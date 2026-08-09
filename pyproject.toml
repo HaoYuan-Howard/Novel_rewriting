@@ -1,0 +1,10 @@
+[project]
+name = "novel-rewriting"
+version = "0.0.1"
+description = "把网文原作重构成一本新书的 7 阶段流水线（正式开发）"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
