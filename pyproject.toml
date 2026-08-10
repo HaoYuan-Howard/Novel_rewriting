@@ -3,6 +3,10 @@ name = "novel-rewriting"
 version = "0.0.1"
 description = "把网文原作重构成一本新书的 7 阶段流水线（正式开发）"
 requires-python = ">=3.10"
+# 产物 schema 的载体（2026-08-10 裁决）。v1 与 v2 的 API 差异极大，下界必须钉死。
+# ⚠ 建模时两条默认行为要显式改掉，理由见 README：
+#   extra 默认 ignore（未知字段静默丢弃）· 给可选字段配默认值会让「缺字段」与「null」混掉
+dependencies = ["pydantic>=2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
