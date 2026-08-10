@@ -1,0 +1,157 @@
+import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '@/api/endpoints'
+import { qk } from '@/api/queryKeys'
+import { chNo } from '@/constants/vocabulary'
+import { lookupAction } from '@/constants/actions'
+import { useApprovals } from '@/hooks/useApprovals'
+import { useAskJob } from '@/hooks/useChrome'
+import { useEnums } from '@/hooks/useEnums'
+import { useSampleCoverage } from '@/hooks/useSample'
+import { useSid } from '@/hooks/useRouteParams'
+import { QueryStates } from '@/components/state/QueryStates'
+import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
+import { Mono } from '@/components/ui/Mono'
+import { Panel, PaneHeader } from '@/components/ui/Panel'
+import { GateChip } from '@/components/vocab/Badges'
+import { cx } from '@/lib/cx'
+
+/**
+ * 进 stage5 之前先挑要深度重构的章节（默认前 3 章），其余走浅层。
+ * 深度 = 闭卷重构（写手看不到原文），按拍多次调用；浅层 = 开卷改写，一次过。
+ * 选错了钱就花在错的章上 —— 所以这一步单独成屏，不塞在写作屏的角落里。
+ */
+export function DepthScreen() {
+  const sid = useSid()
+  const nav = useNavigate()
+  const { doc, setDeep, startWriting } = useApprovals()
+  const enums = useEnums()
+  const ask = useAskJob()
+
+  // 深度选择只需要全书索引，随便哪一章的响应都带着它 ——
+  // 但得等「哪一章取得到」这件事从数据层回来，key 和 fn 必须用同一个章号
+  const { coverage, defaultOrdinal } = useSampleCoverage()
+  const planOrdinal = defaultOrdinal(sid)
+  const q = useQuery({
+    queryKey: qk.stage4(sid, planOrdinal),
+    queryFn: () => api.getStage4(sid, planOrdinal),
+    enabled: coverage !== undefined,
+    retry: false,
+  })
+
+  const deep = doc?.deep ?? []
+  const ready = !!doc && doc.gate.s3 && doc.gate.s4
+
+  const writeAction = lookupAction(enums.data, { kind: 'n5_write', extra: null })
+
+  return (
+    <section className="flex flex-col gap-16 px-30 py-26">
+      <header className="flex items-end justify-between gap-24">
+        <div className="flex flex-col gap-5">
+          <h1 className="m-0 text-screen font-semibold">挑深度重构章节</h1>
+          <div className="text-body text-ink-3">
+            深度 = 闭卷重构，写手看不到原文，按拍多次调用；浅层 = 开卷改写，一次过。
+          </div>
+        </div>
+        <div className="flex items-center gap-8">
+          <GateChip ok={!!doc?.gate.s3} label="stage3 文风" />
+          <GateChip ok={!!doc?.gate.s4} label="stage4 计划" />
+        </div>
+      </header>
+
+      <QueryStates q={q} loadingLabel="读全书计划索引">
+        {(d) => (
+          <Panel>
+            <PaneHeader
+              title="全书章节"
+              meta={d.index.length + ' 章'}
+              right={<LinkButton onClick={() => setDeep.mutate([1, 2, 3])}>恢复默认（前 3 章）</LinkButton>}
+            />
+            <div className="grid gap-8 border-b border-line-soft bg-sunken-2 px-18 py-9 text-tag text-ink-4" style={{ gridTemplateColumns: '64px 1fr 96px 92px' }}>
+              <span>章</span>
+              <span>目标 / op</span>
+              <span>预算</span>
+              <span className="text-center">这一章走哪条臂</span>
+            </div>
+            {d.index.map((i) => {
+              const on = deep.includes(i.output_ordinal)
+              return (
+                <button
+                  key={i.output_ordinal}
+                  type="button"
+                  onClick={() =>
+                    setDeep.mutate(
+                      on
+                        ? deep.filter((x) => x !== i.output_ordinal)
+                        : [...deep, i.output_ordinal],
+                    )
+                  }
+                  className={cx(
+                    'grid w-full cursor-pointer items-center gap-8 border-b border-line-row px-18 py-11 text-left',
+                    on ? 'bg-spend-bg' : 'bg-transparent',
+                  )}
+                  style={{ gridTemplateColumns: '64px 1fr 96px 92px' }}
+                >
+                  <Mono className="text-body">{chNo(i.output_ordinal)}</Mono>
+                  <span className="min-w-0 truncate text-body text-ink-2">
+                    {i.op}
+                    {i.in_band ? '' : ' · 出档'}
+                    {i.output_ordinal === d.ordinal && d.chapter.chapter_goal
+                      ? ' —— ' + d.chapter.chapter_goal
+                      : ''}
+                  </span>
+                  <Mono className="text-body text-ink-3">{i.budget_chars} 字</Mono>
+                  <span
+                    className={cx(
+                      'rounded-chip py-3 text-center text-tag font-semibold',
+                      on ? 'bg-spend text-card' : 'bg-inset text-ink-4',
+                    )}
+                  >
+                    {on ? '深度' : '浅层'}
+                  </span>
+                </button>
+              )
+            })}
+
+            <div className="flex flex-wrap items-center gap-14 bg-sunken-2 px-18 py-14">
+              <div className="flex min-w-0 flex-col gap-3">
+                <span className="text-body font-semibold">
+                  深度重构 {deep.length} 章：
+                  {deep.length ? deep.map((n) => chNo(n)).join(' ') : '一章都没选'}；其余走浅层
+                </span>
+                <span className="text-tag text-ink-4">
+                  深度按拍重写，一章多次调用；浅层一次过。选之前先看清计划——选错了钱花在错的章上。
+                </span>
+              </div>
+              <ActionButton
+                className="ml-auto"
+                action={writeAction}
+                disabled={!ready}
+                disabledReason="stage3 文风与 stage4 计划都确认之后才允许下笔"
+                onClick={() =>
+                  ask(
+                    {
+                      kind: 'n5_write',
+                      label: 'stage5 写作 · 深度 ' + deep.length + ' 章',
+                      extra: null,
+                      args: ['--deep', deep.join(','), '--shallow-rest'],
+                      sid,
+                      ordinal: null,
+                    },
+                    () => {
+                      startWriting.mutate(undefined, {
+                        onSuccess: () => nav('/n/' + sid + '/stage5/' + defaultOrdinal(sid)),
+                      })
+                    },
+                  )
+                }
+              >
+                {ready ? '按这个分配开写' : '等 stage3 / stage4 确认'}
+              </ActionButton>
+            </div>
+          </Panel>
+        )}
+      </QueryStates>
+    </section>
+  )
+}

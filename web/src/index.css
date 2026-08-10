@@ -1,0 +1,205 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------------------
+   设计令牌。值全部照抄 design_handoff_novel_refactor_console/审校台.dc.html。
+
+   两条规则：
+   1) 默认调色板被整个删掉（--color-*: initial）。`bg-red-500` 编译不过，
+      于是状态色只能从 src/constants/vocabulary.ts 走 —— 那是唯一的状态色出口。
+   2) --spacing: 1px。于是 `p-13 px-30 gap-18` 里的数字就是规格里的数字本身，
+      不会退化成 p-[13px] 这种任意值汤。注意：gap-4 在这里是 4px，不是 16px。
+--------------------------------------------------------------------------- */
+
+@theme {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-white: #fff;
+
+  /* 面 */
+  --color-page: #f6f4f1;
+  --color-card: #fffdfa;
+  --color-sunken: #fbf9f6;
+  --color-sunken-2: #fcfaf7;
+  --color-sunken-3: #faf8f5;
+  --color-inset: #f1eee9;
+
+  /* 墨 */
+  --color-ink: #1b1a18;
+  --color-ink-2: #3f3c37;
+  --color-ink-3: #57534c;
+  --color-ink-4: #8a8479;
+  --color-ink-5: #a09a8f;
+  --color-ink-6: #b3ada2;
+  --color-ink-7: #c4bdb2;
+
+  /* 线 */
+  --color-line: #e2ded8;
+  --color-line-2: #e8e3dc;
+  --color-line-soft: #efebe5;
+  --color-line-row: #f3efe9;
+  --color-line-btn: #ddd8d0;
+  --color-line-dash: #cfc9c0;
+
+  /* 强调 / 当前项 */
+  --color-accent: oklch(0.52 0.13 250);
+  --color-accent-ink: oklch(0.42 0.11 250);
+  --color-accent-bg: oklch(0.975 0.02 250);
+  --color-accent-bg-2: oklch(0.985 0.012 250);
+  --color-accent-line: oklch(0.86 0.05 250);
+  --color-accent-line-2: oklch(0.66 0.1 250);
+  --color-accent-head: oklch(0.978 0.012 250);
+  --color-accent-solid: oklch(0.55 0.11 250);
+  --color-accent-ring: oklch(0.93 0.03 250);
+  --color-accent-bar: oklch(0.62 0.09 250);
+
+  /* 花钱操作：全应用唯一的橙 */
+  --color-spend: oklch(0.55 0.16 38);
+  --color-spend-bg: oklch(0.985 0.012 40);
+
+  /* 时间层：现在 = 中性，回忆 / 转述 = 紫 */
+  --color-recall: oklch(0.42 0.1 300);
+  --color-recall-bg: oklch(0.95 0.03 300);
+
+  /* 必须保真的点（hinge） */
+  --color-hinge: oklch(0.72 0.11 60);
+  --color-hinge-bg: oklch(0.98 0.02 75);
+
+  /* 文案段（钩子） */
+  --color-hook: oklch(0.62 0.14 62);
+  --color-hook-ink: oklch(0.42 0.13 55);
+  --color-hook-bg: oklch(0.985 0.02 75);
+  --color-hook-head: oklch(0.97 0.03 75);
+  --color-hook-line: oklch(0.8 0.09 62);
+
+  /* 警告（切得可疑 / 部分遮蔽） */
+  --color-warn: oklch(0.6 0.15 55);
+  --color-warn-strong: oklch(0.55 0.17 45);
+  --color-warn-ink: oklch(0.45 0.12 55);
+  --color-warn-bg: oklch(0.98 0.03 80);
+  --color-warn-bg-2: oklch(0.995 0.012 80);
+  --color-warn-bg-3: oklch(0.965 0.045 80);
+  --color-warn-line: oklch(0.78 0.1 62);
+  --color-warn-line-2: oklch(0.88 0.05 70);
+  --color-warn-line-3: oklch(0.85 0.06 62);
+
+  /* 闸门 */
+  --color-gate-ok: oklch(0.58 0.14 150);
+  --color-gate-ok-ring: oklch(0.94 0.05 150);
+  --color-gate-ok-ink: oklch(0.4 0.09 150);
+  --color-gate-ok-bg: oklch(0.95 0.04 150);
+  --color-gate-ok-strip: oklch(0.97 0.03 150);
+  --color-gate-ok-line: oklch(0.87 0.04 152);
+  --color-gate-wait: oklch(0.62 0.16 55);
+  --color-gate-wait-ring: oklch(0.95 0.06 70);
+  --color-gate-mark: oklch(0.52 0.12 150);
+
+  /* 排版：中文优先，绝不让中文落到 Latin-first 兜底字体（U-14） */
+  --font-sans:
+    'PingFang SC', 'Hiragino Sans GB', 'Source Han Sans SC', 'Noto Sans CJK SC',
+    'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  /* 字号：规格里有半像素，Tailwind 默认刻度表达不了 */
+  --text-micro: 10.5px;
+  --text-micro--line-height: 1.5;
+  --text-mini: 11px;
+  --text-mini--line-height: 1.6;
+  --text-tag: 11.5px;
+  --text-tag--line-height: 1.6;
+  --text-sm2: 12px;
+  --text-sm2--line-height: 1.75;
+  --text-body: 12.5px;
+  --text-body--line-height: 1.85;
+  --text-body-lg: 13px;
+  --text-body-lg--line-height: 1.85;
+  --text-section: 13.5px;
+  --text-section--line-height: 1.9;
+  --text-read: 14px;
+  --text-read--line-height: 2.05;
+  --text-read-lg: 14.5px;
+  --text-read-lg--line-height: 2.1;
+  --text-read-xl: 15px;
+  --text-read-xl--line-height: 2.15;
+  --text-h3: 15px;
+  --text-h3--line-height: 1.5;
+  --text-h2: 16px;
+  --text-h2--line-height: 1.5;
+  --text-h1: 20px;
+  --text-h1--line-height: 1.35;
+  --text-screen: 21px;
+  --text-screen--line-height: 1.35;
+
+  /* 间距基数 = 1px，于是类名里的数字就是规格里的 px 数字 */
+  --spacing: 1px;
+
+  /* 圆角 */
+  --radius-xs: 1.5px;
+  --radius-nub: 2px;
+  --radius-tag: 4px;
+  --radius-chip: 5px;
+  --radius-btn: 6px;
+  --radius-btn-lg: 7px;
+  --radius-block: 9px;
+  --radius-block-lg: 10px;
+  --radius-card: 11px;
+  --radius-modal: 12px;
+
+  /* 阴影：几乎不用 */
+  --shadow-current: inset 0 0 0 1px #ddd8d0;
+  --shadow-ring-accent: 0 0 0 3px oklch(0.93 0.03 250);
+  --shadow-modal: 0 24px 60px rgb(27 26 24 / 0.24);
+  --shadow-drawer: 0 -6px 24px rgb(27 26 24 / 0.06);
+}
+
+@layer base {
+  :root {
+    --rail-w: 236px; /* 左导航宽 */
+    --head-h: 118px; /* 屏内粘性表头高，粘性侧栏用它做 top */
+    --drawer-h: 60px; /* 作业抽屉高，AppShell 按开合改写 */
+    --pane-max: calc(100vh - var(--head-h) - var(--drawer-h) - 40px);
+    --measure-compare: 34em; /* 并排时两栏共用的正文宽上限 */
+    --measure-read: 38em;
+    --measure-solo: 40em;
+  }
+
+  html {
+    background: var(--color-page);
+  }
+
+  body {
+    margin: 0;
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    /* 中文两端对齐会拉出难看的字距（U-14），全局禁掉 */
+    text-align: start;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 斜纹底：用于「这一段没抓样本」「fate 被遮住」这类「不是空，是取不到」 */
+  .hatch {
+    background-image: repeating-linear-gradient(
+      135deg,
+      var(--color-sunken) 0,
+      var(--color-sunken) 8px,
+      var(--color-page) 8px,
+      var(--color-page) 16px
+    );
+  }
+
+  .hatch-tight {
+    background-image: repeating-linear-gradient(
+      135deg,
+      var(--color-page) 0,
+      var(--color-page) 6px,
+      var(--color-inset) 6px,
+      var(--color-inset) 12px
+    );
+  }
+}
+
+@utility prose-cn {
+  /* 中文长时间阅读：段落用间距分隔，不用首行缩进；不 justify */
+  text-wrap: pretty;
+  text-align: start;
+}

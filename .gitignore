@@ -13,6 +13,16 @@ Novel_data/
 .llm_cache/
 .env
 
+# 前端（web/）
+node_modules/
+dist/
+.vite/
+*.local
+
+# web/.env 只有一个开关 VITE_USE_MOCK，不是密钥，要进仓
+# （上面那条 .env 是无路径的，会连它一起吃掉）
+!/web/.env
+
 # IDE
 .idea/
 .vscode/

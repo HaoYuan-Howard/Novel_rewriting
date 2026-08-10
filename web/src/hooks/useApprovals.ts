@@ -1,0 +1,56 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api } from '@/api/endpoints'
+import { qk } from '@/api/queryKeys'
+import type { ApprovalDoc, GateKey, SeenKey } from '@/types/approvals'
+import { useSid } from './useRouteParams'
+
+/**
+ * 人工验收记录。走 Query 而不是 Context+useReducer：
+ * 它在真产品里是服务端的记录，接后端时只改 mock.ts 一个文件，
+ * 屏与组件改动 0 行。
+ */
+export function useApprovals(sidOverride?: string) {
+  const routeSid = useSid()
+  const sid = sidOverride ?? routeSid
+  const qc = useQueryClient()
+
+  const q = useQuery({
+    queryKey: qk.approvals(sid),
+    queryFn: () => api.getApprovals(sid),
+    enabled: !!sid,
+    staleTime: Infinity,
+  })
+
+  const put = (doc: ApprovalDoc) => {
+    qc.setQueryData(qk.approvals(sid), doc)
+    // 确认会发起下游作业 —— 让抽屉立刻看得见
+    void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
+  }
+
+  const approve = useMutation({
+    mutationFn: (key: GateKey) => api.approveGate(sid, key),
+    onSuccess: put,
+  })
+  const markSeen = useMutation({
+    mutationFn: (key: SeenKey) => api.markSeen(sid, key),
+    onSuccess: put,
+  })
+  const setDeep = useMutation({
+    mutationFn: (deep: number[]) => api.setDeep(sid, deep),
+    onSuccess: put,
+  })
+  const startWriting = useMutation({
+    mutationFn: () => api.startWriting(sid),
+    onSuccess: put,
+  })
+
+  return {
+    sid,
+    doc: q.data ?? null,
+    isLoading: q.isLoading,
+    approve,
+    markSeen,
+    setDeep,
+    startWriting,
+  }
+}
