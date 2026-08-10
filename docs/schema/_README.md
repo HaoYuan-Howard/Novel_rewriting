@@ -35,16 +35,16 @@
 只按盘上产物定 schema，会定出一个在 74% 的语料上崩掉的契约。
 ⇒ 凡是「盘上零样本」或「盘上取值面明显偏窄」的字段，都要去**全语料**或**代码**再确认一次。
 
-> 〔`platform` 这个字段本身已于 2026-08-10 从产物里删掉（用户裁决 + 无消费方，见 `stage1.md` §3.5）。
+> 〔`platform` 这个字段本身已从产物里删掉（无消费方，且没有第二个平台值）。
 > **例子留着**：它是本目录这套方法最干净的一次命中，与该字段还在不在无关。〕
 
 ⚠ **反过来也成立：「盘上有」不等于「该落盘」。** 定完取值面还要再问一句
 **「这条信息能不能 0 成本重新算出来」**——能现算的字段落盘只是抄第二份，
 而两份同源数据哪天不一致时，没人知道该信谁。
-实例：`stage1/partition_report.json` 2026-08-10 从 **24 个字段瘦到 11 个**，
-删掉的 13 个全部可由 `main_text.json` / `hook_copy.json` / 目录名 / 原文现算（见 `stage1.md` §3.5）。
+实例：`stage1/partition_report.json` 从原型的 **24 个字段瘦到 9 个**——删掉的那些
+全部可由 `main_text.json` / `hook_copy.json` / 目录名 / 原文现算。
 留下来的判准是**不可再生**：`source_sha1`（没有记录值就没法判「有人换过原文」）、
-`dropped[]`（记的是一段已经被丢弃、盘上不留副本的文本）。
+剔除记账（记的是一段已经被丢弃、盘上不留副本的文本，见 `stage0.md` §2.2）。
 
 ## 目录
 
@@ -52,9 +52,14 @@
 |---|---|
 | `stage0.md` | `clean_text.txt` · `removal_report.json`　**2026-08-10 新增的一层** |
 | `stage1.md` | `main_text.json` · `hook_copy.json` · `partition_report.json` |
-| `stage2.md` ~ `stage7.md` | 待产 |
-| `_common.md` | `_provenance` 等所有产物共有的部分。待产 |
-| （另有两份**不是 JSON**） | `stage5/draft.md` · `stage7/book.txt` —— 它们的 schema 是**字节形态**，单独写。待产 |
+| `stage2.md` | `global_grounding.json` · `chapter_blueprints.json`　**全链第一个调 LLM 的层** |
+| `stage3.md` | `style_grounding.json`　**唯一一份带完整判据表 + 先校验后落盘闸门的产物** |
+| `stage4.md` | `plan_chapters.json` · `writer_context.json`　**两份产物：一份 LLM 产、一份确定性组装**；<br>也是**全链的收口点**——前三层所有逐章闸门最后都汇到 `writer_context` 这一份上 |
+| `stage5.md` | `<mode>/chNN.json`（含 `.INVALID`）· `review_<n>.json` · `wontfix.json` · `_rounds/` 三种归档 · **`draft.md`（字节形态，§四）**<br>**全链唯一产出「书」的层**，也是**唯一带 LLM 返工回路**的层；两条臂（deep/shallow）+ 两相（写作/全书验收）共用一份 schema |
+| `stage6.md` | `hook.json` · `_rounds/hook.rN.json`　**全书级单次产出**（不是逐章），也是**唯一以「人定稿」当现役闸门**的层；<br>判据表分两半的边界是**产物类**（文案＝全文改写 ⇒ 连续文本探针结构性失效），不是判据质量 |
+| `stage7.md` | `name_map.json` · `_rounds/name_map.rN.json` · **`name_map_edit.json`（人产的输入，也是契约）** · **`book.txt`（字节形态，§四）**<br>**全链最后一层**，也是唯一产出交付物的一层；LLM 只写两个键，其余 19 个顶层键一个字都不经模型 |
+| `_common.md` | `_provenance` 的四个共有键 · **两把尺子**（40 位内容身份 / 10 位来源指纹）· `inputs` 的边 `{file, consumed}` · 新鲜度三态与**幽灵边** · `.INVALID` 与提升路（**签名里没有 `prompts`/`model`/`inputs`**）· 轮次账 · `Finding` 13 字段 · `usage` · 记账键的出口规则 |
+| （另有一份**不是 JSON**） | 〔本行已空。`stage5/draft.md` 并进 `stage5.md` §四、`stage7/book.txt` 并进 `stage7.md` §四：<br>它们的规则各只有几条硬机制，单独立一份反而会与产它的那一层分家〕 |
 
 ## 反推工具
 
@@ -64,3 +69,11 @@
 `../Novel_refactoring/Output`，可用 `NOVEL_OUTPUT` 覆盖。
 ⚠ **找不到目录时它显式终态**，不会静默产出一份「所有字段都零样本」的 schema——
 那种产物与真跑过的长得一模一样。
+
+> ### ⚠ 有「人修完再落盘」这条路的层，`_rounds/` 归档**必须一起反推**
+>
+> 正式产物是**修完之后**的状态，它会把「修之前才出现的取值」整个抹掉。
+> 実测（stage7）：`residual[].confidence` 在 3 份正式产物上是**单值 `low`**（19/19），
+> 而 8 份归档里有 **35 条 `high`**——高置信的那些早就被人勾选、走人工补充修掉了。
+> **只反推正式产物，会定出一个把 `high` 当成零样本分支的 schema。**
+> 〔stage6 那次把归档加进来只确认了「归档与正式同形」；stage7 这次第一次**改变了取值面**。〕

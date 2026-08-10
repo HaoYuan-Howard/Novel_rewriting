@@ -28,24 +28,61 @@ _R_SECTION = re.compile(r'^###\s+(R-\d+)\s')
 _Q_DEF = re.compile(r'^###\s+(Q-\d+)\s')
 _B_DEF = re.compile(r'^\|\s*\*\*(B-\d+)\*\*')
 
-# 「谁在查」那一列里出现的守卫记号
-_GUARD_TOKENS = (('HARD', 'HARD'), ('INFO', 'INFO'), ('闸门', 'GATE'))
+# 「谁在查」那一列里出现的记号 → `WHO_CHECKS` 的取值。
+#
+# 【为什么记号表必须与 `WHO_CHECKS` 对得上】读不懂一个记号时解析器**不会报错**，
+# 它只是把那一行读成「什么也没声明」——而那正是这一列存在的理由要防的事。
+# 实测：本文档一度有 10 行是解析器读不懂的（六行「见 `R-0.x`」· 一行「只统计」·
+# 两行「—」· 一行 `度量`），而它们在测试里与「填了 HARD」长得一模一样地绿。
+# ⇒ `tests/test_coverage.py::test_every_r_item_declares_something` 现在盯着它。
+_MARKER_TOKENS = (
+    ('HARD', 'HARD'), ('INFO', 'INFO'), ('闸门', 'GATE'), ('度量', 'METRIC'),
+    ('载体', 'CARRIER'), ('结构', 'STRUCTURAL'), ('不适用', 'N_A'),
+)
+# 「见 `R-0.7`」这类职责转授。**只认行首的「见」**：`**`人`**，见 `B-20`` 那种是
+# 「人在判 + 顺带引一条 B」，不是转授——两者混起来会把一条真有闸门的需求读成「不归我管」。
+_DELEGATE_RE = re.compile(r'^见\s*`?((?:R|Q|B)-[\d.]+[a-z]?)`?')
+
+#: 判据在查的那几个（正向覆盖率要求它们必须有一条注册判据指着）。
+_EXPECTS_RULE = frozenset({'HARD', 'INFO', 'GATE', 'METRIC'})
 
 
 @dataclass(frozen=True)
 class Who:
-    """一条需求的「谁在查」列，解析成结构。"""
+    """一条需求的「谁在查」列，解析成结构。取值面见 `invariants.WHO_CHECKS`。"""
     raw: str
-    guards: tuple[str, ...] = ()        # HARD / INFO / GATE 的子集
+    markers: tuple[str, ...] = ()       # WHO_CHECKS 的子集
     human: bool = False                 # 按设计就由人判
     pending: bool = False               # 待建（R-13/R-14 这类新增能力）
     unguarded: bool = False             # 字面写了「无守卫」
     b_refs: tuple[str, ...] = ()        # 这一格里引用到的 B 编号
+    delegate: str | None = None         # 「见 R-0.7」——职责转授给谁
+
+    @property
+    def guards(self) -> tuple[str, ...]:
+        """阻断/提示/闸门三个。**不含 `METRIC`**——度量无条件产出，它不是一道门。"""
+        return tuple(m for m in self.markers if m in ('HARD', 'INFO', 'GATE'))
 
     @property
     def claims_guard(self) -> bool:
-        """它声称自己有确定性守卫。正向覆盖率就查这些。"""
+        """它声称自己有一道**门**。"""
         return bool(self.guards)
+
+    @property
+    def expects_rule(self) -> bool:
+        """它声称有一条**注册判据**在管它。正向覆盖率查的是这个。
+
+        ⚠ 比 `claims_guard` 多一个 `METRIC`：度量不是门，但它同样必须有一条注册判据——
+        「这条度量无条件报出」与「根本没人算它」必须分得开（判据 21）。"""
+        return any(m in _EXPECTS_RULE for m in self.markers)
+
+    @property
+    def declares_something(self) -> bool:
+        """这一格到底声明了什么没有。**全 False = 解析器读不懂 = 这一行什么也没说。**
+
+        这不是假设出来的故障：本文档一度有 10 行落在这里，而它们在所有测试里都是绿的。"""
+        return bool(self.markers or self.human or self.pending
+                    or self.unguarded or self.delegate)
 
 
 @dataclass(frozen=True)
@@ -75,14 +112,15 @@ class Doc:
 
 def _parse_who(cell: str) -> Who:
     raw = cell.strip()
-    guards = tuple(tag for lit, tag in _GUARD_TOKENS if lit in raw)
+    m = _DELEGATE_RE.match(raw)
     return Who(
         raw=raw,
-        guards=guards,
+        markers=tuple(tag for lit, tag in _MARKER_TOKENS if lit in raw),
         human='人' in raw,
         pending='待建' in raw,
         unguarded='无守卫' in raw,
         b_refs=tuple(sorted(set(re.findall(r'B-\d+', raw)))),
+        delegate=m.group(1) if m else None,
     )
 
 

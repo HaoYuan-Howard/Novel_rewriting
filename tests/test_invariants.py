@@ -158,3 +158,110 @@ def test_beat_thresholds_stay_two_different_numbers():
     """
     assert inv.BEAT_MIN_CHARS != inv.BEAT_ALERT_MIN
     assert inv.BEAT_ALERT_MIN < inv.BEAT_MIN_CHARS < inv.BEAT_ALERT_MAX
+
+
+# ───────── 节点表：命名裁决的守卫（Q-12 —— 守卫本身要有守卫） ─────────
+
+def test_node_ids_are_stage_dot_verb():
+    """作业 id 的形态是 `<stage>.<动词>`，且 stage 必须是真的 stage。
+
+    ⚠ **动词不许是序数。** `n1`~`n9` 那套坏掉的根因就是把序数编进了标识符：
+    加一个节点要么跳号、要么重号，而两者都不会报错。
+    """
+    for node, spec in inv.NODES.items():
+        stage, _, verb = node.partition('.')
+        assert verb, f'{node} 不是 `<stage>.<动词>` 形态'
+        assert stage in inv.STAGES, f'{node} 的 stage={stage!r} 不在 STAGES 里'
+        assert stage == spec.stage, f'{node} 的 id 与 spec.stage={spec.stage!r} 不一致'
+        assert not verb.isdigit(), f'{node} 的动词是序数——那正是 n1..n9 坏掉的形态'
+
+
+def test_node_labels_are_unique():
+    """label 是**前端唯一的取处**。两个节点共用一句话，界面上就分不出点了哪个。"""
+    labels = [s.label for s in inv.NODES.values()]
+    assert len(set(labels)) == len(labels), f'label 有重复：{labels}'
+
+
+def test_only_the_writing_node_has_modes():
+    """臂是**参数**不是节点，而全链只有写作那一层有臂。
+
+    ⚠ 别顺手给别的节点加 `modes`：`stage5.write` 的两臂之所以能当参数，
+    是因为它们「只差 (system prompt, 给不给源章原文)，产物形状逐字节相同，判据表只有一张」。
+    不满足这三条的东西合并成参数，就是把两件事藏进一个 id 里。
+    """
+    with_modes = {n: s.modes for n, s in inv.NODES.items() if s.modes}
+    assert with_modes == {'stage5.write': inv.DEPTH_MODES}, \
+        f'只有 stage5.write 该有 modes，且取值面就是 DEPTH_MODES，实得 {with_modes}'
+
+
+def test_paid_flags_are_never_free_entries():
+    """一个 flag 不能同时是「0 成本入口」和「让节点变付费」。
+
+    `FREE_ENTRIES` 是 0 成本入口的唯一落点；`paid_flags` 是反方向的少数派。
+    两边交叉就意味着**贵贱有两处在算**，而 `R-11.7` 要求它只有一处。
+    """
+    for node, spec in inv.NODES.items():
+        overlap = set(spec.paid_flags) & set(inv.FREE_ENTRIES)
+        assert not overlap, f'{node} 的 paid_flags 与 FREE_ENTRIES 撞了：{overlap}'
+        unknown = set(spec.paid_flags) - set(inv.PAID_FLAGS)
+        assert not unknown, f'{node} 的 paid_flags 有没登记在 PAID_FLAGS 里的：{unknown}'
+
+
+def test_the_three_flag_tables_are_disjoint():
+    """0 成本 / 已被取代 / 付费，三张表不许有同一个 flag。
+
+    一个 flag 同时出现在两张表里，`is_paid` 的答案就取决于查表顺序——
+    而**贵贱只有一处算**（`R-11.7`）。
+    """
+    free, sup, paid = (set(inv.FREE_ENTRIES), set(inv.SUPERSEDED_FREE_ENTRIES),
+                       set(inv.PAID_FLAGS))
+    assert not (free & sup), f'0 成本 ∩ 已取代：{free & sup}'
+    assert not (free & paid), f'0 成本 ∩ 付费：{free & paid}'
+    assert not (sup & paid), f'已取代 ∩ 付费：{sup & paid}'
+
+
+def test_free_entries_covers_every_free_flag_the_live_backend_uses():
+    """⚠ **这条测试就是那次漏登记本身。**
+
+    2026-08-11 拿真实抓包对了一遍：现役后端有 **13 个** flag 被当 0 成本用，
+    而 `FREE_ENTRIES` 当时只有 9 个，交集 8 个。
+    漏登记的后果是**反的**——`is_paid` 拿这张表当白名单，未知 flag 一律按付费算，
+    于是一个不花钱的动作会被画成橙色并弹二次确认。
+
+    每个抓到的 `free_flag` 必须落在两张表之一：**现役**，或**已被两层命名取代且带标注**。
+    """
+    actions = _enums()['actions']
+    live = {a['free_flag'] for a in actions if a['free_flag']}
+    assert len(live) > 10, f'只抓到 {len(live)} 个 free_flag——样本多半换了形状，这条测试要跟着改'
+    known = set(inv.FREE_ENTRIES) | set(inv.SUPERSEDED_FREE_ENTRIES)
+    missing = sorted(live - known)
+    assert not missing, (
+        f'现役后端把这些 flag 当 0 成本用，而两张表里都没有：{missing}\n'
+        f'→ 要么补进 FREE_ENTRIES，要么写进 SUPERSEDED_FREE_ENTRIES 并说清被什么取代了。'
+        f'**不许只是不提它**——漏登记 = 界面上把免费动作画成付费'
+    )
+
+
+def test_a_paid_flag_is_never_captured_as_free():
+    """反方向：登记成付费的 flag，不许在抓包里以 `free_flag` 的身份出现过。
+
+    实测 `--repair-surface-habits` 在抓包里挂的正是 `paid=true` 的那条 action——
+    两边一致。哪天不一致了，说明有一侧改了而另一侧没跟上。
+    """
+    actions = _enums()['actions']
+    live_free = {a['free_flag'] for a in actions if a['free_flag']}
+    liars = sorted(set(inv.PAID_FLAGS) & live_free)
+    assert not liars, f'这些 flag 我们当付费登记，抓包里却是 0 成本入口：{liars}'
+
+
+def test_free_nodes_are_the_ones_without_llm():
+    """哪些节点默认不花钱，写死在这里——它是「预算大约几次调用」那句话的落点。
+
+    ⚠ 这条测试**会随裁决而改**：加一个付费节点就来改这张表，改不动说明加错了地方。
+    """
+    free = {n for n, s in inv.NODES.items() if not s.paid}
+    assert free == {
+        'stage0.remove', 'stage0.approve', 'stage0.edit',
+        'stage1.partition', 'stage4.context', 'stage5.review',
+        'stage6.approve', 'stage7.assemble', 'stage7.approve',
+    }, f'0 成本节点的集合变了：{sorted(free)}'

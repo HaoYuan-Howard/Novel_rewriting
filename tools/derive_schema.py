@@ -50,7 +50,17 @@ ARTIFACTS = [
     ('stage5/<mode>/chNN.json',      'stage5/*/ch*.json'),
     ('stage5/review_N.json',         'stage5/review_*.json'),
     ('stage6/hook.json',             'stage6/hook.json'),
+    # 归档是**整份拷贝**（与 hook.json 逐字段同形）。单列一行不是为了看它长什么样，
+    # 是为了让「归档里有没有出现过正式产物没有的形状」这个问题**有答案**——
+    # 而不是靠「它们应该同形」这个假设。
+    ('stage6/_rounds/hook.rN.json',  'stage6/_rounds/hook*.json'),
     ('stage7/name_map.json',         'stage7/name_map.json'),
+    # 同 stage6：归档是整份拷贝，单列一行是为了让「归档里有没有出现过正式产物没有的形状」
+    # 这个问题**有答案**。stage7 的归档比 stage6 密（一本 4 轮），更值得单看。
+    ('stage7/_rounds/name_map.rN.json', 'stage7/_rounds/name_map*.json'),
+    # 人工编辑面。它不是节点产的，是**人（前端 / 手写）产的输入**——
+    # 但它落在产物目录里、被 `--apply-edit` 当决策集吃掉，所以它的形状同样是契约。
+    ('stage7/name_map_edit.json',    'stage7/name_map_edit.json'),
 ]
 
 

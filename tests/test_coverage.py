@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from contracts import requirements as reqs
+from contracts.invariants import NODES, STAGE_SECTIONS, STAGES, WHO_CHECKS
 from contracts.rules import PORTED_STAGES, REGISTRY
 
 DOC = reqs.load()
@@ -30,6 +31,73 @@ def test_every_r_item_declares_who_checks():
     blank = [k for k, v in DOC.of_kind('R').items()
              if v.who is not None and not v.who.raw]
     assert not blank, f'这些需求没填「谁在查」：{blank}'
+
+
+def test_every_r_item_declares_something():
+    """**填了字**与**声明了什么**是两回事。
+
+    上一条只查「这一格是不是空的」，而真实的故障是另一种：格子里写着字，
+    解析器一个记号也没认出来——于是这一行**什么也没声明**，却在所有测试里绿着。
+    实测：本文档一度有 **10 行**落在这里（六行「见 `R-0.x`」· 一行「只统计」·
+    两行「—」· 一行 `度量`），而那正是这一列存在的理由要防的事。
+    """
+    mute = [(k, v.who.raw) for k, v in DOC.of_kind('R').items()
+            if v.who is not None and v.who.raw and not v.who.declares_something]
+    assert not mute, (
+        '这些「谁在查」解析器读不懂，等于什么也没声明：\n'
+        + '\n'.join(f'  {k:10} {raw!r}' for k, raw in mute)
+        + f'\n→ 取值面是 {WHO_CHECKS}（外加 `人` / `待建` / `无守卫`）。'
+        f'要加新取值就同时改 `invariants.WHO_CHECKS` 与 `requirements._MARKER_TOKENS`'
+    )
+
+
+def test_every_who_checks_value_is_actually_used():
+    """取值面不许有**没人用**的取值——那就是抢跑造出来的一条声明（判据 32）。
+
+    ⚠ 它同时是「每个新取值都要有一个会让它红的样本」的一半：
+    加了一个取值却没有任何一行用它，这条测试当场红。
+    """
+    used = {m for r in DOC.of_kind('R').values() if r.who for m in r.who.markers}
+    if any(r.who and r.who.delegate for r in DOC.of_kind('R').values()):
+        used.add('DELEGATED')
+    unused = sorted(set(WHO_CHECKS) - used)
+    assert not unused, (
+        f'这些取值一行都没用上：{unused}。'
+        f'一个没人用的取值与一条没人查的约束是同一个形状——要么用它，要么别加'
+    )
+
+
+def test_structural_rows_name_their_code_site():
+    """`结构` 的**准入条件**：那一格必须写出代码落点。
+
+    没有这一条，「代码结构在守」就会变成「无守卫」的化妆品——
+    它读起来像有守卫，而谁也说不出是哪一段代码在守。
+    判准很低但够用：格子里得有一个反引号引用（函数名 / 调用点）。
+    """
+    bad = [(k, v.who.raw) for k, v in DOC.of_kind('R').items()
+           if v.who and 'STRUCTURAL' in v.who.markers and '`' not in v.who.raw.replace('`结构`', '')]
+    assert not bad, (
+        '这些标了 `结构` 却没写出代码落点：\n'
+        + '\n'.join(f'  {k:10} {raw!r}' for k, raw in bad)
+        + '\n→ 写成 ``结构``（`模块.函数`）——说不出是哪段代码在守，就不算守'
+    )
+
+
+def test_carrier_rows_name_their_field():
+    """`载体` 的准入条件同理：必须点名是哪个字段被类型收走了取值面。"""
+    bad = [(k, v.who.raw) for k, v in DOC.of_kind('R').items()
+           if v.who and 'CARRIER' in v.who.markers and '`' not in v.who.raw.replace('`载体`', '')]
+    assert not bad, (
+        '这些标了 `载体` 却没点名字段：\n'
+        + '\n'.join(f'  {k:10} {raw!r}' for k, raw in bad)
+    )
+
+
+def test_delegated_rows_point_at_an_existing_requirement():
+    """「见 `R-0.7`」转授的目标必须存在。指向一个不存在的编号 = 职责掉在地上。"""
+    bad = [(k, v.who.delegate) for k, v in DOC.of_kind('R').items()
+           if v.who and v.who.delegate and v.who.delegate not in DOC.requirements]
+    assert not bad, f'这些「见 X」指向不存在的编号：{bad}'
 
 
 def test_unguarded_items_point_at_an_existing_b():
@@ -94,6 +162,26 @@ def test_no_rule_claims_a_requirement_marked_unguarded():
     assert not liars, '\n'.join(liars) + '\n→ 补了守卫，需求表那一列要跟着改'
 
 
+def test_no_rule_claims_a_non_judge_requirement():
+    """`载体` / `结构` / `见另一条` / `不适用` 四个取值，**不许有判据指着**。
+
+    有判据就说明它其实是判据在守，那一格标错了——而标错的方向恰恰是**低估**：
+    读的人会以为「这条没有判据也没关系，类型/结构兜着」，于是判据坏掉时没人会去看它。
+    """
+    NOT_A_JUDGE = ('CARRIER', 'STRUCTURAL', 'N_A')
+    liars = []
+    for rule in REGISTRY.all():
+        req = DOC.requirements.get(rule.requirement)
+        if not (req and req.who):
+            continue
+        wrong = [m for m in req.who.markers if m in NOT_A_JUDGE]
+        if wrong:
+            liars.append(f'{rule.rule} 在查 {rule.requirement}，而那一格写着 {wrong}')
+        if req.who.delegate:
+            liars.append(f'{rule.rule} 在查 {rule.requirement}，而那一格写着「见 {req.who.delegate}」')
+    assert not liars, '\n'.join(liars) + '\n→ 有判据就该写 HARD/INFO/GATE/METRIC'
+
+
 # ───────────────────────── 正向：需求 → 判据 ─────────────────────────
 
 @pytest.mark.parametrize('stage', sorted(PORTED_STAGES) or ['<还没有已移植的 stage>'])
@@ -106,9 +194,15 @@ def test_ported_stages_have_rules_for_every_guarded_requirement(stage):
     if not PORTED_STAGES:
         pytest.skip('PORTED_STAGES 是空的：还没有任何 stage 移植完，正向覆盖率无从谈起')
 
-    section = 'R-' + stage.removeprefix('stage')
+    # ⚠ **不许写成 `'R-' + stage.removeprefix('stage')`。** 那个式子只在 stage0/stage1 上对：
+    # R 节的编排轴是**节点**，不是 stage（R-2/R-3 是 stage2 的两个节点、R-5/R-6 是 stage4 的、
+    # R-7/R-8 是 stage5 的两相），于是 `stage3` 会拿到 **stage2 逐章抽取**的需求。
+    # 它曾经就是那么写的，而 `PORTED_STAGES` 为空让这条 bug 整个藏在 `skip` 后面。
+    sections = STAGE_SECTIONS[stage]
+    # 用 `expects_rule` 而不是 `claims_guard`：**度量也必须有一条注册判据**。
+    # 度量不是门，但「这条度量无条件报出」与「根本没人算它」必须分得开（判据 21）。
     want = {rid for rid, r in DOC.of_kind('R').items()
-            if r.section == section and r.who and r.who.claims_guard}
+            if r.section in sections and r.who and r.who.expects_rule}
     have = REGISTRY.requirements_covered()
     missing = sorted(want - have)
     assert not missing, (
@@ -119,19 +213,62 @@ def test_ported_stages_have_rules_for_every_guarded_requirement(stage):
 def test_ported_stages_are_real_stages():
     """**从 0 起**：2026-08-10 加了 stage0（非正文剔除 + 人工审阅闸门，需求 `R-0`）。
 
-    ⚠ 这个范围要跟着需求文档走，别靠记忆。下面那条测试就是盯它的。
+    ⚠ 这个范围要跟着 `invariants.STAGES` 走，别靠记忆，也别在这里重写一遍 `range(0, 8)`。
     """
-    known = {f'stage{i}' for i in range(0, 8)}
-    assert PORTED_STAGES <= known, f'PORTED_STAGES 里有不存在的 stage：{PORTED_STAGES - known}'
+    assert PORTED_STAGES <= set(STAGES), \
+        f'PORTED_STAGES 里有不存在的 stage：{PORTED_STAGES - set(STAGES)}'
 
 
-def test_stage_range_matches_the_requirement_sections():
-    """`stageN` 的取值范围必须与 `REQUIREMENTS.md` 里真实存在的 `R-N` 节对上。
+# ───────────────────── 阶段 ↔ 节点 ↔ 需求节的映射（F-A 的守卫） ─────────────────────
 
-    加一层（或删一层）却忘了改这里，`PORTED_STAGES` 的校验就会放过一个不存在的 stage，
-    而正向覆盖率是按 `R-N` 节去找需求的——找不到就是**静默零覆盖**。
+def test_every_node_points_at_an_existing_requirement_section():
+    """节点表里写的需求节必须真的存在。
+
+    指向一个不存在的节 = 那个节点的正向覆盖率**静默零覆盖**：`want` 是空集，
+    于是「一条判据都没有」与「判据全齐」在报告上长得一模一样。
     """
     sections = {r.section for r in DOC.of_kind('R').values() if r.section}
-    stage_sections = {f'R-{i}' for i in range(0, 8)}
-    missing = sorted(stage_sections - sections)
-    assert not missing, f'这些 stage 没有对应的需求节：{missing}'
+    bad = [(n, spec.section) for n, spec in NODES.items() if spec.section not in sections]
+    assert not bad, f'这些节点指向不存在的需求节：{bad}'
+
+
+def test_every_pipeline_requirement_section_is_claimed_by_a_node():
+    """反过来：处理链的每一节都必须有节点认领它。
+
+    没人认领的一节 = 那一节里所有「谁在查」写着 HARD 的需求**永远不会被正向覆盖率查到**。
+    ⚠ `R-11`（人工验收界面）/ `R-12`（编排）/ `R-13`/`R-14`（新增能力）不是处理链节点，
+    按设计不在这张表里——它们的守卫在别处，不该靠这条测试。
+    """
+    claimed = {spec.section for spec in NODES.values()}
+    pipeline = {f'R-{i}' for i in range(0, 11)}
+    assert pipeline <= claimed, f'这些需求节没有任何节点认领：{sorted(pipeline - claimed)}'
+
+
+def test_stage_sections_is_not_the_naive_stage_number():
+    """⚠ **这条测试就是那个 bug 本身。**
+
+    `STAGE_SECTIONS` 曾经是算出来的：`'R-' + stage.removeprefix('stage')`。
+    那个式子只在 stage0/stage1 上对——R 节的编排轴是**节点**不是 stage。
+    下面这几个字面值是分歧点，写死在这里，改坏了当场红：
+    """
+    assert STAGE_SECTIONS['stage2'] == ('R-2', 'R-3'), 'stage2 有两个节点（全书 / 逐章）'
+    assert STAGE_SECTIONS['stage3'] == ('R-4',), 'stage3 是 R-4，不是 R-3——R-3 是 stage2 逐章抽取'
+    assert STAGE_SECTIONS['stage4'] == ('R-5', 'R-6'), 'stage4 有两份产物（计划 / 上下文组装）'
+    assert STAGE_SECTIONS['stage5'] == ('R-7', 'R-8'), 'stage5 有两相（写作 / 全书验收）'
+    assert STAGE_SECTIONS['stage7'] == ('R-10',)
+
+    naive = {s for s in STAGES if STAGE_SECTIONS[s] == ('R-' + s.removeprefix('stage'),)}
+    assert naive == {'stage0', 'stage1'}, (
+        f'恰好只有 stage0/stage1 该与 `R-N` 同号，实得 {sorted(naive)}——'
+        f'这条断言在盯「有人把 STAGE_SECTIONS 改回那个式子」'
+    )
+
+
+def test_every_stage_has_at_least_one_node():
+    """八个 stage 一个都不许没有节点。
+
+    ⚠ stage0 在原型里**一个 action 都没有**，而它是唯一那道人工闸门（`R-0.3a`）——
+    「这一层没有作业」与「这一层不需要作业」在界面上长得一样。
+    """
+    empty = [s for s in STAGES if not STAGE_SECTIONS[s]]
+    assert not empty, f'这些 stage 一个节点都没有：{empty}'

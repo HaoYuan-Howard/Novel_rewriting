@@ -21,9 +21,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
-from contracts.invariants import OWNER, SEVERITY
+from contracts.invariants import OWNER, SEVERITY, WHO_CHECKS_RULE
 
-WhoChecks = Literal['HARD', 'INFO', 'GATE', 'HUMAN']
+#: ⚠ 比 `WHO_CHECKS` 少四个（`CARRIER`/`STRUCTURAL`/`DELEGATED`/`N_A`）——
+#: **一条判据的存在本身就否定了那四个**。取值面与理由的唯一落点在 `invariants.WHO_CHECKS`。
+WhoChecks = Literal['HARD', 'INFO', 'GATE', 'METRIC', 'HUMAN']
 RepairBucket = Literal['UNIQUE', 'FREE', 'NONE']
 
 _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
@@ -90,6 +92,21 @@ def _validate(r: Rule) -> None:
         raise ValueError(f'{r.rule}: sev={r.sev!r} 不在 {SEVERITY}')
     if r.owner is not None and r.owner not in OWNER:
         raise ValueError(f'{r.rule}: owner={r.owner!r} 不在 {OWNER}')
+    # `Literal` 在运行时不拦任何东西——它只是给类型检查器看的。取值面要真闭合就得在这里查
+    # （同判据 26：枚举上的兜底就是给违约数据发一张静默通行证）。
+    if r.who_checks not in WHO_CHECKS_RULE:
+        raise ValueError(
+            f'{r.rule}: who_checks={r.who_checks!r} 不在 {WHO_CHECKS_RULE}。'
+            f'`CARRIER`/`STRUCTURAL`/`DELEGATED`/`N_A` 那四个不许出现在判据这一侧——'
+            f'一条判据的存在本身就否定了「载体在守 / 结构在守 / 转授 / 不适用」'
+        )
+    # `metric` 与 `METRIC` 必须成对：一条无条件产出的度量写成 `INFO`，
+    # 就是把度量重新并回告警那一支（判据 21）。
+    if (r.sev == 'metric') != (r.who_checks == 'METRIC'):
+        raise ValueError(
+            f'{r.rule}: sev={r.sev!r} 与 who_checks={r.who_checks!r} 对不上。'
+            f'度量在两侧必须同时是度量——否则「无条件报出的读数」与「一条会命中的结论」混掉'
+        )
 
     # ② 每条判据必须说出它在满足哪条需求。
     if not _REQ_RE.match(r.requirement):
