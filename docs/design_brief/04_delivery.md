@@ -30,7 +30,7 @@ src/
     mock.ts          ← USE_MOCK 为真时，从 src/mocks/ 读同名文件
   mocks/             ← 把 05_samples/*.json 原样放这里，一个字节都不要改
   types/             ← 从 mocks 推出来的 TypeScript 类型
-  screens/           ← 13 屏
+  screens/           ← 14 屏
   components/
   routes.tsx
 ```
@@ -53,7 +53,8 @@ src/
 |---|---|---|---|
 | `/` | S-01 语料库 | `/api/novels` | `novels.json` |
 | `/n/:sid` | S-02 总览 | `/api/novels/:sid`<br>`/api/enums`<br>`/api/jobs?sid=:sid` | `novel_overview.json`<br>`enums.json`<br>`jobs.json` |
-| `/n/:sid/stage1` | S-03 分章 | `/api/novels/:sid/stage1/report`<br>`…/stage1/chapters`<br>`…/stage1/hook_copy` | `stage1_report.json`<br>`stage1_chapters.json`<br>`stage1_hook_copy.json` |
+| `/n/:sid/stage0` | **S-00 剔除审阅** | `…/stage0/segments`<br>`…/stage0/report` | **无 mock**，形状同 `reading_ch3.json` 的 `segments[]` |
+| `/n/:sid/stage1` | S-03 原文↔切分 | `…/stage1/segments`<br>`…/stage1/chapters`<br>`…/stage1/hook_copy`<br>〔`…/stage1/report` 已废〕 | **无 mock**，形状同 `reading_ch3.json` 的 `segments[]`<br>`stage1_chapters.json`<br>`stage1_hook_copy.json`<br>〔`stage1_report.json` 不再上屏〕 |
 | `/n/:sid/read/:o` | S-04 原文↔骨架 | `/api/novels/:sid/reading/:o` | `reading_ch3.json` |
 | `/n/:sid/global` | S-05 全局设定 | `/api/novels/:sid/stage2/global` | `stage2_global.json` |
 | `/n/:sid/style` | S-06 文风 | `/api/novels/:sid/stage3/style` | `stage3_style.json` |
@@ -64,11 +65,11 @@ src/
 | `/n/:sid/stage6` | S-11 开篇文案 | `/api/novels/:sid/stage6` | `stage6_hook.json` |
 | `/n/:sid/stage7` | S-12 人名表 | `/api/novels/:sid/stage7` | `stage7_names.json` |
 | `/n/:sid/stage7/:o` | S-12 逐章对照 | `/api/novels/:sid/stage7/:o` | `stage7_ch3.json` |
-| `/n/:sid/check` | S-13 校验报告 | `/api/novels/:sid/check/:kind` ×7 | `check_stage2.json`<br>`check_stage5_review.json` |
+| `/n/:sid/check` | S-13 校验报告 | `/api/novels/:sid/check/:kind` ×8 | `check_stage2.json`<br>`check_stage5_review.json` |
 
 `:sid` 是书 id（例 `7615069877019300633`），`:o` 是输出章号（1 起）。
-七个 `:kind`：`stage1` `stage2` `stage3` `stage4` `stage5_review` `stage6` `stage7`
-（**只给了两份 mock，其余五份复用这两份的形状即可**——它们同型）。
+**八个** `:kind`：**`stage0`** `stage1` `stage2` `stage3` `stage4` `stage5_review` `stage6` `stage7`
+（**只给了两份 mock，其余六份复用这两份的形状即可**——它们同型）。
 
 ### 写操作（设计阶段只要 UI，不必真发请求）
 
@@ -82,6 +83,7 @@ src/
 | 保存修订后的成稿 | `POST /api/novels/:sid/review/:o/edit` |
 | 文案定稿 / 编辑 | `POST /api/novels/:sid/stage6/approve`、`/stage6/edit` |
 | 人名表定稿 / 编辑 | `POST /api/novels/:sid/stage7/approve`、`/stage7/edit` |
+| **stage0 批准 / 编辑剔除范围** | `POST /api/novels/:sid/stage0/approve`、`/stage0/edit` |
 | 上传语料 | `POST /api/upload` |
 
 ---
@@ -126,7 +128,7 @@ type Mode      = 'deep' | 'shallow'
 
 ## 交付检查清单
 
-- [ ] `npm i && npm run dev` 能起来，13 屏全部可点、可通过 URL 直达
+- [ ] `npm i && npm run dev` 能起来，**14 屏**全部可点、可通过 URL 直达
 - [ ] `src/mocks/` 里是 `05_samples/` 原样的 19 个文件
 - [ ] 全局搜 `src/screens` 和 `src/components`，**0 处内联假数据**、0 处 `fetch(`
 - [ ] `VITE_USE_MOCK=false` 时代码路径能走通（后端没起来会报错，这是对的）

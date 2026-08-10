@@ -51,7 +51,6 @@ def test_no_duplicates_in_any_tuple_domain():
 
 @pytest.mark.parametrize('const,key', [
     ('HINGE_KINDS', 'hinge_kinds'),
-    ('NONBODY_KINDS', 'nonbody_kinds'),
     ('TIME_LAYERS', 'time_layers'),
     ('OPS', 'ops'),
     ('STYLE_WORDS', 'style_words'),
@@ -65,6 +64,52 @@ def test_enum_matches_live_backend(const, key):
     它与本模块分家，就意味着界面上画的选项与后端判的不是一回事。
     """
     assert list(getattr(inv, const)) == _enums()[key]
+
+
+def test_nonbody_kinds_is_prototype_plus_registered_additions():
+    """`NONBODY_KINDS` 是**开放**枚举，所以它不走上面那条逐值相等的路。
+
+    但「开放」不等于「随便改」：现役那份必须**恰好**等于
+    `原型那四个 + NONBODY_KINDS_ADDED`。于是三件事同时被盯住：
+
+      · 加了词却没登记 → 红。「有意加的」与「手滑加的」必须能区分
+      · 删了词 → 红。存量产物里那个 `kind` 会读不回来
+      · 顺序被打乱 → 红。加词只许追加
+
+    ⚠ 加词的完整流程见 `R-1.7`：先过 `tools/probe_nonbody_word.py` 那道假阳闸门，
+    再补一份合成样本，最后才动这两张表。
+    """
+    prototype = _enums()['nonbody_kinds']
+    assert list(inv.NONBODY_KINDS) == prototype + list(inv.NONBODY_KINDS_ADDED), (
+        '加词时要两处一起改：NONBODY_KINDS 末尾追加，NONBODY_KINDS_ADDED 里登记同一个词'
+    )
+
+
+def test_nonbody_kinds_never_collides_with_end_markers():
+    """非正文标记与完结标记是**两条不同的路**，同一个词不许两边都算。
+
+    完结标记只定切点、不进 `dropped`；非正文标记进 `dropped` 并记账。
+    一个词落进两张表，同一段内容会同时按两种口径记账。
+    ⚠ 实测踩过：候选词「正文完」在语料里有 1 处全等命中（`(正文完。)`），
+    看着像非正文标记，其实它**已经是完结标记**。
+    """
+    both = set(inv.NONBODY_KINDS) & set(inv.END_MARKER_WORDS)
+    assert not both, f'{both} 同时在两张表里'
+
+
+def test_marker_strip_rules_are_valid_and_idempotent():
+    """剥壳规则只有一份（判据 / 加词闸门 / 将来的 stage1 都从这里取），且必须是幂等的。
+
+    不幂等意味着「剥两次」和「剥一次」结果不同——那样 `core` 的长度就取决于
+    谁先调了它，而所有长度阈值判的都是 `core`。
+    """
+    import re
+    lead, trail = re.compile(inv.NONBODY_LEAD_STRIP), re.compile(inv.NONBODY_TRAIL_STRIP)
+    core = lambda s: trail.sub('', lead.sub('', s.strip()))
+    for raw in ('【番外：两年后】', '19.后记', '(番外)', '15番外:药人', '番外', '  番外  '):
+        assert core(core(raw)) == core(raw), f'{raw!r} 剥壳不幂等'
+    assert core('【番外：两年后】') == '番外：两年后'
+    assert core('19.后记') == '后记'
 
 
 def test_op_band_matches_live_backend():

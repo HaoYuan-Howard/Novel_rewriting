@@ -117,5 +117,21 @@ def test_ported_stages_have_rules_for_every_guarded_requirement(stage):
 
 
 def test_ported_stages_are_real_stages():
-    known = {f'stage{i}' for i in range(1, 8)}
+    """**从 0 起**：2026-08-10 加了 stage0（非正文剔除 + 人工审阅闸门，需求 `R-0`）。
+
+    ⚠ 这个范围要跟着需求文档走，别靠记忆。下面那条测试就是盯它的。
+    """
+    known = {f'stage{i}' for i in range(0, 8)}
     assert PORTED_STAGES <= known, f'PORTED_STAGES 里有不存在的 stage：{PORTED_STAGES - known}'
+
+
+def test_stage_range_matches_the_requirement_sections():
+    """`stageN` 的取值范围必须与 `REQUIREMENTS.md` 里真实存在的 `R-N` 节对上。
+
+    加一层（或删一层）却忘了改这里，`PORTED_STAGES` 的校验就会放过一个不存在的 stage，
+    而正向覆盖率是按 `R-N` 节去找需求的——找不到就是**静默零覆盖**。
+    """
+    sections = {r.section for r in DOC.of_kind('R').values() if r.section}
+    stage_sections = {f'R-{i}' for i in range(0, 8)}
+    missing = sorted(stage_sections - sections)
+    assert not missing, f'这些 stage 没有对应的需求节：{missing}'

@@ -8,9 +8,10 @@
 | `enums.json` | `/api/enums` | 全局 | **36 个动作**（带 `paid`）、12 个 job kind、各类枚举 |
 | `novels.json` | `/api/novels` | S-01 | **3 本书**，各带 10 份产物的状态 |
 | `novel_overview.json` | `/api/novels/:sid` | S-02 | 一本书的逐产物状态 + `provenance` |
-| `stage1_report.json` | `…/stage1/report` | S-03 | 24 个字段；`warnings` 为空、`notes` 3 条 |
-| `stage1_chapters.json` | `…/stage1/chapters` | S-03 | 8 章 × {章号, 标记原文, 字数, 预览} |
+| `stage1_report.json` | `…/stage1/report` | **不上屏了** | 24 个字段；`warnings` 为空、`notes` 3 条。<br>**别照它做界面**——S-03 已砍掉报告块，产物本身也瘦到 11 个字段（`docs/schema/stage1.md`）。<br>文件留着是因为它是原型的真实抓包，删了就少一份实测证据 |
+| `stage1_chapters.json` | `…/stage1/chapters` | S-03 | 8 章 × {章号, 标记原文, 字数, 预览}。S-03 的侧栏章表 |
 | `stage1_hook_copy.json` | `…/stage1/hook_copy` | S-03 | 原作的开篇文案段 |
+| （没有 mock） | `…/stage1/segments` | S-03 | **S-03 的主体**。原型上没有这个 endpoint（那一屏是新加的）。<br>形状照 `reading_ch3.json` 的 `segments[]`，`kind` 换成 `hook`/`chapter`/`dropped`/`end_marker`/`hole` |
 | `reading_ch3.json` | `…/reading/3` | S-04 | 原文 1461 字切成 **19 块** ↔ **9 个 beat** |
 | `stage2_global.json` | `…/stage2/global` | S-05 | 15 人物 / 15 关系 / 6 世界规则 / **secrets 是空数组** |
 | `stage3_style.json` | `…/stage3/style` | S-06 | 8 条 voice / 5 条写作习惯 / 6 个维度的档位词（stored vs now） |
