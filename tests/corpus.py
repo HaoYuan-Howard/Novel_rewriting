@@ -256,10 +256,14 @@ CUT: dict[str, frozenset[str]] = {
         'judged.*.mode',                  # 与 stage5 / stage7 一起裁（`JudgedDraft` 只有一个类）
     }),
 
-    # stage7 —— 三条待决 2026-08-11 用户裁决：**全裁**。
+    # stage7 —— 三条待决 2026-08-11 用户裁决：**全裁**；待决④ 2026-08-12（F2）再裁一条。
     'stage7/name_map.json': frozenset({
         *_TITLE_AND_ID,
         '_problems',                      # 0 读者，且结论已逐条翻进 `book[]` ⇒ 两个落点
+        # 待决④：`false` 分支**结构上不可达**——`R-10.14` 那道「文案未定稿一律拒写 txt」
+        # 的闸挡在前面 ⇒ 只剩「拒写」与「有文案」两种结局。照 `op` 先例裁掉恒等于常量的字段。
+        # ⚠ 它同时是一次**产品语义**裁决：「不允许出一本没有开篇文案的书」。
+        'book_txt.has_hook',
         'title_new',                      # 待决①：`apply_subs(title, …)` 现算，盘上 3/3 与 title 逐字节相同
         'applied.title',                  # 待决①：盘上 3/3 全空，且三块里唯独它缺两个字段
         'applied.chapters.*.chars_before',  # 待决②：唯一读者是一条 metric，替换不改篇幅
@@ -347,6 +351,14 @@ ADDED: dict[str, dict[str, Any]] = {
     'stage7/name_map.json': {
         '_provenance.model': 'deepseek-v4-pro',
         '_provenance.params': {'max_tokens': 16000, 'tag': ''},
+        # ⚠⚠ **这一格填的 `None` 不是占位符，是实况。**
+        #    `identity`（恒等基线的结论，`R-10.7`）是 F2 新增的键，而这三份产物产出时
+        #    它还不存在 ⇒ 那三次基线**确实没有留下任何记录**。原型的 `--identity`
+        #    整个输出是 `print` + 返回码，「跑过且逐字节无损」与「从没跑过」在盘上同形（`Q-2`）。
+        #    ⇒ 迁移填 `null` 的含义就是**「从没跑过」**，报告要照这个含义报出来。
+        #    对照 `stage6` 的 `baselines_identity`：那一格盘上**有值**（12 格），
+        #    因为 stage6 在同一道工序上一开始就做对了。
+        'identity': None,
         **{f'book.*.{f}': COMPUTED for f in _FINDING_FILL},
     },
 }
@@ -393,10 +405,23 @@ def cuts_of(a: Artifact) -> frozenset[str]:
     ⚠ 没有 `_provenance` 的那一份（见 `MISSING_PROVENANCE`），来源账里的裁撤项
     对它**按定义不适用**——它连来源账都没有，谈不上「多了一个 `op_forced`」。
     把这条写成代码而不是把断言放宽成「包含」：**放宽之后就再也抓不到「漏裁一个」了**。
+
+    ⚠ **第二族同形的**（F2 加的）：stage7 的 8 份归档 `book_txt` 恒 `null`
+    （归档写在**组装之前**，`--assemble` 不归档），于是 `book_txt.*` 那一族裁撤项
+    在它们身上同样按定义不适用——**块整个不在，谈不上「块里多了一个字段」**。
+    实测 8/8 归档 `book_txt is None`、3/3 正式产物是 dict，**没有第三种**。
+    ⇒ 判据看的是**盘上这一份到底有没有那个块**，不是路径前缀写死一张表：
+    哪天某份归档真的带了 `book_txt`，这里自动恢复检查，而写死表会静默漏掉它。
     """
     cuts = CUT[a.pattern]
     if (a.source_id, a.rel) in MISSING_PROVENANCE:
         cuts = frozenset(c for c in cuts if not c.startswith('_provenance.'))
+    # ⚠ 先看这张表里有没有 `book_txt.*`，再去读盘——否则每一份产物都要多读一次文件，
+    #   而顶层不是对象的那几份（`stage1/main_text.json` 是数组）根本没有块可言。
+    if any(c.startswith('book_txt.') for c in cuts):
+        raw = load_raw(a)
+        if isinstance(raw, dict) and raw.get('book_txt') is None:
+            cuts = frozenset(c for c in cuts if not c.startswith('book_txt.'))
     return cuts
 
 

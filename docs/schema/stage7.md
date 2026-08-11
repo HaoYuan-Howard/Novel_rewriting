@@ -114,7 +114,7 @@ stage7/book.txt                   ★ 交付物。纯文本，带不了 `_proven
 
 ## 一、`stage7/name_map.json`
 
-顶层 **15 个键**（`hook_consumed` 是第 16 个，见 §1.5）。
+顶层 **16 个键**（`hook_consumed` 是第 17 个，见 §1.5；`identity` 是 F2 新增的那个，见 §1.9）。
 下表里划掉的六项是**盘上有、新契约裁掉**的（`source_id` · `title` · `title_new` ·
 `counts` · `_groups` · `_problems`），迁移清单在 `tests/corpus.py::CUT`。
 
@@ -138,6 +138,7 @@ stage7/book.txt                   ★ 交付物。纯文本，带不了 `_proven
 | `hook_consumed` | `obj` | **否** | 本节点**真正消费**的文案投影。⚠ **盘上 1/3 本有**——后加的键。见 §1.5 | **盘·码** |
 | `sources` | `obj` | 是 | 只有一个子键 `writer_context`，形状与 stage6 §1.4 逐字段相同。盘上 3/3 `fresh` | **三源** |
 | `book` | `obj[]` | 是 | 书级结论。盘上恒 **7 条**（1 info + 3 metric + 3 unver），三本**规则集完全相同**。见 §1.6 | **三源** |
+| `identity` | `obj｜null` | 是（键恒在） | **F2 新增**（`R-10.7`）。恒等基线的结论。缺省 `null` = **从没跑过**——盘上 3/3 都是这一态。见 §1.9 | **契** |
 | ~~`counts`~~ | — | — | **已裁**（§九 ⑥，与 stage6 一起）：`{sev: 条数}`，0 读者 + 100% 现算 + ⚠ **稀疏**（`Counter` 的 0 键消失 ⇒ 盘上 3/3 **没有 `hard` 键**，「没有这个键」与「值是 0」混掉） | **盘·码** |
 | ~~`_groups`~~ | — | — | **已裁**（§九 ③）：下发给模型的姓氏族群表（**键名是中文**：`原姓` / `成员`），盘上 1/1/3 组、共 5 组 11 人。**加载回来 0 读者**，见 §1.8 | **盘·码** |
 | `_provenance` | `obj` | 是 | 见 §五 | **盘·码** |
@@ -317,13 +318,31 @@ applied.hook                           {counts}
 | `sha1` | `str` | 是 | **回查盘上那份**的唯一依据（txt 带不了 `_provenance`） | **三源** |
 | `chars` | `int` | 是 | 盘上 11105 / 11807 / 13308。⚠ **第三个 `chars` 口径**，见 §四 | **三源** |
 | `chapters` | `int` | 是 | 盘上 8 / 14 / 9 | **三源** |
-| `has_hook` | `bool` | 是 | 盘上 3/3 `true`。⚠ `false` 分支**零样本**——`--assemble` 在文案未定稿时就拒写了，**可能不可达**，见 §九 待决 ④ | **契·码** |
+| ~~`has_hook`~~ | — | — | **已裁**（§九 ④，2026-08-12 用户裁决）：盘上 3/3 `true`，而 `false` 分支**结构上不可达**——`R-10.14` 规定「文案未定稿一律拒写 txt」⇒ 只剩「拒写」或「有文案」两种结局。照 `op` 先例删一个恒等于常量的字段。⚠ 它同时是一次**产品语义**裁决：「不允许出一本没有开篇文案的书」 | **契·码** |
 
 ### 1.8 `_groups` —— 一个被顺手落盘的进程内中间量
 
 下发给模型的姓氏族群表（`{原姓: [...], 成员: [{char_id, canonical}]}`，**键名是中文**）。
 **加载回来 0 读者**：`rn_surname_split` 读的是同一次 `build_name_map` 里内存中的那份；
 `--recheck` 会从 registry 重新算一遍覆盖它；界面不发送它。⇒ 见 §九 待决 ③。
+
+### 1.9 `identity` —— 恒等基线的结论（**F2 新增**，`R-10.7` / `R-10.7b`）
+
+原型的 `--identity` 整个输出是 `print(...)` + 返回码 ⇒ **「跑过且逐字节无损」与「从没跑过」
+在盘上长得一模一样**（`Q-2`）。本键就是那个落点，形态照 stage6 的 `baselines_identity`。
+
+| 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
+|---|---|---|---|---|
+| `roundtrip_ok` | `bool` | 是 | 占位符双射往返之后，正文 + 文案 + 书名**逐字节**等于原样 | **契** |
+| `chapters` | `int` | 是 | 这一次基线量了几章。⚠ **`roundtrip_ok=true` 而 `chapters=0` 是一句空话** ⇒ 报告要把它读出来 | **契** |
+| `mismatches` | `str[]` | 是 | 不守恒的位置（`ch<N>` ｜ `hook` ｜ `title`）。`roundtrip_ok` 为真时必须是空列表 | **契** |
+| `blind` | `str[]` | 是 | **它验不了的那三样**（§十）。⚠ **常量，不是现算**——但必须**跟结论存在一起**，否则下一个人会把绿灯读成「替换是安全的」 | **契** |
+
+⚠ **不加「什么时候跑的」字段。** 落点是作业事件流（`JobEvent`），产物里再记一份就是
+第二个落点（同 stage6 那次不给 `ApprovedHook` 加 `approved_at` 的裁决）。
+
+⚠ **盘上 3/3 是 `null`**，而这不是「迁移没填」——它是**实况**：这三份产物产出时
+这个键还不存在，那三次基线**确实没有任何记录**。`tests/corpus.py::ADDED` 里填的就是 `null`。
 
 ---
 
@@ -450,11 +469,28 @@ Web 工作线程调用，而 `SystemExit` 是 `BaseException`，anyio 会把它�
 
 ---
 
-## 六、判据清单（**唯一落点**，31 条）
+## 六、判据清单（**唯一落点**，33 条现役 + 1 条退役）
 
-**31 条 = 15 `hard` / 7 `info` / 3 `metric` / 6 `unver`**。
-owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9。
-`actionable` **16 条，全部进 `REPAIR_FREE`——一条付费自救都不开**（同 stage6）。
+**33 条 = 15 `hard` / 8 `info` / 3 `metric` / 7 `unver`**。
+owner：`stage7` 19 · `stage5` 3 · `stage2` 1 · `None` 10。
+
+> #### 移植时（F2，2026-08-12）对原型那 31 条做的三处增删 —— 每一处都有账
+>
+> | 动作 | 条目 | 理由 |
+> |---|---|---|
+> | **−1 退役** | `rn_unregistered` | 待决 ⑤ 已裁：**全仓 0 行实现**而它是 `info` ⇒ 每本每次打绿灯。同 `B-01` 的裁法，退役后报告里换成一行「这一类没在查」——**信息量增加** |
+> | **+1** | `rn_new_collide_human`（info） | 事实⑤：`rn_new_collide`（HARD）看不见 `extra_subs`，而盘上正好有一次从那扇门进来的撞名，**且那次撞名是对的**。⚠ **不扩 HARD 的取值面**——那会让一次正确的人工裁决当场判红，唯一出路是撤销一个对的决定（判据 20 的标准信号）。照本层自己的先例（`rn_shared_surface_human`）另落一条提示 |
+> | **+2** | `rn_identity_baseline`（info）· `rn_identity_blind`（unver） | `R-10.7` / `R-10.7b` 的 `待建` 兑现：恒等基线**跑完把结论扔掉了**（只 `print`），见下面那个框。stage6 在同一道工序上做对了 |
+>
+> ⚠ **`actionable` 全表 `False`、`repair` 全表 `NONE`。** 原型标着 `actionable=True` **13 条**，
+> 那是**另一个意思**的 actionable（「人能 0 成本改掉」，不是「写作层能修」）。
+> 裁决是**不放宽 `contracts/rules.py::_validate` ③ 与 `Finding._postconditions` ③ 那两条同构不变量**，
+> 那 13 条的「人怎么改」写进 `Rule.note`——理由见 `docs/schema/_report.md` §2.1。
+> **一条付费自救都不开**（同 stage6）。
+>
+> ⚠⚠ 由 `builder._status_of` 推出：7 条 `unver` **每次都输出**，而 `badge_of` 见 `unver`
+> 就至少 amber ⇒ **stage7 的徽章在结构上永远不可能是 `pass`**，最好情况是 `amber`
+> （`passed=True`、退出码 0）。**这不是缺陷**，与 stage6 是同一个形状。
 
 > #### 判据 vs 载体：**一条都不上移**，而本层的两个理由叠加
 >
@@ -469,37 +505,40 @@ owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9。
 
 | # | 判据 | sev | owner | 产地 | 盘上命中 | 需求 |
 |---|---|---|---|---|---|---|
-| 1 | `rn_llm_shape` 模型给每个角色都交出了决定与理由 | hard | stage7 | `rename_findings` | 0/3 | `R-10.13①` |
-| 2 | `rn_map_coverage` 下发的每一个称呼在映射表里都有明确去向 | hard | stage7 | `build_subs` | 0/3 | `R-10.13②` |
-| 3 | `rn_new_collide` 新名全书唯一 | hard | stage7 | `build_subs` | 0/3 ⚠**假绿灯**，见事实⑤ | `R-10.13③` |
-| 4 | `rn_ambiguous` 每个旧称呼只映射到一个新称呼 | hard | stage7 | `build_subs` | 0/3 | `R-10.13④` |
-| 5 | `rn_shared_surface` 被替换的称呼没有同时挂在多个角色身上 | hard | stage7 | `build_subs` | 0/3 | `R-10.3③` |
-| 6 | `rn_shared_surface_human` 多主称呼只在人明写时才替换，且报出它还碰到了谁 | info | stage7 | `build_subs` | 0/3 | `R-10.3b` / `R-10.13b` |
-| 7 | `rn_surface_short` 要替换的称呼都不短于两个字 | hard | stage7 | `build_subs` | 0/3 | `R-10.3②` |
-| 8 | `rn_already_present` 每个新称呼在替换目标里出现 0 次 | hard | stage7 | `rename_findings` | 0/3 | `R-10.13⑤` |
-| 9 | `rn_new_in_source` 每个新称呼在原作正文里也没有出现过 | info | stage7 | `rename_findings` | 0/3 | `R-10.13⑤` |
-| 10 | `rn_title_dropped` 称谓与亲属后缀在新形里原样保留 | hard | stage7 | `rename_findings` | 0/3 | `R-10.13⑥` |
+| 1 | `rn_llm_shape` 模型给每个角色都交出了决定与理由 | hard | stage7 | `rename_findings` | 0/3 | `R-10.13`（①） |
+| 2 | `rn_map_coverage` 下发的每一个称呼在映射表里都有明确去向 | hard | stage7 | `build_subs` | 0/3 | `R-10.13`（②） |
+| 3 | `rn_new_collide` 新名全书唯一 | hard | stage7 | `build_subs` | 0/3 ⚠取值面只有模型写的那一半，见事实⑤ | `R-10.13`（③） |
+| 3b | `rn_new_collide_human` 人手补的映射撞上了别人的新名时报出撞上了谁 | info | stage7 | `build_subs` | **1/3**（書1，见事实⑤） | `R-10.13b` |
+| 4 | `rn_ambiguous` 每个旧称呼只映射到一个新称呼 | hard | stage7 | `build_subs` | 0/3 | `R-10.13`（④） |
+| 5 | `rn_shared_surface` 被替换的称呼没有同时挂在多个角色身上 | hard | stage7 | `build_subs` | 0/3 | `R-10.3d` |
+| 6 | `rn_shared_surface_human` 多主称呼只在人明写时才替换，且报出它还碰到了谁 | info | stage7 | `build_subs` | 0/3 | `R-10.3b` |
+| 7 | `rn_surface_short` 要替换的称呼都不短于两个字 | hard | stage7 | `build_subs` | 0/3 | `R-10.3c` |
+| 8 | `rn_already_present` 每个新称呼在替换目标里出现 0 次 | hard | stage7 | `rename_findings` | 0/3 | `R-10.13`（⑤） |
+| 9 | `rn_new_in_source` 每个新称呼在原作正文里也没有出现过 | info | stage7 | `rename_findings` | 0/3 | `R-10.13`（⑤） |
+| 10 | `rn_title_dropped` 称谓与亲属后缀在新形里原样保留 | hard | stage7 | `rename_findings` | 0/3 | `R-10.13`（⑥） |
 | 11 | `rn_kinship_touched` 通用亲属/敬称一个都没被替换 | hard | stage7 | `rename_findings` | 0/3 | `R-10.5` |
 | 12 | `rn_surname_split` 同一姓氏族群的成员共用同一个新姓 | hard | stage7 | `rename_findings` | 0/3 ⚠见下 | `R-10.4` |
 | 13 | `rn_overlap` 人工补充的映射之间没有跨界重叠 | hard | stage7 | `build_subs` | 0/3 | `R-10.13c` |
-| 14 | `rn_residual_key` 替换后没有任何一条映射的键残留 | hard | stage7 | `rename_findings` | 0/3 | `R-10.2` |
+| 14 | `rn_residual_key` 替换后没有任何一条映射的键残留 | hard | stage7 | `rename_findings` | 0/3 | `R-10.2b` |
 | 15 | `rn_book_incomplete` 每一章都有且只有一份成稿 | hard | stage5 | `rename_findings` | 0/3 | `R-10.14` |
 | 16 | `rn_mixed_contract` 成书的各章出自同一套契约 | hard | stage5 | `rename_findings` | 0/3 | `R-10.14` |
 | 17 | `rn_txt_stale` 盘上的 book.txt 与产物记的指纹一致 | hard | stage7 | **只在 `check_one`** | 0/3 ⚠见下 | `R-10.9` |
 | 18 | `rn_invalid_drafts` 没有被拦下的废稿需要排除 | info | stage5 | `rename_findings` | 0/3 | `R-10.14b` |
-| 19 | `rn_residual_stem` 旧姓字在成稿里没有替换面之外的残留 | info | stage2 | `rename_findings` | **3/3** | `R-10.6` |
-| 20 | `rn_unregistered` 成稿里没有 registry 从没收过的疑似人名 | info | stage2 | ❌ **无实现**（事实⑥） | 0/3 | — **（待决 ⑤）** |
-| 21 | `rn_no_reason` 每个不改名的角色都说明了为什么不改 | info | stage7 | `rename_findings` | 0/3 | `R-10.13①` |
+| 19 | `rn_residual_stem` 旧姓字在成稿里没有替换面之外的残留 | info | stage2 | `rename_findings` | **3/3** | `R-10.6c` |
+| ~~20~~ | ~~`rn_unregistered` 成稿里没有 registry 从没收过的疑似人名~~ | — | — | ❌ **全仓 0 行实现**（事实⑥） | — | **已退役**（待决 ⑤，见 §九） |
+| 21 | `rn_no_reason` 每个不改名的角色都说明了为什么不改 | info | stage7 | `rename_findings` | 0/3 | `R-10.13`（①） |
 | 22 | `rn_kept_contains_mapped` 保留下来的称呼里没有夹着已经改掉的名字 | info | stage7 | `rename_findings` | 0/3 | `R-10.13d` |
-| 23 | `rn_stem_noise` 〔度量〕新姓字在原文里另有多少次非人名用法 | metric | — | 无条件 | 3/3 ⚠见下 | `R-10.17` |
+| 23 | `rn_stem_noise` 〔度量〕新姓字在原文里另有多少次非人名用法 | metric | — | 无条件 | 3/3 ⚠取值面改版，见下 | `R-10.17` |
 | 24 | `rn_report` 〔度量〕替换总账 | metric | — | 无条件 | 3/3 | `R-10.17` |
-| 25 | `rn_style_report` 〔度量〕成书写法密度（正文／文案／原作） | metric | — | 无条件 | 3/3 | `R-10.17` |
-| 26 | `rn_taste_unver` 新名的时代感与雅俗合适 | unver | — | 无条件 | 3/3 | `R-10.11`／`B-22` |
-| 27 | `rn_coverage_unver` 替换面覆盖了正文里所有指称人物的字面 | unver | — | 无条件 | 3/3 | `R-10.10`／`B-21` |
+| 25 | `rn_style_report` 〔度量〕成书写法密度（正文／文案／原作） | metric | — | 无条件 | 3/3 ⚠原作那一列有 bug，见下 | `R-10.17` |
+| 26 | `rn_taste_unver` 新名的时代感与雅俗合适 | unver | — | 无条件 | 3/3 | `R-10.11` |
+| 27 | `rn_coverage_unver` 替换面覆盖了正文里所有指称人物的字面 | unver | — | 无条件 | 3/3 | `R-10.18` |
 | 28 | `rn_title_unver` 书名里的人名替换正确 | unver | — | 无条件 | 3/3 | `R-10.16` |
 | 29 | `rn_not_approved` 有人给这份人物表定过稿 | unver | — | 只在 `check_one` | 0/3 | `R-10.11` |
 | 30 | `rn_body_stale` 判的是照盘上这些成稿做的替换 | unver | — | 只在 `check_one` | 0/3 | `R-10.9` |
 | 31 | `rn_hook_missing` 开篇文案已定稿，可以拼进成书 | unver | stage6→— | `build_name_map` | 0/3 | `R-10.14` |
+| 32 | `rn_identity_baseline` 恒等基线跑过，而且逐字节无损 | info | stage7 | `run_identity` 落进产物 | 盘上 0/3 **没跑过** | `R-10.7` |
+| 33 | `rn_identity_blind` 恒等基线验不了的三样常驻列出 | unver | — | 无条件 | — | `R-10.7b` |
 
 > ### ⚠ 22 条 hard+info 里，盘上只有 **1 条**命中过；**15 条 HARD 全部 0 命中**
 >
@@ -556,6 +595,14 @@ owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9。
 > ⇒ 结论要落进产物（照 `baselines_identity` 的先例），`check_one` 出一行，
 > **没跑过时要说「没跑过」，不是不打印这一行**。
 > ⚠ 落点里必须带**它验不了什么**（§十那三样），否则下一个人会把绿灯读成「替换是安全的」。
+>
+> ✅ **F2 已兑现**（2026-08-12）：新增顶层键 **`identity`**（§1.9）+ 两条判据
+> （`rn_identity_baseline` / `rn_identity_blind`）+ `R-10.7`/`R-10.7b` 的 `待建` 换成真记号。
+> ⚠ **键名不叫 `baselines_identity`**——本层已经有一个 `baselines`（姓字覆盖率，§1.4），
+> 同名前缀会让两件毫无关系的事读起来像一族。
+> ⚠ 连带：`--identity` 从「只 `print`」变成**会写盘** ⇒ 它必须进 `WRITE_EFFECTS`，
+> 而 `contracts/invariants.py` 里那条「`--identity` 刻意不登记，因为它在 stage7 只 print」
+> 的注释**同批作废**（那条注释当时是对的，现在会说假话）。
 
 ### 6.1 判据 ↔ 需求
 
@@ -574,11 +621,35 @@ owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9。
 （`rn_new_collide` / `rn_already_present` / `rn_new_in_source`），而需求文档**曾经 0 处落点**。
 ⇒ `R-10` 从 **14 行补到 22 行**（同 stage6 那轮 `R-9` 从 8 补到 14）。
 
+> #### ⚠ 上面那张表记的是**已经平掉的**账；F2 移植时又逐条对 `_REQ_RE` 验了一遍，**14 条落不了地**
+>
+> 「补齐需求行」与「判据真的注册得进去」是两件事。`contracts/rules.py::_REQ_RE`
+> 只收 `^R-\d+\.\d+[a-z]?$`，而这张表的末列有 **11 条带圈号后缀**（`R-10.13①`、`R-10.3②`…）·
+> **1 条一格写两个需求**（`R-10.3b / R-10.13b`，而 `Rule.requirement` 是单值）·
+> **2 条写成 `需求／B-xx`**。另有 **2 条会被守卫判「说假话」**：
+> `rn_residual_stem` 指着标 `结构` 的 `R-10.6`、`rn_coverage_unver` 指着写「无守卫」的 `R-10.10`。
+>
+> ⇒ **F2-0 的处置**（2026-08-12，`REQUIREMENTS.md` 的 R-10 节）：
+>
+> | 动作 | 行 | 收下谁 |
+> |---|---|---|
+> | 拆混写行（F0 裁决①） | `R-10.2` 留 `结构` + 新 **`R-10.2b`** | `rn_residual_key` |
+> | 同上 | `R-10.3` 留 `结构`（①）+ 新 **`R-10.3c`**（②）/ **`R-10.3d`**（③） | `rn_surface_short` / `rn_shared_surface` |
+> | 补行（F0 裁决②） | 新 **`R-10.6c`** | `rn_residual_stem`（`R-10.6` 说的是探针的**取值面**，探针的**结论**要另立一行） |
+> | 补行（F0 裁决②） | 新 **`R-10.18`** | `rn_coverage_unver`（**`R-10.10` 原样保留「无守卫 → `B-21`」**，同 stage6 补 `R-9.18` 那一笔） |
+> | 改记号 | `R-10.16` `度量` → **`人`** | `rn_title_unver` 是 `unver`，而 `_validate` 要求 `metric` 与 `METRIC` **成对** ⇒ 它不可能是 METRIC |
+> | 改记号 | `R-10.7` `待建` → `INFO`；`R-10.7b` `待建` → **`人`** | 恒等基线落点补上了，见下面那个框 |
+> | **不拆** | `R-10.13`（六条后置条件）· `R-10.14`（四类拒写） | 两行都**没有** `载体`/`结构` 同格 ⇒ 按裁决① 不算混写行。多条判据指同一行是允许的（正向覆盖率只要求「至少一条」），圈号降进 `Rule.note` |
+>
+> ⚠ **拆号从 `c` 起而不是 `b`**：`R-10.3b` 早就被「多主是情节本身」那条占着了。
+> **「判据那半加 `b` 后缀」是惯例不是算法**——撞号时顺延，别去挤占一个已有的编号。
+
 ### 6.2 「谁在查」那一列 —— 本层**不需要**第九个取值
 
 取值面已一次定全（`WHO_CHECKS` 八个：
 `HARD`/`INFO`/`GATE`/`METRIC`/`CARRIER`/`STRUCTURAL`/`DELEGATED`/`N_A`）。
-本层有 6 行标着 `HARD` 而 31 条判据里没有一条在查它们——逐条过一遍：
+本层曾有 6 行标着 `HARD` 而判据表里没有一条在查它们——逐条过一遍
+（**下表就是 F2-0 实际照着改的那一份**，末列即改后的落点）：
 
 | 需求 | 该写什么 | `STRUCTURAL` 要求的代码落点 |
 |---|---|---|
@@ -587,7 +658,7 @@ owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9。
 | `R-10.3①` 保留项进 alternation 当恒等条目 | **`STRUCTURAL`** | `sub_table` 把 `kept` 与 `subs` 合成同一张表、按长度倒排 |
 | `R-10.6` stems = 有据姓 ∪ `surname_map` 键 | **`STRUCTURAL`** | `build_name_map` 里那一行并集 |
 | `R-10.6b` 修探针不修下发面 | **`STRUCTURAL`** | `_attested_surname` 只被 `family_groups` 调，`stems` 另走一条路 |
-| `R-10.7` 恒等基线逐字节守恒 | **`INFO`/`METRIC`**（落点补上之后） | 它不是一条无法表达的守卫，它是一条**跑完就把结论扔掉**的守卫 —— 真正的修法是让它有落点，见 §六那个框 |
+| `R-10.7` 恒等基线逐字节守恒 | **`INFO`** ✅ **F2 已改** | 它不是一条无法表达的守卫，它是一条**跑完就把结论扔掉**的守卫 —— 真正的修法是让它有落点。⚠ **不做成 `HARD`**：HARD 的 `skipped` 进 `fail`，而盘上三份产物都还没有 `identity` 这个键 ⇒ 三本会全红。「没跑过」要出声，但不该阻断 |
 
 ---
 
@@ -622,7 +693,7 @@ owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9。
 | 分支 | 为什么零样本 |
 |---|---|
 | 四类拒写 txt（缺章 / 同章双份 / 混契约稿 / 文案未定稿） | 三本都是齐备态 |
-| `book_txt.has_hook = false` | 上一条挡在前面 ⇒ **结构上只有「拒写」或「有文案」两种结局**，可能**不可达**（待决 ④） |
+| ~~`book_txt.has_hook = false`~~ | ✅ **不再是零样本分支，因为字段已裁**（待决 ④，2026-08-12）：上一条挡在前面 ⇒ 结构上只有「拒写」或「有文案」两种结局 ⇒ **不可达** |
 | `residual[].confidence = 'high'` **在正式产物上** | 人已经修完了；样本只在 `_rounds/` 里（35 条，§1.4） |
 | `approved = null` 之后再 `--check-only` | 三本都已定稿 |
 | `sources.writer_context.state ∈ {stale, unknown}` | 三本 ctx 都 fresh |
@@ -640,8 +711,8 @@ owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9。
 | ~~①~~ | ~~`title_new` + `applied.title` 裁不裁~~ | ✅ **已裁决（2026-08-11，骨架 A3）：裁。** `title_new = apply_subs(title, subs, kept)`，现算 0 成本，盘上 3/3 与 `title` 逐字节相同；`applied.title.counts` 盘上 3/3 空 | `rn_title_unver` 的文案改成现算；**产品语义不变** |
 | ~~②~~ | ~~`applied.chapters{*}.chars_before/chars_after` 裁不裁~~ | ✅ **已裁决：裁。** 唯一读者是 `rn_report`（metric），而它要的两个总数可以直接写进 finding 的 `detail`。<br>⚠ **连 `applied.hook` 那一块的同名两项一起裁**：待决只点名了 `chapters{*}`，但 §1.3 的表把 `hook` 写成「同上」——它带着**同样的两个字段、同一个读者**。留一个裁一个会让那两块长出两种形状 | 逐章篇幅变化从产物里消失；但替换不改篇幅（3/3 都是 1.000×~1.001×），信息量本就接近 0 |
 | ~~③~~ | ~~`_groups` 裁不裁~~ | ✅ **已裁决：裁**，并把「N 个族群 / M 人」并进 `rn_report` 那一行 | 失去「当时下发给模型的族群表长什么样」的记录；⚠ 它可由 registry + 原文确定性重算，且 `_provenance.inputs` 记着 registry 的指纹 |
-| ④ | `has_hook=false` 是否可达（§八） | **仍待决。先查再裁**：可达 ⇒ 留；不可达 ⇒ 删字段（`op` 先例：一个恒等于常量的字段）。<br>⚠ 骨架 A3 **保留了这个字段**——它是**产品语义**问题，不是清理问题 | 这是**产品语义**问题：「允不允许出一本没有开篇文案的书」 |
-| ⑤ | `rn_unregistered`：补实现还是退役（事实⑥） | **仍待决**（属判据层，不属产物 schema，骨架阶段不动）。**建议退役 + 标注**，直到有 ground truth 能定阈值（同 `B-01` 的裁法）。⚠ 有一个**弱版本**是可实现的：`residual_scan` 已经在做掩码，把「掩码后剩下的连续 2~3 字专名形」单独报一族即可——但那需要 ground truth 才能定阈值 | 退役后那盏绿灯消失，报告里换成一行「这一类没在查」——**信息量增加** |
+| ~~④~~ | ~~`has_hook=false` 是否可达（§八）~~ | ✅ **已裁决（2026-08-12，F2-0 移植前）：判不可达，删字段。** `R-10.14` 规定「文案未定稿一律拒写 txt」，那道闸挡在前面 ⇒ 结构上只有「拒写」或「有文案」两种结局。照 `op` 先例（一个恒等于常量的字段）删掉。<br>⚠ 它同时是一次**产品语义**裁决，不只是清理：**「不允许出一本没有开篇文案的书」** | 将来若要允许无文案成书，得改一次契约（加回字段 + 给 `stage7.assemble` 一条显式的无文案路 + 配一份会红的样本）。**这个代价是有意接下的**：今天没有任何样本、也没有任何人要过这个能力 |
+| ~~⑤~~ | ~~`rn_unregistered`：补实现还是退役（事实⑥）~~ | ✅ **已裁决（2026-08-12，F2-0）：退役 + 标注**，同 `B-01` 的裁法。⚠ 那个**弱版本**（`residual_scan` 掩码后剩下的连续 2~3 字专名形单独报一族）**是可实现的，但定不了阈值**——本仓没有 ground truth，硬做出来就是第二盏说不清的灯。⇒ 走 `RetiredRule`，`why` 里写明「量不准所以撤了」与那个弱版本的入口，**留给有 ground truth 的那一天** | 退役后那盏绿灯消失，报告里换成常驻一行「这一类没在查」——**信息量增加**。⚠ 代价要记着：**漏网从此只有一道防线**（`rn_residual_stem`），而原型的注释让人以为有两道 |
 | ⑥ | `counts` 裁不裁（§一顶层键表写着「与 stage5/6 同形，**一起裁或一起留**」） | ✅ **已裁决（2026-08-11，骨架 A3）：裁。** stage6 那一侧已经裁了，同形就一起裁。理由也同形：0 读者 + 100% 可从 `book[]` 现算 + **稀疏**（`Counter` 的 0 键会消失 ⇒ 盘上 3/3 没有 `hard` 键，「没有这个键」与「值是 0」混掉） | 报告现算 |
 
 ---
