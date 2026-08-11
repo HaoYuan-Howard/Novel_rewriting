@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from math import isfinite
 from pathlib import Path
 from typing import Mapping
 
@@ -57,6 +58,20 @@ DEFAULT_BACKOFF_BASE = 2.0
 #: 提高它之前先问「这一批的单价是多少」。
 DEFAULT_CONCURRENCY = 2
 
+#: 字段 → 喂它的那个环境变量。**唯一落点**：`load_config` 与出错文案共用这一张表，
+#: 免得报错说的变量名与真正读的那个分了家（那种错最费时间：人照着改，而它一直没生效）。
+#: ⚠ 必须是 dict **字面量**：模块顶层不许有函数调用（`load_config` 不在 import 期跑）。
+ENV_KEYS: dict[str, str] = {
+    'api_key': 'DEEPSEEK_API_KEY',
+    'model': 'DEEPSEEK_MODEL',
+    'base_url': 'DEEPSEEK_BASE_URL',
+    'cache_dir': 'NOVEL_CACHE_DIR',
+    'timeout': 'DEEPSEEK_TIMEOUT',
+    'max_retries': 'DEEPSEEK_MAX_RETRIES',
+    'backoff_base': 'DEEPSEEK_BACKOFF_BASE',
+    'concurrency': 'NOVEL_CONCURRENCY',
+}
+
 
 @dataclass(frozen=True)
 class Config:
@@ -77,6 +92,38 @@ class Config:
     max_retries: int = DEFAULT_MAX_RETRIES
     backoff_base: float = DEFAULT_BACKOFF_BASE
     concurrency: int = DEFAULT_CONCURRENCY
+
+    def __post_init__(self) -> None:
+        """取值面的闸。**放这里不放 `load_config`**，于是手搭一个 `Config` 也拦得住。
+
+        ⚠ `load_config._num` 只查「能不能转成数字」，不查范围：
+        `DEEPSEEK_MAX_RETRIES=-1`（一次都不发，而调用方以为发过了）·
+        `NOVEL_CONCURRENCY=0`（信号量取 0，整跑当场死锁；今天靠 `max(1, …)` 兜着，
+        而那是在**另一个文件**里替配置擦屁股）· `DEEPSEEK_TIMEOUT=-5` / `nan` / `inf`
+        （httpx 收到就炸，或者永不超时）——全都能一路走到发请求那一刻才发作，
+        而那时的报错说的是别的事。
+
+        ⚠ **抛 `ValueError`，不新造一个 `errors.py` 的类**：这是**构造期**的取值面问题，
+        与 `_num` / `RunContext.__post_init__` / `CachePolicy.__post_init__` /
+        `ask_json` 的 require 检查同一个既定习惯。`errors.py` 里那一族答的是
+        「这一次跑该以什么终态停下」，两件事。别顺手「升级」它。
+        """
+        def bad(field_name: str, why: str) -> ValueError:
+            return ValueError(
+                f'{ENV_KEYS[field_name]}（{field_name}）={getattr(self, field_name)!r}：{why}')
+
+        if not isfinite(self.timeout) or self.timeout <= 0:
+            raise bad('timeout', '超时必须是一个有限的正数（秒）')
+        if self.max_retries < 0:
+            raise bad('max_retries', '重试次数不能是负的——负数会让「首发 + N 次重试」一次都不发')
+        if not isfinite(self.backoff_base) or self.backoff_base < 0:
+            raise bad('backoff_base', '退避基数必须是一个有限的非负数（秒）')
+        if self.concurrency < 1:
+            raise bad('concurrency', '并发闸至少是 1——取 0 的话整跑在信号量上死锁')
+        if not self.model:
+            raise bad('model', '模型 id 不能是空的（`_provenance.model` 靠它答「谁产了这份稿」）')
+        if not self.base_url:
+            raise bad('base_url', 'base_url 不能是空的')
 
     @property
     def has_key(self) -> bool:
@@ -128,7 +175,8 @@ def load_config(*, env: Mapping[str, str] | None = None,
         for k, v in parse_dotenv(path.read_text(encoding='utf-8')).items():
             src.setdefault(k, v)
 
-    def _num(key: str, default: float, cast) -> float:
+    def _num(field_name: str, default: float, cast) -> float:
+        key = ENV_KEYS[field_name]
         raw = src.get(key)
         if raw is None or not str(raw).strip():
             return default
@@ -137,16 +185,18 @@ def load_config(*, env: Mapping[str, str] | None = None,
         except ValueError:
             # ⚠ **不静默兜底成默认值**：写错一个数字比不写更危险
             #   （`DEEPSEEK_TIMEOUT=6O` 里那是个字母 O），而兜底会让它一路跑到超时重试。
+            #   ⚠ 范围/有限性那一层的闸在 `Config.__post_init__`——放那里，
+            #     手搭一个 `Config` 也拦得住。
             raise ValueError(f'{key}={raw!r} 不是合法的数字') from None
 
-    cache = src.get('NOVEL_CACHE_DIR')
+    cache = src.get(ENV_KEYS['cache_dir'])
     return Config(
-        api_key=src.get('DEEPSEEK_API_KEY') or None,
-        model=src.get('DEEPSEEK_MODEL') or DEFAULT_MODEL,
-        base_url=src.get('DEEPSEEK_BASE_URL') or DEFAULT_BASE_URL,
+        api_key=src.get(ENV_KEYS['api_key']) or None,
+        model=src.get(ENV_KEYS['model']) or DEFAULT_MODEL,
+        base_url=src.get(ENV_KEYS['base_url']) or DEFAULT_BASE_URL,
         cache_dir=Path(cache) if cache else _REPO_ROOT / DEFAULT_CACHE_DIRNAME,
-        timeout=_num('DEEPSEEK_TIMEOUT', DEFAULT_TIMEOUT, float),
-        max_retries=int(_num('DEEPSEEK_MAX_RETRIES', DEFAULT_MAX_RETRIES, int)),
-        backoff_base=_num('DEEPSEEK_BACKOFF_BASE', DEFAULT_BACKOFF_BASE, float),
-        concurrency=int(_num('NOVEL_CONCURRENCY', DEFAULT_CONCURRENCY, int)),
+        timeout=_num('timeout', DEFAULT_TIMEOUT, float),
+        max_retries=int(_num('max_retries', DEFAULT_MAX_RETRIES, int)),
+        backoff_base=_num('backoff_base', DEFAULT_BACKOFF_BASE, float),
+        concurrency=int(_num('concurrency', DEFAULT_CONCURRENCY, int)),
     )

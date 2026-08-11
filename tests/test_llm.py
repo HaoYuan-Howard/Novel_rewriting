@@ -633,6 +633,62 @@ def test_a_malformed_number_is_a_hard_error_not_a_silent_default():
         load_config(env={'DEEPSEEK_TIMEOUT': '6O'}, dotenv_path=Path('/nonexistent'))
 
 
+@pytest.mark.parametrize('env,var', [
+    ({'DEEPSEEK_MAX_RETRIES': '-1'}, 'DEEPSEEK_MAX_RETRIES'),   # 一次都不发，而调用方以为发过了
+    ({'NOVEL_CONCURRENCY': '0'}, 'NOVEL_CONCURRENCY'),          # 信号量取 0 ⇒ 整跑死锁
+    ({'NOVEL_CONCURRENCY': '-4'}, 'NOVEL_CONCURRENCY'),
+    ({'DEEPSEEK_BACKOFF_BASE': '-2'}, 'DEEPSEEK_BACKOFF_BASE'),
+    ({'DEEPSEEK_TIMEOUT': '-5'}, 'DEEPSEEK_TIMEOUT'),
+    ({'DEEPSEEK_TIMEOUT': '0'}, 'DEEPSEEK_TIMEOUT'),
+    ({'DEEPSEEK_TIMEOUT': 'inf'}, 'DEEPSEEK_TIMEOUT'),          # float('inf') 转得过去
+    ({'DEEPSEEK_TIMEOUT': 'nan'}, 'DEEPSEEK_TIMEOUT'),
+])
+def test_an_out_of_range_config_number_is_refused_by_the_name_people_typed(env, var):
+    """⭐ `_num` 原来**只**查「能不能转成数字」，不查范围。
+
+    于是负重试（一次都不发，而调用方以为发过了）· `concurrency=0`（信号量取 0，
+    整跑当场死锁——今天靠 `client.py` 里的 `max(1, …)` 兜着，而那是在**另一个文件**里
+    替配置擦屁股）· 负超时 / `nan` / `inf`，全都能一路走到发请求那一刻才发作，
+    **而那时的报错说的是别的事**。
+
+    ⚠ 报错必须点**人敲的那个名字**（环境变量），不是字段名——照着字段名去改，
+    改半天不生效。
+    """
+    with pytest.raises(ValueError, match=var):
+        load_config(env=env, dotenv_path=Path('/nonexistent'))
+
+
+def test_a_hand_built_config_is_checked_too():
+    """闸在 `__post_init__` 不在 `load_config`：C 期手搭一个 `Config` 也得拦得住。"""
+    with pytest.raises(ValueError, match='NOVEL_CONCURRENCY'):
+        Config(concurrency=0)
+    with pytest.raises(ValueError, match='DEEPSEEK_MODEL'):
+        Config(model='')
+
+
+def test_the_client_defaults_come_from_config_not_from_a_second_copy():
+    """⭐ `config.py` 抬头写着「默认值都在这里，别在调用点再写一份」，而调用点写了第二份。
+
+    ⚠ 两份数分家时**不会报错**——它只是让「这次跑到底用的哪个并发度」
+    有两个都说得通的答案，而报告只会显示其中一个。
+    """
+    import inspect
+
+    from novel import config as cfg
+    p = inspect.signature(LlmClient.__init__).parameters
+    assert p['max_retries'].default == cfg.DEFAULT_MAX_RETRIES
+    assert p['backoff_base'].default == cfg.DEFAULT_BACKOFF_BASE
+    assert p['concurrency'].default == cfg.DEFAULT_CONCURRENCY
+    # `model=''` 走的是「没显式传」那条，落到同一个常量上
+    assert LlmClient(_ctx(), FakeTransport.always(OK_TEXT)).model == cfg.DEFAULT_MODEL
+
+    # 只看**代码**，注释里可以复述那几个旧字面量（它们是解释，不是第二个落点）
+    code = '\n'.join(ln.split('#')[0] for ln in
+                     inspect.getsource(LlmClient.__init__).splitlines())
+    for literal in ("'deepseek-v4-pro'", '= 3,', '= 2.0,', '= 2,'):
+        assert literal not in code, f'调用点又写了一份默认值：{literal}'
+
+
 def test_dotenv_parsing_handles_the_shapes_people_actually_write():
     got = parse_dotenv('# 注释\n\nA=1\nB = "two"\nC=\'three\'\nD=has=equals\n没有等号\n')
     assert got == {'A': '1', 'B': 'two', 'C': 'three', 'D': 'has=equals'}

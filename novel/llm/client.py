@@ -35,6 +35,7 @@ from typing import Any, Callable, Final, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from novel import config
 from novel.errors import NovelError
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.prompts import required_top_level
@@ -96,12 +97,18 @@ class LlmClient:
 
     def __init__(self, ctx: RunContext, transport: Transport, *,
                  cache: ResponseCache | None = None, model: str = '',
-                 max_retries: int = 3, backoff_base: float = 2.0, concurrency: int = 2,
+                 max_retries: int = config.DEFAULT_MAX_RETRIES,
+                 backoff_base: float = config.DEFAULT_BACKOFF_BASE,
+                 concurrency: int = config.DEFAULT_CONCURRENCY,
                  sleep: Callable[[float], None] = time.sleep) -> None:
+        # ⚠ 四个默认值**引用** `novel/config.py`，不在这里再写一份字面量。
+        #   那个文件抬头就写着「默认值都在这里，别在调用点再写一份」，而这里原来写了
+        #   第二份（`3` / `2.0` / `2` / `'deepseek-v4-pro'`）。两份数分家时不会报错——
+        #   它只是让「这次跑到底用的哪个并发度」有两个都说得通的答案。
         self.ctx = ctx
         self.transport = transport
         self.cache = cache if cache is not None else ResponseCache()
-        self.model = model or 'deepseek-v4-pro'
+        self.model = model or config.DEFAULT_MODEL
         self.max_retries = max_retries
         self.backoff_base = backoff_base
         self._sleep = sleep
