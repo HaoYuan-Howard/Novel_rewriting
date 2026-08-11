@@ -171,38 +171,70 @@ class LlmClient:
             if hit is not None:
                 # ⚠ **缓存命中也要记一行。** 不记的话，「这次跑读了 31 份缓存」与
                 #   「这次跑什么都没做」在账本上长得一模一样，而这两件事的下一步完全不同。
-                self._record(hit, cached=True, purpose=purpose)
+                self._record_cache_hit(hit, purpose=purpose)
                 return hit, key
 
-        resp = self._send_with_retry(req)
-        self._record(resp, cached=False, purpose=purpose)
+        # ⚠ 记账在 `_send_with_retry` 里逐次发生（那里才知道自己发了几次）。
+        resp = self._send_with_retry(req, purpose=purpose)
         if policy.write:
             self.cache.put(key, resp)      # 空 content 由 `put` 自己拒掉
         return resp, key
 
-    def _send_with_retry(self, req: ChatRequest) -> ChatResponse:
+    def _send_with_retry(self, req: ChatRequest, *, purpose: str) -> ChatResponse:
         """**传输层**重试。与降级阶梯是两条独立的循环（见模块 docstring 末尾）。
 
         ⚠ 只重试 `retryable` 的（429 / 5xx / 超时）。4xx 里其余的是**我们自己发错了**，
         重试只会把同一个错误再犯三遍，而每一遍都可能计费。
+
+        ⚠⚠ **每一次上线都记一行**，成功与失败都记。原来只在整轮成功之后记一次：
+        传输层实际发了 3 次而账上只有 1 次，整轮失败则一行都没有——
+        于是「限流限了半天」与「一次就过」在账本上同形，
+        而「彻底失败」与「什么都没干」也同形。这一层是**唯一**知道自己发了几次的地方。
+
+        ⚠ 本方法是重试的**唯一所有者**：SDK 那一层已经 `max_retries=0`
+        （见 `transport.py::_sdk`），不然两层各退各的避，一次调用能打出 12 次 HTTP。
         """
         last: TransportError | None = None
         for attempt in range(self.max_retries + 1):
             with self._gate:                       # 并发闸：守的是钱不是速率
                 try:
-                    return self.transport.send(req)
+                    resp = self.transport.send(req)
                 except TransportError as e:
                     last = e
+                    self._record_wire(None, error=e, purpose=purpose)
                     if not e.retryable or attempt == self.max_retries:
                         raise
+                else:
+                    self._record_wire(resp, error=None, purpose=purpose)
+                    return resp
+            # ⚠ 睡在信号量**外面**：在闸里睡会把整跑串行化（并发闸守的是钱，不是速率）。
             self._sleep(self.backoff_base * (2 ** attempt))
         raise last if last else LlmFailed('unreachable')
 
-    def _record(self, resp: ChatResponse, *, cached: bool, purpose: str) -> None:
+    def _record_wire(self, resp: ChatResponse | None, *, error: TransportError | None,
+                     purpose: str) -> None:
+        """一次**真上线**记一行。失败那次 token 三项全 `None`——它没拿回任何读数。"""
+        u = (resp.usage if resp else None) or {}
+        self.ctx.ledger.record(
+            node=self.ctx.node, sid=self.ctx.sid,
+            model=(resp.model if resp else '') or self.model,
+            code=self.ctx.code, cached=False, cache_policy=self.ctx.cache.name,
+            prompt_tokens=u.get('prompt_tokens'),
+            completion_tokens=u.get('completion_tokens'),
+            reasoning_tokens=(u.get('reasoning_tokens')
+                              or (u.get('completion_tokens_details') or {}).get('reasoning_tokens')),
+            purpose=purpose,
+            outcome='ok' if error is None else 'error',
+            error=None if error is None else str(error),
+            status=None if error is None else error.status,
+        )
+
+    def _record_cache_hit(self, resp: ChatResponse, *, purpose: str) -> None:
+        """一次缓存命中记一行（0 元）。**不记的话，「读了 31 份缓存」与「什么都没做」同形。**"""
         u = resp.usage or {}
         self.ctx.ledger.record(
             node=self.ctx.node, sid=self.ctx.sid, model=resp.model or self.model,
-            code=self.ctx.code, cached=cached, cache_policy=self.ctx.cache.name,
+            code=self.ctx.code, cached=True, cache_policy=self.ctx.cache.name,
             prompt_tokens=u.get('prompt_tokens'),
             completion_tokens=u.get('completion_tokens'),
             reasoning_tokens=(u.get('reasoning_tokens')

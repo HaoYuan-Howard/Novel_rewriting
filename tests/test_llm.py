@@ -370,8 +370,58 @@ def test_a_retryable_transport_error_does_not_consume_a_ladder_rung():
             else OK_TEXT
 
     t = FakeTransport(responder=responder)
-    assert _client(t).ask_text('s', 'u', purpose='t') == '一段正文'
+    ctx = _ctx()
+    assert _client(t, ctx=ctx).ask_text('s', 'u', purpose='t') == '一段正文'
     assert t.rungs == [('high', True)] * 3, '重试把阶梯的档位吃掉了'
+    assert ctx.ledger.calls_made == 3, '发了 3 次而账上不是 3——见「逐次记录发送事实」那条'
+
+
+def test_the_transport_layer_owns_no_retries_of_its_own():
+    """⭐⭐ **重试的唯一所有者是 `client.py`。**
+
+    openai SDK 自带重试，默认 **2**（＝一次 `create()` 最多 3 次 HTTP）。
+    叠上 `_send_with_retry` 的「首发 + 3 次重试」，**一次调用最多打出 3 × 4 = 12 次 HTTP**
+    ——而账本上只会记 1 次。两层各退各的避、谁也不知道对方在退，限流时正好是最坏的形状。
+    而两个模块的 docstring 都写着这一层「不管重试」。
+    """
+    import inspect
+    from novel.llm.transport import DeepSeekTransport
+    src = inspect.getsource(DeepSeekTransport._sdk)
+    assert 'max_retries=0' in src, \
+        'SDK 那一层的重试没关——它会与 `_send_with_retry` 相乘，而账本看不见'
+
+
+def test_every_wire_attempt_gets_its_own_ledger_row():
+    """⭐⭐ **失败的那几次也要记，而且计进 `calls_made`。**
+
+    原来只在整轮重试**成功之后**记一行：传输层实际发了 3 次而账上只有 1 次；
+    整轮失败则**一行都没有**。于是「限流限了半天」与「一次就过」在账本上同形，
+    「彻底失败」与「什么都没干」也同形——而这几对的下一步动作完全不同。
+    `calls_made` 的契约原文是「**真发出去**的调用数」：一次 429 确实上过线，
+    一次超时对面很可能已经生成并计费了。
+    """
+    d = Path(tempfile.mkdtemp())
+    ctx = RunContext.open(_book(), '123', 'stage3.style', paid=True,
+                          ledger=CostLedger(path=d / 'ledger.jsonl'))
+    t = FakeTransport(responder=lambda _r, i:
+                      TransportError('429', retryable=True, status=429) if i < 2 else OK_TEXT)
+    _client(t, ctx=ctx).ask_text('s', 'u', purpose='t')
+
+    rows = [json.loads(ln) for ln in (d / 'ledger.jsonl').read_text('utf-8').splitlines()]
+    assert [r['outcome'] for r in rows] == ['error', 'error', 'ok']
+    assert [r['status'] for r in rows] == [429, 429, None]
+    assert rows[0]['prompt_tokens'] is None, '失败那次没有任何读数，不许编一个 0'
+    assert rows[2]['prompt_tokens'] == 10
+    assert ctx.ledger.calls_made == 3
+
+
+def test_a_run_that_fails_outright_still_says_it_spent_something():
+    """整轮失败原来 `calls_made == 0`——与「什么都没干」一模一样，而钱可能已经花了。"""
+    ctx = _ctx()
+    t = FakeTransport(responder=lambda _r, _i: TransportError('503', retryable=True, status=503))
+    with pytest.raises(TransportError):
+        _client(t, ctx=ctx, max_retries=3).ask_text('s', 'u', purpose='t')
+    assert len(t.calls) == 4 and ctx.ledger.calls_made == 4
 
 
 def test_a_non_retryable_transport_error_is_not_retried_at_all():

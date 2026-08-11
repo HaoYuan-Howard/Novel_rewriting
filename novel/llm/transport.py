@@ -125,8 +125,14 @@ class DeepSeekTransport:
                     '把 `.env.example` 抄成 `.env` 填进去，或者导出这个环境变量。'
                     '⚠ 只想跑 0 成本动作的话不需要它——`FREE_ENTRIES` 里那些 flag 一分钱不花')
             from openai import OpenAI          # 懒 import：见本方法 docstring
+            # ⚠⚠ **`max_retries=0` 是本层「不管重试」那句话的兑现，不是可选的洁癖。**
+            #   openai SDK 自带重试，默认 **2**（＝一次 `create()` 最多 3 次 HTTP）。
+            #   叠上 `client._send_with_retry` 的「首发 + 3 次重试」，
+            #   **一次调用最多打出 3 × 4 = 12 次 HTTP** —— 而账本上只会记 1 次。
+            #   两层重试各退各的避，谁也不知道对方在退；限流时这正好是最坏的形状。
+            #   ⇒ 重试的**唯一所有者**是 `client.py`（那里才知道降级阶梯还剩几档）。
             self._client = OpenAI(api_key=self.cfg.api_key, base_url=self.cfg.base_url,
-                                  timeout=self.cfg.timeout)
+                                  timeout=self.cfg.timeout, max_retries=0)
         return self._client
 
     def send(self, req: ChatRequest) -> ChatResponse:

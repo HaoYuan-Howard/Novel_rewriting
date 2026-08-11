@@ -96,11 +96,22 @@ class CostLedger:
                prompt_tokens: int | None = None,
                completion_tokens: int | None = None,
                reasoning_tokens: int | None = None,
-               purpose: str = '') -> None:
-        """记一次调用。`cached=True` 表示这一次是缓存命中（0 元）。
+               purpose: str = '',
+               outcome: str = 'ok', error: str | None = None,
+               status: int | None = None) -> None:
+        """记**一次上线**（或一次缓存命中）。`cached=True` 表示这一次是缓存命中（0 元）。
 
         ⚠ **缓存命中也要记一行。** 不记的话，「这次跑读了 31 份缓存」与
         「这次跑什么都没做」在账本上长得一模一样，而这两件事的下一步动作完全不同。
+
+        ⚠⚠ **失败的那几次也要记，而且计进 `calls_made`。** 原来只在整轮重试**成功之后**
+        记一行：传输层实际发了 3 次而账上只有 1 次，整轮失败则一行都没有——
+        于是「限流限了半天」在账本上与「一次就过」长得一模一样，而那两件事的下一步完全不同。
+        `calls_made` 的契约原文是「**真发出去**的调用数」，一次 429 确实上过线，
+        一次超时对面很可能已经生成并计费了。
+        ⇒ 逐次记，`outcome` 那一列把成功与失败分开（离线 `grep` 得出来）。
+        ⚠ **不给 `Usage` 加 `calls_failed`**：那是一次契约改版，会让盘上 79 份存量产物
+        全都缺一个必填键，而这里要答的问题 JSONL 已经答得了。
         """
         if cached:
             self.calls_cached += 1
@@ -121,6 +132,7 @@ class CostLedger:
             'completion_tokens': completion_tokens,
             'reasoning_tokens': reasoning_tokens,
             'purpose': purpose,
+            'outcome': outcome, 'error': error, 'status': status,
         }
         self._append(row)
 
