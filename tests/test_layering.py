@@ -169,7 +169,16 @@ _WRITE_ALLOWED = {
 
 
 def test_only_the_store_writes_to_disk():
-    """**没有模块级 `save_json`**：写盘只经 store 实例，而 store 只由 `RunContext` 造。"""
+    """**没有模块级 `save_json`**：写盘只经 store 实例，而 store 只由 `RunContext` 造。
+
+    ⚠ **`store.write_text(...)` 不算绕过，它就是那条路。** 本条按方法名扫，
+    而 `ArtifactStore` 的字节形态写口恰好也叫 `write_text`（那个名字是对的：
+    它与 `write` 是同一族）。⇒ 收一条**很窄**的例外：接收者必须字面是 `store`。
+    第一个撞上它的是 F2 的 `stage7/assemble.py`（`book.txt` 是本仓第一份
+    真的由代码写出来的字节形态产物）。
+    ⚠ 窄到什么程度是有讲究的：只认名字 `store`，不认任意表达式——
+    放宽成「任何看起来像 store 的东西」，这条守卫就再也拦不住一个叫 `store` 的 `Path`。
+    """
     bad = []
     for p in _runtime_files():
         rel = _rel(p)
@@ -179,6 +188,9 @@ def test_only_the_store_writes_to_disk():
         for n in ast.walk(tree):
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
                     and n.func.attr in ('write_bytes', 'write_text', 'mkdir', 'unlink'):
+                recv = n.func.value
+                if isinstance(recv, ast.Name) and recv.id == 'store':
+                    continue
                 bad.append(f'{rel}:{n.lineno} .{n.func.attr}()')
             elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'open':
                 mode = next((a.value for a in n.args[1:2] if isinstance(a, ast.Constant)), 'r')

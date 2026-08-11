@@ -143,7 +143,12 @@ def test_structural_rows_that_name_a_repo_path_actually_point_at_it():
     )
     # 守卫的守卫（形态照抄 `test_docs_references.py::test_the_scan_actually_finds_something`）：
     # 把可解析形态全改回裸符号名，上面那个循环一条都不跑而测试照样绿。
-    assert checked >= 15, (
+    # 13 →(F1-6) 15 →(F2-6) **30**：stage7 那七行 `结构` 从原型裸符号
+    # （`save_name_map` / `apply_subs` / `sub_table` / `merge_mapping_edit`…）
+    # 改成 `路径::名字` 之后，本条的扫描面**一次翻了一倍**。
+    # ⚠ 顺带说明这个数为什么该往上走而不是往下：`结构` 那一列的全部价值是
+    # 「说得出是哪段代码在守」，而旧形态**对本条不可见**——移植一层就该多几行。
+    assert checked >= 30, (
         f'只扫到 {checked} 个可解析落点——本条快要变成一条什么都没查的测试了')
 
 

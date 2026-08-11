@@ -134,7 +134,7 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
     ⇒ 改成查表，形态**照抄 `novel/stages/__init__.py::_checkers()`**
     ——同一个问题在复检那一侧早就解对了，这里只是把它抄回来。
     """
-    return {'stage3': _run_stage3, 'stage6': _run_stage6}
+    return {'stage3': _run_stage3, 'stage6': _run_stage6, 'stage7': _run_stage7}
 
 
 def runnable_stages() -> frozenset[str]:
@@ -306,6 +306,85 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
                        concurrency=cfg.concurrency)
     hook.run_hook(ctx, client)
     print('  ✓ stage6 开篇文案已落盘（三个候选）——跑 `stage6.approve --pick N` 定稿')
+    return X.OK
+
+
+def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
+    """stage7 的八条路。**七条 0 成本，一条付费。**
+
+    ⚠⚠ **本层是第一个「一个 stage 三个节点」的层**（`stage7.rename` / `.assemble` /
+    `.approve`）。派发按 **stage** 分（`_runners` 那张表的键就是 stage），
+    节点由 `ctx.node` 带着 ⇒ 这里要**先按节点分两次岔，再按 flag 分**。
+    形态照 `_run_stage6` 里 `ctx.node == 'stage6.approve'` 那一支，只是多一支。
+    """
+    from novel.stages.stage7 import assemble, rename
+
+    tokens = set(N.flag_tokens(flags))
+
+    if ctx.node == 'stage7.approve':
+        # ⚠ **它不带参数**，而这与 `stage6.approve --pick N` 不同、且是**终态不是待定**：
+        # 本层一本书只有一份人物表，定稿是「给整份盖章」不是「从三条候选里选一条」。
+        _art, report = rename.run_approve(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if ctx.node == 'stage7.assemble':
+        path, art, report = assemble.run_assemble(ctx)
+        bt = art.book_txt
+        print(f'  ✓ 成书已导出：{path}'
+              + (f'（{bt.chars} 字 / {bt.chapters} 章）' if bt else ''))
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--check-only' in tokens:
+        report = rename.run_check_only(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--dry-run' in tokens:
+        system, user, _mat = rename.build_prompt(ctx)
+        print(f'── system（{len(system)} 字）──\n{system}')
+        print(f'\n── user（{len(user)} 字）──\n{user}')
+        return X.OK
+
+    if '--identity' in tokens:
+        base, report = rename.run_identity(ctx)
+        print(f'── 恒等基线 ── {base.chapters} 章 + 文案 + 书名，'
+              f'{"逐字节无损" if base.roundtrip_ok else f"不守恒：{base.mismatches}"}')
+        for line in base.blind:
+            print(f'  ⚠ 验不了：{line}')
+        print(render(report))
+        # ⚠ 恒等基线**不拿 badge 当退出码**：它量的是「替换器在恒等下守不守恒」，
+        # 而报告里那些 unver 说的是本层的常态。跑完了就是 0。
+        return X.OK
+
+    if '--recheck' in tokens:
+        _art, report = rename.run_recheck(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--revalidate' in tokens:
+        promoted, report = rename.run_revalidate(ctx)
+        print(render(report))
+        print('  ✓ 已提升为正式产物（0 成本）' if promoted
+              else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
+        return X.OK if promoted else X.CHECK_FAILED
+
+    if '--apply-edit' in tokens:
+        _art, report = rename.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
+    from novel.config import load_config
+    from novel.llm.client import LlmClient
+    from novel.llm.transport import DeepSeekTransport
+    cfg = load_config()
+    client = LlmClient(ctx, DeepSeekTransport(cfg), model=cfg.model,
+                       max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
+                       concurrency=cfg.concurrency)
+    rename.run_rename(ctx, client)
+    print('  ✓ stage7 人物表已落盘——跑 `stage7.approve` 定稿，再 `stage7.assemble` 成书')
     return X.OK
 
 

@@ -61,7 +61,15 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
         AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
         AccountingSpec('partial_rewrite', '这份产物是混版的吗？（`--recheck` 改过其中一部分）'),
     ),
-    'stage7': (),
+    # ⚠ `params` 与 stage6 同形（两个付费节点犯同一个错：换了模型、换了 `--max-tokens`，
+    #    产物里没有任何一处说得出来）。另外三个的理由也同 stage6。
+    'stage7': (
+        AccountingSpec('params', '这一次是用什么旋钮跑的？（`max_tokens` / `tag`）'),
+        AccountingSpec('revalidated', '这份映射表是跑出来的，还是被重判提升上来的？'),
+        AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
+        AccountingSpec('partial_rewrite', '这份产物是混版的吗？（`--recheck` / `--apply-edit` '
+                                          '改过其中一部分）'),
+    ),
 }
 
 

@@ -26,7 +26,9 @@ def _checkers() -> dict[str, Callable[[RunContext], CheckReport]]:
     """
     from novel.stages.stage3 import style
     from novel.stages.stage6 import hook
-    return {'stage3': style.run_check_only, 'stage6': hook.run_check_only}
+    from novel.stages.stage7 import rename
+    return {'stage3': style.run_check_only, 'stage6': hook.run_check_only,
+            'stage7': rename.run_check_only}
 
 
 def check_only(stage: str) -> Callable[[RunContext], CheckReport]:

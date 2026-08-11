@@ -75,7 +75,8 @@ from contracts.schema.stage5 import (
 )
 from contracts.schema.stage6 import ApprovedHook, Candidate, Hook, Mech
 from contracts.schema.stage7 import (
-    BookTxt, CharacterPatch, ExtraSub, NameDecision, NameMap, NameMapEdit, Residual,
+    BookTxt, CharacterPatch, ExtraSub, IdentityBaseline, NameDecision, NameMap,
+    NameMapEdit, NameMapResponse, Residual, StemBaseline,
 )
 
 #: **产物相对路径 → 模型。** 路径里的 `{n}` / `{mode}` 是占位符，
@@ -124,8 +125,8 @@ __all__ = [
     'CtxChapter', 'CtxBeat', 'CtxFacts',
     'Chapter', 'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed', 'WontFix',
     'Hook', 'Candidate', 'ApprovedHook', 'Mech',
-    'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'BookTxt',
-    'NameMapEdit', 'CharacterPatch',
+    'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'StemBaseline', 'BookTxt',
+    'IdentityBaseline', 'NameMapEdit', 'CharacterPatch', 'NameMapResponse',
     # 路由表
     'ARTIFACTS',
 ]

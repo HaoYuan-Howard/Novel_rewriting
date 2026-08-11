@@ -700,7 +700,17 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #: 一条会花钱的路不叫「局部改写」，那是一次新的产出，该记一份新的来源账。
 #: ⚠ **`--revalidate` 不在这里**：提升路改的是**状态**（`.INVALID` → 正式稿），
 #: 内容一个字没动，它有自己的键 `revalidated`。两件事。
-PARTIAL_REWRITE_FLAGS: Final = ('--remeasure', '--recheck', '--migrate')
+#:
+#: ⚠ **`--identity` 是 F2 加进来的第四条，而它与 `--remeasure` 逐条同形**：
+#: 0 成本 · 写盘 · 改的是产物里**由代码算出来的那一部分**（stage7 的 `identity` 键 /
+#: stage3 的 `measurable`）· LLM 写的字段一个字不动。
+#: ⚠⚠ 但它**只对 stage7 成立**：stage6 的 `--identity` **不写盘**（那一层的恒等基线
+#: 落在 `baselines_identity`，是付费产出时一起算的）。同一个 flag 在两层行为不同，
+#: 这条已经登记在 `WRITE_EFFECTS` 上方那段注释里——本表按 flag 索引，
+#: 而它收的是「**这条路要是写了盘，那份产物就是混版的**」，对两层都不说假话。
+#: ⚠ **`--approve` 刻意不在这里**：定稿一个由代码算出来的字段都没改，
+#: 它只是盖了个章。标 `partial_rewrite` 会说假话。
+PARTIAL_REWRITE_FLAGS: Final = ('--remeasure', '--recheck', '--migrate', '--identity')
 
 #: 带值的 flag：`--apply-edit <载荷文件>`。值说的是「这个值是什么」。
 #:
@@ -820,8 +830,12 @@ class NodeSpec(NamedTuple):
 #: ⇒ stage0 三个节点全空：原型里 stage0 整层不存在（摄入并进 stage1，F-090）。
 #: ⇒ `stage4.context` / `stage7.assemble` 空：它们**本身**就是那个动作，
 #:   原型的 `--context-only` / `--assemble` 已作为 flag 退役（见 `SUPERSEDED_FREE_ENTRIES`）。
-#: ⇒ 三个 `*.approve` 空：候选序号是它们的**参数**不是 flag，参数名属 F 期（stage6/7 未移植），
+#: ⇒ 三个 `*.approve` 空：候选序号是它们的**参数**不是 flag，参数名属 F 期，
 #:   现在起一个名字就是给一个零消费方的取值面抢跑。
+#:   ⚠ **这条注释后来被逐层查清，而三层的结论不一样**：`stage6.approve` 确实有一个
+#:   候选序号 ⇒ F1 补成 `('--pick',)`；而 `stage7.approve` **没有参数可起名**
+#:   （一本书只有一份人物表，定稿是给整份盖章）⇒ 它的空元组是**终态**。
+#:   stage0 那一格仍然待查。
 #:
 #: ⚠ **这一列今天必然不全，而不全的方向是安全的**：`is_paid` 拿它当白名单，
 #: 没登记的 flag 在付费节点上一律按付费算。已知漏的两个（原型 `FREE_FLAGS` 有、
@@ -889,12 +903,19 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',
                                  flags=('--pick',),
                                  produces=('stage6/hook.json',)),
+    # ⚠ `--revalidate` 是 F2 补的：本层加了落盘闸门（**任何一条 hard ⇒ `.INVALID`**，
+    #   照 stage3 不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
+    #   而**闸门是我们自己加的，不给一条 0 成本提升路，一次付费产出就被永久锁死**。
     'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表',
                                  flags=('--dry-run', '--check-only', '--identity',
-                                        '--recheck', '--apply-edit'),
+                                        '--recheck', '--apply-edit', '--revalidate'),
                                  produces=('stage7/name_map.json',)),
     'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
                                  produces=('stage7/book.txt',)),
+    # ⚠⚠ **`flags=()` 在这一格是【终态】不是待定**（2026-08-12，F2 查清）：
+    #   上面那条「候选序号属 F 期」的注释对 stage6 是对的，对本层不是——
+    #   **本层一本书只有一份人物表**，定稿是「给整份盖章」不是「从三条候选里选一条」，
+    #   原型的 `--approve` 就是一个 `store_true`。**它没有参数可起名。**
     'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
                                  produces=('stage7/name_map.json',)),
 }

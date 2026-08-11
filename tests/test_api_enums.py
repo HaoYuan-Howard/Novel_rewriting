@@ -161,8 +161,14 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
     # ⚠ 57 → 59（2026-08-11，F 期移植 stage6）：`stage6.hook --revalidate` +
     #   `stage6.approve --pick`。两条都是**有意加的**，而这条断言的全部意义
     #   就是逼人来改这个数、顺便说清为什么。
-    assert len(paid_payload['actions']) == 59, (
-        f'actions 有 {len(paid_payload["actions"])} 条，期望 59 '
+    # ⚠ 59 → 60（2026-08-12，F2 移植 stage7）：**只多一条** `stage7.rename --revalidate`
+    #   ——本层加了落盘闸门（任何一条 hard ⇒ `.INVALID`），而不给 0 成本提升路
+    #   一次付费产出就被永久锁死。
+    #   ⚠ **`stage7.approve` 没有跟着 +1**，那不是漏了：本层一本书只有**一份**人物表，
+    #   定稿是「给整份盖章」不是「从三条候选里选一条」⇒ 它没有参数可起名，
+    #   `flags=()` 在那一格是**终态**（`invariants.py` 那条注释已改）。
+    assert len(paid_payload['actions']) == 60, (
+        f'actions 有 {len(paid_payload["actions"])} 条，期望 60 '
         f'（16 个节点的默认路径 + 每个 flag，stage5.write 两条臂各算一遍）。'
         f'这个数**会随 `NODES` 改**——改动它是有意的就来改这个数')
 

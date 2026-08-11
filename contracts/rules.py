@@ -42,7 +42,11 @@ _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
 #: ⚠ **`stage6` 是 F 期第一个移植进来的层**（2026-08-11）。选它而不是 stage2 的理由
 #: 与 C 期选 stage3 当第一条纵切同构：**按验证价值挑，不按管线顺序挑**——
 #: 它是七层里最便宜的一层，用来把「加一层」那张 11 步清单走通一遍。
-PORTED_STAGES: frozenset[str] = frozenset({'stage3', 'stage6'})
+#: ⚠ **`stage7` 是 F 期第二层**（2026-08-12）。它是本仓第一个**一个 stage 三个节点**的层
+#: （`stage7.rename` / `stage7.assemble` / `stage7.approve`），于是「一层一个跑法」
+#: 那几张按 **stage** 索引的表（`_runners` / `_checkers`）第一次要在函数体里再按
+#: `ctx.node` 分一次岔——**那不是新机制，是 F0 定的那张查表的自然形态**。
+PORTED_STAGES: frozenset[str] = frozenset({'stage3', 'stage6', 'stage7'})
 
 
 @dataclass(frozen=True)

@@ -220,9 +220,18 @@ def _judged_drift(art: Hook, up: _Upstreams) -> tuple[list[str], list[str]]:
 
 def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
             art: Hook | None) -> CheckReport:
+    """⚠ **新鲜度判的是「这份报告在说哪个文件」**，而那不总是 `REL`。
+
+    ⚠⚠ **这一处是 F2 在 stage7 上撞出来才回头补的**（本层同形，只是没有样本走到）：
+    **第一次**付费跑就被闸门拦下时，盘上**只有 `.INVALID`**
+    （`write_invalid` 不碰正式稿，而正式稿本来就还不存在）⇒ 拿 `REL` 判新鲜度会抛
+    「不在盘上」，于是 `--revalidate` 这条唯一的 0 成本出路在**最需要它的那一刻**跑不动。
+    F1 的那条提升路测试跑在一本**已经有 `hook.json`** 的书上，所以它一直是绿的。
+    """
     prov = (art.provenance.model_dump(by_alias=True) if art is not None else {})
+    judged_rel = REL if store.exists(REL) else _INVALID
     return build(
-        sid=ctx.sid, node=ctx.node, freshness=store.freshness(REL),
+        sid=ctx.sid, node=ctx.node, freshness=store.freshness(judged_rel),
         outcomes=outcomes, accounting=_accounting_of(prov),
         invalid=store.exists(_INVALID),
         revalidated=prov.get('revalidated'), origin=prov.get('origin'))

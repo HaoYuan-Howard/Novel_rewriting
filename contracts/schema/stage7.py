@@ -419,6 +419,51 @@ class NameMap(StrictModel):
     provenance: NameMapProvenance = Field(alias='_provenance')
 
 
+class NameDecisionResponse(StrictModel):
+    """模型写的一条角色决定。**`old_canonical` 不在里面**——它由代码从 registry 回填。
+
+    ⚠ **本层的响应模型刻意不开 `extra='forbid'` 的严格语义去拒收整份响应**：
+    多写一个键在这里不会坏事（下游只挑它认识的键），而拒收要**再花一次钱**
+    （本层一本书只调用一次）。⇒ 载体照常收，多出来的键由判据报一行。
+    """
+
+    char_id: str = Field(min_length=1)
+    new_canonical: str = Field(min_length=1)
+    renamed: bool
+    not_renamed_reason: str | None = None
+    aliases: list[Alias] = Field(default_factory=list)
+    reason: str = ''
+
+
+class NameMapResponse(StrictModel):
+    """**模型写的那两个键**，`ask_json(model_cls=...)` 收的就是它。
+
+    ⚠⚠ **它与 `NameMap` 不是同一个东西，那正是它存在的理由。** 产物里另外
+    十几个顶层键——`subs` / `kept` / `applied` / `residual` / `baselines` /
+    `book` / `book_txt` / `judged` / `identity` / `_provenance`——**一个字都不经模型**。
+
+    ⚠⚠ **`require` 从本模型的必需顶层键派生 ⇒ 两个键一个都漏不掉。**
+    原型的调用点写的是 `require=('characters',)`，**漏了 `surname_map`**。
+    漏传不报错，它只是让三处 `or {}` 兜底同时生效，而那三处的后果各不相同：
+
+    | 后果 | 机制 |
+    |---|---|
+    | `rn_surname_split`（HARD）**恒不触发** | 查表全 `None` ⇒ 候选集恒空 ⇒ 条件恒假 |
+    | `R-10.6` 的探针盲区**原样回来** | `stems` 少了 `surname_map` 的键那一半 |
+    | `rn_kinship_touched` **变严** | 姓氏豁免失效 ⇒ 「孙大娘」这类重新被误判 |
+
+    **一条违约数据的静默通行证。** 派生之后这件事**结构上不可能再发生**。
+    """
+
+    #: `{原姓: 新姓}`，只覆盖【字面同姓且 ≥2 人】的族群。
+    #: ⚠ **必需键**——见上面那张表。空表是合法的（这本书没有族群），
+    #: 而**键不在**不是（那说明模型没照契约答）。
+    surname_map: dict[str, str]
+
+    #: 长度必须与 registry 一一对应，多一个少一个都是 `rn_llm_shape`。
+    characters: list[NameDecisionResponse] = Field(min_length=1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、`stage7/name_map_edit.json` —— 人产的输入，也是契约
 # ─────────────────────────────────────────────────────────────────────────────
