@@ -27,12 +27,12 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from contracts.invariants import NODES
-from contracts.schema import InputEdge, Provenance
+from contracts.schema import InputEdge, Provenance, Usage
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from novel import paths, prov
 from novel.errors import ProvenanceRefused
 from novel.llm.cache import CachePolicy
-from novel.llm.ledger import CostLedger, ledger_path
+from novel.llm.ledger import CostLedger, UsageMark, ledger_path
 
 P = TypeVar('P', bound=Provenance)
 
@@ -68,12 +68,18 @@ class RunContext:
     #: （`novel/report/accounting.py::ACCOUNTING`）：产地记了而表里没有 ⇒ 显式终态。
     _accounting: dict[str, Any] = field(default_factory=dict, repr=False)
 
+    #: 上一份产物的账**结算到哪**。见 `_settled`。
+    _usage_mark: UsageMark | None = field(default=None, repr=False)
+
     def __post_init__(self) -> None:
         if self.node not in NODES:
             raise ValueError(
                 f'未知节点 {self.node!r}。取值面的唯一落点是 contracts.invariants.NODES：'
                 f'{sorted(NODES)}。⚠ `n1..n9` 那一套已整套退役——作业 id 是 `<stage>.<动词>`')
         self.novel_dir = Path(self.novel_dir)
+        # 在这里而不是在 `open()` 里：手搭的 `RunContext`（测试、以后的 CLI）也得有起点。
+        if self._usage_mark is None:
+            self._usage_mark = self.ledger.snapshot()
 
     # ── 身份 ──────────────────────────────────────────────────────────────
 
@@ -155,9 +161,10 @@ class RunContext:
                 f'⇒ 0 成本产出走 `free_provenance()`；'
                 f'要写回一份**继承来的**来源账（`--revalidate`/`--remeasure`/`--approve`…），'
                 f'走 `store.promote_invalid()` 或直接把读上来的那一份原样带下去，别现造')
-        return cls(code=self.code, inputs=self.edges,
-                   prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
-                   model=model, usage=self.ledger.usage(), **extra)
+        out = cls(code=self.code, inputs=self.edges,
+                  prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
+                  model=model, usage=self.ledger.usage_since(self._usage_mark), **extra)
+        return self._settled(out)
 
     def free_provenance(self, cls: type[P] = FreeProvenance, /, *,
                         prompts: dict[str, str] | None = None, **extra: Any) -> P:
@@ -170,10 +177,33 @@ class RunContext:
         `prompts` 在这里通常只有一项 `RULES`——「这份报告是拿哪一版尺子量的」。
         判据表改了而报告没重跑，这个指纹是唯一说得出来的地方。
         """
-        return cls(code=self.code, inputs=self.edges,
-                   prompts=({k: prov.fingerprint(v) for k, v in prompts.items()}
-                            if prompts else None),
-                   usage=self.ledger.usage(), **extra)
+        out = cls(code=self.code, inputs=self.edges,
+                  prompts=({k: prov.fingerprint(v) for k, v in prompts.items()}
+                           if prompts else None),
+                  usage=self.ledger.usage_since(self._usage_mark), **extra)
+        return self._settled(out)
+
+    def _settled(self, out: P) -> P:
+        """把成本刻度推到这一份产物之后。**两个铸造口的最后一步都是它。**
+
+        ⚠⚠ `usage` 原来直接写 `self.ledger.usage()`，而那是 **run 累计**。
+        `_common.md` §八写得很清楚，两份账答的是两个问题：账本答「这周/这本书花了多少」，
+        产物里那一份答「**这一份**花了多少」——那是看**返工回路边际成本**时会问的。
+        一次跑产 N 份产物（stage5 逐章正是这个形状）时，累计值让第 2 份带着第 1 份的账、
+        第 3 份带着前两份的，一路加上去。边际成本从此读不出来，而账面看着都对。
+
+        ⚠ **结算点是「铸造来源账」，不是「落盘」。** 铸造口只有这两个
+        （`llm_provenance` / `free_provenance`），一份产物 = 一次铸造 = 一次结算。
+        挪到写盘口有两个坏处：① 「先铸 N 份再逐份落盘」时每份会认领同一批 token；
+        ② 要给 `promote_invalid` / `write_invalid` 开例外，而 `store.py` 那边刚论证过
+        「需要白名单的闸迟早被绕开」。
+
+        ⚠ **推刻度必须在构造成功之后。** 来源账自己带后置条件
+        （`StyleProvenance.attempts` 非空之类），构造是会抛的；抛了还把刻度推走，
+        那段窗口的账就再也没有产物认领它——Σ（每份）== run 总量 当场破。
+        """
+        self._usage_mark = self.ledger.commit(self._usage_mark)
+        return out
 
     # ── 构造 ──────────────────────────────────────────────────────────────
 

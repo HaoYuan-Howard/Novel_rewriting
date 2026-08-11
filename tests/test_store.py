@@ -217,6 +217,107 @@ def test_what_we_write_is_what_we_can_read_back():
     StyleGrounding.model_validate(raw)
 
 
+def _spend(ctx: RunContext, **tokens) -> None:
+    """记一次真调用。`tokens` 里没给的那几项 = 这次响应没报它们。"""
+    ctx.ledger.record(node=ctx.node, sid=ctx.sid, model='m', code=ctx.code,
+                      cached=False, cache_policy='default', **tokens)
+
+
+def _mint(ctx: RunContext) -> StyleProvenance:
+    """铸一份付费来源账。**只为了拿它的 `usage`**，别的字段取最小合法值。"""
+    return ctx.llm_provenance(
+        StyleProvenance, prompts={'STYLE_SYS': 'x'}, model='m',
+        attempts=[dict(kind='initial', user_prompt='0' * 10, output='1' * 10,
+                       cache_policy='default')])
+
+
+def test_each_artifact_gets_its_own_usage_not_the_whole_runs_total():
+    """⭐⭐ `_provenance.usage` 答的是「**这一份**花了多少」，不是「这次跑花了多少」。
+
+    ⚠ 这里原来直接写 `ledger.usage()`，而那是 **run 累计**。一次跑产 N 份产物
+    （stage5 逐章正是这个形状）时，第 2 份带着第 1 份的账、第 3 份带着前两份的，
+    一路加上去 —— 而**返工回路的边际成本**正是要从这一格里读的，从此读不出来，
+    账面还看着都对。两份账答的是两个问题（`_common.md` §八）：
+    账本答「这周/这本书花了多少」，产物里那一份答「这一份花了多少」。
+    """
+    ctx = _ctx(_book())
+    _spend(ctx, prompt_tokens=10, completion_tokens=5, reasoning_tokens=1)
+    a = _mint(ctx)
+    _spend(ctx, prompt_tokens=20, completion_tokens=7, reasoning_tokens=2)
+    b = _mint(ctx)
+
+    assert (a.usage.calls_made, a.usage.prompt_tokens) == (1, 10)
+    assert (b.usage.calls_made, b.usage.prompt_tokens) == (1, 20), \
+        '第二份产物带上了第一份的账'
+    assert b.usage.completion_tokens == 7 and b.usage.reasoning_tokens == 2
+    # 账本自己仍然是 run 总量——它答的是另一个问题
+    assert (ctx.ledger.usage().calls_made, ctx.ledger.usage().prompt_tokens) == (2, 30)
+
+
+def test_every_artifacts_usage_sums_back_to_the_run_total():
+    """守卫的守卫：按份切开之后，**各份之和必须等于账本的总量**。
+
+    差一分钱就说明有一段窗口的账**谁都没认领**（或者被认领了两次）。
+    """
+    ctx = _ctx(_book())
+    parts = []
+    for i in (1, 2, 3):
+        _spend(ctx, prompt_tokens=i, completion_tokens=i * 2, reasoning_tokens=i * 3)
+        parts.append(_mint(ctx).usage)
+    total = ctx.ledger.usage()
+    for k in ('calls_made', 'calls_cached', 'prompt_tokens',
+              'completion_tokens', 'reasoning_tokens'):
+        assert sum(getattr(u, k) for u in parts) == getattr(total, k), f'{k} 的账对不上'
+
+
+def test_a_token_kind_the_response_never_reported_stays_null():
+    """⭐ **`null` = 这次响应没给 usage，不是 0**（`_common.md` §八）。
+
+    ⚠ 原来三项共用**一个** `_saw_token_counts` 开关。于是一次只给了 `prompt_tokens`
+    的响应（DeepSeek 实测有）会把另外两项写成 `0`——而「没给」与「真的没花」
+    是必须分得开的两件事。一个全局开关同时管三件事，必然把其中两件搞错。
+    """
+    ctx = _ctx(_book())
+    _spend(ctx, prompt_tokens=10)              # ← 只报了这一项
+    u = _mint(ctx).usage
+    assert u.prompt_tokens == 10
+    assert u.completion_tokens is None and u.reasoning_tokens is None, \
+        '没报过的那两项被写成了 0——「没给」与「真的没花」混掉了'
+
+
+def test_the_same_usage_mark_can_never_be_committed_twice():
+    """同一把刻度提交两次 = 两份产物各自认领同一批 token。**显式终态，不是一笔悄悄重复的账。**"""
+    led = CostLedger()
+    mark = led.snapshot()
+    led.record(node='stage3.style', sid='1', model='m', code='c',
+               cached=False, cache_policy='default', prompt_tokens=3)
+    assert led.usage_since(mark).prompt_tokens == 3
+    led.commit(mark)
+    with pytest.raises(ProvenanceRefused, match='结算了两次'):
+        led.commit(mark)
+
+
+def test_a_failed_mint_does_not_push_the_usage_mark():
+    """⭐ **推刻度必须在构造成功之后。**
+
+    来源账自己带后置条件（`StyleProvenance.attempts` 非空），构造是会抛的。
+    抛了还把刻度推走，那段窗口的账就再也没有产物认领它——
+    Σ（每份）== run 总量 当场破，而破得**一声不响**。
+    """
+    ctx = _ctx(_book())
+    _spend(ctx, prompt_tokens=10)
+    with pytest.raises(Exception):
+        ctx.llm_provenance(StyleProvenance, prompts={'S': 'x'}, model='m', attempts=[])
+    # 刻度没动 ⇒ 下一份产物照样认领得到这 10 个 token
+    assert _mint(ctx).usage.prompt_tokens == 10
+
+
+def test_a_run_with_no_calls_still_has_no_usage_key():
+    """0 成本节点是**键不在**，不是一份全 0 的 usage——按份结算之后这条仍然成立。"""
+    ctx = _ctx(_book(), paid=False)
+    assert ctx.free_provenance().usage is None
+
+
 def test_three_state_keys_are_absent_on_disk_not_null():
     """三态那四个键：`None` ⇒ **键不在**。`revalidated: null` 与「没有这个键」是两份字节。"""
     ctx = _ctx(_book())
