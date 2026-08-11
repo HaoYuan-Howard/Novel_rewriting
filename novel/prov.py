@@ -19,7 +19,6 @@ import json
 import os
 import subprocess
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any, Callable, Iterable, Literal
 
 from contracts.invariants import FRESHNESS, FRESHNESS_REASON
@@ -87,9 +86,18 @@ CODE_UNKNOWN = 'unknown'
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-@lru_cache(maxsize=1)
 def code_version() -> str:
     """当前代码版本。**一次跑只问一次**（`RunContext.code` 把它固化成 run 级的常量）。
+
+    ⚠⚠ **「一次跑一次」不许用 `lru_cache` 实现。** 这里原来挂着 `@lru_cache(maxsize=1)`，
+    而零参函数上的 `lru_cache` 是**进程级**不是 run 级：长驻服务里
+    **第一次跑问到的答案会被盖到此后每一份产物上**——包括它那个 `-dirty` 后缀在不在。
+    于是「跑到一半有人 commit 了 / 改了工作树」这件事再也读不出来，
+    正是加 `--dirty` 要消灭的那个失败，换了个更隐蔽的形态回来。
+    ⇒ 固化的落点是 `RunContext.code`（一个 run 级的字段），它本来就只问一次；
+    本函数保持无状态。代价是每个 run 多一次子进程（~10-30ms），买的是「这次跑用的是哪版代码」。
+    ⚠ **不许**改成给 `RunContext.open` 加一个 `code=` 参数来省这次子进程——
+    那会造出一条能对「哪版代码产了它」撒谎的路，而这一格的全部价值就在于它不会撒谎。
 
     ⚠⚠ **必须带 `--dirty`。** 原来是 `git rev-parse --short HEAD`，
     而**工作树脏的时候它照样给出一个看起来精确的答案**：stage6 盘上有逐字节铁证——
@@ -186,6 +194,50 @@ def _worst(edges: Iterable[EdgeVerdict]) -> tuple[Freshness, str]:
     return ('fresh', 'match') if worst is None else (worst.state, worst.reason)
 
 
+def _edge_of(value: Any) -> dict[str, str | None]:
+    """一条边的任意盘上形态 → `{'file': fp10|None, 'consumed': fp10|None}`。"""
+    if isinstance(value, str):
+        # **旧形态**：`inputs` 的值是一个裸的 10 位指纹。`consumed=null` 的含义是
+        # 「本节点没有声明自己读了哪些字段」⇒ 该边 `unknown`，**不是 `fresh`**。
+        return {'file': value, 'consumed': None}
+    if isinstance(value, dict):
+        f, c = value.get('file'), value.get('consumed')
+        return {'file': f if isinstance(f, str) else None,
+                'consumed': c if isinstance(c, str) else None}
+    # 真正畸形的那些（`int` / `list` / `None`）。`file=None` 会走 `file_changed` ⇒ **stale**。
+    # ⚠ 这是**挑过的一边**：判 stale 的代价是一次多余重跑，判 fresh 的代价是拿一份
+    #   来历说不清的产物当「没问题」。盘上目前一条这种边都没有，它纯属防御。
+    return {'file': None, 'consumed': None}
+
+
+def normalize_inputs(recorded: Any) -> dict[str, dict[str, str | None]] | None:
+    """`_provenance.inputs` 的任意盘上形态 → 新契约形态。**新鲜度这一侧的唯一落点。**
+
+    ⚠⚠ **它存在的理由是盘上那 297 条边。** 存量产物的 `inputs` 值**全部**是扁平的
+    10 位字符串（`tests/corpus.py::RESHAPED` 记着这条），而新契约一条边是
+    `{file, consumed}`。`freshness` 原来直接对每条边调 `.get()`，
+    而 `str` 是真值、`'abc'.get` 不存在 ⇒ 一份**读得出来的**存量产物
+    抛 `AttributeError: 'str' object has no attribute 'get'`。
+    **判过期恰恰是「这份产物已经不合当前 schema」时最该答得出来的那个问题**
+    （`store.freshness` 的 docstring 亲自写着这条），在那一刻炸掉方向是反的。
+
+    ⚠ **本函数不抛异常。** 同理由：`store.freshness` 承诺「别让一条坏键抛异常，
+    那会把『有一条边指向已删文件』变成『整份报告出不来』」——坏**值**同理。
+
+    ⚠ **`None` 与 `{}` 必须留着分界**：前者 ⇒ `no_provenance`，后者 ⇒ `no_inputs`。
+    容器本身不是 dict（盘上没见过，但读的是任意存量字节）也归到 `no_inputs`——
+    「有来源账但读不出上游」与「没有来源账」是两件事。
+
+    ⚠ 每条边**恒输出两个键**：下游 `freshness` 直接下标取值，
+    而 `tests/test_corpus_fixtures.py` 逐条断言 `set(edge) == {'file','consumed'}`。
+    """
+    if recorded is None:
+        return None
+    if not isinstance(recorded, dict):
+        return {}
+    return {str(k): _edge_of(v) for k, v in recorded.items()}
+
+
 def freshness(
     recorded: dict[str, Any] | None,
     *,
@@ -207,7 +259,13 @@ def freshness(
     存在的全部理由（`Q-4`：「指纹是文件级的：改一个不相干的字段会让整份产物的指纹失配，
     把一批结论降级成『读数不可用』，且没有重新挂钩的路」）。
     ⇒ **判定顺序是 consumed 优先于 file，不是反过来。**
+
+    ⚠ **形状归一在函数体第一行**（`normalize_inputs`），不在调用方：
+    盘上存量产物的 `inputs` 是扁平字符串，而判过期正是「这份产物已经太老」时
+    最该跑得通的那条路。放在调用方等于把它做成一条**记得调**的纪律，
+    而本项目每一条纪律都被绕过过。
     """
+    recorded = normalize_inputs(recorded)
     if recorded is None:
         return FreshnessReport('unknown', 'no_provenance')
     if not recorded:
@@ -215,9 +273,9 @@ def freshness(
 
     edges: list[EdgeVerdict] = []
     for key in sorted(recorded):
-        edge = recorded[key] or {}
-        was_file = edge.get('file')
-        was_consumed = edge.get('consumed')
+        edge = recorded[key]              # ← `normalize_inputs` 保证它恒是两个键的 dict
+        was_file = edge['file']
+        was_consumed = edge['consumed']
         now_file = file_now(key)
 
         if now_file is None:

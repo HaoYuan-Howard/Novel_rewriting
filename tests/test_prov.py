@@ -128,6 +128,73 @@ def test_stale_outranks_unknown_outranks_fresh():
         'stage1/a.json': 'fresh', 'stage1/b.json': 'unknown', 'stage1/c.json': 'stale'}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 一之二、**存量**来源账的形状 —— 盘上那 297 条边
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_legacy_flat_input_edge_does_not_crash_the_whole_report():
+    """⭐⭐ 盘上存量产物的 `inputs` 值**全部是扁平的 10 位字符串**（`RESHAPED` 记着 297 条）。
+
+    ⚠ 原来这里对每条边直接 `.get()`，而 `str` 是真值、`'abc'.get` 不存在
+    ⇒ 一份**读得出来的**存量产物抛 `AttributeError: 'str' object has no attribute 'get'`。
+    **判过期恰恰是「这份产物已经不合当前 schema」时最该答得出来的那个问题**
+    （`store.freshness` 亲自写着这条）——在那一刻炸掉，方向是反的。
+
+    扁平边 ⇒ `consumed` 填 `null`，含义是「本节点没有声明自己读了哪些字段」
+    ⇒ 该边 `unknown`，**不是 `fresh`**。
+    """
+    r = _fresh({KEY: FP_V1}, now=FP_V1)
+    assert (r.state, r.reason) == ('unknown', 'consumed_undeclared')
+    # 文件变了照旧 stale——归一没有把旧边变得比它本来更可信
+    assert _fresh({KEY: FP_V1}, now=FP_V2).state == 'stale'
+
+
+def test_a_malformed_edge_is_stale_not_an_exception():
+    """真正畸形的边（`int` / `list` / `None`）判 **stale**，不抛。
+
+    ⚠ 这是**挑过的一边**：判 stale 的代价是一次多余重跑，判 fresh 的代价是
+    拿一份来历说不清的产物当「没问题」。而抛异常的代价最大——
+    `store.freshness` 承诺过「别让一条坏边把整份报告干掉」。
+    """
+    for bad in (123, ['a'], None, {'file': 123}):
+        r = _fresh({KEY: bad}, now=FP_V1)
+        assert (r.state, r.reason) == ('stale', 'file_changed'), f'{bad!r} 判成了 {r.state}'
+
+
+def test_a_non_dict_inputs_container_reads_as_no_inputs():
+    """`inputs` 整个不是 dict ⇒ `no_inputs`，**不是 `no_provenance`**。
+
+    「有来源账但读不出上游」与「根本没有来源账」是两件事——合成一个 reason 之后，
+    「这个节点漏记了上游」与「这份产物早于这套机制」就分不开了。
+    """
+    assert prov.freshness(['a'], file_now=lambda _k: FP_V1).reason == 'no_inputs'
+    assert prov.freshness('abc', file_now=lambda _k: FP_V1).reason == 'no_inputs'
+
+
+def test_normalize_inputs_always_emits_exactly_the_two_keys():
+    """下游直接下标取值，而语料体检逐条断言 `set(edge) == {'file','consumed'}`。"""
+    got = prov.normalize_inputs({'a': FP_V1, 'b': {'file': FP_V1, 'consumed': PROJ_A}, 'c': 7})
+    assert all(set(e) == {'file', 'consumed'} for e in got.values())
+    assert got['a'] == {'file': FP_V1, 'consumed': None}
+    assert got['b'] == {'file': FP_V1, 'consumed': PROJ_A}
+    assert got['c'] == {'file': None, 'consumed': None}
+    # ⚠ `None` 与 `{}` 的分界必须留着：前者 no_provenance，后者 no_inputs
+    assert prov.normalize_inputs(None) is None and prov.normalize_inputs({}) == {}
+
+
+def test_the_corpus_migration_and_the_runtime_share_one_implementation():
+    """⚠ 同一件事的第二个落点必然分家。
+
+    `tests/corpus.py::_migrate_inputs` 与运行时判新鲜度时做的是**同一次换算**
+    （同一批存量字节、同一张 `RESHAPED` 表）。它只许负责定位，换算调运行时那一份。
+    """
+    import inspect
+
+    from tests import corpus
+    assert 'normalize_inputs' in inspect.getsource(corpus._migrate_inputs), \
+        '迁移 helper 又自己写了一份换算——它会与 `prov.normalize_inputs` 分家'
+
+
 def test_every_reason_in_the_enum_is_reachable():
     """守卫的守卫：`FRESHNESS_REASON` 里出现一个**没有任何路径产得出来**的取值，
     上面那些断言全都照绿——而那正是「取值面在说假话」的形状。
@@ -219,3 +286,28 @@ def test_code_version_asks_git_describe_with_dirty():
     src = inspect.getsource(prov.code_version)
     assert "'describe'" in src and "'--dirty'" in src, \
         '有人把它改回 rev-parse 了——那条路给不出「这次跑的代码不在任何一个 commit 上」'
+
+
+def test_code_version_is_asked_again_for_every_run(monkeypatch):
+    """⭐ **「一次跑只问一次」不许用 `lru_cache` 实现。**
+
+    零参函数上的 `lru_cache` 是**进程级**不是 run 级：长驻服务里
+    **第一次跑问到的答案会被盖到此后每一份产物上**——包括那个 `-dirty` 后缀在不在。
+    于是「跑到一半有人 commit 了 / 改了工作树」再也读不出来，
+    正是加 `--dirty` 要消灭的那个失败换了个更隐蔽的形态回来。
+    ⇒ 固化的落点是 `RunContext.code`（run 级字段），本函数保持无状态。
+    """
+    calls: list[list[str]] = []
+
+    class _Out:
+        stdout = 'abc1234-dirty\n'
+
+    def _fake_run(cmd, **_kw):
+        calls.append(cmd)
+        return _Out()
+
+    monkeypatch.setattr(prov.subprocess, 'run', _fake_run)
+    assert prov.code_version() == 'abc1234-dirty'
+    assert prov.code_version() == 'abc1234-dirty'
+    assert len(calls) == 2, '第二次没有重新问 git —— 答案被固化到了进程上，而不是这一次跑上'
+    assert not hasattr(prov.code_version, 'cache_info'), '`lru_cache` 又回来了'

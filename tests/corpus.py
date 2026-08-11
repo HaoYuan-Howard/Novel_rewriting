@@ -35,6 +35,7 @@ from typing import Any, Iterator
 from pydantic import BaseModel
 
 from contracts.schema import ARTIFACTS
+from novel import prov          # `RESHAPED` 里 `inputs` 那一行的换算，见 `_migrate_inputs`
 
 #: 语料目录。默认取本仓的**兄弟目录**，可用环境变量覆盖。
 #: ⚠ 找不到时**显式说出来**（测试 skip 并写明「没在查」），
@@ -450,16 +451,21 @@ def _pop_cuts(data: Any, cuts: frozenset[str]) -> None:
 
 
 def _migrate_inputs(data: Any) -> None:
-    """`{key: fp10}` → `{key: {file: fp10, consumed: null}}`。见 `RESHAPED`。"""
+    """`{key: fp10}` → `{key: {file: fp10, consumed: null}}`。见 `RESHAPED`。
+
+    ⚠ **换算规则不在这里，在 `novel/prov.py::normalize_inputs`。** 运行时判新鲜度时
+    要对同一批存量字节做同一次换算（盘上 297 条边全是扁平字符串），
+    而这里再写一份就是「同一件事的第二个落点」——本项目每一次都付过学费。
+    ⇒ 本函数只负责**定位**（走到 `_provenance.inputs` 那一格），换算调它。
+    """
     if not isinstance(data, dict):
         return
-    prov = data.get('_provenance')
-    if not isinstance(prov, dict):
+    prov_block = data.get('_provenance')
+    if not isinstance(prov_block, dict):
         return
-    edges = prov.get('inputs')
+    edges = prov_block.get('inputs')
     if isinstance(edges, dict):
-        prov['inputs'] = {k: (v if isinstance(v, dict) else {'file': v, 'consumed': None})
-                          for k, v in edges.items()}
+        prov_block['inputs'] = prov.normalize_inputs(edges)
 
 
 def _migrate_findings(data: Any, paths: tuple[str, ...]) -> None:
