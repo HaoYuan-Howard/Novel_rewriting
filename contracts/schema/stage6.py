@@ -243,3 +243,28 @@ class Hook(StrictModel):
     baselines_identity: dict[str, str]
 
     provenance: HookProvenance = Field(alias='_provenance')
+
+
+class HookCandidateResponse(StrictModel):
+    """模型写的一条候选。**只有两个键**——`mech` 与 `findings` 是代码算的。"""
+
+    approach: Literal[HOOK_APPROACHES]
+    text: str = Field(min_length=1)
+
+
+class HookResponse(StrictModel):
+    """**模型写的那两个键**，`ask_json(model_cls=...)` 收的就是它。
+
+    ⚠⚠ **它与 `Hook` 不是同一个东西，那正是它存在的理由。** 产物还有 `judged`
+    （来源账）· `baselines_identity`（代码跑出来的）· `mech` / `findings`
+    （确定性算的）· `_provenance`——**一个字都不经模型**。
+
+    ⚠⚠ **`require` 从本模型的必需顶层键派生 ⇒ 两个键一个都漏不掉。**
+    `rationale` 是**人定稿时唯一的择优说明**（界面渲染它），而原型的结构化调用点
+    **曾漏把它声明为必需键**——缺了它不会报错，产地存 `None`、
+    CLI 与界面**静默不显示那一行**，而本层的现役闸门恰恰就是人定稿。
+    派生之后这件事**结构上不可能再发生**。
+    """
+
+    candidates: list[HookCandidateResponse] = Field(min_length=3, max_length=3)
+    rationale: str = Field(min_length=1)

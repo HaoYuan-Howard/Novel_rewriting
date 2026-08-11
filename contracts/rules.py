@@ -38,7 +38,11 @@ _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
 #: `test_registry_covers_exactly_the_ported_stages`）· 正向覆盖率从 skip 变真 ·
 #: `ask_json` 调用点守卫从 skip 变真 · `test_no_rule_claims_a_non_judge_requirement` 变真真。
 #: **那是好事**——它们本来就欠着，只是 `REGISTRY` 空着的时候一条都红不了。
-PORTED_STAGES: frozenset[str] = frozenset({'stage3'})
+#:
+#: ⚠ **`stage6` 是 F 期第一个移植进来的层**（2026-08-11）。选它而不是 stage2 的理由
+#: 与 C 期选 stage3 当第一条纵切同构：**按验证价值挑，不按管线顺序挑**——
+#: 它是七层里最便宜的一层，用来把「加一层」那张 11 步清单走通一遍。
+PORTED_STAGES: frozenset[str] = frozenset({'stage3', 'stage6'})
 
 
 @dataclass(frozen=True)

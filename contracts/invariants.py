@@ -562,10 +562,14 @@ HOOK_APPROVED_APPROACHES: Final = HOOK_APPROACHES + ('human_edit',)
 #: 它逐字进 `HOOK_SYS`——原型把这三句写在产地的一个 dict 里，而**枚举表在这里**，
 #: 于是「有哪三种写法」与「每种是什么意思」分了两个落点。合成一份之后，
 #: 加一种写法而忘了写说明，`fill()` 当场抛 `KeyError`（缺值不渲染成空串）。
+#: ⚠⚠ **逐字移植自原型，一个字都不许改写。** `result_flashback` 那句里带着一条
+#: **硬约束**——「不得取后期高潮或结局」，那正是本层唯一还禁的东西（`R-9.9`）。
+#: 把它转述成一句顺口的说明，等于把一条现役禁令从 prompt 里删掉，而**不会有任何报错**。
 HOOK_APPROACH_NOTES: Final[dict[str, str]] = {
-    'conflict_first': '冲突前置：开篇第一句就把最尖锐的那个对立摆出来',
-    'result_flashback': '结果倒叙：先给一个反常的结果，再回头交代它怎么来的',
-    'identity_contrast': '身份反差：把人物的表面身份与真实处境并排放',
+    'conflict_first':    '冲突前置 —— 开门见山，把最尖锐的对立或危机直接砸到读者面前',
+    'result_flashback':  '开篇内的局部结果倒叙 —— 只从给定开篇正文里挑一个已发生的结果或画面，'
+                         '再回扣「为什么会这样」；不得取后期高潮或结局',
+    'identity_contrast': '身份反差 —— 用主角表里、处境或身份的强烈反差制造张力',
 }
 
 #: 收尾形态的四类。**唯一落点**——分类器（`novel/core/bands.py::ending_shape`）、
@@ -670,6 +674,14 @@ PARTIAL_REWRITE_FLAGS: Final = ('--remeasure', '--recheck', '--migrate')
 #: 而拼错的那一条**会真的被执行**。所以取值面要有落点，由 `build_argv` 当场拒。
 VALUED_FLAGS: Final = {
     '--apply-edit': '人工改好的那份候选稿的路径',
+    # ⚠ **不叫 `--approve`**：那个名字已经在 `SUPERSEDED_FREE_ENTRIES` 里退役成节点了
+    # （`stage6.approve` / `stage7.approve`），复活它等于让同一个字面既是 flag 又是节点。
+    # ⚠ 它**不进 `FREE_ENTRIES`**（那张表登记的是「0 成本**入口**」，而它是入口的**参数**），
+    # 也**不进 `WRITE_EFFECTS`**（不登记 ⇒ 落到 `spec.produces`，正确）。
+    # ⚠⚠ 它是**第一个只登记在本表里**的 flag——`novel/cli/main.py::_ALL_FLAGS` 从前
+    # 只取前两张表，于是这样的 flag 在命令行上**永远解析不出来且没有任何东西会出声**。
+    # 那一处已在 F0 修掉并配了守卫。
+    '--pick': '定稿选第几个候选（1 起）',
 }
 
 #: ⭐ 一次跑**会往盘上写什么**。空串 = 不写盘。
@@ -827,11 +839,17 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  paid_flags=('--revise',),
                                  flags=('--check-only', '--revise'),
                                  produces=('stage5/review_{n}.json',)),
+    # ⚠ `--revalidate` 是 F 期移植时补的，而它是**新加那道落盘闸门的必然配套**：
+    #   本层一次产三条候选，闸门拦的是「一条干净候选都没有」；不给一条 0 成本的提升路，
+    #   一次付费产出就会被永久锁死。**加闸门与加提升路必须同批**。
     'stage6.hook':      NodeSpec('stage6', 'R-9',  True,  'stage6 开篇文案',
                                  flags=('--dry-run', '--check-only', '--identity',
-                                        '--recheck', '--apply-edit'),
+                                        '--recheck', '--revalidate', '--apply-edit'),
                                  produces=('stage6/hook.json',)),
+    # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
+    #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',
+                                 flags=('--pick',),
                                  produces=('stage6/hook.json',)),
     'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表',
                                  flags=('--dry-run', '--check-only', '--identity',

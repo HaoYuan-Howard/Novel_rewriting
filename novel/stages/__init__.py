@@ -25,7 +25,8 @@ def _checkers() -> dict[str, Callable[[RunContext], CheckReport]]:
     而 `novel/api/routes/` 只是想拿一个函数。
     """
     from novel.stages.stage3 import style
-    return {'stage3': style.run_check_only}
+    from novel.stages.stage6 import hook
+    return {'stage3': style.run_check_only, 'stage6': hook.run_check_only}
 
 
 def check_only(stage: str) -> Callable[[RunContext], CheckReport]:

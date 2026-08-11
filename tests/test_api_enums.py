@@ -158,8 +158,11 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
         assert ('--yes' in argv) == a['paid'], (
             f'{a["label"]}：paid={a["paid"]} 而 argv 里的 --yes 对不上：{argv}')
     # 守卫的守卫：节点表被清空 / 遍历写错时，上面那个 for 一条都不跑而测试照样绿。
-    assert len(paid_payload['actions']) == 57, (
-        f'actions 有 {len(paid_payload["actions"])} 条，期望 57 '
+    # ⚠ 57 → 59（2026-08-11，F 期移植 stage6）：`stage6.hook --revalidate` +
+    #   `stage6.approve --pick`。两条都是**有意加的**，而这条断言的全部意义
+    #   就是逼人来改这个数、顺便说清为什么。
+    assert len(paid_payload['actions']) == 59, (
+        f'actions 有 {len(paid_payload["actions"])} 条，期望 59 '
         f'（16 个节点的默认路径 + 每个 flag，stage5.write 两条臂各算一遍）。'
         f'这个数**会随 `NODES` 改**——改动它是有意的就来改这个数')
 

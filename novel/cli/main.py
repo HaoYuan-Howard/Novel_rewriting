@@ -134,7 +134,7 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
     ⇒ 改成查表，形态**照抄 `novel/stages/__init__.py::_checkers()`**
     ——同一个问题在复检那一侧早就解对了，这里只是把它抄回来。
     """
-    return {'stage3': _run_stage3}
+    return {'stage3': _run_stage3, 'stage6': _run_stage6}
 
 
 def runnable_stages() -> frozenset[str]:
@@ -234,6 +234,84 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
     style.run_style(ctx, client)
     print('  ✓ stage3 文风画像已落盘')
     return X.OK
+
+
+def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
+    """stage6 的七条路。**六条 0 成本，一条付费。**
+
+    ⚠ `stage6.approve --pick N` 也走这里：派发按 **stage** 分，节点由 `ctx.node` 带着。
+    """
+    from novel.stages.stage6 import hook
+
+    tokens = set(N.flag_tokens(flags))
+
+    if ctx.node == 'stage6.approve':
+        pick = _valued(flags, '--pick')
+        if pick is None:
+            raise TerminalState(
+                'stage6.approve 必须说出定稿选哪一条：`--pick N`（1 起）。'
+                '⚠ 这与「选了一个越界的号」是两件事——那一条会告诉你有几个候选')
+        if not pick.isdigit():
+            raise TerminalState(f'--pick {pick!r} 不是一个候选序号（1 起的整数）')
+        _art, report = hook.run_approve(ctx, int(pick))
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--check-only' in tokens:
+        report = hook.run_check_only(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--dry-run' in tokens:
+        system, user, _mat = hook.build_prompt(ctx)
+        print(f'── system（{len(system)} 字）──\n{system}')
+        print(f'\n── user（{len(user)} 字）──\n{user}')
+        return X.OK
+
+    if '--identity' in tokens:
+        grid, report = hook.run_identity(ctx)
+        print(f'── 恒等基线 ── {len(grid)} 格（拿原作文案段当输入跑同一把尺子）')
+        for rule, cell in sorted(grid.items()):
+            print(f'  {cell}  {rule}')
+        print(render(report))
+        # ⚠ 恒等基线**不拿 badge 当退出码**：它量的是「判据有没有误伤原作」，
+        # 而报告里那些 unver 说的是本层的常态。跑完了就是 0。
+        return X.OK
+
+    if '--recheck' in tokens:
+        _art, report = hook.run_recheck(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--revalidate' in tokens:
+        promoted, report = hook.run_revalidate(ctx)
+        print(render(report))
+        print('  ✓ 已提升为正式产物（0 成本）' if promoted
+              else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
+        return X.OK if promoted else X.CHECK_FAILED
+
+    if '--apply-edit' in tokens:
+        raise RunModeNotImplemented(
+            'stage6.hook --apply-edit 登记在案，而本仓还没接它的线。'
+            '⚠ 这与「这个节点没有这条跑法」不是一回事——**有，但还没实现**。'
+            '（`_common.md` §5.3 那份 `human_provenance` 是教科书，连注释一起搬）')
+
+    # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
+    from novel.config import load_config
+    from novel.llm.client import LlmClient
+    from novel.llm.transport import DeepSeekTransport
+    cfg = load_config()
+    client = LlmClient(ctx, DeepSeekTransport(cfg), model=cfg.model,
+                       max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
+                       concurrency=cfg.concurrency)
+    hook.run_hook(ctx, client)
+    print('  ✓ stage6 开篇文案已落盘（三个候选）——跑 `stage6.approve --pick N` 定稿')
+    return X.OK
+
+
+def _valued(flags: list[str], name: str) -> str | None:
+    """带值 flag 的值。`flags` 是 `_flags_of` 拼出来的扁平序列（`['--pick', '2']`）。"""
+    return flags[flags.index(name) + 1] if name in flags else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

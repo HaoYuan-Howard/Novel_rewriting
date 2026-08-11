@@ -53,7 +53,14 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     ),
     'stage4': (),
     'stage5': (),
-    'stage6': (),
+    # ⚠ `params` 是**原型完全没有**的键（`stage6.md` 事实④）：本层是付费节点，
+    #    而换了模型、换了 `--max-tokens`，产物里没有任何一处说得出来。
+    'stage6': (
+        AccountingSpec('params', '这一次是用什么旋钮跑的？（`max_tokens` / `tag`）'),
+        AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
+        AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
+        AccountingSpec('partial_rewrite', '这份产物是混版的吗？（`--recheck` 改过其中一部分）'),
+    ),
     'stage7': (),
 }
 
