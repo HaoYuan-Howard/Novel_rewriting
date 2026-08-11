@@ -15,8 +15,8 @@
 |---|---|
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
 | **契约** | ✅ **十二份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + **`_report.md`**（校验报告，B3 补）+ **`_orchestration.md`**（作业/完成度/队列，D 补）+ **`_api.md`**（HTTP 响应，E 补）。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
-| **骨架** | ✅ **A~E 期完成**（E = HTTP 层，取值面与判定结果第一次有网络出口）。**下一步 = F（逐层移植）**，路线图与交接见下一节 |
-| 移植 | 🚧 **stage3 已移植**（`PORTED_STAGES={'stage3'}`）。其余七层见 F 期 |
+| **骨架** | ✅ **A~E 期全部完成**（E = HTTP 层，取值面与判定结果第一次有网络出口） |
+| 移植 | 🚧 **F 期进行中**：`F0`（清障）✅ · **`F1` = stage6 ✅**（`PORTED_STAGES={'stage3','stage6'}`）。**下一步 = F2**，逐层路线图与交接见下一节 |
 
 ### 🚩 新 session 从这里接手骨架
 
@@ -25,8 +25,10 @@
 默认的 `python` 指向 Miniconda base，**那里没有 pydantic**。
 ⚠ 本机 `%TEMP%\pytest-of-yh255` 的 ACL 坏了，pytest 的 `tmp_path` 一用就炸，测试里用 `tempfile.mkdtemp()`。
 
-**当前基线**：全绿，**1244 passed / 20 skip**（13 stage0 + 5 stage1 + **2 条都指着同一份产物**）。
-⚠ **E 期一个 skip 都没动**（1126→1244，+118 全是新增的真测试）。
+**当前基线**：全绿，**1320 passed / 20 skip**（13 stage0 + 5 stage1 + **2 条都指着同一份产物**）。
+⚠ **F0 + F1 一个 skip 都没动**（1244→1320，+76 全是新增的真测试）——
+移植 stage6 不改变那 20 条的处境，它碰不到 stage0/stage1 的 `importorskip`。
+⚠ **E 期同样一个 skip 都没动**（1126→1244，+118）。
 ⚠ E 期新增的 `tests/test_api_http.py` 挂着 `importorskip('fastapi')`——
 conda env `novel_refactor` 里 fastapi 现成，所以它**不该** skip。
 **那 27 条要是变成 skip，说明 env 选错了**，而 skip 掉的东西看起来像绿的。
@@ -65,13 +67,155 @@ conda env `novel_refactor` 里 fastapi 现成，所以它**不该** skip。
 | **C** | **stage3 纵切**（第一个真正跑起来的节点）· 判据行 + 确定性核心 + 九条判据 + 盘上三本对账 | ✅ |
 | **D** | **编排 + CLI**（R-11.3/11.7/11.8/11.10/11.11 · R-12.3 · R-13 · R-14）· `docs/schema/_orchestration.md` ↔ `contracts/schema/orchestration.py` | ✅ |
 | **E** | **HTTP 层**：`/api/enums`（整份取值面）+ 九个端点 + `docs/schema/_api.md` ↔ `contracts/schema/api.py` · `novel/views/` · **界面的结构纪律测试**（R-11 那一节第一次有守卫） | ✅ |
-| F | 逐层移植 stage2→4→5→6→7→（stage0/1 最后） | **← 下一步** |
+| **F0** | **清障**：CLI 派发表 + 两条跨层裁决入档 | ✅ |
+| **F1** | **stage6 移植**（F 期第一层）· 判据行 25 条 + `novel/core` 补齐 + 盘上三本对账 | ✅ |
+| F2~F7 | 逐层移植（顺序见下） | **← 下一步** |
+
+#### F 期的顺序：**按验证价值挑，不按管线顺序挑**
+
+施工方案写的是 stage2→4→5→6→7→(0/1)，那是**管线**顺序。实测下来体量极不均匀
+——**stage2 一层就占 prompt 的 57%（20 804 / 36 709 字）与判据的 62%（91 / 147）**，
+而且**它是唯一一层没有判据表的**：原型把 91 条判据塞在一个 1688 行的 `check_one()` 里，
+全是 `rep.fail('锚点唯一性', …)` 这种中文首参，**一个 id 都没有**。移植它 = 先从零建一张表。
+
+⇒ 已裁决**先用最便宜的一层把「加一层」那张清单走通一遍**（同 C 期选 stage3 当第一条纵切
+的判准）。剩下的建议顺序与实测体量：
+
+| 顺位 | 层 | 原型行数 / prompt 字 / 判据 | 备注 |
+|---|---|---|---|
+| **F2** | **stage7** | 1784 / 1987 / 31（有表） | 一个文件三个 node；`surface_hits` 不能用 `str.count`（实测差 4 倍）。⚠ 混写行 `R-10.2`/`R-10.3` 要按 F0 那条裁决**拆行** |
+| F3 | stage4 | 2618 / 2546 / 17 + 9 退役 | ⚠ `R-6.1`~`R-6.6` 六行声称 `HARD` 而 `stage4.md` 明说它们一条判据都没有；`R-5.3` 要拆行 |
+| F4 | stage5 | 4370 / 6164 / 43（有表） | 体量最大；§6.1 已列 **20 条判据在需求里没有落点**。`--revise` 挂哪个节点那条分歧在这一层裁 |
+| F5 | **stage2** | 3597 + 1110 / **20804** / **91（无 id）** | 最难。要先建 `novel/core/{spans,overlap}`，并补 `--drop` / `--replay-cache` 两个从没被守卫查过的 0 成本 flag |
+| F6 | stage1 | 828 / 0 / 13（无 id） | 零 prompt 零调用；要沿 stage0/stage1 的新边界把「摄入+分章」切开 |
+| F7 | stage0 | **0** / 0 / 0 | **不是移植是新写**——原型这一层一行代码都没有 |
+
+⚠⚠ **F6/F7 落地那天，`tests/test_ingest_fixtures.py` 的 18 个 `importorskip` 会一次变成
+18 个 `pytest.fail`**。触发条件是**模块存在**，不是进 `PORTED_STAGES`
+——只要建出 `tests/fixtures_ingest.py` 那张 `_IMPL_MODULE` 表点名的模块
+（`novel.stages.stage0.removal` / `novel.stages.stage1.partition`，哪怕空壳）就会发作。
+**「建模块」与「补 18 条断言」必须在同一次提交里。** 这是那份测试有意设计的机制。
 
 ⚠ **付费路写好了但一次都没跑。** `novel/stages/stage3/style.py::run_style()` 的
 `ask_json` 调用点在，而 `build_prompt()` 是 0 成本的 `--dry-run`（展示与执行**共用同一个构造函数**，
 `R-11.8`）。**真发第一次请求要先说一声**——那是本仓第一次真花钱。
 ⚠ D 期又给它加了一道：**CLI 上的付费跑法必须带 `--yes`**（`Q-10`）。
 `build_argv` 会替付费的那条自动补上——到了拼 argv 那一步，确认已经在界面/队列那层发生过了。
+
+### 移植 F1 已完成（2026-08-12）：**stage6 进来了，而路本身先修好了**
+
+#### F0：先修「加一层」这条路，再走它
+
+**`novel/cli/main.py::_dispatch` 在 `PORTED_STAGES` 那道闸【之后】是一句硬编码
+`return _run_stage3(ctx, flags)`。** 移植第二层的那一刻，`run stage6.hook --check-only`
+会安静地跑 stage3 的实现、读 `stage3/style_grounding.json`，
+**报出一份属于另一层的报告——退出码 0、格式正确、内容全错。**
+
+⚠⚠ **它当时抓不到，而抓不到的方式很值得记**：`test_an_unported_node_is_a_terminal_state_not_a_stack`
+只参数化**未移植**的层，`test_api_http` 那条也一样 ⇒ **移植一层反而让覆盖面缩小**，
+正好缩在漏改的那一格上。
+
+⇒ 改成 `_runners()` 查表 + `runnable_stages()`，形态**照抄
+`novel/stages/__init__.py::_checkers()`**——同一个问题在复检那一侧早就解对了。
+守卫盯**已移植**的那一侧（`runnable_stages() == PORTED_STAGES`），加一层漏改就红。
+
+F0 另外两件：`_ALL_FLAGS` 补上 `VALUED_FLAGS`（它与前两张表**正交**，
+而漏掉的后果是那个 flag **在命令行上永远解析不出来且没有任何东西会出声**；
+F1 的 `--pick` 正是第一个撞上它的）· 两条跨层裁决入档（见下）。
+
+#### F1：stage6 的对账 —— 与原型逐条一致，一分钱没花
+
+| 对账 | 结果 |
+|---|---|
+| `--check-only` 三本 | **25 行判据一行不少 · `skipped` 0 条 · HARD 命中 0 · badge `amber` · 退出码 0** |
+| 命中集 | 成年人 `{}` · 头牌 `{hook_ending_shape ×2}` · 三岁 `{hook_shape ×1}` |
+| ⭐ **重判 == 存盘** | **12 份文本（9 候选 + 3 定稿）逐份相等**，每份带 2~3 条真实结论 |
+| ⭐ **归一幂等** | 12/12 再归一一个字节不动、`mech` 三个计数器全 0 |
+
+「重判 == 存盘」对位 C 期 stage3 那次的「23 项逐值」：它抓的是**逐字移植时漏一个字符类、
+少一个前瞻断言**——那种错不会报错，只会让某条判据在某类输入上静默地不再拦。
+
+| 模块 | 它守的那件事 |
+|---|---|
+| `contracts/judges/stage6.py` | 25 条判据行（5 HARD · 9 INFO · 3 metric · 8 unver）+ 1 条退役 |
+| `novel/core/{normalize,facts}.py` + `text`/`naming`/`bands` 扩 | **多层共用**的确定性算子，放 core 不放 stage6 ⇒ F4/F5 零重复 |
+| `novel/stages/stage6/prompts.py` | `HOOK_SYS` 与原型 `N8_SYS` 逐字节相同，**且渲染之后也逐字节相同** |
+| `novel/stages/stage6/hook.py` | 七条路。**归一在判定之前**，三条路共用同一个 `_normalize_and_judge` |
+
+#### ⭐ 这一期最值钱的六件事
+
+**① 「模板逐字」还不够，**渲染出来的那一段也要逐字**——这条是我自己的失误逼出来的。**
+`HOOK_SYS` 确实与原型逐字节相同，而从原型 `APPROACHES` 搬进 `invariants` 的**三句说明**
+被**转述**了一遍，渲染结果短了 48 字：**丢掉的正是 `result_flashback` 那句里的硬约束
+「不得取后期高潮或结局」**——而那是本层唯一还禁的东西（`R-9.9`）。
+**只钉模板的测试抓不到它**：占位符两侧一个字节都没变。
+⇒ 补 `test_the_rendered_prompt_is_byte_for_byte_too`，钉的是**发出去的字节**。
+
+**② stage6 的徽章在结构上永远不可能是 `pass`，而那是对的。**
+8 条 `unver` 每次都输出（`builder._status_of` 强制走 `unverifiable`），而
+`badge_of` 见 `unver` 就至少 amber。**这不是缺陷**，是本层「能查的都查了、
+查不了的写在脸上」的可见形态。`passed` 仍是 `True`、退出码仍是 0
+——**「有查不了的」不等于「不合格」**。
+⚠ 这条是 `builder` **当场抓出来的**：我先写了 `ran()` 分支（前提成立时不出声），
+它判 `RefusedByStructure`。**前提在不在都不构成一条判定，两种状态都要出声。**
+
+**③ `hook_body_stale` 的口径与原型不同，而这是被迁移逼出来的。**
+`judged[].sha1` 是**整文件**指纹，而新契约裁过 stage5 的字段 ⇒ 迁移后它**必然**对不上；
+照原型退回整文件 `sha1` 判过期，盘上 2/3 本会**误报成红**。
+⇒ 新增 `R-9.17`：`consumed`（字段投影）判过期、`sha1` 只作审计；**没有 `consumed` ⇒ 说不清**。
+
+**④ 落盘闸门的条件与 stage3 不同：本层一次产三份。**
+stage3 是「任何 hard ⇒ `.INVALID`」，而这里一条候选红不该废掉另两条（人手里有三条可挑）
+⇒ 拦的是**一条干净候选都没有**。配套**必须同批**给 `stage6.hook` 补 `--revalidate`
+——**闸门是我们自己加的，不给一条 0 成本提升路，一次付费产出就被永久锁死。**
+
+**⑤ 复检报全部四份（3 候选 + 定稿），而不是只报定稿。**
+原型在有定稿时只报定稿那一条，于是盘上三本命中集全空——而 `hook_ending_shape`
+自己的注释写着：**合规的那个候选就在同一份产物里，人定稿时选了违规的那个，
+「没有判据，人也没有依据去挑」**。顺带治一个真病：**原型从来没读过 `approved.findings`**，
+于是成年人那本（`approach='human_edit'`，与任何候选都不匹配）**人工稿自己的判定
+一条都没进报告**。⇒ 比原型多出那 3 条 INFO，**登记为一次有名有姓的偏离**。
+
+**⑥ 合成样本第一次走通付费路，当场抓出一个真 bug。**
+`_context_source` 按猜的字段写成了 `ContextSource(sha1=…)`，而它根本不是指纹、
+是一条**新鲜度结论**（`state`/`detail`/`code`）。它没在任何单测里现形，
+因为**整条付费路在此之前一次都没跑过**——而载体拒收发生在产物已经全部算完的那一刻。
+
+#### F0/F1 定下的三条裁决（都登记在文档里）
+
+| # | 裁决 | 落点 |
+|---|---|---|
+| 1 | **混写行**（`载体`/`结构` 与 `HARD` 同格）**一律拆行**，用 `b` 后缀，不放宽守卫 | `REQUIREMENTS.md` 的裁决记录框。⚠ 欠账在 `R-5.3`（F3）· `R-10.2`/`R-10.3`（F2）· `R-14.2` |
+| 2 | 判据落点写 `Q-x` 的，**在 R 侧补一条真需求行**收下它，不放宽 `_REQ_RE` | 同上。stage6 已按它补了 `R-9.15`~`R-9.18`（**9 条判据原本一条都注册不进来**） |
+| 3 | stage6/stage7 全表 `repair='NONE'` ⇒ `actionable` 全 `False`，两条同构不变量一格不放宽 | `_report.md` §2.1 的裁决框。语料已替它投过票：`corpus.py::_migrate_findings` 写着 `setdefault('actionable', False)` |
+
+#### ⚠ 盘上三条陷阱（同「stage7 归档里 35 条 `high`」那一类，实跑核出）
+
+1. **`baselines_identity` 盘上恰好 12 格，而契约要 13 格**——载体是 `dict[str, str]`，
+   **少一格不会报错**。缺的正是 `hook_quote_unbalanced`（那条判据晚于这三份产物）。
+   ⚠ **不许拿占位符补上**：断言「恰好 12 且缺的正好是它」，
+   才能让「这份产物比那条判据老」留在盘上而不是被抹平。
+2. **`judged[].sha1` 迁移后必然对不上**，而 `consumed.text_sha1` 对得上 —— 见上面 ③。
+3. **`candidates[].chars` 已被新契约裁掉** ⇒ 字数一律现算，**且必须走 `measure()` 那把尺子**
+   （同一条候选 `measure()['chars']` 与 `len(text)` 实测差 **9.5%**）。
+
+#### ⚠ F1 结束时仍欠着的（登记，**不是**验过了）
+
+- **`stage6.hook --apply-edit` 登记在案而没接线**（显式终态说清「有，但还没实现」）。
+  `_common.md` §5.3 那份 `human_provenance` 是教科书，接线时**连注释一起搬**。
+- **付费路一次都没跑**（合成样本走通了整条路，但 `DeepSeekTransport` 从没发过请求）。
+  已用 `--dry-run` 验过：渲染出的 system **1075 字，与原型逐字相同**。
+- **两套新鲜度机制并存**：`sources.writer_context` 与 `_provenance.inputs`。
+  `stage6.md` §1.4 已登记「移植时应当合成一套」——**本轮不合**，
+  因为合并要动 stage5 的 `ReviewSources`，那属 F4。
+- **`hook_para_sep` 对单段文案给的是错的诊断**：它的 detail 写着
+  「归一化应该已经修掉它了」，而**单段文本没有分隔符可归一**。
+  判定本身不冤（本书文案是多段而它是一整块），只是那句话在这一类输入上是假的。
+- **`novel/views/` 下的 stage6 那一屏与它那条 API 路由没做**（可选项）。⚠ 做的时候
+  `candidates[].chars` 的现算**必须留在 Python**。
+- **26 行 `结构` 里还有 11 行是旧形态**（裸符号名 / 原型文件名），
+  新守卫 `test_structural_rows_that_name_a_repo_path_actually_point_at_it` 对它们**不可见**。
+  逐层移植时各自改成 `路径::名字`，**改一行那条守卫就多查一行**（F1 已把它从 13 个落点推到 15 个）。
 
 ### 骨架 E 已完成（2026-08-11）：**取值面与判定结果第一次有网络出口**
 
