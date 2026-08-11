@@ -322,8 +322,11 @@ stage6/_rounds/hook.rN.json 归档：上一轮的整份拷贝（形状与 hook.j
 
 **5 HARD · 9 INFO · 3 metric · 8 unver**。
 owner：`stage6` 13 · `None` 11（＝非结论）· `stage3` 1。
-`actionable=True` **12 条，全部进 `REPAIR_FREE`——本层一条付费自救都不开**
-（已经有更便宜的路：`--approve N` 换一条候选、`--apply-edit` 改一个字，都是 0 成本）。
+**本层一条付费自救都不开**（已经有更便宜的路：`--pick N` 换一条候选、
+`--apply-edit` 改一个字，都是 0 成本）⇒ 全表 `repair='NONE'`，于是 `actionable` 全 `False`。
+⚠ 原型这里标着 `actionable=True` **12 条**，那是**另一个意思**的 actionable
+（「人能 0 成本改掉」而不是「写作层能修」）。**已裁决不放宽载体侧那两条不变量**，
+那 12 条的「人怎么改」写进 `Rule.note` —— 理由见 `_report.md` §2.1 那个框。
 
 「盘上」列 = 9 个候选 + 3 本书级；「恒等」列 = `--identity` 在三本上跑的结果。
 ⚠ **恒等那一列有 6 格是恒等式**（事实⑤），下表用 `≡` 标出来——别把它读成读数。
@@ -418,7 +421,8 @@ owner：`stage6` 13 · `None` 11（＝非结论）· `stage3` 1。
 ### 4.1 判据 ↔ 需求
 
 `contracts/rules.py` 要求每条判据声明 `requirement`，`tests/test_coverage.py` 的反向覆盖率
-会让指向不存在编号的判据变红。`R-9` 为此从 8 条补到 **14 条 + `R-9.3b`**：
+会让指向不存在编号的判据变红。`R-9` 为此从 8 条补到 **14 条 + `R-9.3b`**（2026-08-10），
+移植时又补到 **18 条 + `R-9.3b`**（2026-08-11，见本节末尾那个框）：
 
 | 判据 | 落点 |
 |---|---|
@@ -427,17 +431,34 @@ owner：`stage6` 13 · `None` 11（＝非结论）· `stage3` 1。
 | `hook_ending_shape` | `R-9.4` |
 | `hook_quote_shape` | `R-9.5`（「谁在查」＝`度量`） |
 | `hook_not_approved` | `R-9.6`（`人`） |
-| `hook_spoiler_unver` · `hook_secret_literal` | `R-9.7` → `B-12` |
-| `hook_quote_unver` · `hook_relations_unver` | `R-9.8` → `B-12` |
+| `hook_spoiler_unver` · `hook_quote_unver` · `hook_relations_unver` | **`R-9.18`**（`人`）—— 原写 `R-9.7`/`R-9.8`，那两行标着「无守卫 → `B-12`」，指过去会被判说假话 |
+| `hook_secret_literal` | **`R-9.15`**（`度量`）—— 原写 `R-9.7`，同上；且它本来就是读数不是门 |
 | `hook_arc_literal` | `R-9.9` —— **剧透上界**，本层的产品语义 |
 | `hook_downsend_leak` | `R-9.10` |
 | `hook_reuses_source` · `hook_transcribes_body` | `R-9.11` |
 | `hook_invented_name` · `hook_invented_number` | `R-9.12` |
 | `hook_empty` · `hook_truncated` | `R-9.13` |
 | `hook_length` · `hook_shape` · `hook_quote_style` | `R-9.14` |
-| `hook_body_stale` | `Q-4` / `Q-5`（来源账） |
-| `hook_report` | `Q-1`（度量无条件报出） |
-| `hook_no_secrets` · `hook_secret_no_time` · `hook_body_missing` | `Q-1`（判定前提不成立时要出声） |
+| `hook_body_stale` | **`R-9.17`**（来源账；理由 `Q-4` / `Q-5` 写进 `Rule.note`） |
+| `hook_report` | **`R-9.15`**（读数无条件报出；理由 `Q-1`） |
+| `hook_no_secrets` · `hook_secret_no_time` · `hook_body_missing` | **`R-9.16`**（判定前提不成立时要出声；理由 `Q-1`） |
+
+> #### ⚠ 那 9 条落点是移植时才被逼出来的（2026-08-11）
+>
+> 上表原有 **5 条**写着 `Q-1` / `Q-4` / `Q-5`，而 `contracts/rules.py::_REQ_RE` 只收
+> `R-x.y` ⇒ 它们**注册不进去，import 期当场炸**；另有 **4 条**指着
+> `R-9.7` / `R-9.8`，而那两行写着「**无守卫 → `B-12`**」⇒
+> `tests/test_coverage.py::test_no_rule_claims_a_requirement_marked_unguarded` 会判它们说假话。
+> **9 条判据，一条都注册不进来。**
+>
+> ⇒ 按 `REQUIREMENTS.md` 的跨层裁决②（`Q` 是问题与裁决的记录，不是需求；
+> 指向 `Q` 的判据不进任何一节的正向覆盖率分母）**在 R 侧补四行**收下它们：
+> `R-9.15`（度量）· `R-9.16`（前提不成立要出声）· `R-9.17`（来源账）· `R-9.18`（三条查不了的常驻）。
+> `Q-x` 降为 `Rule.note` 里的理由。
+>
+> ⚠ **`R-9.7` / `R-9.8` 原样保留「无守卫 → `B-12`」，从此没有任何判据指着它们**——
+> 那是对的：它们说的是「这两件事没人在查」，而 `hook_spoiler_unver` 那三条**正是在说同一件事**，
+> 只是换了个地方说。判据指着「无守卫」那一行，等于让同一件事既算无守卫又算有守卫。
 
 > #### ⚠⚠ `R-9` 里曾经 **0 处**提到剧透上界
 >

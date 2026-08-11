@@ -8,6 +8,9 @@ test_coverage.py —— 需求 §6 立的**双向覆盖率**的执行落点。
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from contracts import requirements as reqs
@@ -81,6 +84,67 @@ def test_structural_rows_name_their_code_site():
         + '\n'.join(f'  {k:10} {raw!r}' for k, raw in bad)
         + '\n→ 写成 ``结构``（`模块.函数`）——说不出是哪段代码在守，就不算守'
     )
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+#: 「代码落点」的可解析形态：`<仓内相对路径>::<名字>`。
+#: D/E 期立的惯例（`R-11.13` · `R-13.x` · `R-14.x` 全是它）。
+_CODE_SITE = re.compile(r'`((?:[\w.\-]+/)+[\w.\-]+\.\w+)::(\w+)`')
+#: 只写路径不写名字的那种（`R-14.3` 的 `novel/llm/ledger.py`、`R-14.6` 的那份文档）。
+_BARE_PATH = re.compile(r'`((?:[\w.\-]+/)+[\w.\-]+\.(?:py|md|json|toml|yml))`')
+
+
+def test_structural_rows_that_name_a_repo_path_actually_point_at_it():
+    """上一条查「有没有反引号」，本条查**反引号里那个东西在不在**。
+
+    上一条的判准低到可以被一句原型仓的文件名满足：`R-9.1` 写着
+    `` `n8_hook.main` ``——那是**原型仓**的文件，本仓根本没有这个模块，
+    而它照样过了「写出代码落点」这道准入。**说不出是哪段代码在守，
+    与说了一段不存在的代码，对读的人是同一件事。**
+
+    ⇒ 本条只认可解析的那种形态 `路径::名字`：路径要在仓里，
+    名字要在那个文件里真的定义得出来。裸路径（`novel/llm/ledger.py`）只查存在。
+
+    ⚠ **旧形态对本条不可见**：实测 26 行 `结构` 里 **13 行**仍是裸符号名或原型文件名
+    （`R-4.2` 的 `measure()` · `R-9.1` 的 `n8_hook.main` · `R-10.1` 的 `save_name_map` …），
+    本条只扫得到另外 13 行的 16 个落点。**那正是这一格的漏洞，不是本条的疏忽**：
+    逐层移植时各自改成可解析形态，**改一行本条就多查一行**。
+    下面那条「守卫的守卫」保证它不会悄悄退化成一条什么都没扫到的测试。
+    """
+    unresolved: list[str] = []
+    checked = 0
+    for rid, r in DOC.of_kind('R').items():
+        if not (r.who and 'STRUCTURAL' in r.who.markers):
+            continue
+        sites = _CODE_SITE.findall(r.who.raw)
+        for rel, name in sites:
+            checked += 1
+            p = ROOT / rel
+            if not p.exists():
+                unresolved.append(f'{rid}: `{rel}::{name}` —— 文件不在仓里')
+                continue
+            if not re.search(rf'^\s*(?:def|class)\s+{name}\b|^{name}\s*[:=]',
+                             p.read_text(encoding='utf-8'), re.M):
+                unresolved.append(f'{rid}: `{rel}::{name}` —— {rel} 里定义不出 {name}')
+        with_name = {rel for rel, _ in sites}
+        for rel in _BARE_PATH.findall(r.who.raw):
+            if rel in with_name:              # 已被上面那一轮算过
+                continue
+            checked += 1
+            if not (ROOT / rel).exists():
+                unresolved.append(f'{rid}: `{rel}` —— 不在仓里')
+
+    assert not unresolved, (
+        '这些 `结构` 行点名了一个不存在的落点：\n'
+        + '\n'.join(f'  {u}' for u in unresolved)
+        + '\n→ 落点写的是**本仓**的代码。指向原型仓、或改名之后没跟上，'
+          '读的人会以为有一段代码在守而其实没有'
+    )
+    # 守卫的守卫（形态照抄 `test_docs_references.py::test_the_scan_actually_finds_something`）：
+    # 把可解析形态全改回裸符号名，上面那个循环一条都不跑而测试照样绿。
+    assert checked >= 15, (
+        f'只扫到 {checked} 个可解析落点——本条快要变成一条什么都没查的测试了')
 
 
 def test_carrier_rows_name_their_field():
