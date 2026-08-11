@@ -78,6 +78,41 @@ class ApprovalRequired(TerminalState):
 
     ⚠ **两个未批状态都要拦**（`R-0.3b`）：写成 `if approved == 'pending'` 会漏掉
     `not_run`——那正是把三态压成 `bool` 之后必然长出来的那种漏。
+
+    ⚠ 队列里的付费项没拿到一次性预先确认（`R-13.3`）也走这一条：
+    「排进队列了」不该变成静默扣费。
+    """
+
+
+class UnsupportedRunMode(TerminalState):
+    """这个节点没有这条跑法：未知节点 / 它不接受这个 flag / 带值 flag 没给值。
+
+    ⚠ **归 `TerminalState` 不归 `RefusedByStructure`**，因为最常见的产地是**人**
+    （在终端敲了一条这个节点没有的跑法），而不是代码自相矛盾。
+    ⇒ 报错要说人话，并把这个节点**真正接受的那几个**列出来。
+
+    ⚠ 拒收发生在 `build_argv` 里，而**展示与执行共用它**（`R-11.8`）——
+    于是「界面上摆出来的那条命令」不可能是一条拼错的命令。
+    """
+
+
+class RunModeNotImplemented(TerminalState):
+    """这条跑法登记在案（`NodeSpec.flags`），而本仓还没有接它的线。
+
+    ⚠ 与 `NodeNotPorted` 分开是有用的：「整层还没移植」与「这一层在、这条跑法还没接」
+    对人的下一步是不同的指示。合成一条，报错就只剩「跑不了」三个字。
+    ⚠ 与 `UnsupportedRunMode` 更要分开：那一条说的是**这个节点没有这条跑法**
+    （敲错了），这一条说的是**有，但还没实现**。前者该改命令，后者该改代码。
+    """
+
+
+class NodeNotPorted(TerminalState):
+    """这个节点在取值面里，但本仓还没有它的实现（`contracts.rules.PORTED_STAGES`）。
+
+    ⚠ **取值面要全、能不能跑是另一件事**，两者不许合并：
+    `NODES` 缺一个节点，`/api/enums` 就少一个取值、队列就排不出那一步、
+    正向覆盖率就少查一节；而「今天跑不动」只该在**真去跑它**的那一刻说出来。
+    ⇒ 缺实现是一句人话，不是一段栈。
     """
 
 

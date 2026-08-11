@@ -3,12 +3,14 @@
 """
 style.py —— 本层的**节点函数**。`argv` 那一头留给 Phase D（`build_argv` / `build_steps`）。
 
-三条 0 成本路先落地，付费路最后接：
-  · `run_check_only(ctx)`   复检一份已有产物 → `CheckReport`
-  · `run_remeasure(ctx)`    照盘上 stage1 重算 `measurable` 写回（**0 成本**）
-  · `run_revalidate(ctx)`   按**当前**判据重判 `.INVALID`，合格即提升
+四条 0 成本路先落地，付费路最后接：
+  · `run_check_only(ctx)`    复检一份已有产物 → `CheckReport`
+  · `run_measure_only(ctx)`  只跑确定性实测并报出来，**不写盘**
+  · `run_remeasure(ctx)`     照盘上 stage1 重算 `measurable` 写回（**0 成本**）
+  · `run_revalidate(ctx)`    按**当前**判据重判 `.INVALID`，合格即提升
 
-⚠ 三条都**不发一次请求**。付费路（`--dry-run` 先验 prompt）见 `prompts.py`。
+⚠ 四条都**不发一次请求**。付费路（`--dry-run` 先验 prompt）见 `prompts.py`。
+⚠ `build_prompt(ctx)` 是 `--dry-run` 那一条，与真跑**共用同一个构造入口**（`R-11.8`）。
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage3 import (
     Measurable, StyleAttempt, StyleGrounding, StyleProvenance, StyleResponse,
 )
+from novel import paths
 from novel.core.naming import names_of, spoiler_names_of
 from novel.core.text import render_book
 from novel.errors import GateBlocked, UpstreamMissing
@@ -33,6 +36,10 @@ REL = 'stage3/style_grounding.json'
 MAIN_TEXT = 'stage1/main_text.json'
 HOOK_COPY = 'stage1/hook_copy.json'
 GLOBAL_GROUNDING = 'stage2/global_grounding.json'
+
+#: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串**——
+#: 手写的那份会在改文件名时安静地指向一个不存在的路径。
+_INVALID = paths.invalid_of(REL)
 
 
 # ── `consumed` 投影：本层**真正读到**上游的哪一部分 ──────────────────────────
@@ -114,7 +121,7 @@ def run_check_only(ctx: RunContext) -> CheckReport:
         outcomes=outcomes, accounting=_accounting_of(prov),
         # `.INVALID` 在场是**上一次跑被闸门拦下来的痕迹**。留着不说等于静默：
         # 盘上那份正式稿可能是**更早**的一版，而人会以为它就是最近这次跑出来的。
-        invalid=store.exists(REL.replace('.json', '.INVALID.json')),
+        invalid=store.exists(_INVALID),
         revalidated=prov.get('revalidated'), origin=prov.get('origin'),
     )
 
@@ -221,3 +228,127 @@ def remeasured(ctx: RunContext) -> tuple[StyleGrounding, list[tuple[str, object,
     diff = [d for scope in ('body', 'hook')
             for d in drift(getattr(artifact.measurable, scope), getattr(now, scope))]
     return artifact.model_copy(update={'measurable': now}), diff
+
+
+# ── 另外两条 0 成本路（骨架 D 补齐） ────────────────────────────────────────
+
+def run_measure_only(ctx: RunContext) -> Measurable:
+    """`--measure-only`：只跑确定性实测并报出来，**不写盘**。
+
+    ⚠ 它与 `--remeasure` **是两件事**（`FREE_ENTRIES` 自己写着这句）：
+    本条连产物都不必存在——它量的是 stage1，不是 stage3。
+    ⇒ 它是「改了实测口径之后，先看看新数是多少」那一步，
+    而 `--remeasure` 是「把新数写回去」。混成一个 flag，人就没法先看后写。
+    """
+    store = ArtifactStore(ctx)
+    main, hook, _gg = _upstreams(store)
+    return measure_all(main, hook)
+
+
+def _hard_rules(outcomes) -> set[str]:
+    """这一趟命中了哪几条**阻断级**判据。**按 rule key 记，不按 detail 字符串记。**
+
+    ⚠ 原型这里踩过一个具体的坑，理由一起搬：它比的是**格式化后的字符串**，
+    而 `--remeasure` 这一趟做的事恰恰是改 `measurable` 里的那些数——
+    于是同一条旧问题会被认成「本次新引入」并入终态，
+    **判据 15 那条「旧违约照报但不挡路」的保护会在自己的实现细节上失效**。
+    """
+    return {o.rule for o in outcomes
+            if any(f.sev == 'hard' for f in (o.findings or []))}
+
+
+def run_remeasure(ctx: RunContext) -> tuple[StyleGrounding, list[tuple[str, object, object]],
+                                            CheckReport]:
+    """`--remeasure`：把重算的 `measurable` 写回已有产物，**其余字段不动**。0 成本。
+
+    【为什么必须有这条】`measurable` 全由代码算出，改了口径 / 修了 bug 却只能靠
+    重跑 LLM 才能落盘，等于**为自己的 bug 付钱**（`Q-3`）。
+
+    【来源账怎么记】走 `ctx.rewrite_provenance(prev, by='--remeasure')`：
+    继承 `prompts`/`model`，换掉 `inputs`，标 `partial_rewrite`（`_common.md` §5.1b）。
+    沿用旧账会让「这份 `measurable` 照哪份原文算的」永远说不出口——
+    **而那正是本条存在的理由**；整份覆盖又会把 `prompts` 说成本次产的。
+
+    ⚠⚠ **先校验后落盘，而闸门只拦「本次新引入」的**（`REVALIDATE_ONLY_NEW_ERRORS`）：
+    旧违约照报但不挡路，否则一条不相干的旧问题会把重算这条路**永久堵死**。
+    ⚠ 这一点上本实现比原型严一格：原型是**先写回、再重判**，
+    于是新引入错误的那一趟已经把产物盖掉了。这里判在写之前（`Q-5`）。
+    """
+    store = ArtifactStore(ctx)
+    if not store.exists(REL):
+        raise UpstreamMissing(f'{REL} 不在盘上——先跑一次 stage3.style')
+
+    _artifact, before = store.read_own(StyleGrounding, REL)
+    was = _hard_rules(_judge(store, before, measured_now=None))
+
+    updated, diff = remeasured(ctx)
+    data = updated.model_dump(by_alias=True)
+    # `measured_now=None`：这一趟正要把 `measurable` 覆盖掉，漂移那一条无从谈起。
+    outcomes = _judge(store, data, measured_now=None)
+    fresh_errors = sorted(_hard_rules(outcomes) - was)
+    if fresh_errors:
+        raise GateBlocked(
+            f'stage3 --remeasure **本次新引入**了 {len(fresh_errors)} 条阻断级错误：'
+            f'{fresh_errors}。**没有覆盖已有产物**——'
+            f'多半是描述文本里抄了旧数字，需要重跑 stage3 对齐。'
+            f'（重算前就有的 {len(was)} 条与本次无关，它们照报但不挡路）',
+            invalid_path=str(store.path(REL)))
+
+    written = updated.model_copy(update={
+        'provenance': ctx.rewrite_provenance(updated.provenance, by='--remeasure')})
+    store.write(REL, written)
+
+    prov = written.model_dump(by_alias=True).get('_provenance') or {}
+    report = build(
+        sid=ctx.sid, node=ctx.node, freshness=store.freshness(REL),
+        outcomes=outcomes, accounting=_accounting_of(prov),
+        invalid=store.exists(_INVALID),
+        revalidated=prov.get('revalidated'), origin=prov.get('origin'))
+    return written, diff, report
+
+
+def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
+    """`--revalidate`：按**当前**判据重判被闸门拦下的 `.INVALID` 稿，合格即提升。0 成本。
+
+    【为什么必须有这条】落盘闸门把问题稿存进 `.INVALID` 之后，**纯人工修订需要一条
+    0 成本提升路**。没有它，修一条判错的判据要为每一章再付一次费，
+    而重掷回来的是另一份稿，**修没修好无从对照**。
+
+    ⚠ **合格的判准是「一条 hard 都没有」，不是「没有新引入的」。**
+    与 `--remeasure` 相反，这里不适用 `REVALIDATE_ONLY_NEW_ERRORS`：
+    提升的语义就是「它现在过得了这道闸」——带着一条旧的阻断错误被提升上去，
+    等于把闸门本身作废掉。⚠ 那个常量的名字里有 `revalidate` 而消费方在
+    `--remeasure` 这一侧，是一处**命名与落点分家**，登记在这里（`Q-3`）。
+
+    ⚠ 提升走 `store.promote_invalid`——它的签名里没有 `prompts`/`model`/`inputs`，
+    **没有参数就没有可以传错的东西**（`_common.md` §5.2 记着全链四处实测伪造/丢失）。
+    """
+    store = ArtifactStore(ctx)
+    if not store.exists(_INVALID):
+        raise UpstreamMissing(
+            f'{_INVALID} 不在盘上——没有被闸门拦下的稿可提升。'
+            f'（要复检正式产物用 `--check-only`，那是另一件事）')
+
+    main, hook, gg = _upstreams(store)
+    _cand, data = store.read_own(StyleGrounding, _INVALID)
+    names = names_of(gg) if gg is not None else None
+    outcomes = checks.check(
+        data, corpus=corpus_of(main, hook), names=names,
+        spoiler_names=spoiler_names_of(gg, names) if gg is not None and names else frozenset(),
+        # 恒算漂移：这一份是当初付费那次产的，它的 `measurable` 可能已经跟不上 stage1 了。
+        measured_now=measure_all(main, hook))
+
+    prov = data.get('_provenance') or {}
+    promoted = not _hard_rules(outcomes)
+    if promoted:
+        store.promote_invalid(REL, StyleGrounding)
+        prov = (store.read_own(StyleGrounding, REL)[1].get('_provenance') or {})
+
+    report = build(
+        sid=ctx.sid, node=ctx.node,
+        freshness=store.freshness(REL if promoted else _INVALID),
+        outcomes=outcomes, accounting=_accounting_of(prov),
+        # 提升成功之后 `.INVALID` 已经归档进 `_rounds/`，那一格才回到 False。
+        invalid=store.exists(_INVALID),
+        revalidated=prov.get('revalidated'), origin=prov.get('origin'))
+    return promoted, report

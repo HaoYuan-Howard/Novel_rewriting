@@ -265,3 +265,141 @@ def test_free_nodes_are_the_ones_without_llm():
         'stage1.partition', 'stage4.context', 'stage5.review',
         'stage6.approve', 'stage7.assemble', 'stage7.approve',
     }, f'0 成本节点的集合变了：{sorted(free)}'
+
+
+# ───────── 跑法面（骨架 D 新增：`NodeSpec.flags` / `VALUED_FLAGS` / `WRITE_EFFECTS`） ─────────
+
+def _known_flags():
+    return set(inv.FREE_ENTRIES) | set(inv.PAID_FLAGS) | set(inv.VALUED_FLAGS)
+
+
+def test_node_flags_are_registered_run_modes():
+    """一个节点接受的 flag，必须在三张表之一里有名字。
+
+    ⚠ **没名字的 flag 会让 `is_paid` 说不出话**：它拿 `FREE_ENTRIES` 当白名单，
+    认不出的一律按付费算（`Q-10`）——于是一个不花钱的动作被画成橙色并弹二次确认，
+    **系统在对用户说假话**。这条测试让「漏登记」在改 `NODES` 那一刻就红。
+    """
+    known = _known_flags()
+    bad = {n: sorted(set(s.flags) - known) for n, s in inv.NODES.items()
+           if set(s.flags) - known}
+    assert not bad, (
+        f'这些节点的 flag 三张表里都没有：{bad}\n'
+        f'→ 补进 `FREE_ENTRIES`（0 成本入口）/ `PAID_FLAGS`（挂在付费动作上）'
+        f'/ `VALUED_FLAGS`（带值的参数），别只是不提它'
+    )
+
+
+def test_paid_flags_are_a_subset_of_the_nodes_flags():
+    """`paid_flags` 是 `flags` 的子集——一个节点接受不了的 flag，谈不上让它变付费。
+
+    两张表分家的具体形态：`paid_flags` 里写着 `--revise`、而 `flags` 里没有 ⇒
+    `build_argv` 会当场拒收它，于是那条「能把这个节点变付费」的声明**永远不可能被触发**，
+    却一直挂在表里让人以为它管着事。
+    """
+    bad = {n: sorted(set(s.paid_flags) - set(s.flags)) for n, s in inv.NODES.items()
+           if set(s.paid_flags) - set(s.flags)}
+    assert not bad, f'这些节点的 paid_flags 不在自己的 flags 里：{bad}'
+
+
+def test_valued_flags_are_an_orthogonal_axis():
+    """**「贵不贵」与「带不带值」是两个正交的轴**，重叠是对的，不是 bug。
+
+    ⚠ 这条测试的真正用途是**挡住一次顺手的合并**：
+    `test_the_three_flag_tables_are_disjoint` 读起来像「所有 flag 表两两不交」，
+    照那个印象把 `VALUED_FLAGS` 也加进去，`--apply-edit` 当场红——
+    而它同时是 0 成本入口、又带一个载荷路径，两件事都是真的。
+    """
+    assert '--apply-edit' in inv.FREE_ENTRIES and '--apply-edit' in inv.VALUED_FLAGS, \
+        '`--apply-edit` 同时是 0 成本入口与带值参数——这一条塌了说明有人合并了两个轴'
+    unknown = sorted(set(inv.VALUED_FLAGS) - _known_flags())
+    assert not unknown, f'VALUED_FLAGS 里有三张表都不认识的 flag：{unknown}'
+
+
+def test_write_effects_leaves_out_the_flags_that_differ_across_nodes():
+    """`WRITE_EFFECTS` 按 **flag** 索引，所以只许收**跨节点一致**的那些。
+
+    ⚠ `--identity` 刻意不在表里，那不是漏登记：它在 stage7 只 `print`（不写盘），
+    在 stage6 却把 `baselines_identity` **落进产物**。
+    收进一张按 flag 索引的表，就必然对其中一层说假话；
+    不收 ⇒ 落到「未知按会写算」⇒ 对 stage6 是对的、对 stage7 是保守的，两边都不说假话。
+    """
+    assert '--identity' not in inv.WRITE_EFFECTS, (
+        '`--identity` 跨节点不一致（stage6 写盘、stage7 只 print），'
+        '不许进一张按 flag 索引的表'
+    )
+    unknown = sorted(set(inv.WRITE_EFFECTS) - _known_flags())
+    assert not unknown, f'WRITE_EFFECTS 里有三张表都不认识的 flag：{unknown}'
+    # 「不写盘」那几条必须真的是 0 成本入口——一条会花钱的路不可能什么都不产。
+    for flag, effect in inv.WRITE_EFFECTS.items():
+        if not effect:
+            assert flag in inv.FREE_ENTRIES, f'{flag} 声称不写盘，却不是 0 成本入口'
+
+
+def test_partial_rewrite_flags_are_free_and_exclude_the_promotion_path():
+    """局部改写的取值面 ⊆ `FREE_ENTRIES`，且**不含 `--revalidate`**。
+
+    一条会花钱的路不叫「局部改写」，那是一次新的产出，该记一份新的来源账。
+    而 `--revalidate` 改的是**状态**（`.INVALID` → 正式稿），内容一个字没动——
+    它有自己的键 `revalidated`。两件事合并，报告就说不清
+    「这份稿被人改过」与「这份稿只是换了个位置」。
+    """
+    extra = sorted(set(inv.PARTIAL_REWRITE_FLAGS) - set(inv.FREE_ENTRIES))
+    assert not extra, f'这些不是 0 成本入口，不该算局部改写：{extra}'
+    assert '--revalidate' not in inv.PARTIAL_REWRITE_FLAGS
+
+
+#: 原型 kind → 新节点。**只给下面那条对账测试用，不是契约**——
+#: `n1..n9` 整套已退役（`invariants.py` §九 的裁决记录），
+#: 把这张表放进 `invariants` 等于把死掉的名字复活成一份现役取值面。
+_KIND_TO_NODE = {
+    'n1_partition': ('stage1.partition', ()),
+    'check_partition': ('stage1.partition', ('--check-only',)),   # 没有 check 节点
+    'n2_global': ('stage2.global', ()),
+    'n2_blueprint': ('stage2.blueprint', ()),
+    'check_blueprints': ('stage2.blueprint', ('--check-only',)),
+    'n3_style': ('stage3.style', ()),
+    'n4_plan': ('stage4.plan', ()),
+    'n5_write': ('stage5.write', ()),                             # 臂是参数不是节点
+    'n6_write': ('stage5.write', ()),
+    'stage5_review': ('stage5.review', ()),
+    'n8_hook': ('stage6.hook', ()),
+    'n9_rename': ('stage7.rename', ()),
+}
+
+#: 抓包里的 flag → 两层命名下它变成了什么。`None` = 它变成了一个**节点**。
+_FLAG_REDIRECT = {
+    '--identity-plan': '--identity',      # 同一个语义的第二个名字（`Q-3` 的实例）
+    '--context-only': None,               # → 节点 stage4.context
+    '--assemble': None,                   # → 节点 stage7.assemble
+    '--approve': None,                    # → 节点 stage0/6/7.approve
+}
+
+
+def test_every_captured_action_maps_onto_a_node_and_its_flags():
+    """⚠ **这条是 `test_free_entries_covers_every_free_flag_the_live_backend_uses` 的姊妹条。**
+
+    那一条查「这个 flag 有没有登记」，本条查「它挂在**对的节点**上没有」。
+    两者差一个真实的故障：一个登记齐全但挂错节点的 flag，`is_paid` 照样答得出贵贱，
+    而 `build_argv` 会把一条现役后端天天在跑的命令**当场拒收**。
+
+    ⚠ 抓包里的 36 条 `actions` 是**现役后端真的会执行的那些**，不是示意图。
+    """
+    actions = _enums()['actions']
+    assert len(actions) > 30, f'只抓到 {len(actions)} 条 action——样本换形状了，本条要跟着改'
+    bad = []
+    for a in actions:
+        node, implied = _KIND_TO_NODE[a['kind']]
+        flags = list(implied)
+        for f in (a['extra'] or []):
+            red = _FLAG_REDIRECT.get(f, f)
+            if red is not None:
+                flags.append(red)
+        missing = sorted(set(flags) - set(inv.NODES[node].flags))
+        if missing:
+            bad.append(f'{a["kind"]}{a["extra"] or []} → {node} 缺 {missing}')
+    assert not bad, (
+        '现役后端跑得动、而新节点表接不住的跑法：\n  ' + '\n  '.join(bad)
+        + '\n→ 要么补进那个节点的 `flags`，要么在 `SUPERSEDED_FREE_ENTRIES` 里'
+          '说清它被什么取代了。**不许只是不提它**'
+    )

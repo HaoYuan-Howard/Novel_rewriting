@@ -17,11 +17,12 @@ from typing import Literal, TypeVar
 
 from pydantic import Field, model_validator
 
-from contracts.invariants import OWNER, SEVERITY
+from contracts.invariants import OWNER, PARTIAL_REWRITE_FLAGS, SEVERITY
 from contracts.schema.base import Fp10, FrozenModel, StrictModel
 
 Severity = Literal[SEVERITY]
 Owner = Literal[OWNER]
+PartialRewrite = Literal[PARTIAL_REWRITE_FLAGS]
 
 #: `promoted()` 的返回类型。**`model_copy` 保留具体类**，于是
 #: `RoundLlmProvenance.promoted()` 仍是 `RoundLlmProvenance`（`round` 原样带下来——
@@ -121,6 +122,19 @@ class Provenance(StrictModel):
     #: 「这份 `inputs` 是本次重判时读的，**不是对历史来源的追认**」。
     input_basis: str | None = None
 
+    #: ⭐ 这份产物被一条 0 成本路径**局部改写**过，值 = 那条路的 flag
+    #: （`PARTIAL_REWRITE_FLAGS`）。见 `_common.md` §5.1b。
+    #:
+    #: 改完之后这一份是**混版的**：LLM 写的那些字段出自当初那次付费产出，
+    #: 被改的那部分是**现在**从盘上重算的。三个记法各错一半：
+    #: 沿用旧账 ⇒「这份 `measurable` 照哪份原文算的」永远说不出口（而那正是
+    #: `--remeasure` 存在的理由）· 整份覆盖 ⇒ 把 `prompts`/`model` 说成本次产的（伪造）·
+    #: 借 `revalidated` ⇒ 那一条说的是**状态变更**，内容一个字没动。
+    #:
+    #: ⚠ **一个带值的键，不是三个布尔。** 原型标的是 `remeasured: true`，
+    #: 于是 `--recheck` / `--migrate` 各自还要再加一个键——同一件事的第三个落点。
+    partial_rewrite: PartialRewrite | None = None
+
     def to_disk(self) -> dict:
         """落盘形态：**本层 `None` 的键一个都不写**。
 
@@ -176,6 +190,35 @@ class Provenance(StrictModel):
         """
         return self.model_copy(update={'code': code, 'revalidated': True,
                                        'gates_skipped': None})
+
+    def partially_rewritten(self: P, *, by: str, code: str,
+                            inputs: dict[str, InputEdge]) -> P:
+        """一条 0 成本路径**只改了这份产物的一部分**。`_common.md` §5.1b。
+
+        ⚠⚠ **签名里没有 `prompts` / `model`** —— 与 `promoted()` 同一条判准：
+        本次一个请求都没发过，记上它们就是假账（`Q-5` 点名的那类伪造）。
+
+        ⚠ 签名里**有** `inputs` 而 `promoted()` 没有，这不是不一致：
+        提升路**没有读任何新东西**（它只是把一份已有的稿换个位置），
+        而局部改写**真的重新读了上游**——记下这次读到的正是它的全部意义。
+        原型的注释把这件事说得最清楚：「沿用旧 `_provenance` 会让『这份 measurable
+        照哪份原文算的』永远说不出口——而那正是 `--remeasure` 存在的理由」。
+        危险的那两个在两条路上都够不到。
+
+        ⚠ 运行时那一侧再收一道：`inputs` 只能来自 `RunContext` 的来源账
+        （`novel/run.py::RunContext.rewrite_provenance`），**调用方传不进去**。
+        本方法留这个参数，是因为契约层不知道 `RunContext` 的存在（分层不许反向依赖）。
+
+        `round` 不 +1 —— 它不是新的一轮写作。
+        """
+        if by not in PARTIAL_REWRITE_FLAGS:
+            raise ValueError(
+                f'{by!r} 不是一条「局部改写」路。取值面的唯一落点是 '
+                f'`contracts.invariants.PARTIAL_REWRITE_FLAGS`：{PARTIAL_REWRITE_FLAGS}。'
+                f'⚠ 一条会花钱的路不叫局部改写，那是一次新的产出，该记一份新的来源账'
+            )
+        return self.model_copy(update={'code': code, 'inputs': dict(inputs),
+                                       'partial_rewrite': by})
 
 
 class FreeProvenance(Provenance):

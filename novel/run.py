@@ -183,6 +183,23 @@ class RunContext:
                   usage=self.ledger.usage_since(self._usage_mark), **extra)
         return self._settled(out)
 
+    def rewrite_provenance(self, prev: P, *, by: str) -> P:
+        """**第三个口，也是最窄的一个**：一条 0 成本路径只改了这份产物的一部分。
+
+        `--remeasure` / `--recheck` / `--migrate` 改完之后那一份是**混版的**：
+        LLM 写的那些字段出自当初那次付费产出，被改的那部分是**现在**从盘上重算的。
+        ⇒ 继承 `prompts` / `model` 一个字不动，换掉 `inputs`（本次真读到的），
+        标一个 `partial_rewrite` 让混版这件事看得见（`_common.md` §5.1b）。
+
+        ⚠⚠ **它没有 `prompts` / `model` / `inputs` 三个参数**——与 `promoted()` 同一条判准：
+        本次一个请求都没发过，记上它们就是假账。`inputs` 只能来自 `_edges`
+        （与另外两个铸造口一致：**手工列举的来源清单会烂，而且是静默地烂**）。
+
+        ⚠ 它**不走 `_settled()`**：本次一分钱没花，`usage` 该原样留着当初那次的
+        ——把一份 `calls_made=0` 的账盖上去，「这份产物花了多少」就永远说不出来了。
+        """
+        return prev.partially_rewritten(by=by, code=self.code, inputs=self.edges)
+
     def _settled(self, out: P) -> P:
         """把成本刻度推到这一份产物之后。**两个铸造口的最后一步都是它。**
 

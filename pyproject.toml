@@ -21,6 +21,25 @@ dev = ["pytest>=8"]
 # api = [...] —— FastAPI 那一层在 E 期落地，到那时再声明。
 # 现在写上等于声称一件还没发生的事。
 
+# 骨架 D 加的。**它解的是一个具体的问题，不是形式**：
+# `build_argv` 拼出来的那条命令是 `<python> -X utf8 -u -m novel.cli …`，
+# 而 `-m novel.cli` 要求 cwd 在仓根（`pythonpath=["."]` 只对 pytest 生效）。
+# 装成 editable（`pip install -e .`）之后这条 cwd 依赖就没了，
+# 而 `Step.cwd` 仍然如实记着那一次是在哪儿跑的——**记录与依赖是两件事**。
+#
+# ⚠ **刻意不加 `[project.scripts]`**：那会让 `argv[0]` 变成一个包装脚本，
+# 与「`argv[0]` 恒是 `sys.executable`，绝不硬编码解释器路径」直接冲突
+# （换一个 venv 就会指到另一份依赖上，而那份 `contracts` 可能是旧的）。
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["contracts", "contracts.judges", "contracts.schema",
+            "novel", "novel.cli", "novel.core", "novel.llm",
+            "novel.orchestrator", "novel.report", "novel.stages",
+            "novel.stages.stage3"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

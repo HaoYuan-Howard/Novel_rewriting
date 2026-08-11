@@ -113,6 +113,10 @@ def _runtime_files() -> list[str]:
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
     'novel/store.py': '它就是那条唯一的读路，记账在这里发生',
+    'novel/orchestrator/jobs.py': (
+        '作业记录**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它。'
+        '它是 append-only 的事件流（`_service/jobs.jsonl`），'
+        '读的一侧还要容忍被 kill 截断的最后一行——那条容忍不该长在产物读路上'),
 }
 
 
@@ -154,6 +158,13 @@ _WRITE_ALLOWED = {
         '它还是全仓唯一一处**会主动删文件**的地方（`evict`），而那与判据 7'
         '「修不了的原样留着」不冲突——产物留着是给人看的，一份坏缓存留着'
         '只会被下一次重跑静默地当成新结果'),
+    'novel/orchestrator/jobs.py': (
+        '作业记录与子进程日志。⚠ **`R-11.3` 已于 2026-08-11（骨架 D）'
+        '收窄成「绝不落**产物**盘」**，理由是一句话：'
+        '「子进程被 OOM 杀掉了」这条记录**只有父进程写得出来**——'
+        '子进程写不了自己的死讯，而退出码正是编排层判成败的依据（`R-12.3`）。'
+        '它写的两处（`_service/jobs.jsonl` · `_service/logs/`）都不是产物，'
+        '且都是 append-only：被 kill 最坏只损坏最后一行'),
 }
 
 
@@ -177,6 +188,95 @@ def test_only_the_store_writes_to_disk():
         f'这些地方绕过了唯一的写路：{bad}\n'
         f'→ 要么改走 store，要么把它连同理由加进 `_WRITE_ALLOWED`'
     )
+
+
+# ───────────────────── 编排层（骨架 D）─────────────────────
+
+def _orchestrator_files() -> list[str]:
+    files = [p for p in _runtime_files() if _rel(p).startswith('novel/orchestrator/')]
+    assert len(files) >= 2, f'只扫到 {len(files)} 个编排层模块——路径多半错了'
+    return files
+
+
+def test_the_orchestrator_never_imports_the_web_stack():
+    """编排层不许 import `fastapi`。**现在就钉住，E 期才不会顺手在这里开路由。**
+
+    原型的这条纪律写在 `Web/paths.py` 的 docstring 里（「只有 app.py 能 import fastapi」），
+    靠人守；靠人守的分层实测是守不住的（同一份 docstring 里那条
+    「Web 进程只读不写」就已经被 `jobs.py` 自己破了）。
+    """
+    bad = [(_rel(p), sorted(_imports(p) & {'fastapi', 'starlette', 'uvicorn'}))
+           for p in _orchestrator_files()
+           if _imports(p) & {'fastapi', 'starlette', 'uvicorn'}]
+    assert not bad, f'编排层 import 了 HTTP 栈：{bad}——那一层在 E 期，不在这里'
+
+
+def _full_imports(path: str) -> set[str]:
+    """完整模块名（`novel.report.builder`），不是顶层包名。
+
+    ⚠ `_imports()` 只取顶层（`novel`），那对分层够用、对**包内**分层不够：
+    `from novel.report import build` 与 `from novel.store import ArtifactStore`
+    在它眼里长得一模一样。
+    """
+    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    mods: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            mods |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            mods.add(node.module)
+            mods |= {f'{node.module}.{a.name}' for a in node.names}
+    return mods
+
+
+def test_the_queue_cannot_reach_the_judgement_layer():
+    """⭐ `R-13.6`（→ `R-11.4`）：**队列本身不产生新的判定。**
+
+    造第二个判官就是造第二个落点，而这一条**由结构保证**：
+    `queue.py` 够不到 `novel.report`，于是它连「顺手在这里判一下」都做不到。
+    ⚠ 队列该读的是**完成度**（盘上有什么），不是**判定**（那份东西合不合格）。
+    """
+    path = os.path.join(ROOT, 'novel', 'orchestrator', 'queue.py')
+    bad = sorted(m for m in _full_imports(path) if m.startswith('novel.report'))
+    assert not bad, (
+        f'`queue.py` import 了判定层：{bad}\n'
+        f'→ 队列只决定顺序，不产生判定（`R-13.6`）。要用报告就让节点自己去用'
+    )
+    # 守卫的守卫：扫错文件时上面那条会静静地绿。
+    assert 'novel.orchestrator.state' in _full_imports(path)
+
+
+def test_completeness_never_peeks_at_the_job_records():
+    """⭐ `R-14.1`：**完成度按产物存在性 + 来源新鲜度判定，不靠进度文件。**
+
+    ⚠ 作业记录（`Output/_service/`）恰恰就是一份进度文件。它回答「跑过什么命令」，
+    完成度回答「盘上有什么」——**两者不是同一个问题**：
+    一个作业退出码 0 也可能留下残缺产物（F-087），一份产物存在也可能是上一版代码产的。
+    ⇒ `state.py` 里出现 `_service` 三个字，这条纪律就已经开始漏了。
+    """
+    path = os.path.join(ROOT, 'novel', 'orchestrator', 'state.py')
+    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    #: ⚠ 扫**代码**不扫文档：这条纪律本身就要写在 docstring 里说清楚，
+    #: 拿字面 `in src` 去查，第一个被判红的是解释这条纪律的那段话。
+    docstrings = {id(n.body[0].value) for n in ast.walk(tree)
+                  if isinstance(n, (ast.Module, ast.ClassDef,
+                                    ast.FunctionDef, ast.AsyncFunctionDef))
+                  and n.body and isinstance(n.body[0], ast.Expr)
+                  and isinstance(n.body[0].value, ast.Constant)
+                  and isinstance(n.body[0].value.value, str)}
+    hits = [n.lineno for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and '_service' in n.value and id(n) not in docstrings]
+    hits += [n.lineno for n in ast.walk(tree)
+             if isinstance(n, ast.Name) and '_service' in n.id]
+    hits += [n.lineno for n in ast.walk(tree)
+             if isinstance(n, ast.Attribute) and '_service' in n.attr]
+    assert not hits, (
+        f'`state.py` 的代码里够到了 `_service`（第 {sorted(hits)} 行）——'
+        f'完成度不许偷看作业记录（`R-14.1`）'
+    )
+    # 守卫的守卫：它该是经 store 读盘的。扫错文件时上面那条会静静地绿。
+    assert 'ArtifactStore' in {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
 
 
 def test_the_runtime_never_uses_sys_exit():

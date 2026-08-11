@@ -83,6 +83,18 @@ STATUS: Final = ('ok', 'hit', 'unver', 'skipped')
 #: 重启前它是死是活我们真的不知道。
 JOB_STATE: Final = ('running', 'ok', 'failed', 'unknown')
 
+#: 作业记录是一串**事件**，`JOB_STATE` 是它们折叠出来的**视图**（`_orchestration.md` §2.1）。
+#:
+#: 【为什么是事件流而不是一份被改写的 JSON】原型每次状态变化都 `os.replace` 整份
+#: `<job_id>.json`，并且**为此写了一段重试**——`PermissionError: [WinError 5]`，
+#: 因为服务一边写一边被 SSE 轮询读，**实测在测试里必现**。
+#: 改成 append-only 之后，理由与成本账是同一条：**永不需要读-改-写**
+#: ⇒ 并发安全、被 kill 不损坏、可 grep。
+#:
+#: ⚠ `reconciled` 是**追加一条**，不是回去改 `started` 那一行——
+#: 回去改就毁掉了 append-only 的全部意义，而那正是「被 kill 不损坏」的来源。
+JOB_EVENT_KINDS: Final = ('started', 'step', 'ended', 'reconciled')
+
 #: 「待人工」清单的六类。**`unver` 不进这张清单**——那是判据的边界，不是待办；
 #: 堆进去清单就永远清不空，而清不空的清单没人看。
 #: ⚠ `approval` 是**按设计就该人做的一步**，不是故障，但它确实该在这张清单上。
@@ -557,7 +569,6 @@ FREE_ENTRIES: Final = {
     '--revalidate': '按当前判据重判被闸门拦下的 .INVALID 稿，合格即提升为正式产物',
     '--measure-only': '只跑确定性实测并报出来，**不写盘**（与 `--remeasure` 是两件事）',
     '--remeasure': '重算确定性实测值写回，其余字段不动',
-    '--context-only': '从已有决策重建下游的确定性组装产物',
     '--migrate': '确定性回取/迁移：按当前锚点算法重新定位已有产物里的原文引用',
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
@@ -571,6 +582,10 @@ FREE_ENTRIES: Final = {
 #: 它与 `--identity` 是同一件事，只因为原型里一个脚本干两件事才被迫改名。
 SUPERSEDED_FREE_ENTRIES: Final = {
     '--assemble': '→ 节点 `stage7.assemble`。它不是「换个跑法」，是一个独立的动作',
+    '--context-only': '→ 节点 `stage4.context`。**与 `--assemble` 逐字同形**，2026-08-11（骨架 D）'
+                      '补登记：`NODES` 里早就有 `stage4.context` 这个节点了，而本表当时'
+                      '还把它同时留在 `FREE_ENTRIES` 里——同一个动作两个落点，'
+                      '而两个落点里只有一个会被 `build_argv` 拒收',
     '--identity-plan': '→ `stage4.plan --identity`。原型给同一个语义起了第二个名字',
     '--approve': '→ 节点 `stage0/6/7.approve`。定稿是一个人做的动作，候选序号是它的参数；'
                  '贵贱由 `NODES[...].paid` 回答，不必在本表再登记一份',
@@ -585,6 +600,64 @@ PAID_FLAGS: Final = {
 #: 重算时**只对本次新引入的错误入终态** —— 旧违约照报但不挡路。
 #: 否则一条不相干的旧问题会把重算这条路永久堵死。
 REVALIDATE_ONLY_NEW_ERRORS: Final = True
+
+#: **局部改写**一份付费产物的那几条 0 成本路。`_provenance.partial_rewrite` 的取值面。
+#:
+#: 【为什么是一个带值的键，不是三个布尔】这三条干的是同一件事——改掉产物的一部分，
+#: 而 LLM 写的那些字段仍出自当初那次付费产出。区别只在「哪条路」，**那是一个值不是三个键**。
+#: 原型标的是 `remeasured: true`，于是 `--recheck` / `--migrate` 各自还要再加一个键
+#: ——同一件事的第三个落点（`Q-3`：同一个语义必须叫同一个名字）。见 `_common.md` §5.1b。
+#:
+#: ⚠ 它**必须 ⊆ `FREE_ENTRIES`**（由 `tests/test_invariants.py` 钉着）：
+#: 一条会花钱的路不叫「局部改写」，那是一次新的产出，该记一份新的来源账。
+#: ⚠ **`--revalidate` 不在这里**：提升路改的是**状态**（`.INVALID` → 正式稿），
+#: 内容一个字没动，它有自己的键 `revalidated`。两件事。
+PARTIAL_REWRITE_FLAGS: Final = ('--remeasure', '--recheck', '--migrate')
+
+#: 带值的 flag：`--apply-edit <载荷文件>`。值说的是「这个值是什么」。
+#:
+#: 【它与前三张表是**正交**的两个轴】那三张答的是「贵不贵」，本表答的是「带不带值」——
+#: 所以 `--apply-edit` 同时出现在 `FREE_ENTRIES` 与本表里是**对的**，
+#: 不许把它加进 `test_the_three_flag_tables_are_disjoint` 那条不交断言。
+#:
+#: ⚠ 不带值的 flag 传了值、带值的 flag 没传值，都是 argv 拼错——
+#: 而拼错的那一条**会真的被执行**。所以取值面要有落点，由 `build_argv` 当场拒。
+VALUED_FLAGS: Final = {
+    '--apply-edit': '人工改好的那份候选稿的路径',
+}
+
+#: ⭐ 一次跑**会往盘上写什么**。空串 = 不写盘。
+#:
+#: 【为什么它必须存在】「贵贱」与「写不写」是两个**正交**的维度，而原型只实现了前者：
+#: 后者只活在注释里，且**一字不差地出现了 8 次**——「**`FREE_FLAGS` 只管钱不管写**」。
+#: 于是界面上一个写着「0 成本」的按钮可能归档旧轮、覆盖正式产物、重拼成书 txt，
+#: 而用户看到的只有「0 成本」三个字。一条信息在注释里重复四次以上，
+#: 说明它是真的，只是**没有落点**。本表就是它的落点。
+#:
+#: 【为什么值是一句话不是 `bool`】空串 = 不写盘，与记账那边
+#: 「`recorded=False` ⇒ `[????] 未记录`」是同一个纪律：**「不写」与「没人说」必须分得开**。
+#:
+#: 【默认是「写」，flag 只能把它变成「不写」】每个节点的默认路径都产一份产物
+#: ——那是「节点」这个词的定义。所以方向与 `is_paid` 同构（`FREE_ENTRIES` 让付费变免费），
+#: 而**没登记的 flag 一律按会写算**（`Q-10` 的同一条：「不知道」要倒向危险的那一边）。
+#:
+#: ⚠ **`--identity` 刻意不在本表里**，那不是漏登记：它在 stage7 只 `print`（不写盘），
+#: 在 stage6 却把 `baselines_identity` **落进产物**（`stage6.md`：正因为有落点才判死过两条坏判据）。
+#: **跨节点不一致的 flag 不许进一张按 flag 索引的表**——那会让其中一层说假话。
+#: 不登记 ⇒ 按会写算 ⇒ 对 stage6 是对的、对 stage7 是保守的，两边都不说假话。
+WRITE_EFFECTS: Final = {
+    # ── 只看不动的四条（`FREE_ENTRIES` 自述「不写盘」）──
+    '--dry-run': '',
+    '--prompt-only': '',
+    '--check-only': '',
+    '--measure-only': '',
+    # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
+    '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
+    '--recheck': '刷新已有成稿的指标，并重拼 draft.md',
+    '--revalidate': '把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/',
+    '--apply-edit': '把人工稿落成新的一轮，并把上一轮归档进 _rounds/',
+    '--migrate': '按当前锚点算法重新定位原文引用并写回',
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -628,6 +701,8 @@ class NodeSpec(NamedTuple):
     label: str                          # 人读的一句话。**前端从这里取，不许手写第二份**
     modes: tuple[str, ...] = ()         # 有参数臂的节点，取值面在别处（DEPTH_MODES）
     paid_flags: tuple[str, ...] = ()    # 能把一个 0 成本节点变成付费的 flag
+    flags: tuple[str, ...] = ()         # ★ 本节点接受哪些**跑法** flag，见下
+    produces: tuple[str, ...] = ()      # ★ 默认路径往盘上写哪几份产物，见下
 
 
 #: 全部作业单元。⚠ 顺序即处理链顺序，队列与断点续跑都按它排。
@@ -641,26 +716,95 @@ class NodeSpec(NamedTuple):
 #: ⚠ **没有 `check` 节点。** 复检一律是 `--check-only` flag。原型两头都有
 #: （`check_partition` 是独立脚本、`n3_style --check-only` 是 flag），正是 `Q-3` 点名的
 #: 「三个节点行为不一致」。
+#:
+#: 【`flags` 那一列的取值从哪儿来】只有两个来源，**不许凭印象填**：
+#: 真实抓包（`docs/design_brief/05_samples/enums.json` 的 36 条 `actions`）
+#: 与原型各脚本的 `argparse`。两处都没有的节点填 `()`——
+#: **空元组是诚实的**（没有任何东西核对过它的跑法面），而随手编几个是抢跑（判据 32）。
+#: ⇒ stage0 三个节点全空：原型里 stage0 整层不存在（摄入并进 stage1，F-090）。
+#: ⇒ `stage4.context` / `stage7.assemble` 空：它们**本身**就是那个动作，
+#:   原型的 `--context-only` / `--assemble` 已作为 flag 退役（见 `SUPERSEDED_FREE_ENTRIES`）。
+#: ⇒ 三个 `*.approve` 空：候选序号是它们的**参数**不是 flag，参数名属 F 期（stage6/7 未移植），
+#:   现在起一个名字就是给一个零消费方的取值面抢跑。
+#:
+#: ⚠ **这一列今天必然不全，而不全的方向是安全的**：`is_paid` 拿它当白名单，
+#: 没登记的 flag 在付费节点上一律按付费算。已知漏的两个（原型 `FREE_FLAGS` 有、
+#: 抓包的 `actions` 里没有，因此从没被 `test_free_entries_covers_...` 查过）：
+#: `n2_global --drop` 与 `n2_blueprint --replay-cache`。**登记在这里，F 期移植 stage2 时补。**
+#: 【`produces` 那一列：默认路径往盘上写哪几份】它是「完成度按**产物存在性**判定」
+#: （`R-14.1`）的输入，也是 `would_write` 默认为真的依据——
+#: **每个节点的默认路径都产一份产物，那是「节点」这个词的定义**。
+#: ⚠ 值里带 `{}` 的是**逐份不定**的（stage5 逐章 / 验收轮次），存在性不能靠一次 `is_file()`
+#: ——原型正因如此把 stage5 整个排除在它那张完成度表之外，代价是
+#: 「有没有陈旧产物」那个徽章**不覆盖成稿**。这里不排除它，改成逐章数。
+#: ⚠ 同一份产物可以被两个节点写（`stage6.hook` 产候选、`stage6.approve` 落定稿），
+#: 这不是重复登记：**一层要哪几份**取的是本层各节点的并集。
 NODES: Final[dict[str, NodeSpec]] = {
-    'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除'),
-    'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准'),
-    'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑'),
-    'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章'),
-    'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取'),
-    'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取'),
-    'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像'),
-    'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 重构计划'),
-    'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装'),
+    'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除',
+                                 produces=('stage0/removal_report.json',
+                                           'stage0/clean_text.txt')),
+    'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
+                                 produces=('stage0/removal_report.json',)),
+    'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
+                                 produces=('stage0/removal_report.json',
+                                           'stage0/clean_text.txt')),
+    'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
+                                 flags=('--dry-run', '--check-only'),
+                                 produces=('stage1/main_text.json',
+                                           'stage1/hook_copy.json',
+                                           'stage1/partition_report.json')),
+    'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
+                                 flags=('--migrate',),
+                                 produces=('stage2/global_grounding.json',)),
+    'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
+                                 flags=('--prompt-only', '--check-only', '--migrate',
+                                        '--apply-edit'),
+                                 produces=('stage2/chapter_blueprints.json',)),
+    'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
+                                 flags=('--dry-run', '--check-only', '--measure-only',
+                                        '--remeasure', '--revalidate', '--apply-edit',
+                                        '--repair-surface-habits'),
+                                 produces=('stage3/style_grounding.json',)),
+    'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 重构计划',
+                                 flags=('--prompt-only', '--check-only', '--revalidate',
+                                        '--names-only', '--identity', '--apply-edit'),
+                                 produces=('stage4/plan_chapters.json',)),
+    'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
+                                 produces=('stage4/writer_context.json',)),
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 逐章写作',
-                                 modes=('deep', 'shallow')),
+                                 modes=('deep', 'shallow'),
+                                 flags=('--dry-run', '--recheck', '--revalidate',
+                                        '--apply-edit'),
+                                 produces=('stage5/{mode}/ch{nn}.json',
+                                           'stage5/{mode}/draft.md')),
     'stage5.review':    NodeSpec('stage5', 'R-8',  False, 'stage5 全书验收',
-                                 paid_flags=('--revise',)),
-    'stage6.hook':      NodeSpec('stage6', 'R-9',  True,  'stage6 开篇文案'),
-    'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿'),
-    'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表'),
-    'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书'),
-    'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿'),
+                                 paid_flags=('--revise',),
+                                 flags=('--check-only', '--revise'),
+                                 produces=('stage5/review_{n}.json',)),
+    'stage6.hook':      NodeSpec('stage6', 'R-9',  True,  'stage6 开篇文案',
+                                 flags=('--dry-run', '--check-only', '--identity',
+                                        '--recheck', '--apply-edit'),
+                                 produces=('stage6/hook.json',)),
+    'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',
+                                 produces=('stage6/hook.json',)),
+    'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表',
+                                 flags=('--dry-run', '--check-only', '--identity',
+                                        '--recheck', '--apply-edit'),
+                                 produces=('stage7/name_map.json',)),
+    'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
+                                 produces=('stage7/book.txt',)),
+    'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
+                                 produces=('stage7/name_map.json',)),
 }
+
+# ⚠⚠ **一处已知分歧，登记在这里而不是顺手改掉**（`stage5.review.paid_flags`）：
+# 原型的 `--revise`（付费二次修订）挂在 **`n5_write`/`n6_write`** 上——
+# 它把可反哺的结论连同上一轮成稿发回**写手**，产的是新一轮成稿，不是新一份验收报告。
+# 而本表把它记在 `stage5.review` 上。两种读法都说得通（返工由验收报告驱动 / 返工由写手执行），
+# 但它们指向**两段不同的代码**，而 stage5 属 F 期、今天没有任何实现可以裁定谁对。
+# ⇒ **不在 D 期替 stage5 定这件事**；移植 stage5 那一刻连同一份会红的样本一起裁。
+# 顺带：原型 `n5_write --revalidate` 自述 0 成本，而它的 `FREE_FLAGS` 白名单里**没有它**
+# ⇒ 现役界面把一个不花钱的动作画成橙色并弹二次确认。本表已把它补进 `stage5.write.flags`。
 
 #: 八个产物层。**永不用作作业 id**——那一轴归 `NODES`。
 #: 它承重在六处：产物目录名 · schema 文档名 · Pydantic 模块名 · `Rule.stage` ·

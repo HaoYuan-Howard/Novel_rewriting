@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+test_orchestrator_nodes.py —— 四个纯函数：贵贱 · 写不写 · 那条命令 · 那几条命令。
+
+这一份守的三件事，各对应一次已发生的损失：
+  · **贵贱只有一处算**（`R-11.7`）——原型漏登记 4 个 0 成本 flag，界面把免费动作画成付费
+  · **展示与执行共用同一个 argv 构造函数**（`R-11.8`）——第二个落点会慢慢分家而不出声
+  · **「0 成本」不等于「不写盘」**——原型 8 条注释都在说这句，而代码里没有落点
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+import pytest
+
+from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS, WRITE_EFFECTS
+from novel.errors import UnsupportedRunMode
+from novel.orchestrator import nodes as N
+
+BASE = os.path.join('E:', os.sep, 'somewhere', 'Output')
+SID = '7615069877019300633'
+
+#: 逐 node × flag 铺平：每个节点的每一条登记跑法各一行。
+CASES = [(node, flag) for node, spec in NODES.items() for flag in spec.flags]
+
+
+def _mode_of(node: str) -> str | None:
+    return NODES[node].modes[0] if NODES[node].modes else None
+
+
+def _args(flag: str) -> list[str]:
+    """带值 flag 补一个值——不补的话拒收的是「没给值」，测不到我们想测的那件事。"""
+    return [flag, 'payload.json'] if flag in VALUED_FLAGS else [flag]
+
+
+# ───────────────────────── 守卫的守卫 ─────────────────────────
+
+def test_the_matrix_actually_has_rows():
+    """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
+    assert len(CASES) > 25, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
+    assert len(NODES) == 16, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+
+
+# ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
+
+@pytest.mark.parametrize('node,flag', CASES, ids=lambda v: str(v))
+def test_every_registered_run_mode_answers_the_cost_question(node, flag):
+    """每一条登记在案的跑法都答得出贵贱，且答案与三张表一致。
+
+    这条测试的价值不在断言本身，在于**它把 node × flag 铺平走了一遍**：
+    漏登记一个 flag、或把一个 flag 挂错节点，都会在这里现形。
+    """
+    paid = N.is_paid(node, _args(flag))
+    spec = NODES[node]
+    if spec.paid:
+        assert paid == (flag not in FREE_ENTRIES), \
+            f'{node} {flag}: 付费节点带 0 成本 flag 应变免费'
+    else:
+        assert paid == (flag in spec.paid_flags), \
+            f'{node} {flag}: 0 成本节点只有 paid_flags 能把它变贵'
+
+
+def test_an_unknown_node_is_paid():
+    """⚠ **原型在这里踩过**：`KINDS.get(kind, {})` 把未知 kind 当成「paid 缺省为假」，
+    那是拿 `dict.get(k, 默认)` 给一张**账单**发静默通行证。"""
+    assert N.is_paid('stage9.nope') is True
+    assert N.is_paid('') is True
+
+
+def test_an_unknown_flag_is_paid_even_on_a_free_node():
+    """认不出的 flag 一律按花钱算——**「不知道」必须倒向贵的那一边**（`Q-10`）。
+
+    ⚠ 连 0 成本节点也不放行：原型在这一格是放行的，而两处答案不一致
+    （`build_argv` 拒收、`is_paid` 放行）比两处都严更难查。
+    """
+    assert N.is_paid('stage1.partition', ['--brand-new-flag']) is True
+    assert N.is_paid('stage3.style', ['--brand-new-flag']) is True
+
+
+def test_the_value_of_a_valued_flag_is_not_mistaken_for_a_flag():
+    """`--apply-edit C:/x.json` 的**值**不是 flag。
+
+    不把它剔掉，白名单会拿一个文件路径去查、查不到，于是一次 0 成本的人工编辑
+    被判成付费——`Q-3` 记着的那个「漏登记的后果是反的」，换了个成因。
+    """
+    assert N.flag_tokens(['--apply-edit', 'C:/x.json']) == ('--apply-edit',)
+    assert N.is_paid('stage3.style', ['--apply-edit', 'C:/x.json']) is False
+
+
+def test_a_bare_paid_node_is_paid():
+    for node, spec in NODES.items():
+        assert N.is_paid(node) is spec.paid, f'{node} 的默认路径贵贱与 NodeSpec.paid 不一致'
+
+
+# ───────────────────────── 写不写盘（本期新补） ─────────────────────────
+
+@pytest.mark.parametrize('flag', [f for f, e in WRITE_EFFECTS.items() if e == ''])
+def test_the_look_only_flags_never_write(flag):
+    """`--dry-run` / `--prompt-only` / `--check-only` / `--measure-only` 四条只看不动。"""
+    node = next(n for n, s in NODES.items() if flag in s.flags)
+    assert N.would_write(node, _args(flag)) is False
+    assert N.write_effect(node, _args(flag)) == ''
+
+
+@pytest.mark.parametrize('flag', ['--remeasure', '--revalidate', '--recheck',
+                                  '--apply-edit', '--migrate'])
+def test_the_free_but_writing_flags_say_what_they_write(flag):
+    """⭐ **「0 成本」不等于「不写盘」** —— 原型 8 条注释都在说这句，而它没有落点。
+
+    界面上一个写着「0 成本」的按钮可能归档旧轮、覆盖正式产物、重拼成书 txt。
+    """
+    node = next(n for n, s in NODES.items() if flag in s.flags)
+    assert N.is_paid(node, _args(flag)) is False, f'{flag} 该是 0 成本'
+    assert N.would_write(node, _args(flag)) is True, f'{flag} 免费但**会写盘**'
+    assert N.write_effect(node, _args(flag)), '会写盘就必须说出写什么'
+
+
+def test_every_node_writes_by_default():
+    """默认路径都产一份产物——那是「节点」这个词的定义，也是 `would_write` 默认为真的依据。"""
+    for node in NODES:
+        assert N.would_write(node) is True, f'{node} 的默认路径不产产物？那它是什么节点'
+
+
+def test_an_unrecorded_flag_is_assumed_to_write():
+    """没登记 ⇒ 按会写算。方向与 `is_paid` 同构：倒向危险的那一边。
+
+    ⚠ `--identity` 是这条规则的**现役实例**，不是假设：它在 stage6 把
+    `baselines_identity` 落进产物、在 stage7 只 `print`，所以刻意不进 `WRITE_EFFECTS`。
+    """
+    assert '--identity' not in WRITE_EFFECTS
+    assert N.would_write('stage7.rename', ['--identity']) is True
+    assert N.would_write('stage6.hook', ['--identity']) is True
+
+
+# ───────────────────────── 那条命令（R-11.8 · R-12.3） ─────────────────────────
+
+@pytest.mark.parametrize('node,flag', CASES, ids=lambda v: str(v))
+def test_every_registered_run_mode_builds_a_command(node, flag):
+    argv = N.build_argv(node, SID, _args(flag), base=BASE, mode=_mode_of(node))
+    assert argv[0] == sys.executable
+    assert node in argv and SID in argv
+
+
+def test_argv_never_hardcodes_the_interpreter_and_carries_the_encoding_flags():
+    """`argv[0]` 恒是 `sys.executable`；`-X utf8 -u` 在场。
+
+    ⚠ 硬编码解释器路径会指到另一个 venv 上，而那份 `contracts` 可能是旧的。
+    ⚠ `-X utf8 -u` 管的是「人在终端直接粘这条命令」那一半；
+    服务跑子进程那一半由 `child_env()` 管。**两道，不是一道。**
+    """
+    argv = N.build_argv('stage3.style', SID, ['--check-only'], base=BASE)
+    assert argv[0] == sys.executable
+    assert argv[1:5] == ['-X', 'utf8', '-u', '-m']
+    assert argv[5] == N.CLI_MODULE
+
+
+def test_base_is_absolute_so_the_command_does_not_depend_on_cwd():
+    argv = N.build_argv('stage3.style', SID, base='rel/Output')
+    assert os.path.isabs(argv[argv.index('--base') + 1])
+
+
+def test_a_node_refuses_a_flag_it_does_not_have():
+    """认不出就当场拒，**而拒收开在 `build_argv` 里**（展示与执行共用的那一处）。
+
+    开在 CLI 的 argparse 里只拦得住手敲的那一半，界面那一半照样拼得出一条错命令。
+    """
+    with pytest.raises(UnsupportedRunMode, match='不接受'):
+        N.build_argv('stage1.partition', SID, ['--remeasure'], base=BASE)
+    with pytest.raises(UnsupportedRunMode, match='未知节点'):
+        N.build_argv('stage9.nope', SID, base=BASE)
+
+
+def test_only_the_writing_node_takes_a_mode():
+    with pytest.raises(UnsupportedRunMode, match='没有臂'):
+        N.build_argv('stage3.style', SID, base=BASE, mode='deep')
+    with pytest.raises(UnsupportedRunMode, match='--mode'):
+        N.build_argv('stage5.write', SID, base=BASE)
+    argv = N.build_argv('stage5.write', SID, base=BASE, mode='deep')
+    assert argv[argv.index('--mode') + 1] == 'deep'
+
+
+def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():
+    """拼错的那条 argv **会真的被执行**，所以两个方向都要当场对上。"""
+    with pytest.raises(UnsupportedRunMode, match='要一个值'):
+        N.build_argv('stage3.style', SID, ['--apply-edit'], base=BASE)
+    with pytest.raises(UnsupportedRunMode, match='不带值'):
+        N.build_argv('stage3.style', SID, ['--check-only', 'oops'], base=BASE)
+
+
+def test_child_env_carries_the_three_required_variables():
+    """`R-12.3`：三件套缺一不可。
+
+    ⚠ 病因实测过：子进程 stdout 接到**管道**时退回 cp936，而报告里满篇 `✓ ✗ ↻ ⚠`。
+    最要命的形态是先落盘（钱已经花了）再打印 `✓` ⇒
+    **一次成功的付费跑被报成失败**；而失败分支打印 `'✗'*20`，报告失败本身就是崩溃触发器。
+    """
+    env = N.child_env({'PATH': 'x'})
+    assert env['PYTHONUTF8'] == '1'
+    assert env['PYTHONIOENCODING'] == 'utf-8'
+    assert env['PYTHONUNBUFFERED'] == '1'
+    assert env['PATH'] == 'x', '原有环境要带过去，不是替换掉'
+    assert 'replace' not in env['PYTHONIOENCODING'], \
+        '`utf-8:replace` 会把编不出来的字悄悄换掉——静默糟蹋输出比崩溃更坏'
+
+
+# ───────────────────────── 那几条命令 ─────────────────────────
+
+def test_preview_and_the_real_run_are_the_same_argv():
+    """⭐ **`R-11.8` 的全部内容。**
+
+    确认对话框若自己拼一个展示串，那就是同一条命令的第二个落点：
+    显示的与执行的会慢慢分家，而**没有任何东西会出声**。
+    ⇒ 摊开显示的那条，必须就是 `build_steps` 里的那条对象本身。
+    """
+    for node in ('stage3.style', 'stage2.global', 'stage6.hook'):
+        steps = N.build_steps(node, SID, base=BASE)
+        assert steps[0].argv == N.build_argv(node, SID, base=BASE)
+
+
+def test_a_writing_run_gets_a_follow_up_check():
+    """**退出码 0 不等于成功**（F-087：残缺产物退出码 0）。"""
+    steps = N.build_steps('stage3.style', SID, base=BASE)
+    assert len(steps) == 2
+    assert '--check-only' in steps[1].argv
+    assert steps[1].note == N.FOLLOW_CHECK_NOTE
+    assert steps[1].paid is False and steps[1].writes == ''
+
+
+@pytest.mark.parametrize('flag', ['--remeasure', '--revalidate'])
+def test_a_free_but_writing_run_also_gets_a_follow_up_check(flag):
+    """⭐ **判准是「写不写盘」，不是「花不花钱」** —— 这一格是实测改过的。
+
+    `--remeasure` 那一趟**按设计不排** `measurable_drift`（它刚把 `measurable` 覆盖掉，
+    那条检查在这一趟里恒等成立），⇒ 报告里它是 `skipped`，而 HARD 的 `skipped` 进 `fail`。
+    没有这条追跑，`--remeasure` 就是一条**永远拿不到绿灯**的路。
+    """
+    steps = N.build_steps('stage3.style', SID, [flag], base=BASE)
+    assert N.is_paid('stage3.style', [flag]) is False, f'{flag} 是 0 成本的'
+    assert len(steps) == 2 and '--check-only' in steps[1].argv
+
+
+def test_the_follow_up_check_is_skipped_when_the_node_cannot_take_it():
+    """⚠ 追一条它拒收的命令，作业会在第二步无缘无故失败——**而第一步已经花过钱了**。"""
+    assert '--check-only' not in NODES['stage2.global'].flags
+    assert len(N.build_steps('stage2.global', SID, base=BASE)) == 1
+
+
+def test_a_non_writing_run_gets_no_follow_up():
+    """只看不动的那几条没什么可复检的——它们一个字节都没改。"""
+    assert len(N.build_steps('stage3.style', SID, ['--check-only'], base=BASE)) == 1
+    assert len(N.build_steps('stage3.style', SID, ['--dry-run'], base=BASE)) == 1
+    assert len(N.build_steps('stage3.style', SID, ['--measure-only'], base=BASE)) == 1
+
+
+def test_steps_carry_the_cost_and_write_answers_they_were_asked_for():
+    """`Step` 上的 `paid` / `writes` 必须与那两个函数一致——**第二处必然分家**。"""
+    for node, spec in NODES.items():
+        mode = _mode_of(node)
+        for step in N.build_steps(node, SID, base=BASE, mode=mode):
+            flags = [t for t in step.argv if t.startswith('--')
+                     and t not in ('--base', '--mode')]
+            assert step.paid == N.is_paid(node, flags)
+            assert step.writes == N.write_effect(node, flags)
+        assert spec.label in N.build_steps(node, SID, base=BASE, mode=mode)[0].label

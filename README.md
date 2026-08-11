@@ -14,8 +14,8 @@
 | 阶段 | 状态 |
 |---|---|
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
-| **契约** | ✅ **十份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + **`_report.md`**（校验报告，B3 补）。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
-| **骨架** | ✅ **A~C 期完成**（B3 报告构造器 + stage3 纵切）。**下一步 = D（编排 + CLI）**，路线图与交接见下一节 |
+| **契约** | ✅ **十一份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + **`_report.md`**（校验报告，B3 补）+ **`_orchestration.md`**（作业/完成度/队列，D 补）。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
+| **骨架** | ✅ **A~D 期完成**（D = 编排 + CLI，第一次有东西真的把一个节点从头跑到尾）。**下一步 = E（`/api/enums` + stage3 只读端点）**，路线图与交接见下一节 |
 | 移植 | 🚧 **stage3 已移植**（`PORTED_STAGES={'stage3'}`）。其余七层见 F 期 |
 
 ### 🚩 新 session 从这里接手骨架
@@ -25,8 +25,11 @@
 默认的 `python` 指向 Miniconda base，**那里没有 pydantic**。
 ⚠ 本机 `%TEMP%\pytest-of-yh255` 的 ACL 坏了，pytest 的 `tmp_path` 一用就炸，测试里用 `tempfile.mkdtemp()`。
 
-**当前基线**：全绿，**869 passed / 20 skip**（13 stage0 + 5 stage1 + **2 条都指着同一份产物**）。
+**当前基线**：全绿，**1125 passed / 20 skip**（13 stage0 + 5 stage1 + **2 条都指着同一份产物**）。
 每一条 skip 都明说「没在查」——**改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
+⚠ **D 期一个 skip 都没动**（1066→1125 全是新增的真测试）——编排层与 CLI 落地
+不改变那 20 条的处境，但它**第一次走到**了 `tests/test_layering.py` 那个
+`novel/cli/` 的 `sys.exit` 白名单分支（B1 就开好了，此前从未被执行过）。
 ⚠ 那 2 条是**有意的**，而且是**同一份产物**：`成年人不做选择` 那本的 `stage4/plan_chapters.json`
 在新契约下**加载不了**，因为它根本没有 `_provenance`（`stage4.md` 事实⑤ 的字节级铁证）——
 语料体检与落盘往返各跳过它一次。
@@ -49,12 +52,109 @@
 | **B2** | **LLM 层 + `FakeTransport`**（`novel/config.py` · `novel/llm/{transport,client,prompts}.py`） | ✅ |
 | **B3** | **报告构造器**（`build()` 遍历判据注册表，**不遍历 findings**）· `docs/schema/_report.md` ↔ `contracts/schema/report.py` | ✅ |
 | **C** | **stage3 纵切**（第一个真正跑起来的节点）· 判据行 + 确定性核心 + 九条判据 + 盘上三本对账 | ✅ |
-| D | **编排 + CLI**（R-13/R-14）：`build_argv` / `build_steps` / `is_paid` / `would_write` | **← 下一步** |
-| E / F | `/api/enums` + stage3 只读端点 · 逐层移植 stage2→4→5→6→7→（stage0/1 最后） | 未开始 |
+| **D** | **编排 + CLI**（R-11.3/11.7/11.8/11.10/11.11 · R-12.3 · R-13 · R-14）· `docs/schema/_orchestration.md` ↔ `contracts/schema/orchestration.py` | ✅ |
+| E | `/api/enums` + stage3 只读端点 | **← 下一步** |
+| F | 逐层移植 stage2→4→5→6→7→（stage0/1 最后） | 未开始 |
 
 ⚠ **付费路写好了但一次都没跑。** `novel/stages/stage3/style.py::run_style()` 的
 `ask_json` 调用点在，而 `build_prompt()` 是 0 成本的 `--dry-run`（展示与执行**共用同一个构造函数**，
 `R-11.8`）。**真发第一次请求要先说一声**——那是本仓第一次真花钱。
+⚠ D 期又给它加了一道：**CLI 上的付费跑法必须带 `--yes`**（`Q-10`）。
+`build_argv` 会替付费的那条自动补上——到了拼 argv 那一步，确认已经在界面/队列那层发生过了。
+
+### 骨架 D 已完成（2026-08-11）：**第一次有东西真的把一个节点从头跑到尾**
+
+在 D 之前，`style.py` 那四个节点函数**零调用点、零覆盖**：写好了，从没有人跑过
+（`tests/test_stage3.py` 绕开它直接调 `checks.check`）。现在这条命令是真的：
+
+```
+python -X utf8 -u -m novel.cli run stage3.style <sid> --check-only --base <Output>
+```
+
+盘上三本（按 `tests/corpus.py::CUT` 现算成新契约、落进 `mkdtemp()` 沙箱）跑下来，
+**与 C 期的对账逐条一致**，一分钱没花：
+
+| 对账 | 结果 |
+|---|---|
+| `--check-only` | **PASS / PASS / PASS**，三岁那本 1 条命中（`micro_quote`，INFO），退出码全 0 |
+| `--remeasure` | `measurable` **变化 0 项 × 3 本**；紧接着追跑的 `--check-only` 全部 PASS 且 `measurable_drift` 打 `[OK]` |
+
+| 模块 | 它守的那件事 |
+|---|---|
+| `contracts/schema/orchestration.py` | `Step` / `JobEvent` / `JobRecord` / `ArtifactState` / `StageState` / `QueuePlan`。⚠ 抓包 `jobs.json` 是 **`{"jobs":[]}`**——一个样本都没有，所以形状**只能从代码来**（`_README.md` 那条纪律，`platform` 就是这么被推错的） |
+| `novel/orchestrator/nodes.py` | 四个纯函数。`is_paid` 的位置**是被两处注释锁死的**（`invariants.py` 与 `run.py`），D 期兑现了那个名字 |
+| `novel/orchestrator/state.py` | 完成度**只看盘上有什么**（`R-14.1`）。一条 AST 守卫盯着它的**代码里**不许够到 `_service` |
+| `novel/orchestrator/queue.py` | `plan()` 纯函数；**够不到 `novel.report`**——「队列不产生新判定」由结构保证，不是由自觉 |
+| `novel/orchestrator/jobs.py` | 互斥 · append-only 事件流 · 重启改判。日志**按字节存、只在读时解码** |
+| `novel/cli/` | **全仓唯一能 `sys.exit` 的一层**。退出码四态一张表 |
+
+#### ⭐ 这一期最值钱的五件事
+
+**① `would_write` 补上了一个原型只写在注释里的维度。**
+「贵贱」与「写不写盘」正交，而原型**只实现了前者**：后者一字不差地出现在
+**8 条注释**里（「`FREE_FLAGS` 只管钱不管写」），代码里 0 处落点。
+于是界面上一个写着「0 成本」的按钮可能归档旧轮、覆盖正式产物、重拼成书 txt，
+**而用户看到的只有「0 成本」三个字**。
+⇒ 现在它是 `invariants.WRITE_EFFECTS`，值是**一句话说它写什么**（空串 = 不写盘），
+没登记的一律按会写算——方向与 `is_paid` 同构（`Q-10`：倒向危险的那一边）。
+
+**② 追跑规则的判准从「花不花钱」改成「写不写盘」，是被实跑逼出来的。**
+第一版写的是「付费且写盘才追一条 `--check-only`」，于是 `--remeasure` 这条
+**免费但会写盘**的路一条都不追——而它那一趟**按设计不排** `measurable_drift`
+（`measurable` 刚被它自己覆盖），⇒ HARD 的 `skipped` 让徽章恒为 `fail`。
+**`--remeasure` 会变成一条永远拿不到绿灯的路。** 改判准之后两步链才完整：
+写回那一步 exit 0（不拿 badge 当退出码），紧接着的复检去跑那道闸并给出结论。
+
+**③ 「完成度」第一次撞上三态，而且是真数据逼的。**
+stage5 的产物是**逐章**的，「该有几章」要读 stage4 的计划——而那份计划在新契约下读不回来。
+⇒ 盘上有 4 章这件事**既不能证明跑完了、也不能证明没跑完**。
+压成 `False` 的代价是**真金白银**（队列会去重跑一个可能已经写完的付费层），
+压成 `True` 更坏。`StageState.done` 因此是 `bool | None`，`resume_verdict` 也补了第四态。
+
+**④ 捡回一个被静默弄丢的能力。** 原型退役的 `_legacy/run_book.py:14-22` 有过真正的续跑
+（「每步产物各自落盘、**已存在即跳过**」+「**route 漂移安全**」），
+改成 Web 编排之后**整个消失，且没有任何文档说明是有意放弃**——
+今天原型的 `n5_write <book>` 缺省就是全部输出章重新付费。
+`resume_verdict` 的 `skip` 与 `redo` 就是那两条。
+
+**⑤ `R-11.3` 收窄了一格，而且带标注。**「绝不落盘」→「绝不落**产物**盘」，
+理由是一句话：**「子进程被 OOM 杀掉了」这条记录只有父进程写得出来**
+（子进程写不了自己的死讯，而退出码是编排层判成败的依据）。
+⚠ 收窄配了守卫：写口白名单单开一条带理由，外加一条
+`test_the_service_only_writes_under_service_dir`。**只收窄而不标注，读的人会以为规则被偷偷放宽了。**
+
+#### D 顺带定下的几处
+
+- **`_provenance.partial_rewrite`（新键，进基类）**：`--remeasure` / `--recheck` / `--migrate`
+  改完之后那份产物是**混版的**。⚠ **一个带值的键，不是三个布尔**——原型标的是
+  `remeasured: true`，而那三条干的是同一件事，分成三个键 F 期必然分家（`_common.md` §5.1b）。
+- **`--context-only` 挪进 `SUPERSEDED_FREE_ENTRIES`**：`NODES` 里早就有 `stage4.context`
+  这个节点了，而它同时还留在 `FREE_ENTRIES` 里——**与 `--assemble` 逐字同形**的第二个落点。
+- **`NodeSpec` 加了 `flags` 与 `produces` 两列**，取值**只有两个来源**（真实抓包的 36 条
+  `actions` + 原型各脚本的 argparse），两处都没有的填 `()`——**空元组是诚实的**，随手编几个是抢跑。
+- **付费跑法在 CLI 上要 `--yes`**，而 `build_argv` 替付费那条自动补上：
+  摊开显示的那条命令**就是会跑的那条**（`R-11.8`），粘进终端不会再问一遍。
+- **退出码 `1` 与 `2` 必须分开**：「跑成了，结论是不合格」与「压根没跑成」。
+  合成一个数，编排层就分不出「这一层查出问题了」与「这一层没能跑」。
+
+#### ⚠ D 发现、但**没有**在 D 修的三条（下一个 session 要先看）
+
+**① `stage5.review.paid_flags = ('--revise',)` 与原型对不上。**
+原型的 `--revise`（付费二次修订）挂在 **`n5_write`/`n6_write`** 上——它把可反哺的结论
+连同上一轮成稿发回**写手**，产的是新一轮成稿，不是新一份验收报告。
+两种读法都说得通，但它们**指向两段不同的代码**，而 stage5 属 F 期、今天没有任何实现可以裁定谁对。
+⇒ 登记在 `contracts/invariants.py` 的 `NODES` 后面，移植 stage5 那一刻连同一份会红的样本一起裁。
+
+**② 两个 0 成本 flag 从没被任何守卫查过。**
+`n2_global --drop` 与 `n2_blueprint --replay-cache` 在原型的 `FREE_FLAGS` 里，
+而**抓包的 `actions` 里没有**，所以 `test_free_entries_covers_every_free_flag_the_live_backend_uses`
+从来扫不到它们。⚠ 不全的方向是**安全的**（未登记 ⇒ 按付费算），但那是「界面把免费动作
+画成橙色」——`Q-3` 说的「系统在对用户说假话」。F 期移植 stage2 时补。
+
+**③ `R-11.13` 落在反向覆盖率表外。** 它是 `INFO` ⇒ `expects_rule=True`（要求有一条注册判据），
+而第六节那张表只列到 `R-11.1~R-11.4、R-11.6~R-11.11`。
+今天不发作（正向覆盖率只扫 `PORTED_STAGES` 对应的 R-0~R-10 节，`R-11` 按设计不在 `NODES` 里）。
+**登记在这里，E 期接界面时一起清。**
 
 ### 骨架 C 已完成（2026-08-11）：**stage3 纵切跑通，`PORTED_STAGES` 第一次不是空的**
 
@@ -671,7 +771,7 @@ stage6/stage7 移植时必然撞上） · stage7 待决 ④（`book_txt.has_hook
 
 ```
 docs/REQUIREMENTS.md     需求规格。自足（0 处外部引用），每条带「谁在查」列
-docs/schema/             schema 十份（八层 + `_common.md` + `_report.md`）。**它们是源，模型照它写**
+docs/schema/             schema 十一份（八层 + `_common.md` + `_report.md` + `_orchestration.md`）。**它们是源，模型照它写**
 docs/design_brief/       前端重做的 brief 包 + 19 份【真实 API 响应】样本
 contracts/               契约层（见下）。可单独 import，不拉运行时
 novel/                   运行时。**单向依赖 contracts**，由 tests/test_layering.py 钉死
