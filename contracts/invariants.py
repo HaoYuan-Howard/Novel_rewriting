@@ -558,6 +558,29 @@ HOOK_APPROACHES: Final = ('conflict_first', 'result_flashback', 'identity_contra
 #: 而文本已经是人手写的。「它是不是人写的」由 `origin` 回答，不由这里回答。
 HOOK_APPROVED_APPROACHES: Final = HOOK_APPROACHES + ('human_edit',)
 
+#: 三种写法各自的一句说明。**键必须与 `HOOK_APPROACHES` 逐字相等**（下面有 import 期断言）。
+#: 它逐字进 `HOOK_SYS`——原型把这三句写在产地的一个 dict 里，而**枚举表在这里**，
+#: 于是「有哪三种写法」与「每种是什么意思」分了两个落点。合成一份之后，
+#: 加一种写法而忘了写说明，`fill()` 当场抛 `KeyError`（缺值不渲染成空串）。
+HOOK_APPROACH_NOTES: Final[dict[str, str]] = {
+    'conflict_first': '冲突前置：开篇第一句就把最尖锐的那个对立摆出来',
+    'result_flashback': '结果倒叙：先给一个反常的结果，再回头交代它怎么来的',
+    'identity_contrast': '身份反差：把人物的表面身份与真实处境并排放',
+}
+
+#: 收尾形态的四类。**唯一落点**——分类器（`novel/core/bands.py::ending_shape`）、
+#: 判据措辞、报告共用这一份。
+#: ⚠ 它是 `hook_style.end_question`（一条**自由文本**描述）唯一可确定性检测的投影：
+#: 不去解析那段自由文本，而是从原作文案段量出同一个量，两边比**形态**。
+ENDING_SHAPES: Final = ('引号台词', '问句', '省略号', '陈述')
+
+#: 段间分隔的两档。**离散性质，按字节判**（见 `novel/core/bands.py::sep_band_of_text`
+#: 里那段 off-by-one 的账）。
+SEP_BANDS: Final = ('空行分段', '单换行')
+
+assert tuple(HOOK_APPROACH_NOTES) == HOOK_APPROACHES, \
+    'HOOK_APPROACH_NOTES 的键与 HOOK_APPROACHES 分家了——加一种写法就要写一句说明'
+
 #: 残留候选的置信度。**`high` ⟺ 命中处第二个字 ∈ `家府氏宅门`**（结构信号）。
 #: ⚠ 只看正式产物会把取值面定成**只有 `low`**：3 份正式产物 19 条残留全是 `low`，
 #: 而 8 份 `_rounds/` 归档里有 **35 条 `high`**——`high` 的那些早被人勾选修掉了。

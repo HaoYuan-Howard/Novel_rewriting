@@ -13,7 +13,11 @@ bands.py —— 实测数字 → **定性档位词**。喂给抽取器的是档�
 """
 from __future__ import annotations
 
+import re
+
+from contracts.invariants import ENDING_SHAPES, SEP_BANDS
 from contracts.schema.stage3 import Measurable, MeasurableBlock
+from novel.core.normalize import normalize_paragraphs as _normalize_paragraphs
 
 #: 句子/段落的档位阈值：**唯一落点**。
 #:
@@ -79,3 +83,77 @@ def hook_shape_band(hook_meas: MeasurableBlock | None) -> dict[str, str] | None:
         return None
     return {'句子形态': band(hook_meas.avg_sentence_chars or 0, SENT_BANDS),
             '段落形态': band(hook_meas.avg_paragraph_chars or 0, PARA_BANDS)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 段间分隔与收尾形态 —— 两个**离散**性质，都按字节判，不经任何平均值
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BLANK_LINE = re.compile(r'\n[ \t]*\n')
+
+
+def sep_band_of_text(text: str | None) -> str:
+    """一段文本的段间分隔档位（`空行分段` / `单换行`），**直接看字节**。
+
+    ⚠⚠ **不走 `measurable.*.paragraph_sep_chars` 那个平均值。** `measure` 把分隔字符
+    总数除以**段数**，而分隔符只有「段数 − 1」个，于是**段数越少偏得越低**。
+    原型实测七本原作文案**全部**是空行分段（真值一律 2.00），而那个平均值给出
+    11 段→1.82 · 10 段→1.80 · 8 段→1.75 · **3 段→1.33**——最后一个掉到 `1.5` 阈值以下，
+    于是那本自己的文案段被判成了「单换行」，归一化会照着把它拆散。
+
+    「段间有没有空行」是一个**离散、精确**的性质；把它平均成一个浮点数再卡阈值，
+    那一步才是引入 bug 的地方。
+
+    ⚠ 上游那个 off-by-one **本轮不修**：`paragraph_sep_chars` 被 stage3/4/5 一路消费，
+    改分母会动到**所有书所有产物的指纹**，远超本轮范围。
+    它的触发条件很具体：**段数 ≤ 3 的文本会被判成单换行**。
+    正文章节段数都在几十以上所以现在不咬人，而**文案本来就短**——所以本层必须绕开它。
+    """
+    return '空行分段' if _BLANK_LINE.search((text or '').strip()) else '单换行'
+
+
+#: 档位 → 喂给 `normalize.normalize_paragraphs` 的代表值。
+#: **阈值仍然只有一个落点**（那个函数里的 `1.5`），这里只是把「档位」翻译成它认得的输入。
+#: 下面那个 import 期断言把这层翻译钉住：**阈值一改当场炸**，
+#: 而不是静默按错的一侧归一（判据 25）。
+#: ⚠ 键与 `invariants.SEP_BANDS` 逐值相等，同样由 import 期断言钉着。
+BAND_SEP: dict[str, float] = {'空行分段': 2.0, '单换行': 1.0}
+
+_CLOSE_QUOTES = '」”』’"'
+
+
+def ending_shape(text: str | None) -> str | None:
+    """文本最后一行的收尾形态 → `ENDING_SHAPES` 之一（没有内容行时 `None`）。
+
+    这是 `hook_style.end_question`（一条**自由文本**描述，逐书下发给模型）
+    **唯一可确定性检测的投影**：不去解析那段自由文本，而是从原作文案段里量出
+    同一个量，两边比**形态**（判据 11：验收判据用结构不变量，不要用关键词表）。
+
+    ⚠ **判定顺序是有意的**，`引号台词` 优先于 `问句`：原作里就有既是台词又以问号收尾的
+    （`“不然我怎么遇到你就变坏了呢？”`），而「用一句角色台词收尾」与「用叙述者的反问收尾」
+    是两种不同的最后一击——前者是原作最常用的那一种，后者是新文案最常落到的那一种。
+    原型实测七本原作：问句 1 / 陈述 3 / 引号台词 2 / 省略号 1；五本新文案定稿：问句 3。
+
+    ⚠ 已知边界：`引号台词` **只看行尾是不是收引号**，不要求整行都在引号里
+    （`他说：“走。”` 也算）。实测七本原作无假阳；但行内引号恰好收在行尾的情形会被算进来
+    ——**这一条是 `info`，别把它当判定**（判据 7）。
+    """
+    lines = [ln.strip() for ln in (text or '').split('\n') if ln.strip()]
+    if not lines:
+        return None
+    last = lines[-1]
+    if last[-1] in _CLOSE_QUOTES:
+        return '引号台词'
+    if last.endswith(('？', '?')):
+        return '问句'
+    if last.endswith(('…', '...')):
+        return '省略号'
+    return '陈述'
+
+
+# import 期断言：把「档位 → 代表值」这层翻译与 `normalize_paragraphs` 的 1.5 阈值钉在一起。
+# 阈值一改就当场炸，而不是静默按错的一侧归一。
+assert tuple(BAND_SEP) == SEP_BANDS, 'BAND_SEP 的键与 invariants.SEP_BANDS 分家了'
+for _band, _val in BAND_SEP.items():
+    assert ('\n\n' in _normalize_paragraphs('甲。\n乙。', _val)[0]) == (_band == '空行分段'), \
+        f'BAND_SEP[{_band}]={_val} 与 normalize.normalize_paragraphs 的阈值不再对应'

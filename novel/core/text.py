@@ -25,6 +25,10 @@ QUOTE_STYLES = (('「」', re.compile(r'「[^」]*」')),
 QUOTED = re.compile(r'「([^」]{1,40})」|“([^”]{1,40})”|‘([^’]{1,40})’|'
                     r'『([^』]{1,40})』|"([^"]{1,40})"')
 
+#: 「结尾必须有终止标点」的那套。截断判定与删减守卫共用这一份——
+#: 两处各抄一套就会漂（判据 25）。
+TERMINAL_PUNCT = '。！？…”」』!?.'
+
 _NON_CONTENT = re.compile(r'[^一-鿿A-Za-z0-9]')
 
 
@@ -34,6 +38,51 @@ def norm(s: str | None) -> str:
     用于与原文比对——**LLM 常改写标点**（半角逗号→全角），不归一会漏掉真摘抄。
     """
     return _NON_CONTENT.sub('', s or '')
+
+
+def locate_norm(needle: str | None, text: str | None) -> tuple[int, int] | None:
+    """在 `text` 里定位一段**归一后**的串 → 原文下标区间 `(start, end)`；找不到返回 `None`。
+
+    ⚠⚠ **这个回映是承重的，不是便利函数。** `norm()` 剥掉标点与空白，所以
+    「归一后匹配得上」**不等于**「原样出现过」。凡是要把一条结论的凭据落回
+    产物**自己的字节**，就必须走这条回映：
+
+      · 剧透/秘密检测命中的片段来自 `secret.fact`（**不是产物**），
+        直接拿它当凭据展示，等于把那条秘密原文抄进报告——**护栏自己成了泄漏源**。
+        回映之后引用的是**产物自己写过的那句话**，一个新字节都不多给。
+      · 界面要在右栏把凭据高亮出来，也只能用原文下标，**且必须服务端算**：
+        JS 是 UTF-16 码元、Python 是码点，出现一个 emoji 之后全部错位。
+    """
+    k = norm(needle)
+    if not k:
+        return None
+    idx = [i for i, ch in enumerate(text or '') if not _NON_CONTENT.match(ch)]
+    p = ''.join((text or '')[i] for i in idx).find(k)
+    if p < 0:
+        return None
+    return idx[p], idx[p + len(k) - 1] + 1
+
+
+def window_overlap(text: str | None, source: str | None, window: int = 20,
+                   exclude: str = '') -> float | None:
+    """两段文本的【N 字窗口重合率】，扣除 `exclude` 里允许原样出现的那部分。
+
+    在 `norm` 空间里算（去标点/空白），防标点改写绕过。
+    ⚠ `text` 短于一个窗口时返回 **`None`**——那不是「重合 0」，是**量不了**，
+    两者必须分得开（判据 7）。
+
+    **这里只有算法，没有口径**：跟谁比、什么算「允许重合」由调用方给。
+    两套口径共用它——stage5 的成稿 vs 源章（扣 verbatim）· stage6 的文案 vs
+    原作文案段（**无豁免**：文案里一句逐字要求都没有）。
+    各自抄一份窗口逻辑就会漂，而漂的表现是其中一处悄悄不再拦（判据 25）。
+    """
+    src, t, ex = norm(source), norm(text), norm(exclude)
+    if len(t) < window or not src:
+        return None
+    n = len(t) - window + 1
+    hits = sum(1 for i in range(n)
+               if t[i:i + window] in src and t[i:i + window] not in ex)
+    return round(hits / n, 3)
 
 
 def quotes(s: str | None) -> list[str]:
