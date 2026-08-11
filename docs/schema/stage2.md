@@ -435,8 +435,17 @@ stage2/chapter_blueprints.json   一次调用产一章 → R-3.1 ~ R-3.12
 | `address_surface_rewrites` | `[str,str,str][]` | 是 | `(char_id, 原值, 回取值)`。盘上 0 / 2 / 8 条 | **三源** |
 | `address_from_chapter_raised` | `[str,str,int,int][]` | 是 | `(char_id, surface, 原章, 抬到的章)`。盘上共 7 条 | **盘·码** |
 | `canonical_distinguishers_stripped` | `[str,str,str][]` | 是 | `(char_id, 原值, 剥完的值)`。**盘上 3/3 本为空** | **盘·码** |
-| `setup_chapters_pruned` | `[str,int[],int[]][]` | 是 | `(secret_id, 原 setup_chapters, 裁完的)`。**校验器断言的是它，不是 `setup_chapters` 的值**。空列表 = 这一趟没裁过；**键不在 = 「不知道」，不发绿灯** | **三源** |
+| `setup_chapters_pruned` | `[str,int[],int[]][]` | 是 | `(secret_id, 原 setup_chapters, 裁完的)`。**校验器断言的是它，不是 `setup_chapters` 的值**。空列表 = 这一趟没裁过；**键不在 = 「不知道」，不发绿灯** | **契·码** |
 | `human_adjudicated` | `obj[]` | **否** | 人工裁掉某条 secret / 规则时记裁决理由。**盘上零样本** | **契·码** |
+
+> #### ⚠ `setup_chapters_pruned` 的证据列 2026-08-11 从 `三源` 改成了 `契·码`
+>
+> 骨架 A3 的语料体检实测：**盘上 3/3 本的 `_provenance` 里根本没有这个键**
+> （键组合逐字为 `[address_by_fallback, address_from_chapter_raised,
+> address_surface_rewrites, canonical_distinguishers_stripped, changed, code,
+> inputs, model, prompts]`）。契约要它必填是对的——「键不在 = 不知道，不发绿灯」
+> 正是它自己写下的规矩——但那一格标 `三源` 是**说了一件盘上没发生过的事**。
+> ⇒ 它已登记进 `tests/corpus.py::ADDED`，是一条**新增的必填键**，不是既有事实。
 
 ⚠ **已裁撤**：`changed`。它是一个**进程内**的开关（「什么都没改时不落盘——0 成本的记账遍历
 不该打断下游的来源链」），确定性迁移那条路径 `pop` 掉它、正常产出那条路径忘了 pop，

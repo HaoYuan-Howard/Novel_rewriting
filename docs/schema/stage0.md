@@ -185,18 +185,23 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `approved` | `bool` | 是 | **`False` 时 stage1 拒绝启动**（`R-0.3b`，`HARD`） | **设计** |
-| `approved_at` | `str \| null` | 是 | ISO 时间戳；未批准时 `null` | **设计** |
+| `approved` | `str` | 是 | **三态**：`not_run` ｜ `pending` ｜ `approved`（`APPROVAL_STATE`）。**不等于 `approved` 时 stage1 拒绝启动**（`R-0.3b`，`HARD`） | **设计** |
+| `approved_at` | `str \| null` | 是 | ISO 时间戳；未批准时 `null`。**有值 ⟺ `approved == 'approved'`**（载体的后置条件） | **设计** |
 | `round` | `int` | 是 | 第几轮。人每编辑一次 +1，上一轮进 `_rounds/` | **设计** |
 | `edited_by_human` | `bool` | 是 | 本轮有没有人工编辑。= `any(r.origin == 'human' for r in removed)` 之外还含直接改正文 | **设计** |
 
-> #### ⚠ `approved` 是三态的语义压在一个 `bool` 上——**载体阶段要决定**（§四 #1）
+> #### ✅ `approved` 已定为三态（2026-08-11 用户裁决，骨架 A3）
 >
 > 实际有三种状态：**没跑过** · **跑了没批** · **批了**。
 > 用 `bool` 表达，「没跑过」和「跑了没批」就分不开了——而这正是本项目
 > 反复强调的那类错误（`FRESHNESS` 三态、`JOB_STATE` 的 `unknown`）。
 > 「产物不存在」本身能表达「没跑过」，但那要求消费方一律先判文件在不在，
 > **而那种约定迟早会有人漏掉一处**。
+>
+> ⇒ 取值面的唯一落点是 `contracts/invariants.py::APPROVAL_STATE`，
+> 与 `FRESHNESS` / `JOB_STATE` / `BADGE` 同构，随 `/api/enums` 整份下发。
+> ⚠ **`R-0.3b` 的判据要写成「不等于 `approved` 就拦」**：三个值里有**两个**都该拦，
+> 而 `if approved == 'pending'` 会漏掉 `not_run`。
 
 ---
 
@@ -237,7 +242,7 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 
 | # | 问题 | 状态 |
 |---|---|---|
-| 1 | `approved` 用 `bool` 还是三态枚举（没跑过 / 跑了没批 / 批了） | **建议枚举**，与 `contracts/invariants.py` 的其它状态域同构。载体阶段定 |
+| ~~1~~ | ~~`approved` 用 `bool` 还是三态枚举~~ | ✅ **已裁决（2026-08-11，骨架 A3）：三态**，落在 `APPROVAL_STATE`。见 §2.4 |
 | 2 | **审阅闸门覆盖哪些书**：全量 / 只审有检出的 / 全量但零检出可批量放行 | **明确待定**：先跑通几本，按真实上传的书再定。<br>⚠ 实测 27/163 本有检出、136 本干净；「只审检出的」会让盲区①永远不进队列 |
 | 3 | 重跑 stage0 时人工编辑的合并策略 | `R-0.8` 只规定了「不许静默覆盖」，**没规定怎么合并**。<br>参照 stage5 的 `--revalidate` / `REVALIDATE_ONLY_NEW_ERRORS` |
 | 4 | `clean_text.txt` 是否也要参与下游 `_provenance.inputs` 的指纹 | 现在下游记的是 `main_text.json` / `hook_copy.json`。<br>多记一层能定位「问题出在剔除还是分章」，代价是指纹链更长 |

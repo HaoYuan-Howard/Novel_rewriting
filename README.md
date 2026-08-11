@@ -14,8 +14,8 @@
 | 阶段 | 状态 |
 |---|---|
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
-| **契约** | ✅ **九份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md`。只剩 stage0 / stage7 的几条本层待裁决（见下表） |
-| **骨架** | 🚧 **A0 / A1 / A2 / A4 已完成**（见下）。**下一步 = A3**，路线图与交接见下一节 |
+| **契约** | ✅ **九份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md`。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
+| **骨架** | 🚧 **A 期全部完成**（A0~A4）。**下一步 = B1**，路线图与交接见下一节 |
 | 移植 | 未开始 |
 
 ### 🚩 新 session 从这里接手骨架
@@ -25,49 +25,81 @@
 默认的 `python` 指向 Miniconda base，**那里没有 pydantic**。
 ⚠ 本机 `%TEMP%\pytest-of-yh255` 的 ACL 坏了，pytest 的 `tmp_path` 一用就炸，测试里用 `tempfile.mkdtemp()`。
 
-**当前基线**：全绿，**21 条 skip**（1 正向覆盖率 + 13 stage0 + 5 stage1 + 2 分层）。
+**当前基线**：全绿，**22 条 skip**（1 正向覆盖率 + 13 stage0 + 5 stage1 + 2 分层 + **1 语料体检**）。
 每一条 skip 都明说「没在查」——**改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
+⚠ 新增的那一条是**有意的**：`成年人不做选择` 那本的 `stage4/plan_chapters.json`
+在新契约下**加载不了**，因为它根本没有 `_provenance`（`stage4.md` 事实⑤ 的字节级铁证）。
+**不许靠伪造一份来源账把它变绿**——那样这份产物就再也不会提醒任何人「提升路会丢掉来源账」。
 
 | 期 | 做什么 | 状态 |
 |---|---|---|
 | A0 | 三处隐形缺陷 + 命名裁决 | ✅ |
 | A1 | `docs/schema/_common.md` | ✅ |
 | A2 | `contracts/schema/{base,common}.py` | ✅ |
+| A3 | **八层产物模型 + 盘上语料体检**（`contracts/schema/stage3.py` 等八份 · `tests/corpus.py` · `tests/test_corpus_fixtures.py`） | ✅ |
 | A4 | `tests/test_layering.py` | ✅ |
-| **A3** | **八层产物模型（放 `contracts/schema/`，文件名与 schema 文档一一对应）+ 盘上语料体检** | **← 下一步** |
-| B | 运行时：`RunContext` / `ArtifactStore` / LLM / 报告构造器 | 未开始 |
+| **B1** | `novel/{errors,paths,prov,store,run}.py` | **← 下一步** |
+| B2 / B3 | LLM 层 + `FakeTransport` · 报告构造器 | 未开始 |
 | C | **stage3 纵切**（第一个真正跑起来的节点） | 未开始 |
 | D / E / F | 编排（R-13/R-14）· `/api/enums` · 逐层移植 | 未开始 |
 
-#### A3 具体怎么做（含已经量出来的坑）
+### 骨架 A3 已完成（2026-08-11）：**八层模型落地，92 份真实产物过了一遍新 schema**
 
-八层模型照 `docs/schema/` 下同名的那一份写，**文档是源**。每层还要写一个**自己的** `_provenance`
-子类来收下本层的记账键（`attempts` / `batches` / `repairs` / `scope_violations` / `changed` …）——
-`extra='forbid'` 会把它们全拒掉，而那正是我们要的：**记账键必须被显式声明**。
+`contracts/schema/` 下的八份（`stage0.py` ~ `stage7.py`）与 `docs/schema/*.md`
+**文件名一一对应**，文档是源。`contracts/schema/__init__.py` 里的 `ARTIFACTS`
+是「产物相对路径 → 模型」的**唯一落点**（语料体检 / API 响应类型 / 将来产前端 TS 类型，三个消费方共用）。
+每层带一个**自己的** `_provenance` 子类收下本层的记账键（`attempts` / `batches` /
+`repairs` / `scope_violations` / `params` …）——`extra='forbid'` 会把没声明的全拒掉，
+而那正是要的：**记账键必须被显式声明**。
 
-再在 `tests/` 下加一份语料体检，三条断言，拿 `../Novel_refactoring/Output/` 的 3 本书做**零成本体检**：
+**语料体检**（`tests/test_corpus_fixtures.py`，3 本书 × 92 份真实产物含 `_rounds/` 归档，
+零成本、不落任何盘）把三件事各变成一条会红的断言：
 
-1. 原样加载期望失败，且 `extra_forbidden` 的 loc 集合**恰好等于**迁移清单（不是「包含」，是**相等**）；
-2. 按清单迁移之后**全部加载成功**；
-3. 「没有 `_provenance` 的产物」集合**恰好等于**已登记的那一份。
+| 表（`tests/corpus.py`） | 断言 | 规模 |
+|---|---|---|
+| `CUT` | 原样加载时 `extra_forbidden` **恰好等于**它 | **70** 条裁撤路径，覆盖 12 种产物 |
+| `ADDED` | 裁完之后缺的必填键**恰好等于**它 | **46** 个新增键，落在 5 种产物上 |
+| `RESHAPED` | 形状改版，机械转换 | `inputs` 的边 · `Finding` 5→13 · `book_txt.sha1` 10→40 |
+| `MISSING_PROVENANCE` | 「没有 `_provenance` 的产物」**恰好等于**它 | 1 份（stage4 那条铁证） |
 
-> **⚠ 已经量出来的三件事，别再重新发现一遍**（2026-08-11 扫全 `Output/`）：
->
-> - **79 份**产物带 `_provenance`；**297 条** `inputs` 边**全部是扁平的 10 位字符串、两级键**。
->   ⇒ `{file, consumed}` 是一次**已登记的契约改版**，迁移清单里要**单列一条**，
->   不能和「裁撤字段」混在一起——它俩的性质不同。
-> - 轮次账在盘上有**两种**形状，第二种（`--apply-edit` 的人工稿：没有 `prompts`/`model`
->   却仍带 `round`/`revision_of`）**盘上只有 1 份**。它是「轮次账必须是 mixin」这条设计的
->   **唯一证据**，别当噪声。两种形状已在 `tests/test_schema_common.py` 里钉成字面值。
-> - `stage4/plan_chapters.json` 有 **1/3 本完全没有 `_provenance`**——那是 `stage4.md` 事实⑤
->   （提升路把来源账整个丢掉）的**字节级铁证**，它必须进第 3 条测试的「已登记」清单，
->   而不是被当成 bug 修掉。
+⚠ **三张表不能合成一张**：裁撤 / 新增 / 改形状**性质不同**，合并之后
+「少裁了一个」与「多加了一个必填键」在测试输出上会长得一样。
+
+**A3 顺带修的、以及量出来的**（详见各自的注释）：
+
+- **`OWNER` 少了 `stage6` / `stage7` 两个值。** `_common.md` §七 要求全链只有一份 `Finding`，
+  而 stage6/stage7 各有十几条结论的 `owner` 是自己那一层。少这两个值时
+  `Literal[OWNER]` 会把它们当非法数据拒收，`contracts/rules.py::_validate` 也会在那两层移植时当场炸。
+  **它今天看不见**（`PORTED_STAGES` 空、`Finding` 还没有生产者）——与 A0 那三处同形。
+- **`stage4/writer_context.json` 的 `facts.address[].by` 不是 `char_id`。** 它已被逐章投影
+  **解析成人名**（盘上 27 个不同值，只有 `narration`/`public` 是原样字面）。
+  第一版模型与 stage2 的 `by` 共用了同一个受约束类型，**1007 条里 364 条当场被拒**——
+  这条是语料体检抓出来的，不是读出来的。
+- **`stage2` 的 `_provenance.setup_chapters_pruned` 盘上 3/3 本根本没有**，
+  而文档把它的证据列标成 `三源`。已改 `契·码` 并登记进 `ADDED`。
+- `judged[].mode` 与 `counts` **两处文档打架**（stage6 写「已裁」、stage7 自己的表写「必填」），
+  已按用户裁决**三层一起裁**；`JudgedDraft` 全链只有一个类。
+
+#### ⚠ A3 发现、但**没有**在 A3 修的一条（下一个 session 要先看它）
+
+**`Finding.actionable` 的不变量与 stage6/stage7 打架。**
+`_common.md` §七 与 `stage5.md` §2.3 都写着 `actionable` **蕴含 `owner == 'stage5'`**
+（那是「进不进写作层反哺」的语义），而 `stage6.md` §四 写着本层 `actionable=True` **12 条**、
+`stage7.md` §六 写着 **16 条**，owner 全是它们自己那一层——
+在那两层，`actionable` 的意思是「**人能 0 成本改掉它**」（`--approve` 换一条候选 /
+`--apply-edit` 改一个字），不是「写作层能修」。
+
+⇒ `contracts/schema/common.py::Finding._postconditions` 与
+`contracts/rules.py::_validate` 第 ③ 条**都会在 stage6/stage7 移植时炸**。
+今天不发作（那两层的 findings 盘上没有这个字段，体检里一律填 `False`）。
+**这是一次语义裁决，不是一处笔误**：要么给 `actionable` 分层定义，
+要么给 stage6/stage7 另起一个字段名。**别顺手改掉那条断言**——它抓过真 bug。
 
 #### 施工中要回来问用户的（不许替他定）
 
 `stage5_review` → `stage5` 的 check 路由改名 · `CheckReport` 换形状（影响前端 S-13 屏与两份 mock）·
-stage0 的 5 条本层待决（`approved` 用 `bool` 还是三态）· stage7 的 5 条待决
-（其中 `book_txt.has_hook=false` 是否可达是**产品语义**）· 建远程仓库。
+`Finding.actionable` 那条语义裁决（见上）· stage7 待决 ④（`book_txt.has_hook=false`
+是否可达，是**产品语义**）与 ⑤（`rn_unregistered` 补实现还是退役）· 建远程仓库。
 
 ⚠ **`web/` 未跟踪、约 5300 行、本机唯一一份**，且本仓没有远程。
 用户已裁决**骨架阶段当它不存在**（不对齐、不改名），但它里面有 71 处写死的原型作业名

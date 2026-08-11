@@ -114,13 +114,15 @@ stage7/book.txt                   ★ 交付物。纯文本，带不了 `_proven
 
 ## 一、`stage7/name_map.json`
 
-顶层 **21 个键**（`hook_consumed` 是第 22 个，见 §1.5）。
+顶层 **15 个键**（`hook_consumed` 是第 16 个，见 §1.5）。
+下表里划掉的六项是**盘上有、新契约裁掉**的（`source_id` · `title` · `title_new` ·
+`counts` · `_groups` · `_problems`），迁移清单在 `tests/corpus.py::CUT`。
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `source_id` | `str` | 是 | 纯数字串，取自**目录名**（`derive_source_meta`）。⚠ **可 0 成本现算 ⇒ 该裁** | **三源** |
-| `title` | `str` | 是 | 原书名，取自**目录名**（`title_of`）。⚠ `check_one` **不读它**，自己重算了一遍（源码注「书名只认目录名，不认命令行怎么敲」）⇒ 同一件事两个落点。**可 0 成本现算 ⇒ 该裁** | **三源** |
-| `title_new` | `str` | 是 | 书名过一遍同一份替换器的结果。**盘上 3/3 与 `title` 逐字节相同**（三本书名都不含 registry 专名）。⚠ 见 §九 待决 ① | **三源** |
+| ~~`source_id`~~ | — | — | **已裁**：纯数字串，取自**目录名**（`derive_source_meta`），0 成本现算 | **三源** |
+| ~~`title`~~ | — | — | **已裁**：原书名，取自**目录名**（`title_of`）。⚠ `check_one` 本来就**不读它**、自己重算了一遍（源码注「书名只认目录名，不认命令行怎么敲」）⇒ 同一件事两个落点 | **三源** |
+| ~~`title_new`~~ | — | — | **已裁**（§九 ①）：书名过一遍同一份替换器的结果，现算 0 成本。**盘上 3/3 与 `title` 逐字节相同**（三本书名都不含 registry 专名） | **三源** |
 | `surname_map` | `obj` | 是 | **模型写的**。`{原姓: 新姓}`，只覆盖【字面同姓且 ≥2 人】的族群。盘上 8/3/9 条，**新姓 ∩ 旧姓 = ∅、新姓无重复**（3/3） | **三源** |
 | `characters` | `obj[]` | 是 | **模型写的**（`old_canonical` 由代码从 registry 回填）。长度 = registry 大小，盘上 12/15/48。见 §1.1 | **三源** |
 | `extra_subs` | `obj[]` | 是 | **人写的**补充映射。盘上 4~12 条、共 21 条。见 §1.2 | **三源** |
@@ -136,8 +138,8 @@ stage7/book.txt                   ★ 交付物。纯文本，带不了 `_proven
 | `hook_consumed` | `obj` | **否** | 本节点**真正消费**的文案投影。⚠ **盘上 1/3 本有**——后加的键。见 §1.5 | **盘·码** |
 | `sources` | `obj` | 是 | 只有一个子键 `writer_context`，形状与 stage6 §1.4 逐字段相同。盘上 3/3 `fresh` | **三源** |
 | `book` | `obj[]` | 是 | 书级结论。盘上恒 **7 条**（1 info + 3 metric + 3 unver），三本**规则集完全相同**。见 §1.6 | **三源** |
-| `counts` | `obj` | 是 | `{sev: 条数}`。⚠ **稀疏**：`Counter` 的 0 键消失 ⇒ 盘上 3/3 **没有 `hard` 键**。可 0 成本现算——但它与 stage5/6 同形，**一起裁或一起留** | **盘·码** |
-| `_groups` | `obj[]` | 是 | 下发给模型的姓氏族群表（**键名是中文**：`原姓` / `成员`）。盘上 1/1/3 组、共 5 组 11 人。⚠ 加载回来 **0 读者**，见 §1.8 与 §九 待决 ③ | **盘·码** |
+| ~~`counts`~~ | — | — | **已裁**（§九 ⑥，与 stage6 一起）：`{sev: 条数}`，0 读者 + 100% 现算 + ⚠ **稀疏**（`Counter` 的 0 键消失 ⇒ 盘上 3/3 **没有 `hard` 键**，「没有这个键」与「值是 0」混掉） | **盘·码** |
+| ~~`_groups`~~ | — | — | **已裁**（§九 ③）：下发给模型的姓氏族群表（**键名是中文**：`原姓` / `成员`），盘上 1/1/3 组、共 5 组 11 人。**加载回来 0 读者**，见 §1.8 | **盘·码** |
 | `_provenance` | `obj` | 是 | 见 §五 | **盘·码** |
 
 ⚠ **已裁撤**：`_problems`（`build_subs` 攒下的冲突三元组，盘上 3/3 空）——
@@ -189,18 +191,19 @@ stage7/book.txt                   ★ 交付物。纯文本，带不了 `_proven
 ### 1.3 `applied` —— 三个替换面的记账
 
 ```
-applied.chapters{"<output_ordinal>"}   {counts, chars_before, chars_after}
-applied.hook                           {counts, chars_before, chars_after}
-applied.title                          {counts}          ← ⚠ 少两个字段
+applied.chapters{"<output_ordinal>"}   {counts}
+applied.hook                           {counts}
 ```
+
+**裁完之后两块同形，而这不是巧合**：§九 ①② 裁掉的正是让它们不同形的那几项
+（`title` 整块少两个字段、`chars_*` 只有一条 metric 在读）。
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
 | `chapters{*}.counts{称呼}` | `int` | 是 | 该称呼在这一章**独立命中**并被换掉的次数。**恒等条目不计数**（屏蔽不算替换） | **三源** |
-| `chapters{*}.chars_before` | `int` | 是 | 盘上 399~1967。⚠ 唯一读者是 `rn_report`（metric），见 §九 待决 ② | **三源** |
-| `chapters{*}.chars_after` | `int` | 是 | 盘上 399~1968。同上 | **三源** |
-| `hook.*` | 同上 | 是 | 盘上 `chars_before` 128~240 | **三源** |
-| `title.counts` | `obj` | 是 | 盘上 3/3 **全空**。⚠ **没有 `chars_before`/`chars_after`**——三个平行块唯独它缺两个字段 | **⚠冲突** |
+| `hook.counts{称呼}` | `int` | 是 | 同上 | **三源** |
+| ~~`chapters{*}` / `hook` 的 `chars_before` / `chars_after`~~ | — | — | **已裁**（§九 ②）：盘上 399~1968；唯一读者是 `rn_report`（metric），而**替换不改篇幅**（3/3 都是 1.000×~1.001×） | **三源** |
+| ~~`title` 整块~~ | — | — | **已裁**（§九 ①）：`counts` 盘上 3/3 **全空**，且三个平行块**唯独它缺两个字段** | **⚠冲突** |
 
 ⚠ **`counts` 的口径不能用 `str.count`**：称呼之间大量嵌套，`count` 会把长称呼的字节
 重复计给短称呼（实测「阿禾」`count`=4 而独立命中只有 **1**，另外 3 次在「阿禾姊姊」里）。
@@ -268,12 +271,22 @@ applied.title                          {counts}          ← ⚠ 少两个字段
 | `…​.round` | `int` | 是 | 那份成稿当时是第几轮。盘上 1~2。**不可再生** | **三源** |
 | `…​.sha1` | `str` | 是 | **整文件**指纹，只作审计 | **三源** |
 | `…​.consumed` | `obj` | **否** | `{output_ordinal, text_sha1, has_budget_chars}`。**盘上 1/3 本有** | **盘·码** |
-| `…​.mode` | `str` | 是 | `deep｜shallow`。⚠ 可从键（路径中间那一段）现算 | **盘·码** |
+| ~~`…​.mode`~~ | — | — | **已裁**（2026-08-11 用户裁决，骨架 A3）：可从键（路径中间那一段）现算。见下框 | **盘·码** |
 | `hook_sha1` | `str｜null` | 是 | 整文件指纹 | **三源** |
 | `hook_consumed` | `obj` | **否** | `{present: bool, approved_text_sha1: str}` | **盘·码** |
 | `sources.writer_context.state` | `str` | 是 | `fresh｜stale｜unknown`。盘上 3/3 `fresh` | **三源** |
 | `sources.writer_context.detail` | `obj[]` | 是 | `{key, was, now}`。**盘上 3/3 空——非空分支零样本** | **契·码** |
 | `sources.writer_context.code` | `str｜null` | 是 | ctx 的 `_provenance.code` | **盘·码** |
+
+> #### ⚠ 本节开头那句「与 stage6 §1.3 逐字段相同」曾经和下面这张表打架
+>
+> stage6 §1.3 明写 `mode` **已裁**（可从键的中间那一段现算），而本节的表把它列成**必填**。
+> 两句话不可能都对——而 `judged` 在 stage5 / stage6 / stage7 是**同一个形状**，
+> 各写一份就是「同一件事的第 N 个落点」。
+> ⇒ **2026-08-11 用户裁决：三层一起裁。** 载体上 `JudgedDraft` 全链只有一个类，
+> `contracts/schema/stage5.py` 是它的落点。
+> ⚠ **连带 stage5 的 `review_<n>.json` 也要裁**（盘上 124/124 都有 `mode`）——
+> 一个类改形状就是三层一起改，这正是共用一个类想要的效果。
 
 ⚠ **「文案过没过期」在本层是两把尺子**（与 stage6 §1.3 **完全同形**）：
 `check_one._hook_drift` 用 `hook_consumed.approved_text_sha1`（缺席时退回整文件），
@@ -622,13 +635,14 @@ owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9。
 
 ## 九、待决
 
-| # | 决策 | 建议 | 代价 |
+| # | 决策 | 结论 | 代价 |
 |---|---|---|---|
-| ① | `title_new` + `applied.title` 裁不裁 | **裁**。`title_new = apply_subs(title, subs, kept)`，现算 0 成本；`applied.title.counts` 盘上 3/3 空 | `rn_title_unver` 的文案改成现算；**产品语义不变** |
-| ② | `applied.chapters{*}.chars_before/chars_after` 裁不裁 | **裁**。唯一读者是 `rn_report`（metric），而它要的两个总数可以直接写进 finding 的 detail | 逐章篇幅变化从产物里消失；但替换不改篇幅（3/3 都是 1.000×~1.001×），信息量本就接近 0 |
-| ③ | `_groups` 裁不裁 | **裁**，并把「N 个族群 / M 人」并进 `rn_report` 那一行 | 失去「当时下发给模型的族群表长什么样」的记录；⚠ 它可由 registry + 原文确定性重算，且 `_provenance.inputs` 记着 registry 的指纹 |
-| ④ | `has_hook=false` 是否可达（§八） | **先查再裁**：可达 ⇒ 留；不可达 ⇒ 删字段（`op` 先例：一个恒等于常量的字段） | 这是**产品语义**问题：「允不允许出一本没有开篇文案的书」 |
-| ⑤ | `rn_unregistered`：补实现还是退役（事实⑥） | **退役 + 标注**，直到有 ground truth 能定阈值（同 `B-01` 的裁法）。⚠ 有一个**弱版本**是可实现的：`residual_scan` 已经在做掩码，把「掩码后剩下的连续 2~3 字专名形」单独报一族即可——但那需要 ground truth 才能定阈值 | 退役后那盏绿灯消失，报告里换成一行「这一类没在查」——**信息量增加** |
+| ~~①~~ | ~~`title_new` + `applied.title` 裁不裁~~ | ✅ **已裁决（2026-08-11，骨架 A3）：裁。** `title_new = apply_subs(title, subs, kept)`，现算 0 成本，盘上 3/3 与 `title` 逐字节相同；`applied.title.counts` 盘上 3/3 空 | `rn_title_unver` 的文案改成现算；**产品语义不变** |
+| ~~②~~ | ~~`applied.chapters{*}.chars_before/chars_after` 裁不裁~~ | ✅ **已裁决：裁。** 唯一读者是 `rn_report`（metric），而它要的两个总数可以直接写进 finding 的 `detail`。<br>⚠ **连 `applied.hook` 那一块的同名两项一起裁**：待决只点名了 `chapters{*}`，但 §1.3 的表把 `hook` 写成「同上」——它带着**同样的两个字段、同一个读者**。留一个裁一个会让那两块长出两种形状 | 逐章篇幅变化从产物里消失；但替换不改篇幅（3/3 都是 1.000×~1.001×），信息量本就接近 0 |
+| ~~③~~ | ~~`_groups` 裁不裁~~ | ✅ **已裁决：裁**，并把「N 个族群 / M 人」并进 `rn_report` 那一行 | 失去「当时下发给模型的族群表长什么样」的记录；⚠ 它可由 registry + 原文确定性重算，且 `_provenance.inputs` 记着 registry 的指纹 |
+| ④ | `has_hook=false` 是否可达（§八） | **仍待决。先查再裁**：可达 ⇒ 留；不可达 ⇒ 删字段（`op` 先例：一个恒等于常量的字段）。<br>⚠ 骨架 A3 **保留了这个字段**——它是**产品语义**问题，不是清理问题 | 这是**产品语义**问题：「允不允许出一本没有开篇文案的书」 |
+| ⑤ | `rn_unregistered`：补实现还是退役（事实⑥） | **仍待决**（属判据层，不属产物 schema，骨架阶段不动）。**建议退役 + 标注**，直到有 ground truth 能定阈值（同 `B-01` 的裁法）。⚠ 有一个**弱版本**是可实现的：`residual_scan` 已经在做掩码，把「掩码后剩下的连续 2~3 字专名形」单独报一族即可——但那需要 ground truth 才能定阈值 | 退役后那盏绿灯消失，报告里换成一行「这一类没在查」——**信息量增加** |
+| ⑥ | `counts` 裁不裁（§一顶层键表写着「与 stage5/6 同形，**一起裁或一起留**」） | ✅ **已裁决（2026-08-11，骨架 A3）：裁。** stage6 那一侧已经裁了，同形就一起裁。理由也同形：0 读者 + 100% 可从 `book[]` 现算 + **稀疏**（`Counter` 的 0 键会消失 ⇒ 盘上 3/3 没有 `hard` 键，「没有这个键」与「值是 0」混掉） | 报告现算 |
 
 ---
 

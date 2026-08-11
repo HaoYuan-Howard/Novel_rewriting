@@ -50,7 +50,16 @@ JOB_STATE: Final = ('running', 'ok', 'failed', 'unknown')
 INBOX_KIND: Final = ('invalid', 'rejected', 'stalled', 'human_only', 'upstream', 'approval')
 
 #: 结论的根因**第一嫌疑**层。`corpus` = 原文自己就是这样，谁也修不了。
-OWNER: Final = ('stage2', 'stage3', 'stage4', 'stage5', 'corpus')
+#:
+#: ⚠ **`stage6` / `stage7` 是 2026-08-11 补上的，原来漏了两个**。发现于骨架 A3：
+#: `_common.md` §七要求全链只有一份 `Finding`（原型有 5 份拷贝、3 种字段签名），
+#: 而 `stage6.md` §四写着「owner：`stage6` 13 · `None` 11 · `stage3` 1」、
+#: `stage7.md` §六写着「owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9」。
+#: ⇒ 少这两个值时，`Literal[OWNER]` 会把**两层各十几条真实结论**当成非法数据拒收，
+#: 而 `contracts/rules.py::_validate` 会在这两层移植时当场炸。
+#: **它今天看不见**——`Finding` 还没有任何生产者、`PORTED_STAGES` 是空的，
+#: 与 A0 修的那三处是同一个形状（守卫在被启用的那一刻才发作）。
+OWNER: Final = ('stage2', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7', 'corpus')
 
 #: `REQUIREMENTS.md` 的「谁在查」那一列的**取值面**（2026-08-10 一次定全）。
 #:
@@ -177,6 +186,26 @@ NONBODY_MARKER_WARN_CP: Final = 17
 #:   后者独立起作用的窗口只有 `body_ratio ∈ [0.60, 0.65)`。两条都留是因为严重度不同。
 STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 
+#: 人工审阅闸门的状态。**三态，不是 `bool`**（2026-08-11 用户裁决，`stage0.md` §四 #1）。
+#:
+#: 【为什么不能是 `bool`】实际有三种状态：**没跑过** · **跑了没批** · **批了**。
+#: 压成 `bool` 之后前两者就分不开了——而「产物不存在」这条替代表达要求
+#: **每一个消费方都先判文件在不在**，那种约定迟早有人漏掉一处。
+#: 与 `FRESHNESS` / `JOB_STATE` / `BADGE` 同构：本项目每一次把「不知道」并进
+#: 「没问题」都付过学费。
+#: ⚠ `R-0.3b`（`HARD`）判的是 **`approved != 'approved'` ⇒ stage1 拒绝启动**，
+#: 三个值里有**两个**都该拦——写成 `if not approved` 在 `bool` 下对、在三态下也对，
+#: 但写成 `if approved == 'pending'` 就漏掉了 `not_run`。
+APPROVAL_STATE: Final = ('not_run', 'pending', 'approved')
+
+#: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
+#: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。
+SOURCE_ENCODINGS: Final = ('utf-8-sig', 'utf-32', 'utf-16', 'utf-8', 'gb18030')
+
+#: 一条剔除记录是谁圈的。**不许省**（`R-0.8`）：重跑 stage0 时 `machine` 可以重算覆盖，
+#: `human` **不许静默覆盖**——没有这个字段，重跑一次就把人的工作悄悄抹掉了。
+REMOVED_ORIGIN: Final = ('machine', 'human')
+
 #: **分章**的可疑项分类，属于 stage1。原型有 6 类，两轮裁决后只剩 1 类：
 #:   · `仅识别到 ≤1 章却很长`  → 升级成显式终态 `R-1.13`
 #:   · `完结标记之后还有内容`  → 被 `R-1.14` 的 HARD 判据接管
@@ -274,6 +303,22 @@ NARRATIVE_PERSON: Final = ('first', 'second', 'third')
 #: 新产物一律用 `NARRATIVE_PERSON`；限知/全知那一轴归 stage3 的文风画像，本层不记。
 #: ⚠ 这里面的 `third_limited` / `omniscient` **不是人称**，别拿它跟上面那份做值级比对。
 _RETIRED_GRAMMATICAL_PERSON: Final = ('first', 'third_limited', 'omniscient')
+
+#: 世界规则的类别（`canon.world_rules[].kind`）。**七个，闭合。**
+#: ⚠ 盘上只见 **4** 个（`social_norm`×4 · `supernatural_rule`×3 · `legal_rule`×3 ·
+#: `ability_system`×1），**另三个零样本**——取值面从代码来，不是从盘上量出来的。
+#: ⚠ 与 `arc_tracks[].change_type` 恰好相反：那一个是**开放**枚举
+#: （`stage2.md` §1.6 明写「末尾的 `…` 是语义的一部分」），所以它**不许**做成 `Literal`。
+WORLD_RULE_KINDS: Final = (
+    'social_norm', 'institution', 'legal_rule', 'ability_system',
+    'supernatural_rule', 'technology_rule', 'physical_constraint',
+)
+
+#: 一次调用当时的缓存口径，记进 `_provenance`（stage2 的 `repairs[]` · stage3 的 `attempts[]`）。
+#: ⚠ **定向重生成必须配 `refresh-write`**（`R-3.11`）：它的 prompt 与整跑时那一批**逐字相同**，
+#: 缓存必然命中，于是一个字都没重新生成而它照样打印「已重生成」。
+#: 盘上只见前两个，`disabled` 零样本。
+CACHE_POLICY: Final = ('default', 'refresh-write', 'disabled')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -414,6 +459,39 @@ VOICE_KEYS: Final = (
 HOOK_KEYS: Final = (
     'person', 'open_mode', 'info_hiding', 'twist', 'end_question', 'tone', 'relation_to_body',
 )
+
+#: 文风画像的尝试类别（`_provenance.attempts[].kind`）。
+#: `surface_habits_targeted_repair` = 只把 `surface_habits` 那一个列表发回去改写，
+#: 其余字段一个字不动——**全链唯一有定向返工通道的字段**。
+STAGE3_ATTEMPT_KINDS: Final = ('initial', 'surface_habits_targeted_repair')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 七之二、开篇文案（stage6）与人名替换（stage7）
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: 三种文案写法，一次调用各产一条候选。**这是唯一落点**——
+#: prompt 里那一份由 `fill()`（`string.Template`）插值，缺值抛异常而不是渲染成空串。
+#: ⚠ 产地**不许 `.get` 兜底**：写歪的 approach 一律显式终态（枚举上的兜底
+#: 就是给违约数据发一张静默通行证）。
+#: ⚠ 改这张表会改 `prompts.HOOK_SYS` 的指纹——那是对的：
+#: **一个模板 + 一份枚举表 = 一个 prompt**，表变了发出去的东西就变了。
+HOOK_APPROACHES: Final = ('conflict_first', 'result_flashback', 'identity_contrast')
+
+#: 定稿那一份的 `approach` 比候选多一个值。
+#: 它答的是「这份人工稿是从哪一条候选改出来的」——**没有前身时才是 `human_edit`**。
+#: ⚠ 先 `--approve 2` 再 `--apply-edit`，`approach` 会**留着** `result_flashback`，
+#: 而文本已经是人手写的。「它是不是人写的」由 `origin` 回答，不由这里回答。
+HOOK_APPROVED_APPROACHES: Final = HOOK_APPROACHES + ('human_edit',)
+
+#: 残留候选的置信度。**`high` ⟺ 命中处第二个字 ∈ `家府氏宅门`**（结构信号）。
+#: ⚠ 只看正式产物会把取值面定成**只有 `low`**：3 份正式产物 19 条残留全是 `low`，
+#: 而 8 份 `_rounds/` 归档里有 **35 条 `high`**——`high` 的那些早被人勾选修掉了。
+#: **凡是有「人修完再落盘」这条路的层，归档必须一起反推。**
+#: ⚠ 覆盖率 `ratio` 与它打架时**以本字段为准**：`ratio` 有自我压低的反馈回路
+#: （漏掉的形就是该姓的主用法时，分母里装的主要就是分子），实测 `沈` 40% / `孙` 60%
+#: 落在「基本是普通词」那一侧而两个都是真漏网；`confidence` 实测 6/6 全真。
+RESIDUAL_CONFIDENCE: Final = ('high', 'low')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
