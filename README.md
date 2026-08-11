@@ -14,9 +14,9 @@
 | 阶段 | 状态 |
 |---|---|
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
-| **契约** | ✅ **九份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md`。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
-| **骨架** | 🚧 **A 期 + B1 + B2 完成**。**下一步 = B3（报告构造器）**，路线图与交接见下一节 |
-| 移植 | 未开始 |
+| **契约** | ✅ **十份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + **`_report.md`**（校验报告，B3 补）。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
+| **骨架** | ✅ **A~C 期完成**（B3 报告构造器 + stage3 纵切）。**下一步 = D（编排 + CLI）**，路线图与交接见下一节 |
+| 移植 | 🚧 **stage3 已移植**（`PORTED_STAGES={'stage3'}`）。其余七层见 F 期 |
 
 ### 🚩 新 session 从这里接手骨架
 
@@ -25,15 +25,18 @@
 默认的 `python` 指向 Miniconda base，**那里没有 pydantic**。
 ⚠ 本机 `%TEMP%\pytest-of-yh255` 的 ACL 坏了，pytest 的 `tmp_path` 一用就炸，测试里用 `tempfile.mkdtemp()`。
 
-**当前基线**：全绿，**729 passed / 22 skip**（1 正向覆盖率 + 13 stage0 + 5 stage1 +
-**2 条都指着同一份产物** + 1 `ask_json` 调用点）。
+**当前基线**：全绿，**869 passed / 20 skip**（13 stage0 + 5 stage1 + **2 条都指着同一份产物**）。
 每一条 skip 都明说「没在查」——**改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
 ⚠ 那 2 条是**有意的**，而且是**同一份产物**：`成年人不做选择` 那本的 `stage4/plan_chapters.json`
 在新契约下**加载不了**，因为它根本没有 `_provenance`（`stage4.md` 事实⑤ 的字节级铁证）——
 语料体检与落盘往返各跳过它一次。
 **不许靠伪造一份来源账把它变绿**——那样这份产物就再也不会提醒任何人「提升路会丢掉来源账」。
-⚠ skip 数的两次变化都有账：B1 让**分层那 2 条从 skip 变成真测试**（22→21，`novel/` 落地
-之前它们没有扫描面）；B2 加了一条 `ask_json` 调用点守卫，**C 期第一个调用点出现时它自动变真**（21→22）。
+⚠ skip 数的每一次变化都有账：B1 让**分层那 2 条从 skip 变成真测试**（22→21，`novel/` 落地
+之前它们没有扫描面）；B2 加了一条 `ask_json` 调用点守卫（21→22）；
+**C 期一次退掉 2 个**（22→20）——`PORTED_STAGES` 不再是空的，
+于是**正向覆盖率**与那条 **`ask_json` 调用点守卫**同时从「没在查」变成真的在查。
+⚠ 剩下的 18 个是 stage0/stage1 的 `importorskip`，**A~C 期一个都没动**，
+它们落地那天会一次变成 18 个 `pytest.fail`（`tests/test_ingest_fixtures.py` 有意设计的机制）。
 
 | 期 | 做什么 | 状态 |
 |---|---|---|
@@ -44,9 +47,134 @@
 | A4 | `tests/test_layering.py` | ✅ |
 | **B1** | **共享运行时**（`novel/{errors,paths,prov,store,run}.py` + `novel/llm/{cache,ledger}.py`） | ✅ |
 | **B2** | **LLM 层 + `FakeTransport`**（`novel/config.py` · `novel/llm/{transport,client,prompts}.py`） | ✅ |
-| **B3** | 报告构造器（`build()` 遍历判据注册表，**不遍历 findings**） | **← 下一步** |
-| C | **stage3 纵切**（第一个真正跑起来的节点） | 未开始 |
-| D / E / F | 编排（R-13/R-14）· `/api/enums` · 逐层移植 | 未开始 |
+| **B3** | **报告构造器**（`build()` 遍历判据注册表，**不遍历 findings**）· `docs/schema/_report.md` ↔ `contracts/schema/report.py` | ✅ |
+| **C** | **stage3 纵切**（第一个真正跑起来的节点）· 判据行 + 确定性核心 + 九条判据 + 盘上三本对账 | ✅ |
+| D | **编排 + CLI**（R-13/R-14）：`build_argv` / `build_steps` / `is_paid` / `would_write` | **← 下一步** |
+| E / F | `/api/enums` + stage3 只读端点 · 逐层移植 stage2→4→5→6→7→（stage0/1 最后） | 未开始 |
+
+⚠ **付费路写好了但一次都没跑。** `novel/stages/stage3/style.py::run_style()` 的
+`ask_json` 调用点在，而 `build_prompt()` 是 0 成本的 `--dry-run`（展示与执行**共用同一个构造函数**，
+`R-11.8`）。**真发第一次请求要先说一声**——那是本仓第一次真花钱。
+
+### 骨架 C 已完成（2026-08-11）：**stage3 纵切跑通，`PORTED_STAGES` 第一次不是空的**
+
+盘上三本对账，与原型逐条一致，**一分钱没花**：
+
+| 对账 | 结果 |
+|---|---|
+| `--check-only` | **PASS / PASS / PASS** + 三岁那本 `micro_quote` **2 处**（`别说话别说话——` / `结果没过三天`） |
+| `--remeasure` | `measurable` **23 项（body 14 + hook 9）× 3 本逐值相同，0 处漂移** |
+
+**不一致就是骨架抄错了，不是数据变了**——那三份产物一个字节都没动过。
+选 stage3 的理由兑现了：三份上游都在盘上 ⇒ **不实现 stage0/1/2 也能端到端跑通**。
+
+| 模块 | 它守的那件事 |
+|---|---|
+| `contracts/judges/stage3.py` | 判据的**行**与它守的契约同层（`Q-12`）。九条 + 两条退役。`__init__.py` **显式列 import 不 glob**——`REGISTRY` 的内容不许取决于文件系统 |
+| `novel/core/{text,measure,bands,naming}.py` | 确定性核心，**连注释一起搬**。半角 `?!` 那条、`paragraph_sep_chars` 那条、`hook_shape_band` 为什么不并进 `bands()`，每一条都带着一次实测的账 |
+| `novel/stages/stage3/checks.py` | 九条判据的**实现**。`name_leak` 三态 · `measurable_drift` 只在复检时排 |
+| `novel/stages/stage3/prompts.py` | `STYLE_SYS` / `HABIT_REPAIR_SYS` **与原型逐字节相同**，配一条会红的测试钉着 |
+
+#### ⭐ 这一期最值钱的四件事
+
+**① 判据吃 `dict` 不吃模型——而这是被新契约逼出来的一次裁决。**
+A3 把 `voice` 八维、`surface_habits` 全做成了 `Field(min_length=1)` + `extra='forbid'`，
+于是一份**过了模型**的产物再跑 `required` **必然全绿**——那正是判据 31 点名的
+「保证会亮的绿灯」。而按本项目自己的分界线（**判据 vs 载体按失败成本划**），
+`required` 该留在判据侧：载体拒收 ⇒ 整份响应作废 ⇒ **再花一次钱**；
+判据拦下 ⇒ `.INVALID` + 人手改一行 + `--revalidate` ⇒ **0 成本**。
+⇒ 判据跑在模型**之前**那份 dict 上，付费路的落盘闸门与 `--check-only` **同一段代码两个入口**。
+⚠ 副产品：每条 HARD 现在都配得出一个会让它红的反例（模型化之后**构造不出来**）。
+
+**② `require` 从 `model_cls` 派生，把原型漏掉的那条闸门补上了。**
+原型这个调用点写的是 `require=('voice', 'surface_habits')`——**漏了 `hook_style`**。
+漏传不报错，它只是**静默停掉一条 HARD 闸门**（判据 39）。
+新建的 `StyleResponse`（模型只写那三个键，与 `StyleGrounding` **不是同一个东西**）
+派生出三个必需顶层键，这件事**结构上不可能再发生**。
+
+**③ `consumed` 投影全链第一次有人声明。** 在此之前八层一个都没有，新鲜度恒 `unknown`
+——那是契约要的，不是 bug。stage2 那条尤其值：那份上游几千行而本层只拿它当名表，
+不声明投影的话，stage2 改一个不相干的 `role` 措辞就会把 stage3 判成 `stale`
+（`Q-4` 说的「把一批结论降级成『读数不可用』，且没有重新挂钩的路」）。
+
+**④ `stage3.md` §五 那笔账还上了。** `attempts` / `revalidated` / `gates_skipped`
+三个键原来**一个出口都没有**，而它们记的恰好是最该被人看见的三件事。
+现在 `ACCOUNTING['stage3']` 给了它们出口，`gates_skipped` 盘上零样本 ⇒ 报告打 `[????] 未记录`。
+
+#### C 顺带定下的几处
+
+- **`store.read_own()`**：读**自己产的**那一份，**刻意不记来源边**——把产物自己记成
+  自己的上游是假账，而且那条边永远显示对得上。原型这里是裸 `json.load`，
+  连解码与校验也一起绕过去了；新方法只少 `record_edge` 那一行。
+- **`RuleLine.scanned`**：绿灯必须报出自己的分母（判据 31）。
+  「拿 37 个专名扫过 21 个文本字段，0 命中」与「根本没扫」，在旧形状上同形。
+- **两条退役判据（`num_vs_desc` / `cliche`）进 `RetiredLine`**，带理由常驻。
+  ⚠ **退役的是判据不是要求**：`STYLE_SYS` 里那句「不要用『语言流畅／节奏明快』这类
+  放之四海皆准的话填格」**仍在下发**，而那张九词表没有任何现役消费方——判据 35 的教科书实例。
+- **`Registry.retire()`**：一个 id 不许同时又活着又退役（报告会既列判定又列「已退役」，
+  而人只会信其中一行）。
+
+#### ⚠ C 发现、但**没有**在 C 修的两条（下一个 session 要先看）
+
+**① `measurable_drift` 在落盘那一趟是 `skipped`，于是徽章 `fail`——这是对的，别顺手兜掉。**
+落盘时 `measurable` 刚由代码算出来，与「照盘上 stage1 重算」必然相等，
+所以那一趟**不排**它（一条永远不会红的检查不该打 `[OK]`）。
+而报告里没排上就是 `skipped`，HARD 的 `skipped` ⇒ `fail`。
+**你确实没跑那道闸，就不该拿到一个绿灯。** `--check-only` 恒会算它。
+
+**② `hook_style` 在新契约里是必填，于是 `required` 的「无文案段」那一半分支已不可达。**
+`R-1.12` 把无文案段的书挡在 stage1，`stage3.md` §三 明写「`hook_style|null` 这个类型已作废」。
+本层**没有留兜底分支**（`R-4.6` 的教训：留了就是一条永不执行、也永不被验证的路）。
+⚠ 但 `checks.required` 里那句「hook_style 缺失」仍在——它守的是**模型没写**这一种，
+不是「这本书没有文案段」。两件事别混。
+
+### 缺陷审计轮（2026-08-11，`cc0b729..d58d20b`）：**11 条，B1/B2 落地后的一次自审**
+
+`H1`~`H7` + `M1`~`M4`，9 个 commit 逐条修完，测试从 729 涨到 785。
+⚠ **那张编号表只活在当时那个 session 的上下文里，仓库里没有留痕**——
+本节是**唯一**的索引，细节看 `git log cc0b729..d58d20b`（每条的病因与修法都写在 commit body 里）。
+⚠ 交接教训：**本仓的交接一律以文档为准**，而这一轮差点只剩 commit message。
+
+### 骨架 B3 已完成（2026-08-11）：**报告按判据编排，一条判据不可能因为「实现忘了调」而消失**
+
+`build()` 遍历 `REGISTRY.of_stage(stage)`，**不遍历 findings**。整层就是这一句话，
+两条结构性质由它推出来：
+
+- **注册了而 outcomes 里没有 ⇒ 一行 `skipped`**（徽章至少 amber）。
+  一条判据不可能因为「实现忘了调」而从报告里消失——**因为报告不是由实现的输出生成的**。
+- **outcomes 里有而注册表里没有 ⇒ 抛**（镜像疾病：那条结论的 `sev` / `owner` 是谁定的？）。
+
+它直接杀掉 stage7 的 `rn_unregistered` 病：判据表里注册着、**全仓 0 行实现**、
+每本每次打绿灯，而报告由**产出**生成时这种判据会从报告里**消失**
+——消失与「跑过没事」在界面上长得一模一样。
+
+#### 一处要通知前端的契约变更：`CheckReport` 换形状
+
+**`rules: list[RuleLine]` 为权威，四个 sev 桶不再由服务端发**（前端按 `sev` groupby）。
+`badge` / `passed` / `counts` 仍只在服务端算（`R-11.7`）。
+
+旧形状（盘上两份真实抓包）的 `oks` 是一串**没有 rule id 的散文字符串**，
+于是「跑了没命中」与「压根没跑」在响应里**无法区分**；补一个 `skipped` 桶也救不了
+——桶由**产出**填，而没跑的那条本来就没有产出。
+⚠ 另一半账：`check_stage5_review.json` 的 `info` 桶有 **59** 条，其中 **41 条**是 `〔度量〕`
+——`SEVERITY` 四级在载体上只剩三级，靠**措辞前缀**区分。
+⚠ **影响 `web/` 的 S-13 屏 + 两份 mock**，按已裁决「骨架阶段当 `web/` 不存在」记到 Phase E。
+
+#### B3 顺带定下的几处
+
+- **度量的读数与结论共用 `findings` 字段，区别在 `status` 上**：度量**永不 `hit`**。
+  另开一个 `readings` 等于同一件事两个落点，而 `Finding` 已经是全链唯一那一份。
+- **`actionable` 从 `repair != 'NONE'` 派生，不给 `Rule` 加字段**——两条已有的不变量
+  正好同构（`rules.py::_validate` ③ 与 `Finding._postconditions` ③）。
+  ⚠ **stage6/stage7 会推翻它**（那两层的 `actionable` 意思是「人能 0 成本改掉它」），
+  **那是一次语义裁决不是笔误**，登记在 `docs/schema/_report.md` §2.1。
+- **HARD 上的 `skipped` 进 `fail` 不进 amber**：一条阻断级判据没被执行，
+  与它执行了并且命中，对调用方是同一件事——**你不能拿这份产物往下走**。
+- **记账键无声明 ⇒ `AccountingKeyUnregistered`（`RefusedByStructure`）。**
+  `_common.md` §九 写的是「显式终态」，那是口语义；按 `novel/errors.py` 自己的分界线
+  「谁的错」，记账与声明表是**同一批代码**的两处，对不上就是 bug。细化登记在 `_report.md` §六。
+- **`EdgeLine` 的指纹是 `str` 不是 `Fp10`**：报告最该跑得通的时刻恰恰是
+  「这份产物已经不合当前 schema」的时候，给它受约束类型会让一条畸形旧指纹**废掉整份报告**。
 
 ### 骨架 B2 已完成（2026-08-11）：**降级阶梯第一次有了测试，而且一分钱没花**
 
@@ -233,8 +361,10 @@ B1 没动它，因为**本期没有消费方**——挪到基类等于写一条�
 
 #### 施工中要回来问用户的（不许替他定）
 
-`stage5_review` → `stage5` 的 check 路由改名 · `CheckReport` 换形状（影响前端 S-13 屏与两份 mock）·
-`Finding.actionable` 那条语义裁决（见上）· stage7 待决 ④（`book_txt.has_hook=false`
+~~`CheckReport` 换形状~~ **已裁决（2026-08-11，B3）**：`rules[]` 为权威，四桶不再由服务端发 ·
+`stage5_review` → `stage5` 的 check 路由改名（**仍待裁**，E 期接 `/api/enums` 时一起） ·
+`Finding.actionable` 那条语义裁决（见上，**仍待裁**；B3 已按 `repair != 'NONE'` 派生，
+stage6/stage7 移植时必然撞上） · stage7 待决 ④（`book_txt.has_hook=false`
 是否可达，是**产品语义**）与 ⑤（`rn_unregistered` 补实现还是退役）· 建远程仓库。
 
 ⚠ **`web/` 已进仓**（`1f61013`，92 个文件 / 12060 行；`dist/` 与 `node_modules/` 按 `.gitignore` 排除）。
@@ -541,7 +671,7 @@ B1 没动它，因为**本期没有消费方**——挪到基类等于写一条�
 
 ```
 docs/REQUIREMENTS.md     需求规格。自足（0 处外部引用），每条带「谁在查」列
-docs/schema/             产物 schema 九份（八层 + `_common.md`）。**它们是源，模型照它写**
+docs/schema/             schema 十份（八层 + `_common.md` + `_report.md`）。**它们是源，模型照它写**
 docs/design_brief/       前端重做的 brief 包 + 19 份【真实 API 响应】样本
 contracts/               契约层（见下）。可单独 import，不拉运行时
 novel/                   运行时。**单向依赖 contracts**，由 tests/test_layering.py 钉死
