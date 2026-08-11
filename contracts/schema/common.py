@@ -13,7 +13,7 @@ JSON Schema 里照样是个 `enum`（前端 TS 类型因此能生成），而**�
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypeVar
 
 from pydantic import Field, model_validator
 
@@ -22,6 +22,11 @@ from contracts.schema.base import Fp10, FrozenModel, StrictModel
 
 Severity = Literal[SEVERITY]
 Owner = Literal[OWNER]
+
+#: `promoted()` 的返回类型。**`model_copy` 保留具体类**，于是
+#: `RoundLlmProvenance.promoted()` 仍是 `RoundLlmProvenance`（`round` 原样带下来——
+#: 提升不是新的一轮）。写成 `-> Provenance` 会把这件事在类型上抹掉。
+P = TypeVar('P', bound='Provenance')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -144,6 +149,34 @@ class Provenance(StrictModel):
         dumped = self.model_dump(mode='json')
         return {k: v for k, v in dumped.items() if v is not None}
 
+    def promoted(self: P, *, code: str) -> P:
+        """把 `.INVALID` 稿的来源账带上来。`_common.md` §5.2。
+
+        ⚠⚠ **签名里没有 `prompts` / `model` / `inputs` —— 这是本方法存在的全部意义。**
+
+        原型的 `--revalidate` 之所以能**伪造**，是因为提升分支够得到那个会构造一份
+        全新来源账的函数：它盖上当前的 SYS 指纹 + 当前 `model` + 当前 `inputs`，
+        `round` 还 +1，而**没有任何一次新的落笔发生过**。
+        三件事同时错：记了一个没产出它的 prompt；记了一个没写它的模型；
+        把「重判提升」记成了「第 N 轮写作」。
+
+        **没有参数，就没有可以传错的东西。**
+
+        ⚠ `code` 是**唯一**允许变的——它记的是「这次重判用的是哪版代码」，
+        而重判确实是这一次跑的。
+
+        ⚠⚠ **它挂在基类上，不挂在 `LlmProvenance` 上。** 原来挂在付费那一支，
+        而 `store.promote_invalid` 拿到的 `src` 类型是 `Provenance`：
+        `stage4.CtxProvenance` 与 `stage5.ReviewProvenance` 都是 `FreeProvenance` 的子类、
+        都是**真实存在**的 0 成本产物，一样会被闸门拦下、一样要走提升路。
+        提升它们会抛 `AttributeError`——而 `errors.py` 明写「不设默认异常，
+        每一处终态都要选一个具体的类」，一条裸 `AttributeError` 连终态都不算。
+        方法体里没有一处是付费那一支特有的，「没有参数就没有可以传错的东西」
+        对 0 成本孪生同样成立。
+        """
+        return self.model_copy(update={'code': code, 'revalidated': True,
+                                       'gates_skipped': None})
+
 
 class FreeProvenance(Provenance):
     """0 成本节点的来源账。**没有 `model` 这个字段。**
@@ -170,25 +203,6 @@ class LlmProvenance(Provenance):
     prompts: dict[str, Fp10] = Field(min_length=1)
 
     model: str = Field(min_length=1)
-
-    def promoted(self, *, code: str) -> LlmProvenance:
-        """把 `.INVALID` 稿的来源账带上来。`_common.md` §5.2。
-
-        ⚠⚠ **签名里没有 `prompts` / `model` / `inputs` —— 这是本方法存在的全部意义。**
-
-        原型的 `--revalidate` 之所以能**伪造**，是因为提升分支够得到那个会构造一份
-        全新来源账的函数：它盖上当前的 SYS 指纹 + 当前 `model` + 当前 `inputs`，
-        `round` 还 +1，而**没有任何一次新的落笔发生过**。
-        三件事同时错：记了一个没产出它的 prompt；记了一个没写它的模型；
-        把「重判提升」记成了「第 N 轮写作」。
-
-        **没有参数，就没有可以传错的东西。**
-
-        ⚠ `code` 是**唯一**允许变的——它记的是「这次重判用的是哪版代码」，
-        而重判确实是这一次跑的。
-        """
-        return self.model_copy(update={'code': code, 'revalidated': True,
-                                       'gates_skipped': None})
 
     def to_human_edit(self, *, code: str, input_basis: str | None = None) -> FreeProvenance:
         """`--apply-edit` 落人工稿。`_common.md` §5.3 —— 原型这一份是对的。

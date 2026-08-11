@@ -260,8 +260,15 @@ class ArtifactStore:
         ② **`.INVALID` 归档进 `_rounds/`，不删**（`Q-8`）。原型「读完问题稿就把它删了」
            造出的正是盘上那条幽灵边：另一份产物的 `inputs` 还指着它。
            **删一个还被别人指着的文件，会同时制造两个问题。**
+
+        ③ **已有的正式稿也要归档，不许被覆盖掉。** 落正式稿走的是原子替换，
+           而原子替换是**无条件**的：盘上那份**花过钱**的正式稿原地消失，
+           `_rounds/` 里连一份副本都没有。原来只归档 `.INVALID` 那一条历史。
+           对 stage5 这直接违反「上一轮正式稿进入 `_rounds`」；对别的层，
+           它违反的是本模块自己那句「**归档是出事之后唯一能回去的那一份**」。
         """
         inv_rel = paths.invalid_of(paths.check_rel_deep(rel))
+        official_rel = paths.check_rel_deep(rel)
         if not self.exists(inv_rel):
             raise UpstreamMissing(f'{self.ctx.node}: 没有 {inv_rel} 可提升')
 
@@ -273,10 +280,11 @@ class ArtifactStore:
                 f'⚠ 盘上真有这么一份（`stage4/plan_chapters.json`，一本书），'
                 f'根因就是问题稿当初是用裸 `json.dump` 写的——那条路已经不存在了')
 
-        # 【三步的顺序是挑过的】① 先把归档位**占下来并检查**（唯一大概率的失败：轮次号撞了）
-        # ② 落正式稿 ③ 把 `.INVALID` 挪进归档。
+        # 【四步的顺序是挑过的】① 把两个**大概率的失败**挡在「一个字节都没动」之前
+        # （轮次号撞了 · 载体层往返不过）② 上一轮正式稿进归档 ③ 落正式稿
+        # ④ 把 `.INVALID` 挪进归档。
         #
-        # ⚠ 剩下那个窗口（②③ 之间硬崩）**是刻意选的那一半**：崩在这里会同时留下
+        # ⚠ 剩下那个窗口（③④ 之间硬崩）**是刻意选的那一半**：崩在这里会同时留下
         #   一份提升好的正式稿和一份还没挪走的 `.INVALID`，而**再跑一次 `--revalidate`
         #   就自愈**（两份内容本来就相同，正式稿那份带 `revalidated: true`）。
         #   反过来「先归档后落稿」崩掉的话，`.INVALID` 已经从它该在的位置消失、
@@ -287,10 +295,25 @@ class ArtifactStore:
         if dest.exists():
             raise PathRefused(
                 f'归档位 {dest} 已被占用，**一个字节都没动**。轮次号多半算错了')
-        out = self._write_json(paths.check_rel_deep(rel), artifact,
-                               prov_override=src.promoted(code=self.ctx.code))
+        data = self._render(official_rel, artifact, prov_override=src.promoted(code=self.ctx.code))
+        self._verify_round_trip(official_rel, type(artifact), data)
+
+        p = self.path(official_rel)
+        # ② ⚠⚠ **挪，不是 `keep=True` 抄。** 抄一份会让归档位从此被占住，
+        #   于是③④之间崩溃后的重跑撞上 `PathRefused` 卡死——那正好毁掉上面刻意选的那半个窗口。
+        #   挪走之后重跑没有东西可归档，`--revalidate` 自愈。
+        # ⚠⚠ **字节相同就不叫销毁。** 归档是为了保住一份**会被销毁**的版本；
+        #   ③④ 之间崩过一次的话，重跑时盘上那份已经是提升好的那一份，
+        #   再归档一次就是凭空往轮次账里塞一个**幻影轮**——对 stage5 就是
+        #   「把一次重判记成第 N 轮写作」，正是 `promoted()` 存在要防的那件事。
+        # ⚠ 正式稿与 `.INVALID` 的 stem 不同（`stem_of` 保留 `.INVALID`），
+        #   两条历史各编各的号，`r1` 不会撞。
+        if p.is_file() and p.read_bytes() != data:
+            self.archive_round(official_rel)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._replace_atomically(p, data)
         self.archive_round(inv_rel, round_no=round_no)
-        return out
+        return p
 
     # ── 轮次与归档 ────────────────────────────────────────────────────────
 
@@ -435,8 +458,13 @@ class ArtifactStore:
                 f'记账在那里发生）。⚠ 原型这里只 print 一句警告然后照写，'
                 f'代价是三份产物的来源账各漏各的，而没有任何一层出声')
 
-    def _write_json(self, rel: str, artifact: BaseModel, *,
-                    prov_override: Provenance | None = None) -> Path:
+    def _render(self, rel: str, artifact: BaseModel, *,
+                prov_override: Provenance | None = None) -> bytes:
+        """产物 → **将要落盘的那串字节**。过写盘口那道闸，但一个字节都不写。
+
+        ⚠ 抽出来是给 `promote_invalid` 用的：它要在**动归档之前**知道自己将要写什么，
+        才能回答「盘上那份会不会被销毁」。见那边第②步。
+        """
         name = provenance_field(type(artifact))
         payload = artifact.model_dump(by_alias=True, mode='json')
         if name is not None:
@@ -445,10 +473,13 @@ class ArtifactStore:
             # ⚠ 三态只在 `to_disk()` 里兑现：`revalidated: null` 与「没有这个键」
             #   在 JSON 里必须是两份不同的字节，而 `model_dump` 会把 `None` 写成 `null`。
             payload[PROVENANCE_KEY] = src.to_disk()
+        return (json.dumps(payload, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
 
+    def _write_json(self, rel: str, artifact: BaseModel, *,
+                    prov_override: Provenance | None = None) -> Path:
+        data = self._render(rel, artifact, prov_override=prov_override)
         p = self.path(rel)
         p.parent.mkdir(parents=True, exist_ok=True)
-        data = (json.dumps(payload, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
         self._verify_round_trip(rel, type(artifact), data)
         self._replace_atomically(p, data)
         return p

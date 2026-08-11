@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from contracts.schema import StyleGrounding, Usage
 from contracts.schema.stage3 import StyleProvenance
@@ -357,11 +357,11 @@ def test_a_non_utf8_json_artifact_still_says_it_is_not_utf8_not_bad_json():
 # 五、`.INVALID`、`gates_skipped`、提升路
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _write_invalid(base: Path, gates: list[str]) -> tuple[RunContext, Path]:
+def _write_invalid(base: Path, gates: list[str], *, habit: str = '习惯一') -> tuple[RunContext, Path]:
     ctx = _ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    return ctx, st.write_invalid(STYLE_REL, _style(ctx), gates_skipped=gates)
+    return ctx, st.write_invalid(STYLE_REL, _style(ctx, habit=habit), gates_skipped=gates)
 
 
 def test_gates_skipped_is_written_even_when_empty():
@@ -425,23 +425,116 @@ def test_promotion_keeps_the_original_prompts_and_archives_the_invalid():
 
 
 def test_a_second_promotion_lands_in_the_next_round_not_on_top_of_the_first():
-    """第二次被拦下的稿归档到 `r2`，**不覆盖 `r1`**。
+    """第二次被拦下的稿归档到 `r2`，**不覆盖 `r1`**；同时**上一轮正式稿也进 `_rounds`**。
 
     ⚠ 这一条挡的是原型那个 `*.INVALID.superseded.json`（无编号）：
     第二次会静默覆盖第一次。轮次由 `seen_rounds` 扫出来，缺号也不会退回去。
+
+    ⚠ 两份 `.INVALID` **必须内容不同**（`habit`），否则第二次提升渲染出的字节
+    与盘上正式稿逐字节相同、归档那一步按设计跳过，这条断言就变成靠巧合绿的。
     """
     base = _book()
-    _write_invalid(base, [])
-    ArtifactStore(_ctx(base, paid=False)).promote_invalid(STYLE_REL, StyleGrounding)
-    _write_invalid(base, ['name_leak'])
+    _write_invalid(base, [], habit='第一版')
+    p = ArtifactStore(_ctx(base, paid=False)).promote_invalid(STYLE_REL, StyleGrounding)
+    first = p.read_bytes()
+    _write_invalid(base, ['name_leak'], habit='第二版')
     ArtifactStore(_ctx(base, paid=False)).promote_invalid(STYLE_REL, StyleGrounding)
 
-    archived = sorted(p.name for p in (base / '书名_123' / 'stage3' / '_rounds').iterdir())
-    assert archived == ['style_grounding.INVALID.r1.json', 'style_grounding.INVALID.r2.json']
+    rounds = base / '书名_123' / 'stage3' / '_rounds'
+    archived = sorted(q.name for q in rounds.iterdir())
+    assert archived == ['style_grounding.INVALID.r1.json', 'style_grounding.INVALID.r2.json',
+                        'style_grounding.r1.json']
+    assert (rounds / 'style_grounding.r1.json').read_bytes() == first, \
+        '归档里那份不是被换掉的那一版正式稿'
+    assert p.read_bytes() != first, '第二次提升根本没改动正式稿？夹具白搭了'
+
+
+def test_promotion_archives_the_paid_official_instead_of_destroying_it():
+    """⭐⭐ **提升不许销毁一份花过钱的正式稿。**
+
+    落正式稿走的是原子替换，而原子替换是**无条件**的：盘上那份原地消失，
+    `_rounds/` 里连一份副本都没有——原来只归档 `.INVALID` 那一条历史。
+    对 stage5 这直接违反「上一轮正式稿进入 `_rounds`」；对别的层，它违反的是
+    本模块自己那句「**归档是出事之后唯一能回去的那一份**」（而且它是花过钱的产物）。
+    """
+    base = _book()
+    # 先有一份**正式**产物（付费产出的那一版）
+    ctx0 = _ctx(base)
+    st0 = ArtifactStore(ctx0)
+    st0.read(Loose, UPSTREAM)
+    official = st0.write(STYLE_REL, _style(ctx0, habit='付过钱的那一版'))
+    was = official.read_bytes()
+
+    _write_invalid(base, ['name_leak'], habit='被拦下的那一版')
+    out = ArtifactStore(_ctx(base, paid=False)).promote_invalid(STYLE_REL, StyleGrounding)
+
+    rounds = base / '书名_123' / 'stage3' / '_rounds'
+    assert (rounds / 'style_grounding.r1.json').read_bytes() == was, \
+        '旧正式稿被原子替换销毁了，而 `_rounds/` 里没有任何副本'
+    assert (rounds / 'style_grounding.INVALID.r1.json').exists(), '`.INVALID` 那条历史也要归档'
+    assert json.loads(out.read_text(encoding='utf-8'))['surface_habits'] == ['被拦下的那一版']
+    assert _prov_on_disk(out)['revalidated'] is True
+
+
+def test_a_resumed_promotion_does_not_invent_a_phantom_round():
+    """⭐ **字节相同就不叫销毁。**
+
+    ③④ 之间（落正式稿 → 挪 `.INVALID`）硬崩之后重跑，盘上那份已经是提升好的那一份。
+    这时候再归档一次就是凭空往轮次账里塞一个**幻影轮**——对 stage5 就是
+    「把一次重判记成第 N 轮写作」，正是 `promoted()` 存在要防的那件事。
+    ⇒ 归档是为了保住一份**会被销毁**的版本；字节相同 ⇒ 什么都没被销毁 ⇒ 没有可归档的东西。
+
+    这里直接模拟那个崩溃窗口：提升一次之后把 `.INVALID` 放回原位，再提升一次。
+    """
+    base = _book()
+    _write_invalid(base, [], habit='唯一那一版')
+    ArtifactStore(_ctx(base, paid=False)).promote_invalid(STYLE_REL, StyleGrounding)
+
+    rounds = base / '书名_123' / 'stage3' / '_rounds'
+    # 模拟「正式稿已落、`.INVALID` 还没挪走」那半个刻意选的窗口
+    inv = base / '书名_123' / 'stage3' / 'style_grounding.INVALID.json'
+    (rounds / 'style_grounding.INVALID.r1.json').rename(inv)
+    ArtifactStore(_ctx(base, paid=False)).promote_invalid(STYLE_REL, StyleGrounding)
+
+    archived = sorted(q.name for q in rounds.iterdir())
+    assert archived == ['style_grounding.INVALID.r1.json'], \
+        f'重跑凭空造出了轮次：{archived}——`--revalidate` 本该自愈，而不是往账上塞幻影'
+
+
+def test_a_free_produced_invalid_can_be_promoted_too():
+    """⭐ `promoted()` 原来只挂在 `LlmProvenance` 上。
+
+    而 `store.promote_invalid` 拿到的 `src` 类型是 `Provenance`：
+    `stage4.CtxProvenance` 与 `stage5.ReviewProvenance` 都是 `FreeProvenance` 的子类、
+    都是**真实存在**的 0 成本产物，一样会被闸门拦下、一样要走提升路。
+    提升它们抛 `AttributeError`——而 `errors.py` 明写「不设默认异常，
+    每一处终态都要选一个具体的类」，一条裸 `AttributeError` 连终态都不算。
+    """
+    from contracts.schema.common import FreeProvenance
+
+    class FreeArtifact(BaseModel):
+        """一份 0 成本产出的最小产物。形状照 `CtxProvenance` / `ReviewProvenance` 那一族。"""
+        model_config = {'populate_by_name': True}
+        note: str
+        provenance: FreeProvenance = Field(alias='_provenance')
+
+    base = _book()
+    ctx = _ctx(base, paid=False)
+    st = ArtifactStore(ctx)
+    st.read(Loose, UPSTREAM)
+    art = FreeArtifact(note='0 成本算出来的', _provenance=ctx.free_provenance(prompts={'RULES': '判据表'}))
+    st.write_invalid(STYLE_REL, art, gates_skipped=['name_leak'])
+
+    out = ArtifactStore(_ctx(base, paid=False)).promote_invalid(STYLE_REL, FreeArtifact)
+    now = _prov_on_disk(out)
+    assert now['revalidated'] is True
+    assert 'model' not in now, '0 成本产物提升上来不许长出一个 `model`'
+    assert 'gates_skipped' not in now
 
 
 def test_promotion_refuses_before_touching_anything_when_the_slot_is_taken(monkeypatch):
-    """提升有三步（占归档位 → 落正式稿 → 挪 `.INVALID`），**大概率的那个失败必须发生在第一步**。
+    """提升有四步（占归档位 → 归档旧正式稿 → 落正式稿 → 挪 `.INVALID`），
+    **大概率的那个失败必须发生在第一步**。
 
     ⚠ 归档位被占 ⇒ 轮次号算错了。这时候如果已经落了正式稿再报错，
     人看到的是「失败」而盘上其实**变过了**——那比直接失败更难收拾。
@@ -463,6 +556,8 @@ def test_promotion_refuses_before_touching_anything_when_the_slot_is_taken(monke
         st.promote_invalid(STYLE_REL, StyleGrounding)
     assert inv.exists(), '`.INVALID` 被挪走了'
     assert not st.exists(STYLE_REL), '正式稿落下去了，而调用方拿到的是一个异常'
+    assert sorted(q.name for q in rounds.iterdir()) == ['style_grounding.INVALID.r1.json'], \
+        '归档目录变了——有人把「归档旧正式稿」挪到了占位检查之前'
 
 
 def test_promotion_without_an_invalid_is_a_terminal_state():
