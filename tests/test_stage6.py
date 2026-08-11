@@ -331,6 +331,114 @@ def test_approve_refuses_an_out_of_range_pick(box, pick):
         hook.run_approve(ctx, pick)
 
 
+# ── 落盘闸门与提升路：**盘上零样本，只能合成** ──────────────────────────────
+#
+# ⚠ 本层的闸门条件与 stage3 不同：stage3 是「任何 hard ⇒ `.INVALID`」，
+#   而本层一次产**三份**，一条候选红不该废掉另两条 ⇒ 拦的是**一条干净候选都没有**。
+#   两条路各配一个样本：部分红（照常落盘）与全红（拦下）。
+
+def _fake_client(ctx, texts: list[str]):
+    """一个**不发任何请求**的 client，按剧本回三条候选。"""
+    import json as _json
+
+    from contracts.invariants import HOOK_APPROACHES
+    from novel.llm.client import LlmClient
+    from novel.llm.transport import ChatResponse, FakeTransport
+    body = _json.dumps({
+        'candidates': [{'approach': a, 'text': t}
+                       for a, t in zip(HOOK_APPROACHES, texts)],
+        'rationale': '三条各赌一个角度。',
+    }, ensure_ascii=False)
+    resp = ChatResponse(content=body, finish_reason='stop',
+                        usage={'prompt_tokens': 1, 'completion_tokens': 1},
+                        model='deepseek-v4-pro')
+    return LlmClient(ctx, FakeTransport.always(resp), sleep=lambda _s: None)
+
+
+def _sample(box: sandbox.Sandbox, *, truncated: bool) -> str:
+    """造一条合成文案：只在 `hook_truncated` 这一条上可控地红或不红。
+
+    ⚠ **段间分隔必须照本书自己的档位造**，否则 `hook_para_sep`（另一条 HARD）
+    会恒亮，于是「部分红」那个样本变成「全红」——第一版就踩了这个：
+    写了一段单行文本，而三本原作文案段都是**空行分段**，
+    单段文本根本没有分隔符可归一 ⇒ 那条 HARD 修不掉。
+    〔顺带记一条观察：`hook_para_sep` 的 detail 写着「归一化应该已经修掉它了」，
+    而**单段文案是归一化修不掉的**——那句措辞对这一类输入是错的诊断。
+    判定本身不冤（本书文案是多段，这条是一整块），留给 F 期后续层一起看。〕
+    """
+    from novel.core.bands import sep_band_of_text
+    src = (sandbox.cut(box.book, 'stage1/hook_copy.json') or {}).get('text', '').strip()
+    sep = '\n\n' if sep_band_of_text(src) == '空行分段' else '\n'
+    body = sep.join(['她站在门口，手里攥着那张纸', '不知道该不该推门进去，风把头发吹乱了'])
+    return body if truncated else body + '。'
+
+
+def test_the_gate_blocks_only_when_no_candidate_is_clean(box):
+    """⭐ **闸门拦的是「一条干净候选都没有」，不是「有一条红」。**
+
+    一条候选红就废掉整次付费产出，会让另外两条本来可用的候选一起陪葬——
+    而本层的现役闸门是**人定稿**，人手里有三条可挑。
+    """
+    from novel.errors import GateBlocked
+    from novel.store import ArtifactStore
+
+    # ① 部分红 ⇒ 照常落盘，报告把红的那条摆出来
+    ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=True)
+    clean, dirty = _sample(box, truncated=False), _sample(box, truncated=True)
+    art = hook.run_hook(ctx, _fake_client(ctx, [clean, clean, dirty]))
+    assert ArtifactStore(ctx).exists('stage6/hook.json')
+    red = {c.approach for c in art.candidates
+           for f in c.findings if f.rule == 'hook_truncated'}
+    assert len(red) == 1, '只有第三条该红'
+
+    # ② 全红 ⇒ 拦下，问题稿进 .INVALID
+    ctx2 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=True)
+    with pytest.raises(GateBlocked, match='每一条'):
+        hook.run_hook(ctx2, _fake_client(ctx2, [dirty, dirty, dirty]))
+    assert ArtifactStore(ctx2).exists('stage6/hook.INVALID.json')
+
+
+def test_revalidate_promotes_only_after_the_problem_is_fixed(box):
+    """⚠ **提升路是那道闸门的必然配套**——闸门是我们自己加的，
+    不给一条 0 成本的提升路，一次付费产出就被永久锁死。
+
+    两步：仍然全红 ⇒ 不提升；把字改对 ⇒ 提升，且 `_provenance` 不许被重盖
+    （`promote_invalid` 的签名里**没有** `prompts`/`model`/`inputs`）。
+    """
+    import json as _json
+
+    from novel.errors import GateBlocked
+    from novel.store import ArtifactStore
+
+    dirty = _sample(box, truncated=True)
+    ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=True)
+    with pytest.raises(GateBlocked):
+        hook.run_hook(ctx, _fake_client(ctx, [dirty, dirty, dirty]))
+    inv = box.dir / 'stage6' / 'hook.INVALID.json'
+    before = _json.loads(inv.read_text(encoding='utf-8'))['_provenance']
+
+    ctx2 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
+    promoted, _rep = hook.run_revalidate(ctx2)
+    assert promoted is False, '还没改就提升了？那道闸门形同虚设'
+
+    # 人手改一个字（0 成本自救），再提升
+    data = _json.loads(inv.read_text(encoding='utf-8'))
+    for c in data['candidates']:
+        c['text'] = _sample(box, truncated=False)
+    inv.write_text(_json.dumps(data, ensure_ascii=False), encoding='utf-8')
+
+    ctx3 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
+    promoted, rep = hook.run_revalidate(ctx3)
+    assert promoted is True
+    after = box.read('stage6/hook.json')['_provenance']
+    assert after['prompts'] == before['prompts'], '提升重盖了 prompt 指纹 —— 那是伪造'
+    assert after['model'] == before['model']
+    assert after.get('revalidated') is True
+    assert not ArtifactStore(ctx3).exists('stage6/hook.INVALID.json'), \
+        '.INVALID 该被归档进 _rounds/，不是留在原地'
+    assert rep.passed is True
+
+
 # ── 下发面 ──────────────────────────────────────────────────────────────────
 
 def test_the_downsend_face_carries_no_ending(box):

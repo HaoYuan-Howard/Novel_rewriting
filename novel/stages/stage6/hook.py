@@ -27,6 +27,7 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage3 import StyleGrounding
 from contracts.schema.stage4 import WriterContext
+from contracts.schema.stage5 import ContextSource
 from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookParams, HookProvenance, HookResponse, Mech,
 )
@@ -381,7 +382,7 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
 
     artifact = Hook(
         lead_upto=up.upto, rationale=resp.rationale, candidates=cands, approved=None,
-        sources={'writer_context': _context_source(store)}, judged=up.judged,
+        sources={'writer_context': _context_source()}, judged=up.judged,
         book=[], baselines_identity={},
         **{'_provenance': ctx.llm_provenance(
             HookProvenance, prompts={'HOOK_SYS': system, 'RULES': _rules_fingerprint()},
@@ -458,9 +459,25 @@ def _rules_fingerprint() -> str:
                                               key=lambda r: r.rule)))
 
 
-def _context_source(store: ArtifactStore):
-    """`sources.writer_context`。"""
-    from contracts.schema.stage5 import ContextSource
+def _context_source() -> ContextSource:
+    """`sources.writer_context` —— **它是一条新鲜度结论，不是一个指纹。**
+
+    ⚠ 这一处第一版写成了 `ContextSource(sha1=…)`，而那个字段根本不存在
+    ——**是合成样本第一次真的走通付费路时当场炸出来的**。付费路在此之前
+    「写好了、从没有人跑过」，而载体拒收发生在**产物已经算完**的那一刻。
+
+    落盘这一刻 `writer_context` 是**刚读进来的**（`_Upstreams` 里那一次
+    `store.read`），所以 `state='fresh'` 是由构造保证的事实，不是一句乐观的默认值。
+    往后每次 `--check-only` 会拿 `store.freshness` 重算，两者口径不同是**对的**：
+    这一格记的是「产它的时候上游是什么状态」。
+
+    ⚠ **两套新鲜度机制并存**（本字段 vs `_provenance.inputs`），
+    `stage6.md` §1.4 已登记「移植时应当合成一套」——本轮**不合**：
+    合并要动 stage5 的 `ReviewSources`，那属 F4。
+    """
+    return ContextSource(state='fresh', detail=[], code=_code_version())
+
+
+def _code_version() -> str | None:
     from novel import prov
-    p: Path = store.path(WRITER_CONTEXT)
-    return ContextSource(sha1=prov.fingerprint_bytes(p.read_bytes()))
+    return prov.code_version()
