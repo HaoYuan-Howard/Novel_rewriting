@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+client.py —— `ask_text` / `ask_json`。**降级阶梯只有一份，两个入口共用。**
+
+【降级阶梯扛的是两类实测发生过的故障，它们看起来完全不像同一件事】
+
+  ① **答案流丢了。** DeepSeek 会把整段答案写进 `reasoning_content` 而 `content` 返回**空串**，
+     `finish_reason='stop'`——**不是截断**。实测：模型把整章正文写进了推理里。
+     ⚠ 不从 `reasoning` 里把答案抠出来——那里面混着推敲过程，救回来的是**半成品**。
+
+  ② **JSON 被截断。** `max_tokens` 在推理模型上**同时约束 reasoning + completion**。
+     `reasoning_effort='high'` 时模型可能把大半预算花在思考上，正文写到一半就到顶了，
+     于是**截断表现为 JSON 解析失败**（`finish_reason='length'`）。
+     ⇒ 降 effort 就是**给正文腾预算**，这才是阶梯管用的原因。
+
+  ③ **合法 JSON 但结构上是空的。** 这一类与①②**必须走同一条阶梯**（原型 F-125）。
+     实测：某次规划调用拿回 `{"reconstruction_strategy": "…"}`——0 个输出章、正常结束、
+     4477 token 里推理占 4317。它是合法 JSON，于是一路放行**并进了缓存**；
+     下游把它摊成 **74 条**「这一拍没有给预算」。**74 条派生症状盖住了一句话能说清的事实。**
+
+⚠⚠ **原型把这条阶梯在两个入口各写了一遍。** 两份逐行相同的东西必然分家——
+本文件只有一份 `LADDER`，两个入口都从它走。
+
+【阶梯与传输层重试是两条独立的循环，不许合并】
+阶梯换的是**模型行为**（effort / thinking），重试扛的是**网络**（429 / 5xx / 超时）。
+混成一条，一次网络抖动就会消耗掉整条阶梯——而阶梯救不了连接被重置。
+"""
+from __future__ import annotations
+
+import json
+import threading
+import time
+from typing import Any, Callable, Final
+
+from pydantic import BaseModel
+
+from novel.errors import NovelError
+from novel.llm.cache import CachePolicy, ResponseCache, cache_key
+from novel.llm.prompts import required_top_level
+from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
+from novel.run import RunContext
+
+#: **降级阶梯，全仓唯一一份。** `(reasoning_effort, thinking)`，按顺序走。
+#: ⚠ 逐字照抄原型：`high→medium→low` 是**给正文腾预算**（见模块 docstring ②），
+#: 最后那档关掉 thinking 是「推理流本身就是问题源」时的最后一手。
+#: ⚠ **全空则抛**，绝不返回空稿——一份空稿落下去，下游是确定性代码，
+#: 它不会像写手那样将就着用，它会在几层之外炸，或者更坏：静默产出一份缺内容的东西。
+LADDER: Final[tuple[tuple[str, bool], ...]] = (
+    ('high', True), ('medium', True), ('low', True), ('low', False),
+)
+
+#: 默认 token 上限。**统一 64k**：`max_tokens` 在推理模型上同时约束 reasoning + completion，
+#: 高预算防止长正文/推理被 API 默认上限**悄悄**截断。确需更小上限时显式传。
+DEFAULT_MAX_TOKENS: Final = 64_000
+
+
+class LlmFailed(NovelError):
+    """整条阶梯走完仍然没拿到可用的东西。**显式终态，绝不返回空稿。**"""
+
+
+def _strip_fences(s: str | None) -> str:
+    """防御性地剥掉 ```json … ``` ——有些模型在 JSON 模式下照样吐围栏。"""
+    s = (s or '').strip()
+    if s.startswith('```'):
+        s = s.split('\n', 1)[1] if '\n' in s else s[3:]
+        if s.rstrip().endswith('```'):
+            s = s.rstrip()[:-3]
+    return s.strip()
+
+
+class LlmClient:
+    """一次跑的 LLM 入口。**缓存口径与成本账都从 `RunContext` 来**，不各自持有一份。"""
+
+    def __init__(self, ctx: RunContext, transport: Transport, *,
+                 cache: ResponseCache | None = None, model: str = '',
+                 max_retries: int = 3, backoff_base: float = 2.0, concurrency: int = 2,
+                 sleep: Callable[[float], None] = time.sleep) -> None:
+        self.ctx = ctx
+        self.transport = transport
+        self.cache = cache if cache is not None else ResponseCache()
+        self.model = model or 'deepseek-v4-pro'
+        self.max_retries = max_retries
+        self.backoff_base = backoff_base
+        self._sleep = sleep
+        #: 并发闸。⚠ 它守的不是速率，是**钱**：一次配置错误（prompt 漂了）在被人看见之前
+        #: 能烧掉多少，与并发度成正比。见 `novel/config.py::DEFAULT_CONCURRENCY`。
+        self._gate = threading.Semaphore(max(1, concurrency))
+
+    # ── 两个入口 ──────────────────────────────────────────────────────────
+
+    def ask_text(self, system: str, user: str, *, purpose: str,
+                 max_tokens: int = DEFAULT_MAX_TOKENS) -> str:
+        """纯文本调用。走 `LADDER`，**全空则抛**。"""
+        tried: list[str] = []
+        for effort, thinking in LADDER:
+            resp = self._call(system, user, effort=effort, thinking=thinking,
+                              json_mode=False, max_tokens=max_tokens, purpose=purpose)
+            if resp.text:
+                return resp.text
+            tried.append(f'effort={effort} think={thinking} '
+                         f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")}')
+        raise LlmFailed(
+            f'{self.ctx.node}/{purpose}: 走完 {len(LADDER)} 档阶梯仍然拿不到正文。\n  '
+            + '\n  '.join(tried)
+            + '\n⚠ `reasoning_len` 大而正文为空 = 模型不是没干活，是答案流丢了；'
+              '**不从 reasoning 里抠答案**，那里面混着推敲过程，救回来的是半成品')
+
+    def ask_json(self, system: str, user: str, *, model_cls: type[BaseModel], purpose: str,
+                 require: tuple[str, ...] | None = None,
+                 max_tokens: int = DEFAULT_MAX_TOKENS) -> Any:
+        """结构化调用。走**同一条** `LADDER`，解析失败与「结构上是空的」同等对待。
+
+        ⚠⚠ **`model_cls` 是必填的，而 `require` 默认从它派生。**
+        原型的 `require=()` 默认值正是那三个漏声明的调用点得以存在的原因——
+        **漏传不报错，只是静默停掉一条 HARD 闸门**（判据 39）。派生之后它**结构上不可能忘**。
+
+        显式传 `require` **只许收窄**（子集）：放宽等于绕开上面那条，
+        而绕开会长成「这个调用点特殊」的注释，然后没人再回来看它。
+        """
+        derived = required_top_level(model_cls)
+        if require is None:
+            require = derived
+        elif extra := sorted(set(require) - set(derived)):
+            raise ValueError(
+                f'{purpose}: require={sorted(require)} 里的 {extra} 不在 '
+                f'{model_cls.__name__} 的必需顶层键 {sorted(derived)} 里。'
+                f'显式传只许**收窄**——放宽等于给这个调用点开一个「它特殊」的口子')
+
+        errors: list[str] = []
+        for effort, thinking in LADDER:
+            resp, key = self._call_keyed(system, user, effort=effort, thinking=thinking,
+                                         json_mode=True, max_tokens=max_tokens, purpose=purpose)
+            content = _strip_fences(resp.content)
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError as e:
+                # 截断的表现就是这个（见模块 docstring ②）。降一档 = 给正文腾预算。
+                errors.append(f'effort={effort} think={thinking} finish={resp.finish_reason} '
+                              f'clen={len(content)} 解析失败: {e}')
+                continue
+            missing = [k for k in require if not (isinstance(data, dict) and data.get(k))]
+            if not missing:
+                return data
+            # ⚠ **空壳踢出缓存。** 留着它，下一次不带 `--no-cache` 的重跑会原样读回来，
+            #   而调用方看到的是一模一样的失败——那不是重试，是把同一个结果读了两遍。
+            self.cache.evict(key)
+            errors.append(f'effort={effort} think={thinking} finish={resp.finish_reason} '
+                          f'clen={len(content)} 顶层缺必需键（或值为空）: {missing}')
+        raise LlmFailed(
+            f'{self.ctx.node}/{purpose}: 走完 {len(LADDER)} 档阶梯仍然没有可用的 JSON。\n  '
+            + '\n  '.join(errors)
+            + f'\n⚠ 必需顶层键来自 {model_cls.__name__}（判据 39：每个结构化调用点'
+              f'声明【全部】必需顶层键，而这一条现在由派生保证）')
+
+    # ── 一次调用：缓存 → 传输层重试 → 记账 ────────────────────────────────
+
+    def _call(self, system: str, user: str, **kw: Any) -> ChatResponse:
+        return self._call_keyed(system, user, **kw)[0]
+
+    def _call_keyed(self, system: str, user: str, *, effort: str, thinking: bool,
+                    json_mode: bool, max_tokens: int, purpose: str) -> tuple[ChatResponse, str]:
+        req = ChatRequest(model=self.model, system=system, user=user,
+                          reasoning_effort=effort, thinking=thinking,
+                          json_mode=json_mode, max_tokens=max_tokens)
+        key = cache_key(req)
+        policy: CachePolicy = self.ctx.cache
+
+        if policy.read:
+            hit = self.cache.get(key)
+            if hit is not None:
+                # ⚠ **缓存命中也要记一行。** 不记的话，「这次跑读了 31 份缓存」与
+                #   「这次跑什么都没做」在账本上长得一模一样，而这两件事的下一步完全不同。
+                self._record(hit, cached=True, purpose=purpose)
+                return hit, key
+
+        resp = self._send_with_retry(req)
+        self._record(resp, cached=False, purpose=purpose)
+        if policy.write:
+            self.cache.put(key, resp)      # 空 content 由 `put` 自己拒掉
+        return resp, key
+
+    def _send_with_retry(self, req: ChatRequest) -> ChatResponse:
+        """**传输层**重试。与降级阶梯是两条独立的循环（见模块 docstring 末尾）。
+
+        ⚠ 只重试 `retryable` 的（429 / 5xx / 超时）。4xx 里其余的是**我们自己发错了**，
+        重试只会把同一个错误再犯三遍，而每一遍都可能计费。
+        """
+        last: TransportError | None = None
+        for attempt in range(self.max_retries + 1):
+            with self._gate:                       # 并发闸：守的是钱不是速率
+                try:
+                    return self.transport.send(req)
+                except TransportError as e:
+                    last = e
+                    if not e.retryable or attempt == self.max_retries:
+                        raise
+            self._sleep(self.backoff_base * (2 ** attempt))
+        raise last if last else LlmFailed('unreachable')
+
+    def _record(self, resp: ChatResponse, *, cached: bool, purpose: str) -> None:
+        u = resp.usage or {}
+        self.ctx.ledger.record(
+            node=self.ctx.node, sid=self.ctx.sid, model=resp.model or self.model,
+            code=self.ctx.code, cached=cached, cache_policy=self.ctx.cache.name,
+            prompt_tokens=u.get('prompt_tokens'),
+            completion_tokens=u.get('completion_tokens'),
+            reasoning_tokens=(u.get('reasoning_tokens')
+                              or (u.get('completion_tokens_details') or {}).get('reasoning_tokens')),
+            purpose=purpose,
+        )

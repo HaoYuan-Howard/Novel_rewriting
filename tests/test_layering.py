@@ -149,6 +149,11 @@ def test_only_the_store_reads_json_directly():
 _WRITE_ALLOWED = {
     'novel/store.py': '它就是那条唯一的写路，两道闸在这里',
     'novel/llm/ledger.py': '成本账是 append-only JSONL，不是产物；它按字节追加，永不读-改-写',
+    'novel/llm/cache.py': (
+        '响应缓存**不是产物**：不进来源账、不进 `_provenance`、`.gitignore` 盖着。'
+        '它还是全仓唯一一处**会主动删文件**的地方（`evict`），而那与判据 7'
+        '「修不了的原样留着」不冲突——产物留着是给人看的，一份坏缓存留着'
+        '只会被下一次重跑静默地当成新结果'),
 }
 
 

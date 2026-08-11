@@ -8,6 +8,19 @@ requires-python = ">=3.10"
 #   extra 默认 ignore（未知字段静默丢弃）· 给可选字段配默认值会让「缺字段」与「null」混掉
 dependencies = ["pydantic>=2"]
 
+# 依赖分层：**base 只留 pydantic**。契约层的全部测试不该需要网络栈——
+# `tests/` 里跑得最多的那批（语料体检 · 分层 · 双向覆盖率）一个 HTTP 请求都不发，
+# 而 `contracts/` 的四个消费方里三个不需要运行时。
+#
+# ⚠ `openai` 只被 `novel/llm/transport.py::DeepSeekTransport` 用到，而且是**懒 import**
+#   （在 `_sdk()` 里，不在模块顶层）：没装它照样能跑完整条 0 成本链路，
+#   因为那条链路走的是 `FakeTransport`。`tests/test_llm.py` 一次都不 import 它。
+[project.optional-dependencies]
+llm = ["openai>=2"]
+dev = ["pytest>=8"]
+# api = [...] —— FastAPI 那一层在 E 期落地，到那时再声明。
+# 现在写上等于声称一件还没发生的事。
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

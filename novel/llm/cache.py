@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-cache.py —— 缓存的**两个开关**。B2 会在它上面接真正的缓存文件读写。
+cache.py —— 缓存的**两个开关**，以及盘上那份响应缓存。
 
 【为什么必须是两个开关】原型只有一个 `--no-cache`，于是「重新采样一次，但仍然把
 这一次的结果记下来」**表达不出来**。而那正是最常需要的一档：
@@ -10,12 +10,22 @@ cache.py —— 缓存的**两个开关**。B2 会在它上面接真正的缓存
 把读和写混成一件事，这条路就只剩两个都不对的选项：要么读到旧的，要么连账都不记。
 
 ⇒ `CachePolicy(read, write)`，两个方向永不合并（`R-12.4` 第一条）。
+
+【缓存里的东西与产物不同，所以纪律也不同】
+产物「修不好的原样留着」（判据 7）；缓存里一份**已判定不可用**的响应必须**删掉**——
+留着它，下一次「重试」会退化成把同一个坏响应读第二遍，
+**而那与一次真调用长得一模一样**。见 `ResponseCache.evict`。
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from contracts.invariants import CACHE_POLICY
+from novel.llm.transport import ChatRequest, ChatResponse
 
 #: 三个具名口径 → `(read, write)`。**唯一落点**，`_provenance.attempts[].cache_policy`
 #: 记的就是这里的名字（`contracts/schema/stage3.py::StyleAttempt`）。
@@ -81,3 +91,78 @@ class CachePolicy:
             if nm == name:
                 return cls(read=combo[0], write=combo[1])
         raise ValueError(f'未知的缓存口径 {name!r}；取值面是 {sorted(_NAMES.values())}')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 盘上那份
+# ─────────────────────────────────────────────────────────────────────────────
+
+def cache_key(req: ChatRequest) -> str:
+    """一次调用的缓存键。**阶梯的每一档各自成键**（`reasoning_effort` 进键）——
+    不然降级到第二档时会读回第一档那个空壳，「重试」变成把同一个结果读两遍。"""
+    blob = json.dumps(req.cache_payload(), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(blob.encode('utf-8')).hexdigest()[:32]
+
+
+@dataclass
+class ResponseCache:
+    """盘上的响应缓存。`dir=None` = 只走内存（测试 / `--dry-run`），语义完全一样。
+
+    ⚠ 它**不是产物**：不进 `_provenance`、不进来源账、`.gitignore` 盖着。
+    唯一的作用是让「参数不变的重跑」变成 0 元——而那件事必须被**说出来**
+    （`R-12.4` / `Q-11`），所以命中要记进 `CostLedger.calls_cached`。
+    """
+
+    dir: Path | None = None
+
+    def get(self, key: str) -> ChatResponse | None:
+        p = self._path(key)
+        if p is None or not p.is_file():
+            return None
+        try:
+            raw = json.loads(p.read_bytes().decode('utf-8'))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            # ⚠ **读不出来当没有，不抛。** 一份半截的缓存文件如果抛异常，
+            #   那个异常会被当成「这次调用失败」——把一次**已经付过钱**的结果变成一次重跑。
+            #   （原型正因如此才给缓存加了原子写，见 `put`。）
+            return None
+        return ChatResponse(**raw)
+
+    def put(self, key: str, resp: ChatResponse) -> bool:
+        """写一份。**空 content 永不写**，返回「到底写没写」。
+
+        ⚠ 实测 DeepSeek 会把整段答案写进 `reasoning_content`、`content` 返回空串
+        （`finish_reason='stop'`，**不是截断**）。空回答对任何调用方都无用，
+        缓存下来只会让重试**每次都命中同一个空壳**——那时连降级阶梯都救不了它，
+        因为四档都会各自读回自己那份空的。
+        """
+        p = self._path(key)
+        if p is None or not resp.text:
+            return False
+        p.parent.mkdir(parents=True, exist_ok=True)
+        data = (json.dumps(resp.__dict__, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        # 【原子写】调用方会**并发**跑（并发闸默认 2），而「先截断再写」留下的是半截 JSON。
+        # 坏处不是丢一次缓存，是下次读到它——见 `get` 里那条注释。
+        tmp = p.with_name(f'{p.name}.{os.getpid()}.tmp')
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, p)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return True
+
+    def evict(self, key: str) -> None:
+        """把一份**已经判定为不可用**的响应删掉（只由 `ask_json` 的结构检查那条路调）。
+
+        ⚠ 这里**不适用**产物那条「修不了的原样留着」（判据 7）：
+        产物留着是给人看的，缓存留着**不会被人看见**，只会被下一次重跑静默地当成新结果。
+        实测形态：模型返回 `{"reconstruction_strategy": "…"}`——**0 个输出章**，
+        合法 JSON、正常结束，于是一路放行**并进了缓存**；此后不带 `--no-cache` 的重跑
+        只会拿回同一个空壳（「参数不变的重跑什么都没跑」）。
+        """
+        p = self._path(key)
+        if p is not None:
+            p.unlink(missing_ok=True)
+
+    def _path(self, key: str) -> Path | None:
+        return None if self.dir is None else Path(self.dir) / f'{key}.json'

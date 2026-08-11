@@ -15,7 +15,7 @@
 |---|---|
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
 | **契约** | ✅ **九份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md`。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
-| **骨架** | 🚧 **A 期 + B1 完成**。**下一步 = B2（LLM 层 + `FakeTransport`）**，路线图与交接见下一节 |
+| **骨架** | 🚧 **A 期 + B1 + B2 完成**。**下一步 = B3（报告构造器）**，路线图与交接见下一节 |
 | 移植 | 未开始 |
 
 ### 🚩 新 session 从这里接手骨架
@@ -25,14 +25,15 @@
 默认的 `python` 指向 Miniconda base，**那里没有 pydantic**。
 ⚠ 本机 `%TEMP%\pytest-of-yh255` 的 ACL 坏了，pytest 的 `tmp_path` 一用就炸，测试里用 `tempfile.mkdtemp()`。
 
-**当前基线**：全绿，**676 passed / 21 skip**（1 正向覆盖率 + 13 stage0 + 5 stage1 +
-**2 条都指着同一份产物**）。
+**当前基线**：全绿，**729 passed / 22 skip**（1 正向覆盖率 + 13 stage0 + 5 stage1 +
+**2 条都指着同一份产物** + 1 `ask_json` 调用点）。
 每一条 skip 都明说「没在查」——**改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
 ⚠ 那 2 条是**有意的**，而且是**同一份产物**：`成年人不做选择` 那本的 `stage4/plan_chapters.json`
 在新契约下**加载不了**，因为它根本没有 `_provenance`（`stage4.md` 事实⑤ 的字节级铁证）——
 语料体检与落盘往返各跳过它一次。
 **不许靠伪造一份来源账把它变绿**——那样这份产物就再也不会提醒任何人「提升路会丢掉来源账」。
-⚠ B1 之前是 22 条：**分层那 2 条从 skip 变成真测试**了（`novel/` 落地之前它们没有扫描面）。
+⚠ skip 数的两次变化都有账：B1 让**分层那 2 条从 skip 变成真测试**（22→21，`novel/` 落地
+之前它们没有扫描面）；B2 加了一条 `ask_json` 调用点守卫，**C 期第一个调用点出现时它自动变真**（21→22）。
 
 | 期 | 做什么 | 状态 |
 |---|---|---|
@@ -42,10 +43,69 @@
 | A3 | **八层产物模型 + 盘上语料体检**（`contracts/schema/stage3.py` 等八份 · `tests/corpus.py` · `tests/test_corpus_fixtures.py`） | ✅ |
 | A4 | `tests/test_layering.py` | ✅ |
 | **B1** | **共享运行时**（`novel/{errors,paths,prov,store,run}.py` + `novel/llm/{cache,ledger}.py`） | ✅ |
-| **B2** | LLM 层 + `FakeTransport`（`novel/llm/` 的 client/prompts · 降级阶梯 · `require` 从模型派生） | **← 下一步** |
-| B3 | 报告构造器（`build()` 遍历判据注册表，**不遍历 findings**） | 未开始 |
+| **B2** | **LLM 层 + `FakeTransport`**（`novel/config.py` · `novel/llm/{transport,client,prompts}.py`） | ✅ |
+| **B3** | 报告构造器（`build()` 遍历判据注册表，**不遍历 findings**） | **← 下一步** |
 | C | **stage3 纵切**（第一个真正跑起来的节点） | 未开始 |
 | D / E / F | 编排（R-13/R-14）· `/api/enums` · 逐层移植 | 未开始 |
+
+### 骨架 B2 已完成（2026-08-11）：**降级阶梯第一次有了测试，而且一分钱没花**
+
+| 模块 | 它守的那件事 |
+|---|---|
+| `novel/config.py` | `load_config()` **不在 import 期跑、不改 `os.environ`**（原型的模块级 `_load_dotenv` 是它被迫走子进程的五条理由之一）· **密钥永不打印**（`api_key` 的 `repr` 关掉 + 自带 `__repr__`）· 写错一个数字**当场炸不兜底** |
+| `novel/llm/transport.py` | ⭐ **那条缝**：`Transport` 协议 + 真的那个 + `FakeTransport`。缝一开，阶梯的每一档都能零成本跑一遍 |
+| `novel/llm/prompts.py` | `fill()` = `Template.substitute`（**缺值抛，不渲染成空串**）· `ENUM_BLOCKS` 从 invariants 生成 · `required_top_level()` |
+| `novel/llm/client.py` | ⭐ **`LADDER` 全仓一份**，`ask_text` / `ask_json` 共用 · `require` 从 `model_cls` 派生 · 传输层重试与阶梯是**两条**循环 · 并发闸 |
+| `novel/llm/cache.py` | `ResponseCache`：原子写 · **空 content 永不写** · **空壳 evict** · 半截文件当 miss 不当失败 |
+
+#### ⭐ 这一期最值钱的三件事
+
+**① 那条阶梯第一次有了测试——四档逐档，零花费。**
+它是全链最值钱的逻辑之一（扛着两类实测发生过的故障），而原型**一行测试都没有**，
+因为跑一次要花钱。把「发请求」抽成一条缝之后，`FakeTransport` 可以按剧本回答，
+而 `t.rungs` 让「第一档就成功」与「降到第四档才成功」**第一次可区分**
+——只看最终结果的话这两件事长得一模一样。
+⚠ 顺带把三类故障的**边界**写清了：空正文（答案流丢了，`finish_reason='stop'`）·
+JSON 截断（`finish_reason='length'`，降 effort 是**给正文腾预算**）·
+合法但结构上是空的（原型 F-125，那次 74 条派生症状盖住了一句话能说清的事实）。
+**三类走同一条阶梯**，而**传输层重试是另一条循环**——混起来一次网络抖动就吃掉整条阶梯。
+
+**② `require` 从 `model_cls` 派生 = 判据 39 从纪律变成结构。**
+原型把 `require=()` 设成默认值 ⇒ **漏传不报错，只是静默停掉一条 HARD 闸门**。
+现在 `model_cls` 是关键字必填、`require` 默认等于它的必需顶层键，**显式传只许收窄**。
+⚠ 配一条 AST 守卫盯着「有没有人把 `ask_json` 包一层绕开它」——
+今天 0 个调用点所以它 skip 着（明说「没在查」），**C 期第一个调用点出现时自动变真**。
+
+**③ 测试当场抓出一个真 bug：`MissingApiKey` 被当成网络错误重试。**
+`DeepSeekTransport.send` 原来把「建客户端」放在 `try` 里，于是「你没设 key」这条**显式终态**
+被 `except Exception` 抓走、经 `_classify` 变成 `TransportError`——
+**重试三次、带指数退避**，而人看到的报错是 `TransportError` 不是「去填 `.env`」。
+⇒ 建客户端挪到 `try` 外面。**这条是「没有 key 也要能跑完每个 0 成本 flag」那条测试逼出来的**，
+不是读代码读出来的。
+
+#### B2 顺带定下的几处
+
+- **`ENUM_BLOCKS` 自动并进 `fill()`，而调用点传同名 kwarg 会被拒。**
+  自动并之后**手抄一个子集在结构上做不到**（那正是实测漂过两次的动作：`STYLE_WORDS`
+  15 个词 prompt 里只提了 2 个 · 篇幅带漏了整整一档）；拒同名是因为静默覆盖比手抄更难发现
+  ——它连 diff 都看不出来。
+- **占位符全账对得上**：原型全仓用过 **20** 个 `$XXX`，现在 13 个 live + 6 个待补 + 1 个已退役。
+  ⚠ 待补的每一条都写得出「为什么现在给不了」（多半是它要的是 **prompt 正文**，属移植期）。
+  少登记一个的后果不是少一个功能，是移植期渲染时抛 `KeyError`——**抛在正要发请求那一刻**。
+- **`$` 的三类事故边界写清了**：拼错 → `KeyError` · `$99` → `ValueError`（都是 `Template` 自己抛）·
+  **只有 `$$` 会安静活下来**，由 `fill()` 那条残留检查兜住。
+  ⚠ 我第一版把这段写反了（说 `Template` 会静默留下 typo），是测试把它纠正过来的。
+- **`openai` 只在 `_sdk()` 里懒 import**，`pyproject.toml` 把它放进 optional 的 `llm` 分组。
+  全仓 0 处顶层 import 它 ⇒ 没装它照样跑得完整条 0 成本链路，`tests/test_llm.py` 一次都不碰它。
+- **`.env.example` 进仓**（真 `.env` 被 `.gitignore` 盖着）。
+
+#### ⚠ B2 没做、留给后面的
+
+- **`--dry-run` 的 CLI 接线**在 D 期。`FakeTransport` 已经是它的实现，缺的只是命令行那一头。
+- **重试与并发那三个数是拍的，不是量的**（手上没有真实 429 分布）。`Q-10` 已把
+  「重试退避调参」登记为「现在不建」；调它之前先拿到真数据。
+- **prompt 正文一个字都没有**，这是有意的：那 3.5 万字压着 120+ 条真机 findings 的学费，
+  移植期**逐字搬不许转述**。B2 只建了把常量塞进模板的那条路。
 
 ### 骨架 B1 已完成（2026-08-11）：**共享运行时落地，`R-11.3` 的旧理由被它消灭**
 
