@@ -315,7 +315,7 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
         pre_target=up.pre_target, source_text=up.source_text,
         residual_keys=res_keys, stem_noise=stem_noise,
         dup=up.dup, missing=up.missing, mixed=up.mixed, invalids=up.invalids,
-        post_units=post_units)
+        post_units=post_units, title_line=_title_line(up.title, subs, kept))
 
     art = NameMap(
         **name_map,
@@ -327,11 +327,12 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
     return art, list(fs), hook_new
 
 
-def _title_line(up: _Upstreams, art: NameMap) -> str:
-    """`rn_title_unver` 的那一行。⚠ `title_new` **已裁 ⇒ 现算**。"""
-    new, cnt, _c = apply_subs(up.title, art.subs, None, art.kept)
+def _title_line(title: str, subs: dict[str, str],
+                kept: list[str] | tuple[str, ...] | set[str]) -> str:
+    """`rn_title_unver` 的那一行。⚠ `title_new` **已裁 ⇒ 现算**（0 成本）。"""
+    new, cnt, _c = apply_subs(title, subs, None, kept)
     n = sum(cnt.values())
-    return (f'书名「{up.title}」→「{new}」：'
+    return (f'书名「{title}」→「{new}」：'
             + (f'替换了 {n} 处' if n else '**恒等**（书名里没有出现任何一个旧名）')
             + '　※ 盘上三本的书名都不含人名，**这一条从来没有过失败样本**'
               '——没有失败样本的绿灯不携带信息')
@@ -372,7 +373,7 @@ def _judge(ctx: RunContext, store: ArtifactStore, art: NameMap,
         stale=stale, no_consumed=no_consumed,
         hook_stale=_hook_drift(art, up),
         identity=(art.identity.model_dump() if art.identity is not None else None),
-        title_line=_title_line(up, art))
+        title_line=_title_line(up.title, art.subs, art.kept))
 
 
 def _baseline_line(art: NameMap) -> str:

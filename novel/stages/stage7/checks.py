@@ -50,7 +50,8 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                     registry: dict[str, dict], pre_target: str, source_text: str,
                     residual_keys: set[str], stem_noise: dict[str, int],
                     dup: list[int], missing: list[int], mixed: list[int],
-                    invalids: list[str], post_units: list[Unit]) -> list[Finding]:
+                    invalids: list[str], post_units: list[Unit],
+                    title_line: str) -> list[Finding]:
     """对一份映射表 + 一次替换跑全部确定性判据 → `[Finding]`。**唯一判定落点。**"""
     fs: list[Finding] = []
     chars = name_map.get('characters') or []
@@ -223,6 +224,28 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
         evidence=[str(len(subs)), str(tot)]))
 
     fs.append(_style_report(post_units, source_text))
+
+    # ── ⑩ 三条查不了的**也进产物**，而这不是重复 ────────────────────────────
+    #    它们的 `detail` **逐本不同**（书名那条点名这本书的书名、口味那条举本书真实的
+    #    第一个新名），所以它们是**这一份产物的结论**，不是一段可以写死在报告层的模板。
+    #    ⚠ 例子取本书真实的新名，**不写死一个字面量**：写死的那个会随着别的书漂成
+    #      一个谁也不认识的名字（原型那份报告曾经举着一个只存在于验证用假映射里的名字）。
+    #    ⚠ 盘上 `book[]` 恒 **7 条** = 1 info + 3 metric + **这 3 条**，契约就是这么写的。
+    eg = next((c.get('new_canonical') for c in chars if c.get('renamed')), None)
+    fs.append(finding(
+        'rn_taste_unver',
+        detail='新名的时代感 / 性别气质 / 雅俗**没有确定性判据**——'
+               + (f'「{eg}」贴不贴这本书的时代与题材' if eg else '「这个名字像不像那个年代的人」')
+               + '不是结构不变量。本节点这一维的现役闸门是**人定稿**那一步，不是代码',
+        evidence=[eg] if eg else []))
+    fs.append(finding(
+        'rn_coverage_unver',
+        detail='「替换面覆盖了正文里所有指称人物的字面」**验不了**：只能替换人物表里'
+               '有的称呼，而**人物表漏收的角色这一层结构上够不着**。'
+               '`rn_residual_stem` 只是**候选探针，不是覆盖率证明**'
+               '——别把它的 0 条读成「一个都没漏」',
+        evidence=[]))
+    fs.append(finding('rn_title_unver', detail=title_line, evidence=[]))
     return fs
 
 
@@ -342,21 +365,23 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
           '别把基线跑绿了读成「替换是安全的」',
         scanned=f'{len(IDENTITY_BLIND)} 条登记在案的盲区'))
 
-    out.append(unverifiable(
-        'rn_taste_unver',
-        '新名的时代感 / 性别气质 / 雅俗**没有确定性判据**——「这个名字像不像那个年代的人」'
-        '不是结构不变量。本节点这一维的现役闸门是**人定稿**那一步，不是代码',
-        scanned='全部新名'))
-
-    out.append(unverifiable(
-        'rn_coverage_unver',
-        '「替换面覆盖了正文里所有指称人物的字面」**验不了**：只能替换人物表里有的称呼，'
-        '而**人物表漏收的角色这一层结构上够不着**（实测某本成稿里的一个字面原文出现 2 次，'
-        '而人物表完全没有这个写法）。'
-        '`rn_residual_stem` 只是**候选探针，不是覆盖率证明**——别把它的 0 条读成「一个都没漏」',
-        scanned='人物表里有的那些称呼'))
-
-    out.append(unverifiable('rn_title_unver', title_line, scanned='书名一行'))
+    # ⚠⚠ 这三条的措辞**从产物里取**，不在报告层重写一遍：它们逐本不同
+    #    （书名那条点名这本书的书名、口味那条举本书真实的第一个新名）。
+    #    在这里另写一份，「产物说的」与「报告说的」就会在某次改动后分家——
+    #    而**复检那条路的全部纪律就是「读产物，不重算」**。
+    #    取不到时（产物早于这几条）才回落到一句通用的话，并**说出它是回落的**。
+    out.append(unverifiable('rn_taste_unver',
+                            _stored_why(by_rule, 'rn_taste_unver',
+                                        '新名好不好没有确定性判据，现役闸门是人定稿'),
+                            scanned='全部新名'))
+    out.append(unverifiable('rn_coverage_unver',
+                            _stored_why(by_rule, 'rn_coverage_unver',
+                                        '替换覆盖率验不了：人物表够不到的角色，'
+                                        '这一层结构上够不着'),
+                            scanned='人物表里有的那些称呼'))
+    out.append(unverifiable('rn_title_unver',
+                            _stored_why(by_rule, 'rn_title_unver', title_line),
+                            scanned='书名一行'))
 
     if approved:
         out.append(unverifiable(
@@ -381,6 +406,19 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
         '⚠ 正因为那道闸挡在前面，「成书里没有文案」这一态**结构上不可达**',
         scanned='`hook_consumed` 一格'))
     return out
+
+
+def _stored_why(by_rule: dict[str, list[Finding]], rule: str, fallback: str) -> str:
+    """常驻 `unver` 的措辞：**优先用产物里存的那一条**。
+
+    ⚠ 回落时要**说出它是回落的**——「这份产物早于这条判据」与
+    「这条判据这次没话可说」是两件事，静默回落会把前者伪装成后者。
+    """
+    got = by_rule.get(rule)
+    if got:
+        return got[0].detail
+    return f'{fallback}　※ ⚠ 这句是**回落文案**：盘上这份产物里没有这一条的结论，' \
+           f'它早于这条判据 —— 跑一次 `--recheck`（0 成本）就有了'
 
 
 def _body_stale_why(stale: list[str], no_consumed: list[str], hook_stale: bool | None) -> str:

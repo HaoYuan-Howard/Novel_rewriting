@@ -319,6 +319,48 @@ def test_approve_refuses_while_a_hard_rule_is_still_hit(box):
         rename.run_approve(_ctx(box, 'stage7.approve'))
 
 
+def test_recheck_reproduces_every_stored_conclusion(box):
+    """⭐ **重判 == 存盘**：`--recheck` 从 registry 重算整条确定性链，
+    盘上那 7 条结论**一条不少**地被重新产出来。
+
+    对位 stage3 的「23 项逐值」与 stage6 的「12 份文本」。它抓的是**逐字移植时
+    漏一个字符类、少一个前瞻断言**——那种错不会报错，只会让某条判据在某类输入上
+    静默地不再拦。
+    """
+    stored = {f.rule for f in NameMap.model_validate(box.read('stage7/name_map.json')).book}
+    art, _rep = rename.run_recheck(_ctx(box))
+    assert stored <= {f.rule for f in art.book}, \
+        f'重判丢了：{sorted(stored - {f.rule for f in art.book})}'
+    # ⚠ 归档在写之前：`--recheck` 会覆盖 `book[]`，而那是「上一轮判成什么样」的唯一记录。
+    assert (box.dir / 'stage7' / '_rounds' / 'name_map.r1.json').exists()
+    # ⚠ 来源账**继承**，只标混版——本次一个请求都没发过。
+    prov_d = box.read('stage7/name_map.json')['_provenance']
+    assert prov_d['partial_rewrite'] == '--recheck'
+    assert prov_d['prompts'] == \
+        box.read('stage7/_rounds/name_map.r1.json')['_provenance']['prompts']
+
+
+def test_a_human_added_mapping_that_collides_is_reported_but_never_blocked(box):
+    """⭐ **事实⑤：`rn_new_collide`（HARD）的取值面够不到 `extra_subs` 那扇门。**
+
+    盘上某本有一条 `祈辕→叶翎`（人手补）撞上 `char_009` 的 `叶翎`（模型写），
+    **而那条 HARD 打的是 `[OK]`**。⚠ **那一次撞名恰好是对的**（原作对同一个人
+    有两种写法），硬拦它的唯一出路是撤销一个对的决定 ⇒ **不扩 HARD 的取值面**，
+    另落一条提示。
+
+    ⚠ `--check-only` 看不到它：那条路**读产物不重算**（重算就是第二个判官），
+    而盘上那份 `book[]` 是原型产的。要 `--recheck` 才会重新走一遍确定性链。
+    """
+    art, rep = rename.run_recheck(_ctx(box))
+    collided = [f for f in art.book if f.rule == 'rn_new_collide_human']
+    hard = next(r for r in rep.rules if r.rule == 'rn_new_collide')
+    assert hard.status == 'ok', 'HARD 那条不许因为人工补充而红'
+    if box.sid.endswith('3176'):
+        assert len(collided) == 1 and '祈辕' in collided[0].detail
+    else:
+        assert collided == [], f'这本书不该有人工撞名：{[f.detail for f in collided]}'
+
+
 def test_identity_marks_the_artifact_as_partially_rewritten(box):
     """`--identity` 写盘 ⇒ 那份产物是**混版的**，而它必须说得出来。
 
@@ -327,6 +369,69 @@ def test_identity_marks_the_artifact_as_partially_rewritten(box):
     rename.run_identity(_ctx(box))
     prov_d = box.read('stage7/name_map.json')['_provenance']
     assert prov_d.get('partial_rewrite') == '--identity'
+
+
+# ── 四之二、盘上那三条只能从【归档】看见的事实 ────────────────────────────
+#
+# 这一族不吃沙箱，直接读语料——它们说的就是「只反推正式产物会得出什么错结论」。
+
+def _name_maps():
+    return [a for a in corpus.iter_artifacts() if a.pattern == 'stage7/name_map.json']
+
+
+def test_high_confidence_residuals_only_exist_in_the_archives():
+    """⭐ **只反推正式产物，会把 `high` 定成一个零样本分支。**
+
+    3 份正式产物 19 条残留**全部是 `low`**——`high` 的那些早被人勾选、
+    走 `extra_subs` 修掉了，正式产物是**修完之后的状态**。
+    而 8 份归档里有 **35 条 `high`**。
+    ⇒ **凡是有「人修完再落盘」这条路的层，归档必须一起反推。**
+    """
+    live = [r for a in _name_maps() if '_rounds' not in a.rel
+            for r in (corpus.load_raw(a).get('residual') or [])]
+    arch = [r for a in _name_maps() if '_rounds' in a.rel
+            for r in (corpus.load_raw(a).get('residual') or [])]
+    assert len(live) == 19 and {r['confidence'] for r in live} == {'low'}
+    assert sum(1 for r in arch if r['confidence'] == 'high') == 35
+
+
+def test_the_code_fingerprint_never_moved_while_the_prompt_took_three_values():
+    """⭐ **事实⑦ 的字节级铁证：按内容算的指纹戳穿了按 git HEAD 算的那个。**
+
+    盘上 11 份产物 `code` **全是同一个短 sha**，而同一批的 `N9_SYS` 取过 **3 个**值
+    ⇒ **代码确实变过三次，而 `code` 一个字没动**（工作树脏时它照样给出一个
+    看起来很精确的答案）。全链没有一层比对过它们。
+
+    ⚠ 处置**不在本轮**：`provenance()` 在共享层，改 `git describe --always --dirty`
+    一改就是八层一起改（`stage6.md` §三 已登记「处置只定一次，别按层分别裁」）。
+    本条只是**把它钉在盘上**，免得下一个人以为这件事没人知道。
+    """
+    codes, prompts_seen = set(), set()
+    for a in _name_maps():
+        pv = corpus.load_raw(a).get('_provenance') or {}
+        codes.add(pv.get('code'))
+        prompts_seen.add((pv.get('prompts') or {}).get('N9_SYS'))
+    assert len(_name_maps()) == 11
+    assert len(codes) == 1, f'`code` 变过了：{codes}'
+    assert len(prompts_seen) == 3, f'`N9_SYS` 取过 {len(prompts_seen)} 个值'
+
+
+def test_the_book_txt_fingerprint_can_only_be_recomputed(box):
+    """⭐ 盘上记的是 **10 位来源指纹**，新契约要 **40 位内容指纹**，
+    **旧值推不出新值**（`corpus.py::RESHAPED`）。
+
+    迁移填的是占位符 ⇒ **不重算，`rn_txt_stale` 会在每一本上误报红**。
+    ⚠ 别把那个占位符读成实测值。
+    """
+    raw = next(a for a in _name_maps()
+               if a.book_dir == box.book and '_rounds' not in a.rel)
+    on_disk_old = (corpus.load_raw(raw).get('book_txt') or {}).get('sha1')
+    assert on_disk_old and len(on_disk_old) == 10, '盘上那份不再是 10 位了？'
+    migrated = corpus.load_cut(raw)['book_txt']['sha1']
+    assert migrated == '0' * 40, '迁移这一格填的必须是占位符，不是一个看起来像真的值'
+    # `_box` 已按盘上那份 txt 重算过——重算出来的与占位符**必然**不同
+    assert box.read('stage7/name_map.json')['book_txt']['sha1'] != migrated
+    assert next(r for r in _check(box).rules if r.rule == 'rn_txt_stale').status == 'ok'
 
 
 # ── 五、闸门与提升路（**本层 0/15 反例样本，这几条就是那几份样本**）──────────
