@@ -40,10 +40,15 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
+# ⚠ **移植一层要在这里加一行。** 漏掉不会有任何测试出声（`pythonpath=["."]` 让
+#   pytest 照样 import 得到），只有**非 editable 安装**才会缺包——而那时人看到的
+#   是运行时 `ModuleNotFoundError`，离根因很远。
+#   实测漏过一次：F1 把 `novel.stages.stage6` 建出来了而这张表没跟上，F2 补回来。
 packages = ["contracts", "contracts.judges", "contracts.schema",
             "novel", "novel.api", "novel.api.routes", "novel.cli", "novel.core",
             "novel.llm", "novel.orchestrator", "novel.report", "novel.stages",
-            "novel.stages.stage3", "novel.views"]
+            "novel.stages.stage3", "novel.stages.stage6", "novel.stages.stage7",
+            "novel.views"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

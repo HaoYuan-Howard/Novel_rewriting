@@ -206,7 +206,13 @@ class StemBaseline(StrictModel):
     total: int = Field(ge=0)
     covered: int = Field(ge=0)
     residual: int = Field(ge=0)
-    ratio: float = Field(ge=0, le=1)
+
+    #: ⚠ **`total == 0` 时是 `null`，不是 `0.0`**（`Q-2` 的三态在这一格的样子）。
+    #: 那种 stem 只可能来自 `surname_map` 的键而原文里一次都没出现过（模型写错了一个姓）。
+    #: 压成 `0.0` 会被读成「覆盖率 0%」——**在这张按覆盖率排序的表上，那是最坏的读法**：
+    #: 一个根本不存在的姓会被摆到「灾难性漏网」那一端。
+    #: 盘上 11 份产物 0 处 `null`（三本的 stem 全部有据），**这一支是零样本分支**。
+    ratio: float | None = Field(ge=0, le=1)
 
 
 class ApprovedNameMap(StrictModel):

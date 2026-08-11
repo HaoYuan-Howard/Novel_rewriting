@@ -13,7 +13,10 @@ from __future__ import annotations
 from contracts.invariants import ENDING_SHAPES, HOOK_APPROACHES, HOOK_APPROACH_NOTES, SEP_BANDS
 from novel.core.bands import BAND_SEP, ending_shape, sep_band_of_text
 from novel.core.facts import NUM_UNIT, secret_keywords
-from novel.core.naming import invented_names, name_stems
+from novel.core.naming import (
+    attested_surname, family_groups, invented_names, is_generic_appellation,
+    name_stems, strip_distinguisher, surface_owners,
+)
 from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
     quote_pair,
@@ -178,6 +181,73 @@ def test_invented_names_needs_the_left_anchor():
     assert invented_names(body, given, frozenset()) == [], '没有池子就不报，不是报一堆'
     # 下发面里有的不算发明
     assert invented_names('苏二小姐来了。', '苏二小姐', name_stems(_CHARS)) == []
+
+
+# ── 姓氏族群（stage7 改名）─────────────────────────────────────────────────
+
+#: 五个角色，覆盖 `attested_surname` 三道过滤各自拦下的那一类。
+_REG = {
+    'char_001': {'canonical': '孟青禾', 'address': [{'surface': '阿禾'}]},
+    'char_002': {'canonical': '孟青兰', 'address': []},
+    # ① 自造记账标签：「许言的姐姐」的「许」是**别人**的姓，碰巧对上纯属巧合
+    'char_003': {'canonical': '许言的姐姐', 'address': []},
+    # ③ 通用角色词：「书童」同时挂着两个 char_id
+    'char_004': {'canonical': '书童(陆明洲)', 'address': [{'surface': '书童'}]},
+    'char_005': {'canonical': '陆明洲', 'address': [{'surface': '书童'}]},
+    # 外貌修饰不是姓
+    'char_006': {'canonical': '胖媒婆', 'address': []},
+}
+_BOOK = '孟青禾 孟青兰 许言的姐姐 书童 陆明洲 胖媒婆'
+
+
+def test_strip_distinguisher_has_one_home():
+    """区分词是为了 registry 键唯一造的，**不是这本书的语言**。"""
+    assert strip_distinguisher('李嬷嬷(慧贵妃宫)') == '李嬷嬷'
+    assert strip_distinguisher('李嬷嬷（慧贵妃宫）') == '李嬷嬷'
+    assert strip_distinguisher('孟青禾') == '孟青禾'
+
+
+def test_attested_surname_三道过滤各拦一类():
+    """⭐ 三道过滤里**只有第三道**拦得住「书童」——它有据、长度也够。"""
+    ow = surface_owners(_REG)
+    assert sorted(ow['书童']) == ['char_004', 'char_005']
+    got = {cid: attested_surname(v, _BOOK, ow) for cid, v in _REG.items()}
+    assert got['char_001'] == '孟'
+    assert got['char_002'] == '孟'
+    assert got['char_003'] is None, '① 4 字以上的自造标签，首字不是姓'
+    assert got['char_004'] is None, '③ 「书童」挂着两个人 —— ①② 都拦不住它'
+    assert got['char_005'] == '陆'
+    assert got['char_006'] is None, '「胖」是外貌修饰不是姓'
+    # ⚠ 不在原文里的 canonical 一律判掉（过滤①）
+    assert attested_surname({'canonical': '孟青禾'}, '', ow) is None
+
+
+def test_family_groups_needs_two_people_and_that_catches_the_fake_surnames():
+    """⭐ 「≥2 人才成族」兜住了三道过滤漏掉的假姓——它们**全是单例**。
+
+    ⚠ 单例**照样会被改名**，只是不进 `surname_map`。
+    别把「不在族群表」读成「不改名」。
+    """
+    ow = surface_owners(_REG)
+    groups, sur, acct = family_groups(_REG, _BOOK, ow)
+    assert list(groups.values()) == [['char_001', 'char_002']], '只有「孟」够两个人'
+    assert acct['families'] == 1
+    assert acct['singleton_surnames'] == ['陆'], '单例姓记账里留痕，但不成族'
+    assert sur['char_005'] == '陆' and 'char_005' not in sum(groups.values(), [])
+
+
+def test_generic_appellation_defers_to_this_books_surnames():
+    """⭐ **首字是本书的姓时，亲属字判定不成立**（`R-10.5`）。
+
+    亲属字表里有 `孙`/`公`/`子`/`女`/`母`，而它们**同时是常见姓氏**。
+    按「开头是亲属字就不改」去判，会让一个原作的姓氏活着进入「原创」成品。
+    """
+    assert is_generic_appellation('姐姐') is True
+    assert is_generic_appellation('孙大娘') is True, '没把孙当姓的书里，它是亲属称呼'
+    assert is_generic_appellation('孙大娘', {'孙'}) is False, '姓孙的大娘 —— 必须改'
+    assert is_generic_appellation('七郎') is True, '排行不是名字'
+    assert is_generic_appellation('孟青禾') is False
+    assert is_generic_appellation('') is False
 
 
 # ── 取值面 ────────────────────────────────────────────────────────────────

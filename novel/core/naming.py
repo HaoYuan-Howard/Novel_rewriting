@@ -3,11 +3,16 @@
 """
 naming.py —— 人物**专名**表，以及「有没有编出新人名」那条探针。
 
-两组东西方向**正相反**，别混：
+三组东西方向各不相同，别混：
   · `names_of` / `spoiler_names_of` —— stage3 校验期的**专名表**（这些名字不许出现在
     可迁移的风格描述里）；
   · `name_stems` / `invented_names` —— stage5/stage6 的**发明检测**（拿本书已有的姓
-    去造新人，那是闭卷写手最容易干的一件事）。
+    去造新人，那是闭卷写手最容易干的一件事）；
+  · `attested_surname` / `family_groups` / `is_generic_appellation` —— stage7 改名的
+    **姓氏族群**（这个人姓什么、和谁一家、哪些称呼压根不该动）。
+
+⚠ 三组各有一份「亲属称谓」的正则（`KINSHIP` / `_STEM_KINSHIP`），**取值面刻意不同**，
+合成一份会让其中一侧悄悄放宽——每一处的理由写在它自己旁边。
 
 ⚠ **抽取本身不吃 stage2**（风格与情节正交）。第一组名表只服务
 「专名泄漏」那条确定性比对——靠正则猜中文人名不可靠，所以借已抽好的名表。
@@ -21,6 +26,7 @@ from __future__ import annotations
 import re
 
 from contracts.schema.stage2 import GlobalGrounding
+from novel.core.text import norm
 
 #: 亲属/关系称谓（**语言层通用，非某本书特有**）：这类词面即使被登记为某角色的别名，
 #: 出现在风格描述里通常是在说「怎么称呼」这条**可迁移**规则，不算专名泄漏。
@@ -134,3 +140,151 @@ def invented_names(body: str, given: str, stems: frozenset[str]) -> list[str]:
     pat = re.compile('[' + ''.join(sorted(stems)) + r'][一-龥]{0,1}' + NAME_TITLE)
     return sorted({m.group() for m in pat.finditer(body)}
                   - {m.group() for m in pat.finditer(given)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 姓氏族群 —— stage7 改名那一族。**它与上面两组又是不同的方向**：
+# 上面查「名字有没有泄漏 / 有没有被编出来」，这里答「这个人姓什么、和谁一家」。
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: `canonical` 末尾的**消重区分词**：`李嬷嬷(慧贵妃宫)` → `李嬷嬷`。
+#: 区分词是为了满足「registry 键全书唯一」加的，**不是这本书的语言**——
+#: 原文里没人管谁叫「小宫女(打翻茶盏)」。不剥就等于让所有带区分词的角色永远解析不到。
+_DISTINGUISHER = re.compile(r'[（(][^）)]*[）)]\s*$')
+
+#: 「胖媒婆」「瘦掌柜」——外貌修饰词不是姓。
+#: ⚠ 实跑抓到过：`胖媒婆`/`胖婶` 被按首字并成一族，模型只好产出「庞媒婆/庞婶」。
+_DESCRIPTIVE_ROLE_PREFIX = re.compile(r'^[胖瘦]')
+
+#: 称谓/亲属后缀落在**词尾**（`许总` / `李嬷嬷`）——`NAME_TITLE` 的锚定版。
+_TITLE_TAIL = re.compile(NAME_TITLE + r'$')
+
+#: 排行式称呼：数字是**人物关系/排行**，不是名字的一部分。
+#: ⚠ 实跑抓到过：模型把「七郎」改成「六郎」，后缀还在（后缀那条判据全绿），
+#: 而人物排行已经被改写。
+_RANK_APPELLATION = re.compile(
+    r'^(?:第)?(?:大|[一二两三四五六七八九十百\d]+)(?:郎|娘|爷|哥|姐|弟|妹|公子|小姐)$')
+
+
+def strip_distinguisher(canonical: str | None) -> str:
+    """去掉 `canonical` 末尾的消重区分词。**两处共用这一份**（派生显示名 / 反查称呼），
+    各写一份正则就是下一次「这边按 A 剥、那边按 B 剥」的来源。"""
+    return _DISTINGUISHER.sub('', canonical or '').strip()
+
+
+def surface_owners(characters: dict[str, dict] | None) -> dict[str, frozenset[str]]:
+    """`{称呼字面: {char_id…}}` —— 一个称呼可能挂着好几个人（「姐姐」「书童」）。
+
+    字面取 `canonical`（**剥掉区分词**）+ 全部 `address[].surface`。
+
+    ⚠ 键一律走 `core.text.norm`（内容字符）：原文的全半角标点与「每句一段」的换行
+    都不可靠，拿原始字节做键会让「祈颜！」和「祈颜」变成两个不同的称呼。
+    """
+    owners: dict[str, set[str]] = {}
+    for cid, v in (characters or {}).items():
+        names = [strip_distinguisher((v or {}).get('canonical') or '')]
+        names += [(a or {}).get('surface', '').strip()
+                  for a in ((v or {}).get('address') or [])]
+        for nm in names:
+            key = norm(nm)
+            if key:
+                owners.setdefault(key, set()).add(cid)
+    return {k: frozenset(v) for k, v in owners.items()}
+
+
+def attested_surname(char: dict | None, book_text: str,
+                     owners: dict[str, frozenset[str]] | None = None) -> str | None:
+    """这个角色的**姓**（原文有据时 `canonical` 的首字），否则 `None`。三道过滤：
+
+    ① **`canonical` 必须在原文里有据。** registry 里有一批**自造的记账标签**
+       （实测 `书童(陆明洲)` / `许言的姐姐` / `谈默母亲` / `苏父`），它们的首字不是姓：
+       「书」不是姓；「许言的姐姐」的「许」是**别人**的姓，碰巧对上纯属巧合。
+    ② **长度 2~3**：4 字以上基本是标签不是姓名。
+    ③ **`canonical` 不能挂着多个 `char_id`**：那说明它是个通用角色词而不是名字。
+       实测「书童」同时是三个角色的称呼——它有 18 次出现、完全「有据」，
+       ①②两道都拦不住，**只有这一道拦得住**。
+
+    ⚠ 三道加起来仍然不完美：`采草贼`/`府医`/`圣上`/`老御医` 都能过（3 字、有据、单主），
+    于是「采」「府」「圣」「老」会被当成姓。**这是靠 `family_groups` 的「≥2 人才成族」
+    兜住的**——它们全是单例，而单例根本不需要跟谁协调姓氏。
+    别在这里加一张角色词词表：那是判据 11 说的关键词表，换一本书立刻失效。
+
+    ⚠⚠ **这三道过滤会漏掉真姓，而且是必然的**——实测某本两例：`沈` 只由自造记账标签
+    `沈母`/`沈父` 承载（①判掉）· `孙` 撞上亲属字表的「孙大娘」（③判掉）。
+    **别为此放宽这里**：本函数的产物是**下发面**，放宽等于拿假姓去让模型协调族群
+    （收窄一个下发面是修复，收窄一个检测器才是削弱）。
+    漏掉的真姓由**探针侧**兜住——`stems` 并上模型的 `surname_map`（`R-10.6` / `R-10.6b`）。
+    """
+    canon = strip_distinguisher((char or {}).get('canonical') or '')
+    if not (2 <= len(canon) <= 3) or canon not in (book_text or ''):
+        return None
+    if _STEM_KINSHIP.match(canon):              # 「婆母」「表哥」「堂姐」：首字不是姓
+        return None
+    if _DESCRIPTIVE_ROLE_PREFIX.match(canon):   # 「胖媒婆」「瘦掌柜」：修饰语不是姓
+        return None
+    if owners and len(owners.get(norm(canon)) or ()) > 1:
+        return None
+    return canon[0]
+
+
+def family_groups(characters: dict[str, dict] | None, book_text: str,
+                  owners: dict[str, frozenset[str]] | None = None
+                  ) -> tuple[dict[int, list[str]], dict[str, str | None], dict]:
+    """姓氏族群 → `({组号: [char_id…]}, {char_id: 姓}, 记账)`。
+
+    **判据只有一条：`canonical` 字面同姓，且这个姓至少挂着两个人。**
+
+    ⚠ **原来还有一条「关系里的血亲/姻亲边」，已经删掉——它从未独立贡献过，
+    只带来错误合并。** 逐条复算：
+      · 某本的姐妹**本来就字面同姓**，字面那条已经抓到；
+      · 某本的兄弟在关系里**根本没有边**，只有字面那条抓得到；
+      · 而谓词词表（含 夫/妻/兄/弟…）实测把「是妻子」与「是结拜兄弟」都算成合并边，
+        于是三个姓被并成一族——给这一族一个新姓，就成了**夫妻同姓、结拜兄弟同姓**，
+        两样都错。
+    ⇒ 一条**只会造成错误合并、从未独立抓到过东西**的边，删掉是化简不是删功能。
+
+    **为什么要求「≥2 人」**：一个人自己不需要跟谁协调姓氏。这一条同时兜住了
+    `attested_surname` 那三道过滤漏掉的假姓（全是单例）。
+    ⚠ 单例**照样会被改名**，只是不进族群表——**别把「不在族群表」读成「不改名」**。
+
+    ⚠ 字面同姓不等于同族（若某本书里有两个无关的王姓角色），但**换成同一个新姓仍然正确**：
+    原作让他们同姓，成品也让他们同姓，这是保真，不是错误。
+    """
+    sur = {cid: attested_surname(v, book_text, owners)
+           for cid, v in (characters or {}).items()}
+    by_sur: dict[str, list[str]] = {}
+    for cid, s in sorted(sur.items()):
+        if s:
+            by_sur.setdefault(s, []).append(cid)
+    out: dict[int, list[str]] = {}
+    singles: list[str] = []
+    for i, (s, cids) in enumerate(sorted(by_sur.items()), 1):
+        if len(cids) > 1:
+            out[i] = sorted(cids)
+        else:
+            singles.append(s)
+    return out, sur, {'families': len(out), 'singleton_surnames': sorted(singles)}
+
+
+def is_generic_appellation(old: str | None, surnames: frozenset[str] | set[str] = frozenset()
+                           ) -> bool:
+    """这个旧称呼是【纯关系/敬称】（不该改名）还是【带姓的真名】（必须改）？
+
+    【首字是**本书的姓**时，亲属字判定不成立】亲属字表里有 `孙`（孙子）/`公`/`子`/
+    `女`/`母`——它们**同时是常见姓氏**。判据从前只问「开头是不是亲属字」，于是某本的
+    `孙大娘` 命中、被判成「把关系当名字换掉了」。实测那本书：`孙` 在姓氏映射里、
+    原文「孙大娘」6 次、「孙子」**0 次**——它就是**姓孙的大娘**，而下发的规则明写
+    「带姓的称呼是真名，必须改」。
+    **按这条判据去修数据，会让一个原作的姓氏活着进入「原创」成品**，那就是判据错。
+
+    ⚠ 排除依据用**本书的姓氏映射**，不硬编码一张「哪些亲属字也是姓」的表：
+    族群表是从本书 registry 算出来的证据，换一本书自动跟着变；
+    在没把 `孙` 当姓的书里，`孙媳妇` 仍按亲属字拦。
+    """
+    if not old:
+        return False
+    if _RANK_APPELLATION.fullmatch(old):
+        return True
+    if _TITLE_TAIL.fullmatch(old):
+        return True
+    return bool(_STEM_KINSHIP.match(old)) and old[:1] not in set(surnames or ())
