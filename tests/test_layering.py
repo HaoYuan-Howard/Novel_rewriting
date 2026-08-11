@@ -139,6 +139,41 @@ def test_only_the_store_reads_json_directly():
     )
 
 
+#: 允许**往盘上写**的白名单。每一条都要写得出理由。
+#:
+#: ⚠ 这条守卫与上面那条读的守卫是一对：「读只有一条路」保证 `inputs` 不漏，
+#: 「写只有一条路」保证**没有一份产物能绕开写盘口那两道闸**
+#: （`prompts` 非空而 `inputs` 为空 ⇒ 拒 · 落盘前先证明读得回来）。
+#: 原型没有写口守卫，于是落盘闸门的失败支用**裸 `json.dump`** 写 `.INVALID`
+#: ——那份稿从此没有来源账，而提升路又「沿用原稿里那一份」。盘上留下 1 份铁证。
+_WRITE_ALLOWED = {
+    'novel/store.py': '它就是那条唯一的写路，两道闸在这里',
+    'novel/llm/ledger.py': '成本账是 append-only JSONL，不是产物；它按字节追加，永不读-改-写',
+}
+
+
+def test_only_the_store_writes_to_disk():
+    """**没有模块级 `save_json`**：写盘只经 store 实例，而 store 只由 `RunContext` 造。"""
+    bad = []
+    for p in _runtime_files():
+        rel = _rel(p)
+        if rel in _WRITE_ALLOWED:
+            continue
+        tree = ast.parse(open(p, encoding='utf-8').read(), filename=p)
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                    and n.func.attr in ('write_bytes', 'write_text', 'mkdir', 'unlink'):
+                bad.append(f'{rel}:{n.lineno} .{n.func.attr}()')
+            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'open':
+                mode = next((a.value for a in n.args[1:2] if isinstance(a, ast.Constant)), 'r')
+                if any(c in str(mode) for c in 'wax+'):
+                    bad.append(f'{rel}:{n.lineno} open(mode={mode!r})')
+    assert not bad, (
+        f'这些地方绕过了唯一的写路：{bad}\n'
+        f'→ 要么改走 store，要么把它连同理由加进 `_WRITE_ALLOWED`'
+    )
+
+
 def test_the_runtime_never_uses_sys_exit():
     """显式终态用异常，不用 `sys.exit`。
 

@@ -30,6 +30,31 @@ from typing import Final, NamedTuple
 #: 实测代价：某次 23 章成稿与任何一版上游都配不上（匹配 1/23），配对关系永久丢失，而界面全绿。
 FRESHNESS: Final = ('fresh', 'stale', 'unknown')
 
+#: 一条来源边**为什么**得到那个结论。**用 id 不用措辞**（同 `STAGE0_WARNINGS` 的理由）：
+#: 它要进校验报告的第一节（`Q-4`：来源在前判定在后），而报告不在逐字节验收范围内——
+#: 拿字符串前缀认原因会随一次措辞改动静默断掉。算法唯一落点 `novel/prov.py::freshness`。
+#:
+#: ⚠ **`ghost` 是这里最要紧的一个**，它是 `Q-4` 亲自点过的一个 bug：
+#: 原型的比对函数对「取不到指纹」的条目**静默跳过**，于是一条指向已删文件的边
+#: 既不报错、也不报「不知道」，只是安静地当作一条正常的上游边。
+#: 盘上真有一条（`成年人不做选择` 那本的 `stage4/writer_context.json` 挂着
+#: `stage4/plan_chapters.INVALID.json`，而那个文件已经不在了——0 成本提升路读完就删了它）。
+#: ⇒ **取不到指纹 = 那份上游已经不在盘上，要报出来，并按名字说是哪一条。**
+#:
+#: ⚠ `consumed_undeclared` 与 `match` 的差别是本项目最容易被顺手抹平的一条：
+#: 「本节点没声明自己读了哪些字段」**不是**「我读的东西没变」。**建槽位，不填槽位**——
+#: 八层逐步补投影，在补上之前那条边诚实地是 `unknown`。
+FRESHNESS_REASON: Final = (
+    'no_provenance',        # 这份产物根本没有来源账 ⇒ unknown（**永不 fresh**）
+    'no_inputs',            # 有来源账，但 inputs 缺失或为空 ⇒ unknown
+    'ghost',                # 边指向的文件不在盘上 ⇒ unknown ＋ 点名报出
+    'file_changed',         # 整份文件的指纹对不上 ⇒ stale
+    'consumed_changed',     # 本节点真正读到的那部分变了 ⇒ stale
+    'consumed_undeclared',  # 边上 consumed=null ⇒ 该边 unknown
+    'consumed_unresolved',  # 声明过投影，但这次算不出来（没登记投影函数）⇒ 该边 unknown
+    'match',                # 取到且相等 ⇒ fresh
+)
+
 #: 校验报告的徽章。**`amber` = 通过了，但有 N 项查不了**（`passed and unver_count > 0`）。
 #: 它不是绿色。判定放服务端算，免得「PASS + 未验证」在某个分支上被顺手画成绿的。
 BADGE: Final = ('pass', 'amber', 'fail')

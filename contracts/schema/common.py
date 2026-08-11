@@ -117,12 +117,32 @@ class Provenance(StrictModel):
     input_basis: str | None = None
 
     def to_disk(self) -> dict:
-        """落盘形态：**`None` 的键一个都不写**。
+        """落盘形态：**本层 `None` 的键一个都不写**。
 
         这是三态能成立的前提——`revalidated: null` 与「没有 `revalidated` 这个键」
         在 JSON 里必须是两份不同的字节。
+
+        ⚠⚠ **只剥这一层，不许递归**（2026-08-11 骨架 B1 修）。原来写的是
+        `model_dump(exclude_none=True)`，而 `exclude_none` 是**全局**的，它会连着
+        剥掉两处**必填但可为 `null`** 的键，于是**落下去的产物读不回来**：
+
+          · `inputs[].consumed` —— 契约明写「必填但可为 `null`」，
+            `null` = 本节点没声明读了哪些字段 ⇒ 该边 `unknown`。剥掉它，
+            那条边在重新加载时是 `Field required`，整份产物加载失败。
+          · `usage.{prompt,completion,reasoning}_tokens` —— `null` = 这次响应没给 usage，
+            **不是 0**（`_common.md` §八）。同样剥掉、同样加载失败。
+
+        ⚠ 这两处的共同点值得记：**「可为 null」的字段与「三态字段」长得一样，语义相反**。
+        三态字段的 `None` 意思是「这个键不该在」，可空字段的 `None` 意思是
+        「这个键在，值就是不知道」。一个全局开关同时管这两种，必然把其中一种搞错。
+        ⇒ 剥的范围收成**本模型自己的字段**，嵌套模型各自负责（它们没有三态键）。
+
+        这条今天才发作，是因为 A2/A3 只做过「盘上 → 模型」的加载体检，
+        从来没有过一次「模型 → 盘上 → 模型」的往返。
+        `novel/store.py::_verify_round_trip` 现在把这条往返钉在**落盘之前**。
         """
-        return self.model_dump(exclude_none=True)
+        dumped = self.model_dump(mode='json')
+        return {k: v for k, v in dumped.items() if v is not None}
 
 
 class FreeProvenance(Provenance):

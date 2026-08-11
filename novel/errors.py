@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+errors.py —— 显式终态的**唯一**词汇表。
+
+【为什么不用 `sys.exit`】`SystemExit` 是 `BaseException`，它**穿透 `except Exception`**。
+原型每个节点都拿 `sys.exit` 当终态，于是任何想「跑一批书、一本崩了继续下一本」的
+调用方都拦不住它——只能把节点跑成子进程。那是原型被迫走子进程的五条理由之一
+（`R-11.3` 的理由改写见 `docs/REQUIREMENTS.md`：这一条已被本模块 + `novel/run.py` 消灭，
+而**走子进程这条规则仍然留着**，靠另外三条独立成立的理由）。
+⇒ 运行时一律抛这里的异常；**只有 `novel/cli/` 那一层**可以把它翻译成退出码
+（`tests/test_layering.py::test_the_runtime_never_uses_sys_exit` 钉着这条）。
+
+【两族，分界线是「谁的错」】
+  · `TerminalState` —— **数据/流程**说这一步不该继续（上游没跑、闸门拦下、人没批）。
+    它是**预期内**的终态，报告里要说人话，退出码非零，但它不是 bug。
+  · `RefusedByStructure` —— **代码**自相矛盾（来源账里 prompts 非空而 inputs 是空的、
+    0 成本节点想记一个 model、字节形态产物里混进了 `\\r`）。
+    它是 bug，栈要留全。⚠ **它绝不允许被降级成一句警告**——
+    原型那三处写盘口正是 `print` 一句就照写，于是假账全部落了盘。
+
+⚠ **不设「默认异常」**。每一处终态都要选一个具体的类；选不出来说明那个失败还没想清楚，
+而 `raise NovelError('...')` 会让调用方永远只能靠读字符串来分辨发生了什么
+（`Q-6`：措辞是会改的，措辞不是契约）。
+"""
+from __future__ import annotations
+
+
+class NovelError(Exception):
+    """本运行时抛出的一切的基类。**不直接抛它**，见模块 docstring 末尾那条。"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 一、显式终态 —— 预期内的「这一步不该继续」
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TerminalState(NovelError):
+    """显式终态（勿静默）。**不是 bug**，是这条流程按设计走不下去了。
+
+    ⚠ 它与「静默降级」是一对反义词：本项目实测过的最贵一次损失，
+    是一条闸门缺料时**照常打绿灯**（13 格判据打 13 个 `[OK]`，其中 6 条根本没跑）。
+    ⇒ 走不下去就说出来，别产一份看起来正常的东西。
+    """
+
+
+class UpstreamMissing(TerminalState):
+    """要读的上游产物不在盘上。
+
+    ⚠ 与 `ArtifactUnreadable` **必须分开**：「上游还没跑」是流程问题（去跑它），
+    「上游读不出来」是产物坏了（去看它）。混成一条，报告会把「先跑 stage2」
+    说成「stage2 的产物损坏了」。
+    """
+
+
+class ArtifactUnreadable(TerminalState):
+    """盘上那份在，但读不出来：不是合法 JSON、或不合当前 schema。
+
+    ⚠ **不许兜底成「当它不存在」**。半截 JSON 被读成「上游还没产出」而继续等，
+    会把一次**成功的付费跑**说成失败——原型并发落盘时踩过，修法是原子写（`store.write`）。
+    """
+
+
+class GateBlocked(TerminalState):
+    """落盘闸门拦下了这一份：**没有覆盖已有产物**，问题稿已存 `.INVALID`。
+
+    ⚠ 它携带 `invalid_path` 是**刻意的**：这条终态的全部价值在于
+    「稿子没有丢，也没有再花钱」——报告必须说得出那份稿在哪，
+    否则人会以为要重跑（那是一次真金白银）。0 成本提升路见 `store.promote_invalid`。
+    """
+
+    def __init__(self, message: str, *, invalid_path: str) -> None:
+        super().__init__(message)
+        self.invalid_path = invalid_path
+
+
+class ApprovalRequired(TerminalState):
+    """人工闸门没过（`APPROVAL_STATE` 的 `not_run` / `pending`）。
+
+    ⚠ **两个未批状态都要拦**（`R-0.3b`）：写成 `if approved == 'pending'` 会漏掉
+    `not_run`——那正是把三态压成 `bool` 之后必然长出来的那种漏。
+    """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二、结构性拒绝 —— 代码自相矛盾，是 bug
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RefusedByStructure(NovelError):
+    """写盘口/读盘口拒绝了一次自相矛盾的操作。**这是 bug，不是数据问题。**"""
+
+
+class ProvenanceRefused(RefusedByStructure):
+    """来源账自相矛盾，拒绝落盘。
+
+    ⚠⚠ **原型这里是 `print` 一句警告然后照写**，于是：
+    `chapter_blueprints` 漏记 global · `style_grounding` 与 `fidelity_reference`
+    的 `inputs` 干脆是空的。一份自称能证明来源的记录悄悄漏掉一个来源，
+    **比没有这个记录更坏**——下游会拿它当证据。
+    ⇒ 改成拒绝。两道闸的定义见 `novel/store.py::ArtifactStore._refuse_bad_provenance`。
+    """
+
+
+class ByteFormRefused(RefusedByStructure):
+    """字节形态产物（`clean_text.txt` / `draft.md` / `book.txt`）不合字节纪律。
+
+    ⚠ 盘上三份字节形态产物**全是 LF-only**，而 Windows 上 `open(p, 'w')` 默认吐 CRLF。
+    归一是**内容决策**，属产地；写盘口只负责保证**平台不掺东西**，
+    并在拿到 `\\r` 时当场说出来——静默归一等于替产地做了一次它自己没记账的改写。
+    """
+
+
+class PathRefused(RefusedByStructure):
+    """产物相对路径不合法（绝对路径 / 越出书目录 / 层数不对）。
+
+    ⚠ 层数那一条不是洁癖：来源账的键是**两级**的（`_common.md` §3.1），
+    `stage5/deep/ch01.json` 记进 `inputs` 会塌成一个**反查不到文件**的键，
+    于是那条边**永远显示对得上**——`一个假的匹配比没有记录更坏`。
+    成稿走 `store.read_judged`（存完整相对路径），见 `_common.md` §3.2。
+    """

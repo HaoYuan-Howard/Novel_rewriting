@@ -15,7 +15,7 @@
 |---|---|
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
 | **契约** | ✅ **九份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md`。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
-| **骨架** | 🚧 **A 期全部完成**（A0~A4）。**下一步 = B1**，路线图与交接见下一节 |
+| **骨架** | 🚧 **A 期 + B1 完成**。**下一步 = B2（LLM 层 + `FakeTransport`）**，路线图与交接见下一节 |
 | 移植 | 未开始 |
 
 ### 🚩 新 session 从这里接手骨架
@@ -25,11 +25,14 @@
 默认的 `python` 指向 Miniconda base，**那里没有 pydantic**。
 ⚠ 本机 `%TEMP%\pytest-of-yh255` 的 ACL 坏了，pytest 的 `tmp_path` 一用就炸，测试里用 `tempfile.mkdtemp()`。
 
-**当前基线**：全绿，**22 条 skip**（1 正向覆盖率 + 13 stage0 + 5 stage1 + 2 分层 + **1 语料体检**）。
+**当前基线**：全绿，**676 passed / 21 skip**（1 正向覆盖率 + 13 stage0 + 5 stage1 +
+**2 条都指着同一份产物**）。
 每一条 skip 都明说「没在查」——**改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
-⚠ 新增的那一条是**有意的**：`成年人不做选择` 那本的 `stage4/plan_chapters.json`
-在新契约下**加载不了**，因为它根本没有 `_provenance`（`stage4.md` 事实⑤ 的字节级铁证）。
+⚠ 那 2 条是**有意的**，而且是**同一份产物**：`成年人不做选择` 那本的 `stage4/plan_chapters.json`
+在新契约下**加载不了**，因为它根本没有 `_provenance`（`stage4.md` 事实⑤ 的字节级铁证）——
+语料体检与落盘往返各跳过它一次。
 **不许靠伪造一份来源账把它变绿**——那样这份产物就再也不会提醒任何人「提升路会丢掉来源账」。
+⚠ B1 之前是 22 条：**分层那 2 条从 skip 变成真测试**了（`novel/` 落地之前它们没有扫描面）。
 
 | 期 | 做什么 | 状态 |
 |---|---|---|
@@ -38,10 +41,83 @@
 | A2 | `contracts/schema/{base,common}.py` | ✅ |
 | A3 | **八层产物模型 + 盘上语料体检**（`contracts/schema/stage3.py` 等八份 · `tests/corpus.py` · `tests/test_corpus_fixtures.py`） | ✅ |
 | A4 | `tests/test_layering.py` | ✅ |
-| **B1** | `novel/{errors,paths,prov,store,run}.py` | **← 下一步** |
-| B2 / B3 | LLM 层 + `FakeTransport` · 报告构造器 | 未开始 |
+| **B1** | **共享运行时**（`novel/{errors,paths,prov,store,run}.py` + `novel/llm/{cache,ledger}.py`） | ✅ |
+| **B2** | LLM 层 + `FakeTransport`（`novel/llm/` 的 client/prompts · 降级阶梯 · `require` 从模型派生） | **← 下一步** |
+| B3 | 报告构造器（`build()` 遍历判据注册表，**不遍历 findings**） | 未开始 |
 | C | **stage3 纵切**（第一个真正跑起来的节点） | 未开始 |
 | D / E / F | 编排（R-13/R-14）· `/api/enums` · 逐层移植 | 未开始 |
+
+### 骨架 B1 已完成（2026-08-11）：**共享运行时落地，`R-11.3` 的旧理由被它消灭**
+
+`novel/` 从此存在。**它单向依赖 `contracts`，反向一条边都没有**，由 `tests/test_layering.py` 钉死
+（那两条测试在 B1 之前是 skip 的——没有扫描面）。
+
+| 模块 | 它守的那件事 |
+|---|---|
+| `novel/errors.py` | 显式终态**用异常不用 `sys.exit`**（`SystemExit` 是 `BaseException`，穿透 `except Exception`）。两族分界线是「谁的错」：`TerminalState` = 数据/流程说走不下去了（不是 bug）· `RefusedByStructure` = 代码自相矛盾（是 bug，栈要留全） |
+| `novel/paths.py` | 书名 ↔ 目录名的**两把尺子必须互为逆**（原型 F-088：同一本书裂成两个目录）· 书名的唯一权威来源是**目录名**（F-118：书名一度变成数字串发给每一章的写手）· `.INVALID` 与 `_rounds/` 的形态 |
+| `novel/prov.py` | 两把指纹尺子（10 位 / 40 位，**没有 `width=` 参数**）· `git describe --always --dirty` · **新鲜度算法**（`_common.md` §四那张表，纯函数、不碰盘）· `round = max + 1` 不是 `len + 1` |
+| `novel/run.py` | ⭐ **`RunContext`：一本书 · 一个节点 · 一次跑 = 一个实例**。进程全局 `_READ` 死在这里 |
+| `novel/store.py` | ⭐ **`ArtifactStore(ctx)`：唯一读写口**。原子写 + 落盘前往返校验 · 写盘口拒绝 · `.INVALID` / 提升 / 归档 / 新鲜度 |
+| `novel/llm/` 的 cache 与 ledger | 缓存**两个开关永不合并** · 成本账 append-only JSONL，`calls_made` 与 `calls_cached` **两个计数器** |
+
+#### ⭐ 这一期最值钱的三件事
+
+**① 落盘往返把一个真 bug 逼了出来（A2 埋的，A3 的体检抓不到）。**
+`Provenance.to_disk()` 原来是 `model_dump(exclude_none=True)`，而 **`exclude_none` 是全局的**：
+它连着剥掉两处**必填但可为 `null`** 的键——`inputs[].consumed` 与 `usage.*_tokens`
+——于是**落下去的产物读不回来**。
+根因值得记：**「可为 null」的字段与「三态字段」长得一样、语义相反**
+（三态的 `None` 意思是「这个键不该在」，可空的 `None` 意思是「键在，值就是不知道」），
+一个全局开关同时管两种，必然把其中一种搞错。
+⚠ **它今天才发作，是因为 A2/A3 只做过单向的加载体检，从来没有过一次「模型 → 盘上 → 模型」。**
+现在两道守卫：落盘**之前**先证明读得回来（`novel/store.py`）+
+`tests/test_store.py` 拿盘上 **92 份真实产物**跑一遍往返，八层全覆盖，0 成本。
+
+**② 「0 成本节点不许记 `model`」那道闸，实测必须开在【铸造口】而不是写盘口。**
+施工方案原写在写盘口，而那样会**误伤五条真路径**：`--revalidate` / `--remeasure` / `--recheck` /
+`stage6.approve` / `stage7.approve` 改写的都是**付费节点产的**那份产物，
+它记的 `model` 属于当初那次付费产出，**不是本次跑的新宣称**。
+⇒ 真正该拦的是「0 成本的跑**现造**一份声称模型产了它的账」，而现造只有一个入口
+（`RunContext.llm_provenance`）。**放在写盘口的闸迟早会被人加白名单绕开，那比没有更坏。**
+写盘口留下的那一道是 `prompts` 非空而 `inputs` 为空 ⇒ **拒**（原型这里是 `print` 一句然后照写）。
+
+**③ 来源账的键是【两级】的，于是成稿必须走另一条路——这条现在由类型拦。**
+`stage5/deep/ch01.json` 记进 `inputs` 会塌成一个**反查不到文件**的键 ⇒ 指纹取不到
+⇒ 那条边**永远显示对得上**。⇒ `store.read` 只收两级路径，三级当场 `PathRefused`
+并指向 `read_judged`（存完整相对路径 + 指纹，进 `judged` 不进 `inputs`）。
+
+#### B1 顺带定下的几处（施工方案没写死的）
+
+- **`.INVALID` 归档叫 `_rounds/<stem>.INVALID.r<N>.json`，带轮次号。**
+  原型叫 `chNN.INVALID.superseded.json`——**没有编号**，第二次被拦下的稿会**静默覆盖**第一次那份。
+  归档是「出事之后唯一能回去的那一份」，把它做成全系统最容易丢的东西，方向是反的。
+- **提升路三步的顺序是挑过的**：先占归档位并检查（唯一大概率的失败）→ 落正式稿 → 挪 `.INVALID`。
+  剩下那个窗口崩掉**再跑一次 `--revalidate` 就自愈**；反过来「先归档后落稿」崩掉的话，
+  `.INVALID` 已经从它该在的位置消失而正式稿还没写。⚠ 这一处进 `R-14.6` 那张表（D 期建表别漏）。
+- **`write_text` 拿到 `\r` 一律拒收，不静默归一。** 归一是**内容决策**属产地（它要为「我改了什么」
+  负责、可能还要记账）；写盘口只保证**平台不掺东西**。读的一侧同样不翻译换行——两侧口径必须一致。
+- **`CachePolicy` 的第四种组合 `(read=True, write=False)` 被拒**，理由不是「它没有意义」，
+  是**它在 `CACHE_POLICY` 里没有名字** ⇒ 记不进 `_provenance` ⇒ 事后说不出那一次是怎么跑的。
+  要它就先往 `contracts/invariants.py` 加一个值——**那是一次契约改版，该被看见**。
+- **新增 `contracts/invariants.py` 里的 `FRESHNESS_REASON`（8 个）**：一条来源边**为什么**得到那个结论。
+  用 id 不用措辞（同 `STAGE0_WARNINGS`）——报告不在逐字节验收范围内，拿字符串前缀认原因会静默断掉。
+- **`tests/test_layering.py` 加了写口守卫**：`novel/` 里往盘上写只许出现在
+  store 与 ledger 两处（白名单带理由）。原型没有写口守卫，
+  于是落盘闸门的失败支用**裸 `json.dump`** 写 `.INVALID`，盘上留下 1 份没有来源账的铁证。
+
+#### ⚠ B1 发现、但**没有**在 B1 修的两条（下一个 session 要先看）
+
+**① `to_human_edit()` 只长在 `LlmProvenance` 上，而 stage6/stage7 的 `--apply-edit` 够不着它。**
+那两层的 `--approve` 之后再 `--apply-edit`，上一份来源账可能已经是 `FreeProvenance`。
+B1 没动它，因为**本期没有消费方**——挪到基类等于写一条没被跑过的路。
+⇒ **C 期或 F 期真要用它的那一刻，连同一份会红的样本一起挪。**
+
+**② 新鲜度今天几乎恒为 `unknown`，而那是契约要的，不是 bug。**
+八层现在一个 `consumed` 投影都没声明（`_common.md` §三「**建槽位，不填槽位**」），
+而「没声明读了什么」**不是**「读的东西没变」⇒ 该边 `unknown`。
+⚠ 别把这读成「新鲜度没做完」就顺手把它兜成 `fresh`——那正是这一格要防的事。
+**C 期 stage3 纵切时给那三条上游各声明一次投影**，`fresh` 才会第一次真的出现。
 
 ### 骨架 A3 已完成（2026-08-11）：**八层模型落地，92 份真实产物过了一遍新 schema**
 
@@ -405,9 +481,12 @@
 
 ```
 docs/REQUIREMENTS.md     需求规格。自足（0 处外部引用），每条带「谁在查」列
+docs/schema/             产物 schema 九份（八层 + `_common.md`）。**它们是源，模型照它写**
 docs/design_brief/       前端重做的 brief 包 + 19 份【真实 API 响应】样本
-contracts/               契约层（见下）
-tests/                   契约层自己的守卫
+contracts/               契约层（见下）。可单独 import，不拉运行时
+novel/                   运行时。**单向依赖 contracts**，由 tests/test_layering.py 钉死
+web/                     前端（审校台 mock 版）。骨架阶段当它不存在
+tests/                   守卫。契约层的 + 运行时的
 ```
 
 ## `contracts/` 是什么
