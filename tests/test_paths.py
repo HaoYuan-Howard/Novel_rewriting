@@ -104,6 +104,80 @@ def test_every_corpus_filename_round_trips():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 一之二、书 id 的准入 —— 定位这一步不许走出 `<Output>`
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _output_with(*dirnames: str) -> Path:
+    """建一个临时 `<Output>/`，里面放几个书目录。
+
+    ⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸——一律 `tempfile.mkdtemp()`。
+    """
+    import tempfile
+    base = Path(tempfile.mkdtemp()) / 'Output'
+    for n in dirnames:
+        (base / n).mkdir(parents=True)
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+@pytest.mark.parametrize('bad', [
+    '',            # `os.path.join(base, '')` 是 `<Output>/` 本身 ⇒ 每本书都定位到 Output 根
+    '   ',
+    '.',           # `<Output>` 自己
+    '..',          # `<Output>` 的**父目录**
+    'a/b',         # 静默钻进子目录
+    'a\\b',
+    '../别的书_9',  # 越出去落到另一棵树上
+    'C:/x',        # `os.path.join` 遇到带盘符的第二段会**整个丢弃** base
+    '/x',
+    '\x00x',
+])
+def test_a_book_id_can_never_climb_out_of_the_output_dir(bad):
+    """⭐⭐ 产物相对路径那一侧早有闸（`_check`），而书 id 这一侧一条都没有。
+
+    于是 `<Output>` 后面拼的是一个**完全没查过**的字符串：
+    `sid='..'` 定位到 Output 的父目录，`sid=''` 定位到 Output 自己，
+    `sid='C:/x'` 直接落到另一个盘——而 `ArtifactStore` 会在那里照常读写。
+    接上 API / CLI 之后，这些各自都是一个任意目录读写入口。
+    """
+    base = _output_with('书名_123')
+    with pytest.raises(PathRefused):
+        paths.find_novel_dir(base, bad)
+    # `resolve_novel_dir` 也不许把它兜成「上游还没跑」——那是另一件事
+    with pytest.raises(PathRefused):
+        paths.resolve_novel_dir(base, bad)
+
+
+def test_a_legitimate_id_still_resolves_and_a_missing_one_still_returns_none():
+    """加闸不许伤到正路，也不许把「找不到」变成异常。
+
+    ⚠ 「找不到」刻意返回 `None`：原型找不到就 `sys.exit`，
+    而对**长驻服务**那是致命的——一次「这本书还没跑 stage1」会杀掉整个队列。
+    """
+    base = _output_with('书名_123', '我的妻子')
+    assert paths.find_novel_dir(base, '123') == base / '书名_123'
+    assert paths.find_novel_dir(base, '我的妻子') == base / '我的妻子'   # 无 id 的书，sid = 书名
+    assert paths.find_novel_dir(base, '999') is None
+    from novel.errors import UpstreamMissing
+    with pytest.raises(UpstreamMissing):
+        paths.resolve_novel_dir(base, '999')
+
+
+def test_one_id_matching_two_directories_is_refused_by_name():
+    """⭐ **F-088：同一本书裂成两个目录，没有任何一层会报错。**
+
+    原来是 `sorted()` 之后取第一个——于是产地建 `Test_book_<id>/`、
+    消费方找 `book_<id>/`，两边都不出声。静默挑一个不是「容错」，
+    是把一个人能修的问题变成一个查不出来的问题。⇒ 报出来，并把候选**都**列上。
+    """
+    base = _output_with('书名_123', '另一个书名_123')
+    with pytest.raises(PathRefused) as e:
+        paths.find_novel_dir(base, '123')
+    assert '书名_123' in str(e.value) and '另一个书名_123' in str(e.value), \
+        '不把候选都列出来，人就不知道该去合并哪两个'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 二、产物相对路径的准入
 # ─────────────────────────────────────────────────────────────────────────────
 

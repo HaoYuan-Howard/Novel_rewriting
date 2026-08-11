@@ -116,23 +116,88 @@ def dirname_roundtrip_errors(title: str, sid: str) -> list[str]:
     return errs
 
 
+def check_sid(sid: str) -> str:
+    """书 id 的准入。**它是目录名的一整段，不是一条路径**——五条各挡一种越界。
+
+    ⚠⚠ 产物相对路径那一侧早就有闸（`_check`），而书 id 这一侧一条都没有，
+    于是 `<base>` 后面拼的是一个**完全没查过**的字符串。实测四种走法：
+
+      · `sid=''`       ⇒ `os.path.join(base, '')` 是 `<base>/` 本身
+                         ⇒ **每一本书都定位到 Output 根**，`ArtifactStore` 在那里读写；
+      · `sid='..'`     ⇒ 定位到 Output 的**父目录**；
+      · `sid='a/b'`    ⇒ 静默钻进子目录，`..` 混在中间还能一路往上；
+      · `sid='C:/x'`   ⇒ `os.path.join` 遇到带盘符的第二段会**整个丢弃 `base`**，
+                         落点与 Output 再无关系。
+    接上 API / CLI 之后，这四条各自都是一个任意目录读写入口。
+
+    ⚠ 它与 `_check` **不合成一个**：那一份查的是「相对书目录的多级路径」，
+    这一份查的是「目录名里的一段」，形状不同——硬合成一个会让两边的规则互相污染。
+    """
+    key = str(sid)
+    if not key or key != key.strip():
+        raise PathRefused(
+            f'书 id 为空或带首尾空白：{sid!r}。空 id 会让 `os.path.join(base, "")` 返回 '
+            f'`<Output>` 本身 ⇒ 每一本书都定位到 Output 根，而读写照常发生')
+    if _CTRL.search(key):
+        raise PathRefused(f'书 id 里有控制字符：{sid!r}')
+    if '/' in key or '\\' in key:
+        raise PathRefused(
+            f'书 id 里有路径分隔符：{sid!r}。id 是目录名的**一整段**，不是一条路径——'
+            f'带分隔符就能静默钻出 `<Output>`')
+    if key in ('.', '..'):
+        raise PathRefused(f'书 id 是 {sid!r}，它定位到的是 `<Output>` 自己或它的父目录')
+    if re.match(r'^[A-Za-z]:', key):
+        raise PathRefused(
+            f'书 id 带盘符：{sid!r}。`os.path.join` 遇到带盘符的第二段会**整个丢弃** base，'
+            f'落点与 `<Output>` 再无关系')
+    return key
+
+
+def _is_under(base: str, cand: str) -> bool:
+    """`cand` 真的在 `base` 底下吗。**不用 `commonpath`**——它在 Windows 上跨盘抛 `ValueError`。"""
+    b = os.path.normcase(os.path.abspath(base)).rstrip('\\/') + os.sep
+    c = os.path.normcase(os.path.abspath(cand))
+    return c.startswith(b)
+
+
 def find_novel_dir(base: str | os.PathLike[str], sid: str) -> Path | None:
     """按不可变 id 定位 per-novel 目录：`<base>/<id>/` 或 `<base>/<*_id>/`。**找不到返回 `None`。**
 
     `glob.escape`：sid 现在可能是书名（无 id 的书），而书名里的 `[` / `]` 在 glob 里是字符类。
 
-    ⚠ **它刻意不抛异常。** 原型的对应函数找不到就 `sys.exit`，那对一个节点是对的
+    ⚠ **它刻意不抛「找不到」。** 原型的对应函数找不到就 `sys.exit`，那对一个节点是对的
     （上游没跑就该停），对**长驻服务**却是致命的：一次「这本书还没跑 stage1」
     会杀掉整个队列。于是 Web 层自己写了第二份匹配逻辑，两份立刻分了家
     （原型给这里加的 `glob.escape` 那边没有）。
     ⇒ **规则留一份，「找不到怎么办」交给调用方**（要终止的用 `resolve_novel_dir`）。
+
+    ⚠⚠ **「找不到」与另外两件事不是一回事，那两件必须抛**：
+      ① **id 本身不合法**（`check_sid`）——它不会因为等一会儿就变合法；
+      ② **一个 id 匹配到多个目录**——这正是本模块开头那条 F-088
+         「同一本书裂成两个目录，**没有任何一层会报错**」。原来是 `sorted()` 之后取第一个，
+         于是产地写进 A、消费方读到 B，两边都不出声。
+         静默挑一个不是「容错」，是把一个人能修的问题变成一个查不出来的问题。
     """
     base = os.fspath(base)
-    exact = os.path.join(base, str(sid))
+    key = check_sid(sid)
+
+    exact = os.path.join(base, key)
     cands = ([exact] if os.path.isdir(exact) else []) \
-        + sorted(glob.glob(os.path.join(glob.escape(base), f'*_{glob.escape(str(sid))}')))
-    hit = next((c for c in cands if os.path.isdir(c)), None)
-    return Path(hit) if hit else None
+        + sorted(c for c in glob.glob(os.path.join(glob.escape(base), f'*_{glob.escape(key)}'))
+                 if os.path.isdir(c))
+    # 兜底断言：`check_sid` 之后越界应当已不可能，留着是因为这一处出事**不会报错**，
+    # 只会安静地读写到别处去。
+    cands = [c for c in cands if _is_under(base, c)]
+
+    if not cands:
+        return None
+    if len(cands) > 1:
+        raise PathRefused(
+            f'id={key} 在 {base} 下匹配到 {len(cands)} 个目录：{cands}。'
+            f'⚠ 这正是 F-088：**同一本书裂成两个目录，没有任何一层会报错**——'
+            f'产地建了一个、消费方找到另一个。请先把它们合并/改名（只有人能决定留哪个），'
+            f'别让定位这一步替你猜')
+    return Path(cands[0])
 
 
 def resolve_novel_dir(base: str | os.PathLike[str], sid: str) -> Path:
