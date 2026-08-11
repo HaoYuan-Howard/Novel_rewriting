@@ -122,6 +122,28 @@ class ArtifactStore:
         self.ctx.record_judged(paths.check_rel_deep(rel), fp)
         return obj, fp, consumed
 
+    def read_own(self, model: type[M], rel: str) -> tuple[M, Any]:
+        """读**本节点自己产的那一份**（复检 / 重算 / 提升前要先看看它）。
+        返回 `(模型, 盘上原始 dict)`。
+
+        ⚠⚠ **它刻意不记来源边，这是本方法存在的全部理由。**
+        `inputs` 回答的是「我这次产出照哪些**上游**算的」——
+        把产物自己记成自己的上游是**假账**，而且那条边永远显示对得上。
+
+        ⚠ 它**不是**「绕过唯一读路」的口子：字节读取、解码、JSON 解析、模型校验
+        走的还是同一条路（`_read_bytes` / `_loads` / `_validate`），
+        少的只有 `record_edge` 那一行。原型这里是**裸 `json.load`**，
+        于是解码与校验那两道也一起绕过去了。
+
+        ⚠ **同时返回原始 dict** 是有用的：判据跑在**模型之前**的那份 dict 上
+        （新契约把八维做成了 `Field(min_length=1)`，模型化之后 `required` 必然全绿，
+        而按「判据 vs 载体按失败成本划」它该留在判据侧——载体拒收要再花一次钱，
+        判据拦下是 0 成本自救）。见 `novel/stages/stage3/checks.py` 开头那段。
+        """
+        raw = self._read_bytes(rel)
+        data = self._loads(rel, raw)
+        return self._validate(model, rel, data), data
+
     def read_text(self, rel: str) -> str:
         """读一份**字节形态**产物（`clean_text.txt` / `draft.md` / `book.txt`）。记边。
 

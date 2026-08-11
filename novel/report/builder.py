@@ -108,6 +108,8 @@ def build(*, sid: str, node: str, freshness: FreshnessReport,
             rule=r.rule, sev=r.sev, status=status, item=r.item, requirement=r.requirement,
             findings=list(o.findings) if o is not None else [],
             why=why,
+            # 判据 31：绿灯必须报出自己的分母。`skipped` 那一行天然没有——它没扫。
+            scanned=o.scanned if o is not None else None,
             # `wordlist=True` ⇒ **永远打印基线**（`Q-9`）。注册期已经拦过一次
             # （`rules.py::_validate` ⑤），报告这一侧原样带出来，不重算也不省略。
             baseline=r.baseline,

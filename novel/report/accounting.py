@@ -41,9 +41,16 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     'stage0': (),
     'stage1': (),
     'stage2': (),
-    # stage3 的三个键在 C 期随判据一起填（`stage3.md` §五「这三个键一个出口都没有」
-    # 就是这一格要还的那笔账）。
-    'stage3': (),
+    # ⚠⚠ **这三个键就是 `stage3.md` §五 记的那笔账**：实跑三本 `--check-only`，
+    #    报告里 `attempts` / `revalidated` / `gates_skipped` **一行都没有**，
+    #    而它们记的恰好是最该被人看见的三件事。这一格把账还上。
+    'stage3': (
+        AccountingSpec('attempts', '这份稿第几次才产对的？返工改了什么？'),
+        AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
+        # 第三个尤其要紧：它是判据 36 那整套设计的**唯一痕迹**，而「闸门没跑成」
+        # 与「闸门跑过没事」正是 `Q-2` 要求必须能区分的两件事。
+        AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
+    ),
     'stage4': (),
     'stage5': (),
     'stage6': (),

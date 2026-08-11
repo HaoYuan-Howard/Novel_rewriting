@@ -68,8 +68,28 @@ def test_wordlist_rule_must_declare_its_baseline():
     Registry().register(_ok(wordlist=True, baseline='头牌 0/17，三岁 2/40；人读真违规 6/17'))
 
 
-def test_registry_starts_empty():
-    """判据随各 stage 移植过来时才注册。现在是空的，这是对的，不是漏了。"""
+def test_registry_covers_exactly_the_ported_stages():
+    """**两个方向同时钉住。**（它换掉了 `test_registry_starts_empty`——那条在
+    stage3 进 `PORTED_STAGES` 那一刻必然红，而它守的东西这一条全都守着，还多守一个方向。）
+
+    · 注册了却没进 `PORTED_STAGES` ⇒ 正向覆盖率**不会查它**，判据白写；
+    · 进了 `PORTED_STAGES` 却没注册 ⇒ 那张表在**说谎**，正向覆盖率成了摆设。
+    """
     from contracts.rules import PORTED_STAGES, REGISTRY
-    assert len(REGISTRY) == 0
-    assert PORTED_STAGES == frozenset()
+    assert {r.stage for r in REGISTRY.all()} == set(PORTED_STAGES)
+    assert len(REGISTRY) > 0, '注册表空了——`contracts/judges/__init__.py` 多半没被 import'
+
+
+def test_the_judges_package_declares_what_it_loaded():
+    """`LOADED` 与 `PORTED_STAGES` 分家 ⇒ 有一层的判据行写了却没被 import，
+    而**没被 import 的判据行与不存在没有区别**。"""
+    from contracts.judges import LOADED
+    from contracts.rules import PORTED_STAGES
+    assert set(LOADED) == set(PORTED_STAGES)
+
+
+def test_registering_a_stage_outside_the_ported_set_is_visible():
+    """守卫的守卫：上面那条靠的是集合相等，而集合相等在**两边都空**时也成立。"""
+    from contracts.rules import PORTED_STAGES, REGISTRY
+    assert REGISTRY.of_stage('stage3'), 'stage3 的判据行一条都没注册上'
+    assert 'stage3' in PORTED_STAGES

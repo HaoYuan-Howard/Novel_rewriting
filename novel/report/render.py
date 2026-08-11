@@ -71,6 +71,9 @@ def _rules(rules: list[RuleLine]) -> list[str]:
         if r.why:
             head += f' —— {r.why}'
         out.append(head)
+        if r.scanned:
+            # 判据 31：一个不知道自己扫了多少的绿灯没有判别力。
+            out.append(f'        扫过：{r.scanned}')
         if r.baseline:
             # `Q-9`：词表类判据**永远打印基线**。没有基线的词表判据等于不知道自己在说什么。
             out.append(f'        基线：{r.baseline}')

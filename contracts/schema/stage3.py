@@ -320,3 +320,23 @@ class StyleGrounding(StrictModel):
         if any(not h.strip() for h in self.surface_habits):
             raise ValueError('surface_habits 里有空条目——空条目会被下游当成一条要照做的手法')
         return self
+
+
+class StyleResponse(StrictModel):
+    """**模型写的那三个键**，`ask_json(model_cls=...)` 收的就是它。
+
+    ⚠⚠ **它与 `StyleGrounding` 不是同一个东西，那正是它存在的理由。**
+    产物还有 `measurable`（代码算的）与 `_provenance`（来源账），**一个字都不经模型**。
+    拿产物模型去收响应，等于要求模型自己产来源账——而那份账的全部价值在于**不是它写的**。
+
+    ⚠⚠ **`require` 从本模型的必需顶层键派生 ⇒ 三个键一个都漏不掉。**
+    原型这个调用点写的是 `require=('voice', 'surface_habits')`——**漏了 `hook_style`**
+    （`README.md` 记着四个调用点的实况：stage2 全书漏 `arc` · stage3 漏 `hook_style`）。
+    漏传不报错，它只是**静默停掉一条 HARD 闸门**（判据 39）：模型没写 `hook_style`
+    时那一档不会重试、不会降级，直接落一份缺键的稿下去。
+    派生之后这件事**结构上不可能再发生**。
+    """
+
+    voice: Voice
+    surface_habits: list[str] = Field(min_length=1)
+    hook_style: HookStyle

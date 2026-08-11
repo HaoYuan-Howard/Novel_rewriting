@@ -30,9 +30,15 @@ RepairBucket = Literal['UNIQUE', 'FREE', 'NONE']
 
 _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
 
-#: 已经移植完、判据应当齐备的 stage。**空的**——移植一层加一层。
+#: 已经移植完、判据应当齐备的 stage。移植一层加一层。
 #: ⚠ 加进来之前先确认那一层的判据真的全注册了：这张表一旦说谎，正向覆盖率就成了摆设。
-PORTED_STAGES: frozenset[str] = frozenset()
+#:
+#: ⚠⚠ **`stage3` 是 2026-08-11（骨架 C 期）加进来的第一层**，加进来那一刻同时发生四件事：
+#: `test_registry_starts_empty` 红（已换成两侧夹死的
+#: `test_registry_covers_exactly_the_ported_stages`）· 正向覆盖率从 skip 变真 ·
+#: `ask_json` 调用点守卫从 skip 变真 · `test_no_rule_claims_a_non_judge_requirement` 变真真。
+#: **那是好事**——它们本来就欠着，只是 `REGISTRY` 空着的时候一条都红不了。
+PORTED_STAGES: frozenset[str] = frozenset({'stage3'})
 
 
 @dataclass(frozen=True)

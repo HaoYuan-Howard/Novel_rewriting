@@ -102,6 +102,13 @@ class RuleLine(FrozenModel):
     #: 「实现根本不存在」与「实现在，但这条路径没走到」分不开就没法判断该不该修。
     why: str | None = None
 
+    #: 这一次**扫了多少**（`8 个文本字段` / `拿 22 个专名扫过 20 个字段` / `body 14 项`）。
+    #:
+    #: ⚠ **判据 31：一个不知道自己扫了多少的绿灯没有判别力。** 一条判据打 `[OK]`
+    #: 而没人知道它的分母，与它根本没跑在报告上长得一样近。
+    #: ⇒ 它对**任何** `status` 都允许（`skipped` 那一行天然没有，因为它没扫）。
+    scanned: str | None = None
+
     #: 词表类判据的基线命中率。`wordlist=True` 时**必填**（`Q-9`：永远打印基线）。
     baseline: str | None = None
 
@@ -132,6 +139,10 @@ class RuleLine(FrozenModel):
             )
         if not needs_why and self.why:
             raise ValueError(f'{self.rule}: status={self.status!r} 不该带 why={self.why!r}')
+        # ④b 没跑成的那一行不可能扫过任何东西。
+        if self.status == 'skipped' and self.scanned:
+            raise ValueError(
+                f'{self.rule}: status=skipped 却报了扫描量 {self.scanned!r}——它这一次没有执行过')
         # ⑤ 每条 finding 都得是这一行自己的。串行归并时错位过一次，代价是结论指错判据。
         bad = sorted({f.rule for f in self.findings} - {self.rule})
         if bad:

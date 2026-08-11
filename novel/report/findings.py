@@ -35,6 +35,10 @@ class Outcome:
     #: 就会打一盏**保证会亮的绿灯**（`stage3.md` §六 设计要点①）。
     unver_why: str | None = None
 
+    #: 这一次**扫了多少**。判据 31：一个不知道自己扫了多少的绿灯没有判别力。
+    #: ⚠ 它由**实现**给，因为只有实现知道自己的分母是什么（字段数？专名数？项数？）。
+    scanned: str | None = None
+
     def __post_init__(self) -> None:
         if self.unver_why is not None and not self.unver_why.strip():
             raise ValueError(
@@ -45,11 +49,12 @@ class Outcome:
             raise ValueError(f'{self.rule}: 产出里混进了别的判据的结论：{bad}')
 
 
-def unverifiable(rule: str, why: str) -> Outcome:
+def unverifiable(rule: str, why: str, *, scanned: str | None = None) -> Outcome:
     """便利构造：这一次够不着。**`why` 必填**，理由见 `Outcome.unver_why`。"""
-    return Outcome(rule=rule, unver_why=why)
+    return Outcome(rule=rule, unver_why=why, scanned=scanned)
 
 
-def ran(rule: str, findings: tuple[Finding, ...] | list[Finding] = ()) -> Outcome:
+def ran(rule: str, findings: tuple[Finding, ...] | list[Finding] = (),
+        *, scanned: str | None = None) -> Outcome:
     """便利构造：跑过了，产出是这些（可以是空的——那就是「跑了没命中」）。"""
-    return Outcome(rule=rule, findings=tuple(findings))
+    return Outcome(rule=rule, findings=tuple(findings), scanned=scanned)
