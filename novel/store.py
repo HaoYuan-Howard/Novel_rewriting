@@ -128,11 +128,15 @@ class ArtifactStore:
         ⚠ **按字节读再自己解码**，不用文本模式：文本模式会把 `\\r\\n` 悄悄翻成 `\\n`，
         于是「盘上那份带 CRLF」这件事在读的一侧**看不见**，
         而写的一侧刚刚为它立了一道闸（`write_text`）。两侧口径必须一致。
+
+        ⚠ **先解码，再记边。** 反过来的话，一份解不出来的文件会在本次跑的来源账里
+        留下一条边——那条边说的是「我读过它」，而我们其实一个字都没读到。
         """
         key = paths.input_key(rel)
         raw = self._read_bytes(rel)
+        text = self._decode(rel, raw)
         self.ctx.record_edge(key, InputEdge(file=prov.fingerprint_bytes(raw), consumed=None))
-        return raw.decode('utf-8')
+        return text
 
     def _read_bytes(self, rel: str) -> bytes:
         p = self.path(rel)
@@ -145,10 +149,28 @@ class ArtifactStore:
             raise ArtifactUnreadable(f'{self.ctx.node}: 读不了 {rel}：{e!r}') from e
 
     @staticmethod
-    def _loads(rel: str, raw: bytes) -> Any:
+    def _decode(rel: str, raw: bytes) -> str:
+        """字节 → 文本。**解不出来是显式终态**，不是一条裸 `UnicodeDecodeError`。
+
+        ⚠ `_loads` 早就把 `UnicodeDecodeError` 兜成 `ArtifactUnreadable` 了，
+        而 `read_text` 那一侧原来是裸 `raw.decode('utf-8')`——同一件事在两条读路上
+        一条有词汇、一条没有。`errors.py` 明写「**不设默认异常**，每一处终态都要选一个具体的类」，
+        而只有 `novel/cli/` 那一层会把这些类翻译成退出码：
+        漏网的那一条到了 CLI 就是一段栈，说不出「哪个节点、要跑什么、盘上哪份坏了」。
+        """
         try:
-            return json.loads(raw.decode('utf-8'))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            return raw.decode('utf-8')
+        except UnicodeDecodeError as e:
+            raise ArtifactUnreadable(
+                f'{rel} 不是 UTF-8：{e!r}。'
+                f'⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / `book.txt`）盘上一律 UTF-8；'
+                f'别把它当成「上游还没产出」——那会把一次成功的付费跑报成失败') from e
+
+    @classmethod
+    def _loads(cls, rel: str, raw: bytes) -> Any:
+        try:
+            return json.loads(cls._decode(rel, raw))
+        except json.JSONDecodeError as e:
             raise ArtifactUnreadable(
                 f'{rel} 不是合法 JSON：{e!r}。'
                 f'⚠ 别把它当成「上游还没产出」——那会把一次成功的付费跑报成失败') from e

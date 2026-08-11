@@ -320,6 +320,39 @@ def test_read_text_does_not_translate_newlines_either():
     assert ArtifactStore(_ctx(base)).read_text('stage7/book.txt') == 'a\r\nb\n'
 
 
+def test_a_non_utf8_byte_artifact_is_an_explicit_terminal_state():
+    """⭐ 解不出来的字节形态产物是 `ArtifactUnreadable`，**不是一条裸 `UnicodeDecodeError`**。
+
+    ⚠ `_loads` 早就把 `UnicodeDecodeError` 兜成显式终态了，而 `read_text` 那一侧
+    是裸 `raw.decode('utf-8')`——同一件事在两条读路上一条有词汇、一条没有。
+    `errors.py` 明写「**不设默认异常**，每一处终态都要选一个具体的类」，
+    而只有 `novel/cli/` 会把这些类翻译成退出码：漏网的那一条到了 CLI 就是一段栈。
+
+    ⚠ 顺带钉住**记边在解码之后**：一份读不出来的文件不许在来源账里留下
+    一条说「我读过它」的边。
+    """
+    base = _book()
+    (base / '书名_123' / 'stage7').mkdir()
+    (base / '书名_123' / 'stage7' / 'book.txt').write_bytes(b'\xff\xfe\x00\x41')
+    ctx = _ctx(base)
+    with pytest.raises(ArtifactUnreadable, match='UTF-8'):
+        ArtifactStore(ctx).read_text('stage7/book.txt')
+    assert ctx.edges == {}, '一份一个字都没读到的文件，在来源账里留下了一条边'
+
+
+def test_a_non_utf8_json_artifact_still_says_it_is_not_utf8_not_bad_json():
+    """两条报错必须分得开：**不是 UTF-8** 与 **不是合法 JSON** 是两种不同的坏法。
+
+    合成一句之后，「盘上这份编码错了」会被当成「模型吐了段坏 JSON」去查。
+    """
+    base = _book(payload=b'\xff\xfe\x00\x41')
+    with pytest.raises(ArtifactUnreadable, match='UTF-8'):
+        ArtifactStore(_ctx(base)).read(Loose, UPSTREAM)
+    base2 = _book(payload=b'{"sections": [')
+    with pytest.raises(ArtifactUnreadable, match='合法 JSON'):
+        ArtifactStore(_ctx(base2)).read(Loose, UPSTREAM)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 五、`.INVALID`、`gates_skipped`、提升路
 # ─────────────────────────────────────────────────────────────────────────────
