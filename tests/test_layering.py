@@ -205,10 +205,202 @@ def test_the_orchestrator_never_imports_the_web_stack():
     靠人守；靠人守的分层实测是守不住的（同一份 docstring 里那条
     「Web 进程只读不写」就已经被 `jobs.py` 自己破了）。
     """
-    bad = [(_rel(p), sorted(_imports(p) & {'fastapi', 'starlette', 'uvicorn'}))
-           for p in _orchestrator_files()
-           if _imports(p) & {'fastapi', 'starlette', 'uvicorn'}]
+    bad = [(_rel(p), sorted(_imports(p) & _WEB_STACK))
+           for p in _orchestrator_files() if _imports(p) & _WEB_STACK]
     assert not bad, f'编排层 import 了 HTTP 栈：{bad}——那一层在 E 期，不在这里'
+
+
+# ───────────────────────── HTTP 层（骨架 E5）─────────────────────────
+
+_WEB_STACK = {'fastapi', 'starlette', 'uvicorn'}
+
+#: 允许 import web 栈的文件。**每一条都要写得出理由**（形态同 `_WRITE_ALLOWED`）。
+_WEB_STACK_ALLOWED = {
+    'novel/api/app.py': '服务本体：路由挂载、CSRF 中间件、异常归一。这一层就是它',
+    'novel/api/__main__.py': '起进程（`uvicorn.run`）。**绑定地址也只在这里出现一次**',
+    'novel/api/deps.py': '路由共用的两道边界校验，要拿 `Request` 与 `HTTPException`',
+    'novel/api/routes/': '九个端点。`APIRouter` 是它们的定义方式',
+}
+
+
+def _api_files() -> list[str]:
+    files = [p for p in _runtime_files() if _rel(p).startswith('novel/api/')]
+    assert len(files) >= 4, f'只扫到 {len(files)} 个 API 层模块——路径多半错了'
+    return files
+
+
+def _view_files() -> list[str]:
+    files = [p for p in _runtime_files() if _rel(p).startswith('novel/views/')]
+    assert len(files) >= 2, f'只扫到 {len(files)} 个视图层模块——路径多半错了'
+    return files
+
+
+def test_only_the_api_layer_imports_the_web_stack():
+    """web 栈只许出现在白名单里那几个文件。
+
+    ⚠ 一条 `import fastapi` 出现在别处，代价不是风格问题：那一层从此**没装 fastapi
+    就 import 不进来**，于是它的测试要么装整个 web 栈、要么退化成 `importorskip`
+    ——而 `importorskip` 跳过去的东西看起来像绿的。
+    """
+    bad = []
+    for p in _runtime_files():
+        rel = _rel(p)
+        if any(rel.startswith(k) for k in _WEB_STACK_ALLOWED):
+            continue
+        if _imports(p) & _WEB_STACK:
+            bad.append((rel, sorted(_imports(p) & _WEB_STACK)))
+    assert not bad, (
+        f'这些地方 import 了 HTTP 栈：{bad}\n'
+        f'→ 要么挪进 `novel/api/`，要么把它连同理由加进 `_WEB_STACK_ALLOWED`')
+    # 守卫的守卫：一个 fastapi import 都没扫到 ⇒ AST 走错目录，上面那条会静静地绿。
+    assert any(_imports(p) & {'fastapi'} for p in _api_files())
+
+
+def test_the_orchestrator_can_never_be_whitelisted_for_the_web_stack():
+    """⚠ 上面那张白名单**是可以被顺手加一行的**，而编排层进不进它是一次**结构决定**。
+
+    `R-11.3`：一切写操作走子进程，而编排层正是那条缝所在的地方。
+    它一旦够得到 HTTP 栈，「服务进程只读」与「节点跑在子进程里」这两条
+    就没有任何结构上的东西挡着了。
+    """
+    bad = sorted(k for k in _WEB_STACK_ALLOWED if k.startswith('novel/orchestrator/'))
+    assert not bad, f'编排层被加进了 web 栈白名单：{bad}——那不该是一行 diff 的事'
+
+
+def test_contracts_never_imports_the_web_stack():
+    """契约层不许背上 web 栈（`contracts/schema/api.py` 落地之后才有意义）。
+
+    ⚠ 理由是具体的：离线产前端 TS 类型的脚本要 import 契约层，
+    而它**一行 HTTP 都不发**——不该为此装整个 web 栈。
+    """
+    bad = [(_rel(p), sorted(_imports(p) & _WEB_STACK)) for p in _py_files('contracts')
+           if _imports(p) & _WEB_STACK]
+    assert not bad, f'契约层 import 了 HTTP 栈：{bad}'
+    # 守卫的守卫：`api.py` 得真的在那儿被扫到。
+    assert any(_rel(p).endswith('schema/api.py') for p in _py_files('contracts'))
+
+
+#: 经 store / 事件流写盘的那些方法名。
+#:
+#: ⚠ 裸写盘（`write_bytes` / `mkdir` / `open(mode='w')`…）已由
+#: `test_only_the_store_writes_to_disk` 守着——API 与视图层不在它的白名单里。
+#: 这里补的是**另一半**：调白名单模块里的写方法。那一半绕不过上面那条守卫，
+#: 因为它调的正是被允许写的那几个模块。
+_STORE_WRITERS = {'write', 'write_text', 'write_invalid', 'promote_invalid',
+                  'archive_round', 'append_event'}
+
+
+def _writer_hits(path: str) -> list[str]:
+    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    return [f'{_rel(path)}:{n.lineno} .{n.func.attr}()' for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr in _STORE_WRITERS]
+
+
+def test_the_api_and_view_layers_never_write_anything():
+    """⭐ `R-11.3`：**服务进程绝不落产物盘。**
+
+    ⚠ E 期这两层是**一个写盘调用都没有**（唯一的 POST 是 0 成本的 preview）。
+    F 期加 `POST /api/jobs` 时这条要放宽成「只许经 `jobs.run` 写」——
+    **那必须是一次显式的、带理由的改动**，正是白名单形态存在的意义。
+    """
+    bad = [h for p in _api_files() + _view_files() for h in _writer_hits(p)]
+    assert not bad, f'API / 视图层往盘上写了东西（`R-11.3`）：{bad}'
+    # 守卫的守卫（**探测器自测**）：同一个探测器在 `store.py` 上必须抓得到东西，
+    # 否则「一条都没抓到」既可能是干净、也可能是探测器坏了，而两者长得一样。
+    assert _writer_hits(os.path.join(ROOT, 'novel', 'store.py')), '探测器在 store.py 上一条都没抓到'
+
+
+def test_the_service_process_cannot_spend_money():
+    """⭐ `R-11.3` 的孪生条：**一切花钱的操作走子进程** ⇒ 服务层结构上发不出请求。
+
+    ⚠ 这也是 `novel/api/errors.py` 里 `UNREACHABLE_OVER_HTTP` 那张表成立的前提：
+    LLM 那一族异常越不过 HTTP 边界，因为它们只在子进程里抛。
+    ⚠ 查的是**直接** import：`novel/views/stage3.py` 经 `novel.stages.stage3.style`
+    传递地够得到 `novel.llm.client`（那个模块要它跑付费路）。传递闭包这条守不住，
+    而**主保证是调用面**——E 期没有一条端点会构造 `LlmClient`。
+    """
+    bad = []
+    for p in _api_files() + _view_files():
+        leaked = sorted(m for m in _full_imports(p) if m.startswith('novel.llm'))
+        if leaked:
+            bad.append((_rel(p), leaked))
+    assert not bad, f'服务层直接 import 了 LLM 层：{bad}'
+
+
+def test_the_view_layer_cannot_reach_the_judgement_layer():
+    """⭐ `R-11.4` 的第二道：视图层够不到判官，于是**顺手 `build()` 一份报告**做不到。
+
+    ⚠⚠ **说清这道守卫的边界，免得读的人高估它**：`novel/views/stage3.py`
+    import 了 `novel.stages.stage3.style`，而那个模块自己 import 了 `novel.report`
+    ——所以「够不到」在**传递闭包**上并不成立，本条查的是**直接** import。
+    ⇒ `R-11.4` 在这一层的**主保证是类型**：`contracts/schema/api.py::StyleView`
+    里根本没有 `badge` / `passed` / `counts` 这几个格子
+    （`test_schema_api.py::test_the_api_models_never_carry_a_verdict` 钉着），
+    **视图没有地方放一个判定**。
+    """
+    judge = ('novel.report', 'contracts.judges')
+    bad = [(_rel(p), sorted(m for m in _full_imports(p) if m.startswith(judge)))
+           for p in _view_files() + _api_files()
+           if any(m.startswith(judge) for m in _full_imports(p))]
+    assert not bad, (
+        f'服务层直接 import 了判定层：{bad}\n'
+        f'→ **转发**一份别人算好的报告与**造**一份报告是两件事'
+        f'（`novel/api/routes/checks.py` 只做前者）')
+    # 守卫的守卫：扫错目录时上面那条会静静地绿。
+    assert any('contracts.schema.api' in _full_imports(p) for p in _view_files())
+
+
+def test_the_api_layer_has_no_second_argv_builder():
+    """`R-11.8`：**展示与执行共用同一个构造函数** ⇒ API 层不许自己拼一条命令。
+
+    原型那条裂缝是具体的：前端用 `argv.slice(4)` 硬编码切掉解释器前缀来渲染
+    （`Web/static/app.js:291`），`build_argv` 的前缀长度一变它就**静默错位**。
+    ⇒ 这几个字面量出现在 API 层，就说明有人在这里重拼 argv。
+    """
+    marks = ("'novel.cli'", '"novel.cli"', "'-X'", 'sys.executable')
+    bad = []
+    for p in _api_files():
+        src = open(p, encoding='utf-8').read()
+        tree = ast.parse(src, filename=p)
+        code = {n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                and id(n) not in _docstring_ids(tree)}
+        if {'novel.cli', '-X'} & code or 'sys.executable' in {
+                f'{n.value.id}.{n.attr}' for n in ast.walk(tree)
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)}:
+            bad.append(_rel(p))
+    assert not bad, f'这些地方像是在自己拼 argv：{bad}（应当只调 `build_steps`）。标记={marks}'
+
+
+def test_the_api_package_init_imports_nothing():
+    """⭐ `novel/api/__init__.py` **必须是空的**，那是一条设计约束不是懒。
+
+    它一旦 re-export 了 `app`，`import novel.api.enums` 就会连带把 fastapi 拖进来
+    ——于是 E 期那几批本来跑得动的测试（enums / errors）全部退化成 `importorskip`，
+    **而 `importorskip` 跳过去的东西看起来像绿的**。
+    """
+    path = os.path.join(ROOT, 'novel', 'api', '__init__.py')
+    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    bad = [n.lineno for n in ast.walk(tree)
+           if isinstance(n, (ast.Import, ast.ImportFrom))
+           and not (isinstance(n, ast.ImportFrom) and n.module == '__future__')]
+    assert not bad, f'`novel/api/__init__.py` 有 import（第 {bad} 行）'
+
+
+def _docstring_ids(tree: ast.AST) -> set[int]:
+    """docstring 里那些字符串常量的 id。**扫代码不扫文档**——
+
+    这条纪律本身就要写在 docstring 里说清楚，拿字面 `in src` 去查，
+    第一个被判红的是解释这条纪律的那段话。
+    （从 `test_completeness_never_peeks_at_the_job_records` 提出来共用。）
+    """
+    return {id(n.body[0].value) for n in ast.walk(tree)
+            if isinstance(n, (ast.Module, ast.ClassDef,
+                              ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.body and isinstance(n.body[0], ast.Expr)
+            and isinstance(n.body[0].value, ast.Constant)
+            and isinstance(n.body[0].value.value, str)}
 
 
 def _full_imports(path: str) -> set[str]:
@@ -258,12 +450,8 @@ def test_completeness_never_peeks_at_the_job_records():
     tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
     #: ⚠ 扫**代码**不扫文档：这条纪律本身就要写在 docstring 里说清楚，
     #: 拿字面 `in src` 去查，第一个被判红的是解释这条纪律的那段话。
-    docstrings = {id(n.body[0].value) for n in ast.walk(tree)
-                  if isinstance(n, (ast.Module, ast.ClassDef,
-                                    ast.FunctionDef, ast.AsyncFunctionDef))
-                  and n.body and isinstance(n.body[0], ast.Expr)
-                  and isinstance(n.body[0].value, ast.Constant)
-                  and isinstance(n.body[0].value.value, str)}
+    #: （这段逻辑已提成 `_docstring_ids`，E 期那条禁 `0.0.0.0` 的守卫共用它。）
+    docstrings = _docstring_ids(tree)
     hits = [n.lineno for n in ast.walk(tree)
             if isinstance(n, ast.Constant) and isinstance(n.value, str)
             and '_service' in n.value and id(n) not in docstrings]
@@ -279,16 +467,33 @@ def test_completeness_never_peeks_at_the_job_records():
     assert 'ArtifactStore' in {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
 
 
+#: 允许拿 `sys.exit` 当终态的白名单。**只有【进程入口】那一层**，每条写得出理由。
+#:
+#: ⚠ 判准不是「哪个包」，是「这个文件是不是一个进程的最外层」：
+#: 到了那一层，异常已经没有别的调用方可以接住，把它翻成退出码是**唯一**的出路，
+#: 而退出码正是编排层判成败的依据（`R-12.3`）。
+_SYS_EXIT_ALLOWED = {
+    'novel/cli/': '节点跑法的进程入口。**全仓唯一把异常翻成退出码的地方**'
+                  '（`novel/cli/exit_codes.py` 是那四个数的唯一落点）',
+    'novel/api/__main__.py': '服务进程的入口（骨架 E5 加）。`--base` 敲错时要以非零退出——'
+                             '不这样的话，一个起不来的服务会以退出码 0 结束，'
+                             '而「起来了但没有书」与「参数敲错了」在那一刻长得一样。'
+                             '⚠ 它**只在 `if __name__ == "__main__"` 那一行**，'
+                             '`main()` 自己返回 int，所以它仍然可以被 import 进来测',
+}
+
+
 def test_the_runtime_never_uses_sys_exit():
     """显式终态用异常，不用 `sys.exit`。
 
     ⚠ `SystemExit` 是 `BaseException`，它**穿透 `except Exception`**——
-    原型正因如此才不得不把每个节点跑成子进程。只有 CLI 那一层可以把异常翻译成退出码。
+    原型正因如此才不得不把每个节点跑成子进程。只有**进程入口**那一层
+    可以把异常翻译成退出码。
     """
     bad = []
     for p in _runtime_files():
         rel = _rel(p)
-        if rel.startswith('novel/cli/'):
+        if any(rel.startswith(k) for k in _SYS_EXIT_ALLOWED):
             continue
         tree = ast.parse(open(p, encoding='utf-8').read(), filename=p)
         for n in ast.walk(tree):

@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+enums.py —— `GET /api/enums` 的**唯一**构造函数。纯函数：不碰盘、不碰网、不 import fastapi。
+
+【它要解决的病】`contracts/invariants.py` 自称是跨层取值域的唯一落点，而在本期之前
+它一个网络出口都没有。于是前端只好自己抄一份：`web/src/constants/vocabulary.ts`
+硬编码了 7 个联合类型、`web/src/constants/actions.ts` 手抄了一张 `WRITE_EFFECTS`
+并在注释里写着「迟早会漂」。**第 N 个落点必然分家**，那份注释是前端自己写的诊断书。
+
+【三个桶，每个公开常量恰好落一个】
+  桶一 · **自动发布**       —— 容器（tuple / dict）。键名 `NAME.lower()`
+  桶二 · `_CONSUMED`        —— 被某个合成键吃掉了，不再单独发
+  桶三 · `_WITHHELD`        —— 登记为不发，**每条写得出理由**
+  桶三的例外 `_PUBLISHED_SCALARS` —— 标量默认不发，除非登记并说明前端拿它做什么
+
+【为什么「发」是自动的而「不发」要手写 —— 这是本模块的全部承重点】
+两种烂法的**成本相同，方向相反**：
+
+  · 手写**发布清单** ⇒ **静默地烂**。新加一个常量，前端拿不到，于是前端自己硬编码一份，
+    而没有任何东西会出声——那正是 `invariants` 存在的理由要防的事。
+  · 手写**不发登记表** ⇒ **响亮地烂**。新加一个常量落不进任何桶，
+    `payload()` 当场抛 `ValueDomainRefused`，你必须选一个桶并写出理由。
+
+⚠ **标量为什么默认不发**：一个孤立的数字（`MIN_CHAPTERS` / `BODY_RATIO_MIN` /
+`DEEP_OVERLAP_MAX`…）对前端只有一个用途——**自己算一个结论**，而那就是第二个判官
+（`R-11.4`：界面不重算任何已经在校验器里的判据）。容器不一样：取值面、词表、映射表、
+区间，前端拿它渲染选项与图例，渲染不产生判定。
+
+⚠ **本模块的输出必须是抓包那 14 个键的超集**（`docs/REQUIREMENTS.md:125-127`）：
+`docs/design_brief/05_samples/enums.json` 是**现役原型后端的真实抓包**，
+`tests/test_api_enums.py` 拿它逐值对账。**那份抓包永远不许用本模块的输出覆盖**——
+覆盖之后那一族测试就变成拿 `invariants` 跟它自己比。
+"""
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+from contracts import invariants as inv
+from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS
+from novel.errors import ValueDomainRefused
+from novel.orchestrator.nodes import is_paid, step_label, would_write, write_effect
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 一、三张登记表
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: 桶二 —— 被某个**合成键**吃掉的常量。值是「它去了哪儿」。
+#:
+#: ⚠ **吃掉 = 不再单独发。** 同时发 `invent` 和 `invent_allow`，前端就有两处可取，
+#: 而两处必然在某次改动后指向不同的东西——这与本模块要消灭的病是同一个。
+_CONSUMED: dict[str, str] = {
+    'INVENT_ALLOW': 'invent.allow',
+    'INVENT_FORBID': 'invent.forbid',
+    'INVENT_PRINCIPLE': 'invent.principle',
+    'NODES': 'job_kinds + actions',
+}
+
+#: 桶三 —— 登记为**不发**。全是标量，且每一条的理由都是同一句的实例：
+#: **发过去等于请前端自己判**，而判定只许有一处（`R-11.4`）。
+#:
+#: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
+#: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
+_WITHHELD: dict[str, str] = {
+    # ── 分章（stage0 / stage1）的判据阈值与剥壳正则 ──
+    'NONBODY_LEAD_STRIP': '正则。发过去等于请前端自己剥壳，而剥出来的 core 是所有长度阈值的输入',
+    'NONBODY_TRAIL_STRIP': '同上',
+    'MIN_CHAPTERS': '判据阈值。前端拿到就能自己判「章数够不够」，而那条判据在 stage1',
+    'BODY_RATIO_MIN': '判据阈值（正文占比下限）',
+    'DROP_RATIO_MAX': '判据阈值（剔除占比上限）',
+    'NOISY_DUPLICATE_MIN': '判据阈值（重复行算噪声的次数下限）',
+    'NONBODY_HEAD_MAX_CP': '判据阈值（篇首非正文标记的最大码点数）',
+    'NONBODY_MID_MAX_CP': '判据阈值（篇中同上）',
+    'NONBODY_MARKER_WARN_CP': '判据阈值（长标记报警线）',
+    # ── 事件拍 ──
+    'SPEECH_TAG_MAX': '判据阈值（说话标签最大长度）',
+    'BEAT_MIN_CHARS': '分预算参数。⚠ 它与下面那条报警线是**故意的两个数**，'
+                      '发出去一个、前端用它当另一个，就把那次刻意的区分抹平了',
+    'BEAT_ALERT_MIN': '判据阈值（碎拍报警下限）',
+    'BEAT_ALERT_MAX': '判据阈值（长拍报警上限）',
+    # ── stage4 / stage5 ──
+    'LOCKED_OP': '「哪个 op 被锁死」是 stage4 的产地事实，**今天零消费方**；'
+                 'op 的取值面本身已经在 `ops` 里发了',
+    'DEEP_OVERLAP_MAX': '判据阈值（闭卷臂与原文的重合度上限）',
+    'STOP_REWRITE_AFTER': '返工护栏的轮次上限。它是**编排**参数，不是给人看的取值面',
+    'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',
+}
+
+#: 桶三的**例外** —— 标量里被显式放行的那几个。值说的是「前端拿它做什么」。
+#:
+#: ⚠ 没有这张表，`UNCOVERED_MIN_CHARS` 会被「标量默认不发」挡住，
+#: 而它**在抓包里**——超集测试当场红。那不是缺陷，是判据在逼这张表被写出来。
+_PUBLISHED_SCALARS: dict[str, str] = {
+    'UNCOVERED_MIN_CHARS': '抓包里有它。前端把它插值进一句说明文案'
+                           '（「未覆盖 ≥30 字的段」），**不做判定**',
+    'PARTIAL_MASK_NOTE': '`R-11.13` 要求界面**常驻**这句标注。'
+                         '它是一句话不是一个阈值，前端拿它只能显示',
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二、序列化 —— 认不出就当场拒
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _seq(name: str, value: Sequence[Any]) -> list[Any]:
+    """元组 → 列表。**要么全是字符串，要么全是数**，混的一律拒。
+
+    ⚠ 这条「同质」要求不是洁癖，它是 `NamedTuple` 的那道闸：`NodeSpec` 是 tuple 的子类，
+    元素是 `(str, str, bool, str, tuple, ...)`——混的。没有这条，它会被静默写成一个
+    **位置数组**发给前端，字段名全部丢掉而没有一层出声。
+    """
+    items = list(value)
+    if all(isinstance(x, str) for x in items):
+        return items
+    # ⚠ `bool` 是 `int` 的子类：不排掉它，`(True, False)` 会被当成一对数发出去。
+    if all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in items):
+        return items
+    raise ValueDomainRefused(
+        f'{name} 是个元组，但元素既不全是字符串也不全是数：{items!r}。'
+        f'⚠ `NamedTuple` 落到这里就是这个形状——它会被写成一个位置数组，'
+        f'字段名全丢。要发它请先给它一个合成键（见 `_CONSUMED`）')
+
+
+def _jsonable(name: str, value: Any) -> Any:
+    """取值面 → 可 JSON 化。**四种形状，认不出抛 `ValueDomainRefused`，不兜底。**"""
+    if isinstance(value, tuple):
+        return _seq(name, value)
+    if isinstance(value, dict):
+        bad_keys = [k for k in value if not isinstance(k, str)]
+        if bad_keys:
+            raise ValueDomainRefused(f'{name} 的键不是字符串：{bad_keys!r}')
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            if isinstance(v, str):
+                out[k] = v
+            elif isinstance(v, tuple):
+                out[k] = _seq(f'{name}[{k!r}]', v)
+            else:
+                raise ValueDomainRefused(
+                    f'{name}[{k!r}] 的值是 {type(v).__name__}，'
+                    f'发布器只认字符串与元组')
+        return out
+    raise ValueDomainRefused(
+        f'{name} 是 {type(value).__name__}，发布器只自动发**容器**（元组 / 字典）。'
+        f'⚠ 标量默认不发：一个孤立的数字对前端只有一个用途——自己算一个结论，'
+        f'而那是第二个判官（`R-11.4`）。'
+        f'确实要发就登记进 `_PUBLISHED_SCALARS` 并说明前端拿它做什么；'
+        f'不发就登记进 `_WITHHELD` 并写出理由。**不许只是不提它**')
+
+
+def public_constants() -> dict[str, Any]:
+    """`contracts.invariants` 里所有**公开**常量。
+
+    ⚠ `isupper()` 同时挡掉三类东西，都是有意的：import 进来的 `Final` / `NamedTuple`、
+    类型 `NodeSpec`、以及下划线开头的退役常量（`_RETIRED_GRAMMATICAL_PERSON`
+    ——它只用于读懂存量产物，发出去等于把一份死掉的取值面复活成现役的）。
+    """
+    return {n: v for n, v in vars(inv).items() if n.isupper() and not n.startswith('_')}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 三、三个合成键
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _invent() -> dict[str, Any]:
+    """三个常量合成一个键。**形状照抄抓包**（`allow` / `forbid` / `principle`）。"""
+    return {'allow': list(inv.INVENT_ALLOW),
+            'forbid': list(inv.INVENT_FORBID),
+            'principle': inv.INVENT_PRINCIPLE}
+
+
+def job_kinds() -> dict[str, dict[str, Any]]:
+    """作业单元表。**键是节点 id**（`stage3.style`），不是原型那 12 个 `n1..n9`。
+
+    ⚠ **键名保持 `job_kinds` 不改成 `nodes`**：抓包那 14 个键是契约的一部分，
+    改键名是一次前端可见的破坏性变更，而 `REQUIREMENTS.md:125-127` 的裁决是
+    「形状不变，**只有 `kind` 的取值变**」。里面装的是什么，`docs/schema/_api.md` 说清楚。
+
+    ⚠⚠ **本表的 `paid` 说的是【默认路径】贵不贵，不许拿它做贵贱对账。**
+    真正的贵贱由 `(node, flags)` 二元组决定，唯一落点是 `is_paid`（`R-11.7`），
+    出口在 `actions[]`。实测：抓包的 `check_blueprints` 是 `paid=false`，
+    而它映到的 `stage2.blueprint` 节点 `paid=true`——那不是不一致，
+    是原型把复检做成了独立 kind 而两层命名下它是一个 flag。
+    """
+    return {node: {'label': s.label, 'paid': s.paid, 'stage': s.stage,
+                   'section': s.section, 'modes': list(s.modes),
+                   'flags': list(s.flags), 'produces': list(s.produces)}
+            for node, s in NODES.items()}
+
+
+def actions() -> list[dict[str, Any]]:
+    """界面上摆得出来的每一个按钮 = `节点 × (默认路径 + 每个 flag) × 每条臂`。
+
+    **字段形状照抄抓包，只做加法**（`REQUIREMENTS.md:125-127`：形状不变、只有 `kind` 的取值变）：
+    `kind` / `extra` / `label` / `paid` / `free_flag` 五格原样，
+    新增 `mode` / `writes` / `writes_disk` / `needs_value` 四格。
+
+    ⚠ 每一格都是**派生**的，一个字都不手写：
+      · `label`       ← `nodes.step_label`  —— 与作业记录里那一步共用（`R-11.8`）
+      · `paid`        ← `nodes.is_paid`     —— 贵贱只有一处算（`R-11.7`）
+      · `writes`      ← `nodes.write_effect`—— 空串 = 不写盘
+      · `writes_disk` ← `nodes.would_write` —— 前端点名要的那一格（`web/DELIVERY.md`）：
+        它今天在 `web/src/constants/actions.ts` 手抄成了一张表，而那份注释自己写着
+        「`/api/enums` 目前没有 `writes_disk` 字段…所以这个分类只能在前端做一张表」。
+
+    ⚠ **flag 的那一句人话不放进本表。** `free_entries` / `paid_flags` / `valued_flags` /
+    `write_effects` 四张表已经整份下发了，前端按 flag 去查即可——
+    同一份数据放两处就是第二个落点（与 `CheckReport` 砍掉四个 sev 桶是同一条裁决）。
+
+    ⚠ `extra` 里的带值 flag **不带值**（`--apply-edit` 而不是 `--apply-edit <路径>`）：
+    那个值是人在点下去的那一刻才给的。`needs_value` 就是用来说这件事的。
+    """
+    out: list[dict[str, Any]] = []
+    for node, spec in NODES.items():
+        for mode in (spec.modes or (None,)):
+            for flags in [()] + [(f,) for f in spec.flags]:
+                out.append({
+                    'kind': node,
+                    'mode': mode,
+                    'label': step_label(node, flags, mode=mode),
+                    # 抓包里默认路径是 `null`、带 flag 的是一个数组。原样保持。
+                    'extra': list(flags) or None,
+                    'paid': is_paid(node, flags),
+                    'free_flag': next((f for f in flags if f in FREE_ENTRIES), None),
+                    'writes': write_effect(node, flags),
+                    'writes_disk': would_write(node, flags),
+                    'needs_value': next((VALUED_FLAGS[f] for f in flags
+                                         if f in VALUED_FLAGS), None),
+                })
+    return out
+
+
+#: 合成键 → 它的构造函数。桶二那几个常量的去处就是这里。
+_COMPOSITE: dict[str, Any] = {
+    'invent': _invent,
+    'job_kinds': job_kinds,
+    'actions': actions,
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 四、整份
+# ─────────────────────────────────────────────────────────────────────────────
+
+def payload() -> dict[str, Any]:
+    """`GET /api/enums` 的全部内容。**纯函数**，每次现算（57 条 action，成本可忽略）。
+
+    ⚠ **它刻意没有 Pydantic 响应模型。** 它的键集就是它的内容；写成一个
+    五十来个字段的 `StrictModel`，等于把「自动发布」重新变回一份手写清单，
+    而那正是本模块开头论证过要消灭的东西。它的守卫是超集测试，不是类型。
+    这一条也写在 `docs/schema/_api.md` 里，免得下一个人来「补齐」它。
+    """
+    out: dict[str, Any] = {}
+    for name, value in public_constants().items():
+        buckets = [t for t, table in (('_CONSUMED', _CONSUMED),
+                                      ('_WITHHELD', _WITHHELD),
+                                      ('_PUBLISHED_SCALARS', _PUBLISHED_SCALARS))
+                   if name in table]
+        if len(buckets) > 1:
+            # ⚠ 三张表重叠时**谁赢取决于本函数的 if 顺序**——那正是「同一件事两个落点」
+            # 的最坏形态：改一次顺序就换一个答案，而没有任何东西会出声。
+            raise ValueDomainRefused(f'{name} 同时登记在 {buckets} 里，两张表必须互斥')
+        if buckets == ['_CONSUMED'] or buckets == ['_WITHHELD']:
+            continue
+        if buckets == ['_PUBLISHED_SCALARS']:
+            if isinstance(value, (tuple, dict)):
+                raise ValueDomainRefused(
+                    f'{name} 是容器却登记在 `_PUBLISHED_SCALARS` 里。'
+                    f'那张表是**标量的例外表**——容器本来就自动发，'
+                    f'放进去只会让人以为它需要例外')
+            out[name.lower()] = value
+            continue
+        out[name.lower()] = _jsonable(name, value)
+    for key, build in _COMPOSITE.items():
+        if key in out:
+            raise ValueDomainRefused(
+                f'合成键 {key!r} 与一个自动发布的常量撞了——'
+                f'后写的那份会静默覆盖前一份，而两份说的不是同一件事')
+        out[key] = build()
+    return out

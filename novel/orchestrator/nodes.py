@@ -3,9 +3,10 @@
 """
 nodes.py —— 把 `(节点, 书, flags)` 变成一条命令，并回答关于它的两个问题。
 
-【四个纯函数，没有一个碰盘、碰网、碰进程】
+【五个纯函数，没有一个碰盘、碰网、碰进程】
     is_paid(node, flags)       这一次会不会花钱          `R-11.7`：贵贱只有一处算
     would_write(node, flags)   这一次会不会往盘上写      本期新补，原型没有这个概念
+    step_label(node, flags, …) 这一步叫什么              `R-11.8`：界面与作业记录共用它
     build_argv(node, sid, …)   那条命令                  `R-11.8`：展示与执行共用它
     build_steps(node, sid, …)  这个作业要依次跑哪几条
 
@@ -186,6 +187,26 @@ def would_write(node: str, flags: Iterable[str] = ()) -> bool:
     return bool(write_effect(node, flags))
 
 
+def check_nodes(stage: str) -> tuple[str, ...]:
+    """这一层里**接受 `--check-only`** 的那些节点。从 `NODES` 派生，不手抄清单。
+
+    【它给谁用】校验报告的路由 `GET /api/novels/:sid/check/:kind`——
+    `:kind` 是**层**（八个，取值面 = `STAGES`），而复检是**节点**上的一条跑法。
+    这个函数就是那两轴之间唯一的那座桥。
+
+    ⚠⚠ **今天它在 stage0 上返回空元组，那是一颗定时地雷，登记在这里。**
+    stage0 三个节点的 `flags` 全是 `()`——理由是正当的（原型里 stage0 整层不存在，
+    摄入并进了 stage1，所以「这一层接受哪些跑法」**没有任何一处核对过**，
+    而空元组是诚实的）。后果是：F 期移植 stage0 那一刻，`/check/stage0` 会从
+    一个说得清的 501 掉进「这一层一个复检节点都没有」。
+    ⇒ `tests/test_orchestrator_nodes.py` 里配了一条**今天就绿**的守卫：
+    `for stage in PORTED_STAGES: len(check_nodes(stage)) == 1`。
+    它在 stage0 进 `PORTED_STAGES` 而没人给它登记 `--check-only` 的那一刻变红。
+    """
+    return tuple(n for n, s in NODES.items()
+                 if s.stage == stage and '--check-only' in s.flags)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 四、命令（`R-11.8` / `R-12.3`）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -238,16 +259,36 @@ def build_argv(node: str, sid: str, flags: Sequence[str] = (), *,
     return argv
 
 
+def step_label(node: str, flags: Sequence[str] = (), *, mode: str | None = None) -> str:
+    """这一步的人话。**`_step()` 与 `/api/enums` 的 `actions[]` 共用这一个函数。**
+
+    ⚠ 与 `build_argv` 同一条纪律（`R-11.8`）：**界面上那个按钮的名字，与作业记录里
+    那一步的名字，必须是同一个函数产的**。分成两处的具体后果是人点了
+    「stage3 · 只跑确定性实测」而作业记录里写着别的——两边都不出声。
+
+    ⚠ **一个字都不许手写。** 原型那 36 条 action 的 label 是手抄的，于是
+    `n1_partition` 的 label 写着「stage1 摄入+分章」，而「摄入」早已搬到 stage0
+    ——**手写的 label 会说谎，派生的不会**（`NODES` 那段裁决记录的原话）。
+
+    ⚠ 用 `flag_tokens` 而不是 `f.startswith('-')`：带值 flag 的**值**不是 flag，
+    而一个恰好以 `-` 开头的路径会被后者当成 flag 印进 label 里。
+    贵贱（`is_paid`）与写不写（`write_effect`）都走这一个解析器，label 没有理由用第二个。
+    """
+    spec = NODES.get(node)
+    if spec is None:
+        raise UnsupportedRunMode(
+            f'未知节点 {node!r}。取值面的唯一落点是 `contracts.invariants.NODES`')
+    label = spec.label if mode is None else f'{spec.label}（{mode}）'
+    tokens = flag_tokens(flags)
+    return f'{label} {" ".join(tokens)}' if tokens else label
+
+
 def _step(node: str, sid: str, flags: Sequence[str], *, base: str | os.PathLike[str],
           mode: str | None, note: str | None = None) -> Step:
-    spec = NODES[node]
-    label = spec.label if mode is None else f'{spec.label}（{mode}）'
-    if flags:
-        label = f'{label} {" ".join(f for f in flags if f.startswith("-"))}'
     return Step(
         argv=build_argv(node, sid, flags, base=base, mode=mode),
         cwd=str(REPO_ROOT),
-        label=label,
+        label=step_label(node, flags, mode=mode),
         paid=is_paid(node, flags),
         writes=write_effect(node, flags),
         note=note,

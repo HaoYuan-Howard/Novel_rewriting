@@ -200,6 +200,30 @@ def find_novel_dir(base: str | os.PathLike[str], sid: str) -> Path | None:
     return Path(cands[0])
 
 
+def iter_novel_dirs(base: str | os.PathLike[str]) -> list[Path]:
+    """`<base>` 底下有哪几本书。**按目录名排序**，`base` 不存在时返回空列表。
+
+    ⚠ **跳过 `_` 开头的目录**：`Output/_service/`（作业记录与子进程日志）不是一本书。
+    这与 `state.stage5_modes` 跳过 `_rounds/` 是同一条规则的两处应用——
+    实测抓包里第三本的 `stage5_modes` 是 `["_rounds","deep","shallow"]`，
+    原型把归档目录当成了第三条臂，而界面上那多出来的一格**不报错，只是永远是空的**。
+
+    ⚠ **一个 sid 匹配到两个目录时不在这里报**：那是 `find_novel_dir` 的职责，
+    而本函数是**列目录**，它连 sid 都还没解析。两件事分开的具体好处是
+    ——语料库那一屏仍然列得出全部书，而点进那本重复的书才会拿到那条说得清的错
+    （F-088：同一本书裂成两个目录，没有任何一层会报错）。
+    ⇒ 列表页不会因为**某一本**坏掉而整屏打不开。
+
+    ⚠ 它摸盘，和 `find_novel_dir` 一样——「找目录」本身就是 IO，
+    这是本模块 docstring 里那条「不做 IO 决策」的既有例外。
+    """
+    d = Path(os.fspath(base))
+    if not d.is_dir():
+        return []
+    return sorted((p for p in d.iterdir() if p.is_dir() and not p.name.startswith('_')),
+                  key=lambda p: p.name)
+
+
 def resolve_novel_dir(base: str | os.PathLike[str], sid: str) -> Path:
     """`find_novel_dir` + 显式终态。节点用这个，长驻进程用 `find_novel_dir`。"""
     d = find_novel_dir(base, sid)

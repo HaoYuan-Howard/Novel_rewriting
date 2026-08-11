@@ -326,6 +326,30 @@ def new_job_id(now: float | None = None) -> str:
     return f'{int(now if now is not None else time.time())}-{uuid.uuid4().hex[:8]}'
 
 
+def plan_start(node: str, sid: str, flags: Sequence[str] = (), *,
+               base: str | os.PathLike[str], mode: str | None = None,
+               follow_check: bool = True,
+               steps: Sequence[Step] | None = None) -> JobStart:
+    """一个作业的**全部静态字段**。纯函数：不占键、不落事件、不起进程。
+
+    ⚠⚠ **`R-11.8` 在这里从一句纪律变成字面事实。** `run()` 与
+    `POST /api/jobs/preview` 调的是**同一个函数**，于是「界面上摊开给人看的那条命令」
+    与「真的会被 `Popen` 的那条」是同一个对象——不是两份长得像的。
+    原型那条裂缝（前端用 `argv.slice(4)` 硬编码切掉解释器前缀来渲染，
+    `build_argv` 前缀长度一变就静默错位）在这里连发生的地方都没有。
+
+    ⚠ `paid` / `writes` 在这里逐步折叠一次，而 `JobStart` 的后置条件会**反过来断言**
+    它等于逐步折出来的——两处一致才构造得出来（`R-11.7`：贵贱只有一处算）。
+    """
+    plan = list(steps) if steps is not None else build_steps(
+        node, sid, flags, base=base, mode=mode, follow_check=follow_check)
+    return JobStart(
+        sid=sid, node=node, mode=mode, flags=list(flags), steps=plan,
+        python=sys.version, code=code_version(),
+        paid=any(s.paid for s in plan),
+        writes=any(bool(s.writes) for s in plan))
+
+
 def run(base: str | os.PathLike[str], node: str, sid: str, flags: Sequence[str] = (), *,
         mode: str | None = None, follow_check: bool = True,
         spawn: Spawn = default_spawn, registry: JobRegistry = REGISTRY,
@@ -346,11 +370,9 @@ def run(base: str | os.PathLike[str], node: str, sid: str, flags: Sequence[str] 
     registry.acquire(key, job_id)
 
     try:
-        start = JobStart(
-            sid=sid, node=node, mode=mode, flags=list(flags), steps=plan,
-            python=sys.version, code=code_version(),
-            paid=any(s.paid for s in plan),
-            writes=any(bool(s.writes) for s in plan))
+        # ⚠ **与 `POST /api/jobs/preview` 共用同一个构造函数**（`R-11.8`）。
+        # `steps=plan` 已经算好，不会再算第二遍。
+        start = plan_start(node, sid, flags, base=base, mode=mode, steps=plan)
         append_event(base, JobEvent(job_id=job_id, kind='started',
                                     ts=int(time.time()), start=start))
         p = log_path(base, job_id)

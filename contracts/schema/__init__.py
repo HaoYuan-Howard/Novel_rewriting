@@ -16,6 +16,17 @@ contracts.schema —— 产物 schema 的机器形态。
 """
 from __future__ import annotations
 
+from contracts.schema.api import (
+    DriftItem,
+    ErrorBody,
+    HookStyleLine,
+    JobList,
+    LogChunk,
+    NovelList,
+    PreviewRequest,
+    StyleView,
+    VoiceLine,
+)
 from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
 from contracts.schema.common import (
     Finding,
@@ -99,6 +110,9 @@ __all__ = [
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
     'CheckReport', 'RuleLine', 'RetiredLine', 'ProvenanceSection', 'EdgeLine',
     'AccountingLine', 'StatusCounts', 'Status', 'Badge', 'finding', 'badge_of',
+    # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实
+    'StyleView', 'VoiceLine', 'HookStyleLine', 'DriftItem',
+    'NovelList', 'JobList', 'LogChunk', 'PreviewRequest', 'ErrorBody',
     # 八层
     'RemovalReport', 'RemovedSegment', 'Stage0Warning',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',

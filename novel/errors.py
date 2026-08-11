@@ -160,6 +160,22 @@ class ByteFormRefused(RefusedByStructure):
     """
 
 
+class ValueDomainRefused(RefusedByStructure):
+    """`/api/enums` 的发布器认不出一个取值面的形状，或它一个桶都没落进去。
+
+    ⚠⚠ **它存在的全部意义是不兜底。** 发布器如果对认不出的东西
+    `json.dumps` 一下就发出去，`NodeSpec` 这种 `NamedTuple` 会被静默写成一个
+    **位置数组**——前端拿到 `["stage3","R-4",true,"stage3 文风画像",...]`，
+    字段名全没了，而没有任何一层会出声。那是判据 26 说的
+    「给违约数据发的静默通行证」，只是这次发的是一整份取值面。
+
+    ⚠ 另一半：**新加一个常量却没决定发不发**也走这一条。方向是有意的——
+    手写「发布清单」会**静默地烂**（新常量前端拿不到 ⇒ 前端自己硬编码一份，
+    而那正是 `invariants` 存在的理由要防的事）；手写「不发登记表」会**响亮地烂**
+    （新常量落不进任何桶 ⇒ 当场抛）。两种烂的成本相同，方向相反。
+    """
+
+
 class PathRefused(RefusedByStructure):
     """路径这一族的结构性拒绝，三种：
 

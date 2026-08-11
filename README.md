@@ -14,8 +14,8 @@
 | 阶段 | 状态 |
 |---|---|
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
-| **契约** | ✅ **十一份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + **`_report.md`**（校验报告，B3 补）+ **`_orchestration.md`**（作业/完成度/队列，D 补）。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
-| **骨架** | ✅ **A~D 期完成**（D = 编排 + CLI，第一次有东西真的把一个节点从头跑到尾）。**下一步 = E（`/api/enums` + stage3 只读端点）**，路线图与交接见下一节 |
+| **契约** | ✅ **十二份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + **`_report.md`**（校验报告，B3 补）+ **`_orchestration.md`**（作业/完成度/队列，D 补）+ **`_api.md`**（HTTP 响应，E 补）。stage0 / stage7 的本层待决已裁掉 4 条（2026-08-11），只剩 stage7 的 ④ `has_hook` 与 ⑤ `rn_unregistered` |
+| **骨架** | ✅ **A~E 期完成**（E = HTTP 层，取值面与判定结果第一次有网络出口）。**下一步 = F（逐层移植）**，路线图与交接见下一节 |
 | 移植 | 🚧 **stage3 已移植**（`PORTED_STAGES={'stage3'}`）。其余七层见 F 期 |
 
 ### 🚩 新 session 从这里接手骨架
@@ -25,9 +25,20 @@
 默认的 `python` 指向 Miniconda base，**那里没有 pydantic**。
 ⚠ 本机 `%TEMP%\pytest-of-yh255` 的 ACL 坏了，pytest 的 `tmp_path` 一用就炸，测试里用 `tempfile.mkdtemp()`。
 
-**当前基线**：全绿，**1125 passed / 20 skip**（13 stage0 + 5 stage1 + **2 条都指着同一份产物**）。
+**当前基线**：全绿，**1244 passed / 20 skip**（13 stage0 + 5 stage1 + **2 条都指着同一份产物**）。
+⚠ **E 期一个 skip 都没动**（1126→1244，+118 全是新增的真测试）。
+⚠ E 期新增的 `tests/test_api_http.py` 挂着 `importorskip('fastapi')`——
+conda env `novel_refactor` 里 fastapi 现成，所以它**不该** skip。
+**那 27 条要是变成 skip，说明 env 选错了**，而 skip 掉的东西看起来像绿的。
 每一条 skip 都明说「没在查」——**改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
-⚠ **D 期一个 skip 都没动**（1066→1125 全是新增的真测试）——编排层与 CLI 落地
+⚠⚠ **这两个数在 D 期那次提交里写错了，E0 重量过**（`17897ca` 记的是「1066→1125」，
+两个数都不对）：把 `HEAD~1` 的树 `git archive` 出去实跑，得 **889 collected − 20 skip = 869 passed**
+——而 `fedaf2b` 那一版 README 第 28 行自己写的就是 869，**它是被同一次提交覆盖掉的那一行**。
+⇒ D 期真实是 **869 → 1126（+257）**，不是 +59。
+⚠ 量这个数有个坑：语料是按**相对路径**找 `../Novel_refactoring/` 的，
+把树抽到别处（比如 `%TEMP%`）会让 `test_corpus_fixtures.py` 从 279 条塌到 6 条而**不报错**
+——重量历史基线必须抽到 `E:\practice_group\` 的同级目录下。
+⚠ **D 期一个 skip 都没动**（869→1126 全是新增的真测试）——编排层与 CLI 落地
 不改变那 20 条的处境，但它**第一次走到**了 `tests/test_layering.py` 那个
 `novel/cli/` 的 `sys.exit` 白名单分支（B1 就开好了，此前从未被执行过）。
 ⚠ 那 2 条是**有意的**，而且是**同一份产物**：`成年人不做选择` 那本的 `stage4/plan_chapters.json`
@@ -53,14 +64,88 @@
 | **B3** | **报告构造器**（`build()` 遍历判据注册表，**不遍历 findings**）· `docs/schema/_report.md` ↔ `contracts/schema/report.py` | ✅ |
 | **C** | **stage3 纵切**（第一个真正跑起来的节点）· 判据行 + 确定性核心 + 九条判据 + 盘上三本对账 | ✅ |
 | **D** | **编排 + CLI**（R-11.3/11.7/11.8/11.10/11.11 · R-12.3 · R-13 · R-14）· `docs/schema/_orchestration.md` ↔ `contracts/schema/orchestration.py` | ✅ |
-| E | `/api/enums` + stage3 只读端点 | **← 下一步** |
-| F | 逐层移植 stage2→4→5→6→7→（stage0/1 最后） | 未开始 |
+| **E** | **HTTP 层**：`/api/enums`（整份取值面）+ 九个端点 + `docs/schema/_api.md` ↔ `contracts/schema/api.py` · `novel/views/` · **界面的结构纪律测试**（R-11 那一节第一次有守卫） | ✅ |
+| F | 逐层移植 stage2→4→5→6→7→（stage0/1 最后） | **← 下一步** |
 
 ⚠ **付费路写好了但一次都没跑。** `novel/stages/stage3/style.py::run_style()` 的
 `ask_json` 调用点在，而 `build_prompt()` 是 0 成本的 `--dry-run`（展示与执行**共用同一个构造函数**，
 `R-11.8`）。**真发第一次请求要先说一声**——那是本仓第一次真花钱。
 ⚠ D 期又给它加了一道：**CLI 上的付费跑法必须带 `--yes`**（`Q-10`）。
 `build_argv` 会替付费的那条自动补上——到了拼 argv 那一步，确认已经在界面/队列那层发生过了。
+
+### 骨架 E 已完成（2026-08-11）：**取值面与判定结果第一次有网络出口**
+
+在 E 之前，`contracts/invariants.py` 自称是跨层取值域的唯一落点，而它**一个网络出口都没有**。
+于是前端只好自己抄一份：`web/src/constants/vocabulary.ts:12-24` 硬编码了 7 个联合类型、
+`web/src/constants/actions.ts:8-11` 手抄了一张 `WRITE_EFFECTS` 并在注释里写着「迟早会漂」。
+**那份注释是前端自己写的诊断书。** 现在这条命令是真的：
+
+```
+python -X utf8 -u -m novel.api --base <Output>        # 只绑 127.0.0.1:8765
+```
+
+**九个端点**（`04_delivery.md` §路由表是唯一落点，本仓不抄第二份）：
+`GET /api/enums` · `/api/novels` · `/api/novels/:sid` · `/api/novels/:sid/stage3/style` ·
+`/api/novels/:sid/check/:kind` · `/api/jobs` · `/api/jobs/:id` · `/api/jobs/:id/log` ·
+**`POST /api/jobs/preview`**（唯一的 POST，0 成本，CSRF 闸门今天全靠它验）。
+
+#### `/api/enums` 的三个桶 —— 本期最要紧的一处设计
+
+每个 `invariants` 的公开常量必须**恰好落进一个桶**：自动发布（容器）/ 被合成键吃掉 /
+登记为不发（标量，每条写得出理由）。两种烂法的**成本相同、方向相反**：
+
+- 手写**发布清单**会**静默地烂** —— 新加一个常量前端拿不到，于是前端自己硬编码一份，没人出声；
+- 手写**不发登记表**会**响亮地烂** —— 新加一个常量落不进任何桶，`payload()` 当场抛 `ValueDomainRefused`。
+
+实测：发布 **54** 个键，抓包那 14 个**一个不少**，其中 **12 个逐值相等**
+（比原来 `test_invariants.py` 那 6 条多一倍）；只有 `job_kinds` / `actions` 的取值按已裁决变了。
+`actions` 从 `NODES` 派生出 **57** 条，全部 `build_argv` 接得住、label 全部唯一，
+而**抓包那 36 条的 `paid` 与 `is_paid` 36/36 一致**
+——那是全仓唯一一条能抓到 `is_paid` 对现役后端回归的测试。
+
+#### E 期发现并修掉的三处
+
+**① `_KIND_TO_NODE` 少了 mode、`_FLAG_REDIRECT` 少了目标节点。**
+`n5_write`/`n6_write` 原来都映到 `('stage5.write', ())`（丢了臂）、`--context-only` 只说
+「变成了一个节点」而不说是**哪个**。拿旧表做贵贱对账**红 2 条**
+（`n4_plan --context-only` 被算成 stage4.plan 的付费默认路径）。
+⇒ 两张表搬进 `tests/legacy_names.py` 并加宽，两个测试文件共用一份。
+
+**② `R-11.13` 第一次有了机器可读的落点。** 它原来标 `INFO`（要一条注册判据），
+而判据表按 **stage** 编排、**界面不是任何一层的产物** ⇒ 它必然落在反向覆盖率表外。
+现在 `PARTIAL_MASK_NOTE` 进了 `invariants` 随 `/api/enums` 下发，「谁在查」改成 `结构`。
+
+**③ 「每个异常类都要有一个状态码」逼出了 LLM 那一族。**
+`LlmFailed` / `TransportError` / `MissingApiKey` 都不该有状态码，理由是**结构性**的：
+`R-11.3` 规定一切花钱的操作走子进程 ⇒ 它们只在子进程里抛，父进程只看到退出码。
+⇒ 建了第二张表 `UNREACHABLE_OVER_HTTP`，**键是类名字符串**——写成类对象就得
+`import novel.llm`，那会让服务层在结构上够得到发请求的代码。
+
+#### ⚠ E 期结束时仍欠着的（登记，**不是**验过了）
+
+- **`R-11.10` 只验了半格。** 「第二个请求 409」在 E 期只验到状态码映射表；
+  没有 `POST /api/jobs`（用户裁决：不让浏览器能花钱）⇒ **没有第二个请求可以撞**。
+  三处索引：`docs/REQUIREMENTS.md` 第六节那个框 · `docs/schema/_api.md` §七 ·
+  `tests/test_api_discipline.py` 那条名字很长的测试（它同时钉着「POST 面只有 preview」，
+  哪天多了一个会逼人回来补）。
+- **`web/` 一个字没动**（已裁决）。欠着四笔：71 处写死的原型作业名 ·
+  S-13 按 `rules[]` 重画 · 两份 check mock 重生成 · `constants/actions.ts` 那张
+  `WRITE_EFFECTS` 第二落点（`/api/enums` 现在发 `writes` / `writes_disk` 了，它可以删）。
+  ⚠⚠ **`docs/design_brief/05_samples/*.json` 永远不许用新后端的输出覆盖**——
+  它是 `test_api_enums.py` / `test_invariants.py` 全部对账的**证据基线**，
+  覆盖之后那一族测试就变成拿 `invariants` 跟它自己比。
+- **`/check/stage0` 那颗地雷**：stage0 三个节点 `flags` 全空 ⇒ 一个都不接 `--check-only`。
+  守卫今天就写下了且**今天是绿的**（`test_every_ported_stage_has_exactly_one_check_node`），
+  它在 stage0 进 `PORTED_STAGES` 而没人给它登记跑法的那一刻变红。
+- **`/api/novels` 在全语料 163 本上会慢**（每本跑一遍完成度）。**登记不优化**——
+  要优化就给 `overview()` 加浅层分支，**别造第二张清单**（原型那张的代价是 stage5 被整个排除）。
+- **`PARTIAL_MASK_FIELDS` 那四个字段名不立**（零消费方，F 期 stage2 落地时才生）。
+
+⚠ **盘上原样的三本，`/check/stage3` 是 409（`ArtifactUnreadable`）不是 200**，那是对的：
+那三份还带着新契约裁掉的 `source_id`/`title`。迁移之后三本全 `pass`
+（9 条判据 ok，三岁那本 1 条 `micro_quote` / 2 处凭据，与原型逐条一致）。
+而同一时刻 `/stage3/style` 是 **200 且 `exists=true, readable=false`，左半边照常有内容**
+——那正是 `04_delivery.md:123` 要的那一态。
 
 ### 骨架 D 已完成（2026-08-11）：**第一次有东西真的把一个节点从头跑到尾**
 
@@ -151,10 +236,12 @@ stage5 的产物是**逐章**的，「该有几章」要读 stage4 的计划—�
 从来扫不到它们。⚠ 不全的方向是**安全的**（未登记 ⇒ 按付费算），但那是「界面把免费动作
 画成橙色」——`Q-3` 说的「系统在对用户说假话」。F 期移植 stage2 时补。
 
-**③ `R-11.13` 落在反向覆盖率表外。** 它是 `INFO` ⇒ `expects_rule=True`（要求有一条注册判据），
-而第六节那张表只列到 `R-11.1~R-11.4、R-11.6~R-11.11`。
-今天不发作（正向覆盖率只扫 `PORTED_STAGES` 对应的 R-0~R-10 节，`R-11` 按设计不在 `NODES` 里）。
-**登记在这里，E 期接界面时一起清。**
+~~**③ `R-11.13` 落在反向覆盖率表外。**~~ **已在 E 期清掉**（2026-08-11）。
+病根是它标着 `INFO`（要一条注册判据），而判据表按 **stage** 编排、
+**界面不是任何一层的产物** ⇒ 它必然挂不上，而不是有人忘了挂。
+⇒ 「谁在查」改成 `结构`：`contracts/invariants.py::PARTIAL_MASK_NOTE` 随 `/api/enums`
+整份下发，由 `tests/test_api_discipline.py` 查；第六节那一行也补上了 `R-11.13`。
+详见 `docs/REQUIREMENTS.md` 里 `R-11.13` 那个改写框。
 
 ### 骨架 C 已完成（2026-08-11）：**stage3 纵切跑通，`PORTED_STAGES` 第一次不是空的**
 
@@ -259,6 +346,11 @@ A3 把 `voice` 八维、`surface_habits` 全做成了 `Field(min_length=1)` + `e
 ⚠ 另一半账：`check_stage5_review.json` 的 `info` 桶有 **59** 条，其中 **41 条**是 `〔度量〕`
 ——`SEVERITY` 四级在载体上只剩三级，靠**措辞前缀**区分。
 ⚠ **影响 `web/` 的 S-13 屏 + 两份 mock**，按已裁决「骨架阶段当 `web/` 不存在」记到 Phase E。
+⚠ **E 期的实况**（2026-08-11）：后端这一侧已落地——`GET /api/novels/:sid/check/:kind`
+发的就是新形状（`rules[]` 权威，四个 sev 桶不发）。**`web/` 那一侧仍然一个字没动**
+（用户裁决：E 期不动前端），所以这笔账**还欠着**，只是欠款方从后端变成了前端。
+⚠⚠ **重生成那两份 mock 时别覆盖 `docs/design_brief/05_samples/`**——
+那是原型真实抓包，是本仓多条对账测试的证据基线。新形状的样例要另起路径。
 
 #### B3 顺带定下的几处
 
@@ -462,14 +554,19 @@ B1 没动它，因为**本期没有消费方**——挪到基类等于写一条�
 #### 施工中要回来问用户的（不许替他定）
 
 ~~`CheckReport` 换形状~~ **已裁决（2026-08-11，B3）**：`rules[]` 为权威，四桶不再由服务端发 ·
-`stage5_review` → `stage5` 的 check 路由改名（**仍待裁**，E 期接 `/api/enums` 时一起） ·
+~~`stage5_review` → `stage5` 的 check 路由改名~~ **已裁决（2026-08-11，E）**：改。
+八个 kind 现在与 `invariants.STAGES` 逐值相等、由它派生，落点 `novel/api/deps.py::checked_kind`；
+`docs/design_brief/04_delivery.md:71` 那一格已改并带标注，`web/` 里的引用还欠着 ·
 `Finding.actionable` 那条语义裁决（见上，**仍待裁**；B3 已按 `repair != 'NONE'` 派生，
 stage6/stage7 移植时必然撞上） · stage7 待决 ④（`book_txt.has_hook=false`
 是否可达，是**产品语义**）与 ⑤（`rn_unregistered` 补实现还是退役）· 建远程仓库。
 
 ⚠ **`web/` 已进仓**（`1f61013`，92 个文件 / 12060 行；`dist/` 与 `node_modules/` 按 `.gitignore` 排除）。
-用户已裁决**骨架阶段当它不存在**（不对齐、不改名），但它里面有 71 处写死的原型作业名
-（`n4_plan` / `n9_rename` / `stage5_review` …），Phase E 接 `/api/enums` 时要一起处理。
+用户已裁决**骨架阶段当它不存在**（不对齐、不改名），E 期又确认了一次「不动 `web/`」。
+⇒ **前端对齐单独成一期**，欠着四笔（清单见上面「骨架 E 已完成」那一节末尾）：
+71 处写死的原型作业名（`n4_plan` / `n9_rename` / `stage5_review` …）· S-13 按 `rules[]` 重画 ·
+两份 check mock 重生成 · `constants/actions.ts` 那张 `WRITE_EFFECTS` 第二落点
+（`/api/enums` 现在发 `writes` / `writes_disk` 了，它可以删）。
 ⚠ **本仓仍然没有远程，本机是唯一一份拷贝**——这一条没变，`Output/` 那批语料同样只有一份。
 
 ### 骨架 A1 已完成（2026-08-11）：**`_common.md` 落地，契约收口**

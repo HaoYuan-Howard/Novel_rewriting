@@ -171,13 +171,18 @@ def stage_state(store: ArtifactStore, stage: str, *, modes: list[str]) -> StageS
 # 三、一本书
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _readonly_ctx(novel_dir: Path, node: str, code: str) -> RunContext:
+def readonly_ctx(novel_dir: Path, node: str, code: str) -> RunContext:
     """一个**只读**的跑上下文：不记账本、不发请求、不写盘。
 
     ⚠ `node` 只影响错误信息里的那个前缀——新鲜度是**产物的**属性，
     不是提问者的属性。所以这里传的是**产它的那个节点**，报错时那句话才指得对人。
     ⚠ `CostLedger(path=None)` = 账本只在内存里攒。它不是「不记账」，
     只是不往盘上追加行（`_service/` 归编排层写，而完成度这一侧按 `R-14.1` 连读都不该读）。
+
+    ⚠⚠ **它是公开的，因为 `novel/views/` 与 HTTP 层要用同一份**（骨架 E3 提出来的）。
+    自己再构造一个 `RunContext(...)` 就是第二个落点，而它的错法是具体的：
+    漏掉 `ledger=CostLedger(path=None)` ⇒ **长驻的服务进程会往盘上追加账本行**，
+    当场踩 `R-11.3`（服务进程绝不落产物盘）。少一个参数不会报错，只会安静地写。
     """
     return RunContext(novel_dir=novel_dir, node=node, paid=False, code=code,
                       cache=CachePolicy.default(), ledger=CostLedger(path=None))
@@ -195,7 +200,7 @@ def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
     code = prov.code_version()
     modes = stage5_modes(novel_dir)
 
-    #: 每层挑**本层第一个产它的节点**当提问者，理由见 `_readonly_ctx`。
+    #: 每层挑**本层第一个产它的节点**当提问者，理由见 `readonly_ctx`。
     asker = {s: next((n for n, sp in NODES.items() if sp.stage == s and sp.produces), None)
              for s in STAGES}
 
@@ -204,7 +209,7 @@ def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
         node = asker[s]
         if node is None:                     # 一层一个产物都不产？那它不该在 STAGES 里
             continue
-        store = ArtifactStore(_readonly_ctx(novel_dir, node, code))
+        store = ArtifactStore(readonly_ctx(novel_dir, node, code))
         stages.append(stage_state(store, s, modes=modes))
 
     return NovelOverview(

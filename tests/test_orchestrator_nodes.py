@@ -16,7 +16,8 @@ import sys
 import pytest
 
 from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS, WRITE_EFFECTS
-from novel.errors import UnsupportedRunMode
+from contracts.rules import PORTED_STAGES
+from novel.errors import NodeNotPorted, UnsupportedRunMode
 from novel.orchestrator import nodes as N
 
 BASE = os.path.join('E:', os.sep, 'somewhere', 'Output')
@@ -264,3 +265,68 @@ def test_steps_carry_the_cost_and_write_answers_they_were_asked_for():
             assert step.paid == N.is_paid(node, flags)
             assert step.writes == N.write_effect(node, flags)
         assert spec.label in N.build_steps(node, SID, base=BASE, mode=mode)[0].label
+
+
+# ───────────────── 层 ↔ 复检节点那座桥（骨架 E5 加） ─────────────────
+
+def test_step_label_is_the_one_the_actions_table_publishes():
+    """`step_label` 是**界面按钮**与**作业记录里那一步**共用的那一个（`R-11.8`）。
+
+    ⚠ 原型那 36 条 action 的 label 是手抄的，于是 `n1_partition` 写着
+    「stage1 摄入+分章」而「摄入」早已搬到 stage0——**手写的 label 会说谎**。
+    """
+    for node, spec in NODES.items():
+        mode = _mode_of(node)
+        step = N.build_steps(node, SID, base=BASE, mode=mode)[0]
+        assert step.label == N.step_label(node, (), mode=mode)
+        assert spec.label in step.label
+    with pytest.raises(UnsupportedRunMode, match='未知节点'):
+        N.step_label('stage9.nope')
+
+
+def test_step_label_ignores_the_value_of_a_valued_flag():
+    """带值 flag 的**值**不是 flag——一个恰好以 `-` 开头的路径不许被印进 label。
+
+    ⚠ 贵贱（`is_paid`）与写不写（`write_effect`）都走 `flag_tokens` 这一个解析器，
+    label 没有理由用第二个。
+    """
+    got = N.step_label('stage3.style', ['--apply-edit', '-weird-path.json'])
+    assert got.endswith('--apply-edit'), got
+
+
+def test_every_ported_stage_has_exactly_one_check_node():
+    """⭐ **一颗今天就绿、F 期才会响的地雷的守卫。**
+
+    `:kind` 是**层**（八个，取值面 = `STAGES`），而复检是**节点**上的一条跑法
+    ——`check_nodes` 是那两轴之间唯一的桥。
+
+    ⚠ stage0 三个节点的 `flags` 全是 `()`（理由正当：原型里 stage0 整层不存在，
+    「这一层接受哪些跑法」没有任何一处核对过，而**空元组是诚实的**）。
+    于是移植 stage0 而没给它登记 `--check-only` 的那一刻，
+    `/api/novels/:sid/check/stage0` 会从一个说得清的 501 掉进
+    「两张表分家了」。这条测试让那一刻**在改 `PORTED_STAGES` 时就发生**，
+    而不是等到界面上点下去。
+    """
+    for stage in sorted(PORTED_STAGES):
+        got = N.check_nodes(stage)
+        assert len(got) == 1, (
+            f'{stage} 有 {len(got)} 个节点接受 `--check-only`：{got}\n'
+            f'→ 0 个：移植这一层时忘了给它登记跑法（`NODES[...].flags`）；'
+            f'→ 2 个以上：`GET /api/novels/:sid/check/{stage}` 不知道该调哪一个')
+    assert N.check_nodes('stage3') == ('stage3.style',)
+    # 守卫的守卫：`PORTED_STAGES` 空掉时上面那个 for 一条都不跑而测试照样绿。
+    assert PORTED_STAGES, '`PORTED_STAGES` 是空的——本条没在查'
+
+
+def test_the_checker_table_covers_exactly_the_ported_stages():
+    """⭐ **两侧夹死**，形态照抄 `test_registry_covers_exactly_the_ported_stages`。
+
+    `novel/stages/__init__.py::check_only` 是 `--check-only` 与
+    `GET /api/novels/:sid/check/:kind` 的**共用落点**。它与 `PORTED_STAGES`
+    分家的表现是：CLI 复检某层跑得动，而界面上那一屏 501（或反过来）。
+    """
+    from novel.stages import check_only, checkable_stages
+    assert checkable_stages() == PORTED_STAGES
+    with pytest.raises(NodeNotPorted, match='F 期'):
+        check_only('stage2')
+    assert check_only('stage3').__name__ == 'run_check_only'

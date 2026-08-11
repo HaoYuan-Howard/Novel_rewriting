@@ -365,6 +365,29 @@ WORLD_RULE_KINDS: Final = (
     'supernatural_rule', 'technology_rule', 'physical_constraint',
 )
 
+#: ⭐ `R-11.13` 那句**界面上必须常驻**的标注。剧透开关只关四个字段，**已知旁路仍在**。
+#:
+#: 【为什么它是一个常量而不是前端的一句文案】它有**两个**消费方：界面（常驻显示）
+#: 与 F 期 stage2 的屏蔽实现（它得照着这句话决定关哪几个字段）。两个消费方 ⇒ 必须有唯一落点。
+#: 措辞是从现役后端的 `/api/enums` 抓包里原样搬来的（`05_samples/enums.json`
+#: 的 `partial_mask_note`），因为那正是今天真的显示在界面上的那句话。
+#:
+#: ⚠⚠ **刻意只立这一句话，不立 `PARTIAL_MASK_FIELDS` 那四个字段名的元组**——
+#: 那不是漏了。stage2 未移植 ⇒ 那份取值面今天**零消费方**，而给一个零消费方的取值面
+#: 先起个名字就是抢跑（判据 32，同 `NodeSpec.flags` 里三个 `*.approve` 填 `()` 的理由）。
+#: ⇒ F 期落地 stage2 的屏蔽实现时才生它，并**同时**加一条
+#: 「本句里必须逐个出现那四个字段名」的测试——那时候它才有东西可守。
+#:
+#: ⚠ 它是本模块里**唯一一个整句中文**的常量。`/api/enums` 的发布器按类型分派，
+#: 标量默认**不发**（判据阈值发过去等于请前端自己判 ⇒ 第二个判官，`R-11.4`），
+#: 所以它必须显式登记在 `novel/api/enums.py::_PUBLISHED_SCALARS` 里。
+PARTIAL_MASK_NOTE: Final = (
+    '本开关只关四个字段（characters[].fate · canon.secrets · arc.climax · arc.ending）。'
+    'F-047 实测同一批事实仍会从 role（F-075：role 里可能带中段才揭示的事实）、'
+    'relations[].valid_from_chapter、world_rules[].versions[].desc 漏出去。'
+    '**这是部分屏蔽，不是屏蔽。**'
+)
+
 #: 一次调用当时的缓存口径，记进 `_provenance`（stage2 的 `repairs[]` · stage3 的 `attempts[]`）。
 #: ⚠ **定向重生成必须配 `refresh-write`**（`R-3.11`）：它的 prompt 与整跑时那一批**逐字相同**，
 #: 缓存必然命中，于是一个字都没重新生成而它照样打印「已重生成」。

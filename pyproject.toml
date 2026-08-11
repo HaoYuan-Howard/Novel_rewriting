@@ -15,11 +15,16 @@ dependencies = ["pydantic>=2"]
 # ⚠ `openai` 只被 `novel/llm/transport.py::DeepSeekTransport` 用到，而且是**懒 import**
 #   （在 `_sdk()` 里，不在模块顶层）：没装它照样能跑完整条 0 成本链路，
 #   因为那条链路走的是 `FakeTransport`。`tests/test_llm.py` 一次都不 import 它。
+#
+# ⚠ `api` 那一层同理**只被 `novel/api/app.py` 与 `novel/api/__main__.py` 用到**
+#   （白名单在 `tests/test_layering.py::_WEB_STACK_ALLOWED`，逐条写着理由）。
+#   `novel/api/enums.py` / `errors.py` 与 `novel/views/**` 都是纯函数，没装 fastapi
+#   照样 import 得进来——**E 期的绝大多数测试因此不需要 `importorskip`**，
+#   而 `importorskip` 跳过去的东西看起来像绿的。
 [project.optional-dependencies]
 llm = ["openai>=2"]
-dev = ["pytest>=8"]
-# api = [...] —— FastAPI 那一层在 E 期落地，到那时再声明。
-# 现在写上等于声称一件还没发生的事。
+api = ["fastapi>=0.110", "uvicorn>=0.30"]
+dev = ["pytest>=8", "httpx>=0.27"]
 
 # 骨架 D 加的。**它解的是一个具体的问题，不是形式**：
 # `build_argv` 拼出来的那条命令是 `<python> -X utf8 -u -m novel.cli …`，
@@ -36,9 +41,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["contracts", "contracts.judges", "contracts.schema",
-            "novel", "novel.cli", "novel.core", "novel.llm",
-            "novel.orchestrator", "novel.report", "novel.stages",
-            "novel.stages.stage3"]
+            "novel", "novel.api", "novel.api.routes", "novel.cli", "novel.core",
+            "novel.llm", "novel.orchestrator", "novel.report", "novel.stages",
+            "novel.stages.stage3", "novel.views"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

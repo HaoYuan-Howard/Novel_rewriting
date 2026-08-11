@@ -9,20 +9,13 @@ test_invariants.py —— 盯住「唯一落点」这条纪律本身。
 """
 from __future__ import annotations
 
-import json
-import os
-
 import pytest
 
 from contracts import invariants as inv
+from tests import legacy_names as legacy
 
-SAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       'docs', 'design_brief', '05_samples')
-
-
-def _enums():
-    with open(os.path.join(SAMPLES, 'enums.json'), encoding='utf-8') as f:
-        return json.load(f)
+#: 抓包的读取与「原型名 → 新节点」的翻译**只有一份**，在 `tests/legacy_names.py`。
+_enums = legacy.captured_enums
 
 
 # ───────── 取值域闭合 ─────────
@@ -349,33 +342,6 @@ def test_partial_rewrite_flags_are_free_and_exclude_the_promotion_path():
     assert '--revalidate' not in inv.PARTIAL_REWRITE_FLAGS
 
 
-#: 原型 kind → 新节点。**只给下面那条对账测试用，不是契约**——
-#: `n1..n9` 整套已退役（`invariants.py` §九 的裁决记录），
-#: 把这张表放进 `invariants` 等于把死掉的名字复活成一份现役取值面。
-_KIND_TO_NODE = {
-    'n1_partition': ('stage1.partition', ()),
-    'check_partition': ('stage1.partition', ('--check-only',)),   # 没有 check 节点
-    'n2_global': ('stage2.global', ()),
-    'n2_blueprint': ('stage2.blueprint', ()),
-    'check_blueprints': ('stage2.blueprint', ('--check-only',)),
-    'n3_style': ('stage3.style', ()),
-    'n4_plan': ('stage4.plan', ()),
-    'n5_write': ('stage5.write', ()),                             # 臂是参数不是节点
-    'n6_write': ('stage5.write', ()),
-    'stage5_review': ('stage5.review', ()),
-    'n8_hook': ('stage6.hook', ()),
-    'n9_rename': ('stage7.rename', ()),
-}
-
-#: 抓包里的 flag → 两层命名下它变成了什么。`None` = 它变成了一个**节点**。
-_FLAG_REDIRECT = {
-    '--identity-plan': '--identity',      # 同一个语义的第二个名字（`Q-3` 的实例）
-    '--context-only': None,               # → 节点 stage4.context
-    '--assemble': None,                   # → 节点 stage7.assemble
-    '--approve': None,                    # → 节点 stage0/6/7.approve
-}
-
-
 def test_every_captured_action_maps_onto_a_node_and_its_flags():
     """⚠ **这条是 `test_free_entries_covers_every_free_flag_the_live_backend_uses` 的姊妹条。**
 
@@ -384,17 +350,15 @@ def test_every_captured_action_maps_onto_a_node_and_its_flags():
     而 `build_argv` 会把一条现役后端天天在跑的命令**当场拒收**。
 
     ⚠ 抓包里的 36 条 `actions` 是**现役后端真的会执行的那些**，不是示意图。
+    ⚠ 翻译表在 `tests/legacy_names.py`，**两个测试文件共用一份**：
+    `tests/test_api_enums.py` 拿同一张表做贵贱对账，
+    各抄一份的分家表现是「贵贱对账假绿」（那张表的 docstring 记着实测的 2 条红）。
     """
-    actions = _enums()['actions']
+    actions = legacy.captured_enums()['actions']
     assert len(actions) > 30, f'只抓到 {len(actions)} 条 action——样本换形状了，本条要跟着改'
     bad = []
     for a in actions:
-        node, implied = _KIND_TO_NODE[a['kind']]
-        flags = list(implied)
-        for f in (a['extra'] or []):
-            red = _FLAG_REDIRECT.get(f, f)
-            if red is not None:
-                flags.append(red)
+        node, _mode, flags = legacy.translate(a)
         missing = sorted(set(flags) - set(inv.NODES[node].flags))
         if missing:
             bad.append(f'{a["kind"]}{a["extra"] or []} → {node} 缺 {missing}')

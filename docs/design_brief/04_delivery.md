@@ -68,8 +68,16 @@ src/
 | `/n/:sid/check` | S-13 校验报告 | `/api/novels/:sid/check/:kind` ×8 | `check_stage2.json`<br>`check_stage5_review.json` |
 
 `:sid` 是书 id（例 `7615069877019300633`），`:o` 是输出章号（1 起）。
-**八个** `:kind`：**`stage0`** `stage1` `stage2` `stage3` `stage4` `stage5_review` `stage6` `stage7`
+**八个** `:kind`：**`stage0`** `stage1` `stage2` `stage3` `stage4` **`stage5`** `stage6` `stage7`
 （**只给了两份 mock，其余六份复用这两份的形状即可**——它们同型）。
+
+> ⚠ **2026-08-11（骨架 E）改了这一格：`stage5_review` → `stage5`。**
+> 那是**原型脚本名泄漏进契约**——八个 kind 里七个是层名，唯独第六个是一个脚本的名字。
+> 改完之后这一列与后端的 `contracts/invariants.py::STAGES` **逐值相等**，
+> 于是路由的取值面可以从那张表**派生**，不必手写第二份
+> （手写的第二份必然与后端分家，而分家的表现是界面上某一层永远 404）。
+> ⇒ `web/` 里 `stage5_review` 的引用要跟着改。**骨架 E 期不动 `web/`**（已裁决），
+> 账记在仓根 `README.md`。后端侧已落地：`novel/api/deps.py::checked_kind`。
 
 ### 写操作（设计阶段只要 UI，不必真发请求）
 
