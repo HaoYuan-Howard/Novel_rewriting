@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from contracts.invariants import CACHE_POLICY
@@ -106,16 +106,31 @@ def cache_key(req: ChatRequest) -> str:
 
 @dataclass
 class ResponseCache:
-    """盘上的响应缓存。`dir=None` = 只走内存（测试 / `--dry-run`），语义完全一样。
+    """响应缓存。`dir` 给了就落盘，`dir=None` **只走内存**（测试 / `--dry-run`），语义完全一样。
 
     ⚠ 它**不是产物**：不进 `_provenance`、不进来源账、`.gitignore` 盖着。
     唯一的作用是让「参数不变的重跑」变成 0 元——而那件事必须被**说出来**
     （`R-12.4` / `Q-11`），所以命中要记进 `CostLedger.calls_cached`。
+
+    ⚠⚠ **`dir=None` 曾经是「一个字都不缓存」，而 docstring 写着「语义完全一样」。**
+    `_path` 返回 `None` ⇒ `get` 恒 `None` · `put` 恒 `False` · `evict` 什么也不做。
+    而 `LlmClient` 的默认缓存**恰好就是这一档**：于是「四档阶梯各自成键」
+    「空壳踢出缓存」「命中记进 `calls_cached`」这些行为在默认配置下**一条都不成立**，
+    却没有任何测试会红——它们全都在断言一个从不发生的事。
+    ⇒ 内存那一档改成真的（一个 dict），三个方法逐条对齐盘上那一份。
+
+    ⚠ 作用域是**实例**：`LlmClient` 一个 client 造一份 ⇒ 一次跑内去重，跑完就没。
+    这正是 `--dry-run` 要的那一档（不落盘，但同一次跑里问两遍同一个问题只算一次）。
     """
 
     dir: Path | None = None
 
+    #: `dir=None` 时的那一份。**不参与 `repr`**——里面是整段响应正文。
+    _mem: dict[str, ChatResponse] = field(default_factory=dict, repr=False)
+
     def get(self, key: str) -> ChatResponse | None:
+        if self.dir is None:
+            return self._mem.get(key)
         p = self._path(key)
         if p is None or not p.is_file():
             return None
@@ -126,7 +141,16 @@ class ResponseCache:
             #   那个异常会被当成「这次调用失败」——把一次**已经付过钱**的结果变成一次重跑。
             #   （原型正因如此才给缓存加了原子写，见 `put`。）
             return None
-        return ChatResponse(**raw)
+        # ⚠ **结构过期也当没有。** 合法 JSON 不等于读得回 `ChatResponse`：
+        #   `{}` 会让 `ChatResponse(**raw)` 抛 `TypeError`（少必填参数），
+        #   而那个异常同样会被当成「这次调用失败」。缓存的形态改过一次，
+        #   盘上就会留着一批这样的旧文件——它们该是 miss，不该是故障。
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return ChatResponse(**raw)
+        except TypeError:
+            return None
 
     def put(self, key: str, resp: ChatResponse) -> bool:
         """写一份。**空 content 永不写**，返回「到底写没写」。
@@ -136,8 +160,13 @@ class ResponseCache:
         缓存下来只会让重试**每次都命中同一个空壳**——那时连降级阶梯都救不了它，
         因为四档都会各自读回自己那份空的。
         """
+        if not resp.text:
+            return False
+        if self.dir is None:
+            self._mem[key] = resp
+            return True
         p = self._path(key)
-        if p is None or not resp.text:
+        if p is None:
             return False
         p.parent.mkdir(parents=True, exist_ok=True)
         data = (json.dumps(resp.__dict__, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
@@ -152,7 +181,7 @@ class ResponseCache:
         return True
 
     def evict(self, key: str) -> None:
-        """把一份**已经判定为不可用**的响应删掉（只由 `ask_json` 的结构检查那条路调）。
+        """把一份**已经判定为不可用**的响应删掉（由两个入口的每一条不可用路径调）。
 
         ⚠ 这里**不适用**产物那条「修不了的原样留着」（判据 7）：
         产物留着是给人看的，缓存留着**不会被人看见**，只会被下一次重跑静默地当成新结果。
@@ -160,6 +189,9 @@ class ResponseCache:
         合法 JSON、正常结束，于是一路放行**并进了缓存**；此后不带 `--no-cache` 的重跑
         只会拿回同一个空壳（「参数不变的重跑什么都没跑」）。
         """
+        if self.dir is None:
+            self._mem.pop(key, None)
+            return
         p = self._path(key)
         if p is not None:
             p.unlink(missing_ok=True)

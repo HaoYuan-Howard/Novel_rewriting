@@ -241,6 +241,57 @@ def test_a_half_written_cache_file_reads_as_a_miss_not_as_a_failure():
     assert len(t.calls) == 1
 
 
+@pytest.mark.parametrize('stale', ['{}\n', '[]\n', '"abc"\n', '{"没这个字段": 1}\n'])
+def test_a_structurally_stale_cache_payload_reads_as_a_miss_too(stale):
+    """⭐ **合法 JSON 不等于读得回 `ChatResponse`。**
+
+    `{}` 会让 `ChatResponse(**raw)` 抛 `TypeError`（少必填参数），而那个异常与半截文件
+    抛的那个下场一样：被当成「这次调用失败」，把一次已经付过钱的结果变成一次重跑。
+    缓存的形态只要改过一次，盘上就会留着一批这样的旧文件——
+    它们该是 miss，不该是故障。
+    """
+    d = Path(tempfile.mkdtemp())
+    (d / f'{cache_key(_req())}.json').write_bytes(stale.encode('utf-8'))
+    t = FakeTransport.always(OK_TEXT)
+    assert _client(t, cache=ResponseCache(d)).ask_text('s', 'u', purpose='t') == '一段正文'
+    assert len(t.calls) == 1
+
+
+def test_the_memory_only_cache_is_a_real_cache():
+    """⭐⭐ `dir=None` 曾经是「一个字都不缓存」，而 docstring 写着「语义完全一样」。
+
+    `_path` 返回 `None` ⇒ `get` 恒 `None` · `put` 恒 `False` · `evict` 什么也不做。
+    而 **`LlmClient` 的默认缓存恰好就是这一档**：于是「四档各自成键」「空壳踢出缓存」
+    「命中记进 `calls_cached`」这些行为在默认配置下**一条都不成立**，
+    却没有任何测试会红——它们全都在断言一个从不发生的事。
+    """
+    ctx = _ctx()
+    t = FakeTransport.always(OK_TEXT)
+    c = _client(t, ctx=ctx)                    # ← cache=None ⇒ 默认那一档
+    assert c.ask_text('s', 'u', purpose='t') == '一段正文'
+    assert c.ask_text('s', 'u', purpose='t') == '一段正文'
+    assert len(t.calls) == 1, '第二次又发了一遍——默认那一档根本没在缓存'
+    assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (1, 1)
+
+    # 三个方法逐条对齐盘上那一份：空 content 不写 · evict 真的删得掉
+    mem = ResponseCache()
+    assert mem.put('k', ChatResponse(content='', finish_reason='stop')) is False
+    assert mem.put('k', OK_TEXT) is True and mem.get('k') is OK_TEXT
+    mem.evict('k')
+    assert mem.get('k') is None
+
+
+def test_the_memory_cache_does_not_leak_between_two_runs():
+    """作用域是**实例**：一个 `LlmClient` 一份。两次跑 = 两份 = 零串扰。
+
+    同 `RunContext` 那条纪律——进程级的共享状态正是原型被迫用子进程的理由。
+    """
+    t1, t2 = FakeTransport.always(OK_TEXT), FakeTransport.always(OK_TEXT)
+    _client(t1).ask_text('s', 'u', purpose='t')
+    _client(t2).ask_text('s', 'u', purpose='t')
+    assert len(t1.calls) == 1 and len(t2.calls) == 1, '两次跑共用了同一份内存缓存'
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、`require` 从模型派生 —— 判据 39 从纪律变成结构
 # ─────────────────────────────────────────────────────────────────────────────
