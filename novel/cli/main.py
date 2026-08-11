@@ -25,7 +25,7 @@ from __future__ import annotations
 import argparse
 import sys
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS
 from contracts.rules import PORTED_STAGES
@@ -40,7 +40,15 @@ from novel.orchestrator import state as S
 from novel.report import render
 from novel.run import RunContext
 
-_ALL_FLAGS = sorted(set(FREE_ENTRIES) | set(PAID_FLAGS))
+#: 命令行上认得的全部 flag。**三张表并起来，一张都不许漏。**
+#:
+#: ⚠ `VALUED_FLAGS` 与前两张**正交**（它答的是「这个 flag 带不带值」，
+#: 不是「它贵不贵」），所以它可以有前两张里没有的成员。漏掉它的后果不是
+#: 少一个功能，是**那个 flag 在命令行上永远解析不出来，且没有任何东西会出声**
+#: ——`argparse` 只会说「unrecognized arguments」，而人会以为是自己敲错了。
+#: 今天 `VALUED_FLAGS ⊆ FREE_ENTRIES`，所以这一格是**潜伏的**；
+#: 由 `test_the_flag_surface_covers_all_three_tables` 钉住。
+_ALL_FLAGS = sorted(set(FREE_ENTRIES) | set(PAID_FLAGS) | set(VALUED_FLAGS))
 
 
 def _force_utf8() -> None:
@@ -113,20 +121,57 @@ def _flags_of(a: argparse.Namespace) -> list[str]:
 # 节点派发 —— 取值面要全，能不能跑是另一件事
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
+    """`stage` → 它的跑法派发。**全模块唯一一份**，`_dispatch` 与 `runnable_stages` 都读它。
+
+    ⚠⚠ **这里曾经是一句硬编码的 `return _run_stage3(ctx, flags)`**，位置在
+    `PORTED_STAGES` 那道闸**之后**——于是移植第二层的那一刻，
+    `run stage6.hook --check-only` 会安静地去跑 stage3 的实现、读
+    `stage3/style_grounding.json`，报出一份**属于另一层的报告**。
+    而它当时没有任何测试钉着：`test_an_unported_node_is_a_terminal_state_not_a_stack`
+    只参数化**未移植**的层 ⇒ **移植一层反而让覆盖面缩小**，漏改的那一次没人出声。
+
+    ⇒ 改成查表，形态**照抄 `novel/stages/__init__.py::_checkers()`**
+    ——同一个问题在复检那一侧早就解对了，这里只是把它抄回来。
+    """
+    return {'stage3': _run_stage3}
+
+
+def runnable_stages() -> frozenset[str]:
+    """本表覆盖了哪几层。**从同一份 `_runners()` 派生**，不另抄一份清单。
+
+    用途只有一个：让测试拿它与 `PORTED_STAGES` **两侧夹死**（多一层、少一层都红），
+    形态照抄 `novel/stages/__init__.py::checkable_stages()`。
+    """
+    return frozenset(_runners())
+
+
 def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
     """跑一个节点。**未移植的层落显式终态，不是一段栈。**
 
-    ⚠ `NODES` 有 16 个节点而 `PORTED_STAGES` 只有一个——**这不是不一致**：
-    取值面要全（`/api/enums` 少一个取值、队列就排不出那一步、
-    正向覆盖率就少查一节），而「今天跑不动」只该在真去跑它的那一刻说出来。
+    ⚠ **两道闸，各答一个不同的问题**（同 `novel/stages/__init__.py::check_only`）：
+      · 不在 `PORTED_STAGES` ⇒ `NodeNotPorted`：整层还没移植。
+        它在取值面里是**对的**——`NODES` 有 16 个节点而 `PORTED_STAGES` 只有几个，
+        缺一个取值，`/api/enums` 就少一个、队列就排不出那一步、正向覆盖率就少查一节。
+        「今天跑不动」只该在真去跑它的那一刻说出来。
+      · 在 `PORTED_STAGES` 里而 `_runners()` 没有 ⇒ **两张表分家了**。
+        那不是「还没移植」，是「说自己移植了却没有跑法」，报错要说出这一点。
     """
-    if NODES[node].stage not in PORTED_STAGES:
+    stage = NODES[node].stage
+    if stage not in PORTED_STAGES:
         raise NodeNotPorted(
-            f'{node} 属 {NODES[node].stage}，本仓还没有它的实现'
+            f'{node} 属 {stage}，本仓还没有它的实现'
             f'（已移植：{sorted(PORTED_STAGES)}）。'
             f'⚠ 它在取值面里是**对的**——队列要排得出这一步、'
             f'`/api/enums` 要发得出这个取值；缺的只是实现')
-    return _run_stage3(ctx, flags)
+
+    run = _runners().get(stage)
+    if run is None:
+        raise RunModeNotImplemented(
+            f'{stage} 在 `contracts.rules.PORTED_STAGES` 里，而 '
+            f'`novel/cli/main.py::_runners` 没有它的跑法派发——**两张表分家了**。'
+            f'移植一层要同时改这两处')
+    return run(ctx, flags)
 
 
 def _run_stage3(ctx: RunContext, flags: list[str]) -> int:

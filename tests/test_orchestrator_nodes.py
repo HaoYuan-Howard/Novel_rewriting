@@ -330,3 +330,45 @@ def test_the_checker_table_covers_exactly_the_ported_stages():
     with pytest.raises(NodeNotPorted, match='F 期'):
         check_only('stage2')
     assert check_only('stage3').__name__ == 'run_check_only'
+
+
+def test_the_runner_table_covers_exactly_the_ported_stages():
+    """⭐ **上一条的孪生兄弟，而这一侧曾经根本没有表。**
+
+    `_dispatch` 在 `PORTED_STAGES` 那道闸**之后**曾是一句硬编码
+    `return _run_stage3(ctx, flags)`。于是移植第二层的那一刻，
+    `run stage6.hook --check-only` 会安静地跑 stage3 的实现、读
+    `stage3/style_grounding.json`，**报出一份属于另一层的报告**——
+    退出码 0、格式正确、内容全错。
+
+    ⚠⚠ **它当时是抓不到的**：`test_an_unported_node_is_a_terminal_state_not_a_stack`
+    只参数化**未移植**的层，`test_api_http` 那条也一样 ⇒
+    **移植一层反而让覆盖面缩小**，正好缩在漏改的那一格上。
+    这条测试把方向反过来：盯**已移植**的那一侧，加一层漏改就红。
+    """
+    from novel.cli.main import _runners, runnable_stages
+    assert runnable_stages() == PORTED_STAGES, (
+        f'`novel/cli/main.py::_runners` 覆盖 {sorted(runnable_stages())}，'
+        f'而 `PORTED_STAGES` 是 {sorted(PORTED_STAGES)}——两张表分家了。\n'
+        f'→ 少一层：移植时忘了往 `_runners()` 加一行，那一层会掉进另一层的实现里；'
+        f'→ 多一层：那一层的判据行还没进 `REGISTRY`')
+    assert _runners()['stage3'].__name__ == '_run_stage3'
+    # 守卫的守卫：`PORTED_STAGES` 空掉时上面两条都还是绿的。
+    assert PORTED_STAGES, '`PORTED_STAGES` 是空的——本条没在查'
+
+
+def test_the_flag_surface_covers_all_three_tables():
+    """命令行认得的 flag 面 = 三张表的并集，**一张都不许漏**。
+
+    `VALUED_FLAGS` 与前两张**正交**（它答「带不带值」，不答「贵不贵」），
+    所以它可以有前两张里没有的成员。漏掉它的后果不是少一个功能，是
+    **那个 flag 在命令行上永远解析不出来**——`argparse` 只会说
+    「unrecognized arguments」，而人会以为是自己敲错了。
+
+    ⚠ 今天 `VALUED_FLAGS ⊆ FREE_ENTRIES`，所以这一格是**潜伏的**：
+    并集写错也测不出来。第一个只登记在 `VALUED_FLAGS` 里的 flag 出现时，
+    本条才真的开始查——而那正是它存在的时刻。
+    """
+    from novel.cli.main import _ALL_FLAGS
+    from contracts.invariants import PAID_FLAGS
+    assert set(_ALL_FLAGS) == set(FREE_ENTRIES) | set(PAID_FLAGS) | set(VALUED_FLAGS)
