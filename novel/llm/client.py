@@ -31,9 +31,9 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from novel.errors import NovelError
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
@@ -55,6 +55,9 @@ LADDER: Final[tuple[tuple[str, bool], ...]] = (
 DEFAULT_MAX_TOKENS: Final = 64_000
 
 
+M = TypeVar('M', bound=BaseModel)
+
+
 class LlmFailed(NovelError):
     """整条阶梯走完仍然没拿到可用的东西。**显式终态，绝不返回空稿。**"""
 
@@ -67,6 +70,25 @@ def _strip_fences(s: str | None) -> str:
         if s.rstrip().endswith('```'):
             s = s.rstrip()[:-3]
     return s.strip()
+
+
+def _is_empty(v: Any) -> bool:
+    """这个顶层键的值算不算「结构上是空的」。**不是真值判断。**
+
+    `None` / `''` / `[]` / `{}` / 空集合叫空；**`False` 与 `0` 不叫空**。
+
+    ⚠ 原来这里写的是 `not data.get(k)`，于是一个**合法的 `False`**（或 `0`、
+    或一个刻意为空的集合语义）会被报成「模型没给这个键」——
+    白走四档阶梯、花四次钱，去救一个根本没坏的响应。
+    ⚠ 反过来这道闸**不能删**：F-125 那个形态（`{"reconstruction_strategy": "…"}`，
+    **0 个输出章**、正常结束、4477 token 里推理占 4317）是**合法 JSON**，
+    `model_validate` 对一个 `list` 字段收到 `[]` 也照样放行。
+    要让 pydantic 自己拦住它，响应模型得声明 `Field(min_length=1)`——
+    而「记得声明」正是判据 39 已经证明过靠不住的那种纪律。
+    """
+    if v is None:
+        return True
+    return isinstance(v, (str, bytes, list, tuple, dict, set, frozenset)) and len(v) == 0
 
 
 class LlmClient:
@@ -94,21 +116,29 @@ class LlmClient:
         """纯文本调用。走 `LADDER`，**全空则抛**。"""
         tried: list[str] = []
         for effort, thinking in LADDER:
-            resp = self._call(system, user, effort=effort, thinking=thinking,
-                              json_mode=False, max_tokens=max_tokens, purpose=purpose)
-            if resp.text:
-                return resp.text
-            tried.append(f'effort={effort} think={thinking} '
-                         f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")}')
+            for use_cache in (True, False):    # ← 缓存那份不可用 ⇒ 同一档真发一次，见 `_call_keyed`
+                resp, key, cached = self._call_keyed(
+                    system, user, effort=effort, thinking=thinking, json_mode=False,
+                    max_tokens=max_tokens, purpose=purpose, use_cache=use_cache)
+                if resp.text:
+                    if not cached:
+                        self._keep(key, resp)      # ← 判定可用之后才写
+                    return resp.text
+                self.cache.evict(key)
+                tried.append(
+                    f'effort={effort} think={thinking}{" [缓存]" if cached else ""} '
+                    f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")}')
+                if not cached:
+                    break                      # 真发的也空 ⇒ 这一档确实不行，降一档
         raise LlmFailed(
             f'{self.ctx.node}/{purpose}: 走完 {len(LADDER)} 档阶梯仍然拿不到正文。\n  '
             + '\n  '.join(tried)
             + '\n⚠ `reasoning_len` 大而正文为空 = 模型不是没干活，是答案流丢了；'
               '**不从 reasoning 里抠答案**，那里面混着推敲过程，救回来的是半成品')
 
-    def ask_json(self, system: str, user: str, *, model_cls: type[BaseModel], purpose: str,
+    def ask_json(self, system: str, user: str, *, model_cls: type[M], purpose: str,
                  require: tuple[str, ...] | None = None,
-                 max_tokens: int = DEFAULT_MAX_TOKENS) -> Any:
+                 max_tokens: int = DEFAULT_MAX_TOKENS) -> M:
         """结构化调用。走**同一条** `LADDER`，解析失败与「结构上是空的」同等对待。
 
         ⚠⚠ **`model_cls` 是必填的，而 `require` 默认从它派生。**
@@ -117,6 +147,22 @@ class LlmClient:
 
         显式传 `require` **只许收窄**（子集）：放宽等于绕开上面那条，
         而绕开会长成「这个调用点特殊」的注释，然后没人再回来看它。
+
+        ⚠⚠ **返回的是校验过的模型实例，不是原始 dict。** 原来 `model_cls` 只被拿去
+        派生 `require`，**一次 `model_validate` 都没跑过**：于是 `voice='not-a-dict'`、
+        `surface_habits=[1]` 这种一路放行，而 `extra='forbid'` 那类载体守卫
+        **一次都没响过**。`store.py` 那条主杠杆写着「只有 `store.read` 返回带类型的模型
+        ⇒ 绕过意味着同时放弃校验和类型」——`ask_json` 是不可信数据进运行时的**另一扇门**，
+        它得守同一条。校验完再退回 dict 等于让调用方读**未校验**的那一份
+        （pydantic 会强制转换、填默认值、走别名），那就是同一份响应的两种表示。
+
+        【一档之内三道闸，顺序是挑过的】
+          ① `json.loads`      —— 截断就长这样（`finish_reason='length'`）；
+          ② **空壳闸**（`_is_empty`）—— F-125，合法 JSON 但结构上是空的；
+          ③ `model_validate`  —— 形状/类型/`extra='forbid'`。
+        ②在③之前：`require` 是按**盘上键名**（alias）定义的，而且这条路要报得出
+        「缺的是哪一个顶层键」——那句话归②，不归 pydantic 的错误文本。
+        三道闸失败的处置**完全一样**：驱逐这一档的缓存 + 降一档。
         """
         derived = required_top_level(model_cls)
         if require is None:
@@ -129,24 +175,46 @@ class LlmClient:
 
         errors: list[str] = []
         for effort, thinking in LADDER:
-            resp, key = self._call_keyed(system, user, effort=effort, thinking=thinking,
-                                         json_mode=True, max_tokens=max_tokens, purpose=purpose)
-            content = _strip_fences(resp.content)
-            try:
-                data = json.loads(content)
-            except json.JSONDecodeError as e:
-                # 截断的表现就是这个（见模块 docstring ②）。降一档 = 给正文腾预算。
-                errors.append(f'effort={effort} think={thinking} finish={resp.finish_reason} '
-                              f'clen={len(content)} 解析失败: {e}')
-                continue
-            missing = [k for k in require if not (isinstance(data, dict) and data.get(k))]
-            if not missing:
-                return data
-            # ⚠ **空壳踢出缓存。** 留着它，下一次不带 `--no-cache` 的重跑会原样读回来，
-            #   而调用方看到的是一模一样的失败——那不是重试，是把同一个结果读了两遍。
-            self.cache.evict(key)
-            errors.append(f'effort={effort} think={thinking} finish={resp.finish_reason} '
-                          f'clen={len(content)} 顶层缺必需键（或值为空）: {missing}')
+            for use_cache in (True, False):    # ← 缓存那份不可用 ⇒ 同一档真发一次，见 `_call_keyed`
+                resp, key, cached = self._call_keyed(
+                    system, user, effort=effort, thinking=thinking, json_mode=True,
+                    max_tokens=max_tokens, purpose=purpose, use_cache=use_cache)
+                content = _strip_fences(resp.content)
+                head = (f'effort={effort} think={thinking}{" [缓存]" if cached else ""} '
+                        f'finish={resp.finish_reason} clen={len(content)}')
+
+                why = None
+                obj = None
+                try:
+                    data = json.loads(content)
+                except json.JSONDecodeError as e:
+                    # 截断的表现就是这个（见模块 docstring ②）。降一档 = 给正文腾预算。
+                    why = f'解析失败: {e}'
+                else:
+                    missing = [k for k in require
+                               if not isinstance(data, dict) or k not in data
+                               or _is_empty(data[k])]
+                    if missing:
+                        why = f'顶层缺必需键（或值为空）: {missing}'
+                    else:
+                        try:
+                            obj = model_cls.model_validate(data)
+                        except ValidationError as e:
+                            why = f'不合 {model_cls.__name__} 的契约: {e}'
+
+                if why is None:
+                    # ⚠⚠ **判定可用之后才写缓存。** 见 `_call_keyed`。
+                    if not cached:
+                        self._keep(key, resp)
+                    return obj
+
+                # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
+                #   留着它，下一次不带 `--no-cache` 的重跑会原样读回来，
+                #   而调用方看到的是一模一样的失败：**那不是重试，是把同一个结果读了两遍**。
+                self.cache.evict(key)
+                errors.append(f'{head} {why}')
+                if not cached:
+                    break                      # 真发的也坏 ⇒ 这一档确实不行，降一档
         raise LlmFailed(
             f'{self.ctx.node}/{purpose}: 走完 {len(LADDER)} 档阶梯仍然没有可用的 JSON。\n  '
             + '\n  '.join(errors)
@@ -155,30 +223,46 @@ class LlmClient:
 
     # ── 一次调用：缓存 → 传输层重试 → 记账 ────────────────────────────────
 
-    def _call(self, system: str, user: str, **kw: Any) -> ChatResponse:
-        return self._call_keyed(system, user, **kw)[0]
-
     def _call_keyed(self, system: str, user: str, *, effort: str, thinking: bool,
-                    json_mode: bool, max_tokens: int, purpose: str) -> tuple[ChatResponse, str]:
+                    json_mode: bool, max_tokens: int, purpose: str,
+                    use_cache: bool = True) -> tuple[ChatResponse, str, bool]:
+        """发一次（或读一次缓存）。返回 `(响应, 缓存键, 这一份是不是缓存来的)`。
+
+        ⚠⚠ **它不再写缓存。** 原来这里拿到响应就 `put`，而调用方**还没判断它可不可用**：
+        于是四档阶梯各自拿回一份截断 JSON 时，盘上留下的是**四份毒缓存**——
+        此后一次完全健康的重跑会 0 次真调用、以一模一样的方式失败，
+        不带 `--no-cache` 永远走不出来。
+        ⇒ 写缓存的时机挪到「判定可用之后」，由两个入口各自调 `_keep`。
+        `cached` 这一格是给它们用的：读回来的那一份不必再写一遍。
+
+        `use_cache=False` 是**同一档的第二次**（见两个入口里的 `for use_cache in (True, False)`）：
+        ⚠ 一份**读回来之后才发现不可用**的缓存，是一次**发现得晚的 miss**，不是模型的毛病。
+        光 evict 不重发的话，四档会各自读回自己那份毒缓存、各自 evict、然后整体失败——
+        报出来的症状是「模型连着四档都吐截断 JSON」，而**事实是缓存坏了、模型一次都没被问到**。
+        「派生症状盖住一句话能说清的事实」正是本项目反复付学费的那个形状。
+        ⇒ 缓存那份不可用 ⇒ 同一档真发一次；真发的那份也不可用 ⇒ 这一档确实不行，降一档。
+        """
         req = ChatRequest(model=self.model, system=system, user=user,
                           reasoning_effort=effort, thinking=thinking,
                           json_mode=json_mode, max_tokens=max_tokens)
         key = cache_key(req)
         policy: CachePolicy = self.ctx.cache
 
-        if policy.read:
+        if use_cache and policy.read:
             hit = self.cache.get(key)
             if hit is not None:
                 # ⚠ **缓存命中也要记一行。** 不记的话，「这次跑读了 31 份缓存」与
                 #   「这次跑什么都没做」在账本上长得一模一样，而这两件事的下一步完全不同。
                 self._record_cache_hit(hit, purpose=purpose)
-                return hit, key
+                return hit, key, True
 
         # ⚠ 记账在 `_send_with_retry` 里逐次发生（那里才知道自己发了几次）。
-        resp = self._send_with_retry(req, purpose=purpose)
-        if policy.write:
-            self.cache.put(key, resp)      # 空 content 由 `put` 自己拒掉
-        return resp, key
+        return self._send_with_retry(req, purpose=purpose), key, False
+
+    def _keep(self, key: str, resp: ChatResponse) -> None:
+        """把一份**已经判定可用**的响应写进缓存。全类唯一的写口。"""
+        if self.ctx.cache.write:
+            self.cache.put(key, resp)      # 空 content 由 `put` 自己再拒一道
 
     def _send_with_retry(self, req: ChatRequest, *, purpose: str) -> ChatResponse:
         """**传输层**重试。与降级阶梯是两条独立的循环（见模块 docstring 末尾）。

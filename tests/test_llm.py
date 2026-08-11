@@ -123,7 +123,7 @@ def test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget():
 
     t = FakeTransport(responder=responder)
     out = _client(t).ask_json('sys', 'usr', model_cls=Resp, purpose='t')
-    assert out['surface_habits'] == ['h']
+    assert out.surface_habits == ['h']
     assert t.rungs == [('high', True), ('medium', True), ('low', True)]
 
 
@@ -138,7 +138,7 @@ def test_a_legal_but_structurally_empty_json_goes_down_the_same_ladder():
     shell = ChatResponse(content='{"voice": {"a": 1}}', finish_reason='stop', usage=None)
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
     out = _client(t).ask_json('sys', 'usr', model_cls=Resp, purpose='t')
-    assert out['surface_habits'] == ['h']
+    assert out.surface_habits == ['h']
     assert t.rungs == [('high', True), ('medium', True)]
 
 
@@ -231,6 +231,67 @@ def _json_req(effort: str, thinking: bool) -> ChatRequest:
                        json_mode=True, max_tokens=DEFAULT_MAX_TOKENS)
 
 
+def test_a_truncated_response_is_never_written_to_the_cache():
+    """⭐⭐ **写缓存的时机原来在「判断它可不可用」之前。**
+
+    `_call_keyed` 拿到响应就 `put`，而 `ask_json` 还没解析它。于是四档阶梯各自
+    拿回一份截断 JSON 时，盘上留下的是**四份毒缓存**——解析失败那条路
+    （唯一没 evict 的那条）走完，四份全留着。
+    """
+    d = Path(tempfile.mkdtemp())
+    truncated = ChatResponse(content='{"voice": {"a": 1}, "surface_hab', finish_reason='length')
+    t = FakeTransport(responder=lambda _r, i: truncated if i < 1 else OK_JSON)
+    _client(t, cache=ResponseCache(d)).ask_json('s', 'u', model_cls=Resp, purpose='t')
+
+    keys = {p.name for p in d.iterdir()}
+    assert f'{cache_key(_json_req("high", True))}.json' not in keys, '截断的那一份进了缓存'
+    assert f'{cache_key(_json_req("medium", True))}.json' in keys, '好的那一份该留着'
+
+
+def test_a_poisoned_cache_entry_heals_within_the_very_same_run():
+    """⭐⭐ **一份读回来之后才发现不可用的缓存，是一次发现得晚的 miss，不是模型的毛病。**
+
+    实测形态：第一次四档全拿回截断 JSON ⇒ 四份毒缓存。第二次即使传输层保证返回
+    正确 JSON，也是 **0 次真调用**并以一模一样的方式失败——而且不带 `--no-cache`
+    永远走不出来。「重试」退化成把同一个坏结果读第二遍，
+    **而那与一次真调用在报告上长得一模一样**。
+
+    ⚠ 光 evict 不重发只能治好**下一次**跑，而这一次仍然会报
+    「模型连着四档都吐截断 JSON」——**而事实是缓存坏了、模型一次都没被问到**。
+    「派生症状盖住一句话能说清的事实」正是本项目反复付学费的那个形状。
+    ⇒ 同一档真发一次。
+    """
+    d = Path(tempfile.mkdtemp())
+    poison = ChatResponse(content='{"voice": {"a": 1}, "surface_hab', finish_reason='length')
+    cache = ResponseCache(d)
+    for e, th in LADDER:
+        cache.put(cache_key(_json_req(e, th)), poison)
+    assert len(list(d.iterdir())) == len(LADDER)
+
+    ctx = _ctx()
+    t = FakeTransport.always(OK_JSON)
+    out = _client(t, ctx=ctx, cache=ResponseCache(d)).ask_json(
+        's', 'u', model_cls=Resp, purpose='t')
+    assert out.surface_habits == ['h']
+    assert t.rungs == [('high', True)], '第一档就该真发一次，而不是把四档毒缓存读一遍'
+    assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (1, 1)
+    # 毒的那份走了，好的那份留下
+    assert cache.get(cache_key(_json_req('high', True))).text == OK_JSON.text
+
+
+def test_a_genuinely_bad_response_still_walks_the_ladder_without_double_sending():
+    """同一档的「第二次」只给**缓存坏了**那种情况。真发的那份也坏 ⇒ 直接降一档。
+
+    否则每一档都会真发两遍——**降级阶梯的花费当场翻倍**，而阶梯守的正是钱。
+    """
+    truncated = ChatResponse(content='{"voice": {"a": 1}, "surface_hab', finish_reason='length')
+    t = FakeTransport(responder=lambda _r, i: truncated if i < 2 else OK_JSON)
+    out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
+    assert out.surface_habits == ['h']
+    assert t.rungs == [('high', True), ('medium', True), ('low', True)], \
+        '每一档发了不止一次——阶梯的花费翻倍了'
+
+
 def test_a_half_written_cache_file_reads_as_a_miss_not_as_a_failure():
     """⚠ 半截缓存抛异常的话，那个异常会被当成「这次调用失败」——
     **把一次已经付过钱的结果变成一次重跑**。⇒ 读不出来一律当没有。"""
@@ -310,6 +371,73 @@ def test_require_is_derived_from_the_response_model():
     shell = ChatResponse(content='{"voice": {"a": 1}}', finish_reason='stop')
     with pytest.raises(LlmFailed, match='surface_habits'):
         _client(FakeTransport.always(shell)).ask_json('s', 'u', model_cls=Resp, purpose='t')
+
+
+def test_ask_json_returns_a_validated_model_not_a_raw_dict():
+    """⭐⭐ `model_cls` 原来**只**被拿去派生 `require`，一次 `model_validate` 都没跑过。
+
+    `store.py` 那条主杠杆写着「只有 `store.read` 返回带类型的模型 ⇒ 绕过意味着
+    同时放弃校验和类型」。`ask_json` 是不可信数据进运行时的**另一扇门**，得守同一条。
+    校验完再退回 dict 等于让调用方读**未校验**的那一份（pydantic 会强制转换、
+    填默认值、走别名）——同一份响应的两种表示，而两种表示必然分家。
+    """
+    out = _client(FakeTransport.always(OK_JSON)).ask_json(
+        's', 'u', model_cls=Resp, purpose='t')
+    assert isinstance(out, Resp)
+    assert out.voice == {'a': 1} and out.surface_habits == ['h']
+    assert out.note is None, '可选字段该由模型填默认值'
+
+
+@pytest.mark.parametrize('bad', [
+    {'voice': 'not-a-dict', 'surface_habits': ['h']},      # 类型错
+    {'voice': {'a': 1}, 'surface_habits': [1]},            # 元素类型错
+])
+def test_a_wrongly_shaped_value_walks_the_ladder_instead_of_being_accepted(bad):
+    """⭐ `require` 只查真值，于是 `Resp.model_validate` 明确拒绝的两种形状被一路放行。
+
+    ⚠ 这也意味着 `extra='forbid'` 那类**载体守卫一次都没响过**——
+    契约层为它们写的每一条理由，在这条路上都不成立。
+    形状错与「结构上是空的」是同一类故障：走同一条阶梯，降一档再试。
+    """
+    t = FakeTransport(responder=lambda _r, i:
+                      ChatResponse(content=json.dumps(bad), finish_reason='stop')
+                      if i < 1 else OK_JSON)
+    out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
+    assert out.surface_habits == ['h']
+    assert t.rungs == [('high', True), ('medium', True)], '形状错的那一份被放行了'
+
+
+def test_a_legitimate_false_or_zero_is_not_mistaken_for_a_missing_key():
+    """⭐ **`False` 与 `0` 不叫空。**
+
+    原来这里写的是 `not data.get(k)`，于是一个合法的 `False`（或 `0`、或一个刻意
+    为空的集合语义）会被报成「模型没给这个键」——**白走四档阶梯、花四次钱，
+    去救一个根本没坏的响应**。
+    """
+    class Flags(BaseModel):
+        flag: bool
+        count: int
+
+    t = FakeTransport.always(ChatResponse(
+        content='{"flag": false, "count": 0}', finish_reason='stop'))
+    out = _client(t).ask_json('s', 'u', model_cls=Flags, purpose='t')
+    assert (out.flag, out.count) == (False, 0)
+    assert len(t.calls) == 1, '一档就该成功，而它走了阶梯'
+
+
+def test_an_empty_collection_is_still_treated_as_the_f125_shell():
+    """反过来这道闸**不能删**：F-125 那个形态是**合法 JSON**，`model_validate` 也放行。
+
+    实测：`{"reconstruction_strategy": "…"}`——**0 个输出章**、正常结束、
+    4477 token 里推理占 4317；下游把它摊成 74 条派生症状。
+    要让 pydantic 自己拦住它，响应模型得声明 `Field(min_length=1)`——
+    而「记得声明」正是判据 39 已经证明过靠不住的那种纪律。
+    """
+    shell = ChatResponse(content='{"voice": {}, "surface_habits": []}', finish_reason='stop')
+    t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
+    out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
+    assert out.surface_habits == ['h']
+    assert t.rungs == [('high', True), ('medium', True)], '空集合被当成可用的响应放行了'
 
 
 def test_an_explicit_require_may_only_narrow():
