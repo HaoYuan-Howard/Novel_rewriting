@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+test_report.py —— 报告按**判据**编排而不是按**结论**编排，这件事得有守卫。
+
+【这份测试盯的那一句话】`build()` 遍历判据注册表，**不遍历 findings**。
+它推出来的两条性质各杀掉一种已发生的故障：
+  · 注册了而没实现 ⇒ 一行 `skipped`（stage7 的 `rn_unregistered`：判据表里注册着、
+    全仓 0 行实现、每本每次打绿灯）
+  · 产出了而没注册 ⇒ 抛（镜像疾病：那条结论的 `sev`/`owner` 是谁定的？）
+
+⚠ 全程用**合成的 `Registry` 实例**，不碰全局 `REGISTRY`——
+往全局注册会撞 `test_rules_registry.py::test_registry_starts_empty`，
+而那条测试守着「判据随各 stage 移植过来时才注册」。
+"""
+from __future__ import annotations
+
+import pytest
+
+from contracts.invariants import STATUS
+from contracts.rules import Registry, RetiredRule, Rule
+from contracts.schema.report import (
+    CheckReport, ProvenanceSection, RuleLine, StatusCounts, badge_of, finding,
+)
+from novel.errors import AccountingKeyUnregistered, RefusedByStructure
+from novel.prov import EdgeVerdict, FreshnessReport
+from novel.report import accounting as acc
+from novel.report import build, render
+from novel.report.findings import ran, unverifiable
+
+NODE = 'stage3.style'
+STAGE = 'stage3'
+
+
+# ───────────────────────── 脚手架 ─────────────────────────
+
+def _rule(**kw) -> Rule:
+    base = dict(rule='r_demo', stage=STAGE, item='示例判据', sev='hard',
+                who_checks='HARD', requirement='R-4.5', owner='stage3')
+    base.update(kw)
+    return Rule(**base)
+
+
+def _registry(*rules: Rule) -> Registry:
+    reg = Registry()
+    for r in rules or (_rule(),):
+        reg.register(r)
+    return reg
+
+
+def _fresh(*edges: EdgeVerdict) -> FreshnessReport:
+    if not edges:
+        return FreshnessReport('unknown', 'no_inputs')
+    worst = max(edges, key=lambda e: {'fresh': 0, 'unknown': 1, 'stale': 2}[e.state])
+    return FreshnessReport(worst.state, worst.reason, tuple(edges))
+
+
+def _ghost(key: str) -> EdgeVerdict:
+    return EdgeVerdict(key=key, state='unknown', reason='ghost',
+                       recorded_file='0123456789', now_file=None,
+                       recorded_consumed=None, now_consumed=None)
+
+
+def _build(reg: Registry, outcomes=(), *, accounting=None, spec=(), monkeypatch=None, **kw):
+    if monkeypatch is not None:
+        monkeypatch.setitem(acc.ACCOUNTING, STAGE, tuple(spec))
+    return build(sid='7615069877019300633', node=NODE, freshness=_fresh(),
+                 outcomes=outcomes, accounting=accounting, registry=reg, **kw)
+
+
+# ───────── ⭐ 报告由注册表生成，不由产出生成 ─────────
+
+def test_a_registered_rule_with_no_implementation_becomes_skipped_not_absent(monkeypatch):
+    """⭐ **本层最值钱的一条。**
+
+    stage7 的 `rn_unregistered` 在判据表里注册着、全仓 0 行实现，而它是 `info`
+    ⇒ 每本每次都打绿灯。报告由**产出**生成时，这种判据会从报告里**消失**，
+    而消失与「跑过没事」在界面上长得一模一样。
+    """
+    rep = _build(_registry(_rule(rule='never_implemented')), (), monkeypatch=monkeypatch)
+    assert [r.rule for r in rep.rules] == ['never_implemented']
+    line = rep.rules[0]
+    assert line.status == 'skipped'
+    assert line.why and '未被调用' in line.why
+    assert line.findings == []
+
+
+def test_the_row_count_equals_the_registry_not_the_outcomes(monkeypatch):
+    """三条注册、一条有产出 ⇒ **仍然三行**。"""
+    reg = _registry(_rule(rule='a'), _rule(rule='b', sev='info'), _rule(rule='c', sev='info'))
+    rep = _build(reg, [ran('b', [finding('b', detail='命中', evidence=['x'], registry=reg)])],
+                 monkeypatch=monkeypatch)
+    assert len(rep.rules) == 3
+    assert {r.rule: r.status for r in rep.rules} == {'a': 'skipped', 'b': 'hit', 'c': 'skipped'}
+
+
+def test_an_outcome_for_an_unregistered_rule_raises(monkeypatch):
+    """镜像疾病：一条没有判据表撑腰的结论，它的 `sev` / `owner` 是谁定的？"""
+    reg = _registry(_rule(rule='a'))
+    orphan = ran('a')
+    object.__setattr__(orphan, 'rule', 'ghost_rule')      # 绕过 Outcome 自己的校验
+    with pytest.raises(RefusedByStructure, match='判据表里没有'):
+        _build(reg, [orphan], monkeypatch=monkeypatch)
+
+
+def test_two_outcomes_for_the_same_rule_raise(monkeypatch):
+    """并表时会静默丢掉其中一份——而「一条注册判据恰好一行」在这里就已经破了。"""
+    reg = _registry(_rule(rule='a', sev='info'))
+    with pytest.raises(RefusedByStructure, match='两份结果'):
+        _build(reg, [ran('a'), ran('a')], monkeypatch=monkeypatch)
+
+
+def test_a_stage_with_no_registered_rules_raises(monkeypatch):
+    """守卫的守卫：一份零判据的报告**看起来是绿的**，而它什么也没查。"""
+    with pytest.raises(RefusedByStructure, match='一条注册判据都没有'):
+        _build(Registry(), (), monkeypatch=monkeypatch)
+
+
+# ───────── 徽章 ─────────
+
+def test_a_skipped_hard_rule_fails_the_badge(monkeypatch):
+    """一条阻断级判据这次没被执行，与它执行了并且命中，对调用方是同一件事：
+    **你不能拿这份产物往下走。** 降成 amber 等于说「大概没事」，而我们恰恰不知道。"""
+    rep = _build(_registry(_rule(rule='hard_one', sev='hard')), (), monkeypatch=monkeypatch)
+    assert rep.badge == 'fail' and rep.passed is False
+
+
+def test_a_skipped_info_rule_only_ambers_the_badge(monkeypatch):
+    rep = _build(_registry(_rule(rule='info_one', sev='info')), (), monkeypatch=monkeypatch)
+    assert rep.badge == 'amber' and rep.passed is True
+
+
+def test_an_unverifiable_rule_ambers_but_never_passes_green(monkeypatch):
+    """`amber` 不是绿色 ⇒ **「pass + N 项未验证」在类型上不可能**。"""
+    reg = _registry(_rule(rule='name_leak'))
+    rep = _build(reg, [unverifiable('name_leak', '这本书没有名表')], monkeypatch=monkeypatch)
+    assert rep.rules[0].status == 'unver'
+    assert rep.badge == 'amber' and rep.counts.unver == 1
+
+
+def test_everything_ran_and_nothing_hit_is_the_only_way_to_pass(monkeypatch):
+    reg = _registry(_rule(rule='a'), _rule(rule='b', sev='info'))
+    rep = _build(reg, [ran('a'), ran('b')], monkeypatch=monkeypatch)
+    assert rep.badge == 'pass' and rep.counts == StatusCounts(ok=2, hit=0, unver=0, skipped=0)
+
+
+# ───────── 度量：无条件产出，**永不命中** ─────────
+
+def _metric_rule(rule='m'):
+    return _rule(rule=rule, sev='metric', who_checks='METRIC', owner=None)
+
+
+def test_a_metric_with_readings_is_ok_not_hit(monkeypatch):
+    """度量有产出是**常态**。写成 `hit` 就是把「现状读数」重新并回「告警」那一支。"""
+    reg = _registry(_metric_rule())
+    rep = _build(reg, [ran('m', [finding('m', detail='中位 138 字', evidence=['138'],
+                                         registry=reg)])], monkeypatch=monkeypatch)
+    assert rep.rules[0].status == 'ok'
+    assert len(rep.rules[0].findings) == 1, '读数不许因为「不算命中」就被丢掉'
+
+
+def test_a_metric_never_affects_the_badge(monkeypatch):
+    reg = _registry(_metric_rule(), _rule(rule='a', sev='info'))
+    rep = _build(reg, [ran('m', [finding('m', detail='读数', evidence=['1'], registry=reg)]),
+                       ran('a')], monkeypatch=monkeypatch)
+    assert rep.badge == 'pass'
+
+
+def test_a_ruleline_that_claims_a_metric_hit_raises():
+    with pytest.raises(ValueError, match='度量'):
+        RuleLine(rule='m', sev='metric', status='hit', item='x', requirement='R-4.5')
+
+
+# ───────── 「够不着」必须说出为什么 ─────────
+
+def test_a_permanently_unverifiable_rule_must_say_why(monkeypatch):
+    """`sev='unver'` 的判据（stage6 有 3/9 条）必须说出边界在哪，而只有它自己知道。"""
+    reg = _registry(_rule(rule='u', sev='unver', owner=None))
+    with pytest.raises(RefusedByStructure, match='为什么够不着'):
+        _build(reg, [ran('u')], monkeypatch=monkeypatch)
+    rep = _build(reg, [unverifiable('u', '连续文本上的字面探针结构性失效')],
+                 monkeypatch=monkeypatch)
+    assert rep.rules[0].status == 'unver'
+
+
+def test_an_unverifiable_outcome_without_a_reason_raises():
+    with pytest.raises(ValueError, match='没写出为什么'):
+        unverifiable('u', '   ')
+
+
+@pytest.mark.parametrize('status', ['ok', 'hit'])
+def test_a_rule_that_ran_must_not_carry_a_why(status):
+    """跑过的两态带 `why` 是噪声，而噪声会让人不看报告。"""
+    kw = dict(rule='a', sev='info', item='x', requirement='R-4.5', why='多余的话')
+    if status == 'hit':
+        kw['findings'] = [_finding_for('a')]
+    with pytest.raises(ValueError, match='不该带 why'):
+        RuleLine(status=status, **kw)
+
+
+def _finding_for(rule: str):
+    reg = _registry(_rule(rule=rule, sev='info'))
+    return finding(rule, detail='d', evidence=['e'], registry=reg)
+
+
+def test_a_skipped_row_cannot_carry_findings():
+    with pytest.raises(ValueError, match='skipped'):
+        RuleLine(rule='a', sev='info', status='skipped', item='x', requirement='R-4.5',
+                 why='没跑', findings=[_finding_for('a')])
+
+
+# ───────── `finding()` 工厂：一条结论不可能与判据表说的不一致 ─────────
+
+def test_the_factory_takes_sev_item_owner_from_the_registry():
+    reg = _registry(_rule(rule='a', sev='info', item='它在守这个', owner='stage2'))
+    f = finding('a', detail='正文', evidence=['x', 'y'], registry=reg)
+    assert (f.sev, f.item, f.owner) == ('info', '它在守这个', 'stage2')
+    assert f.evidence_key == 'x|y', 'evidence_key 是 evidence 的函数，载体的后置条件'
+
+
+def test_the_factory_refuses_a_rule_that_is_not_registered():
+    with pytest.raises(KeyError, match='不在注册表里'):
+        finding('no_such_rule', detail='d', evidence=[], registry=_registry())
+
+
+def test_actionable_is_derived_from_repair_not_stored_twice():
+    """`Rule` 上**没有** `actionable` 字段，它从 `repair != 'NONE'` 派生。
+    加第二个字段等于给同一件事开第二个落点。"""
+    plain = _registry(_rule(rule='a', sev='info', owner='stage5'))
+    assert finding('a', detail='d', evidence=[], registry=plain).actionable is False
+    fed = _registry(_rule(rule='a', sev='info', owner='stage5', repair='UNIQUE'))
+    assert finding('a', detail='d', evidence=[], registry=fed).actionable is True
+
+
+# ───────── 记账键的出口 ─────────
+
+def _spec(*pairs):
+    return tuple(acc.AccountingSpec(k, i) for k, i in pairs)
+
+
+def test_an_accounting_key_with_no_spec_raises(monkeypatch):
+    """**记了一笔谁也读不到的账**：数已经写进 `_provenance`，人却永远看不见。
+    原型 13 个记账键里 6 个 0 出口。"""
+    with pytest.raises(AccountingKeyUnregistered, match='attempts'):
+        _build(_registry(), (), accounting={'attempts': [1]},
+               spec=(), monkeypatch=monkeypatch)
+
+
+def test_a_declared_key_the_producer_never_recorded_is_flagged(monkeypatch):
+    """「记了 0 次」与「压根没记」必须分开。"""
+    reg = _registry(_rule(rule='a', sev='info'))
+    rep = _build(reg, [ran('a')], accounting={},
+                 spec=_spec(('attempts', '第几次才产对的')), monkeypatch=monkeypatch)
+    line = rep.accounting[0]
+    assert line.recorded is False and line.count == 0
+    assert '[????] attempts：未记录' in render(rep)
+
+
+def test_an_empty_value_still_prints_its_line(monkeypatch):
+    """空也要报，报成 `0 处`——「没改过」与「没在报」必须分得开。"""
+    reg = _registry(_rule(rule='a', sev='info'))
+    rep = _build(reg, [ran('a')], accounting={'gates_skipped': []},
+                 spec=_spec(('gates_skipped', '哪几条闸门没跑成')), monkeypatch=monkeypatch)
+    assert rep.accounting[0].recorded is True and rep.accounting[0].count == 0
+    assert 'gates_skipped：0 处' in render(rep)
+
+
+def test_a_stage_missing_from_the_table_raises(monkeypatch):
+    """八层都要有一行：「这层没有记账键」是空元组，与「这层没被声明过」不是一回事。"""
+    monkeypatch.delitem(acc.ACCOUNTING, STAGE)
+    with pytest.raises(AccountingKeyUnregistered, match='没有一行'):
+        build(sid='s', node=NODE, freshness=_fresh(),
+              outcomes=[ran('a')], registry=_registry(_rule(rule='a', sev='info')))
+
+
+def test_a_recorded_zero_is_not_the_same_as_unrecorded(monkeypatch):
+    reg = _registry(_rule(rule='a', sev='info'))
+    spec = _spec(('n', '数一个数'))
+    rep = _build(reg, [ran('a')], accounting={'n': 0}, spec=spec, monkeypatch=monkeypatch)
+    assert rep.accounting[0].recorded is True and rep.accounting[0].count == 0
+
+
+def test_an_unrecorded_line_cannot_carry_a_count():
+    from contracts.schema.report import AccountingLine
+    with pytest.raises(ValueError, match='没记'):
+        AccountingLine(key='k', item='i', recorded=False, count=3)
+
+
+# ───────── 来源在前，判定在后 ─────────
+
+def test_provenance_comes_before_the_rules_in_the_rendered_report(monkeypatch):
+    """`Q-4`：对不上时报出来的一堆违规是「拿新尺子量旧布」，不说破就会被当成一次回归。"""
+    reg = _registry(_rule(rule='a', sev='info'))
+    text = render(_build(reg, [ran('a')], monkeypatch=monkeypatch))
+    assert text.index('── 来源 ──') < text.index('── 判据 ──')
+
+
+def test_ghost_edges_are_named_not_just_counted(monkeypatch):
+    """`Q-4` 亲自点过的 bug：原型对「取不到指纹」的条目**静默跳过**。"""
+    monkeypatch.setitem(acc.ACCOUNTING, STAGE, ())
+    reg = _registry(_rule(rule='a', sev='info'))
+    rep = build(sid='s', node=NODE, freshness=_fresh(_ghost('stage4/plan_chapters.INVALID.json')),
+                outcomes=[ran('a')], registry=reg)
+    assert rep.provenance.ghosts == ['stage4/plan_chapters.INVALID.json']
+    assert 'stage4/plan_chapters.INVALID.json' in render(rep)
+    assert rep.provenance.freshness == 'unknown', '幽灵边**永不 fresh**'
+
+
+def test_the_ghost_list_cannot_be_hand_written():
+    """点名清单只能从逐条边派生——手抄一份必然与判定分家。"""
+    with pytest.raises(ValueError, match='ghosts'):
+        ProvenanceSection(freshness='unknown', reason='ghost', ghosts=['我编的'],
+                          edges=[{'key': 'a/b.json', 'state': 'fresh', 'reason': 'match',
+                                  'recorded_file': None, 'now_file': None,
+                                  'recorded_consumed': None, 'now_consumed': None}])
+
+
+def test_the_three_state_keys_survive_as_three_states(monkeypatch):
+    """`None` = 键不在（这份产物太老），与 `False` 不是一回事。"""
+    reg = _registry(_rule(rule='a', sev='info'))
+    rep = _build(reg, [ran('a')], monkeypatch=monkeypatch, revalidated=None, origin=None)
+    assert '键不在' in render(rep)
+    rep2 = _build(reg, [ran('a')], monkeypatch=monkeypatch, revalidated=False)
+    assert rep2.provenance.revalidated is False
+    assert 'revalidated：False' in render(rep2)
+
+
+# ───────── 服务端算的那几个数不许与 rules 分家（`R-11.7`） ─────────
+
+def _line(**kw) -> RuleLine:
+    base = dict(rule='a', sev='info', status='ok', item='x', requirement='R-4.5')
+    base.update(kw)
+    return RuleLine(**base)
+
+
+def _report(rules, **kw) -> CheckReport:
+    base = dict(sid='s', node=NODE, stage=STAGE,
+                provenance=ProvenanceSection(freshness='unknown', reason='no_inputs'),
+                rules=rules, badge=badge_of(rules), passed=badge_of(rules) != 'fail',
+                counts=StatusCounts.of(rules))
+    base.update(kw)
+    return CheckReport(**base)
+
+
+def test_a_badge_that_disagrees_with_the_rules_raises():
+    with pytest.raises(ValueError, match='徽章只有一处算'):
+        _report([_line()], badge='fail', passed=False)
+
+
+def test_counts_that_disagree_with_the_rules_raise():
+    with pytest.raises(ValueError, match='counts'):
+        _report([_line()], counts=StatusCounts(ok=9, hit=0, unver=0, skipped=0))
+
+
+def test_the_same_rule_cannot_appear_twice():
+    with pytest.raises(ValueError, match='不止一行'):
+        _report([_line(), _line()])
+
+
+# ───────── 退役而不删 ─────────
+
+def test_a_retired_rule_stays_in_the_report_with_its_reason(monkeypatch):
+    """让「量过、量不准，所以撤了」与「忘了」读起来不一样。"""
+    reg = _registry(_rule(rule='a', sev='info'))
+    reg.retire(RetiredRule(rule='cliche', stage=STAGE, why='词表判据不报基线，等于不知道自己在说什么'))
+    rep = _build(reg, [ran('a')], monkeypatch=monkeypatch)
+    assert [r.rule for r in rep.retired] == ['cliche']
+    assert 'cliche' in render(rep)
+    assert 'cliche' not in {r.rule for r in rep.rules}, '退役的不许同时占一行判定'
+
+
+def test_a_rule_cannot_be_both_live_and_retired():
+    """那种状态下报告会既列一行判定又列一行「已退役」，而人只会信其中一行。"""
+    reg = _registry(_rule(rule='a', sev='info'))
+    with pytest.raises(ValueError, match='同时是现役判据和退役判据'):
+        reg.retire(RetiredRule(rule='a', stage=STAGE, why='理由'))
+    reg2 = Registry()
+    reg2.retire(RetiredRule(rule='b', stage=STAGE, why='理由'))
+    with pytest.raises(ValueError, match='已登记为退役'):
+        reg2.register(_rule(rule='b', sev='info'))
+
+
+def test_retiring_without_a_reason_raises():
+    with pytest.raises(ValueError, match='理由'):
+        Registry().retire(RetiredRule(rule='x', stage=STAGE, why='  '))
+
+
+# ───────── `Q-9`：词表判据永远打印基线 ─────────
+
+def test_a_wordlist_rule_always_carries_its_baseline_into_the_report(monkeypatch):
+    """两段合起来的链：注册期拦住「没填基线」，构造期原样带出来。"""
+    reg = _registry(_rule(rule='w', sev='info', wordlist=True,
+                          baseline='头牌 0/17，三岁 2/40'))
+    rep = _build(reg, [ran('w')], monkeypatch=monkeypatch)
+    assert rep.rules[0].baseline == '头牌 0/17，三岁 2/40'
+    assert '基线：头牌 0/17，三岁 2/40' in render(rep)
+
+
+# ───────── 守卫的守卫 ─────────
+
+def test_every_status_is_reachable_and_rendered(monkeypatch):
+    """四态都要有人走过一遍——`STATUS` 加了第五个值而没人处理时，这条会红。"""
+    reg = _registry(_rule(rule='h', sev='hard'), _rule(rule='o', sev='info'),
+                    _rule(rule='u', sev='info'), _rule(rule='s', sev='info'))
+    reg_hit = finding('h', detail='命中了', evidence=['x'], registry=reg)
+    rep = _build(reg, [ran('h', [reg_hit]), ran('o'), unverifiable('u', '没有样本')],
+                 monkeypatch=monkeypatch)
+    seen = {r.status for r in rep.rules}
+    assert seen == set(STATUS), f'只走到 {sorted(seen)}——四态没跑全'
+    text = render(rep)
+    for mark in ('[OK]', '[!!]', '[??]', '[--]'):
+        assert mark in text, f'{mark} 没出现在渲染结果里'

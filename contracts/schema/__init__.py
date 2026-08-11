@@ -30,6 +30,19 @@ from contracts.schema.common import (
     Usage,
     WontFix as WontFixNote,
 )
+from contracts.schema.report import (
+    AccountingLine,
+    Badge,
+    CheckReport,
+    EdgeLine,
+    ProvenanceSection,
+    RetiredLine,
+    RuleLine,
+    Status,
+    StatusCounts,
+    badge_of,
+    finding,
+)
 from contracts.schema.stage0 import RemovalReport, RemovedSegment, Stage0Warning
 from contracts.schema.stage1 import (
     HookCopy, MainText, MainTextSection, PartitionReport, Stage1Warning,
@@ -81,6 +94,9 @@ __all__ = [
     'InputEdge', 'Usage', 'Provenance', 'FreeProvenance', 'LlmProvenance',
     'RoundLlmProvenance', 'RoundFreeProvenance',
     'Finding', 'WontFixNote', 'Severity', 'Owner',
+    # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
+    'CheckReport', 'RuleLine', 'RetiredLine', 'ProvenanceSection', 'EdgeLine',
+    'AccountingLine', 'StatusCounts', 'Status', 'Badge', 'finding', 'badge_of',
     # 八层
     'RemovalReport', 'RemovedSegment', 'Stage0Warning',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',

@@ -100,6 +100,22 @@ class ProvenanceRefused(RefusedByStructure):
     """
 
 
+class AccountingKeyUnregistered(RefusedByStructure):
+    """产地记了一笔账，而 `novel/report/accounting.py::ACCOUNTING` 里没有这个键。
+
+    ⚠⚠ **它是「记了一笔谁也读不到的账」**：那个数已经写进 `_provenance`，人却永远看不见。
+    原型正是这个下场——13 个记账键里 6 个 0 出口（stage2 的 8 个有 5 个、stage3 的 3 个
+    **一个都没有**）。`Q-1` 的那句话是「**记账不是终点，报出来才是**」。
+    ⇒ 加一个记账键的成本必须是「同时给它一个出口」，否则加不进去。
+
+    ⚠ **为什么归到 `RefusedByStructure` 而不是 `TerminalState`**：`_common.md` §九
+    那张表写的是「显式终态」，而那是**口语义**（＝别静默）。按本模块开头那条分界线
+    ——「谁的错」——记账与声明表是**同一批代码**的两处，对不上就是代码自相矛盾，
+    不是数据说走不下去了。⇒ 是 bug，栈要留全。
+    这一处细化登记在 `docs/schema/_report.md` §六。
+    """
+
+
 class ByteFormRefused(RefusedByStructure):
     """字节形态产物（`clean_text.txt` / `draft.md` / `book.txt`）不合字节纪律。
 

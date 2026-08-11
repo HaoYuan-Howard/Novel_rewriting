@@ -54,9 +54,28 @@ class Rule:
     note: str = ''
 
 
+@dataclass(frozen=True)
+class RetiredRule:
+    """一条**退役而不删**的判据。
+
+    ⚠ 退役的是**判据**，不是**要求**：stage3 的 `cliche` 撤了，而 `STYLE_SYS` 里那句
+    「不要用『语言流畅／节奏明快』这类放之四海皆准的话填格」**仍在下发**——
+    那张九词表因此没有任何现役消费方，是判据 35 的教科书实例
+    （一条只写在 prompt 里的约束，遵守率没人在测）。
+    ⇒ 它必须在报告里**常驻一行**，好让「量过、量不准，所以撤了」与「忘了」读起来不一样。
+
+    `why` 必填：写不出理由的退役与「悄悄删掉」在盘上没有区别。
+    """
+
+    rule: str
+    stage: str
+    why: str
+
+
 class Registry:
     def __init__(self) -> None:
         self._rules: dict[str, Rule] = {}
+        self._retired: dict[str, RetiredRule] = {}
 
     def register(self, rule: Rule) -> Rule:
         if rule.rule in self._rules:
@@ -64,15 +83,56 @@ class Registry:
                 f'判据 id 重复：{rule.rule!r}。判据表只有一张，重名当场炸——'
                 f'两条同名判据会让「这一条报了没有」永远说不清'
             )
+        if rule.rule in self._retired:
+            raise ValueError(
+                f'判据 {rule.rule!r} 已登记为退役，不许再注册成现役。'
+                f'要复活它就先把那条退役登记撤掉——**复活是一次裁决，该被看见**'
+            )
         _validate(rule)
         self._rules[rule.rule] = rule
         return rule
+
+    def retire(self, retired: RetiredRule) -> RetiredRule:
+        """登记一条退役判据。**一个 id 不许同时又活着又退役。**
+
+        那种状态下报告会既列一行判定又列一行「已退役」，而人只会信其中一行。
+        """
+        if not retired.why.strip():
+            raise ValueError(f'{retired.rule}: 退役必须写出理由——没有理由的退役等于悄悄删掉')
+        if retired.rule in self._rules:
+            raise ValueError(
+                f'{retired.rule}: 它同时是现役判据和退役判据。'
+                f'报告会既列一行判定又列一行「已退役」，而人只会信其中一行'
+            )
+        if retired.rule in self._retired:
+            raise ValueError(f'{retired.rule}: 退役判据重复登记')
+        self._retired[retired.rule] = retired
+        return retired
+
+    def retired_of_stage(self, stage: str) -> tuple[RetiredRule, ...]:
+        return tuple(r for r in self._retired.values() if r.stage == stage)
 
     def __contains__(self, rid: str) -> bool:
         return rid in self._rules
 
     def __len__(self) -> int:
         return len(self._rules)
+
+    def get(self, rid: str) -> Rule:
+        """按 id 取一条。**取不到当场炸，不返回 `None`。**
+
+        ⚠ 这是 `finding()` 工厂唯一的入口。返回 `None` 会让「造一条没有判据表撑腰的
+        finding」变成一次静默的 `AttributeError`（或更坏：一条 `sev=None` 的结论），
+        而本表存在的全部意义就是**一条 finding 不可能与判据表说的不一致**。
+        """
+        try:
+            return self._rules[rid]
+        except KeyError:
+            raise KeyError(
+                f'判据 {rid!r} 不在注册表里。判据表是唯一落点——'
+                f'要么这个 id 拼错了，要么这条判据的【行】还没写'
+                f'（判据的行在 `contracts/judges/stageN.py`，与它守的契约同层）'
+            ) from None
 
     def all(self) -> tuple[Rule, ...]:
         return tuple(self._rules.values())
