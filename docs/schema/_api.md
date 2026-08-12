@@ -86,7 +86,7 @@
 
 ## 三、端点 → 响应
 
-**E 期落地的九个**（其余端点见 §七）：
+**当前落地的十八个**（基础九个 + Stage 0/1 九个；其余端点见 §七）：
 
 | 端点 | 响应 | 新旧 |
 |---|---|---|
@@ -99,6 +99,15 @@
 | `GET /api/jobs/:id` | `JobRecord` | **复用** `_orchestration.md` |
 | `GET /api/jobs/:id/log?offset=N` | `LogChunk` | 新 |
 | `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md` |
+| `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
+| `GET /api/novels/:sid/stage0/report` | `RemovalReport` | **复用** `stage0.md` |
+| `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
+| `POST /api/novels/:sid/stage0/edit` | `JobRecord`（请求体 `Stage0EditRequest`） | 新 |
+| `POST /api/novels/:sid/stage0/approve` | `JobRecord` | 新 |
+| `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
+| `GET /api/novels/:sid/stage1/segments` | `Stage1Segments` | 新 |
+| `GET /api/novels/:sid/stage1/chapters` | `Stage1Chapters` | 新 |
+| `GET /api/novels/:sid/stage1/hook_copy` | `HookCopyView` | 新 |
 
 ⚠ **preview 直接返回 `JobStart` 是有意的**，不是图省事：那个模型自带后置条件
 `paid == 任一步 paid` / `writes == 任一步 writes`，于是「整份贵贱是逐步折叠出来的」
@@ -218,14 +227,14 @@ HTTP 侧「书 id 不合法」的产地是**客户端**，那是 400。
 
 ---
 
-## 七、E 期**没有**落地的（登记，不是漏）
+## 七、仍**没有**落地的（登记，不是漏）
 
 - **未移植的七层**：路由**全部注册**，一律 **501** 并点名 `contracts.rules.PORTED_STAGES`。
   判定由 `stage not in PORTED_STAGES` 得出，不手写清单。
   ⇒ 前端分得出「URL 打错了」（404）与「这一层还没建」（501），而这两件事该做的动作完全不同。
-- **全部 POST，除 `/api/jobs/preview` 之外**。`POST /api/jobs`（真启动作业）不在 E 期
-  ——它会第一次让浏览器能花钱。⇒ `R-11.10` 的 409 在 E 期**只验到状态码映射表这一层**，
-  行为半边没验（没有第二个请求可以撞）。**别把它读成验过了。**
+- **通用 `POST /api/jobs` 仍不开放**——它会让浏览器够到付费节点。Stage 0/1 只开放
+  四条明确、确定性且免费的写入口；同书锁冲突的 HTTP 409 已由
+  `tests/test_api_discipline.py::test_stage01_job_conflict_maps_and_returns_409` 走真实请求验证。
 - **`stage5_review` 这个 check kind 已改名为 `stage5`**（E 期裁决），
   八个 kind 现在与 `invariants.STAGES` 逐值相等、从它派生。
   ⚠ `04_delivery.md:71` 那张「固定，不要改」的表要改这一格，`web/` 里的引用同理——

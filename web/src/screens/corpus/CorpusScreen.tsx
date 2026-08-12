@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
+import { errorBody } from '@/api/errors'
 import { qk } from '@/api/queryKeys'
 import { Mono } from '@/components/ui/Mono'
 import { LinkButton } from '@/components/ui/ActionButton'
@@ -18,13 +19,21 @@ export function CorpusScreen() {
   const vm = useCorpusScreen()
   const nav = useNavigate()
   const qc = useQueryClient()
-  const [file, setFile] = useState<{ name: string; size: number } | null>(null)
+  const [file, setFile] = useState<File | null>(null)
   const input = useRef<HTMLInputElement>(null)
 
   const upload = useMutation({
-    mutationFn: () => api.uploadCorpus(file!),
+    mutationFn: async () => {
+      const result = await api.uploadCorpus(file!)
+      if (result.job.state !== 'ok') {
+        throw new Error('Stage 0 扫描没有完成：' + result.job.state + '。请查看作业日志。')
+      }
+      return result
+    },
     onSuccess: ({ sid }) => {
-      void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
+      void qc.invalidateQueries({ queryKey: qk.novels() })
+      void qc.invalidateQueries({ queryKey: qk.stage0Report(sid) })
+      void qc.invalidateQueries({ queryKey: qk.stage0Segments(sid) })
       void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
       nav('/n/' + sid + '/stage0')
     },
@@ -52,14 +61,14 @@ export function CorpusScreen() {
           <div className="flex flex-col gap-4">
             <div className="text-h3 font-semibold">开一本新书</div>
             <div className="text-body text-ink-3">
-              丢一个 txt 进来 → stage0 立刻扫番外（不花钱），完了停在剔除番外那一屏等你确认删除范围
+              丢一个 txt / md 进来 → stage0 立刻扫非正文（不花钱），完了停在审校屏等你确认删除范围
             </div>
           </div>
           <label className="flex cursor-pointer items-center gap-14 rounded-block border-[1.5px] border-dashed border-ink-7 bg-sunken-2 px-16 py-14 hover:border-ink-4">
             <span className="text-h2 text-ink-5">＋</span>
             <span className="flex min-w-0 flex-col gap-3">
               <span className="truncate text-body-lg">
-                {file ? file.name : '把 .txt 拖到这儿，或点右边选文件'}
+                {file ? file.name : '选择一本 .txt / .md 原作'}
               </span>
               <span className="text-tag text-ink-4">
                 {file
@@ -70,11 +79,11 @@ export function CorpusScreen() {
             <input
               ref={input}
               type="file"
-              accept=".txt"
+              accept={'.txt,.md'}
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0]
-                if (f) setFile({ name: f.name, size: f.size })
+                if (f) setFile(f)
               }}
             />
             <span
@@ -97,13 +106,16 @@ export function CorpusScreen() {
                 (!file || upload.isPending ? 'cursor-not-allowed opacity-40' : 'cursor-pointer')
               }
             >
-              {file ? '上传并扫番外（stage0）' : '先选一个 txt'}
+              {file ? '上传并扫非正文（stage0）' : '先选一个 txt / md'}
             </button>
             <span className="text-tag text-ink-4">
               {file
                 ? 'stage0 与 stage1 都是确定性处理，不调 LLM、不花钱。'
-                : '只吃 txt。上传后立刻建 sid，落到 corpus/ 下。'}
+                : '上传会发送文件原始字节；成功后立刻建 sid。'}
             </span>
+            {upload.isError ? (
+              <span className={'text-tag text-warn'}>{errorBody(upload.error)}</span>
+            ) : null}
           </div>
         </div>
         <div className="flex flex-col gap-9 border-l border-line-soft bg-sunken-3 px-20 py-18">

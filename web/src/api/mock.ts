@@ -22,10 +22,13 @@ import type {
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
+  Stage0EditRequest,
   Stage0Extras,
+  Stage0Report,
+  Stage0Segments,
   Stage1Chapters,
   Stage1HookCopy,
-  Stage1Report,
+  Stage1Segments,
   Stage2Global,
   Stage3Style,
   Stage4Response,
@@ -164,7 +167,29 @@ const EXTRA_KINDS: Record<string, { label: string; paid: boolean }> = {
 }
 
 function enums(): EnumsResponse {
-  return raw<EnumsResponse>('enums.json')
+  const base = raw<EnumsResponse>('enums.json')
+  const additions = [
+    { kind: 'stage0.edit', label: 'stage0 人工编辑', extra: null, paid: false },
+    { kind: 'stage0.approve', label: 'stage0 人工批准', extra: null, paid: false },
+    { kind: 'stage1.partition', label: 'stage1 分章', extra: null, paid: false },
+  ]
+  return {
+    ...base,
+    job_kinds: {
+      ...base.job_kinds,
+      ...Object.fromEntries(
+        additions.map((item) => [item.kind, { label: item.label, paid: item.paid }]),
+      ),
+    },
+    actions: [
+      ...base.actions,
+      ...additions.map((item) => ({
+        ...item,
+        free_flag: '',
+        writes_disk: true,
+      })),
+    ],
+  }
 }
 
 /** 花不花钱由服务端的动作表说了算。这里是「假服务端」，所以查的是同一张表。 */
@@ -261,6 +286,19 @@ function spawn(req: JobRequest, label?: string): Job {
   return stripLog(job)
 }
 
+/** Stage 0–1 的真实接口是同步子进程；mock 也返回已经结束的作业，页面才能走同一条链。 */
+function finish(req: JobRequest, label?: string): Job {
+  const started = spawn(req, label)
+  const stored = JOBS.find((job) => job.id === started.id)
+  if (!stored) return started
+  stored.state = 'ok'
+  stored.finished = Math.floor(Date.now() / 1000)
+  stored.log = [...stored.log, '[mock] 完成']
+  JOBS = [...JOBS]
+  persistJobs()
+  return stripLog(stored)
+}
+
 /** 日志不进 /api/jobs 的响应，它走 /jobs/:id/log */
 function stripLog(j: MockJob): Job {
   return {
@@ -296,6 +334,123 @@ const SPAWN_ON_APPROVE: Partial<Record<GateKey, ActionRef[]>> =
     s7: [{ kind: 'n9_rename', label: 'stage7 · 组装成书 txt', extra: ['--assemble'] }],
   }
 
+function codePoints(text: string): number {
+  return [...text].length
+}
+
+function mockStage0Segments(sid: string): Stage0Segments {
+  const data = raw<Stage0Extras>('stage0_extras.json')
+  const saved = lsRead<Stage0EditRequest>('stage0.selection.' + sid)
+  const selected = new Set(saved?.removed_segment_ids)
+  const pieces = [
+    ...data.blocks.map((block, index) => ({
+      id: 'keep-' + index,
+      text: block.label + '\n' + block.preview + '\n\n',
+      machine: false,
+      marker: block.label,
+      removedKind: 'extra',
+    })),
+    ...data.candidates.map((candidate, index) => ({
+      id: 'remove-' + index,
+      text: candidate.marker + '\n' + candidate.head + '\n' + candidate.tail + '\n\n',
+      machine: true,
+      marker: candidate.marker,
+      removedKind: candidate.kind,
+    })),
+  ]
+  let offset = 0
+  const segments = pieces.map((piece) => {
+    const initial = saved ? selected.has(piece.id) : piece.machine
+    const chars = codePoints(piece.text)
+    const start = offset
+    offset += chars
+    return {
+      id: piece.id,
+      kind: initial ? 'remove' as const : 'keep' as const,
+      start,
+      end: offset,
+      chars,
+      flagged: initial,
+      text: piece.text,
+      origin: initial ? (piece.machine ? 'machine' as const : 'human' as const) : null,
+      removed_kind: initial ? piece.removedKind : null,
+      marker_line: initial ? piece.marker : null,
+    }
+  })
+  return { source_sha1: data.source_sha1, available: true, reason: null, segments }
+}
+
+function mockStage0Report(sid: string): Stage0Report {
+  const data = raw<Stage0Extras>('stage0_extras.json')
+  const segments = mockStage0Segments(sid).segments.filter((segment) => segment.kind === 'remove')
+  const approved = loadDoc(sid).gate.s0
+  return {
+    original_filename: data.original_filename,
+    original_path: '/mock/' + data.original_filename,
+    code: 'mock',
+    source_sha1: data.source_sha1,
+    clean_sha1: data.source_sha1,
+    source_encoding: data.source_encoding,
+    text_norm: 'v1:bom+crlf',
+    removed: segments.map((segment, index) => ({
+      kind: segment.removed_kind ?? 'extra',
+      marker_line: segment.marker_line ?? '人工选择',
+      line_no: index + 1,
+      span: [segment.start, segment.end],
+      code_points: segment.chars,
+      head_preview: segment.text.slice(0, 80),
+      tail_preview: segment.text.slice(-40),
+      origin: segment.origin ?? 'human',
+    })),
+    total_code_points: data.total_code_points,
+    body_code_points: Math.max(
+      0,
+      data.total_code_points - segments.reduce((sum, segment) => sum + segment.chars, 0),
+    ),
+    warnings: [],
+    approved: approved ? 'approved' : 'pending',
+    approved_at: approved ? new Date().toISOString() : null,
+    round: lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 2 : 1,
+    edited_by_human: !!lsRead<Stage0EditRequest>('stage0.selection.' + sid),
+  }
+}
+
+function mockStage1Segments(): Stage1Segments {
+  const source = raw<Stage0Extras>('stage0_extras.json')
+  const hook = raw<Stage1HookCopy>('stage1_hook_copy.json')
+  const chapters = raw<Stage1Chapters>('stage1_chapters.json')
+  const pieces = [
+    {
+      id: 'hook',
+      kind: 'hook' as const,
+      text: hook.hook_copy.text + '\n\n',
+      chapter_ordinal: null,
+      source_chapter_label: null,
+    },
+    ...chapters.chapters.map((chapter) => ({
+      id: 'chapter-' + chapter.chapter_ordinal,
+      kind: 'chapter' as const,
+      text: chapter.source_chapter_label + '\n' + chapter.preview + '\n\n',
+      chapter_ordinal: chapter.chapter_ordinal,
+      source_chapter_label: chapter.source_chapter_label,
+    })),
+  ]
+  let offset = 0
+  const segments = pieces.map((piece) => {
+    const chars = codePoints(piece.text)
+    const start = offset
+    offset += chars
+    return {
+      ...piece,
+      start,
+      end: offset,
+      chars,
+      flagged: false,
+    }
+  })
+  return { input_sha1: source.source_sha1, segments }
+}
+
 /* ------------------------------------------------------------------ Api */
 
 export const mockApi: Api = {
@@ -305,11 +460,46 @@ export const mockApi: Api = {
 
   getEnums: () => later(enums()),
 
-  getStage0: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage0/extras`, () => raw<Stage0Extras>('stage0_extras.json')),
+  getStage0Report: (sid) =>
+    bookOnly(sid, `/novels/${sid}/stage0/report`, () => mockStage0Report(sid)),
 
-  getStage1Report: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage1/report`, () => raw<Stage1Report>('stage1_report.json')),
+  getStage0Segments: (sid) =>
+    bookOnly(sid, `/novels/${sid}/stage0/segments`, () => mockStage0Segments(sid)),
+
+  editStage0: (sid, request) => {
+    lsWrite('stage0.selection.' + sid, request)
+    return later(finish({
+      kind: 'stage0.edit',
+      label: 'stage0 人工编辑',
+      extra: null,
+      sid,
+      ordinal: null,
+    }))
+  },
+
+  approveStage0: (sid) => {
+    const doc = loadDoc(sid)
+    saveDoc({ ...doc, gate: { ...doc.gate, s0: true } })
+    return later(finish({
+      kind: 'stage0.approve',
+      label: 'stage0 人工批准',
+      extra: null,
+      sid,
+      ordinal: null,
+    }))
+  },
+
+  partitionStage1: (sid) =>
+    later(finish({
+      kind: 'stage1.partition',
+      label: 'stage1 分章',
+      extra: null,
+      sid,
+      ordinal: null,
+    })),
+
+  getStage1Segments: (sid) =>
+    bookOnly(sid, `/novels/${sid}/stage1/segments`, mockStage1Segments),
 
   getStage1Chapters: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage1/chapters`, () =>
@@ -469,7 +659,7 @@ export const mockApi: Api = {
   uploadCorpus: (file) => {
     // mock 里只有这一本真书。上传等于把它重置回第 0 步。
     saveDoc(freshDoc(SAMPLE_SID))
-    spawn(
+    const job = finish(
       {
         kind: 'n0_extras',
         label: 'stage0 番外扫描',
@@ -479,6 +669,6 @@ export const mockApi: Api = {
       },
       'stage0 番外扫描',
     )
-    return later({ sid: SAMPLE_SID })
+    return later({ sid: SAMPLE_SID, job })
   },
 }

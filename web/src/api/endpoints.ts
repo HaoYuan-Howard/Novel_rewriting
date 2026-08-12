@@ -7,17 +7,27 @@
 import type { Api } from '@/types/api'
 import type { ApprovalDoc, GateKey, SeenKey } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
-import type { Job, JobLogResponse, JobPreview, JobsResponse } from '@/types/jobs'
+import type {
+  BackendJobList,
+  BackendJobRecord,
+  BackendJobStart,
+  BackendLogChunk,
+  Job,
+  JobLogResponse,
+  JobPreview,
+  JobsResponse,
+} from '@/types/jobs'
 import type { NovelOverview, NovelsResponse } from '@/types/novels'
 import type {
   CheckReport,
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
-  Stage0Extras,
+  Stage0Report,
+  Stage0Segments,
   Stage1Chapters,
   Stage1HookCopy,
-  Stage1Report,
+  Stage1Segments,
   Stage2Global,
   Stage3Style,
   Stage4Response,
@@ -25,23 +35,74 @@ import type {
   Stage6Response,
   Stage7Response,
 } from '@/types/stages'
-import { get, post } from './client'
+import { get, post, postRaw } from './client'
 import { mockApi } from './mock'
 
 const n = (sid: string) => '/novels/' + encodeURIComponent(sid)
 
+function quoteArg(value: string): string {
+  if (/^[\w./:=@,+-]+$/u.test(value)) return value
+  const apostrophe = String.fromCharCode(39)
+  return apostrophe + value.replaceAll(apostrophe, apostrophe + apostrophe) + apostrophe
+}
+
+function commandOf(start: BackendJobStart): string {
+  return start.steps.map((step) => step.argv.map(quoteArg).join(' ')).join('\n')
+}
+
+function labelOf(start: BackendJobStart): string {
+  return start.steps.map((step) => step.label).join(' → ')
+}
+
+function adaptJob(record: BackendJobRecord, sidOverride?: string): Job {
+  return {
+    id: record.job_id,
+    kind: record.start.node,
+    label: labelOf(record.start),
+    argv: commandOf(record.start),
+    state: record.state,
+    paid: record.start.paid,
+    started: record.started,
+    finished: record.ended,
+    sid: sidOverride ?? record.start.sid,
+    ordinal: null,
+  }
+}
+
+function adaptPreview(start: BackendJobStart): JobPreview {
+  return {
+    argv: commandOf(start),
+    paid: start.paid,
+    label: labelOf(start),
+    kind: start.node,
+  }
+}
+
+function splitLog(text: string): string[] {
+  if (!text) return []
+  const lines = text.replaceAll('\r\n', '\n').split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  return lines
+}
+
 /**
- * 真实 HTTP 实现。路由表来自 brief/04_delivery.md；
- * stage0 与 approvals 两组是设计稿新增的屏，后端还没有对应 endpoint
- * —— 已在 DELIVERY.md 里写明形状建议，没有自己改后端。
+ * 真实 HTTP 实现。Stage 0–1 的正文、编辑和确定性作业都直接走 novel 服务。
+ * 组件只消费前端视图；jobs.jsonl 的嵌套记录在这条数据缝统一适配。
  */
 export const realApi: Api = {
   getNovels: () => get<NovelsResponse>('/novels'),
   getNovel: (sid) => get<NovelOverview>(n(sid)),
   getEnums: () => get<EnumsResponse>('/enums'),
 
-  getStage0: (sid) => get<Stage0Extras>(n(sid) + '/stage0/extras'),
-  getStage1Report: (sid) => get<Stage1Report>(n(sid) + '/stage1/report'),
+  getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),
+  getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
+  editStage0: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/edit', request)),
+  approveStage0: async (sid) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/approve')),
+  partitionStage1: async (sid) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage1/partition')),
+  getStage1Segments: (sid) => get<Stage1Segments>(n(sid) + '/stage1/segments'),
   getStage1Chapters: (sid) => get<Stage1Chapters>(n(sid) + '/stage1/chapters'),
   getStage1HookCopy: (sid) => get<Stage1HookCopy>(n(sid) + '/stage1/hook_copy'),
   getReading: (sid, o) => get<ReadingResponse>(n(sid) + '/reading/' + o),
@@ -59,10 +120,28 @@ export const realApi: Api = {
   // 真后端上每一章都有数据，没有「样本边界」这回事
   getSampleCoverage: () => Promise.resolve(null),
 
-  getJobs: (sid) => get<JobsResponse>('/jobs?sid=' + encodeURIComponent(sid)),
-  getJobLog: (id, offset) => get<JobLogResponse>('/jobs/' + id + '/log?offset=' + offset),
-  previewJob: (req) => post<JobPreview>('/jobs/preview', req),
-  startJob: (req) => post<Job>('/jobs', req),
+  getJobs: async (sid) => {
+    const raw = await get<BackendJobList>('/jobs?sid=' + encodeURIComponent(sid))
+    const jobs = raw.jobs.map((record) => adaptJob(record)).reverse()
+    return {
+      jobs,
+      running: jobs.find((job) => job.state === 'running') ?? null,
+    } satisfies JobsResponse
+  },
+  getJobLog: async (id, offset) => {
+    const [chunk, record] = await Promise.all([
+      get<BackendLogChunk>('/jobs/' + encodeURIComponent(id) + '/log?offset=' + offset),
+      get<BackendJobRecord>('/jobs/' + encodeURIComponent(id)),
+    ])
+    return {
+      lines: splitLog(chunk.text),
+      offset: chunk.next_byte,
+      done: record.state !== 'running',
+    } satisfies JobLogResponse
+  },
+  previewJob: async (req) =>
+    adaptPreview(await post<BackendJobStart>('/jobs/preview', req)),
+  startJob: async (req) => adaptJob(await post<BackendJobRecord>('/jobs', req)),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
   approveGate: (sid, key: GateKey) => post<ApprovalDoc>(n(sid) + '/approvals/gate/' + key),
@@ -75,7 +154,13 @@ export const realApi: Api = {
   approveHook: (sid, index, text) =>
     post<{ ok: true }>(n(sid) + '/stage6/approve', { index, text }),
   approveNames: (sid) => post<{ ok: true }>(n(sid) + '/stage7/approve'),
-  uploadCorpus: (file) => post<{ sid: string }>('/upload', file),
+  uploadCorpus: async (file) => {
+    const raw = await postRaw<{ sid: string; job: BackendJobRecord }>(
+      '/upload?filename=' + encodeURIComponent(file.name),
+      file,
+    )
+    return { sid: raw.sid, job: adaptJob(raw.job, raw.sid) }
+  },
 }
 
 /** 编译期常量：VITE_USE_MOCK 会被 Vite 替换成字面量，于是这个三元能被静态折叠 */

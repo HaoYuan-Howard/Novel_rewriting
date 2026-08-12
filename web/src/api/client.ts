@@ -18,8 +18,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError('offline', path)
   }
 
-  if (res.status === 404) throw new ApiError('notfound', path, { status: 404 })
-  if (!res.ok) throw new ApiError('server', path, { status: res.status })
+  if (!res.ok) {
+    let message: string | undefined
+    try {
+      const body = (await res.json()) as { message?: unknown }
+      if (typeof body.message === 'string' && body.message) message = body.message
+    } catch {
+      // 非 JSON 错误仍按状态码归一，不能让解析错误盖掉真正的 HTTP 状态。
+    }
+    throw new ApiError(res.status === 404 ? 'notfound' : 'server', path, {
+      status: res.status,
+      message,
+    })
+  }
 
   try {
     return (await res.json()) as T
@@ -37,5 +48,14 @@ export function post<T>(path: string, body?: unknown): Promise<T> {
     method: 'POST',
     headers: { ...UI_HEADER, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
+  })
+}
+
+/** 上传正文时保留原始字节；JSON 化 File 只会得到一个空对象。 */
+export function postRaw<T>(path: string, body: BodyInit): Promise<T> {
+  return request<T>(path, {
+    method: 'POST',
+    headers: { ...UI_HEADER, 'Content-Type': 'application/octet-stream' },
+    body,
   })
 }

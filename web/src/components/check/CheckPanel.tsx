@@ -63,9 +63,11 @@ const GROUPS: { key: 'hard' | 'unver' | 'info'; sev: Severity; title: string; su
 export function CheckPanel({
   screen,
   onJumpChapter,
+  allowRerun = true,
 }: {
   screen: ScreenName
   onJumpChapter?: (n: number) => void
+  allowRerun?: boolean
 }) {
   const sid = useSid()
   const cfg = CHECK_OF[screen]
@@ -85,7 +87,7 @@ export function CheckPanel({
   const noSample = q.isError && isNoSample(q.error)
   const action = lookupAction(enums.data, cfg.action)
 
-  const rerun = (
+  const rerun = allowRerun ? (
     <ActionButton
       action={action}
       size="sm"
@@ -93,7 +95,7 @@ export function CheckPanel({
     >
       重跑这一层校验
     </ActionButton>
-  )
+  ) : null
 
   return (
     <div className="mx-30 mt-20 overflow-hidden rounded-card border border-line bg-card">
@@ -142,7 +144,7 @@ export function CheckPanel({
                     </div>
                     {items.map((it, i) => {
                       const chapters = 'chapters' in it ? (it.chapters ?? []) : []
-                      const fix = 'fix' in it ? it.fix : null
+                      const fix = allowRerun && 'fix' in it ? it.fix : null
                       return (
                         <div
                           key={i}

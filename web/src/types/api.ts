@@ -7,7 +7,14 @@
  */
 import type { ApprovalDoc, GateKey, SeenKey } from './approvals'
 import type { EnumsResponse } from './enums'
-import type { Job, JobLogResponse, JobPreview, JobRequest, JobsResponse } from './jobs'
+import type {
+  Job,
+  JobLogResponse,
+  JobPreview,
+  JobRequest,
+  JobsResponse,
+  UploadResponse,
+} from './jobs'
 import type { NovelOverview, NovelsResponse } from './novels'
 import type {
   CheckKind,
@@ -15,10 +22,12 @@ import type {
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
-  Stage0Extras,
+  Stage0EditRequest,
+  Stage0Report,
+  Stage0Segments,
   Stage1Chapters,
   Stage1HookCopy,
-  Stage1Report,
+  Stage1Segments,
   Stage2Global,
   Stage3Style,
   Stage4Response,
@@ -33,8 +42,12 @@ export interface Api {
   getNovel(sid: string): Promise<NovelOverview>
   getEnums(): Promise<EnumsResponse>
 
-  getStage0(sid: string): Promise<Stage0Extras>
-  getStage1Report(sid: string): Promise<Stage1Report>
+  getStage0Report(sid: string): Promise<Stage0Report>
+  getStage0Segments(sid: string): Promise<Stage0Segments>
+  editStage0(sid: string, request: Stage0EditRequest): Promise<Job>
+  approveStage0(sid: string): Promise<Job>
+  partitionStage1(sid: string): Promise<Job>
+  getStage1Segments(sid: string): Promise<Stage1Segments>
   getStage1Chapters(sid: string): Promise<Stage1Chapters>
   getStage1HookCopy(sid: string): Promise<Stage1HookCopy>
   getReading(sid: string, ordinal: number): Promise<ReadingResponse>
@@ -76,5 +89,5 @@ export interface Api {
   saveDraftEdit(sid: string, ordinal: number, text: string): Promise<{ ok: true }>
   approveHook(sid: string, index: number, text: string): Promise<{ ok: true }>
   approveNames(sid: string): Promise<{ ok: true }>
-  uploadCorpus(file: { name: string; size: number }): Promise<{ sid: string }>
+  uploadCorpus(file: File): Promise<UploadResponse>
 }

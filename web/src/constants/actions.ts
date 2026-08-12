@@ -28,7 +28,10 @@ const WRITES_FLAGS = new Set([
 const WRITES_KINDS = new Set([
   'n1_partition', // stage1 摄入+分章：确定性切分，但写产物
   'stage5_review', // 全书验收：落一份报告
-  'n0_extras', // stage0 剔番外：删原文段落 + 落备份（后端还没有这个 kind）
+  'n0_extras', // 旧 mock 的 stage0 节点
+  'stage0.edit',
+  'stage0.approve',
+  'stage1.partition',
 ])
 
 export const ACTION_CLASS_LABEL: Record<ActionClass, string> = {
@@ -42,6 +45,7 @@ export interface ClassifiableAction {
   kind: string
   extra: string[] | null
   paid: boolean
+  writes_disk?: boolean
 }
 
 function sameExtra(a: string[] | null, b: string[] | null): boolean {
@@ -75,6 +79,7 @@ export function lookupAction(
 export function classifyAction(a: ClassifiableAction | null | undefined): ActionClass {
   if (!a) return 'unclassified'
   if (a.paid) return 'paid'
+  if (a.writes_disk !== undefined) return a.writes_disk ? 'writes' : 'read'
   if (WRITES_KINDS.has(a.kind)) return 'writes'
   if (a.extra && a.extra.some((x) => WRITES_FLAGS.has(x))) return 'writes'
   return 'read'

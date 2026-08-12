@@ -311,7 +311,6 @@ F5-2（`ffbc7c7`）给 `tests/test_core.py` 加了 5 条 ⇒ **该是 `1602 / 2`
 
 | 欠账 | 状态 |
 |---|---|
-| **`R-11.10` 只验了半格** | 「第二个请求 409」只验到状态码映射表；没有 `POST /api/jobs`（用户裁决：不让浏览器能花钱）⇒ **没有第二个请求可以撞**。**别把这一格读成验过了。**<br>三处索引：`docs/REQUIREMENTS.md` 第五节那个框 · `docs/schema/_api.md` §七 · `tests/test_api_discipline.py` 那条名字很长的测试（它同时钉着「POST 面只有 `preview`」，哪天多了一个会逼人回来补） |
 | **check 路由改名的账** | `stage5_review` → `stage5`。八个 kind 现在与 `invariants.STAGES` 逐值相等、由它派生（落点 `novel/api/deps.py::checked_kind`），`docs/design_brief/04_delivery.md` 那一格已改并带标注，**`web/` 里的引用还欠着** |
 | **`novel/views/` 下三屏没做** | stage4 / stage6 / stage7 各自那一屏与那条 API 路由（现在只有 `stage3.py`）。⚠ 做的时候：stage4 的**三个 `source_chars` 口径别混** · stage6 的 `candidates[].chars` 现算**必须留在 Python** · stage7 的 `book_txt.chars` 是全链第三个 `chars` 口径，**别拿它和另外两个比** |
 | **`web/` 一个字没动**（已裁决） | 欠着四笔：71 处写死的原型作业名（`n4_plan` / `n9_rename` / `stage5_review` …）· S-13 屏按 `rules[]` 重画 · 两份 check mock 重生成 · `web/src/constants/actions.ts` 那张 `WRITE_EFFECTS` 第二落点可删（`/api/enums` 现在发 `writes` / `writes_disk` 了）<br>⚠⚠ **`docs/design_brief/05_samples/` 里的 json 永远不许用新后端的输出覆盖**——它是 `tests/test_api_enums.py` 与 `tests/test_invariants.py` 全部对账的**证据基线**，覆盖之后那一族测试就变成拿 `invariants` 跟它自己比。新形状的样例要另起路径 |

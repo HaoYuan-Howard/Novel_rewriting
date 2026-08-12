@@ -261,6 +261,11 @@ SOURCE_ENCODINGS: Final = ('utf-8-sig', 'utf-32', 'utf-16', 'utf-8', 'gb18030')
 #: `human` **不许静默覆盖**——没有这个字段，重跑一次就把人的工作悄悄抹掉了。
 REMOVED_ORIGIN: Final = ('machine', 'human')
 
+#: stage0 / stage1 连续原文视图里的分区类型。它们是 HTTP 契约的一部分，仍然只在
+#: 这里落一次取值面；前端按 `kind` 选渲染，不从 label 文案里猜。
+STAGE0_SEGMENT_KINDS: Final = ('keep', 'remove', 'end_marker')
+STAGE1_SEGMENT_KINDS: Final = ('hook', 'chapter', 'end_marker', 'hole')
+
 #: **分章**的可疑项分类，属于 stage1。原型有 6 类，两轮裁决后只剩 1 类：
 #:   · `仅识别到 ≤1 章却很长`  → 升级成显式终态 `R-1.13`
 #:   · `完结标记之后还有内容`  → 被 `R-1.14` 的 HARD 判据接管
@@ -802,6 +807,7 @@ PARTIAL_REWRITE_FLAGS: Final = ('--remeasure', '--recheck', '--migrate', '--iden
 #: 而拼错的那一条**会真的被执行**。所以取值面要有落点，由 `build_argv` 当场拒。
 VALUED_FLAGS: Final = {
     '--apply-edit': '人工改好的那份候选稿的路径',
+    '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
     # ⚠ **不叫 `--approve`**：那个名字已经在 `SUPERSEDED_FREE_ENTRIES` 里退役成节点了
     # （`stage6.approve` / `stage7.approve`），复活它等于让同一个字面既是 flag 又是节点。
@@ -964,7 +970,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
                                  produces=('stage0/removal_report.json',)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
-                                 flags=('--apply-edit',),
+                                 flags=('--apply-edit', '--apply-edit-plan'),
                                  produces=('stage0/removal_report.json',
                                            'stage0/clean_text.txt')),
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',

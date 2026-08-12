@@ -63,19 +63,18 @@ export function errorTitle(e: unknown): string {
 }
 
 export function errorBody(e: unknown): string {
-  if (!isApiError(e)) return '这一处的数据取不到。界面不拿空白顶上——空白会被当成「查过、没问题」。'
+  if (!isApiError(e)) {
+    return e instanceof Error && e.message
+      ? e.message
+      : '这一处的数据取不到。界面不拿空白顶上——空白会被当成「查过、没问题」。'
+  }
   switch (e.kind) {
     case 'offline':
       return '连不上 127.0.0.1:8765。服务没起来的时候这里是取不到，不是「没有数据」——两者不一样。'
     case 'notfound':
-      return '后端起来了，但它说没有这一份（404）。这不是网络问题，是这本书 / 这一章确实不在盘上。'
+      return e.message || '后端起来了，但它说没有这一份（404）。这不是网络问题，是这本书 / 这一章确实不在盘上。'
     case 'server':
-      return (
-        '后端返回 ' +
-        (e.status ?? '5xx') +
-        '。请求发出去了，但没拿到正常响应。' +
-        '开发环境下这个码通常就是 127.0.0.1:8765 上没有服务在听——Vite 的 /api 代理连不上时会把它翻成 5xx。'
-      )
+      return e.message || '后端返回 ' + (e.status ?? '5xx') + '。请求发出去了，但没有完成。'
     case 'malformed':
       return '拿到响应了但读不动。字段形状和前端约定的不一样——这是要报给后端的问题。'
     case 'nosample':

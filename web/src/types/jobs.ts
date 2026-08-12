@@ -26,6 +26,53 @@ export interface JobsResponse {
   running: Job | null
 }
 
+/** 后端 jobs.jsonl 折叠出来的真实响应；endpoints.ts 在数据缝处适配为上面的视图。 */
+export interface BackendJobStep {
+  argv: string[]
+  cwd: string
+  label: string
+  paid: boolean
+  writes: string
+  note: string | null
+}
+
+export interface BackendJobStart {
+  sid: string | null
+  node: string
+  mode: string | null
+  flags: string[]
+  steps: BackendJobStep[]
+  python: string
+  code: string
+  paid: boolean
+  writes: boolean
+}
+
+export interface BackendJobRecord {
+  job_id: string
+  start: BackendJobStart
+  started: number
+  ended: number | null
+  exit_code: number | null
+  state: JobState
+  steps_started: number
+  note: string | null
+}
+
+export interface BackendJobList {
+  jobs: BackendJobRecord[]
+}
+
+export interface BackendLogChunk {
+  text: string
+  next_byte: number
+}
+
+export interface UploadResponse {
+  sid: string
+  job: Job
+}
+
 export interface JobLogResponse {
   lines: string[]
   /** 下次从这里续取 */

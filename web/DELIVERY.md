@@ -150,19 +150,20 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 
 ---
 
-## 6. 建议后端改的数据形状（**写出来，没有自己改**）
+## 6. 联调状态与剩余的数据形状建议
 
-1. **`/api/enums.actions[]` 应该带 `writes_disk: boolean`。**
-   现在只有 `free_flag`（CLI flag 串），U-08 那第三类（免费但会改盘上的东西）
-   没法从服务端推。前端只好留一张 `constants/actions.ts` 的精确集合表；
-   查不到的组合画成「未标注」，不默认成只读。这张表迟早会和后端漂移。
+1. **后端下发的 `writes_disk: boolean` 已接入动作分类。**
+   `constants/actions.ts` 的旧精确集合只给不带该字段的历史 mock 兜底；
+   真实模式以服务端字段为准。
 
 2. **产物应直接下发 `freshness: 'missing'`**，别让前端用 `!exists` 推第四态。
    现在这个推导集中在 `vocabulary.ts` 的 `freshnessOf()` 一处，但它仍然是前端判定。
 
-3. **stage0 与 depth 两屏在 endpoint 表里没有条目。** 建议：
-   - `GET /api/novels/:sid/stage0/extras`（现在按这个名字接的）
-   - 深度章节选择并入人工验收记录：`GET/POST /api/novels/:sid/approvals`
+3. **Stage 0/1 已接真实接口，depth 验收仍未接。**
+   - Stage 0：`report` / `segments` / `edit` / `approve`
+   - Stage 1：`partition` / `segments` / `chapters` / `hook_copy`
+   - 上传：`POST /api/upload?filename=`，请求体是原始文件字节
+   - 深度章节选择仍建议并入人工验收记录：`GET/POST /api/novels/:sid/approvals`
      （现在前端定义的形状：`{v, sid, gate{s0..s7}, seen{read,global}, deep[], writing, spawns}`）
    - `spawns`：确认某道闸门之后服务端会发起哪些动作。
      现在由 mock 下发，界面据此决定闸门按钮是不是橙的 ——
@@ -175,10 +176,9 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
      而且 `time_layer` / `place` / `present` 三个也会是 `null`
      （样本第 7 拍就是。这条在联调时炸过一次：`present.join()` 直接崩屏。）
 
-5. **`/api/jobs` 的元素形状样本里没有**（`jobs.json` 是空数组）。
-   前端按 `04_delivery.md` 的 `JobState` 契约定义了
-   `{id, kind, label, argv, state, paid, started, finished, sid, ordinal}`，
-   并让 `/api/jobs` 额外下发 `running`（「一本书同时只跑一个」这个判断归服务端）。
+5. **`/api/jobs` 的真实元素是嵌套 `JobRecord`。**
+   `api/endpoints.ts` 已在唯一数据缝把它适配成抽屉使用的扁平 `Job`，并从服务端
+   给出的四态折出 `running`；日志用后端的字节偏移读取，不再猜元素形状。
    请确认。
 
 6. **`/jobs/:id/stream?offset=N`（SSE）** 现在按 `getJobLog(id, offset) → {lines, offset, done}`

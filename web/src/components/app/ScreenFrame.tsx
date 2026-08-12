@@ -11,16 +11,24 @@ export function ScreenFrame({
   screen,
   children,
   onJumpChapter,
+  showGate = true,
+  allowCheckRerun = true,
 }: {
   screen: ScreenName
   children: ReactNode
   onJumpChapter?: (n: number) => void
+  showGate?: boolean
+  allowCheckRerun?: boolean
 }) {
   return (
     <>
       {children}
-      <CheckPanel screen={screen} onJumpChapter={onJumpChapter} />
-      <GateBar screen={screen} />
+      <CheckPanel
+        screen={screen}
+        onJumpChapter={onJumpChapter}
+        allowRerun={allowCheckRerun}
+      />
+      {showGate ? <GateBar screen={screen} /> : null}
     </>
   )
 }

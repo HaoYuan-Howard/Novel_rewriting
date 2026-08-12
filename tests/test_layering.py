@@ -165,6 +165,10 @@ _WRITE_ALLOWED = {
         '子进程写不了自己的死讯，而退出码正是编排层判成败的依据（`R-12.3`）。'
         '它写的两处（`_service/jobs.jsonl` · `_service/logs/`）都不是产物，'
         '且都是 append-only：被 kill 最坏只损坏最后一行'),
+    'novel/orchestrator/uploads.py': (
+        '浏览器原始上传与一次性 stage0 编辑计划，均只写 Output/_service/。'
+        '前者要长期保留供 S-00 按 original_path 审校；后者只把人的选择交给 CLI '
+        '子进程，作业结束即删。两者都不进 ARTIFACTS / 来源账，不是小说产物'),
 }
 
 
@@ -231,7 +235,7 @@ _WEB_STACK_ALLOWED = {
     'novel/api/app.py': '服务本体：路由挂载、CSRF 中间件、异常归一。这一层就是它',
     'novel/api/__main__.py': '起进程（`uvicorn.run`）。**绑定地址也只在这里出现一次**',
     'novel/api/deps.py': '路由共用的两道边界校验，要拿 `Request` 与 `HTTPException`',
-    'novel/api/routes/': '九个端点。`APIRouter` 是它们的定义方式',
+    'novel/api/routes/': 'HTTP 端点。`APIRouter` 是它们的定义方式',
 }
 
 
@@ -309,18 +313,68 @@ def _writer_hits(path: str) -> list[str]:
             and n.func.attr in _STORE_WRITERS]
 
 
-def test_the_api_and_view_layers_never_write_anything():
-    """⭐ `R-11.3`：**服务进程绝不落产物盘。**
+def test_the_api_and_view_layers_never_write_artifacts_directly():
+    """⭐ `R-11.3`：**服务进程绝不直接落产物盘。**
 
-    ⚠ E 期这两层是**一个写盘调用都没有**（唯一的 POST 是 0 成本的 preview）。
-    F 期加 `POST /api/jobs` 时这条要放宽成「只许经 `jobs.run` 写」——
-    **那必须是一次显式的、带理由的改动**，正是白名单形态存在的意义。
+    Stage 0/1 的变更路由只经 `jobs.run` 起 CLI 子进程；上传原文与一次性编辑计划
+    只进 `_service/`。这些窄入口由下一条单独钉住，本条继续禁止绕过 store 的产物写。
     """
     bad = [h for p in _api_files() + _view_files() for h in _writer_hits(p)]
     assert not bad, f'API / 视图层往盘上写了东西（`R-11.3`）：{bad}'
     # 守卫的守卫（**探测器自测**）：同一个探测器在 `store.py` 上必须抓得到东西，
     # 否则「一条都没抓到」既可能是干净、也可能是探测器坏了，而两者长得一样。
     assert _writer_hits(os.path.join(ROOT, 'novel', 'store.py')), '探测器在 store.py 上一条都没抓到'
+
+
+_SERVICE_MUTATORS = {
+    ('jobs', 'run'),
+    ('uploads', 'save_upload'),
+    ('uploads', 'save_edit_plan'),
+    ('uploads', 'discard_edit_plan'),
+}
+
+
+def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
+    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    module_aliases: dict[str, str] = {}
+    direct_aliases: dict[str, tuple[str, str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == 'novel.orchestrator':
+            for alias in node.names:
+                if alias.name in ('jobs', 'uploads'):
+                    module_aliases[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module in (
+            'novel.orchestrator.jobs',
+            'novel.orchestrator.uploads',
+        ):
+            module = node.module.rsplit('.', 1)[-1]
+            for alias in node.names:
+                pair = (module, alias.name)
+                if pair in _SERVICE_MUTATORS:
+                    direct_aliases[alias.asname or alias.name] = pair
+
+    out: list[tuple[str, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+            pair = (module_aliases.get(node.func.value.id, ''), node.func.attr)
+            if pair in _SERVICE_MUTATORS:
+                out.append(pair)
+        elif isinstance(node.func, ast.Name) and node.func.id in direct_aliases:
+            out.append(direct_aliases[node.func.id])
+    return out
+
+
+def test_service_mutations_are_narrowly_owned_by_the_stage01_routes():
+    """API 只准备 `_service` 输入并起子进程；视图层保持纯读。新增写入口必须显式改表。"""
+    hits = {
+        _rel(path): _service_mutator_hits(path)
+        for path in _api_files() + _view_files()
+        if _service_mutator_hits(path)
+    }
+    assert set(hits) == {'novel/api/routes/ingest.py'}
+    assert set(hits['novel/api/routes/ingest.py']) == _SERVICE_MUTATORS
 
 
 def test_the_service_process_cannot_spend_money():

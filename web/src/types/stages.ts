@@ -15,6 +15,69 @@ import type {
 
 /* ---------------------------------------------------------------- stage0 */
 
+export interface Stage0Removed {
+  kind: string
+  marker_line: string
+  line_no: number
+  span: [number, number]
+  code_points: number
+  head_preview: string
+  tail_preview: string
+  origin: 'machine' | 'human'
+}
+
+export interface Stage0Warning {
+  kind: string
+  message: string
+}
+
+export interface Stage0Report {
+  original_filename: string
+  original_path: string
+  code: string
+  source_sha1: string
+  clean_sha1: string
+  source_encoding: string
+  text_norm: string
+  removed: Stage0Removed[]
+  total_code_points: number
+  body_code_points: number
+  warnings: Stage0Warning[]
+  approved: 'not_run' | 'pending' | 'approved'
+  approved_at: string | null
+  round: number
+  edited_by_human: boolean
+}
+
+export type Stage0SegmentKind = 'keep' | 'remove' | 'end_marker'
+
+export interface Stage0Segment {
+  id: string
+  kind: Stage0SegmentKind
+  start: number
+  end: number
+  chars: number
+  flagged: boolean
+  text: string
+  origin: 'machine' | 'human' | null
+  removed_kind: string | null
+  marker_line: string | null
+}
+
+export interface Stage0Segments {
+  source_sha1: string
+  available: boolean
+  reason: string | null
+  segments: Stage0Segment[]
+}
+
+export interface Stage0EditRequest {
+  expected_round: number
+  expected_source_sha1: string
+  expected_clean_sha1: string
+  removed_segment_ids: string[]
+}
+
 export interface S0Block {
   kind: 'hook_copy' | 'chapter'
   label: string
@@ -53,6 +116,25 @@ export interface Stage0Extras {
 }
 
 /* ---------------------------------------------------------------- stage1 */
+
+export type Stage1SegmentKind = 'hook' | 'chapter' | 'end_marker' | 'hole'
+
+export interface Stage1Segment {
+  id: string
+  kind: Stage1SegmentKind
+  start: number
+  end: number
+  chars: number
+  flagged: boolean
+  text: string
+  chapter_ordinal: number | null
+  source_chapter_label: string | null
+}
+
+export interface Stage1Segments {
+  input_sha1: string
+  segments: Stage1Segment[]
+}
 
 export interface Stage1Report {
   source_id: string

@@ -223,10 +223,16 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
     if ctx.node == 'stage0.edit':
         edit_path = _valued(flags, '--apply-edit')
-        if edit_path is None:
+        edit_plan_path = _valued(flags, '--apply-edit-plan')
+        if (edit_path is None) == (edit_plan_path is None):
             raise TerminalState(
-                'stage0.edit 必须给 --apply-edit <人工改好的 clean_text.txt>')
-        art, report = removal.run_edit(ctx, edit_path)
+                'stage0.edit 必须且只能给一种输入：'
+                '--apply-edit <人工 clean_text.txt> 或 --apply-edit-plan <审校台计划.json>')
+        art, report = (
+            removal.run_edit_plan(ctx, edit_plan_path)
+            if edit_plan_path is not None
+            else removal.run_edit(ctx, edit_path or '')
+        )
         print(render(report))
         print(f'  ✓ 人工编辑已落为第 {art.round} 轮；状态退回 pending，请重新批准')
         return X.OK

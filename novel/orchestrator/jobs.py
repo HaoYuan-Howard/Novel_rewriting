@@ -148,7 +148,9 @@ def append_event(base: str | os.PathLike[str], event: JobEvent) -> None:
     """
     p = jobs_path(base)
     p.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event.model_dump(mode='json', exclude_none=True),
+    # 不用 exclude_none：JobStart.sid 是必填可空，上传新书时必须把字面的 null 留下。
+    # 全局剥 None 会把「字段存在且为 null」偷换成「字段缺失」，事件下一次就读不回来。
+    line = json.dumps(event.model_dump(mode='json'),
                       ensure_ascii=False)
     with open(p, 'ab') as f:
         f.write(line.encode('utf-8') + b'\n')

@@ -15,13 +15,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from pydantic import ValidationError
+
 from contracts.invariants import (
     BODY_RATIO_MIN,
     DROP_RATIO_MAX,
     NONBODY_MARKER_WARN_CP,
 )
 from contracts.schema.report import CheckReport
-from contracts.schema.stage0 import RemovalReport, RemovedSegment, Stage0Warning
+from contracts.schema.stage0 import (
+    RemovalReport,
+    RemovedSegment,
+    Stage0EditPlan,
+    Stage0Warning,
+)
 from novel import paths, prov
 from novel.core.ingest import (
     DecodeProblem,
@@ -310,9 +317,17 @@ def _human_text(edit_path: str | Path) -> str:
     return text
 
 
-def run_edit(ctx: RunContext, edit_path: str | Path, *,
-             removed: Sequence[RemovedSegment] | None = None) -> tuple[RemovalReport, CheckReport]:
-    '''落一轮人工 clean_text；上一轮的 JSON/TXT 成对进入 stage0/_rounds。'''
+def _apply_edit(
+    ctx: RunContext,
+    text: str,
+    *,
+    removed: Sequence[RemovedSegment] | None = None,
+    expected_round: int | None = None,
+    expected_source_sha1: str | None = None,
+    expected_clean_sha1: str | None = None,
+    expected_total_code_points: int | None = None,
+) -> tuple[RemovalReport, CheckReport]:
+    '''落一轮已校验的人工作业；乐观锁只在审校台计划路径启用。'''
     store = ArtifactStore(ctx)
     previous = _existing(store)
     if previous is None:
@@ -324,7 +339,20 @@ def run_edit(ctx: RunContext, edit_path: str | Path, *,
             '当前 removal_report 与 clean_text 不是同一轮：可能有人绕过 stage0.edit '
             '直接改了正式稿，也可能上次进程中断在两文件提交之间。'
             '请先从同轮 _rounds 归档恢复成对版本，再重跑编辑')
-    text = _human_text(edit_path)
+    expected = {
+        'round': expected_round,
+        'source_sha1': expected_source_sha1,
+        'clean_sha1': expected_clean_sha1,
+        'total_code_points': expected_total_code_points,
+    }
+    stale = [
+        f'{name}: 页面={want!r}, 当前={getattr(old, name)!r}'
+        for name, want in expected.items()
+        if want is not None and getattr(old, name) != want
+    ]
+    if stale:
+        raise HumanEditProtected(
+            '这份 stage0 编辑计划基于旧页面，拒绝覆盖当前轮：' + '；'.join(stale))
     next_removed = list(removed) if removed is not None else list(old.removed)
     if text == old_clean and next_removed == old.removed:
         from novel.stages.stage0.checks import run_check_only
@@ -349,6 +377,81 @@ def run_edit(ctx: RunContext, edit_path: str | Path, *,
     _write(store, RemovalResult(text, report, scan_text(text)))
     from novel.stages.stage0.checks import run_check_only
     return report, run_check_only(ctx)
+
+
+def run_edit(ctx: RunContext, edit_path: str | Path, *,
+             removed: Sequence[RemovedSegment] | None = None) -> tuple[RemovalReport, CheckReport]:
+    '''落一轮人工 clean_text；上一轮的 JSON/TXT 成对进入 stage0/_rounds。'''
+    return _apply_edit(ctx, _human_text(edit_path), removed=removed)
+
+
+def _read_edit_plan(plan_path: str | Path) -> Stage0EditPlan:
+    path = Path(plan_path).resolve()
+    if not path.is_file():
+        raise UpstreamMissing(f'stage0 编辑计划不在盘上：{path}')
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ArtifactUnreadable(f'读不了 stage0 编辑计划 {path}：{exc!r}') from exc
+    if raw.startswith(codecs.BOM_UTF8):
+        raise ByteFormRefused('stage0 编辑计划带 UTF-8 BOM；内部 JSON 必须是无 BOM UTF-8')
+    try:
+        return Stage0EditPlan.model_validate_json(raw)
+    except (ValidationError, UnicodeDecodeError) as exc:
+        raise ArtifactUnreadable(f'stage0 编辑计划不是合法契约：{exc}') from exc
+
+
+def run_edit_plan(
+    ctx: RunContext,
+    plan_path: str | Path,
+) -> tuple[RemovalReport, CheckReport]:
+    '''应用 S-00 选择计划；原文、区间、重建正文与乐观锁全部在子进程内复核。'''
+    plan = _read_edit_plan(plan_path)
+    store = ArtifactStore(ctx)
+    previous = _existing(store)
+    if previous is None:
+        raise UpstreamMissing('stage0 还没跑，没有可应用编辑计划的 clean_text')
+    old, _old_clean = previous
+    source = Path(old.original_path).resolve()
+    if not source.is_file():
+        raise UpstreamMissing(f'原始小说已经不在 original_path：{source}')
+    try:
+        raw = source.read_bytes()
+    except OSError as exc:
+        raise ArtifactUnreadable(f'读不了原始小说 {source}：{exc!r}') from exc
+    try:
+        decoded = decode_source_bytes(raw)
+    except DecodeProblem as exc:
+        raise SourceDecodeFailed(f'{source}: {exc}') from exc
+    if decoded.source_sha1 != old.source_sha1:
+        raise SourceConflict(
+            f'原始小说已从 {old.source_sha1[:10]} 变为 {decoded.source_sha1[:10]}；'
+            '页面上的区间全部失效，请重新摄入并审阅')
+    if len(decoded.text) != old.total_code_points:
+        raise SourceConflict(
+            f'原始小说当前长度 {len(decoded.text)} 与报告 {old.total_code_points} 对不上')
+
+    cursor = 0
+    kept: list[str] = []
+    for segment in plan.removed:
+        lo, hi = segment.span
+        kept.append(decoded.text[cursor:lo])
+        cursor = hi
+    kept.append(decoded.text[cursor:])
+    reconstructed = ''.join(kept)
+    if reconstructed != plan.clean_text:
+        raise ArtifactUnreadable(
+            '编辑计划的 clean_text 不能由原文减去 removed[] 精确重建；拒绝写一份对不上的剔除账')
+
+    return _apply_edit(
+        ctx,
+        plan.clean_text,
+        removed=plan.removed,
+        expected_round=plan.expected_round,
+        expected_source_sha1=plan.expected_source_sha1,
+        expected_clean_sha1=plan.expected_clean_sha1,
+        expected_total_code_points=plan.expected_total_code_points,
+    )
 
 
 def run_approve(ctx: RunContext, *, approved_at: str | None = None) \

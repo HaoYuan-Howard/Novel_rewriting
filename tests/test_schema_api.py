@@ -21,7 +21,10 @@ from pydantic import ValidationError
 
 from contracts.invariants import HOOK_KEYS, VOICE_KEYS
 from contracts.schema.api import (
-    DriftItem, ErrorBody, JobList, LogChunk, NovelList, PreviewRequest, StyleView,
+    DriftItem, ErrorBody, HookCopyView, JobList, LogChunk, NovelList, PreviewRequest,
+    Stage0EditRequest, Stage0Segment, Stage0Segments,
+    Stage1ChapterRow, Stage1Chapters, Stage1Segment, Stage1Segments,
+    StyleView, UploadResult,
 )
 from contracts.schema.stage3 import (
     ChapterCharStats, Measurable, MeasurableBlock, MeasurableBody, PerChapterSentence,
@@ -36,6 +39,47 @@ def test_preview_sid_is_nullable_but_never_empty():
     assert PreviewRequest(sid=None, node='stage0.remove').sid is None
     with pytest.raises(ValidationError):
         PreviewRequest(sid='', node='stage0.remove')
+
+
+def test_stage0_continuous_view_rejects_a_gap_and_duplicate_ids():
+    first = Stage0Segment(
+        id='same', kind='keep', start=0, end=2, chars=2, flagged=False, text='甲乙')
+    gap = Stage0Segment(
+        id='same', kind='keep', start=3, end=4, chars=1, flagged=False, text='丙')
+    with pytest.raises(ValidationError, match='连续|重复'):
+        Stage0Segments(
+            source_sha1='0' * 40,
+            available=True,
+            reason=None,
+            segments=[first, gap],
+        )
+    with pytest.raises(ValidationError):
+        Stage0Segments(
+            source_sha1='0' * 40,
+            available=False,
+            reason='',
+            segments=[],
+        )
+
+
+def test_stage1_continuous_view_and_chapter_index_reject_gaps():
+    first = Stage1Segment(
+        id='hook', kind='hook', start=0, end=1, chars=1, flagged=False, text='甲')
+    gap = Stage1Segment(
+        id='ch2', kind='chapter', start=2, end=3, chars=1, flagged=False, text='乙',
+        chapter_ordinal=2, source_chapter_label='2',
+    )
+    with pytest.raises(ValidationError, match='连续'):
+        Stage1Segments(input_sha1='0' * 40, segments=[first, gap])
+    with pytest.raises(ValidationError, match='连续有序'):
+        Stage1Chapters(chapters=[
+            Stage1ChapterRow(
+                chapter_ordinal=2,
+                source_chapter_label='2',
+                chars=1,
+                preview='乙',
+            ),
+        ])
 
 
 # ───────────────────────── 造两份最小的合法视图 ─────────────────────────
@@ -238,7 +282,11 @@ def test_the_api_models_never_carry_a_verdict():
     「这是服务端判的」与「这是这一屏自己凑出来的」。
     """
     verdicts = {'badge', 'passed', 'counts', 'hard_count', 'unver_count'}
-    for model in (StyleView, NovelList, JobList, LogChunk, PreviewRequest, ErrorBody):
+    for model in (
+        StyleView, NovelList, JobList, LogChunk, PreviewRequest, ErrorBody,
+        Stage0Segment, Stage0Segments, Stage1Segment, Stage1Segments,
+        Stage1ChapterRow, Stage1Chapters, HookCopyView, UploadResult,
+    ):
         leaked = verdicts & set(model.model_fields)
         assert not leaked, f'{model.__name__} 带着判定字段 {leaked}——那是第二个判官'
 
@@ -298,5 +346,10 @@ def test_every_response_model_forbids_extra_fields():
     响应模型防「我们多发了一个字段而契约文档里没有它」——
     前端会开始依赖那个字段，而 `_api.md` 不知道它存在。
     """
-    for model in (StyleView, NovelList, JobList, LogChunk, PreviewRequest, ErrorBody):
+    for model in (
+        StyleView, NovelList, JobList, LogChunk, PreviewRequest, ErrorBody,
+        Stage0Segment, Stage0Segments, Stage0EditRequest,
+        Stage1Segment, Stage1Segments, Stage1ChapterRow, Stage1Chapters,
+        HookCopyView, UploadResult,
+    ):
         assert model.model_config['extra'] == 'forbid', model.__name__

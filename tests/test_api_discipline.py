@@ -18,7 +18,7 @@ test_api_discipline.py —— **「界面的结构纪律测试」**。
 | `R-11.6` 三态 | 本文件（取值面 + **这条路真的走得到**） |
 | `R-11.7` 贵贱一处算 | 本文件（全仓只有一个 `is_paid`）+ `test_api_enums.py`（36/36 对现役后端） |
 | `R-11.8` 展示=执行 | `tests/test_api_http.py`（preview 逐字段相同）+ `test_layering.py`（没有第二个 argv 构造器） |
-| `R-11.10` 409 | ⚠ **只验到状态码映射表**，见本文件末尾那条 |
+| `R-11.10` 409 | 本文件（映射表 + Stage 0 真实冲突请求） |
 | `R-11.11` 重启改判 unknown | `tests/test_api_http.py` |
 | `R-11.13` 剧透标注 | 本文件（`/api/enums` 发得出那句话） |
 
@@ -35,6 +35,7 @@ import pytest
 from contracts.invariants import BADGE, FRESHNESS, JOB_STATE, SEVERITY
 from novel.api import enums as ENUMS
 from novel.api import errors as HERR
+from novel.orchestrator import jobs as J
 from novel.orchestrator.jobs import JobConflict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -267,29 +268,42 @@ def test_the_partial_mask_note_is_published():
         assert field in note, f'标注里没点名 {field}——那四个字段是它的全部内容'
 
 
-# ───────────────────────── `R-11.10`：**只验了一半**，登记在这里 ─────────────────────────
+# ───────────────────────── `R-11.10`：映射 + 真实冲突行为 ─────────────────────────
 
-def test_the_job_conflict_maps_to_409_but_the_behaviour_is_not_verified_yet():
-    """⚠⚠ **这一条只验到状态码映射表这一层，行为半边没验。别读成验过了。**
+def test_stage01_job_conflict_maps_and_returns_409():
+    """`R-11.10`：同一本书已有作业占锁时，第二个 Stage 0 请求真的返回 409。
 
-    `R-11.10` 要「一本书同时只跑一个作业，第二个请求 **409**」。
-    E 期没有 `POST /api/jobs`（用户裁决：不让浏览器能花钱）⇒
-    **没有第二个请求可以撞**，那半边要等接作业启动的那一期。
-
-    今天真的验过的是两件事，两件都不是 HTTP 行为：
-      · 映射表里 `JobConflict → 409`（本条）
-      · 互斥键本身（`tests/test_orchestrator_jobs.py`：同一本书第二个作业被拒、
-        `stage5.write` 两条臂是唯一例外）
-    ⇒ 反向覆盖率表里「界面的结构纪律测试」那一行，`R-11.10` 这一格是**半格**。
-    这段话就是那半格的登记，仓根 `README.md` 与 `docs/schema/_api.md` §七 各有一份索引。
+    浏览器仍然没有通用 `POST /api/jobs`，所以这条不会顺便开放付费节点；
+    Stage 0/1 的四个写入口都是明确、确定性且免费的专用路由。
     """
     assert HERR.STATUS[JobConflict] == 409
-    pytest.importorskip('fastapi', reason='没装 fastapi ⇒ 下面那半条**没在查**')
-    from novel.api.app import create_app
+    pytest.importorskip('fastapi', reason='没装 fastapi ⇒ 真实 409 行为**没在查**')
+    from fastapi.testclient import TestClient
+    from novel.api.app import UI_HEADER, create_app
+
     app = create_app(ROOT)
     posts = [p for p, ops in app.openapi()['paths'].items()
              if 'post' in ops and p.startswith('/api/')]
-    assert posts == ['/api/jobs/preview'], (
-        f'POST 面变了：{posts}。⚠ 如果这里出现了 `/api/jobs`，'
-        f'那么 `R-11.10` 的**行为**半边现在就该补上一条真的 409 测试，'
-        f'并把本函数的名字与这段登记一起改掉')
+    assert set(posts) == {
+        '/api/jobs/preview',
+        '/api/novels/{sid}/stage0/edit',
+        '/api/novels/{sid}/stage0/approve',
+        '/api/novels/{sid}/stage1/partition',
+        '/api/upload',
+    }
+    assert '/api/jobs' not in posts, '通用作业启动会让浏览器够到付费节点，不能顺手开放'
+
+    sid = 'discipline-409'
+    holder = 'already-running'
+    key = J.active_key(sid, 'stage0.approve')
+    J.REGISTRY.acquire(key, holder)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f'/api/novels/{sid}/stage0/approve',
+                headers={UI_HEADER: '1'},
+            )
+    finally:
+        J.REGISTRY.release(key, holder)
+    assert response.status_code == 409
+    assert response.json()['kind'] == 'JobConflict'

@@ -30,15 +30,177 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
-from contracts.invariants import HOOK_KEYS, VOICE_KEYS
-from contracts.schema.base import FrozenModel, StrictModel
+from contracts.invariants import (
+    HOOK_KEYS,
+    NONBODY_KINDS,
+    REMOVED_ORIGIN,
+    STAGE0_SEGMENT_KINDS,
+    STAGE1_SEGMENT_KINDS,
+    VOICE_KEYS,
+)
+from contracts.schema.base import FrozenModel, Sha1, StrictModel
 from contracts.schema.orchestration import (
     Freshness, FreshnessReason, JobRecord, NovelOverview,
 )
+from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage3 import Measurable, StyleProvenance
 
 VoiceKey = Literal[VOICE_KEYS]
 HookKey = Literal[HOOK_KEYS]
+Stage0SegmentKind = Literal[STAGE0_SEGMENT_KINDS]
+Stage1SegmentKind = Literal[STAGE1_SEGMENT_KINDS]
+NonbodyKind = Literal[NONBODY_KINDS]
+RemovedOrigin = Literal[REMOVED_ORIGIN]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 零、S-00 / S-03 连续文本视图与零成本动作
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Stage0Segment(FrozenModel):
+    '''S-00 原始文本上的一个连续分区；坐标恒是 Python 码点半开区间。'''
+
+    id: str = Field(min_length=1)
+    kind: Stage0SegmentKind
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    chars: int = Field(ge=1)
+    flagged: bool
+    text: str = Field(min_length=1)
+    origin: RemovedOrigin | None = None
+    removed_kind: NonbodyKind | None = None
+    marker_line: str | None = None
+
+    @model_validator(mode='after')
+    def _interval_and_remove_metadata_agree(self) -> Stage0Segment:
+        if self.end <= self.start:
+            raise ValueError(f'[{self.start}, {self.end}) 不是非空半开区间')
+        if self.chars != self.end - self.start or self.chars != len(self.text):
+            raise ValueError('chars 必须同时等于 end-start 与 text 的码点长度')
+        is_remove = self.kind == 'remove'
+        if self.flagged != is_remove:
+            raise ValueError('stage0 只有 remove 分区 flagged=true')
+        metadata = (self.origin, self.removed_kind, self.marker_line)
+        if is_remove != all(value is not None for value in metadata):
+            raise ValueError('remove 必须带完整剔除元数据，非 remove 不得冒充剔除记录')
+        return self
+
+
+class Stage0Segments(StrictModel):
+    '''S-00 连续原文。原文件移走时返回显式 unavailable，而不是假装没有剔除项。'''
+
+    source_sha1: Sha1
+    available: bool
+    reason: Annotated[str, Field(min_length=1)] | None
+    segments: list[Stage0Segment] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _availability_is_explicit(self) -> Stage0Segments:
+        if self.available != (self.reason is None):
+            raise ValueError('available 与 reason 必须恰好表达同一状态')
+        if not self.available and self.segments:
+            raise ValueError('原文不可用时不得发一份看似完整的分区')
+        if self.available:
+            if not self.segments or self.segments[0].start != 0:
+                raise ValueError('可用的 stage0 分区必须从坐标 0 开始且非空')
+            for left, right in zip(self.segments, self.segments[1:]):
+                if left.end != right.start:
+                    raise ValueError('stage0 分区必须按顺序首尾连续')
+        ids = [segment.id for segment in self.segments]
+        if len(ids) != len(set(ids)):
+            raise ValueError('stage0 分区 id 不得重复')
+        return self
+
+
+class Stage0EditRequest(StrictModel):
+    '''人在 S-00 选择要剔除的分区；三格共同构成乐观锁。'''
+
+    expected_round: int = Field(ge=1)
+    expected_source_sha1: Sha1
+    expected_clean_sha1: Sha1
+    removed_segment_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _ids_are_unique(self) -> Stage0EditRequest:
+        if len(self.removed_segment_ids) != len(set(self.removed_segment_ids)):
+            raise ValueError('removed_segment_ids 不得重复')
+        if any(not item for item in self.removed_segment_ids):
+            raise ValueError('removed_segment_ids 不得含空 id')
+        return self
+
+
+class Stage1Segment(FrozenModel):
+    '''S-03 批准后 clean_text 上的一个连续只读分区。'''
+
+    id: str = Field(min_length=1)
+    kind: Stage1SegmentKind
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    chars: int = Field(ge=1)
+    flagged: bool
+    text: str = Field(min_length=1)
+    chapter_ordinal: int | None = Field(default=None, ge=1)
+    source_chapter_label: str | None = None
+
+    @model_validator(mode='after')
+    def _interval_and_chapter_metadata_agree(self) -> Stage1Segment:
+        if self.end <= self.start:
+            raise ValueError(f'[{self.start}, {self.end}) 不是非空半开区间')
+        if self.chars != self.end - self.start or self.chars != len(self.text):
+            raise ValueError('chars 必须同时等于 end-start 与 text 的码点长度')
+        is_chapter = self.kind == 'chapter'
+        if is_chapter != (self.chapter_ordinal is not None):
+            raise ValueError('只有 chapter 分区带 chapter_ordinal')
+        if is_chapter != (self.source_chapter_label is not None):
+            raise ValueError('只有 chapter 分区带 source_chapter_label')
+        if self.flagged != (self.kind == 'hole'):
+            raise ValueError('stage1 只有 hole 分区 flagged=true')
+        return self
+
+
+class Stage1Segments(StrictModel):
+    input_sha1: Sha1
+    segments: list[Stage1Segment] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _segments_are_one_continuous_document(self) -> Stage1Segments:
+        if self.segments[0].start != 0:
+            raise ValueError('stage1 分区必须从 clean_text 坐标 0 开始')
+        for left, right in zip(self.segments, self.segments[1:]):
+            if left.end != right.start:
+                raise ValueError('stage1 分区必须按顺序首尾连续')
+        ids = [segment.id for segment in self.segments]
+        if len(ids) != len(set(ids)):
+            raise ValueError('stage1 分区 id 不得重复')
+        return self
+
+
+class Stage1ChapterRow(FrozenModel):
+    chapter_ordinal: int = Field(ge=1)
+    source_chapter_label: str = Field(min_length=1)
+    chars: int = Field(ge=0)
+    preview: str
+
+
+class Stage1Chapters(StrictModel):
+    chapters: list[Stage1ChapterRow] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _ordinals_are_contiguous(self) -> Stage1Chapters:
+        got = [chapter.chapter_ordinal for chapter in self.chapters]
+        if got != list(range(1, len(got) + 1)):
+            raise ValueError('stage1 章节索引必须从 1 起连续有序')
+        return self
+
+
+class HookCopyView(StrictModel):
+    hook_copy: HookCopy
+    note: str = Field(min_length=1)
+
+
+class UploadResult(StrictModel):
+    sid: str = Field(min_length=1)
+    job: JobRecord
 
 
 # ─────────────────────────────────────────────────────────────────────────────

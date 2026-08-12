@@ -13,6 +13,7 @@ test_orchestrator_jobs.py —— 互斥 · 事件流 · 重启改判。
 """
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import threading
@@ -145,6 +146,23 @@ def test_a_job_leaves_started_step_and_ended(base):
     kinds = [e.kind for e in J.read_events(base)]
     assert kinds == ['started', 'step', 'step', 'ended']
     assert (rec.state, rec.exit_code, rec.steps_started) == ('ok', 0, 2)
+
+
+def test_an_upload_job_preserves_the_required_null_sid(base):
+    '''上传发生在书目录建立前，started 事件里的 sid 必须是字面的 null，不能缺字段。'''
+    rec = J.run(
+        base,
+        'stage0.remove',
+        None,
+        steps=_steps(),
+        spawn=_fake(),
+        registry=J.JobRegistry(),
+    )
+    events = J.read_events(base)
+    assert events[0].start is not None and events[0].start.sid is None
+    assert rec.start.sid is None and rec.state == 'ok'
+    first = json.loads(J.jobs_path(base).read_text(encoding='utf-8').splitlines()[0])
+    assert 'sid' in first['start'] and first['start']['sid'] is None
 
 
 def test_a_failing_step_stops_the_rest(base):

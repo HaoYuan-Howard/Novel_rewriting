@@ -19,12 +19,21 @@ from __future__ import annotations
 from contracts.schema.api import (
     DriftItem,
     ErrorBody,
+    HookCopyView,
     HookStyleLine,
     JobList,
     LogChunk,
     NovelList,
     PreviewRequest,
+    Stage0EditRequest,
+    Stage0Segment,
+    Stage0Segments,
+    Stage1ChapterRow,
+    Stage1Chapters,
+    Stage1Segment,
+    Stage1Segments,
     StyleView,
+    UploadResult,
     VoiceLine,
 )
 from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
@@ -54,7 +63,9 @@ from contracts.schema.report import (
     badge_of,
     finding,
 )
-from contracts.schema.stage0 import RemovalReport, RemovedSegment, Stage0Warning
+from contracts.schema.stage0 import (
+    RemovalReport, RemovedSegment, Stage0EditPlan, Stage0Warning,
+)
 from contracts.schema.stage1 import (
     HookCopy, MainText, MainTextSection, PartitionReport, Stage1Warning,
 )
@@ -120,9 +131,12 @@ __all__ = [
     'AccountingLine', 'StatusCounts', 'Status', 'Badge', 'finding', 'badge_of',
     # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实
     'StyleView', 'VoiceLine', 'HookStyleLine', 'DriftItem',
+    'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest',
+    'Stage1Segment', 'Stage1Segments', 'Stage1ChapterRow', 'Stage1Chapters',
+    'HookCopyView', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'PreviewRequest', 'ErrorBody',
     # 八层
-    'RemovalReport', 'RemovedSegment', 'Stage0Warning',
+    'RemovalReport', 'RemovedSegment', 'Stage0EditPlan', 'Stage0Warning',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'Arc', 'ConflictStage',

@@ -20,6 +20,7 @@ F7 已用临时目录走通产物形态、审阅状态机与编辑回写，并�
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -77,6 +78,47 @@ class RemovedSegment(StrictModel):
         lo, hi = self.span
         if not 0 <= lo < hi:
             raise ValueError(f'span={self.span} 不是合法的半开区间（要求 0 <= 起 < 止）')
+        return self
+
+
+class Stage0EditPlan(StrictModel):
+    '''审校台交给 ``stage0.edit`` 子进程的一次编辑计划。
+
+    它不是产物，不进 ``ARTIFACTS``；HTTP 进程只准备人的决定，真正归档并改写
+    ``stage0`` 两份产物的仍然是 CLI 子进程。三个 ``expected_*`` 字段是乐观锁，
+    防两个标签页拿旧页面互相覆盖。
+    '''
+
+    expected_round: int = Field(ge=1)
+    expected_source_sha1: Sha1
+    expected_clean_sha1: Sha1
+    expected_total_code_points: int = Field(ge=1)
+    clean_text: str
+    clean_sha1: Sha1
+    removed: list[RemovedSegment]
+
+    @model_validator(mode='after')
+    def _payload_is_self_consistent(self) -> Stage0EditPlan:
+        if '\r' in self.clean_text:
+            raise ValueError('clean_text 必须是 LF-only，编辑计划不做静默换行归一')
+        actual = hashlib.sha1(self.clean_text.encode('utf-8')).hexdigest()
+        if self.clean_sha1 != actual:
+            raise ValueError(
+                f'clean_sha1={self.clean_sha1} 与计划正文实际 {actual} 对不上')
+        spans = [segment.span for segment in self.removed]
+        if spans != sorted(spans):
+            raise ValueError('removed 必须按原文 span 顺序排列')
+        for index, segment in enumerate(self.removed):
+            lo, hi = segment.span
+            if hi > self.expected_total_code_points:
+                raise ValueError(
+                    f'removed[{index}].span={segment.span} 越过原文长度 '
+                    f'{self.expected_total_code_points}')
+            if segment.code_points != hi - lo:
+                raise ValueError(
+                    f'removed[{index}].code_points={segment.code_points}，但 span 长 {hi - lo}')
+            if index and self.removed[index - 1].span[1] > lo:
+                raise ValueError(f'removed[{index - 1}] 与 removed[{index}] 重叠')
         return self
 
 

@@ -11,8 +11,9 @@ export const qk = {
   novel: (sid: string) => ['novel', sid] as const,
   enums: () => ['enums'] as const,
 
-  stage0: (sid: string) => ['stage0', sid] as const,
-  s1report: (sid: string) => ['s1report', sid] as const,
+  stage0Report: (sid: string) => ['stage0', sid, 'report'] as const,
+  stage0Segments: (sid: string) => ['stage0', sid, 'segments'] as const,
+  s1segments: (sid: string) => ['s1segments', sid] as const,
   s1chapters: (sid: string) => ['s1chapters', sid] as const,
   s1hook: (sid: string) => ['s1hook', sid] as const,
   reading: (sid: string, o: number) => ['reading', sid, o] as const,

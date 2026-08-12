@@ -93,13 +93,13 @@ def _tree(root) -> set:
     return out
 
 
-# ───────────────────────── 一、九个端点各一条 200 ─────────────────────────
+# ───────────────────────── 一、基础只读端点各一条 200 ─────────────────────────
 
-def test_all_nine_endpoints_answer(client, app, box):
-    """九个端点全部 200，**一个不落**。
+def test_original_read_and_preview_endpoints_answer(client, app, box):
+    """基础只读端点与 preview 全部 200。
 
-    ⚠ 覆盖面由 `_surface(app)` 反过来核对：漏打一个端点会当场红，
-    而「漏打了」与「打过都通过」在只列正例的测试里长得一模一样。
+    Stage 0/1 的九条新接口由 `test_api_stage01.py` 用真实上传与子进程覆盖；
+    本条保留原有只读视图和命令预览的逐条可达性。
     """
     job_id = _fake_started(box.root, box.sid)
     hit = {
@@ -114,7 +114,7 @@ def test_all_nine_endpoints_answer(client, app, box):
         '/api/jobs/preview': ('post', '/api/jobs/preview',
                               {'sid': box.sid, 'node': 'stage3.style'}),
     }
-    assert set(hit) == set(_surface(app)), '端点面变了，本条的清单要跟着改'
+    assert len(hit) == 9 and set(hit) <= set(_surface(app))
     for method, url, body in hit.values():
         r = getattr(client, method)(url, **({'json': body} if body else {}))
         assert r.status_code == 200, f'{method.upper()} {url} → {r.status_code} {r.text[:200]}'
@@ -265,12 +265,12 @@ def _surface(app) -> dict[str, list[str]]:
             if p.startswith('/api/')}
 
 
-def test_the_published_surface_is_exactly_the_nine_endpoints(app):
-    """⭐ E 期的端点清单**写死在这里**（裁决 1：只读全套 + 一条 preview）。
+def test_the_published_surface_is_exactly_the_stage01_surface(app):
+    """⭐ 基础端点与 Stage 0/1 的公开接口面写死在这里。
 
     ⚠ 路由表的唯一落点是 `docs/design_brief/04_delivery.md` §路由表，
     那张表的标题写着「**固定，不要改**」。本条不复制那张表，它只钉住
-    「**E 期实现了其中哪几条**」——多接一个、少接一个都要来改这个清单，
+    「**当前实现了其中哪几条**」——多接一个、少接一个都要来改这个清单，
     于是「顺手加一个端点」变成一次显式的决定。
     """
     assert _surface(app) == {
@@ -283,6 +283,15 @@ def test_the_published_surface_is_exactly_the_nine_endpoints(app):
         '/api/jobs/{job_id}': ['GET'],
         '/api/jobs/{job_id}/log': ['GET'],
         '/api/jobs/preview': ['POST'],
+        '/api/novels/{sid}/stage0/report': ['GET'],
+        '/api/novels/{sid}/stage0/segments': ['GET'],
+        '/api/novels/{sid}/stage0/edit': ['POST'],
+        '/api/novels/{sid}/stage0/approve': ['POST'],
+        '/api/novels/{sid}/stage1/partition': ['POST'],
+        '/api/novels/{sid}/stage1/segments': ['GET'],
+        '/api/novels/{sid}/stage1/chapters': ['GET'],
+        '/api/novels/{sid}/stage1/hook_copy': ['GET'],
+        '/api/upload': ['POST'],
     }
 
 
