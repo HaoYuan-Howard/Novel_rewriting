@@ -33,7 +33,7 @@
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
 | **契约** | ✅ **十二份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + `_report.md` + `_orchestration.md` + `_api.md` |
 | **骨架** | ✅ **A~E 期全部完成**（A = 契约层 · B = 共享运行时 / LLM 层 / 报告构造器 · C = stage3 纵切 · D = 编排 + CLI · E = HTTP 层） |
-| **移植** | 🚧 **F 期只剩 stage2**：`F0` 清障 ✅ · `F1` = stage6 ✅ · `F2` = stage7 ✅ · `F3` = stage4 ✅ · `F4` = stage5 ✅ · **`F6` = stage1 ✅ · `F7` = stage0 ✅**<br>`PORTED_STAGES = {'stage0','stage1','stage3','stage4','stage5','stage6','stage7'}`，**八层去七**。<br>**`F5` = stage2 正在推进**（最难的一层，见下）：`F5-0` 落点审计 ✅（§五 从零建出 **75 条**判据表）· `F5-1` 契约层四格 ✅ · `F5-2` `recover` 臂 ✅ · `F5-3` 三条臂的 prompt ✅ ·**下一步是 `F5-4`：75 条判据行** |
+| **移植** | ✅ **F 期八层全部移植完**：`F0` 清障 · `F1` = stage6 · `F2` = stage7 · `F3` = stage4 · `F4` = stage5 · **`F5` = stage2**（最难的一层，2026-08-12 收官）· `F6` = stage1 · `F7` = stage0<br>`PORTED_STAGES` **= 八层全部**，`STAGES − PORTED_STAGES` 是**空集** ⇒ `NodeNotPorted` 已退役（见下）。<br>`F5` 六步：`F5-0` 落点审计（§五 从零建出 **75 条**判据表）· `F5-1` 契约层四格 · `F5-2` `recover` 臂 · `F5-3` 三条臂的 prompt · `F5-4` 75 条判据行 · **`F5-5` 实现 + 七处接线**<br>⚠⚠ **「移植完」= 契约 + prompt + 校验器三样，不含付费产出**：stage2 两个节点的**生成侧**还没接线（见「仍欠着的」）。八层里**只有它**是这个状态 |
 
 ---
 
@@ -55,11 +55,13 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 `tests/test_corpus_fixtures.py` 从 279 条塌到 6 条**而不报错**——要重量历史基线，
 必须抽到 `E:\practice_group\` 的同级目录下。
 
-**当前基线：全绿 `1643 passed / 2 skip`**（F5-3 收工 `de578d8`，2026-08-12，树干净时实测）。
+**当前基线：全绿 `1684 passed / 2 skip`**（F5-5 收工，2026-08-12，树干净时实测）。
 
 一路的账：`1541 / 20`（F4 收工）→ **`1597 / 2`**（F6/F7 `452b22f`：18 个 `importorskip`
 换成真断言）→ `1611 / 2`（另一个会话的 stage0 摄入/上传路 `3b15ca9`）→
-`1627 / 2`（F5-1 `6be3c2c`，`+16`）→ **`1643 / 2`**（F5-3 `de578d8`，`+16`）。
+`1627 / 2`（F5-1 `6be3c2c`，`+16`）→ `1643 / 2`（F5-3 `de578d8`，`+16`）→
+**`1643 / 2` 逐值不变**（F5-4 `19d61fd`：判据行写好而**故意不 import**，照 F4-4）→
+**`1684 / 2`**（F5-5，`+41` 全在 `tests/test_stage2.py` 里）。
 ⚠ F5-2（`ffbc7c7`）的 `+5` 落在中间那一段里——它收工时树被另一个会话搅浑，
 **当时没能实测到干净的数**，那条已过期的告警不必再读。
 
@@ -96,9 +98,29 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 
 ---
 
-## 下一步：F5（F6/F7 已完成）
+## ✅ F 期收官：八层全部移植完（2026-08-12）
 
-### 顺序：**按验证价值挑，不按管线顺序挑**
+> ## ⭐ 下一个 session 从这里接
+>
+> **F 期没有下一步了**，`PORTED_STAGES` 是八层全集。接手要先知道三件事：
+>
+> **① 「移植完」的口径是「契约 + prompt + 校验器」，不是「这一层能跑」。**
+> 八层里**只有 stage2** 的**付费产出还没接线**——它两个节点的默认路径落
+> `RunModeNotImplemented`（「登记在案、还没接线」），而报错里**逐条写出缺哪四件**
+> （`novel/stages/stage2/extract.py::_NOT_WIRED`）。⚠ 那不是遗漏，是一次取舍：
+> **说「还没接」比给一条半成品的付费路要诚实**——后者会在真花掉一次钱之后才发现产不对。
+> 它已登记进「仍欠着的」那一节。
+>
+> **② `NodeNotPorted` 已退役，别照着旧代码把它写回来。**
+> 理由不是「两个异常太像」，是**前件消失**：`STAGES − PORTED_STAGES` 成了空集，
+> 那个异常在生产路径上**再也构造不出来**。⚠ HTTP 501 那一格没掉（产地换成
+> `RunModeNotImplemented`），取值面也一格没少（`STAGES` 仍八层）。
+>
+> **③ 判据总数 234 条**（八层）· 退役而不删 20 条。stage2 占 **75 / 234 = 32%**。
+> 八层的判据行都在 `contracts/judges/` 下，实现在各层的模块里，
+> **两侧由 `test_registry_covers_exactly_the_ported_stages` 等四条夹死**。
+
+### F 期为什么是这个顺序：**按验证价值挑，不按管线顺序挑**
 
 施工方案写的是 stage2→4→5→6→7→(0/1)，那是**管线**顺序。实测下来体量极不均匀
 ——**stage2 一层就占 prompt 的 57%（20 804 / 36 709 字）**，
@@ -110,41 +132,46 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 > `91` 是**「(中文首参, 严重度) 对」**的数，**不是判据数**——其中 6 次是跨严重度同名
 > （同一条判定的两三种结局），并回去只有 85 个不同的中文首参；分母 `147` 是当时对原型的**估数**。
 > F5-0 从零建表的结果是 **75 条**（41 HARD / 15 INFO / 17 metric / 2 unver），
-> 账在 `docs/schema/stage2.md` §5.0。本仓已注册 **159** 条（七层）⇒ stage2 占 **75 / 234 = 32%**。
+> 账在 `docs/schema/stage2.md` §5.0。⇒ 八层合计 **234 条**，stage2 占 **32%**。
 > **prompt 那个 57% 是准的**：`20804` = 3 个 SYS（8682 + 7448 + 2008）+ 3 个 HINT
 > （按 `json.dumps(ensure_ascii=False, indent=2)` 共 2666），一个不多一个不少。
 
-⇒ 已裁决**先用最便宜的一层把「加一层」那张清单走通一遍**（同 C 期选 stage3 当第一条纵切的判准）。
-剩下的顺序与实测体量：
+⇒ 当时裁决**先用最便宜的一层把「加一层」那张清单走通一遍**（同 C 期选 stage3 当第一条纵切的判准），
+把最难的 stage2 留到最后。三层的实测体量：
 
 | 顺位 | 层 | 原型行数 / prompt 字 / 判据 | 备注 |
 |---|---|---|---|
-| **F5** | **stage2** | **5674 行 / 4 文件** / **20804** / **75（F5-0 建表）** | 最难。⚠ 体量此前记的 `3597 + 1110` 是错的：`1110` 是 `stage2_common.py`，**它已经在 3597 里被数过一次**，而 `check_blueprints.py` 的 **2077 行整个不在这个数里**——判据一条不落全在那个文件。真实体量 = `n2_global 912` + `n2_blueprint 1575` + `stage2_common 1110` + `check_blueprints 2077`。⚠ `novel/core/spans.py` 已有 `content_index` / `locate_spans` / **`lcs`**（F4 带进来的），还缺 `recover` 那条臂与 `HINGE_LCS_MIN`（F5-2） |
+| **F5 ✅** | **stage2** | **5674 行 / 4 文件** / **20804** / **75（F5-0 建表）** | 最难。⚠ 体量此前记的 `3597 + 1110` 是错的：`1110` 是 `stage2_common.py`，**它已经在 3597 里被数过一次**，而 `check_blueprints.py` 的 **2077 行整个不在这个数里**——判据一条不落全在那个文件。真实体量 = `n2_global 912` + `n2_blueprint 1575` + `stage2_common 1110` + `check_blueprints 2077` |
 | **F6 ✅** | stage1 | 828 / 0 / 13（无 id） | 已沿新边界只保留确定性分章；契约收敛为 8 条有 id 判据 |
 | **F7 ✅** | stage0 | **0** / 0 / 0 | 已从零实现摄入、剔除、人工编辑/批准、轮次归档与 13 条有 id 判据 |
 
-### ⭐ F5 从这里接 —— `F5-0`~`F5-3` 已落，**下一步是 `F5-4`（75 条判据行）**
+### ⭐ F5 六步各落了什么
 
-> ## 接手第一件事：`F5-4` 要写的那 75 行，源在哪
+> ## `F5-5`（收官）实测到的三件，比代码本身值钱
 >
-> **`docs/schema/stage2.md` §5.1 那张表就是源，逐条抄，不要重新判。**
-> 那张表 F5-0 从零建的，六列都填满了：`判据 | 级别 | 查什么 | 盘上 3 本 / 31 章 | 修法`。
+> **① 盘上三本实跑 `skipped = 0`，而这是最有说服力的一条。**
+> 报告是**遍历判据注册表**生成的、不是遍历 findings ⇒ 注册了而没实现，
+> 那一行会挂「实现未被调用」并把徽章压成 amber。三本各 75 行，**一行 skipped 都没有**。
+> 而这一列**逐格重现了 §5.1「盘上」那一列**（F5-0 用原型校验器量的）：
+> 四条真反例全在 · `time_layer` 分布 88/5/0 · 67/0/0 · 84/2/5 ·
+> 逐章覆盖率最低 ch5 95% / ch4 96% / **ch7 90%** · 徽章三本全 `fail`（对上事实③）。
 >
-> **`F5-4` 与前四步的关系，三条都已就位：**
-> - `Rule.fix`（F5-1）**已经在等着**：§5.1 的「修法」那一列就是它的取值，
->   24 条非空。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
->   这正是把散文换成结构化表达的收益。
-> - 那个判据行文件写完之后 **不要 import 它**（照 `F4-4`）：
->   判据一进 `REGISTRY`，四张表立刻索要实现，那是 `F5-5` 的事。
->   ⚠ 落点是 `contracts/judges/` 下与本层同名的那份——**这里刻意写成散文**，
->   因为它还不存在，而 `test_every_referenced_repo_path_exists` 会去查反引号路径
->   真实存在（本轮它已经为这件事红过两次）。
-> - 那 4 条标 ✚ 的（`event_empty` / `summary_empty` / `repair_cache_policy` /
->   `verbatim_failed`）**原型没有**，是 `R-3.11` / `R-3.13` / `R-3.18` 索要的。
->   `verbatim_failed` 断言的键 F5-1 已经立好了。
+> **② 三条「守卫的守卫」当场红了 —— 那正是它们存在的理由。**
+> 三条测试都写着「八层全移植完之后本条会一个都不跑，那时候它该被改掉，不该静静地绿」。
+> ⚠⚠ **它们的共同病灶是方向反了：移植一层，覆盖面就缩小一层。**
+> 三条全部把方向掉过来（覆盖面从 0/1 变成 8/16，**加一层只会让它变大**）：
+> 「未移植的节点落终态」→ **全部 16 个节点绝不落退出码 `3`**；
+> 「未移植的层答 501」→ **八层各答一个真状态且没有一层再答 501**；
+> 「`check_only('stage2')` 抛 `NodeNotPorted`」→ **八层逐层交得出一个可调用的复检实现**。
 >
-> ⚠ **`material_malformed` 不许再注册**：它已经在 `contracts/judges/stage5.py` 里
-> 以 `stage='stage5', owner='stage2'` 注册着（stage2 的账，由下游回过头来报）。
+> **③ 逐条落实现时又推翻了两处判断**（同 F5-3 推翻 `R-3.8b` 那一次，形状相同）：
+> `R-3.3`/`R-3.4` 的落点**不在本层的模块目录里**，而在
+> `novel/stages/stage4/beats.py::verbatim_pieces`——**那段代码 F5-0 当时就在仓里**，
+> 它的 docstring 逐字写着这两条。⇒「等模块建出来再改判」这个判断本身是错的，
+> 只是它**错得安全**（晚改判不会让文档说假话，早改判会）。
+> 另一处：`anchor_ambiguous` 的分母是 **251 不是 502**——`502` 是锚点总数（251 拍 × 两端），
+> 而这条判据**只查 `starts_with`**（原型也是），
+> **原型打印的那句 `[OK] N 个锚点…` 却用了全量 anchors ⇒ 那盏绿灯把自己的分母报大了一倍**。
 
 **F5-0（`e5dd5d5`）交的是落点审计，一行 `.py` 都没改：**
 
@@ -162,8 +189,8 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 | `F5-1` | ✅ **已落**（`6be3c2c`）契约层四格：`Rule.fix` + 注册期第 ⑧ 条 · 四个 flag 登记（`--drop` / `--replay-cache` / `--purge-role` / `--chapters`）· 三个 verbatim 记账键 · `corpus.py::ADDED`。⚠ 审计漏的三处已补：① `--chapters` 进 `NODES['stage2.blueprint'].flags`（§5.1 有 **19 条**判据的 `fix` 指着它）② `--drop` / `--replay-cache` **都带值** ⇒ 也进 `VALUED_FLAGS` ③ `--reason` 折进 `--drop` 的值形态（照 `--wontfix`），不单独立 flag。`actions` 70 → **74** |
 | `F5-2` | ✅ **已落**（`ffbc7c7`）`novel/core/spans.py` 的 `recover` 臂与 `HINGE_LCS_MIN` |
 | `F5-3` | ✅ **已落** 本层的 prompt 模块 —— 三条臂 + 三份结构提示。**与原型差三处**，全在 `narration` 那一段、全部由本仓契约逼出来（详见下） |
-| `F5-4` | 本层的判据行文件 —— 75 条，**故意还不被 import**（照 F4-4）。⚠ `Rule.fix` 的注册期第 ⑧ 条已经在等着：24 条带修法的判据里任何一条把节点或 flag 写歪，注册那一刻当场炸 |
-| `F5-5` | 模块 + 接线一次走完（照 F4-6）。⚠ **stage2 是最后一个未移植层** ⇒ 它一进 `PORTED_STAGES`，`STAGES − PORTED_STAGES` 就是空集，`NodeNotPorted` 在生产路径上再也触发不了。用户裁决（2026-08-12）：**退役它**（501 仍由 `RunModeNotImplemented` 可达，HTTP 状态面不变） |
+| `F5-4` | ✅ **已落**（`19d61fd`）`contracts/judges/stage2.py` —— 75 条判据行，**故意还不被 import**（照 F4-4）⇒ 测试 `1643 / 2` 逐值不变。24 条 `fix` 被注册期第 ⑧ 条逐条查过节点与 flag 真实存在，**一次通过**。⚠ 归行那一步**推翻了源表两格**：`address_unlocatable` 落 `R-2.2` 不落 `R-2.5b`（`R-2.5b` 那一行**自己的正文**就写着「叫法在不在原文里不在这里」）· `present_names_invented` 落 `R-3.7b`（那一行的原话是「解析的**五种**去向」，而 §5.6 只列了四分）。另补齐 §5.6 另外 38 条的归行——它们此前**只活在判据行文件里** |
+| `F5-5` | ✅ **已落** 实现 + 七处接线（照 F4-6）：`checks.py` 75 条实现 · `extract.py` 两个节点 · `judges/__init__` · `PORTED_STAGES` · `_checkers` · `_runners` · `ACCOUNTING['stage2']`（空元组 → **11 行**，⚠ **全链唯一一层的记账横跨两份产物**）· `R-3.3`/`R-3.4` 改判 `结构` · `NodeNotPorted` 退役 · **37 条合成反例**。另在 `novel/core/naming.py` 补三个确定性解析纯函数 |
 
 #### `F5-3` 落了什么（**三条臂的 prompt，与原型差三处**）
 
@@ -325,7 +352,7 @@ F5-3 兑现后移进 `ENUM_BLOCKS`。**占位符全账仍是 20**（三张表加
 | 欠账 | 状态 |
 |---|---|
 | **付费路一次都没跑** | 已移植的四层（stage4/5/6/7）都是：合成样本走通了闸门与提升路，但 `DeepSeekTransport` **从没发过一次请求**。已用 `--dry-run` 验过渲染出的 system 与原型逐字节相同（stage4 2192 字 / stage6 1075 字 / stage7 1658 字）。<br>⚠ stage4 那次是**全链最贵的一次请求**（全书一次调用，`max_tokens=96000`，user 实测 22773 字）。**真发第一次要先说一声**——那是本仓第一次真花钱 |
-| **36 条 HARD 盘上 0 反例样本** | stage4 16 · stage6 5 · stage7 15。已补的合成样本只走通了 3 条（`style_words` / `rn_ambiguous` / `context_link`）。跨层规矩「每新加一条 HARD 就要有会让它红的样本」在这三层仍未兑现<br>⚠ **stage5 那 7 条已在 F4-6 配齐**（`tests/test_stage5.py`），所以这个数没有变成 43 |
+| **36 条 HARD 盘上 0 反例样本** | stage4 16 · stage6 5 · stage7 15。已补的合成样本只走通了 3 条（`style_words` / `rn_ambiguous` / `context_link`）。跨层规矩「每新加一条 HARD 就要有会让它红的样本」在这三层仍未兑现<br>⚠ **stage5 那 7 条已在 F4-6 配齐**、**stage2 那 37 条已在 F5-5 配齐**（`tests/test_stage5.py` / `tests/test_stage2.py`），所以这个数没有变成 80。<br>⇒ **stage2 那一份可以照抄**：干净底座 + 一条钉住「底座上 41 条 HARD 全不命中」的测试 + 37 行 `(判据, 改哪一处, 为什么这一处会让它红)` + **一条守卫的守卫**（加一条 HARD 而不配样本，当场点名）。⚠ 前提是**判据吃 `dict` 不吃模型** |
 | **`_provenance.code` 那条没修** | 11 份产物 `code` 全是同一个短 sha，而同一批的 `N9_SYS` 取过 **3 个**值。⚠ **处置只定一次，别按层分别裁**——`provenance()` 在共享层，改 `git describe --always --dirty` 一改就是八层。目前只**钉在测试里** |
 | ~~**两套新鲜度机制并存**~~ | ✅ F4-6 落地：`ReviewSources.writer_context` 是 `store.freshness()` 的**投影**，不是第二次计算（`novel/stages/stage5/review.py::_context_source`） |
 | **`to_human_edit()` 只长在 `LlmProvenance` 上** | stage6/stage7 的 `--apply-edit` 够不着它（`--approve` 之后上一份来源账可能已是 `FreeProvenance`）。⇒ 真要用它的那一刻，连同一份会红的样本一起挪到基类 |
@@ -340,7 +367,7 @@ F5-3 兑现后移进 `ENUM_BLOCKS`。**占位符全账仍是 20**（三张表加
 | **stage6** | `stage6.hook --apply-edit` 同样**没接线**<br>`hook_para_sep` 对单段文案给的是**错的诊断**：detail 写着「归一化应该已经修掉它了」，而单段文本没有分隔符可归一。判定本身不冤，只是那句话在这一类输入上是假的 |
 | **stage5** | 付费两条路（`run_write` / `run_revise`）**一次都没跑**，只走过 `--dry-run`。⚠ 它是全链第一个 `ask_text` 调用点，契约 §七 那条降级阶梯（正文写进 `reasoning_content`、`content` 返回空串）**在真机上一次都没验过**<br>`novel/core/facts.py::secret_keywords` 把 fact 里的中文数字剥掉而成稿这一侧没剥 ⇒ 带数字词的片段**永远匹配不上**（「19/21 条 secret 连揭示章都命中不了」的成因之一）。**本轮不改**：改它会动全部三本的基线，而手上没有 ground truth<br>`checks.trim_regressions` 的六条护栏只在合成输入上验过；`chNN.rejected.json` 那条归档路盘上仍是零样本 |
 | **stage7** | 盘上那三份 `name_map_edit.json` **没有被端到端跑过**（它们是 `character_patches` 那条路，沙箱里没有构造过一次完整重放） |
-| **F5 要连带补的** | `novel/core/spans.py` 缺 `recover` 那条臂（stage2 落盘路才用得上，连同 `HINGE_LCS_MIN` 一起进来；⚠ `lcs` 本身**已在 F4 进来了**，stage5 的 `must_appear_missing` 是它的第一个消费方）<br>`--drop` 与 `--replay-cache` 两个 0 成本 flag **从没被任何守卫查过**（它们在原型的 `FREE_FLAGS` 里而抓包的 `actions` 里没有）。⚠ 不全的方向是安全的（未登记 ⇒ 按付费算），但那是「界面把免费动作画成橙色」 |
+| **stage2** ⭐ | ⚠⚠ **付费产出一行都还没写，而这是八层里唯一一处**（F5-5 的取舍：F5 移植的是审计写死的三样——**契约、prompt、校验器**）。两个节点的默认路径、`--purge-role` / `--migrate` / `--drop` 全部落 `RunModeNotImplemented`（「登记在案、还没接线」），**报错里逐条写出缺哪四件**（`novel/stages/stage2/extract.py::_NOT_WIRED`）：① `ask_json` 的响应模型 ② 落盘前的确定性归一（`address` 四项回取 + `setup_chapters` 裁剪）**与它们各自的账** ③ `present_names → present_char_ids` 的解析调用（纯函数已在 `novel/core/naming.py` 备齐）④ verbatim 回取的三笔账（契约与 `novel/core/spans.py::_find_or_recover` 都已就位，缺的是调用它的落盘路）<br>⚠ **接 `--migrate` 不比接付费路容易**：归一本身是 0 成本纯函数，但**它要写盘，而写回去的那一份必须同时带上归一的账**——判据断言的就是那些账（`secret_setup_order` 断 `setup_chapters_pruned` · `anchor_not_verbatim` 断 `verbatim_recovered` · `verbatim_failed` 断 `verbatim_failures`，三者都跑在落盘前，断字段值就是永远为真的判定）。**少写一笔账，「0 成本修好了」与「什么都没改」在报告上就同形。**<br>⚠ `human_adjudicated` 的**子字段形状契约从没定过**（`contracts/schema/stage2.py` 用 `dict[str, str]` **登记这个空缺**）——接 `--drop` 之前要先把形状补齐，否则 `extra='forbid'` 在这一格上是失效的 |
 
 ### 界面与前端
 
@@ -350,7 +377,7 @@ F5-3 兑现后移进 `ENUM_BLOCKS`。**占位符全账仍是 20**（三张表加
 | **`novel/views/` 下三屏没做** | stage4 / stage6 / stage7 各自那一屏与那条 API 路由（现在只有 `stage3.py`）。⚠ 做的时候：stage4 的**三个 `source_chars` 口径别混** · stage6 的 `candidates[].chars` 现算**必须留在 Python** · stage7 的 `book_txt.chars` 是全链第三个 `chars` 口径，**别拿它和另外两个比** |
 | **`web/` 一个字没动**（已裁决） | 欠着四笔：71 处写死的原型作业名（`n4_plan` / `n9_rename` / `stage5_review` …）· S-13 屏按 `rules[]` 重画 · 两份 check mock 重生成 · `web/src/constants/actions.ts` 那张 `WRITE_EFFECTS` 第二落点可删（`/api/enums` 现在发 `writes` / `writes_disk` 了）<br>⚠⚠ **`docs/design_brief/05_samples/` 里的 json 永远不许用新后端的输出覆盖**——它是 `tests/test_api_enums.py` 与 `tests/test_invariants.py` 全部对账的**证据基线**，覆盖之后那一族测试就变成拿 `invariants` 跟它自己比。新形状的样例要另起路径 |
 | **`/api/novels` 在全语料 163 本上会慢** | 每本跑一遍完成度。**登记不优化**——要优化就给 `overview()` 加浅层分支，**别造第二张清单**（原型那张的代价是 stage5 被整个排除） |
-| **`PARTIAL_MASK_FIELDS` 那四个字段名不立** | 零消费方，F5 落地屏蔽实现时才生，并同时加一条「本句里必须逐个出现那四个字段名」的测试 |
+| **`PARTIAL_MASK_FIELDS` 那四个字段名不立** | 零消费方。⚠ **F5 收官了而它仍然零消费方**，那不是漏做：它的消费方是 stage2 的**屏蔽实现**，而屏蔽跑在**下发**那一侧、属付费产出那一批（见「按层 · stage2」）。⇒ 判准照旧——**接屏蔽实现的那一刻才生它**，并同时加一条「本句里必须逐个出现那四个字段名」的测试 |
 
 ---
 
