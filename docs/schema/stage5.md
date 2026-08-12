@@ -416,8 +416,11 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 ## 六、判据清单（**唯一落点**，两相共用一张表）
 
-**47 条** = **7 HARD / 26 INFO / 9 metric / 5 unver**，`actionable` 23 条。
-owner 分布：`stage5` 26 · `None` 12（＝非结论）· `stage4` 2 · `stage2`/`stage3`/`corpus` 各 1。
+**47 条** = **7 HARD / 26 INFO / 9 metric / 5 unver**，`actionable` 23 条
+（**13 条 `UNIQUE` + 10 条 `FREE`**，见本节末尾那条准入）。
+owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 · `stage2`/`stage3`/`corpus` 各 1。
+⚠ 与原型那 43 条相比各多 2：新加的 `quote_unbalanced` / `deep_overlap_high` 归 `stage5`，
+`dialogue_report` / `draft_duplicated` 是非结论。
 
 落盘闸门 / `--recheck` / `--revalidate` / `--apply-edit` / 全书验收相**读同一张表**，谁也不许再抄一份。
 「盘上」列 = 用当前代码在三本上重算（只读，不写盘），与盘上最近一份 review 的
