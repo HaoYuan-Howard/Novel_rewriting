@@ -46,7 +46,12 @@ _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
 #: （`stage7.rename` / `stage7.assemble` / `stage7.approve`），于是「一层一个跑法」
 #: 那几张按 **stage** 索引的表（`_runners` / `_checkers`）第一次要在函数体里再按
 #: `ctx.node` 分一次岔——**那不是新机制，是 F0 定的那张查表的自然形态**。
-PORTED_STAGES: frozenset[str] = frozenset({'stage3', 'stage6', 'stage7'})
+#: ⚠ **`stage4` 是 F 期第三层**（2026-08-12）。它是本仓第一个**一层两份产物、
+#: 两节需求**的层（`R-5` 计划 + `R-6` 组装），于是正向覆盖率第一次要取两节的并集
+#: ——`STAGE_SECTIONS` 早就是元组了，那一格终于有了真消费方。
+#: ⚠⚠ 它也是第一个**徽章能真的是 `pass`** 的层：判据表里没有一条 `sev='unver'`
+#: （stage6/stage7 各有 8/7 条常驻 `unver`，结构上永远最好只有 amber）。
+PORTED_STAGES: frozenset[str] = frozenset({'stage3', 'stage4', 'stage6', 'stage7'})
 
 
 @dataclass(frozen=True)

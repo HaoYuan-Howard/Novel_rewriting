@@ -51,7 +51,18 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
         # 与「闸门跑过没事」正是 `Q-2` 要求必须能区分的两件事。
         AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
     ),
-    'stage4': (),
+    # ⚠⚠ `params` 是**原型记了、而全仓没有一个读者**的那个键（`stage4.md` §3.3）：
+    #    `beat_seq` / `beat_adjacent` / `beat_layer` 三条 HARD 拿**当前**的分组函数去量，
+    #    从不读它——**每一次都在拿新尺子量旧布**。本层给了它两个出口：
+    #    这一行（常驻）与判据 `params_drift`（三条后置条件先比它再判）。
+    # ⚠ **刻意不声明 `partial_rewrite`**：本层没有一条 0 成本路会把计划改成混版的
+    #    （`--identity` 写的是另一份文件、`--apply-edit` 落的是新一轮）。
+    #    声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
+    'stage4': (
+        AccountingSpec('params', '这份计划的拍是照哪一套阈值切的？'),
+        AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
+        AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
+    ),
     'stage5': (),
     # ⚠ `params` 是**原型完全没有**的键（`stage6.md` 事实④）：本层是付费节点，
     #    而换了模型、换了 `--max-tokens`，产物里没有任何一处说得出来。

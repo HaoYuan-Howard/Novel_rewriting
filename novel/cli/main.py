@@ -134,7 +134,8 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
     ⇒ 改成查表，形态**照抄 `novel/stages/__init__.py::_checkers()`**
     ——同一个问题在复检那一侧早就解对了，这里只是把它抄回来。
     """
-    return {'stage3': _run_stage3, 'stage6': _run_stage6, 'stage7': _run_stage7}
+    return {'stage3': _run_stage3, 'stage4': _run_stage4,
+            'stage6': _run_stage6, 'stage7': _run_stage7}
 
 
 def runnable_stages() -> frozenset[str]:
@@ -307,6 +308,66 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
     hook.run_hook(ctx, client)
     print('  ✓ stage6 开篇文案已落盘（三个候选）——跑 `stage6.approve --pick N` 定稿')
     return X.OK
+
+
+def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
+    """stage4 的六条路。**五条 0 成本，一条付费。**
+
+    ⚠ **一个 stage 两个节点**（`stage4.plan` 付费 / `stage4.context` 0 成本），
+    形态同 stage7 那次：派发按 **stage** 分，节点由 `ctx.node` 带着 ⇒ 先按节点分岔。
+    ⚠ `stage4.context` 的 `flags=()` 是**终态**：它**本身**就是那个动作
+    （原型的 `--context-only` 已作为 flag 退役，见 `SUPERSEDED_FREE_ENTRIES`）。
+    """
+    from novel.stages.stage4 import plan
+
+    tokens = set(N.flag_tokens(flags))
+
+    if ctx.node == 'stage4.context':
+        report = plan.run_context(ctx)
+        print(f'  ✓ 写作上下文已重建：{plan.CTX_REL}（0 成本）')
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--check-only' in tokens:
+        report = plan.run_check_only(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if tokens & {'--dry-run', '--prompt-only'}:
+        system, user = plan.build_prompt(ctx)
+        if '--prompt-only' in tokens:
+            # ⚠ **`--prompt-only` 只量体量**（原型的语义），`--dry-run` 才摊开字节。
+            #   两个都留着是因为它们答的是不同的问题：一个是「这次要花多少 token」，
+            #   一个是「发出去的到底是哪几个字节」。
+            print(f'── 规划 prompt 体量 ── system {len(system)} 字 · user {len(user)} 字')
+            return X.OK
+        print(f'── system（{len(system)} 字）──\n{system}')
+        print(f'\n── user（{len(user)} 字）──\n{user}')
+        return X.OK
+
+    if '--revalidate' in tokens:
+        report = plan.run_revalidate(ctx)
+        print(render(report))
+        print('  ✓ 已提升为正式产物并重建了写作上下文（0 成本）' if report.passed
+              else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--apply-edit' in tokens:
+        plan.run_apply_edit(ctx)          # 显式终态：登记在案而尚未接线
+        return X.TERMINAL_STATE
+
+    # 付费路。⚠ **本仓最贵的一次请求**（全书一次调用，user 里带着全书原文）。
+    from novel.config import load_config
+    from novel.llm.client import LlmClient
+    from novel.llm.transport import DeepSeekTransport
+    cfg = load_config()
+    client = LlmClient(ctx, DeepSeekTransport(cfg), model=cfg.model,
+                       max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
+                       concurrency=cfg.concurrency)
+    report = plan.run_plan(ctx, client)
+    print('  ✓ stage4 重构计划已落盘，写作上下文已同批重建')
+    print(render(report))
+    return X.OK if report.passed else X.CHECK_FAILED
 
 
 def _run_stage7(ctx: RunContext, flags: list[str]) -> int:

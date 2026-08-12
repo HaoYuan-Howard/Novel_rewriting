@@ -185,6 +185,54 @@ class PlanChapters(StrictModel):
     provenance: PlanProvenance = Field(alias='_provenance')
 
 
+class PlanBeatResponse(StrictModel):
+    """**模型响应里**的一拍。⚠ 与落盘那份（`PlanBeat`）**不是同一个形状**。
+
+    模型给的是 `plan_beat`（照抄我们发过去的编号）+ 预算；
+    `from_beats` 由 `expand_plan_beats` **按编号换回来**，模型不产它。
+    """
+
+    #: `pNN_NN`。**它是模型给这一拍分预算时唯一的抓手。**
+    #: ⚠ 三种违约（编号不存在 / 少给一拍 / 重复引用）一律**显式终态，无兜底**。
+    plan_beat: str = Field(min_length=1)
+
+    budget_chars: int = Field(gt=0)
+
+
+class PlanChapterResponse(StrictModel):
+    """**模型响应里**的一个输出章。
+
+    ⚠ **这里刻意没有那条「`output_ordinal` 恒等于源章号」的 `model_validator`**：
+    落盘那一侧（`PlanChapter`）有它，因为那时它是**代码写的**那一侧的后置条件；
+    而这一侧是**模型写的**，违约的代价是「人手改一行 + 0 成本重判」——
+    归载体就等于把它换成一次付费重试。判据 `one_to_one` 在盘上那份 dict 上判它。
+    """
+
+    output_ordinal: int = Field(ge=1)
+    from_source_ordinals: list[int] = Field(min_length=1)
+    chapter_goal: str = Field(min_length=1)
+    open_hook_goal: str = Field(min_length=1)
+    end_hook_goal: str = Field(min_length=1)
+    beats: list[PlanBeatResponse] = Field(min_length=1)
+
+
+class PlanResponse(StrictModel):
+    """规划那一次调用**收回来的东西**。`ask_json(model_cls=…)` 用它。
+
+    ⚠⚠ **`require` 从它派生，而不是手写一个元组**——原型那个 `require=()` 默认值
+    正是几个漏声明的调用点得以存在的原因：**漏传不报错，只是静默停掉一条 HARD 闸门**。
+    从本类派生出来的恰好是 `reconstruction_strategy` · `output_chapters` 两个，
+    与 `stage4.md` §一 写的「这是完整的」逐字对上。
+
+    ⚠ **`extra='forbid'`（继承自 `StrictModel`）在这一侧是承重的**：
+    模型越界产一个 `op` 就在这里当场挡回——那个字段已整个裁撤，
+    而「模型自己冒出来一个 op」说明 prompt 漂了，该出声。
+    """
+
+    reconstruction_strategy: str = Field(min_length=1)
+    output_chapters: list[PlanChapterResponse] = Field(min_length=1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、`writer_context.json`
 # ─────────────────────────────────────────────────────────────────────────────
