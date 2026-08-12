@@ -51,7 +51,11 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > 的出路，**在本层的默认路径上不存在**——默认逐章调用走的是 `ask_text`，**响应是纯文本，没有 JSON 可校验**。
 > 只有 `--batch N`（A/B 用）走 `ask_json`。别把 stage4 的那套结论直接搬过来。
 >
-> ### ③ **7 条 HARD，盘上 31 章 0 命中；43 条【现役】判据里 26 条从未命中**
+> ### ③ **7 条 HARD，盘上 31 章 0 命中；47 条判据里 29 条从未命中**
+>
+> （原型那 43 条里 26 条，加上新契约新加的三条：`quote_unbalanced` 0/31 ·
+> `deep_overlap_high` 0/11 闭卷章 · `draft_duplicated` 0/31。第四条新加的
+> `dialogue_report` 是度量，逐章 31/31 都产。）
 >
 > ```
 > counts（三本 × 最近一轮）  hard 0 · info 32/18/14 · unver 3/2/5 · metric 62/41/48
@@ -523,49 +527,75 @@ owner 分布：`stage5` 26 · `None` 12（＝非结论）· `stage4` 2 · `stage
 > 而**最省力的那条是删内容或编内容**。实测代价：可反哺条目 **36 → 9（转人工 27 条，75%）**。
 > 每条 `actionable` 的判据必须**进且只进其一并写明理由**，分不干净时当场炸。
 
-### 6.1 判据 ↔ 需求 —— **20 条在需求文档里没有落点**
+### 6.1 判据 ↔ 需求 —— **47 条逐条有落点**（F4-0 平掉，2026-08-12）
 
-`contracts/rules.py` 要求每条判据声明 `requirement`，`tests/test_coverage.py` 的**反向覆盖率**
-会让指向不存在编号的判据变红。已有落点的部分：
+`contracts/rules.py` 要求每条判据声明 `requirement`（正则 `^R-\d+\.\d+[a-z]?$`——
+**`Q-x` 与裸 `R-3` 都不收**），`tests/test_coverage.py` 双向查：反向让指向不存在编号的判据变红，
+正向让「声称有守卫却没有判据指着」的需求行变红。
+
+**审计前的账：20 条判据在需求文档里没有落点**，另有 4 条指着收不了它们的地方
+（`secret_timeline` / `no_secrets_in_book` / `event_landing_unver` 指 `Q-9`、
+`draft_missing` / `draft_duplicated` 指 `Q-1`、`material_malformed` 指裸 `R-3`、
+`name_surface_survey` 指 `R-7.5` 而那一行当时写着「无守卫 → `B-01`」）。
+⇒ `REQUIREMENTS.md` 补 17 行、拆 1 行（`R-7.5`），R-8 一节九行**逐行重判**。
 
 | 判据（族） | 落点 |
 |---|---|
 | `verbatim_missing` · `verbatim_typo` | `R-7.3` |
 | `verbatim_split` | `R-7.3b` |
 | `keep_value_missing` | `R-7.4` |
-| `invented_number` · `invented_name` · `name_surface_survey` | `R-7.5`（另五项 → `B-01`） |
-| `overlap_report` · `deep_overlap_high` | `R-7.6`（闭卷有上界）· `R-7.6b`（开卷仍无守卫 → `B-03`） |
-| `length_over` · `length_under` · `length_report` · `book_length` · `book_length_report` | `R-7.8`（书级两条是它与 `R-5.3` 那条带的延长线） |
-| `dialogue_report` | `R-7.8b` |
-| `must_hold_unver` | `R-7.11` |
+| `must_appear_missing` | `R-7.17` ⭐ |
+| `must_hold_unver` | `R-7.11`（那一格是 `人`，判据侧 `who_checks='HUMAN'`） |
+| `invented_number` · `invented_name` | `R-7.5` ⭐**拆行**（另五项留在 `R-7.5b`「无守卫 → `B-01`」） |
+| `deep_overlap_high` | `R-7.6`（闭卷有上界）· `R-7.6b`（开卷仍无守卫 → `B-03`） |
 | `quotes_in_unquoted_corpus` · `quote_unbalanced` | `R-7.7`（前者 `owner=corpus`；后者让这条需求第一次名副其实） |
-| 四条逐章 metric 无条件产出 | `R-8.1` |
-| `secret_timeline` · `no_secrets_in_book` · `event_landing_unver` | `Q-9` + `R-8.9` |
-| `convergence_report` | `R-8.3` / `R-8.4` |
-| `draft_missing` · `draft_duplicated` | `Q-1` |
-| `material_malformed` | `R-3`（stage2 的账） |
+| `length_over` · `length_under` · `book_length` | `R-7.8`（书级那条是它与 `R-5.3b` 那条带的延长线） |
+| `dialogue_report` | `R-7.8b` |
+| `draft_too_short` · `draft_truncated` · `meta_leak` | `R-7.15` ⭐ |
+| `names_absent` | `R-7.16` ⭐ |
+| `secret_leak` · `no_secrets_in_book` | `R-7.18` ⭐（`R-8.10` 只写了**改写式**那一半） |
+| `dialogue_halved` | `R-7.19` ⭐ |
+| `dialogue_fewer` · `dialogue_broken` · `dialogue_ratio_drift` | `R-7.20` ⭐ |
+| `band_drift` · `para_len_drift` · `layout_drift` · `simile_drift` · `xinli_drift` · `dash_drift` | `R-7.21` ⭐ |
+| `dash_report` · `short_run_report` | `R-7.21b` ⭐ |
+| `event_landing` · `event_landing_unver` | `R-7.22` ⭐ |
+| `cross_chapter_number` | `R-7.23` ⭐ |
+| `length_report` · `overlap_report` · `book_length_report` | `R-8.1b` ⭐ |
+| `convergence_report` | `R-8.3b` ⭐ |
+| `secret_timeline` · `name_surface_survey` | `R-8.9b` ⭐（**探针自己的基线读数**） |
+| `draft_missing` · `draft_duplicated` | `R-8.11` ⭐ |
+| `material_malformed` | `R-3.15` ⭐（stage2 的账，由本层回过头来报） |
 | `style_block_carries_plot` | `R-4.5`（描述不许出现专名） |
-| `secret_unknown` | `R-6`（ctx 的 `must_not_reveal` 组装） |
+| `secret_unknown` | `R-6.3`（逐章剧透闸门产的 `must_not_reveal`） |
 
-**没有落点的 20 条**——按缺口分族，**每一族缺的都是同一句话**：
-
-| 缺的那句需求 | 判据 |
-|---|---|
-| 「成稿必须是**完整的一章正文**、不含叙述外壳」 | `draft_too_short` · `draft_truncated` · `meta_leak` |
-| 「必须用**下发的称谓表**称呼人物」（`R-7.5` 只管「不许编新的」，没管「要用给的」） | `names_absent` |
-| 四组保真材料**只有两组进了需求**（`verbatim` / `keep_value`，`must_hold` 有 `R-7.11`） | `must_appear_missing` |
-| 「不许提前点破本章不该揭示的事」——`R-8.10` 只写了**改写式**（无守卫），**字面式那条现役 HARD 没有落点** | `secret_leak` |
-| **对白守恒整族**：`R-7.12` 只管「裁剪时不许腰斩」，写作路径上这四条一条都没有 | `dialogue_halved`（**HARD**）· `dialogue_fewer` · `dialogue_broken` · `dialogue_ratio_drift` |
-| **「成稿要贴着 stage3 的画像」整族**：`R-4` 管的是画像**怎么产**，不管成稿**贴不贴** | `band_drift` · `para_len_drift` · `simile_drift` · `xinli_drift` · `dash_drift` · `dash_report` · `short_run_report` · `layout_drift` |
-| 「每一拍在成稿里要有落点」· 「自造数字跨章不许打架」 | `event_landing` · `cross_chapter_number` |
-
-> ⚠ **这不是「判据多余」，是需求文档漏写了。** 判准很直接：这 20 条**每一条都在盘上跑着**，
+> ⚠ **那 20 条不是「判据多余」，是需求文档漏写了。** 判准很直接：它们**每一条都在盘上跑着**，
 > 其中 `dash_drift`（11/31 命中、恒等基线 0/31）与 `band_drift`（18/31）是本层**命中最多**的两条。
-> 逐字核过：`REQUIREMENTS.md` 全文 **`破折号` 0 次 · `心里` 0 次 · `外壳` 0 次 · `段落平均` 0 次**。
+> 审计当时逐字核过：`REQUIREMENTS.md` 全文 **`破折号` 0 次 · `心里` 0 次 · `外壳` 0 次 ·
+> `段落平均` 0 次**。
 >
-> ⚠⚠ **最刺眼的一条：`dialogue_halved` 是 7 条 HARD 之一，而需求里没有它。**
+> ⚠⚠ **最刺眼的那条：`dialogue_halved` 是 7 条 HARD 之一，而需求里没有它**，
 > 而「闭卷会系统性把台词压短」是本项目**效应量最大**的一条跨书结论——
-> 它今天只作为 `R-7.6` 下面的**一条注**存在（判据 35 的镜像：有守卫、却没有一条要求说它在守什么）。
+> 它当时只作为 `R-7.6` 下面的**一条注**存在（判据 35 的镜像：有守卫、却没有一条要求说它在守什么）。
+> 现在它是 `R-7.19`。
+
+#### R-8 一节九行**没有一行是判据在守**
+
+审计发现的第二件事：`R-8.1`~`R-8.9` 全写着 `HARD`，而 47 条判据里只有四行接得住
+（`R-8.1` 的四条逐章度量 · `R-8.3`/`R-8.4` 的收敛账 · `R-8.9` 的词表基线），
+而那四条接住的其实是**度量**不是阻断。逐行查下来它们说的是**机制**不是对产物的判定：
+
+| 行 | 改判 | 落点 |
+|---|---|---|
+| `R-8.1` | `结构` | `contracts/rules.py::_validate` ②：`sev` 与 `who_checks` 两侧必须成对 |
+| `R-8.2` | `载体` | `Finding` 的两条后置条件（`owner is None` ⇔ 非结论 · `actionable ⇒ owner=='stage5'`） |
+| `R-8.3` | `载体` | `Finding.evidence_key` 由 `evidence` 现算并断言 |
+| `R-8.4` / `R-8.5` / `R-8.6` / `R-8.7b` | `结构` | 落点在本层实现里，**与模块同批改**（形态照 F3-0 对 `R-6.5`/`R-6.6` 的处置） |
+| `R-8.7` | `载体` | `WontFix` 的 `why` 最小长度 + 键↔条目一致性 |
+| `R-8.8` | **`待建`** | `INBOX_KIND` 六个取值今天只有 `invalid` 有消费方，**聚合本身一行都没有** |
+| `R-8.9` | `结构` | `contracts/rules.py::_validate` ⑤：`wordlist` 不填 `baseline` 当场拒绝注册 |
+
+⇒ 度量与「查不了」那两族因此各自有了自己的行（`R-8.1b` / `R-8.3b` / `R-8.9b` / `R-8.11`），
+**不再挂在一行写着「阻断」的需求下面**。
 
 > #### ⚠ `draft_missing` 曾经挂着**两件相反的事**
 >

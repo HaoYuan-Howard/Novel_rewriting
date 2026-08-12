@@ -100,7 +100,7 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 
 | 顺位 | 层 | 原型行数 / prompt 字 / 判据 | 备注 |
 |---|---|---|---|
-| **F4** | **stage5** | 4370 / 6164 / 43（有表） | 体量最大；`stage5.md` §6.1 已列 **20 条判据在需求里没有落点** |
+| **F4** | **stage5** | 4370 / 6164 / **47**（有表） | 体量最大。落点账已平（F4-0）：`REQUIREMENTS.md` 补 17 行、`R-8` 一节九行**逐行重判**，见 `stage5.md` §6.1 |
 | F5 | **stage2** | 3597 + 1110 / **20804** / **91（无 id）** | 最难。要先建 `novel/core/` 的 spans / overlap 两块 |
 | F6 | stage1 | 828 / 0 / 13（无 id） | 零 prompt 零调用；沿 stage0/stage1 的新边界把「摄入+分章」切开 |
 | F7 | stage0 | **0** / 0 / 0 | **不是移植是新写**——原型这一层一行代码都没有 |
