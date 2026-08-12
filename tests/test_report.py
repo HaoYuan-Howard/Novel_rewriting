@@ -228,7 +228,8 @@ def test_actionable_is_derived_from_repair_not_stored_twice():
     加第二个字段等于给同一件事开第二个落点。"""
     plain = _registry(_rule(rule='a', sev='info', owner='stage5'))
     assert finding('a', detail='d', evidence=[], registry=plain).actionable is False
-    fed = _registry(_rule(rule='a', sev='info', owner='stage5', repair='UNIQUE'))
+    fed = _registry(_rule(rule='a', sev='info', owner='stage5',
+                          repair='UNIQUE', directive='把它改回去。'))
     assert finding('a', detail='d', evidence=[], registry=fed).actionable is True
 
 

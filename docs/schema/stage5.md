@@ -589,7 +589,8 @@ owner 分布：`stage5` 26 · `None` 12（＝非结论）· `stage4` 2 · `stage
 | `R-8.1` | `结构` | `contracts/rules.py::_validate` ②：`sev` 与 `who_checks` 两侧必须成对 |
 | `R-8.2` | `载体` | `Finding` 的两条后置条件（`owner is None` ⇔ 非结论 · `actionable ⇒ owner=='stage5'`） |
 | `R-8.3` | `载体` | `Finding.evidence_key` 由 `evidence` 现算并断言 |
-| `R-8.4` / `R-8.5` / `R-8.6` / `R-8.7b` | `结构` | 落点在本层实现里，**与模块同批改**（形态照 F3-0 对 `R-6.5`/`R-6.6` 的处置） |
+| `R-8.6` | `结构` | `contracts/rules.py::_validate` ③④：准入收成**一个字段的三个取值**之后，「进且只进一张桶」结构上不可能分不干净（原型那两张 dict 要另配一道断言） |
+| `R-8.4` / `R-8.5` / `R-8.7b` | `结构` | 落点在本层实现里，**与模块同批改**（形态照 F3-0 对 `R-6.5`/`R-6.6` 的处置） |
 | `R-8.7` | `载体` | `WontFix` 的 `why` 最小长度 + 键↔条目一致性 |
 | `R-8.8` | **`待建`** | `INBOX_KIND` 六个取值今天只有 `invalid` 有消费方，**聚合本身一行都没有** |
 | `R-8.9` | `结构` | `contracts/rules.py::_validate` ⑤：`wordlist` 不填 `baseline` 当场拒绝注册 |

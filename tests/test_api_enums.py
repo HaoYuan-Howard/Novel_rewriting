@@ -174,8 +174,14 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
     #   不同的问题：一个「这次要花多少 token」，一个「发出去的到底是哪几个字节」。
     #   ⚠ `stage4.context` **没有跟着 +1**，那不是漏了：它的 `flags=()` 是**终态**
     #   ——本节点**本身**就是那个动作，原型的 `--context-only` 已作为 flag 退役。
-    assert len(paid_payload['actions']) == 61, (
-        f'actions 有 {len(paid_payload["actions"])} 条，期望 61 '
+    # ⚠ 61 → 63（2026-08-12，F4-1 给 stage5 接线）：**+2，而其中一条是「挪」不是「加」**。
+    #   · `--wontfix` 是新加的（`stage5.review`，1 条）；
+    #   · `--revise` 从 `stage5.review` **挪到 `stage5.write`**（用户裁决）——
+    #     而写作节点**有两条臂**，同一个 flag 于是从 1 条变成 2 条。
+    #   ⚠ 这正是「臂是节点的参数」那条裁决的可见后果：界面上一个 flag 摆几个按钮，
+    #     取决于它挂在哪个节点上。挪节点不是零成本的改名。
+    assert len(paid_payload['actions']) == 63, (
+        f'actions 有 {len(paid_payload["actions"])} 条，期望 63 '
         f'（16 个节点的默认路径 + 每个 flag，stage5.write 两条臂各算一遍）。'
         f'这个数**会随 `NODES` 改**——改动它是有意的就来改这个数')
 

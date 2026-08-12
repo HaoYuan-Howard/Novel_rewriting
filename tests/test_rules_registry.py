@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_rules_registry.py —— 注册期那五条校验，逐条要有一个会红的反例。
+test_rules_registry.py —— 注册期那七条校验，逐条要有一个会红的反例。
 
 一条「据说会拦住 X」的校验，如果没有一个反例证明它真的会拦，
 它与「只写在注释里的约束」没有区别。
@@ -49,15 +49,40 @@ def test_requirement_must_be_a_wellformed_r_id(bad):
         Registry().register(_ok(requirement=bad))
 
 
+#: 进反哺的判据必须同时写出「这一条要怎么改」（见 `test_a_directive_is_required_...`）。
+#: 下面几条查的是别的校验，所以一律带着它，免得被第 ⑦ 条先拦下来。
+_FIX = dict(repair='UNIQUE', directive='把它改回去。')
+
+
 def test_repairable_rule_must_be_owned_by_stage5():
     """根因不在写手身上的条目进反哺 = 花钱让它去修一个它修不了的东西。"""
     with pytest.raises(ValueError, match='反哺|repair'):
-        Registry().register(_ok(owner='stage2', repair='UNIQUE'))
+        Registry().register(_ok(owner='stage2', **_FIX))
 
 
 def test_unver_rule_cannot_be_repairable():
     with pytest.raises(ValueError, match='unver'):
-        Registry().register(_ok(sev='unver', repair='UNIQUE'))
+        Registry().register(_ok(sev='unver', **_FIX))
+
+
+@pytest.mark.parametrize('bad', ['unique', 'free', 'none', '', 'YES'])
+def test_repair_bucket_must_be_one_of_the_three(bad):
+    """⚠ `Literal` 在运行时不拦任何东西，而这一格写歪的后果是**会花钱**：
+    `repair='unique'`（小写）原样存进去，然后 `!= 'NONE'` 判真。"""
+    with pytest.raises(ValueError, match='repair'):
+        Registry().register(_ok(repair=bad, directive='把它改回去。'))
+
+
+def test_a_directive_is_required_exactly_when_the_rule_feeds_back():
+    """**双向**：进反哺却没有指令 ⇒ 那一轮会把一条空指令发给写手（花了钱、没说改什么）；
+    不进反哺却写着指令 ⇒ 一句永远发不出去的话，下一个人会以为反哺在修这一条。"""
+    with pytest.raises(ValueError, match='directive'):
+        Registry().register(_ok(repair='UNIQUE'))
+    with pytest.raises(ValueError, match='directive'):
+        Registry().register(_ok(directive='改回去。'))
+    # 两侧对齐就过（两种对齐各一个）
+    Registry().register(_ok(**_FIX))
+    Registry().register(_ok())
 
 
 def test_wordlist_rule_must_declare_its_baseline():

@@ -763,6 +763,16 @@ VALUED_FLAGS: Final = {
     # 只取前两张表，于是这样的 flag 在命令行上**永远解析不出来且没有任何东西会出声**。
     # 那一处已在 F0 修掉并配了守卫。
     '--pick': '定稿选第几个候选（1 起）',
+    # ⚠ 与 `--pick` 逐条同形：它是 `stage5.review` 的**参数**（豁免哪一条结论），
+    # 不是一个 0 成本入口 ⇒ 不进 `FREE_ENTRIES`。
+    # ⚠⚠ 但它**要进 `WRITE_EFFECTS`**，而 `--pick` 不进——两者在这一格上相反：
+    # `--pick` 写的就是本节点 `produces` 里那一份（不登记 ⇒ 落到 `produces`，正确），
+    # 而 `--wontfix` 写的是**另一份不在 `produces` 里的产物**（`stage5/wontfix.json`
+    # 是可选的，进 `produces` 会让每一本书永远差一份）。
+    # ⚠ 值的形态 `<章|book>|<判据>[|<证据键>]=<理由>`：前两段是人说得出来的，
+    # 证据键由代码从最近一份验收里补全；同一 (章, 判据) 有多条结论时**要人写出第三段**
+    # ——原型那条路把它们**一并豁免**了，而「换了个位置的同类问题」不是人做的决定。
+    '--wontfix': '这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填',
 }
 
 #: ⭐ 一次跑**会往盘上写什么**。空串 = 不写盘。
@@ -801,6 +811,10 @@ WRITE_EFFECTS: Final = {
     '--revalidate': '把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/',
     '--apply-edit': '把人工稿落成新的一轮，并把上一轮归档进 _rounds/',
     '--migrate': '按当前锚点算法重新定位原文引用并写回',
+    # ⚠ 它写的是**另一份**产物（`stage5/wontfix.json`），不是本节点 `produces` 里那一份
+    # ⇒ 不登记的后果是**方向反的**：`/api/enums` 会把它派生成「写 `stage5/review_{n}.json`」，
+    # 而它一份验收报告都不产。同 `--names-only` 那一格的病，只是方向相反。
+    '--wontfix': '把一条豁免记进 stage5/wontfix.json（**一份验收报告都不产**）',
 }
 
 
@@ -927,15 +941,31 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   （原型的 `--context-only` 已作为 flag 退役，见 `SUPERSEDED_FREE_ENTRIES`）。
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
                                  produces=('stage4/writer_context.json',)),
+    # ⚠ `--revise` 是 F4 从 `stage5.review` **挪过来**的（用户裁决，见本表下方那段）。
+    # ⚠⚠ **两条臂合成的那份 `stage5/draft.md` 刻意不在这一列里**，而它确实是本节点写的
+    #   （`assemble_book`，每跑都拼）。F4 试过补上，当场被两条测试抓住：
+    #   这一列的消费方是 `state.required_artifacts`（「这一层**跑完了**盘上该有哪几份」），
+    #   而那份拼稿**在只写了一章时也存在**（缺章会写成 md 里的一条横幅，不是不落盘）
+    #   ⇒ 拿它当完成度信号是**假阳**：`resume_verdict` 会对一个写了一半的付费层判「跳过」。
+    #   本层的完成度只有一条路——`planned_chapters` 对 `chapters_done` 逐章数（`R-14.2`），
+    #   读不回计划时是 `unknown` 而不是 `False`。
+    #   ⇒ 它的写盘效应由 `stage5/{mode}/ch{nn}.json` 那一条带着（同一次跑、同一个动作）。
+    # ⚠ `--revise` 挪过来之后**不再需要 `paid_flags`**：那一列的定义是
+    #   「能把一个 **0 成本节点**变成付费的 flag」，而本节点的默认路径本来就付费。
+    #   留着它是一格永远不起作用的声明——`is_paid` 早在 `spec.paid` 那一步就判完了。
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 逐章写作',
                                  modes=('deep', 'shallow'),
                                  flags=('--dry-run', '--recheck', '--revalidate',
-                                        '--apply-edit'),
+                                        '--apply-edit', '--revise'),
                                  produces=('stage5/{mode}/ch{nn}.json',
                                            'stage5/{mode}/draft.md')),
+    # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。
+    # ⚠⚠ `stage5/wontfix.json` **刻意不进 `produces`**，而它确实是本节点写的：
+    #   这一列的消费方是 `state.required_artifacts`（「这一层跑完了盘上该有哪几份」），
+    #   而豁免那一份是**可选**的——没人豁免过任何东西时它就不该存在（盘上 3/3 本都没有）。
+    #   把它登记进来会让每一本书**永远差一份产物**。⇒ 它的写盘效应登记在 `WRITE_EFFECTS`。
     'stage5.review':    NodeSpec('stage5', 'R-8',  False, 'stage5 全书验收',
-                                 paid_flags=('--revise',),
-                                 flags=('--check-only', '--revise'),
+                                 flags=('--check-only', '--wontfix'),
                                  produces=('stage5/review_{n}.json',)),
     # ⚠ `--revalidate` 是 F 期移植时补的，而它是**新加那道落盘闸门的必然配套**：
     #   本层一次产三条候选，闸门拦的是「一条干净候选都没有」；不给一条 0 成本的提升路，
@@ -966,12 +996,18 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=('stage7/name_map.json',)),
 }
 
-# ⚠⚠ **一处已知分歧，登记在这里而不是顺手改掉**（`stage5.review.paid_flags`）：
-# 原型的 `--revise`（付费二次修订）挂在 **`n5_write`/`n6_write`** 上——
-# 它把可反哺的结论连同上一轮成稿发回**写手**，产的是新一轮成稿，不是新一份验收报告。
-# 而本表把它记在 `stage5.review` 上。两种读法都说得通（返工由验收报告驱动 / 返工由写手执行），
-# 但它们指向**两段不同的代码**，而 stage5 属 F 期、今天没有任何实现可以裁定谁对。
-# ⇒ **不在 D 期替 stage5 定这件事**；移植 stage5 那一刻连同一份会红的样本一起裁。
+# ⚠⚠ **`--revise` 挂哪个节点：D 期登记的那处分歧已在 F4 裁掉**（2026-08-12，用户裁决）。
+# D 期把它记在 `stage5.review` 上（读法：返工由验收报告驱动），而原型挂在
+# **`n5_write`/`n6_write`**（读法：返工由写手执行）。两种读法都说得通，
+# 但它们指向**两段不同的代码**，当时没有任何实现可以裁定谁对，所以原样登记着。
+#
+# ⇒ 裁给 **`stage5.write`**，判准是本表自己那一列：`--revise` 产的是
+# **新一轮成稿**（`stage5/{mode}/chNN.json`，带 `round` +1 与 `revision_of`），
+# 不是新一份验收报告。挂在 `stage5.review` 上会让一个 `paid=False` 的节点
+# 产出另一份产物，而那与它自己的 `produces` 说的不是一回事——
+# **完成度、断点续跑、`would_write` 三处都从 `produces` 派生**，它们会一起说假话。
+# 顺带：`--revise` 要按臂分岔（闭卷/开卷的 SYS 不同），而 `stage5.review` 没有 `modes`。
+#
 # 顺带：原型 `n5_write --revalidate` 自述 0 成本，而它的 `FREE_FLAGS` 白名单里**没有它**
 # ⇒ 现役界面把一个不花钱的动作画成橙色并弹二次确认。本表已把它补进 `stage5.write.flags`。
 

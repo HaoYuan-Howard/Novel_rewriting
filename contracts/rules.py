@@ -9,7 +9,7 @@ rules.py —— 判据注册表。**判据表只有一张**，key 重复当场�
 原型实测过一次：四条确定性检查在新契约下**三条静默失效、一条全量误报**（结论恒为「需修订」）。
 两种故障方向相反、危害相同：**报告不再携带信息**。
 
-【注册期就校验，不等到跑的时候】五条，每条都对应一次已发生的损失，见 `_validate`。
+【注册期就校验，不等到跑的时候】七条，每条都对应一次已发生的损失，见 `_validate`。
 
 【注册表现在是空的，这是对的】判据随各 stage 移植过来时才注册。
 `PORTED_STAGES` 声明「哪些 stage 已经移植完」——**正向覆盖率只对已移植的 stage 生效**，
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Final, Literal
 
 from contracts.invariants import OWNER, SEVERITY, WHO_CHECKS_RULE
 
@@ -27,6 +27,25 @@ from contracts.invariants import OWNER, SEVERITY, WHO_CHECKS_RULE
 #: **一条判据的存在本身就否定了那四个**。取值面与理由的唯一落点在 `invariants.WHO_CHECKS`。
 WhoChecks = Literal['HARD', 'INFO', 'GATE', 'METRIC', 'HUMAN']
 RepairBucket = Literal['UNIQUE', 'FREE', 'NONE']
+
+#: `RepairBucket` 的运行时取值面。⚠ `Literal` 在运行时不拦任何东西（同 `WhoChecks`），
+#: 而这一格写歪的后果是**一次付费自救的准入被静默放宽**。
+#:
+#: 【三个取值答的是同一个问题：满足这条判据的路径唯一吗】
+#:   · `UNIQUE` = 目标字串被上游钉死（材料 / 称谓表 / 源章原话），或动作就是
+#:     「删掉指出来的那个」——写手只能放进去或拿掉，**编不出第三种答案**；
+#:   · `FREE`   = 密度 / 比率 / 档位。满足它的路径有无穷多条，而**最省力的那条
+#:     往往是删内容或编内容**。实测：某章为满足「对白变少了」（引语 7→11 句）
+#:     **凭空编了一句台词**，源章 0 次且语义讲不通，而第二轮全部 4 条判定
+#:     **没有一条指向它**，报告还记它「消掉 2 条」；
+#:   · `NONE`   = 不进反哺。
+#:
+#: ⚠⚠ **「进且只进一张桶」在这里是结构上成立的**（`R-8.6`）：原型把它写成
+#: `REPAIR_UNIQUE` / `REPAIR_FREE` **两张 dict**，于是要另配一个
+#: `assert_repair_admission()` 去查「每条 actionable 判据恰好落进其中一张」。
+#: 收成**一个字段的三个取值**之后那道断言没有服务对象了——一条判据不可能同时
+#: 在两张表里，也不可能一张都不在。
+REPAIR_BUCKETS: Final = ('UNIQUE', 'FREE', 'NONE')
 
 _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
 
@@ -66,11 +85,23 @@ class Rule:
     requirement: str                # 指向 R-x.y。**必填**
 
     owner: str | None = None        # 根因第一嫌疑层；OWNER 之一
-    repair: RepairBucket = 'NONE'   # 进不进付费自救
+    repair: RepairBucket = 'NONE'   # 进不进付费自救。取值面见 REPAIR_BUCKETS
     quote: bool = False             # 凭据能不能原样引用给写作节点
     wordlist: bool = False          # 它是不是词表类判据
     baseline: str | None = None     # 词表类判据的基线命中率。wordlist 时必填
     note: str = ''
+
+    #: **发回写手的那句话**——「这一条要怎么改」。进反哺的判据必填，其余必须留空。
+    #:
+    #: 【为什么它长在判据表上，而不是在反哺那一侧现写】`_provenance.fixes` 存的是
+    #: `[[rule, evidence_key]…]` **引用**，不是渲染后的指令文本（`stage5.md` §5.1）——
+    #: 存第二份就会跟着表漂：判据表改了措辞而存量产物里那份没有，
+    #: 而**下一轮到底发了哪句话**就再也说不清了。⇒ 指令由本字段生成，唯一落点。
+    #:
+    #: 【留空是被下面那条不变量逼出来的，而它是对的】写一条**永远不会被发出去**的指令，
+    #: 就是「退役的描述会以现役身份被引用」那个形状——下一个人读到它会以为反哺在修这条。
+    #: 真有那句话就写进 `note` 当注释（原型 `dash_drift` 就是这么处理的）。
+    directive: str = ''
 
 
 @dataclass(frozen=True)
@@ -164,7 +195,7 @@ class Registry:
 
 
 def _validate(r: Rule) -> None:
-    """注册期校验。五条，每条对应一次已发生的损失。"""
+    """注册期校验。七条，每条对应一次已发生的损失。"""
 
     # ① 取值域闭合。`dict.get(key, 默认值)` 用在契约枚举上，就是给违约数据发一张静默通行证。
     if r.sev not in SEVERITY:
@@ -194,18 +225,28 @@ def _validate(r: Rule) -> None:
             f'一条不指向任何需求的判据，改版时没有任何东西会提醒你它该跟着改'
         )
 
-    # ③ 「可反哺」蕴含「根因在写作层」—— 根因不在写手身上的条目，重写一百遍也修不好。
+    # ③ 自救准入的取值面要真闭合（`R-8.6`）。`Literal` 只给类型检查器看，
+    #    而这一格写歪的后果是**一次付费自救的准入被静默放宽**：`repair='unique'`
+    #    （小写）今天会原样存进去，然后 `!= 'NONE'` 判真——它会花钱。
+    if r.repair not in REPAIR_BUCKETS:
+        raise ValueError(
+            f'{r.rule}: repair={r.repair!r} 不在 {REPAIR_BUCKETS}。'
+            f'这一格答的是「满足这条判据的路径唯一吗」，写歪一个值就是给一条'
+            f'路径不唯一的判据发一张付费自救的通行证'
+        )
+
+    # ④ 「可反哺」蕴含「根因在写作层」—— 根因不在写手身上的条目，重写一百遍也修不好。
     if r.repair != 'NONE' and r.owner != 'stage5':
         raise ValueError(
             f'{r.rule}: repair={r.repair} 但 owner={r.owner!r}。'
             f'根因不在 stage5 的条目进反哺 = 花钱让写手去修一个它修不了的东西'
         )
 
-    # ④ 「查不了」不许进反哺，也不许假装自己是别的。
+    # ⑤ 「查不了」不许进反哺，也不许假装自己是别的。
     if r.sev == 'unver' and r.repair != 'NONE':
         raise ValueError(f'{r.rule}: sev=unver 的判据不许进反哺——它连有没有问题都不知道')
 
-    # ⑤ 词表类判据必须报出自己的基线命中率。
+    # ⑥ 词表类判据必须报出自己的基线命中率。
     #    没有基线数字的词表判据，等于不知道自己在说什么：实测一张「揭示标记」词表
     #    在 21/22 章命中，与那一章有没有点破什么无关——它的「通过」分支是
     #    **一盏保证会亮的绿灯**，报告照常输出、只是不再携带信息。
@@ -213,6 +254,18 @@ def _validate(r: Rule) -> None:
         raise ValueError(
             f'{r.rule}: 词表类判据必须填 baseline（它在多少章/多少条上命中）。'
             f'有判别力的往往只有它的反面——一个标记都没有＝反常'
+        )
+
+    # ⑦ 指令与自救准入**双向**对齐（原型同款断言 `bool(directive) == actionable`）。
+    #    两个方向各消灭一种故障：
+    #      · 进反哺却没有指令 ⇒ 那一轮会把一条**空指令**发给写手（花了钱、没说要改什么）；
+    #      · 不进反哺却写着指令 ⇒ 一句**永远发不出去**的话留在表里，
+    #        下一个人读到它会以为反哺在修这一条。
+    if bool(r.directive) != (r.repair != 'NONE'):
+        raise ValueError(
+            f'{r.rule}: repair={r.repair!r} 而 directive='
+            f'{"有" if r.directive else "空"}。进反哺的必须写出「这一条要怎么改」，'
+            f'不进的必须留空——一句永远发不出去的指令会被下一个人当成现役的'
         )
 
 
