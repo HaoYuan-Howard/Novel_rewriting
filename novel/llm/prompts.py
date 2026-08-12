@@ -27,9 +27,9 @@ from typing import Any, Final
 from pydantic import BaseModel
 
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, BEAT_MIN_CHARS, HINGE_KINDS, INVENT_ALLOW, INVENT_FORBID,
-    INVENT_PRINCIPLE, LOCKED_OP, NAME_DISTINCTIVENESS, OP_BAND, STYLE_WORDS, TIME_LAYERS,
-    WORLD_RULE_KINDS,
+    ADDRESS_BY, ADDRESS_CONTEXT, BEAT_MIN_CHARS, BEAT_NATURAL_MAX, HINGE_KINDS, INVENT_ALLOW,
+    INVENT_FORBID, INVENT_PRINCIPLE, LOCKED_OP, NAME_DISTINCTIVENESS, OP_BAND, STYLE_WORDS,
+    TIME_LAYERS, VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,6 +61,12 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     #   「篇幅方式」这条信息现在从 `LOCKED_OP` 取常量，不再按章查表。
     'BANDS': '{:g}~{:g}×'.format(*OP_BAND[LOCKED_OP]),
     'BEAT_MIN': str(BEAT_MIN_CHARS),
+    # ⚠ 这两个**更隐蔽**（F3-1 兑现，此前挂在 `DEFERRED_BLOCKS` 里）：从前 prompt 里
+    #   写死「两倍」与「80~150」，而两个常量就在同一个文件里，改一个不会有任何东西出声。
+    #   ⚠ `BEAT_NATURAL` 是**一对**（下界恒等于 `BEAT_MIN_CHARS`——拍就是按它切的），
+    #   与判据那一侧的报警线 `BEAT_ALERT_MIN/MAX` 是**故意的两对数**，别混。
+    'VERBATIM_FACTOR': '{:g}'.format(VERBATIM_BUDGET_FACTOR),
+    'BEAT_NATURAL': f'{BEAT_MIN_CHARS}~{BEAT_NATURAL_MAX}',
     # ⚠ **这 15 个词必须整份插值，不许手抄一个子集**——原型就是这么漂的。
     'STYLE_WORDS': '、'.join(f'「{w}」' for w in STYLE_WORDS),
     # 同一张表的第二种渲染（原型 `Stage5/stage5_common.py:153`）。
@@ -84,10 +90,6 @@ DEFERRED_BLOCKS: Final[dict[str, str]] = {
     'CHANGE_TYPES': (
         'stage2。`arc_tracks[].change_type` 是**开放**枚举（`stage2.md` §1.6 明写'
         '「末尾的 `…` 是语义的一部分」）⇒ 它不许做成 `Literal`，也就不该与闭合枚举同表'),
-    'VERBATIM_FACTOR': 'stage4。`VERBATIM_BUDGET_FACTOR=2.0` 还没进 invariants',
-    'BEAT_NATURAL': (
-        'stage4。它是 `(BEAT_MIN_CHARS, 150)`，而**上界 150 在原型里是个字面量**，'
-        'invariants 里没有。⚠ 补它之前先按 `_README.md` 那条纪律问一句：那个 150 是量出来的还是拍的'),
     'ROLE_FATE': 'stage2 的角色拆分规则，是一段 **prompt 正文**不是枚举，属移植期',
 }
 
