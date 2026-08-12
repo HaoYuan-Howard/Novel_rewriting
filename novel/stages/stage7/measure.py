@@ -10,19 +10,19 @@ measure.py —— 上游装载 / 投影 / 展开 / 纯读数。**判定一律不
 """
 from __future__ import annotations
 
-import glob
-import os
 import re
 from collections import Counter, defaultdict
 from typing import Any
 
-from contracts.invariants import DEPTH_MODES, MIN_SURFACE
-from contracts.schema.stage5 import Chapter, DraftConsumed, JudgedDraft
+from contracts.invariants import MIN_SURFACE
 from contracts.schema.stage7 import HookConsumed
 from novel.core.naming import strip_distinguisher
 from novel.core.text import norm
+from novel.stages.stage5.measure import draft_consumed_of, draft_projection, load_drafts
 from novel.stages.stage7.subs import apply_subs, sub_table
 from novel.store import ArtifactStore
+
+__all__ = ['draft_consumed_of', 'draft_projection', 'load_drafts']  # 下游按本模块的名字取
 
 #: `build_subs` / `apply_everything` 交出来的一条待翻译的问题。
 Problem = tuple[str, str, list[str]]
@@ -32,28 +32,11 @@ Unit = tuple[str, str]
 
 
 # ── `consumed` 投影：本层**真正读到**上游的哪一部分 ──────────────────────────
-
-def draft_projection(data: object) -> object:
-    """本层真正消费的成稿投影 —— 喂给 `store.read_judged(project=)`。
-
-    正文与章序进入替换/成书；`budget_chars` 的**具体数值**不进入，
-    但**它有没有**决定这份稿是不是旧契约稿（`rn_mixed_contract`）。
-    ⚠ 它吃**盘上那份原始 dict**（不是模型）：判过期时要对一份
-    **可能已经不合当前 schema** 的上游重算同一个投影。
-    """
-    if not isinstance(data, dict):
-        return None
-    return {'output_ordinal': data.get('output_ordinal'), 'text': data.get('text')}
-
-
-def draft_consumed_of(rec: dict) -> DraftConsumed:
-    """成稿 → `judged[].consumed` 那一格（契约里现成的模型，不另造一份）。"""
-    from novel import prov
-    return DraftConsumed(
-        output_ordinal=int(rec.get('output_ordinal') or 0),
-        text_sha1=prov.fingerprint(str(rec.get('text') or '')),
-        has_budget_chars=rec.get('budget_chars') is not None,
-    )
+#
+# ⚠ **投影与装载器都住在产地**（`novel/stages/stage5/measure.py`）：成稿是 stage5 的
+#   产物，本层与 stage6 都只是下游读者。F4 之前这三样在两层里各有一份**逐字相同**的
+#   拷贝——同一件事的第二个落点，而它们只要有一次不同步，
+#   「本层读到的上游变了没有」就会在两层给出不同的答案。
 
 
 def hook_consumed_of(rec: dict | None) -> HookConsumed:
@@ -67,43 +50,6 @@ def hook_consumed_of(rec: dict | None) -> HookConsumed:
 
 
 # ── 成稿：走 `read_judged`，绝不走会记 `inputs` 的那条 ──────────────────────
-
-def load_drafts(store: ArtifactStore) -> tuple[dict[int, list[dict]], list[str],
-                                               dict[str, JudgedDraft]]:
-    """全部成稿 → `({output_ordinal: [rec]}, invalids, judged)`。
-
-    ⚠⚠ **一律走 `store.read_judged`，绝不走 `store.read`**：`inputs` 的键只取两级，
-    `stage5/deep/ch01.json` 会塌成 `deep/ch01.json` ⇒ 反查拼出来的路径根本不存在
-    ⇒ 那条边被**静默跳过、永远显示「对得上」**。**一个假的匹配比没有记录更坏。**
-    （B1 期已由 `store.read` 的 `PathRefused` 从结构上拦住这条路，这里别绕开它。）
-
-    ⚠ `.INVALID.json` **排除，但要报计数**：「排除了 3 份废稿」与
-    「一份废稿都没有」必须分得开。
-
-    ⚠ 同章双份（deep + shallow 都写过）**这里不判死**：由判据去说。
-    产地的多义性不该在装载器里被一个隐式的选择抹掉。
-    """
-    by_ord: dict[int, list[dict]] = {}
-    judged: dict[str, JudgedDraft] = {}
-    invalids: list[str] = []
-    for mode in DEPTH_MODES:
-        pattern = os.path.join(store.path(f'stage5/{mode}'), 'ch*.json')
-        for p in sorted(glob.glob(pattern)):
-            base = os.path.basename(p)
-            rel = f'stage5/{mode}/{base}'
-            if base.endswith('.INVALID.json'):
-                invalids.append(rel)
-                continue
-            chapter, fp, _cfp = store.read_judged(Chapter, rel, project=draft_projection)
-            rec = chapter.model_dump(by_alias=True)
-            rec['_relpath'], rec['_mode'] = rel, mode
-            by_ord.setdefault(chapter.output_ordinal, []).append(rec)
-            judged[rel] = JudgedDraft(
-                output_ordinal=chapter.output_ordinal,
-                round=getattr(chapter.provenance, 'round', 1) or 1,
-                sha1=fp, consumed=draft_consumed_of(rec))
-    return by_ord, sorted(invalids), judged
-
 
 def collect_chapters(by_ord: dict[int, list[dict]], plan: dict | None,
                      invalids: list[str]

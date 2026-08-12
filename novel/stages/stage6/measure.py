@@ -7,12 +7,9 @@ measure.py —— 本层的上游装载、投影与**纯读数**。**逐字移�
 """
 from __future__ import annotations
 
-import glob
-import os
 import re
 
-from contracts.invariants import DEPTH_MODES
-from contracts.schema.stage5 import Chapter, DraftConsumed, JudgedDraft
+from contracts.schema.stage5 import JudgedDraft
 from contracts.schema.stage6 import Mech
 from novel.core.bands import BAND_SEP, sep_band_of_text
 from novel.core.normalize import (
@@ -20,6 +17,7 @@ from novel.core.normalize import (
     quote_pair,
 )
 from novel.core.text import norm
+from novel.stages.stage5.measure import load_drafts
 from novel.store import ArtifactStore
 
 #: 引号内片段。⚠ 与 `core.text.QUOTED` **刻意不同**：那一份有 40 字上界
@@ -82,66 +80,19 @@ def hidden_secrets(secrets: list[dict], upto: int) -> tuple[list[dict], list[str
 
 # ── 成稿：走 `read_judged`，绝不走会记 `inputs` 的那条 ──────────────────────
 
-def draft_projection(data: object) -> object:
-    """本层**真正消费**的成稿投影 —— 喂给 `store.read_judged(project=)`。
-
-    来源元数据、预算等字段改变**不应**要求重写文案 ⇒ 只投影 `output_ordinal` 与正文。
-    ⚠⚠ 这条投影是 `hook_body_stale`（`R-9.17`）的**全部依据**：整文件 `sha1` 只作审计。
-    盘上实测：迁移之后 `sha1` **必然**对不上（新契约裁过 stage5 产物的字段），
-    而 `consumed.text_sha1` 对得上——照原型退回整文件 `sha1` 会让 2/3 本误报红。
-
-    ⚠ 它吃**盘上那份原始 dict**（不是模型），理由同 stage3 的三条投影：
-    判过期时要对一份**可能已经不合当前 schema** 的上游重算同一个投影。
-    """
-    if not isinstance(data, dict):
-        return None
-    return {'output_ordinal': data.get('output_ordinal'), 'text': data.get('text')}
-
-
-def draft_consumed_of(rec: dict) -> DraftConsumed:
-    """成稿 → `judged[].consumed` 那一格（契约里现成的模型，不另造一份）。
-
-    ⚠ `has_budget_chars` 是**三态**里的「知不知道」那一格：产物有没有预算是
-    stage4 计划的性质，而本层只负责如实记下来。
-    """
-    from novel import prov
-    return DraftConsumed(
-        output_ordinal=int(rec.get('output_ordinal') or 0),
-        text_sha1=prov.fingerprint(str(rec.get('text') or '')),
-        has_budget_chars=rec.get('budget_chars') is not None,
-    )
-
-
 def lead_drafts(store: ArtifactStore, upto: int) -> tuple[list[dict], list[int],
                                                           dict[str, JudgedDraft]]:
     """开篇 `upto` 章的成稿。返回 `(lead, missing, judged)`。
 
-    ⚠⚠ **一律走 `store.read_judged`，绝不走 `store.read`**：`inputs` 的键只取两级，
-    `stage5/deep/ch01.json` 会塌成 `deep/ch01.json` ⇒ 反查拼出来的路径根本不存在
-    ⇒ 那条边被**静默跳过、永远显示「对得上」**。**一个假的匹配比没有记录更坏。**
-    （B1 期已由 `store.read` 的 `PathRefused` 从结构上拦住这条路，这里别绕开它。）
+    ⚠ **装载走产地那一份**（`novel/stages/stage5/measure.py::load_drafts`）：
+    成稿是 stage5 的产物，本层只是下游读者。这里只加本层的**口径**——
+    「开篇到第几章」，以及同章双份时取排在前面的那一份（**由判据去说**，
+    产地的多义性不该在装载器里被一个隐式的选择抹掉）。
+    ⚠⚠ 那份装载器里那条「绝不走 `store.read`」的告诫仍然承重，去那边读。
 
-    ⚠ 同章双份（deep + shallow 都写过）**这里不判死**：取排在前面的那一份，
-    由判据去说。产地的多义性不该在装载器里被一个隐式的选择抹掉。
+    ⚠ `.INVALID` 由装载器排除并单列，本层不消费那个计数：文案只看正式稿。
     """
-    by_ord: dict[int, list[dict]] = {}
-    judged: dict[str, JudgedDraft] = {}
-    for mode in DEPTH_MODES:
-        pattern = os.path.join(store.path(f'stage5/{mode}'), 'ch*.json')
-        for p in sorted(glob.glob(pattern)):
-            if os.path.basename(p).endswith('.INVALID.json'):
-                continue
-            rel = f'stage5/{mode}/{os.path.basename(p)}'
-            chapter, fp, _consumed_fp = store.read_judged(
-                Chapter, rel, project=draft_projection)
-            rec = chapter.model_dump(by_alias=True)
-            rec['_relpath'], rec['_mode'] = rel, mode
-            by_ord.setdefault(chapter.output_ordinal, []).append(rec)
-            judged[rel] = JudgedDraft(
-                output_ordinal=chapter.output_ordinal,
-                round=(chapter.provenance.round if hasattr(chapter.provenance, 'round') else 1),
-                sha1=fp, consumed=draft_consumed_of(rec))
-
+    by_ord, _invalids, judged = load_drafts(store)
     lead: list[dict] = []
     missing: list[int] = []
     for o in range(1, upto + 1):
