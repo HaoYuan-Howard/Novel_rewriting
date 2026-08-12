@@ -1,11 +1,34 @@
 # stage2 产物 schema
 
-抽取。**这一层是全链第一个调 LLM 的地方**，两个节点、两次不同形状的调用：
+抽取。**这一层是全链第一个调 LLM 的地方**，两个节点、**三个付费调用点**：
 
 ```
-stage2/global_grounding.json     全书一次调用   → R-2.1 ~ R-2.12
-stage2/chapter_blueprints.json   一次调用产一章 → R-3.1 ~ R-3.12
+stage2.global     stage2/global_grounding.json     全书一次调用   → R-2.1 ~ R-2.12
+                  （同一节点的第二条臂：--purge-role，见下）
+stage2.blueprint  stage2/chapter_blueprints.json   一次调用产一章 → R-3.1 ~ R-3.18
 ```
+
+> ### ⚠⚠ 第三个付费调用点：`stage2.global --purge-role`
+>
+> **本文件此前只写了两个调用点，而原型有三个**（F5-0 补，2026-08-12）。
+> 漏的这一条不是一个小旋钮：它是 `role 泄结局`（`R-2.6`，**盘上 2/3 本命中、共 7 处**）
+> **唯一的修复路**。不写它，读的人会以为那条 HARD 红了之后只能人工改 json。
+>
+> | | 符号 | 干什么 |
+> |---|---|---|
+> | 主路径 | `GLOBAL_SYS` | 全书一次抽取 |
+> | **第二条臂** | **`ROLE_SPLIT_SYS`** | **语义判官**：把每个角色的 `role`/`fate` **双向重划分**（结局挪进 `fate`，身份留在 `role`），`char_id` 一个不动 |
+>
+> 三条它自己的纪律，移植时一条都不许丢：
+> 1. **`_provenance.prompts` 因此有两个指纹键**（`GLOBAL_SYS` + `ROLE_SPLIT_SYS`）——
+>    `_common.md` §一 那条「指纹算在**渲染结果**上」在这里第一次遇到「一个节点两条臂」。
+> 2. **判官漏了任何一个 `char_id`、或交回空 `role`，当场入显式终态**，不兜底。
+> 3. ⚠ **`_RETIRED_ROLE_PURGE_SYS` 不许搬**：它与 `GLOBAL_SYS` 各写了一份 role/fate 规则，
+>    两份说的不是同一条判据，**在真实数据上把两个角色判反了方向**（F-084）。
+>    产物里的旧键 `ROLE_PURGE_SYS` 由产地主动 `pop` 掉。
+>    ⚠ 同理 `--migrate-identity` 已退役，读到它时当不存在。
+>
+> `--purge-role` 进 `PAID_FLAGS` + `NODES['stage2.global'].flags`（F5-1）。
 
 读法（证据列的取值、为什么三源合并）见 `_README.md`。
 **载体 = Pydantic v2**（已定），但本文只定内容、不写模型——模型在骨架阶段照本文写。
@@ -61,8 +84,13 @@ stage2/chapter_blueprints.json   一次调用产一章 → R-3.1 ~ R-3.12
 > | 档 | 哪些 | 为什么 |
 > |---|---|---|
 > | **安全** | `beat_id` 归一 · `present_char_ids` / `narration.*_char_id` 解析 | 改写结果本身有**可独立复算的后置条件**（格式 / 在不在 registry），判据没有变空 |
-> | **已解决** | `address` 四项 · `setup_chapters` 裁剪 | 改写次数与逐条清单进 `_provenance`，**校验器改断言那个计数**，闸门于是重新可达 |
-> | **⚠ 未解决** | **verbatim 回取** | 改写不留任何产物痕迹，而它对应的判据在改写之后**恒真**（§2.4） |
+> | **已解决** | `address` 四项 · `setup_chapters` 裁剪 · **verbatim 回取**（F5-0 补，见下） | 改写次数与逐条清单进 `_provenance`，**校验器改断言那个计数**，闸门于是重新可达 |
+>
+> ⭐ **verbatim 回取原来是这张表上唯一的「未解决」**——「改写不留任何产物痕迹，
+> 而它对应的判据在改写之后**恒真**」。F5-0 按 `address_*` 的先例给它立了**三个**记账键
+> （`verbatim_rewrites` / `verbatim_recovered` / `verbatim_failures`，见 §3.2），
+> 于是这一档现在是空的。⚠ 三个而不是一个：**「一个字都没动」「按最长公共子串救回来的」
+> 「锚不到」是三件事**，合成一个计数就等于没记（判据 14）。
 >
 > ### ③ **盘上这三本，是 FAIL 的**（0 成本校验器实跑）
 >
@@ -354,8 +382,10 @@ stage2/chapter_blueprints.json   一次调用产一章 → R-3.1 ~ R-3.12
 > ② 产地的显式终态是**进程非零退出**，它**拦不住下一条命令**——那本书照样跑完了 stage1→stage7。
 > 「显式终态」在多命令流水线里只等于「这一步红了」，**不等于「链路被挡住了」**。
 >
-> ⚠ **verbatim 回取的 failures 没有进 `_provenance`**（事实 ② 的「未解决」那一档）：
-> 「这份产物是不是失败态」目前只能靠遍历全部 hinge 去反推。
+> ⚠ **verbatim 回取的 failures 从前没有进 `_provenance`**：「这份产物是不是失败态」
+> 只能靠遍历全部 hinge 去反推——**靠一个字段的【缺席】去表达失败态**。
+> ⇒ F5-0 已给它立 `_provenance.verbatim_failures`（§3.2），失败态从此有正面的落点；
+> `text` 仍按判据 7 原样留着（不猜不删），两者互不替代。
 
 **两个锚点允许重叠、甚至完全重合**：128 条实测里 **75 条（59%）** 的内容字符比两个锚点加起来还短——
 「硬数字」「物件」天生就是短的（`丝绢`、`二十两银子`）。
@@ -461,6 +491,33 @@ stage2/chapter_blueprints.json   一次调用产一章 → R-3.1 ~ R-3.12
 | `char_refs` | `obj` | 是 | 8 个计数：`resolved` / `pronoun_ok` / `ambiguous` / `late` / `unknown` / `invented` / `no_names` / `pronoun`。**解析是可重跑的确定性步骤**，不记这几个数，「这份产物解析时有几条没解出来」在下一次重算之后就永远失去答案 | **三源** |
 | `partial_regen_chapters` | `int[]` | **否** | 定向重生成过哪几章（累积）。盘上 2/3 本有 | **盘·码** |
 | `repairs` | `obj[]` | **否** | 定向重生成的历史，每条 12 个子字段（`chapter_ordinal` / `failure_items[]` / `failure_evidence` / `user_prompt` / `output` / `model` / `cache_policy` / `fields[]` / `before_metrics{beats,hinges,present_names}` / `after_metrics{…}`）。盘上 2/3 本、共 3 条 | **盘·码** |
+| **`verbatim_rewrites`** | `arr[]` | 是 | **F5-0 新增**。精确回取：锚点归一后命中，字节被换成原文的。`(beat_id, 位置, 原值, 回取值)` | **契·码**※ |
+| **`verbatim_recovered`** | `arr[]` | 是 | **F5-0 新增**。**LCS 救回**（`recover` 那条臂命中）：`(beat_id, 位置, 原锚点, 救回的片段, 重合度)` | **契·码**※ |
+| **`verbatim_failures`** | `arr[]` | 是 | **F5-0 新增**。锚不到：`(beat_id, 位置, 三种根因之一)`。**[HARD] 非空即失败态** | **契·码**※ |
+
+> ### ⚠⚠ 这三个键把事实② 那张三档表里**唯一的「未解决」**那一格填上
+>
+> 事实② 原文：**verbatim 回取**「改写不留任何产物痕迹，而它对应的判据在改写之后**恒真**」，
+> 且 §2.4 记着「**这份产物是不是失败态目前只能靠遍历全部 hinge 去反推**」。
+> 修法**照 F4 给 `address_*` 立账的先例**——那一档已因此从「未解决」变成「已解决」：
+> 生产侧把「改了多少、改了什么」交出来，校验器**断言那份账**而不再断言字段值。
+>
+> **为什么是三个键不是一个**（判据 14：一个量纲一个口径）：
+>
+> | | 它记的事 | 为什么不能与邻居合并 |
+> |---|---|---|
+> | `verbatim_rewrites` | 锚点**是**原文、只是标点/换行被归一过 | 与下一条合并 ⇒「一个字都没动」与「救回来的」同形 |
+> | `verbatim_recovered` | 锚点**不是**原文字节，是按最长公共子串**救回来的**（`HINGE_LCS_MIN` 双门槛：绝对 ≥4 字 + 相对 ≥0.8） | 这条**必须单独可见**：救回来的那一条，锚点本来就不是原文——同 F4-2 把 `split_by_speech_tag` 的放行单独留痕 |
+> | `verbatim_failures` | **锚不到**。三种根因修法各不相同（锚点不在本章 / 本 beat 的 span 自己没定位成功 / 落在漏抓区） | 它是**失败态的正面落点**，替掉今天那条「靠 `hinges[].text` 的**缺席**去反推」 |
+>
+> ⚠ **`verbatim_failures` 非空时产地照旧入显式终态**（原型 `report_verbatim_failures` 就是这么做的），
+> 但**账要先落盘**——原型那条 `sys.exit` 之后什么都没留下，
+> 而「显式终态」在多命令流水线里只等于「这一步红了」，**不等于「链路被挡住了」**（§2.4 已记）。
+>
+> ※ **证据列写 `契·码` 而不是 `三源`，也不是裸 `契`**：盘上 3/3 本零样本（这三个键**原型根本没有**），
+> 「码」指的是**本仓 F5-5 的产地**。这一格与 `setup_chapters_pruned` 那一格是同一种处置
+> （它也是 `契·码` 且盘上一份都没有，已登记进 `tests/corpus.py::ADDED`）——
+> 三个新键同样要进 `ADDED['stage2/chapter_blueprints.json']`，否则盘上那三本加载不了。
 
 > `cache_policy` 盘上恒 `refresh-write` —— **定向重生成必须配「不读缓存」**（`R-3.11`）：
 > 它的 prompt 与整跑时该章那一批**逐字相同**，缓存必然命中，
@@ -481,6 +538,9 @@ stage2/chapter_blueprints.json   一次调用产一章 → R-3.1 ~ R-3.12
 | `human_adjudicated` | **逐条列出裁决理由**——人删掉过东西这件事必须留在报告里 |
 | `partial_regen_chapters` | 合并成一行：**哪几章是定向重生成过的** |
 | `repairs` | 同上一行展开：**各修了什么**（`failure_items` + before/after 三个计数） |
+| **`verbatim_rewrites`** | 逐条列出（形态照 `address_surface_rewrites`） |
+| **`verbatim_recovered`** | **断言计数 + 逐条列出**——判据 `anchor_not_verbatim` 断言的就是它 |
+| **`verbatim_failures`** | **断言计数 + 逐条列出**，按三种根因分开；**非空即失败态** |
 
 #### 三条形式要求
 
@@ -540,7 +600,329 @@ stage2/chapter_blueprints.json   一次调用产一章 → R-3.1 ~ R-3.12
 **「没报违规」与「根本没在查」必须能区分**（`Q-2`）——这两条现在区分不了。
 ⇒ 前者已改成断言 `_provenance.setup_chapters_pruned` 的计数；后者要**报出自己的基线**。
 
-### 已经查清楚、结论就是「查不了」的（登记在这里免得被当成漏项）
+---
+
+## 五、判据清单（**唯一落点**，两个节点共用一张表）
+
+**75 条** = **41 HARD / 15 INFO / 17 metric / 2 unver**。`repair` 全表 `NONE`
+（本层没有「花一次钱让写手重写」这条路——反哺是 stage5 独有的，`contracts/rules.py::_validate` ④
+把 `repair != 'NONE'` 锁在 `owner == 'stage5'` 上）。
+owner 分布：`stage2` **56** · `None` **19**（＝非结论，17 metric + 2 unver）。
+
+⚠ 表里标 **✚** 的 **4 条原型没有**——它们是需求行索要的，而原型那两个判定面都没写：
+`event_empty` / `summary_empty`（`R-3.13`）· `repair_cache_policy`（`R-3.11`）· `verbatim_failed`（`R-3.18`）。
+**不补这四条，stage2 进 `PORTED_STAGES` 那一刻正向覆盖率会点名这三行需求。**
+
+两个节点（`stage2.global` / `stage2.blueprint`）**读同一张表**，谁也不许再抄一份。
+⚠ **`--check-only` 只挂在 `stage2.blueprint` 上**（`NODES` 里只有它有这个 flag，
+而 `test_every_ported_stage_has_exactly_one_check_node` 要求每层恰好一个）——
+那一相**两份产物一起读**（判 `canonical` 唯一要 global，判 `present_char_ids` 要 registry），
+所以「global 的判据没有 0 成本复检」这句话不成立。
+
+### 5.0 ⚠ 这张表是从零建的，而原型那个「91」不是判据数
+
+原型 `Stage2/check_blueprints.py::check_one` 里**一个 id 都没有**，严重度只由调用的方法名
+（`fail` / `note` / `unverified`）承载。逐项数下来：
+
+| 口径 | 数 |
+|---|---|
+| `rep.*` 调用点 | **131**（44 `fail` · 58 `note` · 25 `ok` · 4 `unverified`） |
+| **不同的中文首参 × 严重度** | **91** ← 仓根 README 记的就是这个数 |
+| 其中跨严重度同名的 | **6 次**（`char_id` · `hinges 命中` · `secrets 埋点` · `越界产出` 各 2 家族；**`present_char_ids` 占 3 家族**） |
+| ⇒ **不同的中文首参** | **85** |
+
+`91` 数的是「(名字, 严重度) 对」，不是判据。那 5 个名字在原型里是**同一条判定的两三种结局**
+（命中 / 前件不成立 / 上游对不上），而本仓 `RuleLine` 的 `sev` 与 `status` 是**两格**
+（`StatusCounts` 分 ok/hit/unver/skipped）⇒ 一条 `sev='hard'` 的判据完全可以落 `unver` 状态。
+**并成一条**：拆两条会让「这条判了没有」在报告上出现两行，而 `wontfix` 的键要写哪一个说不清。
+
+85 → 75 的账（**每一条都在下面 §5.2 / §5.3 有落点，一条都没有蒸发**）：
+
+```
+85  不同的中文首参
+ −2  取值面枚举 → 载体（§5.2 甲）
+ −3  来源/新鲜度/记账 → 结构（§5.2 乙、丙）
+ −9  存量契约探针 → 退役而不删（§5.3）
+ −1  `揭示痕迹` 并进 `揭示无痕迹`（原型自己写着「这一支不许打 [OK]」，它是同一条的反面）
+ +1  `narration 样本量` 拆成告警与度量各一条（判据 21：度量不许挂在告警的反面）
+ +4  ✚ 原型没有、而需求行索要的（见上）
+ ─────
+ 75
+```
+
+⚠ **仓根 `README.md` 与 `novel/stages/stage6/__init__.py` 里那个「91」要跟着改成 75**
+（形态照 F4-0 把 stage5 的 43 改成 47）。
+
+### 5.1 表
+
+「盘上」列 = **2026-08-12 用原型校验器在三本上实跑一遍量的**（`--all`，0 成本、纯 stdout、
+一个文件都不写；原型仓 `git status` 事后 0 改动）。**这三本是 FAIL 的**（事实③），
+所以这一列里非 0 的那几格是**真反例样本**，不是噪声。
+
+| 判据 | 级别 | 查什么 | 盘上 3 本 / 31 章 | 修法 |
+|---|---|---|---|---|
+| **一、产物完整性与章对齐** | | | | |
+| `upstream_missing` | **HARD** | 两份 stage2 产物齐备才跑得动——**缺一份判 FAIL 不判 note**：什么都没查却打 PASS 是把两件事混为一谈 | 0/3 | — |
+| `section_id_leak` | **HARD** | blueprint 不含上游的分节键 `section_id` | 0/3 | — |
+| `chapter_coverage` | **HARD** | 每个正文章恰有一份 blueprint（不缺 / 不多 / 不重） | 0/3（14+8+9 全覆盖） | `blueprint --chapters` |
+| `chapter_order` | **HARD** | blueprint 顺序与 `main_text` 章序一致 | 0/3 | `blueprint --chapters` |
+| **二、称谓表** | | | | |
+| `canonical_unique` | **HARD** | 一个显示名只挂一个 `char_id`（重名 ⇒ 下游按名字解析**静默**歧义） | 0/3（12 / 15 / 48 个显示名） | — |
+| `character_unattested` | **HARD** | `canonical`（剥区分词）与全部 `surface` **至少有一个**能在原文里搜到 | 0/3 | — |
+| `address_by_unresolved` | **HARD** | `by` 是 registry 里的 `char_id`，或 `narration` / `public` | 0/3（27 / 47 / 82 条） | — |
+| `address_from_out_of_range` | **HARD** | `from_chapter` 在全书章范围内（越界＝这条称呼**永不下发**） | 0/3 | — |
+| `address_from_too_early` | **HARD** | `from_chapter` 不早于该字面在原文里首次出现的章。**单边**：早于一定错，晚于合法 | 0/3（落盘前已抬 7 处） | — |
+| `address_bare_pronoun` | **HARD** | `surface` 整条不是代词 | **1/3** ⭐ 三岁 `char_034='她'` | — |
+| `address_all_pronoun` | **HARD** | 一个角色**有据的叫法不得全都含代词**（否则下游 `display_name` 只能取到「我妈」） | 0/3 | — |
+| `address_has_pronoun` | INFO | 含代词但该角色另有干净叫法（违约，但下游取不到它） | **1/3**（三岁 2 条） | — |
+| `address_selfref` | INFO | 「自己这么叫自己」——自称（本宫/哀家）正当，挂错人不正当 | **1/3**（三岁 1 条） | — |
+| `address_missing` | INFO | 每个角色至少有一条称呼 | 0/3 | — |
+| `address_unlocatable` | INFO | 每条 `surface` 都能在原文里原样找到 | 0/3 | — |
+| **三、身份与结局** | | | | |
+| `role_missing` | **HARD** | 每个角色都有 `role`（下游只下发 role，缺了写手不认识人） | 0/3 | — |
+| `role_leaks_fate` | **HARD**（词表） | `role` 里没有结局词——拆 role/fate 的**唯一理由**就是只下发 role | **2/3** ⭐ 头牌 2 处 · 三岁 5 处 | `global --purge-role`（**付费**） |
+| `role_repeats_name` | **HARD** | `role` 不与 `canonical` 完全同字（写手拿到的会是「X：X」） | 0/3 | — |
+| `hedge_words` | **HARD**（词表） | `role`/`fate`/`canonical` 里没有模棱语 | **2/3** ⭐ 成年人 1 · 头牌 1，**两处都在 `fate`** | — |
+| `distinguisher_lonely` | **HARD** | 带区分词的 `canonical` 必须真有同名对象（区分词会被写手原样写进正文） | 0/3 | — |
+| `role_fate_unverifiable` | unver | **改写式结局泄漏没有确定性防线**——词表只挡转抄式 | **1/3 打出** ⚠ 见下 | — |
+| `fate_report` | metric | `fate` 的缺失率**无条件报出**（`R-2.7`） | 12/12 · **9/15** · 48/48 | — |
+| **四、世界规则 · 秘密 · 关系** | | | | |
+| `world_rule_no_desc` | **HARD** | 每条规则至少一个带 `desc` 的 version（`versions[].desc` 是正文**唯一**落点） | 0/3 | — |
+| `world_rule_names_person` | INFO | 规则正文里出现人名 ⇒ 下游按**叫法时点**扣住。**必须报出闸门自己的基线** | **3/3**（2 / 1 / 1 条）⚠ 见下 | — |
+| `secret_setup_order` | **HARD** | 埋点章**严格早于**最早揭示章（`==` 也违约）。**断言 `_provenance.setup_chapters_pruned` 的计数，不断言字段值** | 0/3 | `global --migrate`（0 成本） |
+| `secret_cold_reveal` | metric | 没有埋点的 secret 条数（凭空点破，据实留空是允许的） | **3/4 · 7/7 · 10/10** ⚠ 见下 | — |
+| `secret_known_by_dangling` | **HARD** | `character_known_by` 按**形状**分流：`char_\d+` 必须能解析，自由文本（「在场士兵」）放行 | 0/3（24 / 24 / 25 条） | — |
+| `reveal_unmarked` | INFO（词表） | 揭示章里有没有点破痕迹。**这是筛子不是判据** | **2/3**（头牌 3/8 · 三岁 6/10） | `global --drop`（0 成本） |
+| `secrets_absent` | unver | 这本书有可查的秘密（一条都没有 ⇒ 逐章剧透闸门恒不执行） | 0/3（三本都有） | — |
+| `relation_dangling` | INFO | `relations` 两端都是 registry 里的 `char_id` | 0/3（13 / 15 / 42 条） | — |
+| **五、拍与区间** | | | | |
+| `beat_id_unique` | **HARD** | 全书 `beat_id` 不重复 | 0/3（93 / 67 / 91 个） | — |
+| `beat_id_format` | **HARD** | `b<章:02d>_<序:02d>` 且章内序连续、章号与所属章一致 | 0/3 | — |
+| `span_unlocatable` | **HARD** | 每条 `span` 的首尾锚点都能在原文里**按序**定位（定位不到＝这条没有量纲） | 0/3（251/251 全中） | `blueprint --chapters` |
+| `anchor_ambiguous` | **HARD** | 锚点在**定位器还要搜的那段**里只匹配到一处 | 0/3（502/502） | `blueprint --chapters` |
+| `anchor_not_verbatim` | INFO | 锚点是原文字节。**期望恒为 0**（落盘前已回取）⇒ 改断言 `_provenance.verbatim_recovered` | 0/3 | `blueprint --migrate`（0 成本） |
+| `verbatim_failed` | **HARD** ✚ | `_provenance.verbatim_failures` 非空即失败态。**原型没有这条**——它那边只有一次 `sys.exit`，账不落盘 | 0/3（键还不存在 ⇒ 今天落 `unver`） | `blueprint --chapters` |
+| `edge_hole` | **HARD** | ≥30 字的未覆盖原文不得落在**第一拍之前或最后一拍之后** | 0/3（未覆盖区间全在中段） | `blueprint --chapters` |
+| `beats_collapsed` | **HARD** | ≥300 字的章不得只有 ≤1 拍（锚用**契约自己的反例**，不跨书比） | 0/3 | `blueprint --chapters` |
+| `beats_coarse` | **HARD** | 章级 字/拍 不得超本书中位数 3 倍（**同一本书内部**才可比） | 0/3（中位 143 / 169 / 138） | `blueprint --chapters` |
+| **六、保真材料** | | | | |
+| `hinge_cross_chapter` | **HARD** | hinge 引的不是**别的章**的原文（逐字无误但归错了章） | 0/3 | `blueprint --chapters` |
+| `hinge_in_hole` | **HARD** | 锚点在本章原文里，却落在任何 span 都没覆盖到的空档——**漏抓的下游后果** | **1/3** ⭐ 三岁 `b07_05` | `blueprint --chapters` |
+| `hinge_anchor_void` | **HARD** | 锚点在本章原文里**根本找不到**（是转述或编的） | 0/3 | `blueprint --chapters` |
+| `hinge_drift` | **HARD** | `text` 在本 beat 的 span 原文内（转抄漂移：位置对、字节错） | 0/3（113 / 66 / 103 条全中） | `blueprint --chapters` |
+| `hinge_cascade` | INFO | 锚不到是因为**本 beat 的 span 自己就没定位成功**——不是独立故障，别重复计数 | 0/3 | — |
+| `hinge_unanchored` | **HARD** | 每条 hinge 都带 `starts_with`/`ends_with`（`text` 是代码取的，不是模型默写的） | 0/3（282/282 全带锚点） | — |
+| `chapter_no_hinge` | **HARD** | 整章一条 hinge 都没有＝这一章的原文材料一条都没往下游走 | 0/3 | `blueprint --chapters` |
+| **七、在场与叙述** | | | | |
+| `time_layer_no_present` | **HARD** | 全书不得 0 条 `present`——**枚举合法 ≠ 分布合理**（实测某本 0/70） | 0/3（present 95% / 100% / 92%） | `blueprint --chapters` |
+| `present_ids_dangling` | **HARD** | `present_char_ids` 都在 registry。⚠ 这是**解析器的后置条件**：违反它＝代码坏了不是数据坏了 | 0/3（130 / 148 / 173 个） | `blueprint --migrate`（0 成本） |
+| `present_names_partial` | **HARD** | **混版探测**：不许一部分 beat 给了 `present_names` 而另一部分没给 | 0/3 | `blueprint --chapters` |
+| `present_names_invented` | **HARD** | 在场者称呼全书原文里找得到（找不到＝模型凭空造了一个人） | 0/3（177 / 176 / 216 个） | `blueprint --chapters` |
+| `present_continuity` | INFO | 相邻拍同地同层在场、本拍被点名却未列。⚠ **依赖 `place` 字面相等，系统性漏检** | **2/3**（5 / 7 / 0 处） | — |
+| `present_ungrounded` | INFO | （章, 在场者）对在本章原文里有字面依据。**叙述者豁免且单独计数** | **1/3**（1/36 · 0/43 · 0/49）⚠ 见下 | — |
+| `present_early_named` | INFO | 在场者不早于该角色在原文里被指名的章 | 0/3 | — |
+| `event_early_name` | INFO | `event`/`summary` 里不写出本章尚未指名的角色名（**只查 `canonical`，排除通名**） | 0/3 | `blueprint --chapters` |
+| `pronoun_surface_unattested` | INFO | `pronoun_surfaces` 照原文用字（第三人称交空数组合法） | 0/3（14 / 8 / 9 个全有据） | — |
+| `narration_multi` | INFO | 一章内出现一个以上叙述声音时出声——报的是**本层不记段界**这个能力边界（`R-3.14`） | 0/31 ⚠ **零样本，合成反例必须跟上** | — |
+| `scope_violation` | **HARD** | `_provenance.scope_violations` 非空即失败 | 0/3 | — |
+| `event_empty` | **HARD** ✚ | 每一拍都有非空 `event`。**原型没有这条**——`R-3.13` 索要它，而它判在**本层**不判 stage4（留在 stage4 意味着要先付掉一次规划调用才发现这一层产坏了） | 0/3（251/251） | `blueprint --chapters` |
+| `summary_empty` | **HARD** ✚ | 每一章都有非空 `summary`。同上 | 0/3（31/31） | `blueprint --chapters` |
+| `repair_cache_policy` | **HARD** ✚ | 有 `repairs[]` 时 `cache_policy` 必须是 `refresh-write`。**原型没有这条**——`R-3.11` 索要它：定向重生成的 prompt 与整跑时那一批**逐字相同**，缓存必然命中，于是**一个字都没重新生成而它照样打印「已重生成」** | 0/3（盘上 3 条 `repairs` 恒 `refresh-write`） | — |
+| **八、度量（无条件报出，`owner=None`）** | | | | |
+| `narration_voices` | metric | 多叙述声音的章数＝`narration` 这一整维的**样本量** | 0/14 · 0/8 · 0/9 | — |
+| `time_layer_mix` | metric | 叙述层分布（`time_layer_no_present` 的输入） | 88/5/0 · 67/0/0 · 84/2/5 | — |
+| `place_moves` | metric | 转场点数。⚠ **系统性高估**：`place` 自由文本、粒度不稳（街上/街边） | 23 / 22 / 39 处 | — |
+| `present_names_ambiguous` | metric | 称呼在 registry 里挂着不止一个人 → 未解析（**不猜**） | **1** / 0 / 0 | — |
+| `present_names_unlisted` | metric | 原文里真有、只是 `address` 没收它。**这是 global 该修的，不是本层违约** | **14 / 14 / 24** | — |
+| `present_names_pronoun` | metric | 在场者写成了代词。**代词按设计永远不在 registry 里**——既不是自造也不是漏收 | **15** / 0 / 0 | — |
+| `present_names_late` | metric | 称呼要到本章之后才出现 → 已拦下。**这是收益不是违约** | 0 / 0 / 0 | — |
+| `present_broad` | metric | 宽筛：`event` 点名了某角色而本拍未列它。⚠ 精度约 1/4，**分子分母不同量纲**（拍×角色 vs 拍） | 45 / 74 / 69 处 | — |
+| `batch_density` | metric | 按**一次调用**分组的抽取量。逐章产物上说明「批与章是同一个东西」 | 14 / 8 / 9 次调用 | — |
+| `context_scope` | metric | 这一趟抽某章时后面的章在不在 prompt 里。**必须常驻打印** | 3/3 恒 `{1, true}` | — |
+| `span_coverage` | metric | 定位成功条数 / 覆盖率 / 每条字数分位 | 98% / 98% / 97% | — |
+| `span_coverage_per_chapter` | metric | **逐章**覆盖率——全书一个数看不出哪一章塌了 | 最低 ch5 95% · ch4 96% · **ch7 90%** | — |
+| `anchor_short` | metric | 内容字符 <6 的锚点计数。契约的「8~30 字」是**生成期指导**，此处不判违约 | 23/186 · 13/134 · 30/182（合 **66/502**） | — |
+| `uncovered_holes` | metric | 未覆盖原文区间（位置 × 长度两维切分，**分到哪一类交人工**） | 2% / 2% / 3% | — |
+| `hinge_density` | metric | 全书 hinges / 千字原文。⚠ **按字数归一不按拍数**——拍数是自由变量 | 9.3 / 6.2 / 7.8 条每千字 | — |
+
+### 5.2 不进这张表的（**登记在这里，免得被当成漏项**）
+
+**甲 · 取值面枚举归载体（2 条）** —— `contracts/schema/stage2.py` 文件头已立的规矩，
+判准是**失败成本**：拒收＝整份响应作废＝再花一次钱，而那要在生成下一章之前就停住。
+
+| 原型判据 | 本仓落点 |
+|---|---|
+| `time_layer` 取值合法 | `contracts/schema/stage2.py::Beat.time_layer`（`Literal[TIME_LAYERS]`） |
+| `hinges kind` 取值合法 | `contracts/schema/stage2.py::Hinge.kind`（`Literal[HINGE_KINDS]`） |
+
+⚠ `address.by` **不在这一档**：它的判定要查 registry（跨产物），`AddressBy` 那个正则只管形状。
+
+**乙 · 来源与新鲜度归结构（2 条）** —— `_common.md` §四 已定「校验报告第一节恒是
+新鲜度 + 幽灵边 + 指纹对照，**空也要报**」。
+
+| 原型判据 | 本仓落点 |
+|---|---|
+| `产物来源`（产自另一份上游 / 无 `_provenance`） | `contracts/schema/report.py::ProvenanceSection` + `EdgeLine` |
+| `引用可信度`（blueprint ↔ global 的挂钩状态） | `novel/prov.py::freshness()` 三态（`stale` > `unknown` > `fresh`） |
+
+**丙 · 记账键的出口归 `ACCOUNTING`（1 条）** —— `_common.md` §九 已把它做成一张会炸的表。
+
+| 原型判据 | 本仓落点 |
+|---|---|
+| `落盘前改写`（`address_by_fallback` / `address_surface_rewrites` 的账） | `novel/report/accounting.py::ACCOUNTING['stage2']`（今天是空元组，F5-5 填，出口见 §3.3） |
+
+### 5.3 退役而不删（9 条，`RetiredRule`）
+
+判准一律是「**在本仓结构上不可表示**」，不是「不重要」。
+**退役而不删**（LESSONS 15）：删掉的话「没报违规」与「根本没在查」就再也分不开。
+
+| 原型判据 | 为什么在本仓不可表示 |
+|---|---|
+| `address`（无 address 称谓表，旧契约 aliases/titles） | 新契约 `Character.address` 是必填且 `min_length=1` |
+| `残留死字段`（`address.to_chapter` · 四张 `DEAD*` 表 · 七条 `DEAD_G` 点号路径） | `StrictModel` 的 `extra='forbid'`；存量那一侧由 `tests/corpus.py::CUT` 逐条钉着 |
+| `narration 段界`（`last_beat_id` 的三条） | 该字段**已裁撤**（`CUT['stage2/chapter_blueprints.json']`），它唯一的读者 `segment_sizes` 随 split 一起退役 |
+| `narration.last_beat_id`（零消费方声明） | 同上，字段已不在 |
+| `beat 新字段`（`time_layer`/`place`/`present_char_ids` 整体缺失） | 三者在 `Beat` 上都是必填 |
+| `批间离散`（批间 拍/千字 max/min > 2×） | 分批机制已随 F-100 整个删除，`BlueprintContext.batch_size` 新产物恒 1 ⇒ **前件恒不成立**。原型自己写着「一条恒不触发的 HARD 和一条恒亮的绿灯是同一个病」 |
+| `span`（本产物无 `beat.span`，旧契约） | `Beat.span` 必填 |
+| `role/fate`（characters 仍是旧的 identity 单字段） | `Character.role` / `.fate` 都是必填键 |
+| `★跨批`（`end_hook.pays_to_chapter` 残留 / 产物无跨章引用） | `end_hook` 整字段已删；后一支是一句**恒真陈述**，不是判定 |
+
+### 5.4 `fix` 那一列 —— 它今天在本仓没有落点
+
+原型每条判据带一个**结构化的修复路由**，而不是一句散文：
+
+```python
+FIX_MIGRATE_BP = {'kind': 'n2_blueprint', 'extra': ['--migrate']}    # 0 成本
+FIX_PURGE_ROLE = {'kind': 'n2_global',    'extra': ['--purge-role']} # 一次小调用（付费）
+def fix_chapters(chs): ...   # {'kind': 'n2_blueprint', 'extra': ['--chapters', '2,7', '--retry']}
+```
+
+它的理由原型自己写着：「文案里那句『修法：…』是给人读的；**界面要执行它，就必须有一份
+机器可读的同源表达**，否则只能去正则抠文案」。
+
+本仓 `Rule`（13 字段）与 `Finding`（13 字段）**都没有这一格**——
+`directive` 被注册期不变量 `bool(directive) == (repair != 'NONE')` 锁死在 stage5。
+
+⇒ **用户裁决（2026-08-12）：`Rule` 加一格**，形态照 F4-1 加 `directive` 的先例。
+上表「修法」那一列就是它的取值，F5-1 落地：
+
+```python
+fix: tuple[str, ...] | None = None      # ('stage2.blueprint', '--migrate')
+```
+
+配一条注册期不变量：**只能指向 `NODES` 里真实存在的节点、与那个节点 `flags` 里真实存在的 flag**。
+收益是它**能过 `is_paid`**——界面据此把「0 成本修」与「要再花一次钱」画成两个颜色；
+写进 `note` 就只是一段散文，拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
+
+### 5.5 五条要连基线一起读的
+
+> #### ⚠ `role_fate_unverifiable`：三本里只有一本打得出这条 unver
+>
+> 它挂在 `if not leaky` 那一支上——`role_leaks_fate` 命中的两本**根本走不到它**。
+> 于是「这一维没有确定性防线」这句话在最需要说的那两本上反而不说。
+> 实测：词表 `('最终','后被','而死','下狱','被处死','走向','结局','沦为')`
+> 在头牌上**命中 0/17 而人读真违规 6/17**（`char_009.role` 写「…**后成为**李宝珠的下属」，
+> 差一个字避开了 `后被`）。
+> ⇒ **本仓改成无条件产出**（同 F4-6 对 `name_surface_survey` 的处置）：
+> `role_leaks_fate` 报绿灯或报红灯，都要在同一份报告里说清这道防线只挡转抄式。
+>
+> #### ⚠ `world_rule_names_person`：这道闸门在三本上**什么也没拦住**
+>
+> | 本 | 含人名的规则 | 最晚叫法的 `from_chapter` |
+> |---|---|---|
+> | 成年人 | 2 条（`宿主`/`系统`） | ch14（全书 14 章）⇒ 几乎全程扣住 |
+> | 头牌 | 1 条（`夫君`） | **ch1** ⇒ 等于全程下发 |
+> | 三岁 | 1 条（`念念`/`月老`/`沈念念`） | **ch1** ⇒ 等于全程下发 |
+>
+> ⇒ 判据必须**报出自己的基线**，否则「没报违规」与「闸门一条都没拦住」在报告上同形。
+>
+> #### ⚠ `secret_cold_reveal`：20/21 条 secret 没有埋点，而 `secret_setup_order` 三本全绿
+>
+> 「冷揭示」（据实留空，合法）与「被裁空」（产地把揭示章号抄进了埋点，落盘前被裁掉）
+> 在字段值上**完全同形**。⇒ `secret_setup_order` 断言的是 `_provenance.setup_chapters_pruned`
+> 那个计数，不是字段值——再断言字段值就是一条**永远为真**的判定。
+> ⚠ 而 `setup_chapters_pruned` 这个键**盘上 3/3 本一份都没有**（证据列 `契·码`，
+> 已登记进 `tests/corpus.py::ADDED`）⇒ 今天它只能落 `unver`，不能发绿灯。
+>
+> #### ⚠ `present_ungrounded` 不是幻觉检测器
+>
+> 三本 128 对里只报 1 条（成年人 `ch10 char_009(祈颜)`），**幻觉在场者 0 例**。
+> 它实际抓的是两件别的事：① `address[]` 漏收了原文在用的叫法（绰号 / 无归属台词）
+> ② **后见之明标注**（身份本章尚未揭示，而 `present_char_ids` 是逐拍下发给写手的
+> ⇒ 那是一条剧透旁路）。也确有合法反例（整段用代词、`recall`/`hearsay` 的在场者本章不留字面）。
+> ⇒ **判 INFO 不判 HARD**，且名字表**不许复用 `present_broad` 那份**——那份带 `len>=2` 过滤，
+> 搬过来会把「唯一 surface 是『姐』」的角色报成找不到依据，那是**判据自己造的假阳**。
+>
+> #### ⚠ 41 条 HARD 里，盘上有真反例的只有 4 条
+>
+> `address_bare_pronoun`（1 本）· `role_leaks_fate`（2 本）· `hedge_words`（2 本）·
+> `hinge_in_hole`（1 本）。**其余 37 条盘上 0 命中**——那不是「干净」，
+> 是「那种失效模式在这三本上一次都没发生过」。
+> ⇒ 用户裁决（2026-08-12）：**盘上 0 命中的 HARD 各配一份会让它红的样本**，
+> 落点是 stage2 那一族测试（F5-5 才建）。⚠ 反例配得出来的前提是**判据吃 `dict` 不吃模型**
+> ——一旦跑在已过 Pydantic 的对象上，「必填齐全」那类在结构上就构造不出反例。
+
+### 5.6 判据 ↔ 需求
+
+`contracts/rules.py` 要求每条判据声明 `requirement`（正则 `^R-\d+\.\d+[a-z]?$`——
+`Q-x` 与裸 `R-2` 都不收），`tests/test_coverage.py` 双向查。逐条对下来
+**R-2 十二行 + R-3 十六行接不住 75 条**，`docs/REQUIREMENTS.md` 本次
+**补 17 行、拆 1 行、改判 1 行**：
+
+| 新行 | 收哪几条判据 |
+|---|---|
+| `R-2.5b` INFO | `address_selfref` · `address_missing` · `address_unlocatable` |
+| `R-2.6b` HARD | `distinguisher_lonely` |
+| `R-2.9b` 度量 | `secret_cold_reveal` · `secrets_absent` |
+| `R-2.9c` HARD | `secret_known_by_dangling` |
+| `R-2.9d` INFO | `reveal_unmarked` |
+| `R-2.11b` HARD | `world_rule_no_desc` · `world_rule_names_person` |
+| `R-3.2b` HARD | `anchor_ambiguous` · `anchor_short` |
+| `R-3.6b` HARD | `chapter_no_hinge` · `hinge_density` |
+| `R-3.6c` HARD | `time_layer_no_present` · `time_layer_mix` |
+| `R-3.7b` HARD | `present_names_partial` · `present_names_ambiguous` · `present_names_unlisted` · `present_names_pronoun` |
+| `R-3.7c` INFO | `present_continuity` · `present_ungrounded` · `present_broad` |
+| `R-3.7d` INFO | `present_early_named` · `event_early_name` · `present_names_late` |
+| `R-3.14b` INFO | `pronoun_surface_unattested` |
+| `R-3.16` HARD | `upstream_missing` · `section_id_leak` · `chapter_coverage` · `chapter_order` |
+| `R-3.16b` HARD | `scope_violation` · `batch_density` · `context_scope` |
+| `R-3.17` 度量 | `place_moves` |
+| `R-3.18` HARD | `verbatim_failed` ✚ · `anchor_not_verbatim`（断言 `verbatim_recovered`）——见 §3.2 新增的三个键 |
+
+**改判一行**：`R-3.6`（保真类型闭合枚举）`HARD` → **`载体`**，落点
+`contracts/schema/stage2.py::Hinge`。理由是 `contracts/schema/stage2.py` 文件头已立的那条规矩
+（取值面枚举归载体，判准是失败成本），而**那个文件今天就在仓里**——
+所以这一行可以现在改，不必等模块（与下面那六行的处境相反）。
+⚠ 「兜底分支不许静默通过」由 `Literal` 在结构上保证：没有 `dict.get(kind, 默认值)` 可写。
+⚠ `载体` 行**不在** `test_structural_rows_that_name_a_repo_path_actually_point_at_it` 的扫描面里
+（那条只扫 `结构`），所以本次可解析落点数不变。
+
+**另外三行 `R-3.11` / `R-3.13` 不动**：它们照旧是 `HARD`，只是从「没有判据指着」变成
+「由 ✚ 那三条指着」——需求文本一个字都不用改。
+
+**拆行一处**：`R-2.11`（抽取判据本身）今天整行写着「无守卫 → `B-08`」，
+而其中「规则描述必须连『怎么运作』一起写」现在**有判据指着**
+⇒ 拆出 `R-2.11b`，留在 `R-2.11` 的是仍然没有守卫的那三项（只收结构性规则 /
+秘密的四类收录判据 / 冲突阶段名要能定位）。**有判据的那一半与没有守卫的那一半必须分得开**，
+否则 `test_no_rule_claims_a_requirement_marked_unguarded` 判它说假话。
+
+⚠ **`R-2.10`（五个枚举）不拆**：枚举取值面归载体（§5.2 甲），它仍然没有判据 ⇒ 那一格照旧。
+⚠ **`R-3.10`（`B-07` 那七项）不拆**：七项没有一项会有 stage2 判据。
+
+⚠⚠ **`结构` 行本次一行都不改。** 还剩三行（`R-3.3` 点不下发 · `R-3.4` 跨段拆点 ·
+`R-3.8b` prompt 必须明说章首）的落点在**本层的模块目录里，而那个目录今天还不存在**，
+`test_structural_rows_that_name_a_repo_path_actually_point_at_it` 会去查它真实存在。
+**指向一个还不存在的模块，与说不出是哪段代码在守，对读的人是同一件事。**
+⇒ 留到 F5-5 与模块同批改（形态照 F4-0 对那六行的处置）。
+
+⚠ 同一条纪律**本次已经真的绊到过一次**：`tests/test_docs_references.py::test_every_referenced_repo_path_exists`
+把本文件里两处指向尚不存在落点的**反引号路径**当场判红。⇒ 本节一律写成散文
+（「本层的模块目录」「stage2 那一族测试」），**等 F5-5 建出来再写成路径**。
+
+---
+
+## 六、已经查清楚、结论就是「查不了」的（登记在这里免得被当成漏项）
 
 1. **`role` 里藏着中段才揭示的事实，确定性验不了**（`R-2.6` / `B-14`）。
    词表只抓「转抄式结局词」：实测一本上命中 0/17 而人读真违规 6/17，另一本 2/40。
