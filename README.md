@@ -33,7 +33,7 @@
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
 | **契约** | ✅ **十二份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + `_report.md` + `_orchestration.md` + `_api.md` |
 | **骨架** | ✅ **A~E 期全部完成**（A = 契约层 · B = 共享运行时 / LLM 层 / 报告构造器 · C = stage3 纵切 · D = 编排 + CLI · E = HTTP 层） |
-| **移植** | 🚧 **F 期只剩 stage2**：`F0` 清障 ✅ · `F1` = stage6 ✅ · `F2` = stage7 ✅ · `F3` = stage4 ✅ · `F4` = stage5 ✅ · **`F6` = stage1 ✅ · `F7` = stage0 ✅**<br>`PORTED_STAGES = {'stage0','stage1','stage3','stage4','stage5','stage6','stage7'}`，**八层去七**。`F5` = stage2 正在推进（最难的一层，见下） |
+| **移植** | 🚧 **F 期只剩 stage2**：`F0` 清障 ✅ · `F1` = stage6 ✅ · `F2` = stage7 ✅ · `F3` = stage4 ✅ · `F4` = stage5 ✅ · **`F6` = stage1 ✅ · `F7` = stage0 ✅**<br>`PORTED_STAGES = {'stage0','stage1','stage3','stage4','stage5','stage6','stage7'}`，**八层去七**。<br>**`F5` = stage2 正在推进**（最难的一层，见下）：`F5-0` 落点审计 ✅（`docs/schema/stage2.md` §五 从零建出 **75 条**判据表 + `docs/REQUIREMENTS.md` 补 17 行）·**下一步是 `F5-1` 契约层四格** |
 
 ---
 
@@ -58,7 +58,7 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 **当前基线：全绿，1597 passed / 2 skip**（F6/F7 收工，2026-08-12）。
 
 **每一条 skip 都明说「没在查」——改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
-20 条的来历：
+2 条的来历：
 
 | 条数 | 是什么 | 什么时候消失 |
 |---|---|---|
@@ -73,7 +73,7 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 | # | 读什么 | 得到什么 |
 |---|---|---|
 | 1 | `docs/schema/_README.md` | **方法**：三源合并 · 证据列的四个取值 · 为什么文档只定内容、模型照它写 |
-| 2 | `docs/schema/stage2.md` | **模板（首选）**，而且**它就是下一步要移植的那一层**（F5，最难）。调 LLM 的层的完整样板：模型写的 vs 代码写的怎么分开读、落盘前改写怎么记账、记账键的出口规则。⚠ 它那 91 条判据**一个 id 都没有** ⇒ 移植它 = 先从零建一张表 |
+| 2 | `docs/schema/stage2.md` | **模板（首选）**，而且**它就是下一步要移植的那一层**（F5，最难）。调 LLM 的层的完整样板：模型写的 vs 代码写的怎么分开读、落盘前改写怎么记账、记账键的出口规则。⚠ **§五 那张 75 条的判据表是 F5-0 从零建的**（原型那边一个 id 都没有，严重度只由方法名 `fail`/`note`/`unverified` 承载）——判据行、`checks.py`、需求补行、会红的样本**全以它为源**，先读 §5.0 的计数账再往下 |
 | 3 | `docs/schema/stage1.md` | 不调 LLM 那种层的模板 |
 | 4 | `docs/schema/stage0.md` | 同上，另含新写摄入层的审批状态机、人工编辑与归档契约；F7 已有盘上临时跑盘证据 |
 | 5 | `docs/REQUIREMENTS.md` | 每条需求的「谁在查」列——schema 里的 `[HARD]` 都要能追到它 |
@@ -89,20 +89,61 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 ### 顺序：**按验证价值挑，不按管线顺序挑**
 
 施工方案写的是 stage2→4→5→6→7→(0/1)，那是**管线**顺序。实测下来体量极不均匀
-——**stage2 一层就占 prompt 的 57%（20 804 / 36 709 字）与判据的 62%（91 / 147）**，
-而且**它是唯一一层没有判据表的**：原型把 91 条判据塞在一个 1688 行的 `check_one()` 里，
-全是 `rep.fail('锚点唯一性', …)` 这种中文首参，**一个 id 都没有**。移植它 = 先从零建一张表。
+——**stage2 一层就占 prompt 的 57%（20 804 / 36 709 字）**，
+而且**它是当时唯一一层没有判据表的**：原型把判据塞在 `Stage2/check_blueprints.py`
+（**2077 行**）的一个 `check_one()` 里，全是 `rep.fail('锚点唯一性', …)` 这种中文首参，
+**一个 id 都没有**，严重度只由调用的方法名承载。移植它 = 先从零建一张表。
+
+> ⚠ **本节此前记的「判据的 62%（91 / 147）」两个数都不能用**（F5-0 逐项数过）：
+> `91` 是**「(中文首参, 严重度) 对」**的数，**不是判据数**——其中 6 次是跨严重度同名
+> （同一条判定的两三种结局），并回去只有 85 个不同的中文首参；分母 `147` 是当时对原型的**估数**。
+> F5-0 从零建表的结果是 **75 条**（41 HARD / 15 INFO / 17 metric / 2 unver），
+> 账在 `docs/schema/stage2.md` §5.0。本仓已注册 **159** 条（七层）⇒ stage2 占 **75 / 234 = 32%**。
+> **prompt 那个 57% 是准的**：`20804` = 3 个 SYS（8682 + 7448 + 2008）+ 3 个 HINT
+> （按 `json.dumps(ensure_ascii=False, indent=2)` 共 2666），一个不多一个不少。
 
 ⇒ 已裁决**先用最便宜的一层把「加一层」那张清单走通一遍**（同 C 期选 stage3 当第一条纵切的判准）。
 剩下的顺序与实测体量：
 
 | 顺位 | 层 | 原型行数 / prompt 字 / 判据 | 备注 |
 |---|---|---|---|
-| **F5** | **stage2** | 3597 + 1110 / **20804** / **91（无 id）** | 最难。⚠ `novel/core/spans.py` 已有 `content_index` / `locate_spans` / **`lcs`**（F4 带进来的），还缺 `recover` 那条臂与 `HINGE_LCS_MIN` |
+| **F5** | **stage2** | **5674 行 / 4 文件** / **20804** / **75（F5-0 建表）** | 最难。⚠ 体量此前记的 `3597 + 1110` 是错的：`1110` 是 `stage2_common.py`，**它已经在 3597 里被数过一次**，而 `check_blueprints.py` 的 **2077 行整个不在这个数里**——判据一条不落全在那个文件。真实体量 = `n2_global 912` + `n2_blueprint 1575` + `stage2_common 1110` + `check_blueprints 2077`。⚠ `novel/core/spans.py` 已有 `content_index` / `locate_spans` / **`lcs`**（F4 带进来的），还缺 `recover` 那条臂与 `HINGE_LCS_MIN`（F5-2） |
 | **F6 ✅** | stage1 | 828 / 0 / 13（无 id） | 已沿新边界只保留确定性分章；契约收敛为 8 条有 id 判据 |
 | **F7 ✅** | stage0 | **0** / 0 / 0 | 已从零实现摄入、剔除、人工编辑/批准、轮次归档与 13 条有 id 判据 |
 
-### ⭐ F5 从这里接 —— stage5 已经收工，下一层是 stage2
+### ⭐ F5 从这里接 —— `F5-0` 已落，下一步是 `F5-1`
+
+**F5-0（`e5dd5d5`）交的是落点审计，一行 `.py` 都没改：**
+
+- `docs/schema/stage2.md` **+398 行**：§五 判据清单（**唯一落点**，两个节点共用一张表）
+  —— **75 条** = 41 HARD / 15 INFO / 17 metric / 2 unver，`repair` 全表 `NONE`，
+  owner `stage2` 56 / `None` 19。含 §5.0 计数账 · §5.1 表 · §5.2 不进表的 5 条 ·
+  §5.3 退役而不删 9 条 · §5.4 `fix` 那一列 · §5.5 五条要连基线一起读的 · §5.6 判据↔需求。
+  另补 §一 的 `ROLE_SPLIT_SYS` **第三付费臂**、§3.2/§3.3 的**三个 verbatim 记账键**。
+- `docs/REQUIREMENTS.md` **+24 行**：补 17 行 · 拆 `R-2.11` · `R-3.6` 改判 `载体`。
+
+**F5-1~F5-5 的路线图**（每一步的落点已在审计里写死）：
+
+| 提交 | 内容 |
+|---|---|
+| `F5-1` | 契约层四格：`Rule.fix` + 注册期不变量 · 四个 flag 登记 · 三个 verbatim 记账键 · `corpus.py::ADDED` |
+| `F5-2` | `novel/core/spans.py` 的 `recover` 臂与 `HINGE_LCS_MIN` |
+| `F5-3` | 本层的 prompt 模块 —— 三条臂逐字节搬。⚠ `_legacy/n2_semantic.py` 里**同名并存**着旧世代的 `BLUEPRINT_SYS` 与 `BLUEPRINT_HINT`（比 F4-5 那次「改名」更深），取值器必须按**文件路径**取不许按符号名 grep |
+| `F5-4` | 本层的判据行文件 —— 75 条，**故意还不被 import**（照 F4-4） |
+| `F5-5` | 模块 + 接线一次走完（照 F4-6）。⚠ **stage2 是最后一个未移植层** ⇒ 它一进 `PORTED_STAGES`，`STAGES − PORTED_STAGES` 就是空集，`NodeNotPorted` 在生产路径上再也触发不了。用户裁决（2026-08-12）：**退役它**（501 仍由 `RunModeNotImplemented` 可达，HTTP 状态面不变） |
+
+#### ⚠ stage2 自己欠着的（登记，**不是**验过了）
+
+| 欠账 | 说明 |
+|---|---|
+| **41 条 HARD 里盘上只有 4 条有真反例** | `address_bare_pronoun`（1 本）· `role_leaks_fate`（2 本）· `hedge_words`（2 本）· `hinge_in_hole`（1 本）。**其余 37 条盘上 0 命中——那不是「干净」，是「那种失效模式在这三本上一次都没发生过」。** 用户裁决：每条各配一份会让它红的样本（F5-5）。⚠ 前提是**判据吃 `dict` 不吃模型**——跑在已过 Pydantic 的对象上，「必填齐全」那类在结构上构造不出反例 |
+| **`role_fate_unverifiable` 在最该说话的两本上反而不说** | 它挂在 `if not leaky` 那一支上，`role_leaks_fate` 命中的两本**根本走不到它**。实测词表在头牌上命中 **0/17 而人读真违规 6/17**（`char_009.role` 写「…**后成为**李宝珠的下属」，差一个字避开了 `后被`）⇒ 本仓改成**无条件产出**（同 F4-6 对 `name_surface_survey` 的处置） |
+| **`world_rule_names_person` 这道闸门在三本上什么也没拦住** | 含人名的规则里，最晚叫法的 `from_chapter` 是 ch1 的有两本 ⇒ **等于全程下发**。判据必须**报出自己的基线**，否则「没报违规」与「闸门一条都没拦住」在报告上同形 |
+| **`secret_setup_order` 三本全绿而 20/21 条 secret 没有埋点** | 「冷揭示」（据实留空，合法）与「被裁空」（产地把揭示章号抄进埋点、落盘前被裁）在**字段值上完全同形** ⇒ 它断言的是 `_provenance.setup_chapters_pruned` 那个**计数**，不是字段值。⚠ 而那个键**盘上 3/3 本一份都没有** ⇒ 今天只能落 `unver`，不能发绿灯 |
+| **`present_ungrounded` 不是幻觉检测器** | 三本 128 对里只报 1 条，逐条回原文核过，**幻觉在场者 0 例**。它实际抓的是 ① `address[]` 漏收原文在用的叫法 ② **后见之明标注**（那是一条剧透旁路）⇒ 判 INFO 不判 HARD，且名字表**不许复用 `present_broad` 那份**（带 `len>=2` 过滤，搬过来会造假阳） |
+| **三条「查不了」已结案** | `role` 藏中段才揭示的事实（词表只抓转抄式）· `event` 面的跨章引用（只能从输入侧解，现已是默认且无旋钮）· `place` 不能当相等判断的键（自由文本、粒度不稳）。见 `docs/schema/stage2.md` §六 |
+
+---
 
 **F4 落地七个提交**（`git log --oneline`，每条的病因与修法都在 commit body 里）：
 `F4-0` 落点审计 · `F4-1` 契约层（`Rule.directive` / `REPAIR_BUCKETS` / 三条裁决）·
