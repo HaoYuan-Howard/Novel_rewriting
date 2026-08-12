@@ -22,13 +22,15 @@ spans.py —— 把 `beat.span` 的首尾锚点在原文里**确定性定位**�
 **而它不会报错**，只会让某几拍的 `source_chars` 变成另一个数。
 ⇒ 两份各留各的，配一条会红的测试（`tests/test_core.py`）钉住这个分歧。
 
-【本模块没有 `recover` 那条臂，那不是漏了】原型的 `_find_or_recover` 有一条「锚点被模型
-改掉一两个字时按最长公共子串救一次」的分支，**只在 stage2 落盘时（`normalize_verbatim`）
-开着，校验器一律不开**——理由原文照抄：「否则『能定位』会把『锚点不是原文字节』
-这件事盖掉」。stage4 这一侧**只读**，一个消费方都没有。
-⇒ 今天建它就是一条**零消费方、零测试**的分支（判据 32 的抢跑）。F5 移植 stage2 的落盘路时，
-`recover` 与 `HINGE_LCS_MIN` 一起进来。
-⚠ 而 `lcs` 本身**已经进来了**（F4）：stage5 的 `must_appear_missing` 是它的第一个消费方。
+【`recover` 那条臂是 F5-2 进来的，而它默认关着】原型 `_find_or_recover` 的那条
+「锚点被模型改掉一两个字时按最长公共子串救一次」的分支，**只在 stage2 落盘时
+（`normalize_verbatim`）开着，校验器一律不开**——理由原文照抄：
+「否则『能定位』会把『锚点不是原文字节』这件事盖掉」。
+⇒ 它是 `walk_spans` 的一个 **keyword-only 参数且默认 `False`**，
+而 `locate_spans` / `has_spans`（量纲侧与校验侧）**根本不暴露它**：
+那两个函数的默认值就是终态，不是「还没接上」。
+⚠ 而 `lcs` 本身在 F4 就进来了：stage5 的 `must_appear_missing` 是它的第一个消费方，
+本模块的 `_find_or_recover` 是第二个——**不许再写一份最长公共子串**（判据 25）。
 """
 from __future__ import annotations
 
@@ -37,6 +39,20 @@ from typing import Any, Iterator
 
 #: 汉字/字母/数字；标点与空白都不算内容。⚠ 见模块 docstring：**别拿它去换 `text.norm`**。
 CONTENT = re.compile(r'\w')
+
+#: 按最长公共子串救锚点时的**相对**门槛：覆盖率低于这个值就不猜，报「找不到」。
+#:
+#: 【它今天只有一个用户，那不是漏接】原型这个常数曾经有两个消费方（span 锚点与 hinge），
+#: 而 **hinges 那一侧的 LCS 兜底已被整个删掉**：实测「传家玉镯」→「家传玉镯」的
+#: 最长公共子串只剩「玉镯」**2/4**，救回来的是一个**语义已经变了**的片段。
+#: ⇒ 搬进本仓时**只接 span 锚点这一路**，不许顺手给 hinge 也接一条
+#: （`hinge_drift` / `hinge_anchor_void` 要的正是「位置对、字节错」这件事被报出来）。
+HINGE_LCS_MIN = 0.8
+
+#: 救回来的片段还要够长的**绝对**门槛。两道门是**与**关系：
+#: 只有相对门槛时，`'的我'` 这种两字锚点用一个字就能凑到 0.5 以上；
+#: 只有绝对门槛时，一个 20 字锚点里对上 4 个字也算救回来了。
+_RECOVER_MIN_CHARS = 4
 
 
 def content_index(text: str) -> tuple[str, list[int]]:
@@ -90,6 +106,37 @@ def lcs(a: str, b: str) -> tuple[int, int]:
     return best_i, best_n
 
 
+def _find_or_recover(content: str, needle: str, start: int,
+                     recover: bool) -> tuple[int, str]:
+    """在 `content[start:]` 里找 `needle`；找不到且 `recover=True` 时按最长公共子串**救一次**。
+
+    **逐字移植自原型 `Stage2/stage2_common.py::_find_or_recover`，注释一起搬。**
+
+    救的是同一类反复出现的损坏：模型在照抄锚点时改掉一两个字
+    （原型实测 5 次：`'都不会善罢甘休'` ← 原文 `'定然不会善罢甘休'`；
+    `'难产的对我说过'` ← `'难产的我说过'`）。
+    **它是原文片段字段，就该按原文片段的办法修。**
+
+    ⚠⚠ **只在落盘时（`normalize_verbatim`）开 `recover`，校验器一律 `recover=False`**：
+    否则「能定位」会把「锚点不是原文字节」这件事盖掉——而那正是
+    `anchor_not_verbatim` 与 `_provenance.verbatim_recovered` 要说的话。
+
+    返回 `(命中下标, **实际匹配到的串**)`；未命中返回 `(-1, needle)`。
+    ⚠ 第二格必须被调用方**接回去**：救回来的片段长度与 `needle` 不同，
+    而后面的区间算术全用它的 `len()`——不接就是一串错位的原文偏移，**且不会报错**。
+    """
+    i = content.find(needle, start)
+    if i >= 0 or not recover:
+        return i, needle
+    i0, n = lcs(needle, content[start:])
+    if n >= _RECOVER_MIN_CHARS and n / len(needle) >= HINGE_LCS_MIN:
+        frag = needle[i0:i0 + n]
+        j = content.find(frag, start)
+        if j >= 0:
+            return j, frag
+    return -1, needle
+
+
 def extend_punct(text: str, end: int) -> int:
     """把区间末尾延到**紧邻的标点**（不跨空白/换行）。
 
@@ -104,7 +151,8 @@ def extend_punct(text: str, end: int) -> int:
 
 
 def walk_spans(bps: list[dict[str, Any]],
-               text_of: dict[Any, str]) -> Iterator[tuple[Any, dict, tuple[int, int, int, int] | None, str | None]]:
+               text_of: dict[Any, str],
+               *, recover: bool = False) -> Iterator[tuple[Any, dict, tuple[int, int, int, int] | None, str | None]]:
     """把 `beat.span` 的首尾锚点在原文里逐条定位——**【唯一】一份游标实现**。
 
     两个视图共用它：`locate_spans()` 要的是 beat 的**整段区间**（量纲），
@@ -119,6 +167,10 @@ def walk_spans(bps: list[dict[str, Any]],
         `problem=None`
       · 失败 → `hit=None`，`problem` = 说明。**定位不到就报出来，绝不退回估算**
         （估算方向会整个反过来）。
+
+    ⚠⚠ **`recover` 是 keyword-only 且默认 `False`，而那个默认值是本模块的一条不变量**
+    （见模块 docstring）：**只有 stage2 的落盘路许开它**。
+    开着跑校验，「能定位」就会把「锚点不是原文字节」这件事盖掉。
     """
     for x in bps:
         o = x.get('chapter_ordinal')
@@ -137,7 +189,9 @@ def walk_spans(bps: list[dict[str, Any]],
             if not a or not b:
                 yield o, be, None, f'{bid} 锚点无内容字符: {raw_a[:12]!r}/{raw_b[:12]!r}'
                 continue
-            i = content.find(a, cur)
+            # ⚠ `a` 被**重新绑定**成实际匹配到的串（救回来时它比原锚点短）：
+            #   下面每一处 `len(a)` 都是区间算术的输入，用原锚点的长度就是错位的偏移。
+            i, a = _find_or_recover(content, a, cur, recover)
             if i < 0:
                 # 【先分清是「原文里没有」还是「被上一条越过去了」】两者的病因完全不同，
                 # 而说错了会让人去查一个**根本没问题**的锚点（判据 32）。
@@ -155,7 +209,7 @@ def walk_spans(bps: list[dict[str, Any]],
                     if 0 <= back < cur else
                     f'{bid}.starts_with 在 ch{o} 第 {cur} 字(内容序)之后找不到: {raw_a[:14]!r}')
                 continue
-            j = content.find(b, i)
+            j, b = _find_or_recover(content, b, i, recover)      # 同上：`b` 也要接回去
             if j < 0:
                 yield o, be, None, f'{bid}.ends_with 在 starts_with 之后找不到: {raw_b[:14]!r}'
                 continue

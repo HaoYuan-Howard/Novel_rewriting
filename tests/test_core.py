@@ -22,6 +22,7 @@ from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
     quote_pair,
 )
+from novel.core.spans import HINGE_LCS_MIN, locate_spans, walk_spans
 from novel.core.text import (
     SPLIT_MIN_SIDE, TERMINAL_PUNCT, locate_norm, min_hamming, norm, quote_count,
     split_by_speech_tag, window_overlap,
@@ -406,3 +407,101 @@ def test_terminal_punct_has_one_home():
     """截断判定与删减守卫共用这一份——两处各抄一套就会漂。"""
     assert '。' in TERMINAL_PUNCT and '」' in TERMINAL_PUNCT and '.' in TERMINAL_PUNCT
     assert '，' not in TERMINAL_PUNCT
+
+
+# ── `span` 锚点的 `recover` 臂（F5-2）─────────────────────────────────────
+#
+# 原型注释记着「实测 5 次」模型照抄锚点时改掉一两个字，下面两例逐字搬自那份注释。
+# ⚠ 每一条测的都是**边界与反例**：`recover` 这条臂真正的风险不是「救不回来」，
+#   而是「**该报错的时候把错盖掉了**」。
+
+_TEXT = '定然不会善罢甘休。她转身就走，难产的我说过一句话都算多。'
+
+
+def _bps(starts: str, ends: str) -> list[dict[str, object]]:
+    return [{'chapter_ordinal': 1,
+             'beats': [{'beat_id': 'b01_01', 'span': {'starts_with': starts, 'ends_with': ends}}]}]
+
+
+def _walk(starts: str, ends: str, *, recover: bool):
+    return list(walk_spans(_bps(starts, ends), {1: _TEXT}, recover=recover))
+
+
+def test_a_damaged_anchor_is_a_failure_when_recover_is_off():
+    """⭐⭐ **这一条是本臂的主守卫，不是那条「救得回来」。**
+
+    `recover=False` 时锚点差一个字就必须报「找不到」——校验器走的正是这条路。
+    开着 `recover` 跑校验，「能定位」会把「**锚点不是原文字节**」这件事整个盖掉，
+    而那是 `anchor_not_verbatim` 与 `_provenance.verbatim_recovered` 唯一要说的话。
+    """
+    (_o, _be, hit, prob) = _walk('都不会善罢甘休', '算多', recover=False)[0]
+    assert hit is None
+    assert 'starts_with' in prob and '找不到' in prob
+
+
+def test_recover_returns_the_fragment_it_actually_matched_not_the_anchor():
+    """`recover=True` 时按最长公共子串救回来，**而返回的是实际匹配到的那一截**。
+
+    ⚠ 第二个返回值必须被 `walk_spans` 接回去：救回来的片段比原锚点短，
+    而它的 `len()` 是区间算术的输入——不接就是一串**错位且不报错**的原文偏移。
+    这里正面钉住区间落在原文里对的位置上。
+    """
+    (_o, _be, hit, prob) = _walk('都不会善罢甘休', '算多', recover=True)[0]
+    assert prob is None
+    a0, a1, _b0, _b1 = hit
+    # `'都不会善罢甘休'` 的 LCS 是 `'不会善罢甘休'`（6/7 = 0.86 ≥ 0.8，且 6 ≥ 4）。
+    # ⚠ 区间**带着句末的「。」**：`extend_punct` 对救回来的片段一样生效，
+    #   而那是对的——hinge 要逐字发给下游，削掉句末标点就是发出去一句不完整的原话。
+    assert _TEXT[a0:a1] == '不会善罢甘休。'
+
+
+def test_the_prototypes_own_second_example_is_NOT_recoverable_by_its_own_thresholds():
+    """⭐⭐ **原型注释举的两例里，只有一例救得回来——而这不是 bug，是双门槛在做它该做的事。**
+
+    第二例 `'难产的对我说过'` ← 原文 `'难产的我说过'`（模型**插**了一个字，
+    上一例是**改**字）：最长公共子串只有 `'难产的'` **3 字**，
+    相对覆盖率 3/7 = **0.43**，绝对长度 3 < 4 ⇒ **两道门都不过**。
+
+    ⚠ 那段注释写的是「救的是同一类反复出现的损坏（**实测 5 次**：…）」——
+    括号里列的是**观察到的损坏**，不是「这几例都救回来了」。照字面读成后者，
+    就会去把门槛调低到能救它，而调低的代价是**把猜出来的字节当成原文发给写手**。
+
+    ⇒ 这一类的正确出路不是救，是**报**：它进 `_provenance.verbatim_failures`
+    （非空即失败态）。那个键正是为这一类存在的——在它之前，
+    「这份产物是不是失败态」只能靠遍历全部 hinge 去**反推一个缺席**。
+    """
+    (_o, _be, hit, prob) = _walk('定然', '难产的对我说过', recover=True)[0]
+    assert hit is None
+    assert 'ends_with' in prob and '找不到' in prob
+
+
+def test_both_recover_thresholds_are_and_not_or():
+    """⭐ 两道门是**与**关系，各拦一类。少一道就有一类假救回。
+
+    · 只有相对门槛（`HINGE_LCS_MIN`）时：两字锚点对上一个字就是 0.5，
+      三字锚点对上两个字就是 0.67——**短锚点太容易凑**。绝对门槛（≥4 字）拦它。
+    · 只有绝对门槛时：一个 20 字锚点里对上 4 个字也算救回来了。相对门槛拦它。
+    """
+    assert HINGE_LCS_MIN == 0.8
+    # ① 绝对门槛拦下的：'的我说' 与原文 '的我说' 本来就在——换成 '的他说'，
+    #    LCS = '说' 1/3，两道门都不过。
+    assert _walk('定然', '的他说', recover=True)[0][2] is None
+    # ② 相对门槛拦下的：锚点前半整段是编的，只有尾巴 4 个字对得上 ⇒ 4/12 = 0.33。
+    assert _walk('定然', '完全不相干的八个字算多', recover=True)[0][2] is None
+
+
+def test_locate_spans_does_not_expose_recover_at_all():
+    """⭐ **量纲侧与校验侧根本没有这个旋钮，那个默认值是终态不是「还没接」。**
+
+    `locate_spans` 是 stage4 算 `source_chars` 与本层判 `span_unlocatable` 共用的入口。
+    给它开一个 `recover` 参数，下一次就会有人为了「让红灯变绿」把它打开——
+    而那一下会同时改掉**下游写手真正收到的字节**。
+    ⇒ 这一条钉的是签名：`recover` 只在 `walk_spans` 上，且只有落盘路会传 `True`。
+    """
+    import inspect
+    assert 'recover' not in inspect.signature(locate_spans).parameters
+    p = inspect.signature(walk_spans).parameters['recover']
+    assert p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is False
+    # 而它确实还是那条会报错的路：坏锚点在 `locate_spans` 上照旧进 `problems`
+    _spans, problems, _loose = locate_spans(_bps('都不会善罢甘休', '算多'), {1: _TEXT})
+    assert len(problems) == 1
