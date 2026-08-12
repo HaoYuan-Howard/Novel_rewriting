@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from contracts.invariants import ENDING_SHAPES, HOOK_APPROACHES, HOOK_APPROACH_NOTES, SEP_BANDS
 from novel.core.bands import BAND_SEP, ending_shape, sep_band_of_text
-from novel.core.facts import NUM_UNIT, secret_keywords
+from novel.core.facts import NUM_UNIT, num_unit_keys, num_value, secret_keywords
 from novel.core.naming import (
     attested_surname, family_groups, invented_names, is_generic_appellation,
     name_stems, person_naming_surfaces, rule_names_a_person, strip_distinguisher,
@@ -22,7 +22,10 @@ from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
     quote_pair,
 )
-from novel.core.text import TERMINAL_PUNCT, locate_norm, norm, window_overlap
+from novel.core.text import (
+    SPLIT_MIN_SIDE, TERMINAL_PUNCT, locate_norm, min_hamming, norm, quote_count,
+    split_by_speech_tag, window_overlap,
+)
 
 
 # ── 段间分隔：那个 off-by-one 的触发条件 ──────────────────────────────────
@@ -144,6 +147,59 @@ def test_locate_norm_maps_back_to_the_products_own_bytes():
     assert locate_norm('，，，', body) is None, '归一后是空串 ⇒ 定位不了'
 
 
+# ── 原话被提示语切开（`R-7.3b`）───────────────────────────────────────────
+
+_SPLIT_SEG = '你若真要走，便再不必回来了。'
+
+
+def test_a_speech_tag_split_still_counts_as_verbatim():
+    """⭐ `「…，」他说，「…」` 是中文小说的**标准写法**，不是违规。
+
+    按「原样出现」的字面判据它一定判缺失 ⇒ 放行，但返回**那处提示语**单独留痕：
+    「一个字都没动」与「切成两截后逐字出现」不是同一件事。
+    """
+    body = '「你若真要走，」他放下茶盏，「便再不必回来了。」'
+    assert split_by_speech_tag(norm(_SPLIT_SEG), body) == '，」他放下茶盏，「'
+
+
+def test_the_gap_must_be_short_and_must_look_like_a_speech_tag():
+    """两条准入各拦一类，少一条这个放行口就变成「判据不再拦」。"""
+    long_tag = '「你若真要走，」他慢慢地放下手里那只温热的茶盏，「便再不必回来了。」'
+    assert split_by_speech_tag(norm(_SPLIT_SEG), long_tag) is None, \
+        '插一段动作描写不算提示语——那是改写，不是标准写法'
+    rewritten = '他说你若真要走，然后又说便再不必回来了。'
+    assert split_by_speech_tag(norm(_SPLIT_SEG), rewritten) is None, \
+        '不是「收引号 + 短提示语 + 开引号」那个形状就不放行'
+
+
+def test_a_short_fragment_is_refused_outright():
+    """⚠ 两侧各至少 `SPLIT_MIN_SIDE` 个内容字：更短的碎片会在长正文里随便撞上，
+    那就成了「把判据放宽到没有意义」，而不是「放行一个合法写法」。"""
+    seg = '我不去你也别去'                       # 7 个内容字，切完必有一侧 < 4
+    assert len(seg) < SPLIT_MIN_SIDE * 2
+    assert split_by_speech_tag(seg, '「我不去，」他说，「你也别去。」') is None
+
+
+def test_min_hamming_separates_a_typo_fix_from_a_missing_line():
+    """「漏写了这句」与「只改了一两个字」是两件事——后者实测多半是纠正原文的错别字。
+    ⚠ 等长窗口而非编辑距离：要查的就是「原样」。"""
+    assert min_hamming('你若真要走', '……你若真要走……') == 0
+    assert min_hamming('你若真要走', '你若真想走') == 1
+    assert min_hamming('你若真要走', '完全不同的一句话') == 3, 'cap 以上不细算，返回 cap+1'
+    assert min_hamming('你若真要走', '太短') == 3, '长度都不够就不必谈一字之差'
+
+
+def test_quote_count_counts_lines_not_characters():
+    """⭐ 它与 `dialogue_ratio` 都要：那一个量**占多少字**，这一个量**说了几句**。
+
+    台词被压成转述时前者可以纹丝不动（叙述里复述一遍同样长），后者掉一半
+    ——原型正是靠它抓到「闭卷把台词压成转述」这条效应量最大的跨书结论。
+    """
+    assert quote_count('「甲。」他说。「乙。」') == 2
+    assert quote_count('他说甲，然后又说乙。') == 0
+    assert quote_count('“甲。”和「乙。」') == 2, '四种引号体全表都数（归一前后都要成立）'
+
+
 # ── 事实词法 ──────────────────────────────────────────────────────────────
 
 def test_num_unit_skips_the_indefinite_article_and_bare_numerals():
@@ -157,6 +213,41 @@ def test_secret_keywords_drops_numbers_and_short_fragments():
     """去数字（换个数字说法照样泄底）→ 按全角逗号切 → 留 ≥6 字。"""
     got = secret_keywords('他其实是三皇子，母亲当年被人换了孩子，很短')
     assert got == ['他其实是皇子', '母亲当年被人换了孩子']
+
+
+def test_num_value_reads_the_value_not_the_literal():
+    """⭐ **这一条就是那次全量误报本身。**
+
+    契约发给写手的原话是「数字必须保住，**措辞随你**」，而判据只搜阿拉伯字面
+    ⇒ 成稿写「三十岁」被判成改了 `30`，**整章拦下**。古风正文里写「30」反而出戏，
+    照那条判据去修数据必然让产物更差——那正是「判据错了」的信号。
+    """
+    assert num_value('三十') == num_value('30') == 30
+    assert num_value('半') == 0.5
+    assert num_value('两万') == 20000, '「万」要结算前面所有位'
+    assert num_value('八') == 8
+
+
+def test_num_value_returns_none_instead_of_guessing():
+    """⚠ `None`（这串不是数）与 `0`（这串是零）**必须分得开**：
+    调用方拿它当比对键，猜一个值出来就会把两个不同的事实判成同一个。"""
+    assert num_value('第三者') is None and num_value('') is None
+    assert num_value('〇') == 0, '「〇」是零，不是「解析不了」'
+
+
+def test_num_unit_keys_are_valued_but_display_the_original_wording():
+    """键按**值**取（`三十岁` 与 `30岁` 同键），展示串留正文里的原样——
+    报出来的东西要是人在正文里找得到的那个写法。"""
+    assert num_unit_keys('他三十岁') == {(30, '岁'): '三十岁'}
+    assert num_unit_keys('他30岁') == {(30, '岁'): '30岁'}
+    assert set(num_unit_keys('他三十岁')) == set(num_unit_keys('他30岁'))
+
+
+def test_num_unit_keys_survives_a_number_at_the_very_end():
+    """⚠ `m.end()` 正好落在串尾时，原型旧写法 `text[m.end()]` 直接 `IndexError`
+    ——一份以数字结尾的成稿会让整条判据崩掉，而不是报出一个结论。"""
+    assert num_unit_keys('打了二十') == {}, '没有单位就不是可核对的事实'
+    assert num_unit_keys('打了二十板') == {(20, '板'): '二十板'}
 
 
 # ── 发明检测 ──────────────────────────────────────────────────────────────

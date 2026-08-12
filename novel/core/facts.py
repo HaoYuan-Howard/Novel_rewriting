@@ -5,7 +5,7 @@ facts.py —— 中文正文里的**数值词法**与 secret 的**关键片段�
 **逐字移植自原型（`Stage2/stage2_common.py`），注释一起搬。**
 
 两样东西都是「拿文本做字面匹配」的**唯一落点**，各有多个消费方：
-  · `cn_num_pattern` / `NUM_UNIT` —— stage5 的数值守恒 · stage6 的「发明数字」探针；
+  · `cn_num_pattern` / `NUM_UNIT` / `num_value` —— stage5 的数值守恒 · stage6 的「发明数字」探针；
   · `secret_keywords` —— stage4 的下发面闸门 · stage5 的提前点破 · stage6 的秘密记账。
 
 各处自己抄一份切法必然漂，而漂的表现是**其中一处悄悄不再拦**（判据 25）。
@@ -49,6 +49,76 @@ CN_NUM_RE = re.compile(cn_num_pattern())
 #: 它们后面的数字几乎总是虚指。
 NUM_UNIT = re.compile(cn_num_pattern(exclude_bare_one=True)
                       + r'(?=[年岁月成倍斤里品级重刻鞭板次回遍])')
+
+
+# ── 「数值不得改动」查的是【值】不是【字面】────────────────────────────────────
+#
+# ⚠⚠ **这一族是被一次全量误报逼出来的。** 契约发给写手的原话是「数字必须保住…
+# **措辞随你**——你可以换一种说法把它说出来，但那个数不能变」，而判据只在成稿里
+# 搜阿拉伯字面：原型实测某章被 `('30岁', ['30'])` / `('已经8位数。', ['8'])`
+# **整章拦下**，而成稿写的是「三十岁」「八位数」——**值一个都没变，
+# 写手做的正是契约让它做的事**。古风/口语正文里把 30 写成「30」反而出戏，
+# 所以照这条判据去修数据必然让产物更差（那正是「判据错了」的信号）。
+# ⇒ 比对改成**值级**：两边都归一成数值再比。
+_CN_DIGIT = {'〇': 0, '零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
+             '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+_CN_UNIT = {'十': 10, '百': 100, '千': 1000, '万': 10000}
+
+
+def num_value(tok: str | None) -> int | float | None:
+    """`'30'` / `'三十'` / `'0.5'` / `'半'` → 数值；**解析不了返回 `None`（不猜）**。
+
+    ⚠ 返回 `None` 与返回 `0` 必须分得开：前者是「这串不是数」，后者是「这串是零」。
+    调用方拿它当比对键，猜一个值出来就会把两个不同的事实判成同一个。
+    """
+    s = (tok or '').strip()
+    if not s:
+        return None
+    if s == '半':
+        return 0.5
+    if re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', s):
+        return float(s) if '.' in s else int(s)
+    total, cur, seen = 0, 0, False
+    for ch in s:
+        if ch in _CN_DIGIT:
+            cur, seen = _CN_DIGIT[ch], True
+        elif ch in _CN_UNIT:
+            u = _CN_UNIT[ch]
+            if u == 10000:                       # 「万」结算前面所有位
+                total = (total + (cur or 1)) * u
+                cur = 0
+            else:
+                total += (cur or 1) * u
+                cur = 0
+            seen = True
+        else:
+            return None
+    return (total + cur) if seen else None
+
+
+def num_values(text: str | None) -> set[int | float]:
+    """一段文字里所有**解析得出值**的数字 → 值的集合。解析不了的直接不进集合。"""
+    return {v for tok in CN_NUM_RE.findall(text or '') if (v := num_value(tok)) is not None}
+
+
+def num_unit_keys(text: str | None) -> dict[tuple[object, str], str]:
+    """`{(值|字面, 单位): 展示串}` —— 「发明数字」探针的比对键。
+
+    键按**值**取（`三十岁` 与 `30岁` 同键），展示串留正文里的**原样**——
+    报出来的东西要是人在正文里找得到的那个写法，不是我们归一之后的样子。
+    ⚠ 解析不出值时**用字面当键**（不丢弃）：那仍然是一个可核对的事实，
+    只是我们换算不了它；丢掉它等于让一条查不了的事实变成一条「查过、没问题」。
+
+    ⚠ `m.end()` 可能正好落在串尾（数字是最后一个字符），
+    原型旧写法 `text[m.end()]` 在那里 `IndexError`。
+    """
+    t = text or ''
+    out: dict[tuple[object, str], str] = {}
+    for m in NUM_UNIT.finditer(t):
+        unit = t[m.end()] if m.end() < len(t) else ''
+        v = num_value(m.group())
+        out.setdefault((v if v is not None else m.group(), unit), m.group() + unit)
+    return out
 
 
 def secret_keywords(fact: str | None, min_len: int = SECRET_KEYWORD_MIN) -> list[str]:

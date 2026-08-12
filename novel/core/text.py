@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+from contracts.invariants import SPEECH_TAG_MAX
+
 #: 句界：**必须含【半角 `?!`】**——stage1 原文标点不统一，半角占比高的书
 #: （普女 82 处 / 清杳 90 处）若只认全角，句数被系统性少算、均句长被高估
 #: （普女 22.7→19.0、清杳 17.2→14.9），而这些数字是喂给抽取器的「权威事实」，
@@ -40,6 +42,17 @@ def norm(s: str | None) -> str:
     return _NON_CONTENT.sub('', s or '')
 
 
+def norm_index(text: str | None) -> tuple[str, list[int]]:
+    """`(归一串, 归一下标 → 原文下标)`。**回映到原文字节的唯一入口。**
+
+    `locate_norm` 与 `split_by_speech_tag` 共用它——两处各建一份索引就是同一把尺子的
+    第二个落点，而它们比的是**同一段正文**（判据 14）。
+    """
+    t = text or ''
+    idx = [i for i, ch in enumerate(t) if not _NON_CONTENT.match(ch)]
+    return ''.join(t[i] for i in idx), idx
+
+
 def locate_norm(needle: str | None, text: str | None) -> tuple[int, int] | None:
     """在 `text` 里定位一段**归一后**的串 → 原文下标区间 `(start, end)`；找不到返回 `None`。
 
@@ -56,8 +69,8 @@ def locate_norm(needle: str | None, text: str | None) -> tuple[int, int] | None:
     k = norm(needle)
     if not k:
         return None
-    idx = [i for i, ch in enumerate(text or '') if not _NON_CONTENT.match(ch)]
-    p = ''.join((text or '')[i] for i in idx).find(k)
+    hay, idx = norm_index(text)
+    p = hay.find(k)
     if p < 0:
         return None
     return idx[p], idx[p + len(k) - 1] + 1
@@ -88,6 +101,86 @@ def window_overlap(text: str | None, source: str | None, window: int = 20,
 def quotes(s: str | None) -> list[str]:
     """取出字符串里被引号包住的片段（举例用的原文微引用）。"""
     return [g for m in QUOTED.finditer(s or '') for g in m.groups() if g]
+
+
+def quote_count(s: str | None) -> int:
+    """直接引语的**条数**（四种引号体的成对跨度合计）。
+
+    ⚠ 与 `measure().dialogue_ratio` 不是一回事，两者都要：那一个量的是**占多少字**，
+    这一个量的是**说了几句**。台词被压成转述时前者可以纹丝不动
+    （叙述里复述一遍同样长），后者掉一半——原型正是靠它抓到「闭卷把台词压成转述」。
+    ⚠ 归一之后全书只剩目标引号体，但探针**对归一前后都要成立**（存量稿是归一后的，
+    模型刚吐出来那一份不是）⇒ 四种体全表都数。
+    """
+    return sum(len(rx.findall(s or '')) for _, rx in QUOTE_STYLES)
+
+
+# ── 「原话被一处提示语切开」也算逐字出现（`R-7.3b`）─────────────────────────
+#
+# 中文小说的标准写法：`「…，」我说，「…」`。**这是一个合法写法，不是违规**，
+# 而按「原样出现」的字面判据它一定判缺失。⇒ 放行，但**单独留痕**：
+# 「一个字都没动」与「切成两截后逐字出现」不是同一件事（判据 7）。
+#
+# ⚠ 插入必须在**原文字节**上长成「收引号 + ≤N 内容字 + 开引号」——
+# 改词、插一段动作描写、只写半句照旧判缺失。这条正则就是那个形状。
+_CLOSE_THEN_OPEN = re.compile(r'[」』”’][^」』”’「『“‘]{0,%d}[「『“‘]' % (SPEECH_TAG_MAX * 3))
+
+#: 切口两侧各自至少要有几个内容字。**更短的碎片会在长正文里随便撞上**，
+#: 那就成了「把判据放宽到没有意义」，而不是「放行一个合法写法」。
+SPLIT_MIN_SIDE = 4
+
+
+def split_by_speech_tag(seg_norm: str, body: str,
+                        nb: str | None = None,
+                        nmap: list[int] | None = None) -> str | None:
+    """这条原话是不是**只被一处提示语切开**地出现在 `body` 里？→ 命中处的原文提示语。
+
+    `seg_norm` 是**已归一**的待查串；`nb`/`nmap` 是 `norm_index(body)` 的结果，
+    调用方一章查几十条时传进来复用（这函数在最内层循环里）。
+    """
+    if nb is None or nmap is None:
+        nb, nmap = norm_index(body)
+    n = len(seg_norm)
+    if n < SPLIT_MIN_SIDE * 2:
+        return None
+    for i in range(SPLIT_MIN_SIDE, n - SPLIT_MIN_SIDE + 1):
+        head, tail = seg_norm[:i], seg_norm[i:]
+        p = nb.find(head)
+        while p >= 0:
+            q = nb.find(tail, p + i)
+            if q < 0:
+                break
+            if q - (p + i) <= SPEECH_TAG_MAX:
+                gap = body[nmap[p + i - 1] + 1:nmap[q]]
+                if _CLOSE_THEN_OPEN.search(gap):
+                    return gap
+            p = nb.find(head, p + 1)
+    return None
+
+
+def min_hamming(needle: str, hay: str, cap: int = 2) -> int:
+    """`needle` 与 `hay` 中**等长窗口**的最小逐字差异数（`cap` 以上不再细算）。
+
+    用来区分「写手漏写了这句」与「写手只改了一两个字」——后者在实测里
+    多数是**纠正原文的错别字**，那与漏写是两件事，报出来的话也不同。
+    ⚠ **等长窗口而不是编辑距离**：要查的就是「原样」，长度都不一样就不必谈一字之差了。
+    """
+    n = len(needle)
+    if n == 0 or len(hay) < n:
+        return cap + 1
+    best = cap + 1
+    for i in range(len(hay) - n + 1):
+        d = 0
+        for a, b in zip(needle, hay[i:i + n]):
+            if a != b:
+                d += 1
+                if d >= best:
+                    break
+        if d < best:
+            best = d
+            if best == 0:
+                break
+    return best
 
 
 def render_book(main_text: object) -> tuple[str, str]:
