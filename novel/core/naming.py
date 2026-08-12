@@ -3,13 +3,18 @@
 """
 naming.py —— 人物**专名**表，以及「有没有编出新人名」那条探针。
 
-三组东西方向各不相同，别混：
+四组东西方向各不相同，别混：
   · `names_of` / `spoiler_names_of` —— stage3 校验期的**专名表**（这些名字不许出现在
     可迁移的风格描述里）；
   · `name_stems` / `invented_names` —— stage5/stage6 的**发明检测**（拿本书已有的姓
     去造新人，那是闭卷写手最容易干的一件事）；
   · `attested_surname` / `family_groups` / `is_generic_appellation` —— stage7 改名的
-    **姓氏族群**（这个人姓什么、和谁一家、哪些称呼压根不该动）。
+    **姓氏族群**（这个人姓什么、和谁一家、哪些称呼压根不该动）；
+  · `person_naming_surfaces` / `surface_first_chapter` / `rule_names_a_person` ——
+    stage4 的**叫法时点**（这条规则点到了谁、读者第几章才叫得出这个叫法）。
+
+⚠ 第四组与第一组的方向**正相反**，别拿一组去代另一组：那边问「这个名字在不在名表里」，
+这边问「**读者到这一章为止，叫不叫得出这个叫法**」——同一批数据，一个是集合、一个是时点。
 
 ⚠ 三组各有一份「亲属称谓」的正则（`KINSHIP` / `_STEM_KINSHIP`），**取值面刻意不同**，
 合成一份会让其中一侧悄悄放宽——每一处的理由写在它自己旁边。
@@ -190,6 +195,76 @@ def surface_owners(characters: dict[str, dict] | None) -> dict[str, frozenset[st
             if key:
                 owners.setdefault(key, set()).add(cid)
     return {k: frozenset(v) for k, v in owners.items()}
+
+
+def person_naming_surfaces(characters: dict[str, dict] | None) -> dict[str, str]:
+    """`{叫法: char_id}` —— 只留【能标识某个具体的人】的那些叫法。
+
+    `surface_owners` 收的是「谁被这么叫过」的**全集**，拿它直接当人名探测器会**误杀真规则**。
+    两道筛，各修掉一类实测出来的错（三本书 5 条规则上全部判对）：
+
+      ① **通名不算**（`name_distinctiveness == 'common'`）——「正室」「淫贼」「采花贼」
+         都被登记成了角色，于是「纳妾制度：正室高于妾室」「淫贼会被官府追捕」这类
+         **纯世界规则**被当成情节整条剔掉。
+      ② **一个叫法挂着不止一个人时，它标识不了任何人**——「皇帝」同时是两个 char_id
+         的叫法，于是「皇帝有权赐婚」会被误杀。这不是为样本硬凑的第三条规则，
+         它就是「歧义 ⇒ 不猜」那条不变量换个方向用。
+
+    ⚠⚠ **为什么必须收 `address[].surface` 而不只是 `canonical`**：实测某本
+    `wr_06`「怡红院…**实为百晓生所有**…**龟公等人员可能是卧底**」——那正是
+    `secret_01`（揭示章 ch8）的全部内容，而那个角色的 `canonical` 是「谢允」，
+    规则正文里一次都没出现。于是这条规则逐字发给了 ch1~ch7 的写手，
+    **同一份上下文里 `must_not_reveal` 还写着 `secret_01`**。
+    **剧透是信息的属性，不是字段的属性**——探测器只认一个字段，信息就从另一个字段走。
+    """
+    out: dict[str, str] = {}
+    for key, cids in surface_owners(characters).items():
+        if len(key) < 2 or len(cids) != 1:            # ② 歧义的叫法不标识人
+            continue
+        cid = next(iter(cids))
+        if ((characters or {}).get(cid) or {}).get('name_distinctiveness') == 'common':
+            continue                                  # ① 通名不是人名
+        out[key] = cid
+    return out
+
+
+def surface_first_chapter(characters: dict[str, dict] | None) -> dict[str, int]:
+    """`{叫法: 读者最早能叫出它的章}` —— **与 `person_naming_surfaces` 同一套键**。
+
+    值取该叫法自己的 `address[].from_chapter`（同一叫法多条时取最小）。
+    只作为 `canonical` 出现、`address` 里没有的，退回该角色**最早**的 address 章：
+    那种 canonical 多半是内部记账标签，拿它当时点没有意义。
+    一条都取不到时给 1 —— **不知道就不扣**：扣错的代价是写手丢一条设定。
+
+    ⚠ 键一律走 `core.text.norm`，与 `surface_owners` **同一个键空间**。
+    第四组这三个函数是**串起来用的**（`naming` 的命中拿去查 `avail`），
+    键空间差一格，闸门就会在某几个叫法上静默失效。
+    """
+    out: dict[str, int] = {}
+    for _cid, v in (characters or {}).items():
+        ads = [a for a in ((v or {}).get('address') or []) if (a.get('surface') or '').strip()]
+        earliest = min((int(a.get('from_chapter') or 1) for a in ads), default=1)
+        key0 = norm(strip_distinguisher((v or {}).get('canonical') or ''))
+        if key0:
+            out[key0] = min(out.get(key0, earliest), earliest)
+        for a in ads:
+            k = norm(a.get('surface') or '')
+            if k:
+                ch = int(a.get('from_chapter') or 1)
+                out[k] = min(out[k], ch) if k in out else ch
+    return out
+
+
+def rule_names_a_person(desc: str | None, naming: dict[str, str]) -> list[str]:
+    """这条规则的正文里点到了哪些【具体的人】→ 命中的叫法（有序去重，**长的在前**）。
+
+    `naming` 由 `person_naming_surfaces` 给。长的在前是为了**报告可读**：
+    同时命中「谢允」「谢大兄弟」时，先说长的那个更能说明它在讲谁。
+    """
+    hay = norm(desc)
+    if not hay:
+        return []
+    return sorted({n for n in naming if n in hay}, key=lambda s: (-len(s), s))
 
 
 def attested_surname(char: dict | None, book_text: str,

@@ -15,7 +15,8 @@ from novel.core.bands import BAND_SEP, ending_shape, sep_band_of_text
 from novel.core.facts import NUM_UNIT, secret_keywords
 from novel.core.naming import (
     attested_surname, family_groups, invented_names, is_generic_appellation,
-    name_stems, strip_distinguisher, surface_owners,
+    name_stems, person_naming_surfaces, rule_names_a_person, strip_distinguisher,
+    surface_first_chapter, surface_owners,
 )
 from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
@@ -248,6 +249,58 @@ def test_generic_appellation_defers_to_this_books_surnames():
     assert is_generic_appellation('七郎') is True, '排行不是名字'
     assert is_generic_appellation('孟青禾') is False
     assert is_generic_appellation('') is False
+
+
+# ── 叫法时点（第四组，stage4 的下发闸门）─────────────────────────────────
+
+_GATE_REG = {
+    # 通名：它被登记成了角色，而「正室高于妾室」是**纯世界规则**
+    'char_001': {'canonical': '正室', 'name_distinctiveness': 'common',
+                 'address': [{'surface': '正室', 'from_chapter': 1}]},
+    # 歧义：同一个叫法挂着两个人 ⇒ 它标识不了任何人
+    'char_010': {'canonical': '皇帝', 'name_distinctiveness': 'high',
+                 'address': [{'surface': '皇帝', 'from_chapter': 1}]},
+    'char_011': {'canonical': '太上皇', 'name_distinctiveness': 'high',
+                 'address': [{'surface': '皇帝', 'from_chapter': 1}]},
+    # 真人：正典名 ch1 就有，而**另一个别名要到 ch8 才出现**
+    'char_009': {'canonical': '谢允', 'name_distinctiveness': 'high',
+                 'address': [{'surface': '龟公', 'from_chapter': 2},
+                             {'surface': '百晓生', 'from_chapter': 8}]},
+}
+
+
+def test_a_common_noun_or_an_ambiguous_appellation_does_not_name_a_person():
+    """⭐ 两道筛各修掉一类**误杀真规则**的错。
+
+    拿「谁被这么叫过」的全集当人名探测器，「纳妾制度：正室高于妾室」
+    与「皇帝有权赐婚」都会被当成情节整条剔掉。
+    """
+    naming = person_naming_surfaces(_GATE_REG)
+    assert '正室' not in naming, '通名不是人名'
+    assert '皇帝' not in naming, '一个叫法挂着两个人时，它标识不了任何人'
+    assert naming.get('谢允') == 'char_009' and naming.get('百晓生') == 'char_009'
+
+
+def test_the_gate_is_the_appellations_first_chapter_not_the_characters():
+    """⭐⭐ **闸门用的是【叫法的时点】，不是【角色的时点】。**
+
+    某本 `wr_06`「怡红院…实为百晓生所有…龟公等人员可能是卧底」= 一条 ch8 才揭示的
+    秘密的全部内容。**按角色时点会放行**（那个角色 ch2 就在场、叫「龟公」），
+    **按叫法时点才扣得住**——泄底的是「百晓生」这个叫法，它 ch8 才出现。
+    """
+    avail = surface_first_chapter(_GATE_REG)
+    assert avail['龟公'] == 2 and avail['百晓生'] == 8
+    naming = person_naming_surfaces(_GATE_REG)
+    hit = rule_names_a_person('怡红院实为百晓生所有，龟公等人员可能是卧底。', naming)
+    assert hit and max(avail[n] for n in hit) == 8, '放行章要取命中叫法里最晚的那一个'
+    # 而一条真规则一个人都点不到 ⇒ 不扣
+    assert rule_names_a_person('纳妾制度：正室高于妾室。', naming) == []
+
+
+def test_the_naming_family_shares_one_key_space():
+    """三个函数是**串起来用的**（`naming` 的命中拿去查 `avail`）——键空间差一格，
+    闸门就会在某几个叫法上静默失效。"""
+    assert set(person_naming_surfaces(_GATE_REG)) <= set(surface_first_chapter(_GATE_REG))
 
 
 # ── 取值面 ────────────────────────────────────────────────────────────────
