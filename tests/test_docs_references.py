@@ -28,7 +28,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOC = reqs.load()
 
 #: 扫哪些文档。`design_brief/` 不扫——它是给外部设计工具的包，用的是另一套编号（U-xx / S-xx）。
-DOC_GLOBS = ('docs/schema/*.md', 'docs/REQUIREMENTS.md', 'README.md')
+#:
+#: ⚠ `docs/LESSONS.md` 在这张表里，而它**多数条目都点名代码落点**（「唯一落点是 X」）
+#: ——那正是本文件第 ② 条要查的东西。一份「经验」文档指着一个已经改名的模块，
+#: 比没有这条经验更坏：读的人会去找它，然后按自己的猜测把它读通。
+DOC_GLOBS = ('docs/schema/*.md', 'docs/REQUIREMENTS.md', 'docs/LESSONS.md', 'README.md')
 
 #: 只有这些前缀才当「仓内路径」看。`stage0/clean_text.txt` 这类是**产物路径**，不在仓里。
 REPO_PREFIXES = ('tests/', 'contracts/', 'tools/', 'novel/', 'docs/')
