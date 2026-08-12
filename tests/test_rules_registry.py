@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_rules_registry.py —— 注册期那七条校验，逐条要有一个会红的反例。
+test_rules_registry.py —— 注册期那**八**条校验，逐条要有一个会红的反例。
 
 一条「据说会拦住 X」的校验，如果没有一个反例证明它真的会拦，
 它与「只写在注释里的约束」没有区别。
@@ -83,6 +83,73 @@ def test_a_directive_is_required_exactly_when_the_rule_feeds_back():
     # 两侧对齐就过（两种对齐各一个）
     Registry().register(_ok(**_FIX))
     Registry().register(_ok())
+
+
+# ── ⑧ `fix` 那条修复路由必须真跑得起来（F5-1）────────────────────────────────
+#
+# ⚠ 这一格存在的**全部理由**就是「有东西在查它」：原型那句「修法：…」是写在文案里的
+#   散文，而**拼错一个 flag 名不会有任何东西出声**（LESSONS 第 11 条）。
+#   下面四条各消灭一种「表里看着像能修、点下去修不了」。
+
+def _s2(**kw) -> Rule:
+    """一条 stage2 判据。⚠ `owner` 与 `requirement` 都要落在本层，否则先被 ②④ 拦下。"""
+    return _ok(stage='stage2', owner='stage2', requirement='R-3.2', repair='NONE', **kw)
+
+
+def test_a_fix_route_is_accepted_when_the_node_and_flag_both_exist():
+    """正例：`stage2.md` §5.1 里真实存在的那两条修法，注册得进去。
+
+    ⚠ **这一条是上面四条反例的「守卫的守卫」**：`_validate` ⑧ 要是写成恒抛，
+    下面每条 `pytest.raises` 都会绿，而真表一条也注册不进来。
+    """
+    reg = Registry()
+    reg.register(_s2(rule='r_fix_free', fix=('stage2.blueprint', '--migrate')))
+    reg.register(_s2(rule='r_fix_paid', fix=('stage2.global', '--purge-role')))
+    assert len(reg) == 2
+
+
+def test_a_fix_route_may_not_name_a_node_that_does_not_exist():
+    """节点名拼错 ⇒ 界面上那个「去修」按钮指到一个跑不起来的地址。"""
+    with pytest.raises(ValueError, match='不在 `NODES` 里'):
+        Registry().register(_s2(fix=('stage2.bluepirnt', '--migrate')))
+
+
+def test_a_fix_route_may_not_name_a_flag_the_node_does_not_accept():
+    """⭐ **这一条是本格最值钱的那个反例。**
+
+    flag 不在该节点的 `flags` 里 ⇒ `build_argv` 会当场拒收，
+    于是「这一条能 0 成本修」是一句**永远兑现不了**的承诺，而表里只看得见
+    一句「修法：…」。实例：`--revise` 是 stage5 的，`stage2.blueprint` 接不了它。
+    """
+    with pytest.raises(ValueError, match='不在 `NODES'):
+        Registry().register(_s2(fix=('stage2.blueprint', '--revise')))
+
+
+def test_a_fix_route_may_not_point_at_another_layer():
+    """指到别的层 ⇒ 报告让人去改一个**不产这份产物**的节点。"""
+    with pytest.raises(ValueError, match='属 stage5'):
+        Registry().register(_s2(fix=('stage5.write', '--dry-run')))
+
+
+def test_a_fix_route_needs_at_least_one_flag():
+    """只写节点名 = 「去跑一次默认路径」，而 stage2 的默认路径**要花钱**
+    ——那对一条声称 0 成本的修复路是假话。"""
+    with pytest.raises(ValueError, match='至少要'):
+        Registry().register(_s2(fix=('stage2.blueprint',)))
+
+
+def test_the_fix_route_is_what_makes_the_cost_colour_derivable():
+    """⭐⭐ **`fix` 的收益就是它能过 `is_paid`**，而散文过不了。
+
+    界面据此把「0 成本修」与「要再花一次钱」画成两个颜色。这一条钉住那两条
+    真实修法**确实**落在贵贱的两侧——它们要是一起变成付费（或一起免费），
+    §5.1 那一列就不再携带信息了。
+    """
+    from novel.orchestrator.nodes import is_paid
+    free = _s2(rule='r_c_free', fix=('stage2.blueprint', '--migrate'))
+    paid = _s2(rule='r_c_paid', fix=('stage2.global', '--purge-role'))
+    assert is_paid(free.fix[0], free.fix[1:]) is False
+    assert is_paid(paid.fix[0], paid.fix[1:]) is True
 
 
 def test_wordlist_rule_must_declare_its_baseline():

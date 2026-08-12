@@ -746,6 +746,14 @@ FREE_ENTRIES: Final = {
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
     '--apply-edit': '把人工改过的内容落成新的一轮',
+    # ⚠⚠ **这两条就是本表上方那段注释点名欠着的那两个**（F5-1 补）。
+    #   它们在原型的 `Web/jobs.py::FREE_FLAGS` 里确确实实是 0 成本
+    #   （`'n2_blueprint': (…, '--replay-cache', …)` · `'n2_global': ('--migrate', '--drop')`），
+    #   而**抓包那 36 条 `actions` 里没有它们** ⇒ `test_free_entries_covers_...`
+    #   从来没查过这一格，漏了两年也不会有任何东西出声。
+    # ⚠ 两个都**带值**（见 `VALUED_FLAGS`）：那是正交的另一个轴，不是重复登记。
+    '--drop': '人工裁决：删掉原文无据的 secret / relation，理由必填并落进 `_provenance.human_adjudicated`',
+    '--replay-cache': '拿一个已有的缓存 key 把某一章的响应重放回来——0 成本恢复路，不发新调用',
 }
 
 #: 原型里是 0 成本 **flag**、而在两层命名下**变成了别的东西**的那几个。
@@ -768,6 +776,16 @@ SUPERSEDED_FREE_ENTRIES: Final = {
 PAID_FLAGS: Final = {
     '--repair-surface-habits': 'stage3 表层习惯的定向返工——它要再调一次模型',
     '--revise': 'stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手',
+    # ⚠ 原型 `FREE_FLAGS['n2_global']` 那一行的注释明写着
+    #   「`--purge-role` 是一次真实调用，**不在这里**」——它是语义判官那条臂
+    #   （`ROLE_SPLIT_SYS`，2008 字），`role`/`fate` 双向重划分。
+    # ⚠ 它是判据 `role_leaks_fate`（盘上 2/3 本命中）**唯一的修复路**，
+    #   而那条路要再花一次钱 ⇒ 界面必须把它画成付费色。
+    # ⚠ 它**不进 `NodeSpec.paid_flags`**：那一列的定义是「能把一个 **0 成本节点**
+    #   变成付费的 flag」，而 `stage2.global` 默认路径本来就付费 ⇒ 那会是一格
+    #   永远不起作用的声明（`is_paid` 早在 `spec.paid` 那一步就判完了）。
+    #   同 `stage5.write` 的 `--revise`，理由见 `NODES` 里那一格上方的注释。
+    '--purge-role': 'stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型',
 }
 
 #: 重算时**只对本次新引入的错误入终态** —— 旧违约照报但不挡路。
@@ -835,6 +853,16 @@ VALUED_FLAGS: Final = {
     # （它写的就是本节点 `produces` 里那一份，只是少写几章 ⇒ 不登记就落到 `produces`，正确）。
     # 两条都与 `--pick` 逐条同形。
     '--chapters': '只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章',
+    # ⚠⚠ **理由必填折进值里，不另立一个 `--reason`。** 原型那边是两个 argparse 参数
+    #   （`--drop <ids>` + `--reason <理由>`，后者必填），而本仓**没有「一个 flag 要求
+    #   另一个 flag」的机制**——新造一个就是一条没有守卫的约束（漏传不报错）。
+    #   ⇒ 照 `--wontfix` 那个已有先例把两段折成一个值：人说得出的那部分写在值里，
+    #   `_provenance.human_adjudicated` 是它的落点（「人删掉过东西这件事必须留在报告里」）。
+    '--drop': '人工裁掉原文无据的条目：`<secret_xx|rel_xx>=<理由>`，理由必填',
+    # ⚠ 它**必须配 `--chapters` 指定单章**：缓存 key 只证明**一份单章** prompt/响应，
+    #   一次重放多章等于拿一个 key 去认领它没产过的东西（原型 `n2_blueprint.py:1406`
+    #   就是这么拒的）。这条约束的落点在本层的落盘路，不在本表。
+    '--replay-cache': '要重放的那次调用的缓存 key；必须配 `--chapters` 指定单章',
 }
 
 #: ⭐ 一次跑**会往盘上写什么**。空串 = 不写盘。
@@ -877,6 +905,15 @@ WRITE_EFFECTS: Final = {
     # ⇒ 不登记的后果是**方向反的**：`/api/enums` 会把它派生成「写 `stage5/review_{n}.json`」，
     # 而它一份验收报告都不产。同 `--names-only` 那一格的病，只是方向相反。
     '--wontfix': '把一条豁免记进 stage5/wontfix.json（**一份验收报告都不产**）',
+    # ── stage2 那两条 0 成本但**会写盘**的路（F5-1 补）──
+    # ⚠ 它们与上面 `--remeasure` / `--recheck` 那几条是同一类：**免费，但写盘**。
+    #   本表存在的全部理由就是这一类（原型那句「`FREE_FLAGS` 只管钱不管写」
+    #   一字不差地出现了 8 次，而它没有落点）。
+    '--drop': '把人工裁掉的 secret / relation 从产物里删掉，裁决理由写进 _provenance.human_adjudicated',
+    '--replay-cache': '把重放回来的那一章合并写回 stage2/chapter_blueprints.json',
+    # ⚠ **`--purge-role` 刻意不在本表里**，那不是漏登记：它写的就是本节点 `produces`
+    #   里那一份（`stage2/global_grounding.json`，只改 role/fate 两栏）
+    #   ⇒ 不登记即落到 `produces`，**正确**。同 `--pick` 那一格的理由。
 }
 
 
@@ -978,12 +1015,21 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=('stage1/main_text.json',
                                            'stage1/hook_copy.json',
                                            'stage1/partition_report.json')),
+    # ⚠ `--drop` / `--purge-role` 是 F5-1 补的，**而这一列是 `Rule.fix` 的取值面**：
+    #   `docs/schema/stage2.md` §5.1 那 24 条带修法的判据里，`global --drop` 与
+    #   `global --purge-role` 各占一条。少登记一个，`_validate` ⑧ 就把那条判据判红
+    #   ——那正是它该做的事（散文那条路上拼错 flag 名没有任何东西会出声）。
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
-                                 flags=('--migrate',),
+                                 flags=('--migrate', '--drop', '--purge-role'),
                                  produces=('stage2/global_grounding.json',)),
+    # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
+    #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
+    #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
+    # ⚠ `--replay-cache` 必须配 `--chapters`（缓存 key 只证明一份**单章** prompt/响应），
+    #   而「一个 flag 要求另一个 flag」本仓没有机制表达 ⇒ 那条约束落在本层的落盘路里。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
                                  flags=('--prompt-only', '--check-only', '--migrate',
-                                        '--apply-edit'),
+                                        '--apply-edit', '--chapters', '--replay-cache'),
                                  produces=('stage2/chapter_blueprints.json',)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
                                  flags=('--dry-run', '--check-only', '--measure-only',

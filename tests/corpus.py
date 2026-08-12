@@ -341,6 +341,21 @@ ADDED: dict[str, dict[str, Any]] = {
         #   但那一格该是 `契·码`。已登记，见 A3 的交接。
         '_provenance.setup_chapters_pruned': [],
     },
+    'stage2/chapter_blueprints.json': {
+        # ⚠⚠ **这三个键原型根本没有**（F5-1 立，`stage2.md` §3.2）：盘上 3/3 本零样本。
+        #   证据列标 `契·码`——「码」指的是本仓 F5-5 的产地，与上面那条
+        #   `setup_chapters_pruned` 是同一种处置。
+        # ⚠ 填**空列表**而不是 `None`：这三个键在契约上是**必填**的，
+        #   而「空列表」= 这一趟没改过任何字节、没救过、没失败过。
+        #   ⚠ 对 `verbatim_failures` 尤其要紧：它的语义是「**非空即失败态**」
+        #   ⇒ 空列表是「查过、没失败」，`None` 才是「不知道」。存量产物这一格
+        #   严格来说属于后者，但**载体不许它缺**（键不在会让整份加载不了），
+        #   而迁移填 `None` 会让「不知道」在下游同形于「没失败」——两害取其轻：
+        #   填空列表并在这里说清它是**迁移填的**，不是产地写的。
+        '_provenance.verbatim_rewrites': [],
+        '_provenance.verbatim_recovered': [],
+        '_provenance.verbatim_failures': [],
+    },
     'stage6/hook.json': {**_HOOK_ADDED,
                          **{f'{p}.{f}': COMPUTED
                             for p in _FINDING_PATHS_HOOK for f in _FINDING_FILL}},

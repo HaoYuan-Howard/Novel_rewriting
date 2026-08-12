@@ -611,6 +611,45 @@ class BlueprintProvenance(LlmProvenance):
     context: BlueprintContext
     char_refs: CharRefs
 
+    # ── ⭐ verbatim 回取的三笔账（F5-1 立，`stage2.md` §3.2）───────────────────
+    #
+    # 【它们把事实② 那张三档表里**唯一的「未解决」**那一格填上】
+    # 原文：verbatim 回取「改写不留任何产物痕迹，而它对应的判据在改写之后**恒真**」，
+    # 且 §2.4 记着「这份产物是不是失败态**目前只能靠遍历全部 hinge 去反推**」。
+    # 修法照 F4 给 `address_*` 立账的先例：**生产侧把「改了多少、改了什么」交出来，
+    # 校验器断言那份账而不再断言字段值。**
+    #
+    # 【为什么是三个键不是一个】判据 14：一个量纲一个口径。三者的**修法各不相同**，
+    # 合并之后报告就说不出该去修哪一个。
+    #
+    # ⚠ 三个键**盘上 3/3 本一份都没有**（原型根本没有它们）⇒ 已登记进
+    # `tests/corpus.py::ADDED['stage2/chapter_blueprints.json']`，否则那三本加载不了。
+    # 证据列因此是 `契·码` 而不是 `三源`、也不是裸 `契`：「码」指的是本仓 F5-5 的产地。
+
+    #: `(beat_id, 位置, 原值, 回取值)`。**精确回取**：锚点归一后命中，字节被换成原文的。
+    #: 出口：**逐条列出**（形态照 `address_surface_rewrites`）。
+    verbatim_rewrites: list[tuple[str, str, str, str]]
+
+    #: `(beat_id, 位置, 原锚点, 救回的片段, 重合度)`。**按最长公共子串救回来的**
+    #: （`novel/core/spans.py::_find_or_recover`，双门槛：绝对 ≥4 字 + 相对 ≥`HINGE_LCS_MIN`）。
+    #:
+    #: ⚠⚠ **它必须与上一个键分开**，与 F4-2 把 `split_by_speech_tag` 的放行单独留痕
+    #: 是同一条：「一个字都没动」与「救回来的」**不是同一件事**——
+    #: 后者**锚点本来就不是原文字节**。合成一个键，报告上那两种就同形了。
+    #: 出口：**断言计数 + 逐条列出**——判据 `anchor_not_verbatim` 断言的就是它。
+    verbatim_recovered: list[tuple[str, str, str, str, float]]
+
+    #: `(beat_id, 位置, 三种根因之一)`。**锚不到。[HARD] 非空即失败态。**
+    #:
+    #: ⚠ 它替掉今天那条「靠 `hinges[].text` 的**缺席**去反推失败态」——
+    #: 失败态从此有**正面**的落点。三种根因（锚点不在本章 / 本 beat 的 span 自己
+    #: 没定位成功 / 落在漏抓区）**修法各不相同**，所以要分开报。
+    #: ⚠ 非空时产地照旧入显式终态（原型 `report_verbatim_failures` 就是这么做的），
+    #: 但**账要先落盘**——原型那条 `sys.exit` 之后什么都没留下，而「显式终态」
+    #: 在多命令流水线里只等于「这一步红了」，**不等于「链路被挡住了」**（§2.4 已记）。
+    #: 出口：**断言计数 + 逐条列出**，按三种根因分开。
+    verbatim_failures: list[tuple[str, str, str]]
+
     #: 定向重生成过哪几章（累积）。盘上 2/3 本有。
     #: 出口：合并成一行「哪几章是定向重生成过的」。
     partial_regen_chapters: list[int] | None = None

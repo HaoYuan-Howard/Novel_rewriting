@@ -112,6 +112,25 @@ class Rule:
     #: 真有那句话就写进 `note` 当注释（原型 `dash_drift` 就是这么处理的）。
     directive: str = ''
 
+    #: **机器可读的修复路由**——「这一条要拿哪条跑法去修」。`(节点 id, flag…)`，
+    #: 如 `('stage2.blueprint', '--migrate')`。修不了 / 只能人改的留 `None`。
+    #:
+    #: 【为什么它不能是 `note` 里的一句散文】原型每条判据带的是结构化的
+    #: `{'kind': 'n2_blueprint', 'extra': ['--migrate']}`，理由原型自己写着：
+    #: 「文案里那句『修法：…』是给人读的；**界面要执行它，就必须有一份机器可读的同源表达**，
+    #: 否则只能去正则抠文案」。而散文那条路上**拼错一个 flag 名不会有任何东西出声**
+    #: （LESSONS 第 11 条）。
+    #:
+    #: 【它与 `directive` 是两件事，别合并】`directive` 是**发给写手的一句话**
+    #: （「你把这段改成…」），只有 `repair != 'NONE'` 的判据有；本字段是**一条要跑的命令**
+    #: （「拿 `--migrate` 重新定位一遍」），与花不花钱、进不进反哺都无关。
+    #: stage2 全表 `repair='NONE'` 而 24 条有 `fix`——两格在这一层完全不重叠。
+    #:
+    #: 【收益是它能过 `is_paid`】界面据此把「0 成本修」与「要再花一次钱」画成两个颜色：
+    #: `('stage2.blueprint', '--migrate')` 免费，`('stage2.global', '--purge-role')` 付费。
+    #: 那个判断走的是 `novel/orchestrator/nodes.py::is_paid`，**贵贱只有一处算**（`R-11.7`）。
+    fix: tuple[str, ...] | None = None
+
 
 @dataclass(frozen=True)
 class RetiredRule:
@@ -276,6 +295,39 @@ def _validate(r: Rule) -> None:
             f'{"有" if r.directive else "空"}。进反哺的必须写出「这一条要怎么改」，'
             f'不进的必须留空——一句永远发不出去的指令会被下一个人当成现役的'
         )
+
+    # ⑧ `fix` 指的必须是**真跑得起来的那条命令**。三道，各消灭一种故障：
+    #      · 节点名拼错   ⇒ 界面上那个「去修」按钮点下去是 404，而表里看不出来；
+    #      · flag 不在该节点的 `flags` 里 ⇒ `build_argv` 当场拒收，
+    #        于是「这一条能 0 成本修」是一句**永远兑现不了**的承诺；
+    #      · 指到别的层   ⇒ 报告把修复动作指到一个不产这份产物的节点上。
+    #    ⚠ 这一条正是 `fix` 存在的**全部理由**：写进 `note` 的散文没有任何东西在查它。
+    if r.fix is not None:
+        from contracts.invariants import NODES        # 局部导入：`invariants` 不许反向依赖本模块
+        if len(r.fix) < 2:
+            raise ValueError(
+                f'{r.rule}: fix={r.fix!r} 至少要 (节点, flag) 两格。'
+                f'只写节点名等于说「去跑一次默认路径」，而那对一条 0 成本修复路是假话'
+            )
+        node, *flags = r.fix
+        spec = NODES.get(node)
+        if spec is None:
+            raise ValueError(
+                f'{r.rule}: fix 指的节点 {node!r} 不在 `NODES` 里。'
+                f'界面上那个「去修」按钮会指到一个跑不起来的地址'
+            )
+        unknown = [f for f in flags if f not in spec.flags]
+        if unknown:
+            raise ValueError(
+                f'{r.rule}: fix={r.fix!r} 里的 {unknown} 不在 `NODES[{node!r}].flags` 里。'
+                f'`build_argv` 会当场拒收它 ⇒ 这条修复路**永远兑现不了**，'
+                f'而表里只看得见一句「修法：…」'
+            )
+        if spec.stage != r.stage:
+            raise ValueError(
+                f'{r.rule}: 判据产自 {r.stage}，而 fix 指向 {node!r}（属 {spec.stage}）。'
+                f'一条判据不许把修法指到别的层——那是让报告去改一个不产这份产物的节点'
+            )
 
 
 #: 全局注册表。各 stage 的判据在移植时 import 它并 `register(...)`。

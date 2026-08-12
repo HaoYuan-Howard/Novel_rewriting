@@ -182,8 +182,17 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
     #     取决于它挂在哪个节点上。挪节点不是零成本的改名。
     # ⚠ 65 → 70（2026-08-12，F6/F7 移植 stage0/stage1）：
     #   stage0.remove 的三个 flag、stage0.edit 的两个带值输入各增加一个公开动作。
-    assert len(paid_payload['actions']) == 70, (
-        f'actions 有 {len(paid_payload["actions"])} 条，期望 70 '
+    # ⚠ 70 → 74（2026-08-12，F5-1 给 stage2 立契约层）：**+4，两个节点各 +2**。
+    #   · `stage2.global`    += `--drop`（0 成本，人工裁决）· `--purge-role`（**付费**，语义判官臂）
+    #   · `stage2.blueprint` += `--chapters`（定向重生成）· `--replay-cache`（0 成本重放）
+    #   ⚠⚠ 这四格**不是补全癖**：它们是 `Rule.fix` 的取值面。`docs/schema/stage2.md`
+    #     §5.1 那 24 条带修法的判据里，**19 条**指着 `blueprint --chapters`，
+    #     另外三条分别指着 `global --purge-role` / `global --drop` / `global --migrate`
+    #     ⇒ 少登记一个，`contracts/rules.py::_validate` ⑧ 就在 F5-4 注册那一刻把它判红。
+    #   ⚠ `--drop` / `--replay-cache` 是本文件第一次遇到「**同时**是 0 成本入口
+    #     与带值参数」的一对（此前只有 `--apply-edit`）——两个轴正交，不是重复登记。
+    assert len(paid_payload['actions']) == 74, (
+        f'actions 有 {len(paid_payload["actions"])} 条，期望 74 '
         f'（每个节点的默认路径 + 每个 flag；多臂节点按臂分别计算）。'
         f'这个数**会随 `NODES` 改**——改动它是有意的就来改这个数')
 
