@@ -156,23 +156,62 @@ F5-2（`ffbc7c7`）给 `tests/test_core.py` 加了 5 条 ⇒ **该是 `1602 / 2`
 
 | 提交 | 内容 |
 |---|---|
-| `F5-1` | 🚧 **被堵** 契约层四格：`Rule.fix` + 注册期不变量 · 四个 flag 登记 · 三个 verbatim 记账键 · `corpus.py::ADDED`。⚠ 审计漏了三处，**不补会当场炸**：① `--chapters` 必须进 `NODES['stage2.blueprint'].flags`（§5.1 有 **19 条**判据的 `fix` 指着 `blueprint --chapters`，而它今天只挂在 `stage5.write` 上）② `--drop` / `--replay-cache` **都是带值 flag**（原型 `--drop <ids>` 配必填 `--reason`、`--replay-cache <KEY>` 且必须配 `--chapters`）⇒ 还要进 `VALUED_FLAGS` ③ `--reason` **不单独立 flag**，折进 `--drop` 的值形态，照 `--wontfix` 那个已有先例（本仓没有「一个 flag 要求另一个 flag」的机制）。⚠ `tests/test_api_enums.py` 那个 `len(actions)` 要 **+4** |
+| `F5-1` | ✅ **已落**（`6be3c2c`）契约层四格：`Rule.fix` + 注册期第 ⑧ 条 · 四个 flag 登记（`--drop` / `--replay-cache` / `--purge-role` / `--chapters`）· 三个 verbatim 记账键 · `corpus.py::ADDED`。⚠ 审计漏的三处已补：① `--chapters` 进 `NODES['stage2.blueprint'].flags`（§5.1 有 **19 条**判据的 `fix` 指着它）② `--drop` / `--replay-cache` **都带值** ⇒ 也进 `VALUED_FLAGS` ③ `--reason` 折进 `--drop` 的值形态（照 `--wontfix`），不单独立 flag。`actions` 70 → **74** |
 | `F5-2` | ✅ **已落**（`ffbc7c7`）`novel/core/spans.py` 的 `recover` 臂与 `HINGE_LCS_MIN` |
-| `F5-3` | 🚧 **被堵** 本层的 prompt 模块 —— 三条臂逐字节搬。groundwork 已探明，见下 |
-| `F5-4` | 本层的判据行文件 —— 75 条，**故意还不被 import**（照 F4-4） |
+| `F5-3` | ✅ **已落** 本层的 prompt 模块 —— 三条臂 + 三份结构提示。**与原型差三处**，全在 `narration` 那一段、全部由本仓契约逼出来（详见下） |
+| `F5-4` | 本层的判据行文件 —— 75 条，**故意还不被 import**（照 F4-4）。⚠ `Rule.fix` 的注册期第 ⑧ 条已经在等着：24 条带修法的判据里任何一条把节点或 flag 写歪，注册那一刻当场炸 |
 | `F5-5` | 模块 + 接线一次走完（照 F4-6）。⚠ **stage2 是最后一个未移植层** ⇒ 它一进 `PORTED_STAGES`，`STAGES − PORTED_STAGES` 就是空集，`NodeNotPorted` 在生产路径上再也触发不了。用户裁决（2026-08-12）：**退役它**（501 仍由 `RunModeNotImplemented` 可达，HTTP 状态面不变） |
 
-#### `F5-3` 的 groundwork（**已实测探明，别再推一遍**）
+#### `F5-3` 落了什么（**三条臂的 prompt，与原型差三处**）
 
-**① 取值器不用改一个字。** `tests/test_stage5_prompts.py` 那个受限求值器
-（`_Proto` / `_prototype` / `_want`）**原样就能算出 stage2 全部 7 个常量**，
-文件表换成 `Stage2/{stage2_common,n2_global,n2_blueprint}.py` 即可。实测渲染字数：
+> ## ⚠⚠ `R-3.8b` 那条「prompt 侧待补」是**假的**，已更正三处文档
+>
+> 原来记的是：「抽取 prompt 不但没说『第一拍要从章首起』，还明写『两条之间允许有空隙』；
+> 三本书 5 处漏抓全在章首」。**实况是 prompt 两句都写了**——「允许有空隙」那条 bullet
+> 的**下一条**就是「【但空隙只能在中间，两头不许留】」，明确点出第一条锚点就是本章第一句话、
+> 最后一条就是最后一句话，还带理由带例子。
+> 它是原型 **2026-08-08** 的 `b371244`（F-125，「三本新语料端到端暴露的 10 组问题落地修复」）
+> 补上的，**正为那 5 处章首漏抓**；而本仓记下这条经验是 **2026-08-12**，**晚四天**。
+> 错的形态是**只读到上一条 bullet 就停了**，而下一条正好推翻它。
+>
+> ⇒ **改正后的教训比原来那条强**：那 5 处漏抓**是在 prompt 已经明说之后发生的**
+> ⇒ 「把要求写进 prompt」**没有遵守率保证**，它不能替代守卫，只能与守卫并存。
+> ⇒ **别照旧措辞再往 prompt 里补一句**：那是一次没有收益的付费变更，
+> 还会让同一句话在那段文字里出现两处。
+>
+> 已改：`docs/LESSONS.md`（第 11 条那一族）· `docs/REQUIREMENTS.md` 的 `Q-6` 叙述与
+> `R-3.8b` 那一行（**改判 `结构`**，落点写死成 `novel/stages/stage2/prompts.py::BLUEPRINT_SYS`）·
+> `docs/schema/stage2.md` §5.6。⚠ `docs/schema/stage2.md` §2.3 **一直是对的**
+> （「两条之间允许有空隙…**但两头不许留**」）——契约那份没错，是经验那两份抄漂了。
+
+**与原型的三处分家**，全在 `BLUEPRINT_SYS` 的 `narration` 那一段，
+根因是 `contracts/schema/stage2.py::Narration` **裁撤了 `last_beat_id`**、
+并把 `grammatical_person` 换成了 `NARRATIVE_PERSON`：
+
+| # | 原型 | 本仓 | 不改的后果 |
+|---|---|---|---|
+| ① | 字段表里有 `last_beat_id` | 去掉 | 模型照着产出它 ⇒ `extra='forbid'` 把**整份响应**判废 ⇒ **再花一次钱** |
+| ② | `grammatical_person(first｜third_limited｜omniscient)` | `(first｜second｜third)` | 后两个取值已退役 ⇒ `Literal` 当场拒收，同样整份作废 |
+| ③ | 一整条 `· last_beat_id：…`（5 行）+ 分项那条里对它的引用 | 删掉 | 留着就是**教模型去产一个载体不收的字段** |
+
+⇒ **这三处是「不改就跑不通」，不是「顺手改得更好」**（判准是失败成本，同
+`contracts/schema/stage2.py` 文件头那条）。三处各由 `tests/test_stage2_prompts.py`
+**双向**钉住（本仓没有它 · **而原型有它**），另有一条把三处套回原型那一份、
+断言结果**完全相等**——顺带证明**别的地方一个字节都没动**。
+⚠ `BLUEPRINT_HINT` 也同批去掉了 `last_beat_id`：只删 system 不删提示（或反过来）
+是最糟的形态，那正是「一次付费产出白花」的形状。
+
+**取值器已抽成共用一份** `tests/proto_prompts.py`（照 `tests/legacy_names.py` 的先例，
+那份 docstring 记着「各抄一份的分家表现是**贵贱对账假绿**」）——
+stage5 那个文件改成 import 它，**16 条测试逐条不变**。
+
+**实测渲染字数**（求值器原样就能算出 stage2 全部 7 个常量，一个字都没改）：
 
 | 常量 | 字数 | 出处 |
 |---|---|---|
 | `RULES_V2` | **938** | `stage2_common.py:96`。`GLOBAL_SYS` / `BLUEPRINT_SYS` 共用前缀 ⇒ **单独一格搬、单独钉一次**（照 stage5 逐段钉共用片段的理由：合起来那条对不上时，逐段这一条才说得出**是哪一段**漂了） |
 | `GLOBAL_SYS` | **8682** | `n2_global.py:43` = `RULES_V2 + fill(…)` |
-| `BLUEPRINT_SYS` | **7448** | `n2_blueprint.py:89` = `RULES_V2 + fill(…)` |
+| `BLUEPRINT_SYS` | **7448** → 本仓 **7181** | `n2_blueprint.py:89` = `RULES_V2 + fill(…)`。差的 **267** 就是上面那三处 |
 | `ROLE_SPLIT_SYS` | **2008** | `n2_global.py:435` = `fill(…)`，**无** `RULES_V2` 前缀 |
 | `GLOBAL_HINT` / `BLUEPRINT_HINT` / `ROLE_SPLIT_HINT` | 1028 / 531 / 65 | `:179` / `:224` / `:454`（按 `ensure_ascii=False`） |
 
@@ -188,30 +227,23 @@ F5-2（`ffbc7c7`）给 `tests/test_core.py` 加了 5 条 ⇒ **该是 `1602 / 2`
 | `$NAME_DISTINCT`（global） | `NAME_DISTINCT` | ✅ `NAME_DISTINCTIVENESS`（**名字不同、取值相同**） |
 | `$CONTEXTS`（global） | `ADDRESS_CONTEXTS` | ✅ `ADDRESS_CONTEXT`（同上） |
 | `$BY_SPECIAL`（global） | `ADDRESS_BY_SPECIAL = ['narration','public']` | ✅ 由 `ADDRESS_BY` **减掉 `char_id`** 派生，别手抄第二份 |
-| `$PRONOUNS`（global） | `BARE_PRONOUNS = ['我','你','他','她','它','咱']` | ⚠ **本仓没有，要新立在 `contracts/invariants.py`**——它的第二个消费方是判据 `address_bare_pronoun` / `address_has_pronoun` / `present_names_pronoun`（F5-4）。**这一格就是 F5-3 被 `contracts/invariants.py` 堵住的原因** |
-| `$CHANGE_TYPES`（global） | `CHANGE_TYPES_ENUM = 'stable\|development\|revelation\|deterioration\|reversal\|…'` | ⚠ **本仓没有**。⚠⚠ **末尾那个 `…` 是语义的一部分**（`stage2.md` §1.6 明写）⇒ 它是**开放枚举，不许做成 `Literal`**，只能是一个字符串常量 |
-| `$ROLE_FATE`（global **与** role_split 都用） | `ROLE_FATE_RULE`（约 1.6k 字，压着六条实测反例） | **一个落点两处引用**——两条臂读同一份，各抄一份就是下一次漂移的源头 |
+| `$PRONOUNS`（global） | `BARE_PRONOUNS = ['我','你','他','她','它','咱']` | ✅ F5-3 新立在 `contracts/invariants.py`——它有**三个**消费方（本块 · 判据 `address_bare_pronoun`/`address_has_pronoun` · 度量 `present_names_pronoun`），所以它必须在契约层而不是 prompt 里 |
+| `$CHANGE_TYPES`（global） | `CHANGE_TYPES_ENUM` | ✅ F5-3 新立。⚠⚠ **末尾那个 `…` 是语义的一部分**（`stage2.md` §1.6 明写）⇒ 它是**开放枚举**，在 invariants 里就是一整串字符串，**不许做成 `Literal`、也不许拆成元组再 join**（拆开就把「还可以有别的」丢了，而补漏一个 `…` 不会有任何东西出声） |
+| `$ROLE_FATE`（global **与** role_split 都用） | `ROLE_FATE_RULE`（1527 字，压着六条实测反例） | 落点 `novel/stages/stage2/prompts.py`，**一个落点两处引用**。⚠ **刻意不进 `ENUM_BLOCKS`**：它是一段 prompt 正文不是枚举，把某一层的内容装进 `novel/llm/` 正是分层守卫要拦的 ⇒ 由两条臂各自作为 kwarg 传进 `fill()`。那一格在 `DEFERRED_BLOCKS` 里已改成**终态**说明 |
+
+⚠ 前两个此前挂在 `novel/llm/prompts.py::DEFERRED_BLOCKS` 里（各带一句「为什么现在给不了」），
+F5-3 兑现后移进 `ENUM_BLOCKS`。**占位符全账仍是 20**（三张表加起来），
+那个数的意义是「别自己发明原型没有的占位符」——所以人称那三个字面**照原型一样写死在模板里**，
+不给它立一个 `$PERSON`，另配一条测试把它钉到 `NARRATIVE_PERSON` 上。
 
 **③ `_legacy` 的同名并存比 F4-5 那次更深。** `_legacy/n2_semantic.py` 里
 **同时**有 `BLUEPRINT_SYS`（`:252`）**与** `BLUEPRINT_HINT`（`:274`），
 与现役 `n2_blueprint.py` 的 `:89` / `:224` **同名**（F4-5 那次是**改名**：
 `N5_SYS` → `DEEP_SYS`，这次是同名并存）。而取值器那张文件表的语义是
 **「先出现的赢」**——把 `_legacy/` 放进去就会静默拿到旧世代（它拼的是 `RULES` v1
-不是 `RULES_V2`）。⇒ 文件表**只列现役三份**，并配一条断言
-「拿到的那一份带 `RULES_V2` 前缀」把两代分开。
-
-**④ 唯一一处不许逐字搬 —— `R-3.8b`。** `BLUEPRINT_SYS` 通篇没有「第一拍要从章首起」，
-**还明写着「两条之间允许有空隙」**，而三本 **5 处漏抓全在章首、0 在章尾**。
-⇒ F5-3 要在它里面**插一句**，逐字节测试写成「**除这一处外与原型逐字相同**」
-并**同时断言原型那一份里没有这句话**（照 `test_the_shallow_arm_still_has_no_layer_gloss`
-那两个「有意留着的洞」的形态），同批把 `R-3.8b` 那行改判 `结构`
-——它是三行待改判里**唯一**落点在 prompt 上的，`prompts.py` 一建出来就能写死。
-⚠ 散文里**不许出现那七个记号字面**（「谁在查」是子串匹配，F5-0 已被绊过一次）。
-
-**⑤ 求值器该不该抽成共用一份。** 它今天只长在 `tests/test_stage5_prompts.py` 里，
-而 F5-3 是第二个消费方。照 `tests/legacy_names.py` 的先例
-（那份的 docstring 记着「各抄一份的分家表现是**贵贱对账假绿**」）
-⇒ **抽进一个 `tests/` 下的共用模块**，别复制第二份 70 行的 AST 求值器。
+不是 `RULES_V2`）。⇒ 文件表**只列现役三份**，并配了
+`test_we_got_the_live_generation_not_the_legacy_one`：断言两条 SYS 都以 `RULES_V2` 开头、
+且 `RULES` 在现役三份里**取不到**（求值器抛 `KeyError`）。
 
 #### ⚠ stage2 自己欠着的（登记，**不是**验过了）
 

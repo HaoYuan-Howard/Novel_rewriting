@@ -27,9 +27,10 @@ from typing import Any, Final
 from pydantic import BaseModel
 
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, BEAT_MIN_CHARS, BEAT_NATURAL_MAX, HINGE_KINDS, INVENT_ALLOW,
-    INVENT_FORBID, INVENT_PRINCIPLE, LOCKED_OP, NAME_DISTINCTIVENESS, OP_BAND, STYLE_WORDS,
-    TIME_LAYERS, VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
+    ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS, BEAT_MIN_CHARS, BEAT_NATURAL_MAX,
+    CHANGE_TYPES_ENUM, HINGE_KINDS, INVENT_ALLOW, INVENT_FORBID, INVENT_PRINCIPLE,
+    LOCKED_OP, NAME_DISTINCTIVENESS, OP_BAND, STYLE_WORDS, TIME_LAYERS,
+    VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +57,16 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     'NAME_DISTINCT': '|'.join(NAME_DISTINCTIVENESS),
     'CONTEXTS': '／'.join(f'`"{c}"`' for c in ADDRESS_CONTEXT),
     'BY_SPECIAL': '／'.join(f'`"{b}"`' for b in _BY_SPECIAL),
+    # ⚠ 这两个是 F5-3 兑现的（此前挂在 `DEFERRED_BLOCKS` 里，各带一句「为什么现在给不了」）：
+    #   · `PRONOUNS` 等的是 `BARE_PRONOUNS` 进 invariants —— 它有**三个**消费方
+    #     （本块 · 判据 `address_bare_pronoun`/`address_has_pronoun` · 度量
+    #     `present_names_pronoun`），所以它必须在契约层而不是 prompt 里。
+    #   · `CHANGE_TYPES` 是**开放**枚举，末尾那个 `…` 是语义的一部分 ⇒ 它在 invariants
+    #     里就是一整串字符串（`CHANGE_TYPES_ENUM`），不是元组 join 出来的。
+    #     这也是它当初「不该与闭合枚举同表」那句话的真正含义：**渲染方式不同**，
+    #     而不是不该发下去。
+    'PRONOUNS': '／'.join(f'「{p}」' for p in BARE_PRONOUNS),
+    'CHANGE_TYPES': CHANGE_TYPES_ENUM,
     # stage4 计划（原型 `Stage4/n4_plan.py:251-259`）
     # ⚠ `BANDS` 只发**锁定档**那一格：`op` 那一族已整族裁掉（一个常量伪装成 artifact 字段），
     #   「篇幅方式」这条信息现在从 `LOCKED_OP` 取常量，不再按章查表。
@@ -86,11 +97,15 @@ DEFERRED_BLOCKS: Final[dict[str, str]] = {
         '而那是 **prompt 正文**，属移植期、要逐字搬。'
         '⚠ `HOOK_APPROACHES` 已经在 invariants 里了，缺的只是描述那一半；'
         '搬的时候两半必须一起进这张表，别让描述留在 stage6 的模块里当第二份落点'),
-    'PRONOUNS': 'stage2。`BARE_PRONOUNS`（我/你/他/她/它/咱）还没进 invariants——stage2 移植时一起进',
-    'CHANGE_TYPES': (
-        'stage2。`arc_tracks[].change_type` 是**开放**枚举（`stage2.md` §1.6 明写'
-        '「末尾的 `…` 是语义的一部分」）⇒ 它不许做成 `Literal`，也就不该与闭合枚举同表'),
-    'ROLE_FATE': 'stage2 的角色拆分规则，是一段 **prompt 正文**不是枚举，属移植期',
+    # ⚠ `PRONOUNS` / `CHANGE_TYPES` 已由 F5-3 兑现，移进 `ENUM_BLOCKS`（见那两行的注释）。
+    #: ⚠⚠ **`ROLE_FATE` 留在这里是终态，不是欠账**：它是一段 1527 字的 **prompt 正文**
+    #: （`role`/`fate` 怎么划分，压着六条实测反例），不是一个枚举的渲染
+    #: ⇒ 它的唯一落点在 `novel/stages/stage2/prompts.py::ROLE_FATE_RULE`，
+    #: 由那两条臂各自作为 kwarg 传进 `fill()`。
+    #: 把一段 prompt 正文搬进本表，等于让 `novel/llm/` 这一层装 stage2 的内容
+    #: ——`tests/test_layering.py` 那条分层守卫要的正是这个不许。
+    'ROLE_FATE': 'stage2 的角色拆分规则，是一段 **prompt 正文**不是枚举 ⇒ 唯一落点在那一层的'
+                 ' prompt 模块里，由两条臂各自传进 `fill()`。**本表不收它，这是终态**',
 }
 
 #: 原型有、而**已经退役**的占位符（`Q-8`：退役而不删，且必须带标注）。

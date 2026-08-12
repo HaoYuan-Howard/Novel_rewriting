@@ -8,122 +8,24 @@ test_stage5_prompts.py —— **stage5 两条臂的 system 与原型逐字节相
 而被拼进去的片段自己又是 `fill()` / `'\\n'.join([...])` 的结果。
 ⇒ `ast.literal_eval` 取不到它们，`_prototype_const` 那种取常量的写法在这里不够用。
 
-【为什么不直接 import 原型模块】`n5_write.py` 会拉进 3216 行的 `stage5_common`，
-那里面有网络客户端与盘上路径。⇒ 用一个**受限求值器**在 AST 上算：
-只认常量 / 名字 / 字符串加法 / `join` / `fill` / 生成式，别的当场炸。
-⚠⚠ **求值只用原型侧的值**（`INVENT_*` / `STYLE_WORDS` / `LAYER_*` 都从原型源码取），
-不碰本仓的 `contracts.invariants`——否则这条测试就变成拿本仓跟本仓自己比，恒绿。
+⚠ 那个受限求值器**已抽进 `tests/proto_prompts.py`**（F5-3 起 stage2 是第二个消费方），
+理由与「为什么不直接 import 原型模块」都写在那份文件的 docstring 里。
 """
 from __future__ import annotations
 
-import ast
 import hashlib
-from pathlib import Path
-from string import Template
 
 import pytest
 
 from novel.stages.stage5 import prompts
-
-_PROTO = (Path(__file__).resolve().parent.parent.parent
-          / 'Novel_refactoring' / 'Rapid_Prototyping')
+from tests.proto_prompts import PROTO as _PROTO, wanter
 
 #: 求值时要扫的原型文件。⚠ 顺序即优先级：**先出现的赢**，
-#: 而四份文件里没有重名的模块级常量（重名会让这条测试拿错一份而不出声）。
+#: 而五份文件里没有重名的模块级常量（重名会让这条测试拿错一份而不出声）。
 _FILES = ('Stage5/stage5_common.py', 'Stage5/n5_write.py', 'Stage5/n6_write.py',
           'Stage4/n4_plan.py', 'Stage2/stage2_common.py')
 
-
-class _Proto:
-    """原型模块级常量的**受限求值器**。认不出的语法当场炸，不猜。"""
-
-    def __init__(self, assigns: dict[str, ast.expr]) -> None:
-        self.a = assigns
-
-    def bind(self, target: ast.expr, item: object) -> None:
-        if isinstance(target, ast.Name):
-            self.a[target.id] = ast.Constant(value=item)
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for sub, val in zip(target.elts, item):        # type: ignore[call-overload]
-                self.bind(sub, val)
-        else:
-            raise TypeError(f'认不出的循环变量：{ast.dump(target)[:80]}')
-
-    def ev(self, node: ast.expr):                          # noqa: C901 —— 一条分支一种语法
-        if isinstance(node, ast.Constant):
-            return node.value
-        if isinstance(node, ast.Name):
-            return self.ev(self.a[node.id])
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            return self.ev(node.left) + self.ev(node.right)
-        if isinstance(node, (ast.Tuple, ast.List)):
-            return [self.ev(e) for e in node.elts]
-        if isinstance(node, ast.Dict):
-            return {self.ev(k): self.ev(v) for k, v in zip(node.keys, node.values)}
-        if isinstance(node, ast.Subscript):
-            return self.ev(node.value)[self.ev(node.slice)]
-        if isinstance(node, ast.JoinedStr):
-            out = ''
-            for v in node.values:
-                if isinstance(v, ast.Constant):
-                    out += v.value
-                else:
-                    out += str(self.ev(v.value))           # type: ignore[attr-defined]
-            return out
-        if isinstance(node, (ast.GeneratorExp, ast.ListComp, ast.DictComp)):
-            gen = node.generators[0]
-            src, out = self.ev(gen.iter), ([], {})[isinstance(node, ast.DictComp)]
-            for item in src:                               # type: ignore[union-attr]
-                self.bind(gen.target, item)
-                if isinstance(node, ast.DictComp):
-                    out[self.ev(node.key)] = self.ev(node.value)     # type: ignore[index]
-                else:
-                    out.append(self.ev(node.elt))          # type: ignore[union-attr]
-            return out
-        if isinstance(node, ast.Call):
-            return self._call(node)
-        raise TypeError(f'受限求值器认不出：{ast.dump(node)[:120]}')
-
-    def _call(self, node: ast.Call):
-        fn = node.func
-        if isinstance(fn, ast.Name) and fn.id == 'fill':
-            # 原型的 `fill` 就是 `string.Template.substitute`（`Stage2/stage2_common.py:29`）。
-            return Template(self.ev(node.args[0])).substitute(
-                **{k.arg: self.ev(k.value) for k in node.keywords})     # type: ignore[arg-type]
-        if isinstance(fn, ast.Name) and fn.id == '_hinge_heading':
-            k = self.ev(node.args[0])
-            return self.ev(self.a['HINGE_LABEL_PARTS'])[k][0].replace('【', '').replace('】', '')
-        if isinstance(fn, ast.Attribute):
-            recv = self.ev(fn.value)
-            if fn.attr == 'join':
-                return recv.join(self.ev(node.args[0]))
-            if fn.attr == 'items':
-                return list(recv.items())
-            if fn.attr == 'replace':
-                return recv.replace(self.ev(node.args[0]), self.ev(node.args[1]))
-        raise TypeError(f'受限求值器不认这个调用：{ast.dump(node)[:120]}')
-
-
-def _prototype(name: str) -> str | None:
-    """原型那个常量**渲染之后**的字节。原型仓不在旁边 ⇒ `None`。"""
-    paths = [_PROTO / rel for rel in _FILES]
-    if not all(p.exists() for p in paths):
-        return None
-    assigns: dict[str, ast.expr] = {}
-    for p in paths:
-        for node in ast.parse(p.read_text(encoding='utf-8')).body:
-            if isinstance(node, ast.Assign):
-                for t in node.targets:
-                    if isinstance(t, ast.Name) and t.id not in assigns:
-                        assigns[t.id] = node.value
-    return _Proto(assigns).ev(assigns[name])
-
-
-def _want(name: str) -> str:
-    got = _prototype(name)
-    if got is None:
-        pytest.skip(f'原型仓不在 {_PROTO} —— 本条**没在查**，不是「查过一致」')
-    return got
+_want = wanter(_FILES)
 
 
 # ── 守卫的守卫：求值器本身要真的算出了东西 ────────────────────────────────────
