@@ -20,10 +20,12 @@ import glob
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from contracts.invariants import BOOK_BAND, DEPTH_MODES, DRAFT_BAND
 from contracts.schema.stage5 import Chapter, DraftConsumed, JudgedDraft
+from novel.core.bands import bands
+from novel.core.naming import KINSHIP
 from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
     quote_pair,
@@ -292,3 +294,140 @@ def src_quote_count(entry: dict[str, Any], source_text: dict[int, str]) -> int |
     """
     src = chapter_source(entry, source_text)
     return quote_count(src) if src else None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 五、一本书的上游打包 —— **下发面与判据读同一份**
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class Book:
+    """四份上游 + 从它们算出来的**书级基线**。下发面（`prompts`）与判据（`checks`）共用。
+
+    ⚠⚠ **书级基线只算一次，缓存在这里**（`_cache`）。这不是性能优化，是判据 25：
+    「这本书平均一段多少字 / 破折号多密」在下发面与判据两侧必须是**同一个数**——
+    写手按 A 写、校验按 B 判，谁也不会出声。
+
+    ⚠ **基线一律取【书级】而不是【同章源章】**：同章配对会让恒等基线**退化成恒真**
+    ——`identity` 那一路把源章原文当成一份成稿跑同一套判据，若判据是「与自己的源章比」，
+    源章 vs 源章恒等于 1.00、永不触发，于是它在 `baselines_identity` 里恒为 0/N，
+    被读成「判据干净」——**一盏保证会亮的绿灯**，而那正是唯一能逐书判定判别力的机制。
+    """
+
+    title: str
+    ctx: dict[str, Any]
+    style: dict[str, Any]
+    source_text: dict[int, str]
+    #: stage2 的**全量** secrets（含一次都没下发过的）。⚠ **收窄下发面是修复，收窄检测器是削弱**：
+    #: 从各章 `facts.secrets` 取并集会让一条全书从未下发的 secret 的泄漏检查**永远不执行**，
+    #: 而判据照常输出一个「没报违规」。
+    secrets: list[dict[str, Any]]
+    _cache: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def chapters(self) -> dict[int, dict[str, Any]]:
+        """`{output_ordinal: 章条目}`。"""
+        if 'chapters' not in self._cache:
+            self._cache['chapters'] = {int(c['output_ordinal']): c
+                                       for c in (self.ctx.get('chapters') or [])}
+        return self._cache['chapters']
+
+    @property
+    def characters(self) -> dict[str, dict[str, Any]]:
+        """书级人物表。⚠ **下发给写手的是章级那一份**（`entry['characters']`）——
+        书级这一份只给确定性代码当名表用。"""
+        return (self.ctx.get('world_facts') or {}).get('characters') or {}
+
+    @property
+    def measurable(self) -> dict[str, Any]:
+        return (self.style.get('measurable') or {}).get('body') or {}
+
+    @property
+    def band_of(self) -> dict[str, str]:
+        """这本书自己的形态档位（章篇幅 / 句子形态 / 段落形态 …）。
+
+        ⚠ **prompt 里一律给档位词不给数值**——写手要的是「极短段/一句一段」这种可执行的
+        形态；给原始数字既没用又会诱导它去凑数。
+        ⚠ **不许在 prompt 里硬编码任何一本书的特征**：同样是网文，本语料里章长中位数
+        从 425 到 1348 不等，写死「短章体」会把长章书直接压垮。
+        """
+        if 'bands' not in self._cache:
+            from contracts.schema.stage3 import Measurable
+            meas = self.style.get('measurable')
+            self._cache['bands'] = bands(Measurable.model_validate(meas)) if meas else {}
+        return self._cache['bands']
+
+    @property
+    def sep_chars(self) -> float | None:
+        """段落分隔符的平均字符开销（段落归一的基准）。缺 ⇒ `None`（段落归一那一步不跑）。
+
+        ⚠ 它是 `measurable.body.paragraph_sep_chars` 那个**平均值**，而
+        `core/bands.py::sep_band_of_text` 明写「别走这个平均值，它段数越少偏得越低」。
+        本层照旧走它，理由是**口径必须与存量成稿一致**：盘上 31 份成稿是拿这个数归一过的，
+        换一把尺子会让 `--recheck` 把 31 章全部改写一遍，而那是一次 0 成本操作改付费产物的字节。
+        ⚠ 那条 off-by-one 的触发条件是「段数 ≤ 3」，而正文章节段数都在几十以上 ⇒ 本层不咬人；
+        咬人的是**文案**（本来就短），所以 stage6 才必须绕开它。
+        """
+        return self.measurable.get('paragraph_sep_chars')
+
+    @property
+    def quote_style(self) -> tuple[str, str] | None:
+        """本书成稿应归一到哪种引号体；判不了返回 `None`（**不猜**）。"""
+        if 'quote_style' not in self._cache:
+            self._cache['quote_style'] = target_quote_style(
+                self.style.get('measurable'), ''.join(self.source_text.values()))
+        return self._cache['quote_style']
+
+    @property
+    def names(self) -> frozenset[str]:
+        """全书主要人物的 `display_name`（`names_absent` 用）。
+
+        ⚠ 用 `display_name` 不用 `canonical`：后者为消重名带了区分词
+        （`小宫女(打翻茶盏)`），那是内部唯一键、**从不下发**；写手手里只有 `display_name`。
+        """
+        if 'names' not in self._cache:
+            self._cache['names'] = frozenset(
+                n for c in self.characters.values()
+                if (n := c.get('display_name')) and c.get('name_distinctiveness') != 'common')
+        return self._cache['names']
+
+    @property
+    def name_stems(self) -> frozenset[str]:
+        """本书的**名字用字池**——`invented_name` 的左锚。
+
+        ⚠ 姓氏池得从书里长出来，**不能写死**：写死一张百家姓就是「关键词表」，
+        换一本书（现代言情 / 西幻）立刻失效。
+        """
+        if 'stems' not in self._cache:
+            self._cache['stems'] = frozenset(
+                n[0] for c in self.characters.values()
+                for n in [c.get('display_name') or '']
+                if 2 <= len(n) <= 3 and c.get('name_distinctiveness') in ('high', 'medium')
+                and not KINSHIP.match(n))
+        return self._cache['stems']
+
+    @property
+    def cue_rate(self) -> float | None:
+        """全书源文里「冒号收尾段 → 下一段以引号开头」的占比（提示语排版惯例）。"""
+        if 'cue' not in self._cache:
+            tot = hit = 0
+            for s in self.source_text.values():
+                paras = [ln.strip() for ln in (s or '').split('\n\n') if ln.strip()]
+                for i, p in enumerate(paras):
+                    if p.rstrip().endswith(('：', ':')):
+                        tot += 1
+                        if i + 1 < len(paras) and paras[i + 1][:1] in ('“', '「', '『', '"'):
+                            hit += 1
+            self._cache['cue'] = (hit / tot) if tot else None
+        return self._cache['cue']
+
+    def baseline(self, key: str, fn: Callable[[str], float]) -> float | None:
+        """书级基线 = 把**全书源文**当成一篇跑 `fn`。源文缺失 ⇒ `None`（判不了，不猜）。
+
+        **所有「贴着本书」类探针的唯一基线落点。**
+        """
+        if not self.source_text:
+            return None
+        if key not in self._cache:
+            self._cache[key] = fn(''.join(self.source_text.values()))
+        return self._cache[key]

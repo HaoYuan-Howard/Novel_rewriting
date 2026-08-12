@@ -20,9 +20,10 @@ from __future__ import annotations
 
 from contracts.judges import stage3  # noqa: F401  —— import 即注册，副作用就是它的全部意义
 from contracts.judges import stage4  # noqa: F401
+from contracts.judges import stage5  # noqa: F401
 from contracts.judges import stage6  # noqa: F401
 from contracts.judges import stage7  # noqa: F401
 
 #: 已经写了判据行的 stage。**必须与 `contracts.rules.PORTED_STAGES` 相等**，
 #: 由 `tests/test_rules_registry.py::test_registry_covers_exactly_the_ported_stages` 两侧夹死。
-LOADED = ('stage3', 'stage4', 'stage6', 'stage7')
+LOADED = ('stage3', 'stage4', 'stage5', 'stage6', 'stage7')

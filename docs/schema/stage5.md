@@ -34,6 +34,15 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > 两者曾被拼成同一个串传下去，于是 `dialogue_halved`（判 `mode == 'shallow'`）
 > 在每一条 tag 臂上**恒假**——闸门没有报错，它是**静默地不再存在**。
 >
+> ### ⚠⚠ 本文提到 `--tag` / `--batch` 的四处，**都是原型的实验设施，F4 没有移植**
+>
+> | 它 | 为什么不移植 | 后果 |
+> |---|---|---|
+> | **`--tag`**（A/B 目录后缀） | `Review.tag` 已在 A 期裁撤（全仓 0 读者、盘上 12/12 恒 `''`），D 期定的 flag 面上也没有它 | 臂在本仓是 `RunContext.mode` 一格，**结构上不可能再与 tag 拼成一个串** ⇒ 上面那次事故在本仓复现不了 |
+> | **`--batch N`** | 不在 `NODES['stage5.write'].flags` 里。它只用于 A/B（默认 1） | 本层**没有任何结构化调用点** ⇒ §七末尾那条「`write_batch` 少了 `require=('chapters',)`」**随之失去对象**，登记而不修 |
+>
+> ⇒ 读下文时把 `<tag>` 一律当空串、把 `--batch` 当不存在。**不要照着它去补一个本仓没有的入口。**
+>
 > ### ② 判据 vs 载体的分界线在本层**几乎全部倒向判据**——因为拒收的代价是一整章
 >
 > 照 `stage4.md` §四立的那条规矩（**按失败成本划，不是按「类型表达得了吗」划**）：
@@ -593,7 +602,9 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 | `R-8.2` | `载体` | `Finding` 的两条后置条件（`owner is None` ⇔ 非结论 · `actionable ⇒ owner=='stage5'`） |
 | `R-8.3` | `载体` | `Finding.evidence_key` 由 `evidence` 现算并断言 |
 | `R-8.6` | `结构` | `contracts/rules.py::_validate` ③④：准入收成**一个字段的三个取值**之后，「进且只进一张桶」结构上不可能分不干净（原型那两张 dict 要另配一道断言） |
-| `R-8.4` / `R-8.5` / `R-8.7b` | `结构` | 落点在本层实现里，**与模块同批改**（形态照 F3-0 对 `R-6.5`/`R-6.6` 的处置） |
+| `R-8.4` | `结构` | `novel/stages/stage5/review.py::_converge`（只在**正文**指纹变了时才推进计数） |
+| `R-8.5` | `结构` | `novel/stages/stage5/write.py::revise_targets` 的第四道筛子（`STOP_REWRITE_AFTER`） |
+| `R-8.7b` | `结构` | `novel/stages/stage5/review.py::mark_wontfix` + `::_apply_wontfix`（查不到 ⇒ 显式终态；豁免只降 `actionable`） |
 | `R-8.7` | `载体` | `WontFix` 的 `why` 最小长度 + 键↔条目一致性 |
 | `R-8.8` | **`待建`** | `INBOX_KIND` 六个取值今天只有 `invalid` 有消费方，**聚合本身一行都没有** |
 | `R-8.9` | `结构` | `contracts/rules.py::_validate` ⑤：`wordlist` 不填 `baseline` 当场拒绝注册 |

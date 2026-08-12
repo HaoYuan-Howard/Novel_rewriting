@@ -63,7 +63,22 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
         AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
         AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
     ),
-    'stage5': (),
+    # ⚠⚠ **这三个键就是被裁掉的 `mech` 块换的落点**（`stage5.md` §1.1）：原型把归一链的
+    #    账落进**每一份成稿**，而它全仓 **0 个读者、0 个报告出口**，盘上 31/31 四项全 0。
+    #    它记的是「这一次归一改了多少」——那是**一次运行的读数**，不是产物的属性；
+    #    记在产物里而没有出口，正是它 0 读者的根因。
+    # ⚠ 而 `mech.quote_problems` **不在这三格里**：它根本不是记账，**是一条结论**
+    #    （「引号配对异常、未归一、留着交人工」），已升成判据 `quote_unbalanced`。
+    #    把一条结论塞进记账块，就是它既没有出口、也没有守卫的原因。
+    # ⚠ **刻意不声明 `revalidated` / `gates_skipped`**：前者由 `promoted()` 写进
+    #    `_provenance` 而本层的报告按**这一次跑了什么**报（判据那 47 行由验收相报）；
+    #    后者本层一条都不会跳（判据全是确定性的，没有「缺料所以没跑」那一支）。
+    #    声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
+    'stage5': (
+        AccountingSpec('punct_fixed', '这一次标点归一改了多少字符？'),
+        AccountingSpec('quotes_fixed', '这一次引号体归一改了多少字符？'),
+        AccountingSpec('paras_fixed', '这一次有几章的段落分隔被归一改过？'),
+    ),
     # ⚠ `params` 是**原型完全没有**的键（`stage6.md` 事实④）：本层是付费节点，
     #    而换了模型、换了 `--max-tokens`，产物里没有任何一处说得出来。
     'stage6': (

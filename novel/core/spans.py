@@ -27,7 +27,8 @@ spans.py —— 把 `beat.span` 的首尾锚点在原文里**确定性定位**�
 开着，校验器一律不开**——理由原文照抄：「否则『能定位』会把『锚点不是原文字节』
 这件事盖掉」。stage4 这一侧**只读**，一个消费方都没有。
 ⇒ 今天建它就是一条**零消费方、零测试**的分支（判据 32 的抢跑）。F5 移植 stage2 的落盘路时，
-连同 `_lcs` 与 `HINGE_LCS_MIN` 一起进来。
+`recover` 与 `HINGE_LCS_MIN` 一起进来。
+⚠ 而 `lcs` 本身**已经进来了**（F4）：stage5 的 `must_appear_missing` 是它的第一个消费方。
 """
 from __future__ import annotations
 
@@ -62,6 +63,31 @@ def content_index(text: str) -> tuple[str, list[int]]:
 def content_only(s: str | None) -> str:
     """只留内容字符。**需要同口径比对的地方一律走它，别各写一份。**"""
     return ''.join(CONTENT.findall(s or ''))
+
+
+def lcs(a: str, b: str) -> tuple[int, int]:
+    """最长公共**子串** → `(在 a 里的起点, 长度)`。比的都是锚点/材料级短串，`O(nm)` 足够。
+
+    ⚠ **子串不是子序列**：要的是「这段话原样出现过多长的一截」，
+    子序列会让「羽林卫特制的箭矢带有逆刺」与一段毫不相干的文字算出很高的覆盖率。
+
+    【第一个消费方是 stage5 的 `must_appear_missing`】那一组材料的契约是
+    **「必须在场并起作用，怎么描写随你」** ⇒ **不能按整串比对**（那是 `verbatim` 的查法）。
+    实测吃过一次：材料是「羽林卫特制的箭矢带有逆刺」，成稿写「羽林卫的箭，箭簇带逆刺」，
+    在场与作用都保住了（后文还有「倒刺便在伤口里绞动」），却被整串匹配判成缺失——
+    **判据与它自己声明的维度不一致**。改看最长公共子串之后：换说法能过，整个没写才报。
+    """
+    best_i = best_n = 0
+    prev = [0] * (len(b) + 1)
+    for i in range(1, len(a) + 1):
+        cur = [0] * (len(b) + 1)
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best_n:
+                    best_n, best_i = cur[j], i - cur[j]
+        prev = cur
+    return best_i, best_n
 
 
 def extend_punct(text: str, end: int) -> int:

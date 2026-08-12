@@ -33,7 +33,7 @@
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
 | **契约** | ✅ **十二份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + `_report.md` + `_orchestration.md` + `_api.md` |
 | **骨架** | ✅ **A~E 期全部完成**（A = 契约层 · B = 共享运行时 / LLM 层 / 报告构造器 · C = stage3 纵切 · D = 编排 + CLI · E = HTTP 层） |
-| **移植** | 🚧 **F 期进行中**：`F0` 清障 ✅ · `F1` = stage6 ✅ · `F2` = stage7 ✅ · `F3` = stage4 ✅ · **`F4` = stage5 走了一半** 🚧<br>`PORTED_STAGES = {'stage3','stage4','stage6','stage7'}`，**八层已过半**。**下一步见「F4 走到哪了」那一节** |
+| **移植** | 🚧 **F 期进行中**：`F0` 清障 ✅ · `F1` = stage6 ✅ · `F2` = stage7 ✅ · `F3` = stage4 ✅ · **`F4` = stage5 ✅**<br>`PORTED_STAGES = {'stage3','stage4','stage5','stage6','stage7'}`，**八层去五**。**下一步是 `F5` = stage2**（最难的一层，见下） |
 
 ---
 
@@ -55,7 +55,7 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 `tests/test_corpus_fixtures.py` 从 279 条塌到 6 条**而不报错**——要重量历史基线，
 必须抽到 `E:\practice_group\` 的同级目录下。
 
-**当前基线：全绿，1492 passed / 20 skip**（F4 走到一半时的数）。
+**当前基线：全绿，1541 passed / 20 skip**（F4 收工时的数）。
 
 **每一条 skip 都明说「没在查」——改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
 20 条的来历：
@@ -74,19 +74,18 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 | # | 读什么 | 得到什么 |
 |---|---|---|
 | 1 | `docs/schema/_README.md` | **方法**：三源合并 · 证据列的四个取值 · 为什么文档只定内容、模型照它写 |
-| 2 | `docs/schema/stage2.md` | **模板（首选）**。调 LLM 的层的完整样板：模型写的 vs 代码写的怎么分开读、落盘前改写怎么记账、记账键的出口规则 |
+| 2 | `docs/schema/stage2.md` | **模板（首选）**，而且**它就是下一步要移植的那一层**（F5，最难）。调 LLM 的层的完整样板：模型写的 vs 代码写的怎么分开读、落盘前改写怎么记账、记账键的出口规则。⚠ 它那 91 条判据**一个 id 都没有** ⇒ 移植它 = 先从零建一张表 |
 | 3 | `docs/schema/stage1.md` | 不调 LLM 那种层的模板 |
 | 4 | `docs/schema/stage0.md` | 同上，另含「盘上零产物的一层怎么写」（全部标 `设计`） |
-| 5 | `docs/schema/stage5.md` | **下一步要移植的那一层**：两条臂 + 两相 · 47 条判据一张表 · 四条 0 成本路 · 一份字节形态产物（`draft.md`） |
-| 6 | `docs/REQUIREMENTS.md` | 每条需求的「谁在查」列——schema 里的 `[HARD]` 都要能追到它 |
-| 7 | `docs/LESSONS.md` | 15 条已实测的坑。**移植前过一遍**，它们多数是「改一行就静默失效」那一类 |
+| 5 | `docs/REQUIREMENTS.md` | 每条需求的「谁在查」列——schema 里的 `[HARD]` 都要能追到它 |
+| 6 | `docs/LESSONS.md` | 15 条已实测的坑。**移植前过一遍**，它们多数是「改一行就静默失效」那一类 |
 
-⚠ 已移植四层的契约（`stage3.md` / `stage4.md` / `stage6.md` / `stage7.md`）**按需回查**，
+⚠ 已移植五层的契约（`stage3.md` / `stage4.md` / `stage5.md` / `stage6.md` / `stage7.md`）**按需回查**，
 不必通读——它们的结论已经落进 `contracts/judges/` 与各层实现。
 
 ---
 
-## 下一步：F4 ~ F7
+## 下一步：F5 ~ F7
 
 ### 顺序：**按验证价值挑，不按管线顺序挑**
 
@@ -100,79 +99,55 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 
 | 顺位 | 层 | 原型行数 / prompt 字 / 判据 | 备注 |
 |---|---|---|---|
-| **F4** | **stage5** | 4370 / 6164 / **47**（有表） | 体量最大。落点账已平（F4-0）：`REQUIREMENTS.md` 补 17 行、`R-8` 一节九行**逐行重判**，见 `stage5.md` §6.1 |
-| F5 | **stage2** | 3597 + 1110 / **20804** / **91（无 id）** | 最难。要先建 `novel/core/` 的 spans / overlap 两块 |
+| **F5** | **stage2** | 3597 + 1110 / **20804** / **91（无 id）** | 最难。⚠ `novel/core/spans.py` 已有 `content_index` / `locate_spans` / **`lcs`**（F4 带进来的），还缺 `recover` 那条臂与 `HINGE_LCS_MIN` |
 | F6 | stage1 | 828 / 0 / 13（无 id） | 零 prompt 零调用；沿 stage0/stage1 的新边界把「摄入+分章」切开 |
 | F7 | stage0 | **0** / 0 / 0 | **不是移植是新写**——原型这一层一行代码都没有 |
 
-### ⭐ F4 走到哪了 —— **新 session 从这里接**
+### ⭐ F5 从这里接 —— stage5 已经收工，下一层是 stage2
 
-已落地六个提交（`git log --oneline`，每条的病因与修法都在 commit body 里）：
-
-| 提交 | 做完了什么 |
-|---|---|
-| `F4-0` | **落点审计**：20 条判据落不了地 + `R-8` 一整节九行没有一行是判据在守 ⇒ `REQUIREMENTS.md` 补 17 行、拆 1 行、`R-8` 逐行重判 |
-| `F4-1` | **契约层**：`Rule.directive`（本层第一次要把指令发回写手）· `REPAIR_BUCKETS` 运行时闭合 · 三条裁决接线 |
-| `F4-2` | `novel/core/` 补齐：数值词法（**比值不比字面**）+ 保真回写三件套 |
-| `F4-3` | `novel/stages/stage5/measure.py`：确定性核心，**盘上 31 份成稿逐章对账全过** |
-| `F4-4` | `contracts/judges/stage5.py`：**47 条判据行**，形状逐项验过 |
-| `F4-5` | `novel/stages/stage5/prompts.py`：两条臂的 system，**渲染后与原型逐字节相同**（deep 2724 / shallow 2599） |
+**F4 落地七个提交**（`git log --oneline`，每条的病因与修法都在 commit body 里）：
+`F4-0` 落点审计 · `F4-1` 契约层（`Rule.directive` / `REPAIR_BUCKETS` / 三条裁决）·
+`F4-2` `novel/core/` 数值词法与保真回写 · `F4-3` `measure.py` 确定性核心 ·
+`F4-4` 47 条判据行 · `F4-5` 两条臂的 system · **`F4-6` 四个模块 + 七处接线**。
 
 ⚠ **原型那两条 system 叫 `DEEP_SYS` / `SHALLOW_SYS`**（`Stage5/n5_write.py:50` / `n6_write.py:55`），
 **不叫 `N5_SYS` / `N6_SYS`**——后两个只存在于 `_legacy/`，是**已废弃的旧世代**。
 本文件此前记的是那两个失效的名字（LESSONS 第 11 条那一类：指向改名过的符号，而不会报错）。
 
-#### ⚠⚠ 下一次的第一件事：**六处接线必须同一次提交走完**
+#### stage5 带进来的四个「第一次」，移植下一层之前值得知道
 
-判据表已经写好，但**故意还没被 import**——import 它就要同一次翻 `PORTED_STAGES`，
-而那张表一旦说 stage5 移植完了，四处会立刻索要实现。要一起改的是：
+| 第一次 | 它逼出了什么 |
+|---|---|
+| **第一个 `repair != 'NONE'` 的层** | `Rule.directive` 与 `bool(directive) == actionable` 的双向注册期不变量（F4-1） |
+| **第一个逐章产物的层** | 完成度与来源账都按**章数**；`draft.md` **不许进 `produces`**（它在只写了一章时也存在） |
+| **第一个 `ask_text` 调用点** | 逐章响应是**纯文本** ⇒ stage4 那条「响应侧 `extra='forbid'` 当场挡回」的出路**在本层默认路径上不存在**，全部把关都在落盘闸门这一侧 |
+| **第一个有「臂」的节点** | `RunContext.mode`（`--mode` 此前解析出来就被丢掉了）· `--chapters` 进 `VALUED_FLAGS` |
 
-1. `contracts/judges/__init__.py` +1 行 import、`LOADED` +1
-2. `contracts/rules.py::PORTED_STAGES` 收下 `stage5`
-3. `novel/stages/__init__.py::_checkers` +1（`stage5` → `review.run_check_only`）
-4. `novel/cli/main.py::_runners` +1（`stage5` → `_run_stage5`，**先按 `ctx.node` 分两支再按 flag 分**，形态照 `_run_stage7`）
-5. `novel/report/accounting.py::ACCOUNTING['stage5']`（那三个归一计数器就是被裁掉的 `mech` 换的落点）
-6. `docs/REQUIREMENTS.md` 里 **`R-7.1` / `R-7.12` / `R-8.4` / `R-8.5` / `R-8.7b` 五行改判 `结构`**
-   —— 它们今天仍写着阻断级而一条判据都接不住，**这正是 `PORTED_STAGES` 翻不动的直接原因**
-   （正向覆盖率会为这五行索要五条注册判据）。落点全在还没写的模块里，
-   所以必须**与模块同批改**：`test_structural_rows_that_name_a_repo_path_actually_point_at_it`
-   会查反引号里那个模块真实存在。形态照 F3-0 对 `R-6.5`/`R-6.6` 的处置。
+#### 本轮的三条用户裁决（2026-08-12）与它们的落点
 
-还欠的实现：`checks.py`（47 条，**两相共用同一个函数**）· `write.py` · `review.py`（含 `--wontfix`）。
-`prompts.py` 已在 F4-5 落地（见下）。
-
-#### 本轮已裁决的三条（用户裁决，2026-08-12）
-
-| # | 决定 | 已落地在哪 |
+| # | 决定 | 落点 |
 |---|---|---|
-| 1 | **`--revise` 挪到 `stage5.write`** —— 它产的是新一轮成稿，不是新一份验收报告；挂在验收节点上会让一个 `paid=False` 的节点产出另一份产物，而完成度 / 断点续跑 / `would_write` 三处都从 `produces` 派生 | `invariants.py::NODES`（`F4-1`） |
-| 2 | **`--wontfix` 接线**（`VALUED_FLAGS` +1，挂 `stage5.review`）：值的形态 `<章｜book>｜<判据>[｜<证据键>]=<理由>`。⚠ 同一 (章, 判据) 有多条结论时**要人写出第三段**——原型那条路把它们**一并豁免**了 | 表已改，**产地还没写** |
-| 3 | **两套新鲜度：保留两个字段，只算一次** —— `ReviewSources.writer_context` 改成 `store.freshness()` 的投影，`drafts` 那一半空也报 | **还没写** |
+| 1 | **`--chapters` 进 `VALUED_FLAGS`** —— 「逐章重构深度是人的决策」（`R-7.2`）不落任何产物，只活在这个实参里；不给它那一行就是假话 | `invariants.py::VALUED_FLAGS` + `NODES['stage5.write'].flags`（**不进 `FREE_ENTRIES` / `WRITE_EFFECTS`**，理由同 `--pick`） |
+| 2 | **7 条 HARD 各配一份会让它红的样本** —— 本层不再往「36 条 HARD 盘上 0 反例」那个数上加 | `tests/test_stage5.py` 一族 |
+| 3 | **一次做到 F4 收官** —— 判据一进 `REGISTRY`，四张表立刻索要实现 ⇒ `checks`/`write`/`review`/接线只能同一次提交 | `F4-6` |
 
-#### 三条实测结论，接手前先读
+#### 三条实测结论
 
-- **归一幂等 31/31**：产物里存的是归一**之后**的字节 ⇒ 再归一必须一个字不动。
-  这条测试一次钉住三步归一链的全部口径，**搬错一个字符类不会报错、只会静默不再归一**。
+- **归一幂等 14/14**（这一本）：产物里存的是归一**之后**的字节 ⇒ 再归一必须一个字不动。
+  `--recheck` 在三本上一个字节都没改（`punct/quotes/paras` 全 0）。
 - **本层徽章结构上永远不可能是 `pass`**（5 条 `unver`，`must_hold_unver` 每本都产）
-  ⇒ 最好是 `amber` + 退出码 0。**与 stage4 相反**，那一层没有一条 `unver`。
-- **`stage5/draft.md` 不许进 `produces`**（F4-1 试过并撤回）：那份拼稿在**只写了一章时
-  也存在**，拿它当完成度信号会让 `resume_verdict` 对一个写了一半的付费层判「跳过」。
+  ⇒ 实跑就是 `amber` + 退出码 0。**与 stage4 相反**，那一层没有一条 `unver`。
+- **`name_surface_survey` 已改成无条件产出**：原型 `if by_surface or collide:` 让
+  「全书 0 个自造称谓」这个**读数**永远说不出来，而「查过、干净」与「根本没在查」同形。
 
-### F4 = stage5 的施工提要
+#### ⚠ stage5 自己欠着的（登记，不是验过了）
 
-它与前面几层**不同形**，四条在开工前必须知道（全文见 `docs/schema/stage5.md`）：
-
-- **两条臂 + 两相**：臂＝`deep`（闭卷）/ `shallow`（开卷），**只差 (system prompt, 给不给源章原文)**，
-  产物形状逐字节相同；相＝逐章写作 + 全书验收。**判据表只有一张**（47 条），两相共用，
-  而 `R-7` / `R-8` 两节同时管它 ⇒ 正向覆盖率取**两节的并集**，**不能只移植一半**。
-- **第一个逐章产物的层**（`stage5/{mode}/chNN.json`）：完成度与来源账都要按章数。
-- **唯一有 LLM 返工回路的层**（`--revise`）：护栏有 4 条，但**没有一条查「其余一字不动」**
-  ——它们查的是「没变得更坏」。
-- **默认调用不是结构化的**：逐章走 `ask_text`（纯文本响应）⇒ stage4 那条
-  「响应侧 `extra='forbid'` 当场挡回」的出路**在本层默认路径上不存在**。
-
-> 那两件「就地要裁」的事（`--revise` 挂哪个节点 · 两套新鲜度机制）**已在 F4-1 裁完**，
-> 见上面那张裁决表。
+| 欠账 | 说明 |
+|---|---|
+| **付费两条路一次都没跑** | `run_write` / `run_revise` 只走过 `--dry-run`（渲染出的 system 与原型逐字节相同）。**真发第一次要先说一声。** ⚠ 它是**全链第一个 `ask_text` 调用点**，契约 §七 那条降级阶梯（正文写进 `reasoning_content`、`content` 空串）**在真机上一次都没验过** |
+| **`secret_keywords` 两侧口径不同** | 它把 fact 里的中文数字剥掉（「一直」→「直」）而成稿这一侧没剥 ⇒ 带数字词的片段**永远匹配不上**。这是「21 条 secret 里 19 条连揭示章都命中不了」的成因之一。**本轮不改**：改它会动全部三本的基线，而手上没有 ground truth（落点 `novel/stages/stage5/checks.py::fidelity_findings` ④ 的注释） |
+| **`--revise` 的回归护栏没有真机样本** | `checks.trim_regressions` 的六条只在合成输入上验过；`.rejected.json` 那条归档路盘上仍是零样本 |
+| **`--tag` / `--batch` 未移植** | 原型的 A/B 实验设施。`docs/schema/stage5.md` 事实①下面已标注——**读到它们时当不存在，别照着补一个本仓没有的入口** |
 
 ### ⚠ F6/F7 那颗地雷
 
@@ -190,10 +165,10 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 
 | 欠账 | 状态 |
 |---|---|
-| **付费路一次都没跑** | 已移植的三层（stage4/6/7）都是：合成样本走通了闸门与提升路，但 `DeepSeekTransport` **从没发过一次请求**。已用 `--dry-run` 验过渲染出的 system 与原型逐字节相同（stage4 2192 字 / stage6 1075 字 / stage7 1658 字）。<br>⚠ stage4 那次是**全链最贵的一次请求**（全书一次调用，`max_tokens=96000`，user 实测 22773 字）。**真发第一次要先说一声**——那是本仓第一次真花钱 |
-| **36 条 HARD 盘上 0 反例样本** | stage4 16 · stage6 5 · stage7 15。已补的合成样本只走通了 3 条（`style_words` / `rn_ambiguous` / `context_link`）。跨层规矩「每新加一条 HARD 就要有会让它红的样本」在这三层仍未兑现 |
+| **付费路一次都没跑** | 已移植的四层（stage4/5/6/7）都是：合成样本走通了闸门与提升路，但 `DeepSeekTransport` **从没发过一次请求**。已用 `--dry-run` 验过渲染出的 system 与原型逐字节相同（stage4 2192 字 / stage6 1075 字 / stage7 1658 字）。<br>⚠ stage4 那次是**全链最贵的一次请求**（全书一次调用，`max_tokens=96000`，user 实测 22773 字）。**真发第一次要先说一声**——那是本仓第一次真花钱 |
+| **36 条 HARD 盘上 0 反例样本** | stage4 16 · stage6 5 · stage7 15。已补的合成样本只走通了 3 条（`style_words` / `rn_ambiguous` / `context_link`）。跨层规矩「每新加一条 HARD 就要有会让它红的样本」在这三层仍未兑现<br>⚠ **stage5 那 7 条已在 F4-6 配齐**（`tests/test_stage5.py`），所以这个数没有变成 43 |
 | **`_provenance.code` 那条没修** | 11 份产物 `code` 全是同一个短 sha，而同一批的 `N9_SYS` 取过 **3 个**值。⚠ **处置只定一次，别按层分别裁**——`provenance()` 在共享层，改 `git describe --always --dirty` 一改就是八层。目前只**钉在测试里** |
-| **两套新鲜度机制并存** | `sources.writer_context` 与 `_provenance.inputs`。**已裁决**（保留两个字段、只算一次），落地在 F4 的 `review.py` —— 那份实现还没写 |
+| ~~**两套新鲜度机制并存**~~ | ✅ F4-6 落地：`ReviewSources.writer_context` 是 `store.freshness()` 的**投影**，不是第二次计算（`novel/stages/stage5/review.py::_context_source`） |
 | **`to_human_edit()` 只长在 `LlmProvenance` 上** | stage6/stage7 的 `--apply-edit` 够不着它（`--approve` 之后上一份来源账可能已是 `FreeProvenance`）。⇒ 真要用它的那一刻，连同一份会红的样本一起挪到基类 |
 | **重试与并发那三个数是拍的，不是量的** | 手上没有真实 429 分布。`Q-10` 已把「重试退避调参」登记为「现在不建」；调它之前先拿到真数据 |
 | **4 行 `结构` 仍是旧形态** | 29 行 `结构` 里 `R-4.2` / `R-4.3` / `R-4.3b` / `R-4.10` 四行写的是裸符号名，`tests/test_coverage.py::test_structural_rows_that_name_a_repo_path_actually_point_at_it` 对它们**不可见**（现扫得到 35 个落点）。改成 `路径::名字`，**改一行那条守卫就多查一行** |
@@ -204,8 +179,9 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 |---|---|
 | **stage4** | `stage4.plan --apply-edit` 登记在案而**没接线**（显式终态说清「有，但还没实现」；接线时 `docs/schema/_common.md` §5.3 那份 `human_provenance` 是教科书，**连注释一起搬**）<br>`--identity` 在 `/api/enums` 上的 `writes` 串说的是**错的文件名**（说 `plan_chapters.json`，实际写 `writer_context.identity.json`）。⚠ 方向是安全的（它确实写盘），已钉在测试里，**别顺手去改 `WRITE_EFFECTS`**——那张表按 flag 索引，而这个 flag 在三层行为各不相同 |
 | **stage6** | `stage6.hook --apply-edit` 同样**没接线**<br>`hook_para_sep` 对单段文案给的是**错的诊断**：detail 写着「归一化应该已经修掉它了」，而单段文本没有分隔符可归一。判定本身不冤，只是那句话在这一类输入上是假的 |
+| **stage5** | 付费两条路（`run_write` / `run_revise`）**一次都没跑**，只走过 `--dry-run`。⚠ 它是全链第一个 `ask_text` 调用点，契约 §七 那条降级阶梯（正文写进 `reasoning_content`、`content` 返回空串）**在真机上一次都没验过**<br>`novel/core/facts.py::secret_keywords` 把 fact 里的中文数字剥掉而成稿这一侧没剥 ⇒ 带数字词的片段**永远匹配不上**（「19/21 条 secret 连揭示章都命中不了」的成因之一）。**本轮不改**：改它会动全部三本的基线，而手上没有 ground truth<br>`checks.trim_regressions` 的六条护栏只在合成输入上验过；`chNN.rejected.json` 那条归档路盘上仍是零样本 |
 | **stage7** | 盘上那三份 `name_map_edit.json` **没有被端到端跑过**（它们是 `character_patches` 那条路，沙箱里没有构造过一次完整重放） |
-| **F5 要连带补的** | `novel/core/spans.py` 缺 `recover` 那条臂（stage2 落盘路才用得上，连同 `_lcs` 与 `HINGE_LCS_MIN` 一起进来）<br>`--drop` 与 `--replay-cache` 两个 0 成本 flag **从没被任何守卫查过**（它们在原型的 `FREE_FLAGS` 里而抓包的 `actions` 里没有）。⚠ 不全的方向是安全的（未登记 ⇒ 按付费算），但那是「界面把免费动作画成橙色」 |
+| **F5 要连带补的** | `novel/core/spans.py` 缺 `recover` 那条臂（stage2 落盘路才用得上，连同 `HINGE_LCS_MIN` 一起进来；⚠ `lcs` 本身**已在 F4 进来了**，stage5 的 `must_appear_missing` 是它的第一个消费方）<br>`--drop` 与 `--replay-cache` 两个 0 成本 flag **从没被任何守卫查过**（它们在原型的 `FREE_FLAGS` 里而抓包的 `actions` 里没有）。⚠ 不全的方向是安全的（未登记 ⇒ 按付费算），但那是「界面把免费动作画成橙色」 |
 
 ### 界面与前端
 
@@ -270,7 +246,7 @@ tools/                   0 成本工具（schema 反推 / 剔除词闸门）
   那条需求就不该再写「无守卫」**——补了守卫要同步改需求，否则文档开始说假话
 
 > 这三条把「谁在查」那一列从**装饰**变成**可执行**。
-> 现状：`contracts/judges/` 下 **91 条判据指向 61 个不同编号**，覆盖 `R-4`/`R-5`/`R-6`/`R-9`/`R-10`。
+> 现状：`contracts/judges/` 下 **138 条判据指向 85 个不同编号**，覆盖 `R-3`~`R-10`。
 
 ---
 

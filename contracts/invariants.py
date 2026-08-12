@@ -816,6 +816,14 @@ VALUED_FLAGS: Final = {
     # 证据键由代码从最近一份验收里补全；同一 (章, 判据) 有多条结论时**要人写出第三段**
     # ——原型那条路把它们**一并豁免**了，而「换了个位置的同类问题」不是人做的决定。
     '--wontfix': '这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填',
+    # ⚠⚠ **它是「逐章重构深度」这个人的决策的唯一载体**（`R-7.2` / `stage5.md` §九-3）：
+    # 那件事**不落任何产物**，只活在这个实参里。没有它，`stage5.write --mode deep`
+    # 只能把缺的章全部写成闭卷，两条臂没法按章分工，而 `R-7.2` 那一行就成了假话。
+    # ⚠ 它**不进 `FREE_ENTRIES`**（那张表登记的是「0 成本**入口**」，而它是付费入口的
+    # **参数**——`is_paid` 因此照旧判付费，正确）；也**不进 `WRITE_EFFECTS`**
+    # （它写的就是本节点 `produces` 里那一份，只是少写几章 ⇒ 不登记就落到 `produces`，正确）。
+    # 两条都与 `--pick` 逐条同形。
+    '--chapters': '只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章',
 }
 
 #: ⭐ 一次跑**会往盘上写什么**。空串 = 不写盘。
@@ -999,7 +1007,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 逐章写作',
                                  modes=('deep', 'shallow'),
                                  flags=('--dry-run', '--recheck', '--revalidate',
-                                        '--apply-edit', '--revise'),
+                                        '--apply-edit', '--revise', '--chapters'),
                                  produces=('stage5/{mode}/ch{nn}.json',
                                            'stage5/{mode}/draft.md')),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。

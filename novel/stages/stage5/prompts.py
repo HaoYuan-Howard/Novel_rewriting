@@ -31,10 +31,18 @@ prompts.py —— 下给写手的那一份。**两条臂的 system 与原型逐�
 """
 from __future__ import annotations
 
+import json
+import re
+from dataclasses import dataclass
+from typing import Any
+
 from contracts.invariants import (
-    DEPTH_MODES, HINGE_LABEL_PARTS, LAYER_CN, LAYER_GLOSS, TIME_LAYERS, hinge_heading,
+    DEPTH_MODES, HINGE_LABEL, HINGE_LABEL_PARTS, LAYER_CN, LAYER_GLOSS, TIME_LAYERS,
+    hinge_heading,
 )
+from novel.core.text import norm
 from novel.llm.prompts import fill
+from novel.stages.stage5 import measure as M
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、两条臂共用的四段规则 —— **唯一落点，两条臂各引一次**
@@ -313,3 +321,399 @@ def write_system(mode: str, *, revise: bool = False) -> str:
 def trim_system() -> str:
     """收缩那一次调用的 system。**与臂无关**——它删的是已经写好的正文。"""
     return fill(TRIM_SYS)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 六、下发面 —— 逐章的 user 消息
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _compact(obj: Any) -> str:
+    """最紧的 JSON（无空格）。⚠ 与 stage4 同形：user 里每一个空格都在挤别的东西的预算。"""
+    return json.dumps(obj, ensure_ascii=False, separators=(',', ':'))
+
+
+#: 目标区间**没有预算**时那个估算带（`源字数 ±15%`）。
+#: ⚠ 它与 `measure.target_range` 的 `DRAFT_BAND` **不是一个数，而那是对的**：
+#: 前者是「计划给了预算」时的执行带（判据也按它判），后者是「旧契约成稿没有预算」时
+#: 的一个**估算**——那时 `length_over` / `length_under` 也判不了（`target_range` 返回 `None`）。
+#: 两侧同时失效，不会出现「模型按 A 算、校验按 B 判」。
+_ESTIMATE_BAND = (0.85, 1.15)
+
+
+def target_band(entry: dict[str, Any]) -> tuple[int, int, bool]:
+    """发给写手的目标区间 `(下限, 上限, 是不是估的)`。
+
+    ⚠⚠ **有预算时它必须与 `measure.target_range` 逐值相同**——那是判据用的带。
+    两处各算一份就是 LESSONS 第 9 条那个形状：**模型按 A 写、校验按 B 判，谁也不出声**。
+    """
+    if (band := M.target_range(entry)) is not None:
+        return band[0], band[1], False
+    base = int(entry.get('source_chars') or 0)
+    lo, hi = _ESTIMATE_BAND
+    return round(base * lo), round(base * hi), True
+
+
+def target_paragraphs(entry: dict[str, Any], book: M.Book) -> tuple[int, int]:
+    """把字数目标换算成**段落数**目标。
+
+    ⚠ 实测（55 章全量闭卷）：只给字数目标时 **49/55 章超上限**、均段长从原书 15.5 胖到 28.2
+    ——模型对「字数」几乎没有感知，但对**段落数**很准。段落数同时锁住两个膨胀源
+    （段落变胖 + 段落变多）。
+
+    ⚠⚠ **两个口径必须先对齐，否则这个除法本身就是错的**：`avg_paragraph_chars` 数的是
+    **段内**字符（`measure()` 把行 strip 过、换行不计），而 `budget_chars` 是
+    `len(整章文本)`、**含段落分隔符**。直接相除等于拿含分隔符的总量去除不含分隔符的单价，
+    段数目标被系统性抬高 ~14%。⇒ 分母要加上每段的分隔符开销。
+    """
+    lo, hi, _est = target_band(entry)
+    ap = book.measurable.get('avg_paragraph_chars') or 20
+    sep = book.sep_chars or 0        # 旧 stage3 产物没测过：跑 `stage3.style --remeasure` 补
+    return max(round(lo / (ap + sep)), 3), max(round(hi / (ap + sep)), 4)
+
+
+def prev_context(entry: dict[str, Any], book: M.Book) -> str | None:
+    """衔接上下文：给**上一章的计划**，**不给上一章的成稿**。
+
+    早先给的是上一章成稿全文，已废——理由是职责与误差两条：
+      · 每一章都只该依赖**计划**。拿上一章的成稿当输入，写手会顺着自己刚写的东西续，
+        而不是照计划写；上一章编出来的东西会被下一章继承并强化（误差沿章累积）。
+      · 章与章之间因此变成串行依赖，既不能并行、也不能单章重写而不影响后面。
+    连贯性由计划承担：上一章的目标 + 结尾要达到什么 + 它写了哪几拍，足够知道从哪儿接。
+    """
+    pe = book.chapters.get(int(entry['output_ordinal']) - 1)
+    if not pe:
+        return None
+    bits = [f"上一章的目标：{pe.get('chapter_goal', '')}"]
+    bits += [f'· {e}' for be in (pe.get('beats') or [])
+             for e in (be.get('events') or []) if (e or '').strip()]
+    if pe.get('end_hook_goal'):
+        bits.append(f"上一章结尾停在：{pe['end_hook_goal']}")
+    return '── 上一章写了什么（仅供衔接，不要复述、不要接着展开它）──\n' + '\n'.join(bits)
+
+
+def _stage_line(be: dict[str, Any]) -> str:
+    """一拍的舞台：在哪、什么时候的事、谁在场。**写手闭卷，这三样 `events` 文字本身不承载。**"""
+    def one(d: dict[str, Any]) -> str:
+        bits = [LAYER_CN.get(d.get('time_layer') or '', d.get('time_layer') or '')]
+        if d.get('place'):
+            bits.append(d['place'])
+        if d.get('present'):
+            bits.append('在场：' + '、'.join(d['present']))
+        return '·'.join(b for b in bits if b)
+
+    if be.get('segments'):
+        # 跨叙述层/跨地点的一拍：**分段给，不能压平**——压平取并集会把只在回忆里的人放进当下。
+        return ('　分' + '①②③④⑤⑥'[:len(be['segments'])] + ' 推进：'
+                + ' ｜ '.join(f'{n}{one(s)}' for n, s in zip('①②③④⑤⑥', be['segments'])))
+    s = one(be)
+    return f'　〔{s}〕' if s else ''
+
+
+def chapter_facts(entry: dict[str, Any]) -> str:
+    """本章要写的每一拍：内容 + 篇幅 + 舞台 + 必须守住的原文材料。
+
+    每一拍带**自己的** `budget_chars`（不是相对分量）——写手按「拍」落笔，拍上的字数是它
+    唯一对得齐的东西；只给整章区间时它稳定按每拍 56~94 字写，**与目标无关**。
+
+    四组原文材料按 kind 分开列、各带各的指令（`HINGE_LABEL`）：它们要守的维度不同。
+    ⚠ 这是**闭卷写手拿到原文的唯一通道**——转述必然丢掉「改一个字就废」的那一维。
+    """
+    lines: list[str] = []
+    for i, be in enumerate(entry.get('beats') or [], 1):
+        b = be.get('budget_chars')
+        head = f'{i}. 【约 {b} 字】' if isinstance(b, int) else f'{i}. '
+        # 一拍可能由好几条内容并成。**逐条列，不合并成一段散文**：合并这件事早先是在计划层
+        # 让 LLM 做的，实测既造事实（「某人身边人」→「某家丫头」）又丢材料。
+        # 编号与 `_stage_line` 的 ①②③ 同序（都按源拍展开），跨层时第 n 件事配第 n 段舞台。
+        evs = [e for e in (be.get('events') or []) if (e or '').strip()]
+        if len(evs) > 1:
+            lines.append(head + f'要写这 {len(evs)} 件事：' + _stage_line(be))
+            lines += [f'   {n} {e}' for n, e in zip('①②③④⑤⑥', evs)]
+        else:
+            lines.append(head + (evs[0] if evs else '') + _stage_line(be))
+        for key, label in HINGE_LABEL.items():
+            for t in (be.get(key) or []):
+                lines.append(f'     · {label}：{clean_material(t)}')
+    body = '\n'.join(lines) or '（计划未给节拍）'
+    nar = entry.get('narration') or []
+    return body + f'\n\n叙述视角（按段）：{_compact(nar)}' if nar else body
+
+
+#: 材料两端的标点/引号残渣（多半是 stage2 的锚点切过界）。
+_MATERIAL_EDGE = re.compile(r'^[\s「」『』“”‘’"\'：:，,。.、；;！!？?…—－\-]+|'
+                            r'[\s「」『』“”‘’"\'：:，,、；;－\-]+$')
+
+
+def clean_material(t: str | None) -> str:
+    """发给写手之前把材料两端的残渣清掉。**判定用的仍是原样**（判据 `material_malformed`）。
+
+    ⚠ **两侧方向相反，这是有意的**：下发面该清（带着半个词的指令写手照办不了），
+    判定面不能清（清了就把「stage2 的锚点切过界」这件事盖掉了，而那是上游的账）。
+    LESSONS 第 10 条那条「同一份数据在下发面该严、在检测器该宽」的同一形状。
+    """
+    return _MATERIAL_EDGE.sub('', (t or '').strip())
+
+
+_GOAL_QUOTE_RX = re.compile(r'「([^」]{2,40})」|“([^”]{2,40})”|‘([^’]{2,40})’')
+
+
+def goal_quotes(*goals: str | None) -> list[str]:
+    """`goal` 里被引号括起来的短语。
+
+    ⚠ `goal` 是 stage4 的**模型**写的 ⇒ **凡转抄必验**：核实它真的在源章原文里
+    才升「原句用上」，核实不上就只当普通目标发。
+    """
+    out: list[str] = []
+    for g in goals:
+        for m in _GOAL_QUOTE_RX.finditer(g or ''):
+            out.append(next(g2 for g2 in m.groups() if g2))
+    return out
+
+
+def chapter_directive(entry: dict[str, Any], book: M.Book) -> str:
+    """本章要达成什么（计划的章级指令）。
+
+    ⚠ 开篇/结尾 goal 是**硬要求**——实测它被当成参考描述，原文开场直给的句子被换成
+    垫场记句。引号内的原句核实后升为「原句用上」。
+
+    ⚠⚠ **这里不再有「篇幅方式」那一行。** 原型渲染的是 `op` 与它的语义，而 `op`
+    已随 `stage4.md` §一整族裁撤（它恒等于一个常量）。原型那一行还配着一个
+    `OP_SEMANTICS.get(op, '')` 兜底——一份带 `op:"split"` 的存量旧计划会渲染出
+    「篇幅方式：split —— 」这样**带窟窿的 prompt**，而这是**付费路径**。
+    现在「篇幅怎么分」整件事归 system prompt 与下面那个「篇幅」块，窟窿在结构上不存在。
+    """
+    lines = [f"本章目标：{entry.get('chapter_goal', '')}"]
+    if entry.get('open_hook_goal'):
+        lines.append(f"开篇要达到（硬要求）：{entry['open_hook_goal']}")
+    if entry.get('end_hook_goal'):
+        lines.append(f"结尾要达到（硬要求）：{entry['end_hook_goal']}")
+    src_norm = norm(M.chapter_source(entry, book.source_text))
+    hits = [q for q in goal_quotes(entry.get('open_hook_goal'), entry.get('end_hook_goal'))
+            if norm(q) and norm(q) in src_norm]
+    if hits:
+        lines.append('上述目标里这几句是原文现成的句子，落笔时【原句用上】：'
+                     + '、'.join(f'「{h}」' for h in hits))
+    return '\n'.join(lines)
+
+
+def style_block(style: dict[str, Any]) -> str:
+    """声音底座：voice 八维 + 写作习惯 + 形态档位。**判据 `style_block_carries_plot` 扫的就是它。**
+
+    ⚠ 形态一律给**档位词**不给数值——写手要的是「极短段/一句一段」这种可执行的形态，
+    给原始数字既没用又会诱导它去凑数。
+    """
+    v = style.get('voice') or {}
+    meas = style.get('measurable') or {}
+    from contracts.schema.stage3 import Measurable
+    from novel.core.bands import bands as _bands
+    band_txt = _compact(_bands(Measurable.model_validate(meas))) if (meas.get('body')) else ''
+    return '\n'.join(filter(None, [
+        '【这本书的声音（必须写得像同一本书）】',
+        *[f'· {k}：{v[k]}' for k in v],
+        # ⚠ **手法清单是必须照做的，不是参考**：曾加过「同一个短语全章至多出现一次」去治
+        # 口头禅复用——结果把「同一短句结构快速重复三次或以上」这类**招牌手法**也整批压死
+        # （某本的「很快。我夫君，…」×3 成稿 0 保留）。收窄成：手法照做（要求重复的就重复），
+        # 只禁把**例句**当口头禅同章原样复用。两头的实测都记在这里，防只读一头又改回去。
+        '【写作习惯（这本书的招牌手法清单——照做，不是参考）】'
+        '\n  每条说的是一种【生成方式】，按它执行；它若要求重复（如三连短句、固定自称），'
+        '重复就是手法本身，照它说的节奏来。只禁一件事：不要把任何例句当口头禅在同一章里原样复用——'
+        '手法要反复出现，具体的句子每次新写。',
+        *[f'· {h}' for h in (style.get('surface_habits') or [])],
+        ('【形态档位（写出来要落在这些档上）】\n' + band_txt) if band_txt else '',
+    ]))
+
+
+def facts_block(entry: dict[str, Any]) -> str:
+    """本章为止的事实。⚠⚠ **秘密要分成两组给，不能混在一个数组里。**
+
+    投影出来的 secret 有两种，**写法完全相反**：
+      · `reader_knows_by_now=true` —— 读者已经知道了，可以正面写；
+      · `false`（本章是它的**埋点章**）—— 事实要摆在读者眼前，但**当时读来是别的意思**，
+        绝不能点破。**这一条是伏笔能不能成立的关键。**
+
+    从前是把 `{"reader_knows_by_now": false}` 这个布尔值直接扔进 JSON 让写手自己看——
+    它多半会当成已知事实正面写出来，**反而制造提前泄底**。所以在这里翻译成指令。
+    """
+    f = dict(entry.get('facts') or {})
+    secrets = f.pop('secrets', []) or []
+    # ⚠ `setting` **必须 pop 掉**：`build_user` 里它已经有自己那个带标题的块，
+    #   这里再把整个 `facts` 原样铺一遍，同一段世界观会在一份 prompt 里出现两次。
+    #   留哪一个：留带标题的那个——写手认的是「── 世界设定 ──」这个抬头，
+    #   而这里的抬头写着「称谓/关系/世界规则」，把设定塞进去本身就名不副实。
+    f.pop('setting', None)
+    known = [s for s in secrets if s.get('reader_knows_by_now')]
+    seed = [s for s in secrets if not s.get('reader_knows_by_now')]
+    parts = ['── 本章为止的事实（称谓/关系/世界规则；**只到本章，后面的事你不知道**）──\n'
+             + _compact(f)]
+    if known:
+        parts.append('── 读者已经知道的内情（可以正面写）──\n'
+                     + '\n'.join(f"· {s.get('fact')}（知情者：{'、'.join(s.get('known_by') or [])}）"
+                                 for s in known))
+    if seed:
+        parts.append(
+            '── 本章要【埋下】、但【绝不能点破】的（这一条决定伏笔成不成立）──\n'
+            + '\n'.join(f"· {s.get('fact')}" for s in seed)
+            + '\n把这件事的【表象】如实写进本章——让它读起来像是意外、像是巧合、像是别人自愿；\n'
+              '**不要让任何人说破它、也不要在叙述里点明它的真正含义**。读者要到很久以后才会知道。')
+    return '\n\n'.join(parts)
+
+
+def writer_chars(entry: dict[str, Any], book: M.Book) -> dict[str, dict[str, str]]:
+    """人物表投影：写手只需要**叫什么**和**是谁**，而且只需要**本章已经存在的那些人**。
+
+    ⚠ `name_distinctiveness` 的消费方是**确定性代码**（`Book.names` / `Book.name_stems` /
+    stage3 的专名泄漏过滤），写手这边 prompt 里从没定义过这个枚举是什么意思，
+    整份 JSON 发过去只是噪声 ⇒ **按消费方投影，不是删**。
+
+    ⚠⚠ **章级名册优先，书级只作旧产物兜底**：书级那份是**全书**名单，实测某本 12 人里有
+    10 人的名字在 ch1 尚未出现却全部进了 ch1 写手的 prompt——其中一个正是那一章
+    「新婚夜的男人是谁」的悬念。
+    """
+    chars = entry.get('characters') or book.characters
+    return {cid: {k: v[k] for k in ('display_name', 'role') if (v or {}).get(k)}
+            for cid, v in chars.items()}
+
+
+def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> str:
+    """对白形态块——**这本书的承重墙**。占比 / 符号 / 本章引语数 / 排版惯例，全部从产物插值。
+
+    ⚠ `dialogue_ratio_applicable=False`（语料无引号）⇒ **不下发**：没有可信目标时教排版
+    就是教坏。
+
+    ⚠⚠ **引语数 N 只给开卷写手**：它手里有原章，能逐句判断哪些对白该保留；
+    闭卷写手只拿到事件与离散保真点，给一个**无法回查内容的 N**，只会把「对白保真」
+    变成「凭空凑 N 句」——而那正是实测发生过的那次自造台词。
+    这是按消费方投影，**不是删度量**：N 仍照常由判据 `dialogue_report` 无条件报出。
+    """
+    base = book.measurable
+    if not base.get('dialogue_ratio_applicable'):
+        return ''
+    ratio = base.get('dialogue_ratio')
+    pct = f'{ratio * 100:.0f}%' if isinstance(ratio, (int, float)) else '相当比例'
+    sym = base.get('quote_styles') or []
+    lines = ['── 对白形态（这本书的承重墙）──',
+             f"这本书对白密集，正文约 {pct} 的字符在引号里，引号体是 {sym[0] if sym else ''}。"]
+    n = M.src_quote_count(entry, book.source_text)
+    if n and with_source_text:
+        lines.append(f'本章原文有 {n} 句直接引语——成稿里的直接引语不应明显少于它；'
+                     f'要省字，砍叙述，别砍台词。')
+    cue = book.cue_rate
+    if cue is not None and cue >= 0.8:
+        lines.append(f'对白排版照这本书的惯例：提示语以冒号收尾后换行，引语单独成段'
+                     f'（原文 {cue:.0%} 如此）。')
+    return '\n'.join(lines)
+
+
+@dataclass(frozen=True)
+class Material:
+    """一章的下发面。**`--dry-run` 与真跑共用这一份**（`R-11.8`）。"""
+
+    blocks: list[str]
+    #: 这一章的**全部下发文字**——`invented_number` / `invented_name` 的参照集从它来。
+    given: str
+    #: 开卷才有：源章原文。⚠ 闭卷这一格恒为 `''`，而那**就是两条臂的第二个差异面**。
+    source_text: str
+
+
+def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> Material:
+    """组装一章的下发面。`with_source_text=True` 即开卷（给原章正文）。
+
+    ⚠⚠ **闭卷模式下这里一个字节的源章原文都不碰**——那份原文只供校验器算重合度。
+    「闭卷」这件事是由**这个函数**保证的，不是由 system prompt 里那句话保证的。
+
+    ⚠ **`reconstruction_strategy` 不下发，那是一条剧透旁路**：它是一段全书级自由文本，
+    任务就是描述「这本书整体怎么重构」，于是**必然携带弧线终点**（实测某本写着
+    「…最终接受…摊牌…系统揭秘…」）。而它是**逐章**下发的：写 ch1 的闭卷写手因此
+    已经知道结局与揭示点。字段**保留在 `writer_context` 里**（验收相与界面仍读它），
+    只是不进写手 prompt——按消费方投影，不是删。
+    """
+    lo, hi, est = target_band(entry)
+    plo, phi = target_paragraphs(entry, book)
+    nb = len(entry.get('beats') or [])
+    meas = book.measurable
+    simile = book.baseline('simile_per_1k', M.simile_per_1k)
+    blocks = [
+        f'《{book.title}》',
+        '── 本章任务 ──\n' + chapter_directive(entry, book),
+        '── 篇幅（硬指标，写之前先据此规划）──\n'
+        f"这本书的章节体例是【{book.band_of.get('章篇幅', '')}】、"
+        f"排版是【{book.band_of.get('段落形态', '')}】，"
+        f'章与章的密度和这种排版本身就是它的风格。\n'
+        f"本章目标 **{lo}~{hi} 字**（约 {plo}~{phi} 个自然段；"
+        f"原章对应部分 {entry.get('source_chars') or 0} 字）"
+        + ('——这份计划没给逐拍预算（旧契约产物），此区间是按源字数估的，可浮动。'
+           if est else '，这是硬性要求。')
+        # ⚠ **逐章算的每拍字数**，不是全书平均。实测：写手的真实锚点是**拍数**不是字数区间
+        #   ——它每拍稳定写 56~94 字、与给定目标无关；而 prompt 曾给书级中位数
+        #   「平均一拍只用 133 字」（治注水时加的），在需要 176 字/拍的章上**反而把它锚低了**。
+        + (f'\n· **本章共 {nb} 拍，算下来平均每拍 {lo // nb}~{hi // nb} 字**。'
+           f'逐拍的`【约 N 字】`才是准数——高于均值的那几拍是重头、低于的快速推进，'
+           f'但**加起来必须落在上面的区间里**。' if nb else '')
+        + f"\n· 段落保持这本书的排版：{book.band_of.get('段落形态', '')}"
+          f'——不要把三四句话并成一大段，那不是这本书的样子。'
+        # 【句段/明喻手感锚点】数值插值自 `measurable` 与源文。治「明喻 2→16、心里 3→13、
+        # 段长双向冲」这类腔调漂移——光有档位词，写手不知道自己写密/写长了多少。
+        + f"\n· 句段手感（逐本实测，软指标）：这本书平均一句约 "
+          f"{meas.get('avg_sentence_chars')} 字、平均一段约 "
+          f"{meas.get('avg_paragraph_chars')} 字"
+        + (f'、明喻（像/仿佛/如同这类）每千字只有约 {simile:.1f} 个'
+           if simile is not None else '')
+        + '。写完回看：你的句段若明显比它长、比喻明显比它密，就是写成了另一本书。',
+        dialogue_block(entry, book, with_source_text=with_source_text),
+        '── 本章要写的内容（按顺序；**只写这些**，不得新增剧情、也不要写别的章的事）──\n'
+        + chapter_facts(entry),
+        '── 人物（用这些名字，不要改名、不要另造称呼）──\n'
+        + _compact(writer_chars(entry, book)),
+        # ⚠ **逐章投影，不是书级**：`setting` 曾是唯一一个书级直发、无闸门的事实块，
+        #   而实测某本的 setting 里就写着 ch14 才揭示的那条 secret 的全部内容。
+        '── 世界设定 ──\n' + _compact((entry.get('facts') or {}).get('setting') or {}),
+        # 逐章投影：只给到本章为止该知道的。⚠ **`must_not_reveal` 不在这里**——
+        # 它只有裸 id、对写手无从执行，真正的保护是那些 secret **根本不下发**。
+        facts_block(entry),
+        style_block(book.style),
+    ]
+    if (prev := prev_context(entry, book)):
+        blocks.append(prev)
+    src = ''
+    if with_source_text:
+        for s in (entry.get('from_source_ordinals') or []):
+            one = book.source_text.get(s, '')
+            src += one
+            blocks.append(f'── 源章原文（阅读序第{s}章）──\n' + one)
+    return Material(blocks=[b for b in blocks if b], given='\n\n'.join(b for b in blocks if b),
+                    source_text=src)
+
+
+def build_user(mat: Material) -> str:
+    """下发面 → user 消息。**与 stage6/stage7 同形。**"""
+    return '\n\n'.join(mat.blocks)
+
+
+def revise_user(mat: Material, prev_text: str, fix_lines: list[str]) -> str:
+    """`--revise` 那一轮的 user：**全部材料 + 上一轮成稿 + 本轮要修的问题**。
+
+    ⚠ 指令行由 `Rule.directive` 渲染（`fix_lines`），**这里不写第二份措辞**：
+    `_provenance.fixes` 只存 `[[rule, evidence_key]]` 引用，存第二份就会跟着判据表漂，
+    而「上一轮到底发了哪句话」再也说不清。
+    """
+    return '\n\n'.join([
+        build_user(mat),
+        '── 上一轮你自己写的正文 ──\n' + prev_text,
+        '── 本轮必须修掉的问题（只动这些地方，其余尽量逐字保留）──\n' + '\n'.join(fix_lines),
+    ])
+
+
+def trim_user(text: str, entry: dict[str, Any]) -> str:
+    """收缩那一次调用的 user：**上限 + 必须覆盖的事件清单 + 原稿**。
+
+    ⚠ 事件清单要一起发：删减最容易删掉的正是「带过的那几拍」，而那是**整件事没写**，
+    不是写得简略。
+    """
+    lo, hi, _est = target_band(entry)
+    evs = [e for be in (entry.get('beats') or []) for e in (be.get('events') or [])
+           if (e or '').strip()]
+    return '\n\n'.join([
+        f'【目标区间】{lo}~{hi} 字（现在 {len((text or "").strip())} 字）',
+        '── 必须覆盖的事件（一条都不许删掉）──\n' + '\n'.join(f'· {e}' for e in evs),
+        '── 原稿 ──\n' + text,
+    ])

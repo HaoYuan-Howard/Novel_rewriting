@@ -75,10 +75,17 @@ def test_every_free_flag_runs_without_an_api_key(flag, node, box):
 
     ⚠ **不可接受的是第四种**：一段栈、或者一次真请求。
     原型这条纪律靠人工逐个核对分支保证，而漏一个的后果是一笔没打算花的账单。
+
+    ⚠⚠ **有臂的节点要把 `--mode` 带上**（今天只有 `stage5.write`）。不带的话它在
+    「这一次是哪条臂」那一步就落显式终态了——退出码仍然是 `2`（本条照样绿），
+    而**这条跑法一行都没跑到**：守卫会这样**静默失去扫描面**（LESSONS 第 4 条），
+    而失去的正是新移植那一层。
     """
     argv = ['run', node, box.sid, flag]
     if flag in VALUED_FLAGS:
         argv.append(str(box.dir / 'payload.json'))
+    if (modes := NODES[node].modes):
+        argv += ['--mode', modes[0]]
     argv += ['--base', str(box.root)]
 
     assert N.is_paid(node, argv[3:5] if flag in VALUED_FLAGS else [flag]) is False, \

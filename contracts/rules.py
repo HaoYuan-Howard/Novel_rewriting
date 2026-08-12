@@ -70,7 +70,14 @@ _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
 #: ——`STAGE_SECTIONS` 早就是元组了，那一格终于有了真消费方。
 #: ⚠⚠ 它也是第一个**徽章能真的是 `pass`** 的层：判据表里没有一条 `sev='unver'`
 #: （stage6/stage7 各有 8/7 条常驻 `unver`，结构上永远最好只有 amber）。
-PORTED_STAGES: frozenset[str] = frozenset({'stage3', 'stage4', 'stage6', 'stage7'})
+#: ⚠ **`stage5` 是 F 期第四层**（2026-08-12）。它带进来三个第一次：
+#: 第一个 `repair != 'NONE'`（判据要把指令发回写手）· 第一个**逐章**产物
+#: （完成度与来源账都按章数）· 第一个 `ask_text` 调用点（响应是纯文本，
+#: **没有 JSON 可校验**，所以 stage4 那条「响应侧 `extra='forbid'` 当场挡回」的出路
+#: 在它的默认路径上不存在）。
+#: ⚠⚠ 它的徽章**结构上永远不可能是 `pass`**（5 条 `unver`，其中 `must_hold_unver` 每本都产）
+#: ——最好是 `amber` + 退出码 0，**与 stage4 恰好相反**。
+PORTED_STAGES: frozenset[str] = frozenset({'stage3', 'stage4', 'stage5', 'stage6', 'stage7'})
 
 
 @dataclass(frozen=True)

@@ -134,7 +134,7 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
     ⇒ 改成查表，形态**照抄 `novel/stages/__init__.py::_checkers()`**
     ——同一个问题在复检那一侧早就解对了，这里只是把它抄回来。
     """
-    return {'stage3': _run_stage3, 'stage4': _run_stage4,
+    return {'stage3': _run_stage3, 'stage4': _run_stage4, 'stage5': _run_stage5,
             'stage6': _run_stage6, 'stage7': _run_stage7}
 
 
@@ -389,6 +389,78 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
     return X.OK if report.passed else X.CHECK_FAILED
 
 
+def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
+    """stage5 的九条路。**先按节点分两支，再按 flag 分**——形态照 `_run_stage7`。
+
+    ⚠⚠ **本层是全链唯一有「臂」的层**：`stage5.write --mode deep|shallow`。
+    臂由 `ctx.mode` 带着（`RunContext` 那一格），**不在 flags 里**——它不改变贵贱、
+    也不改变写不写盘，与 `--base` / `--yes` 同类。⚠ 而 `--chapters` 是**付费路的参数**
+    （`VALUED_FLAGS`）：逐章深度这个人的决策**不落任何产物**，只活在它里面（`R-7.2`）。
+
+    ⚠ 写作节点**没有 `--check-only`**：判据表两相共用一张，而复检读的是验收报告那份产物
+    ⇒ `check_nodes('stage5')` 恰好是 `stage5.review` 一个。
+    """
+    from novel.stages.stage5 import review, write
+
+    tokens = set(N.flag_tokens(flags))
+    chapters = _valued(flags, '--chapters')
+
+    if ctx.node == 'stage5.review':
+        if '--wontfix' in tokens:
+            report = review.mark_wontfix(ctx, _valued(flags, '--wontfix') or '')
+            print(render(report))
+            print('  ✓ 豁免已记进 stage5/wontfix.json。'
+                  '⚠ **豁免不删结论**：它照常列在报告与界面上，只是不进反哺、不占待人工')
+            return X.OK if report.passed else X.CHECK_FAILED
+        if '--check-only' in tokens:
+            report = review.run_check_only(ctx)
+            print(render(report))
+            return X.OK if report.passed else X.CHECK_FAILED
+        rev, report = review.run_review(ctx)
+        print(f'  ✓ 全书验收：{len(rev.chapters)} 章 · 书级 {len(rev.book)} 条'
+              f'（{rev.counts}）')
+        print(render(report))
+        # ⚠⚠ **本层徽章结构上永远到不了 `pass`**（5 条 `unver`）⇒ 最好是 amber + 退出码 0。
+        #    拿 `passed` 当退出码是对的：`amber` 的 `passed` 为真，只有真命中 hard 才非零。
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    # ── 以下是 `stage5.write` ────────────────────────────────────────────────
+    if '--dry-run' in tokens:
+        system, user, _mat = write.build_prompt(ctx, chapters)
+        print(f'── system（{len(system)} 字）──\n{system}')
+        print(f'\n── user（{len(user)} 字）──\n{user}')
+        return X.OK
+
+    if '--recheck' in tokens:
+        report = write.run_recheck(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--revalidate' in tokens:
+        report = write.run_revalidate(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--apply-edit' in tokens:
+        report = write.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    # 付费两条路。⚠ 本仓第一次真花钱要先说一声（README）。
+    from novel.config import load_config
+    from novel.llm.client import LlmClient
+    from novel.llm.transport import DeepSeekTransport
+    cfg = load_config()
+    client = LlmClient(ctx, DeepSeekTransport(cfg), model=cfg.model,
+                       max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
+                       concurrency=cfg.concurrency)
+    report = (write.run_revise(ctx, client, chapters) if '--revise' in tokens
+              else write.run_write(ctx, client, chapters))
+    print(render(report))
+    print('  ✓ 逐章成稿已落盘——跑 `stage5.review`（0 成本）看全书验收')
+    return X.OK if report.passed else X.CHECK_FAILED
+
+
 def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
     """stage7 的八条路。**七条 0 成本，一条付费。**
 
@@ -501,7 +573,10 @@ def _cmd_run(a: argparse.Namespace) -> int:
             f'要先看会发出去什么，用 `--dry-run`（0 成本）')
     # ⚠ `paid` 由 `is_paid` 算，**不由 `NODES[node].paid` 推**：
     # 真正的贵贱是 `(node, flags)` 二元组的函数，而它只有一处算（`R-11.7`）。
-    ctx = RunContext.open(a.base, a.sid, a.node, paid=paid)
+    # ⚠⚠ `--mode` **必须传下去**：它此前被解析出来就丢掉了，而全链唯一有臂的
+    # `stage5.write` 从此只能靠一个默认值猜自己是哪条臂——那正是「臂与 tag 被拼成
+    # 同一个串」那次事故的同一个形状（判据在错的臂上恒假，而闸门不报错）。
+    ctx = RunContext.open(a.base, a.sid, a.node, paid=paid, mode=a.mode)
     return _dispatch(a.node, ctx, flags)
 
 
