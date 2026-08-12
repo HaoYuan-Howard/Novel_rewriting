@@ -55,7 +55,22 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 `tests/test_corpus_fixtures.py` 从 279 条塌到 6 条**而不报错**——要重量历史基线，
 必须抽到 `E:\practice_group\` 的同级目录下。
 
-**当前基线：全绿，1597 passed / 2 skip**（F6/F7 收工，2026-08-12）。
+**基线：F6/F7 收工时实测 `1597 passed / 2 skip` 全绿**（`452b22f`）。
+F5-2（`ffbc7c7`）给 `tests/test_core.py` 加了 5 条 ⇒ **该是 `1602 / 2`**。
+
+> ⚠⚠ **这个数 F5-2 收工时【没能实测到】，别把它当核过的。** 2026-08-12 19:25 起
+> 另一个会话在同一工作树里加 stage0 的摄入/上传路（9 个新端点），树上因此挂着
+> **4 红 + 5 错**（全是它的：`test_api_http` 的「九个端点」面 · `test_api_enums`
+> 的 `len(actions) == 69` · `test_api_discipline` 的 409）。
+> 实测到的是 **`1600 passed / 2 skip / 4 failed / 5 error`**（共 1611），
+> 其中本轮自己那几个文件全绿（`test_core.py` 37 条 + `test_stage4_beats.py` 21 条）。
+> 详情与「哪些文件被它占着」见下方 **F5 从这里接** 那一节开头的方框。
+
+> ⚠ **`git worktree` 里跑不出这个数，那不是环境坏了。** 拿 HEAD 开一个干净 worktree
+> 实测 `1593 / 3 / 1F / 2E`——差的那几条是 **F6/F7 的 `tests/test_stage01.py`
+> 依赖 gitignore 掉的 `Test_data/` 与 `outputs/`**（`test_test_data_has_three_byte_comparable_prototype_outputs`
+> 当场红）。⇒ **一份全新 clone 跑不出全绿**，那几条断言只在有实跑产物的那棵树上成立。
+> 登记在这里，别当成回归。
 
 **每一条 skip 都明说「没在查」——改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
 2 条的来历：
@@ -111,7 +126,22 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 | **F6 ✅** | stage1 | 828 / 0 / 13（无 id） | 已沿新边界只保留确定性分章；契约收敛为 8 条有 id 判据 |
 | **F7 ✅** | stage0 | **0** / 0 / 0 | 已从零实现摄入、剔除、人工编辑/批准、轮次归档与 13 条有 id 判据 |
 
-### ⭐ F5 从这里接 —— `F5-0` 已落，下一步是 `F5-1`
+### ⭐ F5 从这里接 —— `F5-0` / `F5-2` 已落，`F5-1` 与 `F5-3` **被另一个会话堵着**
+
+> ## ⚠⚠ 接手第一件事：确认 `contracts/invariants.py` 没人在写
+>
+> **2026-08-12 19:25 实况：另一个会话正在同一工作树里加 stage0 的摄入/上传路**
+> ——已改 `contracts/invariants.py` · `contracts/schema/{__init__,api,stage0}.py` ·
+> `novel/cli/main.py` · `novel/api/app.py` · `novel/stages/stage0/removal.py` ·
+> `tests/test_layering.py`，并新建了 `novel/orchestrator/uploads.py` ·
+> `novel/views/ingest.py` · `novel/api/routes/ingest.py`（9 个新端点）。
+>
+> **树上那 4 红 + 5 错全是它的**（`test_api_http` 的「九个端点」面 · `test_api_enums`
+> 的 `len(actions) == 69` · `test_api_discipline` 的 409）。⇒ **别去修它们**。
+>
+> **`F5-1` 与 `F5-3` 都要改 `contracts/invariants.py`，与它硬冲，必须串行**
+> （同 F5-0 那次的处置）。`F5-2` 之所以能先落，是因为它只碰
+> `novel/core/spans.py` 与 `tests/test_core.py`，与那一批不相交。
 
 **F5-0（`e5dd5d5`）交的是落点审计，一行 `.py` 都没改：**
 
@@ -126,11 +156,62 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 
 | 提交 | 内容 |
 |---|---|
-| `F5-1` | 契约层四格：`Rule.fix` + 注册期不变量 · 四个 flag 登记 · 三个 verbatim 记账键 · `corpus.py::ADDED` |
-| `F5-2` | `novel/core/spans.py` 的 `recover` 臂与 `HINGE_LCS_MIN` |
-| `F5-3` | 本层的 prompt 模块 —— 三条臂逐字节搬。⚠ `_legacy/n2_semantic.py` 里**同名并存**着旧世代的 `BLUEPRINT_SYS` 与 `BLUEPRINT_HINT`（比 F4-5 那次「改名」更深），取值器必须按**文件路径**取不许按符号名 grep |
+| `F5-1` | 🚧 **被堵** 契约层四格：`Rule.fix` + 注册期不变量 · 四个 flag 登记 · 三个 verbatim 记账键 · `corpus.py::ADDED`。⚠ 审计漏了三处，**不补会当场炸**：① `--chapters` 必须进 `NODES['stage2.blueprint'].flags`（§5.1 有 **19 条**判据的 `fix` 指着 `blueprint --chapters`，而它今天只挂在 `stage5.write` 上）② `--drop` / `--replay-cache` **都是带值 flag**（原型 `--drop <ids>` 配必填 `--reason`、`--replay-cache <KEY>` 且必须配 `--chapters`）⇒ 还要进 `VALUED_FLAGS` ③ `--reason` **不单独立 flag**，折进 `--drop` 的值形态，照 `--wontfix` 那个已有先例（本仓没有「一个 flag 要求另一个 flag」的机制）。⚠ `tests/test_api_enums.py` 那个 `len(actions)` 要 **+4** |
+| `F5-2` | ✅ **已落**（`ffbc7c7`）`novel/core/spans.py` 的 `recover` 臂与 `HINGE_LCS_MIN` |
+| `F5-3` | 🚧 **被堵** 本层的 prompt 模块 —— 三条臂逐字节搬。groundwork 已探明，见下 |
 | `F5-4` | 本层的判据行文件 —— 75 条，**故意还不被 import**（照 F4-4） |
 | `F5-5` | 模块 + 接线一次走完（照 F4-6）。⚠ **stage2 是最后一个未移植层** ⇒ 它一进 `PORTED_STAGES`，`STAGES − PORTED_STAGES` 就是空集，`NodeNotPorted` 在生产路径上再也触发不了。用户裁决（2026-08-12）：**退役它**（501 仍由 `RunModeNotImplemented` 可达，HTTP 状态面不变） |
+
+#### `F5-3` 的 groundwork（**已实测探明，别再推一遍**）
+
+**① 取值器不用改一个字。** `tests/test_stage5_prompts.py` 那个受限求值器
+（`_Proto` / `_prototype` / `_want`）**原样就能算出 stage2 全部 7 个常量**，
+文件表换成 `Stage2/{stage2_common,n2_global,n2_blueprint}.py` 即可。实测渲染字数：
+
+| 常量 | 字数 | 出处 |
+|---|---|---|
+| `RULES_V2` | **938** | `stage2_common.py:96`。`GLOBAL_SYS` / `BLUEPRINT_SYS` 共用前缀 ⇒ **单独一格搬、单独钉一次**（照 stage5 逐段钉共用片段的理由：合起来那条对不上时，逐段这一条才说得出**是哪一段**漂了） |
+| `GLOBAL_SYS` | **8682** | `n2_global.py:43` = `RULES_V2 + fill(…)` |
+| `BLUEPRINT_SYS` | **7448** | `n2_blueprint.py:89` = `RULES_V2 + fill(…)` |
+| `ROLE_SPLIT_SYS` | **2008** | `n2_global.py:435` = `fill(…)`，**无** `RULES_V2` 前缀 |
+| `GLOBAL_HINT` / `BLUEPRINT_HINT` / `ROLE_SPLIT_HINT` | 1028 / 531 / 65 | `:179` / `:224` / `:454`（按 `ensure_ascii=False`） |
+
+⇒ `20804` 那个数 = 三个 SYS（`8682+7448+2008`）+ 三个 HINT 按 `indent=2`（`2666`）。
+
+**② 那 10 个插值点从哪儿来 —— 6 个本仓已有、2 个要新立、1 个是共用片段。**
+
+| 占位符 | 原型来源 | 本仓落点 |
+|---|---|---|
+| `$LAYERS`（blueprint） | `TIME_LAYERS_ENUM` | ✅ `TIME_LAYERS` 逐值相同 |
+| `$KINDS`（blueprint） | `HINGE_KINDS_ENUM` | ✅ `HINGE_KINDS` 逐值相同 |
+| `$RULE_KINDS`（global） | `WORLD_RULE_KINDS` | ✅ `WORLD_RULE_KINDS` 逐值相同 |
+| `$NAME_DISTINCT`（global） | `NAME_DISTINCT` | ✅ `NAME_DISTINCTIVENESS`（**名字不同、取值相同**） |
+| `$CONTEXTS`（global） | `ADDRESS_CONTEXTS` | ✅ `ADDRESS_CONTEXT`（同上） |
+| `$BY_SPECIAL`（global） | `ADDRESS_BY_SPECIAL = ['narration','public']` | ✅ 由 `ADDRESS_BY` **减掉 `char_id`** 派生，别手抄第二份 |
+| `$PRONOUNS`（global） | `BARE_PRONOUNS = ['我','你','他','她','它','咱']` | ⚠ **本仓没有，要新立在 `contracts/invariants.py`**——它的第二个消费方是判据 `address_bare_pronoun` / `address_has_pronoun` / `present_names_pronoun`（F5-4）。**这一格就是 F5-3 被 `contracts/invariants.py` 堵住的原因** |
+| `$CHANGE_TYPES`（global） | `CHANGE_TYPES_ENUM = 'stable\|development\|revelation\|deterioration\|reversal\|…'` | ⚠ **本仓没有**。⚠⚠ **末尾那个 `…` 是语义的一部分**（`stage2.md` §1.6 明写）⇒ 它是**开放枚举，不许做成 `Literal`**，只能是一个字符串常量 |
+| `$ROLE_FATE`（global **与** role_split 都用） | `ROLE_FATE_RULE`（约 1.6k 字，压着六条实测反例） | **一个落点两处引用**——两条臂读同一份，各抄一份就是下一次漂移的源头 |
+
+**③ `_legacy` 的同名并存比 F4-5 那次更深。** `_legacy/n2_semantic.py` 里
+**同时**有 `BLUEPRINT_SYS`（`:252`）**与** `BLUEPRINT_HINT`（`:274`），
+与现役 `n2_blueprint.py` 的 `:89` / `:224` **同名**（F4-5 那次是**改名**：
+`N5_SYS` → `DEEP_SYS`，这次是同名并存）。而取值器那张文件表的语义是
+**「先出现的赢」**——把 `_legacy/` 放进去就会静默拿到旧世代（它拼的是 `RULES` v1
+不是 `RULES_V2`）。⇒ 文件表**只列现役三份**，并配一条断言
+「拿到的那一份带 `RULES_V2` 前缀」把两代分开。
+
+**④ 唯一一处不许逐字搬 —— `R-3.8b`。** `BLUEPRINT_SYS` 通篇没有「第一拍要从章首起」，
+**还明写着「两条之间允许有空隙」**，而三本 **5 处漏抓全在章首、0 在章尾**。
+⇒ F5-3 要在它里面**插一句**，逐字节测试写成「**除这一处外与原型逐字相同**」
+并**同时断言原型那一份里没有这句话**（照 `test_the_shallow_arm_still_has_no_layer_gloss`
+那两个「有意留着的洞」的形态），同批把 `R-3.8b` 那行改判 `结构`
+——它是三行待改判里**唯一**落点在 prompt 上的，`prompts.py` 一建出来就能写死。
+⚠ 散文里**不许出现那七个记号字面**（「谁在查」是子串匹配，F5-0 已被绊过一次）。
+
+**⑤ 求值器该不该抽成共用一份。** 它今天只长在 `tests/test_stage5_prompts.py` 里，
+而 F5-3 是第二个消费方。照 `tests/legacy_names.py` 的先例
+（那份的 docstring 记着「各抄一份的分家表现是**贵贱对账假绿**」）
+⇒ **抽进一个 `tests/` 下的共用模块**，别复制第二份 70 行的 AST 求值器。
 
 #### ⚠ stage2 自己欠着的（登记，**不是**验过了）
 
