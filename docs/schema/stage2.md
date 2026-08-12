@@ -872,7 +872,7 @@ fix: tuple[str, ...] | None = None      # ('stage2.blueprint', '--migrate')
 
 | 新行 | 收哪几条判据 |
 |---|---|
-| `R-2.5b` INFO | `address_selfref` · `address_missing` · `address_unlocatable` |
+| `R-2.5b` INFO | `address_selfref` · `address_missing` |
 | `R-2.6b` HARD | `distinguisher_lonely` |
 | `R-2.9b` 度量 | `secret_cold_reveal` · `secrets_absent` |
 | `R-2.9c` HARD | `secret_known_by_dangling` |
@@ -881,7 +881,7 @@ fix: tuple[str, ...] | None = None      # ('stage2.blueprint', '--migrate')
 | `R-3.2b` HARD | `anchor_ambiguous` · `anchor_short` |
 | `R-3.6b` HARD | `chapter_no_hinge` · `hinge_density` |
 | `R-3.6c` HARD | `time_layer_no_present` · `time_layer_mix` |
-| `R-3.7b` HARD | `present_names_partial` · `present_names_ambiguous` · `present_names_unlisted` · `present_names_pronoun` |
+| `R-3.7b` HARD | `present_names_partial` · **`present_names_invented`** · `present_names_ambiguous` · `present_names_unlisted` · `present_names_pronoun` ⚠ 加粗那条是 **F5-4 补的**：这一行的原话是「解析的**五种**去向处置完全不同」，而五分里的**自造**此前不在这一格 —— 五分只列了四分 |
 | `R-3.7c` INFO | `present_continuity` · `present_ungrounded` · `present_broad` |
 | `R-3.7d` INFO | `present_early_named` · `event_early_name` · `present_names_late` |
 | `R-3.14b` INFO | `pronoun_surface_unattested` |
@@ -889,6 +889,49 @@ fix: tuple[str, ...] | None = None      # ('stage2.blueprint', '--migrate')
 | `R-3.16b` HARD | `scope_violation` · `batch_density` · `context_scope` |
 | `R-3.17` 度量 | `place_moves` |
 | `R-3.18` HARD | `verbatim_failed` ✚ · `anchor_not_verbatim`（断言 `verbatim_recovered`）——见 §3.2 新增的三个键 |
+
+> #### ⚠ F5-4 更正一处：`address_unlocatable` 不落 `R-2.5b`，落 `R-2.2`
+>
+> 上表原来把它列在 `R-2.5b` 里，而 **`R-2.5b` 那一行自己的正文写着**
+> 「⚠ 『叫法在不在原文里』**不在这里，那是 `R-2.2`**（同一件事不许有第二个落点）」
+> ——两处直接对立。判 `R-2.2` 对：那一行的原话是「人物的叫法（称谓表）**逐条**
+> 必须在原文里原样搜得到」，而 `address_unlocatable` 判的正是**逐条**。
+> `R-2.5b` 明说自己只收**两个**覆盖度读数（自称挂错人 / 一个称呼都没有），它们
+> 分别是 `address_selfref` 与 `address_missing`。
+> ⇒ 错的形态是**只读了 §5.1 那一格的措辞（「都能在原文里原样找到」）就归行**，
+> 而没有回去核那一行自己排除了什么。发现它是在 F5-4 逐条落 `requirement` 的时候。
+
+#### 另外 38 条落在**已有的行**上（F5-4 补全，此前这张表只记了新行那一半）
+
+上表 17 行收 37 条；剩下 38 条落在 `R-2`/`R-3` 本来就有的行上，而**此前文档一个字都没说
+它们落在哪**——那 38 个 `requirement` 值只活在判据行文件里，改需求编号时没有任何东西
+会提醒该跟着改。⇒ 补全成一张双向都查得动的索引：
+
+| 已有行 | 收哪几条判据 |
+|---|---|
+| `R-2.1` HARD | `canonical_unique` |
+| `R-2.2` HARD | `character_unattested`（至少有一个能搜到）· `address_unlocatable`（**逐条**，INFO） |
+| `R-2.3` HARD | `address_bare_pronoun` · `address_all_pronoun` · `address_has_pronoun` |
+| `R-2.4` HARD | `address_by_unresolved` |
+| `R-2.5` HARD | `address_from_out_of_range` · `address_from_too_early` |
+| `R-2.6` HARD（词表） | `role_missing` · `role_leaks_fate` · `role_repeats_name` · `hedge_words` · `role_fate_unverifiable`（unver） |
+| `R-2.7` 度量 | `fate_report` |
+| `R-2.8` HARD（范围） | `relation_dangling`（INFO）⚠ **只收「两端可解析」这一半**；`valid_from/to_chapter` 的**范围**那一半今天没有判据——它要拿全书章数比，而本层两份产物里都没有那个数 |
+| `R-2.9` HARD | `secret_setup_order` |
+| `R-3.1` HARD | `beat_id_unique` · `beat_id_format` |
+| `R-3.2` HARD | `span_unlocatable` · `span_coverage`（度量）· `span_coverage_per_chapter`（度量） |
+| `R-3.5` HARD | `hinge_cross_chapter` · `hinge_in_hole` · `hinge_anchor_void` · `hinge_drift` · `hinge_cascade`（INFO）· `hinge_unanchored` |
+| `R-3.7` HARD | `present_ids_dangling` ⚠ 只此一条：五分那一族**整族**归 `R-3.7b`（含自造），本行只管「解析出来的 id 都在名册里」这条**解析器后置条件** |
+| `R-3.8` HARD | `edge_hole` · `uncovered_holes`（度量） |
+| `R-3.9` HARD | `beats_collapsed` · `beats_coarse` |
+| `R-3.11` HARD | `repair_cache_policy` ✚ |
+| `R-3.13` HARD | `event_empty` ✚ · `summary_empty` ✚ |
+| `R-3.14` INFO | `narration_multi` · `narration_voices`（度量，它是这一维的**样本量**） |
+
+⚠ **`R-3.3` / `R-3.4` 两行不在上面任何一格里**，而它们今天标着 `HARD`
+⇒ 本层进 `PORTED_STAGES` 那一刻正向覆盖率会点名它们。它们说的是**本层实现里的机制**
+（原文以「点」不以「段」下发 · 跨段台词按段界确定性拆点），不是对某份产物的判定
+⇒ **与模块同批改判 `结构`**，形态照 F4-6 对 stage5 那五行的处置。
 
 **改判一行**：`R-3.6`（保真类型闭合枚举）`HARD` → **`载体`**，落点
 `contracts/schema/stage2.py::Hinge`。理由是 `contracts/schema/stage2.py` 文件头已立的那条规矩
