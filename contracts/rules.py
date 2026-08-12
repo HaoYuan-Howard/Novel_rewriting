@@ -77,8 +77,16 @@ _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
 #: 在它的默认路径上不存在）。
 #: ⚠⚠ 它的徽章**结构上永远不可能是 `pass`**（5 条 `unver`，其中 `must_hold_unver` 每本都产）
 #: ——最好是 `amber` + 退出码 0，**与 stage4 恰好相反**。
+#: ⚠⚠ **`stage2` 是 F 期最后一层**（2026-08-12，F5-5），也是**最难的一层**：
+#: 八份层契约里只有它一开始没有「判据清单」那一节——原型的判据全在一个 2077 行的
+#: `check_one()` 里，**一个 id 都没有**，严重度只由调用的方法名承载。
+#: 移植它 = 先从零建一张表（F5-0，**75 条**）。它带进来两个第一次：
+#: 第一个用 `Rule.fix` 的层（24 条带机器可读的修复路由，注册期第 ⑧ 条逐条查过节点与 flag）·
+#: 第一个**一层两个节点共用一张判据表**且**记账横跨两份产物**的层。
+#: ⚠⚠ 它进来那一刻 `STAGES − PORTED_STAGES` **成了空集** ⇒ `NodeNotPorted`
+#: 在生产路径上再也触发不了（用户裁决 2026-08-12：**退役它**，见 `novel/errors.py`）。
 PORTED_STAGES: frozenset[str] = frozenset({
-    'stage0', 'stage1', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7',
+    'stage0', 'stage1', 'stage2', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7',
 })
 
 

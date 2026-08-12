@@ -29,7 +29,6 @@ from novel.errors import (
     GateBlocked,
     HookCopyMissing,
     HumanEditProtected,
-    NodeNotPorted,
     NovelError,
     PathRefused,
     PartitionChapterMismatch,
@@ -84,10 +83,13 @@ STATUS: dict[type[NovelError], int] = {
     JobConflict: 409,
     #: 人敲了一条这个节点没有的跑法 ⇒ 产地是**客户端**。
     UnsupportedRunMode: 400,
-    #: 「登记在案、还没接线」与「整层还没移植」分开，因为它们对人的下一步不同：
-    #: 前者等实现，后者等移植。合成一条，报错就只剩「跑不了」三个字。
+    #: 「登记在案、还没接线」⇒ 后端认得这个地址，只是没实现。**不是 404**：
+    #: 404 会让前端以为自己请求错了，而这两件事该做的动作完全不同。
+    #: ⚠⚠ **这一格从前是两条**（另一条是 `NodeNotPorted`「整层还没移植」）。
+    #: F5-5 移植完最后一层之后 `STAGES − PORTED_STAGES` 是空集，那个异常
+    #: **在生产路径上再也构造不出来** ⇒ 退役（2026-08-12 用户裁决）。
+    #: **501 这一格没有掉，只是少了一个产地** —— 状态面对前端逐格不变。
     RunModeNotImplemented: 501,
-    NodeNotPorted: 501,
 
     # ── 代码自相矛盾（`RefusedByStructure`）。**是 bug，栈要留全** ──
     #: ⚠ 500 的响应体里**只出类名与一句人话，不出栈**——那份正文是不外流的版权内容，

@@ -164,16 +164,38 @@ def test_a_missing_artifact_is_200_with_the_left_half_intact(client, box):
 
 # ───────────────────────── 二、三种「没有」各不相同 ─────────────────────────
 
-def test_an_unported_stage_is_501_not_404(client, box):
-    """⭐ 裁决 4：**「URL 打错了」与「这一层还没建」不是一回事。**"""
-    for kind in sorted(set(STAGES) - set(PORTED_STAGES)):
+def test_every_stage_answers_a_real_state_not_501(client, box):
+    """⭐ 裁决 4 的今天形态：**八层都答得出「这一层现在是什么状态」。**
+
+    ⚠⚠ **本条此前叫 `test_an_unported_stage_is_501_not_404`**，遍历
+    `STAGES − PORTED_STAGES` 并断言 501 + `kind == 'NodeNotPorted'`。
+    它自己的最后一行写着「八层全移植完之后本条会一个都不跑——**那时候它该被改掉，
+    不该静静地绿**」。F5-5 就是那一刻：`stage2` 是最后一层，那个集合成了空集，
+    而 `NodeNotPorted` 连同它一起退役（2026-08-12 用户裁决）。
+
+    ⇒ **方向反过来**：从「未移植的那几层答 501」改成「**八层各答一个真状态**」。
+    覆盖面从 0 变成 8，且**加一层只会让它变大**——原来那条恰好相反。
+    ⚠ 断言不写死成某一个码：本 fixture 是一个**真书目录**，各层跑到哪一步不同
+    （产物齐的答 200、没跑的答 404）。要钉住的是**没有一层再答 501**——
+    501 从此只属于「这条跑法还没接线」，而复检这条路八层都接好了。
+    """
+    codes = {}
+    for kind in sorted(STAGES):
         r = client.get(f'/api/novels/{box.sid}/check/{kind}')
-        assert r.status_code == 501, f'{kind} → {r.status_code}'
-        body = r.json()
-        assert body['kind'] == 'NodeNotPorted'
-        assert 'stage3' in body['message'], '报错要说出【已经移植了哪些】，否则人不知道能点什么'
-    # 守卫的守卫：八层全移植完之后本条会一个都不跑——那时候它该被改掉，不该静静地绿。
-    assert set(STAGES) - set(PORTED_STAGES), '八层全移植了？本条要跟着改'
+        codes[kind] = r.status_code
+        assert r.status_code != 501, (
+            f'{kind} 仍答 501 —— 八层都在 `PORTED_STAGES` 里了，'
+            f'501 只该由「这条跑法还没接线」发出，而复检这条路每层都接好了')
+        assert r.status_code in (200, 404, 409), (
+            f'{kind} → {r.status_code}；复检这条路只该答这三个：'
+            f'200（查了）· 404（这一层还没跑）· 409（产物读不回来）。'
+            f'⚠ 三者**必须分得开**——它们对人的下一步完全不同')
+    # ⚠ 至少有一层真的答得出 200：全 404 时上面那两句是一对**恒真**的断言，
+    #   本条就退化成「这个地址不 500」。
+    assert 200 in codes.values(), f'一层都没查成：{codes}'
+    assert len(STAGES) == 8 and set(STAGES) <= PORTED_STAGES, (
+        '守卫的守卫：八层齐了这件事本身要有一条断言撑着，'
+        '否则删掉一层这条 for 会静静地少跑一轮')
 
 
 def test_an_unknown_kind_is_400_and_lists_the_eight(client, box):

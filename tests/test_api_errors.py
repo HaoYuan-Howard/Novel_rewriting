@@ -177,15 +177,22 @@ def test_missing_and_unreadable_are_two_different_codes():
     assert H.status_of(E.ArtifactUnreadable('x')) == 409
 
 
-def test_not_ported_is_501_not_404():
-    """⭐ 裁决 4 的落点：**「URL 打错了」与「这一层还没建」不是一回事。**
+def test_not_implemented_is_501_not_404():
+    """⭐ 裁决 4 的落点：**「URL 打错了」与「后端还没实现」不是一回事。**
 
     404 让前端以为自己请求错了；501 告诉它「后端认得这个地址，只是还没实现」。
-    两者该做的动作完全不同，而 `NodeNotPorted` 的 docstring 明写
-    「取值面要全、能不能跑是另一件事」。
+    两者该做的动作完全不同。
+
+    ⚠⚠ **这一格从前有两个产地**（`NodeNotPorted`「整层还没移植」与
+    `RunModeNotImplemented`「这条跑法还没接线」），F5-5 退役了前者：
+    stage2 是最后一层，它一进 `PORTED_STAGES`，那个异常
+    **在生产路径上再也构造不出来**（2026-08-12 用户裁决）。
+    ⇒ **501 这一格本身没有掉**，本条改成盯它：状态面对前端逐格不变。
     """
-    assert H.status_of(E.NodeNotPorted('stage2 属 F 期')) == 501
     assert H.status_of(E.RunModeNotImplemented('这条跑法还没接线')) == 501
+    assert not hasattr(E, 'NodeNotPorted'), (
+        '`NodeNotPorted` 又回来了？它退役的理由是**前件消失**（`STAGES − PORTED_STAGES` '
+        '是空集），不是「两个异常太像」。要复活它就先说清哪一层没移植')
 
 
 def test_a_second_job_on_the_same_book_is_409():

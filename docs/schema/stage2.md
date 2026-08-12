@@ -699,7 +699,7 @@ owner 分布：`stage2` **56** · `None` **19**（＝非结论，17 metric + 2 u
 | `beat_id_unique` | **HARD** | 全书 `beat_id` 不重复 | 0/3（93 / 67 / 91 个） | — |
 | `beat_id_format` | **HARD** | `b<章:02d>_<序:02d>` 且章内序连续、章号与所属章一致 | 0/3 | — |
 | `span_unlocatable` | **HARD** | 每条 `span` 的首尾锚点都能在原文里**按序**定位（定位不到＝这条没有量纲） | 0/3（251/251 全中） | `blueprint --chapters` |
-| `anchor_ambiguous` | **HARD** | 锚点在**定位器还要搜的那段**里只匹配到一处 | 0/3（502/502） | `blueprint --chapters` |
+| `anchor_ambiguous` | **HARD** | 锚点在**定位器还要搜的那段**里只匹配到一处 | 0/3（**251/251**，见下） | `blueprint --chapters` |
 | `anchor_not_verbatim` | INFO | 锚点是原文字节。**期望恒为 0**（落盘前已回取）⇒ 改断言 `_provenance.verbatim_recovered` | 0/3 | `blueprint --migrate`（0 成本） |
 | `verbatim_failed` | **HARD** ✚ | `_provenance.verbatim_failures` 非空即失败态。**原型没有这条**——它那边只有一次 `sys.exit`，账不落盘 | 0/3（键还不存在 ⇒ 今天落 `unver`） | `blueprint --chapters` |
 | `edge_hole` | **HARD** | ≥30 字的未覆盖原文不得落在**第一拍之前或最后一拍之后** | 0/3（未覆盖区间全在中段） | `blueprint --chapters` |
@@ -769,7 +769,7 @@ owner 分布：`stage2` **56** · `None` **19**（＝非结论，17 metric + 2 u
 
 | 原型判据 | 本仓落点 |
 |---|---|
-| `落盘前改写`（`address_by_fallback` / `address_surface_rewrites` 的账） | `novel/report/accounting.py::ACCOUNTING['stage2']`（今天是空元组，F5-5 填，出口见 §3.3） |
+| `落盘前改写`（`address_by_fallback` / `address_surface_rewrites` 的账） | ✅ `novel/report/accounting.py::ACCOUNTING['stage2']`（**F5-5 已填 11 行**，出口逐条见 §3.3）<br>⚠ **本层是全链唯一一层的记账横跨两份产物**：前 6 个键在 global、后 5 个在 blueprint，而报告只有一节。合成一节的理由与「判据表只有一张」同源——两个节点是**同一层**，拆成两节，「这一层落盘前改写了多少」就要读两屏才拼得出来 |
 
 ### 5.3 退役而不删（9 条，`RetiredRule`）
 
@@ -788,7 +788,7 @@ owner 分布：`stage2` **56** · `None` **19**（＝非结论，17 metric + 2 u
 | `role/fate`（characters 仍是旧的 identity 单字段） | `Character.role` / `.fate` 都是必填键 |
 | `★跨批`（`end_hook.pays_to_chapter` 残留 / 产物无跨章引用） | `end_hook` 整字段已删；后一支是一句**恒真陈述**，不是判定 |
 
-### 5.4 `fix` 那一列 —— 它今天在本仓没有落点
+### 5.4 `fix` 那一列 —— ✅ 已落地（`Rule.fix`，F5-1 立 / F5-4 填满）
 
 原型每条判据带一个**结构化的修复路由**，而不是一句散文：
 
@@ -815,6 +815,14 @@ fix: tuple[str, ...] | None = None      # ('stage2.blueprint', '--migrate')
 收益是它**能过 `is_paid`**——界面据此把「0 成本修」与「要再花一次钱」画成两个颜色；
 写进 `note` 就只是一段散文，拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 
+> #### ✅ F5-4 兑现的账：**24 条非空，注册期第 ⑧ 条一次通过**
+>
+> `blueprint --chapters` **19** · `blueprint --migrate` 2 ·
+> `global --purge-role` / `global --migrate` / `global --drop` 各 1。
+> ⚠ 那 24 条的节点名与 flag 逐个被注册期查过真实存在——**这正是这一格存在的全部理由**。
+> ⚠ `fix` 与 `directive` 在本层**完全不重叠**：全表 `repair='NONE'` ⇒ `directive` 全空。
+> 两格答的是不同的问题（「发给写手的一句话」vs「要跑的一条命令」），别合并。
+
 ### 5.5 五条要连基线一起读的
 
 > #### ⚠ `role_fate_unverifiable`：三本里只有一本打得出这条 unver
@@ -826,6 +834,17 @@ fix: tuple[str, ...] | None = None      # ('stage2.blueprint', '--migrate')
 > 差一个字避开了 `后被`）。
 > ⇒ **本仓改成无条件产出**（同 F4-6 对 `name_surface_survey` 的处置）：
 > `role_leaks_fate` 报绿灯或报红灯，都要在同一份报告里说清这道防线只挡转抄式。
+>
+> #### ⚠ `anchor_ambiguous` 的分母是 **251 不是 502**（F5-5 实跑更正）
+>
+> 本表原来这一格写着 `502/502`——那是**锚点总数**（251 拍 × 两端），
+> 而这条判据**只查 `starts_with`**：`ends_with` 由定位器在同一拍的 `starts_with`
+> 之后找，它落在哪儿不改变「这一拍对应原文哪一段」的起点。原型的实现就是这样，
+> **而它打印的那句 `[OK] N 个锚点…` 用的是全量 `anchors`** ⇒ 那盏绿灯把自己的分母
+> 报大了一倍（判据 31：绿灯必须报出自己**真实的**分母）。
+> ⇒ 本仓 `scanned` 写的是「**定位成功的 starts_with 锚点**」，实跑 93+67+91 = **251**。
+> ⚠ 另一头没有掉：`anchor_short` 那条度量照旧数**两端**（66/502），
+> 因为它量的是「锚点有多短」，两端都算数。**同一批对象、两个分母，各自说清自己在数什么。**
 >
 > #### ⚠ `world_rule_names_person`：这道闸门在三本上**什么也没拦住**
 >

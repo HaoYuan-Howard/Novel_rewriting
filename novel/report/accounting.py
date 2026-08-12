@@ -40,7 +40,31 @@ class AccountingSpec:
 ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     'stage0': (),
     'stage1': (),
-    'stage2': (),
+    # ⚠⚠ **全链唯一一层的记账横跨两份产物**（`stage2.md` §3.3 列了 11 个出口）：
+    #    前 6 个在 `global_grounding._provenance`、后 5 个在 `chapter_blueprints`。
+    #    合成一节而不是两节，理由与「判据表只有一张」同源：两个节点是**同一层**，
+    #    拆成两节，「这一层落盘前改写了多少」就要读两屏才拼得出来。
+    # ⚠ 这一层的记账**不是可选的装饰**：本层有一整族判据**断言的就是这些计数而不是字段值**
+    #    （`secret_setup_order` 断言 `setup_chapters_pruned` · `anchor_not_verbatim` 断言
+    #    `verbatim_recovered` · `verbatim_failed` 断言 `verbatim_failures`）——
+    #    因为那几件事都跑在**落盘前**，再去断言字段值就是一条**永远为真**的判定。
+    # ⚠ `human_adjudicated` 与 `partial_regen_chapters` / `repairs` 三个键在契约上**可选**，
+    #    而这里照样声明：键不在时报告打「未记录」，那与「记了 0 次」不是一回事（`Q-2` 的三态）。
+    'stage2': (
+        AccountingSpec('address_by_fallback', '`by` 兜底成 `public` 几次？（判据断言这个计数）'),
+        AccountingSpec('address_surface_rewrites', '哪几条称呼被最长子串回取改写过？'),
+        AccountingSpec('address_from_chapter_raised', '哪几条称呼的可用章被往后抬过？'),
+        AccountingSpec('canonical_distinguishers_stripped', '哪几个显示名被剥掉了消歧区分词？'),
+        AccountingSpec('setup_chapters_pruned', '哪几条秘密的埋点章被裁掉了？'
+                                                '（「冷揭示」与「被裁空」只能靠它分开）'),
+        AccountingSpec('human_adjudicated', '人裁掉过什么？理由是什么？'),
+        AccountingSpec('verbatim_rewrites', '哪几个锚点被**精确回取**过？（一个字都没动）'),
+        AccountingSpec('verbatim_recovered', '哪几个锚点是**按最长公共子串救回来的**？'
+                                             '（它们本来就不是原文字节）'),
+        AccountingSpec('verbatim_failures', '哪几个锚点**锚不到**？（非空即失败态，按三种根因分）'),
+        AccountingSpec('partial_regen_chapters', '哪几章是定向重生成过的？'),
+        AccountingSpec('repairs', '那几次定向重生成各修了什么？（`failure_items` + 前后三个计数）'),
+    ),
     # ⚠⚠ **这三个键就是 `stage3.md` §五 记的那笔账**：实跑三本 `--check-only`，
     #    报告里 `attempts` / `revalidated` / `gates_skipped` **一行都没有**，
     #    而它们记的恰好是最该被人看见的三件事。这一格把账还上。

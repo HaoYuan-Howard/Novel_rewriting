@@ -31,8 +31,7 @@ from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED
 from contracts.rules import PORTED_STAGES
 from novel.cli import exit_codes as X
 from novel.errors import (
-    ApprovalRequired, NodeNotPorted, RefusedByStructure, RunModeNotImplemented,
-    TerminalState,
+    ApprovalRequired, RefusedByStructure, RunModeNotImplemented, TerminalState,
 )
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
@@ -137,7 +136,7 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
     ⇒ 改成查表，形态**照抄 `novel/stages/__init__.py::_checkers()`**
     ——同一个问题在复检那一侧早就解对了，这里只是把它抄回来。
     """
-    return {'stage0': _run_stage0, 'stage1': _run_stage1,
+    return {'stage0': _run_stage0, 'stage1': _run_stage1, 'stage2': _run_stage2,
             'stage3': _run_stage3, 'stage4': _run_stage4, 'stage5': _run_stage5,
             'stage6': _run_stage6, 'stage7': _run_stage7}
 
@@ -152,24 +151,18 @@ def runnable_stages() -> frozenset[str]:
 
 
 def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
-    """跑一个节点。**未移植的层落显式终态，不是一段栈。**
+    """跑一个节点。**跑不动的落显式终态，不是一段栈。**
 
-    ⚠ **两道闸，各答一个不同的问题**（同 `novel/stages/__init__.py::check_only`）：
-      · 不在 `PORTED_STAGES` ⇒ `NodeNotPorted`：整层还没移植。
-        它在取值面里是**对的**——`NODES` 有 16 个节点而 `PORTED_STAGES` 只有几个，
-        缺一个取值，`/api/enums` 就少一个、队列就排不出那一步、正向覆盖率就少查一节。
-        「今天跑不动」只该在真去跑它的那一刻说出来。
-      · 在 `PORTED_STAGES` 里而 `_runners()` 没有 ⇒ **两张表分家了**。
-        那不是「还没移植」，是「说自己移植了却没有跑法」，报错要说出这一点。
+    ⚠⚠ **这里从前有两道闸，F5-5 之后只剩一道**（同 `novel/stages/__init__.py::check_only`）。
+    第一道是 `stage not in PORTED_STAGES ⇒ NodeNotPorted`——stage2 是最后一层，
+    它一进 `PORTED_STAGES`，那道闸**结构上再也触发不了** ⇒ 退役
+    （2026-08-12 用户裁决）。**取值面一格没少**：`NODES` 照旧 16 个节点、
+    `/api/enums` 照旧发得出全部取值；掉的只是那个运行时状态。
+
+    剩下的这一道：**在 `PORTED_STAGES` 里而 `_runners()` 没有 ⇒ 两张表分家了。**
+    那不是「还没移植」，是「说自己移植了却没有跑法」，报错要说出这一点。
     """
     stage = NODES[node].stage
-    if stage not in PORTED_STAGES:
-        raise NodeNotPorted(
-            f'{node} 属 {stage}，本仓还没有它的实现'
-            f'（已移植：{sorted(PORTED_STAGES)}）。'
-            f'⚠ 它在取值面里是**对的**——队列要排得出这一步、'
-            f'`/api/enums` 要发得出这个取值；缺的只是实现')
-
     run = _runners().get(stage)
     if run is None:
         raise RunModeNotImplemented(
@@ -424,6 +417,86 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
                        concurrency=cfg.concurrency)
     hook.run_hook(ctx, client)
     print('  ✓ stage6 开篇文案已落盘（三个候选）——跑 `stage6.approve --pick N` 定稿')
+    return X.OK
+
+
+def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
+    """stage2 的九条路。**一个 stage 两个节点**（全书 / 逐章，两个都付费）。
+
+    ⚠ 派发按 **stage** 分而节点由 `ctx.node` 带着 ⇒ **先按节点分岔**（形态同 stage4/stage7）。
+    ⚠⚠ **付费产出那几条今天落显式终态**（`RunModeNotImplemented`，逐条写出缺什么）：
+    F5 移植的是**契约、prompt、校验器**三样，生成侧是另一批代码。
+    详见 `novel/stages/stage2/extract.py` 文件头。
+    """
+    from novel.stages.stage2 import extract
+
+    tokens = set(N.flag_tokens(flags))
+
+    if ctx.node == 'stage2.global':
+        if '--drop' in tokens:
+            return _fail(extract.run_drop(ctx, target=_valued(flags, '--drop') or '',
+                                          reason=''))
+        if '--migrate' in tokens:
+            return _fail(extract.run_migrate(ctx))
+        if '--purge-role' in tokens:
+            return _fail(extract.run_purge_role(ctx))
+        return _fail(extract.run_global(ctx))
+
+    # ── `stage2.blueprint` ────────────────────────────────────────────────
+    if '--check-only' in tokens:
+        report = extract.run_check_only(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--apply-edit' in tokens:
+        report = extract.run_apply_edit(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    chapters = _chapters_of(_valued(flags, '--chapters'))
+
+    if tokens & {'--prompt-only', '--dry-run'}:
+        system, user = extract.build_prompt(ctx, chapters=chapters)
+        if '--prompt-only' in tokens:
+            # ⚠ **`--prompt-only` 只量体量**（原型的语义），`--dry-run` 才摊开字节。
+            #   本层的 user 里带着**全书原文**，摊开是几万字——两条路答的是不同的问题。
+            print(f'── 抽取 prompt 体量 ── system {len(system)} 字 · user {len(user)} 字')
+            return X.OK
+        print(f'── system（{len(system)} 字）──\n{system}')
+        print(f'\n── user（{len(user)} 字）──\n{user}')
+        return X.OK
+
+    if '--migrate' in tokens:
+        return _fail(extract.run_migrate(ctx))
+    return _fail(extract.run_blueprint(ctx, chapters=chapters))
+
+
+def _chapters_of(raw: str | None) -> tuple[int, ...]:
+    """`--chapters 2,7` → `(2, 7)`。**空值不等于「全书」，那是两条不同的路**——
+    带 `--chapters` 是定向重生成，不带是整跑，贵贱与写盘面都不同。
+    """
+    if not raw:
+        return ()
+    got = []
+    for part in raw.replace('，', ',').split(','):
+        part = part.strip()
+        if not part.isdigit():
+            raise TerminalState(f'--chapters 只收逗号分隔的阅读序章号，收到 {raw!r}')
+        got.append(int(part))
+    return tuple(sorted(set(got)))
+
+
+def _fail(report_or_none: object) -> int:
+    """把一条**必然抛**的路的返回值收掉。
+
+    ⚠ 它今天永远走不到 `return`——上面那几个 `extract.run_*` 全部 `raise`。
+    写成这样而不是直接调用，是为了让**接线那一天**只需要改 `extract.py`：
+    这里的分派表已经按最终形态排好了。
+    """
+    from contracts.schema.report import CheckReport
+    if isinstance(report_or_none, CheckReport):
+        print(render(report_or_none))
+        return X.OK if report_or_none.passed else X.CHECK_FAILED
     return X.OK
 
 

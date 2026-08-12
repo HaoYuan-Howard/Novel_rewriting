@@ -17,7 +17,7 @@ import pytest
 
 from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS, WRITE_EFFECTS
 from contracts.rules import PORTED_STAGES
-from novel.errors import NodeNotPorted, UnsupportedRunMode
+from novel.errors import UnsupportedRunMode
 from novel.orchestrator import nodes as N
 
 BASE = os.path.join('E:', os.sep, 'somewhere', 'Output')
@@ -324,12 +324,26 @@ def test_the_checker_table_covers_exactly_the_ported_stages():
     `novel/stages/__init__.py::check_only` 是 `--check-only` 与
     `GET /api/novels/:sid/check/:kind` 的**共用落点**。它与 `PORTED_STAGES`
     分家的表现是：CLI 复检某层跑得动，而界面上那一屏 501（或反过来）。
+
+    ⚠⚠ **这里从前还断言 `check_only('stage2')` 抛 `NodeNotPorted`。**
+    stage2 是最后一层，F5-5 把它移植进来之后那句断言**只能删**——
+    而删它不是「放宽了一条测试」：`STAGES − PORTED_STAGES` 成了空集，
+    那个异常在生产路径上**再也构造不出来**，于是它连同异常类一起退役
+    （2026-08-12 用户裁决，见 `novel/errors.py::RunModeNotImplemented` 的注释）。
+    ⇒ 换成下面那条**八层逐层查得出实现**的断言：它比原来那句强，
+    因为原来那句只盯着**一个**没移植的层，而移植完最后一层它就自动失效了。
     """
     from novel.stages import check_only, checkable_stages
     assert checkable_stages() == PORTED_STAGES
-    with pytest.raises(NodeNotPorted, match='F 期'):
-        check_only('stage2')
     assert check_only('stage3').__name__ == 'run_check_only'
+    # ⚠ 八层**逐层**都要交得出一个复检实现——这是「两侧夹死」的另一半：
+    #   上面那句只比集合相等，而集合相等不保证 `_checkers()` 里那个值是真函数。
+    for stage in sorted(PORTED_STAGES):
+        assert callable(check_only(stage)), f'{stage} 的复检落点不是一个可调用的东西'
+    assert len(PORTED_STAGES) == 8, (
+        '八层全移植完了。⚠ 这条字面断言是**故意**的：它是「未移植」这个状态'
+        '已经不存在的唯一书面凭据——哪天有人加了第九层，它会在改 `STAGES` 的'
+        '那一刻红，而不是等到界面上点下去')
 
 
 def test_the_runner_table_covers_exactly_the_ported_stages():

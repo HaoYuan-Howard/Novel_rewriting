@@ -95,22 +95,40 @@ def test_every_free_flag_runs_without_an_api_key(flag, node, box):
         f'{node} {flag} 的退出码是 {rc}（{X.MEANING.get(rc, "没有这个码")}）'
 
 
-@pytest.mark.parametrize('node', sorted(n for n, s in NODES.items()
-                                        if s.stage not in PORTED_STAGES))
-def test_an_unported_node_is_a_terminal_state_not_a_stack(node, box):
-    """**取值面要全、能不能跑是另一件事**，两者不许合并。
+def test_every_node_is_a_terminal_state_not_a_stack(box):
+    """跑不动的节点落**显式终态**，不是一段栈。
 
-    `NODES` 有 16 个节点而 `PORTED_STAGES` 只有一个——那不是不一致：
-    缺一个节点，`/api/enums` 就少一个取值、队列就排不出那一步。
-    「今天跑不动」只该在**真去跑它**的那一刻说出来，而且是一句人话。
+    ⚠⚠ **本条此前是 `test_an_unported_node_is_a_terminal_state_not_a_stack`，
+    只参数化【未移植】的层。** F5-5 移植完最后一层之后那个参数集是**空的**，
+    于是它从「16 行断言」退化成一行 `SKIPPED [1] got empty parameter set`
+    ——**一条静静地不查任何东西的测试**，正是本仓要消灭的形状。
+    ⚠ 更糟的是它的方向：**移植一层，它的覆盖面就缩小一层**。
+
+    ⇒ 反过来盯**全部** 16 个节点，断言换成一句今天真成立的话：
+    **每个节点要么做完，要么落显式终态——绝不落 `3`（结构性拒绝 = 代码自相矛盾）。**
+    ⚠ 不能断言「一律 `TERMINAL_STATE`」：本 fixture 是一个**真书目录**，
+    上游齐备的那几层（如 `stage7.rename`）会真跑完并返回 `0`。
+    ⚠ **`3` 才是这条测试在防的东西**：它是「抛了一段栈」在退出码上的样子，
+    而「跑法还没接线」「上游还没跑」「要人确认」全都该是 `2`。
+    覆盖面因此从「未移植的那几个」变成 16 个，且**加一层只会让它变大**。
     """
-    spec = NODES[node]
-    argv = ['run', node, box.sid, '--base', str(box.root)]
-    if spec.modes:
-        argv += ['--mode', spec.modes[0]]
-    if spec.paid:
-        argv.append('--yes')            # 否则先撞上确认那道闸，测不到这一条
-    assert _run(*argv) == X.TERMINAL_STATE
+    got: dict[str, int] = {}
+    for node, spec in sorted(NODES.items()):
+        argv = ['run', node, box.sid, '--base', str(box.root)]
+        if spec.modes:
+            argv += ['--mode', spec.modes[0]]
+        if spec.paid:
+            argv.append('--yes')        # 否则先撞上确认那道闸，测不到这一条
+        got[node] = _run(*argv)
+        assert got[node] != X.REFUSED_BY_STRUCTURE, (
+            f'{node} 跑出了 {X.REFUSED_BY_STRUCTURE}'
+            f'（{X.MEANING[X.REFUSED_BY_STRUCTURE]}）——那是 bug，不是流程走不下去')
+        assert got[node] in X.MEANING, f'{node} 的退出码 {got[node]} 不在四个里'
+    # ⚠ **两个节点是 stage2 的付费产出，今天必然落 `2`**（`RunModeNotImplemented`）。
+    #   写死它们：接线那一天这两格会变成 0/1，而那时本条该被读一遍再改，不该静静地绿。
+    assert got['stage2.global'] == X.TERMINAL_STATE
+    assert got['stage2.blueprint'] == X.TERMINAL_STATE
+    assert len(NODES) >= 16, '守卫的守卫：节点表空掉时上面那个 for 一条都不跑'
 
 
 def test_a_registered_but_unwired_run_mode_says_so(box):
