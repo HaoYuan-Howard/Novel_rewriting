@@ -3,11 +3,9 @@
 """
 stage0.py —— 对应 `docs/schema/stage0.md`。非正文剔除 + 人工审阅闸门，**不调 LLM**。
 
-⚠⚠ **本层盘上零产物。** 判据与词表有全语料 163 本的实测，但**产物形态、审阅状态机、
-编辑回写这三块没有任何盘上样本**——`docs/schema/stage0.md` 里标 `设计` 的字段就是
-「还没有任何东西验证过它」。⇒ **本模块整份都没有过语料体检**
-（`tests/test_corpus_fixtures.py` 扫不到它，因为盘上没有 `stage0/` 目录），
-别把它读成与 stage1~stage7 那几份同等可信。
+F7 已用临时目录走通产物形态、审阅状态机与编辑回写，并用 `Test_data` 的 8 本真实小说
+跑过摄入与下游分章。原仓 `Output/` 仍没有历史 stage0 产物；这份新层的证据边界
+记录在 `docs/schema/stage0.md`，不把本仓生成的临时样本冒充成原型历史样本。
 
 ⚠ 另一份产物 `stage0/clean_text.txt` **不是 JSON**，它的 schema 是字节形态
 （utf-8 无 BOM · 恒 `\\n` · 只删段不改字）。字节形态的守卫在写盘口那一层
@@ -17,8 +15,8 @@ stage0.py —— 对应 `docs/schema/stage0.md`。非正文剔除 + 人工审阅
 `docs/schema/stage0.md` 的三份产物表里**没有 `_provenance` 这一项**，本模块因此也没有。
 它不是漏了：本层是全链的**源头**，`inputs` 恒空，而 `source_sha1` / `clean_sha1` /
 `source_encoding` / `text_norm` 已经把「这份产物照什么产的」答完了。
-⚠ 但 `code`（`git describe --always --dirty`）这一格在本层**确实没有落点**——
-登记在这里，等 stage0 真跑起来时按 `_common.md` §1.3 补，别当成已覆盖。
+`code` 不能塞进一份不存在的 `_provenance`，因此作为报告顶层字段记录；
+它仍由全链同一个 `RunContext.code` / `prov.code_version()` 口径产生。
 """
 from __future__ import annotations
 
@@ -101,6 +99,9 @@ class RemovalReport(StrictModel):
     #: 绝对路径。⚠ **文件被移走时是「不知道」，不是「不匹配」**——
     #: S-03 原文↔切分对照屏的三种降级必须分得开。
     original_path: str = Field(min_length=1)
+
+    #: 本轮写报告所用的代码版本。stage0 没有 `_provenance`，所以这一格落在顶层。
+    code: str = Field(min_length=1)
 
     # ── 两个指纹 = `R-0.6` 的全部内容 ────────────────────────────────────────
     #

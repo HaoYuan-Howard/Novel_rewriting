@@ -9,6 +9,11 @@ venv/
 
 # 运行期产物与语料：不进仓（版权正文 + 会花钱产出的东西）
 Output/
+# ⚠ F7 实跑的落点是**小写** `outputs/`，而上面那条只挡大写的（原型的目录名）。
+#   本机文件系统不分大小写、git 分 ⇒ 那一整棵树带着 8 本的 `stage0/clean_text.txt`
+#   与 `stage1/main_text.json`（**全本版权正文**）以未跟踪状态躺在树里，
+#   `git add -A` 会一次全收进去。这一行就是那次差点发生的事的落点。
+outputs/
 Novel_data/
 Test_data/
 .llm_cache/

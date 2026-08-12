@@ -26,7 +26,7 @@ api.py —— 对应 `docs/schema/_api.md`。**一次 HTTP 响应长什么样。
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -264,7 +264,7 @@ class PreviewRequest(StrictModel):
     `/api/enums` 的 `actions[].needs_value` 就是用来告诉前端「这个按钮要先要一个文件」的。
     """
 
-    sid: str = Field(min_length=1)
+    sid: Annotated[str, Field(min_length=1)] | None
     node: str = Field(min_length=1)
     mode: str | None = None
     flags: list[str] = Field(default_factory=list)

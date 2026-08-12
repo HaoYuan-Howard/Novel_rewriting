@@ -46,7 +46,7 @@ from novel.run import RunContext
 #: 不是「它贵不贵」），所以它可以有前两张里没有的成员。漏掉它的后果不是
 #: 少一个功能，是**那个 flag 在命令行上永远解析不出来，且没有任何东西会出声**
 #: ——`argparse` 只会说「unrecognized arguments」，而人会以为是自己敲错了。
-#: 今天 `VALUED_FLAGS ⊆ FREE_ENTRIES`，所以这一格是**潜伏的**；
+#: `--source` 正是只在 `VALUED_FLAGS` 出现的现役反例；
 #: 由 `test_the_flag_surface_covers_all_three_tables` 钉住。
 _ALL_FLAGS = sorted(set(FREE_ENTRIES) | set(PAID_FLAGS) | set(VALUED_FLAGS))
 
@@ -64,7 +64,10 @@ def _parser() -> argparse.ArgumentParser:
 
     def with_run_args(p: argparse.ArgumentParser) -> None:
         p.add_argument('node', choices=sorted(NODES))
-        p.add_argument('sid')
+        p.add_argument(
+            'sid', nargs='?',
+            help='已有书 id；stage0.remove --source 摄入新书时省略',
+        )
         p.add_argument('--base', required=True, help='<Output> 根目录')
         p.add_argument('--mode', choices=sorted({m for s in NODES.values()
                                                  for m in s.modes}) or None)
@@ -134,7 +137,8 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
     ⇒ 改成查表，形态**照抄 `novel/stages/__init__.py::_checkers()`**
     ——同一个问题在复检那一侧早就解对了，这里只是把它抄回来。
     """
-    return {'stage3': _run_stage3, 'stage4': _run_stage4, 'stage5': _run_stage5,
+    return {'stage0': _run_stage0, 'stage1': _run_stage1,
+            'stage3': _run_stage3, 'stage4': _run_stage4, 'stage5': _run_stage5,
             'stage6': _run_stage6, 'stage7': _run_stage7}
 
 
@@ -173,6 +177,113 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
             f'`novel/cli/main.py::_runners` 没有它的跑法派发——**两张表分家了**。'
             f'移植一层要同时改这两处')
     return run(ctx, flags)
+
+
+def _run_stage0_source(
+    base: str,
+    sid: str | None,
+    flags: list[str],
+) -> int:
+    '''目录尚不存在时的摄入入口；sid 从 source 文件名推导。'''
+    from novel.stages.stage0 import removal
+
+    tokens = set(N.flag_tokens(flags))
+    if '--check-only' in tokens:
+        raise TerminalState('stage0 --check-only 必须带已有书 sid，不能拿 source 代替书目录')
+    source = _valued(flags, '--source')
+    if source is None:
+        raise TerminalState('stage0.remove 摄入新书必须给 --source <原始小说.txt>')
+    novel_dir, result, _report = removal.run_source(
+        source,
+        base,
+        dry_run='--dry-run' in tokens,
+        expected_sid=sid,
+    )
+    action = '将写入' if '--dry-run' in tokens else '已写入'
+    print(
+        f'  ✓ stage0 {action} {novel_dir}：保留 {result.report.body_code_points}/'
+        f'{result.report.total_code_points} 码点，剔除 {len(result.report.removed)} 段，'
+        f'状态 {result.report.approved}',
+    )
+    if result.report.warnings:
+        print('  ⚠ 可疑项：' + '、'.join(w.kind for w in result.report.warnings))
+    return X.OK
+
+
+def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
+    '''stage0 三个人工/机器动作。只有 remove 承担本层复检入口。'''
+    from contracts.schema.stage0 import RemovalReport
+    from novel.stages.stage0 import checks, removal
+    from novel.store import ArtifactStore
+
+    tokens = set(N.flag_tokens(flags))
+    if ctx.node == 'stage0.approve':
+        _art, report = removal.run_approve(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+    if ctx.node == 'stage0.edit':
+        edit_path = _valued(flags, '--apply-edit')
+        if edit_path is None:
+            raise TerminalState(
+                'stage0.edit 必须给 --apply-edit <人工改好的 clean_text.txt>')
+        art, report = removal.run_edit(ctx, edit_path)
+        print(render(report))
+        print(f'  ✓ 人工编辑已落为第 {art.round} 轮；状态退回 pending，请重新批准')
+        return X.OK
+    if '--check-only' in tokens:
+        if '--source' in tokens or '--dry-run' in tokens:
+            raise TerminalState('stage0.remove --check-only 不与 --source/--dry-run 混用')
+        report = checks.run_check_only(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    source = _valued(flags, '--source')
+    if source is None:
+        store = ArtifactStore(ctx)
+        previous, _raw = store.read_own(RemovalReport, removal.REPORT_REL)
+        source = previous.original_path
+    novel_dir, result, _report = removal.run_source(
+        source,
+        ctx.novel_dir.parent,
+        dry_run='--dry-run' in tokens,
+        expected_sid=ctx.sid,
+    )
+    action = '将写入' if '--dry-run' in tokens else '已写入'
+    print(
+        f'  ✓ stage0 {action} {novel_dir}：保留 {result.report.body_code_points}/'
+        f'{result.report.total_code_points} 码点，剔除 {len(result.report.removed)} 段，'
+        f'状态 {result.report.approved}',
+    )
+    return X.OK
+
+
+def _run_stage1(ctx: RunContext, flags: list[str]) -> int:
+    '''stage1 的分章、dry-run 与纯读复检。'''
+    from novel.stages.stage1 import checks, partition
+
+    tokens = set(N.flag_tokens(flags))
+    if '--check-only' in tokens:
+        if '--dry-run' in tokens:
+            raise TerminalState('stage1.partition --check-only 不与 --dry-run 混用')
+        report = checks.run_check_only(ctx)
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    result, report = partition.run_partition(
+        ctx,
+        dry_run='--dry-run' in tokens,
+    )
+    action = '将产出' if '--dry-run' in tokens else '已产出'
+    print(
+        f'  ✓ stage1 {action} {len(result.main_text.root)} 章；'
+        f'文案 {len(result.hook_copy.text)} 码点；tail {len(result.tail)} 码点',
+    )
+    if result.report.warnings:
+        print('  ⚠ 可疑项：' + '、'.join(w.kind for w in result.report.warnings))
+    if report is not None:
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+    return X.OK
 
 
 def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
@@ -576,6 +687,11 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # ⚠⚠ `--mode` **必须传下去**：它此前被解析出来就丢掉了，而全链唯一有臂的
     # `stage5.write` 从此只能靠一个默认值猜自己是哪条臂——那正是「臂与 tag 被拼成
     # 同一个串」那次事故的同一个形状（判据在错的臂上恒假，而闸门不报错）。
+    if a.node == 'stage0.remove' and '--source' in N.flag_tokens(flags):
+        return _run_stage0_source(a.base, a.sid, flags)
+    if a.sid is None:
+        raise TerminalState(
+            f'{a.node} 要已有书 sid；只有 stage0.remove --source 摄入新书时可以省略')
     ctx = RunContext.open(a.base, a.sid, a.node, paid=paid, mode=a.mode)
     return _dispatch(a.node, ctx, flags)
 

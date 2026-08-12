@@ -77,7 +77,9 @@ _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
 #: 在它的默认路径上不存在）。
 #: ⚠⚠ 它的徽章**结构上永远不可能是 `pass`**（5 条 `unver`，其中 `must_hold_unver` 每本都产）
 #: ——最好是 `amber` + 退出码 0，**与 stage4 恰好相反**。
-PORTED_STAGES: frozenset[str] = frozenset({'stage3', 'stage4', 'stage5', 'stage6', 'stage7'})
+PORTED_STAGES: frozenset[str] = frozenset({
+    'stage0', 'stage1', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7',
+})
 
 
 @dataclass(frozen=True)

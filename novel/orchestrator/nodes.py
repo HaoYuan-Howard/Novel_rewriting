@@ -28,6 +28,7 @@ from contracts.invariants import (
     FREE_ENTRIES, NODES, VALUED_FLAGS, WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import Step
+from novel import paths as novel_paths
 from novel.errors import UnsupportedRunMode
 
 #: 仓根。`build_argv` 里的 `-m novel.cli` 要求 cwd 在这里。
@@ -194,14 +195,10 @@ def check_nodes(stage: str) -> tuple[str, ...]:
     `:kind` 是**层**（八个，取值面 = `STAGES`），而复检是**节点**上的一条跑法。
     这个函数就是那两轴之间唯一的那座桥。
 
-    ⚠⚠ **今天它在 stage0 上返回空元组，那是一颗定时地雷，登记在这里。**
-    stage0 三个节点的 `flags` 全是 `()`——理由是正当的（原型里 stage0 整层不存在，
-    摄入并进了 stage1，所以「这一层接受哪些跑法」**没有任何一处核对过**，
-    而空元组是诚实的）。后果是：F 期移植 stage0 那一刻，`/check/stage0` 会从
-    一个说得清的 501 掉进「这一层一个复检节点都没有」。
-    ⇒ `tests/test_orchestrator_nodes.py` 里配了一条**今天就绿**的守卫：
-    `for stage in PORTED_STAGES: len(check_nodes(stage)) == 1`。
-    它在 stage0 进 `PORTED_STAGES` 而没人给它登记 `--check-only` 的那一刻变红。
+    F7 已把 stage0 的旧地雷拆掉：只有 `stage0.remove` 接受 `--check-only`，
+    因此层路由仍然恰好落到一个复检节点。首次 `--source` 摄入尚无 `sid` 时，
+    `build_steps` 会先由原文身份派生它，再给后续复检命令使用。
+    `tests/test_orchestrator_nodes.py` 的守卫要求每个已移植层恰好有一个复检节点。
     """
     return tuple(n for n, s in NODES.items()
                  if s.stage == stage and '--check-only' in s.flags)
@@ -229,7 +226,7 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
             'PYTHONUNBUFFERED': '1'}
 
 
-def build_argv(node: str, sid: str, flags: Sequence[str] = (), *,
+def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str], mode: str | None = None) -> list[str]:
     """那条命令。**preview 与真跑共用这一个函数**（`R-11.8`）。
 
@@ -242,8 +239,17 @@ def build_argv(node: str, sid: str, flags: Sequence[str] = (), *,
     ⚠ argv 里的 `-X utf8 -u` 与 `child_env()` 是**两道**，不是一道：
     前者管「人在终端直接粘这条命令」，后者管「服务把它跑成子进程」。
     """
-    _validate(node, flags, mode)
-    argv = [sys.executable, '-X', 'utf8', '-u', '-m', CLI_MODULE, 'run', node, sid]
+    tokens = _validate(node, flags, mode)
+    if sid is None:
+        if node != 'stage0.remove' or '--source' not in tokens:
+            raise UnsupportedRunMode(
+                '只有 stage0.remove --source <原始小说> 能在目录产生前不带 sid')
+        if '--check-only' in tokens:
+            raise UnsupportedRunMode(
+                'stage0 --check-only 要定位已有书目录，必须带 sid；新书先完成摄入')
+    argv = [sys.executable, '-X', 'utf8', '-u', '-m', CLI_MODULE, 'run', node]
+    if sid is not None:
+        argv.append(sid)
     if mode is not None:
         argv += ['--mode', mode]
     argv += list(flags)
@@ -283,7 +289,7 @@ def step_label(node: str, flags: Sequence[str] = (), *, mode: str | None = None)
     return f'{label} {" ".join(tokens)}' if tokens else label
 
 
-def _step(node: str, sid: str, flags: Sequence[str], *, base: str | os.PathLike[str],
+def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.PathLike[str],
           mode: str | None, note: str | None = None) -> Step:
     return Step(
         argv=build_argv(node, sid, flags, base=base, mode=mode),
@@ -295,7 +301,7 @@ def _step(node: str, sid: str, flags: Sequence[str], *, base: str | os.PathLike[
     )
 
 
-def build_steps(node: str, sid: str, flags: Sequence[str] = (), *,
+def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
                 base: str | os.PathLike[str], mode: str | None = None,
                 follow_check: bool = True) -> list[Step]:
     """一个作业要依次跑哪几条命令。**纯函数、无副作用。**
@@ -319,6 +325,10 @@ def build_steps(node: str, sid: str, flags: Sequence[str] = (), *,
     if (follow_check and first.writes
             and '--check-only' in NODES[node].flags
             and '--check-only' not in flag_tokens(flags)):
-        steps.append(_step(node, sid, ['--check-only'], base=base, mode=mode,
+        check_sid = sid
+        if check_sid is None:
+            source = flags[list(flags).index('--source') + 1]
+            check_sid = novel_paths.derive_source_meta(source)[0]
+        steps.append(_step(node, check_sid, ['--check-only'], base=base, mode=mode,
                            note=FOLLOW_CHECK_NOTE))
     return steps

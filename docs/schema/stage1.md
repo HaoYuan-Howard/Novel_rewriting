@@ -136,7 +136,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
 | `source_sha1` | `str` | 是 | **原始 txt** 的 sha1，从 stage0 透传。只用于追溯，本层不判它 | **三源** |
-| `input_sha1` | `str` | 是 | **本层输入**（`stage0/clean_text.txt`）的 sha1。**[HARD]** 对不上即阻断 | **设计** |
+| `input_sha1` | `str` | 是 | **本层输入**（`stage0/clean_text.txt`）的 sha1。**[HARD]** 对不上即阻断 | **盘·码** |
 
 **这两个是 `R-0.6` 的下半段。** 只记一个，「有人换过原始小说」和「有人改过 stage0 的剔除结果」
 就分不开了，而这两件事的处置完全相反（前者从头重跑，后者**是人有意为之、必须保住**）。
@@ -219,8 +219,8 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `hook_span` | `[int,int]` | 是 | 文案段在归一化原文上的码点半开区间。恒 `[0, x)` | **设计** |
-| `chapter_spans` | `[[int,int], …]` | 是 | 逐章，**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal` | **设计** |
+| `hook_span` | `[int,int]` | 是 | 文案段在归一化原文上的码点半开区间。恒 `[0, x)` | **盘·码** |
+| `chapter_spans` | `[[int,int], …]` | 是 | 逐章，**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal` | **盘·码** |
 
 **为什么不加进 `main_text.json`。** 那是最自然的位置——span 是章的属性。
 但改 `main_text` 的字节形态会让**全部下游产物被整批判成陈旧**（事实 ①），那是一次假回归。

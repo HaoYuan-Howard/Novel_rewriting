@@ -32,6 +32,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 API_PY = os.path.join(ROOT, 'contracts', 'schema', 'api.py')
 
 
+def test_preview_sid_is_nullable_but_never_empty():
+    assert PreviewRequest(sid=None, node='stage0.remove').sid is None
+    with pytest.raises(ValidationError):
+        PreviewRequest(sid='', node='stage0.remove')
+
+
 # ───────────────────────── 造两份最小的合法视图 ─────────────────────────
 #
 # ⚠ **合成，不读盘。** 本文件测的是**载体层**的后置条件，而载体层的正确性

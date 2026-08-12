@@ -24,6 +24,8 @@ def _checkers() -> dict[str, Callable[[RunContext], CheckReport]]:
     `novel.llm.client`。放在模块顶层，`import novel.stages` 就变成一件重活，
     而 `novel/api/routes/` 只是想拿一个函数。
     """
+    from novel.stages.stage0 import checks as stage0_checks
+    from novel.stages.stage1 import checks as stage1_checks
     from novel.stages.stage3 import style
     from novel.stages.stage4 import plan
     from novel.stages.stage5 import review
@@ -32,7 +34,9 @@ def _checkers() -> dict[str, Callable[[RunContext], CheckReport]]:
     # ⚠ stage5 挂的是**验收相**（`stage5.review`），不是写作相：判据表两相共用一张，
     #   而 `--check-only` 那条路读的是验收报告这份产物。写作节点没有 `--check-only`
     #   （它的 `flags` 里就没有），`check_nodes('stage5')` 因此恰好是一个。
-    return {'stage3': style.run_check_only, 'stage4': plan.run_check_only,
+    return {'stage0': stage0_checks.run_check_only,
+            'stage1': stage1_checks.run_check_only,
+            'stage3': style.run_check_only, 'stage4': plan.run_check_only,
             'stage5': review.run_check_only,
             'stage6': hook.run_check_only, 'stage7': rename.run_check_only}
 

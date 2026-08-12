@@ -326,7 +326,7 @@ def new_job_id(now: float | None = None) -> str:
     return f'{int(now if now is not None else time.time())}-{uuid.uuid4().hex[:8]}'
 
 
-def plan_start(node: str, sid: str, flags: Sequence[str] = (), *,
+def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str], mode: str | None = None,
                follow_check: bool = True,
                steps: Sequence[Step] | None = None) -> JobStart:
@@ -350,7 +350,7 @@ def plan_start(node: str, sid: str, flags: Sequence[str] = (), *,
         writes=any(bool(s.writes) for s in plan))
 
 
-def run(base: str | os.PathLike[str], node: str, sid: str, flags: Sequence[str] = (), *,
+def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequence[str] = (), *,
         mode: str | None = None, follow_check: bool = True,
         spawn: Spawn = default_spawn, registry: JobRegistry = REGISTRY,
         steps: Sequence[Step] | None = None) -> JobRecord:

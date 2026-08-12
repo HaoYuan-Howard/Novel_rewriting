@@ -221,6 +221,26 @@ class ArtifactStore:
                 f'被闸门拦下的稿走 `write_invalid`（它强制你交代 `gates_skipped`）')
         return self._write_json(rel, artifact)
 
+    def write_legacy(self, rel: str, artifact: BaseModel) -> Path:
+        '''按原型 stage1 的字节形态落 JSON：CRLF 缩进、文件末尾无换行。
+
+        这个窄入口只服务 main_text.json / hook_copy.json 的逐字节移植验收。两份文件是
+        全链承重输入；改一次纯格式会让所有下游来源指纹一起陈旧。模型往返校验与原子替换
+        仍和 write 走同一套，区别只有明确登记的序列化字节。
+        '''
+        rel = paths.check_rel_deep(rel)
+        allowed = {'stage1/main_text.json', 'stage1/hook_copy.json'}
+        if rel not in allowed:
+            raise PathRefused(
+                f'write_legacy 只服务逐字节承重的 stage1 两份 JSON，实得 {rel!r}')
+        payload = artifact.model_dump(by_alias=True, mode='json')
+        data = json.dumps(payload, ensure_ascii=False, indent=2).replace('\n', '\r\n').encode('utf-8')
+        self._verify_round_trip(rel, type(artifact), data)
+        p = self.path(rel)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._replace_atomically(p, data)
+        return p
+
     def write_invalid(self, rel: str, artifact: BaseModel, *,
                       gates_skipped: list[str]) -> Path:
         """落一份被闸门拦下的稿。**不覆盖已有正式产物**（`Q-5`：先校验后落盘）。
@@ -390,6 +410,42 @@ class ArtifactStore:
             #   原件和归档，而下一次归档会撞上已存在的目标、把这条路堵死。
             #   `_rounds/` 与产物同卷，`replace` 在这里是原子的。
             os.replace(src, dest)
+        return dest
+
+    def archive_bytes(self, rel: str, destination: str, *, keep: bool = False) -> Path:
+        '''把任意字节形态产物归档到显式目标；绝不覆盖已有目标。
+
+        stage0 的一轮由 removal_report.json 与 clean_text.txt 两种后缀组成，通用
+        archive_round 固定的 json 命名无法表达后者。目标名由 stage0 唯一函数构造，
+        此处只负责不覆盖、原子复制或移动。复制式归档遇到相同字节可幂等重放，
+        供多文件轮次从两次复制之间的中断恢复；移动式归档仍拒绝重放，避免制造幻影轮。
+        '''
+        source_rel = paths.check_rel_deep(rel)
+        destination_rel = paths.check_rel_deep(destination)
+        source = self.path(source_rel)
+        dest = self.path(destination_rel)
+        if not source.is_file():
+            raise UpstreamMissing(f'{self.ctx.node}: 要归档的 {source_rel} 不在盘上')
+        source_data = self._read_bytes(source_rel)
+        if dest.exists():
+            try:
+                same = dest.is_file() and dest.read_bytes() == source_data
+            except OSError as exc:
+                raise ArtifactUnreadable(f'{self.ctx.node}: 读不了归档目标 {dest}：{exc!r}') from exc
+            if same:
+                if keep:
+                    # 中断可能发生在一轮多文件归档的两次复制之间。已经复制成功的那一份
+                    # 必须可安全重放，否则“重跑一次自愈”会被自己的归档位挡住。
+                    return dest
+                raise PathRefused(
+                    f'归档目标已存在且字节相同：{dest}。移动式归档不重放，'
+                    '否则会把同一版再记成一轮')
+            raise PathRefused(f'归档目标已存在且字节不同：{dest}。上一版不许被静默覆盖')
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if keep:
+            self._replace_atomically(dest, source_data)
+        else:
+            os.replace(source, dest)
         return dest
 
     def _round_on_disk(self, rel: str) -> int | None:

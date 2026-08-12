@@ -47,6 +47,7 @@ build-backend = "setuptools.build_meta"
 packages = ["contracts", "contracts.judges", "contracts.schema",
             "novel", "novel.api", "novel.api.routes", "novel.cli", "novel.core",
             "novel.llm", "novel.orchestrator", "novel.report", "novel.stages",
+            "novel.stages.stage0", "novel.stages.stage1",
             "novel.stages.stage3", "novel.stages.stage4", "novel.stages.stage6",
             "novel.stages.stage7",
             "novel.views"]

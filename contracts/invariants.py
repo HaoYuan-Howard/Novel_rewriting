@@ -110,7 +110,11 @@ INBOX_KIND: Final = ('invalid', 'rejected', 'stalled', 'human_only', 'upstream',
 #: 而 `contracts/rules.py::_validate` 会在这两层移植时当场炸。
 #: **它今天看不见**——`Finding` 还没有任何生产者、`PORTED_STAGES` 是空的，
 #: 与 A0 修的那三处是同一个形状（守卫在被启用的那一刻才发作）。
-OWNER: Final = ('stage2', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7', 'corpus')
+#: Stage 0/1 是 F6/F7 启用注册守卫时补上的：摄入与分章失败的根因就在这两层；
+#: 假写成 stage2 会让报告把修复动作指到第一个付费层。
+OWNER: Final = (
+    'stage0', 'stage1', 'stage2', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7', 'corpus',
+)
 
 #: `REQUIREMENTS.md` 的「谁在查」那一列的**取值面**（2026-08-10 一次定全）。
 #:
@@ -798,6 +802,7 @@ PARTIAL_REWRITE_FLAGS: Final = ('--remeasure', '--recheck', '--migrate', '--iden
 #: 而拼错的那一条**会真的被执行**。所以取值面要有落点，由 `build_argv` 当场拒。
 VALUED_FLAGS: Final = {
     '--apply-edit': '人工改好的那份候选稿的路径',
+    '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
     # ⚠ **不叫 `--approve`**：那个名字已经在 `SUPERSEDED_FREE_ENTRIES` 里退役成节点了
     # （`stage6.approve` / `stage7.approve`），复活它等于让同一个字面既是 flag 又是节点。
     # ⚠ 它**不进 `FREE_ENTRIES`**（那张表登记的是「0 成本**入口**」，而它是入口的**参数**），
@@ -926,19 +931,18 @@ class NodeSpec(NamedTuple):
 #: （`check_partition` 是独立脚本、`n3_style --check-only` 是 flag），正是 `Q-3` 点名的
 #: 「三个节点行为不一致」。
 #:
-#: 【`flags` 那一列的取值从哪儿来】只有两个来源，**不许凭印象填**：
-#: 真实抓包（`docs/design_brief/05_samples/enums.json` 的 36 条 `actions`）
-#: 与原型各脚本的 `argparse`。两处都没有的节点填 `()`——
-#: **空元组是诚实的**（没有任何东西核对过它的跑法面），而随手编几个是抢跑（判据 32）。
-#: ⇒ stage0 三个节点全空：原型里 stage0 整层不存在（摄入并进 stage1，F-090）。
+#: 【`flags` 那一列的取值从哪儿来】移植节点取真实抓包
+#: （`docs/design_brief/05_samples/enums.json` 的 36 条 `actions`）与原型脚本 `argparse`；
+#: 新写节点取已定契约与真正接线的 CLI 消费方。没有证据的节点填 `()`——
+#: **空元组是诚实的**，而随手编几个是抢跑（判据 32）。
+#: ⇒ F7 已把 stage0 查清：`remove` 接 `--source/--dry-run/--check-only`，
+#:   `edit` 接 `--apply-edit`；`approve` 是整份报告盖章，没有额外参数。
 #: ⇒ `stage4.context` / `stage7.assemble` 空：它们**本身**就是那个动作，
 #:   原型的 `--context-only` / `--assemble` 已作为 flag 退役（见 `SUPERSEDED_FREE_ENTRIES`）。
-#: ⇒ 三个 `*.approve` 空：候选序号是它们的**参数**不是 flag，参数名属 F 期，
-#:   现在起一个名字就是给一个零消费方的取值面抢跑。
-#:   ⚠ **这条注释后来被逐层查清，而三层的结论不一样**：`stage6.approve` 确实有一个
+#: ⇒ 三层 `*.approve` 的结论不一样：`stage6.approve` 确实有一个
 #:   候选序号 ⇒ F1 补成 `('--pick',)`；而 `stage7.approve` **没有参数可起名**
 #:   （一本书只有一份人物表，定稿是给整份盖章）⇒ 它的空元组是**终态**。
-#:   stage0 那一格仍然待查。
+#:   `stage0.approve` 同样给整份剔除报告盖章，空元组也是终态。
 #:
 #: ⚠ **这一列今天必然不全，而不全的方向是安全的**：`is_paid` 拿它当白名单，
 #: 没登记的 flag 在付费节点上一律按付费算。已知漏的两个（原型 `FREE_FLAGS` 有、
@@ -954,11 +958,13 @@ class NodeSpec(NamedTuple):
 #: 这不是重复登记：**一层要哪几份**取的是本层各节点的并集。
 NODES: Final[dict[str, NodeSpec]] = {
     'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除',
+                                 flags=('--source', '--dry-run', '--check-only'),
                                  produces=('stage0/removal_report.json',
                                            'stage0/clean_text.txt')),
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
                                  produces=('stage0/removal_report.json',)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
+                                 flags=('--apply-edit',),
                                  produces=('stage0/removal_report.json',
                                            'stage0/clean_text.txt')),
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',

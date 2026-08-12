@@ -3,12 +3,9 @@
 """
 test_ingest_fixtures.py —— 摄入链（stage0 + stage1）合成样本的两半。
 
-**上半在今天就跑**：样本自身是否自洽、有没有把该覆盖的分支覆盖全。
-这一半不需要任何实现，它验的是「样本集这份资产本身」。
-
-**下半等实现落地**：把样本喂进去，断言它按期望分支走。
-现在 `skip`，理由写在 fixture 里——**「跳过」与「通过」必须能区分**，
-所以它是 `skip` 而不是一个空断言。
+上半检查样本资产自身是否自洽、覆盖面有没有退化；下半把同一批字节真正送进
+stage0 + stage1，检查终态、告警、剔除、比例、尾段与 HARD 判据。F6/F7 落地后
+这里不再有 importorskip：模块存在就必须把 18 个分支全部跑完。
 """
 from __future__ import annotations
 
@@ -247,21 +244,71 @@ _IMPL_MODULE = {
 def test_case_behaves_as_declared(case: Case):
     """把样本喂进它那一层，断言它按声明的分支走。
 
-    实现还没落地就 `skip`——**不是空断言**。一条从一开始就绿的行为测试，
-    与一条真的验过的行为测试，在报告上长得一样。
-    `pytest -rs` 会把跳过原因打出来，「还没接」于是看得见。
-
     ⚠ 断言的是 `terminal` / `num_chapters` / `warnings` 的 **id** / `removed_kinds` /
     `body_ratio` 的**区间** / `tail`——**不断言任何措辞**。
     两层的报告都不在逐字节验收范围内，措辞随时可改。
     """
-    mod = _IMPL_MODULE[case.owner]
-    pytest.importorskip(
-        mod, reason=f'{case.owner} 还没落地（{mod}）。样本已就位，实现一到位自动转为真断言',
+    from contracts.rules import REGISTRY
+    from novel.core.ingest import decode_source_bytes
+    from novel.errors import IngestTerminal
+    from novel.stages.stage0 import checks as checks0
+    from novel.stages.stage0.removal import remove_bytes
+    from novel.stages.stage1 import checks as checks1
+    from novel.stages.stage1.partition import partition_text
+
+    def exercise():
+        removed = remove_bytes(
+            case.to_bytes(),
+            original_path=f'{case.name}.txt',
+            code='test',
+        )
+        partitioned = partition_text(
+            removed.clean_text, source_sha1=removed.report.source_sha1)
+        return removed, partitioned
+
+    if case.terminal is not None:
+        with pytest.raises(IngestTerminal) as exc:
+            exercise()
+        assert exc.value.requirement == case.terminal
+        return
+
+    removed, partitioned = exercise()
+    warnings = (
+        tuple(w.kind for w in removed.report.warnings)
+        if case.owner == 'stage0'
+        else tuple(w.kind for w in partitioned.report.warnings)
     )
-    pytest.fail(
-        f'{case.name}: {case.owner} 已落地但这条断言还没写。'
-        f'期望：terminal={case.terminal} fails={case.fails} '
-        f'chapters={case.num_chapters} warnings={case.warnings} '
-        f'kinds={case.removed_kinds} tail={case.tail!r}'
-    )
+    assert len(partitioned.main_text.root) == case.num_chapters
+    assert warnings == case.warnings
+    if case.owner == 'stage0':
+        assert tuple(segment.kind for segment in removed.report.removed) == case.removed_kinds
+    if case.tail is not None:
+        assert partitioned.tail == case.tail
+
+    ratio = removed.body_ratio
+    if case.body_ratio_below is not None:
+        assert ratio < case.body_ratio_below
+    if case.body_ratio_band is not None:
+        lo, hi = case.body_ratio_band
+        assert lo <= ratio < hi
+
+    if case.owner == 'stage0':
+        outcomes = checks0.check(
+            removed.report,
+            removed.clean_text,
+            source=decode_source_bytes(case.to_bytes()),
+        )
+    else:
+        outcomes = checks1.check(
+            partitioned.report,
+            partitioned.main_text,
+            partitioned.hook_copy,
+            clean_text=removed.clean_text,
+            stage0=removed.report,
+        )
+    failed = {
+        REGISTRY.get(outcome.rule).requirement
+        for outcome in outcomes
+        if outcome.findings and REGISTRY.get(outcome.rule).sev == 'hard'
+    }
+    assert set(case.fails) <= failed

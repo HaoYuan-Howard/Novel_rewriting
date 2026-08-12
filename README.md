@@ -33,7 +33,7 @@
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
 | **契约** | ✅ **十二份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + `_report.md` + `_orchestration.md` + `_api.md` |
 | **骨架** | ✅ **A~E 期全部完成**（A = 契约层 · B = 共享运行时 / LLM 层 / 报告构造器 · C = stage3 纵切 · D = 编排 + CLI · E = HTTP 层） |
-| **移植** | 🚧 **F 期进行中**：`F0` 清障 ✅ · `F1` = stage6 ✅ · `F2` = stage7 ✅ · `F3` = stage4 ✅ · **`F4` = stage5 ✅**<br>`PORTED_STAGES = {'stage3','stage4','stage5','stage6','stage7'}`，**八层去五**。**下一步是 `F5` = stage2**（最难的一层，见下） |
+| **移植** | 🚧 **F 期只剩 stage2**：`F0` 清障 ✅ · `F1` = stage6 ✅ · `F2` = stage7 ✅ · `F3` = stage4 ✅ · `F4` = stage5 ✅ · **`F6` = stage1 ✅ · `F7` = stage0 ✅**<br>`PORTED_STAGES = {'stage0','stage1','stage3','stage4','stage5','stage6','stage7'}`，**八层去七**。`F5` = stage2 正在推进（最难的一层，见下） |
 
 ---
 
@@ -55,14 +55,13 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 `tests/test_corpus_fixtures.py` 从 279 条塌到 6 条**而不报错**——要重量历史基线，
 必须抽到 `E:\practice_group\` 的同级目录下。
 
-**当前基线：全绿，1541 passed / 20 skip**（F4 收工时的数）。
+**当前基线：全绿，1597 passed / 2 skip**（F6/F7 收工，2026-08-12）。
 
 **每一条 skip 都明说「没在查」——改动之后先核对这个数**，它变了就说明有守卫被静默关掉或打开了。
 20 条的来历：
 
 | 条数 | 是什么 | 什么时候消失 |
 |---|---|---|
-| **18** | `tests/test_ingest_fixtures.py` 的 `importorskip` | F6/F7 落地那天，一次变成 **18 个 `pytest.fail`**（见下） |
 | **2** | 都指着**同一份产物**：`成年人不做选择` 那本的 `stage4/plan_chapters.json` 在新契约下加载不了，因为它**根本没有 `_provenance`**（0 成本提升路把来源账整个丢了）。语料体检与落盘往返各跳过它一次 | **不该消失**。⚠ **不许靠伪造一份来源账把它变绿**——那样这份产物就再也不会提醒任何人「提升路会丢掉来源账」 |
 
 ⚠ 还有一处**刻意避开的 skip**：那本书在 `tests/test_stage4.py` 的三条参数化里本可以 `pytest.skip` 掉，
@@ -76,16 +75,16 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 | 1 | `docs/schema/_README.md` | **方法**：三源合并 · 证据列的四个取值 · 为什么文档只定内容、模型照它写 |
 | 2 | `docs/schema/stage2.md` | **模板（首选）**，而且**它就是下一步要移植的那一层**（F5，最难）。调 LLM 的层的完整样板：模型写的 vs 代码写的怎么分开读、落盘前改写怎么记账、记账键的出口规则。⚠ 它那 91 条判据**一个 id 都没有** ⇒ 移植它 = 先从零建一张表 |
 | 3 | `docs/schema/stage1.md` | 不调 LLM 那种层的模板 |
-| 4 | `docs/schema/stage0.md` | 同上，另含「盘上零产物的一层怎么写」（全部标 `设计`） |
+| 4 | `docs/schema/stage0.md` | 同上，另含新写摄入层的审批状态机、人工编辑与归档契约；F7 已有盘上临时跑盘证据 |
 | 5 | `docs/REQUIREMENTS.md` | 每条需求的「谁在查」列——schema 里的 `[HARD]` 都要能追到它 |
 | 6 | `docs/LESSONS.md` | 15 条已实测的坑。**移植前过一遍**，它们多数是「改一行就静默失效」那一类 |
 
-⚠ 已移植五层的契约（`stage3.md` / `stage4.md` / `stage5.md` / `stage6.md` / `stage7.md`）**按需回查**，
+⚠ 已移植七层的契约（`stage0.md` / `stage1.md` / `stage3.md` / `stage4.md` / `stage5.md` / `stage6.md` / `stage7.md`）**按需回查**，
 不必通读——它们的结论已经落进 `contracts/judges/` 与各层实现。
 
 ---
 
-## 下一步：F5 ~ F7
+## 下一步：F5（F6/F7 已完成）
 
 ### 顺序：**按验证价值挑，不按管线顺序挑**
 
@@ -100,8 +99,8 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 | 顺位 | 层 | 原型行数 / prompt 字 / 判据 | 备注 |
 |---|---|---|---|
 | **F5** | **stage2** | 3597 + 1110 / **20804** / **91（无 id）** | 最难。⚠ `novel/core/spans.py` 已有 `content_index` / `locate_spans` / **`lcs`**（F4 带进来的），还缺 `recover` 那条臂与 `HINGE_LCS_MIN` |
-| F6 | stage1 | 828 / 0 / 13（无 id） | 零 prompt 零调用；沿 stage0/stage1 的新边界把「摄入+分章」切开 |
-| F7 | stage0 | **0** / 0 / 0 | **不是移植是新写**——原型这一层一行代码都没有 |
+| **F6 ✅** | stage1 | 828 / 0 / 13（无 id） | 已沿新边界只保留确定性分章；契约收敛为 8 条有 id 判据 |
+| **F7 ✅** | stage0 | **0** / 0 / 0 | 已从零实现摄入、剔除、人工编辑/批准、轮次归档与 13 条有 id 判据 |
 
 ### ⭐ F5 从这里接 —— stage5 已经收工，下一层是 stage2
 
@@ -149,13 +148,16 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 | **`--revise` 的回归护栏没有真机样本** | `checks.trim_regressions` 的六条只在合成输入上验过；`.rejected.json` 那条归档路盘上仍是零样本 |
 | **`--tag` / `--batch` 未移植** | 原型的 A/B 实验设施。`docs/schema/stage5.md` 事实①下面已标注——**读到它们时当不存在，别照着补一个本仓没有的入口** |
 
-### ⚠ F6/F7 那颗地雷
+### ✅ F6/F7 收工验收
 
-**`tests/test_ingest_fixtures.py` 的 18 个 `importorskip` 会一次变成 18 个 `pytest.fail`。**
-触发条件是**模块存在**，不是进 `PORTED_STAGES`——只要建出 `tests/fixtures_ingest.py` 那张
-`_IMPL_MODULE` 表点名的模块（`novel.stages.stage0.removal` / `novel.stages.stage1.partition`，
-哪怕空壳）就会发作。**「建模块」与「补 18 条断言」必须在同一次提交里。**
-这是那份测试有意设计的机制。
+- `tests/test_ingest_fixtures.py` 的 18 个 `importorskip` 已全部换成真实断言；建模块与补断言同轮完成。
+- stage0/stage1 共用 `novel/core/ingest.py` 的一次扫描词法器；首次摄入可不带 `sid`，
+  写盘后由原文身份派生 `sid`，随后自动复检。
+- `Test_data` 的 8 本真实小说全部完成摄入、批准与分章：章节数为
+  8 / 14 / 8 / 9 / 19 / 9 / 15 / 10，其中 2 本命中并剔除番外。
+- 与原型有重叠产物的 3 本书，`main_text.json` / `hook_copy.json` 共 6 份逐字节相同。
+- stage0 的人工语义正确性不可由代码替人裁决，因此批准后的报告仍是 `amber`、退出码 0；
+  这是显式 `unver`，不是运行失败。
 
 ---
 
@@ -191,7 +193,6 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 | **check 路由改名的账** | `stage5_review` → `stage5`。八个 kind 现在与 `invariants.STAGES` 逐值相等、由它派生（落点 `novel/api/deps.py::checked_kind`），`docs/design_brief/04_delivery.md` 那一格已改并带标注，**`web/` 里的引用还欠着** |
 | **`novel/views/` 下三屏没做** | stage4 / stage6 / stage7 各自那一屏与那条 API 路由（现在只有 `stage3.py`）。⚠ 做的时候：stage4 的**三个 `source_chars` 口径别混** · stage6 的 `candidates[].chars` 现算**必须留在 Python** · stage7 的 `book_txt.chars` 是全链第三个 `chars` 口径，**别拿它和另外两个比** |
 | **`web/` 一个字没动**（已裁决） | 欠着四笔：71 处写死的原型作业名（`n4_plan` / `n9_rename` / `stage5_review` …）· S-13 屏按 `rules[]` 重画 · 两份 check mock 重生成 · `web/src/constants/actions.ts` 那张 `WRITE_EFFECTS` 第二落点可删（`/api/enums` 现在发 `writes` / `writes_disk` 了）<br>⚠⚠ **`docs/design_brief/05_samples/` 里的 json 永远不许用新后端的输出覆盖**——它是 `tests/test_api_enums.py` 与 `tests/test_invariants.py` 全部对账的**证据基线**，覆盖之后那一族测试就变成拿 `invariants` 跟它自己比。新形状的样例要另起路径 |
-| **`/check/stage0` 那颗地雷** | stage0 三个节点 `flags` 全空 ⇒ 一个都不接 `--check-only`。守卫已经写下且**今天是绿的**（`test_every_ported_stage_has_exactly_one_check_node`），它在 stage0 进 `PORTED_STAGES` 而没人给它登记跑法的那一刻变红 |
 | **`/api/novels` 在全语料 163 本上会慢** | 每本跑一遍完成度。**登记不优化**——要优化就给 `overview()` 加浅层分支，**别造第二张清单**（原型那张的代价是 stage5 被整个排除） |
 | **`PARTIAL_MASK_FIELDS` 那四个字段名不立** | 零消费方，F5 落地屏蔽实现时才生，并同时加一条「本句里必须逐个出现那四个字段名」的测试 |
 

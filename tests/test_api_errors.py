@@ -39,7 +39,7 @@ def _all_subclasses(cls) -> set[type]:
 
 #: 两个抽象基类。**它们刻意没有状态码**——`novel/errors.py` 明写「不直接抛它」，
 #: 而给它们一格，就等于给所有子类发了一张默认通行证。
-_ABSTRACT = {E.TerminalState, E.RefusedByStructure}
+_ABSTRACT = {E.TerminalState, E.IngestTerminal, E.RefusedByStructure}
 
 
 def _load_the_llm_family() -> None:
@@ -144,7 +144,8 @@ def test_there_is_no_default_status():
 
     ⚠ 反例用的是两个抽象基类与一个仓外异常：三者都不该有答案。
     """
-    for exc in (E.TerminalState('抽象基类'), E.RefusedByStructure('抽象基类'),
+    for exc in (E.TerminalState('抽象基类'), E.IngestTerminal('抽象基类'),
+                E.RefusedByStructure('抽象基类'),
                 ValueError('仓外的异常')):
         with pytest.raises(type(exc)):
             H.status_of(exc)
@@ -192,6 +193,26 @@ def test_a_second_job_on_the_same_book_is_409():
     可以撞，行为半边要等那一期。**这条不许被读成「409 验过了」。**
     """
     assert H.status_of(JobConflict('这本书已经在跑了')) == 409
+
+
+def test_ingest_conflicts_and_unprocessable_content_have_different_codes():
+    '''已有状态冲突要人选择，小说内容不满足契约则是不可处理的输入。'''
+    conflicts = (
+        E.SourceConflict('x'),
+        E.HumanEditProtected('x'),
+        E.PartitionInputMismatch('x'),
+    )
+    unprocessable = (
+        E.SourceDecodeFailed('x'),
+        E.SourcePathRejected('x'),
+        E.Stage0BodyRejected('x'),
+        E.PartitionChapterMismatch('x'),
+        E.ResidualNonbody('x'),
+        E.HookCopyMissing('x'),
+        E.TooFewChapters('x'),
+    )
+    assert all(H.status_of(exc) == 409 for exc in conflicts)
+    assert all(H.status_of(exc) == 422 for exc in unprocessable)
 
 
 def test_structural_refusals_are_5xx_because_they_are_our_bug():

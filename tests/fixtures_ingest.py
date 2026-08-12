@@ -152,7 +152,7 @@ _S0_REMOVAL = (
         name='drop_ratio_only', owner='stage0',
         why=f'丢弃占比越过 {DROP_RATIO_MAX}，但正文占比仍 ≥ {BODY_RATIO_MIN}。'
             f'**这是 drop_ratio 唯一独立起作用的窗口**——只有它响，early_cut 不响。',
-        text=body(5, times=6) + '番外\n\n' + '番外一：十年后的那个冬天，孩子已经会走路了。' * 15 + '\n',
+        text=body(5, times=6) + '番外\n\n' + '番外一：十年后的那个冬天，孩子已经会走路了。' * 18 + '\n',
         num_chapters=5, warnings=('drop_ratio',), removed_kinds=('番外',),
         body_ratio_band=(BODY_RATIO_MIN, 0.65),
     ),

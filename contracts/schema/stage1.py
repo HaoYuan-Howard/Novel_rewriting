@@ -134,8 +134,8 @@ class PartitionReport(StrictModel):
 
     #: **本层输入**（`stage0/clean_text.txt`）的 sha1。**[HARD]** 对不上即阻断（`R-1.3`）。
     #:
-    #: ⚠ **盘上零样本**——它是 stage0 那一层加进来之后才有的字段，
-    #: 存量 `partition_report` 记的是原型那套摄入元数据。
+    #: F6 已用临时盘上产物与 `Test_data` 真实小说走通；原型存量
+    #: `partition_report` 仍记的是旧摄入元数据，不能拿来冒充这一字段的历史样本。
     input_sha1: Sha1
 
     # ── 3.2 规模与分章 ──────────────────────────────────────────────────────
@@ -185,10 +185,10 @@ class PartitionReport(StrictModel):
     # 拿**落盘时记下的** span 去比**此刻盘上的**原文，才是一次真的核对：
     # 原文被换过、被截断、编码变了，都会在屏上直接错位。
 
-    #: 文案段在归一化原文上的码点半开区间。恒 `[0, x)`。**盘上零样本。**
+    #: 文案段在归一化原文上的码点半开区间。恒 `[0, x)`。F6 已临时跑盘。
     hook_span: Span
 
-    #: 逐章。**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal`。**盘上零样本。**
+    #: 逐章。**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal`。F6 已临时跑盘。
     chapter_spans: list[Span]
 
     @model_validator(mode='after')

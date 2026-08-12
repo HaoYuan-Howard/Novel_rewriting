@@ -5,12 +5,12 @@
 读法（证据列的取值、为什么三源合并）见 `_README.md`。
 **载体 = Pydantic v2**（已定），但本文只定内容、不写模型——模型在骨架阶段照本文写。
 
-> ## ⚠ 本层**盘上零产物**
+> ## ✅ 本层实现与临时跑盘均已落地
 >
-> 判据与词表有全语料 163 本的实测，但**产物形态、审阅状态机、编辑回写这三块没有任何盘上样本**。
-> 下表里凡标 **`设计`** 的，就是「还没有任何东西验证过它」——
-> 别把它读成与标 **`三源`** 的字段同等可信。本文描述的是**契约**，不是已验证的实况。
-> ⚠ 跑通之后要回来把 **`设计`** 改成 **`盘·码`**；改不动的说明那个字段还没真的被用上。
+> F7 已用临时小说目录走通产物形态、审批门禁、人工编辑与成对轮次归档；
+> `Test_data` 的 8 本真实小说也已完成摄入、批准与下游分章。
+> 原仓 `Output/` 仍没有历史 stage0 产物，因此这里的 **`盘·码`** 指本仓实现生成并复读的
+> 临时盘上证据，不冒充原型历史样本；**`三源`** 仍只用于原本就有三源证据的字段。
 
 三份产物：
 
@@ -74,8 +74,9 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 |---|---|---|---|---|
 | `original_filename` | `str` | 是 | 含平台前缀与扩展名 | **码** |
 | `original_path` | `str` | 是 | 绝对路径。**文件被移走时是「不知道」，不是「不匹配」** | **码** |
+| `code` | `str` | 是 | 本轮写报告所用代码版本；本层没有 `_provenance`，故落在顶层 | **盘·码** |
 | `source_sha1` | `str` | 是 | **原始 txt** 归一化后的 sha1。追溯用 | **码** |
-| `clean_sha1` | `str` | 是 | **`clean_text.txt`** 的 sha1。**这才是 stage1 记的那个输入指纹** | **设计** |
+| `clean_sha1` | `str` | 是 | **`clean_text.txt`** 的 sha1。**这才是 stage1 记的那个输入指纹** | **盘·码** |
 | `source_encoding` | `str` | 是 | 五候选 `utf-8-sig` / `utf-32` / `utf-16` / `utf-8` / `gb18030` 之一。⚠ 全语料 163 本**只出现过 `utf-8`，另四个零样本**——取值面只能从代码来，样本再多也补不出没发生过的分支 | **码** |
 | `text_norm` | `str` | 是 | 恒 `v1:bom+crlf` | **码** |
 
@@ -102,7 +103,7 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 | `removed[].code_points` | `int` | 是 | 94 ~ 3290 | **三源** |
 | `removed[].head_preview` | `str` | 是 | 恒 80 | **三源** |
 | `removed[].tail_preview` | `str` | 是 | 恒 40 | **三源** |
-| `removed[].origin` | `str` | 是 | `machine`（判据认出的）\| `human`（人手工圈的） | **设计** |
+| `removed[].origin` | `str` | 是 | `machine`（判据认出的）\| `human`（人手工圈的） | **契·码** |
 
 > ⚠ **`span` 的坐标系是原始 txt。** 审阅屏要在原文上画高亮，而 `clean_text` 里那段已经没了。
 > 混用坐标系是这类设计最常见的 bug，而且它**不会报错**——只会把高亮画到错误的位置上。
@@ -155,8 +156,8 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
 | `total_code_points` | `int` | 是 | 原始 txt 归一化后的长度。全语料 8088 ~ 41224 | **三源** |
-| `body_code_points` | `int` | 是 | 剔除后剩下的长度 = `len(clean_text)` | **设计** |
-| `warnings` | `obj[]` | 是 | 每条带 `kind`（`STAGE0_WARNINGS` 之一）与人读的一句话 | **设计** |
+| `body_code_points` | `int` | 是 | 剔除后剩下的长度 = `len(clean_text)` | **盘·码** |
+| `warnings` | `obj[]` | 是 | 每条带 `kind`（`STAGE0_WARNINGS` 之一）与人读的一句话 | **盘·码** |
 
 **`body_ratio` 与 `removed_code_points` 都不落盘**——前者恒等于
 `body_code_points / total_code_points`，后者恒等于 `sum(removed[].code_points)`，
@@ -185,10 +186,10 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `approved` | `str` | 是 | **三态**：`not_run` ｜ `pending` ｜ `approved`（`APPROVAL_STATE`）。**不等于 `approved` 时 stage1 拒绝启动**（`R-0.3b`，`HARD`） | **设计** |
-| `approved_at` | `str \| null` | 是 | ISO 时间戳；未批准时 `null`。**有值 ⟺ `approved == 'approved'`**（载体的后置条件） | **设计** |
-| `round` | `int` | 是 | 第几轮。人每编辑一次 +1，上一轮进 `_rounds/` | **设计** |
-| `edited_by_human` | `bool` | 是 | 本轮有没有人工编辑。= `any(r.origin == 'human' for r in removed)` 之外还含直接改正文 | **设计** |
+| `approved` | `str` | 是 | **三态**：`not_run` ｜ `pending` ｜ `approved`（`APPROVAL_STATE`）。**不等于 `approved` 时 stage1 拒绝启动**（`R-0.3b`，`HARD`） | **盘·码** |
+| `approved_at` | `str \| null` | 是 | ISO 时间戳；未批准时 `null`。**有值 ⟺ `approved == 'approved'`**（载体的后置条件） | **盘·码** |
+| `round` | `int` | 是 | 第几轮。人每编辑一次 +1，上一轮进 `_rounds/` | **盘·码** |
+| `edited_by_human` | `bool` | 是 | 本轮有没有人工编辑。= `any(r.origin == 'human' for r in removed)` 之外还含直接改正文 | **盘·码** |
 
 > #### ✅ `approved` 已定为三态（2026-08-11 用户裁决，骨架 A3）
 >
@@ -209,12 +210,12 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 
 | 不变量 | 对应需求 | 证据 |
 |---|---|---|
-| `clean_sha1` == 盘上 `clean_text.txt` 的复算值 | `R-0.6` | **设计** |
-| `sum(removed[].code_points) + len(clean_text) == len(归一化原文)` | `R-0.2` | **设计** |
-| `removed[].span` 两两不重叠，且都落在原始 txt 长度内 | `R-0.2` | **设计** |
+| `clean_sha1` == 盘上 `clean_text.txt` 的复算值 | `R-0.6` | **盘·码** |
+| **机器轮且无人改正文时**：`sum(removed[].code_points) + len(clean_text) == len(归一化原文)` | `R-0.2` | **盘·码** |
+| `removed[].span` 两两不重叠，且都落在原始 txt 长度内 | `R-0.2` | **盘·码** |
 | `removed[].kind` ∈ `NONBODY_KINDS` | `R-0.1` | **三源** |
-| `approved == False` → stage1 必须拒绝启动 | `R-0.3b`（`HARD`） | **设计** |
-| `clean_text` 里**认不出任何非正文标记** | `R-0.1` / `R-1.7` | **设计** |
+| `approved != 'approved'` → stage1 必须拒绝启动 | `R-0.3b`（`HARD`） | **盘·码** |
+| `clean_text` 里**认不出任何非正文标记** | `R-0.1` / `R-1.7` | **盘·码** |
 
 > #### 最后那条就是 stage1 的断言（`R-1.7`）
 >

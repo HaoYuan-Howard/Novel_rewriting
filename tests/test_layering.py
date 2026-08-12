@@ -298,8 +298,8 @@ def test_contracts_never_imports_the_web_stack():
 #: `test_only_the_store_writes_to_disk` 守着——API 与视图层不在它的白名单里。
 #: 这里补的是**另一半**：调白名单模块里的写方法。那一半绕不过上面那条守卫，
 #: 因为它调的正是被允许写的那几个模块。
-_STORE_WRITERS = {'write', 'write_text', 'write_invalid', 'promote_invalid',
-                  'archive_round', 'append_event'}
+_STORE_WRITERS = {'write', 'write_legacy', 'write_text', 'write_invalid',
+                  'promote_invalid', 'archive_round', 'archive_bytes', 'append_event'}
 
 
 def _writer_hits(path: str) -> list[str]:

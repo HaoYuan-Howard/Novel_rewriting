@@ -84,6 +84,75 @@ class ApprovalRequired(TerminalState):
     """
 
 
+    requirement = 'R-0.3b'
+
+
+class IngestTerminal(TerminalState):
+    '''stage0/stage1 的数据终态；子类用 requirement 给机器稳定分类。'''
+
+    requirement: str
+
+
+class SourceDecodeFailed(IngestTerminal):
+    '''原始小说无法按契约候选无损解码、含 NUL，或正文为空。'''
+
+    requirement = 'R-0.11'
+
+
+class SourcePathRejected(IngestTerminal):
+    '''源文件名推导出的书目录不能被同一把尺子无损解析回来。'''
+
+    requirement = 'R-0.13'
+
+
+class SourceConflict(IngestTerminal):
+    '''同一目标目录已有另一份正文，未获显式覆盖许可。'''
+
+    requirement = 'R-0.14'
+
+
+class HumanEditProtected(IngestTerminal):
+    '''stage0 重跑会覆盖人工编辑，未显式强制时拒绝。'''
+
+    requirement = 'R-0.8'
+
+
+class Stage0BodyRejected(IngestTerminal):
+    '''清理后保留正文不足六成，不能把结果递给下游。'''
+
+    requirement = 'R-0.9'
+
+
+class PartitionInputMismatch(IngestTerminal):
+    '''stage1 真正读到的 clean_text 与 stage0 批准的指纹不一致。'''
+
+    requirement = 'R-1.3'
+
+
+class PartitionChapterMismatch(IngestTerminal):
+    '''分章标记与可写入章表无法保持一一对应。'''
+
+    requirement = 'R-1.5'
+
+
+class ResidualNonbody(IngestTerminal):
+    '''已批准的 clean_text 里仍能识别出非正文标记。'''
+
+    requirement = 'R-1.7'
+
+
+class HookCopyMissing(IngestTerminal):
+    '''第一个正文章标记之前没有非空开篇文案段。'''
+
+    requirement = 'R-1.12'
+
+
+class TooFewChapters(IngestTerminal):
+    '''正文章数少于契约下限。'''
+
+    requirement = 'R-1.13'
+
+
 class UnsupportedRunMode(TerminalState):
     """这个节点没有这条跑法：未知节点 / 它不接受这个 flag / 带值 flag 没给值。
 
