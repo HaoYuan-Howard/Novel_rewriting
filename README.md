@@ -33,7 +33,7 @@
 | **需求** | ✅ `docs/REQUIREMENTS.md` —— `R-0`~`R-14` · `Q-1`~`Q-12` · `B-01`~`B-22` |
 | **契约** | ✅ **十二份全部产出** —— `docs/schema/` 的 stage0~stage7 + `_common.md` + `_report.md` + `_orchestration.md` + `_api.md` |
 | **骨架** | ✅ **A~E 期全部完成**（A = 契约层 · B = 共享运行时 / LLM 层 / 报告构造器 · C = stage3 纵切 · D = 编排 + CLI · E = HTTP 层） |
-| **移植** | 🚧 **F 期只剩 stage2**：`F0` 清障 ✅ · `F1` = stage6 ✅ · `F2` = stage7 ✅ · `F3` = stage4 ✅ · `F4` = stage5 ✅ · **`F6` = stage1 ✅ · `F7` = stage0 ✅**<br>`PORTED_STAGES = {'stage0','stage1','stage3','stage4','stage5','stage6','stage7'}`，**八层去七**。<br>**`F5` = stage2 正在推进**（最难的一层，见下）：`F5-0` 落点审计 ✅（`docs/schema/stage2.md` §五 从零建出 **75 条**判据表 + `docs/REQUIREMENTS.md` 补 17 行）·**下一步是 `F5-1` 契约层四格** |
+| **移植** | 🚧 **F 期只剩 stage2**：`F0` 清障 ✅ · `F1` = stage6 ✅ · `F2` = stage7 ✅ · `F3` = stage4 ✅ · `F4` = stage5 ✅ · **`F6` = stage1 ✅ · `F7` = stage0 ✅**<br>`PORTED_STAGES = {'stage0','stage1','stage3','stage4','stage5','stage6','stage7'}`，**八层去七**。<br>**`F5` = stage2 正在推进**（最难的一层，见下）：`F5-0` 落点审计 ✅（§五 从零建出 **75 条**判据表）· `F5-1` 契约层四格 ✅ · `F5-2` `recover` 臂 ✅ · `F5-3` 三条臂的 prompt ✅ ·**下一步是 `F5-4`：75 条判据行** |
 
 ---
 
@@ -55,16 +55,13 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 `tests/test_corpus_fixtures.py` 从 279 条塌到 6 条**而不报错**——要重量历史基线，
 必须抽到 `E:\practice_group\` 的同级目录下。
 
-**基线：F6/F7 收工时实测 `1597 passed / 2 skip` 全绿**（`452b22f`）。
-F5-2（`ffbc7c7`）给 `tests/test_core.py` 加了 5 条 ⇒ **该是 `1602 / 2`**。
+**当前基线：全绿 `1643 passed / 2 skip`**（F5-3 收工 `de578d8`，2026-08-12，树干净时实测）。
 
-> ⚠⚠ **这个数 F5-2 收工时【没能实测到】，别把它当核过的。** 2026-08-12 19:25 起
-> 另一个会话在同一工作树里加 stage0 的摄入/上传路（9 个新端点），树上因此挂着
-> **4 红 + 5 错**（全是它的：`test_api_http` 的「九个端点」面 · `test_api_enums`
-> 的 `len(actions) == 69` · `test_api_discipline` 的 409）。
-> 实测到的是 **`1600 passed / 2 skip / 4 failed / 5 error`**（共 1611），
-> 其中本轮自己那几个文件全绿（`test_core.py` 37 条 + `test_stage4_beats.py` 21 条）。
-> 详情与「哪些文件被它占着」见下方 **F5 从这里接** 那一节开头的方框。
+一路的账：`1541 / 20`（F4 收工）→ **`1597 / 2`**（F6/F7 `452b22f`：18 个 `importorskip`
+换成真断言）→ `1611 / 2`（另一个会话的 stage0 摄入/上传路 `3b15ca9`）→
+`1627 / 2`（F5-1 `6be3c2c`，`+16`）→ **`1643 / 2`**（F5-3 `de578d8`，`+16`）。
+⚠ F5-2（`ffbc7c7`）的 `+5` 落在中间那一段里——它收工时树被另一个会话搅浑，
+**当时没能实测到干净的数**，那条已过期的告警不必再读。
 
 > ⚠ **`git worktree` 里跑不出这个数，那不是环境坏了。** 拿 HEAD 开一个干净 worktree
 > 实测 `1593 / 3 / 1F / 2E`——差的那几条是 **F6/F7 的 `tests/test_stage01.py`
@@ -126,22 +123,28 @@ F5-2（`ffbc7c7`）给 `tests/test_core.py` 加了 5 条 ⇒ **该是 `1602 / 2`
 | **F6 ✅** | stage1 | 828 / 0 / 13（无 id） | 已沿新边界只保留确定性分章；契约收敛为 8 条有 id 判据 |
 | **F7 ✅** | stage0 | **0** / 0 / 0 | 已从零实现摄入、剔除、人工编辑/批准、轮次归档与 13 条有 id 判据 |
 
-### ⭐ F5 从这里接 —— `F5-0` / `F5-2` 已落，`F5-1` 与 `F5-3` **被另一个会话堵着**
+### ⭐ F5 从这里接 —— `F5-0`~`F5-3` 已落，**下一步是 `F5-4`（75 条判据行）**
 
-> ## ⚠⚠ 接手第一件事：确认 `contracts/invariants.py` 没人在写
+> ## 接手第一件事：`F5-4` 要写的那 75 行，源在哪
 >
-> **2026-08-12 19:25 实况：另一个会话正在同一工作树里加 stage0 的摄入/上传路**
-> ——已改 `contracts/invariants.py` · `contracts/schema/{__init__,api,stage0}.py` ·
-> `novel/cli/main.py` · `novel/api/app.py` · `novel/stages/stage0/removal.py` ·
-> `tests/test_layering.py`，并新建了 `novel/orchestrator/uploads.py` ·
-> `novel/views/ingest.py` · `novel/api/routes/ingest.py`（9 个新端点）。
+> **`docs/schema/stage2.md` §5.1 那张表就是源，逐条抄，不要重新判。**
+> 那张表 F5-0 从零建的，六列都填满了：`判据 | 级别 | 查什么 | 盘上 3 本 / 31 章 | 修法`。
 >
-> **树上那 4 红 + 5 错全是它的**（`test_api_http` 的「九个端点」面 · `test_api_enums`
-> 的 `len(actions) == 69` · `test_api_discipline` 的 409）。⇒ **别去修它们**。
+> **`F5-4` 与前四步的关系，三条都已就位：**
+> - `Rule.fix`（F5-1）**已经在等着**：§5.1 的「修法」那一列就是它的取值，
+>   24 条非空。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
+>   这正是把散文换成结构化表达的收益。
+> - 那个判据行文件写完之后 **不要 import 它**（照 `F4-4`）：
+>   判据一进 `REGISTRY`，四张表立刻索要实现，那是 `F5-5` 的事。
+>   ⚠ 落点是 `contracts/judges/` 下与本层同名的那份——**这里刻意写成散文**，
+>   因为它还不存在，而 `test_every_referenced_repo_path_exists` 会去查反引号路径
+>   真实存在（本轮它已经为这件事红过两次）。
+> - 那 4 条标 ✚ 的（`event_empty` / `summary_empty` / `repair_cache_policy` /
+>   `verbatim_failed`）**原型没有**，是 `R-3.11` / `R-3.13` / `R-3.18` 索要的。
+>   `verbatim_failed` 断言的键 F5-1 已经立好了。
 >
-> **`F5-1` 与 `F5-3` 都要改 `contracts/invariants.py`，与它硬冲，必须串行**
-> （同 F5-0 那次的处置）。`F5-2` 之所以能先落，是因为它只碰
-> `novel/core/spans.py` 与 `tests/test_core.py`，与那一批不相交。
+> ⚠ **`material_malformed` 不许再注册**：它已经在 `contracts/judges/stage5.py` 里
+> 以 `stage='stage5', owner='stage2'` 注册着（stage2 的账，由下游回过头来报）。
 
 **F5-0（`e5dd5d5`）交的是落点审计，一行 `.py` 都没改：**
 
