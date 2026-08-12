@@ -107,7 +107,7 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 
 ### ⭐ F4 走到哪了 —— **新 session 从这里接**
 
-已落地五个提交（`git log --oneline`，每条的病因与修法都在 commit body 里）：
+已落地六个提交（`git log --oneline`，每条的病因与修法都在 commit body 里）：
 
 | 提交 | 做完了什么 |
 |---|---|
@@ -116,6 +116,11 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
 | `F4-2` | `novel/core/` 补齐：数值词法（**比值不比字面**）+ 保真回写三件套 |
 | `F4-3` | `novel/stages/stage5/measure.py`：确定性核心，**盘上 31 份成稿逐章对账全过** |
 | `F4-4` | `contracts/judges/stage5.py`：**47 条判据行**，形状逐项验过 |
+| `F4-5` | `novel/stages/stage5/prompts.py`：两条臂的 system，**渲染后与原型逐字节相同**（deep 2724 / shallow 2599） |
+
+⚠ **原型那两条 system 叫 `DEEP_SYS` / `SHALLOW_SYS`**（`Stage5/n5_write.py:50` / `n6_write.py:55`），
+**不叫 `N5_SYS` / `N6_SYS`**——后两个只存在于 `_legacy/`，是**已废弃的旧世代**。
+本文件此前记的是那两个失效的名字（LESSONS 第 11 条那一类：指向改名过的符号，而不会报错）。
 
 #### ⚠⚠ 下一次的第一件事：**六处接线必须同一次提交走完**
 
@@ -133,9 +138,8 @@ D:\Miniconda\envs\novel_refactor\python.exe -m pytest -q
    所以必须**与模块同批改**：`test_structural_rows_that_name_a_repo_path_actually_point_at_it`
    会查反引号里那个模块真实存在。形态照 F3-0 对 `R-6.5`/`R-6.6` 的处置。
 
-还欠的实现：`prompts.py`（两条臂的 system **逐字 = 原型 `N5_SYS`/`N6_SYS`**，
-且**渲染之后也要逐字**——F1 的教训是模板一个字节没变而搬进 `invariants` 的说明被转述了一遍）·
-`checks.py`（47 条，**两相共用同一个函数**）· `write.py` · `review.py`（含 `--wontfix`）。
+还欠的实现：`checks.py`（47 条，**两相共用同一个函数**）· `write.py` · `review.py`（含 `--wontfix`）。
+`prompts.py` 已在 F4-5 落地（见下）。
 
 #### 本轮已裁决的三条（用户裁决，2026-08-12）
 

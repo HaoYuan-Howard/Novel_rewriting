@@ -273,6 +273,18 @@ STAGE1_WARNINGS: Final = ('noisy_duplicate',)
 #: 跨层并拍会把只在回忆里出场的人放进现世街头。
 TIME_LAYERS: Final = ('present', 'recall', 'hearsay')
 
+#: 三个叙述层给人看的那一面：**短名**（下发面逐拍渲染用）与**释义**（system prompt 展开用）。
+#: ⚠ **两处都要，而且必须来自同一张表**：写作节点的 user 消息里逐拍打的是短名
+#: （`现场·某地·在场：…`），system prompt 里展开的是「〔现场〕= 当下正在发生」。
+#: 从前 system 那一份是**手抄**的，改措辞时它不会跟着改、也不会报错（判据 25）。
+#: ⚠ 键必须与 `TIME_LAYERS` 逐值相同——下面那条 `assert` 是它的落点。
+LAYER_CN: Final = {'present': '现场', 'recall': '回忆', 'hearsay': '转述'}
+LAYER_GLOSS: Final = {'present': '当下正在发生',
+                      'recall': '视角人自己想起的往事',
+                      'hearsay': '别人讲给她听的事'}
+assert tuple(LAYER_CN) == tuple(LAYER_GLOSS) == TIME_LAYERS, \
+    '叙述层的短名/释义与 `TIME_LAYERS` 分家了——渲染顺序会跟着漂，而没有东西会出声'
+
 #: 从原文抽出来的保真「点」。
 #: **以「点」不以「段」**：离散原子无法被模仿成文风，只能被放进去或不放进去；
 #: 连续文本段一律不下发——写作节点必然沿着它的句序和节奏走，那正是重写要避免的。
@@ -288,6 +300,37 @@ HINGE_GROUPS: Final = {
     '物件': 'must_appear',       # 必须出现
     '因果前提': 'must_hold',     # 必须成立，不必写在纸面上 —— 按定义查不了文面，恒 unver
 }
+
+#: 四组保真材料**给写手看的标签**，拆成「标签名 + 限定语」两截。
+#:
+#: 【为什么拆两截】下发面逐条渲染的是**合起来的全串**（`· 原样写入（一个字都不能改）：…`），
+#: 而 system prompt 里逐条展开时用的是**短名**（`- 【原样写入】：…`）。两种写法都要，
+#: 且必须来自同一个源——从前 system 那一份是手抄的，改标签措辞时它不会跟着改、也不会报错。
+#:
+#: ⚠ **把四种都当成「必须逐字出现」是最常见的错法**：`must_hold` 要的只是命题成立，
+#: 当台词写就会逼出一段背景交代。四条限定语正是在防这件事，**一个字都不许省**。
+HINGE_LABEL_PARTS: Final = {
+    'verbatim': ('原样写入', '一个字都不能改'),
+    'keep_value': ('数值不得改动', '措辞随你'),
+    'must_appear': ('必须在场并起作用', '怎么描写随你'),
+    'must_hold': ('必须成立，但【不必写在纸面上】', '别为它硬塞背景交代'),
+}
+assert set(HINGE_LABEL_PARTS) == set(HINGE_GROUPS.values()), \
+    '保真标签的四个键与 `HINGE_GROUPS` 分家了'
+
+#: 合起来的全串（下发面逐条用）。**由上表派生，不另存一份。**
+HINGE_LABEL: Final = {k: f'{name}（{qual}）' for k, (name, qual) in HINGE_LABEL_PARTS.items()}
+
+
+def hinge_heading(kind: str) -> str:
+    """标签名当**小节标题**用时的写法：去掉名字内部的强调号。
+
+    `must_hold` 的标签名自带一对【】（「必须成立，但【不必写在纸面上】」），
+    而小节标题本身又要套一层【】——不去掉就渲染成
+    「【必须成立，但【不必写在纸面上】】」。另三个不含【】，本函数对它们是恒等的。
+    """
+    return HINGE_LABEL_PARTS[kind][0].replace('【', '').replace('】', '')
+
 
 #: 逐字原话允许被一处提示语切开时，插入部分的内容字数上限。
 #: 形态必须在原文字节上长成「收引号 + ≤N 内容字 + 开引号」；
