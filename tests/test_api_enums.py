@@ -167,8 +167,15 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
     #   ⚠ **`stage7.approve` 没有跟着 +1**，那不是漏了：本层一本书只有**一份**人物表，
     #   定稿是「给整份盖章」不是「从三条候选里选一条」⇒ 它没有参数可起名，
     #   `flags=()` 在那一格是**终态**（`invariants.py` 那条注释已改）。
-    assert len(paid_payload['actions']) == 60, (
-        f'actions 有 {len(paid_payload["actions"])} 条，期望 60 '
+    # ⚠ 60 → 61（2026-08-12，F3 移植 stage4）：**只多一条** `stage4.plan --dry-run`。
+    #   那一格从前只有 `--prompt-only`（只量体量），而「渲染出来的 system 与原型
+    #   逐字节相同」这条对账**在 CLI 上根本走不通**——贵贱闸会把 `--dry-run`
+    #   当成付费默认路径拦下（实测过一次）。两个 flag 都留着是因为它们答的是
+    #   不同的问题：一个「这次要花多少 token」，一个「发出去的到底是哪几个字节」。
+    #   ⚠ `stage4.context` **没有跟着 +1**，那不是漏了：它的 `flags=()` 是**终态**
+    #   ——本节点**本身**就是那个动作，原型的 `--context-only` 已作为 flag 退役。
+    assert len(paid_payload['actions']) == 61, (
+        f'actions 有 {len(paid_payload["actions"])} 条，期望 61 '
         f'（16 个节点的默认路径 + 每个 flag，stage5.write 两条臂各算一遍）。'
         f'这个数**会随 `NODES` 改**——改动它是有意的就来改这个数')
 

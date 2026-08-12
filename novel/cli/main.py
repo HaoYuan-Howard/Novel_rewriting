@@ -345,6 +345,25 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
 
+    if '--identity' in tokens:
+        n_beats, report = plan.run_identity(ctx)
+        print(f'── 恒等基线 ── 每源章一输出章、每拍照源字数给预算，共 {n_beats} 拍；'
+              f'已落 {plan.IDENTITY_CTX_REL}')
+        print(render(report))
+        # ⚠ **不拿 badge 当退出码**：它量的是「判据有没有把合法情况排除在外」，
+        #   红了先怀疑判据、不是先怀疑数据。跑完了就是 0。
+        return X.OK
+
+    if '--names-only' in tokens:
+        rows = plan.run_names_only(ctx)
+        print(f'── 逐章可用名册 ── {len(rows)} 章（0 成本，只吃 stage1+stage2，不写盘）')
+        for o, avail, held in rows:
+            print(f'  ch{o}: 叫得出 {len(avail)} 人 {sorted(avail.values())[:8]}'
+                  + (f' · 还叫不出 {len(held)} 人 {held[:6]}' if held else ''))
+        print('  ⚠ 叫法**会随章变**（退回的是「到本章为止出现最多的有据称呼」）——'
+              '只有 char_id 的集合是单调的')
+        return X.OK
+
     if '--revalidate' in tokens:
         report = plan.run_revalidate(ctx)
         print(render(report))

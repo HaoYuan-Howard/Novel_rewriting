@@ -94,6 +94,13 @@ ARTIFACTS: dict[str, type] = {
     'stage3/style_grounding.json': StyleGrounding,
     'stage4/plan_chapters.json': PlanChapters,
     'stage4/writer_context.json': WriterContext,
+    # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。原型的
+    #   `--identity-plan` 整个输出是 `print` + 返回码 ⇒「跑过且写手手里有这些」与
+    #   「从没跑过」在盘上长得一模一样（`Q-2`）。stage6/stage7 在同一道工序上都做对了。
+    #   ⚠ 它与正式那份**同一个模型**：形状完全一样，差别只在三个 goal 是显式标记
+    #   ——**换一个模型就等于说它是另一种东西**，而它恰恰要回答
+    #   「计划什么都不改时，写手手里到底有什么」。
+    'stage4/writer_context.identity.json': WriterContext,
     'stage5/{mode}/ch{nn}.json': Chapter,
     'stage5/review_{n}.json': Review,
     'stage5/wontfix.json': WontFix,

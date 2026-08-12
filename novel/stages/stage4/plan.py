@@ -31,12 +31,16 @@ from novel.report.findings import Outcome
 from novel.run import RunContext
 from novel.stages.stage4 import checks, prompts
 from novel.stages.stage4.beats import beat_index, group_beats
-from novel.stages.stage4.context import build_writer_context
-from novel.stages.stage4.measure import expand_plan_beats, source_chars_table
+from novel.stages.stage4.context import build_writer_context, display_names_at
+from novel.stages.stage4.measure import expand_plan_beats, identity_plan, source_chars_table
 from novel.store import ArtifactStore
 
 REL = 'stage4/plan_chapters.json'
 CTX_REL = 'stage4/writer_context.json'
+
+#: 恒等基线那一份。⚠ **另一个文件名，不覆盖正式那份**——
+#: 「计划什么都不改时写手手里有什么」与「这一版计划下写手手里有什么」是两个问题。
+IDENTITY_CTX_REL = 'stage4/writer_context.identity.json'
 MAIN_TEXT = 'stage1/main_text.json'
 GLOBAL_GROUNDING = 'stage2/global_grounding.json'
 BLUEPRINTS = 'stage2/chapter_blueprints.json'
@@ -345,11 +349,14 @@ def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: 
     outcomes = _judge(store, {**data, '_provenance': provenance.model_dump(by_alias=True)},
                       up, with_ctx_link=False)
     if (hits := _hard_hits(outcomes)):
-        store.write_invalid(REL, art, gates_skipped=[])
+        # ⚠ `gates_skipped=[]` —— **空列表也要写**：「这一次没有闸门跑不成」
+        #   与「压根没记这笔账」是 `Q-2` 要求必须能区分的两件事。
+        path = store.write_invalid(REL, art, gates_skipped=[])
         raise GateBlocked(
             f'{len(hits)} 条阻断级判据命中：{hits}。问题稿已存 `{_INVALID}`，'
             f'**正式产物没有被覆盖**。⚠ 这次不必再付费：手改那几行，'
-            f'`stage4.plan --revalidate` 提升即可（0 成本）')
+            f'`stage4.plan --revalidate` 提升即可（0 成本）',
+            invalid_path=str(path))
     store.write(REL, art)
     run_context(ctx)
     return _report(ctx, store, _judge(store, art.model_dump(by_alias=True), up, with_ctx_link=True),
@@ -379,6 +386,71 @@ def run_plan(ctx: RunContext, client: Any) -> CheckReport:
                       provenance=ctx.llm_provenance(
                           PlanProvenance, prompts={'N4_SYS': prompts.PLAN_SYS},
                           model=client.model, params=params))
+
+
+def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
+    """`--identity`：**恒等基线** —— 拿原作自己的东西跑整套判据。
+
+    `FREE_ENTRIES['--identity']` 自己写着它答什么：
+    **「看判据有没有把合法情况排除在外」**。合成一份「什么都不改」的计划
+    （每拍照源字数给预算），组一份上下文，然后**跑同一张判据表**。
+    红了先怀疑判据，不是先怀疑数据。
+
+    ⚠⚠ **它落盘**，写 `stage4/writer_context.identity.json`（已进 `ARTIFACTS`）。
+    原型这条路整个输出是 `print` + 返回码 ⇒「跑过且写手手里有这些」与「从没跑过」
+    **在盘上长得一模一样**（`Q-2`）。stage6/stage7 在同一道工序上都做对了。
+    ⚠ **它写的是另一份文件**，不碰正式那份 ⇒ 它不是「局部改写」，
+    也就不该标 `partial_rewrite`（本层的 `ACCOUNTING` 因此没有那个键）。
+
+    返回 `(拍数, 报告)`。
+    """
+    store = ArtifactStore(ctx)
+    up = _Upstreams(ctx, store)
+    assert up.global_g is not None
+    base = identity_plan(up.blueprints, up.main_text, up.bidx, up.groups)
+    asm = build_writer_context(base, up.global_g, up.blueprints, up.main_text)
+    art = WriterContext.model_validate(
+        {**asm.ctx, '_provenance': ctx.free_provenance(CtxProvenance)})
+    store.write(IDENTITY_CTX_REL, art)
+    outcomes = checks.check(
+        base, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
+        ctx=asm.ctx, ctx_link=None,
+        ctx_source=f'{IDENTITY_CTX_REL}：本次现算的恒等基线，不比来源', bidx=up.bidx)
+    return (sum(len(c['beats']) for c in base['output_chapters']),
+            _report(ctx, store, outcomes, {}))
+
+
+def run_names_only(ctx: RunContext) -> list[tuple[int, dict[str, str], list[str]]]:
+    """`--names-only`：**逐章可用名册与被扣住的角色**（0 成本，只吃 stage1+stage2）。
+
+    返回 `[(源章号, {char_id: 本章叫得出的名字}, 本章还叫不出名字的 char_id)]`。
+
+    ⚠⚠ **返回的是映射不是名字列表，而这不是口味问题**：
+    随着读到的原文变多，**同一个人的「叫法」会变**——章级表退回的是
+    「到本章为止出现最多的有据称呼」，某个角色可能 ch2 叫「书童」、ch5 有了本名。
+    ⇒ **只有 `char_id` 的集合是单调的，名字的集合不是**。
+    返回名字列表会让「这一章多了一个人」与「这一章某人改了叫法」在输出里同形。
+
+    ⚠⚠ **它刻意【不】产一份 `CheckReport`，而这不是偷懒。**
+    报告是**判定**的载体，而本条一条判据都没跑：硬造一份出来，24 行会全是
+    `skipped`、徽章恒 `fail` —— 那是一份**说假话的绿灯的反面**：一份说假话的红灯。
+    ⇒ 结论走结构化返回值，由 CLI 渲染。
+    ⚠ 「跑过 vs 没跑过在盘上同形」这条在**这一条路上不成立**：名册是
+    `stage1+stage2` 的纯函数，任何时刻 0 成本重算得出来，没有需要留痕的一次性事实。
+    这与 `--identity` 正相反（那一条量的是**这一次替换/组装守不守恒**，必须留痕）。
+    """
+    store = ArtifactStore(ctx)
+    up = _Upstreams(ctx, store)
+    assert up.global_g is not None
+    chars = ((up.global_g.get('entities') or {}).get('characters') or {})
+    text = {m.get('chapter_ordinal'): (m.get('text') or '') for m in up.main_text}
+    out: list[tuple[int, dict[str, str], list[str]]] = []
+    acc: list[str] = []
+    for o in sorted(text):
+        acc.append(text[o])
+        disp = display_names_at(chars, '\n'.join(acc))
+        out.append((o, dict(sorted(disp.items())), sorted(set(chars) - set(disp))))
+    return out
 
 
 def run_apply_edit(ctx: RunContext) -> CheckReport:

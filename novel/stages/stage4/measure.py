@@ -175,6 +175,13 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) 
 
     ⚠ **抛 `RefusedByStructure` 而不是 `sys.exit`**：本仓只有 `novel/cli/` 那一层能退出进程
     （`tests/test_layering.py` 钉着），产地只负责说清楚是什么终态。
+
+    ⚠⚠ **换完之后就地 `pop` 掉 `plan_beat`**（`stage4.md` §1.2：「落盘 pop 掉，不进产物」）。
+    它归本函数而不归调用方，理由是**消费它的就是这里**：留给调用方去 pop，
+    那件事就有了第二个落点，而漏 pop 的表现是**载体在最后一刻拒收整份计划**
+    （`extra='forbid'`）——一次付费产出卡在写盘那一步。实测漏过一次。
+    ⚠ 裁掉它**不必记账**：它的值是一个可复算的纯函数（盘上 197/197 恒等于
+    `p{output_ordinal:02d}_{本拍序号:02d}`），丢的不是证据，是一份抄件。
     """
     gmap = group_map(groups)
     if not (plan.get('output_chapters') or []):
@@ -203,6 +210,9 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) 
             f'{f" …另 {len(bad) - 8} 处" if len(bad) > 8 else ""}。'
             f'拍是 `group_beats` 确定性切的（{GROUPING_VERSION}，阈值 {BEAT_MIN_CHARS} 字），'
             f'模型只该照抄编号并给预算；对不上说明规划 prompt 漂了，去看它怎么说的')
+    for o in (plan.get('output_chapters') or []):
+        for be in (o.get('beats') or []):
+            be.pop('plan_beat', None)
     return len(seen)
 
 

@@ -790,6 +790,11 @@ WRITE_EFFECTS: Final = {
     '--prompt-only': '',
     '--check-only': '',
     '--measure-only': '',
+    # ⚠ **它一个字节都不写**（原型只 `print` 逐章名册），而本表**默认按会写算** ⇒
+    #   不登记的后果是**方向反的**：`/api/enums` 上它会被派生成
+    #   「写 `stage4/plan_chapters.json`」——**那是系统在对用户说假话**
+    #   （`Q-3`）。实测确认过一次才补上这一行。
+    '--names-only': '',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
     '--recheck': '刷新已有成稿的指标，并重拼 draft.md',
@@ -908,10 +913,18 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--remeasure', '--revalidate', '--apply-edit',
                                         '--repair-surface-habits'),
                                  produces=('stage3/style_grounding.json',)),
+    # ⚠ `--dry-run` 是 F3 补的，而它与 `--prompt-only` **不是重复登记**：
+    #   后者只量体量（原型的语义），前者摊开**要发出去的那几个字节**。
+    #   两个都留着是因为它们答的是不同的问题；而少了前者，
+    #   「渲染出来的 system 与原型逐字节相同」这条对账在 CLI 上根本走不通
+    #   ——贵贱闸会把它当成付费默认路径拦下（实测过一次）。
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 重构计划',
-                                 flags=('--prompt-only', '--check-only', '--revalidate',
-                                        '--names-only', '--identity', '--apply-edit'),
+                                 flags=('--dry-run', '--prompt-only', '--check-only',
+                                        '--revalidate', '--names-only', '--identity',
+                                        '--apply-edit'),
                                  produces=('stage4/plan_chapters.json',)),
+    # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
+    #   （原型的 `--context-only` 已作为 flag 退役，见 `SUPERSEDED_FREE_ENTRIES`）。
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
                                  produces=('stage4/writer_context.json',)),
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 逐章写作',

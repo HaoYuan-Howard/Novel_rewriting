@@ -253,7 +253,192 @@ def test_dry_run_builds_the_same_user_message_the_paid_path_would_send(book):
         box.close()
 
 
-# ── 三、表间守卫（移植一层漏改一处就红）─────────────────────────────────
+# ── 三、落盘闸门与提升路（合成样本 —— 盘上这三本一条 HARD 都不红）───────────
+
+def _synthetic_response(box: sandbox.Sandbox, *, poison: bool) -> dict:
+    """拿盘上那份计划反推一份**模型响应**（带 `plan_beat`、不带 `from_beats`）。
+
+    `poison=True` ⇒ 往一个 goal 里塞一个写法词。**盘上三本 `style_words` 0 命中**，
+    要看闸门真的拦得住就只能合成——那 16 条 HARD 在盘上是零反例样本。
+    """
+    from novel.stages.stage4.beats import plan_beat_id
+    src = box.read('stage4/plan_chapters.json')
+    out = {'reconstruction_strategy': src['reconstruction_strategy'], 'output_chapters': []}
+    for ch in src['output_chapters']:
+        c = {k: ch[k] for k in ('output_ordinal', 'from_source_ordinals',
+                                'chapter_goal', 'open_hook_goal', 'end_hook_goal')}
+        c['beats'] = [{'plan_beat': plan_beat_id(ch['output_ordinal'], i),
+                       'budget_chars': be['budget_chars']}
+                      for i, be in enumerate(ch['beats'], 1)]
+        out['output_chapters'].append(c)
+    if poison:
+        out['output_chapters'][0]['chapter_goal'] += '，要有张力'
+    return out
+
+
+def _provenance(ctx: RunContext, up) -> object:
+    from contracts.schema.stage4 import PlanProvenance
+    return PlanProvenance(code='0' * 10, inputs=ctx.edges,
+                          prompts={'N4_SYS': '0' * 10}, model='deepseek-v4-pro',
+                          params=plan._params(up))
+
+
+def test_a_single_hard_hit_sends_the_whole_plan_to_invalid():
+    """⭐ **落盘闸门照 stage3 不照 stage6**：本层一次产**一份** ⇒ 任何一条 hard 就 `.INVALID`。
+
+    ⚠ 而且这条闸**必须配一条 0 成本提升路**：闸门是我们自己加的，
+    不给出路，一次付费产出就被永久锁死。下一条测试跑的就是那条路。
+    """
+    from novel.errors import GateBlocked
+    book = readable_books()[0]
+    box = sandbox.Sandbox(book, STAGE4_INPUTS)
+    try:
+        ctx = _ctx_for(box, 'stage4.plan')
+        store = plan.ArtifactStore(ctx)
+        up = plan._Upstreams(ctx, store)
+        before = box.read('stage4/plan_chapters.json')
+        with pytest.raises(GateBlocked, match='style_words'):
+            plan.write_plan(ctx, store, _synthetic_response(box, poison=True), up,
+                            provenance=_provenance(ctx, up))
+        assert (box.dir / 'stage4/plan_chapters.INVALID.json').exists(), '问题稿没存下来'
+        assert box.read('stage4/plan_chapters.json') == before, \
+            '**正式产物被覆盖了**——先校验后落盘那条就白写了'
+    finally:
+        box.close()
+
+
+def test_revalidate_promotes_the_fixed_plan_and_rebuilds_the_context():
+    """⭐ 0 成本提升路：手改那一行 → `--revalidate` → 提升 **并重建上下文**。
+
+    ⚠ **重建是必须的**：计划换了一版而上下文没跟上，`context_link` 会立刻红。
+    """
+    import json
+
+    from novel.errors import GateBlocked
+    book = readable_books()[0]
+    box = sandbox.Sandbox(book, STAGE4_INPUTS)
+    try:
+        ctx = _ctx_for(box, 'stage4.plan')
+        store = plan.ArtifactStore(ctx)
+        up = plan._Upstreams(ctx, store)
+        with pytest.raises(GateBlocked):
+            plan.write_plan(ctx, store, _synthetic_response(box, poison=True), up,
+                            provenance=_provenance(ctx, up))
+        # 人手改掉那个写法词（0 成本），再提升
+        inv = box.dir / 'stage4/plan_chapters.INVALID.json'
+        fixed = json.loads(inv.read_text(encoding='utf-8'))
+        fixed['output_chapters'][0]['chapter_goal'] = \
+            fixed['output_chapters'][0]['chapter_goal'].replace('，要有张力', '')
+        inv.write_text(json.dumps(fixed, ensure_ascii=False), encoding='utf-8')
+
+        rep = plan.run_revalidate(_ctx_for(box, 'stage4.plan'))
+        assert rep.passed and rep.badge == 'pass', f'提升之后该是绿的，实得 {rep.badge}'
+        assert not inv.exists(), '.INVALID 提升之后该消失'
+        ctx_art = WriterContext.model_validate(box.read('stage4/writer_context.json'))
+        assert 'stage4/plan_chapters.json' in (ctx_art.provenance.inputs or {})
+        line = next(ln for ln in rep.rules if ln.rule == 'context_link')
+        assert line.status == 'ok', '提升之后上下文没跟着重建——context_link 该红而没红'
+    finally:
+        box.close()
+
+
+# ── 四、两条 0 成本路 ────────────────────────────────────────────────────
+
+@pytest.mark.parametrize('book', books())
+def test_the_identity_baseline_lands_on_disk_as_an_artifact(book):
+    """⭐ **恒等基线是一份产物，不是一次 `print`。**
+
+    原型这条路整个输出是 `print` + 返回码 ⇒「跑过且写手手里有这些」与
+    「从没跑过」**在盘上长得一模一样**（`Q-2`）。
+    ⚠ 它**不吃计划** ⇒ 那本载体拒收的书照样跑得动，所以这里参数化的是 `books()`。
+    """
+    box = sandbox.Sandbox(book, STAGE4_INPUTS)
+    try:
+        n_beats, rep = plan.run_identity(_ctx_for(box, 'stage4.plan'))
+        art = WriterContext.model_validate(box.read('stage4/writer_context.identity.json'))
+        assert n_beats == sum(len(c.beats) for c in art.chapters)
+        from novel.stages.stage4.measure import IDENTITY_GOAL
+        assert all(c.chapter_goal == IDENTITY_GOAL for c in art.chapters), \
+            '三个 goal 必须是显式标记——空串与「没做决策」在人眼里同形'
+        # ⚠ 它写的是**另一份文件**，正式那份一个字节都不许动
+        assert box.read('stage4/writer_context.json') != box.read(
+            'stage4/writer_context.identity.json')
+        # `context_link` 这一趟按设计不排 ⇒ `unver`，徽章 amber。**这不是缺陷。**
+        assert next(ln for ln in rep.rules if ln.rule == 'context_link').status == 'unver'
+    finally:
+        box.close()
+
+
+@pytest.mark.parametrize('book', books())
+def test_names_only_reads_the_roster_and_writes_nothing(book):
+    """⚠ **它一个字节都不写**，而本表默认按会写算 ⇒ 不登记的方向是**反的**。"""
+    from contracts.invariants import WRITE_EFFECTS
+    assert WRITE_EFFECTS['--names-only'] == '', \
+        '不登记 ⇒ `/api/enums` 会把它派生成「写 plan_chapters.json」——那是在说假话'
+    box = sandbox.Sandbox(book, STAGE4_INPUTS)
+    try:
+        before = sorted(p.name for p in (box.dir / 'stage4').iterdir())
+        rows = plan.run_names_only(_ctx_for(box, 'stage4.plan'))
+        assert sorted(p.name for p in (box.dir / 'stage4').iterdir()) == before, '它写盘了'
+        assert len(rows) == len(box.read('stage1/main_text.json'))
+        # ⚠⚠ **只有 `char_id` 的集合单调，名字的集合不单调**——这不是 bug：
+        #    章级表退回的是「到本章为止出现最多的有据称呼」，读到更多原文之后
+        #    同一个人的叫法**会变**（某人 ch2 叫「书童」、后面才有本名）。
+        ids = [set(a) for _o, a, _h in rows]
+        assert all(ids[i] <= ids[i + 1] for i in range(len(ids) - 1)), \
+            '章级名字表的 char_id 集合不是单调的——那说明「到本章为止」的累积算错了'
+        assert ids[0] < ids[-1], 'ch1 就把全书名册给出去了？那正是章级表要防的事'
+    finally:
+        box.close()
+
+
+def test_an_appellation_itself_changes_as_the_book_goes_on():
+    """⚠⚠ **只有 `char_id` 的集合单调，名字的集合【不】单调**——而这不是 bug。
+
+    章级表退回的是「到本章为止**出现最多**的有据称呼」，读到更多原文之后
+    同一个人的叫法会变（某人先叫「书童」，本名出现之后才换过去）。
+    ⇒ `run_names_only` 返回的是**映射**不是名字列表：
+    返回列表会让「这一章多了一个人」与「这一章某人改了叫法」在输出里**同形**。
+
+    ⚠ 本条是**跨书**的：盘上并非每一本都发生这件事（实测三本里 2 本会变、1 本不变），
+    所以它不参数化——那样会把「这本书恰好没变」误报成缺陷。
+    """
+    changed = []
+    for book in books():
+        box = sandbox.Sandbox(book, STAGE4_INPUTS)
+        try:
+            rows = plan.run_names_only(_ctx_for(box, 'stage4.plan'))
+            for (_o1, a, _h1), (_o2, b, _h2) in zip(rows, rows[1:]):
+                if any(cid in b and b[cid] != nm for cid, nm in a.items()):
+                    changed.append(book)
+                    break
+        finally:
+            box.close()
+    assert changed, ('盘上一本都没有「叫法随章变」了？那就该重新写这条基线——'
+                     '**别把它删掉**：那正是「返回映射不返回列表」的全部理由')
+
+
+def test_identity_is_deliberately_absent_from_write_effects_and_that_costs_us_a_filename():
+    """⚠⚠ **一处登记在案的不精确，别顺手「修」它。**
+
+    `--identity` 在三层的行为**各不相同**（stage6 不写盘 · stage7 写产物内一个键 ·
+    stage4 写**另一份文件**）⇒ 它刻意不进 `WRITE_EFFECTS`（那张表按 flag 索引，
+    跨节点不一致的 flag 进去会让其中一层说假话）。
+    代价是 `/api/enums` 派生出来的 `writes` 串在本层会说成 `plan_chapters.json`
+    ——**方向是安全的**（它确实写盘），只是文件名不对。
+    ⇒ 钉在这里，而不是去改那张表。
+    """
+    from contracts.invariants import WRITE_EFFECTS
+    from novel.api.enums import payload
+    assert '--identity' not in WRITE_EFFECTS
+    act = next(a for a in payload()['actions']
+               if a['kind'] == 'stage4.plan' and a['extra'] == ['--identity'])
+    assert act['writes_disk'] is True and act['writes'] == 'stage4/plan_chapters.json'
+    assert plan.IDENTITY_CTX_REL == 'stage4/writer_context.identity.json', \
+        '它写的其实是这一份——上面那个串对不上，是已知的、方向安全的不精确'
+
+
+# ── 五、表间守卫（移植一层漏改一处就红）─────────────────────────────────
 
 def test_stage4_has_exactly_two_nodes_and_only_one_of_them_checks():
     """一个 stage 两个节点，而 `--check-only` 只挂在其中一个上。"""
