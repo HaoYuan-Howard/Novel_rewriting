@@ -20,7 +20,10 @@ ledger.py —— 成本账。**原型完全没有这一层。**
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +38,49 @@ LEDGER_REL = ('_service', 'ledger.jsonl')
 #: token 三项的名字。**一处落点**——三个计数器、三个「见过几次」、`Usage` 的三个键
 #: 都从它派生，免得哪天加一项时漏掉其中一处。
 TOKEN_KINDS = ('prompt_tokens', 'completion_tokens', 'reasoning_tokens')
+
+# Composite runs create multiple ledger instances in one process; different novels
+# create different CLI processes. The thread lock covers the first case and the
+# adjacent OS file lock covers the second. Only one already-rendered JSONL line is
+# inside the lock, so model calls remain fully concurrent.
+_APPEND_LOCK = threading.Lock()
+
+
+@contextmanager
+def _process_append_lock(path: Path):
+    lock_path = path.with_name(path.name + '.lock')
+    with open(lock_path, 'a+b') as handle:
+        if os.name == 'nt':
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b'\0')
+                handle.flush()
+            deadline = time.monotonic() + 30.0
+            while True:
+                handle.seek(0)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            f'timed out locking shared ledger {lock_path}')
+                    time.sleep(0.01)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def ledger_path(base: str | Path) -> Path:
@@ -56,6 +102,26 @@ class UsageMark:
     tokens: tuple[int, ...]
     #: 每一项**被响应报过几次**。差值为 0 ⇒ 这段窗口里没人报过它 ⇒ `null`，不是 `0`。
     seen: tuple[int, ...]
+
+
+@dataclass
+class _UsageCounter:
+    calls_made: int = 0
+    calls_cached: int = 0
+    tokens: dict[str, int] = field(
+        default_factory=lambda: {key: 0 for key in TOKEN_KINDS})
+    seen: dict[str, int] = field(
+        default_factory=lambda: {key: 0 for key in TOKEN_KINDS})
+
+    def usage(self) -> Usage | None:
+        if not self.calls_made and not self.calls_cached:
+            return None
+        values = {
+            key: self.tokens[key] if self.seen[key] else None
+            for key in TOKEN_KINDS
+        }
+        return Usage(calls_made=self.calls_made,
+                     calls_cached=self.calls_cached, **values)
 
 
 @dataclass
@@ -92,6 +158,13 @@ class CostLedger:
 
     #: 刻度的世代号。每 `commit` 一次 +1，于是旧刻度立刻作废。
     _seq: int = field(default=0, repr=False)
+
+    # Concurrent chapter writers cannot use one moving usage mark: completion
+    # order would make one chapter claim another chapter's calls. Requests already
+    # carry RequestProgress, so aggregate and settle them by chapter instead.
+    _by_chapter: dict[int, _UsageCounter] = field(
+        default_factory=dict, repr=False)
+    _claimed_chapters: set[int] = field(default_factory=set, repr=False)
 
     #: Stage 2 会并发等待独立章节响应。计数更新与 JSONL 追加必须是同一个临界区，
     #: 否则两个成功回包可能互相覆盖内存计数，甚至把两行字节交错写坏。
@@ -144,6 +217,20 @@ class CostLedger:
                     setattr(self, name, getattr(self, name) + val)
                     self._seen[name] += 1
 
+            if progress is not None:
+                counter = self._by_chapter.setdefault(
+                    progress.chapter, _UsageCounter())
+                if cached:
+                    counter.calls_cached += 1
+                else:
+                    counter.calls_made += 1
+                for name, val in zip(
+                        TOKEN_KINDS,
+                        (prompt_tokens, completion_tokens, reasoning_tokens)):
+                    if val is not None:
+                        counter.tokens[name] += val
+                        counter.seen[name] += 1
+
             if self.path is None:
                 return
             row = {
@@ -182,8 +269,10 @@ class CostLedger:
         assert self.path is not None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n'
-        with open(self.path, 'ab') as fh:
-            fh.write(line.encode('utf-8'))
+        with _APPEND_LOCK:
+            with _process_append_lock(self.path):
+                with open(self.path, 'ab') as fh:
+                    fh.write(line.encode('utf-8'))
 
     # ── 结算：run 总量 vs **这一份** ──────────────────────────────────────
 
@@ -222,6 +311,19 @@ class CostLedger:
                     f'⇒ 一份产物一次结算（`RunContext` 的两个来源账铸造口各调一次）')
             self._seq += 1
             return self.snapshot()
+
+    def chapter_usage(self, chapter: int) -> Usage | None:
+        with self._lock:
+            counter = self._by_chapter.get(int(chapter))
+            return counter.usage() if counter is not None else None
+
+    def commit_chapter(self, chapter: int) -> None:
+        chapter = int(chapter)
+        with self._lock:
+            if chapter in self._claimed_chapters:
+                raise ProvenanceRefused(
+                    f'chapter {chapter} usage was already claimed by an artifact')
+            self._claimed_chapters.add(chapter)
 
     def usage(self) -> Usage | None:
         """**整个 run** 花了多少。⚠ 进 `_provenance.usage` 的**不是**这一份，是 `usage_since` 的差值。

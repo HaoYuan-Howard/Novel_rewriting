@@ -114,7 +114,14 @@ class JobStart(StrictModel):
             raise ValueError(
                 f'未知节点 {self.node!r}。取值面的唯一落点是 `contracts.invariants.NODES`')
         want = NODES[self.node].modes
-        if want and self.mode not in want:
+        tokens = {value for value in self.flags if value.startswith('--')}
+        composite_write = (
+            self.node == 'stage5.write'
+            and {'--deep', '--shallow-rest'} <= tokens
+        )
+        if composite_write and self.mode is not None:
+            raise ValueError('stage5 composite write must not carry a single-arm mode')
+        if want and not composite_write and self.mode not in want:
             raise ValueError(f'{self.node} 的 mode 必须是 {want} 之一，实得 {self.mode!r}')
         if not want and self.mode is not None:
             raise ValueError(

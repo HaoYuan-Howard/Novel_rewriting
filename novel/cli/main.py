@@ -440,6 +440,23 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage2.global':
+        if '--full-extract' in tokens:
+            from novel.stages.initial_extract import run_initial_extract
+            blueprint_ctx = RunContext.open(
+                ctx.novel_dir.parent, ctx.sid, 'stage2.blueprint', paid=True)
+            style_ctx = RunContext.open(
+                ctx.novel_dir.parent, ctx.sid, 'stage3.style', paid=True)
+            report, _artifact = run_initial_extract(
+                ctx,
+                _llm_client(ctx),
+                blueprint_ctx,
+                _llm_client(blueprint_ctx),
+                style_ctx,
+                _llm_client(style_ctx),
+            )
+            print('  ✓ stage2 全局/逐章抽取与 stage3 文风画像已并发完成')
+            print(render(report))
+            return X.OK if report.passed else X.CHECK_FAILED
         if '--revalidate' in tokens:
             promoted, report = extract.run_revalidate(ctx)
             print(render(report))
@@ -614,10 +631,10 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
 def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
     """stage5 的九条路。**先按节点分两支，再按 flag 分**——形态照 `_run_stage7`。
 
-    ⚠⚠ **本层是全链唯一有「臂」的层**：`stage5.write --mode deep|shallow`。
-    臂由 `ctx.mode` 带着（`RunContext` 那一格），**不在 flags 里**——它不改变贵贱、
-    也不改变写不写盘，与 `--base` / `--yes` 同类。⚠ 而 `--chapters` 是**付费路的参数**
-    （`VALUED_FLAGS`）：逐章深度这个人的决策**不落任何产物**，只活在它里面（`R-7.2`）。
+    ⚠⚠ **本层是全链唯一有「臂」的层**。单臂维护入口仍用
+    `stage5.write --mode deep|shallow`；正常整书入口用
+    `stage5.write --deep 1,2,3 --shallow-rest`，一次选择两臂并发写作。
+    人工深度选择持久化在 `_service/approvals/`，不混进小说产物或 provenance。
 
     ⚠ 写作节点**没有 `--check-only`**：判据表两相共用一张，而复检读的是验收报告那份产物
     ⇒ `check_nodes('stage5')` 恰好是 `stage5.review` 一个。
@@ -647,6 +664,25 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     # ── 以下是 `stage5.write` ────────────────────────────────────────────────
+    if {'--deep', '--shallow-rest'} <= tokens:
+        raw_deep = _valued(flags, '--deep') or ''
+        selected = () if raw_deep == 'none' else _chapters_of(raw_deep)
+        deep_ctx = RunContext.open(
+            ctx.novel_dir.parent, ctx.sid, ctx.node, paid=True, mode='deep')
+        shallow_ctx = RunContext.open(
+            ctx.novel_dir.parent, ctx.sid, ctx.node, paid=True, mode='shallow')
+        reports = write.run_selected(
+            deep_ctx, _llm_client(deep_ctx),
+            shallow_ctx, _llm_client(shallow_ctx),
+            selected,
+        )
+        for mode in ('deep', 'shallow'):
+            if mode in reports:
+                print(render(reports[mode]))
+        print('  ✓ 深度与浅层两条写作臂已并发完成，整本 draft.md 已重拼')
+        return (X.OK if all(report.passed for report in reports.values())
+                else X.CHECK_FAILED)
+
     if '--dry-run' in tokens:
         system, user, _mat = write.build_prompt(ctx, chapters)
         print(f'── system（{len(system)} 字）──\n{system}')

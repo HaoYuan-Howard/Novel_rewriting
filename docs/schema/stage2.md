@@ -8,6 +8,10 @@ stage2.global     stage2/global_grounding.json     全书一次调用   → R-2.
 stage2.blueprint  stage2/chapter_blueprints.json   一次调用产一章 → R-3.1 ~ R-3.18
 ```
 
+正常首跑使用 `stage2.global --full-extract`：全书抽取、所有逐章抽取请求和 Stage3 文风请求
+三路同时起跑。逐章请求“一章一个 future”，20 章可有 20 个同时在途，单书该线程池硬上限
+32；归一、联合校验与落盘仍在 global 完成后收口，因此并发不放宽跨产物闸门。
+
 > ### ⚠⚠ 第三个付费调用点：`stage2.global --purge-role`
 >
 > **本文件此前只写了两个调用点，而原型有三个**（F5-0 补，2026-08-12）。

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-novel.api.routes —— 九个端点。**路由表的唯一落点是
-`docs/design_brief/04_delivery.md` §路由表**（那张表的标题写着「固定，不要改」）。
+"""HTTP 路由集合。
 
-⚠ 这一层只做三件事：**校验路径参数 → 调一个纯读函数 → 把结果原样交出去**。
-一个格子都不许在这里算——判定在 `contracts/schema/report.py`，
-组装在 `novel/views/`，贵贱在 `novel/orchestrator/nodes.py::is_paid`。
-路由里出现第四种计算，那就是那件事的第二个落点。
+只读路由负责校验路径参数并调用视图；变更路由只能调用编排层的窄入口，产物写入仍由
+CLI 子进程完成。判定在 ``contracts/schema/report.py``，展示组装在 ``novel/views/``，
+贵贱在 ``novel/orchestrator/nodes.py::is_paid``，路由本身不复制这些结论。
 """
 from __future__ import annotations

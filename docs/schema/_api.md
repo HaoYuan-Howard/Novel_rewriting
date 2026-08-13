@@ -86,7 +86,7 @@
 
 ## 三、端点 → 响应
 
-**当前落地的十八个**（基础九个 + Stage 0/1 九个；其余端点见 §七）：
+**当前落地的二十五个**（其余端点见 §七）：
 
 | 端点 | 响应 | 新旧 |
 |---|---|---|
@@ -99,6 +99,7 @@
 | `GET /api/jobs/:id` | `JobRecord` | **复用** `_orchestration.md` |
 | `GET /api/jobs/:id/log?offset=N` | `LogChunk` | 新 |
 | `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md` |
+| `POST /api/jobs` | `JobRecord`（202；请求体 `PreviewRequest`） | **复用** `_orchestration.md` |
 | `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
 | `GET /api/novels/:sid/stage0/report` | `RemovalReport` | **复用** `stage0.md` |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
@@ -108,11 +109,21 @@
 | `GET /api/novels/:sid/stage1/segments` | `Stage1Segments` | 新 |
 | `GET /api/novels/:sid/stage1/chapters` | `Stage1Chapters` | 新 |
 | `GET /api/novels/:sid/stage1/hook_copy` | `HookCopyView` | 新 |
+| `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
+| `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
+| `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | 新 |
+| `POST /api/novels/:sid/approvals/deep` | `ApprovalDoc`（请求体 `DeepSelectionRequest`） | 新 |
+| `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc` | 新 |
+| `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
 
 ⚠ **preview 直接返回 `JobStart` 是有意的**，不是图省事：那个模型自带后置条件
 `paid == 任一步 paid` / `writes == 任一步 writes`，于是「整份贵贱是逐步折叠出来的」
-这条 `R-11.7` 白拿；而且**真跑时 `jobs.run()` 构造的就是这个类**——
+这条 `R-11.7` 白拿；而且**真跑时 `jobs.start()` 构造的就是这个类**——
 「预览与真跑是同一个对象」从一句话变成字面事实（`R-11.8`）。
+
+通用启动返回 202 和 `running` 作业，由后台线程逐步启动 CLI 子进程。同一 `sid` 的书级
+作业互斥并返回 409，不同小说可并行；Stage5 复合写作在拿到书级键后才原子核对并锁定
+人工深度选章，避免“预览一种分配、实际写另一种分配”。
 
 ⚠ **一个响应模型都不许自己算判定**（`R-11.4`）。`badge` / `passed` / `counts`
 只出现在 `CheckReport` 里，且由 `contracts/schema/report.py::badge_of` 折叠、
@@ -232,9 +243,6 @@ HTTP 侧「书 id 不合法」的产地是**客户端**，那是 400。
 - **未移植的七层**：路由**全部注册**，一律 **501** 并点名 `contracts.rules.PORTED_STAGES`。
   判定由 `stage not in PORTED_STAGES` 得出，不手写清单。
   ⇒ 前端分得出「URL 打错了」（404）与「这一层还没建」（501），而这两件事该做的动作完全不同。
-- **通用 `POST /api/jobs` 仍不开放**——它会让浏览器够到付费节点。Stage 0/1 只开放
-  四条明确、确定性且免费的写入口；同书锁冲突的 HTTP 409 已由
-  `tests/test_api_discipline.py::test_stage01_job_conflict_maps_and_returns_409` 走真实请求验证。
 - **`stage5_review` 这个 check kind 已改名为 `stage5`**（E 期裁决），
   八个 kind 现在与 `invariants.STAGES` 逐值相等、从它派生。
   ⚠ `04_delivery.md:71` 那张「固定，不要改」的表要改这一格，`web/` 里的引用同理——

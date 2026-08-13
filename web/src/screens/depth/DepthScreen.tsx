@@ -42,7 +42,11 @@ export function DepthScreen() {
   const deep = doc?.deep ?? []
   const ready = !!doc && doc.gate.s3 && doc.gate.s4
 
-  const writeAction = lookupAction(enums.data, { kind: 'n5_write', extra: null })
+  const writeAction = lookupAction(enums.data, {
+    kind: 'stage5.write',
+    mode: null,
+    extra: ['--deep', '--shallow-rest'],
+  })
 
   return (
     <section className="flex flex-col gap-16 px-30 py-26">
@@ -65,7 +69,9 @@ export function DepthScreen() {
             <PaneHeader
               title="全书章节"
               meta={d.index.length + ' 章'}
-              right={<LinkButton onClick={() => setDeep.mutate([1, 2, 3])}>恢复默认（前 3 章）</LinkButton>}
+              right={<LinkButton onClick={() => setDeep.mutate(
+                d.index.map((i) => i.output_ordinal).filter((n) => n <= 3),
+              )}>恢复默认（第 1–3 章）</LinkButton>}
             />
             <div className="grid gap-8 border-b border-line-soft bg-sunken-2 px-18 py-9 text-tag text-ink-4" style={{ gridTemplateColumns: '64px 1fr 96px 92px' }}>
               <span>章</span>
@@ -83,7 +89,7 @@ export function DepthScreen() {
                     setDeep.mutate(
                       on
                         ? deep.filter((x) => x !== i.output_ordinal)
-                        : [...deep, i.output_ordinal],
+                        : [...deep, i.output_ordinal].sort((a, b) => a - b),
                     )
                   }
                   className={cx(
@@ -131,10 +137,11 @@ export function DepthScreen() {
                 onClick={() =>
                   ask(
                     {
-                      kind: 'n5_write',
+                      kind: 'stage5.write',
                       label: 'stage5 写作 · 深度 ' + deep.length + ' 章',
                       extra: null,
-                      args: ['--deep', deep.join(','), '--shallow-rest'],
+                      mode: null,
+                      args: ['--deep', deep.length ? deep.join(',') : 'none', '--shallow-rest'],
                       sid,
                       ordinal: null,
                     },

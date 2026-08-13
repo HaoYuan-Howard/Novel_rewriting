@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-jobs.py —— 作业面板 P-01 的四个端点：列表 / 详情 / 日志 / **预览**。
+jobs.py —— 作业面板 P-01：列表 / 详情 / 日志 / 预览 / 异步启动。
 
-⚠⚠ **E 期没有 `POST /api/jobs`（真启动作业）。** 这一层今天读得到作业记录、
-摊得开将要执行的命令，但**发不出一个作业**——那会第一次让浏览器能花钱。
-⇒ `R-11.10`「第二个请求 409」在 E 期**只验到状态码映射表那一层**
-（`novel/api/errors.py::STATUS[JobConflict] == 409`），行为半边没验。
-**别把它读成验过了**（登记在 `docs/schema/_api.md` §七 与仓根 `README.md`）。
+通用启动只接收结构化 `{sid,node,mode,flags}`，先用与预览相同的 `plan_start()`
+构造命令，再交给后台执行器。同一本书的第二个请求由书级锁返回 409；不同小说互不阻塞。
 """
 from __future__ import annotations
 
@@ -15,11 +12,42 @@ from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import JobList, LogChunk, PreviewRequest
 from contracts.schema.orchestration import JobRecord, JobStart
-from novel.api.deps import get_base
-from novel.errors import UpstreamMissing
-from novel.orchestrator import jobs
+from novel.api.deps import checked_sid, get_base
+from novel.errors import UnsupportedRunMode, UpstreamMissing
+from novel.orchestrator import approvals, jobs, nodes
 
 router = APIRouter(prefix='/jobs')
+
+
+def _deep_selection(flags: list[str]) -> list[int] | None:
+    tokens = set(nodes.flag_tokens(flags))
+    if not {'--deep', '--shallow-rest'} <= tokens:
+        return None
+    raw = nodes.flag_value(flags, '--deep')
+    if raw == 'none':
+        return []
+    try:
+        deep = [int(value) for value in (raw or '').split(',')]
+    except ValueError as exc:
+        raise UnsupportedRunMode('--deep must be none or comma-separated ordinals') from exc
+    if deep != sorted(set(deep)) or any(value < 1 for value in deep):
+        raise UnsupportedRunMode('--deep ordinals must be sorted, unique and positive')
+    return deep
+
+
+def _chapter_selection(flags: list[str]) -> list[int] | None:
+    if '--chapters' not in nodes.flag_tokens(flags):
+        return None
+    raw = nodes.flag_value(flags, '--chapters')
+    try:
+        chapters = [int(value) for value in (raw or '').split(',')]
+    except ValueError as exc:
+        raise UnsupportedRunMode(
+            '--chapters must be comma-separated ordinals') from exc
+    if chapters != sorted(set(chapters)) or any(value < 1 for value in chapters):
+        raise UnsupportedRunMode(
+            '--chapters ordinals must be sorted, unique and positive')
+    return chapters
 
 
 def _one(base: str, job_id: str) -> JobRecord:
@@ -42,6 +70,29 @@ def list_jobs(sid: str | None = Query(default=None),
     if sid is not None:
         recs = [r for r in recs if r.start.sid == sid]
     return JobList(jobs=recs)
+
+
+@router.post('', response_model=JobRecord, status_code=202)
+def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
+    sid = checked_sid(req.sid) if req.sid is not None else None
+    planned = jobs.plan_start(
+        req.node, sid, req.flags, base=base, mode=req.mode)
+    deep = _deep_selection(req.flags)
+    if deep is not None and sid is None:
+        raise UnsupportedRunMode('stage5 composite writing requires a novel sid')
+    prepare = (
+        (lambda: approvals.begin_writing(base, sid, deep))
+        if deep is not None and sid is not None else None
+    )
+    if req.node == 'stage5.write' and req.mode in ('deep', 'shallow'):
+        if sid is None:
+            raise UnsupportedRunMode('stage5 writing requires a novel sid')
+        chapters = _chapter_selection(req.flags)
+        prepare = lambda: approvals.authorize_arm(
+            base, sid, req.mode or '', chapters)
+    return jobs.start(
+        base, req.node, sid, req.flags, mode=req.mode,
+        steps=planned.steps, prepare=prepare)
 
 
 @router.get('/{job_id}', response_model=JobRecord)
@@ -70,13 +121,14 @@ def preview_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobStart:
     """把**将要执行的那条命令**摊开（`R-11.8`）。**0 成本：只算，不跑、不写、不发请求。**
 
     ⚠⚠ **它与真跑共用 `build_steps`，而响应就是 `JobStart` 本身**——
-    真跑时 `jobs.run()` 构造的就是这个类。于是「预览与真跑是同一个对象」
+    真跑时 `jobs.start()` 构造的就是这个类。于是「预览与真跑是同一个对象」
     不是一句纪律，是**字面事实**。原型那条裂缝（前端用 `argv.slice(4)`
     硬编码切掉解释器前缀来渲染）在这里连发生的地方都没有。
 
     ⚠ 整份的 `paid` / `writes` 由 `JobStart` 的后置条件**逐步折叠**出来
     （`paid == any(s.paid for s in steps)`），本路由一个字都不算——`R-11.7`。
 
-    ⚠ 它是本服务**唯一的 POST**，所以 CSRF 闸门（`R-11.2`）今天全靠它验。
+    ⚠ 它与真启动端点都经过全局 CSRF 中间件；预览本身仍然 0 成本、无写盘。
     """
-    return jobs.plan_start(req.node, req.sid, req.flags, base=base, mode=req.mode)
+    sid = checked_sid(req.sid) if req.sid is not None else None
+    return jobs.plan_start(req.node, sid, req.flags, base=base, mode=req.mode)

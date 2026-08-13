@@ -8,8 +8,9 @@ app.py —— 服务本体。**全仓只有本模块与 `__main__.py` 许可 imp
     全包里禁止出现 `0.0.0.0`，也**禁止开 CORS**（见 `create_app` 的注释）。
   · `R-11.2` **CSRF**：非安全方法要求 `X-Novel-UI: 1` 且来源是回环。
     做成**中间件**不是依赖，理由见 `_csrf` —— 依赖会被忘，中间件忘不掉。
-  · `R-11.3` **服务进程绝不落产物盘**。变更路由只经 `jobs.run` 启 CLI 子进程；
-    HTTP 进程自身只在 `_service/` 保存上传原文、作业事件、日志与一次性编辑计划。
+  · `R-11.3` **服务进程绝不落产物盘**。变更路由只经 `jobs.run` / `jobs.start`
+    启 CLI 子进程；HTTP 进程自身只在 `_service/` 保存上传原文、作业事件、日志、
+    一次性编辑计划与人工审批状态。
     只读路由 + preview 仍由行为断言保证整棵树逐字节不变。
 
 【`create_app(base)` 是工厂，不是模块级单例】
@@ -28,7 +29,7 @@ from fastapi.responses import JSONResponse
 
 from contracts.schema.api import ErrorBody
 from novel.api.errors import CSRF_REFUSED, status_of
-from novel.api.routes import checks, enums, ingest, jobs, novels
+from novel.api.routes import approvals, checks, enums, ingest, jobs, novels
 from novel.errors import NovelError
 
 #: `R-11.1` 的**唯一落点**。四条各自独立成立的理由（`docs/BACKEND_CONTRACT.md` 的 `R-11.1` 那一行）：
@@ -121,6 +122,9 @@ def create_app(base: str | os.PathLike[str]) -> FastAPI:
         return JSONResponse(status_code=exc.status_code,
                             content=body.model_dump(mode='json'))
 
-    for router in (enums.router, novels.router, checks.router, jobs.router, ingest.router):
+    for router in (
+        enums.router, novels.router, checks.router, jobs.router,
+        ingest.router, approvals.router,
+    ):
         app.include_router(router, prefix='/api')
     return app

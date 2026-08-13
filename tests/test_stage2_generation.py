@@ -8,6 +8,7 @@ import json
 import re
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,7 +22,9 @@ from novel.llm.client import LlmClient
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.run import RunContext
+from novel.stages import initial_extract
 from novel.stages.stage2 import extract
+from novel.stages.stage3 import style
 from novel.stages.stage2.normalize import normalize_verbatim, response_shape
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
@@ -62,6 +65,66 @@ def test_parallel_chapter_requests_report_batch_positions_without_schema_changes
         (event['chapter'], event['outcome'], event['chapter_total'])
         for event in events
     ) == [(4, 'ok', 2), (9, 'ok', 2)]
+
+
+@pytest.mark.parametrize(('chapters', 'expected_peak'), [(20, 20), (40, 32)])
+def test_stage2_uses_one_concurrent_call_per_chapter_up_to_32(chapters, expected_peak):
+    ready = threading.Event()
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    class Response:
+        def __init__(self, ordinal):
+            self.ordinal = ordinal
+
+        def model_dump(self, **_kwargs):
+            return {'blueprints': [{'chapter_ordinal': self.ordinal}]}
+
+    class Client:
+        concurrency = 32
+
+        def ask_json(self, *_args, **kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                if active == expected_peak:
+                    ready.set()
+            assert ready.wait(2), 'chapter extraction was serialized'
+            with lock:
+                active -= 1
+            return Response(kwargs['progress'].chapter)
+
+    ctx = SimpleNamespace(node='stage2.blueprint', observe=lambda *_a, **_kw: None)
+    requests = [(n, 'SYS', f'USER {n}') for n in range(1, chapters + 1)]
+    results, violations, errors = extract._run_chapter_requests(ctx, Client(), requests)
+    assert len(results) == chapters
+    assert violations == [] and errors == []
+    assert peak == expected_peak
+
+
+def test_global_blueprint_batch_and_stage3_style_start_concurrently(monkeypatch):
+    barrier = threading.Barrier(3)
+    entered = []
+
+    def paid(name, result):
+        def run(*_args):
+            entered.append(name)
+            barrier.wait(timeout=2)
+            return result
+        return run
+
+    monkeypatch.setattr(extract, 'run_global', paid('global', None))
+    monkeypatch.setattr(extract, 'request_blueprints', paid('blueprints', {'batch': 1}))
+    monkeypatch.setattr(style, 'request_style', paid('style', {'request': 1}))
+    report = object()
+    artifact = object()
+    monkeypatch.setattr(extract, 'finish_blueprints', lambda *_a: report)
+    monkeypatch.setattr(style, 'finish_style', lambda *_a: artifact)
+    got = initial_extract.run_initial_extract(*([object()] * 6))
+    assert got == (report, artifact)
+    assert set(entered) == {'global', 'blueprints', 'style'}
 
 
 def _response_global() -> dict:

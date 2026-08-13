@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 '''上传、Stage 0 审校动作与 Stage 1 只读对照。
 
-所有产物变更都经 jobs.run 起 CLI 子进程；HTTP 进程只写 _service 下的原始上传、
-作业记录、日志与一次性编辑计划。
+本模块的产物变更都经 jobs.run 起 CLI 子进程；HTTP 进程只写 _service 下的原始上传、
+作业记录、日志、一次性编辑计划与 stage0 审批状态。
 '''
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from contracts.schema.orchestration import JobRecord
 from contracts.schema.stage0 import RemovalReport
 from novel.api.deps import checked_sid, get_base
 from novel.errors import NovelError, SourcePathRejected
-from novel.orchestrator import jobs, uploads
+from novel.orchestrator import approvals, jobs, uploads
 from novel.views import ingest
 
 router = APIRouter()
@@ -78,7 +78,10 @@ def approve_stage0(
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> JobRecord:
-    return jobs.run(base, 'stage0.approve', sid)
+    record = jobs.run(base, 'stage0.approve', sid)
+    if record.state == 'ok':
+        approvals.approve_gate(base, sid, 's0')
+    return record
 
 
 @router.post('/novels/{sid}/stage1/partition', response_model=JobRecord)

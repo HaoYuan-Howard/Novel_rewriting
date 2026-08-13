@@ -22,6 +22,7 @@ export interface ActionRef {
   kind: string
   label: string
   extra: string[] | null
+  mode?: string | null
 }
 
 export interface ApprovalDoc {

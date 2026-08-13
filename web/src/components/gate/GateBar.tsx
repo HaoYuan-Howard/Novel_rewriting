@@ -2,8 +2,8 @@ import { resolveGate } from '@/constants/gates'
 import { lookupAction } from '@/constants/actions'
 import { GATE, SPEND_INK, type ScreenName } from '@/constants/vocabulary'
 import { useApprovals } from '@/hooks/useApprovals'
+import { useAskJob } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
-import { useChrome } from '@/hooks/useChrome'
 import { ActionButton } from '@/components/ui/ActionButton'
 import { GateChip, GateMark } from '@/components/vocab/Badges'
 
@@ -16,7 +16,7 @@ import { GateChip, GateMark } from '@/components/vocab/Badges'
 export function GateBar({ screen }: { screen: ScreenName }) {
   const { doc, approve } = useApprovals()
   const enums = useEnums()
-  const { openDrawer } = useChrome()
+  const ask = useAskJob()
 
   if (!doc) return null
   const view = resolveGate(screen, doc)
@@ -28,7 +28,7 @@ export function GateBar({ screen }: { screen: ScreenName }) {
   // 有未知动作时不假装它免费
   const unknownSpawn = spawns.length > 0 && resolved.some((a) => a === null)
 
-  const off = view.done || view.blocked || approve.isPending
+  const off = view.done || view.blocked || approve.isPending || spawns.length > 1
 
   return (
     <div className="mx-30 mt-20 mb-4 overflow-hidden rounded-card border border-line-btn bg-card">
@@ -49,10 +49,29 @@ export function GateBar({ screen }: { screen: ScreenName }) {
                 : { kind: 'gate.' + view.key, extra: null, paid: willSpend }
             }
             disabled={off}
-            disabledReason={view.blocked ? view.blockedReason : view.done ? '已经确认过了' : ''}
+            disabledReason={
+              view.blocked ? view.blockedReason
+                : view.done ? '已经确认过了'
+                  : spawns.length > 1 ? '服务端返回了多个作业，需合并成一个可预览动作' : ''
+            }
             onClick={() => {
-              approve.mutate(view.key)
-              if (spawns.length) openDrawer()
+              const spawn = spawns[0]
+              if (!spawn) {
+                approve.mutate(view.key)
+                return
+              }
+              ask(
+                {
+                  kind: spawn.kind,
+                  label: spawn.label,
+                  extra: spawn.extra,
+                  mode: spawn.mode ?? null,
+                  sid: doc.sid,
+                  ordinal: null,
+                },
+                undefined,
+                async () => { await approve.mutateAsync(view.key) },
+              )
             }}
           >
             {view.btn}

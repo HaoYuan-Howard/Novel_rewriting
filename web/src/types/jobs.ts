@@ -96,6 +96,7 @@ export interface JobPreview {
 export interface JobRequest {
   kind: string
   label: string
+  mode?: string | null
   /**
    * 这个动作的**身份**：服务端动作表里那一条的 extra，一个字都不能多。
    * 加了运行期参数就查不到这一条了，paid 会掉回 kind 级的默认值 ——
@@ -106,4 +107,11 @@ export interface JobRequest {
   args?: string[]
   sid: string
   ordinal?: number | null
+}
+
+export interface BackendJobRequest {
+  sid: string | null
+  node: string
+  mode: string | null
+  flags: string[]
 }

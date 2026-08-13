@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
@@ -18,6 +19,7 @@ import { cx } from '@/lib/cx'
  */
 export function ConfirmDialog() {
   const { confirm, closeConfirm, openDrawer } = useChrome()
+  const [preparing, setPreparing] = useState(false)
   const start = useStartJob(confirm?.req.sid)
   const jobs = useJobs(confirm?.req.sid)
 
@@ -90,20 +92,29 @@ export function ConfirmDialog() {
           </button>
           <button
             type="button"
-            disabled={preview.isPending || preview.isError || busy || start.isPending}
-            onClick={() => {
-              start.mutate(confirm.req, {
-                onSuccess: () => {
-                  openDrawer()
-                  confirm.after?.()
-                  closeConfirm()
-                },
-              })
+            disabled={preview.isPending || preview.isError || busy || preparing || start.isPending}
+            onClick={async () => {
+              setPreparing(true)
+              try {
+                await confirm.before?.()
+                start.mutate(confirm.req, {
+                  onSuccess: () => {
+                    openDrawer()
+                    confirm.after?.()
+                    closeConfirm()
+                  },
+                })
+              } catch {
+                // Mutation state owns the error presentation; most importantly,
+                // a rejected approval must not fall through to POST /jobs.
+              } finally {
+                setPreparing(false)
+              }
             }}
             className={cx(
               'rounded-btn px-18 py-8 text-body-lg font-semibold text-card',
               paid ? 'bg-spend' : 'bg-ink',
-              preview.isPending || preview.isError || busy || start.isPending
+              preview.isPending || preview.isError || busy || preparing || start.isPending
                 ? 'cursor-not-allowed opacity-40'
                 : 'cursor-pointer',
             )}

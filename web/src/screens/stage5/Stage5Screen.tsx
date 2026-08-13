@@ -390,7 +390,7 @@ export function Stage5Screen() {
                       <div className="flex flex-wrap gap-8">
                         {vm.writeActions.map((a) => (
                           <ActionButton
-                            key={a.kind + (a.extra ?? []).join(',')}
+                            key={a.kind + ':' + (a.mode ?? '') + ':' + (a.extra ?? []).join(',')}
                             action={a}
                             size="sm"
                             disabled={!vm.chaptersArg.trim()}
@@ -400,6 +400,7 @@ export function Stage5Screen() {
                                 kind: a.kind,
                                 label: a.label,
                                 extra: a.extra,
+                                mode: a.mode ?? null,
                                 args: ['--chapters', vm.chaptersArg.trim()],
                                 sid: vm.sid,
                                 ordinal: null,

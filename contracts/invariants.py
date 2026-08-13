@@ -253,6 +253,11 @@ STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 #: 但写成 `if approved == 'pending'` 就漏掉了 `not_run`。
 APPROVAL_STATE: Final = ('not_run', 'pending', 'approved')
 
+# Human workflow checkpoints kept under Output/_service. These are service
+# state, not artifact approval fields such as stage0 RemovalReport.approved.
+APPROVAL_GATES: Final = ('s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7')
+APPROVAL_SEEN: Final = ('read', 'global')
+
 #: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
 #: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。
 SOURCE_ENCODINGS: Final = ('utf-8-sig', 'utf-32', 'utf-16', 'utf-8', 'gb18030')
@@ -809,6 +814,8 @@ SUPERSEDED_FREE_ENTRIES: Final = {
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
 PAID_FLAGS: Final = {
+    '--full-extract': 'stage2 全局底座、逐章蓝图与 stage3 文风画像并发首跑',
+    '--shallow-rest': 'stage5 把未选为深度重构的其余章节交给浅层写手',
     '--repair-surface-habits': 'stage3 表层习惯的定向返工——它要再调一次模型',
     '--revise': 'stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手',
     # ⚠ 原型 `FREE_FLAGS['n2_global']` 那一行的注释明写着
@@ -864,6 +871,7 @@ PARTIAL_REWRITE_FLAGS: Final = (
 #: ⚠ 不带值的 flag 传了值、带值的 flag 没传值，都是 argv 拼错——
 #: 而拼错的那一条**会真的被执行**。所以取值面要有落点，由 `build_argv` 当场拒。
 VALUED_FLAGS: Final = {
+    '--deep': '深度重构章节（逗号分隔；与 --shallow-rest 成对使用）',
     '--apply-edit': '人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
@@ -925,6 +933,8 @@ VALUED_FLAGS: Final = {
 #: **跨节点不一致的 flag 不许进一张按 flag 索引的表**——那会让其中一层说假话。
 #: 不登记 ⇒ 按会写算 ⇒ 对 stage6 是对的、对 stage7 是保守的，两边都不说假话。
 WRITE_EFFECTS: Final = {
+    '--full-extract': '并发写 stage2/global_grounding.json、stage2/chapter_blueprints.json 与 stage3/style_grounding.json',
+    '--shallow-rest': '按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿',
     # ── 只看不动的四条（`FREE_ENTRIES` 自述「不写盘」）──
     '--dry-run': '',
     '--prompt-only': '',
@@ -1061,7 +1071,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   ——那正是它该做的事（散文那条路上拼错 flag 名没有任何东西会出声）。
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
                                  flags=('--migrate', '--drop', '--purge-role',
-                                        '--revalidate'),
+                                        '--revalidate', '--full-extract'),
                                  produces=('stage2/global_grounding.json',)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
@@ -1107,7 +1117,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 逐章写作',
                                  modes=('deep', 'shallow'),
                                  flags=('--dry-run', '--recheck', '--revalidate',
-                                        '--apply-edit', '--revise', '--chapters'),
+                                        '--apply-edit', '--revise', '--chapters',
+                                        '--deep', '--shallow-rest'),
                                  produces=('stage5/{mode}/ch{nn}.json',
                                            'stage5/{mode}/draft.md')),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。

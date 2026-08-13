@@ -140,7 +140,7 @@ def planned_chapters(store: ArtifactStore) -> list[int] | None:
                                     'stage4/plan_chapters.json')
     except (ArtifactUnreadable, UpstreamMissing):
         return None
-    out = getattr(plan, 'chapters', None)
+    out = getattr(plan, 'output_chapters', None)
     if out is None:
         return None
     return sorted(int(c.output_ordinal) for c in out)

@@ -17,9 +17,9 @@ jobs.py —— 作业执行器：互斥 · 子进程 · 事件流 · 重启改�
 ⚠ 原型每次状态变化都 `os.replace` 整份 `<job_id>.json`，并**为此写了一段重试**——
 `PermissionError: [WinError 5]`，因为服务一边写一边被 SSE 轮询读，实测在测试里必现。
 
-【本模块只提供**同步**的 `run()`】把它放到线程/任务里是 E 期那一层的事。
-同步版本已经足够验完 D 要验的三件事（互斥 · 事件流 · 改判），
-而**一个跑在测试里就能跑完的执行器**比一个只能靠 sleep 观察的强得多。
+【两种入口共用同一执行内核】`run()` 给专用同步端点和测试使用；`start()` 在后台线程
+执行同一组 `Step` 并立即返回 `running` 记录，供通用 `POST /api/jobs` 轮询。
+两者共用互斥键、事件流、日志与 `_run_steps()`，预览和真跑仍是同一份命令对象。
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -43,6 +44,8 @@ from novel.prov import code_version
 SERVICE_DIRNAME = '_service'
 JOBS_FILENAME = 'jobs.jsonl'
 LOGS_DIRNAME = 'logs'
+
+_EVENT_APPEND_LOCK = threading.Lock()
 
 
 class JobConflict(TerminalState):
@@ -78,7 +81,7 @@ def active_key(sid: str | None, node: str, mode: str | None = None) -> str:
     """
     key = sid or '_global'
     has_arms = bool(NODES[node].modes) if node in NODES else False
-    return f'{key}:{node}:{mode}' if has_arms else key
+    return f'{key}:{node}:{mode}' if has_arms and mode is not None else key
 
 
 class JobRegistry:
@@ -96,8 +99,14 @@ class JobRegistry:
 
     def acquire(self, key: str, job_id: str) -> None:
         with self._lock:
-            cur = self._active.get(key)
-            if cur is not None:
+            conflict = next((
+                (active, holder)
+                for active, holder in self._active.items()
+                if (active == key or active.startswith(key + ':')
+                    or key.startswith(active + ':'))
+            ), None)
+            if conflict is not None:
+                _active, cur = conflict
                 raise JobConflict(
                     f'这本书已有作业在跑（{cur}）——等它结束，或换一本。'
                     f'⚠ 唯一的例外是写作的两条臂（deep/shallow）可以并发')
@@ -121,6 +130,8 @@ class JobRegistry:
 
 #: 进程内那一份。E 期的服务进程共用它。
 REGISTRY = JobRegistry()
+_THREADS_LOCK = threading.Lock()
+_THREADS: dict[str, threading.Thread] = {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -152,8 +163,9 @@ def append_event(base: str | os.PathLike[str], event: JobEvent) -> None:
     # 全局剥 None 会把「字段存在且为 null」偷换成「字段缺失」，事件下一次就读不回来。
     line = json.dumps(event.model_dump(mode='json'),
                       ensure_ascii=False)
-    with open(p, 'ab') as f:
-        f.write(line.encode('utf-8') + b'\n')
+    with _EVENT_APPEND_LOCK:
+        with open(p, 'ab') as f:
+            f.write(line.encode('utf-8') + b'\n')
 
 
 def read_events(base: str | os.PathLike[str]) -> list[JobEvent]:
@@ -352,6 +364,26 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
         writes=any(bool(s.writes) for s in plan))
 
 
+def _run_steps(base: str | os.PathLike[str], job_id: str,
+               plan: Sequence[Step], spawn: Spawn) -> int:
+    p = log_path(base, job_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rc = 0
+    env = child_env()
+    with open(p, 'ab') as log:
+        for index, step in enumerate(plan):
+            event = JobEvent(job_id=job_id, kind='step',
+                             ts=int(time.time()), step_index=index)
+            append_event(base, event)
+            command = '$ ' + ' '.join(step.argv) + '\n'
+            log.write(command.encode('utf-8'))
+            log.flush()
+            rc = spawn(step.argv, step.cwd, env, log)
+            if rc != 0:
+                break
+    return rc
+
+
 def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequence[str] = (), *,
         mode: str | None = None, follow_check: bool = True,
         spawn: Spawn = default_spawn, registry: JobRegistry = REGISTRY,
@@ -370,34 +402,93 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
     key = active_key(sid, node, mode)
     job_id = new_job_id()
     registry.acquire(key, job_id)
-
     try:
-        # ⚠ **与 `POST /api/jobs/preview` 共用同一个构造函数**（`R-11.8`）。
-        # `steps=plan` 已经算好，不会再算第二遍。
-        start = plan_start(node, sid, flags, base=base, mode=mode, steps=plan)
-        append_event(base, JobEvent(job_id=job_id, kind='started',
-                                    ts=int(time.time()), start=start))
-        p = log_path(base, job_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        rc = 0
-        env = child_env()
-        with open(p, 'ab') as log:
-            for i, step in enumerate(plan):
-                append_event(base, JobEvent(job_id=job_id, kind='step',
-                                            ts=int(time.time()), step_index=i))
-                log.write(f'$ {" ".join(step.argv)}\n'.encode('utf-8'))
-                log.flush()
-                rc = spawn(step.argv, step.cwd, env, log)
-                if rc != 0:
-                    break                        # 任一步非零即停
-        append_event(base, JobEvent(job_id=job_id, kind='ended',
-                                    ts=int(time.time()), exit_code=rc))
+        start_event = JobEvent(
+            job_id=job_id, kind='started', ts=int(time.time()),
+            start=plan_start(node, sid, flags, base=base, mode=mode, steps=plan))
+        append_event(base, start_event)
+        rc = _run_steps(base, job_id, plan, spawn)
+        append_event(base, JobEvent(
+            job_id=job_id, kind='ended', ts=int(time.time()), exit_code=rc))
         return next(r for r in fold(read_events(base)) if r.job_id == job_id)
     finally:
-        # ⚠ **用同一个函数算键**（含 mode——臂级键少了它就还错了半个键）。
-        # 原型正是在这里与 `start` 那一侧分了家：写的是 `'_global'`、删的时候查 `None`。
         registry.release(key, job_id)
 
+
+def wait(job_id: str, timeout: float | None = None) -> bool:
+    with _THREADS_LOCK:
+        thread = _THREADS.get(job_id)
+    if thread is None:
+        return True
+    thread.join(timeout=timeout)
+    return not thread.is_alive()
+
+
+
+def start(
+    base: str | os.PathLike[str],
+    node: str,
+    sid: str | None,
+    flags: Sequence[str] = (),
+    *,
+    mode: str | None = None,
+    follow_check: bool = True,
+    spawn: Spawn = default_spawn,
+    registry: JobRegistry = REGISTRY,
+    steps: Sequence[Step] | None = None,
+    prepare: Callable[[], None] | None = None,
+) -> JobRecord:
+    plan = list(steps) if steps is not None else build_steps(
+        node, sid, flags, base=base, mode=mode, follow_check=follow_check)
+    key = active_key(sid, node, mode)
+    job_id = new_job_id()
+    registry.acquire(key, job_id)
+    try:
+        if prepare is not None:
+            prepare()
+        start_event = JobEvent(
+            job_id=job_id, kind='started', ts=int(time.time()),
+            start=plan_start(node, sid, flags, base=base, mode=mode, steps=plan))
+        append_event(base, start_event)
+    except Exception:
+        registry.release(key, job_id)
+        raise
+
+    def worker() -> None:
+        rc = 70
+        try:
+            rc = _run_steps(base, job_id, plan, spawn)
+        except BaseException:
+            error_log = log_path(base, job_id)
+            error_log.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log, 'ab') as log:
+                log.write(traceback.format_exc().encode('utf-8'))
+        finally:
+            try:
+                append_event(base, JobEvent(
+                    job_id=job_id, kind='ended', ts=int(time.time()),
+                    exit_code=rc))
+            finally:
+                registry.release(key, job_id)
+                with _THREADS_LOCK:
+                    _THREADS.pop(job_id, None)
+
+    thread = threading.Thread(
+        target=worker, name=f'novel-job-{job_id}', daemon=True)
+    with _THREADS_LOCK:
+        _THREADS[job_id] = thread
+    try:
+        thread.start()
+    except Exception:
+        with _THREADS_LOCK:
+            _THREADS.pop(job_id, None)
+        registry.release(key, job_id)
+        append_event(base, JobEvent(
+            job_id=job_id, kind='ended', ts=int(time.time()), exit_code=70))
+        raise
+    return next(
+        record for record in fold(read_events(base), live=registry.live())
+        if record.job_id == job_id)
 
 def records(base: str | os.PathLike[str], *,
             registry: JobRegistry = REGISTRY) -> list[JobRecord]:

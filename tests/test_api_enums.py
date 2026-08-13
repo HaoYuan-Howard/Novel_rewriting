@@ -152,7 +152,9 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
     for a in paid_payload['actions']:
         flags = list(a['extra'] or [])
         if a['needs_value']:
-            flags.append('C:/placeholder.json')
+            index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
+            flags.insert(index + 1, '1' if flags[index] == '--deep'
+                         else 'C:/placeholder.json')
         argv = N.build_argv(a['kind'], 'sid123', flags, base=BASE, mode=a['mode'])
         # 付费的那条命令**必须**带 `--yes`（`Q-10`：花钱前必须人确认）；不付费的不许带。
         assert ('--yes' in argv) == a['paid'], (
@@ -193,9 +195,10 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
     #     与带值参数」的一对（此前只有 `--apply-edit`）——两个轴正交，不是重复登记。
     # ⚠ 74 → 76（2026-08-13，真实 E2E）：两个 Stage2 付费落盘闸门各补一条
     #   `--revalidate`。闸门由系统加，不能让合格的问题稿永久锁死。
-    assert len(paid_payload['actions']) == 76, (
-        f'actions 有 {len(paid_payload["actions"])} 条，期望 76 '
-        f'（每个节点的默认路径 + 每个 flag；多臂节点按臂分别计算）。'
+    # ⚠ 76 → 78：stage2 并发首跑 +1；stage5 深浅分配是一个复合动作 +1。
+    assert len(paid_payload['actions']) == 78, (
+        f'actions 有 {len(paid_payload["actions"])} 条，期望 78 '
+        f'（每个节点的默认路径 + 每个独立 flag；复合动作只发布一次）。'
         f'这个数**会随 `NODES` 改**——改动它是有意的就来改这个数')
 
 
@@ -300,7 +303,11 @@ def test_action_labels_are_unique_and_come_from_step_label(paid_payload):
     labels = [a['label'] for a in paid_payload['actions']]
     assert len(set(labels)) == len(labels), '有两条 action 共用一句 label'
     for a in paid_payload['actions']:
-        assert a['label'] == N.step_label(a['kind'], a['extra'] or (), mode=a['mode'])
+        flags = list(a['extra'] or ())
+        if a['needs_value']:
+            index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
+            flags.insert(index + 1, '1')
+        assert a['label'] == N.step_label(a['kind'], flags, mode=a['mode'])
 
 
 def test_writes_and_paid_are_two_orthogonal_axes(paid_payload):

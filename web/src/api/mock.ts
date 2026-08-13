@@ -168,10 +168,26 @@ const EXTRA_KINDS: Record<string, { label: string; paid: boolean }> = {
 
 function enums(): EnumsResponse {
   const base = raw<EnumsResponse>('enums.json')
+  const stage5Actions = base.actions
+    .filter((item) => item.kind === 'n5_write' || item.kind === 'n6_write')
+    .map((item) => ({
+      ...item,
+      kind: 'stage5.write',
+      mode: item.kind === 'n5_write' ? 'deep' : 'shallow',
+    }))
   const additions = [
     { kind: 'stage0.edit', label: 'stage0 人工编辑', extra: null, paid: false },
     { kind: 'stage0.approve', label: 'stage0 人工批准', extra: null, paid: false },
     { kind: 'stage1.partition', label: 'stage1 分章', extra: null, paid: false },
+    { kind: 'stage2.global', label: '并发抽取 stage2 + stage3', extra: ['--full-extract'], paid: true },
+    { kind: 'stage4.plan', label: 'stage4 重构计划', extra: null, paid: true },
+    {
+      kind: 'stage5.write', mode: null, label: 'stage5 深浅并发写作',
+      extra: ['--deep', '--shallow-rest'], paid: true,
+    },
+    { kind: 'stage6.hook', label: 'stage6 开篇文案', extra: null, paid: true },
+    { kind: 'stage7.rename', label: 'stage7 人名替换', extra: null, paid: true },
+    { kind: 'stage7.assemble', label: 'stage7 拼装成书', extra: null, paid: false },
   ]
   return {
     ...base,
@@ -182,7 +198,8 @@ function enums(): EnumsResponse {
       ),
     },
     actions: [
-      ...base.actions,
+      ...base.actions.filter((item) => item.kind !== 'n5_write' && item.kind !== 'n6_write'),
+      ...stage5Actions,
       ...additions.map((item) => ({
         ...item,
         free_flag: '',
@@ -201,9 +218,10 @@ function paidOf(req: JobRequest): boolean {
 
 function argvOf(req: JobRequest): string {
   const parts = ['python', '-m', 'novel_refactor.cli', req.kind, '--sid', req.sid]
+  if (req.mode) parts.push('--mode', req.mode)
   if (req.extra) parts.push(...req.extra)
   if (req.args) parts.push(...req.args)
-  if ((req.kind === 'n5_write' || req.kind === 'n6_write') && req.ordinal) {
+  if (req.kind === 'stage5.write' && req.ordinal) {
     parts.push('--chapters', String(req.ordinal))
   }
   return parts.join(' ')
@@ -323,15 +341,15 @@ function publicJobs(sid: string): JobsResponse {
 /** 确认之后自动发起的下游。谁发起什么由服务端决定，不由界面决定。 */
 const SPAWN_ON_APPROVE: Partial<Record<GateKey, ActionRef[]>> =
   {
-    s1: [
-      { kind: 'n2_global', label: 'stage2 全局抽取', extra: null },
-      { kind: 'n2_blueprint', label: 'stage2 逐章蓝图', extra: null },
-      { kind: 'n3_style', label: 'stage3 风格提取', extra: null },
-    ],
-    s2: [{ kind: 'n4_plan', label: 'stage4 重构计划', extra: ['--all-chapters'] }],
-    s5: [{ kind: 'n8_hook', label: 'stage6 开篇文案（产三候选）', extra: null }],
-    s6: [{ kind: 'n9_rename', label: 'stage7 人名替换（产新人物表）', extra: null }],
-    s7: [{ kind: 'n9_rename', label: 'stage7 · 组装成书 txt', extra: ['--assemble'] }],
+    s1: [{
+      kind: 'stage2.global',
+      label: '并发抽取 stage2 + stage3',
+      extra: ['--full-extract'],
+    }],
+    s2: [{ kind: 'stage4.plan', label: 'stage4 重构计划', extra: null }],
+    s5: [{ kind: 'stage6.hook', label: 'stage6 开篇文案（产三候选）', extra: null }],
+    s6: [{ kind: 'stage7.rename', label: 'stage7 人名替换（产新人物表）', extra: null }],
+    s7: [{ kind: 'stage7.assemble', label: 'stage7 · 组装成书 txt', extra: null }],
   }
 
 function codePoints(text: string): number {
@@ -615,12 +633,7 @@ export const mockApi: Api = {
 
   approveGate: (sid, key: GateKey) => {
     const doc = loadDoc(sid)
-    const next = saveDoc({ ...doc, gate: { ...doc.gate, [key]: true } })
-    // 确认即发起下游 —— 在真产品里这也是服务端做的事
-    for (const s of SPAWN_ON_APPROVE[key] ?? []) {
-      spawn({ kind: s.kind, label: s.label, extra: s.extra, sid, ordinal: null })
-    }
-    return later(next)
+    return later(saveDoc({ ...doc, gate: { ...doc.gate, [key]: true } }))
   },
 
   markSeen: (sid, key: SeenKey) => {

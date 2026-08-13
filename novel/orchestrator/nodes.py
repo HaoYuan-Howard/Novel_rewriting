@@ -71,6 +71,13 @@ def flag_tokens(flags: Iterable[str]) -> tuple[str, ...]:
     return tuple(out)
 
 
+def flag_value(flags: Sequence[str], name: str) -> str | None:
+    found = [flags[i + 1] for i, token in enumerate(flags[:-1]) if token == name]
+    if len(found) > 1:
+        raise UnsupportedRunMode(f'{name} must appear at most once')
+    return found[0] if found else None
+
+
 def validate_run(node: str, flags: Sequence[str] = (),
                  mode: str | None = None) -> tuple[str, ...]:
     """节点认不认识这条跑法。**认不出就当场拒**，不猜。
@@ -85,8 +92,24 @@ def validate_run(node: str, flags: Sequence[str] = (),
             f'未知节点 {node!r}。取值面的唯一落点是 `contracts.invariants.NODES`，'
             f'现有 {len(NODES)} 个：{", ".join(sorted(NODES))}')
     spec = NODES[node]
+    tokens = flag_tokens(flags)
+    composite_write = (
+        node == 'stage5.write'
+        and bool({'--deep', '--shallow-rest'} & set(tokens))
+    )
+    if node == 'stage2.global' and '--full-extract' in tokens:
+        if set(tokens) != {'--full-extract'}:
+            raise UnsupportedRunMode(
+                'stage2 --full-extract cannot be combined with repair flags')
 
-    if spec.modes:
+    if composite_write:
+        if set(tokens) != {'--deep', '--shallow-rest'}:
+            raise UnsupportedRunMode(
+                'stage5 composite write requires exactly --deep and --shallow-rest')
+        if mode is not None:
+            raise UnsupportedRunMode(
+                'stage5 composite write selects both arms and must not carry --mode')
+    elif spec.modes:
         if mode not in spec.modes:
             raise UnsupportedRunMode(
                 f'{node} 必须指定 --mode，取值是 {list(spec.modes)}，实得 {mode!r}')
@@ -96,7 +119,6 @@ def validate_run(node: str, flags: Sequence[str] = (),
             f'⚠ 全链只有 `stage5.write` 有臂（两臂只差 system prompt 与给不给源章原文，'
             f'产物形状逐字节相同，判据表只有一张）')
 
-    tokens = flag_tokens(flags)
     bad = [f for f in tokens if f not in spec.flags]
     if bad:
         raise UnsupportedRunMode(
@@ -324,6 +346,15 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
     """
     first = _step(node, sid, flags, base=base, mode=mode)
     steps = [first]
+    if (follow_check and node == 'stage2.global'
+            and '--full-extract' in flag_tokens(flags)):
+        steps.append(_step(
+            'stage2.blueprint', sid, ['--check-only'], base=base, mode=None,
+            note=FOLLOW_CHECK_NOTE))
+        steps.append(_step(
+            'stage3.style', sid, ['--check-only'], base=base, mode=None,
+            note=FOLLOW_CHECK_NOTE))
+        return steps
     if (follow_check and first.writes
             and '--check-only' in NODES[node].flags
             and '--check-only' not in flag_tokens(flags)):

@@ -313,7 +313,7 @@ export function useStage5Screen() {
     chaptersArg,
     setChaptersArg,
     writeActions: (enums.data?.actions ?? []).filter(
-      (a) => a.kind === 'n5_write' || a.kind === 'n6_write',
+      (a) => a.kind === 'stage5.write' && (a.mode === 'deep' || a.mode === 'shallow'),
     ),
   }
 }

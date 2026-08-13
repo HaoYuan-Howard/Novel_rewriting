@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_api_http.py —— 九个端点真的走一遍 HTTP。
+test_api_http.py —— 公共端点真的走一遍 HTTP。
 
 【它与另外三份 API 测试的分界线】
   · `test_api_enums.py`      —— 取值面的**内容**（纯函数，不起服务）
@@ -301,7 +301,7 @@ def test_the_published_surface_is_exactly_the_stage01_surface(app):
         '/api/novels/{sid}': ['GET'],
         '/api/novels/{sid}/stage3/style': ['GET'],
         '/api/novels/{sid}/check/{kind}': ['GET'],
-        '/api/jobs': ['GET'],
+        '/api/jobs': ['GET', 'POST'],
         '/api/jobs/{job_id}': ['GET'],
         '/api/jobs/{job_id}/log': ['GET'],
         '/api/jobs/preview': ['POST'],
@@ -313,6 +313,12 @@ def test_the_published_surface_is_exactly_the_stage01_surface(app):
         '/api/novels/{sid}/stage1/segments': ['GET'],
         '/api/novels/{sid}/stage1/chapters': ['GET'],
         '/api/novels/{sid}/stage1/hook_copy': ['GET'],
+        '/api/novels/{sid}/approvals': ['GET'],
+        '/api/novels/{sid}/approvals/gate/{key}': ['POST'],
+        '/api/novels/{sid}/approvals/seen/{key}': ['POST'],
+        '/api/novels/{sid}/approvals/deep': ['POST'],
+        '/api/novels/{sid}/approvals/writing': ['POST'],
+        '/api/novels/{sid}/approvals/reset': ['POST'],
         '/api/upload': ['POST'],
     }
 
@@ -357,7 +363,7 @@ def test_the_service_writes_nothing_at_all(client, box):
 def test_preview_argv_is_identical_to_what_would_run(client, box):
     """⭐ 沿用原型那条测试名。**摊开显示的那条命令 = 真的会被 `Popen` 的那条。**
 
-    ⚠ 它不是「长得像」：`POST /api/jobs/preview` 与 `jobs.run()` 调的是
+    ⚠ 它不是「长得像」：`POST /api/jobs/preview` 与 `jobs.start()` 调的是
     **同一个 `jobs.plan_start`**，而那个函数里 `steps` 来自**同一个 `build_steps`**。
     原型那条裂缝（前端 `argv.slice(4)` 硬编码切掉解释器前缀）在这里连发生的地方都没有。
     """

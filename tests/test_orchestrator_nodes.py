@@ -23,8 +23,12 @@ from novel.orchestrator import nodes as N
 BASE = os.path.join('E:', os.sep, 'somewhere', 'Output')
 SID = '7615069877019300633'
 
-#: 逐 node × flag 铺平：每个节点的每一条登记跑法各一行。
-CASES = [(node, flag) for node, spec in NODES.items() for flag in spec.flags]
+#: 逐 node × 独立 flag 铺平；stage5 的两项是一个不可拆的复合动作，另有专测。
+PAIRED_FLAGS = {'--deep', '--shallow-rest'}
+CASES = [
+    (node, flag) for node, spec in NODES.items() for flag in spec.flags
+    if flag not in PAIRED_FLAGS
+]
 
 
 def _mode_of(node: str) -> str | None:
@@ -180,6 +184,17 @@ def test_only_the_writing_node_takes_a_mode():
         N.build_argv('stage5.write', SID, base=BASE)
     argv = N.build_argv('stage5.write', SID, base=BASE, mode='deep')
     assert argv[argv.index('--mode') + 1] == 'deep'
+
+
+def test_stage5_composite_selection_builds_both_arms_without_a_mode():
+    flags = ['--deep', '1,2,3', '--shallow-rest']
+    argv = N.build_argv('stage5.write', SID, flags, base=BASE)
+    assert '--mode' not in argv
+    assert argv[argv.index('--deep') + 1] == '1,2,3'
+    assert '--shallow-rest' in argv
+    for lone in (['--deep', '1'], ['--shallow-rest']):
+        with pytest.raises(UnsupportedRunMode, match='requires exactly'):
+            N.build_argv('stage5.write', SID, lone, base=BASE)
 
 
 def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():

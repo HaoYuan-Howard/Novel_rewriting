@@ -78,8 +78,8 @@ STATUS: dict[type[NovelError], int] = {
     HookCopyMissing: 422,
     TooFewChapters: 422,
     #: `R-11.10`：一本书同时只跑一个作业。`jobs.py` 的 docstring 明写「E 期翻成 409」。
-    #: ⚠ E 期**只验到这一格**——没有 `POST /api/jobs` 就没有第二个请求可以撞，
-    #: 行为半边要等那一期。**别把它读成验过了**（登记在 `docs/schema/_api.md` §七）。
+    #: 行为半边由通用 `POST /api/jobs` 与专用 Stage0 端点共同测试：同书第二次启动为 409，
+    #: 不同书可并行，stage5 的 deep/shallow 单臂是唯一可共存的书内例外。
     JobConflict: 409,
     #: 人敲了一条这个节点没有的跑法 ⇒ 产地是**客户端**。
     UnsupportedRunMode: 400,

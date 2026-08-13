@@ -79,13 +79,11 @@ stage3/style_grounding.json     {voice, surface_habits[], hook_style, measurable
 > | 有 `hard` 违规 | 不覆盖现役产物，问题稿存 `style_grounding.INVALID.json` + 显式终态 |
 > | **阻断级判据【没跑成】** | 同样落 `.INVALID`，另记 `_provenance.gates_skipped` |
 >
-> 第二条是这一层最值得照抄的设计：`name_leak` 是 `HARD`，但它要 stage2 的人物名表；
-> stage2 ∥ stage3 并行时名表还不在，判据落 `unver`。
-> **「产物照常落盘 + 事后补跑 `--check-only`」这个口径实测崩了**——
-> 补跑报 FAIL，而 `--check-only` 是纯读的，**没有任何东西能把已经成为正式稿的它退回去**；
-> 同一份稿，串行跑被拦下、并行跑成了正式稿。
-> ⇒ **闸门缺料 ⇒ 状态是「未验」不是「合格」**，等上游落盘后 `--revalidate`（0 成本）补跑那几条，过了即提升。
-> **钱一分没多花**（判据 36 / `Q-2`）。
+> `name_leak` 是 `HARD`，但它要 stage2 的人物名表。现在并发只覆盖**付费请求阶段**：
+> Stage3 请求与 `stage2.global` 同时起跑，`finish_style` 必须等 global 落盘后重新读取人物表，
+> 再执行闸门并决定正式稿还是 `.INVALID`。因此“调用可并行”不再被偷换成“缺料也可落正式稿”。
+> `--revalidate` 仍用于历史问题稿或异常中断留下的未验稿；流程尾部的 0 成本复检负责钉住
+> 最终状态，但不再承担把已经误落的正式稿倒退回问题稿这一件做不到的事。
 
 ---
 

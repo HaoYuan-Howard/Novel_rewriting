@@ -124,7 +124,10 @@ class LlmClient:
         self._clock = clock
         #: 并发闸。⚠ 它守的不是速率，是**钱**：一次配置错误（prompt 漂了）在被人看见之前
         #: 能烧掉多少，与并发度成正比。见 `novel/config.py::DEFAULT_CONCURRENCY`。
-        self.concurrency = max(1, concurrency)
+        if not 1 <= concurrency <= config.MAX_CONCURRENCY:
+            raise ValueError(
+                f'concurrency 必须在 1..{config.MAX_CONCURRENCY}，实得 {concurrency!r}')
+        self.concurrency = concurrency
         self._gate = threading.Semaphore(self.concurrency)
 
     # ── 两个入口 ──────────────────────────────────────────────────────────

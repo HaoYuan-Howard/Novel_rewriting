@@ -208,6 +208,23 @@ class RunContext:
                   model=model, usage=self.ledger.usage_since(self._usage_mark), **extra)
         return self._settled(out)
 
+    def llm_provenance_for_chapter(
+            self, chapter: int, cls: type[P] = LlmProvenance, /, *,
+            prompts: dict[str, str], model: str, **extra: Any) -> P:
+        if not self.paid:
+            raise ProvenanceRefused(
+                f'{self.node} is paid=False and cannot mint model provenance')
+        out = cls(
+            code=self.code,
+            inputs=self.edges,
+            prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
+            model=model,
+            usage=self.ledger.chapter_usage(chapter),
+            **extra,
+        )
+        self.ledger.commit_chapter(chapter)
+        return out
+
     def free_provenance(self, cls: type[P] = FreeProvenance, /, *,
                         prompts: dict[str, str] | None = None, **extra: Any) -> P:
         """0 成本产出的来源账。**没有 `model` 这个字段**（结构上不存在，不是「可以是 null」）。

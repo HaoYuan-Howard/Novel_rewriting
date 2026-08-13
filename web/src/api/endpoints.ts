@@ -9,12 +9,14 @@ import type { ApprovalDoc, GateKey, SeenKey } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
   BackendJobList,
+  BackendJobRequest,
   BackendJobRecord,
   BackendJobStart,
   BackendLogChunk,
   Job,
   JobLogResponse,
   JobPreview,
+  JobRequest,
   JobsResponse,
 } from '@/types/jobs'
 import type { NovelOverview, NovelsResponse } from '@/types/novels'
@@ -75,6 +77,15 @@ function adaptPreview(start: BackendJobStart): JobPreview {
     paid: start.paid,
     label: labelOf(start),
     kind: start.node,
+  }
+}
+
+function backendJobRequest(req: JobRequest): BackendJobRequest {
+  return {
+    sid: req.sid,
+    node: req.kind,
+    mode: req.mode ?? null,
+    flags: [...(req.extra ?? []), ...(req.args ?? [])],
   }
 }
 
@@ -140,8 +151,9 @@ export const realApi: Api = {
     } satisfies JobLogResponse
   },
   previewJob: async (req) =>
-    adaptPreview(await post<BackendJobStart>('/jobs/preview', req)),
-  startJob: async (req) => adaptJob(await post<BackendJobRecord>('/jobs', req)),
+    adaptPreview(await post<BackendJobStart>('/jobs/preview', backendJobRequest(req))),
+  startJob: async (req) =>
+    adaptJob(await post<BackendJobRecord>('/jobs', backendJobRequest(req))),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
   approveGate: (sid, key: GateKey) => post<ApprovalDoc>(n(sid) + '/approvals/gate/' + key),

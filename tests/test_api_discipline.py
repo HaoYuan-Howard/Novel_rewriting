@@ -270,11 +270,10 @@ def test_the_partial_mask_note_is_published():
 
 # ───────────────────────── `R-11.10`：映射 + 真实冲突行为 ─────────────────────────
 
-def test_stage01_job_conflict_maps_and_returns_409():
+def test_job_conflict_maps_and_returns_409():
     """`R-11.10`：同一本书已有作业占锁时，第二个 Stage 0 请求真的返回 409。
 
-    浏览器仍然没有通用 `POST /api/jobs`，所以这条不会顺便开放付费节点；
-    Stage 0/1 的四个写入口都是明确、确定性且免费的专用路由。
+    通用 `POST /api/jobs` 已明确开放；所有变更入口仍受同一 CSRF 中间件和书级锁保护。
     """
     assert HERR.STATUS[JobConflict] == 409
     pytest.importorskip('fastapi', reason='没装 fastapi ⇒ 真实 409 行为**没在查**')
@@ -285,13 +284,19 @@ def test_stage01_job_conflict_maps_and_returns_409():
     posts = [p for p, ops in app.openapi()['paths'].items()
              if 'post' in ops and p.startswith('/api/')]
     assert set(posts) == {
+        '/api/jobs',
         '/api/jobs/preview',
         '/api/novels/{sid}/stage0/edit',
         '/api/novels/{sid}/stage0/approve',
         '/api/novels/{sid}/stage1/partition',
+        '/api/novels/{sid}/approvals/gate/{key}',
+        '/api/novels/{sid}/approvals/seen/{key}',
+        '/api/novels/{sid}/approvals/deep',
+        '/api/novels/{sid}/approvals/writing',
+        '/api/novels/{sid}/approvals/reset',
         '/api/upload',
     }
-    assert '/api/jobs' not in posts, '通用作业启动会让浏览器够到付费节点，不能顺手开放'
+    assert '/api/jobs' in posts
 
     sid = 'discipline-409'
     holder = 'already-running'

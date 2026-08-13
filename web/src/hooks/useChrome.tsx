@@ -11,6 +11,8 @@ import type { JobRequest } from '@/types/jobs'
 
 export interface PendingConfirm {
   req: JobRequest
+  /** 用户确认后、启动作业前必须成功的服务端状态转换（例如批准当前闸门） */
+  before?: () => Promise<void>
   /** 发起成功后要做的事（例如挑完深度章节 → 标记已开写 → 跳成稿屏） */
   after?: () => void
 }
@@ -55,7 +57,8 @@ export function useChrome(): ChromeCtx {
 export function useAskJob() {
   const { askConfirm } = useChrome()
   return useCallback(
-    (req: JobRequest, after?: () => void) => askConfirm({ req, after }),
+    (req: JobRequest, after?: () => void, before?: () => Promise<void>) =>
+      askConfirm({ req, before, after }),
     [askConfirm],
   )
 }

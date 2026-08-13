@@ -308,6 +308,7 @@ CLI 这一侧：没给 `--yes` 而计划里有付费项 ⇒ 打印全部命令�
 ## 六、`active_key(sid, node, mode)` 与 409
 
 `R-11.10`：**一本书同时只跑一个作业**（第二个请求 409）。唯一例外：写作的两条臂可并发。
+不同 `sid` 生成不同键，因此后台作业与其 CLI 子进程可以并行，互不占用对方的锁。
 
 互斥键的**唯一落点**就是这一个函数：
 
@@ -315,9 +316,13 @@ CLI 这一侧：没给 `--yes` 而计划里有付费项 ⇒ 打印全部命令�
 active_key(sid, node, mode) -> str
     sid 为 null      → '_global'（上传新书那条路；串行比并发安全——
                        两个并发的摄入可能推导出同一个目录名、互相覆盖）
-    node 有 mode     → f'{sid}:{node}:{mode}'
-    否则             → sid
+    mode 非 null     → f'{sid}:{node}:{mode}'（单臂维护入口）
+    否则             → sid（包括同时调度 deep/shallow 的 Stage5 整书入口）
 ```
+
+注册表按层级判断冲突：书级键 `sid` 与其任一 `sid:node:mode` 冲突；deep 与 shallow
+两个同级臂键彼此不冲突。通用 `start()` 拿锁、执行可选审批准备、追加 `started` 后立即
+返回 `running`，后台线程与同步 `run()` 共用同一个逐步子进程执行内核。
 
 ⚠⚠ **这个函数必须只有一个落点，而这一条是拿一个真 bug 换来的。**
 原型 `start` 写进去的是 `sid or '_global'`、而 `_run_chain` 释放时拿 `meta['sid']` 去查——
@@ -347,15 +352,19 @@ active_key(sid, node, mode) -> str
 > **「子进程被 OOM 杀掉了」这条记录只有父进程写得出来。**
 > 子进程写不了自己的死讯，而退出码正是编排层判成败的依据（`R-12.3`）。
 
-⇒ 服务进程写、且只写这两处：
+⇒ 服务进程写、且只写这些非产物服务状态：
 
 ```
 Output/_service/jobs.jsonl        append-only 事件流
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
+Output/_service/ledger.jsonl      跨书逐请求成本事实（旁有 ledger.jsonl.lock）
+Output/_service/uploads/…         浏览器上传的原始小说字节
+Output/_service/edits/<sid>/…     交给 stage0 CLI 的一次性编辑计划
+Output/_service/approvals/<sid>.json 人工闸门、已阅状态与深度选章（原子替换）
 ```
 
-它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们、
-`tests/test_layering.py` 的写口白名单为它们各带一条理由（同 `novel/llm/ledger.py` 的先例）。
+它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们；
+`tests/test_layering.py` 的写口与路由所有权白名单为每一类带着明确理由。
 
 ⚠ **只收窄而不标注，读的人会以为这条规则被偷偷放宽了**（`Q-8`：退役而不删，且必须带标注）。
 标注写在 `docs/BACKEND_CONTRACT.md` 的 `R-11.3` 那一格下面，形态同它 2026-08-11 那次「理由改写」。

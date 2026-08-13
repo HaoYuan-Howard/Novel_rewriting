@@ -14,6 +14,7 @@ test_llm.py —— 降级阶梯 · 缓存两个开关 · `require` 从模型派�
 from __future__ import annotations
 
 import json
+import multiprocessing
 import tempfile
 import threading
 from pathlib import Path
@@ -22,7 +23,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from novel.config import Config, load_config, parse_dotenv
-from novel.errors import TerminalState
+from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.client import DEFAULT_MAX_TOKENS, LADDER, LlmClient, LlmFailed
 from novel.llm.ledger import CostLedger
@@ -684,6 +685,53 @@ def test_a_run_with_no_calls_has_no_usage_key_at_all():
     assert CostLedger().usage() is None
 
 
+def test_concurrent_chapter_usage_is_attributed_by_chapter_not_completion_order():
+    ledger = CostLedger()
+    common = dict(node='stage5.write', sid='book', model='m', code='c',
+                  cache_policy='default')
+    ledger.record(
+        **common, cached=False, prompt_tokens=20, completion_tokens=200,
+        progress=RequestProgress(chapter=2, index=2, total=2))
+    ledger.record(
+        **common, cached=False, prompt_tokens=10, completion_tokens=100,
+        progress=RequestProgress(chapter=1, index=1, total=2))
+    first = ledger.chapter_usage(1)
+    second = ledger.chapter_usage(2)
+    assert first and (first.calls_made, first.prompt_tokens, first.completion_tokens) == (1, 10, 100)
+    assert second and (second.calls_made, second.prompt_tokens, second.completion_tokens) == (1, 20, 200)
+    ledger.commit_chapter(1)
+    with pytest.raises(ProvenanceRefused, match='already claimed'):
+        ledger.commit_chapter(1)
+
+
+def _append_ledger_rows(path: str, worker: int, count: int) -> None:
+    ledger = CostLedger(path=Path(path))
+    for index in range(count):
+        ledger.record(
+            node='stage5.write', sid=f'book-{worker}', model='m', code='c',
+            cached=False, cache_policy='default', purpose=f'{worker}:{index}',
+            prompt_tokens=1, completion_tokens=1,
+        )
+
+
+def test_different_novel_processes_append_whole_ledger_rows():
+    directory = Path(tempfile.mkdtemp())
+    path = directory / 'ledger.jsonl'
+    mp = multiprocessing.get_context('spawn')
+    processes = [
+        mp.Process(target=_append_ledger_rows, args=(str(path), worker, 20))
+        for worker in range(2)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(20)
+        assert process.exitcode == 0
+    rows = [json.loads(line) for line in path.read_text('utf-8').splitlines()]
+    assert len(rows) == 40
+    assert {row['sid'] for row in rows} == {'book-0', 'book-1'}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 六、配置：不在 import 期跑 · 结构上不会打印密钥
 # ─────────────────────────────────────────────────────────────────────────────
@@ -730,6 +778,7 @@ def test_a_malformed_number_is_a_hard_error_not_a_silent_default():
     ({'DEEPSEEK_MAX_RETRIES': '-1'}, 'DEEPSEEK_MAX_RETRIES'),   # 一次都不发，而调用方以为发过了
     ({'NOVEL_CONCURRENCY': '0'}, 'NOVEL_CONCURRENCY'),          # 信号量取 0 ⇒ 整跑死锁
     ({'NOVEL_CONCURRENCY': '-4'}, 'NOVEL_CONCURRENCY'),
+    ({'NOVEL_CONCURRENCY': '33'}, 'NOVEL_CONCURRENCY'),         # 用户裁决的逐章硬上限是 32
     ({'DEEPSEEK_BACKOFF_BASE': '-2'}, 'DEEPSEEK_BACKOFF_BASE'),
     ({'DEEPSEEK_TIMEOUT': '-5'}, 'DEEPSEEK_TIMEOUT'),
     ({'DEEPSEEK_TIMEOUT': '0'}, 'DEEPSEEK_TIMEOUT'),
@@ -755,6 +804,8 @@ def test_a_hand_built_config_is_checked_too():
     """闸在 `__post_init__` 不在 `load_config`：C 期手搭一个 `Config` 也得拦得住。"""
     with pytest.raises(ValueError, match='NOVEL_CONCURRENCY'):
         Config(concurrency=0)
+    with pytest.raises(ValueError, match='NOVEL_CONCURRENCY'):
+        Config(concurrency=33)
     with pytest.raises(ValueError, match='DEEPSEEK_MODEL'):
         Config(model='')
 

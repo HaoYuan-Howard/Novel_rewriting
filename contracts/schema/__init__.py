@@ -17,6 +17,9 @@ contracts.schema —— 产物 schema 的机器形态。
 from __future__ import annotations
 
 from contracts.schema.api import (
+    ApprovalAction,
+    ApprovalDoc,
+    DeepSelectionRequest,
     DriftItem,
     ErrorBody,
     HookCopyView,
@@ -136,6 +139,7 @@ __all__ = [
     'Stage1Segment', 'Stage1Segments', 'Stage1ChapterRow', 'Stage1Chapters',
     'HookCopyView', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'PreviewRequest', 'ErrorBody',
+    'ApprovalAction', 'ApprovalDoc', 'DeepSelectionRequest',
     # 八层
     'RemovalReport', 'RemovedSegment', 'Stage0EditPlan', 'Stage0Warning',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',

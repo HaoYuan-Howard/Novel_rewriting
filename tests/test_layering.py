@@ -184,6 +184,9 @@ _WRITE_ALLOWED = {
         '浏览器原始上传与一次性 stage0 编辑计划，均只写 Output/_service/。'
         '前者要长期保留供 S-00 按 original_path 审校；后者只把人的选择交给 CLI '
         '子进程，作业结束即删。两者都不进 ARTIFACTS / 来源账，不是小说产物'),
+    'novel/orchestrator/approvals.py': (
+        '人工闸门与深度选章只写 Output/_service/approvals/。它们控制作业是否可启动，'
+        '不是小说产物，不进 ARTIFACTS / provenance；原子替换防止并发读到半份状态'),
 }
 
 
@@ -331,7 +334,7 @@ def _writer_hits(path: str) -> list[str]:
 def test_the_api_and_view_layers_never_write_artifacts_directly():
     """⭐ `R-11.3`：**服务进程绝不直接落产物盘。**
 
-    Stage 0/1 的变更路由只经 `jobs.run` 起 CLI 子进程；上传原文与一次性编辑计划
+    变更路由只经 `jobs.run` / `jobs.start` 起 CLI 子进程；上传、一次性编辑计划与审批
     只进 `_service/`。这些窄入口由下一条单独钉住，本条继续禁止绕过 store 的产物写。
     """
     bad = [h for p in _api_files() + _view_files() for h in _writer_hits(p)]
@@ -343,9 +346,15 @@ def test_the_api_and_view_layers_never_write_artifacts_directly():
 
 _SERVICE_MUTATORS = {
     ('jobs', 'run'),
+    ('jobs', 'start'),
     ('uploads', 'save_upload'),
     ('uploads', 'save_edit_plan'),
     ('uploads', 'discard_edit_plan'),
+    ('approvals', 'approve_gate'),
+    ('approvals', 'mark_seen'),
+    ('approvals', 'set_deep'),
+    ('approvals', 'begin_writing'),
+    ('approvals', 'reset'),
 }
 
 
@@ -356,11 +365,12 @@ def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == 'novel.orchestrator':
             for alias in node.names:
-                if alias.name in ('jobs', 'uploads'):
+                if alias.name in ('jobs', 'uploads', 'approvals'):
                     module_aliases[alias.asname or alias.name] = alias.name
         elif isinstance(node, ast.ImportFrom) and node.module in (
             'novel.orchestrator.jobs',
             'novel.orchestrator.uploads',
+            'novel.orchestrator.approvals',
         ):
             module = node.module.rsplit('.', 1)[-1]
             for alias in node.names:
@@ -381,15 +391,30 @@ def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
     return out
 
 
-def test_service_mutations_are_narrowly_owned_by_the_stage01_routes():
+def test_service_mutations_are_narrowly_owned_by_mutation_routes():
     """API 只准备 `_service` 输入并起子进程；视图层保持纯读。新增写入口必须显式改表。"""
     hits = {
         _rel(path): _service_mutator_hits(path)
         for path in _api_files() + _view_files()
         if _service_mutator_hits(path)
     }
-    assert set(hits) == {'novel/api/routes/ingest.py'}
-    assert set(hits['novel/api/routes/ingest.py']) == _SERVICE_MUTATORS
+    expected = {
+        'novel/api/routes/ingest.py': {
+            ('jobs', 'run'), ('uploads', 'save_upload'),
+            ('uploads', 'save_edit_plan'), ('uploads', 'discard_edit_plan'),
+            ('approvals', 'approve_gate'),
+        },
+        'novel/api/routes/jobs.py': {
+            ('jobs', 'start'), ('approvals', 'begin_writing'),
+        },
+        'novel/api/routes/approvals.py': {
+            ('approvals', 'approve_gate'), ('approvals', 'mark_seen'),
+            ('approvals', 'set_deep'), ('approvals', 'begin_writing'),
+            ('approvals', 'reset'),
+        },
+    }
+    assert set(hits) == set(expected)
+    assert {path: set(values) for path, values in hits.items()} == expected
 
 
 def test_the_service_process_cannot_spend_money():

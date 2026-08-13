@@ -196,8 +196,7 @@ def test_not_implemented_is_501_not_404():
 
 
 def test_a_second_job_on_the_same_book_is_409():
-    """`R-11.10`。⚠ E 期**只验到这一格**——没有 `POST /api/jobs` 就没有第二个请求
-    可以撞，行为半边要等那一期。**这条不许被读成「409 验过了」。**
+    """`R-11.10` 的状态码映射；第二个请求的真实 409 行为另有 API 测试覆盖。
     """
     assert H.status_of(JobConflict('这本书已经在跑了')) == 409
 

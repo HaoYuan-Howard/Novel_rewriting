@@ -258,7 +258,9 @@ def actions() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for node, spec in NODES.items():
         for mode in (spec.modes or (None,)):
-            for flags in [()] + [(f,) for f in spec.flags]:
+            independent = [f for f in spec.flags
+                           if f not in {'--deep', '--shallow-rest'}]
+            for flags in [()] + [(f,) for f in independent]:
                 out.append({
                     'kind': node,
                     'mode': mode,
@@ -272,6 +274,18 @@ def actions() -> list[dict[str, Any]]:
                     'needs_value': next((VALUED_FLAGS[f] for f in flags
                                          if f in VALUED_FLAGS), None),
                 })
+    composite = ('--deep', '1', '--shallow-rest')
+    out.append({
+        'kind': 'stage5.write',
+        'mode': None,
+        'label': step_label('stage5.write', composite),
+        'extra': ['--deep', '--shallow-rest'],
+        'paid': is_paid('stage5.write', composite),
+        'free_flag': None,
+        'writes': write_effect('stage5.write', composite),
+        'writes_disk': would_write('stage5.write', composite),
+        'needs_value': VALUED_FLAGS['--deep'],
+    })
     return out
 
 

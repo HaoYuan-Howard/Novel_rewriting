@@ -121,7 +121,21 @@ def build_prompt(ctx: RunContext) -> tuple[str, str, Measurable]:
     return prompts.style_system(), user, meas
 
 
-def run_style(ctx: RunContext, client: LlmClient) -> StyleGrounding:
+def request_style(
+    ctx: RunContext,
+    client: LlmClient,
+) -> tuple[str, str, Measurable, StyleResponse]:
+    system, user, measurable = build_prompt(ctx)
+    response = client.ask_json(
+        system, user, model_cls=StyleResponse, purpose=ctx.node)
+    return system, user, measurable, response
+
+
+def finish_style(
+    ctx: RunContext,
+    client: LlmClient,
+    requested: tuple[str, str, Measurable, StyleResponse],
+) -> StyleGrounding:
     """**付费**：抽一份文风画像，先校验后落盘。
 
     ⚠ `require` **不显式传**：它从 `model_cls=StyleResponse` 派生成三个必需顶层键。
@@ -132,8 +146,9 @@ def run_style(ctx: RunContext, client: LlmClient) -> StyleGrounding:
     问题稿另存 `.INVALID` + `GateBlocked`。0 成本提升路是 `--revalidate`。
     """
     store = ArtifactStore(ctx)
-    system, user, meas = build_prompt(ctx)
-    resp = client.ask_json(system, user, model_cls=StyleResponse, purpose=ctx.node)
+    system, user, meas, resp = requested
+    # Global grounding may have completed while this request was in flight.
+    _upstreams(store)
 
     artifact = StyleGrounding(
         voice=resp.voice, surface_habits=resp.surface_habits, hook_style=resp.hook_style,
@@ -161,6 +176,10 @@ def run_style(ctx: RunContext, client: LlmClient) -> StyleGrounding:
             invalid_path=str(p))
     store.write(REL, artifact)
     return artifact
+
+
+def run_style(ctx: RunContext, client: LlmClient) -> StyleGrounding:
+    return finish_style(ctx, client, request_style(ctx, client))
 
 
 def _judge(store: ArtifactStore, data: dict, *, measured_now: Measurable | None):

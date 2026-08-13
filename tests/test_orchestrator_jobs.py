@@ -75,6 +75,20 @@ def test_the_two_writing_arms_get_separate_keys_but_one_arm_is_still_mutex():
     assert deep != J.active_key(SID, 'stage3.style'), '别的节点不许与臂共用一个键'
 
 
+def test_composite_stage5_lock_conflicts_with_either_arm_but_arms_can_coexist():
+    reg = J.JobRegistry()
+    whole = J.active_key(SID, 'stage5.write', None)
+    deep = J.active_key(SID, 'stage5.write', 'deep')
+    shallow = J.active_key(SID, 'stage5.write', 'shallow')
+    reg.acquire(whole, 'whole')
+    with pytest.raises(J.JobConflict):
+        reg.acquire(deep, 'deep')
+    reg.release(whole, 'whole')
+    reg.acquire(deep, 'deep')
+    reg.acquire(shallow, 'shallow')
+    assert reg.holder(deep) == 'deep' and reg.holder(shallow) == 'shallow'
+
+
 def test_only_the_writing_node_has_arms_in_the_key():
     """⚠ 别顺手给别的节点加 mode——那会让它的键多一截而与释放那一侧分家。"""
     armed = {n for n in NODES if ':' in J.active_key(SID, n, 'deep')}
@@ -137,6 +151,63 @@ def test_the_mutex_holds_under_real_threads():
     t.start()
     t.join()
     assert hit == [True]
+
+
+def test_async_start_returns_running_and_refuses_the_same_book(base):
+    reg = J.JobRegistry()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking(argv, cwd, env, log):
+        entered.set()
+        assert release.wait(2)
+        return 0
+
+    rec = J.start(base, 'stage3.style', SID, steps=_steps(), spawn=blocking, registry=reg)
+    assert rec.state == 'running' and entered.wait(1)
+    with pytest.raises(J.JobConflict):
+        J.start(base, 'stage3.style', SID, steps=_steps(), spawn=_fake(), registry=reg)
+    release.set()
+    assert J.wait(rec.job_id, 2)
+    assert J.records(base, registry=reg)[0].state == 'ok'
+
+
+def test_async_prepare_runs_under_the_book_lock_and_releases_on_failure(base):
+    reg = J.JobRegistry()
+    key = J.active_key(SID, 'stage3.style')
+
+    def reject():
+        assert reg.holder(key) is not None
+        raise RuntimeError('approval changed')
+
+    with pytest.raises(RuntimeError, match='approval changed'):
+        J.start(base, 'stage3.style', SID, steps=_steps(), registry=reg, prepare=reject)
+    assert reg.holder(key) is None
+    assert J.read_events(base) == []
+
+
+def test_two_novels_run_in_parallel_and_keep_separate_locks(base):
+    reg = J.JobRegistry()
+    release = threading.Event()
+    both_entered = threading.Event()
+    lock = threading.Lock()
+    entered = 0
+
+    def blocking(argv, cwd, env, log):
+        nonlocal entered
+        with lock:
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+        assert release.wait(2)
+        return 0
+
+    first = J.start(base, 'stage3.style', 'book-a', steps=_steps(), spawn=blocking, registry=reg)
+    second = J.start(base, 'stage3.style', 'book-b', steps=_steps(), spawn=blocking, registry=reg)
+    assert both_entered.wait(1), 'different novels were serialized'
+    release.set()
+    assert J.wait(first.job_id, 2) and J.wait(second.job_id, 2)
+    assert {r.state for r in J.records(base, registry=reg)} == {'ok'}
 
 
 # ───────────────────── 事件流：append-only ─────────────────────

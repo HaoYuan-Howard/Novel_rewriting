@@ -25,10 +25,12 @@ from __future__ import annotations
 import glob
 import os
 import re
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
 from contracts.invariants import DEPTH_MODES, STOP_REWRITE_AFTER
+from novel.config import MAX_CONCURRENCY
 from contracts.rules import REGISTRY
 from contracts.schema.common import (
     InputEdge, RoundFreeProvenance, RoundLlmProvenance,
@@ -287,76 +289,234 @@ def run_write(ctx: RunContext, client: LlmClient,
     return _run_group(ctx, store, book, todo, client, mode=mode, revise=None)
 
 
-def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
-               todo: list[dict[str, Any]], client: LlmClient, *, mode: str,
-               revise: dict[int, tuple[str, list[list[str]], str]] | None) -> CheckReport:
-    """写一批章。`revise` 非空 ⇒ 这是修订轮（SYS 拼 `REVISE_TAIL`、user 带上一轮成稿）。"""
+def run_selected(
+    deep_ctx: RunContext,
+    deep_client: LlmClient,
+    shallow_ctx: RunContext,
+    shallow_client: LlmClient,
+    deep_chapters: tuple[int, ...],
+) -> dict[str, CheckReport]:
+    if deep_ctx.mode != 'deep' or shallow_ctx.mode != 'shallow':
+        raise TerminalState('composite writing requires deep and shallow contexts')
+    store = ArtifactStore(deep_ctx)
+    book = review.load_book(deep_ctx, store)
+    planned = set(book.chapters)
+    selected = {int(value) for value in deep_chapters}
+    if missing := sorted(selected - planned):
+        raise TerminalState(f'deep chapters are absent from the writing plan: {missing}')
+    assigned = {'deep': selected, 'shallow': planned - selected}
+
+    from novel.orchestrator.state import chapters_done
+    done = {
+        mode: set(chapters_done(deep_ctx.novel_dir, mode))
+        for mode in DEPTH_MODES
+    }
+    conflicts: list[str] = []
+    for mode, ordinals in assigned.items():
+        other = 'shallow' if mode == 'deep' else 'deep'
+        for ordinal in sorted(ordinals):
+            wrong = _rel(other, ordinal)
+            if store.exists(wrong) or store.exists(paths.invalid_of(wrong)):
+                conflicts.append(f'ch{ordinal} already has a {other} draft')
+    if conflicts:
+        raise TerminalState(
+            'human depth selection conflicts with existing drafts: '
+            + '; '.join(conflicts))
+    contexts = {'deep': deep_ctx, 'shallow': shallow_ctx}
+    clients = {'deep': deep_client, 'shallow': shallow_client}
+    work = {
+        mode: sorted(ordinals - done[mode])
+        for mode, ordinals in assigned.items()
+        if ordinals - done[mode]
+    }
+    if not work:
+        assemble_book(deep_ctx, store, book)
+        raise TerminalState('all chapters already have drafts in their selected arms')
+
+    reports: dict[str, CheckReport] = {}
+    failures: list[Exception] = []
+    with ThreadPoolExecutor(max_workers=len(work)) as pool:
+        futures = {
+            pool.submit(
+                run_write,
+                contexts[mode],
+                clients[mode],
+                ','.join(str(value) for value in ordinals),
+            ): mode
+            for mode, ordinals in work.items()
+        }
+        for future in as_completed(futures):
+            mode = futures[future]
+            try:
+                reports[mode] = future.result()
+            except Exception as exc:
+                failures.append(exc)
+    assemble_book(deep_ctx, store, book)
+    if failures:
+        raise failures[0]
+    return reports
+
+
+def _generate_chapter(
+    entry: dict[str, Any],
+    book: M.Book,
+    client: LlmClient,
+    *,
+    mode: str,
+    revise: dict[int, tuple[str, list[list[str]], str]] | None,
+    system: str,
+    progress: RequestProgress,
+) -> dict[str, Any]:
+    ordinal = int(entry['output_ordinal'])
+    mat = prompts.build_material(
+        entry, book, with_source_text=_ARMS[mode].with_source_text)
+    if revise is not None:
+        prev_text, fixes, review_fp = revise[ordinal]
+        user = prompts.revise_user(mat, prev_text, _fix_lines(fixes))
+    else:
+        prev_text, fixes, review_fp = '', [], ''
+        user = prompts.build_user(mat)
+    try:
+        got = client.ask_text(
+            system, user, purpose=ctx_purpose(entry), max_tokens=MAX_TOKENS,
+            validator=_reject_length_capped, progress=progress)
+    except LlmFailed as exc:
+        return {'error': str(exc).splitlines()[0]}
+    text = (got or '').strip()
+    if not text:
+        return {'error': '没有拿到正文'}
+    text, account = M.normalize_chapter(
+        text, quote_style=book.quote_style, sep_chars=book.sep_chars)
+    text, trim_notes = _trim_to_fit(
+        client, text, entry, book, mode=mode, progress=progress)
+    return {
+        'entry': entry, 'ordinal': ordinal, 'mat': mat, 'user': user,
+        'text': text, 'account': account, 'trim_notes': trim_notes,
+        'prev_text': prev_text, 'fixes': fixes, 'review_fp': review_fp,
+    }
+
+
+def _run_group_parallel(
+    ctx: RunContext,
+    store: ArtifactStore,
+    book: M.Book,
+    todo: list[dict[str, Any]],
+    client: LlmClient,
+    *,
+    mode: str,
+    revise: dict[int, tuple[str, list[list[str]], str]] | None,
+) -> CheckReport:
     system = prompts.write_system(mode, revise=revise is not None)
     judged: dict[int, list] = {}
-    written: list[str] = []
-    blocked: list[str] = []
-    tracker = ChapterProgressTracker(
-        ctx.observe, [int(entry['output_ordinal']) for entry in todo])
-    for entry in todo:
-        o = int(entry['output_ordinal'])
-        progress = tracker.request(o)
-        mat = prompts.build_material(entry, book,
-                                     with_source_text=_ARMS[mode].with_source_text)
-        if revise is not None:
-            prev_text, fixes, review_fp = revise[o]
-            user = prompts.revise_user(mat, prev_text, _fix_lines(fixes))
-        else:
-            prev_text, fixes, review_fp = '', [], ''
-            user = prompts.build_user(mat)
-        try:
-            got = client.ask_text(
-                system, user, purpose=ctx_purpose(entry), max_tokens=MAX_TOKENS,
-                validator=_reject_length_capped, progress=progress)
-        except LlmFailed as exc:
-            # 单章的四档都失败不该推倒整批；网络级错误仍向上抛，避免故障时继续烧钱。
-            blocked.append(
-                f'第 {o} 章没拿到完整正文：{str(exc).splitlines()[0]}')
-            tracker.finish(o, outcome='failed', detail=str(exc).splitlines()[0])
-            continue
-        text = (got or '').strip()
-        if not text:
-            # 【显式终态·一章失败不中断整批】——但要说出是哪一章。
-            blocked.append(f'第 {o} 章没拿到正文')
-            tracker.finish(o, outcome='failed', detail='没有拿到正文')
-            continue
-        # ⚠⚠ **归一跑在收缩之前**：`normalize_paragraphs` 会把单换行改成空行分段，
-        #   **它往文本里加字符**，而 `budget_chars` 的口径含空白。曾有一章归一前 1408 字
-        #   （未触发收缩，正确），段落归一 +101 个换行 → 1509 字 → 被落盘闸门阻断
-        #   ——**它是被「修版式」这个动作推过线的**，而唯一能救它的收缩已经跑完并正确地拒绝了。
-        text, acc = M.normalize_chapter(text, quote_style=book.quote_style,
-                                        sep_chars=book.sep_chars)
-        text, trim_notes = _trim_to_fit(
-            client, text, entry, book, mode=mode, progress=progress)
-        rnd = store.next_round(_rel(mode, o))
-        extra: dict[str, Any] = {'round': rnd}
-        if revise is not None:
-            extra.update(revision_of=prov.fingerprint(prev_text), review=review_fp,
-                         fixes=[list(f) for f in fixes])
-        provenance = ctx.llm_provenance(
-            RoundLlmProvenance,
-            prompts=({'SYS': system, 'REVISE': prompts.REVISE_TAIL} if revise is not None
-                     else {'SYS': system}),
-            model=client.model, **extra)
-        where, errs, fs = _write_chapter(ctx, store, entry, book, mode=mode, text=text,
-                                         mat=mat.given, account=acc, provenance=provenance)
-        judged[o] = fs
-        (blocked if errs else written).append(
-            f'第 {o} 章 → {where}' + (f'（{len(errs)} 条阻断级）' if errs else '')
-            + (f'　⚠ {"；".join(trim_notes)}' if trim_notes else ''))
-        tracker.finish(
-            o, outcome='blocked' if errs else 'ok',
-            detail=str(errs[0]) if errs else (trim_notes[0] if trim_notes else None))
-    report = _report(ctx, store, mode, written=written, blocked=blocked, judged=judged)
+    written_by: dict[int, str] = {}
+    blocked_by: dict[int, str] = {}
+    ordinals = [int(entry['output_ordinal']) for entry in todo]
+    tracker = ChapterProgressTracker(ctx.observe, ordinals)
+    workers = min(
+        MAX_CONCURRENCY,
+        max(1, int(getattr(client, 'concurrency', MAX_CONCURRENCY))),
+        len(todo),
+    )
+    fatal: Exception | None = None
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _generate_chapter,
+                entry,
+                book,
+                client,
+                mode=mode,
+                revise=revise,
+                system=system,
+                progress=tracker.request(int(entry['output_ordinal'])),
+            ): int(entry['output_ordinal'])
+            for entry in todo
+        }
+        for future in as_completed(futures):
+            ordinal = futures[future]
+            try:
+                generated = future.result()
+            except CancelledError:
+                blocked_by[ordinal] = (
+                    f'第 {ordinal} 章因同批网络故障在发请求前取消')
+                tracker.finish(
+                    ordinal, outcome='failed', detail='同批网络故障，未发请求')
+                continue
+            except Exception as exc:
+                if fatal is None:
+                    fatal = exc
+                    for pending in futures:
+                        if pending is not future:
+                            pending.cancel()
+                blocked_by[ordinal] = (
+                    f'第 {ordinal} 章网络级失败：{type(exc).__name__}: '
+                    f'{str(exc).splitlines()[0]}')
+                tracker.finish(
+                    ordinal, outcome='failed', detail=str(exc).splitlines()[0])
+                continue
+
+            if error := generated.get('error'):
+                blocked_by[ordinal] = (
+                    f'第 {ordinal} 章没拿到正文' if error == '没有拿到正文'
+                    else f'第 {ordinal} 章没拿到完整正文：{error}')
+                tracker.finish(ordinal, outcome='failed', detail=error)
+                continue
+
+            entry = generated['entry']
+            round_number = store.next_round(_rel(mode, ordinal))
+            extra: dict[str, Any] = {'round': round_number}
+            if revise is not None:
+                extra.update(
+                    revision_of=prov.fingerprint(generated['prev_text']),
+                    review=generated['review_fp'],
+                    fixes=[list(item) for item in generated['fixes']],
+                )
+            provenance = ctx.llm_provenance_for_chapter(
+                ordinal,
+                RoundLlmProvenance,
+                prompts=(
+                    {'SYS': system, 'REVISE': prompts.REVISE_TAIL}
+                    if revise is not None else {'SYS': system}),
+                model=client.model,
+                **extra,
+            )
+            where, errors, findings = _write_chapter(
+                ctx, store, entry, book, mode=mode,
+                text=generated['text'], mat=generated['mat'].given,
+                account=generated['account'], provenance=provenance)
+            judged[ordinal] = findings
+            trim_notes = generated['trim_notes']
+            line = (
+                f'第 {ordinal} 章 → {where}'
+                + (f'（{len(errors)} 条阻断级）' if errors else '')
+                + (f'　⚠ {"；".join(trim_notes)}' if trim_notes else '')
+            )
+            (blocked_by if errors else written_by)[ordinal] = line
+            tracker.finish(
+                ordinal,
+                outcome='blocked' if errors else 'ok',
+                detail=(str(errors[0]) if errors
+                        else (trim_notes[0] if trim_notes else None)),
+            )
+
+    if fatal is not None:
+        raise fatal
+    written = [written_by[key] for key in sorted(written_by)]
+    blocked = [blocked_by[key] for key in sorted(blocked_by)]
+    report = _report(
+        ctx, store, mode, written=written, blocked=blocked, judged=judged)
     if blocked and not written:
         raise GateBlocked(
             f'这一批 {len(todo)} 章全部没落成正式稿：' + '；'.join(blocked),
             invalid_path=str(store.path(f'stage5/{mode}')))
     return report
+
+
+def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
+               todo: list[dict[str, Any]], client: LlmClient, *, mode: str,
+               revise: dict[int, tuple[str, list[list[str]], str]] | None) -> CheckReport:
+    return _run_group_parallel(
+        ctx, store, book, todo, client, mode=mode, revise=revise)
 
 
 def _fix_lines(fixes: list[list[str]]) -> list[str]:

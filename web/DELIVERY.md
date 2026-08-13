@@ -159,15 +159,16 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 2. **产物应直接下发 `freshness: 'missing'`**，别让前端用 `!exists` 推第四态。
    现在这个推导集中在 `vocabulary.ts` 的 `freshnessOf()` 一处，但它仍然是前端判定。
 
-3. **Stage 0/1 已接真实接口，depth 验收仍未接。**
+3. **Stage 0/1、通用作业启动与 approvals 已接真实接口；depth 的 Stage4 读屏仍待接。**
    - Stage 0：`report` / `segments` / `edit` / `approve`
    - Stage 1：`partition` / `segments` / `chapters` / `hook_copy`
    - 上传：`POST /api/upload?filename=`，请求体是原始文件字节
-   - 深度章节选择仍建议并入人工验收记录：`GET/POST /api/novels/:sid/approvals`
-     （现在前端定义的形状：`{v, sid, gate{s0..s7}, seen{read,global}, deep[], writing, spawns}`）
+   - 深度章节选择已写入人工验收记录：`GET/POST /api/novels/:sid/approvals`
+     （形状：`{v, sid, gate{s0..s7}, seen{read,global}, deep[], writing, spawns}`）
    - `spawns`：确认某道闸门之后服务端会发起哪些动作。
-     现在由 mock 下发，界面据此决定闸门按钮是不是橙的 ——
-     **否则「谁会花钱」就要在前后端各存一份。**
+     真实服务和 mock 都下发同一形状，界面再用 `/api/enums` 判定按钮颜色；
+     **“谁会花钱”仍只有服务端一个落点。**
+   - `/depth` 还依赖 FE-01 中尚未提供的 Stage4 读屏；关闭 mock 后不能把该缺口伪装为空计划。
 
 4. **`null` 与 `[]` 在两层之间不一致，前端要写两套判空**：
    - `stage4.chapter.beats[]`：`keep_value` / `must_appear` / `must_hold` 缺省是 `[]`；

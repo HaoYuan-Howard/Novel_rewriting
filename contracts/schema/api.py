@@ -31,6 +31,8 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
+    APPROVAL_GATES,
+    APPROVAL_SEEN,
     HOOK_KEYS,
     NONBODY_KINDS,
     REMOVED_ORIGIN,
@@ -51,6 +53,8 @@ Stage0SegmentKind = Literal[STAGE0_SEGMENT_KINDS]
 Stage1SegmentKind = Literal[STAGE1_SEGMENT_KINDS]
 NonbodyKind = Literal[NONBODY_KINDS]
 RemovedOrigin = Literal[REMOVED_ORIGIN]
+GateKey = Literal[APPROVAL_GATES]
+SeenKey = Literal[APPROVAL_SEEN]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -430,6 +434,43 @@ class PreviewRequest(StrictModel):
     node: str = Field(min_length=1)
     mode: str | None = None
     flags: list[str] = Field(default_factory=list)
+
+
+class ApprovalAction(FrozenModel):
+    kind: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    extra: list[str] | None = None
+    mode: str | None = None
+
+
+class ApprovalDoc(StrictModel):
+    v: Literal[1] = 1
+    sid: str = Field(min_length=1)
+    gate: dict[GateKey, bool]
+    seen: dict[SeenKey, bool]
+    deep: list[int] = Field(default_factory=list)
+    writing: bool = False
+    spawns: dict[GateKey, list[ApprovalAction]] = Field(default_factory=dict)
+
+    @model_validator(mode='after')
+    def _approval_state_is_complete(self) -> ApprovalDoc:
+        if set(self.gate) != set(APPROVAL_GATES):
+            raise ValueError('gate must contain exactly s0..s7')
+        if set(self.seen) != set(APPROVAL_SEEN):
+            raise ValueError('seen must contain exactly read/global')
+        if self.deep != sorted(set(self.deep)) or any(n < 1 for n in self.deep):
+            raise ValueError('deep must be sorted, unique positive chapter ordinals')
+        return self
+
+
+class DeepSelectionRequest(StrictModel):
+    deep: list[int] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _selection_is_canonical(self) -> DeepSelectionRequest:
+        if self.deep != sorted(set(self.deep)) or any(n < 1 for n in self.deep):
+            raise ValueError('deep must be sorted, unique positive chapter ordinals')
+        return self
 
 
 # ─────────────────────────────────────────────────────────────────────────────

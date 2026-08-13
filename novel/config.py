@@ -53,10 +53,10 @@ DEFAULT_MAX_RETRIES = 3
 #: 退避基数（秒），指数退避 `base * 2**n`。⚠ 同上，拍的。
 DEFAULT_BACKOFF_BASE = 2.0
 
-#: 并发闸。⚠ **拍的**，取 2 是因为本项目是**批量**服务而不是交互服务：
-#: 并发越高，一次配置错误（比如 prompt 漂了）在被人看见之前烧掉的钱越多。
-#: 提高它之前先问「这一批的单价是多少」。
-DEFAULT_CONCURRENCY = 2
+#: 逐章 LLM 并发闸。2026-08-13 用户裁决：初始抽取与写作都按章并发，硬上限 32。
+#: 默认即用满上限；这是**并发数**，不是速率限制，传输层的重试/退避仍各自生效。
+MAX_CONCURRENCY = 32
+DEFAULT_CONCURRENCY = MAX_CONCURRENCY
 
 #: 字段 → 喂它的那个环境变量。**唯一落点**：`load_config` 与出错文案共用这一张表，
 #: 免得报错说的变量名与真正读的那个分了家（那种错最费时间：人照着改，而它一直没生效）。
@@ -120,6 +120,8 @@ class Config:
             raise bad('backoff_base', '退避基数必须是一个有限的非负数（秒）')
         if self.concurrency < 1:
             raise bad('concurrency', '并发闸至少是 1——取 0 的话整跑在信号量上死锁')
+        if self.concurrency > MAX_CONCURRENCY:
+            raise bad('concurrency', f'逐章并发硬上限是 {MAX_CONCURRENCY}')
         if not self.model:
             raise bad('model', '模型 id 不能是空的（`_provenance.model` 靠它答「谁产了这份稿」）')
         if not self.base_url:

@@ -56,6 +56,7 @@ from contracts.schema.stage2 import (
     MigratableChapterBlueprints, RoleSplitResponse,
 )
 from novel import paths, prov
+from novel.config import MAX_CONCURRENCY
 from novel.errors import GateBlocked, RunModeNotImplemented, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
 from novel.llm.prompts import with_json_shape
@@ -740,7 +741,7 @@ def _run_chapter_requests(
         return response.model_dump(by_alias=True)['blueprints']
 
     with ThreadPoolExecutor(
-        max_workers=min(client.concurrency, max(1, len(concrete)))
+        max_workers=min(MAX_CONCURRENCY, client.concurrency, max(1, len(concrete)))
     ) as pool:
         futures = {
             pool.submit(one, ordinal, system, user): (i, ordinal)
@@ -1014,26 +1015,35 @@ def _run_blueprint_repair(
     return _report(ctx, store, both, both.judge())
 
 
-def run_blueprint(
-    ctx: RunContext,
-    client: LlmClient,
-    *,
-    chapters: tuple[int, ...] = (),
-) -> CheckReport:
-    """付费逐章抽取；每章独立请求，合并后统一归一、联合校验和落盘。"""
+def request_blueprints(ctx: RunContext, client: LlmClient) -> dict[str, Any]:
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
     assert main_text is not None
+    requests = build_prompts(ctx)
+    raw, violations, errors = _run_chapter_requests(ctx, client, requests)
+    return {
+        'main_text': main_text,
+        'requests': requests,
+        'raw_blueprints': raw,
+        'scope_violations': violations,
+        'errors': errors,
+    }
+
+
+def finish_blueprints(
+    ctx: RunContext,
+    client: LlmClient,
+    batch: dict[str, Any],
+) -> CheckReport:
+    """付费逐章抽取；每章独立请求，合并后统一归一、联合校验和落盘。"""
+    store = ArtifactStore(ctx)
+    main_text = batch['main_text']
     global_art = store.read(GlobalGrounding, GLOBAL_REL)
     global_raw = global_art.model_dump(by_alias=True)
-    if chapters:
-        return _run_blueprint_repair(
-            ctx, client, chapters=chapters, store=store,
-            main_text=main_text, global_raw=global_raw)
-
-    requests = build_prompts(ctx)
-    raw_blueprints, scope_violations, errors = _run_chapter_requests(
-        ctx, client, requests)
+    requests = batch['requests']
+    raw_blueprints = batch['raw_blueprints']
+    scope_violations = batch['scope_violations']
+    errors = batch['errors']
     if not raw_blueprints:
         if errors:
             raise errors[0]
@@ -1077,6 +1087,28 @@ def run_blueprint(
     store.write(BLUEPRINT_REL, artifact)
     both = _Both(store)
     return _report(ctx, store, both, both.judge())
+
+
+def run_blueprint(
+    ctx: RunContext,
+    client: LlmClient,
+    *,
+    chapters: tuple[int, ...] = (),
+) -> CheckReport:
+    store = ArtifactStore(ctx)
+    main_text = _read_main_text(store)
+    assert main_text is not None
+    global_art = store.read(GlobalGrounding, GLOBAL_REL)
+    if chapters:
+        return _run_blueprint_repair(
+            ctx,
+            client,
+            chapters=chapters,
+            store=store,
+            main_text=main_text,
+            global_raw=global_art.model_dump(by_alias=True),
+        )
+    return finish_blueprints(ctx, client, request_blueprints(ctx, client))
 
 
 def run_migrate(ctx: RunContext) -> CheckReport:
