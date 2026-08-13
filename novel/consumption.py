@@ -180,6 +180,7 @@ def stage5_style(data: object) -> object:
     return {
         'voice': data.get('voice'),
         'surface_habits': data.get('surface_habits'),
+        'chapter_styles': data.get('chapter_styles'),
         'measurable': data.get('measurable'),
     }
 
@@ -344,6 +345,13 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         'stage3/style_grounding.json': stage5_style,
         'stage4/writer_context.json': stage5_review_context,
     },
+    'stage5.semantic': {
+        'stage1/main_text.json': stage5_main_text,
+        'stage2/global_grounding.json': stage5_grounding,
+        'stage3/style_grounding.json': stage5_style,
+        'stage4/writer_context.json': stage5_review_context,
+        'stage5/review_{n}.json': artifact_payload,
+    },
     'stage6.hook': {
         'stage1/hook_copy.json': stage6_hook_copy,
         'stage2/global_grounding.json': stage6_grounding,
@@ -369,7 +377,12 @@ def canonical_rel(rel: str) -> str:
 
 def projection_for(node: str, rel: str) -> Projection | None:
     """节点对某份上游的唯一投影；未登记返回 ``None``（诚实地 unknown）。"""
-    return CONSUMED_PROJECTIONS.get(node, {}).get(canonical_rel(rel))
+    rel = canonical_rel(rel)
+    table = CONSUMED_PROJECTIONS.get(node, {})
+    direct = table.get(rel)
+    if direct is not None:
+        return direct
+    return next((project for template, project in table.items() if _matches(template, rel)), None)
 
 
 def _matches(template: str, rel: str) -> bool:

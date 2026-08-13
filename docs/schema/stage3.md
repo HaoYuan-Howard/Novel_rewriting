@@ -1,9 +1,15 @@
 # stage3 产物 schema
 
-文风画像。**全书一次调用**，产一份产物。对应需求 `R-4.1` ~ `R-4.10`。
+文风画像，对应需求 `R-4.1` ~ `R-4.15`。第 3 批保留两条可比实验臂：
+
+- `baseline-v1`：全书正文一次调用，保持已有字节与成本基线；
+- `anti-leak-v2`：每个源章独立抽取定性 `voice/surface_habits`，再用一次不含正文的聚合请求产全局摘要与 `hook_style`。
+
+三本真实小说实验后，生产默认值为 `anti-leak-v2`；`baseline-v1` 继续作为可显式选择的
+逐字节基线。两臂都只产一份正式产物，不将“第一轮/第二轮”冒充两份现役产物。
 
 ```
-stage3/style_grounding.json     {voice, surface_habits[], hook_style, measurable, _provenance}
+stage3/style_grounding.json     {voice, surface_habits[], hook_style, measurable, [chapter_styles[]], _provenance}
 ```
 
 读法（证据列的取值、为什么三源合并）见 `_README.md`。
@@ -47,7 +53,7 @@ stage3/style_grounding.json     {voice, surface_habits[], hook_style, measurable
 > **`voice` 八维、`hook_style` 七项、`surface_habits` 的【内容质量】一条判据都没有**（`R-4.7` → `B-09`）。
 > ⇒ PASS 的意思是「没有可探测的越界」，**不是「这份文风画像抓对了」**。
 >
-> ### ③ 这份产物**整份进写作节点的 prompt**，而且**全链只有它没有章级闸门**
+> ### ③ 基线臂的全局定性风格会整份进写作 prompt；逐章臂已收窄这个泄露面
 >
 > 实测投影：`voice` 八维**逐条原样发** + `surface_habits` 逐条原样发 + `measurable` 转成档位词。
 > ⇒ 一处越界 = 全书每一章的 prompt 里都有它。
@@ -55,11 +61,13 @@ stage3/style_grounding.json     {voice, surface_habits[], hook_style, measurable
 > | | 产物粒度 | 下发时有没有章级闸门 |
 > |---|---|---|
 > | stage2 | 逐章 + 全书 | **有**（逐章投影：叫法时点、秘密揭示章、规则放行章…） |
-> | **stage3** | **全书一份** | **没有。整份、原样、每一章都发** |
+> | **stage3 `baseline-v1`** | **全书一份** | **没有。全局 `voice/surface_habits` 原样发每章** |
+> | **stage3 `anti-leak-v2`** | 一份产物内每源章一份 `chapter_styles[]` | **有。Stage 5 只选当前源章的定性风格** |
 >
 > **实测代价**：某本的 `voice.mode_variation` 写了「…系统摊牌…尾声（系统介入）…」，
 > 而「系统」是一条读者第 14 章才知情的秘密的主体——写第 1 章的闭卷写手当场读到全书最大的底。
-> 这就是 `name_leak` 判 `HARD` 的依据（升级代价实测：两本合计只有那 1 处）。
+> 这就是 `name_leak` 判 `HARD` 的依据，也是 `anti-leak-v2` 的实验动机。
+> 逐章臂的单章请求只包含全书机械形态档位与当前章正文；人物与书名字面先由代码脱敏。聚合请求只看已抽象的章风格与开篇文案，不再看正文。
 >
 > ⚠ **`R-4.5`「必须可迁移」实际上是这个缺口的【代理】。** 它禁掉一切本书专属内容，
 > 不是因为这份描述真会被套到另一本书上（它永远只用于本书），
@@ -70,7 +78,7 @@ stage3/style_grounding.json     {voice, surface_habits[], hook_style, measurable
 > 「只要在合适的章节出现，就不算泄露」一量就把同一句话切成两半——
 > 三岁 `interiority` 里的「弹幕」首现 ch1（8/9 章都有，合规），
 > 「系统」首现 ch7、「托梦」首现 ch4（而这份描述整份进 ch1 的 prompt，违规）。
-> 缺口是**结构性的**，拿词表去补只会再造一条没有基线的判据。**登记在 `B-09`，明写「不查」。**
+> 第 3 批因此不扩词表，而是增加结构性的逐章实验臂。`B-09` 仍保留的是自由散文的内容质量无法确定性证明，不是“未做章级隔离”。
 >
 > ### ④ 本层是**先校验后落盘**，而且有两条不同的「不合格」路径
 >
@@ -79,9 +87,9 @@ stage3/style_grounding.json     {voice, surface_habits[], hook_style, measurable
 > | 有 `hard` 违规 | 不覆盖现役产物，问题稿存 `style_grounding.INVALID.json` + 显式终态 |
 > | **阻断级判据【没跑成】** | 同样落 `.INVALID`，另记 `_provenance.gates_skipped` |
 >
-> `name_leak` 是 `HARD`，但它要 stage2 的人物名表。现在并发只覆盖**付费请求阶段**：
-> Stage3 请求与 `stage2.global` 同时起跑，`finish_style` 必须等 global 落盘后重新读取人物表，
-> 再执行闸门并决定正式稿还是 `.INVALID`。因此“调用可并行”不再被偷换成“缺料也可落正式稿”。
+> `name_leak` 是 `HARD`，而默认逐章臂在请求前就要 stage2 的人物名表做脱敏。
+> 因此联合首跑必须先让 `stage2.global` 落稳，再并发扇出 `stage2.blueprint` 与 Stage 3
+> 逐章请求；缺名表会显式拒绝，不把“没有检查材料”偷换成防泄露。
 > `--revalidate` 仍用于历史问题稿或异常中断留下的未验稿；流程尾部的 0 成本复检负责钉住
 > 最终状态，但不再承担把已经误落的正式稿倒退回问题稿这一件做不到的事。
 
@@ -142,22 +150,15 @@ stage3/style_grounding.json     {voice, surface_habits[], hook_style, measurable
 > ⚠ 它 5/5 本触发**不是判据错**——是模型确实 5/5 本都在举词例。
 > 判据 20 的检验（按它去修数据会不会让产物变得更差）在这条上的答案是：不会。
 >
-> **它还是本层唯一有【定向返工】通道的字段**：只坏 `surface_habits` 时不重发全书正文，
-> 只把那一个列表发去改写（`HABIT_REPAIR_SYS`），其余字段一个字不动。
-> ⚠ 配套一条回归护栏——返工回来的列表**不是无条件覆盖**：更坏就保留旧的。
+> **它还是本层唯一有【定向返工】通道的字段**。首轮的唯一阻断集合恰为
+> `{habit_quote}` 时，流程自动进入第二轮；其他阻断项不会被一个泛化 prompt 冒充成“可修”。
 >
-> ⚠⚠ **但返工本身超范围了**（`R-4.10`，实测）：判据只要求删 53 字（8 处引号词例，
-> **一个都没抓错**），而返工**另外多删 42 字**（占删除总量 44%），
-> 包括 `打脸` / `清脆感` / `嘴巴失控的` 这类**通用写法描述**——正是这个字段该有的东西。
-> 根因是**判据与返工 prompt 不是同一条要求**：`HABIT_REPAIR_SYS` 写着「逐条一一对应改写…
-> 每条只说：什么类别的词或句式 + 放在什么位置 + 造成什么效果」，
-> 这句授权了**整条重写并压缩**（总字数 332 → 264，0.80×）。
-> ⇒ **移植时返工 prompt 要收窄成「只替换引号内的字面，其余一字不动」。**
-> （实测第 5 条本来就合规、一字未改 ⇒ 它不是无差别压缩，只是压的时候顺手削掉了非引号内容。）
+> 第 3 批已将原型的超范围返工收窄为 `HABIT_LITERAL_REPAIR_SYS`：LLM 只返回
+> `{ 命中引号字面: 抽象类别 }`，且键集必须与机械 evidence 完全相同。确定性代码
+> 原位替换引号及其内容；引号外字节、条目数和顺序不交给模型。采用前还会重跑
+> 全套判据，拒绝剩余引号、新阻断或任何新的非目标 finding。
 >
-> ⚠ **本节点的真实调用数恒 ≥ 1，不可能靠缓存白跑**：表层习惯引原句 **5/5 本全犯**，
-> 而带反馈重抽那一次不读缓存。重跑路径恒为「首抽命中缓存 → 返回同一份违规稿 → 必然重抽 → 重抽不吃缓存」。
-> 报预算按「1~2 次」。
+> 这条路用 `refresh-write` 绕开已知问题缓存，但只在确有命中时发起；已通过的首轮不为了形式上的“两轮”额外花费一次。
 
 ---
 
@@ -270,6 +271,9 @@ stage6 把它**整份 `json.dumps` 发过去**，另有一条判据把 `end_ques
 而且**语气不同**：档位词是**可执行的指令**（「写出来要落在这些档上」），
 数值是**校准锚点**（「写完回看…就是写成了另一本书」）。
 
+⚠ 上表的数字在两条实验臂上都来自**全书正文聚合测量**。`anti-leak-v2` 逐章的只是
+LLM 产的定性 `voice/surface_habits`；句长、段长、对白比等不会退化为单章高方差小样本。
+
 ⚠ **写作侧那三个数值逐字写死。** `measurable.body` 有 **14 项**；
 只写「写作侧可以发实测数值」，那 14 项里发哪几项就成了**自由变量**
 （同形的坑踩过一次：写法词表在 prompt 里手抄了一个子集，10 个词只提了 2 个，
@@ -287,18 +291,25 @@ stage6 把它**整份 `json.dumps` 发过去**，另有一条判据把 `end_ques
 
 四个共有键（`prompts` / `model` / `code` / `inputs`）留给 `_common.md`。
 本层的 `inputs` 恒有三条：`stage1/main_text.json` · `stage1/hook_copy.json` · `stage2/global_grounding.json`。
-⚠ 第三条只被**校验期**用（取人物名表），**抽取本身不吃 stage2**——风格与情节正交。
+基线臂只在校验期消费第三条；默认逐章臂还消费其中的专名表做确定性脱敏，
+不消费或下发 Stage 2 的 secret 事实。
 
 | 键 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
 | `attempts` | `obj[]` | 是 | 逐次尝试。盘上长度 1~2，共 4 条 | **盘·码** |
-| `attempts[].kind` | `str` | 是 | `initial` ｜ `surface_habits_targeted_repair`。盘上 3 / 1 | **盘·码** |
+| `attempts[].kind` | `str` | 是 | `initial` ｜ `surface_habits_targeted_repair` ｜ `chapter_local` ｜ `chapter_aggregate`。后两者只属于 `anti-leak-v2` | **契·码** |
+| `attempts[].chapter_ordinal` | `int` | 否 | `chapter_local` 必填且只有它可填；让每次请求与源章绑定 | **契·码** |
 | `attempts[].user_prompt` · `.output` | `str` | 是 | 指纹 | **盘·码** |
 | `attempts[].cache_policy` | `str` | 是 | `default` ｜ `refresh-write` ｜ `disabled`。**盘上只见前两个** | **盘·码** |
 | `attempts[].{input, evidence, evidence_count, model, code}` | — | **否** | **只有返工那一条有**（盘上 1/4）。`evidence` = 被改写的字面清单的指纹 | **盘·码** |
 | `gates_skipped` | `str[]` | **否** | 阻断级判据里**没跑成**的那些。**只写在 `.INVALID` 稿上**（见事实 ④）。盘上零样本——三本都是串行跑的 | **契·码** |
 | `revalidated` | `bool` | **否** | 这份稿是被 `--revalidate` / `--apply-edit` 提升上来的。盘上 1/3 | **盘·码** |
 | `prompts.HABIT_REPAIR_SYS` | `str` | **否** | 只有跑过返工的那本有。盘上 1/3 | **盘·码** |
+
+`baseline-v1` 一次主抽取；`anti-leak-v2` 为 `N` 次章级调用 + 1 次聚合。
+2026-08-14 的同三本实验已完成：逐章臂从结构上移除了未来章正文暴露面，并在
+《攻略女主系统》中确定性抽象掉 8 处模型自行推断的机制字面；三本正式产物均通过 Stage 3
+闸门。它增加调用量，但泄露隔离属于安全边界而不是可由均值抵消的软指标，故升为默认。
 
 ⚠ **`revalidated` 刻意不宣称 `origin=human`**：「规则改了」与「人手改过 `.INVALID`」
 在节点这一侧**分不开**，所以它只能诚实地记「这份稿被重判提升过」。

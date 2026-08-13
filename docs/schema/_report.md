@@ -67,6 +67,9 @@
 | `status` | `str` | **是** | §一那四个 | **设计** |
 | `item` | `str` | **是** | 人读的一句话「这条在守什么」。**从注册表取** | **契·码** |
 | `requirement` | `str` | **是** | `R-x.y`。让报告能反查「这条判据在满足哪条需求」 | **契·码** |
+| `check_kind` | `str` | **是** | `mechanical｜semantic`：是确定性检查还是 LLM 语义审判。**与严重度正交** | **契·码** |
+| `remediation` | `str` | **是** | `llm｜human｜deterministic｜none`：工作流的下一步，从现有 `repair/fix/sev` 统一投影 | **契·码** |
+| `fix` | `obj｜null` | **是** | 可执行修复路由 `{node, flags[], paid}`；无结构化路由时为 `null` | **契·码** |
 | `findings` | `Finding[]` | **是** | 这条判据这一次的产出。**度量的读数也装在这里** | **设计** |
 | `why` | `str｜null` | **是**（可为 `null`） | `status='skipped'｜'unver'` 时非空，其余为 `null` | **设计** |
 | `baseline` | `str｜null` | **是**（可为 `null`） | 词表类判据的基线命中率。`wordlist=True` 时**必填** | **契·码** |
@@ -87,6 +90,14 @@
    「词表判据没填基线」，构造期 `builder` 无条件把 `rule.baseline` 原样带出来（不重算、不省略）。
    ⇒ 报告这一侧漏不掉。配一条测试从两头夹住这条链。
 
+### 2.1 严重度、检查性质与处置路由是三个正交轴
+
+- `sev` 回答“影响有多大”；语义泄底可以是 HARD，语义覆盖不足可以是 INFO/UNVER。
+- `check_kind` 回答“这个结论怎么来的”。Stage 2–4 现役判据全是 `mechanical`；Stage 5 另有独立 `semantic` 伙伴审判。
+- `remediation` 回答“下一步谁能修”。`REPAIR_UNIQUE` 或已注册的付费 fix 是 `llm`；0 成本结构化 fix 是 `deterministic`；无安全自动路由是 `human`；metric 是 `none`。
+
+这个投影故意**不把 `REPAIR_FREE` 标成 LLM 自动修复**。它表示理论上可重写，但满足路径不唯一；当前 Stage 5 付费自救明确拒绝它，因为模型可能通过删内容或编内容“修绿”。
+
 > #### ⚠ 为什么度量的读数**不另开一个 `readings` 字段**
 >
 > 那会让同一件事有两个落点，而 `Finding` 已经是全链唯一那一份
@@ -98,7 +109,7 @@
 `sev` / `item` / `owner` / `actionable` 一律从注册表取，调用方只给 `detail` + `evidence`。
 ⇒ 一条 finding 不可能与它所属的那一行说的不一致——**它们读的是同一个 `Rule` 对象**。
 
-### 2.1 ⚠ `actionable` 从 `repair` 派生，**不给 `Rule` 加第二个字段**
+### 2.2 ⚠ `actionable` 从 `repair` 派生，**不给 `Rule` 加第二个字段**
 
 `_common.md` §七 要求工厂从注册表取 `actionable`，而 `contracts/rules.py::Rule` 上**没有这个字段**，
 只有 `repair`（`UNIQUE｜FREE｜NONE`）。两者的不变量正好同构：

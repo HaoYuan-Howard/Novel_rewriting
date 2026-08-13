@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 33 条判据的**实现**。行在 `contracts/judges/stage7.py`（`Q-12`）。
+checks.py —— 34 条判据的**实现**。行在 `contracts/judges/stage7.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 真跑、`--recheck`、`--apply-edit` 走的都是
 `rename_findings()` 这一个函数——三条路各判一遍就会长出三把尺子。
@@ -20,7 +20,9 @@ import re
 from contracts.invariants import IDENTITY_BLIND, MIN_SURFACE
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
-from novel.core.naming import NAME_TITLE, is_generic_appellation, strip_distinguisher
+from novel.core.naming import (
+    NAME_TITLE, is_generic_appellation, rename_semantic_markers, strip_distinguisher,
+)
 from novel.core.style import (
     DASH_CORPUS_P95, SHORT_RUN_CORPUS_P95, dash_per_1k, short_run_per_1k,
 )
@@ -126,6 +128,16 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                           detail=f'这些映射把称谓/职位后缀丢了：{lost[:6]}——'
                                  f'「关系与职位不变」是本节点的总原则',
                           evidence=[o for o, _n in lost]))
+    marker_changes = [
+        (old, new, rename_semantic_markers(old), rename_semantic_markers(new))
+        for old, new in sorted(subs.items())
+        if rename_semantic_markers(old) != rename_semantic_markers(new)
+    ]
+    if marker_changes:
+        fs.append(finding(
+            'rn_semantic_marker_changed',
+            detail=f'这些映射改写了数字/排行/辈分/关系/官职语义标记：{marker_changes[:6]}',
+            evidence=[f'{old}->{new}' for old, new, _before, _after in marker_changes]))
     surs = {s for s in (name_map.get('surname_map') or {}) if s}
     touched = [o for o, n in sorted(subs.items())
                if _generic_appellation_was_touched(o, n, subs, surs)]
@@ -331,7 +343,7 @@ def _style_report(post_units: list[Unit], source_text: str) -> Finding:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一份产物 → 33 个 `Outcome`
+# 一份产物 → 34 个 `Outcome`
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: 由 `rename_findings` 产的那些（hard/info/metric），**逐条列出不 glob**：
@@ -341,7 +353,8 @@ _FROM_FINDINGS = (
     # 映射表自身的结构
     'rn_llm_shape', 'rn_map_coverage', 'rn_new_collide', 'rn_new_collide_human',
     'rn_ambiguous', 'rn_shared_surface', 'rn_shared_surface_human', 'rn_surface_short',
-    'rn_already_present', 'rn_new_in_source', 'rn_title_dropped', 'rn_kinship_touched',
+    'rn_already_present', 'rn_new_in_source', 'rn_title_dropped',
+    'rn_semantic_marker_changed', 'rn_kinship_touched',
     'rn_surname_split', 'rn_overlap',
     # 替换器的后置条件
     'rn_residual_key', 'rn_kept_contains_mapped',
@@ -358,7 +371,7 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
           chapter_scanned: str, txt_state: tuple[bool, str], approved: bool,
           stale: list[str], no_consumed: list[str], hook_stale: bool | None,
           identity: dict | None, title_line: str, body_count: int) -> list[Outcome]:
-    """一份 `name_map.json` → **33 个 `Outcome`，一条判据一个**。
+    """一份 `name_map.json` → **34 个 `Outcome`，一条判据一个**。
 
     ⚠ `scanned` 一律填：**一个不知道自己扫了多少的绿灯没有判别力**。
     两条判据的分母与其余的不同，各自单给：

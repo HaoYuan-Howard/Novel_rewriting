@@ -484,10 +484,10 @@ Web 工作线程调用，而 `SystemExit` 是 `BaseException`，anyio 会把它�
 
 ---
 
-## 六、判据清单（**唯一落点**，33 条现役 + 1 条退役）
+## 六、判据清单（**唯一落点**，34 条现役 + 1 条退役）
 
-**33 条 = 15 `hard` / 8 `info` / 3 `metric` / 7 `unver`**。
-owner：`stage7` 19 · `stage5` 3 · `stage2` 1 · `None` 10。
+**34 条 = 16 `hard` / 8 `info` / 3 `metric` / 7 `unver`**。
+owner：`stage7` 20 · `stage5` 3 · `stage2` 1 · `None` 10。
 
 > #### 移植时（F2，2026-08-12）对原型那 31 条做的三处增删 —— 每一处都有账
 >
@@ -531,6 +531,7 @@ owner：`stage7` 19 · `stage5` 3 · `stage2` 1 · `None` 10。
 | 8 | `rn_already_present` 每个新称呼在替换目标里出现 0 次 | hard | stage7 | `rename_findings` | 0/3 | `R-10.13`（⑤） |
 | 9 | `rn_new_in_source` 每个新称呼在原作正文里也没有出现过 | info | stage7 | `rename_findings` | 0/3 | `R-10.13`（⑤） |
 | 10 | `rn_title_dropped` 称谓与亲属后缀在新形里原样保留 | hard | stage7 | `rename_findings` | 0/3 | `R-10.13`（⑥） |
+| 10b | `rn_semantic_marker_changed` 数字、排行、辈分、关系与官职字面语义标记原样保留 | hard | stage7 | `rename_findings` | 合成反例已覆盖；真实基线待重判 | `R-10.12b` |
 | 11 | `rn_kinship_touched` 通用亲属/敬称一个都没被替换 | hard | stage7 | `rename_findings` | 0/3 | `R-10.5` |
 | 12 | `rn_surname_split` 同一姓氏族群的成员共用同一个新姓 | hard | stage7 | `rename_findings` | 0/3 ⚠见下 | `R-10.4` |
 | 13 | `rn_overlap` 人工补充的映射之间没有跨界重叠 | hard | stage7 | `build_subs` | 0/3 | `R-10.13c` |
@@ -555,10 +556,12 @@ owner：`stage7` 19 · `stage5` 3 · `stage2` 1 · `None` 10。
 | 32 | `rn_identity_baseline` 恒等基线跑过，而且逐字节无损 | info | stage7 | `run_identity` 落进产物 | 盘上 0/3 **没跑过** | `R-10.7` |
 | 33 | `rn_identity_blind` 恒等基线验不了的三样常驻列出 | unver | — | 无条件 | — | `R-10.7b` |
 
-> ### ⚠ 22 条 hard+info 里，盘上只有 **1 条**命中过；**15 条 HARD 全部 0 命中**
+> ### ⚠ 历史 22 条 hard+info 里，盘上只有 **1 条**命中过；第 3 批新增 1 条 HARD
 >
 > `--check-only` 在每本书上打出 **21 行 `[OK]`**。跨层规矩「每新加一条 HARD 判据，
-> 就要有一份会让它红的样本」在本层是 **0/15**。
+> 就要有一份会让它红的样本」在历史盘上是 **0/15**。新增的
+> `rn_semantic_marker_changed` 已有「七郎→六郎」与「阿九→阿七」红灯反例，也有「阿九→玄九」绿灯对照；
+> 新总表的 HARD 数为 16。
 > ⚠ **别把它读成「判据都是多余的」**——`--identity`（恒等基线）在三本上逐字节无损，
 > 说明替换器与组装器确实是对的；而 `rn_residual_stem` 每本都在报东西，说明探针在工作。
 >
@@ -715,7 +718,7 @@ owner：`stage7` 19 · `stage5` 3 · `stage2` 1 · `None` 10。
 | `name_map_edit.characters`（完整决策集） | 三本用的都是 `character_patches` |
 | `judged[].consumed` / `hook_consumed` 在场 | 各只有 1/3 本，而两个消费方各用一把尺子（§1.5） |
 | `--tag` 分叉产物 | 从没用过 |
-| **15 条 HARD 的红灯** | 全 0 命中 ⇒ **0/15 有反例样本** |
+| **历史 15 条 HARD 的红灯** | 盘上全 0 命中 ⇒ **0/15 有真实反例样本**；第 3 批新增的改名语义标记已有合成反例 |
 
 ---
 
@@ -740,5 +743,5 @@ owner：`stage7` 19 · `stage5` 3 · `stage2` 1 · `None` 10。
 |---|---|
 | 替换覆盖率（`R-10.10`／`B-21`） | 只能替换人物表里有的称呼，**人物表够不到的这一层结构上够不着**。残留探针只是候选探针，不是覆盖率证明 |
 | 新名的时代感与雅俗（`R-10.11`／`B-22`） | 没有结构不变量。现役闸门是**人定稿** |
-| 名字之间的结构关系（`R-10.12`／`B-12`） | 「同辈共用排行字」「兄弟只差一字」——原作有没有做这个文章本身就没有判据 |
+| 名字之间的结构关系（`R-10.12`／`B-12`） | 「同辈共用字」「兄弟只差一字」这类**跨角色**关系仍没有可靠判据。但单个旧称呼内的数字、排行、亲属、头衔不变已由 `R-10.12b` 守住 |
 | `--identity` 验不了的三样 | 正向对**真名**安不安全（占位符天然无歧义，真名不是）· 漏网覆盖率 · 新名好不好。<br>⚠ **别把它跑绿了读成「替换是安全的」**——那三样由 pytest 的对抗性合成映射覆盖，不由这条 CLI |

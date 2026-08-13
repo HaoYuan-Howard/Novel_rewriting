@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
+from contracts.invariants import PROMPT_DEFAULTS
 from contracts.schema.report import CheckReport
 from contracts.schema.stage3 import StyleGrounding
 from novel.llm.client import LlmClient
@@ -18,30 +19,26 @@ def run_initial_extract(
     style_ctx: RunContext,
     style_client: LlmClient,
 ) -> tuple[CheckReport, StyleGrounding]:
-    # These are independent paid requests. Blueprint fans out again, one future
-    # per chapter; global and style therefore overlap the entire chapter batch.
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        global_future = pool.submit(
-            extract.run_global, global_ctx, global_client)
+    # anti-leak-v2 必须先消费 global 的专名表做正文脱敏；让它与 global 并发会把
+    # “没拿到名表”伪装成安全输入。global 落稳后，两个逐章扇出仍可彼此并发。
+    extract.run_global(global_ctx, global_client)
+    with ThreadPoolExecutor(max_workers=2) as pool:
         blueprint_future = pool.submit(
             extract.request_blueprints, blueprint_ctx, blueprint_client)
         style_future = pool.submit(
-            style.request_style, style_ctx, style_client)
-
-    global_future.result()
-    blueprint_batch = blueprint_future.result()
-    style_request = style_future.result()
+            style.run_style, style_ctx, style_client, PROMPT_DEFAULTS['stage3'])
 
     report: CheckReport | None = None
     artifact: StyleGrounding | None = None
     errors: list[Exception] = []
     try:
+        blueprint_batch = blueprint_future.result()
         report = extract.finish_blueprints(
             blueprint_ctx, blueprint_client, blueprint_batch)
     except Exception as exc:
         errors.append(exc)
     try:
-        artifact = style.finish_style(style_ctx, style_client, style_request)
+        artifact = style_future.result()
     except Exception as exc:
         errors.append(exc)
 

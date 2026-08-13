@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Final, Literal
 
-from contracts.invariants import OWNER, SEVERITY, WHO_CHECKS_RULE
+from contracts.invariants import CHECK_KIND, OWNER, SEVERITY, WHO_CHECKS_RULE
 
 #: ⚠ 比 `WHO_CHECKS` 少四个（`CARRIER`/`STRUCTURAL`/`DELEGATED`/`N_A`）——
 #: **一条判据的存在本身就否定了那四个**。取值面与理由的唯一落点在 `invariants.WHO_CHECKS`。
@@ -101,6 +101,7 @@ class Rule:
     who_checks: WhoChecks           # 它在需求表「谁在查」那一列里对应什么
     requirement: str                # 指向 R-x.y。**必填**
 
+    check_kind: str = 'mechanical'  # mechanical | semantic；与 sev/repair 正交
     owner: str | None = None        # 根因第一嫌疑层；OWNER 之一
     repair: RepairBucket = 'NONE'   # 进不进付费自救。取值面见 REPAIR_BUCKETS
     quote: bool = False             # 凭据能不能原样引用给写作节点
@@ -236,6 +237,8 @@ def _validate(r: Rule) -> None:
     # ① 取值域闭合。`dict.get(key, 默认值)` 用在契约枚举上，就是给违约数据发一张静默通行证。
     if r.sev not in SEVERITY:
         raise ValueError(f'{r.rule}: sev={r.sev!r} 不在 {SEVERITY}')
+    if r.check_kind not in CHECK_KIND:
+        raise ValueError(f'{r.rule}: check_kind={r.check_kind!r} 不在 {CHECK_KIND}')
     if r.owner is not None and r.owner not in OWNER:
         raise ValueError(f'{r.rule}: owner={r.owner!r} 不在 {OWNER}')
     # `Literal` 在运行时不拦任何东西——它只是给类型检查器看的。取值面要真闭合就得在这里查

@@ -41,6 +41,20 @@ def test_generic_appellation_wrapper_may_keep_label_and_replace_embedded_name():
         '没有内嵌真名映射作证时仍要保守拦截'
 
 
+def test_rename_semantic_marker_finding_catches_rank_change():
+    kwargs = dict(
+        name_map={'characters': [], 'surname_map': {}},
+        problems=[], applied={}, residual=[], baseline={}, registry={},
+        pre_target='', source_text='', residual_keys=set(), stem_noise={},
+        family_members={}, dup=[], missing=[], mixed=[], invalids=[],
+        post_units=[], title_line='书名语义需人工确认',
+    )
+    changed = checks.rename_findings(subs={'七郎': '六郎'}, **kwargs)
+    kept = checks.rename_findings(subs={'阿九': '玄九'}, **kwargs)
+    assert 'rn_semantic_marker_changed' in {finding.rule for finding in changed}
+    assert 'rn_semantic_marker_changed' not in {finding.rule for finding in kept}
+
+
 def test_custom_edit_path_is_resolved_inside_the_novel_directory():
     """`--apply-edit` 的自定义路径不能靠 `store.path('')` 取得根目录。
 

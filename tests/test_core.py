@@ -15,7 +15,8 @@ from novel.core.bands import BAND_SEP, ending_shape, sep_band_of_text
 from novel.core.facts import NUM_UNIT, num_unit_keys, num_value, secret_keywords
 from novel.core.naming import (
     attested_surname, family_groups, invented_names, is_generic_appellation,
-    name_stems, person_naming_surfaces, rule_names_a_person, strip_distinguisher,
+    name_stems, person_naming_surfaces, rename_semantic_markers, rule_names_a_person,
+    strip_distinguisher,
     surface_first_chapter, surface_owners,
 )
 from novel.core.normalize import (
@@ -363,6 +364,16 @@ def test_generic_appellation_defers_to_this_books_surnames():
     assert is_generic_appellation('') is False
 
 
+def test_rename_semantic_markers_preserve_rank_number_relationship_and_office():
+    assert rename_semantic_markers('阿九') == rename_semantic_markers('玄九')
+    assert rename_semantic_markers('阿九') != rename_semantic_markers('阿七')
+    assert rename_semantic_markers('七郎') != rename_semantic_markers('六郎')
+    assert rename_semantic_markers('李将军') == rename_semantic_markers('沈将军')
+    assert rename_semantic_markers('李将军') != rename_semantic_markers('沈凌')
+    assert rename_semantic_markers('沈凌') != rename_semantic_markers('沈将军'), \
+        '新增原本没有的职位同样改变语义'
+
+
 # ── 叫法时点（第四组，stage4 的下发闸门）─────────────────────────────────
 
 _GATE_REG = {
@@ -425,7 +436,7 @@ def test_hook_approach_notes_cover_exactly_the_approaches():
 
 def test_terminal_punct_has_one_home():
     """截断判定与删减守卫共用这一份——两处各抄一套就会漂。"""
-    assert all(x in TERMINAL_PUNCT for x in ('。', '」', '】', '.'))
+    assert all(x in TERMINAL_PUNCT for x in ('。', '」', '】', ']', '］', '.'))
     assert '，' not in TERMINAL_PUNCT
 
 

@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS, WRITE_EFFECTS
+from contracts.invariants import FREE_ENTRIES, NODES, PROMPT_VARIANTS, VALUED_FLAGS, WRITE_EFFECTS
 from contracts.rules import PORTED_STAGES
 from novel.errors import UnsupportedRunMode
 from novel.orchestrator import nodes as N
@@ -35,8 +35,11 @@ def _mode_of(node: str) -> str | None:
     return NODES[node].modes[0] if NODES[node].modes else None
 
 
-def _args(flag: str) -> list[str]:
+def _args(flag: str, node: str | None = None) -> list[str]:
     """带值 flag 补一个值——不补的话拒收的是「没给值」，测不到我们想测的那件事。"""
+    if flag == '--prompt-variant':
+        assert node is not None
+        return [flag, PROMPT_VARIANTS[NODES[node].stage][0]]
     return [flag, 'payload.json'] if flag in VALUED_FLAGS else [flag]
 
 
@@ -45,7 +48,7 @@ def _args(flag: str) -> list[str]:
 def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
     assert len(CASES) > 25, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
-    assert len(NODES) == 16, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    assert len(NODES) == 17, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -57,7 +60,7 @@ def test_every_registered_run_mode_answers_the_cost_question(node, flag):
     这条测试的价值不在断言本身，在于**它把 node × flag 铺平走了一遍**：
     漏登记一个 flag、或把一个 flag 挂错节点，都会在这里现形。
     """
-    paid = N.is_paid(node, _args(flag))
+    paid = N.is_paid(node, _args(flag, node))
     spec = NODES[node]
     if spec.paid:
         assert paid == (flag not in FREE_ENTRIES), \
@@ -143,7 +146,7 @@ def test_an_unrecorded_flag_is_assumed_to_write():
 
 @pytest.mark.parametrize('node,flag', CASES, ids=lambda v: str(v))
 def test_every_registered_run_mode_builds_a_command(node, flag):
-    argv = N.build_argv(node, SID, _args(flag), base=BASE, mode=_mode_of(node))
+    argv = N.build_argv(node, SID, _args(flag, node), base=BASE, mode=_mode_of(node))
     assert argv[0] == sys.executable
     assert node in argv and SID in argv
 
@@ -203,6 +206,14 @@ def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():
         N.build_argv('stage3.style', SID, ['--apply-edit'], base=BASE)
     with pytest.raises(UnsupportedRunMode, match='不带值'):
         N.build_argv('stage3.style', SID, ['--check-only', 'oops'], base=BASE)
+
+
+def test_prompt_variant_rejects_unknown_values_before_execution():
+    with pytest.raises(UnsupportedRunMode, match='不在'):
+        N.build_argv('stage3.style', SID, ['--prompt-variant', 'typo-v9'], base=BASE)
+    with pytest.raises(UnsupportedRunMode, match='不在'):
+        N.build_argv('stage5.write', SID, ['--prompt-variant', 'typo-v9'],
+                     base=BASE, mode='deep')
 
 
 def test_child_env_carries_the_three_required_variables():

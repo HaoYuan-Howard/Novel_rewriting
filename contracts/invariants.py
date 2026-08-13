@@ -65,6 +65,32 @@ BADGE: Final = ('pass', 'amber', 'fail')
 #: 把度量挂在「没问题」分支上，等于规定「一出问题就不许知道现状」。
 SEVERITY: Final = ('hard', 'info', 'metric', 'unver')
 
+#: 判据的实现类型。它与严重度正交：`hard` 可以由机械代码或语义模型给出，
+#: `info` 也一样。前端据此把 0 成本机械验收与付费语义审判分开展示。
+CHECK_KIND: Final = ('mechanical', 'semantic')
+
+#: 判据命中后的处置责任。它与严重度同样正交，且由判据的现有契约派生：
+#: `llm` = 有唯一、受约束的反哺路径；`deterministic` = 有机器可执行的 fix；
+#: `human` = 多解、查不了或没有安全自动路径；`none` = 纯度量。
+REMEDIATION: Final = ('llm', 'human', 'deterministic', 'none')
+
+#: 本批可比较的 prompt 实验臂。基线名称永远指向原 prompt 字节；默认臂另由
+#: `PROMPT_DEFAULTS` 指定，避免把“元组第一项”偷偷当成产品决策。
+PROMPT_VARIANTS: Final = {
+    'stage3': ('baseline-v1', 'anti-leak-v2'),
+    'stage5': ('baseline-v1', 'guarded-v2'),
+}
+
+#: 三本真实小说对照实验后的生产默认值。它与可选取值面分开：枚举顺序只负责稳定展示，
+#: 不承担“哪一臂胜出”的语义。Stage 3 采用逐章隔离；Stage 5 暂留原基线。
+PROMPT_DEFAULTS: Final = {
+    'stage3': 'anti-leak-v2',
+    'stage5': 'baseline-v1',
+}
+assert set(PROMPT_DEFAULTS) == set(PROMPT_VARIANTS)
+assert all(PROMPT_DEFAULTS[stage] in variants
+           for stage, variants in PROMPT_VARIANTS.items())
+
 #: 校验报告里**一条注册判据**的处境（`docs/schema/_report.md` §一）。
 #: 报告按**判据**编排而不是按**结论**编排，这四个态是那次翻转的全部落点。
 #:
@@ -662,7 +688,11 @@ HOOK_KEYS: Final = (
 #: 文风画像的尝试类别（`_provenance.attempts[].kind`）。
 #: `surface_habits_targeted_repair` = 只把 `surface_habits` 那一个列表发回去改写，
 #: 其余字段一个字不动——**全链唯一有定向返工通道的字段**。
-STAGE3_ATTEMPT_KINDS: Final = ('initial', 'surface_habits_targeted_repair')
+STAGE3_ATTEMPT_KINDS: Final = (
+    'initial', 'surface_habits_targeted_repair',
+    # `anti-leak-v2` 逐源章抽取，再只用抽象结果做一次书级汇总。
+    'chapter_local', 'chapter_aggregate',
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -875,6 +905,7 @@ VALUED_FLAGS: Final = {
     '--apply-edit': '人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
+    '--prompt-variant': 'prompt 实验臂（stage3: baseline-v1|anti-leak-v2；stage5: baseline-v1|guarded-v2）',
     # ⚠ **不叫 `--approve`**：那个名字已经在 `SUPERSEDED_FREE_ENTRIES` 里退役成节点了
     # （`stage6.approve` / `stage7.approve`），复活它等于让同一个字面既是 flag 又是节点。
     # ⚠ 它**不进 `FREE_ENTRIES`**（那张表登记的是「0 成本**入口**」，而它是入口的**参数**），
@@ -1086,7 +1117,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
                                  flags=('--dry-run', '--check-only', '--measure-only',
                                         '--remeasure', '--revalidate', '--apply-edit',
-                                        '--repair-surface-habits'),
+                                        '--repair-surface-habits', '--prompt-variant'),
                                  produces=('stage3/style_grounding.json',)),
     # ⚠ `--dry-run` 是 F3 补的，而它与 `--prompt-only` **不是重复登记**：
     #   后者只量体量（原型的语义），前者摊开**要发出去的那几个字节**。
@@ -1118,7 +1149,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  modes=('deep', 'shallow'),
                                  flags=('--dry-run', '--recheck', '--revalidate',
                                         '--apply-edit', '--revise', '--chapters',
-                                        '--deep', '--shallow-rest'),
+                                        '--deep', '--shallow-rest', '--prompt-variant'),
                                  produces=('stage5/{mode}/ch{nn}.json',
                                            'stage5/{mode}/draft.md')),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。
@@ -1129,6 +1160,11 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage5.review':    NodeSpec('stage5', 'R-8',  False, 'stage5 全书验收',
                                  flags=('--check-only', '--wontfix'),
                                  produces=('stage5/review_{n}.json',)),
+    # 付费语义审判是机械验收的 companion，不取代 `stage5.review` 的 0 成本属性。
+    # 它不接 `--check-only`，否则一个 stage 会有两个复检节点、HTTP kind 路由产生歧义。
+    'stage5.semantic':  NodeSpec('stage5', 'R-8',  True,  'stage5 书级语义审判',
+                                 flags=('--dry-run',),
+                                 produces=('stage5/semantic_{n}.json',)),
     # ⚠ `--revalidate` 是 F 期移植时补的，而它是**新加那道落盘闸门的必然配套**：
     #   本层一次产三条候选，闸门拦的是「一条干净候选都没有」；不给一条 0 成本的提升路，
     #   一次付费产出就会被永久锁死。**加闸门与加提升路必须同批**。

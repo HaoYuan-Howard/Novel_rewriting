@@ -56,9 +56,12 @@ from contracts.schema.common import (
 from contracts.schema.report import (
     AccountingLine,
     Badge,
+    CheckKind,
     CheckReport,
     EdgeLine,
+    FixRoute,
     ProvenanceSection,
+    Remediation,
     RetiredLine,
     RuleLine,
     Status,
@@ -79,14 +82,17 @@ from contracts.schema.stage2 import (
     Setting, SourceSpan, WorldRule, WorldRuleVersion,
 )
 from contracts.schema.stage3 import (
-    HookStyle, Measurable, StyleGrounding, StyleResponse, Voice,
+    ChapterStyle, ChapterStyleResponse, HabitRepairResponse, HookStyle, Measurable,
+    StyleGrounding, StyleResponse, Voice,
 )
 from contracts.schema.stage4 import (
     BookCharacter, CtxBeat, CtxChapter, CtxFacts, PlanBeat, PlanChapter, PlanChapters,
     WriterContext,
 )
 from contracts.schema.stage5 import (
-    Chapter, DraftConsumed, JudgedDraft, Review, ReviewChapter, WontFix,
+    Chapter, DraftConsumed, JudgedDraft, Review, ReviewChapter, SemanticAlignmentResponse,
+    SemanticChapterClaims, SemanticClaim, SemanticClaimsResponse, SemanticEvidenceRef,
+    SemanticReview, SemanticSecretAdjudication, SemanticSecretDecision, WontFix,
 )
 from contracts.schema.stage6 import ApprovedHook, Candidate, Hook, Mech
 from contracts.schema.stage7 import (
@@ -118,6 +124,7 @@ ARTIFACTS: dict[str, type] = {
     'stage4/writer_context.identity.json': WriterContext,
     'stage5/{mode}/ch{nn}.json': Chapter,
     'stage5/review_{n}.json': Review,
+    'stage5/semantic_{n}.json': SemanticReview,
     'stage5/wontfix.json': WontFix,
     'stage6/hook.json': Hook,
     'stage7/name_map.json': NameMap,
@@ -132,6 +139,7 @@ __all__ = [
     'Finding', 'WontFixNote', 'Severity', 'Owner',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
     'CheckReport', 'RuleLine', 'RetiredLine', 'ProvenanceSection', 'EdgeLine',
+    'CheckKind', 'Remediation', 'FixRoute',
     'AccountingLine', 'StatusCounts', 'Status', 'Badge', 'finding', 'badge_of',
     # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实
     'StyleView', 'VoiceLine', 'HookStyleLine', 'DriftItem',
@@ -147,10 +155,14 @@ __all__ = [
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'Arc', 'ConflictStage',
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',
-    'StyleGrounding', 'StyleResponse', 'Voice', 'HookStyle', 'Measurable',
+    'StyleGrounding', 'StyleResponse', 'ChapterStyle', 'ChapterStyleResponse',
+    'HabitRepairResponse', 'Voice', 'HookStyle', 'Measurable',
     'PlanChapters', 'PlanChapter', 'PlanBeat', 'WriterContext', 'BookCharacter',
     'CtxChapter', 'CtxBeat', 'CtxFacts',
     'Chapter', 'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed', 'WontFix',
+    'SemanticClaim', 'SemanticChapterClaims', 'SemanticEvidenceRef',
+    'SemanticClaimsResponse', 'SemanticAlignmentResponse',
+    'SemanticSecretDecision', 'SemanticSecretAdjudication', 'SemanticReview',
     'Hook', 'Candidate', 'ApprovedHook', 'Mech',
     'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'StemBaseline', 'BookTxt',
     'IdentityBaseline', 'NameMapEdit', 'CharacterPatch', 'NameMapResponse',

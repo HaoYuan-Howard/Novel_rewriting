@@ -293,7 +293,7 @@ def test_a_poisoned_cache_entry_heals_within_the_very_same_run():
     ⚠ 光 evict 不重发只能治好**下一次**跑，而这一次仍然会报
     「模型连着四档都吐截断 JSON」——**而事实是缓存坏了、模型一次都没被问到**。
     「派生症状盖住一句话能说清的事实」正是本项目反复付学费的那个形状。
-    ⇒ 同一档真发一次。
+    ⇒ 先检查完所有档位；都毒才从 high 真发一次。
     """
     d = Path(tempfile.mkdtemp())
     poison = ChatResponse(content='{"voice": {"a": 1}, "surface_hab', finish_reason='length')
@@ -307,10 +307,42 @@ def test_a_poisoned_cache_entry_heals_within_the_very_same_run():
     out = _client(t, ctx=ctx, cache=ResponseCache(d)).ask_json(
         's', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == [('high', True)], '第一档就该真发一次，而不是把四档毒缓存读一遍'
-    assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (1, 1)
+    assert t.rungs == [('high', True)], '四档缓存都坏后，只该从第一档真发一次'
+    assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (1, len(LADDER))
     # 毒的那份走了，好的那份留下
     assert cache.get(cache_key(_json_req('high', True))).text == OK_JSON.text
+
+
+def test_a_valid_lower_rung_json_cache_prevents_any_higher_rung_network_call():
+    """真实语义审判回归：low 有合格缓存时，high miss 不能触发重复付费。"""
+    d = Path(tempfile.mkdtemp())
+    cache = ResponseCache(d)
+    cache.put(cache_key(_json_req('low', False)), OK_JSON)
+    ctx = _ctx()
+    transport = FakeTransport.always(OK_JSON)
+
+    out = _client(transport, ctx=ctx, cache=ResponseCache(d)).ask_json(
+        's', 'u', model_cls=Resp, purpose='t')
+
+    assert out.surface_habits == ['h']
+    assert transport.calls == []
+    assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (0, 1)
+
+
+def test_a_valid_lower_rung_text_cache_prevents_any_higher_rung_network_call():
+    d = Path(tempfile.mkdtemp())
+    cache = ResponseCache(d)
+    low = ChatRequest(model='deepseek-v4-pro', system='s', user='u',
+                      reasoning_effort='low', thinking=False, json_mode=False,
+                      max_tokens=DEFAULT_MAX_TOKENS)
+    cache.put(cache_key(low), OK_TEXT)
+    ctx = _ctx()
+    transport = FakeTransport.always(OK_TEXT)
+
+    assert _client(transport, ctx=ctx, cache=ResponseCache(d)).ask_text(
+        's', 'u', purpose='t') == '一段正文'
+    assert transport.calls == []
+    assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (0, 1)
 
 
 def test_a_genuinely_bad_response_still_walks_the_ladder_without_double_sending():

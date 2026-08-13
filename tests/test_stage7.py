@@ -86,14 +86,14 @@ def _check(box: sandbox.Sandbox):
 # ── 一、报告的形状 ─────────────────────────────────────────────────────────
 
 def test_every_registered_rule_produced_a_row(box):
-    """⭐ **33 条一行不少，`skipped` 0 条。**
+    """⭐ **34 条一行不少，`skipped` 0 条。**
 
     报告由 `build()` 遍历**注册表**生成，不遍历产出 ⇒ 一条判据不可能因为
     「实现忘了调」而从报告里消失。少调一条，它会以 `skipped` 出现在这里。
     """
     rep = _check(box)
     want = {r.rule for r in REGISTRY.of_stage('stage7')}
-    assert len(want) == 33
+    assert len(want) == 34
     assert {r.rule for r in rep.rules} == want
     skipped = sorted(r.rule for r in rep.rules if r.status == 'skipped')
     assert skipped == [], f'这些判据注册了却没被调用：{skipped}'

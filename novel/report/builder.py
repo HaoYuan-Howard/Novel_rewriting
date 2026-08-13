@@ -22,7 +22,8 @@ from typing import Any, Iterable
 from contracts.invariants import NODES
 from contracts.rules import REGISTRY, Registry, Rule
 from contracts.schema.report import (
-    CheckReport, EdgeLine, ProvenanceSection, RetiredLine, RuleLine, StatusCounts, badge_of,
+    CheckReport, EdgeLine, FixRoute, ProvenanceSection, RetiredLine, RuleLine, StatusCounts,
+    badge_of,
 )
 from novel.errors import RefusedByStructure
 from novel.prov import FreshnessReport
@@ -32,6 +33,30 @@ from novel.report.findings import Outcome
 #: 一条判据注册着，而这一次没有任何代码执行过它。**措辞在这里定一次**——
 #: 报告不在逐字节验收范围内，但这句话会被人读，所以它至少要说清「是哪一种没跑」。
 SKIPPED_WHY = '实现未被调用（这一次没有任何代码执行过它）'
+
+
+def _remediation_of(rule: Rule) -> str:
+    """把已有契约投影成工作流责任；不再拿严重度冒充处置方式。"""
+    if rule.sev == 'metric':
+        return 'none'
+    if rule.repair == 'UNIQUE':
+        return 'llm'
+    if rule.fix is not None:
+        from novel.orchestrator.nodes import is_paid
+        node, *flags = rule.fix
+        # `fix` 只说明「有一条机器可执行的路」，并不说明它是 0 成本算法。
+        # Stage2 的 `blueprint --chapters` 会再次调用模型；把它画成 deterministic
+        # 会在用户确认账单之前说错这一步的性质。
+        return 'llm' if is_paid(node, flags) else 'deterministic'
+    return 'human'
+
+
+def _fix_route(rule: Rule) -> FixRoute | None:
+    if rule.fix is None:
+        return None
+    from novel.orchestrator.nodes import is_paid
+    node, *flags = rule.fix
+    return FixRoute(node=node, flags=flags, paid=is_paid(node, flags))
 
 
 def _status_of(rule: Rule, outcome: Outcome | None) -> tuple[str, str | None]:
@@ -106,6 +131,7 @@ def build(*, sid: str, node: str, freshness: FreshnessReport,
         status, why = _status_of(r, o)
         lines.append(RuleLine(
             rule=r.rule, sev=r.sev, status=status, item=r.item, requirement=r.requirement,
+            check_kind=r.check_kind, remediation=_remediation_of(r), fix=_fix_route(r),
             findings=list(o.findings) if o is not None else [],
             why=why,
             # 判据 31：绿灯必须报出自己的分母。`skipped` 那一行天然没有——它没扫。

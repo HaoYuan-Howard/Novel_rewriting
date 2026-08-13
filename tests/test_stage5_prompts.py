@@ -107,6 +107,18 @@ def test_the_shallow_arm_still_has_no_layer_gloss():
         assert cn not in prompts.SHALLOW_SYS, f'{cn} 出现在开卷 system 里——`B-13` 被人补了'
 
 
+def test_guarded_variant_closes_the_known_prompt_holes_without_changing_baseline():
+    deep = prompts.write_system('deep', variant='guarded-v2')
+    shallow = prompts.write_system('shallow', variant='guarded-v2')
+    assert prompts.write_system('deep') == prompts.DEEP_SYS
+    assert prompts.write_system('shallow') == prompts.SHALLOW_SYS
+    for arm in (deep, shallow):
+        assert '只按本章材料允许的信息层级落笔' in arm
+        assert '不要根据风格画像或全书惯例猜后文底牌' in arm
+    assert prompts.LAYER_RULE in shallow, 'guarded-v2 应补上开卷臂缺失的时空标签释义'
+
+
+
 def test_the_revise_tail_is_the_third_fingerprint_and_has_only_one_producer():
     """⭐ 盘上有**三个** `prompts.SYS` 指纹：deep · shallow · 臂+`REVISE_TAIL`。
 

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 47 条判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
+checks.py —— 47 条机械判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
 
-【本层与前四层最大的形状差异：一张表，两相共用】
+【本层与前四层最大的形状差异：机械表由写作闸门与全书验收共用】
 落盘闸门（写作相，逐章）与全书验收相**调同一个 `chapter_findings`**。
 原型此前把书级那 8 条住在 `n7_review.RULES6` 里、靠一个 `_merged_rules()` 合起来，
 而共享层得反向 lazy-import 才拿得到——**一张表拆成两半的全部成本都在那个环上**。
 
 ⚠⚠ **判据吃 `dict` 不吃模型。** 这不是随意：一旦判据跑在已经过了 Pydantic 的对象上，
 「必填齐全」这类判据在**结构上构造不出反例**——它必然全绿，于是又变成一盏保证会亮的绿灯。
-本层 7 条 HARD 的反例样本（`tests/test_stage5.py`）正是靠这一条才写得出来。
+机械层 7 条 HARD 的反例样本（`tests/test_stage5.py`）正是靠这一条才写得出来。
 
 ⚠ **结论一律走 `contracts.schema.report.finding()`，不许手写 dict**：
 `sev` / `item` / `owner` / `actionable` 全从判据表取 ⇒ 一条 finding 不可能与表说的不一致。
@@ -829,7 +829,13 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
     # ⚠ **盘点通道不盘点字段**：它是在某一维上被发现的，但风格块把 voice 八维 + 写作习惯
     #   **整份**发给每一章 ⇒ 要扫的是**它实际发出去的那整段**。
     # ⚠ 检测器用**全书**名表与**全量** secrets——收窄下发面是修复，收窄检测器是削弱。
-    blob = prompts.style_block(book.style)
+    # 扫写手真正会看到的每一份逐章投影，不扫一份它不再收到的
+    # 书级聚合块。收窄下发面是修复，检测面仍要覆盖全书所有实际投影。
+    blob = '\n'.join(
+        prompts.style_block(
+            book.style,
+            source_ordinals=tuple(entry.get('from_source_ordinals') or []))
+        for entry in book.chapters.values())
     all_names = {c.get('display_name') for c in book.characters.values()}
     kw_hits = sorted({k for s in book.secrets for k in secret_keywords(s.get('fact'))
                       if norm(k) and norm(k) in norm(blob)})
@@ -911,6 +917,11 @@ _FROM_REVIEW: tuple[str, ...] = (
     'no_secrets_in_book', 'secret_timeline', 'cross_chapter_number',
     'book_length_report', 'book_length', 'name_surface_survey',
     'style_block_carries_plot', 'must_hold_unver', 'convergence_report',
+)
+
+#: 付费书级语义审判产出的两条。实现刻意在 `semantic.py`，不混进 0 成本机械检查。
+_FROM_SEMANTIC: tuple[str, ...] = (
+    'semantic_secret_leak', 'semantic_secret_coverage',
 )
 
 #: `unver` 的五条：**必须走 `unverifiable(rule, why)`**（`builder._status_of` 会拒收

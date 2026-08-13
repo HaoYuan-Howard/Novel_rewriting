@@ -27,7 +27,9 @@ import sys
 import traceback
 from collections.abc import Callable, Sequence
 
-from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS
+from contracts.invariants import (
+    FREE_ENTRIES, NODES, PAID_FLAGS, PROMPT_DEFAULTS, STAGES, VALUED_FLAGS,
+)
 from contracts.rules import PORTED_STAGES
 from novel.cli import exit_codes as X
 from novel.errors import (
@@ -156,7 +158,7 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
     ⚠⚠ **这里从前有两道闸，F5-5 之后只剩一道**（同 `novel/stages/__init__.py::check_only`）。
     第一道是 `stage not in PORTED_STAGES ⇒ NodeNotPorted`——stage2 是最后一层，
     它一进 `PORTED_STAGES`，那道闸**结构上再也触发不了** ⇒ 退役
-    （2026-08-12 用户裁决）。**取值面一格没少**：`NODES` 照旧 16 个节点、
+    （2026-08-12 用户裁决）。**取值面一格没少**：`NODES` 现有 17 个节点、
     `/api/enums` 照旧发得出全部取值；掉的只是那个运行时状态。
 
     剩下的这一道：**在 `PORTED_STAGES` 里而 `_runners()` 没有 ⇒ 两张表分家了。**
@@ -309,6 +311,7 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
     from novel.stages.stage3 import style
 
     tokens = set(N.flag_tokens(flags))
+    prompt_variant = _valued(flags, '--prompt-variant') or PROMPT_DEFAULTS['stage3']
 
     if '--check-only' in tokens:
         report = style.run_check_only(ctx)
@@ -322,7 +325,10 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     if '--dry-run' in tokens:
-        system, user, _meas = style.build_prompt(ctx)
+        if '--repair-surface-habits' in tokens:
+            system, user, _literals = style.build_habit_repair_prompt(ctx)
+        else:
+            system, user, _meas = style.build_prompt(ctx, prompt_variant)
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
@@ -346,7 +352,13 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
               else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
         return X.OK if promoted else X.CHECK_FAILED
 
-    unimplemented = tokens & {'--apply-edit', '--repair-surface-habits'}
+    if '--repair-surface-habits' in tokens:
+        artifact, report = style.run_repair_surface_habits(ctx, _llm_client(ctx))
+        print(render(report))
+        print(f'  ✓ stage3 第二轮已原位修复 {len(artifact.surface_habits)} 条全局习惯清单')
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    unimplemented = tokens & {'--apply-edit'}
     if unimplemented:
         raise RunModeNotImplemented(
             f'stage3.style {sorted(unimplemented)} 登记在案，而本仓还没接它的线。'
@@ -355,8 +367,8 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
 
     # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
     client = _llm_client(ctx)
-    style.run_style(ctx, client)
-    print('  ✓ stage3 文风画像已落盘')
+    style.run_style(ctx, client, prompt_variant)
+    print(f'  ✓ stage3 文风画像已落盘（prompt={prompt_variant}）')
     return X.OK
 
 
@@ -454,7 +466,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
                 style_ctx,
                 _llm_client(style_ctx),
             )
-            print('  ✓ stage2 全局/逐章抽取与 stage3 文风画像已并发完成')
+            print('  ✓ stage2 全局底座完成后，逐章抽取与 stage3 防泄露文风画像已并发完成')
             print(render(report))
             return X.OK if report.passed else X.CHECK_FAILED
         if '--revalidate' in tokens:
@@ -636,13 +648,30 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
     `stage5.write --deep 1,2,3 --shallow-rest`，一次选择两臂并发写作。
     人工深度选择持久化在 `_service/approvals/`，不混进小说产物或 provenance。
 
-    ⚠ 写作节点**没有 `--check-only`**：判据表两相共用一张，而复检读的是验收报告那份产物
-    ⇒ `check_nodes('stage5')` 恰好是 `stage5.review` 一个。
+    ⚠ 写作节点**没有 `--check-only`**：机械复检由 `stage5.review` 承担；语义结论由
+    `stage5.semantic` 独立产出，再在 review 报告中合并。⇒ 对外 check 节点仍是 review。
     """
-    from novel.stages.stage5 import review, write
+    from novel.stages.stage5 import review, semantic, write
 
     tokens = set(N.flag_tokens(flags))
     chapters = _valued(flags, '--chapters')
+    prompt_variant = _valued(flags, '--prompt-variant') or PROMPT_DEFAULTS['stage5']
+
+    if ctx.node == 'stage5.semantic':
+        if '--dry-run' in tokens:
+            system, users, *_rest = semantic.build_prompts(ctx)
+            print(f'── system（{len(system)} 字）──\n{system}')
+            for ordinal, user in users:
+                print(f'\n── ch{ordinal} user（{len(user)} 字）──\n{user}')
+            print(f'\n── alignment system（{len(semantic.ALIGN_SYSTEM)} 字）──\n'
+                  f'{semantic.ALIGN_SYSTEM}')
+            print('\n第二相 user 需消费第一相验真的 claims，dry-run 时尚不存在，故不伪造预览。')
+            return X.OK
+        artifact, report = semantic.run_semantic(ctx, _llm_client(ctx))
+        print(f'  ✓ 书级语义审判已落盘：{len(artifact.chapters)} 章 · '
+              f'{len(artifact.secrets)} 条 secret')
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
 
     if ctx.node == 'stage5.review':
         if '--wontfix' in tokens:
@@ -675,6 +704,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
             deep_ctx, _llm_client(deep_ctx),
             shallow_ctx, _llm_client(shallow_ctx),
             selected,
+            prompt_variant,
         )
         for mode in ('deep', 'shallow'):
             if mode in reports:
@@ -684,7 +714,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
                 else X.CHECK_FAILED)
 
     if '--dry-run' in tokens:
-        system, user, _mat = write.build_prompt(ctx, chapters)
+        system, user, _mat = write.build_prompt(ctx, chapters, prompt_variant)
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
@@ -712,8 +742,14 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         from novel.llm.cache import CachePolicy
         ctx.cache = CachePolicy.refresh()
     client = _llm_client(ctx)
-    report = (write.run_revise(ctx, client, chapters) if '--revise' in tokens
-              else write.run_write(ctx, client, chapters))
+    if '--revise' in tokens:
+        report = (write.run_revise(ctx, client, chapters)
+                  if prompt_variant == 'baseline-v1'
+                  else write.run_revise(ctx, client, chapters, prompt_variant))
+    else:
+        report = (write.run_write(ctx, client, chapters)
+                  if prompt_variant == 'baseline-v1'
+                  else write.run_write(ctx, client, chapters, prompt_variant))
     print(render(report))
     print('  ✓ 逐章成稿已落盘——跑 `stage5.review`（0 成本）看全书验收'
           if report.passed

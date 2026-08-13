@@ -19,8 +19,9 @@ naming.py —— 人物**专名**表，以及「有没有编出新人名」那�
 ⚠ 三组各有一份「亲属称谓」的正则（`KINSHIP` / `_STEM_KINSHIP`），**取值面刻意不同**，
 合成一份会让其中一侧悄悄放宽——每一处的理由写在它自己旁边。
 
-⚠ **抽取本身不吃 stage2**（风格与情节正交）。第一组名表只服务
-「专名泄漏」那条确定性比对——靠正则猜中文人名不可靠，所以借已抽好的名表。
+⚠ `baseline-v1` 抽取不吃 stage2；默认 `anti-leak-v2` 会先用第一组名表对当前源章
+做确定性脱敏，抽取后仍用同一张表做「专名泄漏」比对。这里只借专名字面，
+不把 Stage 2 的秘密事实发给风格模型；靠正则猜中文人名不可靠。
 
 ⚠ 本模块**不读盘**：它接收已经由 `store.read` 读上来的模型 / 已读上来的 dict。
 原型这里是裸 `json.load`，于是 `style_grounding` 的 `inputs` 是空的
@@ -170,11 +171,48 @@ _TITLE_TAIL = re.compile(NAME_TITLE + r'$')
 _RANK_APPELLATION = re.compile(
     r'^(?:第)?(?:大|[一二两三四五六七八九十百\d]+)(?:郎|娘|爷|哥|姐|弟|妹|公子|小姐)$')
 
+#: 改名时不能被当作普通字面换掉的关系、辈分与官职标记。最长优先只影响可读顺序，
+#: 返回值仍是集合式的稳定元组；新增或丢失任何一项都会触发不变量。
+_RENAME_SEMANTIC_TAILS = tuple(sorted({
+    '外祖父', '外祖母', '祖父', '祖母', '父亲', '母亲', '丈夫', '妻子', '夫君', '娘子',
+    '兄长', '长兄', '长姐', '哥哥', '姐姐', '弟弟', '妹妹', '嫂嫂', '嫂子', '舅舅',
+    '姨母', '叔父', '伯父', '婶娘', '爷爷', '奶奶', '儿子', '女儿', '孙子', '孙女',
+    '太子', '皇子', '世子', '公主', '郡主', '王妃', '皇后', '贵妃', '皇帝', '陛下',
+    '殿下', '国公', '侯爷', '王爷', '将军', '丞相', '宰相', '尚书', '侍郎', '御史',
+    '太傅', '太师', '知府', '县令', '大人', '公子', '小姐', '姑娘', '夫人', '娘娘',
+    '嬷嬷',
+}, key=lambda value: (-len(value), value)))
+_RENAME_NUMERAL = re.compile(r'(?:第)?(?:\d+|[零〇一二两三四五六七八九十百]+)')
+_RANK_PARTS = re.compile(
+    r'^(?:第)?(?P<rank>大|[一二两三四五六七八九十百\d]+)'
+    r'(?P<role>郎|娘|爷|哥|姐|弟|妹|公子|小姐)$')
+
 
 def strip_distinguisher(canonical: str | None) -> str:
     """去掉 `canonical` 末尾的消重区分词。**两处共用这一份**（派生显示名 / 反查称呼），
     各写一份正则就是下一次「这边按 A 剥、那边按 B 剥」的来源。"""
     return _DISTINGUISHER.sub('', canonical or '').strip()
+
+
+def rename_semantic_markers(surface: str | None) -> tuple[str, ...]:
+    """改名前后必须保持的数字、排行、辈分、关系与官职标记。
+
+    这不是名字相似度：`阿九 → 玄九` 合格、`阿九 → 阿七` 不合格；
+    `李将军 → 沈将军` 合格、`李将军 → 沈凌` 不合格。比较完整 marker 元组，
+    因而偷偷新增一个职位同样会出声。
+    """
+    value = strip_distinguisher(surface)
+    markers = {f'number:{m.group().removeprefix("第")}'
+               for m in _RENAME_NUMERAL.finditer(value)}
+    if rank := _RANK_PARTS.fullmatch(value):
+        markers.add(f'rank-role:{rank.group("role")}')
+        # `大郎` 的「大」也是排行；普通 numeral 正则不收它，显式补在这里。
+        markers.add(f'rank-value:{rank.group("rank")}')
+    for tail in _RENAME_SEMANTIC_TAILS:
+        if value.endswith(tail):
+            markers.add(f'role:{tail}')
+            break
+    return tuple(sorted(markers))
 
 
 def surface_owners(characters: dict[str, dict] | None) -> dict[str, frozenset[str]]:

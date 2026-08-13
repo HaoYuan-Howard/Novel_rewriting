@@ -104,27 +104,38 @@ def test_stage2_uses_one_concurrent_call_per_chapter_up_to_32(chapters, expected
     assert peak == expected_peak
 
 
-def test_global_blueprint_batch_and_stage3_style_start_concurrently(monkeypatch):
-    barrier = threading.Barrier(3)
-    entered = []
+def test_global_precedes_parallel_blueprint_and_anti_leak_style(monkeypatch):
+    from contracts.invariants import PROMPT_DEFAULTS
 
-    def paid(name, result):
-        def run(*_args):
+    barrier = threading.Barrier(2)
+    entered = []
+    global_done = threading.Event()
+
+    def run_global(*_args):
+        entered.append('global')
+        global_done.set()
+
+    def paid_after_global(name, result):
+        def run(*args):
+            assert global_done.is_set(), f'{name} 在全局专名表落盘前启动了'
             entered.append(name)
             barrier.wait(timeout=2)
+            if name == 'style':
+                assert args[-1] == PROMPT_DEFAULTS['stage3'] == 'anti-leak-v2'
             return result
         return run
 
-    monkeypatch.setattr(extract, 'run_global', paid('global', None))
-    monkeypatch.setattr(extract, 'request_blueprints', paid('blueprints', {'batch': 1}))
-    monkeypatch.setattr(style, 'request_style', paid('style', {'request': 1}))
-    report = object()
+    monkeypatch.setattr(extract, 'run_global', run_global)
+    monkeypatch.setattr(
+        extract, 'request_blueprints', paid_after_global('blueprints', {'batch': 1}))
     artifact = object()
+    monkeypatch.setattr(style, 'run_style', paid_after_global('style', artifact))
+    report = object()
     monkeypatch.setattr(extract, 'finish_blueprints', lambda *_a: report)
-    monkeypatch.setattr(style, 'finish_style', lambda *_a: artifact)
     got = initial_extract.run_initial_extract(*([object()] * 6))
     assert got == (report, artifact)
-    assert set(entered) == {'global', 'blueprints', 'style'}
+    assert entered[0] == 'global'
+    assert set(entered[1:]) == {'blueprints', 'style'}
 
 
 def _response_global() -> dict:

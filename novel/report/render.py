@@ -67,7 +67,8 @@ def _rules(rules: list[RuleLine]) -> list[str]:
     """判据行。**每条注册判据恰好一行**，没跑成的那些也在。"""
     out = [f'── 判据 ── {len(rules)} 条']
     for r in rules:
-        head = f'  {_STATUS_MARK[r.status]} {r.rule}（{r.sev}）{r.item}'
+        head = (f'  {_STATUS_MARK[r.status]} {r.rule}（{r.sev} · '
+                f'{r.check_kind}/{r.remediation}）{r.item}')
         if r.why:
             head += f' —— {r.why}'
         out.append(head)

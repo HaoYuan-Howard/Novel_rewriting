@@ -206,6 +206,139 @@ def test_habit_quote_spares_a_pure_structural_template():
     assert not _fire(data, 'habit_quote')
 
 
+def test_habit_quote_scans_chapter_local_style_lists_too():
+    data = _clean(_books()[0])
+    data['chapter_styles'] = [{
+        'source_ordinal': 1,
+        'voice': data['voice'],
+        'surface_habits': ['在转折处插入「我早就知道」式具体口头禅'],
+    }]
+    findings = _fire(data, 'habit_quote')
+    assert findings and findings[0].evidence == [
+        'chapter_styles[0].surface_habits[0]', '我早就知道']
+    assert '我早就知道' not in '\n'.join(data['surface_habits']), \
+        '命中应只能来自 chapter_styles，否则没有证明递归扫描真的生效'
+
+
+def test_targeted_habit_replacement_preserves_everything_outside_the_quote():
+    from novel.stages.stage3 import style
+    data = {'surface_habits': ['转折处用「我气笑了」制造突兀停顿，随后恢复长句。']}
+    got = style._replace_habit_literals(data, {'我气笑了': '短促的情绪反应句'})
+    assert got == {'surface_habits': ['转折处用短促的情绪反应句制造突兀停顿，随后恢复长句。']}
+    assert data['surface_habits'][0] == '转折处用「我气笑了」制造突兀停顿，随后恢复长句。'
+
+
+def test_targeted_habit_repair_contract_accepts_category_and_rejects_normalised_echo():
+    from novel.stages.stage3 import style
+
+    expected = {'我气笑了'}
+    assert style._replacement_contract_error(
+        {'我气笑了': '短促的情绪反应句'}, expected) is None
+    assert '复述原字面' in (style._replacement_contract_error(
+        {'我气笑了': '我 气笑了式反应'}, expected) or '')
+
+
+def test_chapter_prompt_contains_only_current_chapter_and_global_bands():
+    from novel.stages.stage3 import prompts
+    measurable = Measurable.model_validate(_clean(_books()[0])['measurable'])
+    one = prompts.build_chapter_user(
+        measurable, chapter_ordinal=1, chapter_text='第一章独有字节甲乙丙')
+    two = prompts.build_chapter_user(
+        measurable, chapter_ordinal=2, chapter_text='第二章独有字节丁戊己')
+    assert '第一章独有字节甲乙丙' in one and '第二章独有字节丁戊己' not in one
+    assert '第二章独有字节丁戊己' in two and '第一章独有字节甲乙丙' not in two
+    assert one.partition('── 源章 1')[0] == two.partition('── 源章 2')[0]
+
+
+def test_chapter_and_aggregate_prompts_publish_the_exact_response_shape():
+    from contracts.schema.stage3 import HookStyle, Voice
+    from novel.stages.stage3 import prompts
+
+    chapter = prompts.chapter_style_system()
+    aggregate = prompts.chapter_aggregate_system()
+    for key in Voice.model_fields:
+        assert f'"{key}"' in chapter
+        assert f'"{key}"' in aggregate
+    for key in HookStyle.model_fields:
+        assert f'"{key}"' not in chapter
+        assert f'"{key}"' in aggregate
+    assert '"surface_habits": [' in chapter
+    assert '"hook_style": {' in aggregate
+
+
+def test_anti_leak_response_abstraction_removes_inferred_mechanism_and_names():
+    from contracts.schema.stage3 import ChapterStyleResponse
+    from novel.stages.stage3 import style
+
+    raw = ChapterStyleResponse.model_validate({
+        'voice': {
+            'narrative_distance': '方衡以第一人称贴身叙述',
+            'register_tone': '系统提示与弹幕形成冷暖反差',
+            'interiority': '内心短句直接出现',
+            'sentence_rhythm': '短句快速推进',
+            'dialogue_presentation': '系统数值反馈独立成段',
+            'description_density': '环境描写稀疏',
+            'chapter_open_close': '直接开场并戛然而止',
+            'mode_variation': '任务面板出现时转为机械语气',
+        },
+        'surface_habits': ['方衡的系统弹窗独立成段，穿越身份不立即解释'],
+    })
+    cleaned, count = style._abstract_style_content(
+        raw, frozenset({'方衡', '系统'}), title='攻略女主系统')
+    blob = cleaned.model_dump_json()
+    assert count == 8
+    assert all(word not in blob for word in
+               ('方衡', '系统', '弹幕', '任务面板', '穿越身份'))
+    assert '量化反馈' in blob and '群体屏幕化评论' in blob
+
+
+def test_required_rejects_incomplete_or_reordered_chapter_style_coverage():
+    data = {**_clean(_books()[0])}
+    local = {
+        'source_ordinal': 1,
+        'voice': data['voice'],
+        'surface_habits': ['短句在转折处收束'],
+    }
+    data['chapter_styles'] = [local]
+    outcomes = checks.check(
+        data, corpus='', expected_chapters=(1, 2), require_chapter_styles=True)
+    required = next(outcome for outcome in outcomes if outcome.rule == 'required')
+    assert required.findings and '期望 [1, 2]' in required.findings[0].detail
+
+    data['chapter_styles'] = [
+        {**local, 'source_ordinal': 2},
+        local,
+    ]
+    outcomes = checks.check(
+        data, corpus='', expected_chapters=(1, 2), require_chapter_styles=True)
+    required = next(outcome for outcome in outcomes if outcome.rule == 'required')
+    assert required.findings and '实得 [2, 1]' in required.findings[0].detail
+
+
+def test_anti_leak_generation_refuses_to_run_without_stage2_name_table(monkeypatch):
+    from novel.errors import UpstreamMissing
+    from novel.stages.stage3 import style
+
+    monkeypatch.setattr(style, 'ArtifactStore', lambda _ctx: object())
+    monkeypatch.setattr(style, '_upstreams', lambda _store: (object(), object(), None))
+    with pytest.raises(UpstreamMissing, match='global_grounding'):
+        style.build_chapter_prompts(object())
+
+
+def test_real_experiment_defaults_are_explicit_and_valid():
+    from contracts.invariants import PROMPT_DEFAULTS, PROMPT_VARIANTS
+    from novel.stages.stage3 import style
+
+    assert PROMPT_DEFAULTS == {
+        'stage3': 'anti-leak-v2',
+        'stage5': 'baseline-v1',
+    }
+    assert all(PROMPT_DEFAULTS[stage] in variants
+               for stage, variants in PROMPT_VARIANTS.items())
+    assert style.run_style.__defaults__ == (PROMPT_DEFAULTS['stage3'],)
+
+
+
 def test_number_dup_goes_red_on_a_measured_number():
     data = _clean(_books()[0])
     data['voice']['sentence_rhythm'] = '平均句长 19 字，偏短'

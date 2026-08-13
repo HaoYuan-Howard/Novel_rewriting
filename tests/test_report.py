@@ -233,6 +233,23 @@ def test_actionable_is_derived_from_repair_not_stored_twice():
     assert finding('a', detail='d', evidence=[], registry=fed).actionable is True
 
 
+def test_report_exposes_check_kind_and_remediation_independently_of_severity(monkeypatch):
+    from novel.report.findings import ran
+    reg = _registry(
+        _rule(rule='semantic', sev='hard', check_kind='semantic', repair='UNIQUE', owner='stage5',
+              directive='修掉它。'),
+        _rule(rule='human', sev='hard'),
+        _rule(rule='metric', sev='metric', who_checks='METRIC', owner=None),
+    )
+    rep = _build(reg, [ran('semantic', scanned='1'), ran('human', scanned='1'),
+                       ran('metric', scanned='1')], monkeypatch=monkeypatch)
+    rows = {row.rule: row for row in rep.rules}
+    assert (rows['semantic'].check_kind, rows['semantic'].remediation) == ('semantic', 'llm')
+    assert (rows['human'].check_kind, rows['human'].remediation) == ('mechanical', 'human')
+    assert rows['metric'].remediation == 'none'
+
+
+
 # ───────── 记账键的出口 ─────────
 
 def _spec(*pairs):

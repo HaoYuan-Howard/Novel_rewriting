@@ -365,7 +365,7 @@ class NameMap(StrictModel):
 
     extra_subs: list[ExtraSub]
 
-    #: 代码合成的最终替换表 `{old: new}`。盘上 15/24/33 条。
+    #: 代码合成的最终替换表 `{old: new}`。历史三本盘上 15/24/33 条。
     #: ⚠ 落盘顺序是「长的在前」，**但替换器不依赖它**（自己按长度重排）⇒ **顺序是装饰**。
     subs: dict[str, str]
 

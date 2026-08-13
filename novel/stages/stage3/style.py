@@ -14,16 +14,22 @@ style.py —— 本层的**节点函数**。`argv` 那一头留给 Phase D（`bu
 """
 from __future__ import annotations
 
+import copy
+import json
+
+from contracts.invariants import PROMPT_DEFAULTS, PROMPT_VARIANTS
+from contracts.schema.common import Usage
 from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage3 import (
-    Measurable, StyleAttempt, StyleGrounding, StyleProvenance, StyleResponse,
+    ChapterStyle, ChapterStyleResponse, HabitRepairResponse, Measurable, StyleAttempt,
+    StyleGrounding, StyleProvenance, StyleResponse,
 )
 from novel import paths
 from novel.core.naming import names_of, spoiler_names_of
-from novel.core.text import render_book
-from novel.errors import GateBlocked, UpstreamMissing
+from novel.core.text import norm, render_book
+from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
 from novel.prov import fingerprint
 from novel.report import build
@@ -46,7 +52,11 @@ _INVALID = paths.invalid_of(REL)
 
 
 def _upstreams(store: ArtifactStore) -> tuple[MainText, HookCopy, GlobalGrounding | None]:
-    """三份上游。**第三份缺失不是硬错**——它只服务 `name_leak`，缺了那条判据落 `unver`。"""
+    """三份上游。
+
+    基线复检允许第三份缺失，此时 `name_leak` 诚实落 `unver`；anti-leak-v2 的产地
+    必须拿它构造脱敏表，缺失由 `build_chapter_prompts` 显式拒绝。
+    """
     main = store.read(MainText, MAIN_TEXT)
     hook = store.read(HookCopy, HOOK_COPY)
     gg = (store.read(GlobalGrounding, GLOBAL_GROUNDING)
@@ -76,6 +86,8 @@ def run_check_only(ctx: RunContext) -> CheckReport:
         names=names,
         spoiler_names=spoiler_names_of(gg, names) if gg is not None and names else frozenset(),
         measured_now=measure_all(main, hook),
+        expected_chapters=tuple(section.chapter_ordinal for section in main.root),
+        require_chapter_styles=_requires_chapter_styles(data),
     )
     prov = data.get('_provenance') or {}
     return build(
@@ -100,41 +112,461 @@ def _accounting_of(prov: dict) -> dict:
     return {k: prov[k] for k in ('attempts', 'revalidated', 'gates_skipped') if k in prov}
 
 
+def _requires_chapter_styles(data: dict) -> bool:
+    """盘上变体指纹决定逐章覆盖契约；删掉整个列表也不能伪装成基线。"""
+    recorded = (((data.get('_provenance') or {}).get('prompts') or {}).get('VARIANT'))
+    return recorded == fingerprint('anti-leak-v2')
+
+
 # ── 付费路 ──────────────────────────────────────────────────────────────────
 #
-# ⚠⚠ **本函数写好了，但在你点头之前一次都不许真跑**（那是本仓第一次真花钱）。
-#    先 `--dry-run`：`build_prompt()` 是 0 成本的，它把要发出去的两段原样交出来。
+# 付费预览与执行共用以下构造口；是否允许付费由 CLI 的 `--yes` 契约统一控制。
 
-def build_prompt(ctx: RunContext) -> tuple[str, str, Measurable]:
+def _redaction_terms(gg: GlobalGrounding | None) -> frozenset[str]:
+    """实验臂的专名表比告警名表更激进：脱敏宁可多，不向逐章写手泄漏。"""
+    if gg is None:
+        return frozenset()
+    return frozenset(
+        s for char in gg.entities.characters.values()
+        for s in ([char.canonical] + [a.surface for a in char.address])
+        if s and len(s.strip()) >= 2)
+
+
+# 模型即使只见过脱敏正文，也会从排版推断出常见内容机制；真实小说实验里它在
+# ch06/ch07 自行写回了“系统”。这些替换只把内容名还原成功能类别，不改句段/排版结论。
+# 最长项在前，避免“系统数值反馈”先被拆成不自然的半截短语。
+_STYLE_MECHANISM_ABSTRACTIONS = (
+    ('系统数值反馈', '量化反馈'),
+    ('系统数值', '量化反馈'),
+    ('系统弹窗', '非人称提示框'),
+    ('系统提示', '非人称提示'),
+    ('任务面板', '结构化任务提示界面'),
+    ('穿越身份', '身份错位信息'),
+    ('真实身世', '隐藏身份信息'),
+    ('隐藏能力', '未揭示能力信息'),
+    ('弹幕', '群体屏幕化评论'),
+    ('系统', '非人称提示机制'),
+)
+
+
+def _abstract_style_content(response: ChapterStyleResponse | StyleResponse,
+                            surfaces: frozenset[str], *, title: str
+                            ) -> tuple[ChapterStyleResponse | StyleResponse, int]:
+    """把模型风格响应里的作品内容名确定性抽象掉，并返回实际替换次数。
+
+    输入正文脱敏只能阻止“看见”；不能阻止模型根据方括号、量化反馈等形态猜出一个
+    常见机制名。这里的替换面严格闭合在 Stage 2 专名、书名和固定功能机制词上；不会
+    改写任意同义句，也不会让违规响应绕过其他风格判据。
+    """
+    data = response.model_dump(mode='python')
+    count = 0
+
+    # 整个书名先替换，避免标题里的“系统”等短词把标题切成半截。
+    replacement_map: dict[str, str] = {}
+    if title and len(title.strip()) >= 2:
+        replacement_map[title.strip()] = '〔作品标题〕'
+    mechanism_words = tuple(source for source, _target in _STYLE_MECHANISM_ABSTRACTIONS)
+    for surface in sorted({s.strip() for s in surfaces if s and len(s.strip()) >= 2},
+                          key=lambda value: (-len(value), value)):
+        if surface == title.strip():
+            continue
+        target = next((category for marker, category in _STYLE_MECHANISM_ABSTRACTIONS
+                       if marker in surface), '〔作品专名〕')
+        replacement_map[surface] = target
+    # 固定功能机制映射比同字面的笼统“作品专名”更有信息，且长短语必须先于短词。
+    replacement_map.update(_STYLE_MECHANISM_ABSTRACTIONS)
+    replacements = sorted(replacement_map.items(),
+                          key=lambda item: (-len(item[0]), item[0]))
+
+    def visit(value):
+        nonlocal count
+        if isinstance(value, str):
+            got = value
+            for source, target in replacements:
+                hits = got.count(source)
+                if hits:
+                    got = got.replace(source, target)
+                    count += hits
+            return got
+        if isinstance(value, list):
+            return [visit(item) for item in value]
+        if isinstance(value, dict):
+            return {key: visit(item) for key, item in value.items()}
+        return value
+
+    # 保留具体响应类型，聚合响应的 hook_style 也在同一闭合扫描面内。
+    cleaned = type(response).model_validate(visit(data))
+    leftovers = sorted({surface for surface in surfaces
+                        if surface and surface in cleaned.model_dump_json()})
+    mechanism_leftovers = sorted({source for source in mechanism_words
+                                  if source in cleaned.model_dump_json()})
+    if leftovers or mechanism_leftovers:
+        raise TerminalState(
+            f'逐章风格确定性抽象后仍残留作品内容名：{(leftovers + mechanism_leftovers)[:8]}')
+    return cleaned, count
+
+
+def build_prompt(ctx: RunContext, prompt_variant: str = 'baseline-v1'
+                 ) -> tuple[str, str, Measurable]:
     """`--dry-run`：把这次**要发出去的** `(system, user)` 原样交出来。**0 成本。**
 
     ⚠ 它与真跑共用同一个构造入口——展示与执行必须共用同一份构造函数（`R-11.8`），
     否则「预览里看到的」与「真发出去的」是两件事，而那种分家没有任何东西会报错。
     """
     store = ArtifactStore(ctx)
-    main, hook, _gg = _upstreams(store)
+    if prompt_variant not in PROMPT_VARIANTS['stage3']:
+        raise TerminalState(
+            f'stage3 --prompt-variant 要 {"|".join(PROMPT_VARIANTS["stage3"])}，'
+            f'收到 {prompt_variant!r}')
+    if prompt_variant == 'anti-leak-v2':
+        chapter_system, users, meas, _hook_text, _surfaces = build_chapter_prompts(ctx)
+        # dry-run 摊开第一个真实章请求；真跑逐章也调同一个构造口。
+        return chapter_system, users[0][1], meas
+    main, hook, gg = _upstreams(store)
     meas = measure_all(main, hook)
     book_text, section_index = render_book(main)
+    title, sid = ctx.title, ctx.sid
+    hook_text = (hook.text or '').strip()
     user = prompts.build_user(meas, book_text=book_text, section_index=section_index,
-                              hook_text=(hook.text or '').strip(),
-                              title=ctx.title, sid=ctx.sid)
-    return prompts.style_system(), user, meas
+                              hook_text=hook_text, title=title, sid=sid)
+    return prompts.style_system(prompt_variant), user, meas
+
+
+def build_chapter_prompts(ctx: RunContext
+                          ) -> tuple[str, list[tuple[int, str]], Measurable, str,
+                                     frozenset[str]]:
+    """anti-leak-v2 的真实输入面：一个请求只含一个源章。"""
+    store = ArtifactStore(ctx)
+    main, hook, gg = _upstreams(store)
+    if gg is None:
+        raise UpstreamMissing(
+            'anti-leak-v2 需要 stage2/global_grounding.json 先落盘，'
+            '否则无法用专名表脱敏当前章，不能把“没有检查材料”当成防泄露')
+    meas = measure_all(main, hook)
+    terms = _redaction_terms(gg) | frozenset({ctx.title})
+    system = prompts.chapter_style_system()
+    users = [
+        (section.chapter_ordinal,
+         prompts.build_chapter_user(
+             meas, chapter_ordinal=section.chapter_ordinal,
+             chapter_text=prompts.redact_style_entities(section.text, terms)))
+        for section in main.root
+    ]
+    output_surfaces = names_of(gg) if gg is not None else frozenset()
+    return (system, users, meas,
+            prompts.redact_style_entities((hook.text or '').strip(), terms),
+            output_surfaces)
+
+
+def request_chapter_styles(
+    ctx: RunContext,
+    client: LlmClient,
+) -> tuple[str, str, Measurable, list[ChapterStyle], StyleResponse, list[StyleAttempt]]:
+    """逐章抽取后再聚合。章请求可并发，但返回与落盘始终按源章序。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from novel.config import MAX_CONCURRENCY
+
+    chapter_system, users, measurable, hook_text, surfaces = build_chapter_prompts(ctx)
+    results: dict[int, tuple[str, ChapterStyleResponse, ChapterStyleResponse, int]] = {}
+    workers = min(
+        MAX_CONCURRENCY,
+        max(1, int(getattr(client, 'concurrency', MAX_CONCURRENCY))),
+        len(users),
+    )
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = {
+            pool.submit(
+                client.ask_json, chapter_system, user,
+                model_cls=ChapterStyleResponse,
+                purpose=f'{ctx.node}.chapter.{ordinal}',
+            ): (ordinal, user)
+            for ordinal, user in users
+        }
+        for future in as_completed(pending):
+            ordinal, user = pending[future]
+            raw = future.result()
+            cleaned, abstractions = _abstract_style_content(
+                raw, surfaces, title=ctx.title)
+            results[ordinal] = (user, raw, cleaned, abstractions)
+
+    chapter_styles = [
+        ChapterStyle(source_ordinal=ordinal, voice=response.voice,
+                     surface_habits=response.surface_habits)
+        for ordinal, (_user, _raw, response, _count) in sorted(results.items())
+    ]
+    aggregate_user = prompts.build_aggregate_user(
+        measurable,
+        chapter_styles=[style.model_dump() for style in chapter_styles],
+        hook_text=hook_text,
+    )
+    aggregate_system = prompts.chapter_aggregate_system()
+    aggregate_raw = client.ask_json(
+        aggregate_system, aggregate_user, model_cls=StyleResponse,
+        purpose=f'{ctx.node}.aggregate')
+    aggregate, aggregate_abstractions = _abstract_style_content(
+        aggregate_raw, surfaces, title=ctx.title)
+    attempts = [
+        StyleAttempt(
+            kind='chapter_local', chapter_ordinal=ordinal,
+            user_prompt=fingerprint(user),
+            output=fingerprint(raw.model_dump_json()),
+            cache_policy=ctx.cache.name,
+            abstractions=abstractions,
+        )
+        for ordinal, (user, raw, _response, abstractions) in sorted(results.items())
+    ] + [StyleAttempt(
+        kind='chapter_aggregate',
+        user_prompt=fingerprint(aggregate_user),
+        output=fingerprint(aggregate_raw.model_dump_json()),
+        cache_policy=ctx.cache.name,
+        abstractions=aggregate_abstractions,
+    )]
+    return (chapter_system, aggregate_system, measurable, chapter_styles,
+            aggregate, attempts)
 
 
 def request_style(
     ctx: RunContext,
     client: LlmClient,
+    prompt_variant: str = 'baseline-v1',
 ) -> tuple[str, str, Measurable, StyleResponse]:
-    system, user, measurable = build_prompt(ctx)
+    system, user, measurable = build_prompt(ctx, prompt_variant)
     response = client.ask_json(
         system, user, model_cls=StyleResponse, purpose=ctx.node)
     return system, user, measurable, response
+
+
+_QUOTE_PAIRS = (('「', '」'), ('“', '”'), ('‘', '’'), ('『', '』'), ('"', '"'))
+
+
+def _surface_habits(data: dict) -> list[str]:
+    """全局与逐章块中的习惯清单，保持盘上遍历顺序。"""
+    return [habit for _path, habits in checks._surface_habit_groups(data)
+            for habit in habits if isinstance(habit, str)]
+
+
+def _replace_habit_literals(data: dict, replacements: dict[str, str]) -> dict:
+    """只替换成对引号及其内部字面；引号外字节、条目数与顺序不交给模型。"""
+    got = copy.deepcopy(data)
+
+    def visit(obj):
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if key == 'surface_habits' and isinstance(value, list):
+                    for index, habit in enumerate(value):
+                        if not isinstance(habit, str):
+                            continue
+                        replaced = habit
+                        for literal, category in sorted(
+                                replacements.items(), key=lambda item: (-len(item[0]), item[0])):
+                            for opening, closing in _QUOTE_PAIRS:
+                                replaced = replaced.replace(
+                                    f'{opening}{literal}{closing}', category)
+                        value[index] = replaced
+                else:
+                    visit(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                visit(item)
+
+    visit(got)
+    return got
+
+
+def _outcome_evidence(outcomes, *, exclude: frozenset[str] = frozenset()) -> dict[str, set[str]]:
+    return {
+        outcome.rule: {finding.evidence_key for finding in outcome.findings}
+        for outcome in outcomes if outcome.rule not in exclude and outcome.findings
+    }
+
+
+def _usage_sum(left: Usage | None, right: Usage | None) -> Usage | None:
+    """两轮共同产出一份制品；任一轮没报某类 token 时总量也诚实保留 ``null``。"""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    token_fields = ('prompt_tokens', 'completion_tokens', 'reasoning_tokens')
+    tokens = {
+        field: (None if getattr(left, field) is None or getattr(right, field) is None
+                else getattr(left, field) + getattr(right, field))
+        for field in token_fields
+    }
+    return Usage(calls_made=left.calls_made + right.calls_made,
+                 calls_cached=left.calls_cached + right.calls_cached, **tokens)
+
+
+def _habit_repair_candidate(
+    ctx: RunContext,
+) -> tuple[ArtifactStore, StyleGrounding, dict, list, list[str], Measurable]:
+    """证明 `.INVALID` 的全部阻断问题都能由这一条窄修复触及。"""
+    store = ArtifactStore(ctx)
+    if not store.exists(_INVALID):
+        raise UpstreamMissing(f'{_INVALID} 不在盘上——没有待定向返工的问题稿')
+    main, hook, _gg = _upstreams(store)
+    artifact, data = store.read_own(StyleGrounding, _INVALID)
+    measured_now = measure_all(main, hook)
+    outcomes = _judge(store, data, measured_now=measured_now)
+    hard = _hard_rules(outcomes)
+    if hard != {'habit_quote'}:
+        raise TerminalState(
+            'stage3 定向返工只在唯一阻断问题为 habit_quote 时准入；'
+            f'当前阻断集是 {sorted(hard) or "（空）"}。'
+            '空集不该花钱，其他问题必须走各自的人审/修复路径')
+    literals = checks.habit_literals(data)
+    if not literals:
+        raise TerminalState('habit_quote 命中却提取不到字面 evidence；拒绝无目标付费返工')
+    return store, artifact, data, outcomes, literals, measured_now
+
+
+def build_habit_repair_prompt(ctx: RunContext) -> tuple[str, str, list[str]]:
+    """显式返工预览；与真实第二轮共用同一份候选准入与 user builder。"""
+    _store, _artifact, data, _outcomes, literals, _measured = _habit_repair_candidate(ctx)
+    return (prompts.habit_repair_system(),
+            prompts.build_habit_repair_user(_surface_habits(data), literals), literals)
+
+
+def _replacement_contract_error(replacements: dict[str, str],
+                                expected: set[str]) -> str | None:
+    """窄修复响应的纯边界；真实模型返回后、改任何产物字节前执行。"""
+    if set(replacements) != expected:
+        return (f'replacements 键集合必须与 evidence 完全相同：'
+                f'缺 {sorted(expected - set(replacements))}，'
+                f'多 {sorted(set(replacements) - expected)}')
+    quote_chars = frozenset('「」“”‘’『』"')
+    bad_values = [literal for literal, value in replacements.items()
+                  if any(char in value for char in quote_chars)
+                  or '\n' in value or len(value) > 40 or norm(literal) in norm(value)]
+    if bad_values:
+        return f'{bad_values} 的类别替换含引号/换行、过长或仍复述原字面'
+    return None
+
+
+def run_repair_surface_habits(
+    ctx: RunContext,
+    client: LlmClient,
+) -> tuple[StyleGrounding, CheckReport]:
+    """第二轮只生成类别替换；程序原位应用并用完整判据做回归护栏。"""
+    from novel.llm.cache import CachePolicy
+
+    store, previous, data, before_outcomes, literals, measured_now = \
+        _habit_repair_candidate(ctx)
+    habits = _surface_habits(data)
+    system = prompts.habit_repair_system()
+    user = prompts.build_habit_repair_user(habits, literals)
+    expected = set(literals)
+    before_evidence = _outcome_evidence(
+        before_outcomes, exclude=frozenset({'habit_quote'}))
+
+    def validate(response: HabitRepairResponse, _wire_response) -> str | None:
+        replacements = response.replacements
+        if why := _replacement_contract_error(replacements, expected):
+            return why
+        candidate = _replace_habit_literals(data, replacements)
+        if left := checks.habit_literals(candidate):
+            return f'确定性应用后仍有具体词例：{left[:5]}'
+        after_outcomes = _judge(store, candidate, measured_now=measured_now)
+        if hard := _hard_rules(after_outcomes):
+            return f'替换引入或保留阻断问题：{sorted(hard)}'
+        after_evidence = _outcome_evidence(
+            after_outcomes, exclude=frozenset({'habit_quote'}))
+        added = {rule: sorted(keys - before_evidence.get(rule, set()))
+                 for rule, keys in after_evidence.items()
+                 if keys - before_evidence.get(rule, set())}
+        if added:
+            return f'替换引入新的非目标 finding：{added}'
+        return None
+
+    # 定向重采样不能读回首轮同问题缓存，但仍写入新缓存与账本。
+    ctx.cache = CachePolicy.refresh()
+    response = client.ask_json(
+        system, user, model_cls=HabitRepairResponse,
+        purpose=f'{ctx.node}.surface_habits_targeted_repair',
+        max_tokens=16_000, validator=validate)
+    repaired_data = _replace_habit_literals(data, response.replacements)
+    after_outcomes = _judge(store, repaired_data, measured_now=measured_now)
+
+    attempt = StyleAttempt(
+        kind='surface_habits_targeted_repair',
+        input=fingerprint(json.dumps(habits, ensure_ascii=False)),
+        evidence=fingerprint(json.dumps(literals, ensure_ascii=False)),
+        evidence_count=len(literals),
+        user_prompt=fingerprint(user),
+        output=fingerprint(response.model_dump_json()),
+        cache_policy=ctx.cache.name,
+        model=client.model,
+        code=ctx.code,
+    )
+    fresh = ctx.llm_provenance(
+        StyleProvenance, prompts={'HABIT_LITERAL_REPAIR_SYS': system}, model=client.model,
+        attempts=[attempt])
+    old = previous.provenance
+    merged = old.model_copy(update={
+        'code': fresh.code,
+        'inputs': fresh.inputs,
+        'prompts': {**old.prompts, **fresh.prompts},
+        # 顶层 model 仍说明首轮主产物；第二轮模型逐次记在 attempt 上。
+        'model': old.model,
+        'usage': _usage_sum(old.usage, fresh.usage),
+        'attempts': [*old.attempts, attempt],
+        'gates_skipped': None,
+        'revalidated': None,
+        'origin': None,
+        'input_basis': None,
+        'partial_rewrite': None,
+    })
+    repaired_data['_provenance'] = merged.model_dump(by_alias=True, mode='json')
+    artifact = StyleGrounding.model_validate(repaired_data)
+
+    # 新正式稿先落稳，再收起第一轮问题稿；中途崩溃时至少总有一份可恢复稿在活路径。
+    if store.exists(REL):
+        store.archive_round(REL)
+    store.write(REL, artifact)
+    if store.exists(_INVALID):
+        store.archive_round(_INVALID)
+    prov = artifact.model_dump(by_alias=True).get('_provenance') or {}
+    report = build(
+        sid=ctx.sid, node=ctx.node, freshness=store.freshness(REL),
+        outcomes=after_outcomes, accounting=_accounting_of(prov), invalid=False,
+        revalidated=prov.get('revalidated'), origin=prov.get('origin'))
+    return artifact, report
+
+
+def _write_initial_result(
+    ctx: RunContext,
+    client: LlmClient,
+    store: ArtifactStore,
+    artifact: StyleGrounding,
+    outcomes,
+    *,
+    label: str,
+) -> StyleGrounding:
+    """首轮产物先过闸；仅当唯一阻断项有窄 LLM 路由时自动进入第二轮。"""
+    hard = _hard_rules(outcomes)
+    if hard:
+        if store.exists(_INVALID):
+            store.archive_round(_INVALID)
+        path = store.write_invalid(REL, artifact, gates_skipped=[])
+        if hard == {'habit_quote'}:
+            repaired, _report = run_repair_surface_habits(ctx, client)
+            return repaired
+        raise GateBlocked(
+            f'{label}落盘闸门拦下：{sorted(hard)}。问题稿在 {path}；'
+            '报告的 remediation/fix 会区分 LLM 可修与必须人审的问题',
+            invalid_path=str(path))
+    if store.exists(REL):
+        store.archive_round(REL)
+    store.write(REL, artifact)
+    if store.exists(_INVALID):
+        store.archive_round(_INVALID)
+    return artifact
 
 
 def finish_style(
     ctx: RunContext,
     client: LlmClient,
     requested: tuple[str, str, Measurable, StyleResponse],
+    prompt_variant: str = 'baseline-v1',
 ) -> StyleGrounding:
     """**付费**：抽一份文风画像，先校验后落盘。
 
@@ -154,7 +586,8 @@ def finish_style(
         voice=resp.voice, surface_habits=resp.surface_habits, hook_style=resp.hook_style,
         measurable=meas,
         **{'_provenance': ctx.llm_provenance(
-            StyleProvenance, prompts={'STYLE_SYS': system}, model=client.model,
+            StyleProvenance, prompts={'STYLE_SYS': system, 'VARIANT': prompt_variant},
+            model=client.model,
             attempts=[StyleAttempt(kind='initial',
                                    user_prompt=fingerprint(user),
                                    output=fingerprint(resp.model_dump_json()),
@@ -163,23 +596,41 @@ def finish_style(
     # 落盘那一趟**不排** `measurable_drift`：`measurable` 刚由代码算出来，
     # 与「照盘上 stage1 重算」必然相等——一条永远不会红的检查不该打 `[OK]`（判据 31）。
     outcomes = _judge(store, artifact.model_dump(by_alias=True), measured_now=None)
-    hard = [o for o in outcomes if o.findings
-            and any(f.sev == 'hard' for f in o.findings)]
-    if hard:
-        # ⚠ `gates_skipped` **空列表也要写**：「这次没有闸门缺料」与「这份产物早于
-        # 这套机制」必须分得开（`_common.md` §五）。本层串行跑，恒是空。
-        p = store.write_invalid(REL, artifact, gates_skipped=[])
-        raise GateBlocked(
-            f'stage3 落盘闸门拦下这一份：{[o.rule for o in hard]}。'
-            f'**稿子没有丢，也没有再花钱**——问题稿在 {p}，'
-            f'人手改一行之后跑 `--revalidate`（0 成本）',
-            invalid_path=str(p))
-    store.write(REL, artifact)
-    return artifact
+    return _write_initial_result(
+        ctx, client, store, artifact, outcomes, label='stage3 ')
 
 
-def run_style(ctx: RunContext, client: LlmClient) -> StyleGrounding:
-    return finish_style(ctx, client, request_style(ctx, client))
+def run_style(ctx: RunContext, client: LlmClient,
+              prompt_variant: str = PROMPT_DEFAULTS['stage3']) -> StyleGrounding:
+    if prompt_variant == 'baseline-v1':
+        return finish_style(
+            ctx, client, request_style(ctx, client, prompt_variant), prompt_variant)
+    if prompt_variant != 'anti-leak-v2':
+        raise TerminalState(
+            f'stage3 --prompt-variant 要 {"|".join(PROMPT_VARIANTS["stage3"])}，'
+            f'收到 {prompt_variant!r}')
+
+    store = ArtifactStore(ctx)
+    (chapter_system, aggregate_system, meas, chapter_styles,
+     aggregate, attempts) = request_chapter_styles(ctx, client)
+    artifact = StyleGrounding(
+        voice=aggregate.voice,
+        surface_habits=aggregate.surface_habits,
+        hook_style=aggregate.hook_style,
+        measurable=meas,
+        chapter_styles=chapter_styles,
+        **{'_provenance': ctx.llm_provenance(
+            StyleProvenance,
+            prompts={'STYLE_CHAPTER_SYS': chapter_system,
+                     'STYLE_AGGREGATE_SYS': aggregate_system,
+                     'VARIANT': prompt_variant},
+            model=client.model,
+            attempts=attempts,
+        )},
+    )
+    outcomes = _judge(store, artifact.model_dump(by_alias=True), measured_now=None)
+    return _write_initial_result(
+        ctx, client, store, artifact, outcomes, label='stage3 逐章风格')
 
 
 def _judge(store: ArtifactStore, data: dict, *, measured_now: Measurable | None):
@@ -192,7 +643,9 @@ def _judge(store: ArtifactStore, data: dict, *, measured_now: Measurable | None)
     return checks.check(
         data, corpus=corpus_of(main, hook), names=names,
         spoiler_names=spoiler_names_of(gg, names) if gg is not None and names else frozenset(),
-        measured_now=measured_now)
+        measured_now=measured_now,
+        expected_chapters=tuple(section.chapter_ordinal for section in main.root),
+        require_chapter_styles=_requires_chapter_styles(data))
 
 
 def remeasured(ctx: RunContext) -> tuple[StyleGrounding, list[tuple[str, object, object]]]:

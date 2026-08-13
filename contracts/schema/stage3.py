@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-stage3.py —— 对应 `docs/schema/stage3.md`。文风画像。**全书一次调用，产一份产物。**
+stage3.py —— 对应 `docs/schema/stage3.md`。文风画像，最终仍只产一份正式制品。
+
+`baseline-v1` 全书一次抽取；`anti-leak-v2` 每源章一次局部抽取，再用只含抽象风格块的
+聚合请求形成全局画像。两臂共用同一份落盘 schema，只有实验臂附带 `chapter_styles[]`。
 
 【四条贯穿本层的事实，读模型前先知道】
 
@@ -14,8 +17,8 @@ stage3.py —— 对应 `docs/schema/stage3.md`。文风画像。**全书一次�
      一条判据都没有**（`R-4.7` → `B-09`）。⇒ PASS = 「没有可探测的越界」，
      **不是**「这份文风画像抓对了」。
 
-  ③ **这份产物整份进写作节点的 prompt，而且全链只有它没有章级闸门。**
-     一处越界 = 全书每一章的 prompt 里都有它。实测代价：某本的 `voice.mode_variation`
+  ③ **基线产物的全局风格块整份进每章写作 prompt；实验臂只下发当前源章的局部风格，
+     数字锚点仍来自全书确定性测量。** 基线的一处越界会污染全书每章。实测代价：某本的 `voice.mode_variation`
      写了「…系统摊牌…」，而「系统」是读者第 14 章才知情的秘密的主体——
      **写第 1 章的闭卷写手当场读到全书最大的底**。
 
@@ -37,7 +40,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from contracts.invariants import (
     CACHE_POLICY, HOOK_KEYS, STAGE3_ATTEMPT_KINDS, VOICE_KEYS,
@@ -263,13 +266,28 @@ class StyleAttempt(StrictModel):
     model: str | None = None
     code: str | None = None
 
+    #: `chapter_local` 才有；其余调用为空。
+    chapter_ordinal: int | None = Field(default=None, ge=1)
+
+    #: anti-leak-v2 在模型响应进入聚合/落盘前，按 Stage 2 名表和固定机制词做的
+    #: 确定性抽象次数。只记数量，不把被移除的作品专名重新塞回 provenance。
+    abstractions: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode='after')
+    def _chapter_matches_kind(self) -> StyleAttempt:
+        if (self.kind == 'chapter_local') != (self.chapter_ordinal is not None):
+            raise ValueError(
+                'chapter_local 必须带 chapter_ordinal，其他 style attempt 不得带章号')
+        return self
+
 
 class StyleProvenance(LlmProvenance):
     """`style_grounding._provenance`。
 
     `inputs` 恒三条：`stage1/main_text.json` · `stage1/hook_copy.json` ·
     `stage2/global_grounding.json`。
-    ⚠ 第三条只被**校验期**用（取人物名表），**抽取本身不吃 stage2**——风格与情节正交。
+    基线臂只在校验期消费第三条；默认 `anti-leak-v2` 还在抽取前消费其中的专名表，
+    只用于确定性脱敏，**不把秘密事实或全书情节发给风格模型**。
 
     ⚠⚠ **这三个键（`attempts` / `revalidated` / `gates_skipped`）今天一个出口都没有**：
     实跑三本 `--check-only`，报告里一行都没有。而它们记的恰好是最该被人看见的三件事——
@@ -288,6 +306,19 @@ class StyleProvenance(LlmProvenance):
 # ─────────────────────────────────────────────────────────────────────────────
 # 顶层
 # ─────────────────────────────────────────────────────────────────────────────
+
+class ChapterStyle(StrictModel):
+    """只由一个源章抽出的定性风格；正文写作只消费对应源章这一份。"""
+
+    source_ordinal: int = Field(ge=1)
+    voice: Voice
+    surface_habits: list[str] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _no_empty_surface_habit(self) -> ChapterStyle:
+        if any(not habit.strip() for habit in self.surface_habits):
+            raise ValueError('chapter style 的 surface_habits 里有空条目')
+        return self
 
 class StyleGrounding(StrictModel):
     """`stage3/style_grounding.json`。"""
@@ -313,12 +344,27 @@ class StyleGrounding(StrictModel):
     hook_style: HookStyle
     measurable: Measurable
 
+    #: 基线产物为空；anti-leak-v2 为每个源章恰好一份。Stage 5 见到本字段后
+    #: 只消费当前输出章对应的局部风格，未来章描述在结构上不可见。
+    chapter_styles: list[ChapterStyle] = Field(default_factory=list)
+
+    @model_serializer(mode='wrap')
+    def _omit_empty_chapter_styles(self, handler: SerializerFunctionWrapHandler):
+        """存量基线不长新空键；实验产物非空时才落盘。"""
+        data = handler(self)
+        if not self.chapter_styles:
+            data.pop('chapter_styles', None)
+        return data
+
     provenance: StyleProvenance = Field(alias='_provenance')
 
     @model_validator(mode='after')
     def _no_empty_surface_habit(self) -> StyleGrounding:
         if any(not h.strip() for h in self.surface_habits):
             raise ValueError('surface_habits 里有空条目——空条目会被下游当成一条要照做的手法')
+        ordinals = [item.source_ordinal for item in self.chapter_styles]
+        if len(ordinals) != len(set(ordinals)):
+            raise ValueError(f'chapter_styles 的 source_ordinal 重复：{ordinals}')
         return self
 
 
@@ -341,3 +387,34 @@ class StyleResponse(StrictModel):
     voice: Voice
     surface_habits: list[str] = Field(min_length=1)
     hook_style: HookStyle
+
+
+class HabitRepairResponse(StrictModel):
+    """定向返工只给每个命中字面一个抽象类别；原句由确定性代码原位替换。
+
+    返回整条 ``surface_habits`` 会让模型顺手改掉引号外的合格内容，而调用侧无法证明
+    它只修了判据指出的部分。键集合与替换文本的更窄约束由调用点 validator 对本次
+    evidence 精确校验。
+    """
+
+    replacements: dict[str, str] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _non_empty_replacements(self) -> HabitRepairResponse:
+        if any(not literal.strip() or not replacement.strip()
+               for literal, replacement in self.replacements.items()):
+            raise ValueError('habit repair 的命中字面与类别替换都必须非空')
+        return self
+
+
+class ChapterStyleResponse(StrictModel):
+    """anti-leak-v2 单个源章调用的响应；它看不到 hook 与其他章节。"""
+
+    voice: Voice
+    surface_habits: list[str] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _no_empty_surface_habit(self) -> ChapterStyleResponse:
+        if any(not habit.strip() for habit in self.surface_habits):
+            raise ValueError('chapter style response 的 surface_habits 里有空条目')
+        return self

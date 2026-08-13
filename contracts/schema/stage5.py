@@ -9,6 +9,7 @@ stage5/<mode>/chNN.json          LLM 产，逐章一次调用 —— 唯一承�
 stage5/<mode>/chNN.INVALID.json  被落盘闸门拦下的问题稿（同一份章契约 + errs）
 stage5/<mode>/_rounds/…          三种归档：上一轮 · 被提升掉的问题稿 · 被护栏驳回的自救
 stage5/review_<n>.json           确定性验收报告（**0 成本，不调 LLM**）
+stage5/semantic_<n>.json         书级语义审判（付费；claims → reveal 对齐）
 stage5/wontfix.json              人的「这条我不修」
 stage5/draft.md                  两条臂合成的全书拼稿（字节形态，不在本模块）
 ```
@@ -45,14 +46,15 @@ stage5/draft.md                  两条臂合成的全书拼稿（字节形态�
 """
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import Field, RootModel, model_validator
+from pydantic import Field, RootModel, field_validator, model_validator
 
 from contracts.invariants import DEPTH_MODES
 from contracts.schema.base import Fp10, FrozenModel, StrictModel
 from contracts.schema.common import (
-    Finding, FreeProvenance, RoundFreeProvenance, RoundLlmProvenance,
+    Finding, FreeProvenance, LlmProvenance, RoundFreeProvenance, RoundLlmProvenance,
 )
 
 Mode = Literal[DEPTH_MODES]
@@ -335,7 +337,158 @@ class Review(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、`stage5/wontfix.json`
+# 三、`stage5/semantic_<n>.json`
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SemanticClaim(StrictModel):
+    """模型从某章成稿抽出的一个可判真假的命题，以及正文中的逐字证据。"""
+
+    claim_id: str = Field(min_length=1)
+    assertion: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+
+    @field_validator('claim_id', mode='before')
+    @classmethod
+    def _normalise_claim_id(cls, value):
+        # DeepSeek 实跑会稳定地把章内序号写成 JSON number。claim_id 只是本次
+        # 审判内部的引用键，不承载语义；在不放宽 evidence 逐字闸的前提下统一成字符串。
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
+
+
+class SemanticChapterClaims(StrictModel):
+    output_ordinal: int = Field(ge=1)
+    coverage: Literal['complete', 'uncertain']
+    uncertainty_reason: str | None = None
+    claims: list[SemanticClaim]
+
+    @model_validator(mode='before')
+    @classmethod
+    def _normalise_uncertainty_reason_alias(cls, value):
+        """收敛 DeepSeek 实跑出现的解释键；不确定原因的冲突值仍然拒绝。"""
+        if not isinstance(value, dict):
+            return value
+        got = dict(value)
+        alias_keys = ('coverage_reason', 'coverage_note', 'reason', 'reasoning')
+        if got.get('coverage') == 'uncertain':
+            present = {
+                key: got[key] for key in ('uncertainty_reason', *alias_keys)
+                if key in got and got[key] not in (None, '')
+            }
+            if len({str(item) for item in present.values()}) > 1:
+                raise ValueError(f'不确定原因别名互相冲突：{list(present)}')
+            if not got.get('uncertainty_reason') and present:
+                got['uncertainty_reason'] = next(iter(present.values()))
+        # complete 时这些是模型擅自附带的过程说明，不把它偷换成“不确定”；真正写在
+        # uncertainty_reason 的矛盾仍交给 after validator 拒绝。
+        for alias in alias_keys:
+            got.pop(alias, None)
+        return got
+
+    @model_validator(mode='after')
+    def _uncertainty_is_explicit(self) -> SemanticChapterClaims:
+        if self.coverage == 'uncertain' and not self.uncertainty_reason:
+            raise ValueError('coverage=uncertain 必须说明 uncertainty_reason')
+        if self.coverage == 'complete' and self.uncertainty_reason:
+            raise ValueError('coverage=complete 不应携带 uncertainty_reason')
+        return self
+
+
+class SemanticEvidenceRef(StrictModel):
+    output_ordinal: int = Field(ge=1)
+    claim_id: str = Field(min_length=1)
+
+    @field_validator('claim_id', mode='before')
+    @classmethod
+    def _normalise_claim_id(cls, value):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
+
+
+class SemanticSecretDecision(StrictModel):
+    """第二相模型只负责语义判断；时间线字段由代码从 Stage 2/4 派生。"""
+
+    secret_id: str = Field(min_length=1)
+    status: Literal['leak', 'clear', 'unver']
+    evidence_refs: list[SemanticEvidenceRef] = Field(default_factory=list)
+    reason: str = Field(min_length=1)
+
+    @field_validator('evidence_refs', mode='before')
+    @classmethod
+    def _normalise_refs(cls, value):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return value
+        out = []
+        for item in value:
+            if isinstance(item, str):
+                match = re.fullmatch(r'\(\s*(\d+)\s*,\s*([^,()\s]+)\s*\)', item)
+                if match is not None:
+                    item = {
+                        'output_ordinal': int(match.group(1)),
+                        'claim_id': match.group(2),
+                    }
+            out.append(item)
+        return out
+
+    @model_validator(mode='after')
+    def _status_shape(self) -> SemanticSecretDecision:
+        if self.status == 'leak' and not self.evidence_refs:
+            raise ValueError('status=leak 必须给 evidence_refs')
+        if self.status != 'leak' and self.evidence_refs:
+            raise ValueError(f'status={self.status} 不得携带 evidence_refs')
+        return self
+
+
+class SemanticSecretAdjudication(StrictModel):
+    secret_id: str = Field(min_length=1)
+    reveal_chapter: int = Field(ge=1)
+    status: Literal['leak', 'clear', 'unver']
+    evidence_refs: list[SemanticEvidenceRef]
+    earliest_chapter: int | None = Field(default=None, ge=1)
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _status_shape(self) -> SemanticSecretAdjudication:
+        if self.status == 'leak':
+            if not self.evidence_refs or self.earliest_chapter is None:
+                raise ValueError('status=leak 必须给 evidence_refs 与 earliest_chapter')
+            if self.earliest_chapter >= self.reveal_chapter:
+                raise ValueError('泄漏证据必须早于 reveal_chapter')
+        else:
+            if self.evidence_refs or self.earliest_chapter is not None:
+                raise ValueError(
+                    f'status={self.status} 不得携带命中证据或 earliest_chapter')
+        return self
+
+
+class SemanticClaimsResponse(StrictModel):
+    """第一相模型响应：只看正文逐章抽命题，不能接触任何 secret。"""
+
+    chapters: list[SemanticChapterClaims] = Field(min_length=1)
+
+
+class SemanticAlignmentResponse(StrictModel):
+    """第二相模型响应；确定性的 reveal/earliest 不让模型复述。"""
+
+    secrets: list[SemanticSecretDecision] = Field(min_length=1)
+
+
+class SemanticReview(StrictModel):
+    """付费语义审判的可审计落盘形态。"""
+
+    mechanical_review_seq: int = Field(ge=1)
+    judged: dict[str, JudgedDraft]
+    chapters: list[SemanticChapterClaims] = Field(min_length=1)
+    secrets: list[SemanticSecretAdjudication] = Field(min_length=1)
+    provenance: LlmProvenance = Field(alias='_provenance')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 四、`stage5/wontfix.json`
 # ─────────────────────────────────────────────────────────────────────────────
 
 class WontFixEntry(StrictModel):

@@ -37,9 +37,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from contracts.invariants import (
-    DEPTH_MODES, HINGE_LABEL, HINGE_LABEL_PARTS, LAYER_CN, LAYER_GLOSS, TIME_LAYERS,
-    hinge_heading,
+    DEPTH_MODES, HINGE_LABEL, HINGE_LABEL_PARTS, LAYER_CN, LAYER_GLOSS, PROMPT_VARIANTS,
+    TIME_LAYERS, hinge_heading,
 )
+from novel.core.measure import measure
 from novel.core.text import norm
 from novel.llm.prompts import fill
 from novel.stages.stage5 import measure as M
@@ -301,7 +302,8 @@ _SYS_OF: dict[str, str] = {'deep': DEEP_SYS, 'shallow': SHALLOW_SYS}
 assert tuple(_SYS_OF) == DEPTH_MODES, '臂的取值面与 `contracts.invariants.DEPTH_MODES` 分家了'
 
 
-def write_system(mode: str, *, revise: bool = False) -> str:
+def write_system(mode: str, *, revise: bool = False,
+                 variant: str = 'baseline-v1') -> str:
     """这一次要发出去的 system。**盘上那三个指纹的唯一产地。**
 
     `deep` · `shallow` · `deep|shallow + REVISE_TAIL` —— 修订轮的 SYS 是**拼过的**，
@@ -315,7 +317,32 @@ def write_system(mode: str, *, revise: bool = False) -> str:
     if mode not in _SYS_OF:
         raise KeyError(f'没有 {mode!r} 这条臂。取值面是 {DEPTH_MODES}'
                        f'（`contracts.invariants.DEPTH_MODES`）')
-    return fill(_SYS_OF[mode] + (REVISE_TAIL if revise else ''))
+    if variant not in PROMPT_VARIANTS['stage5']:
+        raise KeyError(
+            f'没有 {variant!r} 这条 stage5 prompt 实验臂。'
+            f'取值面是 {PROMPT_VARIANTS["stage5"]}')
+    guarded = ''
+    if variant == 'guarded-v2':
+        guarded = """
+
+【实验臂补强】
+- 任何秘密只按本章材料允许的信息层级落笔；不要根据风格画像或全书惯例猜后文底牌。
+- 对白密度同时参照本章源文标量与全书基线；不为追比例编台词，也不把承重台词压成转述。"""
+        if mode == 'shallow':
+            guarded += '\n- 叙述层标签的含义：' + LAYER_RULE + '。'
+    return fill(_SYS_OF[mode] + guarded + (REVISE_TAIL if revise else ''))
+
+
+def variant_from_provenance(raw: dict[str, Any] | None) -> str:
+    """存量没有 VARIANT 即基线；新产物按指纹恢复当时的 prompt 臂。"""
+    from novel.prov import fingerprint
+    recorded = (((raw or {}).get('_provenance') or {}).get('prompts') or {}).get('VARIANT')
+    if recorded is None:
+        return 'baseline-v1'
+    for variant in PROMPT_VARIANTS['stage5']:
+        if recorded == fingerprint(variant):
+            return variant
+    raise ValueError(f'无法识别 stage5 prompt variant 指纹：{recorded!r}')
 
 
 def trim_system() -> str:
@@ -496,14 +523,44 @@ def chapter_directive(entry: dict[str, Any], book: M.Book) -> str:
     return '\n'.join(lines)
 
 
-def style_block(style: dict[str, Any]) -> str:
+def style_for_sources(style: dict[str, Any], source_ordinals: list[int] | tuple[int, ...]
+                      ) -> dict[str, Any]:
+    """有逐章风格时只投影当前源章；数值仍永远取全书 measurable。"""
+    indexed = {int(item.get('source_ordinal')): item
+               for item in (style.get('chapter_styles') or [])
+               if item.get('source_ordinal') is not None}
+    if not indexed:
+        return style
+    missing = [ordinal for ordinal in source_ordinals if ordinal not in indexed]
+    if missing:
+        raise ValueError(f'逐章风格缺少源章 {missing}，拒绝回退到可能携带后文信息的全局风格')
+    picked = [indexed[ordinal] for ordinal in source_ordinals]
+    if not picked:
+        raise ValueError('已有逐章风格时，写作计划必须声明 from_source_ordinals')
+    voices: dict[str, str] = {}
+    for key in (style.get('voice') or {}):
+        values = list(dict.fromkeys(
+            str((item.get('voice') or {}).get(key) or '').strip()
+            for item in picked
+            if str((item.get('voice') or {}).get(key) or '').strip()))
+        if values:
+            voices[key] = '；'.join(values)
+    habits = list(dict.fromkeys(
+        str(habit).strip() for item in picked
+        for habit in (item.get('surface_habits') or []) if str(habit).strip()))
+    return {'voice': voices, 'surface_habits': habits,
+            'measurable': style.get('measurable') or {}}
+
+
+def style_block(style: dict[str, Any], *, source_ordinals: list[int] | tuple[int, ...] = ()) -> str:
     """声音底座：voice 八维 + 写作习惯 + 形态档位。**判据 `style_block_carries_plot` 扫的就是它。**
 
     ⚠ 形态一律给**档位词**不给数值——写手要的是「极短段/一句一段」这种可执行的形态，
     给原始数字既没用又会诱导它去凑数。
     """
-    v = style.get('voice') or {}
-    meas = style.get('measurable') or {}
+    projected = style_for_sources(style, source_ordinals)
+    v = projected.get('voice') or {}
+    meas = projected.get('measurable') or {}
     from contracts.schema.stage3 import Measurable
     from novel.core.bands import bands as _bands
     band_txt = _compact(_bands(Measurable.model_validate(meas))) if (meas.get('body')) else ''
@@ -518,7 +575,7 @@ def style_block(style: dict[str, Any]) -> str:
         '\n  每条说的是一种【生成方式】，按它执行；它若要求重复（如三连短句、固定自称），'
         '重复就是手法本身，照它说的节奏来。只禁一件事：不要把任何例句当口头禅在同一章里原样复用——'
         '手法要反复出现，具体的句子每次新写。',
-        *[f'· {h}' for h in (style.get('surface_habits') or [])],
+        *[f'· {h}' for h in (projected.get('surface_habits') or [])],
         ('【形态档位（写出来要落在这些档上）】\n' + band_txt) if band_txt else '',
     ]))
 
@@ -574,7 +631,8 @@ def writer_chars(entry: dict[str, Any], book: M.Book) -> dict[str, dict[str, str
             for cid, v in chars.items()}
 
 
-def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> str:
+def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: bool,
+                   variant: str = 'baseline-v1') -> str:
     """对白形态块——**这本书的承重墙**。占比 / 符号 / 本章引语数 / 排版惯例，全部从产物插值。
 
     ⚠ `dialogue_ratio_applicable=False`（语料无引号）⇒ **不下发**：没有可信目标时教排版
@@ -593,6 +651,13 @@ def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
     sym = base.get('quote_styles') or []
     lines = ['── 对白形态（这本书的承重墙）──',
              f"这本书对白密集，正文约 {pct} 的字符在引号里，引号体是 {sym[0] if sym else ''}。"]
+    if variant == 'guarded-v2':
+        chapter_meas = measure(M.chapter_source(entry, book.source_text))
+        chapter_ratio = chapter_meas.dialogue_ratio if chapter_meas is not None else None
+        if chapter_ratio is not None:
+            lines.append(
+                f'本章源文直接引语字符约占 {chapter_ratio:.0%}；把它当本章软目标，'
+                '允许随压缩幅度自然浮动，不要为凑比例新增台词。')
     n = M.src_quote_count(entry, book.source_text)
     if n and with_source_text:
         lines.append(f'本章原文有 {n} 句直接引语——成稿里的直接引语不应明显少于它；'
@@ -615,7 +680,8 @@ class Material:
     source_text: str
 
 
-def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> Material:
+def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: bool,
+                   variant: str = 'baseline-v1') -> Material:
     """组装一章的下发面。`with_source_text=True` 即开卷（给原章正文）。
 
     ⚠⚠ **闭卷模式下这里一个字节的源章原文都不碰**——那份原文只供校验器算重合度。
@@ -659,7 +725,7 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
         + (f'、明喻（像/仿佛/如同这类）每千字只有约 {simile:.1f} 个'
            if simile is not None else '')
         + '。写完回看：你的句段若明显比它长、比喻明显比它密，就是写成了另一本书。',
-        dialogue_block(entry, book, with_source_text=with_source_text),
+        dialogue_block(entry, book, with_source_text=with_source_text, variant=variant),
         '── 本章要写的内容（按顺序；**只写这些**，不得新增剧情、也不要写别的章的事）──\n'
         + chapter_facts(entry),
         '── 人物（用这些名字，不要改名、不要另造称呼）──\n'
@@ -670,7 +736,7 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
         # 逐章投影：只给到本章为止该知道的。⚠ **`must_not_reveal` 不在这里**——
         # 它只有裸 id、对写手无从执行，真正的保护是那些 secret **根本不下发**。
         facts_block(entry),
-        style_block(book.style),
+        style_block(book.style, source_ordinals=tuple(entry.get('from_source_ordinals') or [])),
     ]
     if (prev := prev_context(entry, book)):
         blocks.append(prev)

@@ -279,7 +279,7 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
         body = rec.get('text') or ''
         bodies[o] = body
         mode = rec['_mode']
-        mat = _material(entry, book, mode=mode)
+        mat = _material(entry, book, mode=mode, raw=rec)
         fs += checks.chapter_findings(body, entry, book, mode=mode, given=mat)
         extra, one_land = checks.review_chapter_findings(body, entry, book)
         fs += extra
@@ -340,8 +340,11 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
 
     # ── ⑤ 基线（判据 31：没有基线数字的判据，等于不知道自己在说什么）───────────
     nch = len([r for r in rows if r.relpath])
+    # 这份确定性验收的恒等基线只覆盖机械判据。语义判据有自己按审判产物
+    # 记录的覆盖账；把它们塞进这里会伪造出「0/n 章命中」的机械基线，
+    # 还会让未运行的付费审判看起来像已经跑过。
     conclusive = sorted(r.rule for r in REGISTRY.of_stage('stage5')
-                        if r.sev in ('hard', 'info'))
+                        if r.sev in ('hard', 'info') and r.check_kind == 'mechanical')
     # baseline 的单位明写的是「命中了几章」，不是 finding 条数。同一章既有
     # 句型漂移又有段型漂移时会产两条 `band_drift`；按条数会报出 20/15 章。
     hits = collections.Counter(rule for row in rows for rule in {f.rule for f in row.findings})
@@ -363,14 +366,17 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
     )
 
 
-def _material(entry: dict[str, Any], book: M.Book, *, mode: str) -> str:
+def _material(entry: dict[str, Any], book: M.Book, *, mode: str,
+              raw: dict[str, Any] | None = None) -> str:
     """这一臂**实际看得见**的全部文字 —— 发明越界那两个探针的参照集。
 
     ⚠ **它必须与真跑发出去的那一份同源**（`prompts.build_material`），否则探测器的参照集
     与被测者当时看得见的东西就不是一回事——实测开卷臂曾因此 4/4 全是假阳。
     """
     from novel.stages.stage5 import prompts
-    return prompts.build_material(entry, book, with_source_text=(mode == 'shallow')).given
+    return prompts.build_material(
+        entry, book, with_source_text=(mode == 'shallow'),
+        variant=prompts.variant_from_provenance(raw)).given
 
 
 def _apply_wontfix(rows: list[ReviewChapter], book_fs: list[Finding],
@@ -457,7 +463,7 @@ def _rules_fingerprint() -> str:
     判据表改了而报告没重跑，这个指纹是唯一说得出来的地方。
     """
     return prov.fingerprint(repr(sorted(
-        (r.rule, r.sev, r.item, r.owner, r.repair, r.directive)
+        (r.rule, r.sev, r.check_kind, r.item, r.owner, r.repair, r.directive)
         for r in REGISTRY.of_stage('stage5'))))
 
 
@@ -499,7 +505,7 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
         if n_blind == len(book.secrets):
             blind = (f'这本书 {len(book.secrets)} 条 secret 的字面探针**全部**连它自己的'
                      f'揭示章都命中不了 ⇒ 本条这一次没有判别力样本。'
-                     f'「0 命中」在这里不是一个结论。改写式泄底归语义层，而语义层未接线')
+                     f'「0 命中」在这里不是一个结论；改写式泄底由独立的书级语义层判定')
     return checks.check(
         chapter_findings_by_rule=by_rule, scanned=scanned,
         unver_empty={
@@ -514,11 +520,13 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
 
 
 def _report_of_review(ctx: RunContext, store: ArtifactStore, rev: Review,
-                      book: M.Book | None = None) -> CheckReport:
+                      book: M.Book | None = None, *,
+                      freshness_rel: str | None = None) -> CheckReport:
+    from novel.stages.stage5 import semantic
     seqs = review_seqs(store)
-    rel = REVIEW_TPL.format(n=seqs[-1]) if seqs else WRITER_CONTEXT
+    rel = freshness_rel or (REVIEW_TPL.format(n=seqs[-1]) if seqs else WRITER_CONTEXT)
     return build(sid=ctx.sid, node=ctx.node, freshness=store.freshness(rel),
-                 outcomes=_outcomes(rev, book),
+                 outcomes=[*_outcomes(rev, book), *semantic.outcomes(store, book)],
                  accounting=None, invalid=False)
 
 

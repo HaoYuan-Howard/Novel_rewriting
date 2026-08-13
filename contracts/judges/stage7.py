@@ -3,7 +3,7 @@
 """
 stage7.py —— 人名替换与成书那一层的判据行。源是 `docs/schema/stage7.md` §六（**唯一落点**）。
 
-**33 条现役：15 HARD · 8 INFO · 3 metric · 7 unver。** 外加 1 条退役而不删。
+**34 条现役：16 HARD · 8 INFO · 3 metric · 7 unver。** 外加 1 条退役而不删。
 
 【判据 id 一律照抄文档，不加 stage 前缀】它们是与 `wontfix.json` 的键、
 与 `_provenance.fixes` 的引用之间的契约——加个前缀就等于把存量豁免全部作废。
@@ -64,7 +64,7 @@ _HUMAN_FIX = ('〔人能 0 成本改掉：`--apply-edit` 收完整决策集 JSON
 
 
 def _hard(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -> Rule:
-    """⚠ `owner` 要能改：本层 15 条 HARD 里有 **2 条 owner 是 `stage5`**
+    """⚠ `owner` 要能改：本层 16 条 HARD 里有 **2 条 owner 是 `stage5`**
     （成书的前置条件——缺章 / 混契约稿，根因在写作那一层，不在映射表）。"""
     return REGISTRY.register(Rule(rule=rule, stage=STAGE, item=item, sev='hard',
                                   who_checks='HARD', requirement=requirement,
@@ -162,6 +162,12 @@ _hard('rn_title_dropped', '称谓与亲属后缀在新形里原样保留（职�
            '⚠ 它是「关系与职位不变」唯一能确定性验的**一半**：另一半（排行）'
            '实测漏过——模型把「七郎」改成「六郎」，后缀还在，本条全绿，'
            '而人物排行已经被改写。' + _HUMAN_FIX)
+
+_hard('rn_semantic_marker_changed', '数字、排行、辈分、关系与官职语义标记原样保留',
+      'R-10.12b',
+      note='比较改名前后的结构化 marker，而不是名字相似度：阿九→玄九合格、阿九→阿七失败；'
+           '七郎→六郎失败；李将军→沈将军合格。新增一个原本没有的职位也会出声。'
+           + _HUMAN_FIX)
 
 _hard('rn_kinship_touched', '通用亲属/敬称一个都没被替换', 'R-10.5',
       note='⚠ 判定走 `core.naming.is_generic_appellation`，而它用**本书的姓氏表**'
@@ -277,7 +283,7 @@ _metric('rn_style_report', '成书写法密度（正文／文案／原作三列�
 
 # ── 七条查不了的：**永远输出**，不是「还没写完」 ─────────────────────────────
 #
-# 这 7 条与 15 条 HARD 加在一起才是本层真实的防线图：**能查的都查了，查不了的写在脸上。**
+# 这 7 条与 16 条 HARD 加在一起才是本层真实的防线图：**能查的都查了，查不了的写在脸上。**
 # 省略掉，读报告的人会默认它们守住了。
 
 _unver('rn_taste_unver', '新名的时代感与雅俗合适', 'R-10.11', who_checks='HUMAN',

@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 from contracts import invariants as inv
-from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS
+from contracts.invariants import FREE_ENTRIES, NODES, PROMPT_VARIANTS, VALUED_FLAGS
 from novel.api import enums as E
 from novel.errors import ValueDomainRefused
 from novel.orchestrator import nodes as N
@@ -106,6 +106,21 @@ def test_the_frontend_hardcoded_unions_are_all_published(paid_payload):
             f'{paid_payload.get(key)!r} vs {want!r}')
 
 
+def test_prompt_defaults_are_published_separately_from_variant_order(paid_payload):
+    """实验取值面负责“能选什么”，默认表负责“真实实验选了什么”。
+
+    不允许前端或调用方借数组第一项猜默认值；Stage 3 的胜出臂故意不是第一项。
+    """
+    assert paid_payload['prompt_defaults'] == {
+        'stage3': 'anti-leak-v2',
+        'stage5': 'baseline-v1',
+    }
+    assert paid_payload['prompt_variants']['stage3'][0] != \
+        paid_payload['prompt_defaults']['stage3']
+    for stage, default in paid_payload['prompt_defaults'].items():
+        assert default in paid_payload['prompt_variants'][stage]
+
+
 # ───────────────────────── 二、对现役后端的回归 ─────────────────────────
 
 def test_every_captured_action_exists_in_the_new_table(paid_payload):
@@ -153,8 +168,13 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
         flags = list(a['extra'] or [])
         if a['needs_value']:
             index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
-            flags.insert(index + 1, '1' if flags[index] == '--deep'
-                         else 'C:/placeholder.json')
+            if flags[index] == '--deep':
+                value = '1'
+            elif flags[index] == '--prompt-variant':
+                value = PROMPT_VARIANTS[NODES[a['kind']].stage][0]
+            else:
+                value = 'C:/placeholder.json'
+            flags.insert(index + 1, value)
         argv = N.build_argv(a['kind'], 'sid123', flags, base=BASE, mode=a['mode'])
         # 付费的那条命令**必须**带 `--yes`（`Q-10`：花钱前必须人确认）；不付费的不许带。
         assert ('--yes' in argv) == a['paid'], (
@@ -196,8 +216,10 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
     # ⚠ 74 → 76（2026-08-13，真实 E2E）：两个 Stage2 付费落盘闸门各补一条
     #   `--revalidate`。闸门由系统加，不能让合格的问题稿永久锁死。
     # ⚠ 76 → 78：stage2 并发首跑 +1；stage5 深浅分配是一个复合动作 +1。
-    assert len(paid_payload['actions']) == 78, (
-        f'actions 有 {len(paid_payload["actions"])} 条，期望 78 '
+    # ⚠ 78 → 83：Stage 3/5 的 prompt variant 动作 +3；Stage 5 书级语义审判
+    #   默认路径与 `--dry-run` +2。
+    assert len(paid_payload['actions']) == 83, (
+        f'actions 有 {len(paid_payload["actions"])} 条，期望 83 '
         f'（每个节点的默认路径 + 每个独立 flag；复合动作只发布一次）。'
         f'这个数**会随 `NODES` 改**——改动它是有意的就来改这个数')
 
@@ -306,7 +328,9 @@ def test_action_labels_are_unique_and_come_from_step_label(paid_payload):
         flags = list(a['extra'] or ())
         if a['needs_value']:
             index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
-            flags.insert(index + 1, '1')
+            value = (PROMPT_VARIANTS[NODES[a['kind']].stage][0]
+                     if flags[index] == '--prompt-variant' else '1')
+            flags.insert(index + 1, value)
         assert a['label'] == N.step_label(a['kind'], flags, mode=a['mode'])
 
 

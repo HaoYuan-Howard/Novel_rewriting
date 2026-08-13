@@ -22,7 +22,9 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from contracts.invariants import BADGE, FRESHNESS, FRESHNESS_REASON, STATUS
+from contracts.invariants import (
+    BADGE, CHECK_KIND, FRESHNESS, FRESHNESS_REASON, REMEDIATION, STATUS,
+)
 from contracts.rules import REGISTRY, Registry
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, WontFix
@@ -32,6 +34,8 @@ Status = Literal[STATUS]
 Badge = Literal[BADGE]
 Freshness = Literal[FRESHNESS]
 FreshnessReason = Literal[FRESHNESS_REASON]
+CheckKind = Literal[CHECK_KIND]
+Remediation = Literal[REMEDIATION]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -81,6 +85,14 @@ def finding(rule: str, *, detail: str, evidence: list[str],
 # 二、一条注册判据 = 恰好一行（`_report.md` §二）
 # ─────────────────────────────────────────────────────────────────────────────
 
+class FixRoute(FrozenModel):
+    """前端可直接执行的修复路由；贵贱仍只由服务端计算。"""
+
+    node: str = Field(min_length=1)
+    flags: list[str] = Field(min_length=1)
+    paid: bool
+
+
 class RuleLine(FrozenModel):
     """报告的**权威单位**。注意它由 `Rule` 生成，不由 findings 生成。"""
 
@@ -89,6 +101,9 @@ class RuleLine(FrozenModel):
     status: Status
     item: str = Field(min_length=1)
     requirement: str = Field(min_length=1)
+    check_kind: CheckKind = 'mechanical'
+    remediation: Remediation = 'human'
+    fix: FixRoute | None = None
 
     #: 这条判据这一次产出的结论。
     #:

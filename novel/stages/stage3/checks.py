@@ -80,8 +80,35 @@ def _is_format_placeholder(q: str) -> bool:
     return False
 
 
+def _surface_habit_groups(obj: Any, path: str = '') -> Iterator[tuple[str, list]]:
+    """遍历全局与逐章风格中的 ``surface_habits``；实验臂不能漏扫局部列表。"""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            child = f'{path}.{key}' if path else key
+            if key == 'surface_habits' and isinstance(value, list):
+                yield child, value
+            else:
+                yield from _surface_habit_groups(value, child)
+    elif isinstance(obj, list):
+        for index, value in enumerate(obj):
+            yield from _surface_habit_groups(value, f'{path}[{index}]')
+
+
+def habit_literal_entries(data: dict) -> list[tuple[str, str]]:
+    """所有风格块里 ``(字段路径, 引号内具体词例)``，按路径与字面稳定排序。"""
+    entries = {
+        (f'{path}[{index}]', quoted)
+        for path, habits in _surface_habit_groups(data)
+        for index, habit in enumerate(habits)
+        if isinstance(habit, str)
+        for quoted in quotes(habit)
+        if norm(quoted) and not _is_format_placeholder(quoted)
+    }
+    return sorted(entries)
+
+
 def habit_literals(data: dict) -> list[str]:
-    """`surface_habits` 里【引号内的具体词例】；**按字段形状判，不靠长度/逐书词表**。
+    """所有 ``surface_habits`` 里【引号内的具体词例】；不漏逐章实验块。
 
     这一条单独拎出来阻断，是因为它的下游后果和别处不同：写作侧把 `surface_habits`
     当**写作习惯清单**读，里面举的原句会被当成这本书的口头禅整句复用
@@ -91,16 +118,20 @@ def habit_literals(data: dict) -> list[str]:
     「看吧」「谁怕谁」**全部从 2~3 字门槛下钻过去，自动报告却 PASS**。
     这里的契约本来就比「是不是原文」更严格：**只许写类别，不许列任何具体词。**
     """
-    return sorted({q for h in (data.get('surface_habits') or []) if isinstance(h, str)
-                   for q in quotes(h)
-                   if norm(q) and not _is_format_placeholder(q)})
+    return sorted({quoted for _path, quoted in habit_literal_entries(data)})
+
+
+def _is_surface_habit_path(path: str) -> bool:
+    return path.startswith('surface_habits[') or '.surface_habits[' in path
 
 
 # ── 九条判据 ────────────────────────────────────────────────────────────────
 
 def check(data: dict, *, corpus: str, names: frozenset[str] | None = None,
           spoiler_names: frozenset[str] = frozenset(),
-          measured_now: Measurable | None = None) -> list[Outcome]:
+          measured_now: Measurable | None = None,
+          expected_chapters: tuple[int, ...] | None = None,
+          require_chapter_styles: bool = False) -> list[Outcome]:
     """契约 + 越界 + 自洽。返回**每条判据一个 `Outcome`**（没排上的不给，那就是 `skipped`）。
 
     `measured_now` 给 `None` ⇒ **不排** `measurable_drift`——落盘那一刻它必然相等
@@ -123,6 +154,16 @@ def check(data: dict, *, corpus: str, names: frozenset[str] | None = None,
         req.append(f'voice 出现契约外字段: {extra}')
     if not (data.get('surface_habits') or []):
         req.append('surface_habits 为空（这本书一个写作小动作都没有？多半是没抽到）')
+    chapter_styles = data.get('chapter_styles') or []
+    if require_chapter_styles or chapter_styles:
+        actual_ordinals = [int(item.get('source_ordinal') or 0)
+                           for item in chapter_styles if isinstance(item, dict)]
+        expected = list(expected_chapters or ())
+        if not expected:
+            req.append('逐章风格存在，但校验期拿不到预期源章节集合')
+        elif actual_ordinals != expected:
+            req.append(
+                f'chapter_styles 必须按源章一一覆盖：期望 {expected}，实得 {actual_ordinals}')
     hook = data.get('hook_style')
     if not isinstance(hook, dict):
         # `R-1.12` 已把无文案段的书挡在 stage1 ⇒ 本层**必然**有 hook_style。
@@ -137,6 +178,7 @@ def check(data: dict, *, corpus: str, names: frozenset[str] | None = None,
         # 判据 31：绿灯要报出自己的分母，否则「查过干净」与「根本没在查」分不开。
         scanned=(f'voice {n_voice}/{len(VOICE_KEYS)} 维 · '
                  f'surface_habits {len(data.get("surface_habits") or [])} 条 · '
+                 f'chapter_styles {len(chapter_styles)} 条 · '
                  f'hook_style {"有" if isinstance(hook, dict) else "null"}')))
 
     # ③ 越界：剧情/结构引用。**只报第一处**——同一份产物里这类引用往往成串，
@@ -161,17 +203,19 @@ def check(data: dict, *, corpus: str, names: frozenset[str] | None = None,
                    scanned=f'{n_fields} 个文本字段 × {len(corpus)} 字归一语料'))
 
     # ⑤a surface_habits 举具体词例（阻断）
-    hl = habit_literals(data)
+    hl_entries = habit_literal_entries(data)
+    hl = sorted({quoted for _path, quoted in hl_entries})
     out.append(ran('habit_quote', [finding(
         'habit_quote',
         detail=f'surface_habits 在引号内列了 {len(hl)} 处具体词例「{"、".join(hl[:5])}」'
                f'——不论是否命中原文、也不论长短，都只写类别 + 位置 + 效果；'
                f'带 X/+、多插槽或短单内槽的纯结构模板除外',
-        evidence=['surface_habits', *hl])] if hl else [],
-        scanned=f'surface_habits {len(data.get("surface_habits") or [])} 条'))
+        evidence=[*(path for path, _quoted in hl_entries), *hl])] if hl else [],
+        scanned=(f'{sum(len(group) for _path, group in _surface_habit_groups(data))} 条 '
+                 f'surface_habits（含 {len(data.get("chapter_styles") or [])} 个逐章风格块）')))
 
     # ⑤b 其余位置的原文微引用（举例性质）：不阻断，但**必须可见**——闭卷写作节点的样例泄漏面
-    micro = [q for path, v in fields if not path.startswith('surface_habits')
+    micro = [q for path, v in fields if not _is_surface_habit_path(path)
              for q in quotes(v) if len(norm(q)) >= 6 and norm(q) in corpus]
     out.append(ran('micro_quote', [finding(
         'micro_quote',

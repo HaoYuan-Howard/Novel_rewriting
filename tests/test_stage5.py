@@ -71,17 +71,18 @@ def _clean_body(book: M.Book, entry: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、⭐⭐ 7 条 HARD，**每条一份会让它红的样本**
+# 一、⭐⭐ 8 条 HARD，**每条一份会让它红的样本**
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_seven_hard_judges_are_exactly_the_ones_we_have_samples_for():
-    """守卫的守卫：**本层的 HARD 判据集合改了，下面那七条就要跟着改。**
+def test_the_eight_hard_judges_are_exactly_the_ones_we_have_samples_for():
+    """守卫的守卫：**本层的 HARD 判据集合改了，下面样本就要跟着改。**
 
     多一条 HARD 而这里没有对应的反例，就又回到了「36 条 HARD 盘上 0 反例样本」那个欠账。
     """
     hard = {r.rule for r in REGISTRY.of_stage('stage5') if r.sev == 'hard'}
     assert hard == {'draft_too_short', 'draft_truncated', 'meta_leak', 'verbatim_missing',
-                    'keep_value_missing', 'secret_leak', 'dialogue_halved'}, (
+                    'keep_value_missing', 'secret_leak', 'semantic_secret_leak',
+                    'dialogue_halved'}, (
         f'stage5 的 HARD 集合变成了 {sorted(hard)}——'
         f'每新加一条 HARD 就要有一份会让它红的样本（LESSONS 第 3 条）')
 
@@ -104,9 +105,14 @@ def test_draft_truncated_goes_red_on_a_missing_final_punctuation(book, entry):
     assert 'draft_truncated' in _fire(body.rstrip('。') + '他忽然', entry, book)
 
 
-def test_draft_truncated_accepts_a_closed_interface_message(book, entry):
-    """`【任务完成。】` 与引号对白同形：闭合方括号是完整结尾，不是截断。"""
-    body = _clean_body(book, entry).rstrip('。') + '【好感度已降低。】'
+@pytest.mark.parametrize('message', [
+    '【好感度已降低。】',
+    '[好感度已降低。]',
+    '［好感度已降低。］',
+])
+def test_draft_truncated_accepts_a_closed_interface_message(book, entry, message):
+    """三种界面方括号的闭合符都表示消息已经完整结束。"""
+    body = _clean_body(book, entry).rstrip('。') + message
     assert 'draft_truncated' not in _fire(body, entry, book)
 
 
@@ -239,17 +245,17 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 47 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 49 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
     """
     reg = {r.rule for r in REGISTRY.of_stage('stage5')}
-    mine = [*checks._FROM_CHAPTER, *checks._FROM_REVIEW]
+    mine = [*checks._FROM_CHAPTER, *checks._FROM_REVIEW, *checks._FROM_SEMANTIC]
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    assert len(reg) == 47
+    assert len(reg) == 49
 
 
 def test_the_unver_five_must_say_why_they_cannot_check():
@@ -314,6 +320,30 @@ def test_the_closed_book_arm_never_touches_the_source_text(book, entry):
     src = M.chapter_source(entry, book.source_text)
     assert len(src) > 200, '这一章源文太短，这条断言失去判别力'
     assert src[:120] not in deep.given
+
+
+def test_chapter_local_style_projection_keeps_global_measures(book, entry):
+    local = {
+        'source_ordinal': entry['from_source_ordinals'][0],
+        'voice': {key: f'本章-{key}' for key in book.style['voice']},
+        'surface_habits': ['本章局部手法'],
+    }
+    style = {**book.style, 'chapter_styles': [local]}
+    got = prompts.style_for_sources(style, entry['from_source_ordinals'])
+    assert got['surface_habits'] == ['本章局部手法']
+    assert got['measurable'] == book.style['measurable']
+    assert all(value.startswith('本章-') for value in got['voice'].values())
+
+
+def test_chapter_local_style_never_falls_back_to_global_when_mapping_is_missing(book, entry):
+    local = {
+        'source_ordinal': 999,
+        'voice': book.style['voice'],
+        'surface_habits': ['别章手法'],
+    }
+    with pytest.raises(ValueError, match='拒绝回退'):
+        prompts.style_for_sources(
+            {**book.style, 'chapter_styles': [local]}, entry['from_source_ordinals'])
 
 
 def test_deep_overlap_high_guards_the_arms_identity_not_the_prose(book, entry):

@@ -61,6 +61,7 @@ DEFAULT_MAX_TOKENS: Final = 64_000
 
 M = TypeVar('M', bound=BaseModel)
 TextValidator = Callable[[str, ChatResponse], str | None]
+JsonValidator = Callable[[M, ChatResponse], str | None]
 
 
 class LlmFailed(NovelError):
@@ -150,27 +151,46 @@ class LlmClient:
         if not active_rungs:
             raise ValueError(f'{self.ctx.node}/{purpose}: rungs 不能为空')
         tried: list[str] = []
+
+        # 先横扫所有档位的已验证缓存，再发任何新请求。真实语义审判暴露过：一章在
+        # medium/low 档已有合格缓存，但旧顺序会因为 high miss 立刻重发 high，既重复
+        # 付费又污染 A/B 成本。缓存档位表示“哪种模型行为产出”，不是质量优先级。
         for effort, thinking in active_rungs:
-            for use_cache in (True, False):    # ← 缓存那份不可用 ⇒ 同一档真发一次，见 `_call_keyed`
-                resp, key, cached = self._call_keyed(
-                    system, user, effort=effort, thinking=thinking, json_mode=False,
-                    max_tokens=max_tokens, purpose=purpose, use_cache=use_cache,
-                    progress=progress)
-                text = resp.text
-                why = None if text else '正文为空'
-                if why is None and validator is not None:
-                    why = validator(text, resp)
-                if why is None:
-                    if not cached:
-                        self._keep(key, resp)      # ← 判定可用之后才写
-                    return text
-                self.cache.evict(key)
-                tried.append(
-                    f'effort={effort} think={thinking}{" [缓存]" if cached else ""} '
-                    f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
-                    f'拒绝={why}')
-                if not cached:
-                    break                      # 真发的也空 ⇒ 这一档确实不行，降一档
+            got = self._read_cached(
+                system, user, effort=effort, thinking=thinking, json_mode=False,
+                max_tokens=max_tokens, purpose=purpose, progress=progress)
+            if got is None:
+                continue
+            resp, key = got
+            text = resp.text
+            why = None if text else '正文为空'
+            if why is None and validator is not None:
+                why = validator(text, resp)
+            if why is None:
+                return text
+            self.cache.evict(key)
+            tried.append(
+                f'effort={effort} think={thinking} [缓存] '
+                f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
+                f'拒绝={why}')
+
+        for effort, thinking in active_rungs:
+            resp, key, _cached = self._call_keyed(
+                system, user, effort=effort, thinking=thinking, json_mode=False,
+                max_tokens=max_tokens, purpose=purpose, use_cache=False,
+                progress=progress)
+            text = resp.text
+            why = None if text else '正文为空'
+            if why is None and validator is not None:
+                why = validator(text, resp)
+            if why is None:
+                self._keep(key, resp)      # ← 判定可用之后才写
+                return text
+            self.cache.evict(key)
+            tried.append(
+                f'effort={effort} think={thinking} '
+                f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
+                f'拒绝={why}')
         raise LlmFailed(
             f'{self.ctx.node}/{purpose}: 走完 {len(active_rungs)} 档阶梯仍然拿不到正文'
             '（没有可用响应）。\n  '
@@ -181,6 +201,7 @@ class LlmClient:
     def ask_json(self, system: str, user: str, *, model_cls: type[M], purpose: str,
                  require: tuple[str, ...] | None = None,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
+                 validator: JsonValidator | None = None,
                  progress: RequestProgress | None = None) -> M:
         """结构化调用。走**同一条** `LADDER`，解析失败与「结构上是空的」同等对待。
 
@@ -216,49 +237,62 @@ class LlmClient:
                 f'{model_cls.__name__} 的必需顶层键 {sorted(derived)} 里。'
                 f'显式传只许**收窄**——放宽等于给这个调用点开一个「它特殊」的口子')
 
-        errors: list[str] = []
-        for effort, thinking in LADDER:
-            for use_cache in (True, False):    # ← 缓存那份不可用 ⇒ 同一档真发一次，见 `_call_keyed`
-                resp, key, cached = self._call_keyed(
-                    system, user, effort=effort, thinking=thinking, json_mode=True,
-                    max_tokens=max_tokens, purpose=purpose, use_cache=use_cache,
-                    progress=progress)
-                content = _strip_fences(resp.content)
-                head = (f'effort={effort} think={thinking}{" [缓存]" if cached else ""} '
-                        f'finish={resp.finish_reason} clen={len(content)}')
-
-                why = None
-                obj = None
-                try:
-                    data = json.loads(content)
-                except json.JSONDecodeError as e:
-                    # 截断的表现就是这个（见模块 docstring ②）。降一档 = 给正文腾预算。
-                    why = f'解析失败: {e}'
+        def inspect_response(resp: ChatResponse) -> tuple[M | None, str | None, str]:
+            content = _strip_fences(resp.content)
+            why = None
+            obj = None
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError as e:
+                why = f'解析失败: {e}'
+            else:
+                missing = [k for k in require
+                           if not isinstance(data, dict) or k not in data
+                           or _is_empty(data[k])]
+                if missing:
+                    why = f'顶层缺必需键（或值为空）: {missing}'
                 else:
-                    missing = [k for k in require
-                               if not isinstance(data, dict) or k not in data
-                               or _is_empty(data[k])]
-                    if missing:
-                        why = f'顶层缺必需键（或值为空）: {missing}'
+                    try:
+                        obj = model_cls.model_validate(data)
+                    except ValidationError as e:
+                        why = f'不合 {model_cls.__name__} 的契约: {e}'
                     else:
-                        try:
-                            obj = model_cls.model_validate(data)
-                        except ValidationError as e:
-                            why = f'不合 {model_cls.__name__} 的契约: {e}'
+                        if validator is not None:
+                            why = validator(obj, resp)
+            return obj, why, content
 
-                if why is None:
-                    # ⚠⚠ **判定可用之后才写缓存。** 见 `_call_keyed`。
-                    if not cached:
-                        self._keep(key, resp)
-                    return obj
+        errors: list[str] = []
 
-                # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
-                #   留着它，下一次不带 `--no-cache` 的重跑会原样读回来，
-                #   而调用方看到的是一模一样的失败：**那不是重试，是把同一个结果读了两遍**。
-                self.cache.evict(key)
-                errors.append(f'{head} {why}')
-                if not cached:
-                    break                      # 真发的也坏 ⇒ 这一档确实不行，降一档
+        # 同 ask_text：任一档已有合格缓存时，本次必须是 0 次真请求。
+        for effort, thinking in LADDER:
+            got = self._read_cached(
+                system, user, effort=effort, thinking=thinking, json_mode=True,
+                max_tokens=max_tokens, purpose=purpose, progress=progress)
+            if got is None:
+                continue
+            resp, key = got
+            obj, why, content = inspect_response(resp)
+            head = (f'effort={effort} think={thinking} [缓存] '
+                    f'finish={resp.finish_reason} clen={len(content)}')
+            if why is None:
+                return obj
+            self.cache.evict(key)
+            errors.append(f'{head} {why}')
+
+        for effort, thinking in LADDER:
+            resp, key, _cached = self._call_keyed(
+                system, user, effort=effort, thinking=thinking, json_mode=True,
+                max_tokens=max_tokens, purpose=purpose, use_cache=False,
+                progress=progress)
+            obj, why, content = inspect_response(resp)
+            head = (f'effort={effort} think={thinking} '
+                    f'finish={resp.finish_reason} clen={len(content)}')
+            if why is None:
+                self._keep(key, resp)
+                return obj
+            # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
+            self.cache.evict(key)
+            errors.append(f'{head} {why}')
         raise LlmFailed(
             f'{self.ctx.node}/{purpose}: 走完 {len(LADDER)} 档阶梯仍然没有可用的 JSON。\n  '
             + '\n  '.join(errors)
@@ -266,6 +300,23 @@ class LlmClient:
               f'声明【全部】必需顶层键，而这一条现在由派生保证）')
 
     # ── 一次调用：缓存 → 传输层重试 → 记账 ────────────────────────────────
+
+    def _read_cached(self, system: str, user: str, *, effort: str, thinking: bool,
+                     json_mode: bool, max_tokens: int, purpose: str,
+                     progress: RequestProgress | None
+                     ) -> tuple[ChatResponse, str] | None:
+        """只读一个档位的缓存；miss 绝不顺手上线。"""
+        if not self.ctx.cache.read:
+            return None
+        req = ChatRequest(model=self.model, system=system, user=user,
+                          reasoning_effort=effort, thinking=thinking,
+                          json_mode=json_mode, max_tokens=max_tokens)
+        key = cache_key(req)
+        hit = self.cache.get(key)
+        if hit is None:
+            return None
+        self._record_cache_hit(req, hit, purpose=purpose, progress=progress)
+        return hit, key
 
     def _call_keyed(self, system: str, user: str, *, effort: str, thinking: bool,
                     json_mode: bool, max_tokens: int, purpose: str,
@@ -281,12 +332,9 @@ class LlmClient:
         ⇒ 写缓存的时机挪到「判定可用之后」，由两个入口各自调 `_keep`。
         `cached` 这一格是给它们用的：读回来的那一份不必再写一遍。
 
-        `use_cache=False` 是**同一档的第二次**（见两个入口里的 `for use_cache in (True, False)`）：
-        ⚠ 一份**读回来之后才发现不可用**的缓存，是一次**发现得晚的 miss**，不是模型的毛病。
-        光 evict 不重发的话，四档会各自读回自己那份毒缓存、各自 evict、然后整体失败——
-        报出来的症状是「模型连着四档都吐截断 JSON」，而**事实是缓存坏了、模型一次都没被问到**。
-        「派生症状盖住一句话能说清的事实」正是本项目反复付学费的那个形状。
-        ⇒ 缓存那份不可用 ⇒ 同一档真发一次；真发的那份也不可用 ⇒ 这一档确实不行，降一档。
+        两个公开入口会先用 `_read_cached` 横扫全部档位；只有没有合格缓存时才以
+        `use_cache=False` 调这里。保留 `use_cache=True` 仅维持本私有帮助函数的完整语义，
+        不能拿它恢复“某档 miss 就立刻上线”的旧顺序。
         """
         req = ChatRequest(model=self.model, system=system, user=user,
                           reasoning_effort=effort, thinking=thinking,
