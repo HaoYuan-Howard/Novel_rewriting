@@ -58,21 +58,6 @@ _REVIEW_RX = re.compile(r'^review_(\d+)\.json$')
 # 一、上游
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _main_text_projection(data: object) -> object:
-    """本层**真正消费**的正文投影：章序 + 正文。改一个 `source_chapter_label` 不该让本层重跑。"""
-    if not isinstance(data, list):
-        return None
-    return [{'chapter_ordinal': s.get('chapter_ordinal'), 'text': s.get('text')}
-            for s in data if isinstance(s, dict)]
-
-
-def _grounding_projection(data: object) -> object:
-    """全书事实底座：**本层只拿它当 secrets 的全集**（`secret_leak` 的 ground truth）。"""
-    if not isinstance(data, dict):
-        return None
-    return {'secrets': (data.get('canon') or {}).get('secrets')}
-
-
 def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     """四份上游 → `Book`。**写作相与验收相共用这一个入口。**
 
@@ -84,8 +69,8 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     for rel in (MAIN_TEXT, GLOBAL_GROUNDING, STYLE_GROUNDING, WRITER_CONTEXT):
         if not store.exists(rel):
             raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
-    main = store.read(_main_text_model(), MAIN_TEXT, project=_main_text_projection)
-    gg = store.read(GlobalGrounding, GLOBAL_GROUNDING, project=_grounding_projection)
+    main = store.read(_main_text_model(), MAIN_TEXT)
+    gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
     style = store.read(StyleGrounding, STYLE_GROUNDING)
     wc = store.read(WriterContext, WRITER_CONTEXT)
     return M.Book(

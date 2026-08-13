@@ -26,13 +26,33 @@ from typing import Any, Callable, Protocol
 from novel.errors import NovelError, TerminalState
 
 
-class TransportError(NovelError):
-    """一次请求没发成功。**带 `retryable`**——谁该重试由这里说了算，不由调用方猜措辞。"""
+def _error_kind(*, status: int | None = None, exception_name: str = '') -> str:
+    """把供应商异常压成稳定、可聚合的分类；不依赖 SDK 的易变异常继承树。"""
+    if status in (408, 504):
+        return 'timeout'
+    if status == 409:
+        return 'conflict'
+    if status == 429:
+        return 'rate_limit'
+    if isinstance(status, int):
+        return 'server_error' if status >= 500 else 'http_error'
+    name = exception_name.lower()
+    if 'timeout' in name:
+        return 'timeout'
+    if 'connection' in name or 'apiconnection' in name:
+        return 'connection'
+    return 'transport'
 
-    def __init__(self, message: str, *, retryable: bool, status: int | None = None) -> None:
+
+class TransportError(NovelError):
+    """一次请求没发成功。重试判定与稳定分类都由这里给出，不让调用方猜措辞。"""
+
+    def __init__(self, message: str, *, retryable: bool, status: int | None = None,
+                 kind: str | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status = status
+        self.kind = kind or _error_kind(status=status)
 
 
 class MissingApiKey(TerminalState):
@@ -190,13 +210,15 @@ _RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
 def _classify(e: Exception) -> TransportError:
     """SDK 异常 → 该不该重试。**判定只有这一处**，调用方不许自己认措辞。"""
     status = getattr(e, 'status_code', None) or getattr(e, 'status', None)
+    name = type(e).__name__
     if isinstance(status, int):
         return TransportError(f'{type(e).__name__}: {e}', retryable=status in _RETRYABLE_STATUS,
-                              status=status)
-    # 没有状态码 = 连接层出的事（超时、连接重置、DNS）。这些一律可重试。
-    name = type(e).__name__.lower()
-    connectionish = any(k in name for k in ('timeout', 'connection', 'apiconnection'))
-    return TransportError(f'{type(e).__name__}: {e}', retryable=connectionish)
+                              status=status,
+                              kind=_error_kind(status=status, exception_name=name))
+    # 没有状态码时只重试可识别的超时/连接异常；任意本地异常不能被当成网络抖动。
+    kind = _error_kind(exception_name=name)
+    return TransportError(f'{type(e).__name__}: {e}',
+                          retryable=kind in ('timeout', 'connection'), kind=kind)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -37,6 +37,7 @@ from pydantic import BaseModel, ValidationError
 
 from contracts.schema import InputEdge, Provenance
 from novel import paths, prov
+from novel.consumption import producer_node, projection_for
 from novel.errors import (
     ArtifactUnreadable, ByteFormRefused, PathRefused, ProvenanceRefused, UpstreamMissing,
 )
@@ -79,20 +80,19 @@ class ArtifactStore:
 
     # ── 读 ────────────────────────────────────────────────────────────────
 
-    def read(self, model: type[M], rel: str, *,
-             project: Callable[[Any], Any] | None = None) -> M:
+    def read(self, model: type[M], rel: str) -> M:
         """读一份上游产物，**顺手把它记进本次跑的来源账**。
 
-        `project`：本节点**真正读到的字段投影**。给了它，这条边的 `consumed` 就有值，
-        新鲜度才可能判成 `fresh`；不给，这条边诚实地是 `unknown`
-        （**「没声明读了什么」不是「读的东西没变」**）。
-        ⚠ **建槽位，不填槽位**：八层不必同时交这份作业。
+        本节点真正读到的字段投影从 `novel.consumption` 按 `(node, rel)` 取得。
+        这里不再接受调用点临时传一个函数：写来源账与 freshness 重算必须共用同一对象。
+        未登记仍诚实地写 `consumed=null`，不会把「不知道」偷换成 fresh。
 
         ⚠ 投影吃的是**盘上那份原始 dict**，不是校验后的模型。理由是新鲜度那一侧：
         判过期时要对一份**可能已经不合当前 schema** 的上游重算同一个投影，
         而模型化会先炸在校验上。同一个函数、同一种输入，两侧才对得上。
         """
         key = paths.input_key(rel)          # ← 两级键；三级路径在这里就被拒（见 `PathRefused`）
+        project = projection_for(self.ctx.node, key)
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
         obj = self._validate(model, rel, data)
@@ -157,7 +157,11 @@ class ArtifactStore:
         key = paths.input_key(rel)
         raw = self._read_bytes(rel)
         text = self._decode(rel, raw)
-        self.ctx.record_edge(key, InputEdge(file=prov.fingerprint_bytes(raw), consumed=None))
+        project = projection_for(self.ctx.node, key)
+        self.ctx.record_edge(key, InputEdge(
+            file=prov.fingerprint_bytes(raw),
+            consumed=prov.projection_fingerprint(project(text)) if project else None,
+        ))
         return text
 
     def _read_bytes(self, rel: str) -> bytes:
@@ -464,8 +468,7 @@ class ArtifactStore:
 
     # ── 新鲜度 ────────────────────────────────────────────────────────────
 
-    def freshness(self, rel: str, *,
-                  consumed_now: Callable[[str], str | None] | None = None) -> FreshnessReport:
+    def freshness(self, rel: str) -> FreshnessReport:
         """这份产物是拿**盘上现在这几份**上游产的吗？算法在 `novel/prov.py::freshness`。
 
         ⚠ **读原始 dict，不过模型。** 一份陈旧产物很可能已经不合当前 schema
@@ -488,8 +491,12 @@ class ArtifactStore:
             recorded = (block or {}).get('inputs') if isinstance(block, dict) else None
             if block is not None and recorded is None:
                 recorded = {}                # 有来源账但没有 `inputs` ⇒ `no_inputs`，不是 `no_provenance`
-        return prov.freshness(recorded, file_now=self._file_fp_of_key,
-                              consumed_now=consumed_now or (lambda _k: None))
+        node = producer_node(rel, fallback=self.ctx.node)
+        return prov.freshness(
+            recorded,
+            file_now=self._file_fp_of_key,
+            consumed_now=lambda key: self._consumed_fp_of_key(node, key),
+        )
 
     def _file_fp_of_key(self, key: str) -> str | None:
         """来源账里那个键 → 盘上现在的整份指纹。**取不到一律 `None`（幽灵边）。**
@@ -507,6 +514,25 @@ class ArtifactStore:
             return None
 
     # ── 内部：写盘口的两道闸 + 原子落盘 ───────────────────────────────────
+
+    def _consumed_fp_of_key(self, node: str | None, key: str) -> str | None:
+        if node is None or (project := projection_for(node, key)) is None:
+            return None
+        return self._project_current(key, project)
+
+    def _project_current(self, key: str, project: Callable[[Any], Any]) -> str | None:
+        parts = str(key).replace(chr(92), '/').split('/')
+        if not parts or any(part in ('', '.', '..') for part in parts):
+            return None
+        p = self.ctx.novel_dir.joinpath(*parts)
+        try:
+            raw = p.read_bytes()
+            data: object = (json.loads(raw.decode('utf-8')) if p.suffix.lower() == '.json'
+                            else raw.decode('utf-8'))
+            return prov.projection_fingerprint(project(data))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError,
+                AttributeError, KeyError, IndexError, TypeError, ValueError):
+            return None
 
     @staticmethod
     def _provenance_of(artifact: BaseModel) -> Provenance | None:

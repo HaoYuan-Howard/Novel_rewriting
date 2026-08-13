@@ -198,8 +198,8 @@ def test_the_three_state_domains_reach_the_wire():
 def test_unknown_freshness_actually_happens_on_the_wire():
     """⭐ 「取值面里有」不等于「发得出来」。
 
-    盘上八层今天几乎全是 `unknown`（`consumed` 投影只有 stage3 声明过三条），
-    所以这条今天必然能命中——它防的是将来某次改动把 `unknown` 变成一个
+    固定语料里的存量产物大多生成于统一注册表之前，仍有大量 `consumed=null`，
+    所以这条在该语料上必然能命中——它防的是将来某次改动把 `unknown` 变成一个
     **永不出现的取值**，而那种改动在取值面测试里看不出任何区别。
     """
     pytest.importorskip('fastapi', reason='没装 fastapi ⇒ 本条**没在查**')

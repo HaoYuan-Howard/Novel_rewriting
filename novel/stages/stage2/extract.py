@@ -58,6 +58,7 @@ from novel import paths, prov
 from novel.errors import GateBlocked, RunModeNotImplemented, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
 from novel.llm.prompts import with_json_shape
+from novel.observability import ChapterProgressTracker
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
@@ -663,16 +664,21 @@ def _run_chapter_requests(
     violations: list[str] = []
     errors: list[Exception] = []
 
+    concrete = [(int(o), s, u) for o, s, u in requests if o is not None]
+    if not concrete:
+        return [], violations, errors
+    tracker = ChapterProgressTracker(ctx.observe, [o for o, _s, _u in concrete])
+
     def one(ordinal: int, system: str, user: str) -> list[dict[str, Any]]:
         response = client.ask_json(
             system, user,
             model_cls=ChapterBlueprintsResponse,
             purpose=f'{ctx.node}:ch{ordinal}',
             max_tokens=BLUEPRINT_MAX_TOKENS,
+            progress=tracker.request(ordinal),
         )
         return response.model_dump(by_alias=True)['blueprints']
 
-    concrete = [(int(o), s, u) for o, s, u in requests if o is not None]
     with ThreadPoolExecutor(
         max_workers=min(client.concurrency, max(1, len(concrete)))
     ) as pool:
@@ -686,12 +692,21 @@ def _run_chapter_requests(
                 raw = future.result()
             except Exception as exc:  # 已成功的章仍必须保留。
                 errors.append(exc)
+                tracker.finish(
+                    ordinal, outcome='failed',
+                    detail=f'{type(exc).__name__}: {str(exc).splitlines()[0]}')
                 continue
             kept, violation = _scope_split(raw, ordinal, batch)
             if violation is not None:
                 violations.append(violation)
             if kept is not None:
                 results[ordinal] = kept
+                tracker.finish(
+                    ordinal, outcome='ok',
+                    detail='响应含目标章之外的内容，越界部分已丢弃' if violation else None)
+            else:
+                tracker.finish(
+                    ordinal, outcome='blocked', detail='响应没有请求的目标章')
     return [results[o] for o, _s, _u in concrete if o in results], violations, errors
 
 

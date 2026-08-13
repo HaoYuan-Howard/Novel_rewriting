@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,9 @@ from novel.llm.client import DEFAULT_MAX_TOKENS, LADDER, LlmClient, LlmFailed
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import (
     ChatRequest, ChatResponse, FakeTransport, MissingApiKey, TransportError,
+    _classify,
 )
+from novel.observability import AttemptHeartbeat, RequestProgress
 from novel.run import RunContext
 
 
@@ -561,9 +564,13 @@ def test_every_wire_attempt_gets_its_own_ledger_row():
     d = Path(tempfile.mkdtemp())
     ctx = RunContext.open(_book(), '123', 'stage3.style', paid=True,
                           ledger=CostLedger(path=d / 'ledger.jsonl'))
+    events = []
+    ctx.observer = events.append
     t = FakeTransport(responder=lambda _r, i:
                       TransportError('429', retryable=True, status=429) if i < 2 else OK_TEXT)
-    _client(t, ctx=ctx).ask_text('s', 'u', purpose='t')
+    progress = RequestProgress(chapter=7, index=2, total=5)
+    _client(t, ctx=ctx, backoff_base=0.25).ask_text(
+        's', 'u', purpose='t', progress=progress)
 
     rows = [json.loads(ln) for ln in (d / 'ledger.jsonl').read_text('utf-8').splitlines()]
     assert [r['outcome'] for r in rows] == ['error', 'error', 'ok']
@@ -574,7 +581,59 @@ def test_every_wire_attempt_gets_its_own_ledger_row():
     assert rows[2]['json_mode'] is False
     assert rows[2]['max_tokens'] == DEFAULT_MAX_TOKENS
     assert rows[0]['finish_reason'] is None and rows[2]['finish_reason'] == 'stop'
+    assert [r['attempt'] for r in rows] == [1, 2, 3]
+    assert {r['max_attempts'] for r in rows} == {4}
+    assert [r['error_kind'] for r in rows] == ['rate_limit', 'rate_limit', None]
+    assert [r['retryable'] for r in rows] == [True, True, None]
+    assert [r['will_retry'] for r in rows] == [True, True, False]
+    assert [r['backoff_ms'] for r in rows] == [250, 500, None]
+    assert all(isinstance(r['latency_ms'], int) and r['latency_ms'] >= 0 for r in rows)
+    assert [(r['chapter'], r['chapter_index'], r['chapter_total']) for r in rows] == [
+        (7, 2, 5), (7, 2, 5), (7, 2, 5),
+    ]
+    finished = [event for event in events if event['event'] == 'llm_attempt_finished']
+    assert [(event['attempt'], event['state'], event['chapter']) for event in finished] == [
+        (1, 'error', 7), (2, 'error', 7), (3, 'ok', 7),
+    ]
+    assert all(event['sid'] == '123' and event['node'] == 'stage3.style'
+               for event in events)
     assert ctx.ledger.calls_made == 3
+
+
+def test_transport_errors_have_stable_timeout_and_http_classifications():
+    class ApiTimeoutError(Exception):
+        pass
+
+    class BadRequest(Exception):
+        status_code = 400
+
+    timeout = _classify(ApiTimeoutError('read timed out'))
+    bad = _classify(BadRequest('bad payload'))
+    assert (timeout.kind, timeout.retryable, timeout.status) == ('timeout', True, None)
+    assert (bad.kind, bad.retryable, bad.status) == ('http_error', False, 400)
+
+
+def test_an_inflight_attempt_emits_periodic_heartbeats_with_chapter_progress():
+    events = []
+    in_flight = threading.Event()
+
+    def emit(event, **fields):
+        events.append({'event': event, **fields})
+        if fields.get('state') == 'in_flight':
+            in_flight.set()
+
+    heartbeat = AttemptHeartbeat(
+        emit, purpose='stage5.write·ch3', attempt=1, max_attempts=4,
+        progress=RequestProgress(chapter=3, index=1, total=2), interval=0.005)
+    heartbeat.start()
+    assert in_flight.wait(1), '在途请求没有按间隔发心跳'
+    heartbeat.finish(outcome='ok')
+
+    assert events[0]['state'] == 'started'
+    assert any(event['state'] == 'in_flight' for event in events)
+    assert events[-1]['event'] == 'llm_attempt_finished'
+    assert (events[-1]['chapter'], events[-1]['chapter_index'],
+            events[-1]['chapter_total']) == (3, 1, 2)
 
 
 def test_a_run_that_fails_outright_still_says_it_spent_something():

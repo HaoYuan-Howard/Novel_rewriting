@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Callable, TypeVar
 
 from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance, Usage
@@ -33,6 +33,7 @@ from novel import paths, prov
 from novel.errors import ProvenanceRefused
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, UsageMark, ledger_path
+from novel.observability import emit_observation
 
 P = TypeVar('P', bound=Provenance)
 
@@ -64,6 +65,11 @@ class RunContext:
     #: 闸门没有报错，它是**静默地不再存在**。⇒ 两者在本仓从结构上分开：`--tag` 未移植，
     #: 而臂是这一格。
     mode: str | None = None
+
+    #: 运行期心跳/进度的唯一出口。默认写进 stdout（编排器会把它收进作业日志）；
+    #: 测试可换成 ``list.append``，不需要 mock print 或线程内部。
+    observer: Callable[[dict[str, object]], None] = field(
+        default=emit_observation, repr=False, compare=False)
 
     #: 本次跑**读过**哪些上游（`<stage>/<文件名>` → 边）。由 `store.read` 自动记账，
     #: **不由任何节点手工列举**——手工清单会烂，而且是静默地烂。
@@ -137,6 +143,20 @@ class RunContext:
     @property
     def judged(self) -> dict[str, str]:
         return dict(self._judged)
+
+    # ── 运行期观测 ────────────────────────────────────────────────────────
+
+    def observe(self, event: str, **fields: object) -> None:
+        "发一条结构化运行事件；身份字段只在这里补一次。"
+        payload: dict[str, object] = {
+            'event': event,
+            'sid': self.sid,
+            'node': self.node,
+            **fields,
+        }
+        if self.mode is not None:
+            payload['mode'] = self.mode
+        self.observer(payload)
 
     # ── 记账 ──────────────────────────────────────────────────────────────
 

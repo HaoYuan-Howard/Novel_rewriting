@@ -53,60 +53,7 @@ WRITER_CONTEXT = 'stage4/writer_context.json'
 _INVALID = paths.invalid_of(REL)
 
 
-# ── `consumed` 投影：本层**真正读到**上游的哪一部分 ──────────────────────────
-
-def _hook_projection(data: object) -> object:
-    """原作文案段：**只读 `text`**。它是四条判据的基准。"""
-    return (data or {}).get('text') if isinstance(data, dict) else None
-
-
-def _grounding_projection(data: object) -> object:
-    """全书事实底座：**只读秘密与结局**。
-
-    ⚠ 这份上游有几千行，而本层只拿它当卖点表与禁区表。不声明投影的话，
-    stage2 改一个不相干的 `role` 措辞就会把 stage6 的产物判成 `stale`。
-    """
-    if not isinstance(data, dict):
-        return None
-    canon = data.get('canon') or {}
-    arc = data.get('arc') or {}
-    return {
-        'secrets': sorted(
-            (s.get('secret_id'), s.get('fact'),
-             tuple(sorted((e or {}).get('chapter') or 0
-                          for e in (s.get('reader_reveal_events') or []))))
-            for s in (canon.get('secrets') or []) if isinstance(s, dict)),
-        'arc': (arc.get('climax'), arc.get('ending'),
-                tuple(t.get('trajectory') for t in (arc.get('arc_tracks') or [])),
-                tuple(tuple((st or {}).get('chapters') or ())
-                      for st in (arc.get('conflict_stages') or [])[:1])),
-    }
-
-
-def _style_projection(data: object) -> object:
-    """文风画像：**只读进 prompt 的那几块 + 文案段实测**。
-
-    ⚠ `voice.mode_variation` **不在投影里**——它按定义就不下发（见
-    `prompts.voice_for_hook`），改了它不该把本层判成过期。
-    """
-    if not isinstance(data, dict):
-        return None
-    voice = dict(data.get('voice') or {})
-    voice.pop('mode_variation', None)
-    return {'voice': sorted(voice.items()),
-            'hook_style': sorted((data.get('hook_style') or {}).items()),
-            'hook_meas': sorted(((data.get('measurable') or {}).get('hook') or {}).items())}
-
-
-def _context_projection(data: object) -> object:
-    """写手上下文：**只读逐章名册**（本层唯一用它的地方）。"""
-    if not isinstance(data, dict):
-        return None
-    return sorted(
-        (ch.get('output_ordinal'),
-         tuple(sorted((c.get('display_name'), c.get('role'), c.get('name_distinctiveness'))
-                      for c in (ch.get('characters') or {}).values() if isinstance(c, dict))))
-        for ch in (data.get('chapters') or []) if isinstance(ch, dict))
+# 本节点的 consumed 投影统一登记在 `novel.consumption`；读写与 freshness 共用同一函数。
 
 
 # ── 上游 ────────────────────────────────────────────────────────────────────
@@ -118,16 +65,16 @@ class _Upstreams:
         for rel in (GLOBAL_GROUNDING, STYLE_GROUNDING, WRITER_CONTEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
-        gg = store.read(GlobalGrounding, GLOBAL_GROUNDING, project=_grounding_projection)
-        style = store.read(StyleGrounding, STYLE_GROUNDING, project=_style_projection)
-        wc = store.read(WriterContext, WRITER_CONTEXT, project=_context_projection)
+        gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
+        style = store.read(StyleGrounding, STYLE_GROUNDING)
+        wc = store.read(WriterContext, WRITER_CONTEXT)
         # ⚠ 原作文案段**允许缺**吗？`R-1.12` 已把无文案段的书挡在 stage1 ⇒ 走不到。
         # 但它是**上游产物**不是本层的不变量，缺了就是显式终态而不是一句兜底。
         if not store.exists(HOOK_COPY):
             raise UpstreamMissing(
                 f'{HOOK_COPY} 不在盘上。⚠ 这不是「这本书没有文案段」——'
                 f'`R-1.12` 已经把那种书挡在 stage1 了，所以走到这里说明上游缺了一份')
-        hook_copy = store.read(paths_hook_copy_model(), HOOK_COPY, project=_hook_projection)
+        hook_copy = store.read(paths_hook_copy_model(), HOOK_COPY)
 
         self.gg, self.style, self.wc = gg, style, wc
         self.src_hook: str = (hook_copy.text or '').strip()

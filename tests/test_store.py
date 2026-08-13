@@ -18,10 +18,11 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
-from contracts.schema import StyleGrounding, Usage
+from contracts.schema import InputEdge, StyleGrounding, Usage
 from contracts.schema.stage3 import StyleProvenance
+from novel.consumption import CONSUMED_PROJECTIONS, producer_node, projection_for
 from novel.errors import (
     ArtifactUnreadable, ByteFormRefused, PathRefused, ProvenanceRefused, UpstreamMissing,
 )
@@ -38,6 +39,10 @@ UPSTREAM = 'stage1/main_text.json'
 class Loose(BaseModel):
     """只用来测记账的最小上游模型——本文件不测 stage1 的契约。"""
     sections: list
+
+
+class MainTextLoose(RootModel[list[dict]]):
+    """只验证注册投影的最小正文载体；业务 schema 另有自己的测试。"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,7 +131,7 @@ def test_reading_records_the_edge_without_anyone_listing_it():
     某个节点以后多吃一份上游、却忘了加进清单时，`_provenance` 会继续显示「匹配」。
     改成「谁读了就记谁」之后，**结构上不可能漏**——拿不到数据就等于没读。
     """
-    ctx = _ctx(_book())
+    ctx = _ctx(_book(), node='stage0.remove', paid=False)
     obj = ArtifactStore(ctx).read(Loose, UPSTREAM)
     assert obj.sections == []
     assert ctx.edges[UPSTREAM].consumed is None, '没声明投影 ⇒ 这条边诚实地是「不知道」'
@@ -142,16 +147,71 @@ def test_reading_with_a_projection_fingerprints_the_projection_not_the_whole_fil
     **静默失效**，`fresh` 再也不会因为「我依赖的那部分没变」而出现。
     一条只查「非 None」的断言在这里等于没查。
     """
-    payload = '{"sections": [{"读的": 1, "没读的": 2}]}'.encode('utf-8')
+    payload = json.dumps([
+        {'chapter_ordinal': 1, 'text': '真正读的正文', 'source_chapter_label': '没读的标签'},
+    ], ensure_ascii=False).encode('utf-8')
     base = _book('123', '书名', payload)
     ctx = _ctx(base)
-    ArtifactStore(ctx).read(Loose, UPSTREAM, project=lambda raw: [s['读的'] for s in raw['sections']])
+    ArtifactStore(ctx).read(MainTextLoose, UPSTREAM)
 
     from novel.prov import projection_fingerprint
-    assert ctx.edges[UPSTREAM].consumed == projection_fingerprint([1])
+    assert ctx.edges[UPSTREAM].consumed == projection_fingerprint(['真正读的正文'])
     assert ctx.edges[UPSTREAM].consumed != projection_fingerprint(
         json.loads((base / '书名_123' / 'stage1' / 'main_text.json').read_text('utf-8'))), \
         '投影指纹等于整份文件的指纹 —— `project()` 多半没被调用'
+
+
+def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
+    payload = [
+        {'chapter_ordinal': 1, 'text': '正文不变', 'source_chapter_label': '第一章'},
+    ]
+    base = _book(
+        payload=json.dumps(payload, ensure_ascii=False).encode('utf-8'))
+    ctx = _ctx(base)
+    st = ArtifactStore(ctx)
+    st.read(MainTextLoose, UPSTREAM)
+    st.write(STYLE_REL, _style(ctx))
+
+    upstream = base / '书名_123' / UPSTREAM
+    assert st.freshness(STYLE_REL).state == 'fresh'
+
+    payload[0]['source_chapter_label'] = '标签改了但本节点不读'
+    upstream.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    same = st.freshness(STYLE_REL)
+    assert (same.state, same.reason) == ('fresh', 'match')
+
+    payload[0]['text'] = '真正消费的正文改了'
+    upstream.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    changed = st.freshness(STYLE_REL)
+    assert (changed.state, changed.reason) == ('stale', 'consumed_changed')
+
+
+def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():
+    assert producer_node('stage5/deep/ch01.json') == 'stage5.write'
+    assert producer_node('stage6/hook.INVALID.json') == 'stage6.hook'
+    assert set(CONSUMED_PROJECTIONS['stage4.context']) == {
+        'stage1/main_text.json',
+        'stage2/chapter_blueprints.json',
+        'stage2/global_grounding.json',
+        'stage4/plan_chapters.json',
+    }
+    assert projection_for(
+        'stage3.style', 'stage1/main_text.INVALID.json'
+    ) is projection_for('stage3.style', UPSTREAM)
+
+
+def test_stage5_review_tracks_context_code_without_overinvalidating_writing():
+    write_projection = projection_for('stage5.write', 'stage4/writer_context.json')
+    review_projection = projection_for('stage5.review', 'stage4/writer_context.json')
+    assert write_projection is not None and review_projection is not None
+    before = {
+        'chapters': [{'output_ordinal': 1}],
+        'world_facts': {'characters': {'c1': {'display_name': '甲'}}},
+        '_provenance': {'code': 'old-code'},
+    }
+    after = {**before, '_provenance': {'code': 'new-code'}}
+    assert write_projection(before) == write_projection(after)
+    assert review_projection(before) != review_projection(after)
 
 
 def test_a_draft_cannot_be_read_through_the_edge_path():
@@ -205,6 +265,8 @@ def test_what_we_write_is_what_we_can_read_back():
     ctx = _ctx(_book())
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
+    ctx.record_edge(UPSTREAM, InputEdge(
+        file=ctx.edges[UPSTREAM].file, consumed=None))
     ctx.ledger.record(node=ctx.node, sid=ctx.sid, model='m', code=ctx.code,
                       cached=False, cache_policy='default')     # 响应没给 usage ⇒ token 三项 null
     p = st.write(STYLE_REL, _style(ctx))
@@ -730,7 +792,7 @@ def test_a_deleted_upstream_becomes_a_named_ghost_edge():
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
     st.write(STYLE_REL, _style(ctx))
-    assert st.freshness(STYLE_REL).state == 'unknown'          # consumed 没声明 ⇒ 不知道
+    assert st.freshness(STYLE_REL).state == 'fresh'
 
     (base / '书名_123' / 'stage1' / 'main_text.json').unlink()
     r = st.freshness(STYLE_REL)

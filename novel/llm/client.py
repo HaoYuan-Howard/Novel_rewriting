@@ -40,6 +40,9 @@ from novel.errors import NovelError
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
+from novel.observability import (
+    AttemptHeartbeat, DEFAULT_HEARTBEAT_SECONDS, RequestProgress,
+)
 from novel.run import RunContext
 
 #: **降级阶梯，全仓唯一一份。** `(reasoning_effort, thinking)`，按顺序走。
@@ -101,7 +104,9 @@ class LlmClient:
                  max_retries: int = config.DEFAULT_MAX_RETRIES,
                  backoff_base: float = config.DEFAULT_BACKOFF_BASE,
                  concurrency: int = config.DEFAULT_CONCURRENCY,
-                 sleep: Callable[[float], None] = time.sleep) -> None:
+                 sleep: Callable[[float], None] = time.sleep,
+                 heartbeat_interval: float = DEFAULT_HEARTBEAT_SECONDS,
+                 clock: Callable[[], float] = time.perf_counter) -> None:
         # ⚠ 四个默认值**引用** `novel/config.py`，不在这里再写一份字面量。
         #   那个文件抬头就写着「默认值都在这里，别在调用点再写一份」，而这里原来写了
         #   第二份（`3` / `2.0` / `2` / `'deepseek-v4-pro'`）。两份数分家时不会报错——
@@ -113,6 +118,10 @@ class LlmClient:
         self.max_retries = max_retries
         self.backoff_base = backoff_base
         self._sleep = sleep
+        if heartbeat_interval < 0:
+            raise ValueError(f'heartbeat_interval 不能为负数，实得 {heartbeat_interval}')
+        self.heartbeat_interval = heartbeat_interval
+        self._clock = clock
         #: 并发闸。⚠ 它守的不是速率，是**钱**：一次配置错误（prompt 漂了）在被人看见之前
         #: 能烧掉多少，与并发度成正比。见 `novel/config.py::DEFAULT_CONCURRENCY`。
         self.concurrency = max(1, concurrency)
@@ -123,7 +132,8 @@ class LlmClient:
     def ask_text(self, system: str, user: str, *, purpose: str,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
                  validator: TextValidator | None = None,
-                 rungs: tuple[tuple[str, bool], ...] | None = None) -> str:
+                 rungs: tuple[tuple[str, bool], ...] | None = None,
+                 progress: RequestProgress | None = None) -> str:
         """纯文本调用。默认走 `LADDER`，**全空或全被调用点拒绝则抛**。
 
         `validator` 是纯文本响应声明「可用」含义的边界：返回 `None` 表示可用，
@@ -141,7 +151,8 @@ class LlmClient:
             for use_cache in (True, False):    # ← 缓存那份不可用 ⇒ 同一档真发一次，见 `_call_keyed`
                 resp, key, cached = self._call_keyed(
                     system, user, effort=effort, thinking=thinking, json_mode=False,
-                    max_tokens=max_tokens, purpose=purpose, use_cache=use_cache)
+                    max_tokens=max_tokens, purpose=purpose, use_cache=use_cache,
+                    progress=progress)
                 text = resp.text
                 why = None if text else '正文为空'
                 if why is None and validator is not None:
@@ -166,7 +177,8 @@ class LlmClient:
 
     def ask_json(self, system: str, user: str, *, model_cls: type[M], purpose: str,
                  require: tuple[str, ...] | None = None,
-                 max_tokens: int = DEFAULT_MAX_TOKENS) -> M:
+                 max_tokens: int = DEFAULT_MAX_TOKENS,
+                 progress: RequestProgress | None = None) -> M:
         """结构化调用。走**同一条** `LADDER`，解析失败与「结构上是空的」同等对待。
 
         ⚠⚠ **`model_cls` 是必填的，而 `require` 默认从它派生。**
@@ -206,7 +218,8 @@ class LlmClient:
             for use_cache in (True, False):    # ← 缓存那份不可用 ⇒ 同一档真发一次，见 `_call_keyed`
                 resp, key, cached = self._call_keyed(
                     system, user, effort=effort, thinking=thinking, json_mode=True,
-                    max_tokens=max_tokens, purpose=purpose, use_cache=use_cache)
+                    max_tokens=max_tokens, purpose=purpose, use_cache=use_cache,
+                    progress=progress)
                 content = _strip_fences(resp.content)
                 head = (f'effort={effort} think={thinking}{" [缓存]" if cached else ""} '
                         f'finish={resp.finish_reason} clen={len(content)}')
@@ -253,7 +266,9 @@ class LlmClient:
 
     def _call_keyed(self, system: str, user: str, *, effort: str, thinking: bool,
                     json_mode: bool, max_tokens: int, purpose: str,
-                    use_cache: bool = True) -> tuple[ChatResponse, str, bool]:
+                    use_cache: bool = True,
+                    progress: RequestProgress | None = None
+                    ) -> tuple[ChatResponse, str, bool]:
         """发一次（或读一次缓存）。返回 `(响应, 缓存键, 这一份是不是缓存来的)`。
 
         ⚠⚠ **它不再写缓存。** 原来这里拿到响应就 `put`，而调用方**还没判断它可不可用**：
@@ -281,18 +296,20 @@ class LlmClient:
             if hit is not None:
                 # ⚠ **缓存命中也要记一行。** 不记的话，「这次跑读了 31 份缓存」与
                 #   「这次跑什么都没做」在账本上长得一模一样，而这两件事的下一步完全不同。
-                self._record_cache_hit(req, hit, purpose=purpose)
+                self._record_cache_hit(req, hit, purpose=purpose, progress=progress)
                 return hit, key, True
 
         # ⚠ 记账在 `_send_with_retry` 里逐次发生（那里才知道自己发了几次）。
-        return self._send_with_retry(req, purpose=purpose), key, False
+        return self._send_with_retry(
+            req, purpose=purpose, progress=progress), key, False
 
     def _keep(self, key: str, resp: ChatResponse) -> None:
         """把一份**已经判定可用**的响应写进缓存。全类唯一的写口。"""
         if self.ctx.cache.write:
             self.cache.put(key, resp)      # 空 content 由 `put` 自己再拒一道
 
-    def _send_with_retry(self, req: ChatRequest, *, purpose: str) -> ChatResponse:
+    def _send_with_retry(self, req: ChatRequest, *, purpose: str,
+                         progress: RequestProgress | None = None) -> ChatResponse:
         """**传输层**重试。与降级阶梯是两条独立的循环（见模块 docstring 末尾）。
 
         ⚠ 只重试 `retryable` 的（429 / 5xx / 超时）。4xx 里其余的是**我们自己发错了**，
@@ -307,24 +324,60 @@ class LlmClient:
         （见 `transport.py::_sdk`），不然两层各退各的避，一次调用能打出 12 次 HTTP。
         """
         last: TransportError | None = None
-        for attempt in range(self.max_retries + 1):
+        max_attempts = self.max_retries + 1
+        for attempt_index in range(max_attempts):
+            attempt = attempt_index + 1
+            backoff_seconds: float | None = None
             with self._gate:                       # 并发闸：守的是钱不是速率
+                heartbeat = AttemptHeartbeat(
+                    self.ctx.observe, purpose=purpose, attempt=attempt,
+                    max_attempts=max_attempts, progress=progress,
+                    interval=self.heartbeat_interval, clock=self._clock)
+                heartbeat.start()
+                started = self._clock()
                 try:
                     resp = self.transport.send(req)
                 except TransportError as e:
                     last = e
-                    self._record_wire(req, None, error=e, purpose=purpose)
-                    if not e.retryable or attempt == self.max_retries:
+                    latency_ms = max(0, round((self._clock() - started) * 1000))
+                    will_retry = e.retryable and attempt < max_attempts
+                    if will_retry:
+                        backoff_seconds = self.backoff_base * (2 ** attempt_index)
+                    try:
+                        self._record_wire(
+                            req, None, error=e, purpose=purpose, attempt=attempt,
+                            max_attempts=max_attempts, latency_ms=latency_ms,
+                            will_retry=will_retry,
+                            backoff_ms=(round(backoff_seconds * 1000)
+                                        if backoff_seconds is not None else None),
+                            progress=progress)
+                    finally:
+                        heartbeat.finish(outcome='error', error_kind=e.kind)
+                    if not will_retry:
                         raise
+                except BaseException:
+                    heartbeat.finish(outcome='error', error_kind='unexpected')
+                    raise
                 else:
-                    self._record_wire(req, resp, error=None, purpose=purpose)
+                    latency_ms = max(0, round((self._clock() - started) * 1000))
+                    try:
+                        self._record_wire(
+                            req, resp, error=None, purpose=purpose, attempt=attempt,
+                            max_attempts=max_attempts, latency_ms=latency_ms,
+                            will_retry=False, backoff_ms=None, progress=progress)
+                    finally:
+                        heartbeat.finish(outcome='ok')
                     return resp
             # ⚠ 睡在信号量**外面**：在闸里睡会把整跑串行化（并发闸守的是钱，不是速率）。
-            self._sleep(self.backoff_base * (2 ** attempt))
+            assert backoff_seconds is not None
+            self._sleep(backoff_seconds)
         raise last if last else LlmFailed('unreachable')
 
     def _record_wire(self, req: ChatRequest, resp: ChatResponse | None, *,
-                     error: TransportError | None, purpose: str) -> None:
+                     error: TransportError | None, purpose: str,
+                     attempt: int, max_attempts: int, latency_ms: int,
+                     will_retry: bool, backoff_ms: int | None,
+                     progress: RequestProgress | None) -> None:
         """一次**真上线**记一行。失败那次 token 三项全 `None`——它没拿回任何读数。"""
         u = (resp.usage if resp else None) or {}
         self.ctx.ledger.record(
@@ -344,10 +397,18 @@ class LlmClient:
             json_mode=req.json_mode,
             max_tokens=req.max_tokens,
             finish_reason=None if resp is None else resp.finish_reason,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            latency_ms=latency_ms,
+            error_kind=None if error is None else error.kind,
+            retryable=None if error is None else error.retryable,
+            will_retry=will_retry,
+            backoff_ms=backoff_ms,
+            progress=progress,
         )
 
     def _record_cache_hit(self, req: ChatRequest, resp: ChatResponse, *,
-                          purpose: str) -> None:
+                          purpose: str, progress: RequestProgress | None) -> None:
         """一次缓存命中记一行（0 元）。**不记的话，「读了 31 份缓存」与「什么都没做」同形。**"""
         u = resp.usage or {}
         self.ctx.ledger.record(
@@ -363,4 +424,5 @@ class LlmClient:
             json_mode=req.json_mode,
             max_tokens=req.max_tokens,
             finish_reason=resp.finish_reason,
+            progress=progress,
         )

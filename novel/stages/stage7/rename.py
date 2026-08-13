@@ -56,69 +56,7 @@ _INVALID = paths.invalid_of(REL)
 MAX_TOKENS = 16000
 
 
-# ── `consumed` 投影：本层**真正读到**上游的哪一部分 ──────────────────────────
-
-def _grounding_projection(data: object) -> object:
-    """全书事实底座：**只读人物表、关系与时代背景**。
-
-    ⚠ 这份上游有几千行，而本层只拿它当名表。不声明投影的话，
-    stage2 改一个不相干的 `fate` 措辞就会把本层的产物判成 `stale`。
-    """
-    if not isinstance(data, dict):
-        return None
-    ent = data.get('entities') or {}
-    chars = ent.get('characters') or {}
-    return {
-        'characters': sorted(
-            (cid, (c or {}).get('canonical'),
-             tuple(sorted((a or {}).get('surface') or ''
-                          for a in ((c or {}).get('address') or []))))
-            for cid, c in chars.items()),
-        'relations': sorted(
-            ((r or {}).get('subject_id'), (r or {}).get('predicate'), (r or {}).get('object_id'))
-            for r in (ent.get('relations') or [])),
-        'setting': sorted(((data.get('canon') or {}).get('setting') or {}).items()),
-    }
-
-
-def _main_text_projection(data: object) -> object:
-    """原文：**只读正文字节**。`attested_surname` 判「有没有据」、`rn_stem_noise` 量基线。"""
-    if not isinstance(data, list):
-        return None
-    return [(c or {}).get('text') for c in data if isinstance(c, dict)]
-
-
-def _plan_projection(data: object) -> object:
-    """计划：**只读该有哪几章**（缺章判定的分母）。"""
-    if not isinstance(data, dict):
-        return None
-    return sorted((c or {}).get('output_ordinal')
-                  for c in (data.get('output_chapters') or []))
-
-
-def _context_projection(data: object) -> object:
-    """写手上下文：本层**只拿它的新鲜度**，一个字段都不读进 prompt。"""
-    if not isinstance(data, dict):
-        return None
-    return ((data.get('_provenance') or {}).get('code'))
-
-
-def _hook_projection(data: object) -> object:
-    """开篇文案：**只读人工定稿的那一段正文**。
-
-    ⚠⚠ **这是与原型的一处偏离，而它把一条真边捡了回来。** 原型对 `hook.json`
-    走裸 `json.load`，理由抄的是成稿那一条（「`inputs` 的键只取两级，反查拼不出路径」）
-    ——**而那条理由在这里不成立**：`stage6/hook.json` 本来就是两级路径。
-    照抄的结果是本层的四条上游边少了一条，**而没有任何东西会出声**。
-
-    真正要防的是另一件事：整份 `hook.json` 带着三条候选与它们的判定，
-    记成**文件级**的边，stage6 一次 `--recheck` 就会把本层判成 `stale`
-    ——而拼进成书的那一段一个字节都没变。**那正是字段级投影要解的问题。**
-    ⇒ 走 `store.read(project=...)`：边记上了，而新鲜度按本层真正消费的那一格判。
-    """
-    if not isinstance(data, dict):
-        return None
-    return ((data.get('approved') or {}).get('text') or '')
+# 本节点的 consumed 投影统一登记在 `novel.consumption`；读写与 freshness 共用同一函数。
 
 
 # ── 上游 ────────────────────────────────────────────────────────────────────
@@ -130,8 +68,8 @@ class _Upstreams:
         for rel in (GLOBAL_GROUNDING, MAIN_TEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
-        gg = store.read(GlobalGrounding, GLOBAL_GROUNDING, project=_grounding_projection)
-        main_text = store.read(paths_model(MAIN_TEXT), MAIN_TEXT, project=_main_text_projection)
+        gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
+        main_text = store.read(paths_model(MAIN_TEXT), MAIN_TEXT)
 
         self.title: str = ctx.title
         self.registry: dict[str, dict] = {
@@ -150,11 +88,11 @@ class _Upstreams:
         #   整个丢了，`stage4.md` 事实⑤ 的字节级铁证）。压成「缺章 0 条」是**说假话**
         #   ——那本书的缺章判据这一趟根本没有分母。⇒ 记下来，由 `plan_note` 说出来。
         plan, self.plan_note = _read_optional(
-            store, PlanChapters, PLAN_CHAPTERS, _plan_projection)
+            store, PlanChapters, PLAN_CHAPTERS)
         self.ctx_code: str | None = None
         self.ctx_present = store.exists(WRITER_CONTEXT)
         wc, self.ctx_note = _read_optional(
-            store, WriterContext, WRITER_CONTEXT, _context_projection)
+            store, WriterContext, WRITER_CONTEXT)
         if wc is not None:
             self.ctx_code = (wc.get('_provenance') or {}).get('code')
         elif self.ctx_note:
@@ -168,7 +106,7 @@ class _Upstreams:
         self.hook_raw: dict | None = None
         if store.exists(HOOK):
             self.hook_raw = store.read(
-                paths_model(HOOK), HOOK, project=_hook_projection).model_dump(by_alias=True)
+                paths_model(HOOK), HOOK).model_dump(by_alias=True)
         self.hook_text: str = (((self.hook_raw or {}).get('approved') or {}).get('text') or '')
         self.hook_sha1: str | None = _hook_file_fp(store)
         self.hook_consumed = hook_consumed_of(self.hook_raw)
@@ -203,7 +141,7 @@ def paths_model(rel: str):
     return ARTIFACTS[rel]
 
 
-def _read_optional(store: ArtifactStore, model, rel: str, project) -> tuple[dict | None, str]:
+def _read_optional(store: ArtifactStore, model, rel: str) -> tuple[dict | None, str]:
     """读一份**可缺**的上游 → `(dict|None, 说明)`。**三态，不是两态。**
 
     · 不在盘上 ⇒ `(None, '不在盘上')`；
@@ -220,7 +158,7 @@ def _read_optional(store: ArtifactStore, model, rel: str, project) -> tuple[dict
     if not store.exists(rel):
         return None, f'{rel} 不在盘上'
     try:
-        return store.read(model, rel, project=project).model_dump(by_alias=True), ''
+        return store.read(model, rel).model_dump(by_alias=True), ''
     except ArtifactUnreadable as e:
         return None, f'{rel} 在盘上但读不回来（{str(e).splitlines()[0]}）'
 

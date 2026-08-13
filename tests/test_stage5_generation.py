@@ -92,6 +92,7 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
 
     client = Client()
     captured = {}
+    events = []
     report = object()
     monkeypatch.setattr(
         write.prompts, 'write_system', lambda *_a, **_kw: 'SYS')
@@ -113,7 +114,8 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
 
     monkeypatch.setattr(write, '_report', fake_report)
     ctx = SimpleNamespace(
-        llm_provenance=lambda *_a, **_kw: object())
+        llm_provenance=lambda *_a, **_kw: object(),
+        observe=lambda event, **fields: events.append({'event': event, **fields}))
     todo = [
         {'output_ordinal': 1},
         {'output_ordinal': 2},
@@ -126,6 +128,11 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
     assert len(client.calls) == 2
     assert all(call['validator'] is write._reject_length_capped
                for call in client.calls)
+    assert [(call['progress'].chapter, call['progress'].index, call['progress'].total)
+            for call in client.calls] == [(1, 1, 2), (2, 2, 2)]
+    assert [(event['chapter'], event['outcome']) for event in events] == [
+        (1, 'failed'), (2, 'ok'),
+    ]
     assert captured['written'] and '第 1 章没拿到完整正文' in captured['blocked'][0]
 
 

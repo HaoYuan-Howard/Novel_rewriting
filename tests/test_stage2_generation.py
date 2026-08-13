@@ -9,6 +9,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,6 +24,43 @@ from novel.run import RunContext
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
+
+
+def test_parallel_chapter_requests_report_batch_positions_without_schema_changes():
+    calls = []
+    events = []
+
+    class Response:
+        def __init__(self, ordinal):
+            self.ordinal = ordinal
+
+        def model_dump(self, **_kwargs):
+            return {'blueprints': [{'chapter_ordinal': self.ordinal}]}
+
+    class Client:
+        concurrency = 2
+
+        def ask_json(self, *_args, **kwargs):
+            calls.append(kwargs)
+            return Response(kwargs['progress'].chapter)
+
+    ctx = SimpleNamespace(
+        node='stage2.blueprint',
+        observe=lambda event, **fields: events.append({'event': event, **fields}),
+    )
+    requests = [(4, 'sys4', 'user4'), (9, 'sys9', 'user9')]
+    results, violations, errors = extract._run_chapter_requests(ctx, Client(), requests)
+
+    assert [result['chapter_ordinal'] for result in results] == [4, 9]
+    assert violations == [] and errors == []
+    assert sorted(
+        (call['progress'].chapter, call['progress'].index, call['progress'].total)
+        for call in calls
+    ) == [(4, 1, 2), (9, 2, 2)]
+    assert sorted(
+        (event['chapter'], event['outcome'], event['chapter_total'])
+        for event in events
+    ) == [(4, 'ok', 2), (9, 'ok', 2)]
 
 
 def _response_global() -> dict:

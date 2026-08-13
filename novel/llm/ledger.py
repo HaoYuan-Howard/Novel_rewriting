@@ -27,6 +27,7 @@ from pathlib import Path
 
 from contracts.schema import Usage
 from novel.errors import ProvenanceRefused
+from novel.observability import RequestProgress
 
 #: 账本在 `<Output>/` 下的位置。跨书，所以不在任何一本书的目录里。
 LEDGER_REL = ('_service', 'ledger.jsonl')
@@ -109,7 +110,15 @@ class CostLedger:
                thinking: bool | None = None,
                json_mode: bool | None = None,
                max_tokens: int | None = None,
-               finish_reason: str | None = None) -> None:
+               finish_reason: str | None = None,
+               attempt: int | None = None,
+               max_attempts: int | None = None,
+               latency_ms: int | None = None,
+               error_kind: str | None = None,
+               retryable: bool | None = None,
+               will_retry: bool | None = None,
+               backoff_ms: int | None = None,
+               progress: RequestProgress | None = None) -> None:
         """记**一次上线**（或一次缓存命中）。`cached=True` 表示这一次是缓存命中（0 元）。
 
         ⚠ **缓存命中也要记一行。** 不记的话，「这次跑读了 31 份缓存」与
@@ -151,6 +160,16 @@ class CostLedger:
                 'json_mode': json_mode,
                 'max_tokens': max_tokens,
                 'finish_reason': finish_reason,
+                'attempt': attempt,
+                'max_attempts': max_attempts,
+                'latency_ms': latency_ms,
+                'error_kind': error_kind,
+                'retryable': retryable,
+                'will_retry': will_retry,
+                'backoff_ms': backoff_ms,
+                'chapter': progress.chapter if progress else None,
+                'chapter_index': progress.index if progress else None,
+                'chapter_total': progress.total if progress else None,
             }
             self._append(row)
 

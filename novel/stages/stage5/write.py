@@ -39,6 +39,7 @@ from novel import paths, prov
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.transport import ChatResponse
+from novel.observability import ChapterProgressTracker, RequestProgress
 from novel.report.builder import build
 from novel.report.findings import unverifiable
 from novel.run import RunContext
@@ -223,7 +224,8 @@ def _reject_length_capped(_text: str, response: ChatResponse) -> str | None:
 
 
 def _trim_to_fit(client: LlmClient, text: str, entry: dict[str, Any], book: M.Book, *,
-                 mode: str) -> tuple[str, list[str]]:
+                 mode: str, progress: RequestProgress | None = None
+                 ) -> tuple[str, list[str]]:
     """超上限 ⇒ 退回去做「**只删不改**」的收缩，最多 `TRIM_ROUNDS` 轮。
 
     三条护栏，`R-7.12` 的落点：
@@ -246,7 +248,7 @@ def _trim_to_fit(client: LlmClient, text: str, entry: dict[str, Any], book: M.Bo
             got = client.ask_text(
                 prompts.trim_system(), prompts.trim_user(text, entry),
                 purpose=f'{ctx_purpose(entry)}·收缩{i + 1}', max_tokens=MAX_TOKENS,
-                validator=_reject_length_capped, rungs=TRIM_RUNGS)
+                validator=_reject_length_capped, rungs=TRIM_RUNGS, progress=progress)
         except LlmFailed as exc:
             notes.append(
                 f'收缩第 {i + 1} 轮没有拿到完整正文，保留原稿：{str(exc).splitlines()[0]}')
@@ -293,8 +295,11 @@ def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
     judged: dict[int, list] = {}
     written: list[str] = []
     blocked: list[str] = []
+    tracker = ChapterProgressTracker(
+        ctx.observe, [int(entry['output_ordinal']) for entry in todo])
     for entry in todo:
         o = int(entry['output_ordinal'])
+        progress = tracker.request(o)
         mat = prompts.build_material(entry, book,
                                      with_source_text=_ARMS[mode].with_source_text)
         if revise is not None:
@@ -306,16 +311,18 @@ def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
         try:
             got = client.ask_text(
                 system, user, purpose=ctx_purpose(entry), max_tokens=MAX_TOKENS,
-                validator=_reject_length_capped)
+                validator=_reject_length_capped, progress=progress)
         except LlmFailed as exc:
             # 单章的四档都失败不该推倒整批；网络级错误仍向上抛，避免故障时继续烧钱。
             blocked.append(
                 f'第 {o} 章没拿到完整正文：{str(exc).splitlines()[0]}')
+            tracker.finish(o, outcome='failed', detail=str(exc).splitlines()[0])
             continue
         text = (got or '').strip()
         if not text:
             # 【显式终态·一章失败不中断整批】——但要说出是哪一章。
             blocked.append(f'第 {o} 章没拿到正文')
+            tracker.finish(o, outcome='failed', detail='没有拿到正文')
             continue
         # ⚠⚠ **归一跑在收缩之前**：`normalize_paragraphs` 会把单换行改成空行分段，
         #   **它往文本里加字符**，而 `budget_chars` 的口径含空白。曾有一章归一前 1408 字
@@ -323,7 +330,8 @@ def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
         #   ——**它是被「修版式」这个动作推过线的**，而唯一能救它的收缩已经跑完并正确地拒绝了。
         text, acc = M.normalize_chapter(text, quote_style=book.quote_style,
                                         sep_chars=book.sep_chars)
-        text, trim_notes = _trim_to_fit(client, text, entry, book, mode=mode)
+        text, trim_notes = _trim_to_fit(
+            client, text, entry, book, mode=mode, progress=progress)
         rnd = store.next_round(_rel(mode, o))
         extra: dict[str, Any] = {'round': rnd}
         if revise is not None:
@@ -340,6 +348,9 @@ def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
         (blocked if errs else written).append(
             f'第 {o} 章 → {where}' + (f'（{len(errs)} 条阻断级）' if errs else '')
             + (f'　⚠ {"；".join(trim_notes)}' if trim_notes else ''))
+        tracker.finish(
+            o, outcome='blocked' if errs else 'ok',
+            detail=str(errs[0]) if errs else (trim_notes[0] if trim_notes else None))
     report = _report(ctx, store, mode, written=written, blocked=blocked, judged=judged)
     if blocked and not written:
         raise GateBlocked(

@@ -107,8 +107,8 @@ def _measure(store: ArtifactStore) -> tuple[object, str | None, str | None, str 
     而 `novel/errors.py` 开头写着那一族「绝不允许被降级成一句警告」。
     """
     try:
-        main = store.read(MainText, style.MAIN_TEXT, project=style._main_text_projection)
-        hook = store.read(HookCopy, style.HOOK_COPY, project=style._hook_projection)
+        main = store.read(MainText, style.MAIN_TEXT)
+        hook = store.read(HookCopy, style.HOOK_COPY)
         return measure_all(main, hook), None, None, hook_text_of(hook)
     except (UpstreamMissing, ArtifactUnreadable) as e:
         # ⚠ **id 与措辞各出一格**（`Q-6`）：类名给前端做分支（「先跑 stage1」还是

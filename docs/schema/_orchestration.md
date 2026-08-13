@@ -210,8 +210,8 @@ argv 的形态是：
 > ⇒ 同 `FRESHNESS` / `JOB_STATE` 的 `unknown`，这是 `Q-2` 那条三态在完成度这一侧的样子。
 
 ⚠ **`.INVALID` 不计入已完成**，它进 inbox（`INBOX_KIND` 已有 `invalid` 这个值）。
-⚠ **`freshness == 'unknown'` 计入已完成**，这不是漏判：八层今天几乎全是 `unknown`
-（`consumed` 投影只有 stage3 声明过三条），把 `unknown` 当未完成会让整条链永远跑不出第一步。
+⚠ **`freshness == 'unknown'` 计入已完成**，这不是漏判：存量语料是在统一投影注册前生成的，
+大量边仍为 `consumed=null`；把 `unknown` 当未完成会让升级后的队列重跑一批可能已完成的付费层。
 「不知道它新不新」与「它是旧的」是两件事——后者才该挡路。
 
 **`NovelOverview`** 另有一格 `stage5_modes`（glob `stage5/*` 的目录名）：
@@ -389,6 +389,19 @@ UTF-8，接到**管道**时退回 cp936——而报告里满篇 `✓ ✗ ↻ ⚠
 `spawn` 时带这三个环境变量（子进程的完整保证）。
 ⚠ CLI 入口另外还要显式把 stdout/stderr 重配成 UTF-8——那是给
 「人在 GBK 控制台里直接敲 `python -m novel.cli`」准备的第三道。
+
+### 7.3 结构化运行心跳复用作业日志，不另造进度文件
+
+长请求把一行 UTF-8 JSON 写到 stdout，固定前缀为 `@observe `。父进程已把 stdout/stderr
+按字节追加到 `logs/<job_id>.log`，所以终端直跑与 Web 作业共享同一条出口：
+
+- `llm_attempt_heartbeat`：发送开始即报；仍在途时默认每 30 秒报一次，含
+  `attempt/max_attempts`、elapsed 与可选章进度；
+- `llm_attempt_finished`：每次真实发送结束即报 `ok/error` 与错误分类；
+- `chapter_progress`：Stage 2/5 每章结算后报本批 `completed/succeeded/failed`。
+
+这些事件只回答「当前长作业有没有活着、走到哪一章」，**不参与完成度判定**。
+`R-14.1` 仍只认产物存在性与 freshness；单独进度文件会与盘上真实产物分家，因此不新增。
 
 ---
 

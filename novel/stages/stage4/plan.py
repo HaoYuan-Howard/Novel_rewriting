@@ -49,67 +49,7 @@ BLUEPRINTS = 'stage2/chapter_blueprints.json'
 _INVALID = paths.invalid_of(REL)
 
 
-# ── `consumed` 投影：本节点**真正读到**上游的哪一部分 ────────────────────────
-
-def _blueprints_projection(data: object) -> object:
-    """章节骨架：**本层只读拍的编号、内容、叙述层、地点与 span 锚点**。
-
-    ⚠ 不声明投影的话，stage2 改一个不相干的 `summary` 措辞就会把本层判成 `stale`
-    ——把一批结论降级成「读数不可用」，而且没有重新挂钩的路。
-    """
-    if not isinstance(data, dict):
-        return None
-    return sorted(
-        (b.get('chapter_ordinal'),
-         tuple((be.get('beat_id'), be.get('event'), be.get('time_layer'), be.get('place'),
-                ((be.get('span') or {}).get('starts_with'), (be.get('span') or {}).get('ends_with')))
-               for be in (b.get('beats') or [])))
-        for b in (data.get('blueprints') or []))
-
-
-def _main_text_projection(data: object) -> object:
-    """正文：**只读章号与正文字节**（篇幅基准与 span 定位都建在它上面）。"""
-    if not isinstance(data, list):
-        return None
-    return sorted((m.get('chapter_ordinal'), m.get('text')) for m in data)
-
-
-def _grounding_projection(data: object) -> object:
-    """全书事实底座：**规划那一次调用根本不读它**（已退役），只有组装读。
-
-    ⇒ 投影覆盖组装真正用到的四块：人物表 · 关系 · 秘密 · 设定与规则。
-    """
-    if not isinstance(data, dict):
-        return None
-    ent = data.get('entities') or {}
-    canon = data.get('canon') or {}
-    return {
-        'characters': sorted(
-            (cid, (c or {}).get('canonical'), (c or {}).get('role'),
-             (c or {}).get('name_distinctiveness'),
-             tuple(sorted(((a or {}).get('surface'), (a or {}).get('from_chapter'),
-                           (a or {}).get('by'), (a or {}).get('context'))
-                          for a in ((c or {}).get('address') or []))))
-            for cid, c in (ent.get('characters') or {}).items()),
-        'relations': sorted(
-            ((r or {}).get('relation_id'), (r or {}).get('subject_id'), (r or {}).get('predicate'),
-             (r or {}).get('object_id'), (r or {}).get('valid_from_chapter'),
-             (r or {}).get('valid_to_chapter'))
-            for r in (ent.get('relations') or [])),
-        'secrets': sorted(
-            ((s or {}).get('secret_id'), (s or {}).get('fact'),
-             tuple(sorted(map(str, (s or {}).get('setup_chapters') or []))),
-             tuple(sorted(str(e.get('chapter')) for e in ((s or {}).get('reader_reveal_events') or []))))
-            for s in (canon.get('secrets') or [])),
-        'setting': sorted((canon.get('setting') or {}).items()),
-        'world_rules': sorted(
-            ((r or {}).get('rule_id'),
-             tuple(sorted((str(v.get('effective_from_chapter')), v.get('desc'))
-                          for v in ((r or {}).get('versions') or []))))
-            for r in (canon.get('world_rules') or [])),
-        'arc': sorted(((data.get('arc') or {}).get('conflict_stages') or []),
-                      key=lambda st: str(st.get('stage'))),
-    }
+# 本节点的 consumed 投影统一登记在 `novel.consumption`；读写与 freshness 共用同一函数。
 
 
 class _Upstreams:
@@ -124,14 +64,13 @@ class _Upstreams:
         for rel in (MAIN_TEXT, BLUEPRINTS) + ((GLOBAL_GROUNDING,) if need_grounding else ()):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——stage4 吃的是 stage1 与 stage2 的产出')
-        self.main_text = store.read(MainText, MAIN_TEXT,
-                                    project=_main_text_projection).model_dump(by_alias=True)
-        self.blueprints = store.read(ChapterBlueprints, BLUEPRINTS,
-                                     project=_blueprints_projection).model_dump(by_alias=True)
+        self.main_text = store.read(MainText, MAIN_TEXT).model_dump(by_alias=True)
+        self.blueprints = store.read(
+            ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
         self.global_g: dict[str, Any] | None = None
         if need_grounding:
-            self.global_g = store.read(GlobalGrounding, GLOBAL_GROUNDING,
-                                       project=_grounding_projection).model_dump(by_alias=True)
+            self.global_g = store.read(
+                GlobalGrounding, GLOBAL_GROUNDING).model_dump(by_alias=True)
         self.bidx = beat_index(self.blueprints, self.main_text)
         self.groups = group_beats(self.blueprints, self.main_text, self.bidx)
 

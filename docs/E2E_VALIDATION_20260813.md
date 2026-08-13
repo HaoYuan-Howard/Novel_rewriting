@@ -142,3 +142,15 @@
 - 全量测试仅有 1 条 Starlette / httpx 弃用警告，无失败。
 - 三本 Stage 5 / Stage 7 最终检查均退出码 0。
 - 三本最终正文的账本 SHA-1、章数和改名 round-trip 均已重新读取落盘文件复核。
+
+## 8. 第 1 批实施记录（2026-08-13）
+
+本报告 §6 建议的第 1 批已实现：
+
+- consumed projection 改为按 `(node, input-rel)` 唯一注册；读边与 freshness 重算共用
+  同一函数，动态逐章产物及 `.INVALID` 路径会先解析回真实生产节点；
+- 服务账本逐 wire attempt 记录 attempt、finish reason、稳定错误分类、latency、
+  是否继续重试、下一次退避，以及可选章节批次位置；
+- 真实请求提供 30 秒在途心跳，Stage 2 并发蓝图与 Stage 5 串行写作提供逐章完成进度；
+- 本批只增加运行时 metadata、服务日志与 provenance 重算能力，**没有修改 Stage 2 schema、
+  Stage 2 响应形状或盘上制品契约**。材料锚点与上下文架构仍留在第 2 批单独设计。

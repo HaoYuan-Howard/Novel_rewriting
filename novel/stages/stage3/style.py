@@ -42,54 +42,14 @@ GLOBAL_GROUNDING = 'stage2/global_grounding.json'
 _INVALID = paths.invalid_of(REL)
 
 
-# ── `consumed` 投影：本层**真正读到**上游的哪一部分 ──────────────────────────
-#
-# ⚠⚠ **这是全链第一次有节点声明投影。** 在此之前八层一个都没有，于是新鲜度恒为
-# `unknown`——那是契约要的，不是 bug（`_common.md` §三「建槽位，不填槽位」）。
-# 声明之后 `fresh` 才第一次真的出现。
-# ⚠ 投影吃的是**盘上那份原始 dict**（不是模型），理由见 `store.read`：
-# 判过期时要对一份**可能已经不合当前 schema** 的上游重算同一个投影。
-
-def _main_text_projection(data: object) -> object:
-    """正文：**只读 `text`**。章号/原文标号改了不影响本层的任何一个数——
-    `measure_body` 只吃 `text`，`corpus` 也只吃 `text`。"""
-    return [s.get('text') for s in data] if isinstance(data, list) else None
-
-
-def _hook_projection(data: object) -> object:
-    """文案段：**只读 `text`**。"""
-    return (data or {}).get('text') if isinstance(data, dict) else None
-
-
-def _grounding_projection(data: object) -> object:
-    """全书事实底座：**只读名表要用的那几格 + 秘密**（`canonical` / `address[].surface` /
-    `name_distinctiveness` / `secrets`）。
-
-    ⚠ 这份上游有**几千行**，而本层只在校验期拿它当名表。不声明投影的话，
-    stage2 改一个不相干的 `role` 措辞就会把 stage3 的产物判成 `stale`
-    ——那正是 `Q-4` 说的「把一批结论降级成『读数不可用』，且没有重新挂钩的路」。
-    """
-    if not isinstance(data, dict):
-        return None
-    chars = ((data.get('entities') or {}).get('characters') or {})
-    return {
-        'characters': sorted(
-            (cid, c.get('canonical'), c.get('name_distinctiveness'),
-             tuple(sorted((a or {}).get('surface') or '' for a in (c.get('address') or []))))
-            for cid, c in chars.items() if isinstance(c, dict)),
-        'secrets': sorted(
-            (s.get('secret_id'), s.get('fact'),
-             tuple(sorted((e or {}).get('chapter') or 0
-                          for e in (s.get('reader_reveal_events') or []))))
-            for s in ((data.get('canon') or {}).get('secrets') or []) if isinstance(s, dict)),
-    }
+# 本节点的 consumed 投影统一登记在 `novel.consumption`；读写与 freshness 共用同一函数。
 
 
 def _upstreams(store: ArtifactStore) -> tuple[MainText, HookCopy, GlobalGrounding | None]:
     """三份上游。**第三份缺失不是硬错**——它只服务 `name_leak`，缺了那条判据落 `unver`。"""
-    main = store.read(MainText, MAIN_TEXT, project=_main_text_projection)
-    hook = store.read(HookCopy, HOOK_COPY, project=_hook_projection)
-    gg = (store.read(GlobalGrounding, GLOBAL_GROUNDING, project=_grounding_projection)
+    main = store.read(MainText, MAIN_TEXT)
+    hook = store.read(HookCopy, HOOK_COPY)
+    gg = (store.read(GlobalGrounding, GLOBAL_GROUNDING)
           if store.exists(GLOBAL_GROUNDING) else None)
     return main, hook, gg
 
@@ -205,9 +165,9 @@ def run_style(ctx: RunContext, client: LlmClient) -> StyleGrounding:
 
 def _judge(store: ArtifactStore, data: dict, *, measured_now: Measurable | None):
     """判据的**唯一调度点**：付费路的落盘闸门与 `--check-only` 走同一条。"""
-    main = store.read(MainText, MAIN_TEXT, project=_main_text_projection)
-    hook = store.read(HookCopy, HOOK_COPY, project=_hook_projection)
-    gg = (store.read(GlobalGrounding, GLOBAL_GROUNDING, project=_grounding_projection)
+    main = store.read(MainText, MAIN_TEXT)
+    hook = store.read(HookCopy, HOOK_COPY)
+    gg = (store.read(GlobalGrounding, GLOBAL_GROUNDING)
           if store.exists(GLOBAL_GROUNDING) else None)
     names = names_of(gg) if gg is not None else None
     return checks.check(
