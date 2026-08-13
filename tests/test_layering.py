@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import os
+import tomllib
 
 import pytest
 
@@ -77,6 +78,20 @@ def test_the_scan_actually_finds_something():
     assert len(files) >= 6, f'只扫到 {len(files)} 个契约层模块——路径多半错了'
     assert any(_imports(p) & {'pydantic'} for p in files), \
         '一个 pydantic import 都没扫到——AST 解析多半失效了'
+
+
+def test_every_runtime_package_is_in_the_distribution():
+    """源码树可 import 不等于 wheel 里有；pythonpath 会把漏包静默遮住。"""
+    with open(os.path.join(ROOT, 'pyproject.toml'), 'rb') as fh:
+        configured = set(tomllib.load(fh)['tool']['setuptools']['packages'])
+    actual = {
+        _rel(os.path.dirname(p)).replace('/', '.')
+        for p in _py_files('novel')
+        if os.path.basename(p) == '__init__.py'
+    }
+    assert configured >= actual, (
+        f'这些 runtime 包没有进 setuptools 清单：{sorted(actual - configured)}。'
+        'pytest 的 pythonpath=["."] 会让源码树测试照常通过，非 editable 安装才会炸')
 
 
 # ───────────────────── 全仓只有一个 `Finding` ─────────────────────

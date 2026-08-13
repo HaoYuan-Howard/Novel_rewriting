@@ -425,7 +425,7 @@ def test_jobs_can_be_filtered_by_book(client, box):
 
 def test_the_only_bindable_host_is_loopback():
     """`R-11.1` 的四条理由（会执行进程 · 花真钱 · 写盘 · 传不外流的正文）
-    在 `docs/REQUIREMENTS.md` 的 `R-11.1` 那一行。这里只钉那**一个常量**——
+    在 `docs/BACKEND_CONTRACT.md` 的 `R-11.1` 那一行。这里只钉那**一个常量**——
     「有没有第二个落点」由 `test_api_discipline.py` 用 AST 查。
     """
     assert HOST == '127.0.0.1' and PORT == 8765

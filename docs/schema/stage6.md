@@ -451,7 +451,7 @@ owner：`stage6` 13 · `None` 11（＝非结论）· `stage3` 1。
 > `tests/test_coverage.py::test_no_rule_claims_a_requirement_marked_unguarded` 会判它们说假话。
 > **9 条判据，一条都注册不进来。**
 >
-> ⇒ 按 `REQUIREMENTS.md` 的跨层裁决②（`Q` 是问题与裁决的记录，不是需求；
+> ⇒ 按 `docs/BACKEND_CONTRACT.md` 的跨层裁决②（`Q` 是问题与裁决的记录，不是需求；
 > 指向 `Q` 的判据不进任何一节的正向覆盖率分母）**在 R 侧补四行**收下它们：
 > `R-9.15`（度量）· `R-9.16`（前提不成立要出声）· `R-9.17`（来源账）· `R-9.18`（三条查不了的常驻）。
 > `Q-x` 降为 `Rule.note` 里的理由。
@@ -462,7 +462,7 @@ owner：`stage6` 13 · `None` 11（＝非结论）· `stage3` 1。
 
 > #### ⚠⚠ `R-9` 里曾经 **0 处**提到剧透上界
 >
-> 逐字核过——`REQUIREMENTS.md` 全文「结局」**6 次全在 stage2**（`R-2.6`/`R-2.7`/`R-2.12`/`B-14`），
+> 逐字核过——`docs/BACKEND_CONTRACT.md` 全文「结局」**6 次全在 stage2**（`R-2.6`/`R-2.7`/`R-2.12`/`B-14`），
 > 「卖点」**0 次**、「誊抄」**0 次**、「段落形态」**0 次**。
 > 而「秘密全量下发、可以说破；只有 `arc.climax`/`arc.ending`/`arc_tracks[].trajectory` 不下发」
 > 是一次**用户裁决**，还是**量出来的**（5 本原作文案无一提结局，而其中一本的原作文案

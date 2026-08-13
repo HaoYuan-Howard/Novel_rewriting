@@ -27,7 +27,7 @@ enums.py —— `GET /api/enums` 的**唯一**构造函数。纯函数：不碰�
 （`R-11.4`：界面不重算任何已经在校验器里的判据）。容器不一样：取值面、词表、映射表、
 区间，前端拿它渲染选项与图例，渲染不产生判定。
 
-⚠ **本模块的输出必须是抓包那 14 个键的超集**（`docs/REQUIREMENTS.md` §一「命名体系」第 5 条）：
+⚠ **本模块的输出必须是抓包那 14 个键的超集**（`docs/BACKEND_CONTRACT.md` §一「命名体系」第 5 条）：
 `docs/design_brief/05_samples/enums.json` 是**现役原型后端的真实抓包**，
 `tests/test_api_enums.py` 拿它逐值对账。**那份抓包永远不许用本模块的输出覆盖**——
 覆盖之后那一族测试就变成拿 `invariants` 跟它自己比。
@@ -218,7 +218,7 @@ def job_kinds() -> dict[str, dict[str, Any]]:
     """作业单元表。**键是节点 id**（`stage3.style`），不是原型那 12 个 `n1..n9`。
 
     ⚠ **键名保持 `job_kinds` 不改成 `nodes`**：抓包那 14 个键是契约的一部分，
-    改键名是一次前端可见的破坏性变更，而 `REQUIREMENTS.md` §一「命名体系」第 5 条 说的是
+    改键名是一次前端可见的破坏性变更，而 `docs/BACKEND_CONTRACT.md` §一「命名体系」第 5 条说的是
     「形状不变，**只有 `kind` 的取值变**」。里面装的是什么，`docs/schema/_api.md` 说清楚。
 
     ⚠⚠ **本表的 `paid` 说的是【默认路径】贵不贵，不许拿它做贵贱对账。**

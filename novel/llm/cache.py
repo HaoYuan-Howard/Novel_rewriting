@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -172,7 +173,9 @@ class ResponseCache:
         data = (json.dumps(resp.__dict__, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
         # 【原子写】调用方会**并发**跑（并发闸默认 2），而「先截断再写」留下的是半截 JSON。
         # 坏处不是丢一次缓存，是下次读到它——见 `get` 里那条注释。
-        tmp = p.with_name(f'{p.name}.{os.getpid()}.tmp')
+        # 同一进程的章节线程可能同时碰同一个 key（例如重复任务）。PID 不足以区分
+        # 临时文件；加线程 id 后仍保持同目录原子替换。
+        tmp = p.with_name(f'{p.name}.{os.getpid()}.{threading.get_ident()}.tmp')
         try:
             tmp.write_bytes(data)
             os.replace(tmp, p)

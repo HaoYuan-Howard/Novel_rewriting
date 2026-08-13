@@ -331,7 +331,7 @@ class StyleResponse(StrictModel):
 
     ⚠⚠ **`require` 从本模型的必需顶层键派生 ⇒ 三个键一个都漏不掉。**
     原型这个调用点写的是 `require=('voice', 'surface_habits')`——**漏了 `hook_style`**
-    （`docs/REQUIREMENTS.md` 的 `R-2` 节那条跨节点规矩记着两处实况：
+    （`docs/BACKEND_CONTRACT.md` 的 `R-2` 节那条跨节点规矩记着两处实况：
     stage2 全书抽取漏 `arc`〔**裸缺口，缺整块全链不出声**〕· stage3 漏 `hook_style`）。
     漏传不报错，它只是**静默停掉一条 HARD 闸门**（判据 39）：模型没写 `hook_style`
     时那一档不会重试、不会降级，直接落一份缺键的稿下去。

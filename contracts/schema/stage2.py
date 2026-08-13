@@ -350,6 +350,51 @@ class GlobalGrounding(StrictModel):
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
+# ── LLM response models：只收【模型该写的字段】──────────────────────────────
+#
+# 最终产物模型不能直接拿来校验响应：Address.by 允许模型先写人名、再由代码回解；
+# _provenance 更是代码在请求完成后才铸造。若为了省一组模型而把这些字段设成可选，
+# 最终产物的严格契约也会被一起放宽。响应边界因此单独建模，二者各守各的责任。
+
+class AddressResponse(StrictModel):
+    surface: str = Field(min_length=1)
+    by: str = Field(min_length=1)
+    context: Literal[ADDRESS_CONTEXT]
+    from_chapter: int = Field(ge=1)
+
+
+class CharacterResponse(StrictModel):
+    canonical: str = Field(min_length=1)
+    address: list[AddressResponse] = Field(min_length=1)
+    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
+    role: str = Field(min_length=1)
+    fate: str | None
+
+
+class EntitiesResponse(StrictModel):
+    characters: dict[str, CharacterResponse]
+    relations: list[Relation]
+
+
+class GlobalGroundingResponse(StrictModel):
+    """stage2.global 的不可信响应；不含任何代码产字段。"""
+
+    entities: EntitiesResponse
+    canon: Canon
+    arc: Arc
+
+
+class RoleFateResponse(StrictModel):
+    role: str = Field(min_length=1)
+    fate: str | None
+
+
+class RoleSplitResponse(StrictModel):
+    """purge-role 只允许交回 role/fate；char_id 是映射键。"""
+
+    characters: dict[str, RoleFateResponse]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、`chapter_blueprints.json`
 # ─────────────────────────────────────────────────────────────────────────────
@@ -527,6 +572,46 @@ class Blueprint(StrictModel):
 
     #: **盘上恒长度 1**（31/31）。
     narration: list[Narration] = Field(min_length=1)
+
+
+class HingeResponse(StrictModel):
+    """模型只选锚点；text 必须由代码从原文切出。"""
+
+    kind: Literal[HINGE_KINDS]
+    starts_with: str = Field(min_length=1)
+    ends_with: str = Field(min_length=1)
+
+
+class BeatResponse(StrictModel):
+    """模型的拍；beat_id 会归一，char_id 不允许模型猜。"""
+
+    beat_id: str = Field(min_length=1)
+    span: BeatSpan
+    time_layer: Literal[TIME_LAYERS]
+    place: str | None
+    present_names: list[str]
+    event: str = Field(min_length=1)
+    hinges: list[HingeResponse]
+
+
+class NarrationResponse(StrictModel):
+    grammatical_person: Literal[NARRATIVE_PERSON]
+    narrator_name: str | None
+    focalizer_name: str | None
+    pronoun_surfaces: list[str]
+
+
+class BlueprintResponse(StrictModel):
+    chapter_ordinal: int = Field(ge=1)
+    summary: str = Field(min_length=1)
+    beats: list[BeatResponse] = Field(min_length=1)
+    narration: list[NarrationResponse] = Field(min_length=1)
+
+
+class ChapterBlueprintsResponse(StrictModel):
+    """一次调用原则上只产一章；越界章仍需先接住并记账。"""
+
+    blueprints: list[BlueprintResponse] = Field(min_length=1)
 
 
 class BlueprintContext(StrictModel):

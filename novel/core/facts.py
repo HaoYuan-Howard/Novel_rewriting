@@ -117,6 +117,13 @@ def num_unit_keys(text: str | None) -> dict[tuple[object, str], str]:
     for m in NUM_UNIT.finditer(t):
         unit = t[m.end()] if m.end() < len(t) else ''
         v = num_value(m.group())
+        # 「成」既是成数单位，也是大量普通词的首字。正则只能看见
+        # 「一百成功」里的「一百成」，但 >10 成不是合法成数；若不在共享
+        # 抽取层剔除，stage6 会把「好感度一百成功」误报成编造数字。
+        # 不能简单写 `成(?!功)`：那只补一个词，下一本书遇到「一百成就」
+        # 还会重犯；按成数的值域过滤才是稳定的语言约束。
+        if unit == '成' and isinstance(v, (int, float)) and not 0 <= v <= 10:
+            continue
         out.setdefault((v if v is not None else m.group(), unit), m.group() + unit)
     return out
 

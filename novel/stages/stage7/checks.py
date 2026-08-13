@@ -20,7 +20,7 @@ import re
 from contracts.invariants import IDENTITY_BLIND, MIN_SURFACE
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
-from novel.core.naming import NAME_TITLE, is_generic_appellation
+from novel.core.naming import NAME_TITLE, is_generic_appellation, strip_distinguisher
 from novel.core.style import (
     DASH_CORPUS_P95, SHORT_RUN_CORPUS_P95, dash_per_1k, short_run_per_1k,
 )
@@ -45,10 +45,30 @@ def _kept_tail(old: str, new: str) -> bool | None:
     return (new or '').endswith(m.group()) if m else None
 
 
+def _generic_appellation_was_touched(old: str, new: str, subs: dict[str, str],
+                                     surnames: set[str]) -> bool:
+    """关系词本身被改了才算违规；「关系标签 + 真名」只换真名不算。
+
+    `is_generic_appellation` 为了拦「姐姐」「女主」这类词会做前缀匹配，
+    所以复合别名「女主方衡」也会命中。若同一张替换表能证明它只是把内嵌的
+    `方衡→沈凌` 展开成 `女主方衡→女主沈凌`，关系标签逐字未动；除此之外
+    一律继续保守地判为 touched。
+    """
+    if not is_generic_appellation(old, surnames):
+        return False
+    return not any(
+        inner_old != old
+        and inner_old in old
+        and old.replace(inner_old, inner_new) == new
+        for inner_old, inner_new in subs.items()
+    )
+
+
 def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Problem],
                     applied: dict, residual: list[dict], baseline: dict[str, dict],
                     registry: dict[str, dict], pre_target: str, source_text: str,
                     residual_keys: set[str], stem_noise: dict[str, int],
+                    family_members: dict[str, tuple[str, ...]],
                     dup: list[int], missing: list[int], mixed: list[int],
                     invalids: list[str], post_units: list[Unit],
                     title_line: str) -> list[Finding]:
@@ -107,7 +127,8 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                                  f'「关系与职位不变」是本节点的总原则',
                           evidence=[o for o, _n in lost]))
     surs = {s for s in (name_map.get('surname_map') or {}) if s}
-    touched = [o for o in sorted(subs) if is_generic_appellation(o, surs)]
+    touched = [o for o, n in sorted(subs.items())
+               if _generic_appellation_was_touched(o, n, subs, surs)]
     if touched:
         fs.append(finding('rn_kinship_touched',
                           detail=f'通用亲属/敬称被当成名字换掉了：{touched[:8]}'
@@ -115,19 +136,44 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                           evidence=touched))
 
     # ── ⑤ 同族共姓 ───────────────────────────────────────────────
-    #    ⚠ 族群表（`_groups`）已被新契约裁掉（加载回来 0 读者）⇒ 这里**现算**：
-    #      同一个新姓不许被两个原姓共用、同一个原姓不许有两个新姓。
+    #    ⚠ 族群表（`_groups`）已被新契约裁掉（加载回来 0 读者）⇒ 上游装载时**现算**：
+    #      必需族群一个不能漏；同一个新姓不许被两个原姓共用；额外映射至少得被一个
+    #      已改名角色真实使用。最后一条拦的是实测 `太后`/`太傅` 误组后留下的 `太→宋`：
+    #      两个角色都明确不改名，而这条幽灵映射此前能让全部 HARD 打绿。
     smap = name_map.get('surname_map') or {}
+    missing_surnames = sorted(set(family_members) - set(smap))
     by_new: dict[str, list[str]] = {}
     for old_s, new_s in sorted(smap.items()):
         if new_s:
             by_new.setdefault(new_s, []).append(old_s)
     split = [(new_s, olds) for new_s, olds in sorted(by_new.items()) if len(olds) > 1]
-    if split:
+    by_id = {c.get('char_id'): c for c in chars}
+    inconsistent: list[str] = []
+    for old_s, cids in sorted(family_members.items()):
+        new_s = smap.get(old_s)
+        if not new_s:
+            continue
+        for cid in cids:
+            c = by_id.get(cid) or {}
+            if not c.get('renamed') or not (c.get('new_canonical') or '').startswith(new_s):
+                inconsistent.append(f'{old_s}:{cid}')
+    orphan: list[str] = []
+    for old_s, new_s in sorted(smap.items()):
+        used = any(
+            c.get('renamed')
+            and strip_distinguisher((c.get('old_canonical') or '')).startswith(old_s)
+            and (c.get('new_canonical') or '').startswith(new_s)
+            for c in chars)
+        if not used:
+            orphan.append(f'{old_s}→{new_s}')
+    if split or missing_surnames or inconsistent or orphan:
         fs.append(finding('rn_surname_split',
-                          detail=f'这些原姓被分配了同一个新姓：{split[:4]}——'
-                                 f'不同族群共用一个新姓，读者会读成一家人',
-                          evidence=[n for n, _o in split]))
+                          detail=(f'姓氏族群账不一致：漏填 {missing_surnames[:4]}、'
+                                  f'共用新姓 {split[:4]}、成员未按族群改名 {inconsistent[:6]}、'
+                                  f'无人使用的映射 {orphan[:4]}——'
+                                  f'同族必须共姓，映射也不能脱离角色决定单独存在'),
+                          evidence=(missing_surnames + [n for n, _o in split]
+                                    + inconsistent + orphan)))
 
     # ── ⑥ 替换器的后置条件 ───────────────────────────────────────
     #    红了 = **替换器坏了或产物是旧的，不是数据坏了**。
@@ -311,7 +357,7 @@ _FROM_FINDINGS = (
 def check(*, findings: list[Finding], scanned: str, baseline_line: str,
           chapter_scanned: str, txt_state: tuple[bool, str], approved: bool,
           stale: list[str], no_consumed: list[str], hook_stale: bool | None,
-          identity: dict | None, title_line: str) -> list[Outcome]:
+          identity: dict | None, title_line: str, body_count: int) -> list[Outcome]:
     """一份 `name_map.json` → **33 个 `Outcome`，一条判据一个**。
 
     ⚠ `scanned` 一律填：**一个不知道自己扫了多少的绿灯没有判别力**。
@@ -336,35 +382,9 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
                    scanned='盘上的 book.txt × 产物记的指纹'))
 
     # ── 恒等基线（`R-10.7`）──────────────────────────────────────────────────
-    if identity is None:
-        # **「没跑过」要出声。** 不打印这一行，它与「跑过且无损」在报告上同形。
-        out.append(ran('rn_identity_baseline',
-                       [finding('rn_identity_baseline',
-                                detail='恒等基线**从没跑过**——产物里没有 `identity`。'
-                                       '它是本层最该先点的一条：替换器在恒等下不逐字节守恒时，'
-                                       '后面每一分钱都白花。跑 `--identity`（0 成本）',
-                                evidence=[])],
-                       scanned='产物里的 `identity` 键'))
-    else:
-        bad = list(identity.get('mismatches') or [])
-        n = identity.get('chapters') or 0
-        out.append(ran(
-            'rn_identity_baseline',
-            [] if (identity.get('roundtrip_ok') and not bad and n) else
-            [finding('rn_identity_baseline',
-                     detail=(f'恒等基线不守恒：{bad[:6]}' if bad else
-                             f'恒等基线量了 {n} 章——**量 0 章的「无损」是一句空话**'),
-                     evidence=[str(x) for x in bad] or ['0'])],
-            scanned=f'{n} 章 + 文案 + 书名的占位符双射往返'))
+    out.extend(identity_outcomes(identity))
 
     # ── 七条查不了的：**永远输出**，不是「还没写完」 ────────────────────────
-    out.append(unverifiable(
-        'rn_identity_blind',
-        '恒等基线**验不了**这三样：' + '；'.join(IDENTITY_BLIND)
-        + '。⚠ 它们由 pytest 的对抗性合成映射覆盖，**不由这条 CLI**——'
-          '别把基线跑绿了读成「替换是安全的」',
-        scanned=f'{len(IDENTITY_BLIND)} 条登记在案的盲区'))
-
     # ⚠⚠ 这三条的措辞**从产物里取**，不在报告层重写一遍：它们逐本不同
     #    （书名那条点名这本书的书名、口味那条举本书真实的第一个新名）。
     #    在这里另写一份，「产物说的」与「报告说的」就会在某次改动后分家——
@@ -397,7 +417,7 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
 
     out.append(unverifiable('rn_body_stale',
                             _body_stale_why(stale, no_consumed, hook_stale),
-                            scanned=f'{len(stale) + len(no_consumed)} 份成稿 + 文案'))
+                            scanned=f'{body_count} 份成稿 + 文案'))
 
     out.append(unverifiable(
         'rn_hook_missing',
@@ -405,6 +425,45 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
         '**文案未定稿时 `stage7.assemble` 会直接拒写 txt**（那道闸在组装那一步，不在这里）。'
         '⚠ 正因为那道闸挡在前面，「成书里没有文案」这一态**结构上不可达**',
         scanned='`hook_consumed` 一格'))
+    return out
+
+
+def identity_outcomes(identity: dict | None) -> list[Outcome]:
+    """只判恒等基线。
+
+    `stage7.rename --identity` 必须能在 `name_map.json` 诞生前运行；那时映射相关判据
+    没有被执行，不能借一份空映射把它们伪装成绿灯。这个小出口让预检只产出自己
+    真正量过的两行，其余注册规则由报告层诚实标为 `skipped`。
+    """
+    out: list[Outcome] = []
+    if identity is None:
+        # **「没跑过」要出声。** 不打印这一行，它与「跑过且无损」在报告上同形。
+        out.append(ran('rn_identity_baseline',
+                       [finding('rn_identity_baseline',
+                                detail='恒等基线**从没跑过**——产物里没有 `identity`。'
+                                       '它是本层最该先点的一条：替换器在恒等下不逐字节守恒时，'
+                                       '后面每一分钱都白花。跑 `--identity`（0 成本）',
+                                evidence=[])],
+                       scanned='产物里的 `identity` 键'))
+    else:
+        bad = list(identity.get('mismatches') or [])
+        n = identity.get('chapters') or 0
+        out.append(ran(
+            'rn_identity_baseline',
+            [] if (identity.get('roundtrip_ok') and not bad and n) else
+            [finding('rn_identity_baseline',
+                     detail=(f'恒等基线不守恒：{bad[:6]}' if bad else
+                             f'恒等基线量了 {n} 章——**量 0 章的「无损」是一句空话**'),
+                     evidence=[str(x) for x in bad] or ['0'])],
+            scanned=f'{n} 章 + 文案 + 书名的占位符双射往返'))
+
+    out.append(unverifiable(
+        'rn_identity_blind',
+        '恒等基线**验不了**这三样：' + '；'.join(IDENTITY_BLIND)
+        + '。⚠ 它们由 pytest 的对抗性合成映射覆盖，**不由这条 CLI**——'
+          '别把基线跑绿了读成「替换是安全的」',
+        scanned=f'{len(IDENTITY_BLIND)} 条登记在案的盲区'))
+
     return out
 
 

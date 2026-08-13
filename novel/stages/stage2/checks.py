@@ -56,11 +56,12 @@ from novel.report.findings import Outcome, ran, unverifiable
 #   `address_bare_pronoun`/`address_has_pronoun` · 度量 `present_names_pronoun`）
 #   ⇒ 它在 `invariants` 里，本模块 import 它、**不手抄子集**。
 
-#: `role` / `fate` / `canonical` 里的模棱语。逐字搬自原型 `check_blueprints.HEDGE_WORDS`。
-#: ⚠ 抽取 prompt 明令「不要用『可能／大约／似乎』把猜测包装成事实」，
-#: 而 **`或` 是同一件事的另一种写法**（实测某本 `char_012`「皇帝的姐妹**或**长辈」）
-#: ——那正是它在这张表里而不在 prompt 那句话里的理由。
-HEDGE_WORDS: tuple[str, ...] = ('或', '可能', '似乎', '大约', '应该是', '疑似', '也许', '之类')
+#: `role` / `fate` / `canonical` 里的模棱语。
+#: ⚠ 只收能独立表达不确定性的词。单字「或」也用于确定事实的并列选择
+#: （「建议过继或让父母再生」），没有分词/句法边界时拿它做子串扫描会误报。
+HEDGE_WORDS: tuple[str, ...] = (
+    '可能', '似乎', '大约', '应该是', '疑似', '也许', '或许', '之类',
+)
 
 #: 「原文正在点破一件事」的字面标记。逐字搬自原型 `check_blueprints.REVEAL_MARKS`。
 #: ⚠⚠ **它的判别力全在反面**：这些是高频词，基线命中率实测 **21/22 章**
@@ -304,7 +305,10 @@ def _addresses(c: _Ctx) -> list[Outcome]:
     # 重名 ⇒ 下游按名字解析时**静默**取到其中一个，而取到哪一个只取决于遍历顺序。
     by_name: dict[str, list[str]] = {}
     for cid, v in items:
-        nm = strip_distinguisher((v or {}).get('canonical') or '')
+        # canonical 是下游真正展示/索引的全名；尾部区分词正是为同名角色消歧。
+        # 是否“无端加了区分词”由 distinguisher_lonely 独立检查。这里再把它剥掉，
+        # 会让两个判据互相矛盾：合法消歧必然被 canonical_unique 判红。
+        nm = ((v or {}).get('canonical') or '').strip()
         if nm:
             by_name.setdefault(nm, []).append(cid)
     dup_names = {nm: cids for nm, cids in by_name.items() if len(cids) > 1}

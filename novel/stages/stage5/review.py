@@ -357,7 +357,9 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
     nch = len([r for r in rows if r.relpath])
     conclusive = sorted(r.rule for r in REGISTRY.of_stage('stage5')
                         if r.sev in ('hard', 'info'))
-    hits = collections.Counter(f.rule for r in rows for f in r.findings)
+    # baseline 的单位明写的是「命中了几章」，不是 finding 条数。同一章既有
+    # 句型漂移又有段型漂移时会产两条 `band_drift`；按条数会报出 20/15 章。
+    hits = collections.Counter(rule for row in rows for rule in {f.rule for f in row.findings})
     baselines = {r_: f'{hits.get(r_, 0)}/{nch}' for r_ in conclusive}
     baselines['_beat_event_landing'] = (
         f"{land['ok']}/{land['ok'] + land['missed']} 拍有落点"

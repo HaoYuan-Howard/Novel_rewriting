@@ -73,7 +73,7 @@
 | 键 | E 期的变化 | 依据 |
 |---|---|---|
 | `invent` | 无（`allow`/`forbid`/`principle` 逐值相同） | `抓包` |
-| `job_kinds` | 键从原型 12 个 `n1..n9` 换成**节点 id**，值加 5 格（`stage`/`section`/`modes`/`flags`/`produces`） | `REQUIREMENTS.md:125-127`：形状不变、只有 `kind` 的取值变 |
+| `job_kinds` | 键从原型 12 个 `n1..n9` 换成**节点 id**，值加 5 格（`stage`/`section`/`modes`/`flags`/`produces`） | `docs/BACKEND_CONTRACT.md`「命名体系」第 5 条：形状不变、只有 `kind` 的取值变 |
 | `actions` | `kind` 取值同上；**新增** `mode` / `writes` / `writes_disk` / `needs_value` 四格 | 同上；`writes_disk` 是前端在 `web/DELIVERY.md` 里点名要的那一格 |
 
 ⚠ `job_kinds` 里的 `paid` 说的是**默认路径**贵不贵，**不许拿它做贵贱对账**。

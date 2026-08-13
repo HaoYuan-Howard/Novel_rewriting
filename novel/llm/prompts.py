@@ -21,6 +21,7 @@ prompts.py —— prompt 的**插值机器**。⚠ **本文件不含任何 promp
 """
 from __future__ import annotations
 
+import json
 import string
 from typing import Any, Final
 
@@ -188,3 +189,17 @@ def required_top_level(model_cls: type[BaseModel]) -> tuple[str, ...]:
     """
     return tuple(f.alias or name for name, f in model_cls.model_fields.items()
                  if f.is_required())
+
+
+def with_json_shape(system: str, shape: object) -> str:
+    """把结构提示接到 system 上，返回【实际发送】的完整字节。
+
+    原型由客户端暗中追加 schema_hint，导致 dry-run、缓存键与 prompt 来源指纹各自
+    看见不同的 system。现在构造侧先显式合成，预览、真发、缓存与 provenance 共用它。
+    """
+    return (
+        system
+        + '\n\nReturn ONLY valid JSON matching this shape '
+          '(no markdown fences, no comments):\n'
+        + json.dumps(shape, ensure_ascii=False, indent=2)
+    )

@@ -20,6 +20,7 @@ ledger.py —— 成本账。**原型完全没有这一层。**
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,6 +92,11 @@ class CostLedger:
     #: 刻度的世代号。每 `commit` 一次 +1，于是旧刻度立刻作废。
     _seq: int = field(default=0, repr=False)
 
+    #: Stage 2 会并发等待独立章节响应。计数更新与 JSONL 追加必须是同一个临界区，
+    #: 否则两个成功回包可能互相覆盖内存计数，甚至把两行字节交错写坏。
+    _lock: threading.RLock = field(default_factory=threading.RLock,
+                                    repr=False, compare=False)
+
     def record(self, *, node: str, sid: str, model: str, code: str,
                cached: bool, cache_policy: str,
                prompt_tokens: int | None = None,
@@ -98,7 +104,12 @@ class CostLedger:
                reasoning_tokens: int | None = None,
                purpose: str = '',
                outcome: str = 'ok', error: str | None = None,
-               status: int | None = None) -> None:
+               status: int | None = None,
+               reasoning_effort: str | None = None,
+               thinking: bool | None = None,
+               json_mode: bool | None = None,
+               max_tokens: int | None = None,
+               finish_reason: str | None = None) -> None:
         """记**一次上线**（或一次缓存命中）。`cached=True` 表示这一次是缓存命中（0 元）。
 
         ⚠ **缓存命中也要记一行。** 不记的话，「这次跑读了 31 份缓存」与
@@ -113,28 +124,35 @@ class CostLedger:
         ⚠ **不给 `Usage` 加 `calls_failed`**：那是一次契约改版，会让盘上 79 份存量产物
         全都缺一个必填键，而这里要答的问题 JSONL 已经答得了。
         """
-        if cached:
-            self.calls_cached += 1
-        else:
-            self.calls_made += 1
-        for name, val in zip(TOKEN_KINDS, (prompt_tokens, completion_tokens, reasoning_tokens)):
-            if val is not None:
-                setattr(self, name, getattr(self, name) + val)
-                self._seen[name] += 1
+        with self._lock:
+            if cached:
+                self.calls_cached += 1
+            else:
+                self.calls_made += 1
+            for name, val in zip(TOKEN_KINDS,
+                                 (prompt_tokens, completion_tokens, reasoning_tokens)):
+                if val is not None:
+                    setattr(self, name, getattr(self, name) + val)
+                    self._seen[name] += 1
 
-        if self.path is None:
-            return
-        row = {
-            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-            'sid': sid, 'node': node, 'model': model, 'code': code,
-            'cached': cached, 'cache_policy': cache_policy,
-            'prompt_tokens': prompt_tokens,
-            'completion_tokens': completion_tokens,
-            'reasoning_tokens': reasoning_tokens,
-            'purpose': purpose,
-            'outcome': outcome, 'error': error, 'status': status,
-        }
-        self._append(row)
+            if self.path is None:
+                return
+            row = {
+                'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                'sid': sid, 'node': node, 'model': model, 'code': code,
+                'cached': cached, 'cache_policy': cache_policy,
+                'prompt_tokens': prompt_tokens,
+                'completion_tokens': completion_tokens,
+                'reasoning_tokens': reasoning_tokens,
+                'purpose': purpose,
+                'outcome': outcome, 'error': error, 'status': status,
+                'reasoning_effort': reasoning_effort,
+                'thinking': thinking,
+                'json_mode': json_mode,
+                'max_tokens': max_tokens,
+                'finish_reason': finish_reason,
+            }
+            self._append(row)
 
     def _append(self, row: dict) -> None:
         """一行 JSON + `\\n`，**按字节追加**。
@@ -152,11 +170,12 @@ class CostLedger:
 
     def snapshot(self) -> UsageMark:
         """当前刻度。**一份产物的账 = 两把刻度之间的差值。**"""
-        return UsageMark(
-            seq=self._seq, calls_made=self.calls_made, calls_cached=self.calls_cached,
-            tokens=tuple(getattr(self, k) for k in TOKEN_KINDS),
-            seen=tuple(self._seen[k] for k in TOKEN_KINDS),
-        )
+        with self._lock:
+            return UsageMark(
+                seq=self._seq, calls_made=self.calls_made, calls_cached=self.calls_cached,
+                tokens=tuple(getattr(self, k) for k in TOKEN_KINDS),
+                seen=tuple(self._seen[k] for k in TOKEN_KINDS),
+            )
 
     def usage_since(self, mark: UsageMark) -> Usage | None:
         """从 `mark` 到现在花了多少。**纯算，一个字节都不动**（包括刻度本身）。
@@ -166,7 +185,8 @@ class CostLedger:
         推走了那段窗口的账就再也没有产物认领它，Σ 不变量当场破。
         ⇒ 先纯算、再构造（可能抛）、构造成功了才 `commit`。
         """
-        return self._usage_between(mark)
+        with self._lock:
+            return self._usage_between(mark)
 
     def commit(self, mark: UsageMark) -> UsageMark:
         """把刻度推到现在，返回**下一把**。
@@ -175,20 +195,22 @@ class CostLedger:
         而那正是本次要修掉的那个病（run 累计写进按份计的字段）的镜像形态：
         一个数被两份产物同时声称是自己的。它是显式终态，不是一笔悄悄重复的账。
         """
-        if mark.seq != self._seq:
-            raise ProvenanceRefused(
-                f'这把刻度是第 {mark.seq} 代，账本已经走到第 {self._seq} 代——'
-                f'同一把刻度结算了两次，等于两份产物各自认领同一批 token。'
-                f'⇒ 一份产物一次结算（`RunContext` 的两个来源账铸造口各调一次）')
-        self._seq += 1
-        return self.snapshot()
+        with self._lock:
+            if mark.seq != self._seq:
+                raise ProvenanceRefused(
+                    f'这把刻度是第 {mark.seq} 代，账本已经走到第 {self._seq} 代——'
+                    f'同一把刻度结算了两次，等于两份产物各自认领同一批 token。'
+                    f'⇒ 一份产物一次结算（`RunContext` 的两个来源账铸造口各调一次）')
+            self._seq += 1
+            return self.snapshot()
 
     def usage(self) -> Usage | None:
         """**整个 run** 花了多少。⚠ 进 `_provenance.usage` 的**不是**这一份，是 `usage_since` 的差值。
 
         一次调用都没有 ⇒ `None`（键不在）。
         """
-        return self._usage_between(None)
+        with self._lock:
+            return self._usage_between(None)
 
     def _usage_between(self, mark: UsageMark | None) -> Usage | None:
         """`mark`（`None` = run 起点）到现在的用量。**三态在这里兑现。**

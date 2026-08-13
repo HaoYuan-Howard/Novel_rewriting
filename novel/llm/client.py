@@ -57,6 +57,7 @@ DEFAULT_MAX_TOKENS: Final = 64_000
 
 
 M = TypeVar('M', bound=BaseModel)
+TextValidator = Callable[[str, ChatResponse], str | None]
 
 
 class LlmFailed(NovelError):
@@ -114,31 +115,51 @@ class LlmClient:
         self._sleep = sleep
         #: 并发闸。⚠ 它守的不是速率，是**钱**：一次配置错误（prompt 漂了）在被人看见之前
         #: 能烧掉多少，与并发度成正比。见 `novel/config.py::DEFAULT_CONCURRENCY`。
-        self._gate = threading.Semaphore(max(1, concurrency))
+        self.concurrency = max(1, concurrency)
+        self._gate = threading.Semaphore(self.concurrency)
 
     # ── 两个入口 ──────────────────────────────────────────────────────────
 
     def ask_text(self, system: str, user: str, *, purpose: str,
-                 max_tokens: int = DEFAULT_MAX_TOKENS) -> str:
-        """纯文本调用。走 `LADDER`，**全空则抛**。"""
+                 max_tokens: int = DEFAULT_MAX_TOKENS,
+                 validator: TextValidator | None = None,
+                 rungs: tuple[tuple[str, bool], ...] | None = None) -> str:
+        """纯文本调用。默认走 `LADDER`，**全空或全被调用点拒绝则抛**。
+
+        `validator` 是纯文本响应声明「可用」含义的边界：返回 `None` 表示可用，
+        返回人话理由表示这一档不可用、应驱逐缓存并降档。它只该判断响应是否完整，
+        不能拿文风偏好触发付费重采样。
+
+        `rungs` 只给确有不同成本语义的辅助调用收窄阶梯；默认路径仍走全仓唯一的
+        `LADDER`。空阶梯是调用错误，不能伪装成「模型失败」。
+        """
+        active_rungs = LADDER if rungs is None else tuple(rungs)
+        if not active_rungs:
+            raise ValueError(f'{self.ctx.node}/{purpose}: rungs 不能为空')
         tried: list[str] = []
-        for effort, thinking in LADDER:
+        for effort, thinking in active_rungs:
             for use_cache in (True, False):    # ← 缓存那份不可用 ⇒ 同一档真发一次，见 `_call_keyed`
                 resp, key, cached = self._call_keyed(
                     system, user, effort=effort, thinking=thinking, json_mode=False,
                     max_tokens=max_tokens, purpose=purpose, use_cache=use_cache)
-                if resp.text:
+                text = resp.text
+                why = None if text else '正文为空'
+                if why is None and validator is not None:
+                    why = validator(text, resp)
+                if why is None:
                     if not cached:
                         self._keep(key, resp)      # ← 判定可用之后才写
-                    return resp.text
+                    return text
                 self.cache.evict(key)
                 tried.append(
                     f'effort={effort} think={thinking}{" [缓存]" if cached else ""} '
-                    f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")}')
+                    f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
+                    f'拒绝={why}')
                 if not cached:
                     break                      # 真发的也空 ⇒ 这一档确实不行，降一档
         raise LlmFailed(
-            f'{self.ctx.node}/{purpose}: 走完 {len(LADDER)} 档阶梯仍然拿不到正文。\n  '
+            f'{self.ctx.node}/{purpose}: 走完 {len(active_rungs)} 档阶梯仍然拿不到正文'
+            '（没有可用响应）。\n  '
             + '\n  '.join(tried)
             + '\n⚠ `reasoning_len` 大而正文为空 = 模型不是没干活，是答案流丢了；'
               '**不从 reasoning 里抠答案**，那里面混着推敲过程，救回来的是半成品')
@@ -260,7 +281,7 @@ class LlmClient:
             if hit is not None:
                 # ⚠ **缓存命中也要记一行。** 不记的话，「这次跑读了 31 份缓存」与
                 #   「这次跑什么都没做」在账本上长得一模一样，而这两件事的下一步完全不同。
-                self._record_cache_hit(hit, purpose=purpose)
+                self._record_cache_hit(req, hit, purpose=purpose)
                 return hit, key, True
 
         # ⚠ 记账在 `_send_with_retry` 里逐次发生（那里才知道自己发了几次）。
@@ -292,18 +313,18 @@ class LlmClient:
                     resp = self.transport.send(req)
                 except TransportError as e:
                     last = e
-                    self._record_wire(None, error=e, purpose=purpose)
+                    self._record_wire(req, None, error=e, purpose=purpose)
                     if not e.retryable or attempt == self.max_retries:
                         raise
                 else:
-                    self._record_wire(resp, error=None, purpose=purpose)
+                    self._record_wire(req, resp, error=None, purpose=purpose)
                     return resp
             # ⚠ 睡在信号量**外面**：在闸里睡会把整跑串行化（并发闸守的是钱，不是速率）。
             self._sleep(self.backoff_base * (2 ** attempt))
         raise last if last else LlmFailed('unreachable')
 
-    def _record_wire(self, resp: ChatResponse | None, *, error: TransportError | None,
-                     purpose: str) -> None:
+    def _record_wire(self, req: ChatRequest, resp: ChatResponse | None, *,
+                     error: TransportError | None, purpose: str) -> None:
         """一次**真上线**记一行。失败那次 token 三项全 `None`——它没拿回任何读数。"""
         u = (resp.usage if resp else None) or {}
         self.ctx.ledger.record(
@@ -318,9 +339,15 @@ class LlmClient:
             outcome='ok' if error is None else 'error',
             error=None if error is None else str(error),
             status=None if error is None else error.status,
+            reasoning_effort=req.reasoning_effort,
+            thinking=req.thinking,
+            json_mode=req.json_mode,
+            max_tokens=req.max_tokens,
+            finish_reason=None if resp is None else resp.finish_reason,
         )
 
-    def _record_cache_hit(self, resp: ChatResponse, *, purpose: str) -> None:
+    def _record_cache_hit(self, req: ChatRequest, resp: ChatResponse, *,
+                          purpose: str) -> None:
         """一次缓存命中记一行（0 元）。**不记的话，「读了 31 份缓存」与「什么都没做」同形。**"""
         u = resp.usage or {}
         self.ctx.ledger.record(
@@ -331,4 +358,9 @@ class LlmClient:
             reasoning_tokens=(u.get('reasoning_tokens')
                               or (u.get('completion_tokens_details') or {}).get('reasoning_tokens')),
             purpose=purpose,
+            reasoning_effort=req.reasoning_effort,
+            thinking=req.thinking,
+            json_mode=req.json_mode,
+            max_tokens=req.max_tokens,
+            finish_reason=resp.finish_reason,
         )

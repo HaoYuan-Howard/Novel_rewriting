@@ -171,6 +171,17 @@ def test_normalization_is_idempotent(box):
         assert quote_problems_of(text, src_hook=src_hook) == []
 
 
+def test_invented_number_compares_values_and_ignores_success_false_positive():
+    """真实 E2E 曾把「好感度一百成功」报成不存在的「一百成」。"""
+    mat = prompts.Material(blocks=('人物已经三十岁，做这件事有八成胜算。',))
+    text = ('好感度一百成功。这位人物已经30岁，做这件事仍有八成胜算。'
+            '所有事实都来自下发材料，这一句只是把文案补到正常长度。')
+    fs = checks.hook_findings(
+        text, mat=mat, secrets=[], arc=None, characters={}, src_hook=None,
+        style_hook=None, quote_problems=[])
+    assert not [f for f in fs if f.rule == 'hook_invented_number']
+
+
 def test_chars_are_recomputed_with_the_same_ruler(box):
     """`candidates[].chars` 已被新契约裁掉 ⇒ 现算。
 

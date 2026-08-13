@@ -116,7 +116,7 @@ OWNER: Final = (
     'stage0', 'stage1', 'stage2', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7', 'corpus',
 )
 
-#: `REQUIREMENTS.md` 的「谁在查」那一列的**取值面**（2026-08-10 一次定全）。
+#: `docs/BACKEND_CONTRACT.md` 的「谁在查」那一列的**取值面**。
 #:
 #: 【为什么它必须闭合】那一列的全部价值是「让『我们真的知道』与『我们只是写着』读起来不一样」。
 #: 解析器读不懂一个记号时**不会报错**，它只是把那一行读成「什么也没声明」——
@@ -848,7 +848,12 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #: 而它收的是「**这条路要是写了盘，那份产物就是混版的**」，对两层都不说假话。
 #: ⚠ **`--approve` 刻意不在这里**：定稿一个由代码算出来的字段都没改，
 #: 它只是盖了个章。标 `partial_rewrite` 会说假话。
-PARTIAL_REWRITE_FLAGS: Final = ('--remeasure', '--recheck', '--migrate', '--identity')
+#: `--apply-edit` 不是在每一层都代表混版：stage5 的整章人工稿会铸一份
+#: `origin=human` 的新来源账；stage7 只改 `extra_subs` / 决策 patch，模型生成的
+#: `characters` 仍来自旧调用，所以必须允许它如实标成局部改写。
+PARTIAL_REWRITE_FLAGS: Final = (
+    '--remeasure', '--recheck', '--migrate', '--identity', '--apply-edit',
+)
 
 #: 带值的 flag：`--apply-edit <载荷文件>`。值说的是「这个值是什么」。
 #:
@@ -859,7 +864,7 @@ PARTIAL_REWRITE_FLAGS: Final = ('--remeasure', '--recheck', '--migrate', '--iden
 #: ⚠ 不带值的 flag 传了值、带值的 flag 没传值，都是 argv 拼错——
 #: 而拼错的那一条**会真的被执行**。所以取值面要有落点，由 `build_argv` 当场拒。
 VALUED_FLAGS: Final = {
-    '--apply-edit': '人工改好的那份候选稿的路径',
+    '--apply-edit': '人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
     # ⚠ **不叫 `--approve`**：那个名字已经在 `SUPERSEDED_FREE_ENTRIES` 里退役成节点了
@@ -1055,7 +1060,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   `global --purge-role` 各占一条。少登记一个，`_validate` ⑧ 就把那条判据判红
     #   ——那正是它该做的事（散文那条路上拼错 flag 名没有任何东西会出声）。
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
-                                 flags=('--migrate', '--drop', '--purge-role'),
+                                 flags=('--migrate', '--drop', '--purge-role',
+                                        '--revalidate'),
                                  produces=('stage2/global_grounding.json',)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
@@ -1064,7 +1070,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   而「一个 flag 要求另一个 flag」本仓没有机制表达 ⇒ 那条约束落在本层的落盘路里。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
                                  flags=('--prompt-only', '--check-only', '--migrate',
-                                        '--apply-edit', '--chapters', '--replay-cache'),
+                                        '--apply-edit', '--chapters', '--replay-cache',
+                                        '--revalidate'),
                                  produces=('stage2/chapter_blueprints.json',)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
                                  flags=('--dry-run', '--check-only', '--measure-only',

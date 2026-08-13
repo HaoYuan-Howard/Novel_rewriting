@@ -79,10 +79,12 @@ def test_the_ladder_is_exactly_the_four_rungs_and_there_is_only_one_of_it():
     from novel.llm import client
     src = inspect.getsource(client)
     assert src.count('LADDER: Final') == 1
-    # 两个入口都必须**走**它，不许各自展开一份
-    for fn in ('ask_text', 'ask_json'):
-        body = inspect.getsource(getattr(client.LlmClient, fn))
-        assert 'in LADDER' in body, f'{fn} 没有走那条唯一的阶梯'
+    # 两个入口默认都必须**走**它，不许各自展开一份。ask_text 允许收缩调用显式收窄，
+    # 但默认值仍必须从这同一份常量取得。
+    text_body = inspect.getsource(client.LlmClient.ask_text)
+    json_body = inspect.getsource(client.LlmClient.ask_json)
+    assert 'LADDER if rungs is None' in text_body
+    assert 'in LADDER' in json_body
 
 
 @pytest.mark.parametrize('rung', range(len(LADDER)))
@@ -107,6 +109,34 @@ def test_all_rungs_empty_raises_and_never_returns_an_empty_draft():
     with pytest.raises(LlmFailed, match='拿不到正文'):
         _client(t).ask_text('sys', 'usr', purpose='t')
     assert t.rungs == list(LADDER)
+
+
+def test_nonempty_but_length_capped_text_can_be_rejected_and_downgraded():
+    """非空不等于完整：`finish_reason=length` 的短稿也必须能走降档阶梯。"""
+    cut = ChatResponse(content='写到一半', reasoning='想了很久',
+                       finish_reason='length', usage=None)
+    t = FakeTransport(responder=lambda _req, i: cut if i == 0 else OK_TEXT)
+
+    def complete(_text: str, response: ChatResponse) -> str | None:
+        return '答案被 token 上限截断' if response.finish_reason == 'length' else None
+
+    assert _client(t).ask_text(
+        'sys', 'usr', purpose='t', validator=complete) == '一段正文'
+    assert t.rungs == [('high', True), ('medium', True)]
+
+
+def test_a_text_helper_can_explicitly_use_one_cheaper_rung():
+    """收缩类辅助调用不必先烧 high/medium，但默认创作路径仍走唯一 `LADDER`。"""
+    t = FakeTransport.always(OK_TEXT)
+    assert _client(t).ask_text(
+        'sys', 'usr', purpose='trim', rungs=(('low', False),)) == '一段正文'
+    assert t.rungs == [('low', False)]
+
+
+def test_an_empty_custom_text_ladder_is_a_call_error():
+    with pytest.raises(ValueError, match='rungs 不能为空'):
+        _client(FakeTransport.always(OK_TEXT)).ask_text(
+            'sys', 'usr', purpose='t', rungs=())
 
 
 def test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget():
@@ -540,6 +570,10 @@ def test_every_wire_attempt_gets_its_own_ledger_row():
     assert [r['status'] for r in rows] == [429, 429, None]
     assert rows[0]['prompt_tokens'] is None, '失败那次没有任何读数，不许编一个 0'
     assert rows[2]['prompt_tokens'] == 10
+    assert rows[0]['reasoning_effort'] == 'high' and rows[0]['thinking'] is True
+    assert rows[2]['json_mode'] is False
+    assert rows[2]['max_tokens'] == DEFAULT_MAX_TOKENS
+    assert rows[0]['finish_reason'] is None and rows[2]['finish_reason'] == 'stop'
     assert ctx.ledger.calls_made == 3
 
 
@@ -734,3 +768,13 @@ def test_every_free_flag_runs_without_an_api_key():
         DeepSeekTransport(cfg).send(_req())
     assert issubclass(MissingApiKey, TerminalState)
     assert 'DEEPSEEK_API_KEY' in str(e.value)
+
+
+def test_cli_client_uses_the_configured_persistent_cache(monkeypatch):
+    """两个 CLI 进程必须能共享缓存；内存缓存会让每次重跑都重新付费。"""
+    from novel.cli import main as cli
+
+    cache_dir = Path(tempfile.mkdtemp()) / 'responses'
+    monkeypatch.setenv('NOVEL_CACHE_DIR', str(cache_dir))
+    client = cli._llm_client(_ctx())
+    assert client.cache.dir == cache_dir

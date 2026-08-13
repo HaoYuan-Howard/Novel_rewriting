@@ -12,7 +12,7 @@ test_docs_references.py —— 文档里的**引用**不许悬空。
 **读着已改名东西的消费方不会报错，它只是安静地什么也不做。**
 
 本文件把这一类变成会红的测试。它查两件事：
-  ① 文档里出现的每个 `R-x.y` / `Q-x` / `B-xx` 编号，在 `REQUIREMENTS.md` 里真的存在
+  ① 文档里出现的每个 `R-x.y` / `Q-x` / `B-xx` 编号，在冻结后端契约里真的存在
   ② 文档里出现的每个**仓内路径**，盘上真的存在
 """
 from __future__ import annotations
@@ -32,7 +32,13 @@ DOC = reqs.load()
 #: ⚠ `docs/LESSONS.md` 在这张表里，而它**多数条目都点名代码落点**（「唯一落点是 X」）
 #: ——那正是本文件第 ② 条要查的东西。一份「经验」文档指着一个已经改名的模块，
 #: 比没有这条经验更坏：读的人会去找它，然后按自己的猜测把它读通。
-DOC_GLOBS = ('docs/schema/*.md', 'docs/REQUIREMENTS.md', 'docs/LESSONS.md', 'README.md')
+DOC_GLOBS = (
+    'docs/schema/*.md',
+    'docs/BACKEND_CONTRACT.md',
+    'docs/REQUIREMENTS.md',
+    'docs/LESSONS.md',
+    'README.md',
+)
 
 #: 只有这些前缀才当「仓内路径」看。`stage0/clean_text.txt` 这类是**产物路径**，不在仓里。
 REPO_PREFIXES = ('tests/', 'contracts/', 'tools/', 'novel/', 'docs/')

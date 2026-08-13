@@ -37,7 +37,8 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage5 import Chapter
 from novel import paths, prov
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
-from novel.llm.client import LlmClient
+from novel.llm.client import LlmClient, LlmFailed
+from novel.llm.transport import ChatResponse
 from novel.report.builder import build
 from novel.report.findings import unverifiable
 from novel.run import RunContext
@@ -54,6 +55,10 @@ MAX_TOKENS = 16000
 
 #: 收缩最多跑几轮，且**每轮必须真的变短**。
 TRIM_ROUNDS = 2
+
+#: 收缩不是创作：实测 high / medium 会连续把 16k 全花在 reasoning 上而正文为空。
+#: 这一条辅助调用直接走最低推理并关闭 thinking；失败就保留原稿，由篇幅提示如实报告。
+TRIM_RUNGS = (('low', False),)
 
 
 @dataclass(frozen=True)
@@ -162,6 +167,20 @@ def _chapter_record(entry: dict[str, Any], text: str, book: M.Book, *, mode: str
     )
 
 
+def _archive_superseded(store: ArtifactStore, rel: str, *,
+                        new_invalid: bool) -> None:
+    """新一轮落盘前归档会被替换的活文件。
+
+    新问题稿只替换旧问题稿，正式稿必须保留；新正式稿则同时终结旧正式稿和旧问题稿。
+    否则定向修复虽然产出了合格正文，遗留的 `.INVALID` 仍会让节点保持失败状态。
+    """
+    invalid_rel = paths.invalid_of(rel)
+    candidates = (invalid_rel,) if new_invalid else (rel, invalid_rel)
+    for candidate in candidates:
+        if store.exists(candidate):
+            store.archive_round(candidate)
+
+
 def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
                    book: M.Book, *, mode: str, text: str, mat: str,
                    account: M.NormalizeAccount, provenance: Any
@@ -185,16 +204,23 @@ def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
                           errs=errs or None, provenance=provenance)
     if errs:
         # ⚠ `gates_skipped` 是**空列表也要写**的那一格：「一条都没跳过」与「没人说」是两件事。
+        _archive_superseded(store, rel, new_invalid=True)
         p = store.write_invalid(rel, art, gates_skipped=[])
         return str(p), errs, fs
-    if store.exists(rel):
-        store.archive_round(rel)          # 上一轮正式稿进 `_rounds/`，**不许被覆盖掉**
+    _archive_superseded(store, rel, new_invalid=False)
     return str(store.write(rel, art)), [], fs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、付费路
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _reject_length_capped(_text: str, response: ChatResponse) -> str | None:
+    """`finish_reason=length` 是协议层明确说「答案被截断」，非空也不能当成正文。"""
+    if response.finish_reason == 'length':
+        return 'finish_reason=length（答案被 token 上限截断）'
+    return None
+
 
 def _trim_to_fit(client: LlmClient, text: str, entry: dict[str, Any], book: M.Book, *,
                  mode: str) -> tuple[str, list[str]]:
@@ -216,8 +242,15 @@ def _trim_to_fit(client: LlmClient, text: str, entry: dict[str, Any], book: M.Bo
     for i in range(TRIM_ROUNDS):
         if M.chars_of(text) <= band[1]:
             break
-        got = client.ask_text(prompts.trim_system(), prompts.trim_user(text, entry),
-                              purpose=f'{ctx_purpose(entry)}·收缩{i + 1}', max_tokens=MAX_TOKENS)
+        try:
+            got = client.ask_text(
+                prompts.trim_system(), prompts.trim_user(text, entry),
+                purpose=f'{ctx_purpose(entry)}·收缩{i + 1}', max_tokens=MAX_TOKENS,
+                validator=_reject_length_capped, rungs=TRIM_RUNGS)
+        except LlmFailed as exc:
+            notes.append(
+                f'收缩第 {i + 1} 轮没有拿到完整正文，保留原稿：{str(exc).splitlines()[0]}')
+            break
         new = (got or '').strip()
         if not new or M.chars_of(new) >= M.chars_of(text):
             notes.append(f'收缩第 {i + 1} 轮没有真的变短（{M.chars_of(text)} → '
@@ -270,7 +303,15 @@ def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
         else:
             prev_text, fixes, review_fp = '', [], ''
             user = prompts.build_user(mat)
-        got = client.ask_text(system, user, purpose=ctx_purpose(entry), max_tokens=MAX_TOKENS)
+        try:
+            got = client.ask_text(
+                system, user, purpose=ctx_purpose(entry), max_tokens=MAX_TOKENS,
+                validator=_reject_length_capped)
+        except LlmFailed as exc:
+            # 单章的四档都失败不该推倒整批；网络级错误仍向上抛，避免故障时继续烧钱。
+            blocked.append(
+                f'第 {o} 章没拿到完整正文：{str(exc).splitlines()[0]}')
+            continue
         text = (got or '').strip()
         if not text:
             # 【显式终态·一章失败不中断整批】——但要说出是哪一章。

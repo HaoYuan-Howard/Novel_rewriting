@@ -380,8 +380,11 @@ def resolve_present_names(names: list[str] | None, text_upto: str,
 
 def attested_surname(char: dict | None, book_text: str,
                      owners: dict[str, frozenset[str]] | None = None) -> str | None:
-    """这个角色的**姓**（原文有据时 `canonical` 的首字），否则 `None`。三道过滤：
+    """这个角色的**姓**（原文有据时 `canonical` 的首字），否则 `None`。四道过滤：
 
+    ⓪ **`name_distinctiveness == common` 不是专名。** `太后` / `太傅` 都有据、
+       都是两字且各自唯一；若忽略 Stage 2 已有的分类，它们会因同为「太」开头而被
+       错组为一族，模型随即交出 `太→宋` 这种幽灵姓氏映射。
     ① **`canonical` 必须在原文里有据。** registry 里有一批**自造的记账标签**
        （实测 `书童(陆明洲)` / `许言的姐姐` / `谈默母亲` / `苏父`），它们的首字不是姓：
        「书」不是姓；「许言的姐姐」的「许」是**别人**的姓，碰巧对上纯属巧合。
@@ -390,17 +393,19 @@ def attested_surname(char: dict | None, book_text: str,
        实测「书童」同时是三个角色的称呼——它有 18 次出现、完全「有据」，
        ①②两道都拦不住，**只有这一道拦得住**。
 
-    ⚠ 三道加起来仍然不完美：`采草贼`/`府医`/`圣上`/`老御医` 都能过（3 字、有据、单主），
+    ⚠ 四道加起来仍然不完美：`采草贼`/`府医`/`圣上`/`老御医` 都能过（3 字、有据、单主），
     于是「采」「府」「圣」「老」会被当成姓。**这是靠 `family_groups` 的「≥2 人才成族」
     兜住的**——它们全是单例，而单例根本不需要跟谁协调姓氏。
     别在这里加一张角色词词表：那是判据 11 说的关键词表，换一本书立刻失效。
 
-    ⚠⚠ **这三道过滤会漏掉真姓，而且是必然的**——实测某本两例：`沈` 只由自造记账标签
+    ⚠⚠ **这些过滤会漏掉真姓，而且是必然的**——实测某本两例：`沈` 只由自造记账标签
     `沈母`/`沈父` 承载（①判掉）· `孙` 撞上亲属字表的「孙大娘」（③判掉）。
     **别为此放宽这里**：本函数的产物是**下发面**，放宽等于拿假姓去让模型协调族群
     （收窄一个下发面是修复，收窄一个检测器才是削弱）。
     漏掉的真姓由**探针侧**兜住——`stems` 并上模型的 `surname_map`（`R-10.6` / `R-10.6b`）。
     """
+    if (char or {}).get('name_distinctiveness') == 'common':
+        return None
     canon = strip_distinguisher((char or {}).get('canonical') or '')
     if not (2 <= len(canon) <= 3) or canon not in (book_text or ''):
         return None

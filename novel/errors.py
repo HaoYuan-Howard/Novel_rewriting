@@ -6,7 +6,7 @@ errors.py —— 显式终态的**唯一**词汇表。
 【为什么不用 `sys.exit`】`SystemExit` 是 `BaseException`，它**穿透 `except Exception`**。
 原型每个节点都拿 `sys.exit` 当终态，于是任何想「跑一批书、一本崩了继续下一本」的
 调用方都拦不住它——只能把节点跑成子进程。那是原型被迫走子进程的五条理由之一
-（`R-11.3` 的理由改写见 `docs/REQUIREMENTS.md`：这一条已被本模块 + `novel/run.py` 消灭，
+（`R-11.3` 的理由改写见 `docs/BACKEND_CONTRACT.md`：这一条已被本模块 + `novel/run.py` 消灭，
 而**走子进程这条规则仍然留着**，靠另外三条独立成立的理由）。
 ⇒ 运行时一律抛这里的异常；**只有 `novel/cli/` 那一层**可以把它翻译成退出码
 （`tests/test_layering.py::test_the_runtime_never_uses_sys_exit` 钉着这条）。

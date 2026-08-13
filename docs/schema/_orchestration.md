@@ -358,7 +358,7 @@ Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
 `tests/test_layering.py` 的写口白名单为它们各带一条理由（同 `novel/llm/ledger.py` 的先例）。
 
 ⚠ **只收窄而不标注，读的人会以为这条规则被偷偷放宽了**（`Q-8`：退役而不删，且必须带标注）。
-标注写在 `docs/REQUIREMENTS.md` 的 `R-11.3` 那一格下面，形态同它 2026-08-11 那次「理由改写」。
+标注写在 `docs/BACKEND_CONTRACT.md` 的 `R-11.3` 那一格下面，形态同它 2026-08-11 那次「理由改写」。
 
 ### 7.1 ⚠ 日志按**字节**存，只在读的时候解码
 

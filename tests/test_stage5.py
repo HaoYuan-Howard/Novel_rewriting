@@ -104,6 +104,12 @@ def test_draft_truncated_goes_red_on_a_missing_final_punctuation(book, entry):
     assert 'draft_truncated' in _fire(body.rstrip('。') + '他忽然', entry, book)
 
 
+def test_draft_truncated_accepts_a_closed_interface_message(book, entry):
+    """`【任务完成。】` 与引号对白同形：闭合方括号是完整结尾，不是截断。"""
+    body = _clean_body(book, entry).rstrip('。') + '【好感度已降低。】'
+    assert 'draft_truncated' not in _fire(body, entry, book)
+
+
 @pytest.mark.parametrize('shell', ['第三章 雨夜', '本章共 8 拍，先写第一拍。',
                                    '## 小标题', '正文：她把杯子放下。'])
 def test_meta_leak_goes_red_on_narrative_shell(book, entry, shell):
@@ -392,6 +398,13 @@ def test_the_review_runs_on_a_real_book_and_lands_on_amber(box):
     rev = json.loads((root / _BOOK / 'stage5' / 'review_1.json').read_text(encoding='utf-8'))
     assert rev['counts'].get('hard', 0) == 0
     assert len(rev['baselines']) == 34, '基线少了几条——`baselines` 收的是全部 hard/info + 一条拍账'
+    nch = len([c for c in rev['chapters'] if c.get('relpath')])
+    for rule, baseline in rev['baselines'].items():
+        if rule == '_beat_event_landing':
+            continue
+        hits, total = map(int, baseline.split('/'))
+        assert total == nch and hits <= total, \
+            f'{rule}: baseline 的单位应是命中章节数，不是 finding 条数（{baseline}）'
     # ⚠ **`name_surface_survey` 无条件产出**：原型只在命中时才产，于是
     #   「全书 0 个自造称谓」这个**读数**永远说不出来。
     assert any(f['rule'] == 'name_surface_survey' for f in rev['book'])

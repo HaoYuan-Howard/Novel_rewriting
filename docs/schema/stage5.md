@@ -549,7 +549,7 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 （`secret_timeline` / `no_secrets_in_book` / `event_landing_unver` 指 `Q-9`、
 `draft_missing` / `draft_duplicated` 指 `Q-1`、`material_malformed` 指裸 `R-3`、
 `name_surface_survey` 指 `R-7.5` 而那一行当时写着「无守卫 → `B-01`」）。
-⇒ `REQUIREMENTS.md` 补 17 行、拆 1 行（`R-7.5`），R-8 一节九行**逐行重判**。
+⇒ `docs/BACKEND_CONTRACT.md` 补 17 行、拆 1 行（`R-7.5`），R-8 一节九行**逐行重判**。
 
 | 判据（族） | 落点 |
 |---|---|
@@ -582,7 +582,7 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 
 > ⚠ **那 20 条不是「判据多余」，是需求文档漏写了。** 判准很直接：它们**每一条都在盘上跑着**，
 > 其中 `dash_drift`（11/31 命中、恒等基线 0/31）与 `band_drift`（18/31）是本层**命中最多**的两条。
-> 审计当时逐字核过：`REQUIREMENTS.md` 全文 **`破折号` 0 次 · `心里` 0 次 · `外壳` 0 次 ·
+> 审计当时逐字核过：`docs/BACKEND_CONTRACT.md` 全文 **`破折号` 0 次 · `心里` 0 次 · `外壳` 0 次 ·
 > `段落平均` 0 次**。
 >
 > ⚠⚠ **最刺眼的那条：`dialogue_halved` 是 7 条 HARD 之一，而需求里没有它**，

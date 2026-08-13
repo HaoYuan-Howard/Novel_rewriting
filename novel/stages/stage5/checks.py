@@ -620,8 +620,9 @@ def _atoms_of_event(text: str, roster: Iterable[str]) -> set[str]:
     """
     atoms: set[str] = set()
     t = text or ''
-    for m in NUM_UNIT.finditer(t):
-        atoms.add(m.group() + (t[m.end()] if m.end() < len(t) else ''))
+    # 与 invented_number 共用值域过滤；否则「一百成功」会在事件落点里
+    # 生成一个正文永远不可能合理复现的假原子「一百成」。
+    atoms.update(num_unit_keys(t).values())
     for nm in roster:
         if nm and nm in t:
             atoms.add(nm)

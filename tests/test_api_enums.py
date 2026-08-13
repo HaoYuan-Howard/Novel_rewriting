@@ -4,7 +4,7 @@
 test_api_enums.py —— `/api/enums` 是不是**真的**把取值面整份发了出去。
 
 【本文件的三条主线】
-  ① **超集**（`docs/REQUIREMENTS.md` §一「命名体系」第 5 条）：抓包那 14 个键一个都不许少。
+  ① **超集**（`docs/BACKEND_CONTRACT.md` §一「命名体系」第 5 条）：抓包那 14 个键一个都不许少。
   ② **回归**：拿现役后端真的在跑的 36 条 `actions` 反过来查新表——
      这是全仓**唯一**一处能抓到 `is_paid` 对现役行为回归的地方。
   ③ **三个桶焊死**：往 `invariants` 加一个常量而不决定发不发，当场红。
@@ -191,8 +191,10 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
     #     ⇒ 少登记一个，`contracts/rules.py::_validate` ⑧ 就在 F5-4 注册那一刻把它判红。
     #   ⚠ `--drop` / `--replay-cache` 是本文件第一次遇到「**同时**是 0 成本入口
     #     与带值参数」的一对（此前只有 `--apply-edit`）——两个轴正交，不是重复登记。
-    assert len(paid_payload['actions']) == 74, (
-        f'actions 有 {len(paid_payload["actions"])} 条，期望 74 '
+    # ⚠ 74 → 76（2026-08-13，真实 E2E）：两个 Stage2 付费落盘闸门各补一条
+    #   `--revalidate`。闸门由系统加，不能让合格的问题稿永久锁死。
+    assert len(paid_payload['actions']) == 76, (
+        f'actions 有 {len(paid_payload["actions"])} 条，期望 76 '
         f'（每个节点的默认路径 + 每个 flag；多臂节点按臂分别计算）。'
         f'这个数**会随 `NODES` 改**——改动它是有意的就来改这个数')
 
@@ -332,7 +334,7 @@ def test_free_flag_and_needs_value_are_derived_from_the_registries(paid_payload)
 
 
 def test_job_kinds_is_keyed_by_node_id(paid_payload):
-    """`job_kinds` 的键换成了节点 id，而**形状不变**（`REQUIREMENTS.md` §一「命名体系」第 5 条）。"""
+    """`job_kinds` 的键换成了节点 id，而**形状不变**（`docs/BACKEND_CONTRACT.md` §一「命名体系」第 5 条）。"""
     jk = paid_payload['job_kinds']
     assert set(jk) == set(NODES)
     for node, spec in NODES.items():

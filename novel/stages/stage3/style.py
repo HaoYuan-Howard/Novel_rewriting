@@ -101,11 +101,13 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     （落盘闸门那一趟才不排它——那时两边必然相等）。
     """
     store = ArtifactStore(ctx)
-    if not store.exists(REL):
-        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage3.style')
+    judged = REL if store.exists(REL) else _INVALID
+    if not store.exists(judged):
+        raise UpstreamMissing(
+            f'{REL} 与 {_INVALID} 都不在盘上——先跑 stage3.style')
 
     main, hook, gg = _upstreams(store)
-    _artifact, data = store.read_own(StyleGrounding, REL)
+    _artifact, data = store.read_own(StyleGrounding, judged)
 
     names = names_of(gg) if gg is not None else None
     outcomes = checks.check(
@@ -117,7 +119,7 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     )
     prov = data.get('_provenance') or {}
     return build(
-        sid=ctx.sid, node=ctx.node, freshness=store.freshness(REL),
+        sid=ctx.sid, node=ctx.node, freshness=store.freshness(judged),
         outcomes=outcomes, accounting=_accounting_of(prov),
         # `.INVALID` 在场是**上一次跑被闸门拦下来的痕迹**。留着不说等于静默：
         # 盘上那份正式稿可能是**更早**的一版，而人会以为它就是最近这次跑出来的。

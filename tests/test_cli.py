@@ -39,8 +39,12 @@ def box():
 
 @pytest.fixture(autouse=True)
 def no_api_key(monkeypatch):
-    """**把钥匙拿走。** 任何一条走到真发请求的路都会当场现形。"""
+    """把环境与仓内 .env 两条密钥来源都隔离掉，测试绝不触网。"""
+    from novel import config
+
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
+    monkeypatch.setattr(
+        config, 'load_config', lambda: config.Config(api_key=None))
 
 
 def _run(*argv: str) -> int:
@@ -124,10 +128,6 @@ def test_every_node_is_a_terminal_state_not_a_stack(box):
             f'{node} 跑出了 {X.REFUSED_BY_STRUCTURE}'
             f'（{X.MEANING[X.REFUSED_BY_STRUCTURE]}）——那是 bug，不是流程走不下去')
         assert got[node] in X.MEANING, f'{node} 的退出码 {got[node]} 不在四个里'
-    # ⚠ **两个节点是 stage2 的付费产出，今天必然落 `2`**（`RunModeNotImplemented`）。
-    #   写死它们：接线那一天这两格会变成 0/1，而那时本条该被读一遍再改，不该静静地绿。
-    assert got['stage2.global'] == X.TERMINAL_STATE
-    assert got['stage2.blueprint'] == X.TERMINAL_STATE
     assert len(NODES) >= 16, '守卫的守卫：节点表空掉时上面那个 for 一条都不跑'
 
 
@@ -140,6 +140,24 @@ def test_a_registered_but_unwired_run_mode_says_so(box):
     rc = _run('run', 'stage3.style', box.sid, '--apply-edit',
               str(box.dir / 'x.json'), '--base', str(box.root))
     assert rc == X.TERMINAL_STATE
+
+
+def test_direct_cli_rejects_a_flag_the_node_does_not_accept_before_costing_it(box, capsys):
+    """手敲命令也必须走节点表；未知跑法不能被误导成“加 --yes 就能跑”。"""
+    rc = _run('run', 'stage2.global', box.sid, '--check-only',
+              '--base', str(box.root))
+    assert rc == X.TERMINAL_STATE
+    err = capsys.readouterr().err
+    assert '不接受' in err and '会花钱' not in err and 'Traceback' not in err
+
+
+def test_direct_cli_rejects_mode_on_a_node_without_arms_without_a_stack(box, capsys):
+    """无臂节点的 `--mode` 在 RunContext 之前成为显式终态，不泄漏裸 ValueError。"""
+    rc = _run('run', 'stage5.review', box.sid, '--mode', 'deep', '--check-only',
+              '--base', str(box.root))
+    assert rc == X.TERMINAL_STATE
+    err = capsys.readouterr().err
+    assert '没有臂' in err and 'Traceback' not in err
 
 
 # ───────────────────── 钱（Q-10） ─────────────────────

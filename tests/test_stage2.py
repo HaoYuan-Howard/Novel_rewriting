@@ -225,6 +225,27 @@ def test_the_clean_base_has_no_hard_hits():
     assert got == set(), f'干净底座上不该有任何 HARD 命中，实得 {sorted(got)}'
 
 
+def test_canonical_unique_accepts_two_explicitly_distinguished_same_base_names():
+    gg = global_grounding()
+    chars = gg['entities']['characters']
+    chars['char_001']['canonical'] = '书童(婆母的)'
+    chars['char_002']['canonical'] = '书童(陆明洲的)'
+
+    hits = _hard_hits(gg, blueprints(), main_text())
+    assert 'canonical_unique' not in hits
+    assert 'distinguisher_lonely' not in hits
+
+
+def test_hedge_words_does_not_treat_factual_or_as_uncertainty():
+    gg = global_grounding()
+    character = gg['entities']['characters']['char_001']
+    character['fate'] = '御医建议过继或让父母再生。'
+    assert 'hedge_words' not in _hard_hits(gg, blueprints(), main_text())
+
+    character['fate'] = '或许会让父母再生。'
+    assert 'hedge_words' in _hard_hits(gg, blueprints(), main_text())
+
+
 def test_the_clean_base_leaves_no_rule_unimplemented():
     """**注册了而没有实现调用它 ⇒ `skipped`，徽章至少 amber。**
 

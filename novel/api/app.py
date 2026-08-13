@@ -31,7 +31,7 @@ from novel.api.errors import CSRF_REFUSED, status_of
 from novel.api.routes import checks, enums, ingest, jobs, novels
 from novel.errors import NovelError
 
-#: `R-11.1` 的**唯一落点**。四条各自独立成立的理由（`docs/REQUIREMENTS.md` 的 `R-11.1` 那一行）：
+#: `R-11.1` 的**唯一落点**。四条各自独立成立的理由（`docs/BACKEND_CONTRACT.md` 的 `R-11.1` 那一行）：
 #: 会在本机执行进程 · 那些进程花真钱 · 会往盘上写文件 · 传输的是不外流的版权正文。
 HOST = '127.0.0.1'
 

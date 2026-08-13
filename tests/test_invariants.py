@@ -340,6 +340,9 @@ def test_partial_rewrite_flags_are_free_and_exclude_the_promotion_path():
     extra = sorted(set(inv.PARTIAL_REWRITE_FLAGS) - set(inv.FREE_ENTRIES))
     assert not extra, f'这些不是 0 成本入口，不该算局部改写：{extra}'
     assert '--revalidate' not in inv.PARTIAL_REWRITE_FLAGS
+    assert '--apply-edit' in inv.PARTIAL_REWRITE_FLAGS, (
+        'stage7 只改人工映射 patch、保留模型人物表，是混版；'
+        '不登记会让它的正式 0 成本修复路每次都在来源账校验处抛异常')
 
 
 def test_every_captured_action_maps_onto_a_node_and_its_flags():

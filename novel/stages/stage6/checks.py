@@ -18,7 +18,7 @@ from contracts.invariants import ENDING_SHAPES
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.core.bands import ending_shape, sep_band_of_text
-from novel.core.facts import NUM_UNIT, secret_keywords
+from novel.core.facts import num_unit_keys, secret_keywords
 from novel.core.measure import measure
 from novel.core.naming import invented_names, name_stems
 from novel.core.text import TERMINAL_PUNCT, locate_norm, norm, window_overlap
@@ -138,8 +138,12 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
                           detail=f'文案出现下发面里没有的【人物称谓】{nm[:6]}'
                                  f'——逐个核对指的是不是已有角色',
                           evidence=nm))
-    inv = sorted({m.group() + body[m.end()] for m in NUM_UNIT.finditer(body)}
-                 - {m.group() + given[m.end()] for m in NUM_UNIT.finditer(given)})
+    # 比较归一后的「值+单位」，展示仍用正文原字面：这样 `30岁` 与
+    # `三十岁` 是同一事实，同时共享层也能过滤「一百成功」→「一百成」
+    # 这类把普通词首字误当单位的假阳。
+    body_nums = num_unit_keys(body)
+    given_nums = num_unit_keys(given)
+    inv = sorted(body_nums[k] for k in body_nums.keys() - given_nums.keys())
     if inv:
         fs.append(finding('hook_invented_number',
                           detail=f'文案出现下发面里没有的【数字+单位】{inv[:6]}——逐个核对',

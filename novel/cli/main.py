@@ -172,6 +172,25 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
     return run(ctx, flags)
 
 
+def _llm_client(ctx: RunContext):
+    """运行期 LLM 客户端的唯一构造口；所有 CLI 节点共用配置与持久化缓存。"""
+    from novel.config import load_config
+    from novel.llm.cache import ResponseCache
+    from novel.llm.client import LlmClient
+    from novel.llm.transport import DeepSeekTransport
+
+    cfg = load_config()
+    return LlmClient(
+        ctx,
+        DeepSeekTransport(cfg),
+        cache=ResponseCache(cfg.cache_dir),
+        model=cfg.model,
+        max_retries=cfg.max_retries,
+        backoff_base=cfg.backoff_base,
+        concurrency=cfg.concurrency,
+    )
+
+
 def _run_stage0_source(
     base: str,
     sid: str | None,
@@ -335,13 +354,7 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
             f'（`--apply-edit` 属 F 期：`_common.md` §5.3 那份是教科书，连注释一起搬）')
 
     # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
-    from novel.llm.client import LlmClient
-    from novel.llm.transport import DeepSeekTransport
-    from novel.config import load_config
-    cfg = load_config()
-    client = LlmClient(ctx, DeepSeekTransport(cfg), model=cfg.model,
-                       max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
-                       concurrency=cfg.concurrency)
+    client = _llm_client(ctx)
     style.run_style(ctx, client)
     print('  ✓ stage3 文风画像已落盘')
     return X.OK
@@ -408,13 +421,7 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
             '（`_common.md` §5.3 那份 `human_provenance` 是教科书，连注释一起搬）')
 
     # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
-    from novel.config import load_config
-    from novel.llm.client import LlmClient
-    from novel.llm.transport import DeepSeekTransport
-    cfg = load_config()
-    client = LlmClient(ctx, DeepSeekTransport(cfg), model=cfg.model,
-                       max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
-                       concurrency=cfg.concurrency)
+    client = _llm_client(ctx)
     hook.run_hook(ctx, client)
     print('  ✓ stage6 开篇文案已落盘（三个候选）——跑 `stage6.approve --pick N` 定稿')
     return X.OK
@@ -433,16 +440,35 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage2.global':
+        if '--revalidate' in tokens:
+            promoted, report = extract.run_revalidate(ctx)
+            print(render(report))
+            print('  ✓ 已提升为正式全局底座（0 成本）' if promoted
+                  else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
+            return X.OK if promoted else X.CHECK_FAILED
         if '--drop' in tokens:
-            return _fail(extract.run_drop(ctx, target=_valued(flags, '--drop') or '',
-                                          reason=''))
+            raw = _valued(flags, '--drop') or ''
+            if '=' not in raw:
+                raise TerminalState('--drop 的值必须是 <secret_xx|rel_xx>=<理由>，理由不能为空')
+            target, reason = raw.split('=', 1)
+            return _fail(extract.run_drop(ctx, target=target.strip(),
+                                          reason=reason.strip()))
         if '--migrate' in tokens:
             return _fail(extract.run_migrate(ctx))
         if '--purge-role' in tokens:
-            return _fail(extract.run_purge_role(ctx))
-        return _fail(extract.run_global(ctx))
+            return _fail(extract.run_purge_role(ctx, _llm_client(ctx)))
+        extract.run_global(ctx, _llm_client(ctx))
+        print('  ✓ stage2 全书事实底座已落盘')
+        return X.OK
 
     # ── `stage2.blueprint` ────────────────────────────────────────────────
+    if '--revalidate' in tokens:
+        promoted, report = extract.run_revalidate(ctx)
+        print(render(report))
+        print('  ✓ 已提升为正式逐章蓝图（0 成本）' if promoted
+              else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
+        return X.OK if promoted else X.CHECK_FAILED
+
     if '--check-only' in tokens:
         report = extract.run_check_only(ctx)
         print(render(report))
@@ -454,6 +480,17 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     chapters = _chapters_of(_valued(flags, '--chapters'))
+
+    if '--replay-cache' in tokens:
+        if len(chapters) != 1:
+            raise TerminalState(
+                '--replay-cache 必须同时用 --chapters 指定且只指定一章；'
+                '一个缓存 key 不能认领多章输出')
+        raise RunModeNotImplemented(
+            'stage2.blueprint --replay-cache 已在发请求之前安全截断，当前不会触网。'
+            '完整回放仍缺 artifact 契约：Repair.cache_policy 没有 replay-standard，'
+            '也没有 source_cache_key/source_cache_usage 的落点；'
+            '在补齐这组 schema 前拒绝伪装成 refresh-write')
 
     if tokens & {'--prompt-only', '--dry-run'}:
         system, user = extract.build_prompt(ctx, chapters=chapters)
@@ -468,7 +505,13 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
 
     if '--migrate' in tokens:
         return _fail(extract.run_migrate(ctx))
-    return _fail(extract.run_blueprint(ctx, chapters=chapters))
+    if chapters:
+        from novel.llm.cache import CachePolicy
+        ctx.cache = CachePolicy.refresh()
+    report = extract.run_blueprint(ctx, _llm_client(ctx), chapters=chapters)
+    print('  ✓ stage2 逐章蓝图已落盘')
+    print(render(report))
+    return X.OK if report.passed else X.CHECK_FAILED
 
 
 def _chapters_of(raw: str | None) -> tuple[int, ...]:
@@ -487,12 +530,7 @@ def _chapters_of(raw: str | None) -> tuple[int, ...]:
 
 
 def _fail(report_or_none: object) -> int:
-    """把一条**必然抛**的路的返回值收掉。
-
-    ⚠ 它今天永远走不到 `return`——上面那几个 `extract.run_*` 全部 `raise`。
-    写成这样而不是直接调用，是为了让**接线那一天**只需要改 `extract.py`：
-    这里的分派表已经按最终形态排好了。
-    """
+    """兼容返回报告或纯产物的 Stage2 辅助动作。"""
     from contracts.schema.report import CheckReport
     if isinstance(report_or_none, CheckReport):
         print(render(report_or_none))
@@ -566,13 +604,7 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return X.TERMINAL_STATE
 
     # 付费路。⚠ **本仓最贵的一次请求**（全书一次调用，user 里带着全书原文）。
-    from novel.config import load_config
-    from novel.llm.client import LlmClient
-    from novel.llm.transport import DeepSeekTransport
-    cfg = load_config()
-    client = LlmClient(ctx, DeepSeekTransport(cfg), model=cfg.model,
-                       max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
-                       concurrency=cfg.concurrency)
+    client = _llm_client(ctx)
     report = plan.run_plan(ctx, client)
     print('  ✓ stage4 重构计划已落盘，写作上下文已同批重建')
     print(render(report))
@@ -637,17 +669,19 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     # 付费两条路。⚠ 本仓第一次真花钱要先说一声（README）。
-    from novel.config import load_config
-    from novel.llm.client import LlmClient
-    from novel.llm.transport import DeepSeekTransport
-    cfg = load_config()
-    client = LlmClient(ctx, DeepSeekTransport(cfg), model=cfg.model,
-                       max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
-                       concurrency=cfg.concurrency)
+    if chapters:
+        # 定向重生成必须真的重新采样；否则 prompt 不变会静默命中旧问题稿的缓存。
+        selected = _chapters_of(chapters)
+        chapters = ','.join(str(n) for n in selected)
+        from novel.llm.cache import CachePolicy
+        ctx.cache = CachePolicy.refresh()
+    client = _llm_client(ctx)
     report = (write.run_revise(ctx, client, chapters) if '--revise' in tokens
               else write.run_write(ctx, client, chapters))
     print(render(report))
-    print('  ✓ 逐章成稿已落盘——跑 `stage5.review`（0 成本）看全书验收')
+    print('  ✓ 逐章成稿已落盘——跑 `stage5.review`（0 成本）看全书验收'
+          if report.passed
+          else '  ✗ 本轮仍有阻断稿；正式稿与 .INVALID 状态见上方报告')
     return X.OK if report.passed else X.CHECK_FAILED
 
 
@@ -718,13 +752,7 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
-    from novel.config import load_config
-    from novel.llm.client import LlmClient
-    from novel.llm.transport import DeepSeekTransport
-    cfg = load_config()
-    client = LlmClient(ctx, DeepSeekTransport(cfg), model=cfg.model,
-                       max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
-                       concurrency=cfg.concurrency)
+    client = _llm_client(ctx)
     rename.run_rename(ctx, client)
     print('  ✓ stage7 人物表已落盘——跑 `stage7.approve` 定稿，再 `stage7.assemble` 成书')
     return X.OK
@@ -755,6 +783,11 @@ def _cmd_preview(a: argparse.Namespace) -> int:
 
 def _cmd_run(a: argparse.Namespace) -> int:
     flags = _flags_of(a)
+    # 手敲 CLI 不能绕过编排器的节点契约。此前 `stage2.global --check-only`
+    # （该节点不接受这条跑法）先被 `is_paid` 倒向“会花钱”，显示成“加 --yes”；
+    # 真加了又会落到默认付费分支。更隐蔽的一例是给无臂节点传 `--mode`，它直到
+    # `RunContext` 才抛裸 `ValueError`。两条入口都必须先走同一份校验。
+    N.validate_run(a.node, flags, a.mode)
     paid = N.is_paid(a.node, flags)
     if paid and not a.yes:
         raise ApprovalRequired(

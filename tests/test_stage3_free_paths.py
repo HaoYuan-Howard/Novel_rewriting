@@ -66,6 +66,19 @@ def test_check_only_refuses_when_there_is_nothing_to_check(box):
         style.run_check_only(box.ctx())
 
 
+def test_check_only_reads_the_blocked_draft_when_no_formal_artifact_exists(box):
+    """首次付费即被闸门拦下时，`.INVALID` 是唯一可审阅稿，复检必须能读它。"""
+    src = box.dir / 'stage3' / 'style_grounding.json'
+    bad = box.dir / 'stage3' / 'style_grounding.INVALID.json'
+    bad.write_bytes(src.read_bytes())
+    src.unlink()
+
+    report = style.run_check_only(box.ctx())
+    assert report.provenance.invalid is True
+    assert report.provenance.freshness in ('fresh', 'unknown', 'stale')
+    assert {r.rule for r in report.rules}
+
+
 # ───────────────── `--measure-only`：只看不动 ─────────────────
 
 def test_measure_only_writes_nothing_and_matches_what_is_on_disk(box):

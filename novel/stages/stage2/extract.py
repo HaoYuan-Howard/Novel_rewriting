@@ -37,17 +37,34 @@ verbatim 回取 · 逐章批次与定向重生成）是另一批代码，一行�
 """
 from __future__ import annotations
 
+import copy
+import json
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from pydantic import ValidationError
+
+from contracts.rules import REGISTRY
+from contracts.schema.base import StrictModel
+from contracts.schema.common import Usage
 from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
-from novel import paths
-from novel.errors import RunModeNotImplemented, UpstreamMissing
+from contracts.schema.stage2 import (
+    BlueprintProvenance, ChapterBlueprints, ChapterBlueprintsResponse,
+    GlobalGrounding, GlobalGroundingResponse, GlobalProvenance, RoleSplitResponse,
+)
+from novel import paths, prov
+from novel.errors import GateBlocked, RunModeNotImplemented, TerminalState, UpstreamMissing
+from novel.llm.client import LlmClient
+from novel.llm.prompts import with_json_shape
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
 from novel.stages.stage2 import checks
+from novel.stages.stage2.normalize import (
+    normalize_blueprints, normalize_global, resolve_character_refs,
+)
 from novel.store import ArtifactStore
 
 GLOBAL_REL = 'stage2/global_grounding.json'
@@ -56,6 +73,21 @@ MAIN_TEXT = 'stage1/main_text.json'
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(BLUEPRINT_REL)
+_GLOBAL_INVALID = paths.invalid_of(GLOBAL_REL)
+
+GLOBAL_MAX_TOKENS = 96_000
+BLUEPRINT_MAX_TOKENS = 256_000
+ROLE_MAX_TOKENS = 32_000
+
+
+class _ScopeViolationRow(StrictModel):
+    """`scope_violations[]` 内由本模块生成的结构化字符串载体。"""
+
+    batch: int
+    requested: list[int]
+    produced: list[int]
+    discarded_chapters: list[int]
+    duplicate_target: int
 
 #: 付费产出那几条路今天缺的是什么。**逐条写出来**，而不是一句「没实现」——
 #: 下一个人要据此判断「接它」是多大一件事。
@@ -112,9 +144,12 @@ def _read_raw(store: ArtifactStore, model: type, rel: str) -> dict[str, Any] | N
     ⚠ 载体拒收时**照常抛**：那份产物存在的意义就是提醒人这条路坏了，
     不许静默降级成一份「PASS」。
     """
-    if not store.exists(rel):
+    invalid = paths.invalid_of(rel)
+    # 有问题稿说明它是更新的一次尝试；复检必须看最新问题稿，不能被仍在盘上的旧正式稿遮住。
+    target = invalid if store.exists(invalid) else rel
+    if not store.exists(target):
         return None
-    _art, raw = store.read_own(model, rel)
+    _art, raw = store.read_own(model, target)
     return raw
 
 
@@ -147,17 +182,37 @@ def _accounting_of(both: _Both) -> dict[str, Any]:
 
 
 def _report(ctx: RunContext, store: ArtifactStore, both: _Both,
-            outcomes: list[Outcome]) -> CheckReport:
+            outcomes: list[Outcome], *, judged_rel: str | None = None,
+            invalid_rel: str = _INVALID) -> CheckReport:
     """⚠ **新鲜度判的是「这份报告在说哪个文件」**，而那不总是正式产物：
     第一次付费跑就被闸门拦下时，盘上**只有 `.INVALID`**（正式稿本来还不存在），
     此时拿正式路径去判新鲜度会抛「不在盘上」——于是 0 成本的提升路
     **在最需要它的那一刻**跑不动。（这条 bug 是 stage7 上撞出来的，本层从一开始照着写。）
     """
-    judged = BLUEPRINT_REL if store.exists(BLUEPRINT_REL) else _INVALID
-    prov = (both.blueprints or {}).get('_provenance') or {}
+    judged = judged_rel or (
+        _INVALID if store.exists(_INVALID) else BLUEPRINT_REL)
+    source = both.global_g if ctx.node == 'stage2.global' else both.blueprints
+    prov = (source or {}).get('_provenance') or {}
+    # global 是本层的上游半步，按正常顺序执行时 blueprint 必然还不存在。
+    # 落盘闸门已经用同一作用域忽略了 upstream_missing；报告若仍把它算 HARD，
+    # 就会出现“正式 global 已写成功但命令退出失败”的自相矛盾。
+    reported = [
+        Outcome(
+            rule='upstream_missing',
+            unver_why=(
+                'stage2.global 是本层的上游半步：本次所需的 main_text 与 global '
+                '都已就绪；blueprint 要到下一节点才会生成，因此此刻不把“整层两份产物齐全”'
+                '误判成 global 落盘失败'
+            ),
+            scanned='stage1/main_text.json + stage2/global_grounding.json',
+        )
+        if ctx.node == 'stage2.global' and outcome.rule == 'upstream_missing'
+        else outcome
+        for outcome in outcomes
+    ]
     return build(sid=ctx.sid, node=ctx.node, freshness=store.freshness(judged),
-                 outcomes=outcomes, accounting=_accounting_of(both),
-                 invalid=store.exists(_INVALID),
+                 outcomes=reported, accounting=_accounting_of(both),
+                 invalid=store.exists(invalid_rel),
                  revalidated=prov.get('revalidated'), origin=prov.get('origin'))
 
 
@@ -184,6 +239,78 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     return _report(ctx, store, both, both.judge())
 
 
+def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
+    """按当前判据重判问题稿；合格即从 `.INVALID` 零成本提升。
+
+    落盘闸门由本层自己加，因此提升路也是闸门闭环的一部分。提升只继承原来源账，
+    不构造新 prompt/model/usage；唯一变化由 `ArtifactStore.promote_invalid` 记为
+    `revalidated=true`。
+    """
+    store = ArtifactStore(ctx)
+    main_text = _read_main_text(store)
+    if main_text is None:
+        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——无法按当前正文重判问题稿')
+
+    if ctx.node == 'stage2.global':
+        if not store.exists(_GLOBAL_INVALID):
+            raise UpstreamMissing(
+                f'{_GLOBAL_INVALID} 不在盘上——没有被拦下的全局问题稿要提升')
+        _artifact, raw = store.read_own(GlobalGrounding, _GLOBAL_INVALID)
+        outcomes = _judge_candidate(raw, None, main_text)
+        if _hard_hits(outcomes, ignore={'upstream_missing'}):
+            both = _Both(store)
+            return False, _report(
+                ctx, store, both, outcomes,
+                judged_rel=_GLOBAL_INVALID, invalid_rel=_GLOBAL_INVALID)
+        store.promote_invalid(GLOBAL_REL, GlobalGrounding)
+        both = _Both(store)
+        return True, _report(
+            ctx, store, both, both.judge(),
+            judged_rel=GLOBAL_REL, invalid_rel=_GLOBAL_INVALID)
+
+    if ctx.node != 'stage2.blueprint':
+        raise TerminalState(f'{ctx.node} 不是 stage2 的可提升节点')
+    if not store.exists(_INVALID):
+        raise UpstreamMissing(
+            f'{_INVALID} 不在盘上——没有被拦下的逐章问题稿要提升')
+    if not store.exists(GLOBAL_REL):
+        raise UpstreamMissing(
+            f'{GLOBAL_REL} 不在盘上——逐章问题稿不能脱离正式全局底座提升')
+    _global, global_raw = store.read_own(GlobalGrounding, GLOBAL_REL)
+    _artifact, raw = store.read_own(ChapterBlueprints, _INVALID)
+    outcomes = _judge_candidate(global_raw, raw, main_text)
+    if _hard_hits(outcomes):
+        both = _Both(store)
+        return False, _report(ctx, store, both, outcomes, judged_rel=_INVALID)
+    store.promote_invalid(BLUEPRINT_REL, ChapterBlueprints)
+    both = _Both(store)
+    return True, _report(ctx, store, both, both.judge())
+
+
+def build_prompts(
+    ctx: RunContext, *, chapters: tuple[int, ...] = ()
+) -> list[tuple[int | None, str, str]]:
+    """返回本次会发出的真实请求；blueprint 始终是一章一条。"""
+    from novel.stages.stage2 import prompts
+
+    store = ArtifactStore(ctx)
+    mt = _read_main_text(store)
+    if mt is None:
+        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——先跑 stage1')
+    if ctx.node == 'stage2.global':
+        system = with_json_shape(prompts.GLOBAL_SYS, prompts.GLOBAL_HINT)
+        return [(None, system, build_global_user(ctx.title, ctx.sid, mt))]
+
+    ordinals = tuple(int(s.get('chapter_ordinal') or 0) for s in mt)
+    targets = tuple(chapters) or ordinals
+    missing = sorted(set(targets) - set(ordinals))
+    if missing:
+        raise TerminalState(f'--chapters 不在正文阅读序里：{missing}')
+    system = with_json_shape(prompts.BLUEPRINT_SYS, prompts.BLUEPRINT_HINT)
+    return [(o, system, build_blueprint_user(ctx.title, ctx.sid, mt, (o,)))
+            for o in targets]
+
+
 def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:
     """`--prompt-only` / `--dry-run`：把这次**要发出去的** `(system, user)` 原样交出来。
 
@@ -192,17 +319,8 @@ def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[st
     ⚠ 本层的 `user` 里带着**全书原文**（逐章那一相带到本章为止），
     所以它 0 成本但不便宜：打印出来是几万字。
     """
-    from novel.stages.stage2 import prompts
-
-    store = ArtifactStore(ctx)
-    mt = _read_main_text(store)
-    if mt is None:
-        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——先跑 stage1')
-
-    if ctx.node == 'stage2.global':
-        return prompts.GLOBAL_SYS, build_global_user(ctx.title, ctx.sid, mt)
-    targets = tuple(chapters) or tuple(s.get('chapter_ordinal') for s in mt)
-    return prompts.BLUEPRINT_SYS, build_blueprint_user(ctx.title, ctx.sid, mt, targets)
+    _ordinal, system, user = build_prompts(ctx, chapters=chapters)[0]
+    return system, user
 
 
 def _chapter_index(main_text: list[dict[str, Any]]) -> str:
@@ -233,7 +351,9 @@ def build_global_user(title: str, sid: str, main_text: list[dict[str, Any]]) -> 
 
 
 def build_blueprint_user(title: str, sid: str, main_text: list[dict[str, Any]],
-                         targets: tuple[int, ...]) -> str:
+                         targets: tuple[int, ...], *,
+                         repair_findings: list[dict[str, str]] | None = None,
+                         repair_baseline: dict[str, Any] | None = None) -> str:
     """逐章那一相的 user。
 
     ⚠⚠ **这里没有人物表**：`char_id` 反转之后抽取器不引用任何全局编号，
@@ -243,14 +363,28 @@ def build_blueprint_user(title: str, sid: str, main_text: list[dict[str, Any]],
     是同一个根因的两条腿。
     """
     scope = '、'.join(f'阅读序第{o}章' for o in targets)
-    return '\n\n'.join([
+    parts = [
         f'《{title}》(source_id={sid})',
         '── 章节索引 ──\n' + _chapter_index(main_text),
         '── 正文（不可变原文，按阅读序章号分块）──\n'
         + _book_text(main_text, upto=max(targets) if targets else None),
         '── 本次任务范围 ──\n只产出以下章的 blueprint'
         '（按此顺序，范围外的章一律不要产出）：\n' + scope,
-    ])
+    ]
+    if repair_baseline:
+        parts.append(
+            '── 上一版结构基线 ──\n'
+            '这是局部修订基线。除失败证据直接要求改动之处，不得删除或合并已有事件拍，'
+            '不得减少 hinges / present_names；仍须交回一份完整章节结构。正文与证据优先。\n'
+            + json.dumps(repair_baseline, ensure_ascii=False, separators=(',', ':')))
+    if repair_findings:
+        evidence = '\n'.join(
+            f'- [{item["item"]}] {item["detail"]}' for item in repair_findings)
+        parts.append(
+            '── 上一版必须修正的问题 ──\n'
+            '这些是确定性校验命中的问题。只修本次任务章；不要靠机械放宽 span 遮住漏抓。\n'
+            + evidence)
+    return '\n\n'.join(parts)
 
 
 def run_apply_edit(ctx: RunContext) -> CheckReport:
@@ -271,38 +405,688 @@ def run_apply_edit(ctx: RunContext) -> CheckReport:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、还没接线的那几条 —— **说清楚缺什么，不给半成品**
+# 三、生成、归一、闸门与落盘
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_global(ctx: RunContext) -> CheckReport:
-    raise _paid_not_wired('`stage2.global` 的默认路径（一次调用产全书事实底座）')
+def _hard_hits(outcomes: list[Outcome], *, ignore: set[str] | None = None) -> list[str]:
+    """返回真正命中的 hard；unver/skipped 不是数据违约。"""
+    ignored = ignore or set()
+    return sorted(
+        outcome.rule for outcome in outcomes
+        if outcome.rule not in ignored
+        and outcome.unver_why is None
+        and outcome.findings
+        and REGISTRY.get(outcome.rule).sev == 'hard'
+    )
 
 
-def run_purge_role(ctx: RunContext) -> CheckReport:
-    raise _paid_not_wired('`stage2.global --purge-role`（语义判官双向重划分 role/fate）')
+def _scope_split(
+    raw: list[dict[str, Any]], ordinal: int, batch: int
+) -> tuple[dict[str, Any] | None, str | None]:
+    """一章调用只接纳一个目标章；其余响应留结构化范围账。"""
+    produced = [bp.get('chapter_ordinal') for bp in raw]
+    matching = [bp for bp in raw if bp.get('chapter_ordinal') == ordinal]
+    violation = None
+    if produced != [ordinal]:
+        violation = _ScopeViolationRow(
+            batch=batch,
+            requested=[ordinal],
+            produced=produced,
+            discarded_chapters=[o for o in produced if o != ordinal],
+            duplicate_target=max(0, len(matching) - 1),
+        ).model_dump_json()
+    return (matching[0] if matching else None), violation
 
 
-def run_blueprint(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> CheckReport:
-    what = ('`stage2.blueprint --chapters`（定向重生成那几章）' if chapters
-            else '`stage2.blueprint` 的默认路径（逐章抽取）')
-    raise _paid_not_wired(what)
+def _judge_candidate(
+    global_g: dict[str, Any] | None,
+    blueprints: dict[str, Any] | None,
+    main_text: list[dict[str, Any]],
+) -> list[Outcome]:
+    return checks.check(
+        global_g=global_g, blueprints=blueprints, main_text=main_text)
+
+
+def _combined_usage(old: Usage | None, new: Usage | None) -> Usage | None:
+    """两次真实产出的用量合并；任一 token 分量未知则总量也未知。"""
+    if old is None or new is None:
+        return None
+
+    def total(name: str) -> int | None:
+        left, right = getattr(old, name), getattr(new, name)
+        return left + right if left is not None and right is not None else None
+
+    return Usage(
+        calls_made=old.calls_made + new.calls_made,
+        calls_cached=old.calls_cached + new.calls_cached,
+        prompt_tokens=total('prompt_tokens'),
+        completion_tokens=total('completion_tokens'),
+        reasoning_tokens=total('reasoning_tokens'),
+    )
+
+
+def _archive_live(store: ArtifactStore, rel: str) -> None:
+    if store.exists(rel):
+        store.archive_round(rel)
+
+
+def _write_formal(store: ArtifactStore, rel: str, artifact: Any) -> None:
+    """成功新稿替换前保留正式稿与问题稿，两条历史都可恢复。"""
+    _archive_live(store, rel)
+    _archive_live(store, paths.invalid_of(rel))
+    store.write(rel, artifact)
+
+
+def _write_invalid(
+    store: ArtifactStore, rel: str, artifact: Any
+) -> str:
+    """新问题稿覆盖旧问题稿前先归档，避免一次付费响应原地消失。"""
+    _archive_live(store, paths.invalid_of(rel))
+    return str(store.write_invalid(rel, artifact, gates_skipped=[]))
+
+
+def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
+    """付费产出全书事实底座；响应边界、归一与落盘载体各校验一次。"""
+    store = ArtifactStore(ctx)
+    requests = build_prompts(ctx)
+    _ordinal, system, user = requests[0]
+    main_text = _read_main_text(store)
+    assert main_text is not None
+
+    response = client.ask_json(
+        system, user,
+        model_cls=GlobalGroundingResponse,
+        purpose=ctx.node,
+        max_tokens=GLOBAL_MAX_TOKENS,
+    )
+    data, accounting = normalize_global(
+        response.model_dump(by_alias=True), main_text)
+    provenance = ctx.llm_provenance(
+        GlobalProvenance,
+        prompts={'GLOBAL_SYS': system},
+        model=client.model,
+        **accounting,
+    )
+    artifact = GlobalGrounding.model_validate({
+        **data, '_provenance': provenance,
+    })
+
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(candidate, None, main_text)
+    hits = _hard_hits(outcomes, ignore={'upstream_missing'})
+
+    # 已有 blueprint 时，额外防止一次 global 重跑新造悬空 char_id；
+    # 旧问题照报，但不把与本次无关的存量违约当作新错误。
+    if store.exists(BLUEPRINT_REL):
+        _old_bp, old_bp_raw = store.read_own(ChapterBlueprints, BLUEPRINT_REL)
+        old_global = _read_raw(store, GlobalGrounding, GLOBAL_REL)
+        before = set(_hard_hits(
+            _judge_candidate(old_global, old_bp_raw, main_text)))
+        after = set(_hard_hits(
+            _judge_candidate(candidate, old_bp_raw, main_text)))
+        hits = sorted(set(hits) | (after - before))
+
+    if hits:
+        path = _write_invalid(store, GLOBAL_REL, artifact)
+        raise GateBlocked(
+            f'stage2.global 落盘闸门命中 {hits}。问题稿已存 '
+            f'{_GLOBAL_INVALID}，正式产物没有被覆盖。',
+            invalid_path=path,
+        )
+    _write_formal(store, GLOBAL_REL, artifact)
+    return artifact
+
+
+def _global_source(
+    store: ArtifactStore,
+) -> tuple[GlobalGrounding, dict[str, Any], str]:
+    """修复优先吃最新问题稿；没有问题稿才吃正式稿。"""
+    rel = _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL
+    if not store.exists(rel):
+        raise UpstreamMissing(
+            f'{GLOBAL_REL} 与 {_GLOBAL_INVALID} 都不在盘上——先跑 stage2.global')
+    artifact, raw = store.read_own(GlobalGrounding, rel)
+    return artifact, raw, rel
+
+
+def _role_split_user(global_raw: dict[str, Any]) -> str:
+    characters = ((global_raw.get('entities') or {}).get('characters') or {})
+    secrets = []
+    for secret in ((global_raw.get('canon') or {}).get('secrets') or []):
+        reveals = [e.get('chapter') for e in secret.get('reader_reveal_events') or []
+                   if isinstance(e.get('chapter'), int)]
+        secrets.append({
+            '第几章揭示': min(reveals) if reveals else None,
+            '秘密': secret.get('fact'),
+        })
+    payload = {
+        cid: {
+            'canonical': character.get('canonical'),
+            'role': character.get('role'),
+            'fate': character.get('fate'),
+        }
+        for cid, character in characters.items()
+    }
+    compact = lambda value: json.dumps(
+        value, ensure_ascii=False, separators=(',', ':'))
+    return (
+        '── 秘密清单（每条注明第几章才对读者揭示）──\n'
+        + compact(secrets)
+        + '\n\n── 人物表（role/fate 可能划错了，按判据重划）──\n'
+        + compact(payload)
+    )
+
+
+def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
+    """付费语义判官：只在原 char_id 上双向重划 role/fate。"""
+    from novel.stages.stage2 import prompts
+
+    store = ArtifactStore(ctx)
+    old_artifact, old_raw, _source_rel = _global_source(store)
+    main_text = _read_main_text(store)
+    if main_text is None:
+        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上')
+    if old_artifact.provenance.model != client.model:
+        raise TerminalState(
+            '当前 GlobalProvenance 没有表达混合模型的槽位；'
+            f'原稿 model={old_artifact.provenance.model!r}，本次={client.model!r}。'
+            '为避免来源账说假话，尚未调用 LLM')
+
+    system = with_json_shape(prompts.ROLE_SPLIT_SYS, prompts.ROLE_SPLIT_HINT)
+    response = client.ask_json(
+        system,
+        _role_split_user(old_raw),
+        model_cls=RoleSplitResponse,
+        purpose=f'{ctx.node}:purge-role',
+        max_tokens=ROLE_MAX_TOKENS,
+    )
+    returned = response.model_dump(by_alias=True)['characters']
+    characters = ((old_raw.get('entities') or {}).get('characters') or {})
+    if set(returned) != set(characters):
+        missing = sorted(set(characters) - set(returned))
+        extra = sorted(set(returned) - set(characters))
+        raise TerminalState(
+            f'role/fate 判官没有原样交回 char_id 集合：缺 {missing}，多 {extra}。'
+            '响应已进缓存与成本账，但没有覆盖 artifact')
+
+    data = copy.deepcopy(old_raw)
+    data.pop('_provenance', None)
+    out_characters = ((data.get('entities') or {}).get('characters') or {})
+    for cid, split in returned.items():
+        out_characters[cid]['role'] = split['role'].strip()
+        out_characters[cid]['fate'] = split['fate']
+
+    old_prov = old_artifact.provenance
+    delta = ctx.llm_provenance(
+        GlobalProvenance,
+        prompts={'ROLE_SPLIT_SYS': system},
+        model=client.model,
+        address_by_fallback=old_prov.address_by_fallback,
+        address_surface_rewrites=old_prov.address_surface_rewrites,
+        address_from_chapter_raised=old_prov.address_from_chapter_raised,
+        canonical_distinguishers_stripped=old_prov.canonical_distinguishers_stripped,
+        setup_chapters_pruned=old_prov.setup_chapters_pruned,
+        human_adjudicated=old_prov.human_adjudicated,
+    )
+    provenance = GlobalProvenance.model_validate({
+        **old_prov.model_dump(),
+        'code': ctx.code,
+        'inputs': delta.inputs,
+        'prompts': {**old_prov.prompts, **delta.prompts},
+        'usage': _combined_usage(old_prov.usage, delta.usage),
+        'gates_skipped': None,
+    })
+    artifact = GlobalGrounding.model_validate({
+        **data, '_provenance': provenance,
+    })
+    hits = _hard_hits(_judge_candidate(
+        artifact.model_dump(by_alias=True), None, main_text),
+        ignore={'upstream_missing'},
+    )
+    if hits:
+        path = _write_invalid(store, GLOBAL_REL, artifact)
+        raise GateBlocked(
+            f'role/fate 重划后仍命中 {hits}。问题稿保留在 {_GLOBAL_INVALID}。',
+            invalid_path=path,
+        )
+    _write_formal(store, GLOBAL_REL, artifact)
+    return artifact
+
+
+def _run_chapter_requests(
+    ctx: RunContext,
+    client: LlmClient,
+    requests: list[tuple[int | None, str, str]],
+) -> tuple[list[dict[str, Any]], list[str], list[Exception]]:
+    """并发等待独立章节；一个失败不丢掉已经付费成功的其他章。"""
+    results: dict[int, dict[str, Any]] = {}
+    violations: list[str] = []
+    errors: list[Exception] = []
+
+    def one(ordinal: int, system: str, user: str) -> list[dict[str, Any]]:
+        response = client.ask_json(
+            system, user,
+            model_cls=ChapterBlueprintsResponse,
+            purpose=f'{ctx.node}:ch{ordinal}',
+            max_tokens=BLUEPRINT_MAX_TOKENS,
+        )
+        return response.model_dump(by_alias=True)['blueprints']
+
+    concrete = [(int(o), s, u) for o, s, u in requests if o is not None]
+    with ThreadPoolExecutor(
+        max_workers=min(client.concurrency, max(1, len(concrete)))
+    ) as pool:
+        futures = {
+            pool.submit(one, ordinal, system, user): (i, ordinal)
+            for i, (ordinal, system, user) in enumerate(concrete, 1)
+        }
+        for future in as_completed(futures):
+            batch, ordinal = futures[future]
+            try:
+                raw = future.result()
+            except Exception as exc:  # 已成功的章仍必须保留。
+                errors.append(exc)
+                continue
+            kept, violation = _scope_split(raw, ordinal, batch)
+            if violation is not None:
+                violations.append(violation)
+            if kept is not None:
+                results[ordinal] = kept
+    return [results[o] for o, _s, _u in concrete if o in results], violations, errors
+
+
+def _blueprint_metrics(blueprint: dict[str, Any]) -> dict[str, int]:
+    beats = list(blueprint.get('beats') or [])
+    return {
+        'beats': len(beats),
+        'hinges': sum(len(beat.get('hinges') or []) for beat in beats),
+        'present_names': sum(len(beat.get('present_names') or []) for beat in beats),
+    }
+
+
+def _repair_baseline(blueprint: dict[str, Any]) -> dict[str, Any]:
+    """最终产物 → 模型响应形状；代码派生字段不反喂给模型。"""
+    out = copy.deepcopy(blueprint)
+    for beat in (out.get('beats') or []):
+        beat.pop('present_char_ids', None)
+        for hinge in (beat.get('hinges') or []):
+            hinge.pop('text', None)
+    for narration in (out.get('narration') or []):
+        narration.pop('narrator_char_id', None)
+        narration.pop('focalizer_char_id', None)
+    return out
+
+
+def _mentions_chapter(value: str, ordinal: int) -> bool:
+    return bool(
+        re.search(rf'\bb{ordinal:02d}_', value)
+        or re.search(rf'\bch0*{ordinal}(?!\d)', value)
+    )
+
+
+def _repair_findings(
+    outcomes: list[Outcome], ordinal: int
+) -> list[dict[str, str]]:
+    """只把目标章自己的 HARD 证据下发，绝不把未来章失败带进较早章节。"""
+    rows: list[dict[str, str]] = []
+    for outcome in outcomes:
+        if REGISTRY.get(outcome.rule).sev != 'hard':
+            continue
+        evidence = sorted({
+            str(value)
+            for item in outcome.findings
+            for value in item.evidence
+            if _mentions_chapter(str(value), ordinal)
+        })
+        if not evidence:
+            continue
+        rows.append({
+            'rule': outcome.rule,
+            'item': REGISTRY.get(outcome.rule).item,
+            'detail': '确定性校验证据：'
+                      + json.dumps(evidence, ensure_ascii=False, separators=(',', ':')),
+        })
+    if not rows:
+        rows.append({
+            'rule': 'manual_regeneration',
+            'item': '人工指定重生成',
+            'detail': f'用户明确要求重新抽取阅读序第 {ordinal} 章；正文与结构基线优先。',
+        })
+    return rows
+
+
+def _record_is_targeted(row: Any, targets: set[int]) -> bool:
+    if not isinstance(row, (list, tuple)) or not row:
+        return False
+    match = re.match(r'b(\d{2})_', str(row[0]))
+    return bool(match and int(match.group(1)) in targets)
+
+
+def _keep_scope_violation(row: str, targets: set[int]) -> bool:
+    try:
+        requested = set(_ScopeViolationRow.model_validate_json(row).requested)
+    except (TypeError, ValueError, ValidationError):
+        return True
+    return requested.isdisjoint(targets)
+
+
+def _run_blueprint_repair(
+    ctx: RunContext,
+    client: LlmClient,
+    *,
+    chapters: tuple[int, ...],
+    store: ArtifactStore,
+    main_text: list[dict[str, Any]],
+    global_raw: dict[str, Any],
+) -> CheckReport:
+    """只重生成目标章，合并未动章节并记录完整 repair 账。"""
+    if ctx.cache.name != 'refresh-write':
+        raise TerminalState(
+            'stage2.blueprint --chapters 必须使用 refresh-write：'
+            '定向重生成不得读回原请求缓存')
+    source_rel = _INVALID if store.exists(_INVALID) else BLUEPRINT_REL
+    if not store.exists(source_rel):
+        raise UpstreamMissing(
+            f'{BLUEPRINT_REL} 与 {_INVALID} 都不在盘上——定向重生成没有结构基线')
+    previous, previous_raw = store.read_own(ChapterBlueprints, source_rel)
+    if previous.provenance.model != client.model:
+        raise TerminalState(
+            '当前 BlueprintProvenance 没有表达混合模型的槽位；'
+            f'原稿 model={previous.provenance.model!r}，本次={client.model!r}。'
+            '为避免来源账说假话，尚未调用 LLM')
+
+    from novel.stages.stage2 import prompts
+    system = with_json_shape(prompts.BLUEPRINT_SYS, prompts.BLUEPRINT_HINT)
+    old_system = previous.provenance.prompts.get('BLUEPRINT_SYS')
+    if old_system != prov.fingerprint(system):
+        raise TerminalState(
+            '定向重生成的 BLUEPRINT_SYS 与基线产物不同，而现有 provenance '
+            '没有表达“部分章节使用另一版 system”的槽位；尚未调用 LLM')
+
+    old_by = {
+        int(blueprint.get('chapter_ordinal') or 0): blueprint
+        for blueprint in (previous_raw.get('blueprints') or [])
+    }
+    missing_baselines = sorted(set(chapters) - set(old_by))
+    if missing_baselines:
+        raise TerminalState(f'目标章没有上一版结构基线：{missing_baselines}')
+
+    before_outcomes = _judge_candidate(global_raw, previous_raw, main_text)
+    prompt_rows: dict[int, tuple[str, list[dict[str, str]]]] = {}
+    requests: list[tuple[int | None, str, str]] = []
+    for ordinal in chapters:
+        findings = _repair_findings(before_outcomes, ordinal)
+        user = build_blueprint_user(
+            ctx.title, ctx.sid, main_text, (ordinal,),
+            repair_findings=findings,
+            repair_baseline=_repair_baseline(old_by[ordinal]),
+        )
+        prompt_rows[ordinal] = (user, findings)
+        requests.append((ordinal, system, user))
+
+    returned, new_scope, errors = _run_chapter_requests(ctx, client, requests)
+    if not returned:
+        if errors:
+            raise errors[0]
+        raise TerminalState('定向重生成没有任何目标章返回可接纳的响应')
+
+    raw_by = {
+        int(blueprint.get('chapter_ordinal') or 0): blueprint
+        for blueprint in returned
+    }
+    target_data, target_accounting = normalize_blueprints(
+        {'blueprints': returned},
+        main_text,
+        global_raw['entities']['characters'],
+    )
+    normalized_by = {
+        int(blueprint.get('chapter_ordinal') or 0): blueprint
+        for blueprint in target_data['blueprints']
+    }
+    ordinals = [
+        int(section.get('chapter_ordinal') or 0) for section in main_text
+    ]
+    merged_by = copy.deepcopy(old_by)
+    merged_by.update(normalized_by)
+    merged = [merged_by[ordinal] for ordinal in ordinals if ordinal in merged_by]
+    char_refs = resolve_character_refs(
+        merged, main_text, global_raw['entities']['characters'])
+
+    targets = set(chapters)
+    old_prov = previous.provenance
+    old_rewrites = [
+        list(row) for row in old_prov.verbatim_rewrites
+        if not _record_is_targeted(row, targets)
+    ]
+    old_recovered = [
+        list(row) for row in old_prov.verbatim_recovered
+        if not _record_is_targeted(row, targets)
+    ]
+    old_failures = [
+        list(row) for row in old_prov.verbatim_failures
+        if not _record_is_targeted(row, targets)
+    ]
+    rewrites = old_rewrites + list(target_accounting['verbatim_rewrites'])
+    recovered = old_recovered + list(target_accounting['verbatim_recovered'])
+    failures = old_failures + list(target_accounting['verbatim_failures'])
+
+    repaired_ordinals = sorted(normalized_by)
+    repair_history = [
+        row.model_dump() for row in (old_prov.repairs or [])
+    ]
+    for ordinal in repaired_ordinals:
+        user, findings = prompt_rows[ordinal]
+        repair_history.append({
+            'chapter_ordinal': ordinal,
+            'failure_items': sorted({row['rule'] for row in findings}),
+            'failure_evidence': prov.projection_fingerprint(findings),
+            'user_prompt': prov.fingerprint(user),
+            'output': prov.projection_fingerprint(raw_by[ordinal]),
+            'model': client.model,
+            'cache_policy': ctx.cache.name,
+            'fields': ['*'],
+            'before_metrics': _blueprint_metrics(old_by[ordinal]),
+            'after_metrics': _blueprint_metrics(normalized_by[ordinal]),
+        })
+
+    old_scope = [
+        row for row in old_prov.scope_violations
+        if _keep_scope_violation(row, targets)
+    ]
+    partial = sorted(set(old_prov.partial_regen_chapters or [])
+                     | set(repaired_ordinals))
+    delta = ctx.llm_provenance(
+        BlueprintProvenance,
+        prompts={'BLUEPRINT_SYS': system},
+        model=client.model,
+        scope_violations=old_scope + new_scope,
+        batches=[list(batch) for batch in old_prov.batches],
+        context=old_prov.context.model_dump(),
+        char_refs=char_refs,
+        verbatim_rewrites=rewrites,
+        verbatim_recovered=recovered,
+        verbatim_failures=failures,
+        partial_regen_chapters=partial,
+        repairs=repair_history,
+    )
+    provenance = BlueprintProvenance.model_validate({
+        **delta.model_dump(),
+        'usage': _combined_usage(old_prov.usage, delta.usage),
+        'partial_rewrite': old_prov.partial_rewrite,
+    })
+    artifact = ChapterBlueprints.model_validate({
+        'blueprints': merged,
+        '_provenance': provenance,
+    })
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(global_raw, candidate, main_text)
+    hits = _hard_hits(outcomes)
+    not_returned = sorted(targets - set(repaired_ordinals))
+    if hits or errors or not_returned:
+        path = _write_invalid(store, BLUEPRINT_REL, artifact)
+        extra = []
+        if errors:
+            extra.append(f'{len(errors)} 个章节调用失败')
+        if not_returned:
+            extra.append(f'未返回目标章 {not_returned}')
+        suffix = f'；{"；".join(extra)}' if extra else ''
+        raise GateBlocked(
+            f'stage2.blueprint 定向重生成后仍命中 {hits}{suffix}。'
+            f'问题稿已存 {_INVALID}，正式产物没有被覆盖。',
+            invalid_path=path,
+        )
+
+    _write_formal(store, BLUEPRINT_REL, artifact)
+    both = _Both(store)
+    return _report(ctx, store, both, both.judge())
+
+
+def run_blueprint(
+    ctx: RunContext,
+    client: LlmClient,
+    *,
+    chapters: tuple[int, ...] = (),
+) -> CheckReport:
+    """付费逐章抽取；每章独立请求，合并后统一归一、联合校验和落盘。"""
+    store = ArtifactStore(ctx)
+    main_text = _read_main_text(store)
+    assert main_text is not None
+    global_art = store.read(GlobalGrounding, GLOBAL_REL)
+    global_raw = global_art.model_dump(by_alias=True)
+    if chapters:
+        return _run_blueprint_repair(
+            ctx, client, chapters=chapters, store=store,
+            main_text=main_text, global_raw=global_raw)
+
+    requests = build_prompts(ctx)
+    raw_blueprints, scope_violations, errors = _run_chapter_requests(
+        ctx, client, requests)
+    if not raw_blueprints:
+        if errors:
+            raise errors[0]
+        raise TerminalState('stage2.blueprint 没有任何一章返回可接纳的响应')
+
+    data, accounting = normalize_blueprints(
+        {'blueprints': raw_blueprints},
+        main_text,
+        global_raw['entities']['characters'],
+    )
+    system = requests[0][1]
+    ordinals = [int(section.get('chapter_ordinal') or 0)
+                for section in main_text]
+    provenance = ctx.llm_provenance(
+        BlueprintProvenance,
+        prompts={'BLUEPRINT_SYS': system},
+        model=client.model,
+        scope_violations=scope_violations,
+        batches=[[ordinal] for ordinal in ordinals],
+        context={'batch_size': 1, 'context_upto': True},
+        **accounting,
+    )
+    artifact = ChapterBlueprints.model_validate({
+        **data, '_provenance': provenance,
+    })
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(global_raw, candidate, main_text)
+    hits = _hard_hits(outcomes)
+    if hits:
+        path = store.write_invalid(
+            BLUEPRINT_REL, artifact, gates_skipped=[])
+        suffix = (
+            f'；另有 {len(errors)} 个章节调用失败，已成功返回的付费结果仍保留'
+            if errors else '')
+        raise GateBlocked(
+            f'stage2.blueprint 落盘闸门命中 {hits}{suffix}。问题稿已存 '
+            f'{_INVALID}，正式产物没有被覆盖。',
+            invalid_path=str(path),
+        )
+
+    store.write(BLUEPRINT_REL, artifact)
+    both = _Both(store)
+    return _report(ctx, store, both, both.judge())
 
 
 def run_migrate(ctx: RunContext) -> CheckReport:
     """`--migrate`：0 成本重跑确定性归一并把账写回。
 
-    ⚠ 它今天**跑不动，而理由与付费那几条不同**：归一本身是 0 成本的纯函数，
-    但**它要写盘**，而写回去的那一份必须同时带上归一的账
-    （`address_*` 四项 / `setup_chapters_pruned` / verbatim 三笔）——
-    **那些账正是判据断言的东西**。少写一笔，判据就会去断言一个不存在的键、落 `unver`，
-    于是「0 成本修好了」与「什么都没改」在报告上同形。
-    ⇒ 与落盘口同批接（`_NOT_WIRED` ②④），不单独放行。
+    迁移改的是模型产物中的代码派生字段，因此保留原 `prompts/model/usage`，
+    只换成本次实际读取的 `inputs`，并以 `partial_rewrite=--migrate` 留痕。
+    旧版（包括被闸门拦下的 `.INVALID`）先归档，再写本次重判结果。
     """
-    raise RunModeNotImplemented(
-        f'`{ctx.node} --migrate` 的**归一逻辑**是 0 成本纯函数，而它要写盘，'
-        f'写回去的那一份必须同时带上归一的账——**判据断言的就是那些账**。\n'
-        f'→ 缺的是：{_NOT_WIRED}\n'
-        f'⚠ 少写一笔账，「0 成本修好了」与「什么都没改」在报告上就同形')
+    store = ArtifactStore(ctx)
+    main_text = _read_main_text(store)
+    if main_text is None:
+        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——无法重跑确定性归一')
+
+    if ctx.node == 'stage2.global':
+        source_rel = _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL
+        if not store.exists(source_rel):
+            raise UpstreamMissing(
+                f'{GLOBAL_REL} 与 {_GLOBAL_INVALID} 都不在盘上——没有可迁移的全局底座')
+        previous, raw = store.read_own(GlobalGrounding, source_rel)
+        data = copy.deepcopy(raw)
+        data.pop('_provenance', None)
+        data, accounting = normalize_global(data, main_text)
+        rewritten = ctx.rewrite_provenance(
+            previous.provenance, by='--migrate')
+        provenance = GlobalProvenance.model_validate({
+            **rewritten.model_dump(),
+            **accounting,
+            'gates_skipped': None,
+        })
+        artifact = GlobalGrounding.model_validate({
+            **data, '_provenance': provenance,
+        })
+        candidate = artifact.model_dump(by_alias=True)
+        outcomes = _judge_candidate(candidate, None, main_text)
+        hits = _hard_hits(outcomes, ignore={'upstream_missing'})
+        if hits:
+            _write_invalid(store, GLOBAL_REL, artifact)
+            both = _Both(store)
+            return _report(
+                ctx, store, both, outcomes,
+                judged_rel=_GLOBAL_INVALID, invalid_rel=_GLOBAL_INVALID)
+        _write_formal(store, GLOBAL_REL, artifact)
+        both = _Both(store)
+        return _report(
+            ctx, store, both, both.judge(),
+            judged_rel=GLOBAL_REL, invalid_rel=_GLOBAL_INVALID)
+
+    if ctx.node != 'stage2.blueprint':
+        raise TerminalState(f'{ctx.node} 不是 stage2 的可迁移节点')
+    source_rel = _INVALID if store.exists(_INVALID) else BLUEPRINT_REL
+    if not store.exists(source_rel):
+        raise UpstreamMissing(
+            f'{BLUEPRINT_REL} 与 {_INVALID} 都不在盘上——没有可迁移的逐章蓝图')
+    if not store.exists(GLOBAL_REL):
+        raise UpstreamMissing(f'{GLOBAL_REL} 不在盘上——逐章蓝图不能脱离人物表迁移')
+
+    global_artifact = store.read(GlobalGrounding, GLOBAL_REL)
+    global_raw = global_artifact.model_dump(by_alias=True)
+    previous, raw = store.read_own(ChapterBlueprints, source_rel)
+    data = copy.deepcopy(raw)
+    data.pop('_provenance', None)
+    data, accounting = normalize_blueprints(
+        data, main_text, global_raw['entities']['characters'])
+    rewritten = ctx.rewrite_provenance(
+        previous.provenance, by='--migrate')
+    provenance = BlueprintProvenance.model_validate({
+        **rewritten.model_dump(),
+        **accounting,
+        'gates_skipped': None,
+    })
+    artifact = ChapterBlueprints.model_validate({
+        **data, '_provenance': provenance,
+    })
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(global_raw, candidate, main_text)
+    if _hard_hits(outcomes):
+        _write_invalid(store, BLUEPRINT_REL, artifact)
+        both = _Both(store)
+        return _report(ctx, store, both, outcomes, judged_rel=_INVALID)
+    _write_formal(store, BLUEPRINT_REL, artifact)
+    both = _Both(store)
+    return _report(ctx, store, both, both.judge(), judged_rel=BLUEPRINT_REL)
 
 
 def run_drop(ctx: RunContext, *, target: str, reason: str) -> CheckReport:

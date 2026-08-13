@@ -886,7 +886,7 @@ fix: tuple[str, ...] | None = None      # ('stage2.blueprint', '--migrate')
 
 `contracts/rules.py` 要求每条判据声明 `requirement`（正则 `^R-\d+\.\d+[a-z]?$`——
 `Q-x` 与裸 `R-2` 都不收），`tests/test_coverage.py` 双向查。逐条对下来
-**R-2 十二行 + R-3 十六行接不住 75 条**，`docs/REQUIREMENTS.md` 本次
+**R-2 十二行 + R-3 十六行接不住 75 条**，`docs/BACKEND_CONTRACT.md` 本次
 **补 17 行、拆 1 行、改判 1 行**：
 
 | 新行 | 收哪几条判据 |

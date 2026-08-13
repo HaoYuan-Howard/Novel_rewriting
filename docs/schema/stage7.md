@@ -246,7 +246,7 @@ applied.hook                           {counts}
 
 > #### ⚠ 残留探针捡回来的是**哪一类**东西 —— 一条被四处抄过的误读
 >
-> 旧文档（含 `REQUIREMENTS.md` `R-10.10` 下面那条注、界面常驻说明、运行时
+> 旧文档（含 `docs/BACKEND_CONTRACT.md` `R-10.10` 下面那条注、界面常驻说明、运行时
 > `rn_coverage_unver` 的文案）写着：「**她**改了名而**她的家人**原样留着」。**逐条复算，三处不成立**：
 >
 > | 文档说 | 实测 |
@@ -625,7 +625,7 @@ owner：`stage7` 19 · `stage5` 3 · `stage2` 1 · `None` 10。
 
 | 缺的族 | 条数 | 说明 | 补成 |
 |---|---|---|---|
-| **映射表自身的结构** | 10 | `rn_llm_shape` · `rn_map_coverage` · `rn_new_collide` · `rn_ambiguous` · `rn_already_present` · `rn_new_in_source` · `rn_title_dropped` · `rn_overlap` · `rn_no_reason` · `rn_kept_contains_mapped`。<br>它们全是 `N9_SYS` 六条规则的**后置条件**，而那六条规则在 `REQUIREMENTS.md` 里一个字都没有——`R-10` 从前只写了替换器与探针，没写「模型该交出什么」 | `R-10.13` + `13b`/`13c`/`13d` |
+| **映射表自身的结构** | 10 | `rn_llm_shape` · `rn_map_coverage` · `rn_new_collide` · `rn_ambiguous` · `rn_already_present` · `rn_new_in_source` · `rn_title_dropped` · `rn_overlap` · `rn_no_reason` · `rn_kept_contains_mapped`。<br>它们全是 `N9_SYS` 六条规则的**后置条件**，而那六条规则在 `docs/BACKEND_CONTRACT.md` 里一个字都没有——`R-10` 从前只写了替换器与探针，没写「模型该交出什么」 | `R-10.13` + `13b`/`13c`/`13d` |
 | **成书的前置条件** | 3 | `rn_book_incomplete` · `rn_mixed_contract` · `rn_invalid_drafts`。`R-10.8` 只规定了 txt 的**格式**，没规定**什么情况下不许写** | `R-10.14` + `14b` |
 | 三条 metric | 3 | 尤其 `rn_style_report`——**文案那一列全链只有这里量** | `R-10.17`（`度量` ×3） |
 | 书名替换 | 1 | `rn_title_unver`。它是用户裁决，而需求文档里没有 | `R-10.16`（`度量`） |
@@ -644,7 +644,7 @@ owner：`stage7` 19 · `stage5` 3 · `stage2` 1 · `None` 10。
 > **2 条写成 `需求／B-xx`**。另有 **2 条会被守卫判「说假话」**：
 > `rn_residual_stem` 指着标 `结构` 的 `R-10.6`、`rn_coverage_unver` 指着写「无守卫」的 `R-10.10`。
 >
-> ⇒ **F2-0 的处置**（2026-08-12，`REQUIREMENTS.md` 的 R-10 节）：
+> ⇒ **F2-0 的处置**（2026-08-12，`docs/BACKEND_CONTRACT.md` 的 R-10 节）：
 >
 > | 动作 | 行 | 收下谁 |
 > |---|---|---|

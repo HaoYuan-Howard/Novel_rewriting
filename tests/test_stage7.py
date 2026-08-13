@@ -99,6 +99,13 @@ def test_every_registered_rule_produced_a_row(box):
     assert skipped == [], f'这些判据注册了却没被调用：{skipped}'
 
 
+def test_body_stale_reports_every_draft_as_its_scan_denominator(box):
+    """全都 fresh 时 stale 列表为 0，但判据仍实际扫描了全部成稿。"""
+    rep = _check(box)
+    line = next(r for r in rep.rules if r.rule == 'rn_body_stale')
+    assert line.scanned == f'{len(_drafts_of(box.book))} 份成稿 + 文案'
+
+
 def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     """⭐ **stage7 的徽章在结构上永远不可能是 `pass`。**
 
@@ -202,6 +209,18 @@ def test_the_identity_baseline_is_byte_lossless(box):
     assert len(base.blind) == 3
     # 落进产物，而不是打印完就扔
     assert NameMap.model_validate(box.read('stage7/name_map.json')).identity == base
+
+
+def test_identity_preflight_works_before_the_first_name_map_exists(box):
+    """首次付费前没有本层产物：预检仍应可运行，且不得把未跑的映射规则报绿。"""
+    (box.dir / 'stage7' / 'name_map.json').unlink()
+    base, rep = rename.run_identity(_ctx(box))
+    assert base.roundtrip_ok and base.chapters > 0
+    row = next(r for r in rep.rules if r.rule == 'rn_identity_baseline')
+    assert row.status == 'ok'
+    assert rep.provenance.freshness == 'unknown'
+    assert any(r.status == 'skipped' for r in rep.rules if r.rule != 'rn_identity_blind')
+    assert not (box.dir / 'stage7' / 'name_map.json').exists()
 
 
 def test_rejudging_reproduces_the_rule_set_on_disk(box):
@@ -489,6 +508,46 @@ def test_the_gate_blocks_a_dirty_map_and_revalidate_promotes_it_after_the_fix(bo
     assert promoted is False and invalid.exists()
 
 
+def test_revalidate_rebuilds_stale_stored_findings_before_promoting(box):
+    """判据修好后不能继续复读 `.INVALID.book[]` 里的旧 HARD。"""
+    from contracts.schema.report import finding
+    from novel import paths
+
+    raw = box.read('stage7/name_map.json')
+    raw['book'].append(finding(
+        'rn_ambiguous', detail='旧代码留下、当前映射重算不出的 HARD',
+        evidence=['幽灵结论']).model_dump(by_alias=True))
+    (box.dir / 'stage7' / 'name_map.json').unlink()
+    inv = paths.invalid_of('stage7/name_map.json')
+    box.write(inv, raw)
+
+    promoted, _rep = rename.run_revalidate(_ctx(box))
+    assert promoted is True
+    live = NameMap.model_validate(box.read('stage7/name_map.json'))
+    assert not [f for f in live.book if f.rule == 'rn_ambiguous']
+
+
+def test_apply_edit_can_patch_the_first_invalid_map_without_full_characters(box):
+    """首次生成被拦时只有 `.INVALID`；patch-only 编辑仍必须有真实出路。"""
+    from novel import paths
+
+    raw = box.read('stage7/name_map.json')
+    (box.dir / 'stage7' / 'name_map.json').unlink()
+    box.write(paths.invalid_of('stage7/name_map.json'), raw)
+    cid = raw['characters'][0]['char_id']
+    box.write('stage7/name_map_edit.json', {
+        'character_patches': [{
+            'char_id': cid,
+            'reason': '人工确认：只改说明，不重抄整张人物表',
+        }],
+    })
+
+    art, rep = rename.run_apply_edit(_ctx(box), '')
+    assert rep.passed is True
+    assert (box.dir / 'stage7' / 'name_map.json').exists()
+    assert next(c for c in art.characters if c.char_id == cid).reason.startswith('人工确认')
+
+
 def test_a_clean_map_lands_and_the_gate_stays_open(box):
     """同一条路，干净的那一份**照常落盘**——闸门不许把合法产出也拦住。"""
     clean = _model_out_from_disk(box, break_it=False)
@@ -498,5 +557,16 @@ def test_a_clean_map_lands_and_the_gate_stays_open(box):
     assert art.book_txt is None and art.approved is None
     assert (box.dir / 'stage7' / 'name_map.json').exists()
     assert art.provenance.model == 'fake'
+    assert art.identity is not None and art.identity.roundtrip_ok
 
 
+def test_an_unused_surname_mapping_is_blocked_instead_of_polluting_the_probe(box):
+    """`surname_map` 不能独立于角色决定存在；实测 `太→宋` 曾让 14 个普通词假报警。"""
+    from novel.errors import GateBlocked
+
+    clean = _model_out_from_disk(box, break_it=False)
+    clean['surname_map']['太'] = '宋'
+    (box.dir / 'stage7' / 'name_map.json').unlink()
+    ctx = RunContext.open(str(box.root), box.sid, 'stage7.rename', paid=True)
+    with pytest.raises(GateBlocked, match='rn_surname_split'):
+        rename.run_rename(ctx, _fake_client(ctx, clean))

@@ -12,12 +12,50 @@ test_stage7_subs.py —— 替换器与残留探针。**不吃语料，纯函数
 """
 from __future__ import annotations
 
+import shutil
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from novel.errors import TerminalState
+from novel.stages.stage7 import checks, rename
 from novel.stages.stage7.subs import (
     apply_subs, mask_known, residual_scan, sub_table, surface_hits,
 )
 
 # 「阿禾」⊂「阿禾姊姊」· 「青禾」⊂「孟青禾」——嵌套是本层全部风险的来源。
 CH1 = '阿禾姊姊回来了。孟青禾站在门口，青禾轻轻应了一声，阿禾没有回头。'
+
+
+def test_generic_appellation_wrapper_may_keep_label_and_replace_embedded_name():
+    """真实 E2E：`女主方衡→女主沈凌` 只改真名，不是把「女主」关系改掉。"""
+    subs = {'女主方衡': '女主沈凌', '方衡': '沈凌'}
+    assert not checks._generic_appellation_was_touched(
+        '女主方衡', '女主沈凌', subs, {'方'})
+    assert checks._generic_appellation_was_touched(
+        '姐姐', '妹妹', {'姐姐': '妹妹'}, set())
+    assert checks._generic_appellation_was_touched(
+        '女主方衡', '女主沈凌', {'女主方衡': '女主沈凌'}, {'方'}), \
+        '没有内嵌真名映射作证时仍要保守拦截'
+
+
+def test_custom_edit_path_is_resolved_inside_the_novel_directory():
+    """`--apply-edit` 的自定义路径不能靠 `store.path('')` 取得根目录。
+
+    路径安全层明确拒绝空相对路径；那种写法会让每一次自定义编辑都在读文件前结构性失败。
+    """
+    root = Path(tempfile.mkdtemp())
+    try:
+        novel_dir = root / '书名_123'
+        edit = novel_dir / 'stage7' / 'name_map_edit.json'
+        store = SimpleNamespace(ctx=SimpleNamespace(novel_dir=novel_dir))
+        assert rename._edit_rel(store, str(edit)) == 'stage7/name_map_edit.json'
+        with pytest.raises(TerminalState, match='产物目录之外'):
+            rename._edit_rel(store, str(root / 'outside.json'))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 # ── ① 最长优先与恒等屏蔽 ───────────────────────────────────────────────────

@@ -14,7 +14,7 @@ run.py —— 一次跑的上下文。**它存在的头号理由是杀掉进程�
 那条假匹配边**在结构上不存在**，键保持两级即可（作用域已经由实例边界给出）。
 
 ⚠⚠ **`R-11.3` 这条规则仍然留着，只是它的理由换了**（`Q-8`：退役的理由必须带标注，
-否则读的人会以为那个坑还在）。改写后的三条见 `docs/REQUIREMENTS.md` 的 `R-11.3`。
+否则读的人会以为那个坑还在）。改写后的三条见 `docs/BACKEND_CONTRACT.md` 的 `R-11.3`。
 
 【它不做什么】不读盘、不写盘——那是 `novel/store.py`（`ArtifactStore(ctx)`）。
 本模块只持有「这一次跑是谁、算不算钱、读过什么、记了什么账」。
@@ -208,7 +208,8 @@ class RunContext:
     def rewrite_provenance(self, prev: P, *, by: str) -> P:
         """**第三个口，也是最窄的一个**：一条 0 成本路径只改了这份产物的一部分。
 
-        `--remeasure` / `--recheck` / `--migrate` 改完之后那一份是**混版的**：
+        `--remeasure` / `--recheck` / `--migrate`，以及只改一部分决策集的
+        `--apply-edit`，改完之后那一份是**混版的**：
         LLM 写的那些字段出自当初那次付费产出，被改的那部分是**现在**从盘上重算的。
         ⇒ 继承 `prompts` / `model` 一个字不动，换掉 `inputs`（本次真读到的），
         标一个 `partial_rewrite` 让混版这件事看得见（`_common.md` §5.1b）。

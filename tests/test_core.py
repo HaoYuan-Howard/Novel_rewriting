@@ -251,6 +251,12 @@ def test_num_unit_keys_survives_a_number_at_the_very_end():
     assert num_unit_keys('打了二十板') == {(20, '板'): '二十板'}
 
 
+def test_num_unit_keys_does_not_cut_success_into_a_fraction_unit():
+    """「成」只有 0~10 才可能是成数；不能把「一百成功」截成「一百成」。"""
+    assert num_unit_keys('好感度一百成功') == {}
+    assert num_unit_keys('胜算八成') == {(8, '成'): '八成'}
+
+
 # ── 发明检测 ──────────────────────────────────────────────────────────────
 
 _CHARS = {
@@ -300,8 +306,8 @@ def test_strip_distinguisher_has_one_home():
     assert strip_distinguisher('孟青禾') == '孟青禾'
 
 
-def test_attested_surname_三道过滤各拦一类():
-    """⭐ 三道过滤里**只有第三道**拦得住「书童」——它有据、长度也够。"""
+def test_attested_surname_四道过滤各拦一类():
+    """⭐ 四道过滤里**只有多主那道**拦得住「书童」——它有据、长度也够。"""
     ow = surface_owners(_REG)
     assert sorted(ow['书童']) == ['char_004', 'char_005']
     got = {cid: attested_surname(v, _BOOK, ow) for cid, v in _REG.items()}
@@ -313,6 +319,18 @@ def test_attested_surname_三道过滤各拦一类():
     assert got['char_006'] is None, '「胖」是外貌修饰不是姓'
     # ⚠ 不在原文里的 canonical 一律判掉（过滤①）
     assert attested_surname({'canonical': '孟青禾'}, '', ow) is None
+
+
+def test_common_titles_that_share_a_first_character_do_not_become_a_family():
+    """实测回归：`太后` + `太傅` 不是姓太的一家人，不能下发 `太→新姓`。"""
+    reg = {
+        'char_001': {'canonical': '太后', 'name_distinctiveness': 'common', 'address': []},
+        'char_002': {'canonical': '太傅', 'name_distinctiveness': 'common', 'address': []},
+    }
+    groups, sur, acct = family_groups(reg, '太后召见太傅。', surface_owners(reg))
+    assert groups == {}
+    assert sur == {'char_001': None, 'char_002': None}
+    assert acct == {'families': 0, 'singleton_surnames': []}
 
 
 def test_family_groups_needs_two_people_and_that_catches_the_fake_surnames():
@@ -405,7 +423,7 @@ def test_hook_approach_notes_cover_exactly_the_approaches():
 
 def test_terminal_punct_has_one_home():
     """截断判定与删减守卫共用这一份——两处各抄一套就会漂。"""
-    assert '。' in TERMINAL_PUNCT and '」' in TERMINAL_PUNCT and '.' in TERMINAL_PUNCT
+    assert all(x in TERMINAL_PUNCT for x in ('。', '」', '】', '.'))
     assert '，' not in TERMINAL_PUNCT
 
 

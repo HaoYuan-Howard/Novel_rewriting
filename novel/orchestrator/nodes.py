@@ -4,6 +4,7 @@
 nodes.py —— 把 `(节点, 书, flags)` 变成一条命令，并回答关于它的两个问题。
 
 【五个纯函数，没有一个碰盘、碰网、碰进程】
+    validate_run(node, flags)  这条跑法是否属于该节点    手敲 CLI 与编排器共用
     is_paid(node, flags)       这一次会不会花钱          `R-11.7`：贵贱只有一处算
     would_write(node, flags)   这一次会不会往盘上写      本期新补，原型没有这个概念
     step_label(node, flags, …) 这一步叫什么              `R-11.8`：界面与作业记录共用它
@@ -70,7 +71,8 @@ def flag_tokens(flags: Iterable[str]) -> tuple[str, ...]:
     return tuple(out)
 
 
-def _validate(node: str, flags: Sequence[str], mode: str | None) -> tuple[str, ...]:
+def validate_run(node: str, flags: Sequence[str] = (),
+                 mode: str | None = None) -> tuple[str, ...]:
     """节点认不认识这条跑法。**认不出就当场拒**，不猜。
 
     ⚠ 它开在 `build_argv` 里而不是 CLI 的 argparse 里，是因为
@@ -239,7 +241,7 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
     ⚠ argv 里的 `-X utf8 -u` 与 `child_env()` 是**两道**，不是一道：
     前者管「人在终端直接粘这条命令」，后者管「服务把它跑成子进程」。
     """
-    tokens = _validate(node, flags, mode)
+    tokens = validate_run(node, flags, mode)
     if sid is None:
         if node != 'stage0.remove' or '--source' not in tokens:
             raise UnsupportedRunMode(

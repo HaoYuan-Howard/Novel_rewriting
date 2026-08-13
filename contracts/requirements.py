@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-requirements.py —— 把 `docs/REQUIREMENTS.md` 读成数据。
+requirements.py —— 把冻结的 `docs/BACKEND_CONTRACT.md` 读成数据。
 
 【为什么要解析 markdown 而不是另存一份结构化清单】那就是第二个落点。
 需求文档是人写人读的那一份，也必须是**唯一**的那一份；一旦另存一份 YAML，
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 DOC_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        'docs', 'REQUIREMENTS.md')
+                        'docs', 'BACKEND_CONTRACT.md')
 
 # 【定义】与【引用】必须分得开，否则一句「见 `B-20`」会被当成 B-20 的定义。
 # 判据是**行首形态**：定义一律在表格行首或标题行首，引用一律在行内（多半带反引号）。
