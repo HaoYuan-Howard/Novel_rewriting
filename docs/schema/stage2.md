@@ -71,8 +71,8 @@ stage2.blueprint  stage2/chapter_blueprints.json   一次调用产一章 → R-3
 > | 代码写的 | 由谁 | 模型写的对应物 |
 > |---|---|---|
 > | `beats[].beat_id` | 归一为 `b<章>_<序>`（模型自拟一律覆盖） | —（模型也写，但被无条件覆盖） |
-> | `beats[].hinges[].text` | 按锚点从原文切 | `starts_with` / `ends_with` |
-> | `beats[].span.{starts_with,ends_with}` | 回取成原文字节 | 同名字段（模型的版本被覆盖） |
+> | `beats[].hinges[].source` | 按 locator 从原文切出精确 `text/start/end/normalized/recovery` | `starts_with` / `ends_with`（仅响应边界） |
+> | `beats[].span` | 按 locator 回取成同形精确 source span | `starts_with` / `ends_with`（仅响应边界） |
 > | `beats[].present_char_ids[]` | 从 `present_names` 解析 | `present_names[]` |
 > | `narration[].{narrator,focalizer}_char_id` | 同上 | `{narrator,focalizer}_name` |
 > | `characters{}.address[].{surface,by,from_chapter}` · `canonical` | 回取 / 回解 / 抬首现章 / 剥区分词 | 同名字段 |
@@ -293,7 +293,7 @@ stage2.blueprint  stage2/chapter_blueprints.json   一次调用产一章 → R-3
 | 字段 | 类型 | 必填 | 取值面 / 范围（251 拍） | 证据 |
 |---|---|---|---|---|
 | `beat_id` | `str` | 是 | **`b<章:02d>_<序:02d>`**，章内连续。**代码无条件归一**，模型自拟一律覆盖（`R-3.1`）。**[HARD] 全书唯一 + 格式 + 连续** | **三源** |
-| `span` | `obj` | 是 | `{starts_with, ends_with}`，见 §2.3。**[HARD] 按序定位**（`R-3.2`） | **三源** |
+| `span` | `SourceSpan｜null` | 是（键恒在） | 正式成功态为精确 `text/start/end/normalized/recovery`；`null` 只表示已记账的 INVALID。见 §2.3。**[HARD] 与原文一致且按序**（`R-3.2`） | **三源** |
 | `time_layer` | `str` | 是 | **闭合**：`present` ｜ `recall` ｜ `hearsay`。**[HARD] 取值** · **[HARD] 全书 `present` 不得为 0**（枚举合法 ≠ 分布合理）<br>盘上 `present` 239 (95%) · `recall` 7 · `hearsay` 5 | **三源** |
 | `place` | `str｜null` | 是（键恒在） | 长度 1~11，**盘上 40/251 为 `null`**。[INFO] 只做转场计数<br>⚠ **自由文本、粒度不稳**（街上/街边、公寓/公寓卫生间门口）：作为**下发内容**合格，作为**相等判断的键**不合格 | **三源** |
 | `present_names` | `str[]` | 是（可为空数组） | 长度 0~7，共 515 项；**21/251 拍为空**。**模型写的决策**：这一拍在场的人，各用原文里称呼他的那个字面。**[HARD] 有据**——全书原文都找不到 = 自造（`R-3.7`）<br>⚠ **盘上仍有 15 项是代词**（`我`），见下 | **三源** |
@@ -332,10 +332,21 @@ stage2.blueprint  stage2/chapter_blueprints.json   一次调用产一章 → R-3
 
 ### 2.3 `beats[].span`
 
-| 字段 | 类型 | 必填 | 取值面 / 范围（251 条 = 502 个锚点） | 证据 |
-|---|---|---|---|---|
-| `starts_with` | `str` | 是 | 长度 2~43 | **三源** |
-| `ends_with` | `str` | 是 | 长度 1~25 | **三源** |
+正式制品中的 `span` 是一条 `SourceSpan`；`starts_with/ends_with` 只存在于 LLM 响应
+和旧制品迁移入口，落盘前必须被确定性代码替换。
+
+| 字段 | 类型 | 必填 | 不变量 |
+|---|---|---|---|
+| `text` | `str` | 是 | 严格等于 `main_text[chapter][start:end]` |
+| `start` / `end` | `int` | 是 | 原文字符半开区间，`0 ≤ start < end ≤ len(chapter)`；beat 按序不回退 |
+| `normalized` | `str` | 是 | 严格等于 `content_only(text)` |
+| `recovery` | `str` | 是 | `exact` ｜ `normalized` ｜ `lcs`；说明 locator 如何被回取 |
+
+上述四项在晋升正式蓝图前联合验证；任一不一致进入 INVALID，`span=null` 并记录
+`_provenance.verbatim_failures`。Stage 4 的字数量纲与 freshness 投影直接消费这条精确引用，
+不再二次搜索自由锚点。
+
+旧契约的生成期 locator 仍要求照抄 8~30 字，并保留以下历史结论供迁移审计：
 
 **契约要的是「原样照抄 8~30 字」，而这是【生成期指导】不是产物不变量**——
 落盘前的回取会把两头改长度。盘上 **66/502 个锚点内容字符 < 6**（最短 1），
@@ -347,7 +358,9 @@ stage2.blueprint  stage2/chapter_blueprints.json   一次调用产一章 → R-3
 > ⇒ prompt 里必须有那条逃生口：「锚点本来就短时，照抄它有多少字，不要补字凑长度」
 > （`hinges` 那一段一直有，`span` 这一段是补上的）。
 
-**[HARD] 按序定位**（`R-3.2`）：第 n 条的 `starts_with` 必须出现在第 n−1 条的 `ends_with` 之后。
+**[HARD] 精确且按序**（`R-3.2`）：正式产物逐条验证 `text == chapter[start:end]`、
+`normalized == content_only(text)`，且第 n 条的 `start` 不得小于第 n−1 条的 `end`。
+模型响应和旧制品在迁移边界仍要求第 n 条 `starts_with` 出现在上一条 locator 所确定区间之后。
 **两条之间允许有空隙**（过渡句、环境交代），**但两头不许留**——
 **[HARD] 章首章尾必须被第一/最后一拍覆盖**（`R-3.8`）。
 盘上三本合计覆盖率 97~98%，未覆盖区间全在章的中段。
@@ -356,24 +369,26 @@ stage2.blueprint  stage2/chapter_blueprints.json   一次调用产一章 → R-3
 
 282 条。**闭卷写作唯一的保真通道**，所以它的字节必须是原文的字节。
 
-| 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
-|---|---|---|---|---|
-| `kind` | `str` | 是 | **闭合 4 值**：`硬数字` ｜ `要害台词` ｜ `物件` ｜ `因果前提`。**[HARD]**（`R-3.6`）<br>盘上 `要害台词` 167 · `硬数字` 61 · `物件` 30 · `因果前提` 24 | **三源** |
-| `starts_with` | `str` | 是 | 长度 2~24。**模型写的决策**：这段材料在原文的哪一段 | **三源** |
-| `ends_with` | `str` | 是 | 长度 1~24 | **三源** |
-| `text` | `str` | **否 —— 见下** | 长度 2~81。**代码按锚点从原文切出来的，模型不写它** | **盘·码** |
+| 字段 | 类型 | 必填 | 取值面 / 不变量 |
+|---|---|---|---|
+| `kind` | `str` | 是 | **闭合 4 值**：`硬数字` ｜ `要害台词` ｜ `物件` ｜ `因果前提`。**[HARD]**（`R-3.6`） |
+| `source` | `SourceSpan｜null` | 是 | 成功态必须同时满足 offset/text/normalized 一致，且区间完整落在所属 beat.span 内 |
 
-> #### ⚠⚠ `text` 缺失 = **失败态标记**，不是一个合法的可选字段
+模型响应仍给 `starts_with/ends_with` locator；代码在所属 beat 内允许两端重合，
+回取 `source` 后清除 locator。切片末尾只接句末标点，不接冒号、开引号或孤立闭引号；
+E2E 中的 `冰冷链子：「` 因而会正式落成 `冰冷链子`，不再把半截标点交给写手。
+
+> #### ⚠⚠ `source=null` = **失败态标记**，不是一个合法的成功分支
 >
-> 契约把它写成「必须在本 beat 的 span 原文内（锚点化后这是结构上必然成立的）」——
-> 那句话只在**成功路径**上成立。锚不到时的设计是**原样留着、不猜不删**（判据 7：
-> 删了这一次会响亮报错，下一次跑就没得报了），于是产物里留下一条**没有 `text` 的 hinge**。
+> 成功路径要求精确 source 完整落在所属 beat.span 内。locator 锚不到时不猜位置、
+> 不伪造原文字节，正式 INVALID 形状保留 `kind` 并显式写 `source:null`；
+> `_provenance.verbatim_failures` 同时记录 beat、位置和根因。
 >
-> **盘上实测 281/282**：三岁 `b07_05` 的「要害台词」锚不到。
-> 它是这份产物**唯一**能看出「这次跑是失败态」的痕迹——`_provenance` 里没有记 failures。
+> 旧盘实测 281/282 成功：三岁 `b07_05` 的「要害台词」锚不到。当时只能靠 `text` 缺席
+> 反推失败；迁移后这条会变成 `source:null` 并进入 failures 正面记账。
 >
-> ⇒ schema 上 `text` 必须记成**可选**，同时把「缺失」定义成**显式终态标记**而不是缺省值。
-> **两件事都要写**：只写「可选」会被读成「有时候没有很正常」；只写「必填」则盘上这份产物不合法。
+> `source` 这个键本身必填；只有值允许为 `null`。因此“旧数据太老没这个键”与
+> “这一趟验证失败、明确写了 null”不会同形。
 >
 > ⚠ **两个配套事实**：
 > ① 锚不到有**三种根因、修法各不相同**——锚点不在本章原文（重生成）/ 本 beat 的 `span`
@@ -383,9 +398,8 @@ stage2.blueprint  stage2/chapter_blueprints.json   一次调用产一章 → R-3
 > 「显式终态」在多命令流水线里只等于「这一步红了」，**不等于「链路被挡住了」**。
 >
 > ⚠ **verbatim 回取的 failures 从前没有进 `_provenance`**：「这份产物是不是失败态」
-> 只能靠遍历全部 hinge 去反推——**靠一个字段的【缺席】去表达失败态**。
-> ⇒ F5-0 已给它立 `_provenance.verbatim_failures`（§3.2），失败态从此有正面的落点；
-> `text` 仍按判据 7 原样留着（不猜不删），两者互不替代。
+> 只能靠遍历全部 hinge 去反推。现在 `source:null` 与 failures 同时存在：前者是局部失败态，
+> 后者是可汇总、可定向重生成的审计账，两者互不替代。
 
 **两个锚点允许重叠、甚至完全重合**：128 条实测里 **75 条（59%）** 的内容字符比两个锚点加起来还短——
 「硬数字」「物件」天生就是短的（`丝绢`、`二十两银子`）。
@@ -487,7 +501,7 @@ stage2.blueprint  stage2/chapter_blueprints.json   一次调用产一章 → R-3
 |---|---|---|---|---|
 | `scope_violations` | `str[]` | 是 | 某一批没按「本次任务范围」产出。**[HARD] 非空即失败**；**键不在 = 「不知道」，不发绿灯**。<br>**产地无条件写这个键**（没越界写空列表），否则「键不在 = 没越界」会给所有旧产物发绿灯 | **三源** |
 | `batches` | `int[][]` | 是 | 新产物恒 `[[1],[2],…]`；**旧产物记的是别的值**。校验器靠它区分「逐章」「分了 N 批」「不知道」三种产物 | **三源** |
-| `context` | `obj` | 是 | `{batch_size, context_upto}`。新产物恒 `{1, true}`。**必须常驻打印**——不打印它，读的人会把「这次没报跨章引用」当成模型学乖了，而其实只是没抽到 | **三源** |
+| `context` | `obj` | 是 | 新产物为 `bounded-fidelity-v2`：`architecture` / `batch_size=1` / `stable_prefix` / `current_chapter_full=true` / `future_visible=false` / `past_neighbor_chars_max` / `continuity_chars_max`。**必须常驻打印**。旧 `{batch_size,context_upto}` 迁移后诚实标成 `cumulative-past-v1`，不伪造 v2 指纹或窗口 | **契·码** |
 | `char_refs` | `obj` | 是 | 8 个计数：`resolved` / `pronoun_ok` / `ambiguous` / `late` / `unknown` / `invented` / `no_names` / `pronoun`。**解析是可重跑的确定性步骤**，不记这几个数，「这份产物解析时有几条没解出来」在下一次重算之后就永远失去答案 | **三源** |
 | `partial_regen_chapters` | `int[]` | **否** | 定向重生成过哪几章（累积）。盘上 2/3 本有 | **盘·码** |
 | `repairs` | `obj[]` | **否** | 定向重生成的历史，每条 12 个子字段（`chapter_ordinal` / `failure_items[]` / `failure_evidence` / `user_prompt` / `output` / `model` / `cache_policy` / `fields[]` / `before_metrics{beats,hinges,present_names}` / `after_metrics{…}`）。盘上 2/3 本、共 3 条 | **盘·码** |
@@ -698,9 +712,9 @@ owner 分布：`stage2` **56** · `None` **19**（＝非结论，17 metric + 2 u
 | **五、拍与区间** | | | | |
 | `beat_id_unique` | **HARD** | 全书 `beat_id` 不重复 | 0/3（93 / 67 / 91 个） | — |
 | `beat_id_format` | **HARD** | `b<章:02d>_<序:02d>` 且章内序连续、章号与所属章一致 | 0/3 | — |
-| `span_unlocatable` | **HARD** | 每条 `span` 的首尾锚点都能在原文里**按序**定位（定位不到＝这条没有量纲） | 0/3（251/251 全中） | `blueprint --chapters` |
-| `anchor_ambiguous` | **HARD** | 锚点在**定位器还要搜的那段**里只匹配到一处 | 0/3（**251/251**，见下） | `blueprint --chapters` |
-| `anchor_not_verbatim` | INFO | 锚点是原文字节。**期望恒为 0**（落盘前已回取）⇒ 改断言 `_provenance.verbatim_recovered` | 0/3 | `blueprint --migrate`（0 成本） |
+| `span_unlocatable` | **HARD** | 正式 `span` 的 offset/text/normalized 与原文一致且按序；旧 locator 迁移时仍需可定位（失败＝没有量纲） | 0/3（251/251 全中） | `blueprint --chapters` |
+| `anchor_ambiguous` | **HARD** | 只适用于响应/旧制品 locator；正式 offset 已消除搜索歧义 | 0/3（**251/251**，历史样本） | `blueprint --chapters` |
+| `anchor_not_verbatim` | INFO | `_provenance.verbatim_recovered` 记录 locator 不是原文字节、靠 LCS 救回的情况 | 0/3 | `blueprint --migrate`（0 成本） |
 | `verbatim_failed` | **HARD** ✚ | `_provenance.verbatim_failures` 非空即失败态。**原型没有这条**——它那边只有一次 `sys.exit`，账不落盘 | 0/3（键还不存在 ⇒ 今天落 `unver`） | `blueprint --chapters` |
 | `edge_hole` | **HARD** | ≥30 字的未覆盖原文不得落在**第一拍之前或最后一拍之后** | 0/3（未覆盖区间全在中段） | `blueprint --chapters` |
 | `beats_collapsed` | **HARD** | ≥300 字的章不得只有 ≤1 拍（锚用**契约自己的反例**，不跨书比） | 0/3 | `blueprint --chapters` |
@@ -709,9 +723,9 @@ owner 分布：`stage2` **56** · `None` **19**（＝非结论，17 metric + 2 u
 | `hinge_cross_chapter` | **HARD** | hinge 引的不是**别的章**的原文（逐字无误但归错了章） | 0/3 | `blueprint --chapters` |
 | `hinge_in_hole` | **HARD** | 锚点在本章原文里，却落在任何 span 都没覆盖到的空档——**漏抓的下游后果** | **1/3** ⭐ 三岁 `b07_05` | `blueprint --chapters` |
 | `hinge_anchor_void` | **HARD** | 锚点在本章原文里**根本找不到**（是转述或编的） | 0/3 | `blueprint --chapters` |
-| `hinge_drift` | **HARD** | `text` 在本 beat 的 span 原文内（转抄漂移：位置对、字节错） | 0/3（113 / 66 / 103 条全中） | `blueprint --chapters` |
+| `hinge_drift` | **HARD** | `source` 的 offset/text/normalized 一致且完整落在本 beat.span 内 | 0/3（113 / 66 / 103 条全中） | `blueprint --chapters` |
 | `hinge_cascade` | INFO | 锚不到是因为**本 beat 的 span 自己就没定位成功**——不是独立故障，别重复计数 | 0/3 | — |
-| `hinge_unanchored` | **HARD** | 每条 hinge 都带 `starts_with`/`ends_with`（`text` 是代码取的，不是模型默写的） | 0/3（282/282 全带锚点） | — |
+| `hinge_unanchored` | **HARD** | 正式 hinge 必须带 `source` 键；旧数据至少要有完整 locator 才能迁移。`source:null` 另由 failures/void 报，不重复计数 | 0/3（282/282 全带锚点） | — |
 | `chapter_no_hinge` | **HARD** | 整章一条 hinge 都没有＝这一章的原文材料一条都没往下游走 | 0/3 | `blueprint --chapters` |
 | **七、在场与叙述** | | | | |
 | `time_layer_no_present` | **HARD** | 全书不得 0 条 `present`——**枚举合法 ≠ 分布合理**（实测某本 0/70） | 0/3（present 95% / 100% / 92%） | `blueprint --chapters` |
@@ -738,10 +752,10 @@ owner 分布：`stage2` **56** · `None` **19**（＝非结论，17 metric + 2 u
 | `present_names_late` | metric | 称呼要到本章之后才出现 → 已拦下。**这是收益不是违约** | 0 / 0 / 0 | — |
 | `present_broad` | metric | 宽筛：`event` 点名了某角色而本拍未列它。⚠ 精度约 1/4，**分子分母不同量纲**（拍×角色 vs 拍） | 45 / 74 / 69 处 | — |
 | `batch_density` | metric | 按**一次调用**分组的抽取量。逐章产物上说明「批与章是同一个东西」 | 14 / 8 / 9 次调用 | — |
-| `context_scope` | metric | 这一趟抽某章时后面的章在不在 prompt 里。**必须常驻打印** | 3/3 恒 `{1, true}` | — |
+| `context_scope` | metric | 常驻打印架构版本、稳定前缀指纹、当前章完整性、未来可见性与两个过去窗口上限 | 新产物 `bounded-fidelity-v2` | — |
 | `span_coverage` | metric | 定位成功条数 / 覆盖率 / 每条字数分位 | 98% / 98% / 97% | — |
 | `span_coverage_per_chapter` | metric | **逐章**覆盖率——全书一个数看不出哪一章塌了 | 最低 ch5 95% · ch4 96% · **ch7 90%** | — |
-| `anchor_short` | metric | 内容字符 <6 的锚点计数。契约的「8~30 字」是**生成期指导**，此处不判违约 | 23/186 · 13/134 · 30/182（合 **66/502**） | — |
+| `anchor_short` | metric | 仅统计迁移/响应 locator；正式 offset 制品不再需要该指标 | 历史样本合 **66/502** | — |
 | `uncovered_holes` | metric | 未覆盖原文区间（位置 × 长度两维切分，**分到哪一类交人工**） | 2% / 2% / 3% | — |
 | `hinge_density` | metric | 全书 hinges / 千字原文。⚠ **按字数归一不按拍数**——拍数是自由变量 | 9.3 / 6.2 / 7.8 条每千字 | — |
 
@@ -835,16 +849,17 @@ fix: tuple[str, ...] | None = None      # ('stage2.blueprint', '--migrate')
 > ⇒ **本仓改成无条件产出**（同 F4-6 对 `name_surface_survey` 的处置）：
 > `role_leaks_fate` 报绿灯或报红灯，都要在同一份报告里说清这道防线只挡转抄式。
 >
-> #### ⚠ `anchor_ambiguous` 的分母是 **251 不是 502**（F5-5 实跑更正）
+> #### ⚠ `anchor_ambiguous` 只适用于响应/旧制品 locator（历史分母 251，不是 502）
 >
-> 本表原来这一格写着 `502/502`——那是**锚点总数**（251 拍 × 两端），
+> 历史表原来这一格写着 `502/502`——那是**锚点总数**（251 拍 × 两端），
 > 而这条判据**只查 `starts_with`**：`ends_with` 由定位器在同一拍的 `starts_with`
 > 之后找，它落在哪儿不改变「这一拍对应原文哪一段」的起点。原型的实现就是这样，
 > **而它打印的那句 `[OK] N 个锚点…` 用的是全量 `anchors`** ⇒ 那盏绿灯把自己的分母
 > 报大了一倍（判据 31：绿灯必须报出自己**真实的**分母）。
-> ⇒ 本仓 `scanned` 写的是「**定位成功的 starts_with 锚点**」，实跑 93+67+91 = **251**。
-> ⚠ 另一头没有掉：`anchor_short` 那条度量照旧数**两端**（66/502），
-> 因为它量的是「锚点有多短」，两端都算数。**同一批对象、两个分母，各自说清自己在数什么。**
+> ⇒ 旧制品路径的 `scanned` 写「**定位成功的 starts_with locator**」，历史实跑 93+67+91 = **251**；
+> 正式精确 offset 不再搜索，因而不会进入歧义度量。
+> `anchor_short` 同样只保留为旧 locator 的迁移观测，历史口径仍数两端（66/502）；
+> 新正式制品该度量的样本量为 0。
 >
 > #### ⚠ `world_rule_names_person`：这道闸门在三本上**什么也没拦住**
 >

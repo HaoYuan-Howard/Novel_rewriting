@@ -32,6 +32,12 @@ from novel.core.spans import locate_spans
 _PARA_SPLIT = re.compile(r'\n\s*\n')
 
 
+def _hinge_text(hinge: dict[str, Any]) -> str:
+    source = hinge.get('source')
+    return str(source.get('text') if isinstance(source, dict)
+               else hinge.get('text') or '')
+
+
 def beat_index(blueprints: dict[str, Any],
                main_text: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """`beat_id` → 写作侧要的原文材料，**按引用取值**。
@@ -56,8 +62,8 @@ def beat_index(blueprints: dict[str, Any],
                 # 【写手要写的内容本身也走引用】不再由规划器转述一遍，见 `context._resolve_beats`
                 'event': be.get('event'),
                 'source_chars': size.get(be.get('beat_id')),
-                'hinges': [{'kind': h.get('kind'), 'text': h.get('text')}
-                           for h in (be.get('hinges') or []) if (h.get('text') or '').strip()],
+                'hinges': [{'kind': h.get('kind'), 'text': _hinge_text(h)}
+                           for h in (be.get('hinges') or []) if _hinge_text(h).strip()],
                 'time_layer': be.get('time_layer'),
                 'place': be.get('place'),
                 'present_char_ids': be.get('present_char_ids') or [],
@@ -182,9 +188,9 @@ def verbatim_pieces(hinges: list[dict[str, Any]]) -> tuple[dict[str, list[str]],
         kind = h.get('kind')
         g = HINGE_GROUPS.get(kind)
         if g is None:
-            unknown.append((kind, (h.get('text') or '')[:20]))
+            unknown.append((kind, _hinge_text(h)[:20]))
             continue
-        for piece in _PARA_SPLIT.split(h.get('text') or ''):
+        for piece in _PARA_SPLIT.split(_hinge_text(h)):
             piece = piece.strip()
             if piece:
                 out.setdefault(g, []).append(piece)

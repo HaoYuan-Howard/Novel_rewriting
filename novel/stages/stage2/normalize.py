@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from contracts.invariants import BARE_PRONOUNS
@@ -14,7 +15,10 @@ from novel.core.naming import (
     classify_unattested, resolve_present_names, strip_distinguisher,
     surface_owner_since, surface_owners,
 )
-from novel.core.spans import content_index, content_only, extend_punct, lcs, walk_spans
+from novel.core.spans import (
+    content_index, content_only, exact_span, extend_punct, extend_terminal_punct, lcs,
+    walk_spans,
+)
 from novel.core.text import norm
 
 
@@ -263,22 +267,32 @@ def resolve_character_refs(blueprints: list[dict[str, Any]],
             for key, value in stats.items()}
 
 
-def _resolve_hinge(span_text: str, starts_with: str, ends_with: str) \
-        -> tuple[str | None, int]:
+def _resolve_hinge(span_text: str, starts_with: str, ends_with: str) -> tuple[int, int] | None:
     content, cmap = content_index(span_text)
     start_anchor, end_anchor = content_only(starts_with), content_only(ends_with)
     if not start_anchor or not end_anchor or not cmap:
-        return None, 0
+        return None
     start = content.find(start_anchor)
     if start < 0:
-        return None, 0
+        return None
     end_start = content.find(end_anchor, start)  # 允许重合，短数字/物件依赖这个语义。
     if end_start < 0:
-        return None, 0
+        return None
     end = max(start + len(start_anchor), end_start + len(end_anchor))
-    raw_end = extend_punct(span_text, cmap[end - 1] + 1)
-    hits = max(content.count(start_anchor), content.count(end_anchor))
-    return span_text[cmap[start]:raw_end], hits
+    raw_start = cmap[start]
+    raw_end = extend_terminal_punct(span_text, cmap[end - 1] + 1)
+    return raw_start, raw_end
+
+
+def _source(text: str, start: int, end: int, recovery: str) -> dict[str, Any]:
+    raw = text[start:end]
+    return {
+        'text': raw,
+        'start': start,
+        'end': end,
+        'normalized': content_only(raw),
+        'recovery': recovery,
+    }
 
 
 def normalize_verbatim(blueprints: list[dict[str, Any]],
@@ -294,14 +308,23 @@ def normalize_verbatim(blueprints: list[dict[str, Any]],
         if problem or hit is None:
             failures.append((beat_id, 'span',
                              f'本 beat 的 span 自己没定位成功：{problem or "未知原因"}'))
+            beat['span'] = None
             for hinge in (beat.get('hinges') or []):
-                hinge['text'] = None
+                kind = hinge.get('kind')
+                hinge.clear()
+                hinge.update({'kind': kind, 'source': None})
             continue
         a0, a1, b0, b1 = hit
         text = text_of.get(int(ordinal), '')
         span = beat.get('span') or {}
+        if 'start' in span:
+            located.setdefault(int(ordinal), []).append((beat, a0, b1))
+            continue
+        locator = dict(span)
+        used_normalization = False
+        used_lcs = False
         for field, start, end in (('starts_with', a0, a1), ('ends_with', b0, b1)):
-            raw = str(span.get(field) or '').strip()
+            raw = str(locator.get(field) or '').strip()
             if text.startswith(raw, start):
                 span[field] = raw
                 continue
@@ -310,11 +333,16 @@ def normalize_verbatim(blueprints: list[dict[str, Any]],
             position = f'span.{field}'
             if old_content == new_content:
                 rewrites.append((beat_id, position, raw, fixed))
+                used_normalization = True
             else:
                 overlap = (lcs(old_content, new_content)[1] / len(old_content)
                            if old_content else 0.0)
                 recovered.append((beat_id, position, raw, fixed, round(min(overlap, 1.0), 4)))
+                used_lcs = True
             span[field] = fixed
+        recovery = 'lcs' if used_lcs else (
+            'normalized' if used_normalization else 'exact')
+        beat['span'] = _source(text, a0, b1, recovery)
         located.setdefault(int(ordinal), []).append((beat, a0, b1))
 
     for ordinal, items in located.items():
@@ -325,38 +353,74 @@ def normalize_verbatim(blueprints: list[dict[str, Any]],
         for beat, start, end in items:
             beat_id = str(beat.get('beat_id') or '')
             for hinge in (beat.get('hinges') or []):
+                if 'source' in hinge:
+                    source = hinge.get('source')
+                    h_start, h_end, problem = exact_span(source, chapter_text)
+                    if problem or h_start < start or h_end > end:
+                        kind = hinge.get('kind')
+                        hinge.clear()
+                        hinge.update({'kind': kind, 'source': None})
+                        fresh[beat_id].append(hinge)
+                        failures.append((
+                            beat_id, 'hinge',
+                            problem or 'source span is outside its beat span',
+                        ))
+                    else:
+                        fresh[beat_id].append(hinge)
+                    continue
                 anchor_a = str(hinge.get('starts_with') or '')
                 anchor_z = str(hinge.get('ends_with') or '')
-                fixed, _hits = _resolve_hinge(chapter_text[start:end], anchor_a, anchor_z)
+                fixed = _resolve_hinge(chapter_text[start:end], anchor_a, anchor_z)
                 owner = beat_id
 
                 if fixed is None:
-                    candidates: list[tuple[str, str]] = []
+                    candidates: list[tuple[str, tuple[int, int]]] = []
                     for other_id, (_other, other_start, other_end) in by_id.items():
                         if other_id == beat_id:
                             continue
-                        candidate, _ = _resolve_hinge(
+                        candidate = _resolve_hinge(
                             chapter_text[other_start:other_end], anchor_a, anchor_z)
                         if candidate is not None:
-                            candidates.append((other_id, candidate))
+                            candidates.append((
+                                other_id,
+                                (other_start + candidate[0], other_start + candidate[1]),
+                            ))
                     if len(candidates) == 1:
                         owner, fixed = candidates[0]
                         rewrites.append((beat_id, 'hinge.owner', beat_id, owner))
 
                 if fixed is None:
-                    chapter_hit, _ = _resolve_hinge(chapter_text, anchor_a, anchor_z)
+                    chapter_hit = _resolve_hinge(chapter_text, anchor_a, anchor_z)
                     if chapter_hit is None:
                         cause = '锚点不在本章原文'
                     elif len(candidates) > 1:
                         cause = '锚点在多个 beat 的 span 内命中，归属不唯一'
                     else:
                         cause = '锚点落在未被任何 beat 覆盖的空档'
-                    hinge['text'] = None
+                    kind = hinge.get('kind')
+                    hinge.clear()
+                    hinge.update({'kind': kind, 'source': None})
                     fresh[beat_id].append(hinge)
                     failures.append((beat_id, 'hinge', cause))
                     continue
 
-                hinge['text'] = fixed
+                if owner == beat_id:
+                    h_start, h_end = start + fixed[0], start + fixed[1]
+                else:
+                    h_start, h_end = fixed
+                kind = hinge.get('kind')
+                raw_source = chapter_text[h_start:h_end]
+                method = (
+                    'exact'
+                    if raw_source.startswith(anchor_a.strip())
+                    and anchor_z.strip() in raw_source
+                    else 'normalized'
+                )
+                hinge.clear()
+                hinge.update({
+                    'kind': kind,
+                    'source': _source(chapter_text, h_start, h_end, method),
+                })
                 fresh[owner].append(hinge)
 
         for beat, _start, _end in items:
@@ -366,6 +430,58 @@ def normalize_verbatim(blueprints: list[dict[str, Any]],
         'verbatim_rewrites': rewrites,
         'verbatim_recovered': recovered,
         'verbatim_failures': failures,
+    }
+
+
+def response_shape(blueprint: dict[str, Any]) -> dict[str, Any]:
+    """正式蓝图转回不含代码派生字段的模型响应形状，供定向重生成使用。"""
+    out = copy.deepcopy(blueprint)
+    out['beats'] = []
+    for beat in (blueprint.get('beats') or []):
+        copied = dict(beat)
+        span = beat.get('span') or {}
+        if 'starts_with' not in span:
+            raw = str(span.get('text') or '')
+            copied['span'] = {
+                'starts_with': raw[:30] or 'missing',
+                'ends_with': raw[-30:] or 'missing',
+            }
+        copied.pop('present_char_ids', None)
+        copied['hinges'] = []
+        for hinge in (beat.get('hinges') or []):
+            h = dict(hinge)
+            source = hinge.get('source') or {}
+            if 'starts_with' not in h:
+                raw = str(source.get('text') or '')
+                h = {
+                    'kind': h.get('kind'),
+                    'starts_with': raw[:30] or 'missing',
+                    'ends_with': raw[-30:] or 'missing',
+                }
+            else:
+                h.pop('text', None)
+                h.pop('source', None)
+            copied['hinges'].append(h)
+        out['beats'].append(copied)
+    for narration in (out.get('narration') or []):
+        narration.pop('narrator_char_id', None)
+        narration.pop('focalizer_char_id', None)
+    return out
+
+
+def migrate_blueprint_context(context: Any) -> dict[str, Any]:
+    """旧 context_upto 账诚实升级为 v1；v2 账原样保留。"""
+    value = dict(context) if isinstance(context, dict) else {}
+    if 'architecture' in value:
+        return value
+    return {
+        'architecture': 'cumulative-past-v1',
+        'batch_size': int(value.get('batch_size') or 1),
+        'stable_prefix': None,
+        'current_chapter_full': True,
+        'future_visible': not bool(value.get('context_upto', True)),
+        'past_neighbor_chars_max': None,
+        'continuity_chars_max': None,
     }
 
 

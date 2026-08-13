@@ -150,6 +150,35 @@ def extend_punct(text: str, end: int) -> int:
     return end
 
 
+_TERMINAL_SUFFIX = frozenset('\u3002\uff01\uff1f?!\u2026.')
+
+
+def extend_terminal_punct(text: str, end: int) -> int:
+    """只接住句末闭合标点，不把冒号、开引号等下一段语义吞进材料。"""
+    while end < len(text) and text[end] in _TERMINAL_SUFFIX:
+        end += 1
+    return end
+
+
+def exact_span(source: Any, text: str, after: int = 0) -> tuple[int, int, str | None]:
+    """验证正式 source span 的偏移、原文字节、规范化值和恢复方式。"""
+    if not isinstance(source, dict):
+        return 0, 0, 'missing exact source span'
+    start, end = source.get('start'), source.get('end')
+    if type(start) is not int or type(end) is not int:
+        return 0, 0, 'source span offsets are not integers'
+    if start < after or end <= start or end > len(text):
+        return 0, 0, f'invalid source span [{start}:{end}] after {after}'
+    raw = text[start:end]
+    if source.get('text') != raw:
+        return 0, 0, 'source span text does not match offsets'
+    if source.get('normalized') != content_only(raw):
+        return 0, 0, 'source span normalized text does not match'
+    if source.get('recovery') not in ('exact', 'normalized', 'lcs'):
+        return 0, 0, 'source span recovery is invalid'
+    return start, end, None
+
+
 def walk_spans(bps: list[dict[str, Any]],
                text_of: dict[Any, str],
                *, recover: bool = False) -> Iterator[tuple[Any, dict, tuple[int, int, int, int] | None, str | None]]:
@@ -177,8 +206,18 @@ def walk_spans(bps: list[dict[str, Any]],
         text = text_of.get(o, '')
         content, cmap = content_index(text)
         cur = 0                                # cur 是【内容空间】的游标
+        raw_cur = 0
         for be in (x.get('beats') or []):
             sp = be.get('span') or {}
+            if any(key in sp for key in ('start', 'end', 'text', 'normalized')):
+                start, end, problem = exact_span(sp, text, raw_cur)
+                if problem:
+                    bid = be.get('beat_id')
+                    yield o, be, None, f'{bid}: {problem}'
+                else:
+                    yield o, be, (start, start, end, end), None
+                    raw_cur = end
+                continue
             raw_a = (sp.get('starts_with') or '').strip()
             raw_b = (sp.get('ends_with') or '').strip()
             bid = be.get('beat_id')

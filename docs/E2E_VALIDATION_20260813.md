@@ -154,3 +154,27 @@
 - 真实请求提供 30 秒在途心跳，Stage 2 并发蓝图与 Stage 5 串行写作提供逐章完成进度；
 - 本批只增加运行时 metadata、服务日志与 provenance 重算能力，**没有修改 Stage 2 schema、
   Stage 2 响应形状或盘上制品契约**。材料锚点与上下文架构仍留在第 2 批单独设计。
+
+## 9. 第 2 批实施记录（2026-08-13）
+
+本报告 §6 建议的第 2 批已按“保真优先”边界实现：
+
+- Stage 2 模型响应仍用 `starts_with/ends_with` 选择位置，但正式制品统一改为
+  `SourceSpan{text,start,end,normalized,recovery}`；beat 与 hinge 晋升前都验证字符半开区间、
+  原文字节、规范化文本和所属关系，失败以 `span/source=null` 加
+  `_provenance.verbatim_failures` 进入 INVALID，不猜位置；
+- hinge 回取只接句末标点，不再吞入冒号、开引号或孤立闭引号；报告中的
+  `冰冷链子：「` 反例已加入回归，正式材料为 `冰冷链子`；Stage 5 的
+  `material_malformed` 继续作为旧制品和人工稿的兼容防线；
+- Stage 4 的字数量纲、写作材料与 consumed projection 已切到精确 source，
+  因而材料或 offset 改变会正确触发 freshness，纯 provenance 改变不会过度失效；
+- `--migrate` 能读取旧 locator、旧 `{batch_size,context_upto}`、扁平 inputs 及缺失的
+  verbatim 账，零 LLM 回取精确 source、重算人物引用、归档旧制品，并把旧上下文诚实标为
+  `cumulative-past-v1`；不会伪造 v2 前缀指纹或窗口；
+- 新 blueprint prompt 使用稳定全书索引前缀、当前章全文、最多 4000 字相邻过去原文和
+  最多 1600 字更早连续性尾摘；未来章正文不可见，内部 `source_id` 不进入 prompt。
+  `_provenance.context` 常驻记录架构版本、稳定前缀指纹、当前章完整性、未来可见性及两个上限；
+- 新增回归覆盖精确 offset/text 校验、正式 source 的 Stage 4 消费、freshness、
+  长上下文窗口边界、旧制品迁移/归档与三本盘上制品的内存迁移。完整套件结果为
+  **1747 passed、2 skipped、1 条既有 Starlette/httpx 弃用警告**。此批未重新发起付费 E2E；
+  真实模型效果与 token/latency 对比留待固定三本样本的下一次实验。

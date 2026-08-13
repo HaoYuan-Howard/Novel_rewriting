@@ -27,7 +27,7 @@ stage2.py —— 对应 `docs/schema/stage2.md`。抽取。**全链第一个调 
 """
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, StringConstraints, model_validator
 
@@ -399,7 +399,7 @@ class RoleSplitResponse(StrictModel):
 # 二、`chapter_blueprints.json`
 # ─────────────────────────────────────────────────────────────────────────────
 
-class BeatSpan(StrictModel):
+class LegacyBeatSpan(StrictModel):
     """一拍在原文里的两个锚点。
 
     **契约要的是「原样照抄 8~30 字」，而那是【生成期指导】不是产物不变量**——
@@ -419,7 +419,7 @@ class BeatSpan(StrictModel):
     ends_with: str = Field(min_length=1)
 
 
-class Hinge(StrictModel):
+class LegacyHinge(StrictModel):
     """一条保真点。**闭卷写作唯一的保真通道**，所以它的字节必须是原文的字节。
 
     盘上 282 条：`要害台词` 167 · `硬数字` 61 · `物件` 30 · `因果前提` 24。
@@ -457,7 +457,7 @@ class Hinge(StrictModel):
     text: str | None = None
 
 
-class Beat(StrictModel):
+class LegacyBeat(StrictModel):
     """一拍 = **一件独立发生的事**。盘上 251 条。
 
     ⚠ 比它大的那一层（连续区间 + 恒定 place + 恒定在场集）叫**场景**，
@@ -472,7 +472,7 @@ class Beat(StrictModel):
     #: `ends_with` 之后。**两条之间允许有空隙**（过渡句、环境交代），**但两头不许留**——
     #: **[HARD] 章首章尾必须被第一/最后一拍覆盖**（`R-3.8`）。
     #: 盘上三本合计覆盖率 97~98%，未覆盖区间全在章的中段。
-    span: BeatSpan
+    span: LegacyBeatSpan
 
     #: **[HARD] 取值** · **[HARD] 全书 `present` 不得为 0**（枚举合法 ≠ 分布合理）。
     #: 盘上 `present` 239 (95%) · `recall` 7 · `hearsay` 5。
@@ -511,6 +511,50 @@ class Beat(StrictModel):
 
     #: 长度 0~7，共 282 条；**63/251 拍为空（25%）**。
     #: **[HARD] 整章一条都没有 = FAIL**（单拍为空正常）。
+    hinges: list[LegacyHinge]
+
+
+class SourceSpan(StrictModel):
+    """正式制品里的原文引用；模型 locator 只存在于响应和迁移边界。"""
+
+    text: str = Field(min_length=1)
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+    normalized: str = Field(min_length=1)
+    recovery: Literal['exact', 'normalized', 'lcs']
+
+    @model_validator(mode='after')
+    def _end_is_after_start(self) -> SourceSpan:
+        if self.end <= self.start:
+            raise ValueError('source span end must be greater than start')
+        return self
+
+
+class MigratableChapterBlueprints(StrictModel):
+    """兼容旧锚点制品的宽松迁移入口，不能用于正式写盘。"""
+
+    source_id: str | None = None
+    blueprints: list[dict[str, Any]] = Field(min_length=1)
+    provenance: dict[str, Any] = Field(alias='_provenance')
+
+
+class Hinge(StrictModel):
+    """一条保真材料；source 为空只表示需要重生成的 INVALID 状态。"""
+
+    kind: Literal[HINGE_KINDS]
+    source: SourceSpan | None
+
+
+class Beat(StrictModel):
+    """一拍及其经过原文一致性验证的精确覆盖区间。"""
+
+    beat_id: str = Field(pattern=r'^b\d{2}_\d{2}$')
+    span: SourceSpan | None
+    time_layer: Literal[TIME_LAYERS]
+    place: str | None
+    present_names: list[str]
+    present_char_ids: list[str]
+    event: str = Field(min_length=1)
     hinges: list[Hinge]
 
 
@@ -574,9 +618,14 @@ class Blueprint(StrictModel):
     narration: list[Narration] = Field(min_length=1)
 
 
-class HingeResponse(StrictModel):
-    """模型只选锚点；text 必须由代码从原文切出。"""
+class AnchorLocatorResponse(StrictModel):
+    """模型只选首尾 locator；正式 source span 由代码回取并验证。"""
 
+    starts_with: str = Field(min_length=1)
+    ends_with: str = Field(min_length=1)
+
+
+class HingeResponse(StrictModel):
     kind: Literal[HINGE_KINDS]
     starts_with: str = Field(min_length=1)
     ends_with: str = Field(min_length=1)
@@ -586,7 +635,7 @@ class BeatResponse(StrictModel):
     """模型的拍；beat_id 会归一，char_id 不允许模型猜。"""
 
     beat_id: str = Field(min_length=1)
-    span: BeatSpan
+    span: AnchorLocatorResponse
     time_layer: Literal[TIME_LAYERS]
     place: str | None
     present_names: list[str]
@@ -614,7 +663,7 @@ class ChapterBlueprintsResponse(StrictModel):
     blueprints: list[BlueprintResponse] = Field(min_length=1)
 
 
-class BlueprintContext(StrictModel):
+class LegacyBlueprintContext(StrictModel):
     """这一趟是怎么分批、吃到哪儿的。新产物恒 `{1, true}`。
 
     **必须常驻打印**——不打印它，读的人会把「这次没报跨章引用」当成模型学乖了，
@@ -623,6 +672,39 @@ class BlueprintContext(StrictModel):
 
     batch_size: int = Field(ge=1)
     context_upto: bool
+
+
+class BlueprintContext(StrictModel):
+    """蓝图调用的模型可见边界；v2 明确记录前缀身份与两个历史窗口上限。"""
+
+    architecture: Literal['cumulative-past-v1', 'bounded-fidelity-v2']
+    batch_size: int = Field(ge=1)
+    stable_prefix: Fp10 | None
+    current_chapter_full: bool
+    future_visible: bool
+    past_neighbor_chars_max: int | None
+    continuity_chars_max: int | None
+
+    @model_validator(mode='after')
+    def _architecture_fields_agree(self) -> BlueprintContext:
+        if not self.current_chapter_full:
+            raise ValueError('current chapter must remain complete')
+        if self.future_visible:
+            raise ValueError('future chapters must remain hidden')
+        if self.architecture == 'bounded-fidelity-v2':
+            if self.stable_prefix is None:
+                raise ValueError('v2 requires a stable prefix fingerprint')
+            if self.past_neighbor_chars_max is None:
+                raise ValueError('v2 requires a past-neighbor limit')
+            if self.continuity_chars_max is None:
+                raise ValueError('v2 requires a continuity limit')
+            if self.past_neighbor_chars_max < 0 or self.continuity_chars_max < 0:
+                raise ValueError('v2 context limits must be non-negative')
+        elif any(value is not None for value in (
+                self.stable_prefix, self.past_neighbor_chars_max,
+                self.continuity_chars_max)):
+            raise ValueError('v1 cannot claim v2 context metadata')
+        return self
 
 
 class CharRefs(StrictModel):
@@ -745,7 +827,7 @@ class BlueprintProvenance(LlmProvenance):
 
 class ChapterBlueprints(StrictModel):
     """`stage2/chapter_blueprints.json` —— 顶层 2 个键。
-    **一次调用产一章，只吃到该章为止的正文，没有旋钮。**
+    **一次调用产一章：当前章全文、未来章不可见，历史正文只走有界窗口。**
 
     结构化调用点声明的必需顶层键 = `blueprints`。
 

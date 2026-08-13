@@ -22,6 +22,7 @@ from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.run import RunContext
 from novel.stages.stage2 import extract
+from novel.stages.stage2.normalize import normalize_verbatim, response_shape
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
 
@@ -158,6 +159,19 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert [bp.chapter_ordinal for bp in stored.blueprints] == [1, 2, 3]
         assert stored.provenance.usage is not None
         assert stored.provenance.usage.calls_made == 3
+        context = stored.provenance.context
+        assert context.architecture == 'bounded-fidelity-v2'
+        assert context.current_chapter_full is True
+        assert context.future_visible is False
+        assert context.stable_prefix
+        for blueprint in stored.blueprints:
+            for beat in blueprint.beats:
+                assert beat.span is not None
+                chapter = main_text()[blueprint.chapter_ordinal - 1]['text']
+                assert chapter[beat.span.start:beat.span.end] == beat.span.text
+                for hinge in beat.hinges:
+                    assert hinge.source is not None
+                    assert chapter[hinge.source.start:hinge.source.end] == hinge.source.text
         assert not ArtifactStore(blueprint_ctx).exists(extract._INVALID)
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -282,6 +296,116 @@ def test_stage2_blueprint_migrate_rebuilds_code_derived_character_refs():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_hinge_source_does_not_absorb_colon_or_unmatched_quote():
+    chapter = '他摸到冰冷链子：「别动！」'
+    blueprint = [{
+        'chapter_ordinal': 1,
+        'beats': [{
+            'beat_id': 'b01_01',
+            'span': {'starts_with': '他摸到', 'ends_with': '别动'},
+            'hinges': [{
+                'kind': '物件', 'starts_with': '冰冷链子', 'ends_with': '冰冷链子',
+            }],
+        }],
+    }]
+    accounting = normalize_verbatim(blueprint, {1: chapter})
+    source = blueprint[0]['beats'][0]['hinges'][0]['source']
+    assert accounting['verbatim_failures'] == []
+    assert source['text'] == '冰冷链子'
+    assert chapter[source['start']:source['end']] == source['text']
+
+
+def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
+    sections = []
+    for ordinal in range(1, 7):
+        text = (f'BEGIN-{ordinal}|' + chr(64 + ordinal) * 4_800
+                + f'|TAIL-{ordinal}')
+        sections.append({
+            'section_id': f'sec_{ordinal:04d}',
+            'chapter_ordinal': ordinal,
+            'source_chapter_label': str(ordinal),
+            'text': text,
+        })
+
+    user = extract.build_blueprint_user('边界测试', 'private-id', sections, (5,))
+    prefix = extract._blueprint_stable_prefix('边界测试', sections)
+
+    assert user.startswith(prefix)
+    assert sections[4]['text'] in user
+    assert sections[5]['text'] not in user
+    assert 'private-id' not in user
+    assert 'BEGIN-4' not in user and 'TAIL-4' in user
+    assert 'BEGIN-3' not in user and 'TAIL-3' in user
+    neighbor, continuity = extract._bounded_past(sections, 5)
+    assert len(neighbor.split('\n', 1)[1]) == extract.PAST_NEIGHBOR_CHARS_MAX
+    assert len(continuity) <= extract.CONTINUITY_CHARS_MAX
+    many_short = [
+        {'chapter_ordinal': ordinal, 'text': '短'}
+        for ordinal in range(1, 221)
+    ]
+    _neighbor, short_continuity = extract._bounded_past(many_short, 220)
+    assert len(short_continuity) <= extract.CONTINUITY_CHARS_MAX
+    context = extract.blueprint_context('边界测试', sections)
+    assert context['stable_prefix'] == extract.prov.fingerprint(prefix)
+    assert context['future_visible'] is False
+
+
+def test_stage2_blueprint_migrates_legacy_locators_without_llm():
+    root = Path(tempfile.mkdtemp())
+    book = root / '旧蓝图迁移测试_460'
+    book.mkdir()
+    try:
+        global_ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(global_ctx).write(
+            extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        global_client, _ = _client(
+            global_ctx, lambda _req, _index: _ok(_response_global()))
+        extract.run_global(global_ctx, global_client)
+
+        by_ordinal = _response_blueprints()
+
+        def respond(req: ChatRequest, _index: int) -> ChatResponse:
+            ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+            return _ok({'blueprints': [by_ordinal[ordinal]]})
+
+        blueprint_ctx = _ctx(book, 'stage2.blueprint')
+        blueprint_client, transport = _client(blueprint_ctx, respond)
+        assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
+        path = book / extract.BLUEPRINT_REL
+        raw = json.loads(path.read_text(encoding='utf-8'))
+        raw['source_id'] = 'legacy-private-id'
+        raw['blueprints'] = [response_shape(bp) for bp in raw['blueprints']]
+        raw['_provenance']['context'] = {'batch_size': 1, 'context_upto': True}
+        raw['_provenance'].pop('verbatim_rewrites')
+        raw['_provenance'].pop('verbatim_recovered')
+        raw['_provenance'].pop('verbatim_failures')
+        raw['_provenance']['inputs'] = {
+            key: edge['file'] for key, edge in raw['_provenance']['inputs'].items()}
+        path.write_text(
+            json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
+            encoding='utf-8', newline='\n')
+        calls_before = len(transport.calls)
+
+        report = extract.run_migrate(_ctx(book, 'stage2.blueprint', paid=False))
+
+        assert report.passed
+        assert len(transport.calls) == calls_before
+        stored = ArtifactStore(blueprint_ctx).read(
+            ChapterBlueprints, extract.BLUEPRINT_REL)
+        assert stored.provenance.context.architecture == 'cumulative-past-v1'
+        assert stored.provenance.partial_rewrite == '--migrate'
+        assert all(beat.span is not None for bp in stored.blueprints for beat in bp.beats)
+        assert all(
+            hinge.source is not None
+            for bp in stored.blueprints for beat in bp.beats for hinge in beat.hinges)
+        archived = list((book / 'stage2' / '_rounds').glob('chapter_blueprints.r*.json'))
+        assert len(archived) == 1
+        archived_raw = json.loads(archived[0].read_text(encoding='utf-8'))
+        assert 'starts_with' in archived_raw['blueprints'][0]['beats'][0]['span']
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
     root = Path(tempfile.mkdtemp())
     book = root / '定向重生成测试_459'
@@ -310,11 +434,9 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
             ChapterBlueprints, extract.BLUEPRINT_REL)
         broken = copy.deepcopy(raw)
         hinge = broken['blueprints'][0]['beats'][0]['hinges'][0]
-        hinge['starts_with'] = '并不存在的原文锚点'
-        hinge['ends_with'] = '并不存在的原文锚点'
-        hinge['text'] = None
+        hinge['source'] = None
         broken['_provenance']['verbatim_failures'] = [
-            ['b01_01', 'hinge', '锚点不在本章原文']]
+            ['b01_01', 'hinge', 'source span 与原文不一致']]
         store.write_invalid(
             extract.BLUEPRINT_REL,
             ChapterBlueprints.model_validate(broken),

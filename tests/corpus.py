@@ -202,6 +202,13 @@ CUT: dict[str, frozenset[str]] = {
     }),
     'stage2/chapter_blueprints.json': frozenset({
         'source_id',
+        # 第 2 批把自由 locator 收到迁移/响应边界；正式制品只留精确 source span。
+        'blueprints.*.beats.*.span.starts_with',
+        'blueprints.*.beats.*.span.ends_with',
+        'blueprints.*.beats.*.hinges.*.starts_with',
+        'blueprints.*.beats.*.hinges.*.ends_with',
+        'blueprints.*.beats.*.hinges.*.text',
+        '_provenance.context.context_upto',
         # ⚠ 它**有一个读者**——把内部数字 id 原样插进规划节点的 **prompt 载荷**，
         #   而那正是删它的理由。**移植时要连投影一起改**：只删字段不删投影，
         #   那处会安静地发一个 `None` 过去。
@@ -384,6 +391,14 @@ ADDED: dict[str, dict[str, Any]] = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 RESHAPED: dict[str, str] = {
+    'stage2 material locator → exact source span': (
+        '盘上蓝图用 starts_with/ends_with 定位，hinge 另存一份 text。第 2 批迁移按 '
+        'stage1 原文回取为 text/start/end/normalized/recovery；正式契约不再接收自由 locator。'
+    ),
+    'stage2 context cumulative-v1 → bounded-fidelity-v2 contract': (
+        '旧 provenance 只有 batch_size/context_upto；内存迁移诚实标为 cumulative-past-v1。'
+        '新产物另记稳定前缀指纹、当前章完整性、未来可见性与两个过去窗口上限。'
+    ),
     '_provenance.inputs': (
         '盘上 **297 条边全部是扁平的 10 位字符串**；新契约一条边是 `{file, consumed}`。'
         '`Q-4` 明写「指纹是**文件级**的：改一个不相干的字段会让整份产物的指纹失配，'
@@ -508,6 +523,24 @@ def _migrate_inputs(data: Any) -> None:
         prov_block['inputs'] = prov.normalize_inputs(edges)
 
 
+def _migrate_stage2_blueprints(data: Any, artifact: Artifact) -> None:
+    """用同一份运行时代码，把旧 locator 制品在内存中升级为精确 source span。"""
+    if not isinstance(data, dict):
+        return
+    book = artifact.path.parents[1]
+    with (book / 'stage1' / 'main_text.json').open(encoding='utf-8') as fh:
+        main_text = json.load(fh)
+    with (book / 'stage2' / 'global_grounding.json').open(encoding='utf-8') as fh:
+        global_grounding = json.load(fh)
+
+    from novel.stages.stage2.normalize import migrate_blueprint_context, normalize_blueprints
+
+    characters = ((global_grounding.get('entities') or {}).get('characters') or {})
+    normalize_blueprints(data, main_text, characters)
+    provenance = data.get('_provenance') or {}
+    provenance['context'] = migrate_blueprint_context(provenance.get('context'))
+
+
 def _migrate_findings(data: Any, paths: tuple[str, ...]) -> None:
     """把 5 字段的旧 finding 补成 13 字段。见 `RESHAPED` 与 `_FINDING_FILL`。"""
     for path in paths:
@@ -532,9 +565,8 @@ def _set_path(data: Any, path: str, value: Any) -> None:
 def load_cut(a: Artifact, *, apply_cuts: bool = True, fill_added: bool = True) -> Any:
     """**盘上那一份 → 新契约形态**，纯函数，不落任何盘。
 
-    顺序是有讲究的：先 `pop` 再改形状再补键——
-    反过来会把刚补上的键又裁掉，而那种 bug 在断言上表现为「少了一个必填键」，
-    指向的是**另一个根因**。
+    顺序是有讲究的：需要旧字段的形状迁移先跑，再 `pop`，最后补新增键。
+    Stage 2 的精确 source 必须在 locator 被裁掉前从原文回取；全程只改内存对象。
 
     **两个开关让三张表各自有一个、且只有一个断言点**（`test_corpus_fixtures.py`）：
 
@@ -551,6 +583,8 @@ def load_cut(a: Artifact, *, apply_cuts: bool = True, fill_added: bool = True) -
     """
     data = load_raw(a)
     if apply_cuts:
+        if a.pattern == 'stage2/chapter_blueprints.json':
+            _migrate_stage2_blueprints(data, a)
         _pop_cuts(data, CUT[a.pattern])
     _migrate_inputs(data)
     if a.pattern == 'stage7/name_map.json' and isinstance(data.get('book_txt'), dict):

@@ -52,7 +52,8 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     BlueprintProvenance, ChapterBlueprints, ChapterBlueprintsResponse,
-    GlobalGrounding, GlobalGroundingResponse, GlobalProvenance, RoleSplitResponse,
+    GlobalGrounding, GlobalGroundingResponse, GlobalProvenance,
+    MigratableChapterBlueprints, RoleSplitResponse,
 )
 from novel import paths, prov
 from novel.errors import GateBlocked, RunModeNotImplemented, TerminalState, UpstreamMissing
@@ -64,7 +65,8 @@ from novel.report.findings import Outcome
 from novel.run import RunContext
 from novel.stages.stage2 import checks
 from novel.stages.stage2.normalize import (
-    normalize_blueprints, normalize_global, resolve_character_refs,
+    migrate_blueprint_context, normalize_blueprints, normalize_global,
+    resolve_character_refs, response_shape,
 )
 from novel.store import ArtifactStore
 
@@ -79,6 +81,8 @@ _GLOBAL_INVALID = paths.invalid_of(GLOBAL_REL)
 GLOBAL_MAX_TOKENS = 96_000
 BLUEPRINT_MAX_TOKENS = 256_000
 ROLE_MAX_TOKENS = 32_000
+PAST_NEIGHBOR_CHARS_MAX = 4_000
+CONTINUITY_CHARS_MAX = 1_600
 
 
 class _ScopeViolationRow(StrictModel):
@@ -317,8 +321,8 @@ def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[st
 
     ⚠ 它与付费路**共用同一个构造入口**（`R-11.8`）——否则「预览里看到的」与
     「真发出去的」是两件事，而那种分家没有任何东西会报错。
-    ⚠ 本层的 `user` 里带着**全书原文**（逐章那一相带到本章为止），
-    所以它 0 成本但不便宜：打印出来是几万字。
+    ⚠ global 的 `user` 带全书原文；blueprint 只带稳定索引、当前章全文与有界过去窗口。
+    预览与付费路共用同一个构造入口，因此这里看到的边界就是真实模型可见边界。
     """
     _ordinal, system, user = build_prompts(ctx, chapters=chapters)[0]
     return system, user
@@ -340,6 +344,55 @@ def _book_text(main_text: list[dict[str, Any]], upto: int | None = None) -> str:
     return '\n\n'.join(f'【第{s.get("chapter_ordinal")}章】\n{s.get("text") or ""}'
                        for s in main_text
                        if upto is None or (s.get('chapter_ordinal') or 0) <= upto)
+
+
+def _blueprint_stable_prefix(title: str, main_text: list[dict[str, Any]]) -> str:
+    return '\n\n'.join([
+        f'《{title}》',
+        '── 章节索引（一切对章的引用用阅读序章号）──\n' + _chapter_index(main_text),
+        '── 上下文边界 ──\n当前章正文完整提供；只提供过去窗口，未来章正文不可见。',
+    ])
+
+
+def _bounded_past(main_text: list[dict[str, Any]], ordinal: int) -> tuple[str, str]:
+    """返回相邻章原文尾窗与更早章节的滚动连续性尾摘；两者都只看过去。"""
+    prior = [s for s in main_text if int(s.get('chapter_ordinal') or 0) < ordinal]
+    neighbor = prior[-1:]
+    older = prior[:-1]
+    neighbor_text = '\n\n'.join(
+        '【第{}章末邻接窗口】\n{}'.format(
+            s.get('chapter_ordinal'),
+            str(s.get('text') or '')[-PAST_NEIGHBOR_CHARS_MAX:])
+        for s in neighbor)
+    remaining = CONTINUITY_CHARS_MAX
+    rows: list[str] = []
+    for section in reversed(older):
+        separator_chars = 1 if rows else 0
+        label = '第{}章末：'.format(section.get('chapter_ordinal'))
+        available = remaining - separator_chars - len(label)
+        if available <= 0:
+            break
+        text = str(section.get('text') or '')
+        take = min(240, available, len(text))
+        if take <= 0:
+            continue
+        row = label + text[-take:]
+        rows.append(row)
+        remaining -= separator_chars + len(row)
+    return neighbor_text, '\n'.join(reversed(rows))
+
+
+def blueprint_context(title: str, main_text: list[dict[str, Any]]) -> dict[str, Any]:
+    """可落盘、可比较的 v2 上下文策略身份。"""
+    return {
+        'architecture': 'bounded-fidelity-v2',
+        'batch_size': 1,
+        'stable_prefix': prov.fingerprint(_blueprint_stable_prefix(title, main_text)),
+        'current_chapter_full': True,
+        'future_visible': False,
+        'past_neighbor_chars_max': PAST_NEIGHBOR_CHARS_MAX,
+        'continuity_chars_max': CONTINUITY_CHARS_MAX,
+    }
 
 
 def build_global_user(title: str, sid: str, main_text: list[dict[str, Any]]) -> str:
@@ -364,11 +417,18 @@ def build_blueprint_user(title: str, sid: str, main_text: list[dict[str, Any]],
     是同一个根因的两条腿。
     """
     scope = '、'.join(f'阅读序第{o}章' for o in targets)
+    ordinal = max(targets)
+    current = next(
+        str(section.get('text') or '') for section in main_text
+        if int(section.get('chapter_ordinal') or 0) == ordinal)
+    neighbor, continuity = _bounded_past(main_text, ordinal)
     parts = [
-        f'《{title}》(source_id={sid})',
-        '── 章节索引 ──\n' + _chapter_index(main_text),
-        '── 正文（不可变原文，按阅读序章号分块）──\n'
-        + _book_text(main_text, upto=max(targets) if targets else None),
+        _blueprint_stable_prefix(title, main_text),
+        ('── 滚动连续性状态（仅过去、摘要窗口）──\n' + continuity)
+        if continuity else '── 滚动连续性状态 ──\n无（当前为早期章节）',
+        ('── 相邻原文窗口（仅过去）──\n' + neighbor)
+        if neighbor else '── 相邻原文窗口 ──\n无（当前为第一章）',
+        f'── 当前章全文（不可裁剪）──\n【第{ordinal}章】\n{current}',
         '── 本次任务范围 ──\n只产出以下章的 blueprint'
         '（按此顺序，范围外的章一律不要产出）：\n' + scope,
     ]
@@ -721,15 +781,7 @@ def _blueprint_metrics(blueprint: dict[str, Any]) -> dict[str, int]:
 
 def _repair_baseline(blueprint: dict[str, Any]) -> dict[str, Any]:
     """最终产物 → 模型响应形状；代码派生字段不反喂给模型。"""
-    out = copy.deepcopy(blueprint)
-    for beat in (out.get('beats') or []):
-        beat.pop('present_char_ids', None)
-        for hinge in (beat.get('hinges') or []):
-            hinge.pop('text', None)
-    for narration in (out.get('narration') or []):
-        narration.pop('narrator_char_id', None)
-        narration.pop('focalizer_char_id', None)
-    return out
+    return response_shape(blueprint)
 
 
 def _mentions_chapter(value: str, ordinal: int) -> bool:
@@ -817,6 +869,12 @@ def _run_blueprint_repair(
         raise TerminalState(
             '定向重生成的 BLUEPRINT_SYS 与基线产物不同，而现有 provenance '
             '没有表达“部分章节使用另一版 system”的槽位；尚未调用 LLM')
+
+    expected_context = blueprint_context(ctx.title, main_text)
+    if previous.provenance.context.model_dump() != expected_context:
+        raise TerminalState(
+            '定向重生成不能把 cumulative-past 与 bounded-fidelity 两种上下文'
+            '混进同一份 provenance；请先整跑 stage2.blueprint。尚未调用 LLM')
 
     old_by = {
         int(blueprint.get('chapter_ordinal') or 0): blueprint
@@ -995,7 +1053,7 @@ def run_blueprint(
         model=client.model,
         scope_violations=scope_violations,
         batches=[[ordinal] for ordinal in ordinals],
-        context={'batch_size': 1, 'context_upto': True},
+        context=blueprint_context(ctx.title, main_text),
         **accounting,
     )
     artifact = ChapterBlueprints.model_validate({
@@ -1078,13 +1136,26 @@ def run_migrate(ctx: RunContext) -> CheckReport:
 
     global_artifact = store.read(GlobalGrounding, GLOBAL_REL)
     global_raw = global_artifact.model_dump(by_alias=True)
-    previous, raw = store.read_own(ChapterBlueprints, source_rel)
+    _legacy, raw = store.read_own(MigratableChapterBlueprints, source_rel)
+    old_provenance = copy.deepcopy(raw.get('_provenance') or {})
+    old_provenance['inputs'] = prov.normalize_inputs(
+        old_provenance.get('inputs')) or {}
+    old_provenance.setdefault('verbatim_rewrites', [])
+    old_provenance.setdefault('verbatim_recovered', [])
+    old_provenance.setdefault('verbatim_failures', [])
+    old_provenance['context'] = migrate_blueprint_context(
+        old_provenance.get('context'))
+    previous_provenance = BlueprintProvenance.model_validate(old_provenance)
     data = copy.deepcopy(raw)
     data.pop('_provenance', None)
+    data.pop('source_id', None)
+    for blueprint in (data.get('blueprints') or []):
+        for narration in (blueprint.get('narration') or []):
+            narration.pop('last_beat_id', None)
     data, accounting = normalize_blueprints(
         data, main_text, global_raw['entities']['characters'])
     rewritten = ctx.rewrite_provenance(
-        previous.provenance, by='--migrate')
+        previous_provenance, by='--migrate')
     provenance = BlueprintProvenance.model_validate({
         **rewritten.model_dump(),
         **accounting,

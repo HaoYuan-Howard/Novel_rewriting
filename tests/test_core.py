@@ -22,7 +22,9 @@ from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
     quote_pair,
 )
-from novel.core.spans import HINGE_LCS_MIN, locate_spans, walk_spans
+from novel.core.spans import (
+    HINGE_LCS_MIN, content_only, exact_span, extend_terminal_punct, locate_spans, walk_spans,
+)
 from novel.core.text import (
     SPLIT_MIN_SIDE, TERMINAL_PUNCT, locate_norm, min_hamming, norm, quote_count,
     split_by_speech_tag, window_overlap,
@@ -506,6 +508,50 @@ def test_both_recover_thresholds_are_and_not_or():
     assert _walk('定然', '的他说', recover=True)[0][2] is None
     # ② 相对门槛拦下的：锚点前半整段是编的，只有尾巴 4 个字对得上 ⇒ 4/12 = 0.33。
     assert _walk('定然', '完全不相干的八个字算多', recover=True)[0][2] is None
+
+
+def test_exact_source_span_checks_offsets_text_normalization_and_order():
+    raw = '甲说：“原样材料。”乙离开。'
+    start = raw.index('原样材料')
+    end = raw.index('”', start) + 1
+    source = {
+        'text': raw[start:end],
+        'start': start,
+        'end': end,
+        'normalized': content_only(raw[start:end]),
+        'recovery': 'exact',
+    }
+    assert exact_span(source, raw) == (start, end, None)
+    assert (exact_span({**source, 'text': '被改过'}, raw)[2]
+            == 'source span text does not match offsets')
+    assert (exact_span({**source, 'normalized': '被改过'}, raw)[2]
+            == 'source span normalized text does not match')
+    assert 'after' in exact_span(source, raw, after=start + 1)[2]
+
+
+def test_terminal_material_suffix_keeps_ascii_period_but_stops_before_quote_boundary():
+    raw = 'material.:「next」'
+    end = extend_terminal_punct(raw, len('material'))
+    assert raw[:end] == 'material.'
+
+
+def test_locate_spans_accepts_verified_exact_sources_without_searching():
+    raw = '第一拍结束。第二拍结束。'
+    split = raw.index('第二拍')
+    spans = []
+    for bid, start, end in (('b01_01', 0, split), ('b01_02', split, len(raw))):
+        text = raw[start:end]
+        spans.append({
+            'beat_id': bid,
+            'span': {
+                'text': text, 'start': start, 'end': end,
+                'normalized': content_only(text), 'recovery': 'exact',
+            },
+        })
+    located, problems, loose = locate_spans(
+        [{'chapter_ordinal': 1, 'beats': spans}], {1: raw})
+    assert located == {1: [('b01_01', 0, split), ('b01_02', split, len(raw))]}
+    assert problems == [] and loose == 0
 
 
 def test_locate_spans_does_not_expose_recover_at_all():

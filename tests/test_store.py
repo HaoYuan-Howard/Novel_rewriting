@@ -13,6 +13,7 @@ test_store.py —— 唯一读写口 + 一次跑的上下文。
 """
 from __future__ import annotations
 
+import copy
 import json
 import tempfile
 from pathlib import Path
@@ -184,6 +185,54 @@ def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
     upstream.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
     changed = st.freshness(STYLE_REL)
     assert (changed.state, changed.reason) == ('stale', 'consumed_changed')
+
+
+def test_stage4_blueprint_projection_tracks_exact_material_and_ignores_provenance():
+    plan_project = projection_for('stage4.plan', 'stage2/chapter_blueprints.json')
+    context_project = projection_for('stage4.context', 'stage2/chapter_blueprints.json')
+    assert plan_project is not None and context_project is not None
+    base = {
+        'blueprints': [{
+            'chapter_ordinal': 1, 'summary': '摘要',
+            'narration': [{
+                'grammatical_person': 'third', 'narrator_char_id': None,
+                'focalizer_char_id': 'char_001', 'pronoun_surfaces': [],
+            }],
+            'beats': [{
+                'beat_id': 'b01_01', 'event': '事件', 'time_layer': 'present',
+                'place': '庭院', 'present_char_ids': ['char_001'],
+                'span': {
+                    'text': '原文区间。', 'start': 0, 'end': 5,
+                    'normalized': '原文区间', 'recovery': 'exact',
+                },
+                'hinges': [{
+                    'kind': '要害台词',
+                    'source': {
+                        'text': '原话。', 'start': 0, 'end': 3,
+                        'normalized': '原话', 'recovery': 'exact',
+                    },
+                }],
+            }],
+        }],
+        '_provenance': {'code': 'old'},
+    }
+    changed_provenance = {**base, '_provenance': {'code': 'new'}}
+    assert plan_project(base) == plan_project(changed_provenance)
+    assert context_project(base) == context_project(changed_provenance)
+    changed = copy.deepcopy(base)
+    changed['blueprints'][0]['beats'][0]['hinges'][0]['source']['text'] = '改过。'
+    assert plan_project(base) != plan_project(changed)
+    assert context_project(base) != context_project(changed)
+
+    changed_summary = copy.deepcopy(base)
+    changed_summary['blueprints'][0]['summary'] = '新摘要'
+    assert plan_project(base) != plan_project(changed_summary)
+    assert context_project(base) == context_project(changed_summary)
+
+    changed_narration = copy.deepcopy(base)
+    changed_narration['blueprints'][0]['narration'][0]['grammatical_person'] = 'first'
+    assert plan_project(base) == plan_project(changed_narration)
+    assert context_project(base) != context_project(changed_narration)
 
 
 def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():

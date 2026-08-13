@@ -64,17 +64,53 @@ def stage3_grounding(data: object) -> object:
 
 # ── stage4.plan / stage4.context ─────────────────────────────────────────────
 
-def stage4_blueprints(data: object) -> object:
-    """计划只消费章号、拍内容、叙述层、地点与 span 锚点。"""
+def _stage2_source(source: object) -> object:
+    if not isinstance(source, dict):
+        return None
+    if 'start' in source:
+        return (source.get('text'), source.get('start'), source.get('end'),
+                source.get('normalized'), source.get('recovery'))
+    return (source.get('starts_with'), source.get('ends_with'))
+
+
+def _stage2_hinge(hinge: object) -> object:
+    if not isinstance(hinge, dict):
+        return None
+    source = hinge.get('source')
+    text = source.get('text') if isinstance(source, dict) else hinge.get('text')
+    return hinge.get('kind'), text
+
+
+def _stage4_beats(blueprint: dict) -> tuple:
+    return tuple(
+        (be.get('beat_id'), be.get('event'), be.get('time_layer'),
+         be.get('place'), tuple(be.get('present_char_ids') or []),
+         _stage2_source(be.get('span')),
+         tuple(_stage2_hinge(h) for h in (be.get('hinges') or [])))
+        for be in (blueprint.get('beats') or []) if isinstance(be, dict)
+    )
+
+
+def stage4_plan_blueprints(data: object) -> object:
+    """规划消费章摘要与拍；叙述人称只在写作上下文组装时消费。"""
+    if not isinstance(data, dict):
+        return None
+    return sorted(
+        (b.get('chapter_ordinal'), b.get('summary'), _stage4_beats(b))
+        for b in (data.get('blueprints') or []) if isinstance(b, dict))
+
+
+def stage4_context_blueprints(data: object) -> object:
+    """写作上下文消费叙述信息与拍；原章摘要明确不下发。"""
     if not isinstance(data, dict):
         return None
     return sorted(
         (b.get('chapter_ordinal'),
-         tuple((be.get('beat_id'), be.get('event'), be.get('time_layer'), be.get('place'),
-                ((be.get('span') or {}).get('starts_with'),
-                 (be.get('span') or {}).get('ends_with')))
-               for be in (b.get('beats') or [])))
-        for b in (data.get('blueprints') or []))
+         tuple((n.get('grammatical_person'), n.get('narrator_char_id'),
+                n.get('focalizer_char_id'), tuple(n.get('pronoun_surfaces') or []))
+               for n in (b.get('narration') or []) if isinstance(n, dict)),
+         _stage4_beats(b))
+        for b in (data.get('blueprints') or []) if isinstance(b, dict))
 
 
 def stage4_main_text(data: object) -> object:
@@ -287,12 +323,12 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     },
     'stage4.plan': {
         'stage1/main_text.json': stage4_main_text,
-        'stage2/chapter_blueprints.json': stage4_blueprints,
+        'stage2/chapter_blueprints.json': stage4_plan_blueprints,
         'stage2/global_grounding.json': stage4_grounding,
     },
     'stage4.context': {
         'stage1/main_text.json': stage4_main_text,
-        'stage2/chapter_blueprints.json': stage4_blueprints,
+        'stage2/chapter_blueprints.json': stage4_context_blueprints,
         'stage2/global_grounding.json': stage4_grounding,
         'stage4/plan_chapters.json': artifact_payload,
     },

@@ -576,7 +576,7 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 | `convergence_report` | `R-8.3b` ⭐ |
 | `secret_timeline` · `name_surface_survey` | `R-8.9b` ⭐（**探针自己的基线读数**） |
 | `draft_missing` · `draft_duplicated` | `R-8.11` ⭐ |
-| `material_malformed` | `R-3.15` ⭐（stage2 的账，由本层回过头来报） |
+| `material_malformed` | `R-3.15` ⭐（旧制品/人工稿的 Stage 2 兼容账；新正式制品已由 `SourceSpan` 守住） |
 | `style_block_carries_plot` | `R-4.5`（描述不许出现专名） |
 | `secret_unknown` | `R-6.3`（逐章剧透闸门产的 `must_not_reveal`） |
 

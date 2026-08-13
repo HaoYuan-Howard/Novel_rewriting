@@ -41,9 +41,9 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 `verbatim_failed`）：它们是 `R-3.13` / `R-3.11` / `R-3.18` 索要的，而原型那两个判定面都没写。
 不补这四条，本层进 `PORTED_STAGES` 那一刻正向覆盖率会点名那三行需求。
 
-**④ `material_malformed` 不许在这里注册。** 它已经在 `contracts/judges/stage5.py` 里
-以 `stage='stage5', owner='stage2'` 注册着——**stage2 的账，由下游回过头来报**
-（`R-3.15`：按锚点切出来的下发材料是不是完整词句，只有拿着材料去写的那一层才看得见）。
+**④ `material_malformed` 不在这里重复注册。** 新正式产物在 Stage 2 晋升前已经用
+`SourceSpan` 守住 offset/text/normalized 一致性；`contracts/judges/stage5.py` 仍以
+`stage='stage5', owner='stage2'` 注册这条，作为旧制品与人工稿的下游兼容防线。
 
 ⚠ **徽章结构上永远不可能是 `pass`**：本表有 **2 条 `unver`**，其中
 `role_fate_unverifiable` **无条件产出**（见下）⇒ 每本每次都产 ⇒ 最好情况是 `amber`
@@ -311,19 +311,20 @@ _hard('beat_id_format', 'beat_id 形如 b<章:02d>_<序:02d> 且章内序连续'
            '⚠ 代码**无条件归一、模型自拟一律覆盖**（`R-3.1`）⇒ 本条守的是归一器没坏。'
            '盘上 0/3')
 
-_hard('span_unlocatable', '每条区间的首尾锚点都能在原文里按序定位', 'R-3.2', fix=FIX_REGEN,
+_hard('span_unlocatable', '每条精确区间与本章原文一致且按序', 'R-3.2', fix=FIX_REGEN,
       note='定位不到 ＝ 这一拍**没有量纲**：它的字数、覆盖率、hinge 归属全部落空。'
-           '⚠ 「按序」＝第 n 条的 `starts_with` 出现在第 n−1 条的 `ends_with` 之后'
-           '（游标单调）。⚠ **校验器一律 `recover=False`**（`novel/core/spans.py`）——'
-           '开了救回臂，「能定位」就会把「锚点不是原文字节」这件事盖掉。'
+           '正式 `SourceSpan` 联合核对 offset/text/normalized，且起点不得退到上一拍终点之前。'
+           '旧制品与模型响应才走 locator 搜索；该兼容路径仍一律 `recover=False`，'
+           '避免「能救回」掩盖「locator 不是原文字节」。'
            '盘上 0/3（251/251 全中）')
 
-_hard('anchor_ambiguous', '锚点在定位器还要搜的那一段里只匹配到一处', 'R-3.2b', fix=FIX_REGEN,
+_hard('anchor_ambiguous', '响应或旧制品的 locator 在待搜索区间内只匹配到一处', 'R-3.2b', fix=FIX_REGEN,
       note='⚠⚠ **窗口按定位器的游标算，不按整章算**：判据要和定位器用**同一把尺子**，'
            '否则报出来的是判据自己的噪声。匹配到多处 ⇒「这一拍对应原文哪一段」有两个答案，'
            '而取到哪一个只取决于上一条拍恰好停在哪儿——**改动上一条会无声地换一段**。'
            '⚠ 两级消歧：先按原文字节 count，raw 不在窗口时才退到 `content_only` 上 count'
            '（`哥哥！！」` vs 后文 `哥哥，醒醒` 靠标点就完成了消歧）。'
+           '正式 offset 已经消除了搜索歧义，因此不进入这条历史 locator 度量。'
            '盘上 0/3（502/502）')
 
 _info('anchor_not_verbatim', '锚点是原文字节', 'R-3.18', fix=FIX_MIGRATE_BP,
@@ -340,8 +341,8 @@ _hard('verbatim_failed', '落盘前的原文回取没有锚不到的', 'R-3.18',
            '**不等于「链路被挡住了」**。⇒ 本仓断言 `_provenance.verbatim_failures` '
            '非空即失败态，三种根因（锚点不在本章 / 本 beat 的 span 自己没定位成功 / '
            '落在漏抓区）**分开报，修法各不相同**。'
-           '⚠⚠ 它替掉了此前那条「靠 `hinges[].text` 的**缺席**去反推失败态」'
-           '（盘上 281/282）——失败态从此有**正面**的落点。'
+           '⚠⚠ 它替掉了此前那条「靠 `hinges[].text` 的**缺席**去反推失败态」；'
+           '现在局部写 `source:null`，汇总账写入 failures，失败态有**正面**落点。'
            '盘上 0/3，⚠ 但那三个键**盘上一份都没有** ⇒ 今天落 `unver` 状态')
 
 _hard('edge_hole', '章首章尾被第一 / 最后一拍覆盖', 'R-3.8', fix=FIX_REGEN,
@@ -389,16 +390,15 @@ _info('hinge_cascade', '锚不到不是因为本拍的 span 自己就没定位�
            '⇒ 判 INFO 且**不给 fix**：修上游那条 span 就好。盘上 0/3')
 
 _hard('hinge_drift', '保真材料的正文落在本拍 span 的原文范围内', 'R-3.5', fix=FIX_REGEN,
-      note='**转抄漂移：位置对、字节错**。⚠ 今天 `text` 是**代码按锚点从原文切的**，'
-           '所以这条判据在新产物上抓的不是「模型抄漏了一个字」而是'
-           '**这条 hinge 被归到了错的拍**（锚点落在本章别处，切出来的字节是真原文、'
-           '只是不属于这一拍）——⇒ 修法是把那一章重抽，与 `hinge_cross_chapter` 同形。'
-           '⚠ 旧世代产物上它抓的是本义（模型默写 `text`）⇒ **两种形状同一条判据**，'
-           '因为报告上要说的是同一句话：这条材料的字节不可信。'
+      note='正式产物联合核对 hinge `SourceSpan` 的 offset/text/normalized，并要求其区间完整'
+           '落在所属 beat.span 内；因此能区分「原文字节不一致」与「材料归错拍」。'
+           '旧世代的 `text`/locator 形状仍走兼容校验。两种形状报告的是同一句话：'
+           '这条材料的字节或归属不可信。'
            '盘上 0/3（113 / 66 / 103 条全中）')
 
-_hard('hinge_unanchored', '每条保真材料都带首尾锚点', 'R-3.5',
-      note='没有锚点 ⇒ `text` 只能是**模型默写的**，而闭卷写作靠它保真。'
+_hard('hinge_unanchored', '每条保真材料都带精确 source（旧制品至少带完整 locator）', 'R-3.5',
+      note='正式形状必须带 `source` 键；旧制品至少同时带两个 locator，否则 `text` 只能是模型默写。'
+           '显式 `source:null` 是已记账的回取失败态，由 failures/root-cause 判据负责，不重复计数。'
            '⚠ **两个锚点允许重叠甚至完全重合**（128 条实测 75 条的内容字符'
            '比两个锚点加起来还短——「硬数字」「物件」天生就短）'
            '⇒ 本条**只查带没带**，不查先后。盘上 0/3（282/282 全带锚点）')
@@ -557,10 +557,11 @@ _metric('batch_density', '按一次调用分组的抽取量', 'R-3.16b',
              '而**旧产物记的是别的值** ⇒ 校验器靠它区分「逐章」「分了 N 批」「不知道」'
              '三种产物。盘上 14 / 8 / 9 次调用')
 
-_metric('context_scope', '这一趟抽某章时后面的章在不在 prompt 里', 'R-3.16b',
+_metric('context_scope', '逐章抽取采用哪版上下文、边界与窗口', 'R-3.16b',
         note='⚠⚠ **必须常驻打印**：不打印它，读的人会把「这次没报跨章引用」'
              '当成模型学乖了，而其实只是没抽到。'
-             '盘上 3/3 恒 `{batch_size: 1, context_upto: true}`')
+             '新产物报告 architecture、稳定前缀指纹、当前章全文、未来可见性及两个过去窗口；'
+             '旧累积上下文只诚实标作 `cumulative-past-v1`，不伪造 v2 元数据。')
 
 _metric('span_coverage', '区间定位成功条数 / 覆盖率 / 每条字数分位', 'R-3.2',
         note='`span_unlocatable` 那一维的样本量与基线。盘上 98% / 98% / 97%')
@@ -570,9 +571,10 @@ _metric('span_coverage_per_chapter', '逐章覆盖率', 'R-3.2',
              '而逐章最低分别是 ch5 95% · ch4 96% · **ch7 90%**——'
              '最后那一章正是 `hinge_in_hole` 那条真反例所在的章')
 
-_metric('anchor_short', '内容字符 <6 的锚点计数', 'R-3.2b',
+_metric('anchor_short', '旧 locator 中内容字符 <6 的锚点计数', 'R-3.2b',
         note='⚠ 契约的「照抄 8~30 字」是**生成期指导**不是产物不变量'
              '（回取会两头改长度）⇒ **此处只报计数，不判违约**。'
+             '正式精确 offset 不再需要 locator，因此新产物该度量样本量为 0。'
              '⚠⚠ 而**产地按 8~30 要求、校验侧承认做不到，中间那段差额会被模型用编造填上**：'
              '实测一条 `ends_with` 写成 `我"嗯"。`（原文只有 `"嗯。"`），'
              '补出来的「我」原文里不存在，整条 beat 因此作废，'

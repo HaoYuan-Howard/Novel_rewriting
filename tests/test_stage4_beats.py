@@ -210,6 +210,19 @@ def test_a_cross_paragraph_hinge_becomes_several_points():
     assert not unknown
 
 
+def test_formal_hinge_source_is_the_material_stage4_consumes():
+    hinge = {
+        'kind': '要害台词',
+        'source': {
+            'text': '原样材料。', 'start': 4, 'end': 9,
+            'normalized': '原样材料', 'recovery': 'exact',
+        },
+    }
+    out, unknown = verbatim_pieces([hinge])
+    assert out == {'verbatim': ['原样材料。']}
+    assert unknown == []
+
+
 def test_an_unknown_hinge_kind_is_dropped_not_upgraded():
     """⚠ **未知 kind 丢弃 + 告警，不许兜底。**
 

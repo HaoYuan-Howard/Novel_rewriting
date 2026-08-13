@@ -70,10 +70,10 @@ from contracts.schema.stage1 import (
     HookCopy, MainText, MainTextSection, PartitionReport, Stage1Warning,
 )
 from contracts.schema.stage2 import (
-    Address, Arc, ArcTrack, Beat, BeatSpan, Blueprint, Canon, ChapterBlueprints,
+    Address, Arc, ArcTrack, Beat, Blueprint, Canon, ChapterBlueprints,
     ChapterBlueprintsResponse, Character, ConflictStage, Entities, GlobalGrounding,
     GlobalGroundingResponse, Hinge, Narration, Relation, RoleSplitResponse, Secret,
-    Setting, WorldRule, WorldRuleVersion,
+    Setting, SourceSpan, WorldRule, WorldRuleVersion,
 )
 from contracts.schema.stage3 import (
     HookStyle, Measurable, StyleGrounding, StyleResponse, Voice,
@@ -141,7 +141,7 @@ __all__ = [
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'Arc', 'ConflictStage',
-    'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'BeatSpan', 'Hinge', 'Narration',
+    'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',
     'StyleGrounding', 'StyleResponse', 'Voice', 'HookStyle', 'Measurable',
     'PlanChapters', 'PlanChapter', 'PlanBeat', 'WriterContext', 'BookCharacter',

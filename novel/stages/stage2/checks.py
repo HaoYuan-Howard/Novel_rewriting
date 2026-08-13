@@ -41,7 +41,7 @@ from novel.core.naming import (
     classify_unattested, person_naming_surfaces, resolve_present_names, rule_names_a_person,
     strip_distinguisher, surface_first_chapter, surface_owner_since, surface_owners,
 )
-from novel.core.spans import content_only, walk_spans
+from novel.core.spans import content_only, exact_span, walk_spans
 from novel.core.text import norm
 from novel.report.findings import Outcome, ran, unverifiable
 
@@ -790,7 +790,8 @@ def _beats(c: _Ctx) -> list[Outcome]:
     # ── `span_unlocatable` ────────────────────────────────────────────────
     out.append(ran('span_unlocatable',
                    [finding('span_unlocatable',
-                            detail=f'锚点无法在原文里按序定位（定位不到＝这一拍**没有量纲**：'
+                             detail=f'精确 source span 与原文不一致，或旧 locator 无法按序定位'
+                                    f'（失败＝这一拍**没有量纲**：'
                                    f'字数、覆盖率、hinge 归属全部落空）：{prob}',
                             evidence=[f'ch{o}', prob])
                     for o, prob in c.span_problems],
@@ -808,6 +809,9 @@ def _beats(c: _Ctx) -> list[Outcome]:
         for be in (x.get('beats') or []):
             se = got.get(be.get('beat_id'))
             if not se:
+                continue
+            if 'start' in (be.get('span') or {}):
+                pos = se[1]
                 continue
             n_anchor += 1
             window = text[pos:]
@@ -831,8 +835,13 @@ def _beats(c: _Ctx) -> list[Outcome]:
                    scanned=f'{n_anchor} 个定位成功的 starts_with 锚点'))
 
     # ── `anchor_short`（度量）─────────────────────────────────────────────
-    anchors = [(be.get('beat_id'), f, content_only((be.get('span') or {}).get(f) or ''))
-               for _o, be in all_beats for f in ('starts_with', 'ends_with')]
+    anchors = [
+        (be.get('beat_id'), field, content_only(span.get(field) or ''))
+        for _o, be in all_beats
+        for span in [be.get('span') or {}]
+        for field in ('starts_with', 'ends_with')
+        if field in span
+    ]
     short = [f'{bid}.{f}={a!r}' for bid, f, a in anchors if a and len(a) < ANCHOR_MIN_CONTENT]
     out.append(ran('anchor_short', [
         finding('anchor_short',
@@ -1026,6 +1035,12 @@ _HINGE_RULES = ('hinge_cross_chapter', 'hinge_in_hole', 'hinge_anchor_void', 'hi
                 'hinge_cascade', 'hinge_unanchored', 'chapter_no_hinge', 'hinge_density')
 
 
+def _hinge_text(hinge: dict[str, Any]) -> str:
+    source = hinge.get('source')
+    return str(source.get('text') if isinstance(source, dict)
+               else hinge.get('text') or '')
+
+
 def _hinges(c: _Ctx) -> list[Outcome]:
     if not c.has_bp:
         return [unverifiable(r, _NO_BLUEPRINT) for r in _HINGE_RULES]
@@ -1034,15 +1049,16 @@ def _hinges(c: _Ctx) -> list[Outcome]:
     n_h = sum(len(be.get('hinges') or []) for x in c.bps for be in (x.get('beats') or []))
 
     # ── `hinge_unanchored` —— 不吃原文，先判 ───────────────────────────────
-    unanchored = [f'{be.get("beat_id")}:{(h.get("text") or "")[:16]!r}'
+    unanchored = [f'{be.get("beat_id")}:{_hinge_text(h)[:16]!r}'
                   for x in c.bps for be in (x.get('beats') or [])
                   for h in (be.get('hinges') or [])
-                  if not ((h.get('starts_with') or '').strip()
-                          and (h.get('ends_with') or '').strip())]
+                  if 'source' not in h
+                  and not ((h.get('starts_with') or '').strip()
+                           and (h.get('ends_with') or '').strip())]
     out.append(ran('hinge_unanchored',
                    [finding('hinge_unanchored',
-                            detail=f'{len(unanchored)} 条 hinge 没带首尾锚点 —— '
-                                   f'没有锚点则 `text` 只能是**模型默写的**，'
+                             detail=f'{len(unanchored)} 条 hinge 没有可验证的 source span —— '
+                                    f'旧 locator 也不完整，无法由代码回取原文字节，'
                                    f'而闭卷写作靠它保真：{_cut(unanchored)}',
                             evidence=sorted(unanchored))] if unanchored else [],
                    scanned=f'{n_h} 条保真材料'))
@@ -1075,7 +1091,8 @@ def _hinges(c: _Ctx) -> list[Outcome]:
             # 与 span 同一套归一化：只比内容字符，别拿标点全半角去判保真。
             slice_ = content_only(c.text_of.get(o, '')[s:e])
             for h in (be.get('hinges') or []):
-                raw = (h.get('text') or '').strip()
+                source = h.get('source')
+                raw = _hinge_text(h).strip()
                 t = content_only(raw)
                 item = f'{be.get("beat_id")}:{raw[:16]!r}' if t else (
                     f'{be.get("beat_id")}:{(h.get("starts_with") or "")[:10]!r}…'
@@ -1087,13 +1104,25 @@ def _hinges(c: _Ctx) -> list[Outcome]:
                     if be.get('beat_id') not in by_id:
                         cascade.append(item)
                         continue
-                    a = content_only(h.get('starts_with') or '')
-                    b = content_only(h.get('ends_with') or '')
-                    i = ch_txt.find(a) if a else -1
-                    j = ch_txt.find(b, max(i, 0)) if (b and i >= 0) else -1
-                    (hole if (i >= 0 and j >= 0 and a not in slice_) else void).append(item)
+                    if not isinstance(source, dict):
+                        a = content_only(h.get('starts_with') or '')
+                        b = content_only(h.get('ends_with') or '')
+                        i = ch_txt.find(a) if a else -1
+                        j = ch_txt.find(b, max(i, 0)) if (b and i >= 0) else -1
+                        (hole if (
+                            i >= 0 and j >= 0 and a not in slice_)
+                         else void).append(item)
+                        continue
+                    void.append(item)
                     continue
-                if t in slice_:
+                if not isinstance(source, dict) and t in slice_:
+                    continue
+                h_start, h_end, problem = exact_span(
+                    source, c.text_of.get(o, ''))
+                if problem is None and s <= h_start and h_end <= e:
+                    continue
+                if problem is None:
+                    hole.append(item)
                     continue
                 # 【两种病，分开报】同一条「不在本 beat 的 span 内」，
                 # 底下是两个完全不同的故障，修法不同——混成一条会让人拿错方子。
@@ -1169,6 +1198,40 @@ _PRESENT_RULES = (
     'repair_cache_policy', 'narration_voices', 'time_layer_mix', 'place_moves',
     'present_names_ambiguous', 'present_names_unlisted', 'present_names_pronoun',
     'present_names_late', 'present_broad', 'batch_density', 'context_scope')
+
+
+def _context_observation(context: dict[str, Any]) -> tuple[str, list[str]]:
+    architecture = context.get('architecture')
+    batch_size = context.get('batch_size')
+    if not architecture:
+        upto = context.get('context_upto')
+        ok = batch_size == 1 and upto is True
+        verdict = '旧版逐章累积上下文' if ok else '⚠ 旧版上下文边界不符合约定'
+        return (
+            f'architecture=legacy-unversioned · batch_size={batch_size} · '
+            f'context_upto={upto} —— {verdict}',
+            [f'legacy-unversioned', f'batch={batch_size}', f'upto={upto}'],
+        )
+    current_full = context.get('current_chapter_full')
+    future_visible = context.get('future_visible')
+    ok = batch_size == 1 and current_full is True and future_visible is False
+    verdict = '当前章全文保留、未来正文不可见' if ok else '⚠ 模型可见边界不符合约定'
+    detail = (
+        f'architecture={architecture} · batch_size={batch_size} · '
+        f'stable_prefix={context.get("stable_prefix")} · current_full={current_full} · '
+        f'future_visible={future_visible} · '
+        f'past_neighbor≤{context.get("past_neighbor_chars_max")} 字 · '
+        f'continuity≤{context.get("continuity_chars_max")} 字 —— {verdict}'
+    )
+    evidence = [
+        str(architecture),
+        f'stable={context.get("stable_prefix")}',
+        f'current_full={current_full}',
+        f'future_visible={future_visible}',
+        f'past_neighbor={context.get("past_neighbor_chars_max")}',
+        f'continuity={context.get("continuity_chars_max")}',
+    ]
+    return detail, evidence
 
 
 def _present(c: _Ctx) -> list[Outcome]:
@@ -1579,12 +1642,11 @@ def _present(c: _Ctx) -> list[Outcome]:
             '第 N+1 章在不在 prompt 里。⚠⚠ **必须常驻打印**：不打印它，'
             '读的人会把「这次没报跨章引用」当成模型学乖了，而其实只是没抽到'))
     else:
+        detail, evidence = _context_observation(cctx)
         out.append(ran('context_scope', [
             finding('context_scope',
-                    detail=f'batch_size={cctx.get("batch_size")} · '
-                           f'context_upto={cctx.get("context_upto")} —— '
-                           f'{"逐章抽取且只吃到本章为止" if cctx.get("batch_size") == 1 and cctx.get("context_upto") else "⚠ 不是逐章 / 不是只吃到本章为止"}',
-                    evidence=[f'{cctx.get("batch_size")}', f'{cctx.get("context_upto")}'])],
+                    detail=detail,
+                    evidence=evidence)],
             scanned='`_provenance.context`'))
 
     # ── 三条 ✚（原型没有）─────────────────────────────────────────────────
