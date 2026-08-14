@@ -320,10 +320,13 @@ stage6/_rounds/hook.rN.json 归档：上一轮的整份拷贝（形状与 hook.j
 
 ## 四、判据清单（**唯一落点**，25 条现役）
 
-**5 HARD · 9 INFO · 3 metric · 8 unver**。
-owner：`stage6` 13 · `None` 11（＝非结论）· `stage3` 1。
+**6 HARD · 10 INFO · 3 metric · 6 unver**（2026-08-14：两条 `check_kind='semantic'`
+进表——`hook_semantic_spoiler` / `hook_semantic_grounding`，产地是付费节点
+`stage6.semantic` 的两相审判；`hook_spoiler_unver` / `hook_relations_unver` 同批退役）。
+owner：`stage6` 15 · `None` 9（＝非结论）· `stage3` 1。
 **本层一条付费自救都不开**（已经有更便宜的路：`--pick N` 换一条候选、
-`--apply-edit` 改一个字，都是 0 成本）⇒ 全表 `repair='NONE'`，于是 `actionable` 全 `False`。
+`--apply-edit` 改一个字，都是 0 成本；语义命中同理，改完重跑 `stage6.semantic` 清红）
+⇒ 全表 `repair='NONE'`，于是 `actionable` 全 `False`。
 ⚠ 原型这里标着 `actionable=True` **12 条**，那是**另一个意思**的 actionable
 （「人能 0 成本改掉」而不是「写作层能修」）。**已裁决不放宽载体侧那两条不变量**，
 那 12 条的「人怎么改」写进 `Rule.note` —— 理由见 `_report.md` §2.1 那个框。
@@ -350,17 +353,19 @@ owner：`stage6` 13 · `None` 11（＝非结论）· `stage3` 1。
 | **〔度量〕**`hook_secret_literal` | metric | 文案与秘密原文的**逐字**重合条数（按读者时点分已揭示/未揭示） | **9/9**（值恒 0 条） | 0 条 |
 | **〔度量〕**`hook_quote_shape` | metric | 引语条数 · **最长一条字数** · 对白比，与原作**并排**报出 | **9/9** | 6条/36字 · 3/27 · 2/22 |
 | **〔度量〕**`hook_report` | metric | 下发范围 · 各候选字数 · 原作文案段字数 | **3/3 书** | — |
-| `hook_spoiler_unver` | unver | 「不说破答案」被有效检查过 | **3/3 书** | — |
+| `hook_semantic_spoiler` | **HARD**〔语义〕 | 文案没有以改写形式说破结局/高潮/人物终局（`stage6.semantic` 两相审判，按文本 sha1 绑定；缺产物/过期/文本未审/uncertain ⇒ unver） | 盘上无语义产物 ⇒ unver | ⚠ 剔除（0 成本路不跑付费审判） |
+| `hook_semantic_grounding` | INFO〔语义〕 | 文案的事实性陈述在下发面＋开篇正文里有据（「不许发明事实，必须发明文字」） | 盘上无语义产物 ⇒ unver | ⚠ 剔除（同上） |
 | `hook_quote_unver` | unver | 「引语在正文里有着落」被检查过 | **3/3 书** | — |
-| `hook_relations_unver` | unver | 「没歪曲人物关系」被检查过 | **3/3 书** | — |
 | `hook_no_secrets` | unver | 这本书有可查的秘密 | 0 | — |
 | `hook_secret_no_time` | unver | 每条秘密都说得出自己什么时候揭示 | 0 | — |
 | `hook_not_approved` | unver | 有人给这份文案定过稿（`check_one` 产，不落产物） | 0（三本都已定稿） | — |
 | `hook_body_stale` | unver | 判的是照盘上这份正文写的文案（`check_one` 产） | 0 | — |
 | `hook_body_missing` | unver | 开篇那几章都有成稿 | 0 | — |
 
-⚠ **已退役（退役而不删，报告里常驻列出）**：`hook_no_source`（「这本书有原作文案段可比」）
-——缺 `hook_copy.json` 已改**显式终态**，见 §五。
+⚠ **已退役（退役而不删，报告里常驻列出）**，共 3 条：
+`hook_no_source`（「这本书有原作文案段可比」——缺 `hook_copy.json` 已改**显式终态**，见 §五）·
+`hook_spoiler_unver`（改写式泄底已有真实守卫 `hook_semantic_spoiler`，留着就是一个问题两个落点）·
+`hook_relations_unver`（并入 `hook_semantic_grounding`，口径「不许发明事实，必须发明文字」）。
 
 > #### ⚠ `hook_reuses_source` 的**主语**是人，不是模型——`item` 必须说出来
 >

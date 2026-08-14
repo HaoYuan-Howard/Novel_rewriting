@@ -3,7 +3,9 @@
 """
 stage6.py —— 开篇文案那一层的判据行。源是 `docs/schema/stage6.md` §四（**唯一落点**）。
 
-**25 条现役：5 HARD · 9 INFO · 3 metric · 8 unver。** 外加 1 条退役而不删。
+**25 条现役：6 HARD · 10 INFO · 3 metric · 6 unver。** 外加 3 条退役而不删。
+（2026-08-14：`hook_semantic_spoiler`/`hook_semantic_grounding` 两条**语义**判据进表，
+`hook_spoiler_unver`/`hook_relations_unver` 同批退役——见文件尾的退役登记。）
 
 【判据 id 一律照抄文档，不加 stage 前缀】它们是与 `wontfix.json` 的键、
 与 `_provenance.fixes` 的引用之间的契约——加个前缀就等于把存量豁免全部作废。
@@ -20,16 +22,19 @@ stage6.py —— 开篇文案那一层的判据行。源是 `docs/schema/stage6.
 改一个字，都是 0 成本）。原型这里标着 `actionable=True` 12 条，那是**另一个意思**的
 actionable（「人能 0 成本改掉」而不是「写作层能修」）。裁决是**不放宽载体侧那两条
 不变量**，那 12 条的「人怎么改」写进 `note`——理由见 `docs/schema/_report.md` §2.1。
+⚠ **两条语义判据同样 `repair='NONE'`**（remediation 落 `human`）：语义命中的修路
+仍是 `--pick` 避开 / `--apply-edit` 改句，不给写作层开付费自救。
 
 **② 全表不设 `quote`。** `Rule.quote` 答的是「凭据能不能原样引用**给写作节点**」，
 而本层根本没有反哺写作层那条路（见①）。且它今天**全仓零消费方**——
 给一个没有消费方的语义标上值，与 `actionable` 是同一条病。
 
-⚠⚠ **由此推出一条要写进 README 的结论**：8 条 `unver` 每次都走
+⚠⚠ **由此推出一条要写进 README 的结论**：6 条 `unver` 每次都走
 `findings.unverifiable(...)`（`builder._status_of` 强制），而 `badge_of` 见
 `unver` 就至少 amber ⇒ **stage6 的徽章在结构上永远不可能是 `pass`**，
 最好情况是 `amber`（`passed=True`、退出码 0）。**这不是缺陷**，
 是本层「能查的都查了，查不了的写在脸上」的可见形态。
+（两条语义判据在盘上没有当前语义审判产物时同样落 `unver`——「没审」不是「没问题」。）
 """
 from __future__ import annotations
 
@@ -59,8 +64,8 @@ def _metric(rule: str, item: str, requirement: str, **kw) -> Rule:
 def _unver(rule: str, item: str, requirement: str, *, who_checks: str, **kw) -> Rule:
     """查不了的：**永远输出**，不是「还没写完」。
 
-    ⚠ `who_checks` 必须显式给，因为这 8 条分**两族**，而它们指向的需求行记号不同：
-      · `HUMAN` —— 真正由人把关的那 4 条（`R-9.18` / `R-9.6` 两行都标着 `人`）；
+    ⚠ `who_checks` 必须显式给，因为这 6 条分**两族**，而它们指向的需求行记号不同：
+      · `HUMAN` —— 真正由人把关的那 2 条（`R-9.18` / `R-9.6` 两行都标着 `人`）；
       · `INFO`  —— 判定**前提**不成立时出声的那 4 条（`R-9.16` / `R-9.17` 标着 `INFO`）。
     合成一个默认值，其中一族就会指着一个说着别的话的需求行。
     """
@@ -194,20 +199,43 @@ _metric('hook_quote_shape', '引语条数 · 最长一条字数 · 对白比，�
 _metric('hook_secret_literal', '与秘密原文的逐字重合条数（按读者时点分已揭示/未揭示）', 'R-9.15',
         note='盘上 9/9 候选恒 **0 条**。⚠ **0 条是常态，不是「卖点没用上」**：'
              '`secret_keywords` 切的是整个分句，而文案按体裁在改写，'
-             '字面探针在这个产物类上**结构性失效**（同 `hook_spoiler_unver`）。'
+             '字面探针在这个产物类上**结构性失效**（改写式的那一半由 `R-9.19` 的语义审判接管）。'
              '⚠ 非 0 条也**不是违约**：说破秘密现在是授权的（`R-9.9`），这条只是记账。'
              '⚠ 凭据必须经 `core.text.locate_norm` 回映成**文案自己的字节**——'
              '命中的片段来自 `secret.fact`，直接拿它当凭据展示等于把秘密原文抄进报告')
 
 
-# ── 八条查不了的：**永远输出**，不是「还没写完」 ────────────────────────────
+# ── 两条语义判据（check_kind='semantic'，全层仅有）───────────────────────────
 #
-# 这 8 条与 5 条 HARD 加在一起才是本层真实的防线图：**能查的都查了，查不了的写在脸上。**
-# 省略掉，读报告的人会默认它们守住了。
+# **结论怎么来**：付费节点 `stage6.semantic` 两相审判——第一相对每条文本
+# （3 候选＋定稿）arc/secret-blind 抽带逐字证据的 claim（证据由代码回查为
+# 文案连续原字节），第二相只拿验真 claim 与 arc 三项/下发面对齐。
+# **绑定**：结论按**文本内容 sha1** 绑定（`--pick` 定稿不换文本 ⇒ 不过期；
+# `--apply-edit` 改字 ⇒ 自动过期成 unver，重跑 `stage6.semantic` 即清）。
+# 缺产物 / 过期 / 文本未审 / coverage=uncertain ⇒ 一律 unver，不洗绿。
 
-_unver('hook_spoiler_unver', '「不说破任何答案」被有效检查过', 'R-9.18', who_checks='HUMAN',
-       note='⚠ 它不是「还没来得及做」，是**已实测判别力为零**：字面探针抓不到改写式泄底。'
-            '`R-9.7` 那一行写着「无守卫 → `B-12`」，说的正是同一件事')
+_hard('hook_semantic_spoiler', '文案没有以改写形式说破结局/高潮/人物终局', 'R-9.19',
+      check_kind='semantic',
+      note='基准只有 arc 三项（`R-9.9` 改版后 secrets 全量下发、允许说破；'
+           '取值面与 hook_arc_literal 共用 `arc_sources`——那条是字面探针，'
+           '本条补语义等价的那一半，正是退役的 hook_spoiler_unver 自陈的盲区）。'
+           '⚠ 审判报告只引用文案自身字节，代码闸拒收复述 arc 原文的 reason。'
+           '〔人 0 成本改掉：`--pick` 避开泄底候选 / `--apply-edit` 改掉那一句，'
+           '再重跑 `stage6.semantic` 清红〕')
+
+_info('hook_semantic_grounding', '文案的事实性陈述在下发面里有据', 'R-9.20',
+      check_kind='semantic',
+      note='口径「不许发明事实，必须发明文字」（`R-9.8` 打架句删除后的现役口径）。'
+           '参照集＝写手当时看得见的东西：下发面（人物/关系/秘密）＋开篇正文。'
+           '与 hook_invented_name/number（词面探针）互补：那两条抓「词面无据」，'
+           '本条抓「陈述无据」——正是退役的 hook_relations_unver 自陈的盲区。'
+           '〔人 0 成本改掉：`--apply-edit` 删掉那个说法〕')
+
+
+# ── 六条查不了的：**永远输出**，不是「还没写完」 ────────────────────────────
+#
+# 这 6 条与 6 条 HARD 加在一起才是本层真实的防线图：**能查的都查了，查不了的写在脸上。**
+# 省略掉，读报告的人会默认它们守住了。
 
 _unver('hook_quote_unver', '「引语在正文里有着落」被检查过', 'R-9.18', who_checks='HUMAN',
        note='⚠ **这是恒等基线否掉的一条判据，不是漏写的。** 曾有一条 hard：'
@@ -217,13 +245,6 @@ _unver('hook_quote_unver', '「引语在正文里有着落」被检查过', 'R-9
             '⇒ **原作文案里的台词，原作正文里根本不存在**——那是文案作者浓缩、改写、'
             '乃至重编的，是这个体裁的常规手法。按它去修数据会让产物变差（判据 20）'
             '⇒ **判据错，不是数据错。**')
-
-_unver('hook_relations_unver', '「没歪曲人物关系」被检查过', 'R-9.18', who_checks='HUMAN',
-       note='`R-9.8` 写着「无守卫 → `B-12`」。⚠ 这条要求曾与同一份 prompt 的另一条硬禁'
-            '互相打架（「不复用原句」，后者有阻断级在执行），实测代价是'
-            '最长引语 22.6 → 6.8 字、12/12 同向。打架的那句已删，口径改成'
-            '「不许发明事实，必须发明文字」。⇒ **一条要求在被判定为「无守卫」之前，'
-            '先确认它本身是对的**')
 
 _unver('hook_not_approved', '有人给这份文案定过稿', 'R-9.6', who_checks='HUMAN',
        note='`R-9.6` 那一格是 `人`——**定稿是现役的唯一闸门**，文案好坏没有确定性判据。'
@@ -252,7 +273,23 @@ _unver('hook_body_stale', '判的是照盘上这份正文写的那一版文案',
             '盘上：成年人/头牌无 `consumed` ⇒ `unver`；三岁 2/2 条有 ⇒ 判得动')
 
 
-# ── 一条退役而不删（报告里常驻列出） ────────────────────────────────────────
+# ── 三条退役而不删（报告里常驻列出） ────────────────────────────────────────
+
+REGISTRY.retire(RetiredRule(
+    rule='hook_spoiler_unver', stage=STAGE,
+    why='「不说破任何答案」已有真实守卫：`hook_semantic_spoiler`（`R-9.19`，付费语义审判，'
+        '2026-08-14）。留着这一行就是一个问题两个落点——旧行永远说「查不了」，'
+        '新判据却在给命中/干净/unver 三态答案，读报告的人只会信其中一行。'
+        '语义产物缺席时新判据自己落 unver，「没查」这个信息不丢；'
+        '字面探针零判别力的账另见 `hook_secret_literal`/`hook_arc_literal` 的 note'))
+
+REGISTRY.retire(RetiredRule(
+    rule='hook_relations_unver', stage=STAGE,
+    why='「没歪曲人物关系/不发明事实」并入 `hook_semantic_grounding`（`R-9.20`，'
+        '付费语义审判，2026-08-14），口径「不许发明事实，必须发明文字」。'
+        '⚠ 历史教训保留在此：这条要求曾与同一份 prompt 的「不复用原句」硬禁互相打架，'
+        '实测代价是最长引语 22.6 → 6.8 字、12/12 同向——'
+        '**一条要求在被判定为「无守卫」之前，先确认它本身是对的**'))
 
 REGISTRY.retire(RetiredRule(
     rule='hook_no_source', stage=STAGE,

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 25 条判据的**实现**。行在 `contracts/judges/stage6.py`（`Q-12`）。
+checks.py —— 23 条**机械**判据的实现。行在 `contracts/judges/stage6.py`（`Q-12`）。
+（另 2 条 `check_kind='semantic'` 的产地在 `semantic.outcomes`——付费审判读盘上产物，
+与本模块的 0 成本判据在 `hook._judge_artifact` 合并成同一份报告。）
 
 ⚠⚠ **唯一的判定落点。** 三个候选、定稿、以及恒等基线（拿原作文案段当输入）
 走的都是 `hook_findings()` 这一个函数——**基线要有意义，量的就必须是同一把尺子**。
@@ -267,7 +269,7 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一份产物 → 25 个 `Outcome`
+# 一份产物 → 23 个机械 `Outcome`（语义两条由 semantic.outcomes 产）
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: 逐条文本判的那 14 条（5 hard + 9 info）。
@@ -285,7 +287,7 @@ def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
           secrets: list[dict], arc: dict | None, given_leak: list[tuple[str, str]],
           lead_upto_ch: int, hook_chars: int | None, approved: bool,
           stale: list[str] | None, no_consumed: list[str] | None) -> list[Outcome]:
-    """一份 `hook.json` → **25 个 `Outcome`，一条判据一个**。
+    """一份 `hook.json` → **23 个机械 `Outcome`，一条判据一个**。
 
     ⚠ `texts` 是 `[(标签, 文本, 这条文本的 findings)]`，四份（3 候选 + 定稿）。
     **每条 finding 的 `detail` 由调用方加 `[标签]` 前缀**——
@@ -329,21 +331,15 @@ def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
                             evidence=[str(lead_upto_ch)])],
                    scanned=scanned))
 
-    # ── 八条查不了的：**永远输出** ──────────────────────────────────────────
-    out.append(unverifiable(
-        'hook_spoiler_unver',
-        '「不说破任何答案」只有字面探针，而改写式泄底它抓不到——**已实测判别力为零**。'
-        '这一条不是「还没做」，是这个产物类上字面探针结构性失效',
-        scanned=scanned))
+    # ── 六条查不了的：**永远输出** ──────────────────────────────────────────
+    #
+    # ⚠ 旧的 `hook_spoiler_unver` / `hook_relations_unver` 已退役（2026-08-14）：
+    #   改写式泄底与事实无据现在由付费语义判据接管（`hook_semantic_spoiler` /
+    #   `hook_semantic_grounding`，产地在 `semantic.outcomes`，不在本函数）。
     out.append(unverifiable(
         'hook_quote_unver',
         '「引语在正文里有着落」曾是 HARD，恒等基线判死了它：两本原作文案共 7 条引语'
         '在**原作全书**里逐字命中 0 章。原作文案里的台词，原作正文里根本不存在',
-        scanned=scanned))
-    out.append(unverifiable(
-        'hook_relations_unver',
-        '「没歪曲人物关系」没有确定性判据。⚠ 它曾与同一份 prompt 的「不复用原句」打架'
-        '（后者有阻断级在执行），实测代价是最长引语 22.6 → 6.8 字、12/12 同向',
         scanned=scanned))
 
     out.append(unverifiable(

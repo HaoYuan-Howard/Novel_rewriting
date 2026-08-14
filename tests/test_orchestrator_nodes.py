@@ -45,7 +45,7 @@ def _args(flag: str, node: str | None = None) -> list[str]:
 def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
     assert len(CASES) > 25, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
-    assert len(NODES) == 17, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    assert len(NODES) == 18, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────

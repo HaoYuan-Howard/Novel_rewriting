@@ -94,7 +94,10 @@ from contracts.schema.stage5 import (
     SemanticChapterClaims, SemanticClaim, SemanticClaimsResponse, SemanticEvidenceRef,
     SemanticReview, SemanticSecretAdjudication, SemanticSecretDecision, WontFix,
 )
-from contracts.schema.stage6 import ApprovedHook, Candidate, Hook, Mech
+from contracts.schema.stage6 import (
+    ApprovedHook, Candidate, Hook, HookClaimDecision, HookSemanticResponse,
+    HookSemanticReview, HookTextClaims, HookTextClaimsResponse, Mech,
+)
 from contracts.schema.stage7 import (
     BookTxt, CharacterPatch, ExtraSub, IdentityBaseline, NameDecision, NameMap,
     NameMapEdit, NameMapResponse, Residual, StemBaseline,
@@ -127,6 +130,7 @@ ARTIFACTS: dict[str, type] = {
     'stage5/semantic_{n}.json': SemanticReview,
     'stage5/wontfix.json': WontFix,
     'stage6/hook.json': Hook,
+    'stage6/semantic_{n}.json': HookSemanticReview,
     'stage7/name_map.json': NameMap,
     'stage7/name_map_edit.json': NameMapEdit,
 }
@@ -164,6 +168,8 @@ __all__ = [
     'SemanticClaimsResponse', 'SemanticAlignmentResponse',
     'SemanticSecretDecision', 'SemanticSecretAdjudication', 'SemanticReview',
     'Hook', 'Candidate', 'ApprovedHook', 'Mech',
+    'HookTextClaimsResponse', 'HookTextClaims', 'HookClaimDecision',
+    'HookSemanticResponse', 'HookSemanticReview',
     'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'StemBaseline', 'BookTxt',
     'IdentityBaseline', 'NameMapEdit', 'CharacterPatch', 'NameMapResponse',
     # 路由表

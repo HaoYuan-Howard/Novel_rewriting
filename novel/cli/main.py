@@ -376,9 +376,25 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
 
     ⚠ `stage6.approve --pick N` 也走这里：派发按 **stage** 分，节点由 `ctx.node` 带着。
     """
-    from novel.stages.stage6 import hook
+    from novel.stages.stage6 import hook, semantic
 
     tokens = set(N.flag_tokens(flags))
+
+    if ctx.node == 'stage6.semantic':
+        if '--dry-run' in tokens:
+            system, users, _art, _up = semantic.build_prompts(ctx)
+            print(f'── claims system（{len(system)} 字）──\n{system}')
+            for label, user, _text in users:
+                print(f'\n── {label} user（{len(user)} 字）──\n{user}')
+            print(f'\n── alignment system（{len(semantic.ALIGN_SYSTEM)} 字）──\n'
+                  f'{semantic.ALIGN_SYSTEM}')
+            print('\n第二相 user 需消费第一相验真的 claims，dry-run 时尚不存在，故不伪造预览。')
+            return X.OK
+        artifact, report = semantic.run_semantic(ctx, _llm_client(ctx))
+        print(f'  ✓ 文案语义审判已落盘：{len(artifact.texts)} 份文本 · '
+              f'{len(artifact.decisions)} 条裁决')
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
 
     if ctx.node == 'stage6.approve':
         pick = _valued(flags, '--pick')

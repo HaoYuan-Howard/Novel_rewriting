@@ -131,7 +131,13 @@ def _texts_of(art: Hook) -> list[tuple[str, str]]:
 
 
 def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Outcome]:
-    """一份产物 → 25 个 `Outcome`。`--check-only` 与落盘闸门共用。"""
+    """一份产物 → 25 个 `Outcome`（23 条机械 + 2 条语义）。`--check-only` 与落盘闸门共用。
+
+    ⚠ 语义两条由 `semantic.outcomes` 产（读盘上最近一次付费审判，按文本 sha1 绑定；
+    缺产物/过期/文本未审 ⇒ unver）——**六条路一处合并**，漏并会被 builder 判 `skipped`。
+    """
+    from novel.stages.stage6 import semantic   # 局部导入：semantic 顶层 import 本模块
+
     texts: list[tuple[str, str, list[Finding]]] = []
     for label, text in _texts_of(art):
         _t, _m, fs = _normalize_and_judge(text, up)
@@ -144,7 +150,7 @@ def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Out
         lead_upto_ch=art.lead_upto,
         hook_chars=(up.style_hook or {}).get('chars'),
         approved=art.approved is not None,
-        stale=stale, no_consumed=no_consumed)
+        stale=stale, no_consumed=no_consumed) + semantic.outcomes(store, art)
 
 
 def _judged_drift(art: Hook, up: _Upstreams) -> tuple[list[str], list[str]]:
@@ -166,7 +172,7 @@ def _judged_drift(art: Hook, up: _Upstreams) -> tuple[list[str], list[str]]:
 
 
 def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
-            art: Hook | None) -> CheckReport:
+            art: Hook | None, freshness_rel: str | None = None) -> CheckReport:
     """⚠ **新鲜度判的是「这份报告在说哪个文件」**，而那不总是 `REL`。
 
     ⚠⚠ **这一处是 F2 在 stage7 上撞出来才回头补的**（本层同形，只是没有样本走到）：
@@ -174,9 +180,12 @@ def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
     （`write_invalid` 不碰正式稿，而正式稿本来就还不存在）⇒ 拿 `REL` 判新鲜度会抛
     「不在盘上」，于是 `--revalidate` 这条唯一的 0 成本出路在**最需要它的那一刻**跑不动。
     F1 的那条提升路测试跑在一本**已经有 `hook.json`** 的书上，所以它一直是绿的。
+
+    `freshness_rel`：`stage6.semantic` 刚落盘时传自己那份 `semantic_<n>.json`
+    （形态照 stage5 `_report_of_review(freshness_rel=...)`），其余路不传。
     """
     prov = (art.provenance.model_dump(by_alias=True) if art is not None else {})
-    judged_rel = REL if store.exists(REL) else _INVALID
+    judged_rel = freshness_rel or (REL if store.exists(REL) else _INVALID)
     return build(
         sid=ctx.sid, node=ctx.node, freshness=store.freshness(judged_rel),
         outcomes=outcomes, accounting=_accounting_of(prov),
@@ -228,6 +237,8 @@ def run_identity(ctx: RunContext) -> tuple[dict[str, str], CheckReport]:
     **报告必须把这 6 格标出来**，不许再拿它们当「判据没有误伤原作」的证据。
     ⚠ `hook_reuses_source` **单独剔除**：原作 vs 原作必然 100%，那是构造使然。
     """
+    from novel.stages.stage6 import semantic   # 局部导入：semantic 顶层 import 本模块
+
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store)
     _t, _m, fs = _normalize_and_judge(up.src_hook, up)
@@ -239,14 +250,20 @@ def run_identity(ctx: RunContext) -> tuple[dict[str, str], CheckReport]:
         mat=up.mat, secrets=up.secrets, arc=up.arc,
         given_leak=checks.downsend_leak(up.mat.given, up.arc),
         lead_upto_ch=up.upto, hook_chars=(up.style_hook or {}).get('chars'),
-        approved=False, stale=[], no_consumed=[])
+        approved=False, stale=[], no_consumed=[]
+    ) + semantic.unavailable_outcomes('恒等基线是 0 成本路，不跑付费语义审判')
     return grid, _report(ctx, store, outcomes, None)
 
 
 def _judgeable_rules():
-    """恒等基线要占格子的那些：hard + info。metric 与 unver 不占格。"""
+    """恒等基线要占格子的那些：hard + info 的**机械**判据。
+
+    metric 与 unver 不占格；两条语义判据也不占——恒等基线是 0 成本路，
+    不跑付费审判，给它们占格就是两个永远 `0/1` 的假格子。
+    """
     from contracts.rules import REGISTRY
-    return [r for r in REGISTRY.of_stage('stage6') if r.sev in ('hard', 'info')]
+    return [r for r in REGISTRY.of_stage('stage6')
+            if r.sev in ('hard', 'info') and r.check_kind != 'semantic']
 
 
 def run_recheck(ctx: RunContext) -> tuple[Hook, CheckReport]:

@@ -185,3 +185,19 @@ def test_registering_a_stage_outside_the_ported_set_is_visible():
     from contracts.rules import PORTED_STAGES, REGISTRY
     assert REGISTRY.of_stage('stage3'), 'stage3 的判据行一条都没注册上'
     assert 'stage3' in PORTED_STAGES
+
+
+def test_semantic_check_kind_is_confined_to_stage5_and_stage6():
+    """「只有 stage5/stage6 有语义校验，其余层全机械」是 2026-08-14 的产品裁决。
+
+    · 反向：语义判据跑出这两层 ⇒ 裁决被静默突破——语义判据要花钱、结论要靠
+      审判模型，放错层就是把「确定性可查」的层悄悄换成「花钱问模型」；
+    · 正向（守卫的守卫）：语义判据的层集合空着，上面那条反向断言照样绿。
+    """
+    from contracts.rules import REGISTRY
+    strays = [(r.rule, r.stage) for r in REGISTRY.all()
+              if r.check_kind == 'semantic' and r.stage not in {'stage5', 'stage6'}]
+    assert strays == []
+    semantic_stages = {r.stage for r in REGISTRY.all() if r.check_kind == 'semantic'}
+    assert semantic_stages == {'stage5', 'stage6'}, \
+        '语义判据的层集合变了——两层各自的语义判据一条都不能少，也不许扩到别的层'

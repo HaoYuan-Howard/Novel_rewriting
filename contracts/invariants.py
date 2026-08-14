@@ -1152,6 +1152,11 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  flags=('--dry-run', '--check-only', '--identity',
                                         '--recheck', '--revalidate', '--apply-edit'),
                                  produces=('stage6/hook.json',)),
+    # 付费语义审判是字面探针的 companion（R-9.19/R-9.20），形态照 stage5.semantic：
+    # 不接 `--check-only`，否则一层两个复检节点、HTTP kind 路由产生歧义。
+    'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',
+                                 flags=('--dry-run',),
+                                 produces=('stage6/semantic_{n}.json',)),
     # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
     #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',

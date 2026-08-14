@@ -254,6 +254,22 @@ def stage6_context(data: object) -> object:
         for ch in (data.get('chapters') or []) if isinstance(ch, dict))
 
 
+def stage6_semantic_hook(data: object) -> object:
+    """语义审判只消费文案的**文本字节集合**（去重）。
+
+    `--pick` 定稿只是把某条候选拷进 `approved`，不换任何文本 ⇒ 集合不变，
+    语义结论不过期；`--apply-edit` 改了字 ⇒ 集合变，正确触发过期。
+    与 `HookSemanticReview.judged_texts` 的 sha1 绑定是同一条口径的两个落点。
+    """
+    if not isinstance(data, dict):
+        return None
+    texts = [c.get('text') for c in (data.get('candidates') or []) if isinstance(c, dict)]
+    approved = data.get('approved')
+    if isinstance(approved, dict):
+        texts.append(approved.get('text'))
+    return sorted({t for t in texts if isinstance(t, str)})
+
+
 # ── stage7.rename ─────────────────────────────────────────────────────────────
 
 def stage7_grounding(data: object) -> object:
@@ -357,6 +373,13 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         'stage2/global_grounding.json': stage6_grounding,
         'stage3/style_grounding.json': stage6_style,
         'stage4/writer_context.json': stage6_context,
+    },
+    'stage6.semantic': {
+        'stage1/hook_copy.json': stage6_hook_copy,
+        'stage2/global_grounding.json': stage6_grounding,
+        'stage3/style_grounding.json': stage6_style,
+        'stage4/writer_context.json': stage6_context,
+        'stage6/hook.json': stage6_semantic_hook,
     },
     'stage7.rename': {
         'stage1/main_text.json': stage7_main_text,

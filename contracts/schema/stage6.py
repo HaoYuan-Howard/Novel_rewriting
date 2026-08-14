@@ -44,17 +44,18 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
 from contracts.invariants import HOOK_APPROACHES, HOOK_APPROVED_APPROACHES
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import Finding, LlmProvenance
-from contracts.schema.stage5 import ContextSource, JudgedDraft
+from contracts.schema.stage5 import ContextSource, JudgedDraft, SemanticClaim
 
 #: ⚠ 从 stage5 借的**不是拷贝，是同一个类**：`judged` 的形状与 stage5 逐字段相同
 #: （同一套理由：成稿一律不走那条记账的读路，因为两级 `input_key` 会造出一条假的匹配边），
-#: `sources.writer_context` 亦然。各定一份就是第二个落点。
-_ = (ContextSource, JudgedDraft)
+#: `sources.writer_context` 亦然；语义审判的 `SemanticClaim`（命题+逐字证据）同理。
+#: 各定一份就是第二个落点。
+_ = (ContextSource, JudgedDraft, SemanticClaim)
 
 
 class Mech(StrictModel):
@@ -268,3 +269,97 @@ class HookResponse(StrictModel):
 
     candidates: list[HookCandidateResponse] = Field(min_length=3, max_length=3)
     rationale: str = Field(min_length=1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `stage6/semantic_<n>.json` —— 付费文案语义审判（`R-9.19` / `R-9.20`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class HookTextClaimsResponse(StrictModel):
+    """第一相模型响应：只看**一条文案文本**抽命题，不接触 arc / secrets。
+
+    `claims` 复用 stage5 的 `SemanticClaim`（命题 + 逐字证据；借的是同一个类不是拷贝）。
+    """
+
+    label: str = Field(min_length=1)
+    coverage: Literal['complete', 'uncertain']
+    uncertainty_reason: str | None = None
+    claims: list[SemanticClaim]
+
+    # 与 stage5 的 `SemanticChapterClaims` 同款收敛：DeepSeek 实跑会把不确定原因写进
+    # 别名键；complete 时那些是模型擅自附带的过程说明，丢弃而不偷换成「不确定」。
+    @model_validator(mode='before')
+    @classmethod
+    def _normalise_uncertainty_reason_alias(cls, value):
+        if not isinstance(value, dict):
+            return value
+        got = dict(value)
+        alias_keys = ('coverage_reason', 'coverage_note', 'reason', 'reasoning')
+        if got.get('coverage') == 'uncertain':
+            present = {
+                key: got[key] for key in ('uncertainty_reason', *alias_keys)
+                if key in got and got[key] not in (None, '')
+            }
+            if len({str(item) for item in present.values()}) > 1:
+                raise ValueError(f'不确定原因别名互相冲突：{list(present)}')
+            if not got.get('uncertainty_reason') and present:
+                got['uncertainty_reason'] = next(iter(present.values()))
+        for alias in alias_keys:
+            got.pop(alias, None)
+        return got
+
+    @model_validator(mode='after')
+    def _uncertainty_is_explicit(self) -> 'HookTextClaimsResponse':
+        if self.coverage == 'uncertain' and not self.uncertainty_reason:
+            raise ValueError('coverage=uncertain 必须说明 uncertainty_reason')
+        if self.coverage == 'complete' and self.uncertainty_reason:
+            raise ValueError('coverage=complete 不应携带 uncertainty_reason')
+        return self
+
+
+class HookTextClaims(HookTextClaimsResponse):
+    """落盘形态 = 第一相响应 + 代码算的 `text_sha1`（文本内容 10 位指纹，绑定键）。"""
+
+    text_sha1: Fp10
+
+
+class HookClaimDecision(StrictModel):
+    """第二相的**单表裁决**：一条 claim 一行。
+
+    `arc_leak` 进 `hook_semantic_spoiler`（HARD）、`invented` 进
+    `hook_semantic_grounding`（INFO）、`unver` 让两条判据都不许洗绿。
+    """
+
+    label: str = Field(min_length=1)
+    claim_id: str = Field(min_length=1)
+    status: Literal['arc_leak', 'invented', 'grounded', 'unver']
+    reason: str = Field(min_length=1)
+
+    @field_validator('claim_id', mode='before')
+    @classmethod
+    def _normalise_claim_id(cls, value):
+        # 同 stage5：DeepSeek 稳定把序号写成 JSON number；引用键不承载语义，统一成字符串。
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
+
+
+class HookSemanticResponse(StrictModel):
+    """第二相模型响应。顶层只有 `decisions`；时间线/取值面由代码持有，不让模型复述。"""
+
+    decisions: list[HookClaimDecision]
+
+
+class HookSemanticReview(StrictModel):
+    """`stage6/semantic_<n>.json` —— 付费文案语义审判的可审计落盘形态。
+
+    ⚠ **绑定键是 `judged_texts`（label → 文本内容 sha1），不绑 hook.json 整文件**：
+    `--pick` 只改 `approved` 键、不换任何文本字节，整文件指纹绑死会让定稿动作把
+    语义结论误判过期——`R-9.17` 教训的同型。`hook_file_sha1` 只作审计。
+    """
+
+    judged_texts: dict[str, Fp10] = Field(min_length=1)
+    hook_file_sha1: Fp10
+    texts: list[HookTextClaims] = Field(min_length=1)
+    decisions: list[HookClaimDecision]
+    provenance: LlmProvenance = Field(alias='_provenance')

@@ -207,8 +207,10 @@ def test_every_action_is_a_command_that_build_argv_accepts(paid_payload):
     # ⚠ 76 → 78：stage2 并发首跑 +1；stage5 深浅分配是一个复合动作 +1。
     # ⚠ 78 → 80：Stage 5 书级语义审判默认路径与 `--dry-run` +2。
     # prompt 实验入口在完成选型后清理，不再占 action。
-    assert len(paid_payload['actions']) == 80, (
-        f'actions 有 {len(paid_payload["actions"])} 条，期望 80 '
+    # ⚠ 80 → 82（2026-08-14）：Stage 6 文案语义审判（`stage6.semantic`）
+    #   默认路径与 `--dry-run` +2——形态与 stage5.semantic 那次完全同型。
+    assert len(paid_payload['actions']) == 82, (
+        f'actions 有 {len(paid_payload["actions"])} 条，期望 82 '
         f'（每个节点的默认路径 + 每个独立 flag；复合动作只发布一次）。'
         f'这个数**会随 `NODES` 改**——改动它是有意的就来改这个数')
 

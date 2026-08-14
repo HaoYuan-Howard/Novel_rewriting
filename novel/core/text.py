@@ -79,6 +79,32 @@ def locate_norm(needle: str | None, text: str | None) -> tuple[int, int] | None:
     return idx[p], idx[p + len(k) - 1] + 1
 
 
+def whitespace_equivalent_slice(needle: str, body: str) -> str | None:
+    """唯一匹配时，把仅空白不同的模型 evidence 回取成正文原字节。
+
+    标点、汉字和顺序一概不归一；相同内容在正文出现两次时也拒绝猜位置。返回值因此
+    仍是 ``body`` 的真实连续子串，后续引用不需要另一套“近似证据”语义。
+
+    ⚠ 两个语义审判共用这一份（stage5 逐章 claims · stage6 文案 claims）——
+    各抄一份回取逻辑就会漂，而漂的表现是其中一处悄悄开始收下拼接证据。
+    """
+    compact_needle = ''.join(char for char in needle if not char.isspace())
+    if not compact_needle:
+        return None
+    positions = [index for index, char in enumerate(body) if not char.isspace()]
+    compact_body = ''.join(body[index] for index in positions)
+    start = compact_body.find(compact_needle)
+    if start < 0 or compact_body.find(compact_needle, start + 1) >= 0:
+        return None
+    end_compact = start + len(compact_needle) - 1
+    if end_compact >= len(positions):
+        return None
+    recovered = body[positions[start]:positions[end_compact] + 1]
+    if ''.join(char for char in recovered if not char.isspace()) != compact_needle:
+        return None
+    return recovered
+
+
 def window_overlap(text: str | None, source: str | None, window: int = 20,
                    exclude: str = '') -> float | None:
     """两段文本的【N 字窗口重合率】，扣除 `exclude` 里允许原样出现的那部分。

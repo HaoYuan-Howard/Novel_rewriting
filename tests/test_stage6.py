@@ -83,9 +83,13 @@ def test_every_registered_rule_produced_a_row(box):
 def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     """⚠ **stage6 的徽章在结构上永远不可能是 `pass`。**
 
-    8 条 `unver` 每次都输出（`builder._status_of` 强制），而 `badge_of` 见 `unver`
-    就至少 amber。**这不是缺陷**，是本层「能查的都查了、查不了的写在脸上」的可见形态
-    ——`hook_spoiler_unver` 尤其：它不是「还没做」，是**已实测判别力为零**。
+    6 条 `sev=unver` 每次都输出（`builder._status_of` 强制），而 `badge_of` 见 `unver`
+    就至少 amber。**这不是缺陷**，是本层「能查的都查了、查不了的写在脸上」的可见形态。
+
+    ⚠ 下面那个 8 = **6 条 `sev=unver`＋2 条语义判据的 unver 状态**——盘上三本
+    都没有 `stage6/semantic_<n>.json`，语义两条落「没审 ≠ 没问题」的 unver。
+    这两族语义不同（一族是判据的边界，一族是「还没花钱审」），数值巧合相等；
+    若语料书补跑了 `stage6.semantic`，此处应变成 6 并把语义两条另行断言。
 
     ⚠ 同时钉住 `passed=True`：**「有查不了的」不等于「不合格」**，退出码要是 0。
     """
@@ -93,6 +97,11 @@ def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     assert rep.badge == 'amber'
     assert rep.passed is True
     assert len([r for r in rep.rules if r.status == 'unver']) == 8
+    semantic_lines = [r for r in rep.rules if r.check_kind == 'semantic']
+    assert {r.rule for r in semantic_lines} == {'hook_semantic_spoiler',
+                                                'hook_semantic_grounding'}
+    assert all(r.status == 'unver' for r in semantic_lines), \
+        '盘上没有语义审判产物，语义两条只能是 unver——绿了就是洗绿'
 
 
 #: 盘上三本的命中集。**与原型的差别是一次有名有姓的裁决**：
@@ -203,13 +212,27 @@ def test_the_identity_baseline_is_exactly_twelve_cells_on_disk(box):
     缺的正是 `hook_quote_unbalanced`（那条判据晚于这三份产物）。
     **不许拿占位符补上**：断言「恰好等于 12 且缺的正好是它」，
     才能让「这份产物比那条判据老」这件事**留在盘上而不是被抹平**。
+    ⚠ 语义两条**不占格**：恒等基线是 0 成本路，不跑付费审判——集合要与
+    `hook._judgeable_rules` 同口径，否则这条测试在语义判据进表那一刻就会假红。
     """
     stored = sandbox.cut(box.book, 'stage6/hook.json')['baselines_identity']
     want = {r.rule for r in REGISTRY.of_stage('stage6')
-            if r.sev in ('hard', 'info') and r.rule != 'hook_reuses_source'}
-    assert len(want) == 13, '恒等基线该占 13 格（hard+info 减去 hook_reuses_source）'
+            if r.sev in ('hard', 'info') and r.check_kind != 'semantic'
+            and r.rule != 'hook_reuses_source'}
+    assert len(want) == 13, '恒等基线该占 13 格（机械 hard+info 减去 hook_reuses_source）'
     assert len(stored) == 12
     assert want - set(stored) == {'hook_quote_unbalanced'}
+
+
+def test_identity_grid_excludes_semantic_rules(box):
+    """恒等基线的格子只给**机械** hard+info——语义判据的产地是付费审判，
+    0 成本路给它们占格就是两个永远 `0/1` 的假格子。"""
+    ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
+    grid, _rep = hook.run_identity(ctx)
+    semantic_rules = {r.rule for r in REGISTRY.of_stage('stage6')
+                      if r.check_kind == 'semantic'}
+    assert semantic_rules == {'hook_semantic_spoiler', 'hook_semantic_grounding'}
+    assert not semantic_rules & set(grid)
 
 
 def test_body_stale_uses_consumed_not_the_whole_file_sha1(box):

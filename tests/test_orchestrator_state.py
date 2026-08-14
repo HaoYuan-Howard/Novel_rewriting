@@ -56,12 +56,21 @@ def test_every_json_artifact_a_node_produces_has_a_model():
     assert not missing, f'这些产物有产地却没有模型：{missing}'
 
 
-def test_stage5_is_the_only_stage_with_pattern_artifacts():
-    """带 `{}` 的产物路径 = 存在性做不了一次 `is_file()`，得走逐章那条路。
-    ⚠ 别顺手给别的层加这种路径而不给它一条逐份判定——那会让那一层的 `done` 恒 `None`。"""
+def test_pattern_artifacts_never_leave_a_stage_without_a_completion_anchor():
+    """带 `{}` 的产物路径 = 存在性做不了一次 `is_file()`。
+
+    stage5 整层都是逐份产物，完成度走逐章数那条路（`R-14.2`）；stage6 的
+    `semantic_{n}.json` 是**审计伴生产物**（与 stage5 的 `review_{n}`/`semantic_{n}`
+    同型，不进完成度），完成度仍锚在无花括号的 `hook.json` 上。
+    ⚠ 给一个层加花括号产物时，要么它有逐份判定，要么该层还留着一份可
+    `is_file()` 的锚——两样都没有，那一层的 `done` 恒 `None`。
+    """
     patterned = {spec.stage for spec in NODES.values()
                  for rel in spec.produces if '{' in rel}
-    assert patterned == {'stage5'}
+    assert patterned == {'stage5', 'stage6'}
+    for stage in sorted(patterned - {'stage5'}):
+        assert S.required_artifacts(stage), \
+            f'{stage} 只剩逐份不定的产物，完成度失去了可 is_file() 的锚点'
 
 
 # ───────────────────── 盘上三本（零成本，不写一个字节） ─────────────────────
