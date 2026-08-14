@@ -7,7 +7,6 @@ import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { QueryStates } from '@/components/state/QueryStates'
 import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
-import { HighlightedText } from '@/components/ui/HighlightedText'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { Prose } from '@/components/ui/Prose'
@@ -85,7 +84,9 @@ export function Stage6Screen() {
                 </div>
               </header>
 
-              <div className="prose-cn text-tag text-ink-4">{d.scope_note}</div>
+              <div className="prose-cn text-tag text-ink-4">
+                判据只看下发范围（lead_upto 前 {d.lead_upto} 章）；{d.rationale}
+              </div>
 
               {!finalPhase ? (
                 <>
@@ -115,28 +116,24 @@ export function Stage6Screen() {
                             <span
                               className={cx(
                                 'ml-auto rounded-tag px-8 py-2 text-tag',
-                                !c.hard && 'bg-inset text-ink-3',
+                                !c.findings.some((f) => f.sev === 'hard') && 'bg-inset text-ink-3',
                               )}
                               style={
-                                c.hard
+                                c.findings.some((f) => f.sev === 'hard')
                                   ? { color: SEV.hard.color, background: SEV.hard.bg }
                                   : undefined
                               }
                             >
-                              hard {c.hard} · info {c.info} · 共 {c.findings.length} 条
+                              hard {c.findings.filter((f) => f.sev === 'hard').length} · info{' '}
+                              {c.findings.filter((f) => f.sev === 'info').length} · 共{' '}
+                              {c.findings.length} 条
                             </span>
                           </div>
 
                           <div className="flex flex-col gap-8 px-16 py-14">
-                            {/* segments 里带 rule/sev 的片段按 sev 上色 —— 服务端切好的，前端不按下标切 */}
-                            <p className="prose-cn m-0 max-w-[var(--measure-compare)] text-read leading-[2.05]">
-                              <HighlightedText
-                                parts={c.segments.map((s) => ({
-                                  text: s.text,
-                                  sev: s.sev,
-                                  rule: s.rule,
-                                }))}
-                              />
+                            {/* 高亮由 findings.evidence 在文案里 indexOf —— 与验收屏同一做法 */}
+                            <p className="prose-cn m-0 max-w-[var(--measure-compare)] whitespace-pre-wrap text-read leading-[2.05]">
+                              {c.text}
                             </p>
                           </div>
 
@@ -174,7 +171,10 @@ export function Stage6Screen() {
                       )
                     })}
                   </div>
-                  <div className="prose-cn text-tag text-ink-4">{d.approve_note}</div>
+                  <div className="prose-cn text-tag text-ink-4">
+                    文案好坏没有确定性判据——人选的那一下就是现役的唯一闸门。改字不在浏览器：把
+                    hook_edit.json 放进书目录 stage6/ 后跑 stage6.hook --apply-edit（0 成本）。
+                  </div>
                 </>
               ) : (
                 <div
@@ -182,17 +182,10 @@ export function Stage6Screen() {
                   style={{ gridTemplateColumns: '300px minmax(0,1fr) minmax(0,1.15fr)' }}
                 >
                   <Panel className="flex flex-col">
-                    <PaneHeader title="校验" meta={d.rules.length + ' 条判据'} />
-                    <div className="flex flex-wrap gap-8 border-b border-line-soft px-16 py-10">
-                      {(['hard', 'info', 'metric', 'unver'] as const).map((s) => (
-                        <span key={s} className="inline-flex items-center gap-5 text-mini">
-                          <SevMark sev={s} />
-                          <span style={{ color: SEV[s].color }}>
-                            {SEV[s].label} {d.counts[s] ?? 0}
-                          </span>
-                        </span>
-                      ))}
-                    </div>
+                    <PaneHeader
+                      title="定稿那一份的判定"
+                      meta="判据全表见本屏底部的 stage6 校验"
+                    />
                     {(d.approved?.findings ?? []).map((f, i) => (
                       <FindingLine key={i} f={f} />
                     ))}

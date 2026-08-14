@@ -19,16 +19,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
+    // 后端错误体是 ErrorBody{kind,message,missing,hint}：kind 是异常类名（id 不是措辞），
+    // 前端按它分「层没跑 / 产物坏了 / 书不存在」，不靠句子前缀去认。
     let message: string | undefined
+    let backendKind: string | null = null
+    let missing: string | null = null
+    let hint: string | null = null
     try {
-      const body = (await res.json()) as { message?: unknown }
+      const body = (await res.json()) as {
+        message?: unknown
+        kind?: unknown
+        missing?: unknown
+        hint?: unknown
+      }
       if (typeof body.message === 'string' && body.message) message = body.message
+      if (typeof body.kind === 'string' && body.kind) backendKind = body.kind
+      if (typeof body.missing === 'string') missing = body.missing
+      if (typeof body.hint === 'string') hint = body.hint
     } catch {
       // 非 JSON 错误仍按状态码归一，不能让解析错误盖掉真正的 HTTP 状态。
     }
     throw new ApiError(res.status === 404 ? 'notfound' : 'server', path, {
       status: res.status,
       message,
+      backendKind,
+      missing,
+      hint,
     })
   }
 

@@ -5,6 +5,7 @@ import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { FRESH, MUTED, SEV, SPOILER_ON } from '@/constants/vocabulary'
 import { useApprovals } from '@/hooks/useApprovals'
+import { useEnums } from '@/hooks/useEnums'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { QueryStates } from '@/components/state/QueryStates'
@@ -32,6 +33,11 @@ export function GlobalScreen() {
   const [tab, setTab] = useState<Tab>('chars')
 
   const q = useQuery({ queryKey: qk.global(sid), queryFn: () => api.getGlobal(sid), retry: false })
+  // R-11.13 那句常驻标注的唯一落点是 /api/enums（partial_mask_note），不再随视图下发
+  const enums = useEnums()
+  const maskNote =
+    (enums.data as { partial_mask_note?: string } | undefined)?.partial_mask_note ??
+    '本开关只关 fate / secrets / climax / ending 四个字段——这是部分屏蔽，不是屏蔽。'
 
   useEffect(() => {
     if (doc && !doc.seen.global && !markSeen.isPending) markSeen.mutate('global')
@@ -93,7 +99,7 @@ export function GlobalScreen() {
                       className="mt-4 inline-block h-10 w-10 flex-none bg-warn"
                       style={{ clipPath: 'polygon(50% 0,100% 100%,0 100%)' }}
                     />
-                    <span className="prose-cn text-tag text-warn-ink">{d.partial_mask_note}</span>
+                    <span className="prose-cn text-tag text-warn-ink">{maskNote}</span>
                   </div>
                 </div>
               </header>
@@ -146,16 +152,6 @@ export function GlobalScreen() {
                     <Panel key={c.char_id} className="flex flex-col gap-8 px-16 py-13">
                       <div className="flex flex-wrap items-center gap-8">
                         <span className="text-h3 font-semibold">{c.canonical}</span>
-                        <span
-                          className={cx(
-                            'rounded-tag px-7 py-1 text-mini',
-                            c.display === c.canonical
-                              ? 'bg-inset text-ink-3'
-                              : 'bg-accent-bg text-accent-ink',
-                          )}
-                        >
-                          {c.display === c.canonical ? '下发名同上' : '下发名 ' + c.display}
-                        </span>
                         <Mono className="text-micro text-ink-5">{c.char_id}</Mono>
                         <span className="ml-auto rounded-tag bg-inset px-7 py-1 text-micro text-ink-4">
                           辨识度 {c.name_distinctiveness}
@@ -265,8 +261,11 @@ export function GlobalScreen() {
                         <Mono className="text-mini text-ink-4">{s.secret_id}</Mono>
                         <span className="prose-cn text-section text-ink-2">{s.fact}</span>
                         <span className="text-tag text-ink-4">
-                          知情：{s.known_by.join('、') || '—'} · 读者此时
-                          {s.reader_knows_by_now ? '已知' : '未知'}
+                          知情：{s.known_by.map((k) => k.display).join('、') || '—'} · 第{' '}
+                          {s.reader_reveal_chapters.join('、')} 章揭示
+                          {s.setup_chapters.length
+                            ? ' · 埋点 ch' + s.setup_chapters.join('/')
+                            : ''}
                         </span>
                       </Panel>
                     ))}
@@ -276,12 +275,12 @@ export function GlobalScreen() {
                     title="secrets 是空数组 —— 一条秘密都没抽到"
                     body="空数组的意思是「这本书没抽到秘密」，不等于「这本书没有秘密」。这一屏不替你下结论：要判断是真没有还是漏抽了，去对着原文看一遍。"
                     extra={
-                      !spoilers && d.hidden.secrets ? (
+                      !spoilers && d.secrets.length ? (
                         <div
                           className="rounded-btn border border-dashed px-12 py-8 text-sm2"
                           style={{ borderColor: SEV.unver.border, color: SEV.unver.color }}
                         >
-                          剧透开关关着时另有 {d.hidden.secrets} 条被遮住的秘密字段——遮蔽和空是两回事。
+                          剧透开关关着时另有 {d.secrets.length} 条被遮住的秘密字段——遮蔽和空是两回事。
                         </div>
                       ) : null
                     }

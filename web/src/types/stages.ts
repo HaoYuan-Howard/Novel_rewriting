@@ -1,16 +1,16 @@
 /**
- * stage0 – stage7 的响应形状。字段名照抄，联合类型显式写出来。
+ * stage0 – stage7 的响应形状。字段名照抄后端契约（`contracts/schema/api.py`），
+ * 抓包证据在 `src/fixtures/backend_v1/`。
  */
-import type { Badge, Freshness, Mode, Op, Severity, InboxKind } from '@/constants/vocabulary'
+import type { Badge, Freshness, Mode, Severity, InboxKind } from '@/constants/vocabulary'
 import type {
-  CharRef,
   Facts,
   Finding,
+  NameRef,
   PlanNarration,
   Provenance,
-  RuleRow,
+  RuleLine,
   Sources,
-  StaleRef,
 } from './common'
 
 /* ---------------------------------------------------------------- stage0 */
@@ -180,76 +180,84 @@ export interface Stage1HookCopy {
   note: string
 }
 
+/* ------------------------------------------------- 产物处境（六格一次拿全） */
+
+/** 一份产物此刻的处境（`contracts/schema/orchestration.py::ArtifactState`）。 */
+export interface ArtifactState {
+  rel: string
+  exists: boolean
+  bytes: number | null
+  mtime: number | null
+  freshness: Freshness
+  reason: string
+  ghosts: string[]
+  invalid: boolean
+  readable: boolean
+}
+
 /* ------------------------------------------------- stage2 · 原文↔骨架 */
 
-export interface ReadingSegmentBeat {
-  kind: 'beat'
+/** 该章原文上的一个连续分区。`beat_id=null` ⇒ 空隙（hole）。服务端已切好 text。 */
+export interface ReadingSegment {
   start: number
   end: number
   chars: number
-  beat_id: string
-  /** 服务端已经切好片。前端绝不按 start/end 自己切字符串（Python 码点 ≠ JS 码元） */
+  /** 前端绝不按 start/end 自己切字符串（Python 码点 ≠ JS 码元） */
   text: string
-}
-
-export interface ReadingSegmentHole {
-  kind: 'hole'
-  start: number
-  end: number
-  chars: number
-  /** 达到 uncovered_min_chars 才判为「漏」 */
+  beat_id: string | null
+  /** 空隙且 ≥ uncovered_min_chars 才 true；beat 分区恒 false */
   flagged: boolean
-  text: string
 }
 
-export type ReadingSegment = ReadingSegmentBeat | ReadingSegmentHole
-
-export interface Hinge {
+export interface ReadingHinge {
   kind: string
-  text: string
+  /** null = 未定位（INVALID 状态的 hinge 没有原文可引） */
+  text: string | null
 }
 
 export interface ReadingBeat {
   beat_id: string
   located: boolean
-  start: number
-  end: number
+  start: number | null
+  end: number | null
   time_layer: string
-  place: string
-  present: CharRef[]
+  place: string | null
+  present: string[]
   event: string
-  hinges: Hinge[]
-  span: { starts_with: string; ends_with: string }
+  hinges: ReadingHinge[]
 }
 
 export interface ReadingNarration {
-  last_beat_id: string | null
   grammatical_person: string
-  narrator: CharRef
-  focalizer: CharRef
+  narrator: string | null
+  focalizer: string | null
   pronoun_surfaces: string[]
 }
 
 export interface ReadingResponse {
+  sid: string
+  title: string
   chapter_ordinal: number
   text_chars: number
-  summary: string
+  /** false = stage2 没跑（或蓝图里没有这一章 / 读不回）。左半边仍是 stage1 的原文。 */
+  blueprint: boolean
+  summary: string | null
   segments: ReadingSegment[]
   beats: ReadingBeat[]
   narration: ReadingNarration[]
-  /** 空数组 = 抽取过程没报出问题。**不代表抽全了。** */
-  problems: string[]
   /** 没被任何 beat 覆盖的字数 */
   loose: number
   uncovered_min_chars: number
-  blueprint: boolean
+  /** blueprint=false 的两种来路（没跑 / 读不回）靠它分 */
+  blueprint_state: ArtifactState
+  _provenance: Provenance | null
 }
 
 /* ------------------------------------------------- stage2 · 全局设定 */
 
 export interface GlobalAddress {
   surface: string
-  by: CharRef
+  by: NameRef
   context: string
   from_chapter: number
 }
@@ -257,19 +265,18 @@ export interface GlobalAddress {
 export interface GlobalCharacter {
   char_id: string
   canonical: string
-  display: string
   name_distinctiveness: string
   role: string
+  /** 全量下发；剧透遮蔽是前端的纯展示行为（R-11.13） */
+  fate: string | null
   address: GlobalAddress[]
-  /** 剧透开关关着时服务端不下发这个字段 */
-  fate?: string
 }
 
 export interface GlobalRelation {
   relation_id: string
-  subject: CharRef
+  subject: NameRef
   predicate: string
-  object: CharRef
+  object: NameRef
   valid_from_chapter: number
   valid_to_chapter: number | null
 }
@@ -283,13 +290,15 @@ export interface GlobalWorldRule {
 export interface GlobalSecret {
   secret_id: string
   fact: string
-  known_by: string[]
-  reader_knows_by_now: boolean
+  known_by: NameRef[]
+  setup_chapters: number[]
+  reader_reveal_chapters: number[]
 }
 
 export interface Stage2Global {
-  source_id: string
+  sid: string
   title: string
+  /** 键是那两个固定中文 key（时代背景 / 世界观） */
   setting: Record<string, string>
   characters: GlobalCharacter[]
   relations: GlobalRelation[]
@@ -298,19 +307,21 @@ export interface Stage2Global {
   secrets: GlobalSecret[]
   arc: {
     conflict_stages: { stage: string; chapters: number[] }[]
+    climax: string
+    ending: string
     arc_tracks: {
-      subject: CharRef
+      subject: NameRef
       dimension: string
       change_type: string
       trajectory: string
     }[]
   }
-  spoilers: boolean
-  /** 被遮住的条数。secrets: [] 配 hidden.secrets: 7 —— 遮蔽和空是两回事 */
-  hidden: { fate: number; secrets: number; climax: boolean; ending: boolean }
-  /** 这句必须常驻显示在剧透开关旁边，不能收进 tooltip */
-  partial_mask_note: string
+  /** 全屏解引用失败的总数（读数，不是判定） */
   unresolved_refs: number
+  invalid_exists: boolean
+  freshness: Freshness
+  reason: string
+  ghosts: string[]
   _provenance: Provenance
 }
 
@@ -334,11 +345,12 @@ export interface StyleBodyMetrics {
   avg_paragraph_chars: number
   paragraph_sep_chars: number
   avg_sentence_chars: number
-  dialogue_ratio: number
+  dialogue_ratio: number | null
   dialogue_ratio_applicable: boolean
   quote_styles: string[]
-  chapter_chars?: { min: number; max: number; avg: number }
-  per_chapter_avg_sentence?: { min: number; max: number }
+  chapter_chars?: { min: number; max: number; avg: number } | null
+  per_chapter_avg_sentence?: { min: number; max: number } | null
+  [k: string]: unknown
 }
 
 export interface StyleMeasured {
@@ -346,26 +358,38 @@ export interface StyleMeasured {
   hook: StyleBodyMetrics
 }
 
+/** 一项实测漂移（具名对象，不是三元组）。`（缺）` 是特殊值：少一个键也算漂移。 */
+export interface DriftItem {
+  key: string
+  stored: number | string | string[] | null
+  now: number | string | string[] | null
+}
+
 export interface Stage3Style {
+  sid: string
+  title: string
   /** false = stage3 还没跑。左半边（实测）仍然有内容。 */
   exists: boolean
   invalid_exists: boolean
-  title: string
-  source_id: string
+  /** 三态：null = 产物不在盘上，「读不读得回来」无从谈起 */
+  readable: boolean | null
   voice: StyleVoice[]
-  voice_extra: StyleVoice[]
   surface_habits: string[]
   hook_style: StyleHookKey[]
-  hook_copy_text: string
   measurable_stored: StyleMeasured | null
+  bands_stored: Record<string, string> | null
+  _provenance: Provenance | null
+  hook_copy_text: string | null
   measured_now: StyleMeasured | null
+  bands_now: Record<string, string> | null
   measure_error: string | null
-  /** 档位词。档位词有没有变，比数字有没有变更要紧。 */
-  bands_now: Record<string, string>
-  bands_stored: Record<string, string>
-  bands_error: string | null
-  drift: string[]
-  _provenance: Provenance
+  /** 异常类名（id 不是措辞）：UpstreamMissing = 先跑 stage1；ArtifactUnreadable = 去看那份产物 */
+  measure_error_kind: string | null
+  /** `[]` = 比过了没漂移；`null` = 有一边算不出来，无从比 */
+  drift: DriftItem[] | null
+  freshness: Freshness
+  reason: string
+  ghosts: string[]
 }
 
 /* ---------------------------------------------------------------- stage4 */
@@ -373,298 +397,250 @@ export interface Stage3Style {
 export interface PlanBeat {
   i: number
   from_beats: string[]
-  unknown_refs: string[]
-  budget_chars: number
-  source_chars: number
-  verbatim_chars: number
-  events: string[]
-  /** 会是 null：这一拍跨了多个时间层 / 地点，单一值填不了 */
-  time_layer: string | null
-  place: string | null
-  /** 这里是显示名字符串，不是 CharRef */
-  present: string[]
-  segments: { time_layer: string; place: string; present: string[] }[]
-  /** 必须逐字写进去的原话 */
-  verbatim: string[]
-  keep_value: string[]
-  must_appear: string[]
-  must_hold: string[]
+  /** null 只出现在恒等基线上（算不出源字数的拍，不估算） */
+  budget_chars: number | null
 }
 
-export interface PlanIndexRow {
-  output_ordinal: number
-  op: Op
-  span_chars: number
-  budget_chars: number
-  in_band: boolean
-  style_hits: string[]
-  span_coverage: [number, number]
-  beats: number
-  hidden: number
-}
-
-export interface PlanChapter {
+export interface PlanChapterLine {
   output_ordinal: number
   from_source_ordinals: number[]
-  op: Op
   chapter_goal: string
   open_hook_goal: string
   end_hook_goal: string
-  span_chars: number
-  span_coverage: [number, number]
-  band: [number, number]
-  budget_chars: number
-  in_band: boolean
-  writer_target: [number, number]
-  writer_target_estimated: boolean
-  chapter_source_chars: number
   beats: PlanBeat[]
-  style_hits: string[]
+}
+
+/** 章索引一行。⚠ 没有 in_band/style_hits —— 那是判据结论，去 join /check/stage4。 */
+export interface Stage4IndexRow {
+  output_ordinal: number
+  budget_chars: number | null
+  span_chars: number | null
+  beats: number
+  /** 本章不许泄的 secret 数；null = ctx 不在盘上，判不了 */
+  hidden: number | null
+}
+
+/** 写手一拍的任务（`CtxBeat`）。 */
+export interface CtxBeat {
+  events: string[]
+  budget_chars: number
+  source_chars: number | null
+  time_layer?: string | null
+  place?: string | null
+  present?: string[] | null
+  segments?: { time_layer: string; place: string | null; present: string[] }[] | null
+  verbatim?: string[] | null
+  keep_value?: string[] | null
+  must_appear?: string[] | null
+  must_hold?: string[] | null
+}
+
+/** 一个输出章的完整任务书（`CtxChapter`）。 */
+export interface CtxChapter {
+  output_ordinal: number
+  from_source_ordinals: number[]
+  chapter_goal: string
+  open_hook_goal: string
+  end_hook_goal: string
+  budget_chars: number | null
+  source_chars: number
+  beats: CtxBeat[]
   characters: Record<string, { display_name: string; role: string }>
-  facts: Facts
   narration: PlanNarration[]
+  facts: Facts
   must_not_reveal: string[]
 }
 
 export interface Stage4Response {
-  plan_exists: boolean
-  /** 'identity' = 还没跑过 stage4，这是恒等基线，不是真计划 */
-  plan_source: string
-  ctx_source: string
-  invalid_exists: boolean
+  sid: string
   title: string
-  source_id: string
-  book: {
-    reconstruction_strategy: string
-    strategy_style_hits: string[]
-    ops: Record<string, number>
-    chapters: number
-    span_chars: number
-    budget_chars: number
-    ratio: number
-    beat_density: number
-    characters: Record<
-      string,
-      { display_name: string; role: string; name_distinctiveness: string }
-    >
-  }
-  not_in_writer_prompt: string
-  identity_note: string
-  plan_scope_note: string
-  _provenance: Provenance
-  _ctx_provenance: Provenance
-  index: PlanIndexRow[]
+  /** true = 恒等基线（没跑过 stage4，现算的「如果什么都不改」），不是真计划 */
+  identity_plan: boolean
+  reconstruction_strategy: string
+  chapters: number[]
   ordinal: number
-  chapter: PlanChapter
+  index: Stage4IndexRow[]
+  plan_chapter: PlanChapterLine
+  /** null = 计划在而 ctx 不在盘上（右半边缺席，ctx_state 说明处境） */
+  ctx_chapter: CtxChapter | null
+  /** 与写手同一把尺子（prompts.target_band）；null ⇔ ctx_chapter=null */
+  writer_target: [number, number] | null
+  writer_target_estimated: boolean
+  plan_state: ArtifactState
+  ctx_state: ArtifactState
+  _provenance: Provenance | null
+  _ctx_provenance: Provenance | null
 }
 
 /* ---------------------------------------------------------------- stage5 */
 
-/**
- * 写手拿到的材料里的一拍。
- * 注意与 PlanBeat 的差别：少 i / from_beats / unknown_refs / source_chars / verbatim_chars，
- * 且五个约束字段缺省是 **null** 而不是 []（stage4 那边是 []）。两层不一致，判空要写两套。
- */
-export interface MaterialBeat {
-  budget_chars: number
-  events: string[]
-  /** 这三个也会是 null（样本里第 7 拍就是）。null ≠ 空数组，判空要判两次。 */
-  time_layer: string | null
-  place: string | null
-  present: string[] | null
-  segments: { time_layer: string; place: string; present: string[] }[] | null
-  verbatim: string[] | null
-  keep_value: string[] | null
-  must_appear: string[] | null
-  must_hold: string[] | null
-}
-
+/** 写手拿到的下发面 —— 与写手同一份（build_material 的 blocks），不是重组的第二份。 */
 export interface Materials {
-  chapter_goal: string
-  open_hook_goal: string
-  end_hook_goal: string
-  budget_chars: number
-  source_chars: number
+  blocks: string[]
+  chars: number
   writer_target: [number, number]
   writer_target_estimated: boolean
-  beats: MaterialBeat[]
-  facts: Facts
-  narration: PlanNarration[]
-  characters: Record<string, { display_name: string; role: string }>
-  must_not_reveal_count: number
 }
 
-/** 原文↔成稿的一个对齐块。一行可能盖好几拍 —— anchored 为 false 时必须显式标出来。 */
+/** 原文↔成稿的一个对齐块。anchored=false = 本块并入了无锚的拍。 */
 export interface AlignRow {
   beats: number[]
   l: string
   r: string
-  budget_chars: number
-  source_chars: number
   anchored: boolean
 }
 
+/** 对齐的账。锚点覆盖率必须常驻显示（「锚 3/8 拍」）。 */
 export interface DraftAlign {
   beats: number
   anchors: number
   rows: number
   inversions: number
-  /** 锚点覆盖率。这个数要常驻显示（「锚 3/8 拍」），不能藏。 */
   coverage: number
+  /** 常驻：这是对应关系，不是判定 */
   note: string
 }
 
 export interface Draft {
-  mode_dir: string
   mode: Mode
-  tagged: boolean
-  op: Op
+  relpath: string
+  invalid: boolean
+  round: number
+  /** human = --apply-edit 的人工稿；llm = 模型产的 */
+  origin: string
   chars: number
-  budget_chars: number
+  budget_chars: number | null
   source_chars: number
-  overlap_excl_verbatim: number
+  overlap_excl_verbatim: number | null
   text: string
+  /** null = 本章无锚可对（对齐辅助诚实缺席，不编分界线） */
+  align: DraftAlign | null
   align_rows: AlignRow[]
-  align: DraftAlign
   freshness: Freshness
-  stale: StaleRef[]
-  provenance: Provenance
+  reason: string
+  _provenance: Provenance
 }
 
 export interface DraftIndexRow {
   output_ordinal: number
-  op: Op
-  budget_chars: number
+  budget_chars: number | null
   modes: Mode[]
   invalid_modes: Mode[]
   dup: boolean
-  chars: number
-  overlap_excl_verbatim: number
-  freshness: Freshness
-}
-
-export interface DraftChapter {
-  output_ordinal: number
-  op: Op
-  from_source_ordinals: number[]
-  source_text: string
-  source_chars_raw: number
-  materials: Materials
-  /** 字段是数组，但一章常常只有 1 份成稿（另一条臂没写这一章） */
-  drafts: Draft[]
-  invalid_drafts: Draft[]
+  chars: number | null
+  overlap_excl_verbatim: number | null
+  freshness: Freshness | null
 }
 
 export interface Stage5Response {
+  sid: string
+  title: string
   /** false = 写作上下文还没建。给「先跑 stage4」，**不显示假材料**。 */
   ctx_exists: boolean
-  note: string | null
-  modes: Mode[]
-  book_draft_exists: boolean
-  gate_note: string
-  depth_note: string
-  title: string
-  source_id: string
-  planned: number
+  /** null = 计划读不回来，「该有几章」判不了（与 0 是两件事） */
+  planned: number | null
   written: number
   invalid: number
   missing: number[]
   duplicates: number[]
-  index: DraftIndexRow[]
+  chapters: number[]
   ordinal: number
-  chapter: DraftChapter
+  index: DraftIndexRow[]
+  source_text: string | null
+  source_chars_raw: number | null
+  materials: Materials | null
+  /** 一章常常只有 1 份成稿（另一条臂没写这一章） */
+  drafts: Draft[]
+  invalid_drafts: Draft[]
+  ctx_state: ArtifactState
 }
 
 /* ------------------------------------------------------ stage5 · 验收 */
 
 export interface ReviewIndexRow {
   output_ordinal: number
-  mode: Mode
-  round: number
-  chars: number
-  budget_chars: number
-  hard: number
-  info: number
-  unver: number
+  mode: Mode | null
+  round: number | null
+  chars: number | null
+  budget_chars: number | null
+  /** 四 sev 键恒在（0 也写） */
+  finding_counts: Record<Severity, number>
   unresolved: number
-  stale: boolean
+  /** 验收判的那份与盘上当前那份还是不是同一份；null = 判不了 */
+  stale: boolean | null
 }
 
 export interface ReviewChapter {
   output_ordinal: number
   findings: Finding[]
-  mode: Mode
-  mode_dir: string
-  chars: number
-  budget_chars: number
-  round: number
-  origin: string
-  text: string
-  segments: { text: string; rule?: string; sev?: Severity }[]
-  errs: string[]
-  warns: string[]
-  rounds: unknown[]
-  /** 空数组 = 这一章没有第二轮稿可比 */
-  diff_rows: { l: string; r: string; kind: string }[]
-  provenance: Provenance
+  mode: Mode | null
+  chars: number | null
+  budget_chars: number | null
+  round: number | null
+  origin: string | null
+  /** 当前盘上的正式稿正文（改稿入口贴着它）；null = 本章无稿 */
+  text: string | null
+  /** 已归档的轮次号（_rounds/），升序 */
+  rounds: number[]
+  stale: boolean | null
 }
 
 export interface ReviewResponse {
-  edit_note: string
-  scope_note: string
-  note: string | null
-  review_seq: number
+  sid: string
   title: string
+  review_seq: number
   sources: Sources
-  counts: Partial<Record<Severity, number>>
+  /** 全书按 sev 现数，四键恒在 —— 不读产物的稀疏 counts */
+  finding_counts: Record<Severity, number>
   baselines: Record<string, string>
+  baselines_identity: Record<string, string>
   book: Finding[]
-  drift: string[]
-  index: ReviewIndexRow[]
+  wontfix: number
+  chapters: number[]
   ordinal: number
+  index: ReviewIndexRow[]
   chapter: ReviewChapter
+  _provenance: Provenance
 }
 
 /* ---------------------------------------------------------------- stage6 */
 
-export interface HookSegment {
-  text: string
-  rule?: string
-  sev?: Severity
-}
-
 export interface HookMech {
   punct_fixed: number
   quotes_fixed: number
-  quote_problems: string[]
   paras_fixed: number
 }
 
 export interface HookCandidate {
   index: number
   approach: string
+  /** measure() 那把尺子的去空白字数（服务端现算，与判据同源） */
   chars: number
   text: string
-  segments: HookSegment[]
-  findings: Finding[]
   mech: HookMech
-  hard: number
-  info: number
+  findings: Finding[]
+  /** 这一条是不是当前定稿 */
   approved: boolean
 }
 
 export interface HookApproved {
   approach: string
+  chars: number
   text: string
   origin: string
   mech: HookMech
   findings: Finding[]
 }
 
+export interface JudgedDraft {
+  output_ordinal: number
+  round: number
+  sha1: string
+  consumed: { output_ordinal: number; text_sha1: string; has_budget_chars: boolean | null } | null
+}
+
 export interface Stage6Response {
-  scope_note: string
-  approve_note: string
-  note: string | null
+  sid: string
   title: string
   lead_upto: number
   rationale: string
@@ -672,19 +648,15 @@ export interface Stage6Response {
   /** null = 还没定稿 */
   approved: HookApproved | null
   book: Finding[]
-  sources: Sources
-  drift: string[]
-  baselines: Record<string, string>
+  /** 键是成稿完整相对路径 */
+  judged: Record<string, JudgedDraft>
   baselines_identity: Record<string, string>
-  counts: Partial<Record<Severity, number>>
-  context: {
-    chapters: number[]
-    judged: Record<
-      string,
-      { output_ordinal: number; round: number; sha1: string; mode: Mode }
-    >
-  }
-  rules: RuleRow[]
+  sources: Sources
+  invalid_exists: boolean
+  freshness: Freshness
+  reason: string
+  ghosts: string[]
+  _provenance: Provenance
 }
 
 /* ---------------------------------------------------------------- stage7 */
@@ -694,65 +666,77 @@ export interface NameChar {
   old_canonical: string
   new_canonical: string
   renamed: boolean
-  /** renamed:false 时这里说明为什么没改 */
-  not_renamed_reason: string
+  /** renamed=true 时恒 null */
+  not_renamed_reason: string | null
   reason: string
   aliases: { old: string; new: string }[]
-  changed_aliases: { old: string; new: string }[]
+  /** 这个角色全部字面在 applied 记账里的替换总次数（按人求和的读数） */
   hits: number
 }
 
-/** 漏网叫法候选 —— 唯一能发现人名表本身漏了人的地方 */
+/** 漏网叫法候选 —— 唯一能发现人名表本身漏了人的地方。顺序是承重的。 */
 export interface Residual {
   stem: string
   where: string
-  hit: number
+  /** 命中处起 3 个字（后端是字符串，不是数字） */
+  hit: string
   context: string
   confidence: string
-  unit: string
+  unit: string | null
   suggest: string | null
 }
 
+export interface StemBaseline {
+  total: number
+  covered: number
+  residual: number
+  /** total=0 时是 null（那种 stem 原文里一次都没出现过），不是 0.0 */
+  ratio: number | null
+}
+
+/** 逐章对照一行。changed 是 bool（不是 kind 字符串）。 */
 export interface NameRow {
   l: string
   r: string
-  kind: 'same' | 'changed'
+  changed: boolean
+}
+
+export interface IdentityBaseline {
+  roundtrip_ok: boolean
+  chapters: number
+  mismatches: string[]
+  blind: string[]
 }
 
 export interface Stage7Response {
-  scope_note: string
-  residual_note: string
-  note: string | null
+  sid: string
   title: string
-  title_new: string
   surname_map: Record<string, string>
   characters: NameChar[]
+  extra_subs: { old: string; new: string; origin: string; note?: string | null }[]
   subs_count: number
   kept_count: number
-  extra_subs: { old: string; new: string; origin: string }[]
   residual: Residual[]
-  baselines: Record<
-    string,
-    { total: number; covered: number; residual: number; ratio: number }
-  >
+  baselines: Record<string, StemBaseline>
   approved: { origin: string } | null
   book: Finding[]
+  /** null = 恒等基线从没跑过（不是「迁移没填」） */
+  identity: IdentityBaseline | null
+  /** 组装时的账；book_txt_on_disk 才是盘上此刻的实况（两者可分家） */
+  book_txt: { sha1: string; chars: number; chapters: number } | null
+  book_txt_on_disk: boolean
   sources: Sources
-  drift: string[]
-  counts: Partial<Record<Severity, number>>
-  book_txt: {
-    sha1: string
-    chars: number
-    chapters: number
-    has_hook: boolean
-    on_disk: string
-  } | null
   chapters: number[]
-  /** 逐章对照时才有 */
+  /** 逐章对照时才有；与 rows 同进同出 */
   ordinal: number | null
   rows: NameRow[] | null
-  hook: { before: string; after: string }
-  rules: RuleRow[]
+  /** null = 文案没定稿（对照的左边没有来源） */
+  hook: { before: string; after: string } | null
+  invalid_exists: boolean
+  freshness: Freshness
+  reason: string
+  ghosts: string[]
+  _provenance: Provenance
 }
 
 /* ----------------------------------------------------------------- 其他 */
@@ -760,7 +744,8 @@ export interface Stage7Response {
 export interface InboxItem {
   kind: InboxKind
   stage: string
-  chapter: number
+  /** 输出章口径；null = 书级 / 整份产物 */
+  chapter: number | null
   rule: string
   what: string
   how: string
@@ -768,61 +753,74 @@ export interface InboxItem {
 
 export interface InboxResponse {
   items: InboxItem[]
-  counts: Partial<Record<InboxKind, number>>
+  /** 六键全出（0 也要出） */
+  counts: Record<InboxKind, number>
   total: number
   wontfix: number
 }
 
-/** 一条能修它的动作。没有这个字段的结论，界面就不该画「重跑修它」按钮。 */
-export interface FixAction {
-  kind: string
-  extra: string[]
-  paid: boolean
-}
+/* ------------------------------------------------------------ 校验报告 */
 
-export interface CheckItem {
+export interface CheckAccountingLine {
+  key: string
   item: string
-  detail: string
-  /** 涉及哪几章由服务端结构化下发。不要从 detail 那段中文里正则抠。 */
-  chapters: number[] | null
-  fix: FixAction | null
+  recorded: boolean
+  count: number
+  detail: unknown[]
 }
 
-export interface CheckUnverItem {
-  item: string
-  detail: string
+export interface CheckRetiredLine {
+  rule: string
+  why: string
 }
 
+export interface CheckProvenance {
+  freshness: Freshness
+  reason: string
+  ghosts: string[]
+  edges: unknown[]
+  invalid: string[]
+  revalidated: boolean
+  origin: string | null
+  [k: string]: unknown
+}
+
+/**
+ * 一次校验的完整输出（`contracts/schema/report.py::CheckReport`）。
+ * 分组按 `rules[].status` 现做（groupby 是展示不是判定）；
+ * `badge`/`passed`/`counts` 是**服务端折好的判定**，前端不再数。
+ */
 export interface CheckReport {
-  title: string
   sid: string
-  /** 查过、没问题的条目 */
-  oks: string[]
-  unver: CheckUnverItem[]
-  info: CheckItem[]
-  hard: CheckItem[]
-  passed: boolean
-  hard_count: number
-  unver_count: number
-  /** amber = passed 且 unver_count > 0。它不是绿色。 */
+  node: string
+  stage: string
+  provenance: CheckProvenance
+  rules: RuleLine[]
+  accounting: CheckAccountingLine[]
+  retired: CheckRetiredLine[]
   badge: Badge
+  passed: boolean
+  counts: { ok: number; hit: number; unver: number; skipped: number }
 }
 
+/** 与服务端 `STAGES` 逐值相等（八层；`stage5_review` 那个旧名已随原型退役）。 */
 export type CheckKind =
+  | 'stage0'
   | 'stage1'
   | 'stage2'
   | 'stage3'
   | 'stage4'
-  | 'stage5_review'
+  | 'stage5'
   | 'stage6'
   | 'stage7'
 
 export const CHECK_KINDS: CheckKind[] = [
+  'stage0',
   'stage1',
   'stage2',
   'stage3',
   'stage4',
-  'stage5_review',
+  'stage5',
   'stage6',
   'stage7',
 ]

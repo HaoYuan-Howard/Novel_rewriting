@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { FRESH, SEV, chNo } from '@/constants/vocabulary'
-import type { PlanBeat } from '@/types/stages'
+import type { CtxBeat, PlanBeat } from '@/types/stages'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 
 const LAYER: Record<string, string> = { past: '过去', present: '现在', future: '将来' }
@@ -11,12 +11,11 @@ const LAYER: Record<string, string> = { past: '过去', present: '现在', futur
 export interface PlanBeatView {
   i: number
   fromBeats: string
-  budget: number
-  source: number
+  budget: number | null
+  source: number | null
   verbatimChars: number
   ratio: string
   pct: number
-  outOfBand: boolean
   layer: string
   layerPresent: boolean
   layerUnknown: boolean
@@ -25,7 +24,13 @@ export interface PlanBeatView {
   events: string[]
   verbatim: string[]
   holds: { k: string; v: string }[]
-  segments: { layer: string; layerPresent: boolean; layerUnknown: boolean; place: string; present: string }[]
+  segments: {
+    layer: string
+    layerPresent: boolean
+    layerUnknown: boolean
+    place: string
+    present: string
+  }[]
 }
 
 export interface FactCard {
@@ -33,6 +38,42 @@ export interface FactCard {
   count: string
   lines: string[]
   more: string
+}
+
+/** 左（计划）与右（写手任务书）逐拍并排：两边同源同序（同一个 group_beats）。 */
+function beatView(p: PlanBeat, c: CtxBeat | undefined): PlanBeatView {
+  const holds: { k: string; v: string }[] = []
+  ;(c?.keep_value ?? []).forEach((v) => holds.push({ k: '硬数字', v }))
+  ;(c?.must_appear ?? []).forEach((v) => holds.push({ k: '必须出现', v }))
+  ;(c?.must_hold ?? []).forEach((v) => holds.push({ k: '必须保持', v }))
+  const budget = p.budget_chars
+  const source = c?.source_chars ?? null
+  const raw = budget !== null && source ? budget / source : null
+  const verbatim = c?.verbatim ?? []
+  return {
+    i: p.i,
+    fromBeats: p.from_beats.join('、') || '—',
+    budget,
+    source,
+    verbatimChars: verbatim.reduce((n, v) => n + [...v].length, 0),
+    ratio: raw === null ? '—' : Math.round(raw * 100) / 100 + '×',
+    pct: raw === null ? 0 : Math.min(100, Math.round(raw * 100)),
+    layer: !c || c.time_layer == null ? '时间层未标注' : (LAYER[c.time_layer] ?? c.time_layer),
+    layerPresent: c?.time_layer === 'present',
+    layerUnknown: !c || c.time_layer == null,
+    place: c?.place ?? '地点未标注',
+    present: c?.present ?? [],
+    events: c?.events ?? [],
+    verbatim,
+    holds,
+    segments: (c?.segments ?? []).map((s) => ({
+      layer: LAYER[s.time_layer] ?? s.time_layer,
+      layerPresent: s.time_layer === 'present',
+      layerUnknown: false,
+      place: s.place ?? '地点未标注',
+      present: s.present.join('、') || '（无人）',
+    })),
+  }
 }
 
 export function useStage4Screen() {
@@ -47,54 +88,26 @@ export function useStage4Screen() {
   })
 
   const d = q.data
-  const ch = d?.chapter
-  const facts = ch?.facts
-  // plan_source === 'identity' 表示盘上还没有计划，这是恒等基线，不是真计划
-  const identity = d?.plan_source === 'identity'
+  const plan = d?.plan_chapter
+  const ctx = d?.ctx_chapter ?? null
+  const facts = ctx?.facts
+  const identity = d?.identity_plan ?? false
 
-  const beats: PlanBeatView[] = (ch?.beats ?? []).map((b: PlanBeat) => {
-    const holds: { k: string; v: string }[] = []
-    b.keep_value.forEach((v) => holds.push({ k: '硬数字', v }))
-    b.must_appear.forEach((v) => holds.push({ k: '必须出现', v }))
-    b.must_hold.forEach((v) => holds.push({ k: '必须保持', v }))
-    const raw = b.budget_chars / Math.max(1, b.source_chars)
-    const pct = Math.min(100, Math.round(raw * 100))
-    return {
-      i: b.i,
-      fromBeats: b.from_beats.join('、') || '—',
-      budget: b.budget_chars,
-      source: b.source_chars,
-      verbatimChars: b.verbatim_chars,
-      ratio: Math.round(raw * 100) / 100 + '×',
-      pct,
-      outOfBand: raw > 1.1 || raw < 0.9,
-      layer: b.time_layer === null ? '时间层未标注' : (LAYER[b.time_layer] ?? b.time_layer),
-      layerPresent: b.time_layer === 'present',
-      layerUnknown: b.time_layer === null,
-      place: b.place ?? '地点未标注',
-      present: b.present,
-      events: b.events,
-      verbatim: b.verbatim,
-      holds,
-      segments: b.segments.map((s) => ({
-        layer: LAYER[s.time_layer] ?? s.time_layer,
-        layerPresent: s.time_layer === 'present',
-        layerUnknown: false,
-        place: s.place,
-        present: s.present.join('、') || '（无人）',
-      })),
-    }
-  })
+  const ctxBeats = ctx?.beats ?? []
+  const beats: PlanBeatView[] = (plan?.beats ?? []).map((p, i) => beatView(p, ctxBeats[i]))
 
-  const charKeys = Object.keys(ch?.characters ?? {})
-  const factCards: FactCard[] = ch
+  const charKeys = Object.keys(ctx?.characters ?? {})
+  const factCards: FactCard[] = ctx
     ? [
         {
           title: '人物名册',
           count: charKeys.length + ' 人',
           lines: charKeys
             .slice(0, 5)
-            .map((k) => ch.characters[k].display_name + ' — ' + ch.characters[k].role.slice(0, 22) + '…'),
+            .map(
+              (k) =>
+                ctx.characters[k].display_name + ' — ' + ctx.characters[k].role.slice(0, 22) + '…',
+            ),
           more: '其余 ' + Math.max(0, charKeys.length - 5) + ' 人同样下发',
         },
         {
@@ -123,7 +136,7 @@ export function useStage4Screen() {
           count:
             (facts?.secrets.length ?? 0) +
             ' 条下发 / ' +
-            (ch.must_not_reveal.length ?? 0) +
+            ctx.must_not_reveal.length +
             ' 条只留 id',
           lines: (facts?.secrets ?? []).map(
             (s) =>
@@ -134,16 +147,20 @@ export function useStage4Screen() {
               (s.reader_knows_by_now ? '已知' : '未知') +
               '）',
           ),
-          more: 'must_not_reveal 只有裸 id：' + (ch.must_not_reveal ?? []).join(' '),
+          more: 'must_not_reveal 只有裸 id：' + ctx.must_not_reveal.join(' '),
         },
       ]
     : []
+
+  const budgetTotal = (d?.index ?? []).reduce((n, r) => n + (r.budget_chars ?? 0), 0)
+  const spanTotal = (d?.index ?? []).reduce((n, r) => n + (r.span_chars ?? 0), 0)
 
   return {
     query: q,
     sid,
     ordinal,
     identity,
+    ctxMissing: !!d && !identity && ctx === null,
     selBeat,
     toggleBeat: (i: number) => setSelBeat((cur) => (cur === i ? null : i)),
     sourceLabel: identity
@@ -152,48 +169,43 @@ export function useStage4Screen() {
     sourceColor: identity ? SEV.unver.color : FRESH.fresh.color,
     sourceBg: identity ? SEV.unver.bg : FRESH.fresh.bg,
     sourceBorder: identity ? SEV.unver.border : 'transparent',
-    chapterMeta: ch
-      ? 'op ' + ch.op + ' · 源章 ' + ch.from_source_ordinals.join(',') + ' · ' + ch.beats.length + ' 拍'
+    chapterMeta: plan
+      ? '源章 ' + plan.from_source_ordinals.join(',') + ' · ' + plan.beats.length + ' 拍'
       : '',
     bookMeta: d
-      ? d.book.chapters +
-        ' 章 · 原文 ' +
-        d.book.span_chars +
+      ? d.chapters.length +
+        ' 章 · 原文跨度 ' +
+        (spanTotal || '—') +
         ' 字 → 预算 ' +
-        d.book.budget_chars +
-        ' 字（' +
-        d.book.ratio +
-        '×）· 拍密度 ' +
-        d.book.beat_density
+        (budgetTotal || '—') +
+        ' 字'
       : '',
-    strategy: d?.book.reconstruction_strategy ?? '',
+    strategy: d?.reconstruction_strategy ?? '',
     index: (d?.index ?? []).map((i) => ({
       no: chNo(i.output_ordinal),
       ordinal: i.output_ordinal,
-      op: i.op,
-      budget: i.budget_chars + '字',
-      inBand: i.in_band,
+      budget: i.budget_chars === null ? '—' : i.budget_chars + '字',
+      beats: i.beats,
+      hidden: i.hidden,
       active: i.output_ordinal === ordinal,
     })),
-    goal: ch?.chapter_goal ?? '',
-    openHook: ch?.open_hook_goal ?? '',
-    endHook: ch?.end_hook_goal ?? '',
-    budgets: ch
+    goal: plan?.chapter_goal ?? '',
+    openHook: plan?.open_hook_goal ?? '',
+    endHook: plan?.end_hook_goal ?? '',
+    budgets: ctx
       ? [
-          { k: '源章字数', v: String(ch.chapter_source_chars) },
-          { k: '本章预算', v: String(ch.budget_chars) },
-          { k: '档区间', v: ch.band.join('–') },
+          { k: '源章字数', v: String(ctx.source_chars) },
+          { k: '本章预算', v: ctx.budget_chars === null ? '—' : String(ctx.budget_chars) },
           {
             k: '写手目标',
-            v: ch.writer_target.join('–') + (ch.writer_target_estimated ? '（估）' : ''),
+            v: d?.writer_target
+              ? d.writer_target.join('–') + (d.writer_target_estimated ? '（估）' : '')
+              : '—（没有任务书）',
           },
         ]
       : [],
     beats,
-    scopeNote: d?.plan_scope_note ?? '',
-    notInPrompt: d?.not_in_writer_prompt ?? '',
-    identityNote: d?.identity_note ?? '',
-    factsMeta: ch
+    factsMeta: ctx
       ? '人物 ' +
         charKeys.length +
         ' · 关系 ' +
@@ -203,7 +215,7 @@ export function useStage4Screen() {
         ' · 称呼 ' +
         (facts?.address.length ?? 0) +
         ' · must_not_reveal ' +
-        ch.must_not_reveal.length
+        ctx.must_not_reveal.length
       : '',
     factCards,
   }

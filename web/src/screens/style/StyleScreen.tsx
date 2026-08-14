@@ -43,8 +43,10 @@ export function StyleScreen() {
     <ScreenFrame screen="style">
       <QueryStates q={q} loadingLabel="量文风" missing={{ title: '文风画像 · stage3' }}>
         {(d) => {
-          const dims = Object.keys(d.bands_now)
-          const drift = d.drift
+          const dims = Object.keys(d.bands_now ?? {})
+          // drift=null 是「无从比」（有一边算不出来），[] 才是「比过了没漂移」
+          const drift = d.drift ?? []
+          const driftUnknown = d.drift === null
           const groups = [
             { label: '正文 body', now: d.measured_now?.body, stored: d.measurable_stored?.body },
             { label: '文案段 hook', now: d.measured_now?.hook, stored: d.measurable_stored?.hook },
@@ -62,12 +64,18 @@ export function StyleScreen() {
                 <span
                   className="rounded-btn px-11 py-4 text-body font-semibold"
                   style={
-                    drift.length
-                      ? { color: FRESH.stale.color, background: FRESH.stale.bg }
-                      : { color: FRESH.fresh.color, background: FRESH.fresh.bg }
+                    driftUnknown
+                      ? { color: FRESH.unknown.color, background: FRESH.unknown.bg }
+                      : drift.length
+                        ? { color: FRESH.stale.color, background: FRESH.stale.bg }
+                        : { color: FRESH.fresh.color, background: FRESH.fresh.bg }
                   }
                 >
-                  {drift.length ? drift.length + ' 个维度换了档位' : '六个维度的档位词一个都没变'}
+                  {driftUnknown
+                    ? '有一边量不出来——无从比'
+                    : drift.length
+                      ? drift.length + ' 项实测漂了'
+                      : '两份实测逐项相同'}
                 </span>
               </header>
 
@@ -149,9 +157,9 @@ export function StyleScreen() {
                         title="右 · 真正发给写手的档位词"
                         meta={d.exists ? '来自盘上的 style_grounding.json' : '还没买——右半边是空的'}
                       />
-                      {d.exists ? (
+                      {d.exists && d.bands_stored ? (
                         dims.map((k) => {
-                          const changed = d.bands_now[k] !== d.bands_stored[k]
+                          const changed = (d.bands_now ?? {})[k] !== d.bands_stored?.[k]
                           return (
                             <div
                               key={k}
@@ -169,11 +177,11 @@ export function StyleScreen() {
                                     : undefined
                                 }
                               >
-                                {d.bands_now[k]}
+                                {(d.bands_now ?? {})[k]}
                               </span>
                               {changed ? (
                                 <Mono className="text-micro text-ink-5">
-                                  盘上那份是「{d.bands_stored[k]}」
+                                  盘上那份是「{d.bands_stored?.[k]}」
                                 </Mono>
                               ) : null}
                             </div>
@@ -197,12 +205,12 @@ export function StyleScreen() {
                           <div className="prose-cn mt-4 text-section text-ink-2">{v.text}</div>
                         </div>
                       ))}
-                      {d.voice_extra.length === 0 ? (
+                      {d.readable === false ? (
                         <div
                           className="prose-cn border-t border-line-soft px-18 py-10 text-tag"
                           style={{ color: SEV.unver.color }}
                         >
-                          voice_extra 是空的 —— 没有额外补充的语感条目。空不代表「没有可补的」。
+                          这份产物在盘上但读不回来（不合当前契约）——它跑过，不是「还没跑」。
                         </div>
                       ) : null}
                     </Panel>

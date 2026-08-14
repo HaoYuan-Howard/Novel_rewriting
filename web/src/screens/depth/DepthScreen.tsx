@@ -100,13 +100,14 @@ export function DepthScreen() {
                 >
                   <Mono className="text-body">{chNo(i.output_ordinal)}</Mono>
                   <span className="min-w-0 truncate text-body text-ink-2">
-                    {i.op}
-                    {i.in_band ? '' : ' · 出档'}
-                    {i.output_ordinal === d.ordinal && d.chapter.chapter_goal
-                      ? ' —— ' + d.chapter.chapter_goal
+                    {i.beats + ' 拍'}
+                    {i.output_ordinal === d.ordinal && d.plan_chapter.chapter_goal
+                      ? ' —— ' + d.plan_chapter.chapter_goal
                       : ''}
                   </span>
-                  <Mono className="text-body text-ink-3">{i.budget_chars} 字</Mono>
+                  <Mono className="text-body text-ink-3">
+                    {i.budget_chars === null ? '—' : i.budget_chars + ' 字'}
+                  </Mono>
                   <span
                     className={cx(
                       'rounded-chip py-3 text-center text-tag font-semibold',

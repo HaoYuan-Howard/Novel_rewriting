@@ -1,0 +1,1816 @@
+{
+ "sid": "7615069877019300633",
+ "node": "stage5.review",
+ "stage": "stage5",
+ "provenance": {
+  "freshness": "stale",
+  "reason": "file_changed",
+  "ghosts": [],
+  "edges": [
+   {
+    "key": "stage1/main_text.json",
+    "state": "stale",
+    "reason": "file_changed",
+    "recorded_file": "b8eb890096",
+    "now_file": "779dd4827b",
+    "recorded_consumed": null,
+    "now_consumed": null
+   },
+   {
+    "key": "stage2/global_grounding.json",
+    "state": "stale",
+    "reason": "file_changed",
+    "recorded_file": "ad1e9a0db7",
+    "now_file": "64eae24202",
+    "recorded_consumed": null,
+    "now_consumed": null
+   },
+   {
+    "key": "stage3/style_grounding.json",
+    "state": "stale",
+    "reason": "file_changed",
+    "recorded_file": "de67f62039",
+    "now_file": "fcedce0a8d",
+    "recorded_consumed": null,
+    "now_consumed": null
+   },
+   {
+    "key": "stage4/writer_context.json",
+    "state": "stale",
+    "reason": "file_changed",
+    "recorded_file": "a5ae981e52",
+    "now_file": "9ba94ddf59",
+    "recorded_consumed": null,
+    "now_consumed": null
+   }
+  ],
+  "invalid": false,
+  "revalidated": null,
+  "origin": null
+ },
+ "rules": [
+  {
+   "rule": "band_drift",
+   "sev": "info",
+   "status": "hit",
+   "item": "句段形态还落在本书的档位上",
+   "requirement": "R-7.21",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "band_drift",
+     "sev": "info",
+     "item": "句段形态还落在本书的档位上",
+     "detail": "形态漂移 句子形态：底座「短句」→ 成稿「极短句」",
+     "evidence": [
+      "句子形态",
+      "短句",
+      "极短句"
+     ],
+     "evidence_key": "句子形态|短句|极短句",
+     "owner": "stage5",
+     "actionable": true,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "band_drift",
+     "sev": "info",
+     "item": "句段形态还落在本书的档位上",
+     "detail": "形态漂移 段落形态：底座「极短段（多为一句一段）」→ 成稿「短段」",
+     "evidence": [
+      "段落形态",
+      "极短段（多为一句一段）",
+      "短段"
+     ],
+     "evidence_key": "段落形态|极短段（多为一句一段）|短段",
+     "owner": "stage5",
+     "actionable": true,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "band_drift",
+     "sev": "info",
+     "item": "句段形态还落在本书的档位上",
+     "detail": "形态漂移 句子形态：底座「短句」→ 成稿「极短句」",
+     "evidence": [
+      "句子形态",
+      "短句",
+      "极短句"
+     ],
+     "evidence_key": "句子形态|短句|极短句",
+     "owner": "stage5",
+     "actionable": true,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "3/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "book_length",
+   "sev": "info",
+   "status": "ok",
+   "item": "全书篇幅落在契约带内",
+   "requirement": "R-7.8",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "book_length_report",
+   "sev": "metric",
+   "status": "ok",
+   "item": "〔度量〕全书篇幅总账",
+   "requirement": "R-8.1b",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "book_length_report",
+     "sev": "metric",
+     "item": "〔度量〕全书篇幅总账",
+     "detail": "已写章合计 10936 字 ｜ 预算 9970 字 = 1.10× ｜ 源 10702 字 = 1.02×",
+     "evidence": [
+      "10936",
+      "9970",
+      "10702"
+     ],
+     "evidence_key": "10936|9970|10702",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "8/8 章有成稿",
+   "baseline": null
+  },
+  {
+   "rule": "convergence_report",
+   "sev": "metric",
+   "status": "ok",
+   "item": "〔度量〕与上一轮相比消掉了什么",
+   "requirement": "R-8.3b",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "convergence_report",
+     "sev": "metric",
+     "item": "〔度量〕与上一轮相比消掉了什么",
+     "detail": "与上一份 review 相比：消掉 1 条（['convergence_report']）",
+     "evidence": [],
+     "evidence_key": "",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "new",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "8/8 章有成稿",
+   "baseline": null
+  },
+  {
+   "rule": "cross_chapter_number",
+   "sev": "info",
+   "status": "ok",
+   "item": "自造的数字在跨章之间不打架",
+   "requirement": "R-7.23",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "dash_drift",
+   "sev": "info",
+   "status": "hit",
+   "item": "破折号密度贴着本书与体裁",
+   "requirement": "R-7.21",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "dash_drift",
+     "sev": "info",
+     "item": "破折号密度贴着本书与体裁",
+     "detail": "破折号密度漂移：本书 0.00/千字 → 本章 6.09/千字（5 处；语料 p95 2.25）　例：“实在不行——” ｜ 继续做丫鬟，你我一同——” ｜ “你，你——刷恭桶",
+     "evidence": [
+      "0.00->6.09"
+     ],
+     "evidence_key": "0.00->6.09",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_drift",
+     "sev": "info",
+     "item": "破折号密度贴着本书与体裁",
+     "detail": "破折号密度漂移：本书 0.00/千字 → 本章 5.48/千字（7 处；语料 p95 2.25）　例：“贱人——” ｜ 母，今晚怡红院要拍卖——” ｜ 原地，心里只剩四个字——经商天才",
+     "evidence": [
+      "0.00->5.48"
+     ],
+     "evidence_key": "0.00->5.48",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_drift",
+     "sev": "info",
+     "item": "破折号密度贴着本书与体裁",
+     "detail": "破折号密度漂移：本书 0.00/千字 → 本章 3.21/千字（3 处；语料 p95 2.25）　例：“夫君——我犯了大错 ｜ 捡起和离书，手还在抖——这次是真抖，不是演的 ｜ 就是她——”",
+     "evidence": [
+      "0.00->3.21"
+     ],
+     "evidence_key": "0.00->3.21",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_drift",
+     "sev": "info",
+     "item": "破折号密度贴着本书与体裁",
+     "detail": "破折号密度漂移：本书 0.00/千字 → 本章 4.72/千字（6 处；语料 p95 2.25）　例：铜镜里映出他那张脸——红着眼，青筋暴起 ｜ 你这玩笑开得可真够大——往我酒里下药，让你那 ｜ 那眼神——如果眼神能杀人，我已",
+     "evidence": [
+      "0.00->4.72"
+     ],
+     "evidence_key": "0.00->4.72",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "4/8 章（恒等基线 0/8）",
+   "baseline": "⭐ **本层唯一分母被测过程改不动的判定量**：恒等基线 **0/31**、成稿命中 **11/31** ⇒ **判据干净、有判别力**（原作几乎不用破折号，成稿在用）。语料级上界 `core.style.DASH_CORPUS_P95`(2.25/千字) 由 `calibrate_style_corpus.py` 标定，可 0 成本重跑"
+  },
+  {
+   "rule": "dash_report",
+   "sev": "metric",
+   "status": "ok",
+   "item": "〔度量〕破折号密度",
+   "requirement": "R-7.21b",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "dash_report",
+     "sev": "metric",
+     "item": "〔度量〕破折号密度",
+     "detail": "破折号密度：本章 5 处 = 6.09/千字｜源章 0.00｜本书 0.00｜语料 p95 2.25（156 本）",
+     "evidence": [
+      "0.00->6.09"
+     ],
+     "evidence_key": "0.00->6.09",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_report",
+     "sev": "metric",
+     "item": "〔度量〕破折号密度",
+     "detail": "破折号密度：本章 7 处 = 5.48/千字｜源章 0.00｜本书 0.00｜语料 p95 2.25（156 本）",
+     "evidence": [
+      "0.00->5.48"
+     ],
+     "evidence_key": "0.00->5.48",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_report",
+     "sev": "metric",
+     "item": "〔度量〕破折号密度",
+     "detail": "破折号密度：本章 0 处 = 0.00/千字｜源章 0.00｜本书 0.00｜语料 p95 2.25（156 本）",
+     "evidence": [
+      "0.00->0.00"
+     ],
+     "evidence_key": "0.00->0.00",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_report",
+     "sev": "metric",
+     "item": "〔度量〕破折号密度",
+     "detail": "破折号密度：本章 3 处 = 3.21/千字｜源章 0.00｜本书 0.00｜语料 p95 2.25（156 本）",
+     "evidence": [
+      "0.00->3.21"
+     ],
+     "evidence_key": "0.00->3.21",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_report",
+     "sev": "metric",
+     "item": "〔度量〕破折号密度",
+     "detail": "破折号密度：本章 0 处 = 0.00/千字｜源章 0.00｜本书 0.00｜语料 p95 2.25（156 本）",
+     "evidence": [
+      "0.00->0.00"
+     ],
+     "evidence_key": "0.00->0.00",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_report",
+     "sev": "metric",
+     "item": "〔度量〕破折号密度",
+     "detail": "破折号密度：本章 0 处 = 0.00/千字｜源章 0.00｜本书 0.00｜语料 p95 2.25（156 本）",
+     "evidence": [
+      "0.00->0.00"
+     ],
+     "evidence_key": "0.00->0.00",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_report",
+     "sev": "metric",
+     "item": "〔度量〕破折号密度",
+     "detail": "破折号密度：本章 6 处 = 4.72/千字｜源章 0.00｜本书 0.00｜语料 p95 2.25（156 本）",
+     "evidence": [
+      "0.00->4.72"
+     ],
+     "evidence_key": "0.00->4.72",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dash_report",
+     "sev": "metric",
+     "item": "〔度量〕破折号密度",
+     "detail": "破折号密度：本章 0 处 = 0.00/千字｜源章 0.00｜本书 0.00｜语料 p95 2.25（156 本）",
+     "evidence": [
+      "0.00->0.00"
+     ],
+     "evidence_key": "0.00->0.00",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": null,
+   "baseline": null
+  },
+  {
+   "rule": "deep_overlap_high",
+   "sev": "info",
+   "status": "ok",
+   "item": "闭卷臂没有把源章抄回来",
+   "requirement": "R-7.6",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": null,
+   "baseline": null
+  },
+  {
+   "rule": "dialogue_broken",
+   "sev": "info",
+   "status": "ok",
+   "item": "保持本书的引号对白体",
+   "requirement": "R-7.20",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "dialogue_fewer",
+   "sev": "info",
+   "status": "ok",
+   "item": "直接引语数量接近源章",
+   "requirement": "R-7.20",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "dialogue_halved",
+   "sev": "hard",
+   "status": "ok",
+   "item": "直接引语没有被腰斩",
+   "requirement": "R-7.19",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "dialogue_ratio_drift",
+   "sev": "info",
+   "status": "hit",
+   "item": "对白占比贴着本书",
+   "requirement": "R-7.20",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "dialogue_ratio_drift",
+     "sev": "info",
+     "item": "对白占比贴着本书",
+     "detail": "对白比偏离：原书 0.358 → 成稿 0.219（0.61×）",
+     "evidence": [
+      "0.358->0.219"
+     ],
+     "evidence_key": "0.358->0.219",
+     "owner": "stage5",
+     "actionable": true,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dialogue_ratio_drift",
+     "sev": "info",
+     "item": "对白占比贴着本书",
+     "detail": "对白比偏离：原书 0.358 → 成稿 0.235（0.66×）",
+     "evidence": [
+      "0.358->0.235"
+     ],
+     "evidence_key": "0.358->0.235",
+     "owner": "stage5",
+     "actionable": true,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dialogue_ratio_drift",
+     "sev": "info",
+     "item": "对白占比贴着本书",
+     "detail": "对白比偏离：原书 0.358 → 成稿 0.212（0.59×）",
+     "evidence": [
+      "0.358->0.212"
+     ],
+     "evidence_key": "0.358->0.212",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dialogue_ratio_drift",
+     "sev": "info",
+     "item": "对白占比贴着本书",
+     "detail": "对白比偏离：原书 0.358 → 成稿 0.182（0.51×）",
+     "evidence": [
+      "0.358->0.182"
+     ],
+     "evidence_key": "0.358->0.182",
+     "owner": "stage5",
+     "actionable": true,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "dialogue_ratio_drift",
+     "sev": "info",
+     "item": "对白占比贴着本书",
+     "detail": "对白比偏离：原书 0.358 → 成稿 0.509（1.42×）",
+     "evidence": [
+      "0.358->0.509"
+     ],
+     "evidence_key": "0.358->0.509",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "5/8 章（恒等基线 2/8）",
+   "baseline": null
+  },
+  {
+   "rule": "dialogue_report",
+   "sev": "metric",
+   "status": "ok",
+   "item": "〔度量〕直接引语条数与比值",
+   "requirement": "R-7.8b",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": null,
+   "baseline": null
+  },
+  {
+   "rule": "draft_duplicated",
+   "sev": "unver",
+   "status": "unver",
+   "item": "同一输出章只有一份成稿",
+   "requirement": "R-8.11",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": "同一输出章没有出现在两条臂里",
+   "scanned": "8/8 章有成稿",
+   "baseline": null
+  },
+  {
+   "rule": "draft_missing",
+   "sev": "unver",
+   "status": "unver",
+   "item": "计划里的每一章都有成稿",
+   "requirement": "R-8.11",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": "计划 8 章全部有成稿——没有一章的判定被跳过",
+   "scanned": "8/8 章有成稿",
+   "baseline": null
+  },
+  {
+   "rule": "draft_too_short",
+   "sev": "hard",
+   "status": "ok",
+   "item": "成稿不是空的或残的",
+   "requirement": "R-7.15",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "draft_truncated",
+   "sev": "hard",
+   "status": "ok",
+   "item": "结尾是完整的句子",
+   "requirement": "R-7.15",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "event_landing",
+   "sev": "info",
+   "status": "ok",
+   "item": "每一拍的事件在成稿里都留下了落点",
+   "requirement": "R-7.22",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "event_landing_unver",
+   "sev": "unver",
+   "status": "unver",
+   "item": "每一拍都提得出可回查的原子",
+   "requirement": "R-7.22",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": "1 拍提不出可回查的原子、0 拍的原子连源章原文里都找不到（原子提错了，不是成稿的账）—— 这些拍**没有被检查**",
+   "scanned": "8/8 章有成稿",
+   "baseline": null
+  },
+  {
+   "rule": "invented_name",
+   "sev": "info",
+   "status": "ok",
+   "item": "没有编出下发面以外的人",
+   "requirement": "R-7.5",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": "盘上 0 命中、恒等基线 0。⚠ **召回有缺口**：用没出现过的姓造人抓不到 · 不带称谓后缀的光名字抓不到 · 地名物名完全不查"
+  },
+  {
+   "rule": "invented_number",
+   "sev": "info",
+   "status": "hit",
+   "item": "没有编出下发面以外的数字",
+   "requirement": "R-7.5",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "invented_number",
+     "sev": "info",
+     "item": "没有编出下发面以外的数字",
+     "detail": "⚠ 成稿出现下发面里都没有的【数字+单位】['二十岁', '半月']——闭卷写手写出的事实性数字若不在任何给定材料里，就只能是编的，逐个核对",
+     "evidence": [
+      "二十岁",
+      "半月"
+     ],
+     "evidence_key": "二十岁|半月",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": true,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "invented_number",
+     "sev": "info",
+     "item": "没有编出下发面以外的数字",
+     "detail": "⚠ 成稿出现下发面里都没有的【数字+单位】['十倍']——闭卷写手写出的事实性数字若不在任何给定材料里，就只能是编的，逐个核对",
+     "evidence": [
+      "十倍"
+     ],
+     "evidence_key": "十倍",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": true,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "2/8 章（恒等基线 2/8）",
+   "baseline": "盘上命中 **3**，而**恒等基线 4**——⚠⚠ **基线高于命中**：拿同一把尺子量源章原文触发得更多。它在 2/3 本上被书级恒等闸门判死"
+  },
+  {
+   "rule": "keep_value_missing",
+   "sev": "hard",
+   "status": "ok",
+   "item": "【数值不得改动】的数字都在",
+   "requirement": "R-7.4",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "layout_drift",
+   "sev": "info",
+   "status": "ok",
+   "item": "提示语排版守本书的惯例",
+   "requirement": "R-7.21",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "length_over",
+   "sev": "info",
+   "status": "ok",
+   "item": "篇幅不超上限",
+   "requirement": "R-7.8",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "length_report",
+   "sev": "metric",
+   "status": "ok",
+   "item": "〔度量〕篇幅",
+   "requirement": "R-8.1b",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "length_report",
+     "sev": "metric",
+     "item": "〔度量〕篇幅",
+     "detail": "篇幅：1135 字 / 预算 1120 字 = 1.01× ｜ 原章 1222 字 = 0.93×（op=keep）",
+     "evidence": [
+      "1135",
+      "1120",
+      "1222"
+     ],
+     "evidence_key": "1135|1120|1222",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "length_report",
+     "sev": "metric",
+     "item": "〔度量〕篇幅",
+     "detail": "篇幅：1689 字 / 预算 1400 字 = 1.21× ｜ 原章 1471 字 = 1.15×（op=keep）  ← 超出目标 1260~1540",
+     "evidence": [
+      "1689",
+      "1400",
+      "1471"
+     ],
+     "evidence_key": "1689|1400|1471",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "length_report",
+     "sev": "metric",
+     "item": "〔度量〕篇幅",
+     "detail": "篇幅：1374 字 / 预算 1360 字 = 1.01× ｜ 原章 1461 字 = 0.94×（op=keep）",
+     "evidence": [
+      "1374",
+      "1360",
+      "1461"
+     ],
+     "evidence_key": "1374|1360|1461",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "length_report",
+     "sev": "metric",
+     "item": "〔度量〕篇幅",
+     "detail": "篇幅：1211 字 / 预算 1050 字 = 1.15× ｜ 原章 1200 字 = 1.01×（op=keep）  ← 超出目标 945~1155",
+     "evidence": [
+      "1211",
+      "1050",
+      "1200"
+     ],
+     "evidence_key": "1211|1050|1200",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "length_report",
+     "sev": "metric",
+     "item": "〔度量〕篇幅",
+     "detail": "篇幅：1384 字 / 预算 1280 字 = 1.08× ｜ 原章 1366 字 = 1.01×（op=keep）",
+     "evidence": [
+      "1384",
+      "1280",
+      "1366"
+     ],
+     "evidence_key": "1384|1280|1366",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "length_report",
+     "sev": "metric",
+     "item": "〔度量〕篇幅",
+     "detail": "篇幅：1238 字 / 预算 1140 字 = 1.09× ｜ 原章 1234 字 = 1.00×（op=keep）",
+     "evidence": [
+      "1238",
+      "1140",
+      "1234"
+     ],
+     "evidence_key": "1238|1140|1234",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "length_report",
+     "sev": "metric",
+     "item": "〔度量〕篇幅",
+     "detail": "篇幅：1721 字 / 预算 1500 字 = 1.15× ｜ 原章 1568 字 = 1.10×（op=keep）  ← 超出目标 1350~1650",
+     "evidence": [
+      "1721",
+      "1500",
+      "1568"
+     ],
+     "evidence_key": "1721|1500|1568",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "length_report",
+     "sev": "metric",
+     "item": "〔度量〕篇幅",
+     "detail": "篇幅：1184 字 / 预算 1120 字 = 1.06× ｜ 原章 1180 字 = 1.00×（op=keep）",
+     "evidence": [
+      "1184",
+      "1120",
+      "1180"
+     ],
+     "evidence_key": "1184|1120|1180",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": null,
+   "baseline": null
+  },
+  {
+   "rule": "length_under",
+   "sev": "info",
+   "status": "ok",
+   "item": "篇幅不明显低于下限",
+   "requirement": "R-7.8",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "material_malformed",
+   "sev": "info",
+   "status": "hit",
+   "item": "下发给写手的材料都是完整的词句",
+   "requirement": "R-3.15",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "material_malformed",
+     "sev": "info",
+     "item": "下发给写手的材料都是完整的词句",
+     "detail": "1 条下发材料两端带着标点/引号残渣（多半是 stage2 的锚点切过界）：[\"'他抄起枕下的和离书甩给我：'\"]——拿它判「在不在」会判出假阳，拿它反哺写手照办不了。发给写手时已清掉残渣，但**判定用的还是原样**：证据留着，等 stage2 修（判据 7）",
+     "evidence": [
+      "他抄起枕下的和离书甩给我："
+     ],
+     "evidence_key": "他抄起枕下的和离书甩给我：",
+     "owner": "stage2",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "1/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "meta_leak",
+   "sev": "hard",
+   "status": "ok",
+   "item": "正文里没有叙述外壳",
+   "requirement": "R-7.15",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": "盘上 0/31。词表是章节标题 / 编号 / 任务术语那几类模式（「第N章」「本章」「拍」「beat」「字数」…）"
+  },
+  {
+   "rule": "must_appear_missing",
+   "sev": "info",
+   "status": "ok",
+   "item": "【必须在场】的物件留下了痕迹",
+   "requirement": "R-7.17",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "must_hold_unver",
+   "sev": "unver",
+   "status": "unver",
+   "item": "【必须成立】那一组守住了",
+   "requirement": "R-7.11",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": "全书 6 条【必须成立、不必写在纸面上】的材料 —— 这一组按定义就查不了文面，确定性层**没有检查它们**。要判只能上语义层（`--semantic`），在那之前别把「没报违规」读成「守住了」",
+   "scanned": "8/8 章有成稿",
+   "baseline": null
+  },
+  {
+   "rule": "name_surface_survey",
+   "sev": "metric",
+   "status": "ok",
+   "item": "〔度量〕全书自造称谓与撞名的名字面",
+   "requirement": "R-8.9b",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "8/8 章有成稿",
+   "baseline": null
+  },
+  {
+   "rule": "names_absent",
+   "sev": "info",
+   "status": "ok",
+   "item": "本章人物的名字出现在正文里",
+   "requirement": "R-7.16",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "no_secrets_in_book",
+   "sev": "unver",
+   "status": "unver",
+   "item": "这本书有可查的秘密",
+   "requirement": "R-7.18",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": "这本书有 7 条 secret",
+   "scanned": "7 条 secret",
+   "baseline": null
+  },
+  {
+   "rule": "overlap_report",
+   "sev": "metric",
+   "status": "ok",
+   "item": "〔度量〕与源章原文的重合度",
+   "requirement": "R-8.1b",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "overlap_report",
+     "sev": "metric",
+     "item": "〔度量〕与源章原文的重合度",
+     "detail": "与源章原文重合度（20字窗口）：0.1%",
+     "evidence": [
+      "0.001"
+     ],
+     "evidence_key": "0.001",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "overlap_report",
+     "sev": "metric",
+     "item": "〔度量〕与源章原文的重合度",
+     "detail": "与源章原文重合度（20字窗口）：0.0%",
+     "evidence": [
+      "0.0"
+     ],
+     "evidence_key": "0.0",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "overlap_report",
+     "sev": "metric",
+     "item": "〔度量〕与源章原文的重合度",
+     "detail": "与源章原文重合度（20字窗口）：82.3%",
+     "evidence": [
+      "0.823"
+     ],
+     "evidence_key": "0.823",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "overlap_report",
+     "sev": "metric",
+     "item": "〔度量〕与源章原文的重合度",
+     "detail": "与源章原文重合度（20字窗口）：0.1%",
+     "evidence": [
+      "0.001"
+     ],
+     "evidence_key": "0.001",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "overlap_report",
+     "sev": "metric",
+     "item": "〔度量〕与源章原文的重合度",
+     "detail": "与源章原文重合度（20字窗口）：67.8%",
+     "evidence": [
+      "0.678"
+     ],
+     "evidence_key": "0.678",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "overlap_report",
+     "sev": "metric",
+     "item": "〔度量〕与源章原文的重合度",
+     "detail": "与源章原文重合度（20字窗口）：87.0%",
+     "evidence": [
+      "0.87"
+     ],
+     "evidence_key": "0.87",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "overlap_report",
+     "sev": "metric",
+     "item": "〔度量〕与源章原文的重合度",
+     "detail": "与源章原文重合度（20字窗口）：0.0%",
+     "evidence": [
+      "0.0"
+     ],
+     "evidence_key": "0.0",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "overlap_report",
+     "sev": "metric",
+     "item": "〔度量〕与源章原文的重合度",
+     "detail": "与源章原文重合度（20字窗口）：74.9%",
+     "evidence": [
+      "0.749"
+     ],
+     "evidence_key": "0.749",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": null,
+   "baseline": null
+  },
+  {
+   "rule": "para_len_drift",
+   "sev": "info",
+   "status": "ok",
+   "item": "段均字数贴着本书",
+   "requirement": "R-7.21",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "quote_unbalanced",
+   "sev": "info",
+   "status": "ok",
+   "item": "引号配对正常、已归一",
+   "requirement": "R-7.7",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": null,
+   "baseline": null
+  },
+  {
+   "rule": "quotes_in_unquoted_corpus",
+   "sev": "info",
+   "status": "ok",
+   "item": "引号用法与语料一致",
+   "requirement": "R-7.7",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "secret_leak",
+   "sev": "hard",
+   "status": "unver",
+   "item": "没有提前点破本章不该揭示的事",
+   "requirement": "R-7.18",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": "这本书 7 条 secret 的字面探针**全部**连它自己的揭示章都命中不了 ⇒ 本条这一次没有判别力样本。「0 命中」在这里不是一个结论；改写式泄底由独立的书级语义层判定",
+   "scanned": "7 条 secret，其中 7 条的字面探针零判别力",
+   "baseline": null
+  },
+  {
+   "rule": "secret_timeline",
+   "sev": "metric",
+   "status": "ok",
+   "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
+   "requirement": "R-8.9b",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "secret_timeline",
+     "sev": "metric",
+     "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
+     "detail": "secret_01：关键片段 3 条 · 揭示章 [3] · 在成稿里出现于 （一章都没有）　← 连揭示章自己都没命中：这条 secret 的字面探针在本书上没有判别力",
+     "evidence": [
+      "secret_01"
+     ],
+     "evidence_key": "secret_01",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "secret_timeline",
+     "sev": "metric",
+     "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
+     "detail": "secret_02：关键片段 4 条 · 揭示章 [4] · 在成稿里出现于 （一章都没有）　← 连揭示章自己都没命中：这条 secret 的字面探针在本书上没有判别力",
+     "evidence": [
+      "secret_02"
+     ],
+     "evidence_key": "secret_02",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "secret_timeline",
+     "sev": "metric",
+     "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
+     "detail": "secret_03：关键片段 2 条 · 揭示章 [4] · 在成稿里出现于 （一章都没有）　← 连揭示章自己都没命中：这条 secret 的字面探针在本书上没有判别力",
+     "evidence": [
+      "secret_03"
+     ],
+     "evidence_key": "secret_03",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "secret_timeline",
+     "sev": "metric",
+     "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
+     "detail": "secret_04：关键片段 3 条 · 揭示章 [6] · 在成稿里出现于 （一章都没有）　← 连揭示章自己都没命中：这条 secret 的字面探针在本书上没有判别力",
+     "evidence": [
+      "secret_04"
+     ],
+     "evidence_key": "secret_04",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "secret_timeline",
+     "sev": "metric",
+     "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
+     "detail": "secret_05：关键片段 3 条 · 揭示章 [6] · 在成稿里出现于 （一章都没有）　← 连揭示章自己都没命中：这条 secret 的字面探针在本书上没有判别力",
+     "evidence": [
+      "secret_05"
+     ],
+     "evidence_key": "secret_05",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "secret_timeline",
+     "sev": "metric",
+     "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
+     "detail": "secret_06：关键片段 3 条 · 揭示章 [5, 6] · 在成稿里出现于 （一章都没有）　← 连揭示章自己都没命中：这条 secret 的字面探针在本书上没有判别力",
+     "evidence": [
+      "secret_06"
+     ],
+     "evidence_key": "secret_06",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    },
+    {
+     "rule": "secret_timeline",
+     "sev": "metric",
+     "item": "〔度量〕未揭示秘密在全书成稿里的出现分布",
+     "detail": "secret_07：关键片段 3 条 · 揭示章 [5] · 在成稿里出现于 （一章都没有）　← 连揭示章自己都没命中：这条 secret 的字面探针在本书上没有判别力",
+     "evidence": [
+      "secret_07"
+     ],
+     "evidence_key": "secret_07",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 1,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "7 条 secret",
+   "baseline": null
+  },
+  {
+   "rule": "secret_unknown",
+   "sev": "info",
+   "status": "ok",
+   "item": "must_not_reveal 点到的都查得到",
+   "requirement": "R-6.3",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "semantic_secret_coverage",
+   "sev": "info",
+   "status": "unver",
+   "item": "语义审判覆盖全部成稿与秘密",
+   "requirement": "R-7.18c",
+   "check_kind": "semantic",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": "没有与最新机械验收及当前正文匹配的 semantic_<n>.json；这不是通过，需运行 `stage5.semantic` 或人工审阅",
+   "scanned": "0 份当前语义审判",
+   "baseline": null
+  },
+  {
+   "rule": "semantic_secret_leak",
+   "sev": "hard",
+   "status": "unver",
+   "item": "书级语义没有提前揭示后文秘密",
+   "requirement": "R-7.18b",
+   "check_kind": "semantic",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": "没有与最新机械验收及当前正文匹配的 semantic_<n>.json；这不是通过，需运行 `stage5.semantic` 或人工审阅",
+   "scanned": "0 份当前语义审判",
+   "baseline": null
+  },
+  {
+   "rule": "short_run_report",
+   "sev": "metric",
+   "status": "ok",
+   "item": "〔度量〕连续短段成串",
+   "requirement": "R-7.21b",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "short_run_report",
+     "sev": "metric",
+     "item": "〔度量〕连续短段成串",
+     "detail": "连续短段成串：本章 7.31/千字｜源章 4.47｜本书 3.10｜语料 p95 7.68（口径：≤12 字的段连续 ≥3 段算一串）",
+     "evidence": [
+      "3.10->7.31"
+     ],
+     "evidence_key": "3.10->7.31",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "short_run_report",
+     "sev": "metric",
+     "item": "〔度量〕连续短段成串",
+     "detail": "连续短段成串：本章 6.26/千字｜源章 4.52｜本书 3.10｜语料 p95 7.68（口径：≤12 字的段连续 ≥3 段算一串）",
+     "evidence": [
+      "3.10->6.26"
+     ],
+     "evidence_key": "3.10->6.26",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "short_run_report",
+     "sev": "metric",
+     "item": "〔度量〕连续短段成串",
+     "detail": "连续短段成串：本章 1.90/千字｜源章 1.79｜本书 3.10｜语料 p95 7.68（口径：≤12 字的段连续 ≥3 段算一串）",
+     "evidence": [
+      "3.10->1.90"
+     ],
+     "evidence_key": "3.10->1.90",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "short_run_report",
+     "sev": "metric",
+     "item": "〔度量〕连续短段成串",
+     "detail": "连续短段成串：本章 2.14/千字｜源章 2.25｜本书 3.10｜语料 p95 7.68（口径：≤12 字的段连续 ≥3 段算一串）",
+     "evidence": [
+      "3.10->2.14"
+     ],
+     "evidence_key": "3.10->2.14",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "short_run_report",
+     "sev": "metric",
+     "item": "〔度量〕连续短段成串",
+     "detail": "连续短段成串：本章 3.77/千字｜源章 4.79｜本书 3.10｜语料 p95 7.68（口径：≤12 字的段连续 ≥3 段算一串）",
+     "evidence": [
+      "3.10->3.77"
+     ],
+     "evidence_key": "3.10->3.77",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "short_run_report",
+     "sev": "metric",
+     "item": "〔度量〕连续短段成串",
+     "detail": "连续短段成串：本章 3.09/千字｜源章 2.06｜本书 3.10｜语料 p95 7.68（口径：≤12 字的段连续 ≥3 段算一串）",
+     "evidence": [
+      "3.10->3.09"
+     ],
+     "evidence_key": "3.10->3.09",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "short_run_report",
+     "sev": "metric",
+     "item": "〔度量〕连续短段成串",
+     "detail": "连续短段成串：本章 5.51/千字｜源章 2.54｜本书 3.10｜语料 p95 7.68（口径：≤12 字的段连续 ≥3 段算一串）",
+     "evidence": [
+      "3.10->5.51"
+     ],
+     "evidence_key": "3.10->5.51",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "short_run_report",
+     "sev": "metric",
+     "item": "〔度量〕连续短段成串",
+     "detail": "连续短段成串：本章 2.27/千字｜源章 1.14｜本书 3.10｜语料 p95 7.68（口径：≤12 字的段连续 ≥3 段算一串）",
+     "evidence": [
+      "3.10->2.27"
+     ],
+     "evidence_key": "3.10->2.27",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": null,
+   "baseline": null
+  },
+  {
+   "rule": "simile_drift",
+   "sev": "info",
+   "status": "hit",
+   "item": "明喻密度贴着本书",
+   "requirement": "R-7.21",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "simile_drift",
+     "sev": "info",
+     "item": "明喻密度贴着本书",
+     "detail": "明喻密度漂移：本书 0.99/千字 → 本章 4.69/千字（这本书靠白描不靠比喻，你把它写成了另一本）",
+     "evidence": [
+      "0.99->4.69"
+     ],
+     "evidence_key": "0.99->4.69",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": true,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    },
+    {
+     "rule": "simile_drift",
+     "sev": "info",
+     "item": "明喻密度贴着本书",
+     "detail": "明喻密度漂移：本书 0.99/千字 → 本章 2.83/千字（这本书靠白描不靠比喻，你把它写成了另一本）",
+     "evidence": [
+      "0.99->2.83"
+     ],
+     "evidence_key": "0.99->2.83",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "2/8 章（恒等基线 2/8）",
+   "baseline": "盘上命中 7/31，**恒等基线 5/31**——判别力薄。词表是六个明喻标记（像/好似/如同/仿佛/似的/一样）"
+  },
+  {
+   "rule": "style_block_carries_plot",
+   "sev": "info",
+   "status": "ok",
+   "item": "风格块里没有夹带情节",
+   "requirement": "R-4.5",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "verbatim_missing",
+   "sev": "hard",
+   "status": "ok",
+   "item": "【原样写入】的句子逐字出现了",
+   "requirement": "R-7.3",
+   "check_kind": "mechanical",
+   "remediation": "llm",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "verbatim_split",
+   "sev": "info",
+   "status": "ok",
+   "item": "【原样写入】即便被提示语切开也逐字出现了",
+   "requirement": "R-7.3b",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "verbatim_typo",
+   "sev": "info",
+   "status": "ok",
+   "item": "【原样写入】没有被改字",
+   "requirement": "R-7.3",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "0/8 章（恒等基线 0/8）",
+   "baseline": null
+  },
+  {
+   "rule": "xinli_drift",
+   "sev": "info",
+   "status": "hit",
+   "item": "不靠「心里」解释情绪",
+   "requirement": "R-7.21",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "xinli_drift",
+     "sev": "info",
+     "item": "不靠「心里」解释情绪",
+     "detail": "「心里」密度漂移：本书 0.62/千字 → 本章 2.86/千字（这本书表演情绪、不解释情绪）",
+     "evidence": [
+      "0.62->2.86"
+     ],
+     "evidence_key": "0.62->2.86",
+     "owner": "stage5",
+     "actionable": false,
+     "identity_hit": true,
+     "identity_dead": null,
+     "converge": "same_draft",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "1/8 章（恒等基线 1/8）",
+   "baseline": "盘上命中 7/31，恒等基线 4/31。词表是三个词（心里 / 心中 / 心底）"
+  }
+ ],
+ "accounting": [
+  {
+   "key": "punct_fixed",
+   "item": "这一次标点归一改了多少字符？",
+   "recorded": false,
+   "count": 0,
+   "detail": []
+  },
+  {
+   "key": "quotes_fixed",
+   "item": "这一次引号体归一改了多少字符？",
+   "recorded": false,
+   "count": 0,
+   "detail": []
+  },
+  {
+   "key": "paras_fixed",
+   "item": "这一次有几章的段落分隔被归一改过？",
+   "recorded": false,
+   "count": 0,
+   "detail": []
+  }
+ ],
+ "retired": [
+  {
+   "rule": "upstream_ref",
+   "why": "它原来挂着两件事：本义是「上游各层对本章的既有结论」，而收敛账也借了这个名字。**一个名字下挂着两件事，读报告的人会按名字去解释数字**（判据 32）。⇒ 收敛账改叫 `convergence_report`；而本义那一半**整条撤掉**——上游各层的结论不再冻进本产物，看的时候现算，不留一份会过期的拷贝。"
+  }
+ ],
+ "badge": "amber",
+ "passed": true,
+ "counts": {
+  "ok": 34,
+  "hit": 7,
+  "unver": 8,
+  "skipped": 0
+ }
+}

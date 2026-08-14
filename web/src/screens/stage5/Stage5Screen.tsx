@@ -224,39 +224,15 @@ export function Stage5Screen() {
                       />
                       {vm.matOpen ? (
                         <div className="flex flex-col gap-12 px-18 py-14">
-                          <div className="prose-cn text-section text-ink-2">{vm.matGoal}</div>
-                          {vm.matBeats.map((b) => (
-                            <div key={b.i} className="flex flex-col gap-5 border-t border-line-row pt-10">
-                              <div className="flex items-center gap-8">
-                                <Mono className="rounded-tag bg-inset px-7 py-1 text-mini">
-                                  第 {b.i} 拍
-                                </Mono>
-                                <Mono className="text-micro text-ink-5">{b.budget}</Mono>
-                                <span
-                                  className="text-tag text-ink-3"
-                                  style={b.unlabelled ? { color: SEV.unver.color } : undefined}
-                                  title={b.unlabelled ? '这一拍有字段是 null —— 没标注，不是「没有」' : undefined}
-                                >
-                                  {b.stage}
-                                </span>
-                              </div>
-                              {b.events.map((e, i) => (
-                                <div key={i} className="prose-cn text-sm2 text-ink-2">
-                                  {e}
-                                </div>
-                              ))}
-                              {b.verbatim.map((v, i) => (
-                                <div
-                                  key={i}
-                                  className="rounded-r-btn border-l-3 border-l-hinge bg-hinge-bg px-12 py-8"
-                                >
-                                  <div className="text-micro text-hook-ink">必须逐字保留</div>
-                                  <div className="prose-cn text-sm2 text-ink-2">{v}</div>
-                                </div>
-                              ))}
+                          {/* 与写手同一份下发面（build_material 的 blocks）——逐块原样展示 */}
+                          {vm.matBlocks.map((block, i) => (
+                            <div
+                              key={i}
+                              className="prose-cn whitespace-pre-wrap border-t border-line-row pt-10 text-sm2 text-ink-2 first:border-t-0 first:pt-0"
+                            >
+                              {block}
                             </div>
                           ))}
-                          <div className="prose-cn text-tag text-ink-4">{vm.matFacts}</div>
                         </div>
                       ) : null}
                     </Panel>
@@ -428,7 +404,8 @@ export function Stage5Screen() {
                               i.active ? 'border-ink bg-inset' : 'border-line bg-card',
                             )}
                           >
-                            <FreshnessBadge f={i.freshness} size={8} />
+                            {/* freshness=null = 本章还没有稿——按「不在盘上」画 */}
+                            <FreshnessBadge f={i.freshness ?? 'missing'} size={8} />
                             <Mono className="text-mini">{i.no}</Mono>
                             <span className="text-tag text-ink-3">{i.modes}</span>
                             <Mono className="text-micro text-ink-5">{i.chars}</Mono>

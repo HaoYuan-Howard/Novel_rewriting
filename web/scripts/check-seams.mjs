@@ -6,7 +6,9 @@
  *  2. 屏 / 组件里不许出现颜色字面量 —— 状态色只从 src/constants/vocabulary.ts 取，
  *     其余从 Tailwind @theme 令牌取。两份颜色表一定会漂移。
  *  3. src/mocks/*.json 只许 src/api/mock.ts 读 —— 组件里出现内联假数据就算不合格
- *  4. src/mocks/ 必须和交接包里的 20 份逐字节一致
+ *  4. src/mocks/ 必须和交接包里的 20 份逐字节一致（冻结的证据基线，FE-06）
+ *  5. src/fixtures/ 只许 src/api/mock.ts 读 —— backend_v1 是 mock 的现役数据源，
+ *     不是屏幕的（屏幕连 fixture 长什么样都不该知道）
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -46,6 +48,9 @@ for (const f of files) {
     }
     if (!isApi && rel !== 'src/api/mock.ts' && /from ['"].*mocks\//.test(code)) {
       problems.push([at, 'src/mocks/ 只许 src/api/mock.ts 读'])
+    }
+    if (rel !== 'src/api/mock.ts' && /['"][^'"]*fixtures\//.test(code) && !isComment) {
+      problems.push([at, 'src/fixtures/ 只许 src/api/mock.ts 读（backend_v1 是 mock 的数据源）'])
     }
     if (isScreenOrComponent && !isVocab && !isComment) {
       // 颜色字面量：#rgb / #rrggbb / oklch(...) / rgb(...)

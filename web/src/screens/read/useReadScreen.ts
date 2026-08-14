@@ -30,8 +30,6 @@ export interface BeatView {
   present: { name: string; resolved: boolean }[]
   event: string
   hinges: { kind: string; text: string }[]
-  startsWith: string
-  endsWith: string
   selected: boolean
 }
 
@@ -56,10 +54,11 @@ export function useReadScreen() {
   const d = q.data
 
   const segments: SegView[] = (d?.segments ?? []).map((s: ReadingSegment, i) => {
-    if (s.kind === 'beat') {
+    // beat_id=null 即空隙（hole）—— kind 由可空性表达，不再有字符串判别字段
+    if (s.beat_id !== null) {
       return {
         key: 'b' + i,
-        kind: 'beat',
+        kind: 'beat' as const,
         beatId: s.beat_id,
         label: s.beat_id + ' · ' + s.chars + ' 字 · ' + s.start + '–' + s.end,
         paras: s.text.split(/\n+/).filter((t) => t.trim()),
@@ -69,7 +68,7 @@ export function useReadScreen() {
     }
     return {
       key: 'h' + i,
-      kind: 'hole',
+      kind: 'hole' as const,
       beatId: null,
       label: s.flagged ? '没有被任何 beat 覆盖 · ' + s.chars + ' 字' : '空隙 ' + s.chars + ' 字',
       paras: s.flagged ? s.text.split(/\n+/).filter((t) => t.trim()) : [],
@@ -84,16 +83,14 @@ export function useReadScreen() {
     layerPresent: b.time_layer === 'present',
     place: b.place || '—',
     located: b.located,
-    span: b.start + '–' + b.end,
-    present: b.present.map((p) => ({
-      // 没解析出来的人名带一个 ?，且用「查不了」的虚线框——不是普通人名
-      name: p.display + (p.resolved ? '' : ' ?'),
-      resolved: p.resolved,
-    })),
+    span: b.located ? b.start + '–' + b.end : '未定位',
+    // 服务端已把 present 解成人名（叫不出名字的本章剔除，不发裸 id）
+    present: b.present.map((p) => ({ name: p, resolved: true })),
     event: b.event,
-    hinges: b.hinges,
-    startsWith: b.span?.starts_with ?? '',
-    endsWith: b.span?.ends_with ?? '',
+    hinges: b.hinges.map((h) => ({
+      kind: h.kind,
+      text: h.text ?? '（未定位——这条保真材料没有原文可引）',
+    })),
     selected: selBeat === b.beat_id,
   }))
 
@@ -118,7 +115,7 @@ export function useReadScreen() {
     narration: nar
       ? (nar.grammatical_person === 'first' ? '第一人称' : nar.grammatical_person) +
         ' · ' +
-        (nar.narrator?.display ?? '') +
+        (nar.narrator ?? '（叙述者本章还叫不出名字）') +
         ' · 「' +
         nar.pronoun_surfaces.join('/') +
         '」'
@@ -128,13 +125,13 @@ export function useReadScreen() {
     selHint: selBeat ? '选中 ' + selBeat + '，左边已定位' : '点一个 beat 或一段原文，两边一起定位',
     leftMeta: d ? '服务端切好的 ' + d.segments.length + ' 块，按 beat 边界分' : '',
     rightMeta: d ? d.beats.length + ' 拍 · blueprint ' + (d.blueprint ? '已抽' : '未抽') : '',
-    /** problems 为空绝不画成「抽全了」 */
+    /** 定位问题归判据（/check/stage2 的 span_located 一族），本屏只看覆盖高亮 */
     problems: d
-      ? d.problems.length
-        ? d.problems.join('；')
-        : '本章 problems 为空：抽取过程没有报出问题。这不代表抽全了——漏没漏要靠左边的高亮块自己看。'
+      ? d.blueprint
+        ? '定位/覆盖类的判定见本屏底部的 stage2 校验；漏没漏也要靠左边的高亮块自己看。'
+        : 'stage2 还没跑——右半边整块缺席，左边是 stage1 的原文。'
       : '',
-    problemsEmpty: !!d && d.problems.length === 0,
+    problemsEmpty: !!d && d.blueprint,
     unverColor: SEV.unver.color,
   }
 }

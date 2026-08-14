@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { FRESH, SEV } from '@/constants/vocabulary'
+import { SEV } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { ComparePanes, PaneScroll } from '@/components/compare/ComparePanes'
@@ -71,8 +71,15 @@ export function Stage4Screen() {
                 </span>
                 <span className="ml-auto text-tag text-ink-4">{vm.bookMeta}</span>
               </div>
-              {vm.identity && vm.identityNote ? (
-                <div className="prose-cn text-tag text-ink-4">{vm.identityNote}</div>
+              {vm.identity ? (
+                <div className="prose-cn text-tag text-ink-4">
+                  恒等基线不是重构计划：三个 goal 是显式标记；预算=源字数。它回答的是「上游产出够不够写手用」。
+                </div>
+              ) : null}
+              {vm.ctxMissing ? (
+                <div className="prose-cn text-tag text-ink-4">
+                  writer_context 不在盘上——右半边缺席。跑 stage4.plan（或 --context-only）重建任务书。
+                </div>
               ) : null}
             </header>
 
@@ -90,18 +97,11 @@ export function Stage4Screen() {
                       )}
                     >
                       <Mono className="text-mini">{i.no}</Mono>
-                      <span className="text-tag text-ink-3">{i.op}</span>
                       <Mono className="text-micro text-ink-5">{i.budget}</Mono>
-                      <span
-                        className="rounded-tag px-6 py-1 text-micro"
-                        style={
-                          i.inBand
-                            ? { color: FRESH.fresh.color, background: FRESH.fresh.bg }
-                            : { color: FRESH.stale.color, background: FRESH.stale.bg }
-                        }
-                      >
-                        {i.inBand ? '在档' : '出档'}
-                      </span>
+                      <Mono className="text-micro text-ink-5">{i.beats} 拍</Mono>
+                      {i.hidden ? (
+                        <Mono className="text-micro text-ink-5">瞒 {i.hidden}</Mono>
+                      ) : null}
                     </button>
                   ))}
                 </div>
@@ -180,9 +180,11 @@ export function Stage4Screen() {
                     ))}
 
                     <div className="prose-cn rounded-btn-lg border border-dashed border-line-btn bg-page px-12 py-10 text-sm2 text-ink-4">
-                      {vm.notInPrompt}
+                      must_not_reveal 等只服务回写校验，不进写手 prompt——写手看不到内容才不会写出来。
                     </div>
-                    <div className="prose-cn text-micro text-ink-5">{vm.scopeNote}</div>
+                    <div className="prose-cn text-micro text-ink-5">
+                      计划这一侧真正由 LLM 决定的只剩逐章目标 + 逐拍预算；拍怎么切是代码定的。在不在档的判定见本屏底部的 stage4 校验。
+                    </div>
                   </PaneScroll>
                 </Panel>
               }
@@ -231,12 +233,7 @@ function PlanBeatRow({
           <Mono className="text-micro text-ink-4">
             预算 {b.budget} / 源文 {b.source}
           </Mono>
-          <Mono
-            className="rounded-tag px-6 py-1 text-micro"
-            title={b.outOfBand ? '这一拍的预算比例落在档区间外' : undefined}
-          >
-            <span style={b.outOfBand ? { color: FRESH.stale.color } : undefined}>{b.ratio}</span>
-          </Mono>
+          <Mono className="rounded-tag px-6 py-1 text-micro">{b.ratio}</Mono>
         </span>
       </div>
 
@@ -244,10 +241,7 @@ function PlanBeatRow({
       <div className="relative h-6 overflow-hidden rounded-nub bg-inset">
         <span
           className="absolute top-0 bottom-0 left-0"
-          style={{
-            width: b.pct + '%',
-            background: b.outOfBand ? FRESH.stale.color : 'var(--color-accent-bar)',
-          }}
+          style={{ width: b.pct + '%', background: 'var(--color-accent-bar)' }}
         />
       </div>
 

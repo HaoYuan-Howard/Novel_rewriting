@@ -48,7 +48,7 @@ export function Stage7Screen() {
       <QueryStates q={q} loadingLabel="读人名表" missing={{ title: '人名替换 + 成书 · stage7' }}>
         {(d) => {
           const rows = chQ.data?.rows ?? null
-          const changedRows = rows?.filter((r) => r.kind !== 'same').length ?? 0
+          const changedRows = rows?.filter((r) => r.changed).length ?? 0
 
           return (
             <section className="flex flex-col gap-16 px-30 py-24">
@@ -79,14 +79,20 @@ export function Stage7Screen() {
                 </div>
               </header>
 
-              <div className="prose-cn text-tag text-ink-4">{d.scope_note}</div>
+              <div className="prose-cn text-tag text-ink-4">
+                正文只读——改正文回成稿屏。人物表编辑走 CLI（stage7.rename --apply-edit）。
+              </div>
 
               {/* 漏网叫法候选：唯一能发现人名表漏了人的地方 */}
               <Panel>
                 <PaneHeader
                   title="漏网叫法候选"
                   meta={d.residual.length + ' 条'}
-                  right={<span className="prose-cn text-tag text-ink-4">{d.residual_note}</span>}
+                  right={
+                    <span className="prose-cn text-tag text-ink-4">
+                      这是全链唯一能发现「人物表本身漏了人」的通道——按置信度从上往下看
+                    </span>
+                  }
                 />
                 {d.residual.length ? (
                   d.residual.map((r, i) => (
@@ -115,7 +121,7 @@ export function Stage7Screen() {
                         ) : null}
                       </div>
                       <div className="prose-cn text-section text-ink-2">
-                        <HighlightedText parts={splitOnce(r.context, r.unit)} />
+                        <HighlightedText parts={splitOnce(r.context, r.unit ?? r.hit)} />
                       </div>
                       <span
                         className="text-tag"
@@ -182,7 +188,7 @@ export function Stage7Screen() {
                       <span className="flex min-w-0 flex-col gap-5">
                         <span className="flex flex-wrap gap-4">
                           {c.aliases.map((a, i) => {
-                            const changed = c.changed_aliases.some((x) => x.old === a.old)
+                            const changed = a.old !== a.new
                             return (
                               <span
                                 key={i}
@@ -237,9 +243,7 @@ export function Stage7Screen() {
 
                   <Panel className="flex flex-col gap-8 px-18 py-14">
                     <span className="text-section font-semibold">书名 / 成书</span>
-                    <span className="text-body text-ink-2">
-                      {d.title} → <strong>{d.title_new}</strong>
-                    </span>
+                    <span className="text-body text-ink-2">{d.title}</span>
                     <Mono className="text-micro text-ink-5">
                       {d.book_txt
                         ? 'book.txt · ' +
@@ -248,7 +252,7 @@ export function Stage7Screen() {
                           d.book_txt.chapters +
                           ' 章 · sha1 ' +
                           d.book_txt.sha1.slice(0, 12) +
-                          (d.book_txt.has_hook ? ' · 含文案' : '')
+                          (d.book_txt_on_disk ? ' · 在盘上' : ' · ⚠ 账在而盘上没有——重跑 stage7.assemble')
                         : '还没组装成书'}
                     </Mono>
                   </Panel>
@@ -257,10 +261,16 @@ export function Stage7Screen() {
 
               <Panel>
                 <PaneHeader title="文案替换前后" meta="hook" />
-                <div className="grid grid-cols-2 gap-16 px-18 py-14">
-                  <Prose text={d.hook.before} measure="compare" size="md" tone="ink-2" />
-                  <Prose text={d.hook.after} measure="compare" size="md" />
-                </div>
+                {d.hook ? (
+                  <div className="grid grid-cols-2 gap-16 px-18 py-14">
+                    <Prose text={d.hook.before} measure="compare" size="md" tone="ink-2" />
+                    <Prose text={d.hook.after} measure="compare" size="md" />
+                  </div>
+                ) : (
+                  <div className="prose-cn px-18 py-14 text-sm2 text-ink-4">
+                    文案还没定稿——对照的左边没有来源。去文案屏定稿后这里才有内容。
+                  </div>
+                )}
               </Panel>
 
               <Panel>
@@ -298,7 +308,7 @@ export function Stage7Screen() {
                       left: r.l,
                       right: r.r,
                       anchored: true,
-                      note: r.kind === 'same' ? undefined : '这一行有替换',
+                      note: r.changed ? '这一行有替换' : undefined,
                     }))}
                   />
                 ) : (

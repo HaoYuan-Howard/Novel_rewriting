@@ -1,0 +1,225 @@
+{
+ "sid": "7615069877019300633",
+ "title": "我把夫君捧成头牌后，全家悔疯了",
+ "exists": true,
+ "invalid_exists": false,
+ "readable": true,
+ "voice": [
+  {
+   "key": "narrative_distance",
+   "text": "紧贴内视，全程由主角第一人称即时反应推动，所见所感皆带强烈的主观情绪与算计",
+   "chars": 37
+  },
+  {
+   "key": "register_tone",
+   "text": "高度口语化的现代网感语调，以毒舌、反讽、唯恐天下不乱的腹黑口吻叙述，刻意用调侃冲淡事件的惨烈",
+   "chars": 46
+  },
+  {
+   "key": "interiority",
+   "text": "内心戏密集且外显，几乎每句对白或每个事件后都紧跟主角的即时吐槽、嗤笑或算计，内心活动与口头表达融为一体",
+   "chars": 51
+  },
+  {
+   "key": "sentence_rhythm",
+   "text": "短句，高频率一句一段，节奏跳跃急促，读起来像连续突刺的短刀，不给喘息空间",
+   "chars": 36
+  },
+  {
+   "key": "dialogue_presentation",
+   "text": "引号体对白密集，对话句后常以极短段落插入主角的内心反应或动作，形成一问一吐槽的紧凑咬合",
+   "chars": 43
+  },
+  {
+   "key": "description_density",
+   "text": "环境与动作描写极尽省略，仅以白描式动作词推动，重点全部落在人物互动与语言交锋上",
+   "chars": 39
+  },
+  {
+   "key": "chapter_open_close",
+   "text": "章首直接切入事件，毫无铺垫；章尾惯以一句俏皮反转、自我调侃或戛然而止的轻描淡写收束，留下戏谑余味",
+   "chars": 48
+  },
+  {
+   "key": "mode_variation",
+   "text": "日常推进章以毒舌自嘲、快意恩仇的快节奏口语叙述，嬉笑怒骂地对待所有遭遇；当被戳中要害或被指责时，叙述短暂收敛玩笑口吻，露出一瞬心虚或凝重，随即用更激烈的嘲讽反扑；进入摊牌类冲突顶点时，节奏进一步加快，句子更短，穿插动作场面与内心嗤笑，语调转为直接的冷笑与质问；段落收束常以一句故作姿态的洒脱或双关语作结，保持整体幸灾乐祸的围观者腔调",
+   "chars": 166
+  }
+ ],
+ "surface_habits": [
+  "将主角的即时内心反应如嗤笑、吐槽、翻白眼等用极短动作句独立成段，紧接在对白或事件之后，形成情绪暴击",
+  "引号对白后频繁紧跟主角的第一人称内心独白，构成他说我想的紧凑结构，且内心句常以我字起头，直白外露",
+  "刻意使用现代网络感的强口语感叹词或拟声词穿插在古代语境中，以出戏的元素制造喜剧落差",
+  "章末习惯用一句自我调侃或故作无能为力的轻描淡写收束，如某类表示无奈的短句，留下既俏皮又解气的余韵",
+  "情节推进中频繁使用次日一早那日晚间等明确时间短语另起一段，以跳跃式时间标推进叙事，省略过程细节"
+ ],
+ "hook_style": [
+  {
+   "key": "person",
+   "text": "第一人称主角自述，伪装成受害者的口吻，实则包藏颠覆性的报复行动"
+  },
+  {
+   "key": "open_mode",
+   "text": "结论先行，开篇直接抛出对主角最不利的绝境处境，迅速建立代入与好奇"
+  },
+  {
+   "key": "info_hiding",
+   "text": "先完整暴露主角被迫接受的表面厄运与夫君的指手画脚，暂时隐藏主角主动推波助澜的真实企图与即将到来的反转"
+  },
+  {
+   "key": "twist",
+   "text": "从夫君自信命令主角接客，突转为夫君自己被强行洗白挂牌，主角从惶恐哭求陡变为幸灾乐祸的毒舌劝说，身份与权力瞬间颠倒"
+  },
+  {
+   "key": "end_question",
+   "text": "以一句表面体贴大度、实则嘲讽满满的宣言戛然而止，将全部悬念抛给读者去想象夫君的反应"
+  },
+  {
+   "key": "tone",
+   "text": "高浓度网感的戏谑反讽，用最无辜的语调讲最黑心的反杀，表面哭唧唧内里毒辣辣"
+  },
+  {
+   "key": "relation_to_body",
+   "text": "与正文声音完全一致，均为快节奏、毒舌反套路的第一人称叙述，文案段更浓缩、反转更密集"
+  }
+ ],
+ "measurable_stored": {
+  "body": {
+   "chars": 9516,
+   "paragraphs": 589,
+   "sentences": 546,
+   "avg_paragraph_chars": 16.2,
+   "paragraph_sep_chars": 2.03,
+   "avg_sentence_chars": 17.4,
+   "dialogue_ratio": 0.358,
+   "dialogue_ratio_applicable": true,
+   "quote_styles": [
+    "“”"
+   ],
+   "chapter_chars": {
+    "min": 1053,
+    "max": 1391,
+    "avg": 1189.5
+   },
+   "per_chapter_avg_sentence": {
+    "min": 16.6,
+    "max": 18.4
+   }
+  },
+  "hook": {
+   "chars": 139,
+   "paragraphs": 8,
+   "sentences": 9,
+   "avg_paragraph_chars": 17.4,
+   "paragraph_sep_chars": 1.75,
+   "avg_sentence_chars": 15.4,
+   "dialogue_ratio": 0.496,
+   "dialogue_ratio_applicable": true,
+   "quote_styles": [
+    "“”"
+   ]
+  }
+ },
+ "bands_stored": {
+  "句子形态": "短句",
+  "段落形态": "极短段（多为一句一段）",
+  "对白形态": "对白密集（引号体：“”）",
+  "章篇幅": "中等篇幅章",
+  "章间形态差异": "各章句长形态接近",
+  "文案段形态": "极短句；相对正文接近"
+ },
+ "_provenance": {
+  "code": "b371244",
+  "inputs": {
+   "stage1/main_text.json": {
+    "file": "b8eb890096",
+    "consumed": null
+   },
+   "stage1/hook_copy.json": {
+    "file": "10d7955546",
+    "consumed": null
+   },
+   "stage2/global_grounding.json": {
+    "file": "ad1e9a0db7",
+    "consumed": null
+   }
+  },
+  "usage": null,
+  "revalidated": null,
+  "gates_skipped": null,
+  "origin": null,
+  "input_basis": null,
+  "partial_rewrite": null,
+  "prompts": {
+   "STYLE_SYS": "0ca5dc44e0"
+  },
+  "model": "deepseek-v4-pro",
+  "attempts": [
+   {
+    "kind": "initial",
+    "user_prompt": "37b4277e08",
+    "output": "345dd96743",
+    "cache_policy": "default",
+    "input": null,
+    "evidence": null,
+    "evidence_count": null,
+    "model": null,
+    "code": null,
+    "chapter_ordinal": null,
+    "abstractions": null
+   }
+  ]
+ },
+ "hook_copy_text": "全家被贬为奴籍发配青楼。\n\n夫君警告我：“别瞎反抗，你好好干，多赚点咱们才能翻盘！”\n\n我惶恐无比。\n\n谁知当晚他被按进浴桶，前后无死角洗白白。\n\n龟公说：“贵客就好良家妇男，你夫君要火啦！”\n\n夫君吓得凶猛挣扎，却被灌足迷药。\n\n我哭着劝说：\n\n“夫君莫要逞强，反抗不了就享受！你放心，我不会嫌你脏的！”",
+ "measured_now": {
+  "body": {
+   "chars": 9516,
+   "paragraphs": 589,
+   "sentences": 546,
+   "avg_paragraph_chars": 16.2,
+   "paragraph_sep_chars": 2.03,
+   "avg_sentence_chars": 17.4,
+   "dialogue_ratio": 0.358,
+   "dialogue_ratio_applicable": true,
+   "quote_styles": [
+    "“”"
+   ],
+   "chapter_chars": {
+    "min": 1053,
+    "max": 1391,
+    "avg": 1189.5
+   },
+   "per_chapter_avg_sentence": {
+    "min": 16.6,
+    "max": 18.4
+   }
+  },
+  "hook": {
+   "chars": 139,
+   "paragraphs": 8,
+   "sentences": 9,
+   "avg_paragraph_chars": 17.4,
+   "paragraph_sep_chars": 1.75,
+   "avg_sentence_chars": 15.4,
+   "dialogue_ratio": 0.496,
+   "dialogue_ratio_applicable": true,
+   "quote_styles": [
+    "“”"
+   ]
+  }
+ },
+ "bands_now": {
+  "句子形态": "短句",
+  "段落形态": "极短段（多为一句一段）",
+  "对白形态": "对白密集（引号体：“”）",
+  "章篇幅": "中等篇幅章",
+  "章间形态差异": "各章句长形态接近",
+  "文案段形态": "极短句；相对正文接近"
+ },
+ "measure_error": null,
+ "measure_error_kind": null,
+ "drift": [],
+ "freshness": "stale",
+ "reason": "file_changed",
+ "ghosts": []
+}

@@ -242,9 +242,7 @@ function Beat({ b, onClick }: { b: BeatView; onClick: () => void }) {
         </div>
       ))}
 
-      <Mono className="text-mini text-ink-5">
-        起「{b.startsWith}」 止「{b.endsWith}」
-      </Mono>
+      <Mono className="text-mini text-ink-5">原文区间 {b.span}</Mono>
     </div>
   )
 }

@@ -85,13 +85,12 @@ export function useStage5Screen() {
   })
 
   const d = draftQ.data
-  const ch = d?.chapter
-  const mat = ch?.materials
+  const mat = d?.materials ?? null
   const rv = reviewQ.data
 
   const findings: Finding[] = rv?.chapter.findings ?? []
   const active = findings[selFinding]
-  const firstDraft = ch?.drafts[0] ?? null
+  const firstDraft = d?.drafts[0] ?? null
   const baseText = rv?.chapter.text ?? firstDraft?.text ?? ''
   const text = draftText ?? baseText
 
@@ -132,31 +131,40 @@ export function useStage5Screen() {
     text,
     setText: setDraftText,
     save,
-    editNote:
-      rv?.edit_note ?? '保存走子进程重跑校验，落成新的一轮；旧轮归档，不覆盖。',
+    editNote: '保存走子进程重跑校验，落成新的一轮；旧轮归档，不覆盖。',
 
-    counts: d ? '计划 ' + d.planned + ' · 写了 ' + d.written + ' · 被拦下 ' + d.invalid : '',
+    counts: d
+      ? '计划 ' +
+        (d.planned ?? '判不了') +
+        ' · 写了 ' +
+        d.written +
+        ' · 被拦下 ' +
+        d.invalid
+      : '',
     missingLabel: d ? (d.missing.length ? '缺 ' + d.missing.join(',') : '没有缺章') : '',
     missingBad: !!d && d.missing.length > 0,
-    invalidLabel: ch
-      ? ch.invalid_drafts.length
-        ? ch.invalid_drafts.length + ' 份被闸门拦下'
+    invalidLabel: d
+      ? d.invalid_drafts.length
+        ? d.invalid_drafts.length + ' 份被闸门拦下'
         : '本章没有被拦下的稿'
       : '',
-    invalidBad: !!ch && ch.invalid_drafts.length > 0,
-    depthNote: d?.depth_note ?? '',
-    gateNote: d?.gate_note ?? '',
+    invalidBad: !!d && d.invalid_drafts.length > 0,
+    depthNote: '深度=闭卷按拍重构（每章多次调用）；浅层=开卷一次过。',
+    gateNote: '写作闸门在 depth 屏：文风与计划确认后才允许下笔。',
     /** ctx_exists 为 false 时不显示假材料 */
     ctxExists: d?.ctx_exists ?? true,
-    ctxNote: d?.note ?? null,
+    ctxNote: d && !d.ctx_exists ? '写作上下文不在盘上——先跑 stage4，这里不显示假材料。' : null,
 
     index: (d?.index ?? []).map((i) => ({
       no: chNo(i.output_ordinal),
       ordinal: i.output_ordinal,
       freshness: i.freshness,
-      modes: i.modes.join('+'),
-      chars: i.chars + '/' + i.budget_chars,
-      overlap: Math.round(i.overlap_excl_verbatim * 100) + '%',
+      modes: i.modes.join('+') || '未写',
+      chars: (i.chars ?? '—') + '/' + (i.budget_chars ?? '—'),
+      overlap:
+        i.overlap_excl_verbatim === null
+          ? '—'
+          : Math.round(i.overlap_excl_verbatim * 100) + '%',
       active: i.output_ordinal === ordinal,
     })),
 
@@ -179,16 +187,17 @@ export function useStage5Screen() {
     reviewIndex: (rv?.index ?? []).map((i) => ({
       no: chNo(i.output_ordinal),
       ordinal: i.output_ordinal,
-      mode: i.mode + ' r' + i.round,
-      chars: i.chars + '/' + i.budget_chars,
-      hard: i.hard,
-      info: i.info,
-      unver: i.unver,
+      mode: (i.mode ?? '无稿') + (i.round ? ' r' + i.round : ''),
+      chars: (i.chars ?? '—') + '/' + (i.budget_chars ?? '—'),
+      hard: i.finding_counts.hard,
+      info: i.finding_counts.info,
+      unver: i.finding_counts.unver,
       unresolved: i.unresolved,
+      stale: i.stale,
       active: i.output_ordinal === ordinal,
     })),
     // 41/61 条是 metric —— 四级分开计数，metric 不能画成警告
-    sevCounts: (rv?.counts ?? {}) as Partial<Record<Severity, number>>,
+    sevCounts: (rv?.finding_counts ?? {}) as Partial<Record<Severity, number>>,
     tabLabels: {
       chapter: '本章 ' + findings.length + ' 条',
       book: '全书 ' + (rv?.book.length ?? 0) + ' 条',
@@ -223,42 +232,18 @@ export function useStage5Screen() {
 
     matOpen,
     toggleMat: () => setMatOpen((v) => !v),
-    matGoal: mat?.chapter_goal ?? '',
+    /** 与写手同一份下发面（build_material 的 blocks）——不是重组的第二份 */
+    matBlocks: mat?.blocks ?? [],
     matNumbers: mat
       ? [
-          { k: '预算', v: String(mat.budget_chars) },
-          { k: '源文', v: String(mat.source_chars) },
-          { k: '写手目标', v: mat.writer_target.join('–') },
-          { k: 'must_not_reveal', v: String(mat.must_not_reveal_count) },
+          {
+            k: '写手目标',
+            v: mat.writer_target.join('–') + (mat.writer_target_estimated ? '（估）' : ''),
+          },
+          { k: '下发面', v: mat.chars + ' 字' },
+          { k: '源章原文', v: (d?.source_chars_raw ?? '—') + ' 字' },
         ]
       : [],
-    matBeats: (mat?.beats ?? []).map((b, i) => ({
-      i: i + 1,
-      budget: b.budget_chars + ' 字',
-      // 这三个字段会是 null（不是空数组）—— null 的意思是「这一拍没标」，不是「没有人」
-      stage: [
-        b.time_layer === null ? '时间层未标注' : b.time_layer === 'present' ? '现在' : b.time_layer,
-        b.place ?? '地点未标注',
-        b.present === null ? '在场未标注' : b.present.join('、') || '无人',
-      ].join(' · '),
-      unlabelled: b.time_layer === null || b.place === null || b.present === null,
-      events: b.events,
-      // stage5 这一层这些字段缺省是 null（stage4 那边是 []）—— 两套判空
-      verbatim: b.verbatim ?? [],
-    })),
-    matFacts: mat
-      ? '另附全套 facts：关系 ' +
-        mat.facts.relations.length +
-        ' 条 · 世界规则 ' +
-        mat.facts.world_rules.length +
-        ' 条 · 秘密 ' +
-        mat.facts.secrets.length +
-        ' 条 · 称呼 ' +
-        mat.facts.address.length +
-        ' 条 · 人物 ' +
-        Object.keys(mat.characters).length +
-        ' 人。'
-      : '',
 
     draft: firstDraft
       ? {
@@ -270,15 +255,16 @@ export function useStage5Screen() {
             ' 字 / 预算 ' +
             firstDraft.budget_chars +
             ' · 与原文重合（除逐字保留）' +
-            Math.round(firstDraft.overlap_excl_verbatim * 100) +
-            '%',
+            (firstDraft.overlap_excl_verbatim === null
+              ? '量不了'
+              : Math.round(firstDraft.overlap_excl_verbatim * 100) + '%'),
           prov:
             'model ' +
-            (firstDraft.provenance.model ?? '—') +
+            (firstDraft._provenance.model ?? '—') +
             ' · code ' +
-            (firstDraft.provenance.code ?? '—') +
+            (firstDraft._provenance.code ?? '—') +
             ' · prompts ' +
-            Object.keys(firstDraft.provenance.prompts ?? {}).join(','),
+            Object.keys(firstDraft._provenance.prompts ?? {}).join(','),
         }
       : null,
     /** 锚点覆盖率常驻显示。没有这个数，「这一行盖了 3 拍」和「这一行就是第 3 拍」长得一样。 */
@@ -301,14 +287,14 @@ export function useStage5Screen() {
         note: multi
           ? '其中只有一拍有锚——其余并进来了，这一块的对应没有验证过'
           : '这一拍自己锚到了',
-        meta: '源 ' + r.source_chars + ' 字 → 稿 ' + r.budget_chars + ' 字预算',
+        meta: '原文 ' + [...r.l].length + ' 字 → 成稿 ' + [...r.r].length + ' 字',
         left: r.l,
         right: r.r,
       }
     }),
 
     paragraphs: paras(text).map((p) => markParts(p, live)),
-    sourceParagraphs: paras(ch?.source_text ?? ''),
+    sourceParagraphs: paras(d?.source_text ?? ''),
 
     chaptersArg,
     setChaptersArg,

@@ -37,6 +37,7 @@ import type {
   Stage6Response,
   Stage7Response,
 } from '@/types/stages'
+import { isApiError } from './errors'
 import { get, post, postRaw } from './client'
 import { mockApi } from './mock'
 
@@ -126,7 +127,16 @@ export const realApi: Api = {
   getStage6: (sid) => get<Stage6Response>(n(sid) + '/stage6'),
   getStage7: (sid) => get<Stage7Response>(n(sid) + '/stage7'),
   getStage7Chapter: (sid, o) => get<Stage7Response>(n(sid) + '/stage7/' + o),
-  getCheck: (sid, kind) => get<CheckReport | null>(n(sid) + '/check/' + kind),
+  // 后端对「这一层还没跑」答 404（资源不存在）；Api 契约里 null = 「还没有报告」。
+  // 在这里翻译（唯一数据缝的职责），CheckPanel 不用自己捕 404。
+  getCheck: async (sid, kind) => {
+    try {
+      return await get<CheckReport>(n(sid) + '/check/' + kind)
+    } catch (e) {
+      if (isApiError(e) && e.kind === 'notfound') return null
+      throw e
+    }
+  },
 
   // 真后端上每一章都有数据，没有「样本边界」这回事
   getSampleCoverage: () => Promise.resolve(null),

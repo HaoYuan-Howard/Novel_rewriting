@@ -61,6 +61,24 @@ function raw<T>(file: string): T {
   return hit as T
 }
 
+/* ------------------------------------------------- backend_v1（现役数据源） */
+
+/**
+ * 新后端真实响应的 fixture（FE-06 的「有版本含义的目录」）。
+ * `src/mocks/` 那 20 份是**冻结的证据基线**，从此不再被新形状的端点消费；
+ * mock 现役读的是这一批 —— 与真后端同一形状，屏幕在两种模式下走同一条代码路径。
+ */
+const RAW_V1 = import.meta.glob('../fixtures/backend_v1/*.json', {
+  eager: true,
+  import: 'default',
+}) as Record<string, unknown>
+
+function fx<T>(file: string): T {
+  const hit = RAW_V1['../fixtures/backend_v1/' + file]
+  if (hit === undefined) throw new ApiError('malformed', '/fixtures/' + file)
+  return hit as T
+}
+
 /* ---------------------------------------------------------------- 延迟 */
 
 const LATENCY = 120
@@ -161,59 +179,15 @@ function saveDoc(doc: ApprovalDoc): ApprovalDoc {
 
 /* ------------------------------------------------------------ 命令行拼装 */
 
-/** 后端还没有的两个 kind。写进 DELIVERY.md 当作需要后端补的形状。 */
-const EXTRA_KINDS: Record<string, { label: string; paid: boolean }> = {
-  n0_extras: { label: 'stage0 剔除番外', paid: false },
-}
-
+/** 取值面直接透传新后端抓包（82 条真实动作，真实节点 id）——mock 不再打补丁。 */
 function enums(): EnumsResponse {
-  const base = raw<EnumsResponse>('enums.json')
-  const stage5Actions = base.actions
-    .filter((item) => item.kind === 'n5_write' || item.kind === 'n6_write')
-    .map((item) => ({
-      ...item,
-      kind: 'stage5.write',
-      mode: item.kind === 'n5_write' ? 'deep' : 'shallow',
-    }))
-  const additions = [
-    { kind: 'stage0.edit', label: 'stage0 人工编辑', extra: null, paid: false },
-    { kind: 'stage0.approve', label: 'stage0 人工批准', extra: null, paid: false },
-    { kind: 'stage1.partition', label: 'stage1 分章', extra: null, paid: false },
-    { kind: 'stage2.global', label: '并发抽取 stage2 + stage3', extra: ['--full-extract'], paid: true },
-    { kind: 'stage4.plan', label: 'stage4 重构计划', extra: null, paid: true },
-    {
-      kind: 'stage5.write', mode: null, label: 'stage5 深浅并发写作',
-      extra: ['--deep', '--shallow-rest'], paid: true,
-    },
-    { kind: 'stage6.hook', label: 'stage6 开篇文案', extra: null, paid: true },
-    { kind: 'stage7.rename', label: 'stage7 人名替换', extra: null, paid: true },
-    { kind: 'stage7.assemble', label: 'stage7 拼装成书', extra: null, paid: false },
-  ]
-  return {
-    ...base,
-    job_kinds: {
-      ...base.job_kinds,
-      ...Object.fromEntries(
-        additions.map((item) => [item.kind, { label: item.label, paid: item.paid }]),
-      ),
-    },
-    actions: [
-      ...base.actions.filter((item) => item.kind !== 'n5_write' && item.kind !== 'n6_write'),
-      ...stage5Actions,
-      ...additions.map((item) => ({
-        ...item,
-        free_flag: '',
-        writes_disk: true,
-      })),
-    ],
-  }
+  return fx<EnumsResponse>('enums.json')
 }
 
 /** 花不花钱由服务端的动作表说了算。这里是「假服务端」，所以查的是同一张表。 */
 function paidOf(req: JobRequest): boolean {
   const hit = lookupAction(enums(), req)
-  if (hit) return hit.paid
-  return EXTRA_KINDS[req.kind]?.paid ?? false
+  return hit ? hit.paid : false
 }
 
 function argvOf(req: JobRequest): string {
@@ -530,78 +504,76 @@ export const mockApi: Api = {
     ),
 
   getReading: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/reading/${o}`, () => raw<ReadingResponse>('reading_ch3.json')),
+    chapterOnly(sid, o, `/novels/${sid}/reading/${o}`, () => fx<ReadingResponse>('reading_ch3.json')),
 
   getGlobal: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage2/global`, () => raw<Stage2Global>('stage2_global.json')),
+    bookOnly(sid, `/novels/${sid}/stage2/global`, () => fx<Stage2Global>('global.json')),
 
   getStyle: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage3/style`, () => raw<Stage3Style>('stage3_style.json')),
+    bookOnly(sid, `/novels/${sid}/stage3/style`, () => fx<Stage3Style>('style.json')),
 
   getStage4: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/stage4/${o}`, () => raw<Stage4Response>('stage4_ch3.json')),
+    chapterOnly(sid, o, `/novels/${sid}/stage4/${o}`, () => fx<Stage4Response>('stage4_ch3.json')),
 
   getStage5: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/stage5/${o}`, () => raw<Stage5Response>('stage5_ch3.json')),
+    chapterOnly(sid, o, `/novels/${sid}/stage5/${o}`, () => fx<Stage5Response>('stage5_ch3.json')),
 
   getReview: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/review/${o}`, () => {
-      const base = raw<ReviewResponse>('review_ch3.json')
+      const base = fx<ReviewResponse>('review_ch3.json')
       const edit = lsRead<{ text: string; at: number }>(`edits.${sid}.${o}`)
       if (!edit) return base
       // 人改过 → 落成新的一轮，旧的一轮进 rounds。形状和后端的语义一致。
+      const prev = base.chapter.round ?? 1
       return {
         ...base,
         chapter: {
           ...base.chapter,
           text: edit.text,
           chars: [...edit.text].length,
-          round: base.chapter.round + 1,
+          round: prev + 1,
           origin: 'human',
-          rounds: [...base.chapter.rounds, { round: base.chapter.round, origin: base.chapter.origin }],
+          rounds: [...base.chapter.rounds, prev],
         },
       }
     }),
 
-  getInbox: (sid) => bookOnly(sid, `/novels/${sid}/inbox`, () => raw<InboxResponse>('inbox.json')),
+  getInbox: (sid) => bookOnly(sid, `/novels/${sid}/inbox`, () => fx<InboxResponse>('inbox.json')),
 
   getStage6: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage6`, () => {
-      const base = raw<Stage6Response>('stage6_hook.json')
-      const edit = lsRead<{ index: number; text: string }>('hook.' + sid)
+      const base = fx<Stage6Response>('stage6.json')
+      const edit = lsRead<{ index: number }>('hook.' + sid)
       if (!edit) return base
       const cand = base.candidates.find((c) => c.index === edit.index)
+      if (!cand) return base
+      // 定稿 = 候选那一份的拷贝（--pick 的语义；改字不在浏览器，走 CLI）。
       return {
         ...base,
         approved: {
-          approach: cand?.approach ?? base.approved?.approach ?? '',
-          text: edit.text,
+          approach: cand.approach,
+          chars: cand.chars,
+          text: cand.text,
           origin: 'human',
-          mech: cand?.mech ?? base.approved?.mech ?? {
-            punct_fixed: 0,
-            quotes_fixed: 0,
-            quote_problems: [],
-            paras_fixed: 0,
-          },
-          findings: cand?.findings ?? [],
+          mech: cand.mech,
+          findings: cand.findings,
         },
         candidates: base.candidates.map((c) => ({ ...c, approved: c.index === edit.index })),
       }
     }),
 
   getStage7: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage7`, () => raw<Stage7Response>('stage7_names.json')),
+    bookOnly(sid, `/novels/${sid}/stage7`, () => fx<Stage7Response>('stage7.json')),
 
   getStage7Chapter: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/stage7/${o}`, () => raw<Stage7Response>('stage7_ch3.json')),
+    chapterOnly(sid, o, `/novels/${sid}/stage7/${o}`, () => fx<Stage7Response>('stage7_ch3.json')),
 
   getCheck: (sid, kind: CheckKind) => {
     const path = `/novels/${sid}/check/${kind}`
     if (sid !== SAMPLE_SID) return noBook(path)
-    if (kind === 'stage2') return later(raw<CheckReport>('check_stage2.json'))
-    if (kind === 'stage5_review') return later(raw<CheckReport>('check_stage5_review.json'))
-    // 其余五份没抓在样本里。不是「通过」，也不是「没跑过」—— 是取不到。
-    return noChapter(path)
+    // stage0/1 在样本书上没跑过（真后端答 404）—— null = 「还没跑」，不是「通过」。
+    if (kind === 'stage0' || kind === 'stage1') return later(null)
+    return later(fx<CheckReport>(`check_${kind}.json`))
   },
 
   getSampleCoverage: () => later({ sid: SAMPLE_SID, ordinals: [SAMPLE_ORDINAL] }),

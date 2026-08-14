@@ -1,0 +1,571 @@
+{
+ "sid": "7615069877019300633",
+ "node": "stage4.plan",
+ "stage": "stage4",
+ "provenance": {
+  "freshness": "stale",
+  "reason": "file_changed",
+  "ghosts": [],
+  "edges": [
+   {
+    "key": "stage1/main_text.json",
+    "state": "stale",
+    "reason": "file_changed",
+    "recorded_file": "b8eb890096",
+    "now_file": "779dd4827b",
+    "recorded_consumed": null,
+    "now_consumed": null
+   },
+   {
+    "key": "stage2/chapter_blueprints.json",
+    "state": "stale",
+    "reason": "file_changed",
+    "recorded_file": "3a2a0ffe10",
+    "now_file": "0ab5968a3c",
+    "recorded_consumed": null,
+    "now_consumed": null
+   },
+   {
+    "key": "stage2/global_grounding.json",
+    "state": "stale",
+    "reason": "file_changed",
+    "recorded_file": "ad1e9a0db7",
+    "now_file": "64eae24202",
+    "recorded_consumed": null,
+    "now_consumed": null
+   }
+  ],
+  "invalid": false,
+  "revalidated": null,
+  "origin": null
+ },
+ "rules": [
+  {
+   "rule": "beat_adjacent",
+   "sev": "hard",
+   "status": "ok",
+   "item": "每一拍只并相邻的源拍",
+   "requirement": "R-5.6",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "57 拍",
+   "baseline": null
+  },
+  {
+   "rule": "beat_coverage",
+   "sev": "hard",
+   "status": "ok",
+   "item": "源 beat 全覆盖",
+   "requirement": "R-5.2",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "67 条源 beat",
+   "baseline": null
+  },
+  {
+   "rule": "beat_layer",
+   "sev": "hard",
+   "status": "ok",
+   "item": "每一拍只并同一叙述层",
+   "requirement": "R-5.6",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "57 拍",
+   "baseline": null
+  },
+  {
+   "rule": "beat_ref",
+   "sev": "hard",
+   "status": "ok",
+   "item": "from_beats 引用有效且属本章",
+   "requirement": "R-5.5",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "67 条引用",
+   "baseline": null
+  },
+  {
+   "rule": "beat_reuse",
+   "sev": "info",
+   "status": "ok",
+   "item": "同一源 beat 只被一拍引用",
+   "requirement": "R-5.12",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "67 条被引用的源 beat",
+   "baseline": null
+  },
+  {
+   "rule": "beat_seq",
+   "sev": "hard",
+   "status": "ok",
+   "item": "章内拍序与源序一致",
+   "requirement": "R-5.6",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "8 个输出章",
+   "baseline": null
+  },
+  {
+   "rule": "beat_size",
+   "sev": "info",
+   "status": "hit",
+   "item": "每拍字数落在写手的自然区间",
+   "requirement": "R-5.9b",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "beat_size",
+     "sev": "info",
+     "item": "每拍字数落在写手的自然区间",
+     "detail": "输出章 [2, 4] 有 >300 字的拍——一拍塞不下，写手会注水或漏写，该拆成两拍",
+     "evidence": [
+      "out2",
+      "out4"
+     ],
+     "evidence_key": "out2|out4",
+     "owner": "stage4",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "new",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "57 拍（报警线 50~300）",
+   "baseline": null
+  },
+  {
+   "rule": "budget_band",
+   "sev": "hard",
+   "status": "ok",
+   "item": "逐章预算之和落在源字数的目标区间内",
+   "requirement": "R-5.3b",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "8/8 章逐章比过",
+   "baseline": null
+  },
+  {
+   "rule": "budget_int",
+   "sev": "hard",
+   "status": "ok",
+   "item": "budget_chars 为正整数",
+   "requirement": "R-5.7",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "57 拍",
+   "baseline": null
+  },
+  {
+   "rule": "context_link",
+   "sev": "hard",
+   "status": "hit",
+   "item": "writer_context 照的是盘上这份计划",
+   "requirement": "R-5.10b",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "context_link",
+     "sev": "hard",
+     "item": "writer_context 照的是盘上这份计划",
+     "detail": "stage4/writer_context.json 照的是**另一版**计划（它记的是 `a0d9407f3a`，盘上这份是 `2d9ec765bb`）⇒ 两处各存一份 goals 已经分家。跑 `stage4.context` 重建，0 成本",
+     "evidence": [
+      "ctx"
+     ],
+     "evidence_key": "ctx",
+     "owner": "stage4",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "new",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "1 条边",
+   "baseline": null
+  },
+  {
+   "rule": "ctx_events_verbatim",
+   "sev": "hard",
+   "status": "ok",
+   "item": "events[] 是按引用搬来的 stage2 原件，中间层没有转抄",
+   "requirement": "R-6.1",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "67 条 events",
+   "baseline": null
+  },
+  {
+   "rule": "ctx_layer_flat",
+   "sev": "hard",
+   "status": "ok",
+   "item": "一拍要么平铺、要么走 segments，两者互斥且不取并集",
+   "requirement": "R-6.4",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "57 拍",
+   "baseline": null
+  },
+  {
+   "rule": "ctx_name_attested",
+   "sev": "hard",
+   "status": "ok",
+   "item": "下发的人名在【本章为止】的原文里有据",
+   "requirement": "R-6.2",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "256 处人名",
+   "baseline": null
+  },
+  {
+   "rule": "ctx_secret_gate",
+   "sev": "hard",
+   "status": "ok",
+   "item": "下发的秘密要么读者已知情、要么本章是埋点章",
+   "requirement": "R-6.3",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "30 条下发的秘密",
+   "baseline": null
+  },
+  {
+   "rule": "ctx_source",
+   "sev": "metric",
+   "status": "ok",
+   "item": "写作上下文那一份产物的来源账",
+   "requirement": "R-5.10c",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "ctx_source",
+     "sev": "metric",
+     "item": "写作上下文那一份产物的来源账",
+     "detail": "stage4/writer_context.json：4 条上游边，判定 `stale`（file_changed）",
+     "evidence": [
+      "ctx_provenance"
+     ],
+     "evidence_key": "ctx_provenance",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "new",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "1 份产物",
+   "baseline": null
+  },
+  {
+   "rule": "empty_chapter",
+   "sev": "hard",
+   "status": "ok",
+   "item": "每个输出章都有 beats",
+   "requirement": "R-5.7",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "8 个输出章",
+   "baseline": null
+  },
+  {
+   "rule": "flat_chapter",
+   "sev": "info",
+   "status": "hit",
+   "item": "章内各拍字数有轻重",
+   "requirement": "R-5.9b",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "flat_chapter",
+     "sev": "info",
+     "item": "章内各拍字数有轻重",
+     "detail": "输出章 [8] 各拍字数几乎一样平（最长拍不到最短拍的 2 倍）——本章没有重头，读起来会是梗概不是章节",
+     "evidence": [
+      "out8"
+     ],
+     "evidence_key": "out8",
+     "owner": "stage4",
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "new",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "8/8 章拍数 ≥3",
+   "baseline": null
+  },
+  {
+   "rule": "one_to_one",
+   "sev": "hard",
+   "status": "ok",
+   "item": "一章对一章（禁合并/重排/删章/拆分）",
+   "requirement": "R-5.2",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "8 个输出章 × 4 条禁令",
+   "baseline": null
+  },
+  {
+   "rule": "ordinal_seq",
+   "sev": "hard",
+   "status": "ok",
+   "item": "output_ordinal 1..N 连续",
+   "requirement": "R-5.1",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "8 个章号",
+   "baseline": null
+  },
+  {
+   "rule": "params_drift",
+   "sev": "info",
+   "status": "ok",
+   "item": "三条后置条件判据比过了分组参数再判",
+   "requirement": "R-5.11b",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "比过：absorb-small-v1，阈值 80 字",
+   "baseline": null
+  },
+  {
+   "rule": "plan_params",
+   "sev": "metric",
+   "status": "ok",
+   "item": "这份计划的拍是照哪一套阈值切的",
+   "requirement": "R-5.11",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "plan_params",
+     "sev": "metric",
+     "item": "这份计划的拍是照哪一套阈值切的",
+     "detail": "grouping=absorb-small-v1 · beat_min_chars=80 · plan_beats=57",
+     "evidence": [
+      "grouping=absorb-small-v1",
+      "beat_min_chars=80",
+      "plan_beats=57"
+     ],
+     "evidence_key": "grouping=absorb-small-v1|beat_min_chars=80|plan_beats=57",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "new",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "1 份来源账",
+   "baseline": null
+  },
+  {
+   "rule": "style_words",
+   "sev": "hard",
+   "status": "ok",
+   "item": "只说写什么、不说怎么写（含 reconstruction_strategy）",
+   "requirement": "R-5.4",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "15 个写法词 × 25 个自由文本字段",
+   "baseline": "盘上这三本 **0 处命中**。⚠ 旧口径两本共 **5 处**（「张力」×4 +「意象」×1），**全在三个 goal 里**、全部按提示级放行、一路进了写手 prompt。词表是 `invariants.STYLE_WORDS`（15 个），整份插值进 prompt、不许手抄子集"
+  },
+  {
+   "rule": "verbatim_share",
+   "sev": "metric",
+   "status": "ok",
+   "item": "原话占预算的分布",
+   "requirement": "R-5.14",
+   "check_kind": "mechanical",
+   "remediation": "none",
+   "fix": null,
+   "findings": [
+    {
+     "rule": "verbatim_share",
+     "sev": "metric",
+     "item": "原话占预算的分布",
+     "detail": "41 拍带原话，中位 10% · p90 22% · 最高 27%（提示线 50%）",
+     "evidence": [
+      "n=41",
+      "median=0.1",
+      "p90=0.218",
+      "max=0.267"
+     ],
+     "evidence_key": "n=41|median=0.1|p90=0.218|max=0.267",
+     "owner": null,
+     "actionable": false,
+     "identity_hit": false,
+     "identity_dead": null,
+     "converge": "new",
+     "unresolved_rounds": 0,
+     "wontfix": null
+    }
+   ],
+   "why": null,
+   "scanned": "57 拍",
+   "baseline": null
+  },
+  {
+   "rule": "verbatim_starved",
+   "sev": "info",
+   "status": "ok",
+   "item": "拍预算没有被逐字原话挤满",
+   "requirement": "R-5.13",
+   "check_kind": "mechanical",
+   "remediation": "human",
+   "fix": null,
+   "findings": [],
+   "why": null,
+   "scanned": "41 拍带原话",
+   "baseline": null
+  }
+ ],
+ "accounting": [
+  {
+   "key": "params",
+   "item": "这份计划的拍是照哪一套阈值切的？",
+   "recorded": true,
+   "count": 3,
+   "detail": [
+    "grouping: absorb-small-v1",
+    "beat_min_chars: 80",
+    "plan_beats: 57"
+   ]
+  },
+  {
+   "key": "revalidated",
+   "item": "这份稿是跑出来的，还是被重判提升上来的？",
+   "recorded": true,
+   "count": 0,
+   "detail": []
+  },
+  {
+   "key": "gates_skipped",
+   "item": "哪几条阻断级判据当时【没跑成】？",
+   "recorded": true,
+   "count": 0,
+   "detail": []
+  }
+ ],
+ "retired": [
+  {
+   "rule": "book_budget",
+   "why": "「全书篇幅预算守恒：amplify 章数 ≤ compress 章数」。`op` 已锁定为 `keep`（用户裁决），amplify/compress 章数恒为 0 ⇒ `0 > 0` 恒假。留着它不会报错，**它只会继续输出一个看起来正常的「没问题」**。⚠ **它防的那件事没有失去保护**：当初的理由是「逐章合规不蕴含全书不胀」（某本 12 章 amplify / 4 章抵消 ⇒ 成稿 2.35×），而 `op` 锁 keep 之后每一章的带都是0.90~1.10×，全书自然落在同一区间——**逐章判据这次真的蕴含了全书判据**。⚠ 解锁 `op` 时必须把它一起放回来。"
+  },
+  {
+   "rule": "causal_beat_cut",
+   "why": "「关键因果 beat 被删章带走」。计划契约已禁止删章（`from_source_ordinals` 长度锁 1）⇒ 条件恒为假。**它防的那件事由 `one_to_one` 接管。**"
+  },
+  {
+   "rule": "causal_beat_starved",
+   "why": "「关键因果 beat 被并进大拍后摊到的字数 < 30」。它需要一张「哪几条 beat 是因果脊柱」的清单，而那张清单来自已退役的语义关卡。**这条移交全书验收相在成品上判**——「这条因果在成稿里只剩一句带过」是看得见的，「摊 29 字 vs 31 字」是猜的。⚠ 一笔必须记下的账：阈值 30 是拿那个 LLM 语义层当 ground truth 校准出来的，退役不会让这个数失效（它已经标定完了），但会**永久拿掉重新标定它的能力**。"
+  },
+  {
+   "rule": "causal_beat_uncovered",
+   "why": "「关键因果 beat 未被任何一拍覆盖」。已由 `beat_coverage` 硬保证 ⇒ 这里再查恒 pass。"
+  },
+  {
+   "rule": "causal_beat_unknown",
+   "why": "「保真基准点名的 beat 在骨架里不存在」。它查的是语义关卡**自己的幻觉**，而那一节已整个退役 ⇒ 没有关卡就没有关卡幻觉。"
+  },
+  {
+   "rule": "foreshadow_cut",
+   "why": "「伏笔被砍」。stage2 已删除 `foreshadow` 字段（与 `secrets` 是同一语义的两个落点）⇒ **上游没了**，不是没人查了。"
+  },
+  {
+   "rule": "gate1_semantic",
+   "why": "语义关卡（压缩把关键因果压没 / 揭示时机错位 / 结尾泄底）。用户裁决：stage4 只做确定性校验，语义判定整个搬到成品上、按章反哺重写。⚠⚠ 这同时解掉一个死结：**在抽象中间层上做语义判定时，护栏本身就是发明源**——实测它把原文里各 0 次的词收进结论还补了条原文没有的佐证，据此判计划漏了揭示；若照办，写手就会被关卡逼着写一场**原文没有的戏**。"
+  },
+  {
+   "rule": "op_enum",
+   "why": "「op 恒为 keep」。`op` 字段已随用户裁决**整个裁撤**（一个常量伪装成产物字段，暗示着一种从不存在的「按章变化」），常量回到 `contracts/invariants.py::LOCKED_OP` ⇒ 判据无字段可查。⚠ **它与 `book_budget` 同因同果**，而那一条早在退役表里——把这一条写成「裁撤」而不是「退役」是措辞不一致，一条不带标注的消失会让读的人以为忘了查。⚠ 解锁 `op` 时要一起放回来的还有：字段本身 · 预算带检查里「取值面外就跳过整章」那条静默分支。"
+  },
+  {
+   "rule": "reveal_reordered",
+   "why": "「揭示被重排（章级）」。计划契约已改为一章对一章且禁止重排 ⇒ **章**的输出序恒单调。⚠⚠ 这条退役理由曾写成「输出序恒单调」而**不带「章级」二字**，于是它盖住了一件当时没人在查的事：**章内的拍序**由 prompt 明文授权模型自己排，而代码里一个门都没有——实测某本 out1 就把 `b01_03` 排到了 `b01_02` 之前，一路传进写手 prompt。现由 `beat_seq` 承担。**一条措辞偏宽的退役理由，会以现役身份继续担保它其实没在担保的东西。**"
+  },
+  {
+   "rule": "split_misplaced",
+   "why": "「拆分拆错」。`op=split` 已废除——它存在的唯一理由是「源章里混着正文结局与文末番外」，而番外现在在 stage1 就被剔出正文了；计划侧另有恒等式断言 ⇒ 拆分在结构上不再可能出现。"
+  }
+ ],
+ "badge": "fail",
+ "passed": false,
+ "counts": {
+  "ok": 21,
+  "hit": 3,
+  "unver": 0,
+  "skipped": 0
+ }
+}
