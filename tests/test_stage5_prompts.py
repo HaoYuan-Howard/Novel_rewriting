@@ -14,6 +14,7 @@ test_stage5_prompts.py —— **stage5 两条臂的 system 与原型逐字节相
 from __future__ import annotations
 
 import hashlib
+import inspect
 
 import pytest
 
@@ -66,6 +67,18 @@ def test_the_arm_system_is_a_byte_for_byte_port(mode, const, proto, size):
     assert len(got) == size          # 守卫的守卫：两边被同时改坏时才会一起漏
 
 
+def test_stage5_has_one_prompt_implementation_without_experiment_selector():
+    from novel.stages.stage5 import write
+
+    assert list(inspect.signature(prompts.write_system).parameters) == ['mode', 'revise']
+    assert list(inspect.signature(prompts.build_material).parameters) == [
+        'entry', 'book', 'with_source_text']
+    assert list(inspect.signature(write.run_write).parameters) == [
+        'ctx', 'client', 'chapters']
+    assert list(inspect.signature(write.run_revise).parameters) == [
+        'ctx', 'client', 'chapters']
+
+
 @pytest.mark.parametrize('name', ['LAYER_RULE', 'HINGE_LABEL_RULE', 'FIDELITY_RULE',
                                   'ORDER_RULE', 'STYLE_WORD_RULE', 'REVISE_TAIL'])
 def test_every_shared_fragment_is_a_byte_for_byte_port(name):
@@ -105,18 +118,6 @@ def test_the_shallow_arm_still_has_no_layer_gloss():
     assert prompts.LAYER_RULE not in prompts.SHALLOW_SYS
     for cn in ('〔现场〕', '〔回忆〕', '〔转述〕'):
         assert cn not in prompts.SHALLOW_SYS, f'{cn} 出现在开卷 system 里——`B-13` 被人补了'
-
-
-def test_guarded_variant_closes_the_known_prompt_holes_without_changing_baseline():
-    deep = prompts.write_system('deep', variant='guarded-v2')
-    shallow = prompts.write_system('shallow', variant='guarded-v2')
-    assert prompts.write_system('deep') == prompts.DEEP_SYS
-    assert prompts.write_system('shallow') == prompts.SHALLOW_SYS
-    for arm in (deep, shallow):
-        assert '只按本章材料允许的信息层级落笔' in arm
-        assert '不要根据风格画像或全书惯例猜后文底牌' in arm
-    assert prompts.LAYER_RULE in shallow, 'guarded-v2 应补上开卷臂缺失的时空标签释义'
-
 
 
 def test_the_revise_tail_is_the_third_fingerprint_and_has_only_one_producer():

@@ -715,7 +715,7 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 
 登记在这里免得被当成漏项。
 
-1. **改写式泄底语义防线已经过三本真实小说、三条实验臂验证。** 字面探针只挡转抄式，
+1. **改写式泄底语义防线已经过三本真实小说、三组实验配置验证。** 字面探针只挡转抄式，
    而语义审判在基线第一本检出 3 条提前等价 claim；同时九次审判中逐书仍有 0~6 个
    `coverage=uncertain`。因此必须同时看 `semantic_secret_leak` 与
    `semantic_secret_coverage`，既不能用机械 `secret_leak=0` 代替，也不能把 UNVER 当 PASS。

@@ -37,10 +37,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from contracts.invariants import (
-    DEPTH_MODES, HINGE_LABEL, HINGE_LABEL_PARTS, LAYER_CN, LAYER_GLOSS, PROMPT_VARIANTS,
+    DEPTH_MODES, HINGE_LABEL, HINGE_LABEL_PARTS, LAYER_CN, LAYER_GLOSS,
     TIME_LAYERS, hinge_heading,
 )
-from novel.core.measure import measure
 from novel.core.text import norm
 from novel.llm.prompts import fill
 from novel.stages.stage5 import measure as M
@@ -302,8 +301,7 @@ _SYS_OF: dict[str, str] = {'deep': DEEP_SYS, 'shallow': SHALLOW_SYS}
 assert tuple(_SYS_OF) == DEPTH_MODES, '臂的取值面与 `contracts.invariants.DEPTH_MODES` 分家了'
 
 
-def write_system(mode: str, *, revise: bool = False,
-                 variant: str = 'baseline-v1') -> str:
+def write_system(mode: str, *, revise: bool = False) -> str:
     """这一次要发出去的 system。**盘上那三个指纹的唯一产地。**
 
     `deep` · `shallow` · `deep|shallow + REVISE_TAIL` —— 修订轮的 SYS 是**拼过的**，
@@ -317,32 +315,7 @@ def write_system(mode: str, *, revise: bool = False,
     if mode not in _SYS_OF:
         raise KeyError(f'没有 {mode!r} 这条臂。取值面是 {DEPTH_MODES}'
                        f'（`contracts.invariants.DEPTH_MODES`）')
-    if variant not in PROMPT_VARIANTS['stage5']:
-        raise KeyError(
-            f'没有 {variant!r} 这条 stage5 prompt 实验臂。'
-            f'取值面是 {PROMPT_VARIANTS["stage5"]}')
-    guarded = ''
-    if variant == 'guarded-v2':
-        guarded = """
-
-【实验臂补强】
-- 任何秘密只按本章材料允许的信息层级落笔；不要根据风格画像或全书惯例猜后文底牌。
-- 对白密度同时参照本章源文标量与全书基线；不为追比例编台词，也不把承重台词压成转述。"""
-        if mode == 'shallow':
-            guarded += '\n- 叙述层标签的含义：' + LAYER_RULE + '。'
-    return fill(_SYS_OF[mode] + guarded + (REVISE_TAIL if revise else ''))
-
-
-def variant_from_provenance(raw: dict[str, Any] | None) -> str:
-    """存量没有 VARIANT 即基线；新产物按指纹恢复当时的 prompt 臂。"""
-    from novel.prov import fingerprint
-    recorded = (((raw or {}).get('_provenance') or {}).get('prompts') or {}).get('VARIANT')
-    if recorded is None:
-        return 'baseline-v1'
-    for variant in PROMPT_VARIANTS['stage5']:
-        if recorded == fingerprint(variant):
-            return variant
-    raise ValueError(f'无法识别 stage5 prompt variant 指纹：{recorded!r}')
+    return fill(_SYS_OF[mode] + (REVISE_TAIL if revise else ''))
 
 
 def trim_system() -> str:
@@ -631,8 +604,7 @@ def writer_chars(entry: dict[str, Any], book: M.Book) -> dict[str, dict[str, str
             for cid, v in chars.items()}
 
 
-def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: bool,
-                   variant: str = 'baseline-v1') -> str:
+def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> str:
     """对白形态块——**这本书的承重墙**。占比 / 符号 / 本章引语数 / 排版惯例，全部从产物插值。
 
     ⚠ `dialogue_ratio_applicable=False`（语料无引号）⇒ **不下发**：没有可信目标时教排版
@@ -651,13 +623,6 @@ def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
     sym = base.get('quote_styles') or []
     lines = ['── 对白形态（这本书的承重墙）──',
              f"这本书对白密集，正文约 {pct} 的字符在引号里，引号体是 {sym[0] if sym else ''}。"]
-    if variant == 'guarded-v2':
-        chapter_meas = measure(M.chapter_source(entry, book.source_text))
-        chapter_ratio = chapter_meas.dialogue_ratio if chapter_meas is not None else None
-        if chapter_ratio is not None:
-            lines.append(
-                f'本章源文直接引语字符约占 {chapter_ratio:.0%}；把它当本章软目标，'
-                '允许随压缩幅度自然浮动，不要为凑比例新增台词。')
     n = M.src_quote_count(entry, book.source_text)
     if n and with_source_text:
         lines.append(f'本章原文有 {n} 句直接引语——成稿里的直接引语不应明显少于它；'
@@ -680,8 +645,7 @@ class Material:
     source_text: str
 
 
-def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: bool,
-                   variant: str = 'baseline-v1') -> Material:
+def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> Material:
     """组装一章的下发面。`with_source_text=True` 即开卷（给原章正文）。
 
     ⚠⚠ **闭卷模式下这里一个字节的源章原文都不碰**——那份原文只供校验器算重合度。
@@ -725,7 +689,7 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
         + (f'、明喻（像/仿佛/如同这类）每千字只有约 {simile:.1f} 个'
            if simile is not None else '')
         + '。写完回看：你的句段若明显比它长、比喻明显比它密，就是写成了另一本书。',
-        dialogue_block(entry, book, with_source_text=with_source_text, variant=variant),
+        dialogue_block(entry, book, with_source_text=with_source_text),
         '── 本章要写的内容（按顺序；**只写这些**，不得新增剧情、也不要写别的章的事）──\n'
         + chapter_facts(entry),
         '── 人物（用这些名字，不要改名、不要另造称呼）──\n'

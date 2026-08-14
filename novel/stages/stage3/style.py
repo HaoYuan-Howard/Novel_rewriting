@@ -17,7 +17,6 @@ from __future__ import annotations
 import copy
 import json
 
-from contracts.invariants import PROMPT_DEFAULTS, PROMPT_VARIANTS
 from contracts.schema.common import Usage
 from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import HookCopy, MainText
@@ -28,7 +27,7 @@ from contracts.schema.stage3 import (
 )
 from novel import paths
 from novel.core.naming import names_of, spoiler_names_of
-from novel.core.text import norm, render_book
+from novel.core.text import norm
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
 from novel.prov import fingerprint
@@ -54,7 +53,7 @@ _INVALID = paths.invalid_of(REL)
 def _upstreams(store: ArtifactStore) -> tuple[MainText, HookCopy, GlobalGrounding | None]:
     """三份上游。
 
-    基线复检允许第三份缺失，此时 `name_leak` 诚实落 `unver`；anti-leak-v2 的产地
+    旧产物复检允许第三份缺失，此时 `name_leak` 诚实落 `unver`；生产抽取
     必须拿它构造脱敏表，缺失由 `build_chapter_prompts` 显式拒绝。
     """
     main = store.read(MainText, MAIN_TEXT)
@@ -113,9 +112,17 @@ def _accounting_of(prov: dict) -> dict:
 
 
 def _requires_chapter_styles(data: dict) -> bool:
-    """盘上变体指纹决定逐章覆盖契约；删掉整个列表也不能伪装成基线。"""
-    recorded = (((data.get('_provenance') or {}).get('prompts') or {}).get('VARIANT'))
-    return recorded == fingerprint('anti-leak-v2')
+    """现役逐章产物严格覆盖；旧全书产物仅保留只读兼容。"""
+    prompt_keys = set((((data.get('_provenance') or {}).get('prompts') or {})))
+    # 清理前全书抽取只记录这一枚 prompt key；它不是可选生产路径，
+    # 仅是让历史正式产物还能复检/迁移的格式签名。
+    legacy_prompt_key = 'STYLE_' + 'SYS'
+    is_legacy_full_book = (
+        legacy_prompt_key in prompt_keys
+        and 'STYLE_CHAPTER_SYS' not in prompt_keys
+        and not data.get('chapter_styles')
+    )
+    return not is_legacy_full_book
 
 
 # ── 付费路 ──────────────────────────────────────────────────────────────────
@@ -123,7 +130,7 @@ def _requires_chapter_styles(data: dict) -> bool:
 # 付费预览与执行共用以下构造口；是否允许付费由 CLI 的 `--yes` 契约统一控制。
 
 def _redaction_terms(gg: GlobalGrounding | None) -> frozenset[str]:
-    """实验臂的专名表比告警名表更激进：脱敏宁可多，不向逐章写手泄漏。"""
+    """抽取专名表比告警名表更激进：脱敏宁可多，不向逐章风格模型泄漏。"""
     if gg is None:
         return frozenset()
     return frozenset(
@@ -206,41 +213,26 @@ def _abstract_style_content(response: ChapterStyleResponse | StyleResponse,
     return cleaned, count
 
 
-def build_prompt(ctx: RunContext, prompt_variant: str = 'baseline-v1'
-                 ) -> tuple[str, str, Measurable]:
+def build_prompt(ctx: RunContext) -> tuple[str, str, Measurable]:
     """`--dry-run`：把这次**要发出去的** `(system, user)` 原样交出来。**0 成本。**
 
     ⚠ 它与真跑共用同一个构造入口——展示与执行必须共用同一份构造函数（`R-11.8`），
     否则「预览里看到的」与「真发出去的」是两件事，而那种分家没有任何东西会报错。
     """
-    store = ArtifactStore(ctx)
-    if prompt_variant not in PROMPT_VARIANTS['stage3']:
-        raise TerminalState(
-            f'stage3 --prompt-variant 要 {"|".join(PROMPT_VARIANTS["stage3"])}，'
-            f'收到 {prompt_variant!r}')
-    if prompt_variant == 'anti-leak-v2':
-        chapter_system, users, meas, _hook_text, _surfaces = build_chapter_prompts(ctx)
-        # dry-run 摊开第一个真实章请求；真跑逐章也调同一个构造口。
-        return chapter_system, users[0][1], meas
-    main, hook, gg = _upstreams(store)
-    meas = measure_all(main, hook)
-    book_text, section_index = render_book(main)
-    title, sid = ctx.title, ctx.sid
-    hook_text = (hook.text or '').strip()
-    user = prompts.build_user(meas, book_text=book_text, section_index=section_index,
-                              hook_text=hook_text, title=title, sid=sid)
-    return prompts.style_system(prompt_variant), user, meas
+    chapter_system, users, meas, _hook_text, _surfaces = build_chapter_prompts(ctx)
+    # dry-run 摊开第一个真实章请求；真跑逐章也调同一个构造口。
+    return chapter_system, users[0][1], meas
 
 
 def build_chapter_prompts(ctx: RunContext
                           ) -> tuple[str, list[tuple[int, str]], Measurable, str,
                                      frozenset[str]]:
-    """anti-leak-v2 的真实输入面：一个请求只含一个源章。"""
+    """生产输入面：一个请求只含一个源章。"""
     store = ArtifactStore(ctx)
     main, hook, gg = _upstreams(store)
     if gg is None:
         raise UpstreamMissing(
-            'anti-leak-v2 需要 stage2/global_grounding.json 先落盘，'
+            '逐章风格抽取需要 stage2/global_grounding.json 先落盘，'
             '否则无法用专名表脱敏当前章，不能把“没有检查材料”当成防泄露')
     meas = measure_all(main, hook)
     terms = _redaction_terms(gg) | frozenset({ctx.title})
@@ -323,17 +315,6 @@ def request_chapter_styles(
     )]
     return (chapter_system, aggregate_system, measurable, chapter_styles,
             aggregate, attempts)
-
-
-def request_style(
-    ctx: RunContext,
-    client: LlmClient,
-    prompt_variant: str = 'baseline-v1',
-) -> tuple[str, str, Measurable, StyleResponse]:
-    system, user, measurable = build_prompt(ctx, prompt_variant)
-    response = client.ask_json(
-        system, user, model_cls=StyleResponse, purpose=ctx.node)
-    return system, user, measurable, response
 
 
 _QUOTE_PAIRS = (('「', '」'), ('“', '”'), ('‘', '’'), ('『', '』'), ('"', '"'))
@@ -562,54 +543,8 @@ def _write_initial_result(
     return artifact
 
 
-def finish_style(
-    ctx: RunContext,
-    client: LlmClient,
-    requested: tuple[str, str, Measurable, StyleResponse],
-    prompt_variant: str = 'baseline-v1',
-) -> StyleGrounding:
-    """**付费**：抽一份文风画像，先校验后落盘。
-
-    ⚠ `require` **不显式传**：它从 `model_cls=StyleResponse` 派生成三个必需顶层键。
-    原型这个调用点写的是 `require=('voice', 'surface_habits')`——**漏了 `hook_style`**，
-    而漏传不报错，它只是**静默停掉一条 HARD 闸门**（判据 39）。
-
-    落盘闸门（`Q-5`：先校验后落盘）：有 `hard` 命中 ⇒ **不覆盖已有产物**，
-    问题稿另存 `.INVALID` + `GateBlocked`。0 成本提升路是 `--revalidate`。
-    """
-    store = ArtifactStore(ctx)
-    system, user, meas, resp = requested
-    # Global grounding may have completed while this request was in flight.
-    _upstreams(store)
-
-    artifact = StyleGrounding(
-        voice=resp.voice, surface_habits=resp.surface_habits, hook_style=resp.hook_style,
-        measurable=meas,
-        **{'_provenance': ctx.llm_provenance(
-            StyleProvenance, prompts={'STYLE_SYS': system, 'VARIANT': prompt_variant},
-            model=client.model,
-            attempts=[StyleAttempt(kind='initial',
-                                   user_prompt=fingerprint(user),
-                                   output=fingerprint(resp.model_dump_json()),
-                                   cache_policy=ctx.cache.name)])})
-
-    # 落盘那一趟**不排** `measurable_drift`：`measurable` 刚由代码算出来，
-    # 与「照盘上 stage1 重算」必然相等——一条永远不会红的检查不该打 `[OK]`（判据 31）。
-    outcomes = _judge(store, artifact.model_dump(by_alias=True), measured_now=None)
-    return _write_initial_result(
-        ctx, client, store, artifact, outcomes, label='stage3 ')
-
-
-def run_style(ctx: RunContext, client: LlmClient,
-              prompt_variant: str = PROMPT_DEFAULTS['stage3']) -> StyleGrounding:
-    if prompt_variant == 'baseline-v1':
-        return finish_style(
-            ctx, client, request_style(ctx, client, prompt_variant), prompt_variant)
-    if prompt_variant != 'anti-leak-v2':
-        raise TerminalState(
-            f'stage3 --prompt-variant 要 {"|".join(PROMPT_VARIANTS["stage3"])}，'
-            f'收到 {prompt_variant!r}')
-
+def run_style(ctx: RunContext, client: LlmClient) -> StyleGrounding:
+    """逐章脱敏抽取并聚合；这是 Stage 3 唯一生产实现。"""
     store = ArtifactStore(ctx)
     (chapter_system, aggregate_system, meas, chapter_styles,
      aggregate, attempts) = request_chapter_styles(ctx, client)
@@ -622,8 +557,7 @@ def run_style(ctx: RunContext, client: LlmClient,
         **{'_provenance': ctx.llm_provenance(
             StyleProvenance,
             prompts={'STYLE_CHAPTER_SYS': chapter_system,
-                     'STYLE_AGGREGATE_SYS': aggregate_system,
-                     'VARIANT': prompt_variant},
+                     'STYLE_AGGREGATE_SYS': aggregate_system},
             model=client.model,
             attempts=attempts,
         )},

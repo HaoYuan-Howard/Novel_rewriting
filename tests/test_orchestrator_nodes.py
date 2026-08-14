@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-from contracts.invariants import FREE_ENTRIES, NODES, PROMPT_VARIANTS, VALUED_FLAGS, WRITE_EFFECTS
+from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS, WRITE_EFFECTS
 from contracts.rules import PORTED_STAGES
 from novel.errors import UnsupportedRunMode
 from novel.orchestrator import nodes as N
@@ -37,9 +37,6 @@ def _mode_of(node: str) -> str | None:
 
 def _args(flag: str, node: str | None = None) -> list[str]:
     """带值 flag 补一个值——不补的话拒收的是「没给值」，测不到我们想测的那件事。"""
-    if flag == '--prompt-variant':
-        assert node is not None
-        return [flag, PROMPT_VARIANTS[NODES[node].stage][0]]
     return [flag, 'payload.json'] if flag in VALUED_FLAGS else [flag]
 
 
@@ -206,14 +203,6 @@ def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():
         N.build_argv('stage3.style', SID, ['--apply-edit'], base=BASE)
     with pytest.raises(UnsupportedRunMode, match='不带值'):
         N.build_argv('stage3.style', SID, ['--check-only', 'oops'], base=BASE)
-
-
-def test_prompt_variant_rejects_unknown_values_before_execution():
-    with pytest.raises(UnsupportedRunMode, match='不在'):
-        N.build_argv('stage3.style', SID, ['--prompt-variant', 'typo-v9'], base=BASE)
-    with pytest.raises(UnsupportedRunMode, match='不在'):
-        N.build_argv('stage5.write', SID, ['--prompt-variant', 'typo-v9'],
-                     base=BASE, mode='deep')
 
 
 def test_child_env_carries_the_three_required_variables():
@@ -405,9 +394,8 @@ def test_the_flag_surface_covers_all_three_tables():
     **那个 flag 在命令行上永远解析不出来**——`argparse` 只会说
     「unrecognized arguments」，而人会以为是自己敲错了。
 
-    ⚠ 今天 `VALUED_FLAGS ⊆ FREE_ENTRIES`，所以这一格是**潜伏的**：
-    并集写错也测不出来。第一个只登记在 `VALUED_FLAGS` 里的 flag 出现时，
-    本条才真的开始查——而那正是它存在的时刻。
+    `--pick` / `--chapters` 等参数只登记在 `VALUED_FLAGS`，所以这条必须直接验证
+    三表并集；只覆盖免费与付费入口会让这些参数在 CLI 上静默消失。
     """
     from novel.cli.main import _ALL_FLAGS
     from contracts.invariants import PAID_FLAGS

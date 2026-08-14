@@ -81,7 +81,7 @@ def _is_format_placeholder(q: str) -> bool:
 
 
 def _surface_habit_groups(obj: Any, path: str = '') -> Iterator[tuple[str, list]]:
-    """遍历全局与逐章风格中的 ``surface_habits``；实验臂不能漏扫局部列表。"""
+    """遍历全局与逐章风格中的 ``surface_habits``；不能漏扫局部列表。"""
     if isinstance(obj, dict):
         for key, value in obj.items():
             child = f'{path}.{key}' if path else key
@@ -277,7 +277,7 @@ def _name_leak(fields: list[tuple[str, str]], names: frozenset[str] | None,
         'name_leak',
         detail=f'出现人物专名 {hit[:6]}——描述应可迁移到新故事，改用角色功能（主角/施害方/旁观者）'
                + (f'。⚠ 其中 {spoil} **同时是读者尚未知情的秘密主体**：'
-                  f'这份产物会整份进写手 prompt，等于把底提前告诉写第 1 章的写手' if spoil else ''),
+                  f'局部项会泄给同源输出章，聚合项则表示抽象失败；两者都不得晋升' if spoil else ''),
         evidence=hit)], scanned=scanned)
 
 

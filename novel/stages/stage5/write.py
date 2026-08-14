@@ -29,7 +29,7 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
-from contracts.invariants import DEPTH_MODES, PROMPT_VARIANTS, STOP_REWRITE_AFTER
+from contracts.invariants import DEPTH_MODES, STOP_REWRITE_AFTER
 from novel.config import MAX_CONCURRENCY
 from contracts.rules import REGISTRY
 from contracts.schema.common import (
@@ -117,8 +117,7 @@ def _chapters_of(ctx: RunContext, book: M.Book, spec: str | None) -> list[dict[s
 # 一、下发面 —— `--dry-run` 与真跑**共用这一个入口**
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_prompt(ctx: RunContext, chapters: str | None = None,
-                 prompt_variant: str = 'baseline-v1'
+def build_prompt(ctx: RunContext, chapters: str | None = None
                  ) -> tuple[str, str, prompts.Material]:
     """这一次**要发出去的** `(system, user, 下发面)`。
 
@@ -127,7 +126,6 @@ def build_prompt(ctx: RunContext, chapters: str | None = None,
     ⚠ `--dry-run` 只摊**这一次要写的第一章**——摊全部没人读得完，而形状是一样的。
     """
     mode = _mode_of(ctx)
-    _validate_prompt_variant(prompt_variant)
     store = ArtifactStore(ctx)
     book = review.load_book(ctx, store)
     todo = _chapters_of(ctx, book, chapters)
@@ -137,17 +135,9 @@ def build_prompt(ctx: RunContext, chapters: str | None = None,
             '⚠ 这**不是**「没问题」——要重写某一章就用 `--chapters N` 明说')
     entry = todo[0]
     mat = prompts.build_material(entry, book,
-                                 with_source_text=_ARMS[mode].with_source_text,
-                                 variant=prompt_variant)
-    return (prompts.write_system(mode, variant=prompt_variant),
+                                 with_source_text=_ARMS[mode].with_source_text)
+    return (prompts.write_system(mode),
             prompts.build_user(mat), mat)
-
-
-def _validate_prompt_variant(prompt_variant: str) -> None:
-    if prompt_variant not in PROMPT_VARIANTS['stage5']:
-        raise TerminalState(
-            f'stage5 --prompt-variant 要 {"|".join(PROMPT_VARIANTS["stage5"])}，'
-            f'收到 {prompt_variant!r}')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -283,15 +273,13 @@ def ctx_purpose(entry: dict[str, Any]) -> str:
 
 
 def run_write(ctx: RunContext, client: LlmClient,
-              chapters: str | None = None,
-              prompt_variant: str = 'baseline-v1') -> CheckReport:
+              chapters: str | None = None) -> CheckReport:
     """默认付费路：逐章一次调用。**一章失败不中断整批。**
 
     ⚠ 连贯性靠**上一章的计划**传递，**不给上一章的成稿**——否则写手会顺着自己刚写的续，
     偏差沿章累积，章与章也变成串行依赖（`prompts.prev_context`）。
     """
     mode = _mode_of(ctx)
-    _validate_prompt_variant(prompt_variant)
     store = ArtifactStore(ctx)
     book = review.load_book(ctx, store)
     todo = _chapters_of(ctx, book, chapters)
@@ -299,8 +287,7 @@ def run_write(ctx: RunContext, client: LlmClient,
         raise TerminalState(
             '这一次没有要写的章：计划里的每一章两条臂都已经有成稿了。'
             '⚠ 这**不是**「没问题」——要重写某一章就用 `--chapters N` 明说')
-    return _run_group(ctx, store, book, todo, client, mode=mode, revise=None,
-                      prompt_variant=prompt_variant)
+    return _run_group(ctx, store, book, todo, client, mode=mode, revise=None)
 
 
 def run_selected(
@@ -309,11 +296,9 @@ def run_selected(
     shallow_ctx: RunContext,
     shallow_client: LlmClient,
     deep_chapters: tuple[int, ...],
-    prompt_variant: str = 'baseline-v1',
 ) -> dict[str, CheckReport]:
     if deep_ctx.mode != 'deep' or shallow_ctx.mode != 'shallow':
         raise TerminalState('composite writing requires deep and shallow contexts')
-    _validate_prompt_variant(prompt_variant)
     store = ArtifactStore(deep_ctx)
     book = review.load_book(deep_ctx, store)
     planned = set(book.chapters)
@@ -356,8 +341,7 @@ def run_selected(
         for mode, ordinals in work.items():
             args = (contexts[mode], clients[mode],
                     ','.join(str(value) for value in ordinals))
-            future = (pool.submit(run_write, *args) if prompt_variant == 'baseline-v1'
-                      else pool.submit(run_write, *args, prompt_variant))
+            future = pool.submit(run_write, *args)
             futures[future] = mode
         for future in as_completed(futures):
             mode = futures[future]
@@ -379,13 +363,11 @@ def _generate_chapter(
     mode: str,
     revise: dict[int, tuple[str, list[list[str]], str]] | None,
     system: str,
-    prompt_variant: str,
     progress: RequestProgress,
 ) -> dict[str, Any]:
     ordinal = int(entry['output_ordinal'])
     mat = prompts.build_material(
-        entry, book, with_source_text=_ARMS[mode].with_source_text,
-        variant=prompt_variant)
+        entry, book, with_source_text=_ARMS[mode].with_source_text)
     if revise is not None:
         prev_text, fixes, review_fp = revise[ordinal]
         user = prompts.revise_user(mat, prev_text, _fix_lines(fixes))
@@ -421,10 +403,8 @@ def _run_group_parallel(
     *,
     mode: str,
     revise: dict[int, tuple[str, list[list[str]], str]] | None,
-    prompt_variant: str,
 ) -> CheckReport:
-    system = prompts.write_system(mode, revise=revise is not None,
-                                  variant=prompt_variant)
+    system = prompts.write_system(mode, revise=revise is not None)
     judged: dict[int, list] = {}
     written_by: dict[int, str] = {}
     blocked_by: dict[int, str] = {}
@@ -446,7 +426,6 @@ def _run_group_parallel(
                 mode=mode,
                 revise=revise,
                 system=system,
-                prompt_variant=prompt_variant,
                 progress=tracker.request(int(entry['output_ordinal'])),
             ): int(entry['output_ordinal'])
             for entry in todo
@@ -494,10 +473,9 @@ def _run_group_parallel(
                 ordinal,
                 RoundLlmProvenance,
                 prompts=(
-                    {'SYS': system, 'REVISE': prompts.REVISE_TAIL,
-                     'VARIANT': prompt_variant}
+                    {'SYS': system, 'REVISE': prompts.REVISE_TAIL}
                     if revise is not None else
-                    {'SYS': system, 'VARIANT': prompt_variant}),
+                    {'SYS': system}),
                 model=client.model,
                 **extra,
             )
@@ -535,11 +513,9 @@ def _run_group_parallel(
 
 def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
                todo: list[dict[str, Any]], client: LlmClient, *, mode: str,
-               revise: dict[int, tuple[str, list[list[str]], str]] | None,
-               prompt_variant: str = 'baseline-v1') -> CheckReport:
+               revise: dict[int, tuple[str, list[list[str]], str]] | None) -> CheckReport:
     return _run_group_parallel(
-        ctx, store, book, todo, client, mode=mode, revise=revise,
-        prompt_variant=prompt_variant)
+        ctx, store, book, todo, client, mode=mode, revise=revise)
 
 
 def _fix_lines(fixes: list[list[str]]) -> list[str]:
@@ -608,11 +584,9 @@ def revise_targets(store: ArtifactStore, mode: str
 
 
 def run_revise(ctx: RunContext, client: LlmClient,
-               chapters: str | None = None,
-               prompt_variant: str = 'baseline-v1') -> CheckReport:
+               chapters: str | None = None) -> CheckReport:
     """`--revise`：把可反哺的结论连同上一轮成稿发回写手。**付费。**"""
     mode = _mode_of(ctx)
-    _validate_prompt_variant(prompt_variant)
     store = ArtifactStore(ctx)
     book = review.load_book(ctx, store)
     picked, skipped, fp = revise_targets(store, mode)
@@ -637,8 +611,7 @@ def run_revise(ctx: RunContext, client: LlmClient,
         revise[o] = (prev_art.text, fixes, fp)
     for s in skipped:
         print(f'    · 跳过：{s}', flush=True)
-    return _run_group(ctx, store, book, todo, client, mode=mode, revise=revise,
-                      prompt_variant=prompt_variant)
+    return _run_group(ctx, store, book, todo, client, mode=mode, revise=revise)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -665,14 +638,12 @@ def run_recheck(ctx: RunContext) -> CheckReport:
         rel = _rel(mode, o)
         if not store.exists(rel):
             continue
-        art, raw = store.read_own(Chapter, rel)
+        art, _raw = store.read_own(Chapter, rel)
         entry = book.chapters[o]
         text, acc = M.normalize_chapter(art.text, quote_style=book.quote_style,
                                         sep_chars=book.sep_chars)
-        variant = prompts.variant_from_provenance(raw)
         mat = prompts.build_material(
-            entry, book, with_source_text=_ARMS[mode].with_source_text,
-            variant=variant).given
+            entry, book, with_source_text=_ARMS[mode].with_source_text).given
         fs, errs, warns = _judge(text, entry, book, mode=mode, mat=mat, account=acc)
         judged[o] = fs
         for k, v in acc.counters().items():
@@ -681,12 +652,10 @@ def run_recheck(ctx: RunContext) -> CheckReport:
         if changed:
             touched.append(f'第 {o} 章正文字节被归一改写了（{M.chars_of(art.text)} → '
                            f'{M.chars_of(text)} 字）——**这是一次 0 成本操作改付费产物**')
-        prev_prov = (raw or {}).get('_provenance') or {}
         new_prov = ctx.rewrite_provenance(
             art.provenance, by='--recheck') if changed else art.provenance
         store.write(rel, _chapter_record(entry, text, book, mode=mode, warns=warns,
                                          errs=errs or None, provenance=new_prov))
-        del prev_prov
     assemble_book(ctx, store, book)
     return _report(ctx, store, mode, written=[], blocked=touched, judged=judged)
 
@@ -712,12 +681,10 @@ def run_revalidate(ctx: RunContext) -> CheckReport:
         inv = paths.invalid_of(rel)
         if not store.exists(inv):
             continue
-        art, raw = store.read_own(Chapter, inv)
+        art, _raw = store.read_own(Chapter, inv)
         entry = book.chapters[o]
-        variant = prompts.variant_from_provenance(raw)
         mat = prompts.build_material(
-            entry, book, with_source_text=_ARMS[mode].with_source_text,
-            variant=variant).given
+            entry, book, with_source_text=_ARMS[mode].with_source_text).given
         fs, errs, _warns = _judge(art.text, entry, book, mode=mode, mat=mat,
                                   account=M.NormalizeAccount())
         judged[o] = fs
@@ -760,11 +727,9 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
         raise TerminalState(f'人工稿说自己是第 {o} 章，而计划里没有这一章')
     rel = _rel(mode, o)
     prev_inputs: dict[str, Any] = {}
-    previous_variant = 'baseline-v1'
     if store.exists(rel):
         _prev, raw = store.read_own(Chapter, rel)
         prev_inputs = ((raw or {}).get('_provenance') or {}).get('inputs') or {}
-        previous_variant = prompts.variant_from_provenance(raw)
     text, acc = M.normalize_chapter(text, quote_style=book.quote_style,
                                     sep_chars=book.sep_chars)
     rnd = store.next_round(rel)
@@ -781,8 +746,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
         provenance = provenance.model_copy(update={
             'inputs': {k: InputEdge.model_validate(v) for k, v in prev_inputs.items()}})
     mat = prompts.build_material(
-        entry, book, with_source_text=_ARMS[mode].with_source_text,
-        variant=previous_variant).given
+        entry, book, with_source_text=_ARMS[mode].with_source_text).given
     fs, errs, warns = _judge(text, entry, book, mode=mode, mat=mat, account=acc)
     if store.exists(rel):
         store.archive_round(rel)

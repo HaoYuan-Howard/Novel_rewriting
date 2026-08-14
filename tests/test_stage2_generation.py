@@ -105,8 +105,6 @@ def test_stage2_uses_one_concurrent_call_per_chapter_up_to_32(chapters, expected
 
 
 def test_global_precedes_parallel_blueprint_and_anti_leak_style(monkeypatch):
-    from contracts.invariants import PROMPT_DEFAULTS
-
     barrier = threading.Barrier(2)
     entered = []
     global_done = threading.Event()
@@ -121,7 +119,7 @@ def test_global_precedes_parallel_blueprint_and_anti_leak_style(monkeypatch):
             entered.append(name)
             barrier.wait(timeout=2)
             if name == 'style':
-                assert args[-1] == PROMPT_DEFAULTS['stage3'] == 'anti-leak-v2'
+                assert len(args) == 2, 'Stage 3 已收敛为唯一逐章实现，不再携带实验臂参数'
             return result
         return run
 

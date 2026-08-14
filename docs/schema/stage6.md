@@ -484,7 +484,7 @@ owner：`stage6` 13 · `None` 11（＝非结论）· `stage3` 1。
 | **归一必须在判定之前** | `normalize_and_judge` 是**唯一落点**，三条路共用（候选 / `--apply-edit` / `--recheck`）。分家的代价实测过：`--recheck` 曾把 `approved` 原样搬过去（注释还写着「定稿文本要跟着重判一遍」），于是候选归一了、而 `n9_rename` 真正拼进 `book.txt` 的那一份没有——**报告全绿，交付的书里文案是坏版式** |
 | **缺 `hook_copy.json` ⇒ 显式终态** | `R-1.12` 已让它不可达（认不出文案段的书在 stage1 就被挡住），而**一旦执行它会造出 6 盏假绿灯**：0 成本实测把 `_hook_copy` 与 `style_hook` 一起置空重跑，13 条 hard+info 打了 13 个 `[OK]`，其中 **6 条根本没跑**（`hook_reuses_source` · `hook_para_sep` · `hook_ending_shape` · `hook_length` · `hook_shape` · `hook_quote_style`）。<br>⚠ **终态消息必须点名它会废掉哪 6 条判据**——一条不说清代价的终态与静默降级只差一层窗户纸 |
 | **段间分隔按字节取档位** | `sep_band_of_text`，**不许读 `measurable.*.paragraph_sep_chars`**：`measure()` 把分隔字符总数除以**段数**，而分隔符只有「段数 − 1」个。七本原作文案真值一律 2.00，那个平均值给出 11 段→1.82 · 8 段→1.75 · **3 段→1.33**——最后一个掉到 1.5 阈值以下。**触发条件：段数 ≤ 3 的文本会被判反**（正文章节段数都在几十以上，现在不咬） |
-| **下发面三处收窄 + 一处兜底** | 收窄：人物表取**逐章名册的并集**（不是 `world_facts.characters` 全书名册）· `voice` 剥掉 `mode_variation`（按定义遍历全书各阶段，必然携带后文）· `reconstruction_strategy` **不下发**。兜底：`_downsend_leak` 拿结局的字面片段回扫**拼好的 prompt** |
+| **下发面三处收窄 + 一处兜底** | 收窄：人物表取**逐章名册的并集**（不是 `world_facts.characters` 全书名册）· `voice` 剥掉 `mode_variation`（现役局部项由 Stage 5 同源消费；Stage 6 只读书级聚合，文案也不需要情境切换；同时兼容可能携带后文的历史全书产物）· `reconstruction_strategy` **不下发**。兜底：`_downsend_leak` 拿结局的字面片段回扫**拼好的 prompt** |
 | **`hook_copy` 在三处方向相反**（判据 33） | **下发面＝挡住**（样例会被模仿，`hook_style` 存在的意义就是把「怎么写」抽象出来）· **检测器＝用满** · **恒等基线＝用满** · **收尾形态与段间分隔的参照集＝用满**（仍是检测器侧） |
 | **`_name_stems` 绝不收窄** | 人物表在下发面按章收窄，而发明越界探针的名字池**用全书的**。同一份数据在两处方向正相反——按章收窄探针，第 1 章就检不出真编出来的名字 |
 | **`given` 由 `build_material` 一处产出** | 发明越界探针拿它当「给过什么」的全集。探针与 prompt 一旦分家，探针就会开始误报或漏报 |

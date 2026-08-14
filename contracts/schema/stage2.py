@@ -576,9 +576,10 @@ class Narration(StrictModel):
     #:
     #: ⚠ **逐章存是实测辩护过的，不是保守**：`FQ_皇帝亲自替我宫斗` ch1 第一人称 →
     #: ch2~ch19 第三人称——**人称在章之间会变**，一个全书标量表达不了它。
-    #: ⚠ 「限知 vs 全知」这一轴**刻意不在本层立字段**：它已经有落点
-    #: （stage3 的 `narrative_distance` / `interiority`，写得比二值枚举好得多）。
-    #: 已知代价（stage3 是全书一份，表达不了章间差异）归 `B-09`，**不假装它被覆盖了**。
+    #: ⚠ 「限知 vs 全知」这一轴**刻意不在本层立字段**：它已经有逐章落点
+    #: （Stage 3 的 `narrative_distance` / `interiority`，写得比二值枚举好得多）。
+    #: Stage 3 按源章抽取并由 Stage 5 同源消费，因此能表达章间差异；自由文本是否准确
+    #: 区分视点贴近程度与语法人称仍归 `B-09`。
     grammatical_person: Literal[NARRATIVE_PERSON]
 
     #: **模型写的决策**，与 `present_names` 同一条规矩（用原文里的叫法，叫不出填 `null`）。

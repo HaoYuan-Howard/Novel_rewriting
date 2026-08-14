@@ -132,7 +132,7 @@ def fill(tpl: str, **kw: Any) -> str:
 
     `ENUM_BLOCKS` 自动并进来，调用点不必也**不许**重复传：
 
-        fill(STYLE_SYS, BOOK_TITLE=title)        # `$WORDS` / `$FORBID` … 自动就位
+        fill(SYSTEM_TEMPLATE, BOOK_TITLE=title)  # `$WORDS` / `$FORBID` … 自动就位
 
     ⚠ **为什么自动并、而不是让调用点自己传**：让调用点传，等于给了它一个
     「在这里手写一份词表」的位置——而那正是实测漂过两次的那个动作。

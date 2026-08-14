@@ -74,23 +74,6 @@ CHECK_KIND: Final = ('mechanical', 'semantic')
 #: `human` = 多解、查不了或没有安全自动路径；`none` = 纯度量。
 REMEDIATION: Final = ('llm', 'human', 'deterministic', 'none')
 
-#: 本批可比较的 prompt 实验臂。基线名称永远指向原 prompt 字节；默认臂另由
-#: `PROMPT_DEFAULTS` 指定，避免把“元组第一项”偷偷当成产品决策。
-PROMPT_VARIANTS: Final = {
-    'stage3': ('baseline-v1', 'anti-leak-v2'),
-    'stage5': ('baseline-v1', 'guarded-v2'),
-}
-
-#: 三本真实小说对照实验后的生产默认值。它与可选取值面分开：枚举顺序只负责稳定展示，
-#: 不承担“哪一臂胜出”的语义。Stage 3 采用逐章隔离；Stage 5 暂留原基线。
-PROMPT_DEFAULTS: Final = {
-    'stage3': 'anti-leak-v2',
-    'stage5': 'baseline-v1',
-}
-assert set(PROMPT_DEFAULTS) == set(PROMPT_VARIANTS)
-assert all(PROMPT_DEFAULTS[stage] in variants
-           for stage, variants in PROMPT_VARIANTS.items())
-
 #: 校验报告里**一条注册判据**的处境（`docs/schema/_report.md` §一）。
 #: 报告按**判据**编排而不是按**结论**编排，这四个态是那次翻转的全部落点。
 #:
@@ -689,8 +672,9 @@ HOOK_KEYS: Final = (
 #: `surface_habits_targeted_repair` = 只把 `surface_habits` 那一个列表发回去改写，
 #: 其余字段一个字不动——**全链唯一有定向返工通道的字段**。
 STAGE3_ATTEMPT_KINDS: Final = (
+    # `initial` 只为读取清理前的全书抽取产物；现役生产路径不再写它。
     'initial', 'surface_habits_targeted_repair',
-    # `anti-leak-v2` 逐源章抽取，再只用抽象结果做一次书级汇总。
+    # 逐源章抽取，再只用抽象结果做一次书级汇总。
     'chapter_local', 'chapter_aggregate',
 )
 
@@ -905,14 +889,10 @@ VALUED_FLAGS: Final = {
     '--apply-edit': '人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
-    '--prompt-variant': 'prompt 实验臂（stage3: baseline-v1|anti-leak-v2；stage5: baseline-v1|guarded-v2）',
-    # ⚠ **不叫 `--approve`**：那个名字已经在 `SUPERSEDED_FREE_ENTRIES` 里退役成节点了
-    # （`stage6.approve` / `stage7.approve`），复活它等于让同一个字面既是 flag 又是节点。
-    # ⚠ 它**不进 `FREE_ENTRIES`**（那张表登记的是「0 成本**入口**」，而它是入口的**参数**），
-    # 也**不进 `WRITE_EFFECTS`**（不登记 ⇒ 落到 `spec.produces`，正确）。
-    # ⚠⚠ 它是**第一个只登记在本表里**的 flag——`novel/cli/main.py::_ALL_FLAGS` 从前
-    # 只取前两张表，于是这样的 flag 在命令行上**永远解析不出来且没有任何东西会出声**。
-    # 那一处已在 F0 修掉并配了守卫。
+    # ⚠ `--pick` **不叫 `--approve`**：后者已退役成 stage0/6/7 的独立节点；
+    # 复活同名字面会让一个动作同时成为节点和参数。它只表示定稿候选序号，
+    # 不进 `FREE_ENTRIES`（不是独立入口），也不进 `WRITE_EFFECTS`
+    # （写的就是本节点 `produces` 中的正式产物）。
     '--pick': '定稿选第几个候选（1 起）',
     # ⚠ 与 `--pick` 逐条同形：它是 `stage5.review` 的**参数**（豁免哪一条结论），
     # 不是一个 0 成本入口 ⇒ 不进 `FREE_ENTRIES`。
@@ -1115,9 +1095,9 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--revalidate'),
                                  produces=('stage2/chapter_blueprints.json',)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
-                                 flags=('--dry-run', '--check-only', '--measure-only',
-                                        '--remeasure', '--revalidate', '--apply-edit',
-                                        '--repair-surface-habits', '--prompt-variant'),
+                                  flags=('--dry-run', '--check-only', '--measure-only',
+                                         '--remeasure', '--revalidate', '--apply-edit',
+                                         '--repair-surface-habits'),
                                  produces=('stage3/style_grounding.json',)),
     # ⚠ `--dry-run` 是 F3 补的，而它与 `--prompt-only` **不是重复登记**：
     #   后者只量体量（原型的语义），前者摊开**要发出去的那几个字节**。
@@ -1146,10 +1126,10 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   「能把一个 **0 成本节点**变成付费的 flag」，而本节点的默认路径本来就付费。
     #   留着它是一格永远不起作用的声明——`is_paid` 早在 `spec.paid` 那一步就判完了。
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 逐章写作',
-                                 modes=('deep', 'shallow'),
-                                 flags=('--dry-run', '--recheck', '--revalidate',
-                                        '--apply-edit', '--revise', '--chapters',
-                                        '--deep', '--shallow-rest', '--prompt-variant'),
+                                  modes=('deep', 'shallow'),
+                                  flags=('--dry-run', '--recheck', '--revalidate',
+                                         '--apply-edit', '--revise', '--chapters',
+                                         '--deep', '--shallow-rest'),
                                  produces=('stage5/{mode}/ch{nn}.json',
                                            'stage5/{mode}/draft.md')),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。

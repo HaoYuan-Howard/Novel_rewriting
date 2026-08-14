@@ -459,4 +459,4 @@ def test_the_downsend_face_carries_no_ending(box):
     gg = sandbox.cut(box.book, 'stage2/global_grounding.json')
     assert checks.downsend_leak(mat.given, gg['arc']) == []
     assert 'mode_variation' not in user, \
-        'voice.mode_variation 按定义遍历全书各阶段，必然携带后文——它不该下发'
+        '文案不需要情境切换；书级聚合和历史产物的 mode_variation 不该下发'

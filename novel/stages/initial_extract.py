@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
-from contracts.invariants import PROMPT_DEFAULTS
 from contracts.schema.report import CheckReport
 from contracts.schema.stage3 import StyleGrounding
 from novel.llm.client import LlmClient
@@ -19,14 +18,13 @@ def run_initial_extract(
     style_ctx: RunContext,
     style_client: LlmClient,
 ) -> tuple[CheckReport, StyleGrounding]:
-    # anti-leak-v2 必须先消费 global 的专名表做正文脱敏；让它与 global 并发会把
+    # 逐章风格抽取必须先消费 global 的专名表做正文脱敏；让它与 global 并发会把
     # “没拿到名表”伪装成安全输入。global 落稳后，两个逐章扇出仍可彼此并发。
     extract.run_global(global_ctx, global_client)
     with ThreadPoolExecutor(max_workers=2) as pool:
         blueprint_future = pool.submit(
             extract.request_blueprints, blueprint_ctx, blueprint_client)
-        style_future = pool.submit(
-            style.run_style, style_ctx, style_client, PROMPT_DEFAULTS['stage3'])
+        style_future = pool.submit(style.run_style, style_ctx, style_client)
 
     report: CheckReport | None = None
     artifact: StyleGrounding | None = None

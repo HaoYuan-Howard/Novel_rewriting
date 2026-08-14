@@ -28,7 +28,7 @@ import traceback
 from collections.abc import Callable, Sequence
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, PAID_FLAGS, PROMPT_DEFAULTS, STAGES, VALUED_FLAGS,
+    FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS,
 )
 from contracts.rules import PORTED_STAGES
 from novel.cli import exit_codes as X
@@ -311,7 +311,6 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
     from novel.stages.stage3 import style
 
     tokens = set(N.flag_tokens(flags))
-    prompt_variant = _valued(flags, '--prompt-variant') or PROMPT_DEFAULTS['stage3']
 
     if '--check-only' in tokens:
         report = style.run_check_only(ctx)
@@ -328,7 +327,7 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
         if '--repair-surface-habits' in tokens:
             system, user, _literals = style.build_habit_repair_prompt(ctx)
         else:
-            system, user, _meas = style.build_prompt(ctx, prompt_variant)
+            system, user, _meas = style.build_prompt(ctx)
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
@@ -367,8 +366,8 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
 
     # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
     client = _llm_client(ctx)
-    style.run_style(ctx, client, prompt_variant)
-    print(f'  ✓ stage3 文风画像已落盘（prompt={prompt_variant}）')
+    style.run_style(ctx, client)
+    print('  ✓ stage3 逐章文风画像已落盘')
     return X.OK
 
 
@@ -655,7 +654,6 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
 
     tokens = set(N.flag_tokens(flags))
     chapters = _valued(flags, '--chapters')
-    prompt_variant = _valued(flags, '--prompt-variant') or PROMPT_DEFAULTS['stage5']
 
     if ctx.node == 'stage5.semantic':
         if '--dry-run' in tokens:
@@ -704,7 +702,6 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
             deep_ctx, _llm_client(deep_ctx),
             shallow_ctx, _llm_client(shallow_ctx),
             selected,
-            prompt_variant,
         )
         for mode in ('deep', 'shallow'):
             if mode in reports:
@@ -714,7 +711,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
                 else X.CHECK_FAILED)
 
     if '--dry-run' in tokens:
-        system, user, _mat = write.build_prompt(ctx, chapters, prompt_variant)
+        system, user, _mat = write.build_prompt(ctx, chapters)
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
@@ -743,13 +740,9 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         ctx.cache = CachePolicy.refresh()
     client = _llm_client(ctx)
     if '--revise' in tokens:
-        report = (write.run_revise(ctx, client, chapters)
-                  if prompt_variant == 'baseline-v1'
-                  else write.run_revise(ctx, client, chapters, prompt_variant))
+        report = write.run_revise(ctx, client, chapters)
     else:
-        report = (write.run_write(ctx, client, chapters)
-                  if prompt_variant == 'baseline-v1'
-                  else write.run_write(ctx, client, chapters, prompt_variant))
+        report = write.run_write(ctx, client, chapters)
     print(render(report))
     print('  ✓ 逐章成稿已落盘——跑 `stage5.review`（0 成本）看全书验收'
           if report.passed

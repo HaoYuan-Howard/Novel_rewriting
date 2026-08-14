@@ -315,7 +315,7 @@ def test_required_rejects_incomplete_or_reordered_chapter_style_coverage():
     assert required.findings and '实得 [2, 1]' in required.findings[0].detail
 
 
-def test_anti_leak_generation_refuses_to_run_without_stage2_name_table(monkeypatch):
+def test_chapter_style_generation_refuses_to_run_without_stage2_name_table(monkeypatch):
     from novel.errors import UpstreamMissing
     from novel.stages.stage3 import style
 
@@ -325,17 +325,25 @@ def test_anti_leak_generation_refuses_to_run_without_stage2_name_table(monkeypat
         style.build_chapter_prompts(object())
 
 
-def test_real_experiment_defaults_are_explicit_and_valid():
-    from contracts.invariants import PROMPT_DEFAULTS, PROMPT_VARIANTS
+def test_stage3_has_one_production_path_without_variant_parameter():
+    import inspect
     from novel.stages.stage3 import style
 
-    assert PROMPT_DEFAULTS == {
-        'stage3': 'anti-leak-v2',
-        'stage5': 'baseline-v1',
-    }
-    assert all(PROMPT_DEFAULTS[stage] in variants
-               for stage, variants in PROMPT_VARIANTS.items())
-    assert style.run_style.__defaults__ == (PROMPT_DEFAULTS['stage3'],)
+    assert list(inspect.signature(style.run_style).parameters) == ['ctx', 'client']
+
+
+def test_only_explicit_old_full_book_provenance_can_skip_chapter_coverage():
+    from novel.stages.stage3 import style
+
+    legacy_prompt_key = 'STYLE_' + 'SYS'
+    assert not style._requires_chapter_styles({
+        '_provenance': {'prompts': {legacy_prompt_key: 'legacy-fingerprint'}},
+    })
+    assert style._requires_chapter_styles({
+        '_provenance': {'prompts': {'STYLE_CHAPTER_SYS': 'current-fingerprint'}},
+    })
+    assert style._requires_chapter_styles({}), \
+        '来源账缺失的未知产物不能伪装成清理前的全书产物'
 
 
 
@@ -426,44 +434,7 @@ def test_gates_skipped_is_reported_even_when_the_producer_never_recorded_it(book
     assert '[????] gates_skipped：未记录' in render(rep)
 
 
-# ───────────────── prompt 逐字移植，不许转述 ─────────────────
-
-_PROTOTYPE = (corpus.corpus_root().parent / 'Rapid_Prototyping' / 'Stage3' / 'n3_style.py'
-              if corpus.corpus_root() else None)
-
-
-def _prototype_const(name: str) -> str:
-    """从原型源码里把那个字符串常量**原样求值**出来（不 import 它——那要拉起整条依赖链）。"""
-    src = _PROTOTYPE.read_text(encoding='utf-8').splitlines(keepends=True)
-    i = next(k for k, ln in enumerate(src) if ln.startswith(name + ' = """'))
-    j = next(k for k in range(i + 1, len(src)) if src[k].rstrip().endswith('"""'))
-    ns: dict = {}
-    exec(''.join(src[i:j + 1]), ns)      # noqa: S102 —— 只 exec 一段字符串字面量赋值
-    return ns[name]
-
-
-@pytest.mark.skipif(_PROTOTYPE is None or not _PROTOTYPE.exists(),
-                    reason='原型仓不在盘上——这一条**没在查**，不是「查过没事」')
-@pytest.mark.parametrize('name', ['STYLE_SYS', 'HABIT_REPAIR_SYS'])
-def test_the_prompt_is_a_byte_for_byte_port(name):
-    """⚠⚠ **逐字移植，不许转述。**
-
-    这段文字压着 120+ 条真机 findings 的学费：每一条禁令下面都躺着一次实测的损失
-    （F-013 的自相冲突指令、F-104/F-118 的剧透泄漏…）。改写它等于把学费重交一遍，
-    而**改写不会报错**——它只会让模型的产出慢慢变差，而没有任何一层会出声。
-    ⚠ 真要改，改的是**本仓这一份**，然后这条测试会红——那正是它该红的时候，
-    删掉它之前先想清楚谁来守「prompt 没被人顺手改坏」。
-    """
-    from novel.stages.stage3 import prompts
-    assert getattr(prompts, name) == _prototype_const(name)
-
-
-def test_the_rendered_system_prompt_survives_fill():
-    """`fill()` 的残留检查：渲染完不许剩下任何 `$`。
-    本层没有占位符，但「今天没有」不等于「明天加一个不会忘」。"""
-    from novel.stages.stage3.prompts import STYLE_SYS, style_system
-    assert style_system() == STYLE_SYS
-
+# ───────────────── 响应契约 ─────────────────
 
 def test_require_is_derived_and_covers_hook_style():
     """⭐ **原型这个调用点漏了 `hook_style`**，而漏传不报错——它只是静默停掉一条

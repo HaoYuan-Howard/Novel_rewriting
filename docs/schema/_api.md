@@ -69,9 +69,8 @@
 ⇒ 它的守卫是**超集测试**（`tests/test_api_enums.py`），不是类型。
 **这一行写在这里，是为了下一个人不会来「补齐」它。**
 
-Prompt 实验同时发布 `prompt_variants` 与 `prompt_defaults`：前者回答“能选什么”，
-后者回答“真实实验后默认用什么”。数组顺序只为稳定展示，调用方不许拿第一项猜默认值；
-当前 Stage 3 默认 `anti-leak-v2`，Stage 5 默认 `baseline-v1`。
+Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-variant` 已从公开契约删除；
+Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不能选择实验臂。
 
 三个合成键与抓包的关系：
 

@@ -3,8 +3,8 @@
 """
 stage3.py —— 对应 `docs/schema/stage3.md`。文风画像，最终仍只产一份正式制品。
 
-`baseline-v1` 全书一次抽取；`anti-leak-v2` 每源章一次局部抽取，再用只含抽象风格块的
-聚合请求形成全局画像。两臂共用同一份落盘 schema，只有实验臂附带 `chapter_styles[]`。
+生产实现按每个源章独立抽取，再用只含抽象风格块的聚合请求形成全局画像；
+逐章定性风格由 `chapter_styles[]` 承载。
 
 【四条贯穿本层的事实，读模型前先知道】
 
@@ -17,8 +17,8 @@ stage3.py —— 对应 `docs/schema/stage3.md`。文风画像，最终仍只产
      一条判据都没有**（`R-4.7` → `B-09`）。⇒ PASS = 「没有可探测的越界」，
      **不是**「这份文风画像抓对了」。
 
-  ③ **基线产物的全局风格块整份进每章写作 prompt；实验臂只下发当前源章的局部风格，
-     数字锚点仍来自全书确定性测量。** 基线的一处越界会污染全书每章。实测代价：某本的 `voice.mode_variation`
+  ③ **生产路径只下发当前源章的局部风格，数字锚点仍来自全书确定性测量。**
+     已退役的全书抽取曾让一处越界污染每章。实测代价：某本的 `voice.mode_variation`
      写了「…系统摊牌…」，而「系统」是读者第 14 章才知情的秘密的主体——
      **写第 1 章的闭卷写手当场读到全书最大的底**。
 
@@ -63,15 +63,11 @@ class Voice(StrictModel):
 
     #: 叙述贴人物多近。prompt 给的档位词：紧贴内视 / 半抽离 / 冷眼旁观。37~51 字。
     #:
-    #: ⚠⚠ **它就是视角（限知/全知）那一轴，这是有意的**：stage2 的 `grammatical_person`
-    #: 只管**人称**，「限知 vs 全知」在全链**只有这里一个落点**，而且以档位词形态存在。
-    #: ⚠ 因此 `STYLE_SYS` 那句「不要判定人称/视角类型」**必须拆成两半**：
-    #: **视角解禁**（它是唯一落点）· **人称保留禁令**——本层是全书一份而人称是逐章变量，
-    #: 实测 `FQ_皇帝亲自替我宫斗` ch1 第一人称、ch2~ch19 第三人称，
-    #: 本层无论写哪个**对 18/19 章都是错的**，而这份描述整份进**每一章**的写手 prompt。
-    #: 这不是「两个落点会漂」的一般担心，是**结构上必然错**。
-    #: ⚠ 盘上 3/3 违反（三本都写了「第一人称」），**零守卫**——
-    #: 这三本恰好全书单一人称所以没造成损失，但那是运气不是保证（`R-4.9` / `B-09`）。
+    #: 它记录视点贴近程度（限知／全知那一轴），不是 `grammatical_person` 的我／你／他。
+    #: 现役抽取只判断当前源章，Stage 5 也只消费同源项；这避免把某一章的人称或视角
+    #: 误当成全书常量。描述仍不应重复判「第一／第二／第三人称」，那一轴由 Stage 2 承载。
+    #: 历史全书路径曾在三本样本里都把「第一人称」写进此字段；该内容质量仍无确定性守卫
+    #: （`R-4.9` / `B-09`），但不会再由一份全书标量扩散到每章。
     narrative_distance: str = Field(min_length=1)
 
     #: 语域与情绪基调（口语／网感／古白话；反讽／自嘲／毒舌／深情）。43~49 字。
@@ -94,9 +90,9 @@ class Voice(StrictModel):
     #: 章首怎么起、章尾怎么收的**惯例**，不是某一章的具体钩子。48~73 字。
     chapter_open_close: str = Field(min_length=1)
 
-    #: 声音在不同情境下怎么变。**要求逐条写全、分号分开**，覆盖四类位置：
-    #: 基础态／防御失效处／冲突顶点／换人说话的段落。156~233 字（明显长于其余七维）。
-    #: ⚠ 它按定义遍历全书各阶段 ⇒ **必然携带后文**，所以 stage6 的下发面把它整维剥掉。
+    #: 声音在**当前源章可见的不同情境**下怎么变；不得猜后续、高潮或结局。
+    #: Stage 5 只消费对应源章的局部项。Stage 6 只读书级聚合画像，且文案是一段话、
+    #: 不需要情境切换，所以仍从它的下发面剥掉本维（同时兼容历史全书产物）。
     mode_variation: str = Field(min_length=1)
 
 
@@ -243,11 +239,11 @@ class Measurable(StrictModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class StyleAttempt(StrictModel):
-    """一次尝试。盘上长度 1~2，共 4 条（3 `initial` + 1 返工）。
+    """一次模型调用的审计记录。
 
-    ⚠ **本节点的真实调用数恒 ≥ 1，不可能靠缓存白跑**：表层习惯引原句 **5/5 本全犯**，
-    而带反馈重抽那一次不读缓存。重跑路径恒为
-    「首抽命中缓存 → 返回同一份违规稿 → 必然重抽 → 重抽不吃缓存」。报预算按「1~2 次」。
+    现役首轮固定为每源章一条 ``chapter_local``，再加一条
+    ``chapter_aggregate``；只有 ``habit_quote`` 是唯一阻断项时才追加窄修复记录。
+    ``initial`` 仅用于读取清理前的全书抽取产物。
     """
 
     kind: Literal[STAGE3_ATTEMPT_KINDS]
@@ -255,7 +251,7 @@ class StyleAttempt(StrictModel):
     output: Fp10
     cache_policy: Literal[CACHE_POLICY]
 
-    # ── 以下四个**只有返工那一条有**（盘上 1/4） ────────────────────────────
+    # ── 以下四个**只有返工记录有** ──────────────────────────────────────────
 
     input: Fp10 | None = None
 
@@ -269,7 +265,7 @@ class StyleAttempt(StrictModel):
     #: `chapter_local` 才有；其余调用为空。
     chapter_ordinal: int | None = Field(default=None, ge=1)
 
-    #: anti-leak-v2 在模型响应进入聚合/落盘前，按 Stage 2 名表和固定机制词做的
+    #: 模型响应进入聚合/落盘前，按 Stage 2 名表和固定机制词做的
     #: 确定性抽象次数。只记数量，不把被移除的作品专名重新塞回 provenance。
     abstractions: int | None = Field(default=None, ge=0)
 
@@ -286,7 +282,7 @@ class StyleProvenance(LlmProvenance):
 
     `inputs` 恒三条：`stage1/main_text.json` · `stage1/hook_copy.json` ·
     `stage2/global_grounding.json`。
-    基线臂只在校验期消费第三条；默认 `anti-leak-v2` 还在抽取前消费其中的专名表，
+    生产抽取在请求前消费第三条中的专名表，
     只用于确定性脱敏，**不把秘密事实或全书情节发给风格模型**。
 
     ⚠⚠ **这三个键（`attempts` / `revalidated` / `gates_skipped`）今天一个出口都没有**：
@@ -334,7 +330,7 @@ class StyleGrounding(StrictModel):
     #: 写作节点把它当**必须照做的手法清单**，短词例与长原句一样会被当成口头禅反复复用。
     #: 它 5/5 本触发**不是判据错**——是模型确实 5/5 本都在举词例。
     #:
-    #: ⚠ 它还是本层**唯一有定向返工通道**的字段（`HABIT_REPAIR_SYS`），
+    #: ⚠ 它还是本层**唯一有定向返工通道**的字段（窄字面替换 prompt），
     #: 而**返工本身超范围了**（`R-4.10`，实测）：判据只要求删 53 字（8 处引号词例，
     #: 一个都没抓错），而返工**另外多删 42 字**（占删除总量 44%），包括
     #: `打脸`/`清脆感` 这类**通用写法描述**——正是这个字段该有的东西。
@@ -344,13 +340,14 @@ class StyleGrounding(StrictModel):
     hook_style: HookStyle
     measurable: Measurable
 
-    #: 基线产物为空；anti-leak-v2 为每个源章恰好一份。Stage 5 见到本字段后
+    #: 新生产产物每个源章必须恰好一份。默认空列表只用于读取清理前的存量产物；
+    #: 现役落盘闸门由 Stage 3 judge 强制逐章完整覆盖。
     #: 只消费当前输出章对应的局部风格，未来章描述在结构上不可见。
     chapter_styles: list[ChapterStyle] = Field(default_factory=list)
 
     @model_serializer(mode='wrap')
-    def _omit_empty_chapter_styles(self, handler: SerializerFunctionWrapHandler):
-        """存量基线不长新空键；实验产物非空时才落盘。"""
+    def _omit_empty_legacy_chapter_styles(self, handler: SerializerFunctionWrapHandler):
+        """读取并重写旧产物时不凭空增加一个空键。"""
         data = handler(self)
         if not self.chapter_styles:
             data.pop('chapter_styles', None)
@@ -408,7 +405,7 @@ class HabitRepairResponse(StrictModel):
 
 
 class ChapterStyleResponse(StrictModel):
-    """anti-leak-v2 单个源章调用的响应；它看不到 hook 与其他章节。"""
+    """单个源章调用的响应；它看不到 hook 与其他章节。"""
 
     voice: Voice
     surface_habits: list[str] = Field(min_length=1)

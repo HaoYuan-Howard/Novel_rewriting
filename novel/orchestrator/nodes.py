@@ -26,7 +26,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, PROMPT_VARIANTS, VALUED_FLAGS, WRITE_EFFECTS,
+    FREE_ENTRIES, NODES, VALUED_FLAGS, WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import Step
 from novel import paths as novel_paths
@@ -110,10 +110,9 @@ def validate_run(node: str, flags: Sequence[str] = (),
 
     if composite_write:
         required = {'--deep', '--shallow-rest'}
-        if not required <= set(tokens) or set(tokens) - required - {'--prompt-variant'}:
+        if not required <= set(tokens) or set(tokens) - required:
             raise UnsupportedRunMode(
-                'stage5 composite write requires exactly --deep and --shallow-rest, '
-                'plus optional --prompt-variant')
+                'stage5 composite write requires exactly --deep and --shallow-rest')
         if mode is not None:
             raise UnsupportedRunMode(
                 'stage5 composite write selects both arms and must not carry --mode')
@@ -146,12 +145,6 @@ def validate_run(node: str, flags: Sequence[str] = (),
         if tok not in VALUED_FLAGS and has_value:
             raise UnsupportedRunMode(
                 f'{tok} 不带值，而它后面跟着 {seq[i + 1]!r}')
-    prompt_variant = flag_value(flags, '--prompt-variant')
-    if prompt_variant is not None:
-        allowed_variants = PROMPT_VARIANTS.get(spec.stage, ())
-        if prompt_variant not in allowed_variants:
-            raise UnsupportedRunMode(
-                f'{node} --prompt-variant={prompt_variant!r} 不在 {list(allowed_variants)}')
     return tokens
 
 

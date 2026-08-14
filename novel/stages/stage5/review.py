@@ -279,7 +279,7 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
         body = rec.get('text') or ''
         bodies[o] = body
         mode = rec['_mode']
-        mat = _material(entry, book, mode=mode, raw=rec)
+        mat = _material(entry, book, mode=mode)
         fs += checks.chapter_findings(body, entry, book, mode=mode, given=mat)
         extra, one_land = checks.review_chapter_findings(body, entry, book)
         fs += extra
@@ -366,8 +366,7 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
     )
 
 
-def _material(entry: dict[str, Any], book: M.Book, *, mode: str,
-              raw: dict[str, Any] | None = None) -> str:
+def _material(entry: dict[str, Any], book: M.Book, *, mode: str) -> str:
     """这一臂**实际看得见**的全部文字 —— 发明越界那两个探针的参照集。
 
     ⚠ **它必须与真跑发出去的那一份同源**（`prompts.build_material`），否则探测器的参照集
@@ -375,8 +374,7 @@ def _material(entry: dict[str, Any], book: M.Book, *, mode: str,
     """
     from novel.stages.stage5 import prompts
     return prompts.build_material(
-        entry, book, with_source_text=(mode == 'shallow'),
-        variant=prompts.variant_from_provenance(raw)).given
+        entry, book, with_source_text=(mode == 'shallow')).given
 
 
 def _apply_wontfix(rows: list[ReviewChapter], book_fs: list[Finding],
