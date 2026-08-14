@@ -24,6 +24,8 @@ from contracts.schema.api import (
     ErrorBody,
     HookCopyView,
     HookStyleLine,
+    InboxItem,
+    InboxView,
     JobList,
     LogChunk,
     NovelList,
@@ -157,6 +159,7 @@ __all__ = [
     'HookCopyView', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'PreviewRequest', 'ErrorBody',
     'ApprovalAction', 'ApprovalDoc', 'DeepSelectionRequest',
+    'InboxItem', 'InboxView',
     # 八层
     'RemovalReport', 'RemovedSegment', 'Stage0EditPlan', 'Stage0Warning',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',

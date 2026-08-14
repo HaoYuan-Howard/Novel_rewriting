@@ -35,8 +35,12 @@ from novel.report.findings import Outcome
 SKIPPED_WHY = '实现未被调用（这一次没有任何代码执行过它）'
 
 
-def _remediation_of(rule: Rule) -> str:
-    """把已有契约投影成工作流责任；不再拿严重度冒充处置方式。"""
+def remediation_of(rule: Rule) -> str:
+    """把已有契约投影成工作流责任；不再拿严重度冒充处置方式。
+
+    **公开名**：修复路由（四类处置 → 谁能修）的唯一算法落点——
+    报告行、待人工清单与文档引用的都是它，别在别处再推一遍。
+    """
     if rule.sev == 'metric':
         return 'none'
     if rule.repair == 'UNIQUE':
@@ -49,6 +53,10 @@ def _remediation_of(rule: Rule) -> str:
         # 会在用户确认账单之前说错这一步的性质。
         return 'llm' if is_paid(node, flags) else 'deterministic'
     return 'human'
+
+
+#: 旧名。既有调用点与测试仍在用，别删——公开化是加门，不是搬家。
+_remediation_of = remediation_of
 
 
 def _fix_route(rule: Rule) -> FixRoute | None:

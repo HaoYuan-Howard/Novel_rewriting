@@ -34,6 +34,7 @@ from contracts.invariants import (
     APPROVAL_GATES,
     APPROVAL_SEEN,
     HOOK_KEYS,
+    INBOX_KIND,
     NONBODY_KINDS,
     REMOVED_ORIGIN,
     STAGE0_SEGMENT_KINDS,
@@ -55,6 +56,7 @@ NonbodyKind = Literal[NONBODY_KINDS]
 RemovedOrigin = Literal[REMOVED_ORIGIN]
 GateKey = Literal[APPROVAL_GATES]
 SeenKey = Literal[APPROVAL_SEEN]
+InboxKind = Literal[INBOX_KIND]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -470,6 +472,57 @@ class DeepSelectionRequest(StrictModel):
     def _selection_is_canonical(self) -> DeepSelectionRequest:
         if self.deep != sorted(set(self.deep)) or any(n < 1 for n in self.deep):
             raise ValueError('deep must be sorted, unique positive chapter ordinals')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二b、待人工清单（修复路由的 `human` 落面；BE-04 第一条的生产者形状）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class InboxItem(FrozenModel):
+    """「待人工」清单的一条。**`unver` 永不入列**——那是判据的边界，不是待办
+    （`invariants.INBOX_KIND` 那条纪律：堆进去清单就永远清不空，而清不空的清单没人看）。
+
+    `rule`：`human_only` / `upstream` / `stalled` 填**判据 id**；
+    `invalid` / `rejected` / `approval` 没有单条判据可指，填**节点 id**（如 `stage6.hook`）。
+    `chapter`：**输出章**口径（现契约一源章=一输出章，数值恰好相同；未来规划映射若改，
+    本字段跟 stage5 结论键走输出章，别按源章跳屏）。书级 / 整份产物 = `None`。
+    ⚠ 前端现役类型把 `chapter` 写成非空 number（mock 时代的形状）——第二阶段接线时
+    前端要跟着放宽，不是后端把书级条目编一个假章号。
+    """
+
+    kind: InboxKind
+    stage: str
+    chapter: int | None
+    rule: str = Field(min_length=1)
+    what: str = Field(min_length=1)
+    how: str = Field(min_length=1)
+
+
+class InboxView(StrictModel):
+    """`GET /api/novels/:sid/inbox` 的响应体（路由属第二阶段；本模块只定形状）。
+
+    `counts` **六键全出**（0 也要出）：「没有这个键」与「值是 0」不许混——
+    stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失）。
+    `wontfix`：被人豁免的条数——豁免不删结论、不进清单，单独计数。
+    """
+
+    items: list[InboxItem]
+    counts: dict[str, int]
+    total: int = Field(ge=0)
+    wontfix: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _counts_partition_is_consistent(self) -> InboxView:
+        if set(self.counts) != set(INBOX_KIND):
+            raise ValueError('counts 必须六键全出（0 也要出）——稀疏计数会把「没有」与「0」混掉')
+        if self.total != len(self.items) or sum(self.counts.values()) != self.total:
+            raise ValueError('counts / total / items 三者必须相互一致')
+        got: dict[str, int] = {}
+        for item in self.items:
+            got[item.kind] = got.get(item.kind, 0) + 1
+        if any(self.counts[k] != got.get(k, 0) for k in self.counts):
+            raise ValueError('counts 与 items 的分组计数不一致')
         return self
 
 
