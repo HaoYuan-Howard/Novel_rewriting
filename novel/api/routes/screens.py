@@ -16,14 +16,51 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from contracts.schema.api import GlobalView, InboxView, Stage6View, Stage7View
+from contracts.schema.api import (
+    GlobalView, InboxView, ReadingView, ReviewView,
+    Stage4View, Stage5View, Stage6View, Stage7View,
+)
 from novel.api.deps import checked_sid, get_base
 from novel.views.inbox import inbox_view
-from novel.views.stage2 import global_view
+from novel.views.stage2 import global_view, reading_view
+from novel.views.stage4 import stage4_view
+from novel.views.stage5 import review_view, stage5_view
 from novel.views.stage6 import stage6_view
 from novel.views.stage7 import stage7_view
 
 router = APIRouter(prefix='/novels')
+
+
+@router.get('/{sid}/reading/{ordinal}', response_model=ReadingView,
+            response_model_by_alias=True)
+def get_reading(ordinal: int, sid: str = Depends(checked_sid),
+                base: str = Depends(get_base)) -> ReadingView:
+    """S-04 原文↔骨架。stage2 没跑 ⇒ 200 且 `blueprint=false`（左半边是 stage1 的）。"""
+    return reading_view(base, sid, ordinal)
+
+
+@router.get('/{sid}/stage4/{ordinal}', response_model=Stage4View,
+            response_model_by_alias=True)
+def get_stage4(ordinal: int, sid: str = Depends(checked_sid),
+               base: str = Depends(get_base)) -> Stage4View:
+    """S-07 计划↔上下文。没跑过 stage4 ⇒ 200 恒等基线（`identity_plan=true`）。"""
+    return stage4_view(base, sid, ordinal)
+
+
+@router.get('/{sid}/stage5/{ordinal}', response_model=Stage5View,
+            response_model_by_alias=True)
+def get_stage5(ordinal: int, sid: str = Depends(checked_sid),
+               base: str = Depends(get_base)) -> Stage5View:
+    """S-08 成稿↔材料。`ctx_exists=false` ⇒ 不显示假材料；无稿的章 ⇒ 空 drafts。"""
+    return stage5_view(base, sid, ordinal)
+
+
+@router.get('/{sid}/review/{ordinal}', response_model=ReviewView,
+            response_model_by_alias=True)
+def get_review(ordinal: int, sid: str = Depends(checked_sid),
+               base: str = Depends(get_base)) -> ReviewView:
+    """S-09 验收/修订（最新一份验收产物）。一份都没有 ⇒ 404。"""
+    return review_view(base, sid, ordinal)
 
 
 @router.get('/{sid}/stage2/global', response_model=GlobalView, response_model_by_alias=True)

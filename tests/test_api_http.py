@@ -320,12 +320,16 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/approvals/writing': ['POST'],
         '/api/novels/{sid}/approvals/reset': ['POST'],
         '/api/upload': ['POST'],
-        # ── 第二阶段 · 批 1：书级读屏（`tests/test_api_screens.py` 管行为） ──
+        # ── 第二阶段 · 批 1/2：读屏（`tests/test_api_screens.py` 管行为） ──
         '/api/novels/{sid}/stage2/global': ['GET'],
         '/api/novels/{sid}/stage6': ['GET'],
         '/api/novels/{sid}/stage7': ['GET'],
         '/api/novels/{sid}/stage7/{ordinal}': ['GET'],
         '/api/novels/{sid}/inbox': ['GET'],
+        '/api/novels/{sid}/reading/{ordinal}': ['GET'],
+        '/api/novels/{sid}/stage4/{ordinal}': ['GET'],
+        '/api/novels/{sid}/stage5/{ordinal}': ['GET'],
+        '/api/novels/{sid}/review/{ordinal}': ['GET'],
     }
 
 

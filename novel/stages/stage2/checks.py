@@ -42,6 +42,7 @@ from novel.core.naming import (
     strip_distinguisher, surface_first_chapter, surface_owner_since, surface_owners,
 )
 from novel.core.spans import content_only, exact_span, walk_spans
+from novel.stages.stage2.coverage import hole_intervals
 from novel.core.text import norm
 from novel.report.findings import Outcome, ran, unverifiable
 
@@ -949,20 +950,16 @@ def _uncovered(c: _Ctx, min_chars: int) -> list[tuple[Any, int, int, int, str, s
 
     返回 `[(章, 起, 止, 字数, 位置, 原文摘录)]`，只列 ≥`min_chars` 的：
     几个字的空隙通常只是过渡句。**是漏抓还是过渡，交人工看摘录判断，不自动定性。**
+
+    ⚠ 区间行走在 `coverage.hole_intervals`（与 S-04 读屏**同源**——判据报的「漏」
+    与屏上画的「洞」必须是同一套区间，两边各写一遍必然分家）。
     """
     holes = []
     for o, items in c.spans.items():
         text = c.text_of.get(o, '')
-        cur = 0
-        for _b, s, e in sorted(items, key=lambda t: (t[1], t[2])):
-            if s - cur >= min_chars:
-                holes.append((o, cur, s, s - cur, _where(cur, s, len(text)),
-                              text[cur:s].strip().replace('\n', ' ')[:46]))
-            cur = max(cur, e)
-        if len(text) - cur >= min_chars:
-            holes.append((o, cur, len(text), len(text) - cur,
-                          _where(cur, len(text), len(text)),
-                          text[cur:].strip().replace('\n', ' ')[:46]))
+        for s, e in hole_intervals(len(text), items, min_chars):
+            holes.append((o, s, e, e - s, _where(s, e, len(text)),
+                          text[s:e].strip().replace('\n', ' ')[:46]))
     return holes
 
 

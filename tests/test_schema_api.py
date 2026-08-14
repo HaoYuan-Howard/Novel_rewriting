@@ -22,10 +22,10 @@ from pydantic import ValidationError
 from contracts.invariants import HOOK_KEYS, VOICE_KEYS
 from contracts.schema.api import (
     DriftItem, ErrorBody, GlobalView, HookCopyView, JobList, LogChunk, NovelList,
-    PreviewRequest,
+    PreviewRequest, ReadingView, ReviewView,
     Stage0EditRequest, Stage0Segment, Stage0Segments,
     Stage1ChapterRow, Stage1Chapters, Stage1Segment, Stage1Segments,
-    Stage6View, Stage7View, StyleView, UploadResult,
+    Stage4View, Stage5View, Stage6View, Stage7View, StyleView, UploadResult,
 )
 from contracts.schema.stage3 import (
     ChapterCharStats, Measurable, MeasurableBlock, MeasurableBody, PerChapterSentence,
@@ -288,6 +288,7 @@ def test_the_api_models_never_carry_a_verdict():
         Stage0Segment, Stage0Segments, Stage1Segment, Stage1Segments,
         Stage1ChapterRow, Stage1Chapters, HookCopyView, UploadResult,
         GlobalView, Stage6View, Stage7View,
+        ReadingView, Stage4View, Stage5View, ReviewView,
     ):
         leaked = verdicts & set(model.model_fields)
         assert not leaked, f'{model.__name__} 带着判定字段 {leaked}——那是第二个判官'
@@ -353,6 +354,7 @@ def test_every_response_model_forbids_extra_fields():
         Stage0Segment, Stage0Segments, Stage0EditRequest,
         Stage1Segment, Stage1Segments, Stage1ChapterRow, Stage1Chapters,
         HookCopyView, UploadResult, GlobalView, Stage6View, Stage7View,
+        ReadingView, Stage4View, Stage5View, ReviewView,
     ):
         assert model.model_config['extra'] == 'forbid', model.__name__
 

@@ -34,26 +34,37 @@ from contracts.invariants import (
     ADDRESS_CONTEXT,
     APPROVAL_GATES,
     APPROVAL_SEEN,
+    DEPTH_MODES,
+    HINGE_KINDS,
     HOOK_APPROACHES,
     HOOK_APPROVED_APPROACHES,
     HOOK_KEYS,
     INBOX_KIND,
     NAME_DISTINCTIVENESS,
+    NARRATIVE_PERSON,
     NONBODY_KINDS,
     REMOVED_ORIGIN,
+    SEVERITY,
     STAGE0_SEGMENT_KINDS,
     STAGE1_SEGMENT_KINDS,
+    TIME_LAYERS,
     VOICE_KEYS,
 )
 from contracts.schema.base import FrozenModel, Sha1, StrictModel
 from contracts.schema.common import Finding
 from contracts.schema.orchestration import (
-    Freshness, FreshnessReason, JobRecord, NovelOverview,
+    ArtifactState, Freshness, FreshnessReason, JobRecord, NovelOverview,
 )
 from contracts.schema.stage1 import HookCopy
-from contracts.schema.stage2 import ConflictStage, GlobalProvenance, Setting, WorldRule
+from contracts.schema.stage2 import (
+    BlueprintProvenance, ConflictStage, GlobalProvenance, Setting, WorldRule,
+)
 from contracts.schema.stage3 import Measurable, StyleProvenance
-from contracts.schema.stage5 import JudgedDraft
+from contracts.schema.stage4 import CtxChapter, CtxProvenance, PlanProvenance
+from contracts.schema.stage5 import (
+    JudgedDraft, ReviewProvenance, ReviewSources,
+    RoundFreeProvenance, RoundLlmProvenance,
+)
 from contracts.schema.stage6 import HookProvenance, HookSources, Mech
 from contracts.schema.stage7 import (
     Alias, ApprovedNameMap, BookTxt, ExtraSub, IdentityBaseline,
@@ -816,6 +827,402 @@ class Stage7View(StrictModel):
                 f'——逐章对照要么整块在（问了 :o），要么整块不在（书级）')
         if self.ordinal is not None and self.ordinal not in self.chapters:
             raise ValueError(f'ordinal={self.ordinal} 不在 chapters={self.chapters} 里')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二f、S-04 原文↔骨架（`GET /api/novels/:sid/reading/:o`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ReadingSegment(FrozenModel):
+    """该章原文上的一个连续分区。**`beat_id=null` ⇒ 空隙（hole）**——
+    kind 不另立字符串（两态由可空性表达，api.py 不手抄取值面）。
+
+    坐标恒是 Python 码点半开区间；**服务端已切好 `text`**，前端绝不按 start/end
+    自己切字符串（Python 码点 ≠ JS 码元）。
+    """
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    chars: int = Field(ge=1)
+    text: str = Field(min_length=1)
+    beat_id: str | None
+    #: 空隙且 `chars >= uncovered_min_chars` 才 `true`（beat 分区恒 `false`）。
+    #: 阈值由响应自带（`uncovered_min_chars`），**是漏抓还是过渡交人工看摘录判断**。
+    flagged: bool
+
+    @model_validator(mode='after')
+    def _interval_is_sound(self) -> ReadingSegment:
+        if self.end <= self.start:
+            raise ValueError(f'[{self.start}, {self.end}) 不是非空半开区间')
+        if self.chars != self.end - self.start or self.chars != len(self.text):
+            raise ValueError('chars 必须同时等于 end-start 与 text 的码点长度')
+        if self.beat_id is not None and self.flagged:
+            raise ValueError('beat 分区不许 flagged——「漏」只属于空隙')
+        return self
+
+
+class ReadingHinge(FrozenModel):
+    """一条保真材料。`text=null` = 未定位（INVALID 状态的 hinge 没有原文可引）。"""
+
+    kind: Literal[HINGE_KINDS]
+    text: str | None
+
+
+class ReadingBeatLine(FrozenModel):
+    """一拍。`located=false` 时坐标为 `null`（定位失败不编区间）。"""
+
+    beat_id: str = Field(min_length=1)
+    located: bool
+    start: int | None
+    end: int | None
+    time_layer: Literal[TIME_LAYERS]
+    place: str | None
+    present: list[str]
+    event: str = Field(min_length=1)
+    hinges: list[ReadingHinge]
+
+    @model_validator(mode='after')
+    def _location_is_all_or_nothing(self) -> ReadingBeatLine:
+        if self.located != (self.start is not None and self.end is not None):
+            raise ValueError('located 与坐标必须说同一件事')
+        return self
+
+
+class ReadingNarrationLine(FrozenModel):
+    grammatical_person: Literal[NARRATIVE_PERSON]
+    narrator: str | None
+    focalizer: str | None
+    pronoun_surfaces: list[str]
+
+
+class ReadingView(StrictModel):
+    """`GET /api/novels/:sid/reading/:o`。**S-04 那一屏：原文 ↔ 骨架。**
+
+    左半边（原文）来自 **stage1**；右半边（骨架）来自 stage2 逐章蓝图。
+    ⚠ **stage2 没跑 ⇒ 200 且 `blueprint=false`**：整章一个 hole、beats 空
+    ——左半边与 stage2 无关（同 S-06 左右半分治的道理）。
+    stage1 不在 / `:o` 越界 ⇒ 404。
+    """
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+
+    chapter_ordinal: int = Field(ge=1)
+    text_chars: int = Field(ge=1)
+    blueprint: bool
+    #: `blueprint=false` ⇒ `null`（没有蓝图就没有摘要，不编一句）。
+    summary: str | None
+
+    segments: list[ReadingSegment] = Field(min_length=1)
+    beats: list[ReadingBeatLine]
+    narration: list[ReadingNarrationLine]
+
+    #: 没被任何 beat 覆盖的字数（全部空隙之和，不只 flagged 的）。
+    loose: int = Field(ge=0)
+    uncovered_min_chars: int = Field(ge=1)
+
+    #: `stage2/chapter_blueprints.json` 的处境（六格一次拿全）。
+    #: `blueprint=false` 的两种来路（没跑 / 读不回）靠它分：`exists` 与 `readable`。
+    blueprint_state: ArtifactState
+
+    provenance: BlueprintProvenance | None = Field(alias='_provenance')
+
+    @model_validator(mode='after')
+    def _postconditions(self) -> ReadingView:
+        """① 分区连续覆盖整章；② `blueprint=false` 的形态整块成立；③ `loose` 对得上账。"""
+        if self.segments[0].start != 0 or self.segments[-1].end != self.text_chars:
+            raise ValueError('分区必须从 0 开始、到 text_chars 结束')
+        for left, right in zip(self.segments, self.segments[1:]):
+            if left.end != right.start:
+                raise ValueError('分区必须按顺序首尾连续')
+        if not self.blueprint:
+            if self.beats or self.summary is not None or self.provenance is not None:
+                raise ValueError('blueprint=false 时右半边必须整块缺席——那份内容是从哪儿来的？')
+            if any(s.beat_id is not None for s in self.segments):
+                raise ValueError('blueprint=false 时不该有 beat 分区')
+        holes = sum(s.chars for s in self.segments if s.beat_id is None)
+        if self.loose != holes:
+            raise ValueError(f'loose={self.loose} 而空隙合计 {holes}——两个数必须是同一个')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二g、S-07 计划 ↔ 写作上下文（`GET /api/novels/:sid/stage4/:o`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PlanBeatLine(FrozenModel):
+    """计划的一拍。`budget_chars=null` 只出现在恒等基线上（算不出源字数的拍，
+    **不估算、不拿邻居补**）。"""
+
+    i: int = Field(ge=1)
+    from_beats: list[str] = Field(min_length=1)
+    budget_chars: int | None
+
+
+class PlanChapterLine(StrictModel):
+    """计划侧的一章。恒等基线时三个 goal 是显式标记（`IDENTITY_GOAL`），不是真决策。"""
+
+    output_ordinal: int = Field(ge=1)
+    from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
+    chapter_goal: str = Field(min_length=1)
+    open_hook_goal: str = Field(min_length=1)
+    end_hook_goal: str = Field(min_length=1)
+    beats: list[PlanBeatLine] = Field(min_length=1)
+
+
+class Stage4IndexRow(FrozenModel):
+    """章索引一行。⚠ **没有 `in_band` / `style_hits`**——那是判据结论，
+    唯一来源是 `/check/stage4`（`R-11.4`），前端要并排显示就去 join 那份报告。"""
+
+    output_ordinal: int = Field(ge=1)
+    budget_chars: int | None
+    span_chars: int | None
+    beats: int = Field(ge=1)
+    #: 本章不许泄的 secret 数。`null` = ctx 不在盘上，**判不了**（不编 0）。
+    hidden: int | None
+
+
+class Stage4View(StrictModel):
+    """`GET /api/novels/:sid/stage4/:o`。**S-07：计划决定了什么？写手实际拿到什么？**
+
+    ⚠ **没跑过 stage4 时本屏也有内容**（`04_delivery.md:133`）：`identity_plan=true`，
+    计划与上下文都是**本次现算的恒等基线**（`identity_plan` + `build_writer_context`
+    同一对纯函数，不落盘）——「如果计划什么都不改，写手手里会有什么」。
+    ⚠ 计划在而 ctx 不在 ⇒ 200 且 `ctx_chapter=null`（右半边缺席，`ctx_state` 说明处境）。
+    """
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+
+    identity_plan: bool
+    reconstruction_strategy: str = Field(min_length=1)
+    chapters: list[int] = Field(min_length=1)
+    ordinal: int = Field(ge=1)
+    index: list[Stage4IndexRow] = Field(min_length=1)
+
+    plan_chapter: PlanChapterLine
+    ctx_chapter: CtxChapter | None
+
+    #: 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）。
+    #: `null` ⇔ `ctx_chapter=null`（没有任务书就没有目标）。
+    writer_target: tuple[int, int] | None
+    writer_target_estimated: bool
+
+    plan_state: ArtifactState
+    ctx_state: ArtifactState
+
+    plan_provenance: PlanProvenance | None = Field(alias='_provenance')
+    ctx_provenance: CtxProvenance | None = Field(alias='_ctx_provenance')
+
+    @model_validator(mode='after')
+    def _postconditions(self) -> Stage4View:
+        if self.ordinal not in self.chapters:
+            raise ValueError(f'ordinal={self.ordinal} 不在 chapters={self.chapters} 里')
+        if self.identity_plan and self.plan_provenance is not None:
+            raise ValueError('恒等基线是现算的，没有落盘来源账可发')
+        if (self.writer_target is None) != (self.ctx_chapter is None):
+            raise ValueError('writer_target 与 ctx_chapter 必须同进同出（同一份任务书）')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二h、S-08 成稿 ↔ 材料（`GET /api/novels/:sid/stage5/:o`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MaterialView(StrictModel):
+    """写手拿到的下发面。**与写手同一份**（`prompts.build_material(...).blocks`，
+    `R-11.8` 在读屏上的对应物：显示的材料 = 真发出去的材料，不是重新组装的第二份）。
+
+    ⚠ 按**闭卷**臂组装（`with_source_text=False`）：开卷臂多出的那块就是源章原文，
+    而原文在本屏单独有落点（`source_text`），不重复下发。
+    """
+
+    blocks: list[str] = Field(min_length=1)
+    chars: int = Field(ge=0)
+    writer_target: tuple[int, int]
+    writer_target_estimated: bool
+
+
+class DraftAlignRow(FrozenModel):
+    """原文↔成稿的一个对齐块。`anchored=false` = 本块并入了无锚的拍
+    （分界线只由双侧都命中的 verbatim 定，无锚的拍并进相邻块，不编分界线）。"""
+
+    beats: list[int] = Field(min_length=1)
+    l: str
+    r: str
+    anchored: bool
+
+
+class DraftAlignView(StrictModel):
+    """对齐的账。**这是对应关系，不是判定**（`note` 常驻这句话）。
+    锚点覆盖率必须常驻显示——没有它，「这一行盖了 3 拍」看起来和
+    「这一行就是第 3 拍」一模一样。"""
+
+    beats: int = Field(ge=0)
+    anchors: int = Field(ge=0)
+    rows: int = Field(ge=0)
+    inversions: int = Field(ge=0)
+    coverage: float = Field(ge=0, le=1)
+    note: str = Field(min_length=1)
+
+
+class DraftView(StrictModel):
+    """一份成稿卡（正式或 `.INVALID`，由 `invalid` 区分）。"""
+
+    mode: Literal[DEPTH_MODES]
+    relpath: str = Field(min_length=1)
+    invalid: bool
+    round: int = Field(ge=1)
+    #: `human`（`--apply-edit` 的人工稿）或 `llm`。由 `_provenance` 的载体类派生。
+    origin: str = Field(min_length=1)
+    chars: int = Field(ge=0)
+    budget_chars: int | None
+    source_chars: int = Field(ge=0)
+    overlap_excl_verbatim: float | None
+    text: str = Field(min_length=1)
+
+    #: `null` = 对齐辅助尚未由服务端提供（本章无锚可对时 rows 为空、账仍在）。
+    align: DraftAlignView | None
+    align_rows: list[DraftAlignRow]
+
+    freshness: Freshness
+    reason: FreshnessReason
+
+    provenance: RoundLlmProvenance | RoundFreeProvenance = Field(
+        alias='_provenance', union_mode='left_to_right')
+
+
+class Stage5IndexRow(FrozenModel):
+    """章索引一行。`chars` / `overlap` / `freshness` 取**主稿**（deep 优先）；
+    没有成稿的章三格全 `null`。"""
+
+    output_ordinal: int = Field(ge=1)
+    budget_chars: int | None
+    modes: list[Literal[DEPTH_MODES]]
+    invalid_modes: list[Literal[DEPTH_MODES]]
+    dup: bool
+    chars: int | None
+    overlap_excl_verbatim: float | None
+    freshness: Freshness | None
+
+
+class Stage5View(StrictModel):
+    """`GET /api/novels/:sid/stage5/:o`。**S-08：这一章写出来了吗？守住材料了吗？**
+
+    ⚠ `ctx_exists=false` ⇒ `materials=null`（**不显示假材料**，`04_delivery.md:134`）
+    ——给「先跑 stage4」，左半边缺席、右半边照常列已有成稿。
+    ⚠ 某章两臂皆无稿 ⇒ 200 且 `drafts=[]`（「还没写」不是错误）。
+    """
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+
+    ctx_exists: bool
+    #: `null` = 计划读不回来，「该有几章」判不了（与 0 是两件事）。
+    planned: int | None
+    written: int = Field(ge=0)
+    invalid: int = Field(ge=0)
+    missing: list[int]
+    duplicates: list[int]
+
+    chapters: list[int] = Field(min_length=1)
+    ordinal: int = Field(ge=1)
+    index: list[Stage5IndexRow]
+
+    source_text: str | None
+    source_chars_raw: int | None
+    materials: MaterialView | None
+    drafts: list[DraftView]
+    invalid_drafts: list[DraftView]
+
+    ctx_state: ArtifactState
+
+    @model_validator(mode='after')
+    def _postconditions(self) -> Stage5View:
+        if self.ordinal not in self.chapters:
+            raise ValueError(f'ordinal={self.ordinal} 不在 chapters={self.chapters} 里')
+        if not self.ctx_exists and self.materials is not None:
+            raise ValueError('ctx 不在盘上而 materials 有内容——假材料（`04_delivery.md:134`）')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二i、S-09 验收 / 修订（`GET /api/novels/:sid/review/:o`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ReviewIndexRow(FrozenModel):
+    """章索引一行。`finding_counts` 四 sev 键**恒在**（0 也写）——
+    产物侧 `Review.counts` 是稀疏的（登记过的病），出线侧修掉。"""
+
+    output_ordinal: int = Field(ge=1)
+    mode: Literal[DEPTH_MODES] | None
+    round: int | None
+    chars: int | None
+    budget_chars: int | None
+    finding_counts: dict[str, int]
+    #: 有收敛账（`unresolved_rounds > 0`）且未豁免的结论条数。
+    unresolved: int = Field(ge=0)
+    #: 这一章：验收判的那份与盘上当前那份还是不是同一份（整文件指纹）。
+    #: `null` = 判不了（验收后成稿被移走 / 本章当时就无稿）。
+    stale: bool | None
+
+
+class ReviewChapterView(StrictModel):
+    """一章的验收视图 + 当前正式稿正文（改稿入口要在原文旁边）。"""
+
+    output_ordinal: int = Field(ge=1)
+    findings: list[Finding]
+    mode: Literal[DEPTH_MODES] | None
+    chars: int | None
+    budget_chars: int | None
+    round: int | None
+    origin: str | None
+    text: str | None
+    #: 盘上已归档的轮次号（`_rounds/`），升序。改稿历史从这里回看。
+    rounds: list[int]
+    stale: bool | None
+
+
+class ReviewView(StrictModel):
+    """`GET /api/novels/:sid/review/:o`。**S-09：最新一份全书验收 + 该章明细。**
+
+    一份验收都没有 ⇒ 404（`UpstreamMissing`，前端渲染「先跑 stage5.review」）。
+    ⚠ 判据表本身仍归 `/check/stage5`；本屏发的是**验收产物**（历史事实），
+    与「现在复检一遍」是两件事。
+    """
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+
+    review_seq: int = Field(ge=1)
+    sources: ReviewSources
+    #: 全书（chapters+book 全部结论）按 sev 现数，四键恒在。
+    #: ⚠ 不读产物的 `counts` 字段——那份是稀疏 Counter（`Review.counts` 的登记病）。
+    finding_counts: dict[str, int]
+    baselines: dict[str, str]
+    baselines_identity: dict[str, str]
+    book: list[Finding]
+    wontfix: int = Field(ge=0)
+
+    chapters: list[int] = Field(min_length=1)
+    ordinal: int = Field(ge=1)
+    index: list[ReviewIndexRow] = Field(min_length=1)
+    chapter: ReviewChapterView
+
+    provenance: ReviewProvenance = Field(alias='_provenance')
+
+    @model_validator(mode='after')
+    def _postconditions(self) -> ReviewView:
+        if self.ordinal not in self.chapters:
+            raise ValueError(f'ordinal={self.ordinal} 不在 chapters={self.chapters} 里')
+        want = set(SEVERITY)
+        if set(self.finding_counts) != want:
+            raise ValueError(f'finding_counts 必须四 sev 键恒在（0 也写），实得 '
+                             f'{sorted(self.finding_counts)}')
+        for row in self.index:
+            if set(row.finding_counts) != want:
+                raise ValueError(f'ch{row.output_ordinal} 的 finding_counts 键不全')
         return self
 
 

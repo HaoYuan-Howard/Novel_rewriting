@@ -17,7 +17,7 @@ import os
 import pytest
 
 from novel.errors import ArtifactUnreadable, UpstreamMissing
-from novel.views.stage2 import global_view
+from novel.views.stage2 import global_view, reading_view
 from tests import corpus, sandbox
 
 pytestmark = pytest.mark.skipif(corpus.corpus_root() is None,
@@ -119,3 +119,58 @@ def test_the_view_writes_nothing(box):
     assert _tree(box.root) == before, '视图往盘上写了东西'
     assert not (box.root / '_service').exists()
     assert len(before) >= 4, f'只扫到 {len(before)} 个文件——沙箱多半没建起来'
+
+
+# ───────────────────────── 三、S-04 原文 ↔ 骨架 ─────────────────────────
+
+def _bp_box(book: str) -> sandbox.Sandbox:
+    return sandbox.Sandbox(book, ('stage1/main_text.json',
+                                  'stage2/chapter_blueprints.json'))
+
+
+def _bp_books() -> list[str]:
+    return sorted({a.book_dir for a in corpus.iter_artifacts()
+                   if a.rel == 'stage2/chapter_blueprints.json'})
+
+
+@pytest.fixture(params=_bp_books(), ids=lambda b: b[:10])
+def rbox(request):
+    s = _bp_box(request.param)
+    yield s
+    s.close()
+
+
+def test_reading_segments_partition_the_chapter(rbox):
+    """⭐ 分区首尾相接、切片逐字等于原文——**服务端切好，前端绝不自切**的那半句
+    在这里落地：切错一个码点，两边看到的就不是同一段。"""
+    v = reading_view(rbox.root, rbox.sid, 1)
+    assert v.blueprint and v.beats
+    assert ''.join(s.text for s in v.segments) and v.segments[0].start == 0
+    assert v.segments[-1].end == v.text_chars
+    assert v.loose == sum(s.chars for s in v.segments if s.beat_id is None)
+    for s in v.segments:
+        if s.beat_id is None:
+            assert s.flagged == (s.chars >= v.uncovered_min_chars)
+
+
+def test_reading_beats_carry_their_located_spans(rbox):
+    v = reading_view(rbox.root, rbox.sid, 1)
+    located = [b for b in v.beats if b.located]
+    assert located, '这一章一条 beat 都没定位成功——语料多半坏了'
+    seg_beats = {s.beat_id for s in v.segments if s.beat_id is not None}
+    assert seg_beats <= {b.beat_id for b in located}
+
+
+def test_reading_without_a_blueprint_keeps_the_left_half(rbox):
+    """stage2 没跑 ⇒ 200 形态：整章一个 hole，右半边整块缺席。"""
+    (rbox.dir / 'stage2' / 'chapter_blueprints.json').unlink()
+    v = reading_view(rbox.root, rbox.sid, 1)
+    assert not v.blueprint and v.beats == [] and v.summary is None
+    assert len(v.segments) == 1 and v.segments[0].beat_id is None
+    assert v.loose == v.text_chars
+    assert v.blueprint_state.exists is False
+
+
+def test_reading_an_unknown_chapter_is_a_terminal_state(rbox):
+    with pytest.raises(UpstreamMissing):
+        reading_view(rbox.root, rbox.sid, 999)

@@ -20,14 +20,23 @@ import os
 from contracts.schema.api import (
     ArcTrackLine, GlobalAddressLine, GlobalArcView, GlobalCharacterLine,
     GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
+    ReadingBeatLine, ReadingHinge, ReadingNarrationLine, ReadingSegment, ReadingView,
 )
-from contracts.schema.stage2 import GlobalGrounding
+from contracts.schema.stage1 import MainText
+from contracts.schema.stage2 import Blueprint, ChapterBlueprints, GlobalGrounding
 from novel import paths, prov
+from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.orchestrator.state import artifact_state, readonly_ctx
+from novel.stages.stage2.checks import HOLE_MIN_CHARS
+from novel.stages.stage2.coverage import walk_segments
 from novel.store import ArtifactStore
 
 NODE = 'stage2.global'
 REL = 'stage2/global_grounding.json'
+
+BP_NODE = 'stage2.blueprint'
+BP_REL = 'stage2/chapter_blueprints.json'
+MAIN_TEXT = 'stage1/main_text.json'
 
 
 def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
@@ -123,3 +132,85 @@ class _Misses:
     def unresolved(self, raw: str) -> NameRef:
         self.count += 1
         return NameRef(raw=raw, display=raw, resolved=False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S-04 原文 ↔ 骨架（`GET /api/novels/:sid/reading/:o`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def reading_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> ReadingView:
+    """S-04 的一章。**纯读**。左半边是 stage1 该章原文，右半边是 stage2 逐章蓝图。
+
+    ⚠ **stage2 没跑（或蓝图里没有这一章）⇒ 200 且 `blueprint=false`**：
+    整章一个 hole、beats 空——左半边量的是 stage1，与 stage2 无关（S-06 同款分治）。
+    蓝图在但**读不回** ⇒ 也是 `blueprint=false`，两种来路由 `blueprint_state` 分
+    （`exists` / `readable` 两格）。
+    stage1 不在 / `:o` 越界 ⇒ `UpstreamMissing`（404）。
+    """
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    store = ArtifactStore(readonly_ctx(novel_dir, BP_NODE, prov.code_version()))
+
+    main = store.read(MainText, MAIN_TEXT)
+    text = next((s.text or '' for s in main.root if s.chapter_ordinal == ordinal), None)
+    if text is None:
+        raise UpstreamMissing(
+            f'第 {ordinal} 章不在 stage1 的章集里'
+            f'（1..{max((s.chapter_ordinal for s in main.root), default=0)}）')
+
+    st = artifact_state(store, BP_REL)
+    bp, bp_prov = (_blueprint_of(store, ordinal)
+                   if (st.exists and st.readable) else (None, None))
+
+    spans = [(b.beat_id, b.span.start, b.span.end)
+             for b in (bp.beats if bp is not None else []) if b.span is not None]
+    segments = [
+        ReadingSegment(start=s, end=e, chars=e - s, text=text[s:e], beat_id=bid,
+                       flagged=bid is None and e - s >= HOLE_MIN_CHARS)
+        for bid, s, e in walk_segments(len(text), spans)]
+    beats = [
+        ReadingBeatLine(
+            beat_id=b.beat_id, located=b.span is not None,
+            start=b.span.start if b.span is not None else None,
+            end=b.span.end if b.span is not None else None,
+            time_layer=b.time_layer, place=b.place, present=list(b.present_names),
+            event=b.event,
+            hinges=[ReadingHinge(kind=h.kind,
+                                 text=h.source.text if h.source is not None else None)
+                    for h in b.hinges])
+        for b in (bp.beats if bp is not None else [])]
+    narration = [
+        ReadingNarrationLine(
+            grammatical_person=n.grammatical_person, narrator=n.narrator_name,
+            focalizer=n.focalizer_name, pronoun_surfaces=list(n.pronoun_surfaces))
+        for n in (bp.narration if bp is not None else [])]
+
+    return ReadingView(
+        sid=paths.derive_source_meta(novel_dir.name)[0],
+        title=paths.title_of(novel_dir),
+        chapter_ordinal=ordinal,
+        text_chars=len(text),
+        blueprint=bp is not None,
+        summary=bp.summary if bp is not None else None,
+        segments=segments,
+        beats=beats,
+        narration=narration,
+        loose=sum(s.chars for s in segments if s.beat_id is None),
+        uncovered_min_chars=HOLE_MIN_CHARS,
+        blueprint_state=st,
+        _provenance=bp_prov if bp is not None else None,
+    )
+
+
+def _blueprint_of(store: ArtifactStore, ordinal: int):
+    """这一章的蓝图条目与整份来源账。**仍然 `try`**（TOCTOU，同 `views/stage3._load`）。
+
+    返回 `(Blueprint|None, BlueprintProvenance|None)`——条目不在时来源账也不发
+    （半份产物比没有更误导）。
+    """
+    try:
+        art, _raw = store.read_own(ChapterBlueprints, BP_REL)
+    except (UpstreamMissing, ArtifactUnreadable):
+        return None, None
+    entry: Blueprint | None = next(
+        (b for b in art.blueprints if b.chapter_ordinal == ordinal), None)
+    return entry, art.provenance if entry is not None else None
