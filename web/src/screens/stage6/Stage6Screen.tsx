@@ -233,7 +233,7 @@ export function Stage6Screen() {
                           </LinkButton>
                           {editing ? (
                             <ActionButton
-                              action={{ kind: 'n8_hook', extra: ['--approve'], paid: false }}
+                              action={{ kind: 'stage6.approve', extra: ['--pick'], paid: false }}
                               size="sm"
                               onClick={() => approve.mutate({ index: picked, text: body })}
                             >

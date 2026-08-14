@@ -299,7 +299,7 @@ export function Stage5Screen() {
                               <span className="prose-cn text-tag text-ink-4">{vm.editNote}</span>
                               <ActionButton
                                 className="ml-auto"
-                                action={{ kind: 'stage5_review', extra: ['--apply-edit'], paid: false }}
+                                action={{ kind: 'stage5.write', extra: ['--apply-edit'], paid: false }}
                                 disabled={vm.save.isPending}
                                 onClick={() => vm.save.mutate(vm.text)}
                               >

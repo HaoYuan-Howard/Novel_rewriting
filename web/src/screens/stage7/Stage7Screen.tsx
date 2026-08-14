@@ -71,7 +71,7 @@ export function Stage7Screen() {
                     {d.approved ? '人物表已定稿' : '人物表还没定稿'}
                   </span>
                   <ActionButton
-                    action={{ kind: 'n9_rename', extra: ['--approve'], paid: false }}
+                    action={{ kind: 'stage7.approve', extra: null, paid: false }}
                     onClick={() => approve.mutate()}
                   >
                     {d.approved ? '重新定稿' : '定稿人物表'}

@@ -646,9 +646,9 @@ export const mockApi: Api = {
     saveDoc(freshDoc(SAMPLE_SID))
     const job = finish(
       {
-        kind: 'n0_extras',
-        label: 'stage0 番外扫描',
-        extra: ['--scan', 'corpus/' + file.name],
+        kind: 'stage0.remove',
+        label: 'stage0 非正文剔除',
+        extra: ['--source', 'corpus/' + file.name],
         sid: SAMPLE_SID,
         ordinal: null,
       },

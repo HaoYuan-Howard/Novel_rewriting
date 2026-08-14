@@ -192,9 +192,15 @@ export function InboxScreen() {
                       <button
                         key={n}
                         type="button"
-                        onClick={() =>
-                          nav('/n/' + sid + '/stage5/' + (i.chapter || defaultOrdinal(sid)))
-                        }
+                        onClick={() => {
+                          // 按条目自己的 stage 跳它的阶段屏；chapter=null（书级）不编假章号
+                          const layer = LAYERS.find((l) => l.kind === i.stage)
+                          const screen = layer?.screen ?? 'stage5'
+                          const suffix = layer?.chaptered
+                            ? '/' + (i.chapter ?? defaultOrdinal(sid))
+                            : ''
+                          nav('/n/' + sid + '/' + screen + suffix)
+                        }}
                         className="flex w-full cursor-pointer flex-col gap-5 border-b border-line-row px-18 py-12 text-left"
                       >
                         <div className="flex flex-wrap items-center gap-8">
