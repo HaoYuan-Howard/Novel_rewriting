@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
-import { FRESH, SEV, chNo, type Severity } from '@/constants/vocabulary'
+import { FRESH, SEV, chNo, type Mode, type Severity } from '@/constants/vocabulary'
 import type { Finding } from '@/types/common'
 import type { TextPart } from '@/components/ui/HighlightedText'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
@@ -77,10 +77,14 @@ export function useStage5Screen() {
   })
 
   const save = useMutation({
-    mutationFn: (text: string) => api.saveDraftEdit(sid, ordinal, text),
-    onSuccess: () => {
-      setEditing(false)
+    // mode 取当前稿的臂——人工稿落回同一条臂的新一轮
+    mutationFn: (req: { mode: Mode; text: string }) => api.saveDraftEdit(sid, ordinal, req),
+    onSuccess: (job) => {
+      if (job.state !== 'failed') setEditing(false)
+      void qc.invalidateQueries({ queryKey: qk.stage5(sid, ordinal) })
       void qc.invalidateQueries({ queryKey: qk.review(sid, ordinal) })
+      void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage5') })
+      void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
     },
   })
 
@@ -131,6 +135,7 @@ export function useStage5Screen() {
     text,
     setText: setDraftText,
     save,
+    saveMode: (firstDraft?.mode ?? 'deep') as Mode,
     editNote: '保存走子进程重跑校验，落成新的一轮；旧轮归档，不覆盖。',
 
     counts: d

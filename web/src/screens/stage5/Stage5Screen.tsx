@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { ARM, FRESH, MUTED, SEV } from '@/constants/vocabulary'
-import { useAskJob } from '@/hooks/useChrome'
+import { useAskJob, useChrome } from '@/hooks/useChrome'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { ComparePanes, PaneScroll } from '@/components/compare/ComparePanes'
@@ -25,6 +25,7 @@ export function Stage5Screen() {
   const vm = useStage5Screen()
   const nav = useNavigate()
   const ask = useAskJob()
+  const { askConfirm } = useChrome()
   const { hasSample } = useSampleCoverage()
 
   return (
@@ -301,7 +302,21 @@ export function Stage5Screen() {
                                 className="ml-auto"
                                 action={{ kind: 'stage5.write', extra: ['--apply-edit'], paid: false }}
                                 disabled={vm.save.isPending}
-                                onClick={() => vm.save.mutate(vm.text)}
+                                onClick={() =>
+                                  askConfirm({
+                                    req: {
+                                      kind: 'stage5.write',
+                                      label: '章节改稿 · 第 ' + vm.ordinal + ' 章（人工稿落成新一轮）',
+                                      // 确认框 preview 同一个 (node, flags)；一次性稿的真实路径由服务端执行时生成
+                                      extra: ['--apply-edit', '(服务端一次性人工稿)'],
+                                      mode: vm.saveMode,
+                                      sid: vm.sid,
+                                      ordinal: vm.ordinal,
+                                    },
+                                    run: () =>
+                                      vm.save.mutateAsync({ mode: vm.saveMode, text: vm.text }),
+                                  })
+                                }
                               >
                                 保存，落成新的一轮
                               </ActionButton>

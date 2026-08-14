@@ -16,6 +16,7 @@ import type {
   UploadResponse,
 } from './jobs'
 import type { NovelOverview, NovelsResponse } from './novels'
+import type { Mode } from '@/constants/vocabulary'
 import type {
   CheckKind,
   CheckReport,
@@ -85,9 +86,12 @@ export interface Api {
   startWriting(sid: string): Promise<ApprovalDoc>
   resetBook(sid: string): Promise<ApprovalDoc>
 
-  /* 写 */
-  saveDraftEdit(sid: string, ordinal: number, text: string): Promise<{ ok: true }>
-  approveHook(sid: string, index: number, text: string): Promise<{ ok: true }>
-  approveNames(sid: string): Promise<{ ok: true }>
+  /* 写（三条人工写回走专用路由，返回真实作业记录——真实模式不写 localStorage 充成功） */
+  /** 章节改稿：与生成稿同一判定落点（stage5.write --apply-edit，origin=human 记账） */
+  saveDraftEdit(sid: string, ordinal: number, req: { mode: Mode; text: string }): Promise<Job>
+  /** 文案定稿：只收序号（--pick，1 起）。改字走 CLI（stage6.hook --apply-edit），不在浏览器。 */
+  approveHook(sid: string, pick: number): Promise<Job>
+  /** 人名表定稿（无参终态） */
+  approveNames(sid: string): Promise<Job>
   uploadCorpus(file: File): Promise<UploadResponse>
 }

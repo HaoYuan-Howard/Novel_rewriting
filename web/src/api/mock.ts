@@ -626,19 +626,38 @@ export const mockApi: Api = {
 
   resetBook: (sid) => later(saveDoc(freshDoc(sid))),
 
-  saveDraftEdit: (sid, ordinal, text) => {
-    lsWrite(`edits.${sid}.${ordinal}`, { text, at: Date.now() })
-    return later({ ok: true as const })
+  saveDraftEdit: (sid, ordinal, req) => {
+    lsWrite(`edits.${sid}.${ordinal}`, { text: req.text, at: Date.now() })
+    return later(finish({
+      kind: 'stage5.write',
+      label: '章节改稿（人工稿落成新一轮）',
+      extra: ['--apply-edit'],
+      mode: req.mode,
+      sid,
+      ordinal,
+    }))
   },
 
-  approveHook: (sid, index, text) => {
-    lsWrite('hook.' + sid, { index, text })
-    return later({ ok: true as const })
+  approveHook: (sid, pick) => {
+    lsWrite('hook.' + sid, { index: pick })
+    return later(finish({
+      kind: 'stage6.approve',
+      label: '文案定稿 --pick ' + pick,
+      extra: ['--pick', String(pick)],
+      sid,
+      ordinal: null,
+    }))
   },
 
   approveNames: (sid) => {
     lsWrite('names.' + sid, { origin: 'human' })
-    return later({ ok: true as const })
+    return later(finish({
+      kind: 'stage7.approve',
+      label: '人名表定稿',
+      extra: null,
+      sid,
+      ordinal: null,
+    }))
   },
 
   uploadCorpus: (file) => {

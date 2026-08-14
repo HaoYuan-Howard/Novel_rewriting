@@ -97,13 +97,22 @@ export function ConfirmDialog() {
               setPreparing(true)
               try {
                 await confirm.before?.()
-                start.mutate(confirm.req, {
-                  onSuccess: () => {
-                    openDrawer()
-                    confirm.after?.()
-                    closeConfirm()
-                  },
-                })
+                if (confirm.run) {
+                  // 专用写回路由：执行不走 POST /jobs，但确认的是同一份服务端计划。
+                  // 成败都进作业抽屉——失败的作业要被看见，不是被吞掉。
+                  await confirm.run()
+                  openDrawer()
+                  confirm.after?.()
+                  closeConfirm()
+                } else {
+                  start.mutate(confirm.req, {
+                    onSuccess: () => {
+                      openDrawer()
+                      confirm.after?.()
+                      closeConfirm()
+                    },
+                  })
+                }
               } catch {
                 // Mutation state owns the error presentation; most importantly,
                 // a rejected approval must not fall through to POST /jobs.

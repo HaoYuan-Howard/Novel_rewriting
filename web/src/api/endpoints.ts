@@ -172,10 +172,12 @@ export const realApi: Api = {
   startWriting: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/writing'),
   resetBook: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/reset'),
 
-  saveDraftEdit: (sid, o, text) => post<{ ok: true }>(n(sid) + '/review/' + o + '/edit', { text }),
-  approveHook: (sid, index, text) =>
-    post<{ ok: true }>(n(sid) + '/stage6/approve', { index, text }),
-  approveNames: (sid) => post<{ ok: true }>(n(sid) + '/stage7/approve'),
+  saveDraftEdit: async (sid, o, req) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/review/' + o + '/edit', req)),
+  approveHook: async (sid, pick) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/approve', { pick })),
+  approveNames: async (sid) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage7/approve', {})),
   uploadCorpus: async (file) => {
     const raw = await postRaw<{ sid: string; job: BackendJobRecord }>(
       '/upload?filename=' + encodeURIComponent(file.name),

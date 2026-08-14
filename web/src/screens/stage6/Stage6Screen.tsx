@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { FRESH, SEV } from '@/constants/vocabulary'
+import { useChrome } from '@/hooks/useChrome'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { QueryStates } from '@/components/state/QueryStates'
-import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
+import { LinkButton } from '@/components/ui/ActionButton'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { Prose } from '@/components/ui/Prose'
@@ -22,10 +23,9 @@ import { cx } from '@/lib/cx'
 export function Stage6Screen() {
   const sid = useSid()
   const qc = useQueryClient()
+  const { askConfirm } = useChrome()
   const [pick, setPick] = useState<number | null>(null)
   const [reopened, setReopened] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [text, setText] = useState<string | null>(null)
 
   const q = useQuery({ queryKey: qk.stage6(sid), queryFn: () => api.getStage6(sid), retry: false })
   const s1hook = useQuery({
@@ -35,13 +35,28 @@ export function Stage6Screen() {
   })
 
   const approve = useMutation({
-    mutationFn: (v: { index: number; text: string }) => api.approveHook(sid, v.index, v.text),
-    onSuccess: () => {
-      setReopened(false)
-      setEditing(false)
+    // 只发序号（--pick）。改字不在浏览器——那是 stage6.hook --apply-edit 的事。
+    mutationFn: (pick: number) => api.approveHook(sid, pick),
+    onSuccess: (job) => {
+      if (job.state !== 'failed') setReopened(false)
       void qc.invalidateQueries({ queryKey: qk.stage6(sid) })
+      void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage6') })
+      void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
+      void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
     },
   })
+
+  const askApprove = (n: number) =>
+    askConfirm({
+      req: {
+        kind: 'stage6.approve',
+        label: '文案定稿 · 候选 ' + n,
+        extra: ['--pick', String(n)],
+        sid,
+        ordinal: null,
+      },
+      run: () => approve.mutateAsync(n),
+    })
 
   return (
     <ScreenFrame screen="stage6">
@@ -51,7 +66,7 @@ export function Stage6Screen() {
           const picked = pick ?? approvedIdx ?? d.candidates[0]?.index ?? 1
           const cand = d.candidates.find((c) => c.index === picked) ?? d.candidates[0]
           const finalPhase = !!d.approved && !reopened
-          const body = text ?? d.approved?.text ?? cand?.text ?? ''
+          const body = d.approved?.text ?? cand?.text ?? ''
           const origText = s1hook.data?.hook_copy.text ?? ''
 
           return (
@@ -151,13 +166,8 @@ export function Stage6Screen() {
                             <button
                               type="button"
                               onClick={() => {
-                                if (on) {
-                                  setText(c.text)
-                                  approve.mutate({ index: c.index, text: c.text })
-                                } else {
-                                  setPick(c.index)
-                                  setText(null)
-                                }
+                                if (on) askApprove(c.index)
+                                else setPick(c.index)
                               }}
                               className={cx(
                                 'ml-auto cursor-pointer rounded-btn-lg border px-14 py-9 text-body-lg font-semibold',
@@ -222,37 +232,21 @@ export function Stage6Screen() {
                       title="重构文案"
                       meta={[...body].length + ' 字'}
                       right={
-                        <>
-                          <LinkButton
-                            onClick={() => {
-                              setText(body)
-                              setEditing((v) => !v)
-                            }}
-                          >
-                            {editing ? '读' : '改'}
-                          </LinkButton>
-                          {editing ? (
-                            <ActionButton
-                              action={{ kind: 'stage6.approve', extra: ['--pick'], paid: false }}
-                              size="sm"
-                              onClick={() => approve.mutate({ index: picked, text: body })}
-                            >
-                              保存定稿
-                            </ActionButton>
-                          ) : null}
-                        </>
+                        <LinkButton
+                          disabled
+                          title="当前不可用：把 hook_edit.json 放进书目录 stage6/ 后跑 stage6.hook --apply-edit（0 成本）；语义结论按文本 sha1 自动过期，重跑 stage6.semantic 可清"
+                        >
+                          改字（走 CLI）
+                        </LinkButton>
                       }
                     />
                     <div className="px-18 py-14">
-                      {editing ? (
-                        <textarea
-                          value={body}
-                          onChange={(e) => setText(e.target.value)}
-                          className="min-h-[320px] w-full resize-y rounded-block border border-line bg-card px-14 py-12 text-read leading-[2.05] text-ink"
-                        />
-                      ) : (
-                        <Prose text={body} measure="compare" size="md" />
-                      )}
+                      <Prose text={body} measure="compare" size="md" />
+                    </div>
+                    <div className="prose-cn border-t border-line-soft px-18 py-9 text-tag text-ink-4">
+                      浏览器只做定稿（人选那一下是唯一闸门）。改字是另一个 0 成本节点
+                      （stage6.hook --apply-edit），编辑文件的形状与位置是契约——放进书目录
+                      stage6/ 之后跑 CLI。
                     </div>
                   </Panel>
                 </div>

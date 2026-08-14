@@ -4,6 +4,7 @@ import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { FRESH, SEV } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
+import { useChrome } from '@/hooks/useChrome'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { CompareRows } from '@/components/compare/CompareRows'
@@ -24,6 +25,7 @@ import { cx } from '@/lib/cx'
  */
 export function Stage7Screen() {
   const sid = useSid()
+  const { askConfirm } = useChrome()
   const nav = useNavigate()
   const qc = useQueryClient()
   const { o } = useParams<{ o: string }>()
@@ -40,8 +42,25 @@ export function Stage7Screen() {
 
   const approve = useMutation({
     mutationFn: () => api.approveNames(sid),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.stage7(sid) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
+      void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage7') })
+      void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
+      void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
+    },
   })
+
+  const askApprove = () =>
+    askConfirm({
+      req: {
+        kind: 'stage7.approve',
+        label: '人名表定稿（终态，无参）',
+        extra: null,
+        sid,
+        ordinal: null,
+      },
+      run: () => approve.mutateAsync(),
+    })
 
   return (
     <ScreenFrame screen="stage7">
@@ -72,7 +91,7 @@ export function Stage7Screen() {
                   </span>
                   <ActionButton
                     action={{ kind: 'stage7.approve', extra: null, paid: false }}
-                    onClick={() => approve.mutate()}
+                    onClick={askApprove}
                   >
                     {d.approved ? '重新定稿' : '定稿人物表'}
                   </ActionButton>

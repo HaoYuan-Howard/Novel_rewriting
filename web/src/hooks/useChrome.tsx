@@ -15,6 +15,12 @@ export interface PendingConfirm {
   before?: () => Promise<void>
   /** 发起成功后要做的事（例如挑完深度章节 → 标记已开写 → 跳成稿屏） */
   after?: () => void
+  /**
+   * 执行覆盖：三条人工写回走**专用路由**（review/:o/edit、stage6/approve、
+   * stage7/approve），不走通用 POST /jobs。确认框仍然先 preview 同一个
+   * (node, flags) 的服务端计划（R-11.8：显示与执行同一份），确认后跑这个。
+   */
+  run?: () => Promise<unknown>
 }
 
 interface ChromeCtx {
