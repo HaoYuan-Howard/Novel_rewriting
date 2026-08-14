@@ -181,7 +181,7 @@ stage5/6/7 都有一份「我判了哪几份稿」的清单，它**不是** `inp
 ### 5.1b `partial_rewrite` —— 混版产物要如实记来源（2026-08-11 · 骨架 D）
 
 有一类 0 成本路径**只改产物的一部分**：`--remeasure` 重算 `measurable` 写回 ·
-`--recheck` 刷指标并重拼 · `--migrate` 按当前锚点算法重新定位原文引用 ·
+`--recheck` 刷指标并重拼 · `--renormalize` 按当前契约重算派生字段与原文定位 ·
 stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模型人物表。
 ⚠ 同名 flag 在 stage5 落的是一整章人工新稿，那里走 `origin=human`，不是混版。
 改完之后那一份是**混版的**：LLM 写的那些字段出自当初那次付费产出，
@@ -195,14 +195,14 @@ stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模
 | 整份覆盖成新账 | 会把 `prompts` / `model` 说成**本次**产的，而本次一个请求都没发（`Q-5` 点名的伪造） |
 | 借 `revalidated` 来标 | 那一条说的是**状态变更**（`.INVALID` → 正式稿），**内容一个字没动**。两件事 |
 
-**正确的记法**（原型 `Stage3/n3_style.py:971-980` 逐字写着，连注释一起搬）：
-**只换 `inputs`、留 `prompts` / `model`、标一个 `partial_rewrite`，让混版这件事看得见。**
+**正确的记法**：只换 `inputs`、保留 `prompts` / `model`、标一个 `partial_rewrite`，
+让局部改写这件事看得见。
 
 > #### ⚠ 为什么是**一个带值的键**，不是三个布尔
 >
-> 原型标的是 `remeasured: true`。而 `--recheck` / `--migrate` 干的是**同一件事**
+> `--remeasure` / `--recheck` / `--renormalize` 干的是**同一类事**
 > ——局部改写一份付费产物——区别只在「哪条路」，**那是一个值，不是三个键**。
-> 分成三个布尔就是同一件事的第三个落点，F 期移植 stage5/6/7 时必然分家
+> 分成多个布尔会制造同一语义的多个落点
 > （`Q-3`：同一个语义在不同节点上必须叫同一个名字）。
 >
 > 取值面的唯一落点是 `contracts/invariants.py::PARTIAL_REWRITE_FLAGS`，

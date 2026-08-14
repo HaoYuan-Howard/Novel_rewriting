@@ -245,7 +245,7 @@ class RunContext:
     def rewrite_provenance(self, prev: P, *, by: str) -> P:
         """**第三个口，也是最窄的一个**：一条 0 成本路径只改了这份产物的一部分。
 
-        `--remeasure` / `--recheck` / `--migrate`，以及只改一部分决策集的
+        `--remeasure` / `--recheck` / `--renormalize`，以及只改一部分决策集的
         `--apply-edit`，改完之后那一份是**混版的**：
         LLM 写的那些字段出自当初那次付费产出，被改的那部分是**现在**从盘上重算的。
         ⇒ 继承 `prompts` / `model` 一个字不动，换掉 `inputs`（本次真读到的），

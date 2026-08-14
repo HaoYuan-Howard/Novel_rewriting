@@ -132,11 +132,11 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `output_ordinal` | `int` | 是 | 1..N。**文件名里的 NN 就是它**（旧 `.INVALID` 缺它时界面从文件名兜底解析） | **三源** |
+| `output_ordinal` | `int` | 是 | 1..N；**文件名里的 NN 就是它** | **三源** |
 | `from_source_ordinals` | `int[]` | 是 | **长度恒为 1**（一章对一章）。透传自 ctx | **三源** |
-| `mode` | `str` | 是 | `deep｜shallow`（`DEPTH_MODES`）。**同时是目录名**。⚠ 旧成稿缺它时 `_load_mode` 按目录补 | **三源** |
+| `mode` | `str` | 是 | `deep｜shallow`（`DEPTH_MODES`），同时是目录名 | **三源** |
 | `source_chars` | `int` | 是 | 源章对应部分字数（计划算好的）。盘上 408~1963 | **三源** |
-| `budget_chars` | `int｜null` | 是（键恒在） | 本章各拍预算之和。盘上 380~1960。<br>**兼任契约版次的结构标记**：旧契约成稿没有这一项，`_write_draft` 据此认出混契约的拼稿 | **三源** |
+| `budget_chars` | `int` | 是 | 本章各拍预算之和，必须为正整数 | **三源** |
 | `chars` | `int` | 是 | `len(text.strip())`，**含空白**。盘上 399~1967。<br>⚠ 与 stage3 `measurable.body.chars`（**去空白**）不是同一个口径——跨口径运算要先对齐（判据 14） | **三源** |
 | `overlap_excl_verbatim` | `float｜null` | 是 | 20 字窗口重合率，**已扣掉按契约必须逐字保留的部分**。`null` = 正文短于一个窗口，**那是「量不了」不是「重合 0」**。<br>**闭卷有上界 `DEEP_OVERLAP_MAX` = 10%**（判据 `deep_overlap_high`）；**开卷无上界，只报分布** | **三源** |
 | `text` | `str` | 是 | 正文本身，**唯一承载内容的字段**，`draft.md` 由它拼。⚠ 存的是**归一之后**的字节（事实 ⑤） | **三源** |
@@ -372,7 +372,6 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 ```
 # 重构稿（31/31 章：deep 11 · shallow 20）
-[> ⚠ 混契约横幅]        ← 有旧契约稿（没有 budget_chars）且不是全部时
 [> ⚠ 缺章横幅]          ← 计划有、两条臂都没有的章；**写进 md，不静默跳过**
 
 ## 第 N 章（<mode> · 源 [n] · NNN字 · 重合(扣除逐字要求) 0.xxx）
@@ -385,7 +384,6 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 | 同一输出章在两个目录里都有成稿 | **显式终态**——哪一份是成品无从判断，不猜。<br>⚠ 而 review 与界面对同一情况**只报不判死**（判据 `draft_duplicated`）：把「呈现」变成「判死」会让人连报告都看不到 |
 | 计划有、两边都没有 | **缺章横幅**写进 md |
 | 章头行**不打篇幅方式** | 它恒为一个值，已随 `stage4.md` §一 裁撤；那句话归 system prompt |
-| 混了两套契约下写的章 | 横幅 + 控制台告警。判别用**结构特征**（旧稿没有 `budget_chars`），不用时间戳 |
 | 两条臂并行收尾 | `run_selected` 等两臂线程池全部收口后只调用一次 `assemble_book`；单次复合任务内没有两个拼装器竞争 |
 
 ⚠ **拼装只验「两条臂没打架、合起来覆盖了计划」，验不了「这一章该不该 deep」**——
@@ -406,7 +404,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 | `prompts.REVISE` | `str` | **否** | 修订轮才有。盘上 4/30 | **盘·码** |
 | `model` | `str` | 是（LLM 稿） | 盘上 30/31 `deepseek-v4-pro`；**人工稿不记**（记了就是假账） | **三源** |
 | `code` | `str` | 是 | git 短 sha。盘上 31/31 | **三源** |
-| `inputs` | `obj` | 是 | 恒四条：stage1 正文 · stage2 global · stage3 style · **stage4 `writer_context`**（最要紧的一项——`budget_chars` 只能证明契约版次，证明不了身份） | **三源** |
+| `inputs` | `obj` | 是 | 恒四条：stage1 正文 · stage2 global · stage3 style · **stage4 `writer_context`**；身份由来源边证明 | **三源** |
 | `round` | `int` | 是 | 盘上 1~2。取**盘上见过的最大轮次 +1**，不按「刚归档的那一份」算；`.INVALID` 的轮次也算进去 | **三源** |
 | `revision_of` | `str` | **否** | 上一轮**正文**的指纹。盘上 5/31 | **三源** |
 | `review` | `str` | **否** | 触发这一轮的报告指纹。盘上 4/31 | **三源** |
@@ -617,7 +615,7 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 | `convergence_report` | `R-8.3b` ⭐ |
 | `secret_timeline` · `name_surface_survey` | `R-8.9b` ⭐（**探针自己的基线读数**） |
 | `draft_missing` · `draft_duplicated` | `R-8.11` ⭐ |
-| `material_malformed` | `R-3.15` ⭐（旧制品/人工稿的 Stage 2 兼容账；新正式制品已由 `SourceSpan` 守住） |
+| `material_malformed` | `R-3.15` ⭐（对 Stage 2 精确区间的下游纵深校验） |
 | `style_block_carries_plot` | `R-4.5`（描述不许出现专名） |
 | `secret_unknown` | `R-6.3`（逐章剧透闸门产的 `must_not_reveal`） |
 

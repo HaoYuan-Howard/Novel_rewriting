@@ -20,7 +20,6 @@ import sys
 import pytest
 
 from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, VALUED_FLAGS
-from contracts.rules import PORTED_STAGES
 from novel.cli import exit_codes as X
 from novel.cli.main import main
 from novel.orchestrator import nodes as N

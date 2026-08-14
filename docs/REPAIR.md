@@ -20,7 +20,7 @@ CLI 还是将来的 agent，回路的行为完全相同。
 
 | `remediation` | 谁修 | 路由 | 成本上界 |
 |---|---|---|---|
-| `deterministic` | 代码 | `Rule.fix` 指的免费 (节点, flag)（如 `--migrate` / `--drop`），注册期第 ⑧ 条校验保证它真跑得起来 | 一次命令，0 成本 |
+| `deterministic` | 代码 | `Rule.fix` 指的免费 (节点, flag)（如 `--renormalize`），注册期第 ⑧ 条校验保证它真跑得起来 | 一次命令，0 成本 |
 | `llm` | 写作层 | 准入两道：`Rule.repair=='UNIQUE'`（满足路径唯一才进付费自救；密度/比率/档位一律转人工——最省力的满足路径是删内容或编内容）＋ `unresolved_rounds < STOP_REWRITE_AFTER`；指令文本唯一落点是 `Rule.directive`，语义泄露只下发证据片段、不把 secret 答案喂给写手 | 每 (章, 判据) ≤ 2 轮付费 |
 | `human` | 人 | 进「待人工」六类清单（`invalid` / `rejected` / `stalled` / `human_only` / `upstream` / `approval`）；0 成本口：`--apply-edit`（各层均已接线）· `--pick`（stage6 换候选）· `--wontfix`（豁免**不删结论**，单独计数） | 无自动成本 |
 | `none` | 无 | `metric` 读数，无需处置 | — |

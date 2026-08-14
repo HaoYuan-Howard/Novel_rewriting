@@ -33,19 +33,6 @@
 
 以下内容仍未完成，但后端范围当前关闭。它们保留在这里是为了避免被误读成已支持。
 
-### BE-01 · stage2 生成与写回
-
-`novel/stages/stage2/extract.py` 的以下路径仍落 `RunModeNotImplemented`：
-
-- 全书抽取、逐章抽取与定向重生成；
-- `--purge-role`；
-- `--migrate`；
-- `--drop`。
-
-完成时必须一次接齐：`ask_json` 响应模型、落盘前归一及其 provenance 账、
-`present_names → present_char_ids`、verbatim 回取三笔账，并先确定
-`human_adjudicated` 的子字段契约。只放行其中一半不算完成。
-
 ### BE-04 · 队列与断点续跑的半成品
 
 - 队列只有一次性计划，没有可取消的“尚未开始项”；
@@ -108,9 +95,8 @@
 
 ### VAL-05 · 干净环境可复现性
 
-部分语料测试依赖被 gitignore 排除的 `Test_data/`、`outputs/` 与同级原型仓；干净 clone/worktree
-不能复现全量结果，且 fixture 数量可能静默缩小。应把可提交的最小合成 fixture 纳入仓库，
-把需要本机版权语料的检查标成显式 integration suite，并在缺资产时报告“未检查”及预期数量。
+语料集成测试只读取显式设置的 `NOVEL_OUTPUT`；未设置时明确跳过，不再探测同级仓库或旧输出目录。
+仍应把更多可提交的最小合成 fixture 纳入仓库，并为本机版权语料的 integration suite 记录预期范围。
 
 ## 无守卫但尚未裁决的语义
 

@@ -92,16 +92,11 @@ def test_a_missing_artifact_is_a_terminal_state_not_an_empty_screen(box):
         global_view(box.root, box.sid)
 
 
-def test_an_unreadable_artifact_is_409_material_not_404(box):
-    """盘上原样的旧契约字节（带被裁的键）⇒ `ArtifactUnreadable`。
-
-    「读不回来」与「没跑过」对人的下一步是相反的指示，不许折成一态。
-    """
-    raw = next(a for a in corpus.iter_artifacts()
-               if a.book_dir == box.book and a.rel == REL)
-    (box.dir / REL).write_text(
-        json.dumps(json.loads(open(raw.path, encoding='utf-8').read()), ensure_ascii=False),
-        encoding='utf-8')
+def test_a_malformed_artifact_is_409_material_not_404(box):
+    """文件存在但违反当前严格契约时，必须与“没跑过”区分。"""
+    raw = box.read(REL)
+    raw['obsolete_field'] = True
+    box.write(REL, raw)
     with pytest.raises(ArtifactUnreadable):
         global_view(box.root, box.sid)
 

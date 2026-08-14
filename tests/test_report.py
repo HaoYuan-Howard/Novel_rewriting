@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 from contracts.invariants import STATUS
-from contracts.rules import Registry, RetiredRule, Rule
+from contracts.rules import Registry, Rule
 from contracts.schema.report import (
     CheckReport, ProvenanceSection, RuleLine, StatusCounts, badge_of, finding,
 )
@@ -373,34 +373,6 @@ def test_counts_that_disagree_with_the_rules_raise():
 def test_the_same_rule_cannot_appear_twice():
     with pytest.raises(ValueError, match='不止一行'):
         _report([_line(), _line()])
-
-
-# ───────── 退役而不删 ─────────
-
-def test_a_retired_rule_stays_in_the_report_with_its_reason(monkeypatch):
-    """让「量过、量不准，所以撤了」与「忘了」读起来不一样。"""
-    reg = _registry(_rule(rule='a', sev='info'))
-    reg.retire(RetiredRule(rule='cliche', stage=STAGE, why='词表判据不报基线，等于不知道自己在说什么'))
-    rep = _build(reg, [ran('a')], monkeypatch=monkeypatch)
-    assert [r.rule for r in rep.retired] == ['cliche']
-    assert 'cliche' in render(rep)
-    assert 'cliche' not in {r.rule for r in rep.rules}, '退役的不许同时占一行判定'
-
-
-def test_a_rule_cannot_be_both_live_and_retired():
-    """那种状态下报告会既列一行判定又列一行「已退役」，而人只会信其中一行。"""
-    reg = _registry(_rule(rule='a', sev='info'))
-    with pytest.raises(ValueError, match='同时是现役判据和退役判据'):
-        reg.retire(RetiredRule(rule='a', stage=STAGE, why='理由'))
-    reg2 = Registry()
-    reg2.retire(RetiredRule(rule='b', stage=STAGE, why='理由'))
-    with pytest.raises(ValueError, match='已登记为退役'):
-        reg2.register(_rule(rule='b', sev='info'))
-
-
-def test_retiring_without_a_reason_raises():
-    with pytest.raises(ValueError, match='理由'):
-        Registry().retire(RetiredRule(rule='x', stage=STAGE, why='  '))
 
 
 # ───────── `Q-9`：词表判据永远打印基线 ─────────

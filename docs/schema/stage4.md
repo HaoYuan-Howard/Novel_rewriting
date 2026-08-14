@@ -1,608 +1,162 @@
-# stage4 产物 schema
+# Stage 4 当前契约
 
-重构计划 + 写作上下文。**两份产物，形状完全不同**：
+Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作上下文。规划调用只决定全书
+重构意图、逐章目标与逐拍预算；拍的分组、引用展开和写作上下文均由确定性代码生成。
 
-```
-stage4/plan_chapters.json    LLM 产，全书一次调用 —— 只存决策与引用，一个字内容都不经它
-stage4/writer_context.json   确定性组装（非 LLM）—— 写作节点的唯一输入，可 0 成本重建
-```
-
-对应需求 **R-5**（规划，`R-5.1`~`R-5.11`）与 **R-6**（组装，`R-6.1`~`R-6.10`）。
-读法（证据列的取值、为什么三源合并）见 `_README.md`。
-**载体 = Pydantic v2**（已定），但本文只定内容、不写模型——模型在骨架阶段照本文写。
-
-> **样本面：盘上 3 本 = 31 输出章 / 197 拍 / 251 条源 beat 引用**（14+8+9 章 · 67+57+73 拍）。
-> 与 stage2/stage3 一样，**这一层没有「全语料 163 本」可退**——跑一本要花钱。
-> 「盘上 3/3」在这一层的含义只有一个：**这三次它都写了。**
-
----
-
-> ## ⚠⚠ 五条贯穿本层的事实
->
-> ### ① 这一层 LLM 只产**三样东西**，其余全是代码写的
->
-> | 谁产的 | 是什么 | 盘上 |
-> |---|---|---|
-> | **LLM** | `reconstruction_strategy` · 逐章三个 goal · **逐拍 `budget_chars`** | 3 + 31×3 + 197 |
-> | 代码（**改写**：覆盖了模型写的东西） | `from_beats`（按模型给的 `plan_beat` 换成分组） | 197 |
-> | 代码（确定性组装） | **整份 `writer_context`** | — |
->
-> 拍怎么切、怎么排、怎么并，**不是 LLM 的决定**（`group_beats` 按源文切，只吸收 <80 字的碎拍）。
-> ⇒ 本层 schema 的绝大部分字段，其取值面**不来自模型，来自代码**——
-> 这与 stage2「每一个字段都是模型写的」正好相反，读表时不要套用那边的怀疑口径。
->
-> **拍级预算是非平凡的，三本一致**（支持「预算权留给 LLM」）：
->
-> | | 拍 | 拍级 `budget/源` 中位 | 区间 | **恰好 1.00 的拍** | 章级 | 全书 |
-> |---|---|---|---|---|---|---|
-> | 成年人 | 67 | 0.97 | 0.58~1.85 | **1/67** | 0.86~1.04 | 0.970 |
-> | 头牌 | 57 | 0.97 | 0.49~1.92 | **1/57** | 0.88~0.96 | 0.949 |
-> | 三岁 | 73 | 1.04 | 0.71~1.36 | **0/73** | 0.91~1.02 | 1.016 |
->
-> ⚠ **章级也在变**，盘上没有一本塌成恒等（最窄的头牌也有 0.88~0.96）。
-> `CONTRACTS.md` §4 那张「章级 8/8 全是 1.00」的表量的是**两本已不在盘上的书，复算不了**——
-> 别再引用「章级可能已经塌成恒等」（判据 30：数值一律不采信，现象逐条复算）。
->
-> ### ② `writer_context` 是全链的**收口点**——前三层所有逐章闸门最后都汇到它一份上
->
-> | 闸门 | 挡什么 | 落点 |
-> |---|---|---|
-> | 叫法时点 | 本章原文里还叫不出名字的人 → 整个人不下发 | `_display_names_at`，作用于 `characters` / `present` / `address.who` / `relations` 两端 / `secrets.known_by` |
-> | 秘密揭示章 | 未揭示且非埋点章的 secret → 只留 `secret_id` 进 `must_not_reveal` | `facts.secrets` |
-> | 规则放行章 | 规则点到的人本章还没被指名 → 暂不下发；规则正文含人名 → 判成情节，剔除 | `facts.world_rules` |
-> | 关系剧透闸门 | 承载秘密的关系改按**读者揭示章**开闸（而非世内生效章） | `facts.relations` |
-> | 弧线终点 | `arc_tracks` / `climax` / `ending` **只在末章下发** | `facts.arc` |
-> | setting 逐章闸门 | 转抄式说出未揭示 secret 的句子 → 剔除 | `facts.setting` |
->
-> ⇒ **改任何一条闸门，唯一能看到效果的地方是这份产物。** 校验器查的是产地，
-> 旁路开在下发侧（判据 34）。
->
-> ### ③ `plan ⊊ ctx`，而且是**字节级原样透传**（实测 3/3 本 mismatch 0）
->
-> 章级 5 个字段（`output_ordinal` / `from_source_ordinals` / 三个 goal）× 31 章
-> 与拍级 `budget_chars` × 197 拍，plan 与 ctx **逐值相同，0 处不一致**。
-> 拍级唯一不进 ctx 的是 `from_beats`——它被兑现成 `events[]` / `verbatim[]` / 舞台。
->
-> ⇒ **两处各存一份 goals，手改 plan 而不重建 ctx 就会分家**，这正是 `context_link`（HARD）在盯的事。
-> plan 留在盘上的三个理由（都不在运行时）：付费产物的原件 + 拍映射的耐久记录 ·
-> `_rename_all` 之前的字节 · 人眼审阅的那一份（14~20 KB vs ctx 144~265 KB，约 **7~12%**）。
-> ⚠ **stage7 曾经也读它**（`n9_rename` 拿 `output_ordinal` 算「计划有而成稿无的章」），
-> 而且是 `required=False` ⇒ plan 不在场时那条「缺章」检查**静默变空**。
-> ⇒ **stage7 改读 ctx**（它本来就已经加载了 ctx，那次读取是冗余的），plan 恢复成 0 运行时消费方。
->
-> ### ④ 盘上三本**全部 PASS**——而这句话要连它的基线一起读
->
-> ```
-> 成年人不做选择   PASS（2 条 INFO）
-> 我把夫君捧成头牌 PASS（2 条 INFO）
-> 我三岁嘴强月老   PASS（3 条 INFO）
-> ```
->
-> 上面那三行是**原型**在 17 条判据下跑出来的。12 条 HARD **3/3 全绿，且盘上一个失败样本都没有**；
-> 4 条 INFO 里 3 条有命中（`flat_chapter` / `beat_size` / `verbatim_starved`），`beat_reuse` 全绿。
-> ⇒ PASS 的意思是「结构与预算没有可探测的违约」，**不是**「这份计划分得对」。
->
-> ⚠⚠ **新契约下这句话只对 2/3 本成立，而少掉的那一本正是事实⑤ 本身**（2026-08-12 实跑核实）：
-> `成年人不做选择` 的 `plan_chapters.json` **缺 `_provenance` ⇒ 载体拒收**，
-> 它连被复检的资格都没有——`--check-only` 在那本上必须给一个**显式终态**（`ArtifactUnreadable`），
-> 而不是一份「PASS」。⇒ **不许伪造一份来源账把它变绿**：那样这份产物就再也不会提醒
-> 任何人「0 成本提升路会丢掉来源账」。它在 `tests/corpus.py::MISSING_PROVENANCE` 里登记在案。
-> ⚠ 另一侧相反：`writer_context` **3/3 本都载入得了**，所以 `R-6` 那四条新判据的对账是满的。
->
-> ### ⑤ 先校验后落盘 + `.INVALID`——而**那条提升路会把 `_provenance` 整个丢掉**
->
-> | 情况 | 处置 |
-> |---|---|
-> | 有 `hard` 违规 | 不覆盖现役产物，问题稿存 `plan_chapters.INVALID.json` + 显式终态 |
-> | `.INVALID` 被 `--revalidate` 判合格 | 提升为正式产物 + 重建 `writer_context` + 删掉 `.INVALID` |
->
-> **实测 1/3 本的 `plan_chapters.json` 根本没有 `_provenance`**——它就是走这条路上来的。
-> 三处根因串成一条：① 落盘闸门的失败支用**裸 `json.dump`** 写 `.INVALID`，绕过 `save_json`
-> ⇒ 那份稿从来就没有 `_provenance`；② `--revalidate` 调 `save_json` 时**没传 `prov=`**；
-> ③ 代码注释写着「来源信息沿用原稿里那一份」——而 ① 保证了原稿里没有那一份。
-> **连带故障**：`--revalidate` 先读 `.INVALID` 再删掉它，于是 ctx 的 `inputs` 里留下一条
-> `stage4/plan_chapters.INVALID.json`，**指向一个已被删除的文件**，
-> 而 `stale_inputs` 对取不到指纹的条目**静默跳过**——它既不报错也不报「不知道」。
-> ⇒ 已落成 `R-5.10`（`.INVALID` 也带来源 · `--revalidate` 显式传 `prov` + 记 `revalidated`·
-> `_provenance` 缺失必须出声 · 取不到指纹的 `inputs` 条目要报出来）。
-
----
-
-## 一、`plan_chapters.json`
-
-顶层 **3 个键**。全书一次调用；结构化调用点声明的必需顶层键 =
-`reconstruction_strategy` · `output_chapters`——**这是完整的**（`_provenance` 是代码写的，不归调用点管）。
-
-| 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
-|---|---|---|---|---|
-| `reconstruction_strategy` | `str` | 是 | 全书重构意图，一段话。**在必需键里**。盘上长度 80~238 | **三源** |
-| `output_chapters` | `obj[]` | 是 | 长度 = 源章数（8~14）。**在必需键里** | **三源** |
-| `_provenance` | `obj` | 是 | 见 §三。⚠ **盘上只有 2/3**——缺的那本走的是 `.INVALID` 提升路（事实 ⑤）。「必填」在这里是**契约**，不是盘上的实况 | **⚠冲突** |
-
-⚠ **已裁撤（存量产物里还有，重跑后消失）**：
-
-| 字段 | 为什么裁 | 消费方怎么办 |
-|---|---|---|
-| `title` · `source_id` | 书名 = 目录名、`source_id` = 目录名后缀，0 成本现算 | Web 的兜底显示改现算（`title_of` / `derive_source_meta`） |
-| `beats[].plan_beat` | **0 读者** + 盘上 197/197 恒等于 `p{output_ordinal:02d}_{本拍序号:02d}` ⇒ 可现算。⚠ **响应里仍然必需**，见 §1.2 | — |
-| `output_chapters[].op` | **一个常量伪装成的字段**（恒 `keep`），暗示着一种从不存在的「按章变化」。它的「消费方」读的是它恒等于的那个常量，不是它本身 | `budget_band` 取 `OP_BAND[LOCKED_OP]`；写作 prompt 那句「篇幅方式：keep …」**跨章跨书逐字节相同** ⇒ 搬进 **system prompt** 从 `LOCKED_OP` / `OP_SEMANTICS` 插值 |
-| `_provenance.op_forced` | 它记的是**初始化**不是改写（盘上 17/17 全是「本来是空的」） | 模型越界产 `op` 由**响应侧 `extra='forbid'`** 当场挡回 |
-
-> #### ⚠ 删 `op` 连带消灭一条静默分支
-> `budget_band` 里 `op not in OP_BAND → continue` 那条**静默跳过整章**的分支
-> 随字段一起消失（不是「变得不可达」）。⚠ 同一个函数里**另有一条静默 `continue` 仍在**
-> （本章一个 int 预算都没有）——移植时改成与「基准残缺」那条**同规格的 `unver` 结论**。
-> ⚠ **解锁 `op` 那天要一起放回来**：字段 · **`op_enum` 与 `book_budget` 两条判据**（都在退役表里，
-> 都是因为 `op` 恒为 `keep` 才变成恒真的）· 上面那条 `continue`。
-> 解锁本身的落点是 `contracts/invariants.py` 的 `OPS` / `OP_BAND` / `LOCKED_OP`，
-> **不需要每章存一份**。
-
-### 1.1 `output_chapters[]`
-
-| 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
-|---|---|---|---|---|
-| `output_ordinal` | `int` | 是 | 1..N 连续。**[HARD]** 且 **[HARD] 恒等于 `from_source_ordinals[0]`** | **三源** |
-| `from_source_ordinals` | `int[]` | 是 | **[HARD] 长度恒为 1**（禁合并/重排/删章/拆分四条禁令的合取式） | **三源** |
-| `chapter_goal` | `str` | 是 | 一句话：这一章要达成什么。盘上长度 30~70 | **三源** |
-| `open_hook_goal` | `str` | 是 | 开篇要达到什么。盘上 20~42 | **三源** |
-| `end_hook_goal` | `str` | 是 | 结尾要达到什么（未到结局不提前泄底）。盘上 19~64 | **三源** |
-| `beats` | `obj[]` | 是 | **[HARD] 非空**。长度 3~13，条数与顺序照骨架切好的拍 | **三源** |
-
-> 三个 goal **[HARD] 不含 `STYLE_WORDS`**（15 个纯写法词）。
-> 判 `HARD` 而不是 `INFO` 的理由是「挡下来不需要再付费」：落 `.INVALID` 后手改那一行、
-> `--revalidate` 提升即可。
-> ⚠ 放行的代价是实测的——旧口径下两本共 5 处命中（「张力」×4、「意象」×1）**全在 goal 里**，
-> 全部 INFO 放行、一路进了写手 prompt。**盘上现在这三本 0 处命中。**
-
-> ⚠ **产地的一条后置条件**：`output_chapters` 为空时**先单独说一句**
-> 「这份计划里一个输出章都没有」，**不摊成 N 条「这一拍没有给预算」**——
-> 实测那一次 74 条派生症状盖住了一句话就能说清的事实，
-> 而症状的文案指向的是**另一个根因**（判据 32/39）。
-
-### 1.2 `output_chapters[].beats[]`
-
-**2 个键。**
-
-| 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
-|---|---|---|---|---|
-| `budget_chars` | `int` | 是 | **[HARD] 正整数**。**这是模型在拍这一层唯一的产出**。盘上 15~720 | **三源** |
-| `from_beats` | `str[]` | 是 | 引用 stage2 的 `beat_id`（形如 `b01_02`）。长度 1~3。<br>**代码写的**：`expand_plan_beats` 按模型给的 `plan_beat` 换回，模型不产它 | **三源** |
-
-> #### ⚠ `plan_beat` 已裁撤，但它在【响应】里仍然必需——两件事别混
->
-> | 阶段 | `plan_beat` |
-> |---|---|
-> | 模型的响应 | **必需**。它是模型给这一拍分预算时唯一的抓手（`pNN_NN`，照抄我们给的编号） |
-> | `expand_plan_beats` | **必需**。三种违约（编号不存在 / 少给一拍 / 重复引用）一律显式终态，**无兜底** |
-> | **落盘** | **pop 掉，不进产物** |
->
-> ⚠ **裁掉它不必记账**：它的值是一个**可复算的纯函数**，丢的不是证据，是一份抄件。
-> 判据 24 要记账的是**原值再也查不出来**的那一类（`setup_chapters` 裁剪、`address` 回取）。
-
-> #### `from_beats` 上挂着五条 [HARD]，其中三条是**后置条件**不是叮嘱
->
-> | 判据 | 查什么 |
-> |---|---|
-> | `beat_ref` | 引用存在，且属于本输出章的源章 |
-> | `beat_coverage` | **每个源 beat 都被某一拍覆盖**（压缩靠调低预算，不靠丢内容） |
-> | `beat_seq` | 章内展平后与源序一致 |
-> | `beat_adjacent` | 每一拍是源序上的一段**连续区间** |
-> | `beat_layer` | 一拍内 `time_layer` 恒定 |
->
-> 后三条从前只写在 `N4_SYS` 里、代码里一个门都没有，**实测盘上三条全被违反过**
-> （重排 · 跳过中间那条并两头 · hearsay+present 并成一拍）。拍改成代码切之后，
-> 它们成了 `group_beats` 的后置条件：**红了只有两种可能——产物是旧的，或 `group_beats` 坏了**。
-> ⇒ 它们**不是**「保证会亮的绿灯」（判据 31 要问的是有没有失败样本，而它们有）。
-
----
-
-## 二、`writer_context.json`
-
-顶层 **3 个键**。**确定性组装，无 LLM 参与** ⇒ `_provenance` 里没有 `prompts` / `model`。
-
-| 字段 | 类型 | 必填 | 内容 | 证据 |
-|---|---|---|---|---|
-| `world_facts` | `obj` | 是 | `{characters}`。**只剩这一个键**——`setting` 已收编进逐章、`license` 已归位 prompt 层 | **三源** |
-| `chapters` | `obj[]` | 是 | 长度 = 输出章数 | **三源** |
-| `_provenance` | `obj` | 是 | 见 §三 | **三源** |
-
-⚠ **已裁撤（存量产物里还有，重跑后消失）**：
-
-| 字段 | 为什么裁 | 消费方怎么办 |
-|---|---|---|
-| `title` | ⚠ 它**有一个货真价实的 LLM 消费方**（写手 prompt 第一行 `《书名》`），裁它的理由只有一条：**存的那份不可信**（实测写成了数字 id），产地为此在每个落盘点都重认一次目录 | 改 `title_of(novel_dir)`——`stage5_review` 与 stage6 早就是这么做的。**裁掉的是一份不被信任的副本，不是那条信息** |
-| `source_id` | = 目录名后缀，0 成本现算 | `derive_source_meta` |
-| `reconstruction_strategy` | **0 读者**：写作节点与文案节点都**明确拒收**它（它必然携带弧线终点，写 ch1 的闭卷写手会因此已知结局），界面读的是 plan 那份。<br>⚠ 它躺在「写作节点的唯一输入」里而下游明确拒收 = 闸门开在**渲染侧**不在**产物侧**（`R-6.9`）——换个组装器、或有人图省事整份 dump 一把，它立刻就漏出去 | 留在 `plan_chapters` |
-| `book`（`{beat_density}`） | 唯一读者是界面显示，而那个值只吃 stage1+stage2、0 成本现算；产地那个取数函数已是全仓 0 调用方的死函数。⚠ 删死函数时**保留它 docstring 里「为什么不喂给写手」那段论证**（那段没有第二个落点） | 界面现算。**`book` 整个键随之消失**（它只有这一个子键） |
-
-> ⚠ **这四条对【前端契约】零影响**：`docs/design_brief/05_samples/stage4_ch3.json` 里
-> `title` / `source_id` / `book.beat_density` 都在 API 响应里——**API 的形状不变，只是值改为现算**。
-> 19 份样本一份都不用重生成。
-
-### 2.1 `world_facts.characters{<char_id>}` —— 书级名册，**给确定性代码用**
-
-盘上 75 个（= stage2 registry 全量，不做章级收窄）。
-
-| 字段 | 类型 | 必填 | 说明 | 证据 |
-|---|---|---|---|---|
-| `display_name` | `str` | 是 | **原文里有据**的叫法。`canonical` 查不到就退回出现最多的 `address.surface`；一个都没有则**显式终态**。盘上长度 1~8 | **三源** |
-| `role` | `str` | 是 | 静态身份。**`fate` 一概不下发**（写手提前知道谁最后会死，第 1 章的伏笔就写过明）。盘上 9~106 | **三源** |
-| `name_distinctiveness` | `str` | 是 | `high｜medium｜common`。**只给确定性代码**（成稿人名检查的左锚 / stage3 专名过滤），由 `writer_chars` 在组 prompt 时投影掉 | **三源** |
-
-> **这一块与 `chapters[].characters` 的分工，是判据 16 的教科书实例**：
-> 同一批人物，**书级这份给代码、章级那份给模型**。
-> 「避免逐章复制 20+ 人的名册」这条老理由在章级投影之后不成立了——
-> 实测某本 ch1 投影后只剩 2 人，**比全书 12 人更小**。它现在存在的理由只剩「代码要全量」。
-
-### 2.2 `chapters[]`
-
-| 字段 | 类型 | 必填 | 内容 / 盘上范围 | 证据 |
-|---|---|---|---|---|
-| `output_ordinal` · `from_source_ordinals` · 三个 goal | — | 是 | **原样透传自 plan**（实测 mismatch 0） | **三源** |
-| `budget_chars` | `int｜null` | 是（键恒在） | 本章各拍预算之和（写手不必自己加）。⚠ **`sum(...) or None`：和为 0 时是 `null`**。盘上 380~1960，31/31 与逐拍之和一致 | **盘·码** |
-| `source_chars` | `int` | 是 | 源章真实字数（`len(整章文本)`，**含空白**）。盘上 408~1963。<br>⚠ 与 `budget_band` 判据用的基准**不是同一个口径**（那边用 span 合计，约占正文 97%），见下 | **三源** |
-| `beats` | `obj[]` | 是 | 见 §2.3 | **三源** |
-| `characters` | `obj` | 是 | `{char_id: {display_name, role}}`，**章级收窄**。盘上 31 章合计 518 项。消费方：stage5 写手 + **stage6 文案 roster** | **三源** |
-| `narration` | `obj[]` | 是 | 见 §2.5。盘上长度恒 1 | **三源** |
-| `facts` | `obj` | 是 | 见 §2.4 | **三源** |
-| `must_not_reveal` | `str[]` | 是 | 本章不许泄的 `secret_id`。**只给 id 不给内容**——写手看不到内容才不会写出来；它服务的是**回写校验**，组 prompt 时不下发。盘上 0~8，非空章 13/14 · 5/8 · 7/9 | **三源** |
-
-> #### ⚠ `source_chars` 在同一份产物里有**两个口径**，不许拿它们做相等断言
->
-> | 落点 | 口径 | 用途 |
-> |---|---|---|
-> | `chapters[].source_chars` | `len(整章文本)`，**含空白** | 写手 prompt 里的「原章对应部分 N 字」 |
-> | `budget_band` 判据的基准 | **span 合计**（约占正文 97%） | 逐章预算区间 |
-> | `chapters[].beats[].source_chars` | span 合计（逐拍） | 界面 / 拍级 ratio |
->
-> **两者都是对的，但它们不是同一个数**——`chapters[].source_chars` 与 `sum(beats[].source_chars)`
-> **不相等是正常的**。产地已经踩过这个坑一次：预算区间校验曾用整章字数作基准，
-> 而规划器拿到的是 span 合计，于是一份合格的计划被判 `INVALID`
-> （那次靠 `--revalidate` 0 成本救回，没有重新付费）。
-
-### 2.3 `chapters[].beats[]` —— 写手真正落笔的单位
-
-| 字段 | 类型 | 必填 | 内容 / 盘上范围 | 证据 |
-|---|---|---|---|---|
-| `events` | `str[]` | 是 | **按 `from_beats` 逐条取 stage2 的 `event` 原件**，顺序同 `from_beats`，**不合并成散文**。长度 1~3，单条 13~175 字。⚠ **一条 event 都解析不出 ⇒ 显式终态、不落盘** | **三源** |
-| `budget_chars` | `int` | 是 | 透传自 plan（`budget_int` HARD 保证是正整数）。盘上 15~720。<br>⚠ 恒等基线那条路（`--identity-plan`）算不出源字数时会给 `null`，但它落的是**另一个文件名** | **三源** |
-| `source_chars` | `int｜null` | 是（键恒在） | 所引源 beat 的 span 字数之和。**算不出保持 `null`，不估算、不拿邻居补**。盘上 197/197 有值 | **三源** |
-| `time_layer` | `str` | **否** | `present｜recall｜hearsay`。**同层同地时才平铺**，否则走 `segments`。盘上 169/197 | **三源** |
-| `place` | `str` | **否** | 同上。盘上 141/197，长度 2~10 | **三源** |
-| `present` | `str[]` | **否** | 在场者**人名**（不是 char_id）。本章还叫不出名字的**剔除而不兜底**。盘上 152/197，长度 1~7 | **三源** |
-| `segments` | `obj[]` | **否** | 跨地时的子结构：`{time_layer, place, present[]}`。**不取并集**。盘上 28/197，长度 2~3 | **三源** |
-| `verbatim` | `str[]` | **否** | 原文原话，**逐字写入**。盘上 137/197，共 177 条，单条 3~65 字 | **三源** |
-| `keep_value` | `str[]` | **否** | 硬数字，**值必须保住、措辞可动**。盘上 39/197，共 61 条 | **三源** |
-| `must_appear` | `str[]` | **否** | 物件，**必须在场并起作用、描写可变**。盘上 27/197，共 30 条 | **三源** |
-| `must_hold` | `str[]` | **否** | 因果前提，**命题必须成立、不必出现在文面**。盘上 24/197，共 27 条 | **三源** |
-
-> #### 四组保真材料**守的是不同的维度**，不是「守多少」的四档
-> 全塞进一个叫 `verbatim` 的数组，写手会把「因果前提」也当成必须逐字出现的句子，硬塞背景交代。
-> 映射表 `HINGE_GROUP` 的 key **必须与 stage2 的 `HINGE_KINDS` 逐字一致**（模块加载时断言）。
-> ⚠ **未知 kind 丢弃 + 告警，不许兜底**：曾经是 `HINGE_GROUP.get(kind, 'verbatim')`，
-> 于是模型自造的 kind（「行动描述」）被升级成「原样写入、一个字不能改」——
-> 而那是一句叙述文，正是判据 2 禁止的「把段当点发」。
->
-> #### 跨段落的 hinge 必须**按段落边界拆成独立的点**
-> 一条 55 字、跨 `\n\n` 捆着两三句的「要害台词」**就是一个段**——
-> 写手要么连原文段落结构一起复现、要么整组放弃，实测它选后者（某章 4 条跨段 verbatim 一条不剩地全丢）。
-> 拆分实现（`verbatim_pieces`）与喂给规划器的「逐字 N」量纲表**共用同一份**——
-> 两边各写一份，报给规划者的数就与写手实际收到的字节对不上（判据 14）。
-
-### 2.4 `chapters[].facts` —— 六块，全部逐章投影
-
-| 字段 | 类型 | 必填 | 内容 / 盘上 | 证据 |
-|---|---|---|---|---|
-| `setting` | `obj` | 是 | 两个**中文键**：`世界观` · `时代背景`。逐章闸门只挡**转抄式**泄底 | **三源** |
-| `relations[]` | `obj` | 是 | `{subject, predicate, object}`，**两端都是人名**；一端叫不出名字则整条不发。盘上 1~32 条/章，共 359 | **三源** |
-| `secrets[]` | `obj` | 是 | `{secret_id, fact, known_by[], reader_knows_by_now}`。盘上 0~10 条/章，共 114 | **三源** |
-| `world_rules[]` | `obj` | 是 | `{rule_id, kind, description}`。正文唯一落点是 `versions[].desc`（**无兜底，缺失即显式终态**）。盘上 1~6 条/章，共 87 | **三源** |
-| `arc` | `obj` | 是 | 非末章只有 `current_stage{stage, chapters[]}`；**末章**另加 `arc_tracks[]` · `climax` · `ending`。盘上 3/31 章是末章 | **三源** |
-| `address[]` | `obj` | 是 | `{who, surface, by, context}`，按 `from_chapter <= o` 开闸。`by` 可为 `null`（本章叫不出名字的 char_id 不发裸编号）。盘上 5~82 条/章，共 1007，`by=null` **1 条** | **三源** |
-
-> **`reader_knows_by_now` 是唯一的标志位**，`stage5_common` 就按它分两组：
-> `true` = 读者已知情、可以正面写；`false` = 本章是**埋点章**，事实要摆在读者眼前但**绝不能点破**。
-> ⚠ 曾并排落盘的 `is_setup_chapter` 已删——无人读，且在揭示章上会与它同时为真（一对自相矛盾的标志）。
->
-> ⚠ **`current_stage` 只给阶段名与跨度，不给 `summary`**：阶段摘要描述的是整个阶段的经过，
-> 必然含本阶段后几章才发生的结果（实测 ch16 拿到的摘要写着 ch20 才发生的事）。
->
-> ⚠ **非末章一律不发 `arc_tracks`**：剥掉 `trajectory` 剩下的 `{char_001, 道德底线, deterioration}`
-> 对写手是零信息，不剥就是结局。两头不讨好，所以整块不发。
->
-> ⚠ **`facts` 是【整份 dict 铺进 prompt】的**（`stage5_common.facts_block` 做 `compact(f)`）：
-> `current_stage` / `relations` / `world_rules` / `address` / `arc` 全部逐条进了模型的注意力，
-> **键名只是从不字面出现**。拿 grep 审这一块，默认结论是错的。
-
-### 2.5 `chapters[].narration[]`
-
-| 字段 | 类型 | 必填 | 内容 / 盘上 | 证据 |
-|---|---|---|---|---|
-| `segment` | `str` | 是 | **位置标签**，不是段落边界描述：`全章`（单段）或 `第N段（共M段，按顺序写）`。⚠ 盘上 31/31 恒为 `全章` | **三源** |
-| `grammatical_person` | `str` | 是 | `first｜second｜third`。盘上 31/31 恒 `first` | **三源** |
-| `narrator` | `str` | **否** | 叙述者**人名**（不是 char_id）。叫不出名字就**不写这个键**。盘上 27/31 | **盘·码** |
-| `focalizer` | `str` | **否** | 视点人物，**只在与 narrator 不同时才写**。⚠ **盘上 0/31，零样本** | **契·码** |
-| `pronoun_surfaces` | `str[]` | **否** | 自称/指称字面（`我`…）。盘上 31/31，恒长度 1 | **盘·码** |
-
-> #### `segment` 为什么是位置标签而不是原样透传
-> stage2 的 `segment` 是给人和工具看的界标，里面**常原样引用原文**当分界
-> （「正文主体（直至"……沉重的呼吸声"）」）——那对闭卷写手就是原文泄漏，
-> 而且泄的往往正是本章的末句。写手真正需要的只是「本章分几段、各段谁在说、什么顺序」。
->
-> #### 叫不出名字时**不写键**，而不是兜底成 `char_id`
-> 第一人称书的第 1 章正是这种情况（主角原文通篇写「我」）。
-> 写手要的东西 `grammatical_person` + `pronoun_surfaces` 已经给全了——
-> 「用第一人称、自称『我』」本来就不需要知道他叫什么。
-
----
-
-## 三、`_provenance`
-
-四个跨产物共有的键（`prompts` / `model` / `code` / `inputs`）留给 `_common.md`。
-
-### 3.1 `plan_chapters._provenance`
-
-| 键 | 类型 | 必填 | 内容 | 证据 |
-|---|---|---|---|---|
-| `prompts.N4_SYS` | `str` | 是 | 指纹 | **盘·码** |
-| `model` | `str` | 是 | 盘上恒 `deepseek-v4-pro` | **盘·码** |
-| `inputs` | `obj` | 是 | 恒三条：`stage1/main_text.json` · `stage2/global_grounding.json` · `stage2/chapter_blueprints.json` | **盘·码** |
-| `params` | `obj` | 是 | `{grouping, beat_min_chars, plan_beats}`。盘上恒 `{absorb-small-v1, 80, 57~73}` | **盘·码** |
-| `revalidated` | `bool` | **否** | 这份稿是被 `--revalidate` 提升上来的。⚠ **`False` 与「键不在」不是一回事**（`Q-2` 的三态）。照抄 `stage3.md` §五 | **设计** |
-
-> #### ⚠ `params` 记了，**但全仓没有一个读者**
->
-> 它落地的理由写得很清楚：「不记阈值与算法版本，『这份计划的拍是照哪一套切的』在改过阈值之后
-> 就无从判断」。**而 `beat_seq` / `beat_adjacent` / `beat_layer` 三条 HARD 是拿【当前】的
-> `group_beats` 去量的，从不读这三个值**——也就是说，这三条判据**每一次都在「拿新尺子量旧布」**，
-> 而那个字段本来就是为了让人发现这件事才存在的（判据 28）。
->
-> ⇒ `R-5.11`：三条后置条件判据在开跑前先比一次 `params`；对不上就先说
-> 「这是跨版本比较」，再报判定。**参数缺失记作「不知道」，不是「匹配」。**
-
-### 3.2 `writer_context._provenance`
-
-**没有 `prompts`、没有 `model`**——确定性组装，全部内容由上游 + 代码决定。
-
-| 键 | 类型 | 必填 | 内容 | 证据 |
-|---|---|---|---|---|
-| `code` | `str` | 是 | git 短 sha | **盘·码** |
-| `inputs` | `obj` | 是 | 四条：stage1 正文 · stage2 两份 · **`stage4/plan_chapters.json`**（同进程内 `track=True` 记的唯一一条边） | **三源** |
-
-> **`stage4/plan_chapters.json` 这条边是全仓唯一的一处 `track=True`**，它存在的理由就是
-> `context_link`（HARD）那个问题：「写手手里这份 ctx，是不是照盘上这份计划组的」。
-> 代价已经付过一次：某轮 23 章成稿与盘上任何一版 `writer_context` 都配不上（匹配 1/23），
-> 产出它的那份已被 `--context-only` 覆盖，配对关系**永久丢失**。
-
-### 3.3 ★ 记账键的**出口** —— 校验报告里**一个都没有**
-
-按 `Q-1` 的规则（细则见 `stage2.md` §3.3）逐条查：实跑三本 `--check-only`，
-报告里 `params` 一行都没有，`_provenance` 三个字也没出现过。
-
-| 键 | 它回答的问题 | 出口（2026-08-12 · F3-0 定） |
-|---|---|---|
-| `params` | **这份计划的拍是照哪一套阈值切的？** | 度量 `plan_params` 一行常驻（`R-5.11`）+ 提示 `params_drift`：三条后置条件判据**先比它再判**（`R-5.11b`） |
-| `revalidated` | **这份稿是跑出来的，还是被重判提升上来的？** | `ACCOUNTING['stage4']` 的一行（同 stage3/6/7），报告的记账那一节 |
-| `inputs`（本份产物） | **这份计划是照盘上现在这份上游产的吗？** | 报告第一节恒是它（`novel/prov.py::FreshnessReport`），取不到指纹的边由 `ghosts` 逐条点名（`R-5.10`） |
-| `inputs`（**另一份产物**） | **写手手里那份上下文呢？** | 度量 `ctx_source` 一行常驻（`R-5.10c`）——报告第一节只覆盖被复检的那一份，**另一份要另有一行** |
-
-**三条形式要求照抄 `stage2.md` §3.3**：空也要报 · 一行常驻非空才展开 · 出口在校验报告不在 stdout。
-
-⚠ **`gates_skipped` 也要声明**（同 stage3/6/7）：「阻断级判据当时没跑成」与「跑过没事」
-是 `Q-2` 要求必须能区分的两件事。⚠ **`partial_rewrite` 刻意不声明**：本层没有一条 0 成本路
-会把计划改成混版的——`--identity` 写的是**另一份文件**、`--apply-edit` 落的是**新一轮**。
-声明一个结构上永远记不上的键，只会让报告上恒挂一行 `[????] 未记录`。
-
-> ⚠ **「界面上能看到」不算出口。** Web 的 stage4 页确实把 `_provenance` / `_ctx_provenance`
-> 整块原样传给前端（`docs/design_brief/05_samples/stage4_ch3.json` 里能看到 `params` 一份），
-> 但那是**原始记账 blob**，不是 `Q-1` 要的那一行结论——而且 brief 的 13 屏清单里
-> **一个字都没说这块要怎么渲染**（全文 0 处提到 `_provenance`）。
-> 一份没人负责渲染的 blob 与没记过，在人眼里同形。
-
----
-
-## 四、判据清单（**唯一落点**，四个消费方共用）
-
-落盘闸门 / `check_one` / `--check-only` / `--revalidate` 都读同一张判据表，谁也不许再抄一份。
-**24 条现役** = 16 HARD + 5 INFO + 3 度量。外加 **10 条退役**。
-
-> ⚠ **这张表 2026-08-12（F3-0）从 16 条改到 24 条**，每一处增删都有账，见表下那三段。
-> 原型那 17 条里有 **7 条今天注册不进来**（落点写着 `Q-4`/`Q-9`、写着「无守卫 → `B-17`」、
-> 或者需求格干脆是 `—`），落点账已在 `docs/BACKEND_CONTRACT.md` 的 `R-5` / `R-6` 两节平掉。
-
-| 判据 | 级别 | 查什么 | 对应需求 | 盘上 3 本 |
-|---|---|---|---|---|
-| `one_to_one` | **HARD** | 一章对一章（禁合并/重排/删章/拆分的合取式） | `R-5.2` | 3/3 PASS（31 章） |
-| `ordinal_seq` | **HARD** | `output_ordinal` 1..N 连续 | `R-5.1` | 3/3 PASS |
-| `empty_chapter` | **HARD** | 每个输出章都有 beats | `R-5.7` | 3/3 PASS |
-| `beat_coverage` | **HARD** | 源 beat 全覆盖 | `R-5.2` | 3/3 PASS（251/251） |
-| `beat_ref` | **HARD** | `from_beats` 引用有效且属本章 | `R-5.5` | 3/3 PASS（251 个引用） |
-| `beat_seq` | **HARD** | 章内拍序与源序一致 | `R-5.6` | 3/3 PASS |
-| `beat_adjacent` | **HARD** | 每一拍只并相邻的源拍 | `R-5.6` | 3/3 PASS（197 拍） |
-| `beat_layer` | **HARD** | 每一拍只并同一叙述层 | `R-5.6` | 3/3 PASS（197 拍） |
-| `budget_int` | **HARD** | `budget_chars` 为正整数 | `R-5.7` | 3/3 PASS（197 拍） |
-| `budget_band` | **HARD** | 逐章 `sum(budget)` 落在 `OP_BAND[LOCKED_OP]` × span 合计。**没有第二次宽限**。⚠ 带一条 `unver` 臂（基准残缺就不判这一章） | **`R-5.3b`** | 3/3 PASS（严格带下也是），源字数覆盖率 100% ⇒ **`unver` 臂零样本** |
-| `context_link` | **HARD** | `writer_context` 照的是盘上这份计划。四态 `ok`/`stale`/`unknown`/`missing`，**后两个走 `unver` 不走 `hit`** | **`R-5.10b`** | 3/3 `ok` |
-| `style_words` | **HARD** | 15 个写法词扫遍 `reconstruction_strategy` + 全部章级字段 | `R-5.4` | 0 处命中（`baseline`：旧口径两本共 **5 处**，「张力」×4 +「意象」×1，全在 goal 里） |
-| **`ctx_events_verbatim`** | **HARD** | `events[]` 逐条 == stage2 的 `event` 原件，顺序同 `from_beats` | `R-6.1` | **本轮新建**（原型这份产物 0 判据） |
-| **`ctx_name_attested`** | **HARD** | `display_name` / `present[]` / `narration[].narrator` 在**本章为止**的原文里有据 | `R-6.2` | **本轮新建** |
-| **`ctx_secret_gate`** | **HARD** | 下发的每条秘密：读者已知情 **或** 本章是埋点章 | `R-6.3` | **本轮新建** |
-| **`ctx_layer_flat`** | **HARD** | 一拍要么平铺 `time_layer`/`place`/`present`、要么走 `segments`，**互斥且不取并集** | `R-6.4` | **本轮新建** |
-| `flat_chapter` | INFO | 章内各拍字数有轻重（最长拍 ≥2× 最短拍） | **`R-5.9b`** | 命中 2 章 · 1 章 · 0 |
-| `beat_size` | INFO | 每拍字数落在 50~300（`BEAT_ALERT`） | **`R-5.9b`** | `>300` 4·2·4 章；`<50` 三岁 1 章 |
-| `beat_reuse` | INFO | 同一源 beat 只被一拍引用 | **`R-5.12`** | 0 处命中 |
-| `verbatim_starved` | INFO | 拍预算 ≥ 2× 必须逐字写入的原话字数 | **`R-5.13`** | 三岁 1 处（60 字原话 / 65 字预算 = **92%**） |
-| **`params_drift`** | INFO | 三条后置条件判据开跑前先比一次 `params`；**参数缺失 ⇒ `unver`，不是「匹配」** | **`R-5.11b`** | **本轮新建**（`R-5.11` 的兑现） |
-| `verbatim_share` | **〔度量〕** | 原话占预算的分布，**无条件报出** | **`R-5.14`** | 51/67 中位 8% p90 19% max 44%<br>41/57 中位 11% p90 23% max 28%<br>45/73 中位 14% p90 35% **max 92%** |
-| **`plan_params`** | **〔度量〕** | 这份计划的拍是照哪一套阈值切的，**无条件报出** | **`R-5.11`** | 恒 `{absorb-small-v1, 80, 57~73}` |
-| **`ctx_source`** | **〔度量〕** | `writer_context` 那一份的来源账，**无条件报出（空也要报）** | **`R-5.10c`** | **本轮新建** |
-
-### ⚠ 与原型那 17 条的三处增删，每一处都有账
-
-**① `op_enum` 退役**（不是「裁撤」）。它随 `op` 字段一起变成恒真，而**恒真的判据会照常输出
-一个看起来正常的「没问题」**。⚠ 它与 `book_budget` 是**同因同果**（都因 `op` 锁 `keep` 而恒真），
-而那一条早就在退役表里 —— 把这一条写成「裁撤」、那一条写成「退役」是**措辞不一致**：
-一条不带标注的消失，读的人会以为忘了查。⇒ 退役表 9 → **10**。
-
-**② `R-6` 那一侧从「一条判据都没有」改成【四条后置条件判据】**（2026-08-12 用户裁决）。
-~~`writer_context` 这份产物本身，一条落盘后的判据都没有~~ —— 那句话曾经是这份文档的结论，
-现在只对 `R-6.5` / `R-6.6` 成立。改的理由是本仓自己的先例：
-`beat_seq` / `beat_adjacent` / `beat_layer` 也是**分组函数的后置条件**而不是对模型的叮嘱，
-它们留在表里的理由写得清清楚楚 ——「**改坏 `group_beats` 时要有人出声**」。
-而组装器比分组函数大一个数量级、带 §五 那六道逐章闸，**今天它一条报告行都不产**。
-⇒ 同一条理由在这里更强。完整裁决记录在 `docs/BACKEND_CONTRACT.md` 的 `R-6` 节。
-⚠ **`R-6.5` / `R-6.6` 仍然没有判据**（改判 `结构`）：前者的判别力已被 `R-6.7` 量死
-（字面子串包含，命中 0/8 含一条已知真泄漏），后者说的是一条**盘点方法**、没有可判定的产物形态。
-
-**③ 三条记账键第一次有出口**（`R-5.10c` / `R-5.11` 的兑现，见 §3.3 那张表）：
-`plan_params` · `ctx_source` 两条度量 + `params_drift` 一条提示。
-⚠ 度量**不是**告警：它们无条件产出读数，`status` 恒 `ok`、永不命中（判据 21）。
-
-### ⚠ 由这张表推出的一条结构性质：**stage4 的徽章可以是 `pass`**
-
-全表**没有一条 `sev='unver'` 的判据**——`budget_band` 的基准残缺、`context_link` 的
-`unknown`/`missing`、`params_drift` 的参数缺失都是**产出层的 `unver` 臂**，不是判据的级别。
-而 `badge_of` 只在见到 `unver` **产出**时才压到 amber。
-⇒ 盘上基准全齐、`context_link` 全 `ok` 的那两本，**徽章预测是 `pass`**。
-⚠ **这与 stage6 / stage7 相反**：那两层各有 8 / 7 条常驻 `unver`，
-「结构上永远不可能是 `pass`」。三层放在一起才说得清 amber 到底在说什么。
-
-**10 条退役判据**（`RETIRED`，随每份报告常驻列出名字 + 指回理由全文）：
-`causal_beat_cut` · `foreshadow_cut` · `reveal_reordered` · `causal_beat_uncovered` · `split_misplaced` ·
-`causal_beat_unknown` · `causal_beat_starved` · `book_budget` · `gate1_semantic` · **`op_enum`**。
-
-> #### ⚠ 判据与载体的分界线：**按失败成本划，不是按「类型表达得了吗」划**
->
-> | | 失败处理 |
-> |---|---|
-> | **载体拒收** | 整份响应作废 ⇒ 进重试阶梯 ⇒ **再花一次钱** |
-> | **判据拦下** | 落 `.INVALID` ⇒ 人手改那一行 ⇒ `--revalidate` 提升 ⇒ **0 成本**（`Q-3`/`Q-5`） |
->
-> 所以要问三层，不是一层：
->
-> | 问 | 答 | 归谁 |
-> |---|---|---|
-> | ① 类型表达得了吗？ | **表达不了**（`beat_seq` / `beat_adjacent` / `beat_layer` 要 stage2 的 beat 顺序；`beat_coverage` / `beat_ref` / `budget_band` 跨产物） | **判据** |
-> | ② 表达得了 —— 这个字段**谁写的**？ | **代码写的** | **载体**。拒收＝代码 bug，与重跑成本无关。<br>⚠ 但先问一句「**它恒等于一个常量吗**」——是的话该做的是**删字段**，不是给它一个类型 |
-> | ③ 模型写的 —— **拒收的代价是什么**？ | **人手改一个数就能救**（`budget_int` 的某一拍写成 0 · `style_words` 命中一个词） | **判据**。归载体等于把一次 0 成本手改变成一次付费重试 |
-> | | **整份响应本身就坏了、留着也没用**（`extra='forbid'`：模型产了我们没要的键 ⇒ prompt 漂了） | **载体**。而且要**在生成下一章之前**就停住 |
->
-> ⇒ 本层**一条判据都没有真的上移**。**`budget_int` / `style_words` 留在判据层不动**——
-> 它们守的东西一模一样可以用类型表达，但那样做会**把一条 0 成本出路换成一次付费重试**。
-
-> #### 四条设计要点，都值得照抄
->
-> **① `budget_band` 有一条 `unver` 臂：基准残缺就不判这一章。**
-> 某些拍没有 span 时，这一章的源字数**偏小却仍然存在**——拿它去判会把合格的计划判成不合格，
-> 而报告里看不出基准是残缺的（判据 7/14）。⚠ **盘上 3/3 本覆盖率 100%，这条臂零样本。**
-> ⚠ 报告那一行 `budget_band：N/M 章逐章比过` 的 `N` 取自 **span 覆盖率，不是真正判过的章数**——
-> 移植时要改。
->
-> **② `context_link` 只在【复检】时跑，落盘那一刻不跑。**
-> 落盘时 ctx 是紧接着用这份计划组出来的，必然对得上——一条永远不会红的检查不该打 `[OK]`。
-> 它四态：`ok` / `stale`（照的是另一版计划）/ `unknown`（没记这条边）/ `missing`（ctx 不在场）。
->
-> **③ `.INVALID` 在场时报一条 INFO 并给 `fix`**（`--revalidate`，0 成本）。
-> 「上一次跑被闸门拦下」这件事留着不说等于静默：盘上那份计划可能是更早的一版。
-> ⚠ **移植时它【不是】一条判据**：新骨架把它做进了报告的第一节
-> （`build(invalid=store.exists(_INVALID))` → `ProvenanceSection.invalid`，三层已在这么做）。
-> 做成判据就是同一件事的第二个落点，而且它与「这一次判出了什么」根本不是一回事。
->
-> **④ 只有两条结论给 `fix` 按钮**（`--context-only` / `--revalidate`，都是 0 成本）。
-> 其余阻断级结论的真实修法是重跑一次付费规划——**把 💰 按钮挂在违规条目上，
-> 等于替用户决定去花那笔钱**。缺省即「不知道」，界面不许自己猜一条命令。
-
----
-
-## 五、几条不进判据表的硬机制
-
-它们不是判据，是**产地的显式终态**（不落盘、不静默降级）——schema 层要知道它们的存在，
-因为它们决定了某些字段「结构上不可能是脏的」。
-
-| 机制 | 触发条件 | 处置 | 它守的那条需求 |
+| 路径 | 模型 | 生产节点 | 角色 |
 |---|---|---|---|
-| `expand_plan_beats` | `plan_beat` 编号不存在 / 少给一拍 / 重复引用 | **显式终态**，无兜底（判据 26） | `R-5.5`（判据侧 `beat_ref`） |
-| 同上，**先判空** | `output_chapters` 整个是空的 | 单独一句话说清，**不摊成 N 条「这一拍没有给预算」** | `R-5.7`（判据侧 `empty_chapter`） |
-| `_display_names` | 某角色无任何**原文里有据**的称呼 | **显式终态**，不许把 registry 的记账标签当人名发 | `R-6.2`（判据侧 `ctx_name_attested`） |
-| `world_rules` 正文 | 一条 `versions[].desc` 都没有 | **显式终态**（`or description` 那个兜底**就是漏洞本身**） | `R-6.1`（按引用搬运，无转抄） |
-| `arc_tracks[].subject` | 解析不出人话（`char_id｜reader｜relation_id`） | **显式终态**——实测曾有 7 处 `char_001`/`rel_05` 原样发给写手 | `R-6.6`（`结构`） |
-| `emit_writer_context` | `time_layer` 越 enum · 某拍 events 全空 · 某章 0 拍 | **显式终态，不覆盖已有 ctx** | `R-6.4` / `R-6.1`（判据侧 `ctx_layer_flat` / `ctx_events_verbatim`） |
+| `stage4/plan_chapters.json` | `PlanChapters` | `stage4.plan` | 当前正式计划 |
+| `stage4/plan_edit.json` | `PlanEdit` | 人工输入 | 完整计划修订集 |
+| `stage4/writer_context.json` | `WriterContext` | `stage4.context` | Stage 5/6 的唯一写作材料 |
+| `stage4/writer_context.identity.json` | `WriterContext` | `stage4.plan --identity` | 确定性组装基线 |
 
-> ⚠ **右边那一列是 2026-08-12（F3-0）逐条复算加的，它回答一个具体问题**：
-> 「`R-6` 那一节要不要为这六条终态**再开一行需求**？」——**不要**。
-> 六条各自都落在已有的行上，`R-6` 因此**一行新号都没加**（只改了 `R-6.5`/`R-6.6`/`R-6.9`/`R-6.10` 四格的记号）。
-> 不查这一遍就照着「补一行收下它」的惯例走，会造出一条**与已有行说同一件事**的需求，
-> 而两行说同一件事必然分家。
->
-> ⚠ **终态与判据是两道门，不是一道门的两种写法**：终态开在**产地**（拦住脏数据落盘），
-> 判据开在**产物**（拦住脏数据已经在盘上却没人说）。上表右列那几条判据是
-> **同一条要求在另一道门上的落点**，不是重复——**产地那道门管不住已经在盘上的旧产物**。
->
-> ⚠ **这些终态一律带「这次不必再付费」的出路**：手改那几行 + `--revalidate`（0 成本）。
-> 一条旧数据不该把 0 成本重算路永久堵死（判据 15）。
+所有 JSON 都使用当前严格 schema，未知字段拒收。运行时不读取旧形状、不补缺失字段，也不根据
+历史常量切换预算语义。
 
----
+## 一、规划调用边界
 
-## 六、~~待决（本层唯一一条）~~ → **已裁决（2026-08-10）：选 A，而且一次加了四个取值**
+模型响应使用 `PlanResponse`：
 
-> **裁决**：`R-5.3` 的「谁在查」现在写 **`载体`（`op` 字段已整个裁撤）+ `HARD`（预算带那一半）**。
-> ⚠⚠ **后半句已于 2026-08-12（F3-0）作废：那一格【拆成了两行】**，不再是一格两半——
-> `R-5.3` 只留 `载体`，预算带那一半是新的 `R-5.3b`（`HARD`）。
-> 病灶是 F0 那条跨层裁决①点名的**混写行**：一格同时写 `载体` 与 `HARD`，
-> 而 `test_no_rule_claims_a_non_judge_requirement` 会把指过来的 `budget_band` 判成说假话。
-> **本条是那条裁决的最后一笔欠账**（前面三笔是 `R-10.2` / `R-10.3` / `R-14.2`，
-> 只剩 `R-14.2` 还欠着）。⇒ 下面那张「A / B 两个选项」的表**两条都不是最终形态**：
-> 真正落地的是 **A + B**——取值面加了 `载体`（A），**并且**把这一行拆开（B），
-> 因为 A 只解决「说得出载体在守」，解决不了「一格里同时声称两种守卫」。
->
-> 那一列的取值面**一次定全**：`度量` / `载体` / `结构` / `不适用` 四个新取值，
-> 外加一个由**行首形态**识别的「见 `R-0.x`」＝转授。
-> 唯一落点是 `contracts/invariants.py` 里的 `WHO_CHECKS`（8 个）；
-> 判据那一侧另有 `WHO_CHECKS_RULE`（5 个，**少四个**——一条判据的存在本身就否定那四个）。
->
-> ⚠ **下面那句「必须配一条测试证明类型真的拦得住」兑现了一半，另一半登记在这里别当已验证**：
-> 落地的是 `test_carrier_rows_name_their_field`（`载体` 那一格**必须点名字段**）与
-> `test_no_rule_claims_a_non_judge_requirement`（标了 `载体` 却有判据指着 ⇒ 那一格标错了）。
-> **「Pydantic 真的拦得住吗」要等骨架阶段才有可测的对象。**
->
-> ⚠ 本轮还发现这不是三处、是**五处**：`docs/BACKEND_CONTRACT.md` 另有 10 行是解析器**读不懂**的
-> （六行「见 `R-0.x`」· 一行「只统计」· 两行 `—`）——读不懂 = 这一行什么也没声明，
-> 而它们在所有测试里都绿着。完整清单与六条新测试见 `docs/BACKEND_CONTRACT.md` §五。
+| 字段 | 类型 | 约束 |
+|---|---|---|
+| `reconstruction_strategy` | `str` | 非空的全书重构意图 |
+| `output_chapters` | `PlanChapterResponse[]` | 非空，覆盖全部源章 |
 
-以下是裁决之前的原始论证，**退役而不删**（`Q-8`）——它解释了这条为什么会存在：
+每个 `PlanChapterResponse` 必填：
 
-**`R-5.3` 的「谁在查」写着 `HARD`，而它有一半已经不是判据在守了**——
-「篇幅方式恒为保持」归了载体（`op` 字段已删，常量回到 `contracts/invariants.py`），
-只剩「逐章预算落在带内」还是 `budget_band`。
-而需求文档那一列**没有一个取值能表达「载体在守」**
-（现有取值：`HARD` / `INFO` / `闸门` / `人` / `无守卫 → B-xx` / `待建`）。
+- `output_ordinal` 与唯一的 `from_source_ordinals[0]`；
+- `chapter_goal`、`open_hook_goal`、`end_hook_goal`；
+- 非空 `beats[]`。
 
-⇒ 读的人会以为那半条有判据在查。**这正是判据 35 的形状，只是这一次是我们自己造的。**
+模型响应中的每拍只含 `plan_beat` 与正整数 `budget_chars`。`plan_beat` 是下发骨架上的
+`pNN_NN` 编号；`expand_plan_beats` 必须确认编号存在、不重复、没有漏拍，然后确定性展开成
+正式产物的 `from_beats[]`。编号不存在、重复或缺失均为显式终态，不猜测、不兜底。
 
-| 选项 | 代价 |
+## 二、`plan_chapters.json`
+
+顶层只有三个必填字段：
+
+| 字段 | 类型 | 内容 |
+|---|---|---|
+| `reconstruction_strategy` | `str` | 模型给出的全书重构意图 |
+| `output_chapters` | `PlanChapter[]` | 当前正式逐章计划 |
+| `_provenance` | `PlanProvenance` | LLM 来源账与分组参数 |
+
+`PlanChapter`：
+
+| 字段 | 类型 | 约束 |
+|---|---|---|
+| `output_ordinal` | `int` | 从 1 连续 |
+| `from_source_ordinals` | `int[1]` | 唯一值必须等于 `output_ordinal` |
+| `chapter_goal` | `str` | 非空且不得混入文风指令词 |
+| `open_hook_goal` | `str` | 非空 |
+| `end_hook_goal` | `str` | 非空 |
+| `beats` | `PlanBeat[]` | 非空，完整覆盖本章源拍 |
+
+正式 `PlanBeat` 只含：
+
+- `budget_chars: int > 0`；
+- `from_beats: str[]`，引用一个或多个相邻、同时间层的 Stage 2 `beat_id`。
+
+每章预算总和必须落在其引用 `SourceSpan` 字数总和的 `PLAN_BUDGET_BAND` 内；该常量就是唯一
+执行带，没有第二层宽限。若某个引用无法提供精确基准，该章的预算规则报告 `unver`，不会拿
+不完整分母给出通过或失败结论。
+
+`PlanProvenance` 继承 `LlmProvenance`，并必填：
+
+```json
+{
+  "params": {
+    "grouping": "absorb-small-v1",
+    "beat_min_chars": 80,
+    "plan_beats": 0
+  }
+}
+```
+
+`inputs` 必须覆盖 `stage1/main_text.json`、`stage2/global_grounding.json` 与
+`stage2/chapter_blueprints.json`。复检会先比较来源账中的分组参数与当前参数，再运行拍顺序、
+相邻性和时间层规则。
+
+## 三、`plan_edit.json`
+
+`PlanEdit` 是严格的完整决策集，只含：
+
+- `reconstruction_strategy`；
+- `output_chapters: PlanChapter[]`。
+
+它编辑的是正式计划形状，不使用模型响应中的 `plan_beat`。`--apply-edit <路径>` 只接受当前
+小说产物目录内、能由 `ARTIFACTS` 解析的文件；应用后重新运行全部 Stage 4 判据并重建
+`writer_context.json`。
+
+## 四、`writer_context.json`
+
+写作上下文由当前正式计划和 Stage 1/2 产物确定性组装，顶层只有：
+
+| 字段 | 类型 | 内容 |
+|---|---|---|
+| `world_facts` | `WorldFacts` | 给确定性消费者使用的全书人物投影 |
+| `chapters` | `CtxChapter[]` | 写手逐章实际消费的全部材料 |
+| `_provenance` | `CtxProvenance` | 纯代码来源账 |
+
+`WorldFacts.characters{char_id}` 的每项只含 `display_name`、`role` 与闭合枚举
+`name_distinctiveness`。它不向写手暴露人物结局。
+
+### 4.1 章节上下文
+
+每个 `CtxChapter` 必填：
+
+| 字段 | 类型 | 内容 |
+|---|---|---|
+| `output_ordinal` | `int` | 输出章号 |
+| `from_source_ordinals` | `int[1]` | 唯一源章 |
+| 三个 `*_goal` | `str` | 计划原样透传的章节目标 |
+| `budget_chars` | `int > 0` | 本章各拍预算之和 |
+| `source_chars` | `int ≥ 0` | 本章各拍精确原文区间总字数 |
+| `beats` | `CtxBeat[]` | 展开后的写作单位 |
+| `characters` | `dict[str,ChapterCharacter]` | 截止本章可安全叫出的角色 |
+| `narration` | `CtxNarration[]` | 当前叙述人称、叙述者与视角人物 |
+| `facts` | `CtxFacts` | 当前章可见设定、关系、秘密、规则、弧线和称谓 |
+| `must_not_reveal` | `str[]` | 当前章不得点破的事实 |
+
+`CtxBeat` 必填 `events[]`、`budget_chars` 与 `source_chars`。同时间层、同地点时可平铺
+`time_layer`、`place`、`present`；跨地点时使用 `segments[]`，不把在场者取并集。
+
+保真材料按语义分四组：
+
+- `verbatim`: 必须逐字写入的原话；
+- `keep_value`: 数值必须保持，措辞可变；
+- `must_appear`: 物件必须出现并起作用；
+- `must_hold`: 因果前提必须成立，不要求字面复现。
+
+`CtxFacts` 只投影当前章允许看见的 `setting`、`relations`、`secrets`、`world_rules`、`arc`
+与 `address`。秘密以 `reader_knows_by_now` 作为唯一读者时点标记；人物叫法必须在原文中有据，
+内部 `char_id` 不得作为显示名下发。
+
+`CtxProvenance` 是 `FreeProvenance`，`inputs` 必须记录当前计划、蓝图、全书事实和正文来源。
+
+## 五、当前入口
+
+| 入口 | 成本 | 行为 |
+|---|---|---|
+| `stage4.plan` | 付费 | 生成并严格校验新计划 |
+| `--dry-run` / `--prompt-only` | 0 | 展示当前下发面，不写正式产物 |
+| `--check-only` | 0 | 联合复检计划与写作上下文 |
+| `--revalidate` | 0 | 重判当前 `.INVALID` 计划，合格后晋升并重建上下文 |
+| `--names-only` | 0 | 只重算当前人物显示名投影 |
+| `--identity` | 0 | 生成确定性写作上下文基线 |
+| `--apply-edit <路径>` | 0 | 应用严格完整计划修订集 |
+| `stage4.context` | 0 | 从当前正式上游重建 `writer_context.json` |
+
+## 六、现行判据
+
+当前注册表共 **24 条**：**16 hard、5 info、3 metric**。计划和写作上下文共用同一张表。
+
+| 严重度 | 当前规则 id |
 |---|---|
-| **A. 加一个取值「载体」** —— 改 `contracts/requirements.py` 的守卫记号 + `contracts/rules.py` 的 `WhoChecks` + `tests/test_coverage.py` 让它绕过正向覆盖率 | 它会成为**第三种「声称有守卫但不必注册判据」**的写法（前两种是 `无守卫` / `待建`）。⚠ 必须配一条测试证明**类型真的拦得住**，否则它自己就是一个新的「读起来有守卫」的洞 |
-| **B. 不加，把 `R-5.3` 拆成两条**（篇幅方式 / 预算带），前者「谁在查」写 `待建` + 注里说明归载体 | 零 API 改动，但「待建」是**假的**——它不是没建，是建在另一层 |
+| hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `beat_seq` · `beat_adjacent` · `beat_layer` · `budget_int` · `budget_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` |
+| info | `flat_chapter` · `beat_size` · `beat_reuse` · `verbatim_starved` · `params_drift` |
+| metric | `verbatim_share` · `plan_params` · `ctx_source` |
 
-⚠ **这条会反复出现，不是 stage4 独有**：载体定成 Pydantic 之后，
-所有「单字段取值面 / 必填 / `extra='forbid'`」都会从判据层挪到类型层
-（stage2 的 `time_layer`、`hinges[].kind`，stage3 的 `voice` 八维必填…）。
-**现在决定比 stage5 再决定便宜。** 建议 **A**——`待建` 这个值一旦被用来表示
-「已经建好了，只是不在判据层」，它就再也分不清「还没建」与「建在别处」了（`Q-2`）。
-
-### 已经查清楚、结论就是「查不了」的（登记在这里免得被当成漏项）
-
-1. **计划分得对不对，没有任何确定性判据。** 全部判据都是**结构与预算**的；
-   「这一章的重头拍选对了吗」「这个 `chapter_goal` 抓住本章了吗」一条都没有，也不打算有——
-   语义判定已整个搬到成品上（`gate1_semantic` 退役，理由：
-   **在抽象中间层上做语义判定时，护栏本身就是发明源**）。
-2. **`BEAT_MIN_CHARS = 80` 只有分布支持，没有独立判断校准。** 它来自「写手一拍自然产出 80~150 字」
-   的观测，不是拿成稿质量标定的。当前效果可量（`<50 字的拍` 归零、篇幅上浮 ≤1.03×），
-   但「80 比 60 或 100 更好」**没有证据**。要动它得先有 ground truth（唯一可能来源是成品结论）。
-3. **`VERBATIM_BUDGET_FACTOR = 2.0` 同上**，故意留在提示级——用一个没校准的数去挡一次付费重跑，
-   是判据 15 反对的事。
-4. **两条 `warn` 量出来了然后没有下文**：`flat_chapter` 与 `beat_size` 对应 `N4_SYS` 的
-   「分配要有轻重 / 重头要稀缺 / 一拍 80~150 字」，**不进任何回环**（判据 35 的又一处）。
-5. **`setting` 的改写式泄底挡不住。** 逐章闸门是字面子串包含，只挡转抄式；
-   实测在唯一有 secrets 的那本上命中 **0/8**，包括一条已知真泄漏。
-   命中 0 时打常驻 `[????]`，**不打 `[OK]`**（判据 31）。真根因在 stage2 让 `setting` 装了情节。
+本层没有旧规则占位、旧字段兼容分支或双形状读取路径。权威定义在
+`contracts/judges/stage4.py`；报告形状见 [`_report.md`](./_report.md)。

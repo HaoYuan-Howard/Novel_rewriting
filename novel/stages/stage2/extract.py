@@ -1,39 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-extract.py —— `stage2.global` 与 `stage2.blueprint` 的节点函数。
+"""`stage2.global` 与 `stage2.blueprint` 的当前生成、归一和判定路径。
 
-【本层的两个节点、九条路】
-
-    `stage2.global`     `--migrate`      0 成本：重跑确定性归一（称谓回取 / 章号抬升 /
-                                          区分词剥离 / 埋点裁剪），并把账写进 `_provenance`
-                        `--drop`         0 成本：人工裁掉某条 secret / 规则，**理由必填**
-                        `--purge-role`   **付费**：语义判官双向重划分 `role`/`fate`
-                        （默认）          **付费**：一次调用产全书事实底座
-
-    `stage2.blueprint`  `--check-only`   0 成本复检（**两份产物一起读**）
-                        `--prompt-only`  0 成本：摊开这一次要发出去的两段
-                        `--migrate`      0 成本：重跑 `present_names` → `present_char_ids`
-                                          的解析与锚点回取
-                        `--apply-edit`   0 成本：把人改过的那一份收回来、重判
-                        `--chapters`     定向重生成那几章（**付费**，配 `--replay-cache`）
-                        （默认）          **付费**：一次调用产一章
-
-⚠⚠ **`--check-only` 只挂在 `stage2.blueprint` 上**（`test_every_ported_stage_has_exactly_one_check_node`
-要求每层恰好一个），而那一相**两份产物一起读**：判 `canonical_unique` 要 global，
-判 `present_ids_dangling` 要 registry ⇒「global 的判据没有 0 成本复检」这句话不成立。
-
-⚠⚠ **判定的唯一落点是 `checks.check()`。** 落盘闸门 / 复检 / `--migrate` 之后的重判
-走的都是它——三条路各判一遍就会长出三把尺子。原型这一层正是这么坏的：
-`n2_global` 与 `n2_blueprint` 各带一段自己的校验，而权威那份在 `check_blueprints.py` 里，
-**三处对 `address.by` 的判定互不相同**。
-
-⚠⚠ **付费的【产出】那几条今天落显式终态**（`RunModeNotImplemented`）。
-F5 这一期移植的是**契约、prompt、校验器**三样：判据表 75 条已经在跑真数据，
-prompt 三条臂逐字节对过，而**生成侧**（`ask_json` 的响应模型 · 落盘前的称谓归一与
-verbatim 回取 · 逐章批次与定向重生成）是另一批代码，一行都还没写。
-**说「还没接」比给一条半成品的付费路要诚实**——后者会在真花掉一次钱之后才发现产不对。
-⇒ 报错里逐条写出缺的是哪几件（见 `_NOT_WIRED`）。
+两类产物都以 ``checks.check()`` 为唯一判定入口。模型响应中的 locator 仅用于
+落盘前回取原文字节；正式蓝图只保存经过验证的 ``SourceSpan``。
 """
 from __future__ import annotations
 
@@ -53,11 +23,11 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     BlueprintProvenance, ChapterBlueprints, ChapterBlueprintsResponse,
     GlobalGrounding, GlobalGroundingResponse, GlobalProvenance,
-    MigratableChapterBlueprints, RoleSplitResponse,
+    RoleSplitResponse,
 )
 from novel import paths, prov
 from novel.config import MAX_CONCURRENCY
-from novel.errors import GateBlocked, RunModeNotImplemented, TerminalState, UpstreamMissing
+from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
 from novel.llm.prompts import with_json_shape
 from novel.observability import ChapterProgressTracker
@@ -66,8 +36,8 @@ from novel.report.findings import Outcome
 from novel.run import RunContext
 from novel.stages.stage2 import checks
 from novel.stages.stage2.normalize import (
-    migrate_blueprint_context, normalize_blueprints, normalize_global,
-    past_attested_surfaces, resolve_character_refs, response_shape,
+    normalize_blueprints, normalize_global, past_attested_surfaces,
+    resolve_character_refs, response_shape,
 )
 from novel.store import ArtifactStore
 
@@ -100,29 +70,6 @@ class _ScopeViolationRow(StrictModel):
     produced: list[int]
     discarded_chapters: list[int]
     duplicate_target: int
-
-#: 付费产出那几条路今天缺的是什么。**逐条写出来**，而不是一句「没实现」——
-#: 下一个人要据此判断「接它」是多大一件事。
-_NOT_WIRED = (
-    '① `ask_json` 的响应模型（`GlobalGrounding` / `ChapterBlueprints` 减掉 `_provenance`）；'
-    '② 落盘前的确定性归一：`address` 四项回取（`by` 兜底 / `surface` 最长子串回取 / '
-    '`from_chapter` 只往后抬 / `canonical` 剥区分词）与 `setup_chapters` 裁剪，'
-    '**它们各自的账要同批落进 `_provenance`**——判据断言的是那些计数，不是字段值；'
-    '③ `present_names` → `present_char_ids` 的解析（`novel/core/naming.py` 已备齐纯函数）；'
-    '④ verbatim 回取的三笔账（`verbatim_rewrites` / `verbatim_recovered` / `verbatim_failures`，'
-    '契约与 `novel/core/spans.py::_find_or_recover` 都已就位，缺的是调用它的落盘路）'
-)
-
-
-def _paid_not_wired(what: str) -> RunModeNotImplemented:
-    return RunModeNotImplemented(
-        f'{what} 是**付费产出**路径，本仓还没有接它的线。\n'
-        f'⚠ 本层已经移植的是**契约、prompt、校验器**三样：'
-        f'75 条判据在跑、三条臂的 system 与原型逐字节对过、'
-        f'`--check-only` / `--migrate` / `--apply-edit` / `--drop` 这几条 0 成本路都通。\n'
-        f'→ 缺的是：{_NOT_WIRED}\n'
-        f'⚠ **不给一条半成品的付费路**：那会在真花掉一次钱之后才发现产不对')
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、上游与判定 —— **唯一落点**
@@ -176,7 +123,7 @@ def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
 #: 键不在 ⇒ 报告打「未记录」，那与「记了 0 次」不是一回事（`Q-2` 的三态）。
 _GLOBAL_KEYS = ('address_by_fallback', 'address_surface_rewrites',
                 'address_from_chapter_raised', 'canonical_distinguishers_stripped',
-                'setup_chapters_pruned', 'human_adjudicated')
+                'setup_chapters_pruned')
 _BLUEPRINT_KEYS = ('verbatim_rewrites', 'verbatim_recovered', 'verbatim_failures',
                    'partial_regen_chapters', 'repairs')
 
@@ -311,7 +258,7 @@ def build_prompts(
         raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——先跑 stage1')
     if ctx.node == 'stage2.global':
         system = with_json_shape(prompts.GLOBAL_SYS, prompts.GLOBAL_HINT)
-        return [(None, system, build_global_user(ctx.title, ctx.sid, mt))]
+        return [(None, system, build_global_user(ctx.title, mt))]
 
     ordinals = tuple(int(s.get('chapter_ordinal') or 0) for s in mt)
     targets = tuple(chapters) or ordinals
@@ -325,12 +272,12 @@ def build_prompts(
         .model_dump(by_alias=True)['entities']['characters']
     system = with_json_shape(prompts.BLUEPRINT_SYS, prompts.BLUEPRINT_HINT)
     return [(o, system,
-             build_blueprint_user(ctx.title, ctx.sid, mt, (o,), characters=characters))
+             build_blueprint_user(ctx.title, mt, (o,), characters=characters))
             for o in targets]
 
 
 def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:
-    """`--prompt-only` / `--dry-run`：把这次**要发出去的** `(system, user)` 原样交出来。
+    """`--prompt-only`：把这次要发出的第一条 ``(system, user)`` 原样交出来。
 
     ⚠ 它与付费路**共用同一个构造入口**（`R-11.8`）——否则「预览里看到的」与
     「真发出去的」是两件事，而那种分家没有任何东西会报错。
@@ -430,16 +377,16 @@ def blueprint_context(title: str, main_text: list[dict[str, Any]]) -> dict[str, 
     }
 
 
-def build_global_user(title: str, sid: str, main_text: list[dict[str, Any]]) -> str:
+def build_global_user(title: str, main_text: list[dict[str, Any]]) -> str:
     """全书那一相的 user。**吃全书原文。**"""
     return '\n\n'.join([
-        f'《{title}》(source_id={sid})',
+        f'《{title}》',
         '── 章节索引（一切对章的引用用阅读序章号）──\n' + _chapter_index(main_text),
         '── 全书正文（不可变原文，按阅读序章号分块）──\n' + _book_text(main_text),
     ])
 
 
-def build_blueprint_user(title: str, sid: str, main_text: list[dict[str, Any]],
+def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
                          targets: tuple[int, ...], *,
                          characters: dict[str, dict[str, Any]],
                          repair_findings: list[dict[str, str]] | None = None,
@@ -491,23 +438,6 @@ def build_blueprint_user(title: str, sid: str, main_text: list[dict[str, Any]],
             '这些是确定性校验命中的问题。只修本次任务章；不要靠机械放宽 span 遮住漏抓。\n'
             + evidence)
     return '\n\n'.join(parts)
-
-
-def run_apply_edit(ctx: RunContext) -> CheckReport:
-    """`--apply-edit`：人改过盘上那一份之后**重判一遍**。0 成本。
-
-    ⚠ 它与 `--check-only` **不是同一条路**，虽然今天两条的动作一样：
-    前者的语义是「我改过了，再看一眼」，后者是「什么都没动，复述一遍结论」。
-    两条合并之后，报告上就说不出**这一份是不是人改过的**——而那正是
-    `_provenance.origin` 那一格要回答的问题。
-    ⚠ 本函数今天**不写盘**：写回那一步要连 `origin` 与轮次归档一起做，
-    与付费产出共用同一个落盘口，而那个口还没建（见 `_NOT_WIRED` ②）。
-    """
-    store = ArtifactStore(ctx)
-    both = _Both(store)
-    if both.blueprints is None:
-        raise UpstreamMissing(f'{BLUEPRINT_REL} 不在盘上——没有可以「改过之后重判」的东西')
-    return _report(ctx, store, both, both.judge())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -732,7 +662,6 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
         address_from_chapter_raised=old_prov.address_from_chapter_raised,
         canonical_distinguishers_stripped=old_prov.canonical_distinguishers_stripped,
         setup_chapters_pruned=old_prov.setup_chapters_pruned,
-        human_adjudicated=old_prov.human_adjudicated,
     )
     provenance = GlobalProvenance.model_validate({
         **old_prov.model_dump(),
@@ -935,7 +864,7 @@ def _run_blueprint_repair(
     for ordinal in chapters:
         findings = _repair_findings(before_outcomes, ordinal)
         user = build_blueprint_user(
-            ctx.title, ctx.sid, main_text, (ordinal,),
+            ctx.title, main_text, (ordinal,),
             characters=global_raw['entities']['characters'],
             repair_findings=findings,
             repair_baseline=_repair_baseline(old_by[ordinal]),
@@ -990,9 +919,7 @@ def _run_blueprint_repair(
     failures = old_failures + list(target_accounting['verbatim_failures'])
 
     repaired_ordinals = sorted(normalized_by)
-    repair_history = [
-        row.model_dump() for row in (old_prov.repairs or [])
-    ]
+    repair_history = [row.model_dump() for row in old_prov.repairs]
     for ordinal in repaired_ordinals:
         user, findings = prompt_rows[ordinal]
         repair_history.append({
@@ -1012,7 +939,7 @@ def _run_blueprint_repair(
         row for row in old_prov.scope_violations
         if _keep_scope_violation(row, targets)
     ]
-    partial = sorted(set(old_prov.partial_regen_chapters or [])
+    partial = sorted(set(old_prov.partial_regen_chapters)
                      | set(repaired_ordinals))
     delta = ctx.llm_provenance(
         BlueprintProvenance,
@@ -1109,6 +1036,8 @@ def finish_blueprints(
         scope_violations=scope_violations,
         batches=[[ordinal] for ordinal in ordinals],
         context=blueprint_context(ctx.title, main_text),
+        partial_regen_chapters=[],
+        repairs=[],
         **accounting,
     )
     artifact = ChapterBlueprints.model_validate({
@@ -1156,12 +1085,12 @@ def run_blueprint(
     return finish_blueprints(ctx, client, request_blueprints(ctx, client))
 
 
-def run_migrate(ctx: RunContext) -> CheckReport:
-    """`--migrate`：0 成本重跑确定性归一并把账写回。
+def run_renormalize(ctx: RunContext) -> CheckReport:
+    """`--renormalize`：按当前契约重跑确定性归一并把账写回。
 
-    迁移改的是模型产物中的代码派生字段，因此保留原 `prompts/model/usage`，
-    只换成本次实际读取的 `inputs`，并以 `partial_rewrite=--migrate` 留痕。
-    旧版（包括被闸门拦下的 `.INVALID`）先归档，再写本次重判结果。
+    归一改的是模型产物中的代码派生字段，因此保留原 `prompts/model/usage`，
+    只换成本次实际读取的 `inputs`，并以 `partial_rewrite=--renormalize` 留痕。
+    输入必须已经符合当前 schema；本入口不承担旧产物升级。
     """
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
@@ -1172,13 +1101,13 @@ def run_migrate(ctx: RunContext) -> CheckReport:
         source_rel = _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL
         if not store.exists(source_rel):
             raise UpstreamMissing(
-                f'{GLOBAL_REL} 与 {_GLOBAL_INVALID} 都不在盘上——没有可迁移的全局底座')
+                f'{GLOBAL_REL} 与 {_GLOBAL_INVALID} 都不在盘上——没有可重新归一的全局底座')
         previous, raw = store.read_own(GlobalGrounding, source_rel)
         data = copy.deepcopy(raw)
         data.pop('_provenance', None)
         data, accounting = normalize_global(data, main_text)
         rewritten = ctx.rewrite_provenance(
-            previous.provenance, by='--migrate')
+            previous.provenance, by='--renormalize')
         provenance = GlobalProvenance.model_validate({
             **rewritten.model_dump(),
             **accounting,
@@ -1203,36 +1132,24 @@ def run_migrate(ctx: RunContext) -> CheckReport:
             judged_rel=GLOBAL_REL, invalid_rel=_GLOBAL_INVALID)
 
     if ctx.node != 'stage2.blueprint':
-        raise TerminalState(f'{ctx.node} 不是 stage2 的可迁移节点')
+        raise TerminalState(f'{ctx.node} 不是 stage2 的可重新归一节点')
     source_rel = _INVALID if store.exists(_INVALID) else BLUEPRINT_REL
     if not store.exists(source_rel):
         raise UpstreamMissing(
-            f'{BLUEPRINT_REL} 与 {_INVALID} 都不在盘上——没有可迁移的逐章蓝图')
+            f'{BLUEPRINT_REL} 与 {_INVALID} 都不在盘上——没有可重新归一的逐章蓝图')
     if not store.exists(GLOBAL_REL):
-        raise UpstreamMissing(f'{GLOBAL_REL} 不在盘上——逐章蓝图不能脱离人物表迁移')
+        raise UpstreamMissing(f'{GLOBAL_REL} 不在盘上——逐章蓝图不能脱离人物表归一')
 
     global_artifact = store.read(GlobalGrounding, GLOBAL_REL)
     global_raw = global_artifact.model_dump(by_alias=True)
-    _legacy, raw = store.read_own(MigratableChapterBlueprints, source_rel)
-    old_provenance = copy.deepcopy(raw.get('_provenance') or {})
-    old_provenance['inputs'] = prov.normalize_inputs(
-        old_provenance.get('inputs')) or {}
-    old_provenance.setdefault('verbatim_rewrites', [])
-    old_provenance.setdefault('verbatim_recovered', [])
-    old_provenance.setdefault('verbatim_failures', [])
-    old_provenance['context'] = migrate_blueprint_context(
-        old_provenance.get('context'))
-    previous_provenance = BlueprintProvenance.model_validate(old_provenance)
+    previous, raw = store.read_own(ChapterBlueprints, source_rel)
+    previous_provenance = previous.provenance
     data = copy.deepcopy(raw)
     data.pop('_provenance', None)
-    data.pop('source_id', None)
-    for blueprint in (data.get('blueprints') or []):
-        for narration in (blueprint.get('narration') or []):
-            narration.pop('last_beat_id', None)
     data, accounting = normalize_blueprints(
         data, main_text, global_raw['entities']['characters'])
     rewritten = ctx.rewrite_provenance(
-        previous_provenance, by='--migrate')
+        previous_provenance, by='--renormalize')
     provenance = BlueprintProvenance.model_validate({
         **rewritten.model_dump(),
         **accounting,
@@ -1250,19 +1167,3 @@ def run_migrate(ctx: RunContext) -> CheckReport:
     _write_formal(store, BLUEPRINT_REL, artifact)
     both = _Both(store)
     return _report(ctx, store, both, both.judge(), judged_rel=BLUEPRINT_REL)
-
-
-def run_drop(ctx: RunContext, *, target: str, reason: str) -> CheckReport:
-    """`--drop <id> --reason ...`：人工裁掉某条 secret / 规则。0 成本。
-
-    ⚠ **`--reason` 是值的一部分不是独立 flag**（形态照 `--wontfix`）：
-    一次删除没有理由，与悄悄删掉没有区别 —— 而 `_provenance.human_adjudicated`
-    那一格存在的全部意义就是「人删掉过东西这件事必须留在报告里」。
-    """
-    raise RunModeNotImplemented(
-        f'`{ctx.node} --drop {target}` 要把裁决理由写进 '
-        f'`_provenance.human_adjudicated` 再落盘，而那个落盘口与付费产出共用，'
-        f'今天还没接。\n→ 缺的是：{_NOT_WIRED}\n'
-        f'⚠ 契约**从没定过 `human_adjudicated` 的子字段形状**'
-        f'（`contracts/schema/stage2.py` 里那一格用 `dict[str, str]` **登记这个空缺**）'
-        f'——接它之前要先把形状补齐，否则 `extra=\'forbid\'` 在这一格上是失效的')

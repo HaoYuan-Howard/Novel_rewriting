@@ -225,26 +225,6 @@ class ArtifactStore:
                 f'被闸门拦下的稿走 `write_invalid`（它强制你交代 `gates_skipped`）')
         return self._write_json(rel, artifact)
 
-    def write_legacy(self, rel: str, artifact: BaseModel) -> Path:
-        '''按原型 stage1 的字节形态落 JSON：CRLF 缩进、文件末尾无换行。
-
-        这个窄入口只服务 main_text.json / hook_copy.json 的逐字节移植验收。两份文件是
-        全链承重输入；改一次纯格式会让所有下游来源指纹一起陈旧。模型往返校验与原子替换
-        仍和 write 走同一套，区别只有明确登记的序列化字节。
-        '''
-        rel = paths.check_rel_deep(rel)
-        allowed = {'stage1/main_text.json', 'stage1/hook_copy.json'}
-        if rel not in allowed:
-            raise PathRefused(
-                f'write_legacy 只服务逐字节承重的 stage1 两份 JSON，实得 {rel!r}')
-        payload = artifact.model_dump(by_alias=True, mode='json')
-        data = json.dumps(payload, ensure_ascii=False, indent=2).replace('\n', '\r\n').encode('utf-8')
-        self._verify_round_trip(rel, type(artifact), data)
-        p = self.path(rel)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        self._replace_atomically(p, data)
-        return p
-
     def write_invalid(self, rel: str, artifact: BaseModel, *,
                       gates_skipped: list[str]) -> Path:
         """落一份被闸门拦下的稿。**不覆盖已有正式产物**（`Q-5`：先校验后落盘）。

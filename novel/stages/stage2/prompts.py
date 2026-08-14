@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-prompts.py —— stage2 下给模型的那三份。**三条付费臂，与原型逐字节相同（除下面登记的三处）。**
-
-⚠⚠ **逐字移植，不许转述。** 这三段文字压着 163 本语料 + 三本端到端实跑的学费，
-而改写不会报错——它只会让某一类失效重新出现，且要花一次真钱才看得见。
+"""Stage 2 当前三条模型调用臂的 system prompt 与响应结构提示。
 
 【本层是全链**唯一一个节点带两条付费臂**的地方】
 `stage2.global` 一个节点两次不同形状的调用：
@@ -20,39 +16,9 @@ prompts.py —— stage2 下给模型的那三份。**三条付费臂，与原�
 **刻意不进 `novel/llm/prompts.py::ENUM_BLOCKS`**（那一层不许装某一层的内容，
 `tests/test_layering.py` 的分层守卫要的正是这个），由两条臂各自作为 kwarg 传进 `fill()`。
 
-⚠ 八个枚举占位符（`$KINDS` / `$LAYERS` / `$RULE_KINDS` / `$NAME_DISTINCT` /
-`$CONTEXTS` / `$BY_SPECIAL` + F5-3 兑现的 `$PRONOUNS` / `$CHANGE_TYPES`）
+八个枚举占位符（`$KINDS` / `$LAYERS` / `$RULE_KINDS` / `$NAME_DISTINCT` /
+`$CONTEXTS` / `$BY_SPECIAL` / `$PRONOUNS` / `$CHANGE_TYPES`）
 全部由 `fill()` 自动并入，**调用点不许自己造一份**——那是实测漂过两次的动作。
-
-────────────────────────────────────────────────────────────────────────────
-⚠⚠ 与原型的**三处**分家，全部由本仓契约逼出来，且**都不是可选的**
-────────────────────────────────────────────────────────────────────────────
-
-三处都在 `BLUEPRINT_SYS` 的 `narration` 那一段，根因是同一件事：
-`contracts/schema/stage2.py::Narration` **裁撤了 `last_beat_id`**、
-并把 `grammatical_person` 的取值面换成了 `NARRATIVE_PERSON`。
-
-| # | 原型写的 | 本仓 | 不改的后果 |
-|---|---|---|---|
-| (1) | 字段表里有 `last_beat_id` | 去掉 | 模型照着产出它 ⇒ `StrictModel` 的 `extra='forbid'` 把**整份响应**判废 ⇒ **再花一次钱** |
-| (2) | `grammatical_person(first/third_limited/omniscient)` | `(first/second/third)` | 后两个取值已退役（`_RETIRED_GRAMMATICAL_PERSON`）⇒ `Literal` 当场拒收，同样是整份作废 |
-| (3) | 一整条 `· last_beat_id：…` 的说明（5 行）+ 分项那条里「（各段止于哪儿由 `last_beat_id` 指定）」 | 删掉 | 留着就是**教模型去产一个载体不收的字段** |
-
-⇒ **这三处是「不改就跑不通」，不是「顺手改得更好」。** 判准是失败成本：
-拒收 = 整份响应作废 = 再花一次钱，而那要在生成下一章之前就停住
-（同 `contracts/schema/stage2.py` 文件头那条「取值面枚举归载体」的判准）。
-⚠ 每一处都由 `tests/test_stage2_prompts.py` **双向**钉住：本仓这一份没有它，
-**而原型那一份有它**——让这三处分家永远是可见且有意的。
-
-⚠⚠ **`R-3.8b` 那条「prompt 侧待补」是【假的】，别照着它再改一次 prompt。**
-`BLUEPRINT_SYS` 里明写着「【但空隙只能在中间，两头不许留】**第一条的 starts_with
-就是本章的第一句话，最后一条的 ends_with 就是本章的最后一句话。**」，还带了理由与例子
-——它是原型 2026-08-08 的 `b371244`（F-125，「三本新语料端到端暴露的 10 组问题落地修复」）
-补上的，正是为了那 5 处章首漏抓。本仓的审计（2026-08-12）比它晚四天，却记成
-「prompt 不但没说，还明写允许空隙」——**那是只读到上一条 bullet 就停了**。
-⇒ 真正的教训反过来：**那 5 处漏抓是在 prompt 已经明说之后发生的**，
-所以「写进 prompt」这条路本身没有遵守率保证，守它的只能是确定性判据
-（`edge_hole`，`stage2.md` §5.1 里的那条阻断级）。
 """
 from __future__ import annotations
 
@@ -64,11 +30,8 @@ from contracts.invariants import (
 )
 from novel.llm.prompts import fill
 
-#: 两条抽取臂**共用**的开头（原型 `Stage2/stage2_common.py:96`，938 字）。
+#: 两条抽取臂共用的当前规则前缀。
 #: ⚠ `ROLE_SPLIT_SYS` **不带**这个前缀——它不是抽取，是拿着已有的两栏重划分。
-#: ⚠ `_legacy/n2_semantic.py` 那一代用的是 `RULES`（v1），**与本常量不同**；
-#:   那边的 `BLUEPRINT_SYS` / `BLUEPRINT_HINT` 与现役**同名并存**，
-#:   按符号名 grep 会同时命中两代（比 F4-5 那次「改名」更深）。
 RULES_V2 = """\
 你是小说内容抽取器。只抽取原作【已经写出的事实】，做客观描述：不设计新剧情、不新增设定。只描述原文有什么，【不要】给出「改写时应如何处理／不可违反什么」之类的指令或评价。
 

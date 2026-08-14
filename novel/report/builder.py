@@ -22,8 +22,7 @@ from typing import Any, Iterable
 from contracts.invariants import NODES
 from contracts.rules import REGISTRY, Registry, Rule
 from contracts.schema.report import (
-    CheckReport, EdgeLine, FixRoute, ProvenanceSection, RetiredLine, RuleLine, StatusCounts,
-    badge_of,
+    CheckReport, EdgeLine, FixRoute, ProvenanceSection, RuleLine, StatusCounts, badge_of,
 )
 from novel.errors import RefusedByStructure
 from novel.prov import FreshnessReport
@@ -53,10 +52,6 @@ def remediation_of(rule: Rule) -> str:
         # 会在用户确认账单之前说错这一步的性质。
         return 'llm' if is_paid(node, flags) else 'deterministic'
     return 'human'
-
-
-#: 旧名。既有调用点与测试仍在用，别删——公开化是加门，不是搬家。
-_remediation_of = remediation_of
 
 
 def _fix_route(rule: Rule) -> FixRoute | None:
@@ -139,7 +134,7 @@ def build(*, sid: str, node: str, freshness: FreshnessReport,
         status, why = _status_of(r, o)
         lines.append(RuleLine(
             rule=r.rule, sev=r.sev, status=status, item=r.item, requirement=r.requirement,
-            check_kind=r.check_kind, remediation=_remediation_of(r), fix=_fix_route(r),
+            check_kind=r.check_kind, remediation=remediation_of(r), fix=_fix_route(r),
             findings=list(o.findings) if o is not None else [],
             why=why,
             # 判据 31：绿灯必须报出自己的分母。`skipped` 那一行天然没有——它没扫。
@@ -155,8 +150,6 @@ def build(*, sid: str, node: str, freshness: FreshnessReport,
         provenance=_provenance_section(freshness, invalid, revalidated, origin),
         rules=lines,
         accounting=build_accounting(stage, accounting or {}),
-        retired=[RetiredLine(rule=x.rule, why=x.why)
-                 for x in sorted(registry.retired_of_stage(stage), key=lambda x: x.rule)],
         badge=badge, passed=badge != 'fail', counts=StatusCounts.of(lines),
     )
 

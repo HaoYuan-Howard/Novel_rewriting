@@ -64,7 +64,6 @@ from contracts.schema.report import (
     FixRoute,
     ProvenanceSection,
     Remediation,
-    RetiredLine,
     RuleLine,
     Status,
     StatusCounts,
@@ -149,7 +148,7 @@ __all__ = [
     'RoundLlmProvenance', 'RoundFreeProvenance',
     'Finding', 'WontFixNote', 'Severity', 'Owner',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
-    'CheckReport', 'RuleLine', 'RetiredLine', 'ProvenanceSection', 'EdgeLine',
+    'CheckReport', 'RuleLine', 'ProvenanceSection', 'EdgeLine',
     'CheckKind', 'Remediation', 'FixRoute',
     'AccountingLine', 'StatusCounts', 'Status', 'Badge', 'finding', 'badge_of',
     # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实

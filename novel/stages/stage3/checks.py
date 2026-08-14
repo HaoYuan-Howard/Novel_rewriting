@@ -130,8 +130,7 @@ def _is_surface_habit_path(path: str) -> bool:
 def check(data: dict, *, corpus: str, names: frozenset[str] | None = None,
           spoiler_names: frozenset[str] = frozenset(),
           measured_now: Measurable | None = None,
-          expected_chapters: tuple[int, ...] | None = None,
-          require_chapter_styles: bool = False) -> list[Outcome]:
+          expected_chapters: tuple[int, ...] | None = None) -> list[Outcome]:
     """契约 + 越界 + 自洽。返回**每条判据一个 `Outcome`**（没排上的不给，那就是 `skipped`）。
 
     `measured_now` 给 `None` ⇒ **不排** `measurable_drift`——落盘那一刻它必然相等
@@ -155,15 +154,14 @@ def check(data: dict, *, corpus: str, names: frozenset[str] | None = None,
     if not (data.get('surface_habits') or []):
         req.append('surface_habits 为空（这本书一个写作小动作都没有？多半是没抽到）')
     chapter_styles = data.get('chapter_styles') or []
-    if require_chapter_styles or chapter_styles:
-        actual_ordinals = [int(item.get('source_ordinal') or 0)
-                           for item in chapter_styles if isinstance(item, dict)]
-        expected = list(expected_chapters or ())
-        if not expected:
-            req.append('逐章风格存在，但校验期拿不到预期源章节集合')
-        elif actual_ordinals != expected:
-            req.append(
-                f'chapter_styles 必须按源章一一覆盖：期望 {expected}，实得 {actual_ordinals}')
+    actual_ordinals = [int(item.get('source_ordinal') or 0)
+                       for item in chapter_styles if isinstance(item, dict)]
+    expected = list(expected_chapters or ())
+    if not expected:
+        req.append('校验期拿不到预期源章节集合')
+    elif actual_ordinals != expected:
+        req.append(
+            f'chapter_styles 必须按源章一一覆盖：期望 {expected}，实得 {actual_ordinals}')
     hook = data.get('hook_style')
     if not isinstance(hook, dict):
         # `R-1.12` 已把无文案段的书挡在 stage1 ⇒ 本层**必然**有 hook_style。

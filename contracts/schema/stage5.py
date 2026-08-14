@@ -98,10 +98,8 @@ class Chapter(StrictModel):
     #: 源章对应部分字数（计划算好的）。盘上 408~1963。
     source_chars: int = Field(ge=0)
 
-    #: 本章各拍预算之和。盘上 380~1960（键恒在，可为 `null`）。
-    #: ⚠ **兼任契约版次的结构标记**：旧契约成稿没有这一项，`_write_draft` 据此认出**混契约**的拼稿
-    #: ——判别用结构特征，**不用时间戳**。
-    budget_chars: int | None
+    #: 本章各拍预算之和。
+    budget_chars: int = Field(gt=0)
 
     #: `len(text.strip())`，**含空白**。盘上 399~1967。
     #: ⚠ 与 stage3 `measurable.body.chars`（**去空白**）不是同一个口径——跨口径运算要先对齐。
@@ -218,10 +216,6 @@ class DraftConsumed(FrozenModel):
     #: **只管正文**——判「写手有没有再落笔」。
     text_sha1: Fp10
 
-    #: stage7 那一侧多记一格（旧契约成稿没有 `budget_chars`，它是混契约的判别特征）。
-    has_budget_chars: bool | None = None
-
-
 class JudgedDraft(FrozenModel):
     """「我判了哪一份稿」。键是**完整相对路径**（`stage5/deep/ch01.json`）。
 
@@ -246,7 +240,7 @@ class JudgedDraft(FrozenModel):
     #: 整文件 `sha1` 只作审计）——整文件指纹会因对方任何一次补 `_provenance` 或
     #: `--recheck` 而变，而那些改动**本节点一个字都没消费**。
     #: 盘上两个消费方各用一把尺子，**分歧零样本，但那只是还没发生**。
-    consumed: DraftConsumed | None = None
+    consumed: DraftConsumed
 
 
 class ReviewChapter(StrictModel):
@@ -255,7 +249,7 @@ class ReviewChapter(StrictModel):
     #: 以下四项取自 **ctx**（不取成稿）。
     output_ordinal: int = Field(ge=1)
     from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
-    budget_chars: int | None
+    budget_chars: int = Field(gt=0)
     source_chars: int = Field(ge=0)
 
     #: 以下五项**无成稿的章没有**。

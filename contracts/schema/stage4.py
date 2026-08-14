@@ -22,14 +22,8 @@ writer_context.json   确定性组装（非 LLM）—— 写作节点的唯一�
   ③ **`plan ⊊ ctx`，而且是字节级原样透传**（实测 3/3 本 mismatch 0）。
      ⇒ **两处各存一份 goals，手改 plan 而不重建 ctx 就会分家**——那正是 `context_link`（HARD）在盯的事。
 
-  ④ **盘上三本全 PASS**：16 条判据 = 12 HARD + 4 INFO，12 条 HARD 3/3 全绿
-     **且盘上一个失败样本都没有**。⇒ PASS = 「结构与预算没有可探测的违约」，
-     **不是**「这份计划分得对」。
-
-  ⑤ **先校验后落盘 + `.INVALID`——而那条提升路会把 `_provenance` 整个丢掉。**
-     实测 **1/3 本的 `plan_chapters.json` 根本没有 `_provenance`**，它就是走这条路上来的。
-     ⇒ 本模块把 `_provenance` 定成**必填**，那是**契约**，不是盘上的实况；
-     盘上那一份已登记进 `tests/corpus.py::MISSING_PROVENANCE`，**不是被当成 bug 修掉**。
+  ④ **先校验后落盘**：`_provenance` 是必填契约；失败响应只允许进入 `.INVALID`，
+     不得晋升为正式计划。
 
 【判据 vs 载体：本层一条判据都没有真的上移】
 `budget_int` / `style_words` 守的东西一模一样可以用类型表达，但那样做会
@@ -62,13 +56,8 @@ from contracts.schema.stage2 import Setting
 class PlanBeat(StrictModel):
     """计划里的一拍。**2 个键。**
 
-    ⚠ **已裁撤 `plan_beat`，但它在【响应】里仍然必需——两件事别混**：
-    模型的响应里它**必需**（那是模型给这一拍分预算时唯一的抓手，`pNN_NN`）·
-    `expand_plan_beats` 里它**必需**（三种违约一律显式终态，**无兜底**）·
-    **落盘时 pop 掉，不进产物**。
-    ⚠ **裁掉它不必记账**：它的值是一个可复算的纯函数（盘上 197/197 恒等于
-    `p{output_ordinal:02d}_{本拍序号:02d}`），丢的不是证据，是一份抄件。
-    要记账的是**原值再也查不出来**的那一类（`setup_chapters` 裁剪、`address` 回取）。
+    模型响应用 `plan_beat` 标识骨架拍；`expand_plan_beats` 验证编号后把它确定性展开为
+    正式产物的 `from_beats`。正式产物只保存下游实际消费的引用与预算。
     """
 
     #: **[HARD] 正整数**。**这是模型在拍这一层唯一的产出。** 盘上 15~720。
@@ -143,12 +132,7 @@ class PlanProvenance(LlmProvenance):
     `inputs` 恒三条：`stage1/main_text.json` · `stage2/global_grounding.json` ·
     `stage2/chapter_blueprints.json`。
 
-    ⚠ **已裁撤**：`op_forced`——它记的是**初始化**不是改写（盘上 17/17 全是「本来是空的」）。
-    判准是**那个位置本来有没有东西**：有，才叫改写（原值被销毁 ⇒ 记账）；
-    没有，那叫初始化，记一份「本来是空的」只会制造恒定的噪声。
-    模型越界产 `op` 改由**响应侧 `extra='forbid'`** 当场挡回。
-
-    ⚠ `revalidated` 继承自 `Provenance`（`_common.md` §五），不在这里重定义。
+    `revalidated` 继承自 `Provenance`（`_common.md` §五），不在这里重定义。
     它是 `bool`：**`False` 与「键不在」不是一回事**。
     """
 
@@ -160,17 +144,6 @@ class PlanChapters(StrictModel):
 
     结构化调用点声明的必需顶层键 = `reconstruction_strategy` · `output_chapters`
     ——**这是完整的**（`_provenance` 是代码写的，不归调用点管）。
-
-    ⚠ **已裁撤**：`title` · `source_id`（目录名现算）· `beats[].plan_beat` ·
-    `output_chapters[].op`。
-
-    ⚠ **删 `op` 连带消灭一条静默分支**：`budget_band` 里 `op not in OP_BAND → continue`
-    那条**静默跳过整章**的分支随字段一起消失（不是「变得不可达」）。
-    ⚠ 同一个函数里**另有一条静默 `continue` 仍在**（本章一个 int 预算都没有）——
-    移植时改成与「基准残缺」那条**同规格的 `unver` 结论**。
-    ⚠ **解锁 `op` 那天要一起放回来**：字段 · 全书预算守恒那条判据 · 上面那条 `continue`。
-    解锁本身的落点是 `contracts/invariants.py` 的 `OPS` / `OP_BAND` / `LOCKED_OP`，
-    **不需要每章存一份**。
     """
 
     #: 全书重构意图，一段话。盘上长度 80~238。
@@ -219,14 +192,8 @@ class PlanChapterResponse(StrictModel):
 class PlanResponse(StrictModel):
     """规划那一次调用**收回来的东西**。`ask_json(model_cls=…)` 用它。
 
-    ⚠⚠ **`require` 从它派生，而不是手写一个元组**——原型那个 `require=()` 默认值
-    正是几个漏声明的调用点得以存在的原因：**漏传不报错，只是静默停掉一条 HARD 闸门**。
-    从本类派生出来的恰好是 `reconstruction_strategy` · `output_chapters` 两个，
-    与 `stage4.md` §一 写的「这是完整的」逐字对上。
-
-    ⚠ **`extra='forbid'`（继承自 `StrictModel`）在这一侧是承重的**：
-    模型越界产一个 `op` 就在这里当场挡回——那个字段已整个裁撤，
-    而「模型自己冒出来一个 op」说明 prompt 漂了，该出声。
+    结构化调用的 `require` 从本模型字段派生：`reconstruction_strategy` 与
+    `output_chapters` 都必须返回。继承的 `extra='forbid'` 拒收任何未声明字段。
     """
 
     reconstruction_strategy: str = Field(min_length=1)
@@ -362,10 +329,8 @@ class CtxSecret(StrictModel):
     fact: str = Field(min_length=1)
     known_by: list[str]
 
-    #: **唯一的标志位**，写作层就按它分两组：`true` = 读者已知情、可以正面写；
-    #: `false` = 本章是**埋点章**，事实要摆在读者眼前但**绝不能点破**。
-    #: ⚠ 曾并排落盘的 `is_setup_chapter` 已删——无人读，且在揭示章上会与它同时为真
-    #: （**一对自相矛盾的标志**）。
+    #: **唯一的读者时点标志**：`true` = 读者已知情、可以正面写；
+    #: `false` = 事实可以作为伏笔出现，但本章绝不能点破。
     reader_knows_by_now: bool
 
 
@@ -492,9 +457,8 @@ class CtxChapter(StrictModel):
     open_hook_goal: str = Field(min_length=1)
     end_hook_goal: str = Field(min_length=1)
 
-    #: 本章各拍预算之和（写手不必自己加）。盘上 380~1960，31/31 与逐拍之和一致。
-    #: ⚠ **`sum(...) or None`：和为 0 时是 `null`**（键恒在）。
-    budget_chars: int | None
+    #: 本章各拍预算之和（写手不必自己加）。
+    budget_chars: int = Field(gt=0)
 
     #: 源章真实字数（`len(整章文本)`，**含空白**）。盘上 408~1963。
     #:
@@ -532,33 +496,11 @@ class CtxProvenance(FreeProvenance):
 
 
 class WriterContext(StrictModel):
-    """`stage4/writer_context.json` —— 顶层 3 个键。**确定性组装，无 LLM 参与。**
+    """`stage4/writer_context.json`：确定性组装的当前写作输入。
 
-    ⚠ **已裁撤四个**（对**前端契约零影响**——API 的形状不变，只是值改为现算）：
-
-      · `title` —— ⚠ 它**有一个货真价实的 LLM 消费方**（写手 prompt 第一行 `《书名》`），
-        裁它的理由只有一条：**存的那份不可信**（实测写成了数字 id），
-        产地为此在每个落盘点都重认一次目录。**裁掉的是一份不被信任的副本，不是那条信息。**
-      · `source_id` —— 目录名后缀，0 成本现算。
-      · `reconstruction_strategy` —— **0 读者**：写作节点与文案节点都**明确拒收**它
-        （它必然携带弧线终点，写 ch1 的闭卷写手会因此已知结局）。
-        ⚠ 它躺在「写作节点的唯一输入」里而下游明确拒收 = **闸门开在渲染侧不在产物侧**
-        （`R-6.9`）——换个组装器、或有人图省事整份 dump 一把，它立刻就漏出去。
-      · `book`（`{beat_density}`）—— 唯一读者是界面显示，那个值 0 成本现算；
-        ⚠ 删死函数时**保留它 docstring 里「为什么不喂给写手」那段论证**（那段没有第二个落点）。
-
-    ⚠⚠ **「这份产物本身一条落盘后的判据都没有」这句话已于 2026-08-12（F3-0）作废。**
-    它曾经是本层契约的结论，而它的代价是：组装器带着 §五 那**六道逐章闸**、
-    比 `group_beats` 大一个数量级，**一条报告行都不产**——改坏了没有任何东西会出声。
-    ⇒ 用户裁决：`R-6.1`~`R-6.4` 各补一条**后置条件判据**
-    （`ctx_events_verbatim` / `ctx_name_attested` / `ctx_secret_gate` / `ctx_layer_flat`，
-    行在 `contracts/judges/stage4.py`）。理由与 `beat_seq`/`beat_adjacent`/`beat_layer`
-    留在判据表里的理由是同一条：**它们红了只有两种可能——产物是旧的，或组装器坏了。**
-
-    ⚠ **仍然没有判据的那两条**（改判 `结构`，不是漏了）：`R-6.5` 的闸是**字面子串包含**，
-    判别力已被 `R-6.7` 量死（命中 0/8，含一条已知真泄漏）——再给它一条判据就是第二盏说不清的灯；
-    `R-6.6` 说的是一条**盘点方法**，没有可判定的产物形态。
-    另有 `R-6.7`/`R-6.8` 明写无守卫，`R-6.9`/`R-6.10` 归**本模型自己**（`extra='forbid'`）。
+    顶层只保存下游实际消费的全书人物投影、逐章上下文和来源账。组装结果由
+    `ctx_events_verbatim`、`ctx_name_attested`、`ctx_secret_gate` 与 `ctx_layer_flat`
+    四条后置条件规则验证；未知字段由 `StrictModel.extra='forbid'` 拒收。
     """
 
     world_facts: WorldFacts

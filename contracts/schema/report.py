@@ -165,18 +165,6 @@ class RuleLine(FrozenModel):
         return self
 
 
-class RetiredLine(FrozenModel):
-    """退役判据。**退役而不删**，带着理由常驻一行（`stage3.md` §六 设计要点③）。
-
-    ⚠ **退役的是关键词判据，不是要求**：生产 prompt 仍要求风格描述可迁移、可执行；
-    九词表没有现役消费方。
-    常驻列出，是为了让「量过、量不准，所以撤了」与「忘了」读起来不一样。
-    """
-
-    rule: str = Field(min_length=1)
-    why: str = Field(min_length=1)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、来源在前（`_report.md` §五）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -329,8 +317,6 @@ class CheckReport(StrictModel):
 
     #: 记账键的出口。**空也要报。**
     accounting: list[AccountingLine] = Field(default_factory=list)
-
-    retired: list[RetiredLine] = Field(default_factory=list)
 
     badge: Badge
     passed: bool

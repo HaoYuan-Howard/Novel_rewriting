@@ -28,7 +28,6 @@ fastapi = pytest.importorskip(
 from fastapi.testclient import TestClient          # noqa: E402
 
 from contracts.invariants import STAGES            # noqa: E402
-from contracts.rules import PORTED_STAGES          # noqa: E402
 from novel.api.app import HOST, PORT, UI_HEADER, create_app   # noqa: E402
 from novel.orchestrator import jobs as J           # noqa: E402
 from novel.orchestrator.nodes import build_steps   # noqa: E402
@@ -120,19 +119,12 @@ def test_original_read_and_preview_endpoints_answer(client, app, box):
         assert r.status_code == 200, f'{method.upper()} {url} → {r.status_code} {r.text[:200]}'
 
 
-def test_enums_is_a_superset_over_the_wire(client):
-    """整份取值面经 HTTP 出去之后，**抓包那 14 个键仍然一个不少**。
-
-    ⚠ 与 `test_api_enums.py` 不同：那边测的是纯函数，本条测的是**序列化之后**——
-    元组变列表、中文编码、`by_alias` 之类只在这一层才可能出问题。
-    """
+def test_enums_matches_the_current_contract_over_the_wire(client):
+    """HTTP 只发布当前由 invariants 派生的取值面。"""
+    from novel.api.enums import payload
     got = client.get('/api/enums').json()
-    cap = json.load(open(os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        'docs', 'design_brief', '05_samples', 'enums.json'), encoding='utf-8'))
-    assert not set(cap) - set(got)
-    assert got['style_words'] == cap['style_words']      # 中文数组过一遍 JSON
-    assert got['op_band'] == cap['op_band']              # 元组 → 列表
+    assert got == payload()
+    assert 'ops' not in got and 'op_band' not in got
 
 
 def test_the_style_view_keeps_the_underscore_provenance_key(client, box):
@@ -165,17 +157,9 @@ def test_a_missing_artifact_is_200_with_the_left_half_intact(client, box):
 # ───────────────────────── 二、三种「没有」各不相同 ─────────────────────────
 
 def test_every_stage_answers_a_real_state_not_501(client, box):
-    """⭐ 裁决 4 的今天形态：**八层都答得出「这一层现在是什么状态」。**
+    """八层都答得出当前真实状态，不存在“尚未移植”的兼容态。
 
-    ⚠⚠ **本条此前叫 `test_an_unported_stage_is_501_not_404`**，遍历
-    `STAGES − PORTED_STAGES` 并断言 501 + `kind == 'NodeNotPorted'`。
-    它自己的最后一行写着「八层全移植完之后本条会一个都不跑——**那时候它该被改掉，
-    不该静静地绿**」。F5-5 就是那一刻：`stage2` 是最后一层，那个集合成了空集，
-    而 `NodeNotPorted` 连同它一起退役（2026-08-12 用户裁决）。
-
-    ⇒ **方向反过来**：从「未移植的那几层答 501」改成「**八层各答一个真状态**」。
-    覆盖面从 0 变成 8，且**加一层只会让它变大**——原来那条恰好相反。
-    ⚠ 断言不写死成某一个码：本 fixture 是一个**真书目录**，各层跑到哪一步不同
+    断言不写死成某一个码：本 fixture 是一个**真书目录**，各层跑到哪一步不同
     （产物齐的答 200、没跑的答 404）。要钉住的是**没有一层再答 501**——
     501 从此只属于「这条跑法还没接线」，而复检这条路八层都接好了。
     """
@@ -184,8 +168,7 @@ def test_every_stage_answers_a_real_state_not_501(client, box):
         r = client.get(f'/api/novels/{box.sid}/check/{kind}')
         codes[kind] = r.status_code
         assert r.status_code != 501, (
-            f'{kind} 仍答 501 —— 八层都在 `PORTED_STAGES` 里了，'
-            f'501 只该由「这条跑法还没接线」发出，而复检这条路每层都接好了')
+            f'{kind} 仍答 501 —— 当前八层的复检都应已接线')
         assert r.status_code in (200, 404, 409), (
             f'{kind} → {r.status_code}；复检这条路只该答这三个：'
             f'200（查了）· 404（这一层还没跑）· 409（产物读不回来）。'
@@ -193,9 +176,7 @@ def test_every_stage_answers_a_real_state_not_501(client, box):
     # ⚠ 至少有一层真的答得出 200：全 404 时上面那两句是一对**恒真**的断言，
     #   本条就退化成「这个地址不 500」。
     assert 200 in codes.values(), f'一层都没查成：{codes}'
-    assert len(STAGES) == 8 and set(STAGES) <= PORTED_STAGES, (
-        '守卫的守卫：八层齐了这件事本身要有一条断言撑着，'
-        '否则删掉一层这条 for 会静静地少跑一轮')
+    assert len(STAGES) == 8
 
 
 def test_an_unknown_kind_is_400_and_lists_the_eight(client, box):

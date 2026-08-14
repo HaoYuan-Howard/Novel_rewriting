@@ -25,11 +25,11 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 
 > ## ⚠ 三条贯穿本层的事实
 >
-> **① 承重的只有 `main_text.json` 与 `hook_copy.json` 的【字节形态】。**
-> 下游每一份产物记的来源指纹都是对它们算的（实测三份 `_provenance.inputs`：
+> **① 承重的只有 `main_text.json` 与 `hook_copy.json` 的当前规范 JSON。**
+> 下游每一份产物记的来源指纹都是对它们算的（`_provenance.inputs`：
 > stage2 ← `main_text.json`；stage3 ← `main_text.json` + `hook_copy.json`；
 > **`partition_report.json` 一次都没作为 input 出现过**）。
-> 改动这两份（哪怕只是重排一个键）会让全部下游产物被整批报成「陈旧」——**那是一次假回归**。
+> 新流水线统一通过 `ArtifactStore.write()` 生成规范字节，不再保留原型的 CRLF/无末尾换行格式。
 >
 > **`partition_report.json` 不承重**：没有下游消费方，增字段、删字段、重排键都不会造成任何失配。
 > 「逐字节等价」这条移植验收**只覆盖前两份**，不覆盖它。
@@ -223,8 +223,8 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 | `chapter_spans` | `[[int,int], …]` | 是 | 逐章，**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal` | **盘·码** |
 
 **为什么不加进 `main_text.json`。** 那是最自然的位置——span 是章的属性。
-但改 `main_text` 的字节形态会让**全部下游产物被整批判成陈旧**（事实 ①），那是一次假回归。
-`partition_report` 不承重，加字段没有任何代价。
+但 span 是分章过程的诊断与审计结果，不是下游正文消费契约；因此放在
+`partition_report`，避免正文载体重复携带下游不读的字段。
 
 **为什么它们不属于「能现算所以该删」。** 重跑分章确实能算出同样的 span——
 但那样一来，对照屏画的就是**分割器自己和自己对账**，看不出任何问题。

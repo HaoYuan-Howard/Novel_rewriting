@@ -21,7 +21,7 @@ from collections import Counter
 from typing import Any
 
 from contracts.invariants import (
-    BEAT_ALERT_MAX, BEAT_ALERT_MIN, BEAT_MIN_CHARS, GROUPING_VERSION, LOCKED_OP, OP_BAND,
+    BEAT_ALERT_MAX, BEAT_ALERT_MIN, BEAT_MIN_CHARS, GROUPING_VERSION, PLAN_BUDGET_BAND,
     STYLE_WORDS, VERBATIM_BUDGET_FACTOR,
 )
 from contracts.schema.common import Finding
@@ -229,7 +229,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
 
     # ── ③ 篇幅预算带 ─────────────────────────────────────────────────────
     text_len, cov = chapter_source_chars(main_text, bidx)
-    lo, hi = OP_BAND[LOCKED_OP]
+    lo, hi = PLAN_BUDGET_BAND
     bad_band: list[tuple[Any, int, str]] = []
     unmeasured: list[tuple[Any, int, int]] = []
     no_budget: list[Any] = []

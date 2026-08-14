@@ -559,10 +559,10 @@ def test_locate_spans_accepts_verified_exact_sources_without_searching():
                 'normalized': content_only(text), 'recovery': 'exact',
             },
         })
-    located, problems, loose = locate_spans(
+    located, problems = locate_spans(
         [{'chapter_ordinal': 1, 'beats': spans}], {1: raw})
     assert located == {1: [('b01_01', 0, split), ('b01_02', split, len(raw))]}
-    assert problems == [] and loose == 0
+    assert problems == []
 
 
 def test_locate_spans_does_not_expose_recover_at_all():
@@ -578,5 +578,5 @@ def test_locate_spans_does_not_expose_recover_at_all():
     p = inspect.signature(walk_spans).parameters['recover']
     assert p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is False
     # 而它确实还是那条会报错的路：坏锚点在 `locate_spans` 上照旧进 `problems`
-    _spans, problems, _loose = locate_spans(_bps('都不会善罢甘休', '算多'), {1: _TEXT})
+    _spans, problems = locate_spans(_bps('都不会善罢甘休', '算多'), {1: _TEXT})
     assert len(problems) == 1

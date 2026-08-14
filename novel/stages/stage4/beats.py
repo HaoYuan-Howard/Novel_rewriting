@@ -1,24 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-beats.py —— 拍的**确定性切分**。**逐字移植自原型（`Stage4/n4_plan.py`），注释一起搬。**
+"""Stage 4 拍的确定性切分。
 
-【这一层的自由度是被【收走】的，不是没给】章内「哪几条源 beat 并成一拍、按什么顺序排」
-从前由模型决定，`N4_SYS` 里写着三条硬约束——只并相邻、只并同层、按写作顺序排——
-而代码里**一个门都没有**。实测盘上三条**全被违反过**（重排 · 跳过中间那条并两头 ·
-hearsay+present 并成一拍）。
-⇒ 收走之后它们成了 `group_beats` 的**后置条件**：`beat_seq` / `beat_adjacent` /
-`beat_layer` 三条 HARD **红了只有两种可能——产物是旧的，或本模块坏了**。
-
-⚠ **收走的是一个「无守卫、高方差的自由变量」，不是一个已观测到的质量故障**——
-别把它记成后者：另一次实测已经把「计划层融合 beats」当成风格失败的嫌疑排除过
-（161/161 events 与 stage2 逐字一致、0 丢拍）。**没有守卫 ≠ 已经出事。**
-
-⚠ **为什么不是纯 1:1**：源拍中位只有 113~122 字、27~29% 不足 80 字（最小 13 字），
-而写手每拍有约 56 字的自然下限 —— 纯 1:1 会把某本 2/14 章顶破篇幅上界，最差 1.33×。
-只吸收碎拍则「<50 字的拍」归零、篇幅上浮最差 1.03×。
-
-【本模块吃 `dict` 不吃模型】理由见 `novel/stages/stage4/__init__.py` ③。
+代码按源 beat 顺序切分，只吸收相邻、同时间层的碎拍；模型只为已经切好的拍分配预算。
+`beat_seq`、`beat_adjacent` 与 `beat_layer` 验证正式计划保持这一结果。纯函数接收 dict，
+以便生成、复检与反例测试共用同一实现。
 """
 from __future__ import annotations
 
@@ -34,8 +20,7 @@ _PARA_SPLIT = re.compile(r'\n\s*\n')
 
 def _hinge_text(hinge: dict[str, Any]) -> str:
     source = hinge.get('source')
-    return str(source.get('text') if isinstance(source, dict)
-               else hinge.get('text') or '')
+    return str(source.get('text') if isinstance(source, dict) else '')
 
 
 def beat_index(blueprints: dict[str, Any],
@@ -51,7 +36,7 @@ def beat_index(blueprints: dict[str, Any],
     """
     text = {m.get('chapter_ordinal'): (m.get('text') or '') for m in main_text}
     bps = blueprints.get('blueprints') or []
-    spans, _problems, _loose = locate_spans(bps, text)
+    spans, _problems = locate_spans(bps, text)
     size = {bid: e - s for chs in spans.values() for bid, s, e in chs}
     idx: dict[str, dict[str, Any]] = {}
     for b in bps:

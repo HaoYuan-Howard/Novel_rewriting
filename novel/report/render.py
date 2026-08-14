@@ -34,9 +34,6 @@ def render(report: CheckReport) -> str:
         '',
         *_accounting(report.accounting),
     ]
-    if report.retired:
-        out += ['', '── 已退役（判据撤了，要求没撤）──']
-        out += [f'  {r.rule}：{r.why}' for r in report.retired]
     c = report.counts
     out += ['', f'合计  ok {c.ok} · 命中 {c.hit} · 够不着 {c.unver} · 没跑成 {c.skipped}']
     return '\n'.join(out)

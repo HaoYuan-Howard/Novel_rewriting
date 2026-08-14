@@ -3,7 +3,7 @@
 """
 stage5.py —— 逐章写作与全书验收那一层的判据行。源是 `docs/schema/stage5.md` §六（**唯一落点**）。
 
-**49 条现役：8 HARD · 27 INFO · 9 度量 · 5 查不了。** 外加 1 条退役而不删。
+**49 条现役：8 HARD · 27 INFO · 9 度量 · 5 查不了。**
 
 【一张表，两相共用】落盘闸门 / `--recheck` / `--revalidate` / `--apply-edit` /
 全书验收相**读同一张表**，谁也不许再抄一份。原型此前把书级那 8 条住在
@@ -42,7 +42,7 @@ stage5.py —— 逐章写作与全书验收那一层的判据行。源是 `docs
 """
 from __future__ import annotations
 
-from contracts.rules import REGISTRY, RetiredRule, Rule
+from contracts.rules import REGISTRY, Rule
 
 STAGE = 'stage5'
 
@@ -446,13 +446,3 @@ _unver('draft_duplicated', '同一输出章只有一份成稿', 'R-8.11',
             '⚠ 三处行为**故意不同**：`assemble_book` 对双份**显式终态**'
             '（哪一份是成品无从判断，不猜），而验收与界面**只报不判死**'
             '——把「呈现」变成「判死」会让人连报告都看不到。盘上 0/31')
-
-
-# ── 退役而不删 ──────────────────────────────────────────────────────────────
-
-REGISTRY.retire(RetiredRule(
-    rule='upstream_ref', stage=STAGE,
-    why='它原来挂着两件事：本义是「上游各层对本章的既有结论」，而收敛账也借了这个名字。'
-        '**一个名字下挂着两件事，读报告的人会按名字去解释数字**（判据 32）。'
-        '⇒ 收敛账改叫 `convergence_report`；而本义那一半**整条撤掉**——'
-        '上游各层的结论不再冻进本产物，看的时候现算，不留一份会过期的拷贝。'))

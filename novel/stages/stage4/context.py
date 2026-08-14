@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-context.py —— `writer_context.json` 的**确定性组装**。**逐字移植自原型，注释一起搬。**
+context.py —— `writer_context.json` 的**确定性组装**。
 
 【契约】写作节点只吃 stage3（风格）+ 本文件这一份。本模块是**按引用取值 + 按章投影**，
 不是「把计划给的东西转抄一遍」——四件事都由代码做：
@@ -27,8 +27,8 @@ context.py —— `writer_context.json` 的**确定性组装**。**逐字移植�
 ⇒ **改任何一条闸门，唯一能看到效果的地方是这份产物。**
 
 【本模块吃 `dict` 不吃模型】理由见 `novel/stages/stage4/__init__.py` ③。
-【本模块不 `print`、不 `sys.exit`】原型那些 `print(' ! …')` 全部改成**返回值里的一条记录**，
-由节点函数决定怎么报（判定要进校验报告，不是 stdout）；显式终态一律抛 `RefusedByStructure`。
+【本模块不 `print`、不 `sys.exit`】可观察信息进入返回账，由节点写入校验报告；
+显式终态一律抛 `RefusedByStructure`。
 """
 from __future__ import annotations
 
@@ -56,9 +56,8 @@ _SENT_SPLIT = re.compile(r'(?<=[。！？；])|\n+')
 class Assembly:
     """组装的**副产物**：那些「必须让人看见、但不该静默改变产物」的账。
 
-    ⚠ 原型这些全是 `print`，于是**它们只在跑的那一刻存在**——
-    产物落盘之后，「这一章剔了 3 个在场者」与「这一章本来就没人」在盘上长得一模一样。
-    ⇒ 全部收进本结构，由节点交给校验报告。
+    例如「这一章剔了 3 个在场者」与「这一章本来就没人」不能在落盘后同形，
+    因此全部收进本结构，由节点交给校验报告。
     """
 
     ctx: dict[str, Any] = field(default_factory=dict)
@@ -324,36 +323,11 @@ def _plot_free_rules(canon: dict[str, Any], o: int, naming: dict[str, str], avai
                      ) -> tuple[list[dict[str, Any]], list[tuple[Any, tuple[str, ...]]]]:
     """`world_rules` 取【本章生效】的那一版，并把点到人名的那些**按叫法时点扣住**。
 
-    从前这条是**全书永久剔除**，理由是「规则里出现具体人名，它就不是规则，是情节」
-    （实测某本 5 条里 3 条不是规则：一句台词、一个结局、一段情节；它们全书下发同一份，
-    等于把结局塞给写第 1 章的写手）。
-    ⚠⚠ **那条判据抓对了一半，而代价是把「机制」和「情节」一起杀了**：
-      · 某本的 `wr_01`「月老管理人间姻缘…能看见姻缘线：红线代表正缘、绿线代表出轨」——
-        **这本书的核心装置**，因正文含「月老」被整条剔除。写 ch1 的人知道有姻缘线
-        （setting 里有），却不知道颜色什么意思，**而拍里就写着「绿线」**。
-      · 另一本的「系统」同形，曾靠一条 `kind == 'ability_system'` 的特例豁免绕过。
-        而 `kind` 是模型自己填的：第一本那条填的是 `supernatural_rule`，
-        于是**同一种结构角色两种待遇**。特例豁免已随本次改动收掉。
-
-    ⚠ **闸门用的是【叫法的时点】，不是【角色的时点】。**
+    闸门用的是【叫法的时点】，不是【角色的时点】。
     `avail` = `surface_first_chapter(registry)`。规则的放行章 = 它点到的所有叫法里**最晚**的那一个。
-    三本实测全部判对，其中一本是关键：`wr_06`「怡红院…实为百晓生所有…龟公等人员可能是卧底」
-    = `secret_01`（揭示章 ch8）的全部内容。**按角色时点会放行**（那个角色从 ch1 就在场、
-    叫「龟公」），**按叫法时点才扣得住**——因为泄底的是「百晓生」这个叫法，它 ch8 才出现。
+    规则正文只读 `versions[].desc`，不接受任何平级文本兜底。
 
-    ⚠ **未验证的回归风险**：某本那条「江家、赵家…被悉数下狱」在盘上已不存在、无法实测。
-    若这类规则的 `effective_from_chapter` 被填成 1，而两个家族名从 ch1 就叫得出口，
-    新闸门会**在 ch1 放行一条结局**——旧的永久剔除挡得住，新的挡不住。
-    当前三本没有这个形状。**别把「三本全对」读成「已证明安全」。**
-
-    【规则正文的唯一落点是 `versions[].desc`】曾经还有一个平级的 `description`，
-    这里无条件用 desc 覆盖它、再拿覆盖后的值去查人名——于是**过滤器判的是 desc、
-    下发的也是 desc，而带人名的那个 `description` 谁也没看，却整份进了规划器的 prompt**。
-    ⇒ `description` 已从 stage2 契约删除，这里**也不再兜底**。
-
-    返回 `(保留的规则, held)`。⚠ 原型还返回一个恒空的 `dropped`（永久剔除那条路已退役），
-    **这里不留那个空位**：一个恒空的返回值只会让读的人以为还有一条剔除路。
-    「这一版不再剔除任何规则」这件事写在本 docstring 里。
+    返回 `(保留的规则, held)`。
     """
     out: list[dict[str, Any]] = []
     held: list[tuple[Any, tuple[str, ...]]] = []
@@ -666,8 +640,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
     `core_conflict`（「…最终走向自由」）→ 该字段随后从 stage2 契约整个删除 ·
     `arc_tracks` 剥掉 trajectory 后是零信息、不剥就是结局 → 非末章不发。
 
-    ⚠ **返回 `Assembly` 而不是裸 dict**：那些「必须让人看见」的账（撞名 / 剔除 / 闸住）
-    原型是 `print`，于是它们只在跑的那一刻存在。
+    返回 `Assembly` 而不是裸 dict，使撞名、剔除、闸住等信息能够进入报告。
     """
     bp = {b.get('chapter_ordinal'): b for b in (blueprints.get('blueprints') or [])}
     text = {m.get('chapter_ordinal'): (m.get('text') or '') for m in main_text}
@@ -686,13 +659,7 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             f'  · 原文其实有叫法（爹爹/我妈/老爷…）→ 让 stage2 把它收进 address，这是漏抽；\n'
             f'  · 这个人原文里确实从没被称呼过 → canonical 就得直接写成这本书会写出来的说法')
 
-    # 【显式终态·勿静默】规则正文的唯一落点是 `versions[].desc`。
-    # ⚠⚠ **兜底才是漏洞本身**：旧契约把 versions 写成「仅会改版的规则才给」，于是绝大多数
-    #   规则的正文只存在于平级的 `description` 里，而这里曾用 `or description` 兜底——
-    #   某本 5/5 都恰好有 versions，过滤与下发都走 desc，于是带人名的 description
-    #   看起来「只喂规划器」；而另外 3 本一条 versions 都没有，**同一行兜底让带人名的
-    #   description 直接成为下发给写手的文本**。同一个语义两个落点，
-    #   在不同的书上分叉成了不同的故障。
+    # 【显式终态·勿静默】规则正文的唯一落点是 `versions[].desc`，不设第二落点兜底。
     rules_all = ((global_g.get('canon') or {}).get('world_rules')) or []
     ruleless = [r.get('rule_id') for r in rules_all
                 if not [v for v in (r.get('versions') or []) if (v.get('desc') or '').strip()]]
@@ -759,9 +726,8 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             'chapter_goal': o.get('chapter_goal'),
             'open_hook_goal': o.get('open_hook_goal'),
             'end_hook_goal': o.get('end_hook_goal'),
-            # 章级汇总：写手不必自己把各拍加起来。⚠ `sum(...) or None`：**和为 0 时是 `null`**。
-            'budget_chars': sum(b['budget_chars'] for b in beats
-                                if isinstance(b.get('budget_chars'), int)) or None,
+            # 章级汇总：写手不必自己把各拍加起来；计划载体保证每拍预算为正。
+            'budget_chars': sum(b['budget_chars'] for b in beats),
             'beats': beats,
             'narration': narration,
             'source_chars': n_chars,

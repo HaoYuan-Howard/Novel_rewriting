@@ -15,7 +15,7 @@ import pytest
 
 from contracts import requirements as reqs
 from contracts.invariants import NODES, STAGE_SECTIONS, STAGES, WHO_CHECKS
-from contracts.rules import PORTED_STAGES, REGISTRY
+from contracts.rules import REGISTRY
 
 DOC = reqs.load()
 
@@ -255,20 +255,12 @@ def test_no_rule_claims_a_non_judge_requirement():
 
 # ───────────────────────── 正向：需求 → 判据 ─────────────────────────
 
-@pytest.mark.parametrize('stage', sorted(PORTED_STAGES) or ['<还没有已移植的 stage>'])
-def test_ported_stages_have_rules_for_every_guarded_requirement(stage):
-    """正向覆盖率。**只对已移植的 stage 生效**——
-
-    否则第一天就是满屏红，而一条从一开始就红的测试等于没有测试
-    （「没报违规」与「根本没在查」必须能区分，这条测试自己也不例外）。
-    """
-    if not PORTED_STAGES:
-        pytest.skip('PORTED_STAGES 是空的：还没有任何 stage 移植完，正向覆盖率无从谈起')
-
+@pytest.mark.parametrize('stage', sorted(STAGES))
+def test_every_stage_has_rules_for_every_guarded_requirement(stage):
+    """当前八层的正向覆盖率。"""
     # ⚠ **不许写成 `'R-' + stage.removeprefix('stage')`。** 那个式子只在 stage0/stage1 上对：
     # R 节的编排轴是**节点**，不是 stage（R-2/R-3 是 stage2 的两个节点、R-5/R-6 是 stage4 的、
     # R-7/R-8 是 stage5 的两相），于是 `stage3` 会拿到 **stage2 逐章抽取**的需求。
-    # 它曾经就是那么写的，而 `PORTED_STAGES` 为空让这条 bug 整个藏在 `skip` 后面。
     sections = STAGE_SECTIONS[stage]
     # 用 `expects_rule` 而不是 `claims_guard`：**度量也必须有一条注册判据**。
     # 度量不是门，但「这条度量无条件报出」与「根本没人算它」必须分得开（判据 21）。
@@ -279,15 +271,6 @@ def test_ported_stages_have_rules_for_every_guarded_requirement(stage):
     assert not missing, (
         f'{stage} 声称有守卫、但没有任何判据指着它的需求：{missing}'
     )
-
-
-def test_ported_stages_are_real_stages():
-    """**从 0 起**：2026-08-10 加了 stage0（非正文剔除 + 人工审阅闸门，需求 `R-0`）。
-
-    ⚠ 这个范围要跟着 `invariants.STAGES` 走，别靠记忆，也别在这里重写一遍 `range(0, 8)`。
-    """
-    assert PORTED_STAGES <= set(STAGES), \
-        f'PORTED_STAGES 里有不存在的 stage：{PORTED_STAGES - set(STAGES)}'
 
 
 # ───────────────────── 阶段 ↔ 节点 ↔ 需求节的映射（F-A 的守卫） ─────────────────────

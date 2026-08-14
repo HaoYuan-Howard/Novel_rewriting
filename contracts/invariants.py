@@ -109,18 +109,8 @@ JOB_EVENT_KINDS: Final = ('started', 'step', 'ended', 'reconciled')
 #: ⚠ `approval` 是**按设计就该人做的一步**，不是故障，但它确实该在这张清单上。
 INBOX_KIND: Final = ('invalid', 'rejected', 'stalled', 'human_only', 'upstream', 'approval')
 
-#: 结论的根因**第一嫌疑**层。`corpus` = 原文自己就是这样，谁也修不了。
-#:
-#: ⚠ **`stage6` / `stage7` 是 2026-08-11 补上的，原来漏了两个**。发现于骨架 A3：
-#: `_common.md` §七要求全链只有一份 `Finding`（原型有 5 份拷贝、3 种字段签名），
-#: 而 `stage6.md` §四写着「owner：`stage6` 13 · `None` 11 · `stage3` 1」、
-#: `stage7.md` §六写着「owner：`stage7` 17 · `stage5` 3 · `stage2` 2 · `None` 9」。
-#: ⇒ 少这两个值时，`Literal[OWNER]` 会把**两层各十几条真实结论**当成非法数据拒收，
-#: 而 `contracts/rules.py::_validate` 会在这两层移植时当场炸。
-#: **它今天看不见**——`Finding` 还没有任何生产者、`PORTED_STAGES` 是空的，
-#: 与 A0 修的那三处是同一个形状（守卫在被启用的那一刻才发作）。
-#: Stage 0/1 是 F6/F7 启用注册守卫时补上的：摄入与分章失败的根因就在这两层；
-#: 假写成 stage2 会让报告把修复动作指到第一个付费层。
+#: 结论的根因**第一嫌疑**层。`corpus` = 原文自身如此，没有可修复的流水线阶段。
+#: Stage 0~7 均可拥有本层结论；这也是 `Finding.owner` 的完整取值面。
 OWNER: Final = (
     'stage0', 'stage1', 'stage2', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7', 'corpus',
 )
@@ -183,7 +173,6 @@ NONBODY_KINDS: Final = ('番外', '后记', '尾声', '作者有话说')
 #: 这张表让「分家」变成**登记过的分家**：测试改判 `原型那份 + 本表 == 现役那份`，
 #: 于是「有意加的」与「不小心漏的/删的」重新可区分。
 #: ⚠ **只许追加，不许删**。删掉一个词，存量产物里那个 `kind` 就读不回来了。
-NONBODY_KINDS_ADDED: Final = ()
 
 #: 完结标记的闭合词表。**它与 `NONBODY_KINDS` 必须无交集**——
 #: 完结标记与非正文标记走的是两条完全不同的路（前者只定切点、不进 `dropped`；
@@ -437,12 +426,6 @@ NAME_DISTINCTIVENESS: Final = ('high', 'medium', 'common')
 #:   看着像第三人称，实际是第一人称、自称是「朕」——**那正是 `pronoun_surfaces` 存在的理由**。
 NARRATIVE_PERSON: Final = ('first', 'second', 'third')
 
-#: 【退役 · 判据 29：退役的东西不能只是不删，还必须带标注】
-#: 原型的合一版取值面，只用于**读懂存量产物**（盘上 31/31 章写的是 `first`）。
-#: 新产物一律用 `NARRATIVE_PERSON`；限知/全知那一轴归 stage3 的文风画像，本层不记。
-#: ⚠ 这里面的 `third_limited` / `omniscient` **不是人称**，别拿它跟上面那份做值级比对。
-_RETIRED_GRAMMATICAL_PERSON: Final = ('first', 'third_limited', 'omniscient')
-
 #: 世界规则的类别（`canon.world_rules[].kind`）。**七个，闭合。**
 #: ⚠ 盘上只见 **4** 个（`social_norm`×4 · `supernatural_rule`×3 · `legal_rule`×3 ·
 #: `ability_system`×1），**另三个零样本**——取值面从代码来，不是从盘上量出来的。
@@ -522,45 +505,9 @@ CACHE_POLICY: Final = ('default', 'refresh-write', 'disabled')
 # 五、计划与篇幅（stage4）
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: 篇幅方式。**当前锁定为 `keep`**。
-#:
-#: ⚠⚠ **它不是产物字段**（2026-08-10 用户裁决，`stage4.md` §一）。
-#: 原型在每个输出章上存一个 `op`，而它**恒为 `keep`** —— 一个常量伪装成 artifact 字段，
-#: 暗示着一种从不存在的「按章变化」。与 `license`（跨书逐字节相同的三项清单）**同一个形状**，
-#: 处置也一样：**常量回到这里，字段删掉**。
-#: 连带删掉的还有它派生出来的两样东西：一份记账（每章记一行「本来是空的」，17/17 全是 null）
-#: 与一条判据（断言它恒等于常量）。
-#:
-#: ⇒ **谁需要「篇幅方式」这条信息，就从这里取常量**：
-#:   · 逐章预算带 —— `OP_BAND[LOCKED_OP]`，不再按章查表；
-#:   · 写作节点那句「总长基本不变，不许净增」—— 它跨章跨书逐字节相同，
-#:     **进 system prompt**（插值，判据 25），不进逐章的 user 消息。
-#:
-#: ⚠ **另三个值 + `OPS` 是「解锁时的落点」，不是「读存量的取值面」**（判据 29 的标注）。
-#: 原型写的是「只用于解释存量旧计划」——那条用途在新架构里已经没了：
-#: 新契约裁掉一批字段 + `extra='forbid'` 之后，实测原型产的 3/3 本、两份 stage4 产物
-#: **全部加载失败**（各 2~4 个越界键）⇒ 没有任何东西读得进存量计划。
-#: 解锁 `op` 时要一起放回来的：字段本身 · 「全书 amplify 章数 ≤ compress 章数」那条判据 ·
-#: 预算带检查里那条「取值面外就跳过整章」的静默分支（它会随字段一起复活）。
-OPS: Final = ('keep', 'compress', 'amplify', 'rewrite')
-LOCKED_OP: Final = 'keep'
-
-#: 逐章预算之和 / 源字数，必须落在对应的带里。**无豁免。**
-#: ⚠ `rewrite` 的带与 `keep` 相同 —— 它在预算维上早就是死的。
-#:
-#: ⚠⚠ **移植时别把原型那两个宽限系数搬回来**（2026-08-10 用户裁决，`stage4.md` §四）。
-#: 原型的校验写的是 `src*lo*0.9 <= total <= src*hi*1.1` —— 带本身已经是 ±10%，
-#: 再乘一次宽限，**实际执行的是 0.81~1.21×**，比需求写下来的宽一倍还多。
-#: 「区间本就是眼量的」这条理由在带本身已经是 ±10% 的时候不再成立。
-#: 实测支持去掉：31/31 章全部落在严格带内（span 基准下 0.901~1.058 / 0.910~0.969 / 0.994~1.049），
-#: **宽限那一段 0 样本**。⚠ 但它不是零风险——最窄的一章 0.901，离下界只差 0.1%，
-#: 贴边的计划从此会红。这是**产品语义变更**，不是清理。
-OP_BAND: Final = {
-    'keep': (0.90, 1.10),
-    'compress': (0.60, 0.80),
-    'amplify': (1.30, 1.80),
-    'rewrite': (0.90, 1.10),
-}
+#: Stage4 每章预算之和 / 源 span 字数的唯一现行区间。**无第二层宽限。**
+#: `output_chapters[].op` 不属于当前契约，因此这里也不保留已删除操作的取值面。
+PLAN_BUDGET_BAND: Final = (0.90, 1.10)
 
 #: 「逐字挤占」的下限倍数：一拍的预算至少要是它**必须逐字写入的原话**字数的这么多倍。
 #: 2.0 的含义是「原话最多占一半」——低于它，剩下的字连交代谁在说、说完什么反应都不够。
@@ -620,13 +567,7 @@ INVENT_GUARDED: Final = {
     '新时间跳跃': 'none',
 }
 
-#: 成稿字数 / 本章预算，必须落在这个带里。**无第二层宽限**（2026-08-10 用户裁决）。
-#: ⚠ **移植时别把原型那两个宽限搬回来**：原型在这个带之外又乘了一次 ±10%
-#: （`BUDGET_GRACE` 配 `LENGTH_GRACE`），实际执行 **0.81~1.21×** —— 与 stage4 的
-#: `OP_BAND` 那次是**同一个形状**：写下来的带和执行的带是两个数，模型按 A 算、校验按 B 判。
-#: 实测代价：31 章里 **10 章（32%）落在 ±10% 之外，而两条判据一次都没响**，
-#: 两端极值 0.814 / 1.206 恰好卡在 0.81 / 1.21 的内侧、各差不到 1%。
-#: ⇒ 收窄之后那 10 章开始报**提示级**（不阻断落盘）；全书那条 3/3 本仍绿。
+#: 成稿字数 / 本章预算必须落在这个带里。它就是执行带，**没有第二层宽限**。
 DRAFT_BAND: Final = (0.90, 1.10)
 
 #: 全书成稿字数 / 全书源字数，同一个带。
@@ -672,8 +613,7 @@ HOOK_KEYS: Final = (
 #: `surface_habits_targeted_repair` = 只把 `surface_habits` 那一个列表发回去改写，
 #: 其余字段一个字不动——**全链唯一有定向返工通道的字段**。
 STAGE3_ATTEMPT_KINDS: Final = (
-    # `initial` 只为读取清理前的全书抽取产物；现役生产路径不再写它。
-    'initial', 'surface_habits_targeted_repair',
+    'surface_habits_targeted_repair',
     # 逐源章抽取，再只用抽象结果做一次书级汇总。
     'chapter_local', 'chapter_aggregate',
 )
@@ -796,34 +736,10 @@ FREE_ENTRIES: Final = {
     '--revalidate': '按当前判据重判被闸门拦下的 .INVALID 稿，合格即提升为正式产物',
     '--measure-only': '只跑确定性实测并报出来，**不写盘**（与 `--remeasure` 是两件事）',
     '--remeasure': '重算确定性实测值写回，其余字段不动',
-    '--migrate': '确定性回取/迁移：按当前锚点算法重新定位已有产物里的原文引用',
+    '--renormalize': '按当前契约重算代码派生字段与原文定位',
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
     '--apply-edit': '把人工改过的内容落成新的一轮',
-    # ⚠⚠ **这两条就是本表上方那段注释点名欠着的那两个**（F5-1 补）。
-    #   它们在原型的 `Web/jobs.py::FREE_FLAGS` 里确确实实是 0 成本
-    #   （`'n2_blueprint': (…, '--replay-cache', …)` · `'n2_global': ('--migrate', '--drop')`），
-    #   而**抓包那 36 条 `actions` 里没有它们** ⇒ `test_free_entries_covers_...`
-    #   从来没查过这一格，漏了两年也不会有任何东西出声。
-    # ⚠ 两个都**带值**（见 `VALUED_FLAGS`）：那是正交的另一个轴，不是重复登记。
-    '--drop': '人工裁决：删掉原文无据的 secret / relation，理由必填并落进 `_provenance.human_adjudicated`',
-    '--replay-cache': '拿一个已有的缓存 key 把某一章的响应重放回来——0 成本恢复路，不发新调用',
-}
-
-#: 原型里是 0 成本 **flag**、而在两层命名下**变成了别的东西**的那几个。
-#: `Q-8`：退役而不删且必须带标注——没有标注，读的人会以为它们是被漏掉的。
-#:
-#: ⚠ `--identity-plan` 是 `Q-3`「**同一个语义在不同节点上必须叫同一个名字**」的**实例**：
-#: 它与 `--identity` 是同一件事，只因为原型里一个脚本干两件事才被迫改名。
-SUPERSEDED_FREE_ENTRIES: Final = {
-    '--assemble': '→ 节点 `stage7.assemble`。它不是「换个跑法」，是一个独立的动作',
-    '--context-only': '→ 节点 `stage4.context`。**与 `--assemble` 逐字同形**，2026-08-11（骨架 D）'
-                      '补登记：`NODES` 里早就有 `stage4.context` 这个节点了，而本表当时'
-                      '还把它同时留在 `FREE_ENTRIES` 里——同一个动作两个落点，'
-                      '而两个落点里只有一个会被 `build_argv` 拒收',
-    '--identity-plan': '→ `stage4.plan --identity`。原型给同一个语义起了第二个名字',
-    '--approve': '→ 节点 `stage0/6/7.approve`。定稿是一个人做的动作，候选序号是它的参数；'
-                 '贵贱由 `NODES[...].paid` 回答，不必在本表再登记一份',
 }
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
@@ -852,7 +768,7 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #:
 #: 【为什么是一个带值的键，不是三个布尔】这三条干的是同一件事——改掉产物的一部分，
 #: 而 LLM 写的那些字段仍出自当初那次付费产出。区别只在「哪条路」，**那是一个值不是三个键**。
-#: 原型标的是 `remeasured: true`，于是 `--recheck` / `--migrate` 各自还要再加一个键
+#: `--recheck` / `--renormalize` 都用同一个局部改写字段记录来源
 #: ——同一件事的第三个落点（`Q-3`：同一个语义必须叫同一个名字）。见 `_common.md` §5.1b。
 #:
 #: ⚠ 它**必须 ⊆ `FREE_ENTRIES`**（由 `tests/test_invariants.py` 钉着）：
@@ -873,7 +789,7 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #: `origin=human` 的新来源账；stage7 只改 `extra_subs` / 决策 patch，模型生成的
 #: `characters` 仍来自旧调用，所以必须允许它如实标成局部改写。
 PARTIAL_REWRITE_FLAGS: Final = (
-    '--remeasure', '--recheck', '--migrate', '--identity', '--apply-edit',
+    '--remeasure', '--recheck', '--renormalize', '--identity', '--apply-edit',
 )
 
 #: 带值的 flag：`--apply-edit <载荷文件>`。值说的是「这个值是什么」。
@@ -912,16 +828,6 @@ VALUED_FLAGS: Final = {
     # （它写的就是本节点 `produces` 里那一份，只是少写几章 ⇒ 不登记就落到 `produces`，正确）。
     # 两条都与 `--pick` 逐条同形。
     '--chapters': '只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章',
-    # ⚠⚠ **理由必填折进值里，不另立一个 `--reason`。** 原型那边是两个 argparse 参数
-    #   （`--drop <ids>` + `--reason <理由>`，后者必填），而本仓**没有「一个 flag 要求
-    #   另一个 flag」的机制**——新造一个就是一条没有守卫的约束（漏传不报错）。
-    #   ⇒ 照 `--wontfix` 那个已有先例把两段折成一个值：人说得出的那部分写在值里，
-    #   `_provenance.human_adjudicated` 是它的落点（「人删掉过东西这件事必须留在报告里」）。
-    '--drop': '人工裁掉原文无据的条目：`<secret_xx|rel_xx>=<理由>`，理由必填',
-    # ⚠ 它**必须配 `--chapters` 指定单章**：缓存 key 只证明**一份单章** prompt/响应，
-    #   一次重放多章等于拿一个 key 去认领它没产过的东西（原型 `n2_blueprint.py:1406`
-    #   就是这么拒的）。这条约束的落点在本层的落盘路，不在本表。
-    '--replay-cache': '要重放的那次调用的缓存 key；必须配 `--chapters` 指定单章',
 }
 
 #: ⭐ 一次跑**会往盘上写什么**。空串 = 不写盘。
@@ -961,7 +867,7 @@ WRITE_EFFECTS: Final = {
     '--recheck': '刷新已有成稿的指标，并重拼 draft.md',
     '--revalidate': '把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/',
     '--apply-edit': '把人工稿落成新的一轮，并把上一轮归档进 _rounds/',
-    '--migrate': '按当前锚点算法重新定位原文引用并写回',
+    '--renormalize': '按当前契约重算代码派生字段与原文定位并写回',
     # ⚠ 它写的是**另一份**产物（`stage5/wontfix.json`），不是本节点 `produces` 里那一份
     # ⇒ 不登记的后果是**方向反的**：`/api/enums` 会把它派生成「写 `stage5/review_{n}.json`」，
     # 而它一份验收报告都不产。同 `--names-only` 那一格的病，只是方向相反。
@@ -970,8 +876,6 @@ WRITE_EFFECTS: Final = {
     # ⚠ 它们与上面 `--remeasure` / `--recheck` 那几条是同一类：**免费，但写盘**。
     #   本表存在的全部理由就是这一类（原型那句「`FREE_FLAGS` 只管钱不管写」
     #   一字不差地出现了 8 次，而它没有落点）。
-    '--drop': '把人工裁掉的 secret / relation 从产物里删掉，裁决理由写进 _provenance.human_adjudicated',
-    '--replay-cache': '把重放回来的那一章合并写回 stage2/chapter_blueprints.json',
     # ⚠ **`--purge-role` 刻意不在本表里**，那不是漏登记：它写的就是本节点 `produces`
     #   里那一份（`stage2/global_grounding.json`，只改 role/fate 两栏）
     #   ⇒ 不登记即落到 `produces`，**正确**。同 `--pick` 那一格的理由。
@@ -987,22 +891,8 @@ WRITE_EFFECTS: Final = {
 # 两者不是 1:1——stage2 有两个节点、stage5 有写作与验收两相、stage4 的上下文组装是
 # 0 成本节点、stage0 有三个人参与的动作。
 #
-# 原型的作业名 `n1`~`n9` 是**节点轴用 stage 编号命名**的产物，于是它必然坏掉：
-# 跳号（没有 `n7`）· 重号（`n5`/`n6` 同属 stage5）· 缺号（stage0 一个 action 都没有）·
-# label 说假话（`n1_partition` 的 label 写着「stage1 摄入+分章」，而「摄入」早已搬到 stage0）。
-# ⇒ **`n1..n9` 整套退役**（`Q-8`：退役而不删，这段注释就是它的标注）。
-#
-# 【为什么用动词不用新编号】编号会过期，动词不会——`n` 那套坏掉正是因为把序数
-# 编进了标识符。用 `<stage>.<动词>` 之后，加一个节点是免费的，而 label 从本表派生、
-# 不再手写：**手写的 label 会说谎，派生的不会。**
-#
-# 【它同时修好了一条测试】需求文档的 R 节编排轴一直就是**节点**，不是 stage
-# （R-2/R-3 是 stage2 的两个节点、R-5/R-6 是 stage4 的两个、R-7/R-8 是 stage5 的两相）。
-# 而 `tests/test_coverage.py` 曾用 `'R-' + stage.removeprefix('stage')` 去找需求节——
-# 那个式子只在 stage0/stage1 上对，`stage3` 拿到的是 **stage2 逐章抽取**的需求。
-# `PORTED_STAGES` 为空时这条 bug 整个被 `pytest.skip` 盖住，第一个 stage 移植进来才发作：
-# 要么报一串假 missing，要么**绿着而查的是另一层**。⇒ `STAGE_SECTIONS` 从本表派生，
-# 不许再手抄第二份。
+# 节点 id 使用稳定的 `<stage>.<动词>`；stage 是产物层轴，node 是可执行动作轴。
+# label、需求节、完成度和写入面都从本表派生，避免在多个消费者中手写平行清单。
 
 
 class NodeSpec(NamedTuple):
@@ -1042,16 +932,13 @@ class NodeSpec(NamedTuple):
 #: ⇒ F7 已把 stage0 查清：`remove` 接 `--source/--dry-run/--check-only`，
 #:   `edit` 接 `--apply-edit`；`approve` 是整份报告盖章，没有额外参数。
 #: ⇒ `stage4.context` / `stage7.assemble` 空：它们**本身**就是那个动作，
-#:   原型的 `--context-only` / `--assemble` 已作为 flag 退役（见 `SUPERSEDED_FREE_ENTRIES`）。
+#:   `stage4.context` / `stage7.assemble` 本身就是动作，因此没有同义 flag。
 #: ⇒ 三层 `*.approve` 的结论不一样：`stage6.approve` 确实有一个
 #:   候选序号 ⇒ F1 补成 `('--pick',)`；而 `stage7.approve` **没有参数可起名**
 #:   （一本书只有一份人物表，定稿是给整份盖章）⇒ 它的空元组是**终态**。
 #:   `stage0.approve` 同样给整份剔除报告盖章，空元组也是终态。
 #:
-#: ⚠ **这一列今天必然不全，而不全的方向是安全的**：`is_paid` 拿它当白名单，
-#: 没登记的 flag 在付费节点上一律按付费算。已知漏的两个（原型 `FREE_FLAGS` 有、
-#: 抓包的 `actions` 里没有，因此从没被 `test_free_entries_covers_...` 查过）：
-#: `n2_global --drop` 与 `n2_blueprint --replay-cache`。**登记在这里，F 期移植 stage2 时补。**
+#: 未登记的 flag 会由命令构造器直接拒收，节点表只描述当前真实入口。
 #: 【`produces` 那一列：默认路径往盘上写哪几份】它是「完成度按**产物存在性**判定」
 #: （`R-14.1`）的输入，也是 `would_write` 默认为真的依据——
 #: **每个节点的默认路径都产一份产物，那是「节点」这个词的定义**。
@@ -1076,23 +963,16 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=('stage1/main_text.json',
                                            'stage1/hook_copy.json',
                                            'stage1/partition_report.json')),
-    # ⚠ `--drop` / `--purge-role` 是 F5-1 补的，**而这一列是 `Rule.fix` 的取值面**：
-    #   `docs/schema/stage2.md` §5.1 那 24 条带修法的判据里，`global --drop` 与
-    #   `global --purge-role` 各占一条。少登记一个，`_validate` ⑧ 就把那条判据判红
-    #   ——那正是它该做的事（散文那条路上拼错 flag 名没有任何东西会出声）。
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
-                                 flags=('--migrate', '--drop', '--purge-role',
+                                 flags=('--renormalize', '--purge-role',
                                         '--revalidate', '--full-extract'),
                                  produces=('stage2/global_grounding.json',)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
-    # ⚠ `--replay-cache` 必须配 `--chapters`（缓存 key 只证明一份**单章** prompt/响应），
-    #   而「一个 flag 要求另一个 flag」本仓没有机制表达 ⇒ 那条约束落在本层的落盘路里。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
-                                 flags=('--prompt-only', '--check-only', '--migrate',
-                                        '--apply-edit', '--chapters', '--replay-cache',
-                                        '--revalidate'),
+                                 flags=('--prompt-only', '--check-only', '--renormalize',
+                                        '--chapters', '--revalidate'),
                                  produces=('stage2/chapter_blueprints.json',)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
                                   flags=('--dry-run', '--check-only', '--measure-only',
@@ -1110,7 +990,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--apply-edit'),
                                  produces=('stage4/plan_chapters.json',)),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
-    #   （原型的 `--context-only` 已作为 flag 退役，见 `SUPERSEDED_FREE_ENTRIES`）。
+    #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
                                  produces=('stage4/writer_context.json',)),
     # ⚠ `--revise` 是 F4 从 `stage5.review` **挪过来**的（用户裁决，见本表下方那段）。
@@ -1194,9 +1074,8 @@ NODES: Final[dict[str, NodeSpec]] = {
 # 顺带：原型 `n5_write --revalidate` 自述 0 成本，而它的 `FREE_FLAGS` 白名单里**没有它**
 # ⇒ 现役界面把一个不花钱的动作画成橙色并弹二次确认。本表已把它补进 `stage5.write.flags`。
 
-#: 八个产物层。**永不用作作业 id**——那一轴归 `NODES`。
-#: 它承重在六处：产物目录名 · schema 文档名 · Pydantic 模块名 · `Rule.stage` ·
-#: `PORTED_STAGES` · 校验报告路由 `/api/novels/:sid/check/:kind`。
+#: 八个当前产物层。**永不用作作业 id**——那一轴归 `NODES`。
+#: 它承重在产物目录名、schema 文档名、Pydantic 模块名、`Rule.stage` 与校验报告路由。
 STAGES: Final = tuple(f'stage{i}' for i in range(8))
 
 #: `stage` → 它的需求节。**从 `NODES` 派生，不许手抄。**

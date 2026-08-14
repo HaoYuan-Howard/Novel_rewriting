@@ -27,6 +27,7 @@ from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import CtxProvenance, PlanChapters, PlanEdit, WriterContext
 from novel import paths, prov
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.llm.prompts import with_json_shape
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
@@ -202,7 +203,7 @@ def build_prompt(ctx: RunContext) -> tuple[str, str]:
     """
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store, need_grounding=False)
-    return prompts.PLAN_SYS, _build_user(ctx, up)
+    return with_json_shape(prompts.PLAN_SYS, prompts.PLAN_HINT), _build_user(ctx, up)
 
 
 def _build_user(ctx: RunContext, up: _Upstreams) -> str:
@@ -216,7 +217,7 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
     #   规划的 user 里带着全书原文，骨架那一段每一个空格都在挤原文的预算。
     bs = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
     parts = [
-        f'《{ctx.title}》(source_id={ctx.sid})',
+        f'《{ctx.title}》',
         prompts.BLOCK_INDEX + '\n' + secidx,
         prompts.BLOCK_SKELETON + '\n' + bs,
     ]
@@ -334,14 +335,15 @@ def run_plan(ctx: RunContext, client: Any) -> CheckReport:
     # ⚠ **不显式传 `require`**：它从 `PlanResponse` 派生，恰好是
     #   `reconstruction_strategy` · `output_chapters` 两个——手写一份等于给
     #   「漏一个不报错」留一道门。
-    resp = client.ask_json(prompts.PLAN_SYS, _build_user(ctx, up),
+    system = with_json_shape(prompts.PLAN_SYS, prompts.PLAN_HINT)
+    resp = client.ask_json(system, _build_user(ctx, up),
                            model_cls=PlanResponse, purpose=ctx.node,
                            max_tokens=prompts.PLAN_MAX_TOKENS)
     params = _params(up)
     ctx.account('params', params)
     return write_plan(ctx, store, resp.model_dump(by_alias=True), up,
                       provenance=ctx.llm_provenance(
-                          PlanProvenance, prompts={'N4_SYS': prompts.PLAN_SYS},
+                          PlanProvenance, prompts={'N4_SYS': system},
                           model=client.model, params=params))
 
 

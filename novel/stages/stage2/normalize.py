@@ -506,23 +506,6 @@ def response_shape(blueprint: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def migrate_blueprint_context(context: Any) -> dict[str, Any]:
-    """旧 context_upto 账诚实升级为 v1；v2 账原样保留。"""
-    value = dict(context) if isinstance(context, dict) else {}
-    if 'architecture' in value:
-        return value
-    return {
-        'architecture': 'cumulative-past-v1',
-        'batch_size': int(value.get('batch_size') or 1),
-        'stable_prefix': None,
-        'current_chapter_full': True,
-        'future_visible': not bool(value.get('context_upto', True)),
-        'past_neighbor_chars_max': None,
-        'continuity_chars_max': None,
-        'past_names_chars_max': None,
-    }
-
-
 def normalize_blueprints(data: dict[str, Any], main_text: list[dict[str, Any]],
                          characters: dict[str, dict[str, Any]]) \
         -> tuple[dict[str, Any], dict[str, Any]]:

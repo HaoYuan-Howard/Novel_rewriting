@@ -56,16 +56,11 @@ def draft_projection(data: object) -> object:
 
 
 def draft_consumed_of(rec: dict[str, Any]) -> DraftConsumed:
-    """成稿 → `judged[].consumed` 那一格（契约里现成的模型，不另造一份）。
-
-    ⚠ `has_budget_chars` 是三态里「知不知道」那一格：这份稿是不是**旧契约**下写的
-    （旧稿没有 `budget_chars`）——判别用**结构特征**，不用时间戳。
-    """
+    """成稿 → `judged[].consumed` 那一格（契约里现成的模型，不另造一份）。"""
     from novel import prov
     return DraftConsumed(
         output_ordinal=int(rec.get('output_ordinal') or 0),
         text_sha1=prov.fingerprint(str(rec.get('text') or '')),
-        has_budget_chars=rec.get('budget_chars') is not None,
     )
 
 
@@ -230,18 +225,14 @@ def overlap_ratio(text: str, entry: dict[str, Any],
                           exclude=mandated_verbatim(entry))
 
 
-def target_range(entry: dict[str, Any]) -> tuple[int, int] | None:
-    """本章的篇幅带 `(下限, 上限)`；没有预算返回 `None`（**不拿猜的数挡人**）。
+def target_range(entry: dict[str, Any]) -> tuple[int, int]:
+    """本章的篇幅带 `(下限, 上限)`。
 
-    **`DRAFT_BAND` 就是执行的那个带，没有第二层宽限。**
-    ⚠ 原型在这个带之外又乘了一次 ±10%（`BUDGET_GRACE` 配 `LENGTH_GRACE`），
-    实际执行 0.81~1.21×——与 stage4 的 `OP_BAND` 那次是**同一个形状**：
-    写下来的带和执行的带是两个数，模型按 A 算、校验按 B 判。
-    实测代价：31 章里 **10 章（32%）落在 ±10% 之外，而两条判据一次都没响**。
+    **`DRAFT_BAND` 就是唯一执行带，没有第二层宽限。**
     """
-    budget = entry.get('budget_chars')
-    if not budget:
-        return None
+    budget = int(entry['budget_chars'])
+    if budget <= 0:
+        raise ValueError('budget_chars 必须是正整数')
     lo, hi = DRAFT_BAND
     return round(budget * lo), round(budget * hi)
 
@@ -358,8 +349,8 @@ class Book:
         return self._cache['bands']
 
     @property
-    def sep_chars(self) -> float | None:
-        """段落分隔符的平均字符开销（段落归一的基准）。缺 ⇒ `None`（段落归一那一步不跑）。
+    def sep_chars(self) -> float:
+        """段落分隔符的平均字符开销（段落归一的基准）。
 
         ⚠ 它是 `measurable.body.paragraph_sep_chars` 那个**平均值**，而
         `core/bands.py::sep_band_of_text` 明写「别走这个平均值，它段数越少偏得越低」。
@@ -368,7 +359,7 @@ class Book:
         ⚠ 那条 off-by-one 的触发条件是「段数 ≤ 3」，而正文章节段数都在几十以上 ⇒ 本层不咬人；
         咬人的是**文案**（本来就短），所以 stage6 才必须绕开它。
         """
-        return self.measurable.get('paragraph_sep_chars')
+        return float(self.measurable['paragraph_sep_chars'])
 
     @property
     def quote_style(self) -> tuple[str, str] | None:

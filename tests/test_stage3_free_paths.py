@@ -8,9 +8,9 @@ test_stage3_free_paths.py —— stage3 的四条 0 成本路，**第一次被�
 `RunContext` → `ArtifactStore` → 判据 → 报告 → 落盘，整条走一遍。
 在 D 期之前那四个函数**零调用点、零覆盖**——写好了，但从没有人跑过。
 
-【沙箱怎么来】拿盘上真语料按 `corpus.load_cut` **现算**成新契约形态，
+【沙箱怎么来】拿显式配置的当前产物按 `corpus.load_current` 严格验证，
 写进 `mkdtemp()` 的一份拷贝里。
-⚠ **原语料一个字节都不许动**（`../Novel_refactoring/Output` 是只读证据，改坏了就再也对不了账）。
+⚠ **原语料一个字节都不许动**；所有写盘动作只在临时目录执行。
 ⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸 ⇒ 一律 `mkdtemp()`。
 """
 from __future__ import annotations

@@ -1,44 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-stage6.py —— 开篇文案那一层的判据行。源是 `docs/schema/stage6.md` §四（**唯一落点**）。
+"""Stage 6 当前判据注册表：25 条开篇文案规则。
 
-**25 条现役：6 HARD · 10 INFO · 3 metric · 6 unver。** 外加 3 条退役而不删。
-（2026-08-14：`hook_semantic_spoiler`/`hook_semantic_grounding` 两条**语义**判据进表，
-`hook_spoiler_unver`/`hook_relations_unver` 同批退役——见文件尾的退役登记。）
+分布为 6 HARD、10 INFO、3 metric、6 unver。机械检查与语义审判共享同一注册表；
+`hook_semantic_spoiler` 和 `hook_semantic_grounding` 是当前语义规则。所有修复均由人通过
+`--pick` 或 `--apply-edit` 完成，不开放付费自动返工。
 
-【判据 id 一律照抄文档，不加 stage 前缀】它们是与 `wontfix.json` 的键、
-与 `_provenance.fixes` 的引用之间的契约——加个前缀就等于把存量豁免全部作废。
-
-【落点账已经平过】F1-0 审计：25 条里有 **9 条**原本落不了地——5 条落点写着
-`Q-1`/`Q-4`/`Q-5`（`_REQ_RE` 拒收，**import 期当场炸**）、4 条指着写有
-「无守卫 → `B-12`」的 `R-9.7`/`R-9.8`（会被判说假话）。已补 `R-9.15`~`R-9.18`
-收下它们，`Q-x` 降为下面的 `note`。⇒ 每一条的 `requirement` 都是核过的，不是猜的。
-
-【两条本层特有的裁决，都在这里生效】
-
-**① 全表 `repair='NONE'` ⇒ `actionable` 全 `False`。**
-本层一条付费自救都不开（已经有更便宜的路：`--pick N` 换一条候选、`--apply-edit`
-改一个字，都是 0 成本）。原型这里标着 `actionable=True` 12 条，那是**另一个意思**的
-actionable（「人能 0 成本改掉」而不是「写作层能修」）。裁决是**不放宽载体侧那两条
-不变量**，那 12 条的「人怎么改」写进 `note`——理由见 `docs/schema/_report.md` §2.1。
-⚠ **两条语义判据同样 `repair='NONE'`**（remediation 落 `human`）：语义命中的修路
-仍是 `--pick` 避开 / `--apply-edit` 改句，不给写作层开付费自救。
-
-**② 全表不设 `quote`。** `Rule.quote` 答的是「凭据能不能原样引用**给写作节点**」，
-而本层根本没有反哺写作层那条路（见①）。且它今天**全仓零消费方**——
-给一个没有消费方的语义标上值，与 `actionable` 是同一条病。
-
-⚠⚠ **由此推出一条要写进 README 的结论**：6 条 `unver` 每次都走
-`findings.unverifiable(...)`（`builder._status_of` 强制），而 `badge_of` 见
-`unver` 就至少 amber ⇒ **stage6 的徽章在结构上永远不可能是 `pass`**，
-最好情况是 `amber`（`passed=True`、退出码 0）。**这不是缺陷**，
-是本层「能查的都查了，查不了的写在脸上」的可见形态。
-（两条语义判据在盘上没有当前语义审判产物时同样落 `unver`——「没审」不是「没问题」。）
+6 条 `unver` 常驻输出，因此无 HARD 命中时报告为 `amber` 且 `passed=True`；缺少当前语义
+审判产物同样是 `unver`，不能解释为已经检查通过。
 """
 from __future__ import annotations
 
-from contracts.rules import REGISTRY, RetiredRule, Rule
+from contracts.rules import REGISTRY, Rule
 
 STAGE = 'stage6'
 
@@ -188,13 +161,8 @@ _metric('hook_report', '下发范围 · 各候选字数 · 原作文案段字数
              '所以这三个数**一律现算**，不许读产物')
 
 _metric('hook_quote_shape', '引语条数 · 最长一条字数 · 对白比，与原作并排', 'R-9.5',
-        note='**度量不是门，本轮不给阈值。** 实测（五本 × 三候选 + 七本原作文案）：'
-             '平均最长引语 **原作 22.6 字 → 候选 6.8 字**，条数 2.71 → 1.20，'
-             '**12/12 同向**。根因不在模型：`HOOK_SYS` 的两条硬禁**联合**把引号台词掐死了'
-             '——「只引用正文真实出现过的句子」（判据已退役成 `hook_quote_unver`，'
-             '而 prompt 那句没撤）＋「不许复用正文里读到的句子」（HARD，在执行）。'
-             '模型只能遵守被执行的那一半，于是少引、短引。'
-             '⇒ 报出两边的数字，把**因**写在结论里，等 prompt 改完再谈门（判据 29）')
+        note='**度量不是门，当前不给阈值。** 报告把候选与原作文案的引语形态并排展示，'
+             '供人工定稿时判断；不得把它提升成引语必须逐字来自正文的机械门。')
 
 _metric('hook_secret_literal', '与秘密原文的逐字重合条数（按读者时点分已揭示/未揭示）', 'R-9.15',
         note='盘上 9/9 候选恒 **0 条**。⚠ **0 条是常态，不是「卖点没用上」**：'
@@ -218,7 +186,7 @@ _hard('hook_semantic_spoiler', '文案没有以改写形式说破结局/高潮/�
       check_kind='semantic',
       note='基准只有 arc 三项（`R-9.9` 改版后 secrets 全量下发、允许说破；'
            '取值面与 hook_arc_literal 共用 `arc_sources`——那条是字面探针，'
-           '本条补语义等价的那一半，正是退役的 hook_spoiler_unver 自陈的盲区）。'
+           '本条补语义等价的那一半）。'
            '⚠ 审判报告只引用文案自身字节，代码闸拒收复述 arc 原文的 reason。'
            '〔人 0 成本改掉：`--pick` 避开泄底候选 / `--apply-edit` 改掉那一句，'
            '再重跑 `stage6.semantic` 清红〕')
@@ -228,7 +196,7 @@ _info('hook_semantic_grounding', '文案的事实性陈述在下发面里有据'
       note='口径「不许发明事实，必须发明文字」（`R-9.8` 打架句删除后的现役口径）。'
            '参照集＝写手当时看得见的东西：下发面（人物/关系/秘密）＋开篇正文。'
            '与 hook_invented_name/number（词面探针）互补：那两条抓「词面无据」，'
-           '本条抓「陈述无据」——正是退役的 hook_relations_unver 自陈的盲区。'
+           '本条抓「陈述无据」。'
            '〔人 0 成本改掉：`--apply-edit` 删掉那个说法〕')
 
 
@@ -265,36 +233,5 @@ _unver('hook_body_missing', '开篇那几章都有成稿', 'R-9.16', who_checks=
             '前提不成立要出声，不许静默按「有几章算几章」跑完')
 
 _unver('hook_body_stale', '判的是照盘上这份正文写的那一版文案', 'R-9.17', who_checks='INFO',
-       note='⚠⚠ **口径与原型不同，而这是被迁移逼出来的**：`judged[].sha1` 是**整文件**指纹，'
-            '新契约裁过 stage5 产物的字段 ⇒ 迁移后它**必然**对不上，'
-            '照原型退回整文件 sha1 会让盘上 2/3 本误报红。'
-            '⇒ `consumed`（字段投影）判过期、`sha1` 只作**审计**；'
-            '**没有 `consumed` ⇒ `unver`**（说不清），不是 fresh、也不是 stale。'
-            '盘上：成年人/头牌无 `consumed` ⇒ `unver`；三岁 2/2 条有 ⇒ 判得动')
-
-
-# ── 三条退役而不删（报告里常驻列出） ────────────────────────────────────────
-
-REGISTRY.retire(RetiredRule(
-    rule='hook_spoiler_unver', stage=STAGE,
-    why='「不说破任何答案」已有真实守卫：`hook_semantic_spoiler`（`R-9.19`，付费语义审判，'
-        '2026-08-14）。留着这一行就是一个问题两个落点——旧行永远说「查不了」，'
-        '新判据却在给命中/干净/unver 三态答案，读报告的人只会信其中一行。'
-        '语义产物缺席时新判据自己落 unver，「没查」这个信息不丢；'
-        '字面探针零判别力的账另见 `hook_secret_literal`/`hook_arc_literal` 的 note'))
-
-REGISTRY.retire(RetiredRule(
-    rule='hook_relations_unver', stage=STAGE,
-    why='「没歪曲人物关系/不发明事实」并入 `hook_semantic_grounding`（`R-9.20`，'
-        '付费语义审判，2026-08-14），口径「不许发明事实，必须发明文字」。'
-        '⚠ 历史教训保留在此：这条要求曾与同一份 prompt 的「不复用原句」硬禁互相打架，'
-        '实测代价是最长引语 22.6 → 6.8 字、12/12 同向——'
-        '**一条要求在被判定为「无守卫」之前，先确认它本身是对的**'))
-
-REGISTRY.retire(RetiredRule(
-    rule='hook_no_source', stage=STAGE,
-    why='「这本书有原作文案段可比」。缺 `hook_copy.json` 已改**显式终态**'
-        '（`R-1.12` 把无文案段的书挡在 stage1，本层不可能遇到），'
-        '而它留着会造出 **6 盏假绿灯**：0 成本实测把原作文案段与 `style_hook` '
-        '一起置空重跑，13 条 hard+info 打了 13 个 `[OK]`，其中 6 条**根本没跑**'
-        '——它们全都挂在「有原作文案段」这个前提上。判据 31'))
+       note='`consumed`（字段投影）判过期，`sha1` 只作审计。'
+            '当前 `JudgedDraft` 必须携带 `consumed`，逐条正文投影不一致即 stale。')

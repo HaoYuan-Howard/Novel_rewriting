@@ -254,9 +254,9 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
         entry = book.chapters[o]
         recs = by_ord.get(o) or []
         base = {'output_ordinal': o,
-                'from_source_ordinals': entry.get('from_source_ordinals') or [o],
-                'budget_chars': entry.get('budget_chars'),
-                'source_chars': entry.get('source_chars') or 0}
+                'from_source_ordinals': entry['from_source_ordinals'],
+                'budget_chars': entry['budget_chars'],
+                'source_chars': entry['source_chars']}
         if not recs:
             rows.append(ReviewChapter(**base, findings=[finding(
                 'draft_missing',
@@ -408,25 +408,19 @@ def _converge(rows: list[ReviewChapter], book_fs: list[Finding], prev: Review | 
     """
     old: dict[tuple[int | None, str, str], Finding] = {}
     old_text: dict[int | None, str | None] = {}
-    old_file: dict[int | None, str | None] = {}
     if prev is not None:
         for r in prev.chapters:
             old_text[r.output_ordinal] = r.draft_text_sha1
-            old_file[r.output_ordinal] = r.draft_sha1
             for f in r.findings:
                 old[(r.output_ordinal, f.rule, f.evidence_key)] = f
         for f in prev.book:
             old[(None, f.rule, f.evidence_key)] = f
     now_text = {r.output_ordinal: r.draft_text_sha1 for r in rows}
-    now_file = {r.output_ordinal: r.draft_sha1 for r in rows}
 
     def rewritten(o: int | None) -> bool:
         if o is None:                      # 书级条目跟着「有没有任何一章重写过」走
             return any(rewritten(k) for k in now_text)
-        # 旧验收没有正文指纹：只能沿用整文件比较一次，**不能假装知道旧正文**。
-        if old_text.get(o):
-            return now_text.get(o) != old_text.get(o)
-        return now_file.get(o) != old_file.get(o)
+        return now_text.get(o) != old_text.get(o)
 
     resolved = dict(old)
 

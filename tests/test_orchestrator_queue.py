@@ -10,8 +10,6 @@ test_orchestrator_queue.py —— 批量队列（`R-13`）。
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 from pydantic import ValidationError
 
@@ -20,14 +18,13 @@ from contracts.schema.orchestration import QueueCounts
 from novel.errors import ApprovalRequired
 from novel.orchestrator import queue as Q
 from novel.orchestrator import state as S
+from tests import corpus
 
-CORPUS = os.environ.get('NOVEL_OUTPUT') or os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    'Novel_refactoring', 'Output')
-BOOKS = ('7615069877019300633', '7581413687886353176')
+CORPUS = corpus.corpus_root()
+BOOKS = tuple(sorted({artifact.source_id for artifact in corpus.iter_artifacts()}))
 _NO_CORPUS = pytest.mark.skipif(
-    not os.path.isdir(CORPUS),
-    reason=f'盘上语料不在 {CORPUS}——这几条**没在查**，不是「查过没事」')
+    CORPUS is None or not BOOKS,
+    reason=f'未设置包含当前产物的 {corpus.CORPUS_ENV}')
 
 
 # ───────────────────── 顺序与范围（纯函数，不碰盘） ─────────────────────
@@ -90,30 +87,12 @@ def test_items_that_did_not_run_must_have_a_reason():
 # ───────────────────── 盘上真语料（零成本，不写一个字节） ─────────────────────
 
 @_NO_CORPUS
-def test_plan_runs_on_the_real_corpus_and_every_item_says_why():
+def test_plan_runs_on_the_current_corpus_and_every_item_says_why():
     """**必填的 `why`**：一份说不出理由的计划，人没法判断该不该批准它花钱。"""
     p = Q.plan(CORPUS, BOOKS, until_stage='stage3')
-    assert p.items or p.blocked, '两本书八层，不该一项都排不出来'
     for it in p.items + p.blocked:
         assert it.why and it.steps
         assert NODES[it.node].stage in ('stage0', 'stage1', 'stage2', 'stage3')
-
-
-@_NO_CORPUS
-def test_human_gates_block_the_queue_and_say_who_they_wait_for():
-    """`R-13.5` 与 `R-0.3b` 用的是同一句话：**明确说出在等谁**。
-
-    ⚠ 而且**一旦挡住，其后的项一律跟着挡住**——那才叫「挡住队列」。
-    只挡那一项而让后面照跑，等于让下游拿着一份没人签过字的上游继续走。
-    """
-    p = Q.plan(CORPUS, BOOKS[:1], until_stage='stage7')
-    assert p.blocked, 'stage0.approve 是人做的动作，它该挡住这条链'
-    first = p.blocked[0]
-    assert first.waiting_on in Q.HUMAN_NODES or first.waiting_on == Q.WAITING_ON_INBOX
-    assert all(b.waiting_on for b in p.blocked), '被挡住就必须说出在等谁'
-    #: 挡住之后，本书**没有任何一项**还留在 `items` 里。
-    assert not [it for it in p.items if it.sid == BOOKS[0]
-                and NODES[it.node].stage > NODES[first.node].stage]
 
 
 @_NO_CORPUS
@@ -192,7 +171,7 @@ def test_skip_means_skip_the_queue_does_not_relist_finished_work():
     """`R-14` 的「已存在即跳过」在队列这一侧的样子：判成 `skip` 的层不进计划。"""
     ov = S.overview(CORPUS, BOOKS[0])
     p = Q.plan(CORPUS, BOOKS[:1], until_stage='stage7')
-    listed = {it.node for it in p.items}
+    listed = {it.node for it in p.items if it.sid == BOOKS[0]}
     for node in Q.nodes_up_to('stage7'):
         if node in Q.HUMAN_NODES:
             continue

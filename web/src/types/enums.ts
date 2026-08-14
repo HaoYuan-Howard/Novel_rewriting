@@ -32,8 +32,6 @@ export interface EnumsResponse {
   hinge_kinds: string[]
   nonbody_kinds: string[]
   time_layers: string[]
-  ops: string[]
-  op_band: Record<string, [number, number]>
   hinge_groups: Record<string, string>
   style_words: string[]
   invent: { allow: string[]; forbid: string[]; principle: string }

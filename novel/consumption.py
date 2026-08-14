@@ -67,17 +67,15 @@ def stage3_grounding(data: object) -> object:
 def _stage2_source(source: object) -> object:
     if not isinstance(source, dict):
         return None
-    if 'start' in source:
-        return (source.get('text'), source.get('start'), source.get('end'),
-                source.get('normalized'), source.get('recovery'))
-    return (source.get('starts_with'), source.get('ends_with'))
+    return (source.get('text'), source.get('start'), source.get('end'),
+            source.get('normalized'), source.get('recovery'))
 
 
 def _stage2_hinge(hinge: object) -> object:
     if not isinstance(hinge, dict):
         return None
     source = hinge.get('source')
-    text = source.get('text') if isinstance(source, dict) else hinge.get('text')
+    text = source.get('text') if isinstance(source, dict) else None
     return hinge.get('kind'), text
 
 

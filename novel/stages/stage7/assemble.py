@@ -68,8 +68,6 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
         bad.append(f'同章双份：{up.dup}（哪一份是成品无从判断，删掉不要的那一份）')
     if up.missing:
         bad.append(f'计划有而成稿无：{up.missing}（先把它们写出来）')
-    if up.mixed:
-        bad.append(f'旧契约稿：{up.mixed}（重写它们，否则拼出来不是一本连贯的书）')
     if not up.hook_text:
         bad.append('开篇文案还没定稿（txt 的第一段就是它：先跑 `stage6.approve --pick N`）')
     if bad:

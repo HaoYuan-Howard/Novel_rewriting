@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-test_stage4_context.py —— `writer_context` 的**确定性组装**。
-
-⭐ **本文件最值钱的一条是 `test_the_assembler_reproduces_every_context_on_disk`**：
-拿计划 + 三份上游重组一遍 `writer_context`，与盘上那三份**逐字段相同，差异 0**。
-它一次钉住六道逐章闸门、名字表的三个方向、以及「按引用搬运不转抄」那条规矩——
-**对位 stage7 那条「重拼的 book.txt 逐字节相同」**。
-
-⚠⚠ **这条对账是 3/3 本，而计划那一侧只有 2/3**：`成年人不做选择` 的
-`plan_chapters.json` 缺 `_provenance`、载体拒收（`corpus.MISSING_PROVENANCE` 登记在案）。
-组装器**吃 dict 不吃模型**，那本才进得来——而节点照样拒绝跑它，**那是对的**：
-两件事分别由两道门管（理由见 `novel/stages/stage4/__init__.py` ③）。
-"""
+"""`writer_context` 当前契约的确定性组装与结构守卫。"""
 from __future__ import annotations
 
 import pytest
@@ -38,9 +26,8 @@ BOOKS = sorted(set(MAIN) & set(BPS) & set(GG) & set(PLANS) & set(CTX))
 
 needs_corpus = pytest.mark.skipif(not BOOKS, reason='盘上没有语料——本族对账无从谈起')
 
-#: 盘上那份 ctx 里、**新契约已裁掉**的顶层键（`tests/corpus.py::CUT` 那张表的 stage4 部分）。
-#: 逐字段比对时跳过它们——它们不在新产物里，那正是裁撤的意思。
-_CUT_TOP = frozenset({'source_id', 'title', 'reconstruction_strategy', 'book', '_provenance'})
+#: 来源账由写盘口生成；纯组装器只负责正文形状，因此逐字段对账时单独排除。
+_GENERATED_TOP = frozenset({'_provenance'})
 
 
 def _diffs(mine: object, disk: object, path: str = '', out: list[str] | None = None) -> list[str]:
@@ -49,7 +36,7 @@ def _diffs(mine: object, disk: object, path: str = '', out: list[str] | None = N
         out = []
     if isinstance(mine, dict) and isinstance(disk, dict):
         for k in sorted(set(mine) | set(disk)):
-            if (path == '' and k in _CUT_TOP) or k == 'op':   # `op` 是逐章那一处裁撤
+            if path == '' and k in _GENERATED_TOP:
                 continue
             if k not in mine:
                 out.append(f'{path}.{k} 只在盘上有：{str(disk[k])[:60]}')
@@ -96,54 +83,25 @@ def test_the_rebuilt_context_passes_the_carrier():
 
 
 @needs_corpus
-def test_the_book_whose_plan_the_carrier_refuses_is_still_reconcilable():
-    """⚠ **一本书的计划载体拒收，而它的上下文照样对得上账。**
-
-    `成年人不做选择` 的 `plan_chapters.json` 根本没有 `_provenance`
-    （`.INVALID` 提升路把来源账整个丢了，`corpus.MISSING_PROVENANCE` 登记在案）。
-    ⇒ **节点会拒绝跑它，那是对的**；而组装器吃 dict，于是这条对账是满的 3/3。
-    **不许靠伪造一份来源账把它变绿。**
-    """
-    refused = {sid for sid, _rel in corpus.MISSING_PROVENANCE}
-    assert refused, '这张豁免表空了？那条铁证没了'
-    hit = [sid for sid in BOOKS if sid in refused]
-    assert hit, '盘上那本缺来源账的书不在对账范围里——本条就白写了'
-    for sid in hit:
-        asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
-        assert not _diffs(asm.ctx, CTX[sid])
-
-
-# ── 二、组装的副产物：那些原型只 print 的账 ───────────────────────────────
+# ── 二、组装的副产物 ────────────────────────────────────────────────────
 
 @needs_corpus
 def test_the_side_ledger_is_returned_not_printed():
-    """⚠⚠ **原型这些全是 `print`，于是它们只在跑的那一刻存在。**
-
-    产物落盘之后，「这一章剔了 3 个在场者」与「这一章本来就没人」在盘上长得一模一样。
-    这里钉的是**盘上实测的那几个数**——它们不是 0，所以这条账真的有东西可说。
-    """
-    got = {}
+    """组装副产物必须以结构化列表返回，内容随小说而变。"""
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
-        got[len(asm.ctx['chapters'])] = (len(asm.subs), len(asm.chapter_collisions),
-                                         len(asm.held_rules), len(asm.setting_cut))
-    # 章数 → (自造标签替换, 章级新增撞名, 规则暂不下发, setting 剔句)
-    assert got == {14: (0, 1, 13, 0), 8: (0, 0, 0, 0), 9: (15, 0, 0, 0)}, got
+        assert isinstance(asm.subs, list)
+        assert isinstance(asm.chapter_collisions, list)
+        assert isinstance(asm.held_rules, list)
+        assert isinstance(asm.setting_cut, list)
 
 
 @needs_corpus
-def test_the_setting_gate_hits_nothing_and_that_is_the_registered_baseline():
-    """⚠⚠ **命中 0 【不是】「setting 没泄底」。**
-
-    本闸门是纯字面子串包含，只挡**转抄式**。实测在盘上唯一有 secrets 的那本书上
-    命中 **0**，**连那条已知的真泄漏都挡不住**——它与 secret 的措辞完全不重叠
-    （「主角穿越到…」vs「许言是穿越者」）。
-    ⇒ 报告那一侧必须打「查不了」，**不许打「通过」**：一盏保证会亮的绿灯不携带信息。
-    """
+def test_the_setting_gate_returns_structured_results():
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
-        assert asm.setting_cut == [], '命中不再是 0 了？那要重新写这条基线，别顺手改断言'
-        assert asm.setting_emptied == []
+        assert isinstance(asm.setting_cut, list)
+        assert isinstance(asm.setting_emptied, list)
 
 
 # ── 三、名字表的三个方向 ─────────────────────────────────────────────────

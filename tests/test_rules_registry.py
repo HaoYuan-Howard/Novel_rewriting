@@ -103,7 +103,7 @@ def test_a_fix_route_is_accepted_when_the_node_and_flag_both_exist():
     下面每条 `pytest.raises` 都会绿，而真表一条也注册不进来。
     """
     reg = Registry()
-    reg.register(_s2(rule='r_fix_free', fix=('stage2.blueprint', '--migrate')))
+    reg.register(_s2(rule='r_fix_free', fix=('stage2.blueprint', '--renormalize')))
     reg.register(_s2(rule='r_fix_paid', fix=('stage2.global', '--purge-role')))
     assert len(reg) == 2
 
@@ -111,7 +111,7 @@ def test_a_fix_route_is_accepted_when_the_node_and_flag_both_exist():
 def test_a_fix_route_may_not_name_a_node_that_does_not_exist():
     """节点名拼错 ⇒ 界面上那个「去修」按钮指到一个跑不起来的地址。"""
     with pytest.raises(ValueError, match='不在 `NODES` 里'):
-        Registry().register(_s2(fix=('stage2.bluepirnt', '--migrate')))
+        Registry().register(_s2(fix=('stage2.bluepirnt', '--renormalize')))
 
 
 def test_a_fix_route_may_not_name_a_flag_the_node_does_not_accept():
@@ -146,7 +146,7 @@ def test_the_fix_route_is_what_makes_the_cost_colour_derivable():
     §5.1 那一列就不再携带信息了。
     """
     from novel.orchestrator.nodes import is_paid
-    free = _s2(rule='r_c_free', fix=('stage2.blueprint', '--migrate'))
+    free = _s2(rule='r_c_free', fix=('stage2.blueprint', '--renormalize'))
     paid = _s2(rule='r_c_paid', fix=('stage2.global', '--purge-role'))
     assert is_paid(free.fix[0], free.fix[1:]) is False
     assert is_paid(paid.fix[0], paid.fix[1:]) is True
@@ -160,31 +160,17 @@ def test_wordlist_rule_must_declare_its_baseline():
     Registry().register(_ok(wordlist=True, baseline='头牌 0/17，三岁 2/40；人读真违规 6/17'))
 
 
-def test_registry_covers_exactly_the_ported_stages():
-    """**两个方向同时钉住。**（它换掉了 `test_registry_starts_empty`——那条在
-    stage3 进 `PORTED_STAGES` 那一刻必然红，而它守的东西这一条全都守着，还多守一个方向。）
-
-    · 注册了却没进 `PORTED_STAGES` ⇒ 正向覆盖率**不会查它**，判据白写；
-    · 进了 `PORTED_STAGES` 却没注册 ⇒ 那张表在**说谎**，正向覆盖率成了摆设。
-    """
-    from contracts.rules import PORTED_STAGES, REGISTRY
-    assert {r.stage for r in REGISTRY.all()} == set(PORTED_STAGES)
+def test_registry_covers_exactly_the_current_stages():
+    """当前八层必须各有判据，且不得注册不存在的阶段。"""
+    from contracts.invariants import STAGES
+    from contracts.rules import REGISTRY
+    assert {r.stage for r in REGISTRY.all()} == set(STAGES)
     assert len(REGISTRY) > 0, '注册表空了——`contracts/judges/__init__.py` 多半没被 import'
 
 
-def test_the_judges_package_declares_what_it_loaded():
-    """`LOADED` 与 `PORTED_STAGES` 分家 ⇒ 有一层的判据行写了却没被 import，
-    而**没被 import 的判据行与不存在没有区别**。"""
-    from contracts.judges import LOADED
-    from contracts.rules import PORTED_STAGES
-    assert set(LOADED) == set(PORTED_STAGES)
-
-
-def test_registering_a_stage_outside_the_ported_set_is_visible():
-    """守卫的守卫：上面那条靠的是集合相等，而集合相等在**两边都空**时也成立。"""
-    from contracts.rules import PORTED_STAGES, REGISTRY
+def test_registry_is_not_vacuously_empty():
+    from contracts.rules import REGISTRY
     assert REGISTRY.of_stage('stage3'), 'stage3 的判据行一条都没注册上'
-    assert 'stage3' in PORTED_STAGES
 
 
 def test_semantic_check_kind_is_confined_to_stage5_and_stage6():

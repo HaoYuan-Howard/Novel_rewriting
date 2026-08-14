@@ -146,8 +146,8 @@ def run_partition(
     if dry_run:
         return result, None
 
-    store.write_legacy(MAIN_TEXT, result.main_text)
-    store.write_legacy(HOOK_COPY, result.hook_copy)
+    store.write(MAIN_TEXT, result.main_text)
+    store.write(HOOK_COPY, result.hook_copy)
     store.write(REPORT, result.report)
     from novel.stages.stage1.checks import run_check_only
     return result, run_check_only(ctx)

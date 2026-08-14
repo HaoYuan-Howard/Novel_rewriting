@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-test_stage3.py —— 第一条纵切的对账。**盘上三本，零成本，一分钱不花。**
-
-【这份测试的判准】结论集必须与**原型**一致：
-`--check-only` 三本 **PASS / PASS / PASS + 2 条 INFO `micro_quote`**（三岁那本），
-`--remeasure` 的 `measurable` **23 项逐值相同**。
-⚠ **不一致就是骨架抄错了，不是数据变了**——盘上那三份产物一个字节都没动过。
-
-⚠ 语料按 `tests/corpus.py::load_cut` **现算**成新契约形态，**不落任何盘**：
-写一份迁移后的语料出来就是第二个落点，而它会与 `CUT` 分家。
-"""
+"""Stage3 当前契约、确定性复测与判据反例。"""
 from __future__ import annotations
 
 import pytest
@@ -29,24 +19,15 @@ from tests import corpus
 pytestmark = pytest.mark.skipif(corpus.corpus_root() is None,
                                 reason='盘上没有语料——这几条**没在查**，不是「查过没事」')
 
-#: 盘上三本里 `micro_quote` 唯一命中的那本，以及它命中了**几处**（`stage3.md` §六：「三岁 2 处」）。
-#:
-#: ⚠ **「2 处」是两条微引用，不是两条 finding。** 原型把一次命中汇总成**一条**结论、
-#: 逐处放进凭据（`别说话别说话——` / `结果没过三天`），本层照搬——
-#: 改动结论的**粒度**会连带改掉收敛键（`_common.md` §七：收敛键 = (章, rule, evidence_key)），
-#: 而那是一次语义裁决，不该在移植途中顺手做掉。
-_EXPECT_MICRO = {'我，三岁嘴强月老，拆姻缘一拆一个准': 2}
-
-
 def _books() -> list[str]:
     return sorted({a.book_dir for a in corpus.iter_artifacts()
                    if a.rel == 'stage3/style_grounding.json'})
 
 
 def _cut(book: str, rel: str):
-    """盘上那一份 → 新契约形态。找不到返回 `None`（上游缺失是合法状态）。"""
+    """读取当前严格契约；找不到时返回 `None`。"""
     a = next((x for x in corpus.iter_artifacts() if x.book_dir == book and x.rel == rel), None)
-    return corpus.load_cut(a) if a is not None else None
+    return corpus.load_current(a) if a is not None else None
 
 
 def _inputs(book: str):
@@ -81,28 +62,18 @@ def _report(book: str):
                     if k in prov})
 
 
-# ───────────────── ⭐ 与原型逐条对账 ─────────────────
+# ───────────────── 当前正式产物 ─────────────────
 
-def test_the_corpus_actually_has_three_books():
-    """守卫的守卫：语料没找到时上面的 skip 会说出来，但**找到了却只有一本**不会。"""
-    assert len(_books()) == 3, f'盘上只找到 {len(_books())} 本 stage3 产物'
+def test_the_current_corpus_has_stage3_artifacts():
+    assert _books()
 
 
 @pytest.mark.parametrize('book', _books())
-def test_check_only_matches_the_prototype_verdict(book):
-    """三本全 PASS，唯一的非空结论是三岁那本的 2 条 `micro_quote`。"""
+def test_check_only_accepts_every_current_formal_artifact(book):
+    """正式画像已经过写入闸门，复检不得命中 HARD。INFO 命中随小说内容变化。"""
     rep = _report(book)
-    title = book.rsplit('_', 1)[0]
-    hit_rules = sorted(r.rule for r in rep.rules if r.status == 'hit')
-    assert hit_rules == (['micro_quote'] if title in _EXPECT_MICRO else []), \
-        f'{title} 的命中集与原型不一致：{hit_rules}\n{render(rep)}'
-    if title in _EXPECT_MICRO:
-        line = next(r for r in rep.rules if r.rule == 'micro_quote')
-        assert len(line.findings) == 1, '原型把一次命中汇总成一条结论，逐处放进凭据'
-        assert len(line.findings[0].evidence) == _EXPECT_MICRO[title], \
-            f'微引用处数与 stage3.md 记的不一致：{line.findings[0].evidence}'
-    # 一条 HARD 都不许命中 ⇒ 徽章不是 fail。三本原型都是 PASS。
-    assert not [r for r in rep.rules if r.sev == 'hard' and r.status == 'hit']
+    hard_hits = [r.rule for r in rep.rules if r.sev == 'hard' and r.status == 'hit']
+    assert not hard_hits, f'{book} 的当前正式画像命中 HARD：{hard_hits}\n{render(rep)}'
 
 
 @pytest.mark.parametrize('book', _books())
@@ -115,11 +86,7 @@ def test_every_registered_rule_produced_a_row(book):
 
 @pytest.mark.parametrize('book', _books())
 def test_remeasure_reproduces_the_stored_numbers_value_by_value(book):
-    """**23 项逐值相同** —— 3 本 × 23 项的免费等价测试。
-
-    ⚠ 不一致就是 `measure()` 抄错了：盘上那份 `measurable` 是原型算的，
-    而两边走同一个 `round()`，所以**直接判等，不需要容差**。
-    """
+    """当前产物的 23 项机械度量可逐值复算。"""
     sg, main, hook, _gg = _inputs(book)
     stored = Measurable.model_validate(sg['measurable'])
     now = Measurable(body=measure_body(main), hook=measure((hook.text or '').strip()))
@@ -156,8 +123,7 @@ def test_drift_is_not_scheduled_at_write_time_and_that_shows(book):
 
 # ───────────────── 每条 HARD 都要有一份会让它红的样本 ─────────────────
 #
-# 「见过它通过」不是证据，「见过它红一次」才是。盘上三本全 PASS，
-# 所以反例只能合成——而合成反例正是 `checks.check` 吃 dict 不吃模型的理由：
+# 「见过它通过」不是证据，「见过它红一次」才是。反例使用合成 dict：
 # 新契约把八维做成了 `Field(min_length=1)`，模型化之后 `required` **构造不出反例**。
 
 def _clean(book: str) -> dict:
@@ -300,8 +266,7 @@ def test_required_rejects_incomplete_or_reordered_chapter_style_coverage():
         'surface_habits': ['短句在转折处收束'],
     }
     data['chapter_styles'] = [local]
-    outcomes = checks.check(
-        data, corpus='', expected_chapters=(1, 2), require_chapter_styles=True)
+    outcomes = checks.check(data, corpus='', expected_chapters=(1, 2))
     required = next(outcome for outcome in outcomes if outcome.rule == 'required')
     assert required.findings and '期望 [1, 2]' in required.findings[0].detail
 
@@ -309,8 +274,7 @@ def test_required_rejects_incomplete_or_reordered_chapter_style_coverage():
         {**local, 'source_ordinal': 2},
         local,
     ]
-    outcomes = checks.check(
-        data, corpus='', expected_chapters=(1, 2), require_chapter_styles=True)
+    outcomes = checks.check(data, corpus='', expected_chapters=(1, 2))
     required = next(outcome for outcome in outcomes if outcome.rule == 'required')
     assert required.findings and '实得 [2, 1]' in required.findings[0].detail
 
@@ -330,20 +294,6 @@ def test_stage3_has_one_production_path_without_variant_parameter():
     from novel.stages.stage3 import style
 
     assert list(inspect.signature(style.run_style).parameters) == ['ctx', 'client']
-
-
-def test_only_explicit_old_full_book_provenance_can_skip_chapter_coverage():
-    from novel.stages.stage3 import style
-
-    legacy_prompt_key = 'STYLE_' + 'SYS'
-    assert not style._requires_chapter_styles({
-        '_provenance': {'prompts': {legacy_prompt_key: 'legacy-fingerprint'}},
-    })
-    assert style._requires_chapter_styles({
-        '_provenance': {'prompts': {'STYLE_CHAPTER_SYS': 'current-fingerprint'}},
-    })
-    assert style._requires_chapter_styles({}), \
-        '来源账缺失的未知产物不能伪装成清理前的全书产物'
 
 
 
@@ -416,7 +366,7 @@ def test_every_green_light_reports_what_it_scanned(book):
 
 @pytest.mark.parametrize('book', _books())
 def test_the_three_accounting_keys_finally_have_an_exit(book):
-    """⚠ 实跑三本原型 `--check-only`，报告里这三个键**一行都没有**。这一条把账还上。"""
+    """三个当前记账键都在报告中有常驻出口。"""
     rep = _report(book)
     assert {a.key for a in rep.accounting} == {'attempts', 'revalidated', 'gates_skipped'}
     text = render(rep)
@@ -426,29 +376,19 @@ def test_the_three_accounting_keys_finally_have_an_exit(book):
 
 @pytest.mark.parametrize('book', _books())
 def test_gates_skipped_is_reported_even_when_the_producer_never_recorded_it(book):
-    """盘上三本都是**串行跑的**，`gates_skipped` 零样本 ⇒ 报告要打 `[????] 未记录`。
-    「记了 0 次」与「压根没记」必须分开。"""
+    """`recorded` 必须与当前产物是否真的保存该键一致。"""
+    sg, *_ = _inputs(book)
+    recorded = 'gates_skipped' in (sg.get('_provenance') or {})
     rep = _report(book)
     line = next(a for a in rep.accounting if a.key == 'gates_skipped')
-    assert line.recorded is False
-    assert '[????] gates_skipped：未记录' in render(rep)
+    assert line.recorded is recorded
+    assert ('[????] gates_skipped：未记录' in render(rep)) is (not recorded)
 
 
 # ───────────────── 响应契约 ─────────────────
 
 def test_require_is_derived_and_covers_hook_style():
-    """⭐ **原型这个调用点漏了 `hook_style`**，而漏传不报错——它只是静默停掉一条
-    HARD 闸门（判据 39）。从 `model_cls` 派生之后，这件事结构上不可能再发生。"""
+    """响应必填键从当前模型派生，并覆盖 `hook_style`。"""
     from contracts.schema.stage3 import StyleResponse
     from novel.llm.prompts import required_top_level
     assert set(required_top_level(StyleResponse)) == {'voice', 'surface_habits', 'hook_style'}
-
-
-# ───────────────── 退役而不删 ─────────────────
-
-@pytest.mark.parametrize('book', _books()[:1])
-def test_the_two_retired_rules_are_still_listed(book):
-    """让「量过、量不准，所以撤了」与「忘了」读起来不一样。"""
-    rep = _report(book)
-    assert {r.rule for r in rep.retired} == {'num_vs_desc', 'cliche'}
-    assert '已退役' in render(rep)

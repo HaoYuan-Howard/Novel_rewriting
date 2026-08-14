@@ -1,22 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-prompts.py —— 下发给文案节点的那两段。**`HOOK_SYS` 与原型 `N8_SYS` 逐字节相同。**
+"""Stage 6 文案节点的现行 system prompt 与下发材料。
 
-⚠⚠ **改一个字都要先读这句**：这份 prompt 压着 120+ 条真机 findings 的学费，
-而**改写不会报错**——它只会让某一类失效重新出现，且要花一次真钱才看得见。
-`tests/test_stage6.py` 有一条会红的测试逐字节钉着它。
-
-【唯一一处有意的搬家】三种写法各自那句说明，原型写在产地的一个 dict 里，
-而**枚举表在 `contracts/invariants.py`**——「有哪三种写法」与「每种是什么意思」
-分了两个落点。现在合成一份（`HOOK_APPROACH_NOTES`），prompt 这边由 `fill()` 插值。
-**那是搬家不是改措辞**：渲染出来的字节与原型逐字相同，由
-`test_the_rendered_prompt_is_byte_for_byte_too` 钉着。
-
-⚠⚠ **那条测试是被一次真实失误逼出来的**：模板确实逐字节相同，而三句说明被**转述**了，
-渲染结果短了 48 字——丢掉的正是 `result_flashback` 那句里的硬约束
-**「不得取后期高潮或结局」**，而那是本层唯一还禁的东西（`R-9.9`）。
-**只钉模板抓不到它**：占位符两侧一个字节都没变。⇒ 要钉的是**发出去的字节**。
+三种写法及其说明统一来自 `HOOK_APPROACH_NOTES`，由 `fill()` 插值；测试锁定实际发送的
+完整字节，确保 `result_flashback` 的「不得取后期高潮或结局」约束不会在渲染时丢失。
 
 【`given` 只有这一处产出】发明越界探针（`hook_invented_name` / `hook_invented_number`）
 拿它当「给过什么」的全集。它必须由 `build_material` 产出、而不是另找一处拼一遍：
@@ -29,9 +16,9 @@ from dataclasses import dataclass, field
 
 from contracts.invariants import HOOK_APPROACHES, HOOK_APPROACH_NOTES
 from novel.core.bands import hook_shape_band
-from novel.llm.prompts import fill
+from novel.llm.prompts import fill, with_json_shape
 
-# ⚠⚠ 与原型 `Stage6/n8_hook.py::N8_SYS` **逐字节相同**（893 字 / 32 行）。
+#: 文案生成的现行 system prompt。
 HOOK_SYS = """\
 你在为一本小说写【开篇文案】——放在正文之前、让读者愿意点进第一章的那段话。只输出 JSON。
 
@@ -66,7 +53,7 @@ $APPROACHES
   text 是完整文案，简短有力，多为短句短段；
 - rationale: 一句话，说明这三条各自赌的是什么。"""
 
-#: 结构提示。⚠ 与原型 `N8_HINT` 同形，只是 `approach` 那一格从 `APPROACHES` 派生。
+#: 结构提示；`approach` 从 `HOOK_APPROACHES` 派生。
 HOOK_HINT = {'candidates': [{'approach': '|'.join(HOOK_APPROACHES), 'text': 'str'}],
              'rationale': 'str'}
 
@@ -79,9 +66,11 @@ def hook_system() -> str:
     ⚠ `HOOK_APPROACH_NOTES` 的键与 `HOOK_APPROACHES` 由 invariants 的 import 期断言钉死，
     所以「加了一种写法而忘了写说明」在这里表现为 `KeyError`，不是一句空说明。
     """
-    return fill(HOOK_SYS,
-                APPROACHES='\n'.join(f'  {i}. {k} —— {v}'
-                                     for i, (k, v) in enumerate(HOOK_APPROACH_NOTES.items(), 1)))
+    rendered = fill(HOOK_SYS,
+                    APPROACHES='\n'.join(
+                        f'  {i}. {k} —— {v}'
+                        for i, (k, v) in enumerate(HOOK_APPROACH_NOTES.items(), 1)))
+    return with_json_shape(rendered, HOOK_HINT)
 
 
 @dataclass(frozen=True)
@@ -103,8 +92,7 @@ def voice_for_hook(style: dict) -> dict:
 
     现役 Stage 3 的 `voice.mode_variation` 只描述当前源章可见的情境变化，Stage 5
     也只消费同源项。这里读取的是书级聚合画像；文案只有一段话，本来就不需要
-    「不同情境」这一维，因此继续剥掉它。该投影也兼容历史全书产物：旧产物实测曾把
-    「系统摊牌／系统介入」写进这一维，而「系统」到 ch14 才向读者揭示。
+    「不同情境」这一维，因此剥掉它。
 
     而对文案来说这一维**本来就没用**：文案是一段话，没有「不同情境」。
     ⇒ 处置是按消费方投影，不是删——Stage 5 的逐章写手仍然需要对应局部项。
@@ -142,7 +130,7 @@ def _roster_upto(ctx: dict, upto: int) -> dict[str, str | None]:
 
 def build_material(*, title: str, ctx: dict, style: dict, secrets: list[dict],
                    lead: list[dict], missing: list[int], upto: int) -> Material:
-    """组装下发材料。**块的措辞逐字移植自原型。**"""
+    """按现行 Stage 6 契约组装下发材料。"""
     hook_style = style.get('hook_style')
     facts = [s for s in (secrets or []) if s.get('fact')]
     blocks = [
@@ -188,11 +176,7 @@ def build_material(*, title: str, ctx: dict, style: dict, secrets: list[dict],
         + f"\n目标篇幅：约 {(_hook_meas_raw(style) or {}).get('chars', '?')} 字"
           f'（本书原作文案段的长度）。这是**目标**，不是要写进文案里的信息。',
 
-        # 【剧透边界】旧版这里只给「还有 N 条未揭示的秘密」这个数字、不给内容，
-        # 论证是「给了 fact 就是把答案发过去」。用户裁决把上界整个挪了：
-        # **秘密可以说破，结局不行**。标定依据是原作自己：5 本原作文案**没有一本**
-        # 提结局或高潮，而其中一本的原作文案确实说破了一条 secret。
-        # **这条边界不是我们定的，是量出来的。**
+        # 【剧透边界】秘密可以说破，结局与最终高潮不行。
         '── 唯一的禁区 ──\n'
         '全书的结局与最终高潮不许写，也不要暗示故事最终如何收场（上面的卖点里若牵到结局，'
         '只用它的前半段）。除此之外没有别的信息禁区——秘密该说破就说破；但事实的时点仍须'

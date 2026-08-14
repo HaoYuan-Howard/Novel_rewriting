@@ -133,7 +133,7 @@ def _loaded_view(**over):
             code='b371244', model='deepseek-v4-pro',
             prompts={'STYLE_SYS': '0ca5dc44e0'},
             inputs={'stage1/main_text.json': {'file': 'b8eb890096', 'consumed': None}},
-            attempts=[{'kind': 'initial', 'user_prompt': '37b4277e08',
+            attempts=[{'kind': 'chapter_aggregate', 'user_prompt': '37b4277e08',
                        'output': '345dd96743', 'cache_policy': 'default'}]),
         hook_copy_text='全家被贬为奴籍发配青楼。',
         measured_now=meas, bands_now={'句子形态': '短句'},

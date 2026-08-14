@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 75 条判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
+checks.py —— 71 条判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
 
-⚠⚠ **唯一的判定落点。** 两个节点的落盘闸门 / `--check-only` / `--migrate` 之后的复检
-走的都是 `check()` 这一个函数——三条路各判一遍就会长出三把尺子。
-原型这一层已经踩过：`n2_global` 与 `n2_blueprint` 各带一段自己的校验，
-而权威那份在 `check_blueprints.py` 里，三处对 `address.by` 的判定**互不相同**。
+⚠⚠ **唯一的判定落点。** 两个节点的落盘闸门 / `--check-only` / `--renormalize` 之后的复检
+走的都是 `check()` 这一个函数，保证生成、重算与复检使用同一把尺子。
 
 ⚠⚠ **本模块吃 `dict` 不吃模型。** 一旦判据跑在已经过了 Pydantic 的对象上，
 「必填齐全」那一类（`role_missing` / `address_missing` / `world_rule_no_desc` /
-`event_empty` / `summary_empty` / `hinge_unanchored`）在**结构上构造不出会红的样本**
-——它们必然全绿，于是又变成一盏保证会亮的绿灯。
-⚠ 而那不是假设：存量产物与人工编辑那条路**本来就不过 Pydantic**（`--apply-edit` 落的是
-一份人改过的 dict），判据要在那份 dict 上说得出话。
+`event_empty` / `summary_empty`）在**结构上构造不出会红的样本**
+——它们必然全绿。纯函数保留 dict 输入面，是为了让当前候选在写入前能产出带规则 id、
+证据与修复路由的完整报告；正式读取仍只接受当前 Pydantic schema。
 
 【一张表，两个节点共用】`stage2.global` 判 R-2 那一族、`stage2.blueprint` 判 R-3 那一族，
 而**复检相两份产物一起读**（判 `canonical_unique` 要 global，判 `present_ids_dangling`
@@ -21,7 +18,7 @@ checks.py —— 75 条判据的**实现**。行在 `contracts/judges/stage2.py`
 
 【判据与产地必须用同一把尺子】本模块一处都不自己写解析：
 `surface_owners` / `surface_owner_since` / `resolve_present_names` / `classify_unattested`
-全部来自 `novel/core/naming.py`，`walk_spans` 来自 `novel/core/spans.py`。
+全部来自 `novel/core/naming.py`，正式区间读取来自 `novel/core/spans.py`。
 原型为此吃过两次亏——校验器手抄了一版「只比 canonical」，而下游比的是 display_name，
 **两份都漏掉了别名，且没有任何东西会出声**。
 
@@ -41,7 +38,7 @@ from novel.core.naming import (
     classify_unattested, person_naming_surfaces, resolve_present_names, rule_names_a_person,
     strip_distinguisher, surface_first_chapter, surface_owner_since, surface_owners,
 )
-from novel.core.spans import content_only, exact_span, walk_spans
+from novel.core.spans import content_only, exact_span, locate_spans
 from novel.stages.stage2.coverage import hole_intervals
 from novel.core.text import norm
 from novel.report.findings import Outcome, ran, unverifiable
@@ -102,11 +99,6 @@ HOLE_MIN_CHARS = 30
 #: ——那是整章的起头交代，与「几个字的换行空隙」不是一回事）。
 #: 只进 `uncovered_holes` 那条度量，**不改 `edge_hole` 的档**。
 HOLE_FINE_CHARS = 12
-
-#: `anchor_short` 的线：内容字符少于它就计数。
-#: ⚠ **只报计数，不判违约**——契约的「照抄 8~30 字」是**生成期指导**不是产物不变量
-#: （落盘前的回取会把两头改长度）。
-ANCHOR_MIN_CONTENT = 6
 
 #: `beat_id` 里的章号。⚠ **别按定宽切片**：`b{ord:02d}_{seq:02d}` 在三位数的章上会溢出宽度。
 _BEAT_ID = re.compile(r'^b(\d+)_(\d+)$')
@@ -181,18 +173,10 @@ class _Ctx:
         self.owners = surface_owners(self.chars)
         self.since = surface_owner_since(self.chars)
 
-        # 【`span` 的定位：全模块唯一一次】⚠⚠ **`recover=False` 是本层的一条不变量**：
-        # 只有落盘路（`normalize_verbatim`）许开救回臂；校验器一开，
-        # 「能定位」就会把「锚点不是原文字节」这件事盖掉。
         self.spans: dict[Any, list[tuple[str, int, int]]] = {}
         self.span_problems: list[tuple[Any, str]] = []
         if self.has_bp and self.has_mt:
-            for o, be, hit, prob in walk_spans(self.bps, self.text_of):
-                if prob:
-                    self.span_problems.append((o, prob))
-                    continue
-                assert hit is not None
-                self.spans.setdefault(o, []).append((be.get('beat_id'), hit[0], hit[3]))
+            self.spans, self.span_problems = locate_spans(self.bps, self.text_of)
 
     def first_seen(self, names: Iterable[str]) -> Any | None:
         """这些字面里最早出现的那一章；一个都没出现过返回 `None`。"""
@@ -727,12 +711,12 @@ def _canon(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 五、拍与区间（8 HARD · 1 INFO）+ 相关度量
+# 五、拍与区间（7 HARD · 1 INFO）+ 相关度量
 # ─────────────────────────────────────────────────────────────────────────────
 
-_BEAT_RULES = ('beat_id_unique', 'beat_id_format', 'span_unlocatable', 'anchor_ambiguous',
+_BEAT_RULES = ('beat_id_unique', 'beat_id_format', 'span_unlocatable',
                'anchor_not_verbatim', 'verbatim_failed', 'edge_hole', 'beats_collapsed',
-               'beats_coarse', 'span_coverage', 'span_coverage_per_chapter', 'anchor_short',
+               'beats_coarse', 'span_coverage', 'span_coverage_per_chapter',
                'uncovered_holes')
 
 
@@ -778,9 +762,9 @@ def _beats(c: _Ctx) -> list[Outcome]:
                    scanned=f'{len(ids)} 个 beat_id'))
 
     if not c.has_mt:
-        for rid in ('span_unlocatable', 'anchor_ambiguous', 'edge_hole', 'beats_collapsed',
+        for rid in ('span_unlocatable', 'edge_hole', 'beats_collapsed',
                     'beats_coarse', 'span_coverage', 'span_coverage_per_chapter',
-                    'anchor_short', 'uncovered_holes'):
+                    'uncovered_holes'):
             out.append(unverifiable(rid, _NO_MAIN_TEXT))
         out += _verbatim(c)
         return out
@@ -791,69 +775,12 @@ def _beats(c: _Ctx) -> list[Outcome]:
     # ── `span_unlocatable` ────────────────────────────────────────────────
     out.append(ran('span_unlocatable',
                    [finding('span_unlocatable',
-                             detail=f'精确 source span 与原文不一致，或旧 locator 无法按序定位'
+                             detail=f'精确 source span 与原文不一致或没有按序排列'
                                     f'（失败＝这一拍**没有量纲**：'
                                    f'字数、覆盖率、hinge 归属全部落空）：{prob}',
                             evidence=[f'ch{o}', prob])
                     for o, prob in c.span_problems],
                    scanned=f'{n_hit}/{n_all} 条 beat 定位成功'))
-
-    # ── `anchor_ambiguous` ────────────────────────────────────────────────
-    # ⚠⚠ **窗口按定位器的游标算，不按整章算**：判据要和定位器用**同一把尺子**，
-    #   否则报出来的是判据自己的噪声（整章口径会把首拍之前那些**够不着**的重复算成歧义）。
-    ambiguous, n_anchor = [], 0
-    for x in c.bps:
-        o = x.get('chapter_ordinal')
-        text = c.text_of.get(o, '')
-        got = {bid: (s, e) for bid, s, e in c.spans.get(o, [])}
-        pos = 0
-        for be in (x.get('beats') or []):
-            se = got.get(be.get('beat_id'))
-            if not se:
-                continue
-            if 'start' in (be.get('span') or {}):
-                pos = se[1]
-                continue
-            n_anchor += 1
-            window = text[pos:]
-            raw = ((be.get('span') or {}).get('starts_with') or '').strip()
-            a = content_only(raw)
-            # 落盘前已把锚点回取成原文字节：含标点的原串在窗口内唯一时，**标点本身就完成了消歧**
-            # （`哥哥！！」` vs 后文 `哥哥，醒醒`）。一律 content_only 会把这份信息抹掉、造假歧义
-            # ⇒ 只有 raw 不可用时才退回定位器的内容空间。
-            hits = window.count(raw) if raw and raw in window else content_only(window).count(a)
-            if a and hits > 1:
-                ambiguous.append(f'{be.get("beat_id")}.starts_with={raw[:14]!r}×{hits}'
-                                 f'（ch{o} 游标 {pos} 之后）')
-            pos = se[1]
-    out.append(ran('anchor_ambiguous',
-                   [finding('anchor_ambiguous',
-                            detail=f'{len(ambiguous)} 个锚点在定位器还要搜的那段里匹配到多处 —— '
-                                   f'「这一拍对应原文哪一段」有了两个答案，取到哪一个只取决于'
-                                   f'上一条 beat 恰好停在哪儿，**改动上一条就会无声地换一段**：'
-                                   f'{_cut(ambiguous)}',
-                            evidence=sorted(ambiguous))] if ambiguous else [],
-                   scanned=f'{n_anchor} 个定位成功的 starts_with 锚点'))
-
-    # ── `anchor_short`（度量）─────────────────────────────────────────────
-    anchors = [
-        (be.get('beat_id'), field, content_only(span.get(field) or ''))
-        for _o, be in all_beats
-        for span in [be.get('span') or {}]
-        for field in ('starts_with', 'ends_with')
-        if field in span
-    ]
-    short = [f'{bid}.{f}={a!r}' for bid, f, a in anchors if a and len(a) < ANCHOR_MIN_CONTENT]
-    out.append(ran('anchor_short', [
-        finding('anchor_short',
-                detail=f'{len(short)}/{len(anchors)} 个锚点内容字符 <{ANCHOR_MIN_CONTENT}'
-                       f'（最短 {min((len(a) for _b, _f, a in anchors if a), default=0)}）—— '
-                       f'⚠ 契约的「照抄 8~30 字」是**生成期指导**不是产物不变量'
-                       f'（回取会两头改长度），**此处只报计数不判违约**。'
-                       f'⚠⚠ 而产地按 8~30 要求、校验侧承认做不到，'
-                       f'中间那段差额会被模型用**编造**填上：{_cut(short, 6)}',
-                evidence=[f'{len(short)}/{len(anchors)}'])],
-        scanned=f'{len(anchors)} 个锚点'))
 
     # ── 覆盖率两条度量 + 空隙 ─────────────────────────────────────────────
     holes = _uncovered(c, HOLE_MIN_CHARS)
@@ -1029,13 +956,12 @@ def _verbatim(c: _Ctx) -> list[Outcome]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _HINGE_RULES = ('hinge_cross_chapter', 'hinge_in_hole', 'hinge_anchor_void', 'hinge_drift',
-                'hinge_cascade', 'hinge_unanchored', 'chapter_no_hinge', 'hinge_density')
+                'hinge_cascade', 'chapter_no_hinge', 'hinge_density')
 
 
 def _hinge_text(hinge: dict[str, Any]) -> str:
     source = hinge.get('source')
-    return str(source.get('text') if isinstance(source, dict)
-               else hinge.get('text') or '')
+    return str(source.get('text') if isinstance(source, dict) else '')
 
 
 def _hinges(c: _Ctx) -> list[Outcome]:
@@ -1044,21 +970,6 @@ def _hinges(c: _Ctx) -> list[Outcome]:
 
     out: list[Outcome] = []
     n_h = sum(len(be.get('hinges') or []) for x in c.bps for be in (x.get('beats') or []))
-
-    # ── `hinge_unanchored` —— 不吃原文，先判 ───────────────────────────────
-    unanchored = [f'{be.get("beat_id")}:{_hinge_text(h)[:16]!r}'
-                  for x in c.bps for be in (x.get('beats') or [])
-                  for h in (be.get('hinges') or [])
-                  if 'source' not in h
-                  and not ((h.get('starts_with') or '').strip()
-                           and (h.get('ends_with') or '').strip())]
-    out.append(ran('hinge_unanchored',
-                   [finding('hinge_unanchored',
-                             detail=f'{len(unanchored)} 条 hinge 没有可验证的 source span —— '
-                                    f'旧 locator 也不完整，无法由代码回取原文字节，'
-                                   f'而闭卷写作靠它保真：{_cut(unanchored)}',
-                            evidence=sorted(unanchored))] if unanchored else [],
-                   scanned=f'{n_h} 条保真材料'))
 
     # ── `chapter_no_hinge` ────────────────────────────────────────────────
     no_h = [x.get('chapter_ordinal') for x in c.bps
@@ -1079,10 +990,14 @@ def _hinges(c: _Ctx) -> list[Outcome]:
 
     # ── 锚不到的四分流 + 转抄漂移 ─────────────────────────────────────────
     cascade, hole, void, cross, drift = [], [], [], [], []
+    failure_cause = {
+        str(row[0]): str(row[2])
+        for row in (c.prov.get('verbatim_failures') or [])
+        if isinstance(row, (list, tuple)) and len(row) >= 3 and row[1] == 'hinge'
+    }
     for x in c.bps:
         o = x.get('chapter_ordinal')
         by_id = {bid: (s, e) for bid, s, e in c.spans.get(o, [])}
-        ch_txt = content_only(c.text_of.get(o, ''))
         for be in (x.get('beats') or []):
             s, e = by_id.get(be.get('beat_id'), (0, 0))
             # 与 span 同一套归一化：只比内容字符，别拿标点全半角去判保真。
@@ -1091,28 +1006,19 @@ def _hinges(c: _Ctx) -> list[Outcome]:
                 source = h.get('source')
                 raw = _hinge_text(h).strip()
                 t = content_only(raw)
-                item = f'{be.get("beat_id")}:{raw[:16]!r}' if t else (
-                    f'{be.get("beat_id")}:{(h.get("starts_with") or "")[:10]!r}…'
-                    f'{(h.get("ends_with") or "")[:10]!r}')
+                beat_id = str(be.get('beat_id'))
+                item = f'{beat_id}:{raw[:16]!r}' if t else beat_id
                 if not t:
-                    # 【`text` 缺失 = 失败态标记，不是一个合法的可选字段】
-                    # 锚不到时的设计是**原样留着、不猜不删**——删了这一次会响亮报错，
-                    # 下一次跑就没得报了。三种根因分流：
-                    if be.get('beat_id') not in by_id:
+                    if beat_id not in by_id:
                         cascade.append(item)
                         continue
-                    if not isinstance(source, dict):
-                        a = content_only(h.get('starts_with') or '')
-                        b = content_only(h.get('ends_with') or '')
-                        i = ch_txt.find(a) if a else -1
-                        j = ch_txt.find(b, max(i, 0)) if (b and i >= 0) else -1
-                        (hole if (
-                            i >= 0 and j >= 0 and a not in slice_)
-                         else void).append(item)
-                        continue
-                    void.append(item)
-                    continue
-                if not isinstance(source, dict) and t in slice_:
+                    cause = failure_cause.get(beat_id, '')
+                    if '空档' in cause:
+                        hole.append(item)
+                    elif '本章原文' in cause:
+                        void.append(item)
+                    else:
+                        drift.append((item, None))
                     continue
                 h_start, h_end, problem = exact_span(
                     source, c.text_of.get(o, ''))
@@ -1150,7 +1056,7 @@ def _hinges(c: _Ctx) -> list[Outcome]:
                    [finding('hinge_anchor_void',
                             detail=f'{len(void)} 条 hinge 的锚点在**本章原文里根本找不到**'
                                    f'（是转述或编的）—— 四分流里唯一一条根因在模型身上的。'
-                                   f'⚠ 不要跑 `--migrate`：产物已经是锚点期的，'
+                                   f'⚠ 不要跑 `--renormalize`：锚点本身没有原文依据，'
                                    f'它只会把同一套解析再跑一遍：{_cut(void)}',
                             evidence=sorted(void))] if void else [],
                    scanned=f'{n_h} 条保真材料'))
@@ -1188,7 +1094,7 @@ def _hinges(c: _Ctx) -> list[Outcome]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PRESENT_RULES = (
-    'time_layer_no_present', 'present_ids_dangling', 'present_names_partial',
+    'time_layer_no_present', 'present_ids_dangling',
     'present_names_invented', 'present_continuity', 'present_ungrounded',
     'present_early_named', 'event_early_name', 'pronoun_surface_unattested',
     'narration_multi', 'scope_violation', 'event_empty', 'summary_empty',
@@ -1200,18 +1106,10 @@ _PRESENT_RULES = (
 def _context_observation(context: dict[str, Any]) -> tuple[str, list[str]]:
     architecture = context.get('architecture')
     batch_size = context.get('batch_size')
-    if not architecture:
-        upto = context.get('context_upto')
-        ok = batch_size == 1 and upto is True
-        verdict = '旧版逐章累积上下文' if ok else '⚠ 旧版上下文边界不符合约定'
-        return (
-            f'architecture=legacy-unversioned · batch_size={batch_size} · '
-            f'context_upto={upto} —— {verdict}',
-            [f'legacy-unversioned', f'batch={batch_size}', f'upto={upto}'],
-        )
     current_full = context.get('current_chapter_full')
     future_visible = context.get('future_visible')
-    ok = batch_size == 1 and current_full is True and future_visible is False
+    ok = (architecture == 'bounded-fidelity-v2' and batch_size == 1
+          and current_full is True and future_visible is False)
     verdict = '当前章全文保留、未来正文不可见' if ok else '⚠ 模型可见边界不符合约定'
     detail = (
         f'architecture={architecture} · batch_size={batch_size} · '
@@ -1327,28 +1225,11 @@ def _present(c: _Ctx) -> list[Outcome]:
                                 evidence=sorted(bad_pc))] if bad_pc else [],
                        scanned=f'{n_pc} 个引用 / registry {len(c.chars)} 人'))
 
-    # ── `present_names_partial` —— 混版探测 ───────────────────────────────
-    named_beats = [be for _o, be in all_beats if be.get('present_names') is not None]
-    unnamed = [(o, be.get('beat_id')) for o, be in all_beats if be.get('present_names') is None]
-    out.append(ran('present_names_partial',
-                   [finding('present_names_partial',
-                            detail=f'{len(unnamed)}/{len(all_beats)} 条 beat 没给 '
-                                   f'`present_names`，而同一份产物里别的 beat 给了 —— '
-                                   f'模型没按新契约产全。⚠ 这些 beat 的 `present_char_ids` '
-                                   f'只能是**模型自己编的编号**，而 `char_001` 这种'
-                                   f'**恰好很可能落在 registry 里**、成员检查兜不住：'
-                                   f'{_cut([b for _o, b in unnamed])}',
-                            evidence=sorted(f'ch{o}:{b}' for o, b in unnamed))]
-                   if named_beats and unnamed else [],
-                   scanned=f'{len(all_beats)} 拍'))
-
     # ── 五分：自造（HARD）+ 歧义/漏收/代词/时点（4 条度量）────────────────
     five = ('present_names_invented', 'present_names_ambiguous', 'present_names_unlisted',
             'present_names_pronoun', 'present_names_late')
-    if not (c.has_gg and c.has_mt and named_beats):
-        why = (_NO_GLOBAL if not c.has_gg else _NO_MAIN_TEXT if not c.has_mt else
-               '这份产物一条 beat 都没给 `present_names`（旧契约）—— '
-               '五分是拿**原文称呼**去解析的，没有称呼就没有可解析的东西')
+    if not (c.has_gg and c.has_mt):
+        why = _NO_GLOBAL if not c.has_gg else _NO_MAIN_TEXT
         out += [unverifiable(r, why) for r in five]
     else:
         pron = set(BARE_PRONOUNS)
@@ -1605,7 +1486,7 @@ def _present(c: _Ctx) -> list[Outcome]:
             'scope_violation',
             '这份 blueprint 没记 `_provenance.scope_violations` —— **键不在 = 「不知道」**，'
             '不发绿灯。⚠ 产地必须**无条件**写这个键（没越界写空列表），'
-            '否则「键不在 = 没越界」会给所有旧产物发绿灯'))
+            '否则缺失字段会被误读成没有越界'))
     else:
         out.append(ran('scope_violation',
                        [finding('scope_violation',
@@ -1619,8 +1500,7 @@ def _present(c: _Ctx) -> list[Outcome]:
         out.append(unverifiable(
             'batch_density',
             '这份 blueprint 没记 `_provenance.batches` —— **无从判断哪几章出自同一次调用**。'
-            '⚠ 校验器靠它区分「逐章」「分了 N 批」「不知道」三种产物，'
-            '而第三种绝不能与第一种合并'))
+            '无法核对逐章调用次数与章覆盖'))
     else:
         per_call = [len(b or []) for b in batches]
         out.append(ran('batch_density', [
@@ -1628,8 +1508,7 @@ def _present(c: _Ctx) -> list[Outcome]:
                     detail=(f'逐章抽取（{len(batches)} 章 = {len(batches)} 次调用）'
                             if per_call and max(per_call) == 1 else
                             f'{len(batches)} 次调用，每次 {per_call} 章')
-                           + ' —— 逐章产物上它说明的是「批与章是同一个东西」，'
-                             '⚠ 而**旧产物记的是别的值**',
+                           + ' —— 当前契约要求「批与章是同一个东西」',
                     evidence=[f'{len(batches)}', f'{per_call}'])],
             scanned=f'{len(batches)} 批'))
 

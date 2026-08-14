@@ -146,32 +146,27 @@ def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Out
         _t, _m, fs = _normalize_and_judge(text, up)
         texts.append((label, text, _labelled(label, fs)))
 
-    stale, no_consumed = _judged_drift(art, up)
+    stale, missing = _judged_drift(art, up)
     return checks.check(
         texts=texts, mat=up.mat, secrets=up.secrets, arc=up.arc,
         given_leak=checks.downsend_leak(up.mat.given, up.arc),
         lead_upto_ch=art.lead_upto,
         hook_chars=(up.style_hook or {}).get('chars'),
         approved=art.approved is not None,
-        stale=stale, no_consumed=no_consumed) + semantic.outcomes(store, art)
+        stale=stale, missing=missing) + semantic.outcomes(store, art)
 
 
 def _judged_drift(art: Hook, up: _Upstreams) -> tuple[list[str], list[str]]:
-    """成稿有没有在这份文案之后改过。返回 `(改过的, 说不清的)`。
-
-    ⚠⚠ **只比 `consumed`，不比 `sha1`**（`R-9.17`）：整文件指纹在迁移之后**必然**
-    对不上（新契约裁过 stage5 的字段），拿它判过期会把每一本都误报成红。
-    没记 `consumed` 的 ⇒ **说不清**，落 `unver`，不是 fresh 也不是 stale。
-    """
+    """成稿有没有在这份文案之后改过。返回 `(改过的, 已缺失的)`。"""
     stale: list[str] = []
-    no_consumed: list[str] = []
+    missing: list[str] = []
     for rel, stored in art.judged.items():
         now = up.judged.get(rel)
-        if stored.consumed is None or now is None or now.consumed is None:
-            no_consumed.append(rel)
+        if now is None:
+            missing.append(rel)
         elif stored.consumed.text_sha1 != now.consumed.text_sha1:
             stale.append(rel)
-    return stale, no_consumed
+    return stale, missing
 
 
 def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
@@ -253,7 +248,7 @@ def run_identity(ctx: RunContext) -> tuple[dict[str, str], CheckReport]:
         mat=up.mat, secrets=up.secrets, arc=up.arc,
         given_leak=checks.downsend_leak(up.mat.given, up.arc),
         lead_upto_ch=up.upto, hook_chars=(up.style_hook or {}).get('chars'),
-        approved=False, stale=[], no_consumed=[]
+        approved=False, stale=[], missing=[]
     ) + semantic.unavailable_outcomes('恒等基线是 0 成本路，不跑付费语义审判')
     return grid, _report(ctx, store, outcomes, None)
 
@@ -404,7 +399,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
     文本不适用整拦；红行照 `--recheck` 先例呈现在报告里，退出码由 `report.passed` 定。
 
     ⚠ 来源账走 `rewrite_provenance(prev, by='--apply-edit')`（真改了 LLM 产的字节，
-    与 `--pick` 相反——那条一个字都不动）。旧轮先归档。
+    与 `--pick` 相反——那条一个字都不动）。上一轮先归档。
     ⚠ 语义结论按文本 sha1 绑定：本次改字后自动过期成 unver，重跑 `stage6.semantic` 即清。
     ⚠ **基线只认正式 `REL`**：盘上只有 `.INVALID` 时走既有自救路
     （直接改 `.INVALID` 文件 → `--revalidate`，`GateBlocked` 的提示写着）——

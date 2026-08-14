@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 34 条判据的**实现**。行在 `contracts/judges/stage7.py`（`Q-12`）。
+checks.py —— 33 条判据的**实现**。行在 `contracts/judges/stage7.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 真跑、`--recheck`、`--apply-edit` 走的都是
 `rename_findings()` 这一个函数——三条路各判一遍就会长出三把尺子。
@@ -26,6 +26,7 @@ from novel.core.naming import (
 from novel.core.style import (
     DASH_CORPUS_P95, SHORT_RUN_CORPUS_P95, dash_per_1k, short_run_per_1k,
 )
+from novel.errors import RefusedByStructure
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage7.measure import Problem, Unit
 
@@ -71,7 +72,7 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                     registry: dict[str, dict], pre_target: str, source_text: str,
                     residual_keys: set[str], stem_noise: dict[str, int],
                     family_members: dict[str, tuple[str, ...]],
-                    dup: list[int], missing: list[int], mixed: list[int],
+                    dup: list[int], missing: list[int],
                     invalids: list[str], post_units: list[Unit],
                     title_line: str) -> list[Finding]:
     """对一份映射表 + 一次替换跑全部确定性判据 → `[Finding]`。**唯一判定落点。**"""
@@ -219,12 +220,6 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                                  + (f'计划有而成稿无的章：{missing}' if missing else '')
                                  + '——成书要求每一章有且只有一份',
                           evidence=[str(o) for o in (list(dup) + list(missing))]))
-    if mixed:
-        # 判据用**结构特征**不用时间戳：旧契约成稿没有 `budget_chars`。
-        fs.append(finding('rn_mixed_contract',
-                          detail=f'第 {list(mixed)} 章是旧契约稿（没有 budget_chars），'
-                                 f'与其余各章不是同一套契约下写的——拼成一本不是一本连贯的书',
-                          evidence=[str(o) for o in mixed]))
     if invalids:
         # 「排除了 N 份废稿」与「一份废稿都没有」必须分得开。
         # ⚠ 某章只有废稿时，它同时表现为缺章，两条一起响——**那是对的**。
@@ -359,7 +354,7 @@ _FROM_FINDINGS = (
     # 替换器的后置条件
     'rn_residual_key', 'rn_kept_contains_mapped',
     # 组装的前置条件
-    'rn_book_incomplete', 'rn_mixed_contract', 'rn_invalid_drafts',
+    'rn_book_incomplete', 'rn_invalid_drafts',
     # 漏网
     'rn_residual_stem', 'rn_no_reason',
     # 三条度量
@@ -369,14 +364,14 @@ _FROM_FINDINGS = (
 
 def check(*, findings: list[Finding], scanned: str, baseline_line: str,
           chapter_scanned: str, txt_state: tuple[bool, str], approved: bool,
-          stale: list[str], no_consumed: list[str], hook_stale: bool | None,
+          stale: list[str], missing: list[str], hook_stale: bool,
           identity: dict | None, title_line: str, body_count: int) -> list[Outcome]:
-    """一份 `name_map.json` → **34 个 `Outcome`，一条判据一个**。
+    """一份 `name_map.json` → **33 个 `Outcome`，一条判据一个**。
 
     ⚠ `scanned` 一律填：**一个不知道自己扫了多少的绿灯没有判别力**。
     两条判据的分母与其余的不同，各自单给：
       · `rn_residual_stem` —— 姓字覆盖率（「本轮 0 命中」说明不了探针在不在工作）；
-      · `rn_book_incomplete` —— **章计划读不回来时，它这一趟根本没有分母**。
+      · `rn_book_incomplete` —— 计划章数与当前正式成稿数。
     """
     by_rule: dict[str, list[Finding]] = {}
     for f in findings:
@@ -402,18 +397,14 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
     #    （书名那条点名这本书的书名、口味那条举本书真实的第一个新名）。
     #    在这里另写一份，「产物说的」与「报告说的」就会在某次改动后分家——
     #    而**复检那条路的全部纪律就是「读产物，不重算」**。
-    #    取不到时（产物早于这几条）才回落到一句通用的话，并**说出它是回落的**。
     out.append(unverifiable('rn_taste_unver',
-                            _stored_why(by_rule, 'rn_taste_unver',
-                                        '新名好不好没有确定性判据，现役闸门是人定稿'),
+                            _finding_why(by_rule, 'rn_taste_unver'),
                             scanned='全部新名'))
     out.append(unverifiable('rn_coverage_unver',
-                            _stored_why(by_rule, 'rn_coverage_unver',
-                                        '替换覆盖率验不了：人物表够不到的角色，'
-                                        '这一层结构上够不着'),
+                            _finding_why(by_rule, 'rn_coverage_unver'),
                             scanned='人物表里有的那些称呼'))
     out.append(unverifiable('rn_title_unver',
-                            _stored_why(by_rule, 'rn_title_unver', title_line),
+                            _finding_why(by_rule, 'rn_title_unver'),
                             scanned='书名一行'))
 
     if approved:
@@ -429,7 +420,7 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
             scanned='产物的 `approved` 键'))
 
     out.append(unverifiable('rn_body_stale',
-                            _body_stale_why(stale, no_consumed, hook_stale),
+                            _body_stale_why(stale, missing, hook_stale),
                             scanned=f'{body_count} 份成稿 + 文案'))
 
     out.append(unverifiable(
@@ -480,40 +471,25 @@ def identity_outcomes(identity: dict | None) -> list[Outcome]:
     return out
 
 
-def _stored_why(by_rule: dict[str, list[Finding]], rule: str, fallback: str) -> str:
-    """常驻 `unver` 的措辞：**优先用产物里存的那一条**。
-
-    ⚠ 回落时要**说出它是回落的**——「这份产物早于这条判据」与
-    「这条判据这次没话可说」是两件事，静默回落会把前者伪装成后者。
-    """
+def _finding_why(by_rule: dict[str, list[Finding]], rule: str) -> str:
+    """读取当前产物中常驻 `unver` 的逐本说明。"""
     got = by_rule.get(rule)
     if got:
         return got[0].detail
-    return f'{fallback}　※ ⚠ 这句是**回落文案**：盘上这份产物里没有这一条的结论，' \
-           f'它早于这条判据 —— 跑一次 `--recheck`（0 成本）就有了'
+    raise RefusedByStructure(f'当前 name_map 缺少必需的书级结论 {rule!r}')
 
 
-def _body_stale_why(stale: list[str], no_consumed: list[str], hook_stale: bool | None) -> str:
-    """`rn_body_stale` 的三态措辞。
-
-    ⚠⚠ **口径与原型不同，而这是被迁移逼出来的**（同 stage6 的 `hook_body_stale`）：
-    `judged[].sha1` 是**整文件**指纹，而新契约裁过 stage5 产物的字段
-    ⇒ 迁移后它**必然**对不上，照原型退回整文件 sha1 会让盘上大多数本误报红。
-    ⇒ `consumed`（字段投影）判过期、`sha1` 只作**审计**；
-    **没有 `consumed` ⇒ 说不清**，不是 fresh、也不是 stale。
-    """
+def _body_stale_why(stale: list[str], missing: list[str], hook_stale: bool) -> str:
+    """`rn_body_stale`：按正文与文案的消费投影判断绑定版本。"""
     parts = []
     if stale:
         parts.append(f'{len(stale)} 份成稿在替换之后**变过**：{stale[:4]}'
                      f'——重跑 `--recheck`（0 成本）')
-    if no_consumed:
-        parts.append(f'{len(no_consumed)} 份成稿没有 `consumed` 投影 ⇒ **说不清**'
-                     f'（整文件 `sha1` 只作审计，拿它判过期会让迁移过的产物必然误报）')
+    if missing:
+        parts.append(f'替换引用的 {len(missing)} 份成稿已不在盘上：{missing[:4]}')
     if hook_stale:
         parts.append('`stage6/hook.json` 的**人工定稿文本**在替换之后变过——'
                      '成书里的文案可能是旧的')
-    elif hook_stale is None:
-        parts.append('产物里没有文案的消费投影 ⇒ 无从判断成书文案是否仍配对')
     if not parts:
         return ('逐份成稿的 `consumed` 投影都对得上、文案定稿文本也没变过。'
                 '⚠ 它仍然登记为「查不了」而不是绿灯：整文件 `sha1` 只作审计，'

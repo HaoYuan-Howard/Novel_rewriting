@@ -9,8 +9,7 @@
     手搓的样本证明不了判据函数真的会拦。
   · **最小性靠自律不靠断言**：部分判据共享前置，强断言「不溅射其他 HARD」会把
     构造成本翻倍；每个样本只保证「目标判据必红」。
-  · `ALLOWED_MISSING` 是分批施工的白名单，**只准缩不准涨**（PORTED_STAGES 同款手法）；
-    新增一条 HARD 而不登记反例，守卫测试当场红。
+  · 新增一条 HARD 而不登记反例，守卫测试当场红。
 """
 from __future__ import annotations
 
@@ -21,10 +20,6 @@ from typing import Callable, NamedTuple
 class Case(NamedTuple):
     stage: str
     build: Callable[[], list]          # -> list[Finding]，目标判据必在其中
-
-
-#: 分批白名单：还没登记反例的 HARD。E1~E3 走完后应为空集，只准缩不准涨。
-ALLOWED_MISSING: frozenset[str] = frozenset()
 
 
 # ═══ stage6 ═══════════════════════════════════════════════════════════════════
@@ -76,7 +71,7 @@ def _rename(**over) -> list:
         name_map={'characters': [], 'surname_map': {}, 'kept': []},
         subs={}, problems=[], applied={}, residual=[], baseline={}, registry={},
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
-        family_members={}, dup=[], missing=[], mixed=[], invalids=[],
+        family_members={}, dup=[], missing=[], invalids=[],
         post_units=[], title_line='书名：略')
     kw.update(over)
     return checks.rename_findings(**kw)
@@ -96,11 +91,16 @@ def _c7(cid: str, old: str, new: str, aliases: tuple = ()) -> dict:
 
 
 def _rn_txt_stale() -> list:
+    from contracts.schema.report import finding
     from novel.stages.stage7 import checks
+    required = [
+        finding(rule, detail='当前契约要求的书级说明', evidence=[])
+        for rule in ('rn_taste_unver', 'rn_coverage_unver', 'rn_title_unver')
+    ]
     outcomes = checks.check(
-        findings=[], scanned='0 条映射', baseline_line='0 字', chapter_scanned='0 章',
+        findings=required, scanned='0 条映射', baseline_line='0 字', chapter_scanned='0 章',
         txt_state=(False, '盘上的 book.txt 与产物记的指纹不符——它被人动过或是旧的'),
-        approved=False, stale=[], no_consumed=[], hook_stale=None, identity=None,
+        approved=False, stale=[], missing=[], hook_stale=False, identity=None,
         title_line='书名：略', body_count=0)
     return [f for o in outcomes for f in o.findings]
 
@@ -172,7 +172,7 @@ CASES: dict[str, Case] = {
         src_hook='第一段。\n\n第二段。')),
     'hook_semantic_spoiler': Case('stage6', _hook_semantic_spoiler),
 
-    # ── stage7（16 HARD）──────────────────────────────────────────────────
+    # ── stage7（15 HARD）──────────────────────────────────────────────────
     'rn_llm_shape': Case('stage7', lambda: _rename(registry={'c1': {}})),
     'rn_map_coverage': Case('stage7', lambda: _via_build_subs(
         [], universe=frozenset({'狗剩'}))),
@@ -197,7 +197,6 @@ CASES: dict[str, Case] = {
         [], extra_subs=({'old': '阿禾姊', 'new': '李云'}, {'old': '姊姊', 'new': '妹妹'}))),
     'rn_residual_key': Case('stage7', lambda: _rename(residual_keys={'沈凌'})),
     'rn_book_incomplete': Case('stage7', lambda: _rename(missing=[2])),
-    'rn_mixed_contract': Case('stage7', lambda: _rename(mixed=[3])),
     'rn_txt_stale': Case('stage7', _rn_txt_stale),
 
     # ── stage4（16 HARD）──────────────────────────────────────────────────

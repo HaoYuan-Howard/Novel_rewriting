@@ -27,10 +27,7 @@ enums.py —— `GET /api/enums` 的**唯一**构造函数。纯函数：不碰�
 （`R-11.4`：界面不重算任何已经在校验器里的判据）。容器不一样：取值面、词表、映射表、
 区间，前端拿它渲染选项与图例，渲染不产生判定。
 
-⚠ **本模块的输出必须是抓包那 14 个键的超集**（`docs/BACKEND_CONTRACT.md` §一「命名体系」第 5 条）：
-`docs/design_brief/05_samples/enums.json` 是**现役原型后端的真实抓包**，
-`tests/test_api_enums.py` 拿它逐值对账。**那份抓包永远不许用本模块的输出覆盖**——
-覆盖之后那一族测试就变成拿 `invariants` 跟它自己比。
+输出只由当前 `contracts.invariants` 派生；历史抓包不参与当前 API 契约。
 """
 from __future__ import annotations
 
@@ -102,8 +99,7 @@ _WITHHELD: dict[str, str] = {
                               '把一个没校准的数发给前端，等于请它拿这个数去下结论。'
                               '前端要显示的是分布本身，而那份读数由 `verbatim_share` '
                               '那条度量**无条件报出**（`R-5.14`），已经在报告里了',
-    'LOCKED_OP': '「哪个 op 被锁死」是 stage4 的产地事实，**今天零消费方**；'
-                 'op 的取值面本身已经在 `ops` 里发了',
+    'PLAN_BUDGET_BAND': 'Stage4 判据阈值。前端不自行重算预算是否出带',
     'DEEP_OVERLAP_MAX': '判据阈值（闭卷臂与原文的重合度上限）',
     'STOP_REWRITE_AFTER': '返工护栏的轮次上限。它是**编排**参数，不是给人看的取值面',
     'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',
@@ -196,9 +192,8 @@ def _jsonable(name: str, value: Any) -> Any:
 def public_constants() -> dict[str, Any]:
     """`contracts.invariants` 里所有**公开**常量。
 
-    ⚠ `isupper()` 同时挡掉三类东西，都是有意的：import 进来的 `Final` / `NamedTuple`、
-    类型 `NodeSpec`、以及下划线开头的退役常量（`_RETIRED_GRAMMATICAL_PERSON`
-    ——它只用于读懂存量产物，发出去等于把一份死掉的取值面复活成现役的）。
+    ⚠ `isupper()` 同时挡掉 import 进来的 `Final` / `NamedTuple`、类型 `NodeSpec`
+    以及私有实现常量；这些都不是前端取值面。
     """
     return {n: v for n, v in vars(inv).items() if n.isupper() and not n.startswith('_')}
 

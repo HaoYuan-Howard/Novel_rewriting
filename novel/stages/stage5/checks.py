@@ -446,8 +446,8 @@ def _plan_keeps_content(entry: dict[str, Any]) -> bool:
     这两个数才是计划实际给出的量。
     ⚠ 源字数缺失 ⇒ `False`（判不了就不拦，别拿一把缺刻度的尺子升 HARD）。
     """
-    src = entry.get('source_chars') or 0
-    return bool(src) and (entry.get('budget_chars') or 0) >= src * 0.90
+    src = entry['source_chars']
+    return bool(src) and entry['budget_chars'] >= src * 0.90
 
 
 def _dialogue(body: str, entry: dict[str, Any], book: M.Book, *, mode: str) -> list[Finding]:
@@ -475,7 +475,7 @@ def _dialogue(body: str, entry: dict[str, Any], book: M.Book, *, mode: str) -> l
         out.append(finding(
             'dialogue_halved',
             detail=f'直接引语腰斩：源章 {n} 句 → 成稿 {m} 句（开卷、且计划没有净压缩'
-                   f'（预算 {entry.get("budget_chars")} / 源 {entry.get("source_chars")} 字），'
+                   f'（预算 {entry["budget_chars"]} / 源 {entry["source_chars"]} 字），'
                    f'没有任何合法理由砍对白——台词是承重内容不是可压缩的填充）',
             evidence=[f'{n}->{m}']))
     elif n >= 4 and m < n * 0.7:
@@ -531,35 +531,34 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
                           evidence=sorted(names)))
 
     # ── 篇幅：度量无条件出，两条告警按 `DRAFT_BAND` 判 ──────────────────────
-    src_chars = entry.get('source_chars') or 0
+    src_chars = entry['source_chars']
     band_range = M.target_range(entry)
-    bud = entry.get('budget_chars')
+    bud = entry['budget_chars']
     flag = ''
-    if band_range and not (band_range[0] <= len(body) <= band_range[1]):
+    if not (band_range[0] <= len(body) <= band_range[1]):
         flag = f'  ← 超出目标 {band_range[0]}~{band_range[1]}'
     if src_chars:
         # 【两个比值都给，但主角是 vs 预算那个】写手对齐的是 `budget_chars`（逐拍下发），
         # 只报 vs 原章会让人拿一个**派生量**去判达标——上一轮的外部审阅就是这么读岔的。
-        vs_bud = f' / 预算 {bud} 字 = {len(body) / bud:.2f}×' if bud else ''
+        vs_bud = f' / 预算 {bud} 字 = {len(body) / bud:.2f}×'
         fs.append(finding('length_report',
                           detail=f'篇幅：{len(body)} 字{vs_bud} ｜ '
                                  f'原章 {src_chars} 字 = {len(body) / src_chars:.2f}×{flag}',
                           evidence=[str(len(body)), str(bud), str(src_chars)]))
-    if band_range:
-        lo, hi = band_range
-        if len(body) > hi:
-            fs.append(finding(
-                'length_over',
-                detail=f'篇幅超上限：{len(body)} 字 > {hi} 字（目标 {lo}~{hi}，'
-                       f'{len(body) / hi:.2f}× 上限）——收缩已跑过并未能压下来，**照样落盘**，'
-                       f'由全书验收相在成品上判（由阻断降为提示）',
-                evidence=[f'{len(body)}>{hi}']))
-        elif len(body) < lo:
-            fs.append(finding(
-                'length_under',
-                detail=f'⚠ 明显低于目标下限（{len(body)} < {lo}）——查是否丢了事件；'
-                       f'若本章走过收缩，还要查结尾立意是否被换掉',
-                evidence=[f'{len(body)}<{lo}']))
+    lo, hi = band_range
+    if len(body) > hi:
+        fs.append(finding(
+            'length_over',
+            detail=f'篇幅超上限：{len(body)} 字 > {hi} 字（目标 {lo}~{hi}，'
+                   f'{len(body) / hi:.2f}× 上限）——收缩已跑过并未能压下来，**照样落盘**，'
+                   f'由全书验收相在成品上判（由阻断降为提示）',
+            evidence=[f'{len(body)}>{hi}']))
+    elif len(body) < lo:
+        fs.append(finding(
+            'length_under',
+            detail=f'⚠ 明显低于目标下限（{len(body)} < {lo}）——查是否丢了事件；'
+                   f'若本章走过收缩，还要查结尾立意是否被换掉',
+            evidence=[f'{len(body)}<{lo}']))
 
     # ── 重合度：度量无条件出；**闭卷才有上界** ──────────────────────────────
     ov = M.overlap_ratio(body, entry, book.source_text)

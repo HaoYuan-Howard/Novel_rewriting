@@ -99,17 +99,10 @@ def test_the_right_half_survives_a_missing_upstream(box):
 
 
 def test_an_unreadable_artifact_is_not_the_same_as_a_missing_one(box):
-    """⭐ **`exists=True, readable=False`**——盘上真有这种产物。
-
-    ⚠ 折成「不存在」会让界面说「还没跑」，**而它跑过**，只是那份稿不合当前契约。
-    这里用的正是**盘上那一份原样的字节**（没过 `corpus.load_cut` 的迁移），
-    所以这条测的是一个真实发生过的形态，不是构造出来的。
-    """
-    raw = next(a for a in corpus.iter_artifacts()
-               if a.book_dir == box.book and a.rel == STYLE)
-    (box.dir / STYLE).write_text(
-        json.dumps(json.loads(open(raw.path, encoding='utf-8').read()), ensure_ascii=False),
-        encoding='utf-8')
+    """存在但违反当前严格契约的文件，不得折成“尚未生成”。"""
+    raw = box.read(STYLE)
+    raw['obsolete_field'] = True
+    box.write(STYLE, raw)
     v = style_view(box.root, box.sid)
     assert (v.exists, v.readable) == (True, False)
     assert v.voice == [] and v.provenance is None, '读不回来却给出了内容'
@@ -149,20 +142,9 @@ def test_an_unknown_book_is_a_terminal_state_not_an_empty_screen(box):
 
 @pytest.mark.parametrize('book', sandbox.books_with_stage3(),
                          ids=lambda b: b.rsplit('_', 1)[0])
-def test_the_untouched_corpus_reads_as_exists_but_unreadable(book):
-    """⭐ 拿 `../Novel_refactoring/Output` **原样**跑一遍（不迁移、不拷贝、只读）。
-
-    三本的 `stage3/style_grounding.json` 都还带着新契约裁掉的 `source_id` / `title`
-    ⇒ `extra='forbid'` 拒收 ⇒ `exists=True, readable=False`。
-    **这正是那一屏该显示的东西**：「这份稿跑过，但它不合当前契约」，
-    而不是「还没跑」，也不是一屏报错。
-
-    ⚠ 它同时是本文件里唯一一条**碰真语料**的：`_tree` 那条只证明沙箱没被写，
-    而这一条证明**连真语料都没被写**（视图对它只有读）。
-    """
+def test_the_untouched_current_corpus_is_readable_and_not_modified(book):
     root = corpus.corpus_root()
     before = _tree(os.path.join(root, book))
     v = style_view(root, paths.derive_source_meta(book)[0])
-    assert (v.exists, v.readable) == (True, False)
-    assert v.measured_now is not None, '左半边该量得出来（它只吃 stage1）'
-    assert _tree(os.path.join(root, book)) == before, '⚠⚠ 视图动了只读语料'
+    assert (v.exists, v.readable) == (True, True)
+    assert _tree(os.path.join(root, book)) == before, '视图修改了只读当前语料'

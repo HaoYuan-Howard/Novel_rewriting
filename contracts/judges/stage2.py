@@ -3,47 +3,30 @@
 """
 stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §5.1（**唯一落点**）。
 
-**75 条现役：41 HARD · 15 INFO · 17 度量 · 2 查不了。** 外加 9 条退役而不删。
+**71 条现役：38 HARD · 15 INFO · 16 度量 · 2 查不了。**
 
 【一张表，两个节点共用】`stage2.global`（全书级抽取）与 `stage2.blueprint`（逐章抽取）
 **读同一张表**，谁也不许再抄一份。⚠ `--check-only` 只挂在 `stage2.blueprint` 上
-（`test_every_ported_stage_has_exactly_one_check_node` 要求每层恰好一个），
+（覆盖测试要求每层恰好一个），
 而那一相**两份产物一起读**（判 `canonical_unique` 要 global，判 `present_ids_dangling`
 要 registry）⇒「global 的判据没有 0 成本复检」这句话不成立。
 
-【这张表是从零建的，而原型那个「91」不是判据数】原型 `Stage2/check_blueprints.py::check_one`
-（2077 行）里**一个 id 都没有**，严重度只由调用的方法名（`fail`/`note`/`unverified`）承载。
-`91` 数的是「(中文首参, 严重度) 对」，其中 **6 次跨严重度同名**（同一条判定的两三种结局）
-⇒ 不同的中文首参只有 **85**。85 → 75 的账逐条在 `docs/schema/stage2.md` §5.0，
-**一条都没有蒸发**：2 条归载体 · 3 条归结构 · 9 条退役 · 1 条并 · 1 条拆 · 4 条新增。
-
 【判据 id 一律照抄文档，不加 stage 前缀】它们是与 `wontfix.json` 的键、
-与 `_provenance.fixes` 的引用之间的契约——加个前缀就等于把存量豁免全部作废。
+与 `_provenance.fixes` 的引用之间的契约。
 
 【本层特有的四条，与前七层都不同】
 
-**① 这是第一个用 `Rule.fix` 的层。** 24 条带机器可读的修复路由：
-`blueprint --chapters` 19 · `blueprint --migrate` 2 · `global --purge-role` / `--migrate` /
-`--drop` 各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
+**① 这是第一个用 `Rule.fix` 的层。** 21 条带机器可读的修复路由：
+`blueprint --chapters` 17 · `blueprint --renormalize` 2 · `global --purge-role` / `--renormalize`
+各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
 （反哺是 stage5 独有的，`contracts/rules.py::_validate` ④ 把它锁在 `owner='stage5'` 上）
 ⇒ `directive` 全表为空，而 `fix` 有 24 条。
 
-**② 41 条 HARD 里盘上有真反例的只有 4 条**（`address_bare_pronoun` 1 本 ·
-`role_leaks_fate` 2 本 · `hedge_words` 2 本 · `hinge_in_hole` 1 本）。
-其余 37 条**盘上 0 命中——那不是「干净」，是那种失效模式在这三本上一次都没发生过**。
-用户裁决（2026-08-12）：各配一份会让它红的样本。⚠ 反例配得出来的前提是
-**判据吃 `dict` 不吃模型**——跑在已过 Pydantic 的对象上，「必填齐全」那类在结构上
-构造不出反例。
-
-**③ 4 条标 ✚ 的原型没有**（`event_empty` / `summary_empty` / `repair_cache_policy` /
-`verbatim_failed`）：它们是 `R-3.13` / `R-3.11` / `R-3.18` 索要的，而原型那两个判定面都没写。
-不补这四条，本层进 `PORTED_STAGES` 那一刻正向覆盖率会点名那三行需求。
-
-**④ `material_malformed` 不在这里重复注册。** 新正式产物在 Stage 2 晋升前已经用
+**② `material_malformed` 不在这里重复注册。** Stage 2 产物在晋升前已经用
 `SourceSpan` 守住 offset/text/normalized 一致性；`contracts/judges/stage5.py` 仍以
-`stage='stage5', owner='stage2'` 注册这条，作为旧制品与人工稿的下游兼容防线。
+`stage='stage5', owner='stage2'` 注册这条，作为下发材料的纵深校验。
 
 ⚠ **徽章结构上永远不可能是 `pass`**：本表有 **2 条 `unver`**，其中
 `role_fate_unverifiable` **无条件产出**（见下）⇒ 每本每次都产 ⇒ 最好情况是 `amber`
@@ -51,16 +34,15 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 """
 from __future__ import annotations
 
-from contracts.rules import REGISTRY, RetiredRule, Rule
+from contracts.rules import REGISTRY, Rule
 
 STAGE = 'stage2'
 
 #: 本层两个节点的修复路由。**写成常量而不是每处一个元组字面**：
-#: 19 条判据指着同一条 `blueprint --chapters`，散着写就是 19 份会各自漂的拷贝。
+#: 17 条判据指着同一条 `blueprint --chapters`，散着写就是 17 份会各自漂的拷贝。
 FIX_REGEN = ('stage2.blueprint', '--chapters')      # 定向重生成那几章（**付费**）
-FIX_MIGRATE_BP = ('stage2.blueprint', '--migrate')  # 确定性迁移，0 成本
-FIX_MIGRATE_G = ('stage2.global', '--migrate')      # 同上，全书那一份
-FIX_DROP = ('stage2.global', '--drop')              # 人工裁掉某条，0 成本
+FIX_RENORMALIZE_BP = ('stage2.blueprint', '--renormalize')  # 确定性归一，0 成本
+FIX_RENORMALIZE_G = ('stage2.global', '--renormalize')      # 同上，全书那一份
 FIX_PURGE_ROLE = ('stage2.global', '--purge-role')  # 语义判官臂重划 role/fate（**付费**）
 
 
@@ -79,9 +61,9 @@ def _info(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -
 def _metric(rule: str, item: str, requirement: str, **kw) -> Rule:
     """度量：**无条件报出**，`owner=None`（它不是一条结论，没有「根因第一嫌疑层」）。
 
-    ⚠ 本层 17 条度量里有一批是**原型注释明写「一出问题就不许知道现状」**的那几条
+    本层有一批与告警配对的无条件度量
     （`present_names_*` 五分 · `time_layer_mix` · `narration_voices` · `batch_density` ·
-    `anchor_short` · `span_coverage_per_chapter`）。它们与告警的分界线是
+    `span_coverage_per_chapter`）。它们与告警的分界线是
     **有没有前件**：无条件产出的是度量，挂在 `if 违规` 上的是告警（判据 21）。
     """
     return REGISTRY.register(Rule(rule=rule, stage=STAGE, item=item, sev='metric',
@@ -177,8 +159,8 @@ _info('address_selfref', '没有把别人对他的称呼挂成自称', 'R-2.5b',
 _info('address_missing', '每个角色至少有一条称呼', 'R-2.5b',
       note='叙述里总得指称他，一条都没有多半是漏了。'
            '⚠ **载体那边已有 `min_length=1`**（`Character.address`），本条在结构上'
-           '因此恒不命中——留着不是冗余：判据吃 `dict` 不吃模型，'
-           '而**存量产物与人工编辑那条路都不过 Pydantic**。盘上 0/3')
+           '与载体形成同一约束的报告投影；判据纯函数直接接收候选 dict，'
+           '因此仍能在落盘前给出带规则 id 的失败结论。')
 
 _info('address_unlocatable', '每条叫法都能在原文里原样找到', 'R-2.2',
       note='⚠ **逐条**查，与 `character_unattested`（至少有一个）是同一条需求的两级。'
@@ -253,20 +235,19 @@ _info('world_rule_names_person', '规则正文里出现人名时按叫法时点�
            '⚠ 闸门按**叫法**不按**角色**：同一个人从 ch1 就在场（叫「龟公」），'
            '泄底的是「百晓生」这个 ch8 才出现的叫法。盘上 **3/3 都要报基线**')
 
-_hard('secret_setup_order', '埋点章严格早于最早揭示章', 'R-2.9', fix=FIX_MIGRATE_G,
+_hard('secret_setup_order', '埋点章严格早于最早揭示章', 'R-2.9', fix=FIX_RENORMALIZE_G,
       note='⚠⚠ **断言的是 `_provenance.setup_chapters_pruned` 那个计数，不是字段值**'
            '（2026-08-10 裁决）：裁剪跑在落盘前，再断言字段值就是一条**永远为真**的判定。'
            '`==` 也违约——埋点与揭示同章等于没埋。'
-           '⚠ 而那个键**盘上 3/3 本一份都没有**（已登记进 `tests/corpus.py::ADDED`）'
-           '⇒ 今天它只能落 `unver` 状态，**不能发绿灯**。'
+           '`setup_chapters_pruned` 是现行来源账的必填键；缺失时载体直接拒收。'
            '⚠ 一条 `sev=hard` 的判据落 `unver` 状态在本仓是合法的：`sev` 与 '
-           '`RuleLine.status` 是**两格**。盘上 0/3')
+           '`RuleLine.status` 是**两格**。')
 
 _metric('secret_cold_reveal', '没有埋点的秘密条数', 'R-2.9b',
         note='凭空点破。**据实留空是允许的**（作者确实可以不埋），所以它只能是读数。'
              '⚠⚠ 「冷揭示」与「被裁空」（产地把揭示章号抄进埋点、落盘前被裁）'
              '在**字段值上完全同形** ⇒ 两者只能靠 `setup_chapters_pruned` 那个计数分开，'
-             '而那个键盘上一份都没有。盘上 **3/4 · 7/7 · 10/10**（21 条里 20 条无埋点）')
+             '因此该计数必须常驻来源账。')
 
 _hard('secret_known_by_dangling', '「谁知情」里的保留形都解析得出来', 'R-2.9c',
       note='⚠ 按**形状**分流：`char_\\d+` 必须能在 registry 里解析，'
@@ -277,13 +258,13 @@ _hard('secret_known_by_dangling', '「谁知情」里的保留形都解析得出
            '盘上 0/3（24 / 24 / 25 条，⚠ 73/73 全是 `char_id`——自由文本那一臂零样本）')
 
 _info('reveal_unmarked', '声称点破的那一章里有点破痕迹', 'R-2.9d',
-      wordlist=True, fix=FIX_DROP,
+      wordlist=True,
       baseline='⭐ **盘上 2/3 命中**（头牌 3/8 · 三岁 6/10）。'
                '⚠ **它是筛子不是判据**：「演而不说」是合法写法，命中不等于错。'
                '它的价值是把「需要有人回原文核一眼」的清单**从全书压到个位数**',
       note='⚠ 与 stage5 那张「揭示标记」词表的教训相反着读：那一张在 21/22 章命中，'
            '通过分支是**一盏保证会亮的绿灯**；本条反过来，**有判别力的是它的反面**。'
-           '⇒ 修法是 `--drop`（人看过之后 0 成本裁掉那条 secret），不是重生成')
+           '⇒ 命中后由人核对原文；它不自动提供修改产物的路由')
 
 _unver('secrets_absent', '这本书有可查的秘密', 'R-2.9b',
        note='**一条 secret 都没有** ⇒ 逐章剧透闸门与「本章不许揭示什么」'
@@ -306,28 +287,16 @@ _hard('beat_id_unique', '全书 beat_id 不重复', 'R-3.1',
 
 _hard('beat_id_format', 'beat_id 形如 b<章:02d>_<序:02d> 且章内序连续', 'R-3.1',
       note='三件事一条判据：格式 · 章内序连续 · **章号与所属章一致**。'
-           '第三件是分批年代的老 bug（顺序一乱 `b03_01` 就挂到第 5 章上），'
-           '与 `chapter_order` 是同一个病的两个观测面。'
+           '第三件与 `chapter_order` 是同一个错误的两个观测面。'
            '⚠ 代码**无条件归一、模型自拟一律覆盖**（`R-3.1`）⇒ 本条守的是归一器没坏。'
            '盘上 0/3')
 
 _hard('span_unlocatable', '每条精确区间与本章原文一致且按序', 'R-3.2', fix=FIX_REGEN,
       note='定位不到 ＝ 这一拍**没有量纲**：它的字数、覆盖率、hinge 归属全部落空。'
-           '正式 `SourceSpan` 联合核对 offset/text/normalized，且起点不得退到上一拍终点之前。'
-           '旧制品与模型响应才走 locator 搜索；该兼容路径仍一律 `recover=False`，'
-           '避免「能救回」掩盖「locator 不是原文字节」。'
+           '`SourceSpan` 联合核对 offset/text/normalized，且起点不得退到上一拍终点之前。'
            '盘上 0/3（251/251 全中）')
 
-_hard('anchor_ambiguous', '响应或旧制品的 locator 在待搜索区间内只匹配到一处', 'R-3.2b', fix=FIX_REGEN,
-      note='⚠⚠ **窗口按定位器的游标算，不按整章算**：判据要和定位器用**同一把尺子**，'
-           '否则报出来的是判据自己的噪声。匹配到多处 ⇒「这一拍对应原文哪一段」有两个答案，'
-           '而取到哪一个只取决于上一条拍恰好停在哪儿——**改动上一条会无声地换一段**。'
-           '⚠ 两级消歧：先按原文字节 count，raw 不在窗口时才退到 `content_only` 上 count'
-           '（`哥哥！！」` vs 后文 `哥哥，醒醒` 靠标点就完成了消歧）。'
-           '正式 offset 已经消除了搜索歧义，因此不进入这条历史 locator 度量。'
-           '盘上 0/3（502/502）')
-
-_info('anchor_not_verbatim', '锚点是原文字节', 'R-3.18', fix=FIX_MIGRATE_BP,
+_info('anchor_not_verbatim', '锚点是原文字节', 'R-3.18', fix=FIX_RENORMALIZE_BP,
       note='⚠ **期望恒为 0**（落盘前已回取）⇒ 直接断言字段值是一条永远为真的判定。'
            '**改断言 `_provenance.verbatim_recovered` 的计数**：那是'
            '**按最长公共子串救回来的**那一批，锚点本来就不是原文字节。'
@@ -365,7 +334,7 @@ _hard('beats_coarse', '章级 字/拍 不超本书中位数的 3 倍', 'R-3.9', 
 # ═══ 六、保真材料（6 HARD · 1 INFO）═══════════════════════════════════════
 #
 # ⚠ `hinges` 锚不到的**四分流**（原型旧口径一律并成一条，给三类发的修法都是
-#   `--migrate`——**对锚点期产物是空转**）：
+#   旧定位器重跑——对正式精确区间是空转）：
 #     · 锚点不在本章原文        → `hinge_anchor_void`   → 重生成
 #     · 引的是别的章的原文      → `hinge_cross_chapter` → 重生成
 #     · 落在任何 span 都没覆盖的空档 → `hinge_in_hole`  → 重生成（漏抓的下游后果）
@@ -392,16 +361,8 @@ _info('hinge_cascade', '锚不到不是因为本拍的 span 自己就没定位�
 _hard('hinge_drift', '保真材料的正文落在本拍 span 的原文范围内', 'R-3.5', fix=FIX_REGEN,
       note='正式产物联合核对 hinge `SourceSpan` 的 offset/text/normalized，并要求其区间完整'
            '落在所属 beat.span 内；因此能区分「原文字节不一致」与「材料归错拍」。'
-           '旧世代的 `text`/locator 形状仍走兼容校验。两种形状报告的是同一句话：'
-           '这条材料的字节或归属不可信。'
+           '不满足时说明材料字节或归属不可信。'
            '盘上 0/3（113 / 66 / 103 条全中）')
-
-_hard('hinge_unanchored', '每条保真材料都带精确 source（旧制品至少带完整 locator）', 'R-3.5',
-      note='正式形状必须带 `source` 键；旧制品至少同时带两个 locator，否则 `text` 只能是模型默写。'
-           '显式 `source:null` 是已记账的回取失败态，由 failures/root-cause 判据负责，不重复计数。'
-           '⚠ **两个锚点允许重叠甚至完全重合**（128 条实测 75 条的内容字符'
-           '比两个锚点加起来还短——「硬数字」「物件」天生就短）'
-           '⇒ 本条**只查带没带**，不查先后。盘上 0/3（282/282 全带锚点）')
 
 _hard('chapter_no_hinge', '整章不得一条保真材料都没有', 'R-3.6b', fix=FIX_REGEN,
       note='保真材料是闭卷写作**唯一**的通道 ⇒ 整章为 0 等于这一章的原文材料'
@@ -419,17 +380,12 @@ _hard('time_layer_no_present', '全书不得 0 条「现场」层', 'R-3.6c', fi
            '（回顾式叙述的主线本身就是现场）。前件 `n >= 10` 才判——'
            '章数太少时全是回忆是可能的。盘上 0/3（present 95% / 100% / 92%）')
 
-_hard('present_ids_dangling', '在场人物 id 都在 registry 里', 'R-3.7', fix=FIX_MIGRATE_BP,
+_hard('present_ids_dangling', '在场人物 id 都在 registry 里', 'R-3.7', fix=FIX_RENORMALIZE_BP,
       note='⚠⚠ **这是解析器的后置条件，不是数据判据**：`present_char_ids` 是'
            '**代码从 `present_names` 解析出来的**，模型不写它 ⇒ '
            '违反它 ＝ **代码坏了，不是数据坏了**。'
-           '⇒ 修法是 `--migrate`（重跑一遍确定性解析，0 成本），不是重生成。'
+           '⇒ 修法是 `--renormalize`（重跑一遍确定性解析，0 成本），不是重生成。'
            '盘上 0/3（130 / 148 / 173 个）')
-
-_hard('present_names_partial', '不许一部分拍给了在场称呼而另一部分没给', 'R-3.7b', fix=FIX_REGEN,
-      note='⚠ **混版探测**。没给的那些，`present_char_ids` 只能是模型自己编的编号，'
-           '而 `char_001` 这种**恰好很可能落在名册里**、成员检查兜不住。'
-           '⇒ 它抓的是「这份产物是两代拼起来的」，不是某一拍写错。盘上 0/3')
 
 _hard('present_names_invented', '在场者的称呼在全书原文里找得到', 'R-3.7b', fix=FIX_REGEN,
       note='找不到 ＝ 模型**凭空造了一个人**，没有合法情况 ⇒ 五分里唯一一条判 HARD 的。'
@@ -482,9 +438,7 @@ _info('narration_multi', '一章内只有一个叙述声音', 'R-3.14',
 
 _hard('scope_violation', '没有某一批越出「本次任务范围」产出', 'R-3.16b',
       note='断言 `_provenance.scope_violations` 非空即失败。'
-           '⚠ **产地无条件写这个键**（没越界写空列表），否则「键不在 ＝ 没越界」'
-           '会给所有旧产物发绿灯。⚠ 分批机制已随 F-100 整个删除、新产物恒逐章 ⇒ '
-           '本条的前件今天近乎恒不成立，**但它守的是那个键还在被写**。盘上 0/3')
+           '**产地无条件写这个键**（没越界写空列表）；本条同时守住逐章调用的范围。')
 
 _hard('event_empty', '每一拍都有非空事件文本', 'R-3.13', fix=FIX_REGEN,
       note='✚ **原型没有这条**——`R-3.13` 索要它。'
@@ -554,14 +508,12 @@ _metric('present_broad', '事件文本点名了某角色而本拍未列它', 'R-
 _metric('batch_density', '按一次调用分组的抽取量', 'R-3.16b',
         note='⚠ **必须常驻报出**：逐章产物上它说明的是「批与章是同一个东西」'
              '（`_provenance.batches` 恒 `[[1],[2],…]`），'
-             '而**旧产物记的是别的值** ⇒ 校验器靠它区分「逐章」「分了 N 批」「不知道」'
-             '三种产物。盘上 14 / 8 / 9 次调用')
+             '并让调用次数与章覆盖可以直接核对。')
 
 _metric('context_scope', '逐章抽取采用哪版上下文、边界与窗口', 'R-3.16b',
         note='⚠⚠ **必须常驻打印**：不打印它，读的人会把「这次没报跨章引用」'
              '当成模型学乖了，而其实只是没抽到。'
-             '新产物报告 architecture、稳定前缀指纹、当前章全文、未来可见性及两个过去窗口；'
-             '旧累积上下文只诚实标作 `cumulative-past-v1`，不伪造 v2 元数据。')
+             '报告 architecture、稳定前缀指纹、当前章全文、未来可见性及三个过去窗口。')
 
 _metric('span_coverage', '区间定位成功条数 / 覆盖率 / 每条字数分位', 'R-3.2',
         note='`span_unlocatable` 那一维的样本量与基线。盘上 98% / 98% / 97%')
@@ -570,15 +522,6 @@ _metric('span_coverage_per_chapter', '逐章覆盖率', 'R-3.2',
         note='⚠ **全书一个数看不出哪一章塌了**：三本的全书覆盖率都是 97~98%，'
              '而逐章最低分别是 ch5 95% · ch4 96% · **ch7 90%**——'
              '最后那一章正是 `hinge_in_hole` 那条真反例所在的章')
-
-_metric('anchor_short', '旧 locator 中内容字符 <6 的锚点计数', 'R-3.2b',
-        note='⚠ 契约的「照抄 8~30 字」是**生成期指导**不是产物不变量'
-             '（回取会两头改长度）⇒ **此处只报计数，不判违约**。'
-             '正式精确 offset 不再需要 locator，因此新产物该度量样本量为 0。'
-             '⚠⚠ 而**产地按 8~30 要求、校验侧承认做不到，中间那段差额会被模型用编造填上**：'
-             '实测一条 `ends_with` 写成 `我"嗯"。`（原文只有 `"嗯。"`），'
-             '补出来的「我」原文里不存在，整条 beat 因此作废，'
-             '**而且扛过了一次带证据的定向重生成**。盘上 23/186 · 13/134 · 30/182（合 66/502）')
 
 _metric('uncovered_holes', '未覆盖原文区间', 'R-3.8',
         note='按**位置 × 长度**两维切分（章首 / 中段 / 章尾 × ≥30 字 / 更短），'
@@ -589,78 +532,3 @@ _metric('hinge_density', '全书保真材料密度', 'R-3.6b',
         note='⚠⚠ **按原文字数归一，不按拍数**：拍数是同一个 prompt 都能改动 ±44% 的'
              '自由变量，拿它做分母量到的是**切分粗细**不是材料多少。'
              '盘上 9.3 / 6.2 / 7.8 条每千字')
-
-
-# ═══ 退役而不删（9 条）════════════════════════════════════════════════════
-#
-# 判准一律是「**在本仓结构上不可表示**」，不是「不重要」（LESSONS 15）。
-# 删掉的话「没报违规」与「根本没在查」就再也分不开。
-# ⚠ 九条里有 **6 条**的理由是同一个形状：**那个字段今天是必填的 / 已被裁撤**
-#   ⇒ 原型那条判据的前件在本仓恒不成立。一条恒不触发的 HARD 与一条恒亮的绿灯是同一个病。
-
-REGISTRY.retire(RetiredRule(
-    rule='address_table_absent', stage=STAGE,
-    why='原型判的是「这份产物根本没有称谓表」（旧契约的 `aliases`/`titles` 两个平表）。'
-        '新契约 `Character.address` 是**必填且 `min_length=1`** ⇒ 前件恒不成立。'
-        '⚠ 它守的那件事没有消失，只是换了执行者：由载体在**拒收**那一刻挡住，'
-        '而不是在校验那一刻报出来。'))
-
-REGISTRY.retire(RetiredRule(
-    rule='dead_fields', stage=STAGE,
-    why='原型逐条点名四张 `DEAD*` 表 + 七条 `DEAD_G` 点号路径（`address.to_chapter` …）。'
-        '本仓由 `StrictModel` 的 `extra=\'forbid\'` 在结构上收走——**一条判据管不了'
-        '「还没被想到的那个死字段」，而 `extra=\'forbid\'` 管得了**。'
-        '⚠ 存量产物那一侧由 `tests/corpus.py::CUT` 逐条钉着，两边都没掉在地上。'))
-
-REGISTRY.retire(RetiredRule(
-    rule='narration_segments', stage=STAGE,
-    why='原型三条判据都建立在 `narration[].last_beat_id`（章内段界）上，'
-        '而**该字段已裁撤**（`CUT[\'stage2/chapter_blueprints.json\']`）：'
-        '零消费方 + 零样本——「一章内换叙述者」在全语料 163 本 + 盘上 31 章里'
-        '**一个正样本都没有**，真实发生的是**章之间**换人称，由 `grammatical_person` '
-        '逐章存承担。它唯一的读者 `segment_sizes` 随 split 一起退役。'
-        '⚠ 「本章有几个叙述声音」这件事**没有掉**：`narration` 保持数组，由 '
-        '`narration_multi` 与 `narration_voices` 两条接住。'))
-
-REGISTRY.retire(RetiredRule(
-    rule='narration_last_beat_zero_consumers', stage=STAGE,
-    why='原型另立一条判据，专门声明「`last_beat_id` 没有任何消费方」。'
-        '字段已不在 ⇒ 这条声明也没有服务对象了。'
-        '⚠ 它退役的是**声明**不是**规矩**：「零消费方的字段不许留在契约里」'
-        '仍然成立，只是它不该由某一个字段的判据来表达。'))
-
-REGISTRY.retire(RetiredRule(
-    rule='beat_new_fields', stage=STAGE,
-    why='原型判的是 `time_layer` / `place` / `present_char_ids` **整体缺失**'
-        '（旧世代产物没有这三个键）。三者在 `Beat` 上今天都是**必填**'
-        '（`place` 可为 `null` 但键必须在）⇒ 前件恒不成立。'))
-
-REGISTRY.retire(RetiredRule(
-    rule='batch_dispersion', stage=STAGE,
-    why='原型判「批间 拍/千字 的 max/min > 2×」。**分批机制已随 F-100 整个删除**，'
-        '`BlueprintContext.batch_size` 在新产物上恒 1 ⇒ 只有一批，离散度无从谈起。'
-        '⚠⚠ **原型自己就写着这句话**：「一条恒不触发的 HARD 和一条恒亮的绿灯'
-        '是同一个病」——它是本仓「退役而不删」这条纪律的出处之一。'))
-
-REGISTRY.retire(RetiredRule(
-    rule='beat_span_absent', stage=STAGE,
-    why='原型判的是「这份产物的拍上根本没有 `span`」（旧契约无此字段）。'
-        '`Beat.span` 今天**必填** ⇒ 前件恒不成立。'
-        '⚠ 与 `span_unlocatable` 不是一回事：那一条判「有 span 但定位不到」，现役。'))
-
-REGISTRY.retire(RetiredRule(
-    rule='role_fate_absent', stage=STAGE,
-    why='原型判的是「characters 仍是旧的 identity 单字段」（role/fate 还没拆开）。'
-        '`Character.role` / `.fate` 今天都是**必填键**（`fate` 可为 `null`）'
-        '⇒ 前件恒不成立。⚠ 拆开之后真正要守的是「结局别漏回 role」，'
-        '那由 `role_leaks_fate` 与 `role_fate_unverifiable` 两条接住。'))
-
-REGISTRY.retire(RetiredRule(
-    rule='cross_batch_refs', stage=STAGE,
-    why='原型这一条挂着**两件事**：① `end_hook.pays_to_chapter` 残留 —— `end_hook` '
-        '整字段已删；② 「产物无跨章引用」—— 那是一句**恒真陈述**，不是判定'
-        '（逐章抽取未来章正文不可见，bounded-fidelity-v2 下过去也只给有界窗口，'
-        '默认且无旋钮）。'
-        '⚠ 第二支正是 `docs/schema/stage2.md` §六 记的三条「查不了」之一：'
-        '`event` 是抽象概括、没有可锚定的原文区间，两种通用检测都已证伪，'
-        '**只能从输入侧解**。把一句恒真陈述留在表里，会让人以为有一道闸在拦它。'))

@@ -10,7 +10,7 @@ novel.stages.stage3 —— 文风画像。**第一条端到端跑通的纵切。
 
 而它一层就覆盖：逐章并发抽取 + 1 次聚合 · 1 份产物 · 9 条判据 · 两条不同的 `.INVALID` 路径 +
 `gates_skipped` · 先校验后落盘 · `--check-only`/`--remeasure`/`--revalidate` ·
-**退役而不删**的两条 · `name_leak` 的**三态** · 代码算的 `measurable{}`。
+`name_leak` 的**三态** · 代码算的 `measurable{}`。
 
 生产路径用第三份上游的专名表确定性脱敏当前章，
 但不向风格模型下发 Stage 2 的秘密事实或其他章节正文。

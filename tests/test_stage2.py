@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_stage2.py —— 抽取那一层的 75 条判据。
+test_stage2.py —— Stage 2 当前判据。
 
 ⚠⚠ **本文件的主体是「盘上 0 命中的 HARD 各配一份会让它红的样本」**（2026-08-12 用户裁决）。
-41 条 HARD 里盘上只有 **4 条**有真反例（`address_bare_pronoun` 1 本 · `role_leaks_fate` 2 本 ·
-`hedge_words` 2 本 · `hinge_in_hole` 1 本）——**其余 37 条盘上 0 命中，那不是「干净」，
+40 条 HARD 里盘上只有 **4 条**有真反例（`address_bare_pronoun` 1 本 · `role_leaks_fate` 2 本 ·
+`hedge_words` 2 本 · `hinge_in_hole` 1 本）——**其余 36 条盘上 0 命中，那不是「干净」，
 是那种失效模式在这三本上一次都没发生过**。一条从没见过反例的判据与一条不存在的判据，
 在报告上长得一模一样。
 
 ⚠ **反例配得出来的前提是判据吃 `dict` 不吃模型**（`novel/stages/stage2/checks.py` 文件头）：
-一旦跑在已过 Pydantic 的对象上，`role_missing` / `event_empty` / `hinge_unanchored`
+一旦跑在已过 Pydantic 的对象上，`role_missing` / `event_empty`
 那一类在**结构上就构造不出反例**——`min_length=1` 会先把样本拒掉。
 本文件因此全程操作 dict，一次都不 `model_validate`。
 
 【干净底座是本文件的另一半】`test_the_clean_base_has_no_hard_hits` 钉住：
-**底座上 41 条 HARD 一条都不命中**。没有它，下面 37 条「改一处就红」什么也证明不了
+**底座上 40 条 HARD 一条都不命中**。没有它，下面 36 条「改一处就红」什么也证明不了
 ——一个本来就红的底座上，改什么都红。
 """
 from __future__ import annotations
@@ -27,6 +27,7 @@ import pytest
 
 import contracts.judges  # noqa: F401  —— 全量注册（本层的行才进得了 REGISTRY）
 from contracts.rules import REGISTRY
+from novel.core.spans import content_only
 from novel.stages.stage2 import checks
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -51,13 +52,28 @@ CH3 = ('午后的日头晒得人发懒。李宝珠把账册摊在桌上一页页
        '茶是新沏的还烫着。她端起来吹了吹没有喝。')
 
 
+def _source(text: str, a: str, b: str | None = None) -> dict[str, Any]:
+    start = text.index(a)
+    end_probe = b or a
+    end = text.index(end_probe, start) + len(end_probe)
+    raw = text[start:end]
+    return {'text': raw, 'start': start, 'end': end,
+            'normalized': content_only(raw), 'recovery': 'exact'}
+
+
 def _beat(bid: str, a: str, b: str, *, event: str, place: str,
           names: list[str], ids: list[str], hinges: list[dict] | None = None,
           layer: str = 'present') -> dict[str, Any]:
-    return {'beat_id': bid, 'span': {'starts_with': a, 'ends_with': b},
+    chapter = {'01': CH1, '02': CH2, '03': CH3}[bid[1:3]]
+    current_hinges = [
+        {'kind': hinge['kind'],
+         'source': _source(chapter, hinge['starts_with'], hinge['ends_with'])}
+        for hinge in (hinges or [])
+    ]
+    return {'beat_id': bid, 'span': _source(chapter, a, b),
             'time_layer': layer, 'place': place,
             'present_names': list(names), 'present_char_ids': list(ids),
-            'event': event, 'hinges': list(hinges or [])}
+            'event': event, 'hinges': current_hinges}
 
 
 def _narration(focalizer: str | None = '李宝珠', cid: str | None = 'char_001') -> list[dict]:
@@ -191,12 +207,23 @@ def blueprints() -> dict[str, Any]:
         '_provenance': {
             'scope_violations': [],
             'batches': [[1], [2], [3]],
-            'context': {'batch_size': 1, 'context_upto': True},
+            'context': {
+                'architecture': 'bounded-fidelity-v2',
+                'batch_size': 1,
+                'stable_prefix': '0123456789',
+                'current_chapter_full': True,
+                'future_visible': False,
+                'past_neighbor_chars_max': 4000,
+                'continuity_chars_max': 1600,
+                'past_names_chars_max': 600,
+            },
             'char_refs': {'resolved': 12, 'pronoun_ok': 0, 'ambiguous': 0, 'late': 0,
                           'unknown': 0, 'invented': 0, 'no_names': 1, 'pronoun': 0},
             'verbatim_rewrites': [],
             'verbatim_recovered': [],
             'verbatim_failures': [],
+            'partial_regen_chapters': [],
+            'repairs': [],
         },
     }
 
@@ -249,7 +276,7 @@ def test_hedge_words_does_not_treat_factual_or_as_uncertainty():
 def test_the_clean_base_leaves_no_rule_unimplemented():
     """**注册了而没有实现调用它 ⇒ `skipped`，徽章至少 amber。**
 
-    这一条盯的是 `checks.check()` 恰好产 75 个 `Outcome`——
+    这一条盯的是 `checks.check()` 恰好产 71 个 `Outcome`——
     报告是由**判据注册表**生成的，不是由实现的输出生成的，
     所以漏实现一条不会让它从报告里消失，只会让它挂一行「实现未被调用」。
     """
@@ -257,7 +284,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 75
+    assert len(outs) == len(want) == 71
 
 
 def test_the_two_unver_rules_always_speak():
@@ -276,7 +303,7 @@ def test_the_two_unver_rules_always_speak():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、37 条盘上 0 命中的 HARD —— 各配一份会让它红的样本
+# 三、36 条盘上 0 命中的 HARD —— 各配一份会让它红的样本
 # ─────────────────────────────────────────────────────────────────────────────
 
 Mutator = Callable[[dict, dict, list], Any]
@@ -305,7 +332,7 @@ def _ch(bp: dict, o: int) -> dict:
     return next(x for x in bp['blueprints'] if x['chapter_ordinal'] == o)
 
 
-#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，37 条。
+#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，36 条。
 CASES: list[tuple[str, Mutator, str]] = [
     # ── 一、产物完整性与章对齐 ──────────────────────────────────────────
     ('upstream_missing', lambda g, b, m: (None, b, m),
@@ -377,12 +404,8 @@ CASES: list[tuple[str, Mutator, str]] = [
      '章内序不连续'),
     ('span_unlocatable',
      _m(lambda g, b, m: _ch(b, 1)['beats'][1]['span']
-        .__setitem__('starts_with', '这句话原文里根本没有')),
+        .__setitem__('text', '这句话原文里根本没有')),
      '定位不到 ⇒ 这一拍没有量纲：字数、覆盖率、hinge 归属全部落空'),
-    ('anchor_ambiguous',
-     _m(lambda g, b, m: _ch(b, 3)['beats'][1]['span'].__setitem__('starts_with', '管家')),
-     '「管家」在定位器还要搜的那段里出现两次 ⇒ 这一拍对应原文哪一段有两个答案，'
-     '而取到哪一个只取决于上一条拍恰好停在哪儿'),
     ('verbatim_failed',
      _m(lambda g, b, m: b['_provenance'].__setitem__(
          'verbatim_failures', [['b01_01', 'starts_with', '锚点不在本章原文里']])),
@@ -406,23 +429,21 @@ CASES: list[tuple[str, Mutator, str]] = [
     # ── 六、保真材料 ────────────────────────────────────────────────────
     ('hinge_cross_chapter',
      _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'].append(
-         {'kind': '要害台词', 'starts_with': '街上已经有',
-          'ends_with': '在吆喝。', 'text': '街上已经有小贩在吆喝。'})),
+         {'kind': '要害台词', 'source': _source(CH2, '街上已经有', '在吆喝。')})),
      '引的是别的章的原文，逐字无误但归错了章。'
      '⚠ 它几乎一定同时意味着该拍的 event 也越界了——而 event 会照原样发给写手'),
     ('hinge_anchor_void',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'].append(
-         {'kind': '物件', 'starts_with': '这段原文根本不存在',
-          'ends_with': '也一样不存在', 'text': None})),
+     _m(lambda g, b, m: (
+         _ch(b, 1)['beats'][0]['hinges'].append({'kind': '物件', 'source': None}),
+         b['_provenance']['verbatim_failures'].append(
+             ['b01_01', 'hinge', '锚点不在本章原文']))),
      '锚点在本章原文里根本找不到（是转述或编的）——四分流里唯一一条根因在模型身上的'),
     ('hinge_drift',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'].append(
-         {'kind': '要害台词', 'starts_with': '院墙', 'ends_with': '院墙',
-          'text': '这段文字全书哪一章都没有出现过'})),
+     _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'].append({
+         'kind': '要害台词',
+         'source': {**_source(CH1, '院墙'), 'text': '这段文字全书哪一章都没有出现过'},
+     })),
      'text 不在本 beat 的 span 原文内，而全书哪一章也找不到 ⇒ 位置对、字节错'),
-    ('hinge_unanchored',
-     _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'][0].__setitem__('starts_with', '')),
-     '没有锚点则 text 只能是模型默写的，而闭卷写作靠它保真'),
     ('chapter_no_hinge',
      _m(lambda g, b, m: [be.__setitem__('hinges', []) for be in _ch(b, 2)['beats']]),
      '整章一条保真材料都没有 ⇒ 这一章的原文材料一条都没往下游走。⚠ 单拍为空是正常的'),
@@ -436,10 +457,6 @@ CASES: list[tuple[str, Mutator, str]] = [
      _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('present_char_ids', ['char_999'])),
      '⚠⚠ 这是**解析器的后置条件**：present_char_ids 是代码解析出来的，'
      '违反它 ＝ 代码坏了，不是数据坏了'),
-    ('present_names_partial',
-     _m(lambda g, b, m: _ch(b, 2)['beats'][0].__setitem__('present_names', None)),
-     '混版：一部分拍给了原文称呼而另一部分没给。⚠ 没给的那些，char_id 只能是模型编的，'
-     '而 `char_001` 这种恰好很可能落在名册里、成员检查兜不住'),
     ('present_names_invented',
      _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('present_names', ['王二麻子'])),
      '全书原文里都找不到这个称呼 ⇒ 模型凭空造了一个人。'
@@ -447,7 +464,7 @@ CASES: list[tuple[str, Mutator, str]] = [
     ('scope_violation',
      _m(lambda g, b, m: b['_provenance'].__setitem__(
          'scope_violations', ['批 1 被要求产 ch1，实际产了 ch1 与 ch5'])),
-     '非空即失败。⚠ 产地必须**无条件**写这个键，否则「键不在 = 没越界」会给旧产物发绿灯'),
+     '非空即失败；产地必须无条件写这个键，没越界时写空列表'),
     ('event_empty',
      _m(lambda g, b, m: _ch(b, 1)['beats'][0].__setitem__('event', '')),
      '⚠ **判在本层不判 stage4**：留在下游意味着要先付掉一次规划调用才发现这一层产坏了'),
@@ -482,7 +499,7 @@ def test_a_sample_that_makes_this_hard_rule_red(rule, mutate, why):
 def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     """⭐⭐ **守卫的守卫：这张清单不许悄悄变短。**
 
-    41 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
+    38 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
     加一条 HARD 而不配样本，这条测试当场点名——
     否则那条新判据就又回到「从没见过反例」那一档，而它与一条不存在的判据长得一样。
     """
@@ -491,7 +508,7 @@ def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     on_disk = {'address_bare_pronoun', 'role_leaks_fate', 'hedge_words', 'hinge_in_hole'}
     hard = {r.rule for r in REGISTRY.all() if r.stage == 'stage2' and r.sev == 'hard'}
     covered = {c[0] for c in CASES}
-    assert len(hard) == 41, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
+    assert len(hard) == 38, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
     assert covered <= hard, f'CASES 里有不是 HARD 的：{sorted(covered - hard)}'
     assert not (missing := sorted(hard - on_disk - covered)), (
         f'这几条 HARD 既没有盘上反例、也没有合成样本：{missing}\n'

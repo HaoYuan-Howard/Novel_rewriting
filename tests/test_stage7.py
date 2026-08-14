@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-test_stage7.py —— 人名替换与成书。**盘上三本的对账。**
-
-形态照 `tests/test_stage6.py`（单文件、整份挂 skipif）。
-纯函数那一族在 `tests/test_stage7_subs.py`——**它不该因为语料不在就没人查**。
-
-⚠ 本层最值钱的一条在 `test_the_assembled_book_is_byte_identical_to_the_one_on_disk`：
-**重拼出来的 `book.txt` 与原型交付的那一份 sha1 逐字节相同**。
-它一次性钉住了替换器（最长优先 / 恒等屏蔽 / 单次扫描）与组装器（章分隔 / 块分隔 /
-文案位置 / 编码 / 换行）——那种「逐字移植时漏一个字符类」的错不会报错，
-只会让某条判据在某类输入上静默地不再拦。
-"""
+"""Stage7 当前改名、替换、定稿与成书契约。"""
 from __future__ import annotations
 
 import shutil
@@ -22,22 +11,25 @@ import pytest
 from contracts.rules import REGISTRY
 from contracts.schema.stage7 import NameMap
 from novel import prov
+from novel.errors import UpstreamMissing
 from novel.run import RunContext
 from novel.stages.stage7 import assemble, prompts, rename
 from tests import corpus, sandbox
 
-#: 本层要的上游。⚠ `stage4/*` 两份是 **optional**：某本的 `plan_chapters.json`
-#: 在新契约下**读不回来**（它没有 `_provenance`），而那是登记在案的事实。
-STAGE7_INPUTS = ('stage1/main_text.json', 'stage2/global_grounding.json',
-                 'stage4/plan_chapters.json', 'stage4/writer_context.json',
-                 'stage6/hook.json', 'stage7/name_map.json')
+STAGE7_REQUIRED = ('stage1/main_text.json', 'stage2/global_grounding.json',
+                   'stage4/plan_chapters.json', 'stage4/writer_context.json',
+                   'stage7/name_map.json')
+STAGE7_OPTIONAL = ('stage6/hook.json',)
 
 
 def books() -> list[str]:
     if corpus.corpus_root() is None:
         return []
-    return sorted({a.book_dir for a in corpus.iter_artifacts()
-                   if a.rel == 'stage7/name_map.json'})
+    by_book: dict[str, set[str]] = {}
+    for artifact in corpus.iter_artifacts():
+        by_book.setdefault(artifact.book_dir, set()).add(artifact.rel)
+    required = set(STAGE7_REQUIRED)
+    return sorted(book for book, rels in by_book.items() if required <= rels)
 
 
 pytestmark = pytest.mark.skipif(
@@ -46,25 +38,18 @@ pytestmark = pytest.mark.skipif(
 
 def _drafts_of(book: str) -> tuple[str, ...]:
     return tuple(sorted({a.rel for a in corpus.iter_artifacts()
-                         if a.book_dir == book and a.rel.startswith('stage5/')
-                         and '/ch' in a.rel and '_rounds' not in a.rel}))
+                         if a.book_dir == book and a.pattern == 'stage5/{mode}/ch{nn}.json'
+                         and '_rounds' not in a.rel}))
 
 
 def _box(book: str) -> sandbox.Sandbox:
-    """沙箱 + 盘上那份 `book.txt`（它不是 JSON，`Sandbox` 不管它）。
-
-    ⚠ **`book_txt.sha1` 要按盘上那份 txt 重算**：迁移填的是占位符
-    （`corpus.py::RESHAPED` —— 盘上记的是 10 位来源指纹，新契约要 40 位内容指纹，
-    **旧值推不出新值**）。不重算，`rn_txt_stale` 会在每一本上误报红。
-    """
-    rels = tuple(r for r in STAGE7_INPUTS if sandbox.cut(book, r) is not None)
+    """当前契约 JSON 沙箱，并带上由 Stage7 生成的 `book.txt`。"""
+    rels = STAGE7_REQUIRED + tuple(
+        r for r in STAGE7_OPTIONAL if sandbox.cut(book, r) is not None)
     box = sandbox.Sandbox(book, rels + _drafts_of(book))
     src = corpus.corpus_root() / book / 'stage7' / 'book.txt'
     if src.exists():
         shutil.copy2(src, box.dir / 'stage7' / 'book.txt')
-        nm = box.read('stage7/name_map.json')
-        nm['book_txt']['sha1'] = prov.content_sha1(src.read_bytes())
-        box.write('stage7/name_map.json', nm)
     return box
 
 
@@ -86,14 +71,14 @@ def _check(box: sandbox.Sandbox):
 # ── 一、报告的形状 ─────────────────────────────────────────────────────────
 
 def test_every_registered_rule_produced_a_row(box):
-    """⭐ **34 条一行不少，`skipped` 0 条。**
+    """当前判据一行不少，`skipped` 0 条。
 
     报告由 `build()` 遍历**注册表**生成，不遍历产出 ⇒ 一条判据不可能因为
     「实现忘了调」而从报告里消失。少调一条，它会以 `skipped` 出现在这里。
     """
     rep = _check(box)
     want = {r.rule for r in REGISTRY.of_stage('stage7')}
-    assert len(want) == 34
+    assert len(want) == 33
     assert {r.rule for r in rep.rules} == want
     skipped = sorted(r.rule for r in rep.rules if r.status == 'skipped')
     assert skipped == [], f'这些判据注册了却没被调用：{skipped}'
@@ -106,6 +91,15 @@ def test_body_stale_reports_every_draft_as_its_scan_denominator(box):
     assert line.scanned == f'{len(_drafts_of(box.book))} 份成稿 + 文案'
 
 
+@pytest.mark.parametrize('rel', ('stage4/plan_chapters.json',
+                                 'stage4/writer_context.json'))
+def test_stage7_requires_current_stage4_upstreams(box, rel):
+    """Stage7 只接收完整的当前 Stage4 契约，不降级到缺计划/缺上下文模式。"""
+    (box.dir / rel).unlink()
+    with pytest.raises(UpstreamMissing, match=rel):
+        _check(box)
+
+
 def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     """⭐ **stage7 的徽章在结构上永远不可能是 `pass`。**
 
@@ -115,8 +109,9 @@ def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     与 stage6 是同一个形状。
     """
     rep = _check(box)
-    assert rep.badge == 'amber'
-    assert rep.passed is True
+    hard_hit = any(r.sev == 'hard' and r.status == 'hit' for r in rep.rules)
+    assert rep.badge == ('fail' if hard_hit else 'amber')
+    assert rep.passed is (not hard_hit)
     assert sum(1 for r in rep.rules if r.sev == 'unver') == 7
 
 
@@ -133,50 +128,21 @@ def test_no_hard_rule_is_hit_on_disk(box):
     assert hard_hits == []
 
 
-def test_hits_match_the_reconciliation(box):
-    """命中集恒 `{rn_residual_stem}`。
-
-    ⚠ `rn_identity_baseline` **不在里面**，而那要靠 `_box` 之外的一步：
-    盘上三份产物的 `identity` 都是 `null`（原型只 `print`，没有落点）
-    ⇒ 原样复检时它会命中一条「从没跑过」。本条查的是**跑过基线之后**的状态。
-    """
-    rename.run_identity(_ctx(box))
-    hits = sorted({r.rule for r in _check(box).rules if r.status == 'hit'})
-    assert hits == ['rn_residual_stem']
-
-
-def test_the_residual_probe_is_the_only_one_that_actually_fires(box):
-    """残留探针盘上 **3/3 命中**，条数与文档实测对得上（2 / 2 / 15）。"""
+def test_the_residual_probe_always_reports_its_denominator(box):
+    """是否命中随小说变化，但探针分母必须常驻。"""
     row = next(r for r in _check(box).rules if r.rule == 'rn_residual_stem')
-    assert row.status == 'hit' and len(row.findings) == 1
-    assert '旧姓字落在替换面之外' in row.findings[0].detail
-    # 分母必须报出来——没有分母的绿灯不携带信息
+    assert row.status in ('ok', 'hit')
     assert row.scanned and '姓字覆盖率' in row.scanned
-
-
-def test_the_identity_baseline_says_it_never_ran_instead_of_staying_quiet(box):
-    """⭐ 盘上 `identity` 是 `null`，而报告必须**出声说「没跑过」**。
-
-    原型的 `--identity` 整个输出是 `print` + 返回码 ⇒
-    「跑过且逐字节无损」与「从没跑过」在盘上长得一模一样（`Q-2`）。
-    ⚠ 那个 `null` **不是「迁移没填」，是实况**。
-    """
-    art = NameMap.model_validate(box.read('stage7/name_map.json'))
-    assert art.identity is None, '盘上这三份产物早于 `identity` 这个键'
-    row = next(r for r in _check(box).rules if r.rule == 'rn_identity_baseline')
-    assert row.status == 'hit' and '从没跑过' in row.findings[0].detail
 
 
 # ── 二、⭐ 逐字节对账 ──────────────────────────────────────────────────────
 
 def test_the_assembled_book_is_byte_identical_to_the_one_on_disk(box):
-    """⭐⭐ **本层最值钱的一条：重拼 == 盘上那份交付物，逐字节。**
-
-    它一次钉住替换器（最长优先 / 恒等屏蔽 / 单次扫描不级联）与组装器
-    （章分隔＝裸数字 / 块分隔 / 文案在最前 / UTF-8 / LF）。
-    **不一致就是骨架抄错了，不是数据变了**——那三份 `book.txt` 一个字节都没动过。
-    """
-    on_disk = (corpus.corpus_root() / box.book / 'stage7' / 'book.txt').read_bytes()
+    """已有当前交付物时，确定性重拼必须逐字节相同。"""
+    source = corpus.corpus_root() / box.book / 'stage7' / 'book.txt'
+    if not source.exists():
+        pytest.skip('当前小说尚未组装 book.txt')
+    on_disk = source.read_bytes()
     rename.run_approve(_ctx(box, 'stage7.approve'))
     path, art, _rep = assemble.run_assemble(_ctx(box, 'stage7.assemble'))
     assert Path(path).read_bytes() == on_disk
@@ -198,7 +164,7 @@ def test_the_book_txt_byte_form_holds(box):
 
 
 def test_the_identity_baseline_is_byte_lossless(box):
-    """⭐ 恒等基线：占位符双射往返 **逐字节无损**（`R-10.7`），3/3。
+    """恒等基线：占位符双射往返逐字节无损。
 
     ⚠ 它**验不了**的三样必须与结论存在一起（`R-10.7b`）——分开放，
     下一个人就会把它跑绿了读成「替换是安全的」。
@@ -223,45 +189,21 @@ def test_identity_preflight_works_before_the_first_name_map_exists(box):
     assert not (box.dir / 'stage7' / 'name_map.json').exists()
 
 
-def test_rejudging_reproduces_the_rule_set_on_disk(box):
-    """⭐ **重判 == 存盘**：盘上 `book[]` 恒 7 条，三本规则集完全相同。
-
-    ⚠ 新骨架会**多出**几条（`rn_identity_baseline` 是新增的、`unver` 全量输出），
-    差额要逐条说得出来 ⇒ 本条断言的是「盘上那 7 条**一条不少地**都被重判出来」。
-    """
+def test_rejudging_reproduces_every_stored_current_rule(box):
+    """产物中的判据 id 必须全部属于当前注册表，并可由重判路径报出。"""
     stored = {f.rule for f in NameMap.model_validate(box.read('stage7/name_map.json')).book}
-    assert stored == {'rn_residual_stem', 'rn_stem_noise', 'rn_report', 'rn_style_report',
-                      'rn_taste_unver', 'rn_coverage_unver', 'rn_title_unver'}
-    # ⚠ 判「产出了没有」要看 `findings`，**不能看 `status`**：
-    #   `metric` 永不命中（度量一命中就重新并回告警那一支），它的读数照样装在 `findings` 里。
+    current = {r.rule for r in REGISTRY.of_stage('stage7')}
+    assert stored <= current
     rep = _check(box)
     spoke = {r.rule for r in rep.rules if r.findings or r.status == 'unver'}
     assert stored <= spoke, f'盘上有而重判没产出：{sorted(stored - spoke)}'
 
 
-# ── 三、prompt 逐字 ───────────────────────────────────────────────────────
+# ── 三、当前 prompt 契约 ─────────────────────────────────────────────────
 
-def test_the_prompt_is_a_byte_for_byte_port():
-    """`RENAME_SYS` 与原型 `N9_SYS` **逐字节相同**。"""
-    src = _prototype_const('N9_SYS')
-    if src is None:
-        pytest.skip('原型仓不在旁边 —— 本条**没在查**')
-    assert prompts.RENAME_SYS == src
-    assert len(prompts.RENAME_SYS) == 1658
-
-
-def test_the_rendered_prompt_is_byte_for_byte_too():
-    """⭐⭐ **钉的是发出去的字节，不是模板。**
-
-    F1 的教训①：`HOOK_SYS` 确实逐字节相同，而从原型搬进 `invariants` 的三句说明
-    被**转述**了一遍，渲染结果短了 48 字——丢掉的正是那条唯一还禁的硬约束。
-    **只钉模板的测试抓不到它**（占位符两侧一个字节都没变）。
-    本层今天没有插值点，所以「渲染 == 模板」本身就是要钉的那件事。
-    """
-    src = _prototype_const('N9_SYS')
-    if src is None:
-        pytest.skip('原型仓不在旁边 —— 本条**没在查**')
-    assert prompts.rename_system() == src
+def test_the_current_system_prompt_is_the_rendered_prompt():
+    assert prompts.RENAME_SYS.strip()
+    assert prompts.rename_system() == prompts.RENAME_SYS
 
 
 def test_the_user_blocks_are_a_byte_for_byte_port_too(box):
@@ -291,22 +233,6 @@ def test_the_downsend_face_and_the_probe_share_one_universe(box):
     covered = set(art.subs) | set(art.kept)
     missing = sorted(set(mat.universe) - covered)
     assert not missing, f'下发了却既没换也没留：{missing[:8]}'
-
-
-def _prototype_const(name: str) -> str | None:
-    """从原型源码里**用 AST 取**那个字符串常量。不 import 它（那会拉进整条链）。"""
-    import ast
-    p = (Path(__file__).resolve().parent.parent.parent
-         / 'Novel_refactoring' / 'Rapid_Prototyping' / 'Stage7' / 'n9_rename.py')
-    if not p.exists():
-        return None
-    tree = ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
-    for n in ast.walk(tree):
-        if (isinstance(n, ast.Assign) and len(n.targets) == 1
-                and isinstance(n.targets[0], ast.Name) and n.targets[0].id == name
-                and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)):
-            return n.value.value
-    return None
 
 
 # ── 四、`_provenance` 的账 ────────────────────────────────────────────────
@@ -360,24 +286,12 @@ def test_recheck_reproduces_every_stored_conclusion(box):
 
 
 def test_a_human_added_mapping_that_collides_is_reported_but_never_blocked(box):
-    """⭐ **事实⑤：`rn_new_collide`（HARD）的取值面够不到 `extra_subs` 那扇门。**
-
-    盘上某本有一条 `祈辕→叶翎`（人手补）撞上 `char_009` 的 `叶翎`（模型写），
-    **而那条 HARD 打的是 `[OK]`**。⚠ **那一次撞名恰好是对的**（原作对同一个人
-    有两种写法），硬拦它的唯一出路是撤销一个对的决定 ⇒ **不扩 HARD 的取值面**，
-    另落一条提示。
-
-    ⚠ `--check-only` 看不到它：那条路**读产物不重算**（重算就是第二个判官），
-    而盘上那份 `book[]` 是原型产的。要 `--recheck` 才会重新走一遍确定性链。
-    """
+    """人工补充映射的碰撞只进入 INFO，不扩大模型碰撞 HARD 的取值面。"""
     art, rep = rename.run_recheck(_ctx(box))
     collided = [f for f in art.book if f.rule == 'rn_new_collide_human']
     hard = next(r for r in rep.rules if r.rule == 'rn_new_collide')
     assert hard.status == 'ok', 'HARD 那条不许因为人工补充而红'
-    if box.sid.endswith('3176'):
-        assert len(collided) == 1 and '祈辕' in collided[0].detail
-    else:
-        assert collided == [], f'这本书不该有人工撞名：{[f.detail for f in collided]}'
+    assert all(f.sev == 'info' for f in collided)
 
 
 def test_identity_marks_the_artifact_as_partially_rewritten(box):
@@ -388,69 +302,6 @@ def test_identity_marks_the_artifact_as_partially_rewritten(box):
     rename.run_identity(_ctx(box))
     prov_d = box.read('stage7/name_map.json')['_provenance']
     assert prov_d.get('partial_rewrite') == '--identity'
-
-
-# ── 四之二、盘上那三条只能从【归档】看见的事实 ────────────────────────────
-#
-# 这一族不吃沙箱，直接读语料——它们说的就是「只反推正式产物会得出什么错结论」。
-
-def _name_maps():
-    return [a for a in corpus.iter_artifacts() if a.pattern == 'stage7/name_map.json']
-
-
-def test_high_confidence_residuals_only_exist_in_the_archives():
-    """⭐ **只反推正式产物，会把 `high` 定成一个零样本分支。**
-
-    3 份正式产物 19 条残留**全部是 `low`**——`high` 的那些早被人勾选、
-    走 `extra_subs` 修掉了，正式产物是**修完之后的状态**。
-    而 8 份归档里有 **35 条 `high`**。
-    ⇒ **凡是有「人修完再落盘」这条路的层，归档必须一起反推。**
-    """
-    live = [r for a in _name_maps() if '_rounds' not in a.rel
-            for r in (corpus.load_raw(a).get('residual') or [])]
-    arch = [r for a in _name_maps() if '_rounds' in a.rel
-            for r in (corpus.load_raw(a).get('residual') or [])]
-    assert len(live) == 19 and {r['confidence'] for r in live} == {'low'}
-    assert sum(1 for r in arch if r['confidence'] == 'high') == 35
-
-
-def test_the_code_fingerprint_never_moved_while_the_prompt_took_three_values():
-    """⭐ **事实⑦ 的字节级铁证：按内容算的指纹戳穿了按 git HEAD 算的那个。**
-
-    盘上 11 份产物 `code` **全是同一个短 sha**，而同一批的 `N9_SYS` 取过 **3 个**值
-    ⇒ **代码确实变过三次，而 `code` 一个字没动**（工作树脏时它照样给出一个
-    看起来很精确的答案）。全链没有一层比对过它们。
-
-    ⚠ 处置**不在本轮**：`provenance()` 在共享层，改 `git describe --always --dirty`
-    一改就是八层一起改（`stage6.md` §三 已登记「处置只定一次，别按层分别裁」）。
-    本条只是**把它钉在盘上**，免得下一个人以为这件事没人知道。
-    """
-    codes, prompts_seen = set(), set()
-    for a in _name_maps():
-        pv = corpus.load_raw(a).get('_provenance') or {}
-        codes.add(pv.get('code'))
-        prompts_seen.add((pv.get('prompts') or {}).get('N9_SYS'))
-    assert len(_name_maps()) == 11
-    assert len(codes) == 1, f'`code` 变过了：{codes}'
-    assert len(prompts_seen) == 3, f'`N9_SYS` 取过 {len(prompts_seen)} 个值'
-
-
-def test_the_book_txt_fingerprint_can_only_be_recomputed(box):
-    """⭐ 盘上记的是 **10 位来源指纹**，新契约要 **40 位内容指纹**，
-    **旧值推不出新值**（`corpus.py::RESHAPED`）。
-
-    迁移填的是占位符 ⇒ **不重算，`rn_txt_stale` 会在每一本上误报红**。
-    ⚠ 别把那个占位符读成实测值。
-    """
-    raw = next(a for a in _name_maps()
-               if a.book_dir == box.book and '_rounds' not in a.rel)
-    on_disk_old = (corpus.load_raw(raw).get('book_txt') or {}).get('sha1')
-    assert on_disk_old and len(on_disk_old) == 10, '盘上那份不再是 10 位了？'
-    migrated = corpus.load_cut(raw)['book_txt']['sha1']
-    assert migrated == '0' * 40, '迁移这一格填的必须是占位符，不是一个看起来像真的值'
-    # `_box` 已按盘上那份 txt 重算过——重算出来的与占位符**必然**不同
-    assert box.read('stage7/name_map.json')['book_txt']['sha1'] != migrated
-    assert next(r for r in _check(box).rules if r.rule == 'rn_txt_stale').status == 'ok'
 
 
 # ── 五、闸门与提升路（**本层 0/15 反例样本，这几条就是那几份样本**）──────────

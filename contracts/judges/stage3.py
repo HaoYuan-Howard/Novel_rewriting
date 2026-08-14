@@ -15,7 +15,7 @@ stage3.py —— 文风画像那一层的判据行。源是 `docs/schema/stage3.
 """
 from __future__ import annotations
 
-from contracts.rules import REGISTRY, RetiredRule, Rule
+from contracts.rules import REGISTRY, Rule
 
 STAGE = 'stage3'
 
@@ -86,22 +86,3 @@ _info('node_leak', '内部工作流名泄漏', 'R-4.14',
       wordlist=True, baseline='盘上三本 0/3 命中（`N1`/`gate`/`blueprint`/`stage N`/`QC`）',
       note='它是**关键词表**判据，所以必须报基线（`Q-9` / 判据 31）：'
            '没有基线命中率的词表判据，等于不知道自己在说什么')
-
-
-# ── 两条退役而不删（`stage3.md` §六 设计要点③） ──────────────────────────────
-#
-# ⚠ 退役的是关键词判据，不是「描述必须可迁移、可执行」的产品要求。
-# `CLICHES` 九词表没有现役消费方；报告常驻退役说明，让「量不准所以撤了」与「忘了」
-# 读起来不一样。
-
-REGISTRY.retire(RetiredRule(
-    rule='num_vs_desc', stage=STAGE,
-    why='实测句长 vs 描述里的「长句/短句」字面。拿关键词去匹配自由散文：'
-        '描述写「长短句交错」时既含「长句」又含「短句」，判据只能靠 '
-        '`and "短句" not in rhythm` 兜一层，换个说法就失效。判据 31'))
-
-REGISTRY.retire(RetiredRule(
-    rule='cliche', stage=STAGE,
-    why='套话词表（九词）× 描述短于 25 字。九个词是拍脑袋列的、没有基线命中率；'
-        '且「短于 25 字」与「是不是套话」无关——一句 20 字的精准描述会被判，'
-        '一段 200 字的车轱辘话不会。判据 31'))

@@ -15,8 +15,7 @@ import sys
 
 import pytest
 
-from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS, WRITE_EFFECTS
-from contracts.rules import PORTED_STAGES
+from contracts.invariants import FREE_ENTRIES, NODES, STAGES, VALUED_FLAGS, WRITE_EFFECTS
 from novel.errors import UnsupportedRunMode
 from novel.orchestrator import nodes as N
 
@@ -110,7 +109,7 @@ def test_the_look_only_flags_never_write(flag):
 
 
 @pytest.mark.parametrize('flag', ['--remeasure', '--revalidate', '--recheck',
-                                  '--apply-edit', '--migrate'])
+                                  '--apply-edit', '--renormalize'])
 def test_the_free_but_writing_flags_say_what_they_write(flag):
     """⭐ **「0 成本」不等于「不写盘」** —— 原型 8 条注释都在说这句，而它没有落点。
 
@@ -309,81 +308,33 @@ def test_step_label_ignores_the_value_of_a_valued_flag():
     assert got.endswith('--apply-edit'), got
 
 
-def test_every_ported_stage_has_exactly_one_check_node():
-    """⭐ **一颗今天就绿、F 期才会响的地雷的守卫。**
-
-    `:kind` 是**层**（八个，取值面 = `STAGES`），而复检是**节点**上的一条跑法
-    ——`check_nodes` 是那两轴之间唯一的桥。
-
-    ⚠ stage0 三个节点的 `flags` 全是 `()`（理由正当：原型里 stage0 整层不存在，
-    「这一层接受哪些跑法」没有任何一处核对过，而**空元组是诚实的**）。
-    于是移植 stage0 而没给它登记 `--check-only` 的那一刻，
-    `/api/novels/:sid/check/stage0` 会从一个说得清的 501 掉进
-    「两张表分家了」。这条测试让那一刻**在改 `PORTED_STAGES` 时就发生**，
-    而不是等到界面上点下去。
-    """
-    for stage in sorted(PORTED_STAGES):
+def test_every_stage_has_exactly_one_check_node():
+    """`:kind` 是阶段，复检是节点跑法；每个当前阶段必须恰有一座桥。"""
+    for stage in sorted(STAGES):
         got = N.check_nodes(stage)
         assert len(got) == 1, (
             f'{stage} 有 {len(got)} 个节点接受 `--check-only`：{got}\n'
-            f'→ 0 个：移植这一层时忘了给它登记跑法（`NODES[...].flags`）；'
+            f'→ 0 个：忘了给它登记跑法（`NODES[...].flags`）；'
             f'→ 2 个以上：`GET /api/novels/:sid/check/{stage}` 不知道该调哪一个')
     assert N.check_nodes('stage3') == ('stage3.style',)
-    # 守卫的守卫：`PORTED_STAGES` 空掉时上面那个 for 一条都不跑而测试照样绿。
-    assert PORTED_STAGES, '`PORTED_STAGES` 是空的——本条没在查'
 
 
-def test_the_checker_table_covers_exactly_the_ported_stages():
-    """⭐ **两侧夹死**，形态照抄 `test_registry_covers_exactly_the_ported_stages`。
-
-    `novel/stages/__init__.py::check_only` 是 `--check-only` 与
-    `GET /api/novels/:sid/check/:kind` 的**共用落点**。它与 `PORTED_STAGES`
-    分家的表现是：CLI 复检某层跑得动，而界面上那一屏 501（或反过来）。
-
-    ⚠⚠ **这里从前还断言 `check_only('stage2')` 抛 `NodeNotPorted`。**
-    stage2 是最后一层，F5-5 把它移植进来之后那句断言**只能删**——
-    而删它不是「放宽了一条测试」：`STAGES − PORTED_STAGES` 成了空集，
-    那个异常在生产路径上**再也构造不出来**，于是它连同异常类一起退役
-    （2026-08-12 用户裁决，见 `novel/errors.py::RunModeNotImplemented` 的注释）。
-    ⇒ 换成下面那条**八层逐层查得出实现**的断言：它比原来那句强，
-    因为原来那句只盯着**一个**没移植的层，而移植完最后一层它就自动失效了。
-    """
+def test_the_checker_table_covers_exactly_the_current_stages():
+    """CLI 与 HTTP 共用的复检表必须覆盖当前八层。"""
     from novel.stages import check_only, checkable_stages
-    assert checkable_stages() == PORTED_STAGES
+    assert checkable_stages() == set(STAGES)
     assert check_only('stage3').__name__ == 'run_check_only'
-    # ⚠ 八层**逐层**都要交得出一个复检实现——这是「两侧夹死」的另一半：
-    #   上面那句只比集合相等，而集合相等不保证 `_checkers()` 里那个值是真函数。
-    for stage in sorted(PORTED_STAGES):
+    for stage in sorted(STAGES):
         assert callable(check_only(stage)), f'{stage} 的复检落点不是一个可调用的东西'
-    assert len(PORTED_STAGES) == 8, (
-        '八层全移植完了。⚠ 这条字面断言是**故意**的：它是「未移植」这个状态'
-        '已经不存在的唯一书面凭据——哪天有人加了第九层，它会在改 `STAGES` 的'
-        '那一刻红，而不是等到界面上点下去')
 
 
-def test_the_runner_table_covers_exactly_the_ported_stages():
-    """⭐ **上一条的孪生兄弟，而这一侧曾经根本没有表。**
-
-    `_dispatch` 在 `PORTED_STAGES` 那道闸**之后**曾是一句硬编码
-    `return _run_stage3(ctx, flags)`。于是移植第二层的那一刻，
-    `run stage6.hook --check-only` 会安静地跑 stage3 的实现、读
-    `stage3/style_grounding.json`，**报出一份属于另一层的报告**——
-    退出码 0、格式正确、内容全错。
-
-    ⚠⚠ **它当时是抓不到的**：`test_an_unported_node_is_a_terminal_state_not_a_stack`
-    只参数化**未移植**的层，`test_api_http` 那条也一样 ⇒
-    **移植一层反而让覆盖面缩小**，正好缩在漏改的那一格上。
-    这条测试把方向反过来：盯**已移植**的那一侧，加一层漏改就红。
-    """
+def test_the_runner_table_covers_exactly_the_current_stages():
+    """CLI 派发表必须覆盖当前八层。"""
     from novel.cli.main import _runners, runnable_stages
-    assert runnable_stages() == PORTED_STAGES, (
+    assert runnable_stages() == set(STAGES), (
         f'`novel/cli/main.py::_runners` 覆盖 {sorted(runnable_stages())}，'
-        f'而 `PORTED_STAGES` 是 {sorted(PORTED_STAGES)}——两张表分家了。\n'
-        f'→ 少一层：移植时忘了往 `_runners()` 加一行，那一层会掉进另一层的实现里；'
-        f'→ 多一层：那一层的判据行还没进 `REGISTRY`')
+        f'而当前阶段是 {sorted(STAGES)}')
     assert _runners()['stage3'].__name__ == '_run_stage3'
-    # 守卫的守卫：`PORTED_STAGES` 空掉时上面两条都还是绿的。
-    assert PORTED_STAGES, '`PORTED_STAGES` 是空的——本条没在查'
 
 
 def test_the_flag_surface_covers_all_three_tables():

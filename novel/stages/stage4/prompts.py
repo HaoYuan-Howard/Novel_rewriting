@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-prompts.py —— 规划那一次调用的 system prompt 与下发面。
+"""Stage 4 规划调用的现行 system prompt 与下发面。
 
-⚠⚠ **`PLAN_SYS` 与原型 `Stage4/n4_plan.py::N4_SYS` 逐字节相同**，配一条会红的测试钉着
-（`tests/test_stage4.py`）。**渲染之后也必须逐字节相同**——F1 那次的教训：
-模板确实一个字节没变，而从原型搬进 `invariants` 的三句说明被**转述**了一遍，
-渲染结果短了 48 字，丢掉的正是那一层唯一还禁的东西。**只钉模板的测试抓不到它**：
-占位符两侧一个字节都没变。
-
-【五个占位符全部走插值，一个都不许手抄】原型的注释写得很清楚，手抄版**实测已经漂了**：
-prompt 里写着「象征 / 强化感官 / 增加画面感」，而词表里是「意象 / 感官 / 画面感」，
-词表另外 8 个词 prompt 一个都没提；倍率表 prompt 只写了四个 op、漏了当时第五个的区间。
-**一个只在 prompt 里、一个只在校验器里，模型按 A 算、代码按 B 判，谁也不会报错。**
+五个占位符全部从 `contracts.invariants` 插值，避免 prompt 与校验器使用不同词表或阈值。
+测试同时锁定模板和实际渲染结果；任何语义变更都必须显式更新契约与指纹预期。
 """
 from __future__ import annotations
 
@@ -100,8 +91,7 @@ PLAN_SYS = fill("""\
 
 只输出 JSON（顶层键：reconstruction_strategy, output_chapters）。不要额外解释。""")
 
-#: 响应的形状提示。⚠ `op` **不在这里**（已锁定为常量，模型不产它）；
-#: `from_beats` 也不在这里（拍由代码切好，模型只认编号、只给预算，
+#: 响应的当前形状提示。`from_beats` 不在模型响应里（拍由代码切好，模型只认编号、只给预算，
 #: 落盘前由 `expand_plan_beats` 把 `plan_beat` 换回 `from_beats`）。
 PLAN_HINT: dict[str, Any] = {
     'reconstruction_strategy': 'str',
@@ -113,16 +103,10 @@ PLAN_HINT: dict[str, Any] = {
 }
 
 #: 下发给规划者的**章级**字段。
-#: 〔`PLANNER_BEAT_KEYS = ('beat_id', 'event', 'time_layer', 'place')` 曾在这里，
-#:   **随「拍改成代码切」退役**：规划者拿到的不再是源 beat，而是切好的拍。
-#:   退役而不删 + 标注：记着「规划侧拍级投影」当初留了哪四样，删掉之后无从查证。
-#:   ⚠⚠ 其中 **`beat_id` 是主动拿掉的，不是顺手漏的**——源 beat 的编号一旦进了规划视野，
-#:   模型就有了**重新编组的抓手**，而那正是这一层要收走的自由度。〕
 PLANNER_CHAPTER_KEYS = ('chapter_ordinal', 'summary')
 
-#: 五个块头。⚠ **逐字进 prompt，所以它们的措辞是契约的一部分**——
-#: 改一个字，全部存量产物的 `_provenance.prompts` 指纹当场对不上、被报成 stale，
-#: 那是一次**假回归**。原型这一段没有具名常量，只钉 system 会漏掉整个下发面。
+#: 五个块头。⚠ **逐字进 prompt，所以它们的措辞是契约的一部分**；
+#: system 与 user 下发面都由测试锁定。
 BLOCK_INDEX = '── 章节索引（阅读序）──'
 BLOCK_SKELETON = '── 章节骨架（blueprints，拍已切好，含各拍 plan_beat 编号）──'
 BLOCK_SIZES = ('── 各拍源字数（算好的，直接用；逐拍相加即本章源字数）──\n'
@@ -177,7 +161,7 @@ def projection_note(blueprints: dict[str, Any], groups: dict[Any, list[list[str]
     """投影**省了多少**要出声——它会直接改变下游模型的注意力分配。
 
     静默生效的话，下一次有人怀疑「规划质量变了」时**无从对照**。
-    ⚠ 原型这是两行 `print`；本仓返回字符串，由节点交给报告 / `--dry-run` 的输出。
+    返回字符串，由节点交给报告或 `--dry-run` 输出。
     """
     n_src = sum(len(b.get('beats') or []) for b in (blueprints.get('blueprints') or []))
     n_pb = sum(len(g) for g in groups.values())

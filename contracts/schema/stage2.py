@@ -27,7 +27,7 @@ stage2.py —— 对应 `docs/schema/stage2.md`。抽取。**全链第一个调 
 """
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, model_validator
 
@@ -291,7 +291,7 @@ class Entities(StrictModel):
 
 
 class GlobalProvenance(LlmProvenance):
-    """`global_grounding._provenance` —— 五个记账键 + 一个人工裁决记录。
+    """`global_grounding._provenance` —— 五个确定性归一记账键。
 
     ⚠ **记账不是终点，报出来才是**（`Q-1`）：这五个键各有**指定出口**
     （断言计数 / 逐条列出），细则见 `stage2.md` §3.3。三条形式要求：
@@ -320,15 +320,6 @@ class GlobalProvenance(LlmProvenance):
     #: `(secret_id, 原 setup_chapters, 裁完的)`。**校验器断言的是它，不是字段值。**
     #: 空列表 = 这一趟没裁过；**键不在 = 「不知道」，不发绿灯**。
     setup_chapters_pruned: list[tuple[str, list[int], list[int]]]
-
-    #: 人工裁掉某条 secret / 规则时记裁决理由。**盘上零样本。**
-    #: 出口：**逐条列出裁决理由**——人删掉过东西这件事必须留在报告里。
-    #:
-    #: ⚠ **契约从没定过它的子字段形状**（`stage2.md` §3.1 只写了「记裁决理由」）。
-    #: 这里用 `dict[str, str]` 是**登记这个空缺**，不是定义它——
-    #: stage2 移植之前要把形状补齐，否则 `extra='forbid'` 在这一格上是失效的。
-    human_adjudicated: list[dict[str, str]] | None = None
-
 
 class GlobalGrounding(StrictModel):
     """`stage2/global_grounding.json` —— 顶层 4 个键。**全书一次调用。**
@@ -399,123 +390,10 @@ class RoleSplitResponse(StrictModel):
 # 二、`chapter_blueprints.json`
 # ─────────────────────────────────────────────────────────────────────────────
 
-class LegacyBeatSpan(StrictModel):
-    """一拍在原文里的两个锚点。
-
-    **契约要的是「原样照抄 8~30 字」，而那是【生成期指导】不是产物不变量**——
-    落盘前的回取会把两头改长度。盘上 **66/502 个锚点内容字符 < 6**（最短 1），
-    校验器**明说不判违约**，所以这里也不加长度下界。
-
-    ⚠ **产地按 8~30 要求、校验侧承认做不到，中间那段差额会被模型用编造填上**：
-    实测一条 `ends_with` 写成 `我"嗯"。`（原文只有 `"嗯。"`），补出来的「我」原文里不存在，
-    整条 beat 因锚点定位不到而作废，而且**扛过了一次带证据的定向重生成**。
-    ⇒ prompt 里必须有那条逃生口：「锚点本来就短时，照抄它有多少字，不要补字凑长度」。
-    """
-
-    #: 长度 2~43。
-    starts_with: str = Field(min_length=1)
-
-    #: 长度 1~25。
-    ends_with: str = Field(min_length=1)
-
-
-class LegacyHinge(StrictModel):
-    """一条保真点。**闭卷写作唯一的保真通道**，所以它的字节必须是原文的字节。
-
-    盘上 282 条：`要害台词` 167 · `硬数字` 61 · `物件` 30 · `因果前提` 24。
-
-    ⚠ **两个锚点允许重叠、甚至完全重合**：128 条实测里 **75 条（59%）** 的内容字符
-    比两个锚点加起来还短——「硬数字」「物件」天生就是短的（`丝绢`、`二十两银子`）。
-    按「`ends_with` 必须在 `starts_with` 之后开始」实现的话，这类一律锚不到（实测 97/128 失败）。
-    ⚠ **不加单调游标**：`span` 明写「按原文顺序前进」，`hinges` **没有顺序约定**
-    ——它是「这一幕靠什么成立」的清单，模型按重要性列很正常。强加游标会误伤 7/128。
-    """
-
-    #: **[HARD] 闭合 4 值**（`R-3.6`）。
-    #: ⚠ 每类各守各的维度（`HINGE_GROUPS`），**那张表不许用 `dict.get(kind, 默认值)` 取**：
-    #: 把写歪的类型兜底成「原样写入，一个字都不能改」，会让一段叙述文变成逐字要求，
-    #: 而全链没有一层出声。
-    kind: Literal[HINGE_KINDS]
-
-    #: 长度 2~24 / 1~24。**模型写的决策**：这段材料在原文的哪一段。
-    starts_with: str = Field(min_length=1)
-    ends_with: str = Field(min_length=1)
-
-    #: 长度 2~81。**代码按锚点从原文切出来的，模型不写它。**
-    #:
-    #: ⚠⚠ **缺失 = 失败态标记，不是一个合法的可选字段。**
-    #: 锚不到时的设计是**原样留着、不猜不删**（删了这一次会响亮报错，下一次跑就没得报了），
-    #: 于是产物里留下一条没有 `text` 的 hinge。**盘上实测 281/282**：
-    #: 三岁 `b07_05` 的「要害台词」锚不到——它是那份产物**唯一**能看出
-    #: 「这次跑是失败态」的痕迹（`_provenance` 里没有记 failures）。
-    #:
-    #: **两件事都要写在这儿**：只写「可选」会被读成「有时候没有很正常」；
-    #: 只写「必填」则盘上那份产物不合法。
-    #: ⚠ 锚不到有**三种根因、修法各不相同**——锚点不在本章原文（重生成）/ 本 beat 的
-    #: `span` 自己就没定位成功（级联，修上游那条就好）/ 锚点在本章但落在**没被任何 beat
-    #: 覆盖的空档**（漏抓的下游后果，重生成）。盘上那一条属于第三种。
-    text: str | None = None
-
-
-class LegacyBeat(StrictModel):
-    """一拍 = **一件独立发生的事**。盘上 251 条。
-
-    ⚠ 比它大的那一层（连续区间 + 恒定 place + 恒定在场集）叫**场景**，
-    是**推导出来的、不存字段**。
-    """
-
-    #: **`b<章:02d>_<序:02d>`**，章内连续。**代码无条件归一，模型自拟一律覆盖**（`R-3.1`）。
-    #: **[HARD] 全书唯一 + 格式 + 连续。**
-    beat_id: str = Field(pattern=r'^b\d{2}_\d{2}$')
-
-    #: **[HARD] 按序定位**（`R-3.2`）：第 n 条的 `starts_with` 必须出现在第 n−1 条的
-    #: `ends_with` 之后。**两条之间允许有空隙**（过渡句、环境交代），**但两头不许留**——
-    #: **[HARD] 章首章尾必须被第一/最后一拍覆盖**（`R-3.8`）。
-    #: 盘上三本合计覆盖率 97~98%，未覆盖区间全在章的中段。
-    span: LegacyBeatSpan
-
-    #: **[HARD] 取值** · **[HARD] 全书 `present` 不得为 0**（枚举合法 ≠ 分布合理）。
-    #: 盘上 `present` 239 (95%) · `recall` 7 · `hearsay` 5。
-    #: ⚠ **一拍内恒定**（分组函数的 HARD 后置条件）——跨层并拍会把只在回忆里出场的人
-    #: 放进现世街头。
-    time_layer: Literal[TIME_LAYERS]
-
-    #: 长度 1~11，**盘上 40/251 为 `null`**（键恒在）。[INFO] 只做转场计数。
-    #:
-    #: ⚠ **自由文本、粒度不稳**（街上/街边、公寓/公寓卫生间门口）：
-    #: 作为**下发内容**合格，作为**相等判断的键**不合格——
-    #: 凡按它相等做的推导（转场计数、场景派生、在场连续性）都在量措辞。
-    place: str | None
-
-    #: **模型写的决策**：这一拍在场的人，各用原文里称呼他的那个字面。
-    #: **[HARD] 有据**——全书原文都找不到 = 自造（`R-3.7`，盘上 0 例）。
-    #: 长度 0~7，共 515 项；21/251 拍为空。
-    #:
-    #: ⚠ **取值面是「原文里的叫法 ∪ 代词」，而代词永远不会在 registry 里**——
-    #: 这两句话必须一起写，少一句就会有人去「修」其中一边。
-    #: 第一人称书里模型会照原文写「我」，而 `address[].surface` **按设计永远不会收代词**
-    #: ⇒ 「我」解析不出来**不是 address 漏收，也不是自造**，是两条契约在这里对不上。
-    #: 盘上：书1 有 15 项代词（5 项定人成功、10 项定不了）· 另两本 0 项。
-    present_names: list[str]
-
-    #: **代码从 `present_names` 解析出来的，模型不写它。**
-    #: **[HARD] 都在 registry**——这是解析器的**后置条件**：
-    #: 违反它 = **代码坏了，不是数据坏了**。
-    #: 长度 0~7，共 451 项；29/251 拍为空。
-    present_char_ids: list[str]
-
-    #: 长度 13~175。**按引用逐字搬进下游，中间层不转抄**（`Q-7`）。
-    #: **[HARD] 存在且非空**（`R-3.13`）——⚠ 这条判据判在**本层**而不是 stage4：
-    #: 留在 stage4 意味着要先付掉一次规划调用才发现 stage2 产坏了。
-    event: str = Field(min_length=1)
-
-    #: 长度 0~7，共 282 条；**63/251 拍为空（25%）**。
-    #: **[HARD] 整章一条都没有 = FAIL**（单拍为空正常）。
-    hinges: list[LegacyHinge]
 
 
 class SourceSpan(StrictModel):
-    """正式制品里的原文引用；模型 locator 只存在于响应和迁移边界。"""
+    """正式制品里的原文引用；模型 locator 只存在于响应归一边界。"""
 
     text: str = Field(min_length=1)
     start: int = Field(ge=0)
@@ -530,12 +408,6 @@ class SourceSpan(StrictModel):
         return self
 
 
-class MigratableChapterBlueprints(StrictModel):
-    """兼容旧锚点制品的宽松迁移入口，不能用于正式写盘。"""
-
-    source_id: str | None = None
-    blueprints: list[dict[str, Any]] = Field(min_length=1)
-    provenance: dict[str, Any] = Field(alias='_provenance')
 
 
 class Hinge(StrictModel):
@@ -664,60 +536,19 @@ class ChapterBlueprintsResponse(StrictModel):
     blueprints: list[BlueprintResponse] = Field(min_length=1)
 
 
-class LegacyBlueprintContext(StrictModel):
-    """这一趟是怎么分批、吃到哪儿的。新产物恒 `{1, true}`。
-
-    **必须常驻打印**——不打印它，读的人会把「这次没报跨章引用」当成模型学乖了，
-    而其实只是没抽到。
-    """
-
-    batch_size: int = Field(ge=1)
-    context_upto: bool
 
 
 class BlueprintContext(StrictModel):
-    """蓝图调用的模型可见边界；v2 明确记录前缀身份与三个上下文预算上限。
+    """蓝图调用的模型可见边界；只接受当前有界上下文架构。"""
 
-    ⚠ `past_names_chars_max`（已现称名表预算）是 2026-08-14 对 v2 的**原位修订**，
-    没有另立 v3：修订时盘上不存在任何 v2 产物（三本 e2e 全是 v1），
-    「同名不同义」的歧义在实际产物集上构造不出来。
-    """
-
-    architecture: Literal['cumulative-past-v1', 'bounded-fidelity-v2']
-    batch_size: int = Field(ge=1)
-    stable_prefix: Fp10 | None
-    current_chapter_full: bool
-    future_visible: bool
-    past_neighbor_chars_max: int | None
-    continuity_chars_max: int | None
-
-    #: 默认 `None` 是为了**原样读回存量 v1 产物**（它们落盘时还没有这个键）；
-    #: v2 由下面的校验器强制非 None，产地漏写会在落盘时当场被拒。
-    past_names_chars_max: int | None = None
-
-    @model_validator(mode='after')
-    def _architecture_fields_agree(self) -> BlueprintContext:
-        if not self.current_chapter_full:
-            raise ValueError('current chapter must remain complete')
-        if self.future_visible:
-            raise ValueError('future chapters must remain hidden')
-        if self.architecture == 'bounded-fidelity-v2':
-            if self.stable_prefix is None:
-                raise ValueError('v2 requires a stable prefix fingerprint')
-            if self.past_neighbor_chars_max is None:
-                raise ValueError('v2 requires a past-neighbor limit')
-            if self.continuity_chars_max is None:
-                raise ValueError('v2 requires a continuity limit')
-            if self.past_names_chars_max is None:
-                raise ValueError('v2 requires a past-names limit')
-            if (self.past_neighbor_chars_max < 0 or self.continuity_chars_max < 0
-                    or self.past_names_chars_max < 0):
-                raise ValueError('v2 context limits must be non-negative')
-        elif any(value is not None for value in (
-                self.stable_prefix, self.past_neighbor_chars_max,
-                self.continuity_chars_max, self.past_names_chars_max)):
-            raise ValueError('v1 cannot claim v2 context metadata')
-        return self
+    architecture: Literal['bounded-fidelity-v2']
+    batch_size: Literal[1]
+    stable_prefix: Fp10
+    current_chapter_full: Literal[True]
+    future_visible: Literal[False]
+    past_neighbor_chars_max: int = Field(ge=0)
+    continuity_chars_max: int = Field(ge=0)
+    past_names_chars_max: int = Field(ge=0)
 
 
 class CharRefs(StrictModel):
@@ -780,31 +611,17 @@ class BlueprintProvenance(LlmProvenance):
 
     #: 某一批没按「本次任务范围」产出。**[HARD] 非空即失败**；
     #: **键不在 = 「不知道」，不发绿灯**。
-    #: ⚠ **产地无条件写这个键**（没越界写空列表），否则「键不在 = 没越界」
-    #: 会给所有旧产物发绿灯。
+    #: 产地无条件写这个键（没越界写空列表）。
     scope_violations: list[str]
 
-    #: 新产物恒 `[[1],[2],…]`；**旧产物记的是别的值**。
-    #: 校验器靠它区分「逐章」「分了 N 批」「不知道」三种产物。
+    #: 恒 `[[1],[2],…]`，记录每次逐章调用的范围。
     batches: list[list[int]]
 
     context: BlueprintContext
     char_refs: CharRefs
 
-    # ── ⭐ verbatim 回取的三笔账（F5-1 立，`stage2.md` §3.2）───────────────────
-    #
-    # 【它们把事实② 那张三档表里**唯一的「未解决」**那一格填上】
-    # 原文：verbatim 回取「改写不留任何产物痕迹，而它对应的判据在改写之后**恒真**」，
-    # 且 §2.4 记着「这份产物是不是失败态**目前只能靠遍历全部 hinge 去反推**」。
-    # 修法照 F4 给 `address_*` 立账的先例：**生产侧把「改了多少、改了什么」交出来，
-    # 校验器断言那份账而不再断言字段值。**
-    #
-    # 【为什么是三个键不是一个】判据 14：一个量纲一个口径。三者的**修法各不相同**，
-    # 合并之后报告就说不出该去修哪一个。
-    #
-    # ⚠ 三个键**盘上 3/3 本一份都没有**（原型根本没有它们）⇒ 已登记进
-    # `tests/corpus.py::ADDED['stage2/chapter_blueprints.json']`，否则那三本加载不了。
-    # 证据列因此是 `契·码` 而不是 `三源`、也不是裸 `契`：「码」指的是本仓 F5-5 的产地。
+    # ── verbatim 回取的三笔独立账 ─────────────────────────────────────────────
+    # 三个量纲的修复方式不同，因此分别记录，报告可准确指出需要处理的环节。
 
     #: `(beat_id, 位置, 原值, 回取值)`。**精确回取**：锚点归一后命中，字节被换成原文的。
     #: 出口：**逐条列出**（形态照 `address_surface_rewrites`）。
@@ -830,12 +647,12 @@ class BlueprintProvenance(LlmProvenance):
     #: 出口：**断言计数 + 逐条列出**，按三种根因分开。
     verbatim_failures: list[tuple[str, str, str]]
 
-    #: 定向重生成过哪几章（累积）。盘上 2/3 本有。
+    #: 定向重生成过哪几章（累积）。
     #: 出口：合并成一行「哪几章是定向重生成过的」。
-    partial_regen_chapters: list[int] | None = None
+    partial_regen_chapters: list[int]
 
     #: 定向重生成的历史。出口：上一行展开「各修了什么」。
-    repairs: list[Repair] | None = None
+    repairs: list[Repair]
 
 
 class ChapterBlueprints(StrictModel):

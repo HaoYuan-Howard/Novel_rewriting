@@ -18,9 +18,7 @@ stage3.py —— 对应 `docs/schema/stage3.md`。文风画像，最终仍只产
      **不是**「这份文风画像抓对了」。
 
   ③ **生产路径只下发当前源章的局部风格，数字锚点仍来自全书确定性测量。**
-     已退役的全书抽取曾让一处越界污染每章。实测代价：某本的 `voice.mode_variation`
-     写了「…系统摊牌…」，而「系统」是读者第 14 章才知情的秘密的主体——
-     **写第 1 章的闭卷写手当场读到全书最大的底**。
+     每章风格独立抽取，正文写作只消费同源章的风格块。
 
   ④ **本层是先校验后落盘，而且有两条不同的「不合格」路径**：有 `hard` 违规 ⇒ `.INVALID`；
      **阻断级判据【没跑成】** ⇒ 同样落 `.INVALID`，另记 `_provenance.gates_skipped`。
@@ -40,7 +38,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
+from pydantic import Field, model_validator
 
 from contracts.invariants import (
     CACHE_POLICY, HOOK_KEYS, STAGE3_ATTEMPT_KINDS, VOICE_KEYS,
@@ -66,8 +64,7 @@ class Voice(StrictModel):
     #: 它记录视点贴近程度（限知／全知那一轴），不是 `grammatical_person` 的我／你／他。
     #: 现役抽取只判断当前源章，Stage 5 也只消费同源项；这避免把某一章的人称或视角
     #: 误当成全书常量。描述仍不应重复判「第一／第二／第三人称」，那一轴由 Stage 2 承载。
-    #: 历史全书路径曾在三本样本里都把「第一人称」写进此字段；该内容质量仍无确定性守卫
-    #: （`R-4.9` / `B-09`），但不会再由一份全书标量扩散到每章。
+    #: 该内容质量仍无确定性守卫（`R-4.9` / `B-09`）。
     narrative_distance: str = Field(min_length=1)
 
     #: 语域与情绪基调（口语／网感／古白话；反讽／自嘲／毒舌／深情）。43~49 字。
@@ -92,7 +89,7 @@ class Voice(StrictModel):
 
     #: 声音在**当前源章可见的不同情境**下怎么变；不得猜后续、高潮或结局。
     #: Stage 5 只消费对应源章的局部项。Stage 6 只读书级聚合画像，且文案是一段话、
-    #: 不需要情境切换，所以仍从它的下发面剥掉本维（同时兼容历史全书产物）。
+    #: 不需要情境切换，所以从它的下发面剥掉本维。
     mode_variation: str = Field(min_length=1)
 
 
@@ -243,7 +240,6 @@ class StyleAttempt(StrictModel):
 
     现役首轮固定为每源章一条 ``chapter_local``，再加一条
     ``chapter_aggregate``；只有 ``habit_quote`` 是唯一阻断项时才追加窄修复记录。
-    ``initial`` 仅用于读取清理前的全书抽取产物。
     """
 
     kind: Literal[STAGE3_ATTEMPT_KINDS]
@@ -340,18 +336,9 @@ class StyleGrounding(StrictModel):
     hook_style: HookStyle
     measurable: Measurable
 
-    #: 新生产产物每个源章必须恰好一份。默认空列表只用于读取清理前的存量产物；
-    #: 现役落盘闸门由 Stage 3 judge 强制逐章完整覆盖。
+    #: 每个源章必须恰好一份；落盘闸门强制逐章完整覆盖。
     #: 只消费当前输出章对应的局部风格，未来章描述在结构上不可见。
-    chapter_styles: list[ChapterStyle] = Field(default_factory=list)
-
-    @model_serializer(mode='wrap')
-    def _omit_empty_legacy_chapter_styles(self, handler: SerializerFunctionWrapHandler):
-        """读取并重写旧产物时不凭空增加一个空键。"""
-        data = handler(self)
-        if not self.chapter_styles:
-            data.pop('chapter_styles', None)
-        return data
+    chapter_styles: list[ChapterStyle] = Field(min_length=1)
 
     provenance: StyleProvenance = Field(alias='_provenance')
 

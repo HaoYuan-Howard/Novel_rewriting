@@ -1,71 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-stage7.py —— 人名替换与成书那一层的判据行。源是 `docs/schema/stage7.md` §六（**唯一落点**）。
+"""Stage 7 当前判据注册表：33 条人物替换与成书规则。
 
-**34 条现役：16 HARD · 8 INFO · 3 metric · 7 unver。** 外加 1 条退役而不删。
+分布为 15 HARD、8 INFO、3 metric、7 unver。`rn_*` id 同时用于报告、人工豁免与来源账；
+模型决定和人工 `extra_subs` 使用分开的碰撞规则，避免把人工确认扩进模型 HARD 取值面。
 
-【判据 id 一律照抄文档，不加 stage 前缀】它们是与 `wontfix.json` 的键、
-与 `_provenance.fixes` 的引用之间的契约——加个前缀就等于把存量豁免全部作废。
-⚠ `rn_` 这个前缀**是原型自己带的、有理由的**：stage5 的判据表里已经有
-`book_length` / `name_surface_survey`——`book_` 与 `name_` 都不是空地。
-
-【落点账已经平过】F2-0 审计：原型那 31 条里有 **14 条**原本落不了地——
-11 条落点带**圈号后缀**（`R-10.13①`…，`_REQ_RE` 拒收，import 期当场炸）·
-1 条一格写两个需求 · 2 条写成 `需求／B-xx` · 1 条需求格是 `—`；
-另有 2 条会被守卫判「说假话」（指着 `结构` 行 / 指着「无守卫」行）。
-已在 `docs/BACKEND_CONTRACT.md` 补 `R-10.2b` / `R-10.3c` / `R-10.3d` / `R-10.6c` / `R-10.18`
-并改了 `R-10.7` / `R-10.7b` / `R-10.16` 三行的记号。
-⇒ 每一条的 `requirement` 都是核过的，不是猜的；圈号降成下面的 `note`。
-
-【与原型那 31 条的三处增删，每一处都有账】
-
-**−1 退役 `rn_unregistered`**（待决⑤）：注册着而**全仓 0 行实现**，
-且它是 `info` ⇒ 每本每次打绿灯。见文件末尾那条 `RetiredRule`。
-
-**+1 `rn_new_collide_human`**（事实⑤）：`rn_new_collide`（HARD）的取值面只收模型写的
-`new_canonical`，看不见人手补的 `extra_subs`——而盘上正好有一次从那扇门进来的撞名，
-**且那次撞名是对的**（原作对同一个人有两种写法）。⚠ **不扩 HARD 的取值面**：
-那会让一次正确的人工裁决在盘上当场判红，而唯一的出路是撤销一个对的决定。
-照本层自己的先例（`rn_shared_surface_human`）另落一条提示。
-
-**+2 恒等基线**（`R-10.7` / `R-10.7b`）：原型的 `--identity` 整个输出是 `print` + 返回码
-⇒「跑过且逐字节无损」与「从没跑过」在盘上长得一模一样。stage6 在同一道工序上做对了。
-
-【本层特有的两条裁决，都在这里生效】
-
-**① 全表 `repair='NONE'` ⇒ `actionable` 全 `False`。**
-原型标着 `actionable=True` **13 条**，那是**另一个意思**的 actionable
-（「人能 0 成本改掉」而不是「写作层能修」）。裁决是**不放宽载体侧那两条同构不变量**
-（`contracts/rules.py::_validate` ③ 与 `Finding._postconditions` ③），
-那 13 条的「人怎么改」写进 `note`——理由见 `docs/schema/_report.md` §2.1。
-⚠ 本层「不自救」**不等于「没人管」**：还有 HARD 时 `--approve` **拒绝定稿**、
-`--assemble` **拒写 txt**。人被挡住，而不是被静默放行。
-
-**② 全表不设 `quote`。** 原型那一列答的是「evidence 能不能在正文里定位」，
-而 `Rule.quote` 答的是「凭据能不能原样引用**给写作节点**」——**两个不同的问题**。
-本层根本没有反哺写作层那条路（见①），且 `quote` 今天全仓零消费方。
-
-⚠⚠ **由此推出一条要写进 README 的结论**：7 条 `unver` 每次都走
-`findings.unverifiable(...)`（`builder._status_of` 强制），而 `badge_of` 见 `unver`
-就至少 amber ⇒ **stage7 的徽章在结构上永远不可能是 `pass`**，
-最好情况是 `amber`（`passed=True`、退出码 0）。**与 stage6 是同一个形状。**
+本层不开放付费自动返工。有 HARD 时 `--approve` 拒绝定稿、`--assemble` 拒写 `book.txt`；
+7 条 `unver` 常驻输出，因此无 HARD 命中时报告为 `amber` 且 `passed=True`。
 """
 from __future__ import annotations
 
-from contracts.rules import REGISTRY, RetiredRule, Rule
+from contracts.rules import REGISTRY, Rule
 
 STAGE = 'stage7'
 
-#: 那 13 条原型标 `actionable=True` 的「人怎么改」——**一句话，全表共用**。
-#: 原型也是共用一句（`_HUMAN_WHY8`），它是一次裁决不是省事。
+#: 人工修订路径全表共用；`repair='NONE'`，因此不会误导为写作层自动返工。
 _HUMAN_FIX = ('〔人能 0 成本改掉：`--apply-edit` 收完整决策集 JSON，人直接把映射改对；'
               '还有 HARD 时 `--approve` 拒绝定稿、`--assemble` 拒写 txt〕')
 
 
 def _hard(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -> Rule:
-    """⚠ `owner` 要能改：本层 16 条 HARD 里有 **2 条 owner 是 `stage5`**
-    （成书的前置条件——缺章 / 混契约稿，根因在写作那一层，不在映射表）。"""
+    """`owner` 可覆盖；成书前置条件的根因可属于 Stage 5。"""
     return REGISTRY.register(Rule(rule=rule, stage=STAGE, item=item, sev='hard',
                                   who_checks='HARD', requirement=requirement,
                                   owner=owner, **kw))
@@ -203,9 +158,6 @@ _hard('rn_book_incomplete', '每一章都有且只有一份成稿', 'R-10.14', o
       note='⚠ owner 是 `stage5`：缺章的根因在写作那一层，不在映射表 ⇒ '
            '**它不在那 13 条「人能 0 成本改掉」里**，人改映射表救不了它')
 
-_hard('rn_mixed_contract', '成书的各章出自同一套契约', 'R-10.14', owner='stage5',
-      note='同上。混着两套契约的稿拼进一本书，读者会读到两种文风')
-
 _hard('rn_txt_stale', '盘上的 book.txt 与产物记的指纹一致', 'R-10.9',
       note='⚠ 原型这一条**只在复检里现算、从不进 `book[]`**，而收尾循环给'
            '「没开过口的 hard/info」补打 `[OK]` ⇒ 同一份报告里会**同时**出现'
@@ -319,24 +271,7 @@ _unver('rn_body_stale', '判的是照盘上这些成稿做的替换', 'R-10.9', 
 _unver('rn_hook_missing', '开篇文案已定稿，可以拼进成书', 'R-10.14', who_checks='INFO',
        note='⚠ **根因第一嫌疑层其实是 stage6**（文案没定稿是上一层的账），'
             '而 `owner` 仍然留 `None` —— 全链的口径是 **`owner is None` ⟺ 它不是一条结论**'
-            '（`metric`/`unver` 恒 `None`，`tests/corpus.py::FINDING_OWNER` 就是照这条建的）。'
+            '（`metric`/`unver` 恒 `None`，由规则注册器统一校验）。'
             '给一条 `unver` 填 owner 会让那条口径出现第一个例外，而它买不到任何东西。'
             '它是 `R-10.14` 四类拒写里的一类，而**正因为这道闸挡在前面**，'
             '`book_txt.has_hook=false` 结构上不可达 ⇒ 那个字段已按待决④ 裁掉')
-
-
-# ── 一条退役而不删（报告里常驻列出） ────────────────────────────────────────
-
-REGISTRY.retire(RetiredRule(
-    rule='rn_unregistered', stage=STAGE,
-    why='「成稿里没有 registry 从没收过的疑似人名」。**它在原型的判据表里注册着，'
-        '而全仓 `grep` 只有判据表那一行本身——0 行实现、0 个调用点**，'
-        '且它是 `info` ⇒ 收尾循环每本每次补打一个 `[OK]`。'
-        '更坏的是它在源码里被归在注释「漏网：本节点唯一能发现『白名单不够』的东西」'
-        '这一组下面，与 `rn_residual_stem` 并列——**读的人会以为漏网有两道防线，'
-        '其实只有一道**。'
-        '⚠ 有一个**弱版本是可实现的**（`residual_scan` 已经在做掩码，'
-        '把「掩码后剩下的连续 2~3 字专名形」单独报一族即可），'
-        '**但本仓没有 ground truth 定不了阈值**，硬做出来就是第二盏说不清的灯'
-        '（同 `B-01` 的裁法）。⇒ 退役 + 常驻一行「这一类没在查」，**信息量增加**。'
-        '⚠ 代价要记着：**漏网从此只有一道防线**'))

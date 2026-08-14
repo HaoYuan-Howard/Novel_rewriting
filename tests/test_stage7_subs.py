@@ -46,7 +46,7 @@ def test_rename_semantic_marker_finding_catches_rank_change():
         name_map={'characters': [], 'surname_map': {}},
         problems=[], applied={}, residual=[], baseline={}, registry={},
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
-        family_members={}, dup=[], missing=[], mixed=[], invalids=[],
+        family_members={}, dup=[], missing=[], invalids=[],
         post_units=[], title_line='书名语义需人工确认',
     )
     changed = checks.rename_findings(subs={'七郎': '六郎'}, **kwargs)

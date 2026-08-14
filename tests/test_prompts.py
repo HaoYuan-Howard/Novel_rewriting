@@ -15,8 +15,7 @@ from pydantic import BaseModel, Field
 
 from contracts import invariants as inv
 from novel.llm.prompts import (
-    DEFERRED_BLOCKS, ENUM_BLOCKS, PROTOTYPE_PLACEHOLDER_COUNT, RETIRED_BLOCKS, fill,
-    required_top_level,
+    ENUM_BLOCKS, fill, required_top_level,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,7 +63,7 @@ def test_style_words_is_the_one_that_actually_drifted():
 
 def test_the_length_band_block_carries_both_ends():
     """⚠ 另一次实测漂移：篇幅带的 prompt 版**漏了整整一档**。"""
-    lo, hi = inv.OP_BAND[inv.LOCKED_OP]
+    lo, hi = inv.PLAN_BUDGET_BAND
     assert ENUM_BLOCKS['BANDS'] == f'{lo:g}~{hi:g}×'
     assert str(lo) in ENUM_BLOCKS['BANDS'] or f'{lo:g}' in ENUM_BLOCKS['BANDS']
 
@@ -72,29 +71,6 @@ def test_the_length_band_block_carries_both_ends():
 def test_two_renderings_of_one_table_are_not_two_tables():
     """`$STYLE_WORDS` 与 `$WORDS` 是同一张表的两种渲染。**改表两边一起变。**"""
     assert set(inv.STYLE_WORDS) <= set(ENUM_BLOCKS['WORDS'].split(' / '))
-
-
-def test_the_placeholder_census_is_complete():
-    """守卫的守卫：**三张表加起来 = 原型全仓用过的占位符总数**。
-
-    ⚠ 少一个的后果不是「少一个功能」，是移植期渲染时抛 `KeyError`——
-    抛在最不该抛的地方（正要发请求那一刻）。
-    """
-    total = len(ENUM_BLOCKS) + len(DEFERRED_BLOCKS) + len(RETIRED_BLOCKS)
-    assert total == PROTOTYPE_PLACEHOLDER_COUNT, (
-        f'live={len(ENUM_BLOCKS)} + deferred={len(DEFERRED_BLOCKS)} '
-        f'+ retired={len(RETIRED_BLOCKS)} = {total}，'
-        f'而原型全仓用过 {PROTOTYPE_PLACEHOLDER_COUNT} 个占位符')
-    assert not (set(ENUM_BLOCKS) & set(DEFERRED_BLOCKS)), '一个占位符同时在两张表里'
-    assert not (set(ENUM_BLOCKS) & set(RETIRED_BLOCKS))
-
-
-def test_every_deferred_and_retired_entry_states_why():
-    """`Q-8`：退役/待补的东西不能只是记一笔，**必须写得出理由**。
-    写不出来就说明它其实该在 live 那张表里。"""
-    for table, label in ((DEFERRED_BLOCKS, '待补'), (RETIRED_BLOCKS, '退役')):
-        for name, why in table.items():
-            assert len((why or '').strip()) > 15, f'{label}的 {name} 没写理由'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,13 +133,6 @@ def test_an_invalid_placeholder_is_caught_by_substitute_itself():
     ⚠ 登记在这里是为了说清**边界在哪**——不然读的人会以为上面那条守着全部三类。"""
     with pytest.raises(ValueError, match='Invalid placeholder'):
         fill('价格是 $99')
-
-
-def test_a_template_using_a_deferred_placeholder_says_which_and_why():
-    """用到还没落地的占位符时，报错要说清**是哪一个、为什么还没有**——
-    而不是一句干巴巴的 `KeyError: 'APPROACHES'`。"""
-    with pytest.raises(KeyError, match='APPROACHES'):
-        fill('三种写法：$APPROACHES')
 
 
 def test_normal_interpolation_still_works():

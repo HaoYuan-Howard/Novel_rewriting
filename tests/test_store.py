@@ -76,10 +76,20 @@ def _style(ctx: RunContext, *, habit: str = '习惯一') -> StyleGrounding:
                 per_chapter_avg_sentence=dict(min=1.0, max=2.0))
     prov = ctx.llm_provenance(
         StyleProvenance, prompts={'STYLE_SYS': '插值之后的系统提示词'}, model='deepseek-v4-pro',
-        attempts=[dict(kind='initial', user_prompt='0' * 10, output='1' * 10,
+        attempts=[dict(kind='chapter_aggregate', user_prompt='0' * 10, output='1' * 10,
                        cache_policy='default')])
-    return StyleGrounding(voice=voice, surface_habits=[habit], hook_style=hook,
-                          measurable=dict(body=body, hook=blk), _provenance=prov)
+    return StyleGrounding(
+        voice=voice,
+        surface_habits=[habit],
+        hook_style=hook,
+        measurable=dict(body=body, hook=blk),
+        chapter_styles=[dict(
+            source_ordinal=1,
+            voice=voice,
+            surface_habits=[habit],
+        )],
+        _provenance=prov,
+    )
 
 
 def _prov_on_disk(p: Path) -> dict:
@@ -338,7 +348,7 @@ def _mint(ctx: RunContext) -> StyleProvenance:
     """铸一份付费来源账。**只为了拿它的 `usage`**，别的字段取最小合法值。"""
     return ctx.llm_provenance(
         StyleProvenance, prompts={'STYLE_SYS': 'x'}, model='m',
-        attempts=[dict(kind='initial', user_prompt='0' * 10, output='1' * 10,
+        attempts=[dict(kind='chapter_aggregate', user_prompt='0' * 10, output='1' * 10,
                        cache_policy='default')])
 
 
@@ -973,14 +983,14 @@ def test_opening_a_book_that_is_not_there_is_a_terminal_state():
 _CORPUS = list(corpus.iter_artifacts()) if corpus.corpus_root() else []
 _NO_CORPUS = pytest.mark.skipif(
     not _CORPUS,
-    reason=(f'找不到语料目录（`{corpus.CORPUS_ENV}` 或 `../Novel_refactoring/Output`）'
+    reason=(f'未设置当前产物语料目录 `{corpus.CORPUS_ENV}`'
             f'——**这一条现在没在查，不是「查过没事」**'))
 
 
 @_NO_CORPUS
 @pytest.mark.parametrize('a', _CORPUS, ids=[f'{x.source_id[-4:]}/{x.rel}' for x in _CORPUS])
 def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
-    """⭐ **模型 → 盘上 → 模型**，拿 3 本书 × 92 份真实产物跑一遍，覆盖八层全部产物类型。
+    """模型 → 盘上 → 模型，验证显式配置的每份当前产物。
 
     ⚠ A3 的语料体检做的是**单向**的（盘上 → 模型）。单向永远发现不了这一类：
     `Provenance.to_disk()` 曾经用 `model_dump(exclude_none=True)`，
@@ -988,13 +998,9 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
     （`inputs[].consumed` 与 `usage.*_tokens`）⇒ **落下去的产物读不回来**。
     加载体检 92 份全绿，而第一份真落盘就会炸。
 
-    ⚠ 这条**不产生第二份语料**：写进 `mkdtemp()`，跑完就扔（同 `tests/corpus.py`
-    那条「别把迁移后的语料写成文件」——那说的是落点，不是临时目录）。
+    当前语料只读；往返副本写进 `mkdtemp()`，跑完即删。
     """
-    if (a.source_id, a.rel) in corpus.MISSING_PROVENANCE:
-        pytest.skip('这一份盘上就没有 `_provenance`，加载不了——它是 stage4 事实⑤ 的铁证，'
-                    '**不许靠伪造一份来源账把它变绿**')
-    obj = a.model.model_validate(corpus.load_cut(a))
+    obj = a.model.model_validate(corpus.load_current(a))
 
     base = Path(tempfile.mkdtemp())
     (base / 'roundtrip_1').mkdir(parents=True)

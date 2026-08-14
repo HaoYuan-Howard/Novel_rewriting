@@ -48,8 +48,8 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     #    （`secret_setup_order` 断言 `setup_chapters_pruned` · `anchor_not_verbatim` 断言
     #    `verbatim_recovered` · `verbatim_failed` 断言 `verbatim_failures`）——
     #    因为那几件事都跑在**落盘前**，再去断言字段值就是一条**永远为真**的判定。
-    # ⚠ `human_adjudicated` 与 `partial_regen_chapters` / `repairs` 三个键在契约上**可选**，
-    #    而这里照样声明：键不在时报告打「未记录」，那与「记了 0 次」不是一回事（`Q-2` 的三态）。
+    # ⚠ `partial_regen_chapters` / `repairs` 即使为空也必须落盘并报告：
+    #    「记了 0 次」与「压根没记」不是一回事（`Q-2` 的三态）。
     'stage2': (
         AccountingSpec('address_by_fallback', '`by` 兜底成 `public` 几次？（判据断言这个计数）'),
         AccountingSpec('address_surface_rewrites', '哪几条称呼被最长子串回取改写过？'),
@@ -57,7 +57,6 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
         AccountingSpec('canonical_distinguishers_stripped', '哪几个显示名被剥掉了消歧区分词？'),
         AccountingSpec('setup_chapters_pruned', '哪几条秘密的埋点章被裁掉了？'
                                                 '（「冷揭示」与「被裁空」只能靠它分开）'),
-        AccountingSpec('human_adjudicated', '人裁掉过什么？理由是什么？'),
         AccountingSpec('verbatim_rewrites', '哪几个锚点被**精确回取**过？（一个字都没动）'),
         AccountingSpec('verbatim_recovered', '哪几个锚点是**按最长公共子串救回来的**？'
                                              '（它们本来就不是原文字节）'),

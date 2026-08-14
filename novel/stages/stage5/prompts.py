@@ -1,23 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-prompts.py —— 下给写手的那一份。**两条臂的 system 与原型逐字节相同。**
-
-⚠⚠ **逐字移植，不许转述。** 这两段文字压着 120+ 条真机 findings 的学费，
-而改写不会报错——它只会让某一类失效重新出现，且要花一次真钱才看得见。
+"""Stage 5 当前两条写作臂的 system prompt 与材料渲染。
 
 【本层与前四层的三处不同】
 
 ① **两条臂共用一份骨架，差别只有 (system prompt, 给不给源章原文)。**
    `DEEP_SYS`（闭卷）与 `SHALLOW_SYS`（开卷）**共享四段规则**
    （`HINGE_LABEL_RULE` / `FIDELITY_RULE` / `ORDER_RULE` / `STYLE_WORD_RULE`），
-   各自只有开头与硬要求那两段是自己的。原型把这四段放在 `stage5_common` 里正是这个理由：
-   **同一条边界写手读到两个版本时会按更松的那个执行**（原型 F-072 实测过）。
+   各自只有开头与硬要求那两段是自己的；同一条边界只保留一个文本落点。
 
 ② ⚠⚠ **`SHALLOW_SYS` 刻意不拼 `LAYER_RULE`，那是一个已登记的洞不是笔误。**
    开卷写手在 user 消息里照样收到「现场 / 回忆 / 转述」三个标签
    （下发面逐拍渲染 `LAYER_CN`），而 system prompt 里**一个字的解释都没有**
-   ——这就是 `R-7.14` / `B-13`。**照搬，不要顺手补上**：补它是一次 prompt 变更，
+   ——这就是 `R-7.14` / `B-13`。补它属于独立的 prompt 语义变更，
    要有一次真跑去证明它没把别的东西写坏。
    `test_the_shallow_arm_still_has_no_layer_gloss` 钉着这个洞还在。
 
@@ -75,7 +70,7 @@ HINGE_LABEL_RULE = '\n'.join([
 #:
 #: 【为什么判据句与七项清单必须在同一段里】它们从前分居两处，说的是同一条边界的两个版本、
 #: 切法还不同：这里是一条**复合判据**（新事件 × 时间/地点/人物动作），那边是**七项平铺**。
-#: 实测后果（原型 F-072）：**写手对同一条边界读到两个版本时会按更松的那个执行**。
+#: 写手对同一条边界读到两个版本时可能按更松的那个执行。
 #: 合并是**并集不是替换**——复合判据带着判例和「为什么」，七项平铺带着覆盖面，
 #: 缺哪个都是把话说少。
 #: ⚠ `$PRINCIPLE` / `$FORBID` / `$ALLOW` 三格由 `ENUM_BLOCKS` 自动并入，**不许手抄子集**。
@@ -131,9 +126,7 @@ STYLE_WORD_RULE = fill("""\
 # 二、`deep` 臂 —— 闭卷
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: **与原型 `Stage5/n5_write.py::DEEP_SYS` 逐字节相同**（渲染后 2724 字）。
-#: ⚠ 原型那边是 `"""…""" + LAYER_RULE + …` 的运行时拼接，本仓形状相同——
-#: 拼接顺序与每一段之间的空行数**都是字节的一部分**。
+#: 闭卷臂的现行 system prompt。拼接顺序与段间空行**都是契约字节的一部分**。
 DEEP_SYS = """\
 你是网文写手。你在把一部小说改写成【更紧、更强】的重构版，现在只写其中【一章】的正文。
 
@@ -190,7 +183,7 @@ DEEP_SYS = """\
 # 三、`shallow` 臂 —— 开卷
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: **与原型 `Stage5/n6_write.py::SHALLOW_SYS` 逐字节相同**（渲染后 2599 字）。
+#: 开卷臂的现行 system prompt。
 #: ⚠⚠ **它比 `DEEP_SYS` 少一段 `LAYER_RULE`，那是 `B-13` 那个洞。别补。**
 SHALLOW_SYS = """\
 你是网文写手。你在把一部小说改写成【更紧、更强】的重构版，现在只改写其中【一章】的正文。
@@ -244,7 +237,7 @@ SHALLOW_SYS = """\
 # 四、返工与收缩 —— 两段挂在写作臂上的尾巴
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: `--revise` 时**拼在臂的 SYS 后面**（与原型 `stage5_common.py::REVISE_TAIL` 逐字节相同）。
+#: `--revise` 时**拼在臂的 SYS 后面**。
 #:
 #: ⚠⚠ **本层唯一的返工回路，而它的四条护栏没有一条查「其余一字不动」**
 #: ——它们查的是「没变得更坏」（`checks.trim_regressions` 那一族）。
@@ -260,7 +253,7 @@ REVISE_TAIL = """
 - 篇幅仍然要落在上面给定的区间内。
 """
 
-#: 超上限时那一次「只删不改」的收缩（与原型 `stage5_common.py::TRIM_SYS` 逐字节相同）。
+#: 超上限时那一次「只删不改」的收缩。
 #: **它是一次独立的调用，用自己的 system，不拼在臂的 SYS 上。**
 #:
 #: ⚠ 收缩是本层**真正的那道篇幅门**：`length_over` 已由阻断降为提示（`R-7.8`），
@@ -332,25 +325,13 @@ def _compact(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(',', ':'))
 
 
-#: 目标区间**没有预算**时那个估算带（`源字数 ±15%`）。
-#: ⚠ 它与 `measure.target_range` 的 `DRAFT_BAND` **不是一个数，而那是对的**：
-#: 前者是「计划给了预算」时的执行带（判据也按它判），后者是「旧契约成稿没有预算」时
-#: 的一个**估算**——那时 `length_over` / `length_under` 也判不了（`target_range` 返回 `None`）。
-#: 两侧同时失效，不会出现「模型按 A 算、校验按 B 判」。
-_ESTIMATE_BAND = (0.85, 1.15)
-
-
-def target_band(entry: dict[str, Any]) -> tuple[int, int, bool]:
-    """发给写手的目标区间 `(下限, 上限, 是不是估的)`。
+def target_band(entry: dict[str, Any]) -> tuple[int, int]:
+    """发给写手的目标区间，直接复用校验器执行的篇幅带。
 
     ⚠⚠ **有预算时它必须与 `measure.target_range` 逐值相同**——那是判据用的带。
     两处各算一份就是 LESSONS 第 9 条那个形状：**模型按 A 写、校验按 B 判，谁也不出声**。
     """
-    if (band := M.target_range(entry)) is not None:
-        return band[0], band[1], False
-    base = int(entry.get('source_chars') or 0)
-    lo, hi = _ESTIMATE_BAND
-    return round(base * lo), round(base * hi), True
+    return M.target_range(entry)
 
 
 def target_paragraphs(entry: dict[str, Any], book: M.Book) -> tuple[int, int]:
@@ -365,9 +346,9 @@ def target_paragraphs(entry: dict[str, Any], book: M.Book) -> tuple[int, int]:
     `len(整章文本)`、**含段落分隔符**。直接相除等于拿含分隔符的总量去除不含分隔符的单价，
     段数目标被系统性抬高 ~14%。⇒ 分母要加上每段的分隔符开销。
     """
-    lo, hi, _est = target_band(entry)
+    lo, hi = target_band(entry)
     ap = book.measurable.get('avg_paragraph_chars') or 20
-    sep = book.sep_chars or 0        # 旧 stage3 产物没测过：跑 `stage3.style --remeasure` 补
+    sep = book.sep_chars
     return max(round(lo / (ap + sep)), 3), max(round(hi / (ap + sep)), 4)
 
 
@@ -419,9 +400,9 @@ def chapter_facts(entry: dict[str, Any]) -> str:
     ⚠ 这是**闭卷写手拿到原文的唯一通道**——转述必然丢掉「改一个字就废」的那一维。
     """
     lines: list[str] = []
-    for i, be in enumerate(entry.get('beats') or [], 1):
-        b = be.get('budget_chars')
-        head = f'{i}. 【约 {b} 字】' if isinstance(b, int) else f'{i}. '
+    for i, be in enumerate(entry['beats'], 1):
+        b = be['budget_chars']
+        head = f'{i}. 【约 {b} 字】'
         # 一拍可能由好几条内容并成。**逐条列，不合并成一段散文**：合并这件事早先是在计划层
         # 让 LLM 做的，实测既造事实（「某人身边人」→「某家丫头」）又丢材料。
         # 编号与 `_stage_line` 的 ①②③ 同序（都按源拍展开），跨层时第 n 件事配第 n 段舞台。
@@ -434,7 +415,7 @@ def chapter_facts(entry: dict[str, Any]) -> str:
         for key, label in HINGE_LABEL.items():
             for t in (be.get(key) or []):
                 lines.append(f'     · {label}：{clean_material(t)}')
-    body = '\n'.join(lines) or '（计划未给节拍）'
+    body = '\n'.join(lines)
     nar = entry.get('narration') or []
     return body + f'\n\n叙述视角（按段）：{_compact(nar)}' if nar else body
 
@@ -476,17 +457,12 @@ def chapter_directive(entry: dict[str, Any], book: M.Book) -> str:
     ⚠ 开篇/结尾 goal 是**硬要求**——实测它被当成参考描述，原文开场直给的句子被换成
     垫场记句。引号内的原句核实后升为「原句用上」。
 
-    ⚠⚠ **这里不再有「篇幅方式」那一行。** 原型渲染的是 `op` 与它的语义，而 `op`
-    已随 `stage4.md` §一整族裁撤（它恒等于一个常量）。原型那一行还配着一个
-    `OP_SEMANTICS.get(op, '')` 兜底——一份带 `op:"split"` 的存量旧计划会渲染出
-    「篇幅方式：split —— 」这样**带窟窿的 prompt**，而这是**付费路径**。
+    当前契约不含逐章 `op`；篇幅倍率由 system prompt 的锁定档统一给出。
     现在「篇幅怎么分」整件事归 system prompt 与下面那个「篇幅」块，窟窿在结构上不存在。
     """
-    lines = [f"本章目标：{entry.get('chapter_goal', '')}"]
-    if entry.get('open_hook_goal'):
-        lines.append(f"开篇要达到（硬要求）：{entry['open_hook_goal']}")
-    if entry.get('end_hook_goal'):
-        lines.append(f"结尾要达到（硬要求）：{entry['end_hook_goal']}")
+    lines = [f"本章目标：{entry['chapter_goal']}"]
+    lines.append(f"开篇要达到（硬要求）：{entry['open_hook_goal']}")
+    lines.append(f"结尾要达到（硬要求）：{entry['end_hook_goal']}")
     src_norm = norm(M.chapter_source(entry, book.source_text))
     hits = [q for q in goal_quotes(entry.get('open_hook_goal'), entry.get('end_hook_goal'))
             if norm(q) and norm(q) in src_norm]
@@ -595,11 +571,10 @@ def writer_chars(entry: dict[str, Any], book: M.Book) -> dict[str, dict[str, str
     stage3 的专名泄漏过滤），写手这边 prompt 里从没定义过这个枚举是什么意思，
     整份 JSON 发过去只是噪声 ⇒ **按消费方投影，不是删**。
 
-    ⚠⚠ **章级名册优先，书级只作旧产物兜底**：书级那份是**全书**名单，实测某本 12 人里有
-    10 人的名字在 ch1 尚未出现却全部进了 ch1 写手的 prompt——其中一个正是那一章
-    「新婚夜的男人是谁」的悬念。
+    `entry['characters']` 是 Stage4 生成的章级可见名册；这里不读取全书名册，避免把尚未
+    登场或尚未揭名的人物提前下发给写手。
     """
-    chars = entry.get('characters') or book.characters
+    chars = entry['characters']
     return {cid: {k: v[k] for k in ('display_name', 'role') if (v or {}).get(k)}
             for cid, v in chars.items()}
 
@@ -657,7 +632,7 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
     已经知道结局与揭示点。字段**保留在 `writer_context` 里**（验收相与界面仍读它），
     只是不进写手 prompt——按消费方投影，不是删。
     """
-    lo, hi, est = target_band(entry)
+    lo, hi = target_band(entry)
     plo, phi = target_paragraphs(entry, book)
     nb = len(entry.get('beats') or [])
     meas = book.measurable
@@ -670,9 +645,7 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
         f"排版是【{book.band_of.get('段落形态', '')}】，"
         f'章与章的密度和这种排版本身就是它的风格。\n'
         f"本章目标 **{lo}~{hi} 字**（约 {plo}~{phi} 个自然段；"
-        f"原章对应部分 {entry.get('source_chars') or 0} 字）"
-        + ('——这份计划没给逐拍预算（旧契约产物），此区间是按源字数估的，可浮动。'
-           if est else '，这是硬性要求。')
+        f"原章对应部分 {entry['source_chars']} 字），这是硬性要求。"
         # ⚠ **逐章算的每拍字数**，不是全书平均。实测：写手的真实锚点是**拍数**不是字数区间
         #   ——它每拍稳定写 56~94 字、与给定目标无关；而 prompt 曾给书级中位数
         #   「平均一拍只用 133 字」（治注水时加的），在需要 176 字/拍的章上**反而把它锚低了**。
@@ -739,7 +712,7 @@ def trim_user(text: str, entry: dict[str, Any]) -> str:
     ⚠ 事件清单要一起发：删减最容易删掉的正是「带过的那几拍」，而那是**整件事没写**，
     不是写得简略。
     """
-    lo, hi, _est = target_band(entry)
+    lo, hi = target_band(entry)
     evs = [e for be in (entry.get('beats') or []) for e in (be.get('events') or [])
            if (e or '').strip()]
     return '\n\n'.join([

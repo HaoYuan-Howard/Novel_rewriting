@@ -132,7 +132,7 @@ class Provenance(StrictModel):
     #: 借 `revalidated` ⇒ 那一条说的是**状态变更**，内容一个字没动。
     #:
     #: ⚠ **一个带值的键，不是三个布尔。** 原型标的是 `remeasured: true`，
-    #: 于是 `--recheck` / `--migrate` 各自还要再加一个键——同一件事的第三个落点。
+    #: 于是 `--recheck` / `--renormalize` 各自还要再加一个键——同一件事的第三个落点。
     partial_rewrite: PartialRewrite | None = None
 
     def to_disk(self) -> dict:

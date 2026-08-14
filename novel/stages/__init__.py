@@ -47,37 +47,15 @@ def _checkers() -> dict[str, Callable[[RunContext], CheckReport]]:
 
 
 def check_only(stage: str) -> Callable[[RunContext], CheckReport]:
-    """这一层的 0 成本复检函数。**不跑它，只把它交出来。**
-
-    ⚠⚠ **这里从前有两道闸，F5-5 之后只剩一道**（2026-08-12 用户裁决）。
-    第一道是 `stage not in PORTED_STAGES ⇒ NodeNotPorted`——而 stage2 是最后一层，
-    它一进 `PORTED_STAGES`，`STAGES − PORTED_STAGES` 就是**空集**，
-    那道闸在生产路径上**再也触发不了**。
-    ⇒ **退役它，而不是留着**：一条结构上永远不执行的分支与一条不存在的分支，
-    对读的人是同一件事——留着还更坏，它会让人以为「未移植」这个状态今天还在。
-    ⚠ 取值面那一半**没有掉**：`contracts.invariants.STAGES` 照旧八层，
-    `/api/enums` 与队列一个取值都没少。掉的只是「这一层还没建」这个**运行时**状态。
-
-    剩下的这一道答的是另一个问题：**在 `PORTED_STAGES` 里而本表没有 ⇒ 两张表分家了。**
-    那不是「还没移植」，是「说自己移植了却没有复检实现」，报错要说出这一点。
-    ⚠ 它今天同样不可能触发（`test_the_checker_table_covers_exactly_the_ported_stages`
-    钉着 `checkable_stages() == PORTED_STAGES`），**而它与上面那道的处境不同**：
-    上面那道是**结构上**不可能（空集），这一道是**被一条测试挡住**——
-    删了它，那条测试红的时候拿到的就是一个 `KeyError` 而不是一句人话。
-    """
+    """返回当前层的 0 成本复检函数；登记缺失时给出明确的接线错误。"""
     got = _checkers().get(stage)
     if got is None:
         raise RunModeNotImplemented(
-            f'{stage} 在 `contracts.rules.PORTED_STAGES` 里，而 '
-            f'`novel/stages/__init__.py::check_only` 没有它的复检实现——'
-            f'**两张表分家了**。移植一层要同时改这两处')
+            f'{stage} 属于当前 Stage0–Stage7 契约，但 '
+            f'`novel/stages/__init__.py::check_only` 没有它的复检实现')
     return got
 
 
 def checkable_stages() -> frozenset[str]:
-    """本表覆盖了哪几层。**从同一份 `_checkers()` 派生**，不另抄一份清单。
-
-    它的用途只有一个：让测试拿它与 `PORTED_STAGES` **两侧夹死**
-    （多一层、少一层都红），形态照抄 `test_registry_covers_exactly_the_ported_stages`。
-    """
+    """本表覆盖的当前阶段；从 `_checkers()` 派生，不另抄清单。"""
     return frozenset(_checkers())

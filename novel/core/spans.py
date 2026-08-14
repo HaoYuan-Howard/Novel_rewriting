@@ -27,7 +27,7 @@ spans.py —— 把 `beat.span` 的首尾锚点在原文里**确定性定位**�
 （`normalize_verbatim`）开着，校验器一律不开**——理由原文照抄：
 「否则『能定位』会把『锚点不是原文字节』这件事盖掉」。
 ⇒ 它是 `walk_spans` 的一个 **keyword-only 参数且默认 `False`**，
-而 `locate_spans` / `has_spans`（量纲侧与校验侧）**根本不暴露它**：
+而 `locate_spans`（量纲侧与校验侧）**根本不暴露它**：
 那两个函数的默认值就是终态，不是「还没接上」。
 ⚠ 而 `lcs` 本身在 F4 就进来了：stage5 的 `must_appear_missing` 是它的第一个消费方，
 本模块的 `_find_or_recover` 是第二个——**不许再写一份最长公共子串**（判据 25）。
@@ -182,11 +182,10 @@ def exact_span(source: Any, text: str, after: int = 0) -> tuple[int, int, str | 
 def walk_spans(bps: list[dict[str, Any]],
                text_of: dict[Any, str],
                *, recover: bool = False) -> Iterator[tuple[Any, dict, tuple[int, int, int, int] | None, str | None]]:
-    """把 `beat.span` 的首尾锚点在原文里逐条定位——**【唯一】一份游标实现**。
+    """把模型响应 locator 或当前精确 span 定位到原文。
 
-    两个视图共用它：`locate_spans()` 要的是 beat 的**整段区间**（量纲），
-    stage2 的落盘路要的是两个锚点**各自**的区间（回取原文字节）。
-    各写一份游标就是下一次漂移的源头。
+    该函数只用于 Stage2 的响应归一与重新归一。下游正式产物由
+    :func:`locate_spans` 严格读取 ``SourceSpan``，不再接受 locator。
 
     **游标单调**：`starts_with` 只在上一条终点之后找，`ends_with` 只在本条起点之后找。
     这样既防止匹配到前文的同形句，也顺带把「顺序倒置」表达成「找不到」——**两件事一个机制**。
@@ -259,40 +258,26 @@ def walk_spans(bps: list[dict[str, Any]],
 
 
 def locate_spans(bps: list[dict[str, Any]],
-                 text_of: dict[Any, str]) -> tuple[dict[Any, list[tuple[str, int, int]]], list[str], int]:
-    """按 `beat.span` 确定性算出每条 beat 在原文里的字符区间（返回的是**原文**偏移）。
+                 text_of: dict[Any, str]) -> tuple[
+                     dict[Any, list[tuple[str, int, int]]], list[tuple[Any, str]]
+                 ]:
+    """严格读取正式 ``SourceSpan``，返回每条 beat 的原文字符区间。
 
-    返回 `(spans, problems, loose)`：
+    返回 ``(spans, problems)``：
       · `spans` = `{chapter_ordinal: [(beat_id, start, end), …]}`
-      · `problems` = 无法定位的锚点，**逐条点名**
-      · `loose` = **归一化之后才命中**的条数
-
-    ⚠ `loose` 不是统计口味：stage2 落盘时会把锚点回取成原文字节，跑过那一步之后
-    它**应当恒为 0**——非 0 即「锚点被改过而未回取」。它是一条**会说话的读数**，
-    别把它读成噪声。
+      · `problems` = `(chapter_ordinal, detail)`，逐条点名无效精确区间
     """
     spans: dict[Any, list[tuple[str, int, int]]] = {}
-    problems: list[str] = []
-    loose = 0
-    for o, be, hit, prob in walk_spans(bps, text_of):
-        if prob:
-            problems.append(prob)
-            continue
-        assert hit is not None                      # `prob is None` ⇒ 必然命中
-        a0, _a1, _b0, b1 = hit
-        text = text_of.get(o, '')
-        sp = be.get('span') or {}
-        loose += sum(1 for f in ('starts_with', 'ends_with')      # 逐字比不上＝标点/空白被改
-                     if (sp.get(f) or '').strip() not in text)
-        spans.setdefault(o, []).append((be.get('beat_id'), a0, b1))
-    return spans, problems, loose
-
-
-def has_spans(bps: list[dict[str, Any]]) -> bool:
-    """这份产物是不是按**带 span 的契约**产出的。
-
-    旧产物没有 span ⇒ 量纲/保真相关的处理一律跳过，**而不是拿 0 当字数**。
-    ⚠ 盘上三本 **251/251 条 beat 全部有 span**（93 · 67 · 91），所以这条今天恒真；
-    留着它是因为「没有 span」与「span 定位不到」是两件事，前者连报都不该报。
-    """
-    return any((be or {}).get('span') for x in bps for be in (x.get('beats') or []))
+    problems: list[tuple[Any, str]] = []
+    for blueprint in bps:
+        ordinal = blueprint.get('chapter_ordinal')
+        text = text_of.get(ordinal, '')
+        cursor = 0
+        for beat in (blueprint.get('beats') or []):
+            start, end, problem = exact_span(beat.get('span'), text, cursor)
+            if problem:
+                problems.append((ordinal, f'{beat.get("beat_id")}: {problem}'))
+                continue
+            spans.setdefault(ordinal, []).append((beat.get('beat_id'), start, end))
+            cursor = end
+    return spans, problems

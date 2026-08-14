@@ -11,9 +11,7 @@ rules.py —— 判据注册表。**判据表只有一张**，key 重复当场�
 
 【注册期就校验，不等到跑的时候】七条，每条都对应一次已发生的损失，见 `_validate`。
 
-【注册表现在是空的，这是对的】判据随各 stage 移植过来时才注册。
-`PORTED_STAGES` 声明「哪些 stage 已经移植完」——**正向覆盖率只对已移植的 stage 生效**，
-否则第一天就是满屏红，而一条从一开始就红的测试等于没有测试。
+Stage0–Stage7 均已实现；注册表必须完整覆盖当前八层。
 """
 from __future__ import annotations
 
@@ -49,46 +47,6 @@ REPAIR_BUCKETS: Final = ('UNIQUE', 'FREE', 'NONE')
 
 _REQ_RE = re.compile(r'^R-\d+\.\d+[a-z]?$')
 
-#: 已经移植完、判据应当齐备的 stage。移植一层加一层。
-#: ⚠ 加进来之前先确认那一层的判据真的全注册了：这张表一旦说谎，正向覆盖率就成了摆设。
-#:
-#: ⚠⚠ **`stage3` 是 2026-08-11（骨架 C 期）加进来的第一层**，加进来那一刻同时发生四件事：
-#: `test_registry_starts_empty` 红（已换成两侧夹死的
-#: `test_registry_covers_exactly_the_ported_stages`）· 正向覆盖率从 skip 变真 ·
-#: `ask_json` 调用点守卫从 skip 变真 · `test_no_rule_claims_a_non_judge_requirement` 变真真。
-#: **那是好事**——它们本来就欠着，只是 `REGISTRY` 空着的时候一条都红不了。
-#:
-#: ⚠ **`stage6` 是 F 期第一个移植进来的层**（2026-08-11）。选它而不是 stage2 的理由
-#: 与 C 期选 stage3 当第一条纵切同构：**按验证价值挑，不按管线顺序挑**——
-#: 它是七层里最便宜的一层，用来把「加一层」那张 11 步清单走通一遍。
-#: ⚠ **`stage7` 是 F 期第二层**（2026-08-12）。它是本仓第一个**一个 stage 三个节点**的层
-#: （`stage7.rename` / `stage7.assemble` / `stage7.approve`），于是「一层一个跑法」
-#: 那几张按 **stage** 索引的表（`_runners` / `_checkers`）第一次要在函数体里再按
-#: `ctx.node` 分一次岔——**那不是新机制，是 F0 定的那张查表的自然形态**。
-#: ⚠ **`stage4` 是 F 期第三层**（2026-08-12）。它是本仓第一个**一层两份产物、
-#: 两节需求**的层（`R-5` 计划 + `R-6` 组装），于是正向覆盖率第一次要取两节的并集
-#: ——`STAGE_SECTIONS` 早就是元组了，那一格终于有了真消费方。
-#: ⚠⚠ 它也是第一个**徽章能真的是 `pass`** 的层：判据表里没有一条 `sev='unver'`
-#: （stage6/stage7 各有 8/7 条常驻 `unver`，结构上永远最好只有 amber）。
-#: ⚠ **`stage5` 是 F 期第四层**（2026-08-12）。它带进来三个第一次：
-#: 第一个 `repair != 'NONE'`（判据要把指令发回写手）· 第一个**逐章**产物
-#: （完成度与来源账都按章数）· 第一个 `ask_text` 调用点（响应是纯文本，
-#: **没有 JSON 可校验**，所以 stage4 那条「响应侧 `extra='forbid'` 当场挡回」的出路
-#: 在它的默认路径上不存在）。
-#: ⚠⚠ 它的徽章**结构上永远不可能是 `pass`**（5 条 `unver`，其中 `must_hold_unver` 每本都产）
-#: ——最好是 `amber` + 退出码 0，**与 stage4 恰好相反**。
-#: ⚠⚠ **`stage2` 是 F 期最后一层**（2026-08-12，F5-5），也是**最难的一层**：
-#: 八份层契约里只有它一开始没有「判据清单」那一节——原型的判据全在一个 2077 行的
-#: `check_one()` 里，**一个 id 都没有**，严重度只由调用的方法名承载。
-#: 移植它 = 先从零建一张表（F5-0，**75 条**）。它带进来两个第一次：
-#: 第一个用 `Rule.fix` 的层（24 条带机器可读的修复路由，注册期第 ⑧ 条逐条查过节点与 flag）·
-#: 第一个**一层两个节点共用一张判据表**且**记账横跨两份产物**的层。
-#: ⚠⚠ 它进来那一刻 `STAGES − PORTED_STAGES` **成了空集** ⇒ `NodeNotPorted`
-#: 在生产路径上再也触发不了（用户裁决 2026-08-12：**退役它**，见 `novel/errors.py`）。
-PORTED_STAGES: frozenset[str] = frozenset({
-    'stage0', 'stage1', 'stage2', 'stage3', 'stage4', 'stage5', 'stage6', 'stage7',
-})
-
 
 @dataclass(frozen=True)
 class Rule:
@@ -122,45 +80,28 @@ class Rule:
     directive: str = ''
 
     #: **机器可读的修复路由**——「这一条要拿哪条跑法去修」。`(节点 id, flag…)`，
-    #: 如 `('stage2.blueprint', '--migrate')`。修不了 / 只能人改的留 `None`。
+    #: 如 `('stage2.blueprint', '--renormalize')`。修不了 / 只能人改的留 `None`。
     #:
     #: 【为什么它不能是 `note` 里的一句散文】原型每条判据带的是结构化的
-    #: `{'kind': 'n2_blueprint', 'extra': ['--migrate']}`，理由原型自己写着：
+    #: `{'kind': 'stage2.blueprint', 'extra': ['--renormalize']}`：
     #: 「文案里那句『修法：…』是给人读的；**界面要执行它，就必须有一份机器可读的同源表达**，
     #: 否则只能去正则抠文案」。而散文那条路上**拼错一个 flag 名不会有任何东西出声**
     #: （LESSONS 第 11 条）。
     #:
     #: 【它与 `directive` 是两件事，别合并】`directive` 是**发给写手的一句话**
     #: （「你把这段改成…」），只有 `repair != 'NONE'` 的判据有；本字段是**一条要跑的命令**
-    #: （「拿 `--migrate` 重新定位一遍」），与花不花钱、进不进反哺都无关。
+    #: （「拿 `--renormalize` 重新定位一遍」），与花不花钱、进不进反哺都无关。
     #: stage2 全表 `repair='NONE'` 而 24 条有 `fix`——两格在这一层完全不重叠。
     #:
     #: 【收益是它能过 `is_paid`】界面据此把「0 成本修」与「要再花一次钱」画成两个颜色：
-    #: `('stage2.blueprint', '--migrate')` 免费，`('stage2.global', '--purge-role')` 付费。
+    #: `('stage2.blueprint', '--renormalize')` 免费，`('stage2.global', '--purge-role')` 付费。
     #: 那个判断走的是 `novel/orchestrator/nodes.py::is_paid`，**贵贱只有一处算**（`R-11.7`）。
     fix: tuple[str, ...] | None = None
-
-
-@dataclass(frozen=True)
-class RetiredRule:
-    """一条**退役而不删**的判据。
-
-    ⚠ 退役的是**关键词判据**，不是「风格描述必须可迁移、可执行」的产品要求。
-    九词表没有现役消费方；报告仍常驻说明它为何撤下，避免与漏实现混淆。
-    ⇒ 它必须在报告里**常驻一行**，好让「量过、量不准，所以撤了」与「忘了」读起来不一样。
-
-    `why` 必填：写不出理由的退役与「悄悄删掉」在盘上没有区别。
-    """
-
-    rule: str
-    stage: str
-    why: str
 
 
 class Registry:
     def __init__(self) -> None:
         self._rules: dict[str, Rule] = {}
-        self._retired: dict[str, RetiredRule] = {}
 
     def register(self, rule: Rule) -> Rule:
         if rule.rule in self._rules:
@@ -168,34 +109,9 @@ class Registry:
                 f'判据 id 重复：{rule.rule!r}。判据表只有一张，重名当场炸——'
                 f'两条同名判据会让「这一条报了没有」永远说不清'
             )
-        if rule.rule in self._retired:
-            raise ValueError(
-                f'判据 {rule.rule!r} 已登记为退役，不许再注册成现役。'
-                f'要复活它就先把那条退役登记撤掉——**复活是一次裁决，该被看见**'
-            )
         _validate(rule)
         self._rules[rule.rule] = rule
         return rule
-
-    def retire(self, retired: RetiredRule) -> RetiredRule:
-        """登记一条退役判据。**一个 id 不许同时又活着又退役。**
-
-        那种状态下报告会既列一行判定又列一行「已退役」，而人只会信其中一行。
-        """
-        if not retired.why.strip():
-            raise ValueError(f'{retired.rule}: 退役必须写出理由——没有理由的退役等于悄悄删掉')
-        if retired.rule in self._rules:
-            raise ValueError(
-                f'{retired.rule}: 它同时是现役判据和退役判据。'
-                f'报告会既列一行判定又列一行「已退役」，而人只会信其中一行'
-            )
-        if retired.rule in self._retired:
-            raise ValueError(f'{retired.rule}: 退役判据重复登记')
-        self._retired[retired.rule] = retired
-        return retired
-
-    def retired_of_stage(self, stage: str) -> tuple[RetiredRule, ...]:
-        return tuple(r for r in self._retired.values() if r.stage == stage)
 
     def __contains__(self, rid: str) -> bool:
         return rid in self._rules

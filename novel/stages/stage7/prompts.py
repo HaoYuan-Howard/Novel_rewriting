@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-prompts.py —— 下给模型的那一份。**`RENAME_SYS` 与原型 `N9_SYS` 逐字节相同。**
+"""Stage 7 改名节点的现行 system prompt 与 user 下发面。
 
-⚠⚠ **本层要比对的是【两处】，不是一处。** system 那一段有常量可钉，
-而 **user 那一段在原型里没有具名常量**——它是 `build_material` 里 `blocks` 列表
-内联拼出来的五个块头。F1 的教训①：`HOOK_SYS` 确实逐字节相同，而从原型搬进
-`invariants` 的三句说明被**转述**了一遍，渲染结果短了 48 字，丢掉的正是那条唯一还禁的
-硬约束——**只钉模板的测试抓不到它**（占位符两侧一个字节都没变）。
-⇒ 两处都要有会红的测试。
+system 和 `build_material` 生成的 user 内容都是契约的一部分，必须分别由测试锁定。
 
 ⚠ **本节点没有剧透闸门，这是对的不是疏漏。** stage6 的三处收窄全是为了保护**下游模型**；
 stage7 的下游只有确定性替换器和人。这里不发 `fate`/`secrets`/`arc`/正文的理由只有
@@ -20,11 +14,10 @@ import json
 from dataclasses import dataclass
 
 from novel.core.naming import strip_distinguisher
-from novel.llm.prompts import fill
+from novel.llm.prompts import fill, with_json_shape
 from novel.stages.stage7.subs import surface_hits
 
-#: **与原型 `Stage7/n9_rename.py::N9_SYS` 逐字节相同**（1658 字）。
-#: 六条规则全部继承自那条链路的完整前例，**三处按实测改过**，证据写在规则旁边。
+#: 改名模型的现行 system prompt；六条规则的证据写在规则旁边。
 #: ⚠ 今天没有需要插值的枚举——但仍然走 `fill()`，理由见 `rename_system()`。
 RENAME_SYS = """\
 你在给一本已经重构完成的小说【换掉人物的真实姓名】，好让成品表达原创。只输出 JSON。
@@ -83,7 +76,7 @@ def rename_system() -> str:
     今天没有需要插值的枚举——但仍然走 `fill()`：来源账拿它记指纹、`--dry-run` 拿它打印、
     将来加枚举时插值点也在这里（prompt 里的枚举必须是插值来的，手抄一份会慢慢漂）。
     """
-    return fill(RENAME_SYS)
+    return with_json_shape(fill(RENAME_SYS), RENAME_HINT)
 
 
 @dataclass(frozen=True)
@@ -106,7 +99,7 @@ def build_material(*, title: str, registry: dict[str, dict], relations: list[dic
                    setting: dict, groups: dict[int, list[str]],
                    sur: dict[str, str | None], book_text: str,
                    targets: list[str]) -> Material:
-    """组装下发材料。**块的措辞逐字移植自原型。**
+    """按现行 Stage 7 契约组装下发材料。
 
     **按消费方投影**：改名要知道的是「这个人叫什么、是谁、和谁一家」。
     `fate` / `secrets` / `arc` / `chapter_blueprints` / **任何正文**都不发。

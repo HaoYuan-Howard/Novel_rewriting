@@ -20,14 +20,8 @@ stage6/_rounds/hook.rN.json 归档：上一轮的**整份拷贝**，形状与 ho
   ② **现役的剧透闸门是【人定稿】那一步，不是代码。** 这句话一直印在产物的三条 `unver` 里，
      别读成谦虚：**5 条 HARD 里没有一条在查「文案有没有替故事把话说完」。**
 
-  ③ **三条 0 成本写盘路全部重盖来源账 ⇒ 伪造**，盘上有逐字节铁证：
-     `_rounds/hook.r1.json` 的 `prompts.HOOK_SYS` 与正式产物**是两个值**，
-     而三个候选的 `text` / `findings` **逐字相同**。
-     ⇒ 新骨架由 `LlmProvenance.promoted()` 在**结构上**堵死（签名里没有 prompts/model/inputs）。
-
-  ④ **`_provenance` 缺 `model` 与 `params`，而这是一个付费节点**——
-     换了模型、换了 `--max-tokens`，产物里没有任何一处说得出来。
-     ⇒ 本模块把两者定成**必填**；盘上那 6 份因此需要迁移（已登记进 `tests/corpus.py::ADDED`）。
+  ③ 0 成本写盘路通过 `rewrite_provenance` 或 `promoted()` 继承真实来源；
+     `model` 与 `params` 对付费产物均为必填，不能由 0 成本路径现造。
 
   ⑤ **`--identity`（恒等基线）只有一半在工作。** 13 格里 **6 格构造上不可能非零**
      （5 条形态判据两侧是同一个式子 · `hook_downsend_leak` 根本不由候选判据产）。
@@ -175,10 +169,7 @@ class HookProvenance(LlmProvenance):
     证明**记的那个值本身会错** ⇒ 校验器要补一行「本产物的 prompt 指纹 vs 当前代码」。
     """
 
-    #: ⚠ `model` 由 `LlmProvenance` 定成必填，本层**不重定义**（同一个语义两个落点必然分家）。
-    #: 但要把「它盘上零样本」写在明处：本层是**付费节点**而原型没记 `model`，
-    #: 换了模型产物里没有一处说得出来 ⇒ 3 份 `hook.json` + 3 份归档都要迁移，
-    #: 迁移清单里单列一条（`tests/corpus.py::ADDED`）。
+    #: `model` 由 `LlmProvenance` 定成必填，本层不重复定义。
     params: HookParams
 
 

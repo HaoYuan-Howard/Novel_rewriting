@@ -65,11 +65,7 @@ def downsend_leak(given: str, arc: dict | None) -> list[tuple[str, str]]:
     判据 27：一份「已经在检查」的守卫，要问它**开在哪扇门上**。
     `voice_for_hook` 与「不发 arc」两处收窄都是按已知的洞堵的；这个函数是**兜底**。
 
-    ⚠ 旧版扫的是「未揭示 secret 的字面片段」。剧透上界改版后 secrets 是**故意**下发的，
-    那条判据于是会在每本书上 100% 命中——**一条恒亮的红灯，与恒亮的绿灯一样不携带信息**。
-    ⇒ 取值面换成 `arc_sources`。**改的是取值面，不是严格程度**：
-    它现在查的东西比以前少，但以前那部分已经不是违约了。
-    实测 arc 与 secrets 的字面**零重叠**（5 本全清），所以送 secrets 不会顺带触发它。
+    当前边界允许下发 secrets，但禁止下发结局与最终高潮，因此只扫描 `arc_sources`。
     """
     ng = norm(given)
     out: list[tuple[str, str]] = []
@@ -286,7 +282,7 @@ _PER_TEXT_METRIC = ('hook_secret_literal', 'hook_quote_shape')
 def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
           secrets: list[dict], arc: dict | None, given_leak: list[tuple[str, str]],
           lead_upto_ch: int, hook_chars: int | None, approved: bool,
-          stale: list[str] | None, no_consumed: list[str] | None) -> list[Outcome]:
+          stale: list[str] | None, missing: list[str] | None) -> list[Outcome]:
     """一份 `hook.json` → **23 个机械 `Outcome`，一条判据一个**。
 
     ⚠ `texts` 是 `[(标签, 文本, 这条文本的 findings)]`，四份（3 候选 + 定稿）。
@@ -333,9 +329,8 @@ def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
 
     # ── 六条查不了的：**永远输出** ──────────────────────────────────────────
     #
-    # ⚠ 旧的 `hook_spoiler_unver` / `hook_relations_unver` 已退役（2026-08-14）：
-    #   改写式泄底与事实无据现在由付费语义判据接管（`hook_semantic_spoiler` /
-    #   `hook_semantic_grounding`，产地在 `semantic.outcomes`，不在本函数）。
+    # 改写式泄底与事实无据由付费语义判据 `hook_semantic_spoiler` /
+    # `hook_semantic_grounding` 接管，产地在 `semantic.outcomes`。
     out.append(unverifiable(
         'hook_quote_unver',
         '「引语在正文里有着落」曾是 HARD，恒等基线判死了它：两本原作文案共 7 条引语'
@@ -383,7 +378,7 @@ def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
         f'第 1~{mat.upto} 章全部有成稿。⚠ 「成稿够不够撑起一段文案」不由本层判',
         scanned=f'第 1~{mat.upto} 章'))
 
-    out.append(_body_stale_outcome(stale, no_consumed, mat))
+    out.append(_body_stale_outcome(stale, missing, mat))
     return out
 
 
@@ -393,22 +388,15 @@ def _chars_of(texts: list[tuple[str, str, list[Finding]]]) -> str:
                       for lbl, t, _f in texts) or '（无）'
 
 
-def _body_stale_outcome(stale: list[str] | None, no_consumed: list[str] | None,
+def _body_stale_outcome(stale: list[str] | None, missing: list[str] | None,
                         mat: Material) -> Outcome:
-    """`hook_body_stale` —— **口径与原型不同，而这是被迁移逼出来的。**
-
-    原型退回整文件 `sha1` 比对，而新契约裁过 stage5 产物的字段 ⇒ 迁移后它**必然**
-    对不上，盘上 2/3 本会误报红。`R-9.17` 定的口径是：
-    **`consumed`（字段投影）判过期、`sha1` 只作审计；没有 `consumed` ⇒ 说不清。**
-    """
+    """`hook_body_stale`：按正文消费投影判断文案绑定的版本。"""
     scanned = f'{len(mat.lead)} 份开篇成稿'
-    if no_consumed:
+    if missing:
         return unverifiable(
             'hook_body_stale',
-            f'{len(no_consumed)} 份成稿的 `judged[].consumed` 没有记（{no_consumed[:3]}）'
-            f'——**说不清**这份文案是不是照盘上这一版正文写的。'
-            f'整文件 `sha1` 只作审计：新契约裁过 stage5 的字段，它必然对不上，'
-            f'拿它判过期会把每一本都误报成红',
+            f'文案引用的 {len(missing)} 份成稿已不在盘上（{missing[:3]}），'
+            f'无法证明它仍绑定当前正文集合',
             scanned=scanned)
     if stale:
         return unverifiable(

@@ -10,7 +10,7 @@ stage7/name_map_edit.json         ⚠ 不是节点产的，是【人产的输入
 stage7/book.txt                   ★ 交付物。纯文本，带不了 `_provenance`
 ```
 
-【七条贯穿本层的事实里，最影响这份模型的四条】
+【当前契约的关键边界】
 
   ① **模型只写两个键**（`surname_map` 与 `characters[]`），其余全是代码算的。
      ⇒ **本层的零消费审计比前几层可靠**：stage4 那类假阴（整份 dump 进 prompt，
@@ -23,16 +23,8 @@ stage7/book.txt                   ★ 交付物。纯文本，带不了 `_proven
      「姐」是**单主**，多主判据抓不到它——只剩一道**词表**防线，
      而验收判据不该用词表。**把「姐姐」编进正则，这件事就与词表判得准不准无关了。**
 
-  ⑤ **`rn_new_collide`（HARD）够不到 `extra_subs`**，而盘上正好有一次从缺口进来的违规
-     （`祈颜 → 叶翎` 与 `祈辕 → 叶翎` 撞名，`--check-only` 打 `[OK]`）。
-     **这一次撞名恰好是对的**（两个字面本来就是同一个人），
-     **但「它是对的」这件事没有任何东西验证过。**
-     ⚠ **不要直接把 `extra_subs` 并进那条判据的取值面**——那会让这条正确的人工裁决
-     在盘上当场判红，而唯一的出路是撤销一个对的决定。
-
-  ⑥ **判据表里有一条全仓 0 行实现**（`rn_unregistered`），它每一本每一次都打绿灯。
-     ⚠ 更糟的是它在源码里被归在「**漏网：本节点唯一能发现『白名单不够』的东西**」
-     这一组下面，与另一条并列——**读的人会以为漏网这件事有两道防线，其实只有一道。**
+  ③ `rn_new_collide` 校验模型人物决定；人工 `extra_subs` 的碰撞由
+     `rn_new_collide_human` 单独报出，避免把人工确认过的同人映射误判为模型错误。
 
 【判据 vs 载体：一条都不上移，而本层的两个理由叠加】
 拒收 ⇒ 本层**唯一那次付费调用**整个作废（stage5 的理由）；
@@ -49,7 +41,7 @@ from pydantic import Field
 
 from contracts.invariants import RESIDUAL_CONFIDENCE
 from contracts.schema.base import Fp10, Sha1, StrictModel
-from contracts.schema.common import Finding, LlmProvenance
+from contracts.schema.common import Finding, FreeProvenance, LlmProvenance
 from contracts.schema.stage5 import ContextSource, JudgedDraft
 
 
@@ -116,11 +108,6 @@ class ExtraSub(StrictModel):
     #: 盘上恒 `'human'`。它答的是「这条是谁加的」——
     #: `residual.suggest` 一旦有第二条来源，这个字段就是唯一能分开的地方。
     origin: Literal['human']
-
-    #: ⚠ **契约的例子里有，盘上零样本、代码也不产。**
-    #: 它能进产物只是因为**整条透传**——也就是上面那个框说的漏洞本身。
-    note: str | None = None
-
 
 class AppliedFace(StrictModel):
     """一个替换面的记账（逐章 / 文案）。
@@ -336,6 +323,12 @@ class NameMapProvenance(LlmProvenance):
     params: NameMapParams
 
 
+class NameMapFreeProvenance(FreeProvenance):
+    """没有模型基线时，由完整人工编辑直接产生的来源账。"""
+
+    params: NameMapParams
+
+
 class NameMap(StrictModel):
     """`stage7/name_map.json`。
 
@@ -398,11 +391,8 @@ class NameMap(StrictModel):
     #: `stage6/hook.json` 的**整文件**指纹，**只作审计**。
     hook_sha1: Fp10 | None
 
-    #: ⚠ **「文案过没过期」在本层是两把尺子**（与 stage6 完全同形）：
-    #: 复检用本字段（缺席时退回整文件指纹），而**界面只用 `hook_sha1`**。
-    #: 盘上三本结论一致（零分歧样本），但 2/3 本根本没有本字段。
-    #: ⇒ 移植时**合成一套：`consumed` 判过期、整文件 sha1 只作审计**。
-    hook_consumed: HookConsumed | None = None
+    #: 文案定稿文本的消费投影；`hook_sha1` 只作整文件审计。
+    hook_consumed: HookConsumed
 
     sources: NameMapSources
 
@@ -416,23 +406,19 @@ class NameMap(StrictModel):
     #: 对照 `hook_consumed`：那个是「盘上 1/3 本有」的后加键，键可以不在；本键不是。
     identity: IdentityBaseline | None
 
-    provenance: NameMapProvenance = Field(alias='_provenance')
+    provenance: NameMapProvenance | NameMapFreeProvenance = Field(alias='_provenance')
 
 
 class NameDecisionResponse(StrictModel):
     """模型写的一条角色决定。**`old_canonical` 不在里面**——它由代码从 registry 回填。
-
-    ⚠ **本层的响应模型刻意不开 `extra='forbid'` 的严格语义去拒收整份响应**：
-    多写一个键在这里不会坏事（下游只挑它认识的键），而拒收要**再花一次钱**
-    （本层一本书只调用一次）。⇒ 载体照常收，多出来的键由判据报一行。
     """
 
     char_id: str = Field(min_length=1)
     new_canonical: str = Field(min_length=1)
     renamed: bool
-    not_renamed_reason: str | None = None
-    aliases: list[Alias] = Field(default_factory=list)
-    reason: str = ''
+    not_renamed_reason: str | None
+    aliases: list[Alias]
+    reason: str
 
 
 class NameMapResponse(StrictModel):

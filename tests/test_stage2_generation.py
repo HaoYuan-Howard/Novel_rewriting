@@ -16,7 +16,7 @@ import pytest
 
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
-from novel.errors import GateBlocked
+from novel.errors import ArtifactUnreadable, GateBlocked
 from novel.llm.cache import CachePolicy, ResponseCache
 from novel.llm.client import LlmClient
 from novel.llm.ledger import CostLedger
@@ -145,14 +145,7 @@ def _response_global() -> dict:
 def _response_blueprints() -> dict[int, dict]:
     out: dict[int, dict] = {}
     for blueprint in copy.deepcopy(blueprints())['blueprints']:
-        for beat in blueprint['beats']:
-            beat.pop('present_char_ids')
-            for hinge in beat['hinges']:
-                hinge.pop('text')
-        for narration in blueprint['narration']:
-            narration.pop('narrator_char_id')
-            narration.pop('focalizer_char_id')
-        out[blueprint['chapter_ordinal']] = blueprint
+        out[blueprint['chapter_ordinal']] = response_shape(blueprint)
     return out
 
 
@@ -288,7 +281,7 @@ def test_stage2_global_invalid_can_be_revalidated_without_another_llm_call():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_stage2_global_migrate_promotes_deterministically_pruned_invalid():
+def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
     root = Path(tempfile.mkdtemp())
     book = root / '全局迁移测试_457'
     book.mkdir()
@@ -307,7 +300,7 @@ def test_stage2_global_migrate_promotes_deterministically_pruned_invalid():
         assert len(transport.calls) == 1
         assert (book / extract._GLOBAL_INVALID).is_file()
 
-        report = extract.run_migrate(
+        report = extract.run_renormalize(
             _ctx(book, 'stage2.global', paid=False))
 
         assert report.passed
@@ -317,14 +310,14 @@ def test_stage2_global_migrate_promotes_deterministically_pruned_invalid():
         stored = ArtifactStore(ctx).read(GlobalGrounding, extract.GLOBAL_REL)
         assert stored.canon.secrets[0].setup_chapters == []
         assert stored.provenance.setup_chapters_pruned == []
-        assert stored.provenance.partial_rewrite == '--migrate'
+        assert stored.provenance.partial_rewrite == '--renormalize'
         assert stored.provenance.usage is not None
         assert stored.provenance.usage.calls_made == 1
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_stage2_blueprint_migrate_rebuilds_code_derived_character_refs():
+def test_stage2_blueprint_renormalize_rebuilds_code_derived_character_refs():
     root = Path(tempfile.mkdtemp())
     book = root / '蓝图迁移测试_458'
     book.mkdir()
@@ -355,7 +348,7 @@ def test_stage2_blueprint_migrate_rebuilds_code_derived_character_refs():
             json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
             encoding='utf-8', newline='\n')
 
-        report = extract.run_migrate(
+        report = extract.run_renormalize(
             _ctx(book, 'stage2.blueprint', paid=False))
 
         assert report.passed
@@ -363,7 +356,7 @@ def test_stage2_blueprint_migrate_rebuilds_code_derived_character_refs():
         stored = ArtifactStore(blueprint_ctx).read(
             ChapterBlueprints, extract.BLUEPRINT_REL)
         assert 'char_999' not in stored.blueprints[0].beats[0].present_char_ids
-        assert stored.provenance.partial_rewrite == '--migrate'
+        assert stored.provenance.partial_rewrite == '--renormalize'
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -411,7 +404,7 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
         'char_002': {'canonical': '丙丁', 'address': []},
     }
 
-    user = extract.build_blueprint_user('边界测试', 'private-id', sections, (5,),
+    user = extract.build_blueprint_user('边界测试', sections, (5,),
                                         characters=characters)
     prefix = extract._blueprint_stable_prefix('边界测试', sections)
 
@@ -424,7 +417,7 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
     assert '此前章节已出现的称名（代码派生，仅过去）' in user
     assert '甲乙' in user
     assert '丙丁' not in user
-    first = extract.build_blueprint_user('边界测试', 'private-id', sections, (1,),
+    first = extract.build_blueprint_user('边界测试', sections, (1,),
                                          characters=characters)
     assert '无（此前正文未出现名册称名）' in first
     assert '甲乙' not in first
@@ -455,7 +448,7 @@ def test_past_attested_surfaces_only_hand_out_past_attested_forms():
     assert table[3] == ['李宝珠', '母亲']
 
 
-def test_stage2_blueprint_migrates_legacy_locators_without_llm():
+def test_stage2_renormalize_rejects_locator_shaped_formal_artifact():
     root = Path(tempfile.mkdtemp())
     book = root / '旧蓝图迁移测试_460'
     book.mkdir()
@@ -478,35 +471,15 @@ def test_stage2_blueprint_migrates_legacy_locators_without_llm():
         assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
         path = book / extract.BLUEPRINT_REL
         raw = json.loads(path.read_text(encoding='utf-8'))
-        raw['source_id'] = 'legacy-private-id'
         raw['blueprints'] = [response_shape(bp) for bp in raw['blueprints']]
-        raw['_provenance']['context'] = {'batch_size': 1, 'context_upto': True}
-        raw['_provenance'].pop('verbatim_rewrites')
-        raw['_provenance'].pop('verbatim_recovered')
-        raw['_provenance'].pop('verbatim_failures')
-        raw['_provenance']['inputs'] = {
-            key: edge['file'] for key, edge in raw['_provenance']['inputs'].items()}
         path.write_text(
             json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
             encoding='utf-8', newline='\n')
         calls_before = len(transport.calls)
 
-        report = extract.run_migrate(_ctx(book, 'stage2.blueprint', paid=False))
-
-        assert report.passed
+        with pytest.raises(ArtifactUnreadable):
+            extract.run_renormalize(_ctx(book, 'stage2.blueprint', paid=False))
         assert len(transport.calls) == calls_before
-        stored = ArtifactStore(blueprint_ctx).read(
-            ChapterBlueprints, extract.BLUEPRINT_REL)
-        assert stored.provenance.context.architecture == 'cumulative-past-v1'
-        assert stored.provenance.partial_rewrite == '--migrate'
-        assert all(beat.span is not None for bp in stored.blueprints for beat in bp.beats)
-        assert all(
-            hinge.source is not None
-            for bp in stored.blueprints for beat in bp.beats for hinge in beat.hinges)
-        archived = list((book / 'stage2' / '_rounds').glob('chapter_blueprints.r*.json'))
-        assert len(archived) == 1
-        archived_raw = json.loads(archived[0].read_text(encoding='utf-8'))
-        assert 'starts_with' in archived_raw['blueprints'][0]['beats'][0]['span']
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -541,7 +514,7 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         hinge = broken['blueprints'][0]['beats'][0]['hinges'][0]
         hinge['source'] = None
         broken['_provenance']['verbatim_failures'] = [
-            ['b01_01', 'hinge', 'source span 与原文不一致']]
+            ['b01_01', 'hinge', '锚点不在本章原文']]
         store.write_invalid(
             extract.BLUEPRINT_REL,
             ChapterBlueprints.model_validate(broken),

@@ -38,13 +38,12 @@ INPUTS = ('stage1/main_text.json', 'stage1/hook_copy.json',
 
 
 def books() -> list[str]:
-    """有 name_map **且 plan 迁移后可读**的书（`成年人不做选择` 那本的 plan
-    没有 `_provenance`，是「exists 而 readable=False」的真实样本，单独一条测它）。"""
+    """同时具备当前 name_map 与 plan 的书。"""
     out = []
     for book in sorted({a.book_dir for a in corpus.iter_artifacts()
                         if a.rel == 'stage7/name_map.json'}):
         plan = sandbox.cut(book, 'stage4/plan_chapters.json')
-        if plan is not None and '_provenance' in plan:
+        if plan is not None:
             out.append(book)
     return out
 

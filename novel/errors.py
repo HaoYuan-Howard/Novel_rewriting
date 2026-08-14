@@ -171,17 +171,8 @@ class RunModeNotImplemented(TerminalState):
     ⚠ 与 `UnsupportedRunMode` 要分开：那一条说的是**这个节点没有这条跑法**（敲错了），
     这一条说的是**有，但还没实现**。前者该改命令，后者该改代码。
 
-    ⚠⚠ **它此前还有一个兄弟 `NodeNotPorted`（「整层还没移植」），F5-5 退役了**
-    （2026-08-12 用户裁决）。理由不是「两者一样」——它们对人的下一步确实不同；
-    是**后者的前件消失了**：stage2 是最后一层，它一进 `contracts.rules.PORTED_STAGES`，
-    `STAGES − PORTED_STAGES` 就成了空集，那个异常在生产路径上**再也构造不出来**。
-    ⇒ 留着一条永远不抛的异常，与留着一条永远不执行的分支是同一件事——
-    还更坏：它会让读的人以为「未移植」这个状态今天还在，然后照着它去写新代码。
-
-    ⚠ **HTTP 状态面一格没变**：501 照旧，产地换成本异常
-    （`novel/api/errors.py::STATUS`）。取值面也一格没少：
-    `contracts.invariants.STAGES` 仍是八层，`/api/enums` 仍发得出全部取值——
-    退役掉的只是那个**运行时**状态。
+    HTTP 边界将它映射为 501；八个 stage 本身均已实现，这个状态只表示某个已登记 flag
+    尚未接线。
     """
 
 

@@ -22,7 +22,7 @@ from contracts.schema.stage4 import PlanChapters, WriterContext
 from contracts.schema.stage5 import ContextSource
 from contracts.schema.stage7 import (
     ApprovedNameMap, IdentityBaseline, NameMap, NameMapEdit, NameMapParams,
-    NameMapProvenance, NameMapResponse,
+    NameMapFreeProvenance, NameMapProvenance, NameMapResponse,
 )
 from novel import paths
 from novel.core.naming import family_groups, strip_distinguisher, surface_owners
@@ -65,11 +65,14 @@ class _Upstreams:
     """上游 + 从它们算出来的下发材料。**装载与判定分开，八条路共用这一份。**"""
 
     def __init__(self, ctx: RunContext, store: ArtifactStore) -> None:
-        for rel in (GLOBAL_GROUNDING, MAIN_TEXT):
+        for rel in (GLOBAL_GROUNDING, MAIN_TEXT, PLAN_CHAPTERS, WRITER_CONTEXT):
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
         gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
         main_text = store.read(paths_model(MAIN_TEXT), MAIN_TEXT)
+        plan_art = store.read(PlanChapters, PLAN_CHAPTERS)
+        writer_context = store.read(WriterContext, WRITER_CONTEXT)
+        plan = plan_art.model_dump(by_alias=True)
 
         self.title: str = ctx.title
         self.registry: dict[str, dict] = {
@@ -80,27 +83,14 @@ class _Upstreams:
         # ⚠ `MainText` 顶层是**数组**（`RootModel`），所以要走 `.root`。
         self.source_text: str = '\n'.join(c.text or '' for c in main_text.root)
 
-        # ⚠ 计划与写手上下文都是 **optional**：缺了只是少一个分母 / 少一条新鲜度，
-        #   不是这一层跑不动。
-        #
-        # ⚠⚠ **「在盘上但读不回来」是第三态，而它在语料里有真样本**：某本的
-        #   `stage4/plan_chapters.json` 根本没有 `_provenance`（`.INVALID` 提升路把它
-        #   整个丢了，`stage4.md` 事实⑤ 的字节级铁证）。压成「缺章 0 条」是**说假话**
-        #   ——那本书的缺章判据这一趟根本没有分母。⇒ 记下来，由 `plan_note` 说出来。
-        plan, self.plan_note = _read_optional(
-            store, PlanChapters, PLAN_CHAPTERS)
-        self.ctx_code: str | None = None
-        self.ctx_present = store.exists(WRITER_CONTEXT)
-        wc, self.ctx_note = _read_optional(
-            store, WriterContext, WRITER_CONTEXT)
-        if wc is not None:
-            self.ctx_code = (wc.get('_provenance') or {}).get('code')
-        elif self.ctx_note:
-            self.ctx_present = False        # 读不回来 = 拿不到新鲜度，与「不在盘上」同态
+        # Stage7 只消费当前 Stage4 契约。计划提供章数分母，writer_context 提供
+        # 来源边；缺失或 schema 不合法都由 ArtifactStore 显式终止。
+        self.planned_chapters = len(plan_art.output_chapters)
+        self.ctx_code = writer_context.provenance.code
 
         # ⚠⚠ 成稿与 `hook.json` **一律不走 `store.read`**，理由见 `measure.load_drafts`。
         by_ord, invalids, self.judged = load_drafts(store)
-        (self.recs, self.dup, self.missing, self.mixed,
+        (self.recs, self.dup, self.missing,
          self.invalids) = collect_chapters(by_ord, plan, invalids)
 
         self.hook_raw: dict | None = None
@@ -139,28 +129,6 @@ def paths_model(rel: str):
     """产物的模型。**从 `ARTIFACTS` 取，不在本模块重申一次。**"""
     from contracts.schema import ARTIFACTS
     return ARTIFACTS[rel]
-
-
-def _read_optional(store: ArtifactStore, model, rel: str) -> tuple[dict | None, str]:
-    """读一份**可缺**的上游 → `(dict|None, 说明)`。**三态，不是两态。**
-
-    · 不在盘上 ⇒ `(None, '不在盘上')`；
-    · 在盘上、读得回来 ⇒ `(dict, '')`；
-    · **在盘上、读不回来** ⇒ `(None, '读不回来：…')`。
-
-    ⚠⚠ 第三态**在语料里有真样本**，而它与第一态在结论上是两件事：
-    「没有计划」是「这本书还没排过章」，「计划读不回来」是「分母丢了」。
-    压成同一态，缺章那条判据就会在一本**读不出该有几章**的书上打绿灯。
-    ⇒ 这里**不吞异常也不往上抛**：抛了整层跑不动（而本层的主产物与它无关），
-    吞了就说假话。**记下来，让判据把它说出去。**
-    """
-    from novel.errors import ArtifactUnreadable
-    if not store.exists(rel):
-        return None, f'{rel} 不在盘上'
-    try:
-        return store.read(model, rel).model_dump(by_alias=True), ''
-    except ArtifactUnreadable as e:
-        return None, f'{rel} 在盘上但读不回来（{str(e).splitlines()[0]}）'
 
 
 def _edit_rel(store: ArtifactStore, edit_path: str) -> str:
@@ -262,7 +230,7 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
         pre_target=up.pre_target, source_text=up.source_text,
         residual_keys=res_keys, stem_noise=stem_noise,
         family_members=up.family_members,
-        dup=up.dup, missing=up.missing, mixed=up.mixed, invalids=up.invalids,
+        dup=up.dup, missing=up.missing, invalids=up.invalids,
         post_units=post_units, title_line=_title_line(up.title, subs, kept))
 
     art = NameMap(
@@ -282,24 +250,19 @@ def _title_line(title: str, subs: dict[str, str],
     n = sum(cnt.values())
     return (f'书名「{title}」→「{new}」：'
             + (f'替换了 {n} 处' if n else '**恒等**（书名里没有出现任何一个旧名）')
-            + '　※ 盘上三本的书名都不含人名，**这一条从来没有过失败样本**'
-              '——没有失败样本的绿灯不携带信息')
+            + '　※ 书名替换的语义质量仍需人工确认')
 
 
 def _context_source(up: _Upstreams) -> ContextSource:
     """`sources.writer_context` —— **它是一条新鲜度结论，不是一个指纹。**
 
-    落盘这一刻 `writer_context` 是**刚读进来的**，所以 `fresh` 是由构造保证的事实，
-    不是一句乐观的默认值。上游根本不在盘上时是 `unknown`——**不是 `stale`**。
+    落盘这一刻 `writer_context` 已按当前 schema 读取成功，所以 `fresh` 是由构造保证的事实。
 
     ⚠ **两套新鲜度机制并存**（本字段 vs `_provenance.inputs`），
     `stage7.md` §五 已登记「移植时应当合成一套」——**本轮不合**：
     合并要动 stage5 的 `ReviewSources`，那属 F4。
     """
-    from novel import prov
-    if not up.ctx_present:
-        return ContextSource(state='unknown', detail=[], code=None)
-    return ContextSource(state='fresh', detail=[], code=up.ctx_code or prov.code_version())
+    return ContextSource(state='fresh', detail=[], code=up.ctx_code)
 
 
 # ── 判定：一份产物 → 33 个 `Outcome` ────────────────────────────────────────
@@ -307,18 +270,16 @@ def _context_source(up: _Upstreams) -> ContextSource:
 def _judge(ctx: RunContext, store: ArtifactStore, art: NameMap,
            up: _Upstreams) -> list[Outcome]:
     """**`--check-only` 与落盘闸门共用。** 判的是产物里存的那份 `book[]`。"""
-    stale, no_consumed = _judged_drift(art, up)
+    stale, missing = _judged_drift(art, up)
     return checks.check(
         findings=list(art.book),
         scanned=f'{len(art.characters)} 个角色 · {len(art.subs)} 条映射 · '
                 f'{len(art.kept)} 条保留 · {len(up.recs)} 章成稿',
         baseline_line=_baseline_line(art),
-        chapter_scanned=(f'⚠ **没有分母**：{up.plan_note} ⇒ 这一趟说不出「该有几章」，'
-                         f'只查得了「同一章有没有两份」' if up.plan_note else
-                         f'章计划 × {len(up.recs)} 份成稿'),
+        chapter_scanned=f'{up.planned_chapters} 章计划 × {len(up.recs)} 份成稿',
         txt_state=_txt_state(store, art),
         approved=art.approved is not None,
-        stale=stale, no_consumed=no_consumed,
+        stale=stale, missing=missing,
         hook_stale=_hook_drift(art, up),
         identity=(art.identity.model_dump() if art.identity is not None else None),
         title_line=_title_line(up.title, art.subs, art.kept),
@@ -357,30 +318,20 @@ def _txt_state(store: ArtifactStore, art: NameMap) -> tuple[bool, str]:
 
 
 def _judged_drift(art: NameMap, up: _Upstreams) -> tuple[list[str], list[str]]:
-    """成稿有没有在这次替换之后改过。返回 `(改过的, 说不清的)`。
-
-    ⚠⚠ **只比 `consumed`，不比 `sha1`**（同 stage6 的 `hook_body_stale`）：
-    整文件指纹在迁移之后**必然**对不上（新契约裁过 stage5 的字段），
-    拿它判过期会把每一本都误报成红。没记 `consumed` 的 ⇒ **说不清**。
-    """
+    """成稿有没有在这次替换之后改过。返回 `(改过的, 已缺失的)`。"""
     stale: list[str] = []
-    no_consumed: list[str] = []
+    missing: list[str] = []
     for rel, stored in art.judged.items():
         now = up.judged.get(rel)
-        if stored.consumed is None or now is None or now.consumed is None:
-            no_consumed.append(rel)
+        if now is None:
+            missing.append(rel)
         elif stored.consumed.text_sha1 != now.consumed.text_sha1:
             stale.append(rel)
-    return stale, no_consumed
+    return stale, missing
 
 
-def _hook_drift(art: NameMap, up: _Upstreams) -> bool | None:
-    """人工定稿文案有没有变过。`None` = 说不清（产物里没有消费投影）。
-
-    ⚠ 候选、判据、来源账这些元数据变化**不要求重做替换**——拼进成书的只有定稿那一段。
-    """
-    if art.hook_consumed is None:
-        return None
+def _hook_drift(art: NameMap, up: _Upstreams) -> bool:
+    """人工定稿文案有没有变过；只比较本层实际消费的投影。"""
     return art.hook_consumed != up.hook_consumed
 
 
@@ -574,9 +525,9 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
     if prev is not None:
         provenance = ctx.rewrite_provenance(prev.provenance, by='--apply-edit')
     else:
-        # 盘上没有旧产物 ⇒ 这一份**整个是人产的**，没有任何模型参与 ⇒ 走 0 成本那一口。
+        # 没有模型基线时，这份映射完全由人工产生，使用 0 成本来源账。
         provenance = ctx.free_provenance(
-            NameMapProvenance, prompts={'RULES': _rules_fingerprint()},
+            NameMapFreeProvenance, prompts={'RULES': _rules_fingerprint()},
             params=NameMapParams(max_tokens=MAX_TOKENS, tag=''), origin='human')
     new_art, _fs, _hook_new = _build(ctx, up, model_out, extra, provenance)
     if prev is not None:
@@ -622,8 +573,8 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
     outcomes = _judge(ctx, store, rebuilt, up)
     if _blocking(outcomes):
         return False, _report(ctx, store, outcomes, rebuilt)
-    # 通用入口负责保住旧 `.INVALID` 历史与已有正式稿；随后只覆盖当前代码
-    # 重算出的派生字段。若两步间崩溃，盘上仍有可 `--recheck` 自愈的正式稿。
+    # 通用入口归档 `.INVALID` 与已有正式稿；随后只覆盖当前代码重算出的派生字段。
+    # 若两步间崩溃，盘上仍有可 `--recheck` 自愈的正式稿。
     store.promote_invalid(REL, NameMap)
     promoted = rebuilt.model_copy(update={
         'provenance': rebuilt.provenance.promoted(code=ctx.code)})

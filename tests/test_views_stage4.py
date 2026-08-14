@@ -27,14 +27,13 @@ INPUTS = ('stage1/main_text.json', 'stage2/global_grounding.json',
 
 
 def books() -> list[str]:
-    """plan 迁移后**可读**的书（没 `_provenance` 的那本是 readable=False 的真实样本，
-    它的行为归 `test_api_screens` 的 409 那格）。"""
+    """同时具备当前计划与蓝图的书。"""
     out = []
     for book in sorted({a.book_dir for a in corpus.iter_artifacts()
                         if a.rel == 'stage4/plan_chapters.json'}):
         plan = sandbox.cut(book, 'stage4/plan_chapters.json')
         bp = sandbox.cut(book, 'stage2/chapter_blueprints.json')
-        if plan is not None and '_provenance' in plan and bp is not None:
+        if plan is not None and bp is not None:
             out.append(book)
     return out
 

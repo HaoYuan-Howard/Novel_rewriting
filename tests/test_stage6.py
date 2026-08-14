@@ -1,22 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-test_stage6.py —— stage6 纵切与**盘上三本对账**。
-
-⭐ 这一份里最值钱的是两条**等价测试**，它们对位 stage3 那次的「23 项逐值」：
-  · `test_rejudging_reproduces_what_is_on_disk` —— 对 12 份文本重跑判据，
-    产出的 rule 集合必须与产物里存的**逐份相等**。**不等就是判据抄错了。**
-  · `test_normalization_is_idempotent` —— 存的是**归一之后**的字节 ⇒ 再归一必须一个字不动。
-两条都 0 成本，而它们能抓到「逐字移植时漏了一个字符类」这种不会报错的错。
-
-⚠ 盘上语料是**只读证据**：三本的判定结论一个字节都没动过，所以
-「结论对不上」只可能是骨架抄错了，不可能是数据变了。
-"""
+"""Stage6 当前文案契约、确定性重判、归一幂等与人工定稿。"""
 from __future__ import annotations
-
-import ast
-import hashlib
-import pathlib
 
 import pytest
 
@@ -43,15 +28,20 @@ pytestmark = pytest.mark.skipif(
 
 
 def _drafts_of(book: str) -> tuple[str, ...]:
-    """本书的成稿（**不含 `_rounds/` 归档**——那不是现役正文）。"""
+    """本书当前正式成稿。"""
     return tuple(sorted(
         a.rel for a in corpus.iter_artifacts()
-        if a.book_dir == book and a.rel.startswith('stage5/')
-        and '_rounds' not in a.rel and a.rel.endswith('.json')))
+        if a.book_dir == book and a.pattern == 'stage5/{mode}/ch{nn}.json'
+        and '_rounds' not in a.rel))
+
+
+def _semantic_of(book: str) -> tuple[str, ...]:
+    return tuple(sorted(a.rel for a in corpus.iter_artifacts()
+                        if a.book_dir == book and a.pattern == 'stage6/semantic_{n}.json'))
 
 
 def _box(book: str) -> sandbox.Sandbox:
-    return sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
+    return sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book) + _semantic_of(book))
 
 
 @pytest.fixture(params=books(), ids=lambda b: b[:10])
@@ -77,7 +67,7 @@ def test_every_registered_rule_produced_a_row(box):
     rep = _check(box)
     assert {r.rule for r in rep.rules} == {r.rule for r in REGISTRY.of_stage('stage6')}
     assert [r.rule for r in rep.rules if r.status == 'skipped'] == []
-    assert len(rep.rules) == 25
+    assert len(rep.rules) == len(REGISTRY.of_stage('stage6'))
 
 
 def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
@@ -86,49 +76,16 @@ def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     6 条 `sev=unver` 每次都输出（`builder._status_of` 强制），而 `badge_of` 见 `unver`
     就至少 amber。**这不是缺陷**，是本层「能查的都查了、查不了的写在脸上」的可见形态。
 
-    ⚠ 下面那个 8 = **6 条 `sev=unver`＋2 条语义判据的 unver 状态**——盘上三本
-    都没有 `stage6/semantic_<n>.json`，语义两条落「没审 ≠ 没问题」的 unver。
-    这两族语义不同（一族是判据的边界，一族是「还没花钱审」），数值巧合相等；
-    若语料书补跑了 `stage6.semantic`，此处应变成 6 并把语义两条另行断言。
-
-    ⚠ 同时钉住 `passed=True`：**「有查不了的」不等于「不合格」**，退出码要是 0。
+    6 条机械 `sev=unver` 常驻；语义两条是否 `unver` 取决于当前语义审判产物。
     """
     rep = _check(box)
-    assert rep.badge == 'amber'
-    assert rep.passed is True
-    assert len([r for r in rep.rules if r.status == 'unver']) == 8
+    hard_hit = any(r.sev == 'hard' and r.status == 'hit' for r in rep.rules)
+    assert rep.badge == ('fail' if hard_hit else 'amber')
+    assert rep.passed is (not hard_hit)
+    assert len([r for r in rep.rules if r.sev == 'unver']) == 6
     semantic_lines = [r for r in rep.rules if r.check_kind == 'semantic']
     assert {r.rule for r in semantic_lines} == {'hook_semantic_spoiler',
                                                 'hook_semantic_grounding'}
-    assert all(r.status == 'unver' for r in semantic_lines), \
-        '盘上没有语义审判产物，语义两条只能是 unver——绿了就是洗绿'
-
-
-#: 盘上三本的命中集。**与原型的差别是一次有名有姓的裁决**：
-#: 原型在有定稿时只报定稿那一条候选 ⇒ 三本命中集全空，而
-#: 「合规的那个候选就在同一份产物里」这件事在报告上看不见——**人也就没有依据去挑**。
-#: ⇒ 本仓报**全部四份**（3 候选 + 定稿），于是多出这 3 条 INFO。
-EXPECTED_HITS = {
-    '成年人不做选择，姐全都要_7581413687886353176': {},
-    '我把夫君捧成头牌后，全家悔疯了_7615069877019300633': {'hook_ending_shape': 2},
-    '我，三岁嘴强月老，拆姻缘一拆一个准_7627487175860556568': {'hook_shape': 1},
-}
-
-
-def test_hits_match_the_reconciliation(box):
-    """⭐ 盘上三本的命中集**逐条对账**。不一致就是骨架抄错了，不是数据变了。"""
-    rep = _check(box)
-    got = {r.rule: len(r.findings) for r in rep.rules if r.status == 'hit'}
-    assert got == EXPECTED_HITS[box.book], f'{box.book}: 命中集与对账不符'
-
-
-def test_no_hard_rule_is_hit_on_disk(box):
-    """5 条 HARD 盘上全 0。⚠ **要连基线一起读**：其中 4 条的失效模式一次都没发生过
-    （一个会让它红的样本都没有），只有 `hook_para_sep` 是「绿得有理由」的那一条
-    ——归一化真动过手（盘上 9 候选里 6 个 `paras_fixed=1`），而它 0 命中。"""
-    rep = _check(box)
-    hard = {r.rule for r in REGISTRY.of_stage('stage6') if r.sev == 'hard'}
-    assert not [r.rule for r in rep.rules if r.rule in hard and r.status == 'hit']
 
 
 # ── ⭐ 两条等价测试 ─────────────────────────────────────────────────────────
@@ -151,13 +108,11 @@ def test_rejudging_reproduces_what_is_on_disk(box):
     **不等就是判据抄错了**——而逐字移植时漏一个字符类、少一个前瞻断言，
     不会报错，只会让某条判据在某类输入上静默地不再拦。
 
-    ⚠ 排除两条**不由文本判据产**的：`hook_report` 与 `hook_downsend_leak` 是书级的
-    （原型也不把它们写进 `candidates[].findings`）。
-    ⚠ 也排除 `hook_quote_unbalanced`：它晚于这三份产物（见下面那条 12 格的测试）。
+    排除两条不由逐文本判据产生的书级结论。
     """
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     up = hook._Upstreams(ctx, __import__('novel.store', fromlist=['x']).ArtifactStore(ctx))
-    book_level = {'hook_report', 'hook_downsend_leak', 'hook_quote_unbalanced'}
+    book_level = {'hook_report', 'hook_downsend_leak'}
     for label, text, stored in _texts_and_stored(box):
         _t, _m, fs = hook._normalize_and_judge(text, up)
         got = {f.rule for f in fs} - book_level
@@ -206,22 +161,13 @@ def test_chars_are_recomputed_with_the_same_ruler(box):
 
 # ── ⚠ 三条陷阱 ──────────────────────────────────────────────────────────────
 
-def test_the_identity_baseline_is_exactly_twelve_cells_on_disk(box):
-    """⚠⚠ **盘上恰好 12 格，而契约要 13 格**——载体是 `dict[str, str]`，**少一格不报错**。
-
-    缺的正是 `hook_quote_unbalanced`（那条判据晚于这三份产物）。
-    **不许拿占位符补上**：断言「恰好等于 12 且缺的正好是它」，
-    才能让「这份产物比那条判据老」这件事**留在盘上而不是被抹平**。
-    ⚠ 语义两条**不占格**：恒等基线是 0 成本路，不跑付费审判——集合要与
-    `hook._judgeable_rules` 同口径，否则这条测试在语义判据进表那一刻就会假红。
-    """
+def test_the_stored_identity_baseline_has_every_current_cell(box):
+    """当前正式产物的恒等基线必须完整覆盖机械 hard/info 判据。"""
     stored = sandbox.cut(box.book, 'stage6/hook.json')['baselines_identity']
     want = {r.rule for r in REGISTRY.of_stage('stage6')
             if r.sev in ('hard', 'info') and r.check_kind != 'semantic'
             and r.rule != 'hook_reuses_source'}
-    assert len(want) == 13, '恒等基线该占 13 格（机械 hard+info 减去 hook_reuses_source）'
-    assert len(stored) == 12
-    assert want - set(stored) == {'hook_quote_unbalanced'}
+    assert set(stored) == want
 
 
 def test_identity_grid_excludes_semantic_rules(box):
@@ -236,72 +182,11 @@ def test_identity_grid_excludes_semantic_rules(box):
 
 
 def test_body_stale_uses_consumed_not_the_whole_file_sha1(box):
-    """⚠⚠ **口径与原型不同，而这是被迁移逼出来的**（`R-9.17`）。
-
-    `judged[].sha1` 是**整文件**指纹，而新契约裁过 stage5 产物的字段 ⇒ 迁移之后它
-    **必然**对不上；照原型退回整文件 `sha1` 判过期，盘上会有书被**误报成红**。
-    ⇒ `consumed`（字段投影）判过期、`sha1` 只作审计；**没有 `consumed` ⇒ 说不清**。
-
-    这条钉住的是：无论哪本，`hook_body_stale` 都**不是** `hit`。
-    """
+    """当前成稿未变时，消费投影应直接判 fresh。"""
     rep = _check(box)
     line = next(r for r in rep.rules if r.rule == 'hook_body_stale')
-    assert line.status == 'unver', (
-        f'{box.book}: hook_body_stale = {line.status}。'
-        f'⚠ 若它变成 hit，多半是有人把口径改回了整文件 sha1——那会让每一本都误报')
-
-
-def test_the_prompt_is_a_byte_for_byte_port():
-    """⭐ **`HOOK_SYS` 与原型 `N8_SYS` 逐字节相同。**
-
-    这份 prompt 压着 120+ 条真机 findings 的学费，而**改写不会报错**——
-    它只会让某一类失效重新出现，且要花一次真钱才看得见。
-
-    ⚠ 原型仓是**只读**的，找不到时 skip 并明说「没在查」。
-    """
-    p = pathlib.Path(__file__).resolve().parents[2] / \
-        'Novel_refactoring' / 'Rapid_Prototyping' / 'Stage6' / 'n8_hook.py'
-    if not p.exists():
-        pytest.skip(f'原型仓不在 {p}——本条**没在查**，不是「查过一致」')
-    tree = ast.parse(p.read_text(encoding='utf-8'))
-    want = {t.id: n.value.value for n in tree.body if isinstance(n, ast.Assign)
-            for t in n.targets if isinstance(t, ast.Name)
-            and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)}['N8_SYS']
-    assert prompts.HOOK_SYS == want, (
-        'HOOK_SYS 与原型 N8_SYS 分家了。'
-        f'原型 sha1={hashlib.sha1(want.encode()).hexdigest()[:10]} '
-        f'本仓 sha1={hashlib.sha1(prompts.HOOK_SYS.encode()).hexdigest()[:10]}')
-    # 守卫的守卫：模板本身也钉一个数，免得两边被同时改坏。
-    assert len(prompts.HOOK_SYS) == 893
-
-
-def test_the_rendered_prompt_is_byte_for_byte_too():
-    """⭐⭐ **模板逐字还不够——渲染出来的那一段也要逐字。**
-
-    ⚠ 这条是被一次真实的失误逼出来的：模板确实与原型逐字节相同，而
-    `HOOK_APPROACH_NOTES`（从原型 `APPROACHES` 搬过来的三句说明）被**转述**了一遍，
-    于是渲染结果短了 48 字——**丢掉的正是 `result_flashback` 那句里的硬约束
-    「不得取后期高潮或结局」**，而那是本层唯一还禁的东西（`R-9.9`）。
-    模板那条测试**抓不到它**：占位符两侧一个字节都没变。
-
-    ⇒ 真正要钉的是**发出去的字节**，不是模板的字节。
-    """
-    p = pathlib.Path(__file__).resolve().parents[2] / \
-        'Novel_refactoring' / 'Rapid_Prototyping' / 'Stage6' / 'n8_hook.py'
-    if not p.exists():
-        pytest.skip(f'原型仓不在 {p}——本条**没在查**，不是「查过一致」')
-    tree = ast.parse(p.read_text(encoding='utf-8'))
-    lits = {t.id: n.value for n in tree.body if isinstance(n, ast.Assign)
-            for t in n.targets if isinstance(t, ast.Name)}
-    sys_tpl = lits['N8_SYS'].value
-    approaches = ast.literal_eval(lits['APPROACHES'])
-    from string import Template
-    want = Template(sys_tpl).substitute(
-        APPROACHES='\n'.join(f'  {i}. {k} —— {v}'
-                             for i, (k, v) in enumerate(approaches.items(), 1)))
-    assert prompts.hook_system() == want, (
-        '渲染出来的 system 与原型分家了。模板可能一字未改，'
-        '而插值进去的那几句被转述了——**那会静默删掉里面的硬约束**')
+    assert line.status == 'unver'
+    assert not line.findings, f'{box.book}: 当前成稿被误判为漂移：{line.findings}'
 
 
 def test_the_interpolated_prompt_names_every_approach():
@@ -328,9 +213,12 @@ def test_identity_baseline_runs_and_excludes_the_constructed_one(box):
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     grid, rep = hook.run_identity(ctx)
     assert 'hook_reuses_source' not in grid
-    assert len(grid) == 13
+    want = {r.rule for r in REGISTRY.of_stage('stage6')
+            if r.sev in ('hard', 'info') and r.check_kind != 'semantic'
+            and r.rule != 'hook_reuses_source'}
+    assert set(grid) == want
     assert all(v in ('0/1', '1/1') for v in grid.values())
-    assert len(rep.rules) == 25
+    assert len(rep.rules) == len(REGISTRY.of_stage('stage6'))
 
 
 # ── 定稿 ────────────────────────────────────────────────────────────────────

@@ -12,13 +12,31 @@ from __future__ import annotations
 import pytest
 
 from contracts.invariants import FRESHNESS, FRESHNESS_REASON
+from contracts.schema.stage7 import NameMapFreeProvenance, NameMapParams
 from novel import prov
+from novel.run import RunContext
 
 FP_V1 = prov.fingerprint('v1')
 FP_V2 = prov.fingerprint('v2')
 PROJ_A = prov.projection_fingerprint({'a': 1})
 PROJ_B = prov.projection_fingerprint({'a': 2})
 KEY = 'stage1/main_text.json'
+
+
+def test_stage7_human_only_provenance_has_no_model(tmp_path):
+    """首次人工改名没有模型基线时，也必须能构造符合当前 NameMap 契约的来源账。"""
+    novel_dir = tmp_path / 'book_1'
+    novel_dir.mkdir()
+    ctx = RunContext.open(tmp_path, '1', 'stage7.rename', paid=False, write_ledger=False)
+    provenance = ctx.free_provenance(
+        NameMapFreeProvenance,
+        prompts={'RULES': 'rules'},
+        params=NameMapParams(max_tokens=16000, tag=''),
+        origin='human',
+    )
+    dumped = provenance.to_disk()
+    assert dumped['origin'] == 'human'
+    assert 'model' not in dumped
 
 
 def _fresh(recorded, *, now=FP_V1, consumed=None):
@@ -128,25 +146,10 @@ def test_stale_outranks_unknown_outranks_fresh():
         'stage1/a.json': 'fresh', 'stage1/b.json': 'unknown', 'stage1/c.json': 'stale'}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 一之二、**存量**来源账的形状 —— 盘上那 297 条边
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_a_legacy_flat_input_edge_does_not_crash_the_whole_report():
-    """⭐⭐ 盘上存量产物的 `inputs` 值**全部是扁平的 10 位字符串**（`RESHAPED` 记着 297 条）。
-
-    ⚠ 原来这里对每条边直接 `.get()`，而 `str` 是真值、`'abc'.get` 不存在
-    ⇒ 一份**读得出来的**存量产物抛 `AttributeError: 'str' object has no attribute 'get'`。
-    **判过期恰恰是「这份产物已经不合当前 schema」时最该答得出来的那个问题**
-    （`store.freshness` 亲自写着这条）——在那一刻炸掉，方向是反的。
-
-    扁平边 ⇒ `consumed` 填 `null`，含义是「本节点没有声明自己读了哪些字段」
-    ⇒ 该边 `unknown`，**不是 `fresh`**。
-    """
+def test_a_flat_input_edge_is_rejected_as_stale_without_crashing():
+    """旧的裸指纹不再升级成当前边形状。"""
     r = _fresh({KEY: FP_V1}, now=FP_V1)
-    assert (r.state, r.reason) == ('unknown', 'consumed_undeclared')
-    # 文件变了照旧 stale——归一没有把旧边变得比它本来更可信
-    assert _fresh({KEY: FP_V1}, now=FP_V2).state == 'stale'
+    assert (r.state, r.reason) == ('stale', 'file_changed')
 
 
 def test_a_malformed_edge_is_stale_not_an_exception():
@@ -169,30 +172,6 @@ def test_a_non_dict_inputs_container_reads_as_no_inputs():
     """
     assert prov.freshness(['a'], file_now=lambda _k: FP_V1).reason == 'no_inputs'
     assert prov.freshness('abc', file_now=lambda _k: FP_V1).reason == 'no_inputs'
-
-
-def test_normalize_inputs_always_emits_exactly_the_two_keys():
-    """下游直接下标取值，而语料体检逐条断言 `set(edge) == {'file','consumed'}`。"""
-    got = prov.normalize_inputs({'a': FP_V1, 'b': {'file': FP_V1, 'consumed': PROJ_A}, 'c': 7})
-    assert all(set(e) == {'file', 'consumed'} for e in got.values())
-    assert got['a'] == {'file': FP_V1, 'consumed': None}
-    assert got['b'] == {'file': FP_V1, 'consumed': PROJ_A}
-    assert got['c'] == {'file': None, 'consumed': None}
-    # ⚠ `None` 与 `{}` 的分界必须留着：前者 no_provenance，后者 no_inputs
-    assert prov.normalize_inputs(None) is None and prov.normalize_inputs({}) == {}
-
-
-def test_the_corpus_migration_and_the_runtime_share_one_implementation():
-    """⚠ 同一件事的第二个落点必然分家。
-
-    `tests/corpus.py::_migrate_inputs` 与运行时判新鲜度时做的是**同一次换算**
-    （同一批存量字节、同一张 `RESHAPED` 表）。它只许负责定位，换算调运行时那一份。
-    """
-    import inspect
-
-    from tests import corpus
-    assert 'normalize_inputs' in inspect.getsource(corpus._migrate_inputs), \
-        '迁移 helper 又自己写了一份换算——它会与 `prov.normalize_inputs` 分家'
 
 
 def test_every_reason_in_the_enum_is_reachable():

@@ -54,16 +54,11 @@ _INVALID = paths.invalid_of(REL)
 # 本节点的 consumed 投影统一登记在 `novel.consumption`；读写与 freshness 共用同一函数。
 
 
-def _upstreams(store: ArtifactStore) -> tuple[MainText, HookCopy, GlobalGrounding | None]:
-    """三份上游。
-
-    旧产物复检允许第三份缺失，此时 `name_leak` 诚实落 `unver`；生产抽取
-    必须拿它构造脱敏表，缺失由 `build_chapter_prompts` 显式拒绝。
-    """
+def _upstreams(store: ArtifactStore) -> tuple[MainText, HookCopy, GlobalGrounding]:
+    """读取当前契约要求的三份上游。"""
     main = store.read(MainText, MAIN_TEXT)
     hook = store.read(HookCopy, HOOK_COPY)
-    gg = (store.read(GlobalGrounding, GLOBAL_GROUNDING)
-          if store.exists(GLOBAL_GROUNDING) else None)
+    gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
     return main, hook, gg
 
 
@@ -82,15 +77,14 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     main, hook, gg = _upstreams(store)
     _artifact, data = store.read_own(StyleGrounding, judged)
 
-    names = names_of(gg) if gg is not None else None
+    names = names_of(gg)
     outcomes = checks.check(
         data,
         corpus=corpus_of(main, hook),
         names=names,
-        spoiler_names=spoiler_names_of(gg, names) if gg is not None and names else frozenset(),
+        spoiler_names=spoiler_names_of(gg, names) if names else frozenset(),
         measured_now=measure_all(main, hook),
         expected_chapters=tuple(section.chapter_ordinal for section in main.root),
-        require_chapter_styles=_requires_chapter_styles(data),
     )
     prov = data.get('_provenance') or {}
     return build(
@@ -115,28 +109,12 @@ def _accounting_of(prov: dict) -> dict:
     return {k: prov[k] for k in ('attempts', 'revalidated', 'gates_skipped') if k in prov}
 
 
-def _requires_chapter_styles(data: dict) -> bool:
-    """现役逐章产物严格覆盖；旧全书产物仅保留只读兼容。"""
-    prompt_keys = set((((data.get('_provenance') or {}).get('prompts') or {})))
-    # 清理前全书抽取只记录这一枚 prompt key；它不是可选生产路径，
-    # 仅是让历史正式产物还能复检/迁移的格式签名。
-    legacy_prompt_key = 'STYLE_' + 'SYS'
-    is_legacy_full_book = (
-        legacy_prompt_key in prompt_keys
-        and 'STYLE_CHAPTER_SYS' not in prompt_keys
-        and not data.get('chapter_styles')
-    )
-    return not is_legacy_full_book
-
-
 # ── 付费路 ──────────────────────────────────────────────────────────────────
 #
 # 付费预览与执行共用以下构造口；是否允许付费由 CLI 的 `--yes` 契约统一控制。
 
-def _redaction_terms(gg: GlobalGrounding | None) -> frozenset[str]:
+def _redaction_terms(gg: GlobalGrounding) -> frozenset[str]:
     """抽取专名表比告警名表更激进：脱敏宁可多，不向逐章风格模型泄漏。"""
-    if gg is None:
-        return frozenset()
     return frozenset(
         s for char in gg.entities.characters.values()
         for s in ([char.canonical] + [a.surface for a in char.address])
@@ -234,10 +212,6 @@ def build_chapter_prompts(ctx: RunContext
     """生产输入面：一个请求只含一个源章。"""
     store = ArtifactStore(ctx)
     main, hook, gg = _upstreams(store)
-    if gg is None:
-        raise UpstreamMissing(
-            '逐章风格抽取需要 stage2/global_grounding.json 先落盘，'
-            '否则无法用专名表脱敏当前章，不能把“没有检查材料”当成防泄露')
     meas = measure_all(main, hook)
     terms = _redaction_terms(gg) | frozenset({ctx.title})
     system = prompts.chapter_style_system()
@@ -248,7 +222,7 @@ def build_chapter_prompts(ctx: RunContext
              chapter_text=prompts.redact_style_entities(section.text, terms)))
         for section in main.root
     ]
-    output_surfaces = names_of(gg) if gg is not None else frozenset()
+    output_surfaces = names_of(gg)
     return (system, users, meas,
             prompts.redact_style_entities((hook.text or '').strip(), terms),
             output_surfaces)
@@ -575,15 +549,13 @@ def _judge(store: ArtifactStore, data: dict, *, measured_now: Measurable | None)
     """判据的**唯一调度点**：付费路的落盘闸门与 `--check-only` 走同一条。"""
     main = store.read(MainText, MAIN_TEXT)
     hook = store.read(HookCopy, HOOK_COPY)
-    gg = (store.read(GlobalGrounding, GLOBAL_GROUNDING)
-          if store.exists(GLOBAL_GROUNDING) else None)
-    names = names_of(gg) if gg is not None else None
+    gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
+    names = names_of(gg)
     return checks.check(
         data, corpus=corpus_of(main, hook), names=names,
-        spoiler_names=spoiler_names_of(gg, names) if gg is not None and names else frozenset(),
+        spoiler_names=spoiler_names_of(gg, names) if names else frozenset(),
         measured_now=measured_now,
-        expected_chapters=tuple(section.chapter_ordinal for section in main.root),
-        require_chapter_styles=_requires_chapter_styles(data))
+        expected_chapters=tuple(section.chapter_ordinal for section in main.root))
 
 
 def remeasured(ctx: RunContext) -> tuple[StyleGrounding, list[tuple[str, object, object]]]:
@@ -703,12 +675,13 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
 
     main, hook, gg = _upstreams(store)
     _cand, data = store.read_own(StyleGrounding, _INVALID)
-    names = names_of(gg) if gg is not None else None
+    names = names_of(gg)
     outcomes = checks.check(
         data, corpus=corpus_of(main, hook), names=names,
-        spoiler_names=spoiler_names_of(gg, names) if gg is not None and names else frozenset(),
+        spoiler_names=spoiler_names_of(gg, names) if names else frozenset(),
         # 恒算漂移：这一份是当初付费那次产的，它的 `measurable` 可能已经跟不上 stage1 了。
-        measured_now=measure_all(main, hook))
+        measured_now=measure_all(main, hook),
+        expected_chapters=tuple(section.chapter_ordinal for section in main.root))
 
     prov = data.get('_provenance') or {}
     promoted = not _hard_rules(outcomes)

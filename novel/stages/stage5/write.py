@@ -158,10 +158,10 @@ def _chapter_record(entry: dict[str, Any], text: str, book: M.Book, *, mode: str
     """一份成稿。**正式稿与 `.INVALID` 共用这一份章契约**——状态由文件名区分。"""
     return Chapter(
         output_ordinal=int(entry['output_ordinal']),
-        from_source_ordinals=list(entry.get('from_source_ordinals') or []),
+        from_source_ordinals=list(entry['from_source_ordinals']),
         mode=mode,
-        source_chars=int(entry.get('source_chars') or 0),
-        budget_chars=entry.get('budget_chars'),
+        source_chars=int(entry['source_chars']),
+        budget_chars=int(entry['budget_chars']),
         chars=M.chars_of(text),
         overlap_excl_verbatim=M.overlap_ratio(text, entry, book.source_text),
         text=text,
@@ -241,8 +241,6 @@ def _trim_to_fit(client: LlmClient, text: str, entry: dict[str, Any], book: M.Bo
     这句话在 prompt 里没有任何约束力——**收缩就是那个真的门**。
     """
     band = M.target_range(entry)
-    if band is None:
-        return text, []
     notes: list[str] = []
     for i in range(TRIM_ROUNDS):
         if M.chars_of(text) <= band[1]:
@@ -806,14 +804,10 @@ def assemble_book(ctx: RunContext, store: ArtifactStore, book: M.Book) -> str:
             f'删掉不要的那一份，或用 `--chapters` 明确重跑一条臂')
     planned = sorted(book.chapters)
     missing = [o for o in planned if o not in by_ord]
-    mixed = [o for o, recs in by_ord.items() if recs[0].get('budget_chars') is None]
     n_deep = sum(1 for recs in by_ord.values() if recs[0]['_mode'] == 'deep')
     n_shallow = len(by_ord) - n_deep
 
     head = [f'# 重构稿（{len(by_ord)}/{len(planned)} 章：deep {n_deep} · shallow {n_shallow}）']
-    if mixed and len(mixed) != len(by_ord):
-        head.append(f'> ⚠ 第 {sorted(mixed)} 章是**旧契约**下写的（没有 `budget_chars`），'
-                    f'与其余章混在一本里')
     if missing:
         head.append(f'> ⚠ 计划里的第 {missing} 章**两条臂都没有成稿**')
     parts = ['\n'.join(head)]

@@ -30,7 +30,6 @@ from collections.abc import Callable, Sequence
 from contracts.invariants import (
     FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS,
 )
-from contracts.rules import PORTED_STAGES
 from novel.cli import exit_codes as X
 from novel.errors import (
     ApprovalRequired, RefusedByStructure, RunModeNotImplemented, TerminalState,
@@ -126,51 +125,25 @@ def _flags_of(a: argparse.Namespace) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
-    """`stage` → 它的跑法派发。**全模块唯一一份**，`_dispatch` 与 `runnable_stages` 都读它。
-
-    ⚠⚠ **这里曾经是一句硬编码的 `return _run_stage3(ctx, flags)`**，位置在
-    `PORTED_STAGES` 那道闸**之后**——于是移植第二层的那一刻，
-    `run stage6.hook --check-only` 会安静地去跑 stage3 的实现、读
-    `stage3/style_grounding.json`，报出一份**属于另一层的报告**。
-    而它当时没有任何测试钉着：`test_an_unported_node_is_a_terminal_state_not_a_stack`
-    只参数化**未移植**的层 ⇒ **移植一层反而让覆盖面缩小**，漏改的那一次没人出声。
-
-    ⇒ 改成查表，形态**照抄 `novel/stages/__init__.py::_checkers()`**
-    ——同一个问题在复检那一侧早就解对了，这里只是把它抄回来。
-    """
+    """`stage` → 跑法派发。`_dispatch` 与 `runnable_stages` 共用这一张当前表。"""
     return {'stage0': _run_stage0, 'stage1': _run_stage1, 'stage2': _run_stage2,
             'stage3': _run_stage3, 'stage4': _run_stage4, 'stage5': _run_stage5,
             'stage6': _run_stage6, 'stage7': _run_stage7}
 
 
 def runnable_stages() -> frozenset[str]:
-    """本表覆盖了哪几层。**从同一份 `_runners()` 派生**，不另抄一份清单。
-
-    用途只有一个：让测试拿它与 `PORTED_STAGES` **两侧夹死**（多一层、少一层都红），
-    形态照抄 `novel/stages/__init__.py::checkable_stages()`。
-    """
+    """本表覆盖的当前阶段；从 `_runners()` 派生，不另抄清单。"""
     return frozenset(_runners())
 
 
 def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
-    """跑一个节点。**跑不动的落显式终态，不是一段栈。**
-
-    ⚠⚠ **这里从前有两道闸，F5-5 之后只剩一道**（同 `novel/stages/__init__.py::check_only`）。
-    第一道是 `stage not in PORTED_STAGES ⇒ NodeNotPorted`——stage2 是最后一层，
-    它一进 `PORTED_STAGES`，那道闸**结构上再也触发不了** ⇒ 退役
-    （2026-08-12 用户裁决）。**取值面一格没少**：`NODES` 现有 17 个节点、
-    `/api/enums` 照旧发得出全部取值；掉的只是那个运行时状态。
-
-    剩下的这一道：**在 `PORTED_STAGES` 里而 `_runners()` 没有 ⇒ 两张表分家了。**
-    那不是「还没移植」，是「说自己移植了却没有跑法」，报错要说出这一点。
-    """
+    """跑一个当前节点；缺少阶段接线时落显式终态。"""
     stage = NODES[node].stage
     run = _runners().get(stage)
     if run is None:
         raise RunModeNotImplemented(
-            f'{stage} 在 `contracts.rules.PORTED_STAGES` 里，而 '
-            f'`novel/cli/main.py::_runners` 没有它的跑法派发——**两张表分家了**。'
-            f'移植一层要同时改这两处')
+            f'{stage} 属于当前 Stage0–Stage7 契约，但 '
+            f'`novel/cli/main.py::_runners` 没有它的跑法派发')
     return run(ctx, flags)
 
 
@@ -490,17 +463,12 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             print('  ✓ 已提升为正式全局底座（0 成本）' if promoted
                   else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
             return X.OK if promoted else X.CHECK_FAILED
-        if '--drop' in tokens:
-            raw = _valued(flags, '--drop') or ''
-            if '=' not in raw:
-                raise TerminalState('--drop 的值必须是 <secret_xx|rel_xx>=<理由>，理由不能为空')
-            target, reason = raw.split('=', 1)
-            return _fail(extract.run_drop(ctx, target=target.strip(),
-                                          reason=reason.strip()))
-        if '--migrate' in tokens:
-            return _fail(extract.run_migrate(ctx))
+        if '--renormalize' in tokens:
+            return _report_exit(extract.run_renormalize(ctx))
         if '--purge-role' in tokens:
-            return _fail(extract.run_purge_role(ctx, _llm_client(ctx)))
+            extract.run_purge_role(ctx, _llm_client(ctx))
+            print('  ✓ stage2 role/fate 已重划并落盘')
+            return X.OK
         extract.run_global(ctx, _llm_client(ctx))
         print('  ✓ stage2 全书事实底座已落盘')
         return X.OK
@@ -518,37 +486,15 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
-    if '--apply-edit' in tokens:
-        report = extract.run_apply_edit(ctx)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
     chapters = _chapters_of(_valued(flags, '--chapters'))
 
-    if '--replay-cache' in tokens:
-        if len(chapters) != 1:
-            raise TerminalState(
-                '--replay-cache 必须同时用 --chapters 指定且只指定一章；'
-                '一个缓存 key 不能认领多章输出')
-        raise RunModeNotImplemented(
-            'stage2.blueprint --replay-cache 已在发请求之前安全截断，当前不会触网。'
-            '完整回放仍缺 artifact 契约：Repair.cache_policy 没有 replay-standard，'
-            '也没有 source_cache_key/source_cache_usage 的落点；'
-            '在补齐这组 schema 前拒绝伪装成 refresh-write')
-
-    if tokens & {'--prompt-only', '--dry-run'}:
+    if '--prompt-only' in tokens:
         system, user = extract.build_prompt(ctx, chapters=chapters)
-        if '--prompt-only' in tokens:
-            # ⚠ **`--prompt-only` 只量体量**（原型的语义），`--dry-run` 才摊开字节。
-            #   本层的 user 里带着**全书原文**，摊开是几万字——两条路答的是不同的问题。
-            print(f'── 抽取 prompt 体量 ── system {len(system)} 字 · user {len(user)} 字')
-            return X.OK
-        print(f'── system（{len(system)} 字）──\n{system}')
-        print(f'\n── user（{len(user)} 字）──\n{user}')
+        print(f'── 抽取 prompt 体量 ── system {len(system)} 字 · user {len(user)} 字')
         return X.OK
 
-    if '--migrate' in tokens:
-        return _fail(extract.run_migrate(ctx))
+    if '--renormalize' in tokens:
+        return _report_exit(extract.run_renormalize(ctx))
     if chapters:
         from novel.llm.cache import CachePolicy
         ctx.cache = CachePolicy.refresh()
@@ -573,13 +519,13 @@ def _chapters_of(raw: str | None) -> tuple[int, ...]:
     return tuple(sorted(set(got)))
 
 
-def _fail(report_or_none: object) -> int:
-    """兼容返回报告或纯产物的 Stage2 辅助动作。"""
+def _report_exit(report: object) -> int:
+    """渲染校验报告并按判定返回退出码。"""
     from contracts.schema.report import CheckReport
-    if isinstance(report_or_none, CheckReport):
-        print(render(report_or_none))
-        return X.OK if report_or_none.passed else X.CHECK_FAILED
-    return X.OK
+    if not isinstance(report, CheckReport):
+        raise TypeError(f'expected CheckReport, got {type(report).__name__}')
+    print(render(report))
+    return X.OK if report.passed else X.CHECK_FAILED
 
 
 def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
@@ -587,8 +533,7 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
 
     ⚠ **一个 stage 两个节点**（`stage4.plan` 付费 / `stage4.context` 0 成本），
     形态同 stage7 那次：派发按 **stage** 分，节点由 `ctx.node` 带着 ⇒ 先按节点分岔。
-    ⚠ `stage4.context` 的 `flags=()` 是**终态**：它**本身**就是那个动作
-    （原型的 `--context-only` 已作为 flag 退役，见 `SUPERSEDED_FREE_ENTRIES`）。
+    ⚠ `stage4.context` 的 `flags=()` 是终态：它本身就是那个动作。
     """
     from novel.stages.stage4 import plan
 
