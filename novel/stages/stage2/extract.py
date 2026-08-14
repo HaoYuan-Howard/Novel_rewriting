@@ -67,7 +67,7 @@ from novel.run import RunContext
 from novel.stages.stage2 import checks
 from novel.stages.stage2.normalize import (
     migrate_blueprint_context, normalize_blueprints, normalize_global,
-    resolve_character_refs, response_shape,
+    past_attested_surfaces, resolve_character_refs, response_shape,
 )
 from novel.store import ArtifactStore
 
@@ -82,8 +82,14 @@ _GLOBAL_INVALID = paths.invalid_of(GLOBAL_REL)
 GLOBAL_MAX_TOKENS = 96_000
 BLUEPRINT_MAX_TOKENS = 256_000
 ROLE_MAX_TOKENS = 32_000
+#: 三个 v2 上下文预算（2026-08-14 用 167 本语料 2612 章实测标定，脚本不入仓）：
+#: 4000 字邻章尾窗对 99.5% 的章是整章（章长 P50=795 / P90=1422 / P99=2695；
+#: 收到 2000 只剩 97.2%，不值得省）；1600/240 尾摘只够 ~7 个更早章、86.8% 的书
+#: 盖不全更早章——**这是设计而非缺口**，更早章的名字连续性由已现称名表接住；
+#: 600 字称名表预算对三本真书末章实测 46–195 字，约 3 倍余量。
 PAST_NEIGHBOR_CHARS_MAX = 4_000
 CONTINUITY_CHARS_MAX = 1_600
+PAST_NAMES_CHARS_MAX = 600
 
 
 class _ScopeViolationRow(StrictModel):
@@ -312,8 +318,14 @@ def build_prompts(
     missing = sorted(set(targets) - set(ordinals))
     if missing:
         raise TerminalState(f'--chapters 不在正文阅读序里：{missing}')
+    if not store.exists(GLOBAL_REL):
+        raise UpstreamMissing(
+            f'{GLOBAL_REL} 不在盘上——已现称名表由全局名册派生，先跑 stage2.global')
+    characters = store.read(GlobalGrounding, GLOBAL_REL) \
+        .model_dump(by_alias=True)['entities']['characters']
     system = with_json_shape(prompts.BLUEPRINT_SYS, prompts.BLUEPRINT_HINT)
-    return [(o, system, build_blueprint_user(ctx.title, ctx.sid, mt, (o,)))
+    return [(o, system,
+             build_blueprint_user(ctx.title, ctx.sid, mt, (o,), characters=characters))
             for o in targets]
 
 
@@ -322,7 +334,8 @@ def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[st
 
     ⚠ 它与付费路**共用同一个构造入口**（`R-11.8`）——否则「预览里看到的」与
     「真发出去的」是两件事，而那种分家没有任何东西会报错。
-    ⚠ global 的 `user` 带全书原文；blueprint 只带稳定索引、当前章全文与有界过去窗口。
+    ⚠ global 的 `user` 带全书原文；blueprint 只带稳定索引、当前章全文、有界过去窗口
+    与已现称名表（后者由全局名册派生 ⇒ blueprint 的预览也要求 `stage2.global` 先在盘上）。
     预览与付费路共用同一个构造入口，因此这里看到的边界就是真实模型可见边界。
     """
     _ordinal, system, user = build_prompts(ctx, chapters=chapters)[0]
@@ -330,21 +343,23 @@ def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[st
 
 
 def _chapter_index(main_text: list[dict[str, Any]]) -> str:
-    """章节索引 —— **一切对章的引用用阅读序章号**。"""
+    """章节索引 —— **一切对章的引用用阅读序章号**。
+
+    ⚠ 已登记的分家：`BLUEPRINT_SYS`（prompts.py，字节冻结）说索引里有
+    「阅读序第N章」字样，而这里产的是「第N章（原文标号 X）」——该字样实际由
+    「本次任务范围」块承载（`build_blueprint_user` 的 scope 行），fake transport
+    也解析的是那一处。SYS 逐字节钉死不修；改这条格式前先读 prompts.py 头部警告。
+    """
     return '\n'.join(f'第{s.get("chapter_ordinal")}章（原文标号 {s.get("source_chapter_label")}）'
                      f' {len(s.get("text") or "")} 字' for s in main_text)
 
 
-def _book_text(main_text: list[dict[str, Any]], upto: int | None = None) -> str:
-    """正文块 —— **不可变原文，按阅读序章号分块**。
-
-    `upto` 非 `None` 时只切到该章为止。⚠⚠ **逐章收窄是本层的默认且没有旋钮**：
-    它是「`event` 面的跨章引用」那条**唯一**的解法（两种通用检测都已证伪，
-    见 `docs/schema/stage2.md` §六）。
+def _book_text(main_text: list[dict[str, Any]]) -> str:
+    """正文块 —— **不可变原文，按阅读序章号分块**。只有 global 那一相整本下发；
+    blueprint 侧的过去窗口化在 `_bounded_past`（`docs/schema/stage2.md` §六）。
     """
     return '\n\n'.join(f'【第{s.get("chapter_ordinal")}章】\n{s.get("text") or ""}'
-                       for s in main_text
-                       if upto is None or (s.get('chapter_ordinal') or 0) <= upto)
+                       for s in main_text)
 
 
 def _blueprint_stable_prefix(title: str, main_text: list[dict[str, Any]]) -> str:
@@ -383,6 +398,24 @@ def _bounded_past(main_text: list[dict[str, Any]], ordinal: int) -> tuple[str, s
     return neighbor_text, '\n'.join(reversed(rows))
 
 
+def _past_names_block(names: list[str]) -> str:
+    """已现称名清单 → user 里的一个块；超预算按首现先后保留、砍尾。"""
+    rows: list[str] = []
+    used = 0
+    for name in names:
+        cost = len(name) + (1 if rows else 0)
+        if used + cost > PAST_NAMES_CHARS_MAX:
+            break
+        rows.append(name)
+        used += cost
+    if not rows:
+        return '── 此前章节已出现的称名 ──\n无（此前正文未出现名册称名）'
+    return ('── 此前章节已出现的称名（代码派生，仅过去）──\n'
+            '以下称名在此前章节的正文里出现过。判断「到目前为止的正文里出现过没有」时'
+            '可据此认定；既不在此清单、也不在已给出正文里出现过的名字，仍然一个都不许用。\n'
+            + '、'.join(rows))
+
+
 def blueprint_context(title: str, main_text: list[dict[str, Any]]) -> dict[str, Any]:
     """可落盘、可比较的 v2 上下文策略身份。"""
     return {
@@ -393,6 +426,7 @@ def blueprint_context(title: str, main_text: list[dict[str, Any]]) -> dict[str, 
         'future_visible': False,
         'past_neighbor_chars_max': PAST_NEIGHBOR_CHARS_MAX,
         'continuity_chars_max': CONTINUITY_CHARS_MAX,
+        'past_names_chars_max': PAST_NAMES_CHARS_MAX,
     }
 
 
@@ -407,15 +441,23 @@ def build_global_user(title: str, sid: str, main_text: list[dict[str, Any]]) -> 
 
 def build_blueprint_user(title: str, sid: str, main_text: list[dict[str, Any]],
                          targets: tuple[int, ...], *,
+                         characters: dict[str, dict[str, Any]],
                          repair_findings: list[dict[str, str]] | None = None,
                          repair_baseline: dict[str, Any] | None = None) -> str:
     """逐章那一相的 user。
 
-    ⚠⚠ **这里没有人物表**：`char_id` 反转之后抽取器不引用任何全局编号，
+    ⚠⚠ **这里仍然没有人物表**：`char_id` 反转之后抽取器不引用任何全局编号，
     所以 global 整份不下发。这不只是省输入——**人物表本身带着未来**
     （`char_001.address` 里那个名字可能要到 ch4 才在原文首现，而这份表被喂给了抽 ch1 的那次调用）
     ⇒ 只收窄正文修不掉 `event_early_name`，「收窄上下文」与「去掉 global 依赖」
     是同一个根因的两条腿。
+
+    `characters` 只用来派生**已现称名表**（`past_attested_surfaces`）：清单里每个
+    字面都经过「第 1..N-1 章原文子串命中」过滤，未来性被代码剥掉了，上面那条否决
+    理由对它不成立。v2 窗口化之后模型看不全前文，「到目前为止出现过没有」这条判据
+    由这份清单代为作证——不下发它，窗外首现的名字只能保守漏报。
+    `characters` 是必填参数而非默认 `None`：默认省略会让某条调用路静默丢掉这个块，
+    而整跑与定向重生成的 user 必须同构（context 身份只有一个）。
     """
     scope = '、'.join(f'阅读序第{o}章' for o in targets)
     ordinal = max(targets)
@@ -423,12 +465,14 @@ def build_blueprint_user(title: str, sid: str, main_text: list[dict[str, Any]],
         str(section.get('text') or '') for section in main_text
         if int(section.get('chapter_ordinal') or 0) == ordinal)
     neighbor, continuity = _bounded_past(main_text, ordinal)
+    past_names = past_attested_surfaces(characters, main_text).get(ordinal) or []
     parts = [
         _blueprint_stable_prefix(title, main_text),
         ('── 滚动连续性状态（仅过去、摘要窗口）──\n' + continuity)
         if continuity else '── 滚动连续性状态 ──\n无（当前为早期章节）',
         ('── 相邻原文窗口（仅过去）──\n' + neighbor)
         if neighbor else '── 相邻原文窗口 ──\n无（当前为第一章）',
+        _past_names_block(past_names),
         f'── 当前章全文（不可裁剪）──\n【第{ordinal}章】\n{current}',
         '── 本次任务范围 ──\n只产出以下章的 blueprint'
         '（按此顺序，范围外的章一律不要产出）：\n' + scope,
@@ -892,6 +936,7 @@ def _run_blueprint_repair(
         findings = _repair_findings(before_outcomes, ordinal)
         user = build_blueprint_user(
             ctx.title, ctx.sid, main_text, (ordinal,),
+            characters=global_raw['entities']['characters'],
             repair_findings=findings,
             repair_baseline=_repair_baseline(old_by[ordinal]),
         )

@@ -392,14 +392,27 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
     for ordinal in range(1, 7):
         text = (f'BEGIN-{ordinal}|' + chr(64 + ordinal) * 4_800
                 + f'|TAIL-{ordinal}')
+        if ordinal == 2:
+            # 章首首现的名字：既进不了相邻尾窗也进不了尾摘，只有已现称名表带得进 user。
+            text = '甲乙抱着包裹进了城。' + text
+        if ordinal == 6:
+            # 未来章才首现的名字：不许经名册绕过「未来不可见」。
+            text = '丙丁掀帘进来。' + text
         sections.append({
             'section_id': f'sec_{ordinal:04d}',
             'chapter_ordinal': ordinal,
             'source_chapter_label': str(ordinal),
             'text': text,
         })
+    characters = {
+        'char_001': {'canonical': '甲乙',
+                     'address': [{'surface': '甲乙', 'by': 'narration',
+                                  'context': 'reference', 'from_chapter': 2}]},
+        'char_002': {'canonical': '丙丁', 'address': []},
+    }
 
-    user = extract.build_blueprint_user('边界测试', 'private-id', sections, (5,))
+    user = extract.build_blueprint_user('边界测试', 'private-id', sections, (5,),
+                                        characters=characters)
     prefix = extract._blueprint_stable_prefix('边界测试', sections)
 
     assert user.startswith(prefix)
@@ -408,6 +421,15 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
     assert 'private-id' not in user
     assert 'BEGIN-4' not in user and 'TAIL-4' in user
     assert 'BEGIN-3' not in user and 'TAIL-3' in user
+    assert '此前章节已出现的称名（代码派生，仅过去）' in user
+    assert '甲乙' in user
+    assert '丙丁' not in user
+    first = extract.build_blueprint_user('边界测试', 'private-id', sections, (1,),
+                                         characters=characters)
+    assert '无（此前正文未出现名册称名）' in first
+    assert '甲乙' not in first
+    block = extract._past_names_block(['名' * 300, '姓' * 300])
+    assert '名' * 300 in block and '姓' not in block
     neighbor, continuity = extract._bounded_past(sections, 5)
     assert len(neighbor.split('\n', 1)[1]) == extract.PAST_NEIGHBOR_CHARS_MAX
     assert len(continuity) <= extract.CONTINUITY_CHARS_MAX
@@ -420,6 +442,17 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
     context = extract.blueprint_context('边界测试', sections)
     assert context['stable_prefix'] == extract.prov.fingerprint(prefix)
     assert context['future_visible'] is False
+    assert context['past_names_chars_max'] == extract.PAST_NAMES_CHARS_MAX
+
+
+def test_past_attested_surfaces_only_hand_out_past_attested_forms():
+    from novel.stages.stage2.normalize import past_attested_surfaces
+    table = past_attested_surfaces(
+        global_grounding()['entities']['characters'], main_text())
+    assert table[1] == []
+    assert table[2] == ['李宝珠']
+    # 「沈母」只是 canonical、正文里从未出现过 ⇒ 不进清单；「母亲」按首现先后排在后面。
+    assert table[3] == ['李宝珠', '母亲']
 
 
 def test_stage2_blueprint_migrates_legacy_locators_without_llm():

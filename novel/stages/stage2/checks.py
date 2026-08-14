@@ -1218,7 +1218,8 @@ def _context_observation(context: dict[str, Any]) -> tuple[str, list[str]]:
         f'stable_prefix={context.get("stable_prefix")} · current_full={current_full} · '
         f'future_visible={future_visible} · '
         f'past_neighbor≤{context.get("past_neighbor_chars_max")} 字 · '
-        f'continuity≤{context.get("continuity_chars_max")} 字 —— {verdict}'
+        f'continuity≤{context.get("continuity_chars_max")} 字 · '
+        f'past_names≤{context.get("past_names_chars_max")} 字 —— {verdict}'
     )
     evidence = [
         str(architecture),
@@ -1227,6 +1228,7 @@ def _context_observation(context: dict[str, Any]) -> tuple[str, list[str]]:
         f'future_visible={future_visible}',
         f'past_neighbor={context.get("past_neighbor_chars_max")}',
         f'continuity={context.get("continuity_chars_max")}',
+        f'past_names={context.get("past_names_chars_max")}',
     ]
     return detail, evidence
 

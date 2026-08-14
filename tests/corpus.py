@@ -397,7 +397,8 @@ RESHAPED: dict[str, str] = {
     ),
     'stage2 context cumulative-v1 → bounded-fidelity-v2 contract': (
         '旧 provenance 只有 batch_size/context_upto；内存迁移诚实标为 cumulative-past-v1。'
-        '新产物另记稳定前缀指纹、当前章完整性、未来可见性与两个过去窗口上限。'
+        '新产物另记稳定前缀指纹、当前章完整性、未来可见性与三个上下文预算上限'
+        '（相邻尾窗 / 连续性尾摘 / 已现称名表）。'
     ),
     '_provenance.inputs': (
         '盘上 **297 条边全部是扁平的 10 位字符串**；新契约一条边是 `{file, consumed}`。'

@@ -192,6 +192,43 @@ def _cumulative_text(main_text: list[dict[str, Any]]) \
     return text_of, cumulative, whole
 
 
+def past_attested_surfaces(characters: dict[str, dict[str, Any]] | None,
+                           main_text: list[dict[str, Any]]) -> dict[int, list[str]]:
+    """`{阅读序章号: 此前章节正文里已出现过的名册称名}` —— **只含过去，无未来**。
+
+    bounded-fidelity-v2 把模型可见的前文收窄到窗口与尾摘之后，prompt 里
+    「到目前为止的正文里出现过没有」这条判据模型就自证不了了（名字可能首现在
+    窗口外）。这份清单把「已现与否」的判定收回代码侧：字面取自 registry
+    （canonical 剥区分词 + 全部 `address[].surface`，与 `surface_owners` 同一套
+    取值面），**出现性按第 1..N-1 章原文的 `norm` 子串命中判**——首现在本章
+    及以后的字面一律不进清单，所以它不带任何未来（对比 `extract.build_blueprint_user`
+    docstring 里 global 整份不下发的理由）。
+
+    ⚠ 与 `checks._Ctx.first_seen` 是同一把 `norm` 子串尺子，但形状不同不合并：
+    那边问「这些字面最早出现在第几章」（逐章扫描找最早），这边问「到上一章为止
+    出现过哪些字面」（逐章给清单）。
+    ⚠ `norm` 是纯逐字符过滤 ⇒ `norm(a + '\\n' + b) == norm(a) + norm(b)`，
+    这里按章增量拼接与 checks 侧「先 '\\n'.join 再 norm」逐字节等价。
+    """
+    inventory: dict[str, str] = {}
+    for char in (characters or {}).values():
+        names = [strip_distinguisher(str((char or {}).get('canonical') or ''))]
+        names += [str((a or {}).get('surface') or '').strip()
+                  for a in ((char or {}).get('address') or [])]
+        for name in names:
+            key = norm(name)
+            if key and key not in inventory:
+                inventory[key] = name.strip()
+    out: dict[int, list[str]] = {}
+    past = ''
+    for section in main_text:
+        hits = sorted((past.find(key), key) for key in inventory if key in past)
+        out[int(section.get('chapter_ordinal') or 0)] = \
+            [inventory[key] for _pos, key in hits]
+        past += norm(str(section.get('text') or ''))
+    return out
+
+
 def resolve_character_refs(blueprints: list[dict[str, Any]],
                            main_text: list[dict[str, Any]],
                            characters: dict[str, dict[str, Any]]) -> dict[str, int]:
@@ -482,6 +519,7 @@ def migrate_blueprint_context(context: Any) -> dict[str, Any]:
         'future_visible': not bool(value.get('context_upto', True)),
         'past_neighbor_chars_max': None,
         'continuity_chars_max': None,
+        'past_names_chars_max': None,
     }
 
 

@@ -676,7 +676,12 @@ class LegacyBlueprintContext(StrictModel):
 
 
 class BlueprintContext(StrictModel):
-    """蓝图调用的模型可见边界；v2 明确记录前缀身份与两个历史窗口上限。"""
+    """蓝图调用的模型可见边界；v2 明确记录前缀身份与三个上下文预算上限。
+
+    ⚠ `past_names_chars_max`（已现称名表预算）是 2026-08-14 对 v2 的**原位修订**，
+    没有另立 v3：修订时盘上不存在任何 v2 产物（三本 e2e 全是 v1），
+    「同名不同义」的歧义在实际产物集上构造不出来。
+    """
 
     architecture: Literal['cumulative-past-v1', 'bounded-fidelity-v2']
     batch_size: int = Field(ge=1)
@@ -685,6 +690,10 @@ class BlueprintContext(StrictModel):
     future_visible: bool
     past_neighbor_chars_max: int | None
     continuity_chars_max: int | None
+
+    #: 默认 `None` 是为了**原样读回存量 v1 产物**（它们落盘时还没有这个键）；
+    #: v2 由下面的校验器强制非 None，产地漏写会在落盘时当场被拒。
+    past_names_chars_max: int | None = None
 
     @model_validator(mode='after')
     def _architecture_fields_agree(self) -> BlueprintContext:
@@ -699,11 +708,14 @@ class BlueprintContext(StrictModel):
                 raise ValueError('v2 requires a past-neighbor limit')
             if self.continuity_chars_max is None:
                 raise ValueError('v2 requires a continuity limit')
-            if self.past_neighbor_chars_max < 0 or self.continuity_chars_max < 0:
+            if self.past_names_chars_max is None:
+                raise ValueError('v2 requires a past-names limit')
+            if (self.past_neighbor_chars_max < 0 or self.continuity_chars_max < 0
+                    or self.past_names_chars_max < 0):
                 raise ValueError('v2 context limits must be non-negative')
         elif any(value is not None for value in (
                 self.stable_prefix, self.past_neighbor_chars_max,
-                self.continuity_chars_max)):
+                self.continuity_chars_max, self.past_names_chars_max)):
             raise ValueError('v1 cannot claim v2 context metadata')
         return self
 
