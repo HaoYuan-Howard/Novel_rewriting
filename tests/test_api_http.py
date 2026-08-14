@@ -287,8 +287,8 @@ def _surface(app) -> dict[str, list[str]]:
             if p.startswith('/api/')}
 
 
-def test_the_published_surface_is_exactly_the_stage01_surface(app):
-    """⭐ 基础端点与 Stage 0/1 的公开接口面写死在这里。
+def test_the_published_surface_is_exactly_the_current_surface(app):
+    """⭐ 公开接口面写死在这里（基础端点 + Stage 0/1 + 第二阶段读屏）。
 
     ⚠ 路由表的唯一落点是 `docs/design_brief/04_delivery.md` §路由表，
     那张表的标题写着「**固定，不要改**」。本条不复制那张表，它只钉住
@@ -320,6 +320,12 @@ def test_the_published_surface_is_exactly_the_stage01_surface(app):
         '/api/novels/{sid}/approvals/writing': ['POST'],
         '/api/novels/{sid}/approvals/reset': ['POST'],
         '/api/upload': ['POST'],
+        # ── 第二阶段 · 批 1：书级读屏（`tests/test_api_screens.py` 管行为） ──
+        '/api/novels/{sid}/stage2/global': ['GET'],
+        '/api/novels/{sid}/stage6': ['GET'],
+        '/api/novels/{sid}/stage7': ['GET'],
+        '/api/novels/{sid}/stage7/{ordinal}': ['GET'],
+        '/api/novels/{sid}/inbox': ['GET'],
     }
 
 
@@ -348,7 +354,13 @@ def test_the_service_writes_nothing_at_all(client, box):
     before = _tree(box.root)
     for url in ('/api/enums', '/api/novels', f'/api/novels/{box.sid}',
                 f'/api/novels/{box.sid}/stage3/style',
-                f'/api/novels/{box.sid}/check/stage3', '/api/jobs'):
+                f'/api/novels/{box.sid}/check/stage3', '/api/jobs',
+                # 第二阶段读屏（本沙箱里 stage6/7 是 404——404 也不许写一个字节；
+                # 带全量产物的 0 写断言在 `test_api_screens.py`）。
+                f'/api/novels/{box.sid}/stage2/global',
+                f'/api/novels/{box.sid}/stage6',
+                f'/api/novels/{box.sid}/stage7',
+                f'/api/novels/{box.sid}/inbox'):
         client.get(url)
     client.post('/api/jobs/preview',
                 json={'sid': box.sid, 'node': 'stage3.style', 'flags': ['--remeasure']})

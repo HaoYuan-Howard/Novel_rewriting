@@ -21,10 +21,11 @@ from pydantic import ValidationError
 
 from contracts.invariants import HOOK_KEYS, VOICE_KEYS
 from contracts.schema.api import (
-    DriftItem, ErrorBody, HookCopyView, JobList, LogChunk, NovelList, PreviewRequest,
+    DriftItem, ErrorBody, GlobalView, HookCopyView, JobList, LogChunk, NovelList,
+    PreviewRequest,
     Stage0EditRequest, Stage0Segment, Stage0Segments,
     Stage1ChapterRow, Stage1Chapters, Stage1Segment, Stage1Segments,
-    StyleView, UploadResult,
+    Stage6View, Stage7View, StyleView, UploadResult,
 )
 from contracts.schema.stage3 import (
     ChapterCharStats, Measurable, MeasurableBlock, MeasurableBody, PerChapterSentence,
@@ -286,6 +287,7 @@ def test_the_api_models_never_carry_a_verdict():
         StyleView, NovelList, JobList, LogChunk, PreviewRequest, ErrorBody,
         Stage0Segment, Stage0Segments, Stage1Segment, Stage1Segments,
         Stage1ChapterRow, Stage1Chapters, HookCopyView, UploadResult,
+        GlobalView, Stage6View, Stage7View,
     ):
         leaked = verdicts & set(model.model_fields)
         assert not leaked, f'{model.__name__} 带着判定字段 {leaked}——那是第二个判官'
@@ -350,6 +352,35 @@ def test_every_response_model_forbids_extra_fields():
         StyleView, NovelList, JobList, LogChunk, PreviewRequest, ErrorBody,
         Stage0Segment, Stage0Segments, Stage0EditRequest,
         Stage1Segment, Stage1Segments, Stage1ChapterRow, Stage1Chapters,
-        HookCopyView, UploadResult,
+        HookCopyView, UploadResult, GlobalView, Stage6View, Stage7View,
     ):
         assert model.model_config['extra'] == 'forbid', model.__name__
+
+
+# ───────────────────────── 五、三个新读屏模型的后置条件 ─────────────────────────
+
+def test_a_name_ref_that_failed_to_resolve_keeps_the_raw_id():
+    """view 不编名字：解析不动时 `display == raw`，且 `resolved=False` 看得见。"""
+    from contracts.schema.api import NameRef
+    ref = NameRef(raw='char_099', display='char_099', resolved=False)
+    assert ref.display == ref.raw
+    with pytest.raises(ValidationError):
+        NameRef(raw='', display='x', resolved=True)
+
+
+def test_stage7_chapter_block_is_all_or_nothing():
+    """`ordinal` 与 `rows` 同进同出——「问了 :o」与「书级」不许混出一个半吊子。
+
+    ⚠ 用 `model_construct` 骗过必填字段、只让待测的那条后置条件跑——
+    这里测的是校验器本身，不是造一份全须全尾的产物。
+    """
+    base = Stage7View.model_construct()
+    ok = dict(base.__dict__, chapters=[1, 2], ordinal=None, rows=None)
+    Stage7View._chapter_block_is_all_or_nothing(Stage7View.model_construct(**ok))
+    bad = dict(base.__dict__, chapters=[1, 2], ordinal=1, rows=None)
+    with pytest.raises(ValueError):
+        Stage7View._chapter_block_is_all_or_nothing(Stage7View.model_construct(**bad))
+    out_of_range = dict(base.__dict__, chapters=[1, 2], ordinal=9, rows=[])
+    with pytest.raises(ValueError):
+        Stage7View._chapter_block_is_all_or_nothing(
+            Stage7View.model_construct(**out_of_range))

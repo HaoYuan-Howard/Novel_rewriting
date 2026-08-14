@@ -31,10 +31,14 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
+    ADDRESS_CONTEXT,
     APPROVAL_GATES,
     APPROVAL_SEEN,
+    HOOK_APPROACHES,
+    HOOK_APPROVED_APPROACHES,
     HOOK_KEYS,
     INBOX_KIND,
+    NAME_DISTINCTIVENESS,
     NONBODY_KINDS,
     REMOVED_ORIGIN,
     STAGE0_SEGMENT_KINDS,
@@ -42,11 +46,19 @@ from contracts.invariants import (
     VOICE_KEYS,
 )
 from contracts.schema.base import FrozenModel, Sha1, StrictModel
+from contracts.schema.common import Finding
 from contracts.schema.orchestration import (
     Freshness, FreshnessReason, JobRecord, NovelOverview,
 )
 from contracts.schema.stage1 import HookCopy
+from contracts.schema.stage2 import ConflictStage, GlobalProvenance, Setting, WorldRule
 from contracts.schema.stage3 import Measurable, StyleProvenance
+from contracts.schema.stage5 import JudgedDraft
+from contracts.schema.stage6 import HookProvenance, HookSources, Mech
+from contracts.schema.stage7 import (
+    Alias, ApprovedNameMap, BookTxt, ExtraSub, IdentityBaseline,
+    NameMapProvenance, NameMapSources, Residual, StemBaseline,
+)
 
 VoiceKey = Literal[VOICE_KEYS]
 HookKey = Literal[HOOK_KEYS]
@@ -523,6 +535,287 @@ class InboxView(StrictModel):
             got[item.kind] = got.get(item.kind, 0) + 1
         if any(self.counts[k] != got.get(k, 0) for k in self.counts):
             raise ValueError('counts 与 items 的分组计数不一致')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二c、S-05 全局设定（`GET /api/novels/:sid/stage2/global`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class NameRef(FrozenModel):
+    """一个「谁」的引用，view 层已解引用。
+
+    `raw` 是产物里的原始串（`char_052` / `narration` / `public` / `rel_05` / `reader`），
+    `display` 是人能读的那个名字。**解析不动时 `resolved=False` 且 `display == raw`**
+    ——view 不编名字，编出来的名字比一个看得出来的 id 更坏（它看不出来）。
+    """
+
+    raw: str = Field(min_length=1)
+    display: str = Field(min_length=1)
+    resolved: bool
+
+
+class GlobalAddressLine(FrozenModel):
+    """一条称谓（`stage2.Address` 的视图行：`by` 已解引用）。"""
+
+    surface: str = Field(min_length=1)
+    by: NameRef
+    context: Literal[ADDRESS_CONTEXT]
+    from_chapter: int = Field(ge=1)
+
+
+class GlobalCharacterLine(FrozenModel):
+    """一个人（`entities.characters` 的 dict 展平成带 `char_id` 的行）。
+
+    ⚠ **`fate` 全量下发**：剧透遮蔽是前端的纯展示行为（`R-11.13`，四个字段名
+    写在 `PARTIAL_MASK_NOTE` 里），服务端不做第二把尺子。
+    """
+
+    char_id: str = Field(min_length=1)
+    canonical: str = Field(min_length=1)
+    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
+    role: str = Field(min_length=1)
+    fate: str | None
+    address: list[GlobalAddressLine] = Field(min_length=1)
+
+
+class GlobalRelationLine(FrozenModel):
+    """一条有向关系（两端已解引用）。"""
+
+    relation_id: str = Field(min_length=1)
+    subject: NameRef
+    predicate: str = Field(min_length=1)
+    object: NameRef
+    valid_from_chapter: int = Field(ge=1)
+    valid_to_chapter: int | None
+
+
+class GlobalSecretLine(FrozenModel):
+    """一条秘密。⚠ **没有 `reader_knows_by_now`**——那是「相对当前章」的量，
+    而本屏是全书视图，没有「当前章」；揭示章原样给，让人自己对。
+    """
+
+    secret_id: str = Field(min_length=1)
+    fact: str = Field(min_length=1)
+    known_by: list[NameRef] = Field(min_length=1)
+    setup_chapters: list[int]
+    reader_reveal_chapters: list[int] = Field(min_length=1)
+
+
+class ArcTrackLine(FrozenModel):
+    """一条人物弧线（`subject` 已解引用；`char_id` / `reader` / `relation_id` 三类）。"""
+
+    subject: NameRef
+    dimension: str = Field(min_length=1)
+    change_type: str = Field(min_length=1)
+    trajectory: str = Field(min_length=1)
+
+
+class GlobalArcView(StrictModel):
+    """解读层。`climax` / `ending` 全量下发（遮蔽归前端，同 `fate` 那一条）。"""
+
+    conflict_stages: list[ConflictStage] = Field(min_length=1)
+    climax: str = Field(min_length=1)
+    ending: str = Field(min_length=1)
+    arc_tracks: list[ArcTrackLine] = Field(min_length=1)
+
+
+class GlobalView(StrictModel):
+    """`GET /api/novels/:sid/stage2/global`。**S-05 那一屏的全部数据。**
+
+    ⚠ 与 S-06 不同，本屏**没有「左半边」**：stage2 没跑就没有任何东西可看
+    ⇒ 产物不在盘上是 **404**（`UpstreamMissing`），不是 `exists=False` 的 200。
+    ⚠ `setting` 经 `by_alias` 出线，键是那两个固定中文 key（`时代背景` / `世界观`）。
+    """
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+
+    setting: Setting
+    characters: list[GlobalCharacterLine] = Field(min_length=1)
+    relations: list[GlobalRelationLine]
+    world_rules: list[WorldRule]
+    #: 空数组 = 这本书没抽到秘密。**那可能是漏抽了，不是「无」**（探针盲区）。
+    secrets: list[GlobalSecretLine]
+    arc: GlobalArcView
+
+    #: 全屏解引用失败的总数（relations 两端 + secrets.known_by + arc.subject）。
+    #: **读数不是判定**——它是给人看「这份产物里有几个说不出名字的 id」。
+    unresolved_refs: int = Field(ge=0)
+
+    invalid_exists: bool
+    freshness: Freshness
+    reason: FreshnessReason
+    ghosts: list[str] = Field(default_factory=list)
+
+    provenance: GlobalProvenance = Field(alias='_provenance')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二d、S-11 开篇文案（`GET /api/novels/:sid/stage6`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class HookCandidateLine(FrozenModel):
+    """一条候选的视图行。`index` / `chars` / `approved` 是 view 现算的。
+
+    ⚠ **`chars` 必须在 Python 侧走 `measure()` 那把尺子现算**（`stage6.Candidate`
+    裁掉 `chars` 时明写的条件）：同一条候选 `measure()['chars']=253` 而
+    `len(text)=277`——下沉到 JS 的后果是同一页上人会看到两个字数。
+    """
+
+    index: int = Field(ge=1)
+    approach: Literal[HOOK_APPROACHES]
+    chars: int = Field(ge=0)
+    text: str = Field(min_length=1)
+    mech: Mech
+    findings: list[Finding]
+
+    #: 这一条是不是当前定稿（`hook.approved.approach == candidate.approach`）。
+    approved: bool
+
+
+class HookApprovedLine(FrozenModel):
+    """定稿的视图行。`origin` 的取值由 `stage6.ApprovedHook` 收口（恒 `human`），
+    这里不抄第二份 Literal（api.py 纪律 ①）。"""
+
+    approach: Literal[HOOK_APPROVED_APPROACHES]
+    chars: int = Field(ge=0)
+    text: str = Field(min_length=1)
+    origin: str = Field(min_length=1)
+    mech: Mech
+    findings: list[Finding]
+
+
+class Stage6View(StrictModel):
+    """`GET /api/novels/:sid/stage6`。**S-11 那一屏的全部数据。**
+
+    ⚠ 判据表不在这里——**结论只能来自 `/check/stage6`**（`R-11.4`）。
+    ⚠ 产物不在 ⇒ 404（本屏没有产物就没有内容）；读不回 ⇒ 409。
+    """
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+
+    lead_upto: int = Field(ge=1)
+    rationale: str = Field(min_length=1)
+    candidates: list[HookCandidateLine] = Field(min_length=3, max_length=3)
+    approved: HookApprovedLine | None
+    book: list[Finding]
+    judged: dict[str, JudgedDraft]
+    baselines_identity: dict[str, str]
+    sources: HookSources
+
+    invalid_exists: bool
+    freshness: Freshness
+    reason: FreshnessReason
+    ghosts: list[str] = Field(default_factory=list)
+
+    provenance: HookProvenance = Field(alias='_provenance')
+
+    @model_validator(mode='after')
+    def _the_approved_flag_matches_the_approved_hook(self) -> Stage6View:
+        """`candidates[].approved` 与 `approved` 说的必须是同一件事。"""
+        flagged = [c.approach for c in self.candidates if c.approved]
+        if self.approved is None and flagged:
+            raise ValueError(f'没有定稿而 {flagged} 标着已定——两格在说两件事')
+        if self.approved is not None:
+            want = [self.approved.approach] if self.approved.approach != 'human_edit' else []
+            if flagged != want:
+                raise ValueError(
+                    f'定稿是 {self.approved.approach!r} 而候选标记是 {flagged}——'
+                    f'`human_edit`（无前身）时不许有候选自称定稿')
+        if [c.index for c in self.candidates] != [1, 2, 3]:
+            raise ValueError('候选 index 必须是 1..3（顺序即产物顺序）')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二e、S-12 人名替换 + 成书（`GET /api/novels/:sid/stage7[/:o]`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class NameDecisionLine(FrozenModel):
+    """一个角色的改名决定（`stage7.NameDecision` 的视图行 + 现算 `hits`）。
+
+    `hits` = 这个角色的全部字面（canonical + aliases 的 old）在 `applied`
+    记账里的替换总次数。**记账是产地写的，这里只是按人分组求和**——读数不是判定。
+    """
+
+    char_id: str = Field(min_length=1)
+    old_canonical: str = Field(min_length=1)
+    new_canonical: str = Field(min_length=1)
+    renamed: bool
+    not_renamed_reason: str | None
+    reason: str
+    aliases: list[Alias]
+    hits: int = Field(ge=0)
+
+
+class RenameRow(FrozenModel):
+    """逐章对照的一行（一段）。**`changed` 是 bool 不是 kind 字符串**——
+    api.py 不许手抄取值面，而两态本来就该是 bool。"""
+
+    l: str
+    r: str
+    changed: bool
+
+
+class HookRename(FrozenModel):
+    """开篇文案的替换前后。`before` = stage6 定稿字节。"""
+
+    before: str = Field(min_length=1)
+    after: str = Field(min_length=1)
+
+
+class Stage7View(StrictModel):
+    """`GET /api/novels/:sid/stage7` 与 `/stage7/:o`。**一个模型两问**：
+    书级（`ordinal=null, rows=null`）与逐章对照（两者同非空）。
+
+    ⚠ `rows` 用的是 **stage7 同一个替换器**（`novel/stages/stage7/subs.py`）对当前
+    成稿现算——不写第二个替换器，也不落盘。
+    ⚠ 判据表不在这里——结论只能来自 `/check/stage7`（`R-11.4`）。
+    """
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+
+    surname_map: dict[str, str]
+    characters: list[NameDecisionLine] = Field(min_length=1)
+    extra_subs: list[ExtraSub]
+    subs_count: int = Field(ge=0)
+    kept_count: int = Field(ge=0)
+    #: **顺序是承重的**（照产物：`confidence` 高在前、覆盖率降序）。
+    residual: list[Residual]
+    baselines: dict[str, StemBaseline]
+    approved: ApprovedNameMap | None
+    book: list[Finding]
+    identity: IdentityBaseline | None
+    book_txt: BookTxt | None
+    #: `stage7/book.txt` 此刻真的在不在盘上（`book_txt` 记的是组装时的账，两者可分家）。
+    book_txt_on_disk: bool
+    sources: NameMapSources
+
+    #: 可切换「逐章对照」的输出章号（= 本层判过的成稿章，升序）。
+    chapters: list[int]
+    ordinal: int | None
+    rows: list[RenameRow] | None
+    hook: HookRename | None
+
+    invalid_exists: bool
+    freshness: Freshness
+    reason: FreshnessReason
+    ghosts: list[str] = Field(default_factory=list)
+
+    provenance: NameMapProvenance = Field(alias='_provenance')
+
+    @model_validator(mode='after')
+    def _chapter_block_is_all_or_nothing(self) -> Stage7View:
+        """书级 / 逐章是**一问一答**：`ordinal` 与 `rows` 同进同出。"""
+        if (self.ordinal is None) != (self.rows is None):
+            raise ValueError(
+                f'ordinal={self.ordinal!r} 而 rows={"有" if self.rows is not None else "null"}'
+                f'——逐章对照要么整块在（问了 :o），要么整块不在（书级）')
+        if self.ordinal is not None and self.ordinal not in self.chapters:
+            raise ValueError(f'ordinal={self.ordinal} 不在 chapters={self.chapters} 里')
         return self
 
 
