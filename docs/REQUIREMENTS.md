@@ -177,15 +177,6 @@ npm run build
 `present_names → present_char_ids`、verbatim 回取三笔账，并先确定
 `human_adjudicated` 的子字段契约。只放行其中一半不算完成。
 
-### BE-02 · 已登记但未接线的人工修订
-
-- stage3：`--apply-edit`、`--repair-surface-habits`；
-- stage4：`--apply-edit`；
-- stage6：`--apply-edit`。
-
-完成标准是与生成稿共用校验、落盘、轮次归档和 human provenance 路径；不能另造一条
-“人工稿免检”写口。
-
 ### BE-03 · HTTP 服务仍缺失的真实消费路径
 
 FE-01 点名的读屏与人工写回路由尚不存在。通用 `POST /api/jobs` 和 approvals 已完成，
@@ -196,18 +187,25 @@ FE-01 点名的读屏与人工写回路由尚不存在。通用 `POST /api/jobs`
 - 每个端点必须有成功、上游未运行、产物损坏和未实现的行为测试；
 - 视图层只组装展示数据，不复制判据。
 
-### BE-04 · 队列、待人工与断点续跑的半成品
+### BE-04 · 队列与断点续跑的半成品
 
-- 待人工六类聚合没有生产者；
 - 队列只有一次性计划，没有可取消的“尚未开始项”；
 - 逐章写到一半的中断样本与恢复行为尚未建立；
+- 待人工六类聚合已有纯函数生产者（`novel/views/inbox.py::inbox_view`），
+  但 `GET /api/novels/:sid/inbox` 路由尚未挂线（归 BE-03/FE-01）。
 
 这些能力必须以真实持久状态和失败样本验收，不能只增加 schema 或按钮。
 
 ### BE-05 · 共享基础设施缺口
 
 - `_provenance.code` 不能稳定区分同一短 SHA 下不同 prompt/脏树；
-- `LlmProvenance.to_human_edit()` 没有覆盖 `FreeProvenance`；
+- `LlmProvenance.to_human_edit()` 没有覆盖 `FreeProvenance`，且其返回的裸
+  `FreeProvenance` 会被 stage3/4/6/7 收窄后的 provenance 载体拒收——三条
+  `--apply-edit` 因此一律走 `rewrite_provenance`，`to_human_edit` 现役零消费方；
+- `novel/stages/stage7/rename.py` 的 `--apply-edit` 无前稿分支用
+  `free_provenance(NameMapProvenance, ...)` 而不传 `model`，`NameMapProvenance`
+  继承 `LlmProvenance` 要求 `model` 必填 ⇒ 该分支一跑即 ValidationError
+  （无测试覆盖；「盘上没有产物时也接受」那句 docstring 目前是假的）；
 - 冻结后端契约仍有 4 个 `结构` 落点只写裸符号，路径存在性守卫无法检查；
 - `PARTIAL_MASK_FIELDS` 尚无真实屏蔽消费方，接线前不得宣称完整遮蔽。
 
@@ -229,11 +227,6 @@ stage2 受 BE-01 阻塞。首次调用会花真钱，必须逐次取得用户确
 
 验收需记录模型、prompt 指纹、缓存命中、落盘产物、判据结果与失败重试；不得把真实密钥、
 正文或完整响应提交进仓库。
-
-### VAL-02 · HARD 判据反例
-
-stage4、stage6、stage7 仍有 36 条 HARD 判据没有各自的会红样本。每条必须用判据可消费的
-原始 dict 构造最小反例，并配一条“新增 HARD 却没登记反例就失败”的守卫。
 
 ### VAL-03 · 真链路回归样本
 
@@ -273,8 +266,6 @@ stage4、stage6、stage7 仍有 36 条 HARD 判据没有各自的会红样本。
 | UG-08 | 修剪不得改变人物、地点、因果、时间与结尾立意 |
 | UG-09 | 开卷 system 对“现场/回忆/转述”三个标签没有解释 |
 | UG-10 | 身份描述泄底、改写式泄底与设定块字面闸门判别力不足 |
-| UG-11 | 计划轻重告警只有读数，没有处置回环 |
-| UG-12 | 定向重生成被回归护栏驳回后没有下一条恢复路径 |
 
 ## 待裁决
 

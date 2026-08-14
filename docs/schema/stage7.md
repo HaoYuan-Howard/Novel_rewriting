@@ -323,7 +323,7 @@ applied.hook                           {counts}
 > 多出来的是 `rn_new_collide_human`（事实⑤：`祈辕→叶翎` 撞上 `char_009` 的新名）
 > ——**一条原型结构上够不到的真结论**。另两本仍是 7 条、规则集与盘上逐条相同。
 
-⚠ 本层的 `Finding` **没有** `directive`（stage5 反哺回环专用）、**没有** `chapters`/`fix`。
+⚠ 本层的 `Finding` **没有** `directive`（stage5 修复回环专用，旧称「反哺」）、**没有** `chapters`/`fix`。
 本层没有 LLM 返工回路：「重写」就是重跑一次这个节点，或人走 `--apply-edit` / `--approve`。
 
 ### 1.7 `book_txt` —— 交付物的账

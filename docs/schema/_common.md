@@ -290,7 +290,7 @@ stage5 / stage6 / stage7 **逐字段相同**。⚠ 原型里它有 **5 份拷贝
 | `evidence` | `str[]` | 是 | **机器可比的**凭据 |
 | `evidence_key` | `str` | 是 | `'\|'.join(evidence)`。**收敛键 = (章, rule, evidence_key)** |
 | `owner` | `str｜null` | 是 | **`null` ⇔ 它不是结论**（metric/unver）——这条不变量抓出过一个 sev 写错的判据 |
-| `actionable` | `bool` | 是 | **蕴含 `owner == 'stage5'`**。⚠ 不等于「会进反哺」 |
+| `actionable` | `bool` | 是 | **蕴含 `owner == 'stage5'`**。⚠ 不等于「会进修复（旧称「反哺」）」 |
 | `identity_hit` | `bool` | 是 | 这一章的**源文**也触发了同一条 ⇒ 这条结论不携带信息 |
 | `identity_dead` | `bool` | 否 | 书级：这条判据在这本书上**零判别力** |
 | `converge` | `str` | 是 | `new｜unresolved_N｜same_draft` |

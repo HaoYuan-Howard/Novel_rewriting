@@ -623,7 +623,7 @@ E2E 中的 `冰冷链子：「` 因而会正式落成 `冰冷链子`，不再把
 ## 五、判据清单（**唯一落点**，两个节点共用一张表）
 
 **75 条** = **41 HARD / 15 INFO / 17 metric / 2 unver**。`repair` 全表 `NONE`
-（本层没有「花一次钱让写手重写」这条路——反哺是 stage5 独有的，`contracts/rules.py::_validate` ④
+（本层没有「花一次钱让写手重写」这条路——修复（旧称「反哺」）的 LLM 回环是 stage5 独有的，`contracts/rules.py::_validate` ④
 把 `repair != 'NONE'` 锁在 `owner == 'stage5'` 上）。
 owner 分布：`stage2` **56** · `None` **19**（＝非结论，17 metric + 2 unver）。
 

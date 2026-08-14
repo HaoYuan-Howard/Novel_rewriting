@@ -93,8 +93,8 @@
 ### 2.1 严重度、检查性质与处置路由是三个正交轴
 
 - `sev` 回答“影响有多大”；语义泄底可以是 HARD，语义覆盖不足可以是 INFO/UNVER。
-- `check_kind` 回答“这个结论怎么来的”。Stage 2–4 现役判据全是 `mechanical`；Stage 5 另有独立 `semantic` 伙伴审判。
-- `remediation` 回答“下一步谁能修”。`REPAIR_UNIQUE` 或已注册的付费 fix 是 `llm`；0 成本结构化 fix 是 `deterministic`；无安全自动路由是 `human`；metric 是 `none`。
+- `check_kind` 回答“这个结论怎么来的”。Stage 0–4、7 现役判据全是 `mechanical`；Stage 5 与 Stage 6 各有独立的 `semantic` 伙伴审判（注册表守卫钉着：语义判据只许出现在这两层）。
+- `remediation` 回答“下一步谁能修”。`REPAIR_UNIQUE` 或已注册的付费 fix 是 `llm`；0 成本结构化 fix 是 `deterministic`；无安全自动路由是 `human`；metric 是 `none`。四类各自的修复路由与成本上界见 `docs/REPAIR.md`。
 
 这个投影故意**不把 `REPAIR_FREE` 标成 LLM 自动修复**。它表示理论上可重写，但满足路径不唯一；当前 Stage 5 付费自救明确拒绝它，因为模型可能通过删内容或编内容“修绿”。
 

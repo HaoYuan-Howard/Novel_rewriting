@@ -234,7 +234,7 @@ stage6/_rounds/hook.rN.json 归档：上一轮的整份拷贝（形状与 hook.j
 | `detail` | `str` | 是 | 这一次的具体情况 | **三源** |
 | `evidence` | `str[]` | 是 | 机器可比的凭据。**盘上 `book[]` 的 12 条全空**；`candidates[].findings` 里 3 条非空 | **盘·码** |
 
-⚠ 本层的 `Finding` **没有** `directive`（stage5 反哺回环专用）、**没有** `chapters`/`fix`（stage4 有）。
+⚠ 本层的 `Finding` **没有** `directive`（stage5 修复回环专用，旧称「反哺」）、**没有** `chapters`/`fix`（stage4 有）。
 本层没有 LLM 返工回路：「重写」就是重跑一次这个节点，或人按 `--approve` / `--apply-edit`。
 
 ⚠ `evidence` 能不能在文案里**定位**，由判据表的 `quote` 列答（**8/25** 条为真）。
