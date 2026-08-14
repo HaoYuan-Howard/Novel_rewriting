@@ -659,7 +659,8 @@ REGISTRY.retire(RetiredRule(
     rule='cross_batch_refs', stage=STAGE,
     why='原型这一条挂着**两件事**：① `end_hook.pays_to_chapter` 残留 —— `end_hook` '
         '整字段已删；② 「产物无跨章引用」—— 那是一句**恒真陈述**，不是判定'
-        '（逐章抽取只吃到本章为止，现已是默认且无旋钮）。'
+        '（逐章抽取未来章正文不可见，bounded-fidelity-v2 下过去也只给有界窗口，'
+        '默认且无旋钮）。'
         '⚠ 第二支正是 `docs/schema/stage2.md` §六 记的三条「查不了」之一：'
         '`event` 是抽象概括、没有可锚定的原文区间，两种通用检测都已证伪，'
         '**只能从输入侧解**。把一句恒真陈述留在表里，会让人以为有一道闸在拦它。'))
