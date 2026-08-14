@@ -90,7 +90,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 
 ## 三、端点 → 响应
 
-**当前落地的二十五个**（其余端点见 §七）：
+**当前落地的三十七个**（其余端点见 §七）：
 
 | 端点 | 响应 | 新旧 |
 |---|---|---|
@@ -119,6 +119,18 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/novels/:sid/approvals/deep` | `ApprovalDoc`（请求体 `DeepSelectionRequest`） | 新 |
 | `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
+| `GET /api/novels/:sid/reading/:o` | `ReadingView` | 新 |
+| `GET /api/novels/:sid/stage2/global` | `GlobalView` | 新 |
+| `GET /api/novels/:sid/stage4/:o` | `Stage4View` | 新 |
+| `GET /api/novels/:sid/stage5/:o` | `Stage5View` | 新 |
+| `GET /api/novels/:sid/review/:o` | `ReviewView` | 新 |
+| `GET /api/novels/:sid/inbox` | `InboxView` | 新 |
+| `GET /api/novels/:sid/stage6` | `Stage6View` | 新 |
+| `GET /api/novels/:sid/stage7` | `Stage7View` | 新 |
+| `GET /api/novels/:sid/stage7/:o` | `Stage7View` | 新 |
+| `POST /api/novels/:sid/review/:o/edit` | `JobRecord`（请求体 `DraftEditRequest`） | 新 |
+| `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`） | 新 |
+| `POST /api/novels/:sid/stage7/approve` | `JobRecord`（无请求体） | 新 |
 
 ⚠ **preview 直接返回 `JobStart` 是有意的**，不是图省事：那个模型自带后置条件
 `paid == 任一步 paid` / `writes == 任一步 writes`，于是「整份贵贱是逐步折叠出来的」
@@ -215,6 +227,176 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 `node` · `mode` · `flags[]`。
 ⚠ `flags` 里的**带值 flag 要带上值**（`--apply-edit <路径>`）——
 `/api/enums` 的 `actions[].needs_value` 就是用来告诉前端「这个按钮要先要一个文件」的。
+
+---
+
+## 五b、`GlobalView` —— S-05 全局设定那一屏
+
+⚠ 与 S-06 不同，本屏**没有「左半边」**：stage2 没跑就没有任何东西可看
+⇒ 产物不在盘上是 **404**（`UpstreamMissing`），不是 `exists=False` 的 200。
+有降级形态的三屏在各节自注：S-04（stage2 没跑仍 200）、S-07（恒等基线）、
+S-08（ctx 不在仍 200，`materials=null`）。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` / `title` | 串 | 是 | 由 `novel/paths.py` 从目录名派生 |
+| `setting` | 对象 | 是 | `Setting`。经 `by_alias` 出线，键是那两个固定中文 key（`时代背景` / `世界观`） |
+| `characters[]` | 数组 | 是 | 非空。`fate` **全量下发**——剧透遮蔽是前端的纯展示行为（`R-11.13`），服务端不做第二把尺子；`address[].by` 已解引用成 `NameRef` |
+| `relations[]` | 数组 | 是 | 有向关系，两端已解引用 |
+| `world_rules[]` | 数组 | 是 | `WorldRule` 原样 |
+| `secrets[]` | 数组 | 是 | ⚠ 空数组 = 这本书没抽到秘密——**那可能是漏抽了，不是「无」**（探针盲区） |
+| `arc` | 对象 | 是 | 解读层。`climax` / `ending` 全量下发（遮蔽归前端，同 `fate`） |
+| `unresolved_refs` | 整数 | 是 | 全屏解引用失败的总数。**读数不是判定**——给人看「这份产物里有几个说不出名字的 id」 |
+| `invalid_exists` / `freshness` / `reason` / `ghosts` | | 是 | 同 S-06 的来源账四格 |
+| `_provenance` | 对象 | 是 | `GlobalProvenance` |
+
+三条形状裁决：
+
+**① `NameRef`：解不动就 `resolved=False` 且 `display == raw`——view 不编名字。**
+编出来的名字比一个看得出来的 id 更坏（它看不出来）。
+**② `GlobalSecretLine` 没有 `reader_knows_by_now`。** 那是「相对当前章」的量，
+而本屏是全书视图，没有「当前章」；揭示章原样给，让人自己对。
+**③ 判据结论不在这里**（`R-11.4`），同 §四第 ⑦ 条——本屏及以下各屏的结论
+都只能来自 `/api/novels/:sid/check/:kind`。
+
+## 五c、`ReadingView` —— S-04 原文 ↔ 骨架
+
+左半边（原文）来自 **stage1**；右半边（骨架）来自 stage2 逐章蓝图。
+⚠ **stage2 没跑 ⇒ 200 且 `blueprint=false`**：整章一个 hole、`beats` 空、
+`summary=null`、`_provenance=null`——右半边整块缺席（后置条件焊死，不编一句摘要），
+左半边与 stage2 无关（同 S-06 左右半分治的道理）。stage1 不在 / `:o` 越界 ⇒ 404。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `chapter_ordinal` / `text_chars` | 整数 | 是 | 章号与全章码点数 |
+| `blueprint` | 布尔 | 是 | 右半边在不在 |
+| `summary` | 串 或 null | 是 | `blueprint=false` ⇒ `null`（没有蓝图就没有摘要，不编一句） |
+| `segments[]` | 数组 | 是 | 连续覆盖整章 `[0, text_chars)`（后置条件）。⚠ **服务端已切好 `text`**，前端绝不按 start/end 自己切字符串（Python 码点 ≠ JS 码元）。`beat_id=null` ⇒ 空隙（两态由可空性表达，不另立 kind 字符串）；`flagged` 只属于空隙且 `chars >= uncovered_min_chars` |
+| `beats[]` | 数组 | 是 | `located=false` 时坐标为 `null`（定位失败不编区间）；`hinges[].text=null` = 未定位 |
+| `narration[]` | 数组 | 是 | 叙述者 / 聚焦者 / 人称面 |
+| `loose` | 整数 | 是 | 没被任何 beat 覆盖的字数——与全部空隙合计**是同一个数**（后置条件） |
+| `uncovered_min_chars` | 整数 | 是 | 「漏」的阈值**随响应自带**，是漏抓还是过渡交人工看摘录判断 |
+| `blueprint_state` | 对象 | 是 | `stage2/chapter_blueprints.json` 的 `ArtifactState`（六格一次拿全）。`blueprint=false` 的两种来路——没跑 / 读不回——靠它的 `exists` 与 `readable` 分 |
+| `_provenance` | 对象 或 null | 是 | `BlueprintProvenance`；`blueprint=false` ⇒ `null` |
+
+## 五d、`Stage4View` —— S-07 计划 ↔ 写作上下文
+
+⚠ **没跑过 stage4 时本屏也有内容**（`04_delivery.md:133`）：`identity_plan=true`，
+计划与上下文都是**本次现算的恒等基线**（不落盘）——「如果计划什么都不改，
+写手手里会有什么」。恒等基线没有落盘来源账 ⇒ `_provenance` / `_ctx_provenance`
+必须为 `null`（后置条件）。计划在而 ctx 不在 ⇒ 200 且 `ctx_chapter=null`
+（右半边缺席，`ctx_state` 说明处境）。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `identity_plan` | 布尔 | 是 | `true` = 本屏是恒等基线。此时计划侧三个 goal 是显式标记（`IDENTITY_GOAL`），**不是真决策** |
+| `reconstruction_strategy` / `chapters` / `ordinal` | | 是 | `ordinal ∈ chapters`（后置条件） |
+| `index[]` | 数组 | 是 | 章索引。⚠ **没有 `in_band` / `style_hits`**——那是判据结论，唯一来源 `/check/stage4`（`R-11.4`），要并排显示就去 join 那份报告。`hidden=null` = ctx 不在盘上**判不了**，不编 0 |
+| `plan_chapter` | 对象 | 是 | `beats[].budget_chars=null` 只出现在恒等基线上：算不出源字数的拍**不估算、不拿邻居补** |
+| `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书 |
+| `writer_target` | 二元组 或 null | 是 | 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）；`null` ⇔ `ctx_chapter=null`（同进同出，后置条件） |
+| `writer_target_estimated` | 布尔 | 是 | 目标是不是估算的 |
+| `plan_state` / `ctx_state` | 对象 | 是 | 两份产物各自的 `ArtifactState` |
+| `_provenance` / `_ctx_provenance` | 对象 或 null | 是 | 两份来源账分两个键出，不合并 |
+
+## 五e、`Stage5View` —— S-08 成稿 ↔ 材料
+
+⚠ `ctx_exists=false` ⇒ `materials=null`：**不发假材料**（`04_delivery.md:134`，
+后置条件焊死），给「先跑 stage4」——左半边缺席、右半边照常列已有成稿。
+某章两臂皆无稿 ⇒ 200 且 `drafts=[]`（「还没写」不是错误）。
+`planned=null` = 计划读不回来，「该有几章」判不了——与 0 是两件事。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `ctx_exists` / `planned` / `written` / `invalid` / `missing[]` / `duplicates[]` | | 是 | 全书进度的读数，不折叠成判定 |
+| `chapters` / `ordinal` / `index[]` | | 是 | 章索引取**主稿**（deep 优先）；没有成稿的章 `chars` / `overlap_excl_verbatim` / `freshness` 三格全 `null` |
+| `source_text` / `source_chars_raw` | 串/整数 或 null | 是 | 源章原文单独的落点（材料里不重复） |
+| `materials` | 对象 或 null | 是 | 写手拿到的下发面，**与写手同一份**（`prompts.build_material(...).blocks`——`R-11.8` 在读屏上的对应物：显示的材料 = 真发出去的材料）。按**闭卷**臂组装 |
+| `drafts[]` / `invalid_drafts[]` | 数组 | 是 | 正式稿与 `.INVALID` 分两个数组。`origin`（`human` / `llm`）由 `_provenance` 的载体类派生 |
+| `drafts[].align` | 对象 或 null | 是 | **可空**：`null` = 对齐辅助尚未由服务端提供（本章无锚可对时 `align_rows` 为空、账仍在）。对齐账是对应关系不是判定，`note` 常驻这句话；锚点覆盖率必须常驻显示 |
+| `ctx_state` | 对象 | 是 | `ArtifactState` |
+
+## 五f、`ReviewView` —— S-09 验收 / 修订
+
+一份验收都没有 ⇒ 404（`UpstreamMissing`，前端渲染「先跑 stage5.review」）。
+⚠ 判据表本身仍归 `/check/stage5`；本屏发的是**验收产物**（历史事实），
+与「现在复检一遍」是两件事。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `review_seq` / `sources` / `baselines` / `baselines_identity` / `book[]` | | 是 | 最新一份全书验收的账，原样 |
+| `finding_counts` | 对象 | 是 | 全书结论按 sev 现数，**四键恒在（0 也写）**。⚠ 不读产物的 `counts` 字段——那份是稀疏 Counter（`Review.counts` 登记过的病）；`index[]` 每行同理（后置条件逐行查） |
+| `wontfix` | 整数 | 是 | 被人豁免的条数——豁免不删结论，单独计数 |
+| `index[]` | 数组 | 是 | `unresolved` = 有收敛账（`unresolved_rounds > 0`）且未豁免的结论条数 |
+| `chapter` | 对象 | 是 | 该章明细 + 当前正式稿正文（改稿入口要在原文旁边）。`stale` 是三态：验收判的那份与盘上当前那份还是不是同一份（整文件指纹）；`null` = 判不了。`rounds[]` 是盘上已归档的轮次号（`_rounds/`），升序——改稿历史从这里回看 |
+| `_provenance` | 对象 | 是 | `ReviewProvenance` |
+
+## 五g、`Stage6View` —— S-11 开篇文案
+
+产物不在 ⇒ 404；读不回 ⇒ 409（本屏没有产物就没有内容）。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `lead_upto` / `rationale` | | 是 | 开篇引到哪一章、为什么 |
+| `candidates[]` | 数组 | 是 | 恒三条，`index` 恒 `1..3`（顺序即产物顺序，后置条件）。⚠ **`chars` 在 Python 侧走 `measure()` 那把尺子现算**——同一条候选 `measure()['chars']=253` 而 `len(text)=277`，下沉到 JS 的后果是同一页上人会看到两个字数 |
+| `approved` | 对象 或 null | 是 | `null` = 还没定稿。`candidates[].approved` 与它说同一件事（后置条件）；`human_edit`（无前身）时不许有候选自称定稿 |
+| `book[]` / `judged` / `baselines_identity` / `sources` | | 是 | 书级结论、语义审判、恒等基线、来源账，原样 |
+| `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |
+
+## 五h、`Stage7View` —— S-12 人名替换 + 成书
+
+**一个模型两问**：书级（`ordinal=null, rows=null`）与逐章对照（两者同非空，
+后置条件焊死）；`:o` 不在判过的章集里 ⇒ 404（资源不存在）。
+⚠ `rows` 用的是 **stage7 同一个替换器**（`novel/stages/stage7/subs.py`）对当前成稿
+现算——不写第二个替换器，也不落盘。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `surname_map` / `characters[]` / `extra_subs[]` / `subs_count` / `kept_count` | | 是 | 人名表的内容与读数。`characters[].hits` 是该角色全部字面在 `applied` 记账里的替换总次数，**按人分组求和——读数不是判定** |
+| `residual[]` | 数组 | 是 | 旧名残留。**顺序是承重的**（照产物：置信度高在前、覆盖率降序） |
+| `baselines` / `identity` / `approved` / `book[]` / `sources` | | 是 | 词干基线、恒等基线（可空）、定稿（可空）、书级结论、来源账 |
+| `book_txt` | 对象 或 null | 是 | **可空**——`null` = 成书还没组装过 |
+| `book_txt_on_disk` | 布尔 | 是 | `stage7/book.txt` 此刻真的在不在盘上。`book_txt` 记的是组装时的账，两者可分家 |
+| `chapters[]` / `ordinal` / `rows[]` / `hook` | | 是 | `chapters` = 可切换「逐章对照」的输出章号（本层判过的成稿章，升序）；`rows[].changed` 是 bool 不是 kind 字符串（两态本来就该是 bool） |
+| `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |
+
+## 五i、`InboxView` —— 待人工清单
+
+`counts` **六键全出（0 也要出）**：「没有这个键」与「值是 0」不许混——
+stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失）。
+`counts` / `total` / `items` 三者相互一致由后置条件钉死。
+
+`InboxItem` 的四条纪律：
+
+- `kind`：六值 `INBOX_KIND`。**`unver` 永不入列**——那是判据的边界，不是待办
+  （堆进去清单就永远清不空，而清不空的清单没人看）。
+- `rule`：`human_only` / `upstream` / `stalled` 填**判据 id**；
+  `invalid` / `rejected` / `approval` 没有单条判据可指，填**节点 id**（如 `stage6.hook`）。
+- `chapter`：**输出章**口径，可空——书级 / 整份产物 = `null`，
+  后端不给书级条目编一个假章号。
+- `wontfix`（视图顶层）：被人豁免的条数——豁免不删结论、不进清单，单独计数。
+
+路由侧：对每个已移植层各跑一次 0 成本复检（stage2/4 会重算判据）——**纯读**，
+大书上是秒级。**登记不优化**：盘上 3 本无压力，全语料嫌慢时在路由层加缓存，
+别动生产者（`novel/views/inbox.py::inbox_view`）。
+
+## 五j、三条人工写回的请求体
+
+三条都是**单步 0 成本作业**：产物变更一律经 `jobs.run` 起 CLI 子进程（`R-11.3`），
+HTTP 进程只写 `_service/`（一次性人工稿）。
+⚠ **CLI 内失败 = HTTP 200 + `JobRecord.state='failed'`**——作业失败不是 HTTP 错误
+（`stage0.edit` 同形），前端读 `state` 与日志，不是读状态码。
+
+| 端点 | 请求体 | 说明 |
+|---|---|---|
+| `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（`mode` + `text`） | `text` 落 `_service/edits/` 一次性稿（文件名带 `ch{o}`，`--apply-edit` 从文件名认章），走 `stage5.write --apply-edit`——**与生成稿同一个判定落点**（归一 → 判据 → 归档 → 写回，`origin=human` 记账）；仍有阻断级**只报不拦**（人改的往往正是机器修不动的地方）。⚠ **没有乐观锁**：并发改稿以整份归档兜底，覆盖的代价是多花一轮归档——登记为已知限制，不在 API 层造第二套锁 |
+| `POST /api/novels/:sid/stage6/approve` | `HookApproveRequest`（`pick`，1 起） | **只收序号不收文本**（2026-08-17 用户裁决）：改字是另一个节点（`stage6.hook --apply-edit`），而契约把编辑文件钉死在书目录内（`_edit_rel`）、`R-11.3` 禁止服务进程写产物盘 ⇒ 浏览器文本没有合规通道。**`stage6/edit` / `stage7/edit` 刻意不在 HTTP**，走 CLI |
+| `POST /api/novels/:sid/stage7/approve` | 无请求体 | `flags=()` 是【终态】不是待定：一本书只有一份人物表，定稿是「给整份盖章」不是「从候选里选一条」，**没有参数可起名** |
+
+定稿类动作**落了**（退出码 0/1——先写后判：approve 落了，只是报告可能有红行）
+才盖审批章；盖不盖章看「落没落」，红不红由 check 屏呈现，两件事不许混。
+前置链没到位（中途接手的书、迁移语料）⇒ 定稿照样落，检查单那一格在 approvals 屏补——
+**不把检查单的顺序翻成定稿的失败**。
 
 ---
 

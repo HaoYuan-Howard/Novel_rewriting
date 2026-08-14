@@ -305,14 +305,16 @@ class StageState(StrictModel):
     def _done_matches_the_artifacts(self) -> StageState:
         """折叠规则只有一处算——**第二处必然分家**。
 
-        ⚠ 一层**没有可做存在性判定的产物**（清单为空，粒度在章上）时，
-        `done` 只能是 `None`：这时候写 `False` 是在断言一件我们没有依据的事。
+        ⚠ 清单为空（粒度在章上的层，现役只有 stage5）时**本载体不设约束**：
+        它的完成度证据在**计划 + 逐章成稿**（`state.stage_state` 的 stage5 分支），
+        不在本模型携带的字段里——载体在这里能「重算」的东西是零，硬立一条
+        「只能是 None」就是拿结构断言一件结构看不见的事。
+        这条教训是实测买来的：第一本全链跑完的书（e2e_20260813）`done=True`
+        被旧断言当场拒收，`/api/novels` 对它静默跳过，**语料库屏上它整本消失**。
+        「计划读不回 ⇒ None、不许压成 False」那半句仍然成立，但它守在**产地**
+        （`planned_chapters` 返回 None 的那条路），不在载体。
         """
         if not self.artifacts:
-            if self.done is not None:
-                raise ValueError(
-                    f'{self.stage}: 没有可做存在性判定的产物，done 只能是 None（判不了），'
-                    f'实得 {self.done!r}。⚠ 写 False 是在断言一件没有依据的事')
             return self
         if self.done is None:
             return self          # 逐章类的层：判据在别处（见 `chapters_done`）

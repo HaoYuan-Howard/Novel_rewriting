@@ -127,6 +127,23 @@ def test_stage7_chapter_block_is_all_or_nothing_over_the_wire(client, box):
     assert chapter['ordinal'] == o and chapter['rows']
 
 
+def test_a_fully_written_book_survives_the_overview(client, box):
+    """⭐ 回归锚：**全链跑完的书在语料库上不许整本消失。**
+
+    第一本真跑完的书（e2e_20260813）曾把这条走红：stage5 的 `done=True`
+    被 `StageState` 旧断言（「无产物清单 ⇒ done 只能是 None」）当场拒收，
+    `/api/novels` 的逐本 try 把它静默跳过——**满盘产物的书在界面上不存在**。
+    stage5 的完成度证据在计划 + 逐章成稿，载体看不见它，也就不许替它断言。
+    """
+    body = client.get(f'/api/novels/{box.sid}')
+    assert body.status_code == 200, body.text[:300]
+    st5 = next(s for s in body.json()['stages'] if s['stage'] == 'stage5')
+    assert st5['done'] is True, (
+        f'沙箱书每章都有稿而 done={st5["done"]}——逐章折叠多半又被载体拦了')
+    novels = client.get('/api/novels').json()['novels']
+    assert any(n['sid'] == box.sid for n in novels), '语料库把这本书整本吞了'
+
+
 def test_the_inbox_counts_are_dense(client, box):
     """六键全出（0 也要出）——稀疏计数会把「没有」与「0」混掉。"""
     body = client.get(f'/api/novels/{box.sid}/inbox').json()

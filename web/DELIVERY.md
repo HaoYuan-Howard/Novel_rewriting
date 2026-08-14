@@ -1,7 +1,8 @@
-# 审校台前端 · 交付说明（mock 版）
+# 审校台前端 · 交付说明
 
-按 `design_handoff_novel_refactor_console/` 重建。**当前是 mock 版**：数据全部来自
-`src/mocks/` 里那 20 份真实响应，`VITE_USE_MOCK` 一关就走真 HTTP。
+按 `design_handoff_novel_refactor_console/` 重建。**当前处于真实模式**：
+`web/.env` 为 `VITE_USE_MOCK=false`，数据走 `127.0.0.1:8765` 的真实服务。
+`src/mocks/` 那 20 份是冻结的证据基线（`npm run seams` 钉着），mock 路径仅作离线开发用。
 
 ```bash
 cd web
@@ -159,7 +160,17 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 2. **产物应直接下发 `freshness: 'missing'`**，别让前端用 `!exists` 推第四态。
    现在这个推导集中在 `vocabulary.ts` 的 `freshnessOf()` 一处，但它仍然是前端判定。
 
-3. **Stage 0/1、通用作业启动与 approvals 已接真实接口；depth 的 Stage4 读屏仍待接。**
+3. **批 1–6 已完成：九条读屏与三条写回全部接真实接口（第二阶段）。**
+   - 读屏：`reading/:o` / `stage2/global` / `stage4/:o` / `stage5/:o` / `review/:o` /
+     `inbox` / `stage6` / `stage7(/:o)`；`/depth` 的 Stage4 读屏亦在其内。
+   - 写回：`POST …/review/:o/edit`（章节改稿）、`POST …/stage6/approve`
+     （文案定稿，`--pick`）、`POST …/stage7/approve`（人名定稿，无请求体）。
+     `stage6/edit` 与 `stage7/edit` 浏览器端**明确不可用**（裁决：编辑文件是书目录内
+     契约产物，服务进程不写产物盘），走 CLI；界面上对应入口禁用并说明。
+   - 类型已对齐真实响应：check 报告按 `rules[]` 渲染，`CheckPanel` 重写为两轴面板，
+     不从 `oks/unver/info` 文案反推结构；旧作业名与旧 check kind
+     （`n4_plan` / `n9_rename` / `stage5_review` / `n0_extras`）已清除，
+     动作分类以 `/api/enums` 下发为准。
    - Stage 0：`report` / `segments` / `edit` / `approve`
    - Stage 1：`partition` / `segments` / `chapters` / `hook_copy`
    - 上传：`POST /api/upload?filename=`，请求体是原始文件字节
@@ -168,7 +179,6 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
    - `spawns`：确认某道闸门之后服务端会发起哪些动作。
      真实服务和 mock 都下发同一形状，界面再用 `/api/enums` 判定按钮颜色；
      **“谁会花钱”仍只有服务端一个落点。**
-   - `/depth` 还依赖 FE-01 中尚未提供的 Stage4 读屏；关闭 mock 后不能把该缺口伪装为空计划。
 
 4. **`null` 与 `[]` 在两层之间不一致，前端要写两套判空**：
    - `stage4.chapter.beats[]`：`keep_value` / `must_appear` / `must_hold` 缺省是 `[]`；
@@ -185,8 +195,8 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 6. **`/jobs/:id/stream?offset=N`（SSE）** 现在按 `getJobLog(id, offset) → {lines, offset, done}`
    的签名做的轮询。换成 SSE 时签名不用变。
 
-7. **`n0_extras` 这个 job kind 后端没有**（stage0 是设计稿新增的一层）。
-   现在 mock 里临时补了一条 `{label:'stage0 剔除番外', paid:false}`。
+7. **旧作业名已随批 1–6 清除**（含 mock 里临时补的 `n0_extras`）；
+   job kind 现在一律是节点 id，由 `/api/enums` 下发。
 
 ---
 
@@ -242,10 +252,13 @@ src/mocks/ 与交接包里那 20 份逐字节一致
   免费动作标「免费」、花钱动作标「调 LLM · 花真钱」
 - `VITE_USE_MOCK=false` 时：一份 mock 数据都不泄漏，屏上报「后端报错了（HTTP 500）」
   并说明这个码在开发环境通常就是 8765 上没服务在听
+- **批 1–6 真实模式联调通过**：九条读屏取真实数据，三条写回走 preview → 确认 → 执行链，
+  作业失败读 `state='failed'` 与日志（CLI 内失败不是 HTTP 错误）
 
 ## 10. 没做的
 
-- 没有真的发写请求（brief 说设计阶段只要 UI）。所有写操作打到 `mock.ts` 的 localStorage。
+- mock 路径的写操作仍打到 `mock.ts` 的 localStorage；真实模式的三条人工写回
+  （章节改稿 / 文案定稿 / 人名定稿）已走真实 POST。
 - 没做 SSE，用轮询（签名一致，换过去不影响调用方）。
 - 没做移动端 / 响应式（brief 明确不要）。
 - 没引入 UI 组件库、图表库、状态管理库、i18n、SSR。
