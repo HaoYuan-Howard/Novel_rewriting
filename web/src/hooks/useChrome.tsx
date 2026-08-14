@@ -35,7 +35,8 @@ interface ChromeCtx {
 const Ctx = createContext<ChromeCtx | null>(null)
 
 export function ChromeProvider({ children }: { children: ReactNode }) {
-  const [drawerOpen, setDrawerOpen] = useState(true)
+  // 阅读是主任务；没有作业时不让空抽屉抢走首屏高度。发起作业仍会自动展开。
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null)
 
   const value = useMemo<ChromeCtx>(

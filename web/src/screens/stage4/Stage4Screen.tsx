@@ -27,7 +27,7 @@ export function Stage4Screen() {
         loadingLabel="读重构计划"
         missing={{
           title: '计划 ↔ 写作上下文',
-          chapters: [1, 2, 3, 4, 5, 6, 7, 8],
+          chapters: vm.chapters,
           ordinal: vm.ordinal,
           path: 'stage4',
         }}
@@ -45,7 +45,7 @@ export function Stage4Screen() {
                   </div>
                 </div>
                 <ChapterStrip
-                  items={Array.from({ length: 8 }, (_, i) => i + 1).map((n) => ({
+                  items={vm.chapters.map((n) => ({
                     n,
                     active: n === vm.ordinal,
                     dim: !hasSample(vm.sid, n),

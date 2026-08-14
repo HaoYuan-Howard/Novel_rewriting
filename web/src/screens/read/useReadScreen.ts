@@ -44,6 +44,12 @@ export function useReadScreen() {
     queryFn: () => api.getReading(sid, ordinal),
     retry: false,
   })
+  const book = useQuery({
+    queryKey: qk.novel(sid),
+    queryFn: () => api.getNovel(sid),
+    enabled: !!sid,
+    retry: false,
+  })
 
   // stage2 要两屏都看过才能确认。看过这件事发生在导航时，不在点击时。
   useEffect(() => {
@@ -101,6 +107,9 @@ export function useReadScreen() {
     query: q,
     sid,
     ordinal,
+    chapters: book.data?.chapters
+      ? Array.from({ length: book.data.chapters }, (_, i) => i + 1)
+      : [ordinal],
     segments,
     beats,
     selBeat,

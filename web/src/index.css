@@ -17,26 +17,26 @@
   --color-white: #fff;
 
   /* 面 */
-  --color-page: #f6f4f1;
-  --color-card: #fffdfa;
-  --color-sunken: #fbf9f6;
-  --color-sunken-2: #fcfaf7;
-  --color-sunken-3: #faf8f5;
-  --color-inset: #f1eee9;
+  --color-page: #f4f1ec;
+  --color-card: #fffefa;
+  --color-sunken: #faf7f2;
+  --color-sunken-2: #fcf9f5;
+  --color-sunken-3: #f8f5f0;
+  --color-inset: #eee9e1;
 
   /* 墨 */
   --color-ink: #1b1a18;
   --color-ink-2: #3f3c37;
   --color-ink-3: #57534c;
-  --color-ink-4: #8a8479;
-  --color-ink-5: #a09a8f;
-  --color-ink-6: #b3ada2;
+  --color-ink-4: #706a60;
+  --color-ink-5: #888176;
+  --color-ink-6: #a0998e;
   --color-ink-7: #c4bdb2;
 
   /* 线 */
-  --color-line: #e2ded8;
-  --color-line-2: #e8e3dc;
-  --color-line-soft: #efebe5;
+  --color-line: #ddd7cf;
+  --color-line-2: #e5dfd7;
+  --color-line-soft: #ece6de;
   --color-line-row: #f3efe9;
   --color-line-btn: #ddd8d0;
   --color-line-dash: #cfc9c0;
@@ -101,33 +101,33 @@
   --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
   /* 字号：规格里有半像素，Tailwind 默认刻度表达不了 */
-  --text-micro: 10.5px;
+  --text-micro: 11px;
   --text-micro--line-height: 1.5;
-  --text-mini: 11px;
+  --text-mini: 11.5px;
   --text-mini--line-height: 1.6;
-  --text-tag: 11.5px;
+  --text-tag: 12px;
   --text-tag--line-height: 1.6;
-  --text-sm2: 12px;
+  --text-sm2: 12.75px;
   --text-sm2--line-height: 1.75;
-  --text-body: 12.5px;
+  --text-body: 13.25px;
   --text-body--line-height: 1.85;
-  --text-body-lg: 13px;
+  --text-body-lg: 13.75px;
   --text-body-lg--line-height: 1.85;
-  --text-section: 13.5px;
+  --text-section: 14px;
   --text-section--line-height: 1.9;
-  --text-read: 14px;
+  --text-read: 14.75px;
   --text-read--line-height: 2.05;
-  --text-read-lg: 14.5px;
+  --text-read-lg: 15.25px;
   --text-read-lg--line-height: 2.1;
-  --text-read-xl: 15px;
+  --text-read-xl: 15.75px;
   --text-read-xl--line-height: 2.15;
-  --text-h3: 15px;
+  --text-h3: 15.5px;
   --text-h3--line-height: 1.5;
-  --text-h2: 16px;
+  --text-h2: 17px;
   --text-h2--line-height: 1.5;
-  --text-h1: 20px;
+  --text-h1: 22px;
   --text-h1--line-height: 1.35;
-  --text-screen: 21px;
+  --text-screen: 24px;
   --text-screen--line-height: 1.35;
 
   /* 间距基数 = 1px，于是类名里的数字就是规格里的 px 数字 */
@@ -154,7 +154,7 @@
 
 @layer base {
   :root {
-    --rail-w: 236px; /* 左导航宽 */
+    --rail-w: 248px; /* 左导航宽 */
     --head-h: 118px; /* 屏内粘性表头高，粘性侧栏用它做 top */
     --drawer-h: 60px; /* 作业抽屉高，AppShell 按开合改写 */
     --pane-max: calc(100vh - var(--head-h) - var(--drawer-h) - 40px);
@@ -174,6 +174,27 @@
     /* 中文两端对齐会拉出难看的字距（U-14），全局禁掉 */
     text-align: start;
     -webkit-font-smoothing: antialiased;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--color-accent-line-2);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--color-accent-ring);
+    color: var(--color-ink);
   }
 
   /* 斜纹底：用于「这一段没抓样本」「fate 被遮住」这类「不是空，是取不到」 */

@@ -19,7 +19,7 @@ import type {
   JobRequest,
   JobsResponse,
 } from '@/types/jobs'
-import type { NovelOverview, NovelsResponse } from '@/types/novels'
+import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type {
   CheckReport,
   InboxResponse,
@@ -42,6 +42,95 @@ import { get, post, postRaw } from './client'
 import { mockApi } from './mock'
 
 const n = (sid: string) => '/novels/' + encodeURIComponent(sid)
+
+/**
+ * 当前后端的 NovelOverview 已收敛成「八个 StageState 的列表」，而冻结 mock 仍是
+ * 早期的「stage -> artifacts」对象。这个适配只放在真实数据缝里，屏幕不认识两套形状。
+ */
+interface BackendArtifactState {
+  rel: string
+  exists: boolean
+  bytes: number | null
+  mtime: number | null
+  freshness: Artifact['freshness']
+  reason: string
+  ghosts: string[]
+  invalid: boolean
+  readable: boolean
+}
+
+interface BackendStageState {
+  stage: string
+  artifacts: BackendArtifactState[]
+  done: boolean | null
+  chapters_done: Record<string, number[]>
+}
+
+interface BackendNovelOverview {
+  sid: string
+  title: string
+  dirname: string
+  stages: BackendStageState[]
+  stage5_modes: string[]
+}
+
+interface BackendNovelList {
+  base: string
+  novels: BackendNovelOverview[]
+}
+
+function inferChapters(stages: BackendStageState[]): number | null {
+  const stage5 = stages.find((stage) => stage.stage === 'stage5')
+  // 半本书已经写了几章，不等于这本书总共有几章；只在整层完成时才用它报总数。
+  if (stage5?.done !== true) return null
+  const ordinals = new Set<number>()
+  for (const values of Object.values(stage5.chapters_done)) {
+    for (const ordinal of values) ordinals.add(ordinal)
+  }
+  return ordinals.size || null
+}
+
+function adaptNovel(raw: BackendNovelOverview): NovelOverview {
+  const stages: Record<string, Artifact[]> = {}
+  const stageDone: Record<string, boolean | null> = {}
+  const chaptersDone: Record<string, Record<string, number[]>> = {}
+
+  for (const state of raw.stages) {
+    stageDone[state.stage] = state.done
+    chaptersDone[state.stage] = state.chapters_done
+    stages[state.stage] = state.artifacts.map((artifact) => ({
+      stage: state.stage,
+      name: artifact.rel.split('/').at(-1) ?? artifact.rel,
+      exists: artifact.exists,
+      bytes: artifact.bytes,
+      mtime: artifact.mtime,
+      provenance: {},
+      freshness: artifact.freshness,
+      stale: [],
+      reason: artifact.reason,
+      ghosts: artifact.ghosts,
+      invalid: artifact.invalid,
+      readable: artifact.readable,
+    }))
+  }
+
+  const all = Object.values(stages).flat()
+  return {
+    sid: raw.sid,
+    title: raw.title,
+    dir: raw.dirname,
+    dirname: raw.dirname,
+    chapters: inferChapters(raw.stages),
+    stages,
+    stage5_modes: raw.stage5_modes,
+    any_stale: all.some((artifact) => artifact.exists && artifact.freshness === 'stale'),
+    any_broken: all.some(
+      (artifact) => artifact.invalid || (artifact.exists && artifact.readable === false),
+    ),
+    stage_done: stageDone,
+    chapters_done: chaptersDone,
+  }
+}
 
 function quoteArg(value: string): string {
   if (/^[\w./:=@,+-]+$/u.test(value)) return value
@@ -102,8 +191,22 @@ function splitLog(text: string): string[] {
  * 组件只消费前端视图；jobs.jsonl 的嵌套记录在这条数据缝统一适配。
  */
 export const realApi: Api = {
-  getNovels: () => get<NovelsResponse>('/novels'),
-  getNovel: (sid) => get<NovelOverview>(n(sid)),
+  getNovels: async () => {
+    const raw = await get<BackendNovelList>('/novels')
+    return { base: raw.base, novels: raw.novels.map(adaptNovel) } satisfies NovelsResponse
+  },
+  getNovel: async (sid) => {
+    const novel = adaptNovel(await get<BackendNovelOverview>(n(sid)))
+    if (novel.chapters !== null || novel.stage_done?.stage1 !== true) return novel
+
+    // 书详情只补一次章数；语料库不做 N+1。章表失败不该带走整本书的顶部信息。
+    try {
+      const index = await get<Stage1Chapters>(n(sid) + '/stage1/chapters')
+      return { ...novel, chapters: index.chapters.length }
+    } catch {
+      return novel
+    }
+  },
   getEnums: () => get<EnumsResponse>('/enums'),
 
   getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),

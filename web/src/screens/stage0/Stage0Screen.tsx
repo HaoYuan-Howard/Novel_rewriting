@@ -90,6 +90,7 @@ export function Stage0Screen() {
         qc.invalidateQueries({ queryKey: qk.s1chapters(sid) }),
         qc.invalidateQueries({ queryKey: qk.s1hook(sid) }),
         qc.invalidateQueries({ queryKey: qk.jobs(sid) }),
+        qc.invalidateQueries({ queryKey: qk.approvals(sid) }),
         qc.invalidateQueries({ queryKey: qk.novel(sid) }),
         qc.invalidateQueries({ queryKey: qk.novels() }),
       ])

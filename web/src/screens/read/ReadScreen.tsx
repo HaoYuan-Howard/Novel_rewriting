@@ -21,7 +21,7 @@ export function ReadScreen() {
   const nav = useNavigate()
   const { hasSample } = useSampleCoverage()
 
-  const strip = Array.from({ length: 8 }, (_, i) => i + 1).map((n) => ({
+  const strip = vm.chapters.map((n) => ({
     n,
     active: n === vm.ordinal,
     dim: !hasSample(vm.sid, n),
@@ -35,7 +35,7 @@ export function ReadScreen() {
         loadingLabel="读这一章的骨架"
         missing={{
           title: '原文 ↔ 骨架',
-          chapters: [1, 2, 3, 4, 5, 6, 7, 8],
+          chapters: vm.chapters,
           ordinal: vm.ordinal,
           path: 'read',
         }}

@@ -45,7 +45,7 @@ export function AppShell() {
 
   return (
     <div
-      className="grid min-h-screen min-w-[1280px] bg-page"
+      className="grid min-h-screen min-w-full bg-page"
       style={
         {
           gridTemplateColumns: 'var(--rail-w) 1fr',

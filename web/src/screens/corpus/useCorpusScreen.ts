@@ -22,6 +22,7 @@ export interface ArtifactView {
   name: string
   size: string
   freshness: FreshnessDisplay
+  issue: string | null
 }
 
 export interface StageColumn {
@@ -31,6 +32,8 @@ export interface StageColumn {
   items: ArtifactView[]
   isStage5: boolean
   modes: string[]
+  done: boolean | null
+  stateLabel: string
 }
 
 export interface BookView {
@@ -48,62 +51,96 @@ export interface BookView {
 
 function viewOf(n: NovelRow): BookView {
   const all = STAGES.flatMap((s) => n.stages[s.key] ?? [])
+  const modes = (n.stage5_modes ?? []).filter((x) => x.charAt(0) !== '_')
 
-  const columns: StageColumn[] = STAGES.map((s) => ({
-    n: s.n,
-    label: s.label,
-    key: s.key,
-    items: (n.stages[s.key] ?? []).map((a) => ({
-      name: a.name.replace(/\.json$/, ''),
-      size: kb(a.bytes),
-      freshness: freshnessOf(a),
-    })),
-    isStage5: s.key === 'stage5',
-    // 以 _ 开头的是目录名泄漏进了模式列表，不是一条臂
-    modes: (n.stage5_modes ?? []).filter((x) => x.charAt(0) !== '_'),
-  }))
+  const columns: StageColumn[] = STAGES.map((s) => {
+    const artifacts = n.stages[s.key] ?? []
+    const declared = n.stage_done?.[s.key]
+    // 旧 mock 没有 StageState.done；兼容推导只服务离线样本，真实模式永远走服务端值。
+    const done =
+      declared !== undefined
+        ? declared
+        : s.key === 'stage5'
+          ? modes.length > 0
+          : artifacts.length
+            ? artifacts.every(
+                (a) => a.exists && a.freshness !== 'stale' && !a.invalid && a.readable !== false,
+              )
+            : false
 
-  const staleN = all.filter((a) => a.freshness === 'stale').length
-  const unknownN = all.filter((a) => a.freshness === 'unknown').length
+    return {
+      n: s.n,
+      label: s.label,
+      key: s.key,
+      items: artifacts.map((a) => ({
+        name: a.name.replace(/\.json$/, ''),
+        size: a.bytes === null ? '—' : kb(a.bytes),
+        freshness: freshnessOf(a),
+        issue: a.invalid ? '已隔离' : a.exists && a.readable === false ? '无法读取' : null,
+      })),
+      isStage5: s.key === 'stage5',
+      modes,
+      done,
+      stateLabel: done === true ? '已完成' : done === false ? '待继续' : '判不了',
+    }
+  })
+
+  const staleN = all.filter((a) => a.exists && a.freshness === 'stale').length
+  const unknownN = all.filter((a) => a.exists && a.freshness === 'unknown').length
   const missingN = all.filter((a) => !a.exists).length
+  const brokenN = all.filter((a) => a.invalid || (a.exists && a.readable === false)).length
+  const pending = columns.find((column) => column.done === false)
+  const unknownStageN = columns.filter((column) => column.done === null).length
 
   let verdict: string, verdictColor: string, verdictBg: string, verdictDetail: string
-  if (n.any_broken || missingN) {
-    verdict = '有产物坏了'
+  if (n.any_broken || brokenN) {
+    verdict = brokenN + ' 份产物不可用'
     verdictColor = SEV.hard.color
     verdictBg = SEV.hard.bg
-    verdictDetail = missingN + ' 份不在盘上'
+    verdictDetail = '盘上存在，但当前版本读不回来'
   } else if (staleN || n.any_stale) {
     verdict = staleN + ' 份过期'
     verdictColor = FRESH.stale.color
     verdictBg = FRESH.stale.bg
     verdictDetail = '上游变了，下游要重跑'
+  } else if (pending) {
+    verdict = '待继续'
+    verdictColor = FRESH.fresh.color
+    verdictBg = FRESH.fresh.bg
+    verdictDetail = '下一步：' + pending.n + ' · ' + pending.label
   } else if (unknownN) {
     // 「无从判断」不是「没问题」：它只是没有来源记录
     verdict = unknownN + ' 份无从判断'
     verdictColor = FRESH.unknown.color
     verdictBg = FRESH.unknown.bg
-    verdictDetail = '其余 ' + (all.length - unknownN) + ' 份新鲜'
+    verdictDetail = missingN
+      ? missingN + ' 份尚未落盘'
+      : '其余 ' + (all.filter((a) => a.exists).length - unknownN) + ' 份新鲜'
+  } else if (unknownStageN) {
+    verdict = unknownStageN + ' 层完成度判不了'
+    verdictColor = FRESH.unknown.color
+    verdictBg = FRESH.unknown.bg
+    verdictDetail = '不是没跑，需要打开书逐层确认'
   } else {
-    verdict = '暂时不用管'
+    verdict = '全链已有产物'
     verdictColor = FRESH.fresh.color
     verdictBg = FRESH.fresh.bg
-    verdictDetail = all.length + ' 份全部新鲜'
+    verdictDetail = all.filter((a) => a.exists).length + ' 份产物可读'
   }
 
-  const mt = all.reduce((m, a) => Math.max(m, a.mtime || 0), 0)
+  const mt = all.reduce((m, a) => Math.max(m, a.mtime ?? 0), 0)
 
   return {
     sid: n.sid,
     title: n.title,
-    chaptersLabel: n.chapters + ' 章',
+    chaptersLabel: n.chapters === null ? '章数待分章' : n.chapters + ' 章',
     columns,
     verdict,
     verdictDetail,
     verdictColor,
     verdictBg,
     mtimeLabel: mt ? '最近落盘 ' + when(mt) : null,
-    artifactCount: all.length,
+    artifactCount: all.filter((a) => a.exists).length,
   }
 }
 

@@ -1,9 +1,25 @@
 import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '@/api/endpoints'
+import { qk } from '@/api/queryKeys'
 import { RAIL, type ScreenName } from '@/constants/vocabulary'
 import { RAIL_GATE, RAIL_LOCK } from '@/constants/gates'
 import { useApprovals } from '@/hooks/useApprovals'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { cx } from '@/lib/cx'
+
+const SCREEN_STAGE: Partial<Record<ScreenName, string>> = {
+  stage0: 'stage0',
+  stage1: 'stage1',
+  read: 'stage2',
+  global: 'stage2',
+  style: 'stage3',
+  stage4: 'stage4',
+  depth: 'stage4',
+  stage5: 'stage5',
+  stage6: 'stage6',
+  stage7: 'stage7',
+}
 
 /**
  * 左侧常驻阶段导航。
@@ -23,6 +39,12 @@ export function Rail({
   const nav = useNavigate()
   const { doc } = useApprovals(sid ?? '')
   const { defaultOrdinal } = useSampleCoverage()
+  const overview = useQuery({
+    queryKey: qk.novel(sid ?? ''),
+    queryFn: () => api.getNovel(sid!),
+    enabled: !!sid,
+    retry: false,
+  })
 
   const inBook = !!sid
 
@@ -60,7 +82,17 @@ export function Rail({
             const gk = RAIL_GATE[r.screen]
             const ok = !!(doc && gk && doc.gate[gk])
             const lock = RAIL_LOCK[r.screen]
-            const locked = !!(doc && lock && !doc.gate[lock.need])
+            const stage = SCREEN_STAGE[r.screen]
+            const artifacts = stage ? (overview.data?.stages[stage] ?? []) : []
+            const stageDone = stage ? overview.data?.stage_done?.[stage] : undefined
+            const hasArtifact =
+              !!stage &&
+              (stageDone === true ||
+                artifacts.some((artifact) => artifact.exists && artifact.readable !== false) ||
+                (stage === 'stage5' && !!overview.data?.stage5_modes.length))
+            // 已有真实产物时允许只读审阅；继续运行和定稿仍由 GateBar 按审批记录拦住。
+            const locked = !!(doc && lock && !doc.gate[lock.need] && !hasArtifact)
+            const reviewable = hasArtifact && !ok
             const active = screen === r.screen
             const to =
               '/n/' +
@@ -73,12 +105,19 @@ export function Rail({
                 key={r.screen}
                 type="button"
                 disabled={locked}
-                title={locked ? lock!.why : undefined}
+                title={
+                  locked
+                    ? lock!.why
+                    : reviewable
+                      ? '已有盘上产物，可只读审阅；继续运行仍需补齐人工确认'
+                      : undefined
+                }
+                aria-current={active ? 'page' : undefined}
                 onClick={() => nav(to)}
                 className={cx(
                   'flex items-center gap-7 rounded-btn border-none px-10 py-7 text-left text-body',
                   active ? 'bg-card font-semibold text-ink shadow-current' : 'bg-transparent text-ink-3',
-                  locked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+                  locked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
                 )}
               >
                 <span
@@ -93,7 +132,15 @@ export function Rail({
                     ok ? 'text-mini text-gate-mark' : 'text-micro text-ink-6',
                   )}
                 >
-                  {ok ? '✓' : locked ? '锁' : ''}
+                  {ok
+                    ? '✓'
+                    : locked
+                      ? '先过 ' + lock!.need.slice(1)
+                      : reviewable
+                        ? stageDone === false
+                          ? '需处理'
+                          : '待审'
+                        : ''}
                 </span>
               </button>
             )

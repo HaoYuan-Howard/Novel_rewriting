@@ -39,7 +39,7 @@ export function Stage1Screen() {
   }
 
   return (
-    <ScreenFrame screen={'stage1'} showGate={false} allowCheckRerun={false}>
+    <ScreenFrame screen={'stage1'} allowCheckRerun={false}>
       <QueryStates q={segments} loadingLabel={'读取 Stage 1 连续切分'}>
         {(document) => (
           <QueryStates q={chapters} loadingLabel={'读取章节索引'}>

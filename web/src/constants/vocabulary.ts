@@ -241,8 +241,9 @@ export interface StageDef {
   label: string
 }
 
-/** 产物矩阵的七列。注意：stage5 成稿不进产物表，只记跑过哪几条臂。 */
+/** 产物矩阵的八列。注意：stage5 成稿不进产物表，只记跑过哪几条臂。 */
 export const STAGES: StageDef[] = [
+  { n: '0', key: 'stage0', label: '剔除番外' },
   { n: '1', key: 'stage1', label: '摄入分章' },
   { n: '2', key: 'stage2', label: '抽骨架' },
   { n: '3', key: 'stage3', label: '量文风' },

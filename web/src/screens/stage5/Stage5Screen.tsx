@@ -35,7 +35,7 @@ export function Stage5Screen() {
         loadingLabel="读这一章的成稿"
         missing={{
           title: '成稿 ↔ 材料',
-          chapters: [1, 2, 3, 4, 5, 6, 7, 8],
+          chapters: [vm.ordinal],
           ordinal: vm.ordinal,
           path: 'stage5',
         }}
@@ -51,7 +51,7 @@ export function Stage5Screen() {
                   </div>
                 </div>
                 <ChapterStrip
-                  items={Array.from({ length: 8 }, (_, i) => i + 1).map((n) => ({
+                  items={d.chapters.map((n) => ({
                     n,
                     active: n === vm.ordinal,
                     dim: !hasSample(vm.sid, n),

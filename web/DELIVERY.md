@@ -85,7 +85,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 路由 | 屏 |
 |---|---|
 | `/` | 语料库 |
-| `/n/:sid` | → `stage1` |
+| `/n/:sid` | → `stage0`（新书先审非正文；已有产物仍可从左栏直达各层） |
 | `/n/:sid/stage0` | 剔除番外 **（新增，brief 表里没有）** |
 | `/n/:sid/stage1` | 分章报告 |
 | `/n/:sid/read/:o` | 原文↔骨架 |
@@ -173,6 +173,9 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
      动作分类以 `/api/enums` 下发为准。
    - Stage 0：`report` / `segments` / `edit` / `approve`
    - Stage 1：`partition` / `segments` / `chapters` / `hook_copy`
+   - 语料库：真实 `/api/novels` 的 `stages: StageState[]` 在 `api/endpoints.ts`
+     一次适配成屏幕使用的 stage→artifact 结构；章数只在 stage1 已完成时读取真实章表，
+     不再显示 `undefined 章`，列表页也不为每本书额外发 N+1 请求。
    - 上传：`POST /api/upload?filename=`，请求体是原始文件字节
    - 深度章节选择已写入人工验收记录：`GET/POST /api/novels/:sid/approvals`
      （形状：`{v, sid, gate{s0..s7}, seen{read,global}, deep[], writing, spawns}`）

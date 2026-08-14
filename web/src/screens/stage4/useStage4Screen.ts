@@ -159,6 +159,7 @@ export function useStage4Screen() {
     query: q,
     sid,
     ordinal,
+    chapters: d?.chapters ?? [ordinal],
     identity,
     ctxMissing: !!d && !identity && ctx === null,
     selBeat,
