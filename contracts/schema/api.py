@@ -1227,6 +1227,38 @@ class ReviewView(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 二j、人工写回的请求体（三条 0 成本路：改稿 / 文案定稿 / 人名定稿）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DraftEditRequest(StrictModel):
+    """`POST /api/novels/:sid/review/:o/edit` —— 章节改稿。
+
+    服务进程把 `text` 落成 `_service/edits/` 下的一次性人工稿（文件名带 `ch{o}`，
+    `stage5.write --apply-edit` 从文件名认章），CLI 子进程走**与生成稿同一个判定落点**
+    （`run_apply_edit`：归一 → 判据 → 归档 → 写回，`origin=human` 记账）。
+
+    ⚠ **没有乐观锁**（`stage5.write --apply-edit` 无对应机制）：并发改稿以
+    `archive_round` 的整份归档兜底——覆盖的代价是多花一轮归档，不是丢稿。
+    登记为已知限制，不在 API 层造第二套锁。
+    """
+
+    mode: Literal[DEPTH_MODES]
+    text: str = Field(min_length=1)
+
+
+class HookApproveRequest(StrictModel):
+    """`POST /api/novels/:sid/stage6/approve` —— 文案定稿（`--pick`，1 起）。
+
+    ⚠ **只收序号不收文本**（2026-08-17 用户裁决）：改字是另一个节点
+    （`stage6.hook --apply-edit`），且契约把编辑文件钉死在书目录内（`_edit_rel`）、
+    R-11.3 禁止服务进程写产物盘 ⇒ 浏览器文本没有合规通道落成 `hook_edit.json`。
+    改字走 CLI；S-11 的产品语义本来就只有「定稿按钮」（人选那一下是唯一闸门）。
+    """
+
+    pick: int = Field(ge=1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 三、错误体（`_api.md` §六）
 # ─────────────────────────────────────────────────────────────────────────────
 

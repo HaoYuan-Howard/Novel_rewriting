@@ -295,6 +295,10 @@ def test_job_conflict_maps_and_returns_409():
         '/api/novels/{sid}/approvals/writing',
         '/api/novels/{sid}/approvals/reset',
         '/api/upload',
+        # 第二阶段批 3 · 人工写回（行为在 `tests/test_api_edits.py`）
+        '/api/novels/{sid}/review/{ordinal}/edit',
+        '/api/novels/{sid}/stage6/approve',
+        '/api/novels/{sid}/stage7/approve',
     }
     assert '/api/jobs' in posts
 

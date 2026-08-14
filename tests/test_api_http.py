@@ -330,6 +330,11 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage4/{ordinal}': ['GET'],
         '/api/novels/{sid}/stage5/{ordinal}': ['GET'],
         '/api/novels/{sid}/review/{ordinal}': ['GET'],
+        # ── 第二阶段 · 批 3：人工写回（`tests/test_api_edits.py` 管行为）。
+        #    ⚠ `stage6/edit` / `stage7/edit` 刻意不在（2026-08-17 裁决：改字走 CLI）。
+        '/api/novels/{sid}/review/{ordinal}/edit': ['POST'],
+        '/api/novels/{sid}/stage6/approve': ['POST'],
+        '/api/novels/{sid}/stage7/approve': ['POST'],
     }
 
 

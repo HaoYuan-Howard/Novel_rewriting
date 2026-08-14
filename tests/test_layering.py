@@ -349,6 +349,7 @@ _SERVICE_MUTATORS = {
     ('jobs', 'start'),
     ('uploads', 'save_upload'),
     ('uploads', 'save_edit_plan'),
+    ('uploads', 'save_draft_edit'),
     ('uploads', 'discard_edit_plan'),
     ('approvals', 'approve_gate'),
     ('approvals', 'mark_seen'),
@@ -411,6 +412,10 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
             ('approvals', 'approve_gate'), ('approvals', 'mark_seen'),
             ('approvals', 'set_deep'), ('approvals', 'begin_writing'),
             ('approvals', 'reset'),
+        },
+        'novel/api/routes/edits.py': {
+            ('jobs', 'run'), ('uploads', 'save_draft_edit'),
+            ('uploads', 'discard_edit_plan'), ('approvals', 'approve_gate'),
         },
     }
     assert set(hits) == set(expected)

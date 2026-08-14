@@ -121,8 +121,45 @@ def save_edit_plan(
     return target.resolve()
 
 
+def save_draft_edit(
+    base: str | os.PathLike[str],
+    sid: str,
+    ordinal: int,
+    text: str,
+) -> Path:
+    '''把一份人工改稿原子落进服务目录，供 `stage5.write --apply-edit` 子进程读取。
+
+    ⚠ **文件名必须带 `ch{o}`**：`write._ordinal_of_edit` 从文件名认章、认不出当场炸
+    （不从正文猜——猜错会把一章的人工修改落到另一章头上，而两边都不出声）。
+    与 `save_edit_plan` 同族：一次性文件，作业结束即由调用方清理。
+    '''
+    try:
+        paths.check_sid(sid)
+    except PathRefused as exc:
+        raise SourcePathRejected(f'人工改稿的书 id 不合法：{exc}') from exc
+    if ordinal < 1:
+        raise SourcePathRejected(f'章号必须 ≥1，拿到 {ordinal}')
+    if not text.strip():
+        raise SourcePathRejected('人工改稿是空的——空稿不是一次修改')
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'ch{ordinal:02d}-{uuid.uuid4().hex}.txt'
+    tmp = target.with_suffix('.tmp')
+    try:
+        tmp.write_bytes(text.encode('utf-8'))
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存人工改稿失败：{exc!r}') from exc
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return target.resolve()
+
+
 def discard_edit_plan(base: str | os.PathLike[str], plan_path: str | os.PathLike[str]) -> None:
-    '''只删除 _service/edits 内的一次性计划；路径逃逸会显式拒绝。'''
+    '''只删除 _service/edits 内的一次性文件（编辑计划 / 人工改稿）；路径逃逸会显式拒绝。'''
     root = (service_dir(base) / EDITS_DIRNAME).resolve()
     candidate = Path(plan_path).resolve()
     try:
