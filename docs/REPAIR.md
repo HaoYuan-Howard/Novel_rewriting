@@ -37,7 +37,7 @@ CLI 还是将来的 agent，回路的行为完全相同。
 | llm 准入的四道筛 | `novel/stages/stage5/write.py::revise_targets` |
 | 轮次上限 | `contracts/invariants.py::STOP_REWRITE_AFTER` |
 | 收缩回归护栏（删坏了整轮弃用） | `novel/stages/stage5/checks.py::trim_regressions` |
-| human 落面（六类清单生产者） | `novel/views/inbox.py::inbox_view` |
+| human 落面（六类清单生产者） | `novel/views/inbox.py::inbox_view`；CLI 口 `python -m novel.cli inbox <sid> --base <Output>`（0 成本纯读），HTTP 口 `GET /api/novels/{sid}/inbox` |
 | 六类的取值面与纪律（`unver` 永不入列） | `contracts/invariants.py::INBOX_KIND` |
 
 ## 实测账

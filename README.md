@@ -71,6 +71,7 @@ stage1 分章，所涉节点均 `paid=False`——已在真实服务上走通；
 ```powershell
 conda run -n novel_refactor python -m pytest -q
 conda run -n novel_refactor python -m novel.api --base <Output目录>
+conda run -n novel_refactor python -X utf8 -u -m novel.cli inbox <sid> --base <Output目录>   # 待人工六类清单（0 成本）
 ```
 
 API 只监听 `127.0.0.1:8765`。前端默认配置位于 `web/.env`；真实联调时应为

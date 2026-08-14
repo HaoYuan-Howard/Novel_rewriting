@@ -7,7 +7,10 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     run <node> <sid> [flags]        真跑一个节点。**它就是 `build_argv` 拼出来的那条**
     preview <node> <sid> [flags]    打印 argv + 贵贱 + 写不写盘。0 成本
     state <sid>                     这本书跑到哪了（产物存在性 + 来源新鲜度）
+    inbox <sid>                     待人工六类清单（0 成本纯读；有待办≠失败）
     queue <sid…> --until <stage>    批量计划；含付费项时要 `--yes`
+    jobs                            作业记录（新的在前）
+    reconcile                       启动时把「运行中」一律改判「不知道」
 
 ⚠⚠ **付费跑法必须带 `--yes`**（`Q-10`：花钱前必须人确认）。
 `build_argv` 会替付费的那条**自动补上**——到了构造 argv 那一步，
@@ -88,6 +91,10 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser('state', help='这本书跑到哪了')
     s.add_argument('sid')
     s.add_argument('--base', required=True)
+
+    ib = sub.add_parser('inbox', help='待人工六类清单（0 成本纯读）')
+    ib.add_argument('sid')
+    ib.add_argument('--base', required=True)
 
     q = sub.add_parser('queue', help='批量计划')
     q.add_argument('sids', nargs='+')
@@ -853,6 +860,29 @@ def _cmd_state(a: argparse.Namespace) -> int:
     return X.OK
 
 
+def _cmd_inbox(a: argparse.Namespace) -> int:
+    """待人工六类清单的 CLI 面。**纯读、0 成本、退出码恒 0**。
+
+    ⚠ 「有待办」不是「失败」：`approval` 类按设计必然出现（人定稿闸门），
+    拿 `CHECK_FAILED` 翻译它就是把清单说成一次不合格——判定语义只归
+    check 报告那一个判官（`R-13.6`）。
+    ⚠ 机读口在 HTTP（`GET /api/novels/{sid}/inbox`，`InboxView`）；
+    这里只出人读文本。**再开一个机读口就是同一事实的第二落点。**
+    ⚠ 空清单也打首行——「共 0 项」是查过的 0，不打印是没查（LESSONS 第 2 条）。
+    """
+    from novel.views.inbox import inbox_view
+    view = inbox_view(a.base, a.sid)
+    counts = ' · '.join(f'{kind} {n}' for kind, n in view.counts.items())
+    print(f'── 待人工 ── 共 {view.total} 项（{counts}）；'
+          f'wontfix 豁免 {view.wontfix} 条（有人看过并决定不修，不占清单）')
+    for it in view.items:
+        ch = f' ch{it.chapter}' if it.chapter is not None else ''
+        print(f'  [{it.kind}] {it.stage}{ch}  {it.rule}')
+        print(f'      {it.what}')
+        print(f'      → {it.how}')
+    return X.OK
+
+
 def _cmd_queue(a: argparse.Namespace) -> int:
     plan = Q.plan(a.base, a.sids, until_stage=a.until)
     print(f'── 计划 ── {len(plan.items)} 项要跑，{len(plan.blocked)} 项被挡住，'
@@ -892,7 +922,7 @@ def _cmd_reconcile(a: argparse.Namespace) -> int:
 
 
 _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
-         'state': _cmd_state, 'queue': _cmd_queue,
+         'state': _cmd_state, 'inbox': _cmd_inbox, 'queue': _cmd_queue,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile}
 
 

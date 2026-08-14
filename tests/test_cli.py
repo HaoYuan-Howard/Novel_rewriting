@@ -228,6 +228,30 @@ def test_an_uncaught_exception_exits_seventy_with_a_stack(monkeypatch, capsys):
     assert '70' in err and 'Traceback' in err, '崩溃要报数字本身，栈要留全'
 
 
+def test_inbox_prints_all_six_kind_counts_with_a_denominator(box, capsys):
+    """`inbox` 的首行是**带分母的汇总**——六键全出，0 也要出。
+
+    空清单不打印首行就是「没查」冒充「没事」（LESSONS 第 2 条）；
+    退出码恒 0：「有待办」不是「失败」，判定语义只归 check 报告（`R-13.6`）。
+    """
+    rc = _run('inbox', box.sid, '--base', str(box.root))
+    assert rc == X.OK
+    out = capsys.readouterr().out
+    assert '── 待人工 ──' in out and '共 ' in out and 'wontfix' in out
+    for kind in ('invalid', 'rejected', 'stalled',
+                 'human_only', 'upstream', 'approval'):
+        assert kind in out, f'六类计数行少了 {kind}'
+
+
+def test_inbox_on_an_unknown_sid_is_a_terminal_state_not_a_stack(box, capsys):
+    """敲错 sid 落显式终态（先跑 stage1 那句话），不是一段栈、更不是崩溃码。"""
+    rc = _run('inbox', '0' * 19, '--base', str(box.root))
+    assert rc == X.TERMINAL_STATE
+    err = capsys.readouterr().err
+    assert 'Traceback' not in err
+    assert '显式终态' in err
+
+
 def test_a_terminal_state_prints_no_stack(box, capsys):
     """**不是 bug，所以不打栈。** 打一段栈会让人以为程序坏了，
     而它说的其实是「按设计这一步走不下去」。"""
