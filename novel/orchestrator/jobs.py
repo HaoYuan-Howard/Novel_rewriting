@@ -37,6 +37,7 @@ from typing import BinaryIO
 
 from contracts.invariants import NODES
 from contracts.schema.orchestration import JobEvent, JobRecord, JobStart, Step
+from novel.cli.exit_codes import CRASH
 from novel.errors import TerminalState
 from novel.orchestrator.nodes import build_steps, child_env
 from novel.prov import code_version
@@ -455,7 +456,7 @@ def start(
         raise
 
     def worker() -> None:
-        rc = 70
+        rc = CRASH
         try:
             rc = _run_steps(base, job_id, plan, spawn)
         except BaseException:
@@ -484,7 +485,7 @@ def start(
             _THREADS.pop(job_id, None)
         registry.release(key, job_id)
         append_event(base, JobEvent(
-            job_id=job_id, kind='ended', ts=int(time.time()), exit_code=70))
+            job_id=job_id, kind='ended', ts=int(time.time()), exit_code=CRASH))
         raise
     return next(
         record for record in fold(read_events(base), live=registry.live())

@@ -585,7 +585,7 @@ def test_completeness_never_peeks_at_the_job_records():
 #: 而退出码正是编排层判成败的依据（`R-12.3`）。
 _SYS_EXIT_ALLOWED = {
     'novel/cli/': '节点跑法的进程入口。**全仓唯一把异常翻成退出码的地方**'
-                  '（`novel/cli/exit_codes.py` 是那四个数的唯一落点）',
+                  '（`novel/cli/exit_codes.py` 是那五个数的唯一落点）',
     'novel/api/__main__.py': '服务进程的入口（骨架 E5 加）。`--base` 敲错时要以非零退出——'
                              '不这样的话，一个起不来的服务会以退出码 0 结束，'
                              '而「起来了但没有书」与「参数敲错了」在那一刻长得一样。'

@@ -126,7 +126,7 @@ def test_every_node_is_a_terminal_state_not_a_stack(box):
         assert got[node] != X.REFUSED_BY_STRUCTURE, (
             f'{node} 跑出了 {X.REFUSED_BY_STRUCTURE}'
             f'（{X.MEANING[X.REFUSED_BY_STRUCTURE]}）——那是 bug，不是流程走不下去')
-        assert got[node] in X.MEANING, f'{node} 的退出码 {got[node]} 不在四个里'
+        assert got[node] in X.MEANING, f'{node} 的退出码 {got[node]} 不在取值面里'
     assert len(NODES) >= 16, '守卫的守卫：节点表空掉时上面那个 for 一条都不跑'
 
 
@@ -197,14 +197,35 @@ def test_check_only_returns_zero_on_a_clean_book(box):
                 '--base', str(box.root)) == X.OK
 
 
-def test_the_exit_code_table_keeps_its_four_meanings_apart():
+def test_the_exit_code_table_keeps_its_five_meanings_apart():
     """⚠ `1` 与 `2` 必须分开：「跑成了，结论是不合格」与「压根没跑成」。
 
     合成一个数，编排层就分不出「这一层查出问题了」与「这一层没能跑」（`Q-2`）。
+    ⚠ `1` 与 `70` 也必须分开：未捕获异常若走 Python 默认的 1，
+    真崩溃就被编排层读成「跑完了但不合格」。
     """
-    assert len({X.OK, X.CHECK_FAILED, X.TERMINAL_STATE, X.REFUSED_BY_STRUCTURE}) == 4
+    assert len({X.OK, X.CHECK_FAILED, X.TERMINAL_STATE,
+                X.REFUSED_BY_STRUCTURE, X.CRASH}) == 5
     assert set(X.MEANING) == {X.OK, X.CHECK_FAILED, X.TERMINAL_STATE,
-                              X.REFUSED_BY_STRUCTURE}
+                              X.REFUSED_BY_STRUCTURE, X.CRASH}
+
+
+def test_an_uncaught_exception_exits_seventy_with_a_stack(monkeypatch, capsys):
+    """⭐ 真崩溃是 `70` 不是 `1`——**结论未知**与「判定不通过」必须分得开。
+
+    此前未捕获异常穿透 `main()` 走 Python 默认退出码 1，与 `CHECK_FAILED`
+    同数：stage5 写了一半崩了与「验收没过」在账本上是同一副面孔。
+    """
+    from novel.cli import main as M
+
+    def boom(_a):
+        raise RuntimeError('人为注入的崩溃')
+
+    monkeypatch.setitem(M._CMDS, 'state', boom)
+    rc = _run('state', 'whatever', '--base', 'x')
+    assert rc == X.CRASH
+    err = capsys.readouterr().err
+    assert '70' in err and 'Traceback' in err, '崩溃要报数字本身，栈要留全'
 
 
 def test_a_terminal_state_prints_no_stack(box, capsys):

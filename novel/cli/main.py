@@ -913,6 +913,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f'\n✗ 结构性拒绝（这是 bug）：{e}', file=sys.stderr)
         traceback.print_exc()
         return X.REFUSED_BY_STRUCTURE
+    except Exception as e:
+        # 此前这一族穿透出去走 Python 默认退出码 1，与 `CHECK_FAILED` 同数
+        # ——真崩溃被编排层读成「跑完了但不合格」。⚠ 不捕 `KeyboardInterrupt`/
+        # `SystemExit`（它们不是 `Exception`）：Ctrl-C 是人的动作，不是 bug。
+        print(f'\n✗ 未捕获异常（exit {X.CRASH}，结论未知）：{e}', file=sys.stderr)
+        traceback.print_exc()
+        return X.CRASH
 
 
 if __name__ == '__main__':          # pragma: no cover —— 由 `__main__.py` 走
