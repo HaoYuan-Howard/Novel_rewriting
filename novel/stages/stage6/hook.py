@@ -29,7 +29,8 @@ from contracts.schema.stage3 import StyleGrounding
 from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import ContextSource
 from contracts.schema.stage6 import (
-    ApprovedHook, Candidate, Hook, HookParams, HookProvenance, HookResponse, Mech,
+    ApprovedHook, Candidate, Hook, HookEdit, HookParams, HookProvenance, HookResponse,
+    Mech,
 )
 from novel import paths
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
@@ -44,6 +45,8 @@ from novel.stages.stage6.measure import (
 from novel.store import ArtifactStore
 
 REL = 'stage6/hook.json'
+#: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `HookEdit`）。
+EDIT = 'stage6/hook_edit.json'
 HOOK_COPY = 'stage1/hook_copy.json'
 GLOBAL_GROUNDING = 'stage2/global_grounding.json'
 STYLE_GROUNDING = 'stage3/style_grounding.json'
@@ -376,6 +379,80 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
             invalid_path=str(p))
     store.write(REL, artifact)
     return artifact
+
+
+def _edit_rel(store: ArtifactStore, edit_path: str) -> str:
+    """编辑文件路径 → **仓内相对路径**（形态照 stage7 `rename._edit_rel`）。"""
+    if not edit_path:
+        return EDIT
+    root = Path(store.ctx.novel_dir)
+    try:
+        return Path(edit_path).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        raise TerminalState(
+            f'`--apply-edit {edit_path}` 落在这本书的产物目录之外（{root}）。'
+            f'编辑文件的**形状是契约**（`ARTIFACTS` 里登记着 {EDIT}）——'
+            f'放在别处就没有任何东西在管它，也记不进来源账') from None
+
+
+def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckReport]:
+    """`--apply-edit`：人手改**一条**文案文本（候选或定稿），0 成本。
+
+    **必经 `_normalize_and_judge`**（本层唯一的归一+判定落点；`hook_reuses_source`
+    那条 HARD 守的正是走这条路的人——人手里有原作文案段，模型没有）。
+    落盘**不设新硬闸**：本层闸门语义是「无一干净候选才拦」（run_hook），编辑单条
+    文本不适用整拦；红行照 `--recheck` 先例呈现在报告里，退出码由 `report.passed` 定。
+
+    ⚠ 来源账走 `rewrite_provenance(prev, by='--apply-edit')`（真改了 LLM 产的字节，
+    与 `--pick` 相反——那条一个字都不动）。旧轮先归档。
+    ⚠ 语义结论按文本 sha1 绑定：本次改字后自动过期成 unver，重跑 `stage6.semantic` 即清。
+    ⚠ **基线只认正式 `REL`**：盘上只有 `.INVALID` 时走既有自救路
+    （直接改 `.INVALID` 文件 → `--revalidate`，`GateBlocked` 的提示写着）——
+    给同一件事开第二扇门，两扇门就会各自漂。
+    """
+    store = ArtifactStore(ctx)
+    rel = _edit_rel(store, edit_path)
+    if not store.exists(rel):
+        raise TerminalState(
+            f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**'
+            f'（candidate 指明改哪条候选，null ⇒ 写/替换定稿），'
+            f'把它放到这本书的 `stage6/` 下（缺省文件名 `hook_edit.json`）')
+    edit = store.read(HookEdit, rel)
+    if not store.exists(REL):
+        raise TerminalState(
+            f'{REL} 不在盘上——`--apply-edit` 的基线只认正式产物。'
+            f'被闸门拦下的问题稿走另一条路：直接改 `.INVALID` 文件，'
+            f'`--revalidate` 提升（0 成本）' if store.exists(_INVALID) else
+            f'{REL} 不在盘上——先跑 stage6.hook（付费）')
+    art, _raw = store.read_own(Hook, REL)
+    up = _Upstreams(ctx, store)
+
+    text, mech, fs = _normalize_and_judge(edit.text, up)
+    if edit.candidate is not None:
+        if edit.candidate not in {c.approach for c in art.candidates}:
+            raise TerminalState(
+                f'候选 {edit.candidate!r} 不在这份产物里'
+                f'（有 {[c.approach for c in art.candidates]}）')
+        label = edit.candidate
+        cands = [Candidate(approach=c.approach, text=text, mech=mech,
+                           findings=_labelled(label, fs))
+                 if c.approach == edit.candidate else c
+                 for c in art.candidates]
+        new = art.model_copy(update={
+            'candidates': cands,
+            'provenance': ctx.rewrite_provenance(art.provenance, by='--apply-edit')})
+    else:
+        # 定稿：有前身则记它是从哪条改出来的；没有前身才是 `human_edit`。
+        approach = art.approved.approach if art.approved is not None else 'human_edit'
+        label = f'定稿·{approach}'
+        new = art.model_copy(update={
+            'approved': ApprovedHook(approach=approach, text=text, origin='human',
+                                     mech=mech, findings=_labelled(label, fs)),
+            'provenance': ctx.rewrite_provenance(art.provenance, by='--apply-edit')})
+
+    store.archive_round(REL, keep=True)
+    store.write(REL, new)
+    return new, _report(ctx, store, _judge_artifact(new, up, store), new)
 
 
 def run_approve(ctx: RunContext, pick: int) -> tuple[Hook, CheckReport]:

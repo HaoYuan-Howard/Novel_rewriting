@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 
 from contracts.schema.common import Usage
 from contracts.schema.report import CheckReport
@@ -23,7 +24,7 @@ from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage3 import (
     ChapterStyle, ChapterStyleResponse, HabitRepairResponse, Measurable, StyleAttempt,
-    StyleGrounding, StyleProvenance, StyleResponse,
+    StyleEdit, StyleGrounding, StyleProvenance, StyleResponse,
 )
 from novel import paths
 from novel.core.naming import names_of, spoiler_names_of
@@ -41,6 +42,9 @@ REL = 'stage3/style_grounding.json'
 MAIN_TEXT = 'stage1/main_text.json'
 HOOK_COPY = 'stage1/hook_copy.json'
 GLOBAL_GROUNDING = 'stage2/global_grounding.json'
+
+#: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `StyleEdit`）。
+EDIT = 'stage3/style_edit.json'
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串**——
 #: 手写的那份会在改文件名时安静地指向一个不存在的路径。
@@ -720,3 +724,97 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
         invalid=store.exists(_INVALID),
         revalidated=prov.get('revalidated'), origin=prov.get('origin'))
     return promoted, report
+
+
+def _edit_rel(store: ArtifactStore, edit_path: str) -> str:
+    """编辑文件路径 → **仓内相对路径**（形态照 stage7 `rename._edit_rel`）。
+
+    ⚠ 给了一个产物目录之外的路径 ⇒ **显式终态**，不静默去读它：
+    编辑文件是契约的一部分（`ARTIFACTS` 里有它），落在别处就没有任何东西在管它的形状。
+    """
+    if not edit_path:
+        return EDIT
+    root = Path(store.ctx.novel_dir)
+    try:
+        return Path(edit_path).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        raise TerminalState(
+            f'`--apply-edit {edit_path}` 落在这本书的产物目录之外（{root}）。'
+            f'编辑文件的**形状是契约**（`ARTIFACTS` 里登记着 {EDIT}）——'
+            f'放在别处就没有任何东西在管它，也记不进来源账') from None
+
+
+def run_apply_edit(ctx: RunContext, edit_path: str = ''
+                   ) -> tuple[StyleGrounding, CheckReport]:
+    """`--apply-edit`：吃人手写的画像补丁，走与生成稿**同一道**判定与闸门。0 成本。
+
+    三条纪律（BE-02 的完成标准，与 stage5/stage7 的人工路同款）：
+      · **同一判定落点**（`_judge`）——没有免检写口；HARD ⇒ `.INVALID` 不覆盖正式稿；
+      · **轮次归档**——旧轮进 `_rounds/`，覆盖前有处可回；
+      · **来源账不伪造**——`rewrite_provenance(prev, by='--apply-edit')`：
+        继承 `prompts`/`model` 一个字不动，换 `inputs`，标 `partial_rewrite`
+        （⚠ 不走 `to_human_edit()`：它返回裸 `FreeProvenance`，会被本层收窄成
+        `StyleProvenance` 的载体当场拒收——BE-05 登记的实况）。
+
+    ⚠ **`measurable` 一律照盘上 stage1 重算**（复用 `measure_all`）：人只许改
+    LLM 写的三组散文；实测数字是代码的账，跟着旧稿走会让 `measurable_drift` 说不清。
+    ⚠ **无前稿（正式或 `.INVALID` 皆无）⇒ 显式终态**：这是修订路，不是生成路。
+    ⚠ **不自动触发付费自救**：`habit_quote` 命中同样落 `.INVALID`——人工路花钱
+    需要人自己发起（`--repair-surface-habits`），不由一次 0 成本编辑代扣。
+    """
+    store = ArtifactStore(ctx)
+    rel = _edit_rel(store, edit_path)
+    if not store.exists(rel):
+        raise TerminalState(
+            f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**，'
+            f'把它放到这本书的 `stage3/` 下（缺省文件名 `style_edit.json`）'
+            f'——它的形状是契约的一部分（`StyleEdit`）')
+    edit = store.read(StyleEdit, rel)
+
+    prev_rel = REL if store.exists(REL) else (_INVALID if store.exists(_INVALID) else None)
+    if prev_rel is None:
+        raise TerminalState(
+            '盘上既无正式画像也无 `.INVALID` 问题稿——`--apply-edit` 是修订路，'
+            '不是生成路；先跑一次 stage3.style（付费）')
+    prev, _raw = store.read_own(StyleGrounding, prev_rel)
+
+    main, hook, _gg = _upstreams(store)
+    now = measure_all(main, hook)
+    patched: dict = {'measurable': now,
+                     'provenance': ctx.rewrite_provenance(prev.provenance,
+                                                          by='--apply-edit')}
+    if edit.voice is not None:
+        patched['voice'] = edit.voice
+    if edit.surface_habits is not None:
+        patched['surface_habits'] = list(edit.surface_habits)
+    if edit.hook_style is not None:
+        patched['hook_style'] = edit.hook_style
+    artifact = prev.model_copy(update=patched)
+
+    data = artifact.model_dump(by_alias=True)
+    # `measured_now=now`：刚重算过，漂移应恒为零——非零说明重算链本身坏了，该红。
+    outcomes = _judge(store, data, measured_now=now)
+    hard = _hard_rules(outcomes)
+    if hard:
+        if store.exists(_INVALID):
+            store.archive_round(_INVALID)
+        path = store.write_invalid(REL, artifact, gates_skipped=[])
+        raise GateBlocked(
+            f'人工画像补丁被落盘闸门拦下：{sorted(hard)}。问题稿在 {path}，'
+            f'**正式产物没有被覆盖**；改完编辑文件重跑 `--apply-edit`，'
+            f'或直接改 `.INVALID` 后 `--revalidate` 提升（都是 0 成本）',
+            invalid_path=str(path))
+
+    if store.exists(REL):
+        store.archive_round(REL)
+    store.write(REL, artifact)
+    if store.exists(_INVALID):
+        store.archive_round(_INVALID)
+
+    prov = artifact.model_dump(by_alias=True).get('_provenance') or {}
+    report = build(
+        sid=ctx.sid, node=ctx.node, freshness=store.freshness(REL),
+        outcomes=outcomes, accounting=_accounting_of(prov),
+        invalid=store.exists(_INVALID),
+        revalidated=prov.get('revalidated'), origin=prov.get('origin'))
+    return artifact, report

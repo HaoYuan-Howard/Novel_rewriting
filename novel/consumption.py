@@ -337,11 +337,13 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         'stage1/main_text.json': stage3_main_text,
         'stage1/hook_copy.json': stage3_hook_copy,
         'stage2/global_grounding.json': stage3_grounding,
+        'stage3/style_edit.json': artifact_payload,
     },
     'stage4.plan': {
         'stage1/main_text.json': stage4_main_text,
         'stage2/chapter_blueprints.json': stage4_plan_blueprints,
         'stage2/global_grounding.json': stage4_grounding,
+        'stage4/plan_edit.json': artifact_payload,
     },
     'stage4.context': {
         'stage1/main_text.json': stage4_main_text,
@@ -373,6 +375,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         'stage2/global_grounding.json': stage6_grounding,
         'stage3/style_grounding.json': stage6_style,
         'stage4/writer_context.json': stage6_context,
+        'stage6/hook_edit.json': artifact_payload,
     },
     'stage6.semantic': {
         'stage1/hook_copy.json': stage6_hook_copy,

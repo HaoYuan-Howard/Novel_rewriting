@@ -83,11 +83,11 @@ from contracts.schema.stage2 import (
 )
 from contracts.schema.stage3 import (
     ChapterStyle, ChapterStyleResponse, HabitRepairResponse, HookStyle, Measurable,
-    StyleGrounding, StyleResponse, Voice,
+    StyleEdit, StyleGrounding, StyleResponse, Voice,
 )
 from contracts.schema.stage4 import (
     BookCharacter, CtxBeat, CtxChapter, CtxFacts, PlanBeat, PlanChapter, PlanChapters,
-    WriterContext,
+    PlanEdit, WriterContext,
 )
 from contracts.schema.stage5 import (
     Chapter, DraftConsumed, JudgedDraft, Review, ReviewChapter, SemanticAlignmentResponse,
@@ -95,7 +95,7 @@ from contracts.schema.stage5 import (
     SemanticReview, SemanticSecretAdjudication, SemanticSecretDecision, WontFix,
 )
 from contracts.schema.stage6 import (
-    ApprovedHook, Candidate, Hook, HookClaimDecision, HookSemanticResponse,
+    ApprovedHook, Candidate, Hook, HookClaimDecision, HookEdit, HookSemanticResponse,
     HookSemanticReview, HookTextClaims, HookTextClaimsResponse, Mech,
 )
 from contracts.schema.stage7 import (
@@ -116,7 +116,11 @@ ARTIFACTS: dict[str, type] = {
     'stage2/global_grounding.json': GlobalGrounding,
     'stage2/chapter_blueprints.json': ChapterBlueprints,
     'stage3/style_grounding.json': StyleGrounding,
+    # ⚠ 三份 `*_edit.json` 不是节点产的，是**人产的输入**——但它们落在产物目录、
+    #   被 `--apply-edit` 当决策集吃掉，所以形状同样是契约（stage7 先例，§三）。
+    'stage3/style_edit.json': StyleEdit,
     'stage4/plan_chapters.json': PlanChapters,
+    'stage4/plan_edit.json': PlanEdit,
     'stage4/writer_context.json': WriterContext,
     # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。原型的
     #   `--identity-plan` 整个输出是 `print` + 返回码 ⇒「跑过且写手手里有这些」与
@@ -130,6 +134,7 @@ ARTIFACTS: dict[str, type] = {
     'stage5/semantic_{n}.json': SemanticReview,
     'stage5/wontfix.json': WontFix,
     'stage6/hook.json': Hook,
+    'stage6/hook_edit.json': HookEdit,
     'stage6/semantic_{n}.json': HookSemanticReview,
     'stage7/name_map.json': NameMap,
     'stage7/name_map_edit.json': NameMapEdit,
@@ -160,8 +165,8 @@ __all__ = [
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',
     'StyleGrounding', 'StyleResponse', 'ChapterStyle', 'ChapterStyleResponse',
-    'HabitRepairResponse', 'Voice', 'HookStyle', 'Measurable',
-    'PlanChapters', 'PlanChapter', 'PlanBeat', 'WriterContext', 'BookCharacter',
+    'HabitRepairResponse', 'Voice', 'HookStyle', 'Measurable', 'StyleEdit',
+    'PlanChapters', 'PlanChapter', 'PlanBeat', 'PlanEdit', 'WriterContext', 'BookCharacter',
     'CtxChapter', 'CtxBeat', 'CtxFacts',
     'Chapter', 'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed', 'WontFix',
     'SemanticClaim', 'SemanticChapterClaims', 'SemanticEvidenceRef',
@@ -169,7 +174,7 @@ __all__ = [
     'SemanticSecretDecision', 'SemanticSecretAdjudication', 'SemanticReview',
     'Hook', 'Candidate', 'ApprovedHook', 'Mech',
     'HookTextClaimsResponse', 'HookTextClaims', 'HookClaimDecision',
-    'HookSemanticResponse', 'HookSemanticReview',
+    'HookSemanticResponse', 'HookSemanticReview', 'HookEdit',
     'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'StemBaseline', 'BookTxt',
     'IdentityBaseline', 'NameMapEdit', 'CharacterPatch', 'NameMapResponse',
     # 路由表

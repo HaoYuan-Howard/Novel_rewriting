@@ -18,14 +18,15 @@ plan.py —— stage4 的两个节点。**一个 stage 两份产物、两个节�
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
-from contracts.schema.stage4 import CtxProvenance, PlanChapters, WriterContext
+from contracts.schema.stage4 import CtxProvenance, PlanChapters, PlanEdit, WriterContext
 from novel import paths, prov
-from novel.errors import GateBlocked, RefusedByStructure, UpstreamMissing
+from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
@@ -44,6 +45,9 @@ IDENTITY_CTX_REL = 'stage4/writer_context.identity.json'
 MAIN_TEXT = 'stage1/main_text.json'
 GLOBAL_GROUNDING = 'stage2/global_grounding.json'
 BLUEPRINTS = 'stage2/chapter_blueprints.json'
+
+#: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `PlanEdit`）。
+EDIT = 'stage4/plan_edit.json'
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(REL)
@@ -283,6 +287,18 @@ def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: 
     照 stage3 不照 stage6：本层一次产**一份** ⇒ **任何一条 hard 就 `.INVALID`**。
     """
     expand_plan_beats(data, up.groups)          # 显式终态：编号对不上就在这里停
+    return _gate_and_write(ctx, store, data, up, provenance=provenance)
+
+
+def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
+                    up: _Upstreams, *, provenance: Any, archive: bool = False) -> CheckReport:
+    """`write_plan` 的展开之后那一半——`--apply-edit` 直接从这里进。
+
+    人编辑的是盘上那份**已展开**的计划（`plan_beat` 落盘时已 pop，人产不出它），
+    再过一次 `expand_plan_beats` 会把合法的人工稿判成编号违约 ⇒ 两条路在
+    展开点分岔，在**闸门与写盘**上合流（同一把尺子）。
+    `archive=True`：写盘前把旧正式稿归档进 `_rounds/`（人工修订「落成新的一轮」）。
+    """
     data.pop('_provenance', None)
     art = PlanChapters.model_validate({**data, '_provenance': provenance})
     outcomes = _judge(store, {**data, '_provenance': provenance.model_dump(by_alias=True)},
@@ -296,6 +312,8 @@ def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: 
             f'**正式产物没有被覆盖**。⚠ 这次不必再付费：手改那几行，'
             f'`stage4.plan --revalidate` 提升即可（0 成本）',
             invalid_path=str(path))
+    if archive and store.exists(REL):
+        store.archive_round(REL, keep=True)
     store.write(REL, art)
     run_context(ctx)
     return _report(ctx, store, _judge(store, art.model_dump(by_alias=True), up, with_ctx_link=True),
@@ -392,14 +410,56 @@ def run_names_only(ctx: RunContext) -> list[tuple[int, dict[str, str], list[str]
     return out
 
 
-def run_apply_edit(ctx: RunContext) -> CheckReport:
-    """把人手改好的一份计划落成新的一轮（0 成本）。
+def _edit_rel(store: ArtifactStore, edit_path: str) -> str:
+    """编辑文件路径 → **仓内相对路径**（形态照 stage7 `rename._edit_rel`）。"""
+    if not edit_path:
+        return EDIT
+    root = Path(store.ctx.novel_dir)
+    try:
+        return Path(edit_path).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        raise TerminalState(
+            f'`--apply-edit {edit_path}` 落在这本书的产物目录之外（{root}）。'
+            f'编辑文件的**形状是契约**（`ARTIFACTS` 里登记着 {EDIT}）——'
+            f'放在别处就没有任何东西在管它，也记不进来源账') from None
 
-    ⚠ **登记在案而尚未接线**（同 stage6 的 `--apply-edit`）。
-    显式终态说清「有，但还没实现」——**与「这条路不存在」不是一回事**。
+
+def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
+    """`--apply-edit`：把人手改好的一份计划落成新的一轮（0 成本）。
+
+    与生成稿**同一道**闸门与写盘（`_gate_and_write`）：HARD ⇒ `.INVALID` 不覆盖
+    正式稿；合格 ⇒ 旧轮进 `_rounds/`、落盘、**同批重建写作上下文**（`run_context`
+    在 `_gate_and_write` 里，`context_link` 不会红）。
+
+    来源账走 `rewrite_provenance(prev, by='--apply-edit')`：继承 `prompts`/`model`、
+    换 `inputs`、标 `partial_rewrite`——**不走 `to_human_edit()`**（它返回裸
+    `FreeProvenance`，会被本层收窄成 `PlanProvenance` 的载体当场拒收，BE-05 实况）。
+    ⚠ **无前稿（正式或 `.INVALID` 皆无）⇒ 显式终态**：这是修订路，不是生成路。
     """
-    raise RefusedByStructure(
-        'stage4.plan --apply-edit 已登记在 `FREE_ENTRIES` 与 `NODES` 里，**而本仓还没接线**。'
-        '⚠ 这不是「这条路不存在」：它要走与生成稿**同一道**判据（`write_plan`），'
-        '合格则落盘 + 重建上下文并记 `origin=human`，旧轮进 `_rounds/`。'
-        '接线时 `_common.md` §5.3 那份 `human_provenance` 是教科书，连注释一起搬')
+    store = ArtifactStore(ctx)
+    rel = _edit_rel(store, edit_path)
+    if not store.exists(rel):
+        raise TerminalState(
+            f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**（整份计划替换，'
+            f'形状 = 盘上 `plan_chapters.json` 的两个业务键），把它放到这本书的 '
+            f'`stage4/` 下（缺省文件名 `plan_edit.json`）')
+    edit = store.read(PlanEdit, rel)
+
+    prev_rel = REL if store.exists(REL) else (_INVALID if store.exists(_INVALID) else None)
+    if prev_rel is None:
+        raise TerminalState(
+            '盘上既无正式计划也无 `.INVALID` 问题稿——`--apply-edit` 是修订路，'
+            '不是生成路；先跑一次 stage4.plan（付费）')
+    prev, _raw = store.read_own(PlanChapters, prev_rel)
+
+    up = _Upstreams(ctx, store)
+    data = edit.model_dump(by_alias=True)
+    report = _gate_and_write(
+        ctx, store, data, up,
+        provenance=ctx.rewrite_provenance(prev.provenance, by='--apply-edit'),
+        archive=True)
+    # 基线是 `.INVALID` 且人工稿已合格落成正式 ⇒ 过时的问题稿归档，别留在盘上
+    # 冒充「还有一份待救的稿」。
+    if store.exists(_INVALID):
+        store.archive_round(_INVALID)
+    return report

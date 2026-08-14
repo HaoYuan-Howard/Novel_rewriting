@@ -357,12 +357,11 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
         print(f'  ✓ stage3 第二轮已原位修复 {len(artifact.surface_habits)} 条全局习惯清单')
         return X.OK if report.passed else X.CHECK_FAILED
 
-    unimplemented = tokens & {'--apply-edit'}
-    if unimplemented:
-        raise RunModeNotImplemented(
-            f'stage3.style {sorted(unimplemented)} 登记在案，而本仓还没接它的线。'
-            f'⚠ 这与「这个节点没有这条跑法」不是一回事——**有，但还没实现**。'
-            f'（`--apply-edit` 属 F 期：`_common.md` §5.3 那份是教科书，连注释一起搬）')
+    if '--apply-edit' in tokens:
+        _art, report = style.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
+        print(render(report))
+        print('  ✓ 人工画像修订已落为新一轮；measurable 已照盘上 stage1 重算')
+        return X.OK if report.passed else X.CHECK_FAILED
 
     # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
     client = _llm_client(ctx)
@@ -442,10 +441,11 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if promoted else X.CHECK_FAILED
 
     if '--apply-edit' in tokens:
-        raise RunModeNotImplemented(
-            'stage6.hook --apply-edit 登记在案，而本仓还没接它的线。'
-            '⚠ 这与「这个节点没有这条跑法」不是一回事——**有，但还没实现**。'
-            '（`_common.md` §5.3 那份 `human_provenance` 是教科书，连注释一起搬）')
+        _art, report = hook.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
+        print(render(report))
+        print('  ✓ 人工文案修订已落为新一轮；语义结论对新文本自动过期，'
+              '重跑 stage6.semantic 可清')
+        return X.OK if report.passed else X.CHECK_FAILED
 
     # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
     client = _llm_client(ctx)
@@ -644,8 +644,10 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--apply-edit' in tokens:
-        plan.run_apply_edit(ctx)          # 显式终态：登记在案而尚未接线
-        return X.TERMINAL_STATE
+        report = plan.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
+        print(render(report))
+        print('  ✓ 人工计划修订已落为新一轮，写作上下文已同批重建')
+        return X.OK if report.passed else X.CHECK_FAILED
 
     # 付费路。⚠ **本仓最贵的一次请求**（全书一次调用，user 里带着全书原文）。
     client = _llm_client(ctx)

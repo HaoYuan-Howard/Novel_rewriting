@@ -415,3 +415,26 @@ class ChapterStyleResponse(StrictModel):
         if any(not habit.strip() for habit in self.surface_habits):
             raise ValueError('chapter style response 的 surface_habits 里有空条目')
         return self
+
+
+class StyleEdit(StrictModel):
+    """`stage3/style_edit.json` —— 人手改好的画像补丁（`--apply-edit` 的决策集）。
+
+    三组可选：给了哪组就**整组替换**哪组（组内局部 patch 说不清「没给」与「删掉」）。
+    ⚠ **不收 `measurable`**：它是代码算的，`--apply-edit` 落盘前一律照盘上 stage1
+    重算——人改实测数字就是伪造实测。
+    ⚠ 编辑文件落在书目录里、进 `ARTIFACTS`、被 `store.read` 当上游边记账，
+    形状即契约（照 stage7 `name_map_edit.json` 先例）。
+    """
+
+    voice: Voice | None = None
+    surface_habits: list[str] | None = Field(default=None, min_length=1)
+    hook_style: HookStyle | None = None
+
+    @model_validator(mode='after')
+    def _at_least_one_patch(self) -> StyleEdit:
+        if self.voice is None and self.surface_habits is None and self.hook_style is None:
+            raise ValueError('三组补丁至少给一组——空编辑什么都不改，不该有这份文件')
+        if self.surface_habits is not None and any(not h.strip() for h in self.surface_habits):
+            raise ValueError('surface_habits 补丁里有空条目')
+        return self

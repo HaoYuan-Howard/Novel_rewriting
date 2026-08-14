@@ -363,3 +363,15 @@ class HookSemanticReview(StrictModel):
     texts: list[HookTextClaims] = Field(min_length=1)
     decisions: list[HookClaimDecision]
     provenance: LlmProvenance = Field(alias='_provenance')
+
+
+class HookEdit(StrictModel):
+    """`stage6/hook_edit.json` —— 人手改好的**一条**文案文本（`--apply-edit` 的决策集）。
+
+    `candidate` 指明改哪条候选；`None` ⇒ 写/替换**定稿**。
+    ⚠ 只收文本：`mech` / `findings` 由 `_normalize_and_judge` 重算——
+    人工稿与生成稿走同一条归一+判定，没有免检写口。
+    """
+
+    candidate: Literal[HOOK_APPROACHES] | None = None
+    text: str = Field(min_length=1)

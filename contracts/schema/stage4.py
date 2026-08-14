@@ -233,6 +233,20 @@ class PlanResponse(StrictModel):
     output_chapters: list[PlanChapterResponse] = Field(min_length=1)
 
 
+class PlanEdit(StrictModel):
+    """`stage4/plan_edit.json` —— 人手改好的计划（`--apply-edit` 的决策集）。
+
+    **v1 收整份替换**：章与拍互相引用（`beat_coverage` / `beat_seq` 都是全书性质），
+    补丁式局部替换会造出半坏计划还说不清坏在哪。
+    ⚠ 形状是**落盘产物**的两个业务键（`PlanChapter`，`from_beats` 已展开）——
+    人编辑的就是盘上那份 `plan_chapters.json`；`plan_beat` 编号是发给模型的抓手，
+    落盘时已 pop，人产不出它，所以本路**不过** `expand_plan_beats`。
+    """
+
+    reconstruction_strategy: str = Field(min_length=1)
+    output_chapters: list[PlanChapter] = Field(min_length=1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、`writer_context.json`
 # ─────────────────────────────────────────────────────────────────────────────
