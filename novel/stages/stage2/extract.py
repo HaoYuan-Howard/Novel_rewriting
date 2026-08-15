@@ -1058,7 +1058,10 @@ def finish_blueprints(
             invalid_path=str(path),
         )
 
-    store.write(BLUEPRINT_REL, artifact)
+    # 完整重跑也可能是在一份被拦下的 `.INVALID` 之后发生。成功稿必须像定向修复一样
+    # 归档旧正式稿与问题稿；否则 `_Both` / `--check-only` 会继续优先读取旧问题稿，
+    # 出现“正式稿已写成功、自动复检却仍判上一轮失败”的幽灵红灯。
+    _write_formal(store, BLUEPRINT_REL, artifact)
     both = _Both(store)
     return _report(ctx, store, both, both.judge())
 
