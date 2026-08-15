@@ -31,7 +31,7 @@ def test_stage7_human_only_provenance_has_no_model(tmp_path):
     provenance = ctx.free_provenance(
         NameMapFreeProvenance,
         prompts={'RULES': 'rules'},
-        params=NameMapParams(max_tokens=16000, tag=''),
+        params=NameMapParams(max_tokens=16000),
         origin='human',
     )
     dumped = provenance.to_disk()
@@ -147,7 +147,7 @@ def test_stale_outranks_unknown_outranks_fresh():
 
 
 def test_a_flat_input_edge_is_rejected_as_stale_without_crashing():
-    """旧的裸指纹不再升级成当前边形状。"""
+    """不合当前契约的裸指纹只报告 stale，不升级也不导致报告崩溃。"""
     r = _fresh({KEY: FP_V1}, now=FP_V1)
     assert (r.state, r.reason) == ('stale', 'file_changed')
 

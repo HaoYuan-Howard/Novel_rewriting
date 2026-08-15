@@ -112,9 +112,7 @@ def test_rejudging_reproduces_what_is_on_disk(box):
     """
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     up = hook._Upstreams(ctx, __import__('novel.store', fromlist=['x']).ArtifactStore(ctx))
-    # 历史 hook.json 可能仍带着已退役的剧透字面规则；它们只读兼容，不再重判。
-    retired = {'hook_arc_literal', 'hook_downsend_leak'}
-    book_level = {'hook_report'} | retired
+    book_level = {'hook_report'}
     for label, text, stored in _texts_and_stored(box):
         _t, _m, fs = hook._normalize_and_judge(text, up)
         got = {f.rule for f in fs} - book_level
@@ -182,27 +180,6 @@ def test_chars_are_recomputed_with_the_same_ruler(box):
 
 
 # ── ⚠ 三条陷阱 ──────────────────────────────────────────────────────────────
-
-def test_the_stored_identity_baseline_has_every_current_cell(box):
-    """当前正式产物的恒等基线必须完整覆盖机械 hard/info 判据。
-
-    ⚠ **它依赖语料跑过 `stage6.hook --identity`。** `run_hook` 落盘时写的是
-    `baselines_identity={}`（`hook.py:355`），那一格由 `--identity` 这条**单独的
-    0 成本跑**填。盘上这批三本全是 `{}` ⇒ 不是「基线缺格」，是**那一趟没跑过**。
-    两件事必须分得开：缺格说明判据表加了条目而基线没补（该红），
-    空 dict 说明没人跑过（该说出来，并给出补法）。
-    """
-    stored = sandbox.cut(box.book, 'stage6/hook.json')['baselines_identity']
-    corpus.declared_dependency(
-        bool(stored),
-        needs='跑过恒等基线的 stage6/hook.json（`baselines_identity` 非空；盘上是 `{}`）',
-        produced_by=f'novel.cli run stage6.hook {box.sid} --identity',
-        cost='0 成本，不发请求')
-    want = {r.rule for r in REGISTRY.of_stage('stage6')
-            if r.sev in ('hard', 'info') and r.check_kind != 'semantic'
-            and r.rule != 'hook_reuses_source'}
-    assert set(stored) - {'hook_arc_literal', 'hook_downsend_leak'} == want
-
 
 def test_identity_grid_excludes_semantic_rules(box):
     """恒等基线的格子只给**机械** hard+info——语义判据的产地是付费审判，

@@ -30,23 +30,11 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > |---|---|---|
 > | **臂** | `stage5.write --mode deep`（闭卷）· `--mode shallow`（开卷） | **只差 (system prompt, 给不给源章原文)**，产物形状逐字节相同；`mode` 同时是目录名 |
 > | **写作** | 首轮逐章写作 + 落盘闸门；仅把 `REPAIR_UNIQUE` 或独立语义审判点名的可引用问题送入定向自救 | 正式稿始终只有 `chNN.json`；失败尝试进 `.INVALID` / `_rounds` |
-> | **验收** | `stage5.review` 做 0 成本机械验收；`stage5.semantic` 做付费书级语义审判 | 共用同一张 49 条注册表，但落两份独立产物，报告用 `check_kind` 区分 |
+> | **验收** | `stage5.review` 做 0 成本机械验收；`stage5.semantic` 做付费书级语义审判 | 共用同一张 48 条注册表，但落两份独立产物，报告用 `check_kind` 区分 |
 >
-> ⚠ **臂不是 tag。** `--tag _v2` 给**目录**加后缀做 A/B，而「这是 deep 还是 shallow」是**臂**的属性。
-> 两者曾被拼成同一个串传下去，于是 `dialogue_halved`（判 `mode == 'shallow'`）
-> 在每一条 tag 臂上**恒假**——闸门没有报错，它是**静默地不再存在**。
 > 正常整书写作不分别启动两个 mode，而用
 > `stage5.write --deep <章号列表|none> --shallow-rest`：人工选择一次，两臂同时起跑，
 > 各自的逐章线程池硬上限 32；单臂 mode 入口只留给维护与定向返工。
->
-> ### ⚠⚠ 本文提到 `--tag` / `--batch` 的四处，**都是原型的实验设施，F4 没有移植**
->
-> | 它 | 为什么不移植 | 后果 |
-> |---|---|---|
-> | **`--tag`**（A/B 目录后缀） | `Review.tag` 已在 A 期裁撤（全仓 0 读者、盘上 12/12 恒 `''`），D 期定的 flag 面上也没有它 | 臂在本仓是 `RunContext.mode` 一格，**结构上不可能再与 tag 拼成一个串** ⇒ 上面那次事故在本仓复现不了 |
-> | **`--batch N`** | 不在 `NODES['stage5.write'].flags` 里。它只用于 A/B（默认 1） | 本层**没有任何结构化调用点** ⇒ §七末尾那条「`write_batch` 少了 `require=('chapters',)`」**随之失去对象**，登记而不修 |
->
-> ⇒ 读下文时把 `<tag>` 一律当空串、把 `--batch` 当不存在。**不要照着它去补一个本仓没有的入口。**
 >
 > ### ② 判据 vs 载体的分界线在本层**几乎全部倒向判据**——因为拒收的代价是一整章
 >
@@ -57,7 +45,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > | **载体拒收** | 整章响应作废 ⇒ 重试 ⇒ **再花一次高推理调用**（本层最贵的一次重试） |
 > | **判据拦下** | 落 `.INVALID` ⇒ `--apply-edit` 人手改 / `--revalidate` 重判 ⇒ **0 成本** |
 >
-> ⇒ 49 条判据里**一条都不该上移**：它们判的全是自由文本的内容属性，类型系统够不着；
+> ⇒ 48 条判据里**一条都不该上移**：它们判的全是自由文本的内容属性，类型系统够不着；
 > 而少数够得着的（`mode` / `from_source_ordinals` 长度恒 1）**本来就没有判据**，
 > 归载体是原样承认现状，不是收权。
 >
@@ -87,7 +75,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > | `draft_too_short` / `draft_truncated` / `meta_leak` / `dialogue_halved`（HARD） | 0 | 各自的失效模式盘上一次都没发生过；**一个会让它红的样本都没有** |
 >
 > 第 3 批在注册表增加 1 条语义 HARD 与 1 条语义 INFO，因此现役总数是
-> **49 = 8 HARD / 27 INFO / 9 metric / 5 unver**。上面的 31 章数据仍是第 3 批前的机械基线，
+> **48 = 8 HARD / 26 INFO / 9 metric / 5 unver**。上面的 31 章数据仍是第 3 批前的机械基线，
 > 不能被改写成“新语义审判已在真实小说上 0 命中”。
 >
 > ### ④ 篇幅带**只有一个数**：`0.90~1.10×`，逐章与全书同一个带
@@ -124,7 +112,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > #### ⚠ 前五个字段是 `writer_context` 的**副本**，看起来违反「能 0 成本现算的不落盘」
 >
 > 它们**不是抄件，是冻结下来的任务书**。判准来自本层自己付过的学费：
-> `writer_context` 可以被 `--context-only` **0 成本原地重建并覆盖**，而这一份成稿是**付过钱**的。
+> `writer_context` 可以被 `stage4.context` **0 成本重建并覆盖**，而这一份成稿是**付过钱**的。
 > 实测发生过一次：23 章成稿与盘上任何一版 `writer_context` 都配不上（匹配 1/23），
 > 配对关系**永久丢失**——那时留在成稿里的这几个数是唯一还说得出「写手当时被要求写多少字」的东西。
 > ⇒ 与「能 0 成本现算的不落盘」（`_README.md`）裁掉的那些**不同类**：
@@ -209,7 +197,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 顶层 **8 个键**。**0 成本、不调 LLM**。它只做机械验收；改写式泄底由独立的
 `stage5/semantic_<n>.json` 审判，不把付费结论塞进 0 成本产物。判**成品**，不判计划。
-`<n>` 由盘上已有的最大序号 +1；`--tag` 落成 `review<tag>_<n>.json`。
+`<n>` 由盘上已有的最大序号 +1。
 
 | 字段 | 类型 | 必填 | 内容 / 盘上 | 证据 |
 |---|---|---|---|---|
@@ -265,7 +253,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 | 字段 | 类型 | 必填 | 取值面 | 证据 |
 |---|---|---|---|---|
-| `rule` | `str` | 是 | 49 条注册判据的 key。**key 撞名当场炸** | **三源** |
+| `rule` | `str` | 是 | 48 条注册判据的 key。**key 撞名当场炸** | **三源** |
 | `sev` | `str` | 是 | `hard｜info｜metric｜unver`。**`metric` 与 `info` 必须分开**（判据 21） | **三源** |
 | `item` | `str` | 是 | 人读的一句话「这条在守什么」 | **三源** |
 | `detail` | `str` | 是 | 判定正文。盘上 20~224 字 | **三源** |
@@ -381,7 +369,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 ## 五、`stage5/draft.md` —— 字节形态
 
-`assemble_book` 把 **deep/ 与 shallow/ 两个目录**合成**一本**，`--tag` 臂拼到 `draft<tag>.md`。
+`assemble_book` 把 **deep/ 与 shallow/ 两个目录**合成**一本** `stage5/draft.md`。
 另有 `stage5/<mode>/draft.md` = **单 mode 预览，不是成书**（所以它**不对照计划算缺章**）。
 
 ```
@@ -473,9 +461,9 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 ## 七、判据清单（**唯一落点**，机械与语义共用一张注册表）
 
-**49 条** = **8 HARD / 27 INFO / 9 metric / 5 unver**，`actionable` 24 条
-（**13 条 `UNIQUE` + 10 条 `FREE`**，见本节末尾那条准入）。
-owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 · `stage2`/`stage3`/`corpus` 各 1。
+**48 条** = **8 HARD / 26 INFO / 9 metric / 5 unver**，可反哺 24 条
+（**14 条 `UNIQUE` + 10 条 `FREE`**，见本节末尾那条准入）。
+owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 · `stage3`/`corpus` 各 1。
 ⚠ 与原型那 43 条相比各多 2：新加的 `quote_unbalanced` / `deep_overlap_high` 归 `stage5`，
 `dialogue_report` / `draft_duplicated` 是非结论。
 
@@ -509,7 +497,6 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 | `cross_chapter_number` | INFO | 自造数字跨章不打架 | 0 | — |
 | `book_length` | INFO(stage4) | 全书篇幅落在 **`BOOK_BAND` 0.90~1.10×源字数** | **0**（实测 0.949 / 1.022 / 0.980） | — |
 | `style_block_carries_plot` | INFO(stage3) | 风格块里没夹带情节 | 0 | — |
-| `material_malformed` | INFO(stage2) | 下发材料是完整词句（锚点没切过界） | **2** | — |
 | `quote_unbalanced` | INFO | 引号配对异常、未归一——**留着报，不静默修**（原 `mech.quote_problems`） | **0/31** | — |
 | `deep_overlap_high` | INFO | **闭卷臂**重合度 > `DEEP_OVERLAP_MAX`（10%）。**守的是臂的身份不是文风**；开卷不判 | **0/11 闭卷章**（今天 max 2.4%） | — |
 | **〔度量〕** `length_report` · `overlap_report` · `dash_report` · `short_run_report` | metric | **逐章无条件报出** | 31 / 31 / 31 / 31 | — |
@@ -590,7 +577,7 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 > 而**最省力的那条是删内容或编内容**。实测代价：可修复条目 **36 → 9（转人工 27 条，75%）**。
 > 每条 `actionable` 的判据必须**进且只进其一并写明理由**，分不干净时当场炸。
 
-### 7.1 判据 ↔ 需求 —— **49 条逐条有落点**
+### 7.1 判据 ↔ 需求 —— **48 条逐条有落点**
 
 `contracts/rules.py` 要求每条判据声明 `requirement`（正则 `^R-\d+\.\d+[a-z]?$`——
 **`Q-x` 与裸 `R-3` 都不收**），`tests/test_coverage.py` 双向查：反向让指向不存在编号的判据变红，
@@ -598,7 +585,7 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 
 **审计前的账：20 条判据在需求文档里没有落点**，另有 4 条指着收不了它们的地方
 （`secret_timeline` / `no_secrets_in_book` / `event_landing_unver` 指 `Q-9`、
-`draft_missing` / `draft_duplicated` 指 `Q-1`、`material_malformed` 指裸 `R-3`、
+`draft_missing` / `draft_duplicated` 指 `Q-1`、
 `name_surface_survey` 指 `R-7.5` 而那一行当时写着「无守卫 → `B-01`」）。
 ⇒ `docs/BACKEND_CONTRACT.md` 补 17 行、拆 1 行（`R-7.5`），R-8 一节九行**逐行重判**。
 
@@ -629,7 +616,6 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 | `convergence_report` | `R-8.3b` ⭐ |
 | `secret_timeline` · `name_surface_survey` | `R-8.9b` ⭐（**探针自己的基线读数**） |
 | `draft_missing` · `draft_duplicated` | `R-8.11` ⭐ |
-| `material_malformed` | `R-3.15` ⭐（对 Stage 2 精确区间的下游纵深校验） |
 | `style_block_carries_plot` | `R-4.5`（描述不许出现专名） |
 | `secret_unknown` | `R-6.3`（逐章剧透闸门产的 `must_not_reveal`） |
 
@@ -672,8 +658,7 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 > （收敛键因 `evidence` 不同还分得开，**基线分不开**）。⇒ 已拆成 `draft_missing` + `draft_duplicated`。
 > ⚠ 三处行为**故意不同**：`assemble_book` 对双份**显式终态**，而 review 与界面**只报不判死**。
 
-**退役而不删**：`upstream_ref`（原借这个名字挂收敛账，已改叫 `convergence_report`——
-一个名字下挂着两件事，读报告的人会按名字去解释数字，判据 32）。
+当前只保留 `convergence_report` 收敛账；报告里没有 `upstream_ref` 占位。
 上游各层的结论**已不在本产物里**（看的时候现算，不冻进一份会过期的报告）。
 
 ---

@@ -26,8 +26,7 @@ export interface AgentRunStart {
   argv: string[]
   prompt: string
   authorized: boolean
-  /** null 只会出现在该字段落地前的历史事件，不能视为已授权。 */
-  egress_authorized: boolean | null
+  egress_authorized: boolean
 }
 
 /**

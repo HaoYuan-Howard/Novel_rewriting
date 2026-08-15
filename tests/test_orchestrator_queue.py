@@ -49,7 +49,7 @@ def test_an_unknown_stage_is_refused_not_silently_empty():
 
 
 def test_human_nodes_are_exactly_the_ones_a_person_does():
-    """`--approve` 换一条候选、`--apply-edit` 改一个字——**机器替不了**。"""
+    """定稿节点换候选、`--apply-edit` 改一个字——**机器替不了**。"""
     assert Q.HUMAN_NODES == {'stage0.approve', 'stage0.edit',
                              'stage6.approve', 'stage7.approve'}
 

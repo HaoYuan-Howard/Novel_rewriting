@@ -281,7 +281,7 @@ def test_approve_leaves_provenance_alone(box):
     """`stage7.approve` **`_provenance` 一个字都不动**（`stage7.md` 事实⑦）。
 
     原型的四条 0 成本路走同一个保存函数，它无条件盖上**当前**的 prompt 指纹
-    ——而 `--approve` 根本不重判。盘上 11 份产物 `code` 全是同一个值，
+    ——而 `stage7.approve` 根本不重判。盘上 11 份产物 `code` 全是同一个值，
     `N9_SYS` 却取过**三个**，那是逐字节的铁证。
     """
     before = box.read('stage7/name_map.json')['_provenance']
@@ -337,7 +337,7 @@ def test_a_human_added_mapping_that_collides_is_reported_but_never_blocked(box):
 def test_identity_marks_the_artifact_as_partially_rewritten(box):
     """`--identity` 写盘 ⇒ 那份产物是**混版的**，而它必须说得出来。
 
-    ⚠ 它与 `--approve` 的区别正在这里：定稿一个由代码算出来的字段都没改。
+    ⚠ 它与 `stage7.approve` 的区别正在这里：定稿一个由代码算出来的字段都没改。
     """
     rename.run_identity(_ctx(box))
     prov_d = box.read('stage7/name_map.json')['_provenance']

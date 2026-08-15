@@ -90,12 +90,10 @@ def test_missing_quality_review_is_visible_and_disables_selection(box):
 
 
 def test_the_view_forwards_the_artifact_without_reshaping_it(box):
-    """`judged` / `baselines_identity` / `book` 原样转发——转发不是改写。"""
+    """`judged` 与生成说明原样转发——转发不是改写。"""
     v = stage6_view(box.root, box.sid)
     art = sandbox.cut(box.book, 'stage6/hook.json')
     assert set(v.judged) == set(art['judged'])
-    assert v.baselines_identity == art['baselines_identity']
-    assert len(v.book) == len(art['book'])
     assert v.rationale == art['rationale'] and v.lead_upto == art['lead_upto']
 
 

@@ -783,13 +783,11 @@ def _ordinal_of_edit(path: str, text: str) -> int:
 def assemble_book(ctx: RunContext, store: ArtifactStore, book: M.Book) -> str:
     """把 `deep/` 与 `shallow/` 合成**一本** `stage5/draft.md`（顺带各臂一份单 mode 预览）。
 
-    四条硬机制：
+    三条硬机制：
       · **同一输出章两条臂都有成稿 ⇒ 显式终态**——哪一份是成品无从判断，**不猜**。
         ⚠ 而验收与界面对同一情况**只报不判死**（`draft_duplicated`）：把「呈现」变成
         「判死」会让人连报告都看不到。**三处行为故意不同。**
       · **计划有、两边都没有 ⇒ 缺章横幅写进 md**，不静默跳过；
-      · **混了两套契约下写的章 ⇒ 横幅**。判别用**结构特征**（旧稿没有 `budget_chars`），
-        **不用时间戳**；
       · 章头行**不打篇幅方式**——它恒为一个值，已随 `stage4.md` §一裁撤。
 
     ⚠ `stage5/draft.md` **刻意不进 `NodeSpec.produces`**：那份拼稿在**只写了一章时也存在**

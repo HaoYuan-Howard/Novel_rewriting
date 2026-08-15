@@ -248,8 +248,6 @@ def run_semantic(ctx: RunContext, client: LlmClient) -> tuple[HookSemanticReview
         hook_file_sha1=prov.fingerprint_bytes(store.path(hook.REL).read_bytes()),
         reviews=reviews,
         ranking=ranking,
-        texts=[],
-        decisions=[],
         _provenance=ctx.llm_provenance(
             prompts={'HOOK_SEMANTIC_SYS': system},
             model=client.model,
@@ -269,8 +267,6 @@ def _current_artifact(store: ArtifactStore, art: Hook) -> tuple[HookSemanticRevi
         return None, '没有 stage6/semantic_<n>.json；先运行 stage6.semantic'
     seq, artifact = got
     rel = SEMANTIC_TPL.format(n=seq)
-    if not artifact.reviews:
-        return None, f'{rel} 是旧版剧透审判，不含质量评分与实质矛盾结论；请重跑 stage6.semantic'
     if store.freshness(rel).state != 'fresh':
         return None, f'{rel} 的上游已变化；请重跑 stage6.semantic'
 

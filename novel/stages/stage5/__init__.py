@@ -12,7 +12,7 @@
 
 ⚠ **两条臂是【参数】不是两个节点**：`stage5.write --mode deep|shallow`，
 只差 `(system prompt, 给不给源章原文)`，产物形状逐字节相同。
-⚠ 注册表只有一张（`contracts/judges/stage5.py`，49 条）：47 条 mechanical 由
+⚠ 注册表只有一张（`contracts/judges/stage5.py`，48 条）：46 条 mechanical 由
 写作闸门/全书验收共用；2 条 semantic 只消费独立的付费审判产物。严重度、检查方式与
 修复责任是三条正交轴，不再拿 HARD/INFO 猜“能否反哺 LLM”。
 """

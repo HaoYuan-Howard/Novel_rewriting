@@ -458,7 +458,7 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
         scanned[r_] = f'{len(book.secrets) if book else "?"} 条 secret'
     for r_ in ('draft_missing', 'draft_duplicated', 'book_length', 'book_length_report',
                'convergence_report', 'name_surface_survey', 'must_hold_unver',
-               'event_landing', 'event_landing_unver', 'material_malformed',
+               'event_landing', 'event_landing_unver',
                'cross_chapter_number', 'style_block_carries_plot'):
         scanned.setdefault(r_, f'{nch}/{len(rev.chapters)} 章有成稿')
 

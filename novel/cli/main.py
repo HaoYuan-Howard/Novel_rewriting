@@ -38,9 +38,7 @@ from contracts.invariants import (
 from contracts.schema.orchestration import ProgressEvent
 from novel import paths
 from novel.cli import exit_codes as X
-from novel.errors import (
-    ApprovalRequired, RefusedByStructure, RunModeNotImplemented, TerminalState,
-)
+from novel.errors import ApprovalRequired, RefusedByStructure, TerminalState
 from novel.orchestrator import beacon
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
@@ -158,14 +156,8 @@ def runnable_stages() -> frozenset[str]:
 
 
 def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
-    """跑一个当前节点；缺少阶段接线时落显式终态。"""
-    stage = NODES[node].stage
-    run = _runners().get(stage)
-    if run is None:
-        raise RunModeNotImplemented(
-            f'{stage} 属于当前 Stage0–Stage7 契约，但 '
-            f'`novel/cli/main.py::_runners` 没有它的跑法派发')
-    return run(ctx, flags)
+    """跑一个当前节点；`NODES` 与 `_runners` 的覆盖关系由契约测试钉住。"""
+    return _runners()[NODES[node].stage](ctx, flags)
 
 
 def _llm_client(ctx: RunContext):
@@ -457,9 +449,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     """stage2 的九条路。**一个 stage 两个节点**（全书 / 逐章，两个都付费）。
 
     ⚠ 派发按 **stage** 分而节点由 `ctx.node` 带着 ⇒ **先按节点分岔**（形态同 stage4/stage7）。
-    ⚠⚠ **付费产出那几条今天落显式终态**（`RunModeNotImplemented`，逐条写出缺什么）：
-    F5 移植的是**契约、prompt、校验器**三样，生成侧是另一批代码。
-    详见 `novel/stages/stage2/extract.py` 文件头。
+    全书与逐章两条付费生成路径均已接入；其余 flag 是各自的 0 成本操作。
     """
     from novel.stages.stage2 import extract
 
@@ -498,6 +488,10 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             print(f'  ✓ 人工 secret 订正已落为新一轮（{len(artifact.canon.secrets)} 条 secret）；'
                   f'埋点章已重走 `_prune_setups`，下游全部按真实输入变化转 stale')
             return X.OK if report.passed else X.CHECK_FAILED
+        if '--resample' in tokens:
+            extract.run_resample(ctx, _llm_client(ctx))
+            print('  ✓ stage2 全书事实底座已绕过问题缓存重新采样并落盘')
+            return X.OK
         if '--purge-role' in tokens:
             extract.run_purge_role(ctx, _llm_client(ctx))
             print('  ✓ stage2 role/fate 已重划并落盘')

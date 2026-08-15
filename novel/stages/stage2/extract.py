@@ -28,6 +28,7 @@ from contracts.schema.stage2 import (
 from novel import paths, prov
 from novel.config import MAX_CONCURRENCY
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
 from novel.llm.prompts import with_json_shape
 from novel.observability import ChapterProgressTracker
@@ -574,6 +575,24 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
         )
     _write_formal(store, GLOBAL_REL, artifact)
     return artifact
+
+
+def run_resample(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
+    """为被闸门拦下的整份 global 响应显式重新采样。
+
+    普通重跑必须继续命中同参数缓存；这条入口则只在已有 `.INVALID` 时
+    把缓存口径切到 `refresh-write`。写盘与归档仍完全复用 `run_global`：
+    新稿再次失败时旧问题稿先进入 `_rounds/`，新稿通过时旧正式稿与
+    问题稿都进入 `_rounds/`，请求本身失败时盘面一个字节不动。
+    """
+    store = ArtifactStore(ctx)
+    if not store.exists(_GLOBAL_INVALID):
+        raise UpstreamMissing(
+            f'{ctx.node} --resample 只重采样被闸门拦下的问题稿；'
+            f'盘上没有 {_GLOBAL_INVALID}，尚未发起请求。'
+            '首次生成请运行 stage2.global 默认路径')
+    ctx.cache = CachePolicy.refresh()
+    return run_global(ctx, client)
 
 
 def _global_source(

@@ -99,8 +99,7 @@ from contracts.schema.stage5 import (
     SemanticReview, SemanticSecretAdjudication, SemanticSecretDecision,
 )
 from contracts.schema.stage6 import (
-    ApprovedHook, Candidate, Hook, HookClaimDecision, HookEdit, HookSemanticResponse,
-    HookSemanticReview, HookTextClaims, HookTextClaimsResponse, Mech,
+    ApprovedHook, Candidate, Hook, HookEdit, HookSemanticResponse, HookSemanticReview, Mech,
 )
 from contracts.schema.stage7 import (
     BookTxt, CharacterPatch, ExtraSub, IdentityBaseline, NameDecision, NameMap,
@@ -130,8 +129,8 @@ ARTIFACTS: dict[str, type] = {
     'stage4/plan_chapters.json': PlanChapters,
     'stage4/plan_edit.json': PlanEdit,
     'stage4/writer_context.json': WriterContext,
-    # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。原型的
-    #   `--identity-plan` 整个输出是 `print` + 返回码 ⇒「跑过且写手手里有这些」与
+    # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。
+    #   `stage4.plan --identity` 必须让「跑过且写手手里有这些」与
     #   「从没跑过」在盘上长得一模一样（`Q-2`）。stage6/stage7 在同一道工序上都做对了。
     #   ⚠ 它与正式那份**同一个模型**：形状完全一样，差别只在三个 goal 是显式标记
     #   ——**换一个模型就等于说它是另一种东西**，而它恰恰要回答
@@ -186,7 +185,6 @@ __all__ = [
     'SemanticClaimsResponse', 'SemanticAlignmentResponse',
     'SemanticSecretDecision', 'SemanticSecretAdjudication', 'SemanticReview',
     'Hook', 'Candidate', 'ApprovedHook', 'Mech',
-    'HookTextClaimsResponse', 'HookTextClaims', 'HookClaimDecision',
     'HookSemanticResponse', 'HookSemanticReview', 'HookEdit',
     'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'StemBaseline', 'BookTxt',
     'IdentityBaseline', 'NameMapEdit', 'CharacterPatch', 'NameMapResponse',

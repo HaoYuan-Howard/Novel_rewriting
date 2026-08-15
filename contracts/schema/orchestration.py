@@ -316,9 +316,8 @@ class AgentRunStart(FrozenModel):
     #: 显式付费总授权（SKILL 接口契约）：True = 付费命令直接执行；False = 首个付费节点前停。
     authorized: bool
 
-    #: 正文外发授权，与付费授权正交。新记录必为 bool；null 只表示该字段落地前的历史记录
-    #: 没有采集这项事实，**不得**解释成已授权。
-    egress_authorized: bool | None = Field(...)
+    #: 正文外发授权，与付费授权正交；每一条 started 事件都必须显式记录。
+    egress_authorized: bool
 
 
 AgentRunEventKind = Literal[AGENT_RUN_EVENT_KINDS]

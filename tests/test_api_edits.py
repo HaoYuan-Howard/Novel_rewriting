@@ -5,9 +5,6 @@ test_api_edits.py —— 人工写回三条路由的**行为**（真起 CLI 子�
 
 【四类行为】（BE-03）：成功 / 上游未运行（200+failed，不误发 5xx）/
 产物损坏（200+failed，日志可读）/ 参数不合法（422 载体层）。
-「未实现 ⇒ 501」不适用：三条路由后面的节点全部接线（`RunModeNotImplemented`
-只属未接线跑法）。
-
 【钱】三条全是 0 成本节点（`--apply-edit` / approve 均在 FREE 面）——
 `no_api_key` 把钥匙拿走，任何一条走到真发请求的路都当场现形。
 
@@ -185,11 +182,7 @@ def _why_pick_is_blocked(box, pick: int) -> str:
 
 
 def _needs_a_selectable_candidate(box, pick: int) -> None:
-    """盘上这批语料的 stage6 前提：`hook.json` 的上游边 `consumed_changed`
-    （3/4 条），而 `stage6/semantic_*.json` 是**旧版剧透审判**（`reviews` 为空）
-    ⇒ 语义闸判 `unreviewed`。补它要**先重跑 `stage6.hook`、再重跑 `stage6.semantic`**，
-    两次都是付费节点 ⇒ 不能由测试代跑。
-    """
+    """真语料必须已有与当前候选绑定的可定稿质量审判；测试不代跑付费节点。"""
     why = _why_pick_is_blocked(box, pick)
     corpus.declared_dependency(
         not why,
@@ -202,8 +195,8 @@ def _needs_a_selectable_candidate(box, pick: int) -> None:
 def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
     """⭐ `--pick 1` 后：`approved` 指向第 1 条候选、`s6` 审批章盖上。
 
-    ⚠ 退出码契约：`0/1` 都是「定稿**落了**」（`1` 只是报告有红行——迁移语料上
-    常态如此），`2/3` 才是没跑成。**盖章看落没落，红不红归 check 屏。**
+    ⚠ 退出码契约：`0/1` 都是「定稿**落了**」（`1` 只是报告仍有红行），
+    `2/3` 才是没跑成。**盖章看落没落，红不红归 check 屏。**
     """
     _needs_a_selectable_candidate(box, 1)
     _stamp_chain(box, 's5')
@@ -261,8 +254,7 @@ def test_a_zero_pick_is_422_from_the_carrier(client, box):
 # ───────────────────────── 三、人名定稿 ─────────────────────────
 
 def test_approving_the_name_map_stamps_s7(client, box):
-    """定稿落了（exit 0/1）就盖 `s7`——迁移语料的 `rn_txt_stale` 硬红是常态，
-    人定稿的语义正是「看过红行之后拍板」。"""
+    """定稿落了（exit 0/1）就盖 `s7`；校验红行仍由 check 屏呈现。"""
     _stamp_chain(box, 's6')
     r = client.post(f'/api/novels/{box.sid}/stage7/approve', json={})
     assert r.status_code == 200, r.text[:300]

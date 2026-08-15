@@ -35,22 +35,21 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, model_validator
 
 from contracts.invariants import (
     HOOK_APPROACHES,
     HOOK_APPROVED_APPROACHES,
-    HOOK_STORED_APPROACHES,
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import Finding, LlmProvenance
-from contracts.schema.stage5 import ContextSource, JudgedDraft, SemanticClaim
+from contracts.schema.stage5 import ContextSource, JudgedDraft
 
 #: ⚠ 从 stage5 借的**不是拷贝，是同一个类**：`judged` 的形状与 stage5 逐字段相同
 #: （同一套理由：成稿一律不走那条记账的读路，因为两级 `input_key` 会造出一条假的匹配边），
-#: `sources.writer_context` 亦然；语义审判的 `SemanticClaim`（命题+逐字证据）同理。
+#: `sources.writer_context` 亦然。
 #: 各定一份就是第二个落点。
-_ = (ContextSource, JudgedDraft, SemanticClaim)
+_ = (ContextSource, JudgedDraft)
 
 
 class Mech(StrictModel):
@@ -97,9 +96,7 @@ class Candidate(StrictModel):
     下沉到 JS 的后果不是判据坏掉，是**同一页上人会看到两个字数**。
     """
 
-    #: 历史产物仍可读；新模型响应只收 ``HOOK_APPROACHES``，见
-    #: ``HookCandidateResponse``。读写枚举分开，避免 prompt 升级破坏旧书。
-    approach: Literal[HOOK_STORED_APPROACHES]
+    approach: Literal[HOOK_APPROACHES]
 
     #: 文案本身。盘上**串长** 123~308（含段间分隔符）。
     #: ⚠ 存的是**归一之后**的字节。
@@ -118,8 +115,7 @@ class ApprovedHook(StrictModel):
     """
 
     #: **比候选多一个 `human_edit`。** 它答的是「这份人工稿是从哪一条改出来的」——
-    #: **没有前身时才是 `human_edit`**。盘上 1/3 本是它（那本从没 `--approve` 过
-    #: 就直接上了人工稿）。
+    #: **没有前身时才是 `human_edit`**。
     approach: Literal[HOOK_APPROVED_APPROACHES]
 
     text: str = Field(min_length=1)
@@ -128,10 +124,11 @@ class ApprovedHook(StrictModel):
     #: 不是还没做的。
     origin: Literal['human']
 
-    #: ⚠ `--approve` 时是**候选那一份的拷贝**；`--apply-edit`/`--recheck` 时是重新归一算出来的。
+    #: ⚠ `stage6.approve --pick` 时是**候选那一份的拷贝**；
+    #: `--apply-edit`/`--recheck` 时是重新归一算出来的。
     mech: Mech
 
-    #: ⚠ **三条写它的路都必须带**（`--approve` / `--apply-edit` / `--recheck`）：
+    #: ⚠ **三条写它的路都必须带**（`stage6.approve --pick` / `--apply-edit` / `--recheck`）：
     #: 定稿那一项要携带**它自己这份字节**的判定。只要有一条不带，
     #: 「这份没问题」与「这份没判过」在 JSON 里就长得一模一样。
     findings: list[Finding]
@@ -146,12 +143,9 @@ class HookSources(StrictModel):
 
 
 class HookParams(StrictModel):
-    """一次调用当时的旋钮。⚠ **原型完全没有这个键**（事实 ④）。"""
+    """一次调用当时的生成上限。"""
 
     max_tokens: int = Field(ge=1)
-
-    #: A/B 分叉的目录后缀。⚠ **它不是「臂」**（见 `stage5.py` 事实 ①）。
-    tag: str
 
 
 class HookProvenance(LlmProvenance):
@@ -175,7 +169,7 @@ class HookProvenance(LlmProvenance):
 
 
 class Hook(StrictModel):
-    """`stage6/hook.json` —— 顶层 **9 个键**，全部必填（`approved` 缺省 `null`，键恒在）。
+    """`stage6/hook.json` —— 顶层 **7 个键**，全部必填（`approved` 缺省 `null`，键恒在）。
 
     ⚠ **归档 `_rounds/hook.rN.json` 与它逐字段同形**（整份拷贝，不是差量、不是投影）——
     归档是「出事后唯一能回去的那一份」。盘上三份 `r1` 的 `approved` **全是 `null`**，
@@ -221,20 +215,6 @@ class Hook(StrictModel):
     #: `{成稿相对路径: 引用}`。
     judged: dict[str, JudgedDraft]
 
-    #: 书级结论。盘上恒 **4** 条（3 `unver` + 1 `metric`）。
-    book: list[Finding]
-
-    #: **恒等基线**：同一把尺子量原作文案段，分母恒 1。hard+info 每条一格，
-    #: **减去 `hook_reuses_source`**（原作 vs 原作必然 100%，构造使然）⇒ **13 格**。
-    #:
-    #: ⚠⚠ **其中 6 格是恒等式**（事实⑤）——**报告必须标出来**，别当读数。
-    #: ⚠ **它不裁**：它是「判据有没有把合法情况排除在外」的落点、有两个真读者，
-    #: 而且**不可再生**（上游一变就不是当时那把尺子了）。
-    #: ⚠ 对照 stage7：那一层的恒等基线**跑完把结论扔掉了**（只有 `print` + 返回码），
-    #: 于是「跑过且逐字节无损」与「从没跑过」在盘上长得一模一样。
-    #: **正因为本层有落点，才有人回头去读它，才判死过两条坏判据。**
-    baselines_identity: dict[str, str]
-
     provenance: HookProvenance = Field(alias='_provenance')
 
 
@@ -249,7 +229,7 @@ class HookResponse(StrictModel):
     """**模型写的那两个键**，`ask_json(model_cls=...)` 收的就是它。
 
     ⚠⚠ **它与 `Hook` 不是同一个东西，那正是它存在的理由。** 产物还有 `judged`
-    （来源账）· `baselines_identity`（代码跑出来的）· `mech` / `findings`
+    （来源账）· `mech` / `findings`
     （确定性算的）· `_provenance`——**一个字都不经模型**。
 
     ⚠⚠ **`require` 从本模型的必需顶层键派生 ⇒ 两个键一个都漏不掉。**
@@ -275,76 +255,8 @@ class HookResponse(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# `stage6/semantic_<n>.json` —— 新版质量审判 + 旧版只读兼容
+# `stage6/semantic_<n>.json` —— 当前质量审判
 # ─────────────────────────────────────────────────────────────────────────────
-
-class HookTextClaimsResponse(StrictModel):
-    """旧版第一相模型响应，只用于读取历史 semantic 产物。
-
-    `claims` 复用 stage5 的 `SemanticClaim`（命题 + 逐字证据；借的是同一个类不是拷贝）。
-    """
-
-    label: str = Field(min_length=1)
-    coverage: Literal['complete', 'uncertain']
-    uncertainty_reason: str | None = None
-    claims: list[SemanticClaim]
-
-    # 与 stage5 的 `SemanticChapterClaims` 同款收敛：DeepSeek 实跑会把不确定原因写进
-    # 别名键；complete 时那些是模型擅自附带的过程说明，丢弃而不偷换成「不确定」。
-    @model_validator(mode='before')
-    @classmethod
-    def _normalise_uncertainty_reason_alias(cls, value):
-        if not isinstance(value, dict):
-            return value
-        got = dict(value)
-        alias_keys = ('coverage_reason', 'coverage_note', 'reason', 'reasoning')
-        if got.get('coverage') == 'uncertain':
-            present = {
-                key: got[key] for key in ('uncertainty_reason', *alias_keys)
-                if key in got and got[key] not in (None, '')
-            }
-            if len({str(item) for item in present.values()}) > 1:
-                raise ValueError(f'不确定原因别名互相冲突：{list(present)}')
-            if not got.get('uncertainty_reason') and present:
-                got['uncertainty_reason'] = next(iter(present.values()))
-        for alias in alias_keys:
-            got.pop(alias, None)
-        return got
-
-    @model_validator(mode='after')
-    def _uncertainty_is_explicit(self) -> 'HookTextClaimsResponse':
-        if self.coverage == 'uncertain' and not self.uncertainty_reason:
-            raise ValueError('coverage=uncertain 必须说明 uncertainty_reason')
-        if self.coverage == 'complete' and self.uncertainty_reason:
-            raise ValueError('coverage=complete 不应携带 uncertainty_reason')
-        return self
-
-
-class HookTextClaims(HookTextClaimsResponse):
-    """落盘形态 = 第一相响应 + 代码算的 `text_sha1`（文本内容 10 位指纹，绑定键）。"""
-
-    text_sha1: Fp10
-
-
-class HookClaimDecision(StrictModel):
-    """旧版第二相的单表裁决，只用于读取历史 semantic 产物。
-
-    `arc_leak` 进 `hook_semantic_spoiler`（HARD）、`invented` 进
-    `hook_semantic_grounding`（INFO）、`unver` 让两条判据都不许洗绿。
-    """
-
-    label: str = Field(min_length=1)
-    claim_id: str = Field(min_length=1)
-    status: Literal['arc_leak', 'invented', 'grounded', 'unver']
-    reason: str = Field(min_length=1)
-
-    @field_validator('claim_id', mode='before')
-    @classmethod
-    def _normalise_claim_id(cls, value):
-        # 同 stage5：DeepSeek 稳定把序号写成 JSON number；引用键不承载语义，统一成字符串。
-        if isinstance(value, int) and not isinstance(value, bool):
-            return str(value)
-        return value
 
 
 class HookSemanticResponse(StrictModel):
@@ -408,23 +320,10 @@ class HookSemanticReview(StrictModel):
 
     judged_texts: dict[str, Fp10] = Field(min_length=1)
     hook_file_sha1: Fp10
-    # 新版字段。排序标签使用产物里的真实标签；请求时会换成 T1/T2… 匿名标签。
-    reviews: list[HookCandidateReview] = Field(default_factory=list)
-    ranking: list[str] = Field(default_factory=list)
-
-    # 旧版两相审判的只读兼容面。新版写盘恒为空；保留它们使历史 semantic_N.json
-    # 仍能被载体读取，随后由运行时明确要求按新契约重审，而不是反序列化崩溃。
-    texts: list[HookTextClaims] = Field(default_factory=list)
-    decisions: list[HookClaimDecision] = Field(default_factory=list)
+    # 排序标签使用产物里的真实标签；请求时会换成 T1/T2… 匿名标签。
+    reviews: list[HookCandidateReview] = Field(min_length=1)
+    ranking: list[str] = Field(min_length=1)
     provenance: LlmProvenance = Field(alias='_provenance')
-
-    @model_validator(mode='after')
-    def _one_semantic_generation(self) -> 'HookSemanticReview':
-        if bool(self.reviews) != bool(self.ranking):
-            raise ValueError('新版 semantic 产物的 reviews 与 ranking 必须同时存在')
-        if not self.reviews and not self.texts:
-            raise ValueError('semantic 产物既没有新版 reviews，也没有旧版 texts')
-        return self
 
 
 class HookEdit(StrictModel):
@@ -435,5 +334,5 @@ class HookEdit(StrictModel):
     人工稿与生成稿走同一条归一+判定，没有免检写口。
     """
 
-    candidate: Literal[HOOK_STORED_APPROACHES] | None = None
+    candidate: Literal[HOOK_APPROACHES] | None = None
     text: str = Field(min_length=1)

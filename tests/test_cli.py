@@ -74,12 +74,11 @@ _FREE_CASES = sorted(
 def test_every_free_entry_is_reachable_from_some_node():
     """守卫的守卫：`FREE_ENTRIES` 里挂不到任何节点上的 flag，下面那条**扫不到它**。
 
-    ⚠ 挂不上不等于该删——它可能只是那一层还没登记 flag 面（stage0 三个节点就是空的）。
-    但**必须说出来**，否则「12 个 flag 都测过了」是一句假话。
+    当前表里的每一条都必须挂到至少一个节点，否则参数化扫描根本走不到它。
     """
     orphan = sorted(f for f in FREE_ENTRIES
                     if not any(f in s.flags for s in NODES.values()))
-    assert orphan == ['--context-only'] or not orphan, (
+    assert not orphan, (
         f'这些 0 成本 flag 没挂在任何节点上，本文件的参数化扫不到它们：{orphan}')
 
 

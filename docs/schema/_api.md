@@ -353,9 +353,9 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `lead_upto` / `rationale` | | 是 | 开篇引到哪一章、为什么 |
-| `candidates[]` | 数组 | 是 | 恒三条，`index` 恒 `1..3`。`chars` 在 Python 侧走 `measure()` 现算。质量审判字段包括 `semantic_state`（clear / contradiction / uncertain / unreviewed）、`semantic_reason`、`contradictions[]`、六维 `quality`、代码总分 `quality_score`、`quality_rank` 与 `selectable`；缺失/旧版/过期审判必须显示 unreviewed，不能画成 clear |
+| `candidates[]` | 数组 | 是 | 恒三条，`index` 恒 `1..3`。`chars` 在 Python 侧走 `measure()` 现算。质量审判字段包括 `semantic_state`（clear / contradiction / uncertain / unreviewed）、`semantic_reason`、`contradictions[]`、六维 `quality`、代码总分 `quality_score`、`quality_rank` 与 `selectable`；缺失或过期审判必须显示 unreviewed，不能画成 clear |
 | `approved` | 对象 或 null | 是 | `null` = 还没定稿。`candidates[].approved` 与它说同一件事（后置条件）；`human_edit`（无前身）时不许有候选自称定稿 |
-| `book[]` / `judged` / `baselines_identity` / `sources` | | 是 | 书级结论、语义审判、恒等基线、来源账，原样 |
+| `judged` / `sources` | | 是 | 生成时使用的成稿引用与来源账，原样 |
 | `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |
 
 ## 五h、`Stage7View` —— S-12 人名替换 + 成书
@@ -410,7 +410,7 @@ HTTP 进程只写 `_service/`（一次性人工稿）。
 
 定稿类动作**落了**（退出码 0/1——先写后判：approve 落了，只是报告可能有红行）
 才盖审批章；盖不盖章看「落没落」，红不红由 check 屏呈现，两件事不许混。
-前置链没到位（中途接手的书、迁移语料）⇒ 定稿照样落，检查单那一格在 approvals 屏补——
+前置审批链尚未补齐 ⇒ 定稿照样落，检查单那一格在 approvals 屏补——
 **不把检查单的顺序翻成定稿的失败**。
 
 ---
@@ -436,15 +436,3 @@ HTTP 侧「书 id 不合法」的产地是**客户端**，那是 400。
 解法不是给异常分子类，是**在边界上先验**——路由第一件事调 `paths.check_sid(sid)`
 就地翻 400；验过之后再从深处冒出来的 `PathRefused`（例如「一个 id 匹配到两个目录」）
 就真的是我们的 bug。**「边界验过之后再抛就是 bug」是一条说得清的线。**
-
----
-
-## 七、仍**没有**落地的（登记，不是漏）
-
-- **未移植的七层**：路由**全部注册**，一律 **501** 并点名 `contracts.rules.PORTED_STAGES`。
-  判定由 `stage not in PORTED_STAGES` 得出，不手写清单。
-  ⇒ 前端分得出「URL 打错了」（404）与「这一层还没建」（501），而这两件事该做的动作完全不同。
-- **`stage5_review` 这个 check kind 已改名为 `stage5`**（E 期裁决），
-  八个 kind 现在与 `invariants.STAGES` 逐值相等、从它派生。
-  ⚠ `04_delivery.md:71` 那张「固定，不要改」的表要改这一格，`web/` 里的引用同理——
-  但 **E 期不动 `web/`**（已裁决），账记在仓根 `README.md`。

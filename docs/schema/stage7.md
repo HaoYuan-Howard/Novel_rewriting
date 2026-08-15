@@ -81,7 +81,7 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 ## 二、来源账
 
 模型生成使用 `NameMapProvenance`：继承 `LlmProvenance`，并必填
-`params={max_tokens, tag}`。`prompts` 使用 `RENAME_SYS` 与统一的 `RULES` 指纹键。
+`params={max_tokens}`。`prompts` 使用 `RENAME_SYS` 与统一的 `RULES` 指纹键。
 
 没有模型基线、由完整人工编辑直接产生时使用 `NameMapFreeProvenance`：继承
 `FreeProvenance`，同样保留 `params`，但结构上没有 `model`，并写 `origin=human`。
@@ -120,7 +120,7 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 | `--recheck` | 0 | 按当前代码重建派生字段并重判 |
 | `--apply-edit <路径>` | 0 | 应用严格人工编辑输入。路径相对**书目录**，也接受书目录内的绝对路径；目录外（含 `..` 穿越）是显式终态（`novel/paths.py::edit_rel`，stage3/4/6/7 共用） |
 | `--revalidate` | 0 | 重建 `.INVALID` 的派生字段，合格后提升 |
-| `--assemble` | 0 | 在前置条件满足时写 `book.txt` |
+| `stage7.assemble` | 0 | 在前置条件满足时写 `book.txt` |
 | `--check-only` | 0 | 只读复检当前正式产物 |
 
 ## 六、现行判据

@@ -11,7 +11,6 @@ test_agent.py —— headless agent 代跑的提示词/命令行组装、事件�
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -102,24 +101,6 @@ def test_append_read_fold_roundtrip(base):
     assert rec.state == 'ok' and rec.exit_code == 0
     assert rec.start.authorized is True
     assert rec.start.egress_authorized is True
-
-
-def test_legacy_event_without_egress_is_unknown_not_granted(base):
-    """旧 JSONL 缺字段要能读，但不能套用新请求的 default=True 追认同意。"""
-    p = agent.runs_path(base)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    event = {
-        'run_id': 'legacy', 'kind': 'started', 'ts': 10,
-        'start': {
-            'sid': '42', 'argv': ['claude'], 'prompt': '旧提示词',
-            'authorized': True,
-        },
-        'exit_code': None, 'note': None,
-    }
-    p.write_text(json.dumps(event, ensure_ascii=False) + '\n', encoding='utf-8')
-    [loaded] = agent.read_events(base)
-    assert loaded.start is not None
-    assert loaded.start.egress_authorized is None
 
 
 def test_fold_running_vs_unknown(base):

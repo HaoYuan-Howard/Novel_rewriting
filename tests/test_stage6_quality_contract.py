@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage6 质量升级的生成契约、完整材料面与历史兼容。"""
+"""Stage6 质量升级的生成契约与完整材料面。"""
 from __future__ import annotations
 
 import json
@@ -8,12 +8,8 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from contracts.invariants import (
-    HOOK_APPROACHES,
-    HOOK_LEGACY_APPROACHES,
-    HOOK_STORED_APPROACHES,
-)
-from contracts.schema.stage6 import Candidate, HookResponse, Mech
+from contracts.invariants import HOOK_APPROACHES
+from contracts.schema.stage6 import HookResponse
 from novel.stages.stage6 import checks, prompts
 
 
@@ -31,8 +27,6 @@ def _candidate_payload(approaches=HOOK_APPROACHES, texts=None):
 def test_current_generation_approaches_are_the_ab_tested_three():
     assert HOOK_APPROACHES == (
         'source_architecture', 'payoff_preview', 'scene_punchline')
-    assert not set(HOOK_APPROACHES) & set(HOOK_LEGACY_APPROACHES)
-    assert HOOK_STORED_APPROACHES == HOOK_APPROACHES + HOOK_LEGACY_APPROACHES
 
 
 def test_model_response_requires_each_current_approach_once_and_unique_texts():
@@ -48,19 +42,9 @@ def test_model_response_requires_each_current_approach_once_and_unique_texts():
     with pytest.raises(ValidationError, match='不得重复'):
         HookResponse.model_validate(duplicate_text)
 
-    legacy_response = _candidate_payload(HOOK_LEGACY_APPROACHES)
+    unsupported_response = _candidate_payload(('first', 'second', 'third'))
     with pytest.raises(ValidationError):
-        HookResponse.model_validate(legacy_response)
-
-
-def test_stored_candidate_remains_backward_compatible_with_legacy_approach():
-    candidate = Candidate(
-        approach='result_flashback',
-        text='历史产物仍然能被读取。',
-        mech=Mech(punct_fixed=0, quotes_fixed=0, paras_fixed=0),
-        findings=[],
-    )
-    assert candidate.approach == 'result_flashback'
+        HookResponse.model_validate(unsupported_response)
 
 
 def test_generation_system_prioritizes_retention_and_removes_spoiler_gate():

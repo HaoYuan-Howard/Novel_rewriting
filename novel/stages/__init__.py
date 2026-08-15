@@ -5,14 +5,13 @@
 【本模块只放一样东西：`stage` → 它那条 0 成本复检的实现】
 它是 `--check-only` 与 `GET /api/novels/:sid/check/:kind` 的**共用落点**。
 两个入口各自 `from novel.stages.stageN import ...` 一次，就是同一张映射的两份，
-而它们分家的表现是：CLI 复检 stage2 跑得动，界面上那一屏却 501。
+映射覆盖全部 Stage0–Stage7，并由 CLI 与 HTTP 共用。
 """
 from __future__ import annotations
 
 from collections.abc import Callable
 
 from contracts.schema.report import CheckReport
-from novel.errors import RunModeNotImplemented
 from novel.run import RunContext
 
 
@@ -47,13 +46,8 @@ def _checkers() -> dict[str, Callable[[RunContext], CheckReport]]:
 
 
 def check_only(stage: str) -> Callable[[RunContext], CheckReport]:
-    """返回当前层的 0 成本复检函数；登记缺失时给出明确的接线错误。"""
-    got = _checkers().get(stage)
-    if got is None:
-        raise RunModeNotImplemented(
-            f'{stage} 属于当前 Stage0–Stage7 契约，但 '
-            f'`novel/stages/__init__.py::check_only` 没有它的复检实现')
-    return got
+    """返回当前层的 0 成本复检函数。"""
+    return _checkers()[stage]
 
 
 def checkable_stages() -> frozenset[str]:

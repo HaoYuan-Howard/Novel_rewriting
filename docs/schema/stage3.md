@@ -291,7 +291,7 @@ LLM 产的定性 `voice/surface_habits`；句长、段长、对白比等不会�
 | 键 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
 | `attempts` | `obj[]` | 是 | 逐次调用记录。现役首轮为 `N` 条章级记录 + 1 条聚合记录；命中窄修复条件时再追加一条 | **契·码** |
-| `attempts[].kind` | `str` | 是 | `chapter_local` ｜ `chapter_aggregate` ｜ `surface_habits_targeted_repair`；`initial` 仅为清理前存量产物的只读兼容 | **契·码** |
+| `attempts[].kind` | `str` | 是 | `chapter_local` ｜ `chapter_aggregate` ｜ `surface_habits_targeted_repair` | **契·码** |
 | `attempts[].chapter_ordinal` | `int` | 否 | `chapter_local` 必填且只有它可填；让每次请求与源章绑定 | **契·码** |
 | `attempts[].user_prompt` · `.output` | `str` | 是 | 指纹 | **盘·码** |
 | `attempts[].cache_policy` | `str` | 是 | `default` ｜ `refresh-write` ｜ `disabled`。**盘上只见前两个** | **盘·码** |
@@ -343,10 +343,8 @@ LLM 产的定性 `voice/surface_habits`；句长、段长、对白比等不会�
 | `struct_ref` | INFO | `b\d\d_\d\d` / `sec_\d{4}` / 「第 N 章」 | 0 命中 |
 | `micro_quote` | INFO | 引号内 ≥6 字命中原文（举例性质） | **三岁 2 处** |
 | `node_leak` | INFO | `N1`/`gate`/`blueprint`/`stage N`/`QC` | 0 命中 |
-| ~~`num_vs_desc`~~ | **已退役** | 实测句长 vs 描述里「长句/短句」字面 | 报告常驻列出 |
-| ~~`cliche`~~ | **已退役** | 九词套话表 × 描述短于 25 字 | 报告常驻列出 |
 
-> #### 四条设计要点，都值得照抄
+> #### 三条设计要点，都值得照抄
 >
 > **① `name_leak` 分三态，不是两态。** 没有名表 ⇒ `unver`（这条规则**本次没有跑**）；
 > **名表过滤后为空也是 `unver`**——拿一张空表去扫，0 命中是必然的，那是「保证会亮的绿灯」（判据 31）。
@@ -356,12 +354,7 @@ LLM 产的定性 `voice/surface_habits`；句长、段长、对白比等不会�
 > 落盘时 `measurable` 刚由代码算出来，与「照盘上 stage1 重算」必然相等——
 > **一条永远不会红的检查不该打 `[OK]`**。它能红的场景是 stage1 后来重跑过、或实测口径改过。
 >
-> **③ 两条退役判据【退役而不删】，报告里常驻列出并附理由。**
-> 退役理由是同一条：**没有基线命中率的词表/关键词判据，等于不知道自己在说什么**（判据 31）。
-> 退役的是旧关键词判据；生产 prompt 仍要求输出可迁移、可执行的生成规则。
-> `CLICHES` 九词表没有现役消费方，报告常驻说明它为何退役，避免与漏实现混淆。
->
-> **④ 扫描面必须排除 `_provenance`。** `_iter_strings` 的排除表 `_META_KEYS` 漏了它，
+> **③ 扫描面必须排除 `_provenance`。** `_iter_strings` 的排除表 `_META_KEYS` 漏了它，
 > 于是报告打印「扫过 30 个文本字段」而被测对象只有 20 个（三本各 10 / 10 / 19 个字符串来自 `_provenance`）。
 > **今天没有假阳**（那些值全是 ASCII 指纹／模型名／git sha），
 > 但**报出来的基数是错的**（判据 31），而且一旦往 `_provenance` 里写进任何中文值，

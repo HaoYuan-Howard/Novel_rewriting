@@ -39,15 +39,13 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 | `approved` | `ApprovedHook \| null` | 人工定稿；进入 `stage7/book.txt` 的第一段 |
 | `sources.writer_context` | `ContextSource` | 写作上下文来源状态 |
 | `judged` | `{path: JudgedDraft}` | 生成时使用的开篇成稿及其消费指纹 |
-| `book` | `Finding[]` | 书级机械读数/状态 |
-| `baselines_identity` | `{rule: ratio}` | 历史恒等基线读数 |
 | `_provenance` | `HookProvenance` | 模型、prompt、输入、代码与参数来源账 |
 
 `Candidate`：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `approach` | 枚举 | 新产物见 §三；旧枚举只读兼容 |
+| `approach` | 枚举 | 三个当前策略之一，见 §三 |
 | `text` | 非空 `str` | 归一后的文案字节 |
 | `mech` | `Mech` | 标点、引号、分段归一的计数 |
 | `findings` | `Finding[]` | 该候选的机械判定 |
@@ -61,9 +59,8 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 |---|---|---|
 | `judged_texts` | `{真实标签: Fp10}` | 审过的去重文本集合 |
 | `hook_file_sha1` | `Fp10` | 整份 hook 文件的审计指纹，不作新鲜度绑定键 |
-| `reviews` | `HookCandidateReview[]` | 新版矛盾与质量审阅 |
+| `reviews` | `HookCandidateReview[]` | 矛盾与质量审阅 |
 | `ranking` | `str[]` | 解匿名后的真实标签排序 |
-| `texts` / `decisions` | 旧版字段 | 只读兼容旧剧透审判；新版恒为空 |
 | `_provenance` | `LlmProvenance` | 本次质量审判来源账 |
 
 `HookCandidateReview`：
@@ -90,9 +87,9 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 
 结果裁到 0~10，保留两位小数。
 
-## 三、候选策略与兼容面
+## 三、候选策略
 
-新生成响应必须恰好覆盖：
+生成响应必须恰好覆盖：
 
 | approach | 功能 |
 |---|---|
@@ -100,8 +97,7 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 | `payoff_preview` | 从全书挑最有吸引力的后期兑现/反转，制造“怎么走到这一步”的阅读欲 |
 | `scene_punchline` | 用可视可听的场面或对白砸出核心关系，以人物反应、危险或笑点收尾 |
 
-载体仍能读取旧值 `conflict_first` / `result_flashback` / `identity_contrast`，但模型响应不能再
-写这些值。`HookResponse` 的模型级 validator 同时保证三种新策略各一次、三条文本不重复。
+`HookResponse` 的模型级 validator 保证三种策略各一次、三条文本不重复。
 
 ## 四、生成材料
 
@@ -131,7 +127,7 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 - 该候选没有机械 HARD；
 - `semantic.require_selectable` 判为 `clear`。
 
-因此缺审判、旧版审判、过期、文本未审、coverage=uncertain 或实质矛盾都不能被人工误点绕过。
+因此缺审判、过期、文本未审、coverage=uncertain 或实质矛盾都不能被人工误点绕过。
 
 ### 5.1 `stage6/wontfix.json` —— 语义结论的人工闭环（2026-08-15）
 
@@ -179,7 +175,3 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 | `hook_not_approved` | unver | 是否已有人工定稿 |
 | `hook_body_missing` | unver | 连续开篇范围是否缺成稿 |
 | `hook_body_stale` | unver | 文案绑定的开篇成稿消费投影是否仍一致 |
-
-已退役且不再出现在新报告：`hook_arc_literal`、`hook_downsend_leak`、
-`hook_semantic_spoiler`、`hook_semantic_grounding`、`hook_quote_unver`、`hook_no_secrets`、
-`hook_secret_no_time`。历史 `hook.json` / `semantic_N.json` 只读兼容，不把旧结论冒充新质量审判。

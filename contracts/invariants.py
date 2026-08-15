@@ -631,18 +631,11 @@ STAGE3_ATTEMPT_KINDS: Final = (
 #: **一个模板 + 一份枚举表 = 一个 prompt**，表变了发出去的东西就变了。
 HOOK_APPROACHES: Final = ('source_architecture', 'payoff_preview', 'scene_punchline')
 
-#: 旧版 Stage6 已经落盘的三种写法。它们只用于**读取历史产物与编辑历史候选**，
-#: 不再进入生成 prompt / 模型响应枚举。把历史值直接从载体里删掉，会让一次 prompt
-#: 升级变成全库数据迁移；反过来若继续把它们放在 ``HOOK_APPROACHES``，模型又会继续
-#: 生产已经被 A/B 证伪的策略。读写面必须分开。
-HOOK_LEGACY_APPROACHES: Final = ('conflict_first', 'result_flashback', 'identity_contrast')
-HOOK_STORED_APPROACHES: Final = HOOK_APPROACHES + HOOK_LEGACY_APPROACHES
-
 #: 定稿那一份的 `approach` 比候选多一个值。
 #: 它答的是「这份人工稿是从哪一条候选改出来的」——**没有前身时才是 `human_edit`**。
-#: ⚠ 先 `--approve 2` 再 `--apply-edit`，`approach` 会**留着**被选候选的策略，
+#: ⚠ 先 `stage6.approve --pick 2` 再 `--apply-edit`，`approach` 会**留着**被选候选的策略，
 #: 而文本已经是人手写的。「它是不是人写的」由 `origin` 回答，不由这里回答。
-HOOK_APPROVED_APPROACHES: Final = HOOK_STORED_APPROACHES + ('human_edit',)
+HOOK_APPROVED_APPROACHES: Final = HOOK_APPROACHES + ('human_edit',)
 
 #: 候选在最新一次质量审判中的可选状态。界面与批准路共同消费；``unreviewed``
 #: 明确不同于 ``clear``，缺审判不能被画成绿灯。
@@ -779,6 +772,7 @@ PAID_FLAGS: Final = {
     #   永远不起作用的声明（`is_paid` 早在 `spec.paid` 那一步就判完了）。
     #   同 `stage5.write` 的 `--revise`，理由见 `NODES` 里那一格上方的注释。
     '--purge-role': 'stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型',
+    '--resample': 'stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应',
 }
 
 #: 重算时**只对本次新引入的错误入终态** —— 旧违约照报但不挡路。
@@ -800,11 +794,11 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #: ⚠ **`--identity` 是 F2 加进来的第四条，而它与 `--remeasure` 逐条同形**：
 #: 0 成本 · 写盘 · 改的是产物里**由代码算出来的那一部分**（stage7 的 `identity` 键 /
 #: stage3 的 `measurable`）· LLM 写的字段一个字不动。
-#: ⚠⚠ 但它**只对 stage7 成立**：stage6 的 `--identity` **不写盘**（那一层的恒等基线
-#: 落在 `baselines_identity`，是付费产出时一起算的）。同一个 flag 在两层行为不同，
+#: ⚠⚠ 但它**只对 stage7 成立**：stage6 的 `--identity` 只打印当前恒等读数、**不写盘**。
+#: 同一个 flag 在两层行为不同，
 #: 这条已经登记在 `WRITE_EFFECTS` 上方那段注释里——本表按 flag 索引，
 #: 而它收的是「**这条路要是写了盘，那份产物就是混版的**」，对两层都不说假话。
-#: ⚠ **`--approve` 刻意不在这里**：定稿一个由代码算出来的字段都没改，
+#: ⚠ **定稿节点刻意不在这里**：定稿一个由代码算出来的字段都没改，
 #: 它只是盖了个章。标 `partial_rewrite` 会说假话。
 #: `--apply-edit` 不是在每一层都代表混版：stage5 的整章人工稿会铸一份
 #: `origin=human` 的新来源账；stage7 只改 `extra_subs` / 决策 patch，模型生成的
@@ -831,8 +825,7 @@ VALUED_FLAGS: Final = {
                     '如 stage7/name_map_edit.json，也接受书目录内的绝对路径）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
-    # ⚠ `--pick` **不叫 `--approve`**：后者已退役成 stage0/6/7 的独立节点；
-    # 复活同名字面会让一个动作同时成为节点和参数。它只表示定稿候选序号，
+    # ⚠ `--pick` 只表示 stage6 定稿候选序号；定稿动作本身是独立节点。
     # 不进 `FREE_ENTRIES`（不是独立入口），也不进 `WRITE_EFFECTS`
     # （写的就是本节点 `produces` 中的正式产物）。
     '--pick': '定稿选第几个候选（1 起）',
@@ -1016,9 +1009,9 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   ——没有 schema 管形状，来源账上也留不下「这是人改的」。
     #   八层里 stage0/3/4/5/6/7 六层都已有这条 0 成本人工路，本层是最后一个缺口。
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
-                                 flags=('--renormalize', '--purge-role',
-                                        '--revalidate', '--full-extract',
-                                        '--apply-edit'),
+                                 flags=('--renormalize', '--purge-role', '--resample',
+                                         '--revalidate', '--full-extract',
+                                         '--apply-edit'),
                                  produces=('stage2/global_grounding.json',)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
@@ -1112,7 +1105,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠⚠ **`flags=()` 在这一格是【终态】不是待定**（2026-08-12，F2 查清）：
     #   上面那条「候选序号属 F 期」的注释对 stage6 是对的，对本层不是——
     #   **本层一本书只有一份人物表**，定稿是「给整份盖章」不是「从三条候选里选一条」，
-    #   原型的 `--approve` 就是一个 `store_true`。**它没有参数可起名。**
+    #   本层定稿只是给整份人物表盖章，**没有候选参数**。
     'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
                                  produces=('stage7/name_map.json',)),
 }

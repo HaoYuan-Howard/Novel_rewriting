@@ -668,10 +668,8 @@ export interface Stage6Response {
   candidates: HookCandidate[]
   /** null = 还没定稿 */
   approved: HookApproved | null
-  book: Finding[]
   /** 键是成稿完整相对路径 */
   judged: Record<string, JudgedDraft>
-  baselines_identity: Record<string, string>
   sources: Sources
   invalid_exists: boolean
   freshness: Freshness
@@ -741,7 +739,7 @@ export interface Stage7Response {
   baselines: Record<string, StemBaseline>
   approved: { origin: string } | null
   book: Finding[]
-  /** null = 恒等基线从没跑过（不是「迁移没填」） */
+  /** null = 当前流程从没跑过恒等基线 */
   identity: IdentityBaseline | null
   /** 组装时的账；book_txt_on_disk 才是盘上此刻的实况（两者可分家） */
   book_txt: { sha1: string; chars: number; chapters: number } | null
@@ -790,11 +788,6 @@ export interface CheckAccountingLine {
   detail: unknown[]
 }
 
-export interface CheckRetiredLine {
-  rule: string
-  why: string
-}
-
 export interface CheckProvenance {
   freshness: Freshness
   reason: string
@@ -818,13 +811,12 @@ export interface CheckReport {
   provenance: CheckProvenance
   rules: RuleLine[]
   accounting: CheckAccountingLine[]
-  retired: CheckRetiredLine[]
   badge: Badge
   passed: boolean
   counts: { ok: number; hit: number; unver: number; skipped: number }
 }
 
-/** 与服务端 `STAGES` 逐值相等（八层；`stage5_review` 那个旧名已随原型退役）。 */
+/** 与服务端 `STAGES` 逐值相等（stage0~stage7）。 */
 export type CheckKind =
   | 'stage0'
   | 'stage1'

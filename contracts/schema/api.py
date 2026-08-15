@@ -36,9 +36,9 @@ from contracts.invariants import (
     APPROVAL_SEEN,
     DEPTH_MODES,
     HINGE_KINDS,
+    HOOK_APPROACHES,
     HOOK_APPROVED_APPROACHES,
     HOOK_SEMANTIC_STATES,
-    HOOK_STORED_APPROACHES,
     HOOK_KEYS,
     INBOX_KIND,
     NAME_DISTINCTIVENESS,
@@ -712,13 +712,13 @@ class HookCandidateLine(FrozenModel):
     """
 
     index: int = Field(ge=1)
-    approach: Literal[HOOK_STORED_APPROACHES]
+    approach: Literal[HOOK_APPROACHES]
     chars: int = Field(ge=0)
     text: str = Field(min_length=1)
     mech: Mech
     findings: list[Finding]
 
-    #: 最新质量审判按文本 sha1 映射出的状态。没有/过期/旧版审判均为 unreviewed，
+    #: 最新质量审判按文本 sha1 映射出的状态。没有/过期审判均为 unreviewed，
     #: 不是 clear；批准路只接受 clear。
     semantic_state: Literal[HOOK_SEMANTIC_STATES]
     semantic_reason: str = Field(min_length=1)
@@ -758,9 +758,7 @@ class Stage6View(StrictModel):
     rationale: str = Field(min_length=1)
     candidates: list[HookCandidateLine] = Field(min_length=3, max_length=3)
     approved: HookApprovedLine | None
-    book: list[Finding]
     judged: dict[str, JudgedDraft]
-    baselines_identity: dict[str, str]
     sources: HookSources
 
     invalid_exists: bool

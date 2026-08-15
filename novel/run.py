@@ -58,12 +58,8 @@ class RunContext:
 
     #: 这一次跑的是**哪条臂**（`stage5.write --mode deep|shallow`）。全链只有这一个节点有臂。
     #:
-    #: ⚠⚠ **臂不是 flag，也不是 tag。** 它与 `--base` / `--yes` 同类：不改变贵贱、不改变
+    #: ⚠⚠ **臂不是 flag。** 它与 `--base` / `--yes` 同类：不改变贵贱、不改变
     #: 写不写盘，只说「这一次是哪一条」——所以它不在 `NodeSpec.flags` 里，而在 `modes` 里。
-    #: ⚠ 它与 A/B 用的目录后缀（原型的 `--tag`）曾被**拼成同一个串**传下去，于是
-    #: `dialogue_halved`（判 `mode == 'shallow'`）在每一条 tag 臂上**恒假**——
-    #: 闸门没有报错，它是**静默地不再存在**。⇒ 两者在本仓从结构上分开：`--tag` 未移植，
-    #: 而臂是这一格。
     mode: str | None = None
 
     #: 运行期心跳/进度的唯一出口。默认写进 stdout（编排器会把它收进作业日志）；
@@ -201,7 +197,7 @@ class RunContext:
                 f'{self.node} 这一次跑不花钱（paid=False），却在现造一份带 `model` 的来源账。'
                 f'记一个 `model` 上去就是宣称「某个模型产了它」，而这一次跑一个模型都没调。'
                 f'⇒ 0 成本产出走 `free_provenance()`；'
-                f'要写回一份**继承来的**来源账（`--revalidate`/`--remeasure`/`--approve`…），'
+                f'要写回一份**继承来的**来源账（`--revalidate`/`--remeasure`/定稿节点…），'
                 f'走 `store.promote_invalid()` 或直接把读上来的那一份原样带下去，别现造')
         out = cls(code=self.code, inputs=self.edges,
                   prompts={k: prov.fingerprint(v) for k, v in prompts.items()},

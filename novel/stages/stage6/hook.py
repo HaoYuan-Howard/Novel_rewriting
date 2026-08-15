@@ -246,7 +246,7 @@ def run_wontfix(ctx: RunContext, spec: str) -> CheckReport:
         raise TerminalState(
             f'stage6 的结论一条都不挂在章上，第一段只能是 `book`，拿到 {head!r}。'
             f'⚠ 要说清豁免的是哪一条候选，把**证据键**写成第三段'
-            f'（形如 `conflict_first:<候选文案里的原字节>`）')
+            f'（形如 `source_architecture:<候选文案里的原字节>`）')
 
     up = _Upstreams(ctx, store)
     art, _raw = store.read_own(Hook, REL)
@@ -405,11 +405,10 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
     artifact = Hook(
         lead_upto=up.upto, rationale=resp.rationale, candidates=cands, approved=None,
         sources={'writer_context': _context_source()}, judged=up.judged,
-        book=[], baselines_identity={},
         **{'_provenance': ctx.llm_provenance(
             HookProvenance, prompts={'HOOK_SYS': system, 'RULES': _rules_fingerprint()},
             model=client.model,
-            params=HookParams(max_tokens=MAX_TOKENS, tag=''))})
+            params=HookParams(max_tokens=MAX_TOKENS))})
 
     outcomes = _judge_artifact(artifact, up, store)
     # ⚠⚠ **闸门条件与 stage3 不同**：本层一次产**三份**，一条红不该废掉另两条。

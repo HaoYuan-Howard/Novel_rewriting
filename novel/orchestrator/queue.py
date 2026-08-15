@@ -26,7 +26,7 @@ from novel.errors import ApprovalRequired
 from novel.orchestrator import state as st
 from novel.orchestrator.nodes import build_steps
 
-#: 人做的那几个动作。**队列永不自动排它们**——`--approve` 换一条候选、
+#: 人做的那几个动作。**队列永不自动排它们**——`stage6.approve` 换一条候选、
 #: `--apply-edit` 改一个字，都是「人看过之后的裁决」，机器替不了。
 #: ⚠ 它们进 `blocked` 而不是被跳过：被跳过的闸门在界面上与「不需要它」长得一样。
 HUMAN_NODES: frozenset[str] = frozenset(

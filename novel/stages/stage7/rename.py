@@ -503,7 +503,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
         # 没有模型基线时，这份映射完全由人工产生，使用 0 成本来源账。
         provenance = ctx.free_provenance(
             NameMapFreeProvenance, prompts={'RULES': _rules_fingerprint()},
-            params=NameMapParams(max_tokens=MAX_TOKENS, tag=''), origin='human')
+            params=NameMapParams(max_tokens=MAX_TOKENS), origin='human')
     new_art, _fs, _hook_new = _build(ctx, up, model_out, extra, provenance)
     if prev is not None:
         new_art = new_art.model_copy(update={
@@ -585,7 +585,7 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
     provenance = ctx.llm_provenance(
         NameMapProvenance,
         prompts={'RENAME_SYS': system, 'RULES': _rules_fingerprint()},
-        model=client.model, params=NameMapParams(max_tokens=MAX_TOKENS, tag=''))
+        model=client.model, params=NameMapParams(max_tokens=MAX_TOKENS))
     art, fs, _hook_new = _build(ctx, up, resp.model_dump(by_alias=True), [], provenance)
     art = art.model_copy(update={'identity': baseline})
 
@@ -612,7 +612,7 @@ def run_approve(ctx: RunContext) -> tuple[NameMap, CheckReport]:
     ⚠ **还有 HARD 时拒绝定稿**（显式终态）——人被挡住，而不是被静默放行。
     ⚠ **`_provenance` 一个字都不动**：不走 `llm_provenance`（0 成本的跑不许现造一份
     声称模型产了它的账），**也不走 `rewrite_provenance`**——定稿没有改任何 LLM 产的字节。
-    ⚠ **不归档**：`--approve` 不改任何判定，归档一份逐字段相同的拷贝只是噪声。
+    ⚠ **不归档**：`stage7.approve` 不改任何判定，归档一份逐字段相同的拷贝只是噪声。
     ⚠ 「什么时候定的稿」**不加字段**：落点是作业事件流，产物里再记一份就是第二个落点。
     """
     store = ArtifactStore(ctx)

@@ -78,7 +78,7 @@ export function Stage4Screen() {
               ) : null}
               {vm.ctxMissing ? (
                 <div className="prose-cn text-tag text-ink-4">
-                  writer_context 不在盘上——右半边缺席。跑 stage4.plan（或 --context-only）重建任务书。
+                  writer_context 不在盘上——右半边缺席。跑 stage4.context 重建任务书。
                 </div>
               ) : null}
             </header>

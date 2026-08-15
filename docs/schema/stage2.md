@@ -196,12 +196,18 @@ Stage 2 产出两份严格 JSON，另收一份人产的决策集：
 ## 四、生成、重算与晋升
 
 - `stage2.global`：主路径生成全书抽取；`--purge-role` 付费重划 `role/fate`；
+  `--resample` 仅在已有 `global_grounding.INVALID.json` 时绕过同参数缓存，付费重采整份响应；
   `--renormalize` 仅对**已符合当前 schema**的产物重算代码派生字段；
   `--apply-edit <路径>` 吃 `global_edit.json` 落 secret 的 0 成本人工订正（见 §三之二）。
 - `stage2.blueprint`：逐章生成；`--chapters` 定向付费重生成；`--renormalize` 重算当前
   schema 的原文定位与人物引用；`--check-only` 联合读取两份产物复检。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。
 - 本层没有旧 schema 迁移入口、字段别名或双形状读取路径。
+
+`--resample` 必须单独执行，并使用 `refresh-write`：不读同参数缓存，但合格的新响应仍写回缓存，
+避免下一次正常运行再次付费。请求或响应契约失败发生在写盘前，当前正式稿与问题稿都不动；新候选
+仍命中 HARD 时，旧 `.INVALID` 先进入 `_rounds/`、新问题稿接替原位，正式稿保持原字节；新候选
+通过时，旧正式稿和旧问题稿都进入 `_rounds/`。每次真实调用与缓存命中仍由同一份成本账记录。
 
 ## 五、现行判据
 
@@ -220,10 +226,11 @@ Stage 2 产出两份严格 JSON，另收一份人产的决策集：
 | 范围、必填与返工 | `scope_violation` · `event_empty` · `summary_empty` · `repair_cache_policy` |
 | 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_names_ambiguous` · `present_names_unlisted` · `present_names_pronoun` · `present_names_late` · `present_broad` · `batch_density` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
 
-机器可读修复路由共 **21 条**：
+机器可读修复路由共 **33 条**：
 
 - `stage2.blueprint --chapters`: 17 条；
 - `stage2.blueprint --renormalize`: 2 条；
+- `stage2.global --resample`: 12 条；
 - `stage2.global --purge-role`: 1 条；
 - `stage2.global --renormalize`: 1 条。
 

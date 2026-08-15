@@ -25,8 +25,8 @@ inbox.py —— 「待人工」六类清单的**生产者**（BE-04 第一条；
   ⚠ **豁免不占清单**：`wontfix` 过的结论只计数（「有人看过并决定不修」≠「没人看过」）。
     ⚠ 那张账**逐层各一份**（`<stage>/wontfix.json`，2026-08-15 裁决），
     计数在本模块跨层求和；语义结论的豁免也走同一份账（`novel/wontfix.py`）。
-  ⚠ 只捕「数据说走不下去」那一族（`UpstreamMissing`/`ArtifactUnreadable`/`TerminalState`/
-    `RunModeNotImplemented`——没跑到的层跳过，不编空结论）；`RefusedByStructure`
+  ⚠ 只捕「数据说走不下去」那一族（`UpstreamMissing`/`ArtifactUnreadable`/`TerminalState`
+    ——没跑到的层跳过，不编空结论）；`RefusedByStructure`
     是我们自己的 bug，**不捕**（`novel/errors.py` 开头那条：不许降级成一句温和的提示）。
 """
 from __future__ import annotations
@@ -40,9 +40,7 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from novel import paths, prov, wontfix
-from novel.errors import (
-    ArtifactUnreadable, RunModeNotImplemented, TerminalState, UpstreamMissing,
-)
+from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
 from novel.orchestrator.nodes import check_nodes
 from novel.orchestrator.state import readonly_ctx
 from novel.stages import check_only
@@ -133,7 +131,7 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
 def _report_of(ctx, stage: str) -> CheckReport | None:
     try:
         return check_only(stage)(ctx)
-    except (UpstreamMissing, ArtifactUnreadable, TerminalState, RunModeNotImplemented):
+    except (UpstreamMissing, ArtifactUnreadable, TerminalState):
         # 这一层没跑到 / 读不回来：它的处境由产物矩阵与各自的屏呈现，
         # 清单不替它编条目——「查不了」不是「待办」。
         return None

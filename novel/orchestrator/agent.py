@@ -165,9 +165,6 @@ def run_log_path(base: str | os.PathLike[str], run_id: str) -> Path:
 
 def append(base: str | os.PathLike[str], event: AgentRunEvent) -> None:
     """追加一行。**永不读-改-写**（同 `jobs.append_event` 那条理由）。"""
-    if (event.kind == 'started' and event.start is not None
-            and event.start.egress_authorized is None):
-        raise ValueError('新的 started 事件必须显式记录 egress_authorized；null 只用于读取旧记录')
     p = runs_path(base)
     p.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(event.model_dump(mode='json'), ensure_ascii=False)
@@ -189,13 +186,6 @@ def read_events(base: str | os.PathLike[str]) -> list[AgentRunEvent]:
             continue
         try:
             data = json.loads(line)
-            # 兼容该独立授权字段落地前的 append-only 记录。缺失只能改判为 unknown/null，
-            # 不能套用新请求的默认 True，否则会把未采集的同意追认为已授权。
-            start = data.get('start') if isinstance(data, dict) else None
-            if (isinstance(data, dict) and data.get('kind') == 'started'
-                    and isinstance(start, dict)
-                    and 'egress_authorized' not in start):
-                start['egress_authorized'] = None
             out.append(AgentRunEvent.model_validate(data))
         except Exception:                       # noqa: BLE001 —— 半截行容错
             if i == len(raw) - 1:

@@ -228,12 +228,6 @@ export function Stage6Screen() {
                     {(d.approved?.findings ?? []).map((f, i) => (
                       <FindingLine key={i} f={f} />
                     ))}
-                    <div className="border-t border-line-soft bg-sunken-2 px-16 py-9 text-tag font-semibold text-ink-3">
-                      全书级 {d.book.length} 条
-                    </div>
-                    {d.book.map((f, i) => (
-                      <FindingLine key={'b' + i} f={f} />
-                    ))}
                   </Panel>
 
                   <Panel className="flex flex-col">

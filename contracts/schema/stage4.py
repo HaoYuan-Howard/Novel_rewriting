@@ -491,7 +491,7 @@ class CtxProvenance(FreeProvenance):
     ⚠ 最后那条边是全仓唯一的一处「显式追踪」，它存在的理由就是 `context_link`（HARD）
     那个问题：「写手手里这份 ctx，是不是照盘上这份计划组的」。
     **代价已经付过一次**：某轮 23 章成稿与盘上任何一版 `writer_context` 都配不上
-    （匹配 1/23），产出它的那份已被 `--context-only` 覆盖，**配对关系永久丢失**。
+    （匹配 1/23），产出它的那份已被 `stage4.context` 覆盖，**配对关系永久丢失**。
     """
 
 

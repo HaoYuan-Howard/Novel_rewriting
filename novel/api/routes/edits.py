@@ -44,7 +44,7 @@ def _stamp(base: str, sid: str, gate: str) -> None:
     """**尽力而为**地盖审批章。产物里的 `approved` 是定稿的真相；
     审批文档是队列的检查单（`R-13.5`），它带前置链（s7 要 s6、s6 要 s5…）。
 
-    链没到位（中途接手的书、迁移语料）⇒ 定稿照样落，检查单那一格由
+    前置审批链尚未补齐 ⇒ 定稿照样落，检查单那一格由
     approvals 屏自己呈现、可在那里手工补链——**不把检查单的顺序翻成定稿的失败**。
     """
     try:
@@ -112,8 +112,8 @@ def approve_names(
 ) -> JobRecord:
     '''人名表定稿（`stage7.approve`，无参——终态不是待定）。
 
-    盖章条件同文案定稿：动作**落了**（exit 0/1）就盖 `s7`——迁移语料上
-    `rn_txt_stale` 这类硬红是常态，人定稿的语义正是「看过红行之后拍板」。
+    盖章条件同文案定稿：动作**落了**（exit 0/1）就盖 `s7`——校验仍可能有
+    `rn_txt_stale` 这类硬红，人定稿的语义正是「看过红行之后拍板」。
     '''
     record = jobs.run(base, 'stage7.approve', sid)
     if _completed(record):

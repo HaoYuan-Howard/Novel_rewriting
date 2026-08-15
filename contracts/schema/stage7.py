@@ -217,11 +217,7 @@ class BookTxt(StrictModel):
 
     #: **回查盘上那份的唯一依据**——txt 带不了 `_provenance`。
     #:
-    #: ⚠⚠ **契约要 40 位内容身份，而盘上记的是 10 位来源指纹**（`_common.md` §二
-    #: 明写 `stage7.book_txt 的指纹` 属内容身份那一栏）。
-    #: 它回答「有人换过交付物吗」，人可能拿 `sha1sum` 手工复核 ⇒ **截断买不到任何东西**。
-    #: 盘上那 3 份因此需要迁移，且**旧值推不出新值、只能重算**
-    #: （已登记进 `tests/corpus.py::RESHAPED`）。
+    #: 40 位内容身份，回答「有人换过交付物吗」；可直接与 `sha1sum` 手工复核。
     sha1: Sha1
 
     #: 盘上 11105 / 11807 / 13308。
@@ -252,9 +248,6 @@ class IdentityBaseline(StrictModel):
     【为什么要有这个键】原型的 `--identity` 整个输出是 `print(...)` + 返回码
     ⇒ **「跑过且逐字节无损」与「从没跑过」在盘上长得一模一样**（`Q-2`）。
     而它是本层**最该先点的一条**：替换器在恒等下不逐字节守恒时，后面每一分钱都白花。
-
-    **对照 stage6**：`hook.json` 里有 `baselines_identity`，落在产物里、进界面、进报告
-    ——**正因为它有落点，才有人回头去读它，才判死过两条坏判据**。
 
     ⚠ **不叫 `baselines_identity`**：本层已经有一个 `baselines`（姓字覆盖率，`stage7.md` §1.4），
     同名前缀会让两件毫无关系的事读起来像一族。
@@ -295,10 +288,9 @@ class NameMapSources(StrictModel):
 
 
 class NameMapParams(StrictModel):
-    """⚠ **原型完全没有这个键**（与 stage6 完全同形——两个付费节点犯同一个错）。"""
+    """一次调用当时的生成上限。"""
 
     max_tokens: int = Field(ge=1)
-    tag: str
 
 
 class NameMapProvenance(LlmProvenance):
@@ -399,11 +391,8 @@ class NameMap(StrictModel):
     #: 书级结论。盘上恒 **7 条**（1 info + 3 metric + 3 unver），三本**规则集完全相同**。
     book: list[Finding]
 
-    #: 恒等基线的结论（`R-10.7`）。**缺省 `null` = 从没跑过**——盘上 3/3 都是这一态，
-    #: 而那**不是「迁移没填」，是实况**：这三份产物产出时本键还不存在，
-    #: 那三次基线确实没有留下任何记录。
+    #: 恒等基线的结论（`R-10.7`）。**`null` = 当前流程从没跑过恒等基线**。
     #: ⚠ **键恒在**（`null` 与「键不在」是两件事，`Q-2`）——所以这里**不给默认值**。
-    #: 对照 `hook_consumed`：那个是「盘上 1/3 本有」的后加键，键可以不在；本键不是。
     identity: IdentityBaseline | None
 
     provenance: NameMapProvenance | NameMapFreeProvenance = Field(alias='_provenance')

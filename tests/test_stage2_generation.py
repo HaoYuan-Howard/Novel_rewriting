@@ -16,7 +16,7 @@ import pytest
 
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
-from novel.errors import ArtifactUnreadable, GateBlocked
+from novel.errors import ArtifactUnreadable, GateBlocked, UpstreamMissing
 from novel.llm.cache import CachePolicy, ResponseCache
 from novel.llm.client import LlmClient
 from novel.llm.ledger import CostLedger
@@ -307,9 +307,129 @@ def test_stage2_global_invalid_can_be_revalidated_without_another_llm_call():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_global_resample_bypasses_the_rejected_cache_and_preserves_its_round():
+    """普通重跑仍命中问题缓存；显式重采样才产生第二次调用与新轮次。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '全局重采样测试_460'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        bad = _response_global()
+        bad['entities']['characters']['char_002']['canonical'] = \
+            bad['entities']['characters']['char_001']['canonical']
+
+        def respond(_req: ChatRequest, index: int) -> ChatResponse:
+            return _ok(bad if index == 0 else _response_global())
+
+        client, transport = _client(ctx, respond)
+        with pytest.raises(GateBlocked):
+            extract.run_global(ctx, client)
+        original_invalid = (book / extract._GLOBAL_INVALID).read_bytes()
+
+        # 参数未变的普通重跑必须仍然读缓存，不能暗中把“重跑”解释成“再花钱”。
+        with pytest.raises(GateBlocked):
+            extract.run_global(ctx, client)
+        assert len(transport.calls) == 1
+        assert ctx.ledger.usage().calls_cached == 1
+
+        artifact = extract.run_resample(ctx, client)
+        assert isinstance(artifact, GlobalGrounding)
+        assert ctx.cache.name == 'refresh-write'
+        assert len(transport.calls) == 2, '重采样仍命中了旧问题缓存'
+        assert (book / extract.GLOBAL_REL).is_file()
+        assert not (book / extract._GLOBAL_INVALID).exists()
+        archived = list((book / 'stage2' / '_rounds').glob(
+            'global_grounding.INVALID.r*.json'))
+        assert archived and any(path.read_bytes() == original_invalid for path in archived), \
+            '原问题稿没有进入轮次归档'
+        usage = ctx.ledger.usage()
+        assert usage.calls_made == 2 and usage.calls_cached == 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_global_resample_requires_a_rejected_candidate_before_spending():
+    root = Path(tempfile.mkdtemp())
+    book = root / '无问题稿重采样测试_461'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(ctx).write(
+            extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        client, transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+        with pytest.raises(UpstreamMissing, match='尚未发起请求'):
+            extract.run_resample(ctx, client)
+        assert transport.calls == []
+        assert ctx.cache.name == 'default'
+        assert ctx.ledger.usage() is None, '没有任何调用的账本不能伪装成一份全零 usage'
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_failed_global_resample_keeps_the_formal_round_and_archives_the_problem():
+    root = Path(tempfile.mkdtemp())
+    book = root / '重采样失败测试_462'
+    book.mkdir()
+    try:
+        first_ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(first_ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        first_client, _ = _client(
+            first_ctx, lambda _req, _index: _ok(_response_global()))
+        formal = extract.run_global(first_ctx, first_client)
+        formal_before = (book / extract.GLOBAL_REL).read_bytes()
+
+        rejected = formal.model_dump(by_alias=True)
+        rejected['entities']['characters']['char_002']['canonical'] = \
+            rejected['entities']['characters']['char_001']['canonical']
+        store.write_invalid(
+            extract.GLOBAL_REL,
+            GlobalGrounding.model_validate(rejected),
+            gates_skipped=[],
+        )
+        invalid_before = (book / extract._GLOBAL_INVALID).read_bytes()
+
+        retry_ctx = _ctx(book, 'stage2.global')
+        retry_bad = _response_global()
+        retry_bad['entities']['characters']['char_002']['canonical'] = \
+            retry_bad['entities']['characters']['char_001']['canonical']
+        retry_client, retry_transport = _client(
+            retry_ctx, lambda _req, _index: _ok(retry_bad))
+        with pytest.raises(GateBlocked):
+            extract.run_resample(retry_ctx, retry_client)
+
+        assert len(retry_transport.calls) == 1
+        assert (book / extract.GLOBAL_REL).read_bytes() == formal_before, \
+            '失败重采样覆盖了正式产物'
+        archived = list((book / 'stage2' / '_rounds').glob(
+            'global_grounding.INVALID.r*.json'))
+        assert archived and any(path.read_bytes() == invalid_before for path in archived)
+        assert retry_ctx.ledger.usage().calls_made == 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_cli_dispatches_global_resample_through_the_dedicated_entry(monkeypatch):
+    from novel.cli import exit_codes as X
+    from novel.cli import main as cli
+
+    ctx = SimpleNamespace(node='stage2.global')
+    marker = object()
+    called = []
+    monkeypatch.setattr(cli, '_llm_client', lambda got: marker if got is ctx else None)
+    monkeypatch.setattr(
+        extract, 'run_resample', lambda got_ctx, got_client:
+        called.append((got_ctx, got_client)))
+    assert cli._run_stage2(ctx, ['--resample']) == X.OK
+    assert called == [(ctx, marker)]
+
+
 def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
     root = Path(tempfile.mkdtemp())
-    book = root / '全局迁移测试_457'
+    book = root / '全局重归一测试_457'
     book.mkdir()
     try:
         ctx = _ctx(book, 'stage2.global')
@@ -345,7 +465,7 @@ def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
 
 def test_stage2_blueprint_renormalize_rebuilds_code_derived_character_refs():
     root = Path(tempfile.mkdtemp())
-    book = root / '蓝图迁移测试_458'
+    book = root / '蓝图重归一测试_458'
     book.mkdir()
     try:
         global_ctx = _ctx(book, 'stage2.global')
@@ -512,7 +632,7 @@ def test_past_attested_surfaces_only_hand_out_past_attested_forms():
 
 def test_stage2_renormalize_rejects_locator_shaped_formal_artifact():
     root = Path(tempfile.mkdtemp())
-    book = root / '旧蓝图迁移测试_460'
+    book = root / '非法蓝图重归一测试_460'
     book.mkdir()
     try:
         global_ctx = _ctx(book, 'stage2.global')

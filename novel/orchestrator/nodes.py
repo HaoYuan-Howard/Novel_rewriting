@@ -101,6 +101,10 @@ def validate_run(node: str, flags: Sequence[str] = (),
         if set(tokens) != {'--full-extract'}:
             raise UnsupportedRunMode(
                 'stage2 --full-extract cannot be combined with repair flags')
+    if node == 'stage2.global' and '--resample' in tokens:
+        if set(tokens) != {'--resample'}:
+            raise UnsupportedRunMode(
+                'stage2.global --resample 必须单独执行；它会重新采样整份全局响应')
 
     if '--repair-surface-habits' in tokens:
         allowed = {'--repair-surface-habits', '--dry-run'}

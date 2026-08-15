@@ -16,17 +16,13 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 
 【本层特有的四条，与前七层都不同】
 
-**① 这是第一个用 `Rule.fix` 的层。** 21 条带机器可读的修复路由：
-`blueprint --chapters` 17 · `blueprint --renormalize` 2 · `global --purge-role` / `--renormalize`
-各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
+**① 这是第一个用 `Rule.fix` 的层。** 33 条带机器可读的修复路由：
+`blueprint --chapters` 17 · `blueprint --renormalize` 2 · `global --resample` 12 ·
+`global --purge-role` / `--renormalize` 各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
 （反哺是 stage5 独有的，`contracts/rules.py::_validate` ④ 把它锁在 `owner='stage5'` 上）
-⇒ `directive` 全表为空，而 `fix` 有 24 条。
-
-**② `material_malformed` 不在这里重复注册。** Stage 2 产物在晋升前已经用
-`SourceSpan` 守住 offset/text/normalized 一致性；`contracts/judges/stage5.py` 仍以
-`stage='stage5', owner='stage2'` 注册这条，作为下发材料的纵深校验。
+⇒ `directive` 全表为空，而 `fix` 有 33 条。
 
 ⚠ **徽章结构上永远不可能是 `pass`**：本表有 **2 条 `unver`**，其中
 `role_fate_unverifiable` **无条件产出**（见下）⇒ 每本每次都产 ⇒ 最好情况是 `amber`
@@ -44,6 +40,7 @@ FIX_REGEN = ('stage2.blueprint', '--chapters')      # 定向重生成那几章�
 FIX_RENORMALIZE_BP = ('stage2.blueprint', '--renormalize')  # 确定性归一，0 成本
 FIX_RENORMALIZE_G = ('stage2.global', '--renormalize')      # 同上，全书那一份
 FIX_PURGE_ROLE = ('stage2.global', '--purge-role')  # 语义判官臂重划 role/fate（**付费**）
+FIX_RESAMPLE = ('stage2.global', '--resample')  # 绕过问题缓存重采整份 global（**付费**）
 
 
 def _hard(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -> Rule:
@@ -108,17 +105,17 @@ _hard('chapter_order', 'blueprint 顺序与 main_text 章序一致', 'R-3.16', f
 
 # ═══ 二、称谓表（7 HARD · 4 INFO）═════════════════════════════════════════
 
-_hard('canonical_unique', '一个显示名只挂一个 char_id', 'R-2.1',
+_hard('canonical_unique', '一个显示名只挂一个 char_id', 'R-2.1', fix=FIX_RESAMPLE,
       note='重名 ⇒ 下游按名字解析时**静默**取到其中一个，而取到哪一个只取决于遍历顺序。'
            '盘上 0/3（12 / 15 / 48 个显示名）')
 
-_hard('character_unattested', '每个角色至少有一个叫法在原文里搜得到', 'R-2.2',
+_hard('character_unattested', '每个角色至少有一个叫法在原文里搜得到', 'R-2.2', fix=FIX_RESAMPLE,
       note='判的是 `canonical`（剥掉区分词之后）与全部 `surface` 里**至少有一个**能搜到。'
            '⚠ 与 `address_unlocatable` 是**同一条需求的两级**：那一条逐条查、判 INFO；'
            '本条查「这个人在原文里到底有没有出现过」，一个都搜不到＝**这个角色是编的**。'
            '盘上 0/3')
 
-_hard('address_by_unresolved', '「谁在这么叫」解析得出来', 'R-2.4',
+_hard('address_by_unresolved', '「谁在这么叫」解析得出来', 'R-2.4', fix=FIX_RESAMPLE,
       note='取值是 registry 里的 `char_id`，或 `narration` / `public`。'
            '⚠ 载体那边的 `AddressBy` 只管**形状**（`^(char_\\d+|narration|public)$`），'
            '「这个 `char_001` 在不在 registry 里」是**跨产物**的，只能是判据。'
@@ -127,22 +124,25 @@ _hard('address_by_unresolved', '「谁在这么叫」解析得出来', 'R-2.4',
            '盘上 0/3（27 / 47 / 82 条）')
 
 _hard('address_from_out_of_range', '「从第几章起可用」在全书章范围内', 'R-2.5',
+      fix=FIX_RESAMPLE,
       note='越界 ⇒ 这条称呼**永不下发**，而它在产物里看着一切正常。盘上 0/3')
 
 _hard('address_from_too_early', '「从第几章起可用」不早于该字面在原文里首次出现的章', 'R-2.5',
+      fix=FIX_RESAMPLE,
       note='⚠ **单边判定**：早于字面首现一定错（读者还不知道这个叫法）；晚于合法'
            '（作者可以先用别的叫法）。反过来判就会把一大批正当的谨慎标注报成违规。'
            '⚠ 落盘前会**只往后抬**，账记在 `_provenance.address_from_chapter_raised`'
            '（盘上共 7 处）⇒ 本条在成品上恒 0 是**预期**，它守的是抬升逻辑本身没坏。'
            '盘上 0/3')
 
-_hard('address_bare_pronoun', '称谓整条不是代词', 'R-2.3',
+_hard('address_bare_pronoun', '称谓整条不是代词', 'R-2.3', fix=FIX_RESAMPLE,
       note='代词相对说话人，收了它下游必然取到「我妈」这种说法，而它不触发任何终态。'
            '⭐ **盘上 1/3 有真反例**：三岁那本 `char_034` 的 `surface` 整条就是「她」。'
            '词表是 `contracts/invariants.py::BARE_PRONOUNS`（我/你/他/她/它/咱），'
            '**整份插值进 `GLOBAL_SYS`，不许在这里手抄子集**')
 
 _hard('address_all_pronoun', '一个角色有据的叫法不得全都含代词', 'R-2.3',
+      fix=FIX_RESAMPLE,
       note='上一条判「整条是代词」，本条判**这个角色一条干净叫法都没有**——'
            '那种情况下游 `display_name` 只能取到「我妈」。'
            '两条分开是因为**修法不同**：前者删掉那一条即可，后者要补一条新的。盘上 0/3')
@@ -170,7 +170,7 @@ _info('address_unlocatable', '每条叫法都能在原文里原样找到', 'R-2.
 
 # ═══ 三、身份与结局（5 HARD · 1 度量 · 1 查不了）══════════════════════════
 
-_hard('role_missing', '每个角色都有静态身份描述', 'R-2.6',
+_hard('role_missing', '每个角色都有静态身份描述', 'R-2.6', fix=FIX_RESAMPLE,
       note='下游**只下发 `role`，不下发 `fate`** ⇒ 缺了它写手不认识这个人。盘上 0/3')
 
 _hard('role_leaks_fate', '静态身份里没有结局词', 'R-2.6', wordlist=True, fix=FIX_PURGE_ROLE,
@@ -185,10 +185,11 @@ _hard('role_leaks_fate', '静态身份里没有结局词', 'R-2.6', wordlist=Tru
            '⚠ 修法是**付费**的（`--purge-role` 要再调一次语义判官），'
            '它是本表唯一一条 `is_paid` 为真的 fix')
 
-_hard('role_repeats_name', '静态身份不与显示名完全同字', 'R-2.6',
+_hard('role_repeats_name', '静态身份不与显示名完全同字', 'R-2.6', fix=FIX_RESAMPLE,
       note='同字的话写手拿到的下发面是「李宝珠：李宝珠」——一条零信息的介绍。盘上 0/3')
 
 _hard('hedge_words', '身份 / 结局 / 显示名里没有模棱语', 'R-2.6', wordlist=True,
+      fix=FIX_RESAMPLE,
       baseline='⭐ **盘上 2/3 命中**（成年人 1 · 头牌 1），⚠ **两处都在 `fate`**——'
                '而 `fate` 一概不下发给写手 ⇒ 这两处的实际危害低于它的严重度，'
                '但**不降级**：同一把尺子量 `role` 时它是真阻断，按命中位置分级'
@@ -197,6 +198,7 @@ _hard('hedge_words', '身份 / 结局 / 显示名里没有模棱语', 'R-2.6', w
            '这三个字段是「原文写出来的事实」，不确定就不该写进来')
 
 _hard('distinguisher_lonely', '带区分词的显示名真有同名对象', 'R-2.6b',
+      fix=FIX_RESAMPLE,
       note='没有重名就没有消歧可言，而**区分词会被写手原样写进正文**'
            '（「李宝珠（丫鬟）掀开帘子」）。⚠ 落盘前会剥区分词，账记在'
            '`_provenance.canonical_distinguishers_stripped`——**盘上 3/3 本恒空**，'
@@ -222,6 +224,7 @@ _metric('fate_report', '结局字段的缺失率', 'R-2.7',
 # ═══ 四、世界规则 · 秘密 · 关系（3 HARD · 3 INFO · 1 度量 · 1 查不了）═════
 
 _hard('world_rule_no_desc', '每条规则至少有一个带正文的版本', 'R-2.11b',
+      fix=FIX_RESAMPLE,
       note='`versions[].desc` 是规则正文的**唯一**落点，而下游取正文时'
            '**无兜底、缺失即显式终态**（`or description` 那个兜底就是漏洞本身）。'
            '⚠ 载体那边 `versions` 有 `min_length=1`、`desc` 有 `min_length=1`，'
@@ -250,6 +253,7 @@ _metric('secret_cold_reveal', '没有埋点的秘密条数', 'R-2.9b',
              '因此该计数必须常驻来源账。')
 
 _hard('secret_known_by_dangling', '「谁知情」里的保留形都解析得出来', 'R-2.9c',
+      fix=FIX_RESAMPLE,
       note='⚠ 按**形状**分流：`char_\\d+` 必须能在 registry 里解析，'
            '自由文本（「在场士兵」）**放行**。⚠⚠ 这与 `Address.by` 的处置'
            '**故意相反**：那边要的是派发键，群体名解析不出人就没用；'

@@ -5,7 +5,7 @@
 分布为 15 HARD、8 INFO、3 metric、7 unver。`rn_*` id 同时用于报告、人工豁免与来源账；
 模型决定和人工 `extra_subs` 使用分开的碰撞规则，避免把人工确认扩进模型 HARD 取值面。
 
-本层不开放付费自动返工。有 HARD 时 `--approve` 拒绝定稿、`--assemble` 拒写 `book.txt`；
+本层不开放付费自动返工。有 HARD 时 `stage7.approve` 拒绝定稿、`stage7.assemble` 拒写 `book.txt`；
 7 条 `unver` 常驻输出，因此无 HARD 命中时报告为 `amber` 且 `passed=True`。
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ STAGE = 'stage7'
 
 #: 人工修订路径全表共用；`repair='NONE'`，因此不会误导为写作层自动返工。
 _HUMAN_FIX = ('〔人能 0 成本改掉：`--apply-edit` 收完整决策集 JSON，人直接把映射改对；'
-              '还有 HARD 时 `--approve` 拒绝定稿、`--assemble` 拒写 txt〕')
+              '还有 HARD 时 `stage7.approve` 拒绝定稿、`stage7.assemble` 拒写 txt〕')
 
 
 def _hard(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -> Rule:
@@ -94,7 +94,7 @@ _hard('rn_shared_surface', '被替换的称呼没有同时挂在多个角色身�
 
 # 【人裁决过的那些另立一条】多主有一类是**情节本身**（顶名 / 替身 / 女扮男装）：
 # 某本 `谢昭阳` 既是 char_001 的 canonical、又是 char_002 从 ch12 起的 address。
-# 那种书里「不换」＝主角真名进成书，而旧口径下 hard + `--approve` 拒绝定稿 +
+# 那种书里「不换」＝主角真名进成书，而 HARD + `stage7.approve` 拒绝定稿 +
 # `extra_subs` 也过不了这道门 ⇒ **整本书没有任何一条路能出成书。**
 _info('rn_shared_surface_human', '多主称呼只在人明写时才替换，且报出它还碰到了谁', 'R-10.3b',
       note='这条否决防的是**静默**误伤，不是「多主一律不能换」。'
@@ -193,9 +193,8 @@ _info('rn_kept_contains_mapped', '保留下来的称呼里没有夹着已经改�
 # ── 恒等基线（`R-10.7` / `R-10.7b`，F2 新增）─────────────────────────────────
 
 _info('rn_identity_baseline', '恒等基线跑过，而且逐字节无损', 'R-10.7',
-      note='⚠ **不做成 HARD**：HARD 的 `skipped` 进 `fail`，而盘上三份产物的 '
-           '`identity` 都还是 `null`（那**不是迁移没填，是实况**：原型只 `print`）'
-           '⇒ 做成 HARD 会让三本全红，而它们并没有任何证据表明替换器坏了。'
+      note='⚠ **不做成 HARD**：HARD 的 `skipped` 进 `fail`，而 `identity=null` 只表示'
+           '当前流程没有跑过恒等基线，并不构成替换器损坏的证据。'
            '**「没跑过」要出声，但不该阻断。**'
            '⚠ 结论里必须带**量了几章**：`roundtrip_ok=True` 而 `chapters=0` 是一句空话')
 

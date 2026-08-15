@@ -253,8 +253,6 @@ def test_dialogue_halved_only_fires_on_the_open_book_arm(book, entry):
 
     ⚠ 闭卷写手手里**没有源章**，「把台词写回来」对它只能是**编一句出来**
     ——而那正是实测发生过的那次自造台词。所以闭卷那一侧只报提示级 `dialogue_fewer`。
-    ⚠⚠ 它曾在每一条 `--tag` 臂上**恒假**（臂与 tag 被拼成同一个串）——
-    闸门没有报错，它是**静默地不再存在**。
     """
     src_ord = (entry.get('from_source_ordinals') or [1])[0]
     src = '「一。」「二。」「三。」「四。」「五。」「六。」「七。」「八。」' * 3
@@ -287,7 +285,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 49 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 48 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -297,7 +295,7 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    assert len(reg) == 49
+    assert len(reg) == 48
 
 
 def test_the_unver_five_must_say_why_they_cannot_check():
@@ -414,18 +412,6 @@ def test_the_downsend_band_is_the_very_one_the_judges_use(book, entry):
     assert M.target_range(entry) == (lo, hi)
     mat = prompts.build_material(entry, book, with_source_text=False)
     assert f'**{lo}~{hi} 字**' in mat.given
-
-
-def test_material_is_cleaned_for_the_writer_but_judged_as_is(book, entry):
-    """⚠ **两侧方向相反，这是有意的**：下发面该清（带着半个词的指令写手照办不了），
-    判定面不能清（清了就把「stage2 的锚点切过界」这件事盖掉了，而那是上游的账）。"""
-    bad = '冰冷链子：「'
-    e = dict(entry, beats=[{**(entry['beats'][0]), 'must_appear': [bad]}])
-    assert prompts.clean_material(bad) == '冰冷链子'
-    assert prompts.clean_material(bad) in prompts.chapter_facts(e)
-    fs, _land = checks.review_chapter_findings(_clean_body(book, entry), e, book)
-    mal = [f for f in fs if f.rule == 'material_malformed']
-    assert mal and bad in mal[0].evidence, '判定面把残渣清掉了——上游的账就此消失'
 
 
 def test_the_secret_ids_never_reach_the_writer(book, entry):

@@ -156,19 +156,16 @@ def test_a_missing_artifact_is_200_with_the_left_half_intact(client, box):
 
 # ───────────────────────── 二、三种「没有」各不相同 ─────────────────────────
 
-def test_every_stage_answers_a_real_state_not_501(client, box):
-    """八层都答得出当前真实状态，不存在“尚未移植”的兼容态。
+def test_every_stage_answers_a_real_state(client, box):
+    """八层都答得出当前真实状态。
 
     断言不写死成某一个码：本 fixture 是一个**真书目录**，各层跑到哪一步不同
-    （产物齐的答 200、没跑的答 404）。要钉住的是**没有一层再答 501**——
-    501 从此只属于「这条跑法还没接线」，而复检这条路八层都接好了。
+    （产物齐的答 200、没跑的答 404、产物损坏的答 409）。
     """
     codes = {}
     for kind in sorted(STAGES):
         r = client.get(f'/api/novels/{box.sid}/check/{kind}')
         codes[kind] = r.status_code
-        assert r.status_code != 501, (
-            f'{kind} 仍答 501 —— 当前八层的复检都应已接线')
         assert r.status_code in (200, 404, 409), (
             f'{kind} → {r.status_code}；复检这条路只该答这三个：'
             f'200（查了）· 404（这一层还没跑）· 409（产物读不回来）。'

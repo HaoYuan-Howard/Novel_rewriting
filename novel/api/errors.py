@@ -34,7 +34,6 @@ from novel.errors import (
     PartitionChapterMismatch,
     PartitionInputMismatch,
     ProvenanceRefused,
-    RunModeNotImplemented,
     ResidualNonbody,
     SourceConflict,
     SourceDecodeFailed,
@@ -83,10 +82,6 @@ STATUS: dict[type[NovelError], int] = {
     JobConflict: 409,
     #: 人敲了一条这个节点没有的跑法 ⇒ 产地是**客户端**。
     UnsupportedRunMode: 400,
-    #: 「登记在案、还没接线」⇒ 后端认得这个动作，只是该 flag 尚未实现。**不是 404**：
-    #: 404 表示地址不存在，两者需要不同的客户端处理。
-    RunModeNotImplemented: 501,
-
     # ── 代码自相矛盾（`RefusedByStructure`）。**是 bug，栈要留全** ──
     #: ⚠ 500 的响应体里**只出类名与一句人话，不出栈**——那份正文是不外流的版权内容，
     #: 而栈里可能带着它。栈留在服务端日志里（`R-11.1` 第四条理由）。

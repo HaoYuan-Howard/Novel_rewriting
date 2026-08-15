@@ -667,7 +667,7 @@ def event_landing(entry: dict[str, Any], body: str, src_text: str
 
 def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
                             ) -> tuple[list[Finding], collections.Counter]:
-    """验收相相对落盘闸门的**逐章增量**：事件落点 + 下发材料形态。"""
+    """验收相相对落盘闸门的逐章增量：事件落点。"""
     fs: list[Finding] = []
     src_text = M.chapter_source(entry, book.source_text)
     landed, missed, noatom, ident = event_landing(entry, body, src_text)
@@ -683,17 +683,6 @@ def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
                                  f'连源章原文里都找不到（原子提错了，不是成稿的账）'
                                  f'—— 这些拍**没有被检查**',
                           evidence=[str(len(noatom)), str(len(ident))]))
-    # 材料坏没坏与成稿无关，但它会**同时**污染判定与反哺，所以在这里一起报出来。
-    bad = [t for be in (entry.get('beats') or []) for g in HINGE_GROUPS.values()
-           for t in (be.get(g) or []) if prompts.clean_material(t) != (t or '').strip()]
-    if bad:
-        fs.append(finding(
-            'material_malformed',
-            detail=f'{len(bad)} 条下发材料两端带着标点/引号残渣（多半是 stage2 的锚点切过界）：'
-                   f'{[repr(t) for t in bad[:3]]}——拿它判「在不在」会判出假阳，'
-                   f'拿它反哺写手照办不了。发给写手时已清掉残渣，**但判定用的还是原样**：'
-                   f'证据留着，等 stage2 修',
-            evidence=bad))
     land = collections.Counter({'ok': len(landed), 'missed': len(missed),
                                 'noatom': len(noatom), 'ident': len(ident)})
     return fs, land
@@ -908,7 +897,7 @@ _FROM_CHAPTER: tuple[str, ...] = (
 
 #: **只有全书验收相**产得出来的：单章视角看不到，或者要跨章比。
 _FROM_REVIEW: tuple[str, ...] = (
-    'event_landing', 'event_landing_unver', 'material_malformed',
+    'event_landing', 'event_landing_unver',
     'draft_missing', 'draft_duplicated',
     'no_secrets_in_book', 'secret_timeline', 'cross_chapter_number',
     'book_length_report', 'book_length', 'name_surface_survey',

@@ -414,25 +414,10 @@ def chapter_facts(entry: dict[str, Any]) -> str:
             lines.append(head + (evs[0] if evs else '') + _stage_line(be))
         for key, label in HINGE_LABEL.items():
             for t in (be.get(key) or []):
-                lines.append(f'     · {label}：{clean_material(t)}')
+                lines.append(f'     · {label}：{(t or "").strip()}')
     body = '\n'.join(lines)
     nar = entry.get('narration') or []
     return body + f'\n\n叙述视角（按段）：{_compact(nar)}' if nar else body
-
-
-#: 材料两端的标点/引号残渣（多半是 stage2 的锚点切过界）。
-_MATERIAL_EDGE = re.compile(r'^[\s「」『』“”‘’"\'：:，,。.、；;！!？?…—－\-]+|'
-                            r'[\s「」『』“”‘’"\'：:，,、；;－\-]+$')
-
-
-def clean_material(t: str | None) -> str:
-    """发给写手之前把材料两端的残渣清掉。**判定用的仍是原样**（判据 `material_malformed`）。
-
-    ⚠ **两侧方向相反，这是有意的**：下发面该清（带着半个词的指令写手照办不了），
-    判定面不能清（清了就把「stage2 的锚点切过界」这件事盖掉了，而那是上游的账）。
-    LESSONS 第 10 条那条「同一份数据在下发面该严、在检测器该宽」的同一形状。
-    """
-    return _MATERIAL_EDGE.sub('', (t or '').strip())
 
 
 _GOAL_QUOTE_RX = re.compile(r'「([^」]{2,40})」|“([^”]{2,40})”|‘([^’]{2,40})’')

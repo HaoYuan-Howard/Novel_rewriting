@@ -204,7 +204,7 @@ def test_build_prompt_is_anonymous_and_carries_all_quality_references(monkeypatc
     assert payload['style']['book_surface_habits'] == ['短句']
 
 
-def test_outcomes_are_unver_when_quality_review_is_missing_stale_or_legacy(monkeypatch):
+def test_outcomes_are_unver_when_quality_review_is_missing_or_stale(monkeypatch):
     monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: None)
     got = semantic.outcomes(_Store(), _art())
     assert len(got) == 3 and all(out.unver_why for out in got)
@@ -215,11 +215,6 @@ def test_outcomes_are_unver_when_quality_review_is_missing_stale_or_legacy(monke
     _install(monkeypatch, current)
     got = semantic.outcomes(_Store(fresh=False), _art())
     assert all(out.unver_why and '上游已变化' in out.unver_why for out in got)
-
-    _install(monkeypatch, SimpleNamespace(reviews=[], texts=[object()], ranking=[]))
-    got = semantic.outcomes(_Store(), _art())
-    assert all(out.unver_why and '旧版剧透审判' in out.unver_why for out in got)
-
 
 def test_picking_duplicate_text_does_not_stale_sha_bound_review(monkeypatch):
     artifact = _semantic_artifact(_all_clean_reviews())

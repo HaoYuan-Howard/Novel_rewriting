@@ -191,6 +191,17 @@ def test_a_node_refuses_a_flag_it_does_not_have():
         N.build_argv('stage9.nope', SID, base=BASE)
 
 
+def test_stage2_global_resample_is_paid_and_cannot_hide_another_action():
+    argv = N.build_argv('stage2.global', SID, ['--resample'], base=BASE)
+    assert '--resample' in argv
+    assert N.is_paid('stage2.global', ['--resample']) is True
+    assert N.write_effect('stage2.global', ['--resample']) == \
+        'stage2/global_grounding.json'
+    with pytest.raises(UnsupportedRunMode, match='必须单独执行'):
+        N.build_argv(
+            'stage2.global', SID, ['--resample', '--purge-role'], base=BASE)
+
+
 def test_only_the_writing_node_takes_a_mode():
     with pytest.raises(UnsupportedRunMode, match='没有臂'):
         N.build_argv('stage3.style', SID, base=BASE, mode='deep')

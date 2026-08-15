@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends
 from contracts.schema.report import CheckReport
 from novel import paths, prov
 from novel.api.deps import checked_kind, checked_sid, get_base
-from novel.errors import RunModeNotImplemented
 from novel.orchestrator.nodes import check_nodes
 from novel.orchestrator.state import readonly_ctx
 from novel.stages import check_only
@@ -32,9 +31,6 @@ def get_check(sid: str = Depends(checked_sid), kind: str = Depends(checked_kind)
     三道闸，各答一个不同的问题：
 
       · `kind` 不在八个里            ⇒ **400**（`checked_kind`）：你给的层名不存在
-      · 后端认得这个地址而没有实现   ⇒ **501**（`RunModeNotImplemented`）。
-        **不是 404**——404 会让前端以为自己请求错了，而这两件事该做的动作完全不同
-        （`docs/schema/_api.md` §七 的裁决 4）
       · 这一层没有产物 / 产物读不回来 ⇒ 404 / 409，由 `novel/api/errors.py` 那张表翻
 
     ⚠ 用 `check_nodes(kind)` 从 `NODES` 派生出「哪个节点接受 `--check-only`」，
@@ -44,11 +40,6 @@ def get_check(sid: str = Depends(checked_sid), kind: str = Depends(checked_kind)
     run = check_only(kind)
 
     nodes = check_nodes(kind)
-    if not nodes:
-        raise RunModeNotImplemented(
-            f'{kind} 属于当前契约，但 `contracts.invariants.NODES` 里'
-            f'没有节点接受 `--check-only`')
-
     novel_dir = paths.resolve_novel_dir(base, sid)
     ctx = readonly_ctx(novel_dir, nodes[0], prov.code_version())
     return run(ctx)
