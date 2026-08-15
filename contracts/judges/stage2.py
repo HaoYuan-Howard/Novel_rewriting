@@ -16,13 +16,13 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 
 【本层特有的四条，与前七层都不同】
 
-**① 这是第一个用 `Rule.fix` 的层。** 33 条带机器可读的修复路由：
-`blueprint --chapters` 17 · `blueprint --renormalize` 2 · `global --resample` 12 ·
+**① 这是第一个用 `Rule.fix` 的层。** 34 条带机器可读的修复路由：
+`blueprint --chapters` 17 · `blueprint --renormalize` 2 · `global --resample` 13 ·
 `global --purge-role` / `--renormalize` 各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
 （反哺是 stage5 独有的，`contracts/rules.py::_validate` ④ 把它锁在 `owner='stage5'` 上）
-⇒ `directive` 全表为空，而 `fix` 有 33 条。
+⇒ `directive` 全表为空，而 `fix` 有 34 条。
 
 ⚠ **徽章结构上永远不可能是 `pass`**：本表有 **2 条 `unver`**，其中
 `role_fate_unverifiable` **无条件产出**（见下）⇒ 每本每次都产 ⇒ 最好情况是 `amber`

@@ -226,11 +226,11 @@ Stage 2 产出两份严格 JSON，另收一份人产的决策集：
 | 范围、必填与返工 | `scope_violation` · `event_empty` · `summary_empty` · `repair_cache_policy` |
 | 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_names_ambiguous` · `present_names_unlisted` · `present_names_pronoun` · `present_names_late` · `present_broad` · `batch_density` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
 
-机器可读修复路由共 **33 条**：
+机器可读修复路由共 **34 条**：
 
 - `stage2.blueprint --chapters`: 17 条；
 - `stage2.blueprint --renormalize`: 2 条；
-- `stage2.global --resample`: 12 条；
+- `stage2.global --resample`: 13 条；
 - `stage2.global --purge-role`: 1 条；
 - `stage2.global --renormalize`: 1 条。
 

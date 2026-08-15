@@ -287,6 +287,19 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
     assert len(outs) == len(want) == 71
 
 
+def test_global_field_failures_route_to_the_dedicated_resample_action():
+    routed = {rule.rule for rule in REGISTRY.all()
+              if rule.stage == 'stage2'
+              and rule.fix == ('stage2.global', '--resample')}
+    assert routed == {
+        'canonical_unique', 'character_unattested', 'address_by_unresolved',
+        'address_from_out_of_range', 'address_from_too_early',
+        'address_bare_pronoun', 'address_all_pronoun', 'role_missing',
+        'role_repeats_name', 'hedge_words', 'distinguisher_lonely',
+        'world_rule_no_desc', 'secret_known_by_dangling',
+    }
+
+
 def test_the_two_unver_rules_always_speak():
     """两条 `unver` **每本每次都产**，与别的判据报绿还是报红无关。
 
