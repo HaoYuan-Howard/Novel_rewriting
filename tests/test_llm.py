@@ -25,7 +25,9 @@ from pydantic import BaseModel, Field
 from novel.config import Config, load_config, parse_dotenv
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
-from novel.llm.client import DEFAULT_MAX_TOKENS, LADDER, LlmClient, LlmFailed
+from novel.llm.client import (
+    DEFAULT_MAX_TOKENS, LADDER, NOTHINK_RUNGS, LlmClient, LlmFailed,
+)
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import (
     ChatRequest, ChatResponse, FakeTransport, MissingApiKey, TransportError,
@@ -87,8 +89,10 @@ def test_the_ladder_is_exactly_the_four_rungs_and_there_is_only_one_of_it():
     # 但默认值仍必须从这同一份常量取得。
     text_body = inspect.getsource(client.LlmClient.ask_text)
     json_body = inspect.getsource(client.LlmClient.ask_json)
-    assert 'LADDER if rungs is None' in text_body
-    assert 'in LADDER' in json_body
+    assert 'self._rungs if rungs is None' in text_body
+    assert 'in self._rungs' in json_body
+    # 思考开关默认 `on` ⇒ 默认构造的 client 走的仍是这同一份 LADDER（零行为变化）。
+    assert _client(FakeTransport.always(OK_TEXT))._rungs is LADDER
 
 
 @pytest.mark.parametrize('rung', range(len(LADDER)))
@@ -113,6 +117,46 @@ def test_all_rungs_empty_raises_and_never_returns_an_empty_draft():
     with pytest.raises(LlmFailed, match='拿不到正文'):
         _client(t).ask_text('sys', 'usr', purpose='t')
     assert t.rungs == list(LADDER)
+
+
+def test_thinking_off_walks_only_the_single_nothink_rung():
+    """⭐ 思考开关 `off`：两个入口都只走**单档** `('low', False)`，不再有降级。
+
+    阶梯扛的两类故障全由推理流引起（模块 docstring ①②）——关掉 thinking 后
+    没有降级对象；复制同档当第二档等于把「重试」混进「阶梯」。
+    """
+    t = FakeTransport.always(OK_TEXT)
+    c = _client(t, thinking_mode='off')
+    assert c.ask_text('sys', 'usr', purpose='t') == '一段正文'
+    assert t.rungs == list(NOTHINK_RUNGS) == [('low', False)]
+
+    t2 = FakeTransport.always(OK_JSON)
+    got = _client(t2, thinking_mode='off').ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='t')
+    assert got.voice == {'a': 1}
+    assert t2.rungs == [('low', False)]
+
+
+def test_thinking_off_exhaustion_still_raises_and_never_returns_an_empty_draft():
+    """off 模式全空同样抛 `LlmFailed`——「绝不返回空稿」与思考开关无关。"""
+    t = FakeTransport.empty_until(len(NOTHINK_RUNGS), OK_TEXT)
+    with pytest.raises(LlmFailed, match='拿不到正文'):
+        _client(t, thinking_mode='off').ask_text('sys', 'usr', purpose='t')
+    assert t.rungs == list(NOTHINK_RUNGS)
+
+
+def test_explicit_rungs_beat_the_thinking_mode():
+    """显式 `rungs` 的优先级不因思考开关而变——收缩调用（TRIM_RUNGS 那类）照走自己的档。"""
+    t = FakeTransport.always(OK_TEXT)
+    c = _client(t, thinking_mode='off')
+    c.ask_text('sys', 'usr', purpose='t', rungs=(('high', True),))
+    assert t.rungs == [('high', True)]
+
+
+def test_a_malformed_thinking_mode_is_refused_at_client_construction():
+    """取值闸在构造期（同 concurrency 那道闸）：手搭一个 client 也拦得住。"""
+    with pytest.raises(ValueError, match='DEEPSEEK_THINKING'):
+        _client(FakeTransport.always(OK_TEXT), thinking_mode='max')
 
 
 def test_nonempty_but_length_capped_text_can_be_rejected_and_downgraded():
@@ -840,6 +884,23 @@ def test_a_hand_built_config_is_checked_too():
         Config(concurrency=33)
     with pytest.raises(ValueError, match='DEEPSEEK_MODEL'):
         Config(model='')
+    with pytest.raises(ValueError, match='DEEPSEEK_THINKING'):
+        Config(thinking_mode='max')
+
+
+def test_the_thinking_mode_env_var_reaches_config_and_defaults_to_on():
+    """A/B 的思考轴走 `DEEPSEEK_THINKING`；未设 = `on` = 现行阶梯，零行为变化。"""
+    assert load_config(env={}, dotenv_path=Path('/nonexistent')).thinking_mode == 'on'
+    assert load_config(env={'DEEPSEEK_THINKING': 'off'},
+                       dotenv_path=Path('/nonexistent')).thinking_mode == 'off'
+
+
+@pytest.mark.parametrize('raw', ['Off', 'ON', 'max', '1', 'true'])
+def test_a_malformed_thinking_mode_is_a_hard_error_named_by_the_env_var(raw):
+    """⚠ 不静默兜底：`DEEPSEEK_THINKING=Off` 兜成默认值会把一次 A/B **跑成另一个臂**，
+    而账本里看不出来是拼写错了——报错必须点人敲的那个名字。"""
+    with pytest.raises(ValueError, match='DEEPSEEK_THINKING'):
+        load_config(env={'DEEPSEEK_THINKING': raw}, dotenv_path=Path('/nonexistent'))
 
 
 def test_the_client_defaults_come_from_config_not_from_a_second_copy():
@@ -920,3 +981,13 @@ def test_cli_client_uses_the_configured_persistent_cache(monkeypatch):
     monkeypatch.setenv('NOVEL_CACHE_DIR', str(cache_dir))
     client = cli._llm_client(_ctx())
     assert client.cache.dir == cache_dir
+
+
+def test_cli_client_wires_the_thinking_mode(monkeypatch):
+    """接线断了的话，A/B 的两个 nothink 臂会**静默**跑成默认档——必须钉住这条线。"""
+    from novel.cli import main as cli
+
+    monkeypatch.setenv('DEEPSEEK_THINKING', 'off')
+    assert cli._llm_client(_ctx())._rungs is NOTHINK_RUNGS
+    monkeypatch.delenv('DEEPSEEK_THINKING', raising=False)
+    assert cli._llm_client(_ctx())._rungs is LADDER

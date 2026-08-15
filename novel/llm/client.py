@@ -54,6 +54,13 @@ LADDER: Final[tuple[tuple[str, bool], ...]] = (
     ('high', True), ('medium', True), ('low', True), ('low', False),
 )
 
+#: 关思考阶梯：**单档**。`('low', False)` 是仓内唯一实测验证过的关思考档
+#: （`stage5/write.py::TRIM_RUNGS` 同款）；阶梯扛的两类故障全由推理流引起
+#: （见模块 docstring ①②），关掉 thinking 后没有降级对象——复制同档当第二档
+#: 等于把「重试」混进「阶梯」，而那两条循环不许合并（见上）。
+#: 选用哪条由 `DEEPSEEK_THINKING` 决定（`novel/config.py::THINKING_MODES`）。
+NOTHINK_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('low', False),)
+
 #: 默认 token 上限。**统一 64k**：`max_tokens` 在推理模型上同时约束 reasoning + completion，
 #: 高预算防止长正文/推理被 API 默认上限**悄悄**截断。确需更小上限时显式传。
 DEFAULT_MAX_TOKENS: Final = 64_000
@@ -102,6 +109,7 @@ class LlmClient:
 
     def __init__(self, ctx: RunContext, transport: Transport, *,
                  cache: ResponseCache | None = None, model: str = '',
+                 thinking_mode: str = config.DEFAULT_THINKING_MODE,
                  max_retries: int = config.DEFAULT_MAX_RETRIES,
                  backoff_base: float = config.DEFAULT_BACKOFF_BASE,
                  concurrency: int = config.DEFAULT_CONCURRENCY,
@@ -116,6 +124,14 @@ class LlmClient:
         self.transport = transport
         self.cache = cache if cache is not None else ResponseCache()
         self.model = model or config.DEFAULT_MODEL
+        # 取值闸放构造期（同下面的 concurrency 闸）：手搭一个 client 也拦得住。
+        if thinking_mode not in config.THINKING_MODES:
+            raise ValueError(
+                f'DEEPSEEK_THINKING（thinking_mode）={thinking_mode!r}：'
+                f'思考模式只有 {config.THINKING_MODES}')
+        self.thinking_mode = thinking_mode
+        #: 默认阶梯。思考开关拧的是**默认起点集**；显式 `rungs` 的优先级不受它影响。
+        self._rungs = NOTHINK_RUNGS if thinking_mode == 'off' else LADDER
         self.max_retries = max_retries
         self.backoff_base = backoff_base
         self._sleep = sleep
@@ -138,16 +154,17 @@ class LlmClient:
                  validator: TextValidator | None = None,
                  rungs: tuple[tuple[str, bool], ...] | None = None,
                  progress: RequestProgress | None = None) -> str:
-        """纯文本调用。默认走 `LADDER`，**全空或全被调用点拒绝则抛**。
+        """纯文本调用。默认走 `self._rungs`（思考开关在 `LADDER` 与 `NOTHINK_RUNGS`
+        之间选定），**全空或全被调用点拒绝则抛**。
 
         `validator` 是纯文本响应声明「可用」含义的边界：返回 `None` 表示可用，
         返回人话理由表示这一档不可用、应驱逐缓存并降档。它只该判断响应是否完整，
         不能拿文风偏好触发付费重采样。
 
-        `rungs` 只给确有不同成本语义的辅助调用收窄阶梯；默认路径仍走全仓唯一的
-        `LADDER`。空阶梯是调用错误，不能伪装成「模型失败」。
+        `rungs` 只给确有不同成本语义的辅助调用收窄阶梯；默认路径仍走同一份
+        `self._rungs`。空阶梯是调用错误，不能伪装成「模型失败」。
         """
-        active_rungs = LADDER if rungs is None else tuple(rungs)
+        active_rungs = self._rungs if rungs is None else tuple(rungs)
         if not active_rungs:
             raise ValueError(f'{self.ctx.node}/{purpose}: rungs 不能为空')
         tried: list[str] = []
@@ -203,7 +220,8 @@ class LlmClient:
                  max_tokens: int = DEFAULT_MAX_TOKENS,
                  validator: JsonValidator | None = None,
                  progress: RequestProgress | None = None) -> M:
-        """结构化调用。走**同一条** `LADDER`，解析失败与「结构上是空的」同等对待。
+        """结构化调用。走与 `ask_text` **同一条**默认阶梯（`self._rungs`），
+        解析失败与「结构上是空的」同等对待。
 
         ⚠⚠ **`model_cls` 是必填的，而 `require` 默认从它派生。**
         原型的 `require=()` 默认值正是那三个漏声明的调用点得以存在的原因——
@@ -264,7 +282,7 @@ class LlmClient:
         errors: list[str] = []
 
         # 同 ask_text：任一档已有合格缓存时，本次必须是 0 次真请求。
-        for effort, thinking in LADDER:
+        for effort, thinking in self._rungs:
             got = self._read_cached(
                 system, user, effort=effort, thinking=thinking, json_mode=True,
                 max_tokens=max_tokens, purpose=purpose, progress=progress)
@@ -279,7 +297,7 @@ class LlmClient:
             self.cache.evict(key)
             errors.append(f'{head} {why}')
 
-        for effort, thinking in LADDER:
+        for effort, thinking in self._rungs:
             resp, key, _cached = self._call_keyed(
                 system, user, effort=effort, thinking=thinking, json_mode=True,
                 max_tokens=max_tokens, purpose=purpose, use_cache=False,
@@ -294,7 +312,7 @@ class LlmClient:
             self.cache.evict(key)
             errors.append(f'{head} {why}')
         raise LlmFailed(
-            f'{self.ctx.node}/{purpose}: 走完 {len(LADDER)} 档阶梯仍然没有可用的 JSON。\n  '
+            f'{self.ctx.node}/{purpose}: 走完 {len(self._rungs)} 档阶梯仍然没有可用的 JSON。\n  '
             + '\n  '.join(errors)
             + f'\n⚠ 必需顶层键来自 {model_cls.__name__}（判据 39：每个结构化调用点'
               f'声明【全部】必需顶层键，而这一条现在由派生保证）')

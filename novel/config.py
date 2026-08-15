@@ -38,6 +38,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = 'deepseek-v4-pro'
 DEFAULT_BASE_URL = 'https://api.deepseek.com'
 
+#: 思考模式。`on` = 现行降级阶梯（`('high', True)` 起步，带降档保护）；
+#: `off` = 单档关思考（`novel/llm/client.py::NOTHINK_RUNGS`）。
+#: ⚠ 与 `DEEPSEEK_MODEL` 同一条纪律：这是给 A/B 显式拧一次的口，
+#: 不是随手改的环境变量——账本每行的 `reasoning_effort`/`thinking` 列会如实记下来。
+DEFAULT_THINKING_MODE = 'on'
+THINKING_MODES = ('on', 'off')
+
 #: 缓存目录。`.gitignore` 已经盖住它（连同 `Output/` / `Novel_data/` / `.env`）。
 DEFAULT_CACHE_DIRNAME = '.llm_cache'
 
@@ -64,6 +71,7 @@ DEFAULT_CONCURRENCY = MAX_CONCURRENCY
 ENV_KEYS: dict[str, str] = {
     'api_key': 'DEEPSEEK_API_KEY',
     'model': 'DEEPSEEK_MODEL',
+    'thinking_mode': 'DEEPSEEK_THINKING',
     'base_url': 'DEEPSEEK_BASE_URL',
     'cache_dir': 'NOVEL_CACHE_DIR',
     'timeout': 'DEEPSEEK_TIMEOUT',
@@ -86,6 +94,7 @@ class Config:
     api_key: str | None = field(default=None, repr=False)
 
     model: str = DEFAULT_MODEL
+    thinking_mode: str = DEFAULT_THINKING_MODE
     base_url: str = DEFAULT_BASE_URL
     cache_dir: Path = _REPO_ROOT / DEFAULT_CACHE_DIRNAME
     timeout: float = DEFAULT_TIMEOUT
@@ -124,6 +133,10 @@ class Config:
             raise bad('concurrency', f'逐章并发硬上限是 {MAX_CONCURRENCY}')
         if not self.model:
             raise bad('model', '模型 id 不能是空的（`_provenance.model` 靠它答「谁产了这份稿」）')
+        if self.thinking_mode not in THINKING_MODES:
+            raise bad('thinking_mode',
+                      f'思考模式只有 {THINKING_MODES}（大小写敏感）——静默兜底会把一次 A/B '
+                      '跑成另一个臂，而账本里看不出来是拼写错了')
         if not self.base_url:
             raise bad('base_url', 'base_url 不能是空的')
 
@@ -134,7 +147,8 @@ class Config:
     def __repr__(self) -> str:
         """**结构上不可能泄露密钥。** 只说设了没设。"""
         return (f'Config(api_key=<{"set" if self.has_key else "unset"}>, '
-                f'model={self.model!r}, base_url={self.base_url!r}, '
+                f'model={self.model!r}, thinking_mode={self.thinking_mode!r}, '
+                f'base_url={self.base_url!r}, '
                 f'cache_dir={str(self.cache_dir)!r}, timeout={self.timeout}, '
                 f'max_retries={self.max_retries}, concurrency={self.concurrency})')
 
@@ -195,6 +209,7 @@ def load_config(*, env: Mapping[str, str] | None = None,
     return Config(
         api_key=src.get(ENV_KEYS['api_key']) or None,
         model=src.get(ENV_KEYS['model']) or DEFAULT_MODEL,
+        thinking_mode=src.get(ENV_KEYS['thinking_mode']) or DEFAULT_THINKING_MODE,
         base_url=src.get(ENV_KEYS['base_url']) or DEFAULT_BASE_URL,
         cache_dir=Path(cache) if cache else _REPO_ROOT / DEFAULT_CACHE_DIRNAME,
         timeout=_num('timeout', DEFAULT_TIMEOUT, float),

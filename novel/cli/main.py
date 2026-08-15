@@ -167,6 +167,7 @@ def _llm_client(ctx: RunContext):
         DeepSeekTransport(cfg),
         cache=ResponseCache(cfg.cache_dir),
         model=cfg.model,
+        thinking_mode=cfg.thinking_mode,
         max_retries=cfg.max_retries,
         backoff_base=cfg.backoff_base,
         concurrency=cfg.concurrency,
