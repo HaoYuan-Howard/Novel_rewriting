@@ -9,6 +9,7 @@ import type { JobRequest } from '@/types/jobs'
 export const qk = {
   novels: () => ['novels'] as const,
   novel: (sid: string) => ['novel', sid] as const,
+  run: (sid: string) => ['run', sid] as const,
   enums: () => ['enums'] as const,
 
   stage0Report: (sid: string) => ['stage0', sid, 'report'] as const,
@@ -32,6 +33,11 @@ export const qk = {
   jobLog: (id: string) => ['jobLog', id] as const,
   jobPreview: (req: JobRequest | null) =>
     ['jobPreview', req?.kind ?? null, req?.extra ?? null, req?.args ?? null, req?.sid ?? null, req?.ordinal ?? null] as const,
+
+  agentRuns: (sid: string) => ['agentRuns', sid] as const,
+  agentRunLog: (id: string) => ['agentRunLog', id] as const,
+  agentRunPreview: (sid: string, authorized: boolean, egressAuthorized: boolean) =>
+    ['agentRunPreview', sid, authorized, egressAuthorized] as const,
 
   approvals: (sid: string) => ['approvals', sid] as const,
 }

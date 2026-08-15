@@ -9,6 +9,8 @@ import { LinkButton } from '@/components/ui/ActionButton'
 import { QueryStates } from '@/components/state/QueryStates'
 import { NotRunYet } from '@/components/state/States'
 import { FreshnessBadge, FreshnessDot, FreshnessTag } from '@/components/vocab/Freshness'
+import { SPEND_INK } from '@/constants/vocabulary'
+import { AgentRunDialog } from '@/components/agent/AgentRunDialog'
 import { cx } from '@/lib/cx'
 import { useCorpusScreen, type BookView } from './useCorpusScreen'
 
@@ -33,6 +35,7 @@ export function CorpusScreen() {
   const [fileError, setFileError] = useState<string | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [agentSid, setAgentSid] = useState<string | null>(null)
   const input = useRef<HTMLInputElement>(null)
 
   const chooseFile = (next: File | null) => {
@@ -234,17 +237,41 @@ export function CorpusScreen() {
           ) : (
             <div className="flex flex-col gap-14">
               {vm.books.map((b) => (
-                <BookCard key={b.sid} b={b} onOpen={() => nav('/n/' + b.sid + '/stage0')} />
+                <BookCard
+                  key={b.sid}
+                  b={b}
+                  onOpen={() => nav('/n/' + b.sid + '/stage0')}
+                  onAgent={() => setAgentSid(b.sid)}
+                />
               ))}
             </div>
           )
         }
       </QueryStates>
+
+      {agentSid ? (
+        <AgentRunDialog
+          sid={agentSid}
+          onClose={() => setAgentSid(null)}
+          onStarted={(sid) => {
+            setAgentSid(null)
+            nav('/n/' + sid + '/run')
+          }}
+        />
+      ) : null}
     </section>
   )
 }
 
-function BookCard({ b, onOpen }: { b: BookView; onOpen: () => void }) {
+function BookCard({
+  b,
+  onOpen,
+  onAgent,
+}: {
+  b: BookView
+  onOpen: () => void
+  onAgent: () => void
+}) {
   return (
     <article className="overflow-hidden rounded-card border border-line bg-card">
       <div
@@ -276,13 +303,22 @@ function BookCard({ b, onOpen }: { b: BookView; onOpen: () => void }) {
             {b.mtimeLabel ?? '没有任何产物落过盘'}
           </span>
         </div>
-        <div className="flex items-center justify-center border-l border-line-soft bg-sunken-2 px-12">
+        <div className="flex flex-col items-center justify-center gap-8 border-l border-line-soft bg-sunken-2 px-12">
           <button
             type="button"
             onClick={onOpen}
             className="cursor-pointer rounded-btn border border-line-btn bg-card px-13 py-7 text-body font-semibold text-ink-2 hover:border-accent-line-2 hover:text-accent-ink"
           >
             打开 →
+          </button>
+          <button
+            type="button"
+            onClick={onAgent}
+            title="让 agent 按操作规程代跑这本书（先 0 成本 preview，授权在确认框里勾）"
+            className="cursor-pointer rounded-btn border border-line-btn bg-card px-13 py-7 text-body font-semibold hover:border-accent-line-2"
+            style={{ color: SPEND_INK }}
+          >
+            agent 跑书
           </button>
         </div>
       </div>

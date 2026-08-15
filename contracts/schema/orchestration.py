@@ -25,7 +25,8 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
-    FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
+    AGENT_RUN_EVENT_KINDS, BEACON_STATES, FRESHNESS, FRESHNESS_REASON,
+    JOB_EVENT_KINDS, JOB_STATE, NODES, PROGRESS_PHASES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
 
@@ -34,6 +35,8 @@ JobState = Literal[JOB_STATE]
 JobEventKind = Literal[JOB_EVENT_KINDS]
 Freshness = Literal[FRESHNESS]
 FreshnessReason = Literal[FRESHNESS_REASON]
+ProgressPhase = Literal[PROGRESS_PHASES]
+BeaconState = Literal[BEACON_STATES]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -221,6 +224,174 @@ class JobRecord(StrictModel):
                 'state=unknown 必须说出原因。'
                 '⚠ 「重启前它是死是活我们不知道」与「这个作业出了别的问题」'
                 '在界面上长得一样近，分不开就没法判断该不该重跑')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二之二、进度信标 —— agent 代跑 CLI 时的**观察轨迹**
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ProgressEvent(FrozenModel):
+    """信标的**一行**。append-only JSONL，与 `JobEvent` 同形同理（永不读-改-写）。
+
+    ⚠ **它是观察轨迹，不是判定**：`phase='end', exit_code=0` 只说「那条命令
+    exit 0」——exit 0 ≠ 合格（`F-087`），「这层过没过」的唯一判官仍是 check
+    报告的 badge（`R-13.6`）。消费方（路由/界面）不许把信标渲染成判定。
+    ⚠ **为什么不并进 `JobEvent`**：作业是**服务进程拉起子进程**的记录
+    （有 job_id、有日志文件、有 `reconciled` 改判）；信标是 agent **直跑** CLI
+    时的人为打点，没有进程可追、没有日志可续。捏在一起会让 `jobs.fold` 的
+    「重启后 running → unknown」规则（`R-11.11`）对一堆没有 job_id 的行开火。
+    """
+
+    #: epoch 秒。与 `JobEvent.ts` 同理：顺序由写入顺序保证，`ts` 只给人看。
+    ts: int = Field(ge=0)
+    sid: str = Field(min_length=1)
+    node: str = Field(min_length=1)
+    phase: ProgressPhase
+
+    #: `phase == 'end'` 必填（那条命令的退出码）；`start` 必须为 `None`。
+    exit_code: int | None = None
+
+    #: 人读的一句附注（如「走 §11.2 修复路」）。可空。
+    note: str | None = None
+
+    @model_validator(mode='after')
+    def _payload_matches_the_phase(self) -> ProgressEvent:
+        """一种相位恰好带一种载荷（与 `JobEvent` 那条同理）。"""
+        if self.phase == 'start' and self.exit_code is not None:
+            raise ValueError('start 不带 exit_code——还没跑完哪来的退出码')
+        if self.phase == 'end' and self.exit_code is None:
+            raise ValueError(
+                'end 必须带 exit_code——否则折叠分不出「跑完了」与「还在跑」')
+        return self
+
+
+class RunStepView(StrictModel):
+    """`PIPELINE_STEPS` 里一步此刻的样子。**盘上不存在这样一份文件**——路由现算。"""
+
+    seq: int = Field(ge=1)
+    node: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    paid: bool
+    beacon: BeaconState
+    last_exit: int | None
+    last_ts: int | None
+    #: 仅 `running` 时有值：从 start 打点到现在的秒数。
+    elapsed: int | None
+
+
+class RunProgressView(StrictModel):
+    """`GET /api/novels/{sid}/run` 的响应：信标折叠 + 产物盘的完成度，两栏并排。"""
+
+    sid: str = Field(min_length=1)
+    steps: list[RunStepView]
+    #: `STAGES` → done 三态。书目录还不存在时全 `None`
+    #: （stage0.remove 打点先于书目录落地，进度屏那时也得开得开）。
+    stage_done: dict[str, bool | None]
+    #: 最近若干条信标事件（人读时间线，文件序——新的在后）。
+    events_tail: list[ProgressEvent]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二之三、agent 代跑 —— 前端一键唤起 headless agent 的记录
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AgentRunStart(FrozenModel):
+    """`started` 事件的载荷——一次 agent 代跑的全部静态字段。
+
+    ⚠ `argv` 与 `prompt` **全文留档**：这是一次会花两笔钱的进程
+    （pipeline 的 DeepSeek + agent 自身的模型），审计与终审包要能看到
+    「到底跑了哪条命令、授权声明原文是什么」——不是一份摘要。
+    """
+
+    sid: str = Field(min_length=1)
+
+    #: 解析后的真实命令行（含 claude 的绝对路径与全部旗标）。
+    argv: list[str] = Field(min_length=1)
+
+    #: 发给 agent 的提示词全文。两项授权声明都在里面；下面两格只是机读摘要。
+    prompt: str = Field(min_length=1)
+
+    #: 显式付费总授权（SKILL 接口契约）：True = 付费命令直接执行；False = 首个付费节点前停。
+    authorized: bool
+
+    #: 正文外发授权，与付费授权正交。新记录必为 bool；null 只表示该字段落地前的历史记录
+    #: 没有采集这项事实，**不得**解释成已授权。
+    egress_authorized: bool | None = Field(...)
+
+
+AgentRunEventKind = Literal[AGENT_RUN_EVENT_KINDS]
+
+
+class AgentRunEvent(FrozenModel):
+    """agent 代跑记录的**一行**。append-only JSONL，与 `JobEvent` 同形同理。
+
+    ⚠ **为什么不并进 `jobs.jsonl`**：`JobStart` 的后置条件钉死 `node ∈ NODES`，
+    而 agent 代跑不是流水线节点——它是「拉起一个会自己跑节点的进程」。
+    捏进去就要往 `NODES` 里塞一个假节点，而那张表是完成度/贵贱/写盘效应的
+    全部派生源头，塞假节点的代价是全链说假话。
+    """
+
+    run_id: str = Field(min_length=1)
+    kind: AgentRunEventKind
+    ts: int = Field(ge=0)
+
+    #: `kind == 'started'` 时必填，其余两态必须为 `None`。
+    start: AgentRunStart | None = None
+
+    #: `kind == 'ended'`：agent 进程的退出码。
+    exit_code: int | None = None
+
+    #: `kind == 'reconciled'`：为什么改判（服务重启那一族）。
+    note: str | None = None
+
+    @model_validator(mode='after')
+    def _payload_matches_the_kind(self) -> AgentRunEvent:
+        """一种事件恰好带一种载荷（与 `JobEvent` 那条逐字同理）。"""
+        want = {'started': 'start', 'ended': 'exit_code',
+                'reconciled': 'note'}[self.kind]
+        carried = {k for k in ('start', 'exit_code', 'note')
+                   if getattr(self, k) is not None}
+        if carried != {want}:
+            raise ValueError(
+                f'{self.kind} 事件该带且只该带 {want!r}，实得 {sorted(carried)}')
+        return self
+
+
+class AgentRunRecord(StrictModel):
+    """把同一个 `run_id` 的事件按顺序折叠出来的**视图**。盘上不存在这样一份文件。"""
+
+    run_id: str = Field(min_length=1)
+    start: AgentRunStart
+
+    started: int = Field(ge=0)
+
+    #: 必填但可为 `null`——`null` = 还没结束、或不知道，不是 0。
+    ended: int | None
+    exit_code: int | None
+
+    #: `JobState` 那四态。**`unknown` 是真状态，不是缺省值**（`R-11.11` 同构）：
+    #: 服务重启后，子进程是死是活我们真的不知道。
+    state: JobState
+
+    #: `reconciled` 那一条的原因。`None` = 键不在。
+    note: str | None = None
+
+    @model_validator(mode='after')
+    def _state_matches_the_events(self) -> AgentRunRecord:
+        """折叠规则只有一处算（同 `JobRecord` 那条）。"""
+        if self.exit_code is None:
+            if self.state in ('ok', 'failed'):
+                raise ValueError(
+                    f'state={self.state!r} 而没有 exit_code——'
+                    f'「跑完了」这个结论只能从退出码来')
+        else:
+            want = 'ok' if self.exit_code == 0 else 'failed'
+            if self.state != want:
+                raise ValueError(f'exit_code={self.exit_code} 应折叠成 {want!r}，'
+                                 f'实得 {self.state!r}')
+        if self.state == 'unknown' and not self.note:
+            raise ValueError('state=unknown 必须说出原因（R-11.11）')
         return self
 
 

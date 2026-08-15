@@ -12,6 +12,23 @@ npm run typecheck    # tsc --noEmit
 npm run seams        # 数据缝 / 设计缝红线（见下）
 ```
 
+**跑书进度屏**：`/n/:sid/run`（左导航「进度」按钮）。agent 按
+`.claude/skills/novel-pipeline-operator` 代跑 CLI 时，每条命令前后的打点
+（`novel.cli mark`，落 `<base>/_service/agent_progress.jsonl`）在这一屏折成
+14 步进度 + 事件时间线；有步在跑时 2.5s 轮询，闲置 10s。它是**观察屏不是判定屏**——
+「这层过没过」仍归各层屏的 badge（R-13.6）。后端路由：`GET /api/novels/:sid/run`
+（`novel/api/routes/run.py`，书目录不存在也 200）。
+
+**agent 一键跑书**：语料库屏每本书的「agent 跑书」按钮 → 确认框摊开
+将拉起的完整 argv 与提示词全文。付费授权与正文外发授权使用两个独立复选框：
+付费默认不勾，正文外发默认勾选，任一变化都会重新 preview；两项值和声明原文分别留档，
+不会因已获付费授权而推定正文外发同意。确认后开跑
+（`POST /api/agent/runs`，后端以 `claude -p` 子进程唤起 headless agent，
+权限白名单：Bash 仅 conda python 前缀、写仅 base 目录内——见
+`novel/orchestrator/agent.py` 模块头的 Spike 结论）。进度在 `/n/:sid/run` 实时跟踪，
+那里有 agent 进程状态、日志尾部与「熄火」按钮（`POST /api/agent/runs/:id/stop`）。
+互斥两个方向都拦：agent 在跑时起任何 API 作业 409，反之亦然。
+
 ---
 
 ## 1. 三道缝落在哪

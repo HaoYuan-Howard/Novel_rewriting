@@ -155,6 +155,24 @@ argv 的形态是：
 真崩溃被编排层读成「跑完了但不合格」。现在崩溃是 **`70`（结论未知，是 bug，栈在 stderr）**，
 与 `jobs.py` worker 一直在用的那个数同源。取值面唯一落点 `novel/cli/exit_codes.py`（五个数）。
 
+### 2.4 `AgentRunStart` —— headless agent 代跑的授权快照
+
+agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它使用独立的
+`Output/_service/agent_runs.jsonl` 事件流，但沿用 append-only、折叠四态与全文留档原则。
+`started` 事件中的 `AgentRunStart` 记录：
+
+| 字段 | 类型 | 必填 | 内容 | 证据 |
+|---|---|---|---|---|
+| `sid` | `str` | **是** | 被代跑的书 id | **设计** |
+| `argv` | `str[]` | **是** | 拉起 headless agent 的完整解析后命令行 | **设计** |
+| `prompt` | `str` | **是** | 发给 agent 的全文；必须分别写明付费授权与正文外发授权 | **设计** |
+| `authorized` | `bool` | **是** | 只表示是否允许产生外部调用费用 | **契·码** |
+| `egress_authorized` | `bool \| null` | **是** | 只表示正文及派生上下文能否外发；新事件必为 bool，`null` 仅表示字段落地前的旧事件未采集该事实 | **契·码** |
+
+两项授权不能相互推定。API 的新请求可以有产品默认，但核心 prompt 构造与新 `started`
+事件必须显式取得两项值。读取旧 JSONL 时，缺失的 `egress_authorized` 只迁移为 `null`；
+不得套用新请求的 `true` 默认值，否则会把未采集的同意追认为授权。
+
 ---
 
 ## 三、`JOB_STATE` 四态与 `reconcile`
@@ -361,6 +379,7 @@ active_key(sid, node, mode) -> str
 
 ```
 Output/_service/jobs.jsonl        append-only 事件流
+Output/_service/agent_runs.jsonl  headless agent append-only 事件流（含双授权快照）
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
 Output/_service/ledger.jsonl      跨书逐请求成本事实（旁有 ledger.jsonl.lock）
 Output/_service/uploads/…         浏览器上传的原始小说字节

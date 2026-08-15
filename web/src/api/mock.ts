@@ -12,10 +12,18 @@
  *   3. 花不花钱、会不会写盘 —— 前端一行判定都不许有
  */
 import type { Api } from '@/types/api'
+import type {
+  AgentRunLogChunk,
+  AgentRunPreview,
+  AgentRunRecord,
+  AgentRunRequest,
+  AgentRunsResponse,
+} from '@/types/agent'
 import type { ActionRef, ApprovalDoc, GateKey, SeenKey } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type { Job, JobLogResponse, JobPreview, JobRequest, JobsResponse } from '@/types/jobs'
 import type { NovelOverview, NovelsResponse } from '@/types/novels'
+import type { RunProgress } from '@/types/run'
 import type {
   CheckKind,
   CheckReport,
@@ -443,12 +451,107 @@ function mockStage1Segments(): Stage1Segments {
   return { input_sha1: source.source_sha1, segments }
 }
 
+/* ---------------------------------------------------------- 跑书进度样例 */
+
+/**
+ * SKILL 工作流契约的 14 步：node 顺序与那张表一致，label / paid 与
+ * contracts.invariants.NODES 的派生值一致（1,2,3,7,11,13,14 免，其余付）。
+ * 后端的唯一落点是 contracts.invariants.PIPELINE_STEPS（label 取 NODES[node].label、
+ * paid 走 is_paid 派生）；mock 这份是它的静态镜像——contracts 变了就改这里，别反过来。
+ */
+const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
+  { node: 'stage0.remove', label: 'stage0 非正文剔除', paid: false },
+  { node: 'stage0.approve', label: 'stage0 人工批准', paid: false },
+  { node: 'stage1.partition', label: 'stage1 分章', paid: false },
+  { node: 'stage2.global', label: 'stage2 全书级抽取', paid: true },
+  { node: 'stage4.plan', label: 'stage4 重构计划', paid: true },
+  { node: 'stage5.write', label: 'stage5 逐章写作', paid: true },
+  { node: 'stage5.review', label: 'stage5 全书验收', paid: false },
+  { node: 'stage5.semantic', label: 'stage5 书级语义审判', paid: true },
+  { node: 'stage6.hook', label: 'stage6 开篇文案', paid: true },
+  { node: 'stage6.semantic', label: 'stage6 文案语义审判', paid: true },
+  { node: 'stage6.approve', label: 'stage6 文案定稿', paid: false },
+  { node: 'stage7.rename', label: 'stage7 人名表', paid: true },
+  { node: 'stage7.approve', label: 'stage7 人名表定稿', paid: false },
+  { node: 'stage7.assemble', label: 'stage7 替换与成书', paid: false },
+]
+
+/** 静态样例：14 步全 pending + 空事件流 + 全 null 的 stage_done（书目录还没建时也是这个面貌）。 */
+function mockRunProgress(sid: string): RunProgress {
+  return {
+    sid,
+    steps: PIPELINE_STEPS.map((s, i) => ({
+      seq: i + 1,
+      node: s.node,
+      label: s.label,
+      paid: s.paid,
+      beacon: 'pending',
+      last_exit: null,
+      last_ts: null,
+      elapsed: null,
+    })),
+    stage_done: {
+      stage0: null,
+      stage1: null,
+      stage2: null,
+      stage3: null,
+      stage4: null,
+      stage5: null,
+      stage6: null,
+      stage7: null,
+    },
+    events_tail: [],
+  }
+}
+
+/* ---------------------------------------------------------- agent 代跑样例 */
+
+/** 真 argv / prompt 由后端同一构造函数产出；这里是形状样例（拼装只许住在数据层）。 */
+function mockAgentRunPreview(req: AgentRunRequest): AgentRunPreview {
+  return {
+    argv: ['agent-cli', '--sid', req.sid, '--base', '/mock/base'],
+    prompt:
+      '按 novel-pipeline-operator 操作规程把这本书跑到成书（sid ' + req.sid + '）。\n' +
+      (req.authorized
+        ? '付费授权已授予：付费命令不再逐条停。'
+        : '付费授权未授予：到第一条付费命令前停下。') +
+      '\n' +
+      (req.egress_authorized
+        ? '正文外发授权已授予：允许发送正文及派生上下文。'
+        : '正文外发授权未授予：不得发送正文及派生上下文。'),
+    authorized: req.authorized,
+    egress_authorized: req.egress_authorized,
+  }
+}
+
+function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
+  const preview = mockAgentRunPreview(req)
+  return {
+    run_id: 'agentrun_mock',
+    start: {
+      sid: req.sid,
+      argv: preview.argv,
+      prompt: preview.prompt,
+      authorized: preview.authorized,
+      egress_authorized: preview.egress_authorized,
+    },
+    started: Math.floor(Date.now() / 1000),
+    ended: null,
+    exit_code: null,
+    state: 'running',
+    note: null,
+  }
+}
+
 /* ------------------------------------------------------------------ Api */
 
 export const mockApi: Api = {
   getNovels: () => later(raw<NovelsResponse>('novels.json')),
 
   getNovel: (sid) => bookOnly(sid, `/novels/${sid}`, () => raw<NovelOverview>('novel_overview.json')),
+
+  // 进度屏在 stage0.remove 前就要能开（书目录可能还没建）——任何 sid 都给静态样例，不走 bookOnly
+  getRunProgress: (sid) => later(mockRunProgress(sid)),
 
   getEnums: () => later(enums()),
 
@@ -600,6 +703,20 @@ export const mockApi: Api = {
     }),
 
   startJob: (req) => later(spawn(req)),
+
+  /* agent 代跑：静态样例 —— 列表恒空（mock 不养 agent 进程），start 回一条 running 记录 */
+  previewAgentRun: (req) => later(mockAgentRunPreview(req)),
+  startAgentRun: (req) => later(mockAgentRunRecord(req)),
+  getAgentRuns: () => later<AgentRunsResponse>({ runs: [] }),
+  getAgentRunLog: () => later<AgentRunLogChunk>({ text: '', next_byte: 0 }),
+  stopAgentRun: (runId) =>
+    later<AgentRunRecord>({
+      ...mockAgentRunRecord({ sid: SAMPLE_SID, authorized: false, egress_authorized: true }),
+      run_id: runId,
+      ended: Math.floor(Date.now() / 1000),
+      state: 'unknown',
+      note: 'mock：熄火后结局不明，不改判 ok',
+    }),
 
   getApprovals: (sid) => later(loadDoc(sid)),
 

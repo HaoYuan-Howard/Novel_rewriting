@@ -90,7 +90,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 
 ## 三、端点 → 响应
 
-**当前落地的三十七个**（其余端点见 §七）：
+**当前落地的四十三个**（其余端点见 §七）：
 
 | 端点 | 响应 | 新旧 |
 |---|---|---|
@@ -128,6 +128,12 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `GET /api/novels/:sid/stage6` | `Stage6View` | 新 |
 | `GET /api/novels/:sid/stage7` | `Stage7View` | 新 |
 | `GET /api/novels/:sid/stage7/:o` | `Stage7View` | 新 |
+| `GET /api/novels/:sid/run` | `RunProgressView`（信标折叠 + 完成度，观察轨迹非判定） | **复用** `_orchestration.md` |
+| `POST /api/agent/runs/preview` | `AgentRunPreview`（与真跑同一构造函数） | 新 |
+| `POST /api/agent/runs` | `AgentRunRecord`（202；请求体 `AgentRunRequest`） | **复用** `_orchestration.md` |
+| `GET /api/agent/runs?sid=` | `AgentRunList` | 新 |
+| `GET /api/agent/runs/:id/log?offset=N` | `LogChunk`（与作业日志同一形状） | 新 |
+| `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（熄火：terminate 子进程树） | 新 |
 | `POST /api/novels/:sid/review/:o/edit` | `JobRecord`（请求体 `DraftEditRequest`） | 新 |
 | `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`） | 新 |
 | `POST /api/novels/:sid/stage7/approve` | `JobRecord`（无请求体） | 新 |
@@ -136,6 +142,16 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 `paid == 任一步 paid` / `writes == 任一步 writes`，于是「整份贵贱是逐步折叠出来的」
 这条 `R-11.7` 白拿；而且**真跑时 `jobs.start()` 构造的就是这个类**——
 「预览与真跑是同一个对象」从一句话变成字面事实（`R-11.8`）。
+
+`AgentRunRequest` 的授权面是两条正交轴：
+
+| 字段 | 类型 | 缺省 | 只控制 |
+|---|---|---|---|
+| `authorized` | `bool` | `false` | 是否允许产生外部模型调用费用 |
+| `egress_authorized` | `bool` | `true` | 是否允许向外部模型发送小说正文及派生上下文 |
+
+缺省 `true` 是当前产品偏好，不代表两项授权合并。UI 必须显示两个独立复选框并显式提交二者；
+`AgentRunPreview` 回显两个布尔值，preview 与真跑都由同一函数把两段授权原文写入 prompt。
 
 通用启动返回 202 和 `running` 作业，由后台线程逐步启动 CLI 子进程。同一 `sid` 的书级
 作业互斥并返回 409，不同小说可并行；Stage5 复合写作在拿到书级键后才原子核对并锁定

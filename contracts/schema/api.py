@@ -53,7 +53,8 @@ from contracts.invariants import (
 from contracts.schema.base import FrozenModel, Sha1, StrictModel
 from contracts.schema.common import Finding
 from contracts.schema.orchestration import (
-    ArtifactState, Freshness, FreshnessReason, JobRecord, NovelOverview,
+    AgentRunRecord, ArtifactState, Freshness, FreshnessReason, JobRecord,
+    NovelOverview,
 )
 from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage2 import (
@@ -459,6 +460,35 @@ class PreviewRequest(StrictModel):
     node: str = Field(min_length=1)
     mode: str | None = None
     flags: list[str] = Field(default_factory=list)
+
+
+class AgentRunRequest(StrictModel):
+    """`POST /api/agent/runs`（与 preview）的请求体。
+
+    ⚠ 两项授权彼此独立，不能从其中一项推定另一项。`authorized` 只表示
+    **付费授权**，默认 False；`egress_authorized` 只表示小说正文及派生上下文的
+    **外发授权**，按当前产品偏好默认 True。前端仍显式提交两项，二者的原文都会
+    写进发给 agent 的提示词，并随 `AgentRunStart` 全文留档。
+    """
+
+    sid: str = Field(min_length=1)
+    authorized: bool = False
+    egress_authorized: bool = True
+
+
+class AgentRunPreview(StrictModel):
+    """`POST /api/agent/runs/preview` 的响应。与真跑同一构造函数（`R-11.8` 同构）。"""
+
+    argv: list[str] = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    authorized: bool
+    egress_authorized: bool
+
+
+class AgentRunList(StrictModel):
+    """`GET /api/agent/runs?sid=`。新的在前（与 `JobList` 同款约定）。"""
+
+    runs: list[AgentRunRecord] = Field(default_factory=list)
 
 
 class ApprovalAction(FrozenModel):

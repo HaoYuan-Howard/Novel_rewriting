@@ -5,6 +5,12 @@
  * 如果哪个组件自己造了数据，那一屏就会当场空掉 —— 而这正是联调时最不想找的一类 bug。
  */
 import type { Api } from '@/types/api'
+import type {
+  AgentRunLogChunk,
+  AgentRunPreview,
+  AgentRunRecord,
+  AgentRunsResponse,
+} from '@/types/agent'
 import type { ApprovalDoc, GateKey, SeenKey } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
@@ -20,6 +26,7 @@ import type {
   JobsResponse,
 } from '@/types/jobs'
 import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
+import type { RunProgress } from '@/types/run'
 import type {
   CheckReport,
   InboxResponse,
@@ -208,6 +215,8 @@ export const realApi: Api = {
     }
   },
   getEnums: () => get<EnumsResponse>('/enums'),
+  // run 的响应已是视图形状（snake_case 照后端原样），数据缝不做适配
+  getRunProgress: (sid) => get<RunProgress>(n(sid) + '/run'),
 
   getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
@@ -267,6 +276,15 @@ export const realApi: Api = {
     adaptPreview(await post<BackendJobStart>('/jobs/preview', backendJobRequest(req))),
   startJob: async (req) =>
     adaptJob(await post<BackendJobRecord>('/jobs', backendJobRequest(req))),
+
+  /* agent 代跑：响应已是视图形状（snake_case 原样），数据缝不做适配 */
+  previewAgentRun: (req) => post<AgentRunPreview>('/agent/runs/preview', req),
+  startAgentRun: (req) => post<AgentRunRecord>('/agent/runs', req),
+  getAgentRuns: (sid) => get<AgentRunsResponse>('/agent/runs?sid=' + encodeURIComponent(sid)),
+  getAgentRunLog: (runId, offset) =>
+    get<AgentRunLogChunk>('/agent/runs/' + encodeURIComponent(runId) + '/log?offset=' + offset),
+  stopAgentRun: (runId) =>
+    post<AgentRunRecord>('/agent/runs/' + encodeURIComponent(runId) + '/stop'),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
   approveGate: (sid, key: GateKey) => post<ApprovalDoc>(n(sid) + '/approvals/gate/' + key),

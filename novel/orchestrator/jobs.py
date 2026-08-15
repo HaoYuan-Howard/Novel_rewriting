@@ -131,8 +131,24 @@ class JobRegistry:
 
 #: 进程内那一份。E 期的服务进程共用它。
 REGISTRY = JobRegistry()
+
+#: **agent 代跑那把锁住在这里**（`novel/orchestrator/agent.py` 共用），
+#: 这样 `run()`/`start()` 不 import agent 就能完成反向互斥——
+#: agent 会自己起 `novel.cli` 子进程写同一 base 的盘，「agent 在跑」与
+#: 「API 起作业」撞上的后果就是 SKILL 禁的并行写盘。一次只跑一个 agent，
+#: 所以这张表里至多一条。
+AGENT_REGISTRY = JobRegistry()
+
 _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
+
+
+def _refuse_if_agent_running() -> None:
+    """agent 代跑活着时，任何 API 作业都不许起（反向互斥的唯一落点）。"""
+    if AGENT_REGISTRY.live():
+        raise JobConflict(
+            '有 agent 代跑正在跑——它会自己起 CLI 子进程写盘，'
+            '等它结束（或先熄火）再起作业')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -398,6 +414,7 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
 
     ⚠ 任一步非零即停（`R-13.4` 在单个作业内的样子）：后面那些步一步都不跑。
     """
+    _refuse_if_agent_running()
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, mode=mode, follow_check=follow_check)
     key = active_key(sid, node, mode)
@@ -439,6 +456,7 @@ def start(
     steps: Sequence[Step] | None = None,
     prepare: Callable[[], None] | None = None,
 ) -> JobRecord:
+    _refuse_if_agent_running()
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, mode=mode, follow_check=follow_check)
     key = active_key(sid, node, mode)

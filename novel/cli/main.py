@@ -6,6 +6,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
 【子命令】
     run <node> <sid> [flags]        真跑一个节点。**它就是 `build_argv` 拼出来的那条**
     preview <node> <sid> [flags]    打印 argv + 贵贱 + 写不写盘。0 成本
+    mark <sid> --node N --phase P   进度信标打点（agent 代跑用，0 成本，恒 exit 0）
     state <sid>                     这本书跑到哪了（产物存在性 + 来源新鲜度）
     inbox <sid>                     待人工六类清单（0 成本纯读；有待办≠失败）
     queue <sid…> --until <stage>    批量计划；含付费项时要 `--yes`
@@ -27,16 +28,20 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 import traceback
 from collections.abc import Callable, Sequence
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS,
+    FREE_ENTRIES, NODES, PAID_FLAGS, PROGRESS_PHASES, STAGES, VALUED_FLAGS,
 )
+from contracts.schema.orchestration import ProgressEvent
+from novel import paths
 from novel.cli import exit_codes as X
 from novel.errors import (
     ApprovalRequired, RefusedByStructure, RunModeNotImplemented, TerminalState,
 )
+from novel.orchestrator import beacon
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
 from novel.orchestrator import state as S
@@ -107,6 +112,15 @@ def _parser() -> argparse.ArgumentParser:
 
     rc = sub.add_parser('reconcile', help='启动时把「运行中」一律改判「不知道」')
     rc.add_argument('--base', required=True)
+
+    mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
+    mk.add_argument('sid')
+    mk.add_argument('--node', required=True, choices=sorted(NODES))
+    mk.add_argument('--phase', required=True, choices=list(PROGRESS_PHASES))
+    mk.add_argument('--exit', type=int, default=None,
+                    help='phase=end 必填（那条命令的退出码）；start 不许带')
+    mk.add_argument('--note', default=None, help='人读的一句附注')
+    mk.add_argument('--base', required=True)
     return ap
 
 
@@ -922,9 +936,29 @@ def _cmd_reconcile(a: argparse.Namespace) -> int:
     return X.OK
 
 
+def _cmd_mark(a: argparse.Namespace) -> int:
+    """进度信标打点：往 `_service/agent_progress.jsonl` 追加一行。**0 成本，恒 exit 0**。
+
+    ⚠ 它是**观察轨迹不是判定**（`orchestrator/beacon.py` 模块头那条）——
+    界面上「跑到哪了」由它答，「过没过」仍归 check 报告的 badge。
+    ⚠ 相位与载荷的一致由 `ProgressEvent` 的后置校验钉着；这里先把
+    「end 忘了带 --exit」翻成人话，不放它去撞裸 `ValidationError`。
+    ⚠ stage0.remove 那一步书目录还没落地也能打——信标只进 `_service/`，
+    sid 是 SKILL 工作流契约从源文件名推导出来的那个。
+    """
+    if a.phase == 'end' and a.exit is None:
+        raise TerminalState('phase=end 必须带 --exit <退出码>（phase=start 不许带）')
+    if a.phase == 'start' and a.exit is not None:
+        raise TerminalState('phase=start 不许带 --exit——还没跑完哪来的退出码')
+    beacon.append(a.base, ProgressEvent(
+        ts=int(time.time()), sid=paths.check_sid(a.sid), node=a.node,
+        phase=a.phase, exit_code=a.exit, note=a.note))
+    return X.OK
+
+
 _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'state': _cmd_state, 'inbox': _cmd_inbox, 'queue': _cmd_queue,
-         'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile}
+         'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'mark': _cmd_mark}
 
 
 def main(argv: Sequence[str] | None = None) -> int:

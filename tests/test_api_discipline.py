@@ -299,6 +299,10 @@ def test_job_conflict_maps_and_returns_409():
         '/api/novels/{sid}/review/{ordinal}/edit',
         '/api/novels/{sid}/stage6/approve',
         '/api/novels/{sid}/stage7/approve',
+        # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
+        '/api/agent/runs',
+        '/api/agent/runs/preview',
+        '/api/agent/runs/{run_id}/stop',
     }
     assert '/api/jobs' in posts
 

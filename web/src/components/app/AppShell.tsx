@@ -7,6 +7,7 @@ import { JobDrawer } from '@/components/job/JobDrawer'
 import { ConfirmDialog } from '@/components/job/ConfirmDialog'
 
 const SCREENS = new Set<string>([
+  'run',
   'stage0',
   'stage1',
   'read',

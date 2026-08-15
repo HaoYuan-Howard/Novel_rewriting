@@ -1085,3 +1085,36 @@ STAGE_SECTIONS: Final[dict[str, tuple[str, ...]]] = {
     s: tuple(dict.fromkeys(n.section for n in NODES.values() if n.stage == s))
     for s in STAGES
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 进度信标（agent 代跑的可观察轨迹）
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: 跑书操作序列 —— SKILL《novel-pipeline-operator》工作流契约中 14 步表的**唯一机读落点**。
+#: 值是**节点 id 的有序元组**，只补「顺序」这一件 `NODES` 里没有的事：
+#: label 从 `NODES[node].label` 取、贵贱由 `novel/orchestrator/nodes.py::is_paid`
+#: 按 `(node, ())` 派生——三张事实各只有一处算，本表不抄第二份。
+#: ⚠ 顺序与 `NODES` 的声明序**不同**（尾三格：rename → approve → assemble），
+#: 别拿 dict 序当接口。⚠ 修复回路 / 补跑的命令不在本表——它们是同一批节点上的
+#: **跑法**，打点按节点归位。钉它的测试在 `tests/test_beacon.py`。
+PIPELINE_STEPS: Final = (
+    'stage0.remove', 'stage0.approve', 'stage1.partition',
+    'stage2.global', 'stage4.plan',
+    'stage5.write', 'stage5.review', 'stage5.semantic',
+    'stage6.hook', 'stage6.semantic', 'stage6.approve',
+    'stage7.rename', 'stage7.approve', 'stage7.assemble',
+)
+
+#: 信标事件的两态。**`start` 不带退出码、`end` 必带**——由
+#: `contracts/schema/orchestration.py::ProgressEvent` 的后置校验钉住。
+PROGRESS_PHASES: Final = ('start', 'end')
+
+#: 一步的四种观察态。**它是观察不是判定**（`R-13.6`）：`ok` 只说明「那条命令
+#: exit 0」，而 exit 0 ≠ 合格（`F-087`）——「这层过没过」的唯一判官仍是
+#: check 报告的 badge。消费方（路由/界面）不许把信标渲染成判定。
+BEACON_STATES: Final = ('pending', 'running', 'ok', 'failed')
+
+#: agent 代跑事件的三态。与 `JOB_EVENT_KINDS` 分开：这边没有 `step`
+#: （agent 进程内部干什么不由我们记——那是信标的事），只有生死与改判。
+AGENT_RUN_EVENT_KINDS: Final = ('started', 'ended', 'reconciled')

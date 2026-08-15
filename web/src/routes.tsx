@@ -16,6 +16,7 @@ import { Stage5Screen } from '@/screens/stage5/Stage5Screen'
 import { Stage6Screen } from '@/screens/stage6/Stage6Screen'
 import { Stage7Screen } from '@/screens/stage7/Stage7Screen'
 import { InboxScreen } from '@/screens/inbox/InboxScreen'
+import { RunScreen } from '@/screens/run/RunScreen'
 import { useApprovals } from '@/hooks/useApprovals'
 
 /** 换书 / 换章都整棵重挂：屏内的选中、开关、编辑中的文本不会跟过去 */
@@ -74,6 +75,7 @@ export function AppRoutes() {
 
         <Route path="/n/:sid" element={<BookLayout />}>
           <Route index element={<Navigate to="stage0" replace />} />
+          <Route path="run" element={<RunScreen />} />
 
           <Route path="stage0" element={<Stage0Screen />} />
           <Route path="stage1" element={<Stage1Screen />} />

@@ -30,7 +30,7 @@ from fastapi.responses import JSONResponse
 from contracts.schema.api import ErrorBody
 from novel.api.errors import CSRF_REFUSED, status_of
 from novel.api.routes import (
-    approvals, checks, edits, enums, ingest, jobs, novels, screens,
+    agent, approvals, checks, edits, enums, ingest, jobs, novels, run, screens,
 )
 from novel.errors import NovelError
 
@@ -127,6 +127,7 @@ def create_app(base: str | os.PathLike[str]) -> FastAPI:
     for router in (
         enums.router, novels.router, checks.router, jobs.router,
         ingest.router, approvals.router, screens.router, edits.router,
+        run.router, agent.router,
     ):
         app.include_router(router, prefix='/api')
     return app

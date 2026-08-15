@@ -256,6 +256,7 @@ export const STAGES: StageDef[] = [
 /** 左导航的屏序。按流水线顺序，不是按字母。 */
 export type ScreenName =
   | 'corpus'
+  | 'run'
   | 'stage0'
   | 'stage1'
   | 'read'
@@ -292,6 +293,7 @@ export const RAIL: RailItem[] = [
 /** 每屏标题（缺样本屏与文档标题共用） */
 export const SCREEN_TITLE: Record<ScreenName, string> = {
   corpus: '语料库',
+  run: '跑书进度',
   stage0: '剔除番外 · stage0',
   stage1: '分章报告 · stage1',
   read: '原文 ↔ 骨架',

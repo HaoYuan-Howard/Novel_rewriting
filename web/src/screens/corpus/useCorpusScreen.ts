@@ -145,7 +145,12 @@ function viewOf(n: NovelRow): BookView {
 }
 
 export function useCorpusScreen() {
-  const q = useQuery({ queryKey: qk.novels(), queryFn: () => api.getNovels() })
+  // 10s 一轮：agent 跑书时产物矩阵自己跟进，不用人点「重新读取」
+  const q = useQuery({
+    queryKey: qk.novels(),
+    queryFn: () => api.getNovels(),
+    refetchInterval: 10000,
+  })
 
   const books = (q.data?.novels ?? []).map(viewOf)
   const artifacts = books.reduce((s, b) => s + b.artifactCount, 0)

@@ -6,6 +6,13 @@
  * 组件与屏从不 fetch，只经 hooks → api.*。
  */
 import type { ApprovalDoc, GateKey, SeenKey } from './approvals'
+import type {
+  AgentRunLogChunk,
+  AgentRunPreview,
+  AgentRunRecord,
+  AgentRunRequest,
+  AgentRunsResponse,
+} from './agent'
 import type { EnumsResponse } from './enums'
 import type {
   Job,
@@ -16,6 +23,7 @@ import type {
   UploadResponse,
 } from './jobs'
 import type { NovelOverview, NovelsResponse } from './novels'
+import type { RunProgress } from './run'
 import type { Mode } from '@/constants/vocabulary'
 import type {
   CheckKind,
@@ -42,6 +50,8 @@ export interface Api {
   getNovels(): Promise<NovelsResponse>
   getNovel(sid: string): Promise<NovelOverview>
   getEnums(): Promise<EnumsResponse>
+  /** 跑书进度：14 步信标 + 各层产物完成度。beacon=ok 只念作「跑完」，判定归各层屏的 badge。 */
+  getRunProgress(sid: string): Promise<RunProgress>
 
   getStage0Report(sid: string): Promise<Stage0Report>
   getStage0Segments(sid: string): Promise<Stage0Segments>
@@ -77,6 +87,17 @@ export interface Api {
   /** 确认框里那条命令由服务端下发，前端不拼 */
   previewJob(req: JobRequest): Promise<JobPreview>
   startJob(req: JobRequest): Promise<Job>
+
+  /* agent 代跑（互斥归服务端：冲突 409 / ErrorBody.kind = JobConflict） */
+  /** 0 成本预览：与真跑同一构造函数。两项授权都进 prompt，任一勾选变化都重新 preview。 */
+  previewAgentRun(req: AgentRunRequest): Promise<AgentRunPreview>
+  startAgentRun(req: AgentRunRequest): Promise<AgentRunRecord>
+  /** 新的在前 */
+  getAgentRuns(sid: string): Promise<AgentRunsResponse>
+  /** 与 jobs 日志同一形状 {text, next_byte} */
+  getAgentRunLog(runId: string, offset: number): Promise<AgentRunLogChunk>
+  /** 熄火：没在跑 409 */
+  stopAgentRun(runId: string): Promise<AgentRunRecord>
 
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>

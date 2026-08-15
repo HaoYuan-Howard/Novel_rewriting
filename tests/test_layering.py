@@ -132,6 +132,14 @@ _JSON_READ_ALLOWED = {
         '作业记录**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它。'
         '它是 append-only 的事件流（`_service/jobs.jsonl`），'
         '读的一侧还要容忍被 kill 截断的最后一行——那条容忍不该长在产物读路上'),
+    'novel/orchestrator/beacon.py': (
+        '进度信标**不是产物**：与 jobs.jsonl 同理，append-only 事件流'
+        '（`_service/agent_progress.jsonl`），不进来源账、不进 `_provenance`；'
+        '它记的是「agent 代跑的哪条命令何时结束」，观察轨迹而非判定（`R-13.6`）'),
+    'novel/orchestrator/agent.py': (
+        'agent 代跑记录**不是产物**：与 jobs.jsonl 同一份理由，append-only 事件流'
+        '（`_service/agent_runs.jsonl` + `logs/agent-*.log`），'
+        '读的一侧要容忍被 kill 截断的最后一行'),
 }
 
 
@@ -187,6 +195,14 @@ _WRITE_ALLOWED = {
     'novel/orchestrator/approvals.py': (
         '人工闸门与深度选章只写 Output/_service/approvals/。它们控制作业是否可启动，'
         '不是小说产物，不进 ARTIFACTS / provenance；原子替换防止并发读到半份状态'),
+    'novel/orchestrator/beacon.py': (
+        '进度信标只写 Output/_service/agent_progress.jsonl，append-only、'
+        '永不读-改-写；写入方是 CLI 的 `mark` 子命令（agent 代跑时的人为打点），'
+        '不是小说产物，不进 ARTIFACTS / 来源账'),
+    'novel/orchestrator/agent.py': (
+        'agent 代跑记录只写 Output/_service/agent_runs.jsonl 与 logs/agent-*.log，'
+        'append-only、永不读-改-写；它与 jobs.py 写 _service 同一份理由'
+        '（「子进程被杀」这条记录只有父进程写得出来），不是小说产物'),
 }
 
 

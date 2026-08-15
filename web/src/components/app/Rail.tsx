@@ -78,6 +78,28 @@ export function Rail({
       {inBook ? (
         <div className="mt-14 flex flex-col gap-2 px-10 pb-24">
           <div className="px-12 pt-6 pb-8 text-micro tracking-[0.08em] text-ink-5">流水线</div>
+          {/* 进度是观察屏：不进 RAIL，不吃 RAIL_GATE / RAIL_LOCK，跑到哪一步都能看 */}
+          <button
+            type="button"
+            aria-current={screen === 'run' ? 'page' : undefined}
+            onClick={() => nav('/n/' + sid + '/run')}
+            className={cx(
+              'flex cursor-pointer items-center gap-7 rounded-btn border-none px-10 py-7 text-left text-body',
+              screen === 'run'
+                ? 'bg-card font-semibold text-ink shadow-current'
+                : 'bg-transparent text-ink-3',
+            )}
+          >
+            <span
+              aria-hidden
+              className={cx(
+                'h-14 w-4 flex-none rounded-nub',
+                screen === 'run' ? 'bg-accent' : 'bg-transparent',
+              )}
+            />
+            <span className="w-12 flex-none font-mono text-mini text-ink-5">»</span>
+            <span className="min-w-0 flex-1 truncate">进度</span>
+          </button>
           {RAIL.map((r) => {
             const gk = RAIL_GATE[r.screen]
             const ok = !!(doc && gk && doc.gate[gk])
