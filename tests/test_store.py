@@ -27,6 +27,7 @@ from novel.consumption import CONSUMED_PROJECTIONS, producer_node, projection_fo
 from novel.errors import (
     ArtifactUnreadable, ByteFormRefused, PathRefused, ProvenanceRefused, UpstreamMissing,
 )
+from novel import paths
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.run import RunContext
@@ -999,6 +1000,13 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
     加载体检 92 份全绿，而第一份真落盘就会炸。
 
     当前语料只读；往返副本写进 `mkdtemp()`，跑完即删。
+
+    ⚠ **落点是 `a.formal_rel` 不是 `a.rel`**：语料表里有 `_rounds/<stem>.rN.json`
+    与 `<stem>.INVALID.json` 两类**旁路历史**，它们分别由 `archive_round` 与
+    `write_invalid` 产出，`store.write` 见到 `.INVALID` 会当场 `PathRefused`
+    （那道拒绝是对的，见 `test_the_official_write_path_refuses_an_invalid_name`）。
+    本条测的是**形状**：这个模型落得下去、读得回来。拿归档路径去写，
+    测到的只是「一条没人会走的入口拒收了」。
     """
     obj = a.model.model_validate(corpus.load_current(a))
 
@@ -1007,7 +1015,25 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
     ctx = RunContext.open(base, '1', 'stage3.style', paid=True, write_ledger=False)
     st = ArtifactStore(ctx)
 
-    p = st.write(a.rel, obj)
+    p = st.write(a.formal_rel, obj)
     assert b'\r' not in p.read_bytes()
     assert a.model.model_validate(json.loads(p.read_text(encoding='utf-8'))) == obj, \
         '读回来的模型与写出去的那一份不等——某个键在落盘形态里被抹掉或改了形状'
+
+
+@_NO_CORPUS
+def test_the_round_trip_landing_is_a_writable_path_for_every_corpus_row():
+    """⭐ 上一条的**前提守卫**：`formal_rel` 必须真的把两类旁路历史剥回本体。
+
+    没有这一条，`formal_rel` 少剥一种形态（例如 `.INVALID.rN.json` 只剥了 `.rN`）
+    就会让往返测试重新变成「一条没人会走的入口拒收了」——而那次红**看起来**
+    与真正的形状回归一模一样。⇒ 落点自己也要被查一次：
+    既不带 `_rounds/`，也不带 `.INVALID`，且 `store.write` 的路径闸放行。
+    """
+    for a in _CORPUS:
+        formal = a.formal_rel
+        assert '_rounds/' not in formal, f'{a.rel} 的落点仍在归档目录里：{formal}'
+        assert not paths.is_invalid(formal), f'{a.rel} 的落点仍是 `.INVALID` 形态：{formal}'
+        assert paths.round_no_of(formal) is None, f'{a.rel} 的落点仍带轮次号：{formal}'
+        # `check_rel_deep` 是 `store.write` 自己那道路径闸；对不上会当场 `PathRefused`。
+        assert paths.check_rel_deep(formal) == formal

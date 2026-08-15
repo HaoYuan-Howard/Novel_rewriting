@@ -14,7 +14,7 @@ from novel.core.naming import names_of, spoiler_names_of
 from novel.report import build, render
 from novel.prov import FreshnessReport
 from novel.stages.stage3 import checks
-from tests import corpus
+from tests import corpus, sandbox
 
 pytestmark = pytest.mark.skipif(corpus.corpus_root() is None,
                                 reason='盘上没有语料——这几条**没在查**，不是「查过没事」')
@@ -41,15 +41,19 @@ def _inputs(book: str):
 
 
 def _outcomes(book: str, *, with_drift: bool = True):
+    """⚠ **走生产那一个调度点（`style.judge_with`），不在这里第二次拼实参。**
+
+    原来这里自己拼 `corpus` / `names` / `spoiler_names`，于是
+    `expected_chapters` 加进 `checks.check` 时**只有这一份没跟上** ⇒
+    三本书的 `required` 恒红，报的是「校验期拿不到预期源章节集合」——
+    而真跑的 `stage3.style --check-only` 三本全 PASS。
+    **一条说产物有问题的红，实际说的是测试台漂了。**
+    """
+    from novel.stages.stage3 import style
     sg, main, hook, gg = _inputs(book)
-    from novel.core.text import norm
-    corpus_text = norm(''.join(s.text for s in main.root) + (hook.text or '').strip())
-    names = names_of(gg) if gg is not None else None
+    assert gg is not None, f'{book} 少了 stage2/global_grounding.json——本层判据没有专名表可用'
     now = Measurable(body=measure_body(main), hook=measure((hook.text or '').strip()))
-    return sg, checks.check(
-        sg, corpus=corpus_text, names=names,
-        spoiler_names=spoiler_names_of(gg, names) if gg is not None and names else frozenset(),
-        measured_now=now if with_drift else None)
+    return sg, style.judge_with(sg, main, hook, gg, measured_now=now if with_drift else None)
 
 
 def _report(book: str):
@@ -279,14 +283,32 @@ def test_required_rejects_incomplete_or_reordered_chapter_style_coverage():
     assert required.findings and '实得 [2, 1]' in required.findings[0].detail
 
 
-def test_chapter_style_generation_refuses_to_run_without_stage2_name_table(monkeypatch):
+def test_chapter_style_generation_refuses_to_run_without_stage2_name_table():
+    """缺 stage2 专名表 ⇒ **显式终态**，不许把「没有检查材料」当成防泄露。
+
+    ⚠⚠ **守卫在 `_upstreams` 里，不在 `build_chapter_prompts` 里。**
+    本条原来 `monkeypatch` 掉 `_upstreams`（让它返回 `(object(), object(), None)`）
+    再要求 `build_chapter_prompts` 自己抛——那道 `if gg is None` 的兜底已经随
+    `_upstreams` 收紧而删掉了（`store.read` 读不到就 `UpstreamMissing`，
+    `gg` 在生产里**不可能是 `None`**）。删得对，测试没跟上：
+    它打的是一个够不着的分支，于是先炸在 `measure_all(object(), object())` 的
+    裸 `AttributeError` 上——而 `errors.py` 明写「每一处终态都要选一个具体的类」，
+    一条裸 `AttributeError` 连终态都不算。
+    ⇒ 改成走**真的沙箱**：把 `stage2/global_grounding.json` 拿掉，让真入口去拒。
+    """
     from novel.errors import UpstreamMissing
+    from novel.run import RunContext
     from novel.stages.stage3 import style
 
-    monkeypatch.setattr(style, 'ArtifactStore', lambda _ctx: object())
-    monkeypatch.setattr(style, '_upstreams', lambda _store: (object(), object(), None))
-    with pytest.raises(UpstreamMissing, match='global_grounding'):
-        style.build_chapter_prompts(object())
+    book = _books()[0]
+    box = sandbox.Sandbox(book, ('stage1/main_text.json', 'stage1/hook_copy.json'))
+    try:
+        ctx = RunContext.open(str(box.root), box.sid, 'stage3.style', paid=True,
+                              write_ledger=False)
+        with pytest.raises(UpstreamMissing, match='global_grounding'):
+            style.build_chapter_prompts(ctx)
+    finally:
+        box.close()
 
 
 def test_stage3_has_one_production_path_without_variant_parameter():

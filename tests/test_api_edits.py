@@ -162,12 +162,50 @@ def test_an_illegal_edit_body_is_422_from_the_carrier(client, box, body, why):
 
 # ───────────────────────── 二、文案定稿 ─────────────────────────
 
+def _why_pick_is_blocked(box, pick: int) -> str:
+    """`stage6.approve --pick N` 的语义闸**当下**为什么不放行；放行 ⇒ `''`。
+
+    ⚠ **用生产那一个谓词（`semantic.assessment_for_text`），不在这里重判一遍。**
+    定稿路的硬闸是 `require_selectable`：缺审、矛盾、uncertain 都不许人误选
+    （`novel/stages/stage6/semantic.py`）。它不放行时 CLI 是 **exit 2**，
+    而本文件那两条测的是「定稿落没落 + 章盖没盖」，不是这道闸——
+    前提不成立就该说出前提，不该把它读成路由坏了。
+    """
+    from contracts.schema.stage6 import Hook
+    from novel.run import RunContext
+    from novel.stages.stage6 import semantic
+    from novel.store import ArtifactStore
+
+    ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False,
+                          write_ledger=False)
+    store = ArtifactStore(ctx)
+    art, _raw = store.read_own(Hook, 'stage6/hook.json')
+    got = semantic.assessment_for_text(store, art, art.candidates[pick - 1].text)
+    return '' if got.selectable else got.reason
+
+
+def _needs_a_selectable_candidate(box, pick: int) -> None:
+    """盘上这批语料的 stage6 前提：`hook.json` 的上游边 `consumed_changed`
+    （3/4 条），而 `stage6/semantic_*.json` 是**旧版剧透审判**（`reviews` 为空）
+    ⇒ 语义闸判 `unreviewed`。补它要**先重跑 `stage6.hook`、再重跑 `stage6.semantic`**，
+    两次都是付费节点 ⇒ 不能由测试代跑。
+    """
+    why = _why_pick_is_blocked(box, pick)
+    corpus.declared_dependency(
+        not why,
+        needs=f'能过 stage6 语义闸的当前文案审判（当下：{why}）',
+        produced_by=(f'novel.cli run stage6.hook {box.sid} 之后 '
+                     f'novel.cli run stage6.semantic {box.sid}'),
+        cost='两次都是付费节点')
+
+
 def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
     """⭐ `--pick 1` 后：`approved` 指向第 1 条候选、`s6` 审批章盖上。
 
     ⚠ 退出码契约：`0/1` 都是「定稿**落了**」（`1` 只是报告有红行——迁移语料上
     常态如此），`2/3` 才是没跑成。**盖章看落没落，红不红归 check 屏。**
     """
+    _needs_a_selectable_candidate(box, 1)
     _stamp_chain(box, 's5')
     before = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     r = client.post(f'/api/novels/{box.sid}/stage6/approve', json={'pick': 1})
@@ -185,6 +223,7 @@ def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
 def test_an_approve_before_the_chain_still_lands_in_the_artifact(client, box):
     """⭐ 审批链没到位（中途接手的书）⇒ 定稿**照样落**（产物是真相），
     检查单那一格保持未盖——**不把检查单的顺序翻成定稿的失败**。"""
+    _needs_a_selectable_candidate(box, 1)
     r = client.post(f'/api/novels/{box.sid}/stage6/approve', json={'pick': 1})
     assert r.status_code == 200, r.text[:300]
     assert r.json()['exit_code'] in (0, 1)

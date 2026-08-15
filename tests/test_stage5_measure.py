@@ -73,7 +73,15 @@ def test_normalizing_a_stored_draft_changes_nothing():
         assert new == rec['text'], f'{a.source_id} {a.rel} 再归一改了字节'
         assert acc.counters() == {'punct_fixed': 0, 'quotes_fixed': 0, 'paras_fixed': 0}, \
             f'{a.rel} 的归一账不是全 0：{acc.counters()}'
-        assert acc.quote_problems == [], f'{a.rel} 报了引号配对异常：{acc.quote_problems}'
+        # ⚠ **`quote_problems` 恒空不是本条该断的东西。** 归一化对配对失败
+        #   **拒绝猜**（整段原样返回），问题落到 `quote_unbalanced` 那条 `info` 上
+        #   ⇒ 盘上有一章报「引号未闭合」与「再归一改了 0 字节」**同时成立**，
+        #   而本条名字说的是后者。原来那句 `== []` 把一条 info 的真阳读成了等价性回归。
+        #   ⇒ 这里只钉「它是稳定的」：拒绝猜就意味着第二遍报的是同一条。
+        second = M.normalize_chapter(new, quote_style=_quote_style_of(a.source_id),
+                                     sep_chars=_sep_of(a.source_id))[1]
+        assert second.quote_problems == acc.quote_problems, \
+            f'{a.rel} 两遍归一报的引号问题不一样——「拒绝猜」这条纪律没守住'
         unchanged += 1
     assert unchanged == len(DRAFTS)
 
@@ -141,16 +149,37 @@ def test_overlap_reproduces_every_stored_value():
 
 
 @needs_corpus
-def test_every_formal_draft_is_inside_the_current_length_band():
-    """当前正式稿已经过同一把严格篇幅尺。"""
-    out = []
+def test_every_out_of_band_draft_carries_the_band_finding():
+    """⭐ **出带的每一章都必须把那条 finding 带在身上**——尺子量过了，而且说出口了。
+
+    ⚠⚠ **本条原来断言的是「一章都没出带」，而那是一道产品明说不存在的闸。**
+    `stage5/checks.py::length_over` 的措辞逐字是「收缩已跑过并未能压下来，**照样落盘**，
+    由全书验收相在成品上判（**由阻断降为提示**）」——`length_over` / `length_under`
+    在判据表里是 `info`，不是 `hard`。⇒ 盘上有出带的正式稿是**契约允许的常态**，
+    把它读成「语料过期」会指着一批健康产物要求重跑（那要花钱）。
+    ⇒ 真正的代码级不变量是这一条：**尺子量过、判定出声、字节落盘，三件事对得上。**
+    尺子静默失效（判定没产出）才是 bug，而那正是本条现在守的东西。
+    """
+    silent: list[str] = []
+    seen_out_of_band = 0
     for a in DRAFTS:
         rec = corpus.load_raw(a)
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
         rng = M.target_range(entry or {})
-        if rng and not (rng[0] <= rec['chars'] <= rng[1]):
-            out.append(round(rec['chars'] / entry['budget_chars'], 3))
-    assert not out, f'当前正式成稿仍有篇幅出带：{sorted(out)}'
+        if not rng:
+            continue
+        lo, hi = rng
+        want = ('length_over' if rec['chars'] > hi else
+                'length_under' if rec['chars'] < lo else None)
+        if want is None:
+            continue
+        seen_out_of_band += 1
+        # `warns` 的形态是 `[判据] 说明`（`checks.warnings_of`），判据 id 逐字在里面。
+        if not any(w.startswith(f'[{want}]') for w in (rec.get('warns') or [])):
+            silent.append(f'{a.source_id[-4:]}/{a.rel} {rec["chars"]} 字 ∉ {lo}~{hi}，'
+                          f'却没有 [{want}]')
+    assert not silent, ('出带却没出声的章——尺子静默失效了：\n  ' + '\n  '.join(silent[:8]))
+    assert seen_out_of_band or DRAFTS, '一章都没有？那这条测试什么也没查'
 
 
 @needs_corpus
@@ -182,13 +211,27 @@ def test_dialogue_ratios_are_defined_per_current_mode():
 
 
 @needs_corpus
-def test_overlap_is_bounded_per_chapter():
-    """重合率是逐章的 0..1 数；正式闭卷稿不得越过当前上限。"""
+def test_overlap_is_a_ratio_and_every_deep_excess_carries_its_finding():
+    """重合率是逐章的 0..1 数；闭卷臂越上限的每一章都必须带上 `deep_overlap_high`。
+
+    ⚠ **上限不是闸。** `deep_overlap_high` 在判据表里是 `info`（`judges/stage5.py:229`），
+    它的措辞说的是「这个数说明**这一章多半不是闭卷写的**（分工写反 / 开卷稿落进了
+    `deep/` 目录）」——那是一条要人去看的线索，不是一条拦落盘的规则。
+    本条原来直接断言 `value <= DEEP_OVERLAP_MAX`，于是它在**产品正常工作时**变红。
+    ⇒ 改守「越线必出声」：0..1 的取值域仍然是硬的（那是度量自己的契约）。
+    """
     per: dict[str, list[float]] = {'deep': [], 'shallow': []}
+    silent: list[str] = []
     for a in DRAFTS:
         rec = corpus.load_raw(a)
-        v = rec.get('overlap_excl_verbatim')
-        if v is not None:
-            per[rec['mode']].append(v)
-    assert all(0 <= value <= 1 for values in per.values() for value in values)
-    assert all(value <= DEEP_OVERLAP_MAX for value in per['deep'])
+        value = rec.get('overlap_excl_verbatim')
+        if value is None:
+            continue
+        per[rec['mode']].append(value)
+        if rec['mode'] == 'deep' and value > DEEP_OVERLAP_MAX:
+            if not any(w.startswith('[deep_overlap_high]') for w in (rec.get('warns') or [])):
+                silent.append(f'{a.source_id[-4:]}/{a.rel} 重合 {value} > {DEEP_OVERLAP_MAX}，'
+                              f'却没有 [deep_overlap_high]')
+    assert all(0 <= value <= 1 for values in per.values() for value in values), \
+        '重合率不是 0..1 的比例——度量自己的取值域破了'
+    assert not silent, ('闭卷越线却没出声的章：\n  ' + '\n  '.join(silent[:8]))

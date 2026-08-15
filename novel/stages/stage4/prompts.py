@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from contracts.invariants import BEAT_MIN_CHARS, GROUPING_VERSION
-from novel.llm.prompts import fill
+from novel.llm.prompts import fill, with_json_shape
 from novel.stages.stage4.beats import plan_beat_id
 
 #: 规划那一次调用的**最大输出 token**。
@@ -101,6 +101,19 @@ PLAN_HINT: dict[str, Any] = {
         'beats': [{'plan_beat': 'p01_01', 'budget_chars': 120}],
     }],
 }
+
+def plan_system() -> str:
+    """真正发出去的 system prompt。**唯一落点**（同 stage3/6/7 的三个同名函数）。
+
+    ⚠⚠ `PLAN_SYS` **不是发出去的那一份**——发出去的是它 + `PLAN_HINT` 的 JSON 形状块。
+    这两个东西曾经在 `plan.py` 里被各拼一遍（`build_prompt` 一处、真跑一处），
+    而 `R-11.8` 要求「预览里看到的」与「真发出去的」必须**共用同一个构造入口**：
+    两处各拼一份时，改其中一处的形状提示，另一处不会有任何东西出声。
+    ⚠ 顺带钉住一件事：`_provenance.prompts` 记的是**渲染之后**的指纹
+    （`_common.md` §八），所以拿 `PLAN_SYS` 去比对「当前 prompt」是错的口径。
+    """
+    return with_json_shape(PLAN_SYS, PLAN_HINT)
+
 
 #: 下发给规划者的**章级**字段。
 PLANNER_CHAPTER_KEYS = ('chapter_ordinal', 'summary')

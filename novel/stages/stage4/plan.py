@@ -26,7 +26,6 @@ from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import CtxProvenance, PlanChapters, PlanEdit, WriterContext
 from novel import paths, prov
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
-from novel.llm.prompts import with_json_shape
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
@@ -202,7 +201,7 @@ def build_prompt(ctx: RunContext) -> tuple[str, str]:
     """
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store, need_grounding=False)
-    return with_json_shape(prompts.PLAN_SYS, prompts.PLAN_HINT), _build_user(ctx, up)
+    return prompts.plan_system(), _build_user(ctx, up)
 
 
 def _build_user(ctx: RunContext, up: _Upstreams) -> str:
@@ -334,7 +333,7 @@ def run_plan(ctx: RunContext, client: Any) -> CheckReport:
     # ⚠ **不显式传 `require`**：它从 `PlanResponse` 派生，恰好是
     #   `reconstruction_strategy` · `output_chapters` 两个——手写一份等于给
     #   「漏一个不报错」留一道门。
-    system = with_json_shape(prompts.PLAN_SYS, prompts.PLAN_HINT)
+    system = prompts.plan_system()
     resp = client.ask_json(system, _build_user(ctx, up),
                            model_cls=PlanResponse, purpose=ctx.node,
                            max_tokens=prompts.PLAN_MAX_TOKENS)

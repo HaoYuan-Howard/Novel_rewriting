@@ -316,6 +316,15 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/review/{ordinal}/edit': ['POST'],
         '/api/novels/{sid}/stage6/approve': ['POST'],
         '/api/novels/{sid}/stage7/approve': ['POST'],
+        # ── agent 全链运行（`docs/BACKEND_CONTRACT.md` §6.3 的 `/n/:sid/run` 那一格）──
+        #    ⚠ 这五条是本条绊线**按设计逮到的**一次「顺手加端点」：路由已上线、
+        #    §6.3 的屏幕职责表也已登记，而这张清单没跟着改 ⇒ 全量跑时它红着。
+        #    补进来就是那次「显式的决定」；它们的行为归 `tests/test_api_agent.py`。
+        '/api/agent/runs': ['GET', 'POST'],
+        '/api/agent/runs/preview': ['POST'],
+        '/api/agent/runs/{run_id}/log': ['GET'],
+        '/api/agent/runs/{run_id}/stop': ['POST'],
+        '/api/novels/{sid}/run': ['GET'],
     }
 
 

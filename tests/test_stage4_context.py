@@ -3,12 +3,14 @@
 """`writer_context` 当前契约的确定性组装与结构守卫。"""
 from __future__ import annotations
 
+from typing import get_origin, get_type_hints
+
 import pytest
 
 from contracts.schema.stage4 import WriterContext
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    build_writer_context, display_names, display_names_at, name_collisions, rename_all,
+    Assembly, build_writer_context, display_names, display_names_at, name_collisions, rename_all,
 )
 from tests import corpus
 
@@ -54,21 +56,42 @@ def _diffs(mine: object, disk: object, path: str = '', out: list[str] | None = N
     return out
 
 
+def _through_the_carrier(ctx: dict[str, object], provenance: object) -> dict[str, object]:
+    """组装形态 → **落盘形态**，走的是 `store.write` 用的同一个载体。
+
+    盘上那份的来源账由写盘口生成，纯组装器产不出它 ⇒ 借盘上那份把模型填满，
+    随后 `_GENERATED_TOP` 会在比对时把它排除；这里给它只是为了过必填校验。
+    """
+    return WriterContext.model_validate(
+        {**ctx, '_provenance': provenance}).model_dump(by_alias=True, mode='json')
+
+
 # ── ⭐ 一、ctx 重组 == 存盘 ───────────────────────────────────────────────
 
 @needs_corpus
 def test_the_assembler_reproduces_every_context_on_disk():
     """⭐⭐ **本层最值钱的一条免费等价测试，3/3 本差异 0。**
 
-    盘上那三份 `writer_context.json` 是**原型**的组装器产的。本仓重组一遍，逐字段比对。
+    盘上那几份 `writer_context.json` 本仓重组一遍，逐字段比对。
     它一次钉住：六道逐章闸门 · 名字表的书级/章级两个方向 · 保真材料的拆点与去重 ·
     「跨层不压平」的 `segments` 分支 · 称谓表的 `who` 也走章级表那一处。
 
-    **不一致就是骨架抄错了，不是数据变了**——那三份产物一个字节都没动过。
+    **不一致就是骨架抄错了，不是数据变了**——那几份产物一个字节都没动过。
+
+    ⚠⚠ **两边必须先过同一个载体再比。** `build_writer_context` 交出来的是**组装形态**
+    （可选键不给就是不在），盘上那份是 `store.write` 落的**落盘形态**
+    （`model_dump` 把可选键显式写成 `null`）。直接拿裸 dict 比，
+    `CtxBeat` 的六个可选键会在**每一拍上**各报一处「只在盘上有：None」——
+    实测一本 530 处，而组装器一个字都没错。
+    ⚠ 那种红最坏的地方是**它长得和真回归一模一样**：一列「只在盘上有」，
+    看不出是形态差还是丢字段。⇒ 过一次 `WriterContext` 把两边归到同一形态，
+    差异重新变成「真差异」。`_diffs` 那条「不做宽松相等」的纪律**不放松**，
+    放松的是「拿两种形态直接比」这个前提错误。
     """
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
-        d = _diffs(asm.ctx, CTX[sid])
+        mine = _through_the_carrier(asm.ctx, CTX[sid]['_provenance'])
+        d = _diffs(mine, CTX[sid])
         assert not d, f'{sid} 重组与盘上不一致（{len(d)} 处）：\n  ' + '\n  '.join(d[:8])
 
 
@@ -82,18 +105,31 @@ def test_the_rebuilt_context_passes_the_carrier():
         WriterContext.model_validate({**asm.ctx, '_provenance': prov})
 
 
-@needs_corpus
 # ── 二、组装的副产物 ────────────────────────────────────────────────────
 
 @needs_corpus
 def test_the_side_ledger_is_returned_not_printed():
-    """组装副产物必须以结构化列表返回，内容随小说而变。"""
+    """组装副产物必须以**结构化容器**返回（不是打印出去），且形状照 `Assembly` 的声明。
+
+    ⚠⚠ **容器类型从 `Assembly` 的注解派生，不在这里手抄一份。**
+    手抄那份漂过：本条曾断言 `asm.subs` 是 `list`，而 `Assembly.subs` 从声明起
+    就是 `dict[str, str]`（`{原标签: 换成的}`，`rename_all` 按它做确定性替换）；
+    `held_rules` 同样被抄成 `list` 而它是 `set`。两条都不是「组装器变了」，
+    是**这张表在测试里有了第二个落点**——与 `target_band` 同一家族的跨模块漂移。
+    ⇒ 派生之后，改 `Assembly` 的哪一格都会在这里出声，而不是安静地对不上。
+    """
+    hints = get_type_hints(Assembly)
+    containers = {rows: get_origin(hints[rows]) for rows in
+                  ('subs', 'collisions', 'chapter_collisions', 'withheld',
+                   'dropped_hinges', 'held_rules', 'setting_cut', 'setting_emptied')}
+    assert set(containers.values()) <= {dict, list, set}, \
+        f'副产物出现了非容器形状：{containers}'
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
-        assert isinstance(asm.subs, list)
-        assert isinstance(asm.chapter_collisions, list)
-        assert isinstance(asm.held_rules, list)
-        assert isinstance(asm.setting_cut, list)
+        for name, origin in containers.items():
+            got = getattr(asm, name)
+            assert isinstance(got, origin), \
+                f'{sid} 的 {name} 是 {type(got).__name__}，而 `Assembly` 声明的是 {origin.__name__}'
 
 
 @needs_corpus

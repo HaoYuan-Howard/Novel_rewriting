@@ -104,7 +104,12 @@ def test_dry_run_builds_the_same_user_message_the_paid_path_would_send(book):
     box = sandbox.Sandbox(book, STAGE4_INPUTS)
     try:
         system, user = plan.build_prompt(_ctx_for(box, 'stage4.plan'))
-        assert system == prompts.PLAN_SYS
+        # ⚠ 比的是**渲染后**那一份（`plan_system()` = `PLAN_SYS` + JSON 形状块），
+        #   不是裸常量：`_common.md` §八 明写来源账记的是插值之后的指纹。
+        #   本条原来断言 `system == prompts.PLAN_SYS`，于是 `with_json_shape` 一进来就恒红，
+        #   而它报的「预览与真跑分家」是假的——两边当时都已经渲染过了。
+        assert system == prompts.plan_system()
+        assert prompts.PLAN_SYS in system, '渲染把正文吃掉了——形状块不该替换 system 本体'
         for head in (prompts.BLOCK_INDEX, prompts.BLOCK_SKELETON,
                      prompts.BLOCK_SIZES, prompts.BLOCK_BODY):
             assert head in user, f'块头缺了：{head[:20]}'

@@ -75,16 +75,7 @@ def run_check_only(ctx: RunContext) -> CheckReport:
 
     main, hook, gg = _upstreams(store)
     _artifact, data = store.read_own(StyleGrounding, judged)
-
-    names = names_of(gg)
-    outcomes = checks.check(
-        data,
-        corpus=corpus_of(main, hook),
-        names=names,
-        spoiler_names=spoiler_names_of(gg, names) if names else frozenset(),
-        measured_now=measure_all(main, hook),
-        expected_chapters=tuple(section.chapter_ordinal for section in main.root),
-    )
+    outcomes = judge_with(data, main, hook, gg, measured_now=measure_all(main, hook))
     prov = data.get('_provenance') or {}
     return build(
         sid=ctx.sid, node=ctx.node, freshness=store.freshness(judged),
@@ -544,17 +535,32 @@ def run_style(ctx: RunContext, client: LlmClient) -> StyleGrounding:
         ctx, client, store, artifact, outcomes, label='stage3 逐章风格')
 
 
-def _judge(store: ArtifactStore, data: dict, *, measured_now: Measurable | None):
-    """判据的**唯一调度点**：付费路的落盘闸门与 `--check-only` 走同一条。"""
-    main = store.read(MainText, MAIN_TEXT)
-    hook = store.read(HookCopy, HOOK_COPY)
-    gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
+def judge_with(data: dict, main: MainText, hook: HookCopy, gg: GlobalGrounding, *,
+               measured_now: Measurable | None):
+    """判据的**唯一调度点**（不摸盘的那一半）：本层四条路与测试台都走它。
+
+    ⚠⚠ **它必须是唯一的一份，而「唯一」这件事已经破过一次。**
+    `_judge` 的 docstring 原本就写着「唯一调度点」，而 `run_check_only` 与
+    `run_revalidate` 各自又把这几个实参**拼了一遍**——三份拼装同时存在。
+    随后 `expected_chapters` 被加进 `checks.check`：三份生产拼装跟着改了，
+    `tests/test_stage3.py` 里的第四份没有 ⇒ `required` 在那边**恒报**
+    「校验期拿不到预期源章节集合」，三本书 3 条红，而真跑的 `--check-only` 是绿的。
+    **那条红说的不是产物有问题，是测试台漂了。**
+    ⇒ 参数从盘上读的那一半留给 `_judge`，拼装这一半收成本函数，
+    测试台直接调它——形参一变，四个调用点一起报错。
+    """
     names = names_of(gg)
     return checks.check(
         data, corpus=corpus_of(main, hook), names=names,
         spoiler_names=spoiler_names_of(gg, names) if names else frozenset(),
         measured_now=measured_now,
         expected_chapters=tuple(section.chapter_ordinal for section in main.root))
+
+
+def _judge(store: ArtifactStore, data: dict, *, measured_now: Measurable | None):
+    """`judge_with` 的摸盘版：付费路的落盘闸门走它。"""
+    main, hook, gg = _upstreams(store)
+    return judge_with(data, main, hook, gg, measured_now=measured_now)
 
 
 def remeasured(ctx: RunContext) -> tuple[StyleGrounding, list[tuple[str, object, object]]]:
@@ -674,13 +680,8 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
 
     main, hook, gg = _upstreams(store)
     _cand, data = store.read_own(StyleGrounding, _INVALID)
-    names = names_of(gg)
-    outcomes = checks.check(
-        data, corpus=corpus_of(main, hook), names=names,
-        spoiler_names=spoiler_names_of(gg, names) if names else frozenset(),
-        # 恒算漂移：这一份是当初付费那次产的，它的 `measurable` 可能已经跟不上 stage1 了。
-        measured_now=measure_all(main, hook),
-        expected_chapters=tuple(section.chapter_ordinal for section in main.root))
+    # 恒算漂移：这一份是当初付费那次产的，它的 `measurable` 可能已经跟不上 stage1 了。
+    outcomes = judge_with(data, main, hook, gg, measured_now=measure_all(main, hook))
 
     prov = data.get('_provenance') or {}
     promoted = not _hard_rules(outcomes)

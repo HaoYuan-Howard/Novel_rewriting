@@ -164,8 +164,20 @@ def test_chars_are_recomputed_with_the_same_ruler(box):
 # ── ⚠ 三条陷阱 ──────────────────────────────────────────────────────────────
 
 def test_the_stored_identity_baseline_has_every_current_cell(box):
-    """当前正式产物的恒等基线必须完整覆盖机械 hard/info 判据。"""
+    """当前正式产物的恒等基线必须完整覆盖机械 hard/info 判据。
+
+    ⚠ **它依赖语料跑过 `stage6.hook --identity`。** `run_hook` 落盘时写的是
+    `baselines_identity={}`（`hook.py:355`），那一格由 `--identity` 这条**单独的
+    0 成本跑**填。盘上这批三本全是 `{}` ⇒ 不是「基线缺格」，是**那一趟没跑过**。
+    两件事必须分得开：缺格说明判据表加了条目而基线没补（该红），
+    空 dict 说明没人跑过（该说出来，并给出补法）。
+    """
     stored = sandbox.cut(box.book, 'stage6/hook.json')['baselines_identity']
+    corpus.declared_dependency(
+        bool(stored),
+        needs='跑过恒等基线的 stage6/hook.json（`baselines_identity` 非空；盘上是 `{}`）',
+        produced_by=f'novel.cli run stage6.hook {box.sid} --identity',
+        cost='0 成本，不发请求')
     want = {r.rule for r in REGISTRY.of_stage('stage6')
             if r.sev in ('hard', 'info') and r.check_kind != 'semantic'
             and r.rule != 'hook_reuses_source'}
@@ -302,7 +314,12 @@ def _fake_client(ctx, texts: list[str]):
     return LlmClient(ctx, FakeTransport.always(resp), sleep=lambda _s: None)
 
 
-def _sample(box: sandbox.Sandbox, *, truncated: bool) -> str:
+#: 三条候选各换一处措辞。⚠ **只换形容词，不碰段间分隔也不碰末字**——
+#: 变体存在的唯一理由是让三条文本互不相同，它不许顺手改变任何一条判据的判定。
+_VARIANTS = ('风把头发吹乱了', '雨把头发打湿了', '雪把头发压塌了')
+
+
+def _sample(box: sandbox.Sandbox, *, truncated: bool, variant: int = 0) -> str:
     """造一条合成文案：只在 `hook_truncated` 这一条上可控地红或不红。
 
     ⚠ **段间分隔必须照本书自己的档位造**，否则 `hook_para_sep`（另一条 HARD）
@@ -312,12 +329,25 @@ def _sample(box: sandbox.Sandbox, *, truncated: bool) -> str:
     〔那句「归一化应该已经修掉它了」对单段输入是**错的诊断**，已修（TODO-10b）：
     判据现在按「成稿是不是一整段」分两种病因，反例在
     `tests/test_hard_counterexamples.py` 那两条。本 fixture 的构造理由不变。〕
+
+    ⚠⚠ **`variant` 是被载体逼出来的**：`HookResponse` 现在有一条后置条件
+    「三个候选文本不得重复」（`contracts/schema/stage6.py:273`），而本 fixture 原来
+    对三条候选喂**同一个字符串** ⇒ 4 档阶梯逐档拒收、以 `LlmFailed` 收场。
+    那次红说的不是闸门坏了，是 fixture 比载体老。
+    ⇒ 三条各换一处措辞；换的位置刻意避开段间分隔与末字，
+    **它不许顺手改变任何一条判据的判定**。
     """
     from novel.core.bands import sep_band_of_text
     src = (sandbox.cut(box.book, 'stage1/hook_copy.json') or {}).get('text', '').strip()
     sep = '\n\n' if sep_band_of_text(src) == '空行分段' else '\n'
-    body = sep.join(['她站在门口，手里攥着那张纸', '不知道该不该推门进去，风把头发吹乱了'])
+    body = sep.join(['她站在门口，手里攥着那张纸',
+                     f'不知道该不该推门进去，{_VARIANTS[variant % len(_VARIANTS)]}'])
     return body if truncated else body + '。'
+
+
+def _samples(box: sandbox.Sandbox, *, truncated: list[bool]) -> list[str]:
+    """三条互不相同的候选；`truncated` 逐条说这一条该不该红。"""
+    return [_sample(box, truncated=cut, variant=i) for i, cut in enumerate(truncated)]
 
 
 def test_the_gate_blocks_only_when_no_candidate_is_clean(box):
@@ -331,8 +361,7 @@ def test_the_gate_blocks_only_when_no_candidate_is_clean(box):
 
     # ① 部分红 ⇒ 照常落盘，报告把红的那条摆出来
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=True)
-    clean, dirty = _sample(box, truncated=False), _sample(box, truncated=True)
-    art = hook.run_hook(ctx, _fake_client(ctx, [clean, clean, dirty]))
+    art = hook.run_hook(ctx, _fake_client(ctx, _samples(box, truncated=[False, False, True])))
     assert ArtifactStore(ctx).exists('stage6/hook.json')
     red = {c.approach for c in art.candidates
            for f in c.findings if f.rule == 'hook_truncated'}
@@ -341,7 +370,7 @@ def test_the_gate_blocks_only_when_no_candidate_is_clean(box):
     # ② 全红 ⇒ 拦下，问题稿进 .INVALID
     ctx2 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=True)
     with pytest.raises(GateBlocked, match='每一条'):
-        hook.run_hook(ctx2, _fake_client(ctx2, [dirty, dirty, dirty]))
+        hook.run_hook(ctx2, _fake_client(ctx2, _samples(box, truncated=[True, True, True])))
     assert ArtifactStore(ctx2).exists('stage6/hook.INVALID.json')
 
 
@@ -357,10 +386,9 @@ def test_revalidate_promotes_only_after_the_problem_is_fixed(box):
     from novel.errors import GateBlocked
     from novel.store import ArtifactStore
 
-    dirty = _sample(box, truncated=True)
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=True)
     with pytest.raises(GateBlocked):
-        hook.run_hook(ctx, _fake_client(ctx, [dirty, dirty, dirty]))
+        hook.run_hook(ctx, _fake_client(ctx, _samples(box, truncated=[True, True, True])))
     inv = box.dir / 'stage6' / 'hook.INVALID.json'
     before = _json.loads(inv.read_text(encoding='utf-8'))['_provenance']
 
@@ -370,8 +398,8 @@ def test_revalidate_promotes_only_after_the_problem_is_fixed(box):
 
     # 人手改一个字（0 成本自救），再提升
     data = _json.loads(inv.read_text(encoding='utf-8'))
-    for c in data['candidates']:
-        c['text'] = _sample(box, truncated=False)
+    for i, c in enumerate(data['candidates']):
+        c['text'] = _sample(box, truncated=False, variant=i)
     inv.write_text(_json.dumps(data, ensure_ascii=False), encoding='utf-8')
 
     ctx3 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
@@ -388,17 +416,33 @@ def test_revalidate_promotes_only_after_the_problem_is_fixed(box):
 
 # ── 完整创作包 ──────────────────────────────────────────────────────────────
 
+def _packet_of(user: str) -> dict:
+    """从实际要发出去的 user 里把创作包**解回来**。
+
+    ⚠⚠ **别拿裸子串去查多行内容。** 下发面是 `json.dumps(packet, indent=2)`，
+    原文里的换行在里面是 `\\n` 两个字符 ⇒ `source['text'] in user` 对**任何**
+    带空行分段的文案都必然为假，而它报出来的样子是「原始文案没有下发」——
+    一句与事实相反的话（文案就在里面，只是被 JSON 转义了）。
+    ⇒ 解回来再逐字段比：既准确，也不会在下次改编码方式时假红。
+    """
+    import json as _json
+    return _json.loads(user[user.index('{'):])
+
+
 def test_prompt_carries_source_full_story_and_body_execution_style(box):
     """质量升级的三项信息必须真的进入实际发送的 user，而不只写在设计文档里。"""
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     _sys, user, mat = hook.build_prompt(ctx)
+    packet = _packet_of(user)
     source = sandbox.cut(box.book, 'stage1/hook_copy.json')
     gg = sandbox.cut(box.book, 'stage2/global_grounding.json')
     style = sandbox.cut(box.book, 'stage3/style_grounding.json')
-    assert source['text'] in user and mat.source_hook == source['text'].strip()
-    assert gg['arc'] == mat.story_truth['arc']
+    assert packet['source_hook'] == source['text'].strip()
+    assert mat.source_hook == source['text'].strip()
+    assert gg['arc'] == mat.story_truth['arc'] == packet['story_truth']['arc']
     for value in (gg['arc'].get('climax'), gg['arc'].get('ending')):
         if value:
             assert value in user, '全书兑现没有真正下发，payoff_preview 仍会闭卷写作'
     assert mat.style_packet['book_surface_habits'] == style.get('surface_habits')
-    assert 'whole_story_map' in user and len(mat.story_map) >= 1
+    assert packet['style'] == mat.style_packet, '下发的风格包与 Material 记的那份分家了'
+    assert packet['whole_story_map'] == list(mat.story_map) and len(mat.story_map) >= 1

@@ -230,8 +230,20 @@ def test_rejudging_reproduces_every_stored_current_rule(box):
 # ── 三、当前 prompt 契约 ─────────────────────────────────────────────────
 
 def test_the_current_system_prompt_is_the_rendered_prompt():
+    """真发出去的是 `rename_system()`，而它 = `fill(RENAME_SYS)` + JSON 形状块。
+
+    ⚠ 本条原来断言 `rename_system() == RENAME_SYS`，于是 `with_json_shape` 一进来就恒红。
+    那条断言从口径上就是错的：`_common.md` §八 写着来源账记的是**插值之后**的指纹，
+    而 `rename.py` 两个调用点（`366` / `581`）发的都是 `rename_system()`。
+    ⇒ 该钉的是「常量原样在渲染结果里，且渲染只做加法」，不是「两者相等」。
+    """
+    from novel.llm.prompts import fill
+
     assert prompts.RENAME_SYS.strip()
-    assert prompts.rename_system() == prompts.RENAME_SYS
+    rendered = prompts.rename_system()
+    assert fill(prompts.RENAME_SYS) in rendered, '渲染把 system 本体改写了，不只是补形状'
+    assert rendered != prompts.RENAME_SYS, '形状块没接上——`ask_json` 会收到一个没说形状的 prompt'
+    assert 'char_id' in rendered, '形状块接上了却不是 `RENAME_HINT`'
 
 
 def test_the_user_blocks_are_a_byte_for_byte_port_too(box):
