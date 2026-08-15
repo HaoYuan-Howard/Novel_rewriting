@@ -27,7 +27,9 @@ from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.core.bands import PARA_BANDS, SENT_BANDS, band
-from novel.core.facts import NUM_UNIT, num_unit_keys, num_values, secret_keywords
+from novel.core.facts import (
+    NUM_UNIT, locate_secret, num_unit_keys, num_values, secret_contains, secret_keywords,
+)
 from novel.core.measure import measure
 from novel.core.naming import invented_names
 from novel.core.spans import lcs
@@ -203,24 +205,19 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
                 # 那不是「查过、没泄漏」，是**根本没得查**。
                 unknown.append(sid)
                 continue
-            # ⚠ **两侧不同口径，而这是原型的现状**：`secret_keywords` 把 fact 里的
-            #   中文数字**剥掉**（「一直」→「直」），而成稿这一侧没剥 ⇒ 凡 fact 里带
-            #   数字词的片段**永远匹配不上**。它是「19/21 条 secret 连揭示章都命中不了」
-            #   这个实测数字的成因之一。**本轮不改**：改它会动全部三本的基线，
-            #   而手上没有 ground truth 判断新口径是更准还是更吵（判据 18：调参先量方差）。
-            #   ⇒ 登记在这里，连同那条盲区计数一起（`review._outcomes` 打在同一行上）。
+            # 两侧共用 secret 口径：fact 侧剥数字，成稿侧也剥；数字不是
+            # 泄密与否的身份键。但这仍只是转抄式探针，改写式盲区继续由
+            # `secret_timeline` / 语义审判显式告知用户。
             kws = secret_keywords(s.get('fact'))
-            hit = [k[:14] for k in kws if norm(k) and norm(k) in nb]
+            hit = [k[:14] for k in kws if secret_contains(k, body)]
             if hit:
                 leak.append((sid, hit[:2]))
                 # ⚠⚠ **凭据必须是成稿自己的字节，不是 secret 的字节**：命中的 `k` 来自
                 #   `secret.fact`，把它当凭据发回给写手就是**把秘密告诉它**。
                 #   回映成成稿里的那一段之后，反哺时引用的是写手自己写过的话。
                 for k in kws:
-                    j = nb.find(norm(k)) if norm(k) else -1
-                    if j >= 0 and j < len(nmap):
-                        end = nmap[min(j + len(norm(k)), len(nmap)) - 1] + 1
-                        leak_spans.append(body[nmap[j]:end])
+                    if (span := locate_secret(k, body)) is not None:
+                        leak_spans.append(body[span[0]:span[1]])
         if leak:
             fs.append(finding('secret_leak',
                               detail=f'成稿疑似提前点破了本章不该揭示的秘密：{leak[:4]}',
@@ -750,7 +747,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
     for s in book.secrets:
         kws = [k for k in secret_keywords(s.get('fact')) if norm(k)]
         seen = [o for o, b in sorted(bodies.items())
-                if any(norm(k) in norm(b) for k in kws)]
+                if any(secret_contains(k, b) for k in kws)]
         reveal = sorted({e.get('chapter') for e in (s.get('reader_reveal_events') or [])
                          if e.get('chapter')})
         blind = bool(reveal) and not (set(seen) & set(reveal))
@@ -837,7 +834,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
         for entry in book.chapters.values())
     all_names = {c.get('display_name') for c in book.characters.values()}
     kw_hits = sorted({k for s in book.secrets for k in secret_keywords(s.get('fact'))
-                      if norm(k) and norm(k) in norm(blob)})
+                      if secret_contains(k, blob)})
     nm_hits = sorted({n for n in all_names if n and len(n) >= 2 and n in blob})
     if kw_hits or nm_hits:
         fs.append(finding(

@@ -39,8 +39,7 @@ from typing import Any
 from novel.core.naming import (
     person_naming_surfaces, rule_names_a_person, strip_distinguisher, surface_first_chapter,
 )
-from novel.core.spans import content_only
-from novel.core.facts import secret_keywords
+from novel.core.facts import secret_contains, secret_keywords
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
 
@@ -491,7 +490,7 @@ def _gate_setting(setting: dict[str, Any], secrets: list[dict[str, Any]], hidden
         keep = []
         for sent in _SENT_SPLIT.split(val):
             if sent and sent.strip():
-                if any(content_only(k) and content_only(k) in content_only(sent) for k in kws):
+                if any(secret_contains(k, sent) for k in kws):
                     cut.append((key, sent.strip()[:40]))
                 else:
                     keep.append(sent)

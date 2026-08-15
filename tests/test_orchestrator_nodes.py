@@ -15,7 +15,9 @@ import sys
 
 import pytest
 
-from contracts.invariants import FREE_ENTRIES, NODES, STAGES, VALUED_FLAGS, WRITE_EFFECTS
+from contracts.invariants import (
+    FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS, STAGES, VALUED_FLAGS, WRITE_EFFECTS,
+)
 from novel.errors import UnsupportedRunMode
 from novel.orchestrator import nodes as N
 
@@ -130,12 +132,25 @@ def test_every_node_writes_by_default():
 def test_an_unrecorded_flag_is_assumed_to_write():
     """没登记 ⇒ 按会写算。方向与 `is_paid` 同构：倒向危险的那一边。
 
-    ⚠ `--identity` 是这条规则的**现役实例**，不是假设：它在 stage6 把
-    `baselines_identity` 落进产物、在 stage7 只 `print`，所以刻意不进 `WRITE_EFFECTS`。
+    现役 `--identity` 已按节点核实完，不再借它测「未登记」；这里用一个
+    真正未知的未来 flag，钉住未知不会被当成不写盘。
     """
     assert '--identity' not in WRITE_EFFECTS
-    assert N.would_write('stage7.rename', ['--identity']) is True
-    assert N.would_write('stage6.hook', ['--identity']) is True
+    assert N.would_write('stage7.rename', ['--future-unreviewed-flag']) is True
+
+
+def test_node_specific_write_effects_keep_all_three_identity_behaviors_distinct():
+    """stage4 写专用基线、stage6 只打印、stage7 写回正式人物表。"""
+    assert NODE_WRITE_EFFECTS == {
+        ('stage4.plan', '--identity'): 'stage4/writer_context.identity.json',
+        ('stage6.hook', '--identity'): '',
+        ('stage7.rename', '--identity'): 'stage7/name_map.json',
+    }
+    assert N.write_effect('stage4.plan', ['--identity']) == \
+        'stage4/writer_context.identity.json'
+    assert N.write_effect('stage4.plan', ['--identity', '--dry-run']) == ''
+    assert N.write_effect('stage7.rename', ['--identity']) == 'stage7/name_map.json'
+    assert N.write_effect('stage6.hook', ['--identity']) == ''
 
 
 # ───────────────────────── 那条命令（R-11.8 · R-12.3） ─────────────────────────

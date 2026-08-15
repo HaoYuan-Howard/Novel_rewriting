@@ -10,7 +10,8 @@ import pytest
 from contracts.schema.stage4 import WriterContext
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    Assembly, build_writer_context, display_names, display_names_at, name_collisions, rename_all,
+    Assembly, _gate_setting, build_writer_context, display_names, display_names_at,
+    name_collisions, rename_all,
 )
 from tests import corpus
 
@@ -138,6 +139,16 @@ def test_the_setting_gate_returns_structured_results():
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
         assert isinstance(asm.setting_cut, list)
         assert isinstance(asm.setting_emptied, list)
+
+
+def test_the_setting_gate_uses_the_same_number_ruler_as_secret_keywords():
+    """原样转抄含「一直 / 三」时也必须被从写手的 setting 中剪掉。"""
+    fact = '她其实一直都知道他是三皇子'
+    setting = {'暗线': fact + '。这里另有一条无关规则。'}
+    out, cut = _gate_setting(
+        setting, [{'secret_id': 'secret_x', 'fact': fact}], ['secret_x'])
+    assert out['暗线'] == '这里另有一条无关规则。'
+    assert cut == [('暗线', fact + '。')]
 
 
 # ── 三、名字表的三个方向 ─────────────────────────────────────────────────

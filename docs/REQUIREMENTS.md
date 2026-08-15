@@ -4,7 +4,7 @@
 当前代码与守卫测试的联合审计。已完成事项不在这里保留；历史原因由 Git 和专项验证记录回答。
 产品规格、冻结契约、证据基线以及文档与测试的直接耦合统一见 `docs/BACKEND_CONTRACT.md`。
 
-**编号不重排。** TODO-03 / 04 / 05 / 07 / 16 / 20 与 TODO-10 的 `hook_para_sep` 一项已完成删除，
+**编号不重排。** TODO-03 / 04 / 05 / 07 / 10 / 16 / 20 已完成删除，
 留下的号空着——Git 提交信息按号引用，重排会让那些引用指向别的条目。
 
 ⚠⚠ **跑测试必须显式指路语料**（`NOVEL_OUTPUT=<产物目录>`）。不设则语料相关的整批测试
@@ -72,24 +72,6 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
 
 验收：至少准备一个旧版本 fixture，证明可迁移的能升级、不可迁移的明确指出文件与版本、只读聚合
 不会整页崩溃。
-
-### TODO-10 · 修正仍可复现的诊断与元数据误差
-
-- [ ] stage5 secret 关键词两侧统一中文数字口径；当前 `novel/stages/stage5/checks.py` 明确记录
-  fact 侧剥数字词、成稿侧不剥，导致带数字词的 secret 系统性匹配失败。
-  ⚠ **不是小修**：五个消费方共用这把尺子，难点在 `novel/core/text.py::norm_index` /
-  `locate_norm` 的证据回映（凭据必须是成稿自己的字节，不能把 secret 原文抄进报告）。
-  按判据 18「调参先量方差」，**先做一次全语料纯函数扫描**拿真阳/假阴分布，再决定改哪一侧
-  ——另一条路是直接去掉 `novel/core/facts.py::secret_keywords` 里的剥数字，
-  代码一行但会反转产品语义并同时改动 stage4/5/6 三层基线，需要裁决。
-- [ ] stage4 `--identity` 的动作元数据应报告真实写入的
-  `stage4/writer_context.identity.json`，而不是正式计划文件。
-  ⚠ 代码只需给 `novel/orchestrator/nodes.py::write_effect` 加一维按 `(node, flag)` 的覆盖，
-  但要同时推翻三条把现状钉死的测试及其 docstring（`tests/test_stage4.py` 那条名字就叫
-  `test_identity_is_deliberately_absent_from_write_effects_and_that_costs_us_a_filename`）
-  与 `contracts/invariants.py` 里那段裁决注释——改代码半小时，改说法与守卫是主要工作量。
-
-验收：每项先有能复现旧错误的反例，再修实现与面向用户的说明；不得只改当前样本以变绿。
 
 ### TODO-11 · 收回前端仍在做的业务判定
 

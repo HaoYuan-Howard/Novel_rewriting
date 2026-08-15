@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import re
 
+from novel.core.text import norm_index
+
 CN_NUM_CHARS = '〇零一二两三四五六七八九十百千万'
 
 #: 片段长度下限。⚠ **这个数没有独立标定过**——见 `secret_keywords` 的告诫。
@@ -146,3 +148,46 @@ def secret_keywords(fact: str | None, min_len: int = SECRET_KEYWORD_MIN) -> list
     """
     return [w for w in (x.strip() for x in CN_NUM_RE.sub('', fact or '').split('，'))
             if len(w) >= min_len]
+
+
+def secret_norm_index(text: str | None) -> tuple[str, list[int]]:
+    """秘密字面探针的 `(normalized, normalized index -> original index)`。
+
+    `secret_keywords` 按产品语义不看数字：「三皇子」换成「五皇子」仍然是
+    同一类提前点破。被查文本必须走同一口径；否则 fact 侧的「一直」
+    被剥成「直」，成稿侧却保留「一直」，连原样转抄都永远匹配不上。
+
+    回映表仍指向 `text` 的原始下标。判据因此只能引用产物自己写过的
+    字节，不会把 `secret.fact` 里的原话抄进报告。
+
+    2026-08-15 全语料纯函数扫描（6 本、39 条 secret）：声明的揭示章原文
+    旧口径命中 2/39，当前成稿命中 1/39；两侧统一后这两组真实命中集
+    都无变化。这说明剩余盲区主要是改写式泄露，本修复只关闭数字口径的
+    系统性假阴，不把字面探针宣传成语义守卫。
+    """
+    raw = text or ''
+    keep = [True] * len(raw)
+    for match in CN_NUM_RE.finditer(raw):
+        for i in range(match.start(), match.end()):
+            keep[i] = False
+    original_indexes = [i for i, stays in enumerate(keep) if stays]
+    without_numbers = ''.join(raw[i] for i in original_indexes)
+    normalized, compact_indexes = norm_index(without_numbers)
+    return normalized, [original_indexes[i] for i in compact_indexes]
+
+
+def locate_secret(needle: str | None, text: str | None) -> tuple[int, int] | None:
+    """按 secret 的去数字 + 去标点口径匹配，返回被查文本的原始区间。"""
+    key, _ = secret_norm_index(needle)
+    if not key:
+        return None
+    body, indexes = secret_norm_index(text)
+    start = body.find(key)
+    if start < 0:
+        return None
+    return indexes[start], indexes[start + len(key) - 1] + 1
+
+
+def secret_contains(needle: str | None, text: str | None) -> bool:
+    """布尔消费方也走 `locate_secret`，避免再写一份匹配口径。"""
+    return locate_secret(needle, text) is not None

@@ -197,10 +197,9 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
     ⚠⚠ **凭据必须是成稿自己的字节，不是 secret 的字节**：命中的片段来自 `secret.fact`，
     把它当凭据发回给写手就是**把秘密告诉它**。
     """
-    # ⚠ 探针**把中文数字剥掉**（`secret_keywords`），所以这段刻意不带数字词：
-    #   带「一直」的 fact 会被切成「直都知道…」而永远匹配不上——那是本层已登记的盲区
-    #   （实测 21 条 secret 里 19 条连它自己的揭示章都命中不了），不是这条测试要验的东西。
-    fact = '她其实早就知道那笔钱是从公司账上挪出来的'
+    # 旧实现在 fact 侧剥「一 / 三」、成稿侧不剥，这份原样转抄
+    # 会系统性假阴。反例要直接保留这两类数字词，不许退回不含数字的 happy path。
+    fact = '她其实一直都知道那三笔钱是从公司账上挪出来的'
     b = M.Book(title=book.title, ctx=book.ctx, style=book.style,
                source_text=book.source_text,
                secrets=[{'secret_id': 'secret_x', 'fact': fact,
@@ -213,6 +212,33 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
     assert leak, 'secret_leak 没红——转抄式泄底是它唯一挡得住的那一类'
     assert all(ev in body for ev in leak[0].evidence), (
         '凭据不是成稿自己的字节——把 secret 的原文发回写手就是把秘密告诉它')
+
+
+def test_secret_timeline_uses_the_same_number_ruler(book):
+    """揭示章原样写出带数字的 fact 时，不得误报「连揭示章都没命中」。"""
+    fact = '她其实一直都知道他是三皇子'
+    secret = {'secret_id': 'secret_x', 'fact': fact, 'character_known_by': [],
+              'setup_chapters': [], 'reader_reveal_events': [{'chapter': 9}]}
+    synthetic = M.Book(title=book.title, ctx=book.ctx, style=book.style,
+                       source_text=book.source_text, secrets=[secret])
+    fs = checks.book_findings(synthetic, rows=[], bodies={9: fact},
+                              inv_numbers=[], inv_names=[])
+    timeline = next(f for f in fs if f.rule == 'secret_timeline')
+    assert '出现于 [9]' in timeline.detail
+    assert '没有判别力' not in timeline.detail
+
+
+def test_style_plot_scan_uses_the_same_number_ruler(book, monkeypatch):
+    """风格块是第五个消费方，不得偷偷退回只对 fact 剥数字的旧尺子。"""
+    fact = '她其实一直都知道他是三皇子'
+    secret = {'secret_id': 'secret_x', 'fact': fact, 'character_known_by': [],
+              'setup_chapters': [], 'reader_reveal_events': [{'chapter': 9}]}
+    synthetic = M.Book(title=book.title, ctx=book.ctx, style=book.style,
+                       source_text=book.source_text, secrets=[secret])
+    monkeypatch.setattr(prompts, 'style_block', lambda *_args, **_kwargs: fact)
+    fs = checks.book_findings(synthetic, rows=[], bodies={},
+                              inv_numbers=[], inv_names=[])
+    assert 'style_block_carries_plot' in {f.rule for f in fs}
 
 
 def test_secret_unknown_says_it_could_not_check_instead_of_passing(book, entry):

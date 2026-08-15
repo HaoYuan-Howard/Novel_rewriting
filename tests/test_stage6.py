@@ -148,6 +148,26 @@ def test_invented_number_compares_values_and_ignores_success_false_positive():
     assert not [f for f in fs if f.rule == 'hook_invented_number']
 
 
+def test_hook_secret_literal_uses_the_shared_number_ruler_and_own_bytes():
+    """文案侧与 stage4/5 共用口径，凭据仍只能是文案自己的字节。"""
+    fact = '她其实一直都知道他是三皇子'
+    text = fact + '。这条文案继续写到足够长，并以完整句子收束。'
+    fs = checks.hook_findings(
+        text,
+        mat=prompts.Material(blocks=('完整故事真相。',), upto=1),
+        secrets=[{'secret_id': 'secret_x', 'fact': fact,
+                  'reader_reveal_events': [{'chapter': 9}]}],
+        arc=None,
+        characters={},
+        src_hook=None,
+        style_hook=None,
+        quote_problems=[],
+    )
+    literal = next(item for item in fs if item.rule == 'hook_secret_literal')
+    assert '重合 1/1 条' in literal.detail
+    assert literal.evidence and all(piece in text for piece in literal.evidence)
+
+
 def test_chars_are_recomputed_with_the_same_ruler(box):
     """`candidates[].chars` 已被新契约裁掉 ⇒ 现算。
 

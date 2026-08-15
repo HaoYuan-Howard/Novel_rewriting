@@ -73,7 +73,8 @@ class Step(FrozenModel):
     #:
     #: 原型**根本没有这个概念**：它只活在 8 条一字不差的注释里
     #: （「`FREE_FLAGS` 只管钱不管写」），于是界面上一个写着「0 成本」的按钮
-    #: 可能归档旧轮、覆盖正式产物、重拼成书 txt。取值面唯一落点 `invariants.WRITE_EFFECTS`。
+    #: 可能归档旧轮、覆盖正式产物、重拼成书 txt。通用取值落在
+    #: `invariants.WRITE_EFFECTS`，跨节点特例落在 `NODE_WRITE_EFFECTS`。
     writes: str
 
     #: 这一步的特别提醒（例：追跑的那条 `--check-only` 为什么在）。`None` = 键不在。

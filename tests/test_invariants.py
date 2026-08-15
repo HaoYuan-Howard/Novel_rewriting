@@ -142,6 +142,13 @@ def test_write_effects_only_names_current_flags():
         if not effect:
             assert flag in inv.FREE_ENTRIES
 
+    for (node, flag), effect in inv.NODE_WRITE_EFFECTS.items():
+        assert node in inv.NODES
+        assert flag in inv.NODES[node].flags
+        assert isinstance(effect, str)
+        if not effect:
+            assert flag in inv.FREE_ENTRIES
+
 
 def test_partial_rewrite_flags_are_current_free_paths():
     assert set(inv.PARTIAL_REWRITE_FLAGS) <= set(inv.FREE_ENTRIES)

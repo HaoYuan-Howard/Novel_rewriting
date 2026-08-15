@@ -52,6 +52,7 @@ _CONSUMED: dict[str, str] = {
     'INVENT_FORBID': 'invent.forbid',
     'INVENT_PRINCIPLE': 'invent.principle',
     'NODES': 'job_kinds + actions',
+    'NODE_WRITE_EFFECTS': 'actions[].writes',
 }
 
 #: 桶三 —— 登记为**不发**。全是标量，且每一条的理由都是同一句的实例：

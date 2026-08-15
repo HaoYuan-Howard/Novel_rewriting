@@ -20,10 +20,10 @@ from contracts.invariants import ENDING_SHAPES
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.core.bands import ending_shape, sep_band_of_text
-from novel.core.facts import num_unit_keys, secret_keywords
+from novel.core.facts import locate_secret, num_unit_keys, secret_keywords
 from novel.core.measure import measure
 from novel.core.naming import invented_names, name_stems
-from novel.core.text import TERMINAL_PUNCT, locate_norm, norm, window_overlap
+from novel.core.text import TERMINAL_PUNCT, norm, window_overlap
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage6.measure import hidden_secrets, quote_stats
 from novel.stages.stage6.prompts import Material
@@ -123,11 +123,10 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
     used: list[tuple[str, str]] = []
     for s in secrets or []:
         for k in secret_keywords(s.get('fact')):
-            if norm(k) and norm(k) in nb:
+            if (sp := locate_secret(k, body)) is not None:
                 # ⚠ 凭据必须回映成**文案自己的字节**——命中的片段来自 `secret.fact`，
                 # 直接拿它当凭据展示等于把秘密原文抄进报告。
-                sp = locate_norm(k, body)
-                used.append((s.get('secret_id'), body[sp[0]:sp[1]] if sp else ''))
+                used.append((s.get('secret_id'), body[sp[0]:sp[1]]))
                 break
     late = [sid for sid, _ in used if sid in hid_ids]
     fs.append(finding(

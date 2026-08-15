@@ -271,24 +271,20 @@ def test_names_only_returns_a_mapping_for_every_chapter():
             box.close()
 
 
-def test_identity_is_deliberately_absent_from_write_effects_and_that_costs_us_a_filename():
-    """⚠⚠ **一处登记在案的不精确，别顺手「修」它。**
+def test_identity_action_reports_the_file_it_really_writes():
+    """`--identity` 说出基线专用文件，不得冒充正式计划。
 
-    `--identity` 在三层的行为**各不相同**（stage6 不写盘 · stage7 写产物内一个键 ·
-    stage4 写**另一份文件**）⇒ 它刻意不进 `WRITE_EFFECTS`（那张表按 flag 索引，
-    跨节点不一致的 flag 进去会让其中一层说假话）。
-    代价是 `/api/enums` 派生出来的 `writes` 串在本层会说成 `plan_chapters.json`
-    ——**方向是安全的**（它确实写盘），只是文件名不对。
-    ⇒ 钉在这里，而不是去改那张表。
+    只按 flag 登记会把跨节点差异压平；这一格因此必须走
+    `(node, flag)` 覆盖，并且与 `run_identity` 的真实落点同源受守卫。
     """
-    from contracts.invariants import WRITE_EFFECTS
+    from contracts.invariants import NODE_WRITE_EFFECTS, WRITE_EFFECTS
     from novel.api.enums import payload
     assert '--identity' not in WRITE_EFFECTS
+    assert NODE_WRITE_EFFECTS[('stage4.plan', '--identity')] == plan.IDENTITY_CTX_REL
     act = next(a for a in payload()['actions']
                if a['kind'] == 'stage4.plan' and a['extra'] == ['--identity'])
-    assert act['writes_disk'] is True and act['writes'] == 'stage4/plan_chapters.json'
-    assert plan.IDENTITY_CTX_REL == 'stage4/writer_context.identity.json', \
-        '它写的其实是这一份——上面那个串对不上，是已知的、方向安全的不精确'
+    assert act['writes_disk'] is True
+    assert act['writes'] == plan.IDENTITY_CTX_REL
 
 
 # ── 五、表间守卫（移植一层漏改一处就红）─────────────────────────────────

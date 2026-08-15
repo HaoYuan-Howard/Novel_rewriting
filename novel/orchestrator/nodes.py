@@ -26,7 +26,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, VALUED_FLAGS, WRITE_EFFECTS,
+    FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS, VALUED_FLAGS, WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import Step
 from novel import paths as novel_paths
@@ -205,6 +205,14 @@ def write_effect(node: str, flags: Iterable[str] = ()) -> str:
     # 「只看不动」的跑法是互斥的：带上任意一个，这一趟就不落盘。
     if any(WRITE_EFFECTS.get(f, '未登记') == '' for f in tokens):
         return ''
+    # 同一 flag 在不同节点可以写不同文件。节点维度的覆盖优先：
+    # stage4 `--identity` 实际写的是基线专用文件，不是本节点
+    # `produces` 里的正式计划。「只看不动」仍在它之前，与 CLI 分支
+    # 优先级一致：`--identity --dry-run` 只预览，不写盘。
+    overrides = [NODE_WRITE_EFFECTS[(node, f)] for f in tokens
+                 if (node, f) in NODE_WRITE_EFFECTS]
+    if overrides:
+        return ' · '.join(overrides)
     said = [WRITE_EFFECTS[f] for f in tokens if WRITE_EFFECTS.get(f)]
     if said:
         return ' · '.join(said)

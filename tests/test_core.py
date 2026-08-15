@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from contracts.invariants import ENDING_SHAPES, HOOK_APPROACHES, HOOK_APPROACH_NOTES, SEP_BANDS
 from novel.core.bands import BAND_SEP, ending_shape, sep_band_of_text
-from novel.core.facts import NUM_UNIT, num_unit_keys, num_value, secret_keywords
+from novel.core.facts import (
+    NUM_UNIT, locate_secret, num_unit_keys, num_value, secret_contains, secret_keywords,
+)
 from novel.core.naming import (
     attested_surname, family_groups, invented_names, is_generic_appellation,
     name_stems, person_naming_surfaces, rename_semantic_markers, rule_names_a_person,
@@ -217,6 +219,24 @@ def test_secret_keywords_drops_numbers_and_short_fragments():
     """去数字（换个数字说法照样泄底）→ 按全角逗号切 → 留 ≥6 字。"""
     got = secret_keywords('他其实是三皇子，母亲当年被人换了孩子，很短')
     assert got == ['他其实是皇子', '母亲当年被人换了孩子']
+
+
+def test_secret_matching_uses_the_same_number_ruler_on_both_sides_and_maps_back():
+    """旧错误：fact 侧把「一直 / 三」剥掉，成稿侧不剥，原样转抄也假阴。
+
+    数字取值不参与泄密判别，所以「三」换成「五」仍命中；但凭据必须
+    完全来自被查文本的原始字节。
+    """
+    fact = '她其实一直都知道他是三皇子'
+    body = '开门时，她其实一直都知道他是五皇子。'
+    keyword = secret_keywords(fact)[0]
+    assert secret_contains(keyword, body)
+    span = locate_secret(keyword, body)
+    assert span is not None
+    evidence = body[span[0]:span[1]]
+    assert evidence == '她其实一直都知道他是五皇子'
+    assert evidence in body
+    assert not secret_contains(keyword, '她对他的身世一无所知。')
 
 
 def test_num_value_reads_the_value_not_the_literal():

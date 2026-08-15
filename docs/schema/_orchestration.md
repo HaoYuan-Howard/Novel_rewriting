@@ -82,12 +82,14 @@ argv 的形态是：
 
 > **`FREE_FLAGS` 只管钱不管写。**（`--apply-edit` 落新一轮 + 归档旧轮 ·
 > `--revalidate` 把 `.INVALID` 提升为正式产物 · `--recheck` 刷指标 + 重拼 `draft.md` ·
-> `--assemble` 重拼 `book.txt`）
+> `stage7.assemble` 重拼 `book.txt`）
 
 一条信息在注释里重复四次以上，说明它是真的，只是**没有落点**（同 `_common.md` 立的那条判准）。
 ⇒ 本字段就是它的落点。三条形式要求：
 
-1. **它是一张声明表，不是从 flag 名推的。** 唯一落点 `contracts/invariants.py::WRITE_EFFECTS`
+1. **它是声明表，不是从 flag 名推的。** 通用 flag 落点是
+   `contracts/invariants.py::WRITE_EFFECTS`；同一 flag 在不同节点写不同文件时，
+   例外落在同文件的 `NODE_WRITE_EFFECTS[(node, flag)]`（值同样以空串表示不写盘）。
 2. **值是一句话「它写什么」，不是 `bool`。** 空串 = 不写盘——
    与记账那边「`recorded=False` ⇒ `[????] 未记录`」是同一个纪律：**「不写」与「没人说」必须分得开**
 3. **未知动作 / 未核对的 flag 一律按「会写」算。** 方向与 `is_paid` 同构

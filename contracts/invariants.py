@@ -877,10 +877,10 @@ VALUED_FLAGS: Final = {
 #: ——那是「节点」这个词的定义。所以方向与 `is_paid` 同构（`FREE_ENTRIES` 让付费变免费），
 #: 而**没登记的 flag 一律按会写算**（`Q-10` 的同一条：「不知道」要倒向危险的那一边）。
 #:
-#: ⚠ **`--identity` 刻意不在本表里**，那不是漏登记：它在 stage7 只 `print`（不写盘），
-#: 在 stage6 却把 `baselines_identity` **落进产物**（`stage6.md`：正因为有落点才判死过两条坏判据）。
-#: **跨节点不一致的 flag 不许进一张按 flag 索引的表**——那会让其中一层说假话。
-#: 不登记 ⇒ 按会写算 ⇒ 对 stage6 是对的、对 stage7 是保守的，两边都不说假话。
+#: ⚠ **`--identity` 刻意不在本表里**：它在不同节点的落盘行为不同，
+#: **跨节点不一致的 flag 不许进一张只按 flag 索引的表**。
+#: 已经核实的节点特例放在下方 `NODE_WRITE_EFFECTS`；没登记的其余
+#: 节点仍由 `write_effect` 保守判为会写。
 WRITE_EFFECTS: Final = {
     '--full-extract': '并发写 stage2/global_grounding.json、stage2/chapter_blueprints.json 与 stage3/style_grounding.json',
     '--shallow-rest': '按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿',
@@ -914,6 +914,19 @@ WRITE_EFFECTS: Final = {
     # ⚠ **`--purge-role` 刻意不在本表里**，那不是漏登记：它写的就是本节点 `produces`
     #   里那一份（`stage2/global_grounding.json`，只改 role/fate 两栏）
     #   ⇒ 不登记即落到 `produces`，**正确**。同 `--pick` 那一格的理由。
+}
+
+#: 节点维度的写盘效果覆盖。键是 `(node, flag)`，只收「同一 flag
+#: 在不同节点不同形」且已核实的例外；值的口径与 `WRITE_EFFECTS`
+#: 一样，空串 = 不写盘。普通情形仍由 `WRITE_EFFECTS` 和 `NodeSpec.produces` 派生。
+#:
+#: `stage4.plan --identity` 不覆盖正式计划，它把恒等基线单独落在
+#: `writer_context.identity.json`。此前因为只有 flag 维度，API 会误报
+#: `stage4/plan_chapters.json`；方向虽保守，文件名却会误导人的覆盖决策。
+NODE_WRITE_EFFECTS: Final = {
+    ('stage4.plan', '--identity'): 'stage4/writer_context.identity.json',
+    ('stage6.hook', '--identity'): '',
+    ('stage7.rename', '--identity'): 'stage7/name_map.json',
 }
 
 
