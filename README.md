@@ -3,7 +3,9 @@
 把一本中文网络小说经过 stage0～stage7 处理为一部新书：保留情节骨架，重写文字，
 替换人名，最终交付 `book.txt`。
 
-当前开发阶段是**真实前端联调**。后端开发范围已关闭；尚未完成、尚未验证和待裁决事项
+当前开发阶段是**第三阶段（agent 驱动全链）已验收，进入维护与终审运营**。
+后端开发范围维持关闭（2026-08-15 用户裁决定点重开两件——CLI 崩溃独立退出码 70、
+inbox 六类清单的 CLI 可达口——均已完成并重新关闭）；尚未完成、尚未验证和待裁决事项
 统一登记在 `docs/REQUIREMENTS.md`。
 
 ## 文档职责
@@ -44,6 +46,15 @@ HTTP 200 + `JobRecord.state='failed'` 出线，作业失败不是 HTTP 错误。
 记录见 `docs/E2E_VALIDATION_20260813.md`）。免费端到端路径——上传 txt → stage0 批准 →
 stage1 分章，所涉节点均 `paid=False`——已在真实服务上走通；付费屏在免费语料上
 显示诚实的「还没跑」，不拿空数据伪装。
+
+## 第三阶段：skill 封装端到端工作流
+
+一本书从原始 txt 到 `book.txt` 的完整操作规程封装在项目级 skill
+`.claude/skills/novel-pipeline-operator/SKILL.md`（任何 agent 可凭它独立驱动
+`novel.cli` 全链）。2026-08-15 用户裁决：人工闸门（`*.approve`）可委托 agent 代批，
+代批依据逐条进「终审包」（`final_review_<sid>.md`，随跑随产于输出目录根），
+用户只审终审包与成书。三本真实书验收记录（含账本读数与 skill 锻造过程）见
+`docs/SKILL_E2E_20260815.md`；第三轮为子 agent 仅凭 skill 盲驱。
 
 两笔账登记在这里（`docs/schema/_api.md` §七 与 `novel/api/deps.py` 都指着本文件）：
 

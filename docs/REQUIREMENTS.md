@@ -5,6 +5,8 @@
 
 后端开发当前视为关闭。标有“需重开后端”的条目是已知缺口或前端阻塞项，不代表可以
 自行扩大后端范围；实施前必须先取得明确裁决。
+（裁决记录：2026-08-15 用户定点重开两件——CLI 未捕获异常独立退出码 70、
+inbox 六类清单 CLI 子命令——已完成、已提交、范围重新关闭。）
 
 ## 文档边界
 
@@ -58,25 +60,29 @@
 - stage4 `--identity` 的 `writes` 文案指向错误文件名；
 - stage6 `hook_para_sep` 对单段文案给出不成立的诊断理由；
 - stage5 的秘密词法两侧对中文数字处理不一致；
-- stage5 rejected 归档和 stage7 `name_map_edit.json` 尚无真实端到端样本。
+- stage5 rejected 归档尚无真实端到端样本（stage7 `name_map_edit.json` 的真实样本
+  已于 2026-08-15 两本书补齐，此半条销）。
 
 修复时要给出能复现旧错误的样本，不能只改文案或让当前样本变绿。
 
+### BE-07 · 语义结论与上游事实的人工收口缺口（2026-08-15 三书验收中实测）
+
+- **语义结论够不到 wontfix 面**：`--wontfix` 的结论池 = review 产物内存的行，而
+  stage5/6 语义结论只在渲染时合并、不落 review 产物 ⇒「已裁不修」的语义残红无法收口
+  （实例：斗渣夫书 `semantic_secret_leak@ch7`，源书原文即含该揭示）。验收方式：
+  能对一条语义结论记录人工裁决且报告如实呈现「已裁不修」，含防洗绿测试。
+- **stage2 secret 无人工裁决口**：`--drop`/`human_adjudicated` 随死契约清理删除后，
+  `reader_reveal_events` 标错章时上游没有 0 成本改法。验收方式：给出契约内的
+  改法（编辑文件或等价物）且经落盘闸门重判。
+- **`inbox_view` 读旧契约书整条终态**：`_stage5_stalled_and_wontfix` 不捕
+  `ArtifactUnreadable`（同文件其余数据源都捕），对 v2 前的旧书实测直接终态，
+  HTTP `GET /inbox` 同病。验收方式：旧契约书上 inbox 六类照常输出、stage5 行如实
+  标「读不回来」。
+- **stage4 `--revalidate` 不重建 writer_context**（待裁决是否该同批重建）：手改
+  计划提升后 context 仍是旧的，需人记得跑 `stage4.context`；漏跑时写手吃旧 context
+  而无闸门出声。
+
 ## 尚未完成的验证
-
-### VAL-01 · 真正的 LLM 调用（大部分已销，剩 stage6.semantic）
-
-已销项：
-
-- 2026-08-13 三本真书付费跑通 stage0–7（`docs/E2E_VALIDATION_20260813.md`）——
-  本条目原文「stage2 受 BE-01 阻塞、stage4–7 无真实 smoke」自那次起不再成立；
-- 2026-08-14 用最短书付费验证了三件 e2e 之后的新实现：stage2 bounded-fidelity-v2
-  上下文 + 已现称名表、stage3 逐章防泄露、stage5.semantic 书级语义审判
-  （`docs/V2_SMOKE_20260814.md`，含模型、缓存命中、落盘产物、判据结果与重试的记录）。
-
-仍缺：**stage6.semantic 无真实书佐证**（08-14 批3 新节点，两次付费验证都没跑到它）。
-首次调用会花真钱，必须取得用户确认；验收口径同上（不得把真实密钥、正文或完整响应
-提交进仓库）。
 
 ### VAL-03 · 真链路回归样本
 
@@ -84,8 +90,11 @@
 
 - stage5 `run_write` / `run_revise` 的真实响应降级路径；
 - `.rejected.json` 归档；
-- stage7 人工映射编辑后的完整重放；
 - 真实服务上的付费确认、失败和重启后 unknown。
+
+（已销：stage7 人工映射编辑后的完整重放——2026-08-15 两本书各经
+`name_map_edit.json` → `--apply-edit` 重判 → 重新 approve/assemble 的真实链路，
+见 `docs/SKILL_E2E_20260815.md`。）
 
 ### VAL-04 · 重试参数与并发容量验证
 
