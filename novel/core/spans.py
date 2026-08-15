@@ -34,6 +34,7 @@ spans.py —— 把 `beat.span` 的首尾锚点在原文里**确定性定位**�
 """
 from __future__ import annotations
 
+from bisect import bisect_left
 import re
 from typing import Any, Iterator
 
@@ -137,6 +138,22 @@ def _find_or_recover(content: str, needle: str, start: int,
     return -1, needle
 
 
+def _find_exact_raw(text: str, needle: str, start: int,
+                    cmap: list[int]) -> tuple[int, int, int, int] | None:
+    """优先按原文字节定位锚点，并同时返回内容空间的首尾游标。
+
+    内容空间定位会丢掉标点；当锚点的区分信息恰好全在标点里时会选错同名字面。例如
+    ``温夏白:「......」`` 会坍缩成 ``温夏白``，``「母......」`` 会坍缩成
+    ``母``。模型已经逐字抄对时，原文字节命中比归一化命中更精确，必须优先使用；
+    找不到原样字节时仍回退到既有的内容空间/LCS 路径，保留半角全角和换行容错。
+    """
+    raw_start = text.find(needle, start)
+    if raw_start < 0:
+        return None
+    raw_end = raw_start + len(needle)
+    return raw_start, raw_end, bisect_left(cmap, raw_start), bisect_left(cmap, raw_end)
+
+
 def extend_punct(text: str, end: int) -> int:
     """把区间末尾延到**紧邻的标点**（不跨空白/换行）。
 
@@ -227,34 +244,52 @@ def walk_spans(bps: list[dict[str, Any]],
             if not a or not b:
                 yield o, be, None, f'{bid} 锚点无内容字符: {raw_a[:12]!r}/{raw_b[:12]!r}'
                 continue
-            # ⚠ `a` 被**重新绑定**成实际匹配到的串（救回来时它比原锚点短）：
-            #   下面每一处 `len(a)` 都是区间算术的输入，用原锚点的长度就是错位的偏移。
-            i, a = _find_or_recover(content, a, cur, recover)
-            if i < 0:
-                # 【先分清是「原文里没有」还是「被上一条越过去了」】两者的病因完全不同，
-                # 而说错了会让人去查一个**根本没问题**的锚点（判据 32）。
-                # 实测 `b06_06`：锚点「这套黑皮衣」在 ch6 内容序 216 好好地在那儿，
-                # 真正出问题的是 `b06_05` 的 `ends_with`「不知道放哪了」——它是**句子中间**的
-                # 六个字，落进了 `b06_06` 起始句的内部，把游标推过了头。
-                # 报「找不到」等于把上一条的越界说成这一条的锚点错。
-                back = content.find(a)
-                yield o, be, None, (
-                    f'{bid}.starts_with 落在游标【之前】(内容序 {back} < {cur})：'
-                    f'{raw_a[:14]!r} —— 锚点本身在原文里是对的，'
-                    f'是**上一条 beat 的 span 伸进了这一条的开头**（区间重叠 / 顺序倒置）。'
-                    f'契约：第 n 条的 starts_with 必须在第 n-1 条的 ends_with 之后。'
-                    f'要修的是上一条的 ends_with，不是这一条的 starts_with'
-                    if 0 <= back < cur else
-                    f'{bid}.starts_with 在 ch{o} 第 {cur} 字(内容序)之后找不到: {raw_a[:14]!r}')
-                continue
-            j, b = _find_or_recover(content, b, i, recover)      # 同上：`b` 也要接回去
-            if j < 0:
-                yield o, be, None, f'{bid}.ends_with 在 starts_with 之后找不到: {raw_b[:14]!r}'
-                continue
+            # 原样字节存在时先用它：标点可能正是重复字面的唯一消歧信息。找不到才走
+            # 内容空间；后者仍负责容忍换行、半/全角标点，以及 recover=True 时的 LCS。
+            exact_a = _find_exact_raw(text, raw_a, raw_cur, cmap)
+            if exact_a is not None:
+                a0, a_raw_end, i, _a_content_end = exact_a
+                a1 = extend_punct(text, a_raw_end)
+            else:
+                # ⚠ `a` 被**重新绑定**成实际匹配到的串（救回来时它比原锚点短）：
+                #   下面每一处 `len(a)` 都是区间算术的输入，用原锚点的长度就是错位的偏移。
+                i, a = _find_or_recover(content, a, cur, recover)
+                if i < 0:
+                    # 【先分清是「原文里没有」还是「被上一条越过去了」】两者的病因完全不同，
+                    # 而说错了会让人去查一个**根本没问题**的锚点（判据 32）。
+                    # 实测 `b06_06`：锚点「这套黑皮衣」在 ch6 内容序 216 好好地在那儿，
+                    # 真正出问题的是 `b06_05` 的 `ends_with`「不知道放哪了」——它是**句子中间**的
+                    # 六个字，落进了 `b06_06` 起始句的内部，把游标推过了头。
+                    # 报「找不到」等于把上一条的越界说成这一条的锚点错。
+                    back = content.find(a)
+                    yield o, be, None, (
+                        f'{bid}.starts_with 落在游标【之前】(内容序 {back} < {cur})：'
+                        f'{raw_a[:14]!r} —— 锚点本身在原文里是对的，'
+                        f'是**上一条 beat 的 span 伸进了这一条的开头**（区间重叠 / 顺序倒置）。'
+                        f'契约：第 n 条的 starts_with 必须在第 n-1 条的 ends_with 之后。'
+                        f'要修的是上一条的 ends_with，不是这一条的 starts_with'
+                        if 0 <= back < cur else
+                        f'{bid}.starts_with 在 ch{o} 第 {cur} 字(内容序)之后找不到: {raw_a[:14]!r}')
+                    continue
+                a0 = cmap[i]
+                a1 = extend_punct(text, cmap[i + len(a) - 1] + 1)
+
+            exact_b = _find_exact_raw(text, raw_b, a0, cmap)
+            if exact_b is not None:
+                b0, b_raw_end, j, b_content_end = exact_b
+                b1 = extend_punct(text, b_raw_end)
+            else:
+                j, b = _find_or_recover(content, b, i, recover)  # `b` 也要接回去
+                if j < 0:
+                    yield o, be, None, f'{bid}.ends_with 在 starts_with 之后找不到: {raw_b[:14]!r}'
+                    continue
+                b0 = cmap[j]
+                b1 = extend_punct(text, cmap[j + len(b) - 1] + 1)
+                b_content_end = j + len(b)
             # 两端都延到紧邻标点：区间要覆盖整句（含句末标点），否则 hinge 切片里就没有它
-            yield o, be, (cmap[i], extend_punct(text, cmap[i + len(a) - 1] + 1),
-                          cmap[j], extend_punct(text, cmap[j + len(b) - 1] + 1)), None
-            cur = j + len(b)
+            yield o, be, (a0, a1, b0, b1), None
+            cur = b_content_end
+            raw_cur = b1
 
 
 def locate_spans(bps: list[dict[str, Any]],

@@ -238,6 +238,32 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
                     assert hinge.source is not None
                     assert chapter[hinge.source.start:hinge.source.end] == hinge.source.text
         assert not ArtifactStore(blueprint_ctx).exists(extract._INVALID)
+
+        # 一次失败尝试留下 `.INVALID` 后，完整重跑成功必须把它归档；否则复检会按
+        # “问题稿优先”继续读旧失败版本，即使新的正式稿已经写好了。
+        store = ArtifactStore(blueprint_ctx)
+        _previous, formal_raw = store.read_own(
+            ChapterBlueprints, extract.BLUEPRINT_REL)
+        broken = copy.deepcopy(formal_raw)
+        broken_hinge = broken['blueprints'][0]['beats'][0]['hinges'][0]
+        broken_hinge['source'] = None
+        broken['_provenance']['verbatim_failures'] = [
+            ['b01_01', 'hinge', 'missing exact source span'],
+        ]
+        store.write_invalid(
+            extract.BLUEPRINT_REL,
+            ChapterBlueprints.model_validate(broken),
+            gates_skipped=[],
+        )
+        assert store.exists(extract._INVALID)
+
+        rerun_client, _rerun_transport = _client(blueprint_ctx, respond)
+        rerun_report = extract.run_blueprint(blueprint_ctx, rerun_client)
+
+        assert rerun_report.passed
+        assert not store.exists(extract._INVALID)
+        assert list((book / 'stage2' / '_rounds').glob(
+            'chapter_blueprints.INVALID.r*.json'))
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -378,6 +404,42 @@ def test_hinge_source_does_not_absorb_colon_or_unmatched_quote():
     assert accounting['verbatim_failures'] == []
     assert source['text'] == '冰冷链子'
     assert chapter[source['start']:source['end']] == source['text']
+
+
+@pytest.mark.parametrize(('chapter', 'starts_with', 'ends_with'), [
+    (
+        '说出这话的瞬间。\n\n温夏白脸上的笑意顿时僵住。\n\n'
+        '师姐想了想：「哦，所以呢？」\n\n温夏白:「......」\n\n若不是现在看着这两人就烦。',
+        '说出这话的瞬间。',
+        '温夏白:「......」',
+    ),
+    (
+        '我母妃心系百姓，却被父皇推出去做了罪人。\n\n她从城楼跳了下去。\n\n'
+        '我的喉咙里只能发出呜咽。\n\n「母......」\n\n下一刻，有人蒙住我的眼睛。',
+        '我母妃心系百姓',
+        '「母......」',
+    ),
+])
+def test_span_locator_prefers_exact_punctuation_disambiguation(
+        chapter, starts_with, ends_with):
+    """标点是唯一消歧信息时，不能先抹掉标点再误命中前面的同名字面。"""
+    blueprint = [{
+        'chapter_ordinal': 1,
+        'beats': [{
+            'beat_id': 'b01_01',
+            'span': {'starts_with': starts_with, 'ends_with': ends_with},
+            'hinges': [],
+        }],
+    }]
+
+    accounting = normalize_verbatim(blueprint, {1: chapter})
+
+    span = blueprint[0]['beats'][0]['span']
+    assert accounting['verbatim_failures'] == []
+    assert accounting['verbatim_rewrites'] == []
+    assert accounting['verbatim_recovered'] == []
+    assert span['text'].endswith(ends_with)
+    assert span['end'] > chapter.index(ends_with)
 
 
 def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
