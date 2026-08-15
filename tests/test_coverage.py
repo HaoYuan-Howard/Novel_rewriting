@@ -150,8 +150,37 @@ def test_structural_rows_that_name_a_repo_path_actually_point_at_it():
     # ——**那两段代码本来就在，欠的只是那一格没说出它们**）。
     # ⚠ 顺带说明这个数为什么该往上走而不是往下：`结构` 那一列的全部价值是
     # 「说得出是哪段代码在守」，而旧形态**对本条不可见**——移植一层就该多几行。
-    assert checked >= 32, (
+    # 32 →(TODO-16) **76**：最后 5 行裸符号（`R-3.4` 的散文指代 · `R-4.2` 的
+    # `measure()` · `R-4.3b` 的 `SYS`/`bands()` · `R-12.1c` 的 `extract.` 简写 ·
+    # `R-13.7` 的 `jobs.start`）全部改成 `仓内路径::名字`
+    # ——**那几段代码本来就在，欠的只是那一格没说出它们**。
+    assert checked >= 76, (
         f'只扫到 {checked} 个可解析落点——本条快要变成一条什么都没查的测试了')
+
+
+def test_every_structural_row_names_a_machine_locatable_site():
+    """⭐ **TODO-16 的兑现条件**：`结构` 行不许只写裸符号或散文。
+
+    上面那条只查「写出来的落点存不存在」，对**根本没写可解析落点**的行是盲的
+    ——那正是 `R-4.2` 的 `` `measure()` ``、`R-13.7` 的 `` `jobs.start` `` 这一族
+    长期躲过存在性检查的方式：两条正则都要求落点里至少有一个 `/`，
+    没有 `/` 就整行不可见，而 `test_structural_rows_name_their_code_site`
+    只要求「格子里有个反引号」，它们照样过。
+    ⇒ 本条把那个洞堵上：每一行 `结构` 至少要有一个**机器定位得到**的落点。
+
+    ⚠ 真定位不到时的正确做法是**改判成更诚实的类别**（`人` / `待建`），
+    不是在这里开豁免——一个说不出落点的 `结构` 读起来像有守卫而其实没有。
+    """
+    blind = []
+    for rid, r in DOC.of_kind('R').items():
+        if not (r.who and 'STRUCTURAL' in r.who.markers):
+            continue
+        if not (_CODE_SITE.findall(r.who.raw) or _BARE_PATH.findall(r.who.raw)):
+            blind.append(f'{rid}: {r.who.raw[:70]}…')
+    assert not blind, (
+        '这些 `结构` 行没有任何机器定位得到的落点（存在性检查看不见它们）：\n'
+        + '\n'.join(f'  {b}' for b in blind)
+        + '\n→ 改成 `仓内路径::名字`；真定位不到就改判成 `人` 或 `待建`')
 
 
 def test_carrier_rows_name_their_field():
