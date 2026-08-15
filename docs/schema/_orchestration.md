@@ -285,12 +285,12 @@ stage5 的粒度是**章**（`R-14.2`），逐章状态由 `stage5/<mode>/ch*.js
 | `QueuePlan` 字段 | 类型 | 内容 |
 |---|---|---|
 | `items` | `QueueItem[]` | 顺序即执行顺序（`NODES` 的声明顺序就是处理链顺序） |
-| `paid_items` | `int` | 花钱的项数。**不显示预估花费**（`Q-10`：猜一个数写在界面上比不显示更坏） |
+| `paid_items` | `int` | `items + blocked` 中花钱的项数。**闸门后面的命令也要在建队列时一次确认**，不能把“人后来清了闸门”偷换成付费授权；不显示预估花费 |
 | `blocked` | `QueueItem[]` | 被人工闸门挡住的那些，各带 `waiting_on` |
 
 ### 5.1 ⭐ 「停在那里」的计数形状 —— 三个数不许合并
 
-`R-13.4`：**任一项失败 → 停在那里，不跳过、不继续往下扣费。失败项与其后未跑的项分开计数。**
+`R-13.4`：**一本书任一项失败 → 该书停在那里，不跳过、不继续往下扣费；其他书的 lane 继续。失败项与同书其后未跑的项分开计数。**
 
 ```
 done: N     跑完了的
@@ -326,6 +326,32 @@ not_run: M  它后面那些，一步都没跑
 确认时摊开的仍是**将要执行的那些命令**（复数——所以是 `steps[].argv`，不是一条）。
 
 CLI 这一侧：没给 `--yes` 而计划里有付费项 ⇒ 打印全部命令并落显式终态 `ApprovalRequired`。
+
+### 5.4 `QueueStart` / `QueueEvent` / `QueueRun` —— 可恢复的真实队列
+
+`plan()` 仍是纯预览；`create()` 把确认过的命令冻结为 `QueueStart`，追加到
+`Output/_service/queues.jsonl`。runner **只能执行这份快照里的 `steps`**：恢复前会重新读取
+产物存在性、新鲜度与人工闸门，但重判只能使一项 `done/blocked/pending`，不能临时发明一条
+用户没有确认过的新付费命令。
+
+| 模型 | 关键字段 | 作用 |
+|---|---|---|
+| `QueueStart` | `sids` · `until_stage` · `plan` · `paid_confirmed` | 创建时的目标与一次性授权快照；有付费项却没确认时载体直接拒收 |
+| `QueueEvent` | `queue_id` · `kind` · `ts` · `item_index/state/job_id/exit_code/waiting_on/note` | append-only 状态变化；`created` 与 `item_state` 两种载荷严格互斥 |
+| `QueueEntry` | `index` · `item` · `state` · 作业/等待信息 | 一项的折叠视图 |
+| `QueueRun` | `queue_id` · `start` · `state` · `entries` · `counts_by_sid` | 整个持久队列的当前视图 |
+
+条目状态是 `pending / running / unknown / done / failed / not_run / cancelled / blocked`。
+`running` 只在本进程 runner 活锁仍在时成立；服务重启后旧 `running` 先显示 `unknown`，再按
+`jobs.jsonl` 与盘面恢复：作业已有终态就照终态折；作业 unknown 但正式产物存在且 fresh 就记
+`done`、不重启；仍需执行才退回 `pending`，沿用原命令和缓存。
+
+每本书一条 lane，不同书并行。同书首个 `failed` 后，后续未启动项逐条记 `not_run`；另一书
+不受影响。取消只接收 `pending/blocked`，被取消项记 `cancelled`，同书后续记 `not_run`；
+`running` 明确拒绝，不能把已经在途的 LLM 请求伪装成可无损取消。
+
+人工闸门每项启动前重读。`stage0.edit` 是可选人工能力，不是流水线必经闸门；三道真正的
+approve 闸门读取现役类型里的批准字段，已经批准就跳过，未批准才持久显示 `waiting_on`。
 
 ---
 
@@ -380,6 +406,7 @@ active_key(sid, node, mode) -> str
 
 ```
 Output/_service/jobs.jsonl        append-only 事件流
+Output/_service/queues.jsonl      持久批量队列 append-only 事件流
 Output/_service/agent_runs.jsonl  headless agent append-only 事件流（含双授权快照）
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
 Output/_service/ledger.jsonl      跨书逐请求成本事实（旁有 ledger.jsonl.lock）

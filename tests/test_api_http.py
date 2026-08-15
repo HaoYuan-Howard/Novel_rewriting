@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient          # noqa: E402
 from contracts.invariants import STAGES            # noqa: E402
 from novel.api.app import HOST, PORT, UI_HEADER, create_app   # noqa: E402
 from novel.orchestrator import jobs as J           # noqa: E402
+from novel.orchestrator import queue as Q          # noqa: E402
 from novel.orchestrator.nodes import build_steps   # noqa: E402
 from tests import corpus, sandbox                  # noqa: E402
 
@@ -281,8 +282,13 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/check/{kind}': ['GET'],
         '/api/jobs': ['GET', 'POST'],
         '/api/jobs/{job_id}': ['GET'],
-        '/api/jobs/{job_id}/log': ['GET'],
-        '/api/jobs/preview': ['POST'],
+            '/api/jobs/{job_id}/log': ['GET'],
+            '/api/jobs/preview': ['POST'],
+            '/api/queues': ['GET', 'POST'],
+            '/api/queues/preview': ['POST'],
+            '/api/queues/{queue_id}': ['GET'],
+            '/api/queues/{queue_id}/resume': ['POST'],
+            '/api/queues/{queue_id}/items/{item_index}/cancel': ['POST'],
         '/api/novels/{sid}/stage0/report': ['GET'],
         '/api/novels/{sid}/stage0/segments': ['GET'],
         '/api/novels/{sid}/stage0/edit': ['POST'],
@@ -435,7 +441,46 @@ def test_jobs_can_be_filtered_by_book(client, box):
     assert client.get('/api/jobs?sid=another').json()['jobs'] == []
 
 
-# ───────────────────────── 七、绑定（`R-11.1`） ─────────────────────────
+# ───────────────────────── 七、持久批量队列（TODO-01） ─────────────────────────
+
+def test_queue_preview_is_pure_and_create_persists_the_confirmed_instance(
+        client, box, monkeypatch):
+    before = _tree(box.root)
+    preview = client.post('/api/queues/preview', json={
+        'sids': [box.sid], 'until_stage': 'stage1', 'confirmed': False,
+    })
+    assert preview.status_code == 200
+    assert _tree(box.root) == before, 'preview 不该建立队列或写任何文件'
+
+    def do_not_spawn(base, queue_id):
+        return next(record for record in Q.records(base)
+                    if record.queue_id == queue_id)
+
+    monkeypatch.setattr(Q, 'start', do_not_spawn)
+    created = client.post('/api/queues', json={
+        'sids': [box.sid], 'until_stage': 'stage1', 'confirmed': False,
+    })
+    assert created.status_code == 202
+    queue_id = created.json()['queue_id']
+    listed = client.get('/api/queues').json()['queues']
+    assert any(record['queue_id'] == queue_id for record in listed)
+    assert client.get(f'/api/queues/{queue_id}').status_code == 200
+
+
+def test_queue_api_requires_confirmation_before_persisting_paid_commands(client, box):
+    preview = client.post('/api/queues/preview', json={
+        'sids': [box.sid], 'until_stage': 'stage4', 'confirmed': False,
+    }).json()
+    if not preview['paid_items']:
+        pytest.skip('这本语料到 stage4 没排出付费项——本条没在查')
+    refused = client.post('/api/queues', json={
+        'sids': [box.sid], 'until_stage': 'stage4', 'confirmed': False,
+    })
+    assert refused.status_code == 409
+    assert refused.json()['kind'] == 'ApprovalRequired'
+
+
+# ───────────────────────── 八、绑定（`R-11.1`） ─────────────────────────
 
 def test_the_only_bindable_host_is_loopback():
     """`R-11.1` 的四条理由（会执行进程 · 花真钱 · 写盘 · 传不外流的正文）

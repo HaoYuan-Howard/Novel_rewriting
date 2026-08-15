@@ -46,6 +46,7 @@ from contracts.invariants import (
     NONBODY_KINDS,
     REMOVED_ORIGIN,
     SEVERITY,
+    STAGES,
     STAGE0_SEGMENT_KINDS,
     STAGE1_SEGMENT_KINDS,
     TIME_LAYERS,
@@ -55,7 +56,7 @@ from contracts.schema.base import FrozenModel, Sha1, StrictModel
 from contracts.schema.common import Finding
 from contracts.schema.orchestration import (
     AgentRunRecord, ArtifactState, Freshness, FreshnessReason, JobRecord,
-    NovelOverview,
+    NovelOverview, QueueRun,
 )
 from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage2 import (
@@ -467,6 +468,26 @@ class PreviewRequest(StrictModel):
     node: str = Field(min_length=1)
     mode: str | None = None
     flags: list[str] = Field(default_factory=list)
+
+
+class QueueCreateRequest(StrictModel):
+    """``POST /api/queues`` and ``/preview`` request body."""
+
+    sids: list[str] = Field(min_length=1)
+    until_stage: str = Field(min_length=1)
+    confirmed: bool = False
+
+    @model_validator(mode='after')
+    def _valid_queue_target(self) -> QueueCreateRequest:
+        if self.sids != list(dict.fromkeys(self.sids)):
+            raise ValueError('queue sids must be unique in requested order')
+        if self.until_stage not in STAGES:
+            raise ValueError(f'unknown queue target stage {self.until_stage!r}')
+        return self
+
+
+class QueueList(StrictModel):
+    queues: list[QueueRun] = Field(default_factory=list)
 
 
 class AgentRunRequest(StrictModel):

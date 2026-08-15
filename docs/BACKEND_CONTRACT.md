@@ -866,23 +866,20 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-13.1 | 队列以「书 × 目标阶段」为单位，可排入、可取消**尚未开始**的项 | **`结构`**（排入 = `novel/orchestrator/queue.py::plan`，纯函数）+ **待建**（**取消**尚未开始的项还没做——它要一份存活的队列实例，而现在的队列是「一次算出一份计划」，**没有可取消的对象**） |
+| R-13.1 | 队列以「书 × 目标阶段」为单位，可排入、可取消**尚未开始**的项 | **`结构`**（`novel/orchestrator/queue.py::create` 冻结 `QueueStart` 并追加 `queues.jsonl`；`novel/orchestrator/queue.py::cancel` 只接收 `pending/blocked`，运行中明确拒绝）+ API/CLI 行为回归 |
 | R-13.2 | **一本书同时只跑一个作业**这条不变（唯一例外仍是写作的两条臂）；队列只决定顺序，不放宽互斥 | **`结构`**（互斥键唯一落点 `novel/orchestrator/jobs.py::active_key`；队列不碰它） |
-| R-13.3 | **花钱的项必须一次性预先确认**，不能因为「排进队列了」就变成静默扣费。确认时摊开的仍是**将要执行的那些命令** | **`结构`**（`novel/orchestrator/queue.py::confirm` 落 `ApprovalRequired`）+ **`人`**（确认这个动作按设计就该人做，见 `B-19`） |
-| R-13.4 | 任一项失败 → **停在那里，不跳过、不继续往下扣费**。失败项与其后未跑的项分开计数 | **`结构`**（`novel/orchestrator/queue.py::fold_counts` 折三个数；`contracts/schema/orchestration.py::QueueCounts` 在载体上拒收「第二个失败项」与「没有失败却有没跑的项」） |
-| R-13.5 | 需要人裁决的闸门（文案定稿 / 人名表定稿 / 待人工非空）**会挡住队列**，并明确说出在等谁 | **`结构`**（`novel/orchestrator/queue.py::plan_book` 的 `waiting_on`；载体拒收「说不出在等谁的 blocked 项」） |
+| R-13.3 | **花钱的项必须一次性预先确认**，不能因为「排进队列了」就变成静默扣费。确认时摊开的仍是**将要执行的那些命令** | **`结构`**（`novel/orchestrator/queue.py::confirm` 落 `ApprovalRequired`；`contracts/schema/orchestration.py::QueueStart` 对有付费项却没 `paid_confirmed` 的实例拒收）+ **`人`**（确认这个动作按设计就该人做，见 `B-19`） |
+| R-13.4 | 任一项失败 → **同书停在那里**，不跳过、不继续往下扣费；另一书继续。失败项与同书其后未跑项分开计数 | **`结构`**（`novel/orchestrator/queue.py::_run_lane` 每书一条 lane，首个失败后追加 `not_run`；`contracts/schema/orchestration.py::QueueLaneCounts` 保留 done/failed/not_run）+ 两书一败一成回归 |
+| R-13.5 | 需要人裁决的闸门（stage0 批准 / 文案定稿 / 人名表定稿 / 待人工非空）**会挡住队列**，并明确说出在等谁 | **`结构`**（每项前 `novel/orchestrator/queue.py::plan_book` 重读盘面；`novel/orchestrator/queue.py::_human_gate_satisfied` 识别已有批准；`stage0.edit` 明确是可选能力而非必经闸） |
 | R-13.6 | 队列本身**不产生新的判定**，也不放宽任何落盘闸门 | **`结构`**（`tests/test_layering.py::test_the_queue_cannot_reach_the_judgement_layer`：`queue.py` 够不到 `novel.report`，连「顺手判一下」都做不到） |
-| R-13.7 | 不同小说的作业可以并行执行；互斥范围只落在各自 `sid`。每个后台作业独立启动 CLI 子进程，一本书失败或阻塞不占用另一本书的键 | `结构`（`novel/orchestrator/jobs.py::start` + `novel/orchestrator/jobs.py::active_key`）+ 两本书同时进入子进程的线程回归 |
+| R-13.7 | 不同小说的作业可以并行执行；互斥范围只落在各自 `sid`。每个后台作业独立启动 CLI 子进程，一本书失败或阻塞不占用另一本书的键 | `结构`（`novel/orchestrator/queue.py::_execute` 每书一个线程，调用 `novel/orchestrator/jobs.py::start`；互斥仍唯一落在 `novel/orchestrator/jobs.py::active_key`）+ barrier 证明两本书同时进入子进程的回归 |
 
 ⚠ **批量的风险与单本不同**：单本跑错，人当场看得见；批量跑错，是**一批产物同时坏掉且没人在看**。
 所以 R-13.4 的「停在那里」不是保守，是这条能力成立的前提。
 
-> ### ⚠ R-13.1 只清掉了一半，另一半仍写着「待建」——**这是有意的**
->
-> 文档自己在第五节立过：「**这一列不许在实现之后还留着 `待建`**」。
-> 但反过来那一条更要紧：**把没做的事标成有守卫，比留着「待建」坏得多**——
-> 前者会让人以为有一道闸在那儿，而闸后面是空的（那正是本文档第四节警告的形状）。
-> ⇒ 做完的那半写落点，没做的那半照旧写「待建」并说清在等什么。
+持久载体是 `_service/queues.jsonl`：创建、运行、取消、阻塞和恢复全部 append-only，服务重启后
+旧 `running` 先改判 `unknown`，再对照 `jobs.jsonl` 与正式产物恢复。作业已经成功，或正式产物
+存在且 fresh 时直接记 `done`；仍需执行才沿用创建时冻结的命令和缓存重试，不能在恢复时扩张授权面。
 
 ### R-14 · 断点续跑 【**新增能力**，原型没有】
 
@@ -1139,6 +1136,10 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
 > 通用 `POST /api/jobs` 已开放，并与预览共用 `plan_start()`。同一本书第二个启动请求
 > 返回 409；不同小说的后台作业可并行；stage5 deep/shallow 单臂是唯一书内并发例外。
 > 覆盖见 `tests/test_api_discipline.py` 与 `tests/test_orchestrator_jobs.py`。
+>
+> 持久批量入口同步开放：`/api/queues`（列表/创建）、`/preview`、`/:id`、`/:id/resume`
+> 与 `/:id/items/:index/cancel`。预览纯读；创建先确认并冻结命令；取消只接收尚未开始项；
+> 服务 lifespan 自动恢复非终态队列。公开面由 `tests/test_api_http.py` 精确钉住。
 
 ⚠ `R-13` / `R-14` 是新增能力，**原型里没有任何守卫可供反查**。
 它们的「谁在查」一律是 `待建`——这一列不许在实现之后还留着 `待建`，
@@ -1221,7 +1222,7 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
 15. 未对齐块必须带可见边界和“未验证对应”的文字，不得用空白暗示已对齐。
 16. loading / error / not-run / normal 四态每屏齐备；not-run 说明下一步，不写“暂无数据”。
 17. 不发明健康分、AI 建议卡、项目百分比；只显示有来源的状态与读数。
-18. 不提供运行中取消按钮；只允许未来的持久队列取消尚未开始项。
+18. 不提供运行中取消按钮；持久队列只允许取消尚未开始的 `pending/blocked` 项，运行中返回 409。
 19. 状态不能只靠颜色：同时用形状与文字，满足长时间审校和色觉差异。
 20. 目标视口 1280～2560 桌面宽屏；不要求移动端和响应式重排。
 
@@ -1363,7 +1364,7 @@ npm --prefix web run build
 | 2026-08-14 | v2 与语义审判 | bounded context 和 stage5 semantic 真跑；当时未跑 stage6/7 的限制已被次日完整验收覆盖 |
 | 2026-08-15 | 模型×思考 A/B | pro+thinking 保留；flash 未达到质量门；no-thinking 在 stage2.global 稳定失败。模型选择先过质量门，再比较速度与价格；生成与评审能力分开评价 |
 | 2026-08-15 | skill 盲驱三书 | 共记录 359 次付费调用、47 次缓存命中；第三书由只读操作规程的执行者盲驱。暴露的 wontfix、secret 人工校正、重采样和中断恢复缺口已转入活动待办 |
-| 2026-08-14～15 | 代码与产物复审 | 队列只有计划、整本下发有 token 悬崖、风格漂移缺闭环、schema 无显式版本、重复路径/辅助函数仍在；已修复的 exit collision、旧 inbox、stage4 revalidate、stage6 段间归一和 stage7 无前稿编辑不再列为缺口 |
+| 2026-08-14～15 | 代码与产物复审 | 当时发现队列只有计划（现已由持久 runner/取消/重启恢复闭环）、整本下发有 token 悬崖、风格漂移缺闭环、schema 无显式版本、重复路径/辅助函数仍在；已修复的 exit collision、旧 inbox、stage4 revalidate、stage6 段间归一和 stage7 无前稿编辑不再列为缺口 |
 | 2026-08-15 | 盘面 36 条红逐条定性 | **生产代码 bug 0 条**：11 个病灶在守卫侧（测试台重拼生产实参 / 断言了产品明说不存在的闸 / fixture 比载体老），3 个在语料侧（缺 `--identity` 那一趟 · stage6 语义产物是旧版剧透审判 · `hook.json` 对自身上游 `consumed_changed`）。守卫侧全部修掉并配反漂移守卫；语料侧改成**显式声明依赖哪一版产物**（`tests/corpus.py::declared_dependency` 要求写出缺哪一份、补它跑哪个节点、要不要花钱）。收官盘面：0 失败 / 4 条声明式 skip。教训见 `docs/LESSONS.md` §21 |
 | 2026-08-15 | 语义结论的持久身份 | 裁为 `(层, 章\|book, 判据, 证据键)`，**层由文件路径承载**（`<stage>/wontfix.json`，逐层一份账），审判产物版本只进审计账 `at`、不参与匹配。备选「版本进匹配键」被否：语义审判是付费节点、重跑是常态，一次不改变任何结论的重审会把整本账清空 ⇒ 等于没有豁免。失效改由**证据自身**保证（语义证据是候选/正文的连续原字节）。豁免入口逐层挂在该层的 0 成本复检节点上（`stage5.review` / `stage6.hook`） |
 

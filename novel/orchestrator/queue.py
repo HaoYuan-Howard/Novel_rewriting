@@ -7,6 +7,11 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 **不跑、不写、不发请求**。于是「排这一批会花多少次调用、会写哪些文件、
 命令逐条长什么样」可以 0 成本地摊开给人看，而那正是 `R-13.3` 要人确认的东西。
 
+【`create()` + runner 才是真队列】确认后的整份命令快照追加进
+`_service/queues.jsonl`；每本书一条 lane，不同书并行。同书首项失败后其余项记
+`not_run`，人工闸门持久写 `waiting_on`。服务重启时，旧 running 先成为 unknown，
+再对照 jobs 事件与产物存在性/新鲜度恢复；runner 从不临时扩张已确认的命令面。
+
 【⚠ 队列本身不产生新的判定】`R-13.6` → `R-11.4`：**造第二个判官就是造第二个落点。**
 这条**由结构保证**：本模块不许 import `novel.report`，由 `tests/test_layering.py`
 的一条 AST 测试钉着。队列读的是完成度（`state.py`），而完成度读的是盘上有什么。
@@ -17,20 +22,40 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 """
 from __future__ import annotations
 
+import json
 import os
-from collections.abc import Iterable, Sequence
+import threading
+import time
+import traceback
+import uuid
+from collections.abc import Callable, Iterable, Sequence
+from pathlib import Path
 
 from contracts.invariants import NODES, STAGES
-from contracts.schema.orchestration import QueueCounts, QueueItem, QueuePlan
-from novel.errors import ApprovalRequired
-from novel.orchestrator import state as st
+from contracts.schema.orchestration import (
+    QueueCounts, QueueEntry, QueueEvent, QueueItem, QueueLaneCounts, QueuePlan,
+    QueueRun, QueueStart,
+)
+from contracts.schema.stage0 import RemovalReport
+from contracts.schema.stage6 import Hook
+from contracts.schema.stage7 import NameMap
+from novel import paths, prov
+from novel.cli.exit_codes import CRASH
+from novel.errors import ApprovalRequired, ArtifactUnreadable, QueueConflict, UpstreamMissing
+from novel.orchestrator import jobs, state as st
 from novel.orchestrator.nodes import build_steps
+from novel.store import ArtifactStore
 
 #: 人做的那几个动作。**队列永不自动排它们**——`stage6.approve` 换一条候选、
 #: `--apply-edit` 改一个字，都是「人看过之后的裁决」，机器替不了。
 #: ⚠ 它们进 `blocked` 而不是被跳过：被跳过的闸门在界面上与「不需要它」长得一样。
 HUMAN_NODES: frozenset[str] = frozenset(
     {n for n in NODES if n.endswith('.approve')} | {'stage0.edit'})
+
+#: ``stage0.edit`` is a human capability, not a mandatory gate.  Listing it as
+#: an automatic step would make every book wait forever for an edit the user
+#: may neither need nor want.
+OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
@@ -77,6 +102,32 @@ def _gate_is_reachable(ov, stage: str) -> bool:
     return bool(s and any(a.exists for a in s.artifacts))
 
 
+def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> bool:
+    """Read the gate's existing typed artifact; do not invent a queue verdict.
+
+    These three fields are the same fields consumed by their downstream
+    stages.  Reading them here keeps the queue from permanently blocking an
+    already approved book while still leaving the actual decision to a human.
+    """
+    model_rel = {
+        'stage0.approve': (RemovalReport, 'stage0/removal_report.json'),
+        'stage6.approve': (Hook, 'stage6/hook.json'),
+        'stage7.approve': (NameMap, 'stage7/name_map.json'),
+    }.get(node)
+    if model_rel is None:
+        return False
+    model, rel = model_rel
+    try:
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        store = ArtifactStore(st.readonly_ctx(novel_dir, node, prov.code_version()))
+        artifact, _ = store.read_own(model, rel)
+    except (UpstreamMissing, ArtifactUnreadable):
+        return False
+    if node == 'stage0.approve':
+        return artifact.approved == 'approved'
+    return artifact.approved is not None
+
+
 def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
               follow_check: bool = True) -> tuple[list[QueueItem], list[QueueItem]]:
     """一本书的 `(要跑的, 被挡住的)`。**纯函数**（只读盘，不写、不发请求）。"""
@@ -92,8 +143,12 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
         mode = spec.modes[0] if spec.modes else None
         why_blocked = stuck
         if why_blocked is None and node in HUMAN_NODES:
+            if node in OPTIONAL_HUMAN_NODES:
+                continue                             # 可选人工编辑不是流水线必经闸门
             if not _gate_is_reachable(ov, spec.stage):
                 continue                             # 还没轮到它，不是「在等人」
+            if _human_gate_satisfied(base, sid, node):
+                continue                             # 人已经完成这道闸
             why_blocked = node                       # 在等这一步的那个人
         if why_blocked is None:
             ghosts = _upstream_invalid(ov, spec.stage)
@@ -140,7 +195,7 @@ def plan(base: str | os.PathLike[str], sids: Sequence[str], *, until_stage: str,
         items += todo
         blocked += stop
     return QueuePlan(items=items, blocked=blocked,
-                     paid_items=sum(1 for it in items
+                     paid_items=sum(1 for it in items + blocked
                                     if any(s.paid for s in it.steps)))
 
 
@@ -157,7 +212,7 @@ def confirm(p: QueuePlan, *, yes: bool) -> None:
     if yes or not p.paid_items:
         return
     lines = [f'这批计划里有 {p.paid_items} 项会花钱。将要执行的命令：']
-    for it in p.items:
+    for it in p.items + p.blocked:
         for s in it.steps:
             if s.paid:
                 lines.append(f'  $ {" ".join(s.argv)}')
@@ -187,5 +242,494 @@ def fold_counts(outcomes: Iterable[bool], total: int) -> QueueCounts:
     return QueueCounts(done=done, failed=failed, not_run=total - done - failed)
 
 
-__all__ = ['HUMAN_NODES', 'WAITING_ON_INBOX', 'confirm', 'fold_counts',
-           'nodes_up_to', 'plan', 'plan_book']
+# ─────────────────────────────────────────────────────────────────────────────
+# 持久队列：append-only 事件、折叠视图与 runner（TODO-01）
+# ─────────────────────────────────────────────────────────────────────────────
+
+QUEUES_FILENAME = 'queues.jsonl'
+RESTART_NOTE = '服务重启前这项已经交给作业执行器，但队列没有记到终态；先对照作业与产物恢复'
+_EVENT_APPEND_LOCK = threading.Lock()
+_STATE_LOCK = threading.RLock()
+
+
+class QueueRegistry:
+    """Process-local queue runners; persisted truth remains the event stream."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._live: set[str] = set()
+
+    def acquire(self, queue_id: str) -> None:
+        with self._lock:
+            if queue_id in self._live:
+                raise QueueConflict(f'队列 {queue_id} 已有 runner 在消费')
+            self._live.add(queue_id)
+
+    def release(self, queue_id: str) -> None:
+        with self._lock:
+            self._live.discard(queue_id)
+
+    def live(self) -> set[str]:
+        with self._lock:
+            return set(self._live)
+
+
+REGISTRY = QueueRegistry()
+_THREADS_LOCK = threading.Lock()
+_THREADS: dict[str, threading.Thread] = {}
+
+
+def queue_path(base: str | os.PathLike[str]) -> Path:
+    return jobs.service_dir(base) / QUEUES_FILENAME
+
+
+def append_event(base: str | os.PathLike[str], event: QueueEvent) -> None:
+    """Append one durable queue transition; never read-modify-write the log."""
+    p = queue_path(base)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(event.model_dump(mode='json'), ensure_ascii=False)
+    with _EVENT_APPEND_LOCK:
+        with open(p, 'ab') as stream:
+            stream.write(line.encode('utf-8') + b'\n')
+            stream.flush()
+
+
+def read_events(base: str | os.PathLike[str]) -> list[QueueEvent]:
+    """Read queue events, tolerating only a truncated final line."""
+    p = queue_path(base)
+    if not p.is_file():
+        return []
+    raw = p.read_bytes().decode('utf-8', errors='replace').splitlines()
+    out: list[QueueEvent] = []
+    for index, line in enumerate(raw):
+        if not line.strip():
+            continue
+        try:
+            out.append(QueueEvent.model_validate(json.loads(line)))
+        except Exception:  # noqa: BLE001 - only the interrupted tail is recoverable
+            if index == len(raw) - 1:
+                break
+            raise
+    return out
+
+
+def new_queue_id(now: float | None = None) -> str:
+    return f'q-{int(now if now is not None else time.time())}-{uuid.uuid4().hex[:8]}'
+
+
+def _ordered_items(start: QueueStart) -> list[QueueItem]:
+    """Restore book order and node order after QueuePlan's runnable/blocked split."""
+    rank = {node: index for index, node in enumerate(NODES)}
+    all_items = start.plan.items + start.plan.blocked
+    out: list[QueueItem] = []
+    for sid in start.sids:
+        lane = [item for item in all_items if item.sid == sid]
+        out.extend(sorted(lane, key=lambda item: rank[item.node]))
+    return out
+
+
+def _lane_counts(entries: list[QueueEntry]) -> QueueLaneCounts:
+    states = ('done', 'failed', 'not_run', 'pending', 'running', 'unknown',
+              'cancelled', 'blocked')
+    values = {state: sum(entry.state == state for entry in entries) for state in states}
+    return QueueLaneCounts(**values)
+
+
+def _run_state(entries: list[QueueEntry]) -> str:
+    states = {entry.state for entry in entries}
+    if 'running' in states:
+        return 'running'
+    if 'failed' in states:
+        return 'failed'
+    if 'unknown' in states:
+        return 'unknown'
+    if 'pending' in states:
+        return 'pending'
+    if 'blocked' in states:
+        return 'blocked'
+    if 'cancelled' in states:
+        return 'cancelled'
+    return 'ok'
+
+
+def fold(events: Iterable[QueueEvent], *, live: set[str] | None = None) -> list[QueueRun]:
+    """Fold the durable stream; stale ``running`` becomes explicit ``unknown``."""
+    live = set() if live is None else set(live)
+    starts: dict[str, tuple[int, QueueStart]] = {}
+    transitions: dict[str, list[QueueEvent]] = {}
+    updated: dict[str, int] = {}
+    for event in events:
+        updated[event.queue_id] = event.ts
+        if event.kind == 'created':
+            if event.queue_id in starts:
+                raise ValueError(f'duplicate created event for queue {event.queue_id}')
+            assert event.start is not None
+            starts[event.queue_id] = (event.ts, event.start)
+        else:
+            transitions.setdefault(event.queue_id, []).append(event)
+
+    out: list[QueueRun] = []
+    for queue_id, (created, start) in starts.items():
+        entries = [QueueEntry(
+            index=index, item=item,
+            state='blocked' if item.waiting_on else 'pending',
+            waiting_on=item.waiting_on,
+            note=item.why if item.waiting_on else None,
+        ) for index, item in enumerate(_ordered_items(start))]
+        for event in transitions.get(queue_id, []):
+            assert event.item_index is not None and event.state is not None
+            if event.item_index >= len(entries):
+                raise ValueError(
+                    f'queue {queue_id} event points outside plan: {event.item_index}')
+            old = entries[event.item_index]
+            entries[event.item_index] = QueueEntry(
+                index=old.index, item=old.item, state=event.state,
+                job_id=event.job_id, exit_code=event.exit_code,
+                waiting_on=event.waiting_on, note=event.note,
+            )
+        if queue_id not in live:
+            entries = [
+                entry.model_copy(update={'state': 'unknown', 'note': RESTART_NOTE})
+                if entry.state == 'running' else entry
+                for entry in entries
+            ]
+        counts = {
+            sid: _lane_counts([entry for entry in entries if entry.item.sid == sid])
+            for sid in start.sids
+        }
+        out.append(QueueRun(
+            queue_id=queue_id, created=created,
+            updated=updated.get(queue_id, created), start=start,
+            state=_run_state(entries), entries=entries, counts_by_sid=counts,
+        ))
+    return sorted(out, key=lambda record: record.created, reverse=True)
+
+
+def records(base: str | os.PathLike[str], *,
+            registry: QueueRegistry = REGISTRY) -> list[QueueRun]:
+    return fold(read_events(base), live=registry.live())
+
+
+def _one(base: str | os.PathLike[str], queue_id: str, *,
+         registry: QueueRegistry = REGISTRY) -> QueueRun:
+    record = next((record for record in records(base, registry=registry)
+                   if record.queue_id == queue_id), None)
+    if record is None:
+        raise UpstreamMissing(f'没有 queue_id={queue_id!r} 的持久队列')
+    return record
+
+
+def create(base: str | os.PathLike[str], sids: Sequence[str], *, until_stage: str,
+           yes: bool, follow_check: bool = True,
+           queue_id: str | None = None) -> QueueRun:
+    """Plan, confirm and persist a queue without starting its runner."""
+    unique = list(dict.fromkeys(sids))
+    if not unique or len(unique) != len(sids):
+        raise QueueConflict('队列必须至少包含一本书，且 sid 不得重复')
+    planned = plan(base, unique, until_stage=until_stage, follow_check=follow_check)
+    confirm(planned, yes=yes)
+    queue_id = queue_id or new_queue_id()
+    if any(event.queue_id == queue_id for event in read_events(base)):
+        raise QueueConflict(f'queue_id={queue_id!r} 已存在')
+    start = QueueStart(
+        sids=unique, until_stage=until_stage, plan=planned,
+        paid_confirmed=bool(yes or not planned.paid_items),
+    )
+    append_event(base, QueueEvent(
+        queue_id=queue_id, kind='created', ts=int(time.time()), start=start))
+    return _one(base, queue_id)
+
+
+def _append_state(base: str | os.PathLike[str], queue_id: str, index: int,
+                  state: str, *, job_id: str | None = None,
+                  exit_code: int | None = None, waiting_on: str | None = None,
+                  note: str | None = None) -> None:
+    append_event(base, QueueEvent(
+        queue_id=queue_id, kind='item_state', ts=int(time.time()),
+        item_index=index, state=state, job_id=job_id, exit_code=exit_code,
+        waiting_on=waiting_on, note=note,
+    ))
+
+
+def cancel(base: str | os.PathLike[str], queue_id: str, item_index: int, *,
+           registry: QueueRegistry = REGISTRY) -> QueueRun:
+    """Cancel only an item that has never started, then stop its novel lane."""
+    with _STATE_LOCK:
+        run = _one(base, queue_id, registry=registry)
+        if item_index < 0 or item_index >= len(run.entries):
+            raise QueueConflict(f'队列 {queue_id} 没有第 {item_index} 项')
+        target = run.entries[item_index]
+        if target.state not in ('pending', 'blocked'):
+            raise QueueConflict(
+                f'第 {item_index} 项当前是 {target.state}；只能取消尚未开始的 pending/blocked 项，'
+                '运行中的 LLM 调用不能伪装成可无损取消')
+        reason = f'人工取消尚未开始的第 {item_index} 项'
+        _append_state(base, queue_id, item_index, 'cancelled', note=reason)
+        for entry in run.entries[item_index + 1:]:
+            if entry.item.sid == target.item.sid and entry.state in ('pending', 'blocked'):
+                _append_state(
+                    base, queue_id, entry.index, 'not_run',
+                    note=f'同书较早的第 {item_index} 项被取消；本项未启动')
+    return _one(base, queue_id, registry=registry)
+
+
+def _live_disposition(base: str | os.PathLike[str], run: QueueRun,
+                      entry: QueueEntry) -> tuple[str, str | None, str]:
+    """Recheck disk state before launch; return state/waiting_on/reason."""
+    todo, blocked = plan_book(
+        base, entry.item.sid, until_stage=run.start.until_stage)
+    matches = [item for item in todo + blocked
+               if item.node == entry.item.node and item.mode == entry.item.mode]
+    if not matches:
+        return 'done', None, '盘上产物存在且当前新鲜，恢复时跳过，不重复调用'
+    current = matches[0]
+    if current.waiting_on:
+        return 'blocked', current.waiting_on, current.why
+    return 'pending', None, current.why
+
+
+def _job_record(base: str | os.PathLike[str], job_id: str,
+                registry: jobs.JobRegistry) -> object | None:
+    return next((record for record in jobs.records(base, registry=registry)
+                 if record.job_id == job_id), None)
+
+
+def _recover_running(base: str | os.PathLike[str], run: QueueRun,
+                     entry: QueueEntry, *, job_registry: jobs.JobRegistry) -> str:
+    """Recover one stale running event from job records and artifact truth."""
+    assert entry.job_id is not None
+    job = _job_record(base, entry.job_id, job_registry)
+    if job is not None and job.state == 'running':
+        return 'running'
+    if job is not None and job.state in ('ok', 'failed'):
+        state = 'done' if job.state == 'ok' else 'failed'
+        _append_state(
+            base, run.queue_id, entry.index, state, job_id=entry.job_id,
+            exit_code=job.exit_code, note='从持久作业终态恢复队列项')
+        return state
+    disposition, waiting_on, reason = _live_disposition(base, run, entry)
+    if disposition == 'done':
+        _append_state(
+            base, run.queue_id, entry.index, 'done', job_id=entry.job_id,
+            note=f'{RESTART_NOTE}；{reason}')
+        return 'done'
+    _append_state(
+        base, run.queue_id, entry.index, disposition,
+        waiting_on=waiting_on,
+        note=(f'{RESTART_NOTE}；旧作业是 unknown，当前盘面仍需执行；'
+              '重试沿用原命令与缓存，不把 unknown 当成功'),
+    )
+    return disposition
+
+
+def _mark_not_run_after(base: str | os.PathLike[str], run: QueueRun,
+                        failed: QueueEntry) -> None:
+    for entry in run.entries[failed.index + 1:]:
+        if entry.item.sid == failed.item.sid and entry.state in (
+                'pending', 'blocked', 'unknown'):
+            _append_state(
+                base, run.queue_id, entry.index, 'not_run',
+                note=f'同书第 {failed.index} 项失败后停下；本项没有启动')
+
+
+def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
+              spawn: jobs.Spawn, queue_registry: QueueRegistry,
+              job_registry: jobs.JobRegistry) -> None:
+    # A successful fake/test subprocess does not necessarily materialize an
+    # artifact. Rechecking the item again in the same runner turn would launch
+    # it forever. Disk truth is rechecked when a *new* resume turn starts; this
+    # set only remembers what this turn itself has just settled.
+    settled_this_turn: set[int] = set()
+    while True:
+        run = _one(base, queue_id, registry=queue_registry)
+        lane = [entry for entry in run.entries if entry.item.sid == sid]
+        progressed = False
+        for entry in lane:
+            if entry.state == 'done' and entry.index in settled_this_turn:
+                continue
+            if entry.state in ('failed', 'cancelled', 'not_run'):
+                return
+            if entry.state in ('running', 'unknown'):
+                recovered = _recover_running(
+                    base, run, entry, job_registry=job_registry)
+                if recovered in ('running', 'blocked', 'failed'):
+                    if recovered == 'failed':
+                        _mark_not_run_after(base, _one(base, queue_id, registry=queue_registry), entry)
+                    return
+                if recovered == 'done':
+                    settled_this_turn.add(entry.index)
+                progressed = True
+                break
+
+            disposition, waiting_on, reason = _live_disposition(base, run, entry)
+            if disposition == 'done':
+                if entry.state != 'done':
+                    _append_state(base, queue_id, entry.index, 'done', note=reason)
+                    settled_this_turn.add(entry.index)
+                    progressed = True
+                    break
+                settled_this_turn.add(entry.index)
+                continue
+            if disposition == 'blocked':
+                if entry.state != 'blocked' or entry.waiting_on != waiting_on:
+                    _append_state(
+                        base, queue_id, entry.index, 'blocked',
+                        waiting_on=waiting_on, note=reason)
+                return
+            if entry.state == 'done':
+                _append_state(
+                    base, queue_id, entry.index, 'pending',
+                    note='盘面不再完整/新鲜，按原已确认命令恢复执行')
+                progressed = True
+                break
+
+            job_id = jobs.new_job_id()
+            with _STATE_LOCK:
+                fresh = _one(base, queue_id, registry=queue_registry).entries[entry.index]
+                if fresh.state not in ('pending', 'blocked'):
+                    progressed = True
+                    break
+                _append_state(
+                    base, queue_id, entry.index, 'running', job_id=job_id,
+                    note=reason)
+            try:
+                jobs.start(
+                    base, entry.item.node, entry.item.sid, entry.item.flags,
+                    mode=entry.item.mode, steps=entry.item.steps,
+                    spawn=spawn, registry=job_registry, job_id=job_id)
+                jobs.wait(job_id)
+                result = _job_record(base, job_id, job_registry)
+                if result is None or result.state not in ('ok', 'failed'):
+                    _append_state(
+                        base, queue_id, entry.index, 'unknown', job_id=job_id,
+                        note='作业线程结束后仍没有可折叠终态')
+                    return
+                state = 'done' if result.state == 'ok' else 'failed'
+                _append_state(
+                    base, queue_id, entry.index, state, job_id=job_id,
+                    exit_code=result.exit_code)
+            except jobs.JobConflict as exc:
+                _append_state(
+                    base, queue_id, entry.index, 'blocked',
+                    waiting_on=f'job:{entry.item.sid}', note=str(exc))
+                return
+            except BaseException as exc:  # worker crash is a queue failure, never silent
+                _append_state(
+                    base, queue_id, entry.index, 'failed', job_id=job_id,
+                    exit_code=CRASH, note=f'runner 启动作业失败：{exc!r}')
+            current = _one(base, queue_id, registry=queue_registry)
+            ended = current.entries[entry.index]
+            if ended.state == 'failed':
+                _mark_not_run_after(base, current, ended)
+                return
+            if ended.state == 'done':
+                settled_this_turn.add(entry.index)
+            progressed = True
+            break
+        if not progressed:
+            return
+
+
+def _execute(base: str | os.PathLike[str], queue_id: str, *,
+             spawn: jobs.Spawn, queue_registry: QueueRegistry,
+             job_registry: jobs.JobRegistry) -> QueueRun:
+    run = _one(base, queue_id, registry=queue_registry)
+    lane_threads = [threading.Thread(
+        target=_run_lane,
+        kwargs={
+            'base': base, 'queue_id': queue_id, 'sid': sid, 'spawn': spawn,
+            'queue_registry': queue_registry, 'job_registry': job_registry,
+        },
+        name=f'novel-queue-{queue_id}-{sid}', daemon=True,
+    ) for sid in run.start.sids]
+    for thread in lane_threads:
+        thread.start()
+    for thread in lane_threads:
+        thread.join()
+    return _one(base, queue_id, registry=queue_registry)
+
+
+def run(base: str | os.PathLike[str], queue_id: str, *,
+        spawn: jobs.Spawn = jobs.default_spawn,
+        registry: QueueRegistry = REGISTRY,
+        job_registry: jobs.JobRegistry = jobs.REGISTRY) -> QueueRun:
+    """Synchronously consume each novel lane; different novels run in parallel."""
+    registry.acquire(queue_id)
+    try:
+        return _execute(
+            base, queue_id, spawn=spawn, queue_registry=registry,
+            job_registry=job_registry)
+    finally:
+        registry.release(queue_id)
+
+
+def start(base: str | os.PathLike[str], queue_id: str, *,
+          spawn: jobs.Spawn = jobs.default_spawn,
+          registry: QueueRegistry = REGISTRY,
+          job_registry: jobs.JobRegistry = jobs.REGISTRY) -> QueueRun:
+    """Start a persistent queue runner in the background and return immediately."""
+    registry.acquire(queue_id)
+
+    def worker() -> None:
+        try:
+            _execute(
+                base, queue_id, spawn=spawn, queue_registry=registry,
+                job_registry=job_registry)
+        except BaseException:
+            # Keep the traceback in the service log. Item-level failures are
+            # recorded inside _run_lane; this guard prevents a silent thread death.
+            traceback.print_exc()
+        finally:
+            registry.release(queue_id)
+            with _THREADS_LOCK:
+                _THREADS.pop(queue_id, None)
+
+    thread = threading.Thread(
+        target=worker, name=f'novel-queue-{queue_id}', daemon=True)
+    with _THREADS_LOCK:
+        _THREADS[queue_id] = thread
+    try:
+        thread.start()
+    except Exception:
+        with _THREADS_LOCK:
+            _THREADS.pop(queue_id, None)
+        registry.release(queue_id)
+        raise
+    return _one(base, queue_id, registry=registry)
+
+
+def wait(queue_id: str, timeout: float | None = None) -> bool:
+    with _THREADS_LOCK:
+        thread = _THREADS.get(queue_id)
+    if thread is None:
+        return True
+    thread.join(timeout=timeout)
+    return not thread.is_alive()
+
+
+def resume_incomplete(base: str | os.PathLike[str], *,
+                      spawn: jobs.Spawn = jobs.default_spawn,
+                      registry: QueueRegistry = REGISTRY,
+                      job_registry: jobs.JobRegistry = jobs.REGISTRY) -> list[str]:
+    """Service-start hook: reconcile jobs, then resume non-terminal queues."""
+    before = records(base, registry=registry)
+    if not before:
+        return []
+    jobs.reconcile(base, registry=job_registry)
+    resumed: list[str] = []
+    for record in records(base, registry=registry):
+        if record.state not in ('ok', 'failed', 'cancelled'):
+            start(
+                base, record.queue_id, spawn=spawn, registry=registry,
+                job_registry=job_registry)
+            resumed.append(record.queue_id)
+    return resumed
+
+
+__all__ = [
+    'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
+    'QueueRegistry', 'append_event', 'cancel', 'confirm', 'create', 'fold',
+    'fold_counts', 'new_queue_id', 'nodes_up_to', 'plan', 'plan_book',
+    'queue_path', 'read_events', 'records', 'resume_incomplete', 'run', 'start',
+    'wait',
+]

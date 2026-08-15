@@ -284,8 +284,12 @@ def test_job_conflict_maps_and_returns_409():
     posts = [p for p, ops in app.openapi()['paths'].items()
              if 'post' in ops and p.startswith('/api/')]
     assert set(posts) == {
-        '/api/jobs',
-        '/api/jobs/preview',
+            '/api/jobs',
+            '/api/jobs/preview',
+            '/api/queues',
+            '/api/queues/preview',
+            '/api/queues/{queue_id}/resume',
+            '/api/queues/{queue_id}/items/{item_index}/cancel',
         '/api/novels/{sid}/stage0/edit',
         '/api/novels/{sid}/stage0/approve',
         '/api/novels/{sid}/stage1/partition',

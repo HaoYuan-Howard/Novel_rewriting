@@ -23,6 +23,7 @@ app.py —— 服务本体。**全仓只有本模块与 `__main__.py` 许可 imp
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -30,9 +31,10 @@ from fastapi.responses import JSONResponse
 from contracts.schema.api import ErrorBody
 from novel.api.errors import CSRF_REFUSED, status_of
 from novel.api.routes import (
-    agent, approvals, checks, edits, enums, ingest, jobs, novels, run, screens,
+    agent, approvals, checks, edits, enums, ingest, jobs, novels, queues, run, screens,
 )
 from novel.errors import NovelError
+from novel.orchestrator import queue as queue_runner
 
 #: `R-11.1` 的**唯一落点**。四条各自独立成立的理由（`docs/BACKEND_CONTRACT.md` 的 `R-11.1` 那一行）：
 #: 会在本机执行进程 · 那些进程花真钱 · 会往盘上写文件 · 传输的是不外流的版权正文。
@@ -78,7 +80,16 @@ def create_app(base: str | os.PathLike[str]) -> FastAPI:
     （传输的是不外流的版权正文）当场作废，而**没有任何东西会出声**。
     ⇒ `tests/test_api_discipline.py::test_the_api_never_opens_cors` 钉着这一条。
     """
-    app = FastAPI(title='novel-rewriting', docs_url=None, redoc_url=None)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # A queue's spending authorization and exact commands were persisted at
+        # creation.  Startup only resumes those frozen commands after job and
+        # artifact reconciliation; it never creates a new paid plan.
+        queue_runner.resume_incomplete(app.state.base)
+        yield
+
+    app = FastAPI(title='novel-rewriting', docs_url=None, redoc_url=None,
+                  lifespan=lifespan)
     app.state.base = os.fspath(base)
 
     @app.middleware('http')
@@ -125,7 +136,7 @@ def create_app(base: str | os.PathLike[str]) -> FastAPI:
                             content=body.model_dump(mode='json'))
 
     for router in (
-        enums.router, novels.router, checks.router, jobs.router,
+        enums.router, novels.router, checks.router, jobs.router, queues.router,
         ingest.router, approvals.router, screens.router, edits.router,
         run.router, agent.router,
     ):

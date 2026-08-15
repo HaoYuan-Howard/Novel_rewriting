@@ -132,6 +132,9 @@ _JSON_READ_ALLOWED = {
         '作业记录**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它。'
         '它是 append-only 的事件流（`_service/jobs.jsonl`），'
         '读的一侧还要容忍被 kill 截断的最后一行——那条容忍不该长在产物读路上'),
+    'novel/orchestrator/queue.py': (
+        '持久队列记录不是产物：`_service/queues.jsonl` 是 append-only 编排事件，'
+        '不进来源账/ARTIFACTS；与 jobs.jsonl 一样只容忍被 kill 截断的最后一行'),
     'novel/orchestrator/beacon.py': (
         '进度信标**不是产物**：与 jobs.jsonl 同理，append-only 事件流'
         '（`_service/agent_progress.jsonl`），不进来源账、不进 `_provenance`；'
@@ -188,6 +191,9 @@ _WRITE_ALLOWED = {
         '子进程写不了自己的死讯，而退出码正是编排层判成败的依据（`R-12.3`）。'
         '它写的两处（`_service/jobs.jsonl` · `_service/logs/`）都不是产物，'
         '且都是 append-only：被 kill 最坏只损坏最后一行'),
+    'novel/orchestrator/queue.py': (
+        '持久队列只写 Output/_service/queues.jsonl；它记录排队、取消、恢复与 '
+        'done/failed/not_run，append-only 且不是小说产物。真实产物仍只由 CLI 子进程写'),
     'novel/orchestrator/uploads.py': (
         '浏览器原始上传与一次性 stage0 编辑计划，均只写 Output/_service/。'
         '前者要长期保留供 S-00 按 original_path 审校；后者只把人的选择交给 CLI '

@@ -165,6 +165,15 @@ class UnsupportedRunMode(TerminalState):
     """
 
 
+class QueueConflict(TerminalState):
+    """A persistent queue operation conflicts with the item's current state.
+
+    Most commonly this means attempting to cancel an item whose subprocess has
+    already started.  A running LLM call cannot be represented as a lossless
+    cancellation, so the queue refuses instead of rewriting history.
+    """
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、结构性拒绝 —— 代码自相矛盾，是 bug
 # ─────────────────────────────────────────────────────────────────────────────

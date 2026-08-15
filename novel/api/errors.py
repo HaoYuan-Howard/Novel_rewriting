@@ -34,6 +34,7 @@ from novel.errors import (
     PartitionChapterMismatch,
     PartitionInputMismatch,
     ProvenanceRefused,
+    QueueConflict,
     ResidualNonbody,
     SourceConflict,
     SourceDecodeFailed,
@@ -80,6 +81,7 @@ STATUS: dict[type[NovelError], int] = {
     #: 行为半边由通用 `POST /api/jobs` 与专用 Stage0 端点共同测试：同书第二次启动为 409，
     #: 不同书可并行，stage5 的 deep/shallow 单臂是唯一可共存的书内例外。
     JobConflict: 409,
+    QueueConflict: 409,
     #: 人敲了一条这个节点没有的跑法 ⇒ 产地是**客户端**。
     UnsupportedRunMode: 400,
     # ── 代码自相矛盾（`RefusedByStructure`）。**是 bug，栈要留全** ──

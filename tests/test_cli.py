@@ -371,8 +371,9 @@ def test_state_prints_the_three_state_marks(box, capsys):
 
 def test_queue_prints_a_plan_and_never_runs_anything(box, capsys):
     assert _run('queue', box.sid, '--base', str(box.root),
-                '--until', 'stage1', '--yes') == X.OK
-    assert '计划' in capsys.readouterr().out
+                '--until', 'stage1', '--plan-only') == X.OK
+    out = capsys.readouterr().out
+    assert '计划' in out and '没有建立队列' in out
 
 
 def test_queue_refuses_paid_items_without_yes(box):

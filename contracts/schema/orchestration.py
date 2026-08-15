@@ -26,7 +26,7 @@ from pydantic import Field, model_validator
 
 from contracts.invariants import (
     AGENT_RUN_EVENT_KINDS, BEACON_STATES, FRESHNESS, FRESHNESS_REASON,
-    JOB_EVENT_KINDS, JOB_STATE, NODES, PROGRESS_PHASES,
+    JOB_EVENT_KINDS, JOB_STATE, NODES, PROGRESS_PHASES, STAGES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
 
@@ -582,7 +582,13 @@ class QueuePlan(StrictModel):
 
     @model_validator(mode='after')
     def _postconditions(self) -> QueuePlan:
-        want = sum(1 for it in self.items if any(s.paid for s in it.steps))
+        # A persistent queue may resume after a human gate.  Those currently
+        # blocked items are still part of the queue's declared target, so any
+        # paid command behind the gate must be included in the one-time
+        # confirmation as well.  Counting only ``items`` would turn clearing a
+        # gate into an implicit spending authorization.
+        want = sum(1 for it in self.items + self.blocked
+                   if any(s.paid for s in it.steps))
         if self.paid_items != want:
             raise ValueError(f'paid_items={self.paid_items} 与逐项数出来的 {want} 对不上')
         if any(it.waiting_on for it in self.items):
@@ -592,4 +598,152 @@ class QueuePlan(StrictModel):
                 '而「排进去了」会被读成「会自动跑完」')
         if any(not it.waiting_on for it in self.blocked):
             raise ValueError('`blocked` 里有说不出在等谁的项（`R-13.5`）')
+        return self
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 四之二、持久队列实例（TODO-01）
+# ─────────────────────────────────────────────────────────────────────────────
+
+QueueEntryState = Literal[
+    'pending', 'running', 'unknown', 'done', 'failed', 'not_run', 'cancelled', 'blocked',
+]
+QueueRunState = Literal[
+    'pending', 'running', 'unknown', 'ok', 'failed', 'blocked', 'cancelled',
+]
+QueueEventKind = Literal['created', 'item_state']
+
+
+class QueueStart(FrozenModel):
+    """持久队列的创建快照。
+
+    ``plan`` is frozen here rather than recomputed at execution time: the
+    commands a runner may launch must be exactly the commands the user
+    confirmed.  Freshness and human gates are rechecked before each item, but
+    that check may only skip/block a command, never invent a new one.
+    """
+
+    sids: list[str] = Field(min_length=1)
+    until_stage: str = Field(min_length=1)
+    plan: QueuePlan
+    paid_confirmed: bool
+
+    @model_validator(mode='after')
+    def _valid_target_and_confirmation(self) -> QueueStart:
+        if self.sids != list(dict.fromkeys(self.sids)):
+            raise ValueError('queue sids must be non-empty and unique in requested order')
+        if self.until_stage not in STAGES:
+            raise ValueError(f'unknown queue target stage {self.until_stage!r}')
+        planned = {item.sid for item in self.plan.items + self.plan.blocked}
+        if not planned <= set(self.sids):
+            raise ValueError(f'queue plan contains undeclared novels: {sorted(planned - set(self.sids))}')
+        if self.plan.paid_items and not self.paid_confirmed:
+            raise ValueError('a persistent queue with paid items must record explicit confirmation')
+        return self
+
+
+class QueueEvent(FrozenModel):
+    """持久队列事件流的一行；与 ``JobEvent`` 一样只追加、不回写。"""
+
+    queue_id: str = Field(min_length=1)
+    kind: QueueEventKind
+    ts: int = Field(ge=0)
+    start: QueueStart | None = None
+    item_index: int | None = Field(default=None, ge=0)
+    state: QueueEntryState | None = None
+    job_id: str | None = None
+    exit_code: int | None = None
+    waiting_on: str | None = None
+    note: str | None = None
+
+    @model_validator(mode='after')
+    def _payload_matches_kind_and_state(self) -> QueueEvent:
+        if self.kind == 'created':
+            if self.start is None or any(value is not None for value in (
+                    self.item_index, self.state, self.job_id, self.exit_code,
+                    self.waiting_on, self.note)):
+                raise ValueError('created queue event must carry only start')
+            return self
+        if self.start is not None or self.item_index is None or self.state is None:
+            raise ValueError('item_state event must carry item_index and state, not start')
+        if self.state == 'running' and not self.job_id:
+            raise ValueError('running queue item must name its job_id')
+        if self.state == 'unknown' and (not self.job_id or not self.note):
+            raise ValueError('unknown queue item must name its job and explain the uncertainty')
+        if self.state == 'failed' and (not self.job_id or self.exit_code in (None, 0)):
+            raise ValueError('failed queue item must name a job and a non-zero exit_code')
+        if self.state == 'done' and self.exit_code not in (None, 0):
+            raise ValueError('done queue item cannot carry a failing exit_code')
+        if self.state == 'blocked' and not self.waiting_on:
+            raise ValueError('blocked queue item must say what it is waiting on')
+        if self.state in ('pending', 'not_run', 'cancelled') and (
+                self.job_id is not None or self.exit_code is not None):
+            raise ValueError(f'{self.state} queue item cannot claim a job result')
+        if self.state in ('not_run', 'cancelled') and not self.note:
+            raise ValueError(f'{self.state} queue item must say why it did not run')
+        if self.state != 'blocked' and self.waiting_on is not None:
+            raise ValueError(f'{self.state} queue item cannot carry waiting_on')
+        return self
+
+
+class QueueEntry(StrictModel):
+    """一项在持久队列里的当前折叠视图。"""
+
+    index: int = Field(ge=0)
+    item: QueueItem
+    state: QueueEntryState
+    job_id: str | None = None
+    exit_code: int | None = None
+    waiting_on: str | None = None
+    note: str | None = None
+
+
+class QueueLaneCounts(StrictModel):
+    """一本书在一条批量队列里的七类计数。
+
+    ``done / failed / not_run`` remain separate.  Cancellation and blocking
+    are separate too, because neither is a failed command.
+    """
+
+    done: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    not_run: int = Field(ge=0)
+    pending: int = Field(ge=0)
+    running: int = Field(ge=0)
+    unknown: int = Field(ge=0)
+    cancelled: int = Field(ge=0)
+    blocked: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _one_lane_has_one_stop(self) -> QueueLaneCounts:
+        if self.failed > 1:
+            raise ValueError('one novel lane must stop at its first failed item')
+        if self.cancelled > 1:
+            raise ValueError('one novel lane can have at most one cancellation stop')
+        return self
+
+
+class QueueRun(StrictModel):
+    """一个持久队列实例的当前视图；盘上由 ``QueueEvent`` 折叠得出。"""
+
+    queue_id: str = Field(min_length=1)
+    created: int = Field(ge=0)
+    updated: int = Field(ge=0)
+    start: QueueStart
+    state: QueueRunState
+    entries: list[QueueEntry]
+    counts_by_sid: dict[str, QueueLaneCounts]
+
+    @model_validator(mode='after')
+    def _counts_match_entries(self) -> QueueRun:
+        fields = ('done', 'failed', 'not_run', 'pending', 'running', 'unknown',
+                  'cancelled', 'blocked')
+        for sid in self.start.sids:
+            entries = [entry for entry in self.entries if entry.item.sid == sid]
+            want = {field: sum(entry.state == field for entry in entries) for field in fields}
+            got = self.counts_by_sid.get(sid)
+            if got is None or any(getattr(got, field) != want[field] for field in fields):
+                raise ValueError(f'queue counts for {sid!r} do not match its entries')
+        if set(self.counts_by_sid) != set(self.start.sids):
+            raise ValueError('queue counts must contain exactly the declared novels')
         return self

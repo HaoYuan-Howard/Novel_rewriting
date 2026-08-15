@@ -9,7 +9,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     mark <sid> --node N --phase P   进度信标打点（agent 代跑用，0 成本，恒 exit 0）
     state <sid>                     这本书跑到哪了（产物存在性 + 来源新鲜度）
     inbox <sid>                     待人工六类清单（0 成本纯读；有待办≠失败）
-    queue <sid…> --until <stage>    批量计划；含付费项时要 `--yes`
+    queue <sid…> --until <stage>    建立并执行持久批量队列；含付费项时要 `--yes`
     jobs                            作业记录（新的在前）
     reconcile                       启动时把「运行中」一律改判「不知道」
 
@@ -99,11 +99,25 @@ def _parser() -> argparse.ArgumentParser:
     ib.add_argument('sid')
     ib.add_argument('--base', required=True)
 
-    q = sub.add_parser('queue', help='批量计划')
+    q = sub.add_parser('queue', help='建立并执行持久批量队列')
     q.add_argument('sids', nargs='+')
     q.add_argument('--base', required=True)
     q.add_argument('--until', required=True, choices=list(STAGES))
     q.add_argument('--yes', action='store_true', help='确认这批计划里的付费项')
+    q.add_argument('--plan-only', action='store_true',
+                   help='仅打印当前计划，不建立队列、不执行')
+
+    ql = sub.add_parser('queue-list', help='持久队列记录（新的在前）')
+    ql.add_argument('--base', required=True)
+
+    qc = sub.add_parser('queue-cancel', help='取消一个尚未开始的队列项')
+    qc.add_argument('queue_id')
+    qc.add_argument('item_index', type=int)
+    qc.add_argument('--base', required=True)
+
+    qr = sub.add_parser('queue-resume', help='恢复一个未完成的持久队列')
+    qr.add_argument('queue_id')
+    qr.add_argument('--base', required=True)
 
     j = sub.add_parser('jobs', help='作业记录（新的在前）')
     j.add_argument('--base', required=True)
@@ -911,9 +925,46 @@ def _cmd_queue(a: argparse.Namespace) -> int:
         print(f'  {it.sid}  {it.node}  —— {it.why}')
     for it in plan.blocked:
         print(f'  ⏸ {it.sid}  {it.node}  在等 `{it.waiting_on}` —— {it.why}')
+    if a.plan_only:
+        print('（仅预览：没有建立队列，也没有启动任何作业）')
+        return X.OK
     Q.confirm(plan, yes=a.yes)
-    print('⚠ 队列的执行在 `novel.orchestrator.jobs`；本命令只出计划（0 成本）')
+    run = Q.create(a.base, a.sids, until_stage=a.until, yes=a.yes)
+    print(f'── 持久队列 {run.queue_id} 已建立，开始执行 ──')
+    run = Q.run(a.base, run.queue_id)
+    print(f'── 队列终态：{run.state} ──')
+    for sid, counts in run.counts_by_sid.items():
+        print(f'  {sid}: done={counts.done} failed={counts.failed} '
+              f'not_run={counts.not_run} blocked={counts.blocked} '
+              f'cancelled={counts.cancelled}')
+    return X.OK if run.state in ('ok', 'blocked', 'cancelled') else X.CHECK_FAILED
+
+
+def _cmd_queue_list(a: argparse.Namespace) -> int:
+    recs = Q.records(a.base)
+    if not recs:
+        print('（还没有持久队列）')
+    for rec in recs:
+        print(f'  {rec.state:9} {rec.queue_id}  until={rec.start.until_stage}  '
+              f'books={",".join(rec.start.sids)}')
+        for entry in rec.entries:
+            if entry.state not in ('done', 'pending'):
+                suffix = f' waiting_on={entry.waiting_on}' if entry.waiting_on else ''
+                print(f'      [{entry.index}] {entry.state} '
+                      f'{entry.item.sid} {entry.item.node}{suffix}')
     return X.OK
+
+
+def _cmd_queue_cancel(a: argparse.Namespace) -> int:
+    rec = Q.cancel(a.base, a.queue_id, a.item_index)
+    print(f'{rec.queue_id} 第 {a.item_index} 项已取消；队列当前状态 {rec.state}')
+    return X.OK
+
+
+def _cmd_queue_resume(a: argparse.Namespace) -> int:
+    rec = Q.run(a.base, a.queue_id)
+    print(f'{rec.queue_id} 恢复完成；当前状态 {rec.state}')
+    return X.OK if rec.state in ('ok', 'blocked', 'cancelled') else X.CHECK_FAILED
 
 
 def _cmd_jobs(a: argparse.Namespace) -> int:
@@ -963,6 +1014,8 @@ def _cmd_mark(a: argparse.Namespace) -> int:
 
 _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'state': _cmd_state, 'inbox': _cmd_inbox, 'queue': _cmd_queue,
+         'queue-list': _cmd_queue_list, 'queue-cancel': _cmd_queue_cancel,
+         'queue-resume': _cmd_queue_resume,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'mark': _cmd_mark}
 
 

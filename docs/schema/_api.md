@@ -90,7 +90,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 
 ## 三、端点 → 响应
 
-**当前落地的四十三个**（其余端点见 §七）：
+**当前落地的四十九个**（其余端点见 §七）：
 
 | 端点 | 响应 | 新旧 |
 |---|---|---|
@@ -104,6 +104,12 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `GET /api/jobs/:id/log?offset=N` | `LogChunk` | 新 |
 | `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md` |
 | `POST /api/jobs` | `JobRecord`（202；请求体 `PreviewRequest`） | **复用** `_orchestration.md` |
+| `GET /api/queues` | `QueueList` | 新 |
+| `POST /api/queues/preview` | `QueuePlan`（请求体 `QueueCreateRequest`；纯预览） | **复用** `_orchestration.md` |
+| `POST /api/queues` | `QueueRun`（202；确认并建立、启动持久队列） | **复用** `_orchestration.md` |
+| `GET /api/queues/:id` | `QueueRun` | **复用** `_orchestration.md` |
+| `POST /api/queues/:id/resume` | `QueueRun`（202） | **复用** `_orchestration.md` |
+| `POST /api/queues/:id/items/:index/cancel` | `QueueRun`（只取消尚未开始项） | **复用** `_orchestration.md` |
 | `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
 | `GET /api/novels/:sid/stage0/report` | `RemovalReport` | **复用** `stage0.md` |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
@@ -142,6 +148,10 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 `paid == 任一步 paid` / `writes == 任一步 writes`，于是「整份贵贱是逐步折叠出来的」
 这条 `R-11.7` 白拿；而且**真跑时 `jobs.start()` 构造的就是这个类**——
 「预览与真跑是同一个对象」从一句话变成字面事实（`R-11.8`）。
+
+队列 preview 同样只读；`POST /api/queues` 只有在 `confirmed=true`（或计划无付费项）时才会
+先落 `QueueStart`、再起后台 runner。服务 lifespan 会恢复未完成队列，但只能消费创建时冻结且
+已经确认的命令。取消运行中项返回 409；它不会 terminate 或把在途调用改写成 cancelled。
 
 `AgentRunRequest` 的授权面是两条正交轴：
 

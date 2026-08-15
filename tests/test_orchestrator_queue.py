@@ -10,13 +10,21 @@ test_orchestrator_queue.py —— 批量队列（`R-13`）。
 """
 from __future__ import annotations
 
+import shutil
+import tempfile
+import threading
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
 from contracts.invariants import NODES, STAGES
-from contracts.schema.orchestration import QueueCounts
-from novel.errors import ApprovalRequired
+from contracts.schema.orchestration import (
+    JobEvent, QueueCounts, QueueEvent, QueueItem, QueuePlan, QueueStart, Step,
+)
+from novel.errors import ApprovalRequired, QueueConflict
 from novel.orchestrator import queue as Q
+from novel.orchestrator import jobs as J
 from novel.orchestrator import state as S
 from tests import corpus
 
@@ -25,6 +33,42 @@ BOOKS = tuple(sorted({artifact.source_id for artifact in corpus.iter_artifacts()
 _NO_CORPUS = pytest.mark.skipif(
     CORPUS is None or not BOOKS,
     reason=f'未设置包含当前产物的 {corpus.CORPUS_ENV}')
+
+
+@pytest.fixture
+def queue_base():
+    root = Path(tempfile.mkdtemp())
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def _step(name: str, *, paid: bool = False) -> Step:
+    return Step(argv=['python', '-c', name], cwd='.', label=name,
+                paid=paid, writes='artifact' if paid else '')
+
+
+def _item(sid: str, node: str, name: str, *, paid: bool = False) -> QueueItem:
+    return QueueItem(sid=sid, node=node, flags=[], steps=[_step(name, paid=paid)],
+                     why='synthetic queue acceptance path')
+
+
+def _seed(queue_base: Path, queue_id: str, items: list[QueueItem], *,
+          blocked: list[QueueItem] | None = None) -> None:
+    blocked = blocked or []
+    sids = list(dict.fromkeys(item.sid for item in items + blocked))
+    plan = QueuePlan(
+        items=items, blocked=blocked,
+        paid_items=sum(any(step.paid for step in item.steps)
+                       for item in items + blocked),
+    )
+    start = QueueStart(sids=sids, until_stage='stage7', plan=plan,
+                       paid_confirmed=True)
+    Q.append_event(queue_base, QueueEvent(
+        queue_id=queue_id, kind='created', ts=1, start=start))
+
+
+def _always_pending(base, run, entry):
+    return 'pending', None, 'synthetic runnable item'
 
 
 # ───────────────────── 顺序与范围（纯函数，不碰盘） ─────────────────────
@@ -177,3 +221,136 @@ def test_skip_means_skip_the_queue_does_not_relist_finished_work():
             continue
         if S.resume_verdict(ov, node)[0] == S.RESUME_SKIP:
             assert node not in listed, f'{node} 已完成且不陈旧，不该再排一次'
+
+
+# ───────────────────── 持久 runner 的四条验收链路（TODO-01） ─────────────────────
+
+def test_two_novel_lanes_really_enter_the_job_runner_in_parallel(
+        queue_base, monkeypatch):
+    _seed(queue_base, 'q-parallel', [
+        _item('book-a', 'stage0.remove', 'a'),
+        _item('book-b', 'stage0.remove', 'b'),
+    ])
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    rendezvous = threading.Barrier(2)
+    calls: list[str] = []
+
+    def spawn(argv, cwd, env, log):
+        calls.append(argv[-1])
+        rendezvous.wait(2)
+        return 0
+
+    run = Q.run(
+        queue_base, 'q-parallel', spawn=spawn,
+        registry=Q.QueueRegistry(), job_registry=J.JobRegistry())
+    assert run.state == 'ok'
+    assert sorted(calls) == ['a', 'b']
+    assert all(counts.done == 1 for counts in run.counts_by_sid.values())
+
+
+def test_one_novel_failure_marks_only_its_tail_not_run_and_other_book_finishes(
+        queue_base, monkeypatch):
+    _seed(queue_base, 'q-fail-one-book', [
+        _item('book-a', 'stage0.remove', 'fail'),
+        _item('book-a', 'stage1.partition', 'must-not-run'),
+        _item('book-b', 'stage0.remove', 'other-book-runs'),
+    ])
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    calls: list[str] = []
+
+    def spawn(argv, cwd, env, log):
+        calls.append(argv[-1])
+        return 2 if argv[-1] == 'fail' else 0
+
+    run = Q.run(
+        queue_base, 'q-fail-one-book', spawn=spawn,
+        registry=Q.QueueRegistry(), job_registry=J.JobRegistry())
+    a = run.counts_by_sid['book-a']
+    b = run.counts_by_sid['book-b']
+    assert (a.done, a.failed, a.not_run) == (0, 1, 1)
+    assert (b.done, b.failed, b.not_run) == (1, 0, 0)
+    assert 'must-not-run' not in calls and 'other-book-runs' in calls
+
+
+def test_cancel_accepts_pending_but_refuses_to_fake_cancel_a_running_call(
+        queue_base, monkeypatch):
+    _seed(queue_base, 'q-cancel-pending', [
+        _item('book-a', 'stage0.remove', 'first'),
+        _item('book-a', 'stage1.partition', 'cancel-me'),
+        _item('book-a', 'stage2.global', 'tail'),
+    ])
+    cancelled = Q.cancel(
+        queue_base, 'q-cancel-pending', 1, registry=Q.QueueRegistry())
+    assert [entry.state for entry in cancelled.entries] == [
+        'pending', 'cancelled', 'not_run']
+
+    _seed(queue_base, 'q-cancel-running', [
+        _item('book-b', 'stage0.remove', 'blocking'),
+    ])
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    entered = threading.Event()
+    release = threading.Event()
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+
+    def spawn(argv, cwd, env, log):
+        entered.set()
+        assert release.wait(2)
+        return 0
+
+    Q.start(queue_base, 'q-cancel-running', spawn=spawn,
+            registry=qreg, job_registry=jreg)
+    assert entered.wait(1)
+    with pytest.raises(QueueConflict, match='只能取消尚未开始'):
+        Q.cancel(queue_base, 'q-cancel-running', 0, registry=qreg)
+    release.set()
+    assert Q.wait('q-cancel-running', 2)
+    finished = next(record for record in Q.records(queue_base, registry=qreg)
+                    if record.queue_id == 'q-cancel-running')
+    assert finished.state == 'ok'
+
+
+def test_service_restart_recovers_unknown_job_from_artifact_truth_without_rerun(
+        queue_base, monkeypatch):
+    item = _item('book-a', 'stage3.style', 'paid-call', paid=True)
+    _seed(queue_base, 'q-restart', [item])
+    Q.append_event(queue_base, QueueEvent(
+        queue_id='q-restart', kind='item_state', ts=2, item_index=0,
+        state='running', job_id='old-job'))
+    start = J.plan_start(
+        item.node, item.sid, base=queue_base, steps=item.steps)
+    J.append_event(queue_base, JobEvent(
+        job_id='old-job', kind='started', ts=2, start=start))
+
+    # The old process left no ended event, but its formal artifact is already
+    # present and fresh. Recovery must trust disk truth and not launch again.
+    monkeypatch.setattr(
+        Q, '_live_disposition',
+        lambda base, run, entry: (
+            'done', None, 'formal artifact is present and fresh'))
+    calls: list[list[str]] = []
+
+    def spawn(argv, cwd, env, log):
+        calls.append(list(argv))
+        return 0
+
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+    before = Q.records(queue_base, registry=qreg)[0]
+    assert before.state == 'unknown' and before.entries[0].state == 'unknown'
+    assert Q.resume_incomplete(
+        queue_base, spawn=spawn, registry=qreg, job_registry=jreg) == ['q-restart']
+    assert Q.wait('q-restart', 2)
+    after = Q.records(queue_base, registry=qreg)[0]
+    assert after.state == 'ok' and after.counts_by_sid['book-a'].done == 1
+    assert calls == [], '已成功且盘面 fresh 的付费项不许在重启恢复时重复启动'
+
+
+def test_blocked_item_persists_what_it_is_waiting_for(queue_base):
+    blocked = _item('book-a', 'stage6.approve', 'human')
+    blocked = blocked.model_copy(update={
+        'waiting_on': 'stage6.approve',
+        'why': '在等文案定稿的人',
+    })
+    _seed(queue_base, 'q-blocked', [], blocked=[blocked])
+    record = Q.records(queue_base, registry=Q.QueueRegistry())[0]
+    assert record.state == 'blocked'
+    assert record.entries[0].waiting_on == 'stage6.approve'

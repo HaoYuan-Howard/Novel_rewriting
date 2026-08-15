@@ -404,7 +404,8 @@ def _run_steps(base: str | os.PathLike[str], job_id: str,
 def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequence[str] = (), *,
         mode: str | None = None, follow_check: bool = True,
         spawn: Spawn = default_spawn, registry: JobRegistry = REGISTRY,
-        steps: Sequence[Step] | None = None) -> JobRecord:
+        steps: Sequence[Step] | None = None,
+        job_id: str | None = None) -> JobRecord:
     """跑一个作业（**同步**）：占键 → 记 `started` → 逐步起子进程 → 记 `ended` → 还键。
 
     ⚠⚠ **拿到锁之后到真跑起来之前，任何一步抛出去都要把锁还回去**——
@@ -418,7 +419,9 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, mode=mode, follow_check=follow_check)
     key = active_key(sid, node, mode)
-    job_id = new_job_id()
+    job_id = job_id or new_job_id()
+    if any(event.job_id == job_id for event in read_events(base)):
+        raise JobConflict(f'job_id={job_id!r} already exists')
     registry.acquire(key, job_id)
     try:
         start_event = JobEvent(
@@ -455,12 +458,15 @@ def start(
     registry: JobRegistry = REGISTRY,
     steps: Sequence[Step] | None = None,
     prepare: Callable[[], None] | None = None,
+    job_id: str | None = None,
 ) -> JobRecord:
     _refuse_if_agent_running()
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, mode=mode, follow_check=follow_check)
     key = active_key(sid, node, mode)
-    job_id = new_job_id()
+    job_id = job_id or new_job_id()
+    if any(event.job_id == job_id for event in read_events(base)):
+        raise JobConflict(f'job_id={job_id!r} already exists')
     registry.acquire(key, job_id)
     try:
         if prepare is not None:
