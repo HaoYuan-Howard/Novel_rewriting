@@ -33,23 +33,35 @@ def _hook(text: str, *, src_hook: str | None = None, characters: dict | None = N
         quote_problems=[])
 
 
-def _hook_semantic_spoiler() -> list:
+def _hook_semantic_contradiction() -> list:
     """经 `semantic.outcomes` 的真实裁决物化路径（latest_semantic 临时替身，跑完复原）。"""
     from novel.stages.stage6 import semantic
 
     text = '她嫁进将军府那晚，就发现枕头下压着一封没有署名的信。'
+    from contracts.schema.stage6 import HookCandidateReview
     art = SimpleNamespace(
-        candidates=[SimpleNamespace(approach='identity_contrast', text=text)],
+        candidates=[SimpleNamespace(approach='source_architecture', text=text)],
         approved=None)
-    claims = SimpleNamespace(
-        label='identity_contrast', coverage='complete', uncertainty_reason=None,
-        claims=[SimpleNamespace(claim_id='c1', assertion='她婚后将亲手烧掉将军府',
-                                evidence='枕头下压着一封没有署名的信')])
+    review = HookCandidateReview.model_validate({
+        'label': 'source_architecture',
+        'coverage': 'complete',
+        'uncertainty_reason': None,
+        'contradictions': [{
+            'assertion': '她与将军成婚',
+            'evidence': '她嫁进将军府',
+            'reason': '全书设定中两人并非婚姻关系',
+        }],
+        'quality': {
+            'read_on_desire': 8, 'body_voice_match': 8,
+            'concrete_scene_and_specificity': 8,
+            'curiosity_and_payoff_promise': 8, 'hook_craft': 8,
+            'synopsis_penalty': 1,
+        },
+        'concise_reason': '场面具体，但关系写反。',
+        'text_sha1': semantic.text_sha1(text),
+    })
     fake = SimpleNamespace(
-        judged_texts={'identity_contrast': semantic.text_sha1(text)},
-        texts=[claims],
-        decisions=[SimpleNamespace(label='identity_contrast', claim_id='c1',
-                                   status='arc_leak', reason='语义等价于收场')])
+        reviews=[review], ranking=['source_architecture'])
     store = SimpleNamespace(freshness=lambda _rel: SimpleNamespace(state='fresh'))
     original = semantic.latest_semantic
     semantic.latest_semantic = lambda _s: (1, fake)
@@ -170,7 +182,7 @@ CASES: dict[str, Case] = {
     'hook_para_sep': Case('stage6', lambda: _hook(
         '第一段落的文字要足够长一点。\n第二段落的文字也足够长一点。',
         src_hook='第一段。\n\n第二段。')),
-    'hook_semantic_spoiler': Case('stage6', _hook_semantic_spoiler),
+    'hook_semantic_contradiction': Case('stage6', _hook_semantic_contradiction),
 
     # ── stage7（15 HARD）──────────────────────────────────────────────────
     'rn_llm_shape': Case('stage7', lambda: _rename(registry={'c1': {}})),

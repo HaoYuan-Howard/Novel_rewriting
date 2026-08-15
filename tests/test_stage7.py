@@ -68,6 +68,12 @@ def _check(box: sandbox.Sandbox):
     return rename.run_check_only(_ctx(box))
 
 
+def _allow_hook_quality(monkeypatch):
+    """隔离 Stage7 自身；Stage6 下游质量闸由专门反例覆盖。"""
+    from novel.stages.stage6 import semantic
+    monkeypatch.setattr(semantic, 'require_approved_clear', lambda *_args, **_kwargs: None)
+
+
 # ── 一、报告的形状 ─────────────────────────────────────────────────────────
 
 def test_every_registered_rule_produced_a_row(box):
@@ -137,12 +143,13 @@ def test_the_residual_probe_always_reports_its_denominator(box):
 
 # ── 二、⭐ 逐字节对账 ──────────────────────────────────────────────────────
 
-def test_the_assembled_book_is_byte_identical_to_the_one_on_disk(box):
+def test_the_assembled_book_is_byte_identical_to_the_one_on_disk(box, monkeypatch):
     """已有当前交付物时，确定性重拼必须逐字节相同。"""
     source = corpus.corpus_root() / box.book / 'stage7' / 'book.txt'
     if not source.exists():
         pytest.skip('当前小说尚未组装 book.txt')
     on_disk = source.read_bytes()
+    _allow_hook_quality(monkeypatch)
     rename.run_approve(_ctx(box, 'stage7.approve'))
     path, art, _rep = assemble.run_assemble(_ctx(box, 'stage7.assemble'))
     assert Path(path).read_bytes() == on_disk
@@ -150,8 +157,9 @@ def test_the_assembled_book_is_byte_identical_to_the_one_on_disk(box):
     assert art.book_txt.sha1 == prov.content_sha1(on_disk)
 
 
-def test_the_book_txt_byte_form_holds(box):
+def test_the_book_txt_byte_form_holds(box, monkeypatch):
     """字节形态：LF-only · 章分隔是**裸阿拉伯数字**且恰好 `1..N` · 没有审阅元信息。"""
+    _allow_hook_quality(monkeypatch)
     rename.run_approve(_ctx(box, 'stage7.approve'))
     path, art, _rep = assemble.run_assemble(_ctx(box, 'stage7.assemble'))
     txt = Path(path).read_bytes().decode('utf-8')
@@ -161,6 +169,26 @@ def test_the_book_txt_byte_form_holds(box):
     assert '第1章' not in txt and box.book.rsplit('_', 1)[0] not in txt
     # ⚠ **全链第三个 `chars` 口径**：含空白，**并且含章号行与全部块间分隔符**。
     assert art.book_txt.chars == len(txt)
+
+
+def test_assemble_refuses_when_the_approved_hook_is_not_quality_clear(box, monkeypatch):
+    """定稿后改字也不能绕过 Stage6 审判进入交付物。"""
+    from novel.errors import TerminalState
+    from novel.stages.stage6 import semantic
+
+    if not (box.dir / 'stage6' / 'hook.json').exists():
+        pytest.skip('本书没有 Stage6 文案产物')
+    target = box.dir / 'stage7' / 'book.txt'
+    before = target.read_bytes() if target.exists() else None
+
+    def reject(*_args, **_kwargs):
+        raise TerminalState('定稿文本没有当前 clear 质量审判')
+
+    monkeypatch.setattr(semantic, 'require_approved_clear', reject)
+    with pytest.raises(TerminalState, match='clear'):
+        assemble.run_assemble(_ctx(box, 'stage7.assemble'))
+    after = target.read_bytes() if target.exists() else None
+    assert after == before
 
 
 def test_the_identity_baseline_is_byte_lossless(box):
@@ -335,7 +363,7 @@ def _model_out_from_disk(box: sandbox.Sandbox, *, break_it: bool) -> dict:
     return {'surname_map': dict(art.surname_map), 'characters': chars}
 
 
-def test_the_gate_blocks_a_dirty_map_and_revalidate_promotes_it_after_the_fix(box):
+def test_the_gate_blocks_a_dirty_map_and_revalidate_promotes_it_after_the_fix(box, monkeypatch):
     """⭐ **落盘闸门照 stage3：任何一条 hard ⇒ `.INVALID`**（本层一次只产一份）。
 
     配套的 `--revalidate` 是它的**必然结果**——闸门是我们自己加的，
@@ -346,6 +374,7 @@ def test_the_gate_blocks_a_dirty_map_and_revalidate_promotes_it_after_the_fix(bo
 
     # ⚠ **先取出模型产出，再删产物**：付费路要求盘上没有正式稿（先校验后落盘）。
     dirty = _model_out_from_disk(box, break_it=True)
+    _allow_hook_quality(monkeypatch)
     (box.dir / 'stage7' / 'name_map.json').unlink()
     ctx = RunContext.open(str(box.root), box.sid, 'stage7.rename', paid=True)
     with pytest.raises(GateBlocked, match='阻断级'):
@@ -399,9 +428,10 @@ def test_apply_edit_can_patch_the_first_invalid_map_without_full_characters(box)
     assert next(c for c in art.characters if c.char_id == cid).reason.startswith('人工确认')
 
 
-def test_a_clean_map_lands_and_the_gate_stays_open(box):
+def test_a_clean_map_lands_and_the_gate_stays_open(box, monkeypatch):
     """同一条路，干净的那一份**照常落盘**——闸门不许把合法产出也拦住。"""
     clean = _model_out_from_disk(box, break_it=False)
+    _allow_hook_quality(monkeypatch)
     (box.dir / 'stage7' / 'name_map.json').unlink()
     ctx = RunContext.open(str(box.root), box.sid, 'stage7.rename', paid=True)
     art = rename.run_rename(ctx, _fake_client(ctx, clean))
@@ -411,11 +441,12 @@ def test_a_clean_map_lands_and_the_gate_stays_open(box):
     assert art.identity is not None and art.identity.roundtrip_ok
 
 
-def test_an_unused_surname_mapping_is_blocked_instead_of_polluting_the_probe(box):
+def test_an_unused_surname_mapping_is_blocked_instead_of_polluting_the_probe(box, monkeypatch):
     """`surname_map` 不能独立于角色决定存在；实测 `太→宋` 曾让 14 个普通词假报警。"""
     from novel.errors import GateBlocked
 
     clean = _model_out_from_disk(box, break_it=False)
+    _allow_hook_quality(monkeypatch)
     clean['surname_map']['太'] = '宋'
     (box.dir / 'stage7' / 'name_map.json').unlink()
     ctx = RunContext.open(str(box.root), box.sid, 'stage7.rename', paid=True)

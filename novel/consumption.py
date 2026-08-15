@@ -207,49 +207,53 @@ def stage5_review_context(data: object) -> object:
 # ── stage6.hook ───────────────────────────────────────────────────────────────
 
 def stage6_hook_copy(data: object) -> object:
-    """开篇文案以原作文案正文作为确定性判据基准。"""
+    """原作文案同时是生成的结构金标准与非抄写判据基准。"""
     return (data or {}).get('text') if isinstance(data, dict) else None
 
 
 def stage6_grounding(data: object) -> object:
-    """开篇文案只消费秘密与结局/冲突弧线。"""
+    """开篇文案与质量审判消费完整故事真相面。"""
     if not isinstance(data, dict):
         return None
-    canon = data.get('canon') or {}
-    arc = data.get('arc') or {}
     return {
-        'secrets': sorted(
-            (s.get('secret_id'), s.get('fact'),
-             tuple(sorted((e or {}).get('chapter') or 0
-                          for e in (s.get('reader_reveal_events') or []))))
-            for s in (canon.get('secrets') or []) if isinstance(s, dict)),
-        'arc': (arc.get('climax'), arc.get('ending'),
-                tuple(t.get('trajectory') for t in (arc.get('arc_tracks') or [])),
-                tuple(tuple((st or {}).get('chapters') or ())
-                      for st in (arc.get('conflict_stages') or [])[:1])),
+        'entities': data.get('entities'),
+        'canon': data.get('canon'),
+        'arc': data.get('arc'),
     }
 
 
 def stage6_style(data: object) -> object:
-    """开篇文案不消费 ``voice.mode_variation``，其余 voice 与 hook 度量会下发。"""
+    """文案消费正文声音、surface habits、逐章风格与全部可量风格面。"""
     if not isinstance(data, dict):
         return None
-    voice = dict(data.get('voice') or {})
-    voice.pop('mode_variation', None)
-    return {'voice': sorted(voice.items()),
-            'hook_style': sorted((data.get('hook_style') or {}).items()),
-            'hook_meas': sorted(((data.get('measurable') or {}).get('hook') or {}).items())}
+    return {
+        'voice': data.get('voice'),
+        'surface_habits': data.get('surface_habits'),
+        'chapter_styles': data.get('chapter_styles'),
+        'hook_style': data.get('hook_style'),
+        'measurable': data.get('measurable'),
+    }
 
 
 def stage6_context(data: object) -> object:
-    """开篇文案只从写手上下文消费逐章人物名册。"""
+    """文案消费全书故事地图，并用开篇源章号选择对应 chapter_styles。"""
     if not isinstance(data, dict):
         return None
-    return sorted(
-        (ch.get('output_ordinal'),
-         tuple(sorted((c.get('display_name'), c.get('role'), c.get('name_distinctiveness'))
-                      for c in (ch.get('characters') or {}).values() if isinstance(c, dict))))
-        for ch in (data.get('chapters') or []) if isinstance(ch, dict))
+    return [
+        {
+            'output_ordinal': chapter.get('output_ordinal'),
+            'from_source_ordinals': chapter.get('from_source_ordinals'),
+            'chapter_goal': chapter.get('chapter_goal'),
+            'open_hook_goal': chapter.get('open_hook_goal'),
+            'events': [
+                event
+                for beat in (chapter.get('beats') or []) if isinstance(beat, dict)
+                for event in (beat.get('events') or [])
+            ],
+            'end_hook_goal': chapter.get('end_hook_goal'),
+        }
+        for chapter in (data.get('chapters') or []) if isinstance(chapter, dict)
+    ]
 
 
 def stage6_semantic_hook(data: object) -> object:

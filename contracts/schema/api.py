@@ -36,8 +36,9 @@ from contracts.invariants import (
     APPROVAL_SEEN,
     DEPTH_MODES,
     HINGE_KINDS,
-    HOOK_APPROACHES,
     HOOK_APPROVED_APPROACHES,
+    HOOK_SEMANTIC_STATES,
+    HOOK_STORED_APPROACHES,
     HOOK_KEYS,
     INBOX_KIND,
     NAME_DISTINCTIVENESS,
@@ -66,7 +67,13 @@ from contracts.schema.stage5 import (
     JudgedDraft, ReviewProvenance, ReviewSources,
     RoundFreeProvenance, RoundLlmProvenance,
 )
-from contracts.schema.stage6 import HookProvenance, HookSources, Mech
+from contracts.schema.stage6 import (
+    HookContradiction,
+    HookProvenance,
+    HookQualityScores,
+    HookSources,
+    Mech,
+)
 from contracts.schema.stage7 import (
     Alias, ApprovedNameMap, BookTxt, ExtraSub, IdentityBaseline,
     NameMapProvenance, NameMapSources, Residual, StemBaseline,
@@ -705,11 +712,21 @@ class HookCandidateLine(FrozenModel):
     """
 
     index: int = Field(ge=1)
-    approach: Literal[HOOK_APPROACHES]
+    approach: Literal[HOOK_STORED_APPROACHES]
     chars: int = Field(ge=0)
     text: str = Field(min_length=1)
     mech: Mech
     findings: list[Finding]
+
+    #: 最新质量审判按文本 sha1 映射出的状态。没有/过期/旧版审判均为 unreviewed，
+    #: 不是 clear；批准路只接受 clear。
+    semantic_state: Literal[HOOK_SEMANTIC_STATES]
+    semantic_reason: str = Field(min_length=1)
+    contradictions: list[HookContradiction]
+    quality: HookQualityScores | None
+    quality_score: float | None = Field(default=None, ge=0, le=10)
+    quality_rank: int | None = Field(default=None, ge=1)
+    selectable: bool
 
     #: 这一条是不是当前定稿（`hook.approved.approach == candidate.approach`）。
     approved: bool

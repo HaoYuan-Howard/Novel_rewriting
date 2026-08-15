@@ -9,22 +9,19 @@ stage6/hook.json            LLM 产 + 确定性判据 —— 一本书一份，�
 stage6/_rounds/hook.rN.json 归档：上一轮的**整份拷贝**，形状与 hook.json 逐字段相同
 ```
 
-【六条贯穿本层的事实】
+【贯穿本层的事实】
 
-  ① **判据表分成两半，边界是产物类，不是判据质量。** 文案是一个「全文改写」的产物类：
-     查连续文本的字面探针在它身上**结构性失效**，查离散符号的探针仍然有效。
-     两条 0 成本实测把这条边界钉死了：`secret_keywords` × 原作文案 = 0 命中
-     （而書2 的原作文案确实把一条 secret 讲了出来）· 「文案引语必须能在正文里找到」
-     曾是 HARD，恒等基线当场判死（两本原作文案共 7 条引语在**原作全书**里逐字命中 0 条）。
+  ① 原作文案、全书结构与正文 surface habits 都进入生成材料；剧透不是违规。
+     语义硬边界是实质矛盾，质量由匿名六维审判排序。
 
-  ② **现役的剧透闸门是【人定稿】那一步，不是代码。** 这句话一直印在产物的三条 `unver` 里，
-     别读成谦虚：**5 条 HARD 里没有一条在查「文案有没有替故事把话说完」。**
+  ② 人仍做最终定稿，但批准动作只接受最新质量审判为 ``clear`` 的候选；缺审、过期、
+     uncertain 和 contradiction 都不能被人工误点绕过。
 
   ③ 0 成本写盘路通过 `rewrite_provenance` 或 `promoted()` 继承真实来源；
      `model` 与 `params` 对付费产物均为必填，不能由 0 成本路径现造。
 
-  ⑤ **`--identity`（恒等基线）只有一半在工作。** 13 格里 **6 格构造上不可能非零**
-     （5 条形态判据两侧是同一个式子 · `hook_downsend_leak` 根本不由候选判据产）。
+  ⑤ **`--identity`（恒等基线）只有一半在工作。** 多个形态格构造上不可能非零，
+     因为判定两侧最终都来自同一份原作文案度量。
      ⇒ **7 真 6 假，而报告必须把这 6 格标出来**，不许再拿它们当
      「判据没有误伤原作」的证据。
      ⚠ 那 5 条形态判据**是被修成恒等式的**：修 off-by-one 之前两侧用的是两把不同的尺子，
@@ -40,7 +37,11 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from contracts.invariants import HOOK_APPROACHES, HOOK_APPROVED_APPROACHES
+from contracts.invariants import (
+    HOOK_APPROACHES,
+    HOOK_APPROVED_APPROACHES,
+    HOOK_STORED_APPROACHES,
+)
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import Finding, LlmProvenance
 from contracts.schema.stage5 import ContextSource, JudgedDraft, SemanticClaim
@@ -96,9 +97,9 @@ class Candidate(StrictModel):
     下沉到 JS 的后果不是判据坏掉，是**同一页上人会看到两个字数**。
     """
 
-    #: **唯一落点是 `HOOK_APPROACHES`**，prompt 那一份是插值来的。
-    #: ⚠ 产地**不许 `.get` 兜底**：写歪的 approach 一律显式终态。
-    approach: Literal[HOOK_APPROACHES]
+    #: 历史产物仍可读；新模型响应只收 ``HOOK_APPROACHES``，见
+    #: ``HookCandidateResponse``。读写枚举分开，避免 prompt 升级破坏旧书。
+    approach: Literal[HOOK_STORED_APPROACHES]
 
     #: 文案本身。盘上**串长** 123~308（含段间分隔符）。
     #: ⚠ 存的是**归一之后**的字节。
@@ -186,7 +187,7 @@ class Hook(StrictModel):
         （stage1 ×1 · stage4 ×2 · stage5 ×2）。
       · `baselines`（`{判据: 'k/3'}`）—— 0 读者 + 100% 可从同文件的 `candidates[].findings`
         现算（盘上 3/3 逐值验过）+ **它自陈不是判据基线**（三个候选是同一次调用的相关三条）
-        + **其中一格结构性说谎**（`hook_downsend_leak` 恒 `0/3`，因为它压根不由候选判据产）。
+        + 历史上还曾混入不由候选文本产生的书级格，现已退役。
       · `counts` —— 0 读者 + 100% 现算 + **稀疏**：`Counter` 的 0 键会消失，
         盘上 1/3 本没有 `info` 键、3/3 本没有 `hard` 键——
         「没有这个键」与「值是 0」混掉，正是载体那条默认值警告要防的三态。
@@ -261,13 +262,24 @@ class HookResponse(StrictModel):
     candidates: list[HookCandidateResponse] = Field(min_length=3, max_length=3)
     rationale: str = Field(min_length=1)
 
+    @model_validator(mode='after')
+    def _each_current_approach_exactly_once(self) -> 'HookResponse':
+        approaches = [c.approach for c in self.candidates]
+        if len(set(approaches)) != len(approaches) or set(approaches) != set(HOOK_APPROACHES):
+            raise ValueError(
+                f'candidates 必须各覆盖一次 {HOOK_APPROACHES}，实得 {approaches}')
+        texts = [c.text.strip() for c in self.candidates]
+        if len(set(texts)) != len(texts):
+            raise ValueError('三个候选文本不得重复')
+        return self
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# `stage6/semantic_<n>.json` —— 付费文案语义审判（`R-9.19` / `R-9.20`）
+# `stage6/semantic_<n>.json` —— 新版质量审判 + 旧版只读兼容
 # ─────────────────────────────────────────────────────────────────────────────
 
 class HookTextClaimsResponse(StrictModel):
-    """第一相模型响应：只看**一条文案文本**抽命题，不接触 arc / secrets。
+    """旧版第一相模型响应，只用于读取历史 semantic 产物。
 
     `claims` 复用 stage5 的 `SemanticClaim`（命题 + 逐字证据；借的是同一个类不是拷贝）。
     """
@@ -315,7 +327,7 @@ class HookTextClaims(HookTextClaimsResponse):
 
 
 class HookClaimDecision(StrictModel):
-    """第二相的**单表裁决**：一条 claim 一行。
+    """旧版第二相的单表裁决，只用于读取历史 semantic 产物。
 
     `arc_leak` 进 `hook_semantic_spoiler`（HARD）、`invented` 进
     `hook_semantic_grounding`（INFO）、`unver` 让两条判据都不许洗绿。
@@ -336,13 +348,58 @@ class HookClaimDecision(StrictModel):
 
 
 class HookSemanticResponse(StrictModel):
-    """第二相模型响应。顶层只有 `decisions`；时间线/取值面由代码持有，不让模型复述。"""
+    """匿名主编的一次响应：实质矛盾审查 + 吸引力评分与排序。"""
 
-    decisions: list[HookClaimDecision]
+    reviews: list['HookCandidateReviewResponse'] = Field(min_length=1)
+    ranking: list[str] = Field(min_length=1)
+
+
+class HookContradiction(StrictModel):
+    """会改变读者对身份、关系、关键因果或故事结果理解的一处矛盾。"""
+
+    assertion: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class HookQualityScores(StrictModel):
+    """质量六维；总分由代码按固定权重计算，不接收模型自报总分。"""
+
+    read_on_desire: float = Field(ge=0, le=10)
+    body_voice_match: float = Field(ge=0, le=10)
+    concrete_scene_and_specificity: float = Field(ge=0, le=10)
+    curiosity_and_payoff_promise: float = Field(ge=0, le=10)
+    hook_craft: float = Field(ge=0, le=10)
+    synopsis_penalty: float = Field(ge=0, le=10)
+
+
+class HookCandidateReviewResponse(StrictModel):
+    """模型对一个匿名文本标签的审阅；证据随后由代码回查原文。"""
+
+    label: str = Field(min_length=1)
+    coverage: Literal['complete', 'uncertain']
+    uncertainty_reason: str | None = None
+    contradictions: list[HookContradiction]
+    quality: HookQualityScores
+    concise_reason: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _uncertainty_is_explicit(self) -> 'HookCandidateReviewResponse':
+        if self.coverage == 'uncertain' and not self.uncertainty_reason:
+            raise ValueError('coverage=uncertain 必须说明 uncertainty_reason')
+        if self.coverage == 'complete' and self.uncertainty_reason:
+            raise ValueError('coverage=complete 不应携带 uncertainty_reason')
+        return self
+
+
+class HookCandidateReview(HookCandidateReviewResponse):
+    """落盘审阅 = 模型响应 + 代码绑定的文案内容指纹。"""
+
+    text_sha1: Fp10
 
 
 class HookSemanticReview(StrictModel):
-    """`stage6/semantic_<n>.json` —— 付费文案语义审判的可审计落盘形态。
+    """`stage6/semantic_<n>.json` —— 付费文案质量审判的可审计落盘形态。
 
     ⚠ **绑定键是 `judged_texts`（label → 文本内容 sha1），不绑 hook.json 整文件**：
     `--pick` 只改 `approved` 键、不换任何文本字节，整文件指纹绑死会让定稿动作把
@@ -351,9 +408,23 @@ class HookSemanticReview(StrictModel):
 
     judged_texts: dict[str, Fp10] = Field(min_length=1)
     hook_file_sha1: Fp10
-    texts: list[HookTextClaims] = Field(min_length=1)
-    decisions: list[HookClaimDecision]
+    # 新版字段。排序标签使用产物里的真实标签；请求时会换成 T1/T2… 匿名标签。
+    reviews: list[HookCandidateReview] = Field(default_factory=list)
+    ranking: list[str] = Field(default_factory=list)
+
+    # 旧版两相审判的只读兼容面。新版写盘恒为空；保留它们使历史 semantic_N.json
+    # 仍能被载体读取，随后由运行时明确要求按新契约重审，而不是反序列化崩溃。
+    texts: list[HookTextClaims] = Field(default_factory=list)
+    decisions: list[HookClaimDecision] = Field(default_factory=list)
     provenance: LlmProvenance = Field(alias='_provenance')
+
+    @model_validator(mode='after')
+    def _one_semantic_generation(self) -> 'HookSemanticReview':
+        if bool(self.reviews) != bool(self.ranking):
+            raise ValueError('新版 semantic 产物的 reviews 与 ranking 必须同时存在')
+        if not self.reviews and not self.texts:
+            raise ValueError('semantic 产物既没有新版 reviews，也没有旧版 texts')
+        return self
 
 
 class HookEdit(StrictModel):
@@ -364,5 +435,5 @@ class HookEdit(StrictModel):
     人工稿与生成稿走同一条归一+判定，没有免检写口。
     """
 
-    candidate: Literal[HOOK_APPROACHES] | None = None
+    candidate: Literal[HOOK_STORED_APPROACHES] | None = None
     text: str = Field(min_length=1)

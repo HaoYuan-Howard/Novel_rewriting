@@ -611,6 +611,21 @@ export interface HookMech {
   paras_fixed: number
 }
 
+export interface HookContradiction {
+  assertion: string
+  evidence: string
+  reason: string
+}
+
+export interface HookQualityScores {
+  read_on_desire: number
+  body_voice_match: number
+  concrete_scene_and_specificity: number
+  curiosity_and_payoff_promise: number
+  hook_craft: number
+  synopsis_penalty: number
+}
+
 export interface HookCandidate {
   index: number
   approach: string
@@ -619,6 +634,14 @@ export interface HookCandidate {
   text: string
   mech: HookMech
   findings: Finding[]
+  semantic_state: 'clear' | 'contradiction' | 'uncertain' | 'unreviewed'
+  semantic_reason: string
+  contradictions: HookContradiction[]
+  quality: HookQualityScores | null
+  quality_score: number | null
+  quality_rank: number | null
+  /** 只有最新质量审判为 clear 才能定稿 */
+  selectable: boolean
   /** 这一条是不是当前定稿 */
   approved: boolean
 }

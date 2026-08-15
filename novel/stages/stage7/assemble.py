@@ -63,6 +63,13 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     up = _Upstreams(ctx, store)
     art, _raw = store.read_own(NameMap, REL)
 
+    # ``--apply-edit`` 可以在定稿之后改文案字节；因此只检查 approved 非空不够。
+    # 成书前再次按文本 sha1 要求当前质量审判为 clear，堵住编辑后的绕行路径。
+    if up.hook_art is None:
+        raise UpstreamMissing('stage6/hook.json 不在盘上——先完成 stage6')
+    from novel.stages.stage6 import semantic as hook_semantic
+    hook_semantic.require_approved_clear(store, up.hook_art)
+
     bad: list[str] = []
     if up.dup:
         bad.append(f'同章双份：{up.dup}（哪一份是成品无从判断，删掉不要的那一份）')

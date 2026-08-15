@@ -81,6 +81,7 @@ class _Upstreams:
 
         self.gg, self.style, self.wc = gg, style, wc
         self.src_hook: str = (hook_copy.text or '').strip()
+        self.grounding_raw: dict = gg.model_dump(by_alias=True)
         self.style_raw: dict = style.model_dump(by_alias=True)
         self.arc: dict = gg.arc.model_dump(by_alias=True)
         self.secrets: list[dict] = [s.model_dump(by_alias=True) for s in gg.canon.secrets]
@@ -90,7 +91,8 @@ class _Upstreams:
         lead, missing, self.judged = lead_drafts(store, self.upto)
         self.mat = prompts.build_material(
             title=ctx.title, ctx=wc.model_dump(by_alias=True), style=self.style_raw,
-            secrets=self.secrets, lead=lead, missing=missing, upto=self.upto)
+            grounding=self.grounding_raw, source_hook=self.src_hook,
+            lead=lead, missing=missing, upto=self.upto)
 
     @property
     def style_hook(self) -> dict | None:
@@ -134,9 +136,9 @@ def _texts_of(art: Hook) -> list[tuple[str, str]]:
 
 
 def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Outcome]:
-    """一份产物 → 25 个 `Outcome`（23 条机械 + 2 条语义）。`--check-only` 与落盘闸门共用。
+    """一份产物 → 机械判据 + 质量语义判据。`--check-only` 与落盘闸门共用。
 
-    ⚠ 语义两条由 `semantic.outcomes` 产（读盘上最近一次付费审判，按文本 sha1 绑定；
+    ⚠ 语义判据由 `semantic.outcomes` 产（读盘上最近一次付费审判，按文本 sha1 绑定；
     缺产物/过期/文本未审 ⇒ unver）——**六条路一处合并**，漏并会被 builder 判 `skipped`。
     """
     from novel.stages.stage6 import semantic   # 局部导入：semantic 顶层 import 本模块
@@ -149,7 +151,6 @@ def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Out
     stale, missing = _judged_drift(art, up)
     return checks.check(
         texts=texts, mat=up.mat, secrets=up.secrets, arc=up.arc,
-        given_leak=checks.downsend_leak(up.mat.given, up.arc),
         lead_upto_ch=art.lead_upto,
         hook_chars=(up.style_hook or {}).get('chars'),
         approved=art.approved is not None,
@@ -230,9 +231,8 @@ def run_identity(ctx: RunContext) -> tuple[dict[str, str], CheckReport]:
     原作自己都过不了的判据，是**判据把合法情况排除在外了**（判据 20：
     判据错的信号是「按它去修数据会让产物变得更差」）。
 
-    ⚠⚠ **13 格里有 6 格是恒等式**（`stage6.md` 事实⑤）：5 条形态判据的两侧
-    是同一个式子、`hook_downsend_leak` 根本不由文本判据产。
-    **报告必须把这 6 格标出来**，不许再拿它们当「判据没有误伤原作」的证据。
+    形态判据两侧用同一把尺子，因此其中若干格是后置条件读数；报告仍保留这些格，
+    但不得把构造上的 0 命中夸成独立证据。
     ⚠ `hook_reuses_source` **单独剔除**：原作 vs 原作必然 100%，那是构造使然。
     """
     from novel.stages.stage6 import semantic   # 局部导入：semantic 顶层 import 本模块
@@ -246,7 +246,6 @@ def run_identity(ctx: RunContext) -> tuple[dict[str, str], CheckReport]:
     outcomes = checks.check(
         texts=[('原作文案段', up.src_hook, _labelled('原作文案段', fs))],
         mat=up.mat, secrets=up.secrets, arc=up.arc,
-        given_leak=checks.downsend_leak(up.mat.given, up.arc),
         lead_upto_ch=up.upto, hook_chars=(up.style_hook or {}).get('chars'),
         approved=False, stale=[], missing=[]
     ) + semantic.unavailable_outcomes('恒等基线是 0 成本路，不跑付费语义审判')
@@ -256,7 +255,7 @@ def run_identity(ctx: RunContext) -> tuple[dict[str, str], CheckReport]:
 def _judgeable_rules():
     """恒等基线要占格子的那些：hard + info 的**机械**判据。
 
-    metric 与 unver 不占格；两条语义判据也不占——恒等基线是 0 成本路，
+    metric 与 unver 不占格；三条语义判据也不占——恒等基线是 0 成本路，
     不跑付费审判，给它们占格就是两个永远 `0/1` 的假格子。
     """
     from contracts.rules import REGISTRY
@@ -472,6 +471,17 @@ def run_approve(ctx: RunContext, pick: int) -> tuple[Hook, CheckReport]:
             f'（1~{len(art.candidates)}）')
 
     c = art.candidates[pick - 1]
+    mechanical_hard = sorted({f.rule for f in c.findings if _sev_of(f.rule) == 'hard'})
+    if mechanical_hard:
+        raise TerminalState(
+            f'候选 {pick} 有阻断级机械问题 {mechanical_hard}，不能定稿。'
+            f'请改选干净候选或 --apply-edit 修正')
+
+    # 质量审判是批准动作的前置条件，而不是一张可忽略的报告：缺审、过期、
+    # coverage=uncertain 或实质矛盾都不能由一次人工误点绕过。
+    from novel.stages.stage6 import semantic
+    semantic.require_selectable(store, art, c.text, str(pick))
+
     store.archive_round(REL, keep=True)
     new = art.model_copy(update={
         'approved': ApprovedHook(approach=c.approach, text=c.text, origin='human',

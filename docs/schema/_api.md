@@ -354,7 +354,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `lead_upto` / `rationale` | | 是 | 开篇引到哪一章、为什么 |
-| `candidates[]` | 数组 | 是 | 恒三条，`index` 恒 `1..3`（顺序即产物顺序，后置条件）。⚠ **`chars` 在 Python 侧走 `measure()` 那把尺子现算**——同一条候选 `measure()['chars']=253` 而 `len(text)=277`，下沉到 JS 的后果是同一页上人会看到两个字数 |
+| `candidates[]` | 数组 | 是 | 恒三条，`index` 恒 `1..3`。`chars` 在 Python 侧走 `measure()` 现算。质量审判字段包括 `semantic_state`（clear / contradiction / uncertain / unreviewed）、`semantic_reason`、`contradictions[]`、六维 `quality`、代码总分 `quality_score`、`quality_rank` 与 `selectable`；缺失/旧版/过期审判必须显示 unreviewed，不能画成 clear |
 | `approved` | 对象 或 null | 是 | `null` = 还没定稿。`candidates[].approved` 与它说同一件事（后置条件）；`human_edit`（无前身）时不许有候选自称定稿 |
 | `book[]` / `judged` / `baselines_identity` / `sources` | | 是 | 书级结论、语义审判、恒等基线、来源账，原样 |
 | `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |

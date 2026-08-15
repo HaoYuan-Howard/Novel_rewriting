@@ -80,6 +80,15 @@ def test_the_approved_flag_and_the_approved_block_tell_one_story(box):
                                     if measure(v.approved.text) else 0)
 
 
+def test_missing_quality_review_is_visible_and_disables_selection(box):
+    """沙箱刻意不复制 semantic_N.json：缺审必须是 unreviewed，不能默认 clear。"""
+    v = stage6_view(box.root, box.sid)
+    assert all(candidate.semantic_state == 'unreviewed' for candidate in v.candidates)
+    assert all(not candidate.selectable for candidate in v.candidates)
+    assert all(candidate.quality is None and candidate.quality_rank is None
+               for candidate in v.candidates)
+
+
 def test_the_view_forwards_the_artifact_without_reshaping_it(box):
     """`judged` / `baselines_identity` / `book` 原样转发——转发不是改写。"""
     v = stage6_view(box.root, box.sid)

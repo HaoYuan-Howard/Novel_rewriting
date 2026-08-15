@@ -73,19 +73,19 @@ def test_every_registered_rule_produced_a_row(box):
 def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     """⚠ **stage6 的徽章在结构上永远不可能是 `pass`。**
 
-    6 条 `sev=unver` 每次都输出（`builder._status_of` 强制），而 `badge_of` 见 `unver`
+    3 条 `sev=unver` 每次都输出（`builder._status_of` 强制），而 `badge_of` 见 `unver`
     就至少 amber。**这不是缺陷**，是本层「能查的都查了、查不了的写在脸上」的可见形态。
 
-    6 条机械 `sev=unver` 常驻；语义两条是否 `unver` 取决于当前语义审判产物。
+    3 条工作流/前提 `sev=unver` 常驻；质量语义三条是否 `unver` 取决于当前审判产物。
     """
     rep = _check(box)
     hard_hit = any(r.sev == 'hard' and r.status == 'hit' for r in rep.rules)
     assert rep.badge == ('fail' if hard_hit else 'amber')
     assert rep.passed is (not hard_hit)
-    assert len([r for r in rep.rules if r.sev == 'unver']) == 6
+    assert len([r for r in rep.rules if r.sev == 'unver']) == 3
     semantic_lines = [r for r in rep.rules if r.check_kind == 'semantic']
-    assert {r.rule for r in semantic_lines} == {'hook_semantic_spoiler',
-                                                'hook_semantic_grounding'}
+    assert {r.rule for r in semantic_lines} == {
+        'hook_semantic_contradiction', 'hook_candidate_contradiction', 'hook_quality_rank'}
 
 
 # ── ⭐ 两条等价测试 ─────────────────────────────────────────────────────────
@@ -112,7 +112,9 @@ def test_rejudging_reproduces_what_is_on_disk(box):
     """
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     up = hook._Upstreams(ctx, __import__('novel.store', fromlist=['x']).ArtifactStore(ctx))
-    book_level = {'hook_report', 'hook_downsend_leak'}
+    # 历史 hook.json 可能仍带着已退役的剧透字面规则；它们只读兼容，不再重判。
+    retired = {'hook_arc_literal', 'hook_downsend_leak'}
+    book_level = {'hook_report'} | retired
     for label, text, stored in _texts_and_stored(box):
         _t, _m, fs = hook._normalize_and_judge(text, up)
         got = {f.rule for f in fs} - book_level
@@ -167,7 +169,7 @@ def test_the_stored_identity_baseline_has_every_current_cell(box):
     want = {r.rule for r in REGISTRY.of_stage('stage6')
             if r.sev in ('hard', 'info') and r.check_kind != 'semantic'
             and r.rule != 'hook_reuses_source'}
-    assert set(stored) == want
+    assert set(stored) - {'hook_arc_literal', 'hook_downsend_leak'} == want
 
 
 def test_identity_grid_excludes_semantic_rules(box):
@@ -177,7 +179,8 @@ def test_identity_grid_excludes_semantic_rules(box):
     grid, _rep = hook.run_identity(ctx)
     semantic_rules = {r.rule for r in REGISTRY.of_stage('stage6')
                       if r.check_kind == 'semantic'}
-    assert semantic_rules == {'hook_semantic_spoiler', 'hook_semantic_grounding'}
+    assert semantic_rules == {
+        'hook_semantic_contradiction', 'hook_candidate_contradiction', 'hook_quality_rank'}
     assert not semantic_rules & set(grid)
 
 
@@ -223,7 +226,7 @@ def test_identity_baseline_runs_and_excludes_the_constructed_one(box):
 
 # ── 定稿 ────────────────────────────────────────────────────────────────────
 
-def test_approve_copies_the_candidate_and_leaves_provenance_alone(box):
+def test_approve_copies_the_candidate_and_leaves_provenance_alone(box, monkeypatch):
     """`stage6.approve --pick N`：定稿 = **候选那一份的拷贝** + `origin='human'`。
 
     ⚠⚠ **`_provenance` 一个字都不动**：不走 `llm_provenance`（0 成本的跑不许现造
@@ -231,6 +234,8 @@ def test_approve_copies_the_candidate_and_leaves_provenance_alone(box):
     LLM 产的字节，标 `partial_rewrite` 会说假话。
     """
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.approve', paid=False)
+    from novel.stages.stage6 import semantic
+    monkeypatch.setattr(semantic, 'require_selectable', lambda *_args, **_kw: None)
     before = box.read('stage6/hook.json')['_provenance']
     new, rep = hook.run_approve(ctx, 2)
     after = box.read('stage6/hook.json')
@@ -242,6 +247,26 @@ def test_approve_copies_the_candidate_and_leaves_provenance_alone(box):
     assert rep.passed is True
     # 归档：换掉的是「谁被选中」这个决定，而那正是下次调 prompt 时唯一的证据。
     assert list((box.dir / 'stage6' / '_rounds').glob('hook.r*.json'))
+
+
+def test_approve_checks_quality_before_archiving_or_writing(box, monkeypatch):
+    """矛盾闸必须在任何状态变化之前执行，拒绝后 hook.json 与归档目录都不动。"""
+    from novel.errors import TerminalState
+    from novel.stages.stage6 import semantic
+
+    before = box.read('stage6/hook.json')
+    rounds_before = sorted((box.dir / 'stage6' / '_rounds').glob('hook.r*.json'))
+
+    def reject(*_args, **_kwargs):
+        raise TerminalState('候选有实质矛盾，不能定稿')
+
+    monkeypatch.setattr(semantic, 'require_selectable', reject)
+    ctx = RunContext.open(str(box.root), box.sid, 'stage6.approve', paid=False)
+    with pytest.raises(TerminalState, match='实质矛盾'):
+        hook.run_approve(ctx, 1)
+
+    assert box.read('stage6/hook.json') == before
+    assert sorted((box.dir / 'stage6' / '_rounds').glob('hook.r*.json')) == rounds_before
 
 
 @pytest.mark.parametrize('pick', [0, 4, -1])
@@ -361,13 +386,19 @@ def test_revalidate_promotes_only_after_the_problem_is_fixed(box):
     assert rep.passed is True
 
 
-# ── 下发面 ──────────────────────────────────────────────────────────────────
+# ── 完整创作包 ──────────────────────────────────────────────────────────────
 
-def test_the_downsend_face_carries_no_ending(box):
-    """⚠ **护栏自己也可能是泄漏源。** 盘上 0/3 本命中。"""
+def test_prompt_carries_source_full_story_and_body_execution_style(box):
+    """质量升级的三项信息必须真的进入实际发送的 user，而不只写在设计文档里。"""
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     _sys, user, mat = hook.build_prompt(ctx)
+    source = sandbox.cut(box.book, 'stage1/hook_copy.json')
     gg = sandbox.cut(box.book, 'stage2/global_grounding.json')
-    assert checks.downsend_leak(mat.given, gg['arc']) == []
-    assert 'mode_variation' not in user, \
-        '文案不需要情境切换；书级聚合和历史产物的 mode_variation 不该下发'
+    style = sandbox.cut(box.book, 'stage3/style_grounding.json')
+    assert source['text'] in user and mat.source_hook == source['text'].strip()
+    assert gg['arc'] == mat.story_truth['arc']
+    for value in (gg['arc'].get('climax'), gg['arc'].get('ending')):
+        if value:
+            assert value in user, '全书兑现没有真正下发，payoff_preview 仍会闭卷写作'
+    assert mat.style_packet['book_surface_habits'] == style.get('surface_habits')
+    assert 'whole_story_map' in user and len(mat.story_map) >= 1

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage 6 文案节点的现行 system prompt 与下发材料。
+"""Stage 6 开篇文案生成 prompt 与唯一的材料投影。
 
-三种写法及其说明统一来自 `HOOK_APPROACH_NOTES`，由 `fill()` 插值；测试锁定实际发送的
-完整字节，确保 `result_flashback` 的「不得取后期高潮或结局」约束不会在渲染时丢失。
+2026-08-15 三书 A/B 证明，当前文案质量的主要瓶颈不是模型能力，而是模型看不见
+原作文案的有效结构、全书兑现和正文实际执行的 ``surface_habits``。本模块因此把
+原作文案作为创作金标准，把全书事实/故事地图作为真实性边界，把开篇成稿与正文手法
+作为声线边界。剧透不再是违规；真正的边界是不能改变人物身份、关系、关键因果或结果。
 
-【`given` 只有这一处产出】发明越界探针（`hook_invented_name` / `hook_invented_number`）
-拿它当「给过什么」的全集。它必须由 `build_material` 产出、而不是另找一处拼一遍：
-**探针与 prompt 一旦分家，探针就开始误报（把给过的当成编的）或漏报（把没给的当成给过的）。**
+``Material.given`` 仍是机械词面探针的唯一「给过什么」全集。prompt 与探针必须消费
+同一份 blocks；分开拼装会让发明人名/数字的探针误报或漏报。
 """
 from __future__ import annotations
 
@@ -18,172 +19,162 @@ from contracts.invariants import HOOK_APPROACHES, HOOK_APPROACH_NOTES
 from novel.core.bands import hook_shape_band
 from novel.llm.prompts import fill, with_json_shape
 
-#: 文案生成的现行 system prompt。
+
 HOOK_SYS = """\
-你在为一本小说写【开篇文案】——放在正文之前、让读者愿意点进第一章的那段话。只输出 JSON。
+你是中文商业网文的资深开篇文案作者。你的第一目标只有一个：让目标读者看完文案后立刻继续读第一章。
 
-要求：
-- 尽快立住【身份 / 处境 / 危机】，把最有张力的那个冲突亮出来，留下一个明确的未答问题，自然接进第一章；
-- 落在给定的【文案写法】与【声音】上：文案的情绪浓度通常高于正文，按给定的「与正文的关系」把握分寸；
-- **不许发明事实，必须发明文字**：文案里的事必须在给定材料里有据——不写没发生的事、
-  不承诺没兑现的反转、不歪曲人物关系；但**措辞一律自己写**，不要沿用给定材料的句子。
-- 文案里出现的人物称谓，只能用【人物表】或【全书卖点】里出现过的那些。
+你会看到原始文案、完整故事事实、全书逐章故事地图、重写后的开篇正文，以及正文实际使用的声音和写作手法。
+你知道全书，不等于必须把全书都说出来；由你选择披露多少。剧透不是违规，也不是目的，只是一种吸引读者的
+工具：能增强期待就用，会把悬念彻底说死就不用。
 
-【可以说破】给定的【全书卖点】是这本书最有戏的那几件事，**它们就是拿来用的**：
-可以直接写出来当钩子，不必绕开、不必只做暗示。这是文案，不是正文——读者是先看它才决定
-要不要点进第一章的。
+【原始文案是创作金标准】
+- 保留它真正有效的钩子机制：信息出场顺序、误导与揭示、喜剧或危险节拍、对白密度、反差、最后一击的功能；
+- 不得照抄其措辞；不要出现与原始文案连续 20 个内容字符相同的片段。短小的通用称谓和必要设定可以自然重合；
+- 新文案必须与重写正文像同一本书，优先执行逐章声音与 surface_habits，不要写成编辑部剧情简介。
 
-【事实与时点是两条约束】只有【正文】能作为「开篇这几章已经发生了什么、谁当时知道什么」
-的依据。【全书卖点】可以由文案叙述者直接点破、概括或设问，但它不是开篇事件清单：
-- 不得把卖点补写成发生在开篇某一夜、某一处的场景，不得为它新编台词、动作或因果；
-- 不得把人物后期才获得的知识、能力、身份或关系前移到开篇时点；
-- 不得把两条分别真实的材料拼成一件从未发生过的新事件。
-「可以说破」授权的是信息披露，不是改动故事时间线。
+【文案体裁自由】
+- 允许压缩时间线、把数章合成一个高张力预告、从后期结果倒叙、为真实关系和真实事件重写新台词、
+  用一个合成场面承载真实矛盾；
+- 这些自由不能改变人物身份、关系、关键因果或故事结果，不能凭空增加会改变读者理解的新设定；
+- 不要把秘密清单逐条翻译成摘要。每条候选只选一个最强承诺，围绕它形成起势、升级、最后一击；
+- 避免空泛收尾，如“究竟会怎样”“是命还是债”“谁才是真正的……”；最后一句必须带具体人物欲望、
+  危险、反转、笑点或行动；
+- 长度以原始文案为基准，约为其 0.8~1.35 倍；按原作的短句、短段、对白与停顿习惯写。
 
-【硬禁·结局】唯一不许碰的是**故事最终如何收场**：不要写结局、不要写最后的胜负与归宿、
-不要写「最终……」这类收束。悬念要留在「接下来会怎样」，不是「原来是这样，完了」。
-
-【硬禁·不复用原句】这是一次**重写**。不要复用你在给定正文里读到的句子，全部用自己的话写。
-
-产出【三个候选】，各用一种策略：
+产出三个真正不同的候选，各用一种策略：
 $APPROACHES
 
-输出 JSON：
-- candidates: [{approach, text}]，三条，approach 用上面的英文键名；
-  text 是完整文案，简短有力，多为短句短段；
-- rationale: 一句话，说明这三条各自赌的是什么。"""
+输出前在心里逐条与原始文案比较：若更抽象、更像摘要、笑点/危险更弱或最后一句更空，就重写。
+输出 JSON：candidates 恰好三条、每种英文 approach 各一次；rationale 用一句话说明三条各自赌的吸引点。
+只输出 JSON。"""
 
-#: 结构提示；`approach` 从 `HOOK_APPROACHES` 派生。
-HOOK_HINT = {'candidates': [{'approach': '|'.join(HOOK_APPROACHES), 'text': 'str'}],
-             'rationale': 'str'}
+HOOK_HINT = {
+    'candidates': [{'approach': '|'.join(HOOK_APPROACHES), 'text': 'str'}],
+    'rationale': 'str',
+}
 
 
 def hook_system() -> str:
-    """把三种写法插值进 system prompt。
-
-    `fill()` 走 `string.Template`：占位符缺值时**抛 `KeyError`**，
-    而 Jinja 那类默认渲染成空串——那会静默产出一个带窟窿的 prompt，与显式终态正相反。
-    ⚠ `HOOK_APPROACH_NOTES` 的键与 `HOOK_APPROACHES` 由 invariants 的 import 期断言钉死，
-    所以「加了一种写法而忘了写说明」在这里表现为 `KeyError`，不是一句空说明。
-    """
-    rendered = fill(HOOK_SYS,
-                    APPROACHES='\n'.join(
-                        f'  {i}. {k} —— {v}'
-                        for i, (k, v) in enumerate(HOOK_APPROACH_NOTES.items(), 1)))
+    """插值三种策略；枚举与说明的覆盖关系由 invariants 在 import 期锁定。"""
+    rendered = fill(
+        HOOK_SYS,
+        APPROACHES='\n'.join(
+            f'  {i}. {key} —— {note}'
+            for i, (key, note) in enumerate(HOOK_APPROACH_NOTES.items(), 1)
+        ),
+    )
     return with_json_shape(rendered, HOOK_HINT)
 
 
 @dataclass(frozen=True)
 class Material:
-    """下发材料。**`given` 是探针的「给过什么」全集，只有这里产出它。**"""
+    """生成与校验共用的一份下发材料。"""
 
     blocks: tuple[str, ...]
     lead: tuple[dict, ...] = field(default_factory=tuple)
     missing: tuple[int, ...] = field(default_factory=tuple)
     upto: int = 1
+    source_hook: str = ''
+    story_truth: dict = field(default_factory=dict)
+    story_map: tuple[dict, ...] = field(default_factory=tuple)
+    style_packet: dict = field(default_factory=dict)
 
     @property
     def given(self) -> str:
+        """机械词面探针的「模型实际看见过什么」全集。"""
         return '\n'.join(self.blocks)
 
 
 def voice_for_hook(style: dict) -> dict:
-    """正文声音里**能给文案节点看的那几维**。
+    """正文的整份书级 voice。
 
-    现役 Stage 3 的 `voice.mode_variation` 只描述当前源章可见的情境变化，Stage 5
-    也只消费同源项。这里读取的是书级聚合画像；文案只有一段话，本来就不需要
-    「不同情境」这一维，因此剥掉它。
-
-    而对文案来说这一维**本来就没用**：文案是一段话，没有「不同情境」。
-    ⇒ 处置是按消费方投影，不是删——Stage 5 的逐章写手仍然需要对应局部项。
-
-    ⚠ 这是**下发面**方向的收窄。同一份 `voice` 若将来拿去做检测器
-    （比如查文案有没有偏离本书声音），那一边**不能**收窄——方向正相反。
+    旧设计删除 ``mode_variation`` 是因为文案只有一段；A/B 表明问题恰恰在文案与正文
+    执行感不一致。它现在与 ``surface_habits``、开篇逐章风格一起作为可选择的声线证据，
+    由模型判断哪些情境变化与所选场面有关。
     """
-    v = dict(style.get('voice') or {})
-    v.pop('mode_variation', None)
-    return v
+    return dict(style.get('voice') or {})
 
 
-def _roster_upto(ctx: dict, upto: int) -> dict[str, str | None]:
-    """人物表 = **逐章名册的并集**，不是 `world_facts.characters`。
-
-    ⚠ 后者是**全书**名册，它自己就带着未来：实测某本的全书名册里有一条
-    「系统：绑定许言的穿越系统…」，而这个存在要到 ch14 才对读者揭示。
-    整份发下去，写开篇文案的模型当场读到全书最大的那个底。
-    逐章 `characters` 是 stage4 已经逐章投影过的，按范围取并集即可。
-
-    ⚠⚠ **这里收窄，`core.naming.name_stems` 那边绝不能收窄**：同一份人名表在这里是
-    「要发出去的东西」，在发明越界探针那里是「用来发现问题的东西」，**方向正相反**。
-    按章收窄探针，第 1 章就检不出那个后文才出场的人名，真编出来的反而漏网。
-    """
-    roster: dict[str, str | None] = {}
-    for ch in (ctx.get('chapters') or []):
-        if (ch.get('output_ordinal') or 0) <= upto:
-            for c in (ch.get('characters') or {}).values():
-                # 只给【叫什么 + 是谁】。`name_distinctiveness` 的消费方是确定性代码，
-                # prompt 里从没定义过这个枚举是什么意思，发过去只是噪声。
-                if (c or {}).get('display_name'):
-                    roster[c['display_name']] = c.get('role')
-    return roster
+def story_map(ctx: dict) -> list[dict]:
+    """全书 writer_context → 无禁写标记、但有完整事件与钩子目标的故事地图。"""
+    out: list[dict] = []
+    for chapter in ctx.get('chapters') or []:
+        events: list[str] = []
+        for beat in chapter.get('beats') or []:
+            events.extend(str(event) for event in (beat.get('events') or []) if str(event).strip())
+        out.append({
+            'chapter': chapter.get('output_ordinal'),
+            'from_source_ordinals': chapter.get('from_source_ordinals') or [],
+            'chapter_goal': chapter.get('chapter_goal'),
+            'open_hook_goal': chapter.get('open_hook_goal'),
+            'events': events,
+            'end_hook_goal': chapter.get('end_hook_goal'),
+        })
+    return out
 
 
-def build_material(*, title: str, ctx: dict, style: dict, secrets: list[dict],
-                   lead: list[dict], missing: list[int], upto: int) -> Material:
-    """按现行 Stage 6 契约组装下发材料。"""
-    hook_style = style.get('hook_style')
-    facts = [s for s in (secrets or []) if s.get('fact')]
-    blocks = [
-        f'《{title}》 —— 为这本书写开篇文案。',
+def _opening_source_ordinals(ctx: dict, upto: int) -> set[int]:
+    out: set[int] = set()
+    for chapter in ctx.get('chapters') or []:
+        if int(chapter.get('output_ordinal') or 0) <= upto:
+            out.update(int(x) for x in (chapter.get('from_source_ordinals') or []) if int(x) > 0)
+    return out
 
-        '── 正文（开篇这几章的成稿；文案须与它真实相符，且【不得复用它的句子】）──\n'
-        + '\n\n'.join(f"【第 {r.get('output_ordinal')} 章】\n{r.get('text') or ''}" for r in lead),
 
-        # 【为什么送的是 `fact` 而不是多给几章正文】判据 2「原文以点不以段下发」：
-        # `secrets[].fact` 是**离散的事实陈述**，写手只能把它放进去或不放进去，
-        # 模仿不出文风；多给几章成稿是**连续文本段**，模型必然沿着它的句序和节奏走。
-        # 而且加章还解决不了问题——实测某本的卖点是 reveal=4 的那条，
-        # 放宽到第 4 章它仍然是 secret、仍然被禁。**挡路的从来是剧透口径，不是章节范围。**
-        ('── 全书卖点（可直接说破的事实；不是『开篇已经发生』的事件清单）──\n'
-         + '\n'.join(f"· {s.get('fact')}" for s in facts)
-         + '\n挑最有戏的一到两件当钩子。可以由文案叙述者概括、点破或设问；'
-           '不得把它补写成开篇场景，不得擅加发生时点、地点、台词、动作或因果。'
-         if facts else
-         '── 全书卖点 ──\n（这本书没有抽到 secret，只能靠开篇那几章自己立钩子）'),
-
-        # 人物表不再是唯一的名字来源：卖点里必然带着后文才出场的人（实测五本每本都有）。
-        # `hook_invented_name` 拿整个下发面 `given` 当依据，所以那些名字自动有据。
-        '── 人物表（文案里的人物称谓只能用这里或【全书卖点】里出现过的）──\n'
-        + json.dumps(_roster_upto(ctx, upto), ensure_ascii=False),
-
-        '── 文案写法（这本书的文案是怎么写的）──\n' + json.dumps(hook_style, ensure_ascii=False),
-
-        '── 正文的声音（文案与它的关系见上面的 relation_to_body）──\n'
-        + json.dumps(voice_for_hook(style), ensure_ascii=False),
-
-        # 【形态给档位，不给数值】既给「权威数字」又禁止复述数字，是一对自相冲突的指令。
-        # 实测动机：首跑三个候选**全被写成一整段**（162/178/185 字/段），
-        # 而本书文案段是 16.4 字/段。`hook_shape` 抓到了，
-        # 可 prompt 当时只有一句含糊的「多为短句短段」——**判据在查一件 prompt 没说清的事**。
-        '── 这本书的文案是什么形态（按原作文案量出的档位，权威）──\n'
-        + json.dumps(hook_shape_band(_hook_meas(style)), ensure_ascii=False)
-        + '\n照这个形态写：段落怎么切、句子多长，跟它一致。'
-        # 【篇幅给数值，形态给档位 —— 这两条不矛盾】「喂档位不喂数值」是对**描述性节点**
-        # （stage3）说的：那里既要它参考权威数字又禁止复述，模型只能靠写进描述来自证。
-        # stage6 是**生成**节点，字数是它的**目标**不是它要描述的对象。
-        # 实测动机：首跑两本**全部偏短**（118/114 vs 180、116/74/79 vs 319），
-        # 因为当时只说了一句「简短有力」。
-        + f"\n目标篇幅：约 {(_hook_meas_raw(style) or {}).get('chars', '?')} 字"
-          f'（本书原作文案段的长度）。这是**目标**，不是要写进文案里的信息。',
-
-        # 【剧透边界】秘密可以说破，结局与最终高潮不行。
-        '── 唯一的禁区 ──\n'
-        '全书的结局与最终高潮不许写，也不要暗示故事最终如何收场（上面的卖点里若牵到结局，'
-        '只用它的前半段）。除此之外没有别的信息禁区——秘密该说破就说破；但事实的时点仍须'
-        '真实：可提前告诉读者，不可把后期事实搬成开篇已经发生的戏。',
+def style_packet(style: dict, ctx: dict, upto: int) -> dict:
+    """与开篇正文同源的风格执行包，而非只有抽象的书级 voice。"""
+    source_ordinals = _opening_source_ordinals(ctx, upto)
+    chapter_styles = [
+        item for item in (style.get('chapter_styles') or [])
+        if int(item.get('source_ordinal') or 0) in source_ordinals
     ]
-    return Material(blocks=tuple(blocks), lead=tuple(lead),
-                    missing=tuple(missing), upto=upto)
+    return {
+        'hook_style': style.get('hook_style'),
+        'book_voice': voice_for_hook(style),
+        'book_surface_habits': style.get('surface_habits'),
+        'opening_chapter_styles': chapter_styles,
+        'source_hook_shape': hook_shape_band(_hook_meas(style)),
+        'measurable': style.get('measurable'),
+    }
+
+
+def build_material(*, title: str, ctx: dict, style: dict, grounding: dict,
+                   source_hook: str, lead: list[dict], missing: list[int],
+                   upto: int) -> Material:
+    """组装 A/B 已验证的完整创作包。"""
+    truth = {
+        'entities': grounding.get('entities'),
+        'canon': grounding.get('canon'),
+        'arc': grounding.get('arc'),
+    }
+    full_map = story_map(ctx)
+    styles = style_packet(style, ctx, upto)
+    packet = {
+        'title': title,
+        'source_hook': source_hook,
+        'source_hook_target_chars': ((_hook_meas_raw(style) or {}).get('chars')),
+        'style': styles,
+        'story_truth': truth,
+        'whole_story_map': full_map,
+        'rewritten_opening': [
+            {'chapter': row.get('output_ordinal'), 'text': row.get('text') or ''}
+            for row in lead
+        ],
+    }
+    blocks = (
+        '下面是本书的完整创作包。先理解原始文案为何有效，再写三条新的开篇文案。',
+        json.dumps(packet, ensure_ascii=False, indent=2),
+    )
+    return Material(
+        blocks=blocks,
+        lead=tuple(lead),
+        missing=tuple(missing),
+        upto=upto,
+        source_hook=source_hook,
+        story_truth=truth,
+        story_map=tuple(full_map),
+        style_packet=styles,
+    )
 
 
 def _hook_meas_raw(style: dict) -> dict | None:
@@ -191,12 +182,7 @@ def _hook_meas_raw(style: dict) -> dict | None:
 
 
 def _hook_meas(style: dict):
-    """`measurable.hook` → `MeasurableBlock`，喂给 `hook_shape_band`。
-
-    ⚠ 走模型而不是裸 dict：`hook_shape_band` 的两个入参是 `avg_sentence_chars` /
-    `avg_paragraph_chars`，拿 dict 直接 `.get` 会在字段改名时静默取到 `None`
-    并渲染出一档错的档位词——而那一档**逐字进 prompt**。
-    """
+    """``measurable.hook`` → 强类型模型，避免字段漂移静默选错形态档。"""
     from contracts.schema.stage3 import MeasurableBlock
     raw = _hook_meas_raw(style)
     return MeasurableBlock.model_validate(raw) if raw else None

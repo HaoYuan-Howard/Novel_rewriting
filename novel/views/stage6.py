@@ -25,6 +25,7 @@ from contracts.schema.stage6 import Hook
 from novel import paths, prov
 from novel.core.measure import measure
 from novel.orchestrator.state import artifact_state, readonly_ctx
+from novel.stages.stage6 import semantic
 from novel.store import ArtifactStore
 
 NODE = 'stage6.hook'
@@ -46,11 +47,21 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
     art, _raw = store.read_own(Hook, REL)
 
     approved_approach = art.approved.approach if art.approved is not None else None
+    assessments = semantic.current_assessments(store, art)
     candidates = [
         HookCandidateLine(
             index=i, approach=c.approach, chars=_chars(c.text), text=c.text,
             mech=c.mech, findings=c.findings,
-            approved=c.approach == approved_approach)
+            approved=c.approach == approved_approach,
+            semantic_state=assessments[semantic.text_sha1(c.text)].state,
+            semantic_reason=assessments[semantic.text_sha1(c.text)].reason,
+            contradictions=(list(assessments[semantic.text_sha1(c.text)].review.contradictions)
+                            if assessments[semantic.text_sha1(c.text)].review else []),
+            quality=(assessments[semantic.text_sha1(c.text)].review.quality
+                     if assessments[semantic.text_sha1(c.text)].review else None),
+            quality_score=assessments[semantic.text_sha1(c.text)].quality_score,
+            quality_rank=assessments[semantic.text_sha1(c.text)].quality_rank,
+            selectable=assessments[semantic.text_sha1(c.text)].selectable)
         for i, c in enumerate(art.candidates, start=1)]
     approved = (HookApprovedLine(
         approach=art.approved.approach, chars=_chars(art.approved.text),

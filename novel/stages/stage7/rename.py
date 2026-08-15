@@ -94,9 +94,10 @@ class _Upstreams:
          self.invalids) = collect_chapters(by_ord, plan, invalids)
 
         self.hook_raw: dict | None = None
+        self.hook_art = None
         if store.exists(HOOK):
-            self.hook_raw = store.read(
-                paths_model(HOOK), HOOK).model_dump(by_alias=True)
+            self.hook_art = store.read(paths_model(HOOK), HOOK)
+            self.hook_raw = self.hook_art.model_dump(by_alias=True)
         self.hook_text: str = (((self.hook_raw or {}).get('approved') or {}).get('text') or '')
         self.hook_sha1: str | None = _hook_file_fp(store)
         self.hook_consumed = hook_consumed_of(self.hook_raw)
@@ -594,6 +595,10 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
     """
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store)
+    if up.hook_art is None:
+        raise UpstreamMissing(f'{HOOK} 不在盘上——先完成 stage6')
+    from novel.stages.stage6 import semantic as hook_semantic
+    hook_semantic.require_approved_clear(store, up.hook_art)
     baseline = _identity_baseline(up)
     if not baseline.roundtrip_ok or baseline.chapters <= 0:
         raise TerminalState(

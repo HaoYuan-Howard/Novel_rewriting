@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 23 条**机械**判据的实现。行在 `contracts/judges/stage6.py`（`Q-12`）。
-（另 2 条 `check_kind='semantic'` 的产地在 `semantic.outcomes`——付费审判读盘上产物，
+checks.py —— 18 条**机械**判据的实现。行在 `contracts/judges/stage6.py`（`Q-12`）。
+（另 3 条 `check_kind='semantic'` 的产地在 `semantic.outcomes`——付费审判读盘上产物，
 与本模块的 0 成本判据在 `hook._judge_artifact` 合并成同一份报告。）
 
 ⚠⚠ **唯一的判定落点。** 三个候选、定稿、以及恒等基线（拿原作文案段当输入）
@@ -32,8 +32,9 @@ from novel.stages.stage6.prompts import Material
 HOOK_BAND = (0.6, 1.6)
 SHAPE_BAND = (0.5, 2.0)
 
-#: 与**原作文案段**的窗口重合上限。**无豁免**——文案里一句逐字要求都没有。
-REUSE_MAX = 0.02
+#: 与**原作文案段**的 20 内容字窗口重合上限。原作文案现在作为结构金标准下发，
+#: 因而这条从「人可能抄」变成模型也可违反的真实门；允许学结构，不允许复用长句。
+REUSE_MAX = 0.0
 
 #: 与**开篇正文**的窗口重合上限。
 #: ⚠ 原型这里是**行内字面量**（`> 0.10`），而同一族的另一个阈值 `REUSE_MAX` 有落点
@@ -44,37 +45,6 @@ TRANSCRIBE_MAX = 0.10
 
 #: 文案长度下限（内容字符）。低于它整份早退，**其余判据一条都不跑**。
 EMPTY_MIN = 20
-
-
-def arc_sources(arc: dict | None) -> list[str]:
-    """**唯一还禁的那批取值面**：结局 · 高潮 · 每个人最后变成了什么样。**唯一落点。**
-
-    两个消费方共用：`hook_downsend_leak`（查它有没有混进 prompt）与
-    `hook_arc_literal`（查它有没有混进文案）。分别写一遍就会漂。
-    ⚠ `arc_tracks[].trajectory` 也在里面：「这个人最后变成了什么样」**同样是结局**。
-    """
-    a = arc or {}
-    return [x for x in ([a.get('climax'), a.get('ending')]
-                        + [t.get('trajectory') for t in (a.get('arc_tracks') or [])])
-            if isinstance(x, str) and x]
-
-
-def downsend_leak(given: str, arc: dict | None) -> list[tuple[str, str]]:
-    """扫**下发面自己**有没有混进结局。返回命中的 `(来源, 片段)`。
-
-    判据 27：一份「已经在检查」的守卫，要问它**开在哪扇门上**。
-    `voice_for_hook` 与「不发 arc」两处收窄都是按已知的洞堵的；这个函数是**兜底**。
-
-    当前边界允许下发 secrets，但禁止下发结局与最终高潮，因此只扫描 `arc_sources`。
-    """
-    ng = norm(given)
-    out: list[tuple[str, str]] = []
-    for src in arc_sources(arc):
-        for k in secret_keywords(src):
-            if norm(k) and norm(k) in ng:
-                out.append(('arc', k[:20]))
-                break
-    return out
 
 
 def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | None,
@@ -147,7 +117,7 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
                           detail=f'文案出现下发面里没有的【数字+单位】{inv[:6]}——逐个核对',
                           evidence=inv))
 
-    # ── ④ 卖点用了哪几条（度量）+ 结局有没有被说破（唯一还禁的那道）────────
+    # ── ④ 卖点用了哪几条（度量）──────────────────────────────────────────
     hid, _no_time = hidden_secrets(secrets, mat.upto)
     hid_ids = {s.get('secret_id') for s in hid}
     used: list[tuple[str, str]] = []
@@ -169,19 +139,6 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
                    '——**0 条是常态**，它不代表卖点没用上：文案按体裁在改写，'
                    '字面探针在这个产物类上结构性失效（同 hook_spoiler_unver）')),
         evidence=[seg for _, seg in used]))
-
-    hit_arc: list[str] = []
-    for src in arc_sources(arc):
-        for k in secret_keywords(src):
-            if norm(k) and norm(k) in nb:
-                sp = locate_norm(k, body)
-                hit_arc.append(body[sp[0]:sp[1]] if sp else k[:16])
-                break
-    if hit_arc:
-        fs.append(finding('hook_arc_literal',
-                          detail=f'文案**逐字**撞上了结局/高潮：{[h[:16] for h in hit_arc[:3]]}'
-                                 f'——秘密可以说破，收场不行',
-                          evidence=hit_arc))
 
     # ── ⑤ 形态：贴合本书自己的**文案段**，不是正文 ─────────────────────────
     #
@@ -265,13 +222,13 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一份产物 → 23 个机械 `Outcome`（语义两条由 semantic.outcomes 产）
+# 一份产物 → 18 个机械 `Outcome`（语义三条由 semantic.outcomes 产）
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: 逐条文本判的那 14 条（5 hard + 9 info）。
 _PER_TEXT_JUDGED = (
     'hook_empty', 'hook_truncated', 'hook_reuses_source', 'hook_invented_name',
-    'hook_para_sep', 'hook_transcribes_body', 'hook_invented_number', 'hook_arc_literal',
+    'hook_para_sep', 'hook_transcribes_body', 'hook_invented_number',
     'hook_length', 'hook_shape', 'hook_quote_style', 'hook_quote_unbalanced',
     'hook_ending_shape',
 )
@@ -280,10 +237,10 @@ _PER_TEXT_METRIC = ('hook_secret_literal', 'hook_quote_shape')
 
 
 def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
-          secrets: list[dict], arc: dict | None, given_leak: list[tuple[str, str]],
+          secrets: list[dict], arc: dict | None,
           lead_upto_ch: int, hook_chars: int | None, approved: bool,
           stale: list[str] | None, missing: list[str] | None) -> list[Outcome]:
-    """一份 `hook.json` → **23 个机械 `Outcome`，一条判据一个**。
+    """一份 `hook.json` → **18 个机械 `Outcome`，一条判据一个**。
 
     ⚠ `texts` 是 `[(标签, 文本, 这条文本的 findings)]`，四份（3 候选 + 定稿）。
     **每条 finding 的 `detail` 由调用方加 `[标签]` 前缀**——
@@ -304,14 +261,6 @@ def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
     for rule in _PER_TEXT_JUDGED + _PER_TEXT_METRIC:
         out.append(ran(rule, by_rule.get(rule, []), scanned=scanned))
 
-    # ── 书级：下发面自己有没有漏结局 ────────────────────────────────────────
-    out.append(ran('hook_downsend_leak',
-                   [finding('hook_downsend_leak',
-                            detail=f'下发面里混进了结局/高潮的字面：{src} 「{seg}」',
-                            evidence=[seg]) for src, seg in given_leak],
-                   scanned=f'拼好的 prompt {len(mat.given)} 字 × '
-                           f'{len(arc_sources(arc))} 条结局取值面'))
-
     # ── 书级度量 ────────────────────────────────────────────────────────────
     #
     # ⚠⚠ **字数一律现算**：`candidates[].chars` 已被新契约裁掉（能 0 成本重算的字段
@@ -327,48 +276,13 @@ def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
                             evidence=[str(lead_upto_ch)])],
                    scanned=scanned))
 
-    # ── 六条查不了的：**永远输出** ──────────────────────────────────────────
-    #
-    # 改写式泄底与事实无据由付费语义判据 `hook_semantic_spoiler` /
-    # `hook_semantic_grounding` 接管，产地在 `semantic.outcomes`。
-    out.append(unverifiable(
-        'hook_quote_unver',
-        '「引语在正文里有着落」曾是 HARD，恒等基线判死了它：两本原作文案共 7 条引语'
-        '在**原作全书**里逐字命中 0 章。原作文案里的台词，原作正文里根本不存在',
-        scanned=scanned))
-
+    # ── 三条工作流/前提状态 ────────────────────────────────────────────────
     out.append(unverifiable(
         'hook_not_approved',
-        '这份文案还没有人定稿——**定稿是本层现役的唯一闸门**，跑 `stage6.approve --pick N`'
+        '这份文案还没有人定稿——先看质量排序，再跑 `stage6.approve --pick N`'
         if not approved else
-        '已有人定稿。「文案写得好不好」没有确定性判据，那一下就是唯一的闸门',
+        '已有人定稿；质量审判负责排序与矛盾门，人负责最终审美选择',
         scanned='approved 一格'))
-
-    # ⚠⚠ **这四条也一样永远 `unverifiable`，一个 `ran` 分支都没有。**
-    # 它们答的是「判定的**前提**在不在」，而前提在不在都不构成一条判定
-    # ——`builder._status_of` 会把 `sev='unver'` 却走 `ran()` 的当场判成
-    # `RefusedByStructure`（**这条是它抓出来的**，不是读代码读出来的）。
-    # 前提成立时 `why` 说「成立，但本层没有判据能接着往下判」，
-    # 前提不成立时说清缺了什么。**两种状态都出声，而不是一种出声一种消失。**
-    out.append(unverifiable(
-        'hook_no_secrets',
-        'stage2 一条 secret 都没抽到——**下发面里没有卖点可给**，'
-        '这本书的文案只能靠开篇那几章自己立钩子，先天比原作干瘪一截'
-        if not secrets else
-        f'下发面有 {len(secrets)} 条卖点可用。⚠ **用得好不好没有确定性判据**：'
-        f'字面探针只查得出逐字重合（见 hook_secret_literal 的 0 条常态）',
-        scanned=f'{len(secrets or [])} 条 secret'))
-
-    _hid, no_time = hidden_secrets(secrets, mat.upto)
-    out.append(unverifiable(
-        'hook_secret_no_time',
-        f'{len(no_time)} 条 secret 没有 reader_reveal_events（{no_time[:4]}）'
-        f'——说不出它什么时候对读者揭示。⚠ 这**不再影响下发**（秘密现在全量下发），'
-        f'只影响那条度量把它算进「已揭示」还是「未揭示」'
-        if no_time else
-        f'{len(secrets or [])} 条 secret 各自说得出揭示时点，'
-        f'所以「已揭示/未揭示」那一分是有据的',
-        scanned=f'{len(secrets or [])} 条 secret'))
 
     out.append(unverifiable(
         'hook_body_missing',

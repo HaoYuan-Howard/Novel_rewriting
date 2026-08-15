@@ -63,7 +63,10 @@ export function Stage6Screen() {
       <QueryStates q={q} loadingLabel="读开篇文案候选" missing={{ title: '开篇文案 · stage6' }}>
         {(d) => {
           const approvedIdx = d.candidates.find((c) => c.approved)?.index ?? null
-          const picked = pick ?? approvedIdx ?? d.candidates[0]?.index ?? 1
+          const recommended = [...d.candidates]
+            .filter((c) => c.selectable)
+            .sort((a, b) => (a.quality_rank ?? 999) - (b.quality_rank ?? 999))[0]
+          const picked = pick ?? approvedIdx ?? recommended?.index ?? d.candidates[0]?.index ?? 1
           const cand = d.candidates.find((c) => c.index === picked) ?? d.candidates[0]
           const finalPhase = !!d.approved && !reopened
           const body = d.approved?.text ?? cand?.text ?? ''
@@ -128,6 +131,11 @@ export function Stage6Screen() {
                             </Mono>
                             <span className="text-body font-semibold">{c.approach}</span>
                             <Mono className="text-micro text-ink-5">{c.chars} 字</Mono>
+                            {c.quality_rank != null ? (
+                              <Mono className="rounded-tag bg-inset px-7 py-1 text-mini">
+                                质量 #{c.quality_rank} · {c.quality_score?.toFixed(2)}
+                              </Mono>
+                            ) : null}
                             <span
                               className={cx(
                                 'ml-auto rounded-tag px-8 py-2 text-tag',
@@ -150,6 +158,18 @@ export function Stage6Screen() {
                             <p className="prose-cn m-0 max-w-[var(--measure-compare)] whitespace-pre-wrap text-read leading-[2.05]">
                               {c.text}
                             </p>
+                            <div className="prose-cn rounded-block bg-sunken-2 px-10 py-8 text-tag text-ink-3">
+                              质量审判：{c.semantic_state} · {c.semantic_reason}
+                            </div>
+                            {c.contradictions.map((item, i) => (
+                              <div
+                                key={'semantic-' + i}
+                                className="prose-cn rounded-block px-10 py-8 text-tag"
+                                style={{ color: SEV.hard.color, background: SEV.hard.bg }}
+                              >
+                                实质矛盾：{item.assertion}（证据：{item.evidence}）
+                              </div>
+                            ))}
                           </div>
 
                           <div className="flex flex-col border-t border-line-soft">
@@ -165,16 +185,25 @@ export function Stage6Screen() {
                             </Mono>
                             <button
                               type="button"
+                              disabled={!c.selectable}
                               onClick={() => {
+                                if (!c.selectable) return
                                 if (on) askApprove(c.index)
                                 else setPick(c.index)
                               }}
                               className={cx(
                                 'ml-auto cursor-pointer rounded-btn-lg border px-14 py-9 text-body-lg font-semibold',
+                                !c.selectable && 'cursor-not-allowed opacity-50',
                                 on ? 'border-ink bg-ink text-card' : 'border-line-btn bg-card text-ink',
                               )}
                             >
-                              {on ? '定稿这一条 · 进入审阅' : '定这一条'}
+                              {!c.selectable
+                                ? c.semantic_state === 'contradiction'
+                                  ? '有实质矛盾 · 不可定稿'
+                                  : '先完成质量审判'
+                                : on
+                                  ? '定稿这一条 · 进入审阅'
+                                  : '定这一条'}
                             </button>
                           </div>
                         </div>
@@ -182,7 +211,7 @@ export function Stage6Screen() {
                     })}
                   </div>
                   <div className="prose-cn text-tag text-ink-4">
-                    文案好坏没有确定性判据——人选的那一下就是现役的唯一闸门。改字不在浏览器：把
+                    排序来自匿名主编的六维质量审判；剧透不扣分，实质矛盾候选不可定稿。人仍负责最终审美选择。改字不在浏览器：把
                     hook_edit.json 放进书目录 stage6/ 后跑 stage6.hook --apply-edit（0 成本）。
                   </div>
                 </>

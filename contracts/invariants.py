@@ -629,26 +629,39 @@ STAGE3_ATTEMPT_KINDS: Final = (
 #: 就是给违约数据发一张静默通行证）。
 #: ⚠ 改这张表会改 `prompts.HOOK_SYS` 的指纹——那是对的：
 #: **一个模板 + 一份枚举表 = 一个 prompt**，表变了发出去的东西就变了。
-HOOK_APPROACHES: Final = ('conflict_first', 'result_flashback', 'identity_contrast')
+HOOK_APPROACHES: Final = ('source_architecture', 'payoff_preview', 'scene_punchline')
+
+#: 旧版 Stage6 已经落盘的三种写法。它们只用于**读取历史产物与编辑历史候选**，
+#: 不再进入生成 prompt / 模型响应枚举。把历史值直接从载体里删掉，会让一次 prompt
+#: 升级变成全库数据迁移；反过来若继续把它们放在 ``HOOK_APPROACHES``，模型又会继续
+#: 生产已经被 A/B 证伪的策略。读写面必须分开。
+HOOK_LEGACY_APPROACHES: Final = ('conflict_first', 'result_flashback', 'identity_contrast')
+HOOK_STORED_APPROACHES: Final = HOOK_APPROACHES + HOOK_LEGACY_APPROACHES
 
 #: 定稿那一份的 `approach` 比候选多一个值。
 #: 它答的是「这份人工稿是从哪一条候选改出来的」——**没有前身时才是 `human_edit`**。
-#: ⚠ 先 `--approve 2` 再 `--apply-edit`，`approach` 会**留着** `result_flashback`，
+#: ⚠ 先 `--approve 2` 再 `--apply-edit`，`approach` 会**留着**被选候选的策略，
 #: 而文本已经是人手写的。「它是不是人写的」由 `origin` 回答，不由这里回答。
-HOOK_APPROVED_APPROACHES: Final = HOOK_APPROACHES + ('human_edit',)
+HOOK_APPROVED_APPROACHES: Final = HOOK_STORED_APPROACHES + ('human_edit',)
+
+#: 候选在最新一次质量审判中的可选状态。界面与批准路共同消费；``unreviewed``
+#: 明确不同于 ``clear``，缺审判不能被画成绿灯。
+HOOK_SEMANTIC_STATES: Final = ('clear', 'contradiction', 'uncertain', 'unreviewed')
 
 #: 三种写法各自的一句说明。**键必须与 `HOOK_APPROACHES` 逐字相等**（下面有 import 期断言）。
 #: 它逐字进 `HOOK_SYS`——原型把这三句写在产地的一个 dict 里，而**枚举表在这里**，
 #: 于是「有哪三种写法」与「每种是什么意思」分了两个落点。合成一份之后，
 #: 加一种写法而忘了写说明，`fill()` 当场抛 `KeyError`（缺值不渲染成空串）。
-#: ⚠⚠ **逐字移植自原型，一个字都不许改写。** `result_flashback` 那句里带着一条
-#: **硬约束**——「不得取后期高潮或结局」，那正是本层唯一还禁的东西（`R-9.9`）。
-#: 把它转述成一句顺口的说明，等于把一条现役禁令从 prompt 里删掉，而**不会有任何报错**。
+#: 这三种写法来自 2026-08-15 的三书 A/B：最佳实验候选对当前定稿的匿名主编分
+#: 8.78 vs 4.88，且 3/3 本获胜。它们分别守住原作文案已经验证有效的结构、允许用
+#: 后期兑现制造期待、以及强制落到可视可听的场面；不再按「泄底多少」切策略。
 HOOK_APPROACH_NOTES: Final[dict[str, str]] = {
-    'conflict_first':    '冲突前置 —— 开门见山，把最尖锐的对立或危机直接砸到读者面前',
-    'result_flashback':  '开篇内的局部结果倒叙 —— 只从给定开篇正文里挑一个已发生的结果或画面，'
-                         '再回扣「为什么会这样」；不得取后期高潮或结局',
-    'identity_contrast': '身份反差 —— 用主角表里、处境或身份的强烈反差制造张力',
+    'source_architecture': '原作文案结构 —— 保住原文的信息次序、升级节拍、反差与最后一击，'
+                           '换成重写正文的声线和全新措辞',
+    'payoff_preview':      '兑现预告 —— 从全书挑最有吸引力的后期兑现或反转作预告，'
+                           '制造「怎么走到这一步」的阅读欲',
+    'scene_punchline':     '场面重击 —— 用一个可视、可听的具体场面或对白砸出核心关系，'
+                           '以人物反应、危险或笑点收尾',
 }
 
 #: 收尾形态的四类。**唯一落点**——分类器（`novel/core/bands.py::ending_shape`）、
