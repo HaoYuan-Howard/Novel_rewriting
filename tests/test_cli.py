@@ -50,11 +50,25 @@ def _run(*argv: str) -> int:
     return main(list(argv))
 
 
-#: 每个 0 成本 flag 挂在哪个节点上（取**第一个**接受它的节点）。
+#: **每一个** (0 成本 flag, 接受它的节点) 配对——不是每个 flag 取一个代表。
+#:
+#: ⚠⚠ 这里此前是 `next(n for n, s in NODES.items() if flag in s.flags)`，
+#: 即「每个 flag 只测第一个接受它的节点」。11 个 flag ⇒ 11 条用例，
+#: 而真实配对是 **43** 条 —— 三分之二的跑法**没在查**，且守卫看上去是满的。
+#: ⚠⚠ 它当场漏掉过一次真事故：`--dry-run` 挂在 9 个节点上，只有 `stage0.remove`
+#: 被扫到；`325424e` 重写 `stage6/semantic.py` 的函数签名（`build_prompts` →
+#: `build_prompt`）而没改 `novel/cli/main.py` 的对应分支，
+#: `stage6.semantic --dry-run` 在 HEAD 上直接 `AttributeError`，**全套测试仍然全绿**
+#: ——因为那一层的测试直接 import 模块函数，从不经过 CLI 分派。
+#: ⇒ **stage 模块与 CLI 分支之间的 API 漂移，只有走 CLI 的用例抓得到。**
+#:
+#: ⚠ 与 `test_every_node_is_a_terminal_state_not_a_stack` 同一条纪律：
+#: 覆盖面要随着节点表变大而变大，不许「取一个代表」把它钉死在 11。
 _FREE_CASES = sorted(
-    (flag, next(n for n, s in NODES.items() if flag in s.flags))
+    (flag, node)
     for flag in FREE_ENTRIES
-    if any(flag in s.flags for s in NODES.values()))
+    for node, spec in NODES.items()
+    if flag in spec.flags)
 
 
 def test_every_free_entry_is_reachable_from_some_node():
@@ -67,6 +81,29 @@ def test_every_free_entry_is_reachable_from_some_node():
                     if not any(f in s.flags for s in NODES.values()))
     assert orphan == ['--context-only'] or not orphan, (
         f'这些 0 成本 flag 没挂在任何节点上，本文件的参数化扫不到它们：{orphan}')
+
+
+def test_the_free_flag_scan_covers_every_pair_not_one_per_flag():
+    """⭐ 守卫的守卫之二：**扫描面是「配对数」，不是「flag 数」。**
+
+    `_FREE_CASES` 曾经每个 flag 只取第一个节点 —— 11 条用例看起来把 11 个 flag
+    都测了，实际 43 个配对里 32 个**没在查**，而 `stage6.semantic --dry-run`
+    正是没被查的那一条（见 `_FREE_CASES` 上方那段）。
+    ⇒ 这一条把「配对数」本身钉住：谁再把它退化成一个代表，这里当场红。
+
+    ⚠ 下界是**实测值**，不是估的。加节点/加 flag 只会让它变大；变小说明
+    有一批跑法悄悄退出了扫描面。
+    """
+    pairs = {(f, n) for f in FREE_ENTRIES
+             for n, s in NODES.items() if f in s.flags}
+    assert set(_FREE_CASES) == pairs, '参数化集合与节点表对不上了'
+    assert len(_FREE_CASES) >= 43, (
+        f'0 成本跑法的扫描面掉到了 {len(_FREE_CASES)} 个配对（曾实测 43）——'
+        f'是删了节点/flag，还是有人又把它改回「每个 flag 取一个代表」？')
+    # `--dry-run` 是漂移最容易藏身的那一族：它是**唯一**逐层各写一段
+    # 「怎么把 prompt 打出来」的分支，而那段代码直接调 stage 模块的函数签名。
+    assert sum(1 for f, _ in _FREE_CASES if f == '--dry-run') >= 9, \
+        '`--dry-run` 的覆盖面缩水了——CLI 与 stage 模块的 API 漂移正是从这里漏的'
 
 
 @pytest.mark.parametrize('flag,node', _FREE_CASES, ids=lambda v: str(v))

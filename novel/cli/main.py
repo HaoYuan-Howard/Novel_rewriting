@@ -376,17 +376,13 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
 
     if ctx.node == 'stage6.semantic':
         if '--dry-run' in tokens:
-            system, users, _art, _up = semantic.build_prompts(ctx)
-            print(f'── claims system（{len(system)} 字）──\n{system}')
-            for label, user, _text in users:
-                print(f'\n── {label} user（{len(user)} 字）──\n{user}')
-            print(f'\n── alignment system（{len(semantic.ALIGN_SYSTEM)} 字）──\n'
-                  f'{semantic.ALIGN_SYSTEM}')
-            print('\n第二相 user 需消费第一相验真的 claims，dry-run 时尚不存在，故不伪造预览。')
+            system, user, _art, _up, aliases = semantic.build_prompt(ctx)
+            print(f'── anonymous editor system（{len(system)} 字）──\n{system}')
+            print(f'\n── user（{len(user)} 字；{len(aliases)} 份去重文本）──\n{user}')
             return X.OK
         artifact, report = semantic.run_semantic(ctx, _llm_client(ctx))
-        print(f'  ✓ 文案语义审判已落盘：{len(artifact.texts)} 份文本 · '
-              f'{len(artifact.decisions)} 条裁决')
+        print(f'  ✓ 文案质量审判已落盘：{len(artifact.reviews)} 份文本 · '
+              f'排序 {artifact.ranking}')
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 

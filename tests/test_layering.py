@@ -629,3 +629,96 @@ def test_the_runtime_never_uses_sys_exit():
                     and isinstance(n.func.value, ast.Name) and n.func.value.id == 'sys'):
                 bad.append(f'{rel}:{n.lineno}')
     assert not bad, f'这些地方拿 sys.exit 当终态：{bad}'
+
+
+# ───────────────────── CLI 与 stage 模块之间的 API 漂移 ─────────────────────
+#
+# ⚠⚠ 这一节补的是一个**真事故**留下的洞。
+# `325424e` 重写 `novel/stages/stage6/semantic.py`（`build_prompts` → `build_prompt`，
+# 并删掉 `ALIGN_SYSTEM`），却没改 `novel/cli/main.py:379` 那段调用。
+# 于是 `stage6.semantic --dry-run` 在那个提交上直接 `AttributeError` → exit 70，
+# 而**整套测试仍然全绿**：那一层的测试直接 `import` 模块函数，从不经过 CLI 分派。
+#
+# ⚠ 为什么光靠 `tests/test_cli.py` 的 CLI 跑法不够：那些用例要真语料，
+# 而语料一旦整批过期（改判据表就会），`build_prompt` 里的新鲜度闸门会在
+# 函数体第一行就抛终态 —— 于是「返回几个值」这一半**根本没被执行到**，
+# 扫描面靠「语料碰巧是新鲜的」维持（LESSONS 第 4 条那个形状）。
+# ⇒ 这一条改用 AST + `hasattr`：**不要语料、不要产物、不要密钥**，
+#   只回答「CLI 点名的每个符号今天还在不在」。
+
+_CLI_MAIN = os.path.join(ROOT, 'novel', 'cli', 'main.py')
+
+
+def _stage_aliases(scope: ast.AST) -> dict[str, str]:
+    """这段作用域里 `from novel.stages.X import a, b` 建立的 别名 → 模块路径。
+
+    ⚠ **必须按函数分**：`semantic` 这个名字在 `_run_stage5` 里指 stage5 那份，
+    在 `_run_stage6` 里指 stage6 那份。全文件合成一张表会把两者混成一个。
+    """
+    out: dict[str, str] = {}
+    for n in ast.walk(scope):
+        if isinstance(n, ast.ImportFrom) and (n.module or '').startswith('novel.stages'):
+            for al in n.names:
+                out[al.asname or al.name] = f'{n.module}.{al.name}'
+    return out
+
+
+def _cli_stage_references() -> list[tuple[str, str, int, str]]:
+    """CLI 里所有 `<stage模块别名>.<名字>` 的引用，去重后按 (模块, 名字) 排序。"""
+    tree = ast.parse(open(_CLI_MAIN, encoding='utf-8').read(), filename=_CLI_MAIN)
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str, int, str]] = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        aliases = _stage_aliases(fn)
+        if not aliases:
+            continue
+        for n in ast.walk(fn):
+            if (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                    and n.value.id in aliases):
+                key = (aliases[n.value.id], n.attr)
+                if key not in seen:
+                    seen.add(key)
+                    out.append((key[0], key[1], n.lineno, fn.name))
+    return sorted(out)
+
+
+def test_every_symbol_the_cli_names_still_exists_in_that_stage_module():
+    """⭐ **改了 stage 模块的函数名/常量名而没改 CLI，这条当场红。**
+
+    CLI 是唯一一层用「模块.属性」跨层点名的地方（stage 之间走的是 import 的符号，
+    解释器会当场报 ImportError；而 `semantic.build_prompts` 这种写法要等**运行到那一行**
+    才发现名字没了）。⇒ 把「运行到才发现」提前成「导入就发现」。
+    """
+    import importlib
+
+    missing = []
+    for mod_path, attr, lineno, fn in _cli_stage_references():
+        try:
+            mod = importlib.import_module(mod_path)
+        except Exception as e:                       # pragma: no cover - 真坏了才走到
+            missing.append(f'novel/cli/main.py:{lineno} 的 {mod_path} import 不了：{e}')
+            continue
+        if not hasattr(mod, attr):
+            missing.append(
+                f'novel/cli/main.py:{lineno}（{fn}）点名 `{mod_path}.{attr}`，'
+                f'而那个模块上**没有这个名字**')
+    assert not missing, (
+        'CLI 与 stage 模块的 API 漂移了：\n  ' + '\n  '.join(missing)
+        + '\n→ 改 stage 模块的对外名字时，`novel/cli/main.py` 的对应分支要一起改。')
+
+
+def test_the_cli_drift_scan_actually_finds_something():
+    """守卫的守卫：扫不到东西时，上面那条会**静静地绿**。
+
+    ⚠ 下界是实测值。CLI 少接一层、或者有人把 `from novel.stages.X import y` 改成
+    别的写法（例如 `importlib.import_module`），这个数就会掉下来——
+    而那正是上面那条**失去扫描面**的样子。
+    """
+    refs = _cli_stage_references()
+    assert len(refs) >= 66, (
+        f'只扫到 {len(refs)} 个「CLI 点名 stage 模块符号」的配对（曾实测 66）——'
+        f'`_stage_aliases` 多半没认出 CLI 现在的 import 写法')
+    fns = {fn for _, _, _, fn in refs}
+    assert len(fns) >= 9, f'只覆盖到 {sorted(fns)}——八层派发函数应该都在里面'
