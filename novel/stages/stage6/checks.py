@@ -183,10 +183,22 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
     if src_hook:
         gb, sb = sep_band_of_text(body), sep_band_of_text(src_hook)
         if gb != sb:
-            fs.append(finding('hook_para_sep',
-                              detail=f'文案是【{gb}】，本书原作文案段是【{sb}】'
-                                     f'——归一化应该已经修掉它了，这条亮了说明归一没跑或坏了',
-                              evidence=[f'{gb}/{sb}']))
+            # ⚠⚠ **两种病因，处方相反，此前共用一句错的诊断。**
+            # `normalize_paragraphs` 是 `sep.join(按行切开的非空行)`：它能把
+            # 分隔符从 `\n` 换成 `\n\n`，**但造不出段落边界**。模型回一整段密排
+            # 正文（一个 `\n` 都没有）时 `lines` 长度为 1，join 出来还是它自己，
+            # `changed=False` —— 于是这条 HARD 亮起，还附一句「归一没跑或坏了」，
+            # 把人支去查一个**根本没问题**的归一化（判据 32：说错病因等于制造第二个 bug）。
+            one_para = '\n' not in body.strip()
+            fs.append(finding(
+                'hook_para_sep',
+                detail=(f'文案是**一整段**（正文里一个换行都没有），而本书原作文案段是'
+                        f'【{sb}】——**归一化修不掉这个**：它只换得了分隔符，'
+                        f'造不出段落边界。要么重出一版文案，要么人工分段后 `--apply-edit`'
+                        if one_para else
+                        f'文案是【{gb}】，本书原作文案段是【{sb}】'
+                        f'——归一化应该已经修掉它了，这条亮了说明归一没跑或坏了'),
+                evidence=[f'{gb}/{sb}' + ('（成稿单段）' if one_para else '')]))
 
     # ── ⑧ 收尾形态：`hook_style.end_question` 唯一可确定性检测的投影 ────────
     #

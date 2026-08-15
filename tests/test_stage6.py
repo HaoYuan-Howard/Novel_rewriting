@@ -309,9 +309,9 @@ def _sample(box: sandbox.Sandbox, *, truncated: bool) -> str:
     会恒亮，于是「部分红」那个样本变成「全红」——第一版就踩了这个：
     写了一段单行文本，而三本原作文案段都是**空行分段**，
     单段文本根本没有分隔符可归一 ⇒ 那条 HARD 修不掉。
-    〔顺带记一条观察：`hook_para_sep` 的 detail 写着「归一化应该已经修掉它了」，
-    而**单段文案是归一化修不掉的**——那句措辞对这一类输入是错的诊断。
-    判定本身不冤（本书文案是多段，这条是一整块），留给 F 期后续层一起看。〕
+    〔那句「归一化应该已经修掉它了」对单段输入是**错的诊断**，已修（TODO-10b）：
+    判据现在按「成稿是不是一整段」分两种病因，反例在
+    `tests/test_hard_counterexamples.py` 那两条。本 fixture 的构造理由不变。〕
     """
     from novel.core.bands import sep_band_of_text
     src = (sandbox.cut(box.book, 'stage1/hook_copy.json') or {}).get('text', '').strip()
