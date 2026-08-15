@@ -61,7 +61,7 @@ function Stage5IndexRedirect() {
   return <Navigate to={'/n/' + sid + '/depth'} replace />
 }
 
-/** 老路由（brief/04_delivery.md 的固定表）保留为重定向，URL 一条都没丢 */
+/** 老路由保留为重定向；当前权威路由表在 docs/BACKEND_CONTRACT.md §6.3 */
 function RedirectChapter({ to }: { to: string }) {
   const { o } = useParams<{ o: string }>()
   return <Navigate to={'../../' + to + '/' + o} replace relative="path" />

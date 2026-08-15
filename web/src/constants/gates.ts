@@ -5,7 +5,7 @@
  *                                 └─► stage3 文风 ─────────────────────────────────────────────┤
  *                                                                                              ├─► 挑深度章节 ─► stage5 ─► stage6 ─► stage7
  *
- * 文案与禁用条件逐字来自设计稿 gateVals()（审校台.dc.html 2128–2219）。
+ * 文案与禁用条件源自历史原型 gateVals()，现役语义见 docs/BACKEND_CONTRACT.md §六。
  *
  * 这张表只被 components/gate/useGateBar.ts 消费。等后端接管这套工作流
  * （approve 返回新记录 + 它发起的作业），删这一个文件即可。

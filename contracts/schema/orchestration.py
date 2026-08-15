@@ -9,11 +9,11 @@ orchestration.py —— 对应 `docs/schema/_orchestration.md`。作业 · 完�
 共用一个版本号，而前者改一次要重跑一层书，后者改一次只影响界面。
 
 【本模块的证据面比另外两份差，说清楚差在哪】
-`docs/design_brief/05_samples/jobs.json` 的真实抓包是 `{"jobs":[]}`——**一个样本都没有**。
+`docs/BACKEND_CONTRACT.md` §八冻结的 `jobs.json` 是 `{"jobs":[]}`——**一个样本都没有**。
 所以 `JobRecord` 的形状**只能从代码来**（原型 `Web/jobs.py` 的 `meta` 字典），
 而那正是 `_README.md` 立过的纪律：盘上零样本的取值面要去代码或全语料再确认一次
 （`platform` 就是这么被推错的）。`NovelOverview` 那一半好些——
-`05_samples/novel_overview.json` 是一本真实的书。`QueuePlan` 整个是新增能力，全是设计。
+统一契约 §八冻结的 `novel_overview.json` 是一本真实的书。`QueuePlan` 整个是新增能力，全是设计。
 
 ⚠ 本模块 import `contracts.invariants` 与 `contracts.schema.base`，**不 import `rules`**：
 队列与作业不产生任何判定（`R-13.6`），连类型上都够不到判据注册表。

@@ -27,7 +27,7 @@ from contracts import requirements as reqs
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOC = reqs.load()
 
-#: 扫哪些文档。`design_brief/` 不扫——它是给外部设计工具的包，用的是另一套编号（U-xx / S-xx）。
+#: 扫哪些文档。产品 U/S 规格已并入冻结契约；本正则只识别后端 R/Q/B 编号。
 #:
 #: ⚠ `docs/LESSONS.md` 在这张表里，而它**多数条目都点名代码落点**（「唯一落点是 X」）
 #: ——那正是本文件第 ② 条要查的东西。一份「经验」文档指着一个已经改名的模块，

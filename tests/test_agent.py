@@ -4,7 +4,7 @@
 test_agent.py —— headless agent 代跑的提示词/命令行组装、事件流与互斥。
 
 【不在这里测的】真拉起 `claude` —— 那要模型配额与真钱，归端到端实战
-（`docs/SKILL_E2E_*.md` 那一档）。这里全部走 fake spawn（`Spawn` 那条缝存在的
+（`docs/BACKEND_CONTRACT.md` §十那一档）。这里全部走 fake spawn（`Spawn` 那条缝存在的
 理由同 `jobs.default_spawn` 的注释）。
 
 ⚠ 沙箱一律 `tempfile.mkdtemp()`（本机 `%TEMP%\\pytest-of-*` 的 ACL 坏了）。

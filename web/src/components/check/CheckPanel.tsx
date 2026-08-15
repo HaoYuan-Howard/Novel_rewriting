@@ -28,7 +28,7 @@ const CHECK_OF: Partial<Record<ScreenName, CheckKind>> = {
   stage7: 'stage7',
 }
 
-/** `remediation` → 人话标签（处置路由表在 docs/REPAIR.md，这里只是呈现）。 */
+/** `remediation` → 人话标签（处置路由表在 docs/BACKEND_CONTRACT.md §七，这里只是呈现）。 */
 const REMEDIATION_LABEL: Record<RuleLine['remediation'], string> = {
   deterministic: '确定性可修',
   llm: '可付费自救（≤2 轮）',

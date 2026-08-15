@@ -38,7 +38,7 @@ from novel.errors import NovelError
 #: 会在本机执行进程 · 那些进程花真钱 · 会往盘上写文件 · 传输的是不外流的版权正文。
 HOST = '127.0.0.1'
 
-#: `docs/design_brief/04_delivery.md:46` 写死的（Vite dev proxy 指着它）。
+#: `docs/BACKEND_CONTRACT.md` §6.5 写死的（Vite dev proxy 指着它）。
 PORT = 8765
 
 #: `R-11.2` 的自定义头。前端在 `web/src/api/client.ts` 里只给 `post()` 带它。

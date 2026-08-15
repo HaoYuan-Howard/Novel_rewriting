@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 
 /* ---------------------------------------------------------------------------
-   设计令牌。值全部照抄 design_handoff_novel_refactor_console/审校台.dc.html。
+   设计令牌。历史值来自原型，现役语义统一登记在 docs/BACKEND_CONTRACT.md §6.4。
 
    两条规则：
    1) 默认调色板被整个删掉（--color-*: initial）。`bg-red-500` 编译不过，

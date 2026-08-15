@@ -3,10 +3,9 @@
 把一本中文网络小说经过 stage0～stage7 处理为一部新书：保留情节骨架，重写文字，
 替换人名，最终交付 `book.txt`。
 
-当前开发阶段是**第三阶段（agent 驱动全链）已验收，进入维护与终审运营**。
-后端开发范围维持关闭（2026-08-15 用户裁决定点重开两件——CLI 崩溃独立退出码 70、
-inbox 六类清单的 CLI 可达口——均已完成并重新关闭）；尚未完成、尚未验证和待裁决事项
-统一登记在 `docs/REQUIREMENTS.md`。
+单书 stage0～stage7、agent 驱动全链和前端真实服务主路径已经验收。当前开发重点是
+**正确性、恢复能力、质量闭环与契约收口**；尚未完成、尚未验证和待产品裁决的事项统一登记在
+`docs/REQUIREMENTS.md`。它是唯一活动待办，README 不重复维护任务状态。
 
 ## 文档职责
 
@@ -15,65 +14,40 @@ inbox 六类清单的 CLI 可达口——均已完成并重新关闭）；尚未
 | 本文件 | 项目入口、当前阶段、运行方式、接手顺序 | 需求明细、完成日志、踩坑长文 |
 | `docs/REQUIREMENTS.md` | 仅列未完成事项、阻塞、验收条件与待裁决问题 | 已完成能力、施工过程、界面设计细节 |
 | `docs/LESSONS.md` | 可迁移的工程经验与真实踩坑，最多 20 条 | 任务状态、需求清单 |
-| `docs/design_brief/` | 产品流程、屏幕、UI 硬规则和交付形状 | 当前实现状态 |
 | `web/DELIVERY.md` | 前端现有结构、数据缝和联调事实 | 项目总任务清单 |
 | `docs/schema/` | 已实现后端的产物与 API 契约 | 后续工作排序 |
-| `docs/REPAIR.md` | 修复机制（旧称「反哺」）：四类处置的路由表、准入与成本上界 | 判据明细 |
-| `docs/BACKEND_CONTRACT.md` | 冻结的后端编号与判据追踪，供现有覆盖率守卫读取 | 活动开发指导 |
+| `docs/BACKEND_CONTRACT.md` | 统一产品/UI 规格、冻结编号、修复路由、守卫耦合、证据基线与历史验收账 | 活动开发指导 |
 
-完成事项从 README 与活动需求中删除；“做过什么”由 Git 历史回答。若完成过程产生了可迁移
-经验，再整合进 `docs/LESSONS.md`。
+README 只保留稳定入口和当前能力；“做过什么”由 Git 历史与
+`docs/BACKEND_CONTRACT.md` §十回答。可迁移经验整合进 `docs/LESSONS.md`。
 
 ## 当前工作边界
 
-- 活动目标：让 `web/` 在 `VITE_USE_MOCK=false` 下使用真实服务完成可达流程。
-- 后端不是默认可修改范围。需求中标为“需重开后端”的条目必须先取得明确裁决。
+- 只从 `docs/REQUIREMENTS.md` 仍存在的条目开工，优先处理 P0；待产品裁决项先确认语义再实现。
+- 条目需要跨后端、前端、契约、测试或文档时，完成整条真实消费路径，不按历史阶段边界截断。
 - 不能用 mock、空数组、普通 404 或本地存储伪装尚未提供的后端能力。
-- 产品语义与屏幕行为以 `docs/design_brief/` 为准；若它与真实 API 冲突，按
+- 产品语义与屏幕行为以 `docs/BACKEND_CONTRACT.md` §六为准；若它与真实 API 冲突，按
   `docs/REQUIREMENTS.md` 的待裁决项处理，不静默选择一边。
 
-## 第二阶段：前后端打通
+## 当前已具备的主路径
 
-薄 API/view 层已按 DEC-01 的裁决重开并完成：九条读屏 GET
-（`novel/api/routes/screens.py`）加三条人工写回 POST（`novel/api/routes/edits.py`）。
-服务进程只写 `_service/`，产物变更一律经 CLI 子进程（R-11.3）；CLI 内失败以
-HTTP 200 + `JobRecord.state='failed'` 出线，作业失败不是 HTTP 错误。
-前端已处真实模式（`web/.env` 的 `VITE_USE_MOCK=false`）：校验面板按 `rules[]`
-两轴渲染、写操作走 preview → 确认 → 执行链、旧作业名与旧 check kind 已清除，
-批 1–6 真实模式联调通过。
-
-付费链路冒烟语料在 `outputs/e2e_20260813/`（gitignored；三本书 stage0–7 全程，
-记录见 `docs/E2E_VALIDATION_20260813.md`）。免费端到端路径——上传 txt → stage0 批准 →
-stage1 分章，所涉节点均 `paid=False`——已在真实服务上走通；付费屏在免费语料上
-显示诚实的「还没跑」，不拿空数据伪装。
-
-## 第三阶段：skill 封装端到端工作流
-
-一本书从原始 txt 到 `book.txt` 的完整操作规程封装在项目级 skill
-`.claude/skills/novel-pipeline-operator/SKILL.md`（任何 agent 可凭它独立驱动
-`novel.cli` 全链）。2026-08-15 用户裁决：人工闸门（`*.approve`）可委托 agent 代批，
-代批依据逐条进「终审包」（`final_review_<sid>.md`，随跑随产于输出目录根），
-用户只审终审包与成书。三本真实书验收记录（含账本读数与 skill 锻造过程）见
-`docs/SKILL_E2E_20260815.md`；第三轮为子 agent 仅凭 skill 盲驱。
-
-两笔账登记在这里（`docs/schema/_api.md` §七 与 `novel/api/deps.py` 都指着本文件）：
-
-- **改名账**：check kind `stage5_review` → `stage5`（E 期裁决）。八个 kind 现在与
-  `invariants.STAGES` 逐值相等、由它派生（`checked_kind` 不手写第二份清单）；
-  前端引用已随第二阶段同步清除。
-- **裁决账**（2026-08-17 用户裁决）：`stage6/edit` 与 `stage7/edit` 浏览器端
-  **明确不可用，走 CLI**（`stage6.hook --apply-edit` / `stage7.rename --apply-edit`）
-  ——编辑文件是书目录内的契约产物（`_edit_rel`），R-11.3 禁止服务进程写产物盘，
-  浏览器文本没有合规通道。stage6 在浏览器只挂 `POST /stage6/approve`
-  （`--pick` 定稿，只收序号不收文本），stage7 只有 `POST /stage7/approve`（无请求体）。
+- `novel.cli` 可驱动单书 stage0～stage7，最终组装 `book.txt`；完整操作规程位于
+  `.claude/skills/novel-pipeline-operator/SKILL.md`。
+- `web/` 默认以 `VITE_USE_MOCK=false` 连接真实服务。九条读屏 GET 与三条人工写回 POST
+  已接通；写操作遵循 preview → 确认 → CLI 作业执行，作业失败由 `JobRecord.state='failed'`
+  表达，而不是伪装成 HTTP 错误。
+- 服务进程只写 `_service/`，产物变更经 CLI 子进程完成（R-11.3）。`stage6/edit` 与
+  `stage7/edit` 因此只走 CLI；浏览器仅提供对应批准入口。
+- 人工闸门可委托 agent 按规则代审，依据持续写入输出目录根的
+  `final_review_<sid>.md`。真实书全链验收和账本摘要见 `docs/BACKEND_CONTRACT.md` §十。
 
 ## 接手顺序
 
 1. 运行 `git status --short`，确认并保留工作区已有改动。
-2. 阅读 `docs/REQUIREMENTS.md`，只从仍存在的条目中选任务。
-3. 做前端时再读 `docs/design_brief/00_START_HERE.md` 与 `web/DELIVERY.md`；
+2. 阅读 `docs/REQUIREMENTS.md`，只从仍存在的条目中选任务；待裁决项先取得产品决定。
+3. 做前端时再读 `docs/BACKEND_CONTRACT.md` §六、§八与 `web/DELIVERY.md`；
    做后端缺口时按条目点名的 schema 和代码落点回查。
-4. 在真实消费路径验收；通过后删除对应活动条目。
+4. 覆盖真实消费者和失败路径；验收通过后删除对应活动条目。
 
 ## 运行与验证
 
@@ -107,8 +81,9 @@ contracts/       后端 schema、判据注册与跨层常量
 novel/           CLI、运行时、API、视图与 stage 实现
 web/             React + Vite + TypeScript 前端
 docs/schema/     后端产物/API 契约
-docs/design_brief/  前端产品与交付规格
 tests/           后端与文档守卫
+tools/           探针、对比与 schema 派生工具
+.claude/skills/  agent 端到端操作规程
 ```
 
 快速原型 `../Novel_refactoring/` 只作为证据来源，不在本仓任务中修改。

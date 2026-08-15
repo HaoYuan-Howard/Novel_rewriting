@@ -95,7 +95,7 @@ def get_stage7_chapter(ordinal: int, sid: str = Depends(checked_sid),
 @router.get('/{sid}/inbox', response_model=InboxView)
 def get_inbox(sid: str = Depends(checked_sid),
               base: str = Depends(get_base)) -> InboxView:
-    """待人工六类清单（`docs/REPAIR.md` 的 `human` 落面）。
+    """待人工六类清单（`docs/BACKEND_CONTRACT.md` §七的 `human` 落面）。
 
     ⚠ 它对每个已移植层各跑一次 0 成本复检（stage2/4 会重算判据）——**纯读**，
     大书上是秒级。`inbox_view` 的 docstring 说缓存归路由层：**登记不优化**，

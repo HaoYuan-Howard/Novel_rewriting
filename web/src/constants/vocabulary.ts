@@ -1,7 +1,7 @@
 /**
  * 静态设计契约。不是数据 —— 数据只有服务端响应。
  *
- * 值照抄 design_handoff_novel_refactor_console/审校台.dc.html 1926–1959 行。
+ * 值源自历史原型，现役语义统一登记在 docs/BACKEND_CONTRACT.md §6.4。
  * 状态色**只从这里取**：组件里不许写死十六进制或 oklch。
  * 消费者只有 src/components/vocab/ 下那几个叶子组件（它们把 color/bg 内联出来），
  * 其余一切走 Tailwind class。

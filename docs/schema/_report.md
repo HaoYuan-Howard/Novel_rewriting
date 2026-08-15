@@ -24,7 +24,7 @@
 
 > ### ⚠ 旧形状长什么样，以及它为什么救不回来
 >
-> 盘上两份真实抓包（`docs/design_brief/05_samples/check_stage2.json` ·
+> 盘上两份冻结抓包（`web/src/mocks/check_stage2.json` ·
 > `check_stage5_review.json`）的顶层十个键：
 > `title` · `sid` · **`oks: str[]`** · `unver[]` · `info[]` · `hard[]` ·
 > `passed` · `hard_count` · `unver_count` · `badge`。
@@ -94,7 +94,7 @@
 
 - `sev` 回答“影响有多大”；语义泄底可以是 HARD，语义覆盖不足可以是 INFO/UNVER。
 - `check_kind` 回答“这个结论怎么来的”。Stage 0–4、7 现役判据全是 `mechanical`；Stage 5 与 Stage 6 各有独立的 `semantic` 伙伴审判（注册表守卫钉着：语义判据只许出现在这两层）。
-- `remediation` 回答“下一步谁能修”。`REPAIR_UNIQUE` 或已注册的付费 fix 是 `llm`；0 成本结构化 fix 是 `deterministic`；无安全自动路由是 `human`；metric 是 `none`。四类各自的修复路由与成本上界见 `docs/REPAIR.md`。
+- `remediation` 回答“下一步谁能修”。`REPAIR_UNIQUE` 或已注册的付费 fix 是 `llm`；0 成本结构化 fix 是 `deterministic`；无安全自动路由是 `human`；metric 是 `none`。四类修复路由与成本上界见 `docs/BACKEND_CONTRACT.md` §七。
 
 这个投影故意**不把 `REPAIR_FREE` 标成 LLM 自动修复**。它表示理论上可重写，但满足路径不唯一；当前 Stage 5 付费自救明确拒绝它，因为模型可能通过删内容或编内容“修绿”。
 

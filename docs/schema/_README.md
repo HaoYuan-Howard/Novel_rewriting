@@ -61,7 +61,7 @@
 | `_common.md` | `_provenance` 的四个共有键 · **两把尺子**（40 位内容身份 / 10 位来源指纹）· `inputs` 的边 `{file, consumed}` · 新鲜度三态与**幽灵边** · `.INVALID` 与提升路（**签名里没有 `prompts`/`model`/`inputs`**）· 轮次账 · `Finding` 13 字段 · `usage` · 记账键的出口规则 |
 | `_report.md` | `CheckReport`　**不是产物**——它是 `--check-only` 打印的、`/api/novels/:sid/check/:kind` 返回的那一份。B3 补 |
 | `_orchestration.md` | `Step` · 作业事件流 · 完成度 · 队列　**不是产物**——服务契约与产物契约改版节奏不同。D 补 |
-| `_api.md` | HTTP 响应　**不是产物**，也**不定路由表**（那一份在 `docs/design_brief/04_delivery.md`，固定不要改）。E 补 |
+| `_api.md` | HTTP 响应　**不是产物**，也**不定路由表**（路由在 `docs/BACKEND_CONTRACT.md` §6.3）。E 补 |
 | （另有一份**不是 JSON**） | 〔本行已空。`stage5/draft.md` 并进 `stage5.md` §五、`stage7/book.txt` 并进 `stage7.md` §四：<br>它们的规则各只有几条硬机制，单独立一份反而会与产它的那一层分家〕 |
 
 ## 反推工具

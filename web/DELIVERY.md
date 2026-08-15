@@ -1,8 +1,9 @@
 # 审校台前端 · 交付说明
 
-按 `design_handoff_novel_refactor_console/` 重建。**当前处于真实模式**：
+按 `docs/BACKEND_CONTRACT.md` §六的统一产品规格重建。**当前处于真实模式**：
 `web/.env` 为 `VITE_USE_MOCK=false`，数据走 `127.0.0.1:8765` 的真实服务。
-`src/mocks/` 那 20 份是冻结的证据基线（`npm run seams` 钉着），mock 路径仅作离线开发用。
+`src/mocks/` 那 20 份是冻结的证据基线（哈希清单在统一契约 §八，`npm run seams` 钉着），
+mock 路径仅作离线开发用。
 
 ```bash
 cd web
@@ -49,7 +50,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 
 `src/api/mock.ts` 不是 fixture 加载器，是一个假服务端：
 
-- 20 份 JSON 逐字节原样（`npm run seams` 会和交接包比对）
+- 20 份 JSON 原始字节（`npm run seams` 会和统一契约中的 bytes + SHA-256 比对）
 - 一层 localStorage 覆盖层：验收记录、作业、改稿
 - 120ms 模拟延迟，所以加载态是真的会看到
 - 作业引擎：起一个 running 作业、定时往日志里追加行、最后翻 `ok`
@@ -96,14 +97,14 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 
 ## 3. 路由
 
-设计稿是 12 屏；`brief/04_delivery.md` 那张「固定不要改」的 13 条路由表早于设计稿。
-取的方案是：**按设计稿建屏，老路由保留为重定向**，所以那张表里每条 URL 仍然可达。
+历史设计稿是 12 屏，历史路由表又早于设计稿。最终方案是：**按审校任务建屏，老路由保留为
+重定向**；当前权威路由表已收进统一契约 §6.3。
 
 | 路由 | 屏 |
 |---|---|
 | `/` | 语料库 |
 | `/n/:sid` | → `stage0`（新书先审非正文；已有产物仍可从左栏直达各层） |
-| `/n/:sid/stage0` | 剔除番外 **（新增，brief 表里没有）** |
+| `/n/:sid/stage0` | 剔除番外 **（历史原型没有，现为正式入口）** |
 | `/n/:sid/stage1` | 分章报告 |
 | `/n/:sid/read/:o` | 原文↔骨架 |
 | `/n/:sid/global` | 全局设定 |
@@ -256,7 +257,7 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 src/screens、src/components 里 0 处 fetch(
 src/screens、src/components 里 0 处颜色字面量（#xxx / oklch() / rgb()）
 src/mocks/*.json 只被 src/api/mock.ts import
-src/mocks/ 与交接包里那 20 份逐字节一致
+src/mocks/ 与统一契约 §八的 20 份 bytes + SHA-256 一致
 ```
 
 `npm run typecheck`：mock 与真实实现都满足 `Api`。
@@ -280,5 +281,5 @@ src/mocks/ 与交接包里那 20 份逐字节一致
 - mock 路径的写操作仍打到 `mock.ts` 的 localStorage；真实模式的三条人工写回
   （章节改稿 / 文案定稿 / 人名定稿）已走真实 POST。
 - 没做 SSE，用轮询（签名一致，换过去不影响调用方）。
-- 没做移动端 / 响应式（brief 明确不要）。
+- 没做移动端 / 响应式（统一产品规格明确不要）。
 - 没引入 UI 组件库、图表库、状态管理库、i18n、SSR。

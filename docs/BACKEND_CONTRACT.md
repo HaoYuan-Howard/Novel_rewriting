@@ -1,10 +1,10 @@
-# 小说重构系统 — 后端契约与判据追踪（冻结）
+# 小说重构系统 — 统一契约、产品规格与证据基线（冻结）
 
-> 本文件不是活动开发指南。后端开发结束后，它只为既有判据编号、双向覆盖率与
-> schema 追踪保留；不要在这里登记新任务、进度或交接信息。
+> 本文件不是活动开发指南。前后端开发结束后，它统一保留产品与界面规格、既有判据编号、
+> 双向覆盖率、修复路由、schema 追踪、证据基线和历史验收结论；不要在这里登记新任务或进度。
 > 当前未完成工作统一见 `docs/REQUIREMENTS.md`。
 
-本文件冻结后端开发结束时的契约、判据与编号口径。正文中的 `待建` / `无守卫` 只用于
+本文件冻结前后端开发结束时的契约、产品规格、判据与编号口径。正文中的 `待建` / `无守卫` 只用于
 保留追踪关系；它们的现行处置以 `docs/REQUIREMENTS.md` 为准。
 
 ---
@@ -677,7 +677,7 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
 | # | 要求 | 谁在查 |
 |---|---|---|
 | R-9.1 | 三候选是**一次**调用产出，不是三次（成本口径） | `结构`（`novel/stages/stage6/hook.py::run_hook` 是全层唯一一处 `client.ask_json`） |
-| R-9.2 | 连续的**重写正文**只下发到第一个冲突阶段末章；同时下发全书离散事实与逐章结构地图，使文案能选择后期兑现而不靠猜 | `结构`（`measure.py::lead_upto` 决定连续正文上界；`prompts.py::story_map` 与 `build_material` 投影全书结构） |
+| R-9.2 | 连续的**重写正文**只下发到第一个冲突阶段末章；同时下发全书离散事实与逐章结构地图，使文案能选择后期兑现而不靠猜 | `结构`（`novel/stages/stage6/measure.py::lead_upto` 决定连续正文上界；`novel/stages/stage6/prompts.py::story_map` 与 `novel/stages/stage6/prompts.py::build_material` 投影全书结构） |
 | R-9.3 | 机械层归一（标点 / 引号体 / **段间分隔**）由代码做**并记账**；段间分隔另有后置条件校验 | `HARD`（后置条件）+ 记账进报告 |
 | R-9.3b | 引号配对异常**留着报，不静默修** | `INFO`（`hook_quote_unbalanced`） |
 | R-9.4 | 收尾形态参照原作文案段的四分类 | `INFO` |
@@ -965,7 +965,7 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
 > `is_paid` 拿它当白名单，未知 flag 一律按付费算（`Q-10`：不知道要倒向贵的那一边）
 > ——于是一个漏登记的 0 成本动作会被画成橙色、弹二次确认，**而它根本不花钱**。
 > **表不全 ⇒ 系统在对用户说假话。**
-> 实测过一次：拿真实抓包（`docs/design_brief/05_samples/enums.json` 的 36 条 `actions`）
+> 实测过一次：拿冻结证据基线（本文 §八登记的 `enums.json`，含 36 条 `actions`）
 > 逐条对，现役后端真正当 0 成本用的 flag 有 **13 个**而表里只有 **9 个**，交集 8 个。
 >
 > ⚠ **`--identity-plan` 是本条自己的违例实例**：它与 `--identity` 是同一件事，
@@ -1165,3 +1165,225 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
 
 **没有守卫的，一律指向 `B-01` ~ `B-22`。** 一条需求既没有守卫、也不在 B 清单里，
 就是这份文档的漏洞。
+
+---
+
+## 六、产品与界面规格
+
+本节承接已归档的设计交接包与 design brief。它记录仍具产品约束力的内容；原型里的旧阶段名、
+旧路由、前端自算 argv 和已经被真实 API 推翻的数据形状不再保留为现役规范。
+
+### 6.1 产品边界
+
+- 单人、本机、桌面浏览器；服务只绑定 `127.0.0.1`，不做登录、协作、权限、通知或移动端。
+- 输入是一部中文网络小说，stage0～stage7 依次完成清洗、分章、抽取、文风、计划、写作、文案、
+  改名与成书，最终产出 `book.txt`。
+- 工具的主要风险不是程序崩溃，而是 LLM 造事实、提前泄密或漏掉内容后仍写得通顺。因此产品是
+  “审校台”而不是 dashboard：主体动作是并排对照证据，再由人做决定。
+- stage0 批准是全链唯一的前置人工硬闸；stage6 与 stage7 的人工定稿是各自产物进入下游的语义闸。
+- 看、免费但写盘、付费 LLM 三类动作必须一眼可分。付费前由服务端下发完整 argv 并二次确认；
+  不显示猜测的价格或调用次数，发起后不承诺无损取消在途调用。
+
+### 6.2 八阶段的人类任务
+
+| 阶段 | 系统动作 | 人的主要检查 |
+|---|---|---|
+| stage0 | 剔除番外、后记、尾声、作者有话说 | 整本审阅删除范围；可直接修正范围或正文；批准后才下行 |
+| stage1 | 确定性分章 | 原文与切分并排，确认无漏章、错章、断号 |
+| stage2 | 全书事实底座与逐章事件拍 | 原文与骨架逐段对照；全局人物、关系、规则、秘密是否有据 |
+| stage3 | 代码实测加 LLM 文风画像 | 实测数字与真正下发给写手的档位词是否一致 |
+| stage4 | 重构计划与写作上下文 | 计划决定与写手实际收到的材料逐拍对照 |
+| stage5 | 深/浅两臂写作、机械验收和语义审判 | 材料与成稿、原文与改写、finding 与修订面 |
+| stage6 | 生成三个开篇文案候选 | 三候选并排，人选一条定稿 |
+| stage7 | 生成人名决策，确定性替换并组书 | 新旧名表、漏网候选和逐章替换前后；人定稿 |
+
+### 6.3 当前路由与屏幕职责
+
+路由以 `web/src/routes.tsx` 为执行落点。当前生产实现保留设计任务，但合并了重复屏：
+
+| 路由 | 屏幕职责 |
+|---|---|
+| `/` | 语料库、上传与逐书阶段状态 |
+| `/n/:sid` | 进入该书并重定向到 stage0 |
+| `/n/:sid/run` | agent 全链运行进度与事件时间线；只观察，不判定 |
+| `/n/:sid/stage0` | 整本剔除审阅、编辑与批准 |
+| `/n/:sid/stage1` | 原文与分章对照，只读 |
+| `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
+| `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
+| `/n/:sid/style` | stage3 文风实测与下发档位 |
+| `/n/:sid/stage4/:o` | 计划与写作上下文逐拍对照 |
+| `/n/:sid/depth` | 逐章深/浅重构选择与写作启动前确认 |
+| `/n/:sid/stage5/:o` | 成稿、材料、验收 finding 与修订合并工作面 |
+| `/n/:sid/inbox` | 六类待人工的全书路由器；不提供第二个编辑面 |
+| `/n/:sid/stage6` | 三候选文案与人工定稿 |
+| `/n/:sid/stage7`、`/n/:sid/stage7/:o` | 人名表、漏网候选、成书状态和逐章替换对照 |
+
+旧 `/review/:o` 重定向到 stage5，旧 `/check` 重定向到 inbox；总览、独立 review 和独立 check 的
+信息已由当前工作面承接，不再作为第二个真相来源。
+
+### 6.4 UI 硬规则 U-01～U-20
+
+1. freshness 保留 fresh / stale / unknown，missing 作为明确显示态；unknown 不得画成 fresh。
+2. badge 保留 pass / amber / fail；amber 表示存在 unver，不是较弱的通过。
+3. severity 保留 hard / info / metric / unver；metric 是读数，不使用警告语义。
+4. job state 保留 running / ok / failed / unknown；服务重启后的 running 一律改判 unknown。
+5. 空数组按字段解释，不得统一翻译成“没问题”；not-run、合法空与数据缺失分别呈现。
+6. 部分遮蔽必须常驻标注“部分”，不能收进 tooltip 或宣传为完整安全边界。
+7. 付费、免费只读、免费写盘在按钮与确认流上可辨；费用和写盘语义只由服务端给出。
+8. 付费确认显示服务端下发的完整命令；取不到预览就不允许发起。
+9. 不显示预估花费、预估调用次数或伪精度进度。
+10. 前端不重算 badge、passed、severity、freshness、paid 或业务阈值；缺结论时显示读数/unknown。
+11. 不从中文文案正则抠结构；修复路由、章节、证据、状态全部消费结构化字段。
+12. 服务端切好的片段直接渲染；不按 Python 下标在 JavaScript 中二次切中文字符串。
+13. 中文正文不 justify，使用适合长读的字体与行高，段落靠间距而不是缩进堆叠。
+14. 对照任务默认并排，不用 tab 隐藏另一侧；两侧共享可读列宽。
+15. 未对齐块必须带可见边界和“未验证对应”的文字，不得用空白暗示已对齐。
+16. loading / error / not-run / normal 四态每屏齐备；not-run 说明下一步，不写“暂无数据”。
+17. 不发明健康分、AI 建议卡、项目百分比；只显示有来源的状态与读数。
+18. 不提供运行中取消按钮；只允许未来的持久队列取消尚未开始项。
+19. 状态不能只靠颜色：同时用形状与文字，满足长时间审校和色觉差异。
+20. 目标视口 1280～2560 桌面宽屏；不要求移动端和响应式重排。
+
+### 6.5 技术与数据缝
+
+- React 18、TypeScript、Vite、Tailwind CSS、React Router、TanStack Query；不引入无需求支撑的 UI
+  组件库、图表库、全局状态库、i18n、鉴权或 SSR。
+- 屏与组件只经 hooks → `web/src/api/endpoints.ts` → Api 接口取数，不直接 fetch。
+- real 与 mock 适配器满足同一 TypeScript 接口；真实模式不允许缺端点时回退 mock。
+- 写请求携带 `X-Novel-UI: 1`；服务进程只写 `_service/`，产物变更经 CLI 子进程。
+- action、枚举、付费与写盘语义由服务端 `/api/enums` 和 preview 返回；前端不保存第二份判定表。
+- 作业日志当前按 offset 轮询；SSE 是活动待办中的可选增强，不影响上述接口语义。
+
+## 七、修复机制与成本上界
+
+校验结论按 `remediation` 分四类；路由是策略，不在 CLI、界面或 agent 中临时猜：
+
+| remediation | 谁修 | 准入与路由 | 自动成本上界 |
+|---|---|---|---|
+| deterministic | 代码 | 运行 Rule.fix 指向的同层免费节点与 flag，注册期验证路由真实存在 | 一次免费命令 |
+| llm | stage5 写手 | 只接受 `repair == UNIQUE` 且 `unresolved_rounds < 2`；directive 从 Rule 唯一派生 | 每章每判据最多两轮付费 |
+| human | 人 | 进入 invalid / rejected / stalled / human_only / upstream / approval 六类清单；通过 apply-edit、pick 或 wontfix 收口 | 无自动费用 |
+| none | 无 | metric 只报告读数 | 无 |
+
+处理顺序：首轮生成 → 机械检查 → deterministic 先修 → UNIQUE 才可付费修 → 连续两轮未消转人 →
+全规则回归 → 机械干净且 fresh 后再运行 stage5/stage6 语义审判。unver 与 skipped 不属于四种修复，
+也不得洗成通过。
+
+唯一落点：路由算法 `novel/report/builder.py::remediation_of`；付费筛选
+`novel/stages/stage5/write.py::revise_targets`；轮次上限
+`contracts/invariants.py::STOP_REWRITE_AFTER`；六类清单 `novel/views/inbox.py::inbox_view`。
+
+实测收缩账：stage5 可修复条目从 36 条收缩到 9 条，其余 27 条转人工；这避免把密度、比率和档位
+这类多解问题交给模型用删内容或编内容“修绿”。
+
+## 八、冻结证据基线
+
+### 8.1 唯一保留位置与守卫
+
+历史交接包和 design brief 曾各保存一份相同 JSON，`web/src/mocks/` 又保存第三份。清理后只保留
+`web/src/mocks/` 的 20 份原始字节；本节的文件名、字节数与 SHA-256 是
+`web/scripts/check-seams.mjs` 的直接输入。脚本同时验证文件清单恰好一致、每份字节数和哈希均不变。
+要换基线必须有明确产品裁决，并同时更新样本字节、下表和版本说明。
+
+<!-- MOCK_BASELINE_V1_START -->
+| 文件 | bytes | SHA-256 |
+|---|---:|---|
+| `check_stage2.json` | 11142 | `ea091893217ff0e6ce4723cf837555ac3d887896617b9e178f8601b600f973c8` |
+| `check_stage5_review.json` | 15578 | `7cfa516872bf20accb71a380c7245d56703d0b73e1d1016334f31f90efe4f343` |
+| `enums.json` | 6779 | `a803abe33d6def148230edf517c1ca2f814ca21f4c54d964ddc9e3f17b4be875` |
+| `inbox.json` | 1943 | `d8ad9754da44a634639a27044cdc237d808b65259ed27a716be6fcf03e9166f8` |
+| `jobs.json` | 11 | `0a5796e93f9b57ddf7c45f860485cbb7353fc0eda3dca753a444d0fd2a1573fe` |
+| `novel_overview.json` | 4301 | `9e14cead8aa79de4ed419d8617b7e15164381202800ce0bb0c98228a65116207` |
+| `novels.json` | 13906 | `f98c9425ff31f7dda62928625c96a7eb7491623e840dd369c3401034314d235e` |
+| `reading_ch3.json` | 13764 | `79039b81fdaca9b9de416a0aba9e3ceed029082d172cc126f43622585f458a70` |
+| `review_ch3.json` | 18227 | `40d2e120114b3ff3f546eea278a726402f24df6ba833ecf8dea67806dd21ba92` |
+| `stage0_extras.json` | 3401 | `daad1d6c0e3d2f736434c947873a4a8260bf07b03201958ab36cc7a51429a576` |
+| `stage1_chapters.json` | 1694 | `8f87eb3325b84fa30e0ba578826414aeb1bc23234822f16af50ab89a266286be` |
+| `stage1_hook_copy.json` | 594 | `ae6aebbec146d0b063e7603fdae7d0bf0f1048edf5b8f7bc4ab36d30bb394943` |
+| `stage1_report.json` | 1405 | `1a3b3b21586c6dd3e9fc26ff5a0468d91e3ecbc752dea85eba6ddccf8a328fee` |
+| `stage2_global.json` | 17334 | `6cfcd60c474bfad8ff37dd9597cf61dc6890abfa1b762a71c0c7e15d1e277b59` |
+| `stage3_style.json` | 6257 | `22f8337443b957b0f1d4d327584420c1c37a634354b9da0c3a19b2a57da656f1` |
+| `stage4_ch3.json` | 18304 | `7d49126802cfe39a0243a4ee72bba87c5d14e5bdd1453dce10d4734051493ead` |
+| `stage5_ch3.json` | 30599 | `d4d9bd76444b4411e78d5b0b1e7bb7142837a0d39a309bb467398b0a91c73f86` |
+| `stage6_hook.json` | 12345 | `147473f9258522f5037636edfaf919ca8523bc1a9980454a81375cef1ab62975` |
+| `stage7_ch3.json` | 24402 | `9ed773d02b88495a3a353c8b91e1d949548b15bf4a5f2cd3a732e156a8553536` |
+| `stage7_names.json` | 14723 | `3dc197c7a56199603a0915c35e6bdf868e4ca9f2f5066ddb3a60c99e117fbc5a` |
+<!-- MOCK_BASELINE_V1_END -->
+
+### 8.2 样本读法与不可推导项
+
+这些是历史抓包，不是当前 schema：旧 job kind、旧 check kind、stage0_extras 和部分旧字段只证明
+“曾经出现过”，不得重新接入 real mode。当前类型以 `contracts/schema/` 与真实 API 为准。
+
+保留的关键反例：`jobs.json` 是合法空数组；stage2 secrets 可以为空；stage5 一章可以只有一条臂；
+锚点覆盖率可低至 0.375 且未对齐块必须明示；已完成书的旧 check 可以是 fail；review diff_rows 可以
+为空；stage7 允许 renamed=false 并要求理由。空值和红灯都不能被 mock 适配器“美化”。
+
+`web/src/fixtures/backend_v1/` 是当前后端形状的版本化 fixture，与本节证据基线职责不同；前者可随
+新版本新增目录，后者未经裁决不得改字节。
+
+## 九、文档与测试的直接耦合
+
+### 9.1 可执行 Markdown 语法
+
+`contracts/requirements.py` 直接解析本文件：R 节必须以 `### R-N` 开头，R 条目必须是至少三列的
+`| R-N.m | 要求 | 谁在查 |`，Q 定义必须以 `### Q-N` 开头，B 定义必须是
+`| **B-NN** | ... |`。编号重复、表格缺列或完全解析不到条目会失败。
+
+现役自检：R 家族大于 50、Q 恰好 12、B 恰好 22 且连续。每个 B 必须被某条 R 引用；每个声明
+HARD / INFO / 闸门 / 度量的 R 必须被注册 Rule 覆盖；每条 Rule 必须反向指向现存 R。结构行的
+可解析落点使用 `` `仓内路径.py::symbol` ``，当前扫描下限为 32 个，只应增加。
+
+### 9.2 文档引用与扫描自检
+
+`tests/test_docs_references.py` 扫描本文件、`docs/LESSONS.md`、`docs/REQUIREMENTS.md`、README 与
+`docs/schema/*.md`。反引号中的 R/Q/B 编号必须存在；以 tests、contracts、tools、novel、docs 开头
+的仓内路径必须存在。扫描总数还要超过 100 个编号和 10 个路径，防止正则失配后假绿。
+
+### 9.3 判据注册与反例资产
+
+- Rule id 全局唯一；severity、owner、check_kind、who_checks、repair bucket 都是闭合枚举。
+- metric 与 METRIC 双向一致；unver 不进自动修复；词表规则必须有 baseline。
+- repair 非 NONE 只属于 stage5 且必须有 directive；NONE 时 directive 必须为空。
+- fix 指向同层真实节点与真实 flag，费用可由唯一入口推导。
+- semantic 判据只在 stage5/stage6，且两层都必须非空。
+- stage4/6/7 每条 HARD 在 `tests/hard_cases.py` 有真实会红的反例；stage0/1 的 warning、编码、kind、
+  新增 HARD 与阈值带由 `tests/test_ingest_fixtures.py` 双向覆盖。
+
+### 9.4 架构与前端 seam
+
+`tests/test_layering.py` 守 contracts/runtime/web 分层、store 独占 JSON 读写、API/view 不直写产物、
+服务不能花钱、view/queue 不产生判定、API 不造第二个 argv builder、完成度不偷看作业记录。
+`tests/test_api_discipline.py` 守 loopback、无 CORS、状态域、unknown、唯一 paid 来源、部分遮蔽说明与
+同书 409。`web/scripts/check-seams.mjs` 守唯一 fetch 缝、mock/fixture 消费边界、颜色令牌和 §8 哈希。
+
+### 9.5 最小验证命令
+
+```powershell
+& 'D:\Miniconda\envs\novel_refactor\python.exe' -B -m pytest -q `
+  tests/test_docs_references.py tests/test_coverage.py tests/test_rules_registry.py `
+  tests/test_hard_counterexamples.py tests/test_ingest_fixtures.py
+npm --prefix web run seams
+npm --prefix web run typecheck
+npm --prefix web run build
+```
+
+修改业务判据、schema、节点或 API 时追加对应 stage/API 测试，交付前运行完整测试集。测试通过只说明
+已登记守卫没有发现问题，仍需检查真实消费者和最终盘面。
+
+## 十、历史验证证据账
+
+本节只保留会影响现役判断的结论，不保留逐日施工日志。
+
+| 日期 | 范围 | 可继续引用的结论 |
+|---|---|---|
+| 2026-08-13 | 三本真实书 stage0～stage7 | 完整产物链可达；精确 SourceSpan、bounded context、stage3 防泄漏、stage5 落盘闸与修复路径均经过真实盘面；真实失败与恢复覆盖仍见活动待办 |
+| 2026-08-14 | 前后端第二阶段 smoke | 免费上传→stage0 批准→stage1 真实服务链通过；九条读屏、三条人工写回、preview→确认→执行链随后完成；旧 smoke 中“付费未接”已被后续验收覆盖 |
+| 2026-08-14 | v2 与语义审判 | bounded context 和 stage5 semantic 真跑；当时未跑 stage6/7 的限制已被次日完整验收覆盖 |
+| 2026-08-15 | 模型×思考 A/B | pro+thinking 保留；flash 未达到质量门；no-thinking 在 stage2.global 稳定失败。模型选择先过质量门，再比较速度与价格；生成与评审能力分开评价 |
+| 2026-08-15 | skill 盲驱三书 | 共记录 359 次付费调用、47 次缓存命中；第三书由只读操作规程的执行者盲驱。暴露的 wontfix、secret 人工校正、重采样和中断恢复缺口已转入活动待办 |
+| 2026-08-14～15 | 代码与产物复审 | 队列只有计划、整本下发有 token 悬崖、风格漂移缺闭环、schema 无显式版本、重复路径/辅助函数仍在；已修复的 exit collision、旧 inbox、stage4 revalidate、stage6 段间归一和 stage7 无前稿编辑不再列为缺口 |
+
+证据解释纪律：阶段性 smoke 会被后续完整验收覆盖；历史报告中的“未完成”不能越过
+`docs/REQUIREMENTS.md` 重新成为活动状态。模型或语料结论只适用于当时样本与预登记规则，不外推成
+普遍质量保证。

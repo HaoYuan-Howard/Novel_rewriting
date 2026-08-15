@@ -23,14 +23,14 @@
 
 ## ⚠ 本文的证据面比前十份都差，说清楚差在哪
 
-`docs/design_brief/05_samples/jobs.json` 的真实抓包是 **`{"jobs":[]}`**——**一个样本都没有**。
+`docs/BACKEND_CONTRACT.md` §八冻结的 `jobs.json` 是 **`{"jobs":[]}`**——**一个样本都没有**。
 所以 `JobRecord` 的形状**只能从代码来**（原型 `Web/jobs.py` 的 `meta` 字典），
 而那正是 `_README.md` 立过的那条纪律：
 
 > 凡是「盘上零样本」或「盘上取值面明显偏窄」的字段，都要去**全语料**或**代码**再确认一次。
 > （`platform` 就是这么被推错的：盘上 3/3 是 `'FQ'`，全语料 120/163 是 `null`）
 
-`NovelOverview` 那一半好一些：`05_samples/novel_overview.json` 是**一本真实的书**，
+`NovelOverview` 那一半好一些：统一契约 §八冻结的 `novel_overview.json` 是**一本真实的书**，
 八层产物 + `_provenance` + 三态新鲜度都在里面，标 `盘·码`。
 `QueuePlan` 整个是新的（`R-13` 是本次相对原型的**新增能力**），全部标 `设计`。
 

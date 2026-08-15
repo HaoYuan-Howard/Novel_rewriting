@@ -271,7 +271,7 @@ def _surface(app) -> dict[str, list[str]]:
 def test_the_published_surface_is_exactly_the_current_surface(app):
     """⭐ 公开接口面写死在这里（基础端点 + Stage 0/1 + 第二阶段读屏）。
 
-    ⚠ 路由表的唯一落点是 `docs/design_brief/04_delivery.md` §路由表，
+    ⚠ 路由表的唯一落点是 `docs/BACKEND_CONTRACT.md` §6.3，
     那张表的标题写着「**固定，不要改**」。本条不复制那张表，它只钉住
     「**当前实现了其中哪几条**」——多接一个、少接一个都要来改这个清单，
     于是「顺手加一个端点」变成一次显式的决定。
