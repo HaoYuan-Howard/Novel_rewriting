@@ -311,7 +311,6 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | `plan_chapter` | 对象 | 是 | `beats[].budget_chars=null` 只出现在恒等基线上：算不出源字数的拍**不估算、不拿邻居补** |
 | `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书 |
 | `writer_target` | 二元组 或 null | 是 | 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）；`null` ⇔ `ctx_chapter=null`（同进同出，后置条件） |
-| `writer_target_estimated` | 布尔 | 是 | 目标是不是估算的 |
 | `plan_state` / `ctx_state` | 对象 | 是 | 两份产物各自的 `ArtifactState` |
 | `_provenance` / `_ctx_provenance` | 对象 或 null | 是 | 两份来源账分两个键出，不合并 |
 

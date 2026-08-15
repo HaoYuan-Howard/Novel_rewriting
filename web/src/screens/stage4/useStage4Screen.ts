@@ -199,9 +199,7 @@ export function useStage4Screen() {
           { k: '本章预算', v: ctx.budget_chars === null ? '—' : String(ctx.budget_chars) },
           {
             k: '写手目标',
-            v: d?.writer_target
-              ? d.writer_target.join('–') + (d.writer_target_estimated ? '（估）' : '')
-              : '—（没有任务书）',
+            v: d?.writer_target ? d.writer_target.join('–') : '—（没有任务书）',
           },
         ]
       : [],

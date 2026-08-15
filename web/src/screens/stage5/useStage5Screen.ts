@@ -243,7 +243,7 @@ export function useStage5Screen() {
       ? [
           {
             k: '写手目标',
-            v: mat.writer_target.join('–') + (mat.writer_target_estimated ? '（估）' : ''),
+            v: mat.writer_target.join('–'),
           },
           { k: '下发面', v: mat.chars + ' 字' },
           { k: '源章原文', v: (d?.source_chars_raw ?? '—') + ' 字' },

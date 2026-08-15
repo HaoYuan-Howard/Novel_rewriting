@@ -78,8 +78,7 @@ def test_writer_target_walks_the_same_ruler_as_the_writer(box):
     谁也不会出声。"""
     v = stage4_view(box.root, box.sid, v0 := 1)
     assert v.ctx_chapter is not None
-    lo, hi, est = target_band(v.ctx_chapter.model_dump(by_alias=True))
-    assert v.writer_target == (lo, hi) and v.writer_target_estimated == est
+    assert v.writer_target == target_band(v.ctx_chapter.model_dump(by_alias=True))
     assert v.ordinal == v0
 
 

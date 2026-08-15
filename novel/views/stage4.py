@@ -73,10 +73,8 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
     pc = next(c for c in plan_raw['output_chapters'] if int(c['output_ordinal']) == ordinal)
     ctx_entry = by_ord.get(ordinal)
     target = None
-    estimated = False
     if ctx_entry is not None:
-        lo, hi, estimated = target_band(ctx_entry.model_dump(by_alias=True))
-        target = (lo, hi)
+        target = target_band(ctx_entry.model_dump(by_alias=True))
 
     return Stage4View(
         sid=paths.derive_source_meta(novel_dir.name)[0],
@@ -97,7 +95,6 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
                    for i, b in enumerate(pc['beats'], start=1)]),
         ctx_chapter=ctx_entry,
         writer_target=target,
-        writer_target_estimated=estimated,
         plan_state=plan_state,
         ctx_state=ctx_state,
         _provenance=plan_prov,

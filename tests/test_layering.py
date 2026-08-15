@@ -722,3 +722,110 @@ def test_the_cli_drift_scan_actually_finds_something():
         f'`_stage_aliases` 多半没认出 CLI 现在的 import 写法')
     fns = {fn for _, _, _, fn in refs}
     assert len(fns) >= 9, f'只覆盖到 {sorted(fns)}——八层派发函数应该都在里面'
+
+
+# ───────────────── 跨模块「返回元数」漂移 ─────────────────
+#
+# ⚠⚠ 这是上一节抓不到的**第二个维度**，也由一个真事故留下：
+# `08240cf` 把 `stage5/prompts.py::target_band` 从 `tuple[int,int,bool]` 改成
+# `tuple[int,int]`（「是不是估的」那一位随估算路一起退役），改了同文件内 3 个调用方，
+# **漏了文件外 4 个** —— `novel/views/stage4.py` 与 `novel/views/stage5.py` 仍按 3 元解包，
+# 于是 S-07 / S-08 两个读屏经 HTTP 直接 500，**持续了 12 个提交没人发现**。
+#
+# ⚠ 名字还在，所以上一节的 `hasattr` 扫描一个字都不会说。
+# ⚠ 而它没被测试发现的原因也登记在案：那些用例要真语料，
+#   不设 `NOVEL_OUTPUT` 就整批 skip —— **「没在查」伪装成「查过没事」**。
+# ⇒ 本条改用声明：函数自己写了 `-> tuple[A, B]`，调用方就必须按那么多元解包。
+#   纯 AST，不 import、不要语料。
+
+def _fixed_tuple_arity(ann: ast.expr | None) -> int | None:
+    """`-> tuple[A, B]` → 2。变长 `tuple[A, ...]`、非元组、`| None` 一律不管
+    （返回 `None` 表示「这条不在本守卫的射程内」，宁可漏报也不误报）。"""
+    if not isinstance(ann, ast.Subscript):
+        return None
+    base = ann.value
+    name = base.id if isinstance(base, ast.Name) else getattr(base, 'attr', None)
+    if name not in ('tuple', 'Tuple'):
+        return None
+    sl = ann.slice
+    elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+    if any(isinstance(e, ast.Constant) and e.value is Ellipsis for e in elts):
+        return None
+    return len(elts)
+
+
+def _repo_py_files() -> list[str]:
+    out: list[str] = []
+    for rel in ('novel', 'contracts', 'tests', 'tools'):
+        out += _py_files(rel)
+    return out
+
+
+def _arity_table(trees: dict[str, ast.Module]) -> dict[tuple[str, str], int]:
+    """全仓「声明返回定长元组」的函数：(模块点名, 函数名) → 元数。"""
+    table: dict[tuple[str, str], int] = {}
+    for path, tree in trees.items():
+        mod = os.path.relpath(path, ROOT).replace(os.sep, '/')[:-3].replace('/', '.')
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                a = _fixed_tuple_arity(n.returns)
+                if a is not None and a >= 2:
+                    table[(mod, n.name)] = a
+    return table
+
+
+def _unpack_sites(trees: dict[str, ast.Module], table: dict[tuple[str, str], int]):
+    """`a, b = f(...)` 形态的解包点，能解析到 `table` 里某个函数的那些。"""
+    sites = []
+    for path, tree in trees.items():
+        fn_bind: dict[str, tuple[str, str]] = {}      # 直接 import 进来的函数
+        mod_bind: dict[str, str] = {}                 # import 进来的模块别名
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
+                for al in n.names:
+                    local = al.asname or al.name
+                    if (n.module, al.name) in table:
+                        fn_bind[local] = (n.module, al.name)
+                    mod_bind[local] = f'{n.module}.{al.name}'
+        for n in ast.walk(tree):
+            if (not isinstance(n, ast.Assign) or len(n.targets) != 1
+                    or not isinstance(n.targets[0], ast.Tuple)
+                    or not isinstance(n.value, ast.Call)):
+                continue
+            tgt = n.targets[0]
+            if any(isinstance(e, ast.Starred) for e in tgt.elts):
+                continue                              # `a, *rest =` 不受定长约束
+            f, key = n.value.func, None
+            if isinstance(f, ast.Name):
+                key = fn_bind.get(f.id)
+            elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+                base = mod_bind.get(f.value.id)
+                if base and (base, f.attr) in table:
+                    key = (base, f.attr)
+            if key is not None:
+                sites.append((_rel(path), n.lineno, key, table[key], len(tgt.elts)))
+    return sites
+
+
+def _arity_scan():
+    trees: dict[str, ast.Module] = {}
+    for p in _repo_py_files():
+        trees[p] = ast.parse(open(p, encoding='utf-8').read(), filename=p)
+    table = _arity_table(trees)
+    return table, _unpack_sites(trees, table)
+
+
+def test_no_caller_unpacks_a_different_number_of_values_than_declared():
+    """⭐ **改了一个函数的返回元数而漏掉文件外的调用方，这条当场红。**"""
+    _table, sites = _arity_scan()
+    bad = [f'{rel}:{ln} 按 {got} 元解包 `{mod}.{name}()`，而它声明返回 {want} 元'
+           for rel, ln, (mod, name), want, got in sites if want != got]
+    assert not bad, ('跨模块的返回元数对不上了：\n  ' + '\n  '.join(bad)
+                     + '\n→ 改函数返回几个值时，**文件外**的调用方也要一起改。')
+
+
+def test_the_arity_scan_actually_finds_something():
+    """守卫的守卫：两个数都是实测值，掉下来就说明解析器没认出现在的写法。"""
+    table, sites = _arity_scan()
+    assert len(table) >= 132, f'只认出 {len(table)} 个「返回定长元组」的函数（曾实测 132）'
+    assert len(sites) >= 201, f'只查到 {len(sites)} 个可解析的解包点（曾实测 201）'

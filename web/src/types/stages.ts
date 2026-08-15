@@ -465,7 +465,6 @@ export interface Stage4Response {
   ctx_chapter: CtxChapter | null
   /** 与写手同一把尺子（prompts.target_band）；null ⇔ ctx_chapter=null */
   writer_target: [number, number] | null
-  writer_target_estimated: boolean
   plan_state: ArtifactState
   ctx_state: ArtifactState
   _provenance: Provenance | null
@@ -479,7 +478,6 @@ export interface Materials {
   blocks: string[]
   chars: number
   writer_target: [number, number]
-  writer_target_estimated: boolean
 }
 
 /** 原文↔成稿的一个对齐块。anchored=false = 本块并入了无锚的拍。 */

@@ -1053,8 +1053,13 @@ class Stage4View(StrictModel):
 
     #: 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）。
     #: `null` ⇔ `ctx_chapter=null`（没有任务书就没有目标）。
+    #:
+    #: ⚠ 此处**没有** `writer_target_estimated`：那个布尔曾用于区分「按 `budget_chars`
+    #: 算的实数带」与「`budget_chars` 缺席时按 `source_chars` 估的带」，而
+    #: `CtxBeat.budget_chars` / `CtxChapter.budget_chars` 现在都是 `Field(gt=0)` 必填，
+    #: 估算那条路已随 `08240cf` 一并退役 ⇒ 它只会是 `false`。
+    #: **一个永远不会为真的布尔比没有这个字段更坏**：它让下一个人以为这里真能区分两者。
     writer_target: tuple[int, int] | None
-    writer_target_estimated: bool
 
     plan_state: ArtifactState
     ctx_state: ArtifactState
@@ -1087,8 +1092,8 @@ class MaterialView(StrictModel):
 
     blocks: list[str] = Field(min_length=1)
     chars: int = Field(ge=0)
+    #: ⚠ 同 `Stage4View.writer_target`：不再有 `writer_target_estimated`，理由见那一格。
     writer_target: tuple[int, int]
-    writer_target_estimated: bool
 
 
 class DraftAlignRow(FrozenModel):

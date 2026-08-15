@@ -677,7 +677,6 @@
   1224,
   1496
  ],
- "writer_target_estimated": false,
  "plan_state": {
   "rel": "stage4/plan_chapters.json",
   "exists": true,

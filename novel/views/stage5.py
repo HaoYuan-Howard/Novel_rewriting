@@ -71,9 +71,8 @@ def stage5_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage5V
     materials = None
     if entry is not None and book is not None:
         mat = build_material(entry, book, with_source_text=False)
-        lo, hi, est = target_band(entry)
         materials = MaterialView(blocks=list(mat.blocks), chars=len(mat.given),
-                                 writer_target=(lo, hi), writer_target_estimated=est)
+                                 writer_target=target_band(entry))
 
     invalid_by_ord = _invalids_by_ord(invalid_rels)
     index = [_index_row(store, o, by_ord.get(o, []), invalid_by_ord.get(o, []),

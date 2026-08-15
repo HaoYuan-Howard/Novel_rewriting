@@ -384,8 +384,8 @@ def test_the_downsend_band_is_the_very_one_the_judges_use(book, entry):
     原型在 `DRAFT_BAND` 之外又乘了一次 ±10%，实际执行 0.81~1.21×——而两端极值
     恰好卡在旧口径内侧、各差不到 1%，**两条判据一次都没响**。
     """
-    lo, hi, est = prompts.target_band(entry)
-    assert not est and M.target_range(entry) == (lo, hi)
+    lo, hi = prompts.target_band(entry)
+    assert M.target_range(entry) == (lo, hi)
     mat = prompts.build_material(entry, book, with_source_text=False)
     assert f'**{lo}~{hi} 字**' in mat.given
 
