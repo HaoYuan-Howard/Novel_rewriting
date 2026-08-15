@@ -18,7 +18,6 @@ plan.py —— stage4 的两个节点。**一个 stage 两份产物、两个节�
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from contracts.schema.report import CheckReport
@@ -412,20 +411,6 @@ def run_names_only(ctx: RunContext) -> list[tuple[int, dict[str, str], list[str]
     return out
 
 
-def _edit_rel(store: ArtifactStore, edit_path: str) -> str:
-    """编辑文件路径 → **仓内相对路径**（形态照 stage7 `rename._edit_rel`）。"""
-    if not edit_path:
-        return EDIT
-    root = Path(store.ctx.novel_dir)
-    try:
-        return Path(edit_path).resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        raise TerminalState(
-            f'`--apply-edit {edit_path}` 落在这本书的产物目录之外（{root}）。'
-            f'编辑文件的**形状是契约**（`ARTIFACTS` 里登记着 {EDIT}）——'
-            f'放在别处就没有任何东西在管它，也记不进来源账') from None
-
-
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
     """`--apply-edit`：把人手改好的一份计划落成新的一轮（0 成本）。
 
@@ -439,7 +424,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
     ⚠ **无前稿（正式或 `.INVALID` 皆无）⇒ 显式终态**：这是修订路，不是生成路。
     """
     store = ArtifactStore(ctx)
-    rel = _edit_rel(store, edit_path)
+    rel = paths.edit_rel(ctx.novel_dir, edit_path, EDIT)
     if not store.exists(rel):
         raise TerminalState(
             f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**（整份计划替换，'

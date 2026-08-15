@@ -89,6 +89,9 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 小说产物目录内、能由 `ARTIFACTS` 解析的文件；应用后重新运行全部 Stage 4 判据并重建
 `writer_context.json`。
 
+**路径口径**（stage3/4/6/7 共用 `novel/paths.py::edit_rel`）：相对路径按**当前书目录**
+解释，不按进程 cwd；书目录内的绝对路径同样接受；落在书目录之外（含 `..` 穿越）是显式终态。
+
 ## 四、`writer_context.json`
 
 写作上下文由当前正式计划和 Stage 1/2 产物确定性组装，顶层只有：
@@ -145,7 +148,7 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 | `--revalidate` | 0 | 重判当前 `.INVALID` 计划，合格后晋升并重建上下文 |
 | `--names-only` | 0 | 只重算当前人物显示名投影 |
 | `--identity` | 0 | 生成确定性写作上下文基线 |
-| `--apply-edit <路径>` | 0 | 应用严格完整计划修订集 |
+| `--apply-edit <路径>` | 0 | 应用严格完整计划修订集。路径相对**书目录**（`paths.edit_rel`） |
 | `stage4.context` | 0 | 从当前正式上游重建 `writer_context.json` |
 
 ## 六、现行判据

@@ -247,3 +247,116 @@ def test_archived_rounds_anchors_the_stem_exactly():
     assert paths.archived_rounds(d, 'hook') == {1, 3}
     assert paths.archived_rounds(d, 'hook.INVALID') == {2}
     assert paths.archived_rounds(d / '不存在', 'hook') == set()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 五、`--apply-edit <路径>` → 书内相对路径（`edit_rel`）
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# ⚠⚠ 这一节此前**不存在**，而 stage3/4/6/7 各有一份逐字相同的 `_edit_rel`。
+# 全仓唯一直接测过它的是 `tests/test_stage7_subs.py` 的两条断言（书内绝对路径 /
+# 目录外绝对路径），stage3/4/6 零覆盖、**相对路径与 `..` 穿越零覆盖**。
+# 而漏掉的恰好是坏的那一条：四份实现都先 `Path(edit_path).resolve()`（按**进程 cwd**）
+# 再拿书目录去卡，报错文案却以书目录为基准 —— 站在仓根敲一个书内相对路径会被
+# 报成「落在产物目录之外」。skill 现场记录为此挂着 FN-014，处置建议是绕开它。
+#
+# ⇒ 收敛成 `paths.edit_rel` 一份，并按**书目录**解释相对路径；本节按
+#   「四层 × 五类路径」钉住，缺一类就等于那一类没在查。
+
+_EDIT_DEFAULTS = {
+    'stage3': 'stage3/style_edit.json',
+    'stage4': 'stage4/plan_edit.json',
+    'stage6': 'stage6/hook_edit.json',
+    'stage7': 'stage7/name_map_edit.json',
+}
+
+
+def test_the_edit_defaults_here_are_the_ones_the_stages_actually_use():
+    """守卫的守卫：本节的四个缺省值必须**就是**各层 `EDIT` 常量。
+
+    各写一份，下面那五类用例就会在一个**没人用的路径**上全绿。
+    """
+    from novel.stages.stage3 import style
+    from novel.stages.stage4 import plan
+    from novel.stages.stage6 import hook
+    from novel.stages.stage7 import rename
+
+    assert {'stage3': style.EDIT, 'stage4': plan.EDIT,
+            'stage6': hook.EDIT, 'stage7': rename.EDIT} == _EDIT_DEFAULTS
+
+
+@pytest.fixture
+def book_dir(tmp_path: Path) -> Path:
+    d = tmp_path / '书名_123'
+    (d / 'stage3').mkdir(parents=True)
+    return d
+
+
+@pytest.mark.parametrize('layer,default', sorted(_EDIT_DEFAULTS.items()))
+def test_an_empty_path_falls_back_to_this_layers_registered_default(layer, default, book_dir):
+    """① 缺省：不给路径 ⇒ 契约里登记的那一份（`ARTIFACTS` 有它的形状）。"""
+    assert paths.edit_rel(book_dir, '', default) == default
+    assert paths.edit_rel(book_dir, None, default) == default
+
+
+@pytest.mark.parametrize('layer,default', sorted(_EDIT_DEFAULTS.items()))
+def test_a_relative_path_is_read_against_the_book_dir_not_the_cwd(
+        layer, default, book_dir, monkeypatch, tmp_path):
+    """⭐② **相对路径相对书目录**——本节存在的理由（FN-014 那条 `open-gap`）。
+
+    ⚠ 故意把 cwd 挪到别处：旧实现在这里会把路径解释到 cwd 底下，
+    然后拿书目录去卡它，报出一句与自己行为矛盾的「落在产物目录之外」。
+    """
+    monkeypatch.chdir(tmp_path)
+    assert paths.edit_rel(book_dir, default, default) == default
+    # 反斜杠（Windows 上手敲命令的常见形态）也要归一成 `/`
+    assert paths.edit_rel(book_dir, default.replace('/', os.sep), default) == default
+
+
+@pytest.mark.parametrize('layer,default', sorted(_EDIT_DEFAULTS.items()))
+def test_an_absolute_path_inside_the_book_dir_is_still_accepted(layer, default, book_dir):
+    """③ 绝对路径照收——这是 FN-014 教人用的那条绕行路，收敛之后它仍然成立。"""
+    assert paths.edit_rel(book_dir, str(book_dir / default), default) == default
+
+
+@pytest.mark.parametrize('layer,default', sorted(_EDIT_DEFAULTS.items()))
+def test_a_path_outside_the_book_dir_is_a_terminal_state(layer, default, book_dir, tmp_path):
+    """④ 目录外 ⇒ 显式终态（`2`），不静默去读。
+
+    编辑文件的**形状是契约**；落在别处就没有任何东西在管它，也记不进来源账。
+    """
+    from novel.errors import TerminalState
+
+    with pytest.raises(TerminalState, match='产物目录之外'):
+        paths.edit_rel(book_dir, str(tmp_path / 'outside.json'), default)
+
+
+@pytest.mark.parametrize('layer,default', sorted(_EDIT_DEFAULTS.items()))
+def test_a_dotdot_traversal_cannot_climb_out(layer, default, book_dir):
+    """⑤ `..` 穿越 ⇒ 同样拦下。**此前一条用例都没有。**
+
+    `resolve()` 先把 `..` 算平，算平之后不在书目录里就一样被拦
+    ——挡的是「另一本书」而不只是「另一个目录」：来源账的键不含书名，
+    真写过去了事后查不出来（`input_key` 的 docstring）。
+    """
+    from novel.errors import TerminalState
+
+    for bad in ('../别的书/stage3/style_edit.json', '..', '../../etc/passwd'):
+        with pytest.raises(TerminalState, match='产物目录之外'):
+            paths.edit_rel(book_dir, bad, default)
+
+
+def test_a_dotdot_that_stays_inside_is_fine():
+    """⚠ 反面：`..` 本身不是罪名，**越出去**才是。只拦形态会把合法路径也拦掉。"""
+    import tempfile
+
+    root = Path(tempfile.mkdtemp())
+    try:
+        book = root / '书名_123'
+        (book / 'stage3').mkdir(parents=True)
+        got = paths.edit_rel(book, 'stage3/../stage3/style_edit.json',
+                             'stage3/style_edit.json')
+        assert got == 'stage3/style_edit.json'
+    finally:
+        import shutil
+        shutil.rmtree(root, ignore_errors=True)

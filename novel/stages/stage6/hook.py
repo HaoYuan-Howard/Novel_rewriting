@@ -19,7 +19,6 @@ hook.py —— `stage6.hook` 与 `stage6.approve` 的节点函数。
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 from contracts.invariants import HOOK_APPROACHES
 from contracts.schema.common import Finding
@@ -375,20 +374,6 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
     return artifact
 
 
-def _edit_rel(store: ArtifactStore, edit_path: str) -> str:
-    """编辑文件路径 → **仓内相对路径**（形态照 stage7 `rename._edit_rel`）。"""
-    if not edit_path:
-        return EDIT
-    root = Path(store.ctx.novel_dir)
-    try:
-        return Path(edit_path).resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        raise TerminalState(
-            f'`--apply-edit {edit_path}` 落在这本书的产物目录之外（{root}）。'
-            f'编辑文件的**形状是契约**（`ARTIFACTS` 里登记着 {EDIT}）——'
-            f'放在别处就没有任何东西在管它，也记不进来源账') from None
-
-
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckReport]:
     """`--apply-edit`：人手改**一条**文案文本（候选或定稿），0 成本。
 
@@ -405,7 +390,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
     给同一件事开第二扇门，两扇门就会各自漂。
     """
     store = ArtifactStore(ctx)
-    rel = _edit_rel(store, edit_path)
+    rel = paths.edit_rel(ctx.novel_dir, edit_path, EDIT)
     if not store.exists(rel):
         raise TerminalState(
             f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**'

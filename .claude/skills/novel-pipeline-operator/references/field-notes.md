@@ -26,7 +26,6 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-010 | stage7 映射边角 | kept, marker, one-char alias |
 | FN-011 | stage7 编辑后重装配 | approved, book_txt, stale |
 | FN-012 | 来源指纹诊断噪声 | `consumed_changed`, fingerprints |
-| FN-014 | apply-edit 相对路径 | cwd, absolute path |
 
 ### FN-001 · stage0 批准前的预期红灯
 
@@ -136,11 +135,3 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 验证：下游 check 读取的 context 与当前 plan/global/blueprint 指纹一致。
 - 依据：实跑观察；未被提升为实现契约。
 
-### FN-014 · `--apply-edit` 统一传绝对路径
-
-- 状态：`open-gap`
-- 触发：位于书目录内的相对编辑路径仍被报“产物目录之外”。
-- 判断：当前若用 `Path.resolve()`，相对路径会先按 cwd（仓根）解释，与报错宣称的书目录语义不一致。
-- 处置：把同一书目录内编辑文件的绝对路径传给 `--apply-edit`；不要移到书目录外规避。
-- 验证：preview 显示绝对路径，CLI 经 schema 读取决策集并把它记入 provenance inputs。
-- 依据：当前缺口登记 `BE-08` 与各层 `_edit_rel` 实现。

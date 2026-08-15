@@ -12,15 +12,10 @@ test_stage7_subs.py —— 替换器与残留探针。**不吃语料，纯函数
 """
 from __future__ import annotations
 
-import shutil
-import tempfile
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from novel.errors import TerminalState
-from novel.stages.stage7 import checks, rename
+from novel.stages.stage7 import checks
 from novel.stages.stage7.subs import (
     apply_subs, mask_known, residual_scan, sub_table, surface_hits,
 )
@@ -55,21 +50,12 @@ def test_rename_semantic_marker_finding_catches_rank_change():
     assert 'rn_semantic_marker_changed' not in {finding.rule for finding in kept}
 
 
-def test_custom_edit_path_is_resolved_inside_the_novel_directory():
-    """`--apply-edit` 的自定义路径不能靠 `store.path('')` 取得根目录。
-
-    路径安全层明确拒绝空相对路径；那种写法会让每一次自定义编辑都在读文件前结构性失败。
-    """
-    root = Path(tempfile.mkdtemp())
-    try:
-        novel_dir = root / '书名_123'
-        edit = novel_dir / 'stage7' / 'name_map_edit.json'
-        store = SimpleNamespace(ctx=SimpleNamespace(novel_dir=novel_dir))
-        assert rename._edit_rel(store, str(edit)) == 'stage7/name_map_edit.json'
-        with pytest.raises(TerminalState, match='产物目录之外'):
-            rename._edit_rel(store, str(root / 'outside.json'))
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+# ⚠ `test_custom_edit_path_is_resolved_inside_the_novel_directory` 曾在这里，
+# 直接测 `rename._edit_rel`（全仓唯一一条），只覆盖「书内绝对路径 / 目录外绝对路径」两类。
+# 四份 `_edit_rel` 收敛成 `novel/paths.py::edit_rel` 之后，它的覆盖面并进
+# `tests/test_paths.py` §五「四层 × 五类路径」——**只增不减**：
+# 新增了相对路径按书目录解释（旧实现按 cwd，那正是 FN-014 那条 bug）与 `..` 穿越两类，
+# 且四层各跑一遍而不只是 stage7。
 
 
 # ── ① 最长优先与恒等屏蔽 ───────────────────────────────────────────────────

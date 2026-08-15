@@ -27,7 +27,7 @@ import os
 import re
 from pathlib import Path
 
-from novel.errors import PathRefused, UpstreamMissing
+from novel.errors import PathRefused, TerminalState, UpstreamMissing
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、书名 ↔ 目录名
@@ -323,6 +323,47 @@ def input_key(rel: str) -> str:
 def artifact_path(novel_dir: str | os.PathLike[str], rel: str) -> Path:
     """书目录 + 相对路径 → 绝对路径。允许多级（字节形态产物在 `stage5/<mode>/` 下）。"""
     return Path(novel_dir).joinpath(*check_rel_deep(rel).split('/'))
+
+
+def edit_rel(novel_dir: str | os.PathLike[str], edit_path: str | None,
+             default_rel: str) -> str:
+    """`--apply-edit <路径>` → **书内相对路径**。stage3/4/6/7 共用这一份。
+
+    【相对谁】**相对当前书目录**，不是相对进程 cwd。
+    ⚠⚠ 这一位是本函数存在的理由。四层此前各有一份 `_edit_rel`，都写成
+    `Path(edit_path).resolve()` 再 `.relative_to(书目录)` —— 先按 **cwd** 解释，
+    再拿书目录去卡。于是站在仓根敲 `--apply-edit stage3/style_edit.json`
+    会被报成「落在这本书的产物目录之外」，而报错文案说的正是书目录
+    ——**代码按一个口径解释，报错按另一个口径解释**，两边都言之凿凿。
+    这条已经把 skill 现场记录逼出一条 `open-gap`（FN-014），处置建议是
+    「一律传绝对路径」绕开它。⇒ 现在按报错文案说的那个口径来。
+
+    【绝对路径仍然收】给了绝对路径就按绝对路径算，只要它落在这本书目录内。
+
+    ⚠ 落在书目录**之外** ⇒ 显式终态（`2`），不静默去读：编辑文件的形状是契约的一部分
+    （`contracts/schema/__init__.py::ARTIFACTS` 里登记着），放在别处就没有任何东西
+    在管它的形状，也记不进来源账。`..` 穿越同理——`resolve()` 先把它算平，
+    算平之后不在书目录里就一样被拦。
+
+    ⚠⚠ **`stage5.write` 与 `stage0.edit` 刻意不走这里。** 它们的路径语义是「任意路径」，
+    而 `novel/api/routes/edits.py` **依赖**这一点：服务进程把书目录**之外**的
+    `<base>/_service/edits/` 绝对路径喂给 `stage5.write --apply-edit`
+    （`R-11.3` 要求服务进程不写产物盘）。把它们并进来会打断那条现役 HTTP 改稿路。
+    """
+    if not edit_path:
+        return default_rel
+    root = Path(novel_dir).resolve()
+    p = Path(edit_path)
+    target = (p if p.is_absolute() else root / p).resolve()
+    try:
+        return target.relative_to(root).as_posix()
+    except ValueError:
+        raise TerminalState(
+            f'`--apply-edit {edit_path}` 落在这本书的产物目录之外'
+            f'（书目录 {root}，算出来是 {target}）。'
+            f'编辑文件的**形状是契约**（`ARTIFACTS` 里登记着 {default_rel}）——'
+            f'放在别处就没有任何东西在管它，也记不进来源账。'
+            f'⚠ 相对路径按**书目录**解释，不按当前工作目录') from None
 
 
 def invalid_of(rel: str) -> str:

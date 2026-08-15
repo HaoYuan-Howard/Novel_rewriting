@@ -12,7 +12,6 @@ rename.py —— `stage7.rename` 与 `stage7.approve` 的节点函数。**唯一
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from contracts.schema.common import Finding
@@ -130,31 +129,6 @@ def paths_model(rel: str):
     """产物的模型。**从 `ARTIFACTS` 取，不在本模块重申一次。**"""
     from contracts.schema import ARTIFACTS
     return ARTIFACTS[rel]
-
-
-def _edit_rel(store: ArtifactStore, edit_path: str) -> str:
-    """编辑文件路径 → **仓内相对路径**。
-
-    Python 内部调用缺省到登记在契约里的那一份；公开 CLI 的带值参数契约仍是
-    `--apply-edit <路径>`，路径不可省略（`VALUED_FLAGS` / `docs/schema/_api.md`）。
-
-    ⚠ 给了一个产物目录之外的路径 ⇒ **显式终态**，不静默去读它：
-    编辑文件是契约的一部分（`ARTIFACTS` 里有它），落在别处就没有任何东西在管它的形状。
-    """
-    if not edit_path:
-        return EDIT
-    p = Path(edit_path)
-    # `ArtifactStore.path` 只接受真实产物相对路径；空串不是「根目录」的别名。
-    # 这里要比较的是这本书的目录本身，直接取 RunContext 上的权威路径。
-    root = Path(store.ctx.novel_dir)
-    try:
-        rel = p.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        raise TerminalState(
-            f'`--apply-edit {edit_path}` 落在这本书的产物目录之外（{root}）。'
-            f'编辑文件的**形状是契约**（`ARTIFACTS` 里登记着 {EDIT}）——'
-            f'放在别处就没有任何东西在管它，也记不进来源账') from None
-    return rel
 
 
 def _hook_file_fp(store: ArtifactStore) -> str | None:
@@ -506,7 +480,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
     """
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store)
-    rel = _edit_rel(store, edit_path)
+    rel = paths.edit_rel(ctx.novel_dir, edit_path, EDIT)
     if not store.exists(rel):
         raise TerminalState(
             f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**，'

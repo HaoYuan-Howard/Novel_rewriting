@@ -815,7 +815,12 @@ PARTIAL_REWRITE_FLAGS: Final = (
 #: 而拼错的那一条**会真的被执行**。所以取值面要有落点，由 `build_argv` 当场拒。
 VALUED_FLAGS: Final = {
     '--deep': '深度重构章节（逗号分隔；与 --shallow-rest 成对使用）',
-    '--apply-edit': '人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）',
+    # ⚠ 「相对**书目录**」这五个字是承重的：stage3/4/6/7 走
+    #   `novel/paths.py::edit_rel`，相对路径按当前书目录解释、绝对路径照收，
+    #   两者都必须落在书目录内。此前四份实现按进程 cwd 解释而报错文案说书目录，
+    #   两个口径分家（skill 现场记录 FN-014）。这一行是人唯一会读到的说明。
+    '--apply-edit': '人工改好的候选稿路径（必填；相对路径相对**书目录**，'
+                    '如 stage7/name_map_edit.json，也接受书目录内的绝对路径）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
     # ⚠ `--pick` **不叫 `--approve`**：后者已退役成 stage0/6/7 的独立节点；
