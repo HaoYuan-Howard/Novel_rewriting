@@ -4,6 +4,13 @@
 当前代码与守卫测试的联合审计。已完成事项不在这里保留；历史原因由 Git 和专项验证记录回答。
 产品规格、冻结契约、证据基线以及文档与测试的直接耦合统一见 `docs/BACKEND_CONTRACT.md`。
 
+**编号不重排。** TODO-03 / 07 / 16 与 TODO-10 的 `hook_para_sep` 一项已完成删除，留下的号
+空着——Git 提交信息按号引用，重排会让那些引用指向别的条目。
+
+⚠⚠ **跑测试必须显式指路语料**（`NOVEL_OUTPUT=<产物目录>`）。不设则语料相关的整批测试
+**静默 skip**，全绿是假的：本轮就是靠设上它才发现两处已在主分支存活多个提交的跨模块契约
+漂移（`stage6.semantic` 的 CLI 分支、`target_band` 的返回元数）。「没在查」不是「查过没事」。
+
 优先级含义：P0 影响正确性、真实花费或恢复能力；P1 影响质量闭环、诊断可信度或兼容性；
 P2 是明确可延期的工程化与体验增强。勾选前必须满足条目中的验收条件，而不是只增加类型、按钮
 或占位函数。
@@ -31,15 +38,6 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
 验收：边界内、恰好边界和超限各有测试；超限样本不产生网络调用、缓存条目或伪产物，错误中
 报告估算口径和可行动的下一步。
 
-### TODO-03 · 把模型降级阶梯耗尽与程序崩溃分开
-
-- [ ] `novel/llm/client.py` 的 `LlmFailed` 在 CLI 主入口映射为业务终态，而不是由
-  `novel/cli/main.py` 的兜底异常映射成 crash/exit 70。
-- [ ] 保留真正未捕获异常的栈与 crash 语义；不能为了让作业“看起来失败得正常”吞掉 bug。
-
-验收：stage2.global 的空响应/结构失败阶梯耗尽返回 exit 2 且不打栈；真实编程错误仍返回 exit 70
-并保留栈，作业 API 能区分两者。
-
 ### TODO-04 · 让语义判据进入人工 wontfix 闭环
 
 - [ ] stage5/stage6 的语义结论目前在报告渲染时合并；人工豁免入口主要从机械 review 结论池取项。
@@ -65,14 +63,20 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
 
 验收：同参数普通重跑仍命中缓存，显式重采样产生新调用和新轮次，失败时不覆盖正式产物。
 
-### TODO-07 · 统一 `--apply-edit` 相对路径语义
+### TODO-20 · 清掉盘面上仍红的既有失败
 
-- [ ] stage3/4/6/7 的 `_edit_rel` 当前先按进程 cwd 解析，再检查是否位于书目录；报错文案和用户心智
-  却以书目录为基准。推荐将相对路径统一解释为相对当前书目录，同时继续接受绝对路径。
-- [ ] 抽出一个共享实现，避免四份路径校验再次漂移。
+带语料跑全量（`NOVEL_OUTPUT` 显式指路）时仍有约 37 条失败 / 23 个病灶，全部先于本轮存在。
+它们此前被“不设 `NOVEL_OUTPUT` 就整批 skip”掩盖，属于**没在查**而不是查过没事。
 
-验收：四层都覆盖缺省路径、书目录相对路径、合法绝对路径、目录外路径和路径穿越；CLI 帮助、
-schema 文档和实现口径一致。
+- [ ] 逐条定性：哪些是“语料相对新判据已过期”（stage6 判据换血后旧产物不合新判据、
+  stage3 正式画像命中 HARD、stage5 成稿出带），哪些是**真代码 bug**。
+- [ ] 已定位的真 bug 至少一条：`tests/test_stage4_context.py:93` 的 `Assembly.subs`
+  是 dict 而消费方按 list 断言——与 `target_band` 同一家族的跨模块契约漂移。
+- [ ] `tests/test_store.py` 的语料往返对 `_rounds/*.INVALID.r*.json` 走 `write` 被
+  `PathRefused` 拦下：是往返测试选错了入口，还是归档产物本就不该进那张表。
+
+验收：每条给出“过期/真 bug”的定性与依据；真 bug 修掉并配守卫；过期的那些要么重跑语料，
+要么在测试里显式声明它依赖哪一版产物——不许靠不设环境变量来变绿。
 
 ## P1 · 质量闭环、诊断与兼容
 
@@ -98,16 +102,32 @@ schema 文档和实现口径一致。
 
 - [ ] stage5 secret 关键词两侧统一中文数字口径；当前 `novel/stages/stage5/checks.py` 明确记录
   fact 侧剥数字词、成稿侧不剥，导致带数字词的 secret 系统性匹配失败。
-- [ ] stage6 `hook_para_sep` 对单段文案使用准确诊断；归一化能改分隔符，不能凭空制造多个段落。
+  ⚠ **不是小修**：五个消费方共用这把尺子，难点在 `novel/core/text.py::norm_index` /
+  `locate_norm` 的证据回映（凭据必须是成稿自己的字节，不能把 secret 原文抄进报告）。
+  按判据 18「调参先量方差」，**先做一次全语料纯函数扫描**拿真阳/假阴分布，再决定改哪一侧
+  ——另一条路是直接去掉 `novel/core/facts.py::secret_keywords` 里的剥数字，
+  代码一行但会反转产品语义并同时改动 stage4/5/6 三层基线，需要裁决。
 - [ ] stage4 `--identity` 的动作元数据应报告真实写入的
   `stage4/writer_context.identity.json`，而不是正式计划文件。
+  ⚠ 代码只需给 `novel/orchestrator/nodes.py::write_effect` 加一维按 `(node, flag)` 的覆盖，
+  但要同时推翻三条把现状钉死的测试及其 docstring（`tests/test_stage4.py` 那条名字就叫
+  `test_identity_is_deliberately_absent_from_write_effects_and_that_costs_us_a_filename`）
+  与 `contracts/invariants.py` 里那段裁决注释——改代码半小时，改说法与守卫是主要工作量。
 
 验收：每项先有能复现旧错误的反例，再修实现与面向用户的说明；不得只改当前样本以变绿。
 
 ### TODO-11 · 收回前端仍在做的业务判定
 
 - [ ] 后端直接下发 artifact 的 missing/freshness 状态，退役前端用 `!exists` 推导第四态的兼容逻辑。
-- [ ] 锚点覆盖率和拍级预算比的警示阈值由服务端下发结论或阈值来源；前端只画，不自行决定风险色。
+  显示态那一处收敛在 `web/src/constants/vocabulary.ts::freshnessOf` 一个函数里（小修：
+  `ArtifactState` 加一个合并态字段、产地一行、前端删这个函数）；难的是另外 6 处拿 `exists`
+  做**业务判定**的地方，其中 `web/src/screens/corpus/useCorpusScreen.ts` 95-129 行整块
+  verdict 是在前端算“这本书当下最该说的一句话”，真收回去等于新开一个 API 面。
+- [ ] 锚点覆盖率的警示阈值由服务端下发结论或阈值来源；前端只画，不自行决定风险色。
+  ⚠ 真实残留只剩 `web/src/screens/stage5/useStage5Screen.ts:115` 的 `align.coverage < 0.6`
+  （后端 `contracts/schema/api.py::DraftAlignView` 只有 `coverage`，没有阈值也没有结论）。
+  ~~拍级预算比 0.9/1.1~~ **已不在前端**：`Stage4Screen.tsx` 只显示数值 + 中性色条，
+  在不在档的判定已经归 `/check/stage4`。`web/DELIVERY.md` 的 U-11 那格因此过期一条。
 - [ ] 区分“人工流程 DAG 的界面导航”与“业务闸门判定”，前者可留前端，后者必须来自服务端。
 
 验收：真实模式删除上述推导后仍能呈现所有状态；服务端缺字段时显示 unknown 或原始读数，不默认
@@ -115,9 +135,19 @@ schema 文档和实现口径一致。
 
 ### TODO-12 · 统一相邻层的 null / 空数组契约
 
-- [ ] stage4 与 stage5 的同名 beat 字段目前分别以 `[]` 和 `null` 表达缺省，前端需要两套判空。
+⚠ **本条原来的前提已过期，先按下面重新界定再动手。** 原措辞（逐字来自 `web/DELIVERY.md`）
+说的是“stage4 与 stage5 的同名 beat 字段”，而 `contracts/schema/api.py::MaterialView`
+**早已没有 `beats[]`**——那描述的是 mock / 交接包时代的形状。
+
+- [ ] 真实残留有两处：**stage4 内部**（`contracts/schema/stage4.py` 里 `CtxBeat.present`
+  缺省 `null` vs 同文件 `BeatSegment.present` 恒是 `[]`），以及 **stage2↔stage4**
+  （`api.py::ReadingBeatLine.present` 恒是 `[]`）。前端因此两套判空：
+  `useStage4Screen.ts` 里 `?? []` 七处，而 `s.present.join('、')` 与
+  `useReadScreen.ts:94` 的 `b.present.map(...)` 两处**无保护**。
 - [ ] 逐字段决定“未提供”“适用但为空”“不适用”的语义，再同步 Pydantic 模型、API 类型、fixture
   和屏幕；不能用一次全局 `exclude_none` 抹平差异。
+  ⚠ `CtxBeat` 的 `null` **是有语义的**（“同层同地时才平铺，否则走 `segments`”），
+  不该一律翻成 `[]`——真做完这一步，结论可能是「保留 null 但让前端只判一次」。
 
 验收：每种状态有序列化回归和界面样本，`present.join()` 一类对 null 的崩屏不再可能。
 
@@ -148,20 +178,13 @@ schema 文档和实现口径一致。
 
 验收：fixture 自带存在理由、编码/字节可复现、覆盖表双向无悬空；干净环境能跑完整免费测试集。
 
-### TODO-16 · 清完契约表中机器不可定位的结构落点
-
-- [ ] `docs/BACKEND_CONTRACT.md` 目前仍有 5 个 `结构` 行只有裸符号或散文落点，路径/符号存在性
-  守卫看不到。改成 `仓内路径::符号`，或在确实无法定位时改判为更诚实的类别。
-
-验收：`tests/test_coverage.py` 的可解析落点扫描数只增不减，五行全部由存在性检查覆盖。
-
 ## P2 · 工程化与体验增强
 
 ### TODO-17 · 收敛重复的产物路径与公共辅助函数
 
 - [ ] 以现有 `ARTIFACTS` 和节点表为基础，统一派生产物相对路径，减少各 stage 重复字符串。
-- [ ] 合并四份 `_edit_rel`、重复的 fingerprint/usage 辅助逻辑；不为抽象而抽象，只收敛已实际漂移的
-  代码。
+- [ ] 合并重复的 fingerprint/usage 辅助逻辑；不为抽象而抽象，只收敛已实际漂移的代码。
+  （~~四份 `_edit_rel`~~ 已随 TODO-07 收敛成 `novel/paths.py::edit_rel`。）
 
 验收：路径改名只需改一个权威表，节点产物、schema、API 与 stage 读写同步变化并由测试报错。
 
