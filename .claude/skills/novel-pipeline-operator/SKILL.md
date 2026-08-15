@@ -19,8 +19,12 @@ description: 驱动 novel.cli 把一本中文小说从原始 txt 端到端跑成
 - UTF-8 由 `-X utf8` + CLI 入口重配兜住，不要再包编码转换。
 - ⚠⚠ **管道会吃退出码**：`cmd | tail` 后 `$?` 是 tail 的。要退出码就
   `cmd > /tmp/out.txt 2>&1; echo rc=$?` 再看文件，或用 `${PIPESTATUS[0]}`。
-- 长节点后台执行（agent 前台命令有约 10 分钟上限）。实测短书（≈1.2 万字 19 章）
-  每个节点都在 10 分钟内（见 §3 耗时列），但 stage2/stage5 随书变长，保守全后台。
+- 长节点执行方式按**你是谁**分两条路（前台命令约 10 分钟上限）：
+  - **主会话 agent**：后台执行（`run_in_background`），完成通知会把你唤回。
+  - **子 agent**：⚠⚠ **后台等待不会唤回你——回合一结束你就没了**（书3 盲驱实测：
+    后台命令的进程活着跑完，agent 却再没醒来消费结果）。子 agent 一律**前台跑 +
+    输出重定向到文件**；超时被杀按 §11.3 同参数重跑吃缓存，多次分段直到该节点封口。
+  实测短书（≈1.2 万字 19 章）每个节点都在 10 分钟内（见 §3 耗时列）。
   **一次只跑一个写盘节点，绝不并行两本书**（账本/缓存写交错）。
 - 测试语料开关（只在跑 pytest 时需要）：`NOVEL_OUTPUT=<现行契约产物目录>`；
   不设则语料测试整批 skip（skip≠绿）。
@@ -68,6 +72,10 @@ $RUN preview <node> <sid> [flags] --base $B
 *实测基准：1.2 万字 19 章短书、32 并发、v2 上下文；全链含一次修复回路约 55 分钟。
 章数翻倍者按线性放大预估并全部后台。
 
+⚠ 第 4 步的三个产物也可**分步单跑**（`stage2.global --yes` → `stage2.blueprint --yes` →
+`stage3.style --yes`，均付费）——`--full-extract` 中途被拦后的补齐、定向补章
+（`stage2.blueprint --chapters N,M --yes`）都走单跑形态（§11.8/§11.12）。
+
 随时可用读屏：`state <sid> --base $B`（跑到哪了）、`inbox <sid> --base $B`（待人工六类清单）。
 
 ## §4 付费确认纪律
@@ -112,8 +120,9 @@ $RUN preview <node> <sid> [flags] --base $B
 
 - 中断后从 state 找第一个非 skip 节点接续；`.llm_cache/` 让同参数重跑实付 0。
 - ⚠ 已知诊断噪声：`stage4/writer_context.json` 常挂 `stale/consumed_changed`
-  而 provenance 里 file 指纹与盘上逐一相同（BE-06 族）——不阻塞、不影响成书，
-  **不要**因它重跑 stage4；记终审包即可。
+  而 provenance 里 file 指纹与盘上逐一相同（BE-06 族；书1/书3 均复现，stage4.plan
+  顺产的 context 落盘即挂）——不阻塞、不影响成书，**不要**因它重跑 stage4.plan；
+  想清边就跑一次免费 `stage4.context`，或记终审包即可。
 
 ## §7 修复路由（四类处置）
 
@@ -147,6 +156,11 @@ human_only（筛子级告警，几十条属常态，无一阻断）/ upstream（
 
 ① 只在**零 HARD 命中**的候选里选（`hook_semantic_spoiler` 判到谁谁出局）；
 ② 并列时取 info 命中最少者；③ 仍并列按与 blueprint 开篇钩子的一致性择优，**写出理由**。
+④ **三候选全泄底**（书3 实测）：走 `stage6.hook --apply-edit <书内 stage6/hook_edit.json>`
+   重写一条候选——只用语义判官已判 grounded 的素材、不复用【原作文案段】句子
+   （`hook_reuses_source` 守着）；重跑 `stage6.semantic` 清红后再 pick 它。
+⑤ **语义判官非确定性**（书3 实测：同 sha1 文本两轮一判 arc_leak 一判 grounded）：
+   两轮矛盾时**采信更严的一轮**，不采信翻绿；拿不准按 unver 处置并记终审包。
 ⚠ 泄底判据按拍板判**全部**候选：落选候选的 HARD 残红留在报告里**不拦定稿也不拦成书**
 （assemble 只拦「未定稿」）；清红是可选项——`stage6.hook --apply-edit` 改写泄底候选后
 重跑 `stage6.semantic`——记终审包待人裁，不默认执行。
@@ -188,6 +202,14 @@ human_only（筛子级告警，几十条属常态，无一阻断）/ upstream（
 3. **钱花了没产物**（账本先写产物后写，崩在中间不自愈）：**同参数原命令重跑**，
    `.llm_cache/` 命中 ⇒ 实付 0。**禁改参数**（换参数=缓存失效=二次付费）。
 4. **stage5.write 调用数 > 章数**属正常（写作重试+长度收缩，按 2× 章数打底预算）。
+   账本读法：收缩重试行 reasoning_tokens 常为 0；`cached: true` 行是持久缓存命中、实付 0。
+4b. **付费修复路跑一次未消 ≠ 该停**（书3 实例 `role_leaks_fate` + `--purge-role`）：
+   「同一节点两次失败即停」说的是**同一条路重复失败**；修复臂无效后**换一条路是处置不是
+   重试**——先读判据 note 判断是否假阳（如词表字面命中而语义不成立），是则走
+   `.INVALID` 手改等价改写 + `--revalidate`（0 成本），裁决理由记终审包。
+4c. **stage7 `rn_semantic_marker_changed`**（书3 实例）：新名必须保留旧名的数字/排行/
+   辈分/关系/官职语义标记（秦九言→顾怀瑾丢「九」即红）；`character_patches` 换含同标记
+   的新名（新字以源文 0 命中为佳），apply-edit 过闸。
 5. **exit 70**：崩了、结论未知。先 `state` 判位置，产物完整则继续下一节点，
    残缺则同参数重跑；两次同点崩 ⇒ 停下报告用户。
 6. **连接类错误**（账本 error_kind 可查）：退避后同命令重试；设计内已有 4 次重试阶梯。
