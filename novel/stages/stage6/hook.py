@@ -21,6 +21,7 @@ from __future__ import annotations
 
 
 from contracts.invariants import HOOK_APPROACHES
+from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import GlobalGrounding
@@ -31,7 +32,7 @@ from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookEdit, HookParams, HookProvenance, HookResponse,
     Mech,
 )
-from novel import paths
+from novel import paths, prov, wontfix
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
 from novel.report import build
@@ -181,12 +182,18 @@ def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
 
     `freshness_rel`：`stage6.semantic` 刚落盘时传自己那份 `semantic_<n>.json`
     （形态照 stage5 `_report_of_review(freshness_rel=...)`），其余路不传。
+
+    ⚠⚠ **人的「这条我不修」在这里套上**（本层结论一份都不落盘 ⇒ 只能在渲染时套）。
+    `stage6/wontfix.json` 与 stage5 那份共用 `novel/wontfix.py` 的同一套机制与同一个模型；
+    **它只降 `actionable` 并打标，不删结论、不改 `sev`、不动徽章、不开落盘闸门**
+    ——「有人看过并决定不修」不等于「这条不再是问题」。
     """
     prov = (art.provenance.model_dump(by_alias=True) if art is not None else {})
     judged_rel = freshness_rel or (REL if store.exists(REL) else _INVALID)
     return build(
         sid=ctx.sid, node=ctx.node, freshness=store.freshness(judged_rel),
-        outcomes=outcomes, accounting=_accounting_of(prov),
+        outcomes=wontfix.applied_to_outcomes(outcomes, wontfix.load(store, 'stage6')),
+        accounting=_accounting_of(prov),
         invalid=store.exists(_INVALID),
         revalidated=prov.get('revalidated'), origin=prov.get('origin'))
 
@@ -211,6 +218,52 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     up = _Upstreams(ctx, store)
     art, _raw = store.read_own(Hook, REL)
     return _report(ctx, store, _judge_artifact(art, up, store), art)
+
+
+def run_wontfix(ctx: RunContext, spec: str) -> CheckReport:
+    """`--wontfix`：把一条「这条我不修」记进 `stage6/wontfix.json`。**0 成本。**
+
+    【它补的是什么】本层的两条语义判据（`hook_semantic_contradiction` 阻断、
+    `hook_candidate_contradiction` 提示）此前**没有任何人工闭环**：结论在报告渲染时
+    现算、不落盘，而豁免机制只活在 stage5 里。更坏的是待人工清单**在建议人去跑
+    `--wontfix`**——一个这一层根本不存在的 flag（那句兜底文案已随本轮改成按
+    `NODES` 派生，见 `novel/views/inbox.py::_human_how`）。
+
+    ⚠ **本层结论一律书级**：候选是同一次调用产的三条，没有章这一维；
+    候选身份在证据键里（`<候选>:<原字节>`）。写章号 ⇒ 显式终态，不静默当成 book。
+
+    ⚠ **豁免不开闸门**：它只降 `actionable` 并打标。`hook_semantic_contradiction`
+    被豁免之后，落盘闸门与批准路（`require_selectable`）照旧拒绝那条候选——
+    「有人看过并决定不修」不等于「这条不再是问题」。
+    """
+    from novel.stages.stage6 import semantic   # 局部导入：semantic 顶层 import 本模块
+
+    store = ArtifactStore(ctx)
+    if not store.exists(REL):
+        raise UpstreamMissing(f'{REL} 不在盘上——**不给不存在的结论发豁免**。先跑 stage6.hook')
+    head, rule, _ev, _why = wontfix.parse_spec(spec)
+    if head != 'book':
+        raise TerminalState(
+            f'stage6 的结论一条都不挂在章上，第一段只能是 `book`，拿到 {head!r}。'
+            f'⚠ 要说清豁免的是哪一条候选，把**证据键**写成第三段'
+            f'（形如 `conflict_first:<候选文案里的原字节>`）')
+
+    up = _Upstreams(ctx, store)
+    art, _raw = store.read_own(Hook, REL)
+    outcomes = _judge_artifact(art, up, store)
+    pool = [f for outcome in outcomes for f in outcome.findings]
+
+    semantic_rules = {r.rule for r in REGISTRY.of_stage('stage6') if r.check_kind == 'semantic'}
+    seqs = semantic.semantic_seqs(store)
+    if rule in semantic_rules and seqs:
+        rel = semantic.SEMANTIC_TPL.format(n=seqs[-1])
+        at = f'semantic_{seqs[-1]}:{prov.fingerprint_bytes(store.path(rel).read_bytes())}'
+    else:
+        at = f'hook:{prov.fingerprint_bytes(store.path(REL).read_bytes())}'
+
+    wontfix.mark(store, 'stage6', spec,
+                 pool_of=lambda ordinal: pool if ordinal is None else [], at=at)
+    return _report(ctx, store, outcomes, art)
 
 
 def build_prompt(ctx: RunContext) -> tuple[str, str, prompts.Material]:

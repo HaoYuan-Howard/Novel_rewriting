@@ -438,6 +438,14 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
               '重跑 stage6.semantic 可清')
         return X.OK if report.passed else X.CHECK_FAILED
 
+    if '--wontfix' in tokens:
+        report = hook.run_wontfix(ctx, _valued(flags, '--wontfix') or '')
+        print(render(report))
+        print('  ✓ 豁免已记进 stage6/wontfix.json。'
+              '⚠ **豁免不删结论**：它照常列在报告与界面上，只是不占待人工；'
+              '定稿闸门（`stage6.approve --pick`）**照旧拒绝有矛盾的候选**')
+        return X.OK if report.passed else X.CHECK_FAILED
+
     # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
     client = _llm_client(ctx)
     hook.run_hook(ctx, client)
@@ -483,6 +491,13 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             return X.OK if promoted else X.CHECK_FAILED
         if '--renormalize' in tokens:
             return _report_exit(extract.run_renormalize(ctx))
+        if '--apply-edit' in tokens:
+            artifact, report = extract.run_apply_edit(
+                ctx, _valued(flags, '--apply-edit') or '')
+            print(render(report))
+            print(f'  ✓ 人工 secret 订正已落为新一轮（{len(artifact.canon.secrets)} 条 secret）；'
+                  f'埋点章已重走 `_prune_setups`，下游全部按真实输入变化转 stale')
+            return X.OK if report.passed else X.CHECK_FAILED
         if '--purge-role' in tokens:
             extract.run_purge_role(ctx, _llm_client(ctx))
             print('  ✓ stage2 role/fate 已重划并落盘')

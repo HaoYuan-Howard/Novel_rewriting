@@ -498,10 +498,11 @@ def test_the_wontfix_key_survives_an_evidence_key_that_contains_a_pipe():
     报错还说「键读不出来」——**那句话是假的**：键是对的，是解析器错了。
     ⇒ 限定切两刀，第三段吃掉剩下的全部（证据键在最后，这样恒正确）。
     """
-    from novel.stages.stage5.review import _parse_wontfix_spec
-    got = _parse_wontfix_spec('1|length_report|887|880|875=这本书就这么写')
+    # ⚠ 解析器已收成全链一份（`novel/wontfix.py`）：stage5 与 stage6 共用它。
+    from novel.wontfix import parse_spec
+    got = parse_spec('1|length_report|887|880|875=这本书就这么写')
     assert got == ('1', 'length_report', '887|880|875', '这本书就这么写')
-    assert _parse_wontfix_spec('book|book_length=预算就是这么定的')[2] is None
+    assert parse_spec('book|book_length=预算就是这么定的')[2] is None
 
 
 def test_wontfix_lands_and_never_deletes_the_conclusion(box):

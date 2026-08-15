@@ -341,6 +341,62 @@ class GlobalGrounding(StrictModel):
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
+class SecretPatch(StrictModel):
+    """一条 secret 的人工订正。**按 `secret_id` 定位；给了哪个字段就整字段替换那个。**
+
+    ⚠ **字段级替换而不是组内合并**：`character_known_by` 少写一个人与「这一项没给」
+    在合并语义下同形，而它们是两个决定。`None` = 这一格人没动过。
+    ⚠ **`setup_chapters` 的 `[]` 是有语义的**（「冷揭示」，盘上 20/21 条如此），
+    所以它必须是 `list[int] | None` 而不是靠空列表表示未给——两者一旦同形，
+    「人把埋点清空了」就再也说不出口。
+    """
+
+    secret_id: str = Field(pattern=r'^secret_\d{2}$')
+
+    fact: str | None = Field(default=None, min_length=1)
+    character_known_by: list[str] | None = Field(default=None, min_length=1)
+    setup_chapters: list[int] | None = None
+    reader_reveal_events: list[ReaderRevealEvent] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _at_least_one_field(self) -> SecretPatch:
+        given = (self.fact, self.character_known_by,
+                 self.setup_chapters, self.reader_reveal_events)
+        if all(value is None for value in given):
+            raise ValueError(
+                f'{self.secret_id}: 一个字段都没给——空补丁什么都不改，'
+                f'而它在盘上与「人看过并改了」长得一样')
+        return self
+
+
+class GlobalEdit(StrictModel):
+    """`stage2/global_edit.json` —— 人手订正的 secret 决策集（`--apply-edit` 吃它）。
+
+    【它解决的是什么】`reader_reveal_events` / 知情人 / secret 事实抽错时，此前
+    **契约内没有任何人工决策集可改**：`--purge-role` 只修 role/fate、`--renormalize`
+    只重算代码派生字段，剩下的路是手改产物——那既没有 schema 管形状，
+    也在来源账上留不下「这是人改的」。
+
+    ⚠ **只订正已有的 secret，不新增也不删除。** 新增要凭空发明 `secret_id`
+    与它的全部时间线，那是一次抽取而不是一次订正；删除等于宣称「这条秘密不存在」，
+    而下游的逐章剧透闸门是按 secret 全集开的。两者都该走重新抽取那条路。
+    ⚠ 编辑文件落在书目录里、进 `ARTIFACTS`、被 `store.read` 当上游边记账，
+    **形状即契约**（照 stage3/4/6/7 四份 `*_edit.json` 的先例）。
+    """
+
+    secrets: list[SecretPatch] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _one_patch_per_secret(self) -> GlobalEdit:
+        got = [patch.secret_id for patch in self.secrets]
+        if len(set(got)) != len(got):
+            dup = sorted({sid for sid in got if got.count(sid) > 1})
+            raise ValueError(
+                f'同一条 secret 给了多份补丁：{dup}。'
+                f'哪一份生效取决于遍历顺序 ⇒ 人的决定会被实现细节改写')
+        return self
+
+
 # ── LLM response models：只收【模型该写的字段】──────────────────────────────
 #
 # 最终产物模型不能直接拿来校验响应：Address.by 允许模型先写人名、再由代码回解；

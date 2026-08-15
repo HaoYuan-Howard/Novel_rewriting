@@ -26,6 +26,7 @@ stage6/hook.json             生成候选、机械判定与人工定稿
 stage6/_rounds/hook.rN.json  上一轮 hook.json 的整份归档
 stage6/semantic_N.json       匿名质量审判；按文本 sha1 绑定
 stage6/hook_edit.json        人工编辑一条候选或定稿的决策集
+stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
 
 ### 2.1 `hook.json`
@@ -131,6 +132,25 @@ stage6/hook_edit.json        人工编辑一条候选或定稿的决策集
 - `semantic.require_selectable` 判为 `clear`。
 
 因此缺审判、旧版审判、过期、文本未审、coverage=uncertain 或实质矛盾都不能被人工误点绕过。
+
+### 5.1 `stage6/wontfix.json` —— 语义结论的人工闭环（2026-08-15）
+
+本层两条语义判据（`hook_semantic_contradiction` 阻断、`hook_candidate_contradiction` 提示）
+此前**没有任何人工闭环**：结论在报告渲染时现算、不落产物，而豁免机制只活在 stage5 里。
+更坏的是待人工清单**在建议人跑 `--wontfix`**，而本层根本没有这个 flag——一句结构上
+兑现不了的承诺（那句兜底文案现已按 `NODES` 派生，见 `novel/views/inbox.py::_human_how`）。
+
+`stage6.hook --wontfix '<book>|<判据>[|<证据键>]=<理由>'`，形状与账本模型与 stage5 那份
+**完全相同**（`novel/wontfix.py` 是唯一的机制落点）。本层特有的三条：
+
+| 约束 | 说明 |
+|---|---|
+| **一律 `book` 级** | 候选是同一次调用产的三条，没有章这一维；候选身份在证据键里（`<候选>:<原字节>`）。写章号 ⇒ 显式终态 |
+| **`coverage=uncertain` 逐条可寻址** | 它的证据是 `<候选>:<文本指纹>`。⚠ 原来是空列表 ⇒ 收敛键恒为空串 ⇒ 三条候选共用一个键，一次豁免会一并豁免三条 |
+| **豁免不开闸门** | `require_selectable` 与落盘闸门照旧拒绝有矛盾的候选。「有人看过并决定不修」≠「这条不再是问题」 |
+
+`at` 记的是人当时看的那一版：语义判据记 `semantic_<n>:<产物指纹>`，机械判据记
+`hook:<产物指纹>`。**它是审计账，不参与匹配**——失效由证据自身保证（文本一改键就失配）。
 
 ## 六、现役判据（21 条）
 

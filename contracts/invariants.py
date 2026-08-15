@@ -753,6 +753,14 @@ FREE_ENTRIES: Final = {
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
     '--apply-edit': '把人工改过的内容落成新的一轮',
+    # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
+    #   `--wontfix` 原来只挂在 `stage5.review` 上，而那是个 `paid=False` 节点
+    #   ⇒ 不进本表也判不出付费，注释因此写着「它是参数不是入口 ⇒ 不进 FREE_ENTRIES」。
+    #   语义豁免闭环把它同时挂上了 **`stage6.hook`**（`paid=True`）之后，
+    #   那句推理就不成立了：`is_paid` 拿本表当白名单、未知一律按付费算
+    #   ⇒ 一次**纯记账、一个请求都不发**的动作会当场要 `--yes` 二次确认。
+    #   实测就是这么发现的（真跑 CLI 被拦下）。**表不全 ⇒ 系统在对用户说假话。**
+    '--wontfix': '把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用',
 }
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
@@ -828,14 +836,20 @@ VALUED_FLAGS: Final = {
     # 不进 `FREE_ENTRIES`（不是独立入口），也不进 `WRITE_EFFECTS`
     # （写的就是本节点 `produces` 中的正式产物）。
     '--pick': '定稿选第几个候选（1 起）',
-    # ⚠ 与 `--pick` 逐条同形：它是 `stage5.review` 的**参数**（豁免哪一条结论），
-    # 不是一个 0 成本入口 ⇒ 不进 `FREE_ENTRIES`。
-    # ⚠⚠ 但它**要进 `WRITE_EFFECTS`**，而 `--pick` 不进——两者在这一格上相反：
-    # `--pick` 写的就是本节点 `produces` 里那一份（不登记 ⇒ 落到 `produces`，正确），
-    # 而 `--wontfix` 写的是**另一份不在 `produces` 里的产物**（`stage5/wontfix.json`
-    # 是可选的，进 `produces` 会让每一本书永远差一份）。
+    # ⚠ 它与 `--pick` 在**带值**这一格同形，其余三格全不一样：
+    #   · 它**进 `FREE_ENTRIES`**（2026-08-15 改），而 `--pick` 不进。
+    #     原来的理由是「它是 `stage5.review` 的参数，不是 0 成本入口」——
+    #     那句话在 `stage5.review`（`paid=False`）上恰好无害，
+    #     而语义豁免闭环把它同时挂上 `stage6.hook`（`paid=True`）之后就变成假话：
+    #     一次纯记账会被 `is_paid` 判成花钱。⇒ 判准改成「它自己花不花钱」，
+    #     而不是「它挂的那个节点花不花钱」。
+    #   · 它**要进 `WRITE_EFFECTS`**，而 `--pick` 不进：`--pick` 写的就是本节点
+    #     `produces` 里那一份（不登记 ⇒ 落到 `produces`，正确），
+    #     而 `--wontfix` 写的是**另一份不在 `produces` 里的产物**
+    #     （`<stage>/wontfix.json` 是可选的，进 `produces` 会让每一本书永远差一份）。
     # ⚠ 值的形态 `<章|book>|<判据>[|<证据键>]=<理由>`：前两段是人说得出来的，
-    # 证据键由代码从最近一份验收里补全；同一 (章, 判据) 有多条结论时**要人写出第三段**
+    # 证据键由代码从**该层当前的结论池**里补全（含语义结论）；
+    # 同一 (章, 判据) 有多条结论时**要人写出第三段**
     # ——原型那条路把它们**一并豁免**了，而「换了个位置的同类问题」不是人做的决定。
     '--wontfix': '这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填',
     # ⚠⚠ **它是「逐章重构深度」这个人的决策的唯一载体**（`R-7.2` / `stage5.md` §九-3）：
@@ -886,10 +900,13 @@ WRITE_EFFECTS: Final = {
     '--revalidate': '把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/',
     '--apply-edit': '把人工稿落成新的一轮，并把上一轮归档进 _rounds/',
     '--renormalize': '按当前契约重算代码派生字段与原文定位并写回',
-    # ⚠ 它写的是**另一份**产物（`stage5/wontfix.json`），不是本节点 `produces` 里那一份
+    # ⚠ 它写的是**另一份**产物（`<stage>/wontfix.json`），不是本节点 `produces` 里那一份
     # ⇒ 不登记的后果是**方向反的**：`/api/enums` 会把它派生成「写 `stage5/review_{n}.json`」，
     # 而它一份验收报告都不产。同 `--names-only` 那一格的病，只是方向相反。
-    '--wontfix': '把一条豁免记进 stage5/wontfix.json（**一份验收报告都不产**）',
+    # ⚠ **本表按 flag 索引，所以这句话必须对每一个挂它的节点都成立**（表头那条纪律）：
+    #   stage5 挂在 `stage5.review` 上、stage6 挂在 `stage6.hook` 上，两边都是
+    #   「写自己那一层的 `wontfix.json`，不产本节点 `produces` 里那一份」⇒ 一句话说得下。
+    '--wontfix': '把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）',
     # ── stage2 那两条 0 成本但**会写盘**的路（F5-1 补）──
     # ⚠ 它们与上面 `--remeasure` / `--recheck` 那几条是同一类：**免费，但写盘**。
     #   本表存在的全部理由就是这一类（原型那句「`FREE_FLAGS` 只管钱不管写」
@@ -981,9 +998,14 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=('stage1/main_text.json',
                                            'stage1/hook_copy.json',
                                            'stage1/partition_report.json')),
+    # ⚠ `--apply-edit` 是 TODO-05 补的，而它补的是一个**契约内的空洞**：
+    #   `reader_reveal_events` / 知情人 / secret 事实抽错时，此前唯一的路是手改产物
+    #   ——没有 schema 管形状，来源账上也留不下「这是人改的」。
+    #   八层里 stage0/3/4/5/6/7 六层都已有这条 0 成本人工路，本层是最后一个缺口。
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
                                  flags=('--renormalize', '--purge-role',
-                                        '--revalidate', '--full-extract'),
+                                        '--revalidate', '--full-extract',
+                                        '--apply-edit'),
                                  produces=('stage2/global_grounding.json',)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
@@ -1046,9 +1068,14 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠ `--revalidate` 是 F 期移植时补的，而它是**新加那道落盘闸门的必然配套**：
     #   本层一次产三条候选，闸门拦的是「一条干净候选都没有」；不给一条 0 成本的提升路，
     #   一次付费产出就会被永久锁死。**加闸门与加提升路必须同批**。
+    # ⚠ `--wontfix` 是 TODO-04 补的，形态同 `stage5.review` 那一条（**参数不是入口**）。
+    #   它挂在本层的 0 成本复检节点上，理由与 stage5 一样：反查要拿到**当前**结论池，
+    #   而结论池是复检算出来的。⚠⚠ 本层的两条语义判据此前**没有任何人工闭环**，
+    #   而待人工清单在建议人去跑一个这一层根本没有的 flag（见 `views/inbox.py::_human_how`）。
     'stage6.hook':      NodeSpec('stage6', 'R-9',  True,  'stage6 开篇文案',
                                  flags=('--dry-run', '--check-only', '--identity',
-                                        '--recheck', '--revalidate', '--apply-edit'),
+                                        '--recheck', '--revalidate', '--apply-edit',
+                                        '--wontfix'),
                                  produces=('stage6/hook.json',)),
     # 付费语义审判是字面探针的 companion（R-9.19/R-9.20），形态照 stage5.semantic：
     # 不接 `--check-only`，否则一层两个复检节点、HTTP kind 路由产生歧义。

@@ -22,7 +22,7 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     BlueprintProvenance, ChapterBlueprints, ChapterBlueprintsResponse,
-    GlobalGrounding, GlobalGroundingResponse, GlobalProvenance,
+    GlobalEdit, GlobalGrounding, GlobalGroundingResponse, GlobalProvenance,
     RoleSplitResponse,
 )
 from novel import paths, prov
@@ -44,6 +44,9 @@ from novel.store import ArtifactStore
 GLOBAL_REL = 'stage2/global_grounding.json'
 BLUEPRINT_REL = 'stage2/chapter_blueprints.json'
 MAIN_TEXT = 'stage1/main_text.json'
+
+#: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `GlobalEdit`）。
+GLOBAL_EDIT = 'stage2/global_edit.json'
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(BLUEPRINT_REL)
@@ -1170,3 +1173,136 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
     _write_formal(store, BLUEPRINT_REL, artifact)
     both = _Both(store)
     return _report(ctx, store, both, both.judge(), judged_rel=BLUEPRINT_REL)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 四、`--apply-edit`：secret 的 0 成本人工订正
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
+                          ordinals: set[int]) -> list[str]:
+    """把补丁打进 `canon.secrets`，返回逐条改动摘要。**改之前先把两种越界拒掉。**
+
+    ⚠⚠ **拒收发生在任何一次写盘之前，而且是 `TerminalState` 不是 `GateBlocked`。**
+    两者答的是不同的问题：`GateBlocked` 说「这份**产物**过不了闸」（问题稿留 `.INVALID`，
+    人接着改），而这里错的是**决策集本身**——把一份指着不存在的 `secret_id`、
+    或写着第 99 章的编辑文件落成 `.INVALID`，等于给一个打不开的东西建一份归档。
+    """
+    secrets = ((data.get('canon') or {}).get('secrets')) or []
+    by_id = {str(item.get('secret_id') or ''): item for item in secrets}
+
+    unknown = sorted({p.secret_id for p in edit.secrets if p.secret_id not in by_id})
+    if unknown:
+        raise TerminalState(
+            f'编辑文件指向盘上没有的 secret：{unknown}。'
+            f'盘上现有 {sorted(by_id)}。'
+            f'⚠ `--apply-edit` 只**订正**已有的 secret，不新增也不删除——'
+            f'新增要凭空发明它的全部时间线，那是一次抽取而不是一次订正')
+
+    hi = max(ordinals) if ordinals else 0
+    bad: list[str] = []
+    for patch in edit.secrets:
+        for event in (patch.reader_reveal_events or []):
+            if event.chapter not in ordinals:
+                bad.append(f'{patch.secret_id}.reader_reveal_events={event.chapter}')
+        for chapter in (patch.setup_chapters or []):
+            if chapter not in ordinals:
+                bad.append(f'{patch.secret_id}.setup_chapters={chapter}')
+    if bad:
+        raise TerminalState(
+            f'编辑文件里的章号不在这本书的章集合内：{bad}。'
+            f'盘上是第 {min(ordinals) if ordinals else "?"}~{hi} 章'
+            f'（共 {len(ordinals)} 章）。'
+            f'⚠ 越界的揭示章会让**逐章剧透闸门永不触发**（`R-6.3` 按它开闸），'
+            f'而产物里那一格看着一切正常')
+
+    changed: list[str] = []
+    for patch in edit.secrets:
+        target = by_id[patch.secret_id]
+        for field in ('fact', 'character_known_by', 'setup_chapters'):
+            value = getattr(patch, field)
+            if value is not None:
+                target[field] = copy.deepcopy(value)
+                changed.append(f'{patch.secret_id}.{field}')
+        if patch.reader_reveal_events is not None:
+            target['reader_reveal_events'] = [
+                {'chapter': event.chapter} for event in patch.reader_reveal_events]
+            changed.append(f'{patch.secret_id}.reader_reveal_events')
+    return changed
+
+
+def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGrounding, CheckReport]:
+    """`--apply-edit`：吃人手写的 secret 订正，走与生成稿**同一道**归一、判定与闸门。0 成本。
+
+    【它补的是什么】`reader_reveal_events` / 知情人 / secret 事实抽错时，本层此前
+    **契约内没有任何人工决策集**：`--purge-role` 只修 role/fate，`--renormalize`
+    只重算代码派生字段，剩下的路是手改产物——既没有 schema 管形状，
+    也在来源账上留不下「这是人改的」。
+
+    四条纪律（与 stage3/4/6/7 的人工路同款）：
+      · **同一归一落点**（`normalize_global`）——人改完的埋点章照样过 `_prune_setups`，
+        人工稿与生成稿不许有两套归一；
+      · **同一判定落点**（`_judge_candidate`）——没有免检写口；
+        HARD ⇒ `.INVALID` **不覆盖正式全书底座**；
+      · **轮次归档**——旧轮进 `_rounds/`，覆盖前有处可回；
+      · **来源账不伪造**——`rewrite_provenance(prev, by='--apply-edit')`：
+        继承 `prompts`/`model` 一个字不动，换成本次真读到的 `inputs`，
+        标 `partial_rewrite`（这一份此后是混版的：LLM 写的那些字段出自当初那次付费产出，
+        被改的 secret 是**现在**由人给的）。
+
+    ⚠ **下游 stale 是由构造保证的，不额外做一件事**：这一份的字节变了 ⇒
+    `stage2/chapter_blueprints.json` / stage3 / stage4 记的 `inputs[].file` 全部失配；
+    改的又恰好是 `secrets`，所以按字段投影算的 `consumed` 也跟着失配
+    （`R-6.3` 的逐章剧透闸门正是消费它的那一个）。
+
+    ⚠ **无前稿（正式与 `.INVALID` 皆无）⇒ 显式终态**：这是修订路，不是生成路。
+    """
+    store = ArtifactStore(ctx)
+    if ctx.node != 'stage2.global':
+        raise TerminalState(
+            f'{ctx.node} 没有 secret 人工订正入口——`--apply-edit` 挂在 `stage2.global` 上'
+            f'（逐章蓝图的人工路是 `--chapters` 定向重生成）')
+
+    rel = paths.edit_rel(ctx.novel_dir, edit_path, GLOBAL_EDIT)
+    if not store.exists(rel):
+        raise TerminalState(
+            f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**，'
+            f'把它放到这本书的 `stage2/` 下（缺省文件名 `global_edit.json`）'
+            f'——它的形状是契约的一部分（`GlobalEdit`）')
+    edit = store.read(GlobalEdit, rel)
+
+    main_text = _read_main_text(store)
+    if main_text is None:
+        raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上——人工订正同样要重走归一与判据')
+    ordinals = {int(section.get('chapter_ordinal') or 0) for section in main_text}
+
+    previous, raw, _source_rel = _global_source(store)
+    data = copy.deepcopy(raw)
+    data.pop('_provenance', None)
+    changed = _apply_secret_patches(data, edit, ordinals)
+    data, accounting = normalize_global(data, main_text)
+
+    rewritten = ctx.rewrite_provenance(previous.provenance, by='--apply-edit')
+    provenance = GlobalProvenance.model_validate({
+        **rewritten.model_dump(),
+        **accounting,
+        'gates_skipped': None,
+    })
+    artifact = GlobalGrounding.model_validate({**data, '_provenance': provenance})
+
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(candidate, None, main_text)
+    hits = _hard_hits(outcomes, ignore={'upstream_missing'})
+    if hits:
+        path = _write_invalid(store, GLOBAL_REL, artifact)
+        raise GateBlocked(
+            f'人工 secret 订正被落盘闸门拦下：{hits}（改动 {changed}）。'
+            f'问题稿在 {path}，**正式全书底座没有被覆盖**；'
+            f'改完编辑文件重跑 `--apply-edit`，'
+            f'或直接改 `.INVALID` 后 `--revalidate` 提升（都是 0 成本）',
+            invalid_path=path)
+
+    _write_formal(store, GLOBAL_REL, artifact)
+    both = _Both(store)
+    return artifact, _report(ctx, store, both, both.judge(),
+                             judged_rel=GLOBAL_REL, invalid_rel=_GLOBAL_INVALID)

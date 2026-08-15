@@ -295,7 +295,7 @@ stage5 / stage6 / stage7 **逐字段相同**。⚠ 原型里它有 **5 份拷贝
 | `identity_dead` | `bool` | 否 | 书级：这条判据在这本书上**零判别力** |
 | `converge` | `str` | 是 | `new｜unresolved_N｜same_draft` |
 | `unresolved_rounds` | `int` | 是 | 连续未消的轮数 |
-| `wontfix` | `obj` | 否 | `{why, at_review}` |
+| `wontfix` | `obj` | 否 | `{why, at}`。`at` = 人做这个决定时看的是哪一版结论（`review_4` / `semantic_2:<指纹>`）；**审计账，不参与豁免的匹配** |
 
 **三条设计要点：**
 

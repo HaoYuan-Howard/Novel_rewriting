@@ -76,7 +76,12 @@ def _rules(rules: list[RuleLine]) -> list[str]:
             # `Q-9`：词表类判据**永远打印基线**。没有基线的词表判据等于不知道自己在说什么。
             out.append(f'        基线：{r.baseline}')
         for f in r.findings[:DETAIL_MAX]:
-            out.append(f'        · {f.detail}')
+            # ⚠⚠ **豁免过的那条必须在这里看得出来。** 机制那一侧的全部意义就是
+            # 「有人看过并决定不修」与「没人看过」分得开（`R-8.7b`），而报告是
+            # CLI 唯一的呈现面——不打这个记号，两者在终端上又同形了
+            # （界面那一侧早就有：`web/src/components/check/CheckPanel.tsx` 的「已豁免」）。
+            mark = f'〔已豁免：{f.wontfix.why}〕' if f.wontfix is not None else ''
+            out.append(f'        · {f.detail}{mark}')
         if len(r.findings) > DETAIL_MAX:
             out.append(f'        …… 另 {len(r.findings) - DETAIL_MAX} 条（共 {len(r.findings)}）')
     return out

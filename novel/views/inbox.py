@@ -23,6 +23,8 @@ inbox.py —— 「待人工」六类清单的**生产者**（BE-04 第一条；
 【三条纪律】
   ⚠ **`unver` 永不入列**（`invariants.INBOX_KIND` 的纪律）：那是判据的边界不是待办。
   ⚠ **豁免不占清单**：`wontfix` 过的结论只计数（「有人看过并决定不修」≠「没人看过」）。
+    ⚠ 那张账**逐层各一份**（`<stage>/wontfix.json`，2026-08-15 裁决），
+    计数在本模块跨层求和；语义结论的豁免也走同一份账（`novel/wontfix.py`）。
   ⚠ 只捕「数据说走不下去」那一族（`UpstreamMissing`/`ArtifactUnreadable`/`TerminalState`/
     `RunModeNotImplemented`——没跑到的层跳过，不编空结论）；`RefusedByStructure`
     是我们自己的 bug，**不捕**（`novel/errors.py` 开头那条：不许降级成一句温和的提示）。
@@ -37,7 +39,7 @@ from contracts.schema.api import InboxItem, InboxView
 from contracts.schema.report import CheckReport
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
-from novel import paths, prov
+from novel import paths, prov, wontfix
 from novel.errors import (
     ArtifactUnreadable, RunModeNotImplemented, TerminalState, UpstreamMissing,
 )
@@ -48,8 +50,40 @@ from novel.store import ArtifactStore
 
 _CH_RX = re.compile(r'ch(\d+)')
 
-#: 兜底的 0 成本人工路（有 `Rule.fix` 时用 fix 那条，更具体）。
-_HUMAN_HOW = '0 成本人工路：`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决'
+#: 兜底文案里会被点名的两条 0 成本人工路。`(flag, 这条路在干什么)`。
+#: ⚠ **顺序即优先级**：改内容排在记豁免前面——先问「能不能修」，再问「要不要不修」。
+_HUMAN_FLAGS: tuple[tuple[str, str], ...] = (
+    ('--apply-edit', '改内容'),
+    ('--wontfix', '记「不修」的裁决'),
+)
+
+
+def _human_how(stage: str) -> str:
+    """兜底的 0 成本人工路（有 `Rule.fix` 时用 fix 那条，更具体）——
+    **按这一层真有的入口说话，不背一句常量。**
+
+    ⚠⚠ **这里原来是一个常量**，逐字写着
+    「0 成本人工路：`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决」。
+    而 `--wontfix` **全仓只有 `stage5.review` 有**（`NODES` 可查）：
+    stage6 的 `hook_candidate_contradiction` 一命中，清单就会建议人去跑一个
+    这一层根本不存在的 flag ⇒ `build_argv` 当场拒收，
+    人拿到的是一条**兑现不了的承诺**，而清单上看不出来。
+
+    ⚠ 这与 `contracts/rules.py::_validate` ⑧ 拦的是同一种病——那三道校验的原话是
+    「`build_argv` 会当场拒收它 ⇒ 这条修复路**永远兑现不了**，而表里只看得见一句
+    『修法：…』」。区别只在于：`Rule.fix` 那一侧有校验，**兜底文案这一侧一个都没有**。
+    ⇒ 从 `NODES` 派生。谎话在结构上就说不出口了，而且新入口一上线它自动跟上
+    （stage2 的 `--apply-edit` 就是这么被这句话认领的）。
+
+    ⚠ 一条都没有时**如实说没有**，不要编一个看起来像下一步的句子：
+    「这一层没有 0 成本入口」与「有而我没告诉你」是两件事。
+    """
+    have = {flag for spec in NODES.values() if spec.stage == stage for flag in spec.flags}
+    parts = [f'`{flag}` {what}' for flag, what in _HUMAN_FLAGS if flag in have]
+    if not parts:
+        return (f'{stage} 没有 0 成本人工入口——处置归人判断：'
+                f'要么改上游重跑本层，要么这条结论就这样留在报告上')
+    return '0 成本人工路：' + ' / '.join(parts)
 
 
 def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
@@ -69,11 +103,15 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
         ctx = readonly_ctx(novel_dir, node, code)
         store = ArtifactStore(ctx)
 
+        # 「有人看过并决定不修」是**逐层各一份账**（2026-08-15 裁决：层由文件路径承载）
+        # ⇒ 计数要跨层求和。⚠ 只数一次不数两次：`_stage5_stalled`
+        #   从此只交 stalled，不再自己数 stage5 那一份。
+        wontfix_total += len(wontfix.load(store, stage))
+
         items += _invalid_items(store, stage)
         if stage == 'stage5':
             items += _stage5_chapter_invalids(store)
-            stalled, wontfix_total = _stage5_stalled_and_wontfix(store)
-            items += stalled
+            items += _stage5_stalled(store)
 
         report = _report_of(ctx, stage)
         if report is not None:
@@ -164,12 +202,16 @@ def _stage5_chapter_invalids(store: ArtifactStore) -> list[InboxItem]:
     return out
 
 
-def _stage5_stalled_and_wontfix(store: ArtifactStore) -> tuple[list[InboxItem], int]:
+def _stage5_stalled(store: ArtifactStore) -> list[InboxItem]:
+    """连续 N 轮未消、修复已判「根因不在写手」主动跳过的那些。
+
+    ⚠ 豁免计数**不在这里数**：它逐层各一份账，由 `inbox_view` 跨层求和
+    （从前这里顺手数了 stage5 那一份，收成跨层之后会数两次）。
+    """
     from novel.stages.stage5 import review
-    wontfix_total = len(review.load_wontfix(store))
     got = review.latest_review(store)
     if got is None:
-        return [], wontfix_total
+        return []
     _seq, rev = got
     out: list[InboxItem] = []
 
@@ -182,14 +224,15 @@ def _stage5_stalled_and_wontfix(store: ArtifactStore) -> tuple[list[InboxItem], 
             kind='stalled', stage='stage5', chapter=chapter, rule=finding.rule,
             what=finding.detail,
             how=f'连续 {finding.unresolved_rounds} 轮未消，修复已判「根因不在写手」'
-                f'主动跳过——人工改稿（`stage5.write --apply-edit`）或豁免（`--wontfix`）'))
+                f'主动跳过——人工改稿（`stage5.write --apply-edit`）'
+                f'或豁免（`stage5.review --wontfix`）'))
 
     for row in rev.chapters:
         for finding in row.findings:
             one(row.output_ordinal, finding)
     for finding in rev.book:
         one(None, finding)
-    return out, wontfix_total
+    return out
 
 
 def _report_items(report: CheckReport, stage: str) -> list[InboxItem]:
@@ -213,7 +256,7 @@ def _report_items(report: CheckReport, stage: str) -> list[InboxItem]:
                 fix = line.fix
                 how = (f'跑 `{fix.node} {" ".join(fix.flags)}`'
                        f'（{"付费" if fix.paid else "0 成本"}）' if fix is not None
-                       else _HUMAN_HOW)
+                       else _human_how(stage))
                 out.append(InboxItem(
                     kind='human_only', stage=stage, chapter=None, rule=line.rule,
                     what=finding.detail, how=how))

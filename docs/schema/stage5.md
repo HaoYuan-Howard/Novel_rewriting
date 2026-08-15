@@ -277,7 +277,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 | `identity_dead` | `bool` | **否** | 书级恒等闸门：这条判据在这本书上**零判别力**。盘上 30/789 | **盘·码** |
 | `converge` | `str` | 是 | `new｜unresolved_N｜same_draft`。**`draft_text_sha1` 没变时不许前进计数** | **三源** |
 | `unresolved_rounds` | `int` | 是 | 连续未消的轮数；到 `STOP_REWRITE_AFTER`(2) 判「根因不在写手」 | **三源** |
-| `wontfix` | `obj` | **否** | `{why, at_review}`。**盘上零样本**（没有一本有 `wontfix.json`） | **契·码** |
+| `wontfix` | `obj` | **否** | `{why, at}`。**盘上零样本**（没有一本有 `wontfix.json`） | **契·码** |
 
 > #### 逐章豁免与书级闸门问的是**两个不同的问题**，都要
 >
@@ -326,14 +326,28 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 ### 4.1 `stage5/wontfix.json` —— 人的「这条我不修」
 
-`{'<章|book>|<rule>|<evidence_key>': {output_ordinal, rule, evidence_key, why, detail, review_seq}}`
+`{'<章|book>|<rule>|<evidence_key>': {output_ordinal, rule, evidence_key, why, detail, at}}`
 **键与收敛键同构**——只按 `rule` 记会把「换了个位置的同类问题」一并豁免掉，那不是人做的决定。
+
+⚠ **机制是全链一份**（`novel/wontfix.py`），**账是逐层一份**：stage6 有一份同模型的
+`stage6/wontfix.json`。持久身份是 `(层, 章|book, 判据, 证据键)`，而**层由文件路径承载**，
+不进收敛键——每层各有自己的账，键里再写一遍层名就是同一个信息的第二个落点。
 
 | 约束 | 说明 |
 |---|---|
 | **`why` 必填** | 写不出理由的豁免，与「没看过」在盘上没有区别 |
-| **不给不存在的结论发豁免** | 最近一份 review 里没有那条 → **显式终态**（判据 28：缺省是「不知道」，不许猜） |
+| **不给不存在的结论发豁免** | 该层**当前结论池**里没有那条 → **显式终态**（判据 28：缺省是「不知道」，不许猜） |
 | **豁免不删结论** | 照常出现在报告与界面上，只是不进修复、不占「待人工」，并**单独计数** |
+| **`at` 只进审计** | 人做这个决定时看的是哪一版结论（`review_4` / `semantic_2@review_4`）。它**不参与匹配** |
+
+**结论池含语义结论**（2026-08-15）。此前反查只看 `review_<n>.json`，而 `semantic_secret_leak`
+是报告渲染时现算的、一份产物都不进 ⇒ 那条结论**结构上豁免不了**，报错还说「不给不存在的
+结论发豁免」——一句与事实相反的话。语义结论**一律 book 级寻址**：章信息在证据键里
+（`ch<n>:<正文原字节>`）。
+
+**失效由证据自身保证，不靠版本号**：证据是正文/候选的连续原字节，文本一改键就失配。
+反过来，语义重跑但结论一字未变时豁免仍然有效——`stage5.semantic` 是付费节点、重跑是常态，
+把审判版本塞进匹配键会让一次不改变任何结论的重审把整本账清空。
 
 ### 4.2 `stage5/<mode>/_rounds/` —— **三种归档，形状各不相同**
 
@@ -643,7 +657,7 @@ owner 分布：`stage5` **28** · `None` **14**（＝非结论）· `stage4` 2 �
 | `R-8.6` | `结构` | `contracts/rules.py::_validate` ③④：准入收成**一个字段的三个取值**之后，「进且只进一张桶」结构上不可能分不干净（原型那两张 dict 要另配一道断言） |
 | `R-8.4` | `结构` | `novel/stages/stage5/review.py::_converge`（只在**正文**指纹变了时才推进计数） |
 | `R-8.5` | `结构` | `novel/stages/stage5/write.py::revise_targets` 的第四道筛子（`STOP_REWRITE_AFTER`） |
-| `R-8.7b` | `结构` | `novel/stages/stage5/review.py::mark_wontfix` + `::_apply_wontfix`（查不到 ⇒ 显式终态；豁免只降 `actionable`） |
+| `R-8.7b` | `结构` | `novel/wontfix.py::mark` + `::applied`（全链一份机制；查不到 ⇒ 显式终态；豁免只降 `actionable`。结论池由 `novel/stages/stage5/review.py::mark_wontfix` 交出，含语义结论） |
 | `R-8.7` | `载体` | `WontFix` 的 `why` 最小长度 + 键↔条目一致性 |
 | `R-8.8` | **`待建`** | `INBOX_KIND` 六个取值今天只有 `invalid` 有消费方，**聚合本身一行都没有** |
 | `R-8.9` | `结构` | `contracts/rules.py::_validate` ⑤：`wordlist` 不填 `baseline` 当场拒绝注册 |

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Literal, TypeVar
 
-from pydantic import Field, model_validator
+from pydantic import Field, RootModel, model_validator
 
 from contracts.invariants import OWNER, PARTIAL_REWRITE_FLAGS, SEVERITY
 from contracts.schema.base import Fp10, FrozenModel, StrictModel
@@ -308,11 +308,76 @@ class RoundFreeProvenance(FreeProvenance, _RoundFields):
 # 二、结论（`_common.md` §七）—— 全链一份，13 个字段
 # ─────────────────────────────────────────────────────────────────────────────
 
-class WontFix(FrozenModel):
-    """人的「这条我不修」。`why` 必填——写不出理由的豁免，与「没看过」在盘上没有区别。"""
+class WontFixNote(FrozenModel):
+    """一条结论上挂着的「这条我不修」。`why` 必填——写不出理由的豁免，
+    与「没看过」在盘上没有区别。
+
+    ⚠ **它是结论上的标记，不是那份账本**——账本是下面的 `WontFix`，
+    落在 `<stage>/wontfix.json`。两者的字段刻意不同：账本要能反查（带 `rule` /
+    `evidence_key` / `detail`），标记只要能在报告和界面上说清「有人看过并决定不修」。
+    """
 
     why: str = Field(min_length=1)
-    at_review: int
+
+    #: **人做这个决定时看的是哪一版结论。**形如 `review_4` / `semantic_2:9f1c2ab0d3`。
+    #:
+    #: ⚠⚠ **它是审计账，不参与豁免的匹配**（2026-08-15 裁决）。
+    #: 匹配只按身份 `(层, 章|book, 判据, 证据键)` ——层由**文件路径**承载
+    #: （`<stage>/wontfix.json`），其余三段是键。
+    #: 把审判版本也塞进匹配键的后果很具体：`stage5.semantic` / `stage6.semantic`
+    #: 都是**付费**节点、重跑是常态，而一次不改变任何结论的重审会把
+    #: 「有人看过并决定不修」这条账**整批清空** ⇒ 等于没有豁免。
+    #: ⚠ 反过来，失效由**证据自身**保证而不是靠版本：两条语义判据的证据
+    #: 都是当前候选文案/正文的连续原字节，文本一改证据就变、键就失配。
+    at: str = Field(min_length=1)
+
+
+class WontFixEntry(StrictModel):
+    """账本里的一条「这条我不修」。**盘上零样本**（没有一本有 `wontfix.json`）。
+
+    键与**收敛键同构**（`<章|book>|<rule>|<evidence_key>`）——
+    只按 `rule` 记会把「换了个位置的同类问题」一并豁免掉，**那不是人做的决定**。
+
+    三条约束：
+      · **`why` 必填**——写不出理由的豁免，与「没看过」在盘上没有区别；
+      · **不给不存在的结论发豁免**——该层当前结论池里没有那条 ⇒ 显式终态；
+      · **豁免不删结论**——照常出现在报告与界面上，只是不进反哺、不占「待人工」，并单独计数。
+
+    ⚠ **它从 `stage5.py` 搬到本模块，是因为语义结论的豁免闭环把它变成了跨层机制**
+    （2026-08-15 裁决）：stage5 与 stage6 各有一份 `<stage>/wontfix.json`，
+    形状必须只有一份——同一件事的第 N 个落点必然分家。
+    """
+
+    output_ordinal: int | None
+    rule: str = Field(min_length=1)
+    evidence_key: str
+    why: str = Field(min_length=1)
+    detail: str
+
+    #: **人做这个决定时看的是哪一版结论**（同 `WontFixNote.at`：审计账，不参与匹配）。
+    at: str = Field(min_length=1)
+
+
+class WontFix(RootModel[dict[str, WontFixEntry]]):
+    """`<stage>/wontfix.json` —— **顶层就是那张映射**（`{收敛键: 条目}`），没有包一层。
+
+    ⚠ **层由文件路径承载，不进键**：身份的完整形态是 `(层, 章|book, 判据, 证据键)`，
+    而每层各有自己的一份账 ⇒ 键里再写一遍层名就是同一个信息的第二个落点。
+    """
+
+    @model_validator(mode='after')
+    def _key_agrees_with_the_entry(self) -> WontFix:
+        """键是收敛键 `<章|book>|<rule>|<evidence_key>` —— 它与条目里的字段必须一致。
+
+        ⚠ 不一致时豁免会挂在另一条结论上，而**豁免不删结论**、报告照常打印它，
+        于是「人豁免过」与「人没看过」在界面上同形。
+        """
+        for key, e in self.root.items():
+            head = 'book' if e.output_ordinal is None else str(e.output_ordinal)
+            want = f'{head}|{e.rule}|{e.evidence_key}'
+            if key != want:
+                raise ValueError(f'wontfix 键 {key!r} 与条目算出来的收敛键 {want!r} 对不上')
+        return self
 
 
 class Finding(FrozenModel):
@@ -351,7 +416,7 @@ class Finding(FrozenModel):
 
     converge: str
     unresolved_rounds: int = Field(ge=0)
-    wontfix: WontFix | None = None
+    wontfix: WontFixNote | None = None
 
     @model_validator(mode='after')
     def _postconditions(self) -> Finding:

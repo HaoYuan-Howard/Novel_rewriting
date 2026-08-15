@@ -378,7 +378,17 @@ def outcomes(store: ArtifactStore, art: Hook | None) -> list[Outcome]:
             candidate_findings.append(finding(
                 'hook_candidate_contradiction',
                 detail=f'[{label}] 语义核对不完整：{review.uncertainty_reason}',
-                evidence=[],
+                # ⚠⚠ **这一格原来是 `[]`，而那让人工豁免闭环在这条上失效。**
+                # 空凭据 ⇒ `evidence_key` 恒是空串 ⇒ 三条候选各自的「核对不完整」
+                # **共用同一个收敛键**，一次豁免会把三条一并豁免掉——正是
+                # `novel/wontfix.py` 明令禁止的形状（「换了个位置的同类问题」
+                # 不是人做的决定）。
+                # ⚠ 用 `<候选>:<文本指纹>` 而不是候选名：候选名是**位置**，
+                # 换一条文案还是同一个名字；而豁免必须在文本变化后自动失效
+                # （2026-08-15 裁决：失效由证据自身保证，不靠版本号）。
+                # ⚠ 不放 `uncertainty_reason`：那句话每次重审都可能换措辞，
+                # 放进键里等于「重跑一次就失效」——那是被裁掉的那个方案。
+                evidence=[f'{label}:{review.text_sha1}'],
             ))
 
     hard_findings: list[Finding] = []

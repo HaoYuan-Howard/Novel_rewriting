@@ -53,7 +53,9 @@ from contracts.schema.common import (
     RoundLlmProvenance,
     Severity,
     Usage,
-    WontFix as WontFixNote,
+    WontFix,
+    WontFixEntry,
+    WontFixNote,
 )
 from contracts.schema.report import (
     AccountingLine,
@@ -78,9 +80,10 @@ from contracts.schema.stage1 import (
 )
 from contracts.schema.stage2 import (
     Address, Arc, ArcTrack, Beat, Blueprint, Canon, ChapterBlueprints,
-    ChapterBlueprintsResponse, Character, ConflictStage, Entities, GlobalGrounding,
-    GlobalGroundingResponse, Hinge, Narration, Relation, RoleSplitResponse, Secret,
-    Setting, SourceSpan, WorldRule, WorldRuleVersion,
+    ChapterBlueprintsResponse, Character, ConflictStage, Entities, GlobalEdit,
+    GlobalGrounding, GlobalGroundingResponse, Hinge, Narration, ReaderRevealEvent,
+    Relation, RoleSplitResponse, Secret, SecretPatch, Setting, SourceSpan,
+    WorldRule, WorldRuleVersion,
 )
 from contracts.schema.stage3 import (
     ChapterStyle, ChapterStyleResponse, HabitRepairResponse, HookStyle, Measurable,
@@ -93,7 +96,7 @@ from contracts.schema.stage4 import (
 from contracts.schema.stage5 import (
     Chapter, DraftConsumed, JudgedDraft, Review, ReviewChapter, SemanticAlignmentResponse,
     SemanticChapterClaims, SemanticClaim, SemanticClaimsResponse, SemanticEvidenceRef,
-    SemanticReview, SemanticSecretAdjudication, SemanticSecretDecision, WontFix,
+    SemanticReview, SemanticSecretAdjudication, SemanticSecretDecision,
 )
 from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookClaimDecision, HookEdit, HookSemanticResponse,
@@ -115,6 +118,10 @@ ARTIFACTS: dict[str, type] = {
     'stage1/hook_copy.json': HookCopy,
     'stage1/partition_report.json': PartitionReport,
     'stage2/global_grounding.json': GlobalGrounding,
+    # ⚠ 人产的 secret 订正决策集（`stage2.global --apply-edit` 吃它）——
+    #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
+    #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
+    'stage2/global_edit.json': GlobalEdit,
     'stage2/chapter_blueprints.json': ChapterBlueprints,
     'stage3/style_grounding.json': StyleGrounding,
     # ⚠ 三份 `*_edit.json` 不是节点产的，是**人产的输入**——但它们落在产物目录、
@@ -133,10 +140,13 @@ ARTIFACTS: dict[str, type] = {
     'stage5/{mode}/ch{nn}.json': Chapter,
     'stage5/review_{n}.json': Review,
     'stage5/semantic_{n}.json': SemanticReview,
+    # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
+    #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     'stage5/wontfix.json': WontFix,
     'stage6/hook.json': Hook,
     'stage6/hook_edit.json': HookEdit,
     'stage6/semantic_{n}.json': HookSemanticReview,
+    'stage6/wontfix.json': WontFix,
     'stage7/name_map.json': NameMap,
     'stage7/name_map_edit.json': NameMapEdit,
 }
@@ -146,7 +156,7 @@ __all__ = [
     'Fp10', 'Sha1', 'StrictModel', 'FrozenModel',
     'InputEdge', 'Usage', 'Provenance', 'FreeProvenance', 'LlmProvenance',
     'RoundLlmProvenance', 'RoundFreeProvenance',
-    'Finding', 'WontFixNote', 'Severity', 'Owner',
+    'Finding', 'WontFixNote', 'WontFix', 'WontFixEntry', 'Severity', 'Owner',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
     'CheckReport', 'RuleLine', 'ProvenanceSection', 'EdgeLine',
     'CheckKind', 'Remediation', 'FixRoute',
@@ -163,14 +173,15 @@ __all__ = [
     'RemovalReport', 'RemovedSegment', 'Stage0EditPlan', 'Stage0Warning',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
-    'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'Arc', 'ConflictStage',
+    'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'ReaderRevealEvent',
+    'GlobalEdit', 'SecretPatch', 'Arc', 'ConflictStage',
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',
     'StyleGrounding', 'StyleResponse', 'ChapterStyle', 'ChapterStyleResponse',
     'HabitRepairResponse', 'Voice', 'HookStyle', 'Measurable', 'StyleEdit',
     'PlanChapters', 'PlanChapter', 'PlanBeat', 'PlanEdit', 'WriterContext', 'BookCharacter',
     'CtxChapter', 'CtxBeat', 'CtxFacts',
-    'Chapter', 'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed', 'WontFix',
+    'Chapter', 'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed',
     'SemanticClaim', 'SemanticChapterClaims', 'SemanticEvidenceRef',
     'SemanticClaimsResponse', 'SemanticAlignmentResponse',
     'SemanticSecretDecision', 'SemanticSecretAdjudication', 'SemanticReview',

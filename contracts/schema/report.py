@@ -27,7 +27,7 @@ from contracts.invariants import (
 )
 from contracts.rules import REGISTRY, Registry
 from contracts.schema.base import FrozenModel, StrictModel
-from contracts.schema.common import Finding, WontFix
+from contracts.schema.common import Finding, WontFixNote
 
 #: 枚举一律从 `contracts.invariants` 取，不在本文件重抄（同 `common.py` 的写法）。
 Status = Literal[STATUS]
@@ -45,7 +45,7 @@ Remediation = Literal[REMEDIATION]
 def finding(rule: str, *, detail: str, evidence: list[str],
             identity_hit: bool = False, identity_dead: bool | None = None,
             converge: str = 'new', unresolved_rounds: int = 0,
-            wontfix: WontFix | None = None,
+            wontfix: WontFixNote | None = None,
             registry: Registry = REGISTRY) -> Finding:
     """造一条结论。**调用方只给 `detail` + `evidence`。**
 

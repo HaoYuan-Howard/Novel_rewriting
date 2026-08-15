@@ -26,16 +26,16 @@ from typing import Any
 
 from contracts.invariants import STOP_REWRITE_AFTER
 from contracts.rules import REGISTRY
-from contracts.schema.common import Finding
+from contracts.schema.common import Finding, WontFixEntry
 from contracts.schema.report import CheckReport, finding
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage3 import StyleGrounding
 from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import (
     ContextSource, ContextSourceDetail, DraftSources, Review, ReviewChapter, ReviewProvenance,
-    ReviewSources, WontFix, WontFixEntry,
+    ReviewSources,
 )
-from novel import prov
+from novel import prov, wontfix
 from novel.errors import TerminalState, UpstreamMissing
 from novel.report.builder import build
 from novel.run import RunContext
@@ -47,7 +47,8 @@ MAIN_TEXT = 'stage1/main_text.json'
 GLOBAL_GROUNDING = 'stage2/global_grounding.json'
 STYLE_GROUNDING = 'stage3/style_grounding.json'
 WRITER_CONTEXT = 'stage4/writer_context.json'
-WONTFIX = 'stage5/wontfix.json'
+#: ⚠ 从 `novel/wontfix.py` 派生，不手写第二个字符串——两层共用同一张模板。
+WONTFIX = wontfix.rel_of('stage5')
 
 #: `stage5/review_<n>.json`。`<n>` 由盘上已有的最大序号 **+1**。
 REVIEW_TPL = 'stage5/review_{n}.json'
@@ -111,89 +112,65 @@ def latest_review(store: ArtifactStore) -> tuple[int, Review] | None:
 
 
 def load_wontfix(store: ArtifactStore) -> dict[str, WontFixEntry]:
-    if not store.exists(WONTFIX):
-        return {}
-    art, _raw = store.read_own(WontFix, WONTFIX)
-    return dict(art.root)
+    return wontfix.load(store, 'stage5')
 
 
-def wontfix_key(ordinal: int | None, rule: str, evidence_key: str) -> str:
-    """收敛键同构：`<章|book>|<判据>|<证据键>`。
+#: 收敛键的构造器。⚠ 全链只有 `novel/wontfix.py::key` 一份实现，本名是转发。
+wontfix_key = wontfix.key
 
-    ⚠ **只按 `rule` 记会把「换了个位置的同类问题」一并豁免掉，而那不是人做的决定。**
+
+def _semantic_pool(ctx: RunContext, store: ArtifactStore) -> tuple[list[Finding], str | None]:
+    """本层**当前的语义结论**，以及它出自哪一份审判产物（审计账用）。
+
+    ⚠⚠ **它是这条闭环存在的理由。** 语义结论在报告渲染时由
+    `stage5/semantic.py::outcomes` 现算，**不进 `review_<n>.json`** ⇒
+    只从最近一份验收里反查的旧实现，对 `semantic_secret_leak` 永远查不到，
+    人拿到的是一句「不给不存在的结论发豁免」——而那条结论明明就在报告上。
+    ⇒ 反查池 = 验收里的机械结论 **∪** 现算的语义结论。
+
+    ⚠ 语义结论**一律 book 级寻址**：它们的章信息在证据键里
+    （`semantic_secret_leak` 的证据是 `ch<n>:<正文原字节>`），
+    再按章分一次是同一个信息的第二个落点。
     """
-    return f'{ordinal if ordinal is not None else "book"}|{rule}|{evidence_key}'
-
-
-def _parse_wontfix_spec(spec: str) -> tuple[str, str, str | None, str]:
-    """`<章|book>|<判据>[|<证据键>]=<理由>` → `(章, 判据, 证据键|None, 理由)`。
-
-    ⚠⚠ **第三段必须用 `split('|', 2)` 切，不能 `split('|')`。**
-    `evidence_key` 自己就是 `'|'.join(evidence)` —— 一条 `length_report` 的证据键长成
-    `887|880|875`，裸切会得到 5 段而不是 3 段，于是**每一条多凭据的结论都豁免不了**，
-    报错还说「键读不出来」（那句话是假的：键是对的，是解析器错了）。
-    ⇒ 限定切两刀，**第三段吃掉剩下的全部**——证据键在最后，这样恒正确。
-    """
-    head, sep, why = spec.partition('=')
-    if not sep or not why.strip():
-        raise TerminalState(
-            f'--wontfix 的值缺理由：{spec!r}。形态是 '
-            f'`<章|book>|<判据>[|<证据键>]=<理由>`——**写不出理由的豁免，'
-            f'与「没看过」在盘上没有区别**')
-    parts = head.split('|', 2)
-    if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
-        raise TerminalState(
-            f'--wontfix 的键读不出来：{head!r}。形态是 `<章|book>|<判据>[|<证据键>]`')
-    return parts[0].strip(), parts[1].strip(), (parts[2] if len(parts) == 3 else None), \
-        why.strip()
+    from novel.stages.stage5 import semantic
+    book = load_book(ctx, store) if store.exists(GLOBAL_GROUNDING) else None
+    outs = semantic.outcomes(store, book)
+    seqs = semantic.semantic_seqs(store)
+    at = f'semantic_{seqs[-1]}' if seqs else None
+    return [f for o in outs for f in o.findings], at
 
 
 def mark_wontfix(ctx: RunContext, spec: str) -> CheckReport:
     """`--wontfix`：把一条「这条我不修」记进 `stage5/wontfix.json`。**不产验收报告。**
 
+    机制在 `novel/wontfix.py`（全链一份，stage6 用的是同一套）；本函数只负责
+    交出**这一层当下的结论池**与审计账。
+
     三条约束，一条都不许松：
       · **`why` 必填**——写不出理由的豁免，与「没看过」在盘上没有区别；
-      · **不给不存在的结论发豁免**——最近一份验收里没有那条 ⇒ **显式终态**（缺省是
+      · **不给不存在的结论发豁免**——当前结论池里没有那条 ⇒ **显式终态**（缺省是
         「不知道」，不许猜）；
       · **豁免不删结论**——照常出现在报告与界面上，只是不进反哺、不占「待人工」，并单独计数。
-
-    ⚠⚠ **同一 (章, 判据) 有多条结论时要人写出第三段（证据键）。**
-    原型那条路对命中的**列表整体**循环写入，把它们**一并豁免**了——而契约自己写着
-    「只按 `rule` 记会把『换了个位置的同类问题』一并豁免掉，**那不是人做的决定**」。
     """
     store = ArtifactStore(ctx)
-    head, rule, ev_key, why = _parse_wontfix_spec(spec)
-    if rule not in {r.rule for r in REGISTRY.of_stage('stage5')}:
-        raise TerminalState(
-            f'{rule!r} 不是 stage5 的判据。取值面在 `contracts/judges/stage5.py`')
     got = latest_review(store)
     if got is None:
         raise TerminalState(
             '盘上一份验收报告都没有——**不给不存在的结论发豁免**。先跑 `stage5.review`')
     seq, rev = got
-    ordinal = None if head == 'book' else int(head)
+    semantic_findings, semantic_at = _semantic_pool(ctx, store)
 
-    pool = rev.book if ordinal is None else next(
-        (c.findings for c in rev.chapters if c.output_ordinal == ordinal), [])
-    hits = [f for f in pool if f.rule == rule
-            and (ev_key is None or f.evidence_key == ev_key)]
-    if not hits:
-        raise TerminalState(
-            f'最近一份验收（review_{seq}）里 {head} 上没有 {rule!r} 这条结论'
-            f'{f"（证据键 {ev_key!r}）" if ev_key else ""}——**不给不存在的结论发豁免**')
-    if len(hits) > 1 and ev_key is None:
-        raise TerminalState(
-            f'{head} 上有 {len(hits)} 条 {rule!r}，**要说清豁免的是哪一条**：'
-            f'把证据键写成第三段。候选：'
-            + ' · '.join(repr(f.evidence_key) for f in hits[:6])
-            + '\n⚠ 一并豁免不是人做的决定——「换了个位置的同类问题」照样要有人看一眼')
+    def pool_of(ordinal: int | None) -> list[Finding]:
+        if ordinal is not None:
+            return list(next((c.findings for c in rev.chapters
+                              if c.output_ordinal == ordinal), []))
+        return list(rev.book) + semantic_findings
 
-    data = load_wontfix(store)
-    f = hits[0]
-    data[wontfix_key(ordinal, rule, f.evidence_key)] = WontFixEntry(
-        output_ordinal=ordinal, rule=rule, evidence_key=f.evidence_key,
-        why=why, detail=f.detail, review_seq=seq)
-    store.write(WONTFIX, WontFix(root=data))
+    semantic_rules = {f.rule for f in semantic_findings}
+    _head, rule, _ev, _why = wontfix.parse_spec(spec)
+    at = (f'{semantic_at or "semantic_?"}@review_{seq}'
+          if rule in semantic_rules else f'review_{seq}')
+    wontfix.mark(store, 'stage5', spec, pool_of=pool_of, at=at)
     return _report_of_review(ctx, store, rev)
 
 
@@ -381,14 +358,14 @@ def _apply_wontfix(rows: list[ReviewChapter], book_fs: list[Finding],
                    wf: dict[str, WontFixEntry]) -> tuple[list[ReviewChapter], list[Finding]]:
     """**只降 `actionable` 并打标，不删结论**：豁免过的条目照常列在报告与界面上，
     只是不再进反哺、也不再算进「待人工」。**「有人看过并决定不修」与「没人看过」
-    必须分得开**——那正是加这个机制的全部理由。"""
-    def one(o: int | None, f: Finding) -> Finding:
-        hit = wf.get(wontfix_key(o, f.rule, f.evidence_key))
-        return f if hit is None else _downgrade(
-            f, actionable=False, wontfix={'why': hit.why, 'at_review': hit.review_seq})
-    return ([r.model_copy(update={'findings': [one(r.output_ordinal, f) for f in r.findings]})
-             for r in rows],
-            [one(None, f) for f in book_fs])
+    必须分得开**——那正是加这个机制的全部理由。
+
+    ⚠ 这里套的是**落进产物的那一份**（机械结论）。语义结论不进产物，
+    它们由 `_report_of_review` 在渲染时套同一份账（`novel/wontfix.py::applied_to_outcomes`）。
+    """
+    return ([r.model_copy(update={'findings': wontfix.applied(
+                r.findings, wf, ordinal=r.output_ordinal)}) for r in rows],
+            wontfix.applied(book_fs, wf))
 
 
 def _converge(rows: list[ReviewChapter], book_fs: list[Finding], prev: Review | None
@@ -514,11 +491,20 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
 def _report_of_review(ctx: RunContext, store: ArtifactStore, rev: Review,
                       book: M.Book | None = None, *,
                       freshness_rel: str | None = None) -> CheckReport:
+    """⚠ **语义那一半的豁免在这里套，不在 `build_review` 里。**
+
+    机械结论落进 `review_<n>.json`（豁免跟着落盘，人的决定是产物的一部分），
+    而语义结论是渲染时现算的 ⇒ 它们的豁免只能在**这一层**套上。
+    漏了这一步，人明明豁免过一条 `semantic_secret_leak`，报告照旧把它算成待办
+    ——「有人看过并决定不修」与「没人看过」又同形了。
+    """
     from novel.stages.stage5 import semantic
     seqs = review_seqs(store)
     rel = freshness_rel or (REVIEW_TPL.format(n=seqs[-1]) if seqs else WRITER_CONTEXT)
+    wf = load_wontfix(store)
     return build(sid=ctx.sid, node=ctx.node, freshness=store.freshness(rel),
-                 outcomes=[*_outcomes(rev, book), *semantic.outcomes(store, book)],
+                 outcomes=[*_outcomes(rev, book),
+                           *wontfix.applied_to_outcomes(semantic.outcomes(store, book), wf)],
                  accounting=None, invalid=False)
 
 

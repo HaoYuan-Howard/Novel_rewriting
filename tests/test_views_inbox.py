@@ -140,9 +140,63 @@ def test_stalled_items_come_from_unresolved_rounds_at_the_stop_threshold(monkeyp
         ])],
         book=[finding('book_length', 2)])
     monkeypatch.setattr(review, 'latest_review', lambda _s: (4, rev))
-    monkeypatch.setattr(review, 'load_wontfix', lambda _s: {'3|invented_number|e': object()})
 
-    items, wontfix = I._stage5_stalled_and_wontfix(object())
-    assert wontfix == 1
+    # ⚠ 豁免计数**不再由这个函数交**：那张账逐层各一份（`<stage>/wontfix.json`），
+    #   由 `inbox_view` 跨层求和。顺手在这里数会把 stage5 那一份数两次。
+    items = I._stage5_stalled(object())
     assert [(it.rule, it.chapter) for it in items] == [('band_drift', 3), ('book_length', None)]
     assert all(it.kind == 'stalled' and 'wontfix' in it.how for it in items)
+    assert all('stage5.review --wontfix' in it.how for it in items),         'stalled 那条路要指名节点——`--wontfix` 现在两层都有'
+
+
+def test_the_fallback_how_never_names_a_flag_the_stage_does_not_have():
+    """⭐ **兜底文案不许承诺一条这一层敲不出来的命令。**
+
+    ⚠⚠ 这里原来是一个常量，逐字写着「`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决」，
+    而 `--wontfix` **全仓只有 `stage5.review` 有**：stage6 的
+    `hook_candidate_contradiction`（`sev=info` · `fix=None` ⇒ `remediation='human'`）
+    一命中，清单就建议人去跑一个这一层根本没有的 flag ⇒ `build_argv` 当场拒收。
+    与 `contracts/rules.py::_validate` ⑧ 拦的是同一种病，区别只在于
+    **`Rule.fix` 那一侧有三道校验，兜底文案这一侧一道都没有**——本条就是那道。
+
+    ⚠ 它逐层比对，不写死名单：新入口一上线这句话自动跟上，
+    退役一个入口也会当场说话。
+    """
+    import re as _re
+
+    from contracts.invariants import NODES, STAGES
+    from novel.views.inbox import _human_how
+
+    for stage in STAGES:
+        have = {flag for spec in NODES.values() if spec.stage == stage for flag in spec.flags}
+        text = _human_how(stage)
+        named = set(_re.findall(r'`(--[a-z-]+)`', text))
+        assert named <= have, (
+            f'{stage} 的兜底文案点名了它没有的 flag：{sorted(named - have)}；'
+            f'这一层实有 {sorted(have)}')
+        if not ({'--apply-edit', '--wontfix'} & have):
+            assert '--' not in text, f'{stage} 一条 0 成本人工路都没有，却给出了一条命令：{text}'
+
+
+def test_every_human_only_row_offers_something_the_operator_can_actually_run(box):
+    """⭐ 端到端：清单上每一条 `human_only` 的 `how` 都必须是**跑得动的**。
+
+    `Rule.fix` 那条路由由注册期三道校验守着（节点存在 · flag 在该节点的 `flags` 里 ·
+    不指向别的层），**兜底那条此前一道都没有**——而 stage6 的语义提示恰好走的是兜底。
+    """
+    import re as _re
+
+    from contracts.invariants import NODES
+
+    view = inbox_view(str(box.root), box.sid)
+    rows = [it for it in view.items if it.kind == 'human_only']
+    assert rows, '一条 human_only 都没有——本条没在查'
+    for item in rows:
+        for node, flag in _re.findall(r'`([a-z0-9]+\.[a-z-]+) (--[a-z-]+)`', item.how):
+            spec = NODES.get(node)
+            assert spec is not None, f'{item.rule} 指向不存在的节点 {node}'
+            assert flag in spec.flags, f'{item.rule} 指的 {node} {flag} 不在该节点的 flags 里'
+        bare = set(_re.findall(r'`(--[a-z-]+)`', item.how))
+        have = {f for spec in NODES.values() if spec.stage == item.stage for f in spec.flags}
+        assert bare <= have, (
+            f'{item.stage}/{item.rule} 的 how 点名了这一层没有的 flag：{sorted(bare - have)}')
