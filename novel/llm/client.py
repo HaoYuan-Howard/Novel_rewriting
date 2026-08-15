@@ -36,7 +36,7 @@ from typing import Any, Callable, Final, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from novel import config
-from novel.errors import NovelError
+from novel.errors import TerminalState
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
@@ -71,8 +71,20 @@ TextValidator = Callable[[str, ChatResponse], str | None]
 JsonValidator = Callable[[M, ChatResponse], str | None]
 
 
-class LlmFailed(NovelError):
-    """整条阶梯走完仍然没拿到可用的东西。**显式终态，绝不返回空稿。**"""
+class LlmFailed(TerminalState):
+    """整条阶梯走完仍然没拿到可用的东西。**显式终态，绝不返回空稿。**
+
+    ⚠⚠ 基类是 `TerminalState` 而不是 `NovelError`，而这一位承重：
+    `novel/cli/main.py` 只捕 `TerminalState` / `RefusedByStructure` / `Exception`，
+    挂在 `NovelError` 上就落最后那条兜底 ⇒ **exit 70 + 一段栈**，
+    编排层与人都会读成「进程崩了，结论未知」。
+    而它说的其实是「按设计这一步走不下去了」——`exit_codes.py` 的 `2`，不打栈。
+    ⚠ 这不是把 bug 说成正常：真正未捕获的异常仍走 70 且栈留全，两条各有守卫。
+    ⚠ `MissingApiKey`（`novel/llm/transport.py`）早就是同样的归属，本条与它对齐。
+    ⚠ 归族改了**不影响 HTTP 那一侧**：`novel/api/errors.py` 是
+    `STATUS.get(type(exc))` 精确类型查表、不走 MRO，`LlmFailed` 仍只登记在
+    `UNREACHABLE_OVER_HTTP`（它只在子进程里抛，父进程只看得到退出码）。
+    """
 
 
 def _strip_fences(s: str | None) -> str:

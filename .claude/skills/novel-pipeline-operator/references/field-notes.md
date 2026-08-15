@@ -26,7 +26,6 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-010 | stage7 映射边角 | kept, marker, one-char alias |
 | FN-011 | stage7 编辑后重装配 | approved, book_txt, stale |
 | FN-012 | 来源指纹诊断噪声 | `consumed_changed`, fingerprints |
-| FN-013 | 模型阶梯耗尽的退出码 | `LlmFailed`, exit 70 |
 | FN-014 | apply-edit 相对路径 | cwd, absolute path |
 
 ### FN-001 · stage0 批准前的预期红灯
@@ -136,15 +135,6 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 处置：核对全部 inputs、code 与实际消费投影。证据完全一致时披露诊断边，不因此重跑付费 plan；存在任何差异时按真实 stale 处理。
 - 验证：下游 check 读取的 context 与当前 plan/global/blueprint 指纹一致。
 - 依据：实跑观察；未被提升为实现契约。
-
-### FN-013 · 模型阶梯耗尽可能落成 exit 70
-
-- 状态：`open-gap`
-- 触发：`LlmFailed` 或全部模型重试档位耗尽后 CLI 返回 exit 70。
-- 判断：这可能是当前异常映射缺口，不一定是代码逻辑崩溃；但 exit 70 的正式语义仍是“结论未知”。
-- 处置：保存完整错误种类与 attempt，查盘后按未知态处理；不无限叠加外层重试。
-- 验证：若无正式产物则 `stopped`；若未来实现改为 exit 2，重新验证并删除本条 open-gap。
-- 依据：当前缺口登记 `BE-08`。
 
 ### FN-014 · `--apply-edit` 统一传绝对路径
 

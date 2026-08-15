@@ -265,6 +265,45 @@ def test_an_uncaught_exception_exits_seventy_with_a_stack(monkeypatch, capsys):
     assert '70' in err and 'Traceback' in err, '崩溃要报数字本身，栈要留全'
 
 
+def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
+        box, monkeypatch, capsys):
+    """⭐ **降级阶梯走完仍拿不到东西 ≠ 程序崩了。** 它是 `2`，且不打栈。
+
+    这是上一条的**反面**，两条必须成对存在：
+      · 真编程错误 → `70` + 栈（上一条）
+      · 模型四档全空 → `2` + 一句人话（本条）
+
+    `LlmFailed` 的 docstring 一直写着「显式终态」，而它此前挂在 `NovelError` 上
+    ⇒ 落 `main()` 的 `except Exception` 兜底 ⇒ **exit 70 + 一段栈**。
+    于是 stage2/3/4/6/7 每一次「模型这回没给出可用 JSON」都长成一次崩溃，
+    编排层读到的是「结论未知」，人读到的是「程序坏了」。
+
+    ⚠ 本条 0 成本：`FakeTransport` 不发任何请求，四档全返回空 content
+    （实测那个形态——答案全写进了 reasoning，`finish_reason='stop'` 不是截断）。
+    """
+    from novel.cli import main as M
+    from novel.llm.client import LlmClient
+    from novel.llm.transport import ChatResponse, FakeTransport
+
+    empty = ChatResponse(content='', reasoning='想了很多，但答案没流出来',
+                         finish_reason='stop', usage=None)
+    fake = FakeTransport.always(empty)
+    monkeypatch.setattr(M, '_llm_client', lambda ctx: LlmClient(
+        ctx, fake, cache=None, model='deepseek-v4-pro', sleep=lambda _s: None))
+
+    rc = _run('run', 'stage2.global', box.sid, '--yes', '--base', str(box.root))
+
+    assert rc == X.TERMINAL_STATE, (
+        f'阶梯耗尽给了 {rc}（{X.MEANING.get(rc, "没有这个码")}）——'
+        f'{X.CRASH} 会让编排层把「模型没给出东西」记成「进程崩了，结论未知」')
+    err = capsys.readouterr().err
+    assert 'Traceback' not in err, '显式终态不打栈：打了栈就是在说这是个 bug'
+    assert '阶梯' in err or '没有可用' in err, '报错要说清是模型那一侧走不下去了'
+    assert len(fake.calls) >= 2, (
+        '守卫的守卫：只发了 %d 次请求——阶梯根本没走完，本条测的是别的东西'
+        % len(fake.calls))
+
+
 def test_inbox_prints_all_six_kind_counts_with_a_denominator(box, capsys):
     """`inbox` 的首行是**带分母的汇总**——六键全出，0 也要出。
 
