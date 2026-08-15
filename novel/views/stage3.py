@@ -60,6 +60,7 @@ def style_view(base: str | os.PathLike[str], sid: str) -> StyleView:
         sid=paths.derive_source_meta(novel_dir.name)[0],
         title=paths.title_of(novel_dir),
         exists=st.exists,
+        condition=st.condition,
         invalid_exists=st.invalid,
         # ⚠ 三态：不在盘上时是 `None`，不是 `True`。`ArtifactState` 那边用 `True` 兜底
         # （它的 `readable` 是二值的），本屏把「无从谈起」显式建模成第三个值。

@@ -35,7 +35,9 @@ from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from contracts.schema import InputEdge, Provenance
+from contracts.schema import (
+    ArtifactVersionError, InputEdge, Provenance, decode_artifact, encode_artifact,
+)
 from novel import paths, prov
 from novel.consumption import producer_node, projection_for
 from novel.errors import (
@@ -95,7 +97,7 @@ class ArtifactStore:
         project = projection_for(self.ctx.node, key)
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
-        obj = self._validate(model, rel, data)
+        obj, data = self._validate_payload(model, rel, data)
         self.ctx.record_edge(key, InputEdge(
             file=prov.fingerprint_bytes(raw),
             consumed=prov.projection_fingerprint(project(data)) if project else None,
@@ -116,7 +118,7 @@ class ArtifactStore:
         paths.check_rel_deep(rel)
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
-        obj = self._validate(model, rel, data)
+        obj, data = self._validate_payload(model, rel, data)
         fp = prov.fingerprint_bytes(raw)
         consumed = prov.projection_fingerprint(project(data)) if project else None
         self.ctx.record_judged(paths.check_rel_deep(rel), fp)
@@ -142,7 +144,7 @@ class ArtifactStore:
         """
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
-        return self._validate(model, rel, data), data
+        return self._validate_payload(model, rel, data)
 
     def read_text(self, rel: str) -> str:
         """读一份**字节形态**产物（`clean_text.txt` / `draft.md` / `book.txt`）。记边。
@@ -202,12 +204,17 @@ class ArtifactStore:
                 f'⚠ 别把它当成「上游还没产出」——那会把一次成功的付费跑报成失败') from e
 
     @staticmethod
-    def _validate(model: type[M], rel: str, data: Any) -> M:
+    def _validate_payload(model: type[M], rel: str, data: Any) -> tuple[M, Any]:
         try:
-            return model.model_validate(data)
+            decoded = decode_artifact(rel, data)
+        except ArtifactVersionError as e:
+            raise ArtifactUnreadable(str(e)) from e
+        try:
+            return model.model_validate(decoded.payload), decoded.payload
         except ValidationError as e:
             raise ArtifactUnreadable(
-                f'{rel} 不合 {model.__name__} 的契约：\n{e}') from e
+                f'{rel} 从 schema v{decoded.source_version} 升到 '
+                f'v{decoded.current_version} 后仍不合 {model.__name__} 的契约：\n{e}') from e
 
     # ── 写 ────────────────────────────────────────────────────────────────
 
@@ -298,7 +305,8 @@ class ArtifactStore:
         if not self.exists(inv_rel):
             raise UpstreamMissing(f'{self.ctx.node}: 没有 {inv_rel} 可提升')
 
-        artifact = self._validate(model, inv_rel, self._loads(inv_rel, self._read_bytes(inv_rel)))
+        artifact, _payload = self._validate_payload(
+            model, inv_rel, self._loads(inv_rel, self._read_bytes(inv_rel)))
         src = self._provenance_of(artifact)
         if src is None:
             raise ProvenanceRefused(
@@ -438,8 +446,9 @@ class ArtifactStore:
         if not p.is_file():
             return None
         try:
-            data = json.loads(p.read_bytes().decode('utf-8'))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raw_data = json.loads(p.read_bytes().decode('utf-8'))
+            data = decode_artifact(rel, raw_data).payload
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ArtifactVersionError):
             return None
         if not isinstance(data, dict):
             return None
@@ -461,8 +470,9 @@ class ArtifactStore:
         if not p.is_file():
             raise UpstreamMissing(f'{self.ctx.node}: 要判新鲜度的 {rel} 不在盘上')
         try:
-            data = json.loads(p.read_bytes().decode('utf-8'))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            raw_data = json.loads(p.read_bytes().decode('utf-8'))
+            data = decode_artifact(rel, raw_data).payload
+        except (UnicodeDecodeError, json.JSONDecodeError, ArtifactVersionError) as e:
             raise ArtifactUnreadable(f'{rel} 不是合法 JSON，判不了新鲜度：{e!r}') from e
 
         recorded = None
@@ -507,11 +517,12 @@ class ArtifactStore:
         p = self.ctx.novel_dir.joinpath(*parts)
         try:
             raw = p.read_bytes()
-            data: object = (json.loads(raw.decode('utf-8')) if p.suffix.lower() == '.json'
-                            else raw.decode('utf-8'))
+            data: object = (decode_artifact(key, json.loads(raw.decode('utf-8'))).payload
+                            if p.suffix.lower() == '.json' else raw.decode('utf-8'))
             return prov.projection_fingerprint(project(data))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError,
-                AttributeError, KeyError, IndexError, TypeError, ValueError):
+                AttributeError, KeyError, IndexError, TypeError, ValueError,
+                ArtifactVersionError):
             return None
 
     @staticmethod
@@ -557,6 +568,7 @@ class ArtifactStore:
             # ⚠ 三态只在 `to_disk()` 里兑现：`revalidated: null` 与「没有这个键」
             #   在 JSON 里必须是两份不同的字节，而 `model_dump` 会把 `None` 写成 `null`。
             payload[PROVENANCE_KEY] = src.to_disk()
+        payload = encode_artifact(rel, payload)
         return (json.dumps(payload, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
 
     def _write_json(self, rel: str, artifact: BaseModel, *,
@@ -578,8 +590,11 @@ class ArtifactStore:
         而那时产物已经落了盘、上游也已经花过钱。
         """
         try:
-            model.model_validate(json.loads(data.decode('utf-8')))
-        except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as e:
+            raw = json.loads(data.decode('utf-8'))
+            decoded = decode_artifact(rel, raw)
+            model.model_validate(decoded.payload)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValidationError,
+                ArtifactVersionError) as e:
             raise ProvenanceRefused(
                 f'{rel} 序列化之后读不回 {model.__name__}，**没有落盘**：\n{e}\n'
                 f'→ 这是载体层的 bug（多半是某个三态键在落盘形态里被抹掉了），不是数据问题'

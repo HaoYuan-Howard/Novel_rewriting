@@ -22,7 +22,7 @@ import type {
 import type { ActionRef, ApprovalDoc, GateKey, SeenKey } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type { Job, JobLogResponse, JobPreview, JobRequest, JobsResponse } from '@/types/jobs'
-import type { NovelOverview, NovelsResponse } from '@/types/novels'
+import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { RunProgress } from '@/types/run'
 import type {
   CheckKind,
@@ -67,6 +67,140 @@ function raw<T>(file: string): T {
   // 一次性穿过手写类型。Vite 会把 JSON 推成巨型字面量类型，
   // 让它进类型系统会把 tsc 拖垮，也会让 types/ 失去「契约」的意义。
   return hit as T
+}
+
+type LegacyArtifact = Omit<Artifact, 'display_freshness' | 'condition'>
+type LegacyStyle = Omit<Stage3Style, 'condition'>
+type LegacyNovel = Omit<
+  NovelOverview,
+  'stages' | 'stage_done' | 'stage_reviewable' | 'chapters_done' | 'summary'
+> & {
+  stages: Record<string, LegacyArtifact[]>
+  stage_done?: Record<string, boolean | null>
+  chapters_done?: Record<string, Record<string, number[]>>
+}
+
+const PIPELINE_STAGES = Array.from({ length: 8 }, (_, i) => 'stage' + i)
+
+function currentMockStyle(legacy: LegacyStyle): Stage3Style {
+  return {
+    ...legacy,
+    condition: legacy.invalid_exists
+      ? 'invalid'
+      : !legacy.exists
+        ? 'missing'
+        : legacy.readable === false
+          ? 'unreadable'
+          : 'ready',
+  }
+}
+
+/** 冻结 mock 的旧业务推导只准留在这个假后端；屏幕与真实数据缝不兼容旧形状。 */
+function currentMockNovel(legacy: LegacyNovel): NovelOverview {
+  const stages: Record<string, Artifact[]> = {}
+  const stageDone: Record<string, boolean | null> = {}
+  const stageReviewable: Record<string, boolean> = {}
+  const modes = legacy.stage5_modes.filter((mode) => !mode.startsWith('_'))
+
+  for (const stage of PIPELINE_STAGES) {
+    const artifacts = (legacy.stages[stage] ?? []).map<Artifact>((artifact) => ({
+      ...artifact,
+      display_freshness: artifact.exists ? artifact.freshness : 'missing',
+      condition: artifact.invalid
+        ? 'invalid'
+        : !artifact.exists
+          ? 'missing'
+          : artifact.readable === false
+            ? 'unreadable'
+            : 'ready',
+    }))
+    stages[stage] = artifacts
+    const declared = legacy.stage_done?.[stage]
+    const done =
+      declared !== undefined
+        ? declared
+        : stage === 'stage5'
+          ? modes.length > 0
+          : artifacts.length
+            ? artifacts.every(
+                (artifact) =>
+                  artifact.condition === 'ready' && artifact.display_freshness !== 'stale',
+              )
+            : false
+    stageDone[stage] = done
+    stageReviewable[stage] =
+      done === true ||
+      (stage === 'stage5'
+        ? modes.length > 0
+        : artifacts.some((artifact) => artifact.exists && artifact.readable !== false))
+  }
+
+  const all = Object.values(stages).flat()
+  const broken = all.filter(
+    (artifact) => artifact.condition === 'invalid' || artifact.condition === 'unreadable',
+  )
+  const stale = all.filter((artifact) => artifact.display_freshness === 'stale')
+  const unknown = all.filter(
+    (artifact) => artifact.exists && artifact.display_freshness === 'unknown',
+  )
+  const missing = all.filter((artifact) => artifact.display_freshness === 'missing')
+  const pending = PIPELINE_STAGES.find((stage) => stageDone[stage] === false)
+  const unknownStages = PIPELINE_STAGES.filter((stage) => stageDone[stage] === null)
+  const existing = all.filter((artifact) => artifact.exists)
+
+  let verdict: NovelOverview['summary']['verdict']
+  let text: string
+  let detail: string
+  if (broken.length) {
+    ;[verdict, text, detail] = [
+      'broken',
+      broken.length + ' 份产物不可用',
+      '盘上存在，但当前版本读不回来或已被隔离',
+    ]
+  } else if (stale.length) {
+    ;[verdict, text, detail] = ['stale', stale.length + ' 份过期', '上游变了，下游要重跑']
+  } else if (pending) {
+    ;[verdict, text, detail] = ['pending', '待继续', '下一步：' + pending]
+  } else if (unknown.length) {
+    ;[verdict, text, detail] = [
+      'unknown',
+      unknown.length + ' 份无从判断',
+      missing.length ? missing.length + ' 份尚未落盘' : '其余产物新鲜',
+    ]
+  } else if (unknownStages.length) {
+    ;[verdict, text, detail] = [
+      'unknown',
+      unknownStages.length + ' 层完成度判不了',
+      '不是没跑，需要打开书逐层确认',
+    ]
+  } else {
+    ;[verdict, text, detail] = [
+      'complete',
+      '全链已有产物',
+      existing.length + ' 份产物可读',
+    ]
+  }
+
+  return {
+    ...legacy,
+    stages,
+    stage5_modes: modes,
+    stage_done: stageDone,
+    stage_reviewable: stageReviewable,
+    chapters_done: legacy.chapters_done ?? {},
+    summary: {
+      verdict,
+      text,
+      detail,
+      artifact_count: existing.length,
+      latest_mtime: Math.max(0, ...existing.map((artifact) => artifact.mtime ?? 0)) || null,
+    },
+  }
+}
+
+function mockNovels(): NovelsResponse {
+  const legacy = raw<{ base: string; novels: LegacyNovel[] }>('novels.json')
+  return { base: legacy.base, novels: legacy.novels.map(currentMockNovel) }
 }
 
 /* ------------------------------------------------- backend_v1（现役数据源） */
@@ -546,9 +680,12 @@ function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
 /* ------------------------------------------------------------------ Api */
 
 export const mockApi: Api = {
-  getNovels: () => later(raw<NovelsResponse>('novels.json')),
+  getNovels: () => later(mockNovels()),
 
-  getNovel: (sid) => bookOnly(sid, `/novels/${sid}`, () => raw<NovelOverview>('novel_overview.json')),
+  getNovel: (sid) =>
+    bookOnly(sid, `/novels/${sid}`, () =>
+      currentMockNovel(raw<LegacyNovel>('novel_overview.json')),
+    ),
 
   // 进度屏在 stage0.remove 前就要能开（书目录可能还没建）——任何 sid 都给静态样例，不走 bookOnly
   getRunProgress: (sid) => later(mockRunProgress(sid)),
@@ -613,7 +750,9 @@ export const mockApi: Api = {
     bookOnly(sid, `/novels/${sid}/stage2/global`, () => fx<Stage2Global>('global.json')),
 
   getStyle: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage3/style`, () => fx<Stage3Style>('style.json')),
+    bookOnly(sid, `/novels/${sid}/stage3/style`, () =>
+      currentMockStyle(fx<LegacyStyle>('style.json')),
+    ),
 
   getStage4: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/stage4/${o}`, () => fx<Stage4Response>('stage4_ch3.json')),
@@ -692,6 +831,37 @@ export const mockApi: Api = {
       offset: j.log.length,
       done: j.state !== 'running',
     })
+  },
+
+  streamJobLog: (id, offset, sink) => {
+    let closed = false
+    let cursor = offset
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const encoder = new TextEncoder()
+    const decoder = new TextDecoder()
+    const pump = () => {
+      if (closed) return
+      const j = JOBS.find((x) => x.id === id)
+      if (!j) {
+        sink.onError(new ApiError('notfound', '/jobs/' + id + '/stream'))
+        return
+      }
+      const bytes = encoder.encode(j.log.length ? j.log.join('\n') + '\n' : '')
+      const text = decoder.decode(bytes.slice(cursor))
+      cursor = bytes.length
+      sink.onEvent({
+        text,
+        next_byte: cursor,
+        done: j.state !== 'running',
+        state: j.state === 'running' ? null : j.state,
+      })
+      if (!closed && j.state === 'running') timer = setTimeout(pump, 80)
+    }
+    timer = setTimeout(pump, 0)
+    return () => {
+      closed = true
+      if (timer !== undefined) clearTimeout(timer)
+    }
   },
 
   previewJob: (req) =>

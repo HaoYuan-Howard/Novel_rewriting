@@ -25,8 +25,9 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
-    AGENT_RUN_EVENT_KINDS, BEACON_STATES, FRESHNESS, FRESHNESS_REASON,
-    JOB_EVENT_KINDS, JOB_STATE, NODES, PROGRESS_PHASES, STAGES,
+    AGENT_RUN_EVENT_KINDS, ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
+    FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
+    OVERVIEW_VERDICT, PROGRESS_PHASES, STAGES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
 
@@ -35,6 +36,9 @@ JobState = Literal[JOB_STATE]
 JobEventKind = Literal[JOB_EVENT_KINDS]
 Freshness = Literal[FRESHNESS]
 FreshnessReason = Literal[FRESHNESS_REASON]
+ArtifactDisplay = Literal[ARTIFACT_DISPLAY]
+ArtifactCondition = Literal[ARTIFACT_CONDITION]
+OverviewVerdict = Literal[OVERVIEW_VERDICT]
 ProgressPhase = Literal[PROGRESS_PHASES]
 BeaconState = Literal[BEACON_STATES]
 
@@ -105,7 +109,7 @@ class JobStart(StrictModel):
     #: `sys.version`。哪版解释器跑的。
     python: str = Field(min_length=1)
 
-    #: `git describe --always --dirty`。哪版代码跑的（同 `_provenance.code`，全链一个实现）。
+    #: 完整提交 + 可选脏树内容摘要。哪版代码跑的（同 `_provenance.code`，全链一个实现）。
     code: str = Field(min_length=1)
 
     #: 整个作业花不花钱 / 写不写盘 = 任一步花钱 / 写盘。
@@ -419,6 +423,8 @@ class ArtifactState(StrictModel):
     mtime: int | None
 
     freshness: Freshness
+    #: 前端直接显示的四态；`missing` 在这里合并，不由 `!exists` 另算一遍。
+    display_freshness: ArtifactDisplay
     #: **用 id 不用措辞**（同 `STAGE0_WARNINGS` 的理由）：报告不在逐字节验收范围内，
     #: 拿字符串前缀认原因会随一次措辞改动静默断掉。
     reason: FreshnessReason
@@ -433,6 +439,9 @@ class ArtifactState(StrictModel):
     #: 能不能按**当前** schema 加载。
     readable: bool = True
 
+    #: 缺席/可用/隔离/读不回。界面只按这个 id 选文案，不再组合 exists/invalid/readable。
+    condition: ArtifactCondition
+
     @model_validator(mode='after')
     def _absent_artifacts_carry_nothing(self) -> ArtifactState:
         if not self.exists and (self.bytes is not None or self.mtime is not None):
@@ -441,6 +450,17 @@ class ArtifactState(StrictModel):
             raise ValueError(
                 f'{self.rel}: 不在盘上的产物只能是 unknown，实得 {self.freshness!r}。'
                 f'「没有它」不是「它是新的」')
+        want_display = 'missing' if not self.exists else self.freshness
+        if self.display_freshness != want_display:
+            raise ValueError(
+                f'{self.rel}: display_freshness={self.display_freshness!r}，'
+                f'按文件与来源状态应为 {want_display!r}')
+        want_condition = ('invalid' if self.invalid else
+                          'missing' if not self.exists else
+                          'unreadable' if not self.readable else 'ready')
+        if self.condition != want_condition:
+            raise ValueError(
+                f'{self.rel}: condition={self.condition!r}，按载体状态应为 {want_condition!r}')
         return self
 
 
@@ -472,6 +492,9 @@ class StageState(StrictModel):
     #: 把被拦下的那份数进去就把语义反过来了。
     chapters_done: dict[str, list[int]] = Field(default_factory=dict)
 
+    #: 只读导航能否进入。它不是运行闸门；运行/定稿仍看 approvals。
+    reviewable: bool
+
     @model_validator(mode='after')
     def _done_matches_the_artifacts(self) -> StageState:
         """折叠规则只有一处算——**第二处必然分家**。
@@ -498,6 +521,16 @@ class StageState(StrictModel):
         return self
 
 
+class OverviewSummary(StrictModel):
+    """语料库卡片顶部那一句。业务优先级与计数都由服务端折叠。"""
+
+    verdict: OverviewVerdict
+    text: str = Field(min_length=1)
+    detail: str = Field(min_length=1)
+    artifact_count: int = Field(ge=0)
+    latest_mtime: int | None
+
+
 class NovelOverview(StrictModel):
     """一本书跑到哪了。**由产物存在性 + 来源新鲜度判定，不靠进度文件**（`R-14.1`）。"""
 
@@ -509,6 +542,8 @@ class NovelOverview(StrictModel):
 
     #: glob `stage5/*` 得到的目录名。stage5 的粒度是**章**（`R-14.2`）。
     stage5_modes: list[str] = Field(default_factory=list)
+
+    summary: OverviewSummary
 
 
 # ─────────────────────────────────────────────────────────────────────────────

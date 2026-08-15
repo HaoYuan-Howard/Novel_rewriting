@@ -92,8 +92,7 @@ def test_measure_only_writes_nothing_and_matches_what_is_on_disk(box):
     assert {p: p.read_bytes() for p in box.dir.rglob('*.json')} == before, \
         '`--measure-only` 不许写盘'
 
-    stored = StyleGrounding.model_validate(
-        json.loads((box.dir / 'stage3' / 'style_grounding.json').read_text('utf-8')))
+    stored = StyleGrounding.model_validate(box.read('stage3/style_grounding.json'))
     from novel.core.measure import drift
     diff = [d for scope in ('body', 'hook')
             for d in drift(getattr(stored.measurable, scope), getattr(meas, scope))]
@@ -108,11 +107,11 @@ def test_remeasure_writes_back_and_marks_the_artifact_as_mixed_version(box):
     继承 `prompts` / `model`（那次付费产出仍然是它们记的）· 换掉 `inputs`
     （本次真读到的那几份）· 标 `partial_rewrite`（让混版这件事看得见）。
     """
-    before = json.loads((box.dir / 'stage3' / 'style_grounding.json').read_text('utf-8'))
+    before = box.read('stage3/style_grounding.json')
     written, diff, report = style.run_remeasure(box.ctx())
 
     assert diff == [], f'语料没动过，重算不该有差异：{diff}'
-    after = json.loads((box.dir / 'stage3' / 'style_grounding.json').read_text('utf-8'))
+    after = box.read('stage3/style_grounding.json')
     assert after != before, '`--remeasure` 是**会写盘**的 0 成本路'
 
     old, new = before['_provenance'], after['_provenance']
@@ -135,9 +134,9 @@ def test_remeasure_writes_back_and_marks_the_artifact_as_mixed_version(box):
 
 def test_remeasure_does_not_touch_anything_else_in_the_artifact(box):
     """「其余字段不动」是本条的字面承诺，逐键对一遍。"""
-    before = json.loads((box.dir / 'stage3' / 'style_grounding.json').read_text('utf-8'))
+    before = box.read('stage3/style_grounding.json')
     style.run_remeasure(box.ctx())
-    after = json.loads((box.dir / 'stage3' / 'style_grounding.json').read_text('utf-8'))
+    after = box.read('stage3/style_grounding.json')
     for k in set(before) | set(after):
         if k in ('measurable', '_provenance'):
             continue
@@ -158,10 +157,9 @@ def _leak_a_real_name(box: Box) -> str:
     ⚠ 用真名而不是随手编一个：判据查的是 stage2 名表里的专名，
     编一个名字命不中，那条测试就会变成「构造不出反例」的假绿。
     """
-    gg = GlobalGrounding.model_validate(
-        json.loads((box.dir / 'stage2' / 'global_grounding.json').read_text('utf-8')))
+    gg = GlobalGrounding.model_validate(box.read('stage2/global_grounding.json'))
     name = sorted(names_of(gg))[0]
-    data = json.loads((box.dir / 'stage3' / 'style_grounding.json').read_text('utf-8'))
+    data = box.read('stage3/style_grounding.json')
     data['voice']['register_tone'] = f'{data["voice"]["register_tone"]}（例如{name}那几段）'
     (box.dir / 'stage3' / 'style_grounding.INVALID.json').write_text(
         json.dumps(data, ensure_ascii=False), encoding='utf-8')
@@ -189,7 +187,7 @@ def test_revalidate_promotes_a_draft_that_now_passes(box):
     assert promoted is True, [r.rule for r in report.rules if r.status == 'hit']
     assert src.is_file(), '合格就该成为正式产物'
     assert not bad.exists(), '`.INVALID` 该被挪走'
-    prov = json.loads(src.read_text('utf-8'))['_provenance']
+    prov = box.read('stage3/style_grounding.json')['_provenance']
     assert prov['revalidated'] is True
     assert 'origin' not in prov, \
         '⚠ 提升路**刻意不宣称 `origin=human`**：「判据改了」与「人手改过」在这一侧分不开'
@@ -223,8 +221,7 @@ def test_the_gate_and_the_promotion_path_share_one_judge(box):
     _promoted, report = style.run_revalidate(box.ctx())
     bad = {r.rule for r in report.rules if r.status == 'hit' and r.sev == 'hard'}
 
-    data = json.loads(
-        (box.dir / 'stage3' / 'style_grounding.INVALID.json').read_text('utf-8'))
+    data = box.read('stage3/style_grounding.INVALID.json')
     store = ArtifactStore(box.ctx())
     gate = style._judge(store, data, measured_now=None)
     assert {o.rule for o in gate
@@ -237,16 +234,15 @@ def test_remeasure_blocks_only_newly_introduced_errors(box):
     这里把一条 HARD 违规写进**正式产物**：重算前它就在，所以 `--remeasure` 照跑不误。
     """
     p = box.dir / 'stage3' / 'style_grounding.json'
-    gg = GlobalGrounding.model_validate(
-        json.loads((box.dir / 'stage2' / 'global_grounding.json').read_text('utf-8')))
-    data = json.loads(p.read_text('utf-8'))
+    gg = GlobalGrounding.model_validate(box.read('stage2/global_grounding.json'))
+    data = box.read('stage3/style_grounding.json')
     data['voice']['register_tone'] += f'（例如{sorted(names_of(gg))[0]}那几段）'
     p.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
 
     _written, _diff, report = style.run_remeasure(box.ctx())
     assert 'name_leak' in {r.rule for r in report.rules
                            if r.status == 'hit' and r.sev == 'hard'}, '旧违约要照报'
-    assert json.loads(p.read_text('utf-8'))['_provenance']['partial_rewrite'] == '--remeasure', \
+    assert box.read('stage3/style_grounding.json')['_provenance']['partial_rewrite'] == '--remeasure', \
         '旧违约不该挡住重算这条路'
 
 
@@ -261,8 +257,7 @@ def test_a_newly_introduced_error_does_block_the_write(box):
 
     def poisoned(ctx):
         art, diff = real(ctx)
-        gg = GlobalGrounding.model_validate(
-            json.loads((box.dir / 'stage2' / 'global_grounding.json').read_text('utf-8')))
+        gg = GlobalGrounding.model_validate(box.read('stage2/global_grounding.json'))
         v = art.voice.model_copy(
             update={'register_tone': f'{art.voice.register_tone}（{sorted(names_of(gg))[0]}）'})
         return art.model_copy(update={'voice': v}), diff

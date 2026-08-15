@@ -105,13 +105,8 @@ export function Rail({
             const ok = !!(doc && gk && doc.gate[gk])
             const lock = RAIL_LOCK[r.screen]
             const stage = SCREEN_STAGE[r.screen]
-            const artifacts = stage ? (overview.data?.stages[stage] ?? []) : []
             const stageDone = stage ? overview.data?.stage_done?.[stage] : undefined
-            const hasArtifact =
-              !!stage &&
-              (stageDone === true ||
-                artifacts.some((artifact) => artifact.exists && artifact.readable !== false) ||
-                (stage === 'stage5' && !!overview.data?.stage5_modes.length))
+            const hasArtifact = !!stage && overview.data?.stage_reviewable[stage] === true
             // 已有真实产物时允许只读审阅；继续运行和定稿仍由 GateBar 按审批记录拦住。
             const locked = !!(doc && lock && !doc.gate[lock.need] && !hasArtifact)
             const reviewable = hasArtifact && !ok

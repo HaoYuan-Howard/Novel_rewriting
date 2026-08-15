@@ -39,8 +39,8 @@ export interface FreshnessToken {
 /**
  * 产物新鲜度三态。
  * unknown 必须与 fresh 一眼可分 —— 画成同一个绿点就等于替用户宣布「已验证」。
- * `missing`（不在盘上）是显示用的第四态，由 freshnessOf() 从 exists:false 推出来，
- * 推导只在这一处发生。
+ * `missing`（不在盘上）是服务端 ArtifactState 直接下发的显示第四态，
+ * 前端不再拿 `!exists` 重算业务状态。
  */
 export const FRESH: Record<Freshness, FreshnessToken> = {
   fresh: {
@@ -79,11 +79,6 @@ export const MISSING: FreshnessToken = {
 }
 
 export type FreshnessDisplay = Freshness | 'missing'
-
-/** exists:false → 'missing'。整个前端只有这一处做这个推导。 */
-export function freshnessOf(a: { exists: boolean; freshness: Freshness }): FreshnessDisplay {
-  return a.exists ? a.freshness : 'missing'
-}
 
 export function freshToken(f: FreshnessDisplay): FreshnessToken {
   return f === 'missing' ? MISSING : (FRESH[f] ?? FRESH.unknown)

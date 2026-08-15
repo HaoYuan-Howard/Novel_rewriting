@@ -31,10 +31,12 @@ inbox.py —— 「待人工」六类清单的**生产者**（BE-04 第一条；
 """
 from __future__ import annotations
 
+from contracts.artifacts import STAGE6_HOOK, STAGE7_NAME_MAP, artifact_rel
+
 import os
 import re
 
-from contracts.invariants import NODES, STAGES, STOP_REWRITE_AFTER
+from contracts.invariants import DEPTH_MODES, NODES, STAGES, STOP_REWRITE_AFTER
 from contracts.schema.api import InboxItem, InboxView
 from contracts.schema.report import CheckReport
 from contracts.schema.stage6 import Hook
@@ -104,11 +106,17 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
         # 「有人看过并决定不修」是**逐层各一份账**（2026-08-15 裁决：层由文件路径承载）
         # ⇒ 计数要跨层求和。⚠ 只数一次不数两次：`_stage5_stalled`
         #   从此只交 stalled，不再自己数 stage5 那一份。
-        wontfix_total += len(wontfix.load(store, stage))
+        try:
+            wontfix_total += len(wontfix.load(store, stage))
+        except ArtifactUnreadable:
+            # 一份旧豁免账不该让整本待办清单终态；该文件仍会在产物矩阵里显示
+            # unreadable。这里不猜它有几条，按 0 聚合，保留其余层可用的待办。
+            pass
 
         items += _invalid_items(store, stage)
         if stage == 'stage5':
             items += _stage5_chapter_invalids(store)
+            items += _stage5_rejected_revisions(store)
             items += _stage5_stalled(store)
 
         report = _report_of(ctx, stage)
@@ -200,6 +208,35 @@ def _stage5_chapter_invalids(store: ArtifactStore) -> list[InboxItem]:
     return out
 
 
+def _stage5_rejected_revisions(store: ArtifactStore) -> list[InboxItem]:
+    """列出修订退化证据；它与 `.INVALID` 是两种不同的 rejected。"""
+    from contracts.schema.stage5 import RejectedRevision
+
+    out: list[InboxItem] = []
+    for mode in DEPTH_MODES:
+        directory_rel = artifact_rel('stage5.chapter', mode=mode, nn=1).rsplit('/', 1)[0]
+        directory = store.path(directory_rel)
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob('ch*.rejected.json')):
+            rel = f'{directory_rel}/{path.name}'
+            match = _CH_RX.search(path.name)
+            chapter = int(match.group(1)) if match else None
+            try:
+                artifact, _raw = store.read_own(RejectedRevision, rel)
+            except ArtifactUnreadable:
+                continue
+            out.append(InboxItem(
+                kind='rejected', stage='stage5', chapter=chapter,
+                rule='stage5.write',
+                what=(f'{rel}：两次修订候选都相对旧正式稿退化；'
+                      f'旧稿未覆盖。{artifact.why[0]}'),
+                how=(f'检查该文件的 {len(artifact.attempts)} 份候选；人工改好后跑 '
+                     f'`stage5.write --mode {mode} --apply-edit <chNN.txt>`，'
+                     f'或在确认修复方向后用 `--revise --chapters {chapter}` 再采样')))
+    return out
+
+
 def _stage5_stalled(store: ArtifactStore) -> list[InboxItem]:
     """连续 N 轮未消、修复已判「根因不在写手」主动跳过的那些。
 
@@ -266,9 +303,9 @@ def _approval_items(novel_dir, code: str) -> list[InboxItem]:
     out: list[InboxItem] = []
 
     store6 = ArtifactStore(readonly_ctx(novel_dir, 'stage6.hook', code))
-    if store6.exists('stage6/hook.json'):
+    if store6.exists(STAGE6_HOOK):
         try:
-            art, _raw = store6.read_own(Hook, 'stage6/hook.json')
+            art, _raw = store6.read_own(Hook, STAGE6_HOOK)
         except ArtifactUnreadable:
             art = None
         if art is not None and art.approved is None:
@@ -278,9 +315,9 @@ def _approval_items(novel_dir, code: str) -> list[InboxItem]:
                 how='跑 `stage6.approve --pick N`（1 起）；语义/机械判据结论在文案屏可查'))
 
     store7 = ArtifactStore(readonly_ctx(novel_dir, 'stage7.rename', code))
-    if store7.exists('stage7/name_map.json'):
+    if store7.exists(STAGE7_NAME_MAP):
         try:
-            art7, _raw = store7.read_own(NameMap, 'stage7/name_map.json')
+            art7, _raw = store7.read_own(NameMap, STAGE7_NAME_MAP)
         except ArtifactUnreadable:
             art7 = None
         if art7 is not None and art7.approved is None:

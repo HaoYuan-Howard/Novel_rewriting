@@ -22,6 +22,8 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 """
 from __future__ import annotations
 
+from contracts.artifacts import STAGE0_REMOVAL_REPORT, STAGE6_HOOK, STAGE7_NAME_MAP
+
 import json
 import os
 import threading
@@ -110,9 +112,9 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
     already approved book while still leaving the actual decision to a human.
     """
     model_rel = {
-        'stage0.approve': (RemovalReport, 'stage0/removal_report.json'),
-        'stage6.approve': (Hook, 'stage6/hook.json'),
-        'stage7.approve': (NameMap, 'stage7/name_map.json'),
+        'stage0.approve': (RemovalReport, STAGE0_REMOVAL_REPORT),
+        'stage6.approve': (Hook, STAGE6_HOOK),
+        'stage7.approve': (NameMap, STAGE7_NAME_MAP),
     }.get(node)
     if model_rel is None:
         return False

@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+from contracts.artifacts import STAGE6_SEMANTIC
+
 import glob
 import json
 import os
@@ -36,7 +38,7 @@ from novel.run import RunContext
 from novel.stages.stage6 import hook
 from novel.store import ArtifactStore
 
-SEMANTIC_TPL = 'stage6/semantic_{n}.json'
+SEMANTIC_TPL = STAGE6_SEMANTIC
 _SEMANTIC_RX = re.compile(r'^semantic_(\d+)\.json$')
 
 #: 固定权重是契约，不让模型自报总分。惩罚项为负权重。

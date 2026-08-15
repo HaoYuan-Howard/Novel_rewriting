@@ -20,7 +20,7 @@ from tests import corpus
 
 
 def _by_rel(rel: str) -> dict[str, object]:
-    return {a.source_id: corpus.load_raw(a) for a in corpus.iter_artifacts() if a.rel == rel}
+    return {a.source_id: corpus.load_current(a) for a in corpus.iter_artifacts() if a.rel == rel}
 
 
 MAIN = _by_rel('stage1/main_text.json')

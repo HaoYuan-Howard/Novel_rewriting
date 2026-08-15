@@ -370,6 +370,8 @@ export interface Stage3Style {
   title: string
   /** false = stage3 还没跑。左半边（实测）仍然有内容。 */
   exists: boolean
+  /** 后端已经折叠好优先级；界面不从下面三个原始事实再判一次。 */
+  condition: 'missing' | 'ready' | 'invalid' | 'unreadable'
   invalid_exists: boolean
   /** 三态：null = 产物不在盘上，「读不读得回来」无从谈起 */
   readable: boolean | null
@@ -495,6 +497,9 @@ export interface DraftAlign {
   rows: number
   inversions: number
   coverage: number
+  /** 旧服务缺字段时屏幕必须显示 unknown，不能按 coverage 自行补判。 */
+  coverage_threshold?: number
+  coverage_state?: 'low' | 'adequate'
   /** 常驻：这是对应关系，不是判定 */
   note: string
 }

@@ -18,6 +18,8 @@ stage7.py —— S-12「人名替换 + 成书」那一屏（`GET /api/novels/:si
 """
 from __future__ import annotations
 
+from contracts.artifacts import STAGE6_HOOK, STAGE7_BOOK, STAGE7_NAME_MAP
+
 import os
 import re
 
@@ -34,9 +36,9 @@ from novel.stages.stage7.subs import apply_subs, sub_table
 from novel.store import ArtifactStore
 
 NODE = 'stage7.rename'
-REL = 'stage7/name_map.json'
-BOOK_TXT = 'stage7/book.txt'
-HOOK_REL = 'stage6/hook.json'
+REL = STAGE7_NAME_MAP
+BOOK_TXT = STAGE7_BOOK
+HOOK_REL = STAGE6_HOOK
 
 
 def stage7_view(base: str | os.PathLike[str], sid: str,

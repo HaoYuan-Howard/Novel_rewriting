@@ -14,10 +14,14 @@ style.py —— 本层的**节点函数**。`argv` 那一头留给 Phase D（`bu
 """
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING,
+    STAGE3_STYLE_EDIT, STAGE3_STYLE_GROUNDING,
+)
+
 import copy
 import json
 
-from contracts.schema.common import Usage
 from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage2 import GlobalGrounding
@@ -30,6 +34,7 @@ from novel.core.naming import names_of, spoiler_names_of
 from novel.core.text import norm
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
+from novel.llm.ledger import combine_usage
 from novel.prov import fingerprint
 from novel.report import build
 from novel.run import RunContext
@@ -37,13 +42,13 @@ from novel.stages.stage3 import checks, prompts
 from novel.stages.stage3.measure import corpus_of, measure_all
 from novel.store import ArtifactStore
 
-REL = 'stage3/style_grounding.json'
-MAIN_TEXT = 'stage1/main_text.json'
-HOOK_COPY = 'stage1/hook_copy.json'
-GLOBAL_GROUNDING = 'stage2/global_grounding.json'
+REL = STAGE3_STYLE_GROUNDING
+MAIN_TEXT = STAGE1_MAIN_TEXT
+HOOK_COPY = STAGE1_HOOK_COPY
+GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
 
 #: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `StyleEdit`）。
-EDIT = 'stage3/style_edit.json'
+EDIT = STAGE3_STYLE_EDIT
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串**——
 #: 手写的那份会在改文件名时安静地指向一个不存在的路径。
@@ -329,22 +334,6 @@ def _outcome_evidence(outcomes, *, exclude: frozenset[str] = frozenset()) -> dic
     }
 
 
-def _usage_sum(left: Usage | None, right: Usage | None) -> Usage | None:
-    """两轮共同产出一份制品；任一轮没报某类 token 时总量也诚实保留 ``null``。"""
-    if left is None:
-        return right
-    if right is None:
-        return left
-    token_fields = ('prompt_tokens', 'completion_tokens', 'reasoning_tokens')
-    tokens = {
-        field: (None if getattr(left, field) is None or getattr(right, field) is None
-                else getattr(left, field) + getattr(right, field))
-        for field in token_fields
-    }
-    return Usage(calls_made=left.calls_made + right.calls_made,
-                 calls_cached=left.calls_cached + right.calls_cached, **tokens)
-
-
 def _habit_repair_candidate(
     ctx: RunContext,
 ) -> tuple[ArtifactStore, StyleGrounding, dict, list, list[str], Measurable]:
@@ -456,7 +445,7 @@ def run_repair_surface_habits(
         'prompts': {**old.prompts, **fresh.prompts},
         # 顶层 model 仍说明首轮主产物；第二轮模型逐次记在 attempt 上。
         'model': old.model,
-        'usage': _usage_sum(old.usage, fresh.usage),
+        'usage': combine_usage(old.usage, fresh.usage),
         'attempts': [*old.attempts, attempt],
         'gates_skipped': None,
         'revalidated': None,

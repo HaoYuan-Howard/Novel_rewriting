@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from contracts.schema import decode_artifact
 from contracts.rules import REGISTRY
 from novel.stages.stage5 import checks, measure as M, prompts
 from tests import corpus
@@ -532,7 +533,9 @@ def test_wontfix_lands_and_never_deletes_the_conclusion(box):
     f = row['findings'][0]
     spec = f"{row['output_ordinal']}|{f['rule']}|{f['evidence_key']}=这本书就这么写"
     assert _run('run', 'stage5.review', sid, '--wontfix', spec, '--base', str(root)) == X.OK
-    wf = json.loads((root / _BOOK / 'stage5' / 'wontfix.json').read_text(encoding='utf-8'))
+    rel = 'stage5/wontfix.json'
+    raw_wf = json.loads((root / _BOOK / rel).read_text(encoding='utf-8'))
+    wf = decode_artifact(rel, raw_wf).payload
     assert list(wf) == [f"{row['output_ordinal']}|{f['rule']}|{f['evidence_key']}"]
     assert wf[list(wf)[0]]['why'] == '这本书就这么写'
     # 再跑一次验收：那条结论**照样在**，只是 `actionable=False` 且带着 `wontfix`

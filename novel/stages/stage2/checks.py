@@ -27,6 +27,10 @@ checks.py —— 71 条判据的**实现**。行在 `contracts/judges/stage2.py`
 """
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
+)
+
 import re
 import statistics
 from typing import Any, Iterable
@@ -199,9 +203,9 @@ def _alignment(c: _Ctx) -> list[Outcome]:
     # ── `upstream_missing` ────────────────────────────────────────────────
     # ⚠ **缺一份判 FAIL 不判 note**：什么都没查却打 PASS，正是
     #   「一条从不执行的判据与一条不存在的判据在报告上长得一样」那个病。
-    missing = [rel for rel, ok in (('stage2/global_grounding.json', c.has_gg),
-                                   ('stage2/chapter_blueprints.json', c.has_bp),
-                                   ('stage1/main_text.json', c.has_mt)) if not ok]
+    missing = [rel for rel, ok in ((STAGE2_GLOBAL_GROUNDING, c.has_gg),
+                                   (STAGE2_CHAPTER_BLUEPRINTS, c.has_bp),
+                                   (STAGE1_MAIN_TEXT, c.has_mt)) if not ok]
     out.append(ran('upstream_missing', [
         finding('upstream_missing',
                 detail=f'缺 {rel} —— 本层的复检相**两份产物一起读**，'

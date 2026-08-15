@@ -68,6 +68,18 @@ export interface BackendLogChunk {
   next_byte: number
 }
 
+export interface BackendLogStreamEvent {
+  text: string
+  next_byte: number
+  done: boolean
+  state: JobState | null
+}
+
+export interface JobLogStreamSink {
+  onEvent(event: BackendLogStreamEvent): void
+  onError(error: unknown): void
+}
+
 export interface UploadResponse {
   sid: string
   job: Job

@@ -21,7 +21,9 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, Field, RootModel
 
-from contracts.schema import InputEdge, StyleGrounding, Usage
+from contracts.schema import (
+    ArtifactVersionError, InputEdge, StyleGrounding, Usage, decode_artifact,
+)
 from contracts.schema.stage3 import StyleProvenance
 from novel.consumption import CONSUMED_PROJECTIONS, producer_node, projection_for
 from novel.errors import (
@@ -336,7 +338,8 @@ def test_what_we_write_is_what_we_can_read_back():
         '`consumed` 的键被抹掉了——「必填但可为 null」与「三态字段」语义相反，不许一个开关同管'
     assert raw['_provenance']['usage']['prompt_tokens'] is None, \
         '`null` = 这次响应没给 usage，**不是 0**；抹掉这个键，产物就再也加载不回来'
-    StyleGrounding.model_validate(raw)
+    assert raw['_schema_version'] == 1
+    StyleGrounding.model_validate(decode_artifact(STYLE_REL, raw).payload)
 
 
 def _spend(ctx: RunContext, **tokens) -> None:
@@ -1008,7 +1011,10 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
     本条测的是**形状**：这个模型落得下去、读得回来。拿归档路径去写，
     测到的只是「一条没人会走的入口拒收了」。
     """
-    obj = a.model.model_validate(corpus.load_current(a))
+    try:
+        obj = a.model.model_validate(corpus.load_current(a))
+    except ArtifactVersionError as error:
+        pytest.skip(f'旧产物明确不可迁移，需重跑产地：{error}')
 
     base = Path(tempfile.mkdtemp())
     (base / 'roundtrip_1').mkdir(parents=True)
@@ -1017,7 +1023,9 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
 
     p = st.write(a.formal_rel, obj)
     assert b'\r' not in p.read_bytes()
-    assert a.model.model_validate(json.loads(p.read_text(encoding='utf-8'))) == obj, \
+    written = json.loads(p.read_text(encoding='utf-8'))
+    logical = decode_artifact(a.formal_rel, written).payload
+    assert a.model.model_validate(logical) == obj, \
         '读回来的模型与写出去的那一份不等——某个键在落盘形态里被抹掉或改了形状'
 
 

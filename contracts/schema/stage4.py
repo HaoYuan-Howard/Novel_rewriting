@@ -304,6 +304,33 @@ class CtxBeat(StrictModel):
     #: 因果前提，**命题必须成立、不必出现在文面**——按定义查不了文面，恒 `unver`。
     must_hold: list[str] | None = None
 
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_flat_empty_present(cls, value):
+        """旧版平铺拍把「适用但无人」写成 null；当前契约升级为显式空数组。
+
+        ``present=null`` 只保留给走 ``segments`` 的拍，表示顶层在场者不适用。
+        这是一条窄迁移，不对其余可空字段做全局 ``exclude_none`` 或猜测。
+        """
+        if (isinstance(value, dict) and value.get('segments') is None
+                and value.get('time_layer') is not None and value.get('present') is None):
+            return {**value, 'present': []}
+        return value
+
+    @model_validator(mode='after')
+    def _flat_or_segmented_stage(self) -> CtxBeat:
+        if self.segments is None:
+            if self.time_layer is None or self.present is None:
+                raise ValueError(
+                    '平铺拍必须带 time_layer 与 present；无人时 present=[]，不能用 null')
+        else:
+            if not self.segments:
+                raise ValueError('分段拍的 segments 不能为空')
+            if self.time_layer is not None or self.place is not None or self.present is not None:
+                raise ValueError(
+                    '分段拍的顶层 time_layer/place/present 必须为 null；舞台信息只在 segments')
+        return self
+
 
 class ChapterCharacter(StrictModel):
     """章级名册的一个人，**给模型**。盘上 31 章合计 518 项。

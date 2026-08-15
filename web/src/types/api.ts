@@ -13,6 +13,7 @@ import type {
   AgentRunRequest,
   AgentRunsResponse,
 } from './agent'
+import type { JobLogStreamSink } from './jobs'
 import type { EnumsResponse } from './enums'
 import type {
   Job,
@@ -84,6 +85,8 @@ export interface Api {
   /* 作业 */
   getJobs(sid: string): Promise<JobsResponse>
   getJobLog(id: string, offset: number): Promise<JobLogResponse>
+  /** SSE：返回关闭函数；event.next_byte 是 UTF-8 字节 offset。 */
+  streamJobLog(id: string, offset: number, sink: JobLogStreamSink): () => void
   /** 确认框里那条命令由服务端下发，前端不拼 */
   previewJob(req: JobRequest): Promise<JobPreview>
   startJob(req: JobRequest): Promise<Job>

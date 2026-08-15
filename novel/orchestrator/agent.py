@@ -368,7 +368,11 @@ def wait(run_id: str, timeout: float | None = None) -> bool:
 
 
 def stop(base: str | os.PathLike[str], run_id: str) -> AgentRunRecord:
-    """熄火：**付费进程的必备闸**。句柄不在（已结束/别的实例拉的）⇒ 显式终态。"""
+    """熄火：**付费进程的必备闸**。句柄不在（已结束/别的实例拉的）⇒ 显式终态。
+
+    返回前必须确认根进程已经退出。只调用 ``taskkill`` 而忽略退出码会把“发过停止命令”
+    误报成“已经熄火”；受限 Windows 会话里该命令可能失败，而付费进程仍继续运行。
+    """
     with _PROCS_LOCK:
         proc = _PROCS.get(run_id)
     if proc is None:
@@ -376,10 +380,23 @@ def stop(base: str | os.PathLike[str], run_id: str) -> AgentRunRecord:
             f'run_id={run_id!r} 没有在跑的子进程（已结束，或服务重启后句柄已丢）')
     if os.name == 'nt':
         # /T 整棵树（cmd → node → agent 起的 novel.cli 孙进程），/F 强制。
-        subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
-                       capture_output=True)
+        killed = subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
+                                capture_output=True)
+        if killed.returncode != 0 and proc.poll() is None:
+            # 至少保证记在句柄里的付费根进程停下；taskkill 成功时仍由 /T 负责整棵树。
+            proc.kill()
     else:
         proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired as exc:
+            raise JobConflict(
+                f'run_id={run_id!r} 已发熄火命令，但进程 {proc.pid} 仍未退出；'
+                '不能把“发过命令”误报成“已经熄火”') from exc
     rec = next((r for r in records(base) if r.run_id == run_id), None)
     if rec is None:
         raise UpstreamMissing(f'没有 run_id={run_id!r} 的 agent 代跑记录')

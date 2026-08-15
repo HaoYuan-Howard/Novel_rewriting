@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
 
@@ -111,10 +112,11 @@ def test_original_read_and_preview_endpoints_answer(client, app, box):
         '/api/jobs': ('get', '/api/jobs', None),
         '/api/jobs/{job_id}': ('get', f'/api/jobs/{job_id}', None),
         '/api/jobs/{job_id}/log': ('get', f'/api/jobs/{job_id}/log', None),
+        '/api/jobs/{job_id}/stream': ('get', f'/api/jobs/{job_id}/stream', None),
         '/api/jobs/preview': ('post', '/api/jobs/preview',
                               {'sid': box.sid, 'node': 'stage3.style'}),
     }
-    assert len(hit) == 9 and set(hit) <= set(_surface(app))
+    assert len(hit) == 10 and set(hit) <= set(_surface(app))
     for method, url, body in hit.values():
         r = getattr(client, method)(url, **({'json': body} if body else {}))
         assert r.status_code == 200, f'{method.upper()} {url} → {r.status_code} {r.text[:200]}'
@@ -283,6 +285,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/jobs': ['GET', 'POST'],
         '/api/jobs/{job_id}': ['GET'],
             '/api/jobs/{job_id}/log': ['GET'],
+            '/api/jobs/{job_id}/stream': ['GET'],
             '/api/jobs/preview': ['POST'],
             '/api/queues': ['GET', 'POST'],
             '/api/queues/preview': ['POST'],
@@ -424,6 +427,40 @@ def test_a_job_from_a_previous_process_reads_as_unknown(client, box):
     assert client.get(f'/api/jobs/{job_id}').json()['state'] == 'unknown'
 
 
+def test_http_start_runs_a_real_failing_subprocess_and_records_its_final_state(
+        client, box, monkeypatch):
+    """TODO-14：HTTP 入口不能只证明“能创建 running 记录”。
+
+    这里让公共启动端点真正拉起一个退出码为 7 的子进程，再从公共详情端点读取
+    最终盘面；因此同时覆盖 HTTP → 后台线程 → Popen → append-only 事件/日志。
+    """
+    from contracts.schema.orchestration import Step
+
+    marker = 'synthetic-child-failure'
+    step = Step(
+        argv=[sys.executable, '-c',
+              f'import sys; print({marker!r}); sys.exit(7)'],
+        cwd=str(box.root), label='synthetic failing subprocess',
+        paid=False, writes='',
+    )
+    monkeypatch.setattr(J, 'build_steps', lambda *_a, **_kw: [step])
+
+    started = client.post('/api/jobs', json={
+        'sid': box.sid, 'node': 'stage3.style', 'flags': [],
+    })
+    assert started.status_code == 202, started.text
+    job_id = started.json()['job_id']
+    assert J.wait(job_id, 10), 'synthetic child did not terminate'
+
+    final = client.get(f'/api/jobs/{job_id}')
+    assert final.status_code == 200
+    record = final.json()
+    assert (record['state'], record['exit_code'], record['steps_started']) == (
+        'failed', 7, 1)
+    log = client.get(f'/api/jobs/{job_id}/log').json()['text']
+    assert marker in log
+
+
 def test_the_job_log_endpoint_tells_missing_from_silent(client, box):
     """⚠ 一个**不存在的** job_id 直接读日志会拿到「空文本 + offset 原样」——
 
@@ -433,6 +470,32 @@ def test_the_job_log_endpoint_tells_missing_from_silent(client, box):
     job_id = _fake_started(box.root, box.sid)
     r = client.get(f'/api/jobs/{job_id}/log')
     assert r.status_code == 200 and r.json() == {'text': '', 'next_byte': 0}
+
+
+def test_job_log_sse_resumes_by_byte_without_duplicates_and_releases(client, box):
+    """断线游标取 UTF-8 字节；终态先排空日志、发 end，然后连接必须结束。"""
+    job_id = _fake_started(box.root, box.sid)  # 不在活锁里 ⇒ 明确终态 unknown
+    first = '第一行\n'.encode('utf-8')
+    second = '第二行\n'.encode('utf-8')
+    path = J.log_path(box.root, job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(first + second)
+
+    response = client.get(
+        f'/api/jobs/{job_id}/stream?offset=0',
+        headers={'Last-Event-ID': str(len(first))})
+
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith('text/event-stream')
+    payloads = [json.loads(line.removeprefix('data: '))
+                for line in response.text.splitlines() if line.startswith('data: ')]
+    assert ''.join(item['text'] for item in payloads) == second.decode('utf-8')
+    assert payloads[-1] == {
+        'text': '', 'next_byte': len(first + second),
+        'done': True, 'state': 'unknown',
+    }
+    assert response.text.count('event: end') == 1
+    assert response.text.count('第二行') == 1
 
 
 def test_jobs_can_be_filtered_by_book(client, box):

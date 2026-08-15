@@ -18,6 +18,12 @@ plan.py —— stage4 的两个节点。**一个 stage 两份产物、两个节�
 """
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
+    STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
+    STAGE4_WRITER_CONTEXT_IDENTITY,
+)
+
 from typing import Any
 
 from contracts.schema.report import CheckReport
@@ -35,18 +41,18 @@ from novel.stages.stage4.context import build_writer_context, display_names_at
 from novel.stages.stage4.measure import expand_plan_beats, identity_plan, source_chars_table
 from novel.store import ArtifactStore
 
-REL = 'stage4/plan_chapters.json'
-CTX_REL = 'stage4/writer_context.json'
+REL = STAGE4_PLAN_CHAPTERS
+CTX_REL = STAGE4_WRITER_CONTEXT
 
 #: 恒等基线那一份。⚠ **另一个文件名，不覆盖正式那份**——
 #: 「计划什么都不改时写手手里有什么」与「这一版计划下写手手里有什么」是两个问题。
-IDENTITY_CTX_REL = 'stage4/writer_context.identity.json'
-MAIN_TEXT = 'stage1/main_text.json'
-GLOBAL_GROUNDING = 'stage2/global_grounding.json'
-BLUEPRINTS = 'stage2/chapter_blueprints.json'
+IDENTITY_CTX_REL = STAGE4_WRITER_CONTEXT_IDENTITY
+MAIN_TEXT = STAGE1_MAIN_TEXT
+GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
+BLUEPRINTS = STAGE2_CHAPTER_BLUEPRINTS
 
 #: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `PlanEdit`）。
-EDIT = 'stage4/plan_edit.json'
+EDIT = STAGE4_PLAN_EDIT
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(REL)

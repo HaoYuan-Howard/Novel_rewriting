@@ -12,7 +12,7 @@ from tests import corpus
 
 
 def _by_rel(rel: str) -> dict[str, object]:
-    return {a.source_id: corpus.load_raw(a) for a in corpus.iter_artifacts() if a.rel == rel}
+    return {a.source_id: corpus.load_current(a) for a in corpus.iter_artifacts() if a.rel == rel}
 
 
 MAIN = _by_rel('stage1/main_text.json')
@@ -66,7 +66,7 @@ def test_normalizing_a_stored_draft_changes_nothing():
     """
     unchanged = 0
     for a in DRAFTS:
-        rec = corpus.load_raw(a)
+        rec = corpus.load_current(a)
         new, acc = M.normalize_chapter(rec['text'],
                                        quote_style=_quote_style_of(a.source_id),
                                        sep_chars=_sep_of(a.source_id))
@@ -124,7 +124,7 @@ def test_chars_is_len_of_the_stripped_text():
     而本层的预算 `budget_chars` 也是含空白那一支——两边对得上才谈得上篇幅带。
     """
     for a in DRAFTS:
-        rec = corpus.load_raw(a)
+        rec = corpus.load_current(a)
         assert M.chars_of(rec['text']) == rec['chars'], a.rel
 
 
@@ -138,7 +138,7 @@ def test_overlap_reproduces_every_stored_value():
     """
     checked = 0
     for a in DRAFTS:
-        rec = corpus.load_raw(a)
+        rec = corpus.load_current(a)
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
         assert entry is not None, f'{a.rel} 在 writer_context 里找不到对应章'
         got = M.overlap_ratio(rec['text'], entry, _source_of(a.source_id))
@@ -163,7 +163,7 @@ def test_every_out_of_band_draft_carries_the_band_finding():
     silent: list[str] = []
     seen_out_of_band = 0
     for a in DRAFTS:
-        rec = corpus.load_raw(a)
+        rec = corpus.load_current(a)
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
         rng = M.target_range(entry or {})
         if not rng:
@@ -202,7 +202,7 @@ def test_dialogue_ratios_are_defined_per_current_mode():
     """对白比逐章计算，模式只允许当前 deep/shallow。"""
     ratios: dict[str, list[float]] = {'deep': [], 'shallow': []}
     for a in DRAFTS:
-        rec = corpus.load_raw(a)
+        rec = corpus.load_current(a)
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
         src_n = M.src_quote_count(entry or {}, _source_of(a.source_id))
         if src_n:
@@ -223,7 +223,7 @@ def test_overlap_is_a_ratio_and_every_deep_excess_carries_its_finding():
     per: dict[str, list[float]] = {'deep': [], 'shallow': []}
     silent: list[str] = []
     for a in DRAFTS:
-        rec = corpus.load_raw(a)
+        rec = corpus.load_current(a)
         value = rec.get('overlap_excl_verbatim')
         if value is None:
             continue

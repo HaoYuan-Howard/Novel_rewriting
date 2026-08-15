@@ -8,9 +8,13 @@ jobs.py —— 作业面板 P-01：列表 / 详情 / 日志 / 预览 / 异步启
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+import asyncio
+import json
 
-from contracts.schema.api import JobList, LogChunk, PreviewRequest
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
+
+from contracts.schema.api import JobList, LogChunk, LogStreamEvent, PreviewRequest
 from contracts.schema.orchestration import JobRecord, JobStart
 from novel.api.deps import checked_sid, get_base
 from novel.errors import UnsupportedRunMode, UpstreamMissing
@@ -114,6 +118,68 @@ def get_job_log(job_id: str, offset: int = Query(default=0, ge=0),
     _one(base, job_id)
     text, nxt = jobs.read_log(base, job_id, from_byte=offset)
     return LogChunk(text=text, next_byte=nxt)
+
+
+def _sse(event: str, payload: LogStreamEvent) -> str:
+    """一条 SSE；`id` 就是下一次字节 offset，不能用字符数代替。"""
+    data = json.dumps(payload.model_dump(mode='json'), ensure_ascii=False)
+    return f'id: {payload.next_byte}\nevent: {event}\ndata: {data}\n\n'
+
+
+async def _job_log_events(base: str, job_id: str, offset: int, request: Request):
+    current = offset
+    heartbeat_at = asyncio.get_running_loop().time() + 10.0
+    while True:
+        if await request.is_disconnected():
+            return
+        text, nxt = jobs.read_log(base, job_id, from_byte=current)
+        if nxt > current:
+            current = nxt
+            yield _sse('log', LogStreamEvent(
+                text=text, next_byte=current, done=False, state=None))
+            # 大日志一次最多读 2 MiB；有余量时立即续，不人为加 100ms 延迟。
+            continue
+
+        rec = _one(base, job_id)
+        if rec.state != 'running':
+            yield _sse('end', LogStreamEvent(
+                text='', next_byte=current, done=True, state=rec.state))
+            return
+
+        now = asyncio.get_running_loop().time()
+        if now >= heartbeat_at:
+            yield ': keep-alive\n\n'
+            heartbeat_at = now + 10.0
+        await asyncio.sleep(0.1)
+
+
+@router.get('/{job_id}/stream')
+async def stream_job_log(job_id: str, request: Request,
+                         offset: int = Query(default=0, ge=0),
+                         base: str = Depends(get_base)) -> StreamingResponse:
+    """SSE 日志流；query offset 与浏览器 `Last-Event-ID` 取较新的那个。
+
+    日志仍以轮询端点的同一条 `jobs.read_log` 为权威读取面。断线不会建第二套游标：
+    每个 data event 的 SSE id 都是 `next_byte`，重连从该字节继续；作业一进终态，
+    先排空已落盘日志，再发唯一 `end` event 并结束生成器。
+    """
+    _one(base, job_id)
+    last = request.headers.get('last-event-id')
+    if last is not None:
+        try:
+            resumed = int(last)
+        except ValueError:
+            resumed = offset
+        if resumed >= 0:
+            offset = max(offset, resumed)
+    return StreamingResponse(
+        _job_log_events(base, job_id, offset, request),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
 
 
 @router.post('/preview', response_model=JobStart)

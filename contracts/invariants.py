@@ -15,11 +15,13 @@ prompt 那一份必须是**插值来的**。手抄一份不会报错，它只是
   · HTTP API 的 `/api/enums` —— 整份下发
   · 前端 —— 从 `/api/enums` 运行时取，**不许硬编码**
 
-【本模块不许 import 任何业务模块】它是叶子。谁都可以依赖它，它不依赖谁。
+【本模块不许 import 任何业务模块】它只依赖同为叶子的 `contracts.artifacts` 路径目录。
 """
 from __future__ import annotations
 
 from typing import Final, NamedTuple
+
+import contracts.artifacts as artifact_paths
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、状态三态 / 严重度四级 —— 「不知道」与「没问题」必须可区分（需求 Q-2）
@@ -29,6 +31,15 @@ from typing import Final, NamedTuple
 #: 画成同一个颜色就等于替人断言了一件没人验证过的事。
 #: 实测代价：某次 23 章成稿与任何一版上游都配不上（匹配 1/23），配对关系永久丢失，而界面全绿。
 FRESHNESS: Final = ('fresh', 'stale', 'unknown')
+
+#: ArtifactState 给界面直接消费的四态。`missing` 不能再由前端拿 `!exists` 推导。
+ARTIFACT_DISPLAY: Final = ('missing', 'fresh', 'stale', 'unknown')
+
+#: 文件可用性与来源新鲜度是两轴；这一轴负责 `.INVALID` / 读不回 / 缺席。
+ARTIFACT_CONDITION: Final = ('missing', 'ready', 'invalid', 'unreadable')
+
+#: 一本书顶部那句服务端结论。顺序优先级由 `novel.orchestrator.state` 唯一计算。
+OVERVIEW_VERDICT: Final = ('broken', 'stale', 'pending', 'unknown', 'complete')
 
 #: 一条来源边**为什么**得到那个结论。**用 id 不用措辞**（同 `STAGE0_WARNINGS` 的理由）：
 #: 它要进校验报告的第一节（`Q-4`：来源在前判定在后），而报告不在逐字节验收范围内——
@@ -371,6 +382,11 @@ BEAT_NATURAL_MAX: Final = 150
 #: 模型按 A 算、校验按 B 判，而谁也不会出声。
 BEAT_ALERT_MIN: Final = 50
 BEAT_ALERT_MAX: Final = 300
+
+#: 原文↔成稿对齐的锚覆盖率低于此值时只提示「证据不足」，不判内容不合格。
+#: 阈值与结论都由服务端下发；前端只画 coverage 原始读数和 state。
+ANCHOR_COVERAGE_WARN: Final = 0.6
+ANCHOR_COVERAGE_STATE: Final = ('low', 'adequate')
 
 #: 拍的**分组算法版本**。与 `BEAT_MIN_CHARS` 一起进 `plan_chapters._provenance.params`。
 #:
@@ -917,9 +933,9 @@ WRITE_EFFECTS: Final = {
 #: `writer_context.identity.json`。此前因为只有 flag 维度，API 会误报
 #: `stage4/plan_chapters.json`；方向虽保守，文件名却会误导人的覆盖决策。
 NODE_WRITE_EFFECTS: Final = {
-    ('stage4.plan', '--identity'): 'stage4/writer_context.identity.json',
+    ('stage4.plan', '--identity'): artifact_paths.STAGE4_WRITER_CONTEXT_IDENTITY,
     ('stage6.hook', '--identity'): '',
-    ('stage7.rename', '--identity'): 'stage7/name_map.json',
+    ('stage7.rename', '--identity'): artifact_paths.STAGE7_NAME_MAP,
 }
 
 
@@ -991,19 +1007,19 @@ class NodeSpec(NamedTuple):
 NODES: Final[dict[str, NodeSpec]] = {
     'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除',
                                  flags=('--source', '--dry-run', '--check-only'),
-                                 produces=('stage0/removal_report.json',
-                                           'stage0/clean_text.txt')),
+                                 produces=(artifact_paths.STAGE0_REMOVAL_REPORT,
+                                           artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
-                                 produces=('stage0/removal_report.json',)),
+                                 produces=(artifact_paths.STAGE0_REMOVAL_REPORT,)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
                                  flags=('--apply-edit', '--apply-edit-plan'),
-                                 produces=('stage0/removal_report.json',
-                                           'stage0/clean_text.txt')),
+                                 produces=(artifact_paths.STAGE0_REMOVAL_REPORT,
+                                           artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
                                  flags=('--dry-run', '--check-only'),
-                                 produces=('stage1/main_text.json',
-                                           'stage1/hook_copy.json',
-                                           'stage1/partition_report.json')),
+                                 produces=(artifact_paths.STAGE1_MAIN_TEXT,
+                                           artifact_paths.STAGE1_HOOK_COPY,
+                                           artifact_paths.STAGE1_PARTITION_REPORT)),
     # ⚠ `--apply-edit` 是 TODO-05 补的，而它补的是一个**契约内的空洞**：
     #   `reader_reveal_events` / 知情人 / secret 事实抽错时，此前唯一的路是手改产物
     #   ——没有 schema 管形状，来源账上也留不下「这是人改的」。
@@ -1012,19 +1028,19 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  flags=('--renormalize', '--purge-role', '--resample',
                                          '--revalidate', '--full-extract',
                                          '--apply-edit'),
-                                 produces=('stage2/global_grounding.json',)),
+                                 produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
                                  flags=('--prompt-only', '--check-only', '--renormalize',
                                         '--chapters', '--revalidate'),
-                                 produces=('stage2/chapter_blueprints.json',)),
+                                 produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
                                   flags=('--dry-run', '--check-only', '--measure-only',
                                          '--remeasure', '--revalidate', '--apply-edit',
                                          '--repair-surface-habits'),
-                                 produces=('stage3/style_grounding.json',)),
+                                 produces=(artifact_paths.STAGE3_STYLE_GROUNDING,)),
     # ⚠ `--dry-run` 是 F3 补的，而它与 `--prompt-only` **不是重复登记**：
     #   后者只量体量（原型的语义），前者摊开**要发出去的那几个字节**。
     #   两个都留着是因为它们答的是不同的问题；而少了前者，
@@ -1034,11 +1050,11 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  flags=('--dry-run', '--prompt-only', '--check-only',
                                         '--revalidate', '--names-only', '--identity',
                                         '--apply-edit'),
-                                 produces=('stage4/plan_chapters.json',)),
+                                 produces=(artifact_paths.STAGE4_PLAN_CHAPTERS,)),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
     #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
-                                 produces=('stage4/writer_context.json',)),
+                                 produces=(artifact_paths.STAGE4_WRITER_CONTEXT,)),
     # ⚠ `--revise` 是 F4 从 `stage5.review` **挪过来**的（用户裁决，见本表下方那段）。
     # ⚠⚠ **两条臂合成的那份 `stage5/draft.md` 刻意不在这一列里**，而它确实是本节点写的
     #   （`assemble_book`，每跑都拼）。F4 试过补上，当场被两条测试抓住：
@@ -1056,8 +1072,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                   flags=('--dry-run', '--recheck', '--revalidate',
                                          '--apply-edit', '--revise', '--chapters',
                                          '--deep', '--shallow-rest'),
-                                 produces=('stage5/{mode}/ch{nn}.json',
-                                           'stage5/{mode}/draft.md')),
+                                 produces=(artifact_paths.STAGE5_CHAPTER,
+                                           artifact_paths.STAGE5_MODE_DRAFT)),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。
     # ⚠⚠ `stage5/wontfix.json` **刻意不进 `produces`**，而它确实是本节点写的：
     #   这一列的消费方是 `state.required_artifacts`（「这一层跑完了盘上该有哪几份」），
@@ -1065,12 +1081,12 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   把它登记进来会让每一本书**永远差一份产物**。⇒ 它的写盘效应登记在 `WRITE_EFFECTS`。
     'stage5.review':    NodeSpec('stage5', 'R-8',  False, 'stage5 全书验收',
                                  flags=('--check-only', '--wontfix'),
-                                 produces=('stage5/review_{n}.json',)),
+                                 produces=(artifact_paths.STAGE5_REVIEW,)),
     # 付费语义审判是机械验收的 companion，不取代 `stage5.review` 的 0 成本属性。
     # 它不接 `--check-only`，否则一个 stage 会有两个复检节点、HTTP kind 路由产生歧义。
     'stage5.semantic':  NodeSpec('stage5', 'R-8',  True,  'stage5 书级语义审判',
                                  flags=('--dry-run',),
-                                 produces=('stage5/semantic_{n}.json',)),
+                                 produces=(artifact_paths.STAGE5_SEMANTIC,)),
     # ⚠ `--revalidate` 是 F 期移植时补的，而它是**新加那道落盘闸门的必然配套**：
     #   本层一次产三条候选，闸门拦的是「一条干净候选都没有」；不给一条 0 成本的提升路，
     #   一次付费产出就会被永久锁死。**加闸门与加提升路必须同批**。
@@ -1082,32 +1098,32 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  flags=('--dry-run', '--check-only', '--identity',
                                         '--recheck', '--revalidate', '--apply-edit',
                                         '--wontfix'),
-                                 produces=('stage6/hook.json',)),
+                                 produces=(artifact_paths.STAGE6_HOOK,)),
     # 付费语义审判是字面探针的 companion（R-9.19/R-9.20），形态照 stage5.semantic：
     # 不接 `--check-only`，否则一层两个复检节点、HTTP kind 路由产生歧义。
     'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',
                                  flags=('--dry-run',),
-                                 produces=('stage6/semantic_{n}.json',)),
+                                 produces=(artifact_paths.STAGE6_SEMANTIC,)),
     # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
     #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',
                                  flags=('--pick',),
-                                 produces=('stage6/hook.json',)),
+                                 produces=(artifact_paths.STAGE6_HOOK,)),
     # ⚠ `--revalidate` 是 F2 补的：本层加了落盘闸门（**任何一条 hard ⇒ `.INVALID`**，
     #   照 stage3 不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
     #   而**闸门是我们自己加的，不给一条 0 成本提升路，一次付费产出就被永久锁死**。
     'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表',
                                  flags=('--dry-run', '--check-only', '--identity',
                                         '--recheck', '--apply-edit', '--revalidate'),
-                                 produces=('stage7/name_map.json',)),
+                                 produces=(artifact_paths.STAGE7_NAME_MAP,)),
     'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
-                                 produces=('stage7/book.txt',)),
+                                 produces=(artifact_paths.STAGE7_BOOK,)),
     # ⚠⚠ **`flags=()` 在这一格是【终态】不是待定**（2026-08-12，F2 查清）：
     #   上面那条「候选序号属 F 期」的注释对 stage6 是对的，对本层不是——
     #   **本层一本书只有一份人物表**，定稿是「给整份盖章」不是「从三条候选里选一条」，
     #   本层定稿只是给整份人物表盖章，**没有候选参数**。
     'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
-                                 produces=('stage7/name_map.json',)),
+                                 produces=(artifact_paths.STAGE7_NAME_MAP,)),
 }
 
 # ⚠⚠ **`--revise` 挂哪个节点：D 期登记的那处分歧已在 F4 裁掉**（2026-08-12，用户裁决）。

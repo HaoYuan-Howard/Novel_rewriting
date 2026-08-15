@@ -75,8 +75,24 @@ def projection_fingerprint(obj: Any) -> str:
                                   separators=(',', ':')))
 
 
+def rules_fingerprint(stage: str) -> str:
+    """某层完整判据表的确定性指纹；所有报告共用这一把尺子。
+
+    字段列表从 ``Rule`` 的 dataclass 声明派生，所以以后新增判据元数据不会只被某一层
+    漏算。按 rule id 排序，注册顺序变化不制造虚假 stale。
+    """
+    from contracts.rules import REGISTRY
+
+    rules = sorted(REGISTRY.of_stage(stage), key=lambda rule: rule.rule)
+    rows = tuple(
+        tuple(getattr(rule, name) for name in rule.__dataclass_fields__)
+        for rule in rules
+    )
+    return fingerprint(repr(rows))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 二、`code` —— `git describe --always --dirty`，全链一个实现
+# 二、`code` —— 完整提交 + 工作树差异摘要，全链一个实现
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: git 都问不到时记什么。**不许留空**（`code` 是必填），也不许编一个像 sha 的值。
@@ -84,6 +100,55 @@ def projection_fingerprint(obj: Any) -> str:
 CODE_UNKNOWN = 'unknown'
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _git(*args: str) -> bytes | None:
+    """运行一条只读 git 查询；失败时返回 ``None``，不拿半份答案冒充身份。"""
+    try:
+        out = subprocess.run(
+            [
+                'git', '-c',
+                f'safe.directory={os.path.abspath(_REPO_ROOT).replace(os.sep, "/")}',
+                *args,
+            ],
+            cwd=_REPO_ROOT, capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def _worktree_digest() -> str | None:
+    """当前提交之外的字节差异摘要；干净树返回空串。
+
+    ``git diff HEAD`` 同时覆盖暂存区与未暂存的 tracked 变更；未跟踪文件不在 diff
+    里，所以再用 NUL 分隔的 ``ls-files --others`` 逐文件纳入。忽略规则仍由 git
+    决定，避免缓存、输出和本机密钥仅因存在就污染代码身份。
+    """
+    diff = _git('diff', '--binary', '--no-ext-diff', 'HEAD', '--', '.')
+    untracked = _git('ls-files', '--others', '--exclude-standard', '-z')
+    if diff is None or untracked is None:
+        return None
+    names = sorted(name for name in untracked.split(b'\0') if name)
+    if not diff and not names:
+        return ''
+
+    digest = hashlib.sha256()
+    digest.update(b'tracked\0')
+    digest.update(diff)
+    digest.update(b'\0untracked\0')
+    for raw_name in names:
+        try:
+            path = os.path.join(_REPO_ROOT, os.fsdecode(raw_name))
+            data = open(path, 'rb').read()
+        except OSError:
+            # 例如文件在 ls-files 与读取之间被删掉。此时工作树没有一份可复算的
+            # 稳定快照，宁可让整项 unknown，也不落一个会与别的脏树相撞的摘要。
+            return None
+        digest.update(len(raw_name).to_bytes(8, 'big'))
+        digest.update(raw_name)
+        digest.update(len(data).to_bytes(8, 'big'))
+        digest.update(data)
+    return digest.hexdigest()[:16]
 
 
 def code_version() -> str:
@@ -99,21 +164,26 @@ def code_version() -> str:
     ⚠ **不许**改成给 `RunContext.open` 加一个 `code=` 参数来省这次子进程——
     那会造出一条能对「哪版代码产了它」撒谎的路，而这一格的全部价值就在于它不会撒谎。
 
-    ⚠⚠ **必须带 `--dirty`。** 原来是 `git rev-parse --short HEAD`，
-    而**工作树脏的时候它照样给出一个看起来精确的答案**：stage6 盘上有逐字节铁证——
-    同一份 `_provenance` 里，按内容算的 prompt 指纹变了，
-    而按 git HEAD 算的 `code` **一个字没动**。
-    加 `--dirty` 之后，「这次跑用的代码不在任何一个 commit 上」能被读出来。
+    形态：干净树是完整 40 位提交；脏树是 ``<commit>-dirty.<sha256[:16]>``。
+    摘要覆盖 tracked diff 与未被 gitignore 的 untracked 文件内容，所以同一提交下两棵
+    不同脏树不会再都只叫 ``-dirty``。prompt 不混进本字段：它已逐项记录在
+    ``_provenance.prompts``；一份产物的完整复现身份是
+    ``(code, sorted(prompts.items()))``。
 
-    ⚠ 它仍然只是**提示**，不是身份：`--dirty` 说不出脏在哪。
-    这条已经登记在 `_common.md` §十「查清楚了、结论就是查不了」那一节，别再当漏项。
+    这组边界是刻意的：工作树摘要只用于审计，不进入响应缓存键；缓存键由实际发出的
+    system/user/model/推理参数构成。于是改 prompt 必定 miss，而改一份与请求无关的文档
+    不会击穿全部缓存。
     """
-    try:
-        out = subprocess.run(['git', 'describe', '--always', '--dirty'],
-                             cwd=_REPO_ROOT, capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
+    head = _git('rev-parse', 'HEAD')
+    if head is None:
         return CODE_UNKNOWN
-    return out.stdout.strip() or CODE_UNKNOWN
+    commit = head.decode('ascii', errors='strict').strip()
+    if len(commit) != 40 or any(c not in '0123456789abcdef' for c in commit.lower()):
+        return CODE_UNKNOWN
+    dirty = _worktree_digest()
+    if dirty is None:
+        return CODE_UNKNOWN
+    return commit if not dirty else f'{commit}-dirty.{dirty}'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -23,6 +23,20 @@ PROJ_B = prov.projection_fingerprint({'a': 2})
 KEY = 'stage1/main_text.json'
 
 
+def test_rule_table_fingerprint_is_stage_scoped_and_covers_every_rule_field():
+    from contracts.rules import REGISTRY
+
+    rules = sorted(REGISTRY.of_stage('stage5'), key=lambda rule: rule.rule)
+    expected_rows = tuple(
+        tuple(getattr(rule, name) for name in rule.__dataclass_fields__)
+        for rule in rules
+    )
+    got = prov.rules_fingerprint('stage5')
+    assert got == prov.fingerprint(repr(expected_rows))
+    assert len(got) == 10
+    assert got != prov.rules_fingerprint('stage6')
+
+
 def test_stage7_human_only_provenance_has_no_model(tmp_path):
     """首次人工改名没有模型基线时，也必须能构造符合当前 NameMap 契约的来源账。"""
     novel_dir = tmp_path / 'book_1'
@@ -226,7 +240,56 @@ def test_projection_fingerprint_is_stable_across_key_order():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、轮次
+# 三、代码身份 —— 同提交下的不同脏树必须分得开
+# ─────────────────────────────────────────────────────────────────────────────
+
+COMMIT = b'0123456789abcdef0123456789abcdef01234567\n'
+
+
+def _fake_git(*, diff: bytes = b'', untracked: bytes = b''):
+    def run(*args: str) -> bytes | None:
+        if args == ('rev-parse', 'HEAD'):
+            return COMMIT
+        if args[:2] == ('diff', '--binary'):
+            return diff
+        if args == ('ls-files', '--others', '--exclude-standard', '-z'):
+            return untracked
+        raise AssertionError(args)
+    return run
+
+
+def test_clean_code_identity_is_the_full_commit(monkeypatch):
+    monkeypatch.setattr(prov, '_git', _fake_git())
+    assert prov.code_version() == COMMIT.decode().strip()
+
+
+def test_tracked_dirty_identity_is_stable_and_distinguishes_the_diff(monkeypatch):
+    monkeypatch.setattr(prov, '_git', _fake_git(diff=b'patch-a'))
+    first = prov.code_version()
+    assert first == prov.code_version()
+    monkeypatch.setattr(prov, '_git', _fake_git(diff=b'patch-b'))
+    second = prov.code_version()
+    assert first != second
+    assert first.startswith(COMMIT.decode().strip() + '-dirty.')
+
+
+def test_untracked_file_bytes_are_part_of_the_dirty_identity(monkeypatch, tmp_path):
+    (tmp_path / 'new.py').write_bytes(b'one')
+    monkeypatch.setattr(prov, '_REPO_ROOT', str(tmp_path))
+    monkeypatch.setattr(prov, '_git', _fake_git(untracked=b'new.py\0'))
+    first = prov.code_version()
+    (tmp_path / 'new.py').write_bytes(b'two')
+    second = prov.code_version()
+    assert first != second
+
+
+def test_incomplete_git_identity_is_unknown_not_a_plausible_commit(monkeypatch):
+    monkeypatch.setattr(prov, '_git', lambda *_args: None)
+    assert prov.code_version() == prov.CODE_UNKNOWN
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 四、轮次
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize('seen,expect', [
@@ -254,17 +317,13 @@ def test_code_version_never_returns_empty():
     assert v == prov.CODE_UNKNOWN or len(v) >= 4
 
 
-def test_code_version_asks_git_describe_with_dirty():
-    """⚠⚠ **必须带 `--dirty`。**
-
-    原来是 `git rev-parse --short HEAD`，而**工作树脏的时候它照样给出一个看起来精确的
-    答案**：stage6 盘上有逐字节铁证——同一份 `_provenance` 里，按内容算的 prompt 指纹变了，
-    而按 git HEAD 算的 `code` **一个字没动**。
-    """
+def test_code_version_uses_full_commit_and_content_sensitive_dirty_digest():
+    """不能退回短提交或只有一个无内容区分力的 ``-dirty`` 后缀。"""
     import inspect
     src = inspect.getsource(prov.code_version)
-    assert "'describe'" in src and "'--dirty'" in src, \
-        '有人把它改回 rev-parse 了——那条路给不出「这次跑的代码不在任何一个 commit 上」'
+    assert "'rev-parse', 'HEAD'" in src
+    assert '_worktree_digest()' in src
+    assert "f'{commit}-dirty.{dirty}'" in src
 
 
 def test_code_version_is_asked_again_for_every_run(monkeypatch):
@@ -276,17 +335,16 @@ def test_code_version_is_asked_again_for_every_run(monkeypatch):
     正是加 `--dirty` 要消灭的那个失败换了个更隐蔽的形态回来。
     ⇒ 固化的落点是 `RunContext.code`（run 级字段），本函数保持无状态。
     """
-    calls: list[list[str]] = []
+    calls: list[tuple[str, ...]] = []
+    commit = b'a' * 40 + b'\n'
 
-    class _Out:
-        stdout = 'abc1234-dirty\n'
+    def _fake_git(*args: str):
+        calls.append(args)
+        return commit
 
-    def _fake_run(cmd, **_kw):
-        calls.append(cmd)
-        return _Out()
-
-    monkeypatch.setattr(prov.subprocess, 'run', _fake_run)
-    assert prov.code_version() == 'abc1234-dirty'
-    assert prov.code_version() == 'abc1234-dirty'
+    monkeypatch.setattr(prov, '_git', _fake_git)
+    monkeypatch.setattr(prov, '_worktree_digest', lambda: '')
+    assert prov.code_version() == 'a' * 40
+    assert prov.code_version() == 'a' * 40
     assert len(calls) == 2, '第二次没有重新问 git —— 答案被固化到了进程上，而不是这一次跑上'
     assert not hasattr(prov.code_version, 'cache_info'), '`lru_cache` 又回来了'

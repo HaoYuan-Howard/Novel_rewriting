@@ -112,7 +112,9 @@ export function useStage5Screen() {
   const live = evHits.filter((x) => x.n > 0).map((x) => x.e)
 
   const align = firstDraft?.align ?? null
-  const lowAnchor = !!align && align.coverage < 0.6
+  const anchorState = align?.coverage_state ?? 'unknown'
+  const lowAnchor = anchorState === 'low'
+  const unknownAnchor = !!align && anchorState === 'unknown'
 
   return {
     draftQ,
@@ -274,9 +276,13 @@ export function useStage5Screen() {
       : null,
     /** 锚点覆盖率常驻显示。没有这个数，「这一行盖了 3 拍」和「这一行就是第 3 拍」长得一样。 */
     anchorLabel: align ? align.anchors + '/' + align.beats + ' 拍' : '',
-    anchorLow: lowAnchor,
-    anchorColor: lowAnchor ? SEV.unver.color : FRESH.fresh.color,
-    anchorBg: lowAnchor ? SEV.unver.bg : FRESH.fresh.bg,
+    anchorLow: lowAnchor || unknownAnchor,
+    anchorColor: lowAnchor
+      ? SEV.unver.color
+      : unknownAnchor
+        ? FRESH.unknown.color
+        : FRESH.fresh.color,
+    anchorBg: lowAnchor ? SEV.unver.bg : unknownAnchor ? FRESH.unknown.bg : FRESH.fresh.bg,
     anchorBorder: lowAnchor ? SEV.unver.border : 'transparent',
     alignMeta: align
       ? '切成 ' + align.rows + ' 块 · 覆盖率 ' + align.coverage + ' · 倒挂 ' + align.inversions

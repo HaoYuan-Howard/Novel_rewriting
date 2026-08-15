@@ -11,7 +11,6 @@ contracts.invariants，包括已由 30 收紧到 20 的番外开头上限。
 from __future__ import annotations
 
 import codecs
-import hashlib
 import re
 from dataclasses import dataclass
 
@@ -22,6 +21,7 @@ from contracts.invariants import (
     NONBODY_MID_MAX_CP,
     NONBODY_TRAIL_STRIP,
 )
+from novel import prov
 
 TEXT_NORM = 'v1:bom+crlf'
 
@@ -132,7 +132,7 @@ def decode_source_bytes(raw: bytes) -> DecodedSource:
     return DecodedSource(
         text=text,
         encoding=encoding,
-        source_sha1=hashlib.sha1(text.encode('utf-8')).hexdigest(),
+        source_sha1=prov.content_sha1(text.encode('utf-8')),
     )
 
 

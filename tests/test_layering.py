@@ -8,7 +8,9 @@ test_layering.py —— 分层靠**测试**守，不靠约定。
 一条只写在文档里的分层规矩，与「只写在 prompt 里的约束」是同一个形状（判据 35）。
 
 【它守的那条线】
-    contracts.invariants   ← 叶子，只 import typing。**它不知道 pydantic 的存在**
+    contracts.artifacts    ← 路径叶子，只 import typing
+         ↑
+    contracts.invariants   ← 取值域叶子。**它不知道 pydantic 的存在**
          ↑
     contracts.rules / contracts.schema.*        ← 契约层，可单独 import
          ↑
@@ -45,24 +47,44 @@ def _imports(path: str) -> set[str]:
     return mods
 
 
+def _import_paths(path: str) -> set[str]:
+    """保留完整模块名，用于约束同一顶层包里的精确依赖边。"""
+    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
+    mods: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            mods |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            mods.add(node.module)
+    return mods
+
+
 def _rel(p: str) -> str:
     return os.path.relpath(p, ROOT).replace(os.sep, '/')
 
 
 # ───────────────────── 叶子性 ─────────────────────
 
-def test_invariants_is_a_leaf():
-    """`contracts/invariants.py` 只许 import `typing`。
+def test_invariants_and_artifact_paths_are_contract_leaves():
+    """两个基础契约模块只许依赖标准库；invariants 只能额外依赖路径叶子。
 
     ⚠ 契约层现在依赖 pydantic 了（模型住在 `contracts/schema/`），
-    **而这个文件必须留在依赖之外**：`/api/enums` 要整份下发它、prompt 要从它插值、
-    前端要从它派生取值面。它一旦长出第三方依赖，这三条路就都要跟着背上那个依赖。
+    **而这两个文件必须留在依赖之外**：`/api/enums`、prompt、节点表与 schema 路由都从
+    它们派生。路径叶子不能反向 import invariants；invariants 也不能借 `contracts` 这个
+    顶层名绕去依赖 schema。
     """
-    mods = _imports(os.path.join(ROOT, 'contracts', 'invariants.py'))
-    assert mods <= {'__future__', 'typing'}, (
-        f'contracts/invariants.py 长出了新依赖：{sorted(mods - {"__future__", "typing"})}。'
-        f'它是叶子——谁都可以依赖它，它不依赖谁'
-    )
+    invariant_path = os.path.join(ROOT, 'contracts', 'invariants.py')
+    artifact_path = os.path.join(ROOT, 'contracts', 'artifacts.py')
+    invariant_imports = _import_paths(invariant_path)
+    artifact_imports = _import_paths(artifact_path)
+    allowed_invariants = {'__future__', 'typing', 'contracts.artifacts'}
+    allowed_artifacts = {'__future__', 'typing'}
+    assert invariant_imports <= allowed_invariants, (
+        'contracts/invariants.py 长出了新依赖：'
+        f'{sorted(invariant_imports - allowed_invariants)}')
+    assert artifact_imports <= allowed_artifacts, (
+        'contracts/artifacts.py 长出了新依赖：'
+        f'{sorted(artifact_imports - allowed_artifacts)}')
 
 
 def test_contracts_never_imports_the_runtime():

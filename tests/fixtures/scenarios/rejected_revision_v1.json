@@ -1,0 +1,10 @@
+{
+  "_schema_version": 1,
+  "output_ordinal": 1,
+  "why": ["结尾动作丢失"],
+  "fixes": [["ending_drop", "review:chapter:1"]],
+  "attempts": [
+    {"chars": 5, "text": "第一份退化"},
+    {"chars": 5, "text": "第二份退化"}
+  ]
+}

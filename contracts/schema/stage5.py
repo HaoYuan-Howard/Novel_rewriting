@@ -160,6 +160,38 @@ class Chapter(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 一b、`stage5/<mode>/chNN.rejected.json`
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RejectedAttempt(StrictModel):
+    """一次已完整返回、但相对上一轮成稿发生确定性退化的候选。"""
+
+    chars: int = Field(ge=1)
+    text: str = Field(min_length=1)
+
+
+class RejectedRevision(StrictModel):
+    """修订稿与唯一一次绕缓存重采样都退化时留下的人工证据。
+
+    它不是正式成稿，也不是落盘闸门产生的 `.INVALID`：旧正式稿保持原位，
+    本文件原样保存失败候选，避免一次付费自救把较好的旧稿覆盖掉。
+    """
+
+    output_ordinal: int = Field(ge=1)
+    why: list[str] = Field(min_length=1)
+    fixes: list[list[str]]
+    attempts: list[RejectedAttempt] = Field(min_length=1, max_length=2)
+
+    @field_validator('fixes')
+    @classmethod
+    def _fixes_are_rule_evidence_pairs(cls, value: list[list[str]]) -> list[list[str]]:
+        for item in value:
+            if len(item) != 2 or not item[0]:
+                raise ValueError('fixes 每项必须是 [非空 rule, evidence_key]')
+        return value
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 二、`stage5/review_<n>.json`
 # ─────────────────────────────────────────────────────────────────────────────
 

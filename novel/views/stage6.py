@@ -18,6 +18,8 @@ stage6.py —— S-11「开篇文案」那一屏（`GET /api/novels/:sid/stage6`
 """
 from __future__ import annotations
 
+from contracts.artifacts import STAGE6_HOOK
+
 import os
 
 from contracts.schema.api import HookApprovedLine, HookCandidateLine, Stage6View
@@ -29,7 +31,7 @@ from novel.stages.stage6 import semantic
 from novel.store import ArtifactStore
 
 NODE = 'stage6.hook'
-REL = 'stage6/hook.json'
+REL = STAGE6_HOOK
 
 
 def _chars(text: str) -> int:

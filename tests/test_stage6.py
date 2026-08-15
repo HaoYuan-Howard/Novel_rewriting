@@ -35,13 +35,10 @@ def _drafts_of(book: str) -> tuple[str, ...]:
         and '_rounds' not in a.rel))
 
 
-def _semantic_of(book: str) -> tuple[str, ...]:
-    return tuple(sorted(a.rel for a in corpus.iter_artifacts()
-                        if a.book_dir == book and a.pattern == 'stage6/semantic_{n}.json'))
-
-
 def _box(book: str) -> sandbox.Sandbox:
-    return sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book) + _semantic_of(book))
+    # 机械复检不依赖付费语义历史。旧 semantic v0 的形状不可无损迁移；把它复制进
+    # 沙箱只会让免费路径被一份它不需要的旧制品卡住。
+    return sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
 
 
 @pytest.fixture(params=books(), ids=lambda b: b[:10])

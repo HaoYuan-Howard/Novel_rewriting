@@ -32,7 +32,7 @@ import os
 
 import pytest
 
-from contracts.invariants import BADGE, FRESHNESS, JOB_STATE, SEVERITY
+from contracts.invariants import ARTIFACT_DISPLAY, BADGE, FRESHNESS, JOB_STATE, SEVERITY
 from novel.api import enums as ENUMS
 from novel.api import errors as HERR
 from novel.orchestrator import jobs as J
@@ -190,6 +190,7 @@ def test_the_three_state_domains_reach_the_wire():
     """
     payload = ENUMS.payload()
     assert payload['freshness'] == list(FRESHNESS) and 'unknown' in payload['freshness']
+    assert payload['artifact_display'] == list(ARTIFACT_DISPLAY)
     assert payload['badge'] == list(BADGE) and 'amber' in payload['badge']
     assert payload['severity'] == list(SEVERITY) and 'unver' in payload['severity']
     assert payload['job_state'] == list(JOB_STATE) and 'unknown' in payload['job_state']
@@ -215,8 +216,18 @@ def test_unknown_freshness_actually_happens_on_the_wire():
             ov = c.get(f'/api/novels/{box.sid}').json()
             seen = {a['freshness'] for st in ov['stages'] for a in st['artifacts']}
             assert 'unknown' in seen, f'一条 unknown 都没发出去过：{seen}'
+            assert all('display_freshness' in a and 'condition' in a
+                       for st in ov['stages'] for a in st['artifacts'])
     finally:
         box.close()
+
+
+def test_frontend_does_not_rejudge_anchor_coverage():
+    source = open(os.path.join(
+        ROOT, 'web', 'src', 'screens', 'stage5', 'useStage5Screen.ts'),
+        encoding='utf-8').read()
+    assert 'coverage <' not in source and 'coverage >' not in source
+    assert 'coverage_state' in source
 
 
 # ───────────────────────── `R-11.7` 贵贱只有一处算 ─────────────────────────

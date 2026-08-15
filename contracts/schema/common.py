@@ -81,11 +81,11 @@ class Provenance(StrictModel):
     ⚠ 本类不直接用——`model` 这个键该不该在，是由**子类**回答的，见下面两个类。
     """
 
-    #: `git describe --always --dirty`，全链一个实现。
+    #: 完整 git commit；脏树追加其内容摘要：`<commit>-dirty.<sha256[:16]>`。
     #:
     #: ⚠ 原来是 `git rev-parse --short HEAD`，**工作树脏的时候它照样给出一个看起来精确
     #: 的答案**：stage6 盘上有逐字节铁证——同一份 `_provenance` 里按内容算的 prompt 指纹
-    #: 变了，而按 git HEAD 算的 `code` 一个字没动。
+    #: 变了，而按 git HEAD 算的 `code` 一个字没动。只有 `-dirty` 也仍区分不了两棵脏树。
     code: str = Field(min_length=1)
 
     #: 这份产物照哪几份上游产的。键是 `<stage>/<文件名>`。

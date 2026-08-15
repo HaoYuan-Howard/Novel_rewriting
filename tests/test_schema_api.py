@@ -21,12 +21,14 @@ from pydantic import ValidationError
 
 from contracts.invariants import HOOK_KEYS, VOICE_KEYS
 from contracts.schema.api import (
-    DriftItem, ErrorBody, GlobalView, HookCopyView, JobList, LogChunk, NovelList,
+    DraftAlignView, DriftItem, ErrorBody, GlobalView, HookCopyView, JobList, LogChunk,
+    LogStreamEvent, NovelList,
     PreviewRequest, ReadingView, ReviewView,
     Stage0EditRequest, Stage0Segment, Stage0Segments,
     Stage1ChapterRow, Stage1Chapters, Stage1Segment, Stage1Segments,
     Stage4View, Stage5View, Stage6View, Stage7View, StyleView, UploadResult,
 )
+from contracts.schema.api import ReadingBeatLine
 from contracts.schema.stage3 import (
     ChapterCharStats, Measurable, MeasurableBlock, MeasurableBody, PerChapterSentence,
     StyleProvenance,
@@ -83,6 +85,27 @@ def test_stage1_continuous_view_and_chapter_index_reject_gaps():
         ])
 
 
+def test_reading_present_is_always_an_array_not_nullable():
+    base = dict(
+        beat_id='b1', located=False, start=None, end=None,
+        time_layer='present', place=None, event='空院里没有别人。', hinges=[],
+    )
+    assert ReadingBeatLine(**base, present=[]).present == []
+    with pytest.raises(ValidationError):
+        ReadingBeatLine(**base, present=None)
+
+
+def test_anchor_coverage_warning_is_a_server_decision():
+    low = DraftAlignView(
+        beats=5, anchors=2, rows=2, inversions=0, coverage=0.4,
+        coverage_threshold=0.6, coverage_state='low', note='对应关系，不是判定')
+    assert low.coverage_state == 'low'
+    with pytest.raises(ValidationError, match='coverage_state'):
+        DraftAlignView(
+            beats=5, anchors=2, rows=2, inversions=0, coverage=0.4,
+            coverage_threshold=0.6, coverage_state='adequate', note='错误地说安全')
+
+
 # ───────────────────────── 造两份最小的合法视图 ─────────────────────────
 #
 # ⚠ **合成，不读盘。** 本文件测的是**载体层**的后置条件，而载体层的正确性
@@ -106,7 +129,7 @@ def _empty_view(**over):
     """产物不在盘上、而左半边也量不出来的那一态。**九个端点里最常见的一态。**"""
     base = dict(
         sid='7615069877019300633', title='某本书',
-        exists=False, invalid_exists=False, readable=None,
+        exists=False, condition='missing', invalid_exists=False, readable=None,
         measurable_stored=None, bands_stored=None, _provenance=None,
         hook_copy_text=None,
         measured_now=None, bands_now=None,
@@ -124,7 +147,7 @@ def _loaded_view(**over):
     meas = _measurable()
     base = dict(
         sid='7615069877019300633', title='某本书',
-        exists=True, invalid_exists=False, readable=True,
+        exists=True, condition='ready', invalid_exists=False, readable=True,
         voice=[{'key': k, 'text': f'{k} 的描述', 'chars': 12} for k in VOICE_KEYS],
         surface_habits=['一条写作小动作'],
         hook_style=[{'key': k, 'text': f'{k} 的描述'} for k in HOOK_KEYS],
@@ -284,7 +307,7 @@ def test_the_api_models_never_carry_a_verdict():
     """
     verdicts = {'badge', 'passed', 'counts', 'hard_count', 'unver_count'}
     for model in (
-        StyleView, NovelList, JobList, LogChunk, PreviewRequest, ErrorBody,
+        StyleView, NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
         Stage0Segment, Stage0Segments, Stage1Segment, Stage1Segments,
         Stage1ChapterRow, Stage1Chapters, HookCopyView, UploadResult,
         GlobalView, Stage6View, Stage7View,
@@ -328,6 +351,17 @@ def test_log_chunk_counts_bytes_not_characters():
         LogChunk(text='x', next_byte=-1)
 
 
+def test_log_stream_event_has_an_explicit_terminal_shape():
+    """SSE 数据块与终态不能长得一样，否则前端只能再猜一次连接是否结束。"""
+    live = LogStreamEvent(text='中文', next_byte=6, done=False, state=None)
+    end = LogStreamEvent(text='', next_byte=6, done=True, state='ok')
+    assert not live.done and end.state == 'ok'
+    with pytest.raises(ValidationError):
+        LogStreamEvent(text='', next_byte=6, done=True, state=None)
+    with pytest.raises(ValidationError):
+        LogStreamEvent(text='', next_byte=6, done=True, state='running')
+
+
 def test_drift_item_is_a_named_object_not_a_triple():
     """具名对象，不是位置数组——理由同 `/api/enums` 拒收 `NamedTuple` 的那一条。"""
     d = DriftItem(key='body.chars', stored=9516, now='（缺）')
@@ -350,7 +384,7 @@ def test_every_response_model_forbids_extra_fields():
     前端会开始依赖那个字段，而 `_api.md` 不知道它存在。
     """
     for model in (
-        StyleView, NovelList, JobList, LogChunk, PreviewRequest, ErrorBody,
+        StyleView, NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
         Stage0Segment, Stage0Segments, Stage0EditRequest,
         Stage1Segment, Stage1Segments, Stage1ChapterRow, Stage1Chapters,
         HookCopyView, UploadResult, GlobalView, Stage6View, Stage7View,

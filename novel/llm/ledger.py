@@ -39,6 +39,27 @@ LEDGER_REL = ('_service', 'ledger.jsonl')
 #: 都从它派生，免得哪天加一项时漏掉其中一处。
 TOKEN_KINDS = ('prompt_tokens', 'completion_tokens', 'reasoning_tokens')
 
+
+def combine_usage(*parts: Usage | None) -> Usage | None:
+    """合并共同产出一份制品的多段用量；任一段未知则总量未知。
+
+    ``usage=None`` 不是“确定花了 0”，而是旧产物没记或本段无法结算。把其余段
+    单独写成总量会得到一个看似精确但必然偏小的数字。
+    """
+    if not parts or any(part is None for part in parts):
+        return None
+    known = tuple(part for part in parts if part is not None)
+    tokens = {
+        key: (sum(getattr(part, key) for part in known)
+              if all(getattr(part, key) is not None for part in known) else None)
+        for key in TOKEN_KINDS
+    }
+    return Usage(
+        calls_made=sum(part.calls_made for part in known),
+        calls_cached=sum(part.calls_cached for part in known),
+        **tokens,
+    )
+
 # Composite runs create multiple ledger instances in one process; different novels
 # create different CLI processes. The thread lock covers the first case and the
 # adjacent OS file lock covers the second. Only one already-rendered JSONL line is

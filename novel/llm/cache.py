@@ -100,7 +100,12 @@ class CachePolicy:
 
 def cache_key(req: ChatRequest) -> str:
     """一次调用的缓存键。**阶梯的每一档各自成键**（`reasoning_effort` 进键）——
-    不然降级到第二档时会读回第一档那个空壳，「重试」变成把同一个结果读两遍。"""
+    不然降级到第二档时会读回第一档那个空壳，「重试」变成把同一个结果读两遍。
+
+    边界裁决（TODO-08）：键只含真正影响响应的请求载荷，不含 git/worktree 身份。
+    system/user 都在 ``cache_payload``，所以 prompt 改动必定 miss；无关文档或测试改动
+    只改变 provenance 审计身份，不击穿全部响应缓存。
+    """
     blob = json.dumps(req.cache_payload(), ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(blob.encode('utf-8')).hexdigest()[:32]
 

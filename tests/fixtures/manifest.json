@@ -1,0 +1,47 @@
+{
+  "encoding": "utf-8",
+  "fixtures": [
+    {
+      "id": "old_schema_migratable",
+      "path": "artifact_versions/main_text_v0.json",
+      "sha256": "54c82c6191b66c3686a6c65c91394f81c84e1a8b6b653e49d6fbf16fcd8c8c90",
+      "reason": "证明无版本标记的 v0 RootModel 可只读迁移为当前 MainText，不改写 fixture。"
+    },
+    {
+      "id": "old_schema_future_rejected",
+      "path": "artifact_versions/future_hook_v99.json",
+      "sha256": "82374e36e65f475bdc023cd59f7624750d09e5fd11e735f2123f5452f636fbcf",
+      "reason": "证明高于当前读者的 schema 明确拒读并报告文件与版本。"
+    },
+    {
+      "id": "long_context",
+      "path": "scenarios/long_context.json",
+      "sha256": "2ea1a268252c4a1127ee1d53074d212566f86e4333fba1e924f3a8e2fcf08330",
+      "reason": "用可复算重复配方生成长 UTF-8 请求，证明尾部变化参与完整请求缓存身份。"
+    },
+    {
+      "id": "secret_numbers",
+      "path": "scenarios/secret_numbers.json",
+      "sha256": "6a8ecb5e19e76b47f3898118daae5d5fbb74c8ed68ac5bba293f015b19b534d7",
+      "reason": "覆盖中文数字与阿拉伯数字等值时的秘密字面探针，避免系统性假阴。"
+    },
+    {
+      "id": "half_draft",
+      "path": "scenarios/half_draft.json",
+      "sha256": "8dd99c43b103095663dd5d56f0f15cf46f0aa49e0c1898bfa8cfc25f3e30faa8",
+      "reason": "模拟逐章写到一半被中断，默认续跑只能调度缺章。"
+    },
+    {
+      "id": "rejected_archive",
+      "path": "scenarios/rejected_revision_v1.json",
+      "sha256": "cb05666466f4ca47600a4722a7c9992dd27e0514a13fbcb396516d529cd5c966",
+      "reason": "固定两次退化候选的 rejected 载体及其独立轮次归档路径。"
+    },
+    {
+      "id": "retry_branch",
+      "path": "scenarios/retry_429_503_ok.json",
+      "sha256": "e07d7addd1806f60985c0825ad05edd1788275868ddfcf0399b101a93d168a35",
+      "reason": "固定 429→503→成功的传输重试、指数退避与调用次数。"
+    }
+  ]
+}

@@ -22,13 +22,14 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, Field
 
+from contracts.schema import Usage
 from novel.config import Config, load_config, parse_dotenv
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.client import (
     DEFAULT_MAX_TOKENS, LADDER, NOTHINK_RUNGS, LlmClient, LlmFailed,
 )
-from novel.llm.ledger import CostLedger
+from novel.llm.ledger import CostLedger, combine_usage
 from novel.llm.transport import (
     ChatRequest, ChatResponse, FakeTransport, MissingApiKey, TransportError,
     _classify,
@@ -68,6 +69,20 @@ OK_JSON = ChatResponse(
     content=json.dumps({'voice': {'a': 1}, 'surface_habits': ['h']}, ensure_ascii=False),
     finish_reason='stop', usage={'prompt_tokens': 10, 'completion_tokens': 5},
     model='deepseek-v4-pro')
+
+
+def test_usage_combination_is_strict_about_missing_history_and_token_parts():
+    left = Usage(calls_made=1, calls_cached=2, prompt_tokens=10,
+                 completion_tokens=None, reasoning_tokens=3)
+    right = Usage(calls_made=4, calls_cached=5, prompt_tokens=20,
+                  completion_tokens=7, reasoning_tokens=6)
+
+    assert combine_usage(left, None) is None
+    got = combine_usage(left, right)
+    assert got is not None
+    assert (got.calls_made, got.calls_cached) == (5, 7)
+    assert got.prompt_tokens == 30 and got.reasoning_tokens == 9
+    assert got.completion_tokens is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -231,6 +246,17 @@ def test_each_rung_is_its_own_cache_entry():
     assert len(keys) == len(LADDER)
 
 
+def test_cache_identity_tracks_the_request_not_the_worktree():
+    """prompt 改动必须 miss；与请求无关的代码/文档身份不进入缓存键。"""
+    base = dict(model='m', user='u', reasoning_effort='high', thinking=True,
+                json_mode=False, max_tokens=1)
+    original = ChatRequest(system='prompt-v1', **base)
+    same_request_under_another_worktree = ChatRequest(system='prompt-v1', **base)
+    changed_prompt = ChatRequest(system='prompt-v2', **base)
+    assert cache_key(original) == cache_key(same_request_under_another_worktree)
+    assert cache_key(original) != cache_key(changed_prompt)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、缓存：两个开关独立 · 空 content 不写 · 空壳 evict
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,6 +294,25 @@ def test_read_and_write_switches_are_independent():
     _client(t4, ctx=ctx4, cache=ResponseCache(d)).ask_text('s', 'u', purpose='t')
     assert len(t4.calls) == 1
     assert ResponseCache(d).get(cache_key(_req())).text == '新采样', 'disabled 不该写缓存'
+
+
+def test_one_call_can_refresh_without_mutating_the_shared_run_policy():
+    """并发逐章共享 client；单章的退化重采样不能把整批上下文改成 refresh。"""
+    d = Path(tempfile.mkdtemp())
+    cache = ResponseCache(d)
+    cache.put(cache_key(_req()), OK_TEXT)
+    ctx = _ctx(cache=CachePolicy.default())
+    transport = FakeTransport.always(
+        ChatResponse(content='绕缓存的新采样', finish_reason='stop'))
+    client = _client(transport, ctx=ctx, cache=ResponseCache(d))
+
+    got = client.ask_text(
+        's', 'u', purpose='单次重采样', cache_policy=CachePolicy.refresh())
+
+    assert got == '绕缓存的新采样'
+    assert len(transport.calls) == 1, 'per-call refresh 读回了旧缓存'
+    assert ctx.cache.name == 'default', '单章覆盖污染了共享 RunContext'
+    assert ResponseCache(d).get(cache_key(_req())).text == '绕缓存的新采样'
 
 
 def _req(effort: str = 'high', thinking: bool = True) -> ChatRequest:

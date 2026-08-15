@@ -18,6 +18,11 @@ review.py —— `stage5.review`：**全书验收**（0 成本，不调 LLM）�
 """
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE3_STYLE_GROUNDING,
+    STAGE4_WRITER_CONTEXT, STAGE5_REVIEW,
+)
+
 import collections
 import glob
 import os
@@ -43,15 +48,15 @@ from novel.stages.stage5 import checks
 from novel.stages.stage5 import measure as M
 from novel.store import ArtifactStore
 
-MAIN_TEXT = 'stage1/main_text.json'
-GLOBAL_GROUNDING = 'stage2/global_grounding.json'
-STYLE_GROUNDING = 'stage3/style_grounding.json'
-WRITER_CONTEXT = 'stage4/writer_context.json'
+MAIN_TEXT = STAGE1_MAIN_TEXT
+GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
+STYLE_GROUNDING = STAGE3_STYLE_GROUNDING
+WRITER_CONTEXT = STAGE4_WRITER_CONTEXT
 #: ⚠ 从 `novel/wontfix.py` 派生，不手写第二个字符串——两层共用同一张模板。
 WONTFIX = wontfix.rel_of('stage5')
 
 #: `stage5/review_<n>.json`。`<n>` 由盘上已有的最大序号 **+1**。
-REVIEW_TPL = 'stage5/review_{n}.json'
+REVIEW_TPL = STAGE5_REVIEW
 _REVIEW_RX = re.compile(r'^review_(\d+)\.json$')
 
 
@@ -339,7 +344,7 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
         sources=sources, judged=judged, chapters=rows, book=book_fs,
         baselines=baselines, baselines_identity=baselines_identity, counts=dict(counts),
         _provenance=ctx.free_provenance(ReviewProvenance,
-                                        prompts={'RULES': _rules_fingerprint()}),
+                                        prompts={'RULES': prov.rules_fingerprint('stage5')}),
     )
 
 
@@ -424,16 +429,6 @@ def _converge(rows: list[ReviewChapter], book_fs: list[Finding], prev: Review | 
                    + (f'（{sorted({k[1] for k in resolved})}）' if resolved else ''),
             evidence=[str(len(resolved))]))
     return rows, book_fs
-
-
-def _rules_fingerprint() -> str:
-    """**判据表自身的指纹** —— 这份报告的「尺子版本」。
-
-    判据表改了而报告没重跑，这个指纹是唯一说得出来的地方。
-    """
-    return prov.fingerprint(repr(sorted(
-        (r.rule, r.sev, r.check_kind, r.item, r.owner, r.repair, r.directive)
-        for r in REGISTRY.of_stage('stage5'))))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

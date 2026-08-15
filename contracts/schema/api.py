@@ -32,6 +32,8 @@ from pydantic import Field, model_validator
 
 from contracts.invariants import (
     ADDRESS_CONTEXT,
+    ANCHOR_COVERAGE_STATE,
+    ANCHOR_COVERAGE_WARN,
     APPROVAL_GATES,
     APPROVAL_SEEN,
     DEPTH_MODES,
@@ -55,8 +57,8 @@ from contracts.invariants import (
 from contracts.schema.base import FrozenModel, Sha1, StrictModel
 from contracts.schema.common import Finding
 from contracts.schema.orchestration import (
-    AgentRunRecord, ArtifactState, Freshness, FreshnessReason, JobRecord,
-    NovelOverview, QueueRun,
+    AgentRunRecord, ArtifactCondition, ArtifactState, Freshness, FreshnessReason,
+    JobRecord, JobState, NovelOverview, QueueRun,
 )
 from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage2 import (
@@ -89,6 +91,7 @@ RemovedOrigin = Literal[REMOVED_ORIGIN]
 GateKey = Literal[APPROVAL_GATES]
 SeenKey = Literal[APPROVAL_SEEN]
 InboxKind = Literal[INBOX_KIND]
+AnchorCoverageState = Literal[ANCHOR_COVERAGE_STATE]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,6 +310,10 @@ class StyleView(StrictModel):
 
     exists: bool
 
+    #: 产物整体处境的服务端结论。界面用它选提示文案，不再用
+    #: ``exists`` / ``invalid_exists`` / ``readable`` 自己重建优先级。
+    condition: ArtifactCondition
+
     #: 盘上有一份 `.INVALID` 在等人处理。**留着不说等于静默**：
     #: 正式稿可能是**更早**的一版，而人会以为它就是最近这次跑出来的。
     invalid_exists: bool
@@ -358,6 +365,17 @@ class StyleView(StrictModel):
     @model_validator(mode='after')
     def _postconditions(self) -> StyleView:
         """五条。每一条都在挡一种「两个状态在界面上长得一样」。"""
+        want_condition = (
+            'invalid' if self.invalid_exists else
+            'missing' if not self.exists else
+            'unreadable' if not self.readable else
+            'ready'
+        )
+        if self.condition != want_condition:
+            raise ValueError(
+                f'condition={self.condition!r} 与服务端原始事实推导出的 '
+                f'{want_condition!r} 不一致')
+
         # ① 不在盘上 ⇒ 「读不读得回来」是个没有意义的问题。
         if (self.readable is None) != (not self.exists):
             raise ValueError(
@@ -449,6 +467,27 @@ class LogChunk(StrictModel):
 
     text: str
     next_byte: int = Field(ge=0)
+
+
+class LogStreamEvent(StrictModel):
+    """`GET /api/jobs/:id/stream` 每个 SSE event 的 JSON data。
+
+    `next_byte` 同轮询端点，是盘上 UTF-8 **字节**偏移；浏览器把它同时保存为 SSE
+    `id`，断线重连时通过 `Last-Event-ID` 续读。终态 event 只出现一次并关闭连接。
+    """
+
+    text: str
+    next_byte: int = Field(ge=0)
+    done: bool
+    state: JobState | None = None
+
+    @model_validator(mode='after')
+    def _terminal_state_matches_done(self) -> LogStreamEvent:
+        if self.done != (self.state is not None):
+            raise ValueError('done 与 state 必须同时出现或同时缺席')
+        if self.state == 'running':
+            raise ValueError('SSE 终态不能是 running')
+        return self
 
 
 class PreviewRequest(StrictModel):
@@ -1135,7 +1174,19 @@ class DraftAlignView(StrictModel):
     rows: int = Field(ge=0)
     inversions: int = Field(ge=0)
     coverage: float = Field(ge=0, le=1)
+    coverage_threshold: float = Field(gt=0, le=1)
+    coverage_state: AnchorCoverageState
     note: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _coverage_state_is_from_the_server_threshold(self) -> DraftAlignView:
+        if self.coverage_threshold != ANCHOR_COVERAGE_WARN:
+            raise ValueError('coverage_threshold 必须来自 ANCHOR_COVERAGE_WARN')
+        want = 'low' if self.coverage < self.coverage_threshold else 'adequate'
+        if self.coverage_state != want:
+            raise ValueError(
+                f'coverage_state={self.coverage_state!r}，按 coverage/threshold 应为 {want!r}')
+        return self
 
 
 class DraftView(StrictModel):

@@ -8,6 +8,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from contracts.schema import decode_artifact
 from tests import corpus
 
 STAGE3_INPUTS = (
@@ -53,7 +54,8 @@ class Sandbox:
             path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
 
     def read(self, rel: str) -> dict:
-        return json.loads((self.dir / rel).read_text(encoding='utf-8'))
+        raw = json.loads((self.dir / rel).read_text(encoding='utf-8'))
+        return decode_artifact(rel, raw).payload
 
     def write(self, rel: str, data: dict) -> None:
         path = self.dir / rel

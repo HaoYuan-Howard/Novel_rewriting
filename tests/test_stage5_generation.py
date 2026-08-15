@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import importlib
+import shutil
+import tempfile
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from novel.cli import exit_codes as X
+from novel.errors import GateBlocked
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed
 from novel.llm.transport import ChatResponse
@@ -65,14 +69,107 @@ def test_a_successful_retry_archives_both_live_formal_and_invalid():
 
     rel = 'stage5/deep/ch05.json'
     invalid = 'stage5/deep/ch05.INVALID.json'
-    store = Store({rel, invalid})
+    rejected = 'stage5/deep/ch05.rejected.json'
+    store = Store({rel, invalid, rejected})
     write._archive_superseded(store, rel, new_invalid=False)
-    assert store.archived == [rel, invalid]
+    assert store.archived == [rel, invalid, rejected]
 
-    store = Store({rel, invalid})
+    store = Store({rel, invalid, rejected})
     write._archive_superseded(store, rel, new_invalid=True)
-    assert store.archived == [invalid]
+    assert store.archived == [invalid, rejected]
     assert rel in store.live, '新问题稿不能销毁上一轮正式稿'
+
+
+def test_revise_regression_gets_exactly_one_refresh_resample(monkeypatch):
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def ask_text(self, *_args, **kwargs):
+            self.calls.append(kwargs)
+            return '第一次退化稿' if len(self.calls) == 1 else '第二次合格稿'
+
+    monkeypatch.setattr(write.prompts, 'build_material',
+                        lambda *_a, **_kw: SimpleNamespace(given='given'))
+    monkeypatch.setattr(write.prompts, 'revise_user', lambda *_a, **_kw: 'USER')
+    monkeypatch.setattr(write.M, 'normalize_chapter',
+                        lambda text, **_kw: (text, object()))
+    monkeypatch.setattr(write, '_trim_to_fit',
+                        lambda _c, text, *_a, **_kw: (text, []))
+    monkeypatch.setattr(
+        write.checks, 'trim_regressions',
+        lambda _prev, new, *_a, **_kw: ['丢失结尾'] if '第一次' in new else [])
+    client = Client()
+
+    got = write._generate_chapter(
+        {'output_ordinal': 1},
+        SimpleNamespace(quote_style='curly', sep_chars=[]),
+        client, mode='deep', revise={1: ('旧正式稿', [], 'review-fp')},
+        system='SYS', progress=SimpleNamespace())
+
+    assert got['text'] == '第二次合格稿'
+    assert len(client.calls) == 2
+    assert 'cache_policy' not in client.calls[0]
+    assert client.calls[1]['cache_policy'].name == 'refresh-write'
+
+
+def test_two_regressed_revisions_preserve_formal_and_write_rejected(monkeypatch):
+    from contracts.schema.stage5 import RejectedRevision
+    from novel.store import ArtifactStore
+
+    rejected = {
+        'output_ordinal': 1,
+        'why': ['丢失结尾'],
+        'fixes': [['rule-a', 'evidence-a']],
+        'attempts': [
+            {'chars': 3, 'text': '退化一'},
+            {'chars': 3, 'text': '退化二'},
+        ],
+    }
+    monkeypatch.setattr(write.prompts, 'write_system', lambda *_a, **_kw: 'SYS')
+    monkeypatch.setattr(write, '_generate_chapter', lambda *_a, **_kw: {'rejected': rejected})
+    monkeypatch.setattr(write, '_report', lambda *_a, **_kw: object())
+    root = Path(tempfile.mkdtemp(prefix='stage5-rejected-disk-'))
+    try:
+        formal = root / 'stage5' / 'deep' / 'ch01.json'
+        formal.parent.mkdir(parents=True)
+        formal.write_bytes(b'paid-formal-draft')
+        ctx = SimpleNamespace(
+            novel_dir=root, observe=lambda *_a, **_kw: None)
+        store = ArtifactStore(ctx)
+
+        for _attempt in range(2):
+            with pytest.raises(GateBlocked, match='全部没落成正式稿'):
+                write._run_group(
+                    ctx, store, SimpleNamespace(), [{'output_ordinal': 1}],
+                    SimpleNamespace(concurrency=1), mode='deep',
+                    revise={1: ('旧正式稿', [], 'review-fp')})
+            assert formal.read_bytes() == b'paid-formal-draft'
+
+        live, _raw = store.read_own(
+            RejectedRevision, 'stage5/deep/ch01.rejected.json')
+        archived, _raw = store.read_own(
+            RejectedRevision,
+            'stage5/deep/_rounds/ch01.rejected.r1.json')
+        for artifact in (live, archived):
+            assert [attempt.text for attempt in artifact.attempts] == [
+                '退化一', '退化二']
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_default_resume_after_interruption_only_schedules_missing_chapters(monkeypatch):
+    from novel.orchestrator import state
+
+    monkeypatch.setattr(state, 'chapters_done', lambda *_a: [1])
+    book = SimpleNamespace(chapters={
+        1: {'output_ordinal': 1},
+        2: {'output_ordinal': 2},
+        3: {'output_ordinal': 3},
+    })
+    ctx = SimpleNamespace(novel_dir='book')
+
+    assert [row['output_ordinal'] for row in write._chapters_of(ctx, book, None)] == [2, 3]
 
 
 def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):

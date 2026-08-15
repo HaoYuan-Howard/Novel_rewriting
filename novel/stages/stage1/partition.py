@@ -3,6 +3,11 @@
 '''stage1 分章产地。零 LLM，不剔除任何非正文。'''
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY,
+    STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
+)
+
 from collections import Counter
 from dataclasses import dataclass
 
@@ -30,11 +35,11 @@ from novel.errors import (
 from novel.run import RunContext
 from novel.store import ArtifactStore
 
-STAGE0_REPORT = 'stage0/removal_report.json'
-CLEAN_TEXT = 'stage0/clean_text.txt'
-MAIN_TEXT = 'stage1/main_text.json'
-HOOK_COPY = 'stage1/hook_copy.json'
-REPORT = 'stage1/partition_report.json'
+STAGE0_REPORT = STAGE0_REMOVAL_REPORT
+CLEAN_TEXT = STAGE0_CLEAN_TEXT
+MAIN_TEXT = STAGE1_MAIN_TEXT
+HOOK_COPY = STAGE1_HOOK_COPY
+REPORT = STAGE1_PARTITION_REPORT
 
 
 @dataclass(frozen=True)

@@ -79,12 +79,12 @@ def test_overview_runs_on_the_real_corpus(sid):
     assert ov.stage5_modes == ['deep', 'shallow']
 
 
-# ───────────────────── 逐章：`.INVALID` 不许被数进去 ─────────────────────
+# ───────────────────── 逐章：只有正式稿可被数进去 ─────────────────────
 
-def test_invalid_chapters_are_never_counted_as_written():
+def test_only_canonical_formal_chapters_are_counted_as_written():
     """⚠⚠ `chNN.json` 的存在本身就是「过了写作时的落盘闸门」这个语义。
 
-    把 `.INVALID.json` 数进去就把这个语义**反过来**了：
+    把 `.INVALID.json` / `.rejected.json` 数进去就把这个语义**反过来**了：
     续跑会跳过一章**根本没写成的**稿子，而那一章的钱到时候还得花。
     ⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸 ⇒ `mkdtemp`。
     """
@@ -94,7 +94,9 @@ def test_invalid_chapters_are_never_counted_as_written():
         d.mkdir(parents=True)
         (d / 'ch01.json').write_text('{}', encoding='utf-8')
         (d / 'ch02.INVALID.json').write_text('{}', encoding='utf-8')
+        (d / 'ch02.rejected.json').write_text('{}', encoding='utf-8')
         (d / 'ch03.json').write_text('{}', encoding='utf-8')
+        (d / 'ch04.notes.json').write_text('{}', encoding='utf-8')
         assert S.chapters_done(root, 'deep') == [1, 3]
         assert S.chapters_done(root, 'shallow') == [], '目录不存在时是空，不是抛'
     finally:

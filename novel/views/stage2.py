@@ -15,6 +15,10 @@ view 不编名字：编出来的名字比一个看得出来的 id 更坏（它�
 """
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
+)
+
 import os
 
 from contracts.schema.api import (
@@ -32,11 +36,11 @@ from novel.stages.stage2.coverage import walk_segments
 from novel.store import ArtifactStore
 
 NODE = 'stage2.global'
-REL = 'stage2/global_grounding.json'
+REL = STAGE2_GLOBAL_GROUNDING
 
 BP_NODE = 'stage2.blueprint'
-BP_REL = 'stage2/chapter_blueprints.json'
-MAIN_TEXT = 'stage1/main_text.json'
+BP_REL = STAGE2_CHAPTER_BLUEPRINTS
+MAIN_TEXT = STAGE1_MAIN_TEXT
 
 
 def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:

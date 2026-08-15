@@ -20,12 +20,16 @@ routing 不符 ⇒ 重跑」。改成 Web 编排之后**整个消失，且没有
 """
 from __future__ import annotations
 
+from contracts.artifacts import STAGE4_PLAN_CHAPTERS, artifact_rel
+
 import os
 from pathlib import Path
 
 from contracts.invariants import NODES, STAGES
 from contracts.schema import ARTIFACTS
-from contracts.schema.orchestration import ArtifactState, NovelOverview, StageState
+from contracts.schema.orchestration import (
+    ArtifactState, NovelOverview, OverviewSummary, StageState,
+)
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.llm.cache import CachePolicy
@@ -79,7 +83,8 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
     if not p.is_file():
         return ArtifactState(rel=rel, exists=False, bytes=None, mtime=None,
                              freshness='unknown', reason='no_provenance',
-                             invalid=invalid, readable=True)
+                             display_freshness='missing', invalid=invalid, readable=True,
+                             condition='invalid' if invalid else 'missing')
 
     st = p.stat()
     try:
@@ -100,7 +105,8 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
     return ArtifactState(
         rel=rel, exists=True, bytes=st.st_size, mtime=int(st.st_mtime),
         freshness=fresh, reason=reason, ghosts=ghosts,
-        invalid=invalid, readable=readable,
+        display_freshness=fresh, invalid=invalid, readable=readable,
+        condition=('invalid' if invalid else 'unreadable' if not readable else 'ready'),
     )
 
 
@@ -109,23 +115,29 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def chapters_done(novel_dir: Path, mode: str) -> list[int]:
-    """`stage5/<mode>/ch*.json` 已落盘的章号（`R-14.2`：续跑粒度是**章**）。
+    """规范 `stage5/<mode>/chNN.json` 已落盘的章号（`R-14.2`：续跑粒度是**章**）。
 
-    ⚠⚠ **必须排除 `.INVALID.json`。** `chNN.json` 的存在本身就是
+    ⚠⚠ **必须排除 `.INVALID.json` 与 `.rejected.json`。** `chNN.json` 的存在本身就是
     「过了写作时的落盘闸门」这个语义（`_common.md` §5.1：先校验后落盘）——
     把被拦下的那一份数进去，就把这个语义**反过来**了：
     续跑会跳过一章**根本没写成的**稿子，而那一章的钱到时候还得花。
+
+    不再靠“排除已知后缀”的黑名单：新增一种失败留证时，黑名单会再次漏掉。
+    候选必须逐字等于产物目录生成的规范路径，只有正式稿这一种形状能通过。
     """
     d = novel_dir / 'stage5' / mode
     if not d.is_dir():
         return []
     out = []
     for p in sorted(d.glob('ch*.json')):
-        if paths.is_invalid(p.name):
-            continue
         digits = ''.join(c for c in p.stem if c.isdigit())
-        if digits:
-            out.append(int(digits))
+        if not digits:
+            continue
+        ordinal = int(digits)
+        expected = novel_dir / artifact_rel(
+            'stage5.chapter', mode=mode, nn=ordinal)
+        if p == expected:
+            out.append(ordinal)
     return sorted(out)
 
 
@@ -136,8 +148,8 @@ def planned_chapters(store: ArtifactStore) -> list[int] | None:
     `None` 是「我们不知道该有几章」。stage5 的完成度整个挂在这个区别上。
     """
     try:
-        plan, _raw = store.read_own(ARTIFACTS['stage4/plan_chapters.json'],
-                                    'stage4/plan_chapters.json')
+        plan, _raw = store.read_own(ARTIFACTS[STAGE4_PLAN_CHAPTERS],
+                                    STAGE4_PLAN_CHAPTERS)
     except (ArtifactUnreadable, UpstreamMissing):
         return None
     out = getattr(plan, 'output_chapters', None)
@@ -158,13 +170,58 @@ def stage_state(store: ArtifactStore, stage: str, *, modes: list[str]) -> StageS
     if stage != 'stage5':
         done = all(a.exists and a.readable and a.freshness != 'stale' and not a.invalid
                    for a in arts) if arts else None
-        return StageState(stage=stage, artifacts=arts, done=done)
+        reviewable = done is True or any(a.exists and a.readable for a in arts)
+        return StageState(stage=stage, artifacts=arts, done=done, reviewable=reviewable)
 
     per_mode = {m: chapters_done(store.ctx.novel_dir, m) for m in modes}
     written = {n for chs in per_mode.values() for n in chs}
     want = planned_chapters(store)
     done = None if want is None else bool(want) and set(want) <= written
-    return StageState(stage=stage, artifacts=arts, done=done, chapters_done=per_mode)
+    return StageState(
+        stage=stage, artifacts=arts, done=done, chapters_done=per_mode,
+        reviewable=bool(per_mode),
+    )
+
+
+def overview_summary(stages: list[StageState]) -> OverviewSummary:
+    """一本书顶部的一句话；优先级与计数只在服务端这一处。"""
+    artifacts = [artifact for stage in stages for artifact in stage.artifacts]
+    broken = [a for a in artifacts if a.condition in ('invalid', 'unreadable')]
+    stale = [a for a in artifacts if a.display_freshness == 'stale']
+    pending = next((stage for stage in stages if stage.done is False), None)
+    unknown = [a for a in artifacts
+               if a.exists and a.display_freshness == 'unknown']
+    missing = [a for a in artifacts if a.display_freshness == 'missing']
+    unknown_stages = [stage for stage in stages if stage.done is None]
+    existing = [a for a in artifacts if a.exists]
+    latest = max((a.mtime or 0 for a in existing), default=0) or None
+
+    if broken:
+        verdict, text, detail = (
+            'broken', f'{len(broken)} 份产物不可用', '盘上存在，但当前版本读不回来或已被隔离')
+    elif stale:
+        verdict, text, detail = (
+            'stale', f'{len(stale)} 份过期', '上游变了，下游要重跑')
+    elif pending is not None:
+        node = next((spec for spec in NODES.values() if spec.stage == pending.stage), None)
+        verdict, text, detail = (
+            'pending', '待继续',
+            f'下一步：{pending.stage}' + (f' · {node.label}' if node else ''))
+    elif unknown:
+        verdict, text = 'unknown', f'{len(unknown)} 份无从判断'
+        detail = (f'{len(missing)} 份尚未落盘' if missing else
+                  f'其余 {len(existing) - len(unknown)} 份新鲜')
+    elif unknown_stages:
+        verdict, text, detail = (
+            'unknown', f'{len(unknown_stages)} 层完成度判不了',
+            '不是没跑，需要打开书逐层确认')
+    else:
+        verdict, text, detail = (
+            'complete', '全链已有产物', f'{len(existing)} 份产物可读')
+    return OverviewSummary(
+        verdict=verdict, text=text, detail=detail,
+        artifact_count=len(existing), latest_mtime=latest,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -218,6 +275,7 @@ def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
         dirname=novel_dir.name,
         stages=stages,
         stage5_modes=modes,
+        summary=overview_summary(stages),
     )
 
 

@@ -19,10 +19,12 @@ stage5.py —— S-08「成稿 ↔ 材料」与 S-09「验收 / 修订」两屏�
 """
 from __future__ import annotations
 
+from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE4_WRITER_CONTEXT
+
 import os
 from typing import Any
 
-from contracts.invariants import DEPTH_MODES, SEVERITY
+from contracts.invariants import ANCHOR_COVERAGE_WARN, DEPTH_MODES, SEVERITY
 from contracts.schema.api import (
     DraftAlignRow, DraftAlignView, DraftView, MaterialView,
     ReviewChapterView, ReviewIndexRow, ReviewView,
@@ -39,8 +41,8 @@ from novel.store import ArtifactStore
 
 WRITE_NODE = 'stage5.write'
 REVIEW_NODE = 'stage5.review'
-CTX_REL = 'stage4/writer_context.json'
-MAIN_TEXT = 'stage1/main_text.json'
+CTX_REL = STAGE4_WRITER_CONTEXT
+MAIN_TEXT = STAGE1_MAIN_TEXT
 
 _ALIGN_NOTE = ('这是对应关系，不是判定——分界线由「必须逐字写入的原话」双侧锚定，'
                '无锚的拍并进相邻块')
@@ -248,6 +250,9 @@ def _align(source: str | None, draft: str,
         beats=len(beats), anchors=len(kept), rows=len(kept),
         inversions=inversions,
         coverage=len(kept) / len(beats) if beats else 0.0,
+        coverage_threshold=ANCHOR_COVERAGE_WARN,
+        coverage_state=('low' if len(kept) / len(beats) < ANCHOR_COVERAGE_WARN
+                        else 'adequate'),
         note=_ALIGN_NOTE)
     if not kept:
         return None, []

@@ -1,0 +1,9 @@
+{
+  "responses": [
+    {"status": 429, "retryable": true},
+    {"status": 503, "retryable": true},
+    {"content": "重试后完整正文", "finish_reason": "stop"}
+  ],
+  "expected_backoff_seconds": [0.25, 0.5],
+  "expected_attempts": 3
+}

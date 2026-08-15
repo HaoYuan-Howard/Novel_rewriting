@@ -27,6 +27,7 @@ import json
 
 import pytest
 
+from contracts.schema import decode_artifact
 from contracts.schema.stage6 import Hook, HookSemanticReview
 from novel import prov
 from novel.errors import TerminalState
@@ -113,7 +114,6 @@ def _seed_semantic(box, *, dirty: int = 0, uncertain: tuple[int, ...] = ()) -> s
         hook_file_sha1=prov.fingerprint_bytes(store.path(hook.REL).read_bytes()),
         reviews=reviews,
         ranking=[label for label, _t in texts],
-        texts=[], decisions=[],
         _provenance=ctx.llm_provenance(
             prompts={'HOOK_SEMANTIC_SYS': semantic.SEMANTIC_SYS}, model='test-model'),
     )
@@ -160,7 +160,9 @@ def test_a_real_semantic_hit_can_be_marked_and_the_conclusion_survives(box):
 
     hook.run_wontfix(_ctx(box, 'stage6.hook'), spec)
 
-    ledger = json.loads((box.dir / 'stage6' / 'wontfix.json').read_text(encoding='utf-8'))
+    rel = 'stage6/wontfix.json'
+    raw = json.loads((box.dir / rel).read_text(encoding='utf-8'))
+    ledger = decode_artifact(rel, raw).payload
     assert list(ledger) == [f'book|hook_candidate_contradiction|{key}'], \
         '键里不该出现层名——层由文件路径承载'
     entry = ledger[list(ledger)[0]]
@@ -471,8 +473,9 @@ def test_a_semantic_secret_leak_can_finally_be_marked_and_stops_occupying_the_in
     ctx3 = RunContext.open(str(root), sid, 'stage5.review', paid=False, write_ledger=False)
     R.mark_wontfix(ctx3, f'book|semantic_secret_leak|{key}=这一章本来就该让读者知道')
 
-    ledger = json.loads(
-        (root / book / 'stage5' / 'wontfix.json').read_text(encoding='utf-8'))
+    rel = 'stage5/wontfix.json'
+    raw = json.loads((root / book / rel).read_text(encoding='utf-8'))
+    ledger = decode_artifact(rel, raw).payload
     entry = ledger[f'book|semantic_secret_leak|{key}']
     assert entry['why'] == '这一章本来就该让读者知道'
     assert entry['at'].startswith('semantic_') and 'review_' in entry['at'], \

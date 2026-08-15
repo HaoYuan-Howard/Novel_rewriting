@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from contracts.schema import ArtifactVersionError
 from tests import corpus
 from tests.corpus import Artifact
 
@@ -27,7 +28,14 @@ def test_current_corpus_contains_registered_artifacts():
 @pytest.mark.parametrize('artifact', ARTIFACTS, ids=_ids(ARTIFACTS))
 def test_current_artifact_matches_its_exact_schema(artifact: Artifact):
     assert artifact.pattern in corpus.ARTIFACTS
-    assert corpus.load_current(artifact) == corpus.load_raw(artifact)
+    try:
+        current = corpus.load_current(artifact)
+    except ArtifactVersionError as error:
+        # 迁不出来的旧事实也属于版本策略的一部分：必须点名文件与旧版本，不能变成长串字段错。
+        assert artifact.pattern == 'stage6/semantic_{n}.json'
+        assert artifact.formal_rel in str(error) and 'schema v0' in str(error)
+    else:
+        assert artifact.model.model_validate(current) is not None
 
 
 def test_current_corpus_has_no_duplicate_paths():

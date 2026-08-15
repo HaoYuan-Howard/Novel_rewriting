@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE0_REMOVAL_REPORT, STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS,
+    STAGE2_GLOBAL_GROUNDING, STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS,
+    STAGE5_BOOK_DRAFT, STAGE6_HOOK, STAGE7_NAME_MAP,
+)
+
 import json
 import os
 import threading
@@ -83,14 +89,14 @@ def get(base: str | os.PathLike[str], sid: str) -> ApprovalDoc:
 
 
 _GATE_ARTIFACTS = {
-    's0': ('stage0/removal_report.json',),
-    's1': ('stage1/main_text.json',),
-    's2': ('stage2/global_grounding.json', 'stage2/chapter_blueprints.json'),
-    's3': ('stage3/style_grounding.json',),
-    's4': ('stage4/plan_chapters.json',),
-    's5': ('stage5/draft.md',),
-    's6': ('stage6/hook.json',),
-    's7': ('stage7/name_map.json',),
+    's0': (STAGE0_REMOVAL_REPORT,),
+    's1': (STAGE1_MAIN_TEXT,),
+    's2': (STAGE2_GLOBAL_GROUNDING, STAGE2_CHAPTER_BLUEPRINTS),
+    's3': (STAGE3_STYLE_GROUNDING,),
+    's4': (STAGE4_PLAN_CHAPTERS,),
+    's5': (STAGE5_BOOK_DRAFT,),
+    's6': (STAGE6_HOOK,),
+    's7': (STAGE7_NAME_MAP,),
 }
 
 
@@ -106,7 +112,7 @@ def _require_stage5_complete(
 ) -> None:
     planned = _planned(base, sid)
     if planned is None:
-        raise UpstreamMissing('stage4/plan_chapters.json is required before stage5 approval')
+        raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before stage5 approval')
     novel_dir = paths.resolve_novel_dir(base, sid)
     deep_done = set(state.chapters_done(novel_dir, 'deep'))
     shallow_done = set(state.chapters_done(novel_dir, 'shallow'))
@@ -147,8 +153,8 @@ def approve_gate(base: str | os.PathLike[str], sid: str, gate: str) -> ApprovalD
 
 def mark_seen(base: str | os.PathLike[str], sid: str, key: str) -> ApprovalDoc:
     rels = {
-        'read': ('stage2/chapter_blueprints.json',),
-        'global': ('stage2/global_grounding.json',),
+        'read': (STAGE2_CHAPTER_BLUEPRINTS,),
+        'global': (STAGE2_GLOBAL_GROUNDING,),
     }
     if key not in rels:
         raise ApprovalRequired(f'unknown stage2 view: {key}')
@@ -182,7 +188,7 @@ def set_deep(base: str | os.PathLike[str], sid: str, deep: list[int]) -> Approva
             raise HumanEditProtected('deep selection is locked after stage5 writing starts')
         planned = _planned(base, sid)
         if planned is None:
-            raise UpstreamMissing('stage4/plan_chapters.json is required before depth selection')
+            raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before depth selection')
         if outside := sorted(set(canonical) - set(planned)):
             raise ApprovalRequired(f'deep selection contains unplanned chapters: {outside}')
         return _write(base, doc.model_copy(update={'deep': canonical}))
@@ -197,7 +203,7 @@ def begin_writing(
             raise ApprovalRequired('stage3 style and stage4 plan must be approved first')
         planned = _planned(base, sid)
         if planned is None:
-            raise UpstreamMissing('stage4/plan_chapters.json is required before writing')
+            raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before writing')
         if outside := sorted(set(doc.deep) - set(planned)):
             raise ApprovalRequired(f'saved deep selection is outside the plan: {outside}')
         if expected is not None and list(expected) != doc.deep:
@@ -222,7 +228,7 @@ def authorize_arm(
             raise ApprovalRequired('select deep chapters and start composite writing first')
         planned = _planned(base, sid)
         if planned is None:
-            raise UpstreamMissing('stage4/plan_chapters.json is required before writing')
+            raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before writing')
         requested = set(planned if chapters is None else chapters)
         allowed = set(doc.deep) if mode == 'deep' else set(planned) - set(doc.deep)
         if outside := sorted(requested - allowed):

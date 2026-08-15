@@ -293,8 +293,8 @@ def _resolve_beats(out_ch: dict[str, Any], bidx: dict[str, dict[str, Any]], disp
                 w['time_layer'] = tl
             if pl:
                 w['place'] = pl
-            if pres:
-                w['present'] = pres
+            # 适用但无人 = []；null 专门表示顶层不适用、改走 segments。
+            w['present'] = pres
         elif stage:
             # ⚠⚠ **跨层/跨地合并必须保留子结构，不能压平。** 压平会产生两种害处：
             #   ① `time_layer` 变成取值面外的 `"present+recall"`，写手无从判断这拍是现场还是回忆；

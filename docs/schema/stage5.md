@@ -5,7 +5,8 @@
 ```
 stage5/<mode>/chNN.json          LLM 产，逐章一次调用 —— 唯一承载正文的产物（deep / shallow 两条臂）
 stage5/<mode>/chNN.INVALID.json  被落盘闸门拦下的问题稿（同一份章契约，只多一个 errs）
-stage5/<mode>/_rounds/…          三种归档：上一轮 · 被提升掉的问题稿 · 被回归护栏驳回的自救尝试
+stage5/<mode>/chNN.rejected.json 两次都相对旧正式稿退化的修订证据；旧正式稿保持原位
+stage5/<mode>/_rounds/…          上一轮与被替代的 INVALID / rejected 历史归档
 stage5/review_<n>.json           确定性验收报告（**0 成本，不调 LLM**），整本写完之后跑
 stage5/semantic_<n>.json         付费书级语义审判（secret-blind claims → secret alignment）
 stage5/wontfix.json              人的「这条我不修」（0 成本，理由必填）
@@ -16,8 +17,9 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 读法（证据列的取值、为什么三源合并）见 `_README.md`。
 **载体 = Pydantic v2**（已定），但本文只定内容、不写模型——模型在骨架阶段照本文写。
 
-> **样本面：盘上 3 本 = 31 输出章（deep 11 / shallow 20）· 12 份 review（每本 4 轮）·
-> 6 份 `_rounds` 归档 · 0 份在场的 `.INVALID` · 0 份 `.rejected.json` · 0 份 `wontfix.json`。**
+> **样本面：真实盘上 3 本 = 31 输出章（deep 11 / shallow 20）· 12 份 review（每本 4 轮）·
+> 6 份 `_rounds` 归档 · 0 份在场的 `.INVALID` · 0 份 `.rejected.json` · 0 份 `wontfix.json`；
+> 可提交 fixture 另含一份 versioned `.rejected.json`，用于无版权回归。**
 > 与 stage2~4 一样，这一层没有「全语料 163 本」可退——**跑一章就是一次高推理调用**。
 
 ---
@@ -337,16 +339,19 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 反过来，语义重跑但结论一字未变时豁免仍然有效——`stage5.semantic` 是付费节点、重跑是常态，
 把审判版本塞进匹配键会让一次不改变任何结论的重审把整本账清空。
 
-### 4.2 `stage5/<mode>/_rounds/` —— **三种归档，形状各不相同**
+### 4.2 `stage5/<mode>/_rounds/` 与当前 `chNN.rejected.json`
 
 | 文件 | 是什么 | 形状 |
 |---|---|---|
 | `chNN.r<N>.json` | 上一轮正式稿 | **与正式稿逐字段相同**（盘上 4 份，实测键集一致） |
 | `chNN.INVALID.superseded.json` | 已被正式稿取代的问题稿 | 同 `.INVALID`（盘上 2 份，都是修好之前的 4 键贫血形） |
-| `chNN.rejected.json` | **被回归护栏驳回的自救尝试** | `{output_ordinal, why[], fixes[[rule, evidence_key]…], attempts[{chars, text}]}`。**盘上零样本** |
+| `chNN.rejected.json` | **当前被回归护栏驳回的自救尝试**；下一次成功或 INVALID 结果会将它归档 | `{output_ordinal, why[], fixes[[rule, evidence_key]…], attempts[{chars, text}]}`；`attempts` 恒为两份：首次候选与唯一一次绕缓存重采样。真实盘零样本，可提交 fixture 有一份 |
 
 > **三个名字不能混**（判据 32）：`.INVALID` = 落盘闸门拦下的问题稿；
 > `.rejected` = 护栏拒绝的一次自救；`.rN` = 正常的上一轮。**三者的下一步动作不同。**
+> 修订候选在任何覆盖前先与旧正式稿跑内容保真回归；首次退化只允许一次
+> `refresh-write` 重采样。第二份仍退化、为空或调用失败时，旧正式稿一个字不动，两个候选与原因
+> 落进 `.rejected.json` 并进入 inbox。这个 per-call 缓存策略不修改共享 RunContext，避免并发章串扰。
 >
 > **归档目录只能放在 `stage5/<mode>/` 下面**，理由逐个核过：`_load_mode` / `recheck` 都是
 > 不递归的 `glob('ch*.json')`；而 `Web` 把 **`stage5/` 的每个子目录**当成一条臂。

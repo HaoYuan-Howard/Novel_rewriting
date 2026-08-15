@@ -10,6 +10,8 @@ export interface Artifact {
   mtime: number | null
   provenance: Provenance
   freshness: Freshness
+  display_freshness: Freshness | 'missing'
+  condition: 'missing' | 'ready' | 'invalid' | 'unreadable'
   stale: StaleRef[]
   /** 真实服务的新载体字段；旧 mock 没有时保持可选。 */
   reason?: string
@@ -29,12 +31,19 @@ export interface NovelRow {
   stages: Record<string, Artifact[]>
   /** stage5 只记跑过哪几条臂。以 _ 开头的是目录名泄漏，显示时要过滤掉 */
   stage5_modes: string[]
-  any_stale: boolean
-  any_broken: boolean
-  /** 服务端折叠出的三态完成度。旧 mock 没有时由视图做兼容显示。 */
-  stage_done?: Record<string, boolean | null>
+  /** 服务端折叠出的三态完成度。 */
+  stage_done: Record<string, boolean | null>
+  /** 人工流程导航是否可进入；不是运行闸门。 */
+  stage_reviewable: Record<string, boolean>
   /** 逐章层已经落盘的章号，按 mode 分组。 */
-  chapters_done?: Record<string, Record<string, number[]>>
+  chapters_done: Record<string, Record<string, number[]>>
+  summary: {
+    verdict: 'broken' | 'stale' | 'pending' | 'unknown' | 'complete'
+    text: string
+    detail: string
+    artifact_count: number
+    latest_mtime: number | null
+  }
 }
 
 export interface NovelsResponse {

@@ -7,6 +7,11 @@
 """
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
+    STAGE2_GLOBAL_GROUNDING,
+)
+
 import copy
 import json
 import re
@@ -17,7 +22,6 @@ from pydantic import ValidationError
 
 from contracts.rules import REGISTRY
 from contracts.schema.base import StrictModel
-from contracts.schema.common import Usage
 from contracts.schema.report import CheckReport
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
@@ -30,6 +34,7 @@ from novel.config import MAX_CONCURRENCY
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
+from novel.llm.ledger import combine_usage
 from novel.llm.prompts import with_json_shape
 from novel.observability import ChapterProgressTracker
 from novel.report import build
@@ -42,12 +47,12 @@ from novel.stages.stage2.normalize import (
 )
 from novel.store import ArtifactStore
 
-GLOBAL_REL = 'stage2/global_grounding.json'
-BLUEPRINT_REL = 'stage2/chapter_blueprints.json'
-MAIN_TEXT = 'stage1/main_text.json'
+GLOBAL_REL = STAGE2_GLOBAL_GROUNDING
+BLUEPRINT_REL = STAGE2_CHAPTER_BLUEPRINTS
+MAIN_TEXT = STAGE1_MAIN_TEXT
 
 #: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `GlobalEdit`）。
-GLOBAL_EDIT = 'stage2/global_edit.json'
+GLOBAL_EDIT = STAGE2_GLOBAL_EDIT
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(BLUEPRINT_REL)
@@ -487,24 +492,6 @@ def _judge_candidate(
         global_g=global_g, blueprints=blueprints, main_text=main_text)
 
 
-def _combined_usage(old: Usage | None, new: Usage | None) -> Usage | None:
-    """两次真实产出的用量合并；任一 token 分量未知则总量也未知。"""
-    if old is None or new is None:
-        return None
-
-    def total(name: str) -> int | None:
-        left, right = getattr(old, name), getattr(new, name)
-        return left + right if left is not None and right is not None else None
-
-    return Usage(
-        calls_made=old.calls_made + new.calls_made,
-        calls_cached=old.calls_cached + new.calls_cached,
-        prompt_tokens=total('prompt_tokens'),
-        completion_tokens=total('completion_tokens'),
-        reasoning_tokens=total('reasoning_tokens'),
-    )
-
-
 def _archive_live(store: ArtifactStore, rel: str) -> None:
     if store.exists(rel):
         store.archive_round(rel)
@@ -690,7 +677,7 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
         'code': ctx.code,
         'inputs': delta.inputs,
         'prompts': {**old_prov.prompts, **delta.prompts},
-        'usage': _combined_usage(old_prov.usage, delta.usage),
+        'usage': combine_usage(old_prov.usage, delta.usage),
         'gates_skipped': None,
     })
     artifact = GlobalGrounding.model_validate({
@@ -979,7 +966,7 @@ def _run_blueprint_repair(
     )
     provenance = BlueprintProvenance.model_validate({
         **delta.model_dump(),
-        'usage': _combined_usage(old_prov.usage, delta.usage),
+        'usage': combine_usage(old_prov.usage, delta.usage),
         'partial_rewrite': old_prov.partial_rewrite,
     })
     artifact = ChapterBlueprints.model_validate({

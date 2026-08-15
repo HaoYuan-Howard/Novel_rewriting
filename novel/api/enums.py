@@ -101,6 +101,8 @@ _WITHHELD: dict[str, str] = {
                               '前端要显示的是分布本身，而那份读数由 `verbatim_share` '
                               '那条度量**无条件报出**（`R-5.14`），已经在报告里了',
     'PLAN_BUDGET_BAND': 'Stage4 判据阈值。前端不自行重算预算是否出带',
+    'ANCHOR_COVERAGE_WARN': 'Stage5 对齐覆盖率的判据阈值。响应已经给出 threshold/state，'
+                            '前端只展示后端结论，不重判',
     'DEEP_OVERLAP_MAX': '判据阈值（闭卷臂与原文的重合度上限）',
     'STOP_REWRITE_AFTER': '返工护栏的轮次上限。它是**编排**参数，不是给人看的取值面',
     'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',

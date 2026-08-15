@@ -16,6 +16,11 @@ stage4.py —— S-07「计划 ↔ 写作上下文」那一屏（`GET /api/novel
 """
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
+    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+)
+
 import os
 
 from contracts.schema.api import (
@@ -34,11 +39,11 @@ from novel.stages.stage5.prompts import target_band
 from novel.store import ArtifactStore
 
 NODE = 'stage4.plan'
-PLAN_REL = 'stage4/plan_chapters.json'
-CTX_REL = 'stage4/writer_context.json'
-MAIN_TEXT = 'stage1/main_text.json'
-BLUEPRINTS = 'stage2/chapter_blueprints.json'
-GLOBAL_GROUNDING = 'stage2/global_grounding.json'
+PLAN_REL = STAGE4_PLAN_CHAPTERS
+CTX_REL = STAGE4_WRITER_CONTEXT
+MAIN_TEXT = STAGE1_MAIN_TEXT
+BLUEPRINTS = STAGE2_CHAPTER_BLUEPRINTS
+GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
 
 
 def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4View:

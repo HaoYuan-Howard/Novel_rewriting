@@ -7,7 +7,7 @@ from typing import get_origin, get_type_hints
 
 import pytest
 
-from contracts.schema.stage4 import WriterContext
+from contracts.schema.stage4 import CtxBeat, WriterContext
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
     Assembly, _gate_setting, build_writer_context, display_names, display_names_at,
@@ -17,7 +17,7 @@ from tests import corpus
 
 
 def _by(rel: str) -> dict[str, object]:
-    return {a.source_id: corpus.load_raw(a) for a in corpus.iter_artifacts() if a.rel == rel}
+    return {a.source_id: corpus.load_current(a) for a in corpus.iter_artifacts() if a.rel == rel}
 
 
 MAIN = _by('stage1/main_text.json')
@@ -31,6 +31,32 @@ needs_corpus = pytest.mark.skipif(not BOOKS, reason='盘上没有语料——本
 
 #: 来源账由写盘口生成；纯组装器只负责正文形状，因此逐字段对账时单独排除。
 _GENERATED_TOP = frozenset({'_provenance'})
+
+
+def test_flat_and_segmented_present_have_distinct_serialized_meanings():
+    flat = CtxBeat.model_validate({
+        'events': ['空院里没有别人。'], 'budget_chars': 80, 'source_chars': 20,
+        'time_layer': 'present', 'place': '空院', 'present': None,
+    })
+    assert flat.present == []
+    assert flat.model_dump(mode='json')['present'] == []
+
+    segmented = CtxBeat.model_validate({
+        'events': ['先在空院，后转入回忆。'], 'budget_chars': 100, 'source_chars': 30,
+        'segments': [
+            {'time_layer': 'present', 'place': '空院', 'present': []},
+            {'time_layer': 'recall', 'place': None, 'present': ['阿青']},
+        ],
+    })
+    dumped = segmented.model_dump(mode='json')
+    assert dumped['present'] is None and dumped['segments'][0]['present'] == []
+
+    with pytest.raises(ValueError, match='只在 segments'):
+        CtxBeat.model_validate({
+            'events': ['跨场。'], 'budget_chars': 80, 'source_chars': 20,
+            'present': [],
+            'segments': [{'time_layer': 'present', 'place': None, 'present': []}],
+        })
 
 
 def _diffs(mine: object, disk: object, path: str = '', out: list[str] | None = None) -> list[str]:
@@ -92,7 +118,9 @@ def test_the_assembler_reproduces_every_context_on_disk():
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])
         mine = _through_the_carrier(asm.ctx, CTX[sid]['_provenance'])
-        d = _diffs(mine, CTX[sid])
+        disk = WriterContext.model_validate(CTX[sid]).model_dump(
+            by_alias=True, mode='json')
+        d = _diffs(mine, disk)
         assert not d, f'{sid} 重组与盘上不一致（{len(d)} 处）：\n  ' + '\n  '.join(d[:8])
 
 

@@ -8,6 +8,8 @@
 '''
 from __future__ import annotations
 
+from contracts.artifacts import STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT
+
 import codecs
 import re
 from dataclasses import dataclass
@@ -55,8 +57,8 @@ from novel.llm.ledger import CostLedger
 from novel.run import RunContext
 from novel.store import ArtifactStore
 
-CLEAN_REL = 'stage0/clean_text.txt'
-REPORT_REL = 'stage0/removal_report.json'
+CLEAN_REL = STAGE0_CLEAN_TEXT
+REPORT_REL = STAGE0_REMOVAL_REPORT
 
 
 @dataclass(frozen=True)
@@ -71,11 +73,13 @@ class RemovalResult:
 
 
 def report_round_rel(round_no: int) -> str:
-    return f'stage0/_rounds/removal_report.r{round_no}.json'
+    return paths.round_rel(REPORT_REL, round_no)
 
 
 def clean_round_rel(round_no: int) -> str:
-    return f'stage0/_rounds/clean_text.r{round_no}.txt'
+    directory, filename = CLEAN_REL.rsplit('/', 1)
+    stem, dot, extension = filename.rpartition('.')
+    return f'{directory}/{paths.ROUNDS_DIRNAME}/{stem}.r{round_no}{dot}{extension}'
 
 
 def preview_text(value: str, limit: int) -> str:

@@ -90,7 +90,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 
 ## 三、端点 → 响应
 
-**当前落地的四十九个**（其余端点见 §七）：
+**当前落地的五十个**（其余端点见 §七）：
 
 | 端点 | 响应 | 新旧 |
 |---|---|---|
@@ -102,6 +102,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `GET /api/jobs?sid=` | `JobList` | 新 |
 | `GET /api/jobs/:id` | `JobRecord` | **复用** `_orchestration.md` |
 | `GET /api/jobs/:id/log?offset=N` | `LogChunk` | 新 |
+| `GET /api/jobs/:id/stream?offset=N` | SSE：`LogStreamEvent` | 新；主日志通道 |
 | `POST /api/jobs/preview` | `JobStart`（请求体 `PreviewRequest`） | **复用** `_orchestration.md` |
 | `POST /api/jobs` | `JobRecord`（202；请求体 `PreviewRequest`） | **复用** `_orchestration.md` |
 | `GET /api/queues` | `QueueList` | 新 |
@@ -248,6 +249,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
+| `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
 
 `PreviewRequest`：`sid`（已有书为非空字符串；首次 `stage0.remove --source` 为 `null`）·
 `node` · `mode` · `flags[]`。

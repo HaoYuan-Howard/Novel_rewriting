@@ -3,6 +3,8 @@
 """Stage 5 书级语义审判：逐章 claims，再与 Stage 2 secret 揭示时点对齐。"""
 from __future__ import annotations
 
+from contracts.artifacts import STAGE5_SEMANTIC
+
 import glob
 import json
 import os
@@ -28,7 +30,7 @@ from novel.stages.stage5 import measure as M
 from novel.stages.stage5 import review
 from novel.store import ArtifactStore
 
-SEMANTIC_TPL = 'stage5/semantic_{n}.json'
+SEMANTIC_TPL = STAGE5_SEMANTIC
 _SEMANTIC_RX = re.compile(r'^semantic_(\d+)\.json$')
 
 CLAIMS_SYS = """\

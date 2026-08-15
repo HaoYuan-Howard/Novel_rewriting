@@ -7,7 +7,6 @@ Stage 0 的坐标系恒是归一化原始文件；Stage 1 的坐标系恒是 cle
 '''
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 from bisect import bisect_left
@@ -267,7 +266,7 @@ def stage0_edit_plan(
         expected_clean_sha1=report.clean_sha1,
         expected_total_code_points=report.total_code_points,
         clean_text=clean,
-        clean_sha1=hashlib.sha1(clean.encode('utf-8')).hexdigest(),
+        clean_sha1=prov.content_sha1(clean.encode('utf-8')),
         removed=removed,
     )
 

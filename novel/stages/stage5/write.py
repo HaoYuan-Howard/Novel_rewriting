@@ -22,6 +22,8 @@ write.py —— `stage5.write`：**逐章写作**。全链唯一产出「书」�
 """
 from __future__ import annotations
 
+from contracts.artifacts import STAGE5_BOOK_DRAFT, STAGE5_CHAPTER, artifact_rel
+
 import glob
 import os
 import re
@@ -36,9 +38,10 @@ from contracts.schema.common import (
     InputEdge, RoundFreeProvenance, RoundLlmProvenance,
 )
 from contracts.schema.report import CheckReport
-from contracts.schema.stage5 import Chapter
+from contracts.schema.stage5 import Chapter, RejectedRevision
 from novel import paths, prov
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.transport import ChatResponse
 from novel.observability import ChapterProgressTracker, RequestProgress
@@ -51,7 +54,7 @@ from novel.stages.stage5 import prompts, review
 from novel.store import ArtifactStore
 
 #: 一章的产物路径。⚠ `NN` **就是** `output_ordinal`（补零两位）。
-REL_TPL = 'stage5/{mode}/ch{nn:02d}.json'
+REL_TPL = STAGE5_CHAPTER
 
 #: 一次逐章调用的上限。⚠ 它进 `_provenance.params`——换了这个数，产物里说得出来。
 MAX_TOKENS = 16000
@@ -83,7 +86,15 @@ assert tuple(_ARMS) == DEPTH_MODES, '臂的取值面与 `contracts.invariants.DE
 
 
 def _rel(mode: str, ordinal: int) -> str:
-    return REL_TPL.format(mode=mode, nn=int(ordinal))
+    return artifact_rel('stage5.chapter', mode=mode, nn=ordinal)
+
+
+def _rejected_rel(mode: str, ordinal: int) -> str:
+    return artifact_rel('stage5.rejected_revision', mode=mode, nn=ordinal)
+
+
+def _mode_dir(mode: str) -> str:
+    return os.path.dirname(artifact_rel('stage5.mode_draft', mode=mode)).replace('\\', '/')
 
 
 def _mode_of(ctx: RunContext) -> str:
@@ -179,7 +190,9 @@ def _archive_superseded(store: ArtifactStore, rel: str, *,
     否则定向修复虽然产出了合格正文，遗留的 `.INVALID` 仍会让节点保持失败状态。
     """
     invalid_rel = paths.invalid_of(rel)
-    candidates = (invalid_rel,) if new_invalid else (rel, invalid_rel)
+    rejected_rel = rel.replace('.json', '.rejected.json')
+    candidates = ((invalid_rel, rejected_rel) if new_invalid
+                  else (rel, invalid_rel, rejected_rel))
     for candidate in candidates:
         if store.exists(candidate):
             store.archive_round(candidate)
@@ -385,6 +398,55 @@ def _generate_chapter(
         text, quote_style=book.quote_style, sep_chars=book.sep_chars)
     text, trim_notes = _trim_to_fit(
         client, text, entry, book, mode=mode, progress=progress)
+    if revise is not None:
+        attempts = [{'chars': M.chars_of(text), 'text': text}]
+        regressions = checks.trim_regressions(
+            prev_text, text, entry, book, mode=mode)
+        if regressions:
+            try:
+                got = client.ask_text(
+                    system, user, purpose=f'{ctx_purpose(entry)}·退化重采样',
+                    max_tokens=MAX_TOKENS, validator=_reject_length_capped,
+                    progress=progress, cache_policy=CachePolicy.refresh())
+            except LlmFailed as exc:
+                return {
+                    'rejected': {
+                        'output_ordinal': ordinal,
+                        'why': [*regressions,
+                                '唯一一次绕缓存重采样没有拿到完整正文：'
+                                + str(exc).splitlines()[0]],
+                        'fixes': fixes,
+                        'attempts': attempts,
+                    },
+                }
+            retry_text = (got or '').strip()
+            if not retry_text:
+                return {
+                    'rejected': {
+                        'output_ordinal': ordinal,
+                        'why': [*regressions, '唯一一次绕缓存重采样返回空正文'],
+                        'fixes': fixes,
+                        'attempts': attempts,
+                    },
+                }
+            retry_text, retry_account = M.normalize_chapter(
+                retry_text, quote_style=book.quote_style, sep_chars=book.sep_chars)
+            retry_text, retry_trim_notes = _trim_to_fit(
+                client, retry_text, entry, book, mode=mode, progress=progress)
+            attempts.append({'chars': M.chars_of(retry_text), 'text': retry_text})
+            retry_regressions = checks.trim_regressions(
+                prev_text, retry_text, entry, book, mode=mode)
+            if retry_regressions:
+                return {
+                    'rejected': {
+                        'output_ordinal': ordinal,
+                        'why': retry_regressions,
+                        'fixes': fixes,
+                        'attempts': attempts,
+                    },
+                }
+            text, account = retry_text, retry_account
+            trim_notes = [*trim_notes, *retry_trim_notes]
     return {
         'entry': entry, 'ordinal': ordinal, 'mat': mat, 'user': user,
         'text': text, 'account': account, 'trim_notes': trim_notes,
@@ -458,6 +520,19 @@ def _run_group_parallel(
                 tracker.finish(ordinal, outcome='failed', detail=error)
                 continue
 
+            if rejected := generated.get('rejected'):
+                rel = _rejected_rel(mode, ordinal)
+                if store.exists(rel):
+                    store.archive_round(rel)
+                artifact = RejectedRevision.model_validate(rejected)
+                where = store.write(rel, artifact)
+                line = (
+                    f'第 {ordinal} 章两次修订候选都相对旧稿退化，旧正式稿未覆盖；'
+                    f'证据 → {where}（{"；".join(artifact.why)}）')
+                blocked_by[ordinal] = line
+                tracker.finish(ordinal, outcome='blocked', detail=artifact.why[0])
+                continue
+
             entry = generated['entry']
             round_number = store.next_round(_rel(mode, ordinal))
             extra: dict[str, Any] = {'round': round_number}
@@ -505,7 +580,7 @@ def _run_group_parallel(
     if blocked and not written:
         raise GateBlocked(
             f'这一批 {len(todo)} 章全部没落成正式稿：' + '；'.join(blocked),
-            invalid_path=str(store.path(f'stage5/{mode}')))
+            invalid_path=str(store.path(_mode_dir(mode))))
     return report
 
 
@@ -819,7 +894,7 @@ def assemble_book(ctx: RunContext, store: ArtifactStore, book: M.Book) -> str:
         parts.append(f"## 第 {o} 章（{r['_mode']} · 源 [{src}] · {r.get('chars')}字"
                      + (f' · 重合(扣除逐字要求) {ov:.3f}' if ov is not None else '')
                      + ')\n\n' + (r.get('text') or ''))
-    store.write_text('stage5/draft.md', '\n\n'.join(parts) + '\n')
+    store.write_text(STAGE5_BOOK_DRAFT, '\n\n'.join(parts) + '\n')
     for mode in DEPTH_MODES:
         one = [f'# {mode} 单臂预览（{sum(1 for recs in by_ord.values() if recs[0]["_mode"] == mode)} 章）'
                '\n\n> ⚠ **这不是成书**：单臂预览不对照计划算缺章。成书是 `stage5/draft.md`。']
@@ -827,9 +902,9 @@ def assemble_book(ctx: RunContext, store: ArtifactStore, book: M.Book) -> str:
             recs = by_ord.get(o)
             if recs and recs[0]['_mode'] == mode:
                 one.append(f'## 第 {o} 章\n\n' + (recs[0].get('text') or ''))
-        store.write_text(f'stage5/{mode}/draft.md', '\n\n'.join(one) + '\n')
+        store.write_text(artifact_rel('stage5.mode_draft', mode=mode), '\n\n'.join(one) + '\n')
     del ctx
-    return 'stage5/draft.md'
+    return STAGE5_BOOK_DRAFT
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -851,7 +926,7 @@ def _report(ctx: RunContext, store: ArtifactStore, mode: str, *,
     """
     for line in (*written, *blocked):
         print(f'    · {line}', flush=True)
-    rel = f'stage5/{mode}'
+    rel = _mode_dir(mode)
     by_rule: dict[str, list] = {}
     n = len(judged or {})
     for fs in (judged or {}).values():

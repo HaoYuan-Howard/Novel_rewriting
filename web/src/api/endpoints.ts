@@ -19,6 +19,7 @@ import type {
   BackendJobRecord,
   BackendJobStart,
   BackendLogChunk,
+  BackendLogStreamEvent,
   Job,
   JobLogResponse,
   JobPreview,
@@ -60,6 +61,8 @@ interface BackendArtifactState {
   bytes: number | null
   mtime: number | null
   freshness: Artifact['freshness']
+  display_freshness: Artifact['display_freshness']
+  condition: Artifact['condition']
   reason: string
   ghosts: string[]
   invalid: boolean
@@ -71,6 +74,7 @@ interface BackendStageState {
   artifacts: BackendArtifactState[]
   done: boolean | null
   chapters_done: Record<string, number[]>
+  reviewable: boolean
 }
 
 interface BackendNovelOverview {
@@ -79,6 +83,7 @@ interface BackendNovelOverview {
   dirname: string
   stages: BackendStageState[]
   stage5_modes: string[]
+  summary: NovelOverview['summary']
 }
 
 interface BackendNovelList {
@@ -101,10 +106,12 @@ function adaptNovel(raw: BackendNovelOverview): NovelOverview {
   const stages: Record<string, Artifact[]> = {}
   const stageDone: Record<string, boolean | null> = {}
   const chaptersDone: Record<string, Record<string, number[]>> = {}
+  const stageReviewable: Record<string, boolean> = {}
 
   for (const state of raw.stages) {
     stageDone[state.stage] = state.done
     chaptersDone[state.stage] = state.chapters_done
+    stageReviewable[state.stage] = state.reviewable
     stages[state.stage] = state.artifacts.map((artifact) => ({
       stage: state.stage,
       name: artifact.rel.split('/').at(-1) ?? artifact.rel,
@@ -113,6 +120,8 @@ function adaptNovel(raw: BackendNovelOverview): NovelOverview {
       mtime: artifact.mtime,
       provenance: {},
       freshness: artifact.freshness,
+      display_freshness: artifact.display_freshness,
+      condition: artifact.condition,
       stale: [],
       reason: artifact.reason,
       ghosts: artifact.ghosts,
@@ -121,7 +130,6 @@ function adaptNovel(raw: BackendNovelOverview): NovelOverview {
     }))
   }
 
-  const all = Object.values(stages).flat()
   return {
     sid: raw.sid,
     title: raw.title,
@@ -130,12 +138,10 @@ function adaptNovel(raw: BackendNovelOverview): NovelOverview {
     chapters: inferChapters(raw.stages),
     stages,
     stage5_modes: raw.stage5_modes,
-    any_stale: all.some((artifact) => artifact.exists && artifact.freshness === 'stale'),
-    any_broken: all.some(
-      (artifact) => artifact.invalid || (artifact.exists && artifact.readable === false),
-    ),
     stage_done: stageDone,
+    stage_reviewable: stageReviewable,
     chapters_done: chaptersDone,
+    summary: raw.summary,
   }
 }
 
@@ -186,7 +192,7 @@ function backendJobRequest(req: JobRequest): BackendJobRequest {
   }
 }
 
-function splitLog(text: string): string[] {
+export function splitLog(text: string): string[] {
   if (!text) return []
   const lines = text.replaceAll('\r\n', '\n').split('\n')
   if (lines.at(-1) === '') lines.pop()
@@ -271,6 +277,47 @@ export const realApi: Api = {
       offset: chunk.next_byte,
       done: record.state !== 'running',
     } satisfies JobLogResponse
+  },
+  streamJobLog: (id, offset, sink) => {
+    const path = '/jobs/' + encodeURIComponent(id) + '/stream?offset=' + offset
+    const source = new EventSource('/api' + path)
+    let closed = false
+
+    const receive = (raw: Event) => {
+      try {
+        const event = raw as MessageEvent<string>
+        const parsed = JSON.parse(event.data) as BackendLogStreamEvent
+        if (
+          typeof parsed.text !== 'string' ||
+          !Number.isInteger(parsed.next_byte) ||
+          parsed.next_byte < 0 ||
+          typeof parsed.done !== 'boolean'
+        ) {
+          throw new Error('invalid job log SSE event')
+        }
+        sink.onEvent(parsed)
+        if (parsed.done) {
+          closed = true
+          source.close()
+        }
+      } catch {
+        closed = true
+        source.close()
+        sink.onError(new Error('malformed job log SSE event'))
+      }
+    }
+    source.addEventListener('log', receive)
+    source.addEventListener('end', receive)
+    source.onerror = () => {
+      // CONNECTING 会由 EventSource 携 Last-Event-ID 自动续连；只有明确 CLOSED 才交给界面。
+      if (!closed && source.readyState === EventSource.CLOSED) {
+        sink.onError(new Error('job log SSE closed before terminal event'))
+      }
+    }
+    return () => {
+      closed = true
+      source.close()
+    }
   },
   previewJob: async (req) =>
     adaptPreview(await post<BackendJobStart>('/jobs/preview', backendJobRequest(req))),

@@ -12,6 +12,12 @@ rename.py —— `stage7.rename` 与 `stage7.approve` 的节点函数。**唯一
 """
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE4_PLAN_CHAPTERS,
+    STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE7_BOOK, STAGE7_NAME_MAP,
+    STAGE7_NAME_MAP_EDIT,
+)
+
 from typing import Any
 
 from contracts.schema.common import Finding
@@ -23,7 +29,7 @@ from contracts.schema.stage7 import (
     ApprovedNameMap, IdentityBaseline, NameMap, NameMapEdit, NameMapParams,
     NameMapFreeProvenance, NameMapProvenance, NameMapResponse,
 )
-from novel import paths
+from novel import paths, prov
 from novel.core.naming import family_groups, strip_distinguisher, surface_owners
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
@@ -38,14 +44,14 @@ from novel.stages.stage7.measure import (
 from novel.stages.stage7.subs import apply_subs, residual_scan, sub_table
 from novel.store import ArtifactStore
 
-REL = 'stage7/name_map.json'
-BOOK_TXT = 'stage7/book.txt'
-EDIT = 'stage7/name_map_edit.json'
-MAIN_TEXT = 'stage1/main_text.json'
-GLOBAL_GROUNDING = 'stage2/global_grounding.json'
-PLAN_CHAPTERS = 'stage4/plan_chapters.json'
-WRITER_CONTEXT = 'stage4/writer_context.json'
-HOOK = 'stage6/hook.json'
+REL = STAGE7_NAME_MAP
+BOOK_TXT = STAGE7_BOOK
+EDIT = STAGE7_NAME_MAP_EDIT
+MAIN_TEXT = STAGE1_MAIN_TEXT
+GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
+PLAN_CHAPTERS = STAGE4_PLAN_CHAPTERS
+WRITER_CONTEXT = STAGE4_WRITER_CONTEXT
+HOOK = STAGE6_HOOK
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(REL)
@@ -502,7 +508,8 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
     else:
         # 没有模型基线时，这份映射完全由人工产生，使用 0 成本来源账。
         provenance = ctx.free_provenance(
-            NameMapFreeProvenance, prompts={'RULES': _rules_fingerprint()},
+            NameMapFreeProvenance,
+            prompts={'RULES': prov.rules_fingerprint('stage7')},
             params=NameMapParams(max_tokens=MAX_TOKENS), origin='human')
     new_art, _fs, _hook_new = _build(ctx, up, model_out, extra, provenance)
     if prev is not None:
@@ -584,7 +591,7 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
 
     provenance = ctx.llm_provenance(
         NameMapProvenance,
-        prompts={'RENAME_SYS': system, 'RULES': _rules_fingerprint()},
+        prompts={'RENAME_SYS': system, 'RULES': prov.rules_fingerprint('stage7')},
         model=client.model, params=NameMapParams(max_tokens=MAX_TOKENS))
     art, fs, _hook_new = _build(ctx, up, resp.model_dump(by_alias=True), [], provenance)
     art = art.model_copy(update={'identity': baseline})
@@ -642,13 +649,3 @@ def _sev_of(rule: str) -> str:
 def _blocking(outcomes: list[Outcome]) -> bool:
     """有没有阻断级命中。**按 rule key 判，不按 detail 串。**"""
     return any(o.findings and _sev_of(o.rule) == 'hard' for o in outcomes)
-
-
-def _rules_fingerprint() -> str:
-    """判据表自身的指纹。⚠ 统一叫 `RULES`——原型在本层叫 `RULES8`，
-    而它与 stage5 的 `RULES`、stage6 的 `RULES7` 是**同一件事**。"""
-    from contracts.rules import REGISTRY
-    from novel import prov
-    return prov.fingerprint(*(f'{r.rule}:{r.sev}:{r.requirement}'
-                              for r in sorted(REGISTRY.of_stage('stage7'),
-                                              key=lambda r: r.rule)))

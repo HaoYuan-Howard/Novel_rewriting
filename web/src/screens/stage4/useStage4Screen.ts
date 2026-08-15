@@ -40,16 +40,25 @@ export interface FactCard {
   more: string
 }
 
+function values(v: string[] | null | undefined): string[] {
+  return v ?? []
+}
+
+/** 顶层 present=null 只表示这拍按 segments 分舞台；平铺且无人由服务端给 []。 */
+function flatPresent(c: CtxBeat | undefined): string[] {
+  return c?.segments == null ? values(c?.present) : []
+}
+
 /** 左（计划）与右（写手任务书）逐拍并排：两边同源同序（同一个 group_beats）。 */
 function beatView(p: PlanBeat, c: CtxBeat | undefined): PlanBeatView {
   const holds: { k: string; v: string }[] = []
-  ;(c?.keep_value ?? []).forEach((v) => holds.push({ k: '硬数字', v }))
-  ;(c?.must_appear ?? []).forEach((v) => holds.push({ k: '必须出现', v }))
-  ;(c?.must_hold ?? []).forEach((v) => holds.push({ k: '必须保持', v }))
+  values(c?.keep_value).forEach((v) => holds.push({ k: '硬数字', v }))
+  values(c?.must_appear).forEach((v) => holds.push({ k: '必须出现', v }))
+  values(c?.must_hold).forEach((v) => holds.push({ k: '必须保持', v }))
   const budget = p.budget_chars
   const source = c?.source_chars ?? null
   const raw = budget !== null && source ? budget / source : null
-  const verbatim = c?.verbatim ?? []
+  const verbatim = values(c?.verbatim)
   return {
     i: p.i,
     fromBeats: p.from_beats.join('、') || '—',
@@ -62,7 +71,7 @@ function beatView(p: PlanBeat, c: CtxBeat | undefined): PlanBeatView {
     layerPresent: c?.time_layer === 'present',
     layerUnknown: !c || c.time_layer == null,
     place: c?.place ?? '地点未标注',
-    present: c?.present ?? [],
+    present: flatPresent(c),
     events: c?.events ?? [],
     verbatim,
     holds,

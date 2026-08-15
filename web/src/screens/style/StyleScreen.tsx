@@ -155,9 +155,14 @@ export function StyleScreen() {
                     <Panel>
                       <PaneHeader
                         title="右 · 真正发给写手的档位词"
-                        meta={d.exists ? '来自盘上的 style_grounding.json' : '还没买——右半边是空的'}
+                        meta={{
+                          ready: '来自盘上的 style_grounding.json',
+                          missing: '还没买——右半边是空的',
+                          invalid: '最近一轮无效；右侧若有内容，是较早的正式稿',
+                          unreadable: '盘上产物无法按当前契约读取',
+                        }[d.condition]}
                       />
-                      {d.exists && d.bands_stored ? (
+                      {d.bands_stored ? (
                         dims.map((k) => {
                           const changed = (d.bands_now ?? {})[k] !== d.bands_stored?.[k]
                           return (

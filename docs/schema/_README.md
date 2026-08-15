@@ -64,6 +64,17 @@
 | `_api.md` | HTTP 响应　**不是产物**，也**不定路由表**（路由在 `docs/BACKEND_CONTRACT.md` §6.3）。E 补 |
 | （另有一份**不是 JSON**） | 〔本行已空。`stage5/draft.md` 并进 `stage5.md` §五、`stage7/book.txt` 并进 `stage7.md` §四：<br>它们的规则各只有几条硬机制，单独立一份反而会与产它的那一层分家〕 |
 
+## 版本与路径注册表
+
+产物路径字面只登记在 `contracts/artifacts.py::ARTIFACT_PATHS`；节点 `produces`、消费投影、
+schema 路由与 stage 真实读写均引用该目录。路径模板由 `artifact_rel()` 展开，逐章 `nn` 统一补零两位。
+`contracts/schema/__init__.py::ARTIFACT_SPECS` 只为其中的 JSON 子集叠加当前模型、schema version 与
+逐版本迁移，`ARTIFACTS` 继续作为兼容读法从它派生，不再有第二张手抄路径表。
+
+未标版本的存量 JSON 视作 v0；当前普通对象顶层带 `_schema_version`，RootModel 用
+`{_schema_version,payload}` 信封。迁移只做能由旧字节证明的无损转换；缺失新语义时明确拒读，
+错误必须带文件与版本。当前 Pydantic 模型不接受旧字段别名或双形状，兼容只发生在这一个读取边界。
+
 ## 反推工具
 
 盘上那一源由一个机械反推脚本产出（0 成本、可重跑）：遍历 `Output/` 下每本书的产物，

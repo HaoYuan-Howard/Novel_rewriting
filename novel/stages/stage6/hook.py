@@ -19,6 +19,11 @@ hook.py —— `stage6.hook` 与 `stage6.approve` 的节点函数。
 """
 from __future__ import annotations
 
+from contracts.artifacts import (
+    STAGE1_HOOK_COPY, STAGE2_GLOBAL_GROUNDING, STAGE3_STYLE_GROUNDING,
+    STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE6_HOOK_EDIT,
+)
+
 
 from contracts.invariants import HOOK_APPROACHES
 from contracts.rules import REGISTRY
@@ -44,13 +49,13 @@ from novel.stages.stage6.measure import (
 )
 from novel.store import ArtifactStore
 
-REL = 'stage6/hook.json'
+REL = STAGE6_HOOK
 #: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `HookEdit`）。
-EDIT = 'stage6/hook_edit.json'
-HOOK_COPY = 'stage1/hook_copy.json'
-GLOBAL_GROUNDING = 'stage2/global_grounding.json'
-STYLE_GROUNDING = 'stage3/style_grounding.json'
-WRITER_CONTEXT = 'stage4/writer_context.json'
+EDIT = STAGE6_HOOK_EDIT
+HOOK_COPY = STAGE1_HOOK_COPY
+GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
+STYLE_GROUNDING = STAGE3_STYLE_GROUNDING
+WRITER_CONTEXT = STAGE4_WRITER_CONTEXT
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(REL)
@@ -406,7 +411,8 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
         lead_upto=up.upto, rationale=resp.rationale, candidates=cands, approved=None,
         sources={'writer_context': _context_source()}, judged=up.judged,
         **{'_provenance': ctx.llm_provenance(
-            HookProvenance, prompts={'HOOK_SYS': system, 'RULES': _rules_fingerprint()},
+            HookProvenance,
+            prompts={'HOOK_SYS': system, 'RULES': prov.rules_fingerprint('stage6')},
             model=client.model,
             params=HookParams(max_tokens=MAX_TOKENS))})
 
@@ -539,16 +545,6 @@ def _sev_of(rule: str) -> str:
 def _blocking(outcomes: list[Outcome]) -> bool:
     """有没有阻断级命中。**按 rule key 判，不按 detail 串。**"""
     return any(o.findings and _sev_of(o.rule) == 'hard' for o in outcomes)
-
-
-def _rules_fingerprint() -> str:
-    """判据表自身的指纹。⚠ 统一叫 `RULES`——原型在这一层叫 `RULES7`、
-    stage7 叫 `RULES8`、stage5 叫 `RULES`，而它们是**同一件事**。"""
-    from novel import prov
-    from contracts.rules import REGISTRY
-    return prov.fingerprint(*(f'{r.rule}:{r.sev}:{r.requirement}'
-                              for r in sorted(REGISTRY.of_stage('stage6'),
-                                              key=lambda r: r.rule)))
 
 
 def _context_source() -> ContextSource:

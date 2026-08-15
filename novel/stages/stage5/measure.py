@@ -16,6 +16,8 @@ F4 之前这份枚举在 stage6 / stage7 里各有一份**逐字相同**的拷�
 """
 from __future__ import annotations
 
+from contracts.artifacts import artifact_rel
+
 import glob
 import os
 import re
@@ -85,10 +87,11 @@ def load_drafts(store: ArtifactStore) -> tuple[dict[int, list[dict[str, Any]]], 
     judged: dict[str, JudgedDraft] = {}
     invalids: list[str] = []
     for mode in DEPTH_MODES:
-        pattern = os.path.join(store.path(f'stage5/{mode}'), 'ch*.json')
+        directory_rel = artifact_rel('stage5.chapter', mode=mode, nn=1).rsplit('/', 1)[0]
+        pattern = os.path.join(store.path(directory_rel), 'ch*.json')
         for p in sorted(glob.glob(pattern)):
             base = os.path.basename(p)
-            rel = f'stage5/{mode}/{base}'
+            rel = f'{directory_rel}/{base}'
             if base.endswith('.INVALID.json'):
                 invalids.append(rel)
                 continue
