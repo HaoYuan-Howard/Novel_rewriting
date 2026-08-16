@@ -19,7 +19,10 @@ from tests import corpus, sandbox
 STAGE7_REQUIRED = ('stage1/main_text.json', 'stage2/global_grounding.json',
                    'stage4/plan_chapters.json', 'stage4/writer_context.json',
                    'stage7/name_map.json')
-STAGE7_OPTIONAL = ('stage6/hook.json',)
+#: ⚠ `stage7/name_map_edit.json` 在这里是**必要的可选项**：一本走过 `--apply-edit`
+#: 的书，它的 `name_map` 把那份人工决策集记成了一条上游边；沙箱不带它 ⇒ 幽灵边 ⇒
+#: `name_map` 判 `unknown/ghost`，而 `stage7.assemble` 会正确地拒绝拿非 fresh 的映射拼书。
+STAGE7_OPTIONAL = ('stage6/hook.json', 'stage7/name_map_edit.json')
 
 
 def books() -> list[str]:

@@ -25,12 +25,114 @@ def test_generic_appellation_wrapper_may_keep_label_and_replace_embedded_name():
     """真实 E2E：`女主方衡→女主沈凌` 只改真名，不是把「女主」关系改掉。"""
     subs = {'女主方衡': '女主沈凌', '方衡': '沈凌'}
     assert not checks._generic_appellation_was_touched(
-        '女主方衡', '女主沈凌', subs, {'方'})
+        '女主方衡', '女主沈凌', subs, {'方'}, set())
     assert checks._generic_appellation_was_touched(
-        '姐姐', '妹妹', {'姐姐': '妹妹'}, set())
+        '姐姐', '妹妹', {'姐姐': '妹妹'}, set(), set())
     assert checks._generic_appellation_was_touched(
-        '女主方衡', '女主沈凌', {'女主方衡': '女主沈凌'}, {'方'}), \
+        '女主方衡', '女主沈凌', {'女主方衡': '女主沈凌'}, {'方'}, set()), \
         '没有内嵌真名映射作证时仍要保守拦截'
+
+
+# ── ①b 「名」不是关系词：`rn_kinship_touched` 的第二条豁免 ─────────────────
+
+#: 一真一诱饵。`周子白` 的名是 `子白`，而 `子` 在亲属字表里（儿子）；
+#: `陈娘子` 去姓之后**正好**是 `娘子` —— 本条要守的东西。
+_KINSHIP_CHARS = [
+    {'char_id': 'char_001', 'old_canonical': '周子白', 'new_canonical': '顾清宴',
+     'renamed': True, 'aliases': [{'old': '子白', 'new': '清宴'}]},
+    {'char_id': 'char_002', 'old_canonical': '陈娘子', 'new_canonical': '林娘子',
+     'renamed': True, 'aliases': []},
+]
+_KINSHIP_SURNAMES = {'周', '陈'}
+
+
+def test_the_given_name_half_of_a_renamed_canonical_is_not_a_kinship_word():
+    """⭐ `周子白→顾清宴` 时 `子白→清宴` 是**名**的那一半，不是关系词。
+
+    姓氏豁免只看首字（`周` 在映射里、`子` 不在），够不着这一形。按本条去修数据，
+    唯一走法是把 `子白` 登记成不改——**那会让原作的名活着进入「原创」成品**。
+    """
+    halves = checks.given_name_halves(_KINSHIP_CHARS, _KINSHIP_SURNAMES)
+    subs = {'周子白': '顾清宴', '子白': '清宴', '陈娘子': '林娘子'}
+    assert ('子白', '清宴') in halves
+    assert not checks._generic_appellation_was_touched(
+        '子白', '清宴', subs, _KINSHIP_SURNAMES, halves)
+
+
+def test_the_exemption_is_a_pair_so_a_relationship_word_still_cannot_slip_through():
+    """⭐⭐ **豁免按 `(旧, 新)` 配对，不按旧名单边。**
+
+    只按旧名豁免的话，`陈娘子→林娘子` 会顺带把 `娘子` 放进白名单，
+    于是任何一条 `娘子→X` 都不再被拦——而 `娘子` 正是本条要守的东西。
+    """
+    halves = checks.given_name_halves(_KINSHIP_CHARS, _KINSHIP_SURNAMES)
+    subs = {'陈娘子': '林娘子', '娘子': '夫人'}
+    assert ('娘子', '娘子') in halves, '配对里确实有它，但两边相同'
+    assert checks._generic_appellation_was_touched(
+        '娘子', '夫人', subs, _KINSHIP_SURNAMES, halves), \
+        '把关系词换成另一个关系词仍然违规'
+    assert checks._generic_appellation_was_touched(
+        '大娘', '苏娘', subs, _KINSHIP_SURNAMES, halves), \
+        '排行式称呼没有任何 canonical 供它派生 ⇒ 照旧被拦'
+
+
+def test_a_character_that_is_not_renamed_contributes_no_exemption():
+    """不改名的角色不该给任何映射发豁免——那正是幽灵映射的入口形状。"""
+    chars = [{'char_id': 'char_001', 'old_canonical': '周子白', 'new_canonical': '周子白',
+              'renamed': False, 'aliases': []}]
+    assert checks.given_name_halves(chars, _KINSHIP_SURNAMES) == set()
+
+
+# ── ①c 姓可以只由别名承载：`rn_surname_split` 的 orphan 那一路 ─────────────
+
+def _split_detail(characters: list[dict], surname_map: dict, subs: dict) -> str | None:
+    """只跑映射表自身那几条判据；替换器侧入参全给空。"""
+    fs = checks.rename_findings(
+        name_map={'surname_map': surname_map, 'characters': characters,
+                  'extra_subs': [], 'subs': subs, 'kept': []},
+        subs=subs, problems=[], applied={'chapters': {}}, residual=[], baseline={},
+        registry={c['char_id']: {} for c in characters},
+        pre_target='', source_text='', residual_keys=set(), stem_noise={},
+        family_members={}, dup=[], missing=[], invalids=[], post_units=[],
+        title_line='书名语义需人工确认')
+    return next((f.detail for f in fs if f.rule == 'rn_surname_split'), None)
+
+
+def test_a_surname_carried_only_by_an_alias_is_not_an_orphan_mapping():
+    """⭐ `宝珠→林琬` 的 canonical 里没有姓，家姓只出现在别名 `陈娘子→林娘子` 上。
+
+    只认 canonical 会把这条**真在用**的映射报成幽灵，而唯一的「修法」是去改一个
+    正文里出现 0 次的登记标签（`陈母`/`陈父`）—— 那是判据错。
+    """
+    assert _split_detail(
+        [{'char_id': 'char_001', 'old_canonical': '宝珠', 'new_canonical': '林琬',
+          'renamed': True, 'aliases': [{'old': '陈娘子', 'new': '林娘子'},
+                                       {'old': '小姐', 'new': '小姐'}]}],
+        {'陈': '林'}, {'宝珠': '林琬', '陈娘子': '林娘子'}) is None
+
+
+def test_a_mapping_no_one_uses_at_all_is_still_reported():
+    """⭐⭐ 反例守卫：实测 `太后`/`太傅` 误组留下的 `太→宋`。
+
+    两个角色都明确**不改名** ⇒ 既没有 canonical 也没有别名在用这个姓，
+    这条幽灵映射此前能让全部 HARD 打绿。别名那一路不许把它放过去。
+    """
+    detail = _split_detail(
+        [{'char_id': 'char_001', 'old_canonical': '太后', 'new_canonical': '太后',
+          'renamed': False, 'aliases': [{'old': '太后', 'new': '太后'}]},
+         {'char_id': 'char_002', 'old_canonical': '太傅', 'new_canonical': '太傅',
+          'renamed': False, 'aliases': []}],
+        {'太': '宋'}, {})
+    assert detail is not None and '太→宋' in detail
+
+
+def test_an_identity_alias_does_not_certify_a_surname_mapping():
+    """别名两侧一字未改时不算「用过这个姓」——否则恒等条目会给任何映射背书。"""
+    detail = _split_detail(
+        [{'char_id': 'char_001', 'old_canonical': '宝珠', 'new_canonical': '林琬',
+          'renamed': True, 'aliases': [{'old': '陈娘子', 'new': '陈娘子'}]}],
+        {'陈': '陈'}, {'宝珠': '林琬'})
+    assert detail is not None and '陈→陈' in detail
 
 
 def test_rename_semantic_marker_finding_catches_rank_change():

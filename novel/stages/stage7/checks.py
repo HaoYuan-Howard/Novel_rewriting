@@ -48,15 +48,51 @@ def _kept_tail(old: str, new: str) -> bool | None:
     return (new or '').endswith(m.group()) if m else None
 
 
+def given_name_halves(chars: list[dict], surnames: set[str]) -> set[tuple[str, str]]:
+    """已改名角色「canonical 去掉姓」那一半的**新旧配对**。
+
+    ⚠⚠ 这是 `is_generic_appellation` 那条姓氏豁免的**第二种形态**，实测撞出来：
+    `_STEM_KINSHIP` 收了 `子`（儿子）而 `周子白` 的名恰是 `子白`
+    ⇒ 「亲昵叫法只叫名」这条真别名被判成「把关系当名字换掉了」。
+    姓氏豁免只看首字（`周` 在映射里、`子` 不在），够不着这一形。
+    与那一条同一个判准：按本条去修数据，唯一走法是把 `子白` 登记成不改，
+    **而那会让原作的名活着进入「原创」成品** ⇒ 那就是判据错。
+
+    ⚠⚠ **返回的是配对不是集合**，这一格是承重的。只按「旧的那一半」豁免，
+    会把 `方大娘 → 苏X` 派生出的 `大娘` 一并放行——而 `大娘` 正是本条要拦的东西。
+    要求 `(旧名, 新名)` 同时等于该角色 canonical 两侧去姓后的那一半，
+    豁免才成立：那说明这条映射就是**同一个人 canonical 改名的名字那一半**，
+    不是「有人把关系词当名字换了」。`娘子` / `大娘` 派生不出这样的配对（要么
+    根本没有角色 canonical 供它派生，要么新旧两半对不上）⇒ 照旧被拦。
+
+    ⚠ 证据全部来自同一张映射表，不新增任何词表。
+    """
+    out: set[tuple[str, str]] = set()
+    for c in chars:
+        if not c.get('renamed'):
+            continue
+        old_canon = strip_distinguisher(c.get('old_canonical') or '')
+        new_canon = strip_distinguisher(c.get('new_canonical') or '')
+        if len(old_canon) > 1 and len(new_canon) > 1 and old_canon[:1] in surnames:
+            out.add((old_canon[1:], new_canon[1:]))
+    return out
+
+
 def _generic_appellation_was_touched(old: str, new: str, subs: dict[str, str],
-                                     surnames: set[str]) -> bool:
+                                     surnames: set[str],
+                                     given_halves: set[tuple[str, str]]) -> bool:
     """关系词本身被改了才算违规；「关系标签 + 真名」只换真名不算。
 
     `is_generic_appellation` 为了拦「姐姐」「女主」这类词会做前缀匹配，
     所以复合别名「女主方衡」也会命中。若同一张替换表能证明它只是把内嵌的
     `方衡→沈凌` 展开成 `女主方衡→女主沈凌`，关系标签逐字未动；除此之外
     一律继续保守地判为 touched。
+
+    `given_halves` 见 `given_name_halves`：这条映射恰是某个已改名角色
+    canonical 去姓后那一半的新旧配对时，它是**名**不是关系词。
     """
+    if (old, new) in given_halves:
+        return False
     if not is_generic_appellation(old, surnames):
         return False
     return not any(
@@ -140,8 +176,9 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
             detail=f'这些映射改写了数字/排行/辈分/关系/官职语义标记：{marker_changes[:6]}',
             evidence=[f'{old}->{new}' for old, new, _before, _after in marker_changes]))
     surs = {s for s in (name_map.get('surname_map') or {}) if s}
+    given = given_name_halves(chars, surs)
     touched = [o for o, n in sorted(subs.items())
-               if _generic_appellation_was_touched(o, n, subs, surs)]
+               if _generic_appellation_was_touched(o, n, subs, surs, given)]
     if touched:
         fs.append(finding('rn_kinship_touched',
                           detail=f'通用亲属/敬称被当成名字换掉了：{touched[:8]}'
@@ -172,10 +209,22 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                 inconsistent.append(f'{old_s}:{cid}')
     orphan: list[str] = []
     for old_s, new_s in sorted(smap.items()):
+        # ⚠⚠ **一个姓也可以只由别名承载**：某角色的 canonical 是光名字（`宝珠`），
+        #   而她的家姓只出现在别名里（`陈娘子→林娘子`）、并被残留探针用来提
+        #   `陈家→林家`。只认 canonical 会把这种**真在用**的映射报成幽灵，
+        #   而唯一的「修法」是去改一个正文里出现 0 次的登记标签 —— 那是判据错。
+        # ⚠ `renamed` 这个前提保留不动：`太后`/`太傅` 都不改名的那条误组
+        #   （`太→宋`）照旧被拦，因为不改名的角色不会有被改写的别名。
         used = any(
             c.get('renamed')
-            and strip_distinguisher((c.get('old_canonical') or '')).startswith(old_s)
-            and (c.get('new_canonical') or '').startswith(new_s)
+            and (
+                (strip_distinguisher((c.get('old_canonical') or '')).startswith(old_s)
+                 and (c.get('new_canonical') or '').startswith(new_s))
+                or any((a.get('old') or '') != (a.get('new') or '')
+                       and (a.get('old') or '').startswith(old_s)
+                       and (a.get('new') or '').startswith(new_s)
+                       for a in (c.get('aliases') or []))
+            )
             for c in chars)
         if not used:
             orphan.append(f'{old_s}→{new_s}')
