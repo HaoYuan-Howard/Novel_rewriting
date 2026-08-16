@@ -56,6 +56,16 @@ def _check(box: sandbox.Sandbox):
     return hook.run_check_only(ctx)
 
 
+def _mechanically_clean_pick(box: sandbox.Sandbox) -> int:
+    """选一条当前语料里机械 HARD 为空的候选，不把「第 N 条恰好干净」当契约。"""
+    data = box.read('stage6/hook.json')
+    for index, candidate in enumerate(data['candidates'], 1):
+        if not any(REGISTRY.get(row['rule']).sev == 'hard'
+                   for row in candidate.get('findings') or []):
+            return index
+    raise AssertionError('现役 hook 产物没有可定稿候选，语料本身违反落盘闸契约')
+
+
 # ── 报告的形状：由 `build()` 遍历注册表保证 ─────────────────────────────────
 
 def test_every_registered_rule_produced_a_row(box):
@@ -244,16 +254,26 @@ def test_approve_copies_the_candidate_and_leaves_provenance_alone(box, monkeypat
     """
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.approve', paid=False)
     from novel.stages.stage6 import semantic
-    monkeypatch.setattr(semantic, 'require_selectable', lambda *_args, **_kw: None)
+    pick = _mechanically_clean_pick(box)
     before = box.read('stage6/hook.json')['_provenance']
-    new, rep = hook.run_approve(ctx, 2)
+    chosen = box.read('stage6/hook.json')['candidates'][pick - 1]
+    monkeypatch.setattr(
+        semantic, 'require_human_resolution',
+        lambda *_args, **_kw: (
+            __import__('types').SimpleNamespace(semantic_review_seq=None),
+            'human_verification'))
+    new, rep = hook.run_approve(
+        ctx, pick, actor='test-editor', reason='已核验',
+        subject_sha256=semantic.text_sha256(chosen['text']))
     after = box.read('stage6/hook.json')
     assert after['_provenance'] == before, '定稿改动了来源账'
     assert new.approved is not None
     assert new.approved.origin == 'human'
-    assert new.approved.approach == new.candidates[1].approach
-    assert new.approved.text == new.candidates[1].text
-    assert rep.passed is True
+    assert new.approved.approach == chosen['approach']
+    assert new.approved.text == chosen['text']
+    # 返回的是整份三候选报告；未选候选的红行仍会如实保留，
+    # 所以「批准成功」不蕴含 `rep.passed is True`。
+    assert rep.rules
     # 归档：换掉的是「谁被选中」这个决定，而那正是下次调 prompt 时唯一的证据。
     assert list((box.dir / 'stage6' / '_rounds').glob('hook.r*.json'))
 
@@ -269,10 +289,14 @@ def test_approve_checks_quality_before_archiving_or_writing(box, monkeypatch):
     def reject(*_args, **_kwargs):
         raise TerminalState('候选有实质矛盾，不能定稿')
 
-    monkeypatch.setattr(semantic, 'require_selectable', reject)
+    monkeypatch.setattr(semantic, 'require_human_resolution', reject)
+    pick = _mechanically_clean_pick(box)
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.approve', paid=False)
     with pytest.raises(TerminalState, match='实质矛盾'):
-        hook.run_approve(ctx, 1)
+        hook.run_approve(
+            ctx, pick, actor='test-editor', reason='已核验',
+            subject_sha256=semantic.text_sha256(
+                box.read('stage6/hook.json')['candidates'][pick - 1]['text']))
 
     assert box.read('stage6/hook.json') == before
     assert sorted((box.dir / 'stage6' / '_rounds').glob('hook.r*.json')) == rounds_before
@@ -284,7 +308,9 @@ def test_approve_refuses_an_out_of_range_pick(box, pick):
     from novel.errors import TerminalState
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.approve', paid=False)
     with pytest.raises(TerminalState, match='候选'):
-        hook.run_approve(ctx, pick)
+        hook.run_approve(
+            ctx, pick, actor='test-editor', reason='已核验',
+            subject_sha256='0' * 64)
 
 
 # ── 落盘闸门与提升路：**盘上零样本，只能合成** ──────────────────────────────
@@ -443,3 +469,27 @@ def test_prompt_carries_source_full_story_and_body_execution_style(box):
     assert mat.style_packet['book_surface_habits'] == style.get('surface_habits')
     assert packet['style'] == mat.style_packet, '下发的风格包与 Material 记的那份分家了'
     assert packet['whole_story_map'] == list(mat.story_map) and len(mat.story_map) >= 1
+
+
+def test_story_map_consumes_segments_keeps_slots_and_strips_private_rationale():
+    goal = {
+        'intent': 'advance',
+        'fact_refs': [{'kind': 'event', 'ref': 'b01_01', 'chapter': 1}],
+        'rationale': '这是只供审计的自由理由，不得下发',
+    }
+    rows = prompts.story_map({'chapters': [{
+        'output_ordinal': 1, 'from_source_ordinals': [1],
+        'chapter_goal': goal, 'open_hook_goal': goal, 'end_hook_goal': goal,
+        'segments': [
+            {'slot': 's01', 'events': ['事件一']},
+            {'slot': 's02', 'events': ['事件二']},
+        ],
+    }]})
+    assert rows[0]['events'] == ['事件一', '事件二']
+    assert rows[0]['segments'] == [
+        {'slot': 's01', 'events': ['事件一']},
+        {'slot': 's02', 'events': ['事件二']},
+    ]
+    for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+        assert rows[0][key] == {'intent': 'advance', 'fact_refs': goal['fact_refs']}
+        assert 'rationale' not in rows[0][key]

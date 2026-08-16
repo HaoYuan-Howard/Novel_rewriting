@@ -84,10 +84,12 @@ def test_the_approved_flag_and_the_approved_block_tell_one_story(box):
 
 
 def test_missing_quality_review_is_visible_and_disables_selection(box):
-    """沙箱刻意不复制 semantic_N.json：缺审必须是 unreviewed，不能默认 clear。"""
+    """缺审不能默认 clear，但必须保留明示的人工 verification 路。"""
     v = stage6_view(box.root, box.sid)
     assert all(candidate.semantic_state == 'unreviewed' for candidate in v.candidates)
     assert all(not candidate.selectable for candidate in v.candidates)
+    assert all(candidate.human_resolvable for candidate in v.candidates)
+    assert all(len(candidate.subject_sha256) == 64 for candidate in v.candidates)
     assert all(candidate.quality is None and candidate.quality_rank is None
                for candidate in v.candidates)
 

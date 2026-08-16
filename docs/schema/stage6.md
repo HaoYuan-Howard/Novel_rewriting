@@ -1,7 +1,9 @@
 # Stage6 产物与质量契约
 
-Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选，随后一次匿名质量审判同时做
-实质矛盾核对与吸引力排序，最后由人从可选候选中定稿。
+Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选，随后由两名互不可见的
+匿名 judge 独立完成实质矛盾核对与吸引力排序，最后由人定稿。只有当
+`reference_boundary` 的 evaluator profile 与 dataset/model/prompt/schema/decoder 全指纹
+相同、两名 judge 同结论且证据闭合时，合并决议才能自动 PASS/FAIL。
 
 对应需求：`docs/BACKEND_CONTRACT.md` 的 R-9。
 
@@ -24,7 +26,7 @@ Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选�
 ```text
 stage6/hook.json             生成候选、机械判定与人工定稿
 stage6/_rounds/hook.rN.json  上一轮 hook.json 的整份归档
-stage6/semantic_N.json       匿名质量审判；按文本 sha1 绑定
+stage6/semantic_N.json       A/B 双盲质量审判；决议按完整 SHA-256 绑定
 stage6/hook_edit.json        人工编辑一条候选或定稿的决策集
 stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
@@ -50,8 +52,13 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 | `mech` | `Mech` | 标点、引号、分段归一的计数 |
 | `findings` | `Finding[]` | 该候选的机械判定 |
 
-`ApprovedHook = Candidate + origin='human'`。`approach` 还可为 `human_edit`；从既有候选编辑时
-保留其 approach，没有候选前身才写 `human_edit`。
+`ApprovedHook = Candidate + origin='human' + resolution`。`resolution` 必须记录自报
+`actor`（不是认证身份）、非空 `reason`、定稿文本的完整 `subject_sha256`、
+`calibrated_pass|human_verification` 基础和可用的语义审判序号。`approach` 还可为
+`human_edit`；从既有候选编辑时保留其 approach，没有候选前身才写 `human_edit`。
+`hook_edit.json` 的 `subject_sha256` 必须绑定经过本书标点、引号与分段归一链后的定稿文本；
+校验发生在 `run_apply_edit` 写盘前，并复用与普通候选批准相同的 calibrated FAIL/
+历史 FAIL 闸，不能用 raw 上传字节的哈希或普通人工说明绕过。
 
 ### 2.2 `semantic_N.json`
 
@@ -59,8 +66,11 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 |---|---|---|
 | `judged_texts` | `{真实标签: Fp10}` | 审过的去重文本集合 |
 | `hook_file_sha1` | `Fp10` | 整份 hook 文件的审计指纹，不作新鲜度绑定键 |
-| `reviews` | `HookCandidateReview[]` | 矛盾与质量审阅 |
-| `ranking` | `str[]` | 解匿名后的真实标签排序 |
+| `reviews` | `HookCandidateReview[]` | 合并后的诊断视图（质量分取 A/B 平均） |
+| `ranking` | `str[]` | 代码从合并决议与平均分确定性派生的真实标签排序 |
+| `judge_rankings` | `{A: str[], B: str[]}` | 两名 judge 各自的原始解匿名排序 |
+| `decisions` | `SemanticDecision[]` | 每份去重文本一条合并 PASS/FAIL/UNVER；唯一运行时判定源 |
+| `evaluator_fingerprint` | `EvaluatorFingerprint` | 运行时 dataset/model/prompt/schema/decoder 全指纹 |
 | `_provenance` | `LlmProvenance` | 本次质量审判来源账 |
 
 `HookCandidateReview`：
@@ -114,20 +124,29 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 
 ## 五、匿名质量审判与批准
 
-质量请求将每条去重文本改名为 `T1/T2/...`。validator 必须确认：
+付费路上的第一个门是 `require_enabled('reference_boundary', ...)`；没有 profile、
+能力未达门或任一指纹漂移都在 transport/cache/ledger 前终止，未发请求。通过后，
+同一份匿名材料分别以 A/B 角色后缀发给两名 judge，候选标签都是 `T1/T2/...`。
+validator 必须确认：
 
 1. `reviews` 与 `ranking` 恰好覆盖全部匿名标签，且无重复；
 2. 每条矛盾 evidence 是对应候选的连续原字节；唯一空白差异可回取成原字节；
 3. 所有 `complete` 且无矛盾的候选排在矛盾或 uncertain 候选之前；
 4. 六维分数都在 0~10；总分由代码计算；
-5. 当前 hook 文本集合与审判的文本 sha1 集合一致，且 semantic 产物新鲜。
+5. 当前 hook 文本集合与审判的文本 sha1 / 决议 SHA-256 集合一致，
+   semantic 产物新鲜，且其 evaluator 指纹仍与当前 profile 相同。
 
-批准动作 `stage6.approve --pick N` 在归档和写盘之前执行两道硬检查：
+批准动作 `stage6.approve --pick N --actor <id> --reason <why>
+--subject-sha256 <hash>` 在归档和写盘之前执行三道硬检查：
 
 - 该候选没有机械 HARD；
-- `semantic.require_selectable` 判为 `clear`。
+- 请求里的完整 SHA-256 与候选当前字节一致，不允许旧页面误批；
+- 当前合并决议不是校准 FAIL，也不存在与本文本绑定的历史校准 FAIL。
 
-因此缺审判、过期、文本未审、coverage=uncertain 或实质矛盾都不能被人工误点绕过。
+校准双盲 PASS 记为 `calibrated_pass`。缺审判、profile 缺失/漂移、文本未审、
+coverage 不足、两名 judge 分歧或缺证据均降为 UNVER，进 `verification` 清单；
+人可在逐项核对后以上述 actor/reason/hash 路径记 `human_verification`。但已校准的
+FAIL/实质矛盾只能改字形成新主体，不能由普通定稿绕过。
 
 ### 5.1 `stage6/wontfix.json` —— 语义结论的人工闭环（2026-08-15）
 
@@ -159,7 +178,7 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 | `hook_reuses_source` | HARD | 与原作文案无任何相同 20 内容字窗口 |
 | `hook_invented_name` | HARD | 人物称谓在完整下发面有据 |
 | `hook_para_sep` | HARD | 分段档位符合原作文案，作为归一后置条件 |
-| `hook_semantic_contradiction` | HARD/semantic | 未定稿时至少一条 clear；定稿后被选文本必须 clear |
+| `hook_semantic_contradiction` | HARD/semantic | 合并决议 FAIL 阻断；UNVER 保持可见并只允许显式人工核验，不能冒充自动 PASS |
 | `hook_transcribes_body` | INFO | 不整段誊抄开篇正文 |
 | `hook_invented_number` | INFO | 数字+单位在下发面有据 |
 | `hook_length` | INFO | 篇幅贴近原作文案 |
@@ -167,7 +186,7 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 | `hook_quote_style` | INFO | 引号体贴近原作文案 |
 | `hook_quote_unbalanced` | INFO | 引号配对异常不静默修 |
 | `hook_ending_shape` | INFO | 最后一击形态贴近原作文案 |
-| `hook_candidate_contradiction` | INFO/semantic | 逐候选列出矛盾和不确定项 |
+| `hook_candidate_contradiction` | INFO/semantic | 按 A/B 合并决议逐候选列出 FAIL 矛盾与 UNVER 不确定项 |
 | `hook_report` | metric | 下发范围、各文本字数、原作文案字数 |
 | `hook_quote_shape` | metric | 引语条数、最长引语、对白比 |
 | `hook_secret_literal` | metric | 与 secret 原文的字面重合读数，不是剧透门 |

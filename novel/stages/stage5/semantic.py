@@ -6,6 +6,7 @@ from __future__ import annotations
 from contracts.artifacts import STAGE5_SEMANTIC
 
 import glob
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from contracts.schema.common import Finding
+from contracts.schema.evaluation import EvidenceRef, JudgeDecision, SemanticDecision
 from contracts.schema.report import CheckReport, finding
 from contracts.schema.stage5 import (
     JudgedDraft, Review, SemanticAlignmentResponse, SemanticChapterClaims,
@@ -25,6 +27,8 @@ from novel.llm.prompts import with_json_shape
 from novel.llm.transport import ChatResponse
 from novel.observability import ChapterProgressTracker
 from novel.report.findings import Outcome, ran, unverifiable
+from novel.quality.evaluator import double_blind_decision
+from novel.quality.profile import require_enabled
 from novel.run import RunContext
 from novel.stages.stage5 import measure as M
 from novel.stages.stage5 import review
@@ -84,6 +88,10 @@ ALIGN_HINT = {
     }],
 }
 ALIGN_SYSTEM = with_json_shape(ALIGN_SYS, ALIGN_HINT)
+ALIGN_ROLE_SUFFIX = {
+    'A': '\n\n你是盲评实例 A；不得推测或接触另一名 judge 的输出。',
+    'B': '\n\n你是盲评实例 B；不得推测或接触另一名 judge 的输出。',
+}
 
 
 def semantic_seqs(store: ArtifactStore) -> list[int]:
@@ -335,23 +343,136 @@ def materialize_alignment(response: SemanticAlignmentResponse, secrets: list[dic
     ) for decision in response.secrets]
 
 
+def _sha256(value: str) -> str:
+    return hashlib.sha256(value.encode('utf-8')).hexdigest()
+
+
+def _judge_decision(
+    judge: str,
+    row,
+    *,
+    chapters: list[SemanticChapterClaims],
+    drafts: dict[int, dict],
+    secret: dict,
+) -> JudgeDecision:
+    verdict = {'clear': 'PASS', 'leak': 'FAIL', 'unver': 'UNVER'}[row.status]
+    by_claim = {
+        (chapter.output_ordinal, claim.claim_id): claim
+        for chapter in chapters for claim in chapter.claims
+    }
+    evidence: list[EvidenceRef] = []
+    for ref in row.evidence_refs:
+        claim = by_claim[(ref.output_ordinal, ref.claim_id)]
+        body = str(drafts[ref.output_ordinal].get('text') or '')
+        start = body.find(claim.evidence)
+        evidence.append(EvidenceRef(
+            artifact=str(
+                drafts[ref.output_ordinal].get('_relpath')
+                or f'stage5/ch{ref.output_ordinal:02d}.json'),
+            subject_sha256=_sha256(body),
+            start=start if start >= 0 else None,
+            end=(start + len(claim.evidence)) if start >= 0 else None,
+        ))
+    if verdict == 'PASS' and not evidence:
+        # A clear verdict is still bound to the exact ground-truth subject.
+        fact = str(secret.get('fact') or '')
+        evidence.append(EvidenceRef(
+            artifact='stage2/global_grounding.json',
+            subject_sha256=_sha256(fact)))
+    return JudgeDecision(
+        judge=judge, verdict=verdict, evidence=evidence, reason=row.reason)
+
+
+def materialize_double_blind_alignment(
+    first: SemanticAlignmentResponse,
+    second: SemanticAlignmentResponse,
+    *,
+    chapters: list[SemanticChapterClaims],
+    secrets: list[dict],
+    book: M.Book,
+    drafts: dict[int, dict],
+    profile,
+    current,
+) -> tuple[list[SemanticSecretAdjudication], list[SemanticDecision]]:
+    by_first = {row.secret_id: row for row in first.secrets}
+    by_second = {row.secret_id: row for row in second.secrets}
+    adjudications: list[SemanticSecretAdjudication] = []
+    decisions: list[SemanticDecision] = []
+    for secret in secrets:
+        sid = str(secret.get('secret_id'))
+        left, right = by_first[sid], by_second[sid]
+        combined = double_blind_decision(
+            ability='secret_timeline', subject_key=sid,
+            first=_judge_decision(
+                'A', left, chapters=chapters, drafts=drafts, secret=secret),
+            second=_judge_decision(
+                'B', right, chapters=chapters, drafts=drafts, secret=secret),
+            profile=profile, current=current,
+        )
+        decisions.append(combined)
+        status = (
+            'clear' if combined.automated and combined.verdict == 'PASS'
+            else 'leak' if combined.automated and combined.verdict == 'FAIL'
+            else 'unver'
+        )
+        refs = []
+        if status == 'leak':
+            seen: set[tuple[int, str]] = set()
+            for row in (left, right):
+                for ref in row.evidence_refs:
+                    key = (ref.output_ordinal, ref.claim_id)
+                    if key not in seen:
+                        seen.add(key)
+                        refs.append(ref)
+        reveal = _reveal_chapter(book, secret)
+        adjudications.append(SemanticSecretAdjudication(
+            secret_id=sid, reveal_chapter=reveal, status=status,
+            evidence_refs=refs,
+            earliest_chapter=(min(ref.output_ordinal for ref in refs) if refs else None),
+            reason=combined.reason,
+        ))
+    return adjudications, decisions
+
+
 def run_semantic(ctx: RunContext, client: LlmClient) -> tuple[SemanticReview, CheckReport]:
+    profile, current = require_enabled(
+        'secret_timeline', model=client.model,
+        prompts=[
+            CLAIMS_SYSTEM,
+            ALIGN_SYSTEM + ALIGN_ROLE_SUFFIX['A'],
+            ALIGN_SYSTEM + ALIGN_ROLE_SUFFIX['B'],
+        ],
+        schemas=[SemanticClaimsResponse, SemanticAlignmentResponse],
+        decoder_identity='stage5-secret-double-blind-v1',
+    )
     claims_system, claim_users, mechanical_seq, rev, book, drafts, judged = build_prompts(ctx)
     chapters = request_claims(ctx, client, claims_system, claim_users, drafts)
     align_system, align_user = build_alignment_prompt(
         chapters, book.secrets, book)
-    align_response = client.ask_json(
-        align_system, align_user, model_cls=SemanticAlignmentResponse,
-        purpose=f'{ctx.node}.alignment',
-        validator=alignment_validator(chapters, book.secrets, book))
-    adjudications = materialize_alignment(align_response, book.secrets, book)
+    align_responses = [
+        client.ask_json(
+            align_system + ALIGN_ROLE_SUFFIX[role], align_user,
+            model_cls=SemanticAlignmentResponse,
+            purpose=f'{ctx.node}.alignment.{role}',
+            validator=alignment_validator(chapters, book.secrets, book))
+        for role in ('A', 'B')
+    ]
+    adjudications, decisions = materialize_double_blind_alignment(
+        align_responses[0], align_responses[1], chapters=chapters,
+        secrets=book.secrets, book=book, drafts=drafts,
+        profile=profile, current=current)
     artifact = SemanticReview(
         mechanical_review_seq=mechanical_seq,
         judged=judged,
         chapters=chapters,
         secrets=adjudications,
+        decisions=decisions,
         _provenance=ctx.llm_provenance(
-            prompts={'CLAIMS_SYS': claims_system, 'ALIGN_SYS': align_system},
+            prompts={
+                'CLAIMS_SYS': claims_system,
+                'ALIGN_SYS_A': align_system + ALIGN_ROLE_SUFFIX['A'],
+                'ALIGN_SYS_B': align_system + ALIGN_ROLE_SUFFIX['B'],
+            },
             model=client.model),
     )
     store = ArtifactStore(ctx)

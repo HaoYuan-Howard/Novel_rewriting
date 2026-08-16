@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""待人工六类聚合生产者（`novel/views/inbox.py`）——BE-04 第一条的落地判据。
+"""待人工八类聚合生产者（`novel/views/inbox.py`）——BE-04 第一条的落地判据。
 
 两条裁决在这里各有一条锚：
   · **UG-11**（计划轻重告警没有处置回环）→ 处置=归人判断：那两条 INFO 的
@@ -52,15 +52,20 @@ def box():
     s.close()
 
 
-def test_human_only_collects_hits_whose_remediation_is_human(box):
-    """`remediation=human` 的命中逐条入列；`unver` 与豁免不占清单。"""
-    view = inbox_view(str(box.root), box.sid)
-    human = [it for it in view.items if it.kind == 'human_only']
-    if box.book == BOOK_WITH_HITS:
-        assert [it.rule for it in human] == ['hook_ending_shape', 'hook_ending_shape']
-        assert all(it.stage == 'stage6' for it in human)
-        assert all('--apply-edit' in it.how or '--pick' in it.how or '跑 `' in it.how
-                   for it in human)
+def test_human_only_collects_hits_whose_remediation_is_human():
+    """用受控报告钉语义；不能把某本现役语料碰巧有两条命中当成契约。"""
+    from novel.views import inbox as I
+
+    finding = SimpleNamespace(
+        wontfix=None, unresolved_rounds=0, owner='stage6', detail='结尾形态需人工裁决')
+    line = SimpleNamespace(
+        status='hit', sev='info', remediation='human', fix=None,
+        rule='hook_ending_shape', findings=[finding])
+    human = I._report_items(SimpleNamespace(rules=[line]), 'stage6')
+    assert len(human) == 1
+    assert human[0].kind == 'human_only'
+    assert human[0].stage == 'stage6' and human[0].rule == 'hook_ending_shape'
+    assert '--apply-edit' in human[0].how or '--pick' in human[0].how
 
 
 def test_unver_rows_never_enter_the_inbox(box):
@@ -72,10 +77,11 @@ def test_unver_rows_never_enter_the_inbox(box):
 
 
 def test_counts_total_and_kind_partition_are_mutually_consistent(box):
-    """六键全出（0 也出）、counts == items 分组 == total——载体后置条件与实产共同钉住。"""
+    """八键全出（0 也出）、counts == items 分组 == total——载体后置条件与实产共同钉住。"""
     view = inbox_view(str(box.root), box.sid)
     assert set(view.counts) == {'invalid', 'rejected', 'stalled',
-                                'human_only', 'upstream', 'approval'}
+                                'repairable', 'human_only', 'verification',
+                                'upstream', 'approval'}
     assert view.total == len(view.items) == sum(view.counts.values())
 
 
@@ -181,7 +187,7 @@ def test_the_fallback_how_never_names_a_flag_the_stage_does_not_have():
             assert '--' not in text, f'{stage} 一条 0 成本人工路都没有，却给出了一条命令：{text}'
 
 
-def test_every_human_only_row_offers_something_the_operator_can_actually_run(box):
+def test_every_human_only_row_offers_something_the_operator_can_actually_run():
     """⭐ 端到端：清单上每一条 `human_only` 的 `how` 都必须是**跑得动的**。
 
     `Rule.fix` 那条路由由注册期三道校验守着（节点存在 · flag 在该节点的 `flags` 里 ·
@@ -190,10 +196,17 @@ def test_every_human_only_row_offers_something_the_operator_can_actually_run(box
     import re as _re
 
     from contracts.invariants import NODES
+    from novel.views import inbox as I
 
-    view = inbox_view(str(box.root), box.sid)
-    rows = [it for it in view.items if it.kind == 'human_only']
-    assert rows, '一条 human_only 都没有——本条没在查'
+    # 语料此刻没有 human_only 是合法盘面，不应把偶然有行当作契约。
+    # 用可控报告直接验证生产路径。
+    finding = SimpleNamespace(
+        wontfix=None, unresolved_rounds=0, owner='stage6', detail='候选需人工判断')
+    line = SimpleNamespace(
+        status='hit', sev='info', remediation='human', fix=None,
+        rule='hook_candidate_contradiction', findings=[finding])
+    rows = I._report_items(SimpleNamespace(rules=[line]), 'stage6')
+    assert len(rows) == 1 and rows[0].kind == 'human_only'
     for item in rows:
         for node, flag in _re.findall(r'`([a-z0-9]+\.[a-z-]+) (--[a-z-]+)`', item.how):
             spec = NODES.get(node)
@@ -203,3 +216,78 @@ def test_every_human_only_row_offers_something_the_operator_can_actually_run(box
         have = {f for spec in NODES.values() if spec.stage == item.stage for f in spec.flags}
         assert bare <= have, (
             f'{item.stage}/{item.rule} 的 how 点名了这一层没有的 flag：{sorted(bare - have)}')
+
+
+def test_a_hard_local_hit_with_a_fix_route_is_repairable_not_human_only():
+    from novel.views import inbox as I
+
+    fix = SimpleNamespace(
+        node='stage2.global', flags=['--apply-edit', 'stage2/global_edit.json'],
+        paid=False, available=True, unavailable_reason=None)
+    finding = SimpleNamespace(
+        wontfix=None, unresolved_rounds=0, owner='stage2', detail='设定字段可确定性修复')
+    line = SimpleNamespace(
+        status='hit', sev='hard', remediation='deterministic', fix=fix,
+        rule='global_field_repair', findings=[finding])
+    rows = I._report_items(SimpleNamespace(rules=[line]), 'stage2')
+    assert len(rows) == 1 and rows[0].kind == 'repairable'
+    assert '`stage2.global --apply-edit stage2/global_edit.json`' in rows[0].how
+
+
+def test_global_review_pending_fail_and_unver_are_verification_rows(box):
+    from contracts.artifacts import STAGE2_GLOBAL_REVIEW
+    from contracts.schema.evaluation import GlobalReview, GlobalReviewItem
+    from novel import prov
+    from novel.orchestrator.state import readonly_ctx
+    from novel.store import ArtifactStore
+
+    digest = 'a' * 64
+    review = GlobalReview(source_sha256='b' * 64, items=[
+        GlobalReviewItem(
+            item_id='secret:one', kind='secret', subject_path='canon.secrets.s1.fact',
+            subject_sha256=digest, state='pending', evidence=[]),
+        GlobalReviewItem(
+            item_id='reveal:two', kind='reveal',
+            subject_path='canon.secrets.s1.reader_reveal_events.0',
+            subject_sha256='c' * 64, state='UNVER', evidence=[], actor='reviewer',
+            decided_at='2026-08-16T00:00:00+00:00', reason='证据不足'),
+        GlobalReviewItem(
+            item_id='known:three', kind='known_by',
+            subject_path='canon.secrets.s1.character_known_by',
+            subject_sha256='d' * 64, state='FAIL', evidence=[], actor='reviewer',
+            decided_at='2026-08-16T00:00:00+00:00', reason='与原文冲突'),
+        GlobalReviewItem(
+            item_id='known:four', kind='known_by',
+            subject_path='canon.secrets.s2.character_known_by',
+            subject_sha256='e' * 64, state='PASS', evidence=[], actor='reviewer',
+            decided_at='2026-08-16T00:00:00+00:00', reason='已核实'),
+    ])
+    store = ArtifactStore(readonly_ctx(
+        box.dir, 'stage2.global', prov.code_version()))
+    store.write(STAGE2_GLOBAL_REVIEW, review)
+
+    rows = [row for row in inbox_view(str(box.root), box.sid).items
+            if row.kind == 'verification' and row.stage == 'stage2']
+    assert {row.rule for row in rows} == {'secret:one', 'reveal:two', 'known:three'}
+    assert all('--review-decisions' in row.how and 'subject hash' in row.how for row in rows)
+
+
+def test_unadopted_trim_without_semantic_evidence_is_a_verification_row(box):
+    from contracts.artifacts import artifact_rel
+    from contracts.schema.evaluation import TrimAudit
+    from novel import prov
+    from novel.orchestrator.state import readonly_ctx
+    from novel.store import ArtifactStore
+
+    audit = TrimAudit(
+        output_ordinal=3, mode='deep', before_sha256='a' * 64, after_sha256='b' * 64,
+        before_claims=[], after_claims=[], deterministic_passed=True,
+        semantic=None, adopted=False,
+        reason='未激活经 ground-truth 校准的 evaluator')
+    store = ArtifactStore(readonly_ctx(box.dir, 'stage5.write', prov.code_version()))
+    store.write(artifact_rel('stage5.trim_audit', nn=3), audit)
+
+    rows = [row for row in inbox_view(str(box.root), box.sid).items
+            if row.kind == 'verification' and row.stage == 'stage5']
+    assert [(row.rule, row.chapter) for row in rows] == [('trim_audit_ch03', 3)]
+    assert 'pretrim' in rows[0].how and '未采用收缩候选' in rows[0].how

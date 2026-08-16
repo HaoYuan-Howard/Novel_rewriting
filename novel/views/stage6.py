@@ -53,6 +53,7 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
     candidates = [
         HookCandidateLine(
             index=i, approach=c.approach, chars=_chars(c.text), text=c.text,
+            subject_sha256=semantic.text_sha256(c.text),
             mech=c.mech, findings=c.findings,
             approved=c.approach == approved_approach,
             semantic_state=assessments[semantic.text_sha1(c.text)].state,
@@ -63,12 +64,14 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
                      if assessments[semantic.text_sha1(c.text)].review else None),
             quality_score=assessments[semantic.text_sha1(c.text)].quality_score,
             quality_rank=assessments[semantic.text_sha1(c.text)].quality_rank,
-            selectable=assessments[semantic.text_sha1(c.text)].selectable)
+            selectable=assessments[semantic.text_sha1(c.text)].selectable,
+            human_resolvable=assessments[semantic.text_sha1(c.text)].human_resolvable)
         for i, c in enumerate(art.candidates, start=1)]
     approved = (HookApprovedLine(
         approach=art.approved.approach, chars=_chars(art.approved.text),
         text=art.approved.text, origin=art.approved.origin,
-        mech=art.approved.mech, findings=art.approved.findings)
+        mech=art.approved.mech, findings=art.approved.findings,
+        resolution=art.approved.resolution)
         if art.approved is not None else None)
 
     return Stage6View(

@@ -25,18 +25,23 @@ from typing import Any
 from pydantic import BaseModel
 
 from contracts.artifacts import (
+    STAGE0_AUDIT_ENTRY, STAGE0_MACHINE_SNAPSHOT, STAGE0_MERGE_CANDIDATE,
     STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE1_PARTITION_REPORT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
-    STAGE2_GLOBAL_GROUNDING, STAGE3_STYLE_EDIT, STAGE3_STYLE_GROUNDING,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
+    STAGE3_STYLE_EDIT,
+    STAGE3_STYLE_GROUNDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
     STAGE4_WRITER_CONTEXT_IDENTITY, STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
-    STAGE5_REVIEW, STAGE5_SEMANTIC, STAGE5_WONTFIX, STAGE6_HOOK,
+    STAGE5_REVIEW, STAGE5_SEMANTIC, STAGE5_TRIM_AUDIT, STAGE5_TRIM_RESOLUTION,
+    STAGE5_WONTFIX, STAGE6_HOOK,
     STAGE6_HOOK_EDIT, STAGE6_SEMANTIC, STAGE6_WONTFIX, STAGE7_NAME_MAP,
     STAGE7_NAME_MAP_EDIT,
 )
 
 from contracts.schema.api import (
     ApprovalAction,
+    ApprovalBackfillResult,
     ApprovalDoc,
     DeepSelectionRequest,
     DriftItem,
@@ -51,6 +56,8 @@ from contracts.schema.api import (
     NovelList,
     PreviewRequest,
     Stage0EditRequest,
+    Stage0ApprovalRequest,
+    Stage0MergeDecisionRequest,
     Stage0Segment,
     Stage0Segments,
     Stage1ChapterRow,
@@ -58,6 +65,7 @@ from contracts.schema.api import (
     Stage1Segment,
     Stage1Segments,
     StyleView,
+    TrimResolutionRequest,
     UploadResult,
     VoiceLine,
 )
@@ -77,6 +85,17 @@ from contracts.schema.common import (
     WontFixEntry,
     WontFixNote,
 )
+from contracts.schema.corpus import (
+    CorpusArtifactEntry, CorpusBookEntry, CorpusLedgerSummary, CorpusManifest,
+    CorpusSkipExpectation, LedgerTokenSummary,
+)
+from contracts.schema.evaluation import (
+    CapabilityMetrics, Claim, EvaluatorFingerprint, EvaluatorProfile, EvidenceRef,
+    GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet, GlobalReviewItem,
+    GroundTruthCase, GroundTruthManifest,
+    JudgeDecision, SemanticDecision, TrimAudit, TrimEvidenceSpan, TrimResolution,
+    TrimJudgeResponse,
+)
 from contracts.schema.report import (
     AccountingLine,
     Badge,
@@ -93,34 +112,39 @@ from contracts.schema.report import (
     finding,
 )
 from contracts.schema.stage0 import (
-    RemovalReport, RemovedSegment, Stage0EditPlan, Stage0Warning,
+    MachineRemovalSnapshot, RemovalReport, RemovedSegment, Stage0AuditEntry,
+    Stage0ConflictResolution, Stage0EditPlan, Stage0MergeCandidate,
+    Stage0MergeConflict, Stage0MergeDecisionPlan, Stage0Warning,
 )
 from contracts.schema.stage1 import (
     HookCopy, MainText, MainTextSection, PartitionReport, Stage1Warning,
 )
 from contracts.schema.stage2 import (
-    Address, Arc, ArcTrack, Beat, Blueprint, Canon, ChapterBlueprints,
-    ChapterBlueprintsResponse, Character, ConflictStage, Entities, GlobalEdit,
-    GlobalGrounding, GlobalGroundingResponse, Hinge, Narration, ReaderRevealEvent,
-    Relation, RoleSplitResponse, Secret, SecretPatch, Setting, SourceSpan,
-    WorldRule, WorldRuleVersion,
+    Address, AddressContextPatch, Arc, ArcTrack, Beat, Blueprint, Canon,
+    ChapterBlueprints, ChapterBlueprintsResponse, Character, CharacterEnumPatch,
+    ConflictStage, Entities, GlobalEdit, GlobalGrounding,
+    GlobalGroundingResponse, Hinge, Narration, ReaderRevealEvent, Relation,
+    RoleSplitResponse, Secret, SecretPatch, Setting, SourceSpan, WorldRule,
+    WorldRulePatch, WorldRuleVersion,
 )
 from contracts.schema.stage3 import (
     ChapterStyle, ChapterStyleResponse, HabitRepairResponse, HookStyle, Measurable,
     StyleEdit, StyleGrounding, StyleResponse, Voice,
 )
 from contracts.schema.stage4 import (
-    BookCharacter, CtxBeat, CtxChapter, CtxFacts, PlanBeat, PlanChapter, PlanChapters,
-    PlanEdit, WriterContext,
+    BookCharacter, CtxBeat, CtxChapter, CtxFacts, CtxGoal, FactRef, PlanBeat, PlanChapter,
+    PlanChapters, PlanEdit, PlanGoal, WriterContext,
 )
 from contracts.schema.stage5 import (
-    Chapter, DraftConsumed, JudgedDraft, RejectedAttempt, RejectedRevision, Review,
+    Chapter, ChapterResponse, ChapterSegment, DraftConsumed, GeneratedSegment,
+    JudgedDraft, RejectedAttempt, RejectedRevision, Review,
     ReviewChapter, SemanticAlignmentResponse, SemanticChapterClaims, SemanticClaim,
     SemanticClaimsResponse, SemanticEvidenceRef, SemanticReview,
     SemanticSecretAdjudication, SemanticSecretDecision,
 )
 from contracts.schema.stage6 import (
-    ApprovedHook, Candidate, Hook, HookEdit, HookSemanticResponse, HookSemanticReview, Mech,
+    ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit,
+    HookSemanticResponse, HookSemanticReview, Mech,
 )
 from contracts.schema.stage7 import (
     BookTxt, CharacterPatch, ExtraSub, IdentityBaseline, NameDecision, NameMap,
@@ -155,42 +179,49 @@ class DecodedArtifact:
 #: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/**/draft.md` / `stage7/book.txt`
 #: ——它们不是 JSON，schema 是**字节形态**，守卫在写盘口那一层。
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
-    STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport),
+    STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport, current_version=2),
+    STAGE0_MACHINE_SNAPSHOT: ArtifactSpec(MachineRemovalSnapshot),
+    STAGE0_MERGE_CANDIDATE: ArtifactSpec(Stage0MergeCandidate),
+    STAGE0_AUDIT_ENTRY: ArtifactSpec(Stage0AuditEntry),
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy),
     STAGE1_PARTITION_REPORT: ArtifactSpec(PartitionReport),
-    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding),
+    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding, current_version=2),
+    STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),
+    STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet),
     # ⚠ 人产的 secret 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
     STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit),
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints),
-    STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, current_version=2),
+    STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding, current_version=2),
     # ⚠ 三份 `*_edit.json` 不是节点产的，是**人产的输入**——但它们落在产物目录、
     #   被 `--apply-edit` 当决策集吃掉，所以形状同样是契约（stage7 先例，§三）。
     STAGE3_STYLE_EDIT: ArtifactSpec(StyleEdit),
-    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters),
+    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, current_version=2),
     STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit),
-    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext),
+    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, current_version=2),
     # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。
     #   `stage4.plan --identity` 必须让「跑过且写手手里有这些」与
     #   「从没跑过」在盘上长得一模一样（`Q-2`）。stage6/stage7 在同一道工序上都做对了。
     #   ⚠ 它与正式那份**同一个模型**：形状完全一样，差别只在三个 goal 是显式标记
     #   ——**换一个模型就等于说它是另一种东西**，而它恰恰要回答
     #   「计划什么都不改时，写手手里到底有什么」。
-    STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext),
-    STAGE5_CHAPTER: ArtifactSpec(Chapter),
+    STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext, current_version=2),
+    STAGE5_CHAPTER: ArtifactSpec(Chapter, current_version=2),
     STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision),
-    STAGE5_REVIEW: ArtifactSpec(Review),
-    STAGE5_SEMANTIC: ArtifactSpec(SemanticReview),
+    STAGE5_REVIEW: ArtifactSpec(Review, current_version=2),
+    STAGE5_SEMANTIC: ArtifactSpec(SemanticReview, current_version=2),
+    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit),
+    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution),
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
     #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
-    STAGE6_HOOK: ArtifactSpec(Hook),
+    STAGE6_HOOK: ArtifactSpec(Hook, current_version=2),
     STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit),
-    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview),
+    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview, current_version=2),
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
-    STAGE7_NAME_MAP: ArtifactSpec(NameMap),
+    STAGE7_NAME_MAP: ArtifactSpec(NameMap, current_version=2),
     STAGE7_NAME_MAP_EDIT: ArtifactSpec(NameMapEdit),
 }
 ARTIFACTS: dict[str, type[BaseModel]] = {
@@ -282,6 +313,13 @@ __all__ = [
     'InputEdge', 'Usage', 'Provenance', 'FreeProvenance', 'LlmProvenance',
     'RoundLlmProvenance', 'RoundFreeProvenance',
     'Finding', 'WontFixNote', 'WontFix', 'WontFixEntry', 'Severity', 'Owner',
+    'CorpusArtifactEntry', 'CorpusBookEntry', 'CorpusLedgerSummary',
+    'CorpusManifest', 'CorpusSkipExpectation', 'LedgerTokenSummary',
+    'EvidenceRef', 'GroundTruthCase', 'GroundTruthManifest',
+    'EvaluatorFingerprint', 'CapabilityMetrics', 'EvaluatorProfile',
+    'JudgeDecision', 'SemanticDecision', 'GlobalReviewItem', 'GlobalReview',
+    'GlobalReviewDecision', 'GlobalReviewDecisionSet',
+    'Claim', 'TrimEvidenceSpan', 'TrimJudgeResponse', 'TrimAudit', 'TrimResolution',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
     'CheckReport', 'RuleLine', 'ProvenanceSection', 'EdgeLine',
     'CheckKind', 'Remediation', 'FixRoute',
@@ -289,29 +327,35 @@ __all__ = [
     # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实
     'StyleView', 'VoiceLine', 'HookStyleLine', 'DriftItem',
     'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest',
+    'Stage0ApprovalRequest', 'Stage0MergeDecisionRequest',
     'Stage1Segment', 'Stage1Segments', 'Stage1ChapterRow', 'Stage1Chapters',
     'HookCopyView', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'LogStreamEvent', 'PreviewRequest', 'ErrorBody',
-    'ApprovalAction', 'ApprovalDoc', 'DeepSelectionRequest',
-    'InboxItem', 'InboxView',
+    'ApprovalAction', 'ApprovalBackfillResult', 'ApprovalDoc', 'DeepSelectionRequest',
+    'InboxItem', 'InboxView', 'TrimResolutionRequest',
     # 八层
     'RemovalReport', 'RemovedSegment', 'Stage0EditPlan', 'Stage0Warning',
+    'MachineRemovalSnapshot', 'Stage0MergeCandidate', 'Stage0MergeConflict',
+    'Stage0ConflictResolution', 'Stage0MergeDecisionPlan', 'Stage0AuditEntry',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'ReaderRevealEvent',
-    'GlobalEdit', 'SecretPatch', 'Arc', 'ConflictStage',
+    'GlobalEdit', 'SecretPatch', 'WorldRulePatch', 'CharacterEnumPatch',
+    'AddressContextPatch', 'Arc', 'ConflictStage',
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',
     'StyleGrounding', 'StyleResponse', 'ChapterStyle', 'ChapterStyleResponse',
     'HabitRepairResponse', 'Voice', 'HookStyle', 'Measurable', 'StyleEdit',
-    'PlanChapters', 'PlanChapter', 'PlanBeat', 'PlanEdit', 'WriterContext', 'BookCharacter',
-    'CtxChapter', 'CtxBeat', 'CtxFacts',
-    'Chapter', 'RejectedAttempt', 'RejectedRevision',
+    'PlanChapters', 'PlanChapter', 'PlanBeat', 'FactRef', 'PlanGoal', 'PlanEdit',
+    'WriterContext', 'BookCharacter',
+    'CtxChapter', 'CtxBeat', 'CtxFacts', 'CtxGoal',
+    'Chapter', 'GeneratedSegment', 'ChapterSegment', 'ChapterResponse',
+    'RejectedAttempt', 'RejectedRevision',
     'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed',
     'SemanticClaim', 'SemanticChapterClaims', 'SemanticEvidenceRef',
     'SemanticClaimsResponse', 'SemanticAlignmentResponse',
     'SemanticSecretDecision', 'SemanticSecretAdjudication', 'SemanticReview',
-    'Hook', 'Candidate', 'ApprovedHook', 'Mech',
+    'Hook', 'Candidate', 'ApprovedHook', 'HookApprovalResolution', 'Mech',
     'HookSemanticResponse', 'HookSemanticReview', 'HookEdit',
     'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'StemBaseline', 'BookTxt',
     'IdentityBaseline', 'NameMapEdit', 'CharacterPatch', 'NameMapResponse',

@@ -8,6 +8,7 @@
    "index": 1,
    "approach": "conflict_first",
    "chars": 120,
+   "subject_sha256": "ddf3ee951b10a1752b3ec9cddfa32c869b8c25dcbe8947facd8cac96470ac273",
    "text": "圣旨下，苏府满门贱籍，发配怡红院。\n\n我爹来求我和离，我一把鼻涕一把泪：“我不走，我要跟夫君同甘共苦。”\n\n婆母红了眼眶：“患难见真情啊。”\n\n次日，嬷嬷拎着苏子瑜出来：“收拾收拾，明日拍卖。”\n\n我扑上去：“嬷嬷！我夫君还是童子身，您可一定要标个好价。”",
    "mech": {
     "punct_fixed": 0,
@@ -46,12 +47,21 @@
      "wontfix": null
     }
    ],
+   "semantic_state": "unreviewed",
+   "semantic_reason": "mock 样本没有当前校准评测产物",
+   "contradictions": [],
+   "quality": null,
+   "quality_score": null,
+   "quality_rank": null,
+   "selectable": false,
+   "human_resolvable": true,
    "approved": true
   },
   {
    "index": 2,
    "approach": "result_flashback",
    "chars": 111,
+   "subject_sha256": "b5aa0abfdd65574862bc73c51fc5ffe460fac7e8ce763f6e491f11cdad73f7b0",
    "text": "婆母被杜玉闲压在身下时，尖叫声整座怡红院都听见了。\n\n她不知道，那包秘药是她亲手下的。\n\n我只不过把茶杯换给了她。\n\n圣上赐婚那日，我就在等这一刻。\n\n苏府上下磋磨我，抄《女德》，送白绫。\n\n他们以为我会哭。\n\n我笑了，怡红院真是个报仇的好地方。",
    "mech": {
     "punct_fixed": 0,
@@ -107,12 +117,21 @@
      "wontfix": null
     }
    ],
+   "semantic_state": "unreviewed",
+   "semantic_reason": "mock 样本没有当前校准评测产物",
+   "contradictions": [],
+   "quality": null,
+   "quality_score": null,
+   "quality_rank": null,
+   "selectable": false,
+   "human_resolvable": true,
    "approved": false
   },
   {
    "index": 3,
    "approach": "identity_contrast",
    "chars": 144,
+   "subject_sha256": "f44cbb0c361865e6931e1c0499c67655dbfbcc5bff28621d1a650096a57c8211",
    "text": "我是李将军独女，圣上赐婚苏家。\n\n新婚夜，夫君丢给我一条白绫，要我自行了断。\n\n婆母列了十二时辰的规矩，拿《女德》抽我脸。\n\n所有人都等着看我被磨死。\n\n后来，苏府败落，全家进怡红院。\n\n公爹刷恭桶，夫君挂牌卖身。\n\n我站在廊下笑盈盈：“嬷嬷，我夫君可值钱了，童男呢。”\n\n他们到死都没想通，我到底是丫鬟还是讨债的。",
    "mech": {
     "punct_fixed": 0,
@@ -168,6 +187,14 @@
      "wontfix": null
     }
    ],
+   "semantic_state": "unreviewed",
+   "semantic_reason": "mock 样本没有当前校准评测产物",
+   "contradictions": [],
+   "quality": null,
+   "quality_score": null,
+   "quality_rank": null,
+   "selectable": false,
+   "human_resolvable": true,
    "approved": false
   }
  ],
@@ -212,7 +239,14 @@
     "unresolved_rounds": 0,
     "wontfix": null
    }
-  ]
+  ],
+  "resolution": {
+   "actor": "fixture-editor",
+   "reason": "mock 样本人工核验",
+   "subject_sha256": "ddf3ee951b10a1752b3ec9cddfa32c869b8c25dcbe8947facd8cac96470ac273",
+   "basis": "human_verification",
+   "semantic_review_seq": null
+  }
  },
  "book": [
   {

@@ -196,7 +196,7 @@ def test_stage2_global_resample_is_paid_and_cannot_hide_another_action():
     assert '--resample' in argv
     assert N.is_paid('stage2.global', ['--resample']) is True
     assert N.write_effect('stage2.global', ['--resample']) == \
-        'stage2/global_grounding.json'
+        'stage2/global_grounding.json · stage2/global_review.json'
     with pytest.raises(UnsupportedRunMode, match='必须单独执行'):
         N.build_argv(
             'stage2.global', SID, ['--resample', '--purge-role'], base=BASE)

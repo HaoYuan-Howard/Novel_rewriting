@@ -43,6 +43,7 @@ from contracts.invariants import (
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import Finding, LlmProvenance
+from contracts.schema.evaluation import EvaluatorFingerprint, SemanticDecision
 from contracts.schema.stage5 import ContextSource, JudgedDraft
 
 #: ⚠ 从 stage5 借的**不是拷贝，是同一个类**：`judged` 的形状与 stage5 逐字段相同
@@ -108,6 +109,29 @@ class Candidate(StrictModel):
     findings: list[Finding]
 
 
+class HookApprovalResolution(StrictModel):
+    """A self-reported human approval bound to the exact approved bytes.
+
+    ``actor`` is deliberately an asserted identity, not an authenticated
+    principal.  The full SHA-256 is supplied by the caller and compared before
+    any archive/write so a stale browser or CLI cannot approve different text.
+    """
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    basis: Literal['calibrated_pass', 'human_verification']
+    semantic_review_seq: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode='after')
+    def _calibrated_pass_names_its_review(self) -> 'HookApprovalResolution':
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('resolution actor/reason 不得只有空白')
+        if self.basis == 'calibrated_pass' and self.semantic_review_seq is None:
+            raise ValueError('calibrated_pass 必须绑定 semantic_review_seq')
+        return self
+
+
 class ApprovedHook(StrictModel):
     """定稿。**= 候选 + 一个 `origin`。**
 
@@ -132,6 +156,10 @@ class ApprovedHook(StrictModel):
     #: 定稿那一项要携带**它自己这份字节**的判定。只要有一条不带，
     #: 「这份没问题」与「这份没判过」在 JSON 里就长得一模一样。
     findings: list[Finding]
+
+    #: 人工定稿不再是一个无主体的 bool：记自报身份、理由、判定基础，
+    #: 并用完整 SHA-256 与真正进成书的字节绑定。
+    resolution: HookApprovalResolution
 
 
 class HookSources(StrictModel):
@@ -323,7 +351,50 @@ class HookSemanticReview(StrictModel):
     # 排序标签使用产物里的真实标签；请求时会换成 T1/T2… 匿名标签。
     reviews: list[HookCandidateReview] = Field(min_length=1)
     ranking: list[str] = Field(min_length=1)
+    #: 两名盲评 judge 各自的原始排序；``ranking`` 是代码按合并决议
+    #: 与平均分确定性派生的顺序。
+    judge_rankings: dict[Literal['A', 'B'], list[str]]
+    #: 每份去重文本一条；真正的 PASS/FAIL/UNVER 只从这里读，
+    #: 不从某一名 judge 的 ``reviews`` 倒推。
+    decisions: list[SemanticDecision] = Field(min_length=1)
+    evaluator_fingerprint: EvaluatorFingerprint
     provenance: LlmProvenance = Field(alias='_provenance')
+
+    @model_validator(mode='after')
+    def _double_blind_surface_is_closed(self) -> 'HookSemanticReview':
+        labels = {review.label for review in self.reviews}
+        if set(self.judged_texts) != labels:
+            raise ValueError('judged_texts 与 reviews 必须恰好覆盖同一批标签')
+        if any(self.judged_texts[review.label] != review.text_sha1
+               for review in self.reviews):
+            raise ValueError('judged_texts 与 reviews 的文本 sha1 绑定不一致')
+        if set(self.judge_rankings) != {'A', 'B'}:
+            raise ValueError('judge_rankings 必须恰有 A/B 两份')
+        for judge, ranking in self.judge_rankings.items():
+            if len(ranking) != len(set(ranking)) or set(ranking) != labels:
+                raise ValueError(f'judge {judge} ranking 未恰好覆盖合并审阅标签')
+        subjects = [decision.subject_key for decision in self.decisions]
+        if len(subjects) != len(set(subjects)) or len(subjects) != len(self.reviews):
+            raise ValueError('decisions 必须与去重文本一一对应')
+        if any(decision.ability != 'reference_boundary' for decision in self.decisions):
+            raise ValueError('Stage6 decisions 只能使用 reference_boundary 能力')
+        if any({judge.judge for judge in decision.judges} != {'A', 'B'}
+               for decision in self.decisions):
+            raise ValueError('每条 Stage6 decision 必须恰含 A/B 两名盲评 judge')
+        for decision in self.decisions:
+            refs = [ref for judge in decision.judges for ref in judge.evidence]
+            if any(ref.subject_sha256 != decision.subject_key
+                   for ref in [*refs, *decision.evidence]):
+                raise ValueError('Stage6 decision 的全部证据必须绑定它自己的完整 subject hash')
+            if decision.automated:
+                if decision.verdict not in {'PASS', 'FAIL'}:
+                    raise ValueError('自动 Stage6 decision 只能是 PASS/FAIL')
+                if any(judge.verdict != decision.verdict or not judge.evidence
+                       for judge in decision.judges):
+                    raise ValueError('自动 Stage6 decision 必须由 A/B 同结论且各自证据闭合')
+            elif decision.verdict != 'UNVER':
+                raise ValueError('非自动 Stage6 decision 必须诚实降为 UNVER')
+        return self
 
 
 class HookEdit(StrictModel):
@@ -336,3 +407,19 @@ class HookEdit(StrictModel):
 
     candidate: Literal[HOOK_APPROACHES] | None = None
     text: str = Field(min_length=1)
+    actor: str | None = None
+    reason: str | None = None
+    subject_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _formal_edit_is_an_explicit_bound_resolution(self) -> 'HookEdit':
+        audit = (self.actor, self.reason, self.subject_sha256)
+        if self.candidate is None:
+            if any(value is None or not value.strip() for value in audit):
+                raise ValueError('人工定稿必须显式给 actor、reason 和 subject_sha256')
+            # subject 绑定的是进入正式产物的归一后文本。归一口径依赖本书原作文案的
+            # 引号与分段，schema 单独拿到 edit 时算不出来；由 run_apply_edit 在写盘前
+            # 用同一条 normalize_hook 链校验，不能在这里误绑 raw upload 字节。
+        elif any(value is not None for value in audit):
+            raise ValueError('修改候选尚未定稿，不应伪造人工 resolution')
+        return self

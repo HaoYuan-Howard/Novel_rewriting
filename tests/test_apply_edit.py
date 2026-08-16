@@ -18,6 +18,9 @@
 """
 from __future__ import annotations
 
+import hashlib
+from types import SimpleNamespace
+
 import pytest
 
 from novel.errors import GateBlocked, TerminalState
@@ -169,14 +172,14 @@ def test_stage4_apply_edit_lands_a_round_and_rebuilds_context(box4):
     from novel.stages.stage4 import plan
 
     edit = _plan_edit_of(box4)
-    edit['output_chapters'][0]['chapter_goal'] += '（人工微调）'
+    edit['output_chapters'][0]['chapter_goal']['rationale'] += '（人工微调）'
     box4.write('stage4/plan_edit.json', edit)
 
     ctx = RunContext.open(str(box4.root), box4.sid, 'stage4.plan', paid=False)
     report = plan.run_apply_edit(ctx)
 
     after = box4.read('stage4/plan_chapters.json')
-    assert after['output_chapters'][0]['chapter_goal'].endswith('（人工微调）')
+    assert after['output_chapters'][0]['chapter_goal']['rationale'].endswith('（人工微调）')
     assert after['_provenance'].get('partial_rewrite') == '--apply-edit'
     assert (box4.dir / 'stage4' / 'writer_context.json').exists(), '写作上下文没有同批重建'
     assert list((box4.dir / 'stage4' / '_rounds').glob('plan_chapters.r*.json'))
@@ -190,7 +193,7 @@ def test_stage4_apply_edit_with_hard_goes_to_invalid_not_formal(box4):
 
     before = (box4.dir / 'stage4' / 'plan_chapters.json').read_bytes()
     edit = _plan_edit_of(box4)
-    edit['output_chapters'][0]['chapter_goal'] = '把本章的张力拉到最满'
+    edit['output_chapters'][0]['chapter_goal']['rationale'] = '把本章的张力拉到最满'
     box4.write('stage4/plan_edit.json', edit)
 
     ctx = RunContext.open(str(box4.root), box4.sid, 'stage4.plan', paid=False)
@@ -222,6 +225,15 @@ def _hook_text(box6, *, truncated: bool = False) -> str:
     return body if truncated else body + '。'
 
 
+def _formal_hook_edit(text: str) -> dict:
+    return {
+        'text': text,
+        'actor': 'test-editor',
+        'reason': '已人工核对全书事实',
+        'subject_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
+    }
+
+
 def test_stage6_apply_edit_normalizes_and_rejudges_the_candidate(box6):
     from novel.stages.stage6 import hook
 
@@ -250,7 +262,7 @@ def test_stage6_apply_edit_replaces_the_approved_text_and_keeps_its_approach(box
 
     art_before = box6.read('stage6/hook.json')
     assert art_before.get('approved'), '本条测试要一本已定稿的书'
-    box6.write('stage6/hook_edit.json', {'text': _hook_text(box6)})
+    box6.write('stage6/hook_edit.json', _formal_hook_edit(_hook_text(box6)))
 
     ctx = RunContext.open(str(box6.root), box6.sid, 'stage6.hook', paid=False)
     new, _report = hook.run_apply_edit(ctx)
@@ -260,6 +272,46 @@ def test_stage6_apply_edit_replaces_the_approved_text_and_keeps_its_approach(box
     assert new.approved.approach == art_before['approved']['approach'], \
         '「这份人工稿是从哪一条改出来的」被抹掉了'
     assert '她站在门口' in new.approved.text
+
+
+def test_stage6_formal_edit_hash_binds_normalized_text_and_checks_semantic_guard(box6, monkeypatch):
+    from novel.stages.stage6 import hook, semantic
+    from novel.stages.stage6.measure import normalize_hook
+
+    raw = _hook_text(box6).replace('。', '.')
+    src = (sandbox.cut(box6.book, 'stage1/hook_copy.json') or {})['text'].strip()
+    normalized, _mech = normalize_hook(raw, src_hook=src)
+    expected = hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+    seen = {}
+
+    def require(_store, _art, text, label, **kwargs):
+        seen.update(text=text, label=label, **kwargs)
+        return SimpleNamespace(semantic_review_seq=None), 'human_verification'
+
+    monkeypatch.setattr(semantic, 'require_human_resolution', require)
+    box6.write('stage6/hook_edit.json', _formal_hook_edit(normalized) | {'text': raw})
+    ctx = RunContext.open(str(box6.root), box6.sid, 'stage6.hook', paid=False)
+
+    new, _report = hook.run_apply_edit(ctx)
+
+    assert new.approved is not None and new.approved.text == normalized
+    assert new.approved.resolution.subject_sha256 == expected
+    assert seen['text'] == normalized
+    assert seen['expected_subject_sha256'] == expected
+
+
+def test_stage6_formal_edit_refuses_a_hash_of_raw_pre_normalized_bytes(box6):
+    from novel.stages.stage6 import hook
+
+    raw = _hook_text(box6).replace('。', '.')
+    box6.write('stage6/hook_edit.json', _formal_hook_edit(raw))
+    before = box6.read('stage6/hook.json')
+    ctx = RunContext.open(str(box6.root), box6.sid, 'stage6.hook', paid=False)
+
+    with pytest.raises(TerminalState, match='已变化'):
+        hook.run_apply_edit(ctx)
+
+    assert box6.read('stage6/hook.json') == before
 
 
 def test_stage6_apply_edit_does_not_gate_but_reports_red(box6):
@@ -280,7 +332,7 @@ def test_stage6_apply_edit_does_not_gate_but_reports_red(box6):
 def test_stage6_apply_edit_requires_the_formal_artifact(box6):
     from novel.stages.stage6 import hook
 
-    box6.write('stage6/hook_edit.json', {'text': _hook_text(box6)})
+    box6.write('stage6/hook_edit.json', _formal_hook_edit(_hook_text(box6)))
     (box6.dir / 'stage6' / 'hook.json').unlink()
     ctx = RunContext.open(str(box6.root), box6.sid, 'stage6.hook', paid=False)
     with pytest.raises(TerminalState, match='stage6.hook'):

@@ -26,6 +26,8 @@ export function Stage6Screen() {
   const { askConfirm } = useChrome()
   const [pick, setPick] = useState<number | null>(null)
   const [reopened, setReopened] = useState(false)
+  const [actor, setActor] = useState('')
+  const [reason, setReason] = useState('')
 
   const q = useQuery({ queryKey: qk.stage6(sid), queryFn: () => api.getStage6(sid), retry: false })
   const s1hook = useQuery({
@@ -35,8 +37,12 @@ export function Stage6Screen() {
   })
 
   const approve = useMutation({
-    // 只发序号（--pick）。改字不在浏览器——那是 stage6.hook --apply-edit 的事。
-    mutationFn: (pick: number) => api.approveHook(sid, pick),
+    mutationFn: (req: {
+      pick: number
+      actor: string
+      reason: string
+      subject_sha256: string
+    }) => api.approveHook(sid, req),
     onSuccess: (job) => {
       if (job.state !== 'failed') setReopened(false)
       void qc.invalidateQueries({ queryKey: qk.stage6(sid) })
@@ -46,16 +52,29 @@ export function Stage6Screen() {
     },
   })
 
-  const askApprove = (n: number) =>
+  const askApprove = (candidate: {
+    index: number
+    subject_sha256: string
+  }) =>
     askConfirm({
       req: {
         kind: 'stage6.approve',
-        label: '文案定稿 · 候选 ' + n,
-        extra: ['--pick', String(n)],
+        label: '文案定稿 · 候选 ' + candidate.index,
+        extra: [
+          '--pick', String(candidate.index),
+          '--actor', actor.trim(),
+          '--reason', reason.trim(),
+          '--subject-sha256', candidate.subject_sha256,
+        ],
         sid,
         ordinal: null,
       },
-      run: () => approve.mutateAsync(n),
+      run: () => approve.mutateAsync({
+        pick: candidate.index,
+        actor: actor.trim(),
+        reason: reason.trim(),
+        subject_sha256: candidate.subject_sha256,
+      }),
     })
 
   return (
@@ -92,7 +111,9 @@ export function Stage6Screen() {
                       ? '已定稿：' +
                         d.approved.approach +
                         '（' +
-                        (d.approved.origin === 'human' ? '人选的' : d.approved.origin) +
+                        (d.approved.resolution.basis === 'human_verification'
+                          ? '人工核验'
+                          : '校准双盲 PASS 后人选') +
                         '）'
                       : '还没定稿'}
                   </span>
@@ -111,12 +132,42 @@ export function Stage6Screen() {
                   <div className="text-section font-semibold">
                     三个候选并排看，选一个定稿（{d.candidates.length} 条）
                   </div>
+                  <div className="grid gap-10 rounded-card border border-line bg-sunken-2 p-14 md:grid-cols-2">
+                    <label className="flex flex-col gap-5 text-tag text-ink-3">
+                      自报身份（不是认证身份）
+                      <input
+                        value={actor}
+                        onChange={(event) => setActor(event.target.value)}
+                        className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
+                        placeholder="例：editor-a"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-5 text-tag text-ink-3">
+                      定稿理由
+                      <input
+                        value={reason}
+                        onChange={(event) => setReason(event.target.value)}
+                        className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
+                        placeholder="说明人工核验与选择依据"
+                      />
+                    </label>
+                    <div className="prose-cn text-tag text-ink-4 md:col-span-2">
+                      定稿会同时绑定当前候选的 SHA-256。缺 profile 或双盲 UNVER
+                      可由这条人工 resolution 消解；已校准的 FAIL/实质矛盾不可绕过。
+                    </div>
+                  </div>
                   <div
                     className="grid items-start gap-14"
                     style={{ gridTemplateColumns: 'repeat(3, minmax(0,1fr))' }}
                   >
                     {d.candidates.map((c) => {
                       const on = picked === c.index
+                      const mechanicallyBlocked = c.findings.some((f) => f.sev === 'hard')
+                      const approvable =
+                        !mechanicallyBlocked &&
+                        (c.selectable || c.human_resolvable) &&
+                        !!actor.trim() &&
+                        !!reason.trim()
                       return (
                         <div
                           key={c.index}
@@ -185,25 +236,31 @@ export function Stage6Screen() {
                             </Mono>
                             <button
                               type="button"
-                              disabled={!c.selectable}
+                              disabled={!approvable}
                               onClick={() => {
-                                if (!c.selectable) return
-                                if (on) askApprove(c.index)
+                                if (!approvable) return
+                                if (on) askApprove(c)
                                 else setPick(c.index)
                               }}
                               className={cx(
                                 'ml-auto cursor-pointer rounded-btn-lg border px-14 py-9 text-body-lg font-semibold',
-                                !c.selectable && 'cursor-not-allowed opacity-50',
+                                !approvable && 'cursor-not-allowed opacity-50',
                                 on ? 'border-ink bg-ink text-card' : 'border-line-btn bg-card text-ink',
                               )}
                             >
-                              {!c.selectable
-                                ? c.semantic_state === 'contradiction'
+                              {mechanicallyBlocked
+                                ? '有机械 HARD · 不可定稿'
+                                : c.semantic_state === 'contradiction'
                                   ? '有实质矛盾 · 不可定稿'
-                                  : '先完成质量审判'
-                                : on
-                                  ? '定稿这一条 · 进入审阅'
-                                  : '定这一条'}
+                                  : !actor.trim() || !reason.trim()
+                                    ? '先填身份与理由'
+                                    : !c.selectable && !c.human_resolvable
+                                      ? '当前结论不可消解'
+                                      : on
+                                        ? c.selectable
+                                          ? '定稿这一条 · 进入审阅'
+                                          : '人工核验后定稿'
+                                        : '定这一条'}
                             </button>
                           </div>
                         </div>

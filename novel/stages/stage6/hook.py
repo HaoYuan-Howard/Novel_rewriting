@@ -34,8 +34,8 @@ from contracts.schema.stage3 import StyleGrounding
 from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import ContextSource
 from contracts.schema.stage6 import (
-    ApprovedHook, Candidate, Hook, HookEdit, HookParams, HookProvenance, HookResponse,
-    Mech,
+    ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit, HookParams,
+    HookProvenance, HookResponse, Mech,
 )
 from novel import paths, prov, wontfix
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
@@ -341,10 +341,15 @@ def run_recheck(ctx: RunContext) -> tuple[Hook, CheckReport]:
     approved = None
     if art.approved is not None:
         text, mech, fs = _normalize_and_judge(art.approved.text, up)
+        if text != art.approved.text:
+            raise TerminalState(
+                '--recheck 将改变已经人工绑定的定稿字节；不能静默搬用旧 resolution。'
+                '请用 --apply-edit 显式给新稿 actor/reason/subject_sha256')
         label = f'定稿·{art.approved.approach}'
         approved = ApprovedHook(approach=art.approved.approach, text=text,
                                 origin=art.approved.origin, mech=mech,
-                                findings=_labelled(label, fs))
+                                findings=_labelled(label, fs),
+                                resolution=art.approved.resolution)
 
     store.archive_round(REL, keep=True)
     new = art.model_copy(update={
@@ -481,9 +486,22 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
         # 定稿：有前身则记它是从哪条改出来的；没有前身才是 `human_edit`。
         approach = art.approved.approach if art.approved is not None else 'human_edit'
         label = f'定稿·{approach}'
+        from novel.stages.stage6 import semantic
+        assessment, basis = semantic.require_human_resolution(
+            store, art, text, label,
+            actor=(edit.actor or ''), reason=(edit.reason or ''),
+            expected_subject_sha256=(edit.subject_sha256 or ''),
+        )
         new = art.model_copy(update={
             'approved': ApprovedHook(approach=approach, text=text, origin='human',
-                                     mech=mech, findings=_labelled(label, fs)),
+                                     mech=mech, findings=_labelled(label, fs),
+                                     resolution=HookApprovalResolution(
+                                          actor=(edit.actor or '').strip(),
+                                          reason=(edit.reason or '').strip(),
+                                          subject_sha256=semantic.text_sha256(text),
+                                          basis=basis,
+                                          semantic_review_seq=assessment.semantic_review_seq,
+                                      )),
             'provenance': ctx.rewrite_provenance(art.provenance, by='--apply-edit')})
 
     store.archive_round(REL, keep=True)
@@ -491,7 +509,14 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
     return new, _report(ctx, store, _judge_artifact(new, up, store), new)
 
 
-def run_approve(ctx: RunContext, pick: int) -> tuple[Hook, CheckReport]:
+def run_approve(
+    ctx: RunContext,
+    pick: int,
+    *,
+    actor: str,
+    reason: str,
+    subject_sha256: str,
+) -> tuple[Hook, CheckReport]:
     """`stage6.approve --pick N`：**人定稿**。0 成本。
 
     N 从 **1** 起（界面上显示的就是「候选 1/2/3」）。
@@ -519,15 +544,23 @@ def run_approve(ctx: RunContext, pick: int) -> tuple[Hook, CheckReport]:
             f'候选 {pick} 有阻断级机械问题 {mechanical_hard}，不能定稿。'
             f'请改选干净候选或 --apply-edit 修正')
 
-    # 质量审判是批准动作的前置条件，而不是一张可忽略的报告：缺审、过期、
-    # coverage=uncertain 或实质矛盾都不能由一次人工误点绕过。
+    # 当前校准 PASS 可作为自动证据；缺 profile / UNVER 必须记一条
+    # 与当前字节绑定的人工 resolution。已有校准 FAIL 不可被这条路覆盖。
     from novel.stages.stage6 import semantic
-    semantic.require_selectable(store, art, c.text, str(pick))
+    assessment, basis = semantic.require_human_resolution(
+        store, art, c.text, str(pick), actor=actor, reason=reason,
+        expected_subject_sha256=subject_sha256)
 
     store.archive_round(REL, keep=True)
     new = art.model_copy(update={
         'approved': ApprovedHook(approach=c.approach, text=c.text, origin='human',
-                                 mech=c.mech, findings=list(c.findings)),
+                                 mech=c.mech, findings=list(c.findings),
+                                 resolution=HookApprovalResolution(
+                                     actor=actor.strip(), reason=reason.strip(),
+                                     subject_sha256=subject_sha256,
+                                     basis=basis,
+                                     semantic_review_seq=assessment.semantic_review_seq,
+                                 )),
     })
     store.write(REL, new)
     up = _Upstreams(ctx, store)

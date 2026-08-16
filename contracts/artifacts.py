@@ -14,10 +14,15 @@ from typing import Final
 ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage0.clean_text': 'stage0/clean_text.txt',
     'stage0.removal_report': 'stage0/removal_report.json',
+    'stage0.machine_snapshot': 'stage0/machine_snapshot.json',
+    'stage0.merge_candidate': 'stage0/merge_candidate.json',
+    'stage0.audit_entry': 'stage0/_audit/edit_{n}.json',
     'stage1.main_text': 'stage1/main_text.json',
     'stage1.hook_copy': 'stage1/hook_copy.json',
     'stage1.partition_report': 'stage1/partition_report.json',
     'stage2.global_grounding': 'stage2/global_grounding.json',
+    'stage2.global_review': 'stage2/global_review.json',
+    'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
     'stage2.global_edit': 'stage2/global_edit.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
     'stage3.style_grounding': 'stage3/style_grounding.json',
@@ -30,6 +35,8 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage5.rejected_revision': 'stage5/{mode}/ch{nn}.rejected.json',
     'stage5.review': 'stage5/review_{n}.json',
     'stage5.semantic': 'stage5/semantic_{n}.json',
+    'stage5.trim_audit': 'stage5/trim_audit_ch{nn}.json',
+    'stage5.trim_resolution': 'stage5/trim_resolution_ch{nn}.json',
     'stage5.wontfix': 'stage5/wontfix.json',
     'stage5.mode_draft': 'stage5/{mode}/draft.md',
     'stage5.book_draft': 'stage5/draft.md',
@@ -62,10 +69,15 @@ def artifact_rel(name: str, **values: object) -> str:
 
 STAGE0_CLEAN_TEXT = artifact_rel('stage0.clean_text')
 STAGE0_REMOVAL_REPORT = artifact_rel('stage0.removal_report')
+STAGE0_MACHINE_SNAPSHOT = artifact_rel('stage0.machine_snapshot')
+STAGE0_MERGE_CANDIDATE = artifact_rel('stage0.merge_candidate')
+STAGE0_AUDIT_ENTRY = artifact_rel('stage0.audit_entry')
 STAGE1_MAIN_TEXT = artifact_rel('stage1.main_text')
 STAGE1_HOOK_COPY = artifact_rel('stage1.hook_copy')
 STAGE1_PARTITION_REPORT = artifact_rel('stage1.partition_report')
 STAGE2_GLOBAL_GROUNDING = artifact_rel('stage2.global_grounding')
+STAGE2_GLOBAL_REVIEW = artifact_rel('stage2.global_review')
+STAGE2_GLOBAL_REVIEW_DECISIONS = artifact_rel('stage2.global_review_decisions')
 STAGE2_GLOBAL_EDIT = artifact_rel('stage2.global_edit')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')
 STAGE3_STYLE_GROUNDING = artifact_rel('stage3.style_grounding')
@@ -78,6 +90,8 @@ STAGE5_CHAPTER = artifact_rel('stage5.chapter')
 STAGE5_REJECTED_REVISION = artifact_rel('stage5.rejected_revision')
 STAGE5_REVIEW = artifact_rel('stage5.review')
 STAGE5_SEMANTIC = artifact_rel('stage5.semantic')
+STAGE5_TRIM_AUDIT = artifact_rel('stage5.trim_audit')
+STAGE5_TRIM_RESOLUTION = artifact_rel('stage5.trim_resolution')
 STAGE5_WONTFIX = artifact_rel('stage5.wontfix')
 STAGE5_MODE_DRAFT = artifact_rel('stage5.mode_draft')
 STAGE5_BOOK_DRAFT = artifact_rel('stage5.book_draft')

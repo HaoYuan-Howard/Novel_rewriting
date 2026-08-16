@@ -12,7 +12,9 @@ test_api_edits.py —— 人工写回三条路由的**行为**（真起 CLI 子�
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 
 import pytest
 
@@ -29,8 +31,11 @@ pytestmark = [
                        reason='盘上没有语料——这一批**没在查**，不是「查过没事」'),
 ]
 
-INPUTS = ('stage1/main_text.json', 'stage1/hook_copy.json',
+INPUTS = ('stage0/removal_report.json',
+          'stage1/main_text.json', 'stage1/hook_copy.json',
+          'stage1/partition_report.json',
           'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
+          'stage2/global_review.json',
           'stage3/style_grounding.json',
           'stage4/plan_chapters.json', 'stage4/writer_context.json',
           'stage6/hook.json', 'stage7/name_map.json')
@@ -62,6 +67,13 @@ def no_api_key(monkeypatch):
 def box():
     book = books()[0]
     s = sandbox.Sandbox(book, INPUTS + _stage5_rels(book))
+    corpus_book = corpus.corpus_root() / book
+    for rel in ('stage0/clean_text.txt', 'stage5/draft.md'):
+        source = corpus_book / rel
+        assert source.is_file(), f'{book} 少了 {rel}，审批 freshness 沙箱无法建立'
+        target = s.dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
     yield s
     s.close()
 
@@ -90,16 +102,23 @@ def _stamp_chain(box, upto: str) -> None:
     审批文档是 `_service/` 的服务状态（不是产物），测试直接落一份合法 doc
     是在摆前置事实，不是绕守卫；`approve_gate` 的链式约束由 approvals 自己的测试守。
     """
+    from novel.orchestrator import approvals
+
     n = int(upto[1:])
-    doc = {
-        'v': 1, 'sid': box.sid,
-        'gate': {f's{i}': i <= n for i in range(8)},
-        'seen': {'read': True, 'global': True},
-        'deep': [], 'writing': True, 'spawns': {},
-    }
-    p = box.root / '_service' / 'approvals' / f'{box.sid}.json'
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(doc, ensure_ascii=False), encoding='utf-8')
+    # Explicit backfill creates the same typed/root/freshness proofs as the real
+    # product path.  Then trim only the checklist gates beyond the precondition
+    # this test needs; never invent legacy v1 booleans against today's files.
+    filled = approvals.backfill_from_disk(box.root, box.sid)
+    assert all(filled.approvals.gate[f's{i}'] for i in range(n + 1))
+    record = approvals._read_current(box.root, box.sid)
+    gates = dict(record.gate)
+    proofs = dict(record.gate_proofs)
+    for i in range(n + 1, 8):
+        gates[f's{i}'] = False
+        proofs[f's{i}'] = None
+    approvals._write(box.root, record.model_copy(update={
+        'gate': gates, 'gate_proofs': proofs,
+    }))
 
 
 # ───────────────────────── 一、章节改稿 ─────────────────────────
@@ -111,15 +130,16 @@ def test_a_draft_edit_lands_as_a_new_human_round(client, box):
     rel = box.dir / 'stage5' / mode / 'ch01.json'
     before = json.loads(rel.read_text(encoding='utf-8'))
     marker = '她把那句话咽了回去，转身出门。'
-    text = (before['text'] + '\n\n' + marker)
+    segments = [dict(segment) for segment in before['segments']]
+    segments[-1]['text'] += '\n\n' + marker
 
     r = client.post(f'/api/novels/{box.sid}/review/1/edit',
-                    json={'mode': mode, 'text': text})
+                    json={'mode': mode, 'segments': segments})
     assert r.status_code == 200, r.text[:300]
     assert r.json()['state'] == 'ok', r.text[:300]
 
     after = json.loads(rel.read_text(encoding='utf-8'))
-    assert marker in after['text']
+    assert marker in '\n\n'.join(segment['text'] for segment in after['segments'])
     assert after['_provenance']['origin'] == 'human'
     assert 'prompts' not in after['_provenance'] and 'model' not in after['_provenance'], \
         '人工稿记了 prompt/model——那是假账（RoundFreeProvenance 在结构上没有那两格）'
@@ -127,32 +147,36 @@ def test_a_draft_edit_lands_as_a_new_human_round(client, box):
         before.get('_provenance', {}).get('round', 1)) + 1
     rounds = list((box.dir / 'stage5' / mode / '_rounds').glob('ch01.r*.json'))
     assert rounds, '旧轮没有归档——覆盖前的那一份再也回不去了'
-    assert not any(_edits_dir(box).rglob('*.txt')), '一次性人工稿没清理'
+    assert not any(_edits_dir(box).rglob('*.json')), '一次性人工稿没清理'
 
 
 def test_a_draft_edit_without_upstream_is_a_failed_job_not_a_5xx(client, box):
     """上游未运行：删 ctx ⇒ CLI 显式终态 ⇒ **200 + state=failed**（作业失败不是 HTTP 错误）。"""
     (box.dir / 'stage4' / 'writer_context.json').unlink()
     r = client.post(f'/api/novels/{box.sid}/review/1/edit',
-                    json={'mode': _draft_mode(box, 1), 'text': '改过的正文。'})
+                    json={'mode': _draft_mode(box, 1),
+                          'segments': [{'slot': 's01', 'text': '改过的正文。'}]})
     assert r.status_code == 200, r.text[:300]
     assert r.json()['state'] == 'failed'
-    assert not any(_edits_dir(box).rglob('*.txt')), '失败的作业也要清理一次性稿'
+    assert not any(_edits_dir(box).rglob('*.json')), '失败的作业也要清理一次性稿'
 
 
 def test_a_draft_edit_for_a_chapter_outside_the_plan_fails_loudly(client, box):
     """章号不在计划里：CLI `TerminalState` ⇒ failed，日志说得出为什么。"""
     r = client.post(f'/api/novels/{box.sid}/review/999/edit',
-                    json={'mode': 'deep', 'text': '不存在的章。'})
+                    json={'mode': 'deep',
+                          'segments': [{'slot': 's01', 'text': '不存在的章。'}]})
     assert r.status_code == 200 and r.json()['state'] == 'failed'
     log = client.get(f'/api/jobs/{r.json()["job_id"]}/log').json()['text']
     assert '999' in log, '日志里连章号都没有——人无从知道错在哪'
 
 
 @pytest.mark.parametrize('body,why', [
-    ({'mode': 'deep', 'text': ''}, '空稿不是一次修改'),
-    ({'mode': 'weird', 'text': '正文'}, 'mode 取值面外'),
-    ({'text': '正文'}, '缺 mode'),
+    ({'mode': 'deep', 'segments': []}, '空稿不是一次修改'),
+    ({'mode': 'deep', 'segments': [
+        {'slot': 's01', 'text': '甲。'}, {'slot': 's01', 'text': '乙。'}]}, 'slot 重复'),
+    ({'mode': 'weird', 'segments': [{'slot': 's01', 'text': '正文'}]}, 'mode 取值面外'),
+    ({'segments': [{'slot': 's01', 'text': '正文'}]}, '缺 mode'),
 ])
 def test_an_illegal_edit_body_is_422_from_the_carrier(client, box, body, why):
     r = client.post(f'/api/novels/{box.sid}/review/1/edit', json=body)
@@ -160,6 +184,18 @@ def test_an_illegal_edit_body_is_422_from_the_carrier(client, box, body, why):
 
 
 # ───────────────────────── 二、文案定稿 ─────────────────────────
+
+def _approve_body(box, pick: int) -> dict:
+    data = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
+    index = max(0, min(pick - 1, len(data['candidates']) - 1))
+    text = data['candidates'][index]['text']
+    return {
+        'pick': pick,
+        'actor': 'api-test-editor',
+        'reason': '逐项核对了当前候选与全书事实',
+        'subject_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
+    }
+
 
 def _why_pick_is_blocked(box, pick: int) -> str:
     """`stage6.approve --pick N` 的语义闸**当下**为什么不放行；放行 ⇒ `''`。
@@ -203,7 +239,7 @@ def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
     _needs_a_selectable_candidate(box, 1)
     _stamp_chain(box, 's5')
     before = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
-    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json={'pick': 1})
+    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=_approve_body(box, 1))
     assert r.status_code == 200, r.text[:300]
     assert r.json()['exit_code'] in (0, 1), r.text[:300]
 
@@ -219,7 +255,7 @@ def test_an_approve_before_the_chain_still_lands_in_the_artifact(client, box):
     """⭐ 审批链没到位（中途接手的书）⇒ 定稿**照样落**（产物是真相），
     检查单那一格保持未盖——**不把检查单的顺序翻成定稿的失败**。"""
     _needs_a_selectable_candidate(box, 1)
-    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json={'pick': 1})
+    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=_approve_body(box, 1))
     assert r.status_code == 200, r.text[:300]
     assert r.json()['exit_code'] in (0, 1)
     after = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
@@ -231,7 +267,7 @@ def test_an_approve_before_the_chain_still_lands_in_the_artifact(client, box):
 def test_an_out_of_range_pick_fails_without_stamping(client, box):
     """越界 pick = 显式终态（exit 2）——**没跑成**，一个脚印都不留。"""
     _stamp_chain(box, 's5')
-    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json={'pick': 99})
+    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=_approve_body(box, 99))
     assert r.status_code == 200 and r.json()['state'] == 'failed'
     assert r.json()['exit_code'] >= 2, '越界 pick 该是「没跑成」，不是「跑完了判定红」'
     doc = client.get(f'/api/novels/{box.sid}/approvals').json()
@@ -241,8 +277,9 @@ def test_an_out_of_range_pick_fails_without_stamping(client, box):
 def test_a_corrupt_hook_makes_the_approve_job_fail(client, box):
     """产物损坏：CLI 读不回 hook.json ⇒ failed（不是 5xx，也绝不盖章）。"""
     _stamp_chain(box, 's5')
+    body = _approve_body(box, 1)
     (box.dir / 'stage6' / 'hook.json').write_text('这不是 JSON', encoding='utf-8')
-    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json={'pick': 1})
+    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=body)
     assert r.status_code == 200 and r.json()['state'] == 'failed'
     assert r.json()['exit_code'] >= 2
     assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s6'] is False
@@ -250,7 +287,7 @@ def test_a_corrupt_hook_makes_the_approve_job_fail(client, box):
 
 def test_a_zero_pick_is_422_from_the_carrier(client, box):
     assert client.post(f'/api/novels/{box.sid}/stage6/approve',
-                       json={'pick': 0}).status_code == 422
+                       json=_approve_body(box, 0)).status_code == 422
 
 
 # ───────────────────────── 三、人名定稿 ─────────────────────────

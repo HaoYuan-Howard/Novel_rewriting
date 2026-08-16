@@ -369,8 +369,37 @@ class SecretPatch(StrictModel):
         return self
 
 
+class WorldRulePatch(StrictModel):
+    """Typed correction for an existing world rule; never creates/deletes one."""
+
+    rule_id: str = Field(pattern=r'^wr_\d{2}$')
+    kind: Literal[WORLD_RULE_KINDS] | None = None
+    versions: list[WorldRuleVersion] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _has_change(self) -> 'WorldRulePatch':
+        if self.kind is None and self.versions is None:
+            raise ValueError(f'{self.rule_id}: empty world-rule patch')
+        return self
+
+
+class CharacterEnumPatch(StrictModel):
+    """Typed correction for the derived name distinctiveness enum."""
+
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
+
+
+class AddressContextPatch(StrictModel):
+    """Correct one existing address enum by its audited list position."""
+
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+    address_index: int = Field(ge=0)
+    context: Literal[ADDRESS_CONTEXT]
+
+
 class GlobalEdit(StrictModel):
-    """`stage2/global_edit.json` —— 人手订正的 secret 决策集（`--apply-edit` 吃它）。
+    """`stage2/global_edit.json` —— typed Stage2 human corrections.
 
     【它解决的是什么】`reader_reveal_events` / 知情人 / secret 事实抽错时，此前
     **契约内没有任何人工决策集可改**：`--purge-role` 只修 role/fate、`--renormalize`
@@ -384,16 +413,28 @@ class GlobalEdit(StrictModel):
     **形状即契约**（照 stage3/4/6/7 四份 `*_edit.json` 的先例）。
     """
 
-    secrets: list[SecretPatch] = Field(min_length=1)
+    secrets: list[SecretPatch] = Field(default_factory=list)
+    world_rules: list[WorldRulePatch] = Field(default_factory=list)
+    characters: list[CharacterEnumPatch] = Field(default_factory=list)
+    addresses: list[AddressContextPatch] = Field(default_factory=list)
 
     @model_validator(mode='after')
-    def _one_patch_per_secret(self) -> GlobalEdit:
+    def _one_patch_per_subject(self) -> GlobalEdit:
+        if not (self.secrets or self.world_rules or self.characters or self.addresses):
+            raise ValueError('global edit must contain at least one typed patch')
         got = [patch.secret_id for patch in self.secrets]
         if len(set(got)) != len(got):
             dup = sorted({sid for sid in got if got.count(sid) > 1})
             raise ValueError(
                 f'同一条 secret 给了多份补丁：{dup}。'
                 f'哪一份生效取决于遍历顺序 ⇒ 人的决定会被实现细节改写')
+        for label, keys in (
+            ('world rule', [patch.rule_id for patch in self.world_rules]),
+            ('character', [patch.char_id for patch in self.characters]),
+            ('address', [(patch.char_id, patch.address_index) for patch in self.addresses]),
+        ):
+            if len(keys) != len(set(keys)):
+                raise ValueError(f'duplicate {label} patches are order-dependent')
         return self
 
 

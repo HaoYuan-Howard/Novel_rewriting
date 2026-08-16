@@ -1,0 +1,182 @@
+import { api } from '@/api/endpoints'
+import { ConfirmDialog } from '@/components/job/ConfirmDialog'
+import type { EnumsResponse } from '@/types/enums'
+import type { GlobalReviewResponse } from '@/types/stages'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { renderRoute } from '@/test/render'
+import { GlobalReviewPanel } from './GlobalReviewPanel'
+
+const hashes = ['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)]
+
+const review: GlobalReviewResponse = {
+  source_sha256: 'd'.repeat(64),
+  current_subject_sha256: 'd'.repeat(64),
+  current: true,
+  approved: false,
+  items: [
+    {
+      item_id: 'rules',
+      kind: 'world_rule_set_complete',
+      subject_path: 'canon.world_rules',
+      subject_sha256: hashes[0],
+      state: 'pending',
+      evidence: [],
+      actor: null,
+      decided_at: null,
+      reason: null,
+    },
+    {
+      item_id: 'secrets',
+      kind: 'secret_set_complete',
+      subject_path: 'canon.secrets',
+      subject_sha256: hashes[1],
+      state: 'FAIL',
+      evidence: [],
+      actor: 'reviewer-old',
+      decided_at: '2026-08-16T00:00:00Z',
+      reason: '疑似漏抽',
+    },
+    {
+      item_id: 'known-by',
+      kind: 'known_by',
+      subject_path: 'canon.secrets.secret_01.character_known_by',
+      subject_sha256: hashes[2],
+      state: 'UNVER',
+      evidence: [],
+      actor: 'reviewer-old',
+      decided_at: '2026-08-16T00:00:00Z',
+      reason: '证据不足',
+    },
+  ],
+}
+
+const enums: EnumsResponse = {
+  hinge_kinds: [],
+  nonbody_kinds: [],
+  time_layers: [],
+  hinge_groups: {},
+  style_words: [],
+  invent: { allow: [], forbid: [], principle: '' },
+  voice_keys: [],
+  hook_keys: [],
+  job_kinds: { 'stage2.global': { label: 'stage2', paid: true } },
+  actions: [{
+    kind: 'stage2.global',
+    label: '提交全局复核',
+    extra: ['--review-decisions'],
+    paid: false,
+    free_flag: '--review-decisions',
+    writes_disk: true,
+  }],
+  uncovered_min_chars: 0,
+  spoiler_disclosure: {
+    mode: 'display_only',
+    security_boundary: false,
+    server_sends_full_data: true,
+    hidden_paths: [],
+    known_leakage_surfaces: [],
+    consumers: [],
+    notice: 'test',
+  },
+}
+
+function Harness() {
+  return (
+    <>
+      <GlobalReviewPanel sid="book-1" />
+      <ConfirmDialog />
+    </>
+  )
+}
+
+describe('GlobalReviewPanel', () => {
+  it('loads every unresolved state and submits an optimistic hash-bound decision with evidence', async () => {
+    vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
+    vi.spyOn(api, 'getGlobalReview').mockResolvedValue(review)
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    vi.spyOn(api, 'previewJob').mockResolvedValue({
+      argv: 'python -m novel.cli run stage2.global book-1 --review-decisions private.json',
+      paid: false,
+      label: '提交 1 项 stage2 全局复核',
+      kind: 'stage2.global',
+      steps: [{
+        label: '提交逐项复核',
+        paid: false,
+        writes: 'stage2/global_review.json',
+        argv: 'python -m novel.cli run stage2.global book-1 --review-decisions private.json',
+      }],
+    })
+    const submit = vi.spyOn(api, 'decideGlobalReview').mockResolvedValue({
+      id: 'job-review',
+      kind: 'stage2.global',
+      label: 'stage2 全局复核决策',
+      argv: 'python -m novel.cli run stage2.global',
+      state: 'landed_red',
+      paid: false,
+      started: 1,
+      finished: 2,
+      sid: 'book-1',
+      ordinal: null,
+    })
+    renderRoute(<Harness />)
+
+    expect(await screen.findByText('canon.world_rules')).toBeVisible()
+    expect(screen.getByText('canon.secrets')).toBeVisible()
+    expect(screen.getByText('canon.secrets.secret_01.character_known_by')).toBeVisible()
+    expect(screen.getByText('pending')).toBeVisible()
+    expect(screen.getAllByText('FAIL').some((element) => element.tagName === 'SPAN')).toBe(true)
+    expect(screen.getAllByText('UNVER').some((element) => element.tagName === 'SPAN')).toBe(true)
+
+    fireEvent.change(screen.getByLabelText('全局复核 actor'), {
+      target: { value: 'reviewer-a' },
+    })
+    fireEvent.click(screen.getByLabelText('选择 canon.world_rules'))
+    fireEvent.change(screen.getByLabelText('canon.world_rules 结论'), {
+      target: { value: 'PASS' },
+    })
+    fireEvent.change(screen.getByLabelText('canon.world_rules 理由'), {
+      target: { value: '已逐项对照来源' },
+    })
+    fireEvent.change(screen.getByLabelText('canon.world_rules evidence artifact'), {
+      target: { value: 'private/source.txt' },
+    })
+    fireEvent.change(screen.getByLabelText('canon.world_rules evidence sha256'), {
+      target: { value: 'e'.repeat(64) },
+    })
+    fireEvent.change(screen.getByLabelText('canon.world_rules evidence start'), {
+      target: { value: '10' },
+    })
+    fireEvent.change(screen.getByLabelText('canon.world_rules evidence end'), {
+      target: { value: '20' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /提交 1 项复核/ }))
+    expect(await screen.findByText(/--review-decisions private\.json/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '发起' }))
+
+    await waitFor(() => expect(submit).toHaveBeenCalledWith('book-1', {
+      actor: 'reviewer-a',
+      decisions: [{
+        item_id: 'rules',
+        expected_subject_sha256: hashes[0],
+        state: 'PASS',
+        reason: '已逐项对照来源',
+        evidence: [{
+          artifact: 'private/source.txt',
+          subject_sha256: 'e'.repeat(64),
+          start: 10,
+          end: 20,
+        }],
+      }],
+    }))
+  })
+
+  it('disables decisions when the read model is not bound to current GlobalGrounding', async () => {
+    vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
+    vi.spyOn(api, 'getGlobalReview').mockResolvedValue({ ...review, current: false })
+    renderRoute(<GlobalReviewPanel sid="book-1" />)
+    expect(await screen.findByText(/盘上复核没有绑定当前完整 GlobalGrounding/)).toBeVisible()
+    expect(screen.getByRole('button', { name: /提交 0 项复核/ })).toBeDisabled()
+  })
+})

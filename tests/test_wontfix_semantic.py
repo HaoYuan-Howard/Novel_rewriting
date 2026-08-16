@@ -24,10 +24,14 @@ test_wontfix_semantic.py —— 语义结论的人工 wontfix 闭环（TODO-04�
 from __future__ import annotations
 
 import json
+import hashlib
 
 import pytest
 
 from contracts.schema import decode_artifact, encode_artifact
+from contracts.schema.evaluation import (
+    EvaluatorFingerprint, EvidenceRef, JudgeDecision, SemanticDecision,
+)
 from contracts.schema.stage6 import Hook, HookSemanticReview
 from novel import prov
 from novel.errors import TerminalState
@@ -69,6 +73,12 @@ def box():
     s.close()
 
 
+@pytest.fixture(autouse=True)
+def _current_fixture_calibration(monkeypatch):
+    """本文件测 wontfix；profile 漂移的正反例在 test_stage6_semantic。"""
+    monkeypatch.setattr(semantic, '_calibration_status', lambda _artifact: (True, ''))
+
+
 def _ctx(box, node: str, *, paid: bool = False) -> RunContext:
     return RunContext.open(str(box.root), box.sid, node, paid=paid, write_ledger=False)
 
@@ -96,6 +106,7 @@ def _seed_semantic(box, *, dirty: int = 0, uncertain: tuple[int, ...] = ()) -> s
 
     texts = semantic._unique_texts(art)
     reviews = []
+    decisions = []
     for index, (label, text) in enumerate(texts):
         bad = index == dirty
         unsure = index in uncertain
@@ -112,13 +123,37 @@ def _seed_semantic(box, *, dirty: int = 0, uncertain: tuple[int, ...] = ()) -> s
             'concise_reason': '这一条的判定说明',
             'text_sha1': semantic.text_sha1(text),
         })
+        verdict = 'UNVER' if unsure else 'FAIL' if bad else 'PASS'
+        ref = EvidenceRef(
+            artifact=f'{hook.REL}#candidate/{label}',
+            subject_sha256=semantic.text_sha256(text), start=0, end=len(text))
+        judges = [JudgeDecision(
+            judge=name, verdict=verdict, evidence=[ref], reason='这一条的判定说明')
+            for name in ('A', 'B')]
+        decisions.append(SemanticDecision(
+            ability='reference_boundary', subject_key=semantic.text_sha256(text),
+            verdict=verdict, automated=verdict != 'UNVER', evidence=[ref],
+            reason='这一条的合并判定说明', profile_id='fixture-profile',
+            judges=judges))
+    fingerprint = EvaluatorFingerprint(
+        dataset_sha256='1' * 64, model='test-model', prompt_sha256='2' * 64,
+        schema_sha256='3' * 64, decoder_sha256='4' * 64)
     artifact = HookSemanticReview(
         judged_texts={label: semantic.text_sha1(text) for label, text in texts},
         hook_file_sha1=prov.fingerprint_bytes(store.path(hook.REL).read_bytes()),
         reviews=reviews,
         ranking=[label for label, _t in texts],
+        judge_rankings={
+            'A': [label for label, _t in texts],
+            'B': [label for label, _t in texts],
+        },
+        decisions=decisions,
+        evaluator_fingerprint=fingerprint,
         _provenance=ctx.llm_provenance(
-            prompts={'HOOK_SEMANTIC_SYS': semantic.SEMANTIC_SYS}, model='test-model'),
+            prompts={
+                'HOOK_SEMANTIC_SYS_A': semantic.SEMANTIC_SYS + semantic.JUDGE_ROLE_SUFFIX['A'],
+                'HOOK_SEMANTIC_SYS_B': semantic.SEMANTIC_SYS + semantic.JUDGE_ROLE_SUFFIX['B'],
+            }, model='test-model'),
     )
     seq = (semantic.semantic_seqs(store)[-1] + 1) if semantic.semantic_seqs(store) else 1
     rel = semantic.SEMANTIC_TPL.format(n=seq)
@@ -427,6 +462,24 @@ def _seed_stage5_semantic(root, sid):
     if reveal <= ordinal:
         pytest.skip('第一条 secret 的揭示章不在第 1 章之后，构造不出「提前泄露」')
 
+    evidence = [{
+        'artifact': f'stage5/ch{ordinal:02d}',
+        'subject_sha256': hashlib.sha256(excerpt.encode()).hexdigest(),
+        'start': 0, 'end': len(excerpt),
+    }]
+    decisions = []
+    for index, item in enumerate(book.secrets):
+        verdict = 'FAIL' if index == 0 else 'PASS'
+        sid_key = item.get('secret_id')
+        decisions.append({
+            'ability': 'secret_timeline', 'subject_key': sid_key,
+            'verdict': verdict, 'automated': True, 'evidence': evidence,
+            'reason': '测试双盲一致', 'profile_id': 'test-profile',
+            'judges': [
+                {'judge': role, 'verdict': verdict, 'evidence': evidence,
+                 'reason': '测试双盲一致'} for role in ('A', 'B')],
+        })
+
     artifact = SemanticReview(
         mechanical_review_seq=seq,
         judged=judged,
@@ -441,6 +494,7 @@ def _seed_stage5_semantic(root, sid):
         + [{'secret_id': s.get('secret_id'), 'reveal_chapter': S._reveal_chapter(book, s),
             'status': 'clear', 'evidence_refs': [], 'reason': '没有提前表达'}
            for s in book.secrets[1:]],
+        decisions=decisions,
         _provenance=ctx.llm_provenance(
             prompts={'CLAIMS_SYS': S.CLAIMS_SYSTEM, 'ALIGN_SYS': S.ALIGN_SYSTEM},
             model='test-model'),

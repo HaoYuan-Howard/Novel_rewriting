@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-inbox.py —— 「待人工」六类清单的**生产者**（BE-04 第一条；HTTP 路由属第二阶段）。
+inbox.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；HTTP 路由属第二阶段）。
 
 它是修复路由的 `human` 落面：`deterministic` 有 `Rule.fix`、`llm` 有反哺回路，
-而「只有人能修 / 该人拍板」的那些，此前**没有生产者**——六类语义在前端登记了
+而「只有人能修 / 该人拍板」的那些，此前**没有生产者**——八类语义在前端登记了
 （`InboxScreen.KIND_META`），后端却没有任何函数产出它们。
 
-【六类的数据源】（全部现存机制，本模块**一个判定都不新造**——照 `views/stage3.py` 纪律）
+【八类的数据源】（全部现存机制，本模块**一个判定都不新造**——照 `views/stage3.py` 纪律）
   · `invalid`    盘上 `.INVALID` 在、同名正式稿**不在**：首跑被落盘闸门拦下，在等人改
   · `rejected`   `.INVALID` 与正式稿**并存**：付费自救/人工补丁被闸门驳回，
                  正式稿仍是旧轮——「钱花了，稿丢了」。`how` 带 `_rounds/` 归档指针
                  （**UG-12 的闭环**：被驳回后下一条恢复路径写在这行字里）
   · `stalled`    stage5 最新验收里 `unresolved_rounds >= STOP_REWRITE_AFTER` 且未豁免：
                  修复已判「根因不在写手」主动跳过，等人工改稿或豁免
+  · `repairable` 0 成本复检里已绑定确定性 `Rule.fix` 路由的本层 HARD 命中
   · `human_only` 各层 0 成本复检里 `status=hit` 且 `remediation=human` 的结论逐条展开
                  （stage4 计划轻重告警自然入列——**UG-11 的闭环**：处置=归人判断）
+  · `verification` stage2 全书评测中可由人补证据消解的 `pending` / `UNVER`
   · `upstream`   `sev=hard` 且根因第一嫌疑（`owner`）在**别的层**的命中
   · `approval`   两个人定稿闸门（stage6 文案 / stage7 人名表）还没盖章
                  （⚠ 按前端契约 v1 不含 stage0——那一闸由审批状态机自己呈现）
 
 【三条纪律】
-  ⚠ **`unver` 永不入列**（`invariants.INBOX_KIND` 的纪律）：那是判据的边界不是待办。
+  ⚠ **通用 check 报告的 `unver` 永不入列**（`invariants.INBOX_KIND` 的纪律）：
+    那是判据的边界不是待办。TODO-24 全书评测的可人工消解项是显式例外。
   ⚠ **豁免不占清单**：`wontfix` 过的结论只计数（「有人看过并决定不修」≠「没人看过」）。
     ⚠ 那张账**逐层各一份**（`<stage>/wontfix.json`，2026-08-15 裁决），
     计数在本模块跨层求和；语义结论的豁免也走同一份账（`novel/wontfix.py`）。
@@ -31,13 +34,17 @@ inbox.py —— 「待人工」六类清单的**生产者**（BE-04 第一条；
 """
 from __future__ import annotations
 
-from contracts.artifacts import STAGE6_HOOK, STAGE7_NAME_MAP, artifact_rel
+from contracts.artifacts import (
+    STAGE2_GLOBAL_REVIEW, STAGE5_TRIM_AUDIT, STAGE6_HOOK, STAGE7_NAME_MAP,
+    artifact_rel,
+)
 
 import os
 import re
 
-from contracts.invariants import DEPTH_MODES, NODES, STAGES, STOP_REWRITE_AFTER
+from contracts.invariants import DEPTH_MODES, INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER
 from contracts.schema.api import InboxItem, InboxView
+from contracts.schema.evaluation import GlobalReview, TrimAudit
 from contracts.schema.report import CheckReport
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
@@ -123,14 +130,16 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
         if report is not None:
             items += _report_items(report, stage)
 
+    items += _verification_items(novel_dir, code)
+    items += _trim_verification_items(novel_dir, code)
+    items += _hook_verification_items(novel_dir, code)
     items += _approval_items(novel_dir, code)
 
     order = {s: i for i, s in enumerate(STAGES)}
     items.sort(key=lambda it: (order.get(it.stage, 99),
                                it.chapter if it.chapter is not None else -1,
                                it.kind, it.rule))
-    counts = {kind: 0 for kind in
-              ('invalid', 'rejected', 'stalled', 'human_only', 'upstream', 'approval')}
+    counts = {kind: 0 for kind in INBOX_KIND}
     for item in items:
         counts[item.kind] += 1
     return InboxView(items=items, counts=counts, total=len(items), wontfix=wontfix_total)
@@ -287,14 +296,136 @@ def _report_items(report: CheckReport, stage: str) -> list[InboxItem]:
                     what=finding.detail,
                     how=f'阻断级且根因第一嫌疑在 {finding.owner}——'
                         f'先修上游那一层，再回来重跑本层复检'))
+            elif (line.sev == 'hard' and finding.owner == stage
+                  and line.fix is not None):
+                fix = line.fix
+                if fix.available:
+                    how = (f'跑 `{fix.node} {" ".join(fix.flags)}`'
+                           f'（{"付费" if fix.paid else "0 成本"}）')
+                else:
+                    how = f'机器修复路由暂不可执行：{fix.unavailable_reason}'
+                out.append(InboxItem(
+                    kind='repairable', stage=stage, chapter=None, rule=line.rule,
+                    what=finding.detail, how=how))
             elif line.remediation == 'human':
                 fix = line.fix
                 how = (f'跑 `{fix.node} {" ".join(fix.flags)}`'
-                       f'（{"付费" if fix.paid else "0 成本"}）' if fix is not None
+                       f'（{"付费" if fix.paid else "0 成本"}）'
+                       if fix is not None and fix.available
+                       else f'机器修复路由暂不可执行：{fix.unavailable_reason}'
+                       if fix is not None
                        else _human_how(stage))
                 out.append(InboxItem(
                     kind='human_only', stage=stage, chapter=None, rule=line.rule,
                     what=finding.detail, how=how))
+    return out
+
+
+def _verification_items(novel_dir, code: str) -> list[InboxItem]:
+    """TODO-24 可人工消解的全书评测项；通用 `unver` 不借机入列。"""
+    store = ArtifactStore(readonly_ctx(novel_dir, 'stage2.global', code))
+    if not store.exists(STAGE2_GLOBAL_REVIEW):
+        return []
+    try:
+        review, _raw = store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)
+    except ArtifactUnreadable:
+        return []
+    out: list[InboxItem] = []
+    for row in review.items:
+        if row.state not in ('pending', 'FAIL', 'UNVER'):
+            continue
+        state = {
+            'pending': '待复核',
+            'FAIL': '复核未通过（FAIL）',
+            'UNVER': '证据不足（UNVER）',
+        }[row.state]
+        reason = f'；上次理由：{row.reason}' if row.reason else ''
+        out.append(InboxItem(
+            kind='verification', stage='stage2', chapter=None,
+            rule=row.item_id,
+            what=f'{row.subject_path}：{state}{reason}',
+            how=('在全局设定屏逐项或批量补 actor、理由与证据，按 subject_sha256 '
+                 '提交 PASS/FAIL/UNVER；也可跑 '
+                 '`stage2.global --review-decisions <书内json>`；'
+                 'subject hash 已变的旧决策会被拒绝')))
+    return out
+
+
+def _trim_verification_items(novel_dir, code: str) -> list[InboxItem]:
+    """Durable trim audits whose retained pretrim still needs human attention."""
+    from novel.stages.stage5.trim_resolution import matches_current_audit
+
+    store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.write', code))
+    template = STAGE5_TRIM_AUDIT
+    directory, filename = template.rsplit('/', 1)
+    pattern = filename.replace('{nn}', '*')
+    root = novel_dir / directory
+    if not root.is_dir():
+        return []
+    out: list[InboxItem] = []
+    for path in sorted(root.glob(pattern)):
+        rel = f'{directory}/{path.name}'
+        try:
+            audit, audit_sha256 = store.read_with_sha256(TrimAudit, rel)
+        except ArtifactUnreadable:
+            continue
+        # PASS only closes this row when the candidate was actually adopted.
+        # A calibrated FAIL still needs a human-visible verification task:
+        # pretrim was retained and the length problem did not disappear.
+        if audit.adopted or not audit.deterministic_passed:
+            continue
+        if matches_current_audit(store, audit, audit_sha256):
+            continue
+        state = ('未运行语义裁决' if audit.semantic is None
+                 else f'语义裁决为 {audit.semantic.verdict}')
+        why = (audit.reason if audit.semantic is None else audit.semantic.reason)
+        out.append(InboxItem(
+            kind='verification', stage='stage5', chapter=audit.output_ordinal,
+            rule=f'trim_audit_ch{audit.output_ordinal:02d}',
+            what=f'第 {audit.output_ordinal} 章收缩机械检查已过，但 {state}：{why}',
+            how=('当前保留 pretrim 原稿、未采用收缩候选；'
+                 '人工确认保留原稿可跑 `stage5.review --retain-pretrim '
+                 f'--chapters {audit.output_ordinal} --actor <自报身份> --reason <理由>`；'
+                 'resolution 同时绑定 mode、当前正式章路径/正文 SHA-256、audit 完整 SHA-256 '
+                 '与 before/after hashes，任一变化即失效')))
+    return out
+
+
+def _hook_verification_items(novel_dir, code: str) -> list[InboxItem]:
+    """Stage6 UNVER/profile drift can be closed by a hash-bound human choice."""
+    from novel.stages.stage6 import semantic
+
+    store = ArtifactStore(readonly_ctx(novel_dir, 'stage6.hook', code))
+    if not store.exists(STAGE6_HOOK):
+        return []
+    try:
+        art, _raw = store.read_own(Hook, STAGE6_HOOK)
+        assessments = semantic.current_assessments(store, art)
+    except (ArtifactUnreadable, TerminalState):
+        return []
+    resolved_sha = (
+        art.approved.resolution.subject_sha256
+        if art.approved is not None
+        and art.approved.resolution.basis == 'human_verification'
+        else None)
+    out: list[InboxItem] = []
+    seen: set[str] = set()
+    for index, candidate in enumerate(art.candidates, 1):
+        subject = semantic.text_sha256(candidate.text)
+        if subject in seen or subject == resolved_sha:
+            continue
+        seen.add(subject)
+        assessment = assessments[semantic.text_sha1(candidate.text)]
+        if not assessment.human_resolvable:
+            continue
+        out.append(InboxItem(
+            kind='verification', stage='stage6', chapter=None,
+            rule=f'reference_boundary:{candidate.approach}',
+            what=f'候选 {index}（{candidate.approach}）当前为 {assessment.state}：'
+                 f'{assessment.reason}',
+            how=(f'人工核对全书事实后跑 `stage6.approve --pick {index} '
+                 f'--actor <自报身份> --reason <理由> '
+                 f'--subject-sha256 {subject}`；候选字节变化会拒绝旧决定')))
     return out
 
 
@@ -312,7 +443,9 @@ def _approval_items(novel_dir, code: str) -> list[InboxItem]:
             out.append(InboxItem(
                 kind='approval', stage='stage6', chapter=None, rule='stage6.approve',
                 what='开篇文案已产三候选，还没有人定稿——定稿是本层现役的唯一闸门',
-                how='跑 `stage6.approve --pick N`（1 起）；语义/机械判据结论在文案屏可查'))
+                how=('在文案屏核对语义/机械结论后，跑 '
+                     '`stage6.approve --pick N --actor <自报身份> --reason <理由> '
+                     '--subject-sha256 <屏上当前 hash>`')))
 
     store7 = ArtifactStore(readonly_ctx(novel_dir, 'stage7.rename', code))
     if store7.exists(STAGE7_NAME_MAP):

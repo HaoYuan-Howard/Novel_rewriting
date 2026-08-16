@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
-    STAGE2_GLOBAL_GROUNDING,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
 )
 
 import copy
@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from contracts.rules import REGISTRY
 from contracts.schema.base import StrictModel
 from contracts.schema.report import CheckReport
+from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     BlueprintProvenance, ChapterBlueprints, ChapterBlueprintsResponse,
@@ -37,6 +38,7 @@ from novel.llm.client import LlmClient
 from novel.llm.ledger import combine_usage
 from novel.llm.prompts import with_json_shape
 from novel.observability import ChapterProgressTracker
+from novel.quality.global_review import build_review
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
@@ -48,6 +50,7 @@ from novel.stages.stage2.normalize import (
 from novel.store import ArtifactStore
 
 GLOBAL_REL = STAGE2_GLOBAL_GROUNDING
+GLOBAL_REVIEW_REL = STAGE2_GLOBAL_REVIEW
 BLUEPRINT_REL = STAGE2_CHAPTER_BLUEPRINTS
 MAIN_TEXT = STAGE1_MAIN_TEXT
 
@@ -231,6 +234,7 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
                 ctx, store, both, outcomes,
                 judged_rel=_GLOBAL_INVALID, invalid_rel=_GLOBAL_INVALID)
         store.promote_invalid(GLOBAL_REL, GlobalGrounding)
+        _refresh_global_review(store, store.read(GlobalGrounding, GLOBAL_REL))
         both = _Both(store)
         return True, _report(
             ctx, store, both, both.judge(),
@@ -497,11 +501,23 @@ def _archive_live(store: ArtifactStore, rel: str) -> None:
         store.archive_round(rel)
 
 
+def _refresh_global_review(store: ArtifactStore, artifact: GlobalGrounding) -> None:
+    previous = (
+        store.read_own(GlobalReview, GLOBAL_REVIEW_REL)[0]
+        if store.exists(GLOBAL_REVIEW_REL) else None
+    )
+    review = build_review(artifact.model_dump(by_alias=True), previous)
+    _archive_live(store, GLOBAL_REVIEW_REL)
+    store.write(GLOBAL_REVIEW_REL, review)
+
+
 def _write_formal(store: ArtifactStore, rel: str, artifact: Any) -> None:
     """成功新稿替换前保留正式稿与问题稿，两条历史都可恢复。"""
     _archive_live(store, rel)
     _archive_live(store, paths.invalid_of(rel))
     store.write(rel, artifact)
+    if rel == GLOBAL_REL:
+        _refresh_global_review(store, artifact)
 
 
 def _write_invalid(
@@ -590,7 +606,7 @@ def _global_source(
     if not store.exists(rel):
         raise UpstreamMissing(
             f'{GLOBAL_REL} 与 {_GLOBAL_INVALID} 都不在盘上——先跑 stage2.global')
-    artifact, raw = store.read_own(GlobalGrounding, rel)
+    artifact, raw = store.read_own(GlobalGrounding, rel, require_current=True)
     return artifact, raw, rel
 
 
@@ -838,7 +854,8 @@ def _run_blueprint_repair(
     if not store.exists(source_rel):
         raise UpstreamMissing(
             f'{BLUEPRINT_REL} 与 {_INVALID} 都不在盘上——定向重生成没有结构基线')
-    previous, previous_raw = store.read_own(ChapterBlueprints, source_rel)
+    previous, previous_raw = store.read_own(
+        ChapterBlueprints, source_rel, require_current=True)
     if previous.provenance.model != client.model:
         raise TerminalState(
             '当前 BlueprintProvenance 没有表达混合模型的槽位；'
@@ -1187,7 +1204,7 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
 
 def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
                           ordinals: set[int]) -> list[str]:
-    """把补丁打进 `canon.secrets`，返回逐条改动摘要。**改之前先把两种越界拒掉。**
+    """Apply all typed Stage2 patches atomically after validating every target.
 
     ⚠⚠ **拒收发生在任何一次写盘之前，而且是 `TerminalState` 不是 `GateBlocked`。**
     两者答的是不同的问题：`GateBlocked` 说「这份**产物**过不了闸」（问题稿留 `.INVALID`，
@@ -1196,6 +1213,9 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     """
     secrets = ((data.get('canon') or {}).get('secrets')) or []
     by_id = {str(item.get('secret_id') or ''): item for item in secrets}
+    rules = ((data.get('canon') or {}).get('world_rules')) or []
+    rules_by_id = {str(item.get('rule_id') or ''): item for item in rules}
+    characters = ((data.get('entities') or {}).get('characters')) or {}
 
     unknown = sorted({p.secret_id for p in edit.secrets if p.secret_id not in by_id})
     if unknown:
@@ -1204,6 +1224,21 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             f'盘上现有 {sorted(by_id)}。'
             f'⚠ `--apply-edit` 只**订正**已有的 secret，不新增也不删除——'
             f'新增要凭空发明它的全部时间线，那是一次抽取而不是一次订正')
+    unknown_rules = sorted({
+        patch.rule_id for patch in edit.world_rules if patch.rule_id not in rules_by_id})
+    if unknown_rules:
+        raise TerminalState(f'编辑文件指向盘上没有的 world rule：{unknown_rules}')
+    unknown_characters = sorted({
+        patch.char_id for patch in [*edit.characters, *edit.addresses]
+        if patch.char_id not in characters})
+    if unknown_characters:
+        raise TerminalState(f'编辑文件指向盘上没有的 character：{unknown_characters}')
+    bad_addresses = sorted(
+        (patch.char_id, patch.address_index)
+        for patch in edit.addresses
+        if patch.address_index >= len((characters.get(patch.char_id) or {}).get('address') or []))
+    if bad_addresses:
+        raise TerminalState(f'编辑文件指向不存在的 address 下标：{bad_addresses}')
 
     hi = max(ordinals) if ordinals else 0
     bad: list[str] = []
@@ -1214,6 +1249,12 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         for chapter in (patch.setup_chapters or []):
             if chapter not in ordinals:
                 bad.append(f'{patch.secret_id}.setup_chapters={chapter}')
+    for patch in edit.world_rules:
+        for version in (patch.versions or []):
+            if version.effective_from_chapter not in ordinals:
+                bad.append(
+                    f'{patch.rule_id}.versions.effective_from_chapter='
+                    f'{version.effective_from_chapter}')
     if bad:
         raise TerminalState(
             f'编辑文件里的章号不在这本书的章集合内：{bad}。'
@@ -1234,6 +1275,20 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             target['reader_reveal_events'] = [
                 {'chapter': event.chapter} for event in patch.reader_reveal_events]
             changed.append(f'{patch.secret_id}.reader_reveal_events')
+    for patch in edit.world_rules:
+        target = rules_by_id[patch.rule_id]
+        if patch.kind is not None:
+            target['kind'] = patch.kind
+            changed.append(f'{patch.rule_id}.kind')
+        if patch.versions is not None:
+            target['versions'] = [version.model_dump() for version in patch.versions]
+            changed.append(f'{patch.rule_id}.versions')
+    for patch in edit.characters:
+        characters[patch.char_id]['name_distinctiveness'] = patch.name_distinctiveness
+        changed.append(f'{patch.char_id}.name_distinctiveness')
+    for patch in edit.addresses:
+        characters[patch.char_id]['address'][patch.address_index]['context'] = patch.context
+        changed.append(f'{patch.char_id}.address.{patch.address_index}.context')
     return changed
 
 

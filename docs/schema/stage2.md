@@ -1,14 +1,16 @@
 # Stage 2 当前契约
 
-Stage 2 产出两份严格 JSON，另收一份人产的决策集：
+Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
 | `stage2/global_grounding.json` | `GlobalGrounding` | `stage2.global` | 全书人物、关系、设定、规则、秘密与弧线 |
 | `stage2/chapter_blueprints.json` | `ChapterBlueprints` | `stage2.blueprint` | 逐章摘要、精确原文区间、事件、保真材料与叙述信息 |
+| `stage2/global_review.json` | `GlobalReview` | `stage2.global` | 由当前全局底座确定性枚举的逐项人工复核；详见 `evaluation.md` |
+| `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` | 人工输入 | actor、理由、证据及 subject hash 乐观锁；也可经同形 API 提交 |
 | `stage2/global_edit.json` | `GlobalEdit` | 人工输入 | secret 订正决策集（`stage2.global --apply-edit` 吃它） |
 
-两份正式产物都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
+三份正式产物与两份人工决策集都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
 缺失字段补默认值；需要保留的输入必须先按本文件的当前 schema 重新生成。
 
 ## 一、`global_grounding.json`
