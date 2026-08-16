@@ -110,8 +110,13 @@ def test_both_directions_of_the_mutex(client, monkeypatch):
     assert r.status_code == 202
     try:
         # agent 活着 ⇒ 起 API 作业 409（反向互斥在 jobs.start 里，路由层白拿）
-        r2 = c.post('/api/jobs', json={'sid': '42', 'node': 'stage0.approve'},
-                    headers=UI)
+        # ⚠ 必填的人工凭据要带全：`stage0.approve` 的 `required_flags` 缺一个就是 400
+        #   （`validate_run` 在拼 argv 那一步拒），而那会让这条测试在**够不到互斥**的
+        #   地方变绿/变红——它要测的是「一条本来能起的作业被锁挡住」。
+        r2 = c.post('/api/jobs', json={
+            'sid': '42', 'node': 'stage0.approve',
+            'flags': ['--actor', 'tester', '--reason', '互斥用例'],
+        }, headers=UI)
         assert r2.status_code == 409
         # 同时第二个 agent 也 409（全局一把锁）
         r3 = c.post('/api/agent/runs', json={

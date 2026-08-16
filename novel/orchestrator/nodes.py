@@ -3,8 +3,9 @@
 """
 nodes.py —— 把 `(节点, 书, flags)` 变成一条命令，并回答关于它的两个问题。
 
-【五个纯函数，没有一个碰盘、碰网、碰进程】
+【纯函数，没有一个碰盘、碰网、碰进程】
     validate_run(node, flags)  这条跑法是否属于该节点    手敲 CLI 与编排器共用
+    missing_required(node, …)  还差哪几个必填 flag       校验与 preview 占位符共用
     is_paid(node, flags)       这一次会不会花钱          `R-11.7`：贵贱只有一处算
     would_write(node, flags)   这一次会不会往盘上写      本期新补，原型没有这个概念
     step_label(node, flags, …) 这一步叫什么              `R-11.8`：界面与作业记录共用它
@@ -26,7 +27,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS, VALUED_FLAGS, WRITE_EFFECTS,
+    CONDITIONAL_REQUIRED_FLAGS, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS,
+    REQUIRED_PLACEHOLDER_PREFIX, VALUED_FLAGS, WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import Step
 from novel import paths as novel_paths
@@ -78,14 +80,52 @@ def flag_value(flags: Sequence[str], name: str) -> str | None:
     return found[0] if found else None
 
 
+def required_flags(node: str, flags: Sequence[str] = ()) -> tuple[str, ...]:
+    """这条跑法必填哪几个 flag。**无条件的那些 + 被本次 flag 触发的那些。**
+
+    ⚠ 顺序稳定（先无条件、后触发序），因为 `preview` 要拿它渲染占位符，
+    而一条命令的形状每次都换个顺序会让人以为跑法变了。
+    """
+    spec = NODES.get(node)
+    if spec is None:
+        return ()
+    out = list(spec.required_flags)
+    for tok in flag_tokens(flags):
+        for extra in CONDITIONAL_REQUIRED_FLAGS.get((node, tok), ()):
+            if extra not in out:
+                out.append(extra)
+    return tuple(out)
+
+
+def missing_required(node: str, flags: Sequence[str] = ()) -> tuple[str, ...]:
+    """还差哪几个必填 flag。**`validate_run` 与 `preview` 共用这一处**——
+    分成两处算，摊开给人看的那条命令与真跑那条的必填口径会慢慢分家。"""
+    present = set(flag_tokens(flags))
+    return tuple(f for f in required_flags(node, flags) if f not in present)
+
+
+def placeholder_for(flag: str) -> str:
+    """`preview` 给一个必填项渲染的占位符。**不含空格**，好让人整条粘走。
+
+    人话说明不塞进占位符里（那会把它变成多个 shell 词），
+    由 `preview` 的注解带着 `VALUED_FLAGS` 那句原文一起打出来。
+    """
+    return REQUIRED_PLACEHOLDER_PREFIX + flag.lstrip('-')
+
+
 def validate_run(node: str, flags: Sequence[str] = (),
-                 mode: str | None = None) -> tuple[str, ...]:
+                 mode: str | None = None, *,
+                 allow_placeholders: bool = False) -> tuple[str, ...]:
     """节点认不认识这条跑法。**认不出就当场拒**，不猜。
 
     ⚠ 它开在 `build_argv` 里而不是 CLI 的 argparse 里，是因为
     **展示与执行共用 `build_argv`**（`R-11.8`）：拒收开在共用的那一处，
     「界面上摆出来的那条命令」就不可能是一条拼错的命令。
     开在 argparse 里等于只拦住手敲的那一半。
+
+    ⚠ `allow_placeholders` **只由 `build_argv(placeholders=True)` 传**，
+    也就是只在 `preview` 那一趟为真：那一趟要的是「形状完整的模板」。
+    真跑那一趟恒为假 ⇒ 占位符进不了产物。
     """
     if node not in NODES:
         raise UnsupportedRunMode(
@@ -149,6 +189,21 @@ def validate_run(node: str, flags: Sequence[str] = (),
         if tok not in VALUED_FLAGS and has_value:
             raise UnsupportedRunMode(
                 f'{tok} 不带值，而它后面跟着 {seq[i + 1]!r}')
+        # preview 的占位符**不是一个值**。放它过去等于把「待填·actor」
+        # 当自报身份写进人工凭据里——那条账日后没有任何人能反查。
+        if (not allow_placeholders and has_value
+                and seq[i + 1].startswith(REQUIRED_PLACEHOLDER_PREFIX)):
+            raise UnsupportedRunMode(
+                f'{tok} 还是 preview 的占位符 {seq[i + 1]!r}，请换成真值'
+                f'（{VALUED_FLAGS.get(tok, "见节点文档")}）')
+
+    # 必填缺项：拒在**展示与执行共用**的这一处（`R-11.8`）。开在节点函数体里
+    # 只拦得住真跑那一半，而 preview 会照样摊开一条注定 exit 2 的命令。
+    missing = missing_required(node, flags)
+    if missing:
+        raise UnsupportedRunMode(
+            f'{node} 缺必填 {list(missing)}：'
+            + '；'.join(f'{f} = {VALUED_FLAGS.get(f, "见节点文档")}' for f in missing))
     return tokens
 
 
@@ -270,7 +325,8 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 
 
 def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
-               base: str | os.PathLike[str], mode: str | None = None) -> list[str]:
+               base: str | os.PathLike[str], mode: str | None = None,
+               placeholders: bool = False) -> list[str]:
     """那条命令。**preview 与真跑共用这一个函数**（`R-11.8`）。
 
     确认对话框若自己拼一个展示串，那就是同一条命令的第二个落点：
@@ -281,8 +337,17 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
     ⚠ `--base` 用绝对路径，好让这条命令与 cwd 无关。
     ⚠ argv 里的 `-X utf8 -u` 与 `child_env()` 是**两道**，不是一道：
     前者管「人在终端直接粘这条命令」，后者管「服务把它跑成子进程」。
+
+    ⚠ `placeholders=True` 只给 `preview` 用：把缺的必填项补成显式占位符，
+    好让摊开的那条命令**形状完整**。占位符本身仍被 `validate_run` 拒收，
+    所以它是「照着改」的模板，不是一条能直接跑通的命令。
     """
-    tokens = validate_run(node, flags, mode)
+    if placeholders:
+        filled = list(flags)
+        for flag in missing_required(node, flags):
+            filled += [flag, placeholder_for(flag)]
+        flags = filled
+    tokens = validate_run(node, flags, mode, allow_placeholders=placeholders)
     if sid is None:
         if node != 'stage0.remove' or '--source' not in tokens:
             raise UnsupportedRunMode(
@@ -333,20 +398,35 @@ def step_label(node: str, flags: Sequence[str] = (), *, mode: str | None = None)
 
 
 def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.PathLike[str],
-          mode: str | None, note: str | None = None) -> Step:
+          mode: str | None, note: str | None = None,
+          placeholders: bool = False) -> Step:
+    # ⚠ **一个 Step 的四格必须出自同一份 flags。** argv 补了占位符而 `paid`/`writes`/
+    #   `label` 还按原 flags 算，就是同一条命令的第二个落点（`R-11.8` 要防的那件事）
+    #   ——今天两边答案恰好一样，而「恰好一样」不是不变量。
+    missing = missing_required(node, flags) if placeholders else ()
+    filled = list(flags)
+    for flag in missing:
+        filled += [flag, placeholder_for(flag)]
+    if missing:
+        said = '；'.join(f'{placeholder_for(f)} = {VALUED_FLAGS.get(f, "见节点文档")}'
+                         for f in missing)
+        said = f'必填项已渲染成占位符，执行前逐个替换：{said}'
+        note = f'{note}\n    ⚠ {said}' if note else said
     return Step(
-        argv=build_argv(node, sid, flags, base=base, mode=mode),
+        argv=build_argv(node, sid, filled, base=base, mode=mode,
+                        placeholders=placeholders),
         cwd=str(REPO_ROOT),
-        label=step_label(node, flags, mode=mode),
-        paid=is_paid(node, flags),
-        writes=write_effect(node, flags),
+        label=step_label(node, filled, mode=mode),
+        paid=is_paid(node, filled),
+        writes=write_effect(node, filled),
         note=note,
     )
 
 
 def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
                 base: str | os.PathLike[str], mode: str | None = None,
-                follow_check: bool = True) -> list[Step]:
+                follow_check: bool = True,
+                placeholders: bool = False) -> list[Step]:
     """一个作业要依次跑哪几条命令。**纯函数、无副作用。**
 
     追跑规则：**任何会写盘的跑法后面自动追一条 `--check-only`**，理由见 `FOLLOW_CHECK_NOTE`。
@@ -363,7 +443,8 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
     ⚠ 只在那个节点**真的接受** `--check-only` 时才追（stage2.global 就不接受）——
     追一条它拒收的命令，作业会在第二步无缘无故失败，而第一步可能已经花过钱了。
     """
-    first = _step(node, sid, flags, base=base, mode=mode)
+    first = _step(node, sid, flags, base=base, mode=mode,
+                  placeholders=placeholders)
     steps = [first]
     if (follow_check and node == 'stage2.global'
             and '--full-extract' in flag_tokens(flags)):

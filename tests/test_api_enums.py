@@ -50,6 +50,12 @@ def test_every_action_is_unique_and_buildable(paid_payload):
         if action['needs_value']:
             index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
             flags.insert(index + 1, '1' if flags[index] == '--deep' else 'C:/placeholder.json')
+        # ⚠ 必填项由**点下去的那个人**给（同 `needs_value` 那一格的理由）：
+        #   `stage0/6.approve` 的 actor/reason 是人工凭据，`actions[]` 里不可能预先填好。
+        #   ⇒ 本条测的是「补齐必填之后这条动作拼得出命令」，不是「空 flags 拼得出」——
+        #   后者恰恰该拼不出，那正是 `NodeSpec.required_flags` 要挡的（复盘 §六.1）。
+        for extra in N.missing_required(action['kind'], flags):
+            flags += [extra, 'C:/placeholder.json'] if extra in VALUED_FLAGS else [extra]
         argv = N.build_argv(
             action['kind'], 'sid123', flags, base=BASE, mode=action['mode'],
         )

@@ -885,8 +885,12 @@ def _valued(flags: list[str], name: str) -> str | None:
 
 def _cmd_preview(a: argparse.Namespace) -> int:
     flags = _flags_of(a)
+    # ⚠ `placeholders=True` **只在这一趟**：preview 要摊开的是一条形状完整的命令。
+    # 缺必填项时渲染占位符并标注，而不是摊开一条真跑必然 exit 2 的半截命令
+    # （2026-08-16 复盘 §六.1）。占位符本身在真跑那一趟仍会被 `validate_run` 拒。
     for i, step in enumerate(N.build_steps(a.node, a.sid, flags,
-                                           base=a.base, mode=a.mode)):
+                                           base=a.base, mode=a.mode,
+                                           placeholders=True)):
         print(f'[{i + 1}] {step.label}')
         print(f'    $ {" ".join(step.argv)}')
         print(f'    cwd    : {step.cwd}')

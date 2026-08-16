@@ -36,9 +36,31 @@ def _mode_of(node: str) -> str | None:
     return NODES[node].modes[0] if NODES[node].modes else None
 
 
+def _bare(node: str) -> list[str]:
+    """这个节点「不带任何跑法 flag」时的最小可执行 flags。
+
+    ⚠ 不是空列表：两个 `*.approve` 有必填的人工凭据（`NodeSpec.required_flags`），
+    少一个就拼不出 argv。想测「默认路径」的那几条要的是**默认跑法**，不是**空 flags**。
+    """
+    out: list[str] = []
+    for extra in N.missing_required(node, out):
+        out += [extra, 'payload.json'] if extra in VALUED_FLAGS else [extra]
+    return out
+
+
 def _args(flag: str, node: str | None = None) -> list[str]:
-    """带值 flag 补一个值——不补的话拒收的是「没给值」，测不到我们想测的那件事。"""
-    return [flag, 'payload.json'] if flag in VALUED_FLAGS else [flag]
+    """带值 flag 补一个值——不补的话拒收的是「没给值」，测不到我们想测的那件事。
+
+    ⚠ 给了 node 就把该节点的**必填项**一并补齐（`NodeSpec.required_flags`）：
+    `stage0.approve` / `stage6.approve` 少一个人工凭据就拼不出可执行 argv，
+    而这张表想测的是「这条 flag 该节点认不认」，不是「必填项齐不齐」——
+    后者有它自己的专测。
+    """
+    out = [flag, 'payload.json'] if flag in VALUED_FLAGS else [flag]
+    if node is not None:
+        for extra in N.missing_required(node, out):
+            out += [extra, 'payload.json'] if extra in VALUED_FLAGS else [extra]
+    return out
 
 
 # ───────────────────────── 守卫的守卫 ─────────────────────────
@@ -230,6 +252,61 @@ def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():
         N.build_argv('stage3.style', SID, ['--check-only', 'oops'], base=BASE)
 
 
+# ───────────────────────── 必填项（2026-08-16 复盘 §六.1） ─────────────────────────
+
+def test_a_node_refuses_to_build_a_command_that_is_missing_a_required_flag():
+    """⭐ **这一条守的是「摊开的那条命令不是一条注定 exit 2 的命令」。**
+
+    此前「必填」只活在节点函数体里（`stage0.approve` 少 `--actor/--reason`
+    就 `TerminalState`），`NodeSpec` 表达不出来 ⇒ `build_argv` 照样拼得出来，
+    `preview` 照着摊开，而 skill 的工作流契约明写「逐字执行 preview 的全部步骤」。
+    ⇒ 拒收挪到 `validate_run`（展示与执行共用的那一处）。
+    """
+    with pytest.raises(UnsupportedRunMode, match='缺必填'):
+        N.build_argv('stage0.approve', SID, base=BASE)
+    with pytest.raises(UnsupportedRunMode, match='缺必填'):
+        N.build_argv('stage0.approve', SID, ['--actor', '我'], base=BASE)
+    argv = N.build_argv('stage0.approve', SID,
+                        ['--actor', '我', '--reason', '零命中'], base=BASE)
+    assert argv[argv.index('--actor') + 1] == '我'
+    assert argv[argv.index('--reason') + 1] == '零命中'
+
+
+def test_the_conditional_required_flags_only_fire_with_their_trigger():
+    """跟着另一条跑法才必填的那些，不带触发 flag 时**不该**被要求。"""
+    assert N.build_argv('stage0.edit', SID,
+                        ['--apply-edit-plan', 'p.json'], base=BASE)
+    with pytest.raises(UnsupportedRunMode, match='缺必填'):
+        N.build_argv('stage0.edit', SID, ['--apply-edit', 'e.json'], base=BASE)
+    assert N.missing_required('stage5.review', ['--retain-pretrim']) == ('--chapters',)
+    assert N.missing_required('stage5.review', ['--check-only']) == ()
+
+
+def test_preview_fills_required_flags_with_placeholders_that_never_run():
+    """`preview` 摊开的是**形状完整**的命令；占位符本身仍跑不通。
+
+    两件事必须同时成立，否则这个机制会从一个病换成另一个病：
+      · 只拒不填 ⇒ preview 直接抛异常，人连命令长什么样都看不到；
+      · 只填不拒 ⇒ `待填·actor` 会被当自报身份写进人工凭据，那条账没人能反查。
+    """
+    steps = N.build_steps('stage0.approve', SID, base=BASE, placeholders=True)
+    argv = steps[0].argv
+    assert argv[argv.index('--actor') + 1] == '待填·actor'
+    assert argv[argv.index('--reason') + 1] == '待填·reason'
+    assert '占位符' in (steps[0].note or '')
+    with pytest.raises(UnsupportedRunMode, match='占位符'):
+        N.build_argv('stage0.approve', SID,
+                     ['--actor', '待填·actor', '--reason', '真理由'], base=BASE)
+
+
+def test_placeholders_do_not_change_a_command_that_needs_nothing():
+    """没有必填项的节点，`placeholders=True` 与真跑必须逐字节同一条（`R-11.8`）。"""
+    for node in ('stage3.style', 'stage2.global', 'stage7.assemble'):
+        shown = N.build_steps(node, SID, base=BASE, placeholders=True)
+        assert shown[0].argv == N.build_argv(node, SID, base=BASE)
+        assert shown[0].note is None
+
+
 def test_child_env_carries_the_three_required_variables():
     """`R-12.3`：三件套缺一不可。
 
@@ -298,13 +375,14 @@ def test_a_non_writing_run_gets_no_follow_up():
 def test_steps_carry_the_cost_and_write_answers_they_were_asked_for():
     """`Step` 上的 `paid` / `writes` 必须与那两个函数一致——**第二处必然分家**。"""
     for node, spec in NODES.items():
-        mode = _mode_of(node)
-        for step in N.build_steps(node, SID, base=BASE, mode=mode):
+        mode, bare = _mode_of(node), _bare(node)
+        for step in N.build_steps(node, SID, bare, base=BASE, mode=mode):
             flags = [t for t in step.argv if t.startswith('--')
                      and t not in ('--base', '--mode')]
             assert step.paid == N.is_paid(node, flags)
             assert step.writes == N.write_effect(node, flags)
-        assert spec.label in N.build_steps(node, SID, base=BASE, mode=mode)[0].label
+        assert spec.label in N.build_steps(
+            node, SID, bare, base=BASE, mode=mode)[0].label
 
 
 # ───────────────── 层 ↔ 复检节点那座桥（骨架 E5 加） ─────────────────
@@ -316,9 +394,9 @@ def test_step_label_is_the_one_the_actions_table_publishes():
     「stage1 摄入+分章」而「摄入」早已搬到 stage0——**手写的 label 会说谎**。
     """
     for node, spec in NODES.items():
-        mode = _mode_of(node)
-        step = N.build_steps(node, SID, base=BASE, mode=mode)[0]
-        assert step.label == N.step_label(node, (), mode=mode)
+        mode, bare = _mode_of(node), _bare(node)
+        step = N.build_steps(node, SID, bare, base=BASE, mode=mode)[0]
+        assert step.label == N.step_label(node, bare, mode=mode)
         assert spec.label in step.label
     with pytest.raises(UnsupportedRunMode, match='未知节点'):
         N.step_label('stage9.nope')

@@ -854,6 +854,13 @@ PARTIAL_REWRITE_FLAGS: Final = (
 #:
 #: ⚠ 不带值的 flag 传了值、带值的 flag 没传值，都是 argv 拼错——
 #: 而拼错的那一条**会真的被执行**。所以取值面要有落点，由 `build_argv` 当场拒。
+#: `preview` 给必填项渲染的占位符前缀。**它不是一个合法值**——
+#: `validate_run` 见到以它开头的值就当场拒，所以「照抄 preview 不改就跑」
+#: 得到的是一句「把 `待填·actor` 换成真身份」，而不是一条把占位符
+#: 当自报身份写进产物的假账（人工凭据是**问责**，不是形状）。
+#: ⚠ 用中点不用冒号：冒号在 Windows 上会与盘符形态撞车。
+REQUIRED_PLACEHOLDER_PREFIX: Final = '待填·'
+
 VALUED_FLAGS: Final = {
     '--deep': '深度重构章节（逗号分隔；与 --shallow-rest 成对使用）',
     # ⚠ 「相对**书目录**」这五个字是承重的：stage3/4/6/7 走
@@ -996,6 +1003,7 @@ class NodeSpec(NamedTuple):
     modes: tuple[str, ...] = ()         # 有参数臂的节点，取值面在别处（DEPTH_MODES）
     paid_flags: tuple[str, ...] = ()    # 能把一个 0 成本节点变成付费的 flag
     flags: tuple[str, ...] = ()         # ★ 本节点接受哪些**跑法** flag，见下
+    required_flags: tuple[str, ...] = ()  # ★ 少一个就拼不出可执行 argv 的 flag，见下
     produces: tuple[str, ...] = ()      # ★ 默认路径往盘上写哪几份产物，见下
     effort: str | None = None           # 可选首档；未做 A/B 的节点必须保持 None（即 high）
 
@@ -1023,9 +1031,20 @@ class NodeSpec(NamedTuple):
 #: ⇒ 三层 `*.approve` 的结论不一样：`stage6.approve` 确实有一个
 #:   候选序号 ⇒ F1 补成 `('--pick',)`；而 `stage7.approve` **没有参数可起名**
 #:   （一本书只有一份人物表，定稿是给整份盖章）⇒ 它的空元组是**终态**。
-#:   `stage0.approve` 同样给整份剔除报告盖章，空元组也是终态。
+#:   `stage0.approve` 同样给整份剔除报告盖章，没有候选参数；但它**有**人工凭据
+#:   （`--actor` / `--reason`，节点函数缺一个就 `TerminalState`）⇒ 那两个是跑法 flag，
+#:   而且是 `required_flags`。「没有候选参数」与「没有 flag」是两件事。
 #:
 #: 未登记的 flag 会由命令构造器直接拒收，节点表只描述当前真实入口。
+#: 【`required_flags` 那一列：少一个就拼不出可执行 argv 的 flag】它是 `flags` 的**子集**，
+#: 补它是因为「必填」此前**只活在节点函数体里**（`stage0.approve` 少了 `--actor/--reason`
+#: 就 `TerminalState`），而 `NodeSpec` 表达不出来 ⇒ `build_argv` 只能拼出一条缺参数的命令，
+#: `preview` 于是照着摊开一条**注定 exit 2** 的命令，而 skill 的工作流契约明写
+#: 「逐字执行 preview 给出的全部步骤」——两边对不上（2026-08-16 复盘 §六.1）。
+#: ⇒ 拒收挪到 `validate_run`（展示与执行共用的那一处），`preview` 把缺的那几个渲染成
+#: `REQUIRED_PLACEHOLDER_PREFIX` 占位符并标注；占位符**本身也会被 `validate_run` 拒**，
+#: 所以「照抄不改直接跑」拿到的是一句人话，不是一条记着 `待填·actor` 的假账。
+#: ⚠ 只登记**无条件**必填的。跟着另一个 flag 才必填的那些在 `CONDITIONAL_REQUIRED_FLAGS`。
 #: 【`produces` 那一列：默认路径往盘上写哪几份】它是「完成度按**产物存在性**判定」
 #: （`R-14.1`）的输入，也是 `would_write` 默认为真的依据——
 #: **每个节点的默认路径都产一份产物，那是「节点」这个词的定义**。
@@ -1041,6 +1060,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
                                   flags=('--actor', '--reason'),
+                                  required_flags=('--actor', '--reason'),
                                   produces=(artifact_paths.STAGE0_REMOVAL_REPORT,)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
                                   flags=('--apply-edit', '--apply-edit-plan',
@@ -1138,6 +1158,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',
                                  flags=('--pick', '--actor', '--reason',
                                         '--subject-sha256'),
+                                 required_flags=('--pick', '--actor', '--reason',
+                                                 '--subject-sha256'),
                                  produces=(artifact_paths.STAGE6_HOOK,)),
     # ⚠ `--revalidate` 是 F2 补的：本层加了落盘闸门（**任何一条 hard ⇒ `.INVALID`**，
     #   照 stage3 不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
@@ -1155,6 +1177,21 @@ NODES: Final[dict[str, NodeSpec]] = {
     # 成书只能消费已批准的人名表；声明顺序同时是队列和进度屏的唯一顺序权威。
     'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
                                  produces=(artifact_paths.STAGE7_BOOK,)),
+}
+
+#: `(节点, 触发 flag)` → 这条跑法**额外**必填的 flag。`NodeSpec.required_flags` 的补集：
+#: 那一列管无条件必填，这张表管「跟着另一条跑法才必填」。
+#:
+#: ⚠ 两张表分开而不是合并成一个可调用的谓词：必填这件事要能被 `preview`
+#: **0 成本地摊开**（渲染占位符），谓词做不到——它只能回答是/否，说不出缺哪几个。
+#:
+#: ⇒ `stage0.edit` 的三条编辑路只有 `--apply-edit` 那条要人工凭据；
+#:   `--apply-edit-plan` / `--apply-merge-plan` 的凭据在计划文件里（连同乐观锁）。
+#: ⇒ `stage5.review --retain-pretrim` 要 `--chapters` 指定恰好一章：
+#:   「保留 pretrim」是逐章的 hash-bound 决定，没有书级形态。
+CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
+    ('stage0.edit', '--apply-edit'): ('--actor', '--reason'),
+    ('stage5.review', '--retain-pretrim'): ('--chapters',),
 }
 
 # ⚠⚠ **`--revise` 挂哪个节点：D 期登记的那处分歧已在 F4 裁掉**（2026-08-12，用户裁决）。
