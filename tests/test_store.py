@@ -1199,7 +1199,15 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
         pytest.fail(f'当前产物语料中混入了非当前版本：{error}')
 
     base = Path(tempfile.mkdtemp())
-    (base / 'roundtrip_1').mkdir(parents=True)
+    landing = base / 'roundtrip_1'
+    landing.mkdir(parents=True)
+    # ⚠ 写盘口那道闸要比对**全链根**（`_refuse_bad_provenance` → `root_clean_sha1`）：
+    #   一个空目录里落任何带来源账的产物都会当场 `ProvenanceRefused`，
+    #   而本条要测的是**形状往返**，不是那道闸。⇒ 把这份产物自己那本书的根搬过来。
+    root = corpus.corpus_root() / a.book_dir / 'stage0/clean_text.txt'
+    if root.is_file():
+        (landing / 'stage0').mkdir(parents=True, exist_ok=True)
+        (landing / 'stage0/clean_text.txt').write_bytes(root.read_bytes())
     ctx = RunContext.open(base, '1', 'stage3.style', paid=True, write_ledger=False)
     st = ArtifactStore(ctx)
 

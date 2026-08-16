@@ -289,5 +289,13 @@ def test_unadopted_trim_without_semantic_evidence_is_a_verification_row(box):
 
     rows = [row for row in inbox_view(str(box.root), box.sid).items
             if row.kind == 'verification' and row.stage == 'stage5']
-    assert [(row.rule, row.chapter) for row in rows] == [('trim_audit_ch03', 3)]
-    assert 'pretrim' in rows[0].how and '未采用收缩候选' in rows[0].how
+    # ⚠ 断言**不能**写成「恰好只有这一行」：语料书自己可能带着一批未采用的收缩审计
+    #   （现役这本 11 章都因为 evaluator profile 缺席保留了 pretrim），
+    #   那时这一条会红在「语料碰巧有几行」上，而不是它要验的那件事。
+    by_rule = {row.rule: row for row in rows}
+    assert 'trim_audit_ch03' in by_rule, f'种下的那一行没进清单：{sorted(by_rule)}'
+    assert all(row.rule.startswith('trim_audit_') for row in rows), \
+        f'stage5 的 verification 只该由收缩审计产生：{sorted(by_rule)}'
+    seeded = by_rule['trim_audit_ch03']
+    assert seeded.chapter == 3
+    assert 'pretrim' in seeded.how and '未采用收缩候选' in seeded.how

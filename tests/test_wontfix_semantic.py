@@ -431,6 +431,12 @@ def box5(tmp_path):
             json.dumps(encode_artifact(a.rel, corpus.load_current(a)), ensure_ascii=False),
             encoding='utf-8',
         )
+    # ⚠ 上面刻意跳过整个 `stage0/`（本条不测剔除），但**全链根那一份字节必须在**：
+    #   `stage5.review` 铸造来源账要拿它算 `root_clean_sha1`，缺了它当场
+    #   `ProvenanceRefused`，而报错长得像本条自己坏了。
+    root_txt = corpus.corpus_root() / book / 'stage0/clean_text.txt'
+    (target / 'stage0').mkdir(parents=True, exist_ok=True)
+    (target / 'stage0/clean_text.txt').write_bytes(root_txt.read_bytes())
     yield root, book, book.rsplit('_', 1)[-1]
 
 
