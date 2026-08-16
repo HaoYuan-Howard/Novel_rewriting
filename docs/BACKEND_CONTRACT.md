@@ -601,7 +601,7 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
 | R-7.17 | 【必须在场】的物件要在成稿里**留下痕迹**（怎么描写随写手）——四组保真材料里的第三组，另两组是 `R-7.3` / `R-7.4`，第四组是 `R-7.11` | `INFO` |
 | R-7.18 | **不许提前点破本章还不该揭示的事**（字面探针那一半）。⚠ 报绿灯时**同一行必须打盲区计数**：实测 21 条秘密里 19 条的字面探针连它自己的揭示章都命中不了，一本书盲区 100% 时要落「查不了」而不是沉默 | `HARD` |
 | R-7.18b | **书级改写式泄底由独立语义审判守**：第一相只见当前正式成稿，逐章抽取带原文连续子串证据的 claim；第二相只见已验真 claim 与 Stage 2 secret，对齐到 Stage 4 输出章的合法揭示点。揭示前的语义等价命题是阻断 | `HARD`（`semantic_secret_leak`） |
-| R-7.18c | **语义审判覆盖必须闭合**：正式章不缺不多、secret 不缺不多、evidence 必须是对应章原样连续子串、引用必须指向存在的 claim；任一揭示前章覆盖不确定时只能 `UNVER`，不得洗成通过 | `INFO`（`semantic_secret_coverage`） |
+| R-7.18c | **语义审判覆盖必须闭合**：正式章不缺不多、secret 不缺不多、evidence 必须是对应章原样连续子串、引用必须指向存在的 claim；任一揭示前章覆盖不确定时只能 `UNVER`，不得洗成通过。默认路径缺 profile 时在 transport 前终止；显式付费 `--advisory` 可运行 A/B 留下人工证据，但所有合并决议强制 `automated=false` / `UNVER`，`semantic_secret_leak` 也不得因此转绿 | `INFO`（`semantic_secret_coverage`） |
 | R-7.19 | 开卷改写、且计划没有净压缩时，**直接引语不许被腰斩** | `HARD` |
 | R-7.20 | 直接引语的**条数 / 引号对白体 / 对白占比**要贴着源章与本书——**闭卷这条臂会系统性把台词压成转述**（6 本书方向一致，是这一层效应量最大的一条跨书结论） | `INFO` |
 | R-7.21 | 成稿要贴着 `R-4` 那份画像：句段形态档位 · 段均字数 · 提示语排版惯例 · 明喻密度 ·「心里」密度 · 破折号密度。⚠ `R-4` 管的是画像**怎么产**，没有一条管成稿贴不贴 | `INFO` |
@@ -701,7 +701,7 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
 | R-9.16 | 开篇连续正文有缺稿时必须常驻出声；secret 缺失或没有揭示时点不再限制文案，因为生成器已有完整事实与故事地图 | `INFO`（`hook_body_missing`） |
 | R-9.17 | 判的必须是**照盘上这份正文写的那一版**文案：逐份成稿记 `judged[].consumed`（字段投影）判过期，整文件 `sha1` 只作审计；**没有 `consumed` ⇒ 说不清，不许算作没过期** | `INFO`（`hook_body_stale`） |
 | R-9.18 | 原作文案式的重写台词与合成场面是合法体裁手法，不再要求台词逐字存在于正文，也不为这件事保留一条永恒的 `unver` 假检查 | `不适用`（负空间声明；边界由 `R-9.8` 定义） |
-| R-9.19 | **实质矛盾只认校准后的 A/B 合并决议**：任何付费请求前先对 `reference_boundary` 调 `require_enabled`，逐能力精确比对 dataset / model / A、B prompt / response schema / decoder 指纹；未启用即在 transport 前终止。通过后，同一批匿名去重文本分别交给 A/B 两名独立 judge；只有 profile 仍匹配、两人同结论且各自证据闭合时，代码才自动产 PASS/FAIL。分歧、任一 UNVER、缺证据或 profile 漂移一律合并为 UNVER。`HookSemanticReview` 持久保存两份排序、完整 `SemanticDecision[]` 与 evaluator 指纹；候选 evidence 先回查为连续原字节，决议按完整 subject SHA-256 绑定 | `HARD`（`hook_semantic_contradiction`）；合并决议路径是 `novel/stages/stage6/semantic.py::run_semantic` / `novel/stages/stage6/semantic.py::materialize_double_blind` |
+| R-9.19 | **实质矛盾只认校准后的 A/B 合并决议**：默认路径在任何付费请求前对 `reference_boundary` 调 `require_enabled`，逐能力精确比对 dataset / model / A、B prompt / response schema / decoder 指纹；未启用即在 transport 前终止。显式付费 `--advisory` 可在无 profile 时运行双判官并持久保存无 ground-truth 哨兵指纹、评论、证据与质量排序，但合并决议强制 `automated=false` / `UNVER`，报告必须显示为当前的人工辅助审判而不是“0 份审判”。只有 profile 仍匹配、两人同结论且各自证据闭合时，代码才自动产 PASS/FAIL。分歧、任一 UNVER、缺证据或 profile 漂移一律合并为 UNVER。`HookSemanticReview` 持久保存两份排序、完整 `SemanticDecision[]` 与 evaluator 指纹；候选 evidence 先回查为连续原字节，决议按完整 subject SHA-256 绑定 | `HARD`（`hook_semantic_contradiction`）；合并决议路径是 `novel/stages/stage6/semantic.py::run_semantic` / `novel/stages/stage6/semantic.py::materialize_double_blind` |
 | R-9.20 | 每条候选都按 **combined `SemanticDecision`** 单独展示 FAIL 矛盾或 UNVER 原因，不能从某一名 judge 的原始 review 倒推，也不能因为另有 PASS 候选而隐藏。UNVER / 缺 profile 进入 `verification`，并可通过 `R-9.6` 的 actor / reason / subject-hash 人工核验路径收口；自动 FAIL（包括同一主体的历史 FAIL）只能改字形成新主体，不能以普通审批或 wontfix 绕过。逐候选不确定项仍须用 `<候选>:<文本指纹>` 寻址，禁止空证据让多条候选共用收敛键 | `INFO`（`hook_candidate_contradiction`）+ `verification` |
 | R-9.21 | **吸引力六维评分与匿名排序常驻输出**：阅读欲 30% + 正文声线 20% + 具体场面 15% + 期待承诺 20% + 文案技法 15% − 摘要感 10%；总分由代码按固定权重计算，模型不能自报。剧透本身不加分也不扣分 | `度量`（`hook_quality_rank`） |
 

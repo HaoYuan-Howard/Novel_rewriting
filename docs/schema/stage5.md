@@ -328,6 +328,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 | `chapters[]` | `obj[]` | 是 | 第一相的逐章 claims：`output_ordinal`、`coverage`、`uncertainty_reason`、`claims[]` |
 | `chapters[].claims[]` | `obj[]` | 是 | `{claim_id, assertion, evidence}`；`evidence` 必须是对应章正文的逐字连续子串 |
 | `secrets[]` | `obj[]` | 是 | 第二相的对齐：`secret_id/reveal_chapter/status/evidence_refs/earliest_chapter/reason` |
+| `decisions[]` | `SemanticDecision[]` | 是 | 每条 secret 的 A/B 原始意见与合并决议；未校准 advisory 一律 `automated=false` / `UNVER` |
 | `_provenance` | `obj` | 是 | claims/alignment 两个 system prompt 指纹、模型、输入边与本次逐章 claims + 对齐调用合计 |
 
 两相故意隔离：
@@ -339,6 +340,11 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 `reveal_chapter` 不直接把 Stage 2 源章号当输出章号；必须经 Stage 4 `from_source_ordinals` 恰好映射到一个输出章。
 泄露前任一章 `coverage=uncertain`时，对应 secret 不允许 `clear`，只能 `unver`。语义产物缺席、过期或不可用也是
 `UNVER`，不是默认通过。
+
+正常运行先执行 `require_enabled('secret_timeline', ...)`，缺 profile 时在 transport 前退出。
+显式 `--advisory` 是付费人工辅助路径：仍运行逐章 claims 与 A/B alignment，但传入
+`profile=None`，所以 `decisions[]` 和 `secrets[].status` 都不能成为自动 PASS/clear。报告仍展示
+覆盖与判官证据，并把 `semantic_secret_leak` 保持为 `UNVER`，不能用“未发现已确认泄漏”冒充绿灯。
 
 ## 四、其余四份产物
 

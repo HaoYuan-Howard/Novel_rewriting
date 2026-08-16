@@ -124,8 +124,11 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 
 ## 五、匿名质量审判与批准
 
-付费路上的第一个门是 `require_enabled('reference_boundary', ...)`；没有 profile、
-能力未达门或任一指纹漂移都在 transport/cache/ledger 前终止，未发请求。通过后，
+默认付费路上的第一个门是 `require_enabled('reference_boundary', ...)`；没有 profile、
+能力未达门或任一指纹漂移都在 transport/cache/ledger 前终止，未发请求。显式
+`--advisory` 是唯一例外：它会用专用的无 ground-truth 哨兵冻结当前请求 surface 并照常运行
+A/B，但合并决议一律 `automated=false` / `UNVER`。advisory 的评论、证据和质量排序必须显示在
+报告中，不能因为未校准而伪装成“0 份当前审判”，也不能参与自动 PASS/FAIL。通过校准门后，
 同一份匿名材料分别以 A/B 角色后缀发给两名 judge，候选标签都是 `T1/T2/...`。
 validator 必须确认：
 

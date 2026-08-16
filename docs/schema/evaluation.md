@@ -4,6 +4,12 @@
 ground truth、模型、prompt、schema 或 decoder 任一指纹变化，或固定门槛中任一项未达标，
 该能力都保持 `human-only`，运行时输出 `UNVER`。
 
+默认付费路径仍在任何模型请求前要求匹配的 evaluator profile。只有操作者显式选择
+`--advisory` 时，`stage5.semantic` / `stage6.semantic` 才会在没有 profile 的情况下运行
+A/B 判官；该模式会冻结实际 model/prompt/schema/decoder 与专用的“无 ground truth”数据集
+哨兵，但所有合并决议强制为 `automated=false` / `UNVER`。判官证据和质量排序可以进入报告与
+人工审批，不能让任何自动语义徽章转绿。
+
 ## 一、数据边界
 
 ground-truth 工作流只搬运以下内容：

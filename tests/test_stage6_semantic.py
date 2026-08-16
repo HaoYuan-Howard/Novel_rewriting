@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema.evaluation import EvidenceRef, JudgeDecision, SemanticDecision
+from contracts.schema.evaluation import (
+    EvaluatorFingerprint, EvidenceRef, JudgeDecision, SemanticDecision,
+)
 from contracts.schema.api import HookApproveRequest
 from contracts.schema.stage6 import (
     HookApprovalResolution,
@@ -163,13 +165,29 @@ def test_paid_path_requires_calibrated_profile_before_prompt_or_transport(monkey
 
     monkeypatch.setattr(
         semantic, '_runtime_contract',
-        lambda _model: (_ for _ in ()).throw(TerminalState('未校准')))
+        lambda _model, **_kwargs: (_ for _ in ()).throw(TerminalState('未校准')))
     monkeypatch.setattr(
         semantic, 'build_prompt',
         lambda _ctx: (_ for _ in ()).throw(AssertionError('prompt built before profile gate')))
     with pytest.raises(TerminalState, match='未校准'):
         semantic.run_semantic(SimpleNamespace(), Client())
     assert calls == []
+
+
+def test_advisory_runtime_contract_is_uncalibrated_but_surface_bound(monkeypatch):
+    monkeypatch.setattr(
+        semantic, 'require_enabled',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('advisory mode must not pretend to use calibration')))
+
+    profile, current = semantic._runtime_contract('fixture-model', advisory=True)
+
+    assert profile is None
+    assert current.model == 'fixture-model'
+    assert current.dataset_sha256 != '0' * 64
+    assert len(current.prompt_sha256) == 64
+    assert len(current.schema_sha256) == 64
+    assert len(current.decoder_sha256) == 64
 
 
 def test_human_edit_and_resolution_contract_require_explicit_hash_binding():
@@ -369,6 +387,31 @@ def test_outcomes_are_unver_when_quality_review_is_missing_or_stale(monkeypatch)
     monkeypatch.setattr(semantic, '_calibration_status', lambda _artifact: (False, 'profile 漂移'))
     got = semantic.outcomes(_Store(), _art())
     assert all(out.unver_why and 'profile 漂移' in out.unver_why for out in got)
+
+
+def test_advisory_outcomes_keep_quality_and_evidence_visible(monkeypatch):
+    artifact = _semantic_artifact(_all_clean_reviews())
+    artifact.evaluator_fingerprint = EvaluatorFingerprint(
+        dataset_sha256=semantic.ADVISORY_DATASET_SHA256,
+        model='fixture-model',
+        prompt_sha256='1' * 64,
+        schema_sha256='2' * 64,
+        decoder_sha256='3' * 64,
+    )
+    for decision in artifact.decisions:
+        decision.verdict = 'UNVER'
+        decision.automated = False
+        decision.profile_id = None
+        decision.reason = '没有已校准 evaluator profile'
+    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (1, artifact))
+    monkeypatch.setattr(semantic, '_historical_fail_subjects',
+                        lambda _store, **_kwargs: set())
+
+    hard, candidates, quality = semantic.outcomes(_Store(), _art())
+
+    assert hard.unver_why and '没有已确认 clear' in hard.unver_why
+    assert len(candidates.findings) == 3
+    assert quality.findings and '匿名排序' in quality.findings[0].detail
 
 def test_picking_duplicate_text_does_not_stale_sha_bound_review(monkeypatch):
     artifact = _semantic_artifact(_all_clean_reviews())

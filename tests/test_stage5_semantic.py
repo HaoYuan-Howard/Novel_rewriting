@@ -78,6 +78,32 @@ def test_claim_prompt_publishes_the_exact_response_shape():
     assert '"claim_id": "c1"' in system
 
 
+def test_advisory_runtime_contract_is_uncalibrated_but_surface_bound(monkeypatch):
+    monkeypatch.setattr(
+        semantic, 'require_enabled',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('advisory mode must not pretend to use calibration')))
+
+    profile, current = semantic._runtime_contract('fixture-model', advisory=True)
+
+    assert profile is None
+    assert current.model == 'fixture-model'
+    assert current.dataset_sha256 != '0' * 64
+    assert len(current.prompt_sha256) == 64
+    assert len(current.schema_sha256) == 64
+    assert len(current.decoder_sha256) == 64
+
+
+def test_uncalibrated_secret_decision_cannot_turn_the_hard_rule_green():
+    advisory = SimpleNamespace(decisions=[SimpleNamespace(
+        subject_key='secret_letter', automated=False, verdict='UNVER')])
+    outcome = semantic._semantic_leak_outcome(
+        advisory, [], scanned='3 章 × 1 条 secret')
+
+    assert outcome.unver_why and '不能' in outcome.unver_why
+    assert not outcome.findings
+
+
 def test_numeric_claim_ids_are_normalised_at_the_llm_boundary():
     response = SemanticClaimsResponse.model_validate({'chapters': [{
         'output_ordinal': 1,

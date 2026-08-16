@@ -795,6 +795,8 @@ FREE_ENTRIES: Final = {
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
 PAID_FLAGS: Final = {
+    '--advisory': ('未配置匹配 evaluator profile 时仍运行双盲判官；'
+                   '只产带证据的 UNVER，绝不自动 PASS/FAIL'),
     '--full-extract': 'stage2 全局底座、逐章蓝图与 stage3 文风画像并发首跑',
     '--shallow-rest': 'stage5 把未选为深度重构的其余章节交给浅层写手',
     '--repair-surface-habits': 'stage3 表层习惯的定向返工——它要再调一次模型',
@@ -1112,7 +1114,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     # 付费语义审判是机械验收的 companion，不取代 `stage5.review` 的 0 成本属性。
     # 它不接 `--check-only`，否则一个 stage 会有两个复检节点、HTTP kind 路由产生歧义。
     'stage5.semantic':  NodeSpec('stage5', 'R-8',  True,  'stage5 书级语义审判',
-                                 flags=('--dry-run',),
+                                 flags=('--dry-run', '--advisory'),
                                  produces=(artifact_paths.STAGE5_SEMANTIC,)),
     # ⚠ `--revalidate` 是 F 期移植时补的，而它是**新加那道落盘闸门的必然配套**：
     #   本层一次产三条候选，闸门拦的是「一条干净候选都没有」；不给一条 0 成本的提升路，
@@ -1129,7 +1131,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     # 付费语义审判是字面探针的 companion（R-9.19/R-9.20），形态照 stage5.semantic：
     # 不接 `--check-only`，否则一层两个复检节点、HTTP kind 路由产生歧义。
     'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',
-                                 flags=('--dry-run',),
+                                 flags=('--dry-run', '--advisory'),
                                  produces=(artifact_paths.STAGE6_SEMANTIC,)),
     # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
     #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。

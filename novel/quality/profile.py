@@ -26,6 +26,12 @@ def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+ADVISORY_DATASET_SHA256 = canonical_sha256({
+    'mode': 'advisory',
+    'ground_truth_dataset': None,
+})
+
+
 def _read_model(path: str | None, model_cls: type[BaseModel], label: str) -> BaseModel:
     if not path:
         raise TerminalState(f'{label} 未配置；设置对应本地路径后才可启用自动语义裁决')
@@ -48,6 +54,30 @@ def runtime_fingerprint(
 ) -> EvaluatorFingerprint:
     return EvaluatorFingerprint(
         dataset_sha256=manifest.dataset_sha256,
+        model=model,
+        prompt_sha256=canonical_sha256(list(prompts)),
+        schema_sha256=canonical_sha256([
+            schema.model_json_schema(mode='validation') for schema in schemas]),
+        decoder_sha256=canonical_sha256(decoder_identity),
+    )
+
+
+def advisory_fingerprint(
+    *,
+    model: str,
+    prompts: Iterable[str],
+    schemas: Iterable[type[BaseModel]],
+    decoder_identity: Any,
+) -> EvaluatorFingerprint:
+    """Bind an uncalibrated advisory run to its exact request surface.
+
+    Advisory evidence has no ground-truth dataset and can therefore never be
+    admitted as an automated verdict.  A stable sentinel keeps the runtime
+    fingerprint honest and structurally complete without inventing a profile
+    or borrowing a test manifest.
+    """
+    return EvaluatorFingerprint(
+        dataset_sha256=ADVISORY_DATASET_SHA256,
         model=model,
         prompt_sha256=canonical_sha256(list(prompts)),
         schema_sha256=canonical_sha256([

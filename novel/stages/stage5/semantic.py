@@ -28,7 +28,7 @@ from novel.llm.transport import ChatResponse
 from novel.observability import ChapterProgressTracker
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.quality.evaluator import double_blind_decision
-from novel.quality.profile import require_enabled
+from novel.quality.profile import advisory_fingerprint, require_enabled
 from novel.run import RunContext
 from novel.stages.stage5 import measure as M
 from novel.stages.stage5 import review
@@ -434,17 +434,26 @@ def materialize_double_blind_alignment(
     return adjudications, decisions
 
 
-def run_semantic(ctx: RunContext, client: LlmClient) -> tuple[SemanticReview, CheckReport]:
-    profile, current = require_enabled(
-        'secret_timeline', model=client.model,
-        prompts=[
-            CLAIMS_SYSTEM,
-            ALIGN_SYSTEM + ALIGN_ROLE_SUFFIX['A'],
-            ALIGN_SYSTEM + ALIGN_ROLE_SUFFIX['B'],
-        ],
-        schemas=[SemanticClaimsResponse, SemanticAlignmentResponse],
-        decoder_identity='stage5-secret-double-blind-v1',
-    )
+def _runtime_contract(model: str, *, advisory: bool = False):
+    prompts = [
+        CLAIMS_SYSTEM,
+        ALIGN_SYSTEM + ALIGN_ROLE_SUFFIX['A'],
+        ALIGN_SYSTEM + ALIGN_ROLE_SUFFIX['B'],
+    ]
+    schemas = [SemanticClaimsResponse, SemanticAlignmentResponse]
+    decoder_identity = 'stage5-secret-double-blind-v1'
+    if advisory:
+        return None, advisory_fingerprint(
+            model=model, prompts=prompts, schemas=schemas,
+            decoder_identity=decoder_identity)
+    return require_enabled(
+        'secret_timeline', model=model, prompts=prompts, schemas=schemas,
+        decoder_identity=decoder_identity)
+
+
+def run_semantic(ctx: RunContext, client: LlmClient, *, advisory: bool = False
+                 ) -> tuple[SemanticReview, CheckReport]:
+    profile, current = _runtime_contract(client.model, advisory=advisory)
     claims_system, claim_users, mechanical_seq, rev, book, drafts, judged = build_prompts(ctx)
     chapters = request_claims(ctx, client, claims_system, claim_users, drafts)
     align_system, align_user = build_alignment_prompt(
@@ -489,6 +498,23 @@ def unavailable_outcomes(why: str) -> list[Outcome]:
         unverifiable('semantic_secret_leak', why, scanned='0 份当前语义审判'),
         unverifiable('semantic_secret_coverage', why, scanned='0 份当前语义审判'),
     ]
+
+
+def _semantic_leak_outcome(
+    artifact: SemanticReview,
+    leaks: list[Finding],
+    *,
+    scanned: str,
+) -> Outcome:
+    undecided = [decision.subject_key for decision in artifact.decisions
+                 if not decision.automated or decision.verdict == 'UNVER']
+    if undecided:
+        return unverifiable(
+            'semantic_secret_leak',
+            '未校准或未达成自动决议，不能把“没有已确认泄漏”显示成自动 PASS：'
+            f'{undecided}',
+            scanned=scanned)
+    return ran('semantic_secret_leak', leaks, scanned=scanned)
 
 
 def _current_artifact(store: ArtifactStore, rev_seq: int,
@@ -547,7 +573,7 @@ def outcomes(store: ArtifactStore, book: M.Book | None) -> list[Outcome]:
                         f'{adjudication.secret_id}；证据：{excerpt}'),
                 evidence=[f'ch{ref.output_ordinal}:{excerpt}']))
     scanned = f'{len(artifact.chapters)} 章 × {len(artifact.secrets)} 条 secret'
-    leak_outcome = ran('semantic_secret_leak', leaks, scanned=scanned)
+    leak_outcome = _semantic_leak_outcome(artifact, leaks, scanned=scanned)
     uncertain_chapters = [chapter.output_ordinal for chapter in artifact.chapters
                           if chapter.coverage == 'uncertain']
     uncertain_secrets = [secret.secret_id for secret in artifact.secrets

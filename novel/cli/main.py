@@ -402,7 +402,8 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
                 print(f'── anonymous editor {role} system（{len(exact)} 字）──\n{exact}')
             print(f'\n── user（{len(user)} 字；{len(aliases)} 份去重文本）──\n{user}')
             return X.OK
-        artifact, report = semantic.run_semantic(ctx, _llm_client(ctx))
+        artifact, report = semantic.run_semantic(
+            ctx, _llm_client(ctx), advisory='--advisory' in tokens)
         print(f'  ✓ 文案质量审判已落盘：{len(artifact.reviews)} 份文本 · '
               f'排序 {artifact.ranking}')
         print(render(report))
@@ -698,7 +699,8 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
                   f'{semantic.ALIGN_SYSTEM}')
             print('\n第二相 user 需消费第一相验真的 claims，dry-run 时尚不存在，故不伪造预览。')
             return X.OK
-        artifact, report = semantic.run_semantic(ctx, _llm_client(ctx))
+        artifact, report = semantic.run_semantic(
+            ctx, _llm_client(ctx), advisory='--advisory' in tokens)
         print(f'  ✓ 书级语义审判已落盘：{len(artifact.chapters)} 章 · '
               f'{len(artifact.secrets)} 条 secret')
         print(render(report))

@@ -42,7 +42,9 @@ from novel.llm.prompts import with_json_shape
 from novel.llm.transport import ChatResponse
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.quality.evaluator import double_blind_decision
-from novel.quality.profile import require_enabled
+from novel.quality.profile import (
+    ADVISORY_DATASET_SHA256, advisory_fingerprint, require_enabled,
+)
 from novel.run import RunContext
 from novel.stages.stage6 import hook
 from novel.store import ArtifactStore
@@ -150,14 +152,20 @@ def text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def _runtime_contract(model: str):
+def _runtime_contract(model: str, *, advisory: bool = False):
     """The exact static request/decoder surface used by both paid judges."""
+    prompts = [SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['A'],
+               SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['B']]
+    schemas = [HookSemanticResponse]
+    if advisory:
+        return None, advisory_fingerprint(
+            model=model, prompts=prompts, schemas=schemas,
+            decoder_identity=DECODER_IDENTITY)
     return require_enabled(
         'reference_boundary',
         model=model,
-        prompts=[SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['A'],
-                 SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['B']],
-        schemas=[HookSemanticResponse],
+        prompts=prompts,
+        schemas=schemas,
         decoder_identity=DECODER_IDENTITY,
     )
 
@@ -414,10 +422,11 @@ def materialize_double_blind(
     return reviews, decisions, ranking, judge_rankings
 
 
-def run_semantic(ctx: RunContext, client: LlmClient) -> tuple[HookSemanticReview, CheckReport]:
+def run_semantic(ctx: RunContext, client: LlmClient, *, advisory: bool = False
+                 ) -> tuple[HookSemanticReview, CheckReport]:
     # This is deliberately the first executable gate in the paid path.  A
     # missing/drifted profile fails before prompt construction can reach transport.
-    profile, current = _runtime_contract(client.model)
+    profile, current = _runtime_contract(client.model, advisory=advisory)
     system, user, art, up, aliases = build_prompt(ctx)
     responses = [
         client.ask_json(
@@ -464,6 +473,8 @@ def _calibration_status(artifact: HookSemanticReview) -> tuple[bool, str]:
     A previously durable FAIL remains visible to the approval guard, but no
     verdict is presented as currently automated after profile drift.
     """
+    if _is_advisory_artifact(artifact):
+        return False, '未校准 advisory 审判；双盲证据仅供人工核验'
     try:
         profile, current = _runtime_contract(artifact.provenance.model)
     except TerminalState as exc:
@@ -474,6 +485,18 @@ def _calibration_status(artifact: HookSemanticReview) -> tuple[bool, str]:
     if profile_ids != {profile.profile_id}:
         return False, '该语义产物的 profile_id 与当前校准 profile 不一致'
     return True, ''
+
+
+def _is_advisory_artifact(artifact: HookSemanticReview) -> bool:
+    """Recognise an intentionally uncalibrated run, not later profile drift."""
+    fingerprint = getattr(artifact, 'evaluator_fingerprint', None)
+    decisions = getattr(artifact, 'decisions', ())
+    return bool(
+        fingerprint is not None
+        and fingerprint.dataset_sha256 == ADVISORY_DATASET_SHA256
+        and decisions
+        and all(not row.automated and row.profile_id is None for row in decisions)
+    )
 
 
 def _current_artifact(
@@ -524,7 +547,8 @@ def current_assessments(store: ArtifactStore, art: Hook) -> dict[str, CandidateA
         historical_fail = text_sha256(text) in historical_fails
         if not calibrated:
             state = 'uncertain'
-            reason = f'evaluator profile 已缺失或漂移：{why}'
+            reason = (why if _is_advisory_artifact(artifact)
+                      else f'evaluator profile 已缺失或漂移：{why}')
         elif decision.automated and decision.verdict == 'PASS':
             state = 'clear'
             reason = decision.reason
@@ -637,7 +661,9 @@ def outcomes(store: ArtifactStore, art: Hook | None) -> list[Outcome]:
     if art is None:
         return unavailable_outcomes('stage6/hook.json 不可读，质量结论无从绑定')
     artifact, why, calibrated, _seq = _current_artifact(store, art)
-    if artifact is None or not calibrated:
+    if artifact is None:
+        return unavailable_outcomes(why)
+    if not calibrated and not _is_advisory_artifact(artifact):
         return unavailable_outcomes(why)
 
     assessments = current_assessments(store, art)
