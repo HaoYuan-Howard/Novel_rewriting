@@ -22,7 +22,7 @@ def _info(rule: str, item: str, requirement: str, **kw) -> Rule:
 
 _hard('s0_nonbody_shared', '剔除与残留断言使用同一套非正文判据', 'R-0.1')
 _hard('s0_removal_ledger', '每段剔除都有可回到原文的完整账', 'R-0.2')
-_hard('s0_approval', 'stage0 已获人工批准才可继续', 'R-0.3b')
+_hard('s0_approval', 'stage0 已获有效批准（自动零命中或人工）才可继续', 'R-0.3b')
 _hard('s0_edit_archive', '人工编辑的上一轮已归档', 'R-0.5')
 _hard('s0_hashes', '原始正文与清理正文的两个指纹都对得上', 'R-0.6')
 _hard('s0_human_preserved', '人工编辑状态没有被机器重跑抹掉', 'R-0.8')

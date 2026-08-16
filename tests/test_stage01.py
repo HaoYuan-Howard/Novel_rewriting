@@ -133,6 +133,9 @@ def test_first_zero_hit_dry_run_previews_auto_approval_without_writing(work):
     assert written.report.approved == preview.report.approved
     assert written.report.approval_origin == preview.report.approval_origin
     assert written_check is not None and written_check.passed
+    assert _line(written_check, 's0_approval').item == (
+        'stage0 已获有效批准（自动零命中或人工）才可继续'
+    )
 
 
 def test_first_nonzero_hit_dry_run_stays_pending_without_writing(work):
