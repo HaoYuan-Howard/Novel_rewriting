@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +15,20 @@ from contracts.schema import (
 )
 from contracts.schema.stage1 import MainText
 from tools import corpus_manifest
+
+
+def test_documented_script_entrypoint_bootstraps_repo_imports(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, '-X', 'utf8', str(root / 'tools' / 'corpus_manifest.py'), '--help'],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert 'Build or verify the exact, text-free current-schema corpus manifest.' in result.stdout
 
 
 def _ledger_row(*, cached: bool, prompt, hit, miss, completion, reasoning):

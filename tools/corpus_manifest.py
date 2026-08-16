@@ -5,17 +5,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from contracts.schema import (
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from contracts.schema import (  # noqa: E402
     CorpusArtifactEntry, CorpusBookEntry, CorpusLedgerSummary, CorpusManifest,
     CorpusSkipExpectation, LedgerTokenSummary, artifact_spec, decode_artifact,
 )
-from novel.llm.ledger import LEDGER_REL
-from novel.paths import derive_source_meta
+from novel.llm.ledger import LEDGER_REL  # noqa: E402
+from novel.paths import derive_source_meta  # noqa: E402
 
 
 _BYTE_ARTIFACTS = (
