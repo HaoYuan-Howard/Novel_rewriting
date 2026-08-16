@@ -36,6 +36,7 @@ from contracts.invariants import (
     ANCHOR_COVERAGE_WARN,
     APPROVAL_GATES,
     APPROVAL_SEEN,
+    DELIVERY_MODES,
     DEPTH_MODES,
     HINGE_KINDS,
     HOOK_APPROACHES,
@@ -49,9 +50,11 @@ from contracts.invariants import (
     REMOVED_ORIGIN,
     SEVERITY,
     STAGES,
+    STRUCTURAL_ROLES,
     STAGE0_SEGMENT_KINDS,
     STAGE1_SEGMENT_KINDS,
     TIME_LAYERS,
+    TEMPORAL_LINKS,
     VOICE_KEYS,
 )
 from contracts.schema.base import FrozenModel, Sha1, StrictModel
@@ -1123,6 +1126,9 @@ class PlanBeatLine(FrozenModel):
     slot: str = Field(pattern=r'^s\d{2,4}$')
     from_beats: list[str] = Field(min_length=1)
     budget_chars: int | None
+    narrative_role: Literal[STRUCTURAL_ROLES]
+    delivery: Literal[DELIVERY_MODES]
+    transition: Literal[TEMPORAL_LINKS]
 
 
 class PlanChapterLine(StrictModel):

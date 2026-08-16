@@ -272,7 +272,10 @@ def _resolve_beats(out_ch: dict[str, Any], bidx: dict[str, dict[str, Any]], disp
         #   缺 event 是 stage2 的契约违约，该由落盘那一步响亮失败，不在这里悄悄补位。
         w: dict[str, Any] = {'slot': be.get('slot'),
                              'events': [bidx[b].get('event') or '' for b in cited],
-                             'budget_chars': be.get('budget_chars')}
+                             'budget_chars': be.get('budget_chars'),
+                             'narrative_role': be.get('narrative_role') or 'bridge',
+                             'delivery': be.get('delivery') or 'scene',
+                             'transition': be.get('transition') or 'continue'}
 
         # 舞台信息取自【所引的全部】源 beat（**不做 `seen` 去重**）：一拍写在哪儿、谁在场、
         # 是不是回忆，跟这拍是不是第一个引用该 beat 无关，漏了写手就得靠猜。

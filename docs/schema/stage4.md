@@ -1,7 +1,8 @@
 # Stage 4 当前契约
 
-Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作上下文。规划调用只决定全书
-重构意图、逐章目标与逐拍预算；拍的分组、引用展开和写作上下文均由确定性代码生成。
+Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构计划和写作上下文。代码先把
+过碎 beat 合成不可再拆的源内容单元；规划调用决定章内叙事入口、信息次序、写作单元分组、
+场景/概述承载、时间衔接和预算。引用展开与写作上下文仍由确定性代码生成。
 
 | 路径 | 模型 | 生产节点 | 角色 |
 |---|---|---|---|
@@ -29,10 +30,10 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 - typed `chapter_goal`、`open_hook_goal`、`end_hook_goal`；
 - 非空 `segments[]`。
 
-模型响应中的每拍只含 `plan_beat` 与正整数 `budget_chars`。`plan_beat` 是下发骨架上的
-`pNN_NN` 编号；`expand_plan_beats` 必须确认编号存在、不重复、没有漏拍，然后确定性展开成
-正式产物的 `from_beats[]`，并按 producer 顺序分配稳定 `slot=s01...`。编号不存在、重复或
-缺失均为显式终态，不猜测、不兜底。
+模型响应中的每个写作单元包含 `plan_beats[]`、`narrative_role`、`delivery`、`transition`
+与正整数 `budget_chars`。`plan_beats[]` 引用下发的 `pNN_NN` 源内容单元，数组顺序就是
+重构后的叙述顺序。`expand_plan_beats` 必须确认编号存在、不重复、没有漏项，再展开成正式
+`from_beats[]`，并按规划顺序分配稳定 `slot=s01...`；不按源序重新排序。
 
 ## 二、`plan_chapters.json`
 
@@ -53,7 +54,7 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 | `chapter_goal` | `PlanGoal` | typed 目标，不得用自由文本代替事实引用 |
 | `open_hook_goal` | `PlanGoal` | typed 开篇目标 |
 | `end_hook_goal` | `PlanGoal` | typed 收束目标 |
-| `segments` | `PlanBeat[]` | 非空，完整覆盖本章源拍；顺序由 producer 决定 |
+| `segments` | `PlanBeat[]` | 非空，完整覆盖源内容单元；顺序就是重构后成稿顺序 |
 
 `PlanGoal` 必填 `intent` 与非空 `fact_refs[]`。每个 `FactRef` 记录闭合 `kind`、可复算 `ref`
 及适用 `chapter`；`ref` 与可选 `rationale` 都标为 prompt-private，写手永远收不到它们。
@@ -62,7 +63,10 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 
 - `slot: sNN`，由 producer 按正式顺序生成且章内唯一；
 - `budget_chars: int > 0`；
-- `from_beats: str[]`，引用一个或多个相邻、同时间层的 Stage 2 `beat_id`。
+- `from_beats: str[]`，引用一个或多个 Stage 2 `beat_id`；
+- `narrative_role: cold_open|setup|escalation|turn|payoff|bridge`；
+- `delivery: scene|summary`；
+- `transition: start|continue|earlier|later|parallel|return`。
 
 每章预算总和必须落在其引用 `SourceSpan` 字数总和的 `PLAN_BUDGET_BAND` 内；该常量就是唯一
 执行带，没有第二层宽限。若某个引用无法提供精确基准，该章的预算规则报告 `unver`，不会拿
@@ -159,13 +163,13 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 
 ## 六、现行判据
 
-当前注册表共 **24 条**：**16 hard、5 info、3 metric**。计划和写作上下文共用同一张表。
+当前注册表共 **26 条**：**17 hard、5 info、4 metric**。计划和写作上下文共用同一张表。
 
 | 严重度 | 当前规则 id |
 |---|---|
-| hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `beat_seq` · `beat_adjacent` · `beat_layer` · `budget_int` · `budget_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` |
+| hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `structure_changed` · `structure_units` · `structure_transition` · `goal_landing` · `budget_int` · `budget_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` |
 | info | `flat_chapter` · `beat_size` · `beat_reuse` · `verbatim_starved` · `params_drift` |
-| metric | `verbatim_share` · `plan_params` · `ctx_source` |
+| metric | `verbatim_share` · `plan_params` · `ctx_source` · `structure_distance` |
 
 本层没有旧规则占位、旧字段兼容分支或双形状读取路径。权威定义在
 `contracts/judges/stage4.py`；报告形状见 [`_report.md`](./_report.md)。

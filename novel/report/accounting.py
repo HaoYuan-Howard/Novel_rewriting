@@ -75,9 +75,9 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
         AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
     ),
     # ⚠⚠ `params` 是**原型记了、而全仓没有一个读者**的那个键（`stage4.md` §3.3）：
-    #    `beat_seq` / `beat_adjacent` / `beat_layer` 三条 HARD 拿**当前**的分组函数去量，
+    #    `structure_changed` / `structure_units` 两条 HARD 拿**当前**的分组函数去量，
     #    从不读它——**每一次都在拿新尺子量旧布**。本层给了它两个出口：
-    #    这一行（常驻）与判据 `params_drift`（三条后置条件先比它再判）。
+    #    这一行（常驻）与判据 `params_drift`（两条依赖分组的判据先比它再判）。
     # ⚠ **刻意不声明 `partial_rewrite`**：本层没有一条 0 成本路会把计划改成混版的
     #    （`--identity` 写的是另一份文件、`--apply-edit` 落的是新一轮）。
     #    声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。

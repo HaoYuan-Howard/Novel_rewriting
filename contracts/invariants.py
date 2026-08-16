@@ -399,10 +399,10 @@ ANCHOR_COVERAGE_STATE: Final = ('low', 'adequate')
 #: 拍的**分组算法版本**。与 `BEAT_MIN_CHARS` 一起进 `plan_chapters._provenance.params`。
 #:
 #: 【它存在的全部理由】不记算法版本与阈值，「这份计划的拍是照哪一套切的」在改过阈值之后
-#: 就**无从判断**——而 `beat_seq` / `beat_adjacent` / `beat_layer` 三条 HARD 是拿**当前**的
-#: `group_beats` 去量的。⚠ 原型记了这个字段，**而全仓没有一个读者**：三条判据每一次都在
+#: 就**无从判断**——而 `structure_changed` / `structure_units` 两条 HARD 是拿**当前**的
+#: `group_beats` 去量的。⚠ 原型记了这个字段，**而全仓没有一个读者**：两条判据每一次都在
 #: **拿新尺子量旧布**，那个字段本来就是为了让人发现这件事才存在的。
-#: ⇒ `R-5.11` / `R-5.11b`：一行常驻报出来，且三条后置条件判据**先比它再判**。
+#: ⇒ `R-5.11` / `R-5.11b`：一行常驻报出来，且两条依赖分组的判据**先比它再判**。
 GROUPING_VERSION: Final = 'absorb-small-v1'
 
 #: 一段原文没被任何拍覆盖时，多长才值得报出来。
@@ -535,6 +535,15 @@ CACHE_POLICY: Final = ('default', 'refresh-write', 'disabled')
 #: Stage4 每章预算之和 / 源 span 字数的唯一现行区间。**无第二层宽限。**
 #: `output_chapters[].op` 不属于当前契约，因此这里也不保留已删除操作的取值面。
 PLAN_BUDGET_BAND: Final = (0.90, 1.10)
+
+#: Stage4 结构规划的三个闭合轴。它们描述的是叙事架构，不是文风：同一组事实可以被
+#: 放在冷开场、升级或兑现位置，可以作为完整场景或压缩交代，并且必须说清与上一单元
+#: 的时间关系。Stage5 只执行这些决定，不再自行猜测重排后的衔接。
+STRUCTURAL_ROLES: Final = (
+    'cold_open', 'setup', 'escalation', 'turn', 'payoff', 'bridge',
+)
+DELIVERY_MODES: Final = ('scene', 'summary')
+TEMPORAL_LINKS: Final = ('start', 'continue', 'earlier', 'later', 'parallel', 'return')
 
 #: 「逐字挤占」的下限倍数：一拍的预算至少要是它**必须逐字写入的原话**字数的这么多倍。
 #: 2.0 的含义是「原话最多占一半」——低于它，剩下的字连交代谁在说、说完什么反应都不够。

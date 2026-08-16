@@ -25,9 +25,9 @@ from pydantic import BaseModel
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS, BEAT_MIN_CHARS, BEAT_NATURAL_MAX,
-    CHANGE_TYPES_ENUM, HINGE_KINDS, INVENT_ALLOW, INVENT_FORBID, INVENT_PRINCIPLE,
-    NAME_DISTINCTIVENESS, PLAN_BUDGET_BAND, STYLE_WORDS, TIME_LAYERS,
-    VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
+    CHANGE_TYPES_ENUM, DELIVERY_MODES, HINGE_KINDS, INVENT_ALLOW, INVENT_FORBID,
+    INVENT_PRINCIPLE, NAME_DISTINCTIVENESS, PLAN_BUDGET_BAND, STRUCTURAL_ROLES,
+    STYLE_WORDS, TEMPORAL_LINKS, TIME_LAYERS, VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -59,6 +59,9 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     # stage4 计划
     'BANDS': '{:g}~{:g}×'.format(*PLAN_BUDGET_BAND),
     'BEAT_MIN': str(BEAT_MIN_CHARS),
+    'STRUCTURAL_ROLES': '|'.join(STRUCTURAL_ROLES),
+    'DELIVERY_MODES': '|'.join(DELIVERY_MODES),
+    'TEMPORAL_LINKS': '|'.join(TEMPORAL_LINKS),
     # 这两项必须从常量渲染，避免 prompt 与判据使用不同数值。
     #   ⚠ `BEAT_NATURAL` 是**一对**（下界恒等于 `BEAT_MIN_CHARS`——拍就是按它切的），
     #   与判据那一侧的报警线 `BEAT_ALERT_MIN/MAX` 是**故意的两对数**，别混。

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 24 条判据的**实现**。行在 `contracts/judges/stage4.py`（`Q-12`）。
+checks.py —— 26 条判据的**实现**。行在 `contracts/judges/stage4.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 落盘闸门 / `--check-only` / `--revalidate` 走的都是
 `check()` 这一个函数——三条路各判一遍就会长出三把尺子。
@@ -27,8 +27,8 @@ from contracts.invariants import (
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.report.findings import Outcome, ran, unverifiable
-from novel.stages.stage4.beats import beat_index
-from novel.stages.stage4.measure import chapter_source_chars, verbatim_share_stats
+from novel.stages.stage4.beats import beat_index, group_beats
+from novel.stages.stage4.measure import IDENTITY_GOAL, chapter_source_chars, verbatim_share_stats
 
 #: 源 beat 编号里的章号。⚠ **别按定宽切片**：`b{ord:02d}_{seq:02d}` 在三位数的章上会溢出宽度。
 _BEAT_CH = re.compile(r'b(\d+)_')
@@ -160,32 +160,67 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
                        [b for b in lost[:20]])) if lost else [],
                    scanned=f'{len(valid)} 条源 beat'))
 
-    # ── ②.5 三条后置条件 + 分组参数 ──────────────────────────────────────
-    order = {be.get('beat_id'): i
-             for b in (blueprints.get('blueprints') or [])
-             for i, be in enumerate(b.get('beats') or [])}
-    layer_of = {be.get('beat_id'): be.get('time_layer')
-                for b in (blueprints.get('blueprints') or [])
-                for be in (b.get('beats') or [])}
-    disorder: list[Any] = []
-    nonadj: list[tuple[Any, int, list[str]]] = []
-    xlayer: list[tuple[Any, int, list[str], list[Any]]] = []
+    # ── ②.5 结构重构：源内容单元守恒，但输出顺序不再恒等于源序 ────────────
+    source_groups = group_beats(blueprints, main_text, bidx)
+    unit_shape_bad: list[tuple[Any, int, list[str]]] = []
+    identity_chapters: list[Any] = []
+    transition_bad: list[tuple[Any, str]] = []
+    structure_metrics: list[str] = []
     for o in outs:
         oo = o.get('output_ordinal')
-        seq: list[int] = []
-        for bi, be in enumerate(o.get('segments') or [], 1):
-            fb = [x for x in (be.get('from_beats') or []) if x in order]
-            idxs = [order[x] for x in fb]
-            seq += idxs
-            # 相邻 = 源序上的一段连续区间；一拍内自己也不许倒序
-            if idxs and (idxs != sorted(idxs) or max(idxs) - min(idxs) + 1 != len(set(idxs))):
-                nonadj.append((oo, bi, fb))
-            if len({layer_of.get(x) for x in fb}) > 1:
-                xlayer.append((oo, bi, fb, [layer_of.get(x) for x in fb]))
-        if seq != sorted(seq):
-            disorder.append(oo)
+        srcs = o.get('from_source_ordinals') or []
+        src = srcs[0] if len(srcs) == 1 else None
+        expected = source_groups.get(src) or []
+        unit_of = {bid: ui for ui, group in enumerate(expected) for bid in group}
+        positions: dict[str, tuple[int, int]] = {}
+        occurrences: Counter[str] = Counter()
+        out_units: list[int] = []
+        segments = o.get('segments') or []
+        for si, be in enumerate(segments):
+            refs = [bid for bid in (be.get('from_beats') or []) if bid in unit_of]
+            for pi, bid in enumerate(refs):
+                positions[bid] = (si, pi)
+                occurrences[bid] += 1
+            for uid in [unit_of[bid] for bid in refs]:
+                if not out_units or out_units[-1] != uid:
+                    out_units.append(uid)
+        for ui, group in enumerate(expected):
+            locs = [positions.get(bid) for bid in group]
+            if (any(occurrences[bid] != 1 for bid in group)
+                    or not all(loc is not None for loc in locs)
+                    or len({loc[0] for loc in locs if loc is not None}) != 1
+                    or [loc[1] for loc in locs if loc is not None]
+                    != list(range(min(loc[1] for loc in locs if loc is not None),
+                                  min(loc[1] for loc in locs if loc is not None) + len(group)))):
+                unit_shape_bad.append((oo, ui + 1, list(group)))
 
-    # ⚠ **先比一次分组参数再判**（`R-5.11b`）：三条后置条件是拿**当前**的
+        source_order = list(range(len(expected)))
+        if len(expected) >= 4 and out_units == source_order:
+            identity_chapters.append(oo)
+
+        transitions = [be.get('transition') for be in segments]
+        if transitions and transitions[0] != 'start':
+            transition_bad.append((oo, f'首单元 transition={transitions[0]!r}，必须是 start'))
+        if any(t == 'start' for t in transitions[1:]):
+            transition_bad.append((oo, '非首单元重复使用 start'))
+        if out_units != source_order and len(expected) >= 2:
+            if all(t in (None, 'continue') for t in transitions[1:]):
+                transition_bad.append((oo, '已重排内容，却没有 earlier/later/parallel/return 衔接'))
+            if out_units and out_units[0] != 0 and (segments[0].get('narrative_role') != 'cold_open'):
+                transition_bad.append((oo, '移动了叙事入口，但首单元不是 cold_open'))
+
+        pairs = list(zip(out_units, out_units[1:]))
+        kept = sum(b == a + 1 for a, b in pairs)
+        denom = max(len(expected) - 1, 1)
+        moved = sum(i != uid for i, uid in enumerate(out_units))
+        structure_metrics.append(
+            f'ch{oo}: 源单元 {len(expected)} → 写作单元 {len(segments)}；'
+            f'入口 p{(out_units[0] + 1):02d}' if out_units else
+            f'ch{oo}: 源单元 {len(expected)} → 写作单元 {len(segments)}；入口缺失')
+        if structure_metrics:
+            structure_metrics[-1] += f'；移位 {moved}/{len(expected)}；源相邻保留 {kept}/{denom}'
+
+    # ⚠ **先比一次分组参数再判**（`R-5.11b`）：两条结构判据是拿**当前**的
     #   `group_beats` 去量的，而产物记着它是照哪一套切的。不比就是拿新尺子量旧布。
     params = ((plan.get('_provenance') or {}).get('params') or {})
     recorded = (params.get('grouping'), params.get('beat_min_chars'))
@@ -194,38 +229,57 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
         out.append(unverifiable(
             'params_drift',
             f'这份计划没有记下分组参数（`_provenance.params` 缺失）⇒ **说不清**它的拍是照'
-            f'哪一套切的。下面三条后置条件仍然照当前这套（{current[0]}，阈值 {current[1]} 字）判，'
+            f'哪一套切的。下面两条结构判据仍然照当前这套（{current[0]}，阈值 {current[1]} 字）判，'
             f'而它们本该先比一次。⚠ **缺失记「不知道」不是「匹配」**——压成匹配就是替它担保',
             scanned='1 份来源账'))
     elif recorded != current:
         out.append(ran('params_drift', fs(
             'params_drift',
             (f'**这是跨版本比较**：这份计划的拍是照 {recorded[0]}（阈值 {recorded[1]} 字）切的，'
-             f'而下面三条后置条件拿的是当前这套 {current[0]}（阈值 {current[1]} 字）。'
+             f'而下面两条结构判据拿的是当前这套 {current[0]}（阈值 {current[1]} 字）。'
              f'先看这一行再看那三条的判定',
              [f'{recorded[0]}→{current[0]}'])), scanned='1 份来源账'))
     else:
         out.append(ran('params_drift', [], scanned=f'比过：{current[0]}，阈值 {current[1]} 字'))
 
-    out.append(ran('beat_seq',
-                   fs('beat_seq',
-                      (f'输出章 {disorder} 的拍序与源序不一致——写手拿到的 `events[]` 就是这个顺序，'
-                       f'**重排会一路传到成稿而无人出声**。拍由 `group_beats` 确定性切、'
-                       f'顺序恒等于源序：红在这里说明这份计划是旧的，或分组函数坏了',
-                       [f'out{o}' for o in disorder])) if disorder else [],
+    out.append(ran('structure_changed',
+                   fs('structure_changed',
+                      (f'可重构章节仍保持源内容单元原顺序：{identity_chapters}。'
+                       f'只有预算/措辞变化不算结构重构',
+                       [f'out{o}' for o in identity_chapters])) if identity_chapters else [],
                    scanned=f'{len(outs)} 个输出章'))
-    out.append(ran('beat_adjacent',
-                   fs('beat_adjacent',
-                      (f'{len(nonadj)} 拍并的不是相邻的源拍（输出章, 第几拍, from_beats）：'
-                       f'{nonadj[:6]}——跳过中间那条去并两头，等于把它从叙述里挪了位置',
-                       [f'out{oo}#{bi}' for oo, bi, _ in nonadj])) if nonadj else [],
-                   scanned=f'{n_beats} 拍'))
-    out.append(ran('beat_layer',
-                   fs('beat_layer',
-                      (f'{len(xlayer)} 拍并了叙述层不同的源拍：{xlayer[:4]}'
-                       f'——写手在一拍之内分不清哪句是现场哪句是回忆',
-                       [f'out{oo}#{bi}' for oo, bi, _f, _l in xlayer])) if xlayer else [],
-                   scanned=f'{n_beats} 拍'))
+    out.append(ran('structure_units',
+                   fs('structure_units',
+                      (f'源内容单元被拆开、内部换序或跨写作单元重复：{unit_shape_bad[:8]}',
+                       [f'out{oo}:p{ui:02d}' for oo, ui, _ in unit_shape_bad]))
+                   if unit_shape_bad else [], scanned=f'{sum(len(g) for g in source_groups.values())} 个源内容单元'))
+    out.append(ran('structure_transition',
+                   fs('structure_transition',
+                      (f'结构衔接标记与重排不一致：{transition_bad[:8]}',
+                       [f'out{oo}' for oo, _ in transition_bad])) if transition_bad else [],
+                   scanned=f'{n_beats} 个写作单元'))
+    goal_bad: list[tuple[Any, str, list[str], list[str]]] = []
+    if plan.get('reconstruction_strategy') != IDENTITY_GOAL:
+        for o in outs:
+            segments = o.get('segments') or []
+            if not segments:
+                continue
+            for key, allowed in (
+                ('open_hook_goal', set(segments[0].get('from_beats') or [])),
+                ('end_hook_goal', set(segments[-1].get('from_beats') or [])),
+            ):
+                event_refs = [r.get('ref') for r in ((o.get(key) or {}).get('fact_refs') or [])
+                              if r.get('kind') == 'event' and r.get('ref')]
+                if not event_refs or not (set(event_refs) & allowed):
+                    goal_bad.append((o.get('output_ordinal'), key, event_refs, sorted(allowed)))
+    out.append(ran('goal_landing',
+                   fs('goal_landing',
+                      (f'开头/结尾目标没有锚在对应的首尾写作单元：{goal_bad[:8]}',
+                       [f'out{oo}:{key}' for oo, key, _refs, _allowed in goal_bad]))
+                   if goal_bad else [], scanned=f'{len(outs)} 章 × 2 个边界目标'))
+    out.append(ran('structure_distance', [finding(
+        'structure_distance', detail='；'.join(structure_metrics), evidence=structure_metrics)],
+        scanned=f'{len(outs)} 个输出章'))
 
     # ── ③ 篇幅预算带 ─────────────────────────────────────────────────────
     text_len, cov = chapter_source_chars(main_text, bidx)

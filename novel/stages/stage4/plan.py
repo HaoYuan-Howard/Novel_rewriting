@@ -179,7 +179,7 @@ def _params(up: _Upstreams) -> dict[str, Any]:
     """`_provenance.params` —— 「这份计划的拍是照哪一套切的」。
 
     ⚠ 原型记了它而**全仓没有一个读者**。本层给了它两个：
-    `plan_params`（一行常驻）与 `params_drift`（三条后置条件判据先比它再判）。
+    `plan_params`（一行常驻）与 `params_drift`（两条依赖分组的判据先比它再判）。
     """
     from contracts.invariants import BEAT_MIN_CHARS, GROUPING_VERSION
     return {'grouping': GROUPING_VERSION, 'beat_min_chars': BEAT_MIN_CHARS,
