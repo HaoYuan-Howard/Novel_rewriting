@@ -323,12 +323,38 @@ advisory，与 `stage5.write` 对齐）：照常发两次判官调用，把 `pro
 - 风险控制：`require_human_resolution` 那套（actor / reason / subject-sha256 乐观锁、
   **已有的校准 FAIL 不可被人工绕过**）原样复用。
 
-**② 自建小规模 ground truth（唯一能真正拿回"自动"的路）**
+**② 自建 ground truth（唯一能真正拿回"自动"的路，但门槛比想象的高得多）**
 
-`GroundTruthManifest` 要的是「逐例标注 + rubric 哈希 + 每轮全覆盖」，**没有要求语料规模**。
-用现有成稿人工标 30~60 例/能力，跑 3 轮，`tools/build_evaluator_profile.py` 就能产出
-一份 profile；达标的能力自动开，不达标的**如实保留 `enabled=false`**（聚合器本来就支持）。
-这是把「自动裁决」拿回来的唯一合法路径。
+先把真实成本摆出来（`contracts/schema/evaluation.py` 的两个 validator 是硬性的）：
+
+| 约束 | 值 | 位置 |
+|---|---|---|
+| 能力数 | **恰好 8 个**（`event_order` / `verbatim_fidelity` / `hard_number_fidelity` / `reference_boundary` / `secret_timeline` / `world_rule_consistency` / `trim_equivalence` / `style_transfer`） | `EvaluatorProfile.capabilities` min=max=8 |
+| **每个能力**的标注例 | **≥100**，其中 PASS ≥40、FAIL ≥40 | `GroundTruthManifest._held_out_floor` |
+| 每个 label 的体裁分布 | ≥4 个体裁、各 ≥10 例 | 同上 |
+| 标注者 | ≥2 人 + 1 名仲裁人，标注者间一致率 ≥0.8 | 同上 |
+| 复跑 | ≥3 轮，阈值必须**评测前**锁定 | `EvaluatorProfile` |
+| 每能力启用门 | pass/fail precision 与 violation recall 的 **Wilson 95% 下界均 ≥0.90**，evidence_closure ≥0.95，rerun_consistency ≥0.95 | `CapabilityMetrics.threshold_passed` |
+
+也就是说：**至少 800 条双人标注 + 仲裁**，而且 Wilson 下界 ≥0.90 在 n=100 上几乎是临界
+（p=0.95、n=100 时下界约 0.887，**过不了**）⇒ 实际要么样本更多、要么判官准确率 ≥96%。
+这是一次研究规模的投入，不是"顺手标几十条"。
+
+⚠⚠ **而且这里有一个粒度不一致，值得单独裁一次**：
+
+- **启用是逐能力的** —— `capability_enabled` 按 ability 查行，
+  文档也明说「即使某能力暂无现役自动 consumer……可如实保留 `enabled=false`」；
+- **但 manifest 的下限是全 8 项无条件的** —— `_held_out_floor` 的循环写死
+  `for ability in EVALUATOR_ABILITIES`，不看你打算开哪几个。
+
+结果：本仓现役真正有 consumer 的只有 3 个能力（`trim_equivalence` / `secret_timeline` /
+`reference_boundary`），**却必须先把 8 个能力各标满 100 例，manifest 才能通过校验**。
+想「先只把泄底这一维打通」在当前 schema 下是做不到的。
+
+**建议**：把 manifest 的下限改成**按已登记能力逐项校验**（例如 `cases` 里出现过的
+ability 才检查其下限，profile 里未覆盖的能力如实记 `enabled=false` 且 `n=0`），
+把投入从「800 条起步」降到「按需 100 条起步」。这一条不放宽任何**启用**门槛
+——达不到 Wilson 下界照旧不许 `enabled=true`，它只是不再强制为用不上的能力先付标注成本。
 
 **③ 用确定性判据啃掉一部分语义面**
 
@@ -367,10 +393,11 @@ advisory，与 `stage5.write` 对齐）：照常发两次判官调用，把 `pro
 | 4 | 三、判据 detail 补位置（lcs） | 纯报告改进，零风险，可操作性收益最大 |
 | 5 | 五、stage7.approve 补 actor/reason/乐观锁 | 补上最主观那层的问责缺口 |
 | 6 | 四、`length_over` 与 trim audit 去重 | 清单可信度 |
-| 7 | 八③ 确定性泄底判据 | 把语义层的负担真正减下来 |
-| 8 | 七、其余摩擦 + 测试分层 | 长期维护成本 |
+| 7 | 八② manifest 下限改成逐能力 | 把「要开一个能力得先标 800 条」降到「按需 100 条」，不放宽任何启用门 |
+| 8 | 八③ 确定性泄底判据 | 把语义层的负担真正减下来 |
+| 9 | 七、其余摩擦 + 测试分层 | 长期维护成本 |
 
-**需要产品裁决、我不自行推进的**：八② 要不要投入人工标注去建 profile；
+**需要产品裁决、我不自行推进的**：八② 要不要投入标注去建 profile（真实门槛见该章表格）；
 四 的两个方案选哪个；六.2 选 (a) 还是 (b)。
 
 ---
