@@ -209,6 +209,13 @@ $ preview stage0.approve <sid>
 那一步就拒绝；preview 把必填项渲染成显式占位符并标注。这样 `R-11.8`
 （显示的就是会跑的那条）才真正成立。
 
+> **已实现（2026-08-17）**：`NodeSpec.required_flags` +
+> `CONDITIONAL_REQUIRED_FLAGS`（跟着另一条跑法才必填的那些）+
+> `REQUIRED_PLACEHOLDER_PREFIX`。拒收开在 `validate_run`；`preview` 渲染
+> `待填·actor` 这类占位符并把 `VALUED_FLAGS` 的说明一起打出来，
+> 而**占位符本身在真跑那一趟仍被拒**——照抄不改跑得到的是一句人话，
+> 不是一条把占位符写进人工凭据的假账。详见第二部分 §〇。
+
 ### 6.2 `*_edit.json` 的 `_schema_version`
 
 `docs/schema/stage7.md` §三 列了 `NameMapEdit` 的四个可选字段，**没有提 `_schema_version`**；
@@ -320,6 +327,12 @@ advisory，与 `stage5.write` 对齐）：照常发两次判官调用，把 `pro
 - 拿回什么：逐条可读的语义线索 + 证据 span + 可追溯的判官原文。
 - 不会拿到什么：任何「未经校准的自动绿灯」——`UNVER` 仍然是 `UNVER`。
 - 代价：要花钱；报告必须显式标注「未校准 · 仅供人工参考」，并且**不许**参与徽章转绿。
+
+> **已实现（2026-08-16）**：`stage5.semantic` 与 `stage6.semantic` 新增显式
+> `--advisory`。默认路径仍在 transport 前拒绝缺失/漂移的 profile；advisory 运行实际 A/B，
+> 以专用无 ground-truth 哨兵绑定请求 surface，并强制合并决议为 `UNVER`。
+> Stage 6 报告会保留匿名排序和逐候选证据，不再把未校准产物显示成“0 份审判”；Stage 5
+> 也不会把“没有已确认泄漏”误显示成自动 PASS。
 - 风险控制：`require_human_resolution` 那套（actor / reason / subject-sha256 乐观锁、
   **已有的校准 FAIL 不可被人工绕过**）原样复用。
 
@@ -415,3 +428,510 @@ ability 才检查其下限，profile 里未覆盖的能力如实记 `enabled=fal
 - **字节形态产物拒收 `\r`、LF-only** —— 成书逐字对账时省掉了一整类问题。
 - **`preview` 自动追跑 `--check-only`** —— 「退出码 0 也可能是残缺产物」这句话本次成立过
   （stage4.plan 退出 0，追跑 check 才暴露 writer_context stale）。
+
+---
+---
+
+# 第二部分 · 2026-08-17 复盘
+
+从**新 stage4 落地后的第一次全链路**里长出来的设计意见
+（`常春杜若_1668963766200045568`，25 章，`outputs/e2e_20260817_changchun`；
+被验代码是 `d28e3be` + 工作树里 `--advisory` 那批未提交改动）。
+
+写在这份文件里而不是另起一份，是因为下面大量条目直接引用上半部分的编号
+（§二 / §三 / §四 / §五 / §六 / §7.x），拆成两份会让引用跨文件。分级口径沿用上半部分。
+
+结论先说：**上半部分诊断的三类接缝，本轮有两类被同一次跑书当场复现了，而且各长出一个新实例。**
+新增的第三类是本轮独有的，也是唯一一个**会让主链断**的：
+
+> **判据要求的信息，请求面里根本没给。**
+> 不是 prompt 写得不够清楚，是那条判据要模型引用的标识符，模型手里一个都没有。
+
+---
+
+## 〇、本轮已经改掉的（先说清楚基线）
+
+| # | 位置 | 问题 | 处置 | 与上半部分的关系 |
+|---:|---|---|---|---|
+| 1 | `contracts/invariants.py` · `novel/orchestrator/nodes.py` · `novel/cli/main.py` · `novel/api/enums.py` | `NodeSpec` 表达不出「必填 flag」⇒ `preview stage0.approve` 摊开一条注定 `exit 2` 的命令 | 新增 `NodeSpec.required_flags` + `CONDITIONAL_REQUIRED_FLAGS` + `REQUIRED_PLACEHOLDER_PREFIX`；拒收开在 `validate_run`（展示与执行共用的那一处）；`preview` 把缺项渲染成 `待填·actor` 占位符并标注，**占位符本身在真跑那一趟仍被拒** | **§六.1 落地** |
+| 2 | `novel/stages/stage4/fact_refs.py` · `plan.py` · `prompts.py` | `goal_landing`（hard）按构造无法满足 —— 详见第一章 | 事实目录补 `event_units`（`event 编号 → 源内容单元编号`）这道 join；不改 schema / 判据 / 严重度 / 公开契约 | 新 |
+
+改完后：默认门 **1519 → 1525 passed**（净增 5 条新回归 + 1 条被契约变更打红后修好的）；
+`stage4.plan` 首跑 20+2 条 HARD → 重跑后 1 条 → 手修 1 条后 **PASS**。
+
+---
+
+## 一、P0 · 「判据要的信息，下发面里没给」——本轮唯一会断主链的那一类
+
+### 现象
+
+新 stage4 首跑 `exit 2`，`goal_landing`（hard）命中 **20 条**（报告只打印前 8 条）。
+`goal_landing` 要求：`open_hook_goal` 至少引用**首个写作单元**里的一条 event，
+`end_hook_goal` 同理指向最后一个单元。全书 25 章 × 2 个边界目标 = 50 个，**错了 20 个**。
+
+### 根因（不是「模型不听话」）
+
+把 `--dry-run` 摊开的那份 user 逐块看一遍，两块拼不起来：
+
+| 块 | 给了什么 | 没给什么 |
+|---|---|---|
+| `BLOCK_SKELETON` 章节骨架 | `plan_beat: p02_03` + 该单元的**事件正文** | **没有 `beat_id`** —— 实测「骨架块之后 `b\d\d_\d\d` 命中 **0** 次」 |
+| `BLOCK_FACT_REFS` 可引用事实目录 | `{"events":{"b02_05":2,…}}` —— b 号 → 章号 | **没有正文，也没有所属单元** |
+
+而 `project_blueprints_for_planner` 的注释写着这是**故意的**：
+「源 beat 的编号一旦下发，模型就有了『重新编组』的抓手」。
+
+⇒ 模型被要求在 `fact_refs` 里写一个 `bNN_MM`，并让它落进某个 `pNN_NN` 里，
+而**下发面里没有任何一处把这两个编号空间连起来**。它只能猜。
+
+### 这不是猜测，数据自己说了
+
+20 条错的里面，**20 条的 `rationale` 全部正确描述了目标单元里的那一拍**：
+
+```
+out2 open_hook_goal
+  rationale：「以温夏白踹门为冷开场。」   ← 踹门 = b02_05，正确
+  fact_refs：b02_04                      ← 引错
+  segments[0].from_beats = [b02_05, b02_06]
+```
+
+`out6 / out8 / out9 / out10 / out12 / out13 / out15 / out17 / out18 / out21 / out25` 同形。
+**模型读得懂骨架正文，只是没法把正文映回 b 号。** 通过的那 30 条是序号碰巧对上。
+
+补上 join 之后重跑（同一模型、同一配置，只多了一张 `event_units` 表）：
+`goal_landing` **20 → 1**、`style_words` **2 → 0**。
+
+### 判断
+
+这一条已经修好了，但**它是一类，不是一个**。当前没有任何机制守住这条不变量：
+
+> 一条 `sev=hard` 且 `mechanical/llm` 的判据，它引用的每个标识符空间，
+> 必须在**本层实际下发的 user** 里可解析。
+
+`PLAN_SYS` 与 `project_blueprints_for_planner` 在**同一个提交**（`9760ea8`）里
+被同时改动，而它们互相矛盾——加规则的人和裁下发面的人是同一个人、同一次改动，
+仍然没有一层出声。这正是本仓一直在防的形状（判据 26 那一族），只是换了个位置。
+
+### 建议
+
+**给这类判据补一条「可满足性」测试，作为跨层纪律。** 形状是：
+拿**当前**下发面，构造一份能通过该判据的响应；构造不出来 ⇒ 那条判据是不可满足的。
+
+本轮已在 stage4 上做了单点实现，可以照抄推广：
+
+```python
+# tests/test_stage4.py::test_the_planner_can_actually_satisfy_goal_landing_from_what_it_is_given
+refs = json.loads(user.split(BLOCK_FACT_REFS)[1].split(BLOCK_SKELETON)[0])
+assert set(refs['event_units']) == set(refs['events'])     # 每条 event 都查得到所属单元
+assert f'"plan_beat":"{sorted(by_unit)[0]}"' in skeleton   # 单元编号与骨架块同一套
+```
+
+⚠ 它守的**不是**「模型会不会照做」（那没有遵守率保证，§7.2 已经记过一次），
+而是「照做所需的信息在不在下发面里」——后者是确定性的，可以被测试钉死。
+
+轻量版落地路径：给 `RuleSpec` 加一格 `needs_id_spaces: tuple[str, ...]`，
+`build_prompt` 侧声明 `provides_id_spaces`，一条参数化测试对账全部 hard·llm 判据。
+重的那半（真去构造合法响应）只对**引用型**判据做。
+
+---
+
+## 二、P0 · `--revalidate` 把人改过的字节洗成「模型产的」
+
+### 现象
+
+`stage4.plan` 被闸门拦下时，终态文案说的是：
+
+```
+问题稿已存 `stage4/plan_chapters.INVALID.json`，**正式产物没有被覆盖**。
+⚠ 这次不必再付费：手改那几行，`stage4.plan --revalidate` 提升即可（0 成本）
+```
+
+我照做了：手改 `.INVALID` 里 **一个** `fact_refs[0].ref`（`b10_04` → `b10_05`），
+`--revalidate` 提升。提升后的正式产物 `_provenance`：
+
+```json
+{"code": "d28e3be…-dirty…", "model": "deepseek-v4-pro",
+ "prompts": {"N4_SYS": "cbd2be9398"}, "revalidated": true,
+ "usage": {"calls_made": 1, "prompt_tokens": 33361, …}}
+```
+
+**没有任何一个字段说「这份产物里有一个字节是人改的」。**
+
+### 对照：本仓其它两处同类动作都留痕
+
+| 路径 | 留痕 |
+|---|---|
+| `stage0.edit --apply-edit` | `edited_by_human` + `origin`，并由 `s0_human_preserved`（hard）守着「人工编辑状态没有被机器重跑抹掉」 |
+| `stage4.plan --apply-edit` | `rewrite_provenance(prev, by='--apply-edit')`，标 `partial_rewrite` |
+| `stage4.plan --revalidate` | **只有一个 `revalidated: true`**，它答的是「重判过」，不是「被改过」 |
+
+`revalidated` 这个布尔分不开两件事：「原样重判、判据变宽了所以过了」与
+「人改了字节所以过了」。而本层**本来就有**一条会留痕的路（`--apply-edit` + `plan_edit.json`，
+`EDIT = STAGE4_PLAN_EDIT` 一直在 `ARTIFACTS` 里登记着）——
+**终态文案却只提留不下账的那一条。**
+
+### 判断
+
+这是本仓最核心的纪律（「每一笔都要有账」）上的一个洞，而且是**被文案主动引导着走进去的**。
+stage6 / stage7 的同类闸门形态一致，同一个洞大概率也在。
+
+### 建议（按代价从小到大，建议全做）
+
+1. **终态文案同时给两条路，并说清区别**：
+   「改 `.INVALID` 再 `--revalidate`」= 改这一轮的字节，**不留人工痕迹**；
+   「写 `plan_edit.json` 再 `--apply-edit`」= 落成新一轮，来源账标 `partial_rewrite`。
+2. **`--revalidate` 落盘前比对 `.INVALID` 的内容指纹**：与被拦下那一刻记下的指纹不同
+   ⇒ 说明人改过，`_provenance` 补 `edited_by_human=True` 与改动摘要（改了哪几个 JSON 路径）。
+   `write_invalid` 那一步顺手记一个 sha256 即可，0 成本。
+3. 更彻底：给 `--revalidate` 也补 `--actor` / `--reason`（本轮新增的 `required_flags`
+   机制可以直接表达），与第七章的凭据统一。
+
+---
+
+## 三、P1 · stage4 是「全书一次调用 + 全或无落盘」，一条 HARD 拖垮 24 章合格规划
+
+### 现象
+
+补完 join 重跑后，`goal_landing` 只剩 **1 条**（out10 一个 `fact_refs`），
+而这一条把**整份 25 章的规划**挡在 `.INVALID` 里。
+
+那一次调用的账：prompt 33,361 / completion 22,024 / reasoning 13,300 token、**248 秒**。
+本层是全仓最贵的单次请求（`max_tokens=96000`，user 里带着全书原文）。
+
+### 对照：别的层都有更细的粒度
+
+| 层 | 拦下之后 |
+|---|---|
+| `stage5.write` | `--chapters` 定向重生成那几章；收缩有 `TRIM_ROUNDS` 多轮 |
+| `stage6.hook` | 一次产三条候选，闸门拦的是「一条干净的都没有」；可 `--apply-edit` 只重写一条 |
+| `stage2.blueprint` | `--chapters` 定向重生成 |
+| **`stage4.plan`** | **只有全书重跑（付费）或手改 JSON（0 成本但要人读懂 `segments[].from_beats` 与 `goal.fact_refs` 的关系）** |
+
+### 建议
+
+**给 `stage4.plan` 补 `--chapters N,M` 定向重规划。** 本层的产物形状允许：
+`output_chapters[]` 逐章独立，`one_to_one` 保证 `output_ordinal == from_source_ordinals[0]`。
+
+- 只把命中章的 `output_chapter` 交回模型重产，其余章原样保留；
+- **把被判违规的具体条目回灌进 user**（同 §三 对 stage6 的建议：报比率不如报位置）；
+- ⚠ `reconstruction_strategy` 是**书级**的，定向重跑不许改它——它一改，
+  `structure_changed` / `style_words` 的判定对象就换了。
+- 成本从「全书一次 33k/22k」降到按章。
+
+---
+
+## 四、P1 · `rn_residual_stem` 的 `confidence` 对本轮 5/5 真漏网全部失效
+
+### 现象
+
+stage7 首轮 `rn_residual_stem` 报 **22 处**旧姓残留，`confidence` **全部 `low`**。
+逐条读上下文之后：**其中 5 处是真漏网。**
+
+| 真漏网 | 次数 | 形态 |
+|---|---:|---|
+| `温兄` | 4 | **未登记简称** —— 人物表收了 `温师兄` / `温大师兄`，没收 `温兄` |
+| `汤、临` | 1 | **顿号拆名** —— 「裴清玄：『……汤、临。』」，旧 canonical 被标点切开 |
+
+其余 17 处是中文没有词边界的固有假阳：
+温柔 / 温度 / 温文尔雅 / 温驯 / 温声道 / 温和 / 温温柔柔 / 温热 / 反常 / 往常 / 常常躺 / 四周 / 周围。
+
+### 根因
+
+`confidence` 的**全部**输入是一格（`novel/stages/stage7/subs.py:203`）：
+
+```python
+'confidence': 'high' if nxt in RESIDUAL_HIGH_STEMS else 'low'   # ('家','府','氏','宅','门')
+```
+
+`nxt` 是旧姓后**紧邻的一个字**。于是：
+`温兄` 的 `nxt` 是「兄」（称呼后缀，不在表里）⇒ low；
+`汤、临` 的 `nxt` 是「、」（标点）⇒ low。**5/5 真漏网全部被判 low。**
+
+那条判据自己提供的第二个信号——覆盖率——在本轮只对了一半：
+
+| 姓 | 覆盖率 | 残留 | 其中真漏网 | 覆盖率判别器给的答案 |
+|---|---:|---:|---:|---|
+| 汤 | 99% | 1 | **1** | ✅「≥90% 的字，残留几乎必然是真漏网」——说对了 |
+| 温 | 78% | 15 | **4** | ❌ 78% 落在「既不是 ≥90% 也不是 <50%」的中间带，给不出答案 |
+| 常 | 83% | 4 | 0 | ❌ 同上，而这 4 条全是假阳 |
+| 周 | 50% | 2 | 0 | ✅「<50% 基本是普通词」——说对了 |
+
+⇒ **本轮唯一能把 5 处真漏网找出来的，是我手写的一个补扫脚本**，而那个脚本只有两条规则。
+
+### 建议：把那两条规则做成 `confidence` 的正交信号
+
+两类都是**确定性可判**、且都不是普通词：
+
+```
+① 旧姓 + 常见称呼后缀  →  high
+   兄/姐/妹/弟/公子/少主/仙子/姑娘/道友/前辈/家/府/宗/氏/宅/门
+   （现有 RESIDUAL_HIGH_STEMS 是它的真子集，合并即可）
+
+② 旧 canonical 被标点/空白拆开  →  high
+   pat = r'[、，。！？…·\s]{1,3}'.join(map(re.escape, old_canonical))
+```
+
+**在本轮语料上实测这两条的效果**：
+① 能把 `温兄`×4 提到 high；② 能把 `汤、临`×1 提到 high ⇒ **5/5 真漏网全部提上来**；
+而 17 处普通词假阳里，没有一条会被这两条规则误提（「温柔」的 `柔` 不在后缀表里；
+「往常一样」里没有标点拆名的形）⇒ **0 假阳被提升**。
+
+⚠ 沿用现有立场：**只影响排序与标记，绝不自动替换**
+（「不允**许家**人」那条注释仍然成立，且形态 ② 更危险——它跨标点）。
+
+⚠ 顺带：形态 ② 说明**替换面本身够不着这一类**。`extra_subs` 能收
+（我这次就是写了 `汤、临 → 陆、景`），但那要求人先发现它。检查这一侧补上之后，
+`suggest` 那一格顺手就能给出可直接用的 `extra_subs` 条目。
+
+---
+
+## 五、P1 · 定稿唯一有效的信号是 `info`，而它在报告里一个字都不打印
+
+### 现象
+
+stage6 三条候选，`stage6.hook --check-only` → **ok 15 · 命中 0**：机械层一条都没拦下。
+而双盲语义判官对其中两条各给出一条具体矛盾：
+
+| 候选 | 匿名总分 | 语义矛盾 |
+|---|---:|---|
+| `scene_punchline` | **8.66（第一）** | 让汤临说「你拿着**我送的**剑」——秋山剑是大比魁首奖品，汤临送的是定光剑。**凭空事实** |
+| `payoff_preview` | 7.35 | 称旁观者以为当众亲吻是脸盲认错——正文该处在表白之后。**改变事件性质**，且直接写出失忆/下药的核心反转 |
+| `source_architecture` | 8.36（第二） | **0 条** |
+
+也就是说：**匿名质量排序第一的那条是脏的**，唯一能把它筛掉的信号是
+`hook_candidate_contradiction`——而它是 `info`。
+
+### 更要命的是：那条 info 在报告里没有 detail
+
+实跑输出逐字如下，**只有规则名，一条证据都没打印**：
+
+```
+[!!] hook_candidate_contradiction（info · semantic/human）逐候选列出实质矛盾或审判不确定项，供定稿时避开
+```
+
+这条判据的**全部价值**就是那几条矛盾正文。我是**读了 `stage6/semantic_1.json` 原文**
+才看到「秋山剑不是汤临送的」这句话的。一个只看报告的人（或 agent）拿不到它。
+
+对照 `rn_residual_stem` 就做对了：它带 `where` / `hit` / `context` / `suggest`
+——所以第四章那 22 条我能逐条判。
+
+### 建议
+
+1. **`hook_candidate_contradiction` 的 detail 逐候选打印 `assertion` / `evidence` / `reason`**。
+   这与上半部分 §三（报比率的判据要补位置）是同一条纪律的另一面：
+   **报存在性的判据要补内容**。
+2. **把「所选候选有语义矛盾」提升为定稿闸门的一等输入。** 现在 `stage6.approve` 拦的是
+   *机械* hard（`mechanical_hard`）与 `require_human_resolution`；
+   语义判官逐条写下来的矛盾**不进闸门**。建议：所选候选在最新语义报告里
+   `contradictions` 非空 ⇒ 拒绝定稿，除非人显式写 `--reason` 说明为何仍然选它。
+   ⚠ 这一条**不依赖 evaluator profile**：矛盾条目是判官写出来的事实陈述，
+   与「合并决议是否 automated」是两件事——本轮 `source_architecture` 的合并决议
+   是 `UNVER`，但它的 `contradictions` 确实是空数组。
+3. 机械侧能不能捞回一部分？`hook_secret_literal` 自己写着「字面探针在这个产物类上
+   结构性失效」。可以试一条**弱**的确定性判据：文案里出现的 `<人名> + 送/给/赠 + <物件>`
+   三元组，对着 stage2 的 `beats[].event` 做字面核对。本轮那条脏候选会被它抓到。
+   但它假阳率未知，建议先做成 `metric` 常驻报读数，攒够样本再谈严重度。
+
+---
+
+## 六、P1 · 同一层两条判据，一条带章号一条不带 —— §四 的折叠方案因此做不到
+
+### 现象
+
+本轮 `inbox` 共 160 项，stage5 占 77 条 `human_only` + 10 条 `verification`。
+其中上半部分 §四 点名的那一对**完全复现**：`length_over` **10 条** / `trim_audit` **10 条**。
+
+但这一次没法像 §四 那样「复算两边的章号，逐个相同」——因为**其中一边根本没有章号**：
+
+```
+[human_only] stage5  length_over
+      篇幅超上限：930 字 > 825 字（目标 675~825，1.13× 上限）
+      → 0 成本人工路：`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决
+
+[verification] stage5 ch3  trim_audit_ch03          ← 这一条有 `ch3`
+      第 3 章收缩机械检查已过，但 未运行语义裁决：…
+```
+
+`inbox` 的 `where` 那一格，同一层里一条填了、一条空着。10 条 `length_over` 在清单上
+长得几乎一样，只能靠「930 字 > 825 字」这串数字去反推是哪一章。
+
+### 判断
+
+§四 提的方案 1（「`length_over` 在该章存在 trim 未采用审计时，降级为那条审计的附注」）
+**在当前数据结构下做不到**：降级要按章 join，而 `length_over` 的 finding 里没有章。
+
+⇒ **先补 `where`，才谈得上按根因折叠。** 这是 §四 的前置条件，不是替代方案。
+
+### 建议
+
+1. `length_over` / `length_under` / `band_drift` / `simile_drift` / `xinli_drift` /
+   `dialogue_ratio_drift` 这一族逐章判据，finding 一律带 `output_ordinal`
+   （`views/inbox.py` 的 `where` 从它取）。
+2. 补完之后再做 §四 的方案 1。
+3. 顺带：`length_over` 的 `→ 0 成本人工路：--apply-edit 改内容` 措辞可疑——
+   stage5 的 `--apply-edit` 吃的是**整章全文**，对人来说那不是「0 成本」，
+   是重写一章。这里的「0 成本」说的是**不花模型的钱**，与人读到的意思不是一回事。
+
+---
+
+## 七、P1 · 人工凭据强度差四档（§五 的新实例）
+
+上半部分 §五 记了三档，本轮又撞出第四档：
+
+| 动作 | 凭据 | 落盘记了什么 |
+|---|---|---|
+| `stage0.approve` | `--actor` `--reason` **必填** | actor / reason / approval_origin |
+| `stage6.approve` | `--actor` `--reason` `--subject-sha256` **必填** | 全套 + basis + semantic_review_seq |
+| `stage7.approve` | **无** | `{"origin": "human"}` |
+| **`stage5.review --retain-pretrim`** | **`--actor` / `--reason` 静默默认空串** | 一条 **hash-bound** 的 resolution，actor 可以是 `''` |
+
+第四档最刺眼：`novel/cli/main.py` 里写的是
+`actor=_valued(flags, '--actor') or ''`——一条绑定了 mode、正文 SHA-256、
+audit 完整 SHA-256 与 before/after hashes 的**正式人工裁决**，允许没有署名、没有理由。
+而 `inbox` 给出的操作提示反而写着 `--actor <自报身份> --reason <理由>`，
+**提示比代码严**。
+
+⇒ 本轮新增的 `CONDITIONAL_REQUIRED_FLAGS` 正好能表达这件事，一行登记即可：
+
+```python
+('stage5.review', '--retain-pretrim'): ('--chapters', '--actor', '--reason'),
+```
+
+（本轮只登记了 `--chapters`，因为把 actor/reason 从「可选」改成「必填」是一次
+**行为变更**，属于产品裁决，没有自行推进。）
+
+---
+
+## 八、P2 · 其余摩擦
+
+### 8.1 一条判据独占 stage5 待人工清单的 39%，而它 26 条说的是同一句话
+
+`band_drift` 在 stage5 的 77 条 `human_only` 里占 **26 条**，逐条内容只有两种：
+
+```
+形态漂移 段落形态：底座「短段」→ 成稿「极短段（多为一句一段）」
+形态漂移 句子形态：底座「短句」→ 成稿「中等长度句」
+```
+
+25 章 × 2 维 = 50 个可能位置，命中 26 个——**超过一半的章在同一个方向上漂**。
+这不像逐章的偶然，更像**写手系统性地比原文写得更碎**（`para_len_drift` 那条独立佐证：
+本书均段 21.8 字 → 某章 13.0 字，判语是「电报体（段被剁得太碎）」）。
+
+⇒ 逐章报 26 次，人读到的是 26 件事；而它其实是 **1 件书级的事**。
+建议：`band_drift` 出书级汇总（「25 章里 13 章段落形态下移一档」）+ 逐章明细折叠，
+计数按书级算。这与 §四 是同一条「清单可信度」纪律。
+
+### 8.2 语料测试的生命周期不受测试控制
+
+本轮给新写的 stage4 回归找语料时，第一选择 `outputs/e2e_changchun_duruo_20260816`
+**已被用户删掉**（正常清理），于是那批 corpus 测试当场
+`0 collected`（pytest `exit 5`）——而 `addopts` 默认带 `-m "not corpus"`，
+所以日常根本跑不到，**删语料这件事不会被任何东西报出来**。
+
+这给上半部分 §7.4（语料测试分层）补了一个新论据：不只是「换一本书会大面积红」，
+还有「**语料没了会静默变绿**」。⇒ 第 (i) 层「任何一本书都必须成立的不变量」
+必须用 fixture 固定，不能吃现役 `NOVEL_OUTPUT`。
+
+### 8.3 产物 `usage` 与账本的口径差
+
+`stage4/plan_chapters.json` 的 `_provenance.usage.calls_made = 1`，
+而账本里 `stage4.plan` 是 **2** 次实付（第一次被闸门拦下、稿子进了 `.INVALID`）。
+
+两个数都对——产物说的是「**这一份**是几次调用产的」，账本说的是「**这本书**花了几次」。
+但只读产物去汇总成本会系统性低估。⇒ 建议在 `docs/schema/_common.md` 把这条口径写死一句，
+并在终审包模板里点明「成本只认账本」。
+
+### 8.4 P1 · 按字节钉哈希的 fixture 在 Windows 上**一次全新 checkout 就全破**
+
+本轮为了验证拆出来的那个 commit 单独是否绿，`git worktree add` 了一份干净检出，
+在里面跑全量门 —— **10 条红**，而同一份代码在主仓里是全绿。逐条查下来根因只有一个：
+
+```
+tests/fixtures/scenarios/long_context.json
+  主仓     ： 77 字节 · CRLF 0 处 · sha256 2ea1a268…   ← 与 manifest 相同
+  新 checkout： 82 字节 · CRLF 5 处 · sha256 ffb1f098…   ← 对不上
+```
+
+`core.autocrlf=true`（本仓当前配置）在检出时把 LF 换成 CRLF，而
+`tests/fixtures/manifest.json` 钉的是**字节** sha256。逐条复算：
+
+| fixture | 主仓 sha 匹配 | 新 checkout 匹配 | 检出后被插入的 CRLF |
+|---|---|---|---:|
+| `long_context` | ✅ | ❌ | 5 |
+| `secret_numbers` | ✅ | ❌ | 5 |
+| `half_draft` | ✅ | ❌ | 5 |
+| `rejected_archive` | ✅ | ❌ | 10 |
+| `retry_branch` | ✅ | ❌ | 9 |
+
+**5/5 全破。** 连带 `test_current_corpus_paid_preview.py` 9 条一起红（它们消费同一批 fixture）。
+
+主仓之所以是绿的，只是因为它的工作副本从来没经过一次真正的 checkout——
+这些文件是工具写出来的、一直是 LF。**也就是说：这条门在「换台机器 clone 一遍」
+的那一刻才会红，而那是最不该红的时刻。**
+
+⚠ 本仓**已经解决过同一个问题**，就在 `.gitattributes` 里：
+
+```
+# The pinned tokenizer is a byte-verified upstream resource. Git must never
+# rewrite its LF bytes to CRLF on Windows checkouts.
+novel/llm/resources/deepseek_v4_tokenizer.json -text
+```
+
+那条注释里的每一个字都适用于这 5 个 fixture ——「byte-verified」「must never rewrite」。
+只是当时只豁免了一个文件，而**「按字节校验」这件事后来长出了第二处，没人回头补**。
+
+**建议（一行）**：
+
+```
+tests/fixtures/** -text
+```
+
+⚠ 顺带一条纪律：**凡是把 sha256 钉进仓库的文件，都必须同时进 `.gitattributes`**。
+这两件事之间今天没有任何东西对账 —— 可以加一条 0 成本测试：
+遍历 `manifest.json` 的 `path`，断言每条都被某条 `-text` 规则覆盖
+（`git check-attr text -- <path>` 或直接匹配 `.gitattributes` 的模式）。
+
+### 8.5 上半部分两条 P2 本轮原样复现，未修
+
+- **§7.1 `state` 不带 badge**：本轮 `state` 显示 stage5 ✓，而 `stage5.review` 是
+  AMBER、11 条命中。两件事都对，摆在一起仍然容易读成「这层没问题」。
+- **§7.2 `global_review.json` 显示 `unknown/no_provenance`**：本轮逐字复现。
+
+---
+
+## 九、建议的落地顺序（第二轮）
+
+| 顺序 | 项 | 理由 |
+|---:|---|---|
+| 1 | 二、`--revalidate` 留痕 | 「每一笔都要有账」上的洞，且文案在主动把人往里引；改动小 |
+| 2 | 五.1 报告补逐候选矛盾正文 | 纯展示改进、零风险；本轮它是唯一能筛掉脏候选的信号却看不见 |
+| 3 | 四、`confidence` 补两条正交信号 | 实测能把 5/5 真漏网提上来且 0 假阳；确定性、可测 |
+| 4 | 六、逐章判据补 `output_ordinal` | 它是上半部分 §四 折叠方案的**前置条件** |
+| 5 | 一、可满足性测试作为跨层纪律 | 防的是本轮唯一断链的那一类；先按 stage4 的单点实现推广 |
+| 6 | 三、`stage4.plan --chapters` 定向重规划 | 省的是全仓最贵那次调用；改动中等 |
+| 3.5 | 八.4 `.gitattributes` 补 `tests/fixtures/** -text` | **一行**，且它挡的是「换台机器 clone 一遍就 10 条红」；本仓已有同款先例 |
+| 7 | 八.2 语料测试分层 | 与上半部分 §7.4 合并做 |
+| 8 | 五.2 语义矛盾进定稿闸门 | **需要产品裁决**：它会让「有矛盾但我就要这条」变成必须写理由 |
+| 9 | 七、`--retain-pretrim` 的 actor/reason 改必填 | **需要产品裁决**：行为变更 |
+
+**需要产品裁决、我不自行推进的**：五.2、七，以及上半部分遗留的
+八②（要不要投入标注建 profile）、四（两个方案选哪个）、六.2（选 a 还是 b）。
+
+---
+
+## 十、本轮验证了上半部分哪些判断是对的
+
+- **§八① Advisory 模式** —— 落地并经受住了一次真实全链路。没有它，本轮
+  `stage5.semantic` / `stage6.semantic` 会双双 `exit 2`，整个语义层缺席；
+  有了它，两层都跑出了带证据的 `UNVER`，而且 **`UNVER` 一次都没有被洗成 `PASS`**
+  （`semantic_secret_leak` 5/5 条 secret 保持未决、`hook_semantic_contradiction`
+  保持 `uncertain`）。上半部分「profile 是自动裁决的准入门，不是能不能判的门」这句话成立。
+- **落盘闸门 + 0 成本提升路** —— stage4 首跑被拦下后，**正式产物一个字节都没被覆盖**；
+  两次修复（改 `.INVALID` / `--apply-edit`）都没再付一分钱。这套设计本轮救了一次全书规划。
+- **`unver` 不算闸门命中**（`_hard_hits` 明确排除）—— 本轮 `semantic_secret_leak`
+  是 `sev=hard` 且落 `UNVER`。若把它算进闸门，一本没有 profile 的书永远交付不了；
+  而它现在正确地表现为「不阻断、但必须在终审包顶格披露」。
+- **`--yes` 由 `build_argv` 补** —— 本轮 6 个付费节点，摊开的命令与执行的逐字相同。
+- **字节形态 LF-only** —— 成书对账 `CR 字节 0 个`，又省掉一整类问题。
+- **`preview` 自动追跑 `--check-only`** —— stage2 `--full-extract` 的两条追跑
+  （blueprint / style）本轮都跑出了独立结论，没有一条是白追的。
