@@ -35,7 +35,8 @@ from pydantic import ValidationError
 from contracts.schema import encode_artifact
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalEdit, GlobalGrounding
-from novel.errors import GateBlocked, TerminalState
+from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
+from novel.orchestrator.state import readonly_ctx
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.test_stage2_generation import (
@@ -246,7 +247,7 @@ def test_the_previous_round_is_archived_before_the_human_round_lands():
             {'secret_id': 'secret_01', 'character_known_by': ['char_002']}]})
         _apply(book)
         archived = sorted(p.name for p in (book / 'stage2' / '_rounds').iterdir())
-        assert archived == ['global_grounding.r1.json']
+        assert archived == ['global_grounding.r1.json', 'global_review.r1.json']
         assert (book / 'stage2' / '_rounds' / 'global_grounding.r1.json').read_bytes() == before
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -425,18 +426,21 @@ def test_the_edit_file_is_recorded_as_an_input_edge():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_the_blueprints_still_load_after_the_base_is_edited():
-    """⚠ 下游转 stale **不等于**下游读不回来：`stale` 是「照的是旧版」，
-    产物本身仍然合契约。两者混掉会让一次合法的人工订正看起来像把下游弄坏了。
-    """
+def test_stale_blueprints_are_displayable_but_not_consumable_after_base_edit():
+    """人工订正后，旧蓝图可供只读诊断，但不得再进生产链或付费请求。"""
     root, book = _sandbox('下游可读_013')
     try:
         _seed(book, with_blueprints=True)
         _write_edit(book, {'secrets': [
             {'secret_id': 'secret_01', 'reader_reveal_events': [{'chapter': 3}]}]})
         _apply(book)
-        store = ArtifactStore(_ctx(book, 'stage2.blueprint', paid=False))
-        stored = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
+        production_store = ArtifactStore(_ctx(book, 'stage2.blueprint', paid=False))
+        with pytest.raises(ProvenanceRefused, match='已过期'):
+            production_store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
+
+        display_store = ArtifactStore(readonly_ctx(
+            book, 'stage2.blueprint', 'test:stale-blueprint-display'))
+        stored = display_store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
         assert [bp.chapter_ordinal for bp in stored.blueprints] == [1, 2, 3]
     finally:
         shutil.rmtree(root, ignore_errors=True)

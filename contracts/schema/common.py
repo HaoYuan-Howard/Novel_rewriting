@@ -13,12 +13,12 @@ JSON Schema 里照样是个 `enum`（前端 TS 类型因此能生成），而**�
 """
 from __future__ import annotations
 
-from typing import Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
-from pydantic import Field, RootModel, model_validator
+from pydantic import Field, RootModel, field_validator, model_validator
 
 from contracts.invariants import OWNER, PARTIAL_REWRITE_FLAGS, SEVERITY
-from contracts.schema.base import Fp10, FrozenModel, StrictModel
+from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
 
 Severity = Literal[SEVERITY]
 Owner = Literal[OWNER]
@@ -28,6 +28,21 @@ PartialRewrite = Literal[PARTIAL_REWRITE_FLAGS]
 #: `RoundLlmProvenance.promoted()` 仍是 `RoundLlmProvenance`（`round` 原样带下来——
 #: 提升不是新的一轮）。写成 `-> Provenance` 会把这件事在类型上抹掉。
 P = TypeVar('P', bound='Provenance')
+
+
+def plain_report_text(value: Any) -> Any:
+    """Remove report-author Markdown while preserving the instance text itself.
+
+    Reports are rendered as plain text in every consumer.  Producers therefore do
+    not get to smuggle presentation syntax into ``detail``/``note`` and depend on a
+    Markdown renderer that some consumers do not have.  This intentionally removes
+    only the formatting delimiters used by our own report prose; characters that can
+    legitimately be part of quoted book evidence (``#``, brackets, underscores,
+    asterisks, and so on) are left alone.
+    """
+    if not isinstance(value, str):
+        return value
+    return value.replace('**', '').replace('`', '').replace('~~', '')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -87,6 +102,10 @@ class Provenance(StrictModel):
     #: 的答案**：stage6 盘上有逐字节铁证——同一份 `_provenance` 里按内容算的 prompt 指纹
     #: 变了，而按 git HEAD 算的 `code` 一个字没动。只有 `-dirty` 也仍区分不了两棵脏树。
     code: str = Field(min_length=1)
+
+    #: 全链根正文身份。所有带来源账的产物都必须声明自己最终建立在哪一版
+    #: stage0/clean_text.txt 上；只比较中间边不足以发现根正文已换而中间产物未重建。
+    root_clean_sha1: Sha1
 
     #: 这份产物照哪几份上游产的。键是 `<stage>/<文件名>`。
     #:
@@ -255,6 +274,7 @@ class LlmProvenance(Provenance):
         """
         return FreeProvenance(
             code=code,
+            root_clean_sha1=self.root_clean_sha1,
             inputs=self.inputs,
             origin='human',
             input_basis=input_basis,
@@ -305,7 +325,7 @@ class RoundFreeProvenance(FreeProvenance, _RoundFields):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 二、结论（`_common.md` §七）—— 全链一份，13 个字段
+# 二、结论（`_common.md` §七）—— 全链一份，14 个字段
 # ─────────────────────────────────────────────────────────────────────────────
 
 class WontFixNote(FrozenModel):
@@ -386,7 +406,8 @@ class Finding(FrozenModel):
     ⚠ 原型里它有 **5 份拷贝、3 种字段签名**，而「同一件事的第 N 个落点必然分家」。
 
     ⚠ **不要直接构造它。** 走判据注册表的工厂：`sev` / `item` / `owner` / `actionable`
-    从注册表取，调用方只给 `rule` + `detail` + `evidence`。
+    从注册表取，调用方只给 `rule` + `detail` + `evidence`
+    （以及规则明确声明的带值修复实参）。
     这样一条 finding **不可能与判据表说的不一致**。
     """
 
@@ -397,6 +418,10 @@ class Finding(FrozenModel):
 
     #: **机器可比**的凭据（不是给人读的散文）。
     evidence: list[str]
+
+    #: 本次命中为 `Rule.fix` 补出的带值实参；键是 flag，值是已经解析好的 CLI 字符串。
+    #: 路由仍只在 `Rule.fix`，这里绝不重复 node 或无值 flag。
+    fix_args: dict[str, str] = Field(default_factory=dict)
 
     #: `'|'.join(evidence)`。**收敛键 = (章, rule, evidence_key)**。
     evidence_key: str
@@ -417,6 +442,12 @@ class Finding(FrozenModel):
     converge: str
     unresolved_rounds: int = Field(ge=0)
     wontfix: WontFixNote | None = None
+
+    @field_validator('detail', mode='before')
+    @classmethod
+    def _detail_is_plain_text(cls, value):
+        """报告契约传纯文本，不把显示职责塞回 finding producer。"""
+        return plain_report_text(value)
 
     @model_validator(mode='after')
     def _postconditions(self) -> Finding:
@@ -441,4 +472,9 @@ class Finding(FrozenModel):
                 f'{self.rule}: actionable=True 但 owner={self.owner!r}。'
                 f'根因不在写作层的条目，重写一百遍也修不好'
             )
+        bad_args = {k: v for k, v in self.fix_args.items()
+                    if not k.startswith('--') or not isinstance(v, str) or not v.strip()}
+        if bad_args:
+            raise ValueError(
+                f'{self.rule}: fix_args 必须是「--flag → 非空 CLI 值」，实得 {bad_args!r}')
         return self

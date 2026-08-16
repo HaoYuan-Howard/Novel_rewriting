@@ -28,7 +28,7 @@ from novel.consumption import CONSUMED_PROJECTIONS, producer_node, projection_fo
 from novel.errors import (
     ArtifactUnreadable, ByteFormRefused, PathRefused, ProvenanceRefused, UpstreamMissing,
 )
-from novel import paths
+from novel import paths, prov
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.run import RunContext
@@ -52,9 +52,14 @@ class MainTextLoose(RootModel[list[dict]]):
 # 夹具：一本书 + 一次跑
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _book(sid: str = '123', title: str = '书名', payload: bytes = b'{"sections": []}') -> Path:
+def _book(sid: str = '123', title: str = '书名', payload: bytes = b'{"sections": []}',
+          *, with_clean: bool = True) -> Path:
     base = Path(tempfile.mkdtemp())
-    (base / f'{title}_{sid}' / 'stage1').mkdir(parents=True)
+    book = base / f'{title}_{sid}'
+    (book / 'stage1').mkdir(parents=True)
+    if with_clean:
+        (book / 'stage0').mkdir()
+        (book / 'stage0' / 'clean_text.txt').write_bytes(b'fixture clean root\n')
     try:
         logical = json.loads(payload.decode('utf-8'))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -63,7 +68,7 @@ def _book(sid: str = '123', title: str = '书名', payload: bytes = b'{"sections
         disk = json.dumps(
             encode_artifact(UPSTREAM, logical), ensure_ascii=False,
         ).encode('utf-8')
-    (base / f'{title}_{sid}' / 'stage1' / 'main_text.json').write_bytes(disk)
+    (book / 'stage1' / 'main_text.json').write_bytes(disk)
     return base
 
 
@@ -104,6 +109,15 @@ def _style(ctx: RunContext, *, habit: str = '习惯一') -> StyleGrounding:
 
 def _prov_on_disk(p: Path) -> dict:
     return json.loads(p.read_text(encoding='utf-8'))['_provenance']
+
+
+def _write_payload(book: Path, rel: str, payload: dict) -> None:
+    p = book / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(encode_artifact(rel, payload), ensure_ascii=False),
+        encoding='utf-8', newline='',
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -354,7 +368,7 @@ def test_what_we_write_is_what_we_can_read_back():
         '`consumed` 的键被抹掉了——「必填但可为 null」与「三态字段」语义相反，不许一个开关同管'
     assert raw['_provenance']['usage']['prompt_tokens'] is None, \
         '`null` = 这次响应没给 usage，**不是 0**；抹掉这个键，产物就再也加载不回来'
-    assert raw['_schema_version'] == 1
+    assert raw['_schema_version'] == 2
     StyleGrounding.model_validate(decode_artifact(STYLE_REL, raw).payload)
 
 
@@ -531,6 +545,54 @@ def test_json_artifacts_are_written_without_cr():
 # 四、字节形态产物：`book.txt` 无 `\r`、无 BOM
 # ─────────────────────────────────────────────────────────────────────────────
 
+def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_freshness():
+    """stage0×2、stage1×3 与 book.txt 不再结构性 `unknown`。
+
+    这些载体没有通用 `_provenance`，但其 companion 已经记着同一条 HARD 判据使用的
+    40 位身份。完成度必须复用那份事实，并在上游变化时给出 stale。
+    """
+    base = _book(with_clean=False)
+    book = base / '书名_123'
+    source = base / 'source.txt'
+    source_bytes = '开篇。\n\n1\n第一章。\n\n2\n第二章。\n'.encode('utf-8')
+    clean_bytes = source_bytes
+    source.write_bytes(source_bytes)
+    (book / 'stage0').mkdir()
+    (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
+    _write_payload(book, 'stage0/removal_report.json', {
+        'original_path': str(source.resolve()),
+        'source_sha1': prov.content_sha1(source_bytes),
+        'clean_sha1': prov.content_sha1(clean_bytes),
+    })
+
+    input_sha1 = prov.content_sha1(clean_bytes)
+    _write_payload(book, 'stage1/hook_copy.json', {'hook': '开篇。'})
+    _write_payload(book, 'stage1/partition_report.json', {'input_sha1': input_sha1})
+
+    book_bytes = '1\n第一章。\n\n2\n第二章。\n'.encode('utf-8')
+    (book / 'stage7').mkdir()
+    (book / 'stage7' / 'book.txt').write_bytes(book_bytes)
+    _write_payload(book, 'stage7/name_map.json', {
+        'book_txt': {'sha1': prov.content_sha1(book_bytes), 'chars': 18, 'chapters': 2},
+    })
+
+    store = ArtifactStore(_ctx(base, paid=False))
+    formerly_unknown = (
+        'stage0/clean_text.txt', 'stage0/removal_report.json',
+        'stage1/main_text.json', 'stage1/hook_copy.json',
+        'stage1/partition_report.json', 'stage7/book.txt',
+    )
+    assert {rel: store.freshness(rel).state for rel in formerly_unknown} == {
+        rel: 'fresh' for rel in formerly_unknown}
+
+    (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes + b'changed\n')
+    for rel in formerly_unknown[:5]:
+        assert store.freshness(rel).state == 'stale', rel
+    assert store.freshness('stage7/book.txt').state == 'fresh'
+
+    (book / 'stage7' / 'book.txt').write_bytes(book_bytes + b'changed\n')
+    assert store.freshness('stage7/book.txt').state == 'stale'
+
 def test_byte_form_artifacts_are_lf_only_and_have_no_bom():
     """⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / `book.txt`）盘上**全是 LF-only**，
     而 Windows 上 `open(p, 'w')` 默认吐 CRLF ⇒ 同一份代码在两台机器上产出两种字节。
@@ -634,6 +696,90 @@ def test_the_official_write_path_refuses_an_invalid_name():
     ctx = _ctx(_book())
     with pytest.raises(PathRefused, match='write_invalid'):
         ArtifactStore(ctx).write('stage3/style_grounding.INVALID.json', _style(ctx))
+
+
+def test_a_new_official_draft_retires_the_old_invalid_sibling():
+    """⭐ **回归**：合格的新稿落盘 ⇒ 同名 `.INVALID` 进归档，不留在盘上。
+
+    ⚠⚠ 留下来的后果不是「多一个文件」，是**四个只看兄弟文件在不在的消费方一起说假话**：
+    语料库把一本已经出书的书报成 `broken` · 续跑判定去**重跑并重新付费**一个
+    已经有新鲜正式稿的节点（实测发生过，stage6.hook 被多发了一次）·
+    人定稿盖不上审批章 · 下游整条链被 `inbox:invalid` 挡住。
+    ⚠ **归档不是删除**（`Q-8`）：那份稿花过钱，而且可能还被别人的 `inputs` 指着。
+    """
+    base = _book()
+    ctx = _ctx(base)
+    st = ArtifactStore(ctx)
+    st.read(Loose, UPSTREAM)
+    inv = st.write_invalid(STYLE_REL, _style(ctx, habit='被拦下的那一版'),
+                           gates_skipped=['name_leak'])
+    assert inv.is_file()
+
+    good = st.write(STYLE_REL, _style(ctx, habit='修好之后的那一版'))
+
+    assert good.is_file(), '正式稿要落盘'
+    assert not inv.exists(), '.INVALID 兄弟必须让位——留着它，四个消费方一起说假话'
+    archived = good.parent / paths.ROUNDS_DIRNAME
+    kept = sorted(p.name for p in archived.iterdir())
+    assert kept and all('INVALID' in name for name in kept), \
+        f'被拦下的那一份要留在 _rounds/ 里，不是删掉：{kept}'
+
+
+def test_a_rejected_official_write_does_not_retire_the_invalid_sibling(monkeypatch):
+    """新内容连完整预校验都过不了时，旧问题稿必须仍留在原位。"""
+    base = _book()
+    ctx = _ctx(base)
+    st = ArtifactStore(ctx)
+    st.read(Loose, UPSTREAM)
+    inv = st.write_invalid(
+        STYLE_REL, _style(ctx, habit='仍待修的问题稿'), gates_skipped=['name_leak'])
+    before = inv.read_bytes()
+
+    def boom(*_args, **_kwargs):
+        raise ProvenanceRefused('故意让新正式稿预校验失败')
+
+    monkeypatch.setattr(ArtifactStore, '_verify_round_trip', staticmethod(boom))
+    with pytest.raises(ProvenanceRefused, match='预校验失败'):
+        st.write(STYLE_REL, _style(ctx, habit='结构坏掉的新稿'))
+
+    assert inv.read_bytes() == before
+    assert not (inv.parent / paths.ROUNDS_DIRNAME).exists()
+
+
+def test_an_atomic_replace_failure_restores_the_just_retired_invalid(monkeypatch):
+    base = _book()
+    ctx = _ctx(base)
+    st = ArtifactStore(ctx)
+    st.read(Loose, UPSTREAM)
+    inv = st.write_invalid(
+        STYLE_REL, _style(ctx, habit='仍待修的问题稿'), gates_skipped=['name_leak'])
+    before = inv.read_bytes()
+    original = ArtifactStore._replace_atomically
+
+    def fail_official(path, data):
+        if path == st.path(STYLE_REL):
+            raise OSError('模拟正式稿原子替换失败')
+        return original(path, data)
+
+    monkeypatch.setattr(ArtifactStore, '_replace_atomically', staticmethod(fail_official))
+    with pytest.raises(OSError, match='原子替换失败'):
+        st.write(STYLE_REL, _style(ctx, habit='已预校验的新稿'))
+
+    assert inv.read_bytes() == before
+    rounds = inv.parent / paths.ROUNDS_DIRNAME
+    assert not rounds.exists() or not any(rounds.iterdir())
+
+
+def test_retiring_the_invalid_sibling_is_a_no_op_when_there_is_none():
+    """没有问题稿时 `None` 表示「本来就没有」，不是「归档失败」。"""
+    base = _book()
+    ctx = _ctx(base)
+    st = ArtifactStore(ctx)
+    st.read(Loose, UPSTREAM)
+    assert st.retire_invalid(STYLE_REL) is None
+    st.write(STYLE_REL, _style(ctx))
+    assert not (st.path(STYLE_REL).parent / paths.ROUNDS_DIRNAME).exists(), \
+        '没有问题稿就不该凭空造一个归档目录'
 
 
 def test_promotion_keeps_the_original_prompts_and_archives_the_invalid():
@@ -889,9 +1035,14 @@ def test_freshness_reads_raw_and_survives_an_artifact_that_no_longer_validates()
     base = _book()
     st = ArtifactStore(_ctx(base))
     (base / '书名_123' / 'stage3').mkdir()
+    root_clean_sha1 = prov.content_sha1(
+        (base / '书名_123' / 'stage0' / 'clean_text.txt').read_bytes())
     malformed = {
         '这份产物不合当前业务契约': True,
-        '_provenance': {'inputs': {UPSTREAM: {'file': 'ffffffffff', 'consumed': None}}},
+        '_provenance': {
+            'root_clean_sha1': root_clean_sha1,
+            'inputs': {UPSTREAM: {'file': 'ffffffffff', 'consumed': None}},
+        },
     }
     (base / '书名_123' / 'stage3' / 'style_grounding.json').write_text(
         json.dumps(encode_artifact(STYLE_REL, malformed), ensure_ascii=False),
@@ -909,10 +1060,15 @@ def test_a_bad_key_in_current_provenance_does_not_blow_up_the_report():
     base = _book()
     st = ArtifactStore(_ctx(base))
     (base / '书名_123' / 'stage3').mkdir()
+    root_clean_sha1 = prov.content_sha1(
+        (base / '书名_123' / 'stage0' / 'clean_text.txt').read_bytes())
     malformed = {
-        '_provenance': {'inputs': {'../../别的书/x.json': {
-            'file': 'ffffffffff', 'consumed': None,
-        }}},
+        '_provenance': {
+            'root_clean_sha1': root_clean_sha1,
+            'inputs': {'../../别的书/x.json': {
+                'file': 'ffffffffff', 'consumed': None,
+            }},
+        },
     }
     (base / '书名_123' / 'stage3' / 'style_grounding.json').write_text(
         json.dumps(encode_artifact(STYLE_REL, malformed)), encoding='utf-8')

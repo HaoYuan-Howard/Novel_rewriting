@@ -342,7 +342,8 @@ def _habit_repair_candidate(
     if not store.exists(_INVALID):
         raise UpstreamMissing(f'{_INVALID} 不在盘上——没有待定向返工的问题稿')
     main, hook, _gg = _upstreams(store)
-    artifact, data = store.read_own(StyleGrounding, _INVALID)
+    artifact, data = store.read_own(
+        StyleGrounding, _INVALID, require_current=True)
     measured_now = measure_all(main, hook)
     outcomes = _judge(store, data, measured_now=measured_now)
     hard = _hard_rules(outcomes)

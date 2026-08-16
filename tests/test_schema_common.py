@@ -20,10 +20,11 @@ from contracts.schema import (
 from contracts.schema.base import StrictModel
 
 EDGE = {'stage1/main_text.json': InputEdge(file='0123456789', consumed=None)}
+ROOT = '0' * 40
 
 
 def _llm_prov(**kw):
-    base = dict(code='abc1234-dirty', inputs=EDGE,
+    base = dict(code='abc1234-dirty', root_clean_sha1=ROOT, inputs=EDGE,
                 prompts={'SYS': 'aaaaaaaaaa'}, model='deepseek-v4-pro')
     return LlmProvenance(**{**base, **kw})
 
@@ -112,7 +113,7 @@ def test_free_provenance_has_no_model_field_at_all():
     """
     assert 'model' not in FreeProvenance.model_fields
     with pytest.raises(ValidationError, match='extra_forbidden|Extra inputs'):
-        FreeProvenance(code='c', inputs=EDGE, model='deepseek-v4-pro')
+        FreeProvenance(code='c', root_clean_sha1=ROOT, inputs=EDGE, model='deepseek-v4-pro')
 
 
 # ───────────────────── ⑤ 提升路：结构上不可能伪造 ─────────────────────
@@ -222,16 +223,18 @@ def test_round_provenance_reproduces_the_two_shapes_seen_on_disk():
     from contracts.schema import RoundFreeProvenance, RoundLlmProvenance
 
     paid = RoundLlmProvenance(
-        code='c', inputs=EDGE, prompts={'SYS': 'a' * 10}, model='deepseek-v4-pro',
+        code='c', root_clean_sha1=ROOT, inputs=EDGE,
+        prompts={'SYS': 'a' * 10}, model='deepseek-v4-pro',
         round=2, revision_of='abc', review='def', fixes=[('secret_leak', 'ch3|x')])
     assert sorted(paid.to_disk()) == [
-        'code', 'fixes', 'inputs', 'model', 'prompts', 'review', 'revision_of', 'round']
+        'code', 'fixes', 'inputs', 'model', 'prompts', 'review', 'revision_of',
+        'root_clean_sha1', 'round']
 
     human = RoundFreeProvenance(
-        code='c', inputs=EDGE, round=3, revision_of='abc',
+        code='c', root_clean_sha1=ROOT, inputs=EDGE, round=3, revision_of='abc',
         origin='human', input_basis='apply_edit_current_validation')
     assert sorted(human.to_disk()) == [
-        'code', 'input_basis', 'inputs', 'origin', 'revision_of', 'round'], \
+        'code', 'input_basis', 'inputs', 'origin', 'revision_of', 'root_clean_sha1', 'round'], \
         '人工稿的键组合与盘上那一份对不上'
     assert 'model' not in human.to_disk(), '人工稿记了模型就是假账'
 

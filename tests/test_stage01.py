@@ -33,8 +33,8 @@ from novel.stages.stage0.removal import (
     clean_round_rel,
     report_round_rel,
     remove_bytes,
-    run_approve,
-    run_edit,
+    run_approve as _run_approve,
+    run_edit as _run_edit,
     run_source,
 )
 from novel.stages.stage1 import checks as stage1_checks
@@ -69,6 +69,19 @@ def _source(work: Path, name: str, case_name: str) -> Path:
 
 def _line(report, rule: str):
     return next(line for line in report.rules if line.rule == rule)
+
+
+def run_approve(ctx, *, approved_at=None):
+    return _run_approve(
+        ctx, actor='stage01-test', reason='explicit test approval',
+        approved_at=approved_at,
+    )
+
+
+def run_edit(ctx, path, *, removed=None):
+    return _run_edit(
+        ctx, path, actor='stage01-test', reason='explicit test edit', removed=removed,
+    )
 
 
 def test_stage01_packages_are_in_the_explicit_wheel_manifest():
@@ -167,7 +180,7 @@ def test_stage1_cli_propagates_a_written_check_failure(work, capsys):
     assert all((novel_dir / rel).is_file() for rel in (MAIN_TEXT, HOOK_COPY, REPORT))
 
 
-def test_human_edit_archives_a_pair_is_protected_and_approval_is_idempotent(work):
+def test_human_edit_archives_a_pair_and_same_machine_rerun_preserves_it(work):
     source = _source(work, 'FQ_edit_345.txt', 'enc_utf8_sig')
     novel_dir, removal, _initial = run_source(source, work / 'Output')
     old_report = (novel_dir / REPORT_REL).read_bytes()
@@ -181,8 +194,10 @@ def test_human_edit_archives_a_pair_is_protected_and_approval_is_idempotent(work
     assert edited.approved == 'pending' and not edit_report.passed
     assert (novel_dir / report_round_rel(1)).read_bytes() == old_report
     assert (novel_dir / clean_round_rel(1)).read_bytes() == old_clean
-    with pytest.raises(HumanEditProtected):
-        run_source(source, work / 'Output')
+    rerun_dir, rerun, _rerun_report = run_source(source, work / 'Output')
+    assert rerun_dir == novel_dir
+    assert rerun.report == edited
+    assert rerun.clean_text == removal.clean_text + '人工补记一行。\n'
 
     approved, _report = run_approve(
         _context(novel_dir, 'stage0.approve'),
@@ -445,7 +460,16 @@ def test_test_data_matches_the_registered_source_set():
 @pytest.mark.parametrize('source', REAL_NOVELS, ids=lambda path: path.name)
 def test_real_test_data_runs_through_both_deterministic_layers(source: Path, work: Path):
     novel_dir, removed, initial = run_source(source, work / 'Output')
-    assert initial is not None and _line(initial, 's0_approval').status == 'hit'
+    assert initial is not None
+    approval_line = _line(initial, 's0_approval')
+    if removed.report.approved == 'approved':
+        assert removed.report.approval_origin == 'auto_zero_hit'
+        assert removed.report.approved_by is None
+        assert not removed.report.removed and not removed.report.warnings
+        assert approval_line.status == 'ok'
+    else:
+        assert removed.report.approval_origin is None
+        assert approval_line.status == 'hit'
     approved, approval_report = run_approve(
         _context(novel_dir, 'stage0.approve'),
         approved_at='2026-08-12T00:00:00+00:00',

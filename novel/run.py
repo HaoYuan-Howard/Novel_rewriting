@@ -57,6 +57,11 @@ class RunContext:
     cache: CachePolicy
     ledger: CostLedger
 
+    #: 完成度/API 视图使用的只读上下文。只读消费者需要把 stale 产物展示出来并解释
+    #: 为什么过期；真正的生产节点则必须在任何 LLM 请求之前拒绝消费 stale 上游。
+    #: 这个位只由 ``state.readonly_ctx`` 设置，普通运行上下文默认一律 fail closed。
+    readonly: bool = False
+
     #: 这一次跑的是**哪条臂**（`stage5.write --mode deep|shallow`）。全链只有这一个节点有臂。
     #:
     #: ⚠⚠ **臂不是 flag。** 它与 `--base` / `--yes` 同类：不改变贵贱、不改变
@@ -248,7 +253,7 @@ class RunContext:
                 f'⇒ 0 成本产出走 `free_provenance()`；'
                 f'要写回一份**继承来的**来源账（`--revalidate`/`--remeasure`/定稿节点…），'
                 f'走 `store.promote_invalid()` 或直接把读上来的那一份原样带下去，别现造')
-        out = cls(code=self.code, inputs=self.edges,
+        out = cls(code=self.code, root_clean_sha1=self._require_single_root(), inputs=self.edges,
                   prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
                   model=model, usage=self.ledger.usage_since(self._usage_mark), **extra)
         return self._settled(out)
@@ -261,6 +266,7 @@ class RunContext:
                 f'{self.node} is paid=False and cannot mint model provenance')
         out = cls(
             code=self.code,
+            root_clean_sha1=self._require_single_root(),
             inputs=self.edges,
             prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
             model=model,
@@ -281,7 +287,7 @@ class RunContext:
         `prompts` 在这里通常只有一项 `RULES`——「这份报告是拿哪一版尺子量的」。
         判据表改了而报告没重跑，这个指纹是唯一说得出来的地方。
         """
-        out = cls(code=self.code, inputs=self.edges,
+        out = cls(code=self.code, root_clean_sha1=self._require_single_root(), inputs=self.edges,
                   prompts=({k: prov.fingerprint(v) for k, v in prompts.items()}
                            if prompts else None),
                   usage=self.ledger.usage_since(self._usage_mark), **extra)
@@ -303,6 +309,11 @@ class RunContext:
         ⚠ 它**不走 `_settled()`**：本次一分钱没花，`usage` 该原样留着当初那次的
         ——把一份 `calls_made=0` 的账盖上去，「这份产物花了多少」就永远说不出来了。
         """
+        current = self._require_single_root()
+        if prev.root_clean_sha1 != current:
+            raise ProvenanceRefused(
+                f'{self.node}: 旧稿 root_clean_sha1={prev.root_clean_sha1}，当前根={current}；'
+                '局部改写不能把旧根内容伪装成新根产物，必须从产地重建')
         return prev.partially_rewritten(by=by, code=self.code, inputs=self.edges)
 
     def _settled(self, out: P) -> P:

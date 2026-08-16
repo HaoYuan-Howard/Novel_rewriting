@@ -86,6 +86,8 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
         'expected_source_sha1': report['source_sha1'],
         'expected_clean_sha1': report['clean_sha1'],
         'removed_segment_ids': [*machine, manual],
+        'actor': 'api-stage01-test',
+        'reason': 'exercise audited edit route',
     }
     edited_response = client.post(
         f'/api/novels/{sid}/stage0/edit', json=request, headers=UI)
@@ -102,7 +104,10 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     assert stale.status_code == 409
     assert stale.json()['kind'] == 'HumanEditProtected'
 
-    approved = client.post(f'/api/novels/{sid}/stage0/approve', headers=UI)
+    approved = client.post(
+        f'/api/novels/{sid}/stage0/approve', headers=UI,
+        json={'actor': 'api-stage01-test', 'reason': 'approve reviewed removal'},
+    )
     assert approved.status_code == 200 and approved.json()['state'] == 'ok'
     partitioned = client.post(f'/api/novels/{sid}/stage1/partition', headers=UI)
     assert partitioned.status_code == 200 and partitioned.json()['state'] == 'ok'
@@ -133,7 +138,9 @@ def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
             'expected_round': report['round'],
             'expected_source_sha1': report['source_sha1'],
             'expected_clean_sha1': report['clean_sha1'],
-            'removed_segment_ids': selected,
+                'removed_segment_ids': selected,
+                'actor': 'api-stage01-test',
+                'reason': 'negative end-marker test',
         },
         headers=UI,
     )

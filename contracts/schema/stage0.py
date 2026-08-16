@@ -21,9 +21,9 @@ F7 已用临时目录走通产物形态、审阅状态机与编辑回写，并�
 from __future__ import annotations
 
 import hashlib
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
     APPROVAL_STATE, NONBODY_KINDS, REMOVED_ORIGIN, SOURCE_ENCODINGS, STAGE0_WARNINGS,
@@ -31,6 +31,9 @@ from contracts.invariants import (
 from contracts.schema.base import Sha1, StrictModel
 
 ApprovalState = Literal[APPROVAL_STATE]
+Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
+ApprovalOrigin = Literal['auto_zero_hit', 'human']
+AuditAction = Literal['auto_approve', 'approve', 'edit', 'merge_accept', 'merge_reject']
 
 
 class RemovedSegment(StrictModel):
@@ -96,6 +99,8 @@ class Stage0EditPlan(StrictModel):
     clean_text: str
     clean_sha1: Sha1
     removed: list[RemovedSegment]
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
 
     @model_validator(mode='after')
     def _payload_is_self_consistent(self) -> Stage0EditPlan:
@@ -119,6 +124,149 @@ class Stage0EditPlan(StrictModel):
                     f'removed[{index}].code_points={segment.code_points}，但 span 长 {hi - lo}')
             if index and self.removed[index - 1].span[1] > lo:
                 raise ValueError(f'removed[{index - 1}] 与 removed[{index}] 重叠')
+        return self
+
+
+class Stage0MergeConflict(StrictModel):
+    """一次码点级 diff3 中不能安全自动选择的重叠改动。"""
+
+    id: str = Field(min_length=1)
+    base_span: tuple[int, int]
+    base_text: str
+    ours_text: str
+    theirs_text: str
+
+    @model_validator(mode='after')
+    def _base_span_is_ordered(self) -> Stage0MergeConflict:
+        lo, hi = self.base_span
+        if not 0 <= lo <= hi:
+            raise ValueError('base_span 必须是允许空插入点的半开区间')
+        if len(self.base_text) != hi - lo:
+            raise ValueError('base_text 长度必须等于 base_span 长度')
+        return self
+
+
+class Stage0ConflictResolution(StrictModel):
+    conflict_id: str = Field(min_length=1)
+    choice: Literal['ours', 'theirs', 'custom']
+    custom_text: str | None = None
+
+    @model_validator(mode='after')
+    def _custom_is_explicit(self) -> Stage0ConflictResolution:
+        if (self.choice == 'custom') != (self.custom_text is not None):
+            raise ValueError('choice=custom 时且仅此时必须给 custom_text')
+        return self
+
+
+class Stage0MergeDecisionPlan(StrictModel):
+    action: Literal['accept', 'reject']
+    candidate_id: Sha256
+    expected_round: int = Field(ge=1)
+    expected_source_sha1: Sha1
+    expected_clean_sha1: Sha1
+    resolutions: list[Stage0ConflictResolution] = Field(default_factory=list)
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _reject_has_no_fake_resolutions(self) -> Stage0MergeDecisionPlan:
+        if self.action == 'reject' and self.resolutions:
+            raise ValueError('reject 不接受 resolutions')
+        return self
+
+
+class MachineRemovalSnapshot(StrictModel):
+    """一轮机器剔除的完整、可复算快照；它从不冒充正式人工稿。"""
+
+    created_at: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+    original_filename: str = Field(min_length=1)
+    original_path: str = Field(min_length=1)
+    source_sha1: Sha1
+    clean_sha1: Sha1
+    source_encoding: Literal[SOURCE_ENCODINGS]
+    text_norm: str = Field(min_length=1)
+    total_code_points: int = Field(ge=1)
+    body_code_points: int = Field(ge=0)
+    clean_text: str
+    removed: list[RemovedSegment]
+    warnings: list['Stage0Warning']
+    snapshot_sha256: Sha256
+
+    @model_validator(mode='after')
+    def _lengths_and_hash_agree(self) -> MachineRemovalSnapshot:
+        if self.body_code_points != len(self.clean_text):
+            raise ValueError('body_code_points 必须等于机器 clean_text 码点长度')
+        actual = hashlib.sha1(self.clean_text.encode('utf-8')).hexdigest()
+        if actual != self.clean_sha1:
+            raise ValueError('clean_sha1 与机器 clean_text 不一致')
+        return self
+
+
+class Stage0MergeCandidate(StrictModel):
+    """机器重跑与正式人工稿的三方合并候选；接受前不得改正式稿。"""
+
+    candidate_id: Sha256
+    created_at: str = Field(min_length=1)
+    expected_round: int = Field(ge=1)
+    expected_source_sha1: Sha1
+    expected_clean_sha1: Sha1
+    base_snapshot_sha256: Sha256
+    theirs_snapshot: MachineRemovalSnapshot
+    base_clean_sha1: Sha1
+    ours_clean_sha1: Sha1
+    theirs_source_sha1: Sha1
+    theirs_clean_sha1: Sha1
+    base_text: str
+    ours_text: str
+    theirs_text: str
+    proposed_clean_text: str
+    conflicts: list[Stage0MergeConflict]
+
+    @model_validator(mode='after')
+    def _conflicts_are_unique(self) -> Stage0MergeCandidate:
+        ids = [item.id for item in self.conflicts]
+        if len(ids) != len(set(ids)):
+            raise ValueError('merge conflict id 不得重复')
+        checks = (
+            ('base_clean_sha1', self.base_clean_sha1, self.base_text),
+            ('ours_clean_sha1', self.ours_clean_sha1, self.ours_text),
+            ('theirs_clean_sha1', self.theirs_clean_sha1, self.theirs_text),
+        )
+        for name, expected, text in checks:
+            actual = hashlib.sha1(text.encode('utf-8')).hexdigest()
+            if actual != expected:
+                raise ValueError(f'{name} 与对应文本不一致')
+        if self.theirs_snapshot.snapshot_sha256 == self.base_snapshot_sha256:
+            raise ValueError('机器快照没有变化时不该生成 merge candidate')
+        if self.theirs_snapshot.source_sha1 != self.theirs_source_sha1:
+            raise ValueError('theirs_snapshot 与 theirs_source_sha1 不一致')
+        return self
+
+
+class Stage0AuditEntry(StrictModel):
+    """不可覆盖、哈希串联的一次 Stage0 人工或自动决定。"""
+
+    seq: int = Field(ge=1)
+    previous_sha256: Sha256 | None
+    entry_sha256: Sha256
+    action: AuditAction
+    actor: str | None
+    reason: str = Field(min_length=1)
+    at: str = Field(min_length=1)
+    before_source_sha1: Sha1 | None
+    before_clean_sha1: Sha1 | None
+    after_source_sha1: Sha1
+    after_clean_sha1: Sha1
+    candidate_id: Sha256 | None = None
+
+    @model_validator(mode='after')
+    def _actor_matches_action(self) -> Stage0AuditEntry:
+        if self.action == 'auto_approve':
+            if self.actor is not None:
+                raise ValueError('auto_approve 不得伪造 actor')
+        elif self.actor is None or not self.actor.strip():
+            raise ValueError('人工决定必须给自报 actor')
         return self
 
 
@@ -189,6 +337,12 @@ class RemovalReport(StrictModel):
     #: 合成样本证明的是「这条分支被执行过」，**不是「在真实语料上验证过」**。
     warnings: list[Stage0Warning]
 
+    #: 机器输入与机器输出的稳定身份。正式 clean 可被人工编辑，因此不能拿 clean_sha1
+    #: 冒充机器结果；三方合并必须显式区分两者。
+    machine_source_sha1: Sha1
+    machine_clean_sha1: Sha1
+    machine_snapshot_sha256: Sha256
+
     # ── 审阅状态 ────────────────────────────────────────────────────────────
 
     #: **三态**（2026-08-11 用户裁决）。`R-0.3b` 是 `HARD`：
@@ -202,6 +356,12 @@ class RemovalReport(StrictModel):
     #: 「键不在」不是合法形态（那会把三态又压回两态）。
     approved_at: str | None
 
+    #: 批准来源。未批准时为 null；零命中自动批与人工批在结构上可区分。
+    approval_origin: ApprovalOrigin | None
+
+    #: 自报身份，不宣称是认证身份。自动批准与未批准时均为 null。
+    approved_by: str | None
+
     #: 第几轮。人每编辑一次 +1，上一轮进 `_rounds/`（`R-0.5`）。
     round: int = Field(ge=1)
 
@@ -209,6 +369,10 @@ class RemovalReport(StrictModel):
     #: ⚠ 它**不等于** `any(r.origin == 'human' for r in removed)`——
     #: 人还可以**直接改正文**（`R-0.4`），那一类改动在 `removed[]` 里没有任何痕迹。
     edited_by_human: bool
+
+    #: 当前报告对应的审计链位置；0/null 表示尚无决定记录。
+    audit_seq: int = Field(ge=0)
+    audit_head_sha256: Sha256 | None
 
     @model_validator(mode='after')
     def _approval_state_and_timestamp_agree(self) -> RemovalReport:
@@ -223,4 +387,16 @@ class RemovalReport(StrictModel):
                 f'approved={self.approved!r} 与 approved_at={self.approved_at!r} 对不上：'
                 f'只有 approved 才该有批准时间，而 approved 必须说得出是什么时候批的'
             )
+        if self.approved == 'approved':
+            if self.approval_origin is None:
+                raise ValueError('approved 报告必须声明 approval_origin')
+            if self.approval_origin == 'human':
+                if self.approved_by is None or not self.approved_by.strip():
+                    raise ValueError('人工批准必须给 approved_by')
+            elif self.approved_by is not None:
+                raise ValueError('auto_zero_hit 自动批准不得伪造 approved_by')
+        elif self.approval_origin is not None or self.approved_by is not None:
+            raise ValueError('未批准报告不得保留 approval_origin/approved_by')
+        if (self.audit_seq == 0) != (self.audit_head_sha256 is None):
+            raise ValueError('audit_seq=0 与 audit_head_sha256=null 必须同时成立')
         return self

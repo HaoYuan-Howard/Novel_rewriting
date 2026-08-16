@@ -3,8 +3,9 @@
 '''HTTP 入口使用的非产物文件：原始上传与一次性 stage0 编辑计划。
 
 两类文件都住在 Output/_service，不进来源账，也不冒充小说产物。上传原文要长期
-保留，因为 stage0 审校屏必须能按 original_path 重新取回被剔除的文本；编辑计划
-只负责把人的选择交给 CLI 子进程，作业结束即删。
+保留，因为 stage0 审校屏必须能按 original_path 重新取回被剔除的文本；普通编辑计划
+在作业结束即删。merge 决定是例外：按内容寻址，失败时保留供同一决定重放，只有
+正式动作已落地（ok / landed_red）后才删。
 '''
 from __future__ import annotations
 
@@ -13,7 +14,9 @@ import os
 import uuid
 from pathlib import Path
 
-from contracts.schema.stage0 import Stage0EditPlan
+from contracts.schema.stage0 import Stage0EditPlan, Stage0MergeDecisionPlan
+from contracts.schema.evaluation import GlobalReviewDecisionSet
+from contracts.schema.stage5 import ChapterResponse
 from novel import paths
 from novel.errors import (
     ArtifactUnreadable,
@@ -96,7 +99,7 @@ def save_upload(
 def save_edit_plan(
     base: str | os.PathLike[str],
     sid: str,
-    plan: Stage0EditPlan,
+    plan: Stage0EditPlan | Stage0MergeDecisionPlan,
 ) -> Path:
     '''把一次编辑计划原子落进服务目录，供随后启动的 CLI 子进程读取。'''
     try:
@@ -121,11 +124,52 @@ def save_edit_plan(
     return target.resolve()
 
 
+def save_merge_plan(
+    base: str | os.PathLike[str], sid: str, plan: Stage0MergeDecisionPlan,
+) -> Path:
+    """Durably save a replayable merge decision under its content identity.
+
+    Unlike an ordinary edit plan, a merge decision is the human half of a
+    crash-recoverable transaction.  A failed job must leave the exact same plan
+    available, and an API retry must address that same file rather than create
+    an unrelated one-shot UUID.
+    """
+    try:
+        paths.check_sid(sid)
+    except PathRefused as exc:
+        raise SourcePathRejected(f'合并决定的书 id 不合法：{exc}') from exc
+    raw = plan.model_dump_json(exclude_none=True).encode('utf-8')
+    digest = hashlib.sha256(raw).hexdigest()
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'merge-{digest}.json'
+    if target.is_file():
+        try:
+            existing = target.read_bytes()
+        except OSError as exc:
+            raise ArtifactUnreadable(f'读不了已有 Stage0 合并决定：{exc!r}') from exc
+        if existing != raw:
+            raise SourceConflict(f'合并决定内容地址 {target} 已存在不同字节；拒绝覆盖')
+        return target.resolve()
+    tmp = target.with_name(f'.{target.name}.{uuid.uuid4().hex}.tmp')
+    try:
+        tmp.write_bytes(raw)
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存 Stage0 合并决定失败：{exc!r}') from exc
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return target.resolve()
+
+
 def save_draft_edit(
     base: str | os.PathLike[str],
     sid: str,
     ordinal: int,
-    text: str,
+    edit: ChapterResponse,
 ) -> Path:
     '''把一份人工改稿原子落进服务目录，供 `stage5.write --apply-edit` 子进程读取。
 
@@ -139,17 +183,42 @@ def save_draft_edit(
         raise SourcePathRejected(f'人工改稿的书 id 不合法：{exc}') from exc
     if ordinal < 1:
         raise SourcePathRejected(f'章号必须 ≥1，拿到 {ordinal}')
-    if not text.strip():
-        raise SourcePathRejected('人工改稿是空的——空稿不是一次修改')
     root = service_dir(base) / EDITS_DIRNAME / sid
     root.mkdir(parents=True, exist_ok=True)
-    target = root / f'ch{ordinal:02d}-{uuid.uuid4().hex}.txt'
+    target = root / f'ch{ordinal:02d}-{uuid.uuid4().hex}.json'
     tmp = target.with_suffix('.tmp')
     try:
-        tmp.write_bytes(text.encode('utf-8'))
+        tmp.write_bytes(edit.model_dump_json().encode('utf-8'))
         os.replace(tmp, target)
     except OSError as exc:
         raise ArtifactUnreadable(f'保存人工改稿失败：{exc!r}') from exc
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return target.resolve()
+
+
+def save_global_review_decisions(
+    base: str | os.PathLike[str],
+    sid: str,
+    decisions: GlobalReviewDecisionSet,
+) -> Path:
+    """Persist a one-shot Stage2 decision set outside the artifact tree."""
+    try:
+        paths.check_sid(sid)
+    except PathRefused as exc:
+        raise SourcePathRejected(f'复核决策的书 id 不合法：{exc}') from exc
+    root = service_dir(base) / EDITS_DIRNAME / sid
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'global-review-{uuid.uuid4().hex}.json'
+    tmp = target.with_suffix('.tmp')
+    try:
+        tmp.write_bytes(decisions.model_dump_json().encode('utf-8'))
+        os.replace(tmp, target)
+    except OSError as exc:
+        raise ArtifactUnreadable(f'保存 stage2 复核决策失败：{exc!r}') from exc
     finally:
         try:
             tmp.unlink(missing_ok=True)

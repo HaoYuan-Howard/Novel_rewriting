@@ -23,7 +23,9 @@ from contracts.schema.api import (
     Stage1Segment,
     Stage1Segments,
 )
-from contracts.schema.stage0 import RemovalReport, RemovedSegment, Stage0EditPlan
+from contracts.schema.stage0 import (
+    RemovalReport, RemovedSegment, Stage0EditPlan, Stage0MergeCandidate,
+)
 from contracts.schema.stage1 import HookCopy, MainText, PartitionReport
 from novel import paths, prov
 from novel.core.ingest import (
@@ -43,6 +45,14 @@ from novel.stages.stage1 import partition
 from novel.store import ArtifactStore
 
 STAGE0_NODE = 'stage0.remove'
+
+
+def stage0_merge_candidate(
+    base: str | os.PathLike[str], sid: str,
+) -> Stage0MergeCandidate:
+    store = _store(base, sid, STAGE0_NODE)
+    candidate, _ = store.read_own(Stage0MergeCandidate, removal.CANDIDATE_REL)
+    return candidate
 STAGE1_NODE = 'stage1.partition'
 _PARAGRAPH_BREAK = re.compile(r'\n[ \t　]*\n')
 
@@ -165,6 +175,11 @@ def _stage0_segments(report: RemovalReport, text: str, clean: str) -> list[Stage
     out.extend(_gap_segments(text, cursor, len(text), scan))
     reconstructed.append(text[cursor:])
     if ''.join(reconstructed) != clean:
+        if report.edited_by_human:
+            # 人可以直接改正文；此时 source 坐标已无法诚实映射到 current clean。
+            # 读屏仍展示当前正式正文，而不是因旧 source-minus-removed 恒等式崩掉。
+            # 新的剔除选择仍应基于一次明确的合并/编辑计划，不能猜坐标迁移。
+            return _gap_segments(clean, 0, len(clean), scan_text(clean))
         raise ArtifactUnreadable(
             '原文减去 removal_report.removed[] 后不能逐字节重建 clean_text')
     if out:
@@ -268,6 +283,8 @@ def stage0_edit_plan(
         clean_text=clean,
         clean_sha1=prov.content_sha1(clean.encode('utf-8')),
         removed=removed,
+        actor=request.actor,
+        reason=request.reason,
     )
 
 

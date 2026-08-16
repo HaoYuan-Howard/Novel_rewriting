@@ -1,23 +1,26 @@
 # stage0 产物 schema
 
-非正文剔除 + **人工审阅闸门**。**这一层不调 LLM。** 对应需求 `R-0.1` ~ `R-0.14`。
+非正文剔除 + **风险分层审批**。**这一层不调 LLM。** 对应需求 `R-0.1` ~ `R-0.14`。
 
 读法（证据列的取值、为什么三源合并）见 `_README.md`。
 **载体 = Pydantic v2**（已定），但本文只定内容、不写模型——模型在骨架阶段照本文写。
 
 > ## ✅ 本层实现与临时跑盘均已落地
 >
-> F7 已用临时小说目录走通产物形态、审批门禁、人工编辑与成对轮次归档；
-> `Test_data` 的 8 本真实小说也已完成摄入、批准与下游分章。
+> F7 已用临时小说目录走通产物形态、分层审批、人工编辑、三方合并、
+> 中断恢复与成对轮次归档；`Test_data` 真实小说也已跑过确定性 stage0/1 链。
 > 原仓 `Output/` 仍没有历史 stage0 产物，因此这里的 **`盘·码`** 指本仓实现生成并复读的
 > 临时盘上证据，不冒充原型历史样本；**`三源`** 仍只用于原本就有三源证据的字段。
 
-三份产物：
+六类持久载体：
 
 ```
 stage0/clean_text.txt        删掉非正文之后的全文。**stage1 的唯一输入**
-stage0/removal_report.json   删了哪些段 + 审阅状态 + 两个指纹
-stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
+stage0/removal_report.json   正式稿身份 + 机器快照身份 + 审批/审计链头（v2）
+stage0/machine_snapshot.json 本次机器剔除的完整、可复算快照（v1）
+stage0/merge_candidate.json  `base / ours / theirs` 与 typed 冲突；未接受前不改正式稿（v1）
+stage0/_audit/edit_N.json    不可覆盖、SHA-256 串联的决定账（v1）
+stage0/_rounds/              正式稿、快照、候选与已提交状态的可恢复历史
 ```
 
 ---
@@ -34,8 +37,10 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 > 人要修剔除的结果必须回到这一层改——**这是有意的单点**：
 > 编辑发生在上游，stage1 及其后仍是确定性纯函数，一改就全链重跑。
 >
-> **③ 未批准 = 不能往下走，而这是【两件事】**（`R-0.3a` / `R-0.3b`）：
-> 「人做出批准这个动作」是 `人`，没有守卫也不该有；
+> **③ 未批准 = 不能往下走，而批准有两个诚实来源**（`R-0.3a` / `R-0.3b`）：
+> 首次且仅当 `removed=[]`、`warnings=[]`、机器 clean 与归一化 source 完全相同、不存在历史漂移时，
+> 可记为 `approval_origin=auto_zero_hit`；其余情形只能由人显式给出 actor 与 reason，
+> 记为 `approval_origin=human`。自动批准不宣称「语义上已人审」；
 > 「**未批准时 stage1 拒绝启动**」是 `HARD`——**它必须有判据**。
 > 压在一条需求上标 `人`，正向覆盖率就不会要求它有任何判据，
 > 而按本层的设计，这道闸门是盲区①（番外用纯数字章节标记写）**全链唯一的防线**。
@@ -77,6 +82,8 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 | `code` | `str` | 是 | 本轮写报告所用代码版本；本层没有 `_provenance`，故落在顶层 | **盘·码** |
 | `source_sha1` | `str` | 是 | **原始 txt** 归一化后的 sha1。追溯用 | **码** |
 | `clean_sha1` | `str` | 是 | **`clean_text.txt`** 的 sha1。**这才是 stage1 记的那个输入指纹** | **盘·码** |
+| `machine_source_sha1` / `machine_clean_sha1` | `str` | 是 | 本轮机器快照的 source/clean 身份；人工正式稿可与 machine clean 不同 | **盘·码** |
+| `machine_snapshot_sha256` | `str` | 是 | 完整 `machine_snapshot.json` 的内容身份；三方合并的 base 绑定到这一值 | **盘·码** |
 | `source_encoding` | `str` | 是 | 五候选 `utf-8-sig` / `utf-32` / `utf-16` / `utf-8` / `gb18030` 之一。⚠ 全语料 163 本**只出现过 `utf-8`，另四个零样本**——取值面只能从代码来，样本再多也补不出没发生过的分支 | **码** |
 | `text_norm` | `str` | 是 | 恒 `v1:bom+crlf` | **码** |
 
@@ -188,8 +195,11 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 |---|---|---|---|---|
 | `approved` | `str` | 是 | **三态**：`not_run` ｜ `pending` ｜ `approved`（`APPROVAL_STATE`）。**不等于 `approved` 时 stage1 拒绝启动**（`R-0.3b`，`HARD`） | **盘·码** |
 | `approved_at` | `str \| null` | 是 | ISO 时间戳；未批准时 `null`。**有值 ⟺ `approved == 'approved'`**（载体的后置条件） | **盘·码** |
+| `approval_origin` | `auto_zero_hit \| human \| null` | 是 | 未批时 `null`；自动零风险与人工批准不得压成同一值 | **盘·码** |
+| `approved_by` | `str \| null` | 是 | 只有 `human` 必填；是自报身份，不宣称认证身份 | **盘·码** |
 | `round` | `int` | 是 | 第几轮。人每编辑一次 +1，上一轮进 `_rounds/` | **盘·码** |
 | `edited_by_human` | `bool` | 是 | 本轮有没有人工编辑。= `any(r.origin == 'human' for r in removed)` 之外还含直接改正文 | **盘·码** |
+| `audit_seq` / `audit_head_sha256` | `int` / `str \| null` | 是 | `0/null` 或精确指向 `_audit/edit_N.json`；盘上多出/少一条都拒绝 | **盘·码** |
 
 > #### ✅ `approved` 已定为三态（2026-08-11 用户裁决，骨架 A3）
 >
@@ -203,6 +213,20 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 > 与 `FRESHNESS` / `JOB_STATE` / `BADGE` 同构，随 `/api/enums` 整份下发。
 > ⚠ **`R-0.3b` 的判据要写成「不等于 `approved` 就拦」**：三个值里有**两个**都该拦，
 > 而 `if approved == 'pending'` 会漏掉 `not_run`。
+
+### 2.5 机器快照、三方合并与 WAL
+
+- `MachineRemovalSnapshot` 保留机器本轮的 source/clean 指纹、全文、removed 与 warnings；
+  它从不冒充正式人工稿。
+- 重跑结果变化时，`Stage0MergeCandidate` 固定 `base=上轮机器稿`、
+  `ours=当前批准稿`、`theirs=新机器稿`。Unicode 码点级 diff3 只自动合并
+  不相交或相同改动；重叠改动产出 `Stage0MergeConflict`，每个 id 必须恰好决议一次。
+- `Stage0AuditEntry` 以 `previous_sha256` 串联，文件不可覆盖。合并决定的 `seq+1`
+  同时是 write-ahead log：accept 以 report 为 commit marker，reject 同样在移走 live candidate 前先提交 report。
+  进程可在任一 durable phase 崩溃；同一 actor/reason/乐观锁/决议重放必须幂等完成，
+  不同决定不得覆盖未完事务。
+- 新正文提交后，`root_clean_sha1` 变化会使 Stage1～7 的 provenance-bearing 产物立即 stale；
+  生产/付费读拒绝 stale，只读视图仍可展示旧产物用于诊断。
 
 ---
 
@@ -239,12 +263,12 @@ stage0/_rounds/              人工编辑的历史版本（`R-0.5`）
 
 ---
 
-## 四、待决
+## 四、已裁决边界
 
 | # | 问题 | 状态 |
 |---|---|---|
 | ~~1~~ | ~~`approved` 用 `bool` 还是三态枚举~~ | ✅ **已裁决（2026-08-11，骨架 A3）：三态**，落在 `APPROVAL_STATE`。见 §2.4 |
-| 2 | **审阅闸门覆盖哪些书**：全量 / 只审有检出的 / 全量但零检出可批量放行 | **明确待定**：先跑通几本，按真实上传的书再定。<br>⚠ 实测 27/163 本有检出、136 本干净；「只审检出的」会让盲区①永远不进队列 |
-| 3 | 重跑 stage0 时人工编辑的合并策略 | `R-0.8` 只规定了「不许静默覆盖」，**没规定怎么合并**。<br>参照 stage5 的 `--revalidate` / `REVALIDATE_ONLY_NEW_ERRORS` |
-| 4 | `clean_text.txt` 是否也要参与下游 `_provenance.inputs` 的指纹 | 现在下游记的是 `main_text.json` / `hook_copy.json`。<br>多记一层能定位「问题出在剔除还是分章」，代价是指纹链更长 |
-| 5 | 人工**改正文**要不要逐条记账（`text_edits[]`：`span` + before/after） | **本轮有意不做**：多一块 schema，而单用户 + `_rounds/` 够回溯。<br>⚠ 代价是 `clean_sha1` 的差异不可分解（§一） |
+| ~~2~~ | ~~审阅闸门覆盖哪些书~~ | ✅ 首次严格零风险自动放行；其余全部人工，来源值分开记录 |
+| ~~3~~ | ~~重跑 stage0 时人工编辑的合并策略~~ | ✅ 唯一有序 `base/ours/theirs` + 码点级 diff3 + typed conflict；冲突必须逐项决议 |
+| ~~4~~ | ~~`clean_text.txt` 是否参与全链来源身份~~ | ✅ 所有 provenance-bearing 产物必填 `root_clean_sha1`；混根写盘和 stale 生产读都拒绝 |
+| ~~5~~ | ~~人工改正文的审计粒度~~ | ✅ 每次决定记 actor/reason/前后 hash/候选 id 并串联；完整字节版本在 `_rounds/`，不重复落 `text_edits[]` |

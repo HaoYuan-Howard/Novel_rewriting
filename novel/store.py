@@ -28,6 +28,7 @@ store.py —— 产物的**唯一**读写口。`ArtifactStore(ctx)`，一次跑�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,11 @@ from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from contracts.artifacts import (
+    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT,
+    STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
+    STAGE7_BOOK, STAGE7_NAME_MAP,
+)
 from contracts.schema import (
     ArtifactVersionError, InputEdge, Provenance, decode_artifact, encode_artifact,
 )
@@ -93,19 +99,34 @@ class ArtifactStore:
         判过期时要对一份**可能已经不合当前 schema** 的上游重算同一个投影，
         而模型化会先炸在校验上。同一个函数、同一种输入，两侧才对得上。
         """
+        obj, _digest = self.read_with_sha256(model, rel)
+        if not self.ctx.readonly:
+            self._refuse_stale_upstream(rel)
+        return obj
+
+    def read_with_sha256(self, model: type[M], rel: str) -> tuple[M, str]:
+        """Read an upstream artifact and return its exact on-disk SHA-256.
+
+        The digest binds decisions to the complete versioned artifact bytes,
+        while the ordinary provenance edge remains the repository's shorter
+        freshness fingerprint.  Keeping both in this one read prevents a
+        hash-bound decision from bypassing input-edge accounting.
+        """
         key = paths.input_key(rel)          # ← 两级键；三级路径在这里就被拒（见 `PathRefused`）
         project = projection_for(self.ctx.node, key)
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
         obj, data = self._validate_payload(model, rel, data)
+        self._record_artifact_root(rel, obj)
         self.ctx.record_edge(key, InputEdge(
             file=prov.fingerprint_bytes(raw),
             consumed=prov.projection_fingerprint(project(data)) if project else None,
         ))
-        return obj
+        return obj, hashlib.sha256(raw).hexdigest()
 
     def read_judged(self, model: type[M], rel: str, *,
-                    project: Callable[[Any], Any] | None = None) -> tuple[M, str, str | None]:
+                    project: Callable[[Any], Any] | None = None,
+                    require_current: bool = False) -> tuple[M, str, str | None]:
         """读一份**成稿**。记进 `judged`，**不记进 `inputs`**（`_common.md` §3.2）。
 
         返回 `(模型, 整份指纹, 投影指纹|None)`——调用方要拿它们去填 `judged[]` 那三格。
@@ -119,12 +140,32 @@ class ArtifactStore:
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
         obj, data = self._validate_payload(model, rel, data)
+        self._record_artifact_root(rel, obj)
+        if require_current and not self.ctx.readonly:
+            self._refuse_stale_upstream(rel)
         fp = prov.fingerprint_bytes(raw)
         consumed = prov.projection_fingerprint(project(data)) if project else None
         self.ctx.record_judged(paths.check_rel_deep(rel), fp)
         return obj, fp, consumed
 
-    def read_own(self, model: type[M], rel: str) -> tuple[M, Any]:
+    def _refuse_stale_upstream(self, rel: str) -> None:
+        """在生产节点拿到载体之前拒绝已知过期的上游。
+
+        ``unknown`` 仍按既有兼容契约放行：它表示旧产物没有足够来源事实，不能伪装成
+        ``fresh``，但也不能凭空断言内容已变。只有可复算且明确为 ``stale`` 的事实会
+        阻断。只读视图由 ``RunContext.readonly`` 绕过本闸，仍能展示旧产物及过期原因。
+        """
+        report = self.freshness(rel)
+        if report.state != 'stale':
+            return
+        changed = ', '.join(edge.key for edge in report.edges) or report.reason
+        producer = producer_node(rel, fallback=self.ctx.node) or self.ctx.node
+        raise ProvenanceRefused(
+            f'{self.ctx.node}: 上游 {rel} 已过期（{changed}）；在生成或付费请求前拒绝消费。'
+            f'请先从 {producer} 重建当前根上的产物')
+
+    def read_own(self, model: type[M], rel: str, *,
+                 require_current: bool = False) -> tuple[M, Any]:
         """读**本节点自己产的那一份**（复检 / 重算 / 提升前要先看看它）。
         返回 `(模型, 盘上原始 dict)`。
 
@@ -144,7 +185,11 @@ class ArtifactStore:
         """
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
-        return self._validate_payload(model, rel, data)
+        obj, payload = self._validate_payload(model, rel, data)
+        self._record_artifact_root(rel, obj)
+        if require_current:
+            self._refuse_stale_upstream(rel)
+        return obj, payload
 
     def read_text(self, rel: str) -> str:
         """读一份**字节形态**产物（`clean_text.txt` / `draft.md` / `book.txt`）。记边。
@@ -165,6 +210,16 @@ class ArtifactStore:
             consumed=prov.projection_fingerprint(project(text)) if project else None,
         ))
         return text
+
+    def read_own_text(self, rel: str) -> str:
+        """Read this node's byte artifact/history without recording a fake input edge.
+
+        This is the text counterpart of :meth:`read_own`.  In particular,
+        ``stage0/_rounds/*.txt`` is a three-level recovery archive and cannot be
+        represented by the two-level provenance input-key contract.
+        """
+        raw = self._read_bytes(paths.check_rel_deep(rel))
+        return self._decode(rel, raw)
 
     def _read_bytes(self, rel: str) -> bytes:
         p = self.path(rel)
@@ -223,13 +278,48 @@ class ArtifactStore:
         ⚠ `.INVALID` 不走这条（走 `write_invalid`）：两条路的语义不同，
         合成一条之后「这份合格」与「这份被拦下了」就只剩一个调用点参数的差别，
         而那种差别是会被传错的。
+
+        ⚠⚠ **落新正式稿之前先把同名 `.INVALID` 送进归档。** 一份合格的新稿
+        就是对同一份产物的旧问题稿的终结；把它留在盘上，`.INVALID` 就成了一个
+        **谁也不会去清的永久标记**，而全仓有四处只看「兄弟文件在不在」：
+        `state.artifact_state`（→ 语料库把一本已出书的书报成 `broken`）·
+        `state.resume_verdict`（→ 队列**重跑并重新付费**一个已经有新鲜正式稿的节点，
+        实测发生过）· `approvals._require_artifacts`（→ 人定稿盖不上章）·
+        `queue._upstream_invalid`（→ 下游整条链被挡）。
+        ⚠ **归档不是删除**（`Q-8`）：那份稿花过钱，而且可能还被别人的 `inputs` 指着。
+        ⚠ **归档前必须先把新字节完整 render 并做 schema 往返校验。** 否则新内容
+        自己不合法时，旧 `.INVALID` 已经被挪走，盘面会从「明确有问题稿」退化成
+        「什么也没有」。真正替换正式稿失败时也把刚挪走的 sibling 原位恢复。
         """
         rel = paths.check_rel_deep(rel)
         if paths.is_invalid(rel):
             raise PathRefused(
                 f'{rel} 是 `.INVALID` 形态，不走 `write`。'
                 f'被闸门拦下的稿走 `write_invalid`（它强制你交代 `gates_skipped`）')
-        return self._write_json(rel, artifact)
+        data = self._render(rel, artifact)
+        self._verify_round_trip(rel, type(artifact), data)
+        p = self.path(rel)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        retired: Path | None = None
+        try:
+            retired = self.retire_invalid(rel)
+            self._replace_atomically(p, data)
+        except BaseException:
+            if retired is not None and retired.is_file():
+                invalid = self.path(paths.invalid_of(rel))
+                invalid.parent.mkdir(parents=True, exist_ok=True)
+                if not invalid.exists():
+                    os.replace(retired, invalid)
+            raise
+        return p
+
+    def retire_invalid(self, rel: str) -> Path | None:
+        """同名 `.INVALID` 若在盘上，按它自己记的那一轮归档；不在就什么都不做。
+
+        返回归档路径或 `None`（`None` = 本来就没有问题稿，不是「归档失败」）。
+        """
+        inv_rel = paths.invalid_of(paths.check_rel_deep(rel))
+        return self.archive_round(inv_rel) if self.exists(inv_rel) else None
 
     def write_invalid(self, rel: str, artifact: BaseModel, *,
                       gates_skipped: list[str]) -> Path:
@@ -439,6 +529,36 @@ class ArtifactStore:
             os.replace(source, dest)
         return dest
 
+    def retire_bytes(self, rel: str, destination: str) -> Path:
+        """Move live bytes to an immutable, content-addressed archive idempotently.
+
+        Unlike ``archive_bytes(..., keep=False)``, this operation deliberately
+        accepts an already-existing destination only when its bytes are exactly
+        identical.  That shape is needed when an interrupted/repeated invalidation
+        is retiring a derived live product, not recording a new logical round.
+        """
+        source_rel = paths.check_rel_deep(rel)
+        destination_rel = paths.check_rel_deep(destination)
+        source = self.path(source_rel)
+        dest = self.path(destination_rel)
+        if not source.is_file():
+            raise UpstreamMissing(f'{self.ctx.node}: 要退休的 {source_rel} 不在盘上')
+        source_data = self._read_bytes(source_rel)
+        if dest.exists():
+            try:
+                same = dest.is_file() and dest.read_bytes() == source_data
+            except OSError as exc:
+                raise ArtifactUnreadable(
+                    f'{self.ctx.node}: 读不了退休目标 {dest}：{exc!r}') from exc
+            if not same:
+                raise PathRefused(
+                    f'退休目标 {dest} 已存在且字节不同；不可覆盖历史交付物')
+            source.unlink()
+            return dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, dest)
+        return dest
+
     def _round_on_disk(self, rel: str) -> int | None:
         """盘上那份 `_provenance.round`；没有文件 / 没有这个键 ⇒ `None`。"""
         p = self.path(rel)
@@ -468,6 +588,14 @@ class ArtifactStore:
         p = self.path(rel)
         if not p.is_file():
             raise UpstreamMissing(f'{self.ctx.node}: 要判新鲜度的 {rel} 不在盘上')
+
+        # 这六份确定性/字节形态产物没有通用 `_provenance.inputs` 槽位，但盘上已经有
+        # 同等强度的 40 位指纹。先走兼容桥，既让历史产物可判，也不改 RootModel/纯文本
+        # 的盘上形状。新增来源事实仍只记在原有权威字段里。
+        deterministic = self._deterministic_freshness(rel)
+        if deterministic is not None:
+            return deterministic
+
         try:
             raw_data = json.loads(p.read_bytes().decode('utf-8'))
             data = decode_artifact(rel, raw_data).payload
@@ -477,6 +605,14 @@ class ArtifactStore:
         recorded = None
         if isinstance(data, dict):
             block = data.get(PROVENANCE_KEY)
+            if isinstance(block, dict):
+                root_was = block.get('root_clean_sha1')
+                root_now = self._content_sha1_or_none(STAGE0_CLEAN_TEXT)
+                if not isinstance(root_was, str):
+                    return FreshnessReport('unknown', 'no_provenance')
+                if root_now != root_was:
+                    edge = self._content_edge(STAGE0_CLEAN_TEXT, root_was, root_now)
+                    return self._content_report((edge,))
             recorded = (block or {}).get('inputs') if isinstance(block, dict) else None
             if block is not None and recorded is None:
                 recorded = {}                # 有来源账但没有 `inputs` ⇒ `no_inputs`，不是 `no_provenance`
@@ -486,6 +622,106 @@ class ArtifactStore:
             file_now=self._file_fp_of_key,
             consumed_now=lambda key: self._consumed_fp_of_key(node, key),
         )
+
+    def _deterministic_freshness(self, rel: str) -> FreshnessReport | None:
+        """没有通用来源块的产物，用其既有确定性指纹回答同一个问题。
+
+        stage0 的两份产物共用 removal report 的 source/clean 身份；stage1 三份
+        共用 partition report 的 input 身份；book.txt 的身份由 name_map.book_txt
+        承载。这些本来就是对应关卡使用的权威比对，完成度只复用，不另造一份账。
+        """
+        if rel in (STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT):
+            return self._stage0_freshness()
+        if rel in (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE1_PARTITION_REPORT):
+            return self._stage1_freshness()
+        if rel == STAGE7_BOOK:
+            return self._book_freshness()
+        return None
+
+    def _stage0_freshness(self) -> FreshnessReport:
+        report = self._freshness_payload(STAGE0_REMOVAL_REPORT)
+        if report is None:
+            return FreshnessReport('unknown', 'no_provenance')
+        source_path = report.get('original_path')
+        source_was = report.get('source_sha1')
+        clean_was = report.get('clean_sha1')
+        if not all(isinstance(value, str) and value
+                   for value in (source_path, source_was, clean_was)):
+            return FreshnessReport('unknown', 'no_provenance')
+
+        clean_now = self._content_sha1_or_none(STAGE0_CLEAN_TEXT)
+        clean_edge = self._content_edge(STAGE0_CLEAN_TEXT, clean_was, clean_now)
+
+        source = Path(source_path)
+        if not source.is_file():
+            source_now = None
+        else:
+            try:
+                from novel.core.ingest import DecodeProblem, decode_source_bytes
+                source_now = decode_source_bytes(source.read_bytes()).source_sha1
+            except DecodeProblem:
+                return FreshnessReport('unknown', 'no_provenance')
+            except OSError:
+                return FreshnessReport('unknown', 'no_provenance')
+        source_edge = self._content_edge(str(source), source_was, source_now)
+        return self._content_report((source_edge, clean_edge))
+
+    def _stage1_freshness(self) -> FreshnessReport:
+        report = self._freshness_payload(STAGE1_PARTITION_REPORT)
+        expected = report.get('input_sha1') if report is not None else None
+        if not isinstance(expected, str) or not expected:
+            return FreshnessReport('unknown', 'no_provenance')
+        edge = self._content_edge(
+            STAGE0_CLEAN_TEXT, expected, self._content_sha1_or_none(STAGE0_CLEAN_TEXT))
+        return self._content_report((edge,))
+
+    def _book_freshness(self) -> FreshnessReport:
+        name_map = self._freshness_payload(STAGE7_NAME_MAP)
+        book_txt = name_map.get('book_txt') if name_map is not None else None
+        expected = book_txt.get('sha1') if isinstance(book_txt, dict) else None
+        if not isinstance(expected, str) or not expected:
+            return FreshnessReport('unknown', 'no_provenance')
+        edge = self._content_edge(
+            STAGE7_BOOK, expected, self._content_sha1_or_none(STAGE7_BOOK))
+        return self._content_report((edge,))
+
+    def _freshness_payload(self, rel: str) -> dict[str, Any] | None:
+        """为新鲜度读一份 companion；缺席表示没有账，坏 JSON 仍是显式不可读。"""
+        p = self.path(rel)
+        if not p.is_file():
+            return None
+        try:
+            raw = json.loads(p.read_bytes().decode('utf-8'))
+            payload = decode_artifact(rel, raw).payload
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError,
+                ArtifactVersionError) as e:
+            raise ArtifactUnreadable(f'{rel} 不是可用的来源指纹载体：{e!r}') from e
+        return payload if isinstance(payload, dict) else None
+
+    def _content_sha1_or_none(self, rel: str) -> str | None:
+        p = self.path(rel)
+        if not p.is_file():
+            return None
+        try:
+            return prov.content_sha1(p.read_bytes())
+        except OSError as e:
+            raise ArtifactUnreadable(f'{self.ctx.node}: 读不了 {rel} 的内容指纹：{e!r}') from e
+
+    @staticmethod
+    def _content_edge(key: str, recorded: str, now: str | None) -> prov.EdgeVerdict:
+        reason = 'ghost' if now is None else 'match' if recorded == now else 'file_changed'
+        state = {'ghost': 'unknown', 'match': 'fresh', 'file_changed': 'stale'}[reason]
+        return prov.EdgeVerdict(
+            key=key, state=state, reason=reason,
+            recorded_file=recorded, now_file=now,
+            recorded_consumed=None, now_consumed=None,
+        )
+
+    @staticmethod
+    def _content_report(edges: tuple[prov.EdgeVerdict, ...]) -> FreshnessReport:
+        rank = {'fresh': 0, 'unknown': 1, 'stale': 2}
+        worst = max(edges, key=lambda edge: rank[edge.state])
+        return FreshnessReport(worst.state, worst.reason, edges)
 
     def _file_fp_of_key(self, key: str) -> str | None:
         """来源账里那个键 → 盘上现在的整份指纹。**取不到一律 `None`（幽灵边）。**
@@ -529,6 +765,16 @@ class ArtifactStore:
         name = provenance_field(type(artifact))
         return getattr(artifact, name) if name else None
 
+    @classmethod
+    def _root_of(cls, artifact: BaseModel) -> str | None:
+        src = cls._provenance_of(artifact)
+        return src.root_clean_sha1 if src is not None else None
+
+    def _record_artifact_root(self, rel: str, artifact: BaseModel) -> None:
+        record = getattr(self.ctx, 'record_artifact_root', None)
+        if callable(record):
+            record(rel, self._root_of(artifact))
+
     def _refuse_bad_provenance(self, rel: str, src: Provenance) -> None:
         """写盘口的闸。**拒绝，不是打印一句警告然后照写。**
 
@@ -545,6 +791,11 @@ class ArtifactStore:
         ⇒ 该拦的是「**0 成本的跑现造一份声称模型产了它的账**」，而现造只有一个入口。
         """
         prompts = getattr(src, 'prompts', None)
+        current_root = self.ctx.root_clean_sha1
+        if src.root_clean_sha1 != current_root:
+            raise ProvenanceRefused(
+                f'{self.ctx.node} 要往 {rel} 写 root_clean_sha1={src.root_clean_sha1} 的产物，'
+                f'但当前 stage0/clean_text.txt 是 {current_root}；拒绝混根或伪造重挂')
         if prompts and not src.inputs:
             raise ProvenanceRefused(
                 f'{self.ctx.node} 要往 {rel} 写一份 `prompts` 非空而 `inputs` 为空的来源账。'
