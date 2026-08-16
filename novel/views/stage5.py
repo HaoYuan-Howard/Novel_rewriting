@@ -188,6 +188,7 @@ def _draft_view(store, rec: dict[str, Any], *, invalid: bool,
         budget_chars=rec.get('budget_chars'),
         source_chars=int(rec.get('source_chars') or 0),
         overlap_excl_verbatim=rec.get('overlap_excl_verbatim'),
+        segments=list(rec.get('segments') or []),
         text=rec['text'],
         align=align,
         align_rows=rows,
@@ -207,6 +208,7 @@ def _invalid_draft_view(store, rel: str, source_text: str | None, entry) -> Draf
     except (UpstreamMissing, ArtifactUnreadable):
         return None
     rec = chapter.model_dump(by_alias=True)
+    rec['text'] = chapter.text
     rec['_relpath'], rec['_mode'] = rel, rel.split('/')[1]
     return _draft_view(store, rec, invalid=True, source_text=source_text, entry=entry)
 
@@ -224,7 +226,7 @@ def _align(source: str | None, draft: str,
     """
     if source is None or entry is None or not draft:
         return None, []
-    beats = list(entry.get('beats') or [])
+    beats = list(entry.get('segments') or [])
     if not beats:
         return None, []
 
@@ -370,6 +372,7 @@ def _review_chapter(store, rc, by_ord, judged_now) -> ReviewChapterView:
         round=rc.draft_round,
         origin=(str(p.get('origin')) if p.get('origin') else
                 ('llm' if rec is not None else None)),
+        segments=(list(rec.get('segments') or []) if rec is not None else None),
         text=(rec or {}).get('text'),
         rounds=rounds,
         stale=_stale_of(rc, judged_now),

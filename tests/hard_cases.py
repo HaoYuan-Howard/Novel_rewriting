@@ -60,15 +60,31 @@ def _hook_semantic_contradiction() -> list:
         'concise_reason': '场面具体，但关系写反。',
         'text_sha1': semantic.text_sha1(text),
     })
+    subject = semantic.text_sha256(text)
+    decision = SimpleNamespace(
+        subject_key=subject,
+        automated=True,
+        verdict='FAIL',
+        reason='两名盲评一致判定关系矛盾',
+    )
     fake = SimpleNamespace(
-        reviews=[review], ranking=['source_architecture'])
+        reviews=[review],
+        decisions=[decision],
+        ranking=['source_architecture'],
+    )
     store = SimpleNamespace(freshness=lambda _rel: SimpleNamespace(state='fresh'))
     original = semantic.latest_semantic
+    original_status = semantic._calibration_status
+    original_seqs = semantic.semantic_seqs
     semantic.latest_semantic = lambda _s: (1, fake)
+    semantic._calibration_status = lambda _artifact: (True, '')
+    semantic.semantic_seqs = lambda _store: [1]
     try:
         outcomes = semantic.outcomes(store, art)
     finally:
         semantic.latest_semantic = original
+        semantic._calibration_status = original_status
+        semantic.semantic_seqs = original_seqs
     return [f for o in outcomes for f in o.findings]
 
 
@@ -136,9 +152,16 @@ def _b4(*ids: str, budget: int = 100) -> dict:
 
 def _ch4(oo: int, beats: list[dict], srcs: list[int] | None = None,
          goal: str = '讲清这一章发生了什么。') -> dict:
+    segments = [{**beat, 'slot': f's{i:02d}'} for i, beat in enumerate(beats, 1)]
+    goal_of = lambda intent, text: {
+        'intent': intent,
+        'fact_refs': [{'kind': 'chapter_boundary', 'ref': f'chapter:{oo}', 'chapter': oo}],
+        'rationale': text,
+    }
     return {'output_ordinal': oo, 'from_source_ordinals': srcs if srcs is not None else [oo],
-            'chapter_goal': goal, 'open_hook_goal': '以日常开场。',
-            'end_hook_goal': '以悬念收束。', 'beats': beats}
+            'chapter_goal': goal_of('advance', goal),
+            'open_hook_goal': goal_of('open', '以日常开场。'),
+            'end_hook_goal': goal_of('close', '以悬念收束。'), 'segments': segments}
 
 
 _GREEN4 = lambda: [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03')]),
@@ -162,7 +185,7 @@ def _ctx4(chapters: list[dict], *, with_gg: bool = True) -> list:
 
 def _ctx_ch(oo: int = 1, **over) -> dict:
     base: dict = {'output_ordinal': oo, 'from_source_ordinals': [oo],
-                  'beats': [], 'characters': {}, 'narration': []}
+                  'segments': [], 'characters': {}, 'narration': []}
     base.update(over)
     return base
 
@@ -243,13 +266,13 @@ CASES: dict[str, Case] = {
         [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03')], goal='把这一章的张力拉满。'),
          _ch4(2, [_b4('b2_01')])])),
     'ctx_events_verbatim': Case('stage4', lambda: _ctx4(
-        [_ctx_ch(beats=[{'events': ['被中间层转抄改写过的一句话']}])])),
+        [_ctx_ch(segments=[{'slot': 's01', 'events': ['被中间层转抄改写过的一句话']}])])),
     'ctx_name_attested': Case('stage4', lambda: _ctx4(
         [_ctx_ch(characters={'c1': {'display_name': '原文中不存在之名'}})])),
     'ctx_secret_gate': Case('stage4', lambda: _ctx4(
         [_ctx_ch(must_not_reveal=['s1'], facts={'secrets': [{'secret_id': 's1'}]})])),
     'ctx_layer_flat': Case('stage4', lambda: _ctx4(
-        [_ctx_ch(beats=[{'time_layer': 'present+recall', 'events': ['事件一']}])])),
+        [_ctx_ch(segments=[{'slot': 's01', 'time_layer': 'present+recall', 'events': ['事件一']}])])),
 }
 
 

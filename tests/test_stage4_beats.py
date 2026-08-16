@@ -64,7 +64,7 @@ def test_the_grouping_reproduces_every_plan_on_disk():
         groups = group_beats(BPS[sid], MAIN[sid])
         for o in (PLANS[sid].get('output_chapters') or []):
             oo = o.get('output_ordinal')
-            stored = [list(be.get('from_beats') or []) for be in (o.get('beats') or [])]
+            stored = [list(be.get('from_beats') or []) for be in (o.get('segments') or [])]
             assert [list(g) for g in groups.get(oo, [])] == stored, (
                 f'{sid} 第 {oo} 章的拍与盘上不一致\n  算: {groups.get(oo)}\n  盘: {stored}')
             total_beats += len(stored)
@@ -244,7 +244,7 @@ def test_every_chapter_budget_falls_inside_the_strict_band():
         chars, _cov = chapter_source_chars(MAIN[sid], bidx)
         for o in PLANS[sid]['output_chapters']:
             src = sum(chars.get(s, 0) for s in o['from_source_ordinals'])
-            tot = sum(b['budget_chars'] for b in o['beats']
+            tot = sum(b['budget_chars'] for b in o['segments']
                       if isinstance(b.get('budget_chars'), int))
             assert lo <= tot / src <= hi, f'{sid} 第 {o["output_ordinal"]} 章 {tot / src:.3f} 出带'
 
@@ -292,16 +292,17 @@ def test_an_empty_plan_says_so_in_one_sentence():
 ])
 def test_every_plan_beat_violation_is_a_terminal_state(bad, why):
     """三种违约各自说出**是哪一种**——兜底会给违约数据发一张静默通行证。"""
-    plan = {'output_chapters': [{'output_ordinal': 1, 'beats': bad}]}
+    plan = {'output_chapters': [{'output_ordinal': 1, 'segments': bad}]}
     with pytest.raises(RefusedByStructure, match=why):
         expand_plan_beats(plan, {1: [['b01_01']]})
 
 
 def test_expand_plan_beats_writes_from_beats_and_drops_nothing():
     plan = {'output_chapters': [{'output_ordinal': 1,
-                                 'beats': [{'plan_beat': 'p01_01', 'budget_chars': 120}]}]}
+                                 'segments': [{'plan_beat': 'p01_01', 'budget_chars': 120}]}]}
     assert expand_plan_beats(plan, {1: [['b01_01', 'b01_02']]}) == 1
-    assert plan['output_chapters'][0]['beats'][0]['from_beats'] == ['b01_01', 'b01_02']
+    assert plan['output_chapters'][0]['segments'][0]['from_beats'] == ['b01_01', 'b01_02']
+    assert plan['output_chapters'][0]['segments'][0]['slot'] == 's01'
 
 
 # ── 七、恒等基线 ──────────────────────────────────────────────────────────
@@ -320,6 +321,6 @@ def test_the_identity_plan_gives_每拍照源字数():
         assert len(ip['output_chapters']) == len(BPS[sid]['blueprints'])
         for ch in ip['output_chapters']:
             assert ch['output_ordinal'] == ch['from_source_ordinals'][0], '恒等式必须成立'
-            assert ch['chapter_goal'] == IDENTITY_GOAL
-            for be in ch['beats']:
+            assert ch['chapter_goal']['rationale'] == IDENTITY_GOAL
+            for be in ch['segments']:
                 assert be['budget_chars'] == group_chars(be['from_beats'], bidx)

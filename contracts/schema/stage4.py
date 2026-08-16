@@ -19,8 +19,9 @@ writer_context.json   确定性组装（非 LLM）—— 写作节点的唯一�
      关系剧透闸门 / 弧线终点 / setting 逐章闸门——**前三层所有逐章闸门最后都汇到它一份上**。
      ⇒ 改任何一条闸门，唯一能看到效果的地方是这份产物。
 
-  ③ **`plan ⊊ ctx`，而且是字节级原样透传**（实测 3/3 本 mismatch 0）。
-     ⇒ **两处各存一份 goals，手改 plan 而不重建 ctx 就会分家**——那正是 `context_link`（HARD）在盯的事。
+  ③ **`plan ⊊ ctx`，但 goal 是安全投影，不是原样透传**：计划保留可复算 id 与审计理由，
+     context 只保留解析后的人话事实。手改 plan 而不重建 ctx 仍会分家——那正是
+     `context_link`（HARD）在盯的事。
 
   ④ **先校验后落盘**：`_provenance` 是必填契约；失败响应只允许进入 `.INVALID`，
      不得晋升为正式计划。
@@ -60,6 +61,10 @@ class PlanBeat(StrictModel):
     正式产物的 `from_beats`。正式产物只保存下游实际消费的引用与预算。
     """
 
+    #: Producer-owned stable response slot.  It is assigned after the model
+    #: response is matched back to the deterministic Stage2 beat groups.
+    slot: str = Field(pattern=r'^s\d{2,4}$')
+
     #: **[HARD] 正整数**。**这是模型在拍这一层唯一的产出。** 盘上 15~720。
     #:
     #: ⚠ 它留在**判据层**不动：归载体等于把一次 0 成本手改（把某一拍写成 0 的那个数改回来）
@@ -78,6 +83,42 @@ class PlanBeat(StrictModel):
     from_beats: list[str] = Field(min_length=1)
 
 
+class FactRef(StrictModel):
+    """A recomputable Stage1/2 fact reference, not a free-text justification."""
+
+    kind: Literal[
+        'character', 'event', 'world_rule', 'secret', 'relation',
+        'setting', 'chapter_boundary',
+    ]
+    # Internal joins are valid in the planning artifact, but they are never a
+    # writer-facing language.  Marking the value private makes the final-message
+    # guard catch any future shortcut that sends PlanGoal itself to Stage5/6.
+    ref: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
+    chapter: int = Field(ge=1)
+
+
+class PlanGoal(StrictModel):
+    """Typed goal; rationale is retained for audit but never sent to the writer."""
+
+    intent: Literal['establish', 'advance', 'open', 'close', 'withhold', 'resolve']
+    fact_refs: list[FactRef] = Field(min_length=1)
+    rationale: str | None = Field(
+        default=None, min_length=1, json_schema_extra={'prompt_private': True})
+
+
+class CtxGoal(StrictModel):
+    """Writer-facing goal with every internal fact reference already resolved.
+
+    ``PlanGoal`` is the durable audit decision and therefore keeps typed IDs.
+    ``CtxGoal`` is a deterministic projection: it carries only human-readable,
+    chapter-safe facts, so neither IDs nor the planner's free rationale can leak
+    into a writer or hook prompt.
+    """
+
+    intent: Literal['establish', 'advance', 'open', 'close', 'withhold', 'resolve']
+    facts: list[str] = Field(min_length=1)
+
+
 class PlanChapter(StrictModel):
     """一个输出章。"""
 
@@ -92,12 +133,12 @@ class PlanChapter(StrictModel):
     #: `--revalidate` 提升即可。
     #: ⚠ 放行的代价是实测的——旧口径下两本共 5 处命中（「张力」×4、「意象」×1）**全在 goal 里**，
     #: 全部 INFO 放行、一路进了写手 prompt。
-    chapter_goal: str = Field(min_length=1)
-    open_hook_goal: str = Field(min_length=1)
-    end_hook_goal: str = Field(min_length=1)
+    chapter_goal: PlanGoal
+    open_hook_goal: PlanGoal
+    end_hook_goal: PlanGoal
 
     #: **[HARD] 非空**。长度 3~13，条数与顺序照骨架切好的拍。
-    beats: list[PlanBeat] = Field(min_length=1)
+    segments: list[PlanBeat] = Field(min_length=1)
 
     @model_validator(mode='after')
     def _output_ordinal_equals_its_only_source(self) -> PlanChapter:
@@ -183,10 +224,10 @@ class PlanChapterResponse(StrictModel):
 
     output_ordinal: int = Field(ge=1)
     from_source_ordinals: list[int] = Field(min_length=1)
-    chapter_goal: str = Field(min_length=1)
-    open_hook_goal: str = Field(min_length=1)
-    end_hook_goal: str = Field(min_length=1)
-    beats: list[PlanBeatResponse] = Field(min_length=1)
+    chapter_goal: PlanGoal
+    open_hook_goal: PlanGoal
+    end_hook_goal: PlanGoal
+    segments: list[PlanBeatResponse] = Field(min_length=1)
 
 
 class PlanResponse(StrictModel):
@@ -270,6 +311,9 @@ class CtxBeat(StrictModel):
     实测它选后者（某章 4 条跨段 verbatim 一条不剩地全丢）。
     """
 
+    #: Producer-owned response slot; Stage5 must return it exactly once.
+    slot: str = Field(pattern=r'^s\d{2,4}$')
+
     #: **按 `from_beats` 逐条取 stage2 的 `event` 原件**，顺序同 `from_beats`，
     #: **不合并成散文**。长度 1~3，单条 13~175 字。
     #: ⚠ **一条 event 都解析不出 ⇒ 显式终态、不落盘。**
@@ -313,6 +357,8 @@ class CtxBeat(StrictModel):
         else:
             if not self.segments:
                 raise ValueError('分段拍的 segments 不能为空')
+            if len(self.segments) != len(self.events):
+                raise ValueError('分段载体的 events 与 segments 必须逐项等长')
             if self.time_layer is not None or self.place is not None or self.present is not None:
                 raise ValueError(
                     '分段拍的顶层 time_layer/place/present 必须为 null；舞台信息只在 segments')
@@ -339,7 +385,7 @@ class CtxRelation(StrictModel):
 class CtxSecret(StrictModel):
     """逐章投影后的一条秘密。盘上共 114 条。"""
 
-    secret_id: str = Field(min_length=1)
+    secret_id: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
     fact: str = Field(min_length=1)
     known_by: list[str]
 
@@ -355,7 +401,7 @@ class CtxWorldRule(StrictModel):
     **无兜底，缺失即显式终态**（`or description` 那个兜底就是漏洞本身）。
     """
 
-    rule_id: str = Field(min_length=1)
+    rule_id: str = Field(min_length=1, json_schema_extra={'prompt_private': True})
     kind: Literal[WORLD_RULE_KINDS]
     description: str = Field(min_length=1)
 
@@ -464,12 +510,13 @@ class CtxNarration(StrictModel):
 class CtxChapter(StrictModel):
     """一个输出章的完整任务书。"""
 
-    #: 以下五项**原样透传自 plan**（实测 mismatch 0）。
+    #: 章号与来源章原样透传；三个目标由 PlanGoal 的 typed refs 确定性解析为
+    #: CtxGoal，不携带内部 id 或审计 rationale。
     output_ordinal: int = Field(ge=1)
     from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
-    chapter_goal: str = Field(min_length=1)
-    open_hook_goal: str = Field(min_length=1)
-    end_hook_goal: str = Field(min_length=1)
+    chapter_goal: CtxGoal
+    open_hook_goal: CtxGoal
+    end_hook_goal: CtxGoal
 
     #: 本章各拍预算之和（写手不必自己加）。
     budget_chars: int = Field(gt=0)
@@ -478,23 +525,31 @@ class CtxChapter(StrictModel):
     #:
     #: ⚠⚠ **同一份产物里有两个口径，不许拿它们做相等断言**：
     #: 本字段是 `len(整章文本)`，而 `budget_band` 判据的基准是 **span 合计**（约占正文 97%），
-    #: `beats[].source_chars` 也是 span 合计。
-    #: **两者都是对的，但它们不是同一个数**——`source_chars` 与 `sum(beats[].source_chars)`
+    #: `segments[].source_chars` 也是 span 合计。
+    #: **两者都是对的，但它们不是同一个数**——`source_chars` 与 `sum(segments[].source_chars)`
     #: **不相等是正常的**。产地已经踩过这个坑一次：预算区间校验曾用整章字数作基准，
     #: 而规划器拿到的是 span 合计，于是一份合格的计划被判 `INVALID`。
     source_chars: int = Field(ge=0)
 
-    beats: list[CtxBeat] = Field(min_length=1)
+    segments: list[CtxBeat] = Field(min_length=1)
 
     #: **章级收窄**。
-    characters: dict[str, ChapterCharacter]
+    characters: dict[str, ChapterCharacter] = Field(
+        json_schema_extra={'prompt_private_keys': True})
 
     narration: list[CtxNarration] = Field(min_length=1)
     facts: CtxFacts
 
     #: 本章不许泄的 `secret_id`。**只给 id 不给内容**——写手看不到内容才不会写出来；
     #: 它服务的是**回写校验**，组 prompt 时不下发。盘上 0~8。
-    must_not_reveal: list[str]
+    must_not_reveal: list[str] = Field(json_schema_extra={'prompt_private': True})
+
+    @model_validator(mode='after')
+    def _ctx_slots_are_unique(self) -> CtxChapter:
+        slots = [segment.slot for segment in self.segments]
+        if len(slots) != len(set(slots)):
+            raise ValueError('writer-context segment slots must be unique')
+        return self
 
 
 class CtxProvenance(FreeProvenance):

@@ -214,7 +214,9 @@ function PlanBeatRow({
       )}
     >
       <div className="flex flex-wrap items-center gap-8">
-        <Mono className="rounded-tag bg-inset px-7 py-1 text-mini">第 {b.i} 拍</Mono>
+        <Mono className="rounded-tag bg-inset px-7 py-1 text-mini">
+          第 {b.i} 拍 · {b.slot}
+        </Mono>
         <Mono className="text-micro text-ink-5">源拍 {b.fromBeats}</Mono>
         <span
           className={cx('rounded-tag px-7 py-1 text-mini', !b.layerUnknown && (

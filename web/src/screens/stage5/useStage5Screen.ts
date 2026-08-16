@@ -4,6 +4,7 @@ import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { FRESH, SEV, chNo, type Mode, type Severity } from '@/constants/vocabulary'
 import type { Finding } from '@/types/common'
+import type { ChapterSegment } from '@/types/stages'
 import type { TextPart } from '@/components/ui/HighlightedText'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 import { useEnums } from '@/hooks/useEnums'
@@ -61,7 +62,7 @@ export function useStage5Screen() {
   const [selFinding, setSelFinding] = useState(0)
   const [sideBySide, setSideBySide] = useState(true)
   const [editing, setEditing] = useState(false)
-  const [draftText, setDraftText] = useState<string | null>(null)
+  const [draftSegments, setDraftSegments] = useState<ChapterSegment[] | null>(null)
   const [matOpen, setMatOpen] = useState(false)
   const [chaptersArg, setChaptersArg] = useState(String(ordinal))
 
@@ -78,7 +79,8 @@ export function useStage5Screen() {
 
   const save = useMutation({
     // mode 取当前稿的臂——人工稿落回同一条臂的新一轮
-    mutationFn: (req: { mode: Mode; text: string }) => api.saveDraftEdit(sid, ordinal, req),
+    mutationFn: (req: { mode: Mode; segments: ChapterSegment[] }) =>
+      api.saveDraftEdit(sid, ordinal, req),
     onSuccess: (job) => {
       if (job.state !== 'failed') setEditing(false)
       void qc.invalidateQueries({ queryKey: qk.stage5(sid, ordinal) })
@@ -95,8 +97,10 @@ export function useStage5Screen() {
   const findings: Finding[] = rv?.chapter.findings ?? []
   const active = findings[selFinding]
   const firstDraft = d?.drafts[0] ?? null
+  const baseSegments = rv?.chapter.segments ?? firstDraft?.segments ?? []
+  const segments = draftSegments ?? baseSegments
   const baseText = rv?.chapter.text ?? firstDraft?.text ?? ''
-  const text = draftText ?? baseText
+  const text = segments.length ? segments.map((segment) => segment.text.trim()).join('\n\n') : baseText
 
   // 证据在成稿里命中了几处 —— 一处都没命中要明说，不能装作高亮过
   const evHits = (active?.evidence ?? []).map((e) => {
@@ -131,11 +135,21 @@ export function useStage5Screen() {
     toggleSide: () => setSideBySide((v) => !v),
     editing,
     toggleEdit: () => {
-      setDraftText(text)
-      setEditing((v) => !v)
+      setEditing((wasEditing) => {
+        if (!wasEditing) {
+          setDraftSegments(baseSegments.map((segment) => ({ ...segment })))
+        }
+        return !wasEditing
+      })
     },
     text,
-    setText: setDraftText,
+    editSegments: segments,
+    setSegmentText: (slot: string, value: string) =>
+      setDraftSegments((current) =>
+        (current ?? baseSegments).map((segment) =>
+          segment.slot === slot ? { ...segment, text: value } : segment,
+        ),
+      ),
     save,
     saveMode: (firstDraft?.mode ?? 'deep') as Mode,
     editNote: '保存走子进程重跑校验，落成新的一轮；旧轮归档，不覆盖。',

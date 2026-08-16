@@ -114,7 +114,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     n_beats = n_refs = 0
     for o in outs:
         srcs = set(o.get('from_source_ordinals') or [])
-        beats = o.get('beats') or []
+        beats = o.get('segments') or []
         if not beats:
             empty.append(o.get('output_ordinal'))
         n_beats += len(beats)
@@ -133,7 +133,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
 
     out.append(ran('empty_chapter',
                    fs('empty_chapter',
-                      (f'输出章没有 beats（计划必须详细到写手能直接写）：{empty}',
+                      (f'输出章没有 segments（计划必须详细到写手能直接写）：{empty}',
                        [f'out{o}' for o in empty])) if empty else [],
                    scanned=f'{len(outs)} 个输出章'))
 
@@ -173,7 +173,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     for o in outs:
         oo = o.get('output_ordinal')
         seq: list[int] = []
-        for bi, be in enumerate(o.get('beats') or [], 1):
+        for bi, be in enumerate(o.get('segments') or [], 1):
             fb = [x for x in (be.get('from_beats') or []) if x in order]
             idxs = [order[x] for x in fb]
             seq += idxs
@@ -238,7 +238,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
         srcs = o.get('from_source_ordinals') or []
         if not srcs:
             continue
-        budgets = [be.get('budget_chars') for be in (o.get('beats') or [])
+        budgets = [be.get('budget_chars') for be in (o.get('segments') or [])
                    if isinstance(be.get('budget_chars'), int)]
         if not budgets:
             # ⚠ 原型这里是一条**静默 `continue`**。改成与「基准残缺」同规格的结论：
@@ -332,7 +332,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     flatten = []
     n_flat = 0
     for o in outs:
-        bs = [be.get('budget_chars') for be in (o.get('beats') or [])
+        bs = [be.get('budget_chars') for be in (o.get('segments') or [])
               if isinstance(be.get('budget_chars'), int) and be.get('budget_chars') > 0]
         if len(bs) >= 3:
             n_flat += 1
@@ -346,7 +346,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
                    scanned=f'{n_flat}/{len(outs)} 章拍数 ≥3'))
 
     per = [(o.get('output_ordinal'), be.get('budget_chars')) for o in outs
-           for be in (o.get('beats') or []) if isinstance(be.get('budget_chars'), int)]
+           for be in (o.get('segments') or []) if isinstance(be.get('budget_chars'), int)]
     nat = f'{BEAT_MIN_CHARS}~150'
     size_rows = []
     if (tiny := sorted({oo for oo, b in per if b < BEAT_ALERT_MIN})):
@@ -359,7 +359,7 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     out.append(ran('beat_size', fs('beat_size', *size_rows),
                    scanned=f'{len(per)} 拍（报警线 {BEAT_ALERT_MIN}~{BEAT_ALERT_MAX}）'))
 
-    cited = Counter(b for o in outs for be in (o.get('beats') or [])
+    cited = Counter(b for o in outs for be in (o.get('segments') or [])
                     for b in (be.get('from_beats') or []))
     dup = sorted(b for b, c in cited.items() if c > 1)
     out.append(ran('beat_reuse',
@@ -459,7 +459,7 @@ def _ctx_checks(ctx: dict[str, Any] | None, *, main_text: list[dict[str, Any]],
         n_ev = 0
         for ch in chapters:
             oo = ch.get('output_ordinal')
-            for bi, be in enumerate(ch.get('beats') or [], 1):
+            for bi, be in enumerate(ch.get('segments') or [], 1):
                 # 本层的 ctx 不存 `from_beats`（它被兑现成了 events / verbatim / 舞台）
                 # ⇒ 按下标与源章的 beat 表对齐是做不到的。改判**每一条 event 必须
                 #   等于某一条源 beat 的 event**：转抄一旦发生，那句话就不再等于任何一条。
@@ -481,7 +481,7 @@ def _ctx_checks(ctx: dict[str, Any] | None, *, main_text: list[dict[str, Any]],
         oo = ch.get('output_ordinal')
         upto = cum.get(max(ch.get('from_source_ordinals') or [0], default=0), '')
         names = [c.get('display_name') for c in (ch.get('characters') or {}).values()]
-        for be in (ch.get('beats') or []):
+        for be in (ch.get('segments') or []):
             names += list(be.get('present') or [])
             for sg in (be.get('segments') or []):
                 names += list(sg.get('present') or [])
@@ -515,7 +515,7 @@ def _ctx_checks(ctx: dict[str, Any] | None, *, main_text: list[dict[str, Any]],
     bad_lay: list[tuple[Any, int, str]] = []
     for ch in chapters:
         oo = ch.get('output_ordinal')
-        for bi, be in enumerate(ch.get('beats') or [], 1):
+        for bi, be in enumerate(ch.get('segments') or [], 1):
             segs = be.get('segments') or []
             flat_keys = [k for k in ('time_layer', 'place', 'present') if be.get(k)]
             if segs and flat_keys:
@@ -530,7 +530,7 @@ def _ctx_checks(ctx: dict[str, Any] | None, *, main_text: list[dict[str, Any]],
                  f'只在回忆里出场的人放进现世街头',
                  [f'out{oo}#{bi}' for oo, bi, _w in bad_lay])] if bad_lay else []
 
-    n_beats = sum(len(c.get('beats') or []) for c in chapters)
+    n_beats = sum(len(c.get('segments') or []) for c in chapters)
     return [
         ev_out,
         ran('ctx_name_attested', fs('ctx_name_attested', nm_rows), scanned=f'{n_nm} 处人名'),

@@ -39,12 +39,14 @@ def stage5_book() -> Book:
     entry = {
         'output_ordinal': 1,
         'from_source_ordinals': [1],
-        'chapter_goal': '沈青确认账册被人调换，并决定暗中追查。',
-        'open_hook_goal': '以雨夜里突然出现的陌生墨迹开场。',
-        'end_hook_goal': '以门外再次响起脚步声收尾。',
+        'chapter_goal': {'intent': 'advance', 'facts': [
+            '事件：沈青发现账册末页的墨迹被人换过。']},
+        'open_hook_goal': {'intent': 'open', 'facts': ['第 1 章开篇']},
+        'end_hook_goal': {'intent': 'close', 'facts': ['第 1 章结尾']},
         'budget_chars': len(source_one),
         'source_chars': len(source_one),
-        'beats': [{
+        'segments': [{
+            'slot': 's01',
             'events': ['沈青发现账册末页的墨迹被人换过。'],
             'budget_chars': len(source_one),
             'source_chars': len(source_one),
@@ -56,18 +58,19 @@ def stage5_book() -> Book:
             'must_appear': [],
             'must_hold': [],
         }],
-        'characters': {'char_001': character},
+        'characters': {'char_001': {
+            'display_name': character['display_name'], 'role': character['role']}},
         'narration': [{
             'segment': '全章',
             'grammatical_person': 'third',
             'narrator': '沈青',
         }],
         'facts': {
-            'setting': {'时代与社会': '架空旧城', '空间与超自然': '临河茶馆'},
+            'setting': {'时代背景': '架空旧城', '世界观': '故事发生在临河茶馆及其旧城商路。'},
             'relations': [],
             'secrets': [],
             'world_rules': [],
-            'arc': {},
+            'arc': {'current_stage': {'stage': '查账', 'chapters': [1]}},
             'address': [],
         },
         'must_not_reveal': [],

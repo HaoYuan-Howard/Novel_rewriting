@@ -95,9 +95,9 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
             chapter_goal=pc['chapter_goal'],
             open_hook_goal=pc['open_hook_goal'],
             end_hook_goal=pc['end_hook_goal'],
-            beats=[PlanBeatLine(i=i, from_beats=list(b['from_beats']),
+            beats=[PlanBeatLine(i=i, slot=str(b['slot']), from_beats=list(b['from_beats']),
                                 budget_chars=b.get('budget_chars'))
-                   for i, b in enumerate(pc['beats'], start=1)]),
+                   for i, b in enumerate(pc['segments'], start=1)]),
         ctx_chapter=ctx_entry,
         writer_target=target,
         plan_state=plan_state,
@@ -139,16 +139,29 @@ def _identity(store: ArtifactStore):
 
 
 def _index_row(pc: dict, ctx_entry: CtxChapter | None) -> Stage4IndexRow:
-    budgets = [b.get('budget_chars') for b in pc['beats']]
+    budgets = [b.get('budget_chars') for b in pc['segments']]
     span = None
     hidden = None
     if ctx_entry is not None:
-        chars = [b.source_chars for b in ctx_entry.beats if b.source_chars is not None]
+        chars = [b.source_chars for b in ctx_entry.segments if b.source_chars is not None]
         span = sum(chars) if chars else None
         hidden = len(ctx_entry.must_not_reveal)
     return Stage4IndexRow(
         output_ordinal=int(pc['output_ordinal']),
+        chapter_goal=_goal_label(pc['chapter_goal']),
         budget_chars=sum(b for b in budgets if b is not None) or None,
         span_chars=span,
-        beats=len(pc['beats']),
+        beats=len(pc['segments']),
         hidden=hidden)
+
+
+def _goal_label(goal: object) -> str:
+    """Typed goal -> stable display line; audit-only rationale is never the UI authority."""
+    if not isinstance(goal, dict):
+        return str(goal)
+    intent = str(goal.get('intent') or '')
+    refs = [
+        f'{ref.get("kind")}:{ref.get("ref")}'
+        for ref in (goal.get('fact_refs') or []) if isinstance(ref, dict)
+    ]
+    return ' · '.join(part for part in (intent, '、'.join(refs)) if part)

@@ -10,8 +10,9 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 | `stage4/writer_context.json` | `WriterContext` | `stage4.context` | Stage 5/6 的唯一写作材料 |
 | `stage4/writer_context.identity.json` | `WriterContext` | `stage4.plan --identity` | 确定性组装基线 |
 
-所有 JSON 都使用当前严格 schema，未知字段拒收。运行时不读取旧形状、不补缺失字段，也不根据
-历史常量切换预算语义。
+三份带 `_provenance` 的正式 JSON 使用 **schema v2**；`plan_edit.json` 是无来源账的人工
+决策集，仍为 v1。未知字段拒收，运行时不读取旧形状、不补缺失字段，也不根据历史常量切换
+预算语义。
 
 ## 一、规划调用边界
 
@@ -25,12 +26,13 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 每个 `PlanChapterResponse` 必填：
 
 - `output_ordinal` 与唯一的 `from_source_ordinals[0]`；
-- `chapter_goal`、`open_hook_goal`、`end_hook_goal`；
-- 非空 `beats[]`。
+- typed `chapter_goal`、`open_hook_goal`、`end_hook_goal`；
+- 非空 `segments[]`。
 
 模型响应中的每拍只含 `plan_beat` 与正整数 `budget_chars`。`plan_beat` 是下发骨架上的
 `pNN_NN` 编号；`expand_plan_beats` 必须确认编号存在、不重复、没有漏拍，然后确定性展开成
-正式产物的 `from_beats[]`。编号不存在、重复或缺失均为显式终态，不猜测、不兜底。
+正式产物的 `from_beats[]`，并按 producer 顺序分配稳定 `slot=s01...`。编号不存在、重复或
+缺失均为显式终态，不猜测、不兜底。
 
 ## 二、`plan_chapters.json`
 
@@ -48,13 +50,17 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 |---|---|---|
 | `output_ordinal` | `int` | 从 1 连续 |
 | `from_source_ordinals` | `int[1]` | 唯一值必须等于 `output_ordinal` |
-| `chapter_goal` | `str` | 非空且不得混入文风指令词 |
-| `open_hook_goal` | `str` | 非空 |
-| `end_hook_goal` | `str` | 非空 |
-| `beats` | `PlanBeat[]` | 非空，完整覆盖本章源拍 |
+| `chapter_goal` | `PlanGoal` | typed 目标，不得用自由文本代替事实引用 |
+| `open_hook_goal` | `PlanGoal` | typed 开篇目标 |
+| `end_hook_goal` | `PlanGoal` | typed 收束目标 |
+| `segments` | `PlanBeat[]` | 非空，完整覆盖本章源拍；顺序由 producer 决定 |
+
+`PlanGoal` 必填 `intent` 与非空 `fact_refs[]`。每个 `FactRef` 记录闭合 `kind`、可复算 `ref`
+及适用 `chapter`；`ref` 与可选 `rationale` 都标为 prompt-private，写手永远收不到它们。
 
 正式 `PlanBeat` 只含：
 
+- `slot: sNN`，由 producer 按正式顺序生成且章内唯一；
 - `budget_chars: int > 0`；
 - `from_beats: str[]`，引用一个或多个相邻、同时间层的 Stage 2 `beat_id`。
 
@@ -113,16 +119,16 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成重构计划和写作
 |---|---|---|
 | `output_ordinal` | `int` | 输出章号 |
 | `from_source_ordinals` | `int[1]` | 唯一源章 |
-| 三个 `*_goal` | `str` | 计划原样透传的章节目标 |
+| 三个 `*_goal` | `CtxGoal` | 代码把 typed refs 按本章闸门解析为 `facts[]` 人话；内部 id 与 `rationale` 均不存在 |
 | `budget_chars` | `int > 0` | 本章各拍预算之和 |
 | `source_chars` | `int ≥ 0` | 本章各拍精确原文区间总字数 |
-| `beats` | `CtxBeat[]` | 展开后的写作单位 |
+| `segments` | `CtxBeat[]` | 展开后的写作单位，顺序与 plan 相同 |
 | `characters` | `dict[str,ChapterCharacter]` | 截止本章可安全叫出的角色 |
 | `narration` | `CtxNarration[]` | 当前叙述人称、叙述者与视角人物 |
 | `facts` | `CtxFacts` | 当前章可见设定、关系、秘密、规则、弧线和称谓 |
 | `must_not_reveal` | `str[]` | 当前章不得点破的事实 |
 
-`CtxBeat` 必填 `events[]`、`budget_chars` 与 `source_chars`。同时间层、同地点时可平铺
+`CtxBeat` 必填 producer `slot`、`events[]`、`budget_chars` 与 `source_chars`。同时间层、同地点时可平铺
 `time_layer`、`place`、`present`；跨地点时使用 `segments[]`，不把在场者取并集。
 
 保真材料按语义分四组：

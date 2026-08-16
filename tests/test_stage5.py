@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from contracts.schema import decode_artifact, encode_artifact
+from contracts.schema import Chapter, decode_artifact, encode_artifact
 from contracts.rules import REGISTRY
 from novel.stages.stage5 import checks, measure as M, prompts
 from tests import corpus, factories
@@ -134,7 +134,7 @@ def test_meta_leak_goes_red_on_narrative_shell(book, entry, shell):
 def test_verbatim_missing_goes_red_when_the_mandated_line_is_gone(book, entry):
     """⭐ 【原样写入】那一组**要求逐字**，改一个字就废。"""
     line = '这句话一个字都不能改，写手必须原样放回去。'
-    e = dict(entry, beats=[{**(entry['beats'][0]), 'verbatim': [line]}])
+    e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
     body = _clean_body(book, entry)
     assert 'verbatim_missing' in _fire(body, e, book)
     assert 'verbatim_missing' not in _fire(body + line, e, book)
@@ -147,7 +147,7 @@ def test_verbatim_typo_is_a_separate_conclusion_not_a_miss(book, entry):
     ——那是**纠正**不是改写。要求它复现原文的错别字是荒谬的。
     """
     line = '这为公子的伤口已经溃烂了整整三日无人问津。'
-    e = dict(entry, beats=[{**(entry['beats'][0]), 'verbatim': [line]}])
+    e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
     fired = _fire(_clean_body(book, entry) + line.replace('这为', '这位'), e, book)
     assert 'verbatim_typo' in fired and 'verbatim_missing' not in fired
 
@@ -158,10 +158,39 @@ def test_verbatim_split_by_a_speech_tag_is_allowed_but_still_recorded(book, entr
     但「一个字都没动」与「切成两截后逐字出现」不是同一件事，**不能都走 `[OK]`**。
     """
     line = '「你要是真的想走，那就走吧，我不拦着你，一次都不会。」'
-    e = dict(entry, beats=[{**(entry['beats'][0]), 'verbatim': [line]}])
+    e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
     split = '「你要是真的想走，」他说，「那就走吧，我不拦着你，一次都不会。」'
     fired = _fire(_clean_body(book, entry) + split, e, book)
     assert 'verbatim_split' in fired and 'verbatim_missing' not in fired
+
+
+def test_real_stage5_report_keeps_verbatim_caveat_in_note_only(book, entry):
+    """FC-14：不用手搓 finding，从真实保真检查一路组装到报告行。"""
+    from collections import defaultdict
+
+    from novel.prov import FreshnessReport
+    from novel.report import build, render
+
+    line = '「你要是真的想走，那就走吧，我不拦着你，一次都不会。」'
+    e = dict(entry, segments=[{**entry['segments'][0], 'verbatim': [line]}])
+    split = '「你要是真的想走，」他说，「那就走吧，我不拦着你，一次都不会。」'
+    findings = checks.chapter_findings(
+        _clean_body(book, entry) + split, e, book, mode='deep', given='')
+    by_rule = defaultdict(list)
+    for hit in findings:
+        by_rule[hit.rule].append(hit)
+    outcomes = checks.check(
+        chapter_findings_by_rule=dict(by_rule), scanned={}, unver_empty={}, phase='write')
+    report = build(
+        sid='7615069877019300633', node='stage5.write',
+        freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=outcomes,
+    )
+    row = next(item for item in report.rules if item.rule == 'verbatim_split')
+    assert row.findings
+    assert '本体裁的标准写法' not in row.findings[0].detail
+    assert '已放行' not in row.findings[0].detail
+    assert row.note and '中文小说的标准写法' in row.note
+    assert f'说明：{row.note}' in render(report)
 
 
 def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
@@ -170,7 +199,7 @@ def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
     ⚠ 这条是被一次**全量误报**逼出来的：原型只搜阿拉伯字面，某章因此被**整章拦下**
     ——而契约发给写手的原话是「数字必须保住，**措辞随你**」，写手做的正是它让做的事。
     """
-    e = dict(entry, beats=[{**(entry['beats'][0]), 'keep_value': ['她今年30岁了。']}])
+    e = dict(entry, segments=[{**(entry['segments'][0]), 'keep_value': ['她今年30岁了。']}])
     body = _clean_body(book, entry)
     assert 'keep_value_missing' in _fire(body, e, book)
     assert 'keep_value_missing' not in _fire(body + '她今年三十岁了。', e, book), (
@@ -575,8 +604,10 @@ def test_recheck_is_idempotent_on_stored_drafts(box):
     rc = _run('run', 'stage5.write', sid, '--mode', 'deep', '--recheck', '--base', str(root))
     assert rc in (X.OK, X.CHECK_FAILED)
     for p, raw in before.items():
-        now = json.loads(p.read_text(encoding='utf-8'))
-        assert now['text'] == json.loads(raw.decode('utf-8'))['text'], (
+        rel = p.relative_to(root / _BOOK).as_posix()
+        now = decode_artifact(rel, json.loads(p.read_text(encoding='utf-8'))).payload
+        old = decode_artifact(rel, json.loads(raw.decode('utf-8'))).payload
+        assert Chapter.model_validate(now).text == Chapter.model_validate(old).text, (
             f'{p.name}：`--recheck` 改写了正文字节——归一不幂等了')
 
 

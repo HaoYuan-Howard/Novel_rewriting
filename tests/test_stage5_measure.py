@@ -9,6 +9,7 @@ import pytest
 
 from contracts.invariants import DEEP_OVERLAP_MAX
 from novel.core.text import quote_count
+from contracts.schema.stage5 import Chapter
 from novel.stages.stage5 import measure as M
 from tests import corpus
 
@@ -68,6 +69,11 @@ def _sep_of(sid: str):
     return ((STYLE[sid].get('measurable') or {}).get('body') or {}).get('paragraph_sep_chars')
 
 
+def _chapter_text(rec: dict) -> str:
+    """Current schema has one content authority: ordered ``segments``."""
+    return Chapter.model_validate(rec).text
+
+
 # ── ⭐ 一、归一幂等 ────────────────────────────────────────────────────────
 
 @needs_corpus
@@ -80,7 +86,8 @@ def test_the_current_corpus_has_formal_drafts():
 def test_normalizing_a_stored_draft_changes_nothing():
     """⭐⭐ **本层最值钱的一条免费等价测试：31/31 一个字不动。**
 
-    产物里存的 `text` 是**归一之后**的字节（模型原样吐出来的那一份不在任何产物里）
+    产物里存的 `segments[].text` 是**归一之后**的唯一权威字节；整章 `text` 由
+    `Chapter.text` 确定性拼出（模型原样吐出来的那一份不在任何产物里）
     ⇒ 拿同一条链子再跑一遍，**必须**得到同样的字节、三个计数器全 0。
 
     它抓的是「逐字移植时错一个字符类、少一个前瞻断言」那种错——那种错不报错，
@@ -90,10 +97,11 @@ def test_normalizing_a_stored_draft_changes_nothing():
     unchanged = 0
     for a in DRAFTS:
         rec = corpus.load_current(a)
-        new, acc = M.normalize_chapter(rec['text'],
+        text = _chapter_text(rec)
+        new, acc = M.normalize_chapter(text,
                                        quote_style=_quote_style_of(a.source_id),
                                        sep_chars=_sep_of(a.source_id))
-        assert new == rec['text'], f'{a.source_id} {a.rel} 再归一改了字节'
+        assert new == text, f'{a.source_id} {a.rel} 再归一改了字节'
         assert acc.counters() == {'punct_fixed': 0, 'quotes_fixed': 0, 'paras_fixed': 0}, \
             f'{a.rel} 的归一账不是全 0：{acc.counters()}'
         # ⚠ **`quote_problems` 恒空不是本条该断的东西。** 归一化对配对失败
@@ -148,7 +156,7 @@ def test_chars_is_len_of_the_stripped_text():
     """
     for a in DRAFTS:
         rec = corpus.load_current(a)
-        assert M.chars_of(rec['text']) == rec['chars'], a.rel
+        assert M.chars_of(_chapter_text(rec)) == rec['chars'], a.rel
 
 
 @needs_corpus
@@ -164,7 +172,7 @@ def test_overlap_reproduces_every_stored_value():
         rec = corpus.load_current(a)
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
         assert entry is not None, f'{a.rel} 在 writer_context 里找不到对应章'
-        got = M.overlap_ratio(rec['text'], entry, _source_of(a.source_id))
+        got = M.overlap_ratio(_chapter_text(rec), entry, _source_of(a.source_id))
         assert got == rec.get('overlap_excl_verbatim'), \
             f'{a.rel} 重合率对不上：算 {got}，盘上 {rec.get("overlap_excl_verbatim")}'
         checked += 1
@@ -229,7 +237,7 @@ def test_dialogue_ratios_are_defined_per_current_mode():
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
         src_n = M.src_quote_count(entry or {}, _source_of(a.source_id))
         if src_n:
-            ratios[rec['mode']].append(quote_count(rec['text']) / src_n)
+            ratios[rec['mode']].append(quote_count(_chapter_text(rec)) / src_n)
     assert all(value >= 0 for values in ratios.values() for value in values)
 
 

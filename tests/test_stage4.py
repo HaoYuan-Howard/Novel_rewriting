@@ -139,18 +139,18 @@ def _synthetic_response(box: sandbox.Sandbox, *, poison: bool) -> dict:
     for ch in src['output_chapters']:
         c = {k: ch[k] for k in ('output_ordinal', 'from_source_ordinals',
                                 'chapter_goal', 'open_hook_goal', 'end_hook_goal')}
-        c['beats'] = [{'plan_beat': plan_beat_id(ch['output_ordinal'], i),
-                       'budget_chars': be['budget_chars']}
-                      for i, be in enumerate(ch['beats'], 1)]
+        c['segments'] = [{'plan_beat': plan_beat_id(ch['output_ordinal'], i),
+                          'budget_chars': be['budget_chars']}
+                         for i, be in enumerate(ch['segments'], 1)]
         out['output_chapters'].append(c)
     if poison:
-        out['output_chapters'][0]['chapter_goal'] += '，要有张力'
+        out['output_chapters'][0]['chapter_goal']['rationale'] += '，要有张力'
     return out
 
 
 def _provenance(ctx: RunContext, up) -> object:
     from contracts.schema.stage4 import PlanProvenance
-    return PlanProvenance(code='0' * 10, inputs=ctx.edges,
+    return PlanProvenance(code='0' * 10, root_clean_sha1=ctx.root_clean_sha1, inputs=ctx.edges,
                           prompts={'N4_SYS': '0' * 10}, model='deepseek-v4-pro',
                           params=plan._params(up))
 
@@ -199,8 +199,8 @@ def test_revalidate_promotes_the_fixed_plan_and_rebuilds_the_context():
         # 人手改掉那个写法词（0 成本），再提升
         inv = box.dir / 'stage4/plan_chapters.INVALID.json'
         fixed = json.loads(inv.read_text(encoding='utf-8'))
-        fixed['output_chapters'][0]['chapter_goal'] = \
-            fixed['output_chapters'][0]['chapter_goal'].replace('，要有张力', '')
+        fixed['output_chapters'][0]['chapter_goal']['rationale'] = \
+            fixed['output_chapters'][0]['chapter_goal']['rationale'].replace('，要有张力', '')
         inv.write_text(json.dumps(fixed, ensure_ascii=False), encoding='utf-8')
 
         rep = plan.run_revalidate(_ctx_for(box, 'stage4.plan'))
@@ -228,10 +228,10 @@ def test_the_identity_baseline_lands_on_disk_as_an_artifact(book):
     try:
         n_beats, rep = plan.run_identity(_ctx_for(box, 'stage4.plan'))
         art = WriterContext.model_validate(box.read('stage4/writer_context.identity.json'))
-        assert n_beats == sum(len(c.beats) for c in art.chapters)
-        from novel.stages.stage4.measure import IDENTITY_GOAL
-        assert all(c.chapter_goal == IDENTITY_GOAL for c in art.chapters), \
-            '三个 goal 必须是显式标记——空串与「没做决策」在人眼里同形'
+        assert n_beats == sum(len(c.segments) for c in art.chapters)
+        assert all(c.chapter_goal.facts == [f'第 {c.output_ordinal} 章整体范围']
+                   for c in art.chapters), \
+            '恒等计划的边界引用必须解析成可读事实，不能把内部 id 或审计理由发给写手'
         # ⚠ 它写的是**另一份文件**，正式那份一个字节都不许动
         assert box.read('stage4/writer_context.json') != box.read(
             'stage4/writer_context.identity.json')

@@ -262,7 +262,7 @@ def _resolve_beats(out_ch: dict[str, Any], bidx: dict[str, dict[str, Any]], disp
     beats: list[dict[str, Any]] = []
     dropped: list[tuple[Any, str]] = []
     withheld_all: list[str] = []
-    for be in (out_ch.get('beats') or []):
+    for be in (out_ch.get('segments') or []):
         cited = [b for b in (be.get('from_beats') or []) if b in bidx]
         refs = [bidx[b] for b in cited if b not in seen]
         seen.update(cited)
@@ -270,7 +270,8 @@ def _resolve_beats(out_ch: dict[str, Any], bidx: dict[str, dict[str, Any]], disp
         #   一过滤下标就会错位——那正好会把某一段的舞台安到另一段的内容上，
         #   而这一类「张冠李戴」正是本层要根除的东西。
         #   缺 event 是 stage2 的契约违约，该由落盘那一步响亮失败，不在这里悄悄补位。
-        w: dict[str, Any] = {'events': [bidx[b].get('event') or '' for b in cited],
+        w: dict[str, Any] = {'slot': be.get('slot'),
+                             'events': [bidx[b].get('event') or '' for b in cited],
                              'budget_chars': be.get('budget_chars')}
 
         # 舞台信息取自【所引的全部】源 beat（**不做 `seen` 去重**）：一拍写在哪儿、谁在场、
@@ -621,6 +622,99 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
              'arc': a, 'address': address}, hidden, held, set_cut)
 
 
+def _resolve_goal(goal: dict[str, Any], *, ordinal: int,
+                  bidx: dict[str, dict[str, Any]], disp: dict[str, str],
+                  facts: dict[str, Any], global_g: dict[str, Any]) -> dict[str, Any]:
+    """Project a durable ``PlanGoal`` into a writer-safe, human-readable goal.
+
+    The plan keeps stable IDs because they make every decision recomputable.  A
+    writer cannot act on ``b03_02`` or ``secret_04`` and must never see those
+    join keys.  Resolution happens here, after all chapter/reveal gates have
+    run, so a reference cannot bypass the same projection used by ``facts``.
+    An inaccessible non-secret reference is a broken plan/context edge and is
+    therefore an explicit terminal state, not an invitation to leak the global
+    record or invent a label.
+    """
+    intent = goal.get('intent')
+    entities = global_g.get('entities') or {}
+    relations = {
+        row.get('relation_id'): row
+        for row in (entities.get('relations') or []) if row.get('relation_id')
+    }
+    projected_relations = facts.get('relations') or []
+    projected_rules = {
+        row.get('rule_id'): row
+        for row in (facts.get('world_rules') or []) if row.get('rule_id')
+    }
+    projected_secrets = {
+        row.get('secret_id'): row
+        for row in (facts.get('secrets') or []) if row.get('secret_id')
+    }
+
+    resolved: list[str] = []
+    failures: list[str] = []
+    for ref in goal.get('fact_refs') or []:
+        kind, key = ref.get('kind'), ref.get('ref')
+        value: str | None = None
+        if kind == 'event':
+            value = (bidx.get(key) or {}).get('event')
+            if value:
+                value = f'事件：{value}'
+        elif kind == 'character':
+            if disp.get(key):
+                value = f'人物：{disp[key]}'
+        elif kind == 'world_rule':
+            row = projected_rules.get(key) or {}
+            if row.get('description'):
+                value = f'规则：{row["description"]}'
+        elif kind == 'secret':
+            row = projected_secrets.get(key)
+            if row and row.get('fact'):
+                prefix = ('只作伏笔，不点破：' if not row.get('reader_knows_by_now')
+                          else '已揭示事实：')
+                value = prefix + str(row['fact'])
+            elif intent == 'withhold':
+                # A hidden secret's content is deliberately absent from this
+                # chapter projection.  The generic directive is sufficient:
+                # events carry what to write, while the gate prevents the
+                # writer from learning what those events will later mean.
+                value = '保留本章尚未公开的一项既定秘密，不点破其内容'
+        elif kind == 'relation':
+            row = relations.get(key) or {}
+            subject = disp.get(row.get('subject_id'))
+            obj = disp.get(row.get('object_id'))
+            predicate = row.get('predicate')
+            projected = {'subject': subject, 'predicate': predicate, 'object': obj}
+            if subject and obj and predicate and projected in projected_relations:
+                value = f'关系：{subject}与{obj}（{predicate}）'
+        elif kind == 'setting':
+            setting = (facts.get('setting') or {}).get(key)
+            if isinstance(setting, str) and setting.strip():
+                value = f'设定：{setting.strip()}'
+        elif kind == 'chapter_boundary':
+            suffix = str(key).rsplit(':', 1)[-1]
+            where = {'start': '开篇', 'end': '结尾'}.get(suffix, '整体范围')
+            value = f'第 {ordinal} 章{where}'
+
+        if not value:
+            failures.append(f'{kind}:{key}')
+            continue
+        # Machine identities must not survive inside a supposedly resolved
+        # label.  Human setting keys are intentionally excluded from this test.
+        if kind not in {'setting'} and key and str(key) in value:
+            failures.append(f'{kind}:{key}（解析结果仍含内部 id）')
+            continue
+        if value not in resolved:
+            resolved.append(value)
+
+    if failures or not resolved:
+        raise RefusedByStructure(
+            f'输出章 {ordinal} 的 writer goal 有无法在本章安全解析的事实引用：'
+            f'{failures or ["empty"]}。内部 id 与未过揭示闸门的全局事实不得下发；'
+            f'请修订 plan 的 fact_refs 后 0 成本重建 writer_context。')
+    return {'intent': intent, 'facts': resolved}
+
+
 # ── 三、组装 ──────────────────────────────────────────────────────────────
 
 def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
@@ -722,12 +816,18 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
         chapters.append({
             'output_ordinal': oo,
             'from_source_ordinals': srcs,
-            'chapter_goal': o.get('chapter_goal'),
-            'open_hook_goal': o.get('open_hook_goal'),
-            'end_hook_goal': o.get('end_hook_goal'),
+            'chapter_goal': _resolve_goal(
+                o.get('chapter_goal') or {}, ordinal=oo, bidx=bidx, disp=disp_o,
+                facts=facts, global_g=global_g),
+            'open_hook_goal': _resolve_goal(
+                o.get('open_hook_goal') or {}, ordinal=oo, bidx=bidx, disp=disp_o,
+                facts=facts, global_g=global_g),
+            'end_hook_goal': _resolve_goal(
+                o.get('end_hook_goal') or {}, ordinal=oo, bidx=bidx, disp=disp_o,
+                facts=facts, global_g=global_g),
             # 章级汇总：写手不必自己把各拍加起来；计划载体保证每拍预算为正。
             'budget_chars': sum(b['budget_chars'] for b in beats),
-            'beats': beats,
+            'segments': beats,
             'narration': narration,
             'source_chars': n_chars,
             # 【本章可用的人物名册】书级那份留在 `world_facts.characters` 给确定性代码用；

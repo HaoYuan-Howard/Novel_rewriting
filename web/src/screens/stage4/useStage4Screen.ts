@@ -3,13 +3,14 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { FRESH, SEV, chNo } from '@/constants/vocabulary'
-import type { CtxBeat, PlanBeat } from '@/types/stages'
+import type { CtxBeat, PlanBeat, PlanGoal } from '@/types/stages'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 
 const LAYER: Record<string, string> = { past: '过去', present: '现在', future: '将来' }
 
 export interface PlanBeatView {
   i: number
+  slot: string
   fromBeats: string
   budget: number | null
   source: number | null
@@ -44,6 +45,12 @@ function values(v: string[] | null | undefined): string[] {
   return v ?? []
 }
 
+function goalLabel(goal: PlanGoal | null | undefined): string {
+  if (!goal) return ''
+  const refs = goal.fact_refs.map((ref) => ref.kind + ':' + ref.ref).join('、')
+  return [goal.intent, refs].filter(Boolean).join(' · ')
+}
+
 /** 顶层 present=null 只表示这拍按 segments 分舞台；平铺且无人由服务端给 []。 */
 function flatPresent(c: CtxBeat | undefined): string[] {
   return c?.segments == null ? values(c?.present) : []
@@ -61,6 +68,7 @@ function beatView(p: PlanBeat, c: CtxBeat | undefined): PlanBeatView {
   const verbatim = values(c?.verbatim)
   return {
     i: p.i,
+    slot: p.slot,
     fromBeats: p.from_beats.join('、') || '—',
     budget,
     source,
@@ -102,7 +110,7 @@ export function useStage4Screen() {
   const facts = ctx?.facts
   const identity = d?.identity_plan ?? false
 
-  const ctxBeats = ctx?.beats ?? []
+  const ctxBeats = ctx?.segments ?? []
   const beats: PlanBeatView[] = (plan?.beats ?? []).map((p, i) => beatView(p, ctxBeats[i]))
 
   const charKeys = Object.keys(ctx?.characters ?? {})
@@ -199,9 +207,9 @@ export function useStage4Screen() {
       hidden: i.hidden,
       active: i.output_ordinal === ordinal,
     })),
-    goal: plan?.chapter_goal ?? '',
-    openHook: plan?.open_hook_goal ?? '',
-    endHook: plan?.end_hook_goal ?? '',
+    goal: goalLabel(plan?.chapter_goal),
+    openHook: goalLabel(plan?.open_hook_goal),
+    endHook: goalLabel(plan?.end_hook_goal),
     budgets: ctx
       ? [
           { k: '源章字数', v: String(ctx.source_chars) },

@@ -16,15 +16,16 @@ write.py —— `stage5.write`：**逐章写作**。全链唯一产出「书」�
 `(system prompt, 给不给源章原文)`。产物形状**逐字节相同**，`mode` 同时是目录名。
 其余全部走同一个 `_write_chapter`。
 
-⚠ **本仓第一个 `ask_text` 调用点**：逐章响应是**纯文本**，没有 JSON 可校验
-⇒ stage4 那条「模型越界多产一个键 ⇒ 响应侧 `extra='forbid'` 当场挡回」的出路
-**在本层的默认路径上不存在**。所有把关都在落盘闸门这一侧。
+逐章写作与收缩都走 `ask_json` + `ChapterResponse`：producer-owned slot 必须恰好各出现一次，
+模型数组顺序不参与组装。机械与校准语义把关仍在落盘前运行，但响应载体越界会更早在
+Pydantic 边界被拒绝，不能形成正常或 `.INVALID` 章产物。
 """
 from __future__ import annotations
 
 from contracts.artifacts import STAGE5_BOOK_DRAFT, STAGE5_CHAPTER, artifact_rel
 
 import glob
+import hashlib
 import os
 import re
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
@@ -38,13 +39,23 @@ from contracts.schema.common import (
     InputEdge, RoundFreeProvenance, RoundLlmProvenance,
 )
 from contracts.schema.report import CheckReport
-from contracts.schema.stage5 import Chapter, RejectedRevision
+from contracts.schema.evaluation import (
+    Claim, EvidenceRef, EvaluatorFingerprint, EvaluatorProfile, JudgeDecision,
+    SemanticDecision, TrimAudit, TrimJudgeResponse,
+)
+from contracts.schema.stage4 import CtxChapter
+from contracts.schema.stage5 import (
+    Chapter, ChapterResponse, ChapterSegment, RejectedRevision,
+)
 from novel import paths, prov
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient, LlmFailed
+from novel.llm.privacy import assert_prompt_private_absent
 from novel.llm.transport import ChatResponse
 from novel.observability import ChapterProgressTracker, RequestProgress
+from novel.quality.evaluator import double_blind_decision
+from novel.quality.profile import require_enabled
 from novel.report.builder import build
 from novel.report.findings import unverifiable
 from novel.run import RunContext
@@ -65,6 +76,23 @@ TRIM_ROUNDS = 2
 #: 收缩不是创作：实测 high / medium 会连续把 16k 全花在 reasoning 上而正文为空。
 #: 这一条辅助调用直接走最低推理并关闭 thinking；失败就保留原稿，由篇幅提示如实报告。
 TRIM_RUNGS = (('low', False),)
+
+#: Semantic equivalence has a much smaller response surface than prose
+#: generation.  Keeping its cap explicit also makes the decoder fingerprint
+#: reproducible by the offline evaluator workflow.
+TRIM_JUDGE_MAX_TOKENS = 4096
+
+TRIM_DECODER_IDENTITY = {
+    'version': 1,
+    'generator_rungs': [list(row) for row in TRIM_RUNGS],
+    'generator_rounds': TRIM_ROUNDS,
+    'generator_max_tokens': MAX_TOKENS,
+    'judge_max_tokens': TRIM_JUDGE_MAX_TOKENS,
+    'candidate_contract': 'producer-slots-exactly-once',
+    'deterministic_gate': 'shorter+target-band+trim-regressions+claims-v1',
+    'evidence_gate': 'python-char-span-bounds+nonblank-v1',
+    'judge_combiner': 'calibrated-double-blind-agree-with-evidence-v1',
+}
 
 
 @dataclass(frozen=True)
@@ -87,6 +115,14 @@ assert tuple(_ARMS) == DEPTH_MODES, '臂的取值面与 `contracts.invariants.DE
 
 def _rel(mode: str, ordinal: int) -> str:
     return artifact_rel('stage5.chapter', mode=mode, nn=ordinal)
+
+
+def _retire_trim_state(store: ArtifactStore, ordinal: int) -> None:
+    """A chapter rewrite makes both the live trim audit and its closure stale."""
+    for kind in ('stage5.trim_audit', 'stage5.trim_resolution'):
+        rel = artifact_rel(kind, nn=ordinal)
+        if store.exists(rel):
+            store.archive_round(rel)
 
 
 def _rejected_rel(mode: str, ordinal: int) -> str:
@@ -147,8 +183,10 @@ def build_prompt(ctx: RunContext, chapters: str | None = None
     entry = todo[0]
     mat = prompts.build_material(entry, book,
                                  with_source_text=_ARMS[mode].with_source_text)
-    return (prompts.write_system(mode),
-            prompts.build_user(mat), mat)
+    system, user = prompts.write_system(mode), prompts.build_user(mat)
+    assert_prompt_private_absent(
+        CtxChapter.model_validate(entry), system=system, user=user)
+    return system, user, mat
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,17 +194,23 @@ def build_prompt(ctx: RunContext, chapters: str | None = None
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _judge(text: str, entry: dict[str, Any], book: M.Book, *, mode: str, mat: str,
-           account: M.NormalizeAccount) -> tuple[list, list[str], list[str]]:
+           account: M.NormalizeAccount,
+           segments: list[dict[str, str]] | None = None) -> tuple[list, list[str], list[str]]:
     """归一之后的字节 → `(findings, errs, warns)`。**落盘闸门与验收相共用同一份判据。**"""
     fs = checks.chapter_findings(text, entry, book, mode=mode, given=mat,
                                  quote_problems=account.quote_problems)
+    if segments is not None:
+        fs.extend(checks.segment_fidelity_findings(
+            segments, entry, book, mode=mode, given=mat))
+        fs.extend(checks.segment_event_findings(segments, entry, book))
     return fs, checks.blocking(fs), checks.warnings_of(fs)
 
 
-def _chapter_record(entry: dict[str, Any], text: str, book: M.Book, *, mode: str,
+def _chapter_record(entry: dict[str, Any], segments: list[dict[str, str]], book: M.Book, *, mode: str,
                     warns: list[str], errs: list[str] | None,
                     provenance: Any) -> Chapter:
     """一份成稿。**正式稿与 `.INVALID` 共用这一份章契约**——状态由文件名区分。"""
+    text = _segments_text(segments)
     return Chapter(
         output_ordinal=int(entry['output_ordinal']),
         from_source_ordinals=list(entry['from_source_ordinals']),
@@ -175,7 +219,7 @@ def _chapter_record(entry: dict[str, Any], text: str, book: M.Book, *, mode: str
         budget_chars=int(entry['budget_chars']),
         chars=M.chars_of(text),
         overlap_excl_verbatim=M.overlap_ratio(text, entry, book.source_text),
-        text=text,
+        segments=[ChapterSegment.model_validate(segment) for segment in segments],
         warns=warns,
         errs=errs,
         _provenance=provenance,
@@ -199,7 +243,7 @@ def _archive_superseded(store: ArtifactStore, rel: str, *,
 
 
 def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
-                   book: M.Book, *, mode: str, text: str, mat: str,
+                   book: M.Book, *, mode: str, segments: list[dict[str, str]], mat: str,
                    account: M.NormalizeAccount, provenance: Any
                    ) -> tuple[str, list[str], list]:
     """归一 → 判据 → 闸门 → 落盘。返回 `(落到哪, errs)`。
@@ -210,14 +254,16 @@ def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
 
     ⚠ 有 `errs` ⇒ **不覆盖已有成稿**，问题稿存 `.INVALID`，**一章失败不中断整批**。
     """
-    text2, acc2 = M.normalize_chapter(text, quote_style=book.quote_style,
-                                      sep_chars=book.sep_chars)
+    segments2, acc2 = _normalize_segments(segments, book)
+    text2 = _segments_text(segments2)
     account = account + acc2
     for k, v in account.counters().items():
         ctx.account(k, int(ctx.accounting.get(k) or 0) + v)
-    fs, errs, warns = _judge(text2, entry, book, mode=mode, mat=mat, account=account)
+    fs, errs, warns = _judge(
+        text2, entry, book, mode=mode, mat=mat, account=account,
+        segments=segments2)
     rel = _rel(mode, entry['output_ordinal'])
-    art = _chapter_record(entry, text2, book, mode=mode, warns=warns,
+    art = _chapter_record(entry, segments2, book, mode=mode, warns=warns,
                           errs=errs or None, provenance=provenance)
     if errs:
         # ⚠ `gates_skipped` 是**空列表也要写**的那一格：「一条都没跳过」与「没人说」是两件事。
@@ -239,9 +285,292 @@ def _reject_length_capped(_text: str, response: ChatResponse) -> str | None:
     return None
 
 
-def _trim_to_fit(client: LlmClient, text: str, entry: dict[str, Any], book: M.Book, *,
+def _expected_slots(entry: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(str(segment.get('slot') or '') for segment in (entry.get('segments') or []))
+
+
+def _response_problem(
+    response: ChapterResponse,
+    wire: ChatResponse,
+    entry: dict[str, Any],
+) -> str | None:
+    if wire.finish_reason == 'length':
+        return 'finish_reason=length（答案被 token 上限截断）'
+    expected = _expected_slots(entry)
+    actual = tuple(segment.slot for segment in response.segments)
+    if len(actual) != len(expected) or set(actual) != set(expected):
+        return f'slot 必须恰好为 {list(expected)}，实际为 {list(actual)}'
+    return None
+
+
+def _ordered_segments(
+    response: ChapterResponse,
+    entry: dict[str, Any],
+) -> list[dict[str, str]]:
+    by_slot = {segment.slot: segment.text.strip() for segment in response.segments}
+    return [{'slot': slot, 'text': by_slot[slot]} for slot in _expected_slots(entry)]
+
+
+def _segments_text(segments: list[dict[str, str]] | list[ChapterSegment]) -> str:
+    def text_of(item: dict[str, str] | ChapterSegment) -> str:
+        return item.text if isinstance(item, ChapterSegment) else str(item.get('text') or '')
+    return '\n\n'.join(text_of(item).strip() for item in segments).strip()
+
+
+def _normalize_segments(
+    segments: list[dict[str, str]],
+    book: M.Book,
+) -> tuple[list[dict[str, str]], M.NormalizeAccount]:
+    out: list[dict[str, str]] = []
+    account = M.NormalizeAccount()
+    for segment in segments:
+        text, one = M.normalize_chapter(
+            segment['text'], quote_style=book.quote_style, sep_chars=book.sep_chars)
+        if not text.strip():
+            raise TerminalState(f"slot {segment['slot']} 归一后为空，拒绝拼成缺段章节")
+        out.append({'slot': segment['slot'], 'text': text})
+        account = account + one
+    return out, account
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+_TIME_CLAIM_RX = re.compile(
+    r'今(?:日|夜|晨)|昨(?:日|夜)|明(?:日|早)|当(?:日|夜|晚)|翌日|'
+    r'片刻后|随后|此前|之后|同时|第[一二三四五六七八九十百千万\d]+(?:日|夜|天|月|年|时|刻)')
+
+
+def _trim_claims(
+    segments: list[dict[str, str]],
+    entry: dict[str, Any],
+) -> list[Claim]:
+    """Extract content-dependent, deterministic claims from one exact draft.
+
+    Plan rows are only a vocabulary: a claim exists when its surface can be
+    located in the corresponding returned slot.  This avoids the old false
+    audit where causality/time claims were copied from the plan and therefore
+    stayed identical even after the candidate deleted them from the prose.
+    """
+    returned = {
+        str(row.get('slot') or ''): str(row.get('text') or '')
+        for row in segments
+    }
+    roster = {
+        str((character or {}).get('display_name') or '').strip()
+        for character in (entry.get('characters') or {}).values()
+    }
+    roster.discard('')
+    claims: list[Claim] = []
+    for contract in (entry.get('segments') or []):
+        slot = str(contract.get('slot') or '')
+        text = returned.get(slot, '')
+        for cid, character in sorted((entry.get('characters') or {}).items()):
+            name = str((character or {}).get('display_name') or '').strip()
+            if name and name in text:
+                claims.append(Claim(
+                    kind='character', key=f'{slot}:{cid}',
+                    value_sha256=_sha256_text(name)))
+        stages = contract.get('segments') or [contract]
+        for stage_index, stage in enumerate(stages, start=1):
+            place = str((stage or {}).get('place') or '').strip()
+            if place and place in text:
+                claims.append(Claim(
+                    kind='place', key=f'{slot}:stage:{stage_index}:{place}',
+                    value_sha256=_sha256_text(place)))
+        for index, event in enumerate(contract.get('events') or [], start=1):
+            atoms = sorted(checks._atoms_of_event(str(event), roster))
+            landed = [atom for atom in atoms if atom in text]
+            if landed:
+                claims.append(Claim(
+                    kind='causality', key=f'{slot}:event:{index}',
+                    value_sha256=_sha256_text('\0'.join(landed))))
+        for index, match in enumerate(_TIME_CLAIM_RX.finditer(text), start=1):
+            marker = match.group(0)
+            claims.append(Claim(
+                kind='time', key=f'{slot}:marker:{index}',
+                value_sha256=_sha256_text(marker)))
+    text = _segments_text(segments)
+    ending = text.strip()[-120:]
+    if ending:
+        claims.append(Claim(
+            kind='ending', key='tail120', value_sha256=_sha256_text(ending)))
+    return claims
+
+
+def _claim_regressions(before: list[Claim], after: list[Claim]) -> list[str]:
+    """Detect deterministic fact loss/addition; ending remains a semantic gate."""
+    def stable(rows: list[Claim]) -> dict[tuple[str, str], str]:
+        return {
+            (row.kind, row.key): row.value_sha256
+            for row in rows if row.kind != 'ending'
+        }
+
+    old, new = stable(before), stable(after)
+    lost = sorted(key for key, value in old.items() if new.get(key) != value)
+    added = sorted(key for key, value in new.items() if old.get(key) != value)
+    out: list[str] = []
+    if lost:
+        out.append(f'结构化 claims 丢失或改变：{lost[:6]}')
+    if added:
+        out.append(f'结构化 claims 新增或改变：{added[:6]}')
+    return out
+
+
+def _trim_deterministic_regressions(
+    before_segments: list[dict[str, str]],
+    after_segments: list[dict[str, str]],
+    entry: dict[str, Any],
+    book: M.Book,
+    *,
+    mode: str,
+) -> tuple[list[str], list[Claim], list[Claim]]:
+    before_text = _segments_text(before_segments)
+    after_text = _segments_text(after_segments)
+    before_claims = _trim_claims(before_segments, entry)
+    after_claims = _trim_claims(after_segments, entry)
+    reasons: list[str] = []
+    before_chars, after_chars = M.chars_of(before_text), M.chars_of(after_text)
+    lo, hi = M.target_range(entry)
+    if after_chars >= before_chars:
+        reasons.append(f'候选没有真的变短（{before_chars} → {after_chars}）')
+    if not lo <= after_chars <= hi:
+        reasons.append(f'候选没有落入目标区间 {lo}~{hi}（实得 {after_chars}）')
+    reasons.extend(checks.trim_regressions(
+        before_text, after_text, entry, book, mode=mode))
+    before_events = sum(
+        finding.rule == 'event_landing'
+        for finding in checks.segment_event_findings(before_segments, entry, book))
+    after_events = sum(
+        finding.rule == 'event_landing'
+        for finding in checks.segment_event_findings(after_segments, entry, book))
+    if after_events > before_events:
+        reasons.append(f'事件落点/顺序退化（event_landing：{before_events} → {after_events}）')
+    reasons.extend(_claim_regressions(before_claims, after_claims))
+    return reasons, before_claims, after_claims
+
+
+def _trim_profile_binding(
+    client: LlmClient,
+) -> tuple[EvaluatorProfile, EvaluatorFingerprint]:
+    systems = [
+        prompts.trim_system(),
+        prompts.trim_judge_system('A'),
+        prompts.trim_judge_system('B'),
+    ]
+    decoder = {
+        **TRIM_DECODER_IDENTITY,
+        # Judge effort/thinking is part of the calibrated decoder surface;
+        # an operator changing the node's starting effort invalidates only
+        # this capability row rather than silently reusing old metrics.
+        'judge_rungs': [
+            list(row) for row in tuple(getattr(client, '_rungs', ()))
+        ],
+    }
+    return require_enabled(
+        'trim_equivalence', model=str(getattr(client, 'model', '') or 'unconfigured'),
+        prompts=systems,
+        schemas=[ChapterResponse, TrimJudgeResponse],
+        decoder_identity=decoder,
+    )
+
+
+def _trim_judge_problem(
+    response: TrimJudgeResponse,
+    wire: ChatResponse,
+    before: str,
+    after: str,
+) -> str | None:
+    if wire.finish_reason == 'length':
+        return 'finish_reason=length（语义裁决被 token 上限截断）'
+    subjects = {'before': before, 'after': after}
+    for ref in response.evidence:
+        subject = subjects[ref.side]
+        if ref.end > len(subject):
+            return (
+                f'{ref.side} evidence [{ref.start},{ref.end}) 超出正文长度 '
+                f'{len(subject)}')
+        if not subject[ref.start:ref.end].strip():
+            return f'{ref.side} evidence [{ref.start},{ref.end}) 只定位到空白'
+    return None
+
+
+def _as_judge_decision(
+    response: TrimJudgeResponse,
+    *,
+    role: str,
+    ordinal: int,
+    before_sha256: str,
+    after_sha256: str,
+) -> JudgeDecision:
+    rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+    hashes = {'before': before_sha256, 'after': after_sha256}
+    return JudgeDecision(
+        judge=f'trim-{role}', verdict=response.verdict,
+        evidence=[EvidenceRef(
+            artifact=f'{rel}#{row.side}', subject_sha256=hashes[row.side],
+            start=row.start, end=row.end,
+        ) for row in response.evidence],
+        reason=response.reason,
+    )
+
+
+def _failed_trim_judge(role: str, reason: str) -> JudgeDecision:
+    return JudgeDecision(
+        judge=f'trim-{role}', verdict='UNVER', evidence=[], reason=reason)
+
+
+def _judge_trim_candidate(
+    client: LlmClient,
+    before_segments: list[dict[str, str]],
+    after_segments: list[dict[str, str]],
+    entry: dict[str, Any],
+    *,
+    profile: EvaluatorProfile,
+    fingerprint: EvaluatorFingerprint,
+    progress: RequestProgress | None,
+) -> SemanticDecision:
+    before, after = _segments_text(before_segments), _segments_text(after_segments)
+    before_sha, after_sha = _sha256_text(before), _sha256_text(after)
+    user = prompts.trim_judge_user(before_segments, after_segments)
+    typed_entry = CtxChapter.model_validate(entry)
+    decisions: dict[str, JudgeDecision] = {}
+    for role in ('A', 'B'):
+        system = prompts.trim_judge_system(role)
+        # This is deliberately at the last point before ask_json: no budget,
+        # cache, ledger or transport side effect can precede the privacy gate.
+        assert_prompt_private_absent(typed_entry, system=system, user=user)
+        try:
+            response = client.ask_json(
+                system, user, model_cls=TrimJudgeResponse,
+                purpose=f'{ctx_purpose(entry)}·收缩等价盲评{role}',
+                max_tokens=TRIM_JUDGE_MAX_TOKENS,
+                validator=lambda obj, wire: _trim_judge_problem(
+                    obj, wire, before, after),
+                progress=progress,
+            )
+        except LlmFailed as exc:
+            decisions[role] = _failed_trim_judge(
+                role, '盲评调用失败：' + str(exc).splitlines()[0])
+            other = 'B' if role == 'A' else 'A'
+            decisions.setdefault(other, _failed_trim_judge(
+                other, f'因 judge {role} 调用失败，停止追加付费裁决'))
+            break
+        decisions[role] = _as_judge_decision(
+            response, role=role, ordinal=int(entry['output_ordinal']),
+            before_sha256=before_sha, after_sha256=after_sha)
+    return double_blind_decision(
+        ability='trim_equivalence', subject_key=after_sha,
+        first=decisions['A'], second=decisions['B'],
+        profile=profile, current=fingerprint,
+    )
+
+
+def _trim_to_fit(client: LlmClient, segments: list[dict[str, str]],
+                 entry: dict[str, Any], book: M.Book, *,
                  mode: str, progress: RequestProgress | None = None
-                 ) -> tuple[str, list[str]]:
+                 ) -> tuple[list[dict[str, str]], list[str], TrimAudit | None]:
     """超上限 ⇒ 退回去做「**只删不改**」的收缩，最多 `TRIM_ROUNDS` 轮。
 
     三条护栏，`R-7.12` 的落点：
@@ -253,30 +582,119 @@ def _trim_to_fit(client: LlmClient, text: str, entry: dict[str, Any], book: M.Bo
     ⚠ **收缩是本层真正的那道篇幅门**：`length_over` 已由阻断降为提示，所以「超了就是失败」
     这句话在 prompt 里没有任何约束力——**收缩就是那个真的门**。
     """
-    band = M.target_range(entry)
-    notes: list[str] = []
-    for i in range(TRIM_ROUNDS):
-        if M.chars_of(text) <= band[1]:
-            break
+    text = _segments_text(segments)
+    if M.chars_of(text) <= M.target_range(entry)[1]:
+        return segments, [], None
+    before_sha = _sha256_text(text)
+    before_claims = _trim_claims(segments, entry)
+
+    # Profile identity is checked before constructing any request path.  A
+    # missing/disabled/drifted profile is a normal human-only outcome, not a
+    # reason to spend one speculative trim call.
+    try:
+        profile, fingerprint = _trim_profile_binding(client)
+    except TerminalState as exc:
+        reason = (
+            f'{str(exc).splitlines()[0]}；未发起收缩调用或语义调用，保留 pretrim，转 verification')
+        audit = TrimAudit(
+            output_ordinal=int(entry['output_ordinal']),
+            mode=mode,
+            before_sha256=before_sha, after_sha256=before_sha,
+            before_claims=before_claims, after_claims=before_claims,
+            # Identity retention has no deterministic regression.  Keeping
+            # this true is what makes the durable audit enter `verification`;
+            # the reason still states that no candidate/judge ran.
+            deterministic_passed=True, semantic=None, adopted=False,
+            reason=reason,
+        )
+        return segments, [reason], audit
+
+    system, user = prompts.trim_system(), prompts.trim_user(segments, entry)
+    typed_entry = CtxChapter.model_validate(entry)
+    assert_prompt_private_absent(typed_entry, system=system, user=user)
+    last_audit: TrimAudit | None = None
+    for round_number in range(1, TRIM_ROUNDS + 1):
         try:
-            got = client.ask_text(
-                prompts.trim_system(), prompts.trim_user(text, entry),
-                purpose=f'{ctx_purpose(entry)}·收缩{i + 1}', max_tokens=MAX_TOKENS,
-                validator=_reject_length_capped, rungs=TRIM_RUNGS, progress=progress)
+            response = client.ask_json(
+                system, user, model_cls=ChapterResponse,
+                purpose=f'{ctx_purpose(entry)}·收缩{round_number}',
+                max_tokens=MAX_TOKENS, rungs=TRIM_RUNGS,
+                validator=lambda obj, wire: _response_problem(obj, wire, entry),
+                progress=progress,
+                cache_policy=(CachePolicy.refresh() if round_number > 1 else None),
+            )
         except LlmFailed as exc:
-            notes.append(
-                f'收缩第 {i + 1} 轮没有拿到完整正文，保留原稿：{str(exc).splitlines()[0]}')
-            break
-        new = (got or '').strip()
-        if not new or M.chars_of(new) >= M.chars_of(text):
-            notes.append(f'收缩第 {i + 1} 轮没有真的变短（{M.chars_of(text)} → '
-                         f'{M.chars_of(new)}），这一轮弃用')
-            break
-        if (bad := checks.trim_regressions(text, new, entry, book, mode=mode)):
-            notes.append(f'收缩第 {i + 1} 轮把稿子删坏了，**整轮弃用**：{"；".join(bad)}')
-            break
-        text = new
-    return text, notes
+            reason = '收缩没有拿到完整结构化候选，保留 pretrim：' + str(exc).splitlines()[0]
+            audit = TrimAudit(
+                output_ordinal=int(entry['output_ordinal']),
+                mode=mode,
+                before_sha256=before_sha, after_sha256=before_sha,
+                before_claims=before_claims, after_claims=before_claims,
+                deterministic_passed=False, semantic=None, adopted=False,
+                reason=reason,
+            )
+            return segments, [reason], audit
+
+        ordered = _ordered_segments(response, entry)
+        try:
+            candidate, _normalise_account = _normalize_segments(ordered, book)
+        except TerminalState as exc:
+            candidate = ordered
+            regressions = [str(exc)]
+            candidate_claims = _trim_claims(candidate, entry)
+        else:
+            regressions, _round_before_claims, candidate_claims = (
+                _trim_deterministic_regressions(
+                    segments, candidate, entry, book, mode=mode))
+        candidate_text = _segments_text(candidate)
+        candidate_sha = _sha256_text(candidate_text)
+        if regressions:
+            reason = (
+                f'第 {round_number} 轮确定性回归失败，候选整轮弃用：'
+                + '；'.join(regressions))
+            last_audit = TrimAudit(
+                output_ordinal=int(entry['output_ordinal']),
+                mode=mode,
+                before_sha256=before_sha, after_sha256=candidate_sha,
+                before_claims=before_claims, after_claims=candidate_claims,
+                deterministic_passed=False, semantic=None, adopted=False,
+                reason=reason,
+            )
+            if round_number < TRIM_ROUNDS:
+                continue
+            return segments, [reason], last_audit
+
+        semantic = _judge_trim_candidate(
+            client, segments, candidate, entry,
+            profile=profile, fingerprint=fingerprint, progress=progress)
+        if semantic.verdict == 'PASS' and semantic.automated:
+            reason = f'第 {round_number} 轮确定性检查通过，且校准双盲 judge 同为 PASS，采用候选'
+            audit = TrimAudit(
+                output_ordinal=int(entry['output_ordinal']),
+                mode=mode,
+                before_sha256=before_sha, after_sha256=candidate_sha,
+                before_claims=before_claims, after_claims=candidate_claims,
+                deterministic_passed=True, evaluator_fingerprint=fingerprint,
+                semantic=semantic, adopted=True,
+                reason=reason,
+            )
+            return candidate, [reason], audit
+        reason = (
+            f'第 {round_number} 轮语义等价未获双 PASS（{semantic.verdict}）：'
+            f'{semantic.reason}；候选整轮弃用，保留 pretrim')
+        audit = TrimAudit(
+            output_ordinal=int(entry['output_ordinal']),
+            mode=mode,
+            before_sha256=before_sha, after_sha256=candidate_sha,
+            before_claims=before_claims, after_claims=candidate_claims,
+            deterministic_passed=True, evaluator_fingerprint=fingerprint,
+            semantic=semantic, adopted=False,
+            reason=reason,
+        )
+        return segments, [reason], audit
+
+    assert last_audit is not None
+    return segments, [last_audit.reason], last_audit
 
 
 def ctx_purpose(entry: dict[str, Any]) -> str:
@@ -385,28 +803,32 @@ def _generate_chapter(
     else:
         prev_text, fixes, review_fp = '', [], ''
         user = prompts.build_user(mat)
+    typed_entry = CtxChapter.model_validate(entry)
+    assert_prompt_private_absent(typed_entry, system=system, user=user)
     try:
-        got = client.ask_text(
-            system, user, purpose=ctx_purpose(entry), max_tokens=MAX_TOKENS,
-            validator=_reject_length_capped, progress=progress)
+        got = client.ask_json(
+            system, user, model_cls=ChapterResponse,
+            purpose=ctx_purpose(entry), max_tokens=MAX_TOKENS,
+            validator=lambda obj, wire: _response_problem(obj, wire, entry),
+            progress=progress)
     except LlmFailed as exc:
         return {'error': str(exc).splitlines()[0]}
-    text = (got or '').strip()
-    if not text:
-        return {'error': '没有拿到正文'}
-    text, account = M.normalize_chapter(
-        text, quote_style=book.quote_style, sep_chars=book.sep_chars)
-    text, trim_notes = _trim_to_fit(
-        client, text, entry, book, mode=mode, progress=progress)
+    segments = _ordered_segments(got, entry)
+    segments, account = _normalize_segments(segments, book)
+    segments, trim_notes, trim_audit = _trim_to_fit(
+        client, segments, entry, book, mode=mode, progress=progress)
+    text = _segments_text(segments)
     if revise is not None:
         attempts = [{'chars': M.chars_of(text), 'text': text}]
         regressions = checks.trim_regressions(
             prev_text, text, entry, book, mode=mode)
         if regressions:
             try:
-                got = client.ask_text(
-                    system, user, purpose=f'{ctx_purpose(entry)}·退化重采样',
-                    max_tokens=MAX_TOKENS, validator=_reject_length_capped,
+                got = client.ask_json(
+                    system, user, model_cls=ChapterResponse,
+                    purpose=f'{ctx_purpose(entry)}·退化重采样',
+                    max_tokens=MAX_TOKENS,
+                    validator=lambda obj, wire: _response_problem(obj, wire, entry),
                     progress=progress, cache_policy=CachePolicy.refresh())
             except LlmFailed as exc:
                 return {
@@ -419,20 +841,11 @@ def _generate_chapter(
                         'attempts': attempts,
                     },
                 }
-            retry_text = (got or '').strip()
-            if not retry_text:
-                return {
-                    'rejected': {
-                        'output_ordinal': ordinal,
-                        'why': [*regressions, '唯一一次绕缓存重采样返回空正文'],
-                        'fixes': fixes,
-                        'attempts': attempts,
-                    },
-                }
-            retry_text, retry_account = M.normalize_chapter(
-                retry_text, quote_style=book.quote_style, sep_chars=book.sep_chars)
-            retry_text, retry_trim_notes = _trim_to_fit(
-                client, retry_text, entry, book, mode=mode, progress=progress)
+            retry_segments = _ordered_segments(got, entry)
+            retry_segments, retry_account = _normalize_segments(retry_segments, book)
+            retry_segments, retry_trim_notes, retry_trim_audit = _trim_to_fit(
+                client, retry_segments, entry, book, mode=mode, progress=progress)
+            retry_text = _segments_text(retry_segments)
             attempts.append({'chars': M.chars_of(retry_text), 'text': retry_text})
             retry_regressions = checks.trim_regressions(
                 prev_text, retry_text, entry, book, mode=mode)
@@ -445,11 +858,13 @@ def _generate_chapter(
                         'attempts': attempts,
                     },
                 }
-            text, account = retry_text, retry_account
+            segments, text, account = retry_segments, retry_text, retry_account
             trim_notes = [*trim_notes, *retry_trim_notes]
+            trim_audit = retry_trim_audit
     return {
         'entry': entry, 'ordinal': ordinal, 'mat': mat, 'user': user,
-        'text': text, 'account': account, 'trim_notes': trim_notes,
+        'segments': segments, 'text': text, 'account': account,
+        'trim_notes': trim_notes, 'trim_audit': trim_audit,
         'prev_text': prev_text, 'fixes': fixes, 'review_fp': review_fp,
     }
 
@@ -552,9 +967,16 @@ def _run_group_parallel(
                 model=client.model,
                 **extra,
             )
+            trim_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+            # A later in-band rewrite resolves the live verification row; a
+            # later trim attempt supersedes it.  In both cases retain the old
+            # audit under `_rounds` instead of silently overwriting history.
+            _retire_trim_state(store, ordinal)
+            if generated['trim_audit'] is not None:
+                store.write(trim_rel, generated['trim_audit'])
             where, errors, findings = _write_chapter(
                 ctx, store, entry, book, mode=mode,
-                text=generated['text'], mat=generated['mat'].given,
+                segments=generated['segments'], mat=generated['mat'].given,
                 account=generated['account'], provenance=provenance)
             judged[ordinal] = findings
             trim_notes = generated['trim_notes']
@@ -679,7 +1101,8 @@ def run_revise(ctx: RunContext, client: LlmClient,
         entry = book.chapters.get(o)
         if entry is None:
             continue
-        prev_art, _raw = store.read_own(Chapter, _rel(mode, o))
+        prev_art, _raw = store.read_own(
+            Chapter, _rel(mode, o), require_current=True)
         todo.append(entry)
         revise[o] = (prev_art.text, fixes, fp)
     for s in skipped:
@@ -713,11 +1136,14 @@ def run_recheck(ctx: RunContext) -> CheckReport:
             continue
         art, _raw = store.read_own(Chapter, rel)
         entry = book.chapters[o]
-        text, acc = M.normalize_chapter(art.text, quote_style=book.quote_style,
-                                        sep_chars=book.sep_chars)
+        segments, acc = _normalize_segments(
+            [segment.model_dump() for segment in art.segments], book)
+        text = _segments_text(segments)
         mat = prompts.build_material(
             entry, book, with_source_text=_ARMS[mode].with_source_text).given
-        fs, errs, warns = _judge(text, entry, book, mode=mode, mat=mat, account=acc)
+        fs, errs, warns = _judge(
+            text, entry, book, mode=mode, mat=mat, account=acc,
+            segments=segments)
         judged[o] = fs
         for k, v in acc.counters().items():
             ctx.account(k, int(ctx.accounting.get(k) or 0) + v)
@@ -725,9 +1151,10 @@ def run_recheck(ctx: RunContext) -> CheckReport:
         if changed:
             touched.append(f'第 {o} 章正文字节被归一改写了（{M.chars_of(art.text)} → '
                            f'{M.chars_of(text)} 字）——**这是一次 0 成本操作改付费产物**')
+            _retire_trim_state(store, o)
         new_prov = ctx.rewrite_provenance(
             art.provenance, by='--recheck') if changed else art.provenance
-        store.write(rel, _chapter_record(entry, text, book, mode=mode, warns=warns,
+        store.write(rel, _chapter_record(entry, segments, book, mode=mode, warns=warns,
                                          errs=errs or None, provenance=new_prov))
     assemble_book(ctx, store, book)
     return _report(ctx, store, mode, written=[], blocked=touched, judged=judged)
@@ -758,12 +1185,15 @@ def run_revalidate(ctx: RunContext) -> CheckReport:
         entry = book.chapters[o]
         mat = prompts.build_material(
             entry, book, with_source_text=_ARMS[mode].with_source_text).given
-        fs, errs, _warns = _judge(art.text, entry, book, mode=mode, mat=mat,
-                                  account=M.NormalizeAccount())
+        fs, errs, _warns = _judge(
+            art.text, entry, book, mode=mode, mat=mat,
+            account=M.NormalizeAccount(),
+            segments=[segment.model_dump() for segment in art.segments])
         judged[o] = fs
         if errs:
             still.append(f'第 {o} 章仍有 {len(errs)} 条阻断级：{errs[0]}')
             continue
+        _retire_trim_state(store, o)
         promoted.append(f'第 {o} 章 → {store.promote_invalid(rel, Chapter)}')
     if not promoted and not still:
         raise TerminalState(f'{mode} 臂盘上一份 `.INVALID` 都没有——没有可提升的稿')
@@ -793,8 +1223,8 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
     p = os.fspath(edit_path)
     if not p or not os.path.isfile(p):
         raise TerminalState(f'--apply-edit 要一份人工稿的路径（这一次是 {edit_path!r}）')
-    text = open(p, encoding='utf-8').read().strip()
-    o = _ordinal_of_edit(p, text)
+    raw_edit = open(p, encoding='utf-8').read().strip()
+    o = _ordinal_of_edit(p, raw_edit)
     entry = book.chapters.get(o)
     if entry is None:
         raise TerminalState(f'人工稿说自己是第 {o} 章，而计划里没有这一章')
@@ -803,8 +1233,22 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
     if store.exists(rel):
         _prev, raw = store.read_own(Chapter, rel)
         prev_inputs = ((raw or {}).get('_provenance') or {}).get('inputs') or {}
-    text, acc = M.normalize_chapter(text, quote_style=book.quote_style,
-                                    sep_chars=book.sep_chars)
+    try:
+        edited = ChapterResponse.model_validate_json(raw_edit)
+    except Exception as exc:
+        raise TerminalState(
+            '--apply-edit 的 schema v2 文件必须是 {"segments":[{"slot":"s01",'
+            '"text":"..."},...]}，不再接受无法恢复 segment 边界的整章纯文本'
+        ) from exc
+    problem = _response_problem(
+        edited,
+        ChatResponse(content='', finish_reason='stop'),
+        entry,
+    )
+    if problem:
+        raise TerminalState(f'人工稿 segment 契约不成立：{problem}')
+    segments, acc = _normalize_segments(_ordered_segments(edited, entry), book)
+    text = _segments_text(segments)
     rnd = store.next_round(rel)
     extra: dict[str, Any] = {'round': rnd, 'origin': 'human'}
     if not prev_inputs:
@@ -820,10 +1264,13 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
             'inputs': {k: InputEdge.model_validate(v) for k, v in prev_inputs.items()}})
     mat = prompts.build_material(
         entry, book, with_source_text=_ARMS[mode].with_source_text).given
-    fs, errs, warns = _judge(text, entry, book, mode=mode, mat=mat, account=acc)
+    fs, errs, warns = _judge(
+        text, entry, book, mode=mode, mat=mat, account=acc,
+        segments=segments)
     if store.exists(rel):
+        _retire_trim_state(store, o)
         store.archive_round(rel)
-    art = _chapter_record(entry, text, book, mode=mode, warns=warns, errs=errs, # 空也写
+    art = _chapter_record(entry, segments, book, mode=mode, warns=warns, errs=errs, # 空也写
                           provenance=provenance)
     where = store.write(rel, art)
     note = ([f'⚠ 人工稿仍有 {len(errs)} 条阻断级判定，**只报不拦**：{errs[0]}'

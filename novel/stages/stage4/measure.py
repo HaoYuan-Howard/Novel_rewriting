@@ -11,9 +11,9 @@ measure.py —— 篇幅的**量纲**：喂给规划器的基准、落盘前的�
 |---|---|---|
 | `chapters[].source_chars` | `len(整章文本)`，**含空白** | 写手 prompt 里那句「原章对应部分 N 字」 |
 | `budget_band` 的基准 · 本模块 | **span 合计**（实测占正文 97.2%~98.2%） | 逐章预算区间 |
-| `chapters[].beats[].source_chars` | span 合计（逐拍） | 界面 / 拍级 ratio |
+| `chapters[].segments[].source_chars` | span 合计（逐拍） | 界面 / 拍级 ratio |
 
-**两者都是对的**——`chapters[].source_chars` 与 `sum(beats[].source_chars)` **不相等是正常的**。
+**两者都是对的**——`chapters[].source_chars` 与 `sum(segments[].source_chars)` **不相等是正常的**。
 产地已经踩过一次：预算区间校验曾用整章字数作基准，而规划器拿到的是 span 合计，
 于是**一份合格的计划被判 `.INVALID`**（那次靠 0 成本重判救回，没有重新付费）。
 """
@@ -35,6 +35,16 @@ from novel.stages.stage4.beats import (
 #: 填同一句标记而不是空串：**空串与「没做决策」在人眼里同形**，而这份产物存在的
 #: 全部意义就是说清「这一版什么都没改」。
 IDENTITY_GOAL = '（恒等基线·未做任何重构决策）'
+
+
+def identity_goal(chapter: int, intent: str = 'advance') -> dict[str, Any]:
+    return {
+        'intent': intent,
+        'fact_refs': [{
+            'kind': 'chapter_boundary', 'ref': f'chapter:{chapter}', 'chapter': chapter,
+        }],
+        'rationale': IDENTITY_GOAL,
+    }
 
 
 def verbatim_chars(hinges: list[dict[str, Any]]) -> int:
@@ -131,7 +141,7 @@ def verbatim_share_stats(plan: dict[str, Any], bidx: dict[str, dict[str, Any]]
     over: list[tuple[Any, int, int, int]] = []
     for o in (plan.get('output_chapters') or []):
         seen: set[str] = set()
-        for bi, b in enumerate(o.get('beats') or [], 1):
+        for bi, b in enumerate(o.get('segments') or [], 1):
             cited = [x for x in (b.get('from_beats') or []) if x in bidx]
             fresh = [x for x in cited if x not in seen]
             seen.update(cited)
@@ -191,13 +201,14 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) 
             f'重跑前先确认不会读回同一份空响应（缓存）')
     bad: list[tuple[Any, Any, str]] = []
     seen: set[str] = set()
+    by_chapter: dict[Any, dict[str, dict[str, Any]]] = {}
     for o in (plan.get('output_chapters') or []):
         oo = o.get('output_ordinal')
-        for be in (o.get('beats') or []):
+        for be in (o.get('segments') or []):
             pid = be.get('plan_beat')
             if pid in gmap and pid not in seen:
                 seen.add(pid)
-                be['from_beats'] = list(gmap[pid])
+                by_chapter.setdefault(oo, {})[pid] = be
             else:
                 bad.append((oo, pid, '重复引用' if pid in seen else '编号不存在'))
     if (missing := [p for p in gmap if p not in seen]):
@@ -211,8 +222,19 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) 
             f'拍是 `group_beats` 确定性切的（{GROUPING_VERSION}，阈值 {BEAT_MIN_CHARS} 字），'
             f'模型只该照抄编号并给预算；对不上说明规划 prompt 漂了，去看它怎么说的')
     for o in (plan.get('output_chapters') or []):
-        for be in (o.get('beats') or []):
+        oo = o.get('output_ordinal')
+        canonical: list[dict[str, Any]] = []
+        for index, _group in enumerate(groups.get(oo, []), 1):
+            pid = plan_beat_id(oo, index)
+            be = by_chapter.get(oo, {}).get(pid)
+            if be is None:
+                raise RefusedByStructure(
+                    f'输出章 {oo} 的 segment 引用了别章编号或缺少 {pid}')
             be.pop('plan_beat', None)
+            be['slot'] = f's{index:02d}'
+            be['from_beats'] = list(gmap[pid])
+            canonical.append(be)
+        o['segments'] = canonical
     return len(seen)
 
 
@@ -242,10 +264,13 @@ def identity_plan(blueprints: dict[str, Any], main_text: list[dict[str, Any]],
         outs.append({
             'output_ordinal': i,
             'from_source_ordinals': [o],
-            'chapter_goal': IDENTITY_GOAL,
-            'open_hook_goal': IDENTITY_GOAL,
-            'end_hook_goal': IDENTITY_GOAL,
-            'beats': [{'from_beats': list(g), 'budget_chars': group_chars(g, bidx)}
-                      for g in groups.get(o, [])],
+            'chapter_goal': identity_goal(int(o), 'advance'),
+            'open_hook_goal': identity_goal(int(o), 'open'),
+            'end_hook_goal': identity_goal(int(o), 'close'),
+            'segments': [
+                {'slot': f's{index:02d}', 'from_beats': list(g),
+                 'budget_chars': group_chars(g, bidx)}
+                for index, g in enumerate(groups.get(o, []), 1)
+            ],
         })
     return {'reconstruction_strategy': IDENTITY_GOAL, 'output_chapters': outs}

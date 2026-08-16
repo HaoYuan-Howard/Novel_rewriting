@@ -59,6 +59,7 @@ _GENERATED_TOP = frozenset({'_provenance'})
 
 def test_flat_and_segmented_present_have_distinct_serialized_meanings():
     flat = CtxBeat.model_validate({
+        'slot': 's01',
         'events': ['空院里没有别人。'], 'budget_chars': 80, 'source_chars': 20,
         'time_layer': 'present', 'place': '空院', 'present': [],
     })
@@ -66,7 +67,8 @@ def test_flat_and_segmented_present_have_distinct_serialized_meanings():
     assert flat.model_dump(mode='json')['present'] == []
 
     segmented = CtxBeat.model_validate({
-        'events': ['先在空院，后转入回忆。'], 'budget_chars': 100, 'source_chars': 30,
+        'slot': 's01',
+        'events': ['先在空院。', '后转入回忆。'], 'budget_chars': 100, 'source_chars': 30,
         'segments': [
             {'time_layer': 'present', 'place': '空院', 'present': []},
             {'time_layer': 'recall', 'place': None, 'present': ['阿青']},
@@ -77,12 +79,14 @@ def test_flat_and_segmented_present_have_distinct_serialized_meanings():
 
     with pytest.raises(ValueError, match='present'):
         CtxBeat.model_validate({
+            'slot': 's01',
             'events': ['空院里没有别人。'], 'budget_chars': 80, 'source_chars': 20,
             'time_layer': 'present', 'place': '空院', 'present': None,
         })
 
     with pytest.raises(ValueError, match='只在 segments'):
         CtxBeat.model_validate({
+            'slot': 's01',
             'events': ['跨场。'], 'budget_chars': 80, 'source_chars': 20,
             'present': [],
             'segments': [{'time_layer': 'present', 'place': None, 'present': []}],
@@ -157,7 +161,7 @@ def test_the_assembler_reproduces_every_context_on_disk():
 @needs_corpus
 def test_the_rebuilt_context_passes_the_carrier():
     """重组出来的那份要**过得了新契约**——差异 0 只说明与盘上一样，不说明它合法。"""
-    prov = {'code': '0' * 10,
+    prov = {'code': '0' * 10, 'root_clean_sha1': '0' * 40,
             'inputs': {'stage4/plan_chapters.json': {'file': '1' * 10, 'consumed': '2' * 10}}}
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid])

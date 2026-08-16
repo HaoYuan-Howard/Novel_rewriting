@@ -65,18 +65,21 @@ def test_material_carries_source_full_truth_story_map_and_body_habits():
             {
                 'output_ordinal': 1,
                 'from_source_ordinals': [2],
-                'chapter_goal': '收到信。',
-                'open_hook_goal': '从匿名信开场。',
-                'end_hook_goal': '发现落款。',
-                'beats': [{'events': ['她在枕下发现匿名信。', '信的落款是仇人的名字。']}],
+                'chapter_goal': {'intent': 'advance', 'facts': ['事件：收到信。']},
+                'open_hook_goal': {'intent': 'open', 'facts': ['事件：从匿名信开场。']},
+                'end_hook_goal': {'intent': 'close', 'facts': ['事件：发现落款。']},
+                'segments': [{
+                    'slot': 's01',
+                    'events': ['她在枕下发现匿名信。', '信的落款是仇人的名字。'],
+                }],
             },
             {
                 'output_ordinal': 2,
                 'from_source_ordinals': [3],
-                'chapter_goal': '追查写信者。',
-                'open_hook_goal': '当面对质。',
-                'end_hook_goal': '对方承认一半。',
-                'beats': [{'events': ['她去城门找人。']}],
+                'chapter_goal': {'intent': 'advance', 'facts': ['事件：追查写信者。']},
+                'open_hook_goal': {'intent': 'open', 'facts': ['事件：当面对质。']},
+                'end_hook_goal': {'intent': 'close', 'facts': ['事件：对方承认一半。']},
+                'segments': [{'slot': 's01', 'events': ['她去城门找人。']}],
             },
         ],
     }
@@ -123,6 +126,12 @@ def test_material_carries_source_full_truth_story_map_and_body_habits():
     assert packet['source_hook'].startswith('原作文案')
     assert packet['story_truth'] == grounding
     assert packet['whole_story_map'][1]['events'] == ['她去城门找人。']
+    assert packet['whole_story_map'][0]['segments'][0]['slot'] == 's01'
+    assert packet['whole_story_map'][0]['chapter_goal'] == {
+        'intent': 'advance',
+        'facts': ['事件：收到信。'],
+    }
+    assert 'fact_refs' not in packet['whole_story_map'][0]['chapter_goal']
     assert packet['story_truth']['arc']['ending'] in user
     assert packet['style']['book_surface_habits'] == style['surface_habits']
     assert packet['style']['book_voice']['mode_variation'] == {'danger': '句子更短'}

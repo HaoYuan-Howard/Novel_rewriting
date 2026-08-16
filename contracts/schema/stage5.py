@@ -53,6 +53,7 @@ from contracts.schema.base import Fp10, FrozenModel, StrictModel
 from contracts.schema.common import (
     Finding, FreeProvenance, LlmProvenance, RoundFreeProvenance, RoundLlmProvenance,
 )
+from contracts.schema.evaluation import SemanticDecision
 
 Mode = Literal[DEPTH_MODES]
 
@@ -60,6 +61,33 @@ Mode = Literal[DEPTH_MODES]
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、`stage5/<mode>/chNN.json`
 # ─────────────────────────────────────────────────────────────────────────────
+
+class GeneratedSegment(StrictModel):
+    """One writer-returned slot.  The producer, not the model, owns ordering."""
+
+    slot: str = Field(pattern=r'^s\d{2,4}$')
+    text: str = Field(min_length=1)
+
+
+class ChapterResponse(StrictModel):
+    """The only accepted Stage5 writer response shape (schema v2)."""
+
+    segments: list[GeneratedSegment] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _unique_slots(self) -> 'ChapterResponse':
+        slots = [segment.slot for segment in self.segments]
+        if len(slots) != len(set(slots)):
+            raise ValueError('writer response contains duplicate segment slots')
+        return self
+
+
+class ChapterSegment(StrictModel):
+    """The sole content authority inside a formal chapter artifact."""
+
+    slot: str = Field(pattern=r'^s\d{2,4}$')
+    text: str = Field(min_length=1)
+
 
 class Chapter(StrictModel):
     """一章成稿。顶层 **10 个键**。
@@ -111,14 +139,9 @@ class Chapter(StrictModel):
     #: 也会藏起「开卷有低到 0.9% 的章」这件事（**它是上界问题不是分布问题**）。
     overlap_excl_verbatim: float | None
 
-    #: 正文本身，**唯一承载内容的字段**，`draft.md` 由它拼。
-    #: ⚠ 存的是**归一之后**的字节（事实 ⑤）。
-    #: ⚠ **归一必须跑在收缩【之前】**，这是实测出来的：`normalize_paragraphs` 会把单换行
-    #: 改成空行分段，**它往文本里加字符**，而 `budget_chars` 的口径含空白。
-    #: 曾有一章归一前 1408 字（未触发收缩，正确），段落归一 +101 个换行 → 1509 字 →
-    #: 被落盘闸门阻断——**它是被「修版式」这个动作推过线的**，而唯一能救它的收缩已经跑完
-    #: 并正确地拒绝了。写手无从改，重跑也白搭。
-    text: str = Field(min_length=1)
+    #: **唯一内容权威**。整章正文与 `draft.md` 都由代码按 producer slot 顺序拼出；
+    #: schema v2 不再保存第二份可独立漂移的 `text`。
+    segments: list[ChapterSegment] = Field(min_length=1)
 
     #: 提示级判定的**字符串投影**。盘上长度 4~9，共 187 条。
     #:
@@ -157,6 +180,18 @@ class Chapter(StrictModel):
     #: 就是第二落点。
     provenance: RoundLlmProvenance | RoundFreeProvenance = Field(
         alias='_provenance', union_mode='left_to_right')
+
+    @model_validator(mode='after')
+    def _segments_are_unique(self) -> 'Chapter':
+        slots = [segment.slot for segment in self.segments]
+        if len(slots) != len(set(slots)):
+            raise ValueError('formal chapter contains duplicate segment slots')
+        return self
+
+    @property
+    def text(self) -> str:
+        """Deterministic whole-chapter projection; never serialized as a second authority."""
+        return '\n\n'.join(segment.text.strip() for segment in self.segments).strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -484,4 +519,5 @@ class SemanticReview(StrictModel):
     judged: dict[str, JudgedDraft]
     chapters: list[SemanticChapterClaims] = Field(min_length=1)
     secrets: list[SemanticSecretAdjudication] = Field(min_length=1)
+    decisions: list['SemanticDecision'] = Field(min_length=1)
     provenance: LlmProvenance = Field(alias='_provenance')

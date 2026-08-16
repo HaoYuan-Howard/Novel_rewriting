@@ -31,27 +31,31 @@ def test_length_capped_nonempty_draft_is_not_usable():
     assert write._reject_length_capped(complete.text, complete) is None
 
 
-def test_trim_uses_only_low_no_thinking_and_keeps_original_when_it_fails():
+def test_trim_keeps_pretrim_segments_when_calibrated_evaluator_is_not_enabled(monkeypatch):
+    monkeypatch.delenv('NOVEL_EVALUATOR_PROFILE', raising=False)
+    monkeypatch.delenv('NOVEL_GROUND_TRUTH_MANIFEST', raising=False)
     class BrokenTrimClient:
+        model = 'test-model'
+
         def __init__(self):
             self.calls = []
 
-        def ask_text(self, *args, **kwargs):
+        def ask_json(self, *args, **kwargs):
             self.calls.append((args, kwargs))
             raise LlmFailed('没有完整正文')
 
     client = BrokenTrimClient()
     original = '甲' * 1200 + '。'
-    got, notes = write._trim_to_fit(
-        client, original,
+    before = [{'slot': 's01', 'text': original}]
+    got, notes, audit = write._trim_to_fit(
+        client, before,
         {'output_ordinal': 1, 'budget_chars': 1000},
         SimpleNamespace(), mode='deep')
 
-    assert got == original
-    assert notes and '保留原稿' in notes[0]
-    kwargs = client.calls[0][1]
-    assert kwargs['rungs'] == write.TRIM_RUNGS == (('low', False),)
-    assert kwargs['validator'] is write._reject_length_capped
+    assert got == before
+    assert notes and '保留 pretrim' in notes[0]
+    assert audit is not None and not audit.adopted
+    assert client.calls == []
 
 
 def test_a_successful_retry_archives_both_live_formal_and_invalid():
@@ -85,24 +89,30 @@ def test_revise_regression_gets_exactly_one_refresh_resample(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        def ask_text(self, *_args, **kwargs):
+        def ask_json(self, *_args, **kwargs):
             self.calls.append(kwargs)
-            return '第一次退化稿' if len(self.calls) == 1 else '第二次合格稿'
+            text = '第一次退化稿' if len(self.calls) == 1 else '第二次合格稿'
+            return write.ChapterResponse.model_validate({
+                'segments': [{'slot': 's01', 'text': text}],
+            })
 
     monkeypatch.setattr(write.prompts, 'build_material',
                         lambda *_a, **_kw: SimpleNamespace(given='given'))
     monkeypatch.setattr(write.prompts, 'revise_user', lambda *_a, **_kw: 'USER')
     monkeypatch.setattr(write.M, 'normalize_chapter',
-                        lambda text, **_kw: (text, object()))
+                        lambda text, **_kw: (text, write.M.NormalizeAccount()))
     monkeypatch.setattr(write, '_trim_to_fit',
-                        lambda _c, text, *_a, **_kw: (text, []))
+                        lambda _c, segments, *_a, **_kw: (segments, [], None))
+    monkeypatch.setattr(
+        write, 'CtxChapter', SimpleNamespace(model_validate=lambda value: value))
+    monkeypatch.setattr(write, 'assert_prompt_private_absent', lambda *_a, **_kw: None)
     monkeypatch.setattr(
         write.checks, 'trim_regressions',
         lambda _prev, new, *_a, **_kw: ['丢失结尾'] if '第一次' in new else [])
     client = Client()
 
     got = write._generate_chapter(
-        {'output_ordinal': 1},
+        {'output_ordinal': 1, 'segments': [{'slot': 's01'}]},
         SimpleNamespace(quote_style='curly', sep_chars=[]),
         client, mode='deep', revise={1: ('旧正式稿', [], 'review-fp')},
         system='SYS', progress=SimpleNamespace())
@@ -179,16 +189,22 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        def ask_text(self, *args, **kwargs):
+        def ask_json(self, *args, **kwargs):
             self.calls.append(kwargs)
             if len(self.calls) == 1:
                 raise LlmFailed('四档都被拒绝')
-            return '第二章完整结束。'
+            return write.ChapterResponse.model_validate({
+                'segments': [{'slot': 's01', 'text': '第二章完整结束。'}],
+            })
 
     class Store:
         @staticmethod
         def next_round(_rel):
             return 1
+
+        @staticmethod
+        def exists(_rel):
+            return False
 
     client = Client()
     captured = {}
@@ -201,9 +217,14 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
         lambda *_a, **_kw: SimpleNamespace(given='given'))
     monkeypatch.setattr(write.prompts, 'build_user', lambda _mat: 'USER')
     monkeypatch.setattr(
-        write.M, 'normalize_chapter', lambda text, **_kw: (text, object()))
+        write.M, 'normalize_chapter',
+        lambda text, **_kw: (text, write.M.NormalizeAccount()))
     monkeypatch.setattr(
-        write, '_trim_to_fit', lambda _c, text, *_a, **_kw: (text, []))
+        write, '_trim_to_fit',
+        lambda _c, segments, *_a, **_kw: (segments, [], None))
+    monkeypatch.setattr(
+        write, 'CtxChapter', SimpleNamespace(model_validate=lambda value: value))
+    monkeypatch.setattr(write, 'assert_prompt_private_absent', lambda *_a, **_kw: None)
     monkeypatch.setattr(
         write, '_write_chapter',
         lambda *_a, **_kw: ('chapter.json', [], ['judged']))
@@ -217,8 +238,8 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
         llm_provenance_for_chapter=lambda *_a, **_kw: object(),
         observe=lambda event, **fields: events.append({'event': event, **fields}))
     todo = [
-        {'output_ordinal': 1},
-        {'output_ordinal': 2},
+        {'output_ordinal': 1, 'segments': [{'slot': 's01'}]},
+        {'output_ordinal': 2, 'segments': [{'slot': 's01'}]},
     ]
 
     book = SimpleNamespace(quote_style='curly', sep_chars=[])
@@ -226,8 +247,8 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
         ctx, Store(), book, todo, client,
         mode='deep', revise=None) is report
     assert len(client.calls) == 2
-    assert all(call['validator'] is write._reject_length_capped
-               for call in client.calls)
+    assert all(call['model_cls'] is write.ChapterResponse for call in client.calls)
+    assert all(callable(call['validator']) for call in client.calls)
     assert [(call['progress'].chapter, call['progress'].index, call['progress'].total)
             for call in client.calls] == [(1, 1, 2), (2, 2, 2)]
     assert [(event['chapter'], event['outcome']) for event in events] == [
@@ -248,7 +269,7 @@ def test_stage5_chapters_run_together_up_to_32(
         concurrency = 32
         model = 'test-model'
 
-        def ask_text(self, *args, **kwargs):
+        def ask_json(self, *args, **kwargs):
             nonlocal active, peak
             with lock:
                 active += 1
@@ -258,12 +279,18 @@ def test_stage5_chapters_run_together_up_to_32(
             assert all_entered.wait(2), 'chapter calls were serialized'
             with lock:
                 active -= 1
-            return '完整章节。'
+            return write.ChapterResponse.model_validate({
+                'segments': [{'slot': 's01', 'text': '完整章节。'}],
+            })
 
     class Store:
         @staticmethod
         def next_round(_rel):
             return 1
+
+        @staticmethod
+        def exists(_rel):
+            return False
 
     monkeypatch.setattr(write.prompts, 'write_system', lambda *_a, **_kw: 'SYS')
     monkeypatch.setattr(
@@ -271,9 +298,14 @@ def test_stage5_chapters_run_together_up_to_32(
         lambda *_a, **_kw: SimpleNamespace(given='given'))
     monkeypatch.setattr(write.prompts, 'build_user', lambda _mat: 'USER')
     monkeypatch.setattr(
-        write.M, 'normalize_chapter', lambda text, **_kw: (text, object()))
+        write.M, 'normalize_chapter',
+        lambda text, **_kw: (text, write.M.NormalizeAccount()))
     monkeypatch.setattr(
-        write, '_trim_to_fit', lambda _c, text, *_a, **_kw: (text, []))
+        write, '_trim_to_fit',
+        lambda _c, segments, *_a, **_kw: (segments, [], None))
+    monkeypatch.setattr(
+        write, 'CtxChapter', SimpleNamespace(model_validate=lambda value: value))
+    monkeypatch.setattr(write, 'assert_prompt_private_absent', lambda *_a, **_kw: None)
     written = []
 
     def fake_write(_ctx, _store, entry, *_args, **_kwargs):
@@ -286,7 +318,10 @@ def test_stage5_chapters_run_together_up_to_32(
     ctx = SimpleNamespace(
         llm_provenance_for_chapter=lambda *_a, **_kw: object(),
         observe=lambda *_a, **_kw: None)
-    todo = [{'output_ordinal': value} for value in range(1, chapters + 1)]
+    todo = [
+        {'output_ordinal': value, 'segments': [{'slot': 's01'}]}
+        for value in range(1, chapters + 1)
+    ]
     book = SimpleNamespace(quote_style='curly', sep_chars=[])
     got = write._run_group(
         ctx, Store(), book, todo, Client(), mode='deep', revise=None)

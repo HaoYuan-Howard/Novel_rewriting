@@ -38,6 +38,7 @@ from novel.run import RunContext
 from novel.stages.stage4 import checks, prompts
 from novel.stages.stage4.beats import beat_index, group_beats
 from novel.stages.stage4.context import build_writer_context, display_names_at
+from novel.stages.stage4.fact_refs import catalog as fact_catalog, validate_plan_refs
 from novel.stages.stage4.measure import expand_plan_beats, identity_plan, source_chars_table
 from novel.store import ArtifactStore
 
@@ -206,7 +207,7 @@ def build_prompt(ctx: RunContext) -> tuple[str, str]:
     「真发出去的」是两件事，而那种分家没有任何东西会报错。
     """
     store = ArtifactStore(ctx)
-    up = _Upstreams(ctx, store, need_grounding=False)
+    up = _Upstreams(ctx, store, need_grounding=True)
     return prompts.plan_system(), _build_user(ctx, up)
 
 
@@ -217,12 +218,16 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
     mt = MainText.model_validate(up.main_text)
     book_text, secidx = render_book(mt)
     projected = prompts.project_blueprints_for_planner(up.blueprints, up.groups)
+    assert up.global_g is not None
+    refs = fact_catalog(up.global_g, up.blueprints, up.main_text)
     # ⚠ 与原型的 `compact()` 同形：**最紧的 JSON**（无空格）——
     #   规划的 user 里带着全书原文，骨架那一段每一个空格都在挤原文的预算。
     bs = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
     parts = [
         f'《{ctx.title}》',
         prompts.BLOCK_INDEX + '\n' + secidx,
+        prompts.BLOCK_FACT_REFS + '\n'
+        + json.dumps(refs, ensure_ascii=False, separators=(',', ':')),
         prompts.BLOCK_SKELETON + '\n' + bs,
     ]
     if (tbl := source_chars_table(up.groups, up.bidx)):
@@ -305,6 +310,9 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
     `archive=True`：写盘前把旧正式稿归档进 `_rounds/`（人工修订「落成新的一轮」）。
     """
     data.pop('_provenance', None)
+    assert up.global_g is not None
+    validate_plan_refs(
+        data, fact_catalog(up.global_g, up.blueprints, up.main_text))
     art = PlanChapters.model_validate({**data, '_provenance': provenance})
     outcomes = _judge(store, {**data, '_provenance': provenance.model_dump(by_alias=True)},
                       up, with_ctx_link=False)
@@ -379,7 +387,7 @@ def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:
         base, blueprints=up.blueprints, main_text=up.main_text, global_g=up.global_g,
         ctx=asm.ctx, ctx_link=None,
         ctx_source=f'{IDENTITY_CTX_REL}：本次现算的恒等基线，不比来源', bidx=up.bidx)
-    return (sum(len(c['beats']) for c in base['output_chapters']),
+    return (sum(len(c['segments']) for c in base['output_chapters']),
             _report(ctx, store, outcomes, {}))
 
 

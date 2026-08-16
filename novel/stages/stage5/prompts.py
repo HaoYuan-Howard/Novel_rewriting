@@ -36,7 +36,8 @@ from contracts.invariants import (
     TIME_LAYERS, hinge_heading,
 )
 from novel.core.text import norm
-from novel.llm.prompts import fill
+from novel.core.style import dash_per_1k, short_run_per_1k
+from novel.llm.prompts import fill, with_json_shape
 from novel.stages.stage5 import measure as M
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -173,10 +174,10 @@ DEEP_SYS = """\
 6. 【不把潜台词说破】人物心里清楚、读者自己能推出来的，不要再补一句解释。
    结尾尤其：给一个动作、一个画面、一句短的就收；不要总结陈词、不要自问自答把主题点明。
 
-只输出【正文本身】：
-- 不写章节标题、章节编号、小标题、作者注、说明性文字；
-- 不出现任何任务术语（节拍、展开、目标之类的词不得进正文）；
-- 直接从这一章的第一句开始，到这一章的最后一句结束。"""
+只输出结构化 JSON：
+- `segments` 必须与任务中列出的 slot 一一对应，每个 slot 恰好出现一次；
+- 每项只含 `slot` 与该段正文 `text`，不要章节标题、作者注或说明；
+- slot 的先后不归你决定，代码会按任务给定顺序组装整章。"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,10 +228,10 @@ SHALLOW_SYS = """\
 5. 【不提前揭示后文才揭示的信息】。结尾要留住往下读的动力，不要把底牌提前掀了。
 6. 【篇幅】以上面「篇幅」一节给的**本章目标区间与逐拍字数**为准；原章长度不是目标。
 
-只输出【正文本身】：
-- 不写章节标题、章节编号、小标题、作者注、说明性文字；
-- 不出现任何任务术语（改写方式、事件编号、目标之类的词不得进正文）；
-- 直接从这一章的第一句开始，到这一章的最后一句结束。"""
+只输出结构化 JSON：
+- `segments` 必须与任务中列出的 slot 一一对应，每个 slot 恰好出现一次；
+- 每项只含 `slot` 与该段正文 `text`，不要章节标题、作者注或说明；
+- slot 的先后不归你决定，代码会按任务给定顺序组装整章。"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -281,7 +282,32 @@ TRIM_SYS = """\
 - 不许新写任何原稿里没有的句子，也不许换一个新的结尾立意——结尾要落在原稿本来的落点上；
 - 不许把「一句一段」并成大段来省字数——排版是这本书的形态，动了就不是这本书了。
 
-只输出删减后的正文本身，不要任何说明、不要标题、不要说你删了什么。"""
+只输出结构化 JSON。`segments` 中每个既有 slot 必须恰好出现一次；每项只含
+`slot` 与删减后的 `text`。不要说明、标题或新增 slot。"""
+
+
+#: The two role suffixes are deliberately different bytes.  That keeps the
+#: cache keys independent and makes "double blind" mean two independent
+#: requests rather than reading the first judge's cached answer twice.
+TRIM_JUDGE_ROLE_SUFFIX = {
+    'A': '\n\n你是盲评 judge A。独立判断；你不会看到另一名 judge 的答案。',
+    'B': '\n\n你是盲评 judge B。独立判断；你不会看到另一名 judge 的答案。',
+}
+
+TRIM_JUDGE_SYS = """\
+你只判断一组小说正文删减前后是否语义等价，不评价文风好坏。
+
+PASS 仅在以下项目全部保持时成立：人物、地点、因果、时间顺序、承担信息的对白、秘密边界，
+以及结尾原本的事实与落点。任何一项被删除、改反、挪到别的时间，或新增了原稿没有的事实，
+都判 FAIL。证据不足以闭合这些项目时判 UNVER，不得猜 PASS。
+
+证据只给 UTF-8 解码后 Python 字符串的 `[start,end)` 字符下标，不抄录正文：
+- PASS 必须至少各定位一处 before 与 after 证据；
+- FAIL 必须至少定位一处 after 证据；
+- UNVER 的 evidence 必须为空。
+
+只输出结构化 JSON：`verdict` 为 PASS|FAIL|UNVER，`evidence` 每项只含
+`side=before|after,start,end`，并给非空 `reason`。"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -292,6 +318,13 @@ TRIM_SYS = """\
 #: 它在 `write.py::_ARMS` 里）。
 _SYS_OF: dict[str, str] = {'deep': DEEP_SYS, 'shallow': SHALLOW_SYS}
 assert tuple(_SYS_OF) == DEPTH_MODES, '臂的取值面与 `contracts.invariants.DEPTH_MODES` 分家了'
+
+CHAPTER_RESPONSE_HINT = {
+    'segments': [
+        {'slot': 's01', 'text': '这一生产者指定片段的正文'},
+        {'slot': 's02', 'text': '下一片段正文'},
+    ],
+}
 
 
 def write_system(mode: str, *, revise: bool = False) -> str:
@@ -308,12 +341,31 @@ def write_system(mode: str, *, revise: bool = False) -> str:
     if mode not in _SYS_OF:
         raise KeyError(f'没有 {mode!r} 这条臂。取值面是 {DEPTH_MODES}'
                        f'（`contracts.invariants.DEPTH_MODES`）')
-    return fill(_SYS_OF[mode] + (REVISE_TAIL if revise else ''))
+    return with_json_shape(
+        fill(_SYS_OF[mode] + (REVISE_TAIL if revise else '')),
+        CHAPTER_RESPONSE_HINT,
+    )
 
 
 def trim_system() -> str:
     """收缩那一次调用的 system。**与臂无关**——它删的是已经写好的正文。"""
-    return fill(TRIM_SYS)
+    return with_json_shape(fill(TRIM_SYS), CHAPTER_RESPONSE_HINT)
+
+
+def trim_judge_system(role: str) -> str:
+    """Return one frozen blind-judge surface; role bytes are cache-separated."""
+    if role not in TRIM_JUDGE_ROLE_SUFFIX:
+        raise KeyError(f'unknown trim judge role {role!r}')
+    hint = {
+        'verdict': 'PASS',
+        'evidence': [
+            {'side': 'before', 'start': 0, 'end': 8},
+            {'side': 'after', 'start': 0, 'end': 8},
+        ],
+        'reason': '逐项核对后的简短理由',
+    }
+    return with_json_shape(
+        fill(TRIM_JUDGE_SYS + TRIM_JUDGE_ROLE_SUFFIX[role]), hint)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -364,11 +416,11 @@ def prev_context(entry: dict[str, Any], book: M.Book) -> str | None:
     pe = book.chapters.get(int(entry['output_ordinal']) - 1)
     if not pe:
         return None
-    bits = [f"上一章的目标：{pe.get('chapter_goal', '')}"]
-    bits += [f'· {e}' for be in (pe.get('beats') or [])
+    bits = [f"上一章的目标：{_goal_directive(pe.get('chapter_goal'))}"]
+    bits += [f'· {e}' for be in (pe.get('segments') or [])
              for e in (be.get('events') or []) if (e or '').strip()]
     if pe.get('end_hook_goal'):
-        bits.append(f"上一章结尾停在：{pe['end_hook_goal']}")
+        bits.append(f"上一章结尾停在：{_goal_directive(pe['end_hook_goal'])}")
     return '── 上一章写了什么（仅供衔接，不要复述、不要接着展开它）──\n' + '\n'.join(bits)
 
 
@@ -400,9 +452,10 @@ def chapter_facts(entry: dict[str, Any]) -> str:
     ⚠ 这是**闭卷写手拿到原文的唯一通道**——转述必然丢掉「改一个字就废」的那一维。
     """
     lines: list[str] = []
-    for i, be in enumerate(entry['beats'], 1):
+    for i, be in enumerate(entry['segments'], 1):
         b = be['budget_chars']
-        head = f'{i}. 【约 {b} 字】'
+        slot = str(be['slot'])
+        head = f'{i}. 【slot={slot}；约 {b} 字】'
         # 一拍可能由好几条内容并成。**逐条列，不合并成一段散文**：合并这件事早先是在计划层
         # 让 LLM 做的，实测既造事实（「某人身边人」→「某家丫头」）又丢材料。
         # 编号与 `_stage_line` 的 ①②③ 同序（都按源拍展开），跨层时第 n 件事配第 n 段舞台。
@@ -421,6 +474,20 @@ def chapter_facts(entry: dict[str, Any]) -> str:
 
 
 _GOAL_QUOTE_RX = re.compile(r'「([^」]{2,40})」|“([^”]{2,40})”|‘([^’]{2,40})’')
+
+_GOAL_INTENT = {
+    'establish': '建立', 'advance': '推进', 'open': '开篇',
+    'close': '收束', 'withhold': '暂不揭示', 'resolve': '解决',
+}
+
+
+def _goal_directive(goal: Any) -> str:
+    """Render only resolved writer facts; IDs and planner rationale never arrive here."""
+    if not isinstance(goal, dict):
+        return str(goal or '')
+    intent = _GOAL_INTENT.get(str(goal.get('intent') or ''), str(goal.get('intent') or ''))
+    facts = [str(fact).strip() for fact in (goal.get('facts') or []) if str(fact).strip()]
+    return intent + ('（' + '；'.join(facts) + '）' if facts else '')
 
 
 def goal_quotes(*goals: str | None) -> list[str]:
@@ -445,15 +512,9 @@ def chapter_directive(entry: dict[str, Any], book: M.Book) -> str:
     当前契约不含逐章 `op`；篇幅倍率由 system prompt 的锁定档统一给出。
     现在「篇幅怎么分」整件事归 system prompt 与下面那个「篇幅」块，窟窿在结构上不存在。
     """
-    lines = [f"本章目标：{entry['chapter_goal']}"]
-    lines.append(f"开篇要达到（硬要求）：{entry['open_hook_goal']}")
-    lines.append(f"结尾要达到（硬要求）：{entry['end_hook_goal']}")
-    src_norm = norm(M.chapter_source(entry, book.source_text))
-    hits = [q for q in goal_quotes(entry.get('open_hook_goal'), entry.get('end_hook_goal'))
-            if norm(q) and norm(q) in src_norm]
-    if hits:
-        lines.append('上述目标里这几句是原文现成的句子，落笔时【原句用上】：'
-                     + '、'.join(f'「{h}」' for h in hits))
+    lines = [f"本章目标：{_goal_directive(entry['chapter_goal'])}"]
+    lines.append(f"开篇要达到（硬要求）：{_goal_directive(entry['open_hook_goal'])}")
+    lines.append(f"结尾要达到（硬要求）：{_goal_directive(entry['end_hook_goal'])}")
     return '\n'.join(lines)
 
 
@@ -532,6 +593,12 @@ def facts_block(entry: dict[str, Any]) -> str:
     #   留哪一个：留带标题的那个——写手认的是「── 世界设定 ──」这个抬头，
     #   而这里的抬头写着「称谓/关系/世界规则」，把设定塞进去本身就名不副实。
     f.pop('setting', None)
+    # ``rule_id`` 是审计/关联用的内部键；写手只消费类别与人类可读规则正文。
+    # 这里必须显式投影，不能把整个 typed row compact 后寄希望于提示词叫模型忽略它。
+    f['world_rules'] = [
+        {key: rule[key] for key in ('kind', 'description') if rule.get(key)}
+        for rule in (f.get('world_rules') or [])
+    ]
     known = [s for s in secrets if s.get('reader_knows_by_now')]
     seed = [s for s in secrets if not s.get('reader_knows_by_now')]
     parts = ['── 本章为止的事实（称谓/关系/世界规则；**只到本章，后面的事你不知道**）──\n'
@@ -549,7 +616,7 @@ def facts_block(entry: dict[str, Any]) -> str:
     return '\n\n'.join(parts)
 
 
-def writer_chars(entry: dict[str, Any], book: M.Book) -> dict[str, dict[str, str]]:
+def writer_chars(entry: dict[str, Any], book: M.Book) -> list[dict[str, str]]:
     """人物表投影：写手只需要**叫什么**和**是谁**，而且只需要**本章已经存在的那些人**。
 
     ⚠ `name_distinctiveness` 的消费方是**确定性代码**（`Book.names` / `Book.name_stems` /
@@ -560,8 +627,11 @@ def writer_chars(entry: dict[str, Any], book: M.Book) -> dict[str, dict[str, str
     登场或尚未揭名的人物提前下发给写手。
     """
     chars = entry['characters']
-    return {cid: {k: v[k] for k in ('display_name', 'role') if (v or {}).get(k)}
-            for cid, v in chars.items()}
+    # dict 的键是内部 char_id。改成有序的人类字段列表，保留产地顺序且不把编号下发。
+    return [
+        {key: value[key] for key in ('display_name', 'role') if (value or {}).get(key)}
+        for value in chars.values()
+    ]
 
 
 def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> str:
@@ -605,6 +675,23 @@ class Material:
     source_text: str
 
 
+def density_guidance(book: M.Book) -> str:
+    """Render every book baseline that stage5 density checks judge against."""
+    values = (
+        ('simile_per_1k', '明喻（像/仿佛/如同这类）',
+         book.baseline('simile_per_1k', M.simile_per_1k)),
+        ('xinli_per_1k', '解释情绪的「心里/心中/心底」',
+         book.baseline('xinli_per_1k', M.xinli_per_1k)),
+        ('dash_per_1k', '破折号',
+         book.baseline('dash_per_1k', dash_per_1k)),
+        ('short_run_per_1k', '连续短段成串',
+         book.baseline('short_run_per_1k', short_run_per_1k)),
+    )
+    rendered = [f'{label}（{key}）约 {value:.2f}/千字'
+                for key, label, value in values if value is not None]
+    return '、'.join(rendered)
+
+
 def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> Material:
     """组装一章的下发面。`with_source_text=True` 即开卷（给原章正文）。
 
@@ -619,9 +706,9 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
     """
     lo, hi = target_band(entry)
     plo, phi = target_paragraphs(entry, book)
-    nb = len(entry.get('beats') or [])
+    nb = len(entry.get('segments') or [])
     meas = book.measurable
-    simile = book.baseline('simile_per_1k', M.simile_per_1k)
+    density = density_guidance(book)
     blocks = [
         f'《{book.title}》',
         '── 本章任务 ──\n' + chapter_directive(entry, book),
@@ -639,14 +726,13 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
            f'但**加起来必须落在上面的区间里**。' if nb else '')
         + f"\n· 段落保持这本书的排版：{book.band_of.get('段落形态', '')}"
           f'——不要把三四句话并成一大段，那不是这本书的样子。'
-        # 【句段/明喻手感锚点】数值插值自 `measurable` 与源文。治「明喻 2→16、心里 3→13、
+        # 【句段/密度手感锚点】数值插值自 `measurable` 与源文。治「明喻 2→16、心里 3→13、
         # 段长双向冲」这类腔调漂移——光有档位词，写手不知道自己写密/写长了多少。
         + f"\n· 句段手感（逐本实测，软指标）：这本书平均一句约 "
           f"{meas.get('avg_sentence_chars')} 字、平均一段约 "
           f"{meas.get('avg_paragraph_chars')} 字"
-        + (f'、明喻（像/仿佛/如同这类）每千字只有约 {simile:.1f} 个'
-           if simile is not None else '')
-        + '。写完回看：你的句段若明显比它长、比喻明显比它密，就是写成了另一本书。',
+        + (f'；写法密度基线：{density}' if density else '')
+        + '。写完回看：你的句段或任一写法密度若明显高于基线，就是写成了另一本书。',
         dialogue_block(entry, book, with_source_text=with_source_text),
         '── 本章要写的内容（按顺序；**只写这些**，不得新增剧情、也不要写别的章的事）──\n'
         + chapter_facts(entry),
@@ -691,17 +777,33 @@ def revise_user(mat: Material, prev_text: str, fix_lines: list[str]) -> str:
     ])
 
 
-def trim_user(text: str, entry: dict[str, Any]) -> str:
+def trim_user(segments: list[dict[str, str]], entry: dict[str, Any]) -> str:
     """收缩那一次调用的 user：**上限 + 必须覆盖的事件清单 + 原稿**。
 
     ⚠ 事件清单要一起发：删减最容易删掉的正是「带过的那几拍」，而那是**整件事没写**，
     不是写得简略。
     """
     lo, hi = target_band(entry)
-    evs = [e for be in (entry.get('beats') or []) for e in (be.get('events') or [])
+    text = '\n\n'.join(str(item.get('text') or '').strip() for item in segments).strip()
+    evs = [e for be in (entry.get('segments') or []) for e in (be.get('events') or [])
            if (e or '').strip()]
     return '\n\n'.join([
         f'【目标区间】{lo}~{hi} 字（现在 {len((text or "").strip())} 字）',
         '── 必须覆盖的事件（一条都不许删掉）──\n' + '\n'.join(f'· {e}' for e in evs),
-        '── 原稿 ──\n' + text,
+        '── 原稿（保持这些 slot，不得增删或改名）──\n' + _compact({'segments': segments}),
+    ])
+
+
+def trim_judge_user(
+    before_segments: list[dict[str, str]],
+    after_segments: list[dict[str, str]],
+) -> str:
+    """Two hash-bound subjects; no plan rationale or later-book facts are sent."""
+    before = '\n\n'.join(str(row.get('text') or '').strip() for row in before_segments).strip()
+    after = '\n\n'.join(str(row.get('text') or '').strip() for row in after_segments).strip()
+    return '\n\n'.join([
+        f'【before 字符数】{len(before)}',
+        '── before（删减前）──\n' + before,
+        f'【after 字符数】{len(after)}',
+        '── after（候选）──\n' + after,
     ])

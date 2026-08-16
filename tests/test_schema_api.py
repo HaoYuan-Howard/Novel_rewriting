@@ -21,14 +21,16 @@ from pydantic import ValidationError
 
 from contracts.invariants import HOOK_KEYS, VOICE_KEYS
 from contracts.schema.api import (
-    DraftAlignView, DriftItem, ErrorBody, GlobalView, HookCopyView, JobList, LogChunk,
-    LogStreamEvent, NovelList,
+    DraftAlignView, DraftView, DriftItem, ErrorBody, GlobalView, HookCopyView, JobList,
+    LogChunk, LogStreamEvent, NovelList,
     PreviewRequest, ReadingView, ReviewView,
+    ReviewChapterView,
     Stage0EditRequest, Stage0Segment, Stage0Segments,
     Stage1ChapterRow, Stage1Chapters, Stage1Segment, Stage1Segments,
     Stage4View, Stage5View, Stage6View, Stage7View, StyleView, UploadResult,
 )
 from contracts.schema.api import ReadingBeatLine
+from contracts.schema.stage5 import ChapterSegment
 from contracts.schema.stage3 import (
     ChapterCharStats, Measurable, MeasurableBlock, MeasurableBody, PerChapterSentence,
     StyleProvenance,
@@ -106,6 +108,37 @@ def test_anchor_coverage_warning_is_a_server_decision():
             coverage_threshold=0.6, coverage_state='adequate', note='错误地说安全')
 
 
+def test_stage5_views_only_expose_text_as_the_segment_projection():
+    segments = [
+        ChapterSegment(slot='s01', text='前段。'),
+        ChapterSegment(slot='s02', text='后段。'),
+    ]
+    provenance = {
+        'code': 'test', 'root_clean_sha1': '0' * 40, 'inputs': {},
+        'origin': 'human', 'round': 1, 'revision_of': None,
+        'review': None, 'fixes': None,
+    }
+    draft = dict(
+        mode='deep', relpath='stage5/deep/ch01.json', invalid=False,
+        round=1, origin='human', chars=8, budget_chars=8, source_chars=8,
+        overlap_excl_verbatim=0.0, segments=segments, text='前段。\n\n后段。',
+        align=None, align_rows=[], freshness='fresh', reason='match',
+        _provenance=provenance,
+    )
+    assert DraftView.model_validate(draft).text == '前段。\n\n后段。'
+    with pytest.raises(ValidationError, match='确定性投影'):
+        DraftView.model_validate({**draft, 'text': '另一份整章正文。'})
+
+    review = dict(
+        output_ordinal=1, findings=[], mode='deep', chars=8, budget_chars=8,
+        round=1, origin='human', segments=segments, text='前段。\n\n后段。',
+        rounds=[], stale=False,
+    )
+    assert ReviewChapterView.model_validate(review).segments == segments
+    with pytest.raises(ValidationError, match='必须为 null'):
+        ReviewChapterView.model_validate({**review, 'segments': None})
+
+
 # ───────────────────────── 造两份最小的合法视图 ─────────────────────────
 #
 # ⚠ **合成，不读盘。** 本文件测的是**载体层**的后置条件，而载体层的正确性
@@ -154,6 +187,7 @@ def _loaded_view(**over):
         measurable_stored=meas, bands_stored={'句子形态': '短句'},
         _provenance=StyleProvenance(
             code='b371244', model='deepseek-v4-pro',
+            root_clean_sha1='0' * 40,
             prompts={'STYLE_SYS': '0ca5dc44e0'},
             inputs={'stage1/main_text.json': {'file': 'b8eb890096', 'consumed': None}},
             attempts=[{'kind': 'chapter_aggregate', 'user_prompt': '37b4277e08',

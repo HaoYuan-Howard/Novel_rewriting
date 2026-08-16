@@ -97,7 +97,7 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     反哺 prompt 与「两轮之间这条消没消」都按它对齐。
     """
     fs: list[Finding] = []
-    beats = entry.get('beats') or []
+    beats = entry.get('segments') or []
 
     # ── ① 【原样写入】必须逐字出现（四组材料里唯一要求逐字的一组）───────────────
     #
@@ -130,20 +130,19 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
         fs.append(finding(
             'verbatim_split',
             detail=f'{len(split_v)} 句【原样写入】被提示语切成两截后逐字出现'
-                   f'（本体裁的标准写法，已放行）：'
-                   f'{[(t[:14], g[:8]) for t, g in split_v[:3]]}',
+                   f'：{[(t[:14], g[:8]) for t, g in split_v[:3]]}',
             evidence=[t for t, _g in split_v]))
     if miss_v:
         fs.append(finding(
             'verbatim_missing',
             detail=f'{len(miss_v)} 句【原样写入】的台词没出现在成稿里'
-                   f'（这组要求逐字，改一个字就废）：{[t[:18] for t in miss_v[:4]]}',
+                   f'：{[t[:18] for t in miss_v[:4]]}',
             evidence=miss_v))
     if typo_v:
         fs.append(finding(
             'verbatim_typo',
             detail=f'{len(typo_v)} 句【原样写入】与成稿差一个字'
-                   f'（多半是写手纠正了原文的错别字，已放行）：{[t[:18] for t in typo_v[:3]]}',
+                   f'：{[t[:18] for t in typo_v[:3]]}',
             evidence=typo_v))
 
     # ── ② 【数值不得改动】只要求**值**保住、措辞可动 ────────────────────────────
@@ -226,8 +225,7 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
             fs.append(finding(
                 'secret_unknown',
                 detail=f'{len(unknown)} 条 must_not_reveal 在 stage2 的 secrets 里找不到'
-                       f'（{unknown[:4]}）——这几条的泄漏检查**没有跑**，不是跑了没问题。'
-                       f'多半是 writer_context 与盘上 stage2 不同步，看产物来源行',
+                       f'：{unknown[:4]}',
                 evidence=unknown))
 
     # ── ⑤ 发明越界的两个探针 ────────────────────────────────────────────────
@@ -239,11 +237,9 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     inv = sorted({disp for k, disp in keys_body.items() if k not in keys_given})
     if inv:
         seen = '源章原文与下发面' if mode == 'shallow' else '下发面'
-        why = ('开卷写手手里有源章原文，两处都没有的数字就只能是编的' if mode == 'shallow'
-               else '闭卷写手写出的事实性数字若不在任何给定材料里，就只能是编的')
         fs.append(finding(
             'invented_number',
-            detail=f'⚠ 成稿出现{seen}里都没有的【数字+单位】{inv[:8]}——{why}，逐个核对',
+            detail=f'成稿出现{seen}里都没有的【数字+单位】：{inv[:8]}',
             evidence=inv))
     nm = invented_names(body, given, book.name_stems)
     if nm:
@@ -252,11 +248,56 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
         # **宁可让人多看两眼，不要为了好看的数字砍掉判别力。**
         fs.append(finding(
             'invented_name',
-            detail=f'⚠ 成稿出现下发面里没有的【人物称谓】{nm[:8]}——逐个核对指的是不是已有角色。'
-                   f'「X家姑娘/X家小姐」这类多半是自然构词（在指已有的人）；'
-                   f'真要警惕的是**多出一个人**（如「苏家二小姐」）',
+            detail=f'成稿出现下发面里没有的【人物称谓】：{nm[:8]}',
             evidence=nm))
     return fs
+
+
+_SEGMENT_BOUNDARY_RULES = frozenset({
+    'verbatim_missing', 'verbatim_typo', 'verbatim_split',
+    'keep_value_missing', 'must_appear_missing',
+})
+
+
+def segment_fidelity_findings(
+    segments: list[dict[str, str]],
+    entry: dict[str, Any],
+    book: M.Book,
+    *,
+    mode: str,
+    given: str,
+) -> list[Finding]:
+    """Enforce fidelity inside the producer-owned slot, not just somewhere in the chapter.
+
+    Whole-chapter checks cannot distinguish a required quote copied into the wrong
+    scene from a correctly placed quote.  This projection reuses the same fidelity
+    rules while limiting each check to its declared producer segment.
+    """
+    expected = {str(row.get('slot') or ''): row for row in (entry.get('segments') or [])}
+    out: list[Finding] = []
+    for returned in segments:
+        slot = str(returned.get('slot') or '')
+        contract = expected.get(slot)
+        if contract is None:
+            continue  # the response-shape validator owns unknown/missing slots
+        isolated = {**entry, 'segments': [contract], 'must_not_reveal': []}
+        for hit in fidelity_findings(
+            str(returned.get('text') or ''), isolated, book, mode=mode, given=given,
+        ):
+            if hit.rule not in _SEGMENT_BOUNDARY_RULES:
+                continue
+            out.append(finding(
+                hit.rule,
+                detail=f'slot {slot} 内部保真边界：{hit.detail}',
+                evidence=[slot, *hit.evidence],
+                fix_args=hit.fix_args,
+                identity_hit=hit.identity_hit,
+                identity_dead=hit.identity_dead,
+                converge=hit.converge,
+                unresolved_rounds=hit.unresolved_rounds,
+                wontfix=hit.wontfix,
+            ))
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,9 +315,7 @@ def _dialogue_drift(body: str, book: M.Book) -> list[Finding]:
         #   所以「无引号」是**语料缺陷不是作者选择**，不能拿它去约束写作
         #   ——写手加引号反而更接近原作。措辞是提示不是违规，`owner=corpus`。
         return ([finding('quotes_in_unquoted_corpus',
-                         detail=f'注意：本书语料无引号（可能是入库时被删，非作者选择），'
-                                f'成稿用了 {list(got.quote_styles)}'
-                                f'——若原作确有引号则属正常，不必按语料回改',
+                         detail=f'本书语料无引号；成稿引号样式 {list(got.quote_styles)}',
                          evidence=list(got.quote_styles))]
                 if got.quote_styles else [])
     if not got.dialogue_ratio_applicable:
@@ -347,8 +386,7 @@ def _layout_drift(body: str, book: M.Book) -> list[Finding]:
         return []
     return [finding('layout_drift',
                     detail=f'对白排版漂移：本书提示语以冒号收尾后 {cue:.0%} 换行独段，'
-                           f'本章有 {len(inline)} 处把提示语和引语挤在同一段'
-                           f'（同行冒号/句中插入）——这不是这本书的排法',
+                           f'本章有 {len(inline)} 处同行冒号/句中插入',
                     evidence=inline[:6])]
 
 
@@ -359,11 +397,9 @@ def _density_drift(body: str, book: M.Book) -> list[Finding]:
     `tools/` 的标定脚本从 156 本语料算出、可 0 成本重跑）⇒ **调它之前先按同样办法重标**。
     """
     out: list[Finding] = []
-    for rule, key, fn, why in (
-            ('simile_drift', 'simile_per_1k', M.simile_per_1k,
-             '这本书靠白描不靠比喻，你把它写成了另一本'),
-            ('xinli_drift', 'xinli_per_1k', M.xinli_per_1k,
-             '这本书表演情绪、不解释情绪')):
+    for rule, key, fn in (
+            ('simile_drift', 'simile_per_1k', M.simile_per_1k),
+            ('xinli_drift', 'xinli_per_1k', M.xinli_per_1k)):
         base = book.baseline(key, fn)
         if base is None:
             continue
@@ -372,7 +408,7 @@ def _density_drift(body: str, book: M.Book) -> list[Finding]:
             label = '明喻' if rule == 'simile_drift' else '「心里」'
             out.append(finding(rule,
                                detail=f'{label}密度漂移：本书 {base:.2f}/千字 → '
-                                      f'本章 {got:.2f}/千字（{why}）',
+                                      f'本章 {got:.2f}/千字',
                                evidence=[f'{base:.2f}->{got:.2f}']))
     return out
 
@@ -428,8 +464,7 @@ def _short_run(body: str, entry: dict[str, Any], book: M.Book) -> list[Finding]:
     vs_src = f'｜源章 {short_run_per_1k(src):.2f}' if src else ''
     return [finding('short_run_report',
                     detail=f'连续短段成串：本章 {short_run_per_1k(body):.2f}/千字{vs_src}'
-                           f'｜本书 {base:.2f}｜语料 p95 {SHORT_RUN_CORPUS_P95:.2f}'
-                           f'（口径：≤{SHORT_PARA_MAX} 字的段连续 ≥{SHORT_RUN_MIN} 段算一串）',
+                           f'｜本书 {base:.2f}｜语料 p95 {SHORT_RUN_CORPUS_P95:.2f}',
                     evidence=[f'{base:.2f}->{short_run_per_1k(body):.2f}'])]
 
 
@@ -472,14 +507,12 @@ def _dialogue(body: str, entry: dict[str, Any], book: M.Book, *, mode: str) -> l
         out.append(finding(
             'dialogue_halved',
             detail=f'直接引语腰斩：源章 {n} 句 → 成稿 {m} 句（开卷、且计划没有净压缩'
-                   f'（预算 {entry["budget_chars"]} / 源 {entry["source_chars"]} 字），'
-                   f'没有任何合法理由砍对白——台词是承重内容不是可压缩的填充）',
+                   f'；预算 {entry["budget_chars"]} / 源 {entry["source_chars"]} 字）',
             evidence=[f'{n}->{m}']))
     elif n >= 4 and m < n * 0.7:
         out.append(finding(
             'dialogue_fewer',
-            detail=f'直接引语明显少于源章：{n} 句 → {m} 句（{m / n:.2f}×）'
-                   f'——查是否把台词压成了转述',
+            detail=f'直接引语少于源章：{n} 句 → {m} 句（{m / n:.2f}×）',
             evidence=[f'{n}->{m}']))
     return out
 
@@ -506,24 +539,23 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
     # 产出一堆没有意义的数。但验收相要知道这不是「其余都干净」——那条区分由这条 HARD 自己承担。
     if len(body) < 50:
         return [finding('draft_too_short',
-                        detail=f'成稿过短或为空（{len(body)} 字），疑似失败',
+                        detail=f'成稿过短或为空：{len(body)} 字',
                         evidence=[body[:30] or '（空）'])]
 
     if body[-1] not in TERMINAL_PUNCT:
         fs.append(finding('draft_truncated',
-                          detail=f'结尾无终止标点（疑似截断）：…{body[-12:]!r}',
+                          detail=f'结尾无终止标点：…{body[-12:]!r}',
                           evidence=[body[-24:]]))
     for pat, label in META_PATTERNS:
         if (m := pat.search(body)) is not None:
             fs.append(finding('meta_leak',
-                              detail=f'正文出现{label}「{m.group().strip()}」'
-                                     f'——叙述外壳不该进正文',
+                              detail=f'正文出现{label}「{m.group().strip()}」',
                               evidence=[m.group().strip()]))
 
     names = book.names
     if names and not any(n in body for n in names):
         fs.append(finding('names_absent',
-                          detail=f'本章相关人物名一个都没出现（是否被改名/换称呼）：'
+                          detail=f'本章相关人物名一个都没出现：'
                                  f'{sorted(names)[:6]}',
                           evidence=sorted(names)))
 
@@ -547,30 +579,26 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
         fs.append(finding(
             'length_over',
             detail=f'篇幅超上限：{len(body)} 字 > {hi} 字（目标 {lo}~{hi}，'
-                   f'{len(body) / hi:.2f}× 上限）——收缩已跑过并未能压下来，**照样落盘**，'
-                   f'由全书验收相在成品上判（由阻断降为提示）',
+                   f'{len(body) / hi:.2f}× 上限）',
             evidence=[f'{len(body)}>{hi}']))
     elif len(body) < lo:
         fs.append(finding(
             'length_under',
-            detail=f'⚠ 明显低于目标下限（{len(body)} < {lo}）——查是否丢了事件；'
-                   f'若本章走过收缩，还要查结尾立意是否被换掉',
+            detail=f'篇幅低于目标下限：{len(body)} 字 < {lo} 字',
             evidence=[f'{len(body)}<{lo}']))
 
     # ── 重合度：度量无条件出；**闭卷才有上界** ──────────────────────────────
     ov = M.overlap_ratio(body, entry, book.source_text)
     if ov is not None:
         fs.append(finding('overlap_report',
-                          detail=f'与源章原文重合度（20字窗口，已扣除逐字要求）：{ov:.1%}',
+                          detail=f'与源章原文重合度：{ov:.1%}',
                           evidence=[f'{ov}']))
         if mode == 'deep' and ov > DEEP_OVERLAP_MAX:
             # ⚠⚠ **它守的是【臂的身份】不是文风**：越线说明「章的分工写反 /
             #   `with_source_text` 被翻转 / 开卷稿落进 deep 目录」，不是「写得像原文」。
             fs.append(finding(
                 'deep_overlap_high',
-                detail=f'闭卷臂与源章重合 {ov:.1%} > {DEEP_OVERLAP_MAX:.0%}'
-                       f'——闭卷写手看不到原文，这个数说明**这一章多半不是闭卷写的**'
-                       f'（分工写反 / 开卷稿落进了 deep/ 目录），不是「写得像原文」',
+                detail=f'闭卷臂与源章重合 {ov:.1%} > {DEEP_OVERLAP_MAX:.0%}',
                 evidence=[f'{ov:.4f}']))
 
     fs += fidelity_findings(body, entry, book, mode=mode, given=given or '')
@@ -583,8 +611,7 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
         # ⚠⚠ 它原来是 `mech.quote_problems`，**一个记账块里的字段**——而它根本不是记账，
         #   **是一条结论**：「引号配对异常、未归一、留着交人工」。
         fs.append(finding('quote_unbalanced',
-                          detail=f'{len(qp)} 处引号配对异常，归一**整段原样返回**未处理'
-                                 f'（引号错乱多半是台词归属错位，不猜）：{qp[:3]}',
+                          detail=f'{len(qp)} 处引号配对异常：{qp[:3]}',
                           evidence=qp))
     return fs
 
@@ -650,7 +677,7 @@ def event_landing(entry: dict[str, Any], body: str, src_text: str
     missed: list = []
     noatom: list = []
     ident_miss: list = []
-    for be in (entry.get('beats') or []):
+    for be in (entry.get('segments') or []):
         text = ' '.join(be.get('events') or [])
         atoms = _atoms_of_event(text, roster)
         if not atoms:
@@ -663,6 +690,67 @@ def event_landing(entry: dict[str, Any], body: str, src_text: str
         (landed if any(a in body for a in atoms) else missed).append(
             (text[:36], sorted(atoms)[:4]))
     return landed, missed, noatom, ident_miss
+
+
+def segment_event_findings(
+    segments: list[dict[str, str]],
+    entry: dict[str, Any],
+    book: M.Book,
+) -> list[Finding]:
+    """Check event/reference order only where deterministic atoms prove it.
+
+    A prose-level semantic guess is never promoted to a pass.  Missing unique
+    atoms and a provably reversed order are findings; shared/absent atoms are
+    explicitly UNVER and enter the verification workflow.
+    """
+    contracts = {str(row.get('slot') or ''): row for row in (entry.get('segments') or [])}
+    roster = {c.get('display_name') for c in (entry.get('characters') or {}).values()}
+    roster = {name for name in roster if name} - _pronoun_named(entry)
+    source = M.chapter_source(entry, book.source_text)
+    out: list[Finding] = []
+    for returned in segments:
+        slot = str(returned.get('slot') or '')
+        contract = contracts.get(slot)
+        if contract is None:
+            continue
+        body = str(returned.get('text') or '')
+        positions: list[int] = []
+        missing: list[str] = []
+        unver: list[str] = []
+        for event in (contract.get('events') or []):
+            atoms = sorted(_atoms_of_event(str(event), roster))
+            source_atoms = [atom for atom in atoms if not source or atom in source]
+            hits = sorted(body.find(atom) for atom in source_atoms if atom in body)
+            if not atoms or not source_atoms:
+                unver.append(str(event)[:36])
+            elif not hits:
+                missing.append(str(event)[:36])
+            elif len(set(hits)) != len(hits):
+                unver.append(str(event)[:36])
+            else:
+                positions.append(hits[0])
+        if missing:
+            out.append(finding(
+                'event_landing',
+                detail=f'slot {slot} 内 {len(missing)} 个事件缺少可回查落点：{missing[:3]}',
+                evidence=[slot, *missing],
+            ))
+        if len(positions) > 1 and len(set(positions)) != len(positions):
+            unver.append('多个事件只能定位到同一原子')
+        elif len(positions) > 1 and positions != sorted(positions):
+            out.append(finding(
+                'event_landing',
+                detail=f'slot {slot} 内可确定性定位的事件顺序与 producer 顺序相反',
+                evidence=[slot, 'event_order'],
+            ))
+        if unver:
+            out.append(finding(
+                'event_landing_unver',
+                detail=f'slot {slot} 内 {len(unver)} 个事件缺少唯一确定性原子：'
+                       f'{unver[:3]}',
+                evidence=[slot, str(len(unver))],
+            ))
+    return out
 
 
 def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
@@ -680,8 +768,7 @@ def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
     if noatom or ident:
         fs.append(finding('event_landing_unver',
                           detail=f'{len(noatom)} 拍提不出可回查的原子、{len(ident)} 拍的原子'
-                                 f'连源章原文里都找不到（原子提错了，不是成稿的账）'
-                                 f'—— 这些拍**没有被检查**',
+                                 f'在源章原文里找不到',
                           evidence=[str(len(noatom)), str(len(ident))]))
     land = collections.Counter({'ok': len(landed), 'missed': len(missed),
                                 'noatom': len(noatom), 'ident': len(ident)})
@@ -729,9 +816,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
     if not book.secrets:
         fs.append(finding(
             'no_secrets_in_book',
-            detail='stage2 给这本书抽出的 secrets 是空的 —— 逐章剧透闸门与 '
-                   '`must_not_reveal` 在它上面**一次都不会执行**。'
-                   '本书的「没有提前泄底」不是一个结论，是没得查',
+            detail='本书 stage2 secrets 数量为 0',
             evidence=['0']))
     for s in book.secrets:
         kws = [k for k in secret_keywords(s.get('fact')) if norm(k)]
@@ -744,7 +829,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
             'secret_timeline',
             detail=f"{s.get('secret_id')}：关键片段 {len(kws)} 条 · 揭示章 {reveal or '（无）'}"
                    f" · 在成稿里出现于 {seen or '（一章都没有）'}"
-                   + ('　← 连揭示章自己都没命中：这条 secret 的字面探针在本书上没有判别力'
+                   + ('　← 揭示章未命中'
                       if blind else ''),
             evidence=[str(s.get('secret_id'))]))
 
@@ -760,8 +845,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
             fs.append(finding(
                 'cross_chapter_number',
                 detail=f'「{ctxs}…{unit}」在不同章里是不同的数：'
-                       f'{sorted(hits)}——两处都不在下发面里（都是写手自己写的），'
-                       f'但它们互相打架',
+                       f'{sorted(hits)}',
                 evidence=[f'{ctxs}|{unit}', *sorted(vals)]))
 
     # ── ③ 全书篇幅总账（**逐章合规不蕴含全书不胀**）─────────────────────────
@@ -780,9 +864,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
         if src and not (lo <= tot <= hi):
             fs.append(finding(
                 'book_length',
-                detail=f'全书 {tot / src:.2f}× 源字数（{tot} 字，契约带 {lo}~{hi}）'
-                       f'——「重构不改变总长」是契约不是倾向。⚠ 全书篇幅是**预算之和**'
-                       f'决定的，写手只能在自己那一章里动，根因在计划',
+                detail=f'全书 {tot / src:.2f}× 源字数：{tot} 字，目标 {lo}~{hi} 字',
                 evidence=[f'{tot / src:.2f}']))
 
     # ── ④ 名字面盘点 —— **筛不判，而且无条件出** ────────────────────────────
@@ -804,9 +886,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
         detail=f'自造称谓 {len(by_surface)} 个'
                + (f'（{dict(sorted((k, sorted(v)) for k, v in by_surface.items())[:6])}）'
                   if by_surface else '')
-               + f'；下发名撞名 {len(collide)} 组' + (f'（{collide}）' if collide else '')
-               + '　——**只摆料不判对错**：原文若本就管两个人叫同一个名字，'
-                 '改写照样叫才是保真的；这一条要人来看',
+               + f'；下发名撞名 {len(collide)} 组' + (f'（{collide}）' if collide else ''),
         evidence=sorted(by_surface) + sorted(collide)))
 
     # ── ⑤ 风格块夹带情节 ────────────────────────────────────────────────────
@@ -828,19 +908,16 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
     if kw_hits or nm_hits:
         fs.append(finding(
             'style_block_carries_plot',
-            detail=f'stage3 的风格块（全量直发每一章）里出现了 secret 片段 {kw_hits[:3]} '
-                   f'/ 人物名 {nm_hits[:5]}——风格描述本不该点名情节与人。'
-                   f'根因在 stage3 的抽取契约，重写本章修不掉',
+            detail=f'stage3 风格块出现 secret 片段 {kw_hits[:3]} '
+                   f'/ 人物名 {nm_hits[:5]}',
             evidence=kw_hits + nm_hits))
 
     # ── ⑥ `must_hold`：确定性层判不了，**必须显式说「没查」而不是让它消失** ────
     n_hold = sum(len(be.get('must_hold') or []) for c in book.chapters.values()
-                 for be in (c.get('beats') or []))
+                 for be in (c.get('segments') or []))
     fs.append(finding(
         'must_hold_unver',
-        detail=f'全书 {n_hold} 条【必须成立、不必写在纸面上】的材料 —— '
-               f'这一组按定义就查不了文面，确定性层**没有检查它们**。'
-               f'要判只能上语义层，在那之前别把「没报违规」读成「守住了」',
+        detail=f'全书 must_hold 材料 {n_hold} 条',
         evidence=[str(n_hold)]))
     return fs
 

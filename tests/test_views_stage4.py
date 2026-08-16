@@ -68,11 +68,12 @@ def test_the_real_plan_forwards_goals_and_sums_budgets(box):
     v = stage4_view(box.root, box.sid, o)
     assert not v.identity_plan
     pc = plan['output_chapters'][0]
-    assert v.plan_chapter.chapter_goal == pc['chapter_goal']
+    assert v.plan_chapter.chapter_goal.model_dump(mode='json') == pc['chapter_goal']
     assert [b.from_beats for b in v.plan_chapter.beats] == \
-        [b['from_beats'] for b in pc['beats']]
+        [b['from_beats'] for b in pc['segments']]
+    assert [b.slot for b in v.plan_chapter.beats] == [b['slot'] for b in pc['segments']]
     row = next(r for r in v.index if r.output_ordinal == o)
-    want = sum(b['budget_chars'] for b in pc['beats'] if b.get('budget_chars'))
+    want = sum(b['budget_chars'] for b in pc['segments'] if b.get('budget_chars'))
     assert row.budget_chars == (want or None)
 
 
@@ -92,7 +93,8 @@ def test_without_a_plan_the_screen_shows_the_identity_baseline(box):
     v = stage4_view(box.root, box.sid, 1)
     assert v.identity_plan
     assert v.reconstruction_strategy == IDENTITY_GOAL
-    assert v.plan_chapter.chapter_goal == IDENTITY_GOAL, '恒等的 goal 是显式标记，不是真决策'
+    assert v.plan_chapter.chapter_goal.rationale == IDENTITY_GOAL, \
+        '恒等的 goal 是显式标记，不是真决策'
     assert v.plan_chapter.beats and v.ctx_chapter is not None
     assert v.plan_provenance is None and v.ctx_provenance is None
     assert _tree(box.root) == before, '恒等基线把东西写到盘上了（那是 --identity 的事）'

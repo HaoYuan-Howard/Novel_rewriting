@@ -9,6 +9,8 @@ stage5/<mode>/chNN.rejected.json 两次都相对旧正式稿退化的修订证�
 stage5/<mode>/_rounds/…          上一轮与被替代的 INVALID / rejected 历史归档
 stage5/review_<n>.json           确定性验收报告（**0 成本，不调 LLM**），整本写完之后跑
 stage5/semantic_<n>.json         付费书级语义审判（secret-blind claims → secret alignment）
+stage5/trim_audit_chNN.json      收缩候选的 durable 机械/语义审计（v1）
+stage5/trim_resolution_chNN.json 人工明确保留 pretrim 的 hash-bound 销账（v1，0 成本）
 stage5/wontfix.json              人的「这条我不修」（0 成本，理由必填）
 stage5/draft.md                  两条臂合成的全书拼稿（**字节形态**，见 §五）
 ```
@@ -51,9 +53,10 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > 而少数够得着的（`mode` / `from_source_ordinals` 长度恒 1）**本来就没有判据**，
 > 归载体是原样承认现状，不是收权。
 >
-> ⚠ **还有一处不对称必须先说**：stage4 那条「模型越界多产一个键 ⇒ 响应侧 `extra='forbid'` 当场挡回」
-> 的出路，**在本层的默认路径上不存在**——默认逐章调用走的是 `ask_text`，**响应是纯文本，没有 JSON 可校验**。
-> 只有 `--batch N`（A/B 用）走 `ask_json`。别把 stage4 的那套结论直接搬过来。
+> 默认逐章调用与定向修订都走结构化 `ChapterResponse`：模型只返回
+> `{segments:[{slot,text}]}`。代码在预算、缓存、ledger、transport 之前先检查 prompt-private
+> 字段，再要求槽位集合完整且唯一，最后严格按 producer 顺序组装。缺槽、重槽、多槽或未知键均
+> 是显式终态，不能靠模型返回顺序决定成书顺序。
 >
 > ### ③ 历史机械基线是 **7 条 HARD，盘上 31 章 0 命中；47 条里 29 条从未命中**
 >
@@ -94,7 +97,8 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > ### ⑤ 落盘前有一次**确定性改写正文本身**，而本层**不为它记账**
 >
 > `normalize_chapter`（标点归一 / 引号体归一 / 段落分隔归一）跑在**落盘之前**，
-> 存进产物的 `text` 是**归一之后的字节**，模型原样吐出来的那一份**不在任何产物里**。
+> 存进产物的 `segments[].text` 是**逐槽归一之后的字节**，模型原样吐出来的那一份**不在任何产物里**。
+> 整章 `text` 只是按 producer slot 顺序用空行拼接的确定性投影，不序列化成第二份权威。
 >
 > ⇒ **判据 24 在这里给出的答案是「不必记账」，但理由与 stage4 完全不同**：
 > stage4 的 `op` 是「那个位置本来没东西」（初始化）；这里位置上**确实有东西且被销毁了**，
@@ -107,6 +111,9 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 ---
 
 ## 一、`stage5/<mode>/chNN.json`
+
+正式章与其 `.INVALID` / 轮次归档使用 **schema v2**；无 `_provenance` 的 rejected、wontfix
+以及新增 trim audit 均从 v1 起步。
 
 顶层 **10 个键**。**正式稿与 `.INVALID` 共用同一份章契约**——状态由**文件名**区分，
 不由字段贫富区分。
@@ -127,9 +134,9 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 | `mode` | `str` | 是 | `deep｜shallow`（`DEPTH_MODES`），同时是目录名 | **三源** |
 | `source_chars` | `int` | 是 | 源章对应部分字数（计划算好的）。盘上 408~1963 | **三源** |
 | `budget_chars` | `int` | 是 | 本章各拍预算之和，必须为正整数 | **三源** |
-| `chars` | `int` | 是 | `len(text.strip())`，**含空白**。盘上 399~1967。<br>⚠ 与 stage3 `measurable.body.chars`（**去空白**）不是同一个口径——跨口径运算要先对齐（判据 14） | **三源** |
+| `chars` | `int` | 是 | `len(整章确定性投影.strip())`，**含空白**。<br>⚠ 与 stage3 `measurable.body.chars`（**去空白**）不是同一个口径——跨口径运算要先对齐（判据 14） | **契·码** |
 | `overlap_excl_verbatim` | `float｜null` | 是 | 20 字窗口重合率，**已扣掉按契约必须逐字保留的部分**。`null` = 正文短于一个窗口，**那是「量不了」不是「重合 0」**。<br>**闭卷有上界 `DEEP_OVERLAP_MAX` = 10%**（判据 `deep_overlap_high`）；**开卷无上界，只报分布** | **三源** |
-| `text` | `str` | 是 | 正文本身，**唯一承载内容的字段**，`draft.md` 由它拼。⚠ 存的是**归一之后**的字节（事实 ⑤） | **三源** |
+| `segments` | `ChapterSegment[]` | 是 | **唯一内容权威**；每项为 producer-owned `{slot,text}`，slot 章内唯一，数组按 producer 顺序落盘。整章正文、API `text` 与 `draft.md` 全部由它确定性派生 | **契·码** |
 | `warns` | `str[]` | 是 | 提示级判定的**字符串投影**。盘上长度 4~9，共 187 条。<br>⚠ **恒非空**：4 条 metric（篇幅 / 重合度 / 破折号密度 / 连续短段）无条件产出 ⇒「有 warns」不携带任何信息，只有**读它是哪几条**才有 | **盘·码** |
 | `errs` | `str[]` | **否** | 阻断级判定。见下 | **盘·码** |
 | `_provenance` | `obj` | 是 | 见 §五 | **三源** |
@@ -178,8 +185,29 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 ### 1.2 归一链本身（**代码做的后置条件，不落产物**）
 
-顺序是 `归一 → 收缩(LLM) → 再归一 → 校验`，三道门与落盘看的是同一份最终字节；
+顺序是 `归一 → profile 精确绑定 → 结构化同槽收缩 → 再归一 → 确定性回归 → 双盲语义裁决 → 校验`，
+所有门与落盘看的是同一份最终字节；
 两遍的账**相加不覆盖**（只留后一份会让「首稿修了 9 处引号」凭空消失）。
+
+`trim_equivalence` 的 profile 按该能力自己的 dataset/model/prompt/schema/decoder 五项指纹
+逐项全等匹配；profile 缺失、未启用或漂移时，收缩生成器与 judge 都是 **0 次调用**。此时
+保留 pretrim，先落 `stage5/trim_audit_chNN.json`（before/after hash 相同、`adopted=false`）并进入
+`verification`。profile 可用时，候选仍必须保持 producer 的 slot 集合恰好一次；代码按 producer
+顺序组装并重新归一，然后真实重算人物、地点、因果、时间、结尾 claims 与
+`trim_regressions`。机械退化会在 judge 前整轮弃用。只有 A/B 两个缓存身份独立的盲评同时
+`PASS`、各自证据闭合，且合并结论为 automated PASS，才采用候选；FAIL、UNVER、分歧、
+证据越界或调用失败一律回滚。`TrimAudit.semantic.subject_key` 必须等于候选 `after_sha256`，
+且 semantic 出现时必须同时冻结完整 `evaluator_fingerprint`，因此人工复核可按同一字节身份
+与同一校准 surface 复算 claims、span 与最终采用决定。
+
+人工销账只允许 `action=retain_pretrim`：运行
+`stage5.review --retain-pretrim --chapters N --actor <自报身份> --reason <理由>` 会写独立的
+`trim_resolution_chNN.json`，绑定当前 versioned trim audit **整文件 SHA-256**、`mode`、
+`stage5/<mode>/chNN.json` 路径及其确定性正文 SHA-256，并要求该正文仍精确等于 audit 的
+`before_sha256`；同时冻结 `after_sha256`。actor 仅是自报身份，不是认证身份。任何 audit 字节、
+正式章路径/正文或根哈希变化都会让旧 resolution 变 stale，verification 重新出现；再次决定时旧 resolution 进入
+`stage5/_rounds/`，不得覆盖历史。该路径不改正文，且 schema 没有任何采用候选的 action；
+收缩候选仍只能由校准的双判官自动 PASS 后采用。
 
 ⚠ **归一必须跑在收缩【之前】**，这一条是实测出来的：`normalize_paragraphs` 会把单换行改成空行分段，
 **它往文本里加字符**，而 `budget_chars` 的口径含空白。曾有一章归一前 1408 字（未触发收缩，正确），
@@ -650,7 +678,7 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 | `R-8.5` | `结构` | `novel/stages/stage5/write.py::revise_targets` 的第四道筛子（`STOP_REWRITE_AFTER`） |
 | `R-8.7b` | `结构` | `novel/wontfix.py::mark` + `::applied`（全链一份机制；查不到 ⇒ 显式终态；豁免只降 `actionable`。结论池由 `novel/stages/stage5/review.py::mark_wontfix` 交出，含语义结论） |
 | `R-8.7` | `载体` | `WontFix` 的 `why` 最小长度 + 键↔条目一致性 |
-| `R-8.8` | **`待建`** | `INBOX_KIND` 六个取值今天只有 `invalid` 有消费方，**聚合本身一行都没有** |
+| `R-8.8` | `结构` | `novel/views/inbox.py::inbox_view` 只读盘聚合八类；`repairable` 与真人工 `human_only` 分开，可人工消解的 `UNVER` 进 `verification` |
 | `R-8.9` | `结构` | `contracts/rules.py::_validate` ⑤：`wordlist` 不填 `baseline` 当场拒绝注册 |
 
 ⇒ 度量与「查不了」那两族因此各自有了自己的行（`R-8.1b` / `R-8.3b` / `R-8.9b` / `R-8.11`），
@@ -672,9 +700,9 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 
 | 机制 | 触发条件 | 处置 |
 |---|---|---|
-| `ask_text` 的降级阶梯 | 模型把正文写进 `reasoning_content`、`content` 返回空串（`finish_reason='stop'`） | 换 effort 重试，**全都空则抛**。⚠ 空回答**从不写进缓存** |
+| `ChapterResponse` 载体门 | 任一请求缺槽、重槽、多槽、未知槽，或 `finish_reason=length` | 响应校验失败；不按模型数组顺序拼接，不产生正常/INVALID 章产物 |
 | `_write_group` 收尾 | 某章没拿到正文 | **显式终态**（多章一批时提示长列表 wind-down） |
-| `trim_to_fit` | 超上限 → 退回去「只删不改」，最多 2 轮；每轮必须真的变短 | 删坏（丢 verbatim / 削断结尾 / 对白腰斩）**整轮弃用**，不做局部修补 |
+| `trim_to_fit` | 超上限 | profile 未精确绑定时 **0 次付费调用**并保留 pretrim；绑定后生成同槽结构化候选，机械回归失败不调用 judge，校准 A/B 双盲只有同 PASS 且证据闭合才采用。所有回滚路径都落 durable `trim_audit` 并转 `verification` |
 | `_revise_regression` | 修订轮把上一轮弄坏 | 整轮弃用 + **一次 no-cache 重采样**（同 prompt 走缓存只会拿回同一份坏稿）+ 仍坏则**保留上一轮**，被驳回的稿留 `.rejected.json` |
 | 落盘闸门 | 有 `errs` | **不覆盖已有成稿**，问题稿存 `.INVALID`，**一章失败不中断整批** |
 | `assemble_book` | 同一章两条臂都有成稿 | **显式终态** |
@@ -685,13 +713,9 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 > **不看正式稿里的 `errs`** ⇒ 一份带阻断级判定的人工稿会一路进 `book.txt`，没有一行报告会说。
 > 盘上零样本（唯一那份人工稿的 `errs` 是空的）。这是裁决的后果，不是 bug——但要写进契约。
 
-> ⚠ **本层唯一的结构化调用点没有声明必需顶层键。** `write_batch`（`--batch N`，A/B 用）走 `ask_json`
-> 却**没有 `require=`**，拿 `(got.get('chapters') or [])` 兜底 ⇒ 一份**合法 JSON 但没有 `chapters`**
-> 的响应会被**正常缓存**，然后由调用方判成显式终态。终态是对的，**但那份坏响应留在缓存里**：
-> 下一次不带 `--no-cache` 的重跑会**原样读回来**，而它长得与一次真调用一模一样。
-> `ask_json` 的 `require=` 分支**会把这种空壳踢出缓存**。⇒ 应为 `require=('chapters',)`（判据 39）。
-> ⚠ 不夸大：现役 8 个结构化调用点里 5 个声明了 `require=`，本层这一个的暴露面最小
-> （`--batch` 只用于 A/B，默认 1），**但形状完全相同**。
+> 所有写作与修订调用共用 `ChapterResponse` 及同一槽位 validator；不存在另一路纯文本或
+> batch-only 响应形状。正式章 artifact 为 **schema v2**，旧 `text` 权威字段没有别名、迁移或
+> 双读分支，必须从 producer 重新生成当前 `segments`。
 
 ---
 

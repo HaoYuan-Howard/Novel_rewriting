@@ -246,18 +246,27 @@ def stage6_context(data: object) -> object:
     """文案消费全书故事地图，并用开篇源章号选择对应 chapter_styles。"""
     if not isinstance(data, dict):
         return None
+
+    def public_goal(value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        return {key: value.get(key) for key in ('intent', 'fact_refs')}
+
     return [
         {
             'output_ordinal': chapter.get('output_ordinal'),
             'from_source_ordinals': chapter.get('from_source_ordinals'),
-            'chapter_goal': chapter.get('chapter_goal'),
-            'open_hook_goal': chapter.get('open_hook_goal'),
-            'events': [
-                event
-                for beat in (chapter.get('beats') or []) if isinstance(beat, dict)
-                for event in (beat.get('events') or [])
+            'chapter_goal': public_goal(chapter.get('chapter_goal')),
+            'open_hook_goal': public_goal(chapter.get('open_hook_goal')),
+            'segments': [
+                {
+                    'slot': segment.get('slot'),
+                    'events': list(segment.get('events') or []),
+                }
+                for segment in (chapter.get('segments') or [])
+                if isinstance(segment, dict)
             ],
-            'end_hook_goal': chapter.get('end_hook_goal'),
+            'end_hook_goal': public_goal(chapter.get('end_hook_goal')),
         }
         for chapter in (data.get('chapters') or []) if isinstance(chapter, dict)
     ]

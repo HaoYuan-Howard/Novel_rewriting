@@ -18,6 +18,15 @@ import { cx } from '@/lib/cx'
 import { useStage5Screen, type FindingView } from './useStage5Screen'
 
 /**
+ * `/api/enums` 用 `extra=['--chapters']` 标识这条带值动作，但值要到点击时才有。
+ * 该 flag 已在动作身份里时，运行期只追加值；否则追加完整 flag/value 对。
+ */
+export function chapterSelectionArgs(extra: readonly string[] | null, value: string): string[] {
+  const chapters = value.trim()
+  return extra?.at(-1) === '--chapters' ? [chapters] : ['--chapters', chapters]
+}
+
+/**
  * 成稿 ↔ 材料（吃掉了原本独立的「验收 / 修订」屏）。
  * 左 = 判据报了什么，中 / 右 = 成稿 ↔ 原文，就地改。
  */
@@ -291,17 +300,26 @@ export function Stage5Screen() {
 
                         {vm.editing ? (
                           <div className="flex flex-col gap-10 px-18 py-14">
-                            <textarea
-                              value={vm.text}
-                              onChange={(e) => vm.setText(e.target.value)}
-                              className="min-h-[420px] w-full resize-y rounded-block border border-line bg-card px-14 py-12 text-read leading-[2.05] text-ink"
-                            />
+                            {vm.editSegments.map((segment) => (
+                              <label key={segment.slot} className="flex flex-col gap-5">
+                                <Mono className="text-micro text-ink-5">{segment.slot}</Mono>
+                                <textarea
+                                  value={segment.text}
+                                  onChange={(e) => vm.setSegmentText(segment.slot, e.target.value)}
+                                  className="min-h-[180px] w-full resize-y rounded-block border border-line bg-card px-14 py-12 text-read leading-[2.05] text-ink"
+                                />
+                              </label>
+                            ))}
                             <div className="flex items-center gap-10">
                               <span className="prose-cn text-tag text-ink-4">{vm.editNote}</span>
                               <ActionButton
                                 className="ml-auto"
                                 action={{ kind: 'stage5.write', extra: ['--apply-edit'], paid: false }}
-                                disabled={vm.save.isPending}
+                                disabled={
+                                  vm.save.isPending ||
+                                  vm.editSegments.length === 0 ||
+                                  vm.editSegments.some((segment) => !segment.text.trim())
+                                }
                                 onClick={() =>
                                   askConfirm({
                                     req: {
@@ -314,7 +332,10 @@ export function Stage5Screen() {
                                       ordinal: vm.ordinal,
                                     },
                                     run: () =>
-                                      vm.save.mutateAsync({ mode: vm.saveMode, text: vm.text }),
+                                      vm.save.mutateAsync({
+                                        mode: vm.saveMode,
+                                        segments: vm.editSegments,
+                                      }),
                                   })
                                 }
                               >
@@ -392,7 +413,7 @@ export function Stage5Screen() {
                                 label: a.label,
                                 extra: a.extra,
                                 mode: a.mode ?? null,
-                                args: ['--chapters', vm.chaptersArg.trim()],
+                                args: chapterSelectionArgs(a.extra, vm.chaptersArg),
                                 sid: vm.sid,
                                 ordinal: null,
                               })

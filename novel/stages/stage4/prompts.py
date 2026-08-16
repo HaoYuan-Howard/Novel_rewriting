@@ -53,10 +53,11 @@ PLAN_SYS = fill("""\
 每个输出章：
   output_ordinal（从 1 连续）
   from_source_ordinals[]（本章出自哪个源章；**恰好一个，且等于 output_ordinal**）
-  chapter_goal：一句话——这一章要达成什么
-  open_hook_goal：开篇要达到什么（与本章事件顺序自洽）
-  end_hook_goal：结尾要达到什么（未到结局不提前泄底）
-  beats[]：【本章的每一拍，条数与顺序照骨架给的，一条不多一条不少】：
+  chapter_goal / open_hook_goal / end_hook_goal：都只能写 typed goal：
+    intent：establish|advance|open|close|withhold|resolve；
+    fact_refs[]：从「可引用事实目录」逐字选择 kind/ref，并写本章 chapter；
+    rationale：可选，仅供审计，写手不会收到。不要在 rationale 里另造事实。
+  segments[]：【本章的每一段，条数照骨架给的，一条不多一条不少】：
     plan_beat：骨架里那一拍的编号（`pNN_NN`，照抄）。**内容本身不用你复述**——
       那一拍里的内容会原样交到写手手里。
     budget_chars：这一拍【大约写多少字】，整数。**这是你在这一层唯一的决定。**
@@ -79,7 +80,8 @@ PLAN_SYS = fill("""\
 - 【但重头要稀缺】一章通常只有一到两拍是重头。每拍都是重头就等于没有重点。
 - 【压缩是砍预算，不是砍内容】要压就把某几拍的 budget_chars 调低，**不许把拍从计划里丢掉**。
 
-【每一拍都必须出现在 beats[] 里】——骨架给你几拍，你就产出几拍，编号一个不落、顺序照原样。
+【每一拍都必须出现在 segments[] 里】——骨架给你几拍，你就产出几拍，编号一个不落；
+最终顺序与 slot 由代码按骨架生成，不由你决定。
 
 【只说写什么，不说怎么写】
 - 下面这些**写法**词一个都不许出现（在 reconstruction_strategy 里也不许）：
@@ -97,8 +99,13 @@ PLAN_HINT: dict[str, Any] = {
     'reconstruction_strategy': 'str',
     'output_chapters': [{
         'output_ordinal': 1, 'from_source_ordinals': [1],
-        'chapter_goal': 'str', 'open_hook_goal': 'str', 'end_hook_goal': 'str',
-        'beats': [{'plan_beat': 'p01_01', 'budget_chars': 120}],
+        'chapter_goal': {'intent': 'advance', 'fact_refs': [
+            {'kind': 'event', 'ref': 'b01_01', 'chapter': 1}], 'rationale': 'str|null'},
+        'open_hook_goal': {'intent': 'open', 'fact_refs': [
+            {'kind': 'event', 'ref': 'b01_01', 'chapter': 1}], 'rationale': 'str|null'},
+        'end_hook_goal': {'intent': 'close', 'fact_refs': [
+            {'kind': 'event', 'ref': 'b01_02', 'chapter': 1}], 'rationale': 'str|null'},
+        'segments': [{'plan_beat': 'p01_01', 'budget_chars': 120}],
     }],
 }
 
@@ -121,6 +128,7 @@ PLANNER_CHAPTER_KEYS = ('chapter_ordinal', 'summary')
 #: 五个块头。⚠ **逐字进 prompt，所以它们的措辞是契约的一部分**；
 #: system 与 user 下发面都由测试锁定。
 BLOCK_INDEX = '── 章节索引（阅读序）──'
+BLOCK_FACT_REFS = '── 可引用事实目录（goal.fact_refs 只能从这里选择）──'
 BLOCK_SKELETON = '── 章节骨架（blueprints，拍已切好，含各拍 plan_beat 编号）──'
 BLOCK_SIZES = ('── 各拍源字数（算好的，直接用；逐拍相加即本章源字数）──\n'
                '格式 `plan_beat=源字数(逐字N)`。括号是这一拍【必须一字不改写进正文】的原话字数，\n'
@@ -164,7 +172,7 @@ def project_blueprints_for_planner(blueprints: dict[str, Any],
                 'time_layer': (members[0] if members else {}).get('time_layer'),
                 'place': places[0] if len(places) == 1 else (places or None),
             })
-        x['beats'] = beats
+        x['segments'] = beats
         bps.append(x)
     return {'blueprints': bps}
 

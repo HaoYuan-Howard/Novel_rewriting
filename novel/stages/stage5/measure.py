@@ -53,7 +53,12 @@ def draft_projection(data: object) -> object:
     """
     if not isinstance(data, dict):
         return None
-    return {'output_ordinal': data.get('output_ordinal'), 'text': data.get('text')}
+    segments = data.get('segments') or []
+    text = '\n\n'.join(
+        str(item.get('text') or '').strip()
+        for item in segments if isinstance(item, dict)
+    ).strip()
+    return {'output_ordinal': data.get('output_ordinal'), 'text': text}
 
 
 def draft_consumed_of(rec: dict[str, Any]) -> DraftConsumed:
@@ -95,8 +100,10 @@ def load_drafts(store: ArtifactStore) -> tuple[dict[int, list[dict[str, Any]]], 
             if base.endswith('.INVALID.json'):
                 invalids.append(rel)
                 continue
-            chapter, fp, _cfp = store.read_judged(Chapter, rel, project=draft_projection)
+            chapter, fp, _cfp = store.read_judged(
+                Chapter, rel, project=draft_projection, require_current=True)
             rec = chapter.model_dump(by_alias=True)
+            rec['text'] = chapter.text  # deterministic in-memory projection, never a disk authority
             rec['_relpath'], rec['_mode'] = rel, mode
             by_ord.setdefault(chapter.output_ordinal, []).append(rec)
             judged[rel] = JudgedDraft(
@@ -207,7 +214,7 @@ def chapter_source(entry: dict[str, Any], source_text: dict[int, str]) -> str:
 
 def mandated_verbatim(entry: dict[str, Any]) -> str:
     """本章**被契约要求逐字复现**的全部句子拼起来——重合度要扣掉的那部分。"""
-    return ''.join(v for be in (entry.get('beats') or [])
+    return ''.join(v for be in (entry.get('segments') or [])
                    for v in (be.get('verbatim') or []))
 
 

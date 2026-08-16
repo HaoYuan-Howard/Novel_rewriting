@@ -56,21 +56,24 @@ from contracts.invariants import (
 )
 from contracts.schema.base import FrozenModel, Sha1, StrictModel
 from contracts.schema.common import Finding
+from contracts.schema.evaluation import GlobalReviewItem
 from contracts.schema.orchestration import (
     AgentRunRecord, ArtifactCondition, ArtifactState, Freshness, FreshnessReason,
     JobRecord, JobState, NovelOverview, QueueRun,
 )
 from contracts.schema.stage1 import HookCopy
+from contracts.schema.stage0 import Stage0ConflictResolution
 from contracts.schema.stage2 import (
     BlueprintProvenance, ConflictStage, GlobalProvenance, Setting, WorldRule,
 )
 from contracts.schema.stage3 import Measurable, StyleProvenance
-from contracts.schema.stage4 import CtxChapter, CtxProvenance, PlanProvenance
+from contracts.schema.stage4 import CtxChapter, CtxProvenance, PlanGoal, PlanProvenance
 from contracts.schema.stage5 import (
-    JudgedDraft, ReviewProvenance, ReviewSources,
+    ChapterSegment, JudgedDraft, ReviewProvenance, ReviewSources,
     RoundFreeProvenance, RoundLlmProvenance,
 )
 from contracts.schema.stage6 import (
+    HookApprovalResolution,
     HookContradiction,
     HookProvenance,
     HookQualityScores,
@@ -160,6 +163,8 @@ class Stage0EditRequest(StrictModel):
     expected_source_sha1: Sha1
     expected_clean_sha1: Sha1
     removed_segment_ids: list[str] = Field(default_factory=list)
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
 
     @model_validator(mode='after')
     def _ids_are_unique(self) -> Stage0EditRequest:
@@ -168,6 +173,21 @@ class Stage0EditRequest(StrictModel):
         if any(not item for item in self.removed_segment_ids):
             raise ValueError('removed_segment_ids 不得含空 id')
         return self
+
+
+class Stage0ApprovalRequest(StrictModel):
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class Stage0MergeDecisionRequest(StrictModel):
+    candidate_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
+    expected_round: int = Field(ge=1)
+    expected_source_sha1: Sha1
+    expected_clean_sha1: Sha1
+    resolutions: list[Stage0ConflictResolution] = Field(default_factory=list)
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
 
 
 class Stage1Segment(FrozenModel):
@@ -525,6 +545,17 @@ class QueueCreateRequest(StrictModel):
         return self
 
 
+class QueueResumeRequest(StrictModel):
+    """``POST /api/queues/{queue_id}/resume`` request body.
+
+    A persisted queue's creation-time confirmation is not reusable for a new
+    resume turn.  The API therefore carries the new authorization explicitly
+    instead of treating the resume endpoint itself as consent.
+    """
+
+    confirmed: bool = False
+
+
 class QueueList(StrictModel):
     queues: list[QueueRun] = Field(default_factory=list)
 
@@ -585,6 +616,13 @@ class ApprovalDoc(StrictModel):
         return self
 
 
+class ApprovalBackfillResult(StrictModel):
+    """按现有产物补录 CLI/队列路径的验收链；`backfilled` 必须在 UI 明示。"""
+
+    approvals: ApprovalDoc
+    backfilled: list[GateKey] = Field(default_factory=list)
+
+
 class DeepSelectionRequest(StrictModel):
     deep: list[int] = Field(default_factory=list)
 
@@ -600,10 +638,11 @@ class DeepSelectionRequest(StrictModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class InboxItem(FrozenModel):
-    """「待人工」清单的一条。**`unver` 永不入列**——那是判据的边界，不是待办
-    （`invariants.INBOX_KIND` 那条纪律：堆进去清单就永远清不空，而清不空的清单没人看）。
+    """「待人工」清单的一条。通用 check 的 `unver` 不入列；
+    TODO-24 中能通过人工证据消解的 `pending` / `UNVER` 以 `verification` 入列。
 
-    `rule`：`human_only` / `upstream` / `stalled` 填**判据 id**；
+    `rule`：`repairable` / `human_only` / `verification` / `upstream` / `stalled`
+    填**判据或复核项 id**；
     `invalid` / `rejected` / `approval` 没有单条判据可指，填**节点 id**（如 `stage6.hook`）。
     `chapter`：**输出章**口径（现契约一源章=一输出章，数值恰好相同；未来规划映射若改，
     本字段跟 stage5 结论键走输出章，别按源章跳屏）。书级 / 整份产物 = `None`。
@@ -622,7 +661,7 @@ class InboxItem(FrozenModel):
 class InboxView(StrictModel):
     """`GET /api/novels/:sid/inbox` 的响应体（路由属第二阶段；本模块只定形状）。
 
-    `counts` **六键全出**（0 也要出）：「没有这个键」与「值是 0」不许混——
+    `counts` **八键全出**（0 也要出）：「没有这个键」与「值是 0」不许混——
     stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失）。
     `wontfix`：被人豁免的条数——豁免不删结论、不进清单，单独计数。
     """
@@ -635,7 +674,7 @@ class InboxView(StrictModel):
     @model_validator(mode='after')
     def _counts_partition_is_consistent(self) -> InboxView:
         if set(self.counts) != set(INBOX_KIND):
-            raise ValueError('counts 必须六键全出（0 也要出）——稀疏计数会把「没有」与「0」混掉')
+            raise ValueError('counts 必须八键全出（0 也要出）——稀疏计数会把「没有」与「0」混掉')
         if self.total != len(self.items) or sum(self.counts.values()) != self.total:
             raise ValueError('counts / total / items 三者必须相互一致')
         got: dict[str, int] = {}
@@ -759,6 +798,21 @@ class GlobalView(StrictModel):
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
+class GlobalReviewView(StrictModel):
+    """Current-subject status plus the auditable Stage2 review rows.
+
+    ``approved`` is recomputed by the read model.  It is never trusted from the
+    persisted review alone, because the current ``GlobalGrounding`` or required
+    review surface may have changed since a person decided the rows.
+    """
+
+    source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    current_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    current: bool
+    approved: bool
+    items: list[GlobalReviewItem]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二d、S-11 开篇文案（`GET /api/novels/:sid/stage6`）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -775,11 +829,12 @@ class HookCandidateLine(FrozenModel):
     approach: Literal[HOOK_APPROACHES]
     chars: int = Field(ge=0)
     text: str = Field(min_length=1)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     mech: Mech
     findings: list[Finding]
 
-    #: 最新质量审判按文本 sha1 映射出的状态。没有/过期审判均为 unreviewed，
-    #: 不是 clear；批准路只接受 clear。
+    #: 最新质量审判按文本 sha1 映射出的状态。没有/过期审判均为 unreviewed；
+    #: 校准 PASS 可直接定稿，UNVER 可走显式人工核验，校准 FAIL 不可绕过。
     semantic_state: Literal[HOOK_SEMANTIC_STATES]
     semantic_reason: str = Field(min_length=1)
     contradictions: list[HookContradiction]
@@ -787,6 +842,9 @@ class HookCandidateLine(FrozenModel):
     quality_score: float | None = Field(default=None, ge=0, le=10)
     quality_rank: int | None = Field(default=None, ge=1)
     selectable: bool
+    #: UNVER / 缺 profile 可由显式 actor+reason 人工消解；历史校准
+    #: FAIL 即使 profile 漂移也不得走普通定稿路绕过。
+    human_resolvable: bool
 
     #: 这一条是不是当前定稿（`hook.approved.approach == candidate.approach`）。
     approved: bool
@@ -802,6 +860,7 @@ class HookApprovedLine(FrozenModel):
     origin: str = Field(min_length=1)
     mech: Mech
     findings: list[Finding]
+    resolution: HookApprovalResolution
 
 
 class Stage6View(StrictModel):
@@ -1061,6 +1120,7 @@ class PlanBeatLine(FrozenModel):
     **不估算、不拿邻居补**）。"""
 
     i: int = Field(ge=1)
+    slot: str = Field(pattern=r'^s\d{2,4}$')
     from_beats: list[str] = Field(min_length=1)
     budget_chars: int | None
 
@@ -1070,9 +1130,9 @@ class PlanChapterLine(StrictModel):
 
     output_ordinal: int = Field(ge=1)
     from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
-    chapter_goal: str = Field(min_length=1)
-    open_hook_goal: str = Field(min_length=1)
-    end_hook_goal: str = Field(min_length=1)
+    chapter_goal: PlanGoal
+    open_hook_goal: PlanGoal
+    end_hook_goal: PlanGoal
     beats: list[PlanBeatLine] = Field(min_length=1)
 
 
@@ -1081,6 +1141,9 @@ class Stage4IndexRow(FrozenModel):
     唯一来源是 `/check/stage4`（`R-11.4`），前端要并排显示就去 join 那份报告。"""
 
     output_ordinal: int = Field(ge=1)
+    #: 深度臂选择的首要决策依据。来自同一份 `plan_chapters.json`，随索引一次下发，
+    #: 不让前端为了 N 章再发 N 次章级请求。
+    chapter_goal: str = Field(min_length=1)
     budget_chars: int | None
     span_chars: int | None
     beats: int = Field(ge=1)
@@ -1202,6 +1265,8 @@ class DraftView(StrictModel):
     budget_chars: int | None
     source_chars: int = Field(ge=0)
     overlap_excl_verbatim: float | None
+    #: 盘上 schema v2 的唯一内容权威；`text` 只是下面的确定性整章投影。
+    segments: list[ChapterSegment] = Field(min_length=1)
     text: str = Field(min_length=1)
 
     #: `null` = 对齐辅助尚未由服务端提供（本章无锚可对时 rows 为空、账仍在）。
@@ -1213,6 +1278,13 @@ class DraftView(StrictModel):
 
     provenance: RoundLlmProvenance | RoundFreeProvenance = Field(
         alias='_provenance', union_mode='left_to_right')
+
+    @model_validator(mode='after')
+    def _text_is_the_segment_projection(self) -> DraftView:
+        projected = '\n\n'.join(segment.text.strip() for segment in self.segments).strip()
+        if self.text != projected:
+            raise ValueError('draft text 必须是 segments 的确定性投影')
+        return self
 
 
 class Stage5IndexRow(FrozenModel):
@@ -1300,10 +1372,22 @@ class ReviewChapterView(StrictModel):
     budget_chars: int | None
     round: int | None
     origin: str | None
+    segments: list[ChapterSegment] | None
     text: str | None
     #: 盘上已归档的轮次号（`_rounds/`），升序。改稿历史从这里回看。
     rounds: list[int]
     stale: bool | None
+
+    @model_validator(mode='after')
+    def _text_is_the_nullable_segment_projection(self) -> ReviewChapterView:
+        if self.segments is None:
+            if self.text is not None:
+                raise ValueError('review chapter 无 segments 时 text 必须为 null')
+            return self
+        projected = '\n\n'.join(segment.text.strip() for segment in self.segments).strip()
+        if self.text != projected:
+            raise ValueError('review chapter text 必须是 segments 的确定性投影')
+        return self
 
 
 class ReviewView(StrictModel):
@@ -1355,7 +1439,7 @@ class ReviewView(StrictModel):
 class DraftEditRequest(StrictModel):
     """`POST /api/novels/:sid/review/:o/edit` —— 章节改稿。
 
-    服务进程把 `text` 落成 `_service/edits/` 下的一次性人工稿（文件名带 `ch{o}`，
+    服务进程把 typed `segments` 落成 `_service/edits/` 下的一次性人工稿（文件名带 `ch{o}`，
     `stage5.write --apply-edit` 从文件名认章），CLI 子进程走**与生成稿同一个判定落点**
     （`run_apply_edit`：归一 → 判据 → 归档 → 写回，`origin=human` 记账）。
 
@@ -1365,19 +1449,53 @@ class DraftEditRequest(StrictModel):
     """
 
     mode: Literal[DEPTH_MODES]
-    text: str = Field(min_length=1)
+    segments: list[ChapterSegment] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _segment_slots_are_unique(self) -> DraftEditRequest:
+        slots = [segment.slot for segment in self.segments]
+        if len(slots) != len(set(slots)):
+            raise ValueError('人工稿 segment slot 不得重复')
+        return self
+
+
+class TrimResolutionRequest(StrictModel):
+    """Retain the pretrim text for the current hash-bound trim audit.
+
+    ``actor`` is self-reported and is not an authenticated identity.  The
+    action is fixed by the endpoint and cannot be used to adopt a candidate.
+    """
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _audit_text_is_not_blank(self) -> 'TrimResolutionRequest':
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('actor/reason 不得只有空白')
+        return self
 
 
 class HookApproveRequest(StrictModel):
     """`POST /api/novels/:sid/stage6/approve` —— 文案定稿（`--pick`，1 起）。
 
-    ⚠ **只收序号不收文本**（2026-08-17 用户裁决）：改字是另一个节点
-    （`stage6.hook --apply-edit`），且契约把编辑文件钉死在书目录内（`_edit_rel`）、
+    ⚠ **不收文本**（2026-08-17 用户裁决）：改字是另一个节点。除候选序号外，
+    必须收 actor/reason 和候选完整 SHA-256，用于自报身份的人工审计与乐观锁。
+    改字由 `stage6.hook --apply-edit` 承接，且契约把编辑文件钉死在书目录内（`_edit_rel`）、
     R-11.3 禁止服务进程写产物盘 ⇒ 浏览器文本没有合规通道落成 `hook_edit.json`。
     改字走 CLI；S-11 的产品语义本来就只有「定稿按钮」（人选那一下是唯一闸门）。
     """
 
     pick: int = Field(ge=1)
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def _audit_text_is_not_blank(self) -> 'HookApproveRequest':
+        if not self.actor.strip() or not self.reason.strip():
+            raise ValueError('actor/reason 不得只有空白')
+        return self
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -99,11 +99,9 @@ export function DepthScreen() {
                   style={{ gridTemplateColumns: '64px 1fr 96px 92px' }}
                 >
                   <Mono className="text-body">{chNo(i.output_ordinal)}</Mono>
-                  <span className="min-w-0 truncate text-body text-ink-2">
-                    {i.beats + ' 拍'}
-                    {i.output_ordinal === d.ordinal && d.plan_chapter.chapter_goal
-                      ? ' —— ' + d.plan_chapter.chapter_goal
-                      : ''}
+                  <span className="flex min-w-0 flex-col gap-2">
+                    <span className="text-body text-ink-2">{i.chapter_goal}</span>
+                    <Mono className="text-micro text-ink-5">{i.beats + ' 拍'}</Mono>
                   </span>
                   <Mono className="text-body text-ink-3">
                     {i.budget_chars === null ? '—' : i.budget_chars + ' 字'}
