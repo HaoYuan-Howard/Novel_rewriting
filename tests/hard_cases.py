@@ -151,21 +151,39 @@ def _b4(*ids: str, budget: int = 100) -> dict:
 
 
 def _ch4(oo: int, beats: list[dict], srcs: list[int] | None = None,
-         goal: str = '讲清这一章发生了什么。') -> dict:
-    segments = [{**beat, 'slot': f's{i:02d}'} for i, beat in enumerate(beats, 1)]
-    goal_of = lambda intent, text: {
+          goal: str = '讲清这一章发生了什么。') -> dict:
+    segments = [{**beat, 'slot': f's{i:02d}',
+                 'narrative_role': 'setup' if i == 1 else 'bridge',
+                 'delivery': 'scene', 'transition': 'start' if i == 1 else 'continue'}
+                for i, beat in enumerate(beats, 1)]
+    first_ref = ((beats[0].get('from_beats') or [None])[0] if beats else None)
+    last_ref = ((beats[-1].get('from_beats') or [None])[-1] if beats else None)
+    goal_of = lambda intent, text, ref: {
         'intent': intent,
-        'fact_refs': [{'kind': 'chapter_boundary', 'ref': f'chapter:{oo}', 'chapter': oo}],
+        'fact_refs': [{'kind': 'event', 'ref': ref, 'chapter': oo}]
+        if ref else [{'kind': 'chapter_boundary', 'ref': f'chapter:{oo}', 'chapter': oo}],
         'rationale': text,
     }
     return {'output_ordinal': oo, 'from_source_ordinals': srcs if srcs is not None else [oo],
-            'chapter_goal': goal_of('advance', goal),
-            'open_hook_goal': goal_of('open', '以日常开场。'),
-            'end_hook_goal': goal_of('close', '以悬念收束。'), 'segments': segments}
+            'chapter_goal': goal_of('advance', goal, first_ref),
+            'open_hook_goal': goal_of('open', '以日常开场。', first_ref),
+            'end_hook_goal': goal_of('close', '以悬念收束。', last_ref), 'segments': segments}
 
 
 _GREEN4 = lambda: [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03')]),
                    _ch4(2, [_b4('b2_01')])]
+
+
+def _bad_transition4() -> list:
+    chapters = _GREEN4()
+    chapters[0]['segments'][0]['transition'] = 'continue'
+    return _plan4(chapters)
+
+
+def _bad_goal_landing4() -> list:
+    chapters = _GREEN4()
+    chapters[0]['open_hook_goal']['fact_refs'][0]['ref'] = 'b1_02'
+    return _plan4(chapters)
 
 
 def _plan4(chapters: list[dict], *, strategy: str = '把故事原样讲完。',
@@ -234,7 +252,7 @@ CASES: dict[str, Case] = {
     'rn_book_incomplete': Case('stage7', lambda: _rename(missing=[2])),
     'rn_txt_stale': Case('stage7', _rn_txt_stale),
 
-    # ── stage4（16 HARD）──────────────────────────────────────────────────
+    # ── stage4（17 HARD）──────────────────────────────────────────────────
     'one_to_one': Case('stage4', lambda: _plan4(
         [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03'), _b4('b2_01')], srcs=[1, 2])])),
     'ordinal_seq': Case('stage4', lambda: _plan4(
@@ -247,12 +265,16 @@ CASES: dict[str, Case] = {
     'beat_ref': Case('stage4', lambda: _plan4(
         [_ch4(1, [_b4('b9_99'), _b4('b1_01'), _b4('b1_02'), _b4('b1_03')]),
          _ch4(2, [_b4('b2_01')])])),
-    'beat_seq': Case('stage4', lambda: _plan4(
-        [_ch4(1, [_b4('b1_02'), _b4('b1_01'), _b4('b1_03')]), _ch4(2, [_b4('b2_01')])])),
-    'beat_adjacent': Case('stage4', lambda: _plan4(
-        [_ch4(1, [_b4('b1_01', 'b1_03'), _b4('b1_02')]), _ch4(2, [_b4('b2_01')])])),
-    'beat_layer': Case('stage4', lambda: _plan4(
-        [_ch4(1, [_b4('b1_01', 'b1_02'), _b4('b1_03')]), _ch4(2, [_b4('b2_01')])])),
+    'structure_changed': Case('stage4', lambda: _plan4(
+        [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03'), _b4('b1_04')])],
+        blueprints={'blueprints': [{'chapter_ordinal': 1, 'beats': [
+            {'beat_id': f'b1_0{i}', 'event': f'事件{i}', 'time_layer': 'present'}
+            for i in range(1, 5)]}]}, main_text=[_MAIN4[0]])),
+    'structure_units': Case('stage4', lambda: _plan4(
+        [_ch4(1, [_b4('b1_01'), _b4('b1_01'), _b4('b1_02'), _b4('b1_03')]),
+         _ch4(2, [_b4('b2_01')])])),
+    'structure_transition': Case('stage4', _bad_transition4),
+    'goal_landing': Case('stage4', _bad_goal_landing4),
     'budget_int': Case('stage4', lambda: _plan4(
         [_ch4(1, [_b4('b1_01', budget=0), _b4('b1_02'), _b4('b1_03')]),
          _ch4(2, [_b4('b2_01')])])),

@@ -164,34 +164,11 @@ def verbatim_share_stats(plan: dict[str, Any], bidx: dict[str, dict[str, Any]]
 
 
 def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) -> int:
-    """把模型给的 `plan_beat` 换回 `from_beats`（**分组是代码定的，模型只认编号**）。
+    """把规划者重组后的 `plan_beats[]` 展开成正式 `from_beats[]`。
 
-    落盘前的确定性改写，而**没有兜底**——一个对不上的编号意味着模型在重新编组，
-    那正是本层收走的那个自由度。
-
-    【三种违约一律显式终态，不许 `dict.get(key, 默认)`】枚举上的兜底就是给违约数据
-    发一张静默通行证。具体地：
-      · **编号不存在** → 拿不到 `from_beats`，兜底只能是空列表或猜一条，两个都在造假；
-      · **少给一拍**   → 那一拍的内容会**整个消失**，而 `beat_coverage` 之外没人会发现少的是哪一拍；
-      · **多给 / 重复** → 同一段内容发给写手两遍，它无从判断各拍写哪一半。
-    三者都便宜不了——这是一次付费调用的产物，宁可整份落 `.INVALID` 让人看见，
-    也不要悄悄产出一份缺了几拍的计划。
-    ⚠ 落 `.INVALID` 之后**不必再付一次费**：手改那几行编号，`--revalidate` 提升即可（0 成本）。
-
-    ⚠⚠ **先把「一章都没产」单独说出来**：否则它会被摊成「每一拍都没有给预算」的 N 条
-    派生症状，而那些症状的文案指向的是**另一个根因**。实测某次模型返回了合法 JSON
-    但只有 `reconstruction_strategy`，这里报的是「**74 处 `plan_beat` 对不上**」
-    ——74 条症状盖住了一句话就能说清的事实。
-
-    ⚠ **抛 `RefusedByStructure` 而不是 `sys.exit`**：本仓只有 `novel/cli/` 那一层能退出进程
-    （`tests/test_layering.py` 钉着），产地只负责说清楚是什么终态。
-
-    ⚠⚠ **换完之后就地 `pop` 掉 `plan_beat`**（`stage4.md` §1.2：「落盘 pop 掉，不进产物」）。
-    它归本函数而不归调用方，理由是**消费它的就是这里**：留给调用方去 pop，
-    那件事就有了第二个落点，而漏 pop 的表现是**载体在最后一刻拒收整份计划**
-    （`extra='forbid'`）——一次付费产出卡在写盘那一步。实测漏过一次。
-    ⚠ 裁掉它**不必记账**：它的值是一个可复算的纯函数（盘上 197/197 恒等于
-    `p{output_ordinal:02d}_{本拍序号:02d}`），丢的不是证据，是一份抄件。
+    `group_beats` 仍负责把过碎的 Stage2 beat 合成安全的【源内容单元】，但这些单元不再是
+    成稿骨架。模型决定输出单元的分组与顺序；本函数只做无损、可审计的编号展开：每个源
+    内容单元必须恰好出现一次，编号不存在、重复、漏项都显式终态，不猜测、不兜底。
     """
     gmap = group_map(groups)
     if not (plan.get('output_chapters') or []):
@@ -201,40 +178,38 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) 
             f'重跑前先确认不会读回同一份空响应（缓存）')
     bad: list[tuple[Any, Any, str]] = []
     seen: set[str] = set()
-    by_chapter: dict[Any, dict[str, dict[str, Any]]] = {}
     for o in (plan.get('output_chapters') or []):
         oo = o.get('output_ordinal')
-        for be in (o.get('segments') or []):
-            pid = be.get('plan_beat')
-            if pid in gmap and pid not in seen:
+        expanded: list[dict[str, Any]] = []
+        for index, be in enumerate(o.get('segments') or [], 1):
+            pids = be.get('plan_beats') or []
+            cited: list[str] = []
+            if not pids:
+                bad.append((oo, None, '写作单元没有 plan_beats'))
+            for pid in pids:
+                if pid not in gmap:
+                    bad.append((oo, pid, '编号不存在'))
+                    continue
+                if pid in seen:
+                    bad.append((oo, pid, '重复引用'))
+                    continue
                 seen.add(pid)
-                by_chapter.setdefault(oo, {})[pid] = be
-            else:
-                bad.append((oo, pid, '重复引用' if pid in seen else '编号不存在'))
+                cited.extend(gmap[pid])
+            be.pop('plan_beats', None)
+            be['slot'] = f's{index:02d}'
+            be['from_beats'] = cited
+            expanded.append(be)
+        o['segments'] = expanded
     if (missing := [p for p in gmap if p not in seen]):
         # 章号从编号里解析，**别按定宽切片**：`plan_beat_id` 用的是 `:02d`，三位数的章会溢出宽度
         bad += [(int(m.group(1)) if (m := re.match(r'p(\d+)_', p)) else None, p, '这一拍没有给预算')
                 for p in sorted(missing)]
     if bad:
         raise RefusedByStructure(
-            f'模型给的 plan_beat 与代码切好的拍对不上，{len(bad)} 处 —— {bad[:8]}'
+            f'模型给的 plan_beats 与源内容单元对不上，{len(bad)} 处 —— {bad[:8]}'
             f'{f" …另 {len(bad) - 8} 处" if len(bad) > 8 else ""}。'
             f'拍是 `group_beats` 确定性切的（{GROUPING_VERSION}，阈值 {BEAT_MIN_CHARS} 字），'
-            f'模型只该照抄编号并给预算；对不上说明规划 prompt 漂了，去看它怎么说的')
-    for o in (plan.get('output_chapters') or []):
-        oo = o.get('output_ordinal')
-        canonical: list[dict[str, Any]] = []
-        for index, _group in enumerate(groups.get(oo, []), 1):
-            pid = plan_beat_id(oo, index)
-            be = by_chapter.get(oo, {}).get(pid)
-            if be is None:
-                raise RefusedByStructure(
-                    f'输出章 {oo} 的 segment 引用了别章编号或缺少 {pid}')
-            be.pop('plan_beat', None)
-            be['slot'] = f's{index:02d}'
-            be['from_beats'] = list(gmap[pid])
-            canonical.append(be)
-        o['segments'] = canonical
+            f'模型可以重排和合并，但不能自造、漏掉或重复编号')
     return len(seen)
 
 
@@ -269,7 +244,11 @@ def identity_plan(blueprints: dict[str, Any], main_text: list[dict[str, Any]],
             'end_hook_goal': identity_goal(int(o), 'close'),
             'segments': [
                 {'slot': f's{index:02d}', 'from_beats': list(g),
-                 'budget_chars': group_chars(g, bidx)}
+                 'budget_chars': group_chars(g, bidx),
+                 'narrative_role': ('setup' if index == 1 else
+                                    'payoff' if index == len(groups.get(o, [])) else 'bridge'),
+                 'delivery': 'scene',
+                 'transition': 'start' if index == 1 else 'continue'}
                 for index, g in enumerate(groups.get(o, []), 1)
             ],
         })

@@ -53,8 +53,8 @@ def test_rebuilding_the_context_then_checking_gives_a_green_badge(book):
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
 
         want = {r.rule for r in REGISTRY.of_stage('stage4')}
-        assert {ln.rule for ln in rep.rules} == want, '24 条判据一行不少'
-        assert len(rep.rules) == 24
+        assert {ln.rule for ln in rep.rules} == want, '26 条判据一行不少'
+        assert len(rep.rules) == 26
         assert not [ln.rule for ln in rep.rules if ln.status == 'skipped'], \
             '有判据注册了却没有任何代码执行过它'
         assert not [ln.rule for ln in rep.rules if ln.sev == 'hard' and ln.status == 'hit'], \
@@ -151,7 +151,7 @@ def test_dry_run_builds_the_same_user_message_the_paid_path_would_send(book):
         for head in (prompts.BLOCK_INDEX, prompts.BLOCK_SKELETON,
                      prompts.BLOCK_SIZES, prompts.BLOCK_BODY):
             assert head in user, f'块头缺了：{head[:20]}'
-        assert '"plan_beat":"p01_01"' in user, '下发的是拍不是源 beat'
+        assert '"plan_beat":"p01_01"' in user, '下发的是源内容单元，不是 Stage2 beat'
         # ⚠⚠ **`beat_id` 不许进规划视野**：它一旦下发，模型就有了重新编组的抓手，
         #    而那正是这一层收走的自由度。
         assert '"beat_id"' not in user
@@ -170,7 +170,7 @@ def test_dry_run_builds_the_same_user_message_the_paid_path_would_send(book):
 # ── 三、落盘闸门与提升路（合成样本 —— 盘上这三本一条 HARD 都不红）───────────
 
 def _synthetic_response(box: sandbox.Sandbox, *, poison: bool) -> dict:
-    """拿盘上那份计划反推一份**模型响应**（带 `plan_beat`、不带 `from_beats`）。
+    """拿盘上那份计划反推一份**模型响应**（带 `plan_beats`、不带 `from_beats`）。
 
     `poison=True` ⇒ 往一个 goal 里塞一个写法词。**盘上三本 `style_words` 0 命中**，
     要看闸门真的拦得住就只能合成——那 16 条 HARD 在盘上是零反例样本。
@@ -181,9 +181,26 @@ def _synthetic_response(box: sandbox.Sandbox, *, poison: bool) -> dict:
     for ch in src['output_chapters']:
         c = {k: ch[k] for k in ('output_ordinal', 'from_source_ordinals',
                                 'chapter_goal', 'open_hook_goal', 'end_hook_goal')}
-        c['segments'] = [{'plan_beat': plan_beat_id(ch['output_ordinal'], i),
-                          'budget_chars': be['budget_chars']}
-                         for i, be in enumerate(ch['segments'], 1)]
+        rows = [{'plan_beats': [plan_beat_id(ch['output_ordinal'], i)],
+                 'budget_chars': be['budget_chars'],
+                 'narrative_role': 'setup', 'delivery': 'scene',
+                 'transition': 'start' if i == 1 else 'continue'}
+                for i, be in enumerate(ch['segments'], 1)]
+        if len(rows) >= 4:
+            rows = [rows[-1], *rows[:-1]]
+            rows[0].update(narrative_role='cold_open', transition='start')
+            rows[1]['transition'] = 'earlier'
+            for row in rows[2:]:
+                row['transition'] = 'continue'
+        first_i = int(rows[0]['plan_beats'][0].rsplit('_', 1)[1]) - 1
+        last_i = int(rows[-1]['plan_beats'][-1].rsplit('_', 1)[1]) - 1
+        c['open_hook_goal']['fact_refs'] = [{
+            'kind': 'event', 'ref': ch['segments'][first_i]['from_beats'][0],
+            'chapter': ch['output_ordinal']}]
+        c['end_hook_goal']['fact_refs'] = [{
+            'kind': 'event', 'ref': ch['segments'][last_i]['from_beats'][-1],
+            'chapter': ch['output_ordinal']}]
+        c['segments'] = rows
         out['output_chapters'].append(c)
     if poison:
         # ⚠ `rationale` 是可空键：某些书的计划里它就是 `null`，`+=` 会当场 TypeError
@@ -351,7 +368,7 @@ def test_stage4_has_exactly_two_nodes_and_only_one_of_them_checks():
 
 
 def test_the_registered_rules_all_produce_a_row_on_a_real_book():
-    """⭐ 照抄 `tests/test_stage3.py` 的形态：**24 条一行不少 + 0 条 `skipped`**。
+    """⭐ 照抄 `tests/test_stage3.py` 的形态：**26 条一行不少 + 0 条 `skipped`**。
 
     `build()` 遍历判据注册表而不是遍历 findings ⇒ 一条判据不可能因为
     「实现忘了调」而从报告里消失，它会变成 `skipped`。本条盯的就是那个 0。
@@ -360,7 +377,7 @@ def test_the_registered_rules_all_produce_a_row_on_a_real_book():
     box = sandbox.Sandbox(book, STAGE4_INPUTS)
     try:
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
-        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 24
+        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 26
         assert all(ln.status != 'skipped' for ln in rep.rules)
         assert all(ln.scanned for ln in rep.rules), '绿灯必须报出自己的分母（判据 31）'
     finally:

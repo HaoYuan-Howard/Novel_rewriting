@@ -96,7 +96,11 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
             open_hook_goal=pc['open_hook_goal'],
             end_hook_goal=pc['end_hook_goal'],
             beats=[PlanBeatLine(i=i, slot=str(b['slot']), from_beats=list(b['from_beats']),
-                                budget_chars=b.get('budget_chars'))
+                                budget_chars=b.get('budget_chars'),
+                                narrative_role=b.get('narrative_role') or 'bridge',
+                                delivery=b.get('delivery') or 'scene',
+                                transition=b.get('transition') or
+                                           ('start' if i == 1 else 'continue'))
                    for i, b in enumerate(pc['segments'], start=1)]),
         ctx_chapter=ctx_entry,
         writer_target=target,

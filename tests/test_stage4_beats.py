@@ -286,8 +286,8 @@ def test_an_empty_plan_says_so_in_one_sentence():
 
 
 @pytest.mark.parametrize('bad, why', [
-    ([{'plan_beat': 'p09_09'}], '编号不存在'),
-    ([{'plan_beat': 'p01_01'}, {'plan_beat': 'p01_01'}], '重复引用'),
+    ([{'plan_beats': ['p09_09']}], '编号不存在'),
+    ([{'plan_beats': ['p01_01']}, {'plan_beats': ['p01_01']}], '重复引用'),
     ([], '这一拍没有给预算'),
 ])
 def test_every_plan_beat_violation_is_a_terminal_state(bad, why):
@@ -299,10 +299,22 @@ def test_every_plan_beat_violation_is_a_terminal_state(bad, why):
 
 def test_expand_plan_beats_writes_from_beats_and_drops_nothing():
     plan = {'output_chapters': [{'output_ordinal': 1,
-                                 'segments': [{'plan_beat': 'p01_01', 'budget_chars': 120}]}]}
+                                 'segments': [{'plan_beats': ['p01_01'], 'budget_chars': 120}]}]}
     assert expand_plan_beats(plan, {1: [['b01_01', 'b01_02']]}) == 1
     assert plan['output_chapters'][0]['segments'][0]['from_beats'] == ['b01_01', 'b01_02']
     assert plan['output_chapters'][0]['segments'][0]['slot'] == 's01'
+
+
+def test_expand_plan_beats_preserves_planner_grouping_and_reordered_sequence():
+    plan = {'output_chapters': [{'output_ordinal': 1, 'segments': [
+        {'plan_beats': ['p01_03'], 'budget_chars': 80},
+        {'plan_beats': ['p01_01', 'p01_02'], 'budget_chars': 160},
+    ]}]}
+    assert expand_plan_beats(
+        plan, {1: [['b01_01'], ['b01_02'], ['b01_03']]}) == 3
+    assert [row['from_beats'] for row in plan['output_chapters'][0]['segments']] == [
+        ['b01_03'], ['b01_01', 'b01_02']]
+    assert [row['slot'] for row in plan['output_chapters'][0]['segments']] == ['s01', 's02']
 
 
 # ── 七、恒等基线 ──────────────────────────────────────────────────────────

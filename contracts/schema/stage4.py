@@ -39,7 +39,8 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
-    ADDRESS_CONTEXT, NAME_DISTINCTIVENESS, NARRATIVE_PERSON, TIME_LAYERS, WORLD_RULE_KINDS,
+    ADDRESS_CONTEXT, DELIVERY_MODES, NAME_DISTINCTIVENESS, NARRATIVE_PERSON,
+    STRUCTURAL_ROLES, TEMPORAL_LINKS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
@@ -72,14 +73,22 @@ class PlanBeat(StrictModel):
     #: 而不是把判据搬上来——判据仍要报出「哪一拍、原值是多少」，那是类型给不了的。
     budget_chars: int = Field(gt=0)
 
+    #: 这一写作单元在重构后章节里的叙事功能。它只决定结构，不指定文风。
+    narrative_role: Literal[STRUCTURAL_ROLES] = 'bridge'
+
+    #: `scene` 要把该单元作为可见可听的场面承载；`summary` 用最少篇幅交代事实。
+    delivery: Literal[DELIVERY_MODES] = 'scene'
+
+    #: 与前一个写作单元的时间关系；第一单元必须是 `start`，由 Stage4 判据检查。
+    transition: Literal[TEMPORAL_LINKS] = 'continue'
+
     #: 引用 stage2 的 `beat_id`。长度 1~3。
     #: **代码写的**：`expand_plan_beats` 按模型给的 `plan_beat` 换回，模型不产它。
     #:
-    #: ⚠ 它上面挂着五条 [HARD]，其中三条是**后置条件**不是叮嘱：
+    #: ⚠ 它上面挂着结构级 [HARD]，不是只靠 prompt 叮嘱：
     #: `beat_ref`（引用存在且属本章）· `beat_coverage`（每个源 beat 都被覆盖——
-    #: 压缩靠调低预算，不靠丢内容）· `beat_seq` · `beat_adjacent` · `beat_layer`。
-    #: 后三条从前只写在 prompt 里、代码里一个门都没有，**实测盘上三条全被违反过**
-    #: （重排 · 跳过中间那条并两头 · hearsay+present 并成一拍）。
+    #: 压缩靠调低预算，不靠丢内容）· `structure_units`（源内容单元不可拆）以及
+    #: `structure_changed` / `structure_transition`（正式 Deep 计划必须真的重排且衔接可执行）。
     from_beats: list[str] = Field(min_length=1)
 
 
@@ -154,11 +163,11 @@ class PlanChapter(StrictModel):
 class PlanParams(StrictModel):
     """这份计划的拍是照哪一套阈值切的。盘上恒 `{absorb-small-v1, 80, 57~73}`。
 
-    ⚠⚠ **它记了，但全仓没有一个读者**——而 `beat_seq` / `beat_adjacent` / `beat_layer`
-    三条 HARD 是拿**当前**的 `group_beats` 去量的，从不读这三个值。
-    也就是说这三条判据**每一次都在「拿新尺子量旧布」**，
+    ⚠⚠ **它记了，但原型没有一个读者**——而 `structure_changed` / `structure_units`
+    两条 HARD 是拿**当前**的 `group_beats` 去量的。
+    若不读取这里，这两条判据就会**每一次都在「拿新尺子量旧布」**，
     而这个字段本来就是为了让人发现这件事才存在的。
-    ⇒ `R-5.11`：三条后置条件判据在开跑前先比一次 `params`；对不上就先说
+    ⇒ `R-5.11`：两条结构判据在开跑前先比一次 `params`；对不上就先说
     「这是跨版本比较」，再报判定。**参数缺失记作「不知道」，不是「匹配」。**
     """
 
@@ -202,15 +211,19 @@ class PlanChapters(StrictModel):
 class PlanBeatResponse(StrictModel):
     """**模型响应里**的一拍。⚠ 与落盘那份（`PlanBeat`）**不是同一个形状**。
 
-    模型给的是 `plan_beat`（照抄我们发过去的编号）+ 预算；
-    `from_beats` 由 `expand_plan_beats` **按编号换回来**，模型不产它。
+    模型给的是一个或多个 `plan_beats`、结构决定与预算；`from_beats` 由
+    `expand_plan_beats` **按编号换回来**，模型不产它。`plan_beats` 的数组顺序就是
+    重构后的叙述顺序，允许不同于源序。
     """
 
     #: `pNN_NN`。**它是模型给这一拍分预算时唯一的抓手。**
     #: ⚠ 三种违约（编号不存在 / 少给一拍 / 重复引用）一律**显式终态，无兜底**。
-    plan_beat: str = Field(min_length=1)
+    plan_beats: list[str] = Field(min_length=1)
 
     budget_chars: int = Field(gt=0)
+    narrative_role: Literal[STRUCTURAL_ROLES]
+    delivery: Literal[DELIVERY_MODES]
+    transition: Literal[TEMPORAL_LINKS]
 
 
 class PlanChapterResponse(StrictModel):
@@ -244,7 +257,7 @@ class PlanResponse(StrictModel):
 class PlanEdit(StrictModel):
     """`stage4/plan_edit.json` —— 人手改好的计划（`--apply-edit` 的决策集）。
 
-    **v1 收整份替换**：章与拍互相引用（`beat_coverage` / `beat_seq` 都是全书性质），
+    **v1 收整份替换**：章与写作单元互相引用（`beat_coverage` / `structure_changed` 都是全书性质），
     补丁式局部替换会造出半坏计划还说不清坏在哪。
     ⚠ 形状是**落盘产物**的两个业务键（`PlanChapter`，`from_beats` 已展开）——
     人编辑的就是盘上那份 `plan_chapters.json`；`plan_beat` 编号是发给模型的抓手，
@@ -321,6 +334,12 @@ class CtxBeat(StrictModel):
 
     #: 透传自 plan（`budget_int` HARD 保证是正整数）。盘上 15~720。
     budget_chars: int = Field(gt=0)
+
+    #: Stage4 已决定的叙事架构。默认值只让旧的恒等基线与存量测试载体可读；新规划响应
+    #: 三项均必填，正式写作上下文会显式落盘。
+    narrative_role: Literal[STRUCTURAL_ROLES] = 'bridge'
+    delivery: Literal[DELIVERY_MODES] = 'scene'
+    transition: Literal[TEMPORAL_LINKS] = 'continue'
 
     #: 所引源 beat 的 span 字数之和。**算不出保持 `null`，不估算、不拿邻居补**（键恒在）。
     #: 盘上 197/197 有值。
