@@ -53,6 +53,8 @@ _CONSUMED: dict[str, str] = {
     'INVENT_PRINCIPLE': 'invent.principle',
     'NODES': 'job_kinds + actions',
     'NODE_WRITE_EFFECTS': 'actions[].writes',
+    'SPOILER_DISCLOSURE': 'spoiler_disclosure',
+    'PARTIAL_MASK_NOTE': 'spoiler_disclosure.notice（旧源码兼容别名）',
 }
 
 #: 桶三 —— 登记为**不发**。全是标量，且每一条的理由都是同一句的实例：
@@ -137,8 +139,6 @@ _WITHHELD: dict[str, str] = {
 _PUBLISHED_SCALARS: dict[str, str] = {
     'UNCOVERED_MIN_CHARS': '抓包里有它。前端把它插值进一句说明文案'
                            '（「未覆盖 ≥30 字的段」），**不做判定**',
-    'PARTIAL_MASK_NOTE': '`R-11.13` 要求界面**常驻**这句标注。'
-                         '它是一句话不是一个阈值，前端拿它只能显示',
 }
 
 
@@ -210,6 +210,14 @@ def _invent() -> dict[str, Any]:
     return {'allow': list(inv.INVENT_ALLOW),
             'forbid': list(inv.INVENT_FORBID),
             'principle': inv.INVENT_PRINCIPLE}
+
+
+def _spoiler_disclosure() -> dict[str, Any]:
+    """TODO-25 display-only boundary, derived from its single invariant."""
+    return {
+        key: list(value) if isinstance(value, tuple) else value
+        for key, value in inv.SPOILER_DISCLOSURE.items()
+    }
 
 
 def job_kinds() -> dict[str, dict[str, Any]]:
@@ -290,6 +298,7 @@ def actions() -> list[dict[str, Any]]:
 #: 合成键 → 它的构造函数。桶二那几个常量的去处就是这里。
 _COMPOSITE: dict[str, Any] = {
     'invent': _invent,
+    'spoiler_disclosure': _spoiler_disclosure,
     'job_kinds': job_kinds,
     'actions': actions,
 }

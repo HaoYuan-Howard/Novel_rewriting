@@ -264,8 +264,8 @@ def test_the_enums_cost_column_comes_from_that_one_function():
 
 # ───────────────────────── `R-11.13` 剧透标注 ─────────────────────────
 
-def test_the_partial_mask_note_is_published():
-    """⭐ `R-11.13`：剧透开关只关四个字段，**界面上常驻这句标注**。
+def test_the_spoiler_disclosure_boundary_is_published():
+    """TODO-25：剧透开关的四路径与非安全边界由一份机器契约发布。
 
     在 E 期之前它**没有任何机器可读的落点**——需求表标着 `INFO`（要一条注册判据），
     而 UI 层没有 stage 可以挂判据，于是它落在反向覆盖率表之外
@@ -275,10 +275,17 @@ def test_the_partial_mask_note_is_published():
     ⚠ 断言里带上「部分屏蔽，不是屏蔽」这句：那是这条标注**存在的全部意义**
     （`F-047` 实测同一批事实仍会从三处漏出去），措辞被改软了这条就该红。
     """
-    note = ENUMS.payload()['partial_mask_note']
-    assert note and '这是部分屏蔽，不是屏蔽' in note
-    for field in ('characters[].fate', 'canon.secrets', 'arc.climax', 'arc.ending'):
-        assert field in note, f'标注里没点名 {field}——那四个字段是它的全部内容'
+    payload = ENUMS.payload()
+    disclosure = payload['spoiler_disclosure']
+    assert disclosure['mode'] == 'display_only'
+    assert disclosure['security_boundary'] is False
+    assert disclosure['server_sends_full_data'] is True
+    assert disclosure['hidden_paths'] == [
+        'characters[].fate', 'secrets', 'arc.climax', 'arc.ending']
+    assert disclosure['known_leakage_surfaces']
+    assert disclosure['consumers']
+    assert '不是安全边界' in disclosure['notice']
+    assert 'partial_mask_note' not in payload, '旧文案键会与结构化契约形成第二个承诺落点'
 
 
 # ───────────────────────── `R-11.10`：映射 + 真实冲突行为 ─────────────────────────
@@ -305,8 +312,11 @@ def test_job_conflict_maps_and_returns_409():
             '/api/queues/{queue_id}/items/{item_index}/cancel',
         '/api/novels/{sid}/stage0/edit',
         '/api/novels/{sid}/stage0/approve',
+        '/api/novels/{sid}/stage0/merge/resolve',
+        '/api/novels/{sid}/stage0/merge/reject',
         '/api/novels/{sid}/stage1/partition',
         '/api/novels/{sid}/approvals/gate/{key}',
+        '/api/novels/{sid}/approvals/backfill',
         '/api/novels/{sid}/approvals/seen/{key}',
         '/api/novels/{sid}/approvals/deep',
         '/api/novels/{sid}/approvals/writing',
@@ -314,8 +324,10 @@ def test_job_conflict_maps_and_returns_409():
         '/api/upload',
         # 第二阶段批 3 · 人工写回（行为在 `tests/test_api_edits.py`）
         '/api/novels/{sid}/review/{ordinal}/edit',
+        '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim',
         '/api/novels/{sid}/stage6/approve',
         '/api/novels/{sid}/stage7/approve',
+        '/api/novels/{sid}/stage2/global-review',
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',
         '/api/agent/runs/preview',
@@ -332,6 +344,7 @@ def test_job_conflict_maps_and_returns_409():
             response = client.post(
                 f'/api/novels/{sid}/stage0/approve',
                 headers={UI_HEADER: '1'},
+                json={'actor': 'api-discipline-test', 'reason': 'lock conflict test'},
             )
     finally:
         J.REGISTRY.release(key, holder)

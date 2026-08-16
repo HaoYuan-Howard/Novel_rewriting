@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
+import { MASKED_SECRET_ID } from '@/api/spoilers'
 import { FRESH, MUTED, SEV, SPOILER_ON } from '@/constants/vocabulary'
 import { useApprovals } from '@/hooks/useApprovals'
 import { useEnums } from '@/hooks/useEnums'
@@ -14,6 +15,7 @@ import { LinkButton } from '@/components/ui/ActionButton'
 import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
+import { GlobalReviewPanel } from './GlobalReviewPanel'
 
 type Tab = 'chars' | 'rels' | 'rules' | 'secrets' | 'arc'
 
@@ -32,12 +34,15 @@ export function GlobalScreen() {
   const [spoilers, setSpoilers] = useState(false)
   const [tab, setTab] = useState<Tab>('chars')
 
-  const q = useQuery({ queryKey: qk.global(sid), queryFn: () => api.getGlobal(sid), retry: false })
-  // R-11.13 那句常驻标注的唯一落点是 /api/enums（partial_mask_note），不再随视图下发
+  const q = useQuery({
+    queryKey: qk.global(sid, spoilers),
+    queryFn: () => api.getGlobal(sid, spoilers),
+    retry: false,
+  })
   const enums = useEnums()
   const maskNote =
-    (enums.data as { partial_mask_note?: string } | undefined)?.partial_mask_note ??
-    '本开关只关 fate / secrets / climax / ending 四个字段——这是部分屏蔽，不是屏蔽。'
+    enums.data?.spoiler_disclosure?.notice ??
+    '仅在屏幕展示层隐藏 fate / secrets / climax / ending；服务端仍全量下发，浏览器网络与缓存仍可能看到。'
 
   useEffect(() => {
     if (doc && !doc.seen.global && !markSeen.isPending) markSeen.mutate('global')
@@ -46,13 +51,53 @@ export function GlobalScreen() {
 
   return (
     <ScreenFrame screen="global" onJumpChapter={(n) => nav('/n/' + sid + '/read/' + n)}>
-      <QueryStates q={q} loadingLabel="读全局设定" missing={{ title: '全局设定 · stage2' }}>
+      <section className="flex flex-col gap-16 px-30 py-24">
+        <header className="flex items-start justify-between gap-24">
+          <div className="flex flex-col gap-5">
+            <h1 className="m-0 text-screen font-semibold">全局设定 · stage2</h1>
+            <div className="text-body text-ink-3">
+              人物、关系、世界规则、秘密、弧线——抽对了吗、抽全了吗。
+            </div>
+          </div>
+          <div className="flex max-w-[620px] flex-col items-end gap-7">
+            <button
+              type="button"
+              onClick={() => setSpoilers((value) => !value)}
+              className={cx(
+                'flex cursor-pointer items-center gap-8 rounded-btn border px-12 py-6 text-body',
+                !spoilers && 'border-line-btn bg-card',
+              )}
+              style={
+                spoilers
+                  ? { borderColor: SPOILER_ON.border, background: SPOILER_ON.bg }
+                  : undefined
+              }
+            >
+              <span
+                aria-hidden
+                className="inline-block h-9 w-9 rounded-full"
+                style={{ background: spoilers ? SPOILER_ON.dot : MUTED }}
+              />
+              隐藏核心剧透字段（非完整遮蔽）：{spoilers ? '已关闭' : '已开启'}
+            </button>
+            <div className="flex items-start gap-7 text-right" role="note">
+              <span
+                aria-hidden
+                className="mt-4 inline-block h-10 w-10 flex-none bg-warn"
+                style={{ clipPath: 'polygon(50% 0,100% 100%,0 100%)' }}
+              />
+              <span className="prose-cn text-tag text-warn-ink">{maskNote}</span>
+            </div>
+          </div>
+        </header>
+        <GlobalReviewPanel sid={sid} />
+        <QueryStates q={q} loadingLabel="读全局设定" missing={{ title: '全局设定 · stage2' }}>
         {(d) => {
           const tabs: { key: Tab; label: string; n: number }[] = [
             { key: 'chars', label: '人物', n: d.characters.length },
             { key: 'rels', label: '关系', n: d.relations.length },
             { key: 'rules', label: '世界规则', n: d.world_rules.length },
-            { key: 'secrets', label: '秘密', n: d.secrets.length },
+            { key: 'secrets', label: '秘密', n: spoilers ? d.secrets.length : 0 },
             { key: 'arc', label: '弧线', n: d.arc.arc_tracks.length },
           ]
           const chapters = Math.max(
@@ -61,49 +106,7 @@ export function GlobalScreen() {
           )
 
           return (
-            <section className="flex flex-col gap-16 px-30 py-24">
-              <header className="flex items-start justify-between gap-24">
-                <div className="flex flex-col gap-5">
-                  <h1 className="m-0 text-screen font-semibold">全局设定 · stage2</h1>
-                  <div className="text-body text-ink-3">
-                    人物、关系、世界规则、秘密、弧线——抽对了吗、抽全了吗。
-                  </div>
-                </div>
-                <div className="flex max-w-[560px] flex-col items-end gap-7">
-                  <button
-                    type="button"
-                    onClick={() => setSpoilers((v) => !v)}
-                    className={cx(
-                      'flex cursor-pointer items-center gap-8 rounded-btn border px-12 py-6 text-body',
-                      !spoilers && 'border-line-btn bg-card',
-                    )}
-                    style={
-                      spoilers
-                        ? { borderColor: SPOILER_ON.border, background: SPOILER_ON.bg }
-                        : undefined
-                    }
-                  >
-                    <span
-                      aria-hidden
-                      className="inline-block h-9 w-9 rounded-full"
-                      style={{ background: spoilers ? SPOILER_ON.dot : MUTED }}
-                    />
-                    {spoilers
-                      ? '剧透：已打开（fate / secrets / climax / ending 可见）'
-                      : '剧透：关着（写手不该知道结局）'}
-                  </button>
-                  {/* 服务端下发的这句必须常驻，不能只挂在 title 上 */}
-                  <div className="flex items-start gap-7 text-right">
-                    <span
-                      aria-hidden
-                      className="mt-4 inline-block h-10 w-10 flex-none bg-warn"
-                      style={{ clipPath: 'polygon(50% 0,100% 100%,0 100%)' }}
-                    />
-                    <span className="prose-cn text-tag text-warn-ink">{maskNote}</span>
-                  </div>
-                </div>
-              </header>
-
+            <div className="flex flex-col gap-16">
               <div className="grid gap-12" style={{ gridTemplateColumns: 'repeat(2,1fr)' }}>
                 {Object.entries(d.setting).map(([k, v]) => (
                   <Panel key={k} className="flex flex-col gap-4 px-16 py-13">
@@ -176,9 +179,7 @@ export function GlobalScreen() {
                           spoilers ? 'border border-line-2 bg-sunken-2 text-ink-2' : 'hatch-tight border border-dashed border-line-dash text-ink-5',
                         )}
                       >
-                        {spoilers
-                          ? (c.fate ?? '（这个人没有 fate 字段）')
-                          : '结局 fate 被遮住'}
+                        {c.fate ?? '（这个人没有 fate 字段）'}
                       </div>
                     </Panel>
                   ))}
@@ -258,15 +259,19 @@ export function GlobalScreen() {
                   <div className="flex flex-col gap-10">
                     {d.secrets.map((s) => (
                       <Panel key={s.secret_id} className="flex flex-col gap-5 px-18 py-14">
-                        <Mono className="text-mini text-ink-4">{s.secret_id}</Mono>
+                        {s.secret_id === MASKED_SECRET_ID ? null : (
+                          <Mono className="text-mini text-ink-4">{s.secret_id}</Mono>
+                        )}
                         <span className="prose-cn text-section text-ink-2">{s.fact}</span>
-                        <span className="text-tag text-ink-4">
-                          知情：{s.known_by.map((k) => k.display).join('、') || '—'} · 第{' '}
-                          {s.reader_reveal_chapters.join('、')} 章揭示
-                          {s.setup_chapters.length
-                            ? ' · 埋点 ch' + s.setup_chapters.join('/')
-                            : ''}
-                        </span>
+                        {s.secret_id === MASKED_SECRET_ID ? null : (
+                          <span className="text-tag text-ink-4">
+                            知情：{s.known_by.map((k) => k.display).join('、') || '—'} · 第{' '}
+                            {s.reader_reveal_chapters.join('、')} 章揭示
+                            {s.setup_chapters.length
+                              ? ' · 埋点 ch' + s.setup_chapters.join('/')
+                              : ''}
+                          </span>
+                        )}
                       </Panel>
                     ))}
                   </div>
@@ -325,12 +330,24 @@ export function GlobalScreen() {
                       </div>
                     ))}
                   </Panel>
+                  <Panel className="flex flex-col gap-10 px-18 py-14">
+                    <span className="text-section font-semibold">高潮 / 结局</span>
+                    <div className="flex flex-col gap-3">
+                      <span className="text-tag text-ink-4">climax</span>
+                      <span className="prose-cn text-section text-ink-2">{d.arc.climax}</span>
+                    </div>
+                    <div className="flex flex-col gap-3">
+                      <span className="text-tag text-ink-4">ending</span>
+                      <span className="prose-cn text-section text-ink-2">{d.arc.ending}</span>
+                    </div>
+                  </Panel>
                 </div>
               ) : null}
-            </section>
+            </div>
           )
         }}
-      </QueryStates>
+        </QueryStates>
+      </section>
     </ScreenFrame>
   )
 }

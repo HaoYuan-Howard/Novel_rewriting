@@ -13,10 +13,10 @@ npm run typecheck    # tsc --noEmit
 npm run seams        # 数据缝 / 设计缝红线（见下）
 ```
 
-**跑书进度屏**：`/n/:sid/run`（左导航「进度」按钮）。agent 按
-`.claude/skills/novel-pipeline-operator` 代跑 CLI 时，每条命令前后的打点
-（`novel.cli mark`，落 `<base>/_service/agent_progress.jsonl`）在这一屏折成
-14 步进度 + 事件时间线；有步在跑时 2.5s 轮询，闲置 10s。它是**观察屏不是判定屏**——
+**跑书进度屏**：`/n/:sid/run`（左导航「进度」按钮）。agent 的 `novel.cli mark`
+与 UI / 持久队列共用 `<base>/_service/agent_progress.jsonl`：作业执行器在每个节点开始、
+结束时自动打点，界面按 `NODES` 的真实顺序折成进度 + 事件时间线；有步在跑时 2.5s 轮询，
+闲置 10s。它是**观察屏不是判定屏**——
 「这层过没过」仍归各层屏的 badge（R-13.6）。后端路由：`GET /api/novels/:sid/run`
 （`novel/api/routes/run.py`，书目录不存在也 200）。
 
@@ -154,14 +154,14 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 | 位置 | 现象 | 处理 |
 |---|---|---|
 | 校验面板头（dc.html 1834–1837） | 空的，但 `chkVals` 算了 badge / counts / explain / missing-note | 按逻辑层补回来（否则整块 U-00 内容不见了） |
-| 抽屉体（1908–1911） | 空的，但算了 label / argv / log / 四态图例 | 补回来 |
+| 抽屉体（1908–1911） | 空的，但算了 label / argv / log / 五态图例 | 补回来；`landed_red` 与命令未跑成的 `failed` 分开显示 |
 | 语料库 135/146/180/184 | 空槽，算了 `verdict`（有产物坏了 / N 份过期 / N 份无从判断）、`mtimeLabel`、`legend` | 补进右侧那格 |
 | `s1HasWarn` | 模板绑了但没人算，warning 框永不出现 | 按 `warnings.length > 0` 补上 |
 | 全局设定 2780 行 | `a.by` 是对象，拼串出 `[object Object]` | 改用 `a.by.display` |
 | `argvOf()` 1997 行 | 前端自己拼命令行 | 改成 `api.previewJob()` 由服务端下发（U-09） |
 | `chapterStrip` 的 `n===3`、`sidOk` | 「样本只抓了第 3 章」漏进了渲染层 | 移进数据层（`api.getSampleCoverage()`，真实模式返回 null） |
 | 写盘判定 2306 行 | 对 `extra` 做正则 | 改成对结构化 `extra` / `kind` 的精确集合判定（U-12） |
-| `partial_mask_note` | 完整那句只在 `title=` 里 | 常驻显示（U-06 明说不能收进 tooltip） |
+| `spoiler_disclosure` | 旧版只下发一句 `partial_mask_note`，且完整说明曾只在 `title=` 里 | 改为结构化披露并在所有状态常驻显示；明确 `display_only=true`、`security_boundary=false`、服务端仍下发完整数据（U-06） |
 | 一屏崩掉 | 变成白板 | 加了 `ScreenBoundary`：崩了要说「这一屏崩了」，白板会被当成「已经看过」 |
 
 另外 `overview` / `review` / `check` 三块 markup 还在设计稿里但被 `go()` 改道成死代码，
@@ -210,7 +210,8 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 
 5. **`/api/jobs` 的真实元素是嵌套 `JobRecord`。**
    `api/endpoints.ts` 已在唯一数据缝把它适配成抽屉使用的扁平 `Job`，并从服务端
-   给出的四态折出 `running`；日志用后端的字节偏移读取，不再猜元素形状。
+   给出的五态（`running / ok / landed_red / failed / unknown`）原样适配；日志用后端的字节偏移读取，
+   不再猜元素形状。`landed_red` 表示产物已落盘但报告有阻断红行，不折进 `ok` 或 `failed`。
    请确认。
 
 6. **`/jobs/:id/stream?offset=N`（SSE）** 现在按 `getJobLog(id, offset) → {lines, offset, done}`
@@ -229,9 +230,9 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 | U-01 新鲜度三态 | ✅ | 圆点 / 方块 / 虚线空心圆 + 常驻文字标签；`missing` 是第四种显示态 |
 | U-02 徽章三态，amber 不是绿 | ✅ | `CheckBadge`；amber 的解释文案写明「查不了不等于没问题」 |
 | U-03 sev 四级，metric 不用警告色 | ✅ | `SevMark` 的 metric 是一条底线不是点，色 `#57534c` |
-| U-04 作业有 unknown | ✅ | 刷新页面 = 服务重启，原本 running 的一律改判 `unknown`（不是 ok），日志里写明原因 |
+| U-04 作业五态含 unknown / landed_red | ✅ | 刷新页面 = 服务重启，原本 running 的一律改判 `unknown`（不是 ok）；exit 1 显示 `landed_red` 并引导查看报告，不冒充成功或命令崩溃 |
 | U-05 空数组 ≠ 没问题 | ✅ | `secrets: []` / `problems: []` / `voice_extra: []` / 漏网候选为空，各有各的说法 |
-| U-06 部分遮蔽必须标注 | ✅ | `partial_mask_note` 全文常驻在开关旁 |
+| U-06 非完整遮蔽边界必须标注 | ✅ | `/api/enums` 的结构化 `spoiler_disclosure` 在 loading / empty / 404 / error / normal 全部状态常驻；界面明确服务端仍下发完整数据、该开关不是安全边界 |
 | U-07 花钱一眼可分，依据只有服务端 `paid` | ✅ | `previewJob` 下发 `paid`；`JobRequest` 里**没有** `paid` 字段，调用方带不进来 |
 | U-08 第三类：免费但写盘 | ⚠️ | 做了（深色 + `写盘` 角标 + 第四种「未标注」），但分类表在前端 —— 见上面第 6 节第 1 条 |
 | U-09 确认框显示完整命令 | ✅ | argv 来自 `POST /api/jobs/preview`；取不到就不让发起 |
