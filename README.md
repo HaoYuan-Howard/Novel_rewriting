@@ -86,4 +86,6 @@ tools/           探针、对比与 schema 派生工具
 .claude/skills/  agent 端到端操作规程
 ```
 
-快速原型 `../Novel_refactoring/` 只作为证据来源，不在本仓任务中修改。
+本仓无外部目录依赖。早期快速原型仓 `../Novel_refactoring/`（含 163 本语料与 3 本书的
+历史产物）已于 2026-08-16 删除，证据一律取 `outputs/` 下的批次产物；需要原始语料的工具与
+测试改为显式指路（`NOVEL_DATA` / `NOVEL_CORPUS` / `NOVEL_OUTPUT`），指不到就明说「没查」。

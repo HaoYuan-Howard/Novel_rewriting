@@ -77,24 +77,31 @@ def test_title_comes_from_the_directory_not_from_the_argument():
 
 # ── 全语料：163 本真实文件名跑一遍两把尺子（0 成本，不落盘） ──────────────────
 
-_CORPUS = Path(__file__).resolve().parents[2] / 'Novel_refactoring' / 'Novel_data'
-
-
 def _corpus_names() -> list[str]:
-    root = Path(os.environ.get('NOVEL_DATA') or _CORPUS)
+    """`NOVEL_DATA` 指到的语料目录里的全部 txt 文件名。
+
+    **没有默认路径**：原来兜底的 `../Novel_refactoring/Novel_data`（163 本）已于
+    2026-08-16 随原型仓删除。指不到的默认值只会让下面那条 skip 看起来像「环境没配」，
+    而实际上是「这台机器上根本没有全语料了」——两者该被区分开。
+    """
+    raw = os.environ.get('NOVEL_DATA')
+    if not raw:
+        return []
+    root = Path(raw)
     return sorted(p.name for p in root.rglob('*.txt')) if root.is_dir() else []
 
 
 @pytest.mark.corpus
 def test_every_corpus_filename_round_trips():
-    """全语料 163 本的文件名 → 目录名 → 再解析回来，**一本都不许对不上**。
+    """全语料的文件名 → 目录名 → 再解析回来，**一本都不许对不上**。
 
     「盘上 3 本能跑」不是证据（`platform` 就是这么被推错的：盘上 3/3 是 `'FQ'`，
-    全语料 120/163 是 `null`）。这条测试是**零成本**的：只做字符串运算，不碰内容。
+    当年那份 163 本语料里 120 本是 `null`）。这条测试是**零成本**的：
+    只做字符串运算，不碰内容——所以只要手上有语料就该跑。
     """
     names = _corpus_names()
     if not names:
-        pytest.skip('找不到原始语料目录——这一条**没在查**，不是「查过没事」')
+        pytest.skip('没设 NOVEL_DATA 或目录里没有 txt——这一条**没在查**，不是「查过没事」')
     assert len(names) >= 100, f'只扫到 {len(names)} 本，语料目录多半找错了'
     bad = []
     for n in names:

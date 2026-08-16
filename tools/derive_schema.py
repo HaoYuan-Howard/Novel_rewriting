@@ -22,16 +22,20 @@ from collections import defaultdict
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-# 原型仓的产物目录。默认按「本仓的兄弟目录」找，可用 NOVEL_OUTPUT 覆盖。
-# ⚠ 别写死绝对路径：换一台机器就静默指向一个不存在的目录，而 glob 的空结果**不报错**——
-#   它只会产出一份「所有字段都零样本」的 schema，看起来和真跑过一模一样。
-_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.environ.get('NOVEL_OUTPUT',
-                     os.path.join(os.path.dirname(_HERE), 'Novel_refactoring', 'Output'))
+# 产物目录，**只从 NOVEL_OUTPUT 取，没有默认值**。
+# 原来兜底的兄弟目录 `../Novel_refactoring/Output` 已于 2026-08-16 随原型仓删除；
+# 留着一个指不到的默认值，比没有默认值更坏——因为 glob 的空结果**不报错**，
+# 它只会产出一份「所有字段都零样本」的 schema，看起来和真跑过一模一样。
+OUT = os.environ.get('NOVEL_OUTPUT')
+if not OUT:
+    raise SystemExit(
+        '[derive_schema] 显式终态：没设 NOVEL_OUTPUT，而本脚本没有默认产物目录。\n'
+        '    指到一个批次目录（其下是若干本书的目录）再跑，例如：\n'
+        '        $env:NOVEL_OUTPUT = "outputs/skill_e2e_20260815"')
 if not os.path.isdir(OUT):
     raise SystemExit(
         f'[derive_schema] 显式终态：找不到产物目录 {OUT}\n'
-        f'    用 NOVEL_OUTPUT 指过去。空目录会静默产出一份「所有字段都零样本」的 schema，\n'
+        f'    空目录会静默产出一份「所有字段都零样本」的 schema，\n'
         f'    而那份产物与真跑过的长得一模一样——比报错坏得多')
 ENUM_MAX = 12          # 唯一值不超过这个数就当枚举候选全列出来
 SAMPLE_LEN = 60

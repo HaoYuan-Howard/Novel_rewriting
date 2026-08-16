@@ -18,10 +18,10 @@ probe_nonbody_word.py —— 往 `NONBODY_KINDS` 加词之前必须先过的那�
 出现在 30% 处，加了它就会把半本书砍掉。位置本身就是判据，
 所以这个工具**不依赖分割器**——它不需要知道当前切点在哪，那正是它要改变的东西。
 
-用法：
-    python tools/probe_nonbody_word.py 外传 特别篇 小剧场
+用法（语料目录**必须自己指**，本机不再有默认语料）：
     python tools/probe_nonbody_word.py 外传 --corpus D:/somewhere/Novel_data
     NOVEL_CORPUS=D:/somewhere/Novel_data python tools/probe_nonbody_word.py 外传
+    python tools/probe_nonbody_word.py 外传          # 不指语料：只出 ③ 的结论，①② 报「没查」
 
 退出码：0 = 全部候选词安全；1 = 至少一个有假阳风险或与完结标记撞车。
 """
@@ -42,9 +42,6 @@ from contracts.invariants import (  # noqa: E402
 
 _LEAD = re.compile(NONBODY_LEAD_STRIP)
 _TRAIL = re.compile(NONBODY_TRAIL_STRIP)
-
-#: 语料默认位置。**不在本仓里**（版权正文不进仓），所以它只是个默认值，不是保证。
-_DEFAULT_CORPUS = r'E:\practice_group\Novel_refactoring\Novel_data'
 
 
 def core_of(line: str) -> str:
@@ -87,21 +84,24 @@ def probe(word: str, books: list[tuple[str, str]]) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description='往 NONBODY_KINDS 加词之前的假阳闸门')
     ap.add_argument('words', nargs='+', help='候选词，可多个')
-    ap.add_argument('--corpus', default=os.environ.get('NOVEL_CORPUS', _DEFAULT_CORPUS),
-                    help='语料目录（递归找 *.txt）。也可用 NOVEL_CORPUS 环境变量')
+    ap.add_argument('--corpus', default=os.environ.get('NOVEL_CORPUS'),
+                    help='语料目录（递归找 *.txt）。也可用 NOVEL_CORPUS 环境变量。'
+                         '**没有默认值**——版权正文不进仓，必须显式指路')
     args = ap.parse_args()
 
-    root = Path(args.corpus)
+    root = Path(args.corpus) if args.corpus else None
     books: list[tuple[str, str]] = []
-    if root.is_dir():
+    if root and root.is_dir():
         for p in sorted(root.rglob('*.txt')):
             t = read_normalized(p)
             if t:
                 books.append((p.stem, t))
-    print(f'语料：{len(books)} 本  ←  {root}')
+    print(f'语料：{len(books)} 本  ←  {root if root else "（未指定）"}')
     if not books:
         print('⚠ 没读到任何语料。①② 两项**没查**——这不等于「安全」。\n'
-              '  用 --corpus 指到语料目录再跑一次；只有 ③ 的结论是可信的。')
+              '  用 --corpus 指到语料目录再跑一次；只有 ③ 的结论是可信的。\n'
+              '  ⚠ 本机原来那份 163 本语料（原型仓 Novel_refactoring）已于 2026-08-16 删除，\n'
+              '    这道闸现在**必须自带语料**才跑得动 ①②。')
 
     bad = False
     for w in args.words:
