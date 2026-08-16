@@ -11,8 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema import ArtifactVersionError, decode_artifact
-from contracts.schema.stage1 import MainText
+from contracts.schema import decode_artifact
 from contracts.schema.stage5 import RejectedRevision
 from novel import paths
 from novel.llm.cache import cache_key
@@ -28,17 +27,6 @@ ENTRIES = {row['id']: row for row in MANIFEST['fixtures']}
 
 def _load(fixture_id: str):
     return json.loads((ROOT / ENTRIES[fixture_id]['path']).read_text(encoding='utf-8'))
-
-
-def _old_schema_migratable(_monkeypatch) -> None:
-    decoded = decode_artifact('stage1/main_text.json', _load('old_schema_migratable'))
-    assert decoded.source_version == 0 and decoded.current_version == 1
-    assert MainText.model_validate(decoded.payload).root
-
-
-def _old_schema_future_rejected(_monkeypatch) -> None:
-    with pytest.raises(ArtifactVersionError, match=r'stage6/hook\.json.*v99'):
-        decode_artifact('stage6/hook.json', _load('old_schema_future_rejected'))
 
 
 def _long_context(_monkeypatch) -> None:
@@ -78,7 +66,7 @@ def _rejected_archive(_monkeypatch) -> None:
     assert len(artifact.attempts) == 2
     archived = paths.round_rel(rel, 1)
     assert archived == 'stage5/deep/_rounds/ch01.rejected.r1.json'
-    assert decode_artifact(archived, _load('rejected_archive')).current_version == 1
+    assert decode_artifact(archived, _load('rejected_archive')).version == 1
 
 
 def _retry_branch(_monkeypatch) -> None:
@@ -108,8 +96,6 @@ def _retry_branch(_monkeypatch) -> None:
 
 
 HANDLERS = {
-    'old_schema_migratable': _old_schema_migratable,
-    'old_schema_future_rejected': _old_schema_future_rejected,
     'long_context': _long_context,
     'secret_numbers': _secret_numbers,
     'half_draft': _half_draft,

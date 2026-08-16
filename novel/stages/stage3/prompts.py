@@ -15,9 +15,7 @@ from __future__ import annotations
 import json
 import re
 
-from contracts.schema.stage3 import (
-    ChapterStyleResponse, HookStyle, Measurable, StyleResponse, Voice,
-)
+from contracts.schema.stage3 import HookStyle, Measurable, Voice
 from novel.core.bands import bands
 from novel.llm.prompts import fill, with_json_shape
 
@@ -96,7 +94,7 @@ def chapter_aggregate_system() -> str:
 def build_chapter_user(meas: Measurable, *, chapter_ordinal: int,
                        chapter_text: str) -> str:
     """单章只发全书机械档位 + 当前章；不发 hook 或其他章正文。"""
-    return (f'── 全书形态档位（机械量出，只用于防止定性描述与全书数字矛盾）──\n'
+    return ('── 全书形态档位（机械量出，只用于防止定性描述与全书数字矛盾）──\n'
             + json.dumps(bands(meas), ensure_ascii=False, indent=2)
             + f'\n\n── 源章 {chapter_ordinal}（本次唯一可见正文）──\n'
             + chapter_text)

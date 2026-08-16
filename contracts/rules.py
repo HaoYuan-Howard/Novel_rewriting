@@ -16,7 +16,7 @@ Stage0–Stage7 均已实现；注册表必须完整覆盖当前八层。
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Final, Literal
 
 from contracts.invariants import CHECK_KIND, OWNER, SEVERITY, WHO_CHECKS_RULE

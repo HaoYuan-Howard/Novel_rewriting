@@ -12,9 +12,6 @@ test_stage7_subs.py —— 替换器与残留探针。**不吃语料，纯函数
 """
 from __future__ import annotations
 
-
-import pytest
-
 from novel.stages.stage7 import checks
 from novel.stages.stage7.subs import (
     apply_subs, mask_known, residual_scan, sub_table, surface_hits,

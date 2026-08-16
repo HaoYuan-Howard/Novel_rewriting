@@ -20,7 +20,6 @@ from novel.core.naming import strip_distinguisher
 from novel.core.text import norm
 from novel.stages.stage5.measure import draft_consumed_of, draft_projection, load_drafts
 from novel.stages.stage7.subs import apply_subs, sub_table
-from novel.store import ArtifactStore
 
 __all__ = ['draft_consumed_of', 'draft_projection', 'load_drafts']  # 下游按本模块的名字取
 

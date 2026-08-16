@@ -27,7 +27,7 @@ from contracts.invariants import (
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.report.findings import Outcome, ran, unverifiable
-from novel.stages.stage4.beats import beat_index, group_beats
+from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.measure import chapter_source_chars, verbatim_share_stats
 
 #: 源 beat 编号里的章号。⚠ **别按定宽切片**：`b{ord:02d}_{seq:02d}` 在三位数的章上会溢出宽度。

@@ -14,10 +14,7 @@ test_orchestrator_jobs.py —— 互斥 · 事件流 · 重启改判。
 from __future__ import annotations
 
 import json
-import shutil
-import tempfile
 import threading
-from pathlib import Path
 
 import pytest
 
@@ -29,11 +26,8 @@ SID = '7615069877019300633'
 
 
 @pytest.fixture
-def base():
-    """⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸 ⇒ `mkdtemp`。"""
-    d = Path(tempfile.mkdtemp())
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
+def base(tmp_path):
+    return tmp_path
 
 
 def _fake(rc: int = 0, note: bytes = b'hello\n'):
@@ -345,6 +339,7 @@ def test_the_service_only_writes_under_service_dir(base):
 
 # ───────────────────── 真的起一个子进程（那条缝自己验不了自己） ─────────────────────
 
+@pytest.mark.corpus
 def test_a_real_subprocess_runs_the_pasted_command_and_its_output_lands_in_the_log():
     """⭐ **`R-11.8` 的最后一环**：`build_argv` 拼的那条命令，
     真的 fork 出去、真的跑完、退出码与日志都对得上。

@@ -30,8 +30,11 @@ BOOK_WITH_HITS = '我把夫君捧成头牌后，全家悔疯了_7615069877019300
 def _books() -> set[str]:
     return {a.book_dir for a in corpus.iter_artifacts() if a.rel == 'stage6/hook.json'}
 
-pytestmark = pytest.mark.skipif(
-    not _books(), reason='盘上没有 stage6 语料——这几条**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(
+        not _books(), reason='盘上没有 stage6 语料——这几条**没在查**，不是「查过没事」'),
+]
 
 
 def _drafts_of(book: str) -> tuple[str, ...]:

@@ -132,9 +132,9 @@ def normalize_hook(text: str, *, src_hook: str | None) -> tuple[str, Mech]:
     text, punct = normalize_punctuation(text)
     qs = quote_pair(dominant_quote_style(src_hook)) if src_hook else None
     if qs:
-        text, quotes_fixed, problems = normalize_quotes(text, *qs)
+        text, quotes_fixed, _problems = normalize_quotes(text, *qs)
     else:
-        quotes_fixed, problems = 0, []
+        quotes_fixed = 0
     if src_hook:
         text, changed = normalize_paragraphs(text, BAND_SEP[sep_band_of_text(src_hook)])
         paras = int(changed)

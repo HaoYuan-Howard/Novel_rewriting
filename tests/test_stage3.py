@@ -10,14 +10,10 @@ from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage3 import Measurable, StyleGrounding
 from novel.core.measure import drift, measure, measure_body
-from novel.core.naming import names_of, spoiler_names_of
 from novel.report import build, render
 from novel.prov import FreshnessReport
 from novel.stages.stage3 import checks
-from tests import corpus, sandbox
-
-pytestmark = pytest.mark.skipif(corpus.corpus_root() is None,
-                                reason='盘上没有语料——这几条**没在查**，不是「查过没事」')
+from tests import corpus, factories, sandbox
 
 def _books() -> list[str]:
     return sorted({a.book_dir for a in corpus.iter_artifacts()
@@ -68,10 +64,14 @@ def _report(book: str):
 
 # ───────────────── 当前正式产物 ─────────────────
 
+@pytest.mark.corpus
 def test_the_current_corpus_has_stage3_artifacts():
+    if corpus.corpus_root() is None:
+        pytest.skip('盘上没有语料——本条**没在查**，不是「查过没事」')
     assert _books()
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', _books())
 def test_check_only_accepts_every_current_formal_artifact(book):
     """正式画像已经过写入闸门，复检不得命中 HARD。INFO 命中随小说内容变化。"""
@@ -80,6 +80,7 @@ def test_check_only_accepts_every_current_formal_artifact(book):
     assert not hard_hits, f'{book} 的当前正式画像命中 HARD：{hard_hits}\n{render(rep)}'
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', _books())
 def test_every_registered_rule_produced_a_row(book):
     """九条注册判据**一行不少**，且没有一条是 `skipped`（`--check-only` 恒排全）。"""
@@ -88,6 +89,7 @@ def test_every_registered_rule_produced_a_row(book):
     assert [r.rule for r in rep.rules if r.status == 'skipped'] == []
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', _books())
 def test_remeasure_reproduces_the_stored_numbers_value_by_value(book):
     """当前产物的 23 项机械度量可逐值复算。"""
@@ -100,6 +102,7 @@ def test_remeasure_reproduces_the_stored_numbers_value_by_value(book):
     assert drift(stored.hook, now.hook) == []
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', _books())
 def test_the_artifact_still_loads_as_a_model(book):
     """判据跑在 dict 上，但那份 dict 仍然必须是一份合法产物——否则判据在判一个幻觉。"""
@@ -109,6 +112,7 @@ def test_the_artifact_still_loads_as_a_model(book):
 
 # ───────────────── `measurable_drift` 只在复检时跑 ─────────────────
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', _books()[:1])
 def test_drift_is_not_scheduled_at_write_time_and_that_shows(book):
     """落盘那一刻 `measurable` 刚由代码算出来，与重算必然相等
@@ -130,8 +134,8 @@ def test_drift_is_not_scheduled_at_write_time_and_that_shows(book):
 # 「见过它通过」不是证据，「见过它红一次」才是。反例使用合成 dict：
 # 新契约把八维做成了 `Field(min_length=1)`，模型化之后 `required` **构造不出反例**。
 
-def _clean(book: str) -> dict:
-    return _inputs(book)[0]
+def _clean(book: str | None = None) -> dict:
+    return _inputs(book)[0] if book is not None else factories.stage3_artifact()
 
 
 def _fire(data: dict, rule: str, **kw) -> list:
@@ -141,29 +145,28 @@ def _fire(data: dict, rule: str, **kw) -> list:
 
 
 def test_required_goes_red_when_a_voice_dimension_is_empty():
-    data = _clean(_books()[0])
+    data = _clean()
     data['voice']['interiority'] = '   '
     assert _fire(data, 'required'), '八维缺一必须红'
 
 
 def test_required_goes_red_on_a_field_outside_the_contract():
-    data = _clean(_books()[0])
+    data = _clean()
     data['voice']['made_up'] = 'x'
     assert _fire(data, 'required')
 
 
 def test_verbatim_goes_red_on_a_twenty_char_lift():
-    book = _books()[0]
-    data = _clean(book)
-    main = MainText.model_validate(_cut(book, 'stage1/main_text.json'))
+    source = factories.stage5_book()
+    data = _clean()
     from novel.core.text import norm
-    corpus_text = norm(''.join(s.text for s in main.root))
+    corpus_text = norm(''.join(source.source_text.values()))
     data['voice']['register_tone'] = corpus_text[:40]
     assert _fire(data, 'verbatim', corpus=corpus_text)
 
 
 def test_habit_quote_goes_red_on_a_concrete_word_example():
-    data = _clean(_books()[0])
+    data = _clean()
     data['surface_habits'] = ['高频使用「我气笑了」这类口头禅']
     assert _fire(data, 'habit_quote')
 
@@ -171,13 +174,13 @@ def test_habit_quote_goes_red_on_a_concrete_word_example():
 def test_habit_quote_spares_a_pure_structural_template():
     """⚠ 「引号内一律禁」**过宽**：`说话者+说：`、`一……便……` 是结构模板，
     删掉会让产物更差（判据 20）。"""
-    data = _clean(_books()[0])
+    data = _clean()
     data['surface_habits'] = ['固定用「一……便……」这类条件复句推进']
     assert not _fire(data, 'habit_quote')
 
 
 def test_habit_quote_scans_chapter_local_style_lists_too():
-    data = _clean(_books()[0])
+    data = _clean()
     data['chapter_styles'] = [{
         'source_ordinal': 1,
         'voice': data['voice'],
@@ -210,7 +213,7 @@ def test_targeted_habit_repair_contract_accepts_category_and_rejects_normalised_
 
 def test_chapter_prompt_contains_only_current_chapter_and_global_bands():
     from novel.stages.stage3 import prompts
-    measurable = Measurable.model_validate(_clean(_books()[0])['measurable'])
+    measurable = Measurable.model_validate(_clean()['measurable'])
     one = prompts.build_chapter_user(
         measurable, chapter_ordinal=1, chapter_text='第一章独有字节甲乙丙')
     two = prompts.build_chapter_user(
@@ -263,7 +266,7 @@ def test_anti_leak_response_abstraction_removes_inferred_mechanism_and_names():
 
 
 def test_required_rejects_incomplete_or_reordered_chapter_style_coverage():
-    data = {**_clean(_books()[0])}
+    data = {**_clean()}
     local = {
         'source_ordinal': 1,
         'voice': data['voice'],
@@ -283,6 +286,7 @@ def test_required_rejects_incomplete_or_reordered_chapter_style_coverage():
     assert required.findings and '实得 [2, 1]' in required.findings[0].detail
 
 
+@pytest.mark.corpus
 def test_chapter_style_generation_refuses_to_run_without_stage2_name_table():
     """缺 stage2 专名表 ⇒ **显式终态**，不许把「没有检查材料」当成防泄露。
 
@@ -300,6 +304,8 @@ def test_chapter_style_generation_refuses_to_run_without_stage2_name_table():
     from novel.run import RunContext
     from novel.stages.stage3 import style
 
+    if not _books():
+        pytest.skip('盘上没有语料——本条**没在查**，不是「查过没事」')
     book = _books()[0]
     box = sandbox.Sandbox(book, ('stage1/main_text.json', 'stage1/hook_copy.json'))
     try:
@@ -320,28 +326,26 @@ def test_stage3_has_one_production_path_without_variant_parameter():
 
 
 def test_number_dup_goes_red_on_a_measured_number():
-    data = _clean(_books()[0])
+    data = _clean()
     data['voice']['sentence_rhythm'] = '平均句长 19 字，偏短'
     assert _fire(data, 'number_dup')
 
 
 def test_struct_ref_goes_red_on_a_beat_id():
-    data = _clean(_books()[0])
+    data = _clean()
     data['voice']['chapter_open_close'] = '章首常照 b03_02 那样起'
     assert _fire(data, 'struct_ref')
 
 
 def test_node_leak_goes_red_on_an_internal_workflow_name():
-    data = _clean(_books()[0])
+    data = _clean()
     data['voice']['mode_variation'] = '按 blueprint 的分段切换声音'
     assert _fire(data, 'node_leak')
 
 
 def test_name_leak_goes_red_and_flags_the_spoiler_subject():
-    book = _books()[0]
-    data = _clean(book)
-    _sg, _main, _hook, gg = _inputs(book)
-    names = names_of(gg)
+    data = _clean()
+    names = frozenset({'沈青'})
     victim = sorted(names)[0]
     data['voice']['register_tone'] = f'常借{victim}的口吻自嘲'
     fs = _fire(data, 'name_leak', names=names)
@@ -352,21 +356,21 @@ def test_name_leak_goes_red_and_flags_the_spoiler_subject():
 
 def test_name_leak_without_a_name_table_is_unver_not_ok():
     """**查不了 ≠ 查过没问题。** 没有名表时这条规则根本没跑。"""
-    data = _clean(_books()[0])
+    data = _clean()
     o = next(o for o in checks.check(data, corpus='', names=None) if o.rule == 'name_leak')
     assert o.unver_why and '没有跑' in o.unver_why
 
 
 def test_name_leak_with_an_empty_name_table_is_also_unver():
     """⚠ **拿一张空表去扫，0 命中是必然的**——那是「保证会亮的绿灯」（判据 31）。"""
-    data = _clean(_books()[0])
+    data = _clean()
     o = next(o for o in checks.check(data, corpus='', names=frozenset())
              if o.rule == 'name_leak')
     assert o.unver_why and '空' in o.unver_why
 
 
 def test_an_unver_name_leak_ambers_the_badge():
-    data = _clean(_books()[0])
+    data = _clean()
     outs = checks.check(data, corpus='', names=None)
     rep = build(sid='s', node='stage3.style',
                 freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=outs)
@@ -376,6 +380,7 @@ def test_an_unver_name_leak_ambers_the_badge():
 
 # ───────────────── 绿灯必须报出自己的分母（判据 31） ─────────────────
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', _books())
 def test_every_green_light_reports_what_it_scanned(book):
     """一个不知道自己扫了多少的绿灯没有判别力。"""
@@ -386,6 +391,7 @@ def test_every_green_light_reports_what_it_scanned(book):
 
 # ───────────────── 记账键终于有了出口（`stage3.md` §五 那笔账） ─────────────────
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', _books())
 def test_the_three_accounting_keys_finally_have_an_exit(book):
     """三个当前记账键都在报告中有常驻出口。"""
@@ -396,6 +402,7 @@ def test_the_three_accounting_keys_finally_have_an_exit(book):
         assert key in text, f'{key} 没有出现在报告里——记账不是终点，报出来才是'
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', _books())
 def test_gates_skipped_is_reported_even_when_the_producer_never_recorded_it(book):
     """`recorded` 必须与当前产物是否真的保存该键一致。"""

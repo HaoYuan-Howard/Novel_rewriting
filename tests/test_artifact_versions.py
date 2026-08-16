@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""逐产物 schema version、迁移和路径注册表的最小合成样本。"""
+"""当前产物版本、路径注册表与只读损坏隔离的最小合成样本。"""
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,35 +19,32 @@ from contracts.schema import (
     decode_artifact,
     encode_artifact,
 )
-from novel.orchestrator.state import overview
 from novel.consumption import CONSUMED_PROJECTIONS
+from novel.orchestrator.state import overview
 from novel.views.inbox import inbox_view
 from novel.views.stage3 import style_view
 
-FIXTURES = Path(__file__).parent / 'fixtures' / 'artifact_versions'
-
-
-def _json(name: str):
-    return json.loads((FIXTURES / name).read_text(encoding='utf-8'))
-
-
-def test_unmarked_v0_root_artifact_migrates_without_rewriting_the_fixture():
-    raw = _json('main_text_v0.json')
-    decoded = decode_artifact('stage1/main_text.json', raw)
-
-    assert decoded.source_version == 0
-    assert decoded.current_version == 1
-    assert MainText.model_validate(decoded.payload).root[1].chapter_ordinal == 2
-    assert raw == _json('main_text_v0.json')
+MAIN_TEXT = [
+    {'section_id': 'sec_0001', 'chapter_ordinal': 1,
+     'source_chapter_label': '一', 'text': '甲推门进屋。'},
+    {'section_id': 'sec_0002', 'chapter_ordinal': 2,
+     'source_chapter_label': '二', 'text': '乙随后离开。'},
+]
 
 
 def test_current_root_artifact_uses_a_versioned_envelope_and_round_trips():
-    old = decode_artifact('stage1/main_text.json', _json('main_text_v0.json')).payload
-    current = encode_artifact('stage1/main_text.json', old)
+    current = encode_artifact('stage1/main_text.json', MAIN_TEXT)
 
     assert current['_schema_version'] == 1
-    assert current['payload'] == old
-    assert decode_artifact('stage1/main_text.json', current).payload == old
+    assert current['payload'] == MAIN_TEXT
+    decoded = decode_artifact('stage1/main_text.json', current)
+    assert decoded.version == 1
+    assert MainText.model_validate(decoded.payload).root[1].chapter_ordinal == 2
+
+
+def test_unversioned_artifact_is_refused_instead_of_inferred_as_v0():
+    with pytest.raises(ArtifactVersionError, match='缺少当前 schema v1 标记'):
+        decode_artifact('stage1/main_text.json', MAIN_TEXT)
 
 
 def test_future_version_is_refused_with_the_file_and_both_versions():
@@ -56,14 +52,23 @@ def test_future_version_is_refused_with_the_file_and_both_versions():
         ArtifactVersionError,
         match=r'stage6/hook\.json: schema v99 .* v1',
     ):
-        decode_artifact('stage6/hook.json', _json('future_hook_v99.json'))
+        decode_artifact('stage6/hook.json', {'_schema_version': 99})
 
 
-def test_schema_and_legacy_model_maps_are_derived_from_one_registry():
+def test_old_version_is_refused_without_a_migration_branch():
+    with pytest.raises(
+        ArtifactVersionError,
+        match=r'stage6/semantic_1\.json: schema v0 不是当前 v1',
+    ):
+        decode_artifact('stage6/semantic_1.json', {
+            '_schema_version': 0, 'texts': [], 'decisions': [],
+        })
+
+
+def test_schema_model_map_is_derived_from_the_current_registry():
     assert set(ARTIFACTS) == set(ARTIFACT_SPECS)
     assert all(ARTIFACTS[key] is spec.model for key, spec in ARTIFACT_SPECS.items())
-    assert all(spec.current_version >= 1 for spec in ARTIFACT_SPECS.values())
-    assert 0 not in ARTIFACT_SPECS['stage6/semantic_{n}.json'].migrations
+    assert {spec.current_version for spec in ARTIFACT_SPECS.values()} == {1}
 
 
 def test_paths_feed_schema_nodes_consumption_and_runtime_from_one_catalog():
@@ -79,21 +84,12 @@ def test_paths_feed_schema_nodes_consumption_and_runtime_from_one_catalog():
         == 'stage5/shallow/ch12.rejected.json'
 
 
-def test_semantic_contract_change_is_explicitly_unmigratable():
-    with pytest.raises(
-        ArtifactVersionError,
-        match=r'stage6/semantic_1\.json: schema v0 没有到 v1 的迁移',
-    ):
-        decode_artifact('stage6/semantic_1.json', {'texts': [], 'decisions': []})
-
-
 @pytest.mark.parametrize('rel,key', [
     ('stage5/deep/ch01.json', 'stage5/{mode}/ch{nn}.json'),
     ('stage5/deep/_rounds/ch01.r3.json', 'stage5/{mode}/ch{nn}.json'),
-    ('stage5/deep/_rounds/ch01.INVALID.superseded.json',
+    ('stage5/deep/_rounds/ch01.INVALID.r3.json',
      'stage5/{mode}/ch{nn}.json'),
-    ('stage5/_rounds/review_4.invalid_metadata_convergence.json',
-     'stage5/review_{n}.json'),
+    ('stage5/_rounds/review_4.r2.json', 'stage5/review_{n}.json'),
     ('stage6/hook.INVALID.json', 'stage6/hook.json'),
     ('stage6/_rounds/hook.r2.json', 'stage6/hook.json'),
 ])
@@ -101,21 +97,32 @@ def test_runtime_and_corpus_share_the_same_path_router(rel: str, key: str):
     assert artifact_key(rel) == key
 
 
-def test_old_unreadable_artifacts_do_not_take_down_read_only_aggregation():
-    root = Path(tempfile.mkdtemp())
-    book = root / '合成旧书_123'
+@pytest.mark.parametrize('rel', [
+    'stage5/deep/_rounds/ch01.INVALID.superseded.json',
+    'stage5/_rounds/review_4.invalid_metadata_convergence.json',
+])
+def test_retired_archive_aliases_are_not_current_artifact_paths(rel: str):
+    assert artifact_key(rel) is None
+
+
+def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp_path: Path):
+    root = tmp_path
+    book = root / '合成损坏书_123'
     (book / 'stage1').mkdir(parents=True)
     (book / 'stage3').mkdir()
     (book / 'stage5').mkdir()
     (book / 'stage1' / 'main_text.json').write_text(
-        json.dumps(_json('main_text_v0.json'), ensure_ascii=False), encoding='utf-8')
-    (book / 'stage1' / 'hook_copy.json').write_text(
-        json.dumps({'section_id': 'sec_0001', 'text': '门外忽然响了一声。'}, ensure_ascii=False),
+        json.dumps(encode_artifact('stage1/main_text.json', MAIN_TEXT), ensure_ascii=False),
         encoding='utf-8')
-    future = json.dumps({'_schema_version': 99}, ensure_ascii=False)
-    (book / 'stage3' / 'style_grounding.json').write_text(future, encoding='utf-8')
+    (book / 'stage1' / 'hook_copy.json').write_text(
+        json.dumps(encode_artifact('stage1/hook_copy.json', {
+            'section_id': 'sec_0001', 'text': '门外忽然响了一声。',
+        }), ensure_ascii=False),
+        encoding='utf-8')
+    malformed = json.dumps({'_schema_version': 1}, ensure_ascii=False)
+    (book / 'stage3' / 'style_grounding.json').write_text(malformed, encoding='utf-8')
     (book / 'stage5' / 'wontfix.json').write_text(
-        json.dumps({'_schema_version': 99, 'payload': {}}, ensure_ascii=False), encoding='utf-8')
+        malformed, encoding='utf-8')
 
     ov = overview(root, '123')
     style = style_view(root, '123')

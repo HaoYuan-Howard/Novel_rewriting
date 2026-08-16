@@ -25,7 +25,6 @@ from typing import Any, Callable
 
 import pytest
 
-import contracts.judges  # noqa: F401  —— 全量注册（本层的行才进得了 REGISTRY）
 from contracts.rules import REGISTRY
 from novel.core.spans import content_only
 from novel.stages.stage2 import checks

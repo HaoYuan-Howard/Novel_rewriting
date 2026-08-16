@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from contracts.invariants import (
-    DEPTH_MODES, HINGE_LABEL, HINGE_LABEL_PARTS, LAYER_CN, LAYER_GLOSS,
+    DEPTH_MODES, HINGE_LABEL, LAYER_CN, LAYER_GLOSS,
     TIME_LAYERS, hinge_heading,
 )
 from novel.core.text import norm

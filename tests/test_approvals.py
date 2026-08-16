@@ -7,11 +7,14 @@ from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals, jobs
 from tests import corpus, sandbox
 
-pytestmark = pytest.mark.skipif(
-    corpus.corpus_root() is None
-    or not any(a.rel == 'stage4/plan_chapters.json' for a in corpus.iter_artifacts()),
-    reason=f'未设置包含当前 Stage4 计划的 {corpus.CORPUS_ENV}',
-)
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(
+        corpus.corpus_root() is None
+        or not any(a.rel == 'stage4/plan_chapters.json' for a in corpus.iter_artifacts()),
+        reason=f'未设置包含当前 Stage4 计划的 {corpus.CORPUS_ENV}',
+    ),
+]
 
 
 def _box() -> sandbox.Sandbox:

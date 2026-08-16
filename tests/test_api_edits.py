@@ -13,7 +13,6 @@ test_api_edits.py —— 人工写回三条路由的**行为**（真起 CLI 子�
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -24,8 +23,11 @@ from fastapi.testclient import TestClient          # noqa: E402
 from novel.api.app import UI_HEADER, create_app    # noqa: E402
 from tests import corpus, sandbox                  # noqa: E402
 
-pytestmark = pytest.mark.skipif(corpus.corpus_root() is None,
-                                reason='盘上没有语料——这一批**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(corpus.corpus_root() is None,
+                       reason='盘上没有语料——这一批**没在查**，不是「查过没事」'),
+]
 
 INPUTS = ('stage1/main_text.json', 'stage1/hook_copy.json',
           'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',

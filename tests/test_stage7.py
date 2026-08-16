@@ -32,8 +32,11 @@ def books() -> list[str]:
     return sorted(book for book, rels in by_book.items() if required <= rels)
 
 
-pytestmark = pytest.mark.skipif(
-    not books(), reason='盘上没有 stage7 产物 —— 本文件整份**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(
+        not books(), reason='盘上没有 stage7 产物 —— 本文件整份**没在查**，不是「查过没事」'),
+]
 
 
 def _drafts_of(book: str) -> tuple[str, ...]:

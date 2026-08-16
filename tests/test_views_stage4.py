@@ -38,8 +38,11 @@ def books() -> list[str]:
     return out
 
 
-pytestmark = pytest.mark.skipif(
-    not books(), reason='盘上没有可读的 stage4 语料——这几条**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(
+        not books(), reason='盘上没有可读的 stage4 语料——这几条**没在查**，不是「查过没事」'),
+]
 
 
 @pytest.fixture(params=books(), ids=lambda b: b[:10])

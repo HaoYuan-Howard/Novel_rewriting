@@ -10,8 +10,6 @@ test_orchestrator_queue.py —— 批量队列（`R-13`）。
 """
 from __future__ import annotations
 
-import shutil
-import tempfile
 import threading
 from pathlib import Path
 
@@ -30,16 +28,18 @@ from tests import corpus
 
 CORPUS = corpus.corpus_root()
 BOOKS = tuple(sorted({artifact.source_id for artifact in corpus.iter_artifacts()}))
-_NO_CORPUS = pytest.mark.skipif(
-    CORPUS is None or not BOOKS,
-    reason=f'未设置包含当前产物的 {corpus.CORPUS_ENV}')
+
+
+def _NO_CORPUS(test):
+    test = pytest.mark.corpus(test)
+    return pytest.mark.skipif(
+        CORPUS is None or not BOOKS,
+        reason=f'未设置包含当前产物的 {corpus.CORPUS_ENV}')(test)
 
 
 @pytest.fixture
-def queue_base():
-    root = Path(tempfile.mkdtemp())
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
+def queue_base(tmp_path):
+    return tmp_path
 
 
 def _step(name: str, *, paid: bool = False) -> Step:
@@ -173,6 +173,7 @@ def test_a_free_only_plan_needs_no_confirmation():
     Q.confirm(p, yes=False)
 
 
+@pytest.mark.corpus
 def test_an_upstream_invalid_draft_blocks_the_queue_and_names_the_inbox():
     """⭐ `R-13.5` 的第三类：**待人工非空**（`INBOX_KIND` 的 `invalid`）。
 

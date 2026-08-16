@@ -7,13 +7,11 @@ test_api_run.py —— `GET /api/novels/:sid/run` 真的走一遍 HTTP。
 **书目录不存在也是 200**（stage0.remove 打点先于书目录落地，
 进度屏那时就得开得开——`stage_done` 全 `None`）。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`；本批不需要语料（信标只进 `_service/`）。
+本批不需要语料（信标只进 `_service/`）。
 """
 from __future__ import annotations
 
 import os
-import shutil
-import tempfile
 
 import pytest
 
@@ -28,11 +26,10 @@ from novel.orchestrator import beacon                   # noqa: E402
 
 
 @pytest.fixture
-def client():
-    base = tempfile.mkdtemp()
+def client(tmp_path):
+    base = str(tmp_path)
     with TestClient(create_app(base)) as c:
         yield c, base
-    shutil.rmtree(base, ignore_errors=True)
 
 
 def _ev(ts, node, phase, exit_code=None, sid='42'):

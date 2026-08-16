@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from contracts.rules import REGISTRY
-from contracts.schema.stage4 import PlanChapters, WriterContext
+from contracts.schema.stage4 import WriterContext
 from novel.run import RunContext
 from novel.stages.stage4 import plan, prompts
 from tests import corpus, sandbox
@@ -24,8 +24,11 @@ def books() -> list[str]:
                    if a.rel == 'stage4/writer_context.json'})
 
 
-pytestmark = pytest.mark.skipif(
-    not books(), reason='盘上没有 stage4 产物 —— 本文件整份**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(
+        not books(), reason='盘上没有 stage4 产物 —— 本文件整份**没在查**，不是「查过没事」'),
+]
 
 
 def _ctx_for(box: sandbox.Sandbox, node: str, *, paid: bool = False) -> RunContext:

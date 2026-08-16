@@ -18,7 +18,6 @@ test_views_stage3.py —— S-06 那一屏的组装。
 """
 from __future__ import annotations
 
-import json
 import os
 
 import pytest
@@ -29,8 +28,11 @@ from novel.errors import UpstreamMissing
 from novel.views.stage3 import style_view
 from tests import corpus, sandbox
 
-pytestmark = pytest.mark.skipif(corpus.corpus_root() is None,
-                                reason='盘上没有语料——这几条**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(corpus.corpus_root() is None,
+                       reason='盘上没有语料——这几条**没在查**，不是「查过没事」'),
+]
 
 STYLE = 'stage3/style_grounding.json'
 

@@ -932,7 +932,7 @@ def _report(ctx: RunContext, store: ArtifactStore, mode: str, *,
     for fs in (judged or {}).values():
         for f in fs:
             by_rule.setdefault(f.rule, []).append(f)
-    empty = f'这一次一章都没碰过——**没有任何一章被判过**，不是判过没问题'
+    empty = '这一次一章都没碰过——**没有任何一章被判过**，不是判过没问题'
     outcomes = checks.check(
         chapter_findings_by_rule=by_rule,
         scanned={r: f'{n} 章（{mode} 臂，这一次碰过的）' for r in checks._FROM_CHAPTER},

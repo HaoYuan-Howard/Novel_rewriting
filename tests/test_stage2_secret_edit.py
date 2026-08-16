@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from contracts.schema import encode_artifact
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalEdit, GlobalGrounding
 from novel.errors import GateBlocked, TerminalState
@@ -65,11 +66,12 @@ def _seed(book: Path, *, with_blueprints: bool = False) -> None:
 
 
 def _write_edit(book: Path, payload: dict) -> None:
-    """把人写的决策集落到书目录里。**故意用裸文件写**——人就是这么放进去的，
-    而载体拒不拒收正是本文件要查的东西之一。"""
+    """把人写的当前版本决策集落到书目录里。"""
     (book / 'stage2').mkdir(parents=True, exist_ok=True)
     (book / extract.GLOBAL_EDIT).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8', newline='\n')
+        json.dumps(encode_artifact(extract.GLOBAL_EDIT, payload),
+                   ensure_ascii=False, indent=2),
+        encoding='utf-8', newline='\n')
 
 
 def _apply(book: Path):

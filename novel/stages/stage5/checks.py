@@ -22,7 +22,7 @@ import math
 import re
 from typing import Any, Iterable
 
-from contracts.invariants import DEEP_OVERLAP_MAX, HINGE_GROUPS, SPEECH_TAG_MAX
+from contracts.invariants import DEEP_OVERLAP_MAX
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding

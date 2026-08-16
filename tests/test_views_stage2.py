@@ -11,7 +11,6 @@ test_views_stage2.py —— S-05「全局设定」那一屏的组装。
 """
 from __future__ import annotations
 
-import json
 import os
 
 import pytest
@@ -20,8 +19,11 @@ from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.views.stage2 import global_view, reading_view
 from tests import corpus, sandbox
 
-pytestmark = pytest.mark.skipif(corpus.corpus_root() is None,
-                                reason='盘上没有语料——这几条**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(corpus.corpus_root() is None,
+                       reason='盘上没有语料——这几条**没在查**，不是「查过没事」'),
+]
 
 REL = 'stage2/global_grounding.json'
 

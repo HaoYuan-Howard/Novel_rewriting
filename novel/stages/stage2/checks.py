@@ -807,7 +807,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
     worst = sorted(per_ch, key=lambda t: t[1])[:3]
     out.append(ran('span_coverage_per_chapter', [
         finding('span_coverage_per_chapter',
-                detail=f'逐章覆盖率最低的三章：'
+                detail='逐章覆盖率最低的三章：'
                        + '、'.join(f'ch{o} {r:.0%}' for o, r in worst)
                        + ' —— ⚠ **全书一个数看不出哪一章塌了**',
                 evidence=[f'ch{o}:{r:.2f}' for o, r in per_ch])],
@@ -1004,8 +1004,6 @@ def _hinges(c: _Ctx) -> list[Outcome]:
         by_id = {bid: (s, e) for bid, s, e in c.spans.get(o, [])}
         for be in (x.get('beats') or []):
             s, e = by_id.get(be.get('beat_id'), (0, 0))
-            # 与 span 同一套归一化：只比内容字符，别拿标点全半角去判保真。
-            slice_ = content_only(c.text_of.get(o, '')[s:e])
             for h in (be.get('hinges') or []):
                 source = h.get('source')
                 raw = _hinge_text(h).strip()

@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pytest
 
-from contracts.schema import decode_artifact
+from contracts.schema import decode_artifact, encode_artifact
 from contracts.rules import REGISTRY
 from novel.stages.stage5 import checks, measure as M, prompts
-from tests import corpus
+from tests import corpus, factories
 
 _REQUIRED = {
     'stage1/main_text.json', 'stage2/global_grounding.json',
@@ -43,8 +43,6 @@ def _eligible_books() -> list[str]:
 
 _BOOKS = _eligible_books()
 _BOOK = _BOOKS[0] if _BOOKS else ''
-pytestmark = pytest.mark.skipif(
-    not _BOOKS, reason='当前语料没有完整 Stage5 上游与正式成稿——本文件未执行')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -53,20 +51,8 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope='module')
 def book() -> M.Book:
-    """从显式配置的当前产物拼一个 `Book`。"""
-    def cut(rel: str):
-        a = next(x for x in corpus.iter_artifacts() if x.book_dir == _BOOK and x.rel == rel)
-        return corpus.load_current(a)
-
-    wc = cut('stage4/writer_context.json')
-    return M.Book(
-        title=_BOOK.rsplit('_', 1)[0],
-        ctx=wc,
-        style=cut('stage3/style_grounding.json'),
-        source_text={s['chapter_ordinal']: s.get('text') or ''
-                     for s in cut('stage1/main_text.json')},
-        secrets=(cut('stage2/global_grounding.json').get('canon') or {}).get('secrets') or [],
-    )
+    """A deterministic current-shape book; no local novel output required."""
+    return factories.stage5_book()
 
 
 @pytest.fixture(scope='module')
@@ -430,6 +416,8 @@ def test_the_secret_ids_never_reach_the_writer(book, entry):
 @pytest.fixture
 def box():
     """一份能跑 `stage5.review` 的当前契约沙箱（跑完即删）。"""
+    if not _BOOKS:
+        pytest.skip('当前语料没有完整 Stage5 上游与正式成稿')
     root = Path(tempfile.mkdtemp())
     d = root / _BOOK
     for a in corpus.iter_artifacts():
@@ -439,7 +427,10 @@ def box():
             continue
         p = d / a.rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(corpus.load_current(a), ensure_ascii=False), encoding='utf-8')
+        p.write_text(
+            json.dumps(encode_artifact(a.rel, corpus.load_current(a)), ensure_ascii=False),
+            encoding='utf-8',
+        )
     yield root, _BOOK.rsplit('_', 1)[-1]
     shutil.rmtree(root, ignore_errors=True)
 
@@ -449,6 +440,7 @@ def _run(*argv: str) -> int:
     return main(list(argv))
 
 
+@pytest.mark.corpus
 def test_the_review_runs_on_a_current_book_and_reports_all_baselines(box):
     """端到端重算当前正式成稿，并核对退出码与 HARD 结论。"""
     from novel.cli import exit_codes as X
@@ -472,6 +464,7 @@ def test_the_review_runs_on_a_current_book_and_reports_all_baselines(box):
     assert any(f['rule'] == 'name_surface_survey' for f in rev['book'])
 
 
+@pytest.mark.corpus
 def test_wontfix_refuses_a_conclusion_that_does_not_exist(box):
     """⚠ **不给不存在的结论发豁免** ⇒ 显式终态（缺省是「不知道」，不许猜）。"""
     from novel.cli import exit_codes as X
@@ -481,6 +474,7 @@ def test_wontfix_refuses_a_conclusion_that_does_not_exist(box):
                 '1|draft_too_short=这条我不修', '--base', str(root)) == X.TERMINAL_STATE
 
 
+@pytest.mark.corpus
 def test_wontfix_needs_a_reason_and_a_third_segment_when_ambiguous(box):
     """⚠ 两条约束一起验：
 
@@ -518,6 +512,7 @@ def test_the_wontfix_key_survives_an_evidence_key_that_contains_a_pipe():
     assert parse_spec('book|book_length=预算就是这么定的')[2] is None
 
 
+@pytest.mark.corpus
 def test_wontfix_lands_and_never_deletes_the_conclusion(box):
     """⭐ **豁免不删结论**：它照常列在报告与界面上，只是不再进反哺、不再占「待人工」。
 
@@ -547,6 +542,7 @@ def test_wontfix_lands_and_never_deletes_the_conclusion(box):
     assert hit['wontfix'] and hit['actionable'] is False
 
 
+@pytest.mark.corpus
 def test_rerunning_the_review_on_one_and_the_same_draft_never_advances_the_counter(box):
     """⭐⭐ `R-8.4`：**成稿指纹没变时不许前进未消轮次计数。**
 
@@ -565,6 +561,7 @@ def test_rerunning_the_review_on_one_and_the_same_draft_never_advances_the_count
     assert all(f['unresolved_rounds'] == 0 for f in fs)
 
 
+@pytest.mark.corpus
 def test_recheck_is_idempotent_on_stored_drafts(box):
     """⭐ 产物里存的是**归一之后**的字节 ⇒ 再归一一遍必须**一个字节都不动**。
 
@@ -583,6 +580,7 @@ def test_recheck_is_idempotent_on_stored_drafts(box):
             f'{p.name}：`--recheck` 改写了正文字节——归一不幂等了')
 
 
+@pytest.mark.corpus
 def test_dry_run_builds_the_same_prompt_the_paid_path_would_send(box):
     """⭐ `R-11.8`：预览与真跑**共用同一个构造入口**。
 

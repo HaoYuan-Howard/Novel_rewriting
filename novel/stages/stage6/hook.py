@@ -416,7 +416,6 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
             model=client.model,
             params=HookParams(max_tokens=MAX_TOKENS))})
 
-    outcomes = _judge_artifact(artifact, up, store)
     # ⚠⚠ **闸门条件与 stage3 不同**：本层一次产**三份**，一条红不该废掉另两条。
     # ⇒ 拦的是「**一条干净候选都没有**」。部分红照常落盘，报告把红的那条摆在人面前，
     # 人 `--pick` 时避开它。

@@ -85,6 +85,7 @@ def _corpus_names() -> list[str]:
     return sorted(p.name for p in root.rglob('*.txt')) if root.is_dir() else []
 
 
+@pytest.mark.corpus
 def test_every_corpus_filename_round_trips():
     """全语料 163 本的文件名 → 目录名 → 再解析回来，**一本都不许对不上**。
 

@@ -35,9 +35,12 @@ def _first_book(rel: str) -> str | None:
     books = sorted({a.book_dir for a in corpus.iter_artifacts() if a.rel == rel})
     return books[0] if books else None
 
-pytestmark = pytest.mark.skipif(
-    _first_book('stage3/style_grounding.json') is None,
-    reason='盘上没有语料——这几条**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(
+        _first_book('stage3/style_grounding.json') is None,
+        reason='盘上没有语料——这几条**没在查**，不是「查过没事」'),
+]
 
 
 def _drafts_of(book: str) -> tuple[str, ...]:

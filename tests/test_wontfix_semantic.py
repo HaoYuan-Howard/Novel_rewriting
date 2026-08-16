@@ -27,7 +27,7 @@ import json
 
 import pytest
 
-from contracts.schema import decode_artifact
+from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.stage6 import Hook, HookSemanticReview
 from novel import prov
 from novel.errors import TerminalState
@@ -46,8 +46,11 @@ def _books() -> list[str]:
     return sorted({a.book_dir for a in corpus.iter_artifacts() if a.rel == 'stage6/hook.json'})
 
 
-pytestmark = pytest.mark.skipif(
-    not _books(), reason='盘上没有 stage6 语料——这一批**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(
+        not _books(), reason='盘上没有 stage6 语料——这一批**没在查**，不是「查过没事」'),
+]
 
 #: 六维评分：本文件不测排序，给一组合法常数就够（总分由代码算，模型不自报）。
 _QUALITY = {'read_on_desire': 7.0, 'body_voice_match': 7.0,
@@ -389,7 +392,10 @@ def box5(tmp_path):
             continue
         p = target / a.rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(corpus.load_current(a), ensure_ascii=False), encoding='utf-8')
+        p.write_text(
+            json.dumps(encode_artifact(a.rel, corpus.load_current(a)), ensure_ascii=False),
+            encoding='utf-8',
+        )
     yield root, book, book.rsplit('_', 1)[-1]
 
 

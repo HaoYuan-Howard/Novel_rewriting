@@ -7,31 +7,28 @@ test_agent.py —— headless agent 代跑的提示词/命令行组装、事件�
 （`docs/BACKEND_CONTRACT.md` §十那一档）。这里全部走 fake spawn（`Spawn` 那条缝存在的
 理由同 `jobs.default_spawn` 的注释）。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`（本机 `%TEMP%\\pytest-of-*` 的 ACL 坏了）。
+临时目录由 pytest 提供，测试结束后自动清理。
 """
 from __future__ import annotations
 
 import os
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 
 import pytest
 
 from contracts.schema.orchestration import (
-    AgentRunEvent, AgentRunRecord, AgentRunStart,
+    AgentRunEvent, AgentRunStart,
 )
 from novel.orchestrator import agent, jobs
 from novel.orchestrator.jobs import JobConflict
 
 
 @pytest.fixture
-def base():
-    d = tempfile.mkdtemp()
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
+def base(tmp_path):
+    return str(tmp_path)
 
 
 def _start(sid='42', argv=('claude', '-p', 'x'), authorized=True,

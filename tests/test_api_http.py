@@ -35,8 +35,11 @@ from novel.orchestrator import queue as Q          # noqa: E402
 from novel.orchestrator.nodes import build_steps   # noqa: E402
 from tests import corpus, sandbox                  # noqa: E402
 
-pytestmark = pytest.mark.skipif(corpus.corpus_root() is None,
-                                reason='盘上没有语料——这一批**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(corpus.corpus_root() is None,
+                       reason='盘上没有语料——这一批**没在查**，不是「查过没事」'),
+]
 
 UI = {UI_HEADER: '1'}
 

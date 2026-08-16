@@ -29,7 +29,6 @@ import os
 import re
 from typing import Any
 
-from contracts.invariants import STOP_REWRITE_AFTER
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding, WontFixEntry
 from contracts.schema.report import CheckReport, finding

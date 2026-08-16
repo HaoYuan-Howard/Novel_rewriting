@@ -3,6 +3,8 @@
 """Stage4 拍的确定性切分、精确 span 与篇幅量纲。"""
 from __future__ import annotations
 
+from functools import wraps
+
 import pytest
 
 from contracts.invariants import BEAT_MIN_CHARS, PLAN_BUDGET_BAND
@@ -23,12 +25,33 @@ def _by_rel(rel: str) -> dict[str, object]:
     return {a.source_id: corpus.load_current(a) for a in corpus.iter_artifacts() if a.rel == rel}
 
 
-MAIN = _by_rel('stage1/main_text.json')
-BPS = _by_rel('stage2/chapter_blueprints.json')
-PLANS = _by_rel('stage4/plan_chapters.json')
-BOOKS = sorted(set(MAIN) & set(BPS) & set(PLANS))
+MAIN: dict[str, object] = {}
+BPS: dict[str, object] = {}
+PLANS: dict[str, object] = {}
+BOOKS: list[str] = []
+_CORPUS_LOADED = False
 
-needs_corpus = pytest.mark.skipif(not BOOKS, reason='盘上没有语料——本族对账无从谈起')
+
+def _load_corpus() -> None:
+    global MAIN, BPS, PLANS, BOOKS, _CORPUS_LOADED
+    if _CORPUS_LOADED:
+        return
+    MAIN = _by_rel('stage1/main_text.json')
+    BPS = _by_rel('stage2/chapter_blueprints.json')
+    PLANS = _by_rel('stage4/plan_chapters.json')
+    BOOKS = sorted(set(MAIN) & set(BPS) & set(PLANS))
+    _CORPUS_LOADED = True
+
+
+def needs_corpus(test):
+    @pytest.mark.corpus
+    @wraps(test)
+    def run(*args, **kwargs):
+        _load_corpus()
+        if not BOOKS:
+            pytest.skip('盘上没有语料——本族对账无从谈起')
+        return test(*args, **kwargs)
+    return run
 
 
 # ── ⭐ 一、拍分组 == 存盘 ──────────────────────────────────────────────────

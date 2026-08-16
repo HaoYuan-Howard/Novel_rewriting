@@ -20,9 +20,11 @@ from tests import corpus
 
 CORPUS = corpus.corpus_root()
 BOOKS = tuple(sorted({artifact.source_id for artifact in corpus.iter_artifacts()}))
-_NO_CORPUS = pytest.mark.skipif(
-    CORPUS is None or not BOOKS,
-    reason=f'未设置包含当前产物的 {corpus.CORPUS_ENV}')
+def _NO_CORPUS(test):
+    test = pytest.mark.corpus(test)
+    return pytest.mark.skipif(
+        CORPUS is None or not BOOKS,
+        reason=f'未设置包含当前产物的 {corpus.CORPUS_ENV}')(test)
 
 
 # ───────────────────── 产物清单从 `NODES.produces` 派生 ─────────────────────

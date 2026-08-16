@@ -344,7 +344,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 | 文件 | 是什么 | 形状 |
 |---|---|---|
 | `chNN.r<N>.json` | 上一轮正式稿 | **与正式稿逐字段相同**（盘上 4 份，实测键集一致） |
-| `chNN.INVALID.superseded.json` | 已被正式稿取代的问题稿 | 同 `.INVALID`（盘上 2 份，都是修好之前的 4 键贫血形） |
+| `chNN.INVALID.r<N>.json` | 上一轮被闸门拦下的问题稿 | 与对应 `.INVALID` 逐字段相同 |
 | `chNN.rejected.json` | **当前被回归护栏驳回的自救尝试**；下一次成功或 INVALID 结果会将它归档 | `{output_ordinal, why[], fixes[[rule, evidence_key]…], attempts[{chars, text}]}`；`attempts` 恒为两份：首次候选与唯一一次绕缓存重采样。真实盘零样本，可提交 fixture 有一份 |
 
 > **三个名字不能混**（判据 32）：`.INVALID` = 落盘闸门拦下的问题稿；

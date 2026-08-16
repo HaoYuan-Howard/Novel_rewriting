@@ -16,7 +16,7 @@ from novel.core.naming import (
     surface_owner_since, surface_owners,
 )
 from novel.core.spans import (
-    content_index, content_only, exact_span, extend_punct, extend_terminal_punct, lcs,
+    content_index, content_only, exact_span, extend_terminal_punct, lcs,
     walk_spans,
 )
 from novel.core.text import norm

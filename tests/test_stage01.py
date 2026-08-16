@@ -432,12 +432,16 @@ def test_two_line_fanwai_rolls_back_the_numeric_pseudo_chapter():
 
 
 REAL_NOVELS = sorted(Path('Test_data').glob('*.txt'))
+
+
+@pytest.mark.corpus
 def test_test_data_matches_the_registered_source_set():
     assert REAL_NOVELS, 'Test_data 中没有当前 Stage0/Stage1 真实文本样本'
     ids = [novel_paths.derive_source_meta(str(source))[0] for source in REAL_NOVELS]
     assert len(ids) == len(set(ids)), 'Test_data 中有 source_id 冲突'
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('source', REAL_NOVELS, ids=lambda path: path.name)
 def test_real_test_data_runs_through_both_deterministic_layers(source: Path, work: Path):
     novel_dir, removed, initial = run_source(source, work / 'Output')

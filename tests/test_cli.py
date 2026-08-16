@@ -14,7 +14,6 @@ test_cli.py —— **唯一能把异常翻译成退出码的那一层**。
 from __future__ import annotations
 
 import io
-import os
 import sys
 
 import pytest
@@ -25,12 +24,10 @@ from novel.cli.main import main
 from novel.orchestrator import nodes as N
 from tests import sandbox
 
-pytestmark = pytest.mark.skipif(not sandbox.books_with_stage3(),
-                                reason='盘上没有语料——这几条**没在查**，不是「查过没事」')
-
-
 @pytest.fixture
 def box():
+    if not sandbox.books_with_stage3():
+        pytest.skip('盘上没有语料——这几条**没在查**，不是「查过没事」')
     s = sandbox.Sandbox(sandbox.books_with_stage3()[0])
     yield s
     s.close()
@@ -106,6 +103,7 @@ def test_the_free_flag_scan_covers_every_pair_not_one_per_flag():
 
 
 @pytest.mark.parametrize('flag,node', _FREE_CASES, ids=lambda v: str(v))
+@pytest.mark.corpus
 def test_every_free_flag_runs_without_an_api_key(flag, node, box):
     """⭐ **没有 `DEEPSEEK_API_KEY` 时，每条 0 成本跑法都要跑到一个明确的终点。**
 
@@ -134,6 +132,7 @@ def test_every_free_flag_runs_without_an_api_key(flag, node, box):
         f'{node} {flag} 的退出码是 {rc}（{X.MEANING.get(rc, "没有这个码")}）'
 
 
+@pytest.mark.corpus
 def test_every_node_is_a_terminal_state_not_a_stack(box):
     """跑不动的节点落**显式终态**，不是一段栈。
 
@@ -166,6 +165,7 @@ def test_every_node_is_a_terminal_state_not_a_stack(box):
     assert len(NODES) >= 16, '守卫的守卫：节点表空掉时上面那个 for 一条都不跑'
 
 
+@pytest.mark.corpus
 def test_a_registered_but_unwired_run_mode_says_so(box):
     """「这个节点没有这条跑法」与「有，但还没接线」**是两件事**。
 
@@ -177,6 +177,7 @@ def test_a_registered_but_unwired_run_mode_says_so(box):
     assert rc == X.TERMINAL_STATE
 
 
+@pytest.mark.corpus
 def test_direct_cli_rejects_a_flag_the_node_does_not_accept_before_costing_it(box, capsys):
     """手敲命令也必须走节点表；未知跑法不能被误导成“加 --yes 就能跑”。"""
     rc = _run('run', 'stage2.global', box.sid, '--check-only',
@@ -186,6 +187,7 @@ def test_direct_cli_rejects_a_flag_the_node_does_not_accept_before_costing_it(bo
     assert '不接受' in err and '会花钱' not in err and 'Traceback' not in err
 
 
+@pytest.mark.corpus
 def test_direct_cli_rejects_mode_on_a_node_without_arms_without_a_stack(box, capsys):
     """无臂节点的 `--mode` 在 RunContext 之前成为显式终态，不泄漏裸 ValueError。"""
     rc = _run('run', 'stage5.review', box.sid, '--mode', 'deep', '--check-only',
@@ -197,6 +199,7 @@ def test_direct_cli_rejects_mode_on_a_node_without_arms_without_a_stack(box, cap
 
 # ───────────────────── 钱（Q-10） ─────────────────────
 
+@pytest.mark.corpus
 def test_a_paid_run_refuses_without_an_explicit_yes(box):
     """**花钱前必须人确认**（`Q-10`）。⚠ 且**不显示预估花费**——
     猜一个数写在界面上比不显示更坏。"""
@@ -215,6 +218,7 @@ def test_build_argv_already_carries_the_yes_for_a_paid_run():
 
 # ───────────────────── 退出码只有一张表 ─────────────────────
 
+@pytest.mark.corpus
 def test_check_only_returns_nonzero_when_the_report_fails(box):
     """`FREE_ENTRIES['--check-only']` 自己写着「**报 FAIL 退出码非零**」。"""
     from novel.core.naming import names_of
@@ -228,6 +232,7 @@ def test_check_only_returns_nonzero_when_the_report_fails(box):
                 '--base', str(box.root)) == X.CHECK_FAILED
 
 
+@pytest.mark.corpus
 def test_check_only_returns_zero_on_a_clean_book(box):
     assert _run('run', 'stage3.style', box.sid, '--check-only',
                 '--base', str(box.root)) == X.OK
@@ -264,6 +269,7 @@ def test_an_uncaught_exception_exits_seventy_with_a_stack(monkeypatch, capsys):
     assert '70' in err and 'Traceback' in err, '崩溃要报数字本身，栈要留全'
 
 
+@pytest.mark.corpus
 def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
         box, monkeypatch, capsys):
     """⭐ **降级阶梯走完仍拿不到东西 ≠ 程序崩了。** 它是 `2`，且不打栈。
@@ -303,6 +309,7 @@ def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
         % len(fake.calls))
 
 
+@pytest.mark.corpus
 def test_inbox_prints_all_six_kind_counts_with_a_denominator(box, capsys):
     """`inbox` 的首行是**带分母的汇总**——六键全出，0 也要出。
 
@@ -318,6 +325,7 @@ def test_inbox_prints_all_six_kind_counts_with_a_denominator(box, capsys):
         assert kind in out, f'六类计数行少了 {kind}'
 
 
+@pytest.mark.corpus
 def test_inbox_on_an_unknown_sid_is_a_terminal_state_not_a_stack(box, capsys):
     """敲错 sid 落显式终态（先跑 stage1 那句话），不是一段栈、更不是崩溃码。"""
     rc = _run('inbox', '0' * 19, '--base', str(box.root))
@@ -327,6 +335,7 @@ def test_inbox_on_an_unknown_sid_is_a_terminal_state_not_a_stack(box, capsys):
     assert '显式终态' in err
 
 
+@pytest.mark.corpus
 def test_a_terminal_state_prints_no_stack(box, capsys):
     """**不是 bug，所以不打栈。** 打一段栈会让人以为程序坏了，
     而它说的其实是「按设计这一步走不下去」。"""
@@ -339,6 +348,7 @@ def test_a_terminal_state_prints_no_stack(box, capsys):
 
 # ───────────────────── `R-11.8`：展示与执行同一条 ─────────────────────
 
+@pytest.mark.corpus
 def test_preview_prints_exactly_the_command_that_would_run(box, capsys):
     """⭐ 摊开的那条 argv 必须与 `build_argv` **逐字节相同**。
 
@@ -353,6 +363,7 @@ def test_preview_prints_exactly_the_command_that_would_run(box, capsys):
     assert want in printed, printed
 
 
+@pytest.mark.corpus
 def test_preview_says_both_whether_it_costs_and_whether_it_writes(box, capsys):
     """**「0 成本」不等于「不写盘」** —— 两个维度都要摆出来。"""
     _run('preview', 'stage3.style', box.sid, '--remeasure', '--base', str(box.root))
@@ -363,12 +374,14 @@ def test_preview_says_both_whether_it_costs_and_whether_it_writes(box, capsys):
 
 # ───────────────────── 其余两个子命令 ─────────────────────
 
+@pytest.mark.corpus
 def test_state_prints_the_three_state_marks(box, capsys):
     assert _run('state', box.sid, '--base', str(box.root)) == X.OK
     out = capsys.readouterr().out
     assert 'stage3' in out and 'style_grounding.json' in out
 
 
+@pytest.mark.corpus
 def test_queue_prints_a_plan_and_never_runs_anything(box, capsys):
     assert _run('queue', box.sid, '--base', str(box.root),
                 '--until', 'stage1', '--plan-only') == X.OK
@@ -376,6 +389,7 @@ def test_queue_prints_a_plan_and_never_runs_anything(box, capsys):
     assert '计划' in out and '没有建立队列' in out
 
 
+@pytest.mark.corpus
 def test_queue_refuses_paid_items_without_yes(box):
     rc = _run('queue', box.sid, '--base', str(box.root), '--until', 'stage3')
     assert rc == X.TERMINAL_STATE, '含付费项而没给 --yes，该落 ApprovalRequired'

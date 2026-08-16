@@ -16,7 +16,6 @@ checks.py —— 18 条**机械**判据的实现。行在 `contracts/judges/stag
 """
 from __future__ import annotations
 
-from contracts.invariants import ENDING_SHAPES
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.core.bands import ending_shape, sep_band_of_text

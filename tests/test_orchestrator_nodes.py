@@ -104,7 +104,7 @@ def test_a_bare_paid_node_is_paid():
 
 @pytest.mark.parametrize('flag', [f for f, e in WRITE_EFFECTS.items() if e == ''])
 def test_the_look_only_flags_never_write(flag):
-    """`--dry-run` / `--prompt-only` / `--check-only` / `--measure-only` 四条只看不动。"""
+    """当前只读 flags 不得产生任何落盘副作用。"""
     node = next(n for n, s in NODES.items() if flag in s.flags)
     assert N.would_write(node, _args(flag)) is False
     assert N.write_effect(node, _args(flag)) == ''

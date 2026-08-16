@@ -107,7 +107,7 @@ def load_raw(artifact: Artifact) -> Any:
 
 
 def load_current(artifact: Artifact) -> Any:
-    """按注册版本迁移、严格验证，并返回当前逻辑 payload（不改写盘上旧文件）。"""
+    """严格读取当前版本并返回逻辑 payload；旧产物必须从产地重跑。"""
     decoded = decode_artifact(artifact.formal_rel, load_raw(artifact))
     artifact.model.model_validate(decoded.payload)
     return decoded.payload

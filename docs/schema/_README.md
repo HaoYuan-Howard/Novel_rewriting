@@ -68,12 +68,12 @@
 
 产物路径字面只登记在 `contracts/artifacts.py::ARTIFACT_PATHS`；节点 `produces`、消费投影、
 schema 路由与 stage 真实读写均引用该目录。路径模板由 `artifact_rel()` 展开，逐章 `nn` 统一补零两位。
-`contracts/schema/__init__.py::ARTIFACT_SPECS` 只为其中的 JSON 子集叠加当前模型、schema version 与
-逐版本迁移，`ARTIFACTS` 继续作为兼容读法从它派生，不再有第二张手抄路径表。
+`contracts/schema/__init__.py::ARTIFACT_SPECS` 只为其中的 JSON 子集叠加当前模型与 schema version，
+`ARTIFACTS` 作为模型投影从它派生，不再有第二张手抄路径表。
 
-未标版本的存量 JSON 视作 v0；当前普通对象顶层带 `_schema_version`，RootModel 用
-`{_schema_version,payload}` 信封。迁移只做能由旧字节证明的无损转换；缺失新语义时明确拒读，
-错误必须带文件与版本。当前 Pydantic 模型不接受旧字段别名或双形状，兼容只发生在这一个读取边界。
+当前普通对象顶层带 `_schema_version`，RootModel 用 `{_schema_version,payload}` 信封。读取只接受
+注册表声明的当前版本；无标记、低版本和高版本都明确拒读，错误必须带文件与版本。当前 Pydantic
+模型同样不接受旧字段别名或双形状，需要保留的输入从产地按当前契约重新生成。
 
 ## 反推工具
 

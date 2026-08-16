@@ -46,7 +46,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import Field, RootModel, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from contracts.invariants import DEPTH_MODES
 from contracts.schema.base import Fp10, FrozenModel, StrictModel
@@ -385,29 +385,6 @@ class SemanticChapterClaims(StrictModel):
     coverage: Literal['complete', 'uncertain']
     uncertainty_reason: str | None = None
     claims: list[SemanticClaim]
-
-    @model_validator(mode='before')
-    @classmethod
-    def _normalise_uncertainty_reason_alias(cls, value):
-        """收敛 DeepSeek 实跑出现的解释键；不确定原因的冲突值仍然拒绝。"""
-        if not isinstance(value, dict):
-            return value
-        got = dict(value)
-        alias_keys = ('coverage_reason', 'coverage_note', 'reason', 'reasoning')
-        if got.get('coverage') == 'uncertain':
-            present = {
-                key: got[key] for key in ('uncertainty_reason', *alias_keys)
-                if key in got and got[key] not in (None, '')
-            }
-            if len({str(item) for item in present.values()}) > 1:
-                raise ValueError(f'不确定原因别名互相冲突：{list(present)}')
-            if not got.get('uncertainty_reason') and present:
-                got['uncertainty_reason'] = next(iter(present.values()))
-        # complete 时这些是模型擅自附带的过程说明，不把它偷换成“不确定”；真正写在
-        # uncertainty_reason 的矛盾仍交给 after validator 拒绝。
-        for alias in alias_keys:
-            got.pop(alias, None)
-        return got
 
     @model_validator(mode='after')
     def _uncertainty_is_explicit(self) -> SemanticChapterClaims:

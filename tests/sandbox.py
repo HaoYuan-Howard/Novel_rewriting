@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from contracts.schema import decode_artifact
+from contracts.schema import decode_artifact, encode_artifact
 from tests import corpus
 
 STAGE3_INPUTS = (
@@ -51,7 +51,10 @@ class Sandbox:
             assert data is not None, f'{book} 少了 {rel}，沙箱无法建立'
             path = self.dir / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+            path.write_text(
+                json.dumps(encode_artifact(rel, data), ensure_ascii=False),
+                encoding='utf-8',
+            )
 
     def read(self, rel: str) -> dict:
         raw = json.loads((self.dir / rel).read_text(encoding='utf-8'))
@@ -60,7 +63,10 @@ class Sandbox:
     def write(self, rel: str, data: dict) -> None:
         path = self.dir / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        path.write_text(
+            json.dumps(encode_artifact(rel, data), ensure_ascii=False),
+            encoding='utf-8',
+        )
 
     def close(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)

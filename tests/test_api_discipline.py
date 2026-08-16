@@ -153,6 +153,7 @@ def test_the_api_never_opens_cors():
 
 # ───────────────────────── `R-11.4` 界面不重算判据 ─────────────────────────
 
+@pytest.mark.corpus
 def test_no_read_only_response_carries_a_verdict():
     """判定只出现在 `CheckReport` 里。**视图不带结论**。
 
@@ -196,6 +197,7 @@ def test_the_three_state_domains_reach_the_wire():
     assert payload['job_state'] == list(JOB_STATE) and 'unknown' in payload['job_state']
 
 
+@pytest.mark.corpus
 def test_unknown_freshness_actually_happens_on_the_wire():
     """⭐ 「取值面里有」不等于「发得出来」。
 

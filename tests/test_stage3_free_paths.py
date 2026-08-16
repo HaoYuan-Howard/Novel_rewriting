@@ -9,13 +9,10 @@ test_stage3_free_paths.py —— stage3 的四条 0 成本路，**第一次被�
 在 D 期之前那四个函数**零调用点、零覆盖**——写好了，但从没有人跑过。
 
 【沙箱怎么来】拿显式配置的当前产物按 `corpus.load_current` 严格验证，
-写进 `mkdtemp()` 的一份拷贝里。
+写进 `Sandbox` 管理的一份临时拷贝里。
 ⚠ **原语料一个字节都不许动**；所有写盘动作只在临时目录执行。
-⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸 ⇒ 一律 `mkdtemp()`。
 """
 from __future__ import annotations
-
-import json
 
 import pytest
 
@@ -28,8 +25,11 @@ from novel.stages.stage3 import style
 from novel.store import ArtifactStore
 from tests import corpus, sandbox
 
-pytestmark = pytest.mark.skipif(corpus.corpus_root() is None,
-                                reason='盘上没有语料——这几条**没在查**，不是「查过没事」')
+pytestmark = [
+    pytest.mark.corpus,
+    pytest.mark.skipif(corpus.corpus_root() is None,
+                       reason='盘上没有语料——这几条**没在查**，不是「查过没事」'),
+]
 
 class Box(sandbox.Sandbox):
     def ctx(self, node: str = 'stage3.style') -> RunContext:
@@ -161,8 +161,7 @@ def _leak_a_real_name(box: Box) -> str:
     name = sorted(names_of(gg))[0]
     data = box.read('stage3/style_grounding.json')
     data['voice']['register_tone'] = f'{data["voice"]["register_tone"]}（例如{name}那几段）'
-    (box.dir / 'stage3' / 'style_grounding.INVALID.json').write_text(
-        json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    box.write('stage3/style_grounding.INVALID.json', data)
     return name
 
 
@@ -233,11 +232,10 @@ def test_remeasure_blocks_only_newly_introduced_errors(box):
 
     这里把一条 HARD 违规写进**正式产物**：重算前它就在，所以 `--remeasure` 照跑不误。
     """
-    p = box.dir / 'stage3' / 'style_grounding.json'
     gg = GlobalGrounding.model_validate(box.read('stage2/global_grounding.json'))
     data = box.read('stage3/style_grounding.json')
     data['voice']['register_tone'] += f'（例如{sorted(names_of(gg))[0]}那几段）'
-    p.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    box.write('stage3/style_grounding.json', data)
 
     _written, _diff, report = style.run_remeasure(box.ctx())
     assert 'name_leak' in {r.rule for r in report.rules

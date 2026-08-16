@@ -752,7 +752,6 @@ IDENTITY_BLIND: Final = (
 #: 而**它根本不花钱**。表不全 ⇒ 系统在对用户说假话。
 FREE_ENTRIES: Final = {
     '--dry-run': '只打印将要发出去的东西，不调用、不写盘',
-    '--prompt-only': '只量 prompt 体量',
     '--check-only': '按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零',
     '--recheck': '按当前判据重判存量产物并写回指标',
     '--revalidate': '按当前判据重判被闸门拦下的 .INVALID 稿，合格即提升为正式产物',
@@ -895,7 +894,6 @@ WRITE_EFFECTS: Final = {
     '--shallow-rest': '按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿',
     # ── 只看不动的四条（`FREE_ENTRIES` 自述「不写盘」）──
     '--dry-run': '',
-    '--prompt-only': '',
     '--check-only': '',
     '--measure-only': '',
     # ⚠ **它一个字节都不写**（原型只 `print` 逐章名册），而本表**默认按会写算** ⇒
@@ -1033,7 +1031,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
-                                 flags=('--prompt-only', '--check-only', '--renormalize',
+                                 flags=('--dry-run', '--check-only', '--renormalize',
                                         '--chapters', '--revalidate'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
@@ -1041,13 +1039,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--remeasure', '--revalidate', '--apply-edit',
                                          '--repair-surface-habits'),
                                  produces=(artifact_paths.STAGE3_STYLE_GROUNDING,)),
-    # ⚠ `--dry-run` 是 F3 补的，而它与 `--prompt-only` **不是重复登记**：
-    #   后者只量体量（原型的语义），前者摊开**要发出去的那几个字节**。
-    #   两个都留着是因为它们答的是不同的问题；而少了前者，
-    #   「渲染出来的 system 与原型逐字节相同」这条对账在 CLI 上根本走不通
-    #   ——贵贱闸会把它当成付费默认路径拦下（实测过一次）。
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 重构计划',
-                                 flags=('--dry-run', '--prompt-only', '--check-only',
+                                 flags=('--dry-run', '--check-only',
                                         '--revalidate', '--names-only', '--identity',
                                         '--apply-edit'),
                                  produces=(artifact_paths.STAGE4_PLAN_CHAPTERS,)),

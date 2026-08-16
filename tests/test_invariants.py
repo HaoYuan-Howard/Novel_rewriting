@@ -118,6 +118,12 @@ def test_node_flags_are_registered_run_modes():
     assert not bad, f'节点使用了未登记参数：{bad}'
 
 
+def test_prompt_preview_has_one_current_flag():
+    assert '--prompt-only' not in _known_flags()
+    assert '--dry-run' in inv.NODES['stage2.blueprint'].flags
+    assert '--dry-run' in inv.NODES['stage4.plan'].flags
+
+
 def test_paid_flags_are_registered_and_accepted_by_their_node():
     for node, spec in inv.NODES.items():
         assert set(spec.paid_flags) <= set(inv.PAID_FLAGS), node

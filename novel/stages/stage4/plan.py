@@ -200,7 +200,7 @@ def run_check_only(ctx: RunContext) -> CheckReport:
 
 
 def build_prompt(ctx: RunContext) -> tuple[str, str]:
-    """`--dry-run` / `--prompt-only`：把这次**要发出去的** `(system, user)` 原样交出来。
+    """`--dry-run`：把这次**要发出去的** `(system, user)` 原样交出来。
 
     ⚠ 它与真跑**共用同一个构造入口**（`R-11.8`）——否则「预览里看到的」与
     「真发出去的」是两件事，而那种分家没有任何东西会报错。

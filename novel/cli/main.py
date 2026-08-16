@@ -529,9 +529,10 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
 
     chapters = _chapters_of(_valued(flags, '--chapters'))
 
-    if '--prompt-only' in tokens:
+    if '--dry-run' in tokens:
         system, user = extract.build_prompt(ctx, chapters=chapters)
-        print(f'── 抽取 prompt 体量 ── system {len(system)} 字 · user {len(user)} 字')
+        print(f'── system（{len(system)} 字）──\n{system}')
+        print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
 
     if '--renormalize' in tokens:
@@ -591,14 +592,8 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
-    if tokens & {'--dry-run', '--prompt-only'}:
+    if '--dry-run' in tokens:
         system, user = plan.build_prompt(ctx)
-        if '--prompt-only' in tokens:
-            # ⚠ **`--prompt-only` 只量体量**（原型的语义），`--dry-run` 才摊开字节。
-            #   两个都留着是因为它们答的是不同的问题：一个是「这次要花多少 token」，
-            #   一个是「发出去的到底是哪几个字节」。
-            print(f'── 规划 prompt 体量 ── system {len(system)} 字 · user {len(user)} 字')
-            return X.OK
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK

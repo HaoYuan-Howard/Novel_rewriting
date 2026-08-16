@@ -286,7 +286,7 @@ def build_prompts(
 
 
 def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:
-    """`--prompt-only`：把这次要发出的第一条 ``(system, user)`` 原样交出来。
+    """`--dry-run`：把这次要发出的第一条 ``(system, user)`` 原样交出来。
 
     ⚠ 它与付费路**共用同一个构造入口**（`R-11.8`）——否则「预览里看到的」与
     「真发出去的」是两件事，而那种分家没有任何东西会报错。

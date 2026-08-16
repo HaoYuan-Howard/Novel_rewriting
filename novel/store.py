@@ -213,8 +213,7 @@ class ArtifactStore:
             return model.model_validate(decoded.payload), decoded.payload
         except ValidationError as e:
             raise ArtifactUnreadable(
-                f'{rel} 从 schema v{decoded.source_version} 升到 '
-                f'v{decoded.current_version} 后仍不合 {model.__name__} 的契约：\n{e}') from e
+                f'{rel} 的 schema v{decoded.version} 不合 {model.__name__} 的当前契约：\n{e}') from e
 
     # ── 写 ────────────────────────────────────────────────────────────────
 

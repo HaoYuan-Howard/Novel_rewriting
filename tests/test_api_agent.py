@@ -6,12 +6,10 @@ test_api_agent.py —— `/api/agent/runs` 各端点真的走一遍 HTTP（fake 
 钉五件事：preview 与真跑同构（`R-11.8`）、202 拉起、列表与字节续读日志、
 熄火闸、以及**两个方向的互斥**（agent 活 ⇒ 起作业 409；作业活 ⇒ 拉 agent 409）。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`；本批不需要语料、不需要模型配额。
+本批不需要语料、不需要模型配额。
 """
 from __future__ import annotations
 
-import shutil
-import tempfile
 import threading
 
 import pytest
@@ -27,11 +25,10 @@ UI = {UI_HEADER: '1'}
 
 
 @pytest.fixture
-def client():
-    base = tempfile.mkdtemp()
+def client(tmp_path):
+    base = str(tmp_path)
     with TestClient(create_app(base)) as c:
         yield c, base
-    shutil.rmtree(base, ignore_errors=True)
 
 
 def _ok_spawn(argv, cwd, env, log):

@@ -97,34 +97,12 @@ def test_numeric_claim_ids_are_normalised_at_the_llm_boundary():
 
 
 @pytest.mark.parametrize('alias', ['coverage_reason', 'coverage_note', 'reason', 'reasoning'])
-def test_uncertainty_reason_llm_aliases_are_normalised(alias):
-    response = SemanticClaimsResponse.model_validate({'chapters': [{
-        'output_ordinal': 1,
-        'coverage': 'uncertain',
-        alias: '本章有含混指涉',
-        'claims': [],
-    }]})
-    assert response.chapters[0].uncertainty_reason == '本章有含混指涉'
-
-
-@pytest.mark.parametrize('alias', ['coverage_reason', 'coverage_note', 'reason', 'reasoning'])
-def test_complete_coverage_drops_unrequested_explanatory_alias(alias):
-    response = SemanticClaimsResponse.model_validate({'chapters': [{
-        'output_ordinal': 1,
-        'coverage': 'complete',
-        alias: '已经逐段覆盖',
-        'claims': [],
-    }]})
-    assert response.chapters[0].uncertainty_reason is None
-
-
-def test_conflicting_uncertainty_reason_aliases_are_rejected():
-    with pytest.raises(ValueError, match='互相冲突'):
+def test_retired_uncertainty_reason_aliases_are_rejected(alias):
+    with pytest.raises(ValueError, match=alias):
         SemanticClaimsResponse.model_validate({'chapters': [{
             'output_ordinal': 1,
             'coverage': 'uncertain',
-            'uncertainty_reason': '甲',
-            'coverage_reason': '乙',
+            alias: '本章有含混指涉',
             'claims': [],
         }]})
 

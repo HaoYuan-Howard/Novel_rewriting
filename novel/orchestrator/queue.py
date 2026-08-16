@@ -30,7 +30,7 @@ import threading
 import time
 import traceback
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from contracts.invariants import NODES, STAGES

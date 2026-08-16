@@ -304,19 +304,6 @@ class CtxBeat(StrictModel):
     #: 因果前提，**命题必须成立、不必出现在文面**——按定义查不了文面，恒 `unver`。
     must_hold: list[str] | None = None
 
-    @model_validator(mode='before')
-    @classmethod
-    def _migrate_flat_empty_present(cls, value):
-        """旧版平铺拍把「适用但无人」写成 null；当前契约升级为显式空数组。
-
-        ``present=null`` 只保留给走 ``segments`` 的拍，表示顶层在场者不适用。
-        这是一条窄迁移，不对其余可空字段做全局 ``exclude_none`` 或猜测。
-        """
-        if (isinstance(value, dict) and value.get('segments') is None
-                and value.get('time_layer') is not None and value.get('present') is None):
-            return {**value, 'present': []}
-        return value
-
     @model_validator(mode='after')
     def _flat_or_segmented_stage(self) -> CtxBeat:
         if self.segments is None:

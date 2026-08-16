@@ -56,4 +56,8 @@ packages = ["contracts", "contracts.judges", "contracts.schema",
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-q"
+addopts = '-q -m "not corpus" --basetemp=.test_runtime'
+cache_dir = ".test_cache"
+markers = [
+    "corpus: optional integration checks against NOVEL_OUTPUT or local source corpora",
+]

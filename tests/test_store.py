@@ -8,8 +8,7 @@ test_store.py —— 唯一读写口 + 一次跑的上下文。
 `prompts` 非空而 `inputs` 是空的却照样落盘 · 归档没编号被覆盖 ·
 `.INVALID` 读完就删造出一条幽灵边 · Windows 上 `open(p,'w')` 把 LF 吐成 CRLF。
 
-⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，pytest 的 `tmp_path` 一用就炸
-——全仓一律 `tempfile.mkdtemp()`。
+测试临时根由 pytest 配置固定在仓库内，避免依赖机器级 `%TEMP%` ACL。
 """
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ import pytest
 from pydantic import BaseModel, Field, RootModel
 
 from contracts.schema import (
-    ArtifactVersionError, InputEdge, StyleGrounding, Usage, decode_artifact,
+    ArtifactVersionError, InputEdge, StyleGrounding, Usage, decode_artifact, encode_artifact,
 )
 from contracts.schema.stage3 import StyleProvenance
 from novel.consumption import CONSUMED_PROJECTIONS, producer_node, projection_for
@@ -56,7 +55,15 @@ class MainTextLoose(RootModel[list[dict]]):
 def _book(sid: str = '123', title: str = '书名', payload: bytes = b'{"sections": []}') -> Path:
     base = Path(tempfile.mkdtemp())
     (base / f'{title}_{sid}' / 'stage1').mkdir(parents=True)
-    (base / f'{title}_{sid}' / 'stage1' / 'main_text.json').write_bytes(payload)
+    try:
+        logical = json.loads(payload.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        disk = payload
+    else:
+        disk = json.dumps(
+            encode_artifact(UPSTREAM, logical), ensure_ascii=False,
+        ).encode('utf-8')
+    (base / f'{title}_{sid}' / 'stage1' / 'main_text.json').write_bytes(disk)
     return base
 
 
@@ -190,12 +197,18 @@ def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
     assert st.freshness(STYLE_REL).state == 'fresh'
 
     payload[0]['source_chapter_label'] = '标签改了但本节点不读'
-    upstream.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    upstream.write_text(
+        json.dumps(encode_artifact(UPSTREAM, payload), ensure_ascii=False),
+        encoding='utf-8',
+    )
     same = st.freshness(STYLE_REL)
     assert (same.state, same.reason) == ('fresh', 'match')
 
     payload[0]['text'] = '真正消费的正文改了'
-    upstream.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    upstream.write_text(
+        json.dumps(encode_artifact(UPSTREAM, payload), ensure_ascii=False),
+        encoding='utf-8',
+    )
     changed = st.freshness(STYLE_REL)
     assert (changed.state, changed.reason) == ('stale', 'consumed_changed')
 
@@ -284,7 +297,10 @@ def test_a_draft_cannot_be_read_through_the_edge_path():
     """
     base = _book()
     (base / '书名_123' / 'stage5' / 'deep').mkdir(parents=True)
-    (base / '书名_123' / 'stage5' / 'deep' / 'ch01.json').write_bytes(b'{"sections": []}')
+    (base / '书名_123' / 'stage5' / 'deep' / 'ch01.json').write_text(
+        json.dumps(encode_artifact('stage5/deep/ch01.json', {'sections': []})),
+        encoding='utf-8',
+    )
     ctx = _ctx(base)
     st = ArtifactStore(ctx)
     with pytest.raises(PathRefused, match='read_judged'):
@@ -873,25 +889,33 @@ def test_freshness_reads_raw_and_survives_an_artifact_that_no_longer_validates()
     base = _book()
     st = ArtifactStore(_ctx(base))
     (base / '书名_123' / 'stage3').mkdir()
-    (base / '书名_123' / 'stage3' / 'style_grounding.json').write_bytes(json.dumps({
-        '这份产物早就不合契约了': True,
+    malformed = {
+        '这份产物不合当前业务契约': True,
         '_provenance': {'inputs': {UPSTREAM: {'file': 'ffffffffff', 'consumed': None}}},
-    }, ensure_ascii=False).encode('utf-8'))
+    }
+    (base / '书名_123' / 'stage3' / 'style_grounding.json').write_text(
+        json.dumps(encode_artifact(STYLE_REL, malformed), ensure_ascii=False),
+        encoding='utf-8',
+    )
     r = st.freshness(STYLE_REL)
     assert (r.state, r.reason) == ('stale', 'file_changed')
     with pytest.raises(ArtifactUnreadable):
         st.read(StyleGrounding, STYLE_REL)          # ← 同一份，过模型就是读不出来
 
 
-def test_a_bad_key_in_a_legacy_provenance_does_not_blow_up_the_report():
-    """存量产物里的键可能是任何字符串。**别让一条坏键把整份报告干掉**——
+def test_a_bad_key_in_current_provenance_does_not_blow_up_the_report():
+    """当前产物里的来源键仍可能损坏。**别让一条坏键把整份报告干掉**——
     「有一条边指向已删文件」不该升级成「报告出不来」。"""
     base = _book()
     st = ArtifactStore(_ctx(base))
     (base / '书名_123' / 'stage3').mkdir()
-    (base / '书名_123' / 'stage3' / 'style_grounding.json').write_bytes(json.dumps({
-        '_provenance': {'inputs': {'../../别的书/x.json': {'file': 'ffffffffff', 'consumed': None}}},
-    }).encode('utf-8'))
+    malformed = {
+        '_provenance': {'inputs': {'../../别的书/x.json': {
+            'file': 'ffffffffff', 'consumed': None,
+        }}},
+    }
+    (base / '书名_123' / 'stage3' / 'style_grounding.json').write_text(
+        json.dumps(encode_artifact(STYLE_REL, malformed)), encoding='utf-8')
     r = st.freshness(STYLE_REL)
     assert (r.state, r.reason) == ('unknown', 'ghost')
 
@@ -985,10 +1009,12 @@ def test_opening_a_book_that_is_not_there_is_a_terminal_state():
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CORPUS = list(corpus.iter_artifacts()) if corpus.corpus_root() else []
-_NO_CORPUS = pytest.mark.skipif(
-    not _CORPUS,
-    reason=(f'未设置当前产物语料目录 `{corpus.CORPUS_ENV}`'
-            f'——**这一条现在没在查，不是「查过没事」**'))
+def _NO_CORPUS(test):
+    test = pytest.mark.corpus(test)
+    return pytest.mark.skipif(
+        not _CORPUS,
+        reason=(f'未设置当前产物语料目录 `{corpus.CORPUS_ENV}`'
+                f'——**这一条现在没在查，不是「查过没事」**'))(test)
 
 
 @_NO_CORPUS
@@ -1014,7 +1040,7 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
     try:
         obj = a.model.model_validate(corpus.load_current(a))
     except ArtifactVersionError as error:
-        pytest.skip(f'旧产物明确不可迁移，需重跑产地：{error}')
+        pytest.fail(f'当前产物语料中混入了非当前版本：{error}')
 
     base = Path(tempfile.mkdtemp())
     (base / 'roundtrip_1').mkdir(parents=True)

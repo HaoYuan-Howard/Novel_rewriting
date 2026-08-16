@@ -7,14 +7,11 @@ test_beacon.py —— 进度信标的写读、容错、折叠，以及 `mark` �
 这里钉四件事：append-only 的写读往返、半截行容错（只容忍最后一行）、
 四态折叠规则（`fold` 唯一落点）、`PIPELINE_STEPS` 与 `NODES` / SKILL 工作流表的对账。
 
-⚠ 沙箱一律 `tempfile.mkdtemp()`（本机 `%TEMP%\\pytest-of-*` 的 ACL 坏了，
-见 `test_api_http.py` 文件头）。
+临时目录由 pytest 提供，测试结束后自动清理。
 """
 from __future__ import annotations
 
 import json
-import shutil
-import tempfile
 
 import pytest
 
@@ -27,10 +24,8 @@ from novel.orchestrator import nodes as N
 
 
 @pytest.fixture
-def base():
-    d = tempfile.mkdtemp()
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
+def base(tmp_path):
+    return str(tmp_path)
 
 
 def _ev(ts, node, phase, exit_code=None, sid='42', note=None):

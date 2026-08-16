@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 
-from contracts.invariants import ENDING_SHAPES, SEP_BANDS
+from contracts.invariants import SEP_BANDS
 from contracts.schema.stage3 import Measurable, MeasurableBlock
 from novel.core.normalize import normalize_paragraphs as _normalize_paragraphs
 

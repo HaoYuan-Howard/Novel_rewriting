@@ -3,6 +3,8 @@
 """Stage5 当前成稿的归一幂等、机械读数与严格篇幅契约。"""
 from __future__ import annotations
 
+from functools import wraps
+
 import pytest
 
 from contracts.invariants import DEEP_OVERLAP_MAX
@@ -15,17 +17,38 @@ def _by_rel(rel: str) -> dict[str, object]:
     return {a.source_id: corpus.load_current(a) for a in corpus.iter_artifacts() if a.rel == rel}
 
 
-MAIN = _by_rel('stage1/main_text.json')
-STYLE = _by_rel('stage3/style_grounding.json')
-CTX = _by_rel('stage4/writer_context.json')
+MAIN: dict[str, object] = {}
+STYLE: dict[str, object] = {}
+CTX: dict[str, object] = {}
+_READY: set[str] = set()
+DRAFTS: list[corpus.Artifact] = []
+_CORPUS_LOADED = False
 
-_READY = set(MAIN) & set(STYLE) & set(CTX)
-#: 正式成稿；归档轮次不属于当前消费面。
-DRAFTS = [a for a in corpus.iter_artifacts()
-          if a.pattern == 'stage5/{mode}/ch{nn}.json' and '_rounds/' not in a.rel
-          and a.source_id in _READY]
 
-needs_corpus = pytest.mark.skipif(not DRAFTS, reason='盘上没有语料——本族对账无从谈起')
+def _load_corpus() -> None:
+    global MAIN, STYLE, CTX, _READY, DRAFTS, _CORPUS_LOADED
+    if _CORPUS_LOADED:
+        return
+    MAIN = _by_rel('stage1/main_text.json')
+    STYLE = _by_rel('stage3/style_grounding.json')
+    CTX = _by_rel('stage4/writer_context.json')
+    _READY = set(MAIN) & set(STYLE) & set(CTX)
+    # 正式成稿；归档轮次不属于当前消费面。
+    DRAFTS = [a for a in corpus.iter_artifacts()
+              if a.pattern == 'stage5/{mode}/ch{nn}.json' and '_rounds/' not in a.rel
+              and a.source_id in _READY]
+    _CORPUS_LOADED = True
+
+
+def needs_corpus(test):
+    @pytest.mark.corpus
+    @wraps(test)
+    def run(*args, **kwargs):
+        _load_corpus()
+        if not DRAFTS:
+            pytest.skip('盘上没有语料——本族对账无从谈起')
+        return test(*args, **kwargs)
+    return run
 
 
 def _ctx_of(sid: str, ordi: int) -> dict | None:

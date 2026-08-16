@@ -7,7 +7,6 @@ from contracts.artifacts import (
     STAGE5_BOOK_DRAFT, STAGE6_HOOK, STAGE7_NAME_MAP,
 )
 
-import json
 import os
 import threading
 from pathlib import Path

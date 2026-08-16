@@ -3,6 +3,7 @@
 """`writer_context` 当前契约的确定性组装与结构守卫。"""
 from __future__ import annotations
 
+from functools import wraps
 from typing import get_origin, get_type_hints
 
 import pytest
@@ -20,14 +21,37 @@ def _by(rel: str) -> dict[str, object]:
     return {a.source_id: corpus.load_current(a) for a in corpus.iter_artifacts() if a.rel == rel}
 
 
-MAIN = _by('stage1/main_text.json')
-BPS = _by('stage2/chapter_blueprints.json')
-GG = _by('stage2/global_grounding.json')
-PLANS = _by('stage4/plan_chapters.json')
-CTX = _by('stage4/writer_context.json')
-BOOKS = sorted(set(MAIN) & set(BPS) & set(GG) & set(PLANS) & set(CTX))
+MAIN: dict[str, object] = {}
+BPS: dict[str, object] = {}
+GG: dict[str, object] = {}
+PLANS: dict[str, object] = {}
+CTX: dict[str, object] = {}
+BOOKS: list[str] = []
+_CORPUS_LOADED = False
 
-needs_corpus = pytest.mark.skipif(not BOOKS, reason='盘上没有语料——本族对账无从谈起')
+
+def _load_corpus() -> None:
+    global MAIN, BPS, GG, PLANS, CTX, BOOKS, _CORPUS_LOADED
+    if _CORPUS_LOADED:
+        return
+    MAIN = _by('stage1/main_text.json')
+    BPS = _by('stage2/chapter_blueprints.json')
+    GG = _by('stage2/global_grounding.json')
+    PLANS = _by('stage4/plan_chapters.json')
+    CTX = _by('stage4/writer_context.json')
+    BOOKS = sorted(set(MAIN) & set(BPS) & set(GG) & set(PLANS) & set(CTX))
+    _CORPUS_LOADED = True
+
+
+def needs_corpus(test):
+    @pytest.mark.corpus
+    @wraps(test)
+    def run(*args, **kwargs):
+        _load_corpus()
+        if not BOOKS:
+            pytest.skip('盘上没有语料——本族对账无从谈起')
+        return test(*args, **kwargs)
+    return run
 
 #: 来源账由写盘口生成；纯组装器只负责正文形状，因此逐字段对账时单独排除。
 _GENERATED_TOP = frozenset({'_provenance'})
@@ -36,7 +60,7 @@ _GENERATED_TOP = frozenset({'_provenance'})
 def test_flat_and_segmented_present_have_distinct_serialized_meanings():
     flat = CtxBeat.model_validate({
         'events': ['空院里没有别人。'], 'budget_chars': 80, 'source_chars': 20,
-        'time_layer': 'present', 'place': '空院', 'present': None,
+        'time_layer': 'present', 'place': '空院', 'present': [],
     })
     assert flat.present == []
     assert flat.model_dump(mode='json')['present'] == []
@@ -50,6 +74,12 @@ def test_flat_and_segmented_present_have_distinct_serialized_meanings():
     })
     dumped = segmented.model_dump(mode='json')
     assert dumped['present'] is None and dumped['segments'][0]['present'] == []
+
+    with pytest.raises(ValueError, match='present'):
+        CtxBeat.model_validate({
+            'events': ['空院里没有别人。'], 'budget_chars': 80, 'source_chars': 20,
+            'time_layer': 'present', 'place': '空院', 'present': None,
+        })
 
     with pytest.raises(ValueError, match='只在 segments'):
         CtxBeat.model_validate({

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from contracts.invariants import NODES
-from contracts.schema import InputEdge, Provenance, Usage
+from contracts.schema import InputEdge, Provenance
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from novel import paths, prov
 from novel.errors import ProvenanceRefused
