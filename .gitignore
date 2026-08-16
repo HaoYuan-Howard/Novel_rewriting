@@ -35,3 +35,6 @@ dist/
 # IDE
 .idea/
 .vscode/
+
+# 本机 agent 权限与连接设置：不进入代码备份或 Git 远程
+.claude/settings.local.json
