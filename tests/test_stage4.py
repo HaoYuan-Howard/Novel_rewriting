@@ -11,7 +11,7 @@ from novel.run import RunContext
 from novel.stages.stage4 import plan, prompts
 from tests import corpus, sandbox
 
-#: 本层要的上游 + 它自己那两份。
+#: 本层要的上游 + 它自己那两份。全链根由 `sandbox.Sandbox` 恒带，不列在这里。
 STAGE4_INPUTS = ('stage1/main_text.json', 'stage2/global_grounding.json',
                  'stage2/chapter_blueprints.json',
                  'stage4/plan_chapters.json', 'stage4/writer_context.json')
@@ -88,6 +88,41 @@ def test_the_rebuilt_context_lands_on_disk_and_carries_the_plan_edge(book):
         box.close()
 
 
+@pytest.mark.parametrize('book', books())
+def test_the_context_is_fresh_even_when_the_paid_node_rebuilds_it_in_the_same_batch(book):
+    """⭐⭐ **付费那一趟顺手重建的上下文，必须当场就是 `fresh`。**
+
+    `stage4.plan` 写完计划会同批调 `run_context`，而 `consumed` 投影是按
+    **(节点, 上游)** 登记的：`stage4.plan` 与 `stage4.context` 对
+    `stage2/chapter_blueprints.json` 读的不是同一批字段，`stage4/plan_chapters.json`
+    更只在后者名下登记过。借调用方的 ctx 写这一份 ⇒ 写盘按 `stage4.plan` 记账、
+    freshness 按产地 `stage4.context` 复算，两侧永远对不上，
+    一份刚组好的上下文当场判 `consumed_changed`。
+
+    ⚠ 代价是主链断在下一层：`stage5.write` 读它会被 `_refuse_stale_upstream` 拒绝，
+    而报错长得像数据问题。⇒ 这里同时钉住两件事：写它的节点身份，与复算后的结论。
+    """
+    from novel.consumption import producer_node
+
+    assert producer_node(plan.CTX_REL) == plan.CTX_NODE, \
+        '产地节点与写它的节点分家了——consumed 投影两侧必然各算一份'
+
+    box = sandbox.Sandbox(book, STAGE4_INPUTS)
+    try:
+        # 付费节点的 ctx：同批重建走的就是这一条
+        plan.run_context(_ctx_for(box, 'stage4.plan'))
+        store = plan.ArtifactStore(_ctx_for(box, 'stage4.context'))
+        fr = store.freshness(plan.CTX_REL)
+        assert fr.state == 'fresh', (
+            f'刚组好的上下文判 {fr.state}（{fr.reason}）：'
+            f'{[(e.key, e.reason) for e in fr.edges if e.state != "fresh"]}')
+        art = WriterContext.model_validate(box.read('stage4/writer_context.json'))
+        assert all(edge.consumed for edge in (art.provenance.inputs or {}).values()), \
+            '有边的 consumed 是 null ⇒ 那条边的投影没在本节点名下登记过'
+    finally:
+        box.close()
+
+
 # ── 二、当前 prompt 契约 ─────────────────────────────────────────────────
 
 def test_system_prompt_contains_every_current_style_word():
@@ -120,7 +155,14 @@ def test_dry_run_builds_the_same_user_message_the_paid_path_would_send(book):
         # ⚠⚠ **`beat_id` 不许进规划视野**：它一旦下发，模型就有了重新编组的抓手，
         #    而那正是这一层收走的自由度。
         assert '"beat_id"' not in user
-        assert 'b01_01' not in user.split(prompts.BLOCK_BODY)[0], '骨架块里漏出了源 beat 编号'
+        # ⚠ 只量**骨架块**。断言原来切的是 `BLOCK_BODY` 之前的**全部**下发面，
+        #   而 `BLOCK_FACT_REFS` 里的 `events{beat_id: 章号}` 是**契约要求**下发的
+        #   （`fact_refs.catalog` 产它、`validate_plan_refs` 拿它验 `kind=='event'` 的引用）
+        #   ⇒ 旧口径把一条合法下发读成「漏出」，而它想守的是骨架那一块。
+        skeleton = user.split(prompts.BLOCK_SKELETON)[1]
+        for nxt in (prompts.BLOCK_SIZES, prompts.BLOCK_BODY):
+            skeleton = skeleton.split(nxt)[0]
+        assert 'b01_01' not in skeleton, '骨架块里漏出了源 beat 编号'
     finally:
         box.close()
 
@@ -144,7 +186,10 @@ def _synthetic_response(box: sandbox.Sandbox, *, poison: bool) -> dict:
                          for i, be in enumerate(ch['segments'], 1)]
         out['output_chapters'].append(c)
     if poison:
-        out['output_chapters'][0]['chapter_goal']['rationale'] += '，要有张力'
+        # ⚠ `rationale` 是可空键：某些书的计划里它就是 `null`，`+=` 会当场 TypeError
+        #   ——那是**测试自己炸了**，而它想验的闸门一次都没跑到。
+        goal = out['output_chapters'][0]['chapter_goal']
+        goal['rationale'] = (goal.get('rationale') or '') + '，要有张力'
     return out
 
 
@@ -197,10 +242,13 @@ def test_revalidate_promotes_the_fixed_plan_and_rebuilds_the_context():
             plan.write_plan(ctx, store, _synthetic_response(box, poison=True), up,
                             provenance=_provenance(ctx, up))
         # 人手改掉那个写法词（0 成本），再提升
+        # ⚠ `rationale` 的取值面是「非空串或 null」：原来无条件 `.replace()` 之后，
+        #   本来就是 `null` 的那些书会得到一个**空串**——载体当场拒收，而这条路
+        #   报出来的是「产物读不回来」，不是它要验的「提升成功没有」。
         inv = box.dir / 'stage4/plan_chapters.INVALID.json'
         fixed = json.loads(inv.read_text(encoding='utf-8'))
-        fixed['output_chapters'][0]['chapter_goal']['rationale'] = \
-            fixed['output_chapters'][0]['chapter_goal']['rationale'].replace('，要有张力', '')
+        goal = fixed['output_chapters'][0]['chapter_goal']
+        goal['rationale'] = (goal['rationale'] or '').replace('，要有张力', '') or None
         inv.write_text(json.dumps(fixed, ensure_ascii=False), encoding='utf-8')
 
         rep = plan.run_revalidate(_ctx_for(box, 'stage4.plan'))

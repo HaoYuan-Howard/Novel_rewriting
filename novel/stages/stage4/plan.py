@@ -45,6 +45,10 @@ from novel.store import ArtifactStore
 REL = STAGE4_PLAN_CHAPTERS
 CTX_REL = STAGE4_WRITER_CONTEXT
 
+#: 写作上下文的**产地节点**。`consumption.producer_node(CTX_REL)` 复算 freshness 时
+#: 取的就是它 ⇒ 写它的那一次跑必须也用这个节点记账（见 `context_ctx`）。
+CTX_NODE = 'stage4.context'
+
 #: 恒等基线那一份。⚠ **另一个文件名，不覆盖正式那份**——
 #: 「计划什么都不改时写手手里有什么」与「这一版计划下写手手里有什么」是两个问题。
 IDENTITY_CTX_REL = STAGE4_WRITER_CONTEXT_IDENTITY
@@ -236,12 +240,34 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
     return '\n\n'.join(parts)
 
 
+def context_ctx(ctx: RunContext) -> RunContext:
+    """组装写作上下文那一次跑，**必须记在 `stage4.context` 名下**。
+
+    ⚠⚠ `consumed` 投影是按 `(节点, 上游)` 登记的（`novel/consumption.py`），而
+    `stage4.plan` 与 `stage4.context` 对同一份上游读的**不是同一批字段**：
+    前者吃章摘要（`stage4_plan_blueprints`），后者吃叙述人称（`stage4_context_blueprints`），
+    而 `stage4/plan_chapters.json` 只在后者名下登记过投影。
+    写盘那一侧按 `ctx.node` 记账，freshness 那一侧按**产地节点**复算
+    （`store.freshness` → `consumption.producer_node`）⇒ 借 `stage4.plan` 的 ctx
+    写这一份，产出的来源账**必然**在下一次复算时判 `consumed_changed`：
+    一份刚刚组好的上下文当场显示 `stale`，而 `stage5.write` 读它会被
+    `_refuse_stale_upstream` 直接拒绝 —— 主链在这里断，且断得像数据问题。
+
+    ⇒ 与 stage2 `--full-extract` 同一条纪律（`novel/cli/main.py` 给 `stage2.blueprint`
+    与 `stage3.style` 各开一个 ctx）：**谁产的产物就记在谁名下**，不共用调用方的 ctx。
+    """
+    if ctx.node == CTX_NODE:
+        return ctx
+    return RunContext.open(ctx.novel_dir.parent, ctx.sid, CTX_NODE, paid=False)
+
+
 def run_context(ctx: RunContext) -> CheckReport:
     """`stage4.context`（0 成本节点）：从盘上那份计划重建写作上下文。
 
     ⚠⚠ **这一条走 `store.read` 而不是 `read_own`**：`plan_chapters.json` 是
     **另一个节点**（`stage4.plan`）产的，把它记成上游边**正是 `context_link` 要的东西**。
     """
+    ctx = context_ctx(ctx)
     store = ArtifactStore(ctx)
     if not store.exists(REL):
         raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage4.plan')
