@@ -1,0 +1,3 @@
+# The pinned tokenizer is a byte-verified upstream resource. Git must never
+# rewrite its LF bytes to CRLF on Windows checkouts.
+novel/llm/resources/deepseek_v4_tokenizer.json -text

@@ -132,6 +132,11 @@ def test_tokenizer_asset_is_packaged_and_matches_the_pinned_hash():
     assert resources.files('novel.llm').joinpath('resources/NOTICE.md').is_file()
 
 
+def test_git_never_rewrites_the_byte_verified_tokenizer_resource():
+    attributes = Path('.gitattributes').read_text(encoding='utf-8').splitlines()
+    assert 'novel/llm/resources/deepseek_v4_tokenizer.json -text' in attributes
+
+
 def test_tokenizer_hash_mismatch_is_a_terminal_refusal():
     with pytest.raises(ContextBudgetRefused, match='资源校验失败'):
         _verified_tokenizer_bytes(b'not the pinned tokenizer')
