@@ -43,6 +43,31 @@ class TerminalState(NovelError):
     """
 
 
+class ContextBudgetRefused(TerminalState):
+    """LLM 请求无法在已登记的供应商上下文预算内安全执行。
+
+    这道终态发生在缓存、账本和网络之前。它既覆盖确定超限，也覆盖无法可靠计算
+    （未知模型、tokenizer 缺失或固定资源校验失败）：后一类如果猜一个近似值放行，
+    就会把配置错误变成一次可能付费的试探请求。
+    """
+
+    requirement = 'R-12.6'
+
+    def __init__(self, message: str, *, model: str,
+                 input_tokens: int | None = None,
+                 max_tokens: int | None = None,
+                 context_limit: int | None = None,
+                 max_output_tokens: int | None = None,
+                 tokenizer_revision: str | None = None) -> None:
+        super().__init__(message)
+        self.model = model
+        self.input_tokens = input_tokens
+        self.max_tokens = max_tokens
+        self.context_limit = context_limit
+        self.max_output_tokens = max_output_tokens
+        self.tokenizer_revision = tokenizer_revision
+
+
 class UpstreamMissing(TerminalState):
     """要读的上游产物不在盘上。
 

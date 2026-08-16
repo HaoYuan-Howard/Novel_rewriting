@@ -120,6 +120,8 @@ STATUS: dict[type[NovelError], int] = {
 #: ⚠ 那条边界哪天松了（比如有人把付费路直接接进 HTTP 层），这张表要跟着改——
 #: 而上面那条测试会逼他先来读这段话。
 UNREACHABLE_OVER_HTTP: dict[str, str] = {
+    'ContextBudgetRefused': '供应商上下文预算预检在缓存/网络之前拒绝请求。它只由付费节点的'
+                            'LLM 子进程抛出，父进程只看到终态退出码',
     'LlmFailed': '降级阶梯走完仍没拿到可用的东西。它在**子进程**里抛，父进程只看到退出码',
     'TransportError': '一次请求没发成功（429/5xx/超时）。同上——服务进程结构上发不出请求',
     'MissingApiKey': '要发真请求了而没有 key。⚠ 它恰恰**证明**了那条边界：'

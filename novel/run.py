@@ -29,6 +29,7 @@ from typing import Any, Callable, TypeVar
 from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance
 from contracts.schema.common import FreeProvenance, LlmProvenance
+from contracts.artifacts import STAGE0_CLEAN_TEXT
 from novel import paths, prov
 from novel.errors import ProvenanceRefused
 from novel.llm.cache import CachePolicy
@@ -82,6 +83,8 @@ class RunContext:
 
     #: 上一份产物的账**结算到哪**。见 `_settled`。
     _usage_mark: UsageMark | None = field(default=None, repr=False)
+    _root_clean_sha1: str | None = field(default=None, init=False, repr=False)
+    _observed_roots: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.node not in NODES:
@@ -101,6 +104,13 @@ class RunContext:
         # （`novel/stages/stage5/write.py::_mode_of` 落显式终态）——
         # 在构造这一步拦，会让一次纯读的完成度查询因为「没选臂」而崩掉。
         self.novel_dir = Path(self.novel_dir)
+        clean_path = self.novel_dir / STAGE0_CLEAN_TEXT
+        if clean_path.is_file():
+            try:
+                self._root_clean_sha1 = prov.content_sha1(clean_path.read_bytes())
+            except OSError as exc:
+                raise ProvenanceRefused(
+                    f'读不了全链根正文 {clean_path}，不能铸造来源账：{exc!r}') from exc
         # 在这里而不是在 `open()` 里：手搭的 `RunContext`（测试、以后的 CLI）也得有起点。
         if self._usage_mark is None:
             self._usage_mark = self.ledger.snapshot()
@@ -130,6 +140,45 @@ class RunContext:
 
     def record_judged(self, rel: str, fp: str) -> None:
         self._judged[rel] = fp
+
+    def record_artifact_root(self, rel: str, root_clean_sha1: str | None) -> None:
+        if root_clean_sha1 is not None:
+            self._observed_roots[rel] = root_clean_sha1
+
+    @property
+    def root_clean_sha1(self) -> str:
+        clean_path = self.novel_dir / STAGE0_CLEAN_TEXT
+        try:
+            current = prov.content_sha1(clean_path.read_bytes()) if clean_path.is_file() else None
+        except OSError as exc:
+            raise ProvenanceRefused(
+                f'读不了全链根正文 {clean_path}，不能校验 root_clean_sha1：{exc!r}') from exc
+        if current is None:
+            raise ProvenanceRefused(
+                f'{self.node}: 缺少 stage0/clean_text.txt，不能为下游产物声明 root_clean_sha1')
+        return current
+
+    def _require_single_root(self) -> str:
+        root = self.root_clean_sha1
+        mismatched = {
+            rel: value for rel, value in self._observed_roots.items() if value != root
+        }
+        if mismatched:
+            raise ProvenanceRefused(
+                f'{self.node}: 读到了不同 root_clean_sha1 的上游：当前根={root}，'
+                f'不匹配={mismatched}。拒绝把混根输入铸成一份新产物')
+        return root
+
+    def require_observed_roots_current(self) -> None:
+        """LLM 请求前复核所有已读 provenance-bearing 输入仍属于当前根。
+
+        没有观察到来源根时不强造一条：响应/预算单元测试和独立 evaluator 可以没有
+        stage0 根；普通无 provenance 的 Stage1 产物则由 ``ArtifactStore.read`` 的
+        deterministic freshness bridge 负责。只要任一 typed 产物暴露了根，本闸就
+        必须在缓存、预算、账本和 transport 之前响。
+        """
+        if self._observed_roots:
+            self._require_single_root()
 
     @property
     def edges(self) -> dict[str, InputEdge]:

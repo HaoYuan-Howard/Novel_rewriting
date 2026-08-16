@@ -37,6 +37,7 @@ from pydantic import BaseModel, ValidationError
 
 from novel import config
 from novel.errors import TerminalState
+from novel.llm.budget import BudgetChecker, enforce_request_budget
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
@@ -127,7 +128,8 @@ class LlmClient:
                  concurrency: int = config.DEFAULT_CONCURRENCY,
                  sleep: Callable[[float], None] = time.sleep,
                  heartbeat_interval: float = DEFAULT_HEARTBEAT_SECONDS,
-                 clock: Callable[[], float] = time.perf_counter) -> None:
+                 clock: Callable[[], float] = time.perf_counter,
+                 budget_checker: BudgetChecker = enforce_request_budget) -> None:
         # ⚠ 四个默认值**引用** `novel/config.py`，不在这里再写一份字面量。
         #   那个文件抬头就写着「默认值都在这里，别在调用点再写一份」，而这里原来写了
         #   第二份（`3` / `2.0` / `2` / `'deepseek-v4-pro'`）。两份数分家时不会报错——
@@ -151,6 +153,9 @@ class LlmClient:
             raise ValueError(f'heartbeat_interval 不能为负数，实得 {heartbeat_interval}')
         self.heartbeat_interval = heartbeat_interval
         self._clock = clock
+        # 预算闸在两个公开入口、任何缓存读之前运行。测试可注入一把合成的精确计数尺，
+        # 但生产默认只有 ``enforce_request_budget`` 这一处供应商规格权威。
+        self._budget_checker = budget_checker
         #: 并发闸。⚠ 它守的不是速率，是**钱**：一次配置错误（prompt 漂了）在被人看见之前
         #: 能烧掉多少，与并发度成正比。见 `novel/config.py::DEFAULT_CONCURRENCY`。
         if not 1 <= concurrency <= config.MAX_CONCURRENCY:
@@ -178,9 +183,11 @@ class LlmClient:
         `self._rungs`。空阶梯是调用错误，不能伪装成「模型失败」。
         """
         active_rungs = self._rungs if rungs is None else tuple(rungs)
-        policy = cache_policy or self.ctx.cache
         if not active_rungs:
             raise ValueError(f'{self.ctx.node}/{purpose}: rungs 不能为空')
+        self._preflight(system, user, rungs=active_rungs, json_mode=False,
+                        max_tokens=max_tokens, purpose=purpose)
+        policy = cache_policy or self.ctx.cache
         tried: list[str] = []
 
         # 先横扫所有档位的已验证缓存，再发任何新请求。真实语义审判暴露过：一章在
@@ -234,8 +241,11 @@ class LlmClient:
                  require: tuple[str, ...] | None = None,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
                  validator: JsonValidator | None = None,
-                 progress: RequestProgress | None = None) -> M:
-        """结构化调用。走与 `ask_text` **同一条**默认阶梯（`self._rungs`），
+                 rungs: tuple[tuple[str, bool], ...] | None = None,
+                 progress: RequestProgress | None = None,
+                 cache_policy: CachePolicy | None = None) -> M:
+        """结构化调用。默认走与 `ask_text` **同一条**阶梯（`self._rungs`）；
+        只有收缩/裁决这类成本语义明确不同的辅助调用可显式收窄 `rungs`。
         解析失败与「结构上是空的」同等对待。
 
         ⚠⚠ **`model_cls` 是必填的，而 `require` 默认从它派生。**
@@ -261,6 +271,9 @@ class LlmClient:
         「缺的是哪一个顶层键」——那句话归②，不归 pydantic 的错误文本。
         三道闸失败的处置**完全一样**：驱逐这一档的缓存 + 降一档。
         """
+        active_rungs = self._rungs if rungs is None else tuple(rungs)
+        if not active_rungs:
+            raise ValueError(f'{self.ctx.node}/{purpose}: rungs 不能为空')
         derived = required_top_level(model_cls)
         if require is None:
             require = derived
@@ -269,6 +282,10 @@ class LlmClient:
                 f'{purpose}: require={sorted(require)} 里的 {extra} 不在 '
                 f'{model_cls.__name__} 的必需顶层键 {sorted(derived)} 里。'
                 f'显式传只许**收窄**——放宽等于给这个调用点开一个「它特殊」的口子')
+
+        policy = cache_policy or self.ctx.cache
+        self._preflight(system, user, rungs=active_rungs, json_mode=True,
+                        max_tokens=max_tokens, purpose=purpose)
 
         def inspect_response(resp: ChatResponse) -> tuple[M | None, str | None, str]:
             content = _strip_fences(resp.content)
@@ -297,10 +314,11 @@ class LlmClient:
         errors: list[str] = []
 
         # 同 ask_text：任一档已有合格缓存时，本次必须是 0 次真请求。
-        for effort, thinking in self._rungs:
+        for effort, thinking in active_rungs:
             got = self._read_cached(
                 system, user, effort=effort, thinking=thinking, json_mode=True,
-                max_tokens=max_tokens, purpose=purpose, progress=progress)
+                max_tokens=max_tokens, purpose=purpose, progress=progress,
+                cache_policy=policy)
             if got is None:
                 continue
             resp, key = got
@@ -312,27 +330,46 @@ class LlmClient:
             self.cache.evict(key)
             errors.append(f'{head} {why}')
 
-        for effort, thinking in self._rungs:
+        for effort, thinking in active_rungs:
             resp, key, _cached = self._call_keyed(
                 system, user, effort=effort, thinking=thinking, json_mode=True,
                 max_tokens=max_tokens, purpose=purpose, use_cache=False,
-                progress=progress)
+                progress=progress, cache_policy=policy)
             obj, why, content = inspect_response(resp)
             head = (f'effort={effort} think={thinking} '
                     f'finish={resp.finish_reason} clen={len(content)}')
             if why is None:
-                self._keep(key, resp)
+                self._keep(key, resp, cache_policy=policy)
                 return obj
             # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
             self.cache.evict(key)
             errors.append(f'{head} {why}')
         raise LlmFailed(
-            f'{self.ctx.node}/{purpose}: 走完 {len(self._rungs)} 档阶梯仍然没有可用的 JSON。\n  '
+            f'{self.ctx.node}/{purpose}: 走完 {len(active_rungs)} 档阶梯仍然没有可用的 JSON。\n  '
             + '\n  '.join(errors)
             + f'\n⚠ 必需顶层键来自 {model_cls.__name__}（判据 39：每个结构化调用点'
               f'声明【全部】必需顶层键，而这一条现在由派生保证）')
 
     # ── 一次调用：缓存 → 传输层重试 → 记账 ────────────────────────────────
+
+    def _preflight(self, system: str, user: str, *,
+                   rungs: tuple[tuple[str, bool], ...], json_mode: bool,
+                   max_tokens: int, purpose: str) -> None:
+        """把整条降级阶梯一次验完；返回前没有缓存、账本、网络或文件副作用。"""
+        self.ctx.require_observed_roots_current()
+        requests = tuple(
+            ChatRequest(
+                model=self.model,
+                system=system,
+                user=user,
+                reasoning_effort=effort,
+                thinking=thinking,
+                json_mode=json_mode,
+                max_tokens=max_tokens,
+            )
+            for effort, thinking in rungs
+        )
+        self._budget_checker(requests, node=self.ctx.node, purpose=purpose)
 
     def _read_cached(self, system: str, user: str, *, effort: str, thinking: bool,
                      json_mode: bool, max_tokens: int, purpose: str,
