@@ -223,7 +223,7 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
     book_text, secidx = render_book(mt)
     projected = prompts.project_blueprints_for_planner(up.blueprints, up.groups)
     assert up.global_g is not None
-    refs = fact_catalog(up.global_g, up.blueprints, up.main_text)
+    refs = fact_catalog(up.global_g, up.blueprints, up.main_text, plan_units=up.groups)
     # ⚠ 与原型的 `compact()` 同形：**最紧的 JSON**（无空格）——
     #   规划的 user 里带着全书原文，骨架那一段每一个空格都在挤原文的预算。
     bs = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
@@ -338,7 +338,8 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
     data.pop('_provenance', None)
     assert up.global_g is not None
     validate_plan_refs(
-        data, fact_catalog(up.global_g, up.blueprints, up.main_text))
+        data, fact_catalog(up.global_g, up.blueprints, up.main_text,
+                           plan_units=up.groups))
     art = PlanChapters.model_validate({**data, '_provenance': provenance})
     outcomes = _judge(store, {**data, '_provenance': provenance.model_dump(by_alias=True)},
                       up, with_ctx_link=False)

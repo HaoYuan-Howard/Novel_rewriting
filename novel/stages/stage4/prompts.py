@@ -60,6 +60,10 @@ PLAN_SYS = fill("""\
     rationale：可选，仅供审计，写手不会收到。不要在 rationale 里另造事实。
     **open_hook_goal 至少引用首个写作单元中的一条 event；end_hook_goal 至少引用最后一个
     写作单元中的一条 event。**目标与结构必须指向同一个开头/结尾，不能各说各话。
+    【怎么选中那条 event】事实目录的 `event_units` 给出 `event 编号 → 源内容单元编号`。
+    先定下这一章 segments[0] 与 segments[-1] 各放了哪些 `pNN_NN`，
+    再从 `event_units` 里挑一条落在该单元里的 event 编号写进 fact_refs。
+    **不要凭骨架里的正文顺序去猜 event 编号**：两者不是一一对应的。
   segments[]：【重构后的写作单元，数组顺序就是成稿顺序】：
     plan_beats[]：把一个或多个源内容单元编号放进本单元，数组内部顺序也是落笔顺序。
       全章所有编号必须恰好出现一次。允许跨原相邻关系合并，也允许把后面的事件提到前面。
@@ -148,7 +152,12 @@ PLANNER_CHAPTER_KEYS = ('chapter_ordinal', 'summary')
 #: 五个块头。⚠ **逐字进 prompt，所以它们的措辞是契约的一部分**；
 #: system 与 user 下发面都由测试锁定。
 BLOCK_INDEX = '── 章节索引（阅读序）──'
-BLOCK_FACT_REFS = '── 可引用事实目录（goal.fact_refs 只能从这里选择）──'
+#: ⚠ `event_units` 是 2026-08-17 补的那道 join（见 `fact_refs.catalog` 的注释）：
+#: 骨架块按设计不下发 `beat_id`，而 `goal_landing` 要求边界目标落在首/尾写作单元里
+#: ⇒ 不给这张表，那条 HARD 按构造就没法满足。块头逐字进 prompt，改它等于改下发面。
+BLOCK_FACT_REFS = ('── 可引用事实目录（goal.fact_refs 只能从这里选择）──\n'
+                   '`event_units` 是 `event 编号 → 源内容单元编号`：'
+                   '要让边界目标落在首/尾写作单元里，就从这张表反查该单元的 event 编号。')
 BLOCK_SKELETON = '── 章节骨架（blueprints，拍已切好，含各拍 plan_beat 编号）──'
 BLOCK_SIZES = ('── 各拍源字数（算好的，直接用；逐拍相加即本章源字数）──\n'
                '格式 `plan_beat=源字数(逐字N)`。括号是这一拍【必须一字不改写进正文】的原话字数，\n'

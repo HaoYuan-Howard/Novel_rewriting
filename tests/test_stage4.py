@@ -3,6 +3,8 @@
 """Stage4 当前契约的节点、prompt、闸门和免费维护路径。"""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from contracts.rules import REGISTRY
@@ -163,6 +165,41 @@ def test_dry_run_builds_the_same_user_message_the_paid_path_would_send(book):
         for nxt in (prompts.BLOCK_SIZES, prompts.BLOCK_BODY):
             skeleton = skeleton.split(nxt)[0]
         assert 'b01_01' not in skeleton, '骨架块里漏出了源 beat 编号'
+    finally:
+        box.close()
+
+
+@pytest.mark.parametrize('book', books())
+def test_the_planner_can_actually_satisfy_goal_landing_from_what_it_is_given(book):
+    """⭐ **一条 HARD 的可满足性，必须由下发面本身保证。**
+
+    `goal_landing` 要求边界目标引用**首/尾写作单元里**的一条 event，而：
+      · 骨架块按设计不下发 `beat_id`（上一条测试正钉着这一点）；
+      · 事实目录的 `events` 只有 `bNN_MM → 章号`，没有正文也没有所属单元。
+    两块拼起来，模型手里是一堆没有含义的 id 加一堆没有 id 的正文——
+    中间那道 join 谁也没给它 ⇒ 那条 HARD 只能靠序号碰巧对上。
+    实测（常春杜若，2026-08-17 首跑）50 个边界目标错 20 个，
+    而 20 条的 `rationale` 全都正确描述了目标单元里的那一拍。
+
+    ⇒ 本条守的不是「模型会不会照做」，而是**照做所需的信息在不在下发面里**。
+    """
+    box = sandbox.Sandbox(book, STAGE4_INPUTS)
+    try:
+        _system, user = plan.build_prompt(_ctx_for(box, 'stage4.plan'))
+        refs = json.loads(
+            user.split(prompts.BLOCK_FACT_REFS)[1].split(prompts.BLOCK_SKELETON)[0].strip())
+        units = refs['event_units']
+        assert set(units) == set(refs['events']), \
+            '每一条可引用 event 都必须查得到它属于哪个源内容单元，一条都不能少'
+        # 反查得到 ⇒ 「首个写作单元里有哪些 event 可引用」是个可答的问题。
+        by_unit: dict[str, list[str]] = {}
+        for event_id, unit in units.items():
+            by_unit.setdefault(unit, []).append(event_id)
+        assert all(by_unit.values()), '存在一个查不出任何 event 的源内容单元'
+        # 而单元编号必须与骨架块用的是同一套，否则这张表反查不到任何东西。
+        skeleton = user.split(prompts.BLOCK_SKELETON)[1]
+        assert f'"plan_beat":"{sorted(by_unit)[0]}"' in skeleton, \
+            'event_units 的单元编号与骨架块下发的 plan_beat 不是同一套'
     finally:
         box.close()
 

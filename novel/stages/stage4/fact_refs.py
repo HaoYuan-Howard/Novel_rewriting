@@ -10,14 +10,38 @@ def catalog(
     global_g: dict[str, Any],
     blueprints: dict[str, Any],
     main_text: list[dict[str, Any]],
+    *,
+    plan_units: dict[Any, list[list[str]]],
 ) -> dict[str, Any]:
-    """Stable identifiers and their recomputable chapter/reveal boundaries."""
+    """Stable identifiers and their recomputable chapter/reveal boundaries.
+
+    ⚠⚠ `plan_units` 是必填而不是可选：少了它，目录会退回「只有 `bNN_MM → 章号`」
+    那一版，而规划者的骨架块**按设计不下发 `beat_id`**
+    （`project_blueprints_for_planner` 的那条注释）——两块拼起来，模型手里就有了
+    一堆没有含义的 id 和一堆没有 id 的正文，中间那道 join 谁也没给它。
+    而 `PLAN_SYS` 又要求「`open_hook_goal` 至少引用**首个写作单元**中的一条 event」，
+    `goal_landing` 还把它做成 HARD ⇒ **一条按构造无法满足的阻断级判据**。
+    实测（常春杜若，2026-08-17 首跑）：50 个边界目标错 20 个，
+    而那 20 条的 `rationale` 全都正确描述了目标单元里的那一拍——模型读得懂骨架正文，
+    只是没法把正文映回 b 号。⇒ 目录必须把这道 join 一起给出来。
+    给出 join **不等于**给了「重新编组」的抓手：`plan_beats[]` 只收 `pNN_MM`，
+    而拆开/换序一个源单元由 `structure_units` 那条 HARD 挡着。
+    """
     chapters = sorted(int(row.get('chapter_ordinal') or 0) for row in main_text)
     events = {
         beat.get('beat_id'): int(bp.get('chapter_ordinal') or 0)
         for bp in (blueprints.get('blueprints') or [])
         for beat in (bp.get('beats') or [])
         if beat.get('beat_id')
+    }
+    # ⚠ 用与骨架块**同一个**编号函数，不在这里手拼 `f'p{o:02d}_{i:02d}'`：
+    #   两处各拼一份，就是同一个编号的第二个落点。
+    from novel.stages.stage4.beats import plan_beat_id
+    event_units = {
+        bid: plan_beat_id(ordinal, index)
+        for ordinal, units in (plan_units or {}).items()
+        for index, unit in enumerate(units, 1)
+        for bid in unit
     }
     entities = global_g.get('entities') or {}
     characters = sorted((entities.get('characters') or {}).keys())
@@ -42,6 +66,10 @@ def catalog(
     return {
         'chapters': chapters,
         'events': events,
+        # 这条 event 属于哪个源内容单元。⚠ 与 `events` 分成两个键而不是把值改成对象：
+        # `validate_plan_refs` 拿 `events[key] == ordinal` 判归属，换形状要改两处判定，
+        # 而这一次要补的只是**下发面缺的那道 join**，不是引用契约。
+        'event_units': event_units,
         'characters': characters,
         'relations': relations,
         'world_rules': rules,
