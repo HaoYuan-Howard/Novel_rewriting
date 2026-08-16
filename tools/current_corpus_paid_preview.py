@@ -180,8 +180,15 @@ class PreviewSpec(_Strict):
         if len({book.sid for book in self.books}) != 2:
             raise ValueError('current corpus 必须是两本不同 sid')
         bases = [book.base.resolve() for book in self.books]
-        if bases[0] == bases[1] or bases[0] in bases[1].parents or bases[1] in bases[0].parents:
-            raise ValueError('两本 current corpus 必须使用互不重叠的隔离 base')
+        # Canonical corpus 两本书共享一个 NOVEL_OUTPUT 根，隔离边界是
+        # ``<title>_<sid>`` 书目录与每 sid cache，不是伪造两个 output 根。
+        # 完全相同的 base 因此合法；一本指向另一本 base 子树仍会把
+        # service/cache 与书目边界绕乱，必须拒绝。
+        if bases[0] != bases[1] \
+                and (bases[0] in bases[1].parents or bases[1] in bases[0].parents):
+            raise ValueError(
+                '两本 current corpus 的 base 可完全相同或互不重叠；'
+                '不得为祖先/子孙目录')
         return self
 
 

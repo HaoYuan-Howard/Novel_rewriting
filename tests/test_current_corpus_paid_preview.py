@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from novel.stages.stage0.removal import _context, run_approve, run_source
+from novel.stages.stage1.partition import run_partition
 from tools import current_corpus_paid_preview as P
 
 
@@ -26,6 +28,25 @@ def _spec(tmp_path: Path, *, ledger: Path | None = None) -> P.PreviewSpec:
                 'source': source,
             }
             for index, source in enumerate(SOURCES, 1)
+        ],
+    })
+
+
+def _shared_spec(
+    tmp_path: Path,
+    *,
+    input_kind: str = 'source',
+) -> P.PreviewSpec:
+    shared = tmp_path / 'NOVEL_OUTPUT'
+    return P.PreviewSpec.model_validate({
+        'books': [
+            {
+                'sid': P.paths.derive_source_meta(source.name)[0],
+                'base': shared,
+                'input_kind': input_kind,
+                **({'source': source} if input_kind == 'source' else {}),
+            }
+            for source in SOURCES
         ],
     })
 
@@ -78,6 +99,63 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
     assert '--shallow-rest' in write['production_cli_argv']
     with pytest.raises(SystemExit):
         P._parser().parse_args(['--execute'])
+
+
+def test_source_preview_allows_one_canonical_output_root_with_per_sid_isolation(tmp_path):
+    spec = _shared_spec(tmp_path)
+    plan = P.build_plan(spec, token_counter=lambda _request: 1)
+    shared = spec.books[0].base.resolve()
+
+    assert {Path(book['base']) for book in plan['books']} == {shared}
+    assert len({Path(book['novel_dir']) for book in plan['books']}) == 2
+    assert all(Path(book['novel_dir']).parent == shared for book in plan['books'])
+    assert len({Path(book['cache']) for book in plan['books']}) == 2
+    assert all(Path(book['cache']).parent.parent == shared / '_service'
+               for book in plan['books'])
+    assert all(
+        Path(row['production_cli_argv'][
+            row['production_cli_argv'].index('--base') + 1]).resolve() == shared
+        for row in plan['dispatches']
+    )
+    assert not shared.exists(), '只读 source 预览不得创建共享 output 根'
+
+
+def test_stage1_preview_reads_two_books_from_one_canonical_output_root(tmp_path):
+    source_spec = _shared_spec(tmp_path)
+    shared = source_spec.books[0].base
+    for book in source_spec.books:
+        assert book.source is not None
+        novel_dir, removed, _ = run_source(book.source, shared)
+        if removed.report.approved != 'approved':
+            run_approve(
+                _context(novel_dir, 'stage0.approve'),
+                actor='current-corpus-preview-test',
+                reason='为共享根 Stage1 只读预览构造已批准 fixture',
+            )
+        run_partition(_context(novel_dir, 'stage1.partition'))
+
+    plan = P.build_plan(
+        _shared_spec(tmp_path, input_kind='stage1'),
+        token_counter=lambda _request: 1,
+    )
+
+    assert {book['input_kind'] for book in plan['books']} == {'stage1'}
+    assert {Path(book['base']) for book in plan['books']} == {shared.resolve()}
+    assert len({Path(book['novel_dir']) for book in plan['books']}) == 2
+    assert len({Path(book['cache']) for book in plan['books']}) == 2
+
+
+def test_book_specs_still_reject_same_sid_and_ancestor_bases(tmp_path):
+    payload = _spec(tmp_path).model_dump(mode='python')
+    payload['books'][1]['sid'] = payload['books'][0]['sid']
+    with pytest.raises(ValueError, match='不同 sid'):
+        P.PreviewSpec.model_validate(payload)
+
+    payload = _spec(tmp_path).model_dump(mode='python')
+    payload['books'][0]['base'] = tmp_path / 'NOVEL_OUTPUT'
+    payload['books'][1]['base'] = tmp_path / 'NOVEL_OUTPUT' / 'nested'
+    with pytest.raises(ValueError, match='祖先/子孙'):
+        P.PreviewSpec.model_validate(payload)
 
 
 def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
