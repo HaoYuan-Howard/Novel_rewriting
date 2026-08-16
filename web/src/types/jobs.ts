@@ -86,10 +86,18 @@ export interface UploadResponse {
 }
 
 export interface JobLogResponse {
-  lines: string[]
+  lines: JobLogLine[]
   /** 下次从这里续取 */
   offset: number
   done: boolean
+}
+
+export interface JobLogLine {
+  text: string
+  /** Present for @observe rows so diagnostics never disappear behind a friendly summary. */
+  raw: string | null
+  details: Record<string, unknown> | null
+  kind: 'plain' | 'observation' | 'malformed'
 }
 
 /** POST /api/jobs/preview 的返回：确认框里原样摆出的那条命令 */
@@ -98,6 +106,12 @@ export interface JobPreview {
   paid: boolean
   label: string
   kind: string
+  steps: Array<{
+    label: string
+    paid: boolean
+    writes: string
+    argv: string
+  }>
 }
 
 /**

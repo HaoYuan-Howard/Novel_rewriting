@@ -40,5 +40,19 @@ export interface EnumsResponse {
   job_kinds: Record<string, EnumJobKind>
   actions: EnumAction[]
   uncovered_min_chars: number
-  partial_mask_note: string
+  /**
+   * This is an honest display boundary, not an access-control boundary: the server still
+   * sends the complete stage2 document and the adapter projects it before a Screen sees it.
+   */
+  spoiler_disclosure: {
+    mode: 'display_only'
+    security_boundary: false
+    server_sends_full_data: true
+    hidden_paths: string[]
+    known_leakage_surfaces: string[]
+    consumers: string[]
+    notice: string
+  }
+  /** Compatibility with frozen v1 fixtures; new servers publish spoiler_disclosure. */
+  partial_mask_note?: string
 }

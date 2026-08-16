@@ -202,7 +202,8 @@ class JobRecord(StrictModel):
     ended: int | None
     exit_code: int | None
 
-    #: §三那四态。**`unknown` 是真状态，不是缺省值**（`R-11.11`）。
+    #: 五态；`landed_red` 明确区分「产物已落盘」与「命令没跑成」。
+    #: **`unknown` 是真状态，不是缺省值**（`R-11.11`）。
     state: JobState
 
     #: 已经开始过的步数（由 `step` 事件数出来）。
@@ -215,12 +216,13 @@ class JobRecord(StrictModel):
     def _state_matches_the_events(self) -> JobRecord:
         """折叠规则只有一处算。**第二处必然分家**（同 `CheckReport` 的 badge）。"""
         if self.exit_code is None:
-            if self.state in ('ok', 'failed'):
+            if self.state in ('ok', 'landed_red', 'failed'):
                 raise ValueError(
                     f'state={self.state!r} 而没有 exit_code——'
                     f'「跑完了」这个结论只能从退出码来')
         else:
-            want = 'ok' if self.exit_code == 0 else 'failed'
+            want = ('ok' if self.exit_code == 0 else
+                    'landed_red' if self.exit_code == 1 else 'failed')
             if self.state != want:
                 raise ValueError(f'exit_code={self.exit_code} 应折叠成 {want!r}，'
                                  f'实得 {self.state!r}')
@@ -374,7 +376,7 @@ class AgentRunRecord(StrictModel):
     ended: int | None
     exit_code: int | None
 
-    #: `JobState` 那四态。**`unknown` 是真状态，不是缺省值**（`R-11.11` 同构）：
+    #: `JobState` 那五态。**`unknown` 是真状态，不是缺省值**（`R-11.11` 同构）：
     #: 服务重启后，子进程是死是活我们真的不知道。
     state: JobState
 
@@ -385,12 +387,13 @@ class AgentRunRecord(StrictModel):
     def _state_matches_the_events(self) -> AgentRunRecord:
         """折叠规则只有一处算（同 `JobRecord` 那条）。"""
         if self.exit_code is None:
-            if self.state in ('ok', 'failed'):
+            if self.state in ('ok', 'landed_red', 'failed'):
                 raise ValueError(
                     f'state={self.state!r} 而没有 exit_code——'
                     f'「跑完了」这个结论只能从退出码来')
         else:
-            want = 'ok' if self.exit_code == 0 else 'failed'
+            want = ('ok' if self.exit_code == 0 else
+                    'landed_red' if self.exit_code == 1 else 'failed')
             if self.state != want:
                 raise ValueError(f'exit_code={self.exit_code} 应折叠成 {want!r}，'
                                  f'实得 {self.state!r}')
@@ -492,6 +495,18 @@ class StageState(StrictModel):
     #: 把被拦下的那份数进去就把语义反过来了。
     chapters_done: dict[str, list[int]] = Field(default_factory=dict)
 
+    #: 轮次编号产物（`stage5/review_{n}.json` / `stage5/semantic_{n}.json` /
+    #: `stage6/semantic_{n}.json`）盘上已有的编号，键是**产它的节点**。
+    #:
+    #: ⚠⚠ **它与 `chapters_done` 不是同一件事，合并会把 bug 装回去。**
+    #: 这两类产物的路径都带 `{}`，于是 `required_artifacts` 一并丢掉、
+    #: `artifacts[]` 里没有它们的行；此前续跑判定只剩 stage 级 `done` 可问，
+    #: 而 stage5 的 `done` 说的是**章稿写全了没有**——拿它答「全书验收跑过没有」，
+    #: 答案恒为「跑过了」，**而盘上一份 `review_*.json` 都没有**。
+    #: 实测：批量队列把 `stage5.review`（0 成本）与 `stage5.semantic`（付费）
+    #: 双双记成 `done` 却一次都没执行。⇒ 逐章有逐章的账，轮次有轮次的账。
+    rounds_done: dict[str, list[int]] = Field(default_factory=dict)
+
     #: 只读导航能否进入。它不是运行闸门；运行/定稿仍看 approvals。
     reviewable: bool
 
@@ -538,6 +553,10 @@ class NovelOverview(StrictModel):
     title: str = Field(min_length=1)
     dirname: str = Field(min_length=1)
 
+    #: stage1 主正文一落盘即可确定的总章数；还没分章 / 读不回时为 `None`。
+    #: 语料库列表复用本模型，因此不用对每本书再发一次 `/stage1/chapters`。
+    chapters: int | None = Field(default=None, ge=1)
+
     stages: list[StageState] = Field(default_factory=list)
 
     #: glob `stage5/*` 得到的目录名。stage5 的粒度是**章**（`R-14.2`）。
@@ -558,8 +577,9 @@ class QueueItem(StrictModel):
     mode: str | None = None
     flags: list[str] = Field(default_factory=list)
 
-    #: 与真跑**同一个 `build_steps`**（`R-11.8`）。
-    steps: list[Step] = Field(min_length=1)
+    #: 与真跑**同一个 `build_steps`**（`R-11.8`）。需要人工选择才能拼出命令的
+    #: blocked 项可以暂时为空；一旦可运行，必须带精确命令快照。
+    steps: list[Step] = Field(default_factory=list)
 
     #: 为什么排它（`产物不存在` / `上游变过 ⇒ 重来` / `.INVALID 待处理`…）。
     #: ⚠ **必填**：一份说不出理由的计划，人没法判断该不该批准它花钱。
@@ -568,6 +588,14 @@ class QueueItem(StrictModel):
     #: ⭐ 在等谁（`R-13.5` 与 `R-0.3b` 用的是同一句话：「明确说出在等谁」）。
     #: `None` = 没在等谁，可以跑。
     waiting_on: str | None = None
+
+    @model_validator(mode='after')
+    def _runnable_items_have_a_command(self) -> QueueItem:
+        if not self.steps and not self.waiting_on:
+            raise ValueError(
+                'a runnable queue item must carry its exact command snapshot; '
+                'only an item blocked on a human choice may have no steps')
+        return self
 
 
 class QueueCounts(StrictModel):
@@ -641,10 +669,11 @@ class QueuePlan(StrictModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 QueueEntryState = Literal[
-    'pending', 'running', 'unknown', 'done', 'failed', 'not_run', 'cancelled', 'blocked',
+    'pending', 'running', 'unknown', 'done', 'landed_red', 'failed', 'not_run',
+    'cancelled', 'blocked',
 ]
 QueueRunState = Literal[
-    'pending', 'running', 'unknown', 'ok', 'failed', 'blocked', 'cancelled',
+    'pending', 'running', 'unknown', 'ok', 'landed_red', 'failed', 'blocked', 'cancelled',
 ]
 QueueEventKind = Literal['created', 'item_state']
 
@@ -705,8 +734,11 @@ class QueueEvent(FrozenModel):
             raise ValueError('running queue item must name its job_id')
         if self.state == 'unknown' and (not self.job_id or not self.note):
             raise ValueError('unknown queue item must name its job and explain the uncertainty')
-        if self.state == 'failed' and (not self.job_id or self.exit_code in (None, 0)):
-            raise ValueError('failed queue item must name a job and a non-zero exit_code')
+        if self.state == 'landed_red' and (not self.job_id or self.exit_code != 1):
+            raise ValueError('landed_red queue item must name a job with exit_code=1')
+        if self.state == 'failed' and (
+                not self.job_id or self.exit_code in (None, 0, 1)):
+            raise ValueError('failed queue item must name a job with an exit_code other than 0/1')
         if self.state == 'done' and self.exit_code not in (None, 0):
             raise ValueError('done queue item cannot carry a failing exit_code')
         if self.state == 'blocked' and not self.waiting_on:
@@ -734,13 +766,14 @@ class QueueEntry(StrictModel):
 
 
 class QueueLaneCounts(StrictModel):
-    """一本书在一条批量队列里的七类计数。
+    """一本书在一条批量队列里的九类计数。
 
-    ``done / failed / not_run`` remain separate.  Cancellation and blocking
-    are separate too, because neither is a failed command.
+    ``done / landed_red / failed / not_run`` remain separate.  Cancellation
+    and blocking are separate too, because neither is a failed command.
     """
 
     done: int = Field(ge=0)
+    landed_red: int = Field(ge=0)
     failed: int = Field(ge=0)
     not_run: int = Field(ge=0)
     pending: int = Field(ge=0)
@@ -751,8 +784,8 @@ class QueueLaneCounts(StrictModel):
 
     @model_validator(mode='after')
     def _one_lane_has_one_stop(self) -> QueueLaneCounts:
-        if self.failed > 1:
-            raise ValueError('one novel lane must stop at its first failed item')
+        if self.failed + self.landed_red > 1:
+            raise ValueError('one novel lane must stop at its first failed/landed_red item')
         if self.cancelled > 1:
             raise ValueError('one novel lane can have at most one cancellation stop')
         return self
@@ -771,7 +804,7 @@ class QueueRun(StrictModel):
 
     @model_validator(mode='after')
     def _counts_match_entries(self) -> QueueRun:
-        fields = ('done', 'failed', 'not_run', 'pending', 'running', 'unknown',
+        fields = ('done', 'landed_red', 'failed', 'not_run', 'pending', 'running', 'unknown',
                   'cancelled', 'blocked')
         for sid in self.start.sids:
             entries = [entry for entry in self.entries if entry.item.sid == sid]

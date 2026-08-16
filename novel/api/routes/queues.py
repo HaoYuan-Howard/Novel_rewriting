@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from contracts.schema.api import QueueCreateRequest, QueueList
+from contracts.schema.api import QueueCreateRequest, QueueList, QueueResumeRequest
 from contracts.schema.orchestration import QueuePlan, QueueRun
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator import queue
@@ -55,8 +55,12 @@ def get_queue(queue_id: str, base: str = Depends(get_base)) -> QueueRun:
 
 
 @router.post('/{queue_id}/resume', response_model=QueueRun, status_code=202)
-def resume_queue(queue_id: str, base: str = Depends(get_base)) -> QueueRun:
-    return queue.start(base, queue_id)
+def resume_queue(
+    request: QueueResumeRequest,
+    queue_id: str,
+    base: str = Depends(get_base),
+) -> QueueRun:
+    return queue.resume_start(base, queue_id, yes=request.confirmed)
 
 
 @router.post('/{queue_id}/items/{item_index}/cancel', response_model=QueueRun)

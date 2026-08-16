@@ -1,8 +1,9 @@
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
-import { FRESH, SEV } from '@/constants/vocabulary'
+import { FRESH, SCRIM, SEV } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { useChrome } from '@/hooks/useChrome'
 import { useSid } from '@/hooks/useRouteParams'
@@ -31,6 +32,7 @@ export function Stage7Screen() {
   const { o } = useParams<{ o: string }>()
   const ordinal = o ? Number(o) : null
   const { hasSample, defaultOrdinal } = useSampleCoverage()
+  const [bookOpen, setBookOpen] = useState(false)
 
   const q = useQuery({ queryKey: qk.stage7(sid), queryFn: () => api.getStage7(sid), retry: false })
   const chQ = useQuery({
@@ -38,6 +40,23 @@ export function Stage7Screen() {
     queryFn: () => api.getStage7Chapter(sid, ordinal!),
     enabled: ordinal !== null,
     retry: false,
+  })
+  const bookQ = useQuery({
+    queryKey: qk.stage7book(sid),
+    queryFn: () => api.getStage7Book(sid),
+    enabled: bookOpen,
+    retry: false,
+  })
+  const download = useMutation({
+    mutationFn: () => api.downloadStage7Book(sid),
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = 'book.txt'
+      anchor.click()
+      URL.revokeObjectURL(url)
+    },
   })
 
   const approve = useMutation({
@@ -274,6 +293,25 @@ export function Stage7Screen() {
                           (d.book_txt_on_disk ? ' · 在盘上' : ' · ⚠ 账在而盘上没有——重跑 stage7.assemble')
                         : '还没组装成书'}
                     </Mono>
+                    {d.book_txt_on_disk ? (
+                      <div className="mt-3 flex flex-wrap gap-8">
+                        <button
+                          type="button"
+                          onClick={() => setBookOpen(true)}
+                          className="cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-6 text-body font-semibold"
+                        >
+                          预览成书
+                        </button>
+                        <button
+                          type="button"
+                          disabled={download.isPending}
+                          onClick={() => download.mutate()}
+                          className="cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-6 text-body font-semibold text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {download.isPending ? '下载中…' : '下载 book.txt'}
+                        </button>
+                      </div>
+                    ) : null}
                   </Panel>
                 </div>
               </div>
@@ -339,6 +377,53 @@ export function Stage7Screen() {
                   </div>
                 )}
               </Panel>
+
+              {bookOpen ? (
+                <div
+                  className="fixed inset-0 z-50 flex justify-end"
+                  style={{ backgroundColor: SCRIM }}
+                  onClick={() => setBookOpen(false)}
+                >
+                  <aside
+                    className="flex h-full w-[min(760px,92vw)] flex-col border-l border-line-btn bg-card shadow-modal"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="flex items-center gap-10 border-b border-line-soft px-20 py-14">
+                      <span className="text-h3 font-semibold">book.txt 成书预览</span>
+                      <Mono className="text-mini text-ink-5">
+                        {d.book_txt ? d.book_txt.chars + ' 字 · ' + d.book_txt.chapters + ' 章' : ''}
+                      </Mono>
+                      <button
+                        type="button"
+                        disabled={download.isPending}
+                        onClick={() => download.mutate()}
+                        className="ml-auto cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-6 text-body font-semibold text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {download.isPending ? '下载中…' : '下载'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBookOpen(false)}
+                        className="cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-6 text-body"
+                      >
+                        关闭
+                      </button>
+                    </div>
+                    <pre className="m-0 min-h-0 flex-1 overflow-y-auto px-28 py-22 font-sans text-read leading-[2] whitespace-pre-wrap text-ink">
+                      {bookQ.isPending
+                        ? '读取成书中…'
+                        : bookQ.isError
+                          ? '取不到 book.txt；请确认文件仍在盘上。'
+                          : bookQ.data}
+                    </pre>
+                    {download.isError ? (
+                      <div className="border-t border-warn-line bg-warn-bg px-20 py-10 text-body text-warn-ink">
+                        下载失败；请确认 book.txt 仍在盘上。
+                      </div>
+                    ) : null}
+                  </aside>
+                </div>
+              ) : null}
             </section>
           )
         }}

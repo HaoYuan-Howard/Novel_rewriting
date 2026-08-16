@@ -30,6 +30,7 @@ pytestmark = [
 
 #: 九个读屏一次全要的产物（stage7 的 rows 与 stage5 屏还要成稿与验收）。
 INPUTS = ('stage1/main_text.json', 'stage1/hook_copy.json',
+          'stage1/partition_report.json',
           'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
           'stage3/style_grounding.json',
           'stage4/plan_chapters.json', 'stage4/writer_context.json',
@@ -125,6 +126,40 @@ def test_stage7_chapter_block_is_all_or_nothing_over_the_wire(client, box):
     assert chapter['ordinal'] == o and chapter['rows']
 
 
+def test_stage4_index_carries_every_chapter_goal_in_one_response(client, box):
+    body = client.get(f'/api/novels/{box.sid}/stage4/1').json()
+    assert len(body['index']) == len(body['chapters'])
+    assert all(row['chapter_goal'] for row in body['index'])
+
+
+def test_stage7_book_can_be_previewed_and_downloaded(client, box, monkeypatch):
+    from novel.stages.stage7 import assemble
+    monkeypatch.setattr(
+        assemble, 'read_current_book', lambda _ctx: '第一章\n成书正文')
+
+    preview = client.get(f'/api/novels/{box.sid}/stage7/book.txt')
+    assert preview.status_code == 200 and preview.text == '第一章\n成书正文'
+    assert 'content-disposition' not in preview.headers
+
+    download = client.get(f'/api/novels/{box.sid}/stage7/book.txt?download=true')
+    assert download.status_code == 200
+    assert download.headers['content-disposition'] == 'attachment; filename="book.txt"'
+
+
+def test_stage7_book_endpoint_never_bypasses_the_current_delivery_gate(
+        client, box, monkeypatch):
+    from novel.errors import TerminalState
+    from novel.stages.stage7 import assemble
+
+    def reject(_ctx):
+        raise TerminalState('旧 book.txt 不再绑定当前批准映射')
+
+    monkeypatch.setattr(assemble, 'read_current_book', reject)
+    response = client.get(f'/api/novels/{box.sid}/stage7/book.txt?download=true')
+    assert response.status_code == 409
+    assert response.json()['kind'] == 'TerminalState'
+
+
 def test_a_fully_written_book_survives_the_overview(client, box):
     """⭐ 回归锚：**全链跑完的书在语料库上不许整本消失。**
 
@@ -138,15 +173,18 @@ def test_a_fully_written_book_survives_the_overview(client, box):
     st5 = next(s for s in body.json()['stages'] if s['stage'] == 'stage5')
     assert st5['done'] is True, (
         f'沙箱书每章都有稿而 done={st5["done"]}——逐章折叠多半又被载体拦了')
+    stage1 = client.get(f'/api/novels/{box.sid}/stage1/chapters').json()
+    assert body.json()['chapters'] == len(stage1['chapters'])
     novels = client.get('/api/novels').json()['novels']
     assert any(n['sid'] == box.sid for n in novels), '语料库把这本书整本吞了'
 
 
 def test_the_inbox_counts_are_dense(client, box):
-    """六键全出（0 也要出）——稀疏计数会把「没有」与「0」混掉。"""
+    """八键全出（0 也要出）——稀疏计数会把「没有」与「0」混掉。"""
     body = client.get(f'/api/novels/{box.sid}/inbox').json()
     assert set(body['counts']) == {'invalid', 'rejected', 'stalled',
-                                   'human_only', 'upstream', 'approval'}
+                                   'repairable', 'human_only', 'verification',
+                                   'upstream', 'approval'}
     assert body['total'] == len(body['items'])
 
 

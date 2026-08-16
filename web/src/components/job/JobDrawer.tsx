@@ -5,7 +5,7 @@ import { useSid } from '@/hooks/useRouteParams'
 import { JobStateChip } from '@/components/vocab/Badges'
 import { cx } from '@/lib/cx'
 
-const ALL_STATES: JobState[] = ['running', 'ok', 'failed', 'unknown']
+const ALL_STATES: JobState[] = ['running', 'ok', 'landed_red', 'failed', 'unknown']
 
 /**
  * 底部常驻作业面板。
@@ -95,9 +95,26 @@ export function JobDrawer() {
 
           <div className="min-w-0 flex-1 overflow-y-auto bg-sunken-2 px-24 py-12">
             {latest ? (
-              <pre className="m-0 font-mono text-mini leading-[1.9] whitespace-pre-wrap text-ink-2">
-                {(log.data?.lines ?? []).join('\n')}
-              </pre>
+              <div className="flex flex-col gap-2 font-mono text-mini leading-[1.9] text-ink-2">
+                {(log.data?.lines ?? []).map((line, index) =>
+                  line.details ? (
+                    <details key={index} className="rounded-tag border border-line-soft bg-card px-7 py-2">
+                      <summary className="cursor-pointer whitespace-pre-wrap">{line.text}</summary>
+                      <pre className="m-0 mt-3 overflow-x-auto border-t border-line-soft pt-3 text-micro whitespace-pre-wrap text-ink-4">
+                        {JSON.stringify(line.details, null, 2)}
+                      </pre>
+                    </details>
+                  ) : (
+                    <div
+                      key={index}
+                      className={line.kind === 'malformed' ? 'text-warn-ink' : 'whitespace-pre-wrap'}
+                      title={line.raw ?? undefined}
+                    >
+                      {line.text}
+                    </div>
+                  ),
+                )}
+              </div>
             ) : (
               <div className="text-mini text-ink-5">—</div>
             )}

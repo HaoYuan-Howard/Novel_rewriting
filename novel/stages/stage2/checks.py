@@ -36,8 +36,9 @@ import statistics
 from typing import Any, Iterable
 
 from contracts.invariants import BARE_PRONOUNS, TIME_LAYERS
+from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
-from contracts.schema.report import finding
+from contracts.schema.report import finding as _finding
 from novel.core.naming import (
     classify_unattested, person_naming_surfaces, resolve_present_names, rule_names_a_person,
     strip_distinguisher, surface_first_chapter, surface_owner_since, surface_owners,
@@ -46,6 +47,33 @@ from novel.core.spans import content_only, exact_span, locate_spans
 from novel.stages.stage2.coverage import hole_intervals
 from novel.core.text import norm
 from novel.report.findings import Outcome, ran, unverifiable
+
+
+_FIX_CHAPTER_EVIDENCE = (
+    re.compile(r'\bb0*(\d+)_\d+\b'),
+    re.compile(r'\bch0*(\d+)\b', re.IGNORECASE),
+    re.compile(r'\b(?:missing|extra|dup):0*(\d+)\b'),
+)
+
+
+def finding(rule: str, *, detail: str, evidence: list[str], **kwargs) -> Finding:
+    """把本次机器证据里的章号解析成最终 CLI 实参。
+
+    报告层不再猜 evidence 格式；推不出时故意不编值，报告会把路由标成
+    unavailable 并说明原因。
+    """
+    row = REGISTRY.get(rule)
+    fix_args: dict[str, str] = {}
+    if '--chapters' in row.fix_args_from_finding:
+        chapters = {
+            int(value)
+            for item in evidence
+            for pattern in _FIX_CHAPTER_EVIDENCE
+            for value in pattern.findall(item)
+        }
+        if chapters:
+            fix_args['--chapters'] = ','.join(str(chapter) for chapter in sorted(chapters))
+    return _finding(rule, detail=detail, evidence=evidence, fix_args=fix_args, **kwargs)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 零、只有本层判据读的几张表
@@ -208,8 +236,7 @@ def _alignment(c: _Ctx) -> list[Outcome]:
                                    (STAGE1_MAIN_TEXT, c.has_mt)) if not ok]
     out.append(ran('upstream_missing', [
         finding('upstream_missing',
-                detail=f'缺 {rel} —— 本层的复检相**两份产物一起读**，'
-                       f'缺一份不是「少查几条」，是这一族什么都没查',
+                detail=f'本次缺少上游产物 {rel}',
                 evidence=[rel]) for rel in missing],
         scanned='3 份上游（两份 stage2 产物 + main_text）'))
 
@@ -224,7 +251,7 @@ def _alignment(c: _Ctx) -> list[Outcome]:
     leaks = sorted({o for o in (_walk_keys(c.bp_raw, 'section_id'))})
     out.append(ran('section_id_leak',
                    [finding('section_id_leak',
-                            detail=f'blueprint 仍含上游的分节键 `section_id`：{_cut(leaks)}',
+                            detail=f'blueprint 含 section_id 的字段路径：{_cut(leaks)}',
                             evidence=[str(x) for x in leaks])] if leaks else [],
                    scanned=f'{len(c.bps)} 章的全部字段路径'))
 
@@ -251,9 +278,8 @@ def _alignment(c: _Ctx) -> list[Outcome]:
     ordered = [o for o in got if o in expected]
     out.append(ran('chapter_order',
                    [finding('chapter_order',
-                            detail='blueprint 顺序与 main_text 章序不一致（合并顺序错乱）——'
-                                   '顺序一乱，`beat_id` 里按位置归一的章号就会挂到别的章上',
-                            evidence=[','.join(str(o) for o in ordered[:20])])]
+                            detail=f'blueprint 章序 {ordered} 与 main_text 章序 {expected} 不一致',
+                            evidence=[f'ch{o}' for o in ordered])]
                    if ordered != sorted(ordered) else [],
                    scanned=f'{len(ordered)} 章'))
     return out
@@ -303,8 +329,7 @@ def _addresses(c: _Ctx) -> list[Outcome]:
     dup_names = {nm: cids for nm, cids in by_name.items() if len(cids) > 1}
     out.append(ran('canonical_unique',
                    [finding('canonical_unique',
-                            detail=f'显示名 {nm!r} 同时挂在 {cids} 上 —— '
-                                   f'下游按名字解析必然歧义，而它不触发任何终态',
+                            detail=f'显示名 {nm!r} 同时对应 {sorted(cids)}',
                             evidence=[nm, *sorted(cids)])
                     for nm, cids in sorted(dup_names.items())],
                    scanned=f'{len(by_name)} 个显示名 / {len(items)} 个角色'))
@@ -333,13 +358,13 @@ def _addresses(c: _Ctx) -> list[Outcome]:
         out.append(ran('character_unattested',
                        [finding('character_unattested',
                                 detail=f'{cid}({nm!r}) 的 canonical（剥区分词）与全部 surface '
-                                       f'在原文里**一个都搜不到** —— 这个角色是编的',
+                                       f'在原文里一个都搜不到',
                                 evidence=[cid, str(nm)]) for cid, nm in void_chars],
                        scanned=f'{len(items)} 个角色 / {n_surf} 个字面'))
         out.append(ran('address_unlocatable',
                        [finding('address_unlocatable',
                                 detail=f'{len(unlocatable)} 个 surface 在原文里原样搜不到'
-                                       f'（疑似改写过的称呼）：{_cut(unlocatable)}',
+                                       f'：{_cut(unlocatable)}',
                                 evidence=sorted(unlocatable))] if unlocatable else [],
                        scanned=f'{n_surf} 个字面'))
 
@@ -359,7 +384,7 @@ def _addresses(c: _Ctx) -> list[Outcome]:
                 bad_by.append(f'{cid}:{(a or {}).get("surface")!r} by={by!r}')
     out.append(ran('address_by_unresolved',
                    [finding('address_by_unresolved',
-                            detail=f'`by` 既不是 registry 里的 char_id 也不是 '
+                            detail=f'by 既不是 registry 里的 char_id 也不是 '
                                    f'narration/public：{_cut(bad_by)}',
                             evidence=sorted(bad_by))] if bad_by else [],
                    scanned=f'{n_addr} 条称呼（其中 narration 视角 {n_narr} 条）'))
@@ -374,9 +399,7 @@ def _addresses(c: _Ctx) -> list[Outcome]:
                    or not 1 <= (a or {}).get('from_chapter') <= c.n_chapters]
         out.append(ran('address_from_out_of_range',
                        [finding('address_from_out_of_range',
-                                detail=f'from_chapter 越出全书章范围（1~{c.n_chapters}）—— '
-                                       f'**这条称呼将永不下发**，而产物里看着一切正常：'
-                                       f'{_cut(bad_win)}',
+                                detail=f'from_chapter 越出 1~{c.n_chapters} 章：{_cut(bad_win)}',
                                 evidence=sorted(bad_win))] if bad_win else [],
                        scanned=f'{n_addr} 条称呼 / 全书 {c.n_chapters} 章'))
 
@@ -423,20 +446,17 @@ def _addresses(c: _Ctx) -> list[Outcome]:
             all_pron.append(f'{cid}({(v or {}).get("canonical")!r})')
     out.append(ran('address_bare_pronoun',
                    [finding('address_bare_pronoun',
-                            detail=f'surface 整条就是代词（零信息，契约明令禁止）：{_cut(bare)}',
+                            detail=f'surface 整条是代词：{_cut(bare)}',
                             evidence=sorted(bare))] if bare else [],
                    scanned=f'{n_addr} 条称呼 · 词表 {BARE_PRONOUNS}'))
     out.append(ran('address_all_pronoun',
                    [finding('address_all_pronoun',
-                            detail=f'{len(all_pron)} 个角色【有据的叫法全都含代词】 ⇒ '
-                                   f'下游 display_name 只能取到「我妈」这种相对说话人的说法：'
-                                   f'{_cut(all_pron)}',
+                            detail=f'{len(all_pron)} 个角色的有据叫法全都含代词：{_cut(all_pron)}',
                             evidence=sorted(all_pron))] if all_pron else [],
                    scanned=f'{len(items)} 个角色'))
     out.append(ran('address_has_pronoun',
                    [finding('address_has_pronoun',
-                            detail=f'{len(soft)} 条 surface 含代词（违约，但该角色另有干净叫法，'
-                                   f'下游取不到它）：{_cut(soft)}',
+                            detail=f'{len(soft)} 条 surface 含代词：{_cut(soft)}',
                             evidence=sorted(soft))] if soft else [],
                    scanned=f'{n_addr} 条称呼'))
 
@@ -448,9 +468,7 @@ def _addresses(c: _Ctx) -> list[Outcome]:
                if (a or {}).get('by') == cid]
     out.append(ran('address_selfref',
                    [finding('address_selfref',
-                            detail=f'{len(selfref)} 条「自己这么叫自己」——'
-                                   f'**自称正当**（本宫/哀家），把别人对他的称呼挂错了人不正当，'
-                                   f'逐条看：{_cut(selfref)}',
+                            detail=f'{len(selfref)} 条称呼的 by 与所属角色相同：{_cut(selfref)}',
                             evidence=sorted(selfref))] if selfref else [],
                    scanned=f'{n_addr} 条称呼'))
 
@@ -459,8 +477,7 @@ def _addresses(c: _Ctx) -> list[Outcome]:
                if not ((v or {}).get('address') or [])]
     out.append(ran('address_missing',
                    [finding('address_missing',
-                            detail=f'{len(no_addr)} 个角色一条称呼都没有'
-                                   f'（叙述里总得指称他，多半是漏了）：{_cut(no_addr)}',
+                            detail=f'{len(no_addr)} 个角色一条称呼都没有：{_cut(no_addr)}',
                             evidence=sorted(no_addr))] if no_addr else [],
                    scanned=f'{len(items)} 个角色'))
     return out
@@ -485,8 +502,7 @@ def _roles(c: _Ctx) -> list[Outcome]:
                if not ((v or {}).get('role') or '').strip()]
     out.append(ran('role_missing',
                    [finding('role_missing',
-                            detail=f'{len(no_role)} 个角色没有 role —— '
-                                   f'下游**只下发 role**，缺了写手不认识这个人：{_cut(no_role)}',
+                            detail=f'{len(no_role)} 个角色没有 role：{_cut(no_role)}',
                             evidence=sorted(no_role))] if no_role else [],
                    scanned=f'{len(items)} 个角色'))
 
@@ -494,8 +510,7 @@ def _roles(c: _Ctx) -> list[Outcome]:
              if w in ((v or {}).get('role') or '')]
     out.append(ran('role_leaks_fate',
                    [finding('role_leaks_fate',
-                            detail=f'role 里出现结局词（该进 fate；下游只发 role，'
-                                   f'混进来这道闸门就白设）：{_cut(leaky)}',
+                            detail=f'role 里出现结局词：{_cut(leaky)}',
                             evidence=sorted(leaky))] if leaky else [],
                    scanned=f'{len(items)} 个角色 · 词表 {len(FATE_WORDS)} 个转抄式结局词'))
 
@@ -504,8 +519,7 @@ def _roles(c: _Ctx) -> list[Outcome]:
             and ((v or {}).get('role') or '').strip() == ((v or {}).get('canonical') or '').strip()]
     out.append(ran('role_repeats_name',
                    [finding('role_repeats_name',
-                            detail=f'{len(same)} 个角色的 role 与 canonical 完全同字'
-                                   f'（写手拿到的下发面是「X：X」，零信息）：{_cut(same)}',
+                            detail=f'{len(same)} 个角色的 role 与 canonical 完全同字：{_cut(same)}',
                             evidence=sorted(same))] if same else [],
                    scanned=f'{len(items)} 个角色'))
 
@@ -513,9 +527,7 @@ def _roles(c: _Ctx) -> list[Outcome]:
               for w in HEDGE_WORDS if w in (((v or {}).get(fld) or '') if v else '')]
     out.append(ran('hedge_words',
                    [finding('hedge_words',
-                            detail=f'{len(hedged)} 处 role/fate/canonical 里出现模棱语 —— '
-                                   f'这三个字段记的是**原文写出来的事实**，'
-                                   f'不确定就不该写进来：{_cut(hedged)}',
+                            detail=f'{len(hedged)} 处 role/fate/canonical 出现模棱语：{_cut(hedged)}',
                             evidence=sorted(hedged))] if hedged else [],
                    scanned=f'{len(items)} 个角色 × 3 个字段 · 词表 {HEDGE_WORDS}'))
 
@@ -532,8 +544,7 @@ def _roles(c: _Ctx) -> list[Outcome]:
     out.append(ran('distinguisher_lonely',
                    [finding('distinguisher_lonely',
                             detail=f'{len(lonely)} 个 canonical 带着消歧区分词，'
-                                   f'剥掉之后【没有同名对象】—— 区分词会被写手原样写进正文'
-                                   f'（「李宝珠（丫鬟）掀开帘子」）：{_cut(lonely)}',
+                                   f'剥掉后没有同名对象：{_cut(lonely)}',
                             evidence=sorted(lonely))] if lonely else [],
                    scanned=f'{len(items)} 个 canonical'))
 
@@ -552,9 +563,7 @@ def _roles(c: _Ctx) -> list[Outcome]:
     n_fate = sum(1 for _cid, v in items if ((v or {}).get('fate') or '').strip())
     out.append(ran('fate_report', [
         finding('fate_report',
-                detail=f'{n_fate}/{len(items)} 个角色有 fate —— '
-                       f'⚠ **缺失不是违约**（配角本来就可以没有归宿），'
-                       f'这一格答的是「结局有没有被单独接住」，所以它只能是读数',
+                detail=f'{n_fate}/{len(items)} 个角色有 fate',
                 evidence=[f'{n_fate}/{len(items)}'])],
         scanned=f'{len(items)} 个角色'))
     return out
@@ -581,8 +590,7 @@ def _canon(c: _Ctx) -> list[Outcome]:
     out.append(ran('world_rule_no_desc',
                    [finding('world_rule_no_desc',
                             detail=f'{len(nover)}/{len(c.world_rules)} 条规则没有任何带 desc 的 '
-                                   f'version —— `versions[].desc` 是规则正文的**唯一**落点，'
-                                   f'而下游取正文时**无兜底、缺失即显式终态**：{_cut(nover)}',
+                                   f'version：{_cut(nover)}',
                             evidence=sorted(nover))] if nover else [],
                    scanned=f'{len(c.world_rules)} 条规则'))
 
@@ -600,11 +608,8 @@ def _canon(c: _Ctx) -> list[Outcome]:
                           max(avail.get(n, 1) for n in hits)))
     late = [x for x in named if x[2] > 1]
     fs = [finding('world_rule_names_person',
-                  detail=f'{rid} 的 desc 里点到了具体的人 {list(names)} ⇒ '
-                         f'下游**按叫法时点扣住**，最晚的叫法从 ch{gate} 起才叫得出'
-                         + ('' if gate > 1 else
-                            ' —— ⚠ **ch1 就叫得出，等于全程下发：这道闸门在这条规则上'
-                            '一个字都没拦住**'),
+                  detail=f'{rid} 的 desc 点到具体人物 {list(names)}；'
+                         f'最晚叫法从 ch{gate} 出现',
                   evidence=[rid, *names])
           for rid, names, gate in named]
     out.append(ran('world_rule_names_person', fs,
@@ -642,18 +647,14 @@ def _canon(c: _Ctx) -> list[Outcome]:
                ((row[0], row[1], row[2]) for row in pruned if len(row) >= 3)]
         out.append(ran('secret_setup_order',
                        [finding('secret_setup_order',
-                                detail=f'落盘前裁掉了 {len(bad)} 条埋点章 —— 产地把**揭示章号**'
-                                       f'抄进了埋点（埋点必须**严格早于**回收，`==` 也违约：'
-                                       f'同一章既埋又破，闸门等于没开）：{_cut(bad)}',
+                                detail=f'落盘前裁掉 {len(bad)} 条埋点章：{_cut(bad)}',
                                 evidence=sorted(bad))] if bad else [],
                        scanned=f'{len(secs)} 条 secret · 断言的是裁剪计数不是字段值'))
 
     cold = [str(s.get('secret_id')) for s in secs if not (s.get('setup_chapters') or [])]
     out.append(ran('secret_cold_reveal', [
         finding('secret_cold_reveal',
-                detail=f'{len(cold)}/{len(secs)} 条 secret 没有埋点（凭空点破）—— '
-                       f'⚠⚠ **「冷揭示」（据实留空，合法）与「被裁空」在字段值上完全同形**，'
-                       f'两者只能靠 `setup_chapters_pruned` 那个计数分开：{_cut(cold)}',
+                detail=f'{len(cold)}/{len(secs)} 条 secret 没有埋点：{_cut(cold)}',
                 evidence=[f'{len(cold)}/{len(secs)}'])],
         scanned=f'{len(secs)} 条 secret'))
 
@@ -691,9 +692,7 @@ def _canon(c: _Ctx) -> list[Outcome]:
         out.append(ran('reveal_unmarked',
                        [finding('reveal_unmarked',
                                 detail=f'{len(unmarked)}/{n_pairs} 组「秘密→揭示章」的那一章里'
-                                       f'**一个点破标记都没有** —— 回原文核一眼那章到底点破没有。'
-                                       f'⚠ **这是筛子不是判据**：「演而不说」是合法写法，'
-                                       f'实测 5 条里只有 1 条真是编的：{_cut(unmarked)}',
+                                       f'一个点破标记都没有：{_cut(unmarked)}',
                                 evidence=sorted(unmarked))] if unmarked else [],
                        scanned=f'{n_pairs} 组「秘密→揭示章」· 词表 {len(REVEAL_MARKS)} 个标记'))
 
@@ -707,8 +706,7 @@ def _canon(c: _Ctx) -> list[Outcome]:
     out.append(ran('relation_dangling',
                    [finding('relation_dangling',
                             detail=f'{len(bad_rel)}/{len(c.relations) * 2} 端悬空'
-                                   f'（非 registry 里的 char_id）—— 地点/机构/物品'
-                                   f'**按契约就不入 relations**：{_cut(bad_rel)}',
+                                   f'（非 registry 里的 char_id）：{_cut(bad_rel)}',
                             evidence=sorted(bad_rel))] if bad_rel else [],
                    scanned=f'{len(c.relations)} 条关系 / {len(c.relations) * 2} 端'))
     return out
@@ -736,9 +734,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
     dup = sorted({i for i in ids if ids.count(i) > 1})
     out.append(ran('beat_id_unique',
                    [finding('beat_id_unique',
-                            detail=f'重复 beat_id —— 它是下游引用一拍的**唯一**键'
-                                   f'（`beat_ref` / 材料回查都按它 join），'
-                                   f'重号则每一次 join 都可能取错拍：{_cut(dup)}',
+                            detail=f'重复 beat_id：{_cut(dup)}',
                             evidence=[str(i) for i in dup])] if dup else [],
                    scanned=f'{len(ids)} 个 beat_id'))
 
@@ -760,8 +756,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
                 bad_fmt.append(f'{bid} 章内序不连续（应为 {seq:02d}）')
     out.append(ran('beat_id_format',
                    [finding('beat_id_format',
-                            detail=f'{len(bad_fmt)} 处 beat_id 不合契约'
-                                   f'（下游据此判 beat 属于哪个源章）：{_cut(bad_fmt)}',
+                            detail=f'{len(bad_fmt)} 处 beat_id 格式或章内序号不符：{_cut(bad_fmt)}',
                             evidence=sorted(bad_fmt))] if bad_fmt else [],
                    scanned=f'{len(ids)} 个 beat_id'))
 
@@ -779,9 +774,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
     # ── `span_unlocatable` ────────────────────────────────────────────────
     out.append(ran('span_unlocatable',
                    [finding('span_unlocatable',
-                             detail=f'精确 source span 与原文不一致或没有按序排列'
-                                    f'（失败＝这一拍**没有量纲**：'
-                                   f'字数、覆盖率、hinge 归属全部落空）：{prob}',
+                             detail=f'ch{o} 的 source span 无法按序定位：{prob}',
                             evidence=[f'ch{o}', prob])
                     for o, prob in c.span_problems],
                    scanned=f'{n_hit}/{n_all} 条 beat 定位成功'))
@@ -808,8 +801,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
     out.append(ran('span_coverage_per_chapter', [
         finding('span_coverage_per_chapter',
                 detail='逐章覆盖率最低的三章：'
-                       + '、'.join(f'ch{o} {r:.0%}' for o, r in worst)
-                       + ' —— ⚠ **全书一个数看不出哪一章塌了**',
+                       + '、'.join(f'ch{o} {r:.0%}' for o, r in worst),
                 evidence=[f'ch{o}:{r:.2f}' for o, r in per_ch])],
         scanned=f'{len(per_ch)} 章'))
 
@@ -821,8 +813,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
                        f'{len(fine)} 处 ≥{HOLE_FINE_CHARS} 字（按位置分：'
                        + '、'.join(f'{w} {sum(1 for h in holes if h[4] == w)}'
                                    for w in ('head', 'mid', 'tail', 'whole'))
-                       + f'）—— ⚠ **分到哪一类交人工**：`edge_hole` 只吃「两头 + ≥'
-                         f'{HOLE_MIN_CHARS} 字」那一格，其余格子是合法的空隙',
+                       + '）',
                 evidence=[f'{uncov}/{src_tot}', f'{len(holes)}', f'{len(fine)}'])],
         scanned=f'{src_tot} 字原文'))
 
@@ -835,8 +826,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
     out.append(ran('edge_hole',
                    [finding('edge_hole',
                             detail=f'ch{o} [{a}:{b}] {n} 字落在{where_cn[w]} —— '
-                                   f'章的**起因与结果**最常丢在这里，'
-                                   f'而被并掉的事在之后的每个环节里都不再存在：{ex!r}',
+                                   f'{ex!r}',
                             evidence=[f'ch{o}', f'{a}:{b}', w])
                     for o, a, b, n, w, ex in edge],
                    scanned=f'{len(holes)} 处 ≥{HOLE_MIN_CHARS} 字的未覆盖区间'))
@@ -854,9 +844,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
     out.append(ran('beats_collapsed',
                    [finding('beats_collapsed',
                             detail=f'{len(collapsed)} 个 ≥{COARSE_MIN_CHARS} 字的章只有 '
-                                   f'≤{COARSE_MAX_BEATS} 拍 —— 锚用的是**契约自己的反例**'
-                                   f'（抽取 prompt 里那个「440 字的章只切了 2 条而它写了六件事」），'
-                                   f'**不跨书比**：{_cut(collapsed)}',
+                                   f'≤{COARSE_MAX_BEATS} 拍：{_cut(collapsed)}',
                             evidence=sorted(collapsed))] if collapsed else [],
                    scanned=f'{len(c.bps)} 章'))
 
@@ -864,10 +852,8 @@ def _beats(c: _Ctx) -> list[Outcome]:
     coarse = [f'ch{o}({r:.0f}字/拍)' for o, r in ratios if med and r > med * COARSE_MEDIAN_MULT]
     out.append(ran('beats_coarse',
                    [finding('beats_coarse',
-                            detail=f'{len(coarse)} 个章的 字/拍 超过**本书自己的中位数**'
-                                   f'（{med:.0f}）的 {COARSE_MEDIAN_MULT} 倍 —— '
-                                   f'⚠ 分母是本书的中位数不是跨书常量：'
-                                   f'拍数是同一个 prompt 都能改动 ±44% 的自由变量：{_cut(coarse)}',
+                            detail=f'{len(coarse)} 个章的字/拍超过本书中位数 '
+                                   f'{med:.0f} 的 {COARSE_MEDIAN_MULT} 倍：{_cut(coarse)}',
                             evidence=sorted(coarse))] if coarse else [],
                    scanned=f'{len(ratios)} 章（本书中位 {med:.0f} 字/拍，'
                            f'最粗 {max((r for _o, r in ratios), default=0):.0f}）'))
@@ -925,9 +911,7 @@ def _verbatim(c: _Ctx) -> list[Outcome]:
         rows = [f'{r[0]}.{r[1]}: {r[2]!r}→{r[3]!r}({r[4]:.0%})' for r in recovered if len(r) >= 5]
         out.append(ran('anchor_not_verbatim',
                        [finding('anchor_not_verbatim',
-                                detail=f'{len(rows)} 个锚点**不是原文字节**，是按最长公共子串'
-                                       f'救回来的 —— ⚠ 「一个字都没动」与「救回来的」'
-                                       f'**不是同一件事**，后者锚点本来就不是原文：{_cut(rows, 6)}',
+                                detail=f'{len(rows)} 个锚点走了回取路径：{_cut(rows, 6)}',
                                 evidence=sorted(rows))] if rows else [],
                        scanned=f'{len(recovered)} 条救回记录'))
 
@@ -947,9 +931,8 @@ def _verbatim(c: _Ctx) -> list[Outcome]:
         rows = [f'{r[0]}.{r[1]}: {r[2]}' for r in failures if len(r) >= 3]
         out.append(ran('verbatim_failed',
                        [finding('verbatim_failed',
-                                detail=f'落盘前的原文回取有 {len(rows)} 处锚不到 —— '
-                                       f'**非空即失败态**。按根因分：{by_cause}'
-                                       f'（三种根因**修法各不相同**）：{_cut(rows, 6)}',
+                                detail=f'落盘前的原文回取有 {len(rows)} 处锚不到；'
+                                       f'原因计数 {by_cause}：{_cut(rows, 6)}',
                                 evidence=sorted(rows))] if rows else [],
                        scanned=f'{len(failures)} 条失败记录'))
     return out
@@ -980,9 +963,7 @@ def _hinges(c: _Ctx) -> list[Outcome]:
             if not any(be.get('hinges') for be in (x.get('beats') or []))]
     out.append(ran('chapter_no_hinge',
                    [finding('chapter_no_hinge',
-                            detail=f'ch{no_h} 一条 hinge 都没有 —— 保真材料是闭卷写作'
-                                   f'**唯一**的通道，整章为 0 等于这一章的原文材料'
-                                   f'一条都没往下游走。⚠ 单拍为空是正常的，判的是章级',
+                            detail=f'{len(no_h)} 章没有任何 hinge：ch{no_h}',
                             evidence=[f'ch{o}' for o in no_h])] if no_h else [],
                    scanned=f'{len(c.bps)} 章 / {n_h} 条保真材料'))
 
@@ -1038,43 +1019,29 @@ def _hinges(c: _Ctx) -> list[Outcome]:
 
     out.append(ran('hinge_cross_chapter',
                    [finding('hinge_cross_chapter',
-                            detail=f'{item} 引的是【别的章】的原文（实出自 ch{ch}），'
-                                   f'逐字无误但归错了章 —— ⚠ **这一条几乎一定同时意味着'
-                                   f'该拍的 `event` 也越界了**：event 会照原样发给写手，'
-                                   f'章末悬念会被提前解除。修前先人读一眼那两拍的 event',
+                            detail=f'{item} 引用了 ch{ch} 的原文',
                             evidence=[item, f'ch{ch}'])
                     for item, ch in cross],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_in_hole',
                    [finding('hinge_in_hole',
-                            detail=f'{len(hole)} 条 hinge 的锚点**在本章原文里找得到**，'
-                                   f'只是落在任何 beat 的 span 都没覆盖到的空档里 —— '
-                                   f'它不是「转述」也不是「编的」，是**漏抓的下游后果**：'
-                                   f'模型指出了一段要害材料，却没把承载它的那件事切成一条 beat：'
-                                   f'{_cut(hole)}',
+                            detail=f'{len(hole)} 条 hinge 锚点在本章原文中，'
+                                   f'但不在任何 beat span 内：{_cut(hole)}',
                             evidence=sorted(hole))] if hole else [],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_anchor_void',
                    [finding('hinge_anchor_void',
-                            detail=f'{len(void)} 条 hinge 的锚点在**本章原文里根本找不到**'
-                                   f'（是转述或编的）—— 四分流里唯一一条根因在模型身上的。'
-                                   f'⚠ 不要跑 `--renormalize`：锚点本身没有原文依据，'
-                                   f'它只会把同一套解析再跑一遍：{_cut(void)}',
+                            detail=f'{len(void)} 条 hinge 锚点在本章原文中找不到：{_cut(void)}',
                             evidence=sorted(void))] if void else [],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_cascade',
                    [finding('hinge_cascade',
-                            detail=f'{len(cascade)} 条 hinge 锚不到，**因为它所在那条 beat 的 '
-                                   f'`span` 自己就没定位成功**（没有区间可切）—— '
-                                   f'这不是独立故障，修好 `span_unlocatable` 它们就跟着好了。'
-                                   f'在这里当第二条违规报出来会重复计数，'
-                                   f'并把人引向一个没有问题的锚点：{_cut(cascade)}',
+                            detail=f'{len(cascade)} 条 hinge 所属 beat 没有可用 span：{_cut(cascade)}',
                             evidence=sorted(cascade))] if cascade else [],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_drift',
                    [finding('hinge_drift',
-                            detail=f'{item} 的 text 不在本 beat 的 span 原文内，'
-                                   f'而全书哪一章也找不到 —— **位置对、字节错**',
+                            detail=f'{item} 的 text 不在本 beat span 内，全书也找不到',
                             evidence=[item])
                     for item, _ch in drift],
                    scanned=f'{n_h} 条保真材料'))
@@ -1083,9 +1050,7 @@ def _hinges(c: _Ctx) -> list[Outcome]:
     out.append(ran('hinge_density', [
         finding('hinge_density',
                 detail=f'全书 {n_h} 条保真材料 / {src_tot} 字原文 = '
-                       f'{(n_h / src_tot * 1000 if src_tot else 0):.1f} 条每千字 —— '
-                       f'⚠⚠ **按原文字数归一，不按拍数**：拍数是自由变量，'
-                       f'拿它做分母量到的是**切分粗细**不是材料多少',
+                       f'{(n_h / src_tot * 1000 if src_tot else 0):.1f} 条每千字',
                 evidence=[f'{n_h}', f'{src_tot}'])],
         scanned=f'{len(c.bps)} 章'))
     return out
@@ -1147,20 +1112,13 @@ def _present(c: _Ctx) -> list[Outcome]:
              for x in c.bps if len(x.get('narration') or []) > 1]
     out.append(ran('narration_multi',
                    [finding('narration_multi',
-                            detail=f'ch{o} 有 {k} 个叙述声音 —— '
-                                   f'⚠ 报的**不是「这本小说有问题」**'
-                                   f'（章内接一段他人视角 / 书信是合法写法，'
-                                   f'判 HARD 就是判据把合法情况排除在外），'
-                                   f'报的是**本层的能力边界**：本层不记段界，'
-                                   f'写作节点只知道分几段、不知道界在哪',
+                            detail=f'ch{o} 有 {k} 个叙述声音',
                             evidence=[f'ch{o}', str(k)])
                     for o, k in multi],
                    scanned=f'{len(c.bps)} 章'))
     out.append(ran('narration_voices', [
         finding('narration_voices',
-                detail=f'多叙述声音的章 {len(multi)}/{len(c.bps)} —— '
-                       f'它是 `narration_multi` 那一整维的**样本量**：没有这个数，'
-                       f'「没报多声音」与「这一维根本没在查」同形',
+                detail=f'多叙述声音的章 {len(multi)}/{len(c.bps)}',
                 evidence=[f'{len(multi)}/{len(c.bps)}'])],
         scanned=f'{len(c.bps)} 章'))
 
@@ -1180,12 +1138,8 @@ def _present(c: _Ctx) -> list[Outcome]:
     # 【前件 `n >= 10` 才判】章数太少时全是回忆是可能的。
     out.append(ran('time_layer_no_present',
                    [finding('time_layer_no_present',
-                            detail=f'{n_tl} 拍里**一条 present 都没有** ⇒ '
-                                   f'写手会把整本书写成回忆/转述。'
-                                   f'⚠⚠ **枚举合法 ≠ 分布合理**：`present` 判的是'
-                                   f'【故事主线所在的那一层】，不是「用的是不是过去时」'
-                                   f'——回顾式叙述的主线本身就是 present（实测某本 0/70）',
-                            evidence=[f'{n_tl}', 'present:0'])]
+                            detail=f'{n_tl} 拍里没有 present；分布 {layer_n}',
+                            evidence=[f'ch{o}' for o in c.ords])]
                    if n_tl >= 10 and not layer_n.get('present') else [],
                    scanned=f'{n_tl} 拍'))
 
@@ -1202,13 +1156,9 @@ def _present(c: _Ctx) -> list[Outcome]:
             prev = pl or prev
     out.append(ran('place_moves', [
         finding('place_moves',
-                detail=f'全书 {moves} 处相邻 beat 换了地点（转场点由 place **推导**，'
-                       f'不单存字段）；{no_place} 条没给 place —— '
-                       f'⚠⚠ **系统性高估**：place 是自由文本、粒度不稳（街上/街边、'
-                       f'公寓/公寓卫生间门口），按它相等推导出来的转场数在量**措辞**。'
-                       f'⚠ 它作为下发给写手的舞台信息是对的，不改；'
-                       f'但**凡引用这个数的地方都要带上这一句**',
-                evidence=[f'{moves}'])],
+                detail=f'全书相邻 beat 的 place 字面变化 {moves} 处；'
+                       f'{no_place} 拍未填 place',
+                evidence=[f'{moves}', f'{no_place}'])],
         scanned=f'{len(all_beats)} 拍'))
 
     # ── `present_ids_dangling` ────────────────────────────────────────────
@@ -1220,10 +1170,7 @@ def _present(c: _Ctx) -> list[Outcome]:
         n_pc = sum(len(be.get('present_char_ids') or []) for _o, be in all_beats)
         out.append(ran('present_ids_dangling',
                        [finding('present_ids_dangling',
-                                detail=f'{len(bad_pc)} 个 present_char_ids 不在 registry 里 —— '
-                                       f'⚠⚠ 这是**解析器的后置条件**：`present_char_ids` 是'
-                                       f'代码从 `present_names` 解析出来的，模型不写它 ⇒ '
-                                       f'违反它 ＝ **代码坏了，不是数据坏了**：{_cut(bad_pc)}',
+                                detail=f'{len(bad_pc)} 个 present_char_ids 不在 registry 里：{_cut(bad_pc)}',
                                 evidence=sorted(bad_pc))] if bad_pc else [],
                        scanned=f'{n_pc} 个引用 / registry {len(c.chars)} 人'))
 
@@ -1261,28 +1208,18 @@ def _present(c: _Ctx) -> list[Outcome]:
                     target.append(f'ch{o} {where} {raw!r}')
         out.append(ran('present_names_invented',
                        [finding('present_names_invented',
-                                detail=f'{len(invented)}/{n_pn} 个在场者称呼**全书原文里都'
-                                       f'找不到**（模型自造的人）—— 契约明写「原文没交代在场者时'
-                                       f'交空数组，不要猜」，这些解析不出 char_id、'
-                                       f'写手也拿不到：{_cut(invented)}',
+                                detail=f'{len(invented)}/{n_pn} 个在场者称呼在全书原文里'
+                                       f'都找不到：{_cut(invented)}',
                                 evidence=sorted(invented))] if invented else [],
                        scanned=f'{n_pn} 个在场者称呼'))
-        for rid, got, blurb in (
-            ('present_names_ambiguous', amb,
-             '⚠ 这多半是**原文自己的歧义**（同一个叫法真的指两个人），不是数据错误；'
-             '**不猜**——三条候选消歧规则实测 0/9 有效，判 HARD 只会得到一盏永远红着的灯'),
-            ('present_names_unlisted', unlisted,
-             '⚠ **这是全书级抽取该修的，不是本层违约**（`address` 漏收了原文在用的叫法）。'
-             '代价在写手侧——这一拍少了一个在场者'),
-            ('present_names_pronoun', pron_hit,
-             '⚠⚠ **代词按设计永远不在 registry 里** ⇒ 它们**既不是自造也不是漏收**，'
-             '是两条契约在这里对不上。第一人称书里模型照原文写「我」——那是对的'),
-            ('present_names_late', late,
-             '⚠ **这是收益不是违约**：拦下来的正是「写手在角色登场前就拿到名字」'
-             '那条剧透旁路。非 0 说明模型仍在用后面的章'),
+        for rid, got in (
+            ('present_names_ambiguous', amb),
+            ('present_names_unlisted', unlisted),
+            ('present_names_pronoun', pron_hit),
+            ('present_names_late', late),
         ):
             out.append(ran(rid, [
-                finding(rid, detail=f'{len(got)}/{n_pn} —— {blurb}'
+                finding(rid, detail=f'{len(got)}/{n_pn}'
                                     + (f'：{_cut(got, 6)}' if got else ''),
                         evidence=[f'{len(got)}/{n_pn}'])],
                 scanned=f'{n_pn} 个在场者称呼'))
@@ -1326,21 +1263,14 @@ def _present(c: _Ctx) -> list[Outcome]:
                         narrow.append(f'{be.get("beat_id")}:{nm}')
         out.append(ran('present_broad', [
             finding('present_broad',
-                    detail=f'{broad} 处（**拍×角色**）event 点名了某角色而本拍未列它，'
-                           f'涉及 {n_ev} 条有 event 的拍 —— ⚠ **精度约 1/4**'
-                           f'（大多是正当提及：被议论/被回忆的人不算在场），'
-                           f'且**分子分母不同量纲**，所以不写成分数',
+                    detail=f'{broad} 处（拍×角色）event 点名某角色而本拍未列；'
+                           f'涉及 {n_ev} 条有 event 的拍',
                     evidence=[f'{broad}', f'{n_ev}'])],
             scanned=f'{n_ev} 条有 event 的拍 × {len(name_owners)} 个叫法'))
         out.append(ran('present_continuity',
                        [finding('present_continuity',
                                 detail=f'{len(narrow)} 处「相邻拍同地同层在场、本拍被点名却未列」'
-                                       f'（人在场景里凭空消失一拍；也可能是他只被想起/被提到）—— '
-                                       f'⚠⚠ **不判阻断**：按它去修数据会让另一半更差'
-                                       f'（「内心剖析某人」时逼着把他列进在场，'
-                                       f'就是造一个不存在的在场者）。'
-                                       f'⚠ 依赖 place 字面相等，**系统性漏检**，'
-                                       f'0 条不等于没有漏标：{_cut(narrow)}',
+                                       f'：{_cut(narrow)}',
                                 evidence=sorted(narrow))] if narrow else [],
                        scanned=f'{n_ev} 条有 event 的拍'))
 
@@ -1377,12 +1307,7 @@ def _present(c: _Ctx) -> list[Outcome]:
         out.append(ran('present_ungrounded',
                        [finding('present_ungrounded',
                                 detail=f'{len(ungrounded)}/{n_pairs} 个（章,在场者）对在本章原文里'
-                                       f'找不到任何字面依据 —— ⚠⚠ **它不是幻觉检测器**'
-                                       f'（实测 128 对报 1 条，逐条核过、幻觉 0 例）：'
-                                       f'它实际抓的是 ① `address[]` 漏收了原文在用的叫法'
-                                       f'② **后见之明标注**（那是一条剧透旁路）；'
-                                       f'也确有合法反例（整段用代词、recall/hearsay 的在场者'
-                                       f'本章不留字面）：{_cut(ungrounded)}',
+                                       f'找不到任何字面依据：{_cut(ungrounded)}',
                                 evidence=sorted(ungrounded))] if ungrounded else [],
                        scanned=f'{n_pairs} 个（章,在场者）对'
                                f'（另有 {n_narr} 对是本章叙述者，**已豁免**）'))
@@ -1421,10 +1346,7 @@ def _present(c: _Ctx) -> list[Outcome]:
         out.append(ran('present_early_named',
                        [finding('present_early_named',
                                 detail=f'{len(early_pres)} 个（章,在场者）对早于该角色在原文里'
-                                       f'被指名的章 —— 下游把 present 解析成【全书通用】'
-                                       f'display_name 直发写手，中途没有章级闸门 ⇒ '
-                                       f'非 0 就意味着写手会在角色登场前拿到他的名字：'
-                                       f'{_cut(early_pres)}',
+                                       f'被指名的章：{_cut(early_pres)}',
                                 evidence=sorted(early_pres))] if early_pres else [],
                        scanned=f'{n_pairs2} 个（拍,在场者）对'
                                f'（另 {n_narr2} 条是本章叙述者，**已豁免**——'
@@ -1452,9 +1374,7 @@ def _present(c: _Ctx) -> list[Outcome]:
         out.append(ran('event_early_name',
                        [finding('event_early_name',
                                 detail=f'{len(early_txt)} 处 event/summary 里写出了本章尚未指名的'
-                                       f'角色名 —— ⚠ **下游堵不住**：在下游做文本替换会摧毁'
-                                       f'人名替换那条构造性安全论证，只能从这一层修：'
-                                       f'{_cut(early_txt)}',
+                                       f'角色名：{_cut(early_txt)}',
                                 evidence=sorted(early_txt))] if early_txt else [],
                        scanned=f'{len(canon_first)} 个 canonical（已排除通名）× {len(c.bps)} 章'))
 
@@ -1474,10 +1394,7 @@ def _present(c: _Ctx) -> list[Outcome]:
         out.append(ran('pronoun_surface_unattested',
                        [finding('pronoun_surface_unattested',
                                 detail=f'{len(bad_pron)}/{n_pron} 个 pronoun_surfaces 在本章原文里'
-                                       f'找不到 —— 凡是契约要求逐字照抄的就该有一条确定性检查'
-                                       f'盯着，而不是只在 prompt 里叮嘱'
-                                       f'（实测 262 个照抄锚点 30 个对不上，**prompt 劝说压不住**）：'
-                                       f'{_cut(bad_pron)}',
+                                       f'找不到：{_cut(bad_pron)}',
                                 evidence=sorted(bad_pron))] if bad_pron else [],
                        scanned=f'{n_pron} 个自称字面（第三人称交空数组合法）'))
 
@@ -1493,7 +1410,7 @@ def _present(c: _Ctx) -> list[Outcome]:
         out.append(ran('scope_violation',
                        [finding('scope_violation',
                                 detail=f'有 {len(scope)} 条越界记录（某一批没按「本次任务范围」'
-                                       f'产出）—— **非空即失败**：{_cut(list(scope))}',
+                                       f'产出）：{_cut(list(scope))}',
                                 evidence=[str(x) for x in scope])] if scope else [],
                        scanned='`_provenance.scope_violations`'))
 
@@ -1509,8 +1426,7 @@ def _present(c: _Ctx) -> list[Outcome]:
             finding('batch_density',
                     detail=(f'逐章抽取（{len(batches)} 章 = {len(batches)} 次调用）'
                             if per_call and max(per_call) == 1 else
-                            f'{len(batches)} 次调用，每次 {per_call} 章')
-                           + ' —— 当前契约要求「批与章是同一个东西」',
+                            f'{len(batches)} 次调用，每次 {per_call} 章'),
                     evidence=[f'{len(batches)}', f'{per_call}'])],
             scanned=f'{len(batches)} 批'))
 
@@ -1534,11 +1450,7 @@ def _present(c: _Ctx) -> list[Outcome]:
                 if not (be.get('event') or '').strip()]
     out.append(ran('event_empty',
                    [finding('event_empty',
-                            detail=f'{len(empty_ev)}/{len(all_beats)} 拍的 event 是空的 —— '
-                                   f'这一层每个字段都是 LLM 写的，而产地只校验顶层键，'
-                                   f'少写一个 event 下游一路 `or \'\'` **不出声**。'
-                                   f'⚠ 判在本层不判 stage4：留在下游意味着要**先付掉一次'
-                                   f'规划调用**才发现这一层产坏了：{_cut(empty_ev)}',
+                            detail=f'{len(empty_ev)}/{len(all_beats)} 拍的 event 是空的：{_cut(empty_ev)}',
                             evidence=sorted(empty_ev))] if empty_ev else [],
                    scanned=f'{len(all_beats)} 拍'))
 
@@ -1556,10 +1468,8 @@ def _present(c: _Ctx) -> list[Outcome]:
                  if r.get('cache_policy') != 'refresh-write']
     out.append(ran('repair_cache_policy',
                    [finding('repair_cache_policy',
-                            detail=f'{len(bad_cache)} 次定向重生成没配「不读缓存」—— '
-                                   f'它的 prompt 与整跑时该章那一批**逐字相同** ⇒ '
-                                   f'**缓存必然命中** ⇒ 一个字都没重新生成，'
-                                   f'而它照样打印「已重生成」：{_cut(bad_cache)}',
+                            detail=f'{len(bad_cache)} 次定向重生成的 cache_policy '
+                                   f'不是 refresh-write：{_cut(bad_cache)}',
                             evidence=sorted(bad_cache))] if bad_cache else [],
                    scanned=f'{len(repairs)} 次定向重生成'))
     return out

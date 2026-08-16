@@ -85,6 +85,25 @@ def test_usage_combination_is_strict_about_missing_history_and_token_parts():
     assert got.completion_tokens is None
 
 
+def test_ask_json_can_refresh_a_valid_cached_response():
+    """Structured revision resampling must bypass, then replace, a valid cache row."""
+    cache = ResponseCache(Path(tempfile.mkdtemp()))
+    first = ChatResponse(
+        content=json.dumps({'voice': {'v': 1}, 'surface_habits': ['old']}),
+        finish_reason='stop')
+    second = ChatResponse(
+        content=json.dumps({'voice': {'v': 2}, 'surface_habits': ['new']}),
+        finish_reason='stop')
+    _client(FakeTransport.always(first), cache=cache).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='refresh-json')
+    transport = FakeTransport.always(second)
+    got = _client(transport, cache=cache).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='refresh-json',
+        cache_policy=CachePolicy.refresh())
+    assert got.voice == {'v': 2}
+    assert len(transport.calls) == 1
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、⭐ 降级阶梯 —— 每一档都零成本跑一遍
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,12 +119,12 @@ def test_the_ladder_is_exactly_the_four_rungs_and_there_is_only_one_of_it():
     from novel.llm import client
     src = inspect.getsource(client)
     assert src.count('LADDER: Final') == 1
-    # 两个入口默认都必须**走**它，不许各自展开一份。ask_text 允许收缩调用显式收窄，
+    # 两个入口默认都必须**走**它，不许各自展开一份。辅助调用可显式收窄，
     # 但默认值仍必须从这同一份常量取得。
     text_body = inspect.getsource(client.LlmClient.ask_text)
     json_body = inspect.getsource(client.LlmClient.ask_json)
     assert 'self._rungs if rungs is None' in text_body
-    assert 'in self._rungs' in json_body
+    assert 'self._rungs if rungs is None' in json_body
     # 思考开关默认 `on` ⇒ 默认构造的 client 走的仍是这同一份 LADDER（零行为变化）。
     assert _client(FakeTransport.always(OK_TEXT))._rungs is LADDER
 
@@ -152,6 +171,15 @@ def test_thinking_off_walks_only_the_single_nothink_rung():
     assert t2.rungs == [('low', False)]
 
 
+def test_a_node_effort_override_changes_only_the_first_rung():
+    medium = _client(FakeTransport.always(OK_TEXT), effort='medium')
+    assert medium._rungs == (('medium', True), ('low', True), ('low', False))
+    low = _client(FakeTransport.always(OK_TEXT), effort='low')
+    assert low._rungs == (('low', True), ('low', False))
+    with pytest.raises(ValueError, match='effort'):
+        _client(FakeTransport.always(OK_TEXT), effort='ultra')
+
+
 def test_thinking_off_exhaustion_still_raises_and_never_returns_an_empty_draft():
     """off 模式全空同样抛 `LlmFailed`——「绝不返回空稿」与思考开关无关。"""
     t = FakeTransport.empty_until(len(NOTHINK_RUNGS), OK_TEXT)
@@ -194,6 +222,50 @@ def test_a_text_helper_can_explicitly_use_one_cheaper_rung():
     assert _client(t).ask_text(
         'sys', 'usr', purpose='trim', rungs=(('low', False),)) == '一段正文'
     assert t.rungs == [('low', False)]
+
+
+def test_a_json_helper_can_explicitly_use_one_cheaper_rung():
+    """Structured trim keeps its JSON contract without paying the prose ladder."""
+    t = FakeTransport.always(OK_JSON)
+    got = _client(t).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='trim-json',
+        rungs=(('low', False),))
+    assert got.voice == {'a': 1}
+    assert t.rungs == [('low', False)]
+
+
+def test_empty_custom_json_ladder_fails_before_budget_cache_or_transport():
+    t = FakeTransport.always(OK_JSON)
+    budget_calls = []
+    client = _client(t, budget_checker=lambda *args, **kwargs: budget_calls.append((args, kwargs)))
+    with pytest.raises(ValueError, match='rungs 不能为空'):
+        client.ask_json('sys', 'usr', model_cls=Resp, purpose='trim-json', rungs=())
+    assert budget_calls == []
+    assert t.calls == []
+
+
+def test_custom_json_rungs_reach_budget_preflight_and_keep_cache_identity():
+    cache = ResponseCache(Path(tempfile.mkdtemp()))
+    budget_requests = []
+
+    def budget_checker(requests, **_kwargs):
+        budget_requests.append(tuple(requests))
+
+    first_transport = FakeTransport.always(OK_JSON)
+    first = _client(first_transport, cache=cache, budget_checker=budget_checker)
+    first.ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='trim-json',
+        rungs=(('low', False),))
+    assert [(row.reasoning_effort, row.thinking) for row in budget_requests[0]] == [
+        ('low', False)]
+
+    second_transport = FakeTransport.always(OK_JSON)
+    second = _client(second_transport, cache=cache, budget_checker=budget_checker)
+    second.ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='trim-json',
+        rungs=(('low', False),))
+    assert second_transport.calls == []
+    assert len(budget_requests) == 2, '预算预检必须早于缓存命中'
 
 
 def test_an_empty_custom_text_ladder_is_a_call_error():
@@ -699,6 +771,8 @@ def test_every_wire_attempt_gets_its_own_ledger_row():
     assert [r['status'] for r in rows] == [429, 429, None]
     assert rows[0]['prompt_tokens'] is None, '失败那次没有任何读数，不许编一个 0'
     assert rows[2]['prompt_tokens'] == 10
+    assert rows[0]['prompt_cache_hit_tokens'] is None
+    assert rows[2]['prompt_cache_hit_tokens'] is None, '供应商没给不能记成 0'
     assert rows[0]['reasoning_effort'] == 'high' and rows[0]['thinking'] is True
     assert rows[2]['json_mode'] is False
     assert rows[2]['max_tokens'] == DEFAULT_MAX_TOKENS
@@ -799,6 +873,25 @@ def test_the_ledger_separates_real_calls_from_cache_hits():
     assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (1, 1)
     u = ctx.ledger.usage()
     assert u is not None and (u.calls_made, u.calls_cached) == (1, 1)
+
+
+def test_provider_prompt_cache_counts_keep_null_distinct_from_zero():
+    d = Path(tempfile.mkdtemp())
+    ctx = RunContext.open(_book(), '123', 'stage3.style', paid=True,
+                          ledger=CostLedger(path=d / 'ledger.jsonl'))
+    response = ChatResponse(
+        content='一段正文', finish_reason='stop', model='deepseek-v4-pro',
+        usage={
+            'prompt_tokens': 10,
+            'prompt_cache_hit_tokens': 0,
+            'prompt_cache_miss_tokens': 10,
+            'completion_tokens': 5,
+        },
+    )
+    _client(FakeTransport.always(response), ctx=ctx).ask_text('s', 'u', purpose='cache-accounting')
+    row = json.loads((d / 'ledger.jsonl').read_text('utf-8').splitlines()[0])
+    assert row['prompt_cache_hit_tokens'] == 0
+    assert row['prompt_cache_miss_tokens'] == 10
 
 
 def test_a_run_with_no_calls_has_no_usage_key_at_all():

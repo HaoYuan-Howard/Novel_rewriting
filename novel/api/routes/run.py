@@ -25,7 +25,7 @@ router = APIRouter(prefix='/novels')
 @router.get('/{sid}/run', response_model=RunProgressView)
 def get_run_progress(sid: str = Depends(checked_sid),
                      base: str = Depends(get_base)) -> RunProgressView:
-    """14 步跑到哪了。**纯读，0 成本，不写盘。**
+    """`NODES` 全图跑到哪了。**纯读，0 成本，不写盘。**
 
     ⚠ **书目录不存在也是 200，不是 404**：stage0.remove 的打点先于书目录
     落地，那时进度屏就得开得开——`stage_done` 全 `None`。「没这本书」与

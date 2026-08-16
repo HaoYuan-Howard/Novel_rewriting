@@ -99,9 +99,11 @@ REMEDIATION: Final = ('llm', 'human', 'deterministic', 'none')
 #: 后者是**系统自己的漏洞**——一条注册在案的判据这一次没有任何代码去执行它。
 STATUS: Final = ('ok', 'hit', 'unver', 'skipped')
 
-#: 作业状态。**服务重启后原本 `running` 的一律改判 `unknown`**，不是 `ok`：
+#: 作业状态。`landed_red` = 命令以 exit 1 结束：产物已落盘，但报告有阻断红行；
+#: 它与「命令没跑成」的 `failed` 处置相反，不可再合并。
+#: **服务重启后原本 `running` 的一律改判 `unknown`**，不是 `ok`：
 #: 重启前它是死是活我们真的不知道。
-JOB_STATE: Final = ('running', 'ok', 'failed', 'unknown')
+JOB_STATE: Final = ('running', 'ok', 'landed_red', 'failed', 'unknown')
 
 #: 作业记录是一串**事件**，`JOB_STATE` 是它们折叠出来的**视图**（`_orchestration.md` §2.1）。
 #:
@@ -115,10 +117,16 @@ JOB_STATE: Final = ('running', 'ok', 'failed', 'unknown')
 #: 回去改就毁掉了 append-only 的全部意义，而那正是「被 kill 不损坏」的来源。
 JOB_EVENT_KINDS: Final = ('started', 'step', 'ended', 'reconciled')
 
-#: 「待人工」清单的六类。**`unver` 不进这张清单**——那是判据的边界，不是待办；
-#: 堆进去清单就永远清不空，而清不空的清单没人看。
+#: 「待人工」清单的八类。`repairable` 是已经有 0 成本确定性修复路由的红行；
+#: `human_only` 才是只能人工裁决的红行。
+#: **通用 check 报告里的 `unver` 仍不进这张清单**——那是判据的边界，
+#: 不是待办；只有 TODO-24 全书评测中可以通过证据与人工决策消解的
+#: `pending` / `UNVER` 才以 `verification` 入列。
 #: ⚠ `approval` 是**按设计就该人做的一步**，不是故障，但它确实该在这张清单上。
-INBOX_KIND: Final = ('invalid', 'rejected', 'stalled', 'human_only', 'upstream', 'approval')
+INBOX_KIND: Final = (
+    'invalid', 'rejected', 'stalled', 'repairable', 'human_only',
+    'verification', 'upstream', 'approval',
+)
 
 #: 结论的根因**第一嫌疑**层。`corpus` = 原文自身如此，没有可修复的流水线阶段。
 #: Stage 0~7 均可拥有本层结论；这也是 `Finding.owner` 的完整取值面。
@@ -487,28 +495,31 @@ CHANGE_TYPES_ENUM: Final = 'stable|development|revelation|deterioration|reversal
 #: 本表没有那个形状（没有从它派生的分数），所以不必登记为不发。
 BARE_PRONOUNS: Final = ('我', '你', '他', '她', '它', '咱')
 
-#: ⭐ `R-11.13` 那句**界面上必须常驻**的标注。剧透开关只关四个字段，**已知旁路仍在**。
-#:
-#: 【为什么它是一个常量而不是前端的一句文案】它有**两个**消费方：界面（常驻显示）
-#: 与 F 期 stage2 的屏蔽实现（它得照着这句话决定关哪几个字段）。两个消费方 ⇒ 必须有唯一落点。
-#: 措辞是从现役后端的 `/api/enums` 冻结抓包里原样搬来的（统一契约 §八的 `enums.json`
-#: 的 `partial_mask_note`），因为那正是今天真的显示在界面上的那句话。
-#:
-#: ⚠⚠ **刻意只立这一句话，不立 `PARTIAL_MASK_FIELDS` 那四个字段名的元组**——
-#: 那不是漏了。stage2 未移植 ⇒ 那份取值面今天**零消费方**，而给一个零消费方的取值面
-#: 先起个名字就是抢跑（判据 32，同 `NodeSpec.flags` 里三个 `*.approve` 填 `()` 的理由）。
-#: ⇒ F 期落地 stage2 的屏蔽实现时才生它，并**同时**加一条
-#: 「本句里必须逐个出现那四个字段名」的测试——那时候它才有东西可守。
-#:
-#: ⚠ 它是本模块里**唯一一个整句中文**的常量。`/api/enums` 的发布器按类型分派，
-#: 标量默认**不发**（判据阈值发过去等于请前端自己判 ⇒ 第二个判官，`R-11.4`），
-#: 所以它必须显式登记在 `novel/api/enums.py::_PUBLISHED_SCALARS` 里。
-PARTIAL_MASK_NOTE: Final = (
-    '本开关只关四个字段（characters[].fate · canon.secrets · arc.climax · arc.ending）。'
-    'F-047 实测同一批事实仍会从 role（F-075：role 里可能带中段才揭示的事实）、'
-    'relations[].valid_from_chapter、world_rules[].versions[].desc 漏出去。'
-    '**这是部分屏蔽，不是屏蔽。**'
-)
+#: TODO-25 的唯一机器契约。它描述的是显示投影，不是访问控制：服务端响应仍含完整数据。
+#: 后端发布器、前端 adapter、Screen 与 mock 都消费这一个结构；隐藏路径和承诺不再散落成文案。
+SPOILER_DISCLOSURE: Final = {
+    'mode': 'display_only',
+    'security_boundary': False,
+    'server_sends_full_data': True,
+    'hidden_paths': (
+        'characters[].fate', 'secrets', 'arc.climax', 'arc.ending',
+    ),
+    'known_leakage_surfaces': (
+        'characters[].role', 'relations[].valid_from_chapter',
+        'world_rules[].versions[].desc', 'network_response_and_devtools',
+    ),
+    'consumers': (
+        'web/src/api/spoilers.ts', 'web/src/screens/global/GlobalScreen.tsx',
+        'web/src/api/mock.ts',
+    ),
+    'notice': (
+        '这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏 fate、secrets、'
+        'climax、ending 四处核心字段，role、关系时点、规则正文与网络响应仍可能剧透。'
+    ),
+}
+
+#: 旧名字只作源码兼容别名；`/api/enums` 不再单独发布，避免一句话与结构化契约分家。
+PARTIAL_MASK_NOTE: Final = SPOILER_DISCLOSURE['notice']
 
 #: 一次调用当时的缓存口径，记进 `_provenance`（stage2 的 `repairs[]` · stage3 的 `attempts[]`）。
 #: ⚠ **定向重生成必须配 `refresh-write`**（`R-3.11`）：它的 prompt 与整跑时那一批**逐字相同**，
@@ -761,6 +772,7 @@ FREE_ENTRIES: Final = {
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
     '--apply-edit': '把人工改过的内容落成新的一轮',
+    '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策',
     # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
     #   `--wontfix` 原来只挂在 `stage5.review` 上，而那是个 `paid=False` 节点
     #   ⇒ 不进本表也判不出付费，注释因此写着「它是参数不是入口 ⇒ 不进 FREE_ENTRIES」。
@@ -769,6 +781,7 @@ FREE_ENTRIES: Final = {
     #   ⇒ 一次**纯记账、一个请求都不发**的动作会当场要 `--yes` 二次确认。
     #   实测就是这么发现的（真跑 CLI 被拦下）。**表不全 ⇒ 系统在对用户说假话。**
     '--wontfix': '把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用',
+    '--retain-pretrim': '确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，不调用模型',
 }
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
@@ -839,6 +852,11 @@ VALUED_FLAGS: Final = {
     '--apply-edit': '人工改好的候选稿路径（必填；相对路径相对**书目录**，'
                     '如 stage7/name_map_edit.json，也接受书目录内的绝对路径）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
+    '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
+    '--apply-merge-plan': '审校台生成的 stage0 三方合并决定（冲突逐项决定 + 乐观锁）',
+    '--actor': '人工决定的自报身份（不是认证身份）',
+    '--reason': '人工决定的非空理由',
+    '--subject-sha256': '人工决定乐观锁定的完整内容 SHA-256',
     '--source': '要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid',
     # ⚠ `--pick` 只表示 stage6 定稿候选序号；定稿动作本身是独立节点。
     # 不进 `FREE_ENTRIES`（不是独立入口），也不进 `WRITE_EFFECTS`
@@ -914,6 +932,8 @@ WRITE_EFFECTS: Final = {
     #   stage5 挂在 `stage5.review` 上、stage6 挂在 `stage6.hook` 上，两边都是
     #   「写自己那一层的 `wontfix.json`，不产本节点 `produces` 里那一份」⇒ 一句话说得下。
     '--wontfix': '把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）',
+    '--retain-pretrim': ('写 stage5/trim_resolution_chNN.json；旧 resolution 归档，'
+                         '不改正文、不采用收缩候选'),
     # ── stage2 那两条 0 成本但**会写盘**的路（F5-1 补）──
     # ⚠ 它们与上面 `--remeasure` / `--recheck` 那几条是同一类：**免费，但写盘**。
     #   本表存在的全部理由就是这一类（原型那句「`FREE_FLAGS` 只管钱不管写」
@@ -966,6 +986,7 @@ class NodeSpec(NamedTuple):
     paid_flags: tuple[str, ...] = ()    # 能把一个 0 成本节点变成付费的 flag
     flags: tuple[str, ...] = ()         # ★ 本节点接受哪些**跑法** flag，见下
     produces: tuple[str, ...] = ()      # ★ 默认路径往盘上写哪几份产物，见下
+    effort: str | None = None           # 可选首档；未做 A/B 的节点必须保持 None（即 high）
 
 
 #: 全部作业单元。⚠ 顺序即处理链顺序，队列与断点续跑都按它排。
@@ -1008,9 +1029,11 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=(artifact_paths.STAGE0_REMOVAL_REPORT,
                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
-                                 produces=(artifact_paths.STAGE0_REMOVAL_REPORT,)),
+                                  flags=('--actor', '--reason'),
+                                  produces=(artifact_paths.STAGE0_REMOVAL_REPORT,)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
-                                 flags=('--apply-edit', '--apply-edit-plan'),
+                                  flags=('--apply-edit', '--apply-edit-plan',
+                                         '--apply-merge-plan', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE0_REMOVAL_REPORT,
                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
@@ -1025,8 +1048,9 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
                                  flags=('--renormalize', '--purge-role', '--resample',
                                          '--revalidate', '--full-extract',
-                                         '--apply-edit'),
-                                 produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,)),
+                                         '--apply-edit', '--review-decisions'),
+                                 produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,
+                                           artifact_paths.STAGE2_GLOBAL_REVIEW)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
@@ -1073,7 +1097,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   而豁免那一份是**可选**的——没人豁免过任何东西时它就不该存在（盘上 3/3 本都没有）。
     #   把它登记进来会让每一本书**永远差一份产物**。⇒ 它的写盘效应登记在 `WRITE_EFFECTS`。
     'stage5.review':    NodeSpec('stage5', 'R-8',  False, 'stage5 全书验收',
-                                 flags=('--check-only', '--wontfix'),
+                                 flags=('--check-only', '--wontfix', '--retain-pretrim',
+                                        '--chapters', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE5_REVIEW,)),
     # 付费语义审判是机械验收的 companion，不取代 `stage5.review` 的 0 成本属性。
     # 它不接 `--check-only`，否则一个 stage 会有两个复检节点、HTTP kind 路由产生歧义。
@@ -1100,7 +1125,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
     #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',
-                                 flags=('--pick',),
+                                 flags=('--pick', '--actor', '--reason',
+                                        '--subject-sha256'),
                                  produces=(artifact_paths.STAGE6_HOOK,)),
     # ⚠ `--revalidate` 是 F2 补的：本层加了落盘闸门（**任何一条 hard ⇒ `.INVALID`**，
     #   照 stage3 不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
@@ -1109,14 +1135,15 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  flags=('--dry-run', '--check-only', '--identity',
                                         '--recheck', '--apply-edit', '--revalidate'),
                                  produces=(artifact_paths.STAGE7_NAME_MAP,)),
-    'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
-                                 produces=(artifact_paths.STAGE7_BOOK,)),
     # ⚠⚠ **`flags=()` 在这一格是【终态】不是待定**（2026-08-12，F2 查清）：
     #   上面那条「候选序号属 F 期」的注释对 stage6 是对的，对本层不是——
     #   **本层一本书只有一份人物表**，定稿是「给整份盖章」不是「从三条候选里选一条」，
     #   本层定稿只是给整份人物表盖章，**没有候选参数**。
     'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
                                  produces=(artifact_paths.STAGE7_NAME_MAP,)),
+    # 成书只能消费已批准的人名表；声明顺序同时是队列和进度屏的唯一顺序权威。
+    'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
+                                 produces=(artifact_paths.STAGE7_BOOK,)),
 }
 
 # ⚠⚠ **`--revise` 挂哪个节点：D 期登记的那处分歧已在 F4 裁掉**（2026-08-12，用户裁决）。
@@ -1151,20 +1178,13 @@ STAGE_SECTIONS: Final[dict[str, tuple[str, ...]]] = {
 # 进度信标（agent 代跑的可观察轨迹）
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: 跑书操作序列 —— SKILL《novel-pipeline-operator》工作流契约中 14 步表的**唯一机读落点**。
-#: 值是**节点 id 的有序元组**，只补「顺序」这一件 `NODES` 里没有的事：
-#: label 从 `NODES[node].label` 取、贵贱由 `novel/orchestrator/nodes.py::is_paid`
-#: 按 `(node, ())` 派生——三张事实各只有一处算，本表不抄第二份。
-#: ⚠ 顺序与 `NODES` 的声明序**不同**（尾三格：rename → approve → assemble），
-#: 别拿 dict 序当接口。⚠ 修复回路 / 补跑的命令不在本表——它们是同一批节点上的
-#: **跑法**，打点按节点归位。钉它的测试在 `tests/test_beacon.py`。
-PIPELINE_STEPS: Final = (
-    'stage0.remove', 'stage0.approve', 'stage1.partition',
-    'stage2.global', 'stage4.plan',
-    'stage5.write', 'stage5.review', 'stage5.semantic',
-    'stage6.hook', 'stage6.semantic', 'stage6.approve',
-    'stage7.rename', 'stage7.approve', 'stage7.assemble',
-)
+#: 跑书进度的节点序列。**直接从 `NODES` 派生，不维护第二张模板。**
+#:
+#: 旧实现手抄了 14 步，漏掉 `stage0.edit` / `stage2.blueprint` / `stage3.style` /
+#: `stage4.context`；真实 UI 与队列跑到这些节点时，进度屏因此仍显示「还没跑到」。
+#: `NODES` 的声明顺序已经是队列与断点续跑的处理链顺序，进度屏只消费同一顺序；
+#: 修复回路仍按节点归位，不因 flags/mode 另造一步。
+PIPELINE_STEPS: Final = tuple(NODES)
 
 #: 信标事件的两态。**`start` 不带退出码、`end` 必带**——由
 #: `contracts/schema/orchestration.py::ProgressEvent` 的后置校验钉住。

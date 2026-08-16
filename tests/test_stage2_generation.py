@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+from functools import partial
 import json
 import re
 import shutil
@@ -14,9 +15,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from contracts.schema import encode_artifact
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
-from novel.errors import ArtifactUnreadable, GateBlocked, UpstreamMissing
+from novel import prov
+from novel.errors import (
+    ArtifactUnreadable, ContextBudgetRefused, GateBlocked, ProvenanceRefused, UpstreamMissing,
+)
+from novel.llm.budget import enforce_request_budget
 from novel.llm.cache import CachePolicy, ResponseCache
 from novel.llm.client import LlmClient
 from novel.llm.ledger import CostLedger
@@ -150,6 +156,10 @@ def _response_blueprints() -> dict[int, dict]:
 
 
 def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
+    clean = book / 'stage0/clean_text.txt'
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    if not clean.exists():
+        clean.write_text('synthetic stage0 root\n', encoding='utf-8', newline='')
     return RunContext(
         novel_dir=book,
         node=node,
@@ -170,6 +180,8 @@ def _client(ctx: RunContext, responder) -> tuple[LlmClient, FakeTransport]:
             model='test-model',
             max_retries=0,
             concurrency=3,
+            # 本文件测试 Stage2 形状与并发，不用一个虚构模型冒充供应商预算规格。
+            budget_checker=lambda *_args, **_kwargs: None,
         ),
         transport,
     )
@@ -186,6 +198,30 @@ def _ok(data: dict) -> ChatResponse:
         },
         model='test-model',
     )
+
+
+def test_stage2_refuses_stale_stage1_before_the_client_can_be_called(tmp_path):
+    book = tmp_path / '旧上游_123'
+    book.mkdir()
+    ctx = _ctx(book, 'stage2.global')
+    store = ArtifactStore(ctx)
+    store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    clean = book / 'stage0/clean_text.txt'
+    old_root = prov.content_sha1(clean.read_bytes())
+    partition = book / 'stage1/partition_report.json'
+    partition.write_text(
+        json.dumps(encode_artifact(
+            'stage1/partition_report.json', {'input_sha1': old_root}), ensure_ascii=False),
+        encoding='utf-8', newline='',
+    )
+    clean.write_text('新的 stage0 根\n', encoding='utf-8', newline='')
+    client, transport = _client(
+        ctx, lambda *_args: pytest.fail('stale 上游不应触达 transport'))
+
+    with pytest.raises(ProvenanceRefused, match='生成或付费请求前拒绝消费'):
+        extract.run_global(ctx, client)
+
+    assert transport.calls == []
 
 
 def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
@@ -346,6 +382,77 @@ def test_global_resample_bypasses_the_rejected_cache_and_preserves_its_round():
             '原问题稿没有进入轮次归档'
         usage = ctx.ledger.usage()
         assert usage.calls_made == 2 and usage.calls_cached == 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_stage2_global_over_limit_stops_before_transport_cache_ledger_or_artifact():
+    root = Path(tempfile.mkdtemp())
+    book = root / '超限测试_123'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(ctx).write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        transport = FakeTransport.always(_ok(_response_global()))
+        cache = ResponseCache(root / 'cache')
+        checker = partial(enforce_request_budget, counter=lambda _request: 904_001)
+        client = LlmClient(ctx, transport, cache=cache, model='deepseek-v4-pro',
+                           max_retries=0, budget_checker=checker)
+
+        with pytest.raises(ContextBudgetRefused, match='input_tokens=904001'):
+            extract.run_global(ctx, client)
+
+        store = ArtifactStore(ctx)
+        assert not store.exists(extract.GLOBAL_REL)
+        assert not store.exists(extract._INVALID)
+        assert transport.calls == []
+        assert ctx.ledger.usage() is None
+        assert not (root / 'cache').exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_stage4_plan_over_limit_stops_before_transport_or_any_stage4_artifact():
+    from novel.stages.stage4 import plan as stage4_plan
+
+    root = Path(tempfile.mkdtemp())
+    book = root / '规划超限测试_123'
+    book.mkdir()
+    try:
+        # 先由当前 Stage2 正式 producer 生成 Stage4 所需的三份上游。
+        global_ctx = _ctx(book, 'stage2.global')
+        ArtifactStore(global_ctx).write(
+            extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        global_client, _ = _client(
+            global_ctx, lambda _request, _index: _ok(_response_global()))
+        extract.run_global(global_ctx, global_client)
+
+        by_ordinal = _response_blueprints()
+
+        def respond(req: ChatRequest, _index: int) -> ChatResponse:
+            ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+            return _ok({'blueprints': [by_ordinal[ordinal]]})
+
+        blueprint_ctx = _ctx(book, 'stage2.blueprint')
+        blueprint_client, _ = _client(blueprint_ctx, respond)
+        assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
+
+        ctx = _ctx(book, 'stage4.plan')
+        transport = FakeTransport.always(ChatResponse(content='{}'))
+        checker = partial(enforce_request_budget, counter=lambda _request: 904_001)
+        client = LlmClient(ctx, transport, cache=ResponseCache(root / 'cache'),
+                           model='deepseek-v4-pro', max_retries=0,
+                           budget_checker=checker)
+
+        with pytest.raises(ContextBudgetRefused, match='stage4.plan'):
+            stage4_plan.run_plan(ctx, client)
+
+        store = ArtifactStore(ctx)
+        assert not store.exists(stage4_plan.REL)
+        assert not store.exists(stage4_plan._INVALID)
+        assert not store.exists(stage4_plan.CTX_REL)
+        assert transport.calls == []
+        assert ctx.ledger.usage() is None
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

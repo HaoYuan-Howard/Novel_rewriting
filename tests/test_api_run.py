@@ -19,9 +19,9 @@ fastapi = pytest.importorskip(
     'fastapi', reason='没装 fastapi ⇒ 这一批**没在查**，不是「查过没事」')
 from fastapi.testclient import TestClient               # noqa: E402
 
-from contracts.invariants import STAGES                 # noqa: E402
+from contracts.invariants import NODES, STAGES          # noqa: E402
 from contracts.schema.orchestration import ProgressEvent  # noqa: E402
-from novel.api.app import create_app                    # noqa: E402
+from novel.api.app import UI_HEADER, create_app         # noqa: E402
 from novel.orchestrator import beacon                   # noqa: E402
 
 
@@ -42,7 +42,7 @@ def test_empty_base_is_all_pending(client):
     assert r.status_code == 200
     d = r.json()
     assert d['sid'] == '42'
-    assert len(d['steps']) == 14
+    assert [step['node'] for step in d['steps']] == list(NODES)
     assert {s['beacon'] for s in d['steps']} == {'pending'}
     assert set(d['stage_done']) == set(STAGES)
     assert all(v is None for v in d['stage_done'].values())
@@ -74,3 +74,19 @@ def test_existing_book_dir_gives_real_stage_done(client):
     # 一份产物都没有：非逐章层 done=False；stage5 读不回计划 ⇒ None（判不了≠False）
     assert d['stage_done']['stage0'] is False
     assert d['stage_done']['stage5'] is None
+
+
+def test_stage2_chapter_fix_route_reaches_http_preview(client):
+    c, base = client
+    os.mkdir(os.path.join(base, '测试书_42'))
+    response = c.post(
+        '/api/jobs/preview',
+        headers={UI_HEADER: '1'},
+        json={'sid': '42', 'node': 'stage2.blueprint',
+              'flags': ['--chapters', '11']},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['flags'] == ['--chapters', '11']
+    assert any('--chapters' in step['argv'] and '11' in step['argv']
+               for step in body['steps'])

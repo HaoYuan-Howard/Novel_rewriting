@@ -90,7 +90,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 
 ## 三、端点 → 响应
 
-**当前落地的五十个**（其余端点见 §七）：
+**当前落地的五十五个**（其余端点见 §七）：
 
 | 端点 | 响应 | 新旧 |
 |---|---|---|
@@ -109,13 +109,16 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/queues/preview` | `QueuePlan`（请求体 `QueueCreateRequest`；纯预览） | **复用** `_orchestration.md` |
 | `POST /api/queues` | `QueueRun`（202；确认并建立、启动持久队列） | **复用** `_orchestration.md` |
 | `GET /api/queues/:id` | `QueueRun` | **复用** `_orchestration.md` |
-| `POST /api/queues/:id/resume` | `QueueRun`（202） | **复用** `_orchestration.md` |
+| `POST /api/queues/:id/resume` | `QueueRun`（202；请求体 `QueueResumeRequest`，剩余付费命令要求 `confirmed=true`） | **复用** `_orchestration.md` |
 | `POST /api/queues/:id/items/:index/cancel` | `QueueRun`（只取消尚未开始项） | **复用** `_orchestration.md` |
 | `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
 | `GET /api/novels/:sid/stage0/report` | `RemovalReport` | **复用** `stage0.md` |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
 | `POST /api/novels/:sid/stage0/edit` | `JobRecord`（请求体 `Stage0EditRequest`） | 新 |
-| `POST /api/novels/:sid/stage0/approve` | `JobRecord` | 新 |
+| `POST /api/novels/:sid/stage0/approve` | `JobRecord`（请求体 `Stage0ApprovalRequest`：自报 `actor` + `reason`） | 新 |
+| `GET /api/novels/:sid/stage0/merge` | `Stage0MergeCandidate`（当前 `base/ours/theirs` 与 typed conflicts） | 新 |
+| `POST /api/novels/:sid/stage0/merge/resolve` | `JobRecord`（请求体 `Stage0MergeDecisionRequest`） | 新 |
+| `POST /api/novels/:sid/stage0/merge/reject` | `JobRecord`（同一请求体，`resolutions=[]`） | 新 |
 | `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
 | `GET /api/novels/:sid/stage1/segments` | `Stage1Segments` | 新 |
 | `GET /api/novels/:sid/stage1/chapters` | `Stage1Chapters` | 新 |
@@ -126,14 +129,18 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/novels/:sid/approvals/deep` | `ApprovalDoc`（请求体 `DeepSelectionRequest`） | 新 |
 | `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
+| `POST /api/novels/:sid/approvals/backfill` | `ApprovalBackfillResult`（按盘面显式补录，不在 GET 时静默发生） | 新 |
 | `GET /api/novels/:sid/reading/:o` | `ReadingView` | 新 |
 | `GET /api/novels/:sid/stage2/global` | `GlobalView` | 新 |
+| `GET /api/novels/:sid/stage2/global-review` | `GlobalReviewView`（含当前完整 subject 重算状态与逐项审计） | 新 |
+| `POST /api/novels/:sid/stage2/global-review` | `JobRecord`（请求体 `GlobalReviewDecisionSet`；仅全部 PASS 的 exit 0 可盖 s2） | 新 |
 | `GET /api/novels/:sid/stage4/:o` | `Stage4View` | 新 |
 | `GET /api/novels/:sid/stage5/:o` | `Stage5View` | 新 |
 | `GET /api/novels/:sid/review/:o` | `ReviewView` | 新 |
 | `GET /api/novels/:sid/inbox` | `InboxView` | 新 |
 | `GET /api/novels/:sid/stage6` | `Stage6View` | 新 |
 | `GET /api/novels/:sid/stage7` | `Stage7View` | 新 |
+| `GET /api/novels/:sid/stage7/book.txt?download=` | 仅在 Stage7 人物表已批准、输入/正文/文案均 current/fresh 且组装账闭合时返回 UTF-8 纯文本（`download=true` 时为附件）；旧文件仅存在不构成交付资格 | 新 |
 | `GET /api/novels/:sid/stage7/:o` | `Stage7View` | 新 |
 | `GET /api/novels/:sid/run` | `RunProgressView`（信标折叠 + 完成度，观察轨迹非判定） | **复用** `_orchestration.md` |
 | `POST /api/agent/runs/preview` | `AgentRunPreview`（与真跑同一构造函数） | 新 |
@@ -142,6 +149,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `GET /api/agent/runs/:id/log?offset=N` | `LogChunk`（与作业日志同一形状） | 新 |
 | `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（熄火：terminate 子进程树） | 新 |
 | `POST /api/novels/:sid/review/:o/edit` | `JobRecord`（请求体 `DraftEditRequest`） | 新 |
+| `POST /api/novels/:sid/stage5/trim/:o/retain-pretrim` | `JobRecord`（请求体 `TrimResolutionRequest`；只允许保留原稿） | 新 |
 | `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`） | 新 |
 | `POST /api/novels/:sid/stage7/approve` | `JobRecord`（无请求体） | 新 |
 
@@ -151,8 +159,10 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 「预览与真跑是同一个对象」从一句话变成字面事实（`R-11.8`）。
 
 队列 preview 同样只读；`POST /api/queues` 只有在 `confirmed=true`（或计划无付费项）时才会
-先落 `QueueStart`、再起后台 runner。服务 lifespan 会恢复未完成队列，但只能消费创建时冻结且
-已经确认的命令。取消运行中项返回 409；它不会 terminate 或把在途调用改写成 cancelled。
+先落 `QueueStart`、再起后台 runner。服务 lifespan 会恢复未完成队列，但只能消费创建时冻结的
+命令；新一轮仍可能付费的恢复必须先重新展示这些冻结命令，并在 resume 请求体显式给
+`confirmed=true`，否则返回 409 且不启动。取消运行中项返回 409；它不会 terminate 或把在途调用
+改写成 cancelled。
 
 `AgentRunRequest` 的授权面是两条正交轴：
 
@@ -242,14 +252,15 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 
 ---
 
-## 五、三个小模型
+## 五、四个小模型
 
 | 模型 | 字段 | 说明 |
 |---|---|---|
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
+| `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录 |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
-| `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
+| `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|landed_red|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
 
 `PreviewRequest`：`sid`（已有书为非空字符串；首次 `stage0.remove --source` 为 `null`）·
 `node` · `mode` · `flags[]`。
@@ -317,11 +328,11 @@ S-08（ctx 不在仍 200，`materials=null`）。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `identity_plan` | 布尔 | 是 | `true` = 本屏是恒等基线。此时计划侧三个 goal 是显式标记（`IDENTITY_GOAL`），**不是真决策** |
+| `identity_plan` | 布尔 | 是 | `true` = 本屏是恒等基线。此时计划侧三个 typed goal 的 `intent` / `fact_refs[]` 指向恒等事实，**不是真决策** |
 | `reconstruction_strategy` / `chapters` / `ordinal` | | 是 | `ordinal ∈ chapters`（后置条件） |
-| `index[]` | 数组 | 是 | 章索引。⚠ **没有 `in_band` / `style_hits`**——那是判据结论，唯一来源 `/check/stage4`（`R-11.4`），要并排显示就去 join 那份报告。`hidden=null` = ctx 不在盘上**判不了**，不编 0 |
-| `plan_chapter` | 对象 | 是 | `beats[].budget_chars=null` 只出现在恒等基线上：算不出源字数的拍**不估算、不拿邻居补** |
-| `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书 |
+| `index[]` | 数组 | 是 | 章索引；每行带 `chapter_goal`，供深/浅选章一次看全，不额外发 N 次请求。⚠ **没有 `in_band` / `style_hits`**——那是判据结论，唯一来源 `/check/stage4`（`R-11.4`），要并排显示就去 join 那份报告。`hidden=null` = ctx 不在盘上**判不了**，不编 0 |
+| `plan_chapter` | 对象 | 是 | 三个 goal 为 `{intent,fact_refs[],rationale?}`；`beats[]` 是盘上 `segments[]` 的展示投影，并保留 producer-owned `slot`。`budget_chars=null` 只出现在恒等基线上：算不出源字数的拍**不估算、不拿邻居补** |
+| `ctx_chapter` | 对象 或 null | 是 | 写手实际拿到的任务书。内容顺序以 `segments[]` / `segments[].slot` 为准；typed goal 下发时剥掉 `prompt_private` 的 `rationale`，只发送 `intent` 与可复算 `fact_refs[]` |
 | `writer_target` | 二元组 或 null | 是 | 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）；`null` ⇔ `ctx_chapter=null`（同进同出，后置条件） |
 | `plan_state` / `ctx_state` | 对象 | 是 | 两份产物各自的 `ArtifactState` |
 | `_provenance` / `_ctx_provenance` | 对象 或 null | 是 | 两份来源账分两个键出，不合并 |
@@ -339,7 +350,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | `chapters` / `ordinal` / `index[]` | | 是 | 章索引取**主稿**（deep 优先）；没有成稿的章 `chars` / `overlap_excl_verbatim` / `freshness` 三格全 `null` |
 | `source_text` / `source_chars_raw` | 串/整数 或 null | 是 | 源章原文单独的落点（材料里不重复） |
 | `materials` | 对象 或 null | 是 | 写手拿到的下发面，**与写手同一份**（`prompts.build_material(...).blocks`——`R-11.8` 在读屏上的对应物：显示的材料 = 真发出去的材料）。按**闭卷**臂组装 |
-| `drafts[]` / `invalid_drafts[]` | 数组 | 是 | 正式稿与 `.INVALID` 分两个数组。`origin`（`human` / `llm`）由 `_provenance` 的载体类派生 |
+| `drafts[]` / `invalid_drafts[]` | 数组 | 是 | 正式稿与 `.INVALID` 分两个数组。`segments[]` 是盘上 schema v2 的唯一内容权威，保留 producer slot；`text` 必须等于代码按段顺序拼出的确定性投影，只供展示。`origin`（`human` / `llm`）由 `_provenance` 的载体类派生 |
 | `drafts[].align` | 对象 或 null | 是 | **可空**：`null` = 对齐辅助尚未由服务端提供（本章无锚可对时 `align_rows` 为空、账仍在）。对齐账是对应关系不是判定，`note` 常驻这句话；锚点覆盖率必须常驻显示 |
 | `ctx_state` | 对象 | 是 | `ArtifactState` |
 
@@ -355,7 +366,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | `finding_counts` | 对象 | 是 | 全书结论按 sev 现数，**四键恒在（0 也写）**。⚠ 不读产物的 `counts` 字段——那份是稀疏 Counter（`Review.counts` 登记过的病）；`index[]` 每行同理（后置条件逐行查） |
 | `wontfix` | 整数 | 是 | 被人豁免的条数——豁免不删结论，单独计数 |
 | `index[]` | 数组 | 是 | `unresolved` = 有收敛账（`unresolved_rounds > 0`）且未豁免的结论条数 |
-| `chapter` | 对象 | 是 | 该章明细 + 当前正式稿正文（改稿入口要在原文旁边）。`stale` 是三态：验收判的那份与盘上当前那份还是不是同一份（整文件指纹）；`null` = 判不了。`rounds[]` 是盘上已归档的轮次号（`_rounds/`），升序——改稿历史从这里回看 |
+| `chapter` | 对象 | 是 | 该章明细 + 当前正式稿的 `segments[]` 与派生 `text`（改稿入口按 slot 放在原文旁边）；两者同为 `null` 表示当前正式稿缺席，非空时服务端强制 `text` 等于 segments 投影。`stale` 是三态：验收判的那份与盘上当前那份还是不是同一份（整文件指纹）；`null` = 判不了。`rounds[]` 是盘上已归档的轮次号（`_rounds/`），升序——改稿历史从这里回看 |
 | `_provenance` | 对象 | 是 | `ReviewProvenance` |
 
 ## 五g、`Stage6View` —— S-11 开篇文案
@@ -387,18 +398,24 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | `chapters[]` / `ordinal` / `rows[]` / `hook` | | 是 | `chapters` = 可切换「逐章对照」的输出章号（本层判过的成稿章，升序）；`rows[].changed` 是 bool 不是 kind 字符串（两态本来就该是 bool） |
 | `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |
 
+`book_txt_on_disk=true` 只表示 live 路径有字节，不是交付授权。界面可据此展示预览/下载
+入口，但专用纯文本端点仍会重跑 approved/current/fresh 与组装账闸；不把整本正文塞进
+`Stage7View`，也不要求用户离开审校台去文件系统寻找。
+
 ## 五i、`InboxView` —— 待人工清单
 
-`counts` **六键全出（0 也要出）**：「没有这个键」与「值是 0」不许混——
+`counts` **八键全出（0 也要出）**：「没有这个键」与「值是 0」不许混——
 stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失）。
 `counts` / `total` / `items` 三者相互一致由后置条件钉死。
 
 `InboxItem` 的四条纪律：
 
-- `kind`：六值 `INBOX_KIND`。**`unver` 永不入列**——那是判据的边界，不是待办
-  （堆进去清单就永远清不空，而清不空的清单没人看）。
-- `rule`：`human_only` / `upstream` / `stalled` 填**判据 id**；
-  `invalid` / `rejected` / `approval` 没有单条判据可指，填**节点 id**（如 `stage6.hook`）。
+- `kind`：八值 `INBOX_KIND`。`repairable` 是有确定本地修法的硬命中；
+  `verification` 是证据不足但可由人工消解的 `UNVER`。其余不可操作的 `UNVER`
+  不入列，避免制造永远清不空的待办。
+- `rule`：`repairable` / `human_only` / `verification` / `upstream` / `stalled`
+  填**判据 id**；`invalid` / `rejected` / `approval` 没有单条判据可指，
+  填**节点 id**（如 `stage6.hook`）。
 - `chapter`：**输出章**口径，可空——书级 / 整份产物 = `null`，
   后端不给书级条目编一个假章号。
 - `wontfix`（视图顶层）：被人豁免的条数——豁免不删结论、不进清单，单独计数。
@@ -407,17 +424,19 @@ stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失�
 大书上是秒级。**登记不优化**：盘上 3 本无压力，全语料嫌慢时在路由层加缓存，
 别动生产者（`novel/views/inbox.py::inbox_view`）。
 
-## 五j、三条人工写回的请求体
+## 五j、人工写回的请求体
 
-三条都是**单步 0 成本作业**：产物变更一律经 `jobs.run` 起 CLI 子进程（`R-11.3`），
+这些路径都是**单步 0 成本作业**：产物变更一律经 `jobs.run` 起 CLI 子进程（`R-11.3`），
 HTTP 进程只写 `_service/`（一次性人工稿）。
-⚠ **CLI 内失败 = HTTP 200 + `JobRecord.state='failed'`**——作业失败不是 HTTP 错误
+⚠ **CLI 内红报告/失败 = HTTP 200 + `JobRecord.state='landed_red'|'failed'`**——作业终态不是 HTTP 错误
 （`stage0.edit` 同形），前端读 `state` 与日志，不是读状态码。
 
 | 端点 | 请求体 | 说明 |
 |---|---|---|
-| `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（`mode` + `text`） | `text` 落 `_service/edits/` 一次性稿（文件名带 `ch{o}`，`--apply-edit` 从文件名认章），走 `stage5.write --apply-edit`——**与生成稿同一个判定落点**（归一 → 判据 → 归档 → 写回，`origin=human` 记账）；仍有阻断级**只报不拦**（人改的往往正是机器修不动的地方）。⚠ **没有乐观锁**：并发改稿以整份归档兜底，覆盖的代价是多花一轮归档——登记为已知限制，不在 API 层造第二套锁 |
-| `POST /api/novels/:sid/stage6/approve` | `HookApproveRequest`（`pick`，1 起） | **只收序号不收文本**（2026-08-17 用户裁决）：改字是另一个节点（`stage6.hook --apply-edit`），而契约把编辑文件钉死在书目录内（`_edit_rel`）、`R-11.3` 禁止服务进程写产物盘 ⇒ 浏览器文本没有合规通道。**`stage6/edit` / `stage7/edit` 刻意不在 HTTP**，走 CLI |
+| `POST /api/novels/:sid/stage0/approve` | `Stage0ApprovalRequest`（`actor` + `reason`） | actor 是自报身份；空值拒绝。严格零风险首跑由产地自动记 `auto_zero_hit`，本端点只产生 `human` 批准 |
+| `POST /api/novels/:sid/stage0/merge/resolve` / `reject` | `Stage0MergeDecisionRequest`（candidate id + round/source/clean 乐观锁 + actor/reason + resolutions） | resolve 要求当前每个冲突恰好一条 `ours/theirs/custom`决议；reject 禁止伪造 resolutions。决定按内容寻址保留，崩溃后同一请求幂等重放；只有 `ok/landed_red` 才清理一次性 plan |
+| `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（`mode` + `segments[{slot,text}]`） | typed segments 落 `_service/edits/` 一次性 JSON 稿（文件名带 `ch{o}`，`--apply-edit` 从文件名认章）；slot 必须唯一，最终与计划 slot 集合完全一致且顺序由 producer 决定的校验归 `stage5.write --apply-edit`。随后走**与生成稿同一个判定落点**（归一 → 判据 → 归档 → 写回，`origin=human` 记账）；仍有阻断级**只报不拦**（人改的往往正是机器修不动的地方）。⚠ **没有乐观锁**：并发改稿以整份归档兜底，覆盖的代价是多花一轮归档——登记为已知限制，不在 API 层造第二套锁 |
+| `POST /api/novels/:sid/stage6/approve` | `HookApproveRequest`（`pick`、`actor`、`reason`、`subject_sha256`） | **不收文本**；完整 hash 与当前候选乐观绑定，actor 是自报而非认证身份。改字是另一个节点（`stage6.hook --apply-edit`），契约把编辑文件钉死在书目录内，`R-11.3` 禁止服务进程写产物盘。**`stage6/edit` / `stage7/edit` 刻意不在 HTTP**，走 CLI |
 | `POST /api/novels/:sid/stage7/approve` | 无请求体 | `flags=()` 是【终态】不是待定：一本书只有一份人物表，定稿是「给整份盖章」不是「从候选里选一条」，**没有参数可起名** |
 
 定稿类动作**落了**（退出码 0/1——先写后判：approve 落了，只是报告可能有红行）

@@ -16,7 +16,7 @@
 单字「姐」，而「姐姐」在成稿里有 4 处——「姐」是**单主**，多主那道抓不到它，
 只剩一道**词表**防线。把「姐姐」编进正则，这件事就与词表判得准不准无关了。
 
-**③ 一个 stage 三个节点**（`stage7.rename` / `stage7.assemble` / `stage7.approve`），
+**③ 一个 stage 三个节点**（`stage7.rename` / `stage7.approve` / `stage7.assemble`），
 本仓第一个这样的层。CLI 派发按 **stage** 分，节点由 `ctx.node` 带着。
 
 **④ 判据一条都不上移到载体，而理由是【两个叠加】。** stage5 是「重试太贵」、

@@ -15,6 +15,10 @@ import pytest
 
 from contracts.invariants import NODES, STAGES
 from contracts.schema import ARTIFACTS
+from contracts.schema.orchestration import (
+    ArtifactState, NovelOverview, OverviewSummary, StageState,
+)
+from novel import paths
 from novel.orchestrator import state as S
 from tests import corpus
 
@@ -78,7 +82,13 @@ def test_overview_runs_on_the_real_corpus(sid):
     ov = S.overview(CORPUS, sid)
     assert ov.sid == sid and ov.title and ov.dirname
     assert [s.stage for s in ov.stages] == list(STAGES)
-    assert ov.stage5_modes == ['deep', 'shallow']
+    # 臂是盘面事实：只写过 deep 的书不应被 fixture 凭空补出 shallow。
+    novel_dir = paths.resolve_novel_dir(CORPUS, sid)
+    stage5_dir = novel_dir / 'stage5'
+    expected_modes = sorted(
+        path.name for path in stage5_dir.iterdir()
+        if path.is_dir() and not path.name.startswith('_')) if stage5_dir.is_dir() else []
+    assert ov.stage5_modes == expected_modes
 
 
 # ───────────────────── 逐章：只有正式稿可被数进去 ─────────────────────
@@ -109,3 +119,77 @@ def test_resume_verdicts_are_a_closed_set():
     """守卫的守卫：四个结论写死在一处，加第五个就来改这里。"""
     assert S.RESUME_VERDICTS == ('run', 'skip', 'redo', 'unknown')
     assert S.RESUME_UNKNOWN not in (S.RESUME_RUN, S.RESUME_SKIP, S.RESUME_REDO)
+
+
+# ─────────────── 轮次编号产物：它有自己的账，不看 stage 级 `done` ───────────────
+
+def _overview(*stages: StageState) -> NovelOverview:
+    """一份最小的完成度视图；`resume_verdict` 只读 `stages`。"""
+    return NovelOverview(
+        sid='1', title='t', dirname='t_1', stages=list(stages), stage5_modes=['deep'],
+        summary=OverviewSummary(verdict='unknown', text='t', detail='d',
+                                artifact_count=0, latest_mtime=None))
+
+
+def _stage5(*, chapters: list[int], rounds: dict[str, list[int]]) -> StageState:
+    return StageState(stage='stage5', artifacts=[], done=True, reviewable=True,
+                      chapters_done={'deep': chapters}, rounds_done=rounds)
+
+
+def test_numbered_round_products_are_not_answered_by_the_chapter_count():
+    """⭐ **回归**：章稿写全了，不等于全书验收与书级语义审判跑过了。
+
+    此前 `stage5.review` / `stage5.semantic` 的 `produces` 带 `{}`，于是它们
+    落进「逐章类」分支、拿到 **stage5 的 `done`**——而那个 `done` 说的是
+    「计划里的章都有成稿吗」。章一写全，两个节点就恒 `skip`，理由还写着
+    「计划里的每个输出章都有成稿了」：**一句正确的话，答的是另一个问题**。
+    实测两本书跑完整条队列，盘上一份 `review_*.json` 都没有而队列记着 `done`
+    ——全链唯一的书级质量闸门静默缺席。
+    """
+    ov = _overview(_stage5(chapters=[1, 2, 3], rounds={}))
+    for node in ('stage5.review', 'stage5.semantic'):
+        verdict, why = S.resume_verdict(ov, node)
+        assert verdict == S.RESUME_RUN, f'{node} 又被章数顶替了：{why}'
+        assert '输出章' not in why, f'{node} 的理由还在拿章数说话：{why}'
+
+    # 写作臂仍然照章数判——那条路本来就是对的，别把它一起改了。
+    assert S.resume_verdict(ov, 'stage5.write')[0] == S.RESUME_SKIP
+
+
+def test_a_numbered_round_on_disk_is_skipped_and_says_what_it_cannot_know():
+    """盘上有轮次 ⇒ 跳过；同时**说出**它判不了新鲜度（`Q-2`：不知道要说出来）。"""
+    ov = _overview(_stage5(chapters=[1], rounds={'stage5.review': [1, 2]}))
+    verdict, why = S.resume_verdict(ov, 'stage5.review')
+    assert verdict == S.RESUME_SKIP
+    assert '1, 2' in why and '新鲜度' in why
+
+    # 同一层里另一个轮次节点各算各的：review 有轮次不代表 semantic 跑过。
+    assert S.resume_verdict(ov, 'stage5.semantic')[0] == S.RESUME_RUN
+
+
+def test_stage6_semantic_is_not_answered_by_the_hook_artifact():
+    """`stage6/semantic_{n}.json` 与 stage5 那两个同型，锚点不是 `hook.json`。
+
+    它当时侥幸在跑，只因为 stage6 恰好有一份 `.INVALID` 把 `done` 压成了假
+    ——**靠一个 bug 抵消另一个 bug**。hook 干净时它就会被跳过。
+    """
+    hook = ArtifactState(rel='stage6/hook.json', exists=True, bytes=1, mtime=1,
+                         freshness='fresh', reason='match', display_freshness='fresh',
+                         invalid=False, readable=True, condition='ready')
+    ov = _overview(StageState(stage='stage6', artifacts=[hook], done=True,
+                              reviewable=True, rounds_done={'stage6.semantic': []}))
+    assert S.resume_verdict(ov, 'stage6.hook')[0] == S.RESUME_SKIP
+    assert S.resume_verdict(ov, 'stage6.semantic')[0] == S.RESUME_RUN
+
+
+def test_numbered_produces_covers_exactly_the_round_numbered_artifacts():
+    """三条路互补：具名 / 轮次编号 / 逐章。**谁也不许拿另一条的答案顶替。**"""
+    assert S.numbered_produces('stage5') == {
+        'stage5.review': 'stage5/review_{n}.json',
+        'stage5.semantic': 'stage5/semantic_{n}.json'}
+    assert S.numbered_produces('stage6') == {
+        'stage6.semantic': 'stage6/semantic_{n}.json'}
+    # 逐章类（目录段也带占位符）不进这张表，它归 `chapters_done`。
+    assert 'stage5.write' not in S.numbered_produces('stage5')
+    for stage in STAGES:
+        assert not (set(S.numbered_produces(stage)) & set(S.required_artifacts(stage)))

@@ -194,6 +194,24 @@ def test_assemble_refuses_when_the_approved_hook_is_not_quality_clear(box, monke
     assert after == before
 
 
+def test_assemble_refuses_an_unapproved_name_map_without_touching_old_book(
+        box, monkeypatch):
+    from novel.errors import TerminalState
+
+    raw = box.read('stage7/name_map.json')
+    raw['approved'] = None
+    raw['book_txt'] = None
+    box.write('stage7/name_map.json', raw)
+    target = box.dir / 'stage7' / 'book.txt'
+    target.write_bytes(b'old-delivery-must-not-be-overwritten')
+    before = target.read_bytes()
+    _allow_hook_quality(monkeypatch)
+
+    with pytest.raises(TerminalState, match='人物映射还没定稿'):
+        assemble.run_assemble(_ctx(box, 'stage7.assemble'))
+    assert target.read_bytes() == before
+
+
 def test_the_identity_baseline_is_byte_lossless(box):
     """恒等基线：占位符双射往返逐字节无损。
 
@@ -358,7 +376,8 @@ def _fake_client(ctx, model_out: dict):
     t = FakeTransport.always(ChatResponse(
         content=_json.dumps(model_out, ensure_ascii=False), finish_reason='stop',
         usage=None, model='fake'))
-    return LlmClient(ctx, t, model='fake', max_retries=1, backoff_base=0, concurrency=1)
+    return LlmClient(ctx, t, model='fake', max_retries=1, backoff_base=0, concurrency=1,
+                     budget_checker=lambda *_args, **_kwargs: None)
 
 
 def _model_out_from_disk(box: sandbox.Sandbox, *, break_it: bool) -> dict:
@@ -441,6 +460,33 @@ def test_apply_edit_can_patch_the_first_invalid_map_without_full_characters(box)
     assert rep.passed is True
     assert (box.dir / 'stage7' / 'name_map.json').exists()
     assert next(c for c in art.characters if c.char_id == cid).reason.startswith('人工确认')
+
+
+def test_apply_edit_invalidates_approval_and_retires_the_old_delivery(box):
+    raw = box.read('stage7/name_map.json')
+    old = '旧交付正文\n'.encode('utf-8')
+    old_sha1 = prov.content_sha1(old)
+    raw['approved'] = {'origin': 'human'}
+    raw['book_txt'] = {
+        'sha1': old_sha1, 'chars': len(old.decode('utf-8')), 'chapters': 1,
+    }
+    box.write('stage7/name_map.json', raw)
+    live = box.dir / 'stage7' / 'book.txt'
+    live.write_bytes(old)
+    cid = raw['characters'][0]['char_id']
+    box.write('stage7/name_map_edit.json', {
+        'character_patches': [{
+            'char_id': cid,
+            'reason': '人工修改后必须重新批准并重新组装',
+        }],
+    })
+
+    art, _report = rename.run_apply_edit(_ctx(box), '')
+
+    assert art.approved is None and art.book_txt is None
+    assert not live.exists()
+    archived = box.dir / 'stage7' / '_rounds' / f'book.{old_sha1}.txt'
+    assert archived.read_bytes() == old
 
 
 def test_a_clean_map_lands_and_the_gate_stays_open(box, monkeypatch):

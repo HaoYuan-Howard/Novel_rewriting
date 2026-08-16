@@ -138,7 +138,7 @@ argv 的形态是：
 | `started` | `int` | **是** | epoch 秒 | **盘·码** |
 | `ended` | `int \| null` | **是** | 必填但可为 `null`——**`null` = 还没结束或不知道**，不是 0 | **盘·码** |
 | `exit_code` | `int \| null` | **是** | 同上。⚠ **`exit_code == 0` 不等于成功**，见 §2.3 | **盘·码** |
-| `state` | `str` | **是** | §三那四态 | **三源** |
+| `state` | `str` | **是** | §三那五态 | **三源** |
 | `note` | `str \| 键不在` | 否 | `reconciled` 那一条的原因 | **契·码** |
 
 ⚠ **`argv` 不在这张表上，它在 `steps[].argv` 里。**
@@ -160,7 +160,7 @@ argv 的形态是：
 ### 2.4 `AgentRunStart` —— headless agent 代跑的授权快照
 
 agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它使用独立的
-`Output/_service/agent_runs.jsonl` 事件流，但沿用 append-only、折叠四态与全文留档原则。
+`Output/_service/agent_runs.jsonl` 事件流，但沿用 append-only、折叠五态与全文留档原则。
 `started` 事件中的 `AgentRunStart` 记录：
 
 | 字段 | 类型 | 必填 | 内容 | 证据 |
@@ -176,9 +176,10 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 
 ---
 
-## 三、`JOB_STATE` 四态与 `reconcile`
+## 三、`JOB_STATE` 五态与 `reconcile`
 
-取值面的唯一落点是 `contracts/invariants.py::JOB_STATE`：`running` / `ok` / `failed` / `unknown`。
+取值面的唯一落点是 `contracts/invariants.py::JOB_STATE`：`running` / `ok` /
+`landed_red` / `failed` / `unknown`。
 
 **`unknown` 是真状态，不是缺省值**（`R-11.11`）：
 服务重启后，原本 `running` 的**一律改判 `unknown`**——重启前它是死是活我们真的不知道。
@@ -187,12 +188,30 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 | 折叠规则 | 结果 |
 |---|---|
 | 有 `ended` 且 `exit_code == 0` | `ok` |
-| 有 `ended` 且 `exit_code != 0` | `failed` |
+| 有 `ended` 且 `exit_code == 1` | `landed_red` |
+| 有 `ended` 且 `exit_code` 为其他非零值 | `failed` |
 | 只有 `started`，且本进程的互斥表里还占着这个键 | `running` |
 | 只有 `started`，而互斥表里没有（服务重启过） | **`unknown`** |
 
 ⚠ **互斥表是进程内内存**，所以第四行成立的条件是「本进程没起过它」。
 这条限制不能靠锁文件补，理由见 §八 第 5 条。
+
+> ### `landed_red` 与 `failed` 是两种处置完全不同的终态
+>
+> | `exit_code` | 发生了什么 | 人该做什么 |
+> |---|---|---|
+> | `1`（`CHECK_FAILED`） | 产物**已经落盘**，校验报告有阻断级红行 | 打开那一层的屏看红行并裁决，**多半不必重跑** |
+> | `2` / `3` / `70` | 压根没跑成 | 修完重跑 |
+>
+> 判据的唯一落点是 `novel/cli/exit_codes.py::landed` / `landed_but_red`。
+> 它此前只活在 `api/routes/edits.py::_completed` 这个私有函数里，编排层根本没有
+> ⇒ `jobs.fold` 自己写了一遍 `code == 0`，两个码同名。实测代价：一次 8 分钟的
+> 付费批量在 `stage6.hook` exit 1 上整条停下，而 `hook.json` 好好地在盘上
+> （三条候选里只有一条命中 HARD），后续三项被记成 `not_run`，账面上与一次真崩一模一样。
+>
+> 现状：exit 1 已升格为第五态 `landed_red`，并保留 `JobRecord.note`
+> （`jobs.LANDED_RED_NOTE`）与队列的停止理由。它仍然**停住同书 lane**等待人工裁决；
+> 状态分辨率提升不等于授权队列越过红报告继续扣费。
 
 ---
 
@@ -233,12 +252,39 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 > 压成 `True` 更坏：跳过一个根本没跑的层，下游拿着半份成品继续走。
 > ⇒ 同 `FRESHNESS` / `JOB_STATE` 的 `unknown`，这是 `Q-2` 那条三态在完成度这一侧的样子。
 
+> ### ⚠ `produces` 有**三种形状**，各有各的账，谁也不许拿另一条的答案顶替
+>
+> | 形状 | 例 | 完成度落点 |
+> |---|---|---|
+> | 具名 | `stage7/name_map.json` | `artifacts[]`（一次 `is_file()`） |
+> | 轮次编号 | `stage5/review_{n}.json` · `stage5/semantic_{n}.json` · `stage6/semantic_{n}.json` | **`rounds_done[节点]`** |
+> | 逐章（目录段也带占位符） | `stage5/{mode}/ch{nn}.json` | `chapters_done[臂]` |
+>
+> `required_artifacts()` 只收第一种，于是**后两种在 `artifacts[]` 里没有行**。
+> 此前只有逐章那一种有自己的账，轮次编号那一种没有 ⇒ 续跑判定只剩 stage 级 `done`
+> 可问，而 stage5 的 `done` 说的是「章稿写全了没有」。章一写全，
+> `stage5.review`（0 成本全书验收）与 `stage5.semantic`（付费书级语义审判）
+> 就恒被判 `skip`，理由还写着「计划里的每个输出章都有成稿了」
+> ——**一句正确的话，答的是另一个问题**。
+> 实测两本书跑完整条队列，盘上一份 `review_*.json` 都没有而队列把它们记成 `done`：
+> 全链唯一的书级质量闸门静默缺席。`stage6.semantic` 同形。
+> ⇒ `rounds_done` 就是那第三本账。判据是**存在性不是新鲜度**（轮次产物没有单份
+> 新鲜度账），这条限制写在 `resume_verdict` 返回的理由里，不藏着。
+> ⚠ 它与 `done` **刻意不联动**：`stage5.review` 跑没跑过不改变「这一层的成稿齐不齐」。
+
 ⚠ **`.INVALID` 不计入已完成**，它进 inbox（`INBOX_KIND` 已有 `invalid` 这个值）。
+⚠ **一份合格的新正式稿落盘时，同名 `.INVALID` 由 `ArtifactStore.write` 送进 `_rounds/`**
+（不是删——那份稿花过钱，还可能被别人的 `inputs` 指着）。留着它的后果不是「多一个文件」，
+是四个只看兄弟文件在不在的消费方一起说假话：语料库把已出书的书报成 `broken` ·
+续跑判定去**重跑并重新付费**一个已有新鲜正式稿的节点 · 人定稿盖不上审批章 ·
+下游整条链被 `inbox:invalid` 挡住。
 ⚠ **`freshness == 'unknown'` 计入已完成**，这不是漏判：存量语料是在统一投影注册前生成的，
 大量边仍为 `consumed=null`；把 `unknown` 当未完成会让升级后的队列重跑一批可能已完成的付费层。
 「不知道它新不新」与「它是旧的」是两件事——后者才该挡路。
 
-**`NovelOverview`** 另有一格 `stage5_modes`（glob `stage5/*` 的目录名）：
+**`NovelOverview`** 另有 `chapters` 与 `stage5_modes` 两格。`chapters` 只从可读的
+`stage1/chapters.json` 的主章表长度派生；stage1 未跑或读不回时为 `null`，语料库不为此
+逐书追加请求，也不等 stage5 才猜章数。`stage5_modes` 取 glob `stage5/*` 的目录名：
 stage5 的粒度是**章**（`R-14.2`），逐章状态由 `stage5/<mode>/ch*.json` 给，
 ⚠ **必须排除 `.INVALID.json`**——原型这里踩过，`chNN.json` 的存在本身就是
 「过了写作时的落盘闸门」这个语义，把被拦下的那份数进去就把语义反过来了：
@@ -278,7 +324,7 @@ stage5 的粒度是**章**（`R-14.2`），逐章状态由 `stage5/<mode>/ch*.js
 | `sid` | `str` | **是** | |
 | `node` | `str` | **是** | |
 | `flags` | `str[]` | **是** | 空列表也要写 |
-| `steps` | `Step[]` | **是** | 与真跑**同一个 `build_steps`**（`R-11.8`） |
+| `steps` | `Step[]` | **是** | 与真跑**同一个 `build_steps`**（`R-11.8`）。仅「还没做深度选章，因而命令本身尚不可构造」的 blocked 项可为空；可运行项为空时载体拒收 |
 | `why` | `str` | **是** | 为什么排它（`产物不存在` / `上游变过 ⇒ 重来` / `.INVALID 待处理`…） |
 | `waiting_on` | `str \| 键不在` | 否 | ⭐ 在等谁。见下 |
 
@@ -288,13 +334,14 @@ stage5 的粒度是**章**（`R-14.2`），逐章状态由 `stage5/<mode>/ch*.js
 | `paid_items` | `int` | `items + blocked` 中花钱的项数。**闸门后面的命令也要在建队列时一次确认**，不能把“人后来清了闸门”偷换成付费授权；不显示预估花费 |
 | `blocked` | `QueueItem[]` | 被人工闸门挡住的那些，各带 `waiting_on` |
 
-### 5.1 ⭐ 「停在那里」的计数形状 —— 三个数不许合并
+### 5.1 ⭐ 「停在那里」的计数形状 —— 四个数不许合并
 
 `R-13.4`：**一本书任一项失败 → 该书停在那里，不跳过、不继续往下扣费；其他书的 lane 继续。失败项与同书其后未跑的项分开计数。**
 
 ```
 done: N     跑完了的
-failed: 1   把队列停下来的那一项
+landed_red: 0|1  已落盘但报告红、把队列停下来的那一项
+failed: 0|1      没跑成、把队列停下来的那一项
 not_run: M  它后面那些，一步都没跑
 ```
 
@@ -306,14 +353,17 @@ not_run: M  它后面那些，一步都没跑
 
 ### 5.2 `waiting_on` —— 说出在等谁
 
-`R-13.5` 与 `R-0.3b` 用的是同一句话：「**明确说出在等谁**」。四种：
+`R-13.5` 与 `R-0.3b` 用的是同一句话：「**明确说出在等谁**」。现役取值包括：
 
 | 情形 | `waiting_on` |
 |---|---|
 | stage0 未批准（`APPROVAL_STATE != 'approved'`） | `stage0.approve` |
+| stage5 尚未持久化人工深度选章 | `approval:stage5-depth` |
 | 文案未定稿 | `stage6.approve` |
 | 人名表未定稿 | `stage7.approve` |
 | inbox 非空（`.INVALID` / 被驳回 / 连续未消） | `inbox:<kind>` |
+| 服务重启后旧快照仍含付费项、等人重新确认 | `queue:restart-confirmation` |
+| 当前命令面与创建时快照不同、必须重建队列 | `queue:plan-changed` |
 
 ⚠ **队列本身不产生新的判定，也不放宽任何落盘闸门**（`R-13.6`，指回 `R-11.4`：
 造第二个判官就是造第二个落点）。
@@ -341,13 +391,16 @@ CLI 这一侧：没给 `--yes` 而计划里有付费项 ⇒ 打印全部命令�
 | `QueueEntry` | `index` · `item` · `state` · 作业/等待信息 | 一项的折叠视图 |
 | `QueueRun` | `queue_id` · `start` · `state` · `entries` · `counts_by_sid` | 整个持久队列的当前视图 |
 
-条目状态是 `pending / running / unknown / done / failed / not_run / cancelled / blocked`。
+条目状态是 `pending / running / unknown / done / landed_red / failed / not_run / cancelled / blocked`。
 `running` 只在本进程 runner 活锁仍在时成立；服务重启后旧 `running` 先显示 `unknown`，再按
 `jobs.jsonl` 与盘面恢复：作业已有终态就照终态折；作业 unknown 但正式产物存在且 fresh 就记
-`done`、不重启；仍需执行才退回 `pending`，沿用原命令和缓存。
+`done`、不重启。仍需执行时先重新 `plan_book`：命令面与冻结快照一致且剩余项全是 0 成本，才自动
+续跑；只要仍含付费项就停在 `queue:restart-confirmation`，恢复时重新展示冻结命令，且 CLI
+`queue-resume --yes` / API `confirmed=true` 才是新一轮确认；无确认的底层 runner 也不能移除该 block；命令面
+已经变化则停在 `queue:plan-changed`，旧队列绝不把新命令偷换进已确认快照，需重新预览并创建队列。
 
-每本书一条 lane，不同书并行。同书首个 `failed` 后，后续未启动项逐条记 `not_run`；另一书
-不受影响。取消只接收 `pending/blocked`，被取消项记 `cancelled`，同书后续记 `not_run`；
+每本书一条 lane，不同书并行。同书首个 `landed_red` 或 `failed` 后，后续未启动项逐条记
+`not_run`；另一书不受影响。取消只接收 `pending/blocked`，被取消项记 `cancelled`，同书后续记 `not_run`；
 `running` 明确拒绝，不能把已经在途的 LLM 请求伪装成可无损取消。
 
 人工闸门每项启动前重读。`stage0.edit` 是可选人工能力，不是流水线必经闸门；三道真正的
@@ -417,6 +470,17 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与深度选章�
 
 它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们；
 `tests/test_layering.py` 的写口与路由所有权白名单为每一类带着明确理由。
+
+`approvals/<sid>.json` 的盘上服务记录当前为 **v2**。每个已盖 gate、已阅状态、
+深浅章选择和 writing 授权都必须带一份 current-subject proof：当前
+`stage0/clean_text.txt` 的完整 SHA-1、所裁决正式产物的逐文件 SHA-256，以及决定本身
+（例如 `deep=[1,2,3]`）的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
+人工决定与 freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、
+出现 `.INVALID` 或 Stage5 选错臂，都会让对应决定及依赖它的下游决定在有效视图中失效。
+旧 v1 只有 bool，无法证明人当时看的是哪份产物，故不猜迁移；只能显式 reset 或按当前
+盘面 backfill。`ApprovalDoc.v=1` 仍只是 HTTP 界面视图版本，不等于这份内部服务记录版本。
+队列用一次加锁读取取得“当前可用深浅章选择”；不得先查文件存在、再另读选择，从而留下
+两次读取之间产物变更仍生成付费命令的窗口。
 
 ⚠ 契约收窄时必须同步更新需求与 schema 文档；运行时只保留收窄后的当前规则。
 

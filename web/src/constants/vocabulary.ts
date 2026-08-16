@@ -12,14 +12,16 @@
 export type Freshness = 'fresh' | 'stale' | 'unknown'
 export type Badge = 'pass' | 'amber' | 'fail'
 export type Severity = 'hard' | 'info' | 'metric' | 'unver'
-export type JobState = 'running' | 'ok' | 'failed' | 'unknown'
+export type JobState = 'running' | 'ok' | 'landed_red' | 'failed' | 'unknown'
 export type Mode = 'deep' | 'shallow'
 export type Op = 'keep' | 'compress' | 'amplify' | 'rewrite'
 export type InboxKind =
   | 'invalid'
   | 'rejected'
   | 'stalled'
+  | 'repairable'
   | 'human_only'
+  | 'verification'
   | 'upstream'
   | 'approval'
 
@@ -216,6 +218,12 @@ export const JOB: Record<JobState, JobStateToken> = {
     shape: 'circle',
   },
   ok: { color: 'oklch(0.45 0.03 260)', bg: '#f1eee9', label: 'ok 跑完了', shape: 'circle' },
+  landed_red: {
+    color: 'oklch(0.45 0.14 62)',
+    bg: 'oklch(0.94 0.07 72)',
+    label: 'landed_red 已落盘但有红项',
+    shape: 'square',
+  },
   failed: {
     color: 'oklch(0.45 0.17 28)',
     bg: 'oklch(0.95 0.04 28)',

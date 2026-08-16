@@ -90,6 +90,12 @@ def test_only_the_writing_node_has_modes():
     assert with_modes == {'stage5.write': inv.DEPTH_MODES}
 
 
+def test_unmeasured_nodes_keep_the_default_high_effort():
+    assert all(spec.effort in (None, 'low', 'medium', 'high') for spec in inv.NODES.values())
+    assert inv.NODES['stage3.style'].effort is None
+    assert inv.NODES['stage7.rename'].effort is None
+
+
 def test_free_nodes_are_the_ones_without_llm():
     free = {node for node, spec in inv.NODES.items() if not spec.paid}
     assert free == {

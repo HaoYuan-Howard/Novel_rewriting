@@ -15,13 +15,16 @@ from __future__ import annotations
 
 import io
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, VALUED_FLAGS
 from novel.cli import exit_codes as X
 from novel.cli.main import main
+from novel.errors import ApprovalRequired
 from novel.orchestrator import nodes as N
+from novel.orchestrator import queue as Q
 from tests import sandbox
 
 @pytest.fixture
@@ -269,6 +272,28 @@ def test_an_uncaught_exception_exits_seventy_with_a_stack(monkeypatch, capsys):
     assert '70' in err and 'Traceback' in err, '崩溃要报数字本身，栈要留全'
 
 
+def test_context_budget_refusal_exits_two_without_a_stack_and_keeps_the_action(monkeypatch,
+                                                                               capsys):
+    from novel.errors import ContextBudgetRefused
+    from novel.cli import main as M
+
+    def over_limit(_args):
+        raise ContextBudgetRefused(
+            'stage4.plan: input_tokens=904001，declared_max_tokens=96000，'
+            'context_limit=1000000；行动：缩短整本正文，不截断、不分块、不自动换模型',
+            model='deepseek-v4-pro', input_tokens=904_001, max_tokens=96_000,
+            context_limit=1_000_000, max_output_tokens=384_000,
+            tokenizer_revision='0e1a0e5')
+
+    monkeypatch.setitem(M._CMDS, 'state', over_limit)
+    rc = _run('state', '123', '--base', 'x')
+
+    assert rc == X.TERMINAL_STATE
+    err = capsys.readouterr().err
+    assert 'Traceback' not in err
+    assert 'input_tokens=904001' in err and '行动：缩短整本正文' in err
+
+
 @pytest.mark.corpus
 def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
         box, monkeypatch, capsys):
@@ -310,8 +335,8 @@ def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
 
 
 @pytest.mark.corpus
-def test_inbox_prints_all_six_kind_counts_with_a_denominator(box, capsys):
-    """`inbox` 的首行是**带分母的汇总**——六键全出，0 也要出。
+def test_inbox_prints_all_eight_kind_counts_with_a_denominator(box, capsys):
+    """`inbox` 的首行是**带分母的汇总**——八键全出，0 也要出。
 
     空清单不打印首行就是「没查」冒充「没事」（LESSONS 第 2 条）；
     退出码恒 0：「有待办」不是「失败」，判定语义只归 check 报告（`R-13.6`）。
@@ -320,9 +345,9 @@ def test_inbox_prints_all_six_kind_counts_with_a_denominator(box, capsys):
     assert rc == X.OK
     out = capsys.readouterr().out
     assert '── 待人工 ──' in out and '共 ' in out and 'wontfix' in out
-    for kind in ('invalid', 'rejected', 'stalled',
-                 'human_only', 'upstream', 'approval'):
-        assert kind in out, f'六类计数行少了 {kind}'
+    for kind in ('invalid', 'rejected', 'stalled', 'repairable',
+                 'human_only', 'verification', 'upstream', 'approval'):
+        assert kind in out, f'八类计数行少了 {kind}'
 
 
 @pytest.mark.corpus
@@ -393,6 +418,27 @@ def test_queue_prints_a_plan_and_never_runs_anything(box, capsys):
 def test_queue_refuses_paid_items_without_yes(box):
     rc = _run('queue', box.sid, '--base', str(box.root), '--until', 'stage3')
     assert rc == X.TERMINAL_STATE, '含付费项而没给 --yes，该落 ApprovalRequired'
+
+
+def test_queue_resume_redisplays_frozen_commands_and_requires_yes(
+        monkeypatch, capsys, tmp_path):
+    command = 'python -m novel.cli run stage6.hook 123 --yes'
+    seen: list[bool] = []
+    monkeypatch.setattr(Q, 'frozen_resume_commands', lambda *_args, **_kwargs: [command])
+
+    def resume(_base, queue_id, *, yes):
+        seen.append(yes)
+        if not yes:
+            raise ApprovalRequired('未重新确认冻结付费命令')
+        return SimpleNamespace(queue_id=queue_id, state='ok')
+
+    monkeypatch.setattr(Q, 'resume', resume)
+    assert _run('queue-resume', 'q-paid', '--base', str(tmp_path)) == X.TERMINAL_STATE
+    assert command in capsys.readouterr().out
+    assert _run(
+        'queue-resume', 'q-paid', '--base', str(tmp_path), '--yes') == X.OK
+    assert command in capsys.readouterr().out
+    assert seen == [False, True]
 
 
 # ───────────────────── UTF-8（R-12.3 的另一侧） ─────────────────────

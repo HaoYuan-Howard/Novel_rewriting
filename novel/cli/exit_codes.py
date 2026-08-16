@@ -45,3 +45,30 @@ MEANING: dict[int, str] = {
     REFUSED_BY_STRUCTURE: '结构性拒绝：代码自相矛盾（是 bug，栈在上面）',
     CRASH: '未捕获异常：进程崩了，结论未知（是 bug，栈在上面）',
 }
+
+#: 「这一次**落没落盘**」——`0` 与 `1` 都落了，`2` / `3` / `70` 都没有。
+#:
+#: ⚠⚠ **它必须在这里，不许在消费方各写一遍。** 这个谓词此前只活在
+#: `novel/api/routes/edits.py::_completed`（一个私有函数）里，于是同一句话在
+#: 编排层根本没有：`orchestrator/jobs.py::fold` 写的是
+#: `state = 'ok' if code == 0 else 'failed'` ⇒ **`1` 与 `2` / `70` 同名**。
+#: 实测代价：一次 8 分钟的付费批量在 `stage6.hook` exit 1 上整条停下，
+#: 而 `hook.json` **好好地落在盘上**（三条候选里只有一条命中 HARD），
+#: 队列却把其后三项记成 `not_run`，日志上与「压根没跑成」一个样子。
+#: ⚠ 未登记的码一律按**没落盘**算：钱这件事上「不知道」倒向贵的一边（`Q-10`），
+#: 落盘这件事上「不知道」倒向「别拿它当成品」。
+LANDED: frozenset[int] = frozenset({OK, CHECK_FAILED})
+
+
+def landed(code: int | None) -> bool:
+    """这一次跑**落没落盘**。`None`（还没结束 / 不知道）一律按没落算。"""
+    return code in LANDED
+
+
+def landed_but_red(code: int | None) -> bool:
+    """落了盘、但校验报告有阻断级红行。**它不是「没跑成」，也不是「没问题」。**
+
+    定稿类动作在这个码上照样盖审批章（`edits.py`），因为人定稿的语义正是
+    「看过红行之后拍板」；混掉它的样子是**一本带任何硬红的书永远盖不上章**。
+    """
+    return code == CHECK_FAILED

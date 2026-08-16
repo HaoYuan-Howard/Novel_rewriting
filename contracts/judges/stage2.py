@@ -37,6 +37,7 @@ STAGE = 'stage2'
 #: 本层两个节点的修复路由。**写成常量而不是每处一个元组字面**：
 #: 17 条判据指着同一条 `blueprint --chapters`，散着写就是 17 份会各自漂的拷贝。
 FIX_REGEN = ('stage2.blueprint', '--chapters')      # 定向重生成那几章（**付费**）
+FIX_REGEN_ARGS = ('--chapters',)                    # 值由本次 finding 的机器证据给
 FIX_RENORMALIZE_BP = ('stage2.blueprint', '--renormalize')  # 确定性归一，0 成本
 FIX_RENORMALIZE_G = ('stage2.global', '--renormalize')      # 同上，全书那一份
 FIX_PURGE_ROLE = ('stage2.global', '--purge-role')  # 语义判官臂重划 role/fate（**付费**）
@@ -44,12 +45,16 @@ FIX_RESAMPLE = ('stage2.global', '--resample')  # 绕过问题缓存重采整份
 
 
 def _hard(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -> Rule:
+    if kw.get('fix') == FIX_REGEN:
+        kw.setdefault('fix_args_from_finding', FIX_REGEN_ARGS)
     return REGISTRY.register(Rule(rule=rule, stage=STAGE, item=item, sev='hard',
                                   who_checks='HARD', requirement=requirement,
                                   owner=owner, **kw))
 
 
 def _info(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -> Rule:
+    if kw.get('fix') == FIX_REGEN:
+        kw.setdefault('fix_args_from_finding', FIX_REGEN_ARGS)
     return REGISTRY.register(Rule(rule=rule, stage=STAGE, item=item, sev='info',
                                   who_checks='INFO', requirement=requirement,
                                   owner=owner, **kw))

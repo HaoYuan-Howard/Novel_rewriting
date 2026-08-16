@@ -5,7 +5,7 @@
 给模型/思考 A/B 用：N 个 `--arm`（每臂一个 base，同一个 sid），把
   ① 成本（账本 token 事实，生成/判官分账）      ② 墙钟（span 分段 + Σlatency 双口径）
   ③ 质量闸（各层 badge / 四态计数 / HARD 残留） ④ `sev='metric'` 全量读数
-  ⑤ inbox 六类                                   ⑥ 语义审判摘要
+  ⑤ inbox 全类                                   ⑥ 语义审判摘要
   ⑦ 账本健康（限流/超时/重试）                   ⑧ 成书统计
 摆成「列=臂」的 markdown 矩阵。**它是读数器不是判官**（R-13.6）：判定语义只归
 check 报告；质量细排名一律不出——单次跑不可归因（`docs/BACKEND_CONTRACT.md` §十）。
@@ -36,7 +36,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from contracts.invariants import STAGES                      # noqa: E402
+from contracts.invariants import INBOX_KIND, STAGES          # noqa: E402
 from novel import paths, prov                                # noqa: E402
 from novel.llm.ledger import ledger_path                     # noqa: E402
 from novel.orchestrator.nodes import check_nodes             # noqa: E402
@@ -86,16 +86,66 @@ def cost_table(rows: list[dict]) -> dict:
         nr = [r for r in rows if r['node'] == node]
         wire = [r for r in nr if not r.get('cached')]
         p, p_n, p_null = _tok(wire, 'prompt_tokens')
+        ph, ph_n, ph_null = _tok(wire, 'prompt_cache_hit_tokens')
+        pm, pm_n, pm_null = _tok(wire, 'prompt_cache_miss_tokens')
         c, c_n, c_null = _tok(wire, 'completion_tokens')
         g, g_n, g_null = _tok(wire, 'reasoning_tokens')
+        cache_known_rows = sum(
+            row.get('prompt_cache_hit_tokens') is not None
+            and row.get('prompt_cache_miss_tokens') is not None
+            for row in wire)
+        cache_partial_rows = sum(
+            (row.get('prompt_cache_hit_tokens') is None)
+            != (row.get('prompt_cache_miss_tokens') is None)
+            for row in wire)
+        cache_mismatch_rows = sum(
+            row.get('prompt_tokens') is not None
+            and row.get('prompt_cache_hit_tokens') is not None
+            and row.get('prompt_cache_miss_tokens') is not None
+            and (row['prompt_cache_hit_tokens'] + row['prompt_cache_miss_tokens']
+                 != row['prompt_tokens'])
+            for row in wire)
+        by_purpose: dict[str, list[tuple[object, object]]] = defaultdict(list)
+        for row in wire:
+            key = str(row.get('purpose') or '（purpose 未记录）')
+            rung = (row.get('reasoning_effort'), row.get('thinking'))
+            # Network retry repeats one rung; fallback means moving to a different rung.
+            if not by_purpose[key] or by_purpose[key][-1] != rung:
+                by_purpose[key].append(rung)
+        fallback_purposes = sum(len(rungs) > 1 for rungs in by_purpose.values())
+        fallback_steps = sum(max(0, len(rungs) - 1) for rungs in by_purpose.values())
+        cache_total = ph + pm
         out[node] = {
             'judge': node in JUDGE_NODES,
             'models': sorted({r.get('model') for r in nr if r.get('model')}),
             'calls_made': len(wire),
             'calls_cached': len(nr) - len(wire),
             'prompt_tokens': p, 'prompt_null_rows': p_null,
+            'prompt_cache_hit_tokens': ph,
+            'prompt_cache_hit_null_rows': ph_null,
+            'prompt_cache_miss_tokens': pm,
+            'prompt_cache_miss_null_rows': pm_null,
+            'prompt_cache_known_rows': cache_known_rows,
+            'prompt_cache_partial_rows': cache_partial_rows,
+            'prompt_cache_mismatch_rows': cache_mismatch_rows,
+            'prompt_cache_hit_rate': (ph / cache_total if cache_total else None),
             'completion_tokens': c, 'completion_null_rows': c_null,
             'reasoning_tokens': g, 'reasoning_null_rows': g_null,
+            # Provider completion is the total output count; reasoning is its diagnostic
+            # subset and must never be added once more for totals or money.
+            'completion_includes_reasoning': True,
+            'efforts': dict(Counter(
+                str(r.get('reasoning_effort') or 'null') for r in wire)),
+            'thinking': dict(Counter(
+                'null' if r.get('thinking') is None else str(bool(r.get('thinking'))).lower()
+                for r in wire)),
+            'fallback_purposes': fallback_purposes,
+            'fallback_steps': fallback_steps,
+            'conditional_surface_repair_calls': sum(
+                str(r.get('purpose') or '').endswith(
+                    '.surface_habits_targeted_repair')
+                for r in wire),
+            'outcomes': dict(Counter(str(r.get('outcome') or 'null') for r in wire)),
             'errors': dict(Counter(r.get('error_kind') for r in nr
                                    if r.get('outcome') == 'error' and r.get('error_kind'))),
             'retries': sum(1 for r in nr if (r.get('attempt') or 1) > 1),
@@ -269,8 +319,8 @@ def diff_semantic(file_a: str, file_b: str) -> dict:
 # ── 折钱（只在给了 --rates 时；结果不落仓内产物） ────────────────────────────
 
 def money_of(cost: dict, rates: dict) -> dict:
-    """折算上界：input 全按未命中价（服务端上下文缓存折扣在账本里看不见）。
-    completion 按「含 reasoning」计（DeepSeek 计费口径把思维链算进输出）。"""
+    """折算输入价：缓存两列与两个费率都完整时按 hit/miss 分算；
+    否则保守回退到全部 `input` 价。completion 含 reasoning。"""
     per = rates.get('per_mtok', {})
     out: dict[str, dict] = {}
     for node, c in cost.items():
@@ -280,9 +330,23 @@ def money_of(cost: dict, rates: dict) -> dict:
             if r is None:
                 cell[model] = None
                 continue
+            cache_complete = (
+                c.get('prompt_cache_hit_null_rows', c['calls_made']) == 0
+                and c.get('prompt_cache_miss_null_rows', c['calls_made']) == 0
+                and c.get('prompt_cache_mismatch_rows', 0) == 0)
+            cache_rates = all(
+                key in r for key in ('input_cache_hit', 'input_cache_miss'))
+            if cache_complete and cache_rates:
+                input_money = (
+                    c.get('prompt_cache_hit_tokens', 0) / 1e6 * r['input_cache_hit']
+                    + c.get('prompt_cache_miss_tokens', 0) / 1e6 * r['input_cache_miss'])
+            elif 'input' in r:
+                input_money = c['prompt_tokens'] / 1e6 * r['input']
+            else:
+                cell[model] = None
+                continue
             cell[model] = round(
-                c['prompt_tokens'] / 1e6 * r['input']
-                + c['completion_tokens'] / 1e6 * r['output'], 4)
+                input_money + c['completion_tokens'] / 1e6 * r['output'], 4)
         out[node] = cell
     return out
 
@@ -291,6 +355,26 @@ def money_of(cost: dict, rates: dict) -> dict:
 
 def _fmt_int(n: int) -> str:
     return f'{n:,}'
+
+
+def _cache_token_cell(cost: dict, key: str) -> str:
+    """Provider omitted usage (`null`) must not render as the numeric fact zero."""
+    null_key = key.replace('_tokens', '_null_rows')
+    if cost['calls_made'] and cost[null_key] == cost['calls_made']:
+        return '—（全部 null）'
+    value = _fmt_int(cost[key])
+    return value if not cost[null_key] else f'{value}（{cost[null_key]} 行 null）'
+
+
+def _cache_rate_cell(cost: dict) -> str:
+    rate = cost['prompt_cache_hit_rate']
+    if rate is None:
+        if cost['prompt_cache_known_rows']:
+            return 'n/a（已知 token 合计为 0）'
+        return '—（usage null）'
+    suffix = (f'；{cost["prompt_cache_partial_rows"]} 行仅给一列'
+              if cost['prompt_cache_partial_rows'] else '')
+    return f'{rate:.1%}{suffix}'
 
 
 def _row(cells: list[str]) -> str:
@@ -308,12 +392,43 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
     for node in all_nodes:
         tag = '判官' if node in JUDGE_NODES else '生成'
         for key, label in (('calls_made', '真调用'), ('calls_cached', '缓存命中'),
-                           ('prompt_tokens', 'prompt'), ('completion_tokens', 'completion'),
-                           ('reasoning_tokens', 'reasoning')):
+                           ('prompt_tokens', 'prompt'),
+                           ('completion_tokens', 'completion（已含 reasoning）'),
+                           ('reasoning_tokens', 'reasoning（completion 子集）')):
             cells = []
             for n in names:
                 c = arms[n]['cost'].get(node)
                 cells.append('—' if c is None else _fmt_int(c[key]))
+            L.append(_row([f'{node}·{tag}', label] + cells))
+        for key, label in (
+                ('prompt_cache_hit_tokens', '供应商 prompt cache hit'),
+                ('prompt_cache_miss_tokens', '供应商 prompt cache miss')):
+            cells = []
+            for n in names:
+                c = arms[n]['cost'].get(node)
+                cells.append('—' if c is None else _cache_token_cell(c, key))
+            L.append(_row([f'{node}·{tag}', label] + cells))
+        L.append(_row(
+            [f'{node}·{tag}', '供应商 prompt cache 命中率']
+            + [('—' if arms[n]['cost'].get(node) is None
+                else _cache_rate_cell(arms[n]['cost'][node])) for n in names]))
+        for key, label in (
+                ('efforts', 'effort（wire 行）'),
+                ('thinking', 'thinking（wire 行）'),
+                ('fallback_steps', '降档步数（按 purpose 去除网络重试）'),
+                ('conditional_surface_repair_calls',
+                 'habit_quote 条件窄修复 wire（非基础调用）'),
+                ('outcomes', 'wire outcome'),
+                ('errors', 'error_kind')):
+            cells = []
+            for n in names:
+                c = arms[n]['cost'].get(node)
+                if c is None:
+                    cells.append('—')
+                elif isinstance(c[key], dict):
+                    cells.append(json.dumps(c[key], ensure_ascii=False) if c[key] else '无')
+                else:
+                    cells.append(str(c[key]))
             L.append(_row([f'{node}·{tag}', label] + cells))
     for scope, pred in (('生成合计', lambda nd: nd not in JUDGE_NODES),
                         ('判官合计', lambda nd: nd in JUDGE_NODES)):
@@ -325,10 +440,20 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
                         for c in arms[n]['cost'].values()) for n in names}
     if any(null_note.values()):
         L += ['', f'⚠ usage 为 null 的行（≠0，响应没给）：{null_note}']
+    mismatches = {
+        n: sum(c['prompt_cache_mismatch_rows'] for c in arms[n]['cost'].values())
+        for n in names
+    }
+    if any(mismatches.values()):
+        L += ['', '⚠ 供应商 cache usage 不闭合（hit + miss != prompt）的行：'
+                  f'{mismatches}']
+    L += ['', '注：`completion_tokens` 已包含 `reasoning_tokens`；后者只作诊断，'
+              '合计与折价均不会再次相加。']
 
     if rates:
         L += ['', f'### 折算（费率表 {rates.get("date")}，{rates.get("currency", "?")}；'
-                  f'input 全按未命中价=上界，completion 含 reasoning）', '',
+                  f'缓存 usage+费率完整时分算 hit/miss，否则 input 未命中价上界；'
+                  f'completion 含 reasoning）', '',
               _row(['范围'] + names), _row(['---'] * (len(names) + 1))]
         for scope, pred in (('生成', lambda nd: nd not in JUDGE_NODES),
                             ('判官', lambda nd: nd in JUDGE_NODES)):
@@ -394,8 +519,7 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
         L.append(_row(['', '读数'] + cells_d))
 
     L += ['', '## ⑤ inbox 待人工', '', _row(['类'] + names), _row(['---'] * (len(names) + 1))]
-    kinds = ('invalid', 'rejected', 'stalled', 'human_only', 'upstream', 'approval')
-    for k in kinds:
+    for k in INBOX_KIND:
         L.append(_row([k] + [str(arms[n]['inbox']['counts'].get(k, 0)) for n in names]))
     L.append(_row(['**total / wontfix**'] +
                   [f'{arms[n]["inbox"]["total"]} / {arms[n]["inbox"]["wontfix"]}'

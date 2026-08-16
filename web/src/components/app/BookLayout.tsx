@@ -2,7 +2,7 @@ import { Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
-import { isNoSample } from '@/api/errors'
+import { errorBody, isNoSample } from '@/api/errors'
 import { useSid } from '@/hooks/useRouteParams'
 import { useApprovals } from '@/hooks/useApprovals'
 import { Mono } from '@/components/ui/Mono'
@@ -24,7 +24,7 @@ const REQUIRED_GATE_BY_STAGE = {
 export function BookLayout() {
   const sid = useSid()
   const nav = useNavigate()
-  const { doc } = useApprovals()
+  const { doc, backfill } = useApprovals()
   const q = useQuery({
     queryKey: qk.novel(sid),
     queryFn: () => api.getNovel(sid),
@@ -60,12 +60,30 @@ export function BookLayout() {
         </Mono>
       </header>
       {approvalGaps.length ? (
-        <div className="flex items-start gap-10 border-b border-warn-line bg-warn-bg px-30 py-10 text-body text-warn-ink">
+        <div className="flex items-center gap-10 border-b border-warn-line bg-warn-bg px-30 py-10 text-body text-warn-ink">
           <span aria-hidden>!</span>
-          <span>
+          <span className="min-w-0 flex-1">
             盘上已有 {approvalGaps.join('、')} 产物，但这本书缺少对应的前端人工验收记录。
-            页面允许只读审阅；继续运行、定稿仍按闸门锁定，避免把旧产物误当成已签字。
+            可以只读审阅，也可以显式按盘面补录验收链；补录会标明来源，不伪装成逐屏点击。
           </span>
+          <button
+            type="button"
+            disabled={backfill.isPending}
+            onClick={() => backfill.mutate()}
+            className="cursor-pointer rounded-btn border border-warn-line bg-card px-12 py-6 text-body font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {backfill.isPending ? '核对盘面中…' : '按盘面补录验收链'}
+          </button>
+        </div>
+      ) : null}
+      {backfill.data?.backfilled.length ? (
+        <div className="border-b border-line-soft bg-gate-ok-bg px-30 py-9 text-body text-ink-2">
+          已按正式产物补录 {backfill.data.backfilled.join('、')}；这些闸门来自盘面核对，不是你逐屏点击的记录。
+        </div>
+      ) : null}
+      {backfill.isError ? (
+        <div className="border-b border-warn-line bg-warn-bg px-30 py-9 text-body text-warn-ink">
+          补录失败：{errorBody(backfill.error)}
         </div>
       ) : null}
       <Outlet />

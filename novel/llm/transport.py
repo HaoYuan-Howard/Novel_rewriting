@@ -191,7 +191,9 @@ class DeepSeekTransport:
                 usage = resp.usage.model_dump()
             except Exception:                       # noqa: BLE001
                 usage = {k: getattr(resp.usage, k, None)
-                         for k in ('prompt_tokens', 'completion_tokens', 'total_tokens')}
+                         for k in ('prompt_tokens', 'prompt_cache_hit_tokens',
+                                   'prompt_cache_miss_tokens', 'completion_tokens',
+                                   'total_tokens')}
         return ChatResponse(
             content=msg.content,
             reasoning=getattr(msg, 'reasoning_content', None),

@@ -38,7 +38,7 @@ export interface RunEvent {
 
 export interface RunProgress {
   sid: string
-  /** 恒 14 条，按 seq 升序（SKILL 工作流契约） */
+  /** 与后端 NODES 逐项一致，按处理链顺序。 */
   steps: RunStep[]
   /** 来自产物盘的真实完成度；书目录还没建时全是 null（不 404，进度屏照样能开） */
   stage_done: Record<string, boolean | null>

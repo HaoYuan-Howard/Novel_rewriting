@@ -100,6 +100,15 @@ def test_append_read_fold_roundtrip(base):
     assert rec.start.egress_authorized is True
 
 
+def test_exit_one_is_landed_red_not_agent_process_failure(base):
+    agent.append(base, AgentRunEvent(run_id='red', kind='started', ts=10,
+                                     start=_start()))
+    agent.append(base, AgentRunEvent(run_id='red', kind='ended', ts=20, exit_code=1))
+    [rec] = agent.fold(agent.read_events(base))
+    assert rec.state == 'landed_red' and rec.exit_code == 1
+    assert rec.note and '已经落盘' in rec.note
+
+
 def test_fold_running_vs_unknown(base):
     """`R-11.11` 同构：不在活锁里的 started ⇒ unknown，不是「成功」。"""
     agent.append(base, AgentRunEvent(run_id='r1', kind='started', ts=10,

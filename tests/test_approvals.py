@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
@@ -17,13 +19,60 @@ pytestmark = [
 ]
 
 
+BASE_RELS = (
+    'stage0/removal_report.json',
+    'stage1/main_text.json', 'stage1/hook_copy.json',
+    'stage1/partition_report.json',
+    'stage2/global_grounding.json', 'stage2/chapter_blueprints.json',
+    'stage2/global_review.json',
+    'stage3/style_grounding.json',
+    'stage4/plan_chapters.json', 'stage4/writer_context.json',
+)
+
+
+def _copy_text(box: sandbox.Sandbox, rel: str) -> None:
+    source = corpus.corpus_root() / box.book / rel
+    assert source.is_file(), f'{box.book} 少了 {rel}，审批 freshness 沙箱无法建立'
+    target = box.dir / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+
+
 def _box() -> sandbox.Sandbox:
     artifact = next(
         a for a in corpus.iter_artifacts()
         if a.rel == 'stage4/plan_chapters.json'
         and corpus.load_current(a).get('_provenance') is not None
     )
-    return sandbox.Sandbox(artifact.book_dir, rels=('stage4/plan_chapters.json',))
+    box = sandbox.Sandbox(artifact.book_dir, rels=BASE_RELS)
+    _copy_text(box, 'stage0/clean_text.txt')
+    return box
+
+
+def _full_box() -> sandbox.Sandbox:
+    artifact = next(
+        a for a in corpus.iter_artifacts()
+        if a.rel == 'stage7/name_map.json'
+    )
+    rels = tuple(sorted({
+        item.rel for item in corpus.iter_artifacts()
+        if item.book_dir == artifact.book_dir and '_rounds/' not in item.rel
+    }))
+    box = sandbox.Sandbox(artifact.book_dir, rels=rels)
+    _copy_text(box, 'stage0/clean_text.txt')
+    _copy_text(box, 'stage5/draft.md')
+    return box
+
+
+def _copy_chapter(box: sandbox.Sandbox, ordinal: int, mode: str) -> None:
+    data = next((
+        sandbox.current(box.book, f'stage5/{source_mode}/ch{ordinal:02d}.json')
+        for source_mode in ('deep', 'shallow')
+        if sandbox.current(box.book, f'stage5/{source_mode}/ch{ordinal:02d}.json')
+        is not None
+    ), None)
+    assert data is not None, f'{box.book} 少了第 {ordinal} 章 current Stage5 正式稿'
+    box.write(f'stage5/{mode}/ch{ordinal:02d}.json', data)
 
 
 def _touch(box: sandbox.Sandbox, rel: str) -> None:
@@ -33,16 +82,11 @@ def _touch(box: sandbox.Sandbox, rel: str) -> None:
 
 
 def _approve_for_writing(box: sandbox.Sandbox) -> None:
-    _touch(box, 'stage0/removal_report.json')
     approvals.approve_gate(box.root, box.sid, 's0')
-    _touch(box, 'stage1/main_text.json')
     approvals.approve_gate(box.root, box.sid, 's1')
-    _touch(box, 'stage2/global_grounding.json')
-    _touch(box, 'stage2/chapter_blueprints.json')
     approvals.mark_seen(box.root, box.sid, 'global')
     approvals.mark_seen(box.root, box.sid, 'read')
     approvals.approve_gate(box.root, box.sid, 's2')
-    _touch(box, 'stage3/style_grounding.json')
     approvals.approve_gate(box.root, box.sid, 's3')
     approvals.approve_gate(box.root, box.sid, 's4')
 
@@ -97,16 +141,16 @@ def test_stage5_gate_requires_exact_arm_assignment_no_invalids_and_combined_draf
         assert planned
         for ordinal in planned:
             mode = 'deep' if ordinal in doc.deep else 'shallow'
-            _touch(box, f'stage5/{mode}/ch{ordinal:02d}.json')
+            _copy_chapter(box, ordinal, mode)
 
         wrong = box.dir / f'stage5/shallow/ch{doc.deep[0]:02d}.json'
-        _touch(box, f'stage5/shallow/ch{doc.deep[0]:02d}.json')
+        _copy_chapter(box, doc.deep[0], 'shallow')
         with pytest.raises(HumanEditProtected, match='wrong arm'):
             approvals.approve_gate(box.root, box.sid, 's5')
         wrong.unlink()
 
         invalid = box.dir / 'stage5/deep/ch01.INVALID.json'
-        _touch(box, 'stage5/deep/ch01.INVALID.json')
+        invalid.write_bytes((box.dir / 'stage5/deep/ch01.json').read_bytes())
         with pytest.raises(ApprovalRequired, match='INVALID'):
             approvals.approve_gate(box.root, box.sid, 's5')
         invalid.unlink()
@@ -115,6 +159,29 @@ def test_stage5_gate_requires_exact_arm_assignment_no_invalids_and_combined_draf
             approvals.approve_gate(box.root, box.sid, 's5')
         _touch(box, 'stage5/draft.md')
         assert approvals.approve_gate(box.root, box.sid, 's5').gate['s5']
+    finally:
+        box.close()
+
+
+def test_cli_products_can_be_explicitly_backfilled_and_are_reported_as_such():
+    box = _full_box()
+    try:
+        planned = approvals._planned(box.root, box.sid)
+        assert planned
+
+        result = approvals.backfill_from_disk(box.root, box.sid)
+        assert result.backfilled == [f's{i}' for i in range(8)]
+        assert all(result.approvals.gate.values())
+        assert result.approvals.seen == {'read': True, 'global': True}
+        expected_deep = [
+            ordinal for ordinal in planned
+            if (box.dir / f'stage5/deep/ch{ordinal:02d}.json').is_file()
+        ]
+        assert result.approvals.writing
+        assert result.approvals.deep == expected_deep
+
+        again = approvals.backfill_from_disk(box.root, box.sid)
+        assert again.backfilled == []
     finally:
         box.close()
 

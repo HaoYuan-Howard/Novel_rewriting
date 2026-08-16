@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from contracts.schema.api import ApprovalDoc, DeepSelectionRequest, GateKey, SeenKey
+from contracts.schema.api import (
+    ApprovalBackfillResult, ApprovalDoc, DeepSelectionRequest, GateKey, SeenKey,
+)
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator import approvals
 
@@ -22,6 +24,13 @@ def approve_gate(
     key: GateKey, sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
     return approvals.approve_gate(base, sid, key)
+
+
+@router.post('/backfill', response_model=ApprovalBackfillResult)
+def backfill_approvals(
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> ApprovalBackfillResult:
+    return approvals.backfill_from_disk(base, sid)
 
 
 @router.post('/seen/{key}', response_model=ApprovalDoc)

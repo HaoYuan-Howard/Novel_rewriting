@@ -42,10 +42,11 @@ from contracts.schema.stage0 import RemovalReport
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from novel import paths, prov
+from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import ApprovalRequired, ArtifactUnreadable, QueueConflict, UpstreamMissing
-from novel.orchestrator import jobs, state as st
-from novel.orchestrator.nodes import build_steps
+from novel.orchestrator import approvals, jobs, state as st
+from novel.orchestrator.nodes import build_steps, flag_value
 from novel.store import ArtifactStore
 
 #: 人做的那几个动作。**队列永不自动排它们**——`stage6.approve` 换一条候选、
@@ -61,6 +62,9 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
+WAITING_ON_DEPTH_SELECTION = 'approval:stage5-depth'
+WAITING_ON_RESTART_CONFIRMATION = 'queue:restart-confirmation'
+WAITING_ON_REPLAN = 'queue:plan-changed'
 
 
 def _stage_index(stage: str) -> int:
@@ -142,7 +146,6 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
 
     for node in nodes_up_to(until_stage):
         spec = NODES[node]
-        mode = spec.modes[0] if spec.modes else None
         why_blocked = stuck
         if why_blocked is None and node in HUMAN_NODES:
             if node in OPTIONAL_HUMAN_NODES:
@@ -161,10 +164,35 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
         if why_blocked is None and verdict == st.RESUME_SKIP:
             continue                                 # 已存在即跳过
 
+        mode = spec.modes[0] if spec.modes else None
+        flags: list[str] = []
+        steps = None
+        if node == 'stage5.write':
+            # The normal writing entry is one composite command.  Choosing the
+            # first arm here used to turn every chapter into the expensive deep
+            # route and silently discard the persisted human selection.
+            mode = None
+            selected = approvals.current_depth_selection(base, sid)
+            if selected is not None:
+                flags = [
+                    '--deep', ','.join(str(value) for value in selected) or 'none',
+                    '--shallow-rest',
+                ]
+            else:
+                if why_blocked is None:
+                    why_blocked = WAITING_ON_DEPTH_SELECTION
+                # No person has selected the depth arm yet, therefore there is
+                # no honest executable command to snapshot.  Once selected, the
+                # command surface changes and the old queue requires replanning.
+                steps = []
+
+        if steps is None:
+            steps = build_steps(
+                node, sid, flags, base=base, mode=mode,
+                follow_check=follow_check)
+
         item = QueueItem(
-            sid=sid, node=node, mode=mode, flags=[],
-            steps=build_steps(node, sid, base=base, mode=mode,
-                              follow_check=follow_check),
+            sid=sid, node=node, mode=mode, flags=flags, steps=steps,
             why=(f'{verdict}：{why}' if why_blocked is None
                  else _blocked_why(why_blocked, why)),
             waiting_on=why_blocked,
@@ -178,6 +206,9 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
 def _blocked_why(waiting_on: str, verdict_why: str) -> str:
     if waiting_on == WAITING_ON_INBOX:
         return f'上游有被闸门拦下的稿要人处理（0 成本提升路是 `--revalidate`）；{verdict_why}'
+    if waiting_on == WAITING_ON_DEPTH_SELECTION:
+        return ('还没有持久化的深度章节选择；先在「挑深度章节」屏保存一次，'
+                f'队列不会猜成全 deep 或全 shallow；{verdict_why}')
     return f'在等 `{waiting_on}`——这一步是人做的裁决，机器替不了；{verdict_why}'
 
 
@@ -331,7 +362,7 @@ def _ordered_items(start: QueueStart) -> list[QueueItem]:
 
 
 def _lane_counts(entries: list[QueueEntry]) -> QueueLaneCounts:
-    states = ('done', 'failed', 'not_run', 'pending', 'running', 'unknown',
+    states = ('done', 'landed_red', 'failed', 'not_run', 'pending', 'running', 'unknown',
               'cancelled', 'blocked')
     values = {state: sum(entry.state == state for entry in entries) for state in states}
     return QueueLaneCounts(**values)
@@ -343,6 +374,8 @@ def _run_state(entries: list[QueueEntry]) -> str:
         return 'running'
     if 'failed' in states:
         return 'failed'
+    if 'landed_red' in states:
+        return 'landed_red'
     if 'unknown' in states:
         return 'unknown'
     if 'pending' in states:
@@ -475,19 +508,105 @@ def cancel(base: str | os.PathLike[str], queue_id: str, item_index: int, *,
     return _one(base, queue_id, registry=registry)
 
 
+def _command_surface(item: QueueItem) -> tuple[object, ...]:
+    """The immutable part of a queue item that was shown and confirmed."""
+    return (
+        item.node, item.mode, tuple(item.flags),
+        tuple((tuple(step.argv), step.cwd, step.paid, step.writes)
+              for step in item.steps),
+    )
+
+
+def _current_plan_items(base: str | os.PathLike[str], start: QueueStart) -> list[QueueItem]:
+    """Rebuild the currently required command surface in lane/node order."""
+    rank = {node: index for index, node in enumerate(NODES)}
+    out: list[QueueItem] = []
+    for sid in start.sids:
+        todo, blocked = plan_book(base, sid, until_stage=start.until_stage)
+        out.extend(sorted(todo + blocked, key=lambda item: rank[item.node]))
+    return out
+
+
 def _live_disposition(base: str | os.PathLike[str], run: QueueRun,
                       entry: QueueEntry) -> tuple[str, str | None, str]:
     """Recheck disk state before launch; return state/waiting_on/reason."""
     todo, blocked = plan_book(
         base, entry.item.sid, until_stage=run.start.until_stage)
-    matches = [item for item in todo + blocked
-               if item.node == entry.item.node and item.mode == entry.item.mode]
-    if not matches:
+    same_node = [item for item in todo + blocked if item.node == entry.item.node]
+    if not same_node:
         return 'done', None, '盘上产物存在且当前新鲜，恢复时跳过，不重复调用'
-    current = matches[0]
+    matches = [item for item in same_node if item.mode == entry.item.mode]
+    current = matches[0] if matches else same_node[0]
+    if _command_surface(current) != _command_surface(entry.item):
+        return (
+            'blocked', WAITING_ON_REPLAN,
+            '盘面或人工选择已改变，当前命令与队列创建时确认的快照不同；'
+            '旧队列不会执行另一条命令，请重新预览并创建队列',
+        )
     if current.waiting_on:
         return 'blocked', current.waiting_on, current.why
     return 'pending', None, current.why
+
+
+def _remaining_paid_entries(run: QueueRun) -> list[QueueEntry]:
+    """Paid frozen entries that a new resume turn could still reach."""
+    terminal = {'done', 'landed_red', 'failed', 'not_run', 'cancelled'}
+    return [
+        entry for entry in run.entries
+        if entry.state not in terminal and any(step.paid for step in entry.item.steps)
+    ]
+
+
+def frozen_resume_commands(
+    base: str | os.PathLike[str], queue_id: str, *,
+    registry: QueueRegistry = REGISTRY,
+) -> list[str]:
+    """Exact persisted paid commands which must be shown before resume."""
+    run = _one(base, queue_id, registry=registry)
+    return [
+        ' '.join(step.argv)
+        for entry in _remaining_paid_entries(run)
+        for step in entry.item.steps
+        if step.paid
+    ]
+
+
+def _confirm_resume(
+    base: str | os.PathLike[str], queue_id: str, *, yes: bool,
+    registry: QueueRegistry,
+) -> QueueRun:
+    """Authorize one resume turn and release only restart-confirmation blocks.
+
+    ``run``/``start`` deliberately continue to refuse the persisted restart
+    marker.  This function is the sole path which may remove it, after showing
+    and explicitly confirming the exact frozen commands.
+    """
+    with _STATE_LOCK:
+        run = _one(base, queue_id, registry=registry)
+        commands = frozen_resume_commands(base, queue_id, registry=registry)
+        if commands and not yes:
+            lines = [
+                f'队列 {queue_id} 的本次恢复仍可能花钱。创建时冻结、现在必须重新确认的命令：',
+                *(f'  $ {command}' for command in commands),
+                '⇒ CLI 加 `--yes`；API 发送 `{"confirmed": true}`。未确认不会启动任何命令',
+            ]
+            raise ApprovalRequired('\n'.join(lines))
+
+        # Startup persists a special block so calling run/start directly cannot
+        # reinterpret it as ordinary pending work.  Once this resume turn has
+        # explicit authorization, restore each such entry's *current* disk/gate
+        # disposition; command-surface drift still becomes WAITING_ON_REPLAN.
+        for entry in run.entries:
+            if not (entry.state == 'blocked'
+                    and entry.waiting_on == WAITING_ON_RESTART_CONFIRMATION):
+                continue
+            disposition, waiting_on, reason = _live_disposition(base, run, entry)
+            _append_state(
+                base, queue_id, entry.index, disposition,
+                waiting_on=waiting_on,
+                note=('本次恢复已重新展示并确认冻结付费命令；' + reason),
+            )
+        return _one(base, queue_id, registry=registry)
 
 
 def _job_record(base: str | os.PathLike[str], job_id: str,
@@ -503,11 +622,13 @@ def _recover_running(base: str | os.PathLike[str], run: QueueRun,
     job = _job_record(base, entry.job_id, job_registry)
     if job is not None and job.state == 'running':
         return 'running'
-    if job is not None and job.state in ('ok', 'failed'):
-        state = 'done' if job.state == 'ok' else 'failed'
+    if job is not None and job.state in ('ok', 'landed_red', 'failed'):
+        state = {'ok': 'done', 'landed_red': 'landed_red', 'failed': 'failed'}[job.state]
+        note = ('从持久作业终态恢复队列项；' + jobs.LANDED_RED_NOTE
+                if job.state == 'landed_red' else '从持久作业终态恢复队列项')
         _append_state(
             base, run.queue_id, entry.index, state, job_id=entry.job_id,
-            exit_code=job.exit_code, note='从持久作业终态恢复队列项')
+            exit_code=job.exit_code, note=note)
         return state
     disposition, waiting_on, reason = _live_disposition(base, run, entry)
     if disposition == 'done':
@@ -524,14 +645,31 @@ def _recover_running(base: str | os.PathLike[str], run: QueueRun,
     return disposition
 
 
+def _stop_reason(failed: QueueEntry) -> str:
+    """停下的那一句话。**必须说出上一项到底是哪一种失败**——处置是相反的。
+
+    ⚠⚠ exit 1（产物已落盘、报告有红行）与 exit 2/3/70（压根没跑成）在
+    `JOB_STATE` 里已分成 `landed_red` / `failed`。人拿到「第 9 项后停下」
+    这句话时要做的事，
+    前者是**去看报告并裁决**，后者是**修完重跑**——不说清就等于让人先去猜。
+    实测：`stage6.hook` exit 1，`hook.json` 好好地在盘上，后三项被记成
+    `not_run`，日志上与一次真崩一模一样。
+    """
+    if X.landed_but_red(failed.exit_code):
+        return (f'同书第 {failed.index} 项（{failed.item.node}）**产物已落盘**、'
+                f'但校验报告有阻断级红行（exit 1）；按 `R-13.4` 队列停在这里等人裁决，'
+                f'本项没有启动。⚠ 这不是「没跑成」——先看那一层的屏，多半不必重跑')
+    return (f'同书第 {failed.index} 项（{failed.item.node}）没跑成'
+            f'（exit {failed.exit_code}）；本项没有启动')
+
+
 def _mark_not_run_after(base: str | os.PathLike[str], run: QueueRun,
                         failed: QueueEntry) -> None:
+    reason = _stop_reason(failed)
     for entry in run.entries[failed.index + 1:]:
         if entry.item.sid == failed.item.sid and entry.state in (
                 'pending', 'blocked', 'unknown'):
-            _append_state(
-                base, run.queue_id, entry.index, 'not_run',
-                note=f'同书第 {failed.index} 项失败后停下；本项没有启动')
+            _append_state(base, run.queue_id, entry.index, 'not_run', note=reason)
 
 
 def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
@@ -549,14 +687,29 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
         for entry in lane:
             if entry.state == 'done' and entry.index in settled_this_turn:
                 continue
-            if entry.state in ('failed', 'cancelled', 'not_run'):
+            if (entry.state == 'blocked'
+                    and entry.waiting_on == WAITING_ON_RESTART_CONFIRMATION):
+                # A service restart expires the old spending authorization.
+                # Only _confirm_resume may remove this durable marker; treating
+                # it like an ordinary live gate would silently turn it back into
+                # pending and execute without a fresh --yes/confirmed=true.
+                return
+            if entry.state == 'blocked' and entry.waiting_on == WAITING_ON_REPLAN:
+                # This is not a human gate that can simply become true.  The
+                # frozen queue lacks (or disagrees with) the current command;
+                # queue-resume must never turn that into permission to execute
+                # an obsolete snapshot.
+                return
+            if entry.state in ('landed_red', 'failed', 'cancelled', 'not_run'):
                 return
             if entry.state in ('running', 'unknown'):
                 recovered = _recover_running(
                     base, run, entry, job_registry=job_registry)
-                if recovered in ('running', 'blocked', 'failed'):
-                    if recovered == 'failed':
-                        _mark_not_run_after(base, _one(base, queue_id, registry=queue_registry), entry)
+                if recovered in ('running', 'blocked', 'landed_red', 'failed'):
+                    if recovered in ('landed_red', 'failed'):
+                        recovered_run = _one(base, queue_id, registry=queue_registry)
+                        _mark_not_run_after(
+                            base, recovered_run, recovered_run.entries[entry.index])
                     return
                 if recovered == 'done':
                     settled_this_turn.add(entry.index)
@@ -595,21 +748,33 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
                     base, queue_id, entry.index, 'running', job_id=job_id,
                     note=reason)
             try:
+                prepare = None
+                if (entry.item.node == 'stage5.write'
+                        and '--shallow-rest' in entry.item.flags):
+                    raw = flag_value(entry.item.flags, '--deep') or ''
+                    selected = [] if raw == 'none' else [
+                        int(value) for value in raw.split(',') if value]
+                    prepare = lambda selected=selected: approvals.begin_writing(
+                        base, entry.item.sid, selected)
                 jobs.start(
                     base, entry.item.node, entry.item.sid, entry.item.flags,
                     mode=entry.item.mode, steps=entry.item.steps,
-                    spawn=spawn, registry=job_registry, job_id=job_id)
+                    spawn=spawn, registry=job_registry, job_id=job_id,
+                    prepare=prepare)
                 jobs.wait(job_id)
                 result = _job_record(base, job_id, job_registry)
-                if result is None or result.state not in ('ok', 'failed'):
+                if result is None or result.state not in ('ok', 'landed_red', 'failed'):
                     _append_state(
                         base, queue_id, entry.index, 'unknown', job_id=job_id,
                         note='作业线程结束后仍没有可折叠终态')
                     return
-                state = 'done' if result.state == 'ok' else 'failed'
+                state = {'ok': 'done', 'landed_red': 'landed_red',
+                         'failed': 'failed'}[result.state]
                 _append_state(
                     base, queue_id, entry.index, state, job_id=job_id,
-                    exit_code=result.exit_code)
+                    exit_code=result.exit_code,
+                    note=(jobs.LANDED_RED_NOTE
+                          if result.state == 'landed_red' else None))
             except jobs.JobConflict as exc:
                 _append_state(
                     base, queue_id, entry.index, 'blocked',
@@ -621,7 +786,7 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
                     exit_code=CRASH, note=f'runner 启动作业失败：{exc!r}')
             current = _one(base, queue_id, registry=queue_registry)
             ended = current.entries[entry.index]
-            if ended.state == 'failed':
+            if ended.state in ('landed_red', 'failed'):
                 _mark_not_run_after(base, current, ended)
                 return
             if ended.state == 'done':
@@ -665,6 +830,17 @@ def run(base: str | os.PathLike[str], queue_id: str, *,
         registry.release(queue_id)
 
 
+def resume(base: str | os.PathLike[str], queue_id: str, *, yes: bool,
+           spawn: jobs.Spawn = jobs.default_spawn,
+           registry: QueueRegistry = REGISTRY,
+           job_registry: jobs.JobRegistry = jobs.REGISTRY) -> QueueRun:
+    """Synchronously resume only after a fresh paid-command confirmation."""
+    _confirm_resume(base, queue_id, yes=yes, registry=registry)
+    return run(
+        base, queue_id, spawn=spawn, registry=registry,
+        job_registry=job_registry)
+
+
 def start(base: str | os.PathLike[str], queue_id: str, *,
           spawn: jobs.Spawn = jobs.default_spawn,
           registry: QueueRegistry = REGISTRY,
@@ -700,6 +876,17 @@ def start(base: str | os.PathLike[str], queue_id: str, *,
     return _one(base, queue_id, registry=registry)
 
 
+def resume_start(base: str | os.PathLike[str], queue_id: str, *, yes: bool,
+                 spawn: jobs.Spawn = jobs.default_spawn,
+                 registry: QueueRegistry = REGISTRY,
+                 job_registry: jobs.JobRegistry = jobs.REGISTRY) -> QueueRun:
+    """Asynchronously resume after the same confirmation used by the CLI."""
+    _confirm_resume(base, queue_id, yes=yes, registry=registry)
+    return start(
+        base, queue_id, spawn=spawn, registry=registry,
+        job_registry=job_registry)
+
+
 def wait(queue_id: str, timeout: float | None = None) -> bool:
     with _THREADS_LOCK:
         thread = _THREADS.get(queue_id)
@@ -713,25 +900,101 @@ def resume_incomplete(base: str | os.PathLike[str], *,
                       spawn: jobs.Spawn = jobs.default_spawn,
                       registry: QueueRegistry = REGISTRY,
                       job_registry: jobs.JobRegistry = jobs.REGISTRY) -> list[str]:
-    """Service-start hook: reconcile jobs, then resume non-terminal queues."""
+    """Service-start hook with a fresh disk/command/cost safety audit.
+
+    An old ``--yes`` authorizes the old plan once.  A service restart is a new
+    execution turn: fresh free commands with an unchanged snapshot may resume,
+    while any remaining paid command waits for an explicit ``queue-resume``.
+    A changed command surface is never substituted into the frozen queue.
+    """
     before = records(base, registry=registry)
     if not before:
         return []
     jobs.reconcile(base, registry=job_registry)
     resumed: list[str] = []
     for record in records(base, registry=registry):
-        if record.state not in ('ok', 'failed', 'cancelled'):
+        if record.state in ('ok', 'landed_red', 'failed', 'cancelled'):
+            continue
+
+        recovered_any = False
+        for entry in record.entries:
+            if entry.state not in ('running', 'unknown'):
+                continue
+            recovered = _recover_running(
+                base, record, entry, job_registry=job_registry)
+            recovered_any = True
+            if recovered in ('landed_red', 'failed'):
+                current = _one(base, record.queue_id, registry=registry)
+                _mark_not_run_after(base, current, current.entries[entry.index])
+
+        # Re-evaluate every non-terminal/done entry against current disk truth.
+        # A previously done free item may safely become pending again; a changed
+        # command is turned into an explicit replan block by _live_disposition.
+        current = _one(base, record.queue_id, registry=registry)
+        if current.state in ('landed_red', 'failed', 'cancelled'):
+            continue
+        for entry in current.entries:
+            if entry.state not in ('pending', 'blocked', 'done'):
+                continue
+            disposition, waiting_on, reason = _live_disposition(base, current, entry)
+            if disposition == entry.state and (
+                    disposition != 'blocked' or waiting_on == entry.waiting_on):
+                continue
+            _append_state(
+                base, current.queue_id, entry.index, disposition,
+                waiting_on=waiting_on, note=reason)
+            recovered_any = True
+
+        current = _one(base, record.queue_id, registry=registry)
+        current_items = _current_plan_items(base, current.start)
+        remaining = [entry.item for entry in current.entries
+                     if entry.state in ('pending', 'blocked', 'unknown', 'running')]
+        if ([_command_surface(item) for item in remaining]
+                != [_command_surface(item) for item in current_items]):
+            targets = [entry for entry in current.entries
+                       if entry.state in ('pending', 'blocked', 'unknown', 'running')]
+            if not targets and current.entries:
+                targets = [current.entries[-1]]
+            reason = (
+                '服务重启后重新规划得到的节点/命令集合与创建时未完成快照不同；'
+                '旧队列不会增加、删除或替换命令，请重新预览并创建队列')
+            for entry in targets:
+                _append_state(
+                    base, current.queue_id, entry.index, 'blocked',
+                    waiting_on=WAITING_ON_REPLAN, note=reason)
+            continue
+
+        pending = [entry for entry in current.entries if entry.state == 'pending']
+        if any(step.paid for entry in pending for step in entry.item.steps):
+            reason = (
+                '服务重启后不会复用旧队列几小时前的 `--yes` 静默执行付费节点；'
+                '当前命令快照未变，重新展示冻结命令并经 CLI `queue-resume --yes` '
+                '或 API `confirmed=true` 确认后才能恢复')
+            for entry in pending:
+                _append_state(
+                    base, current.queue_id, entry.index, 'blocked',
+                    waiting_on=WAITING_ON_RESTART_CONFIRMATION, note=reason)
+            continue
+
+        current = _one(base, record.queue_id, registry=registry)
+        if any(entry.state in ('blocked', 'unknown', 'running')
+               for entry in current.entries):
+            continue
+        if any(entry.state == 'pending' for entry in current.entries):
             start(
-                base, record.queue_id, spawn=spawn, registry=registry,
+                base, current.queue_id, spawn=spawn, registry=registry,
                 job_registry=job_registry)
-            resumed.append(record.queue_id)
+            resumed.append(current.queue_id)
+        elif recovered_any and current.state == 'ok':
+            resumed.append(current.queue_id)
     return resumed
 
 
 __all__ = [
     'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
+    'WAITING_ON_DEPTH_SELECTION', 'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
     'QueueRegistry', 'append_event', 'cancel', 'confirm', 'create', 'fold',
-    'fold_counts', 'new_queue_id', 'nodes_up_to', 'plan', 'plan_book',
+    'fold_counts', 'frozen_resume_commands', 'new_queue_id', 'nodes_up_to', 'plan', 'plan_book',
     'queue_path', 'read_events', 'records', 'resume_incomplete', 'run', 'start',
-    'wait',
+    'resume', 'resume_start', 'wait',
 ]

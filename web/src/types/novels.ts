@@ -8,7 +8,8 @@ export interface Artifact {
   bytes: number | null
   /** unix 秒 */
   mtime: number | null
-  provenance: Provenance
+  /** 总览只发摘要，产物未读或无来源账时可为空；不是正式 artifact 的 `_provenance`。 */
+  provenance: Partial<Provenance>
   freshness: Freshness
   display_freshness: Freshness | 'missing'
   condition: 'missing' | 'ready' | 'invalid' | 'unreadable'
@@ -25,7 +26,7 @@ export interface NovelRow {
   title: string
   dir: string
   dirname: string
-  /** 新服务的 overview 不直接带章数；能从逐章产物确认时填数，否则为 null。 */
+  /** stage1 主正文一落盘即可确定；还没分章时为 null。 */
   chapters: number | null
   /** stage0~7；stage5 成稿不进 artifacts，只在 stage5_modes / chapters_done 中体现。 */
   stages: Record<string, Artifact[]>

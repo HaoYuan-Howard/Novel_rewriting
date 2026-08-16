@@ -8,7 +8,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     preview <node> <sid> [flags]    打印 argv + 贵贱 + 写不写盘。0 成本
     mark <sid> --node N --phase P   进度信标打点（agent 代跑用，0 成本，恒 exit 0）
     state <sid>                     这本书跑到哪了（产物存在性 + 来源新鲜度）
-    inbox <sid>                     待人工六类清单（0 成本纯读；有待办≠失败）
+    inbox <sid>                     待人工八类清单（0 成本纯读；有待办≠失败）
     queue <sid…> --until <stage>    建立并执行持久批量队列；含付费项时要 `--yes`
     jobs                            作业记录（新的在前）
     reconcile                       启动时把「运行中」一律改判「不知道」
@@ -95,7 +95,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument('sid')
     s.add_argument('--base', required=True)
 
-    ib = sub.add_parser('inbox', help='待人工六类清单（0 成本纯读）')
+    ib = sub.add_parser('inbox', help='待人工八类清单（0 成本纯读）')
     ib.add_argument('sid')
     ib.add_argument('--base', required=True)
 
@@ -118,6 +118,8 @@ def _parser() -> argparse.ArgumentParser:
     qr = sub.add_parser('queue-resume', help='恢复一个未完成的持久队列')
     qr.add_argument('queue_id')
     qr.add_argument('--base', required=True)
+    qr.add_argument('--yes', action='store_true',
+                    help='重新确认本次恢复仍可能执行的冻结付费命令')
 
     j = sub.add_parser('jobs', help='作业记录（新的在前）')
     j.add_argument('--base', required=True)
@@ -188,6 +190,7 @@ def _llm_client(ctx: RunContext):
         cache=ResponseCache(cfg.cache_dir),
         model=cfg.model,
         thinking_mode=cfg.thinking_mode,
+        effort=NODES[ctx.node].effort,
         max_retries=cfg.max_retries,
         backoff_base=cfg.backoff_base,
         concurrency=cfg.concurrency,
@@ -233,21 +236,32 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
 
     tokens = set(N.flag_tokens(flags))
     if ctx.node == 'stage0.approve':
-        _art, report = removal.run_approve(ctx)
+        actor = _valued(flags, '--actor')
+        reason = _valued(flags, '--reason')
+        if actor is None or reason is None:
+            raise TerminalState('stage0.approve 必须显式给 --actor 与 --reason')
+        _art, report = removal.run_approve(ctx, actor=actor, reason=reason)
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
     if ctx.node == 'stage0.edit':
         edit_path = _valued(flags, '--apply-edit')
         edit_plan_path = _valued(flags, '--apply-edit-plan')
-        if (edit_path is None) == (edit_plan_path is None):
+        merge_plan_path = _valued(flags, '--apply-merge-plan')
+        if sum(value is not None for value in (edit_path, edit_plan_path, merge_plan_path)) != 1:
             raise TerminalState(
-                'stage0.edit 必须且只能给一种输入：'
-                '--apply-edit <人工 clean_text.txt> 或 --apply-edit-plan <审校台计划.json>')
-        art, report = (
-            removal.run_edit_plan(ctx, edit_plan_path)
-            if edit_plan_path is not None
-            else removal.run_edit(ctx, edit_path or '')
-        )
+                'stage0.edit 必须且只能给一种输入：--apply-edit / --apply-edit-plan / '
+                '--apply-merge-plan')
+        if merge_plan_path is not None:
+            art, report = removal.run_merge_plan(ctx, merge_plan_path)
+        elif edit_plan_path is not None:
+            art, report = removal.run_edit_plan(ctx, edit_plan_path)
+        else:
+            actor = _valued(flags, '--actor')
+            reason = _valued(flags, '--reason')
+            if actor is None or reason is None:
+                raise TerminalState('stage0.edit --apply-edit 必须显式给 --actor 与 --reason')
+            art, report = removal.run_edit(
+                ctx, edit_path or '', actor=actor, reason=reason)
         print(render(report))
         print(f'  ✓ 人工编辑已落为第 {art.round} 轮；状态退回 pending，请重新批准')
         return X.OK
@@ -383,7 +397,9 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
     if ctx.node == 'stage6.semantic':
         if '--dry-run' in tokens:
             system, user, _art, _up, aliases = semantic.build_prompt(ctx)
-            print(f'── anonymous editor system（{len(system)} 字）──\n{system}')
+            for role in ('A', 'B'):
+                exact = system + semantic.JUDGE_ROLE_SUFFIX[role]
+                print(f'── anonymous editor {role} system（{len(exact)} 字）──\n{exact}')
             print(f'\n── user（{len(user)} 字；{len(aliases)} 份去重文本）──\n{user}')
             return X.OK
         artifact, report = semantic.run_semantic(ctx, _llm_client(ctx))
@@ -400,7 +416,16 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
                 '⚠ 这与「选了一个越界的号」是两件事——那一条会告诉你有几个候选')
         if not pick.isdigit():
             raise TerminalState(f'--pick {pick!r} 不是一个候选序号（1 起的整数）')
-        _art, report = hook.run_approve(ctx, int(pick))
+        actor = _valued(flags, '--actor')
+        reason = _valued(flags, '--reason')
+        subject_sha256 = _valued(flags, '--subject-sha256')
+        if not actor or not reason or not subject_sha256:
+            raise TerminalState(
+                'stage6.approve 必须显式给 --actor、--reason 和 '
+                '--subject-sha256；actor 是自报身份，hash 用于防旧页面误批')
+        _art, report = hook.run_approve(
+            ctx, int(pick), actor=actor, reason=reason,
+            subject_sha256=subject_sha256)
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
@@ -502,6 +527,15 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             print(f'  ✓ 人工 secret 订正已落为新一轮（{len(artifact.canon.secrets)} 条 secret）；'
                   f'埋点章已重走 `_prune_setups`，下游全部按真实输入变化转 stale')
             return X.OK if report.passed else X.CHECK_FAILED
+        if '--review-decisions' in tokens:
+            from novel.stages.stage2 import global_review
+            review = global_review.apply_file(
+                ctx, _valued(flags, '--review-decisions') or '')
+            passed = global_review.is_approved(ctx, review)
+            print(f'  {"✓" if passed else "⚠"} stage2 全局复核：'
+                  f'{sum(item.state == "PASS" for item in review.items)}/'
+                  f'{len(review.items)} 项 PASS；只有全部 PASS 才打开 s2 gate')
+            return X.OK if passed else X.CHECK_FAILED
         if '--resample' in tokens:
             extract.run_resample(ctx, _llm_client(ctx))
             print('  ✓ stage2 全书事实底座已绕过问题缓存重新采样并落盘')
@@ -649,7 +683,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
     ⚠ 写作节点**没有 `--check-only`**：机械复检由 `stage5.review` 承担；语义结论由
     `stage5.semantic` 独立产出，再在 review 报告中合并。⇒ 对外 check 节点仍是 review。
     """
-    from novel.stages.stage5 import review, semantic, write
+    from novel.stages.stage5 import review, semantic, trim_resolution, write
 
     tokens = set(N.flag_tokens(flags))
     chapters = _valued(flags, '--chapters')
@@ -671,6 +705,22 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if ctx.node == 'stage5.review':
+        if '--retain-pretrim' in tokens:
+            selected = _chapters_of(chapters)
+            if len(selected) != 1:
+                raise TerminalState('--retain-pretrim 必须用 --chapters 指定恰好一章')
+            resolution = trim_resolution.retain_pretrim(
+                ctx, selected[0],
+                actor=_valued(flags, '--actor') or '',
+                reason=_valued(flags, '--reason') or '',
+            )
+            print(f'  ✓ ch{resolution.output_ordinal:02d} 已明确保留 pretrim 原稿；'
+                  'hash-bound resolution 已落盘，未采用收缩候选')
+            return X.OK
+        stray = {'--chapters', '--actor', '--reason'} & tokens
+        if stray:
+            raise TerminalState(
+                f'{sorted(stray)} 只与 --retain-pretrim 成组使用，不能静默落到默认 review')
         if '--wontfix' in tokens:
             report = review.mark_wontfix(ctx, _valued(flags, '--wontfix') or '')
             print(render(report))
@@ -890,7 +940,7 @@ def _cmd_state(a: argparse.Namespace) -> int:
 
 
 def _cmd_inbox(a: argparse.Namespace) -> int:
-    """待人工六类清单的 CLI 面。**纯读、0 成本、退出码恒 0**。
+    """待人工八类清单的 CLI 面。**纯读、0 成本、退出码恒 0**。
 
     ⚠ 「有待办」不是「失败」：`approval` 类按设计必然出现（人定稿闸门），
     拿 `CHECK_FAILED` 翻译它就是把清单说成一次不合格——判定语义只归
@@ -929,9 +979,21 @@ def _cmd_queue(a: argparse.Namespace) -> int:
     run = Q.run(a.base, run.queue_id)
     print(f'── 队列终态：{run.state} ──')
     for sid, counts in run.counts_by_sid.items():
-        print(f'  {sid}: done={counts.done} failed={counts.failed} '
+        print(f'  {sid}: done={counts.done} landed_red={counts.landed_red} '
+              f'failed={counts.failed} '
               f'not_run={counts.not_run} blocked={counts.blocked} '
               f'cancelled={counts.cancelled}')
+    # ⚠ **三个数不够用**：人拿到 `failed=1` 之后要做的第一件事是「哪一项、为什么」，
+    #   而那此前只能另跑一次 `queue-list` 才看得到。更要命的是 `failed` 同时装着
+    #   「产物已落盘、报告有红行」（exit 1）与「压根没跑成」（exit 2/3/70）——
+    #   处置相反，而计数行一个字都不说。逐项打出来的成本是零。
+    for entry in run.entries:
+        if entry.state in ('landed_red', 'failed', 'not_run', 'blocked', 'unknown'):
+            code = '—' if entry.exit_code is None else entry.exit_code
+            print(f'  [{entry.index}] {entry.state:8} exit={code:<4} '
+                  f'{entry.item.sid}  {entry.item.node}')
+            if entry.note:
+                print(f'      ⚠ {entry.note}')
     return X.OK if run.state in ('ok', 'blocked', 'cancelled') else X.CHECK_FAILED
 
 
@@ -957,7 +1019,12 @@ def _cmd_queue_cancel(a: argparse.Namespace) -> int:
 
 
 def _cmd_queue_resume(a: argparse.Namespace) -> int:
-    rec = Q.run(a.base, a.queue_id)
+    frozen = Q.frozen_resume_commands(a.base, a.queue_id)
+    if frozen:
+        print('这次恢复仍可能执行以下创建时冻结的付费命令：')
+        for command in frozen:
+            print(f'  $ {command}')
+    rec = Q.resume(a.base, a.queue_id, yes=a.yes)
     print(f'{rec.queue_id} 恢复完成；当前状态 {rec.state}')
     return X.OK if rec.state in ('ok', 'blocked', 'cancelled') else X.CHECK_FAILED
 

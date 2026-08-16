@@ -69,10 +69,12 @@
 | `requirement` | `str` | **是** | `R-x.y`。让报告能反查「这条判据在满足哪条需求」 | **契·码** |
 | `check_kind` | `str` | **是** | `mechanical｜semantic`：是确定性检查还是 LLM 语义审判。**与严重度正交** | **契·码** |
 | `remediation` | `str` | **是** | `llm｜human｜deterministic｜none`：工作流的下一步，从现有 `repair/fix/sev` 统一投影 | **契·码** |
-| `fix` | `obj｜null` | **是** | 可执行修复路由 `{node, flags[], paid}`；无结构化路由时为 `null` | **契·码** |
+| `fix` | `obj｜null` | **是** | 修复路由 `{node, flags[], paid, available, unavailable_reason}`；`available=true` 才是完整可执行 argv。带值 flag 的值能从本次 finding 证据唯一推出时由报告补齐；推不出时保留路由但 `available=false` 并点明缺什么，界面不得画死按钮 | **契·码** |
 | `findings` | `Finding[]` | **是** | 这条判据这一次的产出。**度量的读数也装在这里** | **设计** |
 | `why` | `str｜null` | **是**（可为 `null`） | `status='skipped'｜'unver'` 时非空，其余为 `null` | **设计** |
+| `scanned` | `str｜null` | **是**（可为 `null`） | 本次实际扫描的分母；没执行时为 `null` | **契·码** |
 | `baseline` | `str｜null` | **是**（可为 `null`） | 词表类判据的基线命中率。`wordlist=True` 时**必填** | **契·码** |
+| `note` | `str｜null` | **是**（可为 `null`） | 判据稳定的适用边界/合法反例说明；与本次执行失败专用的 `why` 分开，纯文本下发 | **契·码** |
 
 **五条后置条件**（载体在守，不是判据）：
 
@@ -106,7 +108,8 @@
 > 度量「有产出」是它的常态。⇒ 一个字段 `findings`，两条按 `sev` 分开的后置条件。
 
 ⚠ **`findings` 里的 `Finding` 只能经工厂构造**（`_common.md` §七 设计要点 1）：
-`sev` / `item` / `owner` / `actionable` 一律从注册表取，调用方只给 `detail` + `evidence`。
+`sev` / `item` / `owner` / `actionable` 一律从注册表取，调用方只给 `detail` + `evidence`
+以及规则明确声明可由 finding 提供的 `fix_args`。
 ⇒ 一条 finding 不可能与它所属的那一行说的不一致——**它们读的是同一个 `Rule` 对象**。
 
 ### 2.2 ⚠ `actionable` 从 `repair` 派生，**不给 `Rule` 加第二个字段**

@@ -297,14 +297,18 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
             '/api/queues/{queue_id}/items/{item_index}/cancel': ['POST'],
         '/api/novels/{sid}/stage0/report': ['GET'],
         '/api/novels/{sid}/stage0/segments': ['GET'],
+        '/api/novels/{sid}/stage0/merge': ['GET'],
         '/api/novels/{sid}/stage0/edit': ['POST'],
         '/api/novels/{sid}/stage0/approve': ['POST'],
+        '/api/novels/{sid}/stage0/merge/resolve': ['POST'],
+        '/api/novels/{sid}/stage0/merge/reject': ['POST'],
         '/api/novels/{sid}/stage1/partition': ['POST'],
         '/api/novels/{sid}/stage1/segments': ['GET'],
         '/api/novels/{sid}/stage1/chapters': ['GET'],
         '/api/novels/{sid}/stage1/hook_copy': ['GET'],
         '/api/novels/{sid}/approvals': ['GET'],
         '/api/novels/{sid}/approvals/gate/{key}': ['POST'],
+        '/api/novels/{sid}/approvals/backfill': ['POST'],
         '/api/novels/{sid}/approvals/seen/{key}': ['POST'],
         '/api/novels/{sid}/approvals/deep': ['POST'],
         '/api/novels/{sid}/approvals/writing': ['POST'],
@@ -312,8 +316,10 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/upload': ['POST'],
         # ── 第二阶段 · 批 1/2：读屏（`tests/test_api_screens.py` 管行为） ──
         '/api/novels/{sid}/stage2/global': ['GET'],
+        '/api/novels/{sid}/stage2/global-review': ['POST'],
         '/api/novels/{sid}/stage6': ['GET'],
         '/api/novels/{sid}/stage7': ['GET'],
+        '/api/novels/{sid}/stage7/book.txt': ['GET'],
         '/api/novels/{sid}/stage7/{ordinal}': ['GET'],
         '/api/novels/{sid}/inbox': ['GET'],
         '/api/novels/{sid}/reading/{ordinal}': ['GET'],
@@ -544,6 +550,32 @@ def test_queue_api_requires_confirmation_before_persisting_paid_commands(client,
     })
     assert refused.status_code == 409
     assert refused.json()['kind'] == 'ApprovalRequired'
+
+
+def test_queue_resume_api_carries_a_new_explicit_confirmation(client, box, monkeypatch):
+    """Calling the resume endpoint is not itself spending authorization."""
+    plan = Q.plan(str(box.root), [box.sid], until_stage='stage1')
+    run = Q.create(
+        str(box.root), [box.sid], until_stage='stage1',
+        yes=not bool(plan.paid_items), queue_id='q-api-resume-confirm')
+    seen: list[bool] = []
+
+    def resume_start(base, queue_id, *, yes):
+        seen.append(yes)
+        if not yes:
+            from novel.errors import ApprovalRequired
+            raise ApprovalRequired(
+                '冻结命令：python -m novel.cli run stage6.hook --yes；'
+                'API 必须 confirmed=true')
+        return next(item for item in Q.records(base) if item.queue_id == queue_id)
+
+    monkeypatch.setattr(Q, 'resume_start', resume_start)
+    refused = client.post(f'/api/queues/{run.queue_id}/resume', json={'confirmed': False})
+    assert refused.status_code == 409
+    assert refused.json()['kind'] == 'ApprovalRequired'
+    accepted = client.post(f'/api/queues/{run.queue_id}/resume', json={'confirmed': True})
+    assert accepted.status_code == 202
+    assert seen == [False, True]
 
 
 # ───────────────────────── 八、绑定（`R-11.1`） ─────────────────────────

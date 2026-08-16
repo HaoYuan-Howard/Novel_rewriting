@@ -55,8 +55,46 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
+async function requestText(path: string): Promise<string> {
+  let res: Response
+  try {
+    res = await fetch(BASE + path)
+  } catch {
+    throw new ApiError('offline', path)
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status === 404 ? 'notfound' : 'server', path, {
+      status: res.status,
+    })
+  }
+  return res.text()
+}
+
+async function requestBlob(path: string): Promise<Blob> {
+  let res: Response
+  try {
+    res = await fetch(BASE + path)
+  } catch {
+    throw new ApiError('offline', path)
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status === 404 ? 'notfound' : 'server', path, {
+      status: res.status,
+    })
+  }
+  return res.blob()
+}
+
 export function get<T>(path: string): Promise<T> {
   return request<T>(path)
+}
+
+export function getText(path: string): Promise<string> {
+  return requestText(path)
+}
+
+export function getBlob(path: string): Promise<Blob> {
+  return requestBlob(path)
 }
 
 export function post<T>(path: string, body?: unknown): Promise<T> {

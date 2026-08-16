@@ -36,7 +36,10 @@ from pathlib import Path
 from typing import BinaryIO
 
 from contracts.invariants import NODES
-from contracts.schema.orchestration import JobEvent, JobRecord, JobStart, Step
+from contracts.schema.orchestration import (
+    JobEvent, JobRecord, JobStart, ProgressEvent, Step,
+)
+from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import TerminalState
 from novel.orchestrator.nodes import build_steps, child_env
@@ -213,7 +216,7 @@ def read_events(base: str | os.PathLike[str]) -> list[JobEvent]:
 def fold(events: Iterable[JobEvent], *, live: set[str] | None = None) -> list[JobRecord]:
     """事件流 → 作业记录。**折叠规则只有这一处。**
 
-    ⚠ `state` 的四态：有 `ended` 看退出码；只有 `started` 而这个进程还占着锁 ⇒
+    ⚠ `state` 的五态：有 `ended` 看退出码；只有 `started` 而这个进程还占着锁 ⇒
     `running`；只有 `started` 而没人占着 ⇒ **`unknown`**（`R-11.11`）。
     **不是 `ok` 也不是 `failed`**——重启前它是死是活我们真的不知道。
     """
@@ -236,7 +239,8 @@ def fold(events: Iterable[JobEvent], *, live: set[str] | None = None) -> list[Jo
             continue                            # 只有尾巴没有头：那一行的头被截掉了
         code = c.get('exit_code')
         if code is not None:
-            state = 'ok' if code == 0 else 'failed'
+            state = ('ok' if code == 0 else
+                     'landed_red' if X.landed_but_red(code) else 'failed')
         elif job_id in live:
             state = 'running'
         else:
@@ -245,11 +249,25 @@ def fold(events: Iterable[JobEvent], *, live: set[str] | None = None) -> list[Jo
             job_id=job_id, start=c['start'], started=c['started'],
             ended=c.get('ended'), exit_code=code, state=state,
             steps_started=c['steps'],
-            note=c['note'] or (RECONCILE_NOTE if state == 'unknown' else None)))
+            note=c['note'] or _default_note(state, code)))
     return sorted(out, key=lambda r: r.started, reverse=True)
 
 
 RECONCILE_NOTE = '服务重启前这个作业还在跑；它是跑完了还是被一起杀掉了，无从判断'
+
+#: `landed_red` 的人读处置：它不是「命令没跑成」，而是「产物已落盘、
+#: 报告有阻断红行」。与 `failed` 分态后仍保留这句人读指引。
+LANDED_RED_NOTE = (
+    '产物**已经落盘**，但校验报告有阻断级红行（exit 1）。'
+    '⚠ 这不是「没跑成」：该做的是打开对应层的屏看红行并裁决，不是修完重跑')
+
+
+def _default_note(state: str, code: int | None) -> str | None:
+    if state == 'unknown':
+        return RECONCILE_NOTE
+    if state == 'landed_red':
+        return LANDED_RED_NOTE
+    return None
 
 
 def reconcile(base: str | os.PathLike[str], *,
@@ -401,6 +419,23 @@ def _run_steps(base: str | os.PathLike[str], job_id: str,
     return rc
 
 
+def _append_progress(base: str | os.PathLike[str], sid: str | None, node: str,
+                     phase: str, *, exit_code: int | None = None) -> None:
+    """把 UI / 队列作业投影进与 agent CLI 共用的进度信标。
+
+    局部 import 避开模块环：`beacon` 复用本模块的 `service_dir`，而作业执行器
+    只在真正开始/结束时才需要它。上传入口的 stage0.remove 在建书前 `sid=None`，
+    没有可归属的书级进度，仍只记作业账。
+    """
+    if not sid:
+        return
+    from novel.orchestrator import beacon
+
+    beacon.append(base, ProgressEvent(
+        ts=int(time.time()), sid=sid, node=node, phase=phase,
+        exit_code=exit_code))
+
+
 def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequence[str] = (), *,
         mode: str | None = None, follow_check: bool = True,
         spawn: Spawn = default_spawn, registry: JobRegistry = REGISTRY,
@@ -428,9 +463,19 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
             job_id=job_id, kind='started', ts=int(time.time()),
             start=plan_start(node, sid, flags, base=base, mode=mode, steps=plan))
         append_event(base, start_event)
-        rc = _run_steps(base, job_id, plan, spawn)
+        _append_progress(base, sid, node, 'start')
+        try:
+            rc = _run_steps(base, job_id, plan, spawn)
+        except BaseException:
+            # 同步入口也必须闭合事件与进度轨迹。否则一次 spawn 异常会让 UI 永久
+            # 停在 running，作业账也只能等服务重启后猜成 unknown。
+            append_event(base, JobEvent(
+                job_id=job_id, kind='ended', ts=int(time.time()), exit_code=CRASH))
+            _append_progress(base, sid, node, 'end', exit_code=CRASH)
+            raise
         append_event(base, JobEvent(
             job_id=job_id, kind='ended', ts=int(time.time()), exit_code=rc))
+        _append_progress(base, sid, node, 'end', exit_code=rc)
         return next(r for r in fold(read_events(base)) if r.job_id == job_id)
     finally:
         registry.release(key, job_id)
@@ -442,7 +487,12 @@ def wait(job_id: str, timeout: float | None = None) -> bool:
     if thread is None:
         return True
     thread.join(timeout=timeout)
-    return not thread.is_alive()
+    done = not thread.is_alive()
+    if done:
+        with _THREADS_LOCK:
+            if _THREADS.get(job_id) is thread:
+                _THREADS.pop(job_id, None)
+    return done
 
 
 
@@ -460,6 +510,11 @@ def start(
     prepare: Callable[[], None] | None = None,
     job_id: str | None = None,
 ) -> JobRecord:
+    # 无人显式 wait 的 Web 作业在下一次启动时回收；正在 wait 的作业要保留到 join。
+    with _THREADS_LOCK:
+        for finished_id, finished in list(_THREADS.items()):
+            if not finished.is_alive():
+                _THREADS.pop(finished_id, None)
     _refuse_if_agent_running()
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, mode=mode, follow_check=follow_check)
@@ -475,6 +530,7 @@ def start(
             job_id=job_id, kind='started', ts=int(time.time()),
             start=plan_start(node, sid, flags, base=base, mode=mode, steps=plan))
         append_event(base, start_event)
+        _append_progress(base, sid, node, 'start')
     except Exception:
         registry.release(key, job_id)
         raise
@@ -493,10 +549,11 @@ def start(
                 append_event(base, JobEvent(
                     job_id=job_id, kind='ended', ts=int(time.time()),
                     exit_code=rc))
+                _append_progress(base, sid, node, 'end', exit_code=rc)
             finally:
                 registry.release(key, job_id)
-                with _THREADS_LOCK:
-                    _THREADS.pop(job_id, None)
+                # 留给 `wait()` 真正 join 后再移除。worker 自己先 pop 会制造一个
+                # 「表里没有但线程还没完全返回」的窗口，Windows 清理日志会撞占用。
 
     thread = threading.Thread(
         target=worker, name=f'novel-job-{job_id}', daemon=True)
@@ -510,6 +567,7 @@ def start(
         registry.release(key, job_id)
         append_event(base, JobEvent(
             job_id=job_id, kind='ended', ts=int(time.time()), exit_code=CRASH))
+        _append_progress(base, sid, node, 'end', exit_code=CRASH)
         raise
     return next(
         record for record in fold(read_events(base), live=registry.live())

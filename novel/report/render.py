@@ -75,6 +75,13 @@ def _rules(rules: list[RuleLine]) -> list[str]:
         if r.baseline:
             # `Q-9`：词表类判据**永远打印基线**。没有基线的词表判据等于不知道自己在说什么。
             out.append(f'        基线：{r.baseline}')
+        # Stable rule context belongs to the rule line and must stay visible even
+        # when the current run is clean or the line is a metric.  In particular,
+        # a metric caveat (for example place granularity) is most important next
+        # to the value itself; hiding it on ``ok`` recreates the old producer-
+        # detail duplication pressure.
+        if r.note:
+            out.append(f'        说明：{r.note}')
         for f in r.findings[:DETAIL_MAX]:
             # ⚠⚠ **豁免过的那条必须在这里看得出来。** 机制那一侧的全部意义就是
             # 「有人看过并决定不修」与「没人看过」分得开（`R-8.7b`），而报告是

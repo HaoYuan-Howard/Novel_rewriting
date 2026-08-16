@@ -40,7 +40,17 @@ const KIND_META: Record<
     meaning: '判「根因不在写手」，修复已停手',
     ...SEV.unver,
   },
-  human_only: { title: '不进付费自救的判据', meaning: '人改，或裁决不改', ...SEV.info },
+  repairable: {
+    title: '机器可执行的修复',
+    meaning: '走确定性或本地修复路由，不冒充人工项',
+    ...SEV.info,
+  },
+  human_only: { title: '真正需要人工修复', meaning: '没有机器修复路由，或人裁决不改', ...SEV.info },
+  verification: {
+    title: 'Stage2 逐项复核未闭合',
+    meaning: 'pending / FAIL / UNVER 都回到全局设定屏补决定与证据',
+    ...SEV.unver,
+  },
   upstream: { title: '阻断级，重写修不掉', meaning: '根因在上游', ...SEV.hard },
   approval: {
     title: '两个「人定稿」闸门',

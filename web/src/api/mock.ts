@@ -19,7 +19,7 @@ import type {
   AgentRunRequest,
   AgentRunsResponse,
 } from '@/types/agent'
-import type { ActionRef, ApprovalDoc, GateKey, SeenKey } from '@/types/approvals'
+import { GATE_KEYS, type ActionRef, type ApprovalDoc, type GateKey, type SeenKey } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type { Job, JobLogResponse, JobPreview, JobRequest, JobsResponse } from '@/types/jobs'
 import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
@@ -27,6 +27,8 @@ import type { RunProgress } from '@/types/run'
 import type {
   CheckKind,
   CheckReport,
+  GlobalReviewDecisionSet,
+  GlobalReviewResponse,
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
@@ -46,6 +48,7 @@ import type {
 } from '@/types/stages'
 import { lookupAction } from '@/constants/actions'
 import { ApiError } from './errors'
+import { projectGlobalSpoilers } from './spoilers'
 
 /* ------------------------------------------------------------ 样本的边界 */
 
@@ -319,11 +322,79 @@ function saveDoc(doc: ApprovalDoc): ApprovalDoc {
   return doc
 }
 
+/* ------------------------------------------------------ Stage2 全局复核 */
+
+const MOCK_SHA = {
+  source: 'a'.repeat(64),
+  rules: 'b'.repeat(64),
+  secrets: 'c'.repeat(64),
+}
+
+function freshGlobalReview(): GlobalReviewResponse {
+  const decided = {
+    state: 'PASS' as const,
+    evidence: [],
+    actor: 'mock-reviewer',
+    decided_at: '2026-08-16T00:00:00+00:00',
+    reason: 'mock 样本已经逐项核对',
+  }
+  return {
+    source_sha256: MOCK_SHA.source,
+    current_subject_sha256: MOCK_SHA.source,
+    current: true,
+    approved: true,
+    items: [
+      {
+        item_id: 'world_rule_set_complete:canon.world_rules:' + MOCK_SHA.rules.slice(0, 12),
+        kind: 'world_rule_set_complete',
+        subject_path: 'canon.world_rules',
+        subject_sha256: MOCK_SHA.rules,
+        ...decided,
+      },
+      {
+        item_id: 'secret_set_complete:canon.secrets:' + MOCK_SHA.secrets.slice(0, 12),
+        kind: 'secret_set_complete',
+        subject_path: 'canon.secrets',
+        subject_sha256: MOCK_SHA.secrets,
+        ...decided,
+      },
+    ],
+  }
+}
+
+function loadGlobalReview(sid: string): GlobalReviewResponse {
+  return lsRead<GlobalReviewResponse>('global-review.' + sid) ?? freshGlobalReview()
+}
+
+function saveGlobalReview(sid: string, review: GlobalReviewResponse): GlobalReviewResponse {
+  lsWrite('global-review.' + sid, review)
+  return review
+}
+
 /* ------------------------------------------------------------ 命令行拼装 */
 
 /** 取值面直接透传新后端抓包（82 条真实动作，真实节点 id）——mock 不再打补丁。 */
 function enums(): EnumsResponse {
-  return fx<EnumsResponse>('enums.json')
+  const frozen = fx<EnumsResponse>('enums.json')
+  if (frozen.spoiler_disclosure) return frozen
+  return {
+    ...frozen,
+    spoiler_disclosure: {
+      mode: 'display_only',
+      security_boundary: false,
+      server_sends_full_data: true,
+      hidden_paths: ['characters[].fate', 'secrets', 'arc.climax', 'arc.ending'],
+      known_leakage_surfaces: [
+        'HTTP response body',
+        'browser network/devtools/cache',
+        'role, relations and world rule descriptions may imply the same facts',
+      ],
+      consumers: ['api.projectGlobalSpoilers', 'GlobalScreen'],
+      notice:
+        '这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏 fate、secrets、'
+        + 'climax、ending 四处核心字段，role、关系时点、规则正文与网络响应仍可能剧透。',
+    },
+  }
 }
 
 /** 花不花钱由服务端的动作表说了算。这里是「假服务端」，所以查的是同一张表。 */
@@ -341,6 +412,84 @@ function argvOf(req: JobRequest): string {
     parts.push('--chapters', String(req.ordinal))
   }
   return parts.join(' ')
+}
+
+function previewStepsOf(req: JobRequest): JobPreview['steps'] {
+  const first = {
+    label: req.label,
+    paid: paidOf(req),
+    writes: 'mock 产物',
+    argv: argvOf(req),
+  }
+  const checkArgv = (kind: string) =>
+    ['python', '-m', 'novel_refactor.cli', kind, '--sid', req.sid, '--check-only'].join(' ')
+  if (req.kind === 'stage5.write') {
+    return [
+      first,
+      {
+        label: 'stage5 成稿 · 追跑全量校验',
+        paid: false,
+        writes: '',
+        argv: checkArgv('stage5.write'),
+      },
+    ]
+  }
+  if (req.kind !== 'stage2.global' || !req.extra?.includes('--full-extract')) {
+    return [first]
+  }
+  return [
+    first,
+    {
+      label: 'stage2 章蓝图 · 追跑校验',
+      paid: false,
+      writes: '',
+      argv: checkArgv('stage2.blueprint'),
+    },
+    {
+      label: 'stage3 文风 · 追跑校验',
+      paid: false,
+      writes: '',
+      argv: checkArgv('stage3.style'),
+    },
+  ]
+}
+
+function plainMockReport(report: CheckReport): CheckReport {
+  const plain = (value: string | null) => value?.replace(/\*\*|~~|`/g, '') ?? null
+  return {
+    ...report,
+    rules: report.rules.map((line) => ({
+      ...line,
+      why: plain(line.why),
+      scanned: plain(line.scanned),
+      baseline: plain(line.baseline),
+      note: plain(line.note),
+      findings: line.findings.map((finding) => ({
+        ...finding,
+        detail: plain(finding.detail) ?? '',
+      })),
+    })),
+  }
+}
+
+function mockCheck(kind: CheckKind): CheckReport {
+  const report = plainMockReport(fx<CheckReport>(`check_${kind}.json`))
+  if (kind !== 'stage7') return report
+  // stage7 视图在 fake server 中把 book.txt 端点设为可达；同一 fake server 的
+  // 校验响应也要同步这件事实，不能一边说“在盘上”一边保留历史抓包的 missing 红行。
+  return {
+    ...report,
+    counts: {
+      ...report.counts,
+      ok: report.counts.ok + 1,
+      hit: report.counts.hit - 1,
+    },
+    rules: report.rules.map((line) =>
+      line.rule === 'rn_txt_stale'
+        ? { ...line, status: 'ok' as const, findings: [], why: null }
+        : line,
+    ),
+  }
 }
 
 /* -------------------------------------------------------------- 作业引擎 */
@@ -587,18 +736,17 @@ function mockStage1Segments(): Stage1Segments {
 
 /* ---------------------------------------------------------- 跑书进度样例 */
 
-/**
- * SKILL 工作流契约的 14 步：node 顺序与那张表一致，label / paid 与
- * contracts.invariants.NODES 的派生值一致（1,2,3,7,11,13,14 免，其余付）。
- * 后端的唯一落点是 contracts.invariants.PIPELINE_STEPS（label 取 NODES[node].label、
- * paid 走 is_paid 派生）；mock 这份是它的静态镜像——contracts 变了就改这里，别反过来。
- */
+/** mock 的静态镜像；真实响应由后端直接从 NODES 派生。 */
 const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage0.remove', label: 'stage0 非正文剔除', paid: false },
   { node: 'stage0.approve', label: 'stage0 人工批准', paid: false },
+  { node: 'stage0.edit', label: 'stage0 人工编辑', paid: false },
   { node: 'stage1.partition', label: 'stage1 分章', paid: false },
   { node: 'stage2.global', label: 'stage2 全书级抽取', paid: true },
+  { node: 'stage2.blueprint', label: 'stage2 逐章抽取', paid: true },
+  { node: 'stage3.style', label: 'stage3 文风画像', paid: true },
   { node: 'stage4.plan', label: 'stage4 重构计划', paid: true },
+  { node: 'stage4.context', label: 'stage4 写作上下文组装', paid: false },
   { node: 'stage5.write', label: 'stage5 逐章写作', paid: true },
   { node: 'stage5.review', label: 'stage5 全书验收', paid: false },
   { node: 'stage5.semantic', label: 'stage5 书级语义审判', paid: true },
@@ -610,7 +758,7 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage7.assemble', label: 'stage7 替换与成书', paid: false },
 ]
 
-/** 静态样例：14 步全 pending + 空事件流 + 全 null 的 stage_done（书目录还没建时也是这个面貌）。 */
+/** 静态样例：全节点 pending + 空事件流 + 全 null 的 stage_done。 */
 function mockRunProgress(sid: string): RunProgress {
   return {
     sid,
@@ -709,12 +857,37 @@ export const mockApi: Api = {
     }))
   },
 
-  approveStage0: (sid) => {
+  approveStage0: (sid, request) => {
+    lsWrite('stage0.approval.' + sid, request)
     const doc = loadDoc(sid)
     saveDoc({ ...doc, gate: { ...doc.gate, s0: true } })
     return later(finish({
       kind: 'stage0.approve',
       label: 'stage0 人工批准',
+      extra: null,
+      sid,
+      ordinal: null,
+    }))
+  },
+
+  getStage0Merge: () => later(null),
+
+  resolveStage0Merge: (sid, request) => {
+    lsWrite('stage0.merge.resolve.' + sid, request)
+    return later(finish({
+      kind: 'stage0.merge.resolve',
+      label: 'stage0 三方合并定稿',
+      extra: null,
+      sid,
+      ordinal: null,
+    }))
+  },
+
+  rejectStage0Merge: (sid, request) => {
+    lsWrite('stage0.merge.reject.' + sid, request)
+    return later(finish({
+      kind: 'stage0.merge.reject',
+      label: 'stage0 拒绝机器重跑候选',
       extra: null,
       sid,
       ordinal: null,
@@ -746,8 +919,88 @@ export const mockApi: Api = {
   getReading: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/reading/${o}`, () => fx<ReadingResponse>('reading_ch3.json')),
 
-  getGlobal: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage2/global`, () => fx<Stage2Global>('global.json')),
+  getGlobal: (sid, revealSpoilers = false) =>
+    bookOnly(sid, `/novels/${sid}/stage2/global`, () =>
+      projectGlobalSpoilers(fx<Stage2Global>('global.json'), revealSpoilers),
+    ),
+
+  getGlobalReview: (sid) =>
+    bookOnly(sid, `/novels/${sid}/stage2/global-review`, () => loadGlobalReview(sid)),
+
+  decideGlobalReview: (sid, request: GlobalReviewDecisionSet) => {
+    const path = `/novels/${sid}/stage2/global-review`
+    if (sid !== SAMPLE_SID) return noBook(path)
+    if (!request.actor.trim() || request.decisions.some((row) => !row.reason.trim())) {
+      return fail(new ApiError('server', path, {
+        status: 422,
+        message: 'actor/reason 不得只有空白',
+        backendKind: 'RequestValidationError',
+      }))
+    }
+    const review = loadGlobalReview(sid)
+    if (!review.current) {
+      return fail(new ApiError('server', path, {
+        status: 409,
+        message: 'stage2 global review is stale or omits required subjects',
+        backendKind: 'HumanEditProtected',
+      }))
+    }
+    const decisionIds = request.decisions.map((row) => row.item_id)
+    if (new Set(decisionIds).size !== decisionIds.length) {
+      return fail(new ApiError('server', path, {
+        status: 422,
+        message: 'each global-review item may be decided at most once per request',
+        backendKind: 'RequestValidationError',
+      }))
+    }
+    const byId = new Map(review.items.map((item) => [item.item_id, item]))
+    for (const row of request.decisions) {
+      const item = byId.get(row.item_id)
+      if (!item || item.subject_sha256 !== row.expected_subject_sha256) {
+        return fail(new ApiError('server', path, {
+          status: 409,
+          message: 'global-review subject changed; stale decision rejected',
+          backendKind: 'HumanEditProtected',
+        }))
+      }
+    }
+    const timestamp = new Date().toISOString()
+    const decisions = new Map(request.decisions.map((row) => [row.item_id, row]))
+    const items = review.items.map((item) => {
+      const row = decisions.get(item.item_id)
+      return row
+        ? {
+            ...item,
+            state: row.state,
+            actor: request.actor.trim(),
+            decided_at: timestamp,
+            reason: row.reason.trim(),
+            evidence: row.evidence,
+          }
+        : item
+    })
+    const approved = review.current && items.length > 0 && items.every((item) => item.state === 'PASS')
+    saveGlobalReview(sid, { ...review, items, approved })
+    const doc = loadDoc(sid)
+    saveDoc({ ...doc, gate: { ...doc.gate, s2: approved } })
+    const job = finish({
+      kind: 'stage2.global',
+      label: 'stage2 全局复核决策',
+      extra: ['--review-decisions'],
+      sid,
+      ordinal: null,
+    })
+    if (!approved) {
+      const stored = JOBS.find((row) => row.id === job.id)
+      if (stored) {
+        stored.state = 'landed_red'
+        stored.log = [...stored.log, '[mock] 仍有非 PASS 项，s2 gate 保持关闭']
+        persistJobs()
+        return later(stripLog(stored))
+      }
+    }
+    return later(job)
+  },
 
   getStyle: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage3/style`, () =>
@@ -763,16 +1016,21 @@ export const mockApi: Api = {
   getReview: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/review/${o}`, () => {
       const base = fx<ReviewResponse>('review_ch3.json')
-      const edit = lsRead<{ text: string; at: number }>(`edits.${sid}.${o}`)
+      const edit = lsRead<{ segments: ReviewResponse['chapter']['segments']; at: number }>(
+        `edits.${sid}.${o}`,
+      )
       if (!edit) return base
       // 人改过 → 落成新的一轮，旧的一轮进 rounds。形状和后端的语义一致。
       const prev = base.chapter.round ?? 1
+      const segments = edit.segments ?? []
+      const text = segments.map((segment) => segment.text.trim()).join('\n\n').trim()
       return {
         ...base,
         chapter: {
           ...base.chapter,
-          text: edit.text,
-          chars: [...edit.text].length,
+          segments,
+          text,
+          chars: [...text].length,
           round: prev + 1,
           origin: 'human',
           rounds: [...base.chapter.rounds, prev],
@@ -785,7 +1043,12 @@ export const mockApi: Api = {
   getStage6: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage6`, () => {
       const base = fx<Stage6Response>('stage6.json')
-      const edit = lsRead<{ index: number }>('hook.' + sid)
+      const edit = lsRead<{
+        index: number
+        actor: string
+        reason: string
+        subject_sha256: string
+      }>('hook.' + sid)
       if (!edit) return base
       const cand = base.candidates.find((c) => c.index === edit.index)
       if (!cand) return base
@@ -799,23 +1062,46 @@ export const mockApi: Api = {
           origin: 'human',
           mech: cand.mech,
           findings: cand.findings,
+          resolution: {
+            actor: edit.actor,
+            reason: edit.reason,
+            subject_sha256: edit.subject_sha256,
+            basis: cand.selectable ? 'calibrated_pass' : 'human_verification',
+            semantic_review_seq: cand.selectable ? 1 : null,
+          },
         },
         candidates: base.candidates.map((c) => ({ ...c, approved: c.index === edit.index })),
       }
     }),
 
   getStage7: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage7`, () => fx<Stage7Response>('stage7.json')),
+    bookOnly(sid, `/novels/${sid}/stage7`, () => ({
+      ...fx<Stage7Response>('stage7.json'),
+      // 冻结抓包记录的是“账在、txt 不在”的历史故障；假服务端把专用文本端点
+      // 也做成可达，开发时才能走通预览 / 下载这条新增 UX。
+      book_txt_on_disk: true,
+    })),
 
   getStage7Chapter: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/stage7/${o}`, () => fx<Stage7Response>('stage7_ch3.json')),
+
+  getStage7Book: (sid) =>
+    bookOnly(sid, `/novels/${sid}/stage7/book.txt`, () =>
+      '《mock 成书》\n\n这是最终 book.txt 的预览样例。\n'),
+
+  downloadStage7Book: (sid) =>
+    bookOnly(sid, `/novels/${sid}/stage7/book.txt?download=true`, () =>
+      new Blob(['《mock 成书》\n\n这是最终 book.txt 的下载样例。\n'], {
+        type: 'text/plain;charset=utf-8',
+      }),
+    ),
 
   getCheck: (sid, kind: CheckKind) => {
     const path = `/novels/${sid}/check/${kind}`
     if (sid !== SAMPLE_SID) return noBook(path)
     // stage0/1 在样本书上没跑过（真后端答 404）—— null = 「还没跑」，不是「通过」。
     if (kind === 'stage0' || kind === 'stage1') return later(null)
-    return later(fx<CheckReport>(`check_${kind}.json`))
+    return later(mockCheck(kind))
   },
 
   getSampleCoverage: () => later({ sid: SAMPLE_SID, ordinals: [SAMPLE_ORDINAL] }),
@@ -825,7 +1111,12 @@ export const mockApi: Api = {
   getJobLog: (id, offset) => {
     const j = JOBS.find((x) => x.id === id)
     if (!j) return fail(new ApiError('notfound', '/jobs/' + id + '/log'))
-    const lines = j.log.slice(offset)
+    const lines = j.log.slice(offset).map((text) => ({
+      text,
+      raw: null,
+      details: null,
+      kind: 'plain' as const,
+    }))
     return later<JobLogResponse>({
       lines,
       offset: j.log.length,
@@ -870,6 +1161,7 @@ export const mockApi: Api = {
       paid: paidOf(req),
       label: req.label,
       kind: req.kind,
+      steps: previewStepsOf(req),
     }),
 
   startJob: (req) => later(spawn(req)),
@@ -895,6 +1187,18 @@ export const mockApi: Api = {
     return later(saveDoc({ ...doc, gate: { ...doc.gate, [key]: true } }))
   },
 
+  backfillApprovals: (sid) => {
+    const doc = loadDoc(sid)
+    const backfilled = GATE_KEYS.filter((key) => !doc.gate[key])
+    const approvals = saveDoc({
+      ...doc,
+      gate: Object.fromEntries(GATE_KEYS.map((key) => [key, true])) as ApprovalDoc['gate'],
+      seen: { read: true, global: true },
+      writing: true,
+    })
+    return later({ approvals, backfilled })
+  },
+
   markSeen: (sid, key: SeenKey) => {
     const doc = loadDoc(sid)
     if (doc.seen[key]) return later(doc)
@@ -914,7 +1218,7 @@ export const mockApi: Api = {
   resetBook: (sid) => later(saveDoc(freshDoc(sid))),
 
   saveDraftEdit: (sid, ordinal, req) => {
-    lsWrite(`edits.${sid}.${ordinal}`, { text: req.text, at: Date.now() })
+    lsWrite(`edits.${sid}.${ordinal}`, { segments: req.segments, at: Date.now() })
     return later(finish({
       kind: 'stage5.write',
       label: '章节改稿（人工稿落成新一轮）',
@@ -925,12 +1229,36 @@ export const mockApi: Api = {
     }))
   },
 
-  approveHook: (sid, pick) => {
-    lsWrite('hook.' + sid, { index: pick })
+  retainPretrim: (sid, ordinal, req) => {
+    lsWrite(`trim-resolution.${sid}.${ordinal}`, { ...req, action: 'retain_pretrim' })
+    return later(finish({
+      kind: 'stage5.review',
+      label: '保留 pretrim 原稿',
+      extra: [
+        '--retain-pretrim', '--chapters', String(ordinal),
+        '--actor', req.actor, '--reason', req.reason,
+      ],
+      sid,
+      ordinal,
+    }))
+  },
+
+  approveHook: (sid, req) => {
+    lsWrite('hook.' + sid, {
+      index: req.pick,
+      actor: req.actor,
+      reason: req.reason,
+      subject_sha256: req.subject_sha256,
+    })
     return later(finish({
       kind: 'stage6.approve',
-      label: '文案定稿 --pick ' + pick,
-      extra: ['--pick', String(pick)],
+      label: '文案定稿 --pick ' + req.pick,
+      extra: [
+        '--pick', String(req.pick),
+        '--actor', req.actor,
+        '--reason', req.reason,
+        '--subject-sha256', req.subject_sha256,
+      ],
       sid,
       ordinal: null,
     }))

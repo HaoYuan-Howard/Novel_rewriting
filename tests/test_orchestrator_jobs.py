@@ -20,6 +20,7 @@ import pytest
 
 from contracts.invariants import NODES
 from contracts.schema.orchestration import JobEvent, JobStart, Step
+from novel.orchestrator import beacon
 from novel.orchestrator import jobs as J
 
 SID = '7615069877019300633'
@@ -118,7 +119,21 @@ def test_the_lock_comes_back_when_the_job_blows_up_mid_launch(base):
     with pytest.raises(RuntimeError):
         J.run(base, 'stage3.style', SID, steps=_steps(), spawn=boom, registry=reg)
     assert reg.holder(J.active_key(SID, 'stage3.style')) is None
+    failed = J.records(base, registry=reg)[0]
+    assert failed.state == 'failed' and failed.exit_code == J.CRASH
+    progress = beacon.read_events(base)
+    assert [(event.phase, event.exit_code) for event in progress] == [
+        ('start', None), ('end', J.CRASH)]
     J.run(base, 'stage3.style', SID, steps=_steps(), spawn=_fake(), registry=reg)
+
+
+def test_sync_run_projects_start_and_end_into_the_progress_beacon(base):
+    J.run(base, 'stage3.style', SID, steps=_steps(), spawn=_fake())
+    events = beacon.read_events(base)
+    assert [(event.node, event.phase, event.exit_code) for event in events] == [
+        ('stage3.style', 'start', None),
+        ('stage3.style', 'end', 0),
+    ]
 
 
 def test_a_registry_only_releases_its_own_lock():
@@ -159,11 +174,15 @@ def test_async_start_returns_running_and_refuses_the_same_book(base):
 
     rec = J.start(base, 'stage3.style', SID, steps=_steps(), spawn=blocking, registry=reg)
     assert rec.state == 'running' and entered.wait(1)
+    assert [(event.node, event.phase) for event in beacon.read_events(base)] == [
+        ('stage3.style', 'start')]
     with pytest.raises(J.JobConflict):
         J.start(base, 'stage3.style', SID, steps=_steps(), spawn=_fake(), registry=reg)
     release.set()
     assert J.wait(rec.job_id, 2)
     assert J.records(base, registry=reg)[0].state == 'ok'
+    assert [event.phase for event in beacon.read_events(base)] == ['start', 'end']
+    assert beacon.read_events(base)[-1].exit_code == 0
 
 
 def test_async_prepare_runs_under_the_book_lock_and_releases_on_failure(base):
@@ -291,6 +310,44 @@ def test_unknown_must_say_why(base):
             sid=None, node='stage3.style', flags=[], steps=_steps(),
             python='3', code='c', paid=False, writes=False),
             started=1, ended=None, exit_code=None, state='unknown', steps_started=0)
+
+
+def test_landed_but_red_is_not_the_same_failure_as_did_not_run(base):
+    """⭐ **回归**：`failed` 装着两种处置完全相反的情况，其中一种必须当场说出来。
+
+    exit 1 = 产物**已经落盘**、报告有红行 ⇒ 去看报告并裁决。
+    exit 2/3/70 = 压根没跑成 ⇒ 修完重跑。
+    实测：一次 8 分钟的付费批量在 `stage6.hook` exit 1 上整条停下，而
+    `hook.json` 好好地在盘上（三条候选只有一条命中 HARD），
+    账面上与一次真崩一模一样。
+    """
+    reg = J.JobRegistry()
+    red = J.run(base, 'stage6.hook', SID, steps=_steps(),
+                spawn=_fake(rc=1), registry=reg)
+    dead = J.run(base, 'stage7.rename', SID, steps=_steps(),
+                 spawn=_fake(rc=2), registry=reg)
+
+    assert red.state == 'landed_red'
+    assert dead.state == 'failed'
+    assert red.exit_code == 1 and dead.exit_code == 2
+    assert red.note and '已经落盘' in red.note, '落盘了这件事必须说出来'
+    assert not dead.note, '「压根没跑成」是 failed 的常态，不另加一句'
+
+
+def test_the_landed_predicate_has_exactly_one_home():
+    """`0/1 = 落了、2/3/70 = 没落` 只许有一处算。
+
+    ⚠ 它此前只活在 `api/routes/edits.py::_completed` 这个私有函数里，
+    编排层根本没有 ⇒ `jobs.fold` 自己写了一遍 `code == 0`，
+    于是 `1` 与 `2`/`70` 在队列那一侧同名。
+    """
+    from novel.cli import exit_codes as X
+    assert [X.landed(c) for c in (X.OK, X.CHECK_FAILED)] == [True, True]
+    assert not any(X.landed(c) for c in
+                   (X.TERMINAL_STATE, X.REFUSED_BY_STRUCTURE, X.CRASH, None))
+    assert X.landed_but_red(X.CHECK_FAILED)
+    assert not X.landed_but_red(X.OK) and not X.landed_but_red(X.TERMINAL_STATE)
+    assert set(X.LANDED) <= set(X.MEANING), 'LANDED 里的码都要在 MEANING 里有一句人话'
 
 
 def test_job_ids_are_not_a_counter():

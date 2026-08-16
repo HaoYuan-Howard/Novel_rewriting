@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 
 from contracts.invariants import HOOK_APPROACHES, HOOK_APPROACH_NOTES
-from novel.core.bands import hook_shape_band
+from novel.core.bands import ending_shape, hook_shape_band, sep_band_of_text
 from novel.llm.prompts import fill, with_json_shape
 
 
@@ -40,6 +40,13 @@ HOOK_SYS = """\
 - 避免空泛收尾，如“究竟会怎样”“是命还是债”“谁才是真正的……”；最后一句必须带具体人物欲望、
   危险、反转、笑点或行动；
 - 长度以原始文案为基准，约为其 0.8~1.35 倍；按原作的短句、短段、对白与停顿习惯写。
+
+【段间分隔与收尾形态照原作的档位写 —— 这两项按字节判，写错整条候选作废】
+- `source_hook_para_sep` 说的是原作文案段怎么分段：【空行分段】就用**空行**隔开每个自然段，
+  【单换行】就用**单个换行**。⚠ **绝不允许把一条候选写成没有任何换行的一整段**——
+  归一化只换得了分隔符、造不出段落边界，这一条落盘前会被硬闸拦下，整轮三条候选一起作废；
+- `source_hook_ending_shape` 说的是原作文案段最后一行的收尾形态（引号台词 / 问句 / 陈述 / 省略号）：
+  新文案的最后一行照这个形态收，它就是 `hook_style.end_question` 那句描述可被验证的那一面。
 
 产出三个真正不同的候选，各用一种策略：
 $APPROACHES
@@ -97,18 +104,32 @@ def voice_for_hook(style: dict) -> dict:
 
 def story_map(ctx: dict) -> list[dict]:
     """全书 writer_context → 无禁写标记、但有完整事件与钩子目标的故事地图。"""
+    def goal(value: dict | None) -> dict:
+        # CtxGoal 已在 Stage4 把 typed refs 解析成人话；文案与 Stage5
+        # 共用它，既不接触内部 id，也不接触 PlanGoal.rationale。
+        raw = value or {}
+        return {'intent': raw.get('intent'), 'facts': raw.get('facts') or []}
+
     out: list[dict] = []
     for chapter in ctx.get('chapters') or []:
         events: list[str] = []
-        for beat in chapter.get('beats') or []:
-            events.extend(str(event) for event in (beat.get('events') or []) if str(event).strip())
+        segments: list[dict] = []
+        for segment in chapter.get('segments') or []:
+            segment_events = [
+                str(event) for event in (segment.get('events') or []) if str(event).strip()
+            ]
+            events.extend(segment_events)
+            # `slot` 是 producer-owned 的稳定身份；文案层可以投影舞台与
+            # 禁写标记，但不能把段身份也压平掉。
+            segments.append({'slot': segment.get('slot'), 'events': segment_events})
         out.append({
             'chapter': chapter.get('output_ordinal'),
             'from_source_ordinals': chapter.get('from_source_ordinals') or [],
-            'chapter_goal': chapter.get('chapter_goal'),
-            'open_hook_goal': chapter.get('open_hook_goal'),
+            'chapter_goal': goal(chapter.get('chapter_goal')),
+            'open_hook_goal': goal(chapter.get('open_hook_goal')),
             'events': events,
-            'end_hook_goal': chapter.get('end_hook_goal'),
+            'segments': segments,
+            'end_hook_goal': goal(chapter.get('end_hook_goal')),
         })
     return out
 
@@ -153,6 +174,12 @@ def build_material(*, title: str, ctx: dict, style: dict, grounding: dict,
         'title': title,
         'source_hook': source_hook,
         'source_hook_target_chars': ((_hook_meas_raw(style) or {}).get('chars')),
+        # ⚠ 这两项与 `hook_para_sep`（HARD）/ `hook_ending_shape` 消费的是**同一个函数**。
+        # 少了它们，判据就在查一件 prompt 没说过的事——实测一本书三条候选**全部**被
+        # `hook_para_sep` 拦下（模型把文案写成没有换行的一整段），整轮付费产出作废。
+        # 同 `hook_shape_band` 的那条注释，只是那次修的是均值档、这次是离散档。
+        'source_hook_para_sep': sep_band_of_text(source_hook),
+        'source_hook_ending_shape': ending_shape(source_hook),
         'style': styles,
         'story_truth': truth,
         'whole_story_map': full_map,

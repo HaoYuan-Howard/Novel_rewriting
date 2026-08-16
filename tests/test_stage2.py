@@ -251,6 +251,38 @@ def test_the_clean_base_has_no_hard_hits():
     assert got == set(), f'干净底座上不该有任何 HARD 命中，实得 {sorted(got)}'
 
 
+def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
+    """FC-14：真实 checks 产的 detail 只记本次数据，规则 caveat 只在 note。"""
+    from novel.prov import FreshnessReport
+    from novel.report import build, render
+
+    bp = blueprints()
+    bp['_provenance']['verbatim_recovered'] = [
+        ['b01_01', 'hinge', '春风吹过老宅', '春风吹过老宅的院墙', 0.82],
+    ]
+    outcomes = checks.check(
+        global_g=global_grounding(), blueprints=bp, main_text=main_text())
+    report = build(
+        sid='7615069877019300633', node='stage2.blueprint',
+        freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=outcomes,
+    )
+    lines = {line.rule: line for line in report.rules}
+
+    anchor = lines['anchor_not_verbatim']
+    assert anchor.findings and '回取路径' in anchor.findings[0].detail
+    assert '最长公共子串' not in anchor.findings[0].detail
+    assert '期望恒为 0' not in anchor.findings[0].detail
+    assert anchor.note and '最长公共子串' in anchor.note
+
+    moves = lines['place_moves']
+    assert moves.findings and 'place 字面变化' in moves.findings[0].detail
+    assert '系统性高估' not in moves.findings[0].detail
+    assert moves.note and '系统性高估' in moves.note
+    rendered = render(report)
+    assert f'说明：{anchor.note}' in rendered and f'说明：{moves.note}' in rendered
+    assert '**' not in anchor.model_dump_json() and '`' not in anchor.model_dump_json()
+
+
 def test_canonical_unique_accepts_two_explicitly_distinguished_same_base_names():
     gg = global_grounding()
     chars = gg['entities']['characters']

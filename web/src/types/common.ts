@@ -23,6 +23,7 @@ export interface StaleRef {
 
 /** 来源记录。形状随 stage 而异，`{}` 很常见 —— 空对象即「没有来源记录」。 */
 export interface Provenance {
+  root_clean_sha1: string
   model?: string
   code?: string
   round?: number
@@ -33,7 +34,7 @@ export interface Provenance {
 }
 
 /**
- * 一条判据结论（后端 `Finding` 十三字段，键恒在）。
+ * 一条判据结论（后端 `Finding` 十四字段，键恒在）。
  * `wontfix` 非空 = 有人看过并豁免 —— 结论不删、单独计数。
  */
 export interface Finding {
@@ -42,6 +43,7 @@ export interface Finding {
   item: string
   detail: string
   evidence: string[]
+  fix_args: Record<string, string>
   evidence_key: string | null
   owner: string | null
   actionable: boolean
@@ -49,7 +51,7 @@ export interface Finding {
   identity_dead: boolean
   converge: string | null
   unresolved_rounds: number | null
-  wontfix: string | null
+  wontfix: { why: string; at: string } | null
 }
 
 /** 一条能修它的动作（服务端下发，前端不拼 argv）。没有它就不画「重跑修它」。 */
@@ -57,6 +59,8 @@ export interface FixRoute {
   node: string
   flags: string[]
   paid: boolean
+  available: boolean
+  unavailable_reason: string | null
 }
 
 /**
@@ -76,6 +80,7 @@ export interface RuleLine {
   why: string | null
   scanned: string | null
   baseline: string | null
+  note: string | null
 }
 
 /** `writer_context` 这一条上游的新鲜度（三态：没有 inputs 是「不知道」不是「匹配」）。 */

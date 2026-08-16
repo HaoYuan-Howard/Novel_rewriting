@@ -40,3 +40,9 @@ export interface ApprovalDoc {
    */
   spawns: Partial<Record<GateKey, ActionRef[]>>
 }
+
+export interface ApprovalBackfillResult {
+  approvals: ApprovalDoc
+  /** 这些章来自盘面补录，不伪装成用户逐屏点击。 */
+  backfilled: GateKey[]
+}

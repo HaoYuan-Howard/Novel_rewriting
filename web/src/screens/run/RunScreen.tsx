@@ -193,7 +193,7 @@ function AgentRunBlock() {
 /**
  * 跑书进度。
  *
- * 这一屏回答「agent 的 14 步跑到哪了、当前这步在不在跑、每步最近退出码是什么」。
+ * 这一屏回答「真实节点图跑到哪了、当前这步在不在跑、每步最近退出码是什么」。
  * 它是观察屏：不放任何操作按钮，也不做判定 ——
  * 信标只说命令跑没跑完，各层合不合格去各层屏看 badge。
  */
@@ -206,7 +206,7 @@ export function RunScreen() {
         <div className="flex flex-col gap-5">
           <h1 className="m-0 text-screen font-semibold">跑书进度</h1>
           <div className="prose-cn max-w-[52em] text-body text-ink-3">
-            agent 按操作规程跑 14 步。这一屏只跟踪跑到哪一步、当前步在不在跑、每步最近的退出码——
+            UI、队列与 agent 共用同一张真实节点图。这一屏只跟踪跑到哪一步、当前步在不在跑、每步最近的退出码——
             「跑完」不等于「合格」，判定只看各层屏的 badge。
           </div>
         </div>
@@ -218,10 +218,10 @@ export function RunScreen() {
       <QueryStates q={q} loadingLabel="读跑书进度">
         {(d) => (
           <>
-            {/* 14 步清单：seq / 节点 / 付费标记 / 信标 / 最近退出码 / 耗时 */}
+            {/* NODES 清单：seq / 节点 / 付费标记 / 信标 / 最近退出码 / 耗时 */}
             <Panel>
               <PaneHeader
-                title="流水线 14 步"
+                title={'流水线节点 · ' + d.steps.length + ' 项'}
                 meta="信标只说这条命令跑没跑完；合不合格看各层屏的 badge"
               />
               {d.steps.map((s) => (

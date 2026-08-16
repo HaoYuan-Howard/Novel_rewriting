@@ -5,7 +5,7 @@
  * 所以两条路径同型是 **tsc 强制**的，不是口头约定。
  * 组件与屏从不 fetch，只经 hooks → api.*。
  */
-import type { ApprovalDoc, GateKey, SeenKey } from './approvals'
+import type { ApprovalBackfillResult, ApprovalDoc, GateKey, SeenKey } from './approvals'
 import type {
   AgentRunLogChunk,
   AgentRunPreview,
@@ -29,10 +29,16 @@ import type { Mode } from '@/constants/vocabulary'
 import type {
   CheckKind,
   CheckReport,
+  ChapterSegment,
   InboxResponse,
+  GlobalReviewDecisionSet,
+  GlobalReviewResponse,
   ReadingResponse,
   ReviewResponse,
   Stage0EditRequest,
+  Stage0ApprovalRequest,
+  Stage0MergeCandidate,
+  Stage0MergeDecisionRequest,
   Stage0Report,
   Stage0Segments,
   Stage1Chapters,
@@ -44,6 +50,7 @@ import type {
   Stage5Response,
   Stage6Response,
   Stage7Response,
+  TrimResolutionRequest,
 } from './stages'
 
 export interface Api {
@@ -51,19 +58,24 @@ export interface Api {
   getNovels(): Promise<NovelsResponse>
   getNovel(sid: string): Promise<NovelOverview>
   getEnums(): Promise<EnumsResponse>
-  /** 跑书进度：14 步信标 + 各层产物完成度。beacon=ok 只念作「跑完」，判定归各层屏的 badge。 */
+  /** 跑书进度：NODES 信标 + 各层产物完成度。beacon=ok 只念作「跑完」，判定归各层屏的 badge。 */
   getRunProgress(sid: string): Promise<RunProgress>
 
   getStage0Report(sid: string): Promise<Stage0Report>
   getStage0Segments(sid: string): Promise<Stage0Segments>
   editStage0(sid: string, request: Stage0EditRequest): Promise<Job>
-  approveStage0(sid: string): Promise<Job>
+  approveStage0(sid: string, request: Stage0ApprovalRequest): Promise<Job>
+  getStage0Merge(sid: string): Promise<Stage0MergeCandidate | null>
+  resolveStage0Merge(sid: string, request: Stage0MergeDecisionRequest): Promise<Job>
+  rejectStage0Merge(sid: string, request: Stage0MergeDecisionRequest): Promise<Job>
   partitionStage1(sid: string): Promise<Job>
   getStage1Segments(sid: string): Promise<Stage1Segments>
   getStage1Chapters(sid: string): Promise<Stage1Chapters>
   getStage1HookCopy(sid: string): Promise<Stage1HookCopy>
   getReading(sid: string, ordinal: number): Promise<ReadingResponse>
-  getGlobal(sid: string): Promise<Stage2Global>
+  getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
+  getGlobalReview(sid: string): Promise<GlobalReviewResponse>
+  decideGlobalReview(sid: string, request: GlobalReviewDecisionSet): Promise<Job>
   getStyle(sid: string): Promise<Stage3Style>
   getStage4(sid: string, ordinal: number): Promise<Stage4Response>
   getStage5(sid: string, ordinal: number): Promise<Stage5Response>
@@ -72,6 +84,8 @@ export interface Api {
   getStage6(sid: string): Promise<Stage6Response>
   getStage7(sid: string): Promise<Stage7Response>
   getStage7Chapter(sid: string, ordinal: number): Promise<Stage7Response>
+  getStage7Book(sid: string): Promise<string>
+  downloadStage7Book(sid: string): Promise<Blob>
   /** null = 服务端说这一层还没有报告（≠ 通过）。抛 nosample = 这一份没抓在样本里。 */
   getCheck(sid: string, kind: CheckKind): Promise<CheckReport | null>
 
@@ -105,6 +119,7 @@ export interface Api {
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>
   approveGate(sid: string, key: GateKey): Promise<ApprovalDoc>
+  backfillApprovals(sid: string): Promise<ApprovalBackfillResult>
   markSeen(sid: string, key: SeenKey): Promise<ApprovalDoc>
   setDeep(sid: string, deep: number[]): Promise<ApprovalDoc>
   startWriting(sid: string): Promise<ApprovalDoc>
@@ -112,9 +127,18 @@ export interface Api {
 
   /* 写（三条人工写回走专用路由，返回真实作业记录——真实模式不写 localStorage 充成功） */
   /** 章节改稿：与生成稿同一判定落点（stage5.write --apply-edit，origin=human 记账） */
-  saveDraftEdit(sid: string, ordinal: number, req: { mode: Mode; text: string }): Promise<Job>
-  /** 文案定稿：只收序号（--pick，1 起）。改字走 CLI（stage6.hook --apply-edit），不在浏览器。 */
-  approveHook(sid: string, pick: number): Promise<Job>
+  saveDraftEdit(
+    sid: string,
+    ordinal: number,
+    req: { mode: Mode; segments: ChapterSegment[] },
+  ): Promise<Job>
+  /** Resolve one current trim verification by retaining pretrim; candidate adoption is impossible here. */
+  retainPretrim(sid: string, ordinal: number, req: TrimResolutionRequest): Promise<Job>
+  /** 文案定稿：序号 + 自报身份/理由 + 候选完整 hash 乐观锁。 */
+  approveHook(
+    sid: string,
+    req: { pick: number; actor: string; reason: string; subject_sha256: string },
+  ): Promise<Job>
   /** 人名表定稿（无参终态） */
   approveNames(sid: string): Promise<Job>
   uploadCorpus(file: File): Promise<UploadResponse>

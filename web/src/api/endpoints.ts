@@ -11,7 +11,12 @@ import type {
   AgentRunRecord,
   AgentRunsResponse,
 } from '@/types/agent'
-import type { ApprovalDoc, GateKey, SeenKey } from '@/types/approvals'
+import type {
+  ApprovalBackfillResult,
+  ApprovalDoc,
+  GateKey,
+  SeenKey,
+} from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
   BackendJobList,
@@ -21,6 +26,7 @@ import type {
   BackendLogChunk,
   BackendLogStreamEvent,
   Job,
+  JobLogLine,
   JobLogResponse,
   JobPreview,
   JobRequest,
@@ -30,10 +36,13 @@ import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { RunProgress } from '@/types/run'
 import type {
   CheckReport,
+  GlobalReviewDecisionSet,
+  GlobalReviewResponse,
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
   Stage0Report,
+  Stage0MergeCandidate,
   Stage0Segments,
   Stage1Chapters,
   Stage1HookCopy,
@@ -46,8 +55,9 @@ import type {
   Stage7Response,
 } from '@/types/stages'
 import { isApiError } from './errors'
-import { get, post, postRaw } from './client'
+import { get, getBlob, getText, post, postRaw } from './client'
 import { mockApi } from './mock'
+import { projectGlobalSpoilers } from './spoilers'
 
 const n = (sid: string) => '/novels/' + encodeURIComponent(sid)
 
@@ -81,6 +91,7 @@ interface BackendNovelOverview {
   sid: string
   title: string
   dirname: string
+  chapters: number | null
   stages: BackendStageState[]
   stage5_modes: string[]
   summary: NovelOverview['summary']
@@ -91,18 +102,7 @@ interface BackendNovelList {
   novels: BackendNovelOverview[]
 }
 
-function inferChapters(stages: BackendStageState[]): number | null {
-  const stage5 = stages.find((stage) => stage.stage === 'stage5')
-  // 半本书已经写了几章，不等于这本书总共有几章；只在整层完成时才用它报总数。
-  if (stage5?.done !== true) return null
-  const ordinals = new Set<number>()
-  for (const values of Object.values(stage5.chapters_done)) {
-    for (const ordinal of values) ordinals.add(ordinal)
-  }
-  return ordinals.size || null
-}
-
-function adaptNovel(raw: BackendNovelOverview): NovelOverview {
+export function adaptNovel(raw: BackendNovelOverview): NovelOverview {
   const stages: Record<string, Artifact[]> = {}
   const stageDone: Record<string, boolean | null> = {}
   const chaptersDone: Record<string, Record<string, number[]>> = {}
@@ -135,7 +135,7 @@ function adaptNovel(raw: BackendNovelOverview): NovelOverview {
     title: raw.title,
     dir: raw.dirname,
     dirname: raw.dirname,
-    chapters: inferChapters(raw.stages),
+    chapters: raw.chapters,
     stages,
     stage5_modes: raw.stage5_modes,
     stage_done: stageDone,
@@ -180,6 +180,12 @@ function adaptPreview(start: BackendJobStart): JobPreview {
     paid: start.paid,
     label: labelOf(start),
     kind: start.node,
+    steps: start.steps.map((step) => ({
+      label: step.label,
+      paid: step.paid,
+      writes: step.writes,
+      argv: step.argv.map(quoteArg).join(' '),
+    })),
   }
 }
 
@@ -192,11 +198,125 @@ function backendJobRequest(req: JobRequest): BackendJobRequest {
   }
 }
 
-export function splitLog(text: string): string[] {
+const OBSERVE_PREFIX = '@observe '
+
+function observationOf(
+  line: string,
+): { line: JobLogLine; key: string | null } | null {
+  if (!line.startsWith(OBSERVE_PREFIX)) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(line.slice(OBSERVE_PREFIX.length))
+  } catch {
+    return {
+      line: {
+        text: '[遥测] 有一条事件无法解析',
+        raw: line,
+        details: { raw_payload: line.slice(OBSERVE_PREFIX.length) },
+        kind: 'malformed',
+      },
+      key: null,
+    }
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {
+      line: {
+        text: '[遥测] 事件不是 JSON 对象',
+        raw: line,
+        details: { value: parsed },
+        kind: 'malformed',
+      },
+      key: null,
+    }
+  }
+  const row = parsed as Record<string, unknown>
+  const event = typeof row.event === 'string' ? row.event : 'unknown'
+  const chapter = typeof row.chapter === 'number' ? 'ch' + row.chapter + ' · ' : ''
+  const elapsed =
+    typeof row.elapsed_ms === 'number' ? Math.max(0, Math.round(row.elapsed_ms / 1000)) + ' s' : null
+  if (event === 'llm_attempt_heartbeat' || event === 'llm_attempt_finished') {
+    const attempt = typeof row.attempt === 'number' ? row.attempt : '?'
+    const max = typeof row.max_attempts === 'number' ? row.max_attempts : '?'
+    const purpose = typeof row.purpose === 'string' ? row.purpose : 'LLM 调用'
+    const state =
+      row.state === 'started'
+        ? '已发起'
+        : row.state === 'in_flight'
+          ? '进行中'
+          : row.state === 'ok'
+            ? '完成'
+            : row.state === 'error'
+              ? '失败'
+              : String(row.state ?? '状态未知')
+    const detail = [chapter + purpose, '第 ' + attempt + '/' + max + ' 次尝试', elapsed, state]
+      .filter(Boolean)
+      .join(' · ')
+    const diagnostics = [
+      typeof row.error_kind === 'string' ? 'error_kind=' + row.error_kind : null,
+      typeof row.detail === 'string' ? row.detail : null,
+    ].filter(Boolean)
+    return {
+      line: {
+        text: '[LLM] ' + detail + (diagnostics.length ? ' · ' + diagnostics.join(' · ') : ''),
+        raw: line,
+        details: row,
+        kind: 'observation',
+      },
+      key: ['llm', purpose, chapter, attempt].join(':'),
+    }
+  }
+  if (event === 'chapter_progress') {
+    const completed = typeof row.completed === 'number' ? row.completed : '?'
+    const total = typeof row.chapter_total === 'number' ? row.chapter_total : '?'
+    return {
+      line: {
+        text:
+        '[章节] ' +
+        chapter +
+        completed +
+        '/' +
+        total +
+        ' 已结算 · ' +
+        String(row.outcome ?? '状态未知'),
+        raw: line,
+        details: row,
+        kind: 'observation',
+      },
+      key: null,
+    }
+  }
+  return {
+    line: {
+      text: '[遥测] ' + event + '（展开查看完整字段）',
+      raw: line,
+      details: row,
+      kind: 'observation',
+    },
+    key: null,
+  }
+}
+
+export function splitLog(text: string): JobLogLine[] {
   if (!text) return []
   const lines = text.replaceAll('\r\n', '\n').split('\n')
   if (lines.at(-1) === '') lines.pop()
-  return lines
+  const out: JobLogLine[] = []
+  let lastObservationKey: string | null = null
+  for (const line of lines) {
+    const observation = observationOf(line)
+    if (!observation) {
+      out.push({ text: line, raw: null, details: null, kind: 'plain' })
+      lastObservationKey = null
+      continue
+    }
+    if (observation.key !== null && observation.key === lastObservationKey) {
+      out[out.length - 1] = observation.line
+    } else {
+      out.push(observation.line)
+    }
+    lastObservationKey = observation.key
+  }
+  return out
 }
 
 /**
@@ -208,18 +328,7 @@ export const realApi: Api = {
     const raw = await get<BackendNovelList>('/novels')
     return { base: raw.base, novels: raw.novels.map(adaptNovel) } satisfies NovelsResponse
   },
-  getNovel: async (sid) => {
-    const novel = adaptNovel(await get<BackendNovelOverview>(n(sid)))
-    if (novel.chapters !== null || novel.stage_done?.stage1 !== true) return novel
-
-    // 书详情只补一次章数；语料库不做 N+1。章表失败不该带走整本书的顶部信息。
-    try {
-      const index = await get<Stage1Chapters>(n(sid) + '/stage1/chapters')
-      return { ...novel, chapters: index.chapters.length }
-    } catch {
-      return novel
-    }
-  },
+  getNovel: async (sid) => adaptNovel(await get<BackendNovelOverview>(n(sid))),
   getEnums: () => get<EnumsResponse>('/enums'),
   // run 的响应已是视图形状（snake_case 照后端原样），数据缝不做适配
   getRunProgress: (sid) => get<RunProgress>(n(sid) + '/run'),
@@ -228,15 +337,32 @@ export const realApi: Api = {
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
   editStage0: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/edit', request)),
-  approveStage0: async (sid) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/approve')),
+  approveStage0: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/approve', request)),
+  getStage0Merge: async (sid) => {
+    try {
+      return await get<Stage0MergeCandidate>(n(sid) + '/stage0/merge')
+    } catch (error) {
+      if (isApiError(error) && error.kind === 'notfound') return null
+      throw error
+    }
+  },
+  resolveStage0Merge: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/merge/resolve', request)),
+  rejectStage0Merge: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/merge/reject', request)),
   partitionStage1: async (sid) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage1/partition')),
   getStage1Segments: (sid) => get<Stage1Segments>(n(sid) + '/stage1/segments'),
   getStage1Chapters: (sid) => get<Stage1Chapters>(n(sid) + '/stage1/chapters'),
   getStage1HookCopy: (sid) => get<Stage1HookCopy>(n(sid) + '/stage1/hook_copy'),
   getReading: (sid, o) => get<ReadingResponse>(n(sid) + '/reading/' + o),
-  getGlobal: (sid) => get<Stage2Global>(n(sid) + '/stage2/global'),
+  getGlobal: async (sid, revealSpoilers = false) =>
+    projectGlobalSpoilers(await get<Stage2Global>(n(sid) + '/stage2/global'), revealSpoilers),
+  getGlobalReview: (sid) =>
+    get<GlobalReviewResponse>(n(sid) + '/stage2/global-review'),
+  decideGlobalReview: async (sid, request: GlobalReviewDecisionSet) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/global-review', request)),
   getStyle: (sid) => get<Stage3Style>(n(sid) + '/stage3/style'),
   getStage4: (sid, o) => get<Stage4Response>(n(sid) + '/stage4/' + o),
   getStage5: (sid, o) => get<Stage5Response>(n(sid) + '/stage5/' + o),
@@ -245,6 +371,8 @@ export const realApi: Api = {
   getStage6: (sid) => get<Stage6Response>(n(sid) + '/stage6'),
   getStage7: (sid) => get<Stage7Response>(n(sid) + '/stage7'),
   getStage7Chapter: (sid, o) => get<Stage7Response>(n(sid) + '/stage7/' + o),
+  getStage7Book: (sid) => getText(n(sid) + '/stage7/book.txt'),
+  downloadStage7Book: (sid) => getBlob(n(sid) + '/stage7/book.txt?download=true'),
   // 后端对「这一层还没跑」答 404（资源不存在）；Api 契约里 null = 「还没有报告」。
   // 在这里翻译（唯一数据缝的职责），CheckPanel 不用自己捕 404。
   getCheck: async (sid, kind) => {
@@ -335,6 +463,8 @@ export const realApi: Api = {
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
   approveGate: (sid, key: GateKey) => post<ApprovalDoc>(n(sid) + '/approvals/gate/' + key),
+  backfillApprovals: (sid) =>
+    post<ApprovalBackfillResult>(n(sid) + '/approvals/backfill'),
   markSeen: (sid, key: SeenKey) => post<ApprovalDoc>(n(sid) + '/approvals/seen/' + key),
   setDeep: (sid, deep) => post<ApprovalDoc>(n(sid) + '/approvals/deep', { deep }),
   startWriting: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/writing'),
@@ -342,8 +472,11 @@ export const realApi: Api = {
 
   saveDraftEdit: async (sid, o, req) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/review/' + o + '/edit', req)),
-  approveHook: async (sid, pick) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/approve', { pick })),
+  retainPretrim: async (sid, o, req) =>
+    adaptJob(await post<BackendJobRecord>(
+      n(sid) + '/stage5/trim/' + o + '/retain-pretrim', req)),
+  approveHook: async (sid, req) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/approve', req)),
   approveNames: async (sid) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage7/approve', {})),
   uploadCorpus: async (file) => {

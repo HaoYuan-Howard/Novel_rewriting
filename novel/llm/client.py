@@ -62,6 +62,21 @@ LADDER: Final[tuple[tuple[str, bool], ...]] = (
 #: 选用哪条由 `DEEPSEEK_THINKING` 决定（`novel/config.py::THINKING_MODES`）。
 NOTHINK_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('low', False),)
 
+
+def rungs_from_effort(effort: str | None) -> tuple[tuple[str, bool], ...]:
+    """节点的首档覆盖 → 仍可向下退让的阶梯。
+
+    ``None`` 与 ``high`` 都保留全局默认。覆盖只裁掉更高档，不另造第二份阶梯；
+    因而截断/空响应时仍能走现有降级路径。
+    """
+    if effort in (None, 'high'):
+        return LADDER
+    if effort not in ('medium', 'low'):
+        raise ValueError(f'节点 effort={effort!r}；可选 low/medium/high 或 None')
+    start = next(i for i, (name, thinking) in enumerate(LADDER)
+                 if name == effort and thinking)
+    return LADDER[start:]
+
 #: 默认 token 上限。**统一 64k**：`max_tokens` 在推理模型上同时约束 reasoning + completion，
 #: 高预算防止长正文/推理被 API 默认上限**悄悄**截断。确需更小上限时显式传。
 DEFAULT_MAX_TOKENS: Final = 64_000
@@ -123,6 +138,7 @@ class LlmClient:
     def __init__(self, ctx: RunContext, transport: Transport, *,
                  cache: ResponseCache | None = None, model: str = '',
                  thinking_mode: str = config.DEFAULT_THINKING_MODE,
+                 effort: str | None = None,
                  max_retries: int = config.DEFAULT_MAX_RETRIES,
                  backoff_base: float = config.DEFAULT_BACKOFF_BASE,
                  concurrency: int = config.DEFAULT_CONCURRENCY,
@@ -145,7 +161,8 @@ class LlmClient:
                 f'思考模式只有 {config.THINKING_MODES}')
         self.thinking_mode = thinking_mode
         #: 默认阶梯。思考开关拧的是**默认起点集**；显式 `rungs` 的优先级不受它影响。
-        self._rungs = NOTHINK_RUNGS if thinking_mode == 'off' else LADDER
+        self._rungs = (NOTHINK_RUNGS if thinking_mode == 'off'
+                       else rungs_from_effort(effort))
         self.max_retries = max_retries
         self.backoff_base = backoff_base
         self._sleep = sleep
@@ -519,6 +536,8 @@ class LlmClient:
             model=(resp.model if resp else '') or self.model,
             code=self.ctx.code, cached=False, cache_policy=policy.name,
             prompt_tokens=u.get('prompt_tokens'),
+            prompt_cache_hit_tokens=u.get('prompt_cache_hit_tokens'),
+            prompt_cache_miss_tokens=u.get('prompt_cache_miss_tokens'),
             completion_tokens=u.get('completion_tokens'),
             reasoning_tokens=(u.get('reasoning_tokens')
                               or (u.get('completion_tokens_details') or {}).get('reasoning_tokens')),

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from contracts.invariants import NODES
+from contracts.invariants import NODES, VALUED_FLAGS
 from contracts.rules import REGISTRY, Registry, Rule
 from contracts.schema.report import (
     CheckReport, EdgeLine, FixRoute, ProvenanceSection, RuleLine, StatusCounts, badge_of,
@@ -54,12 +54,52 @@ def remediation_of(rule: Rule) -> str:
     return 'human'
 
 
-def _fix_route(rule: Rule) -> FixRoute | None:
+def _fix_route(rule: Rule, findings) -> FixRoute | None:
     if rule.fix is None:
         return None
     from novel.orchestrator.nodes import is_paid
     node, *flags = rule.fix
-    return FixRoute(node=node, flags=flags, paid=is_paid(node, flags))
+    resolved: list[str] = []
+    i = 0
+    while i < len(flags):
+        flag = flags[i]
+        resolved.append(flag)
+        if flag in VALUED_FLAGS:
+            has_value = i + 1 < len(flags) and not flags[i + 1].startswith('--')
+            if has_value:
+                resolved.append(flags[i + 1])
+                i += 2
+                continue
+            values = [finding.fix_args.get(flag) for finding in findings]
+            if not values or any(not value for value in values):
+                return FixRoute(
+                    node=node, flags=resolved, paid=is_paid(node, flags),
+                    available=False,
+                    unavailable_reason=f'{flag} 需要值，但至少一条 finding 没有提供可执行实参',
+                )
+            if flag == '--chapters':
+                try:
+                    chapters = sorted({int(part) for value in values
+                                       for part in str(value).split(',')})
+                except ValueError:
+                    chapters = []
+                if not chapters or any(chapter < 1 for chapter in chapters):
+                    return FixRoute(
+                        node=node, flags=resolved, paid=is_paid(node, flags),
+                        available=False,
+                        unavailable_reason='finding 提供的 --chapters 不是正整数列表',
+                    )
+                resolved.append(','.join(str(chapter) for chapter in chapters))
+            elif len(set(values)) == 1:
+                resolved.append(str(values[0]))
+            else:
+                return FixRoute(
+                    node=node, flags=resolved, paid=is_paid(node, flags),
+                    available=False,
+                    unavailable_reason=f'多条 finding 为 {flag} 提供了互相冲突的值',
+                )
+        i += 1
+    return FixRoute(node=node, flags=resolved, paid=is_paid(node, resolved))
 
 
 def _status_of(rule: Rule, outcome: Outcome | None) -> tuple[str, str | None]:
@@ -132,16 +172,19 @@ def build(*, sid: str, node: str, freshness: FreshnessReport,
     for r in sorted(rules, key=lambda x: x.rule):
         o = by_rule.get(r.rule)
         status, why = _status_of(r, o)
+        findings = list(o.findings) if o is not None else []
         lines.append(RuleLine(
             rule=r.rule, sev=r.sev, status=status, item=r.item, requirement=r.requirement,
-            check_kind=r.check_kind, remediation=remediation_of(r), fix=_fix_route(r),
-            findings=list(o.findings) if o is not None else [],
+            check_kind=r.check_kind, remediation=remediation_of(r),
+            fix=_fix_route(r, findings), findings=findings,
             why=why,
             # 判据 31：绿灯必须报出自己的分母。`skipped` 那一行天然没有——它没扫。
             scanned=o.scanned if o is not None else None,
             # `wordlist=True` ⇒ **永远打印基线**（`Q-9`）。注册期已经拦过一次
             # （`rules.py::_validate` ⑤），报告这一侧原样带出来，不重算也不省略。
             baseline=r.baseline,
+            # 判据为什么这样设计属于稳定规则说明，不借用本次执行失败专用的 `why`。
+            note=r.note or None,
         ))
 
     badge = badge_of(lines)

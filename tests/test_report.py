@@ -15,6 +15,8 @@ test_report.py —— 报告按**判据**编排而不是按**结论**编排，�
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from contracts.invariants import STATUS
@@ -25,6 +27,7 @@ from contracts.schema.report import (
 from novel.errors import AccountingKeyUnregistered, RefusedByStructure
 from novel.prov import EdgeVerdict, FreshnessReport
 from novel.report import accounting as acc
+from novel.report import builder as report_builder
 from novel.report import build, render
 from novel.report.findings import ran, unverifiable
 
@@ -66,6 +69,57 @@ def _build(reg: Registry, outcomes=(), *, accounting=None, spec=(), monkeypatch=
         monkeypatch.setitem(acc.ACCOUNTING, STAGE, tuple(spec))
     return build(sid='7615069877019300633', node=NODE, freshness=_fresh(),
                  outcomes=outcomes, accounting=accounting, registry=reg, **kw)
+
+
+def test_a_valued_fix_route_gets_its_chapters_from_machine_evidence():
+    rule = Rule(
+        rule='demo_chapters', stage='stage2', item='示例', sev='hard',
+        who_checks='HARD', requirement='R-3.5', owner='stage2',
+        fix=('stage2.blueprint', '--chapters'),
+        fix_args_from_finding=('--chapters',),
+    )
+    route = report_builder._fix_route(
+        rule,
+        [SimpleNamespace(fix_args={'--chapters': '11'}),
+         SimpleNamespace(fix_args={'--chapters': '3'})],
+    )
+    assert route is not None and route.available
+    assert route.flags == ['--chapters', '3,11']
+
+
+def test_a_valued_fix_route_without_an_argument_says_it_is_unavailable():
+    rule = Rule(
+        rule='demo_chapters', stage='stage2', item='示例', sev='hard',
+        who_checks='HARD', requirement='R-3.5', owner='stage2',
+        fix=('stage2.blueprint', '--chapters'),
+        fix_args_from_finding=('--chapters',),
+    )
+    route = report_builder._fix_route(
+        rule,
+        [SimpleNamespace(fix_args={})],
+    )
+    assert route is not None and not route.available
+    assert route.unavailable_reason and '没有提供' in route.unavailable_reason
+
+
+def test_hinge_in_hole_carries_the_parsed_chapter_into_the_report(monkeypatch):
+    from novel.stages.stage2.checks import finding as stage2_finding
+
+    hit = stage2_finding(
+        'hinge_in_hole', detail='锚点落在漏抓区', evidence=['b11_02:「证据」'])
+    assert hit.fix_args == {'--chapters': '11'}
+    monkeypatch.setitem(acc.ACCOUNTING, 'stage2', ())
+    rep = build(
+        sid='7615069877019300633', node='stage2.blueprint', freshness=_fresh(),
+        outcomes=[ran('hinge_in_hole', [hit])],
+    )
+    line = next(row for row in rep.rules if row.rule == 'hinge_in_hole')
+    assert line.fix is not None and line.fix.available
+    assert line.fix.flags == ['--chapters', '11']
+    from novel.views.inbox import _report_items
+    inbox = _report_items(rep, 'stage2')
+    item = next(row for row in inbox if row.rule == 'hinge_in_hole')
+    assert item.kind == 'repairable' and '--chapters 11' in item.how
 
 
 # ───────── ⭐ 报告由注册表生成，不由产出生成 ─────────
@@ -216,6 +270,19 @@ def test_the_factory_takes_sev_item_owner_from_the_registry():
     f = finding('a', detail='正文', evidence=['x', 'y'], registry=reg)
     assert (f.sev, f.item, f.owner) == ('info', '它在守这个', 'stage2')
     assert f.evidence_key == 'x|y', 'evidence_key 是 evidence 的函数，载体的后置条件'
+
+
+def test_report_human_text_is_plain_and_rule_note_has_its_own_field(monkeypatch):
+    reg = _registry(_rule(
+        rule='a', sev='info', note='**这是稳定的`判据`理由**'))
+    hit = finding('a', detail='**hinge 落在`漏抓区`**', evidence=['ch11'], registry=reg)
+    rep = _build(reg, [ran('a', [hit], scanned='`3` 条')], monkeypatch=monkeypatch)
+    line = rep.rules[0]
+    assert line.findings[0].detail == 'hinge 落在漏抓区'
+    assert line.note == '这是稳定的判据理由'
+    assert line.scanned == '3 条'
+    assert '**' not in line.model_dump_json() and '`' not in line.model_dump_json()
+    assert '说明：这是稳定的判据理由' in render(rep)
 
 
 def test_the_factory_refuses_a_rule_that_is_not_registered():

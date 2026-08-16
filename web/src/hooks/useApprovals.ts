@@ -31,6 +31,10 @@ export function useApprovals(sidOverride?: string) {
     mutationFn: (key: GateKey) => api.approveGate(sid, key),
     onSuccess: put,
   })
+  const backfill = useMutation({
+    mutationFn: () => api.backfillApprovals(sid),
+    onSuccess: (result) => put(result.approvals),
+  })
   const markSeen = useMutation({
     mutationFn: (key: SeenKey) => api.markSeen(sid, key),
     onSuccess: put,
@@ -49,6 +53,7 @@ export function useApprovals(sidOverride?: string) {
     doc: q.data ?? null,
     isLoading: q.isLoading,
     approve,
+    backfill,
     markSeen,
     setDeep,
     startWriting,

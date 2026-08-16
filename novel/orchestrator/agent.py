@@ -221,7 +221,10 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
         if slot['start'] is None:
             continue                            # 半截 started 事件：没有载荷就无法成记录
         if slot['exit_code'] is not None:
-            state = 'ok' if slot['exit_code'] == 0 else 'failed'
+            state = ('ok' if slot['exit_code'] == 0 else
+                     'landed_red' if slot['exit_code'] == 1 else 'failed')
+            if state == 'landed_red':
+                slot['note'] = slot['note'] or jobs.LANDED_RED_NOTE
         elif run_id in live:
             state = 'running'
         else:

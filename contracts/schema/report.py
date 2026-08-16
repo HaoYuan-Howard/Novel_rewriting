@@ -18,16 +18,17 @@ report.py —— 对应 `docs/schema/_report.md`。校验报告。
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from contracts.invariants import (
     BADGE, CHECK_KIND, FRESHNESS, FRESHNESS_REASON, REMEDIATION, STATUS,
 )
 from contracts.rules import REGISTRY, Registry
 from contracts.schema.base import FrozenModel, StrictModel
-from contracts.schema.common import Finding, WontFixNote
+from contracts.schema.common import Finding, WontFixNote, plain_report_text
 
 #: 枚举一律从 `contracts.invariants` 取，不在本文件重抄（同 `common.py` 的写法）。
 Status = Literal[STATUS]
@@ -43,6 +44,7 @@ Remediation = Literal[REMEDIATION]
 # ─────────────────────────────────────────────────────────────────────────────
 
 def finding(rule: str, *, detail: str, evidence: list[str],
+            fix_args: Mapping[str, str] | None = None,
             identity_hit: bool = False, identity_dead: bool | None = None,
             converge: str = 'new', unresolved_rounds: int = 0,
             wontfix: WontFixNote | None = None,
@@ -60,16 +62,23 @@ def finding(rule: str, *, detail: str, evidence: list[str],
     ⚠ stage6 / stage7 会推翻这条派生（那两层的 `actionable` 意思是「人能 0 成本改掉它」），
     **那是一次语义裁决不是笔误**，登记在 `docs/schema/_report.md` §2.1，移植那两层时一起裁。
 
+    `fix_args` 只接收规则用 `fix_args_from_finding` 明确声明过的 flag；
     `evidence_key` 不收参数：它是 `evidence` 的函数，由载体的后置条件断言
     （设计要点 2——免费，且不可能忘）。
     """
     r = registry.get(rule)
+    supplied = dict(fix_args or {})
+    unknown_args = set(supplied) - set(r.fix_args_from_finding)
+    if unknown_args:
+        raise ValueError(
+            f'{rule}: finding 提供了规则没有声明的修复实参：{sorted(unknown_args)}')
     return Finding(
         rule=r.rule,
         sev=r.sev,
         item=r.item,
         detail=detail,
         evidence=list(evidence),
+        fix_args=supplied,
         evidence_key='|'.join(evidence),
         owner=r.owner,
         actionable=r.repair != 'NONE',
@@ -91,6 +100,14 @@ class FixRoute(FrozenModel):
     node: str = Field(min_length=1)
     flags: list[str] = Field(min_length=1)
     paid: bool
+    available: bool = True
+    unavailable_reason: str | None = None
+
+    @model_validator(mode='after')
+    def _availability_has_a_reason(self) -> FixRoute:
+        if self.available == (self.unavailable_reason is not None):
+            raise ValueError('可执行修复不能带不可用理由；不可执行修复必须说明为什么')
+        return self
 
 
 class RuleLine(FrozenModel):
@@ -126,6 +143,14 @@ class RuleLine(FrozenModel):
 
     #: 词表类判据的基线命中率。`wordlist=True` 时**必填**（`Q-9`：永远打印基线）。
     baseline: str | None = None
+
+    #: 判据表上的补充说明。它是规则的稳定理由，不与本次没跑成的 `why` 混用。
+    note: str | None = None
+
+    @field_validator('why', 'scanned', 'baseline', 'note', mode='before')
+    @classmethod
+    def _human_text_is_plain(cls, value):
+        return plain_report_text(value)
 
     @model_validator(mode='after')
     def _postconditions(self) -> RuleLine:

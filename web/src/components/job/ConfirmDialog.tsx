@@ -31,7 +31,11 @@ export function ConfirmDialog() {
 
   if (!confirm) return null
 
-  const paid = preview.data?.paid ?? false
+  // A background refetch is deliberately treated as unknown. Never leave a stale command or
+  // price visible while a request-shaping input (including mode) is being revalidated.
+  const planReady = preview.isSuccess && !preview.isFetching
+  const paid = planReady ? preview.data.paid : null
+  const steps = planReady ? (preview.data?.steps ?? []) : []
   const running = jobs.data?.running ?? null
   const busy = !!running && running.sid === confirm.req.sid
 
@@ -49,30 +53,64 @@ export function ConfirmDialog() {
           <span
             className={cx(
               'rounded-chip px-9 py-3 text-tag font-semibold',
-              paid ? 'bg-spend text-card' : 'bg-line-soft text-ink-2',
+              paid === true ? 'bg-spend text-card' : 'bg-line-soft text-ink-2',
             )}
           >
-            {preview.isPending ? '取命令中' : paid ? '调 LLM · 花真钱' : '免费'}
+            {!planReady
+              ? '贵贱待服务端确认'
+              : paid
+                ? '调 LLM · 花真钱'
+                : '免费'}
           </span>
           <span className="text-h3 font-semibold">{confirm.req.label}</span>
         </div>
 
         <div className="flex flex-col gap-12 px-22 py-18">
           <div className="text-sm2 text-ink-4">
-            将要执行的命令（服务端 <span className="font-mono">POST /api/jobs/preview</span>{' '}
-            下发，原样摆出）
+            执行计划（服务端 <span className="font-mono">POST /api/jobs/preview</span> 下发）
           </div>
-          <div className="rounded-btn-lg border border-line bg-inset px-14 py-12 font-mono text-body break-all text-ink select-all">
-            {preview.isPending
-              ? '…'
-              : preview.isError
-                ? '取不到这条命令。没拿到服务端下发的 argv，就不该发起——界面不替你拼一条。'
-                : preview.data?.argv}
-          </div>
+          {preview.isFetching ? (
+            <div className="rounded-btn-lg border border-line bg-inset px-14 py-12 text-body text-ink-4">
+              正在取得逐步命令、贵贱与写盘范围…
+            </div>
+          ) : preview.isError ? (
+            <div className="rounded-btn-lg border border-warn-line bg-warn-bg px-14 py-12 text-body text-warn-ink">
+              取不到执行计划。贵贱保持未知，也不会允许发起；界面不替服务端猜命令。
+            </div>
+          ) : (
+            <ol className="m-0 flex max-h-[420px] list-none flex-col gap-9 overflow-y-auto p-0">
+              {steps.map((step, index) => (
+                <li key={index} className="overflow-hidden rounded-btn-lg border border-line bg-inset">
+                  <div className="flex flex-wrap items-center gap-8 border-b border-line-soft px-14 py-9">
+                    <span className="font-mono text-mini text-ink-5">
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    <span className="text-body font-semibold">{step.label}</span>
+                    <span
+                      className={cx(
+                        'rounded-tag px-7 py-2 text-mini font-semibold',
+                        step.paid ? 'bg-spend text-card' : 'bg-card text-ink-3',
+                      )}
+                    >
+                      {step.paid ? '调 LLM · 花钱' : '不调 LLM'}
+                    </span>
+                    <span className="text-mini text-ink-4">
+                      {step.writes ? '写盘：' + step.writes : '不写盘'}
+                    </span>
+                  </div>
+                  <pre className="m-0 px-14 py-11 font-mono text-mini leading-[1.8] break-words whitespace-pre-wrap text-ink select-all">
+                    {step.argv}
+                  </pre>
+                </li>
+              ))}
+            </ol>
+          )}
           <div className="prose-cn text-body text-ink-3">
-            {paid
-              ? '这一步会调 LLM。发起前请确认参数——尤其是章号。'
-              : '这一步不调 LLM，但会写盘：它会刷新指标、提升产物或归档旧轮。'}
+            {paid === null
+              ? '服务端还没有确认这次动作的贵贱；执行计划取回前不会发起。'
+              : paid
+              ? '本计划含 LLM 调用。发起前请逐步确认参数——尤其是章号。'
+              : '本计划不调 LLM；请逐步确认写盘范围。'}
           </div>
           {busy ? (
             <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
@@ -92,7 +130,7 @@ export function ConfirmDialog() {
           </button>
           <button
             type="button"
-            disabled={preview.isPending || preview.isError || busy || preparing || start.isPending}
+            disabled={!planReady || busy || preparing || start.isPending}
             onClick={async () => {
               setPreparing(true)
               try {
@@ -122,13 +160,13 @@ export function ConfirmDialog() {
             }}
             className={cx(
               'rounded-btn px-18 py-8 text-body-lg font-semibold text-card',
-              paid ? 'bg-spend' : 'bg-ink',
-              preview.isPending || preview.isError || busy || preparing || start.isPending
+              paid === true ? 'bg-spend' : 'bg-ink',
+              !planReady || busy || preparing || start.isPending
                 ? 'cursor-not-allowed opacity-40'
                 : 'cursor-pointer',
             )}
           >
-            {paid ? '确认发起（花钱）' : '发起'}
+            {paid === true ? '确认发起（花钱）' : paid === false ? '发起' : '等待执行计划'}
           </button>
         </div>
       </div>

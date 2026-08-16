@@ -433,3 +433,56 @@ def archived_rounds(rounds_dir: str | os.PathLike[str], stem: str) -> set[int]:
         if n is not None and p.name == f'{stem}.r{n}.json':
             out.add(n)
     return out
+
+
+#: `produces` 模板里的占位符（`review_{n}.json` 的 `{n}`）。
+_PLACEHOLDER_RX = re.compile(r'\{[A-Za-z_][A-Za-z0-9_]*\}')
+
+
+def is_numbered_pattern(pattern_rel: str) -> bool:
+    """这条 `produces` 是不是「同目录下一个编号占位符」的形状。
+
+    真：`stage5/review_{n}.json` · `stage6/semantic_{n}.json`
+    假：`stage5/{mode}/ch{nn}.json`（**目录段也带占位符**，那是逐章类，
+        完成度挂在「计划里的章写了没有」上，不是「盘上有几号文件」）
+    假：`stage7/name_map.json`（没有占位符，一次 `is_file()` 就答完了）
+    """
+    head, _, tail = pattern_rel.rpartition('/')
+    return _PLACEHOLDER_RX.search(head) is None and \
+        len(_PLACEHOLDER_RX.findall(tail)) == 1
+
+
+def numbered_rounds(novel_dir: str | os.PathLike[str], pattern_rel: str) -> list[int]:
+    """`stage5/review_{n}.json` → 盘上真实存在的那几个编号（升序）。
+
+    【为什么必须有这个函数】`produces` 带 `{}` 的产物**做不了一次 `is_file()`**，
+    而 `state.required_artifacts` 因此把它们整个丢掉 ⇒ `StageState.artifacts` 里
+    没有它们的行。续跑判定于是只剩 stage 级的 `done` 可问，而那个 `done` 对 stage5
+    说的是**章稿写全了没有**——拿它去答「全书验收跑过没有」，
+    答案永远是「跑过了」，**而盘上一份 `review_*.json` 都没有**。
+    实测后果：批量队列把 `stage5.review`（0 成本）与 `stage5.semantic`（付费）
+    双双记成 `done` 而一次都没执行，整条链上唯一的书级质量闸门静默缺席。
+
+    ⚠ **全等匹配、只认十进制编号**，与 `archived_rounds` 同一条纪律：
+    `review_1.INVALID.json` 匹配不上（它不是一份现役产物），
+    `_rounds/` 是子目录、`is_file()` 就滤掉了（归档不是现役）。
+    ⚠ 书名里可能有 `[` / `]`，所以逐个文件名比对、不拼 glob 模式。
+    """
+    if not is_numbered_pattern(pattern_rel):
+        raise PathRefused(
+            f'{pattern_rel!r} 不是「同目录下一个编号占位符」的形状，'
+            f'不能按轮次编号解析——先用 `is_numbered_pattern` 问一句')
+    head, _, tail = pattern_rel.rpartition('/')
+    prefix, _, suffix = tail.partition(_PLACEHOLDER_RX.search(tail).group(0))
+    d = Path(novel_dir) / head
+    out: list[int] = []
+    if not d.is_dir():
+        return out
+    for p in d.iterdir():
+        name = p.name
+        if not p.is_file() or not name.startswith(prefix) or not name.endswith(suffix):
+            continue
+        digits = name[len(prefix):len(name) - len(suffix)] if suffix else name[len(prefix):]
+        if digits.isdigit():
+            out.append(int(digits))
+    return sorted(out)

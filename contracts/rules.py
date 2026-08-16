@@ -9,7 +9,7 @@ rules.py —— 判据注册表。**判据表只有一张**，key 重复当场�
 原型实测过一次：四条确定性检查在新契约下**三条静默失效、一条全量误报**（结论恒为「需修订」）。
 两种故障方向相反、危害相同：**报告不再携带信息**。
 
-【注册期就校验，不等到跑的时候】七条，每条都对应一次已发生的损失，见 `_validate`。
+【注册期就校验，不等到跑的时候】九条，每条都对应一次已发生的损失，见 `_validate`。
 
 Stage0–Stage7 均已实现；注册表必须完整覆盖当前八层。
 """
@@ -97,6 +97,12 @@ class Rule:
     #: `('stage2.blueprint', '--renormalize')` 免费，`('stage2.global', '--purge-role')` 付费。
     #: 那个判断走的是 `novel/orchestrator/nodes.py::is_paid`，**贵贱只有一处算**（`R-11.7`）。
     fix: tuple[str, ...] | None = None
+
+    #: `fix` 里哪些带值 flag 的实参要由**本次 finding**提供。
+    #:
+    #: 路由属于判据，值属于某次命中：例如 `hinge_in_hole` 永远走
+    #: `stage2.blueprint --chapters`，但章号只能由这次命中的 beat id 得出。
+    fix_args_from_finding: tuple[str, ...] = ()
 
 
 class Registry:
@@ -221,14 +227,14 @@ def _validate(r: Rule) -> None:
             f'不进的必须留空——一句永远发不出去的指令会被下一个人当成现役的'
         )
 
-    # ⑧ `fix` 指的必须是**真跑得起来的那条命令**。三道，各消灭一种故障：
+    # ⑧ `fix` 指的必须是**真跑得起来的那条命令**。四道，各消灭一种故障：
     #      · 节点名拼错   ⇒ 界面上那个「去修」按钮点下去是 404，而表里看不出来；
     #      · flag 不在该节点的 `flags` 里 ⇒ `build_argv` 当场拒收，
     #        于是「这一条能 0 成本修」是一句**永远兑现不了**的承诺；
     #      · 指到别的层   ⇒ 报告把修复动作指到一个不产这份产物的节点上。
     #    ⚠ 这一条正是 `fix` 存在的**全部理由**：写进 `note` 的散文没有任何东西在查它。
     if r.fix is not None:
-        from contracts.invariants import NODES        # 局部导入：`invariants` 不许反向依赖本模块
+        from contracts.invariants import NODES, VALUED_FLAGS  # 局部导入：避免反向依赖
         if len(r.fix) < 2:
             raise ValueError(
                 f'{r.rule}: fix={r.fix!r} 至少要 (节点, flag) 两格。'
@@ -241,18 +247,61 @@ def _validate(r: Rule) -> None:
                 f'{r.rule}: fix 指的节点 {node!r} 不在 `NODES` 里。'
                 f'界面上那个「去修」按钮会指到一个跑不起来的地址'
             )
-        unknown = [f for f in flags if f not in spec.flags]
+        flag_tokens: list[str] = []
+        missing_values: list[str] = []
+        i = 0
+        while i < len(flags):
+            flag = flags[i]
+            if not flag.startswith('--'):
+                raise ValueError(
+                    f'{r.rule}: fix={r.fix!r} 的 {flag!r} 不是 flag，也不是前一个带值 flag 的值')
+            flag_tokens.append(flag)
+            has_value = i + 1 < len(flags) and not flags[i + 1].startswith('--')
+            if flag in VALUED_FLAGS:
+                if has_value:
+                    value = flags[i + 1]
+                    if not value.strip():
+                        raise ValueError(
+                            f'{r.rule}: fix={r.fix!r} 里的带值 flag {flag} '
+                            f'拿到的是空白值 {value!r}；空白不构成可执行实参')
+                    if flag in r.fix_args_from_finding:
+                        raise ValueError(
+                            f'{r.rule}: {flag} 已在 fix 里写死值，又声明由 finding 提供；'
+                            f'同一个实参不许有两个来源')
+                    i += 2
+                    continue
+                missing_values.append(flag)
+            elif has_value:
+                raise ValueError(f'{r.rule}: {flag} 不带值，而 fix 里跟着 {flags[i + 1]!r}')
+            i += 1
+
+        unknown = [f for f in flag_tokens if f not in spec.flags]
         if unknown:
             raise ValueError(
                 f'{r.rule}: fix={r.fix!r} 里的 {unknown} 不在 `NODES[{node!r}].flags` 里。'
                 f'`build_argv` 会当场拒收它 ⇒ 这条修复路**永远兑现不了**，'
                 f'而表里只看得见一句「修法：…」'
             )
+        declared = set(r.fix_args_from_finding)
+        undeclared = set(missing_values) - declared
+        if undeclared:
+            flag = sorted(undeclared)[0]
+            raise ValueError(
+                f'{r.rule}: fix={r.fix!r} 里的带值 flag {flag} 没有值，'
+                f'也没有声明由 finding 提供实参。这样的路由到 preview 才会因缺值失败')
+        stray = declared - set(missing_values)
+        if stray:
+            raise ValueError(
+                f'{r.rule}: fix_args_from_finding={sorted(stray)!r} 没有对应的缺值 flag。'
+                f'实参来源声明必须与 fix 逐项对上')
         if spec.stage != r.stage:
             raise ValueError(
                 f'{r.rule}: 判据产自 {r.stage}，而 fix 指向 {node!r}（属 {spec.stage}）。'
                 f'一条判据不许把修法指到别的层——那是让报告去改一个不产这份产物的节点'
             )
+    elif r.fix_args_from_finding:
+        raise ValueError(
+            f'{r.rule}: 没有 fix，却声明 fix_args_from_finding={r.fix_args_from_finding!r}')
 
 
 #: 全局注册表。各 stage 的判据在移植时 import 它并 `register(...)`。

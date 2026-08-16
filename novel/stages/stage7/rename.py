@@ -64,6 +64,25 @@ MAX_TOKENS = 16000
 # 本节点的 consumed 投影统一登记在 `novel.consumption`；读写与 freshness 共用同一函数。
 
 
+def _retire_book_txt(store: ArtifactStore) -> None:
+    """Move a no-longer-current delivery out of the live download path.
+
+    The content-addressed archive is recoverable and idempotent: if the same
+    bytes were archived by an earlier interrupted attempt, only the redundant
+    live copy is removed.  A different archive is never overwritten.
+    """
+    live = store.path(BOOK_TXT)
+    if not live.is_file():
+        return
+    try:
+        raw = live.read_bytes()
+    except OSError as exc:
+        raise TerminalState(f'读不了待退休的 {BOOK_TXT}：{exc!r}') from exc
+    digest = prov.content_sha1(raw)
+    archived_rel = f'stage7/_rounds/book.{digest}.txt'
+    store.retire_bytes(BOOK_TXT, archived_rel)
+
+
 # ── 上游 ────────────────────────────────────────────────────────────────────
 
 class _Upstreams:
@@ -460,9 +479,10 @@ def run_recheck(ctx: RunContext) -> tuple[NameMap, CheckReport]:
     new_art, _fs, _hook_new = _build(
         ctx, up, model_out, extra,
         ctx.rewrite_provenance(art.provenance, by='--recheck'))
-    # 定稿、成书账与恒等基线**原样带过去**：重判不该把人的决定与另一道工序的结论抹掉。
+    # 映射决定可继续有效，但旧交付物绑定的是重判前的上游，必须退出 live 路径。
     new_art = new_art.model_copy(update={
-        'approved': art.approved, 'book_txt': art.book_txt, 'identity': art.identity})
+        'approved': art.approved, 'book_txt': None, 'identity': art.identity})
+    _retire_book_txt(store)
     store.archive_round(REL, keep=True)
     store.write(REL, new_art)
     return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
@@ -512,9 +532,16 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
             prompts={'RULES': prov.rules_fingerprint('stage7')},
             params=NameMapParams(max_tokens=MAX_TOKENS), origin='human')
     new_art, _fs, _hook_new = _build(ctx, up, model_out, extra, provenance)
+    # Also retire an orphaned delivery when the formal/INVALID map is absent:
+    # its approval/current binding cannot be reconstructed, so keeping it at
+    # the live download path would turn a repair action into implicit consent.
+    _retire_book_txt(store)
     if prev is not None:
         new_art = new_art.model_copy(update={
-            'approved': prev.approved, 'book_txt': prev.book_txt, 'identity': prev.identity})
+            # Any mapping edit invalidates the human decision over the old map.
+            # Delivery is a derived byte product and must be assembled again
+            # only after the edited map receives a new approval.
+            'approved': None, 'book_txt': None, 'identity': prev.identity})
         if prev_rel == _INVALID:
             # 人工 patch 也要过同一道硬闸。仍有 HARD 时保留原问题稿与编辑文件，
             # 不把一份坏映射伪装成正式产物；干净时用通用提升入口先归档原始
@@ -551,12 +578,13 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
     extra = [e.model_dump(by_alias=True) for e in art.extra_subs]
     rebuilt, _fs, _hook_new = _build(ctx, up, model_out, extra, art.provenance)
     rebuilt = rebuilt.model_copy(update={
-        'approved': art.approved, 'book_txt': art.book_txt, 'identity': art.identity})
+        'approved': None, 'book_txt': None, 'identity': art.identity})
     outcomes = _judge(ctx, store, rebuilt, up)
     if _blocking(outcomes):
         return False, _report(ctx, store, outcomes, rebuilt)
     # 通用入口归档 `.INVALID` 与已有正式稿；随后只覆盖当前代码重算出的派生字段。
     # 若两步间崩溃，盘上仍有可 `--recheck` 自愈的正式稿。
+    _retire_book_txt(store)
     store.promote_invalid(REL, NameMap)
     promoted = rebuilt.model_copy(update={
         'provenance': rebuilt.provenance.promoted(code=ctx.code)})
@@ -606,6 +634,7 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
             f'问题稿在 {p}：人改一行后走 `--apply-edit <name_map_edit.json 路径>`，'
             f'或直接 `--revalidate`（都 0 成本）',
             invalid_path=str(p))
+    _retire_book_txt(store)
     store.write(REL, art)
     return art
 
@@ -634,7 +663,11 @@ def run_approve(ctx: RunContext) -> tuple[NameMap, CheckReport]:
             f'人改一行走 `--apply-edit <name_map_edit.json 路径>`，'
             f'或按当前判据重判 `--recheck`（都 0 成本）')
 
-    new = art.model_copy(update={'approved': ApprovedNameMap(origin='human')})
+    # Existing repositories may contain a pre-fix book assembled before this
+    # approval.  Approval never blesses that old byte product retroactively.
+    _retire_book_txt(store)
+    new = art.model_copy(update={
+        'approved': ApprovedNameMap(origin='human'), 'book_txt': None})
     store.write(REL, new)
     return new, _report(ctx, store, _judge(ctx, store, new, up), new)
 

@@ -147,26 +147,42 @@ def _drafts(book: Path, hook: dict) -> list[dict]:
     drafts = []
     for rel, judged in (hook.get('judged') or {}).items():
         art = _json(book / Path(rel))
+        text = '\n\n'.join(
+            str(segment.get('text') or '').strip()
+            for segment in (art.get('segments') or [])
+            if str(segment.get('text') or '').strip()
+        ).strip()
         drafts.append({
             'output_ordinal': judged.get('output_ordinal') or art.get('output_ordinal'),
             'rel': rel,
-            'text': art.get('text') or '',
+            'text': text,
         })
     return sorted(drafts, key=lambda x: int(x['output_ordinal'] or 0))
 
 
 def _story_map(writer_context: dict) -> list[dict]:
+    def goal(value: object) -> dict:
+        raw = value if isinstance(value, dict) else {}
+        return {'intent': raw.get('intent'), 'fact_refs': raw.get('fact_refs') or []}
+
     out = []
     for ch in writer_context.get('chapters') or []:
         events = []
-        for beat in ch.get('beats') or []:
-            events.extend(str(e) for e in (beat.get('events') or []) if str(e).strip())
+        segments = []
+        for segment in ch.get('segments') or []:
+            segment_events = [
+                str(e) for e in (segment.get('events') or []) if str(e).strip()
+            ]
+            events.extend(segment_events)
+            segments.append({'slot': segment.get('slot'), 'events': segment_events})
         out.append({
             'chapter': ch.get('output_ordinal'),
-            'chapter_goal': ch.get('chapter_goal'),
-            'open_hook_goal': ch.get('open_hook_goal'),
+            'from_source_ordinals': ch.get('from_source_ordinals') or [],
+            'chapter_goal': goal(ch.get('chapter_goal')),
+            'open_hook_goal': goal(ch.get('open_hook_goal')),
             'events': events,
-            'end_hook_goal': ch.get('end_hook_goal'),
+            'segments': segments,
+            'end_hook_goal': goal(ch.get('end_hook_goal')),
         })
     return out
 

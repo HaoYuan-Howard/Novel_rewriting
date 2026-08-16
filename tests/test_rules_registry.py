@@ -138,6 +138,38 @@ def test_a_fix_route_needs_at_least_one_flag():
         Registry().register(_s2(fix=('stage2.blueprint',)))
 
 
+def test_a_valued_fix_route_needs_a_value_or_a_finding_source():
+    with pytest.raises(ValueError, match='没有值.*finding'):
+        Registry().register(_s2(fix=('stage2.blueprint', '--chapters')))
+
+    reg = Registry()
+    reg.register(_s2(
+        fix=('stage2.blueprint', '--chapters'),
+        fix_args_from_finding=('--chapters',),
+    ))
+    assert len(reg) == 1
+
+
+def test_a_fix_argument_cannot_have_two_sources_or_a_stray_declaration():
+    with pytest.raises(ValueError, match='两个来源'):
+        Registry().register(_s2(
+            fix=('stage2.blueprint', '--chapters', '11'),
+            fix_args_from_finding=('--chapters',),
+        ))
+    with pytest.raises(ValueError, match='没有对应'):
+        Registry().register(_s2(
+            fix=('stage2.blueprint', '--renormalize'),
+            fix_args_from_finding=('--chapters',),
+        ))
+
+
+def test_a_static_valued_fix_argument_cannot_be_only_whitespace():
+    with pytest.raises(ValueError, match='空白值'):
+        Registry().register(_s2(
+            fix=('stage2.blueprint', '--chapters', '   '),
+        ))
+
+
 def test_the_fix_route_is_what_makes_the_cost_colour_derivable():
     """⭐⭐ **`fix` 的收益就是它能过 `is_paid`**，而散文过不了。
 

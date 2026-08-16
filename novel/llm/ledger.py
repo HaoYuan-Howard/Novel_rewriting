@@ -195,6 +195,8 @@ class CostLedger:
     def record(self, *, node: str, sid: str, model: str, code: str,
                cached: bool, cache_policy: str,
                prompt_tokens: int | None = None,
+               prompt_cache_hit_tokens: int | None = None,
+               prompt_cache_miss_tokens: int | None = None,
                completion_tokens: int | None = None,
                reasoning_tokens: int | None = None,
                purpose: str = '',
@@ -259,6 +261,10 @@ class CostLedger:
                 'sid': sid, 'node': node, 'model': model, 'code': code,
                 'cached': cached, 'cache_policy': cache_policy,
                 'prompt_tokens': prompt_tokens,
+                # 供应商侧 prompt cache 与本地 `cached` 是两件事。必有两列；
+                # `null` 表示响应没给，不能伪装成确定命中 0 token。
+                'prompt_cache_hit_tokens': prompt_cache_hit_tokens,
+                'prompt_cache_miss_tokens': prompt_cache_miss_tokens,
                 'completion_tokens': completion_tokens,
                 'reasoning_tokens': reasoning_tokens,
                 'purpose': purpose,

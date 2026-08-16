@@ -257,6 +257,46 @@ def test_archived_rounds_anchors_the_stem_exactly():
     assert paths.archived_rounds(d / '不存在', 'hook') == set()
 
 
+def test_is_numbered_pattern_separates_three_shapes_of_produces():
+    """`produces` 有三种形状，各有各的完成度判据——**分不开就会互相顶替**。
+
+    带编号占位符的那种此前没有任何解析器，于是 `state.required_artifacts`
+    整个丢掉它们、续跑判定只能退回 stage 级 `done`：`stage5.review` 与
+    `stage5.semantic` 因此恒被「章稿写全了」顶替成 `skip`（实测两本书都没跑）。
+    """
+    assert paths.is_numbered_pattern('stage5/review_{n}.json')
+    assert paths.is_numbered_pattern('stage6/semantic_{n}.json')
+    # 目录段也带占位符 ⇒ 逐章类，归 `chapters_done`，不是轮次账
+    assert not paths.is_numbered_pattern('stage5/{mode}/ch{nn}.json')
+    assert not paths.is_numbered_pattern('stage5/{mode}/draft.md')
+    # 没有占位符 ⇒ 一次 is_file() 就答完了
+    assert not paths.is_numbered_pattern('stage7/name_map.json')
+
+
+def test_numbered_rounds_counts_only_live_formal_rounds():
+    """只认现役正式稿：`.INVALID` 不算、`_rounds/` 里的归档不算、别的前缀不算。
+
+    ⚠ 与 `archived_rounds` 同一条纪律：逐个文件名比对，不拼 glob 模式
+    （书名与 stem 里可能有 `[` / `]`）。
+    """
+    import tempfile
+    root = Path(tempfile.mkdtemp())
+    d = root / 'stage5'
+    (d / paths.ROUNDS_DIRNAME).mkdir(parents=True)
+    for n in ('review_1.json', 'review_2.json', 'review_10.json',
+              'review_3.INVALID.json', 'review_x.json', 'semantic_1.json',
+              'draft.md'):
+        (d / n).write_bytes(b'{}')
+    (d / paths.ROUNDS_DIRNAME / 'review_4.json').write_bytes(b'{}')
+
+    assert paths.numbered_rounds(root, 'stage5/review_{n}.json') == [1, 2, 10]
+    assert paths.numbered_rounds(root, 'stage5/semantic_{n}.json') == [1]
+    assert paths.numbered_rounds(root, 'stage6/semantic_{n}.json') == [], \
+        '目录不存在时是空，不是抛'
+    with pytest.raises(PathRefused, match='is_numbered_pattern'):
+        paths.numbered_rounds(root, 'stage5/{mode}/ch{nn}.json')
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 五、`--apply-edit <路径>` → 书内相对路径（`edit_rel`）
 # ─────────────────────────────────────────────────────────────────────────────

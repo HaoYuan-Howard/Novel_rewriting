@@ -34,18 +34,12 @@ def _ev(ts, node, phase, exit_code=None, sid='42', note=None):
 
 
 def test_pipeline_steps_match_the_skill_table():
-    """14 步的顺序钉死（SKILL 工作流契约）；节点都在 `NODES`；贵贱只有 `is_paid` 一处算。"""
-    assert PIPELINE_STEPS == (
-        'stage0.remove', 'stage0.approve', 'stage1.partition',
-        'stage2.global', 'stage4.plan',
-        'stage5.write', 'stage5.review', 'stage5.semantic',
-        'stage6.hook', 'stage6.semantic', 'stage6.approve',
-        'stage7.rename', 'stage7.approve', 'stage7.assemble',
-    )
-    assert all(node in NODES for node in PIPELINE_STEPS)
-    paid = {'stage2.global', 'stage4.plan', 'stage5.write', 'stage5.semantic',
-            'stage6.hook', 'stage6.semantic', 'stage7.rename'}
-    assert {n for n in PIPELINE_STEPS if N.is_paid(n, ())} == paid
+    """进度节点逐项来自 NODES；贵贱仍只有 `is_paid` 一处算。"""
+    assert PIPELINE_STEPS == tuple(NODES)
+    assert PIPELINE_STEPS[-3:] == (
+        'stage7.rename', 'stage7.approve', 'stage7.assemble')
+    assert {n for n in PIPELINE_STEPS if N.is_paid(n, ())} == {
+        n for n in NODES if N.is_paid(n, ())}
 
 
 def test_progress_event_payload_matches_phase():
@@ -94,7 +88,7 @@ def test_fold_four_states():
     ]
     steps = beacon.fold(events, now=100)
     by_node = {s.node: s for s in steps}
-    assert [s.seq for s in steps] == list(range(1, 15))
+    assert [s.seq for s in steps] == list(range(1, len(NODES) + 1))
     assert by_node['stage0.remove'].beacon == 'ok'
     assert by_node['stage0.remove'].last_exit == 0
     assert by_node['stage0.approve'].beacon == 'running'

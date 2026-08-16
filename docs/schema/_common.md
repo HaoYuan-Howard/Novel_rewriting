@@ -6,11 +6,11 @@
 证据列的四个取值见 `docs/schema/_README.md`。stage0 在 F7 前曾另用 **`设计`**
 标记零盘上样本；F7 临时跑盘后已逐格改成四个正式证据值，不再保留第五种状态。
 
-八份 stage 文档都写着「四个共有键留给本文」。本文管五样东西：
+八份 stage 文档把来源账共有键留给本文。本文管五样东西：
 
 | # | 管什么 | 为什么必须在这里定一次，而不是在八层各定一次 |
 |---|---|---|
-| 一~三 | `_provenance` 的四个共有键 | 它们**逐层同形**。分层定 = 保证漂：`code` 的口径就是在**第二次**踩同一个坑之后才写下「这条对全链生效」的，而 stage7 §五又独立发现了第三次 |
+| 一~三 | `_provenance` 的五个共有键 | 它们**逐层同形**。分层定 = 保证漂：`code` 的口径就是在**第二次**踩同一个坑之后才写下「这条对全链生效」的，而 stage7 §五又独立发现了第三次 |
 | 四 | 新鲜度 `fresh/stale/unknown` | `Q-2` 四个落点里最贵的一个。它由 `inputs` 算出来，算法只能有一份 |
 | 五 | `.INVALID` 与三条 0 成本提升路 | 全链**三处**实测伪造 + **一处**实测丢失，都是同一个形状 |
 | 六~七 | 轮次账 与 `Finding` | `Finding` 在原型里有 **5 份拷贝、3 种字段签名** |
@@ -18,13 +18,14 @@
 
 ---
 
-## 一、`_provenance` 的四个共有键
+## 一、`_provenance` 的五个共有键
 
 | 键 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
 | `prompts` | `{名字: 指纹}` | 付费节点**是**；0 成本节点**只在有尺子时**有 | 插值**之后**的 system prompt 指纹。见 §1.1 | **三源** |
 | `model` | `str` | 付费节点**是**；0 成本节点**键不在** | 盘上恒 `deepseek-v4-pro`。见 §1.2 | **三源** |
 | `code` | `str` | **是** | 完整提交 SHA + 可复现的工作树摘要。见 §1.3 | **三源** |
+| `root_clean_sha1` | 40 位 sha1 | **是** | 本产物最终建立在哪一版 `stage0/clean_text.txt` 上；与运行上下文根哈希不一致时拒绝写盘 | **契·码** |
 | `inputs` | `{键: 边}` | **是** | 这份产物照哪几份上游产的。见 §三 | **三源** |
 | `usage` | `obj` | **否** | 这一份花了多少 token。见 §八 | **设计** |
 
@@ -60,6 +61,13 @@ Stage5/6/7 都调用 `novel.prov.rules_fingerprint(stage)`；指纹覆盖 `Rule`
 这格只进来源审计，**不进 LLM 缓存键**。缓存身份由实际请求载荷决定，其中包含插值后的 prompt；
 因此 prompt 改动必然 miss，而与该请求无关的仓库文件不会击穿所有缓存。两套身份分别回答
 “这份产物由哪份代码工作树生成”与“这次线上请求是否逐字相同”，不能互相代替。
+
+### 1.4 `root_clean_sha1` —— 全链根正文身份
+
+所有既有带 `_provenance` 的 artifact 与 `RemovalReport` 自 schema v2 起必填完整 40 位根哈希。
+中间 `inputs` 全都看似 fresh 也不能替代这条：Stage0 正文换过而 Stage1 尚未重建时，只有根身份
+能立即把 Stage1~7 及其字节产物标为 stale。`RunContext` 从当前已批准的 Stage0 正文建立根身份；
+一次运行内读到不同根、或写入来源账声明另一根，均在写盘前显式拒绝。旧 v1 不手补、不猜迁移。
 
 ---
 
@@ -280,7 +288,7 @@ promote(旧的 _provenance, *, 判据表指纹, 代码版本) -> 新的 _provena
 
 ---
 
-## 七、`Finding` —— 全链一份，13 个字段
+## 七、`Finding` —— 全链一份，14 个字段
 
 stage5 / stage6 / stage7 **逐字段相同**。⚠ 原型里它有 **5 份拷贝、3 种字段签名**，
 而「同一件事的第 N 个落点必然分家」。
@@ -290,8 +298,9 @@ stage5 / stage6 / stage7 **逐字段相同**。⚠ 原型里它有 **5 份拷贝
 | `rule` | `str` | 是 | 判据表的 key。**撞名当场炸** |
 | `sev` | `str` | 是 | `hard｜info｜metric｜unver`。**`metric` 与 `info` 必须分开** |
 | `item` | `str` | 是 | 人读的一句话「这条在守什么」 |
-| `detail` | `str` | 是 | 判定正文 |
+| `detail` | `str` | 是 | 只写「本书哪里有问题」的纯文本；schema 边界不下发 `**` 标记 |
 | `evidence` | `str[]` | 是 | **机器可比的**凭据 |
+| `fix_args` | `{flag: str}` | 是 | 本次命中为 `Rule.fix` 补出的带值实参；只允许规则声明过的来源，不重复 node/无值 flag |
 | `evidence_key` | `str` | 是 | `'\|'.join(evidence)`。**收敛键 = (章, rule, evidence_key)** |
 | `owner` | `str｜null` | 是 | **`null` ⇔ 它不是结论**（metric/unver）——这条不变量抓出过一个 sev 写错的判据 |
 | `actionable` | `bool` | 是 | **蕴含 `owner == 'stage5'`**。⚠ 不等于「会进修复（旧称「反哺」）」 |
@@ -304,7 +313,8 @@ stage5 / stage6 / stage7 **逐字段相同**。⚠ 原型里它有 **5 份拷贝
 **三条设计要点：**
 
 1. **只能经工厂构造。** `sev` / `item` / `owner` / `actionable` 从判据注册表取，
-   调用方只给 `rule` + `detail` + `evidence`。⇒ **一条 finding 不可能与判据表说的不一致。**
+   调用方只给 `rule` + `detail` + `evidence`（以及规则明确声明的 `fix_args`）。
+   ⇒ **一条 finding 不可能与判据表说的不一致。**
 2. `evidence_key` 是 `evidence` 的函数，用载体的后置条件断言它——免费，且不可能忘。
 3. **两道恒等闸都只降 `actionable`，不删结论**：
    「查过、但这一章原文自己也这样」与「没查」必须分得开。
@@ -348,6 +358,7 @@ stage5 / stage6 / stage7 **逐字段相同**。⚠ 原型里它有 **5 份拷贝
 | `retryable` / `will_retry` | 错误本身是否可重试，以及本次之后是否真的还会重试 |
 | `backoff_ms` | 下一次发送前计划执行的退避；没有下一次时为 `null` |
 | `chapter` / `chapter_index` / `chapter_total` | 逐章调用在本批次中的身份与位置；书级调用为 `null` |
+| `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` | 供应商侧 prompt 缓存命中/未命中的输入 token；`null` = 响应没有给，不能当成 0 |
 
 `backoff_ms` 记的是**计划并实际交给 sleep 的时长**，不是把等待时间混进
 `latency_ms`。这些字段只属于 append-only 服务账本；产物里的 `Usage` 仍保持上表五项，

@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 from contracts.invariants import NODES, STAGES
 from contracts.schema.orchestration import (
-    JobEvent, QueueCounts, QueueEvent, QueueItem, QueuePlan, QueueStart, Step,
+    JobEvent, QueueCounts, QueueEntry, QueueEvent, QueueItem, QueuePlan, QueueStart, Step,
 )
 from novel.errors import ApprovalRequired, QueueConflict
 from novel.orchestrator import queue as Q
@@ -98,6 +99,56 @@ def test_human_nodes_are_exactly_the_ones_a_person_does():
                              'stage6.approve', 'stage7.approve'}
 
 
+@pytest.mark.parametrize('deep,want', [([2, 4], '2,4'), ([], 'none')])
+def test_stage5_plan_uses_the_saved_composite_depth_selection(
+        queue_base, monkeypatch, deep, want):
+    """FC-06: one composite item mirrors the human selection value for value."""
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
+    monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (Q.st.RESUME_RUN, 'stage5 drafts are missing'))
+    monkeypatch.setattr(
+        Q.approvals, 'current_depth_selection', lambda _base, _sid: deep)
+
+    todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
+    assert blocked == [] and len(todo) == 1
+    item = todo[0]
+    assert item.node == 'stage5.write' and item.mode is None
+    assert item.flags == ['--deep', want, '--shallow-rest']
+    assert len(item.steps) == 1
+    argv = item.steps[0].argv
+    assert argv[argv.index('--deep') + 1] == want and '--shallow-rest' in argv
+
+
+def test_stage5_plan_blocks_without_a_persisted_depth_selection(
+        queue_base, monkeypatch):
+    """The read-only [1,2,3] default is not spending authorization."""
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
+    monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (Q.st.RESUME_RUN, 'stage5 drafts are missing'))
+    monkeypatch.setattr(
+        Q.approvals, 'current_depth_selection', lambda _base, _sid: None)
+
+    todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
+    assert todo == [] and len(blocked) == 1
+    item = blocked[0]
+    assert item.waiting_on == Q.WAITING_ON_DEPTH_SELECTION
+    assert item.mode is None and item.flags == [] and item.steps == []
+    assert '不会猜成全 deep' in item.why
+
+
+def test_a_runnable_queue_item_cannot_lose_its_command_snapshot():
+    with pytest.raises(ValidationError, match='exact command snapshot'):
+        QueueItem(sid='book-a', node='stage5.write', why='missing command')
+    blocked = QueueItem(
+        sid='book-a', node='stage5.write', why='choose depth first',
+        waiting_on=Q.WAITING_ON_DEPTH_SELECTION)
+    assert blocked.steps == []
+
+
 # ───────────────────── 「停在那里」的三个数（R-13.4） ─────────────────────
 
 def test_the_queue_stops_at_the_first_failure_and_counts_three_ways():
@@ -126,6 +177,26 @@ def test_items_that_did_not_run_must_have_a_reason():
     """没有失败项却有没跑的项 ⇒ 那它们为什么没跑？说不出来就是队列在静默跳过。"""
     with pytest.raises(ValidationError, match='静默跳过'):
         QueueCounts(done=1, failed=0, not_run=3)
+
+
+def test_the_stop_reason_says_which_kind_of_failure_stopped_the_lane():
+    """⭐ **回归**：「第 N 项失败后停下」在两种相反的处置上是同一句话。
+
+    exit 1 = 产物已落盘、报告有红行 ⇒ 去看那一层的屏并裁决（多半不必重跑）。
+    exit 2/3/70 = 压根没跑成 ⇒ 修完重跑。
+    实测：`stage6.hook` exit 1 停掉了整条 lane，而 `hook.json` 好好地在盘上。
+    """
+    def _entry(code: int) -> QueueEntry:
+        return QueueEntry(index=9, item=_item('sid', 'stage6.hook', 'hook'),
+                          state='landed_red' if code == 1 else 'failed', exit_code=code)
+
+    red = Q._stop_reason(_entry(1))
+    dead = Q._stop_reason(_entry(2))
+    assert '产物已落盘' in red and '不是「没跑成」' in red
+    assert '没跑成' in dead and '产物已落盘' not in dead
+    assert red != dead
+    for reason in (red, dead):
+        assert 'stage6.hook' in reason and '第 9 项' in reason
 
 
 # ───────────────────── 盘上真语料（零成本，不写一个字节） ─────────────────────
@@ -273,6 +344,34 @@ def test_one_novel_failure_marks_only_its_tail_not_run_and_other_book_finishes(
     assert 'must-not-run' not in calls and 'other-book-runs' in calls
 
 
+def test_landed_red_stops_its_lane_without_becoming_a_process_failure(
+        queue_base, monkeypatch):
+    _seed(queue_base, 'q-red-one-book', [
+        _item('book-a', 'stage6.hook', 'red'),
+        _item('book-a', 'stage7.rename', 'must-not-run'),
+        _item('book-b', 'stage0.remove', 'other-book-runs'),
+    ])
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    calls: list[str] = []
+
+    def spawn(argv, cwd, env, log):
+        calls.append(argv[-1])
+        return 1 if argv[-1] == 'red' else 0
+
+    run = Q.run(
+        queue_base, 'q-red-one-book', spawn=spawn,
+        registry=Q.QueueRegistry(), job_registry=J.JobRegistry())
+    a = run.counts_by_sid['book-a']
+    b = run.counts_by_sid['book-b']
+    assert run.state == 'landed_red'
+    assert (a.done, a.landed_red, a.failed, a.not_run) == (0, 1, 0, 1)
+    assert (b.done, b.landed_red, b.failed, b.not_run) == (1, 0, 0, 0)
+    assert 'must-not-run' not in calls and 'other-book-runs' in calls
+    red = next(entry for entry in run.entries if entry.item.sid == 'book-a')
+    assert red.state == 'landed_red' and red.exit_code == 1
+    assert red.note and '已经落盘' in red.note
+
+
 def test_cancel_accepts_pending_but_refuses_to_fake_cancel_a_running_call(
         queue_base, monkeypatch):
     _seed(queue_base, 'q-cancel-pending', [
@@ -328,6 +427,7 @@ def test_service_restart_recovers_unknown_job_from_artifact_truth_without_rerun(
         Q, '_live_disposition',
         lambda base, run, entry: (
             'done', None, 'formal artifact is present and fresh'))
+    monkeypatch.setattr(Q, '_current_plan_items', lambda _base, _start: [])
     calls: list[list[str]] = []
 
     def spawn(argv, cwd, env, log):
@@ -343,6 +443,140 @@ def test_service_restart_recovers_unknown_job_from_artifact_truth_without_rerun(
     after = Q.records(queue_base, registry=qreg)[0]
     assert after.state == 'ok' and after.counts_by_sid['book-a'].done == 1
     assert calls == [], '已成功且盘面 fresh 的付费项不许在重启恢复时重复启动'
+
+
+def test_service_restart_blocks_an_unfinished_paid_snapshot_until_reconfirmed(
+        queue_base, monkeypatch):
+    _seed(queue_base, 'q-paid-restart', [
+        _item('book-a', 'stage6.hook', 'paid-call', paid=True),
+    ])
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    monkeypatch.setattr(
+        Q, '_current_plan_items',
+        lambda _base, start: Q._ordered_items(start))
+    calls: list[list[str]] = []
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+
+    assert Q.resume_incomplete(
+        queue_base,
+        spawn=lambda argv, _cwd, _env, _log: calls.append(list(argv)) or 0,
+        registry=qreg, job_registry=jreg) == []
+    record = Q.records(queue_base, registry=qreg)[0]
+    assert record.state == 'blocked'
+    assert record.entries[0].waiting_on == Q.WAITING_ON_RESTART_CONFIRMATION
+    assert '不会复用旧队列' in (record.entries[0].note or '')
+    assert calls == []
+
+    # Neither the low-level runner nor a resume request without a fresh explicit
+    # confirmation may reinterpret the durable marker as spending permission.
+    still_blocked = Q.run(
+        queue_base, 'q-paid-restart',
+        spawn=lambda argv, _cwd, _env, _log: calls.append(list(argv)) or 0,
+        registry=qreg, job_registry=jreg)
+    assert still_blocked.state == 'blocked' and calls == []
+    with pytest.raises(ApprovalRequired, match=r'python -c paid-call'):
+        Q.resume(
+            queue_base, 'q-paid-restart', yes=False,
+            spawn=lambda argv, _cwd, _env, _log: calls.append(list(argv)) or 0,
+            registry=qreg, job_registry=jreg)
+    assert calls == []
+
+    resumed = Q.resume(
+        queue_base, 'q-paid-restart', yes=True,
+        spawn=lambda argv, _cwd, _env, _log: calls.append(list(argv)) or 0,
+        registry=qreg, job_registry=jreg)
+    assert resumed.state == 'ok' and len(calls) == 1
+
+
+def test_service_restart_auto_resumes_an_unchanged_free_snapshot(
+        queue_base, monkeypatch):
+    _seed(queue_base, 'q-free-restart', [
+        _item('book-a', 'stage0.remove', 'free-call'),
+    ])
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    monkeypatch.setattr(
+        Q, '_current_plan_items',
+        lambda _base, start: Q._ordered_items(start))
+    calls: list[str] = []
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+
+    resumed = Q.resume_incomplete(
+        queue_base,
+        spawn=lambda argv, _cwd, _env, _log: calls.append(argv[-1]) or 0,
+        registry=qreg, job_registry=jreg)
+    assert resumed == ['q-free-restart']
+    assert Q.wait('q-free-restart', 2)
+    assert calls == ['free-call']
+    assert Q.records(queue_base, registry=qreg)[0].state == 'ok'
+
+
+def test_changed_command_surface_blocks_instead_of_substituting_a_new_command(
+        queue_base, monkeypatch):
+    old = _item('book-a', 'stage5.write', 'old-paid', paid=True).model_copy(update={
+        'mode': None,
+        'flags': ['--deep', '1,2,3', '--shallow-rest'],
+    })
+    new = old.model_copy(update={
+        'flags': ['--deep', '2,4', '--shallow-rest'],
+        'steps': [_step('new-paid', paid=True)],
+    })
+    _seed(queue_base, 'q-plan-changed', [old])
+    monkeypatch.setattr(Q, 'plan_book', lambda *_args, **_kwargs: ([new], []))
+    run = Q.records(queue_base, registry=Q.QueueRegistry())[0]
+
+    disposition = Q._live_disposition(queue_base, run, run.entries[0])
+    assert disposition[0] == 'blocked'
+    assert disposition[1] == Q.WAITING_ON_REPLAN
+    assert '命令与队列创建时确认的快照不同' in disposition[2]
+
+
+def test_restart_detects_a_new_required_node_not_present_in_the_snapshot(
+        queue_base, monkeypatch):
+    old = _item('book-a', 'stage0.remove', 'old-free')
+    added = _item('book-a', 'stage1.partition', 'new-free')
+    _seed(queue_base, 'q-node-added', [old])
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    monkeypatch.setattr(
+        Q, '_current_plan_items', lambda _base, _start: [old, added])
+    calls: list[list[str]] = []
+    qreg, jreg = Q.QueueRegistry(), J.JobRegistry()
+
+    assert Q.resume_incomplete(
+        queue_base,
+        spawn=lambda argv, _cwd, _env, _log: calls.append(list(argv)) or 0,
+        registry=qreg, job_registry=jreg) == []
+    record = Q.records(queue_base, registry=qreg)[0]
+    assert record.state == 'blocked'
+    assert record.entries[0].waiting_on == Q.WAITING_ON_REPLAN
+    assert '节点/命令集合' in (record.entries[0].note or '')
+    assert calls == []
+
+    still_blocked = Q.run(
+        queue_base, 'q-node-added',
+        spawn=lambda argv, _cwd, _env, _log: calls.append(list(argv)) or 0,
+        registry=qreg, job_registry=jreg)
+    assert still_blocked.state == 'blocked' and calls == []
+
+
+def test_composite_queue_execution_rechecks_and_locks_the_saved_selection(
+        queue_base, monkeypatch):
+    item = _item('book-a', 'stage5.write', 'composite', paid=True).model_copy(update={
+        'mode': None,
+        'flags': ['--deep', '2,4', '--shallow-rest'],
+    })
+    _seed(queue_base, 'q-composite', [item])
+    monkeypatch.setattr(Q, '_live_disposition', _always_pending)
+    prepared: list[list[int]] = []
+    monkeypatch.setattr(
+        Q.approvals, 'begin_writing',
+        lambda _base, _sid, expected: prepared.append(list(expected)))
+
+    run = Q.run(
+        queue_base, 'q-composite',
+        spawn=lambda _argv, _cwd, _env, _log: 0,
+        registry=Q.QueueRegistry(), job_registry=J.JobRegistry())
+    assert run.state == 'ok'
+    assert prepared == [[2, 4]]
 
 
 def test_blocked_item_persists_what_it_is_waiting_for(queue_base):

@@ -14,14 +14,19 @@ screens.py —— 读屏路由（FE-01 点名的那批）。**全部纯读，一
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import PlainTextResponse
 
 from contracts.schema.api import (
-    GlobalView, InboxView, ReadingView, ReviewView,
+    GlobalReviewView, GlobalView, InboxView, ReadingView, ReviewView,
     Stage4View, Stage5View, Stage6View, Stage7View,
 )
 from novel.api.deps import checked_sid, get_base
+from novel import paths, prov
+from novel.orchestrator import state
+from novel.stages.stage7 import assemble
 from novel.views.inbox import inbox_view
+from novel.views.global_review import global_review_view
 from novel.views.stage2 import global_view, reading_view
 from novel.views.stage4 import stage4_view
 from novel.views.stage5 import review_view, stage5_view
@@ -70,6 +75,13 @@ def get_stage2_global(sid: str = Depends(checked_sid),
     return global_view(base, sid)
 
 
+@router.get('/{sid}/stage2/global-review', response_model=GlobalReviewView)
+def get_stage2_global_review(
+    sid: str = Depends(checked_sid), base: str = Depends(get_base),
+) -> GlobalReviewView:
+    return global_review_view(base, sid)
+
+
 @router.get('/{sid}/stage6', response_model=Stage6View, response_model_by_alias=True)
 def get_stage6(sid: str = Depends(checked_sid),
                base: str = Depends(get_base)) -> Stage6View:
@@ -84,6 +96,23 @@ def get_stage7(sid: str = Depends(checked_sid),
     return stage7_view(base, sid)
 
 
+@router.get('/{sid}/stage7/book.txt', response_class=PlainTextResponse)
+def get_stage7_book(
+    download: bool = Query(default=False),
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> PlainTextResponse:
+    """只返回当前已批准、输入新鲜且组装账闭合的最终交付物。"""
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    ctx = state.readonly_ctx(
+        novel_dir, 'stage7.assemble', prov.code_version())
+    text = assemble.read_current_book(ctx)
+    headers = {'Content-Disposition': 'attachment; filename="book.txt"'} if download else None
+    return PlainTextResponse(
+        text, media_type='text/plain; charset=utf-8',
+        headers=headers)
+
+
 @router.get('/{sid}/stage7/{ordinal}', response_model=Stage7View,
             response_model_by_alias=True)
 def get_stage7_chapter(ordinal: int, sid: str = Depends(checked_sid),
@@ -95,7 +124,7 @@ def get_stage7_chapter(ordinal: int, sid: str = Depends(checked_sid),
 @router.get('/{sid}/inbox', response_model=InboxView)
 def get_inbox(sid: str = Depends(checked_sid),
               base: str = Depends(get_base)) -> InboxView:
-    """待人工六类清单（`docs/BACKEND_CONTRACT.md` §七的 `human` 落面）。
+    """待人工八类清单（`docs/BACKEND_CONTRACT.md` §七的 `human` 落面）。
 
     ⚠ 它对每个已移植层各跑一次 0 成本复检（stage2/4 会重算判据）——**纯读**，
     大书上是秒级。`inbox_view` 的 docstring 说缓存归路由层：**登记不优化**，

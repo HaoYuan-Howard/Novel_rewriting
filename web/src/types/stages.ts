@@ -76,6 +76,76 @@ export interface Stage0EditRequest {
   expected_source_sha1: string
   expected_clean_sha1: string
   removed_segment_ids: string[]
+  actor: string
+  reason: string
+}
+
+export interface Stage0ApprovalRequest {
+  actor: string
+  reason: string
+}
+
+export interface TrimResolutionRequest {
+  /** Self-reported audit label; not an authenticated identity. */
+  actor: string
+  reason: string
+}
+
+export interface TrimResolution {
+  output_ordinal: number
+  mode: 'deep' | 'shallow'
+  action: 'retain_pretrim'
+  actor: string
+  reason: string
+  audit_sha256: string
+  before_sha256: string
+  after_sha256: string
+  chapter_rel: string
+  chapter_sha256: string
+  _provenance: Provenance
+}
+
+export interface Stage0MergeConflict {
+  id: string
+  base_span: [number, number]
+  base_text: string
+  ours_text: string
+  theirs_text: string
+}
+
+export interface Stage0MergeCandidate {
+  candidate_id: string
+  created_at: string
+  expected_round: number
+  expected_source_sha1: string
+  expected_clean_sha1: string
+  base_snapshot_sha256: string
+  base_clean_sha1: string
+  ours_clean_sha1: string
+  theirs_source_sha1: string
+  theirs_clean_sha1: string
+  base_text: string
+  ours_text: string
+  theirs_text: string
+  proposed_clean_text: string
+  conflicts: Stage0MergeConflict[]
+  theirs_snapshot: Record<string, unknown>
+}
+
+export interface Stage0MergeResolution {
+  conflict_id: string
+  choice: 'ours' | 'theirs' | 'custom'
+  custom_text: string | null
+}
+
+export interface Stage0MergeDecisionRequest {
+  candidate_id: string
+  expected_round: number
+  expected_source_sha1: string
+  expected_clean_sha1: string
+  resolutions: Stage0MergeResolution[]
+  actor: string
+  reason: string
 }
 
 export interface S0Block {
@@ -325,6 +395,62 @@ export interface Stage2Global {
   _provenance: Provenance
 }
 
+export interface EvidenceRef {
+  artifact: string
+  subject_sha256: string
+  start: number | null
+  end: number | null
+}
+
+export type GlobalReviewState = 'pending' | 'PASS' | 'FAIL' | 'UNVER'
+
+export type GlobalReviewKind =
+  | 'world_rule_version'
+  | 'secret'
+  | 'reveal'
+  | 'known_by'
+  | 'name_distinctiveness'
+  | 'address_context'
+  | 'world_rule_kind'
+  | 'world_rule_set_complete'
+  | 'secret_set_complete'
+
+export interface GlobalReviewItem {
+  item_id: string
+  kind: GlobalReviewKind
+  subject_path: string
+  subject_sha256: string
+  state: GlobalReviewState
+  evidence: EvidenceRef[]
+  actor: string | null
+  decided_at: string | null
+  reason: string | null
+}
+
+export interface GlobalReviewResponse {
+  /** Hash persisted with the review artifact. */
+  source_sha256: string
+  /** Hash recomputed from the current complete GlobalGrounding. */
+  current_subject_sha256: string
+  current: boolean
+  approved: boolean
+  items: GlobalReviewItem[]
+}
+
+export interface GlobalReviewDecision {
+  item_id: string
+  expected_subject_sha256: string
+  state: Exclude<GlobalReviewState, 'pending'>
+  reason: string
+  evidence: EvidenceRef[]
+}
+
+export interface GlobalReviewDecisionSet {
+  /** Self-reported audit label; not an authenticated identity. */
+  actor: string
+  decisions: GlobalReviewDecision[]
+}
+
 /* ---------------------------------------------------------------- stage3 */
 
 export interface StyleVoice {
@@ -396,8 +522,36 @@ export interface Stage3Style {
 
 /* ---------------------------------------------------------------- stage4 */
 
+export interface FactRef {
+  kind:
+    | 'character'
+    | 'event'
+    | 'world_rule'
+    | 'secret'
+    | 'relation'
+    | 'setting'
+    | 'chapter_boundary'
+  ref: string
+  chapter: number
+}
+
+export interface PlanGoal {
+  intent: 'establish' | 'advance' | 'open' | 'close' | 'withhold' | 'resolve'
+  fact_refs: FactRef[]
+  /** 审计理由；写手 prompt 会在进入模型前剥掉。 */
+  rationale?: string | null
+}
+
+/** Writer-facing goal: every planning ID has already been resolved by Stage4. */
+export interface CtxGoal {
+  intent: PlanGoal['intent']
+  facts: string[]
+}
+
 export interface PlanBeat {
   i: number
+  /** producer-owned 稳定槽位；模型不得重排或自造。 */
+  slot: string
   from_beats: string[]
   /** null 只出现在恒等基线上（算不出源字数的拍，不估算） */
   budget_chars: number | null
@@ -406,15 +560,16 @@ export interface PlanBeat {
 export interface PlanChapterLine {
   output_ordinal: number
   from_source_ordinals: number[]
-  chapter_goal: string
-  open_hook_goal: string
-  end_hook_goal: string
+  chapter_goal: PlanGoal
+  open_hook_goal: PlanGoal
+  end_hook_goal: PlanGoal
   beats: PlanBeat[]
 }
 
 /** 章索引一行。⚠ 没有 in_band/style_hits —— 那是判据结论，去 join /check/stage4。 */
 export interface Stage4IndexRow {
   output_ordinal: number
+  chapter_goal: string
   budget_chars: number | null
   span_chars: number | null
   beats: number
@@ -424,6 +579,7 @@ export interface Stage4IndexRow {
 
 /** 写手一拍的任务（`CtxBeat`）。 */
 export interface CtxBeat {
+  slot: string
   events: string[]
   budget_chars: number
   source_chars: number | null
@@ -441,12 +597,12 @@ export interface CtxBeat {
 export interface CtxChapter {
   output_ordinal: number
   from_source_ordinals: number[]
-  chapter_goal: string
-  open_hook_goal: string
-  end_hook_goal: string
+  chapter_goal: CtxGoal
+  open_hook_goal: CtxGoal
+  end_hook_goal: CtxGoal
   budget_chars: number | null
   source_chars: number
-  beats: CtxBeat[]
+  segments: CtxBeat[]
   characters: Record<string, { display_name: string; role: string }>
   narration: PlanNarration[]
   facts: Facts
@@ -504,6 +660,12 @@ export interface DraftAlign {
   note: string
 }
 
+export interface ChapterSegment {
+  /** producer-owned stable slot; the edit API must return the same complete slot set. */
+  slot: string
+  text: string
+}
+
 export interface Draft {
   mode: Mode
   relpath: string
@@ -515,6 +677,8 @@ export interface Draft {
   budget_chars: number | null
   source_chars: number
   overlap_excl_verbatim: number | null
+  /** schema-v2 disk authority; `text` below is a deterministic display projection. */
+  segments: ChapterSegment[]
   text: string
   /** null = 本章无锚可对（对齐辅助诚实缺席，不编分界线） */
   align: DraftAlign | null
@@ -581,6 +745,8 @@ export interface ReviewChapter {
   budget_chars: number | null
   round: number | null
   origin: string | null
+  /** null = 本章当前无稿；否则是人工编辑唯一允许提交的 typed 槽位集。 */
+  segments: ChapterSegment[] | null
   /** 当前盘上的正式稿正文（改稿入口贴着它）；null = 本章无稿 */
   text: string | null
   /** 已归档的轮次号（_rounds/），升序 */
@@ -635,6 +801,7 @@ export interface HookCandidate {
   /** measure() 那把尺子的去空白字数（服务端现算，与判据同源） */
   chars: number
   text: string
+  subject_sha256: string
   mech: HookMech
   findings: Finding[]
   semantic_state: 'clear' | 'contradiction' | 'uncertain' | 'unreviewed'
@@ -643,8 +810,10 @@ export interface HookCandidate {
   quality: HookQualityScores | null
   quality_score: number | null
   quality_rank: number | null
-  /** 只有最新质量审判为 clear 才能定稿 */
+  /** 最新质量审判为校准双盲 PASS；UNVER 另走 human_resolvable */
   selectable: boolean
+  /** 当前为 UNVER/缺 profile，但可由显式人工 resolution 消解 */
+  human_resolvable: boolean
   /** 这一条是不是当前定稿 */
   approved: boolean
 }
@@ -656,6 +825,13 @@ export interface HookApproved {
   origin: string
   mech: HookMech
   findings: Finding[]
+  resolution: {
+    actor: string
+    reason: string
+    subject_sha256: string
+    basis: 'calibrated_pass' | 'human_verification'
+    semantic_review_seq: number | null
+  }
 }
 
 export interface JudgedDraft {

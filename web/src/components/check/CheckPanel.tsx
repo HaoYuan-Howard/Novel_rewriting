@@ -67,7 +67,7 @@ function FindingRow({
         <span className="text-sm2 font-semibold">{f.item}</span>
         {f.wontfix ? (
           <span className="rounded-tag border border-line bg-sunken-2 px-6 py-1 text-mini text-ink-4">
-            已豁免：{f.wontfix}
+            已豁免：{f.wontfix.why}
           </span>
         ) : null}
         {f.unresolved_rounds ? (
@@ -77,7 +77,7 @@ function FindingRow({
           <span className="font-mono text-mini text-ink-4">根因第一嫌疑：{f.owner}</span>
         ) : null}
       </div>
-      <div className="prose-cn text-sm2 text-ink-2">{f.detail}</div>
+      <div className="prose-cn text-sm2 whitespace-pre-wrap text-ink-2">{f.detail}</div>
     </div>
   )
 }
@@ -103,7 +103,7 @@ function RuleBlock({
         <span className="font-mono text-mini text-ink-4">{line.rule}</span>
         <TwoAxisChips line={line} />
         {/* 「重跑修它」只画在服务端下发了 fix 的行上 —— 前端不拼 argv（R-11.8） */}
-        {allowRerun && line.status === 'hit' && fix ? (
+        {allowRerun && line.status === 'hit' && fix && fix.available !== false ? (
           <button
             type="button"
             className="cursor-pointer rounded-tag border border-line bg-card px-8 py-2 text-mini text-ink-2"
@@ -120,6 +120,11 @@ function RuleBlock({
             {fix.paid ? '付费重跑修它' : '重跑修它（0 成本）'}
           </button>
         ) : null}
+        {allowRerun && line.status === 'hit' && fix && fix.available === false ? (
+          <span className="rounded-tag border border-warn-line bg-warn-bg px-8 py-2 text-mini text-warn-ink">
+            不能自动重跑：{fix.unavailable_reason || '服务端没有给出可执行参数'}
+          </span>
+        ) : null}
         <span className="ml-auto font-mono text-mini text-ink-4">
           {line.status === 'hit' ? line.findings.length + ' 条' : null}
         </span>
@@ -127,6 +132,11 @@ function RuleBlock({
       {line.status === 'hit'
         ? line.findings.map((f, i) => <FindingRow key={i} f={f} onJumpChapter={onJumpChapter} />)
         : null}
+      {line.note ? (
+        <div className="prose-cn border-t border-line-row bg-sunken-2 px-20 py-9 text-sm2 whitespace-pre-wrap text-ink-3">
+          {line.note}
+        </div>
+      ) : null}
       {line.status === 'unver' || line.status === 'skipped' ? (
         <div className="prose-cn border-t border-line-row px-20 py-9 text-sm2 text-ink-3">
           {line.why ?? '这一条这次没验成——不是「没问题」。'}

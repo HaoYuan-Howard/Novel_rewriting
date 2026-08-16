@@ -108,7 +108,8 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 - 替换器按长度优先构造单一 alternation；`subs` 与 `kept` 同时参与，防止子串跨界。
 - 正文和已定稿文案使用同一替换器；书名只作为人工不可验证项报告。
 - 成书前要求每个输出章恰有一份正式成稿、没有 `.INVALID` 成稿，并且 Stage 6 文案已定稿。
-- `book.txt` 写入后，其 sha1、字符数与章节数进入 `book_txt`；`rn_txt_stale` 校验盘上文件。
+- `book.txt` 只能在当前 `name_map` 已人工批准、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑/重判会清空旧 `book_txt`（映射编辑同时清空旧批准），并将旧 txt 移到内容寻址的 `_rounds/` 归档。
+- 预览/下载端点复用组装前的 approved/current/fresh 闸并复核 `book_txt` 指纹与规模；只有文件存在而账或批准不成立时拒绝返回。
 
 ## 五、当前入口
 

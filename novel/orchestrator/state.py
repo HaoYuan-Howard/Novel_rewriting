@@ -20,7 +20,7 @@ routing 不符 ⇒ 重跑」。改成 Web 编排之后**整个消失，且没有
 """
 from __future__ import annotations
 
-from contracts.artifacts import STAGE4_PLAN_CHAPTERS, artifact_rel
+from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS, artifact_rel
 
 import os
 from pathlib import Path
@@ -158,6 +158,29 @@ def planned_chapters(store: ArtifactStore) -> list[int] | None:
     return sorted(int(c.output_ordinal) for c in out)
 
 
+def stage1_chapter_count(store: ArtifactStore) -> int | None:
+    """stage1 主正文里的真实章数；缺席或读不回时显式返回未知。"""
+    try:
+        main, _raw = store.read_own(ARTIFACTS[STAGE1_MAIN_TEXT], STAGE1_MAIN_TEXT)
+    except (ArtifactUnreadable, UpstreamMissing):
+        return None
+    return len(main.root)
+
+
+def numbered_produces(stage: str) -> dict[str, str]:
+    """本层里「轮次编号产物」的 `节点 → 模板`（`stage5.review` → `stage5/review_{n}.json`）。
+
+    ⚠ 与 `required_artifacts` 是**互补**的两半，合起来才覆盖 `produces` 全集：
+    那一半只收不带 `{}` 的，这一半只收「同目录一个编号占位符」的，
+    剩下的是逐章类（目录段也带占位符），归 `chapters_done`。
+    三条路各答各的问题，谁也不许拿另一条的答案顶替。
+    """
+    return {node: rel
+            for node, spec in NODES.items() if spec.stage == stage
+            for rel in spec.produces
+            if _is_pattern(rel) and paths.is_numbered_pattern(rel)}
+
+
 def stage_state(store: ArtifactStore, stage: str, *, modes: list[str]) -> StageState:
     """一层的处境。`done` 由逐份折叠出来，**不另存一格**。
 
@@ -165,13 +188,20 @@ def stage_state(store: ArtifactStore, stage: str, *, modes: list[str]) -> StageS
     `is_file()`。判据是「计划里的每个输出章，两条臂加起来都有成稿」——
     而**计划读不回来时结论是 `None`（判不了），不是 `False`**。
     压成 `False` 会让队列一次次去重跑一个可能已经写完的付费层。
+
+    ⚠ `rounds_done` 与 `done` **刻意不联动**：`stage5.review` 跑没跑过
+    不改变「这一层的成稿齐不齐」，而 `done` 是给导航与语料库徽章用的。
+    它只供续跑判定按节点各问各的（见 `resume_verdict`）。
     """
     arts = [artifact_state(store, rel) for rel in required_artifacts(stage)]
+    rounds = {node: paths.numbered_rounds(store.ctx.novel_dir, rel)
+              for node, rel in numbered_produces(stage).items()}
     if stage != 'stage5':
         done = all(a.exists and a.readable and a.freshness != 'stale' and not a.invalid
                    for a in arts) if arts else None
         reviewable = done is True or any(a.exists and a.readable for a in arts)
-        return StageState(stage=stage, artifacts=arts, done=done, reviewable=reviewable)
+        return StageState(stage=stage, artifacts=arts, done=done,
+                          rounds_done=rounds, reviewable=reviewable)
 
     per_mode = {m: chapters_done(store.ctx.novel_dir, m) for m in modes}
     written = {n for chs in per_mode.values() for n in chs}
@@ -179,7 +209,7 @@ def stage_state(store: ArtifactStore, stage: str, *, modes: list[str]) -> StageS
     done = None if want is None else bool(want) and set(want) <= written
     return StageState(
         stage=stage, artifacts=arts, done=done, chapters_done=per_mode,
-        reviewable=bool(per_mode),
+        rounds_done=rounds, reviewable=bool(per_mode),
     )
 
 
@@ -242,7 +272,8 @@ def readonly_ctx(novel_dir: Path, node: str, code: str) -> RunContext:
     当场踩 `R-11.3`（服务进程绝不落产物盘）。少一个参数不会报错，只会安静地写。
     """
     return RunContext(novel_dir=novel_dir, node=node, paid=False, code=code,
-                      cache=CachePolicy.default(), ledger=CostLedger(path=None))
+                      cache=CachePolicy.default(), ledger=CostLedger(path=None),
+                      readonly=True)
 
 
 def stage5_modes(novel_dir: Path) -> list[str]:
@@ -269,10 +300,13 @@ def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
         store = ArtifactStore(readonly_ctx(novel_dir, node, code))
         stages.append(stage_state(store, s, modes=modes))
 
+    chapter_store = ArtifactStore(readonly_ctx(
+        novel_dir, 'stage1.partition', code))
     return NovelOverview(
         sid=paths.derive_source_meta(novel_dir.name)[0],
         title=paths.title_of(novel_dir),
         dirname=novel_dir.name,
+        chapters=stage1_chapter_count(chapter_store),
         stages=stages,
         stage5_modes=modes,
         summary=overview_summary(stages),
@@ -315,6 +349,35 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
     if st is None:
         return RESUME_RUN, f'{spec.stage} 盘上没有可判定的产物'
 
+    # ⭐ 轮次编号产物（`review_{n}` / `semantic_{n}`）：**它有自己的账，不看 stage 级 `done`**。
+    #
+    # ⚠⚠ 这一支是实跑改出来的。此前它落进下面那条「逐章类」分支，于是
+    # `stage5.review`（0 成本全书验收）与 `stage5.semantic`（付费书级语义审判）
+    # 拿到的结论是 **stage5 的 `done`**——而那个 `done` 说的是「章稿写全了没有」。
+    # 章一写全，这两个节点就恒 `skip`，理由还写着「计划里的每个输出章都有成稿了」
+    # ——**一句正确的话，答的是另一个问题**。实测两本书跑完整条队列，
+    # 盘上一份 `review_*.json` / `semantic_*.json` 都没有，而队列把它们记成 `done`：
+    # 全链唯一的书级质量闸门静默缺席，且账面上看不出来。
+    # `stage6.semantic` 同形（它当时侥幸跑了，只因为 stage6 恰好有一份 `.INVALID` 把
+    # `done` 压成了假——靠一个 bug 抵消另一个 bug）。
+    #
+    # ⚠ 判据是**存在性**，不是新鲜度：轮次产物没有单份的新鲜度账
+    # （它们不进 `required_artifacts`，`artifacts[]` 里没有它们的行）。
+    # ⇒ 上游变过时它**不会**自动重来，那一步要人显式再跑一次。
+    # 这句限制写在返回的理由里，不藏着——「不知道」必须说出来（`Q-2`）。
+    numbered = [rel for rel in spec.produces
+                if _is_pattern(rel) and paths.is_numbered_pattern(rel)]
+    if numbered:
+        seen = st.rounds_done.get(node) or []
+        if seen:
+            return RESUME_SKIP, (
+                f'{node} 盘上已有第 {", ".join(str(n) for n in seen)} 轮'
+                f'（{", ".join(numbered)}）——已存在即跳过。'
+                f'⚠ 轮次产物没有单份新鲜度账：上游变过它不会自动重来，'
+                f'要重判就显式再跑一次这个节点')
+        return RESUME_RUN, (
+            f'{node} 盘上一轮都没有（{", ".join(numbered)}）')
+
     # 逐章类的层：结论挂在「计划里的每个输出章都有成稿吗」上，而那可能是**判不了**。
     if not [a for a in st.artifacts if a.rel in spec.produces]:
         got = {m: len(v) for m, v in st.chapters_done.items()}
@@ -339,9 +402,18 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
         return RESUME_RUN, f'产物不在盘上：{", ".join(a.rel for a in missing)}'
     invalid = [a for a in mine if a.invalid]
     if invalid:
+        # ⚠ 走到这里时正式稿**在盘上、读得回来、且不陈旧**（上面三道已经先答过了），
+        #   所以这份 `.INVALID` 只可能是**比它更晚**的一次被拦下的稿——
+        #   旧的那种「合格新稿落盘后残留下来的兄弟文件」已经由
+        #   `ArtifactStore.write` 在落盘前送进 `_rounds/` 了。
+        # ⚠⚠ **理由必须说出队列真正会做什么。** 原来这句写着「不必重新付费」而
+        #   函数返回的是 `run`——队列照着它去**重跑并重新付费**了一个付费节点（实测）。
+        #   一句与动作相反的解释，比不解释更贵。
         return RESUME_RUN, (
-            f'盘上有被闸门拦下的稿：{", ".join(paths.invalid_of(a.rel) for a in invalid)}'
-            f'——0 成本提升路是 `--revalidate`，不必重新付费')
+            f'盘上有比正式稿更晚、被闸门拦下的稿：'
+            f'{", ".join(paths.invalid_of(a.rel) for a in invalid)}。'
+            f'⚠ 队列会按原命令**重跑本节点**（付费节点=重新付费）；'
+            f'想先省钱就手动跑 0 成本提升路 `--revalidate`，或确认后再排队')
     unreadable = [a for a in mine if not a.readable]
     if unreadable:
         return RESUME_REDO, (
