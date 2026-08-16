@@ -58,10 +58,11 @@
 | `stage5.md` | `<mode>/chNN.json`（含 `.INVALID`）· `review_<n>.json` · `semantic_<n>.json` · `wontfix.json` · `_rounds/` 三种归档 · **`draft.md`（字节形态，§五）**<br>**全链唯一产出「书」的层**，也是**唯一带 LLM 返工回路**的层；两条写作臂共用正文 schema，机械验收与付费语义审判各自落盘 |
 | `stage6.md` | `hook.json` · `_rounds/hook.rN.json`　**全书级单次产出**（不是逐章），也是**唯一以「人定稿」当现役闸门**的层；<br>判据表分两半的边界是**产物类**（文案＝全文改写 ⇒ 连续文本探针结构性失效），不是判据质量 |
 | `stage7.md` | `name_map.json` · `_rounds/name_map.rN.json` · **`name_map_edit.json`（人产的输入，也是契约）** · **`book.txt`（字节形态，§四）**<br>**全链最后一层**，也是唯一产出交付物的一层；LLM 只写两个键，其余 19 个顶层键一个字都不经模型 |
-| `_common.md` | `_provenance` 的四个共有键 · **两把尺子**（40 位内容身份 / 10 位来源指纹）· `inputs` 的边 `{file, consumed}` · 新鲜度三态与**幽灵边** · `.INVALID` 与提升路（**签名里没有 `prompts`/`model`/`inputs`**）· 轮次账 · `Finding` 13 字段 · `usage` · 记账键的出口规则 |
+| `_common.md` | `_provenance` 的五个共有键（含必填 `root_clean_sha1`）· **两把尺子**（40 位内容身份 / 10 位来源指纹）· `inputs` 的边 `{file, consumed}` · 新鲜度三态与**幽灵边** · `.INVALID` 与提升路（**签名里没有 `prompts`/`model`/`inputs`**）· 轮次账 · `Finding` 14 字段 · `usage` · 记账键的出口规则 |
 | `_report.md` | `CheckReport`　**不是产物**——它是 `--check-only` 打印的、`/api/novels/:sid/check/:kind` 返回的那一份。B3 补 |
 | `_orchestration.md` | `Step` · 作业事件流 · 完成度 · 队列　**不是产物**——服务契约与产物契约改版节奏不同。D 补 |
 | `_api.md` | HTTP 响应　**不是产物**，也**不定路由表**（路由在 `docs/BACKEND_CONTRACT.md` §6.3）。E 补 |
+| `corpus.md` | current-schema corpus 的无正文 manifest、ledger 汇总与 `--require-corpus` 硬验收 |
 | （另有一份**不是 JSON**） | 〔本行已空。`stage5/draft.md` 并进 `stage5.md` §五、`stage7/book.txt` 并进 `stage7.md` §四：<br>它们的规则各只有几条硬机制，单独立一份反而会与产它的那一层分家〕 |
 
 ## 版本与路径注册表
@@ -74,6 +75,11 @@ schema 路由与 stage 真实读写均引用该目录。路径模板由 `artifac
 当前普通对象顶层带 `_schema_version`，RootModel 用 `{_schema_version,payload}` 信封。读取只接受
 注册表声明的当前版本；无标记、低版本和高版本都明确拒读，错误必须带文件与版本。当前 Pydantic
 模型同样不接受旧字段别名或双形状，需要保留的输入从产地按当前契约重新生成。
+
+版本不是全仓一个数字：`RemovalReport` 与所有既有带 `_provenance` 的 artifact 当前为 **v2**；
+Stage0 machine snapshot / merge candidate / hash-chain audit，以及 global review、trim audit 等新增
+artifact 从 **v1** 起步；其余无 provenance 的既有 artifact 仍为 v1。旧 v1 provenance artifact
+不手补 `root_clean_sha1`、不猜迁移，必须从 producer 重建。
 
 ## 反推工具
 
