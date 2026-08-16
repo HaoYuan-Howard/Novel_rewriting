@@ -235,6 +235,43 @@ def resolved_text(
     return text
 
 
+def make_audit_entry(
+    *,
+    seq: int,
+    previous_sha256: str | None,
+    action: str,
+    actor: str | None,
+    reason: str,
+    before_source_sha1: str | None,
+    before_clean_sha1: str | None,
+    after_source_sha1: str,
+    after_clean_sha1: str,
+    candidate_id: str | None = None,
+    at: str | None = None,
+) -> Stage0AuditEntry:
+    """Build one hash-complete audit entry without touching the filesystem.
+
+    The persisted path and ``stage0.remove --dry-run`` must preview the same
+    approval shape.  Keeping construction pure lets the dry-run report carry
+    the real ``auto_zero_hit`` decision and chain head without creating an
+    audit directory merely to explain what a first run would do.
+    """
+    stable = {
+        'seq': seq,
+        'previous_sha256': previous_sha256,
+        'action': action,
+        'actor': actor,
+        'reason': reason,
+        'before_source_sha1': before_source_sha1,
+        'before_clean_sha1': before_clean_sha1,
+        'after_source_sha1': after_source_sha1,
+        'after_clean_sha1': after_clean_sha1,
+        'candidate_id': candidate_id,
+    }
+    payload = {**stable, 'at': at or _now()}
+    return Stage0AuditEntry(entry_sha256=_digest(payload), **payload)
+
+
 def append_audit(
     ctx: RunContext,
     *,
@@ -272,8 +309,19 @@ def append_audit(
         if existing_stable == stable:
             return existing
         raise HumanEditProtected(f'审计序号 {seq} 已存在且内容不同；不可覆盖')
-    payload = {**stable, 'at': at or _now()}
-    entry = Stage0AuditEntry(entry_sha256=_digest(payload), **payload)
+    entry = make_audit_entry(
+        seq=seq,
+        previous_sha256=previous_sha256,
+        action=action,
+        actor=actor,
+        reason=reason,
+        before_source_sha1=before_source_sha1,
+        before_clean_sha1=before_clean_sha1,
+        after_source_sha1=after_source_sha1,
+        after_clean_sha1=after_clean_sha1,
+        candidate_id=candidate_id,
+        at=at,
+    )
     store.write(rel, entry)
     return entry
 

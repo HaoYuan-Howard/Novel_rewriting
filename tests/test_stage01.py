@@ -113,6 +113,43 @@ def test_stage0_current_pair_is_each_written_once():
     ]
 
 
+def test_first_zero_hit_dry_run_previews_auto_approval_without_writing(work):
+    source = _source(work, 'FQ_dry_auto_102.txt', 'enc_utf8_sig')
+    output = work / 'Output'
+
+    novel_dir, preview, check = run_source(source, output, dry_run=True)
+
+    assert check is None
+    assert preview.report.approved == 'approved'
+    assert preview.report.approval_origin == 'auto_zero_hit'
+    assert preview.report.approved_by is None
+    assert preview.report.audit_seq == 1
+    assert preview.report.audit_head_sha256
+    assert not output.exists() and not novel_dir.exists(), \
+        'dry-run 只能构造内存预览，不得创建 output/书目录/审计链'
+
+    written_dir, written, written_check = run_source(source, output)
+    assert written_dir == novel_dir
+    assert written.report.approved == preview.report.approved
+    assert written.report.approval_origin == preview.report.approval_origin
+    assert written_check is not None and written_check.passed
+
+
+def test_first_nonzero_hit_dry_run_stays_pending_without_writing(work):
+    source = _source(work, 'FQ_dry_pending_103.txt', 'end_marker_then_fanwai')
+    output = work / 'Output'
+
+    novel_dir, preview, check = run_source(source, output, dry_run=True)
+
+    assert check is None
+    assert preview.report.removed
+    assert preview.report.approved == 'pending'
+    assert preview.report.approval_origin is None
+    assert preview.report.audit_seq == 0
+    assert preview.report.audit_head_sha256 is None
+    assert not output.exists() and not novel_dir.exists()
+
+
 def test_disk_path_blocks_before_approval_then_writes_current_bytes(work):
     source = _source(work, 'FQ_book_123.txt', 'end_marker_then_fanwai')
     novel_dir, removal, initial = run_source(source, work / 'Output')

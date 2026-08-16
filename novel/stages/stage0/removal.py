@@ -255,6 +255,51 @@ def _write(store: ArtifactStore, result: RemovalResult) -> None:
     store.write(REPORT_REL, result.report)
 
 
+_AUTO_APPROVAL_REASON = (
+    '首次机器剔除零 removed、零 warning，且 clean 与归一化 source 完全一致'
+)
+
+
+def _auto_approval_eligible(report: RemovalReport) -> bool:
+    return (
+        not report.removed
+        and not report.warnings
+        and report.source_sha1 == report.clean_sha1
+    )
+
+
+def _with_auto_approval(
+    result: RemovalResult,
+    *,
+    ctx: RunContext | None,
+) -> RemovalResult:
+    """Return the first-run auto-approved shape; persist its audit only with a ctx."""
+    from novel.stages.stage0.merge import append_audit, make_audit_entry
+
+    kwargs = {
+        'seq': 1,
+        'previous_sha256': None,
+        'action': 'auto_approve',
+        'actor': None,
+        'reason': _AUTO_APPROVAL_REASON,
+        'before_source_sha1': None,
+        'before_clean_sha1': None,
+        'after_source_sha1': result.report.source_sha1,
+        'after_clean_sha1': result.report.clean_sha1,
+    }
+    entry = make_audit_entry(**kwargs) if ctx is None else append_audit(ctx, **kwargs)
+    return RemovalResult(
+        result.clean_text,
+        result.report.model_copy(update={
+            'approved': 'approved', 'approved_at': entry.at,
+            'approval_origin': 'auto_zero_hit', 'approved_by': None,
+            'audit_seq': entry.seq, 'audit_head_sha256': entry.entry_sha256,
+        }),
+        result.scan,
+        result.machine_snapshot,
+    )
+
+
 def run_source(source_path: str | Path, base: str | Path, *, force: bool = False,
                dry_run: bool = False, expected_sid: str | None = None) \
         -> tuple[Path, RemovalResult, CheckReport | None]:
@@ -339,32 +384,16 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
         from novel.stages.stage0.checks import run_check_only
         return novel_dir, kept, run_check_only(ctx)
 
+    # 第一次且机器零删除、零告警、clean 与归一化 source 完全相同，才可自动批准。
+    # 此时盘上还不存在任何历史轮次/审计链，因此不存在历史漂移可被掩盖。
+    if _auto_approval_eligible(result.report):
+        # dry-run 也返回真实的批准决策/链头形状，但用纯内存 entry，
+        # 绝不创建 novel_dir、_audit 或任何正式产物。
+        result = _with_auto_approval(result, ctx=None if dry_run else ctx)
+
     if dry_run:
         return novel_dir, result, None
 
-    # 第一次且机器零删除、零告警、clean 与归一化 source 完全相同，才可自动批准。
-    # 此时盘上还不存在任何历史轮次/审计链，因此不存在历史漂移可被掩盖。
-    auto = not result.report.removed and not result.report.warnings \
-        and result.report.source_sha1 == result.report.clean_sha1
-    if auto:
-        from novel.stages.stage0.merge import append_audit
-        entry = append_audit(
-            ctx, seq=1, previous_sha256=None, action='auto_approve', actor=None,
-            reason='首次机器剔除零 removed、零 warning，且 clean 与归一化 source 完全一致',
-            before_source_sha1=None, before_clean_sha1=None,
-            after_source_sha1=result.report.source_sha1,
-            after_clean_sha1=result.report.clean_sha1,
-        )
-        result = RemovalResult(
-            result.clean_text,
-            result.report.model_copy(update={
-                'approved': 'approved', 'approved_at': entry.at,
-                'approval_origin': 'auto_zero_hit', 'approved_by': None,
-                'audit_seq': entry.seq, 'audit_head_sha256': entry.entry_sha256,
-            }),
-            result.scan,
-            result.machine_snapshot,
-        )
     store.write(SNAPSHOT_REL, result.machine_snapshot)
     _write(store, result)
     from novel.stages.stage0.checks import run_check_only
