@@ -40,7 +40,7 @@ from typing import Any, Callable, Iterable, Iterator, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT,
+    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE0_SOURCE_TEXT,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE7_BOOK, STAGE7_NAME_MAP,
@@ -1065,19 +1065,50 @@ class ArtifactStore:
         clean_now = self._content_sha1_or_none(STAGE0_CLEAN_TEXT)
         clean_edge = self._content_edge(STAGE0_CLEAN_TEXT, clean_was, clean_now)
 
-        source = Path(source_path)
-        if not _is_file(source):
-            source_now = None
-        else:
+        source_edge = self._stage0_source_edge(source_path, source_was)
+        if source_edge is None:
+            return FreshnessReport('unknown', 'no_provenance')
+        return self._content_report((source_edge, clean_edge))
+
+    def _stage0_source_edge(self, original_path: str,
+                            source_was: str) -> prov.EdgeVerdict | None:
+        """源身份那条边。**外部源在就以它为准，`stage0/source.txt` 副本是回落。**
+
+        `None` ⇒ 判不了（解不开 / 读不了），由调用方折成 `no_provenance`。
+
+        ⚠⚠ **优先级刻意是「外部源优先」，不是「副本优先」。** 副本优先看着更稳，
+        却会拆掉一道现役保护：`_require_stage0_fresh` 在**写盘之后**问一次 freshness，
+        用来发现「提交这一批的过程中源文件被换掉了」并整批回滚。副本是在读源那一刻
+        落下的，它永远与产物自洽 ⇒ 副本优先会让那道闸永远为真，
+        于是「你批准的这份剔除，它的源已经不是刚才那份了」变成一句无人知晓的事。
+        外部源还在时它才是那个能反映「世界变了」的读数。
+
+        ⚠ 副本回落解决的是另一件事：外部源**不在了**。`original_path` 指向书目录之外，
+        Output 根搬家、语料被删、界面上传的原文随 `_service/` 迁走都会让它消失，
+        而那会连带让「不带 `--source` 复跑 stage0」失效（`novel/cli/main.py` 从它取源）。
+        实测过一次：界面上传的书原文落在 `<base>/_service/uploads/`，
+        摊平 Output 布局之后那条边就断了，而报告里的 `source_sha1` 明明还在。
+        ⇒ 有副本时，源的身份仍然答得出来，不必退化成「不知道」。
+
+        ⚠ 两边都不在才是 ghost。**不许因为有副本就把「原文彻底没了」说成好消息**，
+        也不许因为副本是后加的就把一批没有副本的旧书集体判成 ghost。
+        """
+        source = Path(original_path)
+        if _is_file(source):
             try:
                 from novel.core.ingest import DecodeProblem, decode_source_bytes
                 source_now = decode_source_bytes(source.read_bytes()).source_sha1
             except DecodeProblem:
-                return FreshnessReport('unknown', 'no_provenance')
+                return None
             except OSError:
-                return FreshnessReport('unknown', 'no_provenance')
-        source_edge = self._content_edge(str(source), source_was, source_now)
-        return self._content_report((source_edge, clean_edge))
+                return None
+            return self._content_edge(str(source), source_was, source_now)
+
+        if _is_file(self.path(STAGE0_SOURCE_TEXT)):
+            return self._content_edge(
+                STAGE0_SOURCE_TEXT, source_was,
+                self._content_sha1_or_none(STAGE0_SOURCE_TEXT))
+        return self._content_edge(str(source), source_was, None)
 
     def _stage1_freshness(self) -> FreshnessReport:
         report = self._freshness_payload(STAGE1_PARTITION_REPORT)

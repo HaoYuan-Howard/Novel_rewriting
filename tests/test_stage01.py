@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ import pytest
 from contracts.schema.api import PreviewRequest
 from contracts.schema.stage0 import RemovedSegment
 from novel import paths as novel_paths
+from novel import prov
 from novel.core.ingest import decode_source_bytes
 from novel.errors import (
     ApprovalRequired,
@@ -30,6 +32,7 @@ from novel.stages.stage0 import removal as stage0_removal
 from novel.stages.stage0.removal import (
     CLEAN_REL,
     REPORT_REL,
+    SOURCE_REL,
     _context,
     clean_round_rel,
     report_round_rel,
@@ -91,27 +94,59 @@ def test_stage01_packages_are_in_the_explicit_wheel_manifest():
     assert '"novel.stages.stage1"' in pyproject
 
 
-def test_stage0_current_pair_is_each_written_once():
+class _RecordingStore:
+    def __init__(self):
+        self.calls = []
+
+    def write_text(self, rel, value):
+        self.calls.append(('text', rel, value))
+
+    def write(self, rel, value):
+        self.calls.append(('json', rel, value))
+
+
+def test_stage0_current_trio_is_each_written_once():
     result = remove_bytes(
         _case('enc_utf8_sig').to_bytes(),
         original_path='FQ_once_101.txt',
         code='test',
     )
-    calls = []
+    store = _RecordingStore()
 
-    class RecordingStore:
-        def write_text(self, rel, value):
-            calls.append(('text', rel, value))
+    stage0_removal._write(store, result)
 
-        def write(self, rel, value):
-            calls.append(('json', rel, value))
-
-    stage0_removal._write(RecordingStore(), result)
-
-    assert calls == [
+    assert store.calls == [
+        ('text', SOURCE_REL, result.source_text),
         ('text', CLEAN_REL, result.clean_text),
         ('json', REPORT_REL, result.report),
     ]
+    # 副本必须是**归一后的源**，而且它的 sha1 就是报告里那一个 ⇒ 复算一步到位。
+    assert prov.content_sha1(
+        result.source_text.encode('utf-8')) == result.report.source_sha1
+
+
+def test_stage0_write_never_forges_the_source_copy_from_edited_text():
+    """`source_text=None` 时一个字都不许往 `stage0/source.txt` 写。
+
+    ⚠ 这是本批最要紧的一条。`_write` 被人工编辑路径复用（`run_edit_plan`），
+    那里传进来的是**编辑之后的正文**；无条件写副本就等于把改过的正文冒充成原文，
+    而伪造出来的那份还会通过 `source_sha1` 比对（报告里的 sha1 是跟着一起改的），
+    从此没有任何一层能发现原文已经不是原文。
+    """
+    result = remove_bytes(
+        _case('enc_utf8_sig').to_bytes(),
+        original_path='FQ_once_101.txt',
+        code='test',
+    )
+    edited = replace(result, clean_text=result.clean_text + '\n人工补的一段\n',
+                     source_text=None)
+    store = _RecordingStore()
+
+    stage0_removal._write(store, edited)
+
+    assert [rel for _kind, rel, _value in store.calls] == [CLEAN_REL, REPORT_REL]
+    assert all(value != edited.clean_text
+               for kind, rel, value in store.calls if rel == SOURCE_REL)
 
 
 def test_first_zero_hit_dry_run_previews_auto_approval_without_writing(work):
