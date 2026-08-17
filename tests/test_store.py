@@ -46,7 +46,7 @@ from novel.store import (
     ArtifactStore, SELF_FRESH_DETERMINISTIC, _filesystem_path,
     _json_pointer_diff,
 )
-from tests import corpus
+from tests import corpus, sandbox
 
 STYLE_REL = 'stage3/style_grounding.json'
 UPSTREAM = 'stage1/main_text.json'
@@ -1898,9 +1898,92 @@ def _NO_CORPUS(test):
                 f'——**这一条现在没在查，不是「查过没事」**'))(test)
 
 
+@pytest.fixture
+def only_the_unknown_half_of_the_freshness_postcondition_is_waived(monkeypatch):
+    """⚠⚠ **这不是把写盘闸关掉，是把那一条后置条件收窄成这个空沙箱答得出的那一半。**
+
+    `_assert_self_fresh`（`novel/store.py:1360-1372`）要 `state == 'fresh'` 才放行，
+    而往返测试刻意只搬全链根（形状往返不需要上游）⇒ 每条 `inputs` 边都是 `ghost`
+    ⇒ 恒 `unknown`。而这道闸真正防的那件事——「写盘方 ctx 与真正产地不一致」——
+    在 `novel/prov.py` 的口径里**恒落在 `stale`**（`consumed_changed` / `file_changed`）：
+    它是 `be3e6da` 为 `stage4.plan` 借自己的 ctx 去写 `stage4/writer_context.json`
+    那个 P0 加的，现场是一份刚组好的产物当场 `stale/consumed_changed`。
+    ⇒ 这里只放行 `unknown` 家族，`stale` **原样抛、原样回滚、原样用生产的措辞**。
+
+    ⚠⚠ **`unknown` 那一半在生产里仍然是被拒的，别照抄这段到别处。**
+    它抓得住 `consumed_undeclared`（漏登记投影）——`novel/consumption.py:352-356`
+    那条注释就是它抓到过一次的现场（`STAGE2_GLOBAL_EDIT` 那行投影是被它逼出来的），
+    而读侧 `_refuse_stale_upstream` 对 `unknown` 是放行的，写侧一放宽就没人守了。
+    ⇒ 豁免的作用域上界就是本文件；它由
+    `test_the_waiver_switches_off_nothing_but_the_unknown_half` 钉着。
+
+    ⚠ **先调生产那一个落点再判**，不复制那条「没有 `_provenance` 且不在
+    `SELF_FRESH_DETERMINISTIC` 里就早退」的判断。复制一份的代价是具体的：
+    `stage0/removal_report.json` 走 `_stage0_freshness()`，它会去 resolve 真实源文件
+    （reject-new-source 那条路会合法地把新 source 显示为 stale），而生产**根本不检查它**
+    ——自己算就会造出一条生产没有的红。
+    """
+    original = ArtifactStore._assert_self_fresh
+
+    def narrowed(self, rel, artifact):
+        try:
+            original(self, rel, artifact)
+        except ProvenanceRefused:
+            if self.freshness(rel).state == 'stale':
+                raise
+
+    monkeypatch.setattr(ArtifactStore, '_assert_self_fresh', narrowed)
+
+
+def test_the_waiver_lets_unknown_through_and_still_refuses_stale(
+        only_the_unknown_half_of_the_freshness_postcondition_is_waived):
+    """⭐ **豁免的两侧各钉一次 —— 这条是上面那个 fixture 的守卫本体。**
+
+    ⚠⚠ 旁边那几条（`test_global_review_source_drift_refuses_write_and_restores_previous_bytes`
+    等）守的是**没有豁免时**整条后置条件；它们不吃这个 fixture，所以
+    **把 `narrowed` 改宽成 `lambda *_: None` 它们一条都不会红**，而那样 127 条往返会在
+    写盘口后置条件全线放行的情况下照样全绿。⇒ 这条专门吃着 fixture 判两侧：
+
+    ① `unknown`（`ghost`：grounding 不在盘上）⇒ **放行**，这是豁免的全部作用面；
+    ② `stale`（`file_changed`：grounding 变了）⇒ **照旧拒，且正式路径逐字节回滚**。
+
+    走 `stage2/global_review.json` 是因为它在 `SELF_FRESH_DETERMINISTIC` 里
+    （无 `_provenance` 字段也照查），三态由 `_global_review_freshness` 现算
+    ——不用手搓 provenance 就能把两侧都造出来。
+    """
+    grounding = {'entities': {'characters': {}},
+                 'canon': {'world_rules': [], 'secrets': []}}
+
+    # ① unknown/ghost：grounding 不在盘上 ⇒ 算不出来 ⇒ 豁免放行
+    ghost_base = _book()
+    ghost_store = ArtifactStore(_ctx(ghost_base, node='stage2.global', paid=False))
+    landed = ghost_store.write(STAGE2_GLOBAL_REVIEW, build_review(grounding))
+    assert landed.is_file(), '豁免没生效——本条测试自己的前提就不成立了'
+    assert ghost_store.freshness(STAGE2_GLOBAL_REVIEW).state == 'unknown'
+
+    # ② stale/file_changed：写完之后动上游 ⇒ 必须照旧拒，且回滚
+    base = _book()
+    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+    store = ArtifactStore(_ctx(base, node='stage2.global', paid=False))
+    review = build_review(grounding)
+    official = store.write(STAGE2_GLOBAL_REVIEW, review)
+    before = official.read_bytes()
+
+    changed = copy.deepcopy(grounding)
+    changed['canon']['world_rules'].append({'rule_id': 'r1', 'kind': 'hard'})
+    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, changed)
+    assert store.freshness(STAGE2_GLOBAL_REVIEW).state == 'stale'
+
+    with pytest.raises(ProvenanceRefused, match='freshness 后置条件'):
+        store.write(STAGE2_GLOBAL_REVIEW, review)
+    assert official.read_bytes() == before, \
+        '豁免把回滚也一起吞了——`stale` 那一支必须原样走完生产的事务'
+
+
 @_NO_CORPUS
 @pytest.mark.parametrize('a', _CORPUS, ids=[f'{x.source_id[-4:]}/{x.rel}' for x in _CORPUS])
-def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
+def test_every_corpus_artifact_survives_a_write_read_round_trip(
+        a, only_the_unknown_half_of_the_freshness_postcondition_is_waived):
     """模型 → 盘上 → 模型，验证显式配置的每份当前产物。
 
     ⚠ A3 的语料体检做的是**单向**的（盘上 → 模型）。单向永远发现不了这一类：
@@ -1923,25 +2006,27 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(a):
     except ArtifactVersionError as error:
         pytest.fail(f'当前产物语料中混入了非当前版本：{error}')
 
-    base = Path(tempfile.mkdtemp())
-    landing = base / 'roundtrip_1'
-    landing.mkdir(parents=True)
     # ⚠ 写盘口那道闸要比对**全链根**（`_refuse_bad_provenance` → `root_clean_sha1`）：
     #   一个空目录里落任何带来源账的产物都会当场 `ProvenanceRefused`，
-    #   而本条要测的是**形状往返**，不是那道闸。⇒ 把这份产物自己那本书的根搬过来。
-    root = corpus.corpus_root() / a.book_dir / 'stage0/clean_text.txt'
-    if root.is_file():
-        (landing / 'stage0').mkdir(parents=True, exist_ok=True)
-        (landing / 'stage0/clean_text.txt').write_bytes(root.read_bytes())
-    ctx = RunContext.open(base, '1', 'stage3.style', paid=True, write_ledger=False)
-    st = ArtifactStore(ctx)
+    #   而本条要测的是**形状往返**，不是那道闸。⇒ 走 `sandbox.Sandbox`，它无条件带全链根。
+    #   ⚠⚠ **别把这段拷贝回来自己 mkdtemp**：`Sandbox` 的 docstring 记着这正是它存在的理由
+    #   （「两处手抄了拷贝代码，其余七个文件漏掉，17 条红在同一句话上」），
+    #   而这条测试曾经就是那两处手抄之一——它当时还带一个 `if root.is_file():` 的静默分支，
+    #   于是「这本书缺根」会伪装成一条形状回归。`Sandbox` 那里是会点名的 assert。
+    box = sandbox.Sandbox(a.book_dir, ())
+    try:
+        ctx = RunContext.open(box.root, box.sid, 'stage3.style',
+                              paid=True, write_ledger=False)
+        st = ArtifactStore(ctx)
 
-    p = st.write(a.formal_rel, obj)
-    assert b'\r' not in p.read_bytes()
-    written = json.loads(p.read_text(encoding='utf-8'))
-    logical = decode_artifact(a.formal_rel, written).payload
-    assert a.model.model_validate(logical) == obj, \
-        '读回来的模型与写出去的那一份不等——某个键在落盘形态里被抹掉或改了形状'
+        p = st.write(a.formal_rel, obj)
+        assert b'\r' not in p.read_bytes()
+        written = json.loads(p.read_text(encoding='utf-8'))
+        logical = decode_artifact(a.formal_rel, written).payload
+        assert a.model.model_validate(logical) == obj, \
+            '读回来的模型与写出去的那一份不等——某个键在落盘形态里被抹掉或改了形状'
+    finally:
+        box.close()
 
 
 @_NO_CORPUS
@@ -1960,3 +2045,55 @@ def test_the_round_trip_landing_is_a_writable_path_for_every_corpus_row():
         assert paths.round_no_of(formal) is None, f'{a.rel} 的落点仍带轮次号：{formal}'
         # `check_rel_deep` 是 `store.write` 自己那道路径闸；对不上会当场 `PathRefused`。
         assert paths.check_rel_deep(formal) == formal
+
+    # ⚠ **落点的另一半前提：沙箱建得起来。** 往返走 `sandbox.Sandbox`，它无条件搬全链根；
+    #   缺根时 `store.write` 会在 `_refuse_bad_provenance` 那道闸拒收，而那条红
+    #   **与真正的形状回归长得一模一样**。⇒ 把「这是环境缺料」摘出来单独点名，
+    #   否则一本书缺一个文件会表现成它名下几十条各自的形状红。
+    for book in sorted({a.book_dir for a in _CORPUS}):
+        root = corpus.corpus_root() / book / sandbox.CHAIN_ROOT
+        assert root.is_file(), (
+            f'{book} 缺 {sandbox.CHAIN_ROOT}——往返测的就不是形状了，'
+            f'而是「写盘口拒了一份没有根的写」')
+        assert book.rsplit('_', 1)[-1].isdigit(), \
+            f'{book} 的目录名解析不出 sid，`Sandbox` 建不出可用的 `RunContext`'
+
+
+@_NO_CORPUS
+def test_the_waiver_switches_off_nothing_but_the_unknown_half(
+        only_the_unknown_half_of_the_freshness_postcondition_is_waived):
+    """⭐ **前提守卫③：证明上面那条豁免的边界。**
+
+    `only_the_unknown_half_…` 读起来像「写盘闸关了」，而它只关了一条后置条件的一半。
+    没有本条，往后任何一次「顺手把它扩成 `lambda *_: None`」都不会有人出声，
+    而那会让 127 条往返在**写盘口全线放行**的情况下照样全绿。
+    ⇒ 在**同一个豁免生效的进程里**把写盘口另外两道闸各撞一次，两条都必须照旧拒绝。
+
+    ⚠ 这不是重复已有的守卫：`.INVALID` 路径闸与全链根比对各自都有非语料测试，
+    本条测的是**「豁免的作用域」**这条性质——全仓没有第二处守它。
+    """
+    a = next((x for x in _CORPUS if x.formal_rel == STYLE_REL), None)
+    corpus.declared_dependency(
+        a is not None, needs=f'任意一本书的 {STYLE_REL}',
+        produced_by='stage3.style', cost='付费')
+    obj = a.model.model_validate(corpus.load_current(a))
+
+    box = sandbox.Sandbox(a.book_dir, ())
+    try:
+        ctx = RunContext.open(box.root, box.sid, 'stage3.style',
+                              paid=True, write_ledger=False)
+        # ① `.INVALID` 路径闸（`novel/store.py:548-551`）：豁免不该让它放行。
+        with pytest.raises(PathRefused):
+            ArtifactStore(ctx).write(paths.invalid_of(a.formal_rel), obj)
+
+        # ② 全链根比对（`novel/store.py:1426-1429`）：把根改一个字节，写盘口必须当场拒。
+        #    ⚠ 要重开 `RunContext`——`root_clean_sha1` 是 run 级固化的，沿用旧 ctx
+        #    测到的是「它记住了改之前那份」，不是这道闸。
+        root = box.dir / sandbox.CHAIN_ROOT
+        root.write_bytes(root.read_bytes() + '　'.encode('utf-8'))
+        moved = RunContext.open(box.root, box.sid, 'stage3.style',
+                                paid=True, write_ledger=False)
+        with pytest.raises(ProvenanceRefused, match='拒绝混根'):
+            ArtifactStore(moved).write(a.formal_rel, obj)
+    finally:
+        box.close()
