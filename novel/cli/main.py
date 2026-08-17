@@ -10,8 +10,15 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     state <sid>                     这本书跑到哪了（产物存在性 + 来源新鲜度）
     inbox <sid>                     待人工八类清单（0 成本纯读；有待办≠失败）
     queue <sid…> --until <stage>    建立并执行持久批量队列；含付费项时要 `--yes`
+    queue-list                      现有队列一览（0 成本纯读）
+    queue-cancel <qid> <index>      取消队列里的某一项
+    queue-resume <qid>              续跑冻结的队列；含付费项时要重新 `--yes`
     jobs                            作业记录（新的在前）
     reconcile                       启动时把「运行中」一律改判「不知道」
+
+⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
+而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
+`tests/test_cli.py` 拿它与 argparse 实际注册的集合对账。
 
 ⚠⚠ **付费跑法必须带 `--yes`**（`Q-10`：花钱前必须人确认）。
 `build_argv` 会替付费的那条**自动补上**——到了构造 argv 那一步，
@@ -278,7 +285,15 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     if source is None:
         store = ArtifactStore(ctx)
         previous, _raw = store.read_own(RemovalReport, removal.REPORT_REL)
-        source = previous.original_path
+        # ⚠ 记录的那条是**书目录之外**的绝对路径，Output 根一搬家就断。界面上传的原文
+        #   其实跟着 base 走（`<base>/_service/uploads/<内容地址>/`），重锚认得回来；
+        #   外部语料被删则认不回来，此时**照旧把记录的那条传下去**——
+        #   让 `run_source` 给出那句说得清的 `UpstreamMissing`，不在这里改写成别的理由。
+        from novel.core.source import resolve_recorded_source
+        found = resolve_recorded_source(previous.original_path, ctx.novel_dir.parent)
+        # 重锚成功时复跑会把 `original_path` 重新记成当前 base 下的位置（`removal._write`
+        # 记的是这次实际读的那条），于是这本书的源身份边自己就长回来了。
+        source = previous.original_path if found is None else found
     novel_dir, result, _report = removal.run_source(
         source,
         ctx.novel_dir.parent,

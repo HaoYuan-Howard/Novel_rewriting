@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Validate the project-local novel pipeline skill without third-party packages."""
+"""Validate the project-local novel pipeline skill against the live registries.
+
+不引入 pytest/yaml 这类工具依赖，但**必须用项目解释器跑**（`novel_refactor` 环境）：
+「这条入口会不会写盘」的真值只有一个落点 `novel/orchestrator/nodes.py::write_effect`，
+而那条 import 链上有 pydantic。**不要在这里重拼一份 `WRITE_EFFECTS.get(f) == ''` 的规则**
+——它判不出 `stage6.hook --identity` 不写盘而 `stage7.rename --identity` 重写 name map
+这类跨节点例外，正是 `NODE_WRITE_EFFECTS` 存在的理由。换个解释器跑会走 `main()` 的
+崩溃分支报 FAIL，不会假绿。
+
+需要 pydantic 模型实例才能验的事（`render()` 的真实输出、CLI 真跑）不放这里，
+放 `tests/test_skill_operator.py`；本文件只做"读代码 + 读文档"的静态对账。
+"""
 from __future__ import annotations
 
 import ast
@@ -60,14 +71,93 @@ def _local_links(path: Path, text: str) -> list[Path]:
     return links
 
 
-def _invariants(root: Path):
-    """注册表本体。**行为断言全部从它反查**，不在校验器里手抄第二份清单。"""
-    sys.path.insert(0, str(root))
-    try:
-        from contracts import invariants
-    finally:
-        sys.path.pop(0)
-    return invariants
+class _Production:
+    """生产侧真值。**行为断言全部从它反查**，不在校验器里手抄第二份清单。"""
+
+    def __init__(self, root: Path) -> None:
+        sys.path.insert(0, str(root))
+        try:
+            from contracts import invariants
+            from contracts.rules import REGISTRY
+            import contracts.judges  # noqa: F401  判据靠 import 副作用注册进 REGISTRY
+            from novel.orchestrator.nodes import is_paid, write_effect
+        finally:
+            sys.path.pop(0)
+        self.inv = invariants
+        self.registry = REGISTRY
+        self.is_paid = is_paid
+        self.write_effect = write_effect
+
+    def writes(self, node: str, flag: str) -> str:
+        """这一条入口会往盘上写什么；空串 = 只看不动。取自生产那一个落点。"""
+        return self.write_effect(node, [flag])
+
+    def free_writing_pairs(self) -> list[tuple[str, str]]:
+        """0 成本**且会改动盘上产物**的 `(节点, 入口)`。
+
+        「入口」用 `FREE_ENTRIES` 划界，不用 `VALUED_FLAGS`：后者按仓里的说法是
+        「带值的参数，不是入口」（`--actor` / `--reason` / `--pick` 属于这一类），
+        把它们逼进允许写入面表只会制造噪音。
+        """
+        return [(node, flag)
+                for node, spec in self.inv.NODES.items()
+                for flag in spec.flags
+                if flag in self.inv.FREE_ENTRIES and self.writes(node, flag)]
+
+    def writing_pairs(self) -> list[tuple[str, str]]:
+        """所有 0 成本且会写盘的 `(节点, flag)`，含带值参数。断言 A 用它。"""
+        return [(node, flag)
+                for node, spec in self.inv.NODES.items()
+                for flag in spec.flags
+                if not self.is_paid(node, [flag]) and self.writes(node, flag)]
+
+
+def _strip_code(text: str) -> str:
+    """剥掉 ``` 块与行内 code span 之后的散文。
+
+    命令、路径、终端输出里的数字**是数据**；散文里的同一个数字才是会过期的历史日志。
+    不剥就只能在「假红」和「不查」之间二选一，而这两条本仓都禁止。
+    """
+    text = re.sub(r"(?ms)^```.*?^```", "", text)
+    return re.sub(r"`[^`\n]*`", "", text)
+
+
+def _dict_constant(path: Path, name: str) -> dict:
+    """模块级 `NAME = {字面量: 字面量}`。ast 读，不 import。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name) \
+                and node.targets[0].id == name and isinstance(node.value, ast.Dict):
+            return ast.literal_eval(node.value)
+    return {}
+
+
+def _subcommands(path: Path) -> set[str]:
+    """argparse 注册的子命令名。ast 读，不 import。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "add_parser" and node.args:
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                names.add(arg.value)
+    return names
+
+
+def _defined_names(path: Path) -> set[str]:
+    """一个模块里定义过的名字（函数/类/赋值，含嵌套）。ast 读，不 import。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
 
 
 def _section(text: str, heading: str) -> str:
@@ -120,19 +210,29 @@ def _build_prompt_source(path: Path) -> str:
     return ""
 
 
+#: 中文数词 → 整数。只覆盖终审模板里会出现的量级。
+_CN_NUMERALS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+                "七": 7, "八": 8, "九": 9, "十": 10}
+
+
 def _behaviour_errors(
     root: Path,
-    inv,
+    prod: _Production,
     skill_text: str,
     workflow: str,
     skill_texts: dict[Path, str],
+    counters: dict[str, int],
 ) -> list[str]:
     """「文档声称的 CLI 行为」与「代码实际行为」的对账。
 
     结构检查（链接、节点顺序、经验格式）测不到这一类：一次真实复盘里
     `--advisory` 这条注册在案的付费主路径**整个 skill 一次都没提**，
-    每本书因此白丢一整层证据，而校验器全绿。三条断言各钉一个已发生的漏法。
+    每本书因此白丢一整层证据，而校验器全绿。下面每一条都钉一个已发生的漏法。
+
+    ⚠ 失败文案一律指向**文档**。红的是 skill 说错了，不是注册表写错了——
+    把人指向 `contracts/invariants.py` 去改注册表是这一类守卫最贵的假红。
     """
+    inv = prod.inv
     errors: list[str] = []
 
     # ① inbox 分类反查：文档少写一类，执行者就得自己猜它算不算阻断。
@@ -145,6 +245,7 @@ def _behaviour_errors(
         errors.append("recovery.md 不在盘上，inbox 分类反查无从谈起")
         recovery = ""
     for kind in inv.INBOX_KIND:
+        counters["inbox_kinds"] += 1
         if f"`{kind}`：" not in recovery:
             errors.append(
                 f"recovery.md 没有 `{kind}` 这一类的读法（inbox 共 {len(inv.INBOX_KIND)} 类）"
@@ -181,6 +282,7 @@ def _behaviour_errors(
 
     # ③ 退出码反查：`结果判定` 表少一行，执行者会把未登记的码当成未知崩溃。
     codes = _int_constants(root / "novel" / "cli" / "exit_codes.py")
+    counters["exit_codes"] = len(codes)
     documented = {
         int(value)
         for value in re.findall(r"(?m)^\|\s*(\d+)\s*\|", _section(workflow, "## 结果判定"))
@@ -192,10 +294,151 @@ def _behaviour_errors(
             f"  代码：{sorted(codes)}"
         )
 
+    # ④【断言 A】会改动盘上产物的 0 成本入口，必须至少被提过一次。
+    #   这是 ② 反向那条的另一半，理由同样强、而且方向相反的两种漏法都真发生过：
+    #   漏 `--review-decisions` ⇒ 本可 0 成本销账的 verification 留成了余额；
+    #   漏 `--identity` ⇒ 执行者以为「只是看看」，而它在 stage7 直接重写 name map。
+    for node, flag in sorted(prod.writing_pairs()):
+        counters["writing_flags"] += 1
+        if flag not in used:
+            errors.append(
+                f"会改动盘上产物的 0 成本入口 `{flag}` 挂在 `{node}` 上，"
+                f"而整个 skill 一次都没提它。它会：{prod.writes(node, flag)}\n"
+                f"    → 补进 references/recovery.md 的「允许写入面」或对应处置段落；"
+                f"确认它对受托 agent 不适用时，也要写一句「不使用它」并说明理由，不能靠沉默"
+            )
+
+    # ⑤【断言 B】「允许写入面」表与 `NODES[node].flags` 双向对账。
+    #   散文里的「本层没有 X」不可判定，所以把它转成「表必须覆盖 X」——
+    #   `stage2.global` 明明挂着 `--apply-edit`，文档却写「本层没有通用 --apply-edit」，
+    #   而同一 skill 的 FN-007 正在指示走这条路。只有这条断言抓得住那种否定陈述。
+    surface = {
+        node: set(re.findall(r"--[a-z][a-z0-9-]*", cell))
+        for node, cell in re.findall(
+            r"(?m)^\|\s*`([a-z0-9]+\.[a-z]+)`\s*\|([^|]*)\|", recovery)
+    }
+    counters["write_surface_rows"] = len(surface)
+    for node, flags in sorted(surface.items()):
+        spec = inv.NODES.get(node)
+        if spec is None:
+            errors.append(f"「允许写入面」表里的 `{node}` 不是注册在案的节点")
+            continue
+        for flag in sorted(flags - set(spec.flags)):
+            errors.append(
+                f"「允许写入面」把 `{flag}` 写在 `{node}` 那一行，"
+                f"而该节点不接受它（现有：{sorted(spec.flags)}）"
+            )
+    for node, flag in sorted(prod.free_writing_pairs()):
+        counters["free_writing_pairs"] += 1
+        if flag not in surface.get(node, set()):
+            errors.append(
+                f"「允许写入面」表少了 (`{node}`, `{flag}`)。该层确实接受它，"
+                f"且它会：{prod.writes(node, flag)}\n"
+                f"    → 补这一行；不要去改注册表"
+            )
+
+    # ⑥【断言 I】判据 `fix` 指名的路由，skill 必须提过。
+    #   与 ④ 并存不合并：④ 说「这条路会改产物，你得知道它存在」，
+    #   ⑥ 说「finding 会当场指着这条路，而 skill 里没有它」。
+    #   将来若有 fix 指向只读 flag，④ 抓不到、⑥ 抓得到。
+    routes = {tuple(rule.fix) for rule in prod.registry.all() if getattr(rule, "fix", None)}
+    counters["fix_routes"] = len(routes)
+    for route in sorted(routes):
+        if len(route) < 2:
+            continue
+        node, flag = route[0], route[1]
+        if flag not in used:
+            errors.append(
+                f"判据的 `fix` 路由指向 `{node} {flag}`，而整个 skill 一次都没提它"
+                f"——执行者读到 finding 的 fix 会不知道那是哪一类成本。"
+                f"\n    → 补进 references/recovery.md 的 `deterministic` 说明"
+            )
+
+    # ⑦【断言 F】子命令**正向**对账。
+    #   刻意不做反向：queue 系列是 UI/批量路径，硬要求全提会与
+    #   「一次只运行一个写盘节点」的主循环打架，那是典型假红。
+    registered = _subcommands(root / "novel" / "cli" / "main.py")
+    counters["cli_subcommands"] = len(registered)
+    written = {token for body in skill_texts.values()
+               for token in re.findall(r"novel\.cli\s+([a-z][a-z-]*)", body)}
+    for token in sorted(written - registered):
+        errors.append(
+            f"skill 写了 `novel.cli {token}`，而 novel/cli/main.py 没有注册这个子命令"
+            f"（现有：{sorted(registered)}）"
+        )
+
+    # ⑧【断言 E】推荐过滤正则必须接住每一种非 ok 状态。
+    #   过滤吞掉 `[--]`、`── 来源 ──` 或 `⚠` 就不再是「只改变读法」了。
+    #   真值取 `render.py::_STATUS_MARK`，不在这里手抄第二份标记表。
+    marks = _dict_constant(root / "novel" / "report" / "render.py", "_STATUS_MARK")
+    profiles_path = SKILL_DIR / "references" / "runtime-profiles.md"
+    pattern_match = re.search(
+        r"Select-String -Pattern '([^']+)'",
+        profiles_path.read_text(encoding="utf-8") if profiles_path.is_file() else "")
+    if not marks:
+        errors.append("读不到 render.py::_STATUS_MARK，过滤正则的对账无从谈起")
+    elif not pattern_match:
+        errors.append("runtime-profiles.md 里找不到 `Select-String -Pattern '...'` 的推荐过滤")
+    else:
+        pattern = pattern_match.group(1)
+        counters["status_marks"] = len(marks)
+        try:
+            compiled = re.compile(pattern)
+        except re.error as exc:
+            errors.append(f"runtime-profiles.md 的过滤正则编译不过：{exc}")
+            compiled = None
+        if compiled is not None:
+            for status, mark in sorted(marks.items()):
+                hit = compiled.search(f"  {mark} some_rule  详情")
+                if status != "ok" and not hit:
+                    errors.append(
+                        f"推荐过滤会吞掉 `{mark}`（{status}）那一类行。"
+                        f"render.py::_STATUS_MARK 有 {len(marks)} 种标记，"
+                        f"而 workflow.md 明写各态「各自保留语义」。"
+                        f"\n    → 改 runtime-profiles.md 里的正则，不要改 render.py"
+                    )
+                if status == "ok" and hit:
+                    errors.append(
+                        f"推荐过滤连 `{mark}` 也一并留下了，那它就没有在过滤"
+                        f"——这条反向自检防的是把正则写成 `.*` 换绿灯"
+                    )
+            for line, why in (
+                ("── 来源 ── fresh（原因）", "freshness 的唯一出处"),
+                ("  ⚠ 判的这一份是 .INVALID 稿", "把 .INVALID 稿读成正式结论"),
+                ("  [????] some.key：未记录 —— item", "「没人说」与「没有」分不开"),
+            ):
+                if not compiled.search(line):
+                    errors.append(f"推荐过滤吞掉了 `{line.strip()}`——{why}")
+
+    # ⑨【断言 C】终审模板的计数口径必须跟着 `INBOX_KIND` 走。
+    #   `860e1b1` 那次十二处对账改了七个文件，独独漏了模板，而模板才是用户读到的那份。
+    template_text = skill_texts.get(SKILL_DIR / "assets" / "final-review-template.md", "")
+    for written_count in re.findall(r"([一二三四五六七八九十]|\d+)\s*类计数", template_text):
+        value = _CN_NUMERALS.get(written_count, None)
+        if value is None:
+            value = int(written_count) if written_count.isdigit() else None
+        if value is not None and value != len(inv.INBOX_KIND):
+            errors.append(
+                f"终审模板写「{written_count}类计数」，而 INBOX_KIND 是 "
+                f"{len(inv.INBOX_KIND)} 类（recovery.md 与 SKILL.md 已经是八类，只有模板漏改）"
+            )
+
     return errors
 
 
-def validate() -> list[str]:
+def validate(counters: dict[str, int] | None = None) -> list[str]:
+    """返回逐条问题；`counters` 填的是**扫描分母**。
+
+    绿灯必须带分母：只说「一致」看不出查了几条，正则失配或 glob 变空时会全绿。
+    `main()` 在 PASS 分支把它们印出来，`tests/test_skill_operator.py` 给每个计数设下界。
+    """
+    if counters is None:
+        counters = {}
+    for key in ("markdown_files", "links", "inbox_kinds", "exit_codes", "fn_entries",
+                "writing_flags", "free_writing_pairs", "write_surface_rows",
+                "fix_routes", "cli_subcommands", "status_marks",
+                "template_headings", "evidence_symbols"):
+        counters.setdefault(key, 0)
     errors: list[str] = []
     root = _repo_root()
     text = SKILL.read_text(encoding="utf-8")
@@ -222,8 +465,6 @@ def validate() -> list[str]:
     line_count = len(text.splitlines())
     if line_count >= 500:
         errors.append(f"SKILL.md 共 {line_count} 行，应少于 500 行")
-    if re.search(r"(?im)(?:^|\s)v\d+(?:\.\d+)*\b|20\d{2}(?:年|[-/])", body):
-        errors.append("SKILL.md 含版本号或日期残留；历史应由 Git/经验证据承担")
 
     markdown_files = [SKILL, *sorted((SKILL_DIR / "references").glob("*.md"))]
     asset_template = SKILL_DIR / "assets" / "final-review-template.md"
@@ -235,7 +476,9 @@ def validate() -> list[str]:
             continue
         linked_text = path.read_text(encoding="utf-8")
         skill_texts[path] = linked_text
+        counters["markdown_files"] += 1
         for target in _local_links(path, linked_text):
+            counters["links"] += 1
             if not target.exists():
                 errors.append(
                     f"失效链接：{path.relative_to(SKILL_DIR)} -> {target}"
@@ -248,7 +491,32 @@ def validate() -> list[str]:
                 f"reference 未从 SKILL.md 直接链接：{reference.relative_to(SKILL_DIR)}"
             )
 
-    inv = _invariants(root)
+    # 【断言 D】日期、版本号与无锚的一次性读数——**全部 skill markdown**，不只 SKILL.md。
+    # 那条唯一的日期戳能长期活着，就是因为原来只查 SKILL.md 正文。
+    # 先剥代码块与行内 code，再扫散文：不剥的话「每 60 秒汇报一次」这种合法指令会假红。
+    for path in sorted(skill_texts, key=str):
+        prose = _strip_code(skill_texts[path])
+        rel = path.relative_to(SKILL_DIR)
+        if re.search(r"(?im)(?:^|\s)v\d+(?:\.\d+)*\b|20\d{2}(?:年|[-/])", prose):
+            errors.append(
+                f"{rel} 的正文里写了日期或版本号。"
+                f"「何时改过」由 Git 回答，schema 版本由 `--emit-edit-template` 现取"
+            )
+        for sentence in re.split(r"[。！？\n]", prose):
+            if re.search(r"实测|实跑", sentence) and re.search(r"\d", sentence):
+                errors.append(
+                    f"{rel} 有一处带数字的「实测/实跑」读数且没有 freshness 锚："
+                    f"{sentence.strip()[:60]}\n"
+                    f"    → 它明年还对吗？保留「为什么这么做」，删掉「当时量到多少」"
+                )
+        for unit in re.findall(r"\d+(?:\.\d+)?\s*(?:KB|MB|GB|%)", prose):
+            errors.append(
+                f"{rel} 的正文写了一次性体量/比例读数 `{unit}`；"
+                f"改成定性表述，判据条数与报告体积都会随注册表增删而变"
+            )
+
+    prod = _Production(root)
+    inv = prod.inv
 
     workflow = (SKILL_DIR / "references" / "workflow.md").read_text(encoding="utf-8")
     match = re.search(
@@ -270,7 +538,7 @@ def validate() -> list[str]:
                 f"  代码：{actual}"
             )
 
-    errors += _behaviour_errors(root, inv, text, workflow, skill_texts)
+    errors += _behaviour_errors(root, prod, text, workflow, skill_texts, counters)
 
     notes_path = SKILL_DIR / "references" / "field-notes.md"
     notes = notes_path.read_text(encoding="utf-8")
@@ -280,9 +548,20 @@ def validate() -> list[str]:
         errors.append("经验库没有 FN-NNN 条目")
     if len(ids) != len(set(ids)):
         errors.append(f"经验 ID 重复：{ids}")
+    counters["fn_entries"] = len(ids)
     required_fields = ("状态", "触发", "判断", "处置", "验证", "依据")
     allowed_statuses = {"contract-confirmed", "observed", "open-gap"}
+    # 【断言 J】活动缺口编号的现役形态是 `TODO-NN`。
+    # 校验器此前查的是 `BE-`/`VAL-`，而 REQUIREMENTS 里这类编号一个都没有
+    # ——两个方向都会假红，只因当前没有 open-gap 条目才一直没爆。
+    # 存在性用**标题集合成员判定**，不用子串：`'TODO-2' in text` 会被 `TODO-24` 假匹配。
     requirements = (root / "docs" / "REQUIREMENTS.md").read_text(encoding="utf-8")
+    open_todos = set(re.findall(r"(?m)^###\s+(TODO-\d+)\s+·", requirements))
+    if not open_todos:
+        errors.append(
+            "docs/REQUIREMENTS.md 里读不到任何 `### TODO-NN ·` 标题；"
+            "缺口编号反查无从谈起（守卫读不到就当没查，是本仓明令禁止的形状）"
+        )
     for index, entry in enumerate(entry_matches):
         end = entry_matches[index + 1].start() if index + 1 < len(entry_matches) else len(notes)
         block = notes[entry.end() : end]
@@ -293,14 +572,34 @@ def validate() -> list[str]:
         if status and status.group(1) not in allowed_statuses:
             errors.append(f"{entry.group(1)} 状态非法：{status.group(1)}")
         if status and status.group(1) == "open-gap":
-            issue_ids = re.findall(r"\b(?:BE|VAL)-\d+\b", block)
+            issue_ids = re.findall(r"\bTODO-\d+\b", block)
             if not issue_ids:
-                errors.append(f"{entry.group(1)} 是 open-gap 但没有活动缺口编号")
+                errors.append(
+                    f"{entry.group(1)} 是 open-gap 但没有活动缺口编号"
+                    f"（现役形态是 docs/REQUIREMENTS.md 的 `TODO-NN`）"
+                )
             for issue_id in issue_ids:
-                if issue_id not in requirements:
+                if issue_id not in open_todos:
                     errors.append(
-                        f"{entry.group(1)} 引用的 {issue_id} 已不在 REQUIREMENTS；重新验证并退役"
+                        f"{entry.group(1)} 引用的 {issue_id} 已不在 REQUIREMENTS"
+                        f"——编号不重排、完成即删，所以那个缺口已经修了。"
+                        f"重新验证这条经验：改成 contract-confirmed 并补依据，或按生命周期第 7 步退役"
                     )
+        # 【断言 H】`依据` 里写成 `路径::符号` 的引用必须落地。
+        # 只查已经写了这个形态的，不强制每条都有——强制会让那批散文依据当场全红，
+        # 那是内容工作，不是守卫该逼出来的。
+        for rel_path, symbol in re.findall(
+                r"`((?:novel|contracts|tests|tools)/[\w./-]+\.py)::(\w+)[^`]*`", block):
+            counters["evidence_symbols"] += 1
+            target = root / rel_path
+            if not target.is_file():
+                errors.append(f"{entry.group(1)} 的依据指着 {rel_path}，该文件不在盘上")
+            elif symbol not in _defined_names(target):
+                errors.append(
+                    f"{entry.group(1)} 的依据指着 {rel_path}::{symbol}，该符号不在盘上。"
+                    f"经验的价值等于它的依据能不能回查"
+                    f"\n    → 改成当前符号名，或按经验生命周期第 7 步退役这一条"
+                )
 
     template = asset_template.read_text(encoding="utf-8")
     required_headings = (
@@ -313,6 +612,7 @@ def validate() -> list[str]:
         "## 7. 恢复路径与证据指针",
     )
     for heading in required_headings:
+        counters["template_headings"] += 1
         if heading not in template:
             errors.append(f"终审模板缺少章节：{heading}")
 
@@ -329,8 +629,9 @@ def validate() -> list[str]:
 
 def main() -> int:
     _utf8_console()
+    counters: dict[str, int] = {}
     try:
-        errors = validate()
+        errors = validate(counters)
     except Exception as exc:  # validator failure must be visible, never a false pass
         print(f"FAIL validator crashed: {type(exc).__name__}: {exc}")
         return 1
@@ -342,7 +643,11 @@ def main() -> int:
     print("PASS novel-pipeline-operator")
     print("  frontmatter, links, progressive disclosure, pipeline order, field notes,")
     print("  final-review template, and headless consumer references are consistent;")
-    print("  inbox kinds, flags (both directions) and exit codes match the registries")
+    print("  inbox kinds, flags (both directions), write surface, fix routes,")
+    print("  subcommands, report filter and exit codes match the registries")
+    # 绿灯必须带分母：只说「一致」看不出查了几条，正则失配时会全绿。
+    print("  扫描分母：" + " · ".join(
+        f"{key} {value}" for key, value in sorted(counters.items())))
     return 0
 
 

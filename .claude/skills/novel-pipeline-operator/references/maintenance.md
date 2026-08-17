@@ -15,7 +15,8 @@
 | `runtime-profiles.md` | 宿主差异 | 流水线质量判据 |
 | `field-notes.md` | 经验证或明确标态的经验 | 稳定公共接口、流水账 |
 | `assets/final-review-template.md` | 用户最终审阅界面 | 运行逻辑 |
-| `scripts/validate_skill.py` | 结构、链接、节点顺序和经验格式的漂移检查 | 代替真实跑书 |
+| `scripts/validate_skill.py` | 静态对账：结构、链接、节点顺序、经验格式，以及「文档声称的行为 vs 代码」 | 代替真实跑书；需要 pydantic 模型实例才能验的事 |
+| `tests/test_skill_operator.py`（仓内） | 把校验器接进默认 pytest 套件；扫描面下界；用真 `render()` 验推荐读法 | 结构与文案本身 |
 
 所有 reference 必须由 `SKILL.md` 直接链接，保持一层渐进披露。不要增加 README、CHANGELOG、quick reference 或同义副本。
 
@@ -76,29 +77,57 @@
 
 ## 校验
 
-每次修改后从仓根运行：
+每次修改后从仓根运行（`<PY>` 必须是项目解释器——校验器要 import `write_effect`，
+那条链上有 pydantic；换个解释器会报 `FAIL validator crashed`，不会假绿）：
 
 ```text
 <PY> -X utf8 .claude/skills/novel-pipeline-operator/scripts/validate_skill.py
+<PY> -m pytest tests/test_skill_operator.py
 <PY> <SKILL_CREATOR>/scripts/quick_validate.py .claude/skills/novel-pipeline-operator
 ```
 
-项目校验器必须至少保证：
+第二条是这套守卫真正生效的地方：校验器**接在默认 pytest 套件里**，skill 漂了会让回归变红。
+它此前只靠本节这一句话要求人手跑，于是十三处残留在它全绿的情况下活了下来。
 
-- frontmatter 只有 `name` 与 `description`；
-- `SKILL.md` 无版本日志/日期残留且少于 500 行；
-- 所有本地链接存在，所有 reference 均从 `SKILL.md` 直接可达；
-- workflow 的节点顺序与 `PIPELINE_STEPS` 完全一致；
-- 经验 ID 唯一且六个字段齐全；
-- 终审模板的必需章节存在；
-- headless 消费提示词不依赖已删除的章节编号；
-- **行为断言**（这一组测的是「文档声称的 CLI 行为与代码是否一致」，结构检查测不到）：
-  `INBOX_KIND` 的每一类在 `recovery.md` 与 `SKILL.md` 完成定义里都有交代；
-  文档写出的每个双横线 flag 都在注册表或 CLI 选项里，**且**每个挂在节点上的 `PAID_FLAGS`
-  都至少被 skill 提过一次（漏一条现役付费路径的后果是每本书白丢那一层）；
-  `workflow.md`「结果判定」的退出码集合等于 `novel/cli/exit_codes.py`。
+**结构断言**（校验器）：frontmatter 只有 `name` 与 `description`；`SKILL.md` 少于 500 行；
+所有本地链接存在、所有 reference 均从 `SKILL.md` 直接可达；workflow 的节点顺序与
+`PIPELINE_STEPS` 完全一致；经验 ID 唯一且六个字段齐全；终审模板的必需章节存在；
+headless 消费提示词不依赖已删除的章节编号。
 
-“同一个 flag 在不同层行为不同”这类事实**静态测不出来**，只能留在经验库并靠实跑复现。
+**行为断言**（测的是「文档声称的行为与代码是否一致」，结构检查测不到；真值一律从生产落点
+反查，校验器里不出现第二份清单）：
+
+| 断言 | 真值取自 | 它抓的那种漏法 |
+|---|---|---|
+| `INBOX_KIND` 每一类在 `recovery.md` 与 `SKILL.md` 完成定义都有交代 | `INBOX_KIND` | 少写一类，余额被静默漏报 |
+| 文档写出的每个双横线 flag 都在注册表或 CLI 选项里 | `NODES` / 三张 flag 表 / argparse | flag 改名而文档没跟上 |
+| 挂在节点上的每个 `PAID_FLAGS` 至少被提过一次 | 同上 | 漏一条现役付费路径 ⇒ 每本书白丢那一层 |
+| **会改动盘上产物的 0 成本入口**至少被提过一次 | `write_effect(node, [flag])` | 漏 0 成本销账口 ⇒ 本可销账的留成余额；漏会写盘的诊断 flag ⇒ 以为“只是看看”而毁掉已批准的产物 |
+| 「允许写入面」表与 `NODES[node].flags` **双向**对账 | `NODES` + `FREE_ENTRIES` + `write_effect` | 散文里“本层没有 X”不可判定，转成“表必须覆盖 X”才抓得住 |
+| 判据 `fix` 指名的路由必须被提过 | `contracts.rules.REGISTRY` 的 `Rule.fix` | finding 当场指着一条 skill 里没有的路 |
+| 写出的 `novel.cli <子命令>` 必须注册在案（只做正向） | argparse `add_parser` | 反向会逼着把 queue 系列塞进主循环，那是假红 |
+| 推荐过滤正则接住每一种非 `ok` 状态，且**不**接住 `[OK]` | `render.py::_STATUS_MARK` | 过滤吞掉 `[--]` / 来源行 / `⚠` 就不再是“只改变读法”；反向那半防的是把正则写成 `.*` 换绿灯 |
+| 终审模板的“N 类计数”跟着 `INBOX_KIND` 走 | `INBOX_KIND` | `assets/` 长期不在行为断言面内，上一次十二处对账就漏了模板 |
+| `依据` 里的 `路径::符号` 必须落地 | `ast` 解析目标文件 | 经验的价值等于它的依据能不能回查 |
+| `open-gap` 必须带仍在 `docs/REQUIREMENTS.md` 的 `TODO-NN` | REQUIREMENTS 的 `### TODO-NN ·` 标题集合 | 缺口已修而经验还挂着 |
+| 正文（剥掉代码块与行内 code 之后）无日期、版本号、带数字的“实测/实跑”、KB/% 读数 | — | 日期戳与一次性读数会过期，而它们从来没被查过 |
+| `workflow.md`「结果判定」的退出码集合等于 `novel/cli/exit_codes.py` | `exit_codes.py` | 未登记的码被当成未知崩溃 |
+
+`tests/test_skill_operator.py` 另做两件校验器做不到的事：给每个扫描面设**下界**
+（正则失配、glob 变空、`NODES` 被改空时，“零个都没查”会伪装成“全部一致”），
+以及用真报告（`novel.report.build` + `render`，不手写样例）验证推荐过滤确实留下了每一条判定行。
+
+**这套守卫测不到的**（写在这里，免得下一个维护者把全绿读成正确）：
+
+- **同一个 flag 在不同层行为不同**——`--identity` 在 `stage7.rename` 重写 name map、
+  在 `stage6.hook` 一个字节都不写；`--apply-edit` 的路径语义分两组。只能留在经验库靠实跑复现。
+- **秒数与次数类的一次性数字没有不假红的正则**：“每 60 秒汇报一次进度”是合法指令，
+  “约 150 秒”是过期测量，两者形态相同。写之前自己问一句：它明年还对吗？
+- flag 被“提过”**不等于**用法写对了、写在了对的段落。
+- `依据` 的符号还在**不等于**语义没变（FN-006 就是这么烂掉的：它点名的字段整个消失了，
+  而条目仍然“格式合法”）。
+- FN 编号**复用**抓不住，只能靠“不重排、不复用、退役留空号”的纪律；删除那一侧才有守卫。
+- **校验器全绿不等于跑得通一本书**——它不代替真实跑书。
 
 随后运行与修改面相称的项目测试。只改文档仍需运行 skill 校验；改节点、flag、prompt 或 schema 时必须运行对应单测与真实 `preview`。
 

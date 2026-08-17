@@ -589,6 +589,32 @@ def test_the_cli_forces_utf8_on_stdout(monkeypatch):
     assert '⚠' in stream.buffer.getvalue().decode('utf-8')
 
 
+def test_the_help_text_lists_every_registered_subcommand():
+    """`--help` 原样打印模块 docstring，而操作规程让执行者第一步就跑它。
+
+    实测过这个形状：docstring 只列了八条，`queue-list` / `queue-cancel` / `queue-resume`
+    三条注册在案的路对读 `--help` 的人**不存在**。
+    ⇒ 两侧都从 argparse 现取，不在这里手抄第三份清单。
+    """
+    from novel.cli import main as cli_main
+
+    parser = cli_main._parser()
+    registered = {name
+                  for action in parser._subparsers._group_actions  # type: ignore[union-attr]
+                  for name in getattr(action, 'choices', {})}
+    assert len(registered) >= 8, f'只取到 {registered}，子命令反查失配了'
+    documented = {line.split()[0]
+                  for line in (cli_main.__doc__ or '').splitlines()
+                  if line.startswith('    ') and line.strip()
+                  and not line.strip().startswith(('⚠', '`', '【'))}
+    missing = registered - documented
+    assert not missing, (
+        f'`--help` 的子命令表少了 {sorted(missing)}。'
+        f'少列一条 = 那条路对读 --help 的人不存在')
+    assert not documented - registered, \
+        f'`--help` 列了不存在的子命令：{sorted(documented - registered)}'
+
+
 def test_the_free_flag_matrix_actually_has_rows():
     """守卫的守卫：参数化表算空时，上面那条最值钱的测试会**一条都不跑**。"""
     assert len(_FREE_CASES) >= 10, f'只铺出 {len(_FREE_CASES)} 条 0 成本跑法'
