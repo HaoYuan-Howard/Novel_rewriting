@@ -57,11 +57,35 @@ _QUALITY = {'read_on_desire': 7.0, 'body_voice_match': 7.0,
             'hook_craft': 7.0, 'synopsis_penalty': 2.0}
 
 
+#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
+#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
+_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
+
+
+def _one_book() -> list[str]:
+    """只取一本——**取成稿链条相对上游是当前的那一本**，不是排序第一的那一本。
+
+    本文件 11 条集成用例全部要经 `stage6.semantic` 读逐章成稿；成稿一旦相对
+    重生成过的 `stage4/writer_context.json` 过期，读侧闸会 `UpstreamStale`
+    ⇒ **11 条一条不剩地红在同一句话上**，而它们要验的 wontfix 三条约束一次都没跑到。
+    实测三本里两本过期、一本干净，换到干净那本上 11 条全绿。
+    """
+    books = _books()
+    if not books:
+        return []
+    return [corpus.first_current_book(books, *_DRAFT_ARMS) or books[0]]
+
+
 @pytest.fixture(params=corpus_params(
-    _books()[:1], reason='盘上没有 stage6 语料——这些集成用例没在查'),
+    _one_book(), reason='盘上没有 stage6 语料——这些集成用例没在查'),
     ids=lambda b: b[:10] if b else 'no-corpus')
 def box(request):
     book = request.param
+    # ⚠ 前提是**语料的版本**不是被测的性质：本文件测 wontfix 的理由/证据键/闸门边界，
+    #   而它们都得先让 `stage6.semantic` 读得进成稿。过期时用例死在门口（实测
+    #   11/11 都是 `UpstreamStale`），拿不到自己要断言的输入。
+    corpus.requires_current(book, *_DRAFT_ARMS,
+                            produced_by='stage5.write --mode deep', cost='付费')
     drafts = tuple(sorted(
         a.rel for a in corpus.iter_artifacts()
         if a.book_dir == book and a.rel.startswith('stage5/')

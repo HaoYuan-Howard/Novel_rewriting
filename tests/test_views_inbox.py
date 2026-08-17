@@ -43,9 +43,23 @@ def _drafts_of(book: str) -> tuple[str, ...]:
         and '_rounds' not in a.rel and a.rel.endswith('.json')))
 
 
+#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
+#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
+_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
+
+
 @pytest.fixture
 def box():
-    book = BOOK_WITH_HITS if BOOK_WITH_HITS in _books() else sorted(_books())[0]
+    """⚠ 首选 `BOOK_WITH_HITS`，其次**成稿链条相对上游是当前**的那一本。
+
+    收缩审计那条用例要在 stage5 的待核验清单里看见自己种下的那一行，而清单是从
+    验收报告来的：成稿一旦相对重生成过的 `stage4/writer_context.json` 过期，
+    stage5 那一段整段产不出来 ⇒ 清单为空，用例红在「种下的那一行没进清单：[]」上，
+    看起来像视图漏了行。实测：过期的两本 0 行，链条干净的那本 3 行且含种下的那一行。
+    """
+    books = _books()
+    book = (BOOK_WITH_HITS if BOOK_WITH_HITS in books
+            else corpus.first_current_book(books, *_DRAFT_ARMS) or sorted(books)[0])
     s = sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
     yield s
     s.close()

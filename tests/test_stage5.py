@@ -23,7 +23,7 @@ import pytest
 from contracts.schema import Chapter, decode_artifact, encode_artifact
 from contracts.rules import REGISTRY
 from novel.stages.stage5 import checks, measure as M, prompts
-from tests import corpus, factories
+from tests import corpus, factories, sandbox
 
 _REQUIRED = {
     'stage1/main_text.json', 'stage2/global_grounding.json',
@@ -42,7 +42,19 @@ def _eligible_books() -> list[str]:
 
 
 _BOOKS = _eligible_books()
-_BOOK = _BOOKS[0] if _BOOKS else ''
+
+#: ⚠⚠ **优先取「成稿链条相对上游是当前」的那一本**，不是排序第一的那一本。
+#: 本文件五条端到端用例真跑 CLI 写盘，而写盘口的后置条件要求写完自证 `fresh`；
+#: 盘上成稿一旦相对重生成过的 `stage4/writer_context.json` 过期，
+#: `stage5.write --recheck` 会 `ProvenanceRefused` ⇒ **退出码 3**，五条全红。
+#: 实测三本里两本过期、一本干净，换到干净那本上五条全绿。
+#: 一本都不当前时留 `_BOOKS[0]`，由 `box` 里的 `requires_current` 给出**带下一步的跳过**。
+#: ⚠ 前缀点名两条臂，**不写成 `stage5/`**：那一层下面还有 `trim_audit_ch*.json`，
+#: 它不在任何节点的 `produces` 里（它是本层的产出，不是本层的前提输入），
+#: 拿它去问「当前不当前」会当场 `AssertionError`——那是 `freshness_of` 在正确地说
+#: 「这个问题问不出口」，不该在这里被吞掉。
+_BOOK = (corpus.first_current_book(_BOOKS, 'stage5/deep/', 'stage5/shallow/')
+         or (_BOOKS[0] if _BOOKS else ''))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -547,24 +559,32 @@ def test_current_trim_audit_absorbs_the_duplicate_length_over_action():
 
 @pytest.fixture
 def box():
-    """一份能跑 `stage5.review` 的当前契约沙箱（跑完即删）。"""
+    """一份能跑 `stage5.review` 的当前契约沙箱（跑完即删）。
+
+    ⚠⚠ **必须经 `tests/sandbox.py::Sandbox`，不许在这里自己 `mkdtemp` 铺一遍。**
+    这里曾经是手抄的一份，而它按 `corpus.iter_artifacts()` 铺——那个迭代器**只产
+    `.json`**，于是 `stage0/clean_text.txt`（全链根）**从来没有被拷进来过**：
+    任何一次带来源账的写盘都在 `_refuse_bad_provenance` 当场 `ProvenanceRefused`，
+    CLI 把它渲染成**退出码 3「结构性拒绝（这是 bug）」**——一条纯粹的环境缺料
+    被报成代码自相矛盾，本文件五条端到端用例全挂在这上面。
+    `Sandbox` 无条件搬全链根，它的 docstring 记着的正是同一次事故
+    （「两处手抄、其余七个文件漏掉，17 条红在同一句话上」）。这是那批手抄里最后一处。
+    """
     if not _BOOKS:
         pytest.skip('当前语料没有完整 Stage5 上游与正式成稿')
-    root = Path(tempfile.mkdtemp())
-    d = root / _BOOK
-    for a in corpus.iter_artifacts():
-        if a.book_dir != _BOOK or '_rounds' in a.rel:
-            continue
-        if a.rel.startswith(('stage0/', 'stage6/', 'stage7/')) or 'review' in a.rel:
-            continue
-        p = d / a.rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(
-            json.dumps(encode_artifact(a.rel, corpus.load_current(a)), ensure_ascii=False),
-            encoding='utf-8',
-        )
-    yield root, _BOOK.rsplit('_', 1)[-1]
-    shutil.rmtree(root, ignore_errors=True)
+    # ⚠ 前提是**语料的版本**不是被测的性质：本文件测的是验收/wontfix/归一幂等，
+    #   而它们都得先写得下去。成稿过期时 `--recheck` 恒 `ProvenanceRefused`
+    #   ⇒ 用例根本跑不到自己的断言（实测：过期两本退出码 3，干净那本退出码 0）。
+    corpus.requires_current(_BOOK, 'stage5/deep/', 'stage5/shallow/',
+                            produced_by='stage5.write --mode deep', cost='付费')
+    rels = tuple(
+        a.rel for a in corpus.iter_artifacts()
+        if a.book_dir == _BOOK and '_rounds' not in a.rel
+        and not a.rel.startswith(('stage0/', 'stage6/', 'stage7/'))
+        and 'review' not in a.rel)
+    s = sandbox.Sandbox(_BOOK, rels)
+    yield s.root, s.sid
+    s.close()
 
 
 def _run(*argv: str) -> int:

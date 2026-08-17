@@ -7,7 +7,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 import pytest
 from pydantic import BaseModel
@@ -15,6 +15,9 @@ from pydantic import BaseModel
 from contracts.schema import (
     ARTIFACTS, artifact_key, decode_artifact, formal_artifact_rel,
 )
+
+if TYPE_CHECKING:                                          # pragma: no cover
+    from novel.prov import FreshnessReport
 
 CORPUS_ENV = 'NOVEL_OUTPUT'
 
@@ -100,6 +103,129 @@ def declared_dependency(ok: bool, *, needs: str, produced_by: str, cost: str) ->
     """
     if not ok:
         pytest.skip(f'语料缺 {needs}；补法：{produced_by}（{cost}）')
+
+
+def freshness_of(novel_dir: Path, rel: str) -> 'FreshnessReport':
+    """盘上这份产物相对**盘上此刻的上游**新不新鲜 —— 走**生产那一个落点**。
+
+    ⚠⚠ **这里一行投影比对都不写。** 落点是 `ArtifactStore.freshness(rel)`，只读上下文由
+    `novel/orchestrator/state.py::readonly_ctx` 造。自己照 `CONSUMED_PROJECTIONS` 重拼一遍
+    是 `docs/LESSONS.md` 第 21 条的第一形状，而这里的分家方向是具体的：
+    **「测试说新鲜、真跑说过期」⇒ 前提永远成立、跳过永远不发生**，
+    于是它看起来和「查过没事」一模一样。
+
+    ⚠ 提问者节点取 `novel/consumption.py::producer_node`，与 `ArtifactStore.freshness`
+    内部取的是**同一个函数**。自己传一个节点名进来就是第二个落点：
+    `stage7/name_map.json` 由 `stage7.rename` 与 `stage7.approve` 两个节点都 `produces`，
+    而只有前者持有真正的 consumed 契约——那个裁决写在 `NODES` 的声明顺序里，不该被复述。
+
+    ⚠ **运行时 import 收在函数体内**：本模块同时服务 `tests/test_corpus_fixtures.py`
+    那批只 import `contracts.*` 的纯契约体检，顶层拖进 `novel.*` 会让那一批的 import 图跟着变。
+    """
+    from novel import prov
+    from novel.consumption import producer_node
+    from novel.orchestrator.state import readonly_ctx
+    from novel.store import ArtifactStore
+
+    node = producer_node(rel)
+    if node is None:
+        raise AssertionError(
+            f'{rel} 不在任何节点的 `produces` 里——说不出该由谁来提这个问题。'
+            f'新产物要先登记进 `contracts/invariants.py::NODES`')
+    return ArtifactStore(
+        readonly_ctx(Path(novel_dir), node, prov.code_version())).freshness(rel)
+
+
+def _targets(book_dir: str, rel: str) -> list[str]:
+    """`rel` 是一份具体产物，还是一层前缀（以 `/` 收尾 ⇒ 它底下**每一份**都要当前）。
+
+    ⚠ 前缀这一支是必要的：stage5 的成稿是**一整批**，它们共享同一条
+    `stage4/writer_context.json` 边、也在同一次跑里写下。只抽查 `ch01` 会在
+    「只有后面几章过期」时报当前——而那正是最难看出来的一种。
+    ⚠ `_rounds/` 是历史归档，不参与「当前不当前」。
+    """
+    if not rel.endswith('/'):
+        return [rel]
+    return sorted(a.rel for a in iter_artifacts()
+                  if a.book_dir == book_dir and a.rel.startswith(rel)
+                  and '_rounds/' not in a.rel)
+
+
+def _not_current(book_dir: str, *rels: str) -> list[str]:
+    """这本书的这些产物里，**当前不了**的那些的人读理由。
+
+    ⚠ 一层前缀底下**一份都没有**不算问题（那本书可能只跑了一条臂）；
+    但**所有** `rels` 加起来一份都没有就是问题——否则「没东西可查」会伪装成「查过、都当前」。
+    """
+    if corpus_root() is None:
+        return []
+    novel_dir = corpus_root() / book_dir
+    problems: list[str] = []
+    seen = 0
+    for rel in rels:
+        targets = _targets(book_dir, rel)
+        seen += len(targets)
+        if not targets and not rel.endswith('/'):
+            problems.append(f'{rel}（盘上没有这一份）')
+        for target in targets:
+            report = freshness_of(novel_dir, target)
+            if report.state == 'fresh':
+                continue
+            edges = ', '.join(f'{e.key}:{e.reason}' for e in report.edges) or report.reason
+            problems.append(f'{target}（现判 {report.state}/{report.reason}：{edges}）')
+    if not seen and not problems:
+        problems.append(f'{list(rels)} 底下盘上一份产物都没有——没东西可查')
+    return problems
+
+
+def requires_current(book_dir: str, *rels: str, produced_by: str, cost: str) -> None:
+    """本条要的是「盘上这几份与它们的上游对得上」的**那一版语料**；对不上就按声明跳过。
+
+    ⚠⚠ **前提只许是「产物相对上游是哪一版」这一件事**，而且由 `freshness_of` 现算，
+    不是任何判据结论、badge 或 HARD 命中数。这条限制是结构性的：
+    **本函数没有接收「结论」的参数位**，想拿被测性质当前提得先改签名。
+
+    ⚠⚠ **正在测「非当前的上游要被拒」的用例不许调它。** 那一类把「过期」当**输入**，
+    加了前提就是洗绿（见 `declared_dependency` 的第二条警告）。判准三条，全中才可以加：
+      ① 它不是被测的那条性质本身（用例体里不出现 `UpstreamStale` / `.freshness(`，不删改上游）；
+      ② 前提为假时它**死在门口**而不是「拿到了输入」——这一条要靠**实测异常类型**判，不许靠读；
+      ③ 前提为真时断言真的执行了一遍（扫描面 > 0，且在同一条用例里断言它）。
+    一句话：**前提只覆盖「输入是哪一版」，不覆盖「这一版有没有问题」。**
+
+    ⚠ 三态分开说（`docs/LESSONS.md` 第 4 条）：「盘上没有这一份」「相对上游过期」
+    「算不出来（幽灵边）」是三件事，跳过消息里逐条带上现判读数与过期边，
+    **那串读数是复算出来的，不是手写的断言**。
+    """
+    if corpus_root() is None:
+        return                       # 没配语料由各模块自己的 corpus 门管，这里不静默兜底
+    problems = _not_current(book_dir, *rels)
+    declared_dependency(
+        not problems,
+        needs=(f'{book_dir} 的 {list(rels)} 与盘上上游对得上的那一版；'
+               f'当前不了的有 {len(problems)} 份：{"；".join(problems[:3])}'),
+        produced_by=produced_by, cost=cost)
+
+
+def first_current_book(books: Any, *rels: str) -> str | None:
+    """候选里第一本这几份都相对盘上上游是当前的书；一本都没有给 `None`。
+
+    ⚠⚠ **只挑一本的用例要挑「跑得动的那一本」，不是「排序第一的那一本」。**
+    `requires_current` 让整条用例跳过，而**跳过是「没在查」**；换一本书却能把同一条
+    性质真的验一遍 ⇒ 优先真跑，跳过只作最后手段。实测过代价：`test_stage5` 那五条
+    端到端用例固定取 `sorted(books)[0]`，而那本的成稿相对重生成过的
+    `stage4/writer_context.json` 已过期 ⇒ 五条全红（退出码 3）；
+    换成链条当前的那一本，同样五条全绿。
+
+    ⚠ **不许拿它去挑「按书参数化」的用例。** 那种用例的取值面**就是**「每一本」，
+    在里面挑一本等于把另外几本静默摘掉——那是洗绿，不是选书。
+    那一类逐条用 `requires_current`，让过期的书留下**看得见**的跳过。
+
+    ⚠ **纯函数、不跳过**：调用点常在模块级（`_BOOK = …`），而模块级 `pytest.skip`
+    是收集期错误不是跳过。前提由调用方在 fixture 或用例体里用 `requires_current` 声明。
+    """
+    if corpus_root() is None:
+        return None
+    return next((book for book in sorted(books) if not _not_current(book, *rels)), None)
 
 
 def load_raw(artifact: Artifact) -> Any:
