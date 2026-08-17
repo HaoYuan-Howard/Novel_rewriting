@@ -409,3 +409,59 @@ def test_a_dotdot_that_stays_inside_is_fine():
     finally:
         import shutil
         shutil.rmtree(root, ignore_errors=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 五、服务自己的目录：记下来的那条源路径怎么认回来
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DIGEST = 'cc7a2ac151d17b87cbbfa7a55d5440ecbfb53d9bf77c32a9803185c14fa2fe22'
+
+#: `(记下来的路径, 期望的尾巴)`。`None` = **不是上传路径，不许猜**。
+_TAIL_CASES = [
+    # 旧根 + 反斜杠：实测那本断了的书记的就是这个形状
+    (rf'E:\out\e2e_20260817\_service\uploads\{_DIGEST}\书名_123.txt',
+     (_DIGEST, '书名_123.txt')),
+    # 正斜杠、相对路径：同一条尾巴，认法必须一致
+    (f'outputs/_service/uploads/{_DIGEST}/书名_123.txt', (_DIGEST, '书名_123.txt')),
+    # ⚠ 外部语料：被删就是**世界真的变了**，`ghost` 是正确答案，不许在这里"救"
+    (r'E:\practice_group\Novel_rewriting\Test_data\书名_123.txt', None),
+    # ⚠ 目录名不是内容地址 ⇒ 认不出。**认不出就答「不知道」，不许猜一个**
+    (r'E:\out\_service\uploads\随手起的名字\书名_123.txt', None),
+    (rf'E:\out\_service\uploads\{_DIGEST.upper()}\书名_123.txt', None),
+    (rf'E:\out\_service\uploads\{_DIGEST[:-1]}\书名_123.txt', None),
+    # ⚠ `_service` 底下的别的东西不是上传原文（一次性编辑计划、作业日志…）
+    (rf'E:\out\_service\edits\{_DIGEST}\书名_123.txt', None),
+    (rf'E:\out\uploads\{_DIGEST}\书名_123.txt', None),
+    # 段数不够
+    (f'{_DIGEST}/书名_123.txt', None),
+]
+
+
+@pytest.mark.parametrize('recorded,expected', _TAIL_CASES)
+def test_only_an_uploaded_source_tail_can_be_reanchored(recorded, expected):
+    """`<任意 base>/_service/uploads/<内容地址>/<文件名>` **只有这一种形状**认得回来。
+
+    存在的理由：`stage0/removal_report.json::original_path` 记的是绝对路径，
+    Output 根一搬家就断，而界面上传的原文跟着 base 走、一个字节没变
+    ⇒ 拿这条尾巴 + 当前 base 就能重新锚回去（`novel/core/source.py`）。
+
+    ⚠⚠ **多认一种形状 = 把一条真信号洗成好消息。** 外部语料没了就是没了，
+      那是契约有意接受的代价（`docs/schema/stage0.md`：文件被移走时是「不知道」，
+      不是「不匹配」）。所以这里认死内容地址的形状，认不出一律 `None`。
+    """
+    assert paths.uploaded_source_tail(recorded) == expected
+
+
+def test_the_uploads_layout_has_exactly_one_spelling():
+    """上传目录的形状只有一份实现——**产地与回落必须共用它**。
+
+    `novel/orchestrator/uploads.py::save_upload` 用 `paths.uploads_dir` 落盘，
+    `novel/core/source.py` 用同一个函数找回来。两处各拼一份 `_service/uploads`
+    就会在下一次改布局时分家：写在 A、找在 B，而**没有任何一层会报错**
+    （同 F-088 的形状）。
+    """
+    assert paths.uploads_dir('X') == paths.service_dir('X') / paths.UPLOADS_DIRNAME
+    assert paths.service_dir('X') == Path('X') / paths.SERVICE_DIRNAME
+    tail = paths.uploaded_source_tail(paths.uploads_dir('X') / _DIGEST / '书名_123.txt')
+    assert tail == (_DIGEST, '书名_123.txt')

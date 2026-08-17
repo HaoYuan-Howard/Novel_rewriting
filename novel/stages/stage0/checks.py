@@ -3,6 +3,7 @@
 '''stage0 的十三条判据实现。纯检查不改任何产物。'''
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -17,6 +18,7 @@ from novel.core.ingest import (
     nonbody_kind,
     scan_text,
 )
+from novel.core.source import resolve_recorded_source
 from novel.report.builder import build
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.run import RunContext
@@ -36,10 +38,16 @@ def _hit(rule: str, detail: str, *evidence: str):
     return finding(rule, detail=detail, evidence=list(evidence))
 
 
-def _source(report: RemovalReport) -> tuple[DecodedSource | None, str | None]:
-    path = Path(report.original_path)
-    if not path.is_file():
-        return None, f'原始小说已不在记录位置：{path}'
+def _source(report: RemovalReport,
+            base: str | os.PathLike[str]) -> tuple[DecodedSource | None, str | None]:
+    """复检要拿来对账的那份原文；取不到就把**理由**带出去（判据退成 unverifiable）。
+
+    ⚠ 记录的位置优先，只对界面上传的原文做 base 重锚（`novel/core/source.py`）。
+      外部语料被删没有回落——那是契约有意接受的代价，不是这里该"救"的事。
+    """
+    path = resolve_recorded_source(report.original_path, base)
+    if path is None:
+        return None, f'原始小说已不在记录位置：{report.original_path}'
     try:
         raw = path.read_bytes()
     except OSError as exc:
@@ -346,7 +354,7 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     store = ArtifactStore(ctx)
     report, _raw = store.read_own(RemovalReport, REPORT_REL)
     clean_text = store.read_text(CLEAN_REL)
-    source, why = _source(report)
+    source, why = _source(report, ctx.novel_dir.parent)
     outcomes = check(
         report,
         clean_text,

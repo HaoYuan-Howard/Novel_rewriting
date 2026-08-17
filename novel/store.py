@@ -1065,17 +1065,24 @@ class ArtifactStore:
         clean_now = self._content_sha1_or_none(STAGE0_CLEAN_TEXT)
         clean_edge = self._content_edge(STAGE0_CLEAN_TEXT, clean_was, clean_now)
 
-        source = Path(source_path)
-        if not _is_file(source):
-            source_now = None
-        else:
-            try:
-                from novel.core.ingest import DecodeProblem, decode_source_bytes
-                source_now = decode_source_bytes(source.read_bytes()).source_sha1
-            except DecodeProblem:
-                return FreshnessReport('unknown', 'no_provenance')
-            except OSError:
-                return FreshnessReport('unknown', 'no_provenance')
+        # 记录的那条路径优先，`_service/uploads/` 的 base 重锚只是回落——顺序不许反，
+        # 理由写在 `novel/core/source.py`（反过来会让 `_require_stage0_fresh` 那道
+        # 「提交这一批期间源被换掉就整批回滚」的闸拿到一份永远自洽的答案）。
+        from novel.core.source import resolve_recorded_source
+        source = resolve_recorded_source(source_path, self.ctx.novel_dir.parent)
+        if source is None:
+            # ⚠ 边的 key 用记录里那条：读不到时要点名的就是它（`R-5.10`）。
+            source_edge = self._content_edge(source_path, source_was, None)
+            return self._content_report((source_edge, clean_edge))
+        try:
+            from novel.core.ingest import DecodeProblem, decode_source_bytes
+            source_now = decode_source_bytes(source.read_bytes()).source_sha1
+        except DecodeProblem:
+            return FreshnessReport('unknown', 'no_provenance')
+        except OSError:
+            return FreshnessReport('unknown', 'no_provenance')
+        # ⚠ 重锚成功时 key 用**真正读到的那个位置**：点一条其实读到了的旧路径，
+        #   会把人送去找一个并不存在的问题。
         source_edge = self._content_edge(str(source), source_was, source_now)
         return self._content_report((source_edge, clean_edge))
 

@@ -14,6 +14,10 @@ paths.py —— 「这本书在哪」「这份产物在哪」的**唯一落点**
   ② **产物相对路径的形态**：`.INVALID` 的孪生名 · `_rounds/` 的归档名 ·
      来源账那个**两级**的键。三者都必须只有一份实现，理由同上。
 
+  ③ **服务自己那个目录的形状**：`<base>/_service/` 与它底下按内容地址存的上传原文。
+     它跟着 base 走，所以「记下来的绝对路径断了、文件其实还在」要靠这一段认回来
+     （`uploaded_source_tail`；验内容再落地在 `novel/core/source.py`）。
+
 ⚠ **本模块不做 IO 决策**，只有 `find_novel_dir` 摸盘（它必须摸，那是「找目录」本身）。
   读写一律经 `novel/store.py`——那是唯一会记账的那条路。
 
@@ -487,3 +491,59 @@ def numbered_rounds(novel_dir: str | os.PathLike[str], pattern_rel: str) -> list
         if digits.isdigit():
             out.append(int(digits))
     return sorted(out)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 三、服务自己的目录：`<base>/_service/`
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: 服务自己的账（`ledger.jsonl` / `agent_progress.jsonl` / 作业记录）与自己的输入住这里。
+#: **它不是一本书**——`iter_novel_dirs` 靠 `_` 前缀把它跳过。
+SERVICE_DIRNAME = '_service'
+
+#: 界面上传的原文长期保留在 `<base>/_service/uploads/<sha256(原始字节)>/<原文件名>`。
+#: 目录名**就是内容地址**，产地只有一个：`novel/orchestrator/uploads.py::save_upload`。
+UPLOADS_DIRNAME = 'uploads'
+
+#: 内容地址的形状。认死 64 位小写十六进制——**认不出就不是上传目录**，
+#: 与其猜一个不如答「不知道」（`novel/core/source.py` 的重锚以此为前提）。
+_CONTENT_ADDRESS = re.compile(r'[0-9a-f]{64}')
+
+#: 记下来的路径可能是另一台机器/另一个 OS 写的，两种分隔符都要认。
+_ANY_SEP = re.compile(r'[\\/]+')
+
+
+def service_dir(base: str | os.PathLike[str]) -> Path:
+    """`<base>/_service/`。服务自己的东西的**唯一落点**，产物一律不进这里。"""
+    return Path(os.fspath(base)) / SERVICE_DIRNAME
+
+
+def uploads_dir(base: str | os.PathLike[str]) -> Path:
+    """`<base>/_service/uploads/`。界面上传的原文长期留在这儿供 stage0 审校屏取回。"""
+    return service_dir(base) / UPLOADS_DIRNAME
+
+
+def uploaded_source_tail(recorded: str | os.PathLike[str]) -> tuple[str, str] | None:
+    """把一条**记下来的**源路径认成「界面上传的那一份」，拆出 `(内容地址, 文件名)`。
+
+    `None` = 它不是上传路径（比如外部语料 `Test_data/xxx.txt`）。
+
+    ⚠⚠ **认的是尾巴，不是 base。** 存在的理由正是「记下来时的 base 已经不是现在这个」：
+    `stage0/removal_report.json::original_path` 记的是绝对路径，Output 根一搬家
+    那条路径就断，而 `_service/uploads/<内容地址>/<文件名>` 这一段**跟着 base 走、
+    一个字都没变**。⇒ 拿尾巴 + 当前 base 就能重新锚回去
+    （`novel/core/source.py::resolve_recorded_source`）。
+
+    ⚠ **只认这一种形状，其余一律 `None`。** 外部语料被删就是**世界变了**，
+    `ghost` 是正确答案、契约有意接受（`docs/schema/stage0.md`：文件被移走时是
+    「不知道」，不是「不匹配」）。在这里多认一种形状 = 把一条真信号洗成好消息。
+    """
+    parts = [p for p in _ANY_SEP.split(os.fspath(recorded)) if p]
+    if len(parts) < 4:
+        return None
+    service, uploads, digest, name = parts[-4:]
+    if service != SERVICE_DIRNAME or uploads != UPLOADS_DIRNAME:
+        return None
+    if not _CONTENT_ADDRESS.fullmatch(digest):
+        return None
+    return digest, name

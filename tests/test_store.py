@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from novel.errors import (
 from novel import paths, prov
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
+from novel.orchestrator.uploads import save_upload
 from novel.quality.global_review import build_review
 from novel.run import RunContext
 from novel.store import (
@@ -870,6 +872,142 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
 
     (book / 'stage7' / 'book.txt').write_bytes(book_bytes + b'changed\n')
     assert store.freshness('stage7/book.txt').state == 'stale'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 四之二、stage0 源身份那条边：**记录的位置优先，base 重锚只是回落**
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SOURCE_BYTES = '开篇。\n\n1\n第一章。\n\n2\n第二章。\n'.encode('utf-8')
+
+
+def _stage0_book(recorded_source: Path,
+                 base: Path | None = None) -> tuple[Path, ArtifactStore]:
+    """一本只有 stage0 的书，报告里的 `original_path` 记成 `recorded_source`。
+
+    `base` 可以给现成的那个——「源本来就在当前 base 底下」的情形要靠它才造得出来。
+    """
+    from novel.core.ingest import decode_source_bytes
+
+    base = _book(with_clean=False, root=base)
+    book = base / '书名_123'
+    clean_bytes = _SOURCE_BYTES
+    (book / 'stage0').mkdir()
+    (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
+    _write_payload(book, STAGE0_REMOVAL_REPORT, {
+        'original_path': str(recorded_source),
+        'source_sha1': decode_source_bytes(_SOURCE_BYTES).source_sha1,
+        'clean_sha1': prov.content_sha1(clean_bytes),
+    })
+    return base, ArtifactStore(_ctx(base, paid=False))
+
+
+def _source_edge(store: ArtifactStore):
+    """源那一条边（另一条是 `clean_text`），按 key 认。"""
+    edges = [e for e in store.freshness(STAGE0_REMOVAL_REPORT).edges
+             if e.key != 'stage0/clean_text.txt']
+    assert len(edges) == 1, [e.key for e in edges]
+    return edges[0]
+
+
+def test_stage0_source_edge_survives_moving_the_output_root():
+    """Output 根搬家：记下来的绝对路径断了，**而文件跟着 base 一起搬**⇒ 仍是 fresh。
+
+    ⚠⚠ 这一条防的是**假阴性**，与「不许把没了的原文说成好消息」是同一条纪律的两面。
+      `ghost` 的语义是「上游真的不在盘上」。界面上传的原文住在
+      `<base>/_service/uploads/<内容地址>/`——根一改，记录里那条绝对路径指向旧根，
+      而文件一个字节没变。此时报 ghost 会把一条真信号冲淡，还会连带让
+      「不带 `--source` 复跑 stage0」、stage0 审校屏、`_require_stage0_fresh`
+      三条路一起失效（那本书从此连人工编辑都提交不了）。
+      实测过一次：《夫君与鲛人孰_2024515569832010055》，见 `novel/core/source.py`。
+
+    ⚠ 边的 key 必须是**真正读到的那个位置**：ghost 要按名字点名（`R-5.10`），
+      点一条其实读到了的旧路径，会把人送去找一个并不存在的问题。
+    """
+    old_root = Path(tempfile.mkdtemp())
+    recorded, _sid = save_upload(old_root, '书名_123.txt', _SOURCE_BYTES)
+    shutil.rmtree(old_root)                      # 根搬走：这条绝对路径从此不存在
+    assert not recorded.is_file()
+
+    base, store = _stage0_book(recorded)
+    current, _sid = save_upload(base, '书名_123.txt', _SOURCE_BYTES)
+    assert current != recorded
+
+    edge = _source_edge(store)
+    assert (edge.state, edge.reason) == ('fresh', 'match')
+    assert edge.key == str(current)
+    assert store.freshness(STAGE0_REMOVAL_REPORT).state == 'fresh'
+
+
+def test_stage0_source_edge_refuses_a_reanchored_file_that_fails_its_content_address():
+    """重锚拿到的候选**必须自证内容地址**，否则宁可继续答「不在」。
+
+    ⚠⚠ 这是「回落永远不可能把另一份文件冒充成原文」的全部依据。上传目录名就是
+      `sha256(原始字节)`（产地唯一：`novel/orchestrator/uploads.py::save_upload`），
+      所以「同一个内容地址目录里躺着别的字节」只可能是被人动过手脚或搬错了东西——
+      那不是「源变了」（`file_changed` 会暗示产物只是过期），是**这份候选不可信**。
+    """
+    old_root = Path(tempfile.mkdtemp())
+    recorded, _sid = save_upload(old_root, '书名_123.txt', _SOURCE_BYTES)
+    shutil.rmtree(old_root)
+
+    base, store = _stage0_book(recorded)
+    current, _sid = save_upload(base, '书名_123.txt', _SOURCE_BYTES)
+    current.write_bytes(_SOURCE_BYTES + '\n三、混进来的别的字节。\n'.encode('utf-8'))
+
+    edge = _source_edge(store)
+    assert (edge.state, edge.reason) == ('unknown', 'ghost')
+    assert edge.key == str(recorded), '认不下来时要点名的是**记录里那条**'
+    assert store.freshness(STAGE0_REMOVAL_REPORT).state == 'unknown'
+
+
+def test_stage0_source_edge_still_goes_ghost_for_an_external_corpus_that_is_gone():
+    """外部语料被删就是**世界真的变了**：`ghost` 是正确答案，不许"救"。
+
+    ⚠ 契约有意接受这个代价（`docs/schema/stage0.md`：文件被移走时是「不知道」，
+      不是「不匹配」），补偿是报告里的 `head_preview`/`tail_preview` 残片。
+      重锚只认 `_service/uploads/<内容地址>/` 这一种形状——**多认一种就是把一条
+      真信号洗成好消息**，而这正是本仓最贵的那条纪律（三态不许互相冒充）。
+    """
+    corpus_root = Path(tempfile.mkdtemp())
+    recorded = corpus_root / 'Test_data' / '书名_123.txt'
+    recorded.parent.mkdir(parents=True)
+    recorded.write_bytes(_SOURCE_BYTES)
+
+    base, store = _stage0_book(recorded)
+    assert _source_edge(store).state == 'fresh'
+
+    shutil.rmtree(corpus_root)
+    # 同样的字节确实躺在当前 base 的上传目录里，**也不许拿它顶上**：
+    # 记录说的是外部语料那一份，那一份没了就是没了。
+    save_upload(base, '书名_123.txt', _SOURCE_BYTES)
+
+    edge = _source_edge(store)
+    assert (edge.state, edge.reason) == ('unknown', 'ghost')
+    assert edge.key == str(recorded)
+
+
+def test_stage0_source_edge_prefers_the_recorded_location_over_the_reanchored_one():
+    """记录的位置还在时**以它为准**，哪怕重锚能找到一份更"自洽"的。
+
+    ⚠⚠ **「源变了」与「源不在了」对人的下一步是相反的指示**，不许被回落抹平。
+      源被就地换掉时：记录的位置**还在**，读出来是新字节 ⇒ `stale/file_changed`
+      （产物过期了，重跑即可）。而先看重锚的实现会得到 `ghost`——因为内容地址
+      目录名没变、字节变了，候选自证不过 ⇒ 它会说「原文不在盘上」，
+      把一个重跑就能解决的问题报成一个找不着东西的问题。
+      `removal.py::_require_stage0_fresh` 正是靠这条边发现「提交这一批的过程中
+      源被换掉了」并整批回滚的。
+    """
+    base = Path(tempfile.mkdtemp())
+    recorded, _sid = save_upload(base, '书名_123.txt', _SOURCE_BYTES)
+    _base, store = _stage0_book(recorded, base)
+    assert _source_edge(store).state == 'fresh', '源本来就在当前 base 底下'
+
+    # 就地把源换掉：内容地址目录名没变，字节变了 ⇒ 记录的位置仍在，读出来是新字节。
+    recorded.write_bytes(_SOURCE_BYTES + '第三章。\n'.encode('utf-8'))
+    edge = _source_edge(store)
+    assert (edge.state, edge.reason) == ('stale', 'file_changed'), \
+        '源被换掉必须报 stale/file_changed，不是 ghost'
 
 def test_byte_form_artifacts_are_lf_only_and_have_no_bom():
     """⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / `book.txt`）盘上**全是 LF-only**，

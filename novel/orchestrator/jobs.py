@@ -43,9 +43,9 @@ from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import TerminalState
 from novel.orchestrator.nodes import build_steps, child_env, shell_line
+from novel.paths import SERVICE_DIRNAME, service_dir
 from novel.prov import code_version
 
-SERVICE_DIRNAME = '_service'
 JOBS_FILENAME = 'jobs.jsonl'
 LOGS_DIRNAME = 'logs'
 
@@ -198,8 +198,10 @@ def _refuse_if_agent_running(sid: str | None) -> None:
 # 二、事件流（append-only）
 # ─────────────────────────────────────────────────────────────────────────────
 
-def service_dir(base: str | os.PathLike[str]) -> Path:
-    return Path(os.fspath(base)) / SERVICE_DIRNAME
+# `service_dir` / `SERVICE_DIRNAME` 从 `novel/paths.py` 引入（**路径形状归它**）：
+# `<base>/_service/` 这个字面还有第二个消费方——界面上传的原文按内容地址存在它底下，
+# 而「记下来的绝对路径断了、文件其实还在」要靠同一段路径认回来
+# （`novel/core/source.py`）。两处各写一份就会在下一次改布局时分家。
 
 
 def jobs_path(base: str | os.PathLike[str]) -> Path:

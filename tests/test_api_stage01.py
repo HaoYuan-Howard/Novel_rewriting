@@ -157,3 +157,33 @@ def test_missing_original_is_explicitly_unavailable(client: TestClient):
     assert response.json()['available'] is False
     assert response.json()['segments'] == []
     assert 'original_path' in response.json()['reason']
+
+
+def test_original_survives_moving_the_output_root(client: TestClient, root: Path):
+    """Output 根搬家后，界面上传的那本书**照旧读得回原文**。
+
+    ⚠⚠ 与上一条成对，两条一起才是完整的意思：**原文真没了要明说不可用；
+      原文还在就不许说没了。** `original_path` 记的是绝对路径，根一改它就断，
+      而文件根本没动——它住在 `<base>/_service/uploads/<内容地址>/`，跟着 base 一起搬。
+      此时答 `available: false` 是**假阴性**，实测发生过（《夫君与鲛人孰》：
+      记的是旧根，文件就在新根的同一个内容地址目录下、字节逐一相等，
+      而 `state` 报 ghost、不带 `--source` 复跑直接 `UpstreamMissing`）。
+
+    ⚠ 这条回落**只认上传目录那一种形状**，且候选必须自证内容地址；
+      外部语料被删仍然是 ghost（`novel/core/source.py`）。
+    """
+    sid = _upload(client)['sid']
+    before = client.get(f'/api/novels/{sid}/stage0/segments').json()
+    assert before['available'] is True
+
+    moved = root.parent / f'{root.name}-moved'
+    shutil.move(str(root), str(moved))
+    try:
+        with TestClient(create_app(moved)) as moved_client:
+            after = moved_client.get(f'/api/novels/{sid}/stage0/segments').json()
+        assert after['available'] is True, after.get('reason')
+        assert after['source_sha1'] == before['source_sha1']
+        assert [segment['text'] for segment in after['segments']] == \
+            [segment['text'] for segment in before['segments']]
+    finally:
+        shutil.rmtree(moved, ignore_errors=True)

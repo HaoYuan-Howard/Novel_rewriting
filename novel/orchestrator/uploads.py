@@ -24,9 +24,8 @@ from novel.errors import (
     SourceConflict,
     SourcePathRejected,
 )
-from novel.orchestrator.jobs import service_dir
+from novel.paths import service_dir
 
-UPLOADS_DIRNAME = 'uploads'
 EDITS_DIRNAME = 'edits'
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 
@@ -70,8 +69,11 @@ def save_upload(
     if len(raw) > MAX_UPLOAD_BYTES:
         raise SourcePathRejected(
             f'上传文件 {len(raw)} 字节，超过上限 {MAX_UPLOAD_BYTES} 字节')
+    # ⚠ 目录名**就是内容地址**，这不只是防同名覆盖：`novel/core/source.py` 的重锚
+    #   靠它自证「重新锚到的这份确实是当初那份」（Output 根搬家后，记在产物里的
+    #   绝对路径会断，而这一段跟着 base 走）。换成随机 id 会让那条回落失去唯一依据。
     digest = hashlib.sha256(raw).hexdigest()
-    target = service_dir(base) / UPLOADS_DIRNAME / digest / name
+    target = paths.uploads_dir(base) / digest / name
     if target.is_file():
         try:
             existing = target.read_bytes()

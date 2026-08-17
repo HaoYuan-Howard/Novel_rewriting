@@ -571,3 +571,49 @@ def test_real_test_data_runs_through_both_deterministic_layers(source: Path, wor
     assert removed.body_ratio >= 0.60
     assert len(partitioned.main_text.root) >= 1
     assert not partitioned.scan.nonbody
+
+
+def test_no_artifact_holds_the_extra_body_beyond_its_mandated_preview(work):
+    """`R-0.2` 后半句：**番外体不进产物目录**——把机械可判的那一半钉死。
+
+    ⚠⚠ 存在的直接原因：曾有一版实现新增 `stage0/source.txt` 存解码归一后的**完整原文**，
+      好让「源身份」那条边落进书目录（commit `2a28dcf`，已 revert）。完整原文必然含
+      番外体 ⇒ 违反这条 `HARD`；而剔掉番外的那一份就是已有的 `clean_text.txt`。
+      这条 HARD 此前只被 API 那条「原文不在就得说不可用」间接盖住，
+      按编号 grep 找不到守卫——所以补一条**直接查产物面**的。
+
+    ⚠ 判据刻意**不是**「任何产物的 `content_sha1` 不得等于 `source_sha1`」：
+      零 removed 的干净书**合法地**满足 `clean_sha1 == source_sha1`
+      （`_auto_approval_eligible` 正是这么判自动批准的）⇒ 那样写是假红。
+      这里查番外正文本身，且取**预览窗口之外**的那一段：`head_preview`/`tail_preview`
+      恒 80/40 码点，是 `R-0.2` 明文要求的残片（「丢了就没有第二次机会」），不是副本。
+    """
+    lead = '番外正文铺垫。' * 20          # 140 码点 > head_preview 的 80
+    trail = '番外正文收束。' * 40         # 280 码点 > tail_preview 取样的末 120
+    unique = '此句只在番外正文的正中间出现。'
+    main = '\n\n'.join(f'{n}\n\n' + '正文一句，她走进门里没有回头。' * 20
+                       for n in (1, 2, 3))
+    text = ('开篇钩子。\n\n' + main + '\n\n（全文完）\n\n番外\n\n'
+            + lead + unique + trail + '\n')
+
+    source = work / 'FQ_番外守卫_9302.txt'
+    source.write_bytes(text.encode('utf-8'))
+    novel_dir, result, _check = run_source(source, work / 'Output')
+
+    # 守卫的守卫①：番外确实被剔掉了，否则下面那条断言是空的。
+    assert result.report.removed, '这份样本根本没触发剔除，本用例什么都没在查'
+    assert unique not in result.clean_text
+    # 守卫的守卫②：预览残片仍在（`R-0.2` 要求的记账没被这条守卫顺手禁掉）。
+    assert any(segment.head_preview for segment in result.report.removed)
+
+    holders = [
+        p for p in novel_dir.rglob('*')
+        if p.is_file() and unique in p.read_bytes().decode('utf-8', 'replace')
+    ]
+    assert not holders, (
+        f'产物目录里有 {len(holders)} 份产物含番外正文：'
+        f'{[str(p.relative_to(novel_dir)) for p in holders]}\n'
+        f'→ `R-0.2`（HARD）说番外体不进产物目录。想让「源身份」落进书目录，'
+        f'走 `novel/core/source.py` 的 base 重锚，不要在这里存第二份正文')
+    # 反面：原始 txt 在书目录**之外**，它当然还留着整段番外。
+    assert unique in source.read_bytes().decode('utf-8')

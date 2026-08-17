@@ -11,7 +11,6 @@ import os
 import re
 from bisect import bisect_left
 from dataclasses import dataclass
-from pathlib import Path
 
 from contracts.schema.api import (
     HookCopyView,
@@ -31,6 +30,7 @@ from novel import paths, prov
 from novel.core.ingest import (
     DecodeProblem, ScanResult, decode_source_bytes, nonbody_kind, scan_text,
 )
+from novel.core.source import resolve_recorded_source
 from novel.errors import (
     ApprovalRequired,
     ArtifactUnreadable,
@@ -67,10 +67,20 @@ def stage0_report(base: str | os.PathLike[str], sid: str) -> RemovalReport:
     return store.read_own(RemovalReport, removal.REPORT_REL)[0]
 
 
-def _original(report: RemovalReport) -> tuple[str | None, str | None]:
-    source = Path(report.original_path)
-    if not source.is_file():
-        return None, f'原始文件已不在 original_path：{source}'
+def _original(report: RemovalReport,
+              base: str | os.PathLike[str]) -> tuple[str | None, str | None]:
+    """审阅屏要的那份原文。**取不到就明说不可用，绝不从别处变出一份。**
+
+    ⚠ `original_path` 指向书目录之外、不是产物，才可以直接摸盘（产物一律经 store）。
+    ⚠ 记录的位置读不到时**只做一种回落**：界面上传的原文按内容地址存在
+      `<base>/_service/uploads/` 底下，Output 根搬家会让记下来的绝对路径断掉，
+      而文件其实没动——`resolve_recorded_source` 用当前 base 认回来，且要求它
+      自证内容地址。外部语料被删则**没有**回落，那是 `R-0.2` 的意思：
+      产物目录里没有第二份原文副本，取不到就是取不到。
+    """
+    source = resolve_recorded_source(report.original_path, base)
+    if source is None:
+        return None, f'原始文件已不在 original_path：{report.original_path}'
     try:
         raw = source.read_bytes()
     except OSError as exc:
@@ -195,7 +205,7 @@ def _stage0_segments(report: RemovalReport, text: str, clean: str) -> list[Stage
 def stage0_segments(base: str | os.PathLike[str], sid: str) -> Stage0Segments:
     store = _store(base, sid, STAGE0_NODE)
     report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
-    text, reason = _original(report)
+    text, reason = _original(report, base)
     if text is None:
         return Stage0Segments(
             source_sha1=report.source_sha1,
