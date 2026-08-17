@@ -464,10 +464,17 @@ def test_require_corpus_overrides_default_marker_and_fails_closed(
 
 
 def test_windows_basetemp_preflight_rejects_deep_paths_before_stage0_runs():
+    """MAX_PATH 未解除的机器上，深 basetemp 必须在 Stage0 炸之前被拦下。
+
+    ⚠ 一律显式传 `long_paths=False`。不传就等于把这条断言的成立与否交给**宿主机器的
+    注册表**——在一台已解除限制的机器上，预检本该放行，于是这个测试会假红。
+    """
     from tests import conftest as hooks
 
-    assert hooks._windows_basetemp_problem('.test_runtime', os_name='nt') is None
-    assert hooks._windows_basetemp_problem('x' * 400, os_name='posix') is None
+    assert hooks._windows_basetemp_problem(
+        '.test_runtime', os_name='nt', long_paths=False) is None
+    assert hooks._windows_basetemp_problem(
+        'x' * 400, os_name='posix', long_paths=False) is None
     assert tuple(hooks._STAGE0_TMP_SUFFIX.parts[-3:-1]) == ('stage0', '_rounds')
     assert 'Output' in hooks._STAGE0_TMP_SUFFIX.parts
 
@@ -475,14 +482,46 @@ def test_windows_basetemp_preflight_rejects_deep_paths_before_stage0_runs():
     # enormous path that would not catch an underestimated relative suffix.
     first_refused = next(
         size for size in range(1, 500)
-        if hooks._windows_basetemp_problem('x' * size, os_name='nt') is not None
+        if hooks._windows_basetemp_problem(
+            'x' * size, os_name='nt', long_paths=False) is not None
     )
     assert hooks._windows_basetemp_problem(
-        'x' * (first_refused - 1), os_name='nt') is None
-    problem = hooks._windows_basetemp_problem('x' * first_refused, os_name='nt')
+        'x' * (first_refused - 1), os_name='nt', long_paths=False) is None
+    problem = hooks._windows_basetemp_problem(
+        'x' * first_refused, os_name='nt', long_paths=False)
     assert problem is not None
     assert '约 260 字符' in problem
     assert 'MAX_PATH(260)' in problem and '--basetemp=.test_runtime' in problem
+    # 报错必须同时给出两条出路，否则人只会去缩路径，永远不知道限制可以一次性解除。
+    assert 'LongPathsEnabled' in problem
+
+
+def test_windows_basetemp_preflight_stands_down_once_the_limit_is_lifted():
+    """限制解除之后，同一个深 basetemp 必须放行。
+
+    这是 `docs/LESSONS.md` 第 21 条那一格：守卫在问题已经消失之后继续拦，就是假红。
+    先前这里硬编码 260、不问机器状态，于是开启系统长路径也换不来一次能跑的深 basetemp。
+    """
+    from tests import conftest as hooks
+
+    for size in (1, 200, 400, 4000):
+        assert hooks._windows_basetemp_problem(
+            'x' * size, os_name='nt', long_paths=True) is None
+
+
+def test_long_path_probe_measures_the_host_and_leaves_nothing_behind():
+    """探测本身：给出 bool、可缓存、且不在系统 temp 里留残留目录。
+
+    ⚠ 它是**实测**（真去建一个 >260 的目录），所以「不留垃圾」是它的正确性的一部分——
+    未解除的机器上多层探测会留下一串连清理自己都删不掉的中间目录。
+    """
+    from tests import conftest as hooks
+
+    before = set(Path(tempfile.gettempdir()).glob('lp-*'))
+    first = hooks._long_paths_usable()
+    assert isinstance(first, bool)
+    assert hooks._long_paths_usable() is first          # lru_cache，不重复摸盘
+    assert set(Path(tempfile.gettempdir()).glob('lp-*')) == before
 
 
 def test_default_collection_keeps_schema_gates_and_carrier_regressions(tmp_path):

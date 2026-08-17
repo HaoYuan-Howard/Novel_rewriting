@@ -2,8 +2,10 @@
 """Repository-wide pytest acceptance options."""
 from __future__ import annotations
 
+import functools
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -31,13 +33,61 @@ _STAGE0_TMP_SUFFIX = (
 )
 
 
+@functools.lru_cache(maxsize=1)
+def _long_paths_usable() -> bool:
+    """这台机器上，**不带 `\\\\?\\` 前缀**的路径能否越过 MAX_PATH。**实测，不推断。**
+
+    ⚠ **不读注册表、也不查解释器 manifest。** 那是两个各自都会变的间接条件
+    （系统 `LongPathsEnabled` + 可执行文件的 `longPathAware`），**两个都成立才有效**；
+    拿其中一个当答案就会在另一个不成立时给出反向结论。直接问文件系统
+    「这条路径建不建得出来」，答案才是这次跑真正会遇到的那一个。
+
+    ⚠ **只探一层超长目录名**（单段 < 255，整条 > MAX_PATH）：多层探测在未启用的
+    机器上会留下一串**删不掉**的中间目录——清理自己也受 MAX_PATH 限制。
+    ⚠ 探测根取系统 temp，因为它短。放在深目录里探，探的是那个深目录而不是这台机器。
+
+    ⚠⚠ 刻意**不**用 `\\\\?\\` 前缀探测：前缀总能成功，但前缀建出来的文件
+    用普通路径**读不回来**（实测 `FileNotFoundError`）。那会把「明确报错」换成
+    「一部分代码看得见、一部分看不见」的静默不一致，比撞墙坏得多。
+    """
+    if os.name != 'nt':
+        return True
+    root = Path(tempfile.gettempdir())
+    pad = _WINDOWS_MAX_PATH + 8 - len(str(root)) - len(os.sep)
+    # ⚠ 名字里必须带 pid：探测目录名若是固定的，`-p xdist` 下两个 worker 同时探测，
+    #   后一个会撞 `FileExistsError`——它是 `OSError` 的子类,于是被当成「不支持长路径」
+    #   而返回一个**假 False**，把一台已解除限制的机器判成没解除。
+    tag = f'lp-{os.getpid():x}-'
+    if not len(tag) + 1 <= pad <= 250:   # temp 本身过长/过短 ⇒ 保守当作没启用
+        return False
+    probe = root / (tag + 'x' * (pad - len(tag)))
+    try:
+        probe.mkdir()
+    except OSError:
+        return False
+    probe.rmdir()                        # 建得出来的路径，同样删得掉
+    return True
+
+
 def _windows_basetemp_problem(
     configured: str | os.PathLike[str] | None,
     *,
     os_name: str = os.name,
+    long_paths: bool | None = None,
 ) -> str | None:
-    """Return an actionable preflight error before a deep Windows path explodes."""
+    """Return an actionable preflight error before a deep Windows path explodes.
+
+    ⚠ `long_paths` 是**注入口**，`None` 表示实测这台机器。守卫必须能确定性地
+    测「已解除」与「未解除」两种状态：把结论交给宿主机器的注册表，等于让这条
+    断言随环境改变，而其中一侧在另一种机器上根本测不到。
+    """
     if os_name != 'nt' or configured is None:
+        return None
+    if long_paths is None:
+        long_paths = _long_paths_usable()
+    if long_paths:
+        # ⚠ 限制已解除 ⇒ 这一格**不许再拦**。继续按 260 判就是 LESSONS 第 21 条那个
+        # 形状：守卫自己漂了，把一个实际能跑的 basetemp 判成假红。
         return None
     base = Path(configured).expanduser().resolve(strict=False)
     longest = base / _STAGE0_TMP_SUFFIX
@@ -47,7 +97,10 @@ def _windows_basetemp_problem(
     return (
         f'Windows --basetemp is too deep: {base}；Stage0 最长临时归档路径约 '
         f'{length} 字符，达到/超过 MAX_PATH({_WINDOWS_MAX_PATH})。'
-        '请改用仓库内短路径，例如 --basetemp=.test_runtime'
+        '请改用仓库内短路径，例如 --basetemp=.test_runtime；'
+        '或一次性解除这台机器的限制（管理员设 '
+        'HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled=1），'
+        '解除后本预检自动不再拦'
     )
 
 
