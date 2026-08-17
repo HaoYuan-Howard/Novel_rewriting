@@ -298,40 +298,48 @@ def test_a_hard_local_hit_with_a_fix_route_is_repairable_not_human_only():
 
 @_STAGE6_CORPUS
 def test_global_review_pending_fail_and_unver_are_verification_rows(box):
+    """未决 / `UNVER` / `FAIL` 进待核验清单，`PASS` 不进。
+
+    ⚠⚠ **审阅面必须从 `build_review` 现算，不许手搓几条 item。** 这里曾经手搓四条
+    （`source_sha256='b'*64` + 自造的 `subject_path`/`subject_sha256`），而
+    `_global_review_freshness`（`novel/store.py:1120-1138`）拿 `build_review(grounding)`
+    现算的主体哈希与逐条**身份四元组**去比 ⇒ 手搓的载荷**按构造永远算不出 `fresh`**；
+    而 `stage2/global_review.json` 在 `SELF_FRESH_DETERMINISTIC` 里 ⇒ `store.write` 必拒
+    （实测 `ProvenanceRefused: … stale/file_changed`）。
+    这是 `docs/LESSONS.md` 第 21 条第一形状：**守卫重拼了生产的实参**。
+    ⇒ 身份四元组一个字不动，只改 `state`/`actor`/`reason` 三格——那三格恰恰是新鲜度
+    **不看**的，理由就写在 `novel/store.py:1121-1122`（批准完成度是闸门/界面的事，不是新鲜度）。
+    """
     from contracts.artifacts import STAGE2_GLOBAL_REVIEW
-    from contracts.schema.evaluation import GlobalReview, GlobalReviewItem
     from novel import prov
     from novel.orchestrator.state import readonly_ctx
+    from novel.quality.global_review import build_review
     from novel.store import ArtifactStore
 
-    digest = 'a' * 64
-    review = GlobalReview(source_sha256='b' * 64, items=[
-        GlobalReviewItem(
-            item_id='secret:one', kind='secret', subject_path='canon.secrets.s1.fact',
-            subject_sha256=digest, state='pending', evidence=[]),
-        GlobalReviewItem(
-            item_id='reveal:two', kind='reveal',
-            subject_path='canon.secrets.s1.reader_reveal_events.0',
-            subject_sha256='c' * 64, state='UNVER', evidence=[], actor='reviewer',
-            decided_at='2026-08-16T00:00:00+00:00', reason='证据不足'),
-        GlobalReviewItem(
-            item_id='known:three', kind='known_by',
-            subject_path='canon.secrets.s1.character_known_by',
-            subject_sha256='d' * 64, state='FAIL', evidence=[], actor='reviewer',
-            decided_at='2026-08-16T00:00:00+00:00', reason='与原文冲突'),
-        GlobalReviewItem(
-            item_id='known:four', kind='known_by',
-            subject_path='canon.secrets.s2.character_known_by',
-            subject_sha256='e' * 64, state='PASS', evidence=[], actor='reviewer',
-            decided_at='2026-08-16T00:00:00+00:00', reason='已核实'),
-    ])
-    store = ArtifactStore(readonly_ctx(
-        box.dir, 'stage2.global', prov.code_version()))
-    store.write(STAGE2_GLOBAL_REVIEW, review)
+    expected = build_review(box.read('stage2/global_grounding.json'))
+    corpus.declared_dependency(
+        len(expected.items) >= 4,
+        needs=(f'一份至少 4 条审阅项的 stage2/global_grounding.json'
+               f'（这本现算出 {len(expected.items)} 条，凑不出四种决策状态）'),
+        produced_by='stage2.global', cost='付费')
+
+    decided = {'actor': 'reviewer', 'decided_at': '2026-08-16T00:00:00+00:00'}
+    items = list(expected.items)
+    items[1] = items[1].model_copy(update={'state': 'UNVER', 'reason': '证据不足', **decided})
+    items[2] = items[2].model_copy(update={'state': 'FAIL', 'reason': '与原文冲突', **decided})
+    items[3] = items[3].model_copy(update={'state': 'PASS', 'reason': '已核实', **decided})
+
+    store = ArtifactStore(readonly_ctx(box.dir, 'stage2.global', prov.code_version()))
+    store.write(STAGE2_GLOBAL_REVIEW, expected.model_copy(update={'items': items}))
+    assert store.freshness(STAGE2_GLOBAL_REVIEW).state == 'fresh', \
+        '只改三格决策就被判过期了——那说明新鲜度现在也看决策状态，本条的构造前提没了'
 
     rows = [row for row in inbox_view(str(box.root), box.sid).items
             if row.kind == 'verification' and row.stage == 'stage2']
-    assert {row.rule for row in rows} == {'secret:one', 'reveal:two', 'known:three'}
+    # ⚠ 断言写成**取值面的补集**，不写成手数出来的那几个 id：现役语料一本有几十条审阅项，
+    #   数出来的那份一换书就错，而它会红在「这本书碰巧有几条」上，不是它要验的那件事。
+    assert {row.rule for row in rows} == {
+        item.item_id for item in items if item.state != 'PASS'}
     assert all('--review-decisions' in row.how and 'subject hash' in row.how for row in rows)
 
 

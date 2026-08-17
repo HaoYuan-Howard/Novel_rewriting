@@ -184,7 +184,11 @@ def test_stage4_apply_edit_lands_a_round_and_rebuilds_context(box4):
     from novel.stages.stage4 import plan
 
     edit = _plan_edit_of(box4)
-    edit['output_chapters'][0]['chapter_goal']['rationale'] += '（人工微调）'
+    # ⚠ `rationale` 的取值面是「非空串或 `null`」：本来就是 `null` 的那些书上 `+=` 会当场
+    #   `TypeError`——**测试自己炸了**，而它想验的那条人工修订路一次都没跑到。
+    #   同一个坑在 `tests/test_stage4.py::_synthetic_response` 与 `:429` 都写过说明，只有这里漏了。
+    goal = edit['output_chapters'][0]['chapter_goal']
+    goal['rationale'] = (goal.get('rationale') or '') + '（人工微调）'
     box4.write('stage4/plan_edit.json', edit)
 
     ctx = RunContext.open(str(box4.root), box4.sid, 'stage4.plan', paid=False)

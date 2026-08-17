@@ -331,32 +331,50 @@ def _synthetic_response(box: sandbox.Sandbox, *, poison: bool) -> dict:
 
     `poison=True` ⇒ 往一个 goal 里塞一个写法词。**盘上三本 `style_words` 0 命中**，
     要看闸门真的拦得住就只能合成——那 16 条 HARD 在盘上是零反例样本。
+
+    ⚠⚠ **`plan_beats` 必须由生产落点反查，不许按段序现编。** 这里曾经是
+    `plan_beat_id(oo, i) for i, _ in enumerate(segments, 1)`，即假定
+    **「写作单元数 == 源内容单元数」**——而 `R-5.5` 恰恰废除了这个恒等：
+    规划器可以把相邻源单元并进同一个写作单元。盘上实测三本 51/55 章都并过
+    （书[0] 20 章里 19 章有并，缺 41 个编号），于是合成响应漏掉尾部那些 `pNN_MM`，
+    `expand_plan_beats` 报「这一拍没有给预算」**41 处**——
+    **测试自己造了一份违约响应**，而它想验的那道闸（`style_words`）一次都没跑到。
+    ⇒ 从 `group_map(group_beats(…))` 反查每个源 beat 属于哪一拍。
+    这是 `docs/LESSONS.md` 第 21 条第一形状（守卫重拼了生产的实参）。
+
+    ⚠ **其余各格忠实镜像盘上那一份**（段序、`narrative_role`、`delivery`、`transition`、
+    两个 hook goal 的落点都不动）。本函数的定义就是「反推一份**会产出这份计划**的响应」，
+    而盘上那份是过了全部结构闸才落的 ⇒ 镜像它，结构类 HARD 按构造必然全过，
+    只剩被投毒的那一条会红。曾经这里另外造了一次重排（`len(rows) >= 4` 就把末段提到最前），
+    那是上一版「编号按段序」留下的补丁：编号恒等于源序 ⇒ 必然撞 `structure_changed`，
+    于是拿人为重排去躲。现在编号是反查出来的，那个补丁不再需要，
+    留着反而会把 `structure_transition` 的衔接标记覆盖掉。
     """
-    from novel.stages.stage4.beats import plan_beat_id
+    from novel.stages.stage4.beats import group_beats, group_map
+
+    unit_of = {bid: pid
+               for pid, bids in group_map(group_beats(
+                   box.read('stage2/chapter_blueprints.json'),
+                   box.read('stage1/main_text.json'))).items()
+               for bid in bids}
+
     src = box.read('stage4/plan_chapters.json')
     out = {'reconstruction_strategy': src['reconstruction_strategy'], 'output_chapters': []}
     for ch in src['output_chapters']:
         c = {k: ch[k] for k in ('output_ordinal', 'from_source_ordinals',
                                 'chapter_goal', 'open_hook_goal', 'end_hook_goal')}
-        rows = [{'plan_beats': [plan_beat_id(ch['output_ordinal'], i)],
-                 'budget_chars': be['budget_chars'],
-                 'narrative_role': 'setup', 'delivery': 'scene',
-                 'transition': 'start' if i == 1 else 'continue'}
-                for i, be in enumerate(ch['segments'], 1)]
-        if len(rows) >= 4:
-            rows = [rows[-1], *rows[:-1]]
-            rows[0].update(narrative_role='cold_open', transition='start')
-            rows[1]['transition'] = 'earlier'
-            for row in rows[2:]:
-                row['transition'] = 'continue'
-        first_i = int(rows[0]['plan_beats'][0].rsplit('_', 1)[1]) - 1
-        last_i = int(rows[-1]['plan_beats'][-1].rsplit('_', 1)[1]) - 1
-        c['open_hook_goal']['fact_refs'] = [{
-            'kind': 'event', 'ref': ch['segments'][first_i]['from_beats'][0],
-            'chapter': ch['output_ordinal']}]
-        c['end_hook_goal']['fact_refs'] = [{
-            'kind': 'event', 'ref': ch['segments'][last_i]['from_beats'][-1],
-            'chapter': ch['output_ordinal']}]
+        rows = []
+        for be in ch['segments']:
+            pids: list[str] = []
+            for bid in (be.get('from_beats') or []):
+                pid = unit_of.get(bid)
+                if pid is not None and pid not in pids:
+                    pids.append(pid)
+            rows.append({'plan_beats': pids,
+                         'budget_chars': be['budget_chars'],
+                         'narrative_role': be['narrative_role'],
+                         'delivery': be['delivery'],
+                         'transition': be['transition']})
         c['segments'] = rows
         out['output_chapters'].append(c)
     if poison:
