@@ -67,35 +67,10 @@ def stage0_report(base: str | os.PathLike[str], sid: str) -> RemovalReport:
     return store.read_own(RemovalReport, removal.REPORT_REL)[0]
 
 
-def _original(store: ArtifactStore,
-              report: RemovalReport) -> tuple[str | None, str | None]:
-    """原文文本。**书内源副本优先，`original_path` 只是回落。**
-
-    ⚠ 副本存的已经是**解码归一之后**的文本（`content_sha1` 恒等于 `source_sha1`），
-      所以这一侧不再解码；回落那一侧是原始字节，必须解码。两侧最后都用
-      `source_sha1` 加码点数对账，判据一样严——副本不是「更宽松的那条路」。
-    ⚠ 副本是**产物**，因此经 `store` 读（`novel/store.py` 是产物读写的唯一落点）；
-      `original_path` 指向书目录之外、不是产物，才可以直接摸盘。
-    ⚠⚠ 回落必须留着：副本是后加的产物，早于它落盘的书一份都没有。
-    """
-    if store.exists(removal.SOURCE_REL):
-        try:
-            text = store.read_text(removal.SOURCE_REL)
-        except (OSError, ArtifactUnreadable) as exc:
-            return None, f'书内源副本读不了：{exc!r}'
-        got = prov.content_sha1(text.encode('utf-8'))
-        if got != report.source_sha1:
-            return None, (f'书内源副本与报告不一致：报告 {report.source_sha1[:10]}，'
-                          f'当前 {got[:10]}')
-        if len(text) != report.total_code_points:
-            return None, (f'书内源副本长度与报告不一致：报告 {report.total_code_points}，'
-                          f'当前 {len(text)}')
-        return text, None
-
+def _original(report: RemovalReport) -> tuple[str | None, str | None]:
     source = Path(report.original_path)
     if not source.is_file():
-        return None, (f'原始文件已不在 original_path：{source}'
-                      f'（这本书也没有 `{removal.SOURCE_REL}` 副本）')
+        return None, f'原始文件已不在 original_path：{source}'
     try:
         raw = source.read_bytes()
     except OSError as exc:
@@ -220,7 +195,7 @@ def _stage0_segments(report: RemovalReport, text: str, clean: str) -> list[Stage
 def stage0_segments(base: str | os.PathLike[str], sid: str) -> Stage0Segments:
     store = _store(base, sid, STAGE0_NODE)
     report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
-    text, reason = _original(store, report)
+    text, reason = _original(report)
     if text is None:
         return Stage0Segments(
             source_sha1=report.source_sha1,

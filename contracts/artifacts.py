@@ -12,14 +12,6 @@ from typing import Final
 
 
 ARTIFACT_PATHS: Final[dict[str, str]] = {
-    # 原文的忠实副本（**解码归一之后的 utf-8 文本**，不是原始字节）。
-    # ⚠ 存归一后的文本而不是原始字节，是因为 `RemovedSegment.span` 的偏移是**码点**偏移，
-    #   算在这个文本上；而 `source_sha1` 恰恰也是它的 sha1 ⇒ 复算一步到位、无需二次解码。
-    # ⚠⚠ **它存在的理由**：`original_path` 指向书目录之外，随时可能被移走/删除
-    #   （界面上传的书更甚——原文落在 `<base>/_service/uploads/` 里，base 一搬就断）。
-    #   源文件一没，「回原文核对被剔除段落」与「不带 `--source` 复跑 stage0」双双失效。
-    #   副本住在书目录里 ⇒ 与这本书同生共死。
-    'stage0.source_text': 'stage0/source.txt',
     'stage0.clean_text': 'stage0/clean_text.txt',
     'stage0.removal_report': 'stage0/removal_report.json',
     'stage0.machine_snapshot': 'stage0/machine_snapshot.json',
@@ -74,7 +66,6 @@ def artifact_rel(name: str, **values: object) -> str:
         raise ValueError(f'{name} 的路径参数不完整或非法：{values!r}') from exc
 
 
-STAGE0_SOURCE_TEXT = artifact_rel('stage0.source_text')
 STAGE0_CLEAN_TEXT = artifact_rel('stage0.clean_text')
 STAGE0_REMOVAL_REPORT = artifact_rel('stage0.removal_report')
 STAGE0_MACHINE_SNAPSHOT = artifact_rel('stage0.machine_snapshot')

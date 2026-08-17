@@ -275,27 +275,15 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     source = _valued(flags, '--source')
-    known_dir = recorded_original = None
     if source is None:
         store = ArtifactStore(ctx)
         previous, _raw = store.read_own(RemovalReport, removal.REPORT_REL)
-        # ⚠ **书内源副本优先，`original_path` 只是回落。** 那一条是书目录之外的绝对路径：
-        #   Output 根搬家、外部语料被删、界面上传的原文随 `_service/` 迁走，
-        #   任何一件都会让这里拿到一条已经不存在的路径 ⇒ 复跑直接 `UpstreamMissing`。
-        #   副本住在书目录里，跟着这本书走。
-        copy = paths.artifact_path(ctx.novel_dir, removal.SOURCE_REL)
-        if copy.is_file():
-            source, known_dir = copy, ctx.novel_dir
-            recorded_original = previous.original_path
-        else:
-            source = previous.original_path
+        source = previous.original_path
     novel_dir, result, _report = removal.run_source(
         source,
         ctx.novel_dir.parent,
         dry_run='--dry-run' in tokens,
         expected_sid=ctx.sid,
-        known_dir=known_dir,
-        recorded_original_path=recorded_original,
     )
     action = '将写入' if '--dry-run' in tokens else '已写入'
     print(

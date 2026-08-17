@@ -11,7 +11,7 @@ from __future__ import annotations
 from contracts.artifacts import (
     STAGE0_AUDIT_ENTRY, STAGE0_CLEAN_TEXT, STAGE0_MACHINE_SNAPSHOT,
     STAGE0_MERGE_CANDIDATE,
-    STAGE0_REMOVAL_REPORT, STAGE0_SOURCE_TEXT,
+    STAGE0_REMOVAL_REPORT,
 )
 
 import codecs
@@ -67,7 +67,6 @@ from novel.llm.ledger import CostLedger
 from novel.run import RunContext
 from novel.store import ArtifactStore
 
-SOURCE_REL = STAGE0_SOURCE_TEXT
 CLEAN_REL = STAGE0_CLEAN_TEXT
 REPORT_REL = STAGE0_REMOVAL_REPORT
 SNAPSHOT_REL = STAGE0_MACHINE_SNAPSHOT
@@ -80,17 +79,6 @@ class RemovalResult:
     report: RemovalReport
     scan: ScanResult
     machine_snapshot: MachineRemovalSnapshot
-
-    #: 解码归一后的**源**文本，落 `stage0/source.txt`（`content_sha1` 恒等于
-    #: `report.source_sha1`）。`None` = **这一份结果不该动源副本**。
-    #:
-    #: ⚠⚠ **默认必须是 `None`，且绝不能退化成 `clean_text`。** `_write` 被人工编辑路径
-    #: 复用（`run_edit_plan` 那条），那里传进来的文本是**编辑之后的正文**——把它写进
-    #: `source.txt` 就等于伪造原文，而伪造出来的那份还会通过 `source_sha1` 的比对
-    #: （因为报告里的 sha1 也被一起改了），从此没有任何一层能发现原文已经不是原文。
-    #: 保留旧稿的几条分支（`kept = RemovalResult(old_clean, old, ...)`）同理：源没变，
-    #: 副本就不该重写。只有真正读过源文件的那一条（`remove_decoded`）填它。
-    source_text: str | None = None
 
     @property
     def body_ratio(self) -> float:
@@ -208,8 +196,7 @@ def remove_decoded(
         audit_seq=0,
         audit_head_sha256=None,
     )
-    # `text` 是这条路径唯一真正读过源文件的地方 ⇒ 只有它填 `source_text`。
-    return RemovalResult(clean, report, scan, snapshot, source_text=text)
+    return RemovalResult(clean, report, scan, snapshot)
 
 
 def remove_bytes(raw: bytes, *, original_path: str, code: str) -> RemovalResult:
@@ -221,15 +208,7 @@ def remove_bytes(raw: bytes, *, original_path: str, code: str) -> RemovalResult:
     return remove_decoded(decoded, original_path=original_path, code=code)
 
 
-def inspect_source(source_path: str | Path, *, code: str,
-                   original_path: str | None = None) -> RemovalResult:
-    """读源文件并做一次剔除决策。
-
-    ⚠ `original_path`：**报告里要记的那个来源**，默认就是本次读的路径。
-      从书内源副本复跑时必须显式传原值——否则 `report.original_path` 会被改写成
-      `stage0/source.txt`，「这份原文最初从哪儿来」这条历史事实就被副本顶替了。
-      副本是原文的**留存**，不是原文的**产地**，两者不能混。
-    """
+def inspect_source(source_path: str | Path, *, code: str) -> RemovalResult:
     source = Path(source_path).resolve()
     if not source.is_file():
         raise UpstreamMissing(f'原始小说不在盘上：{source}')
@@ -237,7 +216,7 @@ def inspect_source(source_path: str | Path, *, code: str,
         raw = source.read_bytes()
     except OSError as exc:
         raise ArtifactUnreadable(f'读不了原始小说 {source}：{exc!r}') from exc
-    return remove_bytes(raw, original_path=original_path or str(source), code=code)
+    return remove_bytes(raw, original_path=str(source), code=code)
 
 
 def _context(novel_dir: Path, node: str) -> RunContext:
@@ -274,10 +253,6 @@ def _archive_current(store: ArtifactStore, round_no: int) -> None:
 
 def _write(store: ArtifactStore, result: RemovalResult) -> None:
     # 两份产物各自原子；跨文件不假装原子。任一中断都会留下可由双哈希识别的半轮状态。
-    # ⚠ 源副本只在 `source_text` 有值时写——理由见 `RemovalResult.source_text`：
-    #   人工编辑路径复用本函数，无条件写会把编辑后的正文冒充成原文。
-    if result.source_text is not None:
-        store.write_text(SOURCE_REL, result.source_text)
     store.write_text(CLEAN_REL, result.clean_text)
     store.write(REPORT_REL, result.report)
 
@@ -337,36 +312,15 @@ def _with_auto_approval(
         }),
         result.scan,
         result.machine_snapshot,
-        # ⚠ 必须透传：自动批准会**重建**一份 RemovalResult，漏了这一位就等于
-        #   首跑零删除的书（正是最常见的那条路）永远拿不到源副本。
-        source_text=result.source_text,
     )
 
 
 def run_source(source_path: str | Path, base: str | Path, *, force: bool = False,
-               dry_run: bool = False, expected_sid: str | None = None,
-               known_dir: Path | None = None,
-               recorded_original_path: str | None = None) \
+               dry_run: bool = False, expected_sid: str | None = None) \
         -> tuple[Path, RemovalResult, CheckReport | None]:
-    '''真实摄入路径：源文件推导目录，保护已有人工稿，写 stage0 两份产物。
-
-    ⚠ `known_dir`：**从书内源副本复跑**时传它。此时身份取自**目录名**
-      （`paths.title_of` 是书名的唯一权威来源，见该函数的 F-118 记录），
-      不从 `source_path` 的文件名推导——副本一律叫 `source.txt`，
-      推出来的 sid 会是 `source`、书名会是 `source`，产物就写进另一个目录去了。
-    ⚠ 首次摄入没有 `known_dir` 也不该有：那时目录还不存在，文件名是唯一的身份来源。
-    ⚠ `recorded_original_path`：与 `known_dir` 同来同去。复跑**不改产地**——报告里的
-      `original_path` 保持它原本记的那个来源，否则副本会把「原文最初从哪来」顶替掉。
-      由调用方给（它已经读过报告），本函数不再读一遍去多记一条来源边。
-    '''
-    if known_dir is not None:
-        result = inspect_source(source_path, code=prov.code_version(),
-                                original_path=recorded_original_path)
-        sid = paths.derive_source_meta(known_dir.name)[0]
-        title = paths.title_of(known_dir)
-    else:
-        result = inspect_source(source_path, code=prov.code_version())
-        sid, title, _platform = paths.derive_source_meta(str(source_path))
+    '''真实摄入路径：源文件推导目录，保护已有人工稿，写 stage0 两份产物。'''
+    result = inspect_source(source_path, code=prov.code_version())
+    sid, title, _platform = paths.derive_source_meta(str(source_path))
     try:
         paths.check_sid(sid)
     except PathRefused as exc:
@@ -457,8 +411,6 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
         return novel_dir, result, None
 
     transaction_rels = [SNAPSHOT_REL, CLEAN_REL, REPORT_REL]
-    if result.source_text is not None:
-        transaction_rels.append(SOURCE_REL)
     if auto_approved:
         transaction_rels.append(STAGE0_AUDIT_ENTRY.format(n=result.report.audit_seq))
     with store.history_transaction(*transaction_rels):
