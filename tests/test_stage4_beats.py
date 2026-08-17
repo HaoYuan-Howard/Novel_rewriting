@@ -7,7 +7,7 @@ from functools import wraps
 
 import pytest
 
-from contracts.invariants import BEAT_MIN_CHARS, PLAN_BUDGET_BAND
+from contracts.invariants import BEAT_MIN_CHARS, GROUPING_VERSION, PLAN_BUDGET_BAND
 from novel.core.spans import content_only, locate_spans
 from novel.core.text import norm
 from novel.errors import RefusedByStructure
@@ -54,23 +54,20 @@ def needs_corpus(test):
     return run
 
 
-# ── ⭐ 一、拍分组 == 存盘 ──────────────────────────────────────────────────
-
-@needs_corpus
-def test_the_grouping_reproduces_every_plan_on_disk():
-    """按当前算法重组后，必须与每份当前正式计划逐组相等。"""
-    total_beats = total_refs = 0
-    for sid in BOOKS:
-        groups = group_beats(BPS[sid], MAIN[sid])
-        for o in (PLANS[sid].get('output_chapters') or []):
-            oo = o.get('output_ordinal')
-            stored = [list(be.get('from_beats') or []) for be in (o.get('segments') or [])]
-            assert [list(g) for g in groups.get(oo, [])] == stored, (
-                f'{sid} 第 {oo} 章的拍与盘上不一致\n  算: {groups.get(oo)}\n  盘: {stored}')
-            total_beats += len(stored)
-            total_refs += sum(len(x) for x in stored)
-    assert total_beats > 0 and total_refs >= total_beats
-
+# ── 一、源 span 定位与预算基准 ────────────────────────────────────────────
+#
+# ⚠⚠ **这里曾经有一条「重算分组必须逐组等于盘上 `from_beats`」的语料对账，已删。**
+# 它断言的是一道**产品明说不存在的闸**：`R-5.5` 把「输出写作单元的分组与顺序」交给了
+# LLM（`group_beats` 的输出从不落盘，只是喂给规划器的候选，再由 `expand_plan_beats`
+# 按模型给的顺序展开），而 `R-5.6` 的 `structure_changed`（HARD）更**要求**源单元 ≥4
+# 的章不得仍按源序展开 ⇒ 那条断言与一条 HARD 方向相反，在产品**正常工作时**恒红
+# （实测盘上三本 55/55 章全部命中）。属 `docs/LESSONS.md` 第 21 条第二形状。
+# 它想守的合法那半已被判据侧完整接住：`structure_units`（HARD，守「每个源 beat 恰好
+# 一次 + 整组落在同一写作单元 + 组内连续不换序」）、`beat_coverage`（HARD，守一个不丢）、
+# `beat_ref` + `one_to_one`（守跨章）；那两条从未见过红灯的分支已在
+# `tests/test_hard_counterexamples.py` 补了定向反例。
+# 它唯一守得住而别处没有的那半——「算法漂了而 `GROUPING_VERSION` 没跟着动」——
+# 由下面第三节的 `test_the_grouping_version_string_moves_whenever_the_grouping_moves` 接住。
 
 @needs_corpus
 def test_every_current_source_span_locates():
@@ -169,6 +166,30 @@ def test_a_big_enough_beat_is_never_touched():
     ids = ['b01_01', 'b01_02']
     bidx = _bidx({b: BEAT_MIN_CHARS for b in ids})
     assert group_beats(_bps(ids), [], bidx)[1] == [['b01_01'], ['b01_02']]
+
+
+def test_the_grouping_version_string_moves_whenever_the_grouping_moves():
+    """⭐ **接住被删掉那条语料对账唯一守得住、而别处没有的那半。**
+
+    `params_drift`（`novel/stages/stage4/checks.py:223-243`）判的是「这份计划的拍是照
+    哪一套切的」，而它的**全部**依据就是 `GROUPING_VERSION` 这一个字符串。
+    算法改了而这个串没跟着改 ⇒ 盘上一批旧计划会被当成同一把尺子量过的，
+    而它们不是；那条判据会报「比过」，**而它其实没比**——一个假的匹配比没有记录更坏。
+    ⇒ 把「算法的行为」与「版本串」钉进同一条断言：改 `group_beats` 的行为必须同时改这里
+    与 `contracts/invariants.py::GROUPING_VERSION`，否则本条当场红。
+
+    ⚠ **这不是把实现抄一遍**：只有一组固定输入 → 一组固定输出，约束的是
+    「行为变了要有人改版本串」，不是「行为该怎么算」——后者由本节上面那四条性质测试守。
+    这一组输入刻意走满三件事：吸收碎拍、**并进较小的那一侧**（b01_02 两侧 500 vs 100
+    取右）、以及**没有右邻居时并左**（b01_04），且需要连续两轮才收敛。
+    """
+    assert GROUPING_VERSION == 'absorb-small-v1'
+    ids = ['b01_01', 'b01_02', 'b01_03', 'b01_04']
+    bidx = _bidx({'b01_01': 500, 'b01_02': 10, 'b01_03': 100, 'b01_04': 10})
+    assert group_beats(_bps(ids), [], bidx)[1] == [
+        ['b01_01'], ['b01_02', 'b01_03', 'b01_04']], (
+        '分组行为变了。**这不是把断言改成新值就完事**——`GROUPING_VERSION` 要同时 bump，'
+        '否则盘上按旧算法切的计划会被 `params_drift` 当成同一套尺子量过的')
 
 
 def test_plan_beat_ids_use_p_not_b():

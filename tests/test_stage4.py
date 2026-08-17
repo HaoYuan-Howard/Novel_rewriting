@@ -62,6 +62,16 @@ def test_rebuilding_the_context_then_checking_gives_a_green_badge(book):
             '有判据注册了却没有任何代码执行过它'
         assert not [ln.rule for ln in rep.rules if ln.sev == 'hard' and ln.status == 'hit'], \
             'HARD 命中——盘上这三本一条都不该红'
+
+        # ⚠ **绿灯必须带扫描分母**（判据 31 / LESSONS 第 2 条）：`structure_units` 的分母是
+        #   「源内容单元数」，它归零时这条 HARD 会**合法地**报绿——而那与「查过、干净」
+        #   在报告上长得一模一样。上面那条 `HARD 命中 == 0` 因此单独成立不了。
+        #   ⇒ 这一条是 `R-5.6` 里「源单元守恒」那半在语料上的唯一分母证据。
+        units = next(ln for ln in rep.rules if ln.rule == 'structure_units')
+        assert units.scanned and not units.scanned.startswith('0 '), (
+            f'`structure_units` 的扫描分母是 {units.scanned!r}——这一层没东西可查，'
+            f'它的绿不代表源内容单元真的守恒过')
+
         assert rep.badge == 'pass' and rep.passed, (
             f'badge={rep.badge}：本层没有一条常驻 `unver`，重建过上下文之后它就该是绿的。'
             f'unver 的有：{[ln.rule for ln in rep.rules if ln.status == "unver"]}')

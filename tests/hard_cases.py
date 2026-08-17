@@ -159,6 +159,37 @@ _BPS4_HINGED = {'blueprints': [
     for bp in _BPS4['blueprints']]}
 
 
+#: `structure_units` 的判定有四支（`novel/stages/stage4/checks.py:187-195`）：
+#: ①重复引用 ②组内有 beat 没出现 ③一个源单元被拆到两个写作单元 ④组内换序。
+#: 上面那张表里的 `structure_units` 样本只走 ①，而 ③④ **在 `_BPS4` 上构造不出来**：
+#: 那份蓝图的 beat 都不带 `span` ⇒ `beat_index` 给 `source_chars=None` ⇒ `group_beats`
+#: 让每拍独立成组，而**单元素组永远连续、永远落在同一个写作单元里**。
+#: ⇒ 这一份专供那两支：三拍同层、前两拍够碎会被吸收成一个源内容单元、第三拍够大保持独立。
+_BPS4_UNIT = {'blueprints': [
+    {'chapter_ordinal': 1, 'beats': [
+        {'beat_id': 'b1_01', 'event': '事件一', 'time_layer': 'present'},
+        {'beat_id': 'b1_02', 'event': '事件二', 'time_layer': 'present'},
+        {'beat_id': 'b1_03', 'event': '事件三', 'time_layer': 'present'}]}]}
+
+
+def _bidx4_unit() -> dict:
+    """`_BPS4_UNIT` 的量纲表：让 b1_01+b1_02 合成一个源内容单元，b1_03 保持独立。
+
+    ⚠ **底座走 `beat_index` 这个生产落点再改 `source_chars`**，不手搓整个字典：
+    手搓一份就得把 `ord`/`hinges`/`time_layer`/`place`/`present_char_ids` 全抄一遍，
+    而 `beat_index` 一旦多产一个键，抄的那份就悄悄地与生产分家
+    （`tests/test_stage4_beats.py::test_beat_index_hands_verbatim_pieces_a_form_it_can_actually_read`
+    记着这条缝断掉时是什么下场）。这里只按引用改一个字段。
+    """
+    from contracts.invariants import BEAT_MIN_CHARS
+    from novel.stages.stage4.beats import beat_index
+
+    idx = beat_index(_BPS4_UNIT, [_MAIN4[0]])
+    for bid, n in (('b1_01', 40), ('b1_02', 40), ('b1_03', BEAT_MIN_CHARS)):
+        idx[bid]['source_chars'] = n
+    return idx
+
+
 def _b4(*ids: str, budget: int = 100) -> dict:
     return {'budget_chars': budget, 'from_beats': list(ids)}
 
