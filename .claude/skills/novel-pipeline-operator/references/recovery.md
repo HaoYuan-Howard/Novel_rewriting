@@ -46,6 +46,14 @@
 | `human` | 由受托 agent 使用下表的正式人工输入面；必要时用 `--pick` 或机械结论可达的 `--wontfix` | 默认 0 外部调用；人工编辑不得绕过同一闸门 |
 | `none` | 保留 metric/info 读数，不做修复 | 不为“全绿”制造动作 |
 
+`deterministic` 那一行的入口**由 finding 的 `fix` 给出，不要自己挑**。注册在案的确定性修复路由只有两条 flag：
+`--renormalize`（`stage2.global` / `stage2.blueprint`，按当前契约重算代码派生字段与原文定位并写回，
+修锚点逐字、悬空 id、secret 时序这类定位问题）与 `stage2.blueprint --chapters <N>`（定向重生成那几章，**这一条付费**）。
+另有两条同样 0 成本、会写盘但不由 `fix` 指名的重算入口，只在读数需要刷新时用：
+`--recheck`（`stage5.write` / `stage6.hook` / `stage7.rename`，刷新已有成稿的指标并重拼 `draft.md`）与
+`stage3.style --remeasure`（重算的 measurable 写回正式产物，其余字段不动）。
+**它们都写盘**，所以照样先 preview、前后打点、以最新 check 复验；只是不发起外部调用。
+
 `llm` 那一行的「finding 明列的付费入口」在 `stage5.write --revise` 之外还有三条注册在案的定向返工路，
 **它们都要再调一次模型**，只在对应 finding 指名时才跑，不作为「提高质量」的自选项：
 
@@ -59,24 +67,35 @@
 
 ## 允许写入面
 
-正式产物必须由 CLI 生成。受托 agent 只可直接创建或编辑下列人工输入；路径、形状和前稿要求以当前终态文案与 `docs/schema/` 为准。
+正式产物必须由 CLI 生成。受托 agent 只可直接创建或编辑下表的人工输入，并只经下表的入口落盘；
+路径、形状和前稿要求以当前终态文案与 `docs/schema/` 为准。
 
-| 层 | 允许的人产输入 | 消费入口 | 约束 |
+下表按**节点**索引，覆盖每一条 0 成本、但**会改动盘上产物**的入口——包括不需要人产文件的那几条
+（`--revalidate` / `--renormalize` / `--recheck` / `--remeasure` / `--identity` / `--adopt-residual`）。
+**“0 成本”不等于“只看不动”**：真正只读的是 `--dry-run`、`--check-only`、`--measure-only`、
+`--names-only`、`--emit-edit-template`，以及 `stage6.hook --identity`。表外的 0 成本 flag 一律按会写盘对待。
+
+| 节点 | 0 成本写盘入口 | 人产输入 | 约束 |
 |---|---|---|---|
-| stage0 | 正式 edit/edit-plan 形状 | `stage0.edit --apply-edit ...` 或 `--apply-edit-plan ...` | 不直接覆盖 `clean_text.txt` 或 removal report |
-| stage2 global/blueprint | finding 明确允许时编辑活动 `.INVALID` | 对应节点 `--revalidate --actor <id> --reason <text>` | 本层没有通用 `--apply-edit`；只改证据指向字段，不改生成轮次与来源账 |
-| stage3 | `<novel-dir>/stage3/style_edit.json`；终态明确允许时可修活动 `.INVALID` | `stage3.style --apply-edit <绝对路径>` 或 `--revalidate --actor <id> --reason <text>` | 决策集只改 schema 开放字段 |
-| stage4 | `<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID` | `stage4.plan --apply-edit <绝对路径>` 或 `--revalidate --actor <id> --reason <text>` | `--revalidate` 强审计并重建 writer context；仍以追跑 check/state 验证 |
-| stage5 | 文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}` | `stage5.write --apply-edit <绝对路径>` | **0 LLM 调用，但必须提交该章全部 producer-owned slot 的全文**；不直接改正式 chapter JSON、draft.md 或其他章 |
-| stage5 超限章销账 | 无人产文件；决定本身就是输入 | `stage5.review --retain-pretrim --chapters <N> --actor <id> --reason <text>` | **0 LLM 调用**，恰好一章，写 hash-bound `trim_resolution_chNN.json`，不改正文、不采用收缩候选。见 [经验库](field-notes.md) FN-014 |
-| stage6 | `<novel-dir>/stage6/hook_edit.json` | `stage6.hook --apply-edit <绝对路径>` | 一次只改目标候选；随后重跑机械与语义审判 |
-| stage7 | `<novel-dir>/stage7/name_map_edit.json` | 先用 `stage7.rename --emit-edit-template` 取当前 v1 骨架，再跑 `stage7.rename --apply-edit <绝对路径>` | 不手抄 schema 版本；映射变更后强制重新 hash-bound approve、assemble 和逐字对账 |
-| 终审 | `<base>/final_review_<sid>.md` | 用户读取 | 可随跑更新；不得承担产物修复功能 |
+| `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-merge-plan` | 正式 edit / edit-plan / merge-plan 形状 | 不直接覆盖 `clean_text.txt` 或 removal report。`--apply-merge-plan` 逐项决定三方合并冲突，与 edit-plan 同样带乐观锁 |
+| `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` | typed 修订（如 `reader_reveal_events` 时线）；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`（见 [经验库](field-notes.md) FN-007）。`--review-decisions` 是全书评测项唯一的 0 成本销账入口：按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策被拒收 |
+| `stage2.blueprint` | `--renormalize` · `--revalidate` | finding 明确允许时编辑活动 `.INVALID` | 本层确实没有 `--apply-edit`；逐章内容的修正走 `--chapters <N>` 定向重生成（**付费**）或回上游 `stage2.global`。只改证据指向字段，不改生成轮次与来源账 |
+| `stage3.style` | `--apply-edit` · `--remeasure` · `--revalidate` | `<novel-dir>/stage3/style_edit.json`；终态明确允许时可修活动 `.INVALID` | 决策集只改 schema 开放字段 |
+| `stage4.plan` | `--apply-edit` · `--identity` · `--revalidate` | `<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID` | `--revalidate` 强审计并重建 writer context；`--identity` 另写 `stage4/writer_context.identity.json` 基线，不覆盖正式计划。仍以追跑 check/state 验证 |
+| `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` | 文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}` | **0 LLM 调用，但必须提交该章全部 producer-owned slot 的全文**；不直接改正式 chapter JSON、draft.md 或其他章 |
+| `stage5.review` | `--retain-pretrim` · `--wontfix` | 无人产文件；决定本身就是输入 | `--retain-pretrim --chapters <N> --actor <ACTOR> --reason <text>` 恰好一章，写 hash-bound `trim_resolution_chNN.json`，不改正文、不采用收缩候选（见 FN-014）；`--wontfix` 只把豁免记进 `stage5/wontfix.json`，**一份验收报告都不产** |
+| `stage6.hook` | `--apply-edit` · `--recheck` · `--revalidate` · `--wontfix` | `<novel-dir>/stage6/hook_edit.json` | 一次只改目标候选；随后重跑机械与语义审判 |
+| `stage7.rename` | `--apply-edit` · `--adopt-residual` · `--identity` · `--recheck` · `--revalidate` | `<novel-dir>/stage7/name_map_edit.json` | 先用 `--emit-edit-template`（只读）取当前注册的 `NameMapEdit` 骨架再改，不手抄 schema 版本。⚠ `--adopt-residual high` **重写 `stage7/name_map.json`、清旧审批、退休现有 `book.txt`**，`--identity` 也重写同一份 name map——两者都不是“看一眼”，用后强制重新 hash-bound approve、assemble 和逐字对账 |
+
+非节点的第十个写入面是终审包 `<base>/final_review_<sid>.md`：只供用户读取，可随跑更新，不得承担产物修复功能。
 
 不得直接修改：正式 JSON/TXT、`book.txt`、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 历史、旧 run 的输出目录。`mark` 是写进度信标的唯一入口。
 
-`--apply-edit` 的相对路径按**书目录**解析，也接受书目录内的绝对路径；目录外路径和 `..`
-穿越关闭式拒绝。操作包仍优先记录解析后的绝对路径，便于复核。
+`--apply-edit` 的路径解析**逐层不同，不要当成通则**（见 [经验库](field-notes.md) FN-016）：
+`stage3.style` / `stage4.plan` / `stage6.hook` / `stage7.rename` 按**书目录**解析相对路径，
+也接受书目录内的绝对路径，目录外路径和 `..` 穿越关闭式拒绝；`stage5.write` 与 `stage0.edit`
+收任意路径——服务进程把人工改稿放在 `_service/edits/` 下，依赖这一点。
+`--review-decisions` 与前一组同规矩。操作包一律优先记录解析后的绝对路径，便于复核。
 
 ### `--revalidate` 与 `--apply-edit` 不是同一条路
 
@@ -94,7 +113,7 @@
 3. 不为“确保重跑”修改章节集、mode、模型、思考参数或 prompt；那会改变缓存键并形成新付费调用。
 4. 只有 finding 明确要求重新采样时才使用定向刷新入口（`stage2.global --resample` 绕过同参数问题缓存重采整份响应，`stage2.blueprint --chapters <N>` / `stage4.plan --chapters <N>` 只重算目标章）；仍需两项授权并记录原因。
 5. 连接错误使用实现内重试阶梯；实现耗尽后不要再叠加无限外层重试。
-6. **上游正式产物一旦变更，下游缓存全废。** `--revalidate` 提升、`--apply-edit` 新轮、定向重采样都算变更：以它为输入的下游节点缓存键随之失效，下一次运行是**实付**而不是回放（实测一次 stage4 重规划 = 233 秒 / 约 8 万 token）。选择修复层之前先估算下游重算面：同一问题在下游有等价的正式修复入口时优先在下游修；只能在上游修时（如 `present_names_invented` 只有 stage2 有入口），在终审包把这笔重算记成**修复的直接代价**，不要读成重复付费。
+6. **上游正式产物一旦变更，下游缓存全废。** `--revalidate` 提升、`--apply-edit` 新轮、定向重采样都算变更：以它为输入的下游节点缓存键随之失效，下一次运行是**实付**而不是回放，而且是整层重付、与该层首跑同量级。选择修复层之前先估算下游重算面：同一问题在下游有等价的正式修复入口时优先在下游修；只能在上游修时（如 `present_names_invented` 只有 stage2 有入口），在终审包把这笔重算记成**修复的直接代价**，不要读成重复付费。
 
 stage5 调用次数高于章数可以来自写作重试和长度收缩。最终调用/token 成本的唯一
 权威源是 `<BASE>/_service/ledger.jsonl`；产物 usage 和日志不另行混加。账本中的
@@ -102,7 +121,7 @@ stage5 调用次数高于章数可以来自写作重试和长度收缩。最终�
 
 修改正文后：
 
-- 重新运行 `stage5.review`（0 成本）。书级语义审判已下线，本层没有第二个要跟着重跑的节点。
+- 重新运行 `stage5.review`（0 成本）。本层没有第二个要跟着重跑的节点。
 - 若修改开篇消费范围内章节，检查 `stage6.semantic` 是否因正文 sha1 过期，并按需带 `--advisory` 重跑。
 - 不在正文未变时无谓重跑 `stage5.review`。
 
@@ -119,7 +138,12 @@ stage5 调用次数高于章数可以来自写作重试和长度收缩。最终�
 - `stalled`：达到自动修复轮次上限，转受托人工编辑。
 - `repairable`：本层 HARD，且 finding 已经绑定确定性 `fix` 路由；按该行 `how` 给出的节点/flag 收敛，多为 0 成本。`fix` 不可执行时该行会写明原因，此时按 `upstream` 或人工路处理。
 - `human_only`：需要人工语义/审美阅读；逐类裁决，但不一定阻断。
-- `verification`：可由人工证据消解的决策项，有三个来源——stage2 全书评测项（按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策会被拒绝）、stage5 超限章 `trim_audit_chNN`（见 [经验库](field-notes.md) FN-014）、stage6 候选级 UNVER（`stage6.approve --pick <N>` 的 hash-bound 人工核验）。它**不阻断成书**，但必须在终审包按类计数披露，不得并进 `human_only` 或算作已解决；后两类都有 0 成本销账入口，应销账而不是留成余额。
+- `verification`：可由人工证据消解的决策项，**三个来源各有自己的 0 成本销账入口**，应销账而不是留成余额：
+  - stage2 全书评测项 → `stage2.global --review-decisions <书目录内 json>`（按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策会被拒绝）；
+  - stage5 超限章 `trim_audit_chNN` → `stage5.review --retain-pretrim --chapters <N>`（见 [经验库](field-notes.md) FN-014）；
+  - stage6 候选级 UNVER → `stage6.approve --pick <N>` 的 hash-bound 人工核验。
+
+  它**不阻断成书**，但必须在终审包按类计数披露，不得并进 `human_only` 或算作已解决。
 - `upstream`：根因位于更早层，回上游处理。
 - `approval`：标准人工闸门；按代批契约自行处理。
 

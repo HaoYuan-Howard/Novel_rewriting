@@ -31,7 +31,7 @@
 
 1. cwd 是仓根；`<PY> -X utf8 -u -m novel.cli --help` 可用。
 2. `.env` 中存在外部模型密钥，但不输出值；`.llm_cache/` 可用。
-3. 新跑使用新的 `<BASE>`；续跑使用原 `<BASE>`。不要写入任何历史验收或证据目录。
+3. 新跑与续跑使用**同一个** `<BASE>`：隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根。另建一个根会把同一本书的 `_service/ledger.jsonl` 分裂成两份，而[收尾](#收尾)把它当成本的唯一权威源。不要写入任何历史验收或证据目录。
 4. 源文件或既有书目录存在，`<SID>` 唯一。
 5. 付费授权与正文外发授权分别有明确值。两项不是同一授权。
 6. 不覆盖项目默认模型与思考配置；运行时实际模型以配置和账本为准。
@@ -75,7 +75,7 @@
 | # | 节点 | 主跑参数 | 放行证据 |
 |---:|---|---|---|
 | 1 | `stage0.remove` | 新书：`--source <txt>`，省略 sid | 摄入完成；追跑 check 除待批准项外无 HARD。批准前仅 `s0_approval=pending` 导致 exit 1 是预期状态 |
-| 2 | `stage0.approve` | `--actor <id> --reason <text>` | 按代批契约审阅剔除报告后批准，批准状态落盘 |
+| 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅剔除报告后批准，批准状态落盘 |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
 | 5 | `stage2.global` | `--full-extract` | global 正式落盘；执行 preview 列出的后续 blueprint/style 步骤 |
@@ -87,9 +87,9 @@
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
 | 12 | `stage6.hook` | 无 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
 | 13 | `stage6.semantic` | `--advisory`（无标定 profile 时的现役主路径） | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
-| 14 | `stage6.approve` | `--pick <N> --actor <id> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
+| 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
 | 15 | `stage7.rename` | 无 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
-| 16 | `stage7.approve` | `--actor <id> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
+| 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
 | 17 | `stage7.assemble` | 无 | `stage7/book.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
@@ -100,7 +100,7 @@
 不带 `--advisory` 时，在未配置匹配 evaluator profile 的宿主上必然 exit 2 且**不发起任何模型调用**。
 它是注册在案的付费 flag（`contracts/invariants.py::PAID_FLAGS`），用它仍运行双盲判官，
 只是结论恒为带证据的 `UNVER`、`automated=false`——**它不能替代标定，但它是"有证据"与"没有证据"的分界**。
-本节点不接 `--check-only`。实测量级：2 次调用 / 约 150 秒 / 占单本输出 token 的 1.7%。
+本节点不接 `--check-only`。它是全链最小的付费面：两名盲判官各一次调用，不随章数增长。
 
 ### `--deep 1,2,3` 是默认，不是判据
 
@@ -108,9 +108,9 @@
 所以这是一个**有成本含义的默认值**。用户在[接口契约](../SKILL.md#接口契约)的可选约束里指定了章节深浅分配时以用户为准，
 并在终审包记录实际分配与依据。不要为「提高质量」自行扩大 deep 集合——那是未经授权的成本变更。
 
-### 书级语义审判（原 `stage5.semantic`）已下线
+### 书级剧透防线是 0 成本的那一组
 
-该节点于 2026-08-17 整节点删除（用户裁决）。**书级剧透防线现在是 0 成本的那一组**：
+全链没有书级语义审判节点，这条防线**不花钱**：
 stage2 的 `event_early_name` / `present_early_named` / `present_names_late` 在标注层拦后见之明，
 交付前由[代批与终审契约](delegated-review.md)成书逐字对账的「上游 info 下游投影」复核它有没有传导进成书。
 遇到**跨章重组**的计划（`from_source_ordinals` 不是恒等映射）时，这条防线的覆盖面会变——
@@ -135,10 +135,13 @@ stage2 的 `event_early_name` / `present_early_named` / `present_names_late` 在
 - 记录每条 badge 的分母。分母为零或全部 `unver` 不是绿灯。
 - stage6 总报告可以因落选候选 HARD 返回 exit 1；所选候选是否可批准按候选级证据判断，并将总报告残红披露。
 
-check 报告按设计逐条印出判据的设计说明与历史盘面基线（`stage2.blueprint --check-only` 单份实测
-**35.9 KB / 71 条判据**，且在 stage2 至少要读三次），其中与本次判定相关的只有命中行。
-**先按 `[!!]`（命中）、`[??]`（够不着）、`合计` 与 badge 行过滤，只在需要展开某条命中时读全文。**
-过滤只改变读法、不改变任何判定；分母、freshness 与命中数仍以报告原文为准，具体写法见[运行环境](runtime-profiles.md#共同规则)。
+check 报告按设计逐条印出**每一条**判据的设计说明与历史盘面基线，不只印命中的那几条，所以单份可达数十 KB，
+而 stage2 一层至少要读三次；其中与本次判定相关的只有命中行与状态行。
+**先按状态标记（`[!!]` 命中、`[??]` 够不着、`[--]` 没跑成、`[????]` 没人说）、`合计`、`── 来源 ──`、
+`⚠` 告警与 badge 行过滤，只在需要展开某条命中时读全文。**
+过滤保留全部命中、非 `ok` 状态、来源与告警行，因此不改变任何判定；分母、freshness 与命中数仍以报告原文为准，
+具体写法见[运行环境](runtime-profiles.md#共同规则)。**漏掉 `[--]`、`── 来源 ──` 或 `⚠` 中任何一类，
+过滤就变成了改判定**——它们分别承载“没跑成”“这份 fresh 不 fresh”“判的这一份是 `.INVALID` 稿”。
 
 ## 断点续跑
 

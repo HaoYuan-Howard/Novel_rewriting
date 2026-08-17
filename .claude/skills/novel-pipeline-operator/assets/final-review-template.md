@@ -39,7 +39,7 @@
 | 新旧混名 | <pass/fail> | <扫描结果> |
 | 正式章唯一且同契约 | <pass/fail> | <N/N；重复/缺失> |
 | `book.txt` 指纹一致 | <pass/fail> | <盘上 sha1 vs 产物 sha1> |
-| 最终 `state` / `inbox` | <pass/fail> | <状态摘要；六类计数> |
+| 最终 `state` / `inbox` | <pass/fail> | <状态摘要；八类计数> |
 | 活动终态文件 | <pass/fail> | <排除 `_rounds/` 后的计数与路径> |
 
 ## 3. Agent 代批记录

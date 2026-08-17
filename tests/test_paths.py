@@ -306,7 +306,8 @@ def test_numbered_rounds_counts_only_live_formal_rounds():
 # 目录外绝对路径），stage3/4/6 零覆盖、**相对路径与 `..` 穿越零覆盖**。
 # 而漏掉的恰好是坏的那一条：四份实现都先 `Path(edit_path).resolve()`（按**进程 cwd**）
 # 再拿书目录去卡，报错文案却以书目录为基准 —— 站在仓根敲一个书内相对路径会被
-# 报成「落在产物目录之外」。skill 现场记录为此挂着 FN-014，处置建议是绕开它。
+# 报成「落在产物目录之外」。skill 现场记录为此一度只能建议「传绝对路径绕开它」；
+# 收敛后的当前说法是 FN-016（逐层语义不同，走这四层就写进书目录内）。
 #
 # ⇒ 收敛成 `paths.edit_rel` 一份，并按**书目录**解释相对路径；本节按
 #   「四层 × 五类路径」钉住，缺一类就等于那一类没在查。
@@ -350,7 +351,7 @@ def test_an_empty_path_falls_back_to_this_layers_registered_default(layer, defau
 @pytest.mark.parametrize('layer,default', sorted(_EDIT_DEFAULTS.items()))
 def test_a_relative_path_is_read_against_the_book_dir_not_the_cwd(
         layer, default, book_dir, monkeypatch, tmp_path):
-    """⭐② **相对路径相对书目录**——本节存在的理由（FN-014 那条 `open-gap`）。
+    """⭐② **相对路径相对书目录**——本节存在的理由（现场记录 FN-016 的第一条分支）。
 
     ⚠ 故意把 cwd 挪到别处：旧实现在这里会把路径解释到 cwd 底下，
     然后拿书目录去卡它，报出一句与自己行为矛盾的「落在产物目录之外」。
@@ -363,7 +364,7 @@ def test_a_relative_path_is_read_against_the_book_dir_not_the_cwd(
 
 @pytest.mark.parametrize('layer,default', sorted(_EDIT_DEFAULTS.items()))
 def test_an_absolute_path_inside_the_book_dir_is_still_accepted(layer, default, book_dir):
-    """③ 绝对路径照收——这是 FN-014 教人用的那条绕行路，收敛之后它仍然成立。"""
+    """③ 绝对路径照收——这是收敛前唯一那条绕行路，收敛之后它仍然成立（见 FN-016）。"""
     assert paths.edit_rel(book_dir, str(book_dir / default), default) == default
 
 

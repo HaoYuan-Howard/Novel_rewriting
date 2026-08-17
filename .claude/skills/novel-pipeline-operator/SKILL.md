@@ -21,6 +21,8 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 
 把“使用本 skill 端到端跑书”视为对 `stage0.approve`、`stage6.approve`、`stage7.approve` 的标准代批委托；这项委托不包含付费授权或正文外发授权。用户缩小委托范围时遵从用户范围。
 
+代批与人工修订一律以 `<ACTOR>` = `agent:novel-pipeline-operator` 自报身份。生产只要求这个值非空，形态由本 skill 约定且只在这里约定一次：带前缀才能在账本与审计里一次捞全代批记录，裸串会和人名撞。
+
 只产生以下用户交付接口：
 
 - `<novel-dir>/stage7/book.txt`：最终成书，只能由 `stage7.assemble` 生成。

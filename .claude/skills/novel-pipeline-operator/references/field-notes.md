@@ -19,7 +19,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-003 | full-extract 部分完成 | `--full-extract`, upstream missing |
 | FN-004 | blueprint 锚点分流 | `hinge_anchor_void`, `verbatim_failed` |
 | FN-005 | 中断后的缓存重跑 | exit 70, cache, no artifact |
-| FN-006 | review 与 semantic 绑定 | `mechanical_review_seq`, stale |
+| FN-006 | 语义结论按文本 sha1 绑定 | `stage6.semantic`, `text_sha1`, `semantic_review_seq`, stale |
 | FN-007 | 语义泄底的上游误标 | `semantic_secret_leak`, wontfix |
 | FN-008 | stage6 首轮 INVALID | `hook.INVALID`, `hook_para_sep` |
 | FN-009 | stage6 候选级语义 | unselected HARD, nondeterminism |
@@ -29,6 +29,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-013 | 语义审判：advisory 与标定的分界 | `stage6.semantic`, `--advisory`, `NOVEL_EVALUATOR_PROFILE`, exit 2 |
 | FN-014 | 超限章的 0 成本销账 | `trim_audit_chNN`, `--retain-pretrim`, verification |
 | FN-015 | 落盘闸拦下后 finding 细节的读法 | `.INVALID`, `--check-only`, `--revalidate`, exit 2 |
+| FN-016 | `--apply-edit` 的路径语义逐层不同 | `--apply-edit`, `edit_rel`, 产物目录之外, exit 2 |
 
 ### FN-001 · stage0 批准前的预期红灯
 
@@ -75,14 +76,22 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 验证：目标正式产物存在、fresh，追跑 check 完成；账本将缓存回放与实付分开。
 - 依据：持久缓存键与 CLI 写盘顺序。
 
-### FN-006 · mechanical review 与 semantic 绑定
+### FN-006 · 语义结论按文本 sha1 绑定，不跟机械验收的轮次走
 
 - 状态：`contract-confirmed`
-- 触发：正文未变却重跑 `stage5.review` 后，原 semantic 结论变为 stale/unver。
-- 判断：semantic 记录绑定当时最新的 `mechanical_review_seq`；新 review 会产生新序号。
-- 处置：正文未变时不重跑 review。确已产生新 review 时重新运行 semantic 以绑定当前序号。
-- 验证：semantic 的 `mechanical_review_seq`、正文 sha1 与最新 review 一致。
-- 依据：stage5 semantic freshness 逻辑。
+- 触发：跑过 `stage5.review` 或 `stage6.hook --recheck` 之后，不确定 `stage6.semantic`
+  要不要跟着重跑——**它是付费节点**，判错这一步就是一次没有理由的实付。
+- 判断：全链只有 `stage6.semantic` 一个语义节点，它的每条决议按**候选文本的 sha1** 绑定，
+  并且只在 `stage6/hook.json` 不 fresh 时整体作废。重跑 `stage5.review` 不产生新的绑定序号、
+  也不会让已有语义结论过期。⚠ 产物里的 `semantic_review_seq` 记的是“哪一轮语义审判给出了这条
+  结论”，**不是**“绑定了哪一轮机械验收”，别按名字反推出一条机械→语义的耦合。
+- 处置：候选文本 sha1 未变时不要重跑 `stage6.semantic`。确实改过开篇候选
+  （`--apply-edit` 开新轮、`--revalidate` 提升）时 `hook.json` 会失去 fresh，
+  那时才按主链带 `--advisory` 重跑一次。
+- 验证：`stage6/semantic_<n>.json` 里每条 review 的 `text_sha1` 覆盖当前候选集合，
+  `state` 判 stage6 完成；账本这一段没有新增实付记录。
+- 依据：`novel/stages/stage6/semantic.py::text_sha1` 与该模块按 sha1 比对
+  `current_shas` / `judged_shas` 的过期判定；同文件对 `stage6/hook.json` 的 freshness 前置检查。
 
 ### FN-007 · 语义泄底可能源于上游揭示章误标
 
@@ -102,7 +111,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 状态：`contract-confirmed`
 - 触发：首次 `stage6.hook` 被落盘闸拦下，盘上只有 `hook.INVALID.json`，随后 `--check-only` 找不到正式 `hook.json`。
 - 判断：check-only 只读正式产物；候选级 finding 仍可直接从活动 INVALID 读取。
-- 处置：按 INVALID 的 `candidates[].findings` 修复。`hook_para_sep` 若来自单段墙文，归一化不能凭空创建段落；在完整句边界重写为多段后走 `--apply-edit`，或跑 `stage6.hook --revalidate --actor <id> --reason <why>` 强审计提升。**判据自己会说这一句**（detail 里出现「一整段」「归一化修不掉」即此类），无须再从档位反推。
+- 处置：按 INVALID 的 `candidates[].findings` 修复。`hook_para_sep` 若来自单段墙文，归一化不能凭空创建段落；在完整句边界重写为多段后走 `--apply-edit`，或跑 `stage6.hook --revalidate --actor <ACTOR> --reason <why>` 强审计提升。**判据自己会说这一句**（detail 里出现「一整段」「归一化修不掉」即此类），无须再从档位反推。
 - 验证：正式 `hook.json` 落盘，mechanical check 可读且至少一条候选无 HARD；再运行 semantic。
 - 依据：stage6 check-only 与 normalize_hook 的当前行为。
 
@@ -171,7 +180,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   `_trim_to_fit` 在构造任何请求之前就退出，正文保持 pretrim 原样。**它没有 `--advisory` 对应物**，
   与两个 semantic 节点不是一回事。逐条读“超限根因附注”里的实际幅度再决定。
 - 处置：接受当前原稿时跑
-  `stage5.review --retain-pretrim --chapters <N> --actor <自报身份> --reason <理由>`
+  `stage5.review --retain-pretrim --chapters <N> --actor <ACTOR> --reason <理由>`
   （0 次 LLM，只写 hash-bound resolution，恰好一章）。判断该章确需改写时用
   `stage5.write --apply-edit <绝对路径>` 提交该章全部 producer-owned slot 的完整
   `ChapterResponse`（同样 0 次 LLM）。**两条都不要留着不销账**——留着它们会让终审包的
@@ -192,11 +201,29 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   stage7 也只读正式产物。**stage4 的 `.INVALID` 不带 findings**（schema 无此字段），
   所以那一层的逐条证据只能从报告拿，拿不到就是读法用错了。
 - 处置：被拦下后**第一步就是 `--check-only`** 取逐条命中，再按 finding 的 `fix`/`how` 在
-  允许写入面上修，最后 `--revalidate --actor <id> --reason <text>` 同轮重判提升。
+  允许写入面上修，最后 `--revalidate --actor <ACTOR> --reason <text>` 同轮重判提升。
   只有正式稿与 `.INVALID` 两份都不在盘上才是真的“先跑那一层”。
   不要因为终态只给了 rule id 就盲改、自行复算判据或停机。
 - 验证：`--revalidate` 打印的完整报告里该 rule 归零，`state` 判该层完成，活动 `.INVALID` 已归档。
-- 依据：`novel/stages/stage2/extract.py::_raw` 的问题稿优先；
+- 依据：`novel/stages/stage2/extract.py::_read_raw` 的问题稿优先；
   `novel/stages/stage3/style.py::run_check_only` 与 `novel/stages/stage4/plan.py::run_check_only`
   的 `judged` 回落；`novel/stages/stage6/hook.py::run_check_only` 与
   `novel/stages/stage7/rename.py::run_check_only` 只读正式产物；`novel/report/render.py` 的 invalid 标注行。
+
+### FN-016 · `--apply-edit` 的路径语义逐层不同
+
+- 状态：`contract-confirmed`
+- 触发：`--apply-edit <路径>` 返回 exit 2，原文含“落在这本书的产物目录之外”；或反过来，
+  按“一律传绝对路径”的老办法把稿子放在书目录**外**，某些层却收下了。
+- 判断：**没有统一口径，不要拿一层的行为推另一层。** `stage3.style` / `stage4.plan` /
+  `stage6.hook` / `stage7.rename` 共用 `edit_rel`：相对路径按**书目录**解释（不是进程 cwd），
+  绝对路径只要落在书目录内也收，目录外与 `..` 穿越算平后一律关闭式拒绝。
+  `stage5.write` 与 `stage0.edit` **刻意不走这条**，路径语义是“任意路径”——服务进程把人工改稿
+  放在书目录之外的 `<base>/_service/edits/` 再喂给 `stage5.write --apply-edit`，那条现役 HTTP
+  改稿路依赖它（`R-11.3` 要求服务进程不写产物盘）。`stage2.global --review-decisions` 与前一组同规矩。
+- 处置：走 `edit_rel` 那四层时把编辑文件写进书目录内（`<novel-dir>/<stage>/..._edit.json`），
+  传相对书目录的路径或书目录内的绝对路径都可以。被拒时先读报错里算出来的那个绝对路径，
+  它才是代码真正解释成的位置；不要靠加 `..` 或换 cwd 绕过去。
+- 验证：命令 exit 0 且新一轮落盘、上一轮归档进 `_rounds/`；操作包里记的是解析后的绝对路径。
+- 依据：`novel/paths.py::edit_rel` 的相对/绝对分支与目录外终态，其 docstring 记明
+  `stage5.write` / `stage0.edit` 的例外与 `novel/api/routes/edits.py` 对该例外的依赖。

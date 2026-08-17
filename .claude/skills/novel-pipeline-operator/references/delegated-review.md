@@ -91,7 +91,7 @@ SHA-256 主体的结论对齐后，依次筛选：
 freshness。确为同输入非确定性时采信更严格的一轮，不用后一次翻绿覆盖前一轮风险；
 把冲突本身写入终审包。
 
-`stage6.approve --pick N --actor <id> --reason <text> --subject-sha256 <64hex>` 前后同时核对：
+`stage6.approve --pick N --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` 前后同时核对：
 
 - `hook.json.approved.approach/text` 与所选 label 一致；
 - 提交的 hash 是经当前归一链后定稿文本的完整 SHA-256，与页面展示值一致；
@@ -116,11 +116,15 @@ freshness。确为同输入非确定性时采信更严格的一轮，不用后�
    会开新的人工修订轮并把上一轮归档进 `_rounds/`，所以提交前先自查这一条。
 5. 全文补扫人物表不一定覆盖的 surface：顿号拆名、未登记简称、家族/门派/宅邸简称、外文家名和单字昵称。
 6. 对 `rn_residual_stem` 逐条读上下文；普通词假阳可以保留并解释，高置信人名残留必须修复。
-7. 先运行 `stage7.rename --emit-edit-template` 取当前注册的 `NameMapEdit` v1 骨架；人工编辑
+   修法有两条，**先判能不能走自动的那条**：`stage7.rename --adopt-residual high` 显式采纳
+   probe 判为可安全应用的 high residual 建议并重放确定性链（0 成本），需要逐条判断或
+   probe 没给建议时才手写 `name_map_edit.json`。⚠ 它**重写 `stage7/name_map.json`、清旧审批、
+   退休现有 `book.txt`**，与 `--apply-edit` 同样要重批重拼。
+7. 先运行 `stage7.rename --emit-edit-template` 取当前注册的 `NameMapEdit` 骨架；人工编辑
    只写书目录内 `stage7/name_map_edit.json`，经 `stage7.rename --apply-edit <绝对路径>` 重判。
 
 任何映射编辑后都重新取当前决策面 SHA-256，运行
-`stage7.approve --actor <id> --reason <text> --subject-sha256 <64hex>` 与 `stage7.assemble`，
+`stage7.approve --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` 与 `stage7.assemble`，
 再执行成书逐字对账。旧 approved/book_txt 必须视为已过期，不得复用旧页面 hash、
 旧批准或旧成书指纹。
 
@@ -135,7 +139,7 @@ freshness。确为同输入非确定性时采信更严格的一轮，不用后�
 5. **正式章来源**：每章恰有一份被消费的正式稿，没有活动 `.INVALID` 章、重复 ordinal 或跨契约混用。
 6. **最终状态**：`state` 主链完成；`inbox` 活动阻塞类为零；活动目录无未解释终态文件。
 7. **指纹一致**：盘上 `book.txt` 与 name map 记录的 `book_txt.sha1/chars/chapters` 一致，未被人工改写。
-8. **上游 info 的下游投影**：把上游全部“剧透 / 提前指名 / 后见之明”类 info finding 逐条投影到成书章序核实——按章切分 `book.txt`，查涉事角色新名或涉事事实的首现章。核实为未传导时写“已核实无害 + 首现章”；确已传导时回最上游正式修复入口。**这一项是 0 次模型调用**，且它是书级剧透当前唯一的交付前防线（原 `stage5.semantic` 已下线），不得跳过。
+8. **上游 info 的下游投影**：把上游全部“剧透 / 提前指名 / 后见之明”类 info finding 逐条投影到成书章序核实——按章切分 `book.txt`，查涉事角色新名或涉事事实的首现章。核实为未传导时写“已核实无害 + 首现章”；确已传导时回最上游正式修复入口。**这一项是 0 次模型调用**，且它是书级剧透当前唯一的交付前防线，不得跳过。
 
 逐字对账失败时不要直接改 `book.txt`；回到产生差异的最上游正式修复入口，重批、重装配、重查。
 
