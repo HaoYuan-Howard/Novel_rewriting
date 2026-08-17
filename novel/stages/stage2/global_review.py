@@ -32,10 +32,17 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
     if supplied is not None and supplied.is_absolute():
         candidate = supplied.resolve()
         allowed = (service_dir(ctx.novel_dir.parent) / 'edits' / ctx.sid).resolve()
+        book = Path(ctx.novel_dir).resolve()
         try:
             candidate.relative_to(allowed)
-        except ValueError as exc:
-            raise PathRefused(f'复核决策文件必须在当前书或 {allowed} 内：{candidate}') from exc
+        except ValueError:
+            # 与 `paths.edit_rel` 同一口径：绝对路径落在当前书目录内同样合法，
+            # 报错文案承诺的正是「当前书或 <allowed>」两个根。
+            try:
+                candidate.relative_to(book)
+            except ValueError as exc:
+                raise PathRefused(
+                    f'复核决策文件必须在当前书或 {allowed} 内：{candidate}') from exc
         if not candidate.is_file():
             raise TerminalState(f'{candidate} 不在盘上')
         try:
