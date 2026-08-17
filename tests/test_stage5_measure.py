@@ -166,9 +166,25 @@ def test_overlap_reproduces_every_stored_value():
     它同时钉住三样：窗口宽度 20、`norm` 空间、以及**扣除口径**
     ——不扣的话「写手在抄原文」（坏）与「写手正确复现了指定台词」（好）就分不开，
     实测某章重合 19.9% 而 52 个重合窗口里非 `verbatim` 的是 **0** 个。
+
+    ⚠⚠ **只对「成稿相对上游是当前」的书对账。** 扣除面来自
+    `stage4/writer_context.json` 的本章 entry；那份一旦被重生成（本轮的保真点修复就
+    重生成过），旧成稿存的那个数是照**另一版扣除口径**算出来的
+    ——差值不是「尺子漂了」，是它量的不是同一份输入。实测差 0.594 vs 0.600。
+    ⇒ 过滤，并**留分母**：查了几本、几份，一份都不剩就按声明跳过，
+    否则「一本当前的都没有」与「查过、都对得上」在报告上同形（LESSONS 第 2 条）。
     """
+    arms = ('stage5/deep/', 'stage5/shallow/')
+    fresh_books = {a.book_dir for a in DRAFTS if corpus.is_current(a.book_dir, *arms)}
+    todo = [a for a in DRAFTS if a.book_dir in fresh_books]
+    corpus.declared_dependency(
+        bool(todo),
+        needs=(f'至少一本成稿相对 stage4/writer_context.json 是当前的书'
+               f'（{len({a.book_dir for a in DRAFTS})} 本候选里 0 本满足）'),
+        produced_by='stage5.write --mode deep', cost='付费')
+
     checked = 0
-    for a in DRAFTS:
+    for a in todo:
         rec = corpus.load_current(a)
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
         assert entry is not None, f'{a.rel} 在 writer_context 里找不到对应章'
@@ -176,7 +192,8 @@ def test_overlap_reproduces_every_stored_value():
         assert got == rec.get('overlap_excl_verbatim'), \
             f'{a.rel} 重合率对不上：算 {got}，盘上 {rec.get("overlap_excl_verbatim")}'
         checked += 1
-    assert checked == len(DRAFTS)
+    assert checked == len(todo) and checked > 0, \
+        f'扫描分母是 {checked}——这一条没在查'
 
 
 @needs_corpus

@@ -38,6 +38,11 @@ def _box(book: str) -> sandbox.Sandbox:
     return sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
 
 
+#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
+#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
+_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
+
+
 @pytest.fixture(params=corpus_params(
     books(), reason='盘上没有 stage6 语料——这些集成用例没在查'),
     ids=lambda b: b[:10] if b else 'no-corpus')
@@ -45,6 +50,25 @@ def box(request):
     s = _box(request.param)
     yield s
     s.close()
+
+
+@pytest.fixture
+def current_drafts(box):
+    """给**要读逐章成稿**的那些用例用：先声明「这本书的成稿相对上游是当前的」。
+
+    ⚠⚠ **刻意不放进 `box` 自己**：本文件 16 条里只有 10 条真的去读成稿，
+    另外 6 条（文案自身的判据、合成样本、闸门边界）在成稿过期的书上照样成立。
+    把前提提到 `box` 上会把那 6 条一起变成跳过——**那是洗绿**，
+    而跳过与「查过没事」在报告上长得一模一样。
+    ⇒ 谁读成稿谁挂前提，用 `@pytest.mark.usefixtures('current_drafts')`。
+
+    过期时的形状（实测 10/10）：`stage6.hook` 在读侧闸拿到
+    `UpstreamStale: 上游 stage5/deep/ch01.json 已过期` ⇒ 用例死在门口，
+    它要验的判据行数/徽章/重判对账一次都没跑到。
+    """
+    corpus.requires_current(box.book, *_DRAFT_ARMS,
+                            produced_by='stage5.write --mode deep', cost='付费')
+    return box
 
 
 def _check(box: sandbox.Sandbox):
@@ -64,6 +88,7 @@ def _mechanically_clean_pick(box: sandbox.Sandbox) -> int:
 
 # ── 报告的形状：由 `build()` 遍历注册表保证 ─────────────────────────────────
 
+@pytest.mark.usefixtures('current_drafts')
 def test_every_registered_rule_produced_a_row(box):
     """⭐ **每一条注册判据恰好一行，且没有 `skipped`。**（形态照抄 `test_stage3.py`）
 
@@ -76,6 +101,7 @@ def test_every_registered_rule_produced_a_row(box):
     assert len(rep.rules) == len(REGISTRY.of_stage('stage6'))
 
 
+@pytest.mark.usefixtures('current_drafts')
 def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     """⚠ **stage6 的徽章在结构上永远不可能是 `pass`。**
 
@@ -107,6 +133,7 @@ def _texts_and_stored(box: sandbox.Sandbox):
     return out
 
 
+@pytest.mark.usefixtures('current_drafts')
 def test_rejudging_reproduces_what_is_on_disk(box):
     """⭐⭐ **重判 == 存盘。** 对位 stage3 那次的「23 项逐值」。
 
@@ -156,6 +183,7 @@ def test_chars_are_recomputed_with_the_same_ruler(box):
 
 # ── ⚠ 三条陷阱 ──────────────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures('current_drafts')
 def test_identity_grid_excludes_semantic_rules(box):
     """恒等基线的格子只给**机械** hard+info——语义判据的产地是付费审判，
     0 成本路给它们占格就是两个永远 `0/1` 的假格子。"""
@@ -168,6 +196,7 @@ def test_identity_grid_excludes_semantic_rules(box):
     assert not semantic_rules & set(grid)
 
 
+@pytest.mark.usefixtures('current_drafts')
 def test_body_stale_uses_consumed_not_the_whole_file_sha1(box):
     """当前成稿未变时，消费投影应直接判 fresh。"""
     rep = _check(box)
@@ -178,6 +207,7 @@ def test_body_stale_uses_consumed_not_the_whole_file_sha1(box):
 
 # ── 恒等基线 ────────────────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures('current_drafts')
 def test_identity_baseline_runs_and_excludes_the_constructed_one(box):
     """`--identity`：同一把尺子量**原作文案段**。
 
@@ -197,6 +227,7 @@ def test_identity_baseline_runs_and_excludes_the_constructed_one(box):
 
 # ── 定稿 ────────────────────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures('current_drafts')
 def test_approve_copies_the_candidate_and_leaves_provenance_alone(box, monkeypatch):
     """`stage6.approve --pick N`：定稿 = **候选那一份的拷贝** + `origin='human'`。
 
@@ -392,6 +423,7 @@ def _samples(box: sandbox.Sandbox, *, truncated: list[bool]) -> list[str]:
     return [_sample(box, truncated=cut, variant=i) for i, cut in enumerate(truncated)]
 
 
+@pytest.mark.usefixtures('current_drafts')
 def test_the_gate_blocks_only_when_no_candidate_is_clean(box):
     """⭐ **闸门拦的是「一条干净候选都没有」，不是「有一条红」。**
 
@@ -418,6 +450,7 @@ def test_the_gate_blocks_only_when_no_candidate_is_clean(box):
     assert ArtifactStore(ctx2).exists('stage6/hook.INVALID.json')
 
 
+@pytest.mark.usefixtures('current_drafts')
 def test_revalidate_promotes_only_after_the_problem_is_fixed(box):
     """⚠ **提升路是那道闸门的必然配套**——闸门是我们自己加的，
     不给一条 0 成本的提升路，一次付费产出就被永久锁死。
@@ -475,6 +508,7 @@ def _packet_of(user: str) -> dict:
     return _json.loads(user[user.index('{'):])
 
 
+@pytest.mark.usefixtures('current_drafts')
 def test_prompt_carries_source_full_story_and_body_execution_style(box):
     """质量升级的三项信息必须真的进入实际发送的 user，而不只写在设计文档里。"""
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)

@@ -65,11 +65,52 @@ def _corpus_params():
     )]
 
 
+#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
+#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
+_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
+
+
 @pytest.fixture(params=_corpus_params(), ids=lambda b: b[:10] if b else 'no-corpus')
-def box(request):
+def raw_box(request):
+    """**不带任何语料版本前提**的沙箱。
+
+    ⚠⚠ 只给「把过期/缺失当**输入**」的那些用例用（例如断言 Stage7 拒收非当前的
+    Stage4 上游）。给它们加「上游得是当前的」前提就是拿被测性质当前提 ⇒ 洗绿，
+    而洗绿后的它与「查过没事」在报告上长得一模一样。
+    """
     b = _box(request.param)
     yield b
     b.close()
+
+
+@pytest.fixture
+def box(raw_box):
+    """`raw_box` + 「这本书的逐章成稿相对上游是当前的」。
+
+    Stage7 的改名/拼书都要读成稿；成稿一旦相对重生成过的
+    `stage4/writer_context.json` 过期，读侧闸 `UpstreamStale` 会让用例**死在门口**
+    （实测：两本过期的书上 28 个 nodeid 里 26 个红在这上面，而它们各自要验的
+    判据行数、逐字节对账、闸门行为一次都没跑到）。
+    """
+    corpus.requires_current(raw_box.book, *_DRAFT_ARMS,
+                            produced_by='stage5.write --mode deep', cost='付费')
+    return raw_box
+
+
+@pytest.fixture
+def box_current_map(box):
+    """`box` + 「`stage7/name_map.json` 相对上游是当前的」。
+
+    ⚠ 这一条比成稿那一条更严，而且**三本书当前都不满足**：`stage7_context` 投影的是
+    `stage4/writer_context.json` 的 `_provenance.code`（`novel/consumption.py:330-334`），
+    于是上游一次**内容一字未改**的 0 成本重跑就会把三本的 `name_map` 全判 stale。
+    定稿与拼书这一族因此拿不到可用的映射：`run_approve` 明写「`_provenance` 一个字不动」
+    ⇒ 把过期账原样写回 ⇒ 写盘口后置条件当场 `ProvenanceRefused`；
+    `assemble` 那一侧则是 `TerminalState: 旧 book.txt 不再绑定当前批准映射`。
+    """
+    corpus.requires_current(box.book, 'stage7/name_map.json',
+                            produced_by='stage7.rename --recheck', cost='0 成本')
+    return box
 
 
 def _ctx(box: sandbox.Sandbox, node: str = 'stage7.rename') -> RunContext:
@@ -124,11 +165,15 @@ def test_body_stale_reports_every_draft_as_its_scan_denominator(box):
 
 @pytest.mark.parametrize('rel', ('stage4/plan_chapters.json',
                                  'stage4/writer_context.json'))
-def test_stage7_requires_current_stage4_upstreams(box, rel):
-    """Stage7 只接收完整的当前 Stage4 契约，不降级到缺计划/缺上下文模式。"""
-    (box.dir / rel).unlink()
+def test_stage7_requires_current_stage4_upstreams(raw_box, rel):
+    """Stage7 只接收完整的当前 Stage4 契约，不降级到缺计划/缺上下文模式。
+
+    ⚠ **刻意用 `raw_box`（不带语料版本前提）**：本条把「上游不当前」当**输入**，
+    给它加「上游得是当前的」前提就是拿被测性质当前提 ⇒ 洗绿。
+    """
+    (raw_box.dir / rel).unlink()
     with pytest.raises(UpstreamMissing, match=rel):
-        _check(box)
+        _check(raw_box)
 
 
 def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
@@ -168,6 +213,7 @@ def test_the_residual_probe_always_reports_its_denominator(box):
 
 # ── 二、⭐ 逐字节对账 ──────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures('box_current_map')
 def test_the_assembled_book_is_byte_identical_to_the_one_on_disk(box, monkeypatch):
     """已有当前交付物时，确定性重拼必须逐字节相同。"""
     source = corpus.corpus_root() / box.book / 'stage7' / 'book.txt'
@@ -182,6 +228,7 @@ def test_the_assembled_book_is_byte_identical_to_the_one_on_disk(box, monkeypatc
     assert art.book_txt.sha1 == prov.content_sha1(on_disk)
 
 
+@pytest.mark.usefixtures('box_current_map')
 def test_the_book_txt_byte_form_holds(box, monkeypatch):
     """字节形态：LF-only · 章分隔是**裸阿拉伯数字**且恰好 `1..N` · 没有审阅元信息。"""
     _allow_hook_quality(monkeypatch)
@@ -196,6 +243,7 @@ def test_the_book_txt_byte_form_holds(box, monkeypatch):
     assert art.book_txt.chars == len(txt)
 
 
+@pytest.mark.usefixtures('box_current_map')
 def test_assemble_refuses_when_the_approved_hook_is_not_quality_clear(box, monkeypatch):
     """定稿后改字也不能绕过 Stage6 审判进入交付物。"""
     from novel.errors import TerminalState
@@ -320,6 +368,7 @@ def test_the_downsend_face_and_the_probe_share_one_universe(box):
 
 # ── 四、`_provenance` 的账 ────────────────────────────────────────────────
 
+@pytest.mark.usefixtures('box_current_map')
 def test_approve_leaves_provenance_alone(box):
     """`stage7.approve` **`_provenance` 一个字都不动**（`stage7.md` 事实⑦）。
 
@@ -463,6 +512,7 @@ def test_the_gate_blocks_a_dirty_map_and_revalidate_promotes_it_after_the_fix(bo
     assert promoted is False and invalid.exists()
 
 
+@pytest.mark.usefixtures('box_current_map')
 def test_revalidate_rebuilds_stale_stored_findings_before_promoting(box):
     """判据修好后不能继续复读 `.INVALID.book[]` 里的旧 HARD。"""
     from contracts.schema.report import finding

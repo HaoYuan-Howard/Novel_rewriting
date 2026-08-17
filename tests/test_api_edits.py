@@ -78,10 +78,19 @@ def no_api_key(monkeypatch):
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
 
 
+#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
+#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
+_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
+
+
 def _corpus_params():
     current = books()
     if current:
-        return [pytest.param(current[0], marks=pytest.mark.corpus)]
+        # ⚠ 取**成稿链条相对上游是当前**的那一本，不是排序第一的那一本：本组多数用例
+        #   要经 CLI 子进程改产物，成稿过期时那个子进程 exit 2（`UpstreamStale`），
+        #   HTTP 层看到的是「作业失败」，断言红在退出码上而不是它要验的那件事。
+        return [pytest.param(corpus.first_current_book(current, *_DRAFT_ARMS) or current[0],
+                             marks=pytest.mark.corpus)]
     return [pytest.param(
         None,
         marks=(pytest.mark.corpus, pytest.mark.skip(

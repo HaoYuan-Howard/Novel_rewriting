@@ -206,6 +206,17 @@ def requires_current(book_dir: str, *rels: str, produced_by: str, cost: str) -> 
         produced_by=produced_by, cost=cost)
 
 
+def is_current(book_dir: str, *rels: str) -> bool:
+    """这本书的这几份相对盘上上游都当前吗。**谓词形态**，不跳过。
+
+    ⚠ 给「一条用例横扫多本书」的对账用：那种用例不能整条跳过（还有别的书可查），
+    但把过期的书混进去量出来的差值**不是尺子漂了，是它量的不是同一份输入**。
+    ⇒ 过滤之后**必须留分母断言**（查了几份、非零），否则「都当前的书一本都没有」
+    与「查过、都对得上」在报告上长得一模一样（`docs/LESSONS.md` 第 2 条）。
+    """
+    return not _not_current(book_dir, *rels)
+
+
 def first_current_book(books: Any, *rels: str) -> str | None:
     """候选里第一本这几份都相对盘上上游是当前的书；一本都没有给 `None`。
 

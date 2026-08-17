@@ -60,6 +60,22 @@ def box(request):
     s.close()
 
 
+@pytest.fixture
+def current_map(box):
+    """给**要经交付闸**的读屏用例用：先声明「`stage7/name_map.json` 相对上游是当前的」。
+
+    ⚠ 三本书当前都不满足：`stage7_context` 投影的是 `stage4/writer_context.json` 的
+    `_provenance.code`（`novel/consumption.py:330-334`），上游一次内容一字未改的
+    0 成本重跑就把三本的映射全判 stale。交付闸因此正确地拒绝拿非 fresh 的映射交书
+    （`TerminalState: 旧 book.txt 不再绑定当前批准映射`），而那是**产品在正常工作**
+    ——用例要验的是「读屏不绕过这道闸」，它需要一份能过闸的映射当输入。
+    ⚠ 刻意不提到 `box` 上：本文件另外 23 条读屏用例不经交付闸，照跑。
+    """
+    corpus.requires_current(box.book, 'stage7/name_map.json',
+                            produced_by='stage7.rename --recheck', cost='0 成本')
+    return box
+
+
 @pytest.fixture(autouse=True)
 def no_api_key(monkeypatch):
     """把钥匙拿走：任何一条走到真发请求的路都会当场现形。"""
@@ -165,6 +181,7 @@ def test_stage7_book_endpoint_never_bypasses_the_current_delivery_gate(
     assert response.json()['kind'] == 'TerminalState'
 
 
+@pytest.mark.usefixtures('current_map')
 def test_a_fully_written_book_survives_the_overview(client, box):
     """⭐ 回归锚：**全链跑完的书在语料库上不许整本消失。**
 
