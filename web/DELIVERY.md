@@ -5,10 +5,15 @@
 `src/mocks/` 那 20 份是冻结的证据基线（哈希清单在统一契约 §八，`npm run seams` 钉着），
 mock 路径仅作离线开发用。
 
+**只是要用界面**：双击仓库根的 `tools\start.cmd`——按需构建、起服务、开浏览器，
+地址是后端自己的 `http://127.0.0.1:8765/`（服务把 `web/dist` 挂在同一个端口上，
+见 `docs/BACKEND_CONTRACT.md` §6.5）。下面这套是**开发**前端时才需要的：
+
 ```bash
 cd web
 npm install
-npm run dev          # http://127.0.0.1:5173
+npm run dev          # http://127.0.0.1:5173（热更；经 dev proxy 打到 8765）
+npm run build        # 产物落 web/dist，就是服务托管的那一份
 npm run typecheck    # tsc --noEmit
 npm run seams        # 数据缝 / 设计缝红线（见下）
 ```

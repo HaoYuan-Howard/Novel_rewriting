@@ -1266,6 +1266,13 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 
 - React 18、TypeScript、Vite、Tailwind CSS、React Router、TanStack Query；不引入无需求支撑的 UI
   组件库、图表库、全局状态库、i18n、鉴权或 SSR。
+- **界面与 API 同源同端口**：服务把 `web/dist` 静态挂在自己那个端口上
+  （`novel/api/app.py::_mount_ui`，默认落点 `UI_DIST`，可由 `create_app(..., ui_dist=)` 注入）。
+  跑书的人只起一个进程、只记一个地址；`web/vite.config.ts` 那条指向 8765 的 dev proxy
+  只服务于前端开发。三条边界由 `tests/test_api_ui.py` 钉住：
+  非 `/api` 的 GET 一律回 `index.html`（`BrowserRouter` 深链接刷新必需）·
+  `/api/*` 的漏网请求仍是 `ErrorBody` 形状的 404，**不许吞成 200 + HTML** ·
+  catch-all 必须是路由表最后一条。未构建时界面地址答 503 并给出下一步，API 不受影响。
 - 屏与组件只经 hooks → `web/src/api/endpoints.ts` → Api 接口取数，不直接 fetch。
 - real 与 mock 适配器满足同一 TypeScript 接口；真实模式不允许缺端点时回退 mock。
 - 写请求携带 `X-Novel-UI: 1`；服务进程只写 `_service/`，产物变更经 CLI 子进程。

@@ -36,7 +36,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     import uvicorn
-    print(f'novel-rewriting → http://{HOST}:{a.port}/api    base={base}')
+    # ⚠ 打的是**界面**地址不是 `/api`：`create_app` 把 `web/dist` 挂在同一个端口上，
+    # 所以这一行就是人该粘进浏览器的那一条。API 仍在 `/api` 下，没挪。
+    print(f'novel-rewriting → http://{HOST}:{a.port}/    （API 在 /api）    base={base}')
     uvicorn.run(create_app(base), host=HOST, port=a.port, log_level='info')
     return 0
 

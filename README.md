@@ -51,6 +51,11 @@ README 只保留稳定入口和当前能力；“做过什么”由 Git 历史�
 
 ## 运行与验证
 
+**要用界面：双击 `tools\start.cmd`。** 它按需构建前端、起服务、开浏览器，
+只有一个进程一个地址（`http://127.0.0.1:8765/`），Ctrl+C 全停。
+`-Base` 指定语料根（省略取 outputs 下最近改动的那个），`-Dev` 换成 Vite 热更形态。
+界面与 API 同源：服务自己把 `web/dist` 挂在同一个端口上（见 `docs/BACKEND_CONTRACT.md` §6.5）。
+
 后端使用 conda 环境 `novel_refactor`：
 
 ```powershell
@@ -67,8 +72,8 @@ cd web
 npm ci
 npm run typecheck
 npm run seams
-npm run build
-npm run dev
+npm run build     # 产物落 web/dist，服务直接托管它
+npm run dev       # 仅前端开发要用（热更 + dev proxy → 8765）
 ```
 
 只跑编译检查不代表联调完成。交付前还要在真实服务上覆盖正常、未运行、错误和空态，

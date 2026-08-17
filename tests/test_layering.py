@@ -294,7 +294,8 @@ _WEB_STACK = {'fastapi', 'starlette', 'uvicorn'}
 
 #: 允许 import web 栈的文件。**每一条都要写得出理由**（形态同 `_WRITE_ALLOWED`）。
 _WEB_STACK_ALLOWED = {
-    'novel/api/app.py': '服务本体：路由挂载、CSRF 中间件、异常归一。这一层就是它',
+    'novel/api/app.py': '服务本体：路由挂载、CSRF 中间件、异常归一，以及把 `web/dist` '
+                        '静态挂在同一个端口上（只读构建产物，不碰产物盘）。这一层就是它',
     'novel/api/__main__.py': '起进程（`uvicorn.run`）。**绑定地址也只在这里出现一次**',
     'novel/api/deps.py': '路由共用的两道边界校验，要拿 `Request` 与 `HTTPException`',
     'novel/api/routes/': 'HTTP 端点。`APIRouter` 是它们的定义方式',
