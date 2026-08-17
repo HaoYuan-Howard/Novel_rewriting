@@ -14,8 +14,10 @@ Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 
 
 # This manifest is deliberately not a general-purpose corpus format.  It is the
-# hard-acceptance identity for the two books and the nine paid production
-# dispatches frozen in WORKFLOW_REVIEW_20260816.md.
+# hard-acceptance identity for the two books and the paid production dispatches
+# enumerated right below.  The two tuples ARE the frozen set -- the dated workflow
+# review that first froze it has been retired, so do not reintroduce a second
+# hand-copied list in prose; see docs/BACKEND_CONTRACT.md section 10.
 CURRENT_CORPUS_BOOKS: tuple[tuple[str, int], ...] = (
     ('2019402867061048656', 17),
     ('1668963766200045568', 25),

@@ -1,0 +1,107 @@
+{
+  "version": "v1",
+  "note": "web/src/mocks/ 的 20 份原始抓包字节。它们是历史证据基线，不是当前 schema：未经明确产品裁决不得改一个字节。校验器是 web/scripts/check-seams.mjs；基线的来历与读法见 docs/BACKEND_CONTRACT.md §八。",
+  "count": 20,
+  "files": [
+    {
+      "file": "check_stage2.json",
+      "bytes": 11142,
+      "sha256": "ea091893217ff0e6ce4723cf837555ac3d887896617b9e178f8601b600f973c8"
+    },
+    {
+      "file": "check_stage5_review.json",
+      "bytes": 15578,
+      "sha256": "7cfa516872bf20accb71a380c7245d56703d0b73e1d1016334f31f90efe4f343"
+    },
+    {
+      "file": "enums.json",
+      "bytes": 6779,
+      "sha256": "a803abe33d6def148230edf517c1ca2f814ca21f4c54d964ddc9e3f17b4be875"
+    },
+    {
+      "file": "inbox.json",
+      "bytes": 1943,
+      "sha256": "d8ad9754da44a634639a27044cdc237d808b65259ed27a716be6fcf03e9166f8"
+    },
+    {
+      "file": "jobs.json",
+      "bytes": 11,
+      "sha256": "0a5796e93f9b57ddf7c45f860485cbb7353fc0eda3dca753a444d0fd2a1573fe"
+    },
+    {
+      "file": "novel_overview.json",
+      "bytes": 4301,
+      "sha256": "9e14cead8aa79de4ed419d8617b7e15164381202800ce0bb0c98228a65116207"
+    },
+    {
+      "file": "novels.json",
+      "bytes": 13906,
+      "sha256": "f98c9425ff31f7dda62928625c96a7eb7491623e840dd369c3401034314d235e"
+    },
+    {
+      "file": "reading_ch3.json",
+      "bytes": 13764,
+      "sha256": "79039b81fdaca9b9de416a0aba9e3ceed029082d172cc126f43622585f458a70"
+    },
+    {
+      "file": "review_ch3.json",
+      "bytes": 18227,
+      "sha256": "40d2e120114b3ff3f546eea278a726402f24df6ba833ecf8dea67806dd21ba92"
+    },
+    {
+      "file": "stage0_extras.json",
+      "bytes": 3401,
+      "sha256": "daad1d6c0e3d2f736434c947873a4a8260bf07b03201958ab36cc7a51429a576"
+    },
+    {
+      "file": "stage1_chapters.json",
+      "bytes": 1694,
+      "sha256": "8f87eb3325b84fa30e0ba578826414aeb1bc23234822f16af50ab89a266286be"
+    },
+    {
+      "file": "stage1_hook_copy.json",
+      "bytes": 594,
+      "sha256": "ae6aebbec146d0b063e7603fdae7d0bf0f1048edf5b8f7bc4ab36d30bb394943"
+    },
+    {
+      "file": "stage1_report.json",
+      "bytes": 1405,
+      "sha256": "1a3b3b21586c6dd3e9fc26ff5a0468d91e3ecbc752dea85eba6ddccf8a328fee"
+    },
+    {
+      "file": "stage2_global.json",
+      "bytes": 17334,
+      "sha256": "6cfcd60c474bfad8ff37dd9597cf61dc6890abfa1b762a71c0c7e15d1e277b59"
+    },
+    {
+      "file": "stage3_style.json",
+      "bytes": 6257,
+      "sha256": "22f8337443b957b0f1d4d327584420c1c37a634354b9da0c3a19b2a57da656f1"
+    },
+    {
+      "file": "stage4_ch3.json",
+      "bytes": 18304,
+      "sha256": "7d49126802cfe39a0243a4ee72bba87c5d14e5bdd1453dce10d4734051493ead"
+    },
+    {
+      "file": "stage5_ch3.json",
+      "bytes": 30599,
+      "sha256": "d4d9bd76444b4411e78d5b0b1e7bb7142837a0d39a309bb467398b0a91c73f86"
+    },
+    {
+      "file": "stage6_hook.json",
+      "bytes": 12345,
+      "sha256": "147473f9258522f5037636edfaf919ca8523bc1a9980454a81375cef1ab62975"
+    },
+    {
+      "file": "stage7_ch3.json",
+      "bytes": 24402,
+      "sha256": "9ed773d02b88495a3a353c8b91e1d949548b15bf4a5f2cd3a732e156a8553536"
+    },
+    {
+      "file": "stage7_names.json",
+      "bytes": 14723,
+      "sha256": "3dc197c7a56199603a0915c35e6bdf868e4ca9f2f5066ddb3a60c99e117fbc5a"
+    }
+  ]
+}

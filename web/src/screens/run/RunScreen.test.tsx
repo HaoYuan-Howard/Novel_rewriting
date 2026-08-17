@@ -37,7 +37,7 @@ describe('RunScreen check composition', () => {
     expect(screen.getByText(/badge 与计数来自各层 CheckReport/)).toBeInTheDocument()
   })
 
-  it('hides cached green data while the current check refreshes or fails', async () => {
+  it('keeps the previous report while the current check refreshes; failure stays unknown', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     const base = await mockApi.getCheck(SAMPLE_SID, 'stage5')
     if (!base) throw new Error('stage5 mock report is missing')
@@ -62,11 +62,16 @@ describe('RunScreen check composition', () => {
     act(() => {
       void queryClient.invalidateQueries({ queryKey: qk.check(SAMPLE_SID, 'stage1') })
     })
+    // refetch 期间 placeholderData 沿用上一份——不闪成「校验未知」（U-00：未知 ≠ 没问题）
     await waitFor(() => {
-      expect(screen.getByText('? 校验未知')).toBeInTheDocument()
-      expect(screen.getAllByText('通过')).toHaveLength(7)
+      expect(queryClient.getQueryState(qk.check(SAMPLE_SID, 'stage1'))?.fetchStatus).toBe(
+        'fetching',
+      )
     })
+    expect(screen.queryByText('? 校验未知')).not.toBeInTheDocument()
+    expect(screen.getAllByText('通过')).toHaveLength(8)
 
+    // 这次是真的取不到了——才显示未知
     act(() => rejectRefresh(new Error('current check unavailable')))
     await waitFor(() => {
       expect(screen.getByText('? 校验未知')).toBeInTheDocument()

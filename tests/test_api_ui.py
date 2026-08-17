@@ -179,7 +179,7 @@ def test_a_build_that_lands_later_is_picked_up_without_a_restart(base, tmp_path)
 
     ⚠ 它换掉的是一整条人工步骤：先起服务、再构建的顺序下，
     「启动时查一次」会让界面一直是 503，而人看到的是「脚本明明跑完了」。
-    `tools/start.ps1` 正是先起后端再等构建的形态之一。
+    `scripts/start.ps1` 正是先起后端再等构建的形态之一。
     """
     later = tmp_path / 'built-later'
     later.mkdir()

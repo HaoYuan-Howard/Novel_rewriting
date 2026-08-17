@@ -4,6 +4,7 @@ import { useSampleCoverage } from '@/hooks/useSample'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { ComparePanes, PaneScroll } from '@/components/compare/ComparePanes'
 import { QueryStates } from '@/components/state/QueryStates'
+import { ChapterGrid } from '@/components/ui/ChapterGrid'
 import { ChapterStrip } from '@/components/ui/ChapterStrip'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
@@ -85,26 +86,21 @@ export function Stage4Screen() {
 
             <div className="flex flex-col gap-14 px-30 pt-14">
               <Panel className="flex flex-col gap-10 px-18 py-14">
-                <div className="flex flex-wrap items-center gap-8">
-                  {vm.index.map((i) => (
-                    <button
-                      key={i.no}
-                      type="button"
-                      onClick={() => nav('/n/' + vm.sid + '/stage4/' + i.ordinal)}
-                      className={cx(
-                        'flex cursor-pointer items-center gap-7 rounded-btn border px-9 py-5',
-                        i.active ? 'border-ink bg-inset' : 'border-line bg-card',
-                      )}
-                    >
+                <ChapterGrid
+                  items={vm.index}
+                  onPick={(o) => nav('/n/' + vm.sid + '/stage4/' + o)}
+                >
+                  {(i) => (
+                    <>
                       <Mono className="text-mini">{i.no}</Mono>
                       <Mono className="text-micro text-ink-5">{i.budget}</Mono>
                       <Mono className="text-micro text-ink-5">{i.beats} 拍</Mono>
                       {i.hidden ? (
                         <Mono className="text-micro text-ink-5">瞒 {i.hidden}</Mono>
                       ) : null}
-                    </button>
-                  ))}
-                </div>
+                    </>
+                  )}
+                </ChapterGrid>
                 <div className="prose-cn text-body text-ink-2">{vm.strategy}</div>
               </Panel>
 

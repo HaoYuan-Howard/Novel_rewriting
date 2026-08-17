@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
+import { errorBody } from '@/api/errors'
 import { chNo } from '@/constants/vocabulary'
 import { lookupAction } from '@/constants/actions'
 import { useApprovals } from '@/hooks/useApprovals'
@@ -20,6 +21,11 @@ import { cx } from '@/lib/cx'
  * 进 stage5 之前先挑要深度重构的章节（默认前 3 章），其余走浅层。
  * 深度 = 闭卷重构（写手看不到原文），按拍多次调用；浅层 = 开卷改写，一次过。
  * 选错了钱就花在错的章上 —— 所以这一步单独成屏，不塞在写作屏的角落里。
+ *
+ * 本屏刻意不包 ScreenFrame：depth 是 stage4 → stage5 之间的选择屏，
+ * 自己没有校验报告也没有自己的闸门（CHECK_KINDS 里没有 depth，
+ * ScreenFrame 挂的 CheckPanel / GateBar 无处可指）；
+ * 它依赖的两道闸门（s3 文风 / s4 计划）已在头部用 GateChip 摆出。
  */
 export function DepthScreen() {
   const sid = useSid()
@@ -127,6 +133,12 @@ export function DepthScreen() {
                 <span className="text-tag text-ink-4">
                   深度按拍重写，一章多次调用；浅层一次过。选之前先看清计划——选错了钱花在错的章上。
                 </span>
+                {/* 选中直接画自服务端验收记录，不做乐观更新——写失败时图上就是服务端值，无需回滚 */}
+                {setDeep.isError ? (
+                  <span className="rounded-block border border-warn-line bg-warn-bg px-10 py-6 text-tag text-warn-ink">
+                    保存失败：{errorBody(setDeep.error)}
+                  </span>
+                ) : null}
               </div>
               <ActionButton
                 className="ml-auto"

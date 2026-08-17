@@ -41,7 +41,7 @@ export function StyleScreen() {
 
   return (
     <ScreenFrame screen="style">
-      <QueryStates q={q} loadingLabel="量文风" missing={{ title: '文风画像 · stage3' }}>
+      <QueryStates q={q} loadingLabel="读文风画像" missing={{ title: '文风画像 · stage3' }}>
         {(d) => {
           const dims = Object.keys(d.bands_now ?? {})
           // drift=null 是「无从比」（有一边算不出来），[] 才是「比过了没漂移」

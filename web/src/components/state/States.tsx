@@ -15,7 +15,7 @@ import { LinkButton } from '@/components/ui/ActionButton'
 
 export function LoadingPane({ label = '取数中', rows = 3 }: { label?: string; rows?: number }) {
   return (
-    <div className="flex flex-col gap-10 p-20" aria-busy>
+    <div className="flex flex-col gap-10 p-20" role="status" aria-busy>
       <div className="text-tag text-ink-4">{label} …</div>
       {Array.from({ length: rows }).map((_, i) => (
         <div

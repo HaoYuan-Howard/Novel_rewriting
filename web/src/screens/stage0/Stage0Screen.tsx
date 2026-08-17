@@ -11,6 +11,7 @@ import { useEnums } from '@/hooks/useEnums'
 import { useSid } from '@/hooks/useRouteParams'
 import { QueryStates } from '@/components/state/QueryStates'
 import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
+import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
@@ -25,6 +26,13 @@ import type {
 
 function sameIds(left: Set<string>, right: Set<string>): boolean {
   return left.size === right.size && [...left].every((id) => right.has(id))
+}
+
+/** 三方合并的取值仍传英文 key，这里只负责把它显示成中文 */
+const MERGE_CHOICE_LABEL: Record<Stage0MergeResolution['choice'], string> = {
+  ours: '已批准正文',
+  theirs: '机器新跑',
+  custom: '手动合并',
 }
 
 function requireOk(job: Job): void {
@@ -197,9 +205,9 @@ export function Stage0Screen() {
   })
 
   return (
-    <QueryStates q={report} loadingLabel={'读取 Stage 0 审校报告'}>
+    <QueryStates q={report} loadingLabel={'读 Stage 0 审校报告'}>
       {(current) => (
-        <QueryStates q={segments} loadingLabel={'读取原文连续分区'}>
+        <QueryStates q={segments} loadingLabel={'读原文连续分区'}>
           {(source) => {
             const picked = selection ?? initial
             const removed = source.segments.filter((item) => picked.has(item.id))
@@ -280,7 +288,7 @@ export function Stage0Screen() {
                                       }))
                                     }
                                   />
-                                  {choice}
+                                  {MERGE_CHOICE_LABEL[choice]}
                                 </label>
                               ))}
                               {resolution?.choice === 'custom' ? (
@@ -403,29 +411,12 @@ export function Stage0Screen() {
                       </div>
                     </Panel>
 
-                    <Panel className="grid grid-cols-[220px_minmax(0,1fr)] gap-10 px-18 py-14">
-                      <label className="flex flex-col gap-4 text-body font-semibold">
-                        自报身份 actor
-                        <input
-                          value={actor}
-                          onChange={(event) => setActor(event.target.value)}
-                          placeholder="例如：reviewer-a"
-                          className="rounded-btn border border-line-btn bg-card px-10 py-7 font-mono text-body font-normal"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-4 text-body font-semibold">
-                        本次批准 / 编辑理由 reason
-                        <input
-                          value={reason}
-                          onChange={(event) => setReason(event.target.value)}
-                          placeholder="说明核对了什么，以及为什么接受本次正文"
-                          className="rounded-btn border border-line-btn bg-card px-10 py-7 text-body font-normal"
-                        />
-                      </label>
-                      <p className="prose-cn col-span-2 m-0 text-tag text-ink-4">
-                        actor 是操作者自报身份，仅用于可追溯审计；它不是登录认证身份。
-                      </p>
-                    </Panel>
+                    <ActorReasonFields
+                      actor={actor}
+                      reason={reason}
+                      onActor={setActor}
+                      onReason={setReason}
+                    />
 
                     {run.isError ? (
                       <Panel className={'border-warn-line bg-warn-bg px-18 py-14'}>
@@ -512,7 +503,7 @@ export function Stage0Screen() {
                           <div
                             ref={segmentScroll}
                             data-testid="stage0-segment-viewport"
-                            className="h-[640px] overflow-y-auto whitespace-pre-wrap"
+                            className="h-[60vh] overflow-y-auto whitespace-pre-wrap"
                           >
                             <div
                               className="relative w-full"

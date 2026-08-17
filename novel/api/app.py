@@ -41,7 +41,7 @@ from novel.orchestrator import queue as queue_runner
 #: 会在本机执行进程 · 那些进程花真钱 · 会往盘上写文件 · 传输的是不外流的版权正文。
 HOST = '127.0.0.1'
 
-#: `docs/BACKEND_CONTRACT.md` §6.5 写死的（Vite dev proxy 指着它）。
+#: `web/DELIVERY.md` §1 写死的（Vite dev proxy 指着它）。
 PORT = 8765
 
 #: `R-11.2` 的自定义头。前端在 `web/src/api/client.ts` 里只给 `post()` 带它。
@@ -125,7 +125,7 @@ def _mount_ui(app: FastAPI, dist: str) -> None:
             raise HTTPException(
                 status_code=503,
                 detail=f'前端还没构建：{index} 不存在。先在 web/ 里跑 npm run build'
-                       f'（或用 tools/start.cmd，它会替你构建）。API 本身不受影响。')
+                       f'（或用 scripts/start.cmd，它会替你构建）。API 本身不受影响。')
         return FileResponse(index)
 
 

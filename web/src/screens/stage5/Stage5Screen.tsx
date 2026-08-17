@@ -1,4 +1,6 @@
+import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { errorBody } from '@/api/errors'
 import { ARM, FRESH, MUTED, SEV } from '@/constants/vocabulary'
 import { useAskJob, useChrome } from '@/hooks/useChrome'
 import { useSampleCoverage } from '@/hooks/useSample'
@@ -8,6 +10,7 @@ import { CompareRows } from '@/components/compare/CompareRows'
 import { QueryStates } from '@/components/state/QueryStates'
 import { LoadFailed, NotRunYet } from '@/components/state/States'
 import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
+import { ChapterGrid } from '@/components/ui/ChapterGrid'
 import { ChapterStrip } from '@/components/ui/ChapterStrip'
 import { HighlightedText } from '@/components/ui/HighlightedText'
 import { Mono } from '@/components/ui/Mono'
@@ -36,6 +39,14 @@ export function Stage5Screen() {
   const ask = useAskJob()
   const { askConfirm } = useChrome()
   const { hasSample } = useSampleCoverage()
+  const draftPane = useRef<HTMLDivElement>(null)
+
+  // 点中一条判据后，右栏成稿里第一处证据高亮滚到视野中间
+  useEffect(() => {
+    draftPane.current
+      ?.querySelector('mark')
+      ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+  }, [vm.selFinding])
 
   return (
     <ScreenFrame screen="stage5" onJumpChapter={(n) => nav('/n/' + vm.sid + '/stage5/' + n)}>
@@ -64,7 +75,10 @@ export function Stage5Screen() {
                     n,
                     active: n === vm.ordinal,
                     dim: !hasSample(vm.sid, n),
-                    go: () => nav('/n/' + vm.sid + '/stage5/' + n),
+                    // 编辑中有未保存改动时，跳章先挽留
+                    go: () => {
+                      if (vm.guardLeave()) nav('/n/' + vm.sid + '/stage5/' + n)
+                    },
                   }))}
                 />
               </div>
@@ -219,12 +233,17 @@ export function Stage5Screen() {
                                 r.active && 'bg-page',
                               )}
                               style={{
-                                gridTemplateColumns: '58px 62px minmax(0,1fr) 34px 34px 38px 44px',
+                                gridTemplateColumns:
+                                  'minmax(0,58px) minmax(0,62px) minmax(0,1fr) 34px 34px 38px 44px',
                               }}
                             >
-                              <Mono className="text-mini">{r.no}</Mono>
-                              <span className="text-micro text-ink-4">{r.mode}</span>
-                              <Mono className="text-micro text-ink-4">{r.chars}</Mono>
+                              <Mono className="truncate text-mini" title={r.no}>{r.no}</Mono>
+                              <span className="truncate text-micro text-ink-4" title={r.mode}>
+                                {r.mode}
+                              </span>
+                              <Mono className="truncate text-micro text-ink-4" title={r.chars}>
+                                {r.chars}
+                              </Mono>
                               <CountCell n={r.hard} sev="hard" />
                               <CountCell n={r.info} sev="info" />
                               <CountCell n={r.unver} sev="unver" />
@@ -240,7 +259,7 @@ export function Stage5Screen() {
                   </Panel>
                 }
                 right={
-                  <div className="flex flex-col gap-14">
+                  <div ref={draftPane} className="flex flex-col gap-14">
                     {/* 材料（可折叠） */}
                     <Panel>
                       <PaneHeader
@@ -330,6 +349,16 @@ export function Stage5Screen() {
                                 />
                               </label>
                             ))}
+                            {vm.save.isError ? (
+                              <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
+                                保存失败：{errorBody(vm.save.error)}
+                              </div>
+                            ) : null}
+                            {vm.save.data?.state === 'failed' ? (
+                              <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
+                                改稿作业没跑成（failed），改稿未落成新一轮——完整输出在下方作业抽屉的日志里。
+                              </div>
+                            ) : null}
                             <div className="flex items-center gap-10">
                               <span className="prose-cn text-tag text-ink-4">{vm.editNote}</span>
                               <ActionButton
@@ -450,25 +479,22 @@ export function Stage5Screen() {
                     {/* 章索引 */}
                     <Panel>
                       <PaneHeader title="全书成稿" meta={d.index.length + ' 章'} />
-                      <div className="flex flex-wrap gap-8 px-18 py-14">
-                        {vm.index.map((i) => (
-                          <button
-                            key={i.no}
-                            type="button"
-                            onClick={() => nav('/n/' + vm.sid + '/stage5/' + i.ordinal)}
-                            className={cx(
-                              'flex cursor-pointer items-center gap-7 rounded-btn border px-9 py-5',
-                              i.active ? 'border-ink bg-inset' : 'border-line bg-card',
-                            )}
-                          >
-                            {/* freshness=null = 本章还没有稿——按「不在盘上」画 */}
-                            <FreshnessBadge f={i.freshness ?? 'missing'} size={8} />
-                            <Mono className="text-mini">{i.no}</Mono>
-                            <span className="text-tag text-ink-3">{i.modes}</span>
-                            <Mono className="text-micro text-ink-5">{i.chars}</Mono>
-                            <Mono className="text-micro text-ink-5">重合 {i.overlap}</Mono>
-                          </button>
-                        ))}
+                      <div className="px-18 py-14">
+                        <ChapterGrid
+                          items={vm.index}
+                          onPick={(o) => nav('/n/' + vm.sid + '/stage5/' + o)}
+                        >
+                          {(i) => (
+                            <>
+                              {/* freshness=null = 本章还没有稿——按「不在盘上」画 */}
+                              <FreshnessBadge f={i.freshness ?? 'missing'} size={8} />
+                              <Mono className="text-mini">{i.no}</Mono>
+                              <span className="text-tag text-ink-3">{i.modes}</span>
+                              <Mono className="text-micro text-ink-5">{i.chars}</Mono>
+                              <Mono className="text-micro text-ink-5">重合 {i.overlap}</Mono>
+                            </>
+                          )}
+                        </ChapterGrid>
                       </div>
                     </Panel>
                   </div>

@@ -7,6 +7,7 @@ import { MASKED_SECRET_ID } from '@/api/spoilers'
 import { FRESH, MUTED, SEV, SPOILER_ON } from '@/constants/vocabulary'
 import { useApprovals } from '@/hooks/useApprovals'
 import { useEnums } from '@/hooks/useEnums'
+import { useSampleCoverage } from '@/hooks/useSample'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { QueryStates } from '@/components/state/QueryStates'
@@ -31,6 +32,7 @@ export function GlobalScreen() {
   const sid = useSid()
   const nav = useNavigate()
   const { doc, markSeen } = useApprovals()
+  const { defaultOrdinal } = useSampleCoverage()
   const [spoilers, setSpoilers] = useState(false)
   const [tab, setTab] = useState<Tab>('chars')
 
@@ -190,7 +192,7 @@ export function GlobalScreen() {
                 <Panel>
                   <div
                     className="grid gap-12 border-b border-line-soft px-18 py-10 text-tag text-ink-4"
-                    style={{ gridTemplateColumns: '64px 1fr 150px 1fr 210px' }}
+                    style={{ gridTemplateColumns: '64px minmax(0,1fr) minmax(90px,150px) minmax(0,1fr) 210px' }}
                   >
                     <span>id</span>
                     <span>主</span>
@@ -205,11 +207,13 @@ export function GlobalScreen() {
                       <div
                         key={r.relation_id}
                         className="grid items-center gap-12 border-b border-line-row px-18 py-10"
-                        style={{ gridTemplateColumns: '64px 1fr 150px 1fr 210px' }}
+                        style={{ gridTemplateColumns: '64px minmax(0,1fr) minmax(90px,150px) minmax(0,1fr) 210px' }}
                       >
                         <Mono className="text-micro text-ink-5">{r.relation_id}</Mono>
                         <span className="text-body">{r.subject.display}</span>
-                        <span className="text-body text-ink-3">{r.predicate}</span>
+                        <span className="truncate text-body text-ink-3" title={r.predicate}>
+                          {r.predicate}
+                        </span>
                         <span className="text-body">{r.object.display}</span>
                         <span className="flex items-center gap-8">
                           <span className="relative h-7 min-w-0 flex-1 overflow-hidden rounded-tag bg-inset">
@@ -290,7 +294,7 @@ export function GlobalScreen() {
                       ) : null
                     }
                     action={
-                      <LinkButton onClick={() => nav('/n/' + sid + '/read/3')}>
+                      <LinkButton onClick={() => nav('/n/' + sid + '/read/' + defaultOrdinal(sid))}>
                         对着原文看一遍
                       </LinkButton>
                     }

@@ -1,5 +1,21 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { SEV } from '@/constants/vocabulary'
+import { useChrome } from '@/hooks/useChrome'
+import { LinkButton } from '@/components/ui/ActionButton'
+
+/** 复制错误文本。类组件用不了 hook，notify 经这个小组件拿。 */
+function CopyErrorButton({ text }: { text: string }) {
+  const { notify } = useChrome()
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      notify('已复制')
+    } catch {
+      notify('复制失败，请手动选中错误文本复制', 'err')
+    }
+  }
+  return <LinkButton onClick={copy}>复制</LinkButton>
+}
 
 /**
  * 一屏崩了要说「这一屏崩了」，不能变成白板。
@@ -29,6 +45,11 @@ export class ScreenBoundary extends Component<
 
   render() {
     if (!this.state.err) return this.props.children
+    const errText =
+      this.state.err.name +
+      ': ' +
+      this.state.err.message +
+      (this.state.stack ? '\n' + this.state.stack : '')
     return (
       <section className="flex flex-col gap-12 px-30 py-26">
         <div
@@ -43,9 +64,14 @@ export class ScreenBoundary extends Component<
             别把它当成已经看过。把下面这段报给前端。
           </div>
           <pre className="m-0 overflow-x-auto rounded-block border border-line bg-inset px-14 py-12 font-mono text-mini whitespace-pre-wrap text-ink-2">
-            {this.state.err.name}: {this.state.err.message}
-            {this.state.stack ? '\n' + this.state.stack : ''}
+            {errText}
           </pre>
+          <div className="flex items-center gap-10">
+            <LinkButton onClick={() => this.setState({ err: null, stack: '' })}>
+              重试渲染
+            </LinkButton>
+            <CopyErrorButton text={errText} />
+          </div>
         </div>
       </section>
     )

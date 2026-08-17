@@ -258,7 +258,7 @@ NONBODY_MARKER_WARN_CP: Final = 17
 #:   后者独立起作用的窗口只有 `body_ratio ∈ [0.60, 0.65)`。两条都留是因为严重度不同。
 STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 
-#: 人工审阅闸门的状态。**三态，不是 `bool`**（2026-08-11 用户裁决，`stage0.md` §四 #1）。
+#: 人工审阅闸门的状态。**三态，不是 `bool`**（用户裁决，见 `docs/schema/stage0.md` §2.4）。
 #:
 #: 【为什么不能是 `bool`】实际有三种状态：**没跑过** · **跑了没批** · **批了**。
 #: 压成 `bool` 之后前两者就分不开了——而「产物不存在」这条替代表达要求
@@ -1161,7 +1161,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--chapters', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE5_REVIEW,)),
     # ⚠⚠ **`stage5.semantic` 已于 2026-08-17 整节点下线**（用户裁决，见
-    #   `docs/SKILL_OPERATOR_REVIEW_20260817.md` S-13）。裁决依据是实跑证据而非偏好：
+    #   `docs/BACKEND_CONTRACT.md` §十 2026-08-17 那一行）。裁决依据是实跑证据而非偏好：
     #     · 本项目的重构**不跨章重组**（实测 18/18 章 `from_source_ordinals == [自身]`），
     #       书级剧透那条主风险面在计划形态上几乎不存在；
     #     · 剧透的可查通道在 stage2 已有确定性判据（`event_early_name` /

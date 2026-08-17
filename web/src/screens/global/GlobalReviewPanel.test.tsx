@@ -128,7 +128,7 @@ describe('GlobalReviewPanel', () => {
     expect(screen.getAllByText('FAIL').some((element) => element.tagName === 'SPAN')).toBe(true)
     expect(screen.getAllByText('UNVER').some((element) => element.tagName === 'SPAN')).toBe(true)
 
-    fireEvent.change(screen.getByLabelText('全局复核 actor'), {
+    fireEvent.change(screen.getByLabelText(/自报身份/), {
       target: { value: 'reviewer-a' },
     })
     fireEvent.click(screen.getByLabelText('选择 canon.world_rules'))

@@ -5,10 +5,12 @@ import {
   FRESH,
   MISSING,
   SEV,
+  STAGE_SCREEN,
   STAGES,
   kb,
   when,
   type FreshnessDisplay,
+  type ScreenName,
 } from '@/constants/vocabulary'
 import type { NovelRow } from '@/types/novels'
 
@@ -46,6 +48,8 @@ export interface BookView {
   verdictBg: string
   mtimeLabel: string | null
   artifactCount: number
+  /** 「打开」落点：第一个「待继续」层的屏；全部完成是 stage7 */
+  openScreen: ScreenName
 }
 
 function viewOf(n: NovelRow): BookView {
@@ -86,6 +90,10 @@ function viewOf(n: NovelRow): BookView {
           ? FRESH.unknown
           : FRESH.fresh
 
+  // 「打开」落到第一个「待继续」的层（columns 按 STAGES 顺序）；没有待继续就是成了，去 stage7
+  const todo = columns.find((c) => c.done === false)
+  const openScreen = STAGE_SCREEN[todo?.key ?? 'stage7'] ?? 'stage0'
+
   return {
     sid: n.sid,
     title: n.title,
@@ -97,6 +105,7 @@ function viewOf(n: NovelRow): BookView {
     verdictBg: tone.bg,
     mtimeLabel: n.summary.latest_mtime ? '最近落盘 ' + when(n.summary.latest_mtime) : null,
     artifactCount: n.summary.artifact_count,
+    openScreen,
   }
 }
 

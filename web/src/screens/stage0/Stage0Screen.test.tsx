@@ -125,7 +125,7 @@ describe('Stage0Screen segment virtualization', () => {
     fireEvent.change(screen.getByLabelText('本次批准 / 编辑理由 reason'), {
       target: { value: '逐项核对三方文本' },
     })
-    fireEvent.click(screen.getByLabelText('ours'))
+    fireEvent.click(screen.getByLabelText('已批准正文'))
     fireEvent.click(screen.getByRole('button', { name: '接受三方合并候选' }))
 
     await waitFor(() => expect(resolve).toHaveBeenCalledTimes(1))

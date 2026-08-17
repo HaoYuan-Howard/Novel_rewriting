@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
@@ -25,6 +26,8 @@ export function BookLayout() {
   const sid = useSid()
   const nav = useNavigate()
   const { doc, backfill } = useApprovals()
+  // 成功条的「知道了」只挡当前这本书的当前这次结果：换书、或又补录了一次，都要重新出现
+  const [dismissed, setDismissed] = useState<{ sid: string; data: unknown } | null>(null)
   const q = useQuery({
     queryKey: qk.novel(sid),
     queryFn: () => api.getNovel(sid),
@@ -76,9 +79,19 @@ export function BookLayout() {
           </button>
         </div>
       ) : null}
-      {backfill.data?.backfilled.length ? (
-        <div className="border-b border-line-soft bg-gate-ok-bg px-30 py-9 text-body text-ink-2">
-          已按正式产物补录 {backfill.data.backfilled.join('、')}；这些闸门来自盘面核对，不是你逐屏点击的记录。
+      {backfill.data?.backfilled.length &&
+      !(dismissed && dismissed.sid === sid && dismissed.data === backfill.data) ? (
+        <div className="flex items-center gap-10 border-b border-line-soft bg-gate-ok-bg px-30 py-9 text-body text-ink-2">
+          <span className="min-w-0 flex-1">
+            已按正式产物补录 {backfill.data.backfilled.join('、')}；这些闸门来自盘面核对，不是你逐屏点击的记录。
+          </span>
+          <button
+            type="button"
+            onClick={() => setDismissed({ sid, data: backfill.data })}
+            className="cursor-pointer rounded-btn border border-line-btn bg-card px-10 py-4 text-tag text-ink-3"
+          >
+            知道了
+          </button>
         </div>
       ) : null}
       {backfill.isError ? (

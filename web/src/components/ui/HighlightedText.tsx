@@ -31,6 +31,7 @@ export function HighlightedText({
           <mark
             key={i}
             title={p.rule}
+            tabIndex={p.rule ? 0 : undefined}
             className="rounded-[3px] px-2"
             style={{
               color: SEV[p.sev].color,

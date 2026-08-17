@@ -125,14 +125,16 @@ export function InboxScreen() {
                 </div>
                 <CheckBadge badge={rep ? rep.badge : null} />
                 <Mono className="text-micro text-ink-5">
-                  {rep
-                    ? 'hard ' +
-                      rep.rules.filter((x) => x.sev === 'hard' && x.status === 'hit').length +
-                      ' · 查不了 ' +
-                      (rep.counts.unver + rep.counts.skipped)
-                    : noSample
-                      ? '没抓样本'
-                      : '还没跑'}
+                  {r?.isPending
+                    ? '读取中…'
+                    : rep
+                      ? 'hard ' +
+                        rep.rules.filter((x) => x.sev === 'hard' && x.status === 'hit').length +
+                        ' · 查不了 ' +
+                        (rep.counts.unver + rep.counts.skipped)
+                      : noSample
+                        ? '没抓样本'
+                        : '还没跑'}
                 </Mono>
                 <span className="text-micro text-ink-4">→ {l.where}</span>
               </button>
@@ -198,13 +200,14 @@ export function InboxScreen() {
                       <span className="text-tag text-ink-4">{m.meaning}</span>
                       <Mono className="ml-auto text-mini text-ink-4">{mine.length} 条</Mono>
                     </div>
-                    {mine.map((i, n) => (
+                    {mine.map((i, n) => {
+                      // 按条目自己的 stage 跳它的阶段屏；chapter=null（书级）不编假章号
+                      const layer = LAYERS.find((l) => l.kind === i.stage)
+                      return (
                       <button
                         key={n}
                         type="button"
                         onClick={() => {
-                          // 按条目自己的 stage 跳它的阶段屏；chapter=null（书级）不编假章号
-                          const layer = LAYERS.find((l) => l.kind === i.stage)
                           const screen = layer?.screen ?? 'stage5'
                           const suffix = layer?.chaptered
                             ? '/' + (i.chapter ?? defaultOrdinal(sid))
@@ -220,10 +223,14 @@ export function InboxScreen() {
                           <Mono className="text-micro text-ink-5">{i.stage}</Mono>
                           <span className="text-body font-semibold">{i.what}</span>
                           <Mono className="ml-auto text-micro text-ink-5">{i.rule}</Mono>
+                          <span className="text-micro text-ink-4">
+                            → {layer?.where ?? '成稿屏'}
+                          </span>
                         </div>
                         <div className="prose-cn text-sm2 text-ink-2">{i.how}</div>
                       </button>
-                    ))}
+                      )
+                    })}
                   </Panel>
                 )
               })}

@@ -1,6 +1,8 @@
 import { Outlet, useLocation, useMatch } from 'react-router-dom'
 import type { ScreenName } from '@/constants/vocabulary'
 import { useChrome } from '@/hooks/useChrome'
+import { useHotkeys } from '@/hooks/useHotkeys'
+import { cx } from '@/lib/cx'
 import { Rail } from './Rail'
 import { ScreenBoundary } from './ScreenBoundary'
 import { JobDrawer } from '@/components/job/JobDrawer'
@@ -42,7 +44,8 @@ function useWhere() {
  */
 export function AppShell() {
   const { sid, screen, ordinal } = useWhere()
-  const { drawerOpen } = useChrome()
+  const { drawerOpen, notices } = useChrome()
+  useHotkeys()
 
   return (
     <div
@@ -55,13 +58,37 @@ export function AppShell() {
       }
     >
       <Rail sid={sid} screen={screen} ordinal={ordinal} />
-      <main className="min-w-0" style={{ paddingBottom: 'var(--drawer-h)' }}>
+      <main
+        className="min-w-0 transition-[padding-bottom] duration-200 ease-out"
+        style={{ paddingBottom: 'var(--drawer-h)' }}
+      >
         <ScreenBoundary resetKey={(sid ?? '') + '/' + screen + '/' + (ordinal ?? '')}>
           <Outlet />
         </ScreenBoundary>
       </main>
       <ConfirmDialog />
       <JobDrawer />
+      {/* 瞬态通知槽：右下角、抽屉之上（抽屉 z-20）。写回成败的一句话反馈都落这里。 */}
+      <div
+        aria-live="polite"
+        className="fixed right-24 z-30 flex w-[380px] flex-col gap-8"
+        style={{ bottom: 'calc(var(--drawer-h) + 12px)' }}
+      >
+        {notices.map((n) => (
+          <div
+            key={n.id}
+            role="status"
+            className={cx(
+              'rounded-card border px-14 py-10 text-body shadow-drawer',
+              n.tone === 'ok'
+                ? 'border-gate-ok-line bg-gate-ok-bg text-gate-ok-ink'
+                : 'border-warn-line bg-warn-bg text-warn-ink',
+            )}
+          >
+            {n.text}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

@@ -9,6 +9,7 @@ test_coverage.py —— 需求 §6 立的**双向覆盖率**的执行落点。
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -22,11 +23,49 @@ DOC = reqs.load()
 
 # ───────────────────────── 文档自身的一致性 ─────────────────────────
 
+#: 每个 R 节解析出的条目数（**含该节标题自身那一条**）。
+#:
+#: 【为什么是逐节精确快照，不是一个下限】这里原来写的是 `len(r) > 50`，
+#: 而 R 实际有 280 条——那是 **230 条的缓冲**：某一节的表格少一列、标题格式被改，
+#: 整节上百条解析不出来，这条断言照样绿。
+#: 而"少解析"的后果不是报错，是**双向覆盖率对那些条目静默失效**：
+#: 它们压根不在 `DOC` 里，于是「每条声明了 HARD 的需求必须有注册判据在管」
+#: 这类检查根本轮不到它们头上——一整节需求就这样悄悄退出了验收。
+#: ⇒ 改成逐节精确：加/删需求时**必须显式改这里的数字**（那正是它的用途），
+#: 而一次预期外的漂移会精确报出「哪一节从 N 条变成 M 条」，不用去猜是哪里坏了。
+_R_SECTION_SIZES = {
+    'R-0': 16, 'R-1': 15, 'R-2': 20, 'R-3': 28, 'R-4': 18,
+    'R-5': 21, 'R-6': 11, 'R-7': 33, 'R-8': 22, 'R-9': 24,
+    'R-10': 32, 'R-11': 14, 'R-12': 11, 'R-13': 8, 'R-14': 7,
+}
+
+
 def test_doc_parses_and_has_all_three_families():
-    r, q, b = DOC.of_kind('R'), DOC.of_kind('Q'), DOC.of_kind('B')
-    assert len(r) > 50, f'只解析出 {len(r)} 条 R——多半是表格格式变了'
+    q, b = DOC.of_kind('Q'), DOC.of_kind('B')
     assert len(q) == 12, f'Q 应有 12 条，实得 {len(q)}'
     assert len(b) == 22, f'B 应有 22 条，实得 {len(b)}'
+
+
+def test_every_r_section_parses_to_exactly_the_expected_size():
+    """逐节钉死条目数——解析面自己的守卫（判据 3：守卫的扫描面也需要守卫）。"""
+    got = Counter(v.section for v in DOC.of_kind('R').values() if v.section)
+    drift = {sec: (_R_SECTION_SIZES.get(sec), got.get(sec))
+             for sec in sorted(set(_R_SECTION_SIZES) | set(got),
+                               key=lambda s: int(s.split('-')[1]))
+             if _R_SECTION_SIZES.get(sec) != got.get(sec)}
+    assert not drift, (
+        f'R 节的条目数与快照对不上，(快照, 实际) = {drift}\n'
+        f'→ 若是有意增删需求，把 `_R_SECTION_SIZES` 里那一节的数字一并改掉；\n'
+        f'  若不是，多半是那一节的表格列或标题格式被动过，解析器读不到了'
+    )
+
+
+def test_the_section_sizes_cover_every_parsed_r_item():
+    """快照求和必须等于 R 总数——防止有条目落在任何已知节之外而无人察觉。"""
+    assert sum(_R_SECTION_SIZES.values()) == len(DOC.of_kind('R')), (
+        f'快照合计 {sum(_R_SECTION_SIZES.values())} ≠ 解析出的 R 总数 '
+        f'{len(DOC.of_kind("R"))}——有条目不属于任何登记在册的 R 节'
+    )
 
 
 def test_every_r_item_declares_who_checks():
@@ -355,3 +394,68 @@ def test_every_stage_has_at_least_one_node():
     """
     empty = [s for s in STAGES if not STAGE_SECTIONS[s]]
     assert not empty, f'这些 stage 一个节点都没有：{empty}'
+
+
+# ─────────────── §五 反向覆盖率：手抄的那张表也要有人对账 ───────────────
+#
+# 【为什么这三条必须存在】§五 是 `contracts/rules.py` 注册表的**手抄副本**，
+# 而它此前没有任何消费方——于是它成了本仓 `Q-6`（单一落点）最干净的一次自我违反。
+#
+# 实测（2026-08-17）：下线 `stage5.semantic` 那一次，**被解析的 §二** 里
+# `R-7.18b` / `R-7.18c` 被逐条改成了转授形态（不改，
+# `test_every_stage_has_rules_for_every_guarded_requirement` 当场红），
+# 而**没被解析的 §五** 至今写着「48 条现役……含 `R-7.18b` / `R-7.18c`」。
+# ⇒ 同一份文档、同一次改动：**有守卫的那一半没漂，没守卫的这一半漂了。**
+# 一并抓到的还有两处：stage6 少记 1 条，以及**整个 `stage0` 层（13 条判据）
+# 从建层起就没进过这张表**——少一整层不会让任何别的测试变色，
+# 而「反向覆盖率」自己漏层时，它宣称的那个验收方向是空的。
+#
+# 手抄不是问题，**手抄而无人对账**才是。下面三条把它变成会红的那一半。
+_REVERSE_ROW = re.compile(r'`(stage\d)`[^|]*?\*\*(\d+) 条现役\*\*')
+
+
+def _reverse_coverage_claims() -> dict[str, int]:
+    """§五 逐行扫出的「这一层宣称有几条判据」。**逐行**扫是刻意的：
+    整篇 findall 时 `[^|]` 会放过跨行匹配，而表格行首尾都有 `|`，逐行才锁得住列。"""
+    claims: dict[str, int] = {}
+    for line in Path(reqs.DOC_PATH).read_text(encoding='utf-8').splitlines():
+        for stage, n in _REVERSE_ROW.findall(line):
+            if stage in claims:
+                raise AssertionError(
+                    f'§五 里 {stage} 有两行都带条数登记——一层只该有一行是权威')
+            claims[stage] = int(n)
+    return claims
+
+
+def test_reverse_coverage_counts_match_the_live_registry():
+    """§五 手抄的「N 条现役」必须逐层等于注册表实际条数。"""
+    claims = _reverse_coverage_claims()
+    drift = {s: (n, len(REGISTRY.of_stage(s)))
+             for s, n in claims.items() if n != len(REGISTRY.of_stage(s))}
+    assert not drift, (
+        f'§五 的条数与注册表对不上，(宣称, 实际) = {drift}\n'
+        f'→ 判据表改了而反向覆盖率那一节没跟上。真值恒在 `contracts/rules.py` 的注册表，'
+        f'文档里那个数字只是副本；改判据时两边一起改'
+    )
+
+
+def test_every_stage_with_rules_appears_in_the_reverse_coverage_table():
+    """反过来：注册表里有判据的层，一层都不许在 §五 缺席。"""
+    claims = _reverse_coverage_claims()
+    with_rules = {r.stage for r in REGISTRY.all()}
+    missing = sorted(with_rules - set(claims))
+    assert not missing, (
+        f'这些层有注册判据却没进 §五 反向覆盖率表：{missing}\n'
+        f'→ 给每层补一行「（`stageN`，**M 条现役**）」，M 取注册表实际条数'
+    )
+    stray = sorted(set(claims) - with_rules)
+    assert not stray, f'§五 登记了没有任何注册判据的层：{stray}'
+
+
+def test_the_reverse_coverage_scan_actually_finds_something():
+    """守卫的守卫：正则失配时上面两条会全绿，而那正是最坏的情况。"""
+    claims = _reverse_coverage_claims()
+    assert len(claims) >= 8, (
+        f'只从 §五 扫到 {len(claims)} 层的条数登记——正则多半失配了。'
+        f'当前 stage0~stage7 每层都有判据，八层都该被扫到'
+    )

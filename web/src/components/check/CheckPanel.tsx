@@ -213,17 +213,18 @@ export function CheckPanel({
   const rerun = allowRerun ? (
     <button
       type="button"
-      className="cursor-pointer rounded-tag border border-line bg-card px-8 py-3 text-mini text-ink-2"
+      disabled={q.isFetching}
+      className="cursor-pointer rounded-tag border border-line bg-card px-8 py-3 text-mini text-ink-2 disabled:cursor-not-allowed disabled:opacity-40"
       onClick={() => void qc.invalidateQueries({ queryKey: qk.check(sid, kind) })}
     >
-      重新复检（0 成本现算）
+      {q.isFetching ? '复检中…' : '重新复检（0 成本现算）'}
     </button>
   ) : null
 
   return (
     <div className="mx-30 mt-20 overflow-hidden rounded-card border border-line bg-card">
       {q.isPending ? (
-        <LoadingPane label={kind + ' 校验报告'} rows={2} />
+        <LoadingPane label={'读 ' + kind + ' 校验报告'} rows={2} />
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-12 px-20 py-14">

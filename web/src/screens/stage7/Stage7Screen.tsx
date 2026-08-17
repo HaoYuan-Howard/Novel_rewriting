@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
-import { isNotRunYet } from '@/api/errors'
+import { errorBody, isNoSample, isNotRunYet } from '@/api/errors'
 import { qk } from '@/api/queryKeys'
 import { lookupAction } from '@/constants/actions'
 import { FRESH, SCRIM, SEV } from '@/constants/vocabulary'
@@ -13,8 +13,9 @@ import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { CompareRows } from '@/components/compare/CompareRows'
 import { QueryStates } from '@/components/state/QueryStates'
-import { HatchNote } from '@/components/state/States'
+import { HatchNote, LoadFailed } from '@/components/state/States'
 import { ActionButton } from '@/components/ui/ActionButton'
+import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { ChapterStrip } from '@/components/ui/ChapterStrip'
 import { HighlightedText } from '@/components/ui/HighlightedText'
 import { Mono } from '@/components/ui/Mono'
@@ -29,7 +30,7 @@ import { cx } from '@/lib/cx'
  */
 export function Stage7Screen() {
   const sid = useSid()
-  const { askConfirm } = useChrome()
+  const { askConfirm, notify } = useChrome()
   const ask = useAskJob()
   const enums = useEnums()
   const renameAction = lookupAction(enums.data, { kind: 'stage7.rename', extra: null })
@@ -71,7 +72,8 @@ export function Stage7Screen() {
   const approve = useMutation({
     mutationFn: (req: { actor: string; reason: string; subject_sha256: string }) =>
       api.approveNames(sid, req),
-    onSuccess: () => {
+    onSuccess: (job) => {
+      if (job.state !== 'failed') notify('人名表已定稿')
       void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
       void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage7') })
       void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
@@ -81,7 +83,8 @@ export function Stage7Screen() {
 
   const adoptResidual = useMutation({
     mutationFn: () => api.adoptResidual(sid, { confidence: 'high' }),
-    onSuccess: () => {
+    onSuccess: (job) => {
+      if (job.state !== 'failed') notify('已采纳可安全应用的 high 候选')
       void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
       void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage7') })
       void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
@@ -182,6 +185,36 @@ export function Stage7Screen() {
                   >
                     {d.approved ? '人物表已定稿' : '人物表还没定稿'}
                   </span>
+                </div>
+              </header>
+
+              {approve.isError ? (
+                <div className="rounded-card border border-warn-line bg-warn-bg px-18 py-12 text-body text-warn-ink">
+                  定稿失败：{errorBody(approve.error)}
+                </div>
+              ) : null}
+
+              <ActorReasonFields
+                actor={actor}
+                reason={reason}
+                onActor={setActor}
+                onReason={setReason}
+                note={
+                  <>
+                    <div>
+                      定稿绑定当前姓氏映射、角色决定与人工补充替换的 SHA-256；表面变化后旧审批自动失效。
+                    </div>
+                    {d.approved ? (
+                      <div className="text-ink-3">
+                        当前审批：{d.approved.actor} · {d.approved.reason} · subject{' '}
+                        <Mono className="text-micro">
+                          {d.approved.subject_sha256.slice(0, 16)}…
+                        </Mono>
+                      </div>
+                    ) : null}
+                  </>
+                }
+                actions={
                   <ActionButton
                     action={{ kind: 'stage7.approve', extra: null, paid: false }}
                     onClick={() => askApprove(d.approval_subject_sha256)}
@@ -190,38 +223,8 @@ export function Stage7Screen() {
                   >
                     {d.approved ? '重新定稿' : '定稿人物表'}
                   </ActionButton>
-                </div>
-              </header>
-
-              <div className="grid gap-10 rounded-card border border-line bg-sunken-2 p-14 md:grid-cols-2">
-                <label className="flex flex-col gap-5 text-tag text-ink-3">
-                  自报身份（不是认证身份）
-                  <input
-                    value={actor}
-                    onChange={(event) => setActor(event.target.value)}
-                    className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
-                    placeholder="例：editor-a"
-                  />
-                </label>
-                <label className="flex flex-col gap-5 text-tag text-ink-3">
-                  定稿理由
-                  <input
-                    value={reason}
-                    onChange={(event) => setReason(event.target.value)}
-                    className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
-                    placeholder="说明逐项核对人物表与残留候选的依据"
-                  />
-                </label>
-                <div className="prose-cn text-tag text-ink-4 md:col-span-2">
-                  定稿绑定当前姓氏映射、角色决定与人工补充替换的 SHA-256；表面变化后旧审批自动失效。
-                </div>
-                {d.approved ? (
-                  <div className="prose-cn text-tag text-ink-3 md:col-span-2">
-                    当前审批：{d.approved.actor} · {d.approved.reason} · subject{' '}
-                    <Mono className="text-micro">{d.approved.subject_sha256.slice(0, 16)}…</Mono>
-                  </div>
-                ) : null}
-              </div>
+                }
+              />
 
               <div className="prose-cn text-tag text-ink-4">
                 正文只读——改正文回成稿屏。人物表编辑走 CLI（stage7.rename --apply-edit）。
@@ -254,6 +257,11 @@ export function Stage7Screen() {
                     </div>
                   }
                 />
+                {adoptResidual.isError ? (
+                  <div className="border-b border-warn-line bg-warn-bg px-18 py-10 text-body text-warn-ink">
+                    采纳失败：{errorBody(adoptResidual.error)}
+                  </div>
+                ) : null}
                 {d.residual.length ? (
                   d.residual.map((r, i) => (
                     <div key={i} className="flex flex-col gap-6 border-b border-line-row px-18 py-12">
@@ -314,7 +322,7 @@ export function Stage7Screen() {
                   />
                   <div
                     className="grid gap-10 border-b border-line-soft px-18 py-9 text-tag text-ink-4"
-                    style={{ gridTemplateColumns: '120px 18px 120px minmax(0,1fr) 52px' }}
+                    style={{ gridTemplateColumns: 'minmax(120px,1fr) 18px minmax(120px,1fr) minmax(0,2fr) 52px' }}
                   >
                     <span>旧</span>
                     <span />
@@ -329,13 +337,16 @@ export function Stage7Screen() {
                         'grid items-start gap-10 border-b border-line-row px-18 py-11',
                         c.renamed ? 'bg-transparent' : 'bg-sunken-2',
                       )}
-                      style={{ gridTemplateColumns: '120px 18px 120px minmax(0,1fr) 52px' }}
+                      style={{ gridTemplateColumns: 'minmax(120px,1fr) 18px minmax(120px,1fr) minmax(0,2fr) 52px' }}
                     >
-                      <span className="text-read">{c.old_canonical}</span>
+                      <span className="truncate text-read" title={c.old_canonical}>
+                        {c.old_canonical}
+                      </span>
                       <span className="text-ink-6">→</span>
-                      <span className="flex flex-col gap-2">
+                      <span className="flex min-w-0 flex-col gap-2">
                         <span
-                          className={cx('text-read', c.renamed ? 'font-semibold' : 'text-ink-5')}
+                          className={cx('truncate text-read', c.renamed ? 'font-semibold' : 'text-ink-5')}
+                          title={c.renamed ? c.new_canonical : c.old_canonical}
                         >
                           {c.renamed ? c.new_canonical : c.old_canonical}
                         </span>
@@ -520,6 +531,11 @@ export function Stage7Screen() {
                       note: r.changed ? '这一行有替换' : undefined,
                     }))}
                   />
+                ) : chQ.isError && !isNoSample(chQ.error) ? (
+                  /* 真实 500 不能吞成「没有在样本里」——取数失败就是取数失败 */
+                  <div className="px-18 py-14">
+                    <LoadFailed error={chQ.error} onRetry={() => void chQ.refetch()} compact />
+                  </div>
                 ) : (
                   <div className="px-18 py-14">
                     <HatchNote>

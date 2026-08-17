@@ -1,8 +1,9 @@
 import { resolveGate } from '@/constants/gates'
 import { lookupAction } from '@/constants/actions'
 import { GATE, SPEND_INK, type ScreenName } from '@/constants/vocabulary'
+import { errorBody } from '@/api/errors'
 import { useApprovals } from '@/hooks/useApprovals'
-import { useAskJob } from '@/hooks/useChrome'
+import { useAskJob, useChrome } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import { ActionButton } from '@/components/ui/ActionButton'
 import { GateChip, GateMark } from '@/components/vocab/Badges'
@@ -17,6 +18,7 @@ export function GateBar({ screen }: { screen: ScreenName }) {
   const { doc, approve } = useApprovals()
   const enums = useEnums()
   const ask = useAskJob()
+  const { notify } = useChrome()
 
   if (!doc) return null
   const view = resolveGate(screen, doc)
@@ -80,7 +82,9 @@ export function GateBar({ screen }: { screen: ScreenName }) {
             onClick={() => {
               const spawn = spawns[0]
               if (!spawn) {
-                approve.mutate(view.key)
+                approve.mutate(view.key, {
+                  onSuccess: () => notify('闸门已确认：' + view.title),
+                })
                 return
               }
               ask(
@@ -94,7 +98,10 @@ export function GateBar({ screen }: { screen: ScreenName }) {
                   ordinal: null,
                 },
                 undefined,
-                async () => { await approve.mutateAsync(view.key) },
+                async () => {
+                  await approve.mutateAsync(view.key)
+                  notify('闸门已确认：' + view.title)
+                },
               )
             }}
           >
@@ -102,6 +109,12 @@ export function GateBar({ screen }: { screen: ScreenName }) {
           </ActionButton>
         </div>
       </div>
+
+      {approve.isError ? (
+        <div className="border-t border-warn-line bg-warn-bg px-20 py-10 text-body text-warn-ink">
+          确认失败：{errorBody(approve.error)}
+        </div>
+      ) : null}
 
       {spawns.length ? (
         <div className="flex flex-wrap items-center gap-8 border-t border-line-soft bg-sunken-2 px-20 py-9 text-tag text-ink-4">

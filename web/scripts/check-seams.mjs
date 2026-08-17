@@ -16,21 +16,31 @@ import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const BASELINE_DOC = join(ROOT, '..', 'docs', 'BACKEND_CONTRACT.md')
-const BASELINE_START = '<!-- MOCK_BASELINE_V1_START -->'
-const BASELINE_END = '<!-- MOCK_BASELINE_V1_END -->'
+const BASELINE_JSON = join(ROOT, 'scripts', 'mock-baseline.json')
 
+/**
+ * 冻结基线的字节真值。
+ *
+ * 这份数据此前写在 docs/BACKEND_CONTRACT.md §八 的 markdown 表格里，由本脚本正则解析。
+ * 换成 JSON 不是为了好看：那张表**同时**承担人读的散文和机器读的数据两种职责，
+ * 于是它既不能自由排版（改一下对齐就可能解析不到），坏了又只表现为"解析到 N 行"——
+ * 而 N 恰好等于 20 的那种坏法不会被发现。现在文档只讲来历与纪律，字节真值只有这一份。
+ */
 function mockBaseline() {
-  const doc = readFileSync(BASELINE_DOC, 'utf8')
-  const start = doc.indexOf(BASELINE_START)
-  const end = doc.indexOf(BASELINE_END)
-  if (start < 0 || end <= start) throw new Error('统一契约缺少完整的 mock 基线标记')
-  const block = doc.slice(start + BASELINE_START.length, end)
+  const raw = JSON.parse(readFileSync(BASELINE_JSON, 'utf8'))
   const rows = new Map()
-  const row = /^\|\s*`([^`]+\.json)`\s*\|\s*(\d+)\s*\|\s*`([0-9a-f]{64})`\s*\|$/gm
-  for (const m of block.matchAll(row)) {
-    if (rows.has(m[1])) throw new Error('mock 基线文件名重复：' + m[1])
-    rows.set(m[1], { bytes: Number(m[2]), sha256: m[3] })
+  for (const r of raw.files ?? []) {
+    if (!/^[0-9a-f]{64}$/.test(r.sha256 ?? '')) {
+      throw new Error('mock 基线 sha256 形状不对：' + r.file)
+    }
+    if (!Number.isInteger(r.bytes)) throw new Error('mock 基线 bytes 不是整数：' + r.file)
+    if (rows.has(r.file)) throw new Error('mock 基线文件名重复：' + r.file)
+    rows.set(r.file, { bytes: r.bytes, sha256: r.sha256 })
+  }
+  // count 是**声明的**份数，rows.size 是**实际读到的**。两者都对上 20 才算数据完整：
+  // 只查后者的话，manifest 少一行同时 count 也少一行，就会静默通过。
+  if (rows.size !== raw.count) {
+    throw new Error(`mock 基线 count=${raw.count} 与实际 ${rows.size} 行不符`)
   }
   if (rows.size !== 20) throw new Error('mock 基线应有 20 份，实际解析到 ' + rows.size)
   return rows

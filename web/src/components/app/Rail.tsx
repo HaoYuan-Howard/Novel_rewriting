@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { RAIL, type ScreenName } from '@/constants/vocabulary'
-import { RAIL_GATE, RAIL_LOCK } from '@/constants/gates'
+import { RAIL_GATE, RAIL_LOCK, gateNeedText } from '@/constants/gates'
 import { useApprovals } from '@/hooks/useApprovals'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { cx } from '@/lib/cx'
@@ -45,6 +45,14 @@ export function Rail({
     enabled: !!sid,
     retry: false,
   })
+  // 与待办屏同一条 queryKey：走 Query 缓存，不新开请求路径
+  const inbox = useQuery({
+    queryKey: qk.inbox(sid ?? ''),
+    queryFn: () => api.getInbox(sid!),
+    enabled: !!sid,
+    retry: false,
+  })
+  const inboxTotal = inbox.data?.total ?? 0
 
   const inBook = !!sid
 
@@ -52,6 +60,11 @@ export function Rail({
     <nav className="sticky top-0 flex h-screen flex-col overflow-y-auto border-r border-line bg-inset">
       <div className="flex flex-col gap-4 px-16 pt-18 pb-14">
         <div className="text-read font-semibold tracking-[0.02em]">小说重构 · 审校台</div>
+        {inBook && overview.data?.title ? (
+          <div className="truncate text-body text-ink-3" title={overview.data.title}>
+            {overview.data.title}
+          </div>
+        ) : null}
         <div className="font-mono text-mini text-ink-4">127.0.0.1:8765 · 单人 · 本机</div>
       </div>
 
@@ -117,22 +130,20 @@ export function Rail({
               '/' +
               r.screen +
               (r.chaptered ? '/' + (ordinal ?? defaultOrdinal(sid!)) : '')
-            return (
+            const btn = (
               <button
                 key={r.screen}
                 type="button"
                 disabled={locked}
                 title={
-                  locked
-                    ? lock!.why
-                    : reviewable
-                      ? '已有盘上产物，可只读审阅；继续运行仍需补齐人工确认'
-                      : undefined
+                  !locked && reviewable
+                    ? '已有盘上产物，可只读审阅；继续运行仍需补齐人工确认'
+                    : undefined
                 }
                 aria-current={active ? 'page' : undefined}
                 onClick={() => nav(to)}
                 className={cx(
-                  'flex items-center gap-7 rounded-btn border-none px-10 py-7 text-left text-body',
+                  'flex w-full items-center gap-7 rounded-btn border-none px-10 py-7 text-left text-body',
                   active ? 'bg-card font-semibold text-ink shadow-current' : 'bg-transparent text-ink-3',
                   locked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
                 )}
@@ -143,16 +154,21 @@ export function Rail({
                 />
                 <span className="w-12 flex-none font-mono text-mini text-ink-5">{r.n}</span>
                 <span className="min-w-0 flex-1 truncate">{r.label}</span>
+                {r.screen === 'inbox' && inboxTotal > 0 ? (
+                  <span className="flex-none rounded-tag bg-accent-bg px-6 py-1 text-micro font-semibold text-accent-ink">
+                    {inboxTotal}
+                  </span>
+                ) : null}
                 <span
                   className={cx(
-                    'flex-none',
+                    'flex-none whitespace-nowrap',
                     ok ? 'text-mini text-gate-mark' : 'text-micro text-ink-6',
                   )}
                 >
                   {ok
                     ? '✓'
                     : locked
-                      ? '先过 ' + lock!.need.slice(1)
+                      ? gateNeedText(lock!.need)
                       : reviewable
                         ? stageDone === false
                           ? '需处理'
@@ -161,6 +177,14 @@ export function Rail({
                 </span>
               </button>
             )
+            // Chrome 对 disabled 按钮不触发鼠标事件：锁定时 title 由外层 span 承载
+            return locked ? (
+              <span key={r.screen} title={lock!.why} className="block">
+                {btn}
+              </span>
+            ) : (
+              btn
+            )
           })}
         </div>
       ) : (
@@ -168,6 +192,8 @@ export function Rail({
           还没打开哪一本书。流水线导航要进到一本书里才有。
         </div>
       )}
+
+      <div className="mt-auto px-16 pt-10 pb-14 text-micro text-ink-5">←/→ 翻章 · Esc 关闭</div>
     </nav>
   )
 }

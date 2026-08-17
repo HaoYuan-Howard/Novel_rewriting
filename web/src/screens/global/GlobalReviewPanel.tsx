@@ -9,6 +9,7 @@ import { useChrome } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import { QueryStates } from '@/components/state/QueryStates'
 import { ActionButton } from '@/components/ui/ActionButton'
+import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import type {
@@ -80,7 +81,7 @@ function decisionOf(item: GlobalReviewItem, draft: RowDraft): GlobalReviewDecisi
 export function GlobalReviewPanel({ sid }: { sid: string }) {
   const qc = useQueryClient()
   const enums = useEnums()
-  const { askConfirm, openDrawer } = useChrome()
+  const { askConfirm, openDrawer, notify } = useChrome()
   const [actor, setActor] = useState('')
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({})
 
@@ -182,7 +183,10 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
               <span className="text-ink-4">
                 PASS {data.items.filter((item) => item.state === 'PASS').length}/{data.items.length}
               </span>
-              <Mono className="ml-auto text-micro text-ink-5">
+              <Mono
+                className="ml-auto text-micro text-ink-5"
+                title={data.current_subject_sha256}
+              >
                 current {data.current_subject_sha256.slice(0, 16)}…
               </Mono>
             </div>
@@ -202,16 +206,7 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
               </div>
             ) : (
               <>
-                <label className="flex max-w-[560px] flex-col gap-4 text-body">
-                  <span className="text-tag text-ink-4">自报 actor（不是认证身份）</span>
-                  <input
-                    aria-label="全局复核 actor"
-                    value={actor}
-                    onChange={(event) => setActor(event.target.value)}
-                    className="rounded-btn border border-line bg-card px-11 py-8"
-                    placeholder="例如 reviewer-a"
-                  />
-                </label>
+                <ActorReasonFields actor={actor} onActor={setActor} />
 
                 <div className="flex flex-col gap-10">
                   {unresolved.map((item) => {
@@ -231,9 +226,21 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                             {item.state}
                           </span>
                         </div>
-                        <Mono className="mt-5 block break-all text-micro text-ink-5">
-                          expected_subject_sha256 {item.subject_sha256}
-                        </Mono>
+                        <div className="mt-5 flex items-center gap-8">
+                          <Mono className="text-micro text-ink-5" title={item.subject_sha256}>
+                            expected_subject_sha256 {item.subject_sha256.slice(0, 16)}…
+                          </Mono>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(item.subject_sha256)
+                              notify('已复制')
+                            }}
+                            className="cursor-pointer rounded-tag border border-line-btn bg-card px-7 py-2 text-micro text-ink-3"
+                          >
+                            复制
+                          </button>
+                        </div>
                         {item.reason ? (
                           <div className="mt-5 text-tag text-ink-4">上次理由：{item.reason}</div>
                         ) : null}

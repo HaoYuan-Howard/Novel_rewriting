@@ -7,7 +7,7 @@ Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选�
 
 对应需求：`docs/BACKEND_CONTRACT.md` 的 R-9。
 
-## 一、质量语义（2026-08-15）
+## 一、质量语义
 
 三本书快速 A/B 中，最佳实验候选的匿名主编均分为 8.78，当前定稿为 4.88，提升
 +3.90/10，且实验候选 3/3 获胜。因此生产设计采用以下已验证变化：
@@ -171,12 +171,10 @@ SHA-256、RFC 6901 改动路径和 `edited_by_human`；后者消费 v1 `hook_edi
 hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本身份自动过期。两条都是 0 次 LLM
 调用，但 apply-edit 的人工内容工作量不等于零。
 
-### 5.1 `stage6/wontfix.json` —— 语义结论的人工闭环（2026-08-15）
+### 5.1 `stage6/wontfix.json` —— 语义结论的人工闭环
 
 本层两条语义判据（`hook_semantic_contradiction` 阻断、`hook_candidate_contradiction` 提示）
-此前**没有任何人工闭环**：结论在报告渲染时现算、不落产物，而豁免机制只活在 stage5 里。
-更坏的是待人工清单**在建议人跑 `--wontfix`**，而本层根本没有这个 flag——一句结构上
-兑现不了的承诺（那句兜底文案现已按 `NODES` 派生，见 `novel/views/inbox.py::_human_how`）。
+的人工豁免走这里。
 
 `stage6.hook --wontfix '<book>|<判据>[|<证据键>]=<理由>'`，形状与账本模型与 stage5 那份
 **完全相同**（`novel/wontfix.py` 是唯一的机制落点）。本层特有的三条：

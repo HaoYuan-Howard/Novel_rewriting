@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FRESH, SEV } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
@@ -20,6 +21,15 @@ export function ReadScreen() {
   const vm = useReadScreen()
   const nav = useNavigate()
   const { hasSample } = useSampleCoverage()
+  const leftPane = useRef<HTMLDivElement>(null)
+
+  // 选中一拍后，左栏原文里对应的那块滚到视野中间（stage1 同款 data 属性定位）
+  useEffect(() => {
+    if (!vm.selBeat) return
+    leftPane.current
+      ?.querySelector<HTMLElement>('[data-beat="' + vm.selBeat + '"]')
+      ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+  }, [vm.selBeat])
 
   const strip = vm.chapters.map((n) => ({
     n,
@@ -82,7 +92,7 @@ export function ReadScreen() {
               left={
                 <Panel>
                   <PaneHeader title="原文" meta={vm.leftMeta} sticky />
-                  <div className="flex flex-col gap-2 px-20 pt-14 pb-24">
+                  <div ref={leftPane} className="flex flex-col gap-2 px-20 pt-14 pb-24">
                     {vm.segments.map((s) => (
                       <Segment
                         key={s.key}
@@ -151,10 +161,12 @@ function Segment({ s, onClick }: { s: SegView; onClick: () => void }) {
     )
   }
   return (
-    <div
+    <button
+      type="button"
+      data-beat={s.beatId ?? undefined}
       onClick={onClick}
       className={cx(
-        'cursor-pointer rounded-btn-lg border-l-3 px-14 py-8',
+        'block w-full cursor-pointer rounded-btn-lg border-l-3 px-14 py-8 text-left',
         s.selected ? 'border-l-accent bg-accent-bg' : 'border-l-line bg-transparent',
       )}
     >
@@ -168,16 +180,17 @@ function Segment({ s, onClick }: { s: SegView; onClick: () => void }) {
           </p>
         ))}
       </div>
-    </div>
+    </button>
   )
 }
 
 function Beat({ b, onClick }: { b: BeatView; onClick: () => void }) {
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
       className={cx(
-        'flex cursor-pointer flex-col gap-8 rounded-block border px-14 py-12',
+        'flex w-full cursor-pointer flex-col gap-8 rounded-block border px-14 py-12 text-left',
         b.selected
           ? 'border-accent-line-2 bg-accent-bg-2 shadow-ring-accent'
           : 'border-line-2 bg-card',
@@ -243,6 +256,6 @@ function Beat({ b, onClick }: { b: BeatView; onClick: () => void }) {
       ))}
 
       <Mono className="text-mini text-ink-5">原文区间 {b.span}</Mono>
-    </div>
+    </button>
   )
 }

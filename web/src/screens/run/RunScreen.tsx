@@ -1,15 +1,19 @@
-import { useState } from 'react'
-import { useQueries } from '@tanstack/react-query'
+import { useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { keepPreviousData, useQueries } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import {
+  CHAPTERED_SCREENS,
   FRESH,
   GATE,
   JOB,
   SPEND_INK,
+  STAGE_SCREEN,
   STAGES,
   when,
   type JobStateToken,
+  type ScreenName,
 } from '@/constants/vocabulary'
 import { errorBody } from '@/api/errors'
 import type { RunBeacon, RunEvent } from '@/types/run'
@@ -17,6 +21,7 @@ import { CHECK_KINDS, type CheckReport } from '@/types/stages'
 import { useRunProgress } from '@/hooks/useRunProgress'
 import { useSid } from '@/hooks/useRouteParams'
 import { useAgentRunLog, useAgentRuns, useStopAgentRun } from '@/hooks/useAgentRuns'
+import { useSampleCoverage } from '@/hooks/useSample'
 import { QueryStates } from '@/components/state/QueryStates'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
@@ -195,6 +200,13 @@ function AgentRunBlock() {
   )
 }
 
+/** 节点 id → 它产物所在的屏。stage2 两个节点分属两屏；查不到的节点保持纯文本。 */
+function nodeScreen(node: string): ScreenName | null {
+  const stage = node.split('.')[0]
+  if (stage === 'stage2') return node === 'stage2.global' ? 'global' : 'read'
+  return STAGE_SCREEN[stage] ?? null
+}
+
 /**
  * 跑书进度。
  *
@@ -205,11 +217,33 @@ function AgentRunBlock() {
 export function RunScreen() {
   const sid = useSid()
   const q = useRunProgress()
+  const { defaultOrdinal } = useSampleCoverage()
+  const stepsRef = useRef<HTMLDivElement>(null)
+
+  const nodePath = (node: string): string | null => {
+    const screen = nodeScreen(node)
+    if (!screen) return null
+    return (
+      '/n/' +
+      sid +
+      '/' +
+      screen +
+      (CHAPTERED_SCREENS.has(screen) ? '/' + defaultOrdinal(sid) : '')
+    )
+  }
+
+  const scrollToRunning = () =>
+    stepsRef.current
+      ?.querySelector<HTMLElement>('[data-running]')
+      ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+
   const checks = useQueries({
     queries: CHECK_KINDS.map((kind) => ({
       queryKey: qk.check(sid, kind),
       queryFn: () => api.getCheck(sid, kind),
       retry: false,
+      // 轮询 refetch 期间沿用上一份数据——不闪成「校验未知」（U-00：未知 ≠ 没问题）
+      placeholderData: keepPreviousData,
     })),
   })
 
@@ -236,37 +270,67 @@ export function RunScreen() {
               <PaneHeader
                 title={'流水线节点 · ' + d.steps.length + ' 项'}
                 meta="信标只说这条命令跑没跑完；合不合格看各层屏的 badge"
-              />
-              {d.steps.map((s) => (
-                <div
-                  key={s.seq}
-                  className="flex items-center gap-12 border-b border-line-row px-18 py-10"
-                >
-                  <Mono className="w-20 flex-none text-mini text-ink-5">
-                    {String(s.seq).padStart(2, '0')}
-                  </Mono>
-                  <span className="w-190 flex-none text-body font-semibold">{s.label}</span>
-                  <Mono className="w-150 flex-none text-mini text-ink-4">{s.node}</Mono>
-                  <Mono
-                    className="w-40 flex-none text-mini"
-                    style={s.paid ? { color: SPEND_INK } : undefined}
+                right={
+                  <LinkButton
+                    disabled={!d.steps.some((s) => s.beacon === 'running')}
+                    title="滚到正在跑的那一行"
+                    onClick={scrollToRunning}
                   >
-                    {s.paid ? '花钱' : '免费'}
-                  </Mono>
-                  <span className="flex-none">
-                    <BeaconChip beacon={s.beacon} />
-                  </span>
-                  <Mono className="ml-auto flex-none text-mini text-ink-4">
-                    {s.last_exit === null ? '—' : 'exit ' + s.last_exit}
-                  </Mono>
-                  <Mono className="w-110 flex-none text-right text-mini text-ink-4">
-                    {s.beacon === 'running' && s.elapsed !== null ? '已跑 ' + secs(s.elapsed) : ''}
-                  </Mono>
-                  <Mono className="w-110 flex-none text-right text-mini text-ink-5">
-                    {s.last_ts === null ? '' : when(s.last_ts)}
-                  </Mono>
-                </div>
-              ))}
+                    跳到当前步
+                  </LinkButton>
+                }
+              />
+              <div ref={stepsRef}>
+                {d.steps.map((s) => {
+                  const to = nodePath(s.node)
+                  return (
+                    <div
+                      key={s.seq}
+                      data-running={s.beacon === 'running' ? '' : undefined}
+                      className={cx(
+                        'flex items-center gap-12 border-b border-line-row px-18 py-10',
+                        s.beacon === 'running' && 'bg-accent-bg',
+                      )}
+                    >
+                      <Mono className="w-20 flex-none text-mini text-ink-5">
+                        {String(s.seq).padStart(2, '0')}
+                      </Mono>
+                      {to ? (
+                        <Link
+                          to={to}
+                          title={s.node}
+                          className="w-190 flex-none text-body font-semibold text-ink hover:text-accent"
+                        >
+                          {s.label}
+                        </Link>
+                      ) : (
+                        <span className="w-190 flex-none text-body font-semibold">{s.label}</span>
+                      )}
+                      <Mono className="w-150 flex-none truncate text-mini text-ink-4" title={s.node}>
+                        {s.node}
+                      </Mono>
+                      <Mono
+                        className="w-40 flex-none text-mini"
+                        style={s.paid ? { color: SPEND_INK } : undefined}
+                      >
+                        {s.paid ? '花钱' : '免费'}
+                      </Mono>
+                      <span className="flex-none">
+                        <BeaconChip beacon={s.beacon} />
+                      </span>
+                      <Mono className="ml-auto flex-none text-mini text-ink-4">
+                        {s.last_exit === null ? '—' : 'exit ' + s.last_exit}
+                      </Mono>
+                      <Mono className="w-110 flex-none text-right text-mini text-ink-4">
+                        {s.beacon === 'running' && s.elapsed !== null ? '已跑 ' + secs(s.elapsed) : ''}
+                      </Mono>
+                      <Mono className="w-110 flex-none text-right text-mini text-ink-5">
+                        {s.last_ts === null ? '' : when(s.last_ts)}
+                      </Mono>
+                    </div>
+                  )
+                })}
+              </div>
             </Panel>
 
             {/* 各层产物完成度：盘点自产物盘，与信标无关；书目录还没建时全是「判不了」 */}
@@ -279,10 +343,10 @@ export function RunScreen() {
                 {STAGES.map((stage, index) => {
                   const done = d.stage_done[stage.key]
                   const checkQuery = checks[index]
+                  // placeholderData 保住了 refetch 期间的上一份——这里只看「有没有数据」，
+                  // 不再看 isFetching，否则每次轮询都会闪回「校验未知」
                   const report = (
-                    checkQuery && !checkQuery.isFetching && !checkQuery.isError
-                      ? checkQuery.data ?? null
-                      : null
+                    checkQuery && !checkQuery.isError ? checkQuery.data ?? null : null
                   ) as CheckReport | null
                   const hard = report?.rules.filter(
                     (row) => row.sev === 'hard' && row.status === 'hit',
@@ -338,7 +402,9 @@ export function RunScreen() {
                   还没有任何信标事件 —— agent 还没开始跑，或还没打点。
                 </div>
               ) : (
-                [...d.events_tail].reverse().map((e, i) => <EventRow key={i} e={e} />)
+                [...d.events_tail].reverse().map((e) => (
+                  <EventRow key={e.ts + ':' + e.node + ':' + e.phase} e={e} />
+                ))
               )}
             </Panel>
           </>

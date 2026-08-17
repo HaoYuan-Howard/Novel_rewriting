@@ -66,10 +66,10 @@ describe('Stage7Screen download', () => {
       </>,
       `/n/${SAMPLE_SID}/stage7`,
     )
-    fireEvent.change(await screen.findByPlaceholderText('例：editor-a'), {
+    fireEvent.change(await screen.findByLabelText(/自报身份/), {
       target: { value: 'reviewer-seven' },
     })
-    fireEvent.change(screen.getByPlaceholderText('说明逐项核对人物表与残留候选的依据'), {
+    fireEvent.change(screen.getByLabelText(/编辑理由/), {
       target: { value: '已逐项核对别称、亲属后缀与高置信残留' },
     })
     fireEvent.click(screen.getByRole('button', { name: /定稿人物表/ }))

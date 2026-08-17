@@ -41,3 +41,11 @@ dist/
 
 # 本机 agent 权限与连接设置：不进入代码备份或 Git 远程
 .claude/settings.local.json
+
+# ⚠ `CLAUDE.md` 是**指向 AGENTS.md 的符号链接**，只活在本机。
+#   本仓 `core.symlinks=false`（Windows 默认）⇒ 一旦跟踪它，git 会跟随链接、
+#   把 AGENTS.md 的全文当成第二份普通文件存进去，此后两份会各自漂移
+#   ——而"同一份内容有两个权威"正是 Q-6 要防的那件事。
+#   要在别的机器上复现这条链接：`cd <仓根> && mklink CLAUDE.md AGENTS.md`
+#   （Windows 需管理员或开发者模式）/ `ln -s AGENTS.md CLAUDE.md`（类 Unix）。
+/CLAUDE.md

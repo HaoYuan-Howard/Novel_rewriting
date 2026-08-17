@@ -9,7 +9,8 @@ import { LinkButton } from '@/components/ui/ActionButton'
 import { QueryStates } from '@/components/state/QueryStates'
 import { NotRunYet } from '@/components/state/States'
 import { FreshnessBadge, FreshnessDot, FreshnessTag } from '@/components/vocab/Freshness'
-import { SPEND_INK } from '@/constants/vocabulary'
+import { CHAPTERED_SCREENS, SPEND_INK } from '@/constants/vocabulary'
+import { useSampleCoverage } from '@/hooks/useSample'
 import { AgentRunDialog } from '@/components/agent/AgentRunDialog'
 import { AgentBatchDialog } from '@/components/agent/AgentBatchDialog'
 import { useAgentQueue } from '@/hooks/useAgentRuns'
@@ -40,8 +41,26 @@ export function CorpusScreen() {
   const [agentSid, setAgentSid] = useState<string | null>(null)
   const [picked, setPicked] = useState<string[]>([])
   const [batchOpen, setBatchOpen] = useState(false)
+  const [filter, setFilter] = useState('')
   const input = useRef<HTMLInputElement>(null)
   const queue = useAgentQueue()
+  const { defaultOrdinal } = useSampleCoverage()
+
+  // sid / 书名子串过滤（大小写不敏感；空串显示全部）
+  const needle = filter.trim().toLowerCase()
+  const books = needle
+    ? vm.books.filter(
+        (b) => b.sid.toLowerCase().includes(needle) || b.title.toLowerCase().includes(needle),
+      )
+    : vm.books
+
+  // 「打开」落到第一个「待继续」层的屏；带章号的屏拼默认章号
+  const openPath = (b: BookView) =>
+    '/n/' +
+    b.sid +
+    '/' +
+    b.openScreen +
+    (CHAPTERED_SCREENS.has(b.openScreen) ? '/' + defaultOrdinal(b.sid) : '')
 
   // ⚠ 顺序取自 picked 而不是 vm.books：勾选顺序就是排队顺序，
   //   人先勾的那本先跑，这是界面上唯一能表达优先级的地方。
@@ -138,7 +157,15 @@ export function CorpusScreen() {
                 event.preventDefault()
                 setDragging(true)
               }}
-              onDragLeave={() => setDragging(false)}
+              onDragLeave={(event) => {
+                // 划过子元素也会触发 leave —— relatedTarget 还在容器内就不算离开
+                if (
+                  event.relatedTarget instanceof Node &&
+                  event.currentTarget.contains(event.relatedTarget)
+                )
+                  return
+                setDragging(false)
+              }}
               onDrop={(event) => {
                 event.preventDefault()
                 setDragging(false)
@@ -239,6 +266,13 @@ export function CorpusScreen() {
             <span className="text-micro text-ink-5">{l.desc}</span>
           </span>
         ))}
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="按 sid / 书名过滤"
+          aria-label="按 sid 或书名过滤"
+          className="ml-auto w-[220px] rounded-btn border border-line-btn bg-card px-10 py-5 text-body text-ink"
+        />
       </div>
 
       <QueryStates q={vm.query} loadingLabel="读语料库">
@@ -259,13 +293,18 @@ export function CorpusScreen() {
                 onClear={() => setPicked([])}
                 onRun={() => setBatchOpen(true)}
               />
-              {vm.books.map((b) => (
+              {books.length === 0 ? (
+                <div className="prose-cn px-2 text-body text-ink-4">
+                  没有匹配「{filter.trim()}」的书 —— 清空过滤框回到完整列表。
+                </div>
+              ) : null}
+              {books.map((b) => (
                 <BookCard
                   key={b.sid}
                   b={b}
                   picked={picked.includes(b.sid)}
                   onPick={() => togglePick(b.sid)}
-                  onOpen={() => nav('/n/' + b.sid + '/stage0')}
+                  onOpen={() => nav(openPath(b))}
                   onAgent={() => setAgentSid(b.sid)}
                 />
               ))}

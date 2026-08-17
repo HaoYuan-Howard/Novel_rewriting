@@ -52,12 +52,11 @@ export function ActionButton({
 }) {
   const kind = classifyAction(action)
   const corner = CORNER[kind]
-  return (
+  const btn = (
     <button
       type="button"
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
-      title={disabled ? disabledReason : undefined}
       aria-disabled={disabled}
       className={cx(
         BASE,
@@ -75,6 +74,15 @@ export function ActionButton({
       ) : null}
     </button>
   )
+  // Chrome 对 disabled 按钮不触发鼠标事件 —— title 挂在外层 span 上，
+  // 「点不动」的原因才 hover 得到（布局保持 inline-flex 不破行）
+  return disabled ? (
+    <span title={disabledReason} className="inline-flex">
+      {btn}
+    </span>
+  ) : (
+    btn
+  )
 }
 
 /** 纯导航 / 纯读的次要按钮。不参与动作分类。 */
@@ -91,12 +99,12 @@ export function LinkButton({
   disabled?: boolean
   title?: string
 }) {
-  return (
+  const btn = (
     <button
       type="button"
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
-      title={title}
+      title={disabled ? undefined : title}
       className={cx(
         'inline-flex items-center gap-6 rounded-btn border border-line-btn bg-card px-12 py-6 text-body text-ink-2 whitespace-nowrap',
         disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer hover:border-ink-6',
@@ -105,5 +113,13 @@ export function LinkButton({
     >
       {children}
     </button>
+  )
+  // 同 ActionButton：disabled 按钮在 Chrome 不触发鼠标事件，title 交给外层 span
+  return disabled ? (
+    <span title={title} className="inline-flex">
+      {btn}
+    </span>
+  ) : (
+    btn
   )
 }

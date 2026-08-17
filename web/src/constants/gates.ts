@@ -5,7 +5,7 @@
  *                                 └─► stage3 文风 ─────────────────────────────────────────────┤
  *                                                                                              ├─► 挑深度章节 ─► stage5 ─► stage6 ─► stage7
  *
- * 文案与禁用条件源自历史原型 gateVals()，现役语义见 docs/BACKEND_CONTRACT.md §六。
+ * 文案与禁用条件源自历史原型 gateVals()，现役语义见 web/DELIVERY.md（§3 路由 / §7 UI 硬规则）。
  *
  * 这张表只被 components/gate/useGateBar.ts 消费。等后端接管这套工作流
  * （approve 返回新记录 + 它发起的作业），删这一个文件即可。
@@ -189,6 +189,23 @@ export const RAIL_LOCK: Partial<Record<ScreenName, { need: GateKey; why: string 
   stage1: { need: 's0', why: '先过 stage0：番外还没剔，切了也要重切' },
   stage6: { need: 's5', why: '先确认 stage5 成稿：文案是给成稿写的招牌' },
   stage7: { need: 's6', why: '先确认 stage6 文案：不然拼出来的是半本' },
+}
+
+/** gate key → 一句人话。左导航锁定项右侧的小字用它，别在屏里散落硬编码。 */
+export const GATE_LABEL: Record<GateKey, string> = {
+  s0: 'stage0 剔除番外',
+  s1: 'stage1 切分确认',
+  s2: 'stage2 两屏审阅',
+  s3: 'stage3 文风确认',
+  s4: 'stage4 计划确认',
+  s5: 'stage5 成稿确认',
+  s6: 'stage6 文案确认',
+  s7: 'stage7 人名定稿',
+}
+
+/** 锁定项右侧的常驻小字：「先过 stage0 剔除番外」 */
+export function gateNeedText(key: GateKey): string {
+  return '先过 ' + GATE_LABEL[key]
 }
 
 /** 左导航上打 ✓ 的依据 */

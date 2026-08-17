@@ -2,12 +2,14 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
+import { errorBody } from '@/api/errors'
 import { FRESH, SEV } from '@/constants/vocabulary'
 import { useChrome } from '@/hooks/useChrome'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { QueryStates } from '@/components/state/QueryStates'
 import { LinkButton } from '@/components/ui/ActionButton'
+import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { Prose } from '@/components/ui/Prose'
@@ -23,7 +25,7 @@ import { cx } from '@/lib/cx'
 export function Stage6Screen() {
   const sid = useSid()
   const qc = useQueryClient()
-  const { askConfirm } = useChrome()
+  const { askConfirm, notify } = useChrome()
   const [pick, setPick] = useState<number | null>(null)
   const [reopened, setReopened] = useState(false)
   const [actor, setActor] = useState('')
@@ -44,7 +46,10 @@ export function Stage6Screen() {
       subject_sha256: string
     }) => api.approveHook(sid, req),
     onSuccess: (job) => {
-      if (job.state !== 'failed') setReopened(false)
+      if (job.state !== 'failed') {
+        setReopened(false)
+        notify('开篇文案已定稿')
+      }
       void qc.invalidateQueries({ queryKey: qk.stage6(sid) })
       void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage6') })
       void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
@@ -123,6 +128,12 @@ export function Stage6Screen() {
                 </div>
               </header>
 
+              {approve.isError ? (
+                <div className="rounded-card border border-warn-line bg-warn-bg px-18 py-12 text-body text-warn-ink">
+                  定稿失败：{errorBody(approve.error)}
+                </div>
+              ) : null}
+
               <div className="prose-cn text-tag text-ink-4">
                 判据只看下发范围（lead_upto 前 {d.lead_upto} 章）；{d.rationale}
               </div>
@@ -132,32 +143,15 @@ export function Stage6Screen() {
                   <div className="text-section font-semibold">
                     三个候选并排看，选一个定稿（{d.candidates.length} 条）
                   </div>
-                  <div className="grid gap-10 rounded-card border border-line bg-sunken-2 p-14 md:grid-cols-2">
-                    <label className="flex flex-col gap-5 text-tag text-ink-3">
-                      自报身份（不是认证身份）
-                      <input
-                        value={actor}
-                        onChange={(event) => setActor(event.target.value)}
-                        className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
-                        placeholder="例：editor-a"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-5 text-tag text-ink-3">
-                      定稿理由
-                      <input
-                        value={reason}
-                        onChange={(event) => setReason(event.target.value)}
-                        className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
-                        placeholder="说明人工核验与选择依据"
-                      />
-                    </label>
-                    <div className="prose-cn text-tag text-ink-4 md:col-span-2">
-                      定稿会同时绑定当前候选的 SHA-256。缺 profile 或双盲 UNVER
-                      可由这条人工 resolution 消解；已校准的 FAIL/实质矛盾不可绕过。
-                    </div>
-                  </div>
+                  <ActorReasonFields
+                    actor={actor}
+                    reason={reason}
+                    onActor={setActor}
+                    onReason={setReason}
+                    note="定稿会同时绑定当前候选的 SHA-256。缺 profile 或双盲 UNVER 可由这条人工 resolution 消解；已校准的 FAIL/实质矛盾不可绕过。"
+                  />
                   <div
-                    className="grid items-start gap-14"
+                    className="grid gap-14"
                     style={{ gridTemplateColumns: 'repeat(3, minmax(0,1fr))' }}
                   >
                     {d.candidates.map((c) => {
@@ -205,8 +199,9 @@ export function Stage6Screen() {
                           </div>
 
                           <div className="flex flex-col gap-8 px-16 py-14">
-                            {/* 高亮由 findings.evidence 在文案里 indexOf —— 与验收屏同一做法 */}
-                            <p className="prose-cn m-0 max-w-[var(--measure-compare)] whitespace-pre-wrap text-read leading-[2.05]">
+                            {/* 高亮由 findings.evidence 在文案里 indexOf —— 与验收屏同一做法；
+                                文案区统一限高内滚，三卡等高、比较视线不跳 */}
+                            <p className="prose-cn m-0 max-h-[240px] max-w-[var(--measure-compare)] overflow-y-auto whitespace-pre-wrap text-read leading-[2.05]">
                               {c.text}
                             </p>
                             <div className="prose-cn rounded-block bg-sunken-2 px-10 py-8 text-tag text-ink-3">

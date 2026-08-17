@@ -121,10 +121,14 @@ export function useStage4Screen() {
           count: charKeys.length + ' 人',
           lines: charKeys
             .slice(0, 5)
-            .map(
-              (k) =>
-                ctx.characters[k].display_name + ' — ' + ctx.characters[k].role.slice(0, 22) + '…',
-            ),
+            .map((k) => {
+              const role = ctx.characters[k].role
+              return (
+                ctx.characters[k].display_name +
+                ' — ' +
+                (role.length > 22 ? role.slice(0, 22) + '…' : role)
+              )
+            }),
           more: '其余 ' + Math.max(0, charKeys.length - 5) + ' 人同样下发',
         },
         {
@@ -140,7 +144,9 @@ export function useStage4Screen() {
           count: (facts?.world_rules.length ?? 0) + ' 条',
           lines: (facts?.world_rules ?? [])
             .slice(0, 3)
-            .map((w) => w.description.slice(0, 40) + '…')
+            .map((w) =>
+              w.description.length > 40 ? w.description.slice(0, 40) + '…' : w.description,
+            )
             .concat(
               facts?.arc.current_stage.stage
                 ? ['当前冲突阶段：' + facts.arc.current_stage.stage]
@@ -159,8 +165,8 @@ export function useStage4Screen() {
             (s) =>
               s.secret_id +
               '：' +
-              s.fact.slice(0, 30) +
-              '…（读者此时' +
+              (s.fact.length > 30 ? s.fact.slice(0, 30) + '…' : s.fact) +
+              '（读者此时' +
               (s.reader_knows_by_now ? '已知' : '未知') +
               '）',
           ),

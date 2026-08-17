@@ -1,25 +1,15 @@
 # To-do list
 
-本文件是项目唯一的活动待办清单，基于 2026-08-15 对设计交接包、现役设计 brief、根目录记录、
-当前代码与守卫测试的联合审计。已完成事项不在这里保留；历史原因由 Git 和专项验证记录回答。
-产品规格、冻结契约、证据基线以及文档与测试的直接耦合统一见 `docs/BACKEND_CONTRACT.md`。
+本文件是项目唯一的活动待办清单。已完成事项不在这里保留；历史原因由 Git 和
+`docs/BACKEND_CONTRACT.md` §十 回答。产品规格、冻结契约与证据基线见 `docs/BACKEND_CONTRACT.md`。
 
-**编号不重排。** TODO-01 / 02 / 03 / 04 / 05 / 06 / 07 / 08 / 09 / 10 / 11 / 12 / 13 /
-14 / 15 / 16 / 17 / 18 / 19 / 20 / 22 / 23 / 25 / 26 已完成删除；当前只保留 TODO-21 与
-TODO-24。留下的号空着——Git 提交信息按号引用，重排会让那些引用指向别的条目。
+**编号不重排。** TODO-01 ～ TODO-26 中已完成的已删除；留下的号空着——Git 提交信息按号引用，
+重排会让那些引用指向别的条目。
 
-⚠⚠ **默认 pytest 刻意只跑非 corpus 套件。** 最终硬验收必须显式使用
-`--require-corpus`，同时提供隔离的 `NOVEL_OUTPUT` 和与该盘面精确一致的无正文 manifest；缺环境、
-manifest、书目/产物、版本或 skip 任一项都会关闭式失败。当前 manifest 尚未生成，因此现阶段的
-通过数字只能称为“非 corpus 回归”，不能称为“全量”或“current-schema corpus 已绿”。
-真实 corpus 用例逐项标记，不再用整文件 marker 把同文件里的 schema/闸门/API 不变量一并静默
-排除；收集守卫会嵌套运行 `pytest --collect-only -m "not corpus"`，证明 Stage3/4/7 与编辑 API
-的关键 synthetic 回归实际进入默认套件。
-
-⚠ **历史盘面数字已经退役。** `40b0c61` 曾在旧代码与旧产物上得到
-2059 passed / 10 skipped / 0 failed；后续版本边界已经证明它不能代表当前代码。旧 skip、旧 schema
-和旧输出目录只保留为问题来源，不进入当前验收证据。在 TODO-21 生成 manifest 并跑过
-`--require-corpus` 前，不得引用任何历史“0 failed”数字声称当前全量为绿。
+⚠ **默认 pytest 刻意只跑非 corpus 套件。** 最终硬验收必须显式使用
+`--require-corpus`，同时提供隔离的 `NOVEL_OUTPUT` 和与该盘面精确一致的无正文 manifest
+（字段契约见 `docs/schema/corpus.md`）。当前 manifest 尚未生成（TODO-21），因此任何通过数字
+只能称为“非 corpus 回归”，不能称为“全量绿”；也不得引用任何历史“0 failed”数字充当当前证据。
 
 优先级含义：P0 影响正确性、真实花费或恢复能力；P1 影响质量闭环、诊断可信度或兼容性；
 P2 是明确可延期的工程化与体验增强。勾选前必须满足条目中的验收条件，而不是只增加类型、按钮
@@ -40,9 +30,8 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
 - [ ] 对同一盘面运行 `--require-corpus` 的完整 `corpus or not corpus` 套件；任何书目/产物减少、
   版本漂移、ledger 不闭合或新增 skip 都必须失败。
 
-历史中间产物 `outputs/skill_e2e_schema_v1_20260816` 只证明当时的 v1 producer 可达；现役各路径
-已分别演进到 registry 登记的 v1/v2/v3，它不再是 current-schema 验收目录，也不能为最终
-manifest 提供通过数字。
+历史中间产物 `outputs/skill_e2e_schema_v1_20260816` 不是 current-schema 验收证据，
+不能为最终 manifest 提供通过数字。
 
 与最终基线相连、但尚未取得实证的付费项：
 
@@ -56,14 +45,11 @@ manifest 提供通过数字。
 
 ### TODO-24 · 长期积累不可确定语义真值并校准自动审判
 
-本项是**长期活动项**，不阻塞当前由人或 agent 辅助执行、复核、修订和重跑的工作流。已经完成的
-fail-closed 基础负责在没有可靠真值时拒绝自动绿灯；尚未完成的是从真实生产分布积累候选、冻结
-ground truth 并证明 judge 达到自动放行门槛。
+本项是**长期活动项**，不阻塞当前由人或 agent 辅助执行、复核、修订和重跑的工作流。
+fail-closed 基础已落地：缺真值、缺证据、judge 分歧或 profile 不匹配保持 `UNVER`/人工待审，
+不汇总成自动 `PASS`（实现与私有数据边界见 `docs/schema/evaluation.md`）。尚未完成的是从真实
+生产分布积累候选、冻结 ground truth 并证明 judge 达到自动放行门槛。
 
-- [x] 建立无正文的候选构造、双盲独立标注、分歧仲裁、受限三轮评测和 evaluator profile 契约；
-  Stage2 全局规则/秘密人工闸门、Stage5 语义覆盖、trim 回滚、Stage6 人工核验以及 profile 漂移
-  失效均已 fail-closed。缺真值、缺证据、judge 分歧或 profile 不匹配保持 `UNVER`/人工待审，
-  不汇总成自动 `PASS`。实现与私有数据边界见 `docs/schema/evaluation.md`。
 - [ ] 在日常生产使用中持续保留可复算的候选材料：来源与阶段产物哈希、题材、能力、family、模型、
   prompt/schema/decoder 身份、自动与人工/agent 结论、证据理由及修复前后关系。候选产物不是
   ground truth；正文、盲包、标签和仲裁工作文件留在私有目录，仓库只接收无正文 manifest/profile。
@@ -80,6 +66,19 @@ ground truth 并证明 judge 达到自动放行门槛。
 长期验收：最终 manifest 的样本量、标签平衡、题材覆盖、独立 family、标注一致度和三轮评测均满足
 冻结契约；报告分别呈现确定性检查、语义评测与人工结论。计划轻重、施受关系、潜台词、视角等尚无
 正式真值的判断，不得因单次 LLM judge 或词法命中为零而宣称 hard pass。
+
+### TODO-27 · 前端残留的显示阈值与第四态推导收归服务端下发
+
+`web/DELIVERY.md` §6 自查表中 U-08 / U-11 的两处 ⚠️：前端仍在重算业务判定，违反
+「前端只呈现判定，不补后端没给的结论」。
+
+- [ ] 产物新鲜度第四态由服务端直接下发 `freshness: 'missing'`，前端删除
+  `web/src/constants/vocabulary.ts::freshnessOf` 里的 `!exists` 推导。
+- [ ] 拍级「预算/源文」出档阈值（<0.9 / >1.1）与锚点覆盖率警示阈值（0.6）由服务端下发，
+  前端删除这两个显示阈值（章级 `in_band` 已有服务端下发的先例）。
+
+验收：前端代码不再含这两处阈值字面量与 `freshnessOf` 推导；真实模式下三处显示与服务端下发值
+一致；`npm run typecheck` 与 `npm run seams` 通过。
 
 ## 条目生命周期
 

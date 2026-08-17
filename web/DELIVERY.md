@@ -1,13 +1,12 @@
 # 审校台前端 · 交付说明
 
-按 `docs/BACKEND_CONTRACT.md` §六的统一产品规格重建。**当前处于真实模式**：
+产品与界面规格的现役落点就是本文件（§1 技术与数据缝 · §3 路由与屏幕职责 · §6 UI 硬规则），
+产品边界与八阶段的人类任务见仓根 `README.md`。**当前处于真实模式**：
 `web/.env` 为 `VITE_USE_MOCK=false`，数据走 `127.0.0.1:8765` 的真实服务。
-`src/mocks/` 那 20 份是冻结的证据基线（哈希清单在统一契约 §八，`npm run seams` 钉着），
-mock 路径仅作离线开发用。
+`src/mocks/` 那 20 份是冻结的证据基线（字节与哈希登记在 `scripts/mock-baseline.json`，
+来历见统一契约 §8.1，`npm run seams` 钉着），mock 路径仅作离线开发用。
 
-**只是要用界面**：双击仓库根的 `tools\start.cmd`——按需构建、起服务、开浏览器，
-地址是后端自己的 `http://127.0.0.1:8765/`（服务把 `web/dist` 挂在同一个端口上，
-见 `docs/BACKEND_CONTRACT.md` §6.5）。下面这套是**开发**前端时才需要的：
+只想用界面见仓根 `README.md`。下面是**开发**前端时需要的：
 
 ```bash
 cd web
@@ -45,6 +44,25 @@ npm run seams        # 数据缝 / 设计缝红线（见下）
 
 ## 1. 三道缝落在哪
 
+总则：
+
+- React 18、TypeScript、Vite、Tailwind CSS、React Router、TanStack Query；不引入无需求支撑的 UI
+  组件库、图表库、全局状态库、i18n、鉴权或 SSR。
+- **界面与 API 同源同端口**：服务把 `web/dist` 静态挂在自己那个端口上
+  （`novel/api/app.py::_mount_ui`，默认落点 `UI_DIST`，可由 `create_app(..., ui_dist=)` 注入）。
+  跑书的人只起一个进程、只记一个地址；`web/vite.config.ts` 那条指向 8765 的 dev proxy
+  只服务于前端开发。三条边界由 `tests/test_api_ui.py` 钉住：
+  非 `/api` 的 GET 一律回 `index.html`（`BrowserRouter` 深链接刷新必需）·
+  `/api/*` 的漏网请求仍是 `ErrorBody` 形状的 404，**不许吞成 200 + HTML** ·
+  catch-all 必须是路由表最后一条。未构建时界面地址答 503 并给出下一步，API 不受影响。
+- 屏与组件只经 hooks → `web/src/api/endpoints.ts` → Api 接口取数，不直接 fetch。
+- real 与 mock 适配器满足同一 TypeScript 接口；真实模式不允许缺端点时回退 mock。
+- 写请求携带 `X-Novel-UI: 1`；服务进程只写 `_service/`，产物变更经 CLI 子进程。
+- action、枚举、付费与写盘语义由服务端 `/api/enums` 和 preview 返回；前端不保存第二份判定表。
+- 作业日志主通道是 `/api/jobs/:id/stream` SSE；事件 `id` 等于 UTF-8 `next_byte`，断线用
+  `Last-Event-ID` 续读，终态先排空日志、再发唯一 `end` 并释放连接。旧 `/log?offset=` 保留兼容，
+  复用同一字节读取语义；前端不再轮询日志。
+
 ### 数据缝
 
 `src/types/api.ts` 声明 `interface Api`。`src/api/mock.ts`（假后端）和
@@ -61,7 +79,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 
 `src/api/mock.ts` 不是 fixture 加载器，是一个假服务端：
 
-- 20 份 JSON 原始字节（`npm run seams` 会和统一契约中的 bytes + SHA-256 比对）
+- 20 份 JSON 原始字节（`npm run seams` 会和 `scripts/mock-baseline.json` 的 bytes + SHA-256 比对）
 - 一层 localStorage 覆盖层：验收记录、作业、改稿
 - 120ms 模拟延迟，所以加载态是真的会看到
 - 作业引擎：起一个 running 作业、定时往日志里追加行、最后翻 `ok`
@@ -96,38 +114,39 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 选中的判据 / 剧透开关 / tab / 编辑中的文本 | 屏内 `useState` |
 
 **gate 走 Query 而不是 reducer**：它在真产品里是服务端的人工验收记录。
-接后端时 `approveGate` 从「写 localStorage」变成「POST …/approve」，
-只改 `mock.ts` 一个文件，`src/screens/**` 与 `src/components/**` **改动 0 行**。
+`approveGate` 是「POST …/approve」，换实现只改 `src/api/` 一个目录，
+`src/screens/**` 与 `src/components/**` 不感知。
 
 **「闸门不能是全局的」是结构性保证**，不是约定：
-`sid` 来自 `useParams()` → 进 query key → 进 localStorage key。
+`sid` 来自 `useParams()` → 进 query key → 进持久化 key。
 换书就是换一条缓存记录，不存在 A 书的 ✓ 能漏到 B 书的代码路径。
-（已实测：换书后导航上一个 ✓ 都没有。）
 
 ---
 
 ## 3. 路由
 
-历史设计稿是 12 屏，历史路由表又早于设计稿。最终方案是：**按审校任务建屏，老路由保留为
-重定向**；当前权威路由表已收进统一契约 §6.3。
+**按审校任务建屏，老路由保留为重定向。** 下表就是当前**权威**路由表，
+执行落点是 `web/src/routes.tsx`。
 
-| 路由 | 屏 |
+| 路由 | 屏幕职责 |
 |---|---|
-| `/` | 语料库 |
-| `/n/:sid` | → `stage0`（新书先审非正文；已有产物仍可从左栏直达各层） |
-| `/n/:sid/stage0` | 剔除番外 **（历史原型没有，现为正式入口）** |
-| `/n/:sid/stage1` | 分章报告 |
-| `/n/:sid/read/:o` | 原文↔骨架 |
-| `/n/:sid/global` | 全局设定 |
-| `/n/:sid/style` | 文风画像 |
-| `/n/:sid/stage4/:o` | 计划↔上下文 |
-| `/n/:sid/depth` | 挑深度章节 **（新增）** |
-| `/n/:sid/stage5/:o` | 成稿↔材料（吃掉了 S-09 验收/修订）；`writing=false` 时守卫跳 `depth` |
-| `/n/:sid/review/:o` | → `stage5/:o` |
-| `/n/:sid/stage6` | 开篇文案 |
-| `/n/:sid/stage7(/:o)` | 人名+成书 |
-| `/n/:sid/inbox` | 待办（吃掉了 S-13 校验报告；校验下沉到各阶段屏的面板） |
-| `/n/:sid/check` | → `inbox` |
+| `/` | 语料库、上传与逐书阶段状态；勾选多本一次交给 agent 批量代跑（闸与排队归服务端，界面不写死上限） |
+| `/n/:sid` | 进入该书并重定向到 stage0（新书先审非正文；已有产物仍可从左栏直达各层） |
+| `/n/:sid/run` | agent / UI / 持久队列共用的全链运行进度与事件时间线；步骤从 `NODES` 派生，**只观察不判定** |
+| `/n/:sid/stage0` | 整本剔除审阅、编辑与批准 |
+| `/n/:sid/stage1` | 原文与分章对照，只读 |
+| `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
+| `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
+| `/n/:sid/style` | stage3 文风实测与下发档位 |
+| `/n/:sid/stage4/:o` | 计划与写作上下文逐拍对照 |
+| `/n/:sid/depth` | 逐章深/浅重构选择与写作启动前确认 |
+| `/n/:sid/stage5/:o` | 成稿、材料、验收 finding 与修订的合并工作面；`writing=false` 时守卫跳 `depth` |
+| `/n/:sid/inbox` | 八类待办的全书路由器，不提供第二个编辑面（校验下沉到各阶段屏的面板） |
+| `/n/:sid/stage6` | 三候选文案与人工定稿 |
+| `/n/:sid/stage7`、`/n/:sid/stage7/:o` | 人名表、漏网候选、成书状态和逐章替换对照 |
+
+旧 `/n/:sid/review/:o` 重定向到 `stage5/:o`，旧 `/n/:sid/check` 重定向到 `inbox`；
+总览、独立 review 和独立 check 的信息已由当前工作面承接，**不再作为第二个真相来源**。
 
 ---
 
@@ -135,16 +154,24 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 
 ```
 components/
-  app/    AppShell  Rail  BookLayout  ScreenFrame  ScreenBoundary
+  app/    AppShell（含右下角 notice 槽）  Rail  BookLayout  ScreenFrame  ScreenBoundary
   vocab/  FreshnessDot/Tag/Badge/Legend  SevMark/Chip/Badge/Counts
           CheckBadge  CheckMark  JobStateChip  GateChip  GateMark
   ui/     Panel  PaneHeader  SectionTitle  ActionButton  LinkButton
           Mono  Prose  HighlightedText  ChapterStrip
+          ActorReasonFields（actor/reason 两连输入，actor 经 sessionStorage 记住上一次）
+          ChapterGrid（全书章格，stage4 / stage5 共用）
   compare/ ComparePanes（粘性侧栏）  PaneScroll  CompareRows（行配对）
   state/  LoadingPane  LoadFailed  NotRunYet  MissingSample
           EmptyIsSuspicious  EmptyIsGood  HatchNote  QueryStates
   gate/   GateBar        check/  CheckPanel        job/  JobDrawer  ConfirmDialog
+  agent/  AgentBatchDialog  AgentRunDialog
 ```
+
+notice 槽与快捷键不属于任何一屏：`useChrome().notify(text)` 推一条瞬态通知
+（写回成功 / 已复制之类的一句话反馈），AppShell 在右下角渲染，约 3s 自消、最多堆 3 条；
+`useHotkeys` 挂在 AppShell，管全局 ←/→ 翻章与 Esc（见下「快捷键」）。
+`ScreenBoundary` 兜住单屏崩溃：崩了要说「这一屏崩了」，白板会被当成「已经看过」。
 
 两个并排壳覆盖全部六屏对照需求：
 
@@ -156,84 +183,59 @@ components/
 
 stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows`，不是第三种版式。
 
----
+### 快捷键
 
-## 5. 从设计稿里修掉的东西
-
-设计稿是导出的演示文件，有几处 markup 被剥掉但逻辑层还在算；也有几处真 bug。
-
-| 位置 | 现象 | 处理 |
-|---|---|---|
-| 校验面板头（dc.html 1834–1837） | 空的，但 `chkVals` 算了 badge / counts / explain / missing-note | 按逻辑层补回来（否则整块 U-00 内容不见了） |
-| 抽屉体（1908–1911） | 空的，但算了 label / argv / log / 五态图例 | 补回来；`landed_red` 与命令未跑成的 `failed` 分开显示 |
-| 语料库 135/146/180/184 | 空槽，算了 `verdict`（有产物坏了 / N 份过期 / N 份无从判断）、`mtimeLabel`、`legend` | 补进右侧那格 |
-| `s1HasWarn` | 模板绑了但没人算，warning 框永不出现 | 按 `warnings.length > 0` 补上 |
-| 全局设定 2780 行 | `a.by` 是对象，拼串出 `[object Object]` | 改用 `a.by.display` |
-| `argvOf()` 1997 行 | 前端自己拼命令行 | 改成 `api.previewJob()` 由服务端下发（U-09） |
-| `chapterStrip` 的 `n===3`、`sidOk` | 「样本只抓了第 3 章」漏进了渲染层 | 移进数据层（`api.getSampleCoverage()`，真实模式返回 null） |
-| 写盘判定 2306 行 | 对 `extra` 做正则 | 改成对结构化 `extra` / `kind` 的精确集合判定（U-12） |
-| `spoiler_disclosure` | 旧版只下发一句 `partial_mask_note`，且完整说明曾只在 `title=` 里 | 改为结构化披露并在所有状态常驻显示；明确 `display_only=true`、`security_boundary=false`、服务端仍下发完整数据（U-06） |
-| 一屏崩掉 | 变成白板 | 加了 `ScreenBoundary`：崩了要说「这一屏崩了」，白板会被当成「已经看过」 |
-
-另外 `overview` / `review` / `check` 三块 markup 还在设计稿里但被 `go()` 改道成死代码，
-内容已并进 stage1 / stage5 / inbox，按合并后的版本建。
+- `← / →`：带章号的屏（read / stage4 / stage5 / stage7）翻章，屏名保留、只动章号；
+  下界钳在第 1 章，上界各屏数据层自己管（跳过头会看到「没样本」或「还没跑」）
+- `Esc`：确认框开着就关确认框，否则关作业抽屉
+- 焦点在输入框 / textarea / select / contentEditable 里时一律不劫持（左右键是光标）；
+  Ctrl / Alt / Meta 组合键也不碰
 
 ---
 
-## 6. 联调状态与剩余的数据形状建议
+## 5. 数据形状现状
 
-1. **后端下发的 `writes_disk: boolean` 已接入动作分类。**
-   `constants/actions.ts` 的旧精确集合只给不带该字段的历史 mock 兜底；
-   真实模式以服务端字段为准。
-
-2. **产物应直接下发 `freshness: 'missing'`**，别让前端用 `!exists` 推第四态。
-   现在这个推导集中在 `vocabulary.ts` 的 `freshnessOf()` 一处，但它仍然是前端判定。
-
-3. **批 1–6 已完成：九条读屏与三条写回全部接真实接口（第二阶段）。**
-   - 读屏：`reading/:o` / `stage2/global` / `stage4/:o` / `stage5/:o` / `review/:o` /
-     `inbox` / `stage6` / `stage7(/:o)`；`/depth` 的 Stage4 读屏亦在其内。
-   - 写回：`POST …/review/:o/edit`（章节改稿）、`POST …/stage6/approve`
-     （文案定稿，`--pick`）、`POST …/stage7/approve`（人名定稿，无请求体）。
-     `stage6/edit` 与 `stage7/edit` 浏览器端**明确不可用**（裁决：编辑文件是书目录内
-     契约产物，服务进程不写产物盘），走 CLI；界面上对应入口禁用并说明。
-   - 类型已对齐真实响应：check 报告按 `rules[]` 渲染，`CheckPanel` 重写为两轴面板，
-     不从 `oks/unver/info` 文案反推结构；旧作业名与旧 check kind
-     （`n4_plan` / `n9_rename` / `stage5_review` / `n0_extras`）已清除，
-     动作分类以 `/api/enums` 下发为准。
-   - Stage 0：`report` / `segments` / `edit` / `approve`
-   - Stage 1：`partition` / `segments` / `chapters` / `hook_copy`
-   - 语料库：真实 `/api/novels` 的 `stages: StageState[]` 在 `api/endpoints.ts`
-     一次适配成屏幕使用的 stage→artifact 结构；章数只在 stage1 已完成时读取真实章表，
-     不再显示 `undefined 章`，列表页也不为每本书额外发 N+1 请求。
-   - 上传：`POST /api/upload?filename=`，请求体是原始文件字节
-   - 深度章节选择已写入人工验收记录：`GET/POST /api/novels/:sid/approvals`
-     （形状：`{v, sid, gate{s0..s7}, seen{read,global}, deep[], writing, spawns}`）
-   - `spawns`：确认某道闸门之后服务端会发起哪些动作。
-     真实服务和 mock 都下发同一形状，界面再用 `/api/enums` 判定按钮颜色；
-     **“谁会花钱”仍只有服务端一个落点。**
-
-4. **`null` 与 `[]` 在两层之间不一致，前端要写两套判空**：
-   - `stage4.chapter.beats[]`：`keep_value` / `must_appear` / `must_hold` 缺省是 `[]`；
-     但 `time_layer` / `place` 会是 `null`
-   - `stage5.chapter.materials.beats[]`：**同名字段缺省是 `null`**，
-     而且 `time_layer` / `place` / `present` 三个也会是 `null`
-     （样本第 7 拍就是。这条在联调时炸过一次：`present.join()` 直接崩屏。）
-
-5. **`/api/jobs` 的真实元素是嵌套 `JobRecord`。**
-   `api/endpoints.ts` 已在唯一数据缝把它适配成抽屉使用的扁平 `Job`，并从服务端
-   给出的五态（`running / ok / landed_red / failed / unknown`）原样适配；日志用后端的字节偏移读取，
-   不再猜元素形状。`landed_red` 表示产物已落盘但报告有阻断红行，不折进 `ok` 或 `failed`。
-   请确认。
-
-6. **`/jobs/:id/stream?offset=N`（SSE）** 现在按 `getJobLog(id, offset) → {lines, offset, done}`
-   的签名做的轮询。换成 SSE 时签名不用变。
-
-7. **旧作业名已随批 1–6 清除**（含 mock 里临时补的 `n0_extras`）；
-   job kind 现在一律是节点 id，由 `/api/enums` 下发。
+- **动作分类以服务端下发的 `writes_disk: boolean` 为准。** `constants/actions.ts` 的精确集合
+  只给不带该字段的历史 mock 兜底。
+- **`null` 与 `[]` 在两层之间不一致，前端要写两套判空**：
+  - `stage4.chapter.beats[]`：`keep_value` / `must_appear` / `must_hold` 缺省是 `[]`；
+    但 `time_layer` / `place` 会是 `null`
+  - `stage5.chapter.materials.beats[]`：**同名字段缺省是 `null`**，
+    而且 `time_layer` / `place` / `present` 三个也会是 `null`
+- **`/api/jobs` 的元素是嵌套 `JobRecord`**。`api/endpoints.ts` 在唯一数据缝把它适配成抽屉
+  使用的扁平 `Job`，五态（`running / ok / landed_red / failed / unknown`）从服务端原样适配；
+  日志用字节偏移读取。`landed_red` 表示产物已落盘但报告有阻断红行，不折进 `ok` 或 `failed`。
+- 前端日志拉取按 `getJobLog(id, offset) → {lines, offset, done}` 的签名；
+  换到 SSE（§1）时签名不用变。
 
 ---
 
-## 7. U-00 ~ U-20 自查
+## 6. UI 硬规则 U-01～U-20 与逐条自查
+
+规则本身：
+
+1. freshness 保留 fresh / stale / unknown，missing 作为明确显示态；unknown 不得画成 fresh。
+2. badge 保留 pass / amber / fail；amber 表示存在 unver，不是较弱的通过。
+3. severity 保留 hard / info / metric / unver；metric 是读数，不使用警告语义。
+4. job state 保留 running / ok / landed_red / failed / unknown 五态；`landed_red` 表示产物已落盘但报告有阻断红行（exit 1），界面必须引导人看报告，不能画成成功或“命令没跑成”。它在批量队列里仍会停住同书 lane；服务重启后的 running 一律改判 unknown。
+5. 空数组按字段解释，不得统一翻译成“没问题”；not-run、合法空与数据缺失分别呈现。
+6. 部分遮蔽必须常驻标注“部分”，不能收进 tooltip 或宣传为完整安全边界。
+7. 付费、免费只读、免费写盘在按钮与确认流上可辨；费用和写盘语义只由服务端给出。
+8. 付费确认显示服务端下发的完整命令；取不到预览就不允许发起。
+9. 不显示预估花费、预估调用次数或伪精度进度。
+10. 前端不重算 badge、passed、severity、freshness、paid 或业务阈值；缺结论时显示读数/unknown。
+11. 不从中文文案正则抠结构；修复路由、章节、证据、状态全部消费结构化字段。
+12. 服务端切好的片段直接渲染；不按 Python 下标在 JavaScript 中二次切中文字符串。
+13. 中文正文不 justify，使用适合长读的字体与行高，段落靠间距而不是缩进堆叠。
+14. 对照任务默认并排，不用 tab 隐藏另一侧；两侧共享可读列宽。
+15. 未对齐块必须带可见边界和“未验证对应”的文字，不得用空白暗示已对齐。
+16. loading / error / not-run / normal 四态每屏齐备；not-run 说明下一步，不写“暂无数据”。
+17. 不发明健康分、AI 建议卡、项目百分比；只显示有来源的状态与读数。
+18. 不提供运行中取消按钮；持久队列只允许取消尚未开始的 `pending/blocked` 项，运行中返回 409。
+19. 状态不能只靠颜色：同时用形状与文字，满足长时间审校和色觉差异。
+20. 目标视口 1280～2560 桌面宽屏；不要求移动端和响应式重排。
+
+逐条自查（U-00 是本文件自加的一条，规格里没有）：
 
 | 条 | 状态 | 落在哪 |
 |---|---|---|
@@ -245,10 +247,10 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 | U-05 空数组 ≠ 没问题 | ✅ | `secrets: []` / `problems: []` / `voice_extra: []` / 漏网候选为空，各有各的说法 |
 | U-06 非完整遮蔽边界必须标注 | ✅ | `/api/enums` 的结构化 `spoiler_disclosure` 在 loading / empty / 404 / error / normal 全部状态常驻；界面明确服务端仍下发完整数据、该开关不是安全边界 |
 | U-07 花钱一眼可分，依据只有服务端 `paid` | ✅ | `previewJob` 下发 `paid`；`JobRequest` 里**没有** `paid` 字段，调用方带不进来 |
-| U-08 第三类：免费但写盘 | ⚠️ | 做了（深色 + `写盘` 角标 + 第四种「未标注」），但分类表在前端 —— 见上面第 6 节第 1 条 |
+| U-08 第三类：免费但写盘 | ⚠️ | 做了（深色 + `写盘` 角标 + 第四种「未标注」），但分类表在前端 —— 见 §5 第 1 条 |
 | U-09 确认框显示完整命令 | ✅ | argv 来自 `POST /api/jobs/preview`；取不到就不让发起 |
 | U-10 不显示预估花费 / 次数 | ✅ | 全屏搜不到 |
-| U-11 前端不做判定 | ⚠️ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。**三处例外，都是设计稿原有的显示阈值**：<br>· `align.coverage < 0.6` → 锚点覆盖率画成警示<br>· 每一拍 `预算/源文` 比例 <0.9 或 >1.1 → 画成出档（章级的 `in_band` 服务端有，拍级没有）<br>· 闸门 DAG（人工验收流程，brief 自己画了这张图）<br>建议后端把前两个阈值下发 |
+| U-11 前端不做判定 | ⚠️ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。**三处例外，都是设计稿原有的显示阈值**：<br>· `align.coverage < 0.6` → 锚点覆盖率画成警示<br>· 每一拍 `预算/源文` 比例 <0.9 或 >1.1 → 画成出档（章级的 `in_band` 服务端有，拍级没有）<br>· 闸门 DAG（人工验收流程，brief 自己画了这张图）<br>前两个阈值的服务端下发见 `docs/REQUIREMENTS.md` TODO-27 |
 | U-12 不从文案正则抠结构 | ✅ | `chapters` / `fix` 全部读服务端字段；证据高亮只做 `indexOf`，且一处没命中时明说 |
 | U-13 不按下标切字符串 | ✅ | `HighlightedText` 的 props 里**没有 start/end**，类型上就踩不进去 |
 | U-14 中文阅读界面 | ✅ | 中文优先字体栈；行高 2.05–2.15；不 justify；段落用间距分隔；并排两栏共用一个 `measure` |
@@ -261,7 +263,7 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 
 ---
 
-## 8. 机器可查的红线
+## 7. 机器可查的红线
 
 `npm run seams` 逐条查：
 
@@ -269,29 +271,7 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 src/screens、src/components 里 0 处 fetch(
 src/screens、src/components 里 0 处颜色字面量（#xxx / oklch() / rgb()）
 src/mocks/*.json 只被 src/api/mock.ts import
-src/mocks/ 与统一契约 §八的 20 份 bytes + SHA-256 一致
+src/mocks/ 与 scripts/mock-baseline.json 的 20 份 bytes + SHA-256 一致
 ```
 
 `npm run typecheck`：mock 与真实实现都满足 `Api`。
-
----
-
-## 9. 已实测的
-
-- 17 条路由全部渲染、无崩屏（含三条重定向、两种「没有样本」）
-- 一遍闸门流程：确认 → 闸门翻 ✓ → 导航解锁 → 抽屉出现作业 → 日志逐行流完翻 `ok`
-- **刷新页面 ✓ 还在**；换一本书 ✓ 不跟过去
-- 付费确认框摆出服务端下发的 argv、写明「发起后没有取消」；
-  免费动作标「免费」、花钱动作标「调 LLM · 花真钱」
-- `VITE_USE_MOCK=false` 时：一份 mock 数据都不泄漏，屏上报「后端报错了（HTTP 500）」
-  并说明这个码在开发环境通常就是 8765 上没服务在听
-- **批 1–6 真实模式联调通过**：九条读屏取真实数据，三条写回走 preview → 确认 → 执行链，
-  作业失败读 `state='failed'` 与日志（CLI 内失败不是 HTTP 错误）
-
-## 10. 没做的
-
-- mock 路径的写操作仍打到 `mock.ts` 的 localStorage；真实模式的三条人工写回
-  （章节改稿 / 文案定稿 / 人名定稿）已走真实 POST。
-- 没做 SSE，用轮询（签名一致，换过去不影响调用方）。
-- 没做移动端 / 响应式（统一产品规格明确不要）。
-- 没引入 UI 组件库、图表库、状态管理库、i18n、SSR。

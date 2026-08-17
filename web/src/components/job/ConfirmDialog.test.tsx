@@ -203,4 +203,51 @@ describe('ConfirmDialog', () => {
     const submitted = startSpy.mock.calls[0]?.[0]
     expect(JSON.stringify(submitted)).not.toContain('待填·')
   })
+
+  it('Esc 关闭确认框', async () => {
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    vi.spyOn(api, 'previewJob').mockResolvedValue(preview)
+    renderRoute(<Harness />)
+
+    fireEvent.click(screen.getByRole('button', { name: '修第 11 章' }))
+    expect(await screen.findByRole('dialog')).toBeVisible()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('已填必填项时 Esc 先挽留：取消不走，确定才关', async () => {
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    vi.spyOn(api, 'previewJob').mockResolvedValue(revalidatePreview)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    renderRoute(<RevalidateHarness />)
+
+    fireEvent.click(screen.getByRole('button', { name: '同轮重判' }))
+    expect(await screen.findByRole('dialog')).toBeVisible()
+    fireEvent.change(screen.getByRole('textbox', { name: '--actor' }), {
+      target: { value: 'reviewer-a' },
+    })
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('dialog')).toBeVisible()
+
+    confirmSpy.mockReturnValue(true)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('没填内容时 Esc 直接关，不挽留', async () => {
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    vi.spyOn(api, 'previewJob').mockResolvedValue(revalidatePreview)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    renderRoute(<RevalidateHarness />)
+
+    fireEvent.click(screen.getByRole('button', { name: '同轮重判' }))
+    expect(await screen.findByRole('dialog')).toBeVisible()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
 })

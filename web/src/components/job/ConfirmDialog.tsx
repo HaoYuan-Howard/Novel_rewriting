@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { errorBody, errorTitle } from '@/api/errors'
@@ -35,6 +35,40 @@ export function ConfirmDialog() {
   const [failure, setFailure] = useState<unknown>(null)
   const start = useStartJob(confirm?.req.sid)
   const jobs = useJobs(confirm?.req.sid)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLOListElement>(null)
+  const primaryRef = useRef<HTMLButtonElement>(null)
+  /** 步骤列表滚得动时才提示「下面还有」—— 一次性量，不做滚动监听 */
+  const [moreSteps, setMoreSteps] = useState(false)
+
+  // 已填了必填项内容的关闭要先挽留 —— 点遮罩 / Esc / 返回同一条路
+  const dirty = Object.values(requiredValues).some((v) => v.trim().length > 0)
+  const requestClose = () => {
+    if (dirty && !window.confirm('已填写的内容会丢失，确定关闭？')) return
+    closeConfirm()
+  }
+  // 最新一份给 Esc 监听器用（监听器只在 confirm 开合时重挂）
+  const requestCloseRef = useRef(requestClose)
+  requestCloseRef.current = requestClose
+
+  // Esc 关框。preventDefault 告诉全局快捷键（useHotkeys）这条已经有人处理了。
+  useEffect(() => {
+    if (!confirm) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      requestCloseRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [confirm])
+
+  // 打开时焦点进第一个必填输入（没有则主按钮）—— 键盘用户不该先 Tab 一整圈
+  useEffect(() => {
+    if (!confirm) return
+    const first = dialogRef.current?.querySelector<HTMLElement>('input')
+    ;(first ?? primaryRef.current)?.focus()
+  }, [confirm])
 
   const preview = useQuery({
     queryKey: qk.jobPreview(confirm?.req ?? null),
@@ -48,6 +82,13 @@ export function ConfirmDialog() {
     setRequiredValues({})
     setFailure(null)
   }, [confirm])
+
+  // 步骤列表装得下就不打扰；装不下才在底部说一句「还有」
+  const stepCount = preview.isSuccess ? (preview.data?.steps ?? []).length : 0
+  useEffect(() => {
+    const el = listRef.current
+    setMoreSteps(!!el && el.scrollHeight > el.clientHeight + 4)
+  }, [stepCount, preview.isFetching])
 
   if (!confirm) return null
 
@@ -74,13 +115,40 @@ export function ConfirmDialog() {
   const running = jobs.data?.running ?? null
   const busy = !!running && running.sid === confirm.req.sid
 
+  /** 简单焦点圈禁：Tab 在框内循环，不出框 */
+  const trapTab = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab') return
+    const root = dialogRef.current
+    if (!root) return
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      ),
+    )
+    if (!focusables.length) return
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-60 flex items-center justify-center"
       style={{ background: SCRIM }}
-      onClick={closeConfirm}
+      onClick={requestClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={confirm.req.label}
+        onKeyDown={trapTab}
         className="w-[660px] overflow-hidden rounded-modal border border-line-btn bg-card shadow-modal"
         onClick={(e) => e.stopPropagation()}
       >
@@ -109,11 +177,22 @@ export function ConfirmDialog() {
               正在取得逐步命令、贵贱与写盘范围…
             </div>
           ) : preview.isError ? (
-            <div className="rounded-btn-lg border border-warn-line bg-warn-bg px-14 py-12 text-body text-warn-ink">
+            <div className="flex items-center gap-12 rounded-btn-lg border border-warn-line bg-warn-bg px-14 py-12 text-body text-warn-ink">
               取不到执行计划。贵贱保持未知，也不会允许发起；界面不替服务端猜命令。
+              <button
+                type="button"
+                onClick={() => void preview.refetch()}
+                className="ml-auto flex-none cursor-pointer rounded-btn border border-warn-line bg-card px-12 py-5 text-body text-warn-ink"
+              >
+                重试
+              </button>
             </div>
           ) : (
-            <ol className="m-0 flex max-h-[420px] list-none flex-col gap-9 overflow-y-auto p-0">
+            <>
+              <ol
+                ref={listRef}
+                className="m-0 flex max-h-[420px] list-none flex-col gap-9 overflow-y-auto p-0"
+              >
               {steps.map((step, index) => (
                 <li key={index} className="overflow-hidden rounded-btn-lg border border-line bg-inset">
                   <div className="flex flex-wrap items-center gap-8 border-b border-line-soft px-14 py-9">
@@ -138,7 +217,11 @@ export function ConfirmDialog() {
                   </pre>
                 </li>
               ))}
-            </ol>
+              </ol>
+              {moreSteps ? (
+                <div className="text-right text-tag text-ink-5">下面还有步骤，滚动看完再发起 ↓</div>
+              ) : null}
+            </>
           )}
           {requiredInputs.length ? (
             <fieldset className="m-0 flex flex-col gap-9 rounded-btn-lg border border-line bg-sunken-2 px-14 py-12">
@@ -199,12 +282,13 @@ export function ConfirmDialog() {
           <span className="text-tag text-ink-4">发起后没有取消——调用在途时钱已经花了。</span>
           <button
             type="button"
-            onClick={closeConfirm}
+            onClick={requestClose}
             className="ml-auto cursor-pointer rounded-btn border border-line-btn bg-card px-16 py-8 text-body-lg"
           >
             返回
           </button>
           <button
+            ref={primaryRef}
             type="button"
             disabled={!planReady || !requiredReady || busy || preparing || start.isPending}
             onClick={async () => {

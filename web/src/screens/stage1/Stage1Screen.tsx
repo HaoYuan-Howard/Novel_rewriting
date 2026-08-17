@@ -1,11 +1,14 @@
 import { useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
+import type { Stage1HookCopy } from '@/types/stages'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { QueryStates } from '@/components/state/QueryStates'
+import { LoadFailed, LoadingPane } from '@/components/state/States'
 import { Mono } from '@/components/ui/Mono'
+import { ChapterGrid } from '@/components/ui/ChapterGrid'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { Prose } from '@/components/ui/Prose'
 import { cx } from '@/lib/cx'
@@ -40,13 +43,11 @@ export function Stage1Screen() {
 
   return (
     <ScreenFrame screen={'stage1'} allowCheckRerun={false}>
-      <QueryStates q={segments} loadingLabel={'读取 Stage 1 连续切分'}>
+      <QueryStates q={segments} loadingLabel={'读 Stage 1 连续切分'}>
         {(document) => (
-          <QueryStates q={chapters} loadingLabel={'读取章节索引'}>
+          <QueryStates q={chapters} loadingLabel={'读章节索引'}>
             {(index) => (
-              <QueryStates q={hook} loadingLabel={'读取文案段'}>
-                {(hookCopy) => (
-                  <section className={'flex flex-col gap-16 px-30 py-24'}>
+              <section className={'flex flex-col gap-16 px-30 py-24'}>
                     <header className={'flex items-start justify-between gap-24'}>
                       <div className={'flex flex-col gap-5'}>
                         <h1 className={'m-0 text-screen font-semibold'}>正文切分 · stage1</h1>
@@ -84,39 +85,26 @@ export function Stage1Screen() {
                       style={{ gridTemplateColumns: '320px minmax(0,1fr)' }}
                     >
                       <div className={'sticky top-[60px] flex flex-col gap-14'}>
-                        <Panel>
-                          <PaneHeader title={'开篇文案'} meta={hookCopy.hook_copy.section_id} />
-                          <div className={'border-l-5 border-l-hook bg-hook-bg px-16 py-14'}>
-                            <Prose
-                              text={hookCopy.hook_copy.text}
-                              measure={'full'}
-                              size={'sm'}
-                              tone={'ink-2'}
-                            />
-                          </div>
-                          <div className={'border-t border-line-soft px-16 py-10 text-tag text-ink-4'}>
-                            {hookCopy.note}
-                          </div>
-                        </Panel>
+                        <HookPanel q={hook} />
 
                         <Panel>
                           <PaneHeader title={'章节索引'} meta={index.chapters.length + ' 章'} />
-                          <div className={'max-h-[52vh] overflow-y-auto'}>
-                            {index.chapters.map((chapter) => (
-                              <button
-                                key={chapter.chapter_ordinal}
-                                type={'button'}
-                                onClick={() => scrollTo(chapter.chapter_ordinal)}
-                                className={cx(
-                                  'flex w-full cursor-pointer flex-col gap-3 border-0 border-b ' +
-                                    'border-line-row px-14 py-10 text-left',
-                                  selected === chapter.chapter_ordinal
-                                    ? 'bg-accent-bg'
-                                    : 'bg-card hover:bg-sunken-2',
-                                )}
-                              >
+                          <ChapterGrid
+                            layout={'list'}
+                            className={'max-h-[52vh] overflow-y-auto'}
+                            items={index.chapters.map((chapter) => ({
+                              ...chapter,
+                              ordinal: chapter.chapter_ordinal,
+                              active: selected === chapter.chapter_ordinal,
+                            }))}
+                            onPick={scrollTo}
+                          >
+                            {(chapter) => (
+                              <>
                                 <span className={'flex items-center gap-8'}>
-                                  <Mono className={'rounded-tag bg-accent-solid px-7 py-1 text-mini text-card'}>
+                                  <Mono
+                                    className={'rounded-tag bg-accent-solid px-7 py-1 text-mini text-card'}
+                                  >
                                     ch{String(chapter.chapter_ordinal).padStart(2, '0')}
                                   </Mono>
                                   <span className={'truncate text-body font-semibold'}>
@@ -126,10 +114,12 @@ export function Stage1Screen() {
                                     {chapter.chars} 字
                                   </Mono>
                                 </span>
-                                <span className={'line-clamp-2 text-tag text-ink-4'}>{chapter.preview}</span>
-                              </button>
-                            ))}
-                          </div>
+                                <span className={'line-clamp-2 text-tag text-ink-4'}>
+                                  {chapter.preview}
+                                </span>
+                              </>
+                            )}
+                          </ChapterGrid>
                         </Panel>
                       </div>
 
@@ -205,12 +195,42 @@ export function Stage1Screen() {
                       </Panel>
                     </div>
                   </section>
-                )}
-              </QueryStates>
             )}
           </QueryStates>
         )}
       </QueryStates>
     </ScreenFrame>
+  )
+}
+
+/**
+ * 开篇文案面板。hook_copy 查询的四态在这一个面板里就地消化——
+ * 它取数失败只换这一块，不再把已加载的切分与章节索引整屏替掉。
+ */
+function HookPanel({ q }: { q: UseQueryResult<Stage1HookCopy> }) {
+  if (q.isPending) {
+    return (
+      <Panel>
+        <LoadingPane label={'读文案段'} rows={2} />
+      </Panel>
+    )
+  }
+  if (q.isError) {
+    return (
+      <Panel>
+        <div className={'p-14'}>
+          <LoadFailed error={q.error} onRetry={() => void q.refetch()} compact />
+        </div>
+      </Panel>
+    )
+  }
+  return (
+    <Panel>
+      <PaneHeader title={'开篇文案'} meta={q.data.hook_copy.section_id} />
+      <div className={'border-l-5 border-l-hook bg-hook-bg px-16 py-14'}>
+        <Prose text={q.data.hook_copy.text} measure={'full'} size={'sm'} tone={'ink-2'} />
+      </div>
+      <div className={'border-t border-line-soft px-16 py-10 text-tag text-ink-4'}>{q.data.note}</div>
+    </Panel>
   )
 }

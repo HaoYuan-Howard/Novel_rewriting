@@ -1,7 +1,7 @@
 /**
  * 静态设计契约。不是数据 —— 数据只有服务端响应。
  *
- * 值源自历史原型，现役语义统一登记在 docs/BACKEND_CONTRACT.md §6.4。
+ * 值源自历史原型，现役语义统一登记在 web/DELIVERY.md §6（UI 硬规则 U-01～U-20）。
  * 状态色**只从这里取**：组件里不许写死十六进制或 oklch。
  * 消费者只有 src/components/vocab/ 下那几个叶子组件（它们把 color/bg 内联出来），
  * 其余一切走 Tailwind class。
@@ -292,6 +292,21 @@ export const RAIL: RailItem[] = [
   { screen: 'stage7', n: '7', label: '人名+成书' },
   { screen: 'inbox', n: '·', label: '待办' },
 ]
+
+/** stage → 它的主屏。语料库「打开」与进度屏节点链接共用这一份，别在屏里各写一份。 */
+export const STAGE_SCREEN: Record<string, ScreenName> = {
+  stage0: 'stage0',
+  stage1: 'stage1',
+  stage2: 'read',
+  stage3: 'style',
+  stage4: 'stage4',
+  stage5: 'stage5',
+  stage6: 'stage6',
+  stage7: 'stage7',
+}
+
+/** 路由必须带 /:o 的屏 —— 跳过去要拼章号（stage7 的章号是可选的，不在内） */
+export const CHAPTERED_SCREENS: ReadonlySet<ScreenName> = new Set(['read', 'stage4', 'stage5'])
 
 /** 每屏标题（缺样本屏与文档标题共用） */
 export const SCREEN_TITLE: Record<ScreenName, string> = {

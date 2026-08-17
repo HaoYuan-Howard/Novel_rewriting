@@ -122,10 +122,10 @@ describe('Stage6Screen audited approval', () => {
       </>,
       `/n/${SAMPLE_SID}/stage6`,
     )
-    fireEvent.change(await screen.findByPlaceholderText('例：editor-a'), {
+    fireEvent.change(await screen.findByLabelText(/自报身份/), {
       target: { value: 'reviewer-a' },
     })
-    fireEvent.change(screen.getByPlaceholderText('说明人工核验与选择依据'), {
+    fireEvent.change(screen.getByLabelText(/编辑理由/), {
       target: { value: '逐项核对人物关系与关键因果' },
     })
     fireEvent.click(screen.getByRole('button', { name: '人工核验后定稿' }))

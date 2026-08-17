@@ -7,6 +7,7 @@ import type { Finding } from '@/types/common'
 import type { ChapterSegment } from '@/types/stages'
 import type { TextPart } from '@/components/ui/HighlightedText'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
+import { useChrome } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import { lookupAction } from '@/constants/actions'
 import type { EnumAction } from '@/types/enums'
@@ -72,6 +73,7 @@ export function useStage5Screen() {
   const ordinal = useOrdinal()
   const qc = useQueryClient()
   const enums = useEnums()
+  const { notify, openDrawer } = useChrome()
 
   const [tab, setTab] = useState<S5Tab>('chapter')
   const [selFinding, setSelFinding] = useState(0)
@@ -97,7 +99,13 @@ export function useStage5Screen() {
     mutationFn: (req: { mode: Mode; segments: ChapterSegment[] }) =>
       api.saveDraftEdit(sid, ordinal, req),
     onSuccess: (job) => {
-      if (job.state !== 'failed') setEditing(false)
+      if (job.state === 'failed') {
+        // CLI 内失败不是 HTTP 错误（作业落 state='failed'）——完整输出在抽屉日志里
+        openDrawer()
+      } else {
+        setEditing(false)
+        notify('改稿已保存')
+      }
       void qc.invalidateQueries({ queryKey: qk.stage5(sid, ordinal) })
       void qc.invalidateQueries({ queryKey: qk.review(sid, ordinal) })
       void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage5') })
@@ -135,6 +143,12 @@ export function useStage5Screen() {
   const lowAnchor = anchorState === 'low'
   const unknownAnchor = !!align && anchorState === 'unknown'
 
+  /** 编辑中且草稿与基准不一致 —— 这时退出编辑 / 跳章会先挽留一句 */
+  const dirty =
+    !!draftSegments && JSON.stringify(draftSegments) !== JSON.stringify(baseSegments)
+  /** true = 可以放心离开（没改动，或本人在原生确认里点了确定） */
+  const guardLeave = () => !dirty || window.confirm('改稿还没保存，确定离开？')
+
   return {
     draftQ,
     reviewQ,
@@ -149,7 +163,11 @@ export function useStage5Screen() {
     sideBySide,
     toggleSide: () => setSideBySide((v) => !v),
     editing,
+    dirty,
+    guardLeave,
     toggleEdit: () => {
+      // 有未保存的改动时退出编辑先挽留；取消则留在编辑态
+      if (editing && !guardLeave()) return
       setEditing((wasEditing) => {
         if (!wasEditing) {
           setDraftSegments(baseSegments.map((segment) => ({ ...segment })))

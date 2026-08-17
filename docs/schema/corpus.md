@@ -1,23 +1,23 @@
-# Current-schema corpus acceptance manifest
+# 现役 schema 语料硬验收 manifest
 
-The final acceptance will generate the committed, text-free identity of the two-book corpus at the
-path shown in the build and verify commands below. It contains no title, source text, prompt,
-response, or generated prose.
-It records only the acceptance identity:
+最终硬验收会在下方 build/verify 命令给出的路径生成一份已提交、不含正文的语料身份清单，
+覆盖冻结的两本书：`2019402867061048656`（17 章）与 `1668963766200045568`（25 章），
+要求完整 Stage0～7 正式产物（含最终 `stage7/book.txt`）。它不含书名、原文、prompt、
+生成正文，只逐文件记录 SHA-256 与验收身份：
 
-- each `sid`, normalized source SHA-1 and chapter count;
-- every expected Stage 0–7 artifact path and each JSON artifact's exact schema version;
-- the frozen producing code identity and exact rebuild commands;
-- per-book ledger counts, token sums, provider cache hit/miss coverage, model/effort distribution and
-  outcomes; a provider `null` is counted separately from a reported zero;
-- the exact pytest skip allowlist (`nodeid` plus reason).
+- 每本书的 `sid`、归一化源 SHA-1 与章数；
+- Stage0～7 每份预期产物路径，及每份 JSON 产物的精确 schema version；
+- 冻结的产地代码身份与精确重建命令；
+- 每本书的账本调用数、token 汇总、provider 缓存命中/未命中覆盖、模型/思考档位分布与结果；
+  provider 为 `null` 与显式上报为零分别计数；
+- 精确的 pytest skip allowlist（`nodeid` 与理由）。
 
-> 实现在 `tests/corpus_manifest.py`（2026-08-17 从 `tools/` 挪过来）。
+> 实现在 `tests/corpus_manifest.py`。
 > 它不是一次性脚本：`tests/conftest.py` 在模块级 import 它的 `verify`，
 > `--require-corpus` 那条闸就是它把着的 ⇒ 它是**测试基础设施**，
-> 与 `tests/corpus.py` / `tests/sandbox.py` 同族，放在 `tools/` 是错位。
+> 与 `tests/corpus.py` / `tests/sandbox.py` 同族。
 
-Build and verify it only against an isolated output directory:
+只针对隔离的输出目录 build 与 verify：
 
 ```powershell
 conda run -n novel_refactor python -m tests.corpus_manifest build `
@@ -31,18 +31,29 @@ conda run -n novel_refactor python -m tests.corpus_manifest verify `
   --manifest docs/corpus/current_schema_manifest.json
 ```
 
-The hard acceptance invocation is:
+硬验收的调用方式：
 
 ```powershell
 $env:NOVEL_OUTPUT='<isolated-current-corpus>'
 conda run -n novel_refactor python -m pytest --require-corpus
 ```
 
-`--require-corpus` overrides the cheap default marker expression and collects both `corpus` and
-non-`corpus` tests. It refuses a missing environment or manifest, book/artifact reduction, source or
-chapter drift, schema-version drift, ledger drift, and any skip not exactly listed in the manifest.
-Ledger row partitions (`wire + local-cache`, outcome, model and effort) must each close exactly; every
-token column separately records reported/null row counts, and a column with zero reported rows cannot
-claim a nonzero total. Pytest `xfail` reports are not silently reclassified as skips in the allowlist.
-Use `--record-corpus-skips <path>` during manifest finalisation to capture a candidate allowlist;
-recording is explicit and is never enabled by normal test runs.
+`--require-corpus` 会覆盖默认的省钱 marker 表达式，同时收集 `corpus` 与非 `corpus` 两类测试；
+它拒收缺环境变量或缺 manifest、书目/产物减少、源文本或章数漂移、schema version 漂移、ledger
+漂移，以及任何未精确列在 manifest 里的 skip。ledger 的行分区（`wire + local-cache`、结果、
+模型与思考档位）必须逐一闭合；每个 token 列分别记录「上报/为空」的行数，上报行数为零的列
+不能声称有非零总数。pytest 的 `xfail` 不会被静默改记成 allowlist 里的一项 skip。
+
+manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 18 条真实
+production dispatch：每书各一条 Stage2 global/blueprint、Stage3、Stage4、Stage5
+write/semantic、Stage6 hook/semantic、Stage7 rename；两条 semantic 必须保留 `--advisory`，
+write 固定 `--deep 1,2,3 --shallow-rest`。ledger 必须对两书、九节点逐一有非零记录并与这
+18 条命令对账。`preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
+
+语料 JSON 的盘上原始 `_schema_version` 必须直接等于 artifact registry 当前版本；即使
+registry 有 migration，manifest build/verify 也不会先迁移再把旧文件冒充 current。skip
+allowlist 不能收录“缺语料 / missing corpus / 0 collected”一类候选，且硬验收若实际收集到
+0 条 corpus 测试会失败。
+
+finalise manifest 时用 `--record-corpus-skips <path>` 采集候选 allowlist；这个记录动作是
+显式的，普通测试跑不会自动开启。
