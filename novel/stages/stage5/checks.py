@@ -1037,7 +1037,7 @@ _REVIEW_ONLY_WHY = '写作相判不了它——它是书级/跨章的，由 `sta
 
 def check(*, chapter_findings_by_rule: dict[str, list[Finding]],
           scanned: dict[str, str], unver_empty: dict[str, str],
-          secret_blind: str | None = None, phase: str = 'review') -> list[Outcome]:
+          blind: dict[str, str] | None = None, phase: str = 'review') -> list[Outcome]:
     """把逐章 + 书级的全部结论编排成「一条注册判据恰好一行」。
 
     ⚠ **它遍历 `_FROM_CHAPTER + _FROM_REVIEW`，不遍历命中的那些**——报告不是由实现的
@@ -1048,8 +1048,15 @@ def check(*, chapter_findings_by_rule: dict[str, list[Finding]],
     那是一句**假话**——它们的实现在，只是这一相判不了。而一份 47 行全 `skipped` 的报告
     徽章是 `fail`，读起来像「全查过全没过」，实际上什么都没说。
 
-    `secret_blind` 非 `None` ⇒ **这本书的字面探针盲区 100%**，`secret_leak` 落 `unver`
-    而不是打一盏绿灯（实测 21 条 secret 里 19 条连它自己的揭示章都命中不了）。
+    `blind[rule]` ⇒ **这一条这一次没有判别力样本**，落 `unver` 而不是打一盏绿灯。
+    ⚠ 它是一个**通用机制，不是某条判据的特例**——两类都进这里：
+      · 探针本身零判别力：实测 21 条 secret 里 19 条连它自己的揭示章都命中不了
+        ⇒ 盲区 100% 时 `secret_leak` 走这条路；
+      · **分母为零**：四组保真材料一条都没下发时，`verbatim_missing` 那三条 HARD
+        查的东西根本不存在。真发生过——`beat_index` → `verbatim_pieces` 的形态断过一版，
+        五本书下发面全空，三条 HARD 一路报绿而闭卷写手手里一个原文字节都没有
+        （根因那一条是 `stage4` 的 `ctx_hinge_delivered`）。
+        **「查过、干净」与「没东西可查」必须长得不一样**（判据 4 的三态）。
     """
     out: list[Outcome] = []
     for rule in (*_FROM_CHAPTER, *_FROM_REVIEW):
@@ -1058,8 +1065,8 @@ def check(*, chapter_findings_by_rule: dict[str, list[Finding]],
         if phase == 'write' and rule in _FROM_REVIEW:
             out.append(unverifiable(rule, _REVIEW_ONLY_WHY, scanned=sc))
             continue
-        if rule == 'secret_leak' and secret_blind is not None:
-            out.append(unverifiable(rule, secret_blind, scanned=sc))
+        if (why := (blind or {}).get(rule)) is not None:
+            out.append(unverifiable(rule, why, scanned=sc))
             continue
         if rule in _UNVER:
             out.append(unverifiable(

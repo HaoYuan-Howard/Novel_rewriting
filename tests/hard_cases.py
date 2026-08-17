@@ -146,6 +146,19 @@ _BPS4 = {'blueprints': [
         {'beat_id': 'b2_01', 'event': '事件四', 'time_layer': 'present'}]}]}
 
 
+#: `_BPS4` 的 beat 都不带保真材料 ⇒ `ctx_hinge_delivered` 在那上面走 `unver`（没有分母）。
+#: 这一份给每拍挂一条**stage2 产物形态**的 hinge，用来造出「有材料却没下发」那个红。
+#: ⚠ **形态必须是 `{'kind','source':{...}}`**，不是 `{'kind','text'}`——后者恰恰是
+#: 那次事故里的中间形态，拿它当反例等于把断掉的那条路重新写进测试。
+_BPS4_HINGED = {'blueprints': [
+    {**bp, 'beats': [{**be, 'hinges': [{
+        'kind': '要害台词',
+        'source': {'text': '一句要害台词。', 'start': 0, 'end': 7,
+                   'normalized': '一句要害台词', 'recovery': 'exact'}}]}
+        for be in bp['beats']]}
+    for bp in _BPS4['blueprints']]}
+
+
 def _b4(*ids: str, budget: int = 100) -> dict:
     return {'budget_chars': budget, 'from_beats': list(ids)}
 
@@ -252,7 +265,7 @@ CASES: dict[str, Case] = {
     'rn_book_incomplete': Case('stage7', lambda: _rename(missing=[2])),
     'rn_txt_stale': Case('stage7', _rn_txt_stale),
 
-    # ── stage4（17 HARD）──────────────────────────────────────────────────
+    # ── stage4（18 HARD）──────────────────────────────────────────────────
     'one_to_one': Case('stage4', lambda: _plan4(
         [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03'), _b4('b2_01')], srcs=[1, 2])])),
     'ordinal_seq': Case('stage4', lambda: _plan4(
@@ -295,6 +308,12 @@ CASES: dict[str, Case] = {
         [_ctx_ch(must_not_reveal=['s1'], facts={'secrets': [{'secret_id': 's1'}]})])),
     'ctx_layer_flat': Case('stage4', lambda: _ctx4(
         [_ctx_ch(segments=[{'slot': 's01', 'time_layer': 'present+recall', 'events': ['事件一']}])])),
+    # stage2 抽到了保真材料，下发面上一条都没有 —— 这正是真事故在产物上的形状
+    # （`beat_index` → `verbatim_pieces` 形态分家，五本书 898 条 hinge 全部没能下发）。
+    'ctx_hinge_delivered': Case('stage4', lambda: _plan4(
+        _GREEN4(), blueprints=_BPS4_HINGED,
+        ctx={'chapters': [_ctx_ch(segments=[{'slot': 's01', 'events': ['事件一']}])]},
+        global_g={'entities': {'characters': {}}})),
 }
 
 

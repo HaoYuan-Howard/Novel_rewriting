@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 26 条判据的**实现**。行在 `contracts/judges/stage4.py`（`Q-12`）。
+checks.py —— 27 条判据的**实现**。行在 `contracts/judges/stage4.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 落盘闸门 / `--check-only` / `--revalidate` 走的都是
 `check()` 这一个函数——三条路各判一遍就会长出三把尺子。
@@ -11,8 +11,8 @@ checks.py —— 26 条判据的**实现**。行在 `contracts/judges/stage4.py`
 `output_ordinal == from_source_ordinals[0]` 的 `model_validator`，
 模型化之后 `one_to_one` 那条 HARD **根本构造不出会红的样本**。
 
-【本层的两份产物共用这一张表】前 17 条判计划，`ctx_*` 那 4 条判写作上下文，
-3 条度量各报一份读数。**上下文不在场时那 4 条走 `unver` 臂，不是「通过」。**
+【本层的两份产物共用这一张表】前 17 条判计划，`ctx_*` 那 5 条判写作上下文，
+3 条度量各报一份读数。**上下文不在场时那 5 条走 `unver` 臂，不是「通过」。**
 """
 from __future__ import annotations
 
@@ -21,13 +21,13 @@ from collections import Counter
 from typing import Any
 
 from contracts.invariants import (
-    BEAT_ALERT_MAX, BEAT_ALERT_MIN, BEAT_MIN_CHARS, GROUPING_VERSION, PLAN_BUDGET_BAND,
-    STYLE_WORDS, VERBATIM_BUDGET_FACTOR,
+    BEAT_ALERT_MAX, BEAT_ALERT_MIN, BEAT_MIN_CHARS, GROUPING_VERSION, HINGE_GROUPS,
+    PLAN_BUDGET_BAND, STYLE_WORDS, VERBATIM_BUDGET_FACTOR,
 )
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.report.findings import Outcome, ran, unverifiable
-from novel.stages.stage4.beats import beat_index, group_beats
+from novel.stages.stage4.beats import beat_index, group_beats, verbatim_pieces
 from novel.stages.stage4.measure import IDENTITY_GOAL, chapter_source_chars, verbatim_share_stats
 
 #: 源 beat 编号里的章号。⚠ **别按定宽切片**：`b{ord:02d}_{seq:02d}` 在三位数的章上会溢出宽度。
@@ -445,7 +445,12 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     else:
         out.append(ran('verbatim_share', fs('verbatim_share', (
             '这份计划里一拍带原话的都没有 —— 读数为空。'
-            '⚠ 这**不是**「原话没挤占预算」，是这本书的保真材料里一条要害台词都没有',
+            '⚠ 这**不是**「原话没挤占预算」。'
+            '⚠⚠ **也别照着字面读成「这本书一条要害台词都没抽到」**——这条措辞'
+            '曾经就是这么写的，而它把人指向了错的层：真实原因是 `beat_index` → '
+            '`verbatim_pieces` 这一步的形态分了家，stage2 抽得好好的，材料是在中间'
+            '被吃掉的。两种可能先看 `ctx_hinge_delivered` 那一行分清：'
+            '它红 ⇒ 组装这一步的问题；它 `unver` ⇒ 才真是 stage2 一条都没抽到（看 `R-3.6b`）',
             ['n=0'])), scanned=f'{n_beats} 拍'))
 
     # ⚠ **空也要报**：`成年人` 那本没有 `_provenance`，这一行要说出「记了没有」。
@@ -461,20 +466,25 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
         ctx_source or '这一趟没有取写作上下文那一份的来源账',
         ['ctx_provenance'])), scanned='1 份产物'))
 
-    # ── ⑧ writer_context 的四条后置条件 ──────────────────────────────────
+    # ── ⑧ writer_context 的五条后置条件 ──────────────────────────────────
     out.extend(_ctx_checks(ctx, main_text=main_text, bidx=bidx, global_g=global_g))
     return out
 
 
-# ── writer_context 的四条后置条件 ─────────────────────────────────────────
+# ── writer_context 的五条后置条件 ─────────────────────────────────────────
 
-_CTX_RULES = ('ctx_events_verbatim', 'ctx_name_attested', 'ctx_secret_gate', 'ctx_layer_flat')
+_CTX_RULES = ('ctx_events_verbatim', 'ctx_name_attested', 'ctx_secret_gate', 'ctx_layer_flat',
+              'ctx_hinge_delivered')
+
+#: 下发面上那四组保真点的字段名。**从 `HINGE_GROUPS` 的值域派生，不手抄一份**——
+#: 手抄的那一份漏一组，判据的分子就少一块，而它长得跟「材料没下发」一模一样。
+_HINGE_FIELDS = tuple(sorted(set(HINGE_GROUPS.values())))
 
 
 def _ctx_checks(ctx: dict[str, Any] | None, *, main_text: list[dict[str, Any]],
                 bidx: dict[str, dict[str, Any]],
                 global_g: dict[str, Any] | None = None) -> list[Outcome]:
-    """写作上下文那四条。**上下文不在场 ⇒ 四条一起 `unver`，不是「通过」。**"""
+    """写作上下文那五条。**上下文不在场 ⇒ 五条一起 `unver`，不是「通过」。**"""
     if not ctx or not (ctx.get('chapters') or []):
         return [unverifiable(r, _NO_CTX, scanned='0 章') for r in _CTX_RULES]
 
@@ -586,9 +596,51 @@ def _ctx_checks(ctx: dict[str, Any] | None, *, main_text: list[dict[str, Any]],
                  [f'out{oo}#{bi}' for oo, bi, _w in bad_lay])] if bad_lay else []
 
     n_beats = sum(len(c.get('segments') or []) for c in chapters)
+
+    # ⑤ stage2 抽到的保真点，**条条都要真的出现在下发面上**
+    #
+    # ⚠⚠ **这条判据是拿一次真事故换来的，别把它当冗余删掉。** `R-3.3` 原本只配了
+    #   `结构` 级守卫（"守在下发那一刻"，指的就是 `verbatim_pieces` 自己），
+    #   `R-3.6b` 那条 HARD 守的是 **stage2 产物侧**。中间 `beat_index` 有过一层
+    #   `{'kind','text'}` 的归一，一次「清理遗留兼容」把读它的那条分支删了之后，
+    #   下发面**整整五本书 898 条 hinge 一条不剩地变成空**——
+    #   而两条守卫一个在上游看产物（齐的）、一个在下游看函数（还在），谁都没出声，
+    #   stage5 那三条 HARD 又因为分母同时归零而报绿。
+    #   ⇒ 缺的从来不是"更严的判据"，是**一条横跨这一步、比两边条数**的后置条件。
+    #
+    # 【比条数不比文字】组装的最后一步 `rename_all` 会对整棵树做确定性改名
+    #   （见上面 ① 的注释），文字会变、条数不会。比文字必然误报。
+    # 【分母走 `verbatim_pieces` 这个生产落点】不在这里重拼一份拆分逻辑：
+    #   未知 kind 的丢弃、跨段落按 `\n\n` 拆点，两边必须是同一套，否则差额算的是
+    #   "两份实现不一样"，不是"材料丢了"。
+    want, _unk = verbatim_pieces([h for v in bidx.values() for h in (v.get('hinges') or [])])
+    n_want = sum(len(v) for v in want.values())
+    n_got = sum(len(seg.get(g) or [])
+                for c in chapters for seg in (c.get('segments') or []) for g in _HINGE_FIELDS)
+    if not n_want:
+        # 分母为零 ⇒ **「没东西可查」，不是「查过、干净」**（判据 4 的三态）。
+        # 真到了这一步，根因在 stage2：`R-3.6b` 那条 HARD 会在上一层红。
+        hinge_out: Outcome = unverifiable(
+            'ctx_hinge_delivered',
+            'stage2 这一本一条带原文字节的保真材料都没有 ⇒ 这条判据没有分母。'
+            '**不是「下发干净」**：闭卷写手拿原文的唯一通道本来就是空的。'
+            '根因在上一层，看 `R-3.6b`',
+            scanned='0 条保真材料')
+    else:
+        hinge_out = ran('ctx_hinge_delivered', fs('ctx_hinge_delivered', (
+            [(f'stage2 抽到 {n_want} 个保真点，下发面上只有 {n_got} 个'
+              f'（{"一个都没有" if not n_got else f"少了 {n_want - n_got} 个"}）。'
+              f'**闭卷写手拿原文的唯一通道就是这些点**，少一个就是少一份'
+              f'"改一个字就废"的材料，而 `event` 摘要不承载它们。'
+              f'先跑 `stage4.context` 重建一份；重建后仍对不上，'
+              f'是 `beat_index` → `verbatim_pieces` 这一步的形态又分家了',
+              [f'want={n_want}', f'got={n_got}'])]
+            if n_got != n_want else [])), scanned=f'{n_want} 个保真点')
+
     return [
         ev_out,
         ran('ctx_name_attested', fs('ctx_name_attested', nm_rows), scanned=f'{n_nm} 处人名'),
         ran('ctx_secret_gate', fs('ctx_secret_gate', sec_rows), scanned=f'{n_sec} 条下发的秘密'),
         ran('ctx_layer_flat', fs('ctx_layer_flat', lay_rows), scanned=f'{n_beats} 拍'),
+        hinge_out,
     ]

@@ -233,6 +233,40 @@ def test_verbatim_chars_counts_only_the_verbatim_group():
     assert verbatim_chars(hs) == len('你别走。')
 
 
+def test_beat_index_hands_verbatim_pieces_a_form_it_can_actually_read():
+    """⭐⭐ **这条缝断过一次，整整一批书的闭卷写手手里一个原文字节都没有。**
+
+    上面那三条测的是 `verbatim_pieces` **自己**的逻辑，而它们各自现造一份 hinge 喂进去
+    ——于是「`beat_index` 产出的形态，`verbatim_pieces` 到底读不读得懂」这件事
+    **一条测试都没查**。真实经过：
+      · `beat_index` 曾把 hinge 归一成 `{'kind','text'}`（那一版 stage2 的 hinge 就长这样，
+        当时是恒等的）；
+      · stage2 换成 `{'kind','source'}` 后，`_hinge_text` 加了双分支同时读两种形态；
+      · 一次「清理遗留兼容」把读 `text` 的分支删了——**而那个键名恰好与已废弃的旧契约同名**
+        ⇒ 归一形态从此读不出字节，`verbatim_pieces` 恒返回空。
+    盘上五本书 898 条 hinge 一条没下发，stage2 的判据看产物（齐的）、
+    stage4 的 `结构` 级守卫看函数（还在），stage5 三条 HARD 分母归零报绿，全链无人出声。
+
+    ⇒ 本条**必须走 `beat_index` 这个生产落点**，不许自己拼一份 hinge：
+      守卫重拼一份，守的就是它自己那一份，不是生产真正走的那扇门。
+    """
+    bps = {'blueprints': [{'chapter_ordinal': 1, 'beats': [{
+        'beat_id': 'b01_01', 'event': '事件一', 'time_layer': 'present',
+        'hinges': [_hinge('要害台词', '你别走。'), _hinge('硬数字', '二十两银子')]}]}]}
+    bidx = beat_index(bps, [{'chapter_ordinal': 1, 'text': '你别走。二十两银子。'}])
+    hinges = [h for v in bidx.values() for h in (v['hinges'] or [])]
+    assert hinges, '`beat_index` 把 hinge 整个丢了'
+
+    out, unknown = verbatim_pieces(hinges)
+    assert not unknown
+    assert out.get('verbatim') == ['你别走。'], (
+        f'`beat_index` 产出的形态 `verbatim_pieces` 读不出来（拿到 {out!r}）——'
+        f'两边的 hinge 形态又分家了。**别在 `_hinge_text` 里加第二条读法把它兼容过去**，'
+        f'那正是上一次被当成「遗留兼容」删掉的东西；改成两边都用 stage2 产物形态')
+    assert out.get('keep_value') == ['二十两银子']
+    assert verbatim_chars(hinges) == len('你别走。'), '不可压缩量算成 0 ⇒ 规划器看不到原话占位'
+
+
 # ── 五、量纲与分布 ────────────────────────────────────────────────────────
 
 @needs_corpus

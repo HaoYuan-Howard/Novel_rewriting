@@ -19,6 +19,18 @@ _PARA_SPLIT = re.compile(r'\n\s*\n')
 
 
 def _hinge_text(hinge: dict[str, Any]) -> str:
+    """一条 hinge 的原文字节。**入参恒是 stage2 产物形态的 hinge**（`{kind, source}`）。
+
+    ⚠⚠ **这里只认 `source`，而这是本模块唯一允许的 hinge 形态**——别再加
+    `else hinge.get('text')` 那样的第二条读法。真实发生过的事：
+    `beat_index` 曾把 hinge 归一成 `{'kind','text'}` 再交给 `verbatim_pieces`，
+    于是本函数需要双分支才能同时读两种形态；而那个 `text` 键**与已废弃的旧 stage2
+    契约（hinge 直接带顶层 `text`）长得一模一样**，一次「清理遗留兼容」的重构就把它
+    连带删掉了——归一形态从此读不出字节，`verbatim_pieces` 恒返回空，
+    **闭卷写手拿原文的唯一通道整整断了一批书**（盘上 5 本共 898 条 hinge 下发 0 条），
+    而上下游判据的分母同时归零，一路报绿。
+    ⇒ 根治办法不是把那条分支加回来，是**不再造第二种形态**（见 `beat_index`）。
+    """
     source = hinge.get('source')
     return str(source.get('text') if isinstance(source, dict) else '')
 
@@ -31,6 +43,14 @@ def beat_index(blueprints: dict[str, Any],
       算不出给 `None`，**绝不退回估算**——估算的方向会整个反过来。
     · `hinges` 是 stage2 落盘时**已回取成原文字节**的片段，
       所以这里搬运的一定是原文，不是模型打出来的串。
+      ⚠⚠ **原样搬运，不许在这里重建成别的形状**（只按「有没有原文字节」过滤）。
+      曾经这里归一成 `{'kind','text'}`，理由是「写作侧只要这两样」——它当时确实是
+      恒等的（那一版 stage2 的 hinge 就长这样）。后来 stage2 换成 `{'kind','source'}`，
+      这个中间形态就成了**第三种形态**，且它的 `text` 键与已废弃的旧契约同名；
+      一次「清理遗留兼容」把 `_hinge_text` 里读 `text` 的那条分支删掉，
+      下发通道当场断掉且无人出声（详见 `_hinge_text` 的注释）。
+      ⇒ 形态只留两种：**stage2 产物形态**（本函数搬运的）与**下发的点**
+      （`verbatim_pieces` 的产出）。中间不再有第三种。
     · 另外三样是「写手落笔时必须知道、而 `event` 文字本身不承载」的：
       一段转述若不标出来会被写成当场发生的戏；地点与在场者同理，闭卷时无从推断。
     """
@@ -47,8 +67,7 @@ def beat_index(blueprints: dict[str, Any],
                 # 【写手要写的内容本身也走引用】不再由规划器转述一遍，见 `context._resolve_beats`
                 'event': be.get('event'),
                 'source_chars': size.get(be.get('beat_id')),
-                'hinges': [{'kind': h.get('kind'), 'text': _hinge_text(h)}
-                           for h in (be.get('hinges') or []) if _hinge_text(h).strip()],
+                'hinges': [h for h in (be.get('hinges') or []) if _hinge_text(h).strip()],
                 'time_layer': be.get('time_layer'),
                 'place': be.get('place'),
                 'present_char_ids': be.get('present_char_ids') or [],

@@ -177,11 +177,11 @@ raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 
 ## 六、现行判据
 
-当前注册表共 **26 条**：**17 hard、5 info、4 metric**。计划和写作上下文共用同一张表。
+当前注册表共 **27 条**：**18 hard、5 info、4 metric**。计划和写作上下文共用同一张表。
 
 | 严重度 | 当前规则 id |
 |---|---|
-| hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `structure_changed` · `structure_units` · `structure_transition` · `goal_landing` · `budget_int` · `budget_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` |
+| hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `structure_changed` · `structure_units` · `structure_transition` · `goal_landing` · `budget_int` · `budget_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` · `ctx_hinge_delivered` |
 | info | `flat_chapter` · `beat_size` · `beat_reuse` · `verbatim_starved` · `params_drift` |
 | metric | `verbatim_share` · `plan_params` · `ctx_source` · `structure_distance` |
 

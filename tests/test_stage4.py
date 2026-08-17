@@ -56,8 +56,8 @@ def test_rebuilding_the_context_then_checking_gives_a_green_badge(book):
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
 
         want = {r.rule for r in REGISTRY.of_stage('stage4')}
-        assert {ln.rule for ln in rep.rules} == want, '26 条判据一行不少'
-        assert len(rep.rules) == 26
+        assert {ln.rule for ln in rep.rules} == want, '27 条判据一行不少'
+        assert len(rep.rules) == 27
         assert not [ln.rule for ln in rep.rules if ln.status == 'skipped'], \
             '有判据注册了却没有任何代码执行过它'
         assert not [ln.rule for ln in rep.rules if ln.sev == 'hard' and ln.status == 'hit'], \
@@ -542,7 +542,7 @@ def test_check_only_reads_the_blocked_draft_when_no_formal_plan_exists():
 
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
         assert rep.provenance.invalid is True, '报告必须自报判的是 .INVALID 稿'
-        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 26
+        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 27
         assert all(ln.status != 'skipped' for ln in rep.rules), \
             '判据要真的跑在问题稿上，不能整排落成「没跑成」'
     finally:
@@ -564,7 +564,7 @@ def test_check_only_still_refuses_when_neither_draft_is_on_disk():
 
 @needs_corpus
 def test_the_registered_rules_all_produce_a_row_on_a_real_book():
-    """⭐ 照抄 `tests/test_stage3.py` 的形态：**26 条一行不少 + 0 条 `skipped`**。
+    """⭐ 照抄 `tests/test_stage3.py` 的形态：**27 条一行不少 + 0 条 `skipped`**。
 
     `build()` 遍历判据注册表而不是遍历 findings ⇒ 一条判据不可能因为
     「实现忘了调」而从报告里消失，它会变成 `skipped`。本条盯的就是那个 0。
@@ -573,7 +573,7 @@ def test_the_registered_rules_all_produce_a_row_on_a_real_book():
     box = sandbox.Sandbox(book, STAGE4_INPUTS)
     try:
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
-        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 26
+        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 27
         assert all(ln.status != 'skipped' for ln in rep.rules)
         assert all(ln.scanned for ln in rep.rules), '绿灯必须报出自己的分母（判据 31）'
     finally:

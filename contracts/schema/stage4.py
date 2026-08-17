@@ -378,7 +378,17 @@ class CtxBeat(StrictModel):
 
     segments: list[BeatSegment] | None = None
 
-    #: 原文原话，**逐字写入**。盘上 137/197 拍，共 177 条，单条 3~65 字。
+    #: 原文原话，**逐字写入**。旧语料上 137/197 拍、共 177 条、单条 3~65 字（那批语料已删）；
+    #: 现语料五本合计 554 条（另 keep_value 139 · must_hold 140 · must_appear 88，共 921 个点）。
+    #:
+    #: ⚠⚠ **这四个字段一起为空过整整一批书，而当时没有任何judge出声。**
+    #:   `beat_index` 曾把 hinge 归一成 `{'kind','text'}` 再交给 `verbatim_pieces`，
+    #:   而那个 `text` 键与已废弃的旧 stage2 契约同名，一次「清理遗留兼容」把读它的分支
+    #:   删掉之后，这四个字段在盘上 328 个 segment 里**全部为空**——
+    #:   上游 `R-3.6b` 看 stage2 产物（hinge 齐的）、下游 `R-3.3` 看函数（还在），
+    #:   stage5 那三条 HARD 又因分母同时归零而报绿。
+    #:   ⇒ 现在由 `ctx_hinge_delivered`（stage4）比两边条数守着。
+    #:   **读这四个字段的盘上数字时，先确认那一行是绿的**——否则你看到的空不是"这本书没有"。
     verbatim: list[str] | None = None
 
     #: 硬数字，**值必须保住、措辞可动**（下发「30岁」、成稿「三十岁」= 满足）。

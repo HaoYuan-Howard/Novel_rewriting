@@ -483,16 +483,39 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
     # ⚠⚠ **`secret_leak` 报绿灯时同一行必须打盲区计数**：实测 21 条 secret 里 19 条的字面
     #   探针**连它自己的揭示章都命中不了** ⇒「0 命中」这句话的信息量接近 0，而它是 7 条
     #   HARD 之一。⇒ 盲区 100% 时落 `unver` **而不是沉默**。不降级 sev。
-    blind = None
+    blind: dict[str, str] = {}
     if book is not None and book.secrets:
         n_blind = sum(1 for f in rev.book if f.rule == 'secret_timeline'
                       and '连揭示章自己都没命中' in f.detail)
         scanned['secret_leak'] = (f'{len(book.secrets)} 条 secret，'
                                   f'其中 {n_blind} 条的字面探针零判别力')
         if n_blind == len(book.secrets):
-            blind = (f'这本书 {len(book.secrets)} 条 secret 的字面探针**全部**连它自己的'
-                     f'揭示章都命中不了 ⇒ 本条这一次没有判别力样本。'
-                     f'「0 命中」在这里不是一个结论；改写式泄底由独立的书级语义层判定')
+            blind['secret_leak'] = (
+                f'这本书 {len(book.secrets)} 条 secret 的字面探针**全部**连它自己的'
+                f'揭示章都命中不了 ⇒ 本条这一次没有判别力样本。'
+                f'「0 命中」在这里不是一个结论；改写式泄底由独立的书级语义层判定')
+
+    # ⚠⚠ **保真那三条的分母是「下发了多少条材料」，不是「命中了几章」。**
+    #   `baselines` 记的是后者，而两者在报告上长得一模一样：一条材料都没下发时，
+    #   「0/31 章命中」读起来就是「31 章全守住了」。
+    #   真发生过：`beat_index` → `verbatim_pieces` 的形态断过一版，五本书下发面全空，
+    #   这三条 HARD 一路报绿，**而闭卷写手手里一个原文字节都没有**。
+    #   ⇒ 分母无条件打出来；分母为零时落 `unver`（「没东西可查」≠「查过、干净」）。
+    #   根因判据在上一层：`stage4` 的 `ctx_hinge_delivered`。
+    for rule_, field_, what_ in (('verbatim_missing', 'verbatim', '句【原样写入】'),
+                                 ('keep_value_missing', 'keep_value', '处【数值不得改动】'),
+                                 ('must_appear_missing', 'must_appear', '个【必须在场】')):
+        n_mat = sum(len(seg.get(field_) or [])
+                    for c in ((book.ctx.get('chapters') if book else None) or [])
+                    for seg in (c.get('segments') or []))
+        scanned[rule_] = f'{n_mat} {what_}的材料（{scanned.get(rule_, "?")}）'
+        if not n_mat:
+            blind[rule_] = (
+                f'这本书的下发面上一条{what_}的材料都没有 ⇒ 本条没有分母。'
+                f'**这不是「守住了」**：闭卷写手拿原文的唯一通道就是这四组点，'
+                f'空的意味着它这一章什么原文都没拿到。先看 `stage4` 的 '
+                f'`ctx_hinge_delivered` 那一行——那里说得出是 stage2 没抽到，'
+                f'还是组装这一步把材料吃掉了')
     return checks.check(
         chapter_findings_by_rule=by_rule, scanned=scanned,
         unver_empty={
@@ -503,7 +526,7 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
             'must_hold_unver': '这本书没有【必须成立】那一组材料',
             'event_landing_unver': '每一拍都提得出可回查的原子',
         },
-        secret_blind=blind)
+        blind=blind)
 
 
 def _aggregate_band_drift(
