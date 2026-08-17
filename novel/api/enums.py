@@ -37,7 +37,13 @@ from typing import Any
 from contracts import invariants as inv
 from contracts.invariants import FREE_ENTRIES, NODES, VALUED_FLAGS
 from novel.errors import ValueDomainRefused
-from novel.orchestrator.nodes import is_paid, step_label, would_write, write_effect
+from novel.orchestrator.nodes import (
+    is_paid,
+    missing_required,
+    step_label,
+    would_write,
+    write_effect,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、三张登记表
@@ -272,11 +278,31 @@ def actions() -> list[dict[str, Any]]:
     ⚠ `extra` 里的带值 flag **不带值**（`--apply-edit` 而不是 `--apply-edit <路径>`）：
     那个值是人在点下去的那一刻才给的。`needs_value` 就是用来说这件事的。
     """
+    # These flags are audit credentials/locks, never a runnable operation by
+    # themselves.  They remain in ``job_kinds[].flags`` and are exposed on the
+    # operation that requires them through ``required_inputs`` below.
+    credential_flags = {'--actor', '--reason', '--subject-sha256'}
+
+    def required_inputs(node: str, flags: Sequence[str]) -> list[dict[str, str]]:
+        """Missing values the caller must collect before *execution*.
+
+        This is deliberately derived from the same ``missing_required`` helper
+        used by ``validate_run`` and preview placeholders.  Publishing the
+        descriptors on each concrete action does not give the browser a second
+        required-flag table: it only tells the action renderer which human
+        inputs to collect; the server remains authoritative at submit time.
+        """
+        return [
+            {'flag': flag, 'description': VALUED_FLAGS[flag]}
+            for flag in missing_required(node, flags)
+        ]
+
     out: list[dict[str, Any]] = []
     for node, spec in NODES.items():
         for mode in (spec.modes or (None,)):
             independent = [f for f in spec.flags
-                           if f not in {'--deep', '--shallow-rest'}]
+                           if f not in {'--deep', '--shallow-rest'}
+                           and f not in credential_flags]
             for flags in [()] + [(f,) for f in independent]:
                 out.append({
                     'kind': node,
@@ -290,6 +316,7 @@ def actions() -> list[dict[str, Any]]:
                     'writes_disk': would_write(node, flags),
                     'needs_value': next((VALUED_FLAGS[f] for f in flags
                                          if f in VALUED_FLAGS), None),
+                    'required_inputs': required_inputs(node, flags),
                 })
     composite = ('--deep', '1', '--shallow-rest')
     out.append({
@@ -302,6 +329,7 @@ def actions() -> list[dict[str, Any]]:
         'writes': write_effect('stage5.write', composite),
         'writes_disk': would_write('stage5.write', composite),
         'needs_value': VALUED_FLAGS['--deep'],
+        'required_inputs': required_inputs('stage5.write', composite),
     })
     return out
 

@@ -47,13 +47,13 @@ const KIND_META: Record<
   },
   human_only: { title: '真正需要人工修复', meaning: '没有机器修复路由，或人裁决不改', ...SEV.info },
   verification: {
-    title: 'Stage2 逐项复核未闭合',
-    meaning: 'pending / FAIL / UNVER 都回到全局设定屏补决定与证据',
+    title: '人工复核未闭合',
+    meaning: 'Stage2 / Stage5 / Stage6 的 pending、FAIL 或 UNVER 回到所属阶段补决定与证据',
     ...SEV.unver,
   },
   upstream: { title: '阻断级，重写修不掉', meaning: '根因在上游', ...SEV.hard },
   approval: {
-    title: '两个「人定稿」闸门',
+    title: '「人定稿」闸门',
     meaning: '按设计就该人做的一步，不是故障',
     color: GATE.ok.chipColor,
     bg: GATE.ok.chipBg,

@@ -221,7 +221,9 @@
   "invalid": 0,
   "rejected": 0,
   "stalled": 0,
+  "repairable": 0,
   "human_only": 27,
+  "verification": 0,
   "upstream": 0,
   "approval": 0
  },

@@ -115,6 +115,16 @@ export interface JobPreview {
 }
 
 /**
+ * A human-supplied value required by one concrete server action.
+ * The list is derived by the backend from NodeSpec; the browser only renders
+ * the fields and sends their values back.
+ */
+export interface RequiredActionInput {
+  flag: string
+  description: string
+}
+
+/**
  * 发起一个作业需要的参数。
  * 注意这里**没有** `paid` —— 花不花钱由服务端在 preview 里回答，
  * 调用方不许自带一个 paid 过来（那就等于前端自己判定了）。
@@ -131,6 +141,11 @@ export interface JobRequest {
   extra: string[] | null
   /** 运行期参数：--chapters 3 / --deep 1,2,3 这类。只进命令行，不参与查表。 */
   args?: string[]
+  /**
+   * 由 /api/enums 随具体动作下发的人工必填项。它只驱动确认框收值；
+   * preview 不带这些值以取得待填模板，真正 start 才把实值并入 args。
+   */
+  required_inputs?: RequiredActionInput[]
   sid: string
   ordinal?: number | null
 }

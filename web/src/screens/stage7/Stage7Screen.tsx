@@ -33,6 +33,8 @@ export function Stage7Screen() {
   const ordinal = o ? Number(o) : null
   const { hasSample, defaultOrdinal } = useSampleCoverage()
   const [bookOpen, setBookOpen] = useState(false)
+  const [actor, setActor] = useState('')
+  const [reason, setReason] = useState('')
 
   const q = useQuery({ queryKey: qk.stage7(sid), queryFn: () => api.getStage7(sid), retry: false })
   const chQ = useQuery({
@@ -60,7 +62,8 @@ export function Stage7Screen() {
   })
 
   const approve = useMutation({
-    mutationFn: () => api.approveNames(sid),
+    mutationFn: (req: { actor: string; reason: string; subject_sha256: string }) =>
+      api.approveNames(sid, req),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
       void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage7') })
@@ -69,16 +72,46 @@ export function Stage7Screen() {
     },
   })
 
-  const askApprove = () =>
+  const adoptResidual = useMutation({
+    mutationFn: () => api.adoptResidual(sid, { confidence: 'high' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
+      void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage7') })
+      void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
+      void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
+    },
+  })
+
+  const askApprove = (subjectSha256: string) =>
     askConfirm({
       req: {
         kind: 'stage7.approve',
-        label: '人名表定稿（终态，无参）',
-        extra: null,
+        label: '人名表定稿（绑定当前 decision surface）',
+        extra: [
+          '--actor', actor.trim(),
+          '--reason', reason.trim(),
+          '--subject-sha256', subjectSha256,
+        ],
         sid,
         ordinal: null,
       },
-      run: () => approve.mutateAsync(),
+      run: () => approve.mutateAsync({
+        actor: actor.trim(),
+        reason: reason.trim(),
+        subject_sha256: subjectSha256,
+      }),
+    })
+
+  const askAdoptResidual = () =>
+    askConfirm({
+      req: {
+        kind: 'stage7.rename',
+        label: '采纳可安全应用的 high 漏网叫法候选',
+        extra: ['--adopt-residual', 'high'],
+        sid,
+        ordinal: null,
+      },
+      run: () => adoptResidual.mutateAsync(),
     })
 
   return (
@@ -110,12 +143,44 @@ export function Stage7Screen() {
                   </span>
                   <ActionButton
                     action={{ kind: 'stage7.approve', extra: null, paid: false }}
-                    onClick={askApprove}
+                    onClick={() => askApprove(d.approval_subject_sha256)}
+                    disabled={!actor.trim() || !reason.trim()}
+                    disabledReason="请先填写自报身份与定稿理由"
                   >
                     {d.approved ? '重新定稿' : '定稿人物表'}
                   </ActionButton>
                 </div>
               </header>
+
+              <div className="grid gap-10 rounded-card border border-line bg-sunken-2 p-14 md:grid-cols-2">
+                <label className="flex flex-col gap-5 text-tag text-ink-3">
+                  自报身份（不是认证身份）
+                  <input
+                    value={actor}
+                    onChange={(event) => setActor(event.target.value)}
+                    className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
+                    placeholder="例：editor-a"
+                  />
+                </label>
+                <label className="flex flex-col gap-5 text-tag text-ink-3">
+                  定稿理由
+                  <input
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                    className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
+                    placeholder="说明逐项核对人物表与残留候选的依据"
+                  />
+                </label>
+                <div className="prose-cn text-tag text-ink-4 md:col-span-2">
+                  定稿绑定当前姓氏映射、角色决定与人工补充替换的 SHA-256；表面变化后旧审批自动失效。
+                </div>
+                {d.approved ? (
+                  <div className="prose-cn text-tag text-ink-3 md:col-span-2">
+                    当前审批：{d.approved.actor} · {d.approved.reason} · subject{' '}
+                    <Mono className="text-micro">{d.approved.subject_sha256.slice(0, 16)}…</Mono>
+                  </div>
+                ) : null}
+              </div>
 
               <div className="prose-cn text-tag text-ink-4">
                 正文只读——改正文回成稿屏。人物表编辑走 CLI（stage7.rename --apply-edit）。
@@ -127,9 +192,25 @@ export function Stage7Screen() {
                   title="漏网叫法候选"
                   meta={d.residual.length + ' 条'}
                   right={
-                    <span className="prose-cn text-tag text-ink-4">
-                      这是全链唯一能发现「人物表本身漏了人」的通道——按置信度从上往下看
-                    </span>
+                    <div className="flex items-center gap-10">
+                      <span className="prose-cn text-tag text-ink-4">
+                        这是全链唯一能发现「人物表本身漏了人」的通道——按置信度从上往下看
+                      </span>
+                      <ActionButton
+                        action={{
+                          kind: 'stage7.rename',
+                          extra: ['--adopt-residual', 'high'],
+                          paid: false,
+                        }}
+                        size="sm"
+                        onClick={askAdoptResidual}
+                        disabled={!d.residual.some((item) =>
+                          item.confidence === 'high' && !!item.unit && !!item.suggest)}
+                        disabledReason="当前没有可提交给后端复核的 high 建议"
+                      >
+                        采纳安全 high 候选
+                      </ActionButton>
+                    </div>
                   }
                 />
                 {d.residual.length ? (

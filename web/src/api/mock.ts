@@ -414,6 +414,29 @@ function argvOf(req: JobRequest): string {
   return parts.join(' ')
 }
 
+function previewRequest(req: JobRequest): JobRequest {
+  const action = lookupAction(enums(), req)
+  const inputs = req.required_inputs ?? action?.required_inputs ?? []
+  const present = [...(req.extra ?? []), ...(req.args ?? [])]
+  const placeholders = inputs
+    .filter((input) => !present.includes(input.flag))
+    .flatMap((input) => [input.flag, '待填·' + input.flag.replace(/^--/, '')])
+  return placeholders.length
+    ? { ...req, args: [...(req.args ?? []), ...placeholders] }
+    : req
+}
+
+function mockJobPreview(req: JobRequest): JobPreview {
+  const planned = previewRequest(req)
+  return {
+    argv: argvOf(planned),
+    paid: paidOf(req),
+    label: req.label,
+    kind: req.kind,
+    steps: previewStepsOf(planned),
+  }
+}
+
 function previewStepsOf(req: JobRequest): JobPreview['steps'] {
   const first = {
     label: req.label,
@@ -1075,15 +1098,24 @@ export const mockApi: Api = {
     }),
 
   getStage7: (sid) =>
-    bookOnly(sid, `/novels/${sid}/stage7`, () => ({
-      ...fx<Stage7Response>('stage7.json'),
-      // 冻结抓包记录的是“账在、txt 不在”的历史故障；假服务端把专用文本端点
-      // 也做成可达，开发时才能走通预览 / 下载这条新增 UX。
-      book_txt_on_disk: true,
-    })),
+    bookOnly(sid, `/novels/${sid}/stage7`, () => {
+      const base = fx<Stage7Response>('stage7.json')
+      const approved = lsRead<NonNullable<Stage7Response['approved']>>('names.' + sid)
+      return {
+        ...base,
+        approved: approved ?? base.approved,
+        // 冻结抓包记录的是“账在、txt 不在”的历史故障；假服务端把专用文本端点
+        // 也做成可达，开发时才能走通预览 / 下载这条新增 UX。
+        book_txt_on_disk: true,
+      }
+    }),
 
   getStage7Chapter: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/stage7/${o}`, () => fx<Stage7Response>('stage7_ch3.json')),
+    chapterOnly(sid, o, `/novels/${sid}/stage7/${o}`, () => {
+      const base = fx<Stage7Response>('stage7_ch3.json')
+      const approved = lsRead<NonNullable<Stage7Response['approved']>>('names.' + sid)
+      return { ...base, approved: approved ?? base.approved }
+    }),
 
   getStage7Book: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage7/book.txt`, () =>
@@ -1155,14 +1187,7 @@ export const mockApi: Api = {
     }
   },
 
-  previewJob: (req) =>
-    later<JobPreview>({
-      argv: argvOf(req),
-      paid: paidOf(req),
-      label: req.label,
-      kind: req.kind,
-      steps: previewStepsOf(req),
-    }),
+  previewJob: (req) => later(mockJobPreview(req)),
 
   startJob: (req) => later(spawn(req)),
 
@@ -1264,16 +1289,28 @@ export const mockApi: Api = {
     }))
   },
 
-  approveNames: (sid) => {
-    lsWrite('names.' + sid, { origin: 'human' })
+  approveNames: (sid, req) => {
+    lsWrite('names.' + sid, { origin: 'human', ...req })
     return later(finish({
       kind: 'stage7.approve',
       label: '人名表定稿',
-      extra: null,
+      extra: [
+        '--actor', req.actor,
+        '--reason', req.reason,
+        '--subject-sha256', req.subject_sha256,
+      ],
       sid,
       ordinal: null,
     }))
   },
+
+  adoptResidual: (sid, req) => later(finish({
+    kind: 'stage7.rename',
+    label: '采纳 high 漏网叫法候选',
+    extra: ['--adopt-residual', req.confidence],
+    sid,
+    ordinal: null,
+  })),
 
   uploadCorpus: (file) => {
     // mock 里只有这一本真书。上传等于把它重置回第 0 步。

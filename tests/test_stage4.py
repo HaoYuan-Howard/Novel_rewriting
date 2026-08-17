@@ -26,11 +26,10 @@ def books() -> list[str]:
                    if a.rel == 'stage4/writer_context.json'})
 
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        not books(), reason='盘上没有 stage4 产物 —— 本文件整份**没在查**，不是「查过没事」'),
-]
+def needs_corpus(test):
+    test = pytest.mark.corpus(test)
+    return pytest.mark.skipif(
+        not books(), reason='盘上没有 stage4 语料——这条集成用例没在查')(test)
 
 
 def _ctx_for(box: sandbox.Sandbox, node: str, *, paid: bool = False) -> RunContext:
@@ -39,6 +38,7 @@ def _ctx_for(box: sandbox.Sandbox, node: str, *, paid: bool = False) -> RunConte
 
 # ── ⭐ 一、盘上三本：先重建上下文，再复检 ────────────────────────────────
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', books())
 def test_rebuilding_the_context_then_checking_gives_a_green_badge(book):
     """⭐⭐ **stage4 是第一个徽章能真的是 `pass` 的已移植层。**
@@ -68,6 +68,7 @@ def test_rebuilding_the_context_then_checking_gives_a_green_badge(book):
         box.close()
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', books())
 def test_the_rebuilt_context_lands_on_disk_and_carries_the_plan_edge(book):
     """⭐ **`stage4/plan_chapters.json` 这条边是全仓唯一一处「自己这一层的产物记成上游」**。
@@ -90,6 +91,7 @@ def test_the_rebuilt_context_lands_on_disk_and_carries_the_plan_edge(book):
         box.close()
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', books())
 def test_the_context_is_fresh_even_when_the_paid_node_rebuilds_it_in_the_same_batch(book):
     """⭐⭐ **付费那一趟顺手重建的上下文，必须当场就是 `fresh`。**
@@ -134,6 +136,112 @@ def test_system_prompt_contains_every_current_style_word():
     assert all(f'「{word}」' in prompts.PLAN_SYS for word in STYLE_WORDS)
 
 
+def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
+    """A legal response must be constructible from the current prompt ID spaces.
+
+    This is stronger than checking ``needs_id_spaces ⊆ provides_id_spaces``:
+    it builds a schema-valid model response, expands ``plan_beats`` through the
+    production join, validates all typed fact refs, and runs the complete judge.
+    """
+    from contracts.schema.stage4 import PlanResponse
+    from novel.stages.stage4 import checks
+    from novel.stages.stage4.beats import beat_index, group_beats
+    from novel.stages.stage4.fact_refs import catalog, validate_plan_refs
+    from novel.stages.stage4.measure import expand_plan_beats
+    from tests.test_stage2 import blueprints, global_grounding, main_text
+
+    body = main_text()
+    bps = blueprints()
+    global_g = global_grounding()
+    bidx = beat_index(bps, body)
+    groups = group_beats(bps, body, bidx)
+    refs = catalog(global_g, bps, body, plan_units=groups)
+    skeleton = prompts.project_blueprints_for_planner(bps, groups)
+    surface_units = {
+        row['chapter_ordinal']: [segment['plan_beat'] for segment in row['segments']]
+        for row in skeleton['blueprints']
+    }
+    events_by_unit: dict[str, list[str]] = {}
+    for event_id, unit_id in refs['event_units'].items():
+        events_by_unit.setdefault(unit_id, []).append(event_id)
+
+    chapters = []
+    for ordinal in sorted(surface_units):
+        source_units = surface_units[ordinal]
+        order = ([source_units[-1], *source_units[:-1]]
+                 if len(source_units) >= 4 else source_units)
+        segments = []
+        for output_index, unit_id in enumerate(order):
+            moved = len(source_units) >= 4
+            segments.append({
+                'plan_beats': [unit_id],
+                'budget_chars': 100,
+                'narrative_role': ('cold_open' if moved and output_index == 0
+                                   else 'setup'),
+                'delivery': 'scene',
+                'transition': ('start' if output_index == 0
+                               else 'earlier' if moved and output_index == 1
+                               else 'continue'),
+            })
+        first_event = sorted(events_by_unit[order[0]])[0]
+        last_event = sorted(events_by_unit[order[-1]])[-1]
+        chapters.append({
+            'output_ordinal': ordinal,
+            'from_source_ordinals': [ordinal],
+            'chapter_goal': {
+                'intent': 'advance',
+                'fact_refs': [{
+                    'kind': 'chapter_boundary',
+                    'ref': f'chapter:{ordinal}',
+                    'chapter': ordinal,
+                }],
+            },
+            'open_hook_goal': {
+                'intent': 'open',
+                'fact_refs': [{
+                    'kind': 'event', 'ref': first_event, 'chapter': ordinal,
+                }],
+            },
+            'end_hook_goal': {
+                'intent': 'close',
+                'fact_refs': [{
+                    'kind': 'event', 'ref': last_event, 'chapter': ordinal,
+                }],
+            },
+            'segments': segments,
+        })
+        assert refs['event_units'][first_event] == order[0]
+        assert refs['event_units'][last_event] == order[-1]
+
+    response = PlanResponse.model_validate({
+        'reconstruction_strategy': '从末尾事件切入，再回到起因并顺序收束。',
+        'output_chapters': chapters,
+    })
+    expanded = response.model_dump(by_alias=True, mode='json')
+    assert expand_plan_beats(expanded, groups) == sum(map(len, groups.values()))
+    validate_plan_refs(expanded, refs)
+    outcomes = checks.check(
+        expanded,
+        blueprints=bps,
+        main_text=body,
+        global_g=global_g,
+        ctx=None,
+        ctx_link=None,
+        ctx_source='合成响应不落盘',
+        bidx=bidx,
+    )
+    by_rule = {outcome.rule: outcome for outcome in outcomes}
+    reference_hard = {
+        spec.rule for spec in REGISTRY.of_stage('stage4')
+        if spec.sev == 'hard' and spec.needs_id_spaces
+    }
+    assert 'goal_landing' in reference_hard
+    assert set(refs['event_units']) == set(refs['events'])
+    hit = {rule for rule in reference_hard if by_rule[rule].findings}
+    assert hit == set(), f'合法引用响应仍命中 HARD：{sorted(hit)}'
+
+
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', books())
 def test_dry_run_builds_the_same_user_message_the_paid_path_would_send(book):
     """`--dry-run` 与真跑**共用同一个构造入口**（`R-11.8`）——
@@ -169,6 +277,7 @@ def test_dry_run_builds_the_same_user_message_the_paid_path_would_send(book):
         box.close()
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', books())
 def test_the_planner_can_actually_satisfy_goal_landing_from_what_it_is_given(book):
     """⭐ **一条 HARD 的可满足性，必须由下发面本身保证。**
@@ -254,6 +363,7 @@ def _provenance(ctx: RunContext, up) -> object:
                           params=plan._params(up))
 
 
+@needs_corpus
 def test_a_single_hard_hit_sends_the_whole_plan_to_invalid():
     """⭐ **落盘闸门照 stage3 不照 stage6**：本层一次产**一份** ⇒ 任何一条 hard 就 `.INVALID`。
 
@@ -268,9 +378,11 @@ def test_a_single_hard_hit_sends_the_whole_plan_to_invalid():
         store = plan.ArtifactStore(ctx)
         up = plan._Upstreams(ctx, store)
         before = box.read('stage4/plan_chapters.json')
-        with pytest.raises(GateBlocked, match='style_words'):
+        with pytest.raises(GateBlocked, match='style_words') as blocked:
             plan.write_plan(ctx, store, _synthetic_response(box, poison=True), up,
                             provenance=_provenance(ctx, up))
+        assert ('stage4.plan --revalidate --actor <id> --reason <why>'
+                in str(blocked.value))
         assert (box.dir / 'stage4/plan_chapters.INVALID.json').exists(), '问题稿没存下来'
         assert box.read('stage4/plan_chapters.json') == before, \
             '**正式产物被覆盖了**——先校验后落盘那条就白写了'
@@ -278,6 +390,7 @@ def test_a_single_hard_hit_sends_the_whole_plan_to_invalid():
         box.close()
 
 
+@needs_corpus
 def test_revalidate_promotes_the_fixed_plan_and_rebuilds_the_context():
     """⭐ 0 成本提升路：手改那一行 → `--revalidate` → 提升 **并重建上下文**。
 
@@ -305,7 +418,11 @@ def test_revalidate_promotes_the_fixed_plan_and_rebuilds_the_context():
         goal['rationale'] = (goal['rationale'] or '').replace('，要有张力', '') or None
         inv.write_text(json.dumps(fixed, ensure_ascii=False), encoding='utf-8')
 
-        rep = plan.run_revalidate(_ctx_for(box, 'stage4.plan'))
+        rep = plan.run_revalidate(
+            _ctx_for(box, 'stage4.plan'),
+            actor='stage4-test',
+            reason='remove the injected style-word violation',
+        )
         assert rep.passed and rep.badge == 'pass', f'提升之后该是绿的，实得 {rep.badge}'
         assert not inv.exists(), '.INVALID 提升之后该消失'
         ctx_art = WriterContext.model_validate(box.read('stage4/writer_context.json'))
@@ -318,6 +435,7 @@ def test_revalidate_promotes_the_fixed_plan_and_rebuilds_the_context():
 
 # ── 四、两条 0 成本路 ────────────────────────────────────────────────────
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', books())
 def test_the_identity_baseline_lands_on_disk_as_an_artifact(book):
     """⭐ **恒等基线是一份产物，不是一次 `print`。**
@@ -343,6 +461,7 @@ def test_the_identity_baseline_lands_on_disk_as_an_artifact(book):
         box.close()
 
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', books())
 def test_names_only_reads_the_roster_and_writes_nothing(book):
     """⚠ **它一个字节都不写**，而本表默认按会写算 ⇒ 不登记的方向是**反的**。"""
@@ -365,6 +484,7 @@ def test_names_only_reads_the_roster_and_writes_nothing(book):
         box.close()
 
 
+@needs_corpus
 def test_names_only_returns_a_mapping_for_every_chapter():
     """称呼可能随章变化，因此接口必须保留 `char_id -> 称呼` 映射。"""
     for book in books():
@@ -404,6 +524,7 @@ def test_stage4_has_exactly_two_nodes_and_only_one_of_them_checks():
     assert NODES['stage4.context'].flags == ()
 
 
+@needs_corpus
 def test_the_registered_rules_all_produce_a_row_on_a_real_book():
     """⭐ 照抄 `tests/test_stage3.py` 的形态：**26 条一行不少 + 0 条 `skipped`**。
 

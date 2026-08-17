@@ -83,19 +83,23 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 
 ### FN-007 · 语义泄底可能源于上游揭示章误标
 
-- 状态：`open-gap`
+- 状态：`contract-confirmed`
 - 触发：`semantic_secret_leak` 的证据在该章源文中本来就存在。
-- 判断：若成稿只是保留源章已发生的揭示，根因可能是 stage2 `reader_reveal_events` 标晚，而不是写手跨章泄底。
-- 处置：逐句对照源章，不误改成稿。当前语义结论可能够不到 `--wontfix`，且 stage2 secret 可能没有 0 成本裁决口；无法正式收口时保留残红并披露。
-- 验证：记录源文章号、逐字证据、stage2 标注与 semantic finding 的对应关系。
-- 依据：当前实现缺口登记 `BE-07`；条目消失后必须重新验证并更新本经验。
+- 判断：若成稿只是保留源章已发生的揭示，根因可能是 Stage2 权威
+  `reader_reveal_events` 时线标晚，而不是写手跨章泄底。多次/分步揭示不再被压成单点。
+- 处置：逐句对照源章，不误改成稿。上游标注错误时走 typed `stage2.global --apply-edit`
+  修正 secret 时线，重跑受影响的 Stage5 review/semantic；确认不修时用当前 finding
+  证据键的 `stage5.review --wontfix`留账。
+- 验证：记录源文章号、逐字证据、更正后的 `reader_reveal_events` 与 fresh semantic finding
+  的对应关系；旧主体绑定结论必须过期。
+- 依据：Stage2 secret typed edit、Stage5 权威揭示时线与语义 wontfix 收敛链的现役实现。
 
 ### FN-008 · stage6 首轮只有 INVALID
 
 - 状态：`contract-confirmed`
 - 触发：首次 `stage6.hook` 被落盘闸拦下，盘上只有 `hook.INVALID.json`，随后 `--check-only` 找不到正式 `hook.json`。
 - 判断：check-only 只读正式产物；候选级 finding 仍可直接从活动 INVALID 读取。
-- 处置：按 INVALID 的 `candidates[].findings` 修复。`hook_para_sep` 若来自单段墙文，归一化不能凭空创建段落；在完整句边界重写为多段后走 `--apply-edit`/`--revalidate`。**判据自己会说这一句**（detail 里出现「一整段」「归一化修不掉」即此类），无须再从档位反推。
+- 处置：按 INVALID 的 `candidates[].findings` 修复。`hook_para_sep` 若来自单段墙文，归一化不能凭空创建段落；在完整句边界重写为多段后走 `--apply-edit`，或跑 `stage6.hook --revalidate --actor <id> --reason <why>` 强审计提升。**判据自己会说这一句**（detail 里出现「一整段」「归一化修不掉」即此类），无须再从档位反推。
 - 验证：正式 `hook.json` 落盘，mechanical check 可读且至少一条候选无 HARD；再运行 semantic。
 - 依据：stage6 check-only 与 normalize_hook 的当前行为。
 
@@ -134,4 +138,3 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 处置：核对全部 inputs、code 与实际消费投影。证据完全一致时披露诊断边，不因此重跑付费 plan；存在任何差异时按真实 stale 处理。
 - 验证：下游 check 读取的 context 与当前 plan/global/blueprint 指纹一致。
 - 依据：实跑观察；未被提升为实现契约。
-

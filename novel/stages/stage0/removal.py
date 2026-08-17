@@ -9,7 +9,8 @@
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_MACHINE_SNAPSHOT, STAGE0_MERGE_CANDIDATE,
+    STAGE0_AUDIT_ENTRY, STAGE0_CLEAN_TEXT, STAGE0_MACHINE_SNAPSHOT,
+    STAGE0_MERGE_CANDIDATE,
     STAGE0_REMOVAL_REPORT,
 )
 
@@ -55,6 +56,7 @@ from novel.errors import (
     ByteFormRefused,
     HumanEditProtected,
     PathRefused,
+    ProvenanceRefused,
     SourceConflict,
     SourceDecodeFailed,
     SourcePathRejected,
@@ -255,6 +257,19 @@ def _write(store: ArtifactStore, result: RemovalResult) -> None:
     store.write(REPORT_REL, result.report)
 
 
+def _require_stage0_fresh(store: ArtifactStore) -> None:
+    """Refuse committing an approval against source/clean bytes that already moved."""
+    freshness = store.freshness(REPORT_REL)
+    if freshness.state == 'fresh':
+        return
+    edges = ', '.join(
+        f'{edge.key}:{edge.reason}' for edge in freshness.edges) or freshness.reason
+    raise ProvenanceRefused(
+        'Stage0 approval transition wrote a report that is not current against '
+        f'the source/clean decision surface: {freshness.state}/{freshness.reason} '
+        f'({edges}). The report and its audit entry were rolled back.')
+
+
 _AUTO_APPROVAL_REASON = (
     '首次机器剔除零 removed、零 warning，且 clean 与归一化 source 完全一致'
 )
@@ -386,16 +401,38 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
 
     # 第一次且机器零删除、零告警、clean 与归一化 source 完全相同，才可自动批准。
     # 此时盘上还不存在任何历史轮次/审计链，因此不存在历史漂移可被掩盖。
-    if _auto_approval_eligible(result.report):
+    auto_approved = _auto_approval_eligible(result.report)
+    if auto_approved:
         # dry-run 也返回真实的批准决策/链头形状，但用纯内存 entry，
         # 绝不创建 novel_dir、_audit 或任何正式产物。
-        result = _with_auto_approval(result, ctx=None if dry_run else ctx)
+        result = _with_auto_approval(result, ctx=None)
 
     if dry_run:
         return novel_dir, result, None
 
-    store.write(SNAPSHOT_REL, result.machine_snapshot)
-    _write(store, result)
+    transaction_rels = [SNAPSHOT_REL, CLEAN_REL, REPORT_REL]
+    if auto_approved:
+        transaction_rels.append(STAGE0_AUDIT_ENTRY.format(n=result.report.audit_seq))
+    with store.history_transaction(*transaction_rels):
+        if auto_approved:
+            from novel.stages.stage0.merge import append_audit
+            entry = append_audit(
+                ctx, seq=result.report.audit_seq, previous_sha256=None,
+                action='auto_approve', actor=None, reason=_AUTO_APPROVAL_REASON,
+                before_source_sha1=None, before_clean_sha1=None,
+                after_source_sha1=result.report.source_sha1,
+                after_clean_sha1=result.report.clean_sha1,
+                at=result.report.approved_at,
+            )
+            if (entry.entry_sha256 != result.report.audit_head_sha256
+                    or entry.at != result.report.approved_at):
+                raise ArtifactUnreadable(
+                    'Stage0 first-run auto approval found an orphan audit entry '
+                    'that does not match the in-memory decision')
+        store.write(SNAPSHOT_REL, result.machine_snapshot)
+        _write(store, result)
+        if auto_approved:
+            _require_stage0_fresh(store)
     from novel.stages.stage0.checks import run_check_only
     return novel_dir, result, run_check_only(ctx)
 
@@ -630,25 +667,28 @@ def run_approve(ctx: RunContext, *, actor: str, reason: str,
     from novel.stages.stage0.merge import append_audit, verify_audit_chain
     verify_audit_chain(ctx, seq=old.audit_seq, head=old.audit_head_sha256)
     at = approved_at or datetime.now(timezone.utc).isoformat()
-    entry = append_audit(
-        ctx, seq=old.audit_seq + 1, previous_sha256=old.audit_head_sha256,
-        action='approve', actor=actor.strip(), reason=reason.strip(),
-        before_source_sha1=old.source_sha1, before_clean_sha1=old.clean_sha1,
-        after_source_sha1=old.source_sha1, after_clean_sha1=old.clean_sha1,
-        at=at,
-    )
-    payload = old.model_dump(mode='json')
-    payload.update({
-        'code': ctx.code,
-        'approved': 'approved',
-        'approved_at': at,
-        'approval_origin': 'human',
-        'approved_by': actor.strip(),
-        'audit_seq': entry.seq,
-        'audit_head_sha256': entry.entry_sha256,
-    })
-    report = RemovalReport.model_validate(payload)
-    store.write(REPORT_REL, report)
+    audit_rel = STAGE0_AUDIT_ENTRY.format(n=old.audit_seq + 1)
+    with store.history_transaction(REPORT_REL, audit_rel):
+        entry = append_audit(
+            ctx, seq=old.audit_seq + 1, previous_sha256=old.audit_head_sha256,
+            action='approve', actor=actor.strip(), reason=reason.strip(),
+            before_source_sha1=old.source_sha1, before_clean_sha1=old.clean_sha1,
+            after_source_sha1=old.source_sha1, after_clean_sha1=old.clean_sha1,
+            at=at,
+        )
+        payload = old.model_dump(mode='json')
+        payload.update({
+            'code': ctx.code,
+            'approved': 'approved',
+            'approved_at': at,
+            'approval_origin': 'human',
+            'approved_by': actor.strip(),
+            'audit_seq': entry.seq,
+            'audit_head_sha256': entry.entry_sha256,
+        })
+        report = RemovalReport.model_validate(payload)
+        store.write(REPORT_REL, report)
+        _require_stage0_fresh(store)
     from novel.stages.stage0.checks import run_check_only
     return report, run_check_only(ctx)
 

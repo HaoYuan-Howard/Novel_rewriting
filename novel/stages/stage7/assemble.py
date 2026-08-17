@@ -14,11 +14,11 @@ from __future__ import annotations
 from contracts.invariants import BOOK_BLOCK_SEP, BOOK_CHAPTER_SEP
 from contracts.schema.report import CheckReport
 from contracts.schema.stage7 import BookTxt, NameMap
-from novel.errors import TerminalState, UpstreamMissing
+from novel.errors import ProvenanceRefused, TerminalState, UpstreamMissing
 from novel.run import RunContext
 from novel.stages.stage7.rename import (
     BOOK_TXT, REL, _INVALID, _Upstreams, _hook_drift, _judge, _judged_drift,
-    _report, _sev_of,
+    _report, _sev_of, approval_subject_sha256,
 )
 from novel.stages.stage7.subs import apply_subs, sub_table
 from novel.store import ArtifactStore
@@ -68,6 +68,11 @@ def _require_mapping_current(
         raise TerminalState(
             f'{REL} 当前不是 fresh（{freshness.state}/{freshness.reason}）；'
             '先重建或 --recheck，旧批准不能给过期输入授权')
+    current_subject = approval_subject_sha256(art)
+    if art.approved.subject_sha256 != current_subject:
+        raise TerminalState(
+            '人物映射的人工批准不再绑定当前决策面；'
+            '请刷新人物表并重新运行 stage7.approve')
     hard = sorted({finding.rule for finding in art.book if _sev_of(finding.rule) == 'hard'})
     if hard:
         raise TerminalState(f'人物映射仍有阻断级问题 {hard}，不能组装交付物')
@@ -142,8 +147,6 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     kept = list(art.kept)
     hook_new, _cnt, _claimed = apply_subs(up.hook_text, subs, None, kept)
     text = assemble_txt(hook_new, up.recs, subs, kept)
-    p = store.write_text(BOOK_TXT, text)
-
     from novel import prov
     new = art.model_copy(update={
         'book_txt': BookTxt(sha1=prov.content_sha1(text.encode('utf-8')),
@@ -153,5 +156,12 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
         # ⚠ **`_provenance` 一个字不动**：组装没有改任何 LLM 产的字节，
         #   它只是把已有的映射应用了一遍并把交付物的账记下来。
     })
-    store.write(REL, new)
+    with store.history_transaction(REL, BOOK_TXT):
+        p = store.write_text(BOOK_TXT, text)
+        store.write(REL, new)
+        freshness = store.freshness(BOOK_TXT)
+        if freshness.state != 'fresh':
+            raise ProvenanceRefused(
+                f'{BOOK_TXT} was assembled but cannot prove itself current: '
+                f'{freshness.state}/{freshness.reason}; map and delivery were rolled back')
     return str(p), new, _report(ctx, store, _judge(ctx, store, new, up), new)

@@ -413,6 +413,30 @@ def test_advisory_outcomes_keep_quality_and_evidence_visible(monkeypatch):
     assert len(candidates.findings) == 3
     assert quality.findings and '匿名排序' in quality.findings[0].detail
 
+
+def test_advisory_contradiction_keeps_assertion_evidence_and_reason_visible(monkeypatch):
+    reviews = _all_clean_reviews()
+    reviews[1] = _stored_review('payoff_preview', TEXT_B, contradiction=True)
+    artifact = _semantic_artifact(reviews)
+    artifact.evaluator_fingerprint = EvaluatorFingerprint(
+        dataset_sha256=semantic.ADVISORY_DATASET_SHA256,
+        model='fixture-model', prompt_sha256='1' * 64,
+        schema_sha256='2' * 64, decoder_sha256='3' * 64)
+    for decision in artifact.decisions:
+        decision.verdict = 'UNVER'
+        decision.automated = False
+        decision.profile_id = None
+        decision.reason = '没有已校准 evaluator profile'
+    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (1, artifact))
+    monkeypatch.setattr(semantic, '_historical_fail_subjects',
+                        lambda _store, **_kwargs: set())
+
+    _hard, candidates, _quality = semantic.outcomes(_Store(), _art())
+    row = next(item for item in candidates.findings if '她嫁给了仇人' in item.detail)
+    assert 'UNVER，不自动阻断' in row.detail
+    assert TEXT_B[:6] in row.detail
+    assert '全书人物关系与此相反' in row.detail
+
 def test_picking_duplicate_text_does_not_stale_sha_bound_review(monkeypatch):
     artifact = _semantic_artifact(_all_clean_reviews())
     _install(monkeypatch, artifact)
@@ -517,6 +541,66 @@ def test_later_unver_cannot_erase_an_earlier_durable_fail(monkeypatch):
         semantic.require_human_resolution(
             store, _art(), TEXT_A, '1', actor='editor-a', reason='想用后一次 UNVER 覆盖',
             expected_subject_sha256=semantic.text_sha256(TEXT_A))
+
+
+def test_stale_latest_review_cannot_erase_exact_historical_fail(monkeypatch):
+    reviews = _all_clean_reviews()
+    reviews[0] = _stored_review(
+        'source_architecture', TEXT_A, contradiction=True)
+    failed = _semantic_artifact(reviews)
+    store = _Store(fresh=False)
+    store.read_own = lambda _model, _rel: (failed, {})
+    monkeypatch.setattr(semantic, 'semantic_seqs', lambda _store: [1])
+    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (1, failed))
+
+    assessments = semantic.current_assessments(store, _art())
+    failed_assessment = assessments[semantic.text_sha1(TEXT_A)]
+    assert failed_assessment.state == 'unreviewed'
+    assert failed_assessment.historical_fail
+    assert not failed_assessment.human_resolvable
+    assert not assessments[semantic.text_sha1(TEXT_B)].historical_fail
+
+    with pytest.raises(TerminalState, match='不得绕过'):
+        semantic.require_human_resolution(
+            store, _art(), TEXT_A, '1', actor='editor-a', reason='想在 stale 后覆盖',
+            expected_subject_sha256=semantic.text_sha256(TEXT_A))
+    with pytest.raises(TerminalState, match='不能进入成书'):
+        semantic.require_approved_clear(
+            store, _art(approved='source_architecture'))
+
+
+def test_set_mismatch_blocks_unchanged_failed_subject_not_edited_candidate(monkeypatch):
+    edited_b = TEXT_B + '她没有拆开。'
+    reviews = _all_clean_reviews()
+    reviews[0] = _stored_review(
+        'source_architecture', TEXT_A, contradiction=True)
+    reviews[1] = _stored_review(
+        'payoff_preview', TEXT_B, contradiction=True)
+    failed = _semantic_artifact(reviews)
+    current = _art()
+    current.candidates[1] = SimpleNamespace(
+        approach='payoff_preview', text=edited_b, findings=[])
+    store = _Store()
+    store.read_own = lambda _model, _rel: (failed, {})
+    monkeypatch.setattr(semantic, 'semantic_seqs', lambda _store: [1])
+    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (1, failed))
+
+    assessments = semantic.current_assessments(store, current)
+    assert assessments[semantic.text_sha1(TEXT_A)].historical_fail
+    edited_assessment = assessments[semantic.text_sha1(edited_b)]
+    assert edited_assessment.state == 'unreviewed'
+    assert not edited_assessment.historical_fail
+    assert edited_assessment.human_resolvable
+
+    with pytest.raises(TerminalState, match='不得绕过'):
+        semantic.require_human_resolution(
+            store, current, TEXT_A, '1', actor='editor-a', reason='逐项对照原文',
+            expected_subject_sha256=semantic.text_sha256(TEXT_A))
+    assessment, basis = semantic.require_human_resolution(
+        store, current, edited_b, '2', actor='editor-a', reason='逐项对照改后文本',
+        expected_subject_sha256=semantic.text_sha256(edited_b))
+    assert assessment == edited_assessment
+    assert basis == 'human_verification'
 
 
 def test_downstream_requires_the_current_approved_bytes_to_remain_clear(monkeypatch):

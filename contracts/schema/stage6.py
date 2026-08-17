@@ -14,8 +14,10 @@ stage6/_rounds/hook.rN.json 归档：上一轮的**整份拷贝**，形状与 ho
   ① 原作文案、全书结构与正文 surface habits 都进入生成材料；剧透不是违规。
      语义硬边界是实质矛盾，质量由匿名六维审判排序。
 
-  ② 人仍做最终定稿，但批准动作只接受最新质量审判为 ``clear`` 的候选；缺审、过期、
-     uncertain 和 contradiction 都不能被人工误点绕过。
+  ② 人仍做最终定稿。当前校准 ``clear`` 可直接作为自动依据；缺审、过期或
+     ``uncertain`` 只能由人提交 actor / reason / 当前文本完整 SHA-256 后，以
+     ``human_verification`` 收口，不能冒充自动 PASS。当前或历史上与同一完整
+     SHA-256 绑定的校准 ``FAIL`` 不可人工绕过，只能改字形成新主体后重新处理。
 
   ③ 0 成本写盘路通过 `rewrite_provenance` 或 `promoted()` 继承真实来源；
      `model` 与 `params` 对付费产物均为必填，不能由 0 成本路径现造。
@@ -38,11 +40,12 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
+    CACHE_POLICY,
     HOOK_APPROACHES,
     HOOK_APPROVED_APPROACHES,
 )
 from contracts.schema.base import Fp10, StrictModel
-from contracts.schema.common import Finding, LlmProvenance
+from contracts.schema.common import Finding, HashBoundHumanApproval, LlmProvenance
 from contracts.schema.evaluation import EvaluatorFingerprint, SemanticDecision
 from contracts.schema.stage5 import ContextSource, JudgedDraft
 
@@ -109,7 +112,7 @@ class Candidate(StrictModel):
     findings: list[Finding]
 
 
-class HookApprovalResolution(StrictModel):
+class HookApprovalResolution(HashBoundHumanApproval):
     """A self-reported human approval bound to the exact approved bytes.
 
     ``actor`` is deliberately an asserted identity, not an authenticated
@@ -117,16 +120,11 @@ class HookApprovalResolution(StrictModel):
     any archive/write so a stale browser or CLI cannot approve different text.
     """
 
-    actor: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     basis: Literal['calibrated_pass', 'human_verification']
     semantic_review_seq: int | None = Field(default=None, ge=1)
 
     @model_validator(mode='after')
     def _calibrated_pass_names_its_review(self) -> 'HookApprovalResolution':
-        if not self.actor.strip() or not self.reason.strip():
-            raise ValueError('resolution actor/reason 不得只有空白')
         if self.basis == 'calibrated_pass' and self.semantic_review_seq is None:
             raise ValueError('calibrated_pass 必须绑定 semantic_review_seq')
         return self
@@ -171,9 +169,51 @@ class HookSources(StrictModel):
 
 
 class HookParams(StrictModel):
-    """一次调用当时的生成上限。"""
+    """初始生成与单候选自动重试当时的输出上限。"""
 
     max_tokens: int = Field(ge=1)
+    candidate_retry_max_tokens: int = Field(default=24000, ge=1)
+    # ``0`` is the neutral migration value for v2 artifacts: those artifacts
+    # predate candidate retrying and therefore must not claim that a retry was
+    # configured.  Current producers still use the default of exactly one.
+    candidate_retry_limit: int = Field(default=1, ge=0, le=1)
+    candidate_retry_effort: Literal['low'] = 'low'
+    candidate_retry_thinking: Literal[False] = False
+
+
+class HookCandidateRetry(StrictModel):
+    """一条机械 HARD 候选的一次定向重试账。"""
+
+    approach: Literal[HOOK_APPROACHES]
+    attempt: int = Field(default=1, ge=1, le=1)
+    failure_items: list[str] = Field(min_length=1)
+    failure_evidence: Fp10
+    user_prompt: Fp10
+    output: Fp10 | None
+    model: str = Field(min_length=1)
+    cache_policy: Literal[CACHE_POLICY]
+    before_hard: int = Field(ge=1)
+    after_hard: int | None = Field(default=None, ge=0)
+    status: Literal[
+        'accepted', 'hard_not_reduced', 'duplicate', 'wrong_approach', 'request_failed',
+    ]
+    reason: str | None = Field(default=None, min_length=1)
+    accepted: bool
+
+    @model_validator(mode='after')
+    def _status_matches_payload(self) -> 'HookCandidateRetry':
+        if self.accepted != (self.status == 'accepted'):
+            raise ValueError('candidate retry 的 accepted 必须且只能对应 status=accepted')
+        failed_before_candidate = self.status in ('wrong_approach', 'request_failed')
+        if failed_before_candidate != (self.after_hard is None):
+            raise ValueError(
+                'wrong_approach/request_failed 没有可归入目标候选的 after_hard；'
+                '其余状态必须记录重判后的 HARD 数')
+        if (self.status == 'request_failed') != (self.output is None):
+            raise ValueError('只有 request_failed 没有可校验响应 output')
+        if (self.status == 'accepted') != (self.reason is None):
+            raise ValueError('accepted 不写失败 reason；其余状态必须说明未采纳原因')
+        return self
 
 
 class HookProvenance(LlmProvenance):
@@ -183,8 +223,8 @@ class HookProvenance(LlmProvenance):
     `stage3/style_grounding.json` · `stage4/writer_context.json`。
     ⚠ `inputs` 里**没有成稿**——它们在 `judged` 里。
 
-    ⚠ `prompts` 两个键：`HOOK_SYS`（**插值之后**的指纹，`HOOK_APPROACHES` 变了它就变）·
-    `RULES`（判据表自身的指纹）。
+    ⚠ `prompts` 常驻 `HOOK_SYS`（**插值之后**）与 `RULES`；发生脏候选重试时再有
+    `HOOK_RETRY_SYS`。缺第三键表示当轮没有重试，不表示漏记。
     ⚠⚠ **判据表指纹统一叫 `RULES`**（`_common.md` §1.1）——原型在这一层叫 `RULES7`、
     在 stage7 叫 `RULES8`、在 stage5 叫 `RULES`，而它们是**同一件事**。
 
@@ -194,6 +234,9 @@ class HookProvenance(LlmProvenance):
 
     #: `model` 由 `LlmProvenance` 定成必填，本层不重复定义。
     params: HookParams
+
+    #: 每条初始脏候选恰好一次定向重试；默认值兼容旧产物。
+    candidate_retries: list[HookCandidateRetry] = Field(default_factory=list)
 
 
 class Hook(StrictModel):
@@ -251,6 +294,12 @@ class HookCandidateResponse(StrictModel):
 
     approach: Literal[HOOK_APPROACHES]
     text: str = Field(min_length=1)
+
+
+class HookCandidateRetryResponse(HookCandidateResponse):
+    """单候选修复响应，同时重写解释当前整组三候选的 rationale。"""
+
+    rationale: str = Field(min_length=1)
 
 
 class HookResponse(StrictModel):

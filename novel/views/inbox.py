@@ -35,7 +35,7 @@ inbox.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_REVIEW, STAGE5_TRIM_AUDIT, STAGE6_HOOK, STAGE7_NAME_MAP,
+    STAGE2_GLOBAL_REVIEW, STAGE6_HOOK, STAGE7_NAME_MAP,
     artifact_rel,
 )
 
@@ -44,7 +44,7 @@ import re
 
 from contracts.invariants import DEPTH_MODES, INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER
 from contracts.schema.api import InboxItem, InboxView
-from contracts.schema.evaluation import GlobalReview, TrimAudit
+from contracts.schema.evaluation import GlobalReview
 from contracts.schema.report import CheckReport
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
@@ -90,7 +90,20 @@ def _human_how(stage: str) -> str:
     if not parts:
         return (f'{stage} 没有 0 成本人工入口——处置归人判断：'
                 f'要么改上游重跑本层，要么这条结论就这样留在报告上')
+    if stage == 'stage5':
+        parts = [
+            ('`--apply-edit` 提供包含所有 producer-owned slot 的整章全文'
+             if flag == '--apply-edit' else f'`{flag}` {what}')
+            for flag, what in _HUMAN_FLAGS if flag in have
+        ]
+        return '0 LLM 费用的人工路：' + ' / '.join(parts)
     return '0 成本人工路：' + ' / '.join(parts)
+
+
+def _revalidate_how(node: str) -> str:
+    """Copyable strong-audit promotion, never the old credential-free form."""
+    return (f'`{node} --revalidate --actor <id> --reason <why>`：0 LLM、同轮重判、'
+            '写入不可变审计；不是新一轮人工改写')
 
 
 def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
@@ -103,6 +116,7 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     code = prov.code_version()
     items: list[InboxItem] = []
     wontfix_total = 0
+    trim_audits = _current_trim_audits(novel_dir, code)
 
     for stage in STAGES:
         nodes = check_nodes(stage)
@@ -131,7 +145,7 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
             items += _report_items(report, stage)
 
     items += _verification_items(novel_dir, code)
-    items += _trim_verification_items(novel_dir, code)
+    items += _trim_verification_items(novel_dir, code, audits=trim_audits)
     items += _hook_verification_items(novel_dir, code)
     items += _approval_items(novel_dir, code)
 
@@ -179,12 +193,12 @@ def _invalid_items(store: ArtifactStore, stage: str) -> list[InboxItem]:
                 kind='rejected', stage=stage, chapter=None, rule=node,
                 what=f'{inv}：付费自救/人工补丁被落盘闸门驳回，正式稿仍是旧轮',
                 how=f'历史轮次在 `{paths.rounds_dir_of(rel)}/`（已见 r{rounds[-1] if rounds else "?"}）；'
-                    f'改好 `.INVALID` 后跑 `{node} --revalidate` 提升，或改判据后重判'))
+                    f'改好 `.INVALID` 后跑 {_revalidate_how(node)}，或改判据后重判'))
         else:
             out.append(InboxItem(
                 kind='invalid', stage=stage, chapter=None, rule=node,
                 what=f'{inv}：首跑被落盘闸门拦下，还没有现役产物',
-                how=f'改好 `.INVALID` 后跑 `{node} --revalidate` 提升（0 成本）'))
+                how=f'改好 `.INVALID` 后跑 {_revalidate_how(node)}'))
     return out
 
 
@@ -212,7 +226,7 @@ def _stage5_chapter_invalids(store: ArtifactStore) -> list[InboxItem]:
             kind=kind, stage='stage5', chapter=chapter, rule='stage5.write',
             what=(f'{inv}：自救稿被闸门拦下，正式稿仍是旧轮' if kind == 'rejected'
                   else f'{inv}：这一章还没有过闸的正式稿'),
-            how=f'改好后跑 `stage5.write --revalidate` 提升（0 成本）；'
+            how=f'改好后跑 {_revalidate_how("stage5.write")}；'
                 f'历史轮次在 `{paths.rounds_dir_of(formal)}/`'))
     return out
 
@@ -241,7 +255,8 @@ def _stage5_rejected_revisions(store: ArtifactStore) -> list[InboxItem]:
                 what=(f'{rel}：两次修订候选都相对旧正式稿退化；'
                       f'旧稿未覆盖。{artifact.why[0]}'),
                 how=(f'检查该文件的 {len(artifact.attempts)} 份候选；人工改好后跑 '
-                     f'`stage5.write --mode {mode} --apply-edit <chNN.txt>`，'
+                     f'`stage5.write --mode {mode} --apply-edit <chNN.json>`；输入必须提供'
+                     f'该章全部 producer-owned slot 的完整 `segments[{{slot,text}}]` 全文（0 LLM 费用），'
                      f'或在确认修复方向后用 `--revise --chapters {chapter}` 再采样')))
     return out
 
@@ -258,17 +273,22 @@ def _stage5_stalled(store: ArtifactStore) -> list[InboxItem]:
         return []
     _seq, rev = got
     out: list[InboxItem] = []
+    stalled_band: list[tuple[int, object]] = []
 
     def one(chapter: int | None, finding) -> None:
         if finding.wontfix is not None:
             return
         if int(finding.unresolved_rounds or 0) < STOP_REWRITE_AFTER:
             return
+        if finding.rule == 'band_drift' and chapter is not None:
+            stalled_band.append((chapter, finding))
+            return
         out.append(InboxItem(
             kind='stalled', stage='stage5', chapter=chapter, rule=finding.rule,
             what=finding.detail,
             how=f'连续 {finding.unresolved_rounds} 轮未消，修复已判「根因不在写手」'
-                f'主动跳过——人工改稿（`stage5.write --apply-edit`）'
+                f'主动跳过——人工提供所有 producer-owned slot 的整章全文'
+                f'（`stage5.write --apply-edit`，0 LLM 费用）'
                 f'或豁免（`stage5.review --wontfix`）'))
 
     for row in rev.chapters:
@@ -276,23 +296,44 @@ def _stage5_stalled(store: ArtifactStore) -> list[InboxItem]:
             one(row.output_ordinal, finding)
     for finding in rev.book:
         one(None, finding)
+    if stalled_band:
+        chapters = sorted({chapter for chapter, _finding in stalled_band})
+        rounds = max(int(finding.unresolved_rounds or 0)
+                     for _chapter, finding in stalled_band)
+        details = [f'ch{chapter}: {finding.detail}'
+                   for chapter, finding in stalled_band]
+        out.append(InboxItem(
+            kind='stalled', stage='stage5', chapter=None, rule='band_drift',
+            what=(f'书级档位漂移连续未消：涉及章节 {chapters}；'
+                  f'逐章明细 {details}'),
+            how=(f'最长已连续 {rounds} 轮未消，修复已判「根因不在单章写手」'
+                 '主动跳过——按书级风格核对后人工改稿，或在 Review 逐章明细上'
+                 '记录 `stage5.review --wontfix`')))
     return out
 
 
-def _report_items(report: CheckReport, stage: str) -> list[InboxItem]:
+def _report_items(
+    report: CheckReport,
+    stage: str,
+) -> list[InboxItem]:
     out: list[InboxItem] = []
     for line in report.rules:
         if line.status != 'hit':
             continue
+        findings = []
         for finding in line.findings:
             if finding.wontfix is not None:
                 continue                                   # 豁免过：计数不占清单
             stalled = int(finding.unresolved_rounds or 0) >= STOP_REWRITE_AFTER
             if stage == 'stage5' and stalled:
                 continue                                   # 已由 stalled 类列出，别双份
+            findings.append(finding)
+
+        for finding in findings:
+            chapter = getattr(finding, 'output_ordinal', None)
             if line.sev == 'hard' and finding.owner not in (None, stage, 'corpus'):
                 out.append(InboxItem(
-                    kind='upstream', stage=stage, chapter=None, rule=line.rule,
+                    kind='upstream', stage=stage, chapter=chapter, rule=line.rule,
                     what=finding.detail,
                     how=f'阻断级且根因第一嫌疑在 {finding.owner}——'
                         f'先修上游那一层，再回来重跑本层复检'))
@@ -305,7 +346,7 @@ def _report_items(report: CheckReport, stage: str) -> list[InboxItem]:
                 else:
                     how = f'机器修复路由暂不可执行：{fix.unavailable_reason}'
                 out.append(InboxItem(
-                    kind='repairable', stage=stage, chapter=None, rule=line.rule,
+                    kind='repairable', stage=stage, chapter=chapter, rule=line.rule,
                     what=finding.detail, how=how))
             elif line.remediation == 'human':
                 fix = line.fix
@@ -316,7 +357,7 @@ def _report_items(report: CheckReport, stage: str) -> list[InboxItem]:
                        if fix is not None
                        else _human_how(stage))
                 out.append(InboxItem(
-                    kind='human_only', stage=stage, chapter=None, rule=line.rule,
+                    kind='human_only', stage=stage, chapter=chapter, rule=line.rule,
                     what=finding.detail, how=how))
     return out
 
@@ -351,41 +392,34 @@ def _verification_items(novel_dir, code: str) -> list[InboxItem]:
     return out
 
 
-def _trim_verification_items(novel_dir, code: str) -> list[InboxItem]:
-    """Durable trim audits whose retained pretrim still needs human attention."""
-    from novel.stages.stage5.trim_resolution import matches_current_audit
+def _current_trim_audits(novel_dir, code: str):
+    """One shared definition of a current, unresolved Stage5 trim audit."""
+    from novel.stages.stage5 import trim_resolution
 
     store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.write', code))
-    template = STAGE5_TRIM_AUDIT
-    directory, filename = template.rsplit('/', 1)
-    pattern = filename.replace('{nn}', '*')
-    root = novel_dir / directory
-    if not root.is_dir():
-        return []
+    return trim_resolution.current_unresolved_audits(store)
+
+
+def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[InboxItem]:
+    """Durable trim audits whose retained pretrim still needs human attention."""
+    from novel.stages.stage5 import trim_resolution
+
+    current = audits if audits is not None else _current_trim_audits(novel_dir, code)
+    store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.write', code))
     out: list[InboxItem] = []
-    for path in sorted(root.glob(pattern)):
-        rel = f'{directory}/{path.name}'
-        try:
-            audit, audit_sha256 = store.read_with_sha256(TrimAudit, rel)
-        except ArtifactUnreadable:
-            continue
-        # PASS only closes this row when the candidate was actually adopted.
-        # A calibrated FAIL still needs a human-visible verification task:
-        # pretrim was retained and the length problem did not disappear.
-        if audit.adopted or not audit.deterministic_passed:
-            continue
-        if matches_current_audit(store, audit, audit_sha256):
-            continue
+    for ordinal, (audit, _audit_sha256) in sorted(current.items()):
         state = ('未运行语义裁决' if audit.semantic is None
                  else f'语义裁决为 {audit.semantic.verdict}')
         why = (audit.reason if audit.semantic is None else audit.semantic.reason)
+        context = trim_resolution.verification_context(store, audit)
         out.append(InboxItem(
-            kind='verification', stage='stage5', chapter=audit.output_ordinal,
-            rule=f'trim_audit_ch{audit.output_ordinal:02d}',
-            what=f'第 {audit.output_ordinal} 章收缩机械检查已过，但 {state}：{why}',
-            how=('当前保留 pretrim 原稿、未采用收缩候选；'
+            kind='verification', stage='stage5', chapter=ordinal,
+            rule=f'trim_audit_ch{ordinal:02d}',
+            what=(f'第 {ordinal} 章收缩机械检查已过，但 {state}：{why}；'
+                  f'超限根因附注：{context}'),
+            how=('当前保留 pretrim 原稿、未采用收缩候选；这是 0 次 LLM 调用的人工销账，'
                  '人工确认保留原稿可跑 `stage5.review --retain-pretrim '
-                 f'--chapters {audit.output_ordinal} --actor <自报身份> --reason <理由>`；'
+                 f'--chapters {ordinal} --actor <自报身份> --reason <理由>`；'
                  'resolution 同时绑定 mode、当前正式章路径/正文 SHA-256、audit 完整 SHA-256 '
                  '与 before/after hashes，任一变化即失效')))
     return out
@@ -454,8 +488,12 @@ def _approval_items(novel_dir, code: str) -> list[InboxItem]:
         except ArtifactUnreadable:
             art7 = None
         if art7 is not None and art7.approved is None:
+            from novel.stages.stage7.rename import approval_subject_sha256
+            subject = approval_subject_sha256(art7)
             out.append(InboxItem(
                 kind='approval', stage='stage7', chapter=None, rule='stage7.approve',
                 what='人名映射表已产出，还没有人定稿——定稿是给整份盖章',
-                how='核对新旧对照与「漏网叫法候选」后跑 `stage7.approve`'))
+                how=('核对新旧对照与「漏网叫法候选」后跑 '
+                     '`stage7.approve --actor <自报身份> --reason <理由> '
+                     f'--subject-sha256 {subject}`；人物决定变化会拒绝旧决定')))
     return out

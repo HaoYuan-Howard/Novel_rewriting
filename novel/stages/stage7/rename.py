@@ -12,6 +12,9 @@ rename.py —— `stage7.rename` 与 `stage7.approve` 的节点函数。**唯一
 """
 from __future__ import annotations
 
+import hashlib
+import json
+
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE4_PLAN_CHAPTERS,
     STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE7_BOOK, STAGE7_NAME_MAP,
@@ -25,8 +28,9 @@ from contracts.schema.report import CheckReport
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage4 import PlanChapters, WriterContext
 from contracts.schema.stage5 import ContextSource
+from contracts.schema import encode_artifact
 from contracts.schema.stage7 import (
-    ApprovedNameMap, IdentityBaseline, NameMap, NameMapEdit, NameMapParams,
+    ApprovedNameMap, ExtraSub, IdentityBaseline, NameMap, NameMapEdit, NameMapParams,
     NameMapFreeProvenance, NameMapProvenance, NameMapResponse,
 )
 from novel import paths, prov
@@ -81,6 +85,54 @@ def _retire_book_txt(store: ArtifactStore) -> None:
     digest = prov.content_sha1(raw)
     archived_rel = f'stage7/_rounds/book.{digest}.txt'
     store.retire_bytes(BOOK_TXT, archived_rel)
+
+
+def approval_decision_surface(art: NameMap) -> dict[str, Any]:
+    """Return the canonical human decision surface shared by every approval lock."""
+    return {
+        'surname_map': dict(art.surname_map),
+        'characters': [item.model_dump(mode='json', by_alias=True) for item in art.characters],
+        'extra_subs': [item.model_dump(mode='json', by_alias=True) for item in art.extra_subs],
+    }
+
+
+def _canonical_sha256(value: Any) -> str:
+    raw = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def approval_subject_sha256(art: NameMap) -> str:
+    """Hash only the human decision surface, never derived residual/delivery bytes."""
+    return _canonical_sha256(approval_decision_surface(art))
+
+
+def approval_proof_sha256(art: NameMap) -> str | None:
+    """Bind a current typed approval to its decision surface for service gates.
+
+    ``book_txt`` and every deterministic diagnostic/application field are
+    deliberately absent: assembling a delivery must not revoke the approval
+    that authorized it.  Actor/reason/origin remain part of the proof, while
+    the embedded subject must still match the exact current decision surface.
+    """
+    approval = art.approved
+    surface = approval_decision_surface(art)
+    subject = _canonical_sha256(surface)
+    if approval is None or approval.subject_sha256 != subject:
+        return None
+    return _canonical_sha256({
+        'decision_surface': surface,
+        'approved': approval.model_dump(mode='json', by_alias=True),
+    })
+
+
+def edit_template_json() -> str:
+    """Return the registry-versioned, copyable human edit skeleton."""
+    payload = NameMapEdit().model_dump(mode='json', by_alias=True)
+    return json.dumps(
+        encode_artifact(EDIT, payload), ensure_ascii=False, indent=2, sort_keys=True,
+    )
 
 
 # ── 上游 ────────────────────────────────────────────────────────────────────
@@ -208,7 +260,13 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
     # 掩码面 = **全部**已知称呼（新的 + 旧的 + 保留的 + 下发的）。
     # 少掩一类，那一类就会整批冒充漏网。
     known = set(subs.values()) | set(subs) | set(kept) | set(up.mat.universe)
-    residual, baseline = residual_scan(pre_units, post_units, stems, known, smap)
+    canonical_map = {
+        c['old_canonical']: c['new_canonical']
+        for c in chars_out
+        if c['renamed'] and c['old_canonical'] != c['new_canonical']
+    }
+    residual, baseline = residual_scan(
+        pre_units, post_units, stems, known, smap, canonical_map)
 
     # 新姓字在**原文**里另有多少次非人名用法（metric，不是门）。
     # ⚠ 取值面是**姓氏映射的值**——原型取「新名的第一个字」，实测三本全破。
@@ -446,12 +504,11 @@ def run_identity(ctx: RunContext) -> tuple[IdentityBaseline, CheckReport]:
 
     if store.exists(REL):
         art, _raw = store.read_own(NameMap, REL)
-        store.archive_round(REL, keep=True)
         new = art.model_copy(update={
             'identity': baseline,
             'provenance': ctx.rewrite_provenance(art.provenance, by='--identity'),
         })
-        store.write(REL, new)
+        store.write_round(REL, new)
         return baseline, _report(ctx, store, _judge(ctx, store, new, up), new)
     # 还没有产物时它照样能跑（那正是「在花第一分钱之前」的意思）。只报告实际
     # 执行过的 identity 两行；正式生成入口会在请求前复算并把同一结论落进产物。
@@ -480,11 +537,20 @@ def run_recheck(ctx: RunContext) -> tuple[NameMap, CheckReport]:
         ctx, up, model_out, extra,
         ctx.rewrite_provenance(art.provenance, by='--recheck'))
     # 映射决定可继续有效，但旧交付物绑定的是重判前的上游，必须退出 live 路径。
+    old_subject = approval_subject_sha256(art)
+    new_subject = approval_subject_sha256(new_art)
+    approval = art.approved
+    if (old_subject != new_subject
+            or approval is None
+            or approval.subject_sha256 != new_subject):
+        approval = None
     new_art = new_art.model_copy(update={
-        'approved': art.approved, 'book_txt': None, 'identity': art.identity})
-    _retire_book_txt(store)
-    store.archive_round(REL, keep=True)
-    store.write(REL, new_art)
+        'approved': approval, 'book_txt': None, 'identity': art.identity})
+    with store.history_transaction(REL, BOOK_TXT):
+        store.write_round(REL, new_art)
+        # The retirement and replacement map are one logical commit.  A late
+        # archive/write/freshness failure restores both live byte surfaces.
+        _retire_book_txt(store)
     return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
 
 
@@ -532,10 +598,6 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
             prompts={'RULES': prov.rules_fingerprint('stage7')},
             params=NameMapParams(max_tokens=MAX_TOKENS), origin='human')
     new_art, _fs, _hook_new = _build(ctx, up, model_out, extra, provenance)
-    # Also retire an orphaned delivery when the formal/INVALID map is absent:
-    # its approval/current binding cannot be reconstructed, so keeping it at
-    # the live download path would turn a repair action into implicit consent.
-    _retire_book_txt(store)
     if prev is not None:
         new_art = new_art.model_copy(update={
             # Any mapping edit invalidates the human decision over the old map.
@@ -549,17 +611,78 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
             outcomes = _judge(ctx, store, new_art, up)
             if _blocking(outcomes):
                 return new_art, _report(ctx, store, outcomes, new_art)
-            store.promote_invalid(REL, NameMap)
-            new_art = new_art.model_copy(update={
-                'provenance': new_art.provenance.promoted(code=ctx.code)})
-            store.write(REL, new_art)
+            with store.history_transaction(REL, BOOK_TXT):
+                store.write_round(REL, new_art)
+                _retire_book_txt(store)
             return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
-        store.archive_round(REL, keep=True)
-    store.write(REL, new_art)
+    with store.history_transaction(REL, BOOK_TXT):
+        if prev is not None:
+            store.write_round(REL, new_art)
+        else:
+            store.write(REL, new_art)
+        # Also retire an orphaned delivery when the formal/INVALID map is absent.
+        # The outer transaction makes the replacement and retirement indivisible.
+        _retire_book_txt(store)
     return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
 
 
-def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
+def run_adopt_residual(
+    ctx: RunContext, confidence: str,
+) -> tuple[NameMap, CheckReport]:
+    """Explicitly adopt safe residual suggestions and replay the full deterministic chain."""
+    if confidence != 'high':
+        raise TerminalState('--adopt-residual 当前只接受 high')
+    store = ArtifactStore(ctx)
+    if not store.exists(REL):
+        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage7.rename')
+    up = _Upstreams(ctx, store)
+    art, _raw = store.read_own(NameMap, REL)
+
+    existing = {item.old: item.new for item in art.extra_subs}
+    suggestions: dict[str, set[str]] = {}
+    for item in art.residual:
+        if item.confidence != confidence or not item.unit or not item.suggest:
+            continue
+        if item.unit in existing or item.unit in art.subs:
+            continue
+        suggestions.setdefault(item.unit, set()).add(item.suggest)
+    adopted = {
+        old: next(iter(targets))
+        for old, targets in suggestions.items()
+        if len(targets) == 1
+    }
+    if not adopted:
+        raise TerminalState('没有可安全采纳的 high residual：空建议、冲突和已覆盖项均已跳过')
+
+    extra = [item.model_dump(mode='json', by_alias=True) for item in art.extra_subs]
+    extra.extend(
+        ExtraSub(old=old, new=new, origin='human').model_dump(mode='json', by_alias=True)
+        for old, new in sorted(adopted.items())
+    )
+    model_out = {
+        'surname_map': dict(art.surname_map),
+        'characters': [item.model_dump(mode='json', by_alias=True) for item in art.characters],
+    }
+    rebuilt, _fs, _hook_new = _build(
+        ctx, up, model_out, extra,
+        ctx.rewrite_provenance(art.provenance, by='--adopt-residual'),
+    )
+    rebuilt = rebuilt.model_copy(update={
+        'approved': None, 'book_txt': None, 'identity': art.identity,
+    })
+    outcomes = _judge(ctx, store, rebuilt, up)
+    if _blocking(outcomes):
+        raise GateBlocked(
+            '采纳 residual 后产生阻断级问题，正式人物表与交付物均未改动')
+    with store.history_transaction(REL, BOOK_TXT):
+        store.write_round(REL, rebuilt)
+        _retire_book_txt(store)
+    return rebuilt, _report(ctx, store, outcomes, rebuilt)
+
+
+def run_revalidate(
+    ctx: RunContext, *, actor: str, reason: str,
+) -> tuple[bool, CheckReport]:
     """`--revalidate`：把被闸门拦下的 `.INVALID` 提升为正式产物。**0 成本。**
 
     ⚠ 它是落盘闸门的**必然配套**——闸门是我们自己加的，
@@ -584,11 +707,12 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
         return False, _report(ctx, store, outcomes, rebuilt)
     # 通用入口归档 `.INVALID` 与已有正式稿；随后只覆盖当前代码重算出的派生字段。
     # 若两步间崩溃，盘上仍有可 `--recheck` 自愈的正式稿。
-    _retire_book_txt(store)
-    store.promote_invalid(REL, NameMap)
-    promoted = rebuilt.model_copy(update={
-        'provenance': rebuilt.provenance.promoted(code=ctx.code)})
-    store.write(REL, promoted)
+    with store.history_transaction(REL, BOOK_TXT):
+        store.promote_invalid(
+            REL, NameMap, actor=actor, reason=reason,
+            artifact_override=rebuilt)
+        _retire_book_txt(store)
+    promoted = store.read_own(NameMap, REL)[0]
     return True, _report(ctx, store, _judge(ctx, store, promoted, up), promoted)
 
 
@@ -632,18 +756,23 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
         raise GateBlocked(
             f'这份映射表有阻断级问题（{blocking}）——不该拿它去替换正文。'
             f'问题稿在 {p}：人改一行后走 `--apply-edit <name_map_edit.json 路径>`，'
-            f'或直接 `--revalidate`（都 0 成本）',
+            f'或直接跑 `stage7.rename --revalidate --actor <id> --reason <why>`'
+            f'（0 LLM、同轮重判并留不可变审计）',
             invalid_path=str(p))
-    _retire_book_txt(store)
-    store.write(REL, art)
+    with store.history_transaction(REL, BOOK_TXT):
+        _retire_book_txt(store)
+        store.write(REL, art)
     return art
 
 
-def run_approve(ctx: RunContext) -> tuple[NameMap, CheckReport]:
+def run_approve(
+    ctx: RunContext, *, actor: str, reason: str, subject_sha256: str,
+) -> tuple[NameMap, CheckReport]:
     """`stage7.approve`：**人定稿**。0 成本。
 
-    ⚠⚠ **它不带参数，而这与 stage6 的 `--pick N` 不同、且是终态不是待定。**
-    本层一本书只有**一份**人物表，定稿是「给整份盖章」不是「从三条候选里选一条」。
+    ⚠⚠ **它不带候选序号，而这与 stage6 的 `--pick N` 不同。**
+    本层一本书只有**一份**人物表，定稿是「给整份盖章」不是「从三条候选里选一条」；
+    但 actor/reason 与当前 decision-surface SHA-256 三项人工凭据全部必填。
 
     ⚠ **还有 HARD 时拒绝定稿**（显式终态）——人被挡住，而不是被静默放行。
     ⚠ **`_provenance` 一个字都不动**：不走 `llm_provenance`（0 成本的跑不许现造一份
@@ -656,6 +785,15 @@ def run_approve(ctx: RunContext) -> tuple[NameMap, CheckReport]:
         raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage7.rename')
     up = _Upstreams(ctx, store)
     art, _raw = store.read_own(NameMap, REL)
+    actor = actor.strip()
+    reason = reason.strip()
+    if not actor or not reason:
+        raise TerminalState('stage7.approve 必须显式给非空 actor 与 reason')
+    actual_subject = approval_subject_sha256(art)
+    if subject_sha256 != actual_subject:
+        raise TerminalState(
+            '人物表审批对象已变化：'
+            f'提交 {subject_sha256 or "<空>"}，当前 {actual_subject}；请刷新后重审')
     hard = sorted({f.rule for f in art.book if _sev_of(f.rule) == 'hard'})
     if hard:
         raise TerminalState(
@@ -665,10 +803,14 @@ def run_approve(ctx: RunContext) -> tuple[NameMap, CheckReport]:
 
     # Existing repositories may contain a pre-fix book assembled before this
     # approval.  Approval never blesses that old byte product retroactively.
-    _retire_book_txt(store)
     new = art.model_copy(update={
-        'approved': ApprovedNameMap(origin='human'), 'book_txt': None})
-    store.write(REL, new)
+        'approved': ApprovedNameMap(
+            origin='human', actor=actor, reason=reason,
+            subject_sha256=actual_subject),
+        'book_txt': None})
+    with store.history_transaction(REL, BOOK_TXT):
+        _retire_book_txt(store)
+        store.write(REL, new)
     return new, _report(ctx, store, _judge(ctx, store, new, up), new)
 
 

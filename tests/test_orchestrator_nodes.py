@@ -278,8 +278,21 @@ def test_the_conditional_required_flags_only_fire_with_their_trigger():
                         ['--apply-edit-plan', 'p.json'], base=BASE)
     with pytest.raises(UnsupportedRunMode, match='缺必填'):
         N.build_argv('stage0.edit', SID, ['--apply-edit', 'e.json'], base=BASE)
-    assert N.missing_required('stage5.review', ['--retain-pretrim']) == ('--chapters',)
+    assert N.missing_required('stage5.review', ['--retain-pretrim']) == (
+        '--chapters', '--actor', '--reason')
+    assert N.missing_required(
+        'stage5.review',
+        ['--retain-pretrim', '--chapters', '3', '--actor', '复核员', '--reason', '保留原稿'],
+    ) == ()
     assert N.missing_required('stage5.review', ['--check-only']) == ()
+    revalidate_nodes = (
+        'stage2.global', 'stage2.blueprint', 'stage3.style', 'stage4.plan',
+        'stage5.write', 'stage6.hook', 'stage7.rename',
+    )
+    for node in revalidate_nodes:
+        assert N.missing_required(node, ['--revalidate']) == ('--actor', '--reason')
+        assert N.missing_required(
+            node, ['--revalidate', '--actor', '复核员', '--reason', '按当前闸门重判']) == ()
 
 
 def test_preview_fills_required_flags_with_placeholders_that_never_run():
@@ -297,6 +310,19 @@ def test_preview_fills_required_flags_with_placeholders_that_never_run():
     with pytest.raises(UnsupportedRunMode, match='占位符'):
         N.build_argv('stage0.approve', SID,
                      ['--actor', '待填·actor', '--reason', '真理由'], base=BASE)
+
+    retain = N.build_steps(
+        'stage5.review', SID, ['--retain-pretrim'],
+        base=BASE, placeholders=True, follow_check=False)[0]
+    assert retain.argv[retain.argv.index('--chapters') + 1] == '待填·chapters'
+    assert retain.argv[retain.argv.index('--actor') + 1] == '待填·actor'
+    assert retain.argv[retain.argv.index('--reason') + 1] == '待填·reason'
+
+    revalidate = N.build_steps(
+        'stage7.rename', SID, ['--revalidate'],
+        base=BASE, placeholders=True, follow_check=False)[0]
+    assert revalidate.argv[revalidate.argv.index('--actor') + 1] == '待填·actor'
+    assert revalidate.argv[revalidate.argv.index('--reason') + 1] == '待填·reason'
 
 
 def test_placeholders_do_not_change_a_command_that_needs_nothing():
@@ -354,8 +380,9 @@ def test_a_free_but_writing_run_also_gets_a_follow_up_check(flag):
     那条检查在这一趟里恒等成立），⇒ 报告里它是 `skipped`，而 HARD 的 `skipped` 进 `fail`。
     没有这条追跑，`--remeasure` 就是一条**永远拿不到绿灯**的路。
     """
-    steps = N.build_steps('stage3.style', SID, [flag], base=BASE)
-    assert N.is_paid('stage3.style', [flag]) is False, f'{flag} 是 0 成本的'
+    flags = _args(flag, 'stage3.style')
+    steps = N.build_steps('stage3.style', SID, flags, base=BASE)
+    assert N.is_paid('stage3.style', flags) is False, f'{flag} 是 0 成本的'
     assert len(steps) == 2 and '--check-only' in steps[1].argv
 
 

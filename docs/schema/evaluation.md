@@ -41,9 +41,14 @@ ground-truth 工作流只搬运以下内容：
 7. `trim_equivalence`
 8. `style_transfer`
 
-`prepare` 前每类至少有 100 个 held-out 候选，并至少有四个题材各 10 例。仲裁后的最终
-manifest 对每类再次执行更强的硬门：总数至少 100，`PASS`、`FAIL` 各至少 40；每个标签
-都至少覆盖四个题材，且该标签下出现的每个题材至少 10 例。`case_id` 必须全局唯一。
+一份 catalog/manifest 通过**实际包含 case** 登记一个或多个能力，不要求一次凑齐与本轮
+无关的全部八类。`prepare` 前，每个**已登记**能力至少有 100 个 held-out 候选，并至少有
+四个题材各 10 例。仲裁后的最终 manifest 对每个已登记能力再次执行更强的硬门：
+总数至少 100，`PASS`、`FAIL` 各至少 40；每个标签都至少覆盖四个题材，且该标签下出现的
+每个题材至少 10 例。`case_id` 必须全局唯一。
+
+`EvaluatorProfile` 仍必须恰好有八行，让“没有该能力”在发布面可见。manifest 未登记的能力
+必须是 `enabled=false`、`n=0`，五项指标全为 `0.0`；`1..99` 的半校准行非法。
 
 ## 三、离线双标与仲裁
 
@@ -115,10 +120,11 @@ python -X utf8 tools/build_ground_truth_catalog.py build-bundles `
   --audit D:\private-eval\catalog-audit.json
 ```
 
-生成器每能力确定性选 100 个候选，先保证至少四个显式题材各 10 例，再从其余全部题材补足；
+生成器对 inventory 中实际登记了供给的每个能力确定性选 100 个候选，先保证至少四个显式
+题材各 10 例，再从其余全部题材补足；
 同一 family 至多选一个 variant，避免原样/扰动成对进入盲包。它不把 family 当作书，也不预填
 正负比例——最终 `PASS/FAIL 各 >=40`、每标签四题材各 10 例仍由两次真实人工标签和最终 manifest
-硬门验证。任一能力候选不足时退出码为 `2`，只写无正文 audit，不写半份 catalog/case-store；
+硬门验证。任一**已登记**能力候选不足时退出码为 `2`，只写无正文 audit，不写半份 catalog/case-store；
 `source_issues` 和每能力的 `source_families_by_genre/blockers` 就是补材料清单。
 
 仓库还提供一个可选的 current-pipeline adapter：inventory 显式列每本书的 `book_id`、
@@ -253,7 +259,9 @@ python -m novel_refactor.cli run stage2.global <sid> `
 
 `EvaluatorProfile` 必须恰有八个 `CapabilityMetrics`。每个能力行分别记录
 dataset/model/prompt/schema/decoder 五项指纹；不能让八套不同 prompt/schema 共用一个
-看似匹配的全局指纹。profile 还记录至少三次复跑和「阈值在评测前已锁定」。每项能力只有同时满足以下条件才可
+看似匹配的全局指纹。profile 还记录至少三次复跑和「阈值在评测前已锁定」。未出现在
+manifest 的能力按上节发布为 disabled n=0；不因缺样本连带拒绝已完整校准的其他能力。
+每个已登记能力只有同时满足以下条件才可
 `enabled=true`：
 
 - PASS precision 的 95% Wilson 下界 `>=0.90`；
@@ -296,7 +304,8 @@ system 定义。示意形状如下；`system` 的正文必须来自已冻结的�
 }
 ```
 
-`abilities` 必须恰好覆盖八类。工具不把 manifest 的 `expected`、canonical `case_id` 或人工理由
+`abilities` 必须恰好覆盖八类，因为 profile 仍要发布八个可比对的 fingerprint 行；未登记能力
+不会产生 case 请求，其指标为 disabled n=0。工具不把 manifest 的 `expected`、canonical `case_id` 或人工理由
 放进模型请求。每名 judge 只看到不透明 blind token、能力、问题与编号 panel；A/B 各自使用
 不同 system identity 和按 `run_id/slot/case_id` 确定性生成的不同 case 顺序。模型 wire shape
 只能返回 `verdict`、`evidence[].panel/quote` 与 `reason`，不能自报 artifact、subject hash 或
@@ -322,7 +331,7 @@ python -X utf8 tools/restricted_evaluator.py `
 preview 按 run、能力与总计展示 exact calls、精确 input token、声明的最大 output token、
 response schema hash、三项 runtime fingerprint 及 wire hard cap，并给出冻结的执行 argv。
 固定 `batch_size=1`，每 case 每 run 恰好调用 A/B 各一次；因此 `N` 个最终 case 的三轮总硬上限
-是 `6N` 次 wire，八类各 100 例时最低为 4,800 次。单一显式 rung 表示没有 fallback，
+是 `6N` 次 wire（一个已登记能力 100 例为 600 次，八类各 100 例为 4,800 次）。单一显式 rung 表示没有 fallback，
 `max_retries=0` 表示 429、5xx、超时也不重发；任何一笔失败立即停下整个 campaign。
 
 真执行必须在同一命令追加两个开关，缺一不可：
@@ -380,4 +389,5 @@ python -X utf8 tools/build_evaluator_profile.py `
 `tools/build_evaluator_profile.py` 本身不联网。它要求每轮恰好覆盖 manifest 全集、两名
 judge 身份不同、每能力指纹在各轮完全一致，并取三轮各项 Wilson 下界和证据闭合率的
 最差值；复跑一致率按每个 case 的合并结论计算。任一缺例、指纹漂移或少于三轮直接拒绝，
-门槛未达则该能力如实保留 `enabled=false`。私有逐例 run 不提交，只发布无正文的聚合 profile。
+门槛未达则该能力如实保留 `enabled=false`；manifest 未登记的能力固定生成 disabled n=0/
+全零指标行。私有逐例 run 不提交，只发布无正文的聚合 profile。

@@ -48,6 +48,7 @@ from contracts.invariants import (
     NARRATIVE_PERSON,
     NONBODY_KINDS,
     REMOVED_ORIGIN,
+    RESIDUAL_ADOPTION_CONFIDENCE,
     SEVERITY,
     STAGES,
     STRUCTURAL_ROLES,
@@ -58,7 +59,7 @@ from contracts.invariants import (
     VOICE_KEYS,
 )
 from contracts.schema.base import FrozenModel, Sha1, StrictModel
-from contracts.schema.common import Finding
+from contracts.schema.common import Finding, HashBoundHumanApproval
 from contracts.schema.evaluation import GlobalReviewItem
 from contracts.schema.orchestration import (
     AgentRunRecord, ArtifactCondition, ArtifactState, Freshness, FreshnessReason,
@@ -965,6 +966,8 @@ class Stage7View(StrictModel):
     residual: list[Residual]
     baselines: dict[str, StemBaseline]
     approved: ApprovedNameMap | None
+    #: Canonical SHA-256 of surname_map/characters/extra_subs; approval optimistic lock.
+    approval_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     book: list[Finding]
     identity: IdentityBaseline | None
     book_txt: BookTxt | None
@@ -1502,6 +1505,15 @@ class HookApproveRequest(StrictModel):
         if not self.actor.strip() or not self.reason.strip():
             raise ValueError('actor/reason 不得只有空白')
         return self
+
+
+class NameMapApproveRequest(HashBoundHumanApproval):
+    """Stage7 human approval bound to the exact decision surface."""
+
+class ResidualAdoptionRequest(StrictModel):
+    """Explicit, zero-cost adoption; low-confidence residuals are never accepted."""
+
+    confidence: Literal[RESIDUAL_ADOPTION_CONFIDENCE]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

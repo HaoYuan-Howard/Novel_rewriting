@@ -104,10 +104,38 @@ class Rule:
     #: `stage2.blueprint --chapters`，但章号只能由这次命中的 beat id 得出。
     fix_args_from_finding: tuple[str, ...] = ()
 
+    #: Identifier namespaces that a model must be able to resolve from the
+    #: prompt before this rule can fairly reject its response.
+    needs_id_spaces: tuple[str, ...] = ()
+
+    #: Registered prompt surface that is responsible for providing those IDs.
+    prompt_surface: str | None = None
+
+
+@dataclass(frozen=True)
+class PromptSurface:
+    """A named LLM downsend surface and the identifier joins it exposes."""
+
+    surface: str
+    provides_id_spaces: tuple[str, ...]
+
 
 class Registry:
     def __init__(self) -> None:
         self._rules: dict[str, Rule] = {}
+        self._prompt_surfaces: dict[str, PromptSurface] = {}
+
+    def register_prompt_surface(self, surface: PromptSurface) -> PromptSurface:
+        if surface.surface in self._prompt_surfaces:
+            raise ValueError(f'prompt surface 重复：{surface.surface!r}')
+        values = surface.provides_id_spaces
+        if not surface.surface.strip():
+            raise ValueError('prompt surface 名不得为空')
+        if values != tuple(sorted(set(values))) or any(not value.strip() for value in values):
+            raise ValueError(
+                f'{surface.surface}: provides_id_spaces 必须非空白、去重并排序')
+        self._prompt_surfaces[surface.surface] = surface
+        return surface
 
     def register(self, rule: Rule) -> Rule:
         if rule.rule in self._rules:
@@ -115,7 +143,7 @@ class Registry:
                 f'判据 id 重复：{rule.rule!r}。判据表只有一张，重名当场炸——'
                 f'两条同名判据会让「这一条报了没有」永远说不清'
             )
-        _validate(rule)
+        _validate(rule, self._prompt_surfaces)
         self._rules[rule.rule] = rule
         return rule
 
@@ -150,8 +178,17 @@ class Registry:
     def requirements_covered(self) -> set[str]:
         return {r.requirement for r in self._rules.values()}
 
+    def prompt_surface(self, name: str) -> PromptSurface:
+        try:
+            return self._prompt_surfaces[name]
+        except KeyError:
+            raise KeyError(f'prompt surface {name!r} 未注册') from None
 
-def _validate(r: Rule) -> None:
+    def prompt_surfaces(self) -> tuple[PromptSurface, ...]:
+        return tuple(self._prompt_surfaces.values())
+
+
+def _validate(r: Rule, prompt_surfaces: dict[str, PromptSurface]) -> None:
     """注册期校验。七条，每条对应一次已发生的损失。"""
 
     # ① 取值域闭合。`dict.get(key, 默认值)` 用在契约枚举上，就是给违约数据发一张静默通行证。
@@ -183,6 +220,30 @@ def _validate(r: Rule) -> None:
             f'{r.rule}: requirement={r.requirement!r} 形如 R-8.2 才对。'
             f'一条不指向任何需求的判据，改版时没有任何东西会提醒你它该跟着改'
         )
+
+    # A reference-shaped model rule is satisfiable only if its actual prompt
+    # declares every identifier namespace the rule later expects.  This is a
+    # registry invariant, not a one-off Stage4 regression.
+    needs = r.needs_id_spaces
+    if needs != tuple(sorted(set(needs))) or any(not value.strip() for value in needs):
+        raise ValueError(
+            f'{r.rule}: needs_id_spaces 必须非空白、去重并排序')
+    if needs:
+        if not r.prompt_surface:
+            raise ValueError(
+                f'{r.rule}: 声明 needs_id_spaces 却没有 prompt_surface')
+        surface = prompt_surfaces.get(r.prompt_surface)
+        if surface is None:
+            raise ValueError(
+                f'{r.rule}: prompt_surface={r.prompt_surface!r} 尚未注册')
+        missing = sorted(set(needs) - set(surface.provides_id_spaces))
+        if missing:
+            raise ValueError(
+                f'{r.rule}: prompt {surface.surface!r} 缺少 ID spaces {missing}；'
+                '一条模型按下发面无法满足的判据不得注册为现役门')
+    elif r.prompt_surface is not None:
+        raise ValueError(
+            f'{r.rule}: prompt_surface 有值但 needs_id_spaces 为空；空声明不携带信息')
 
     # ③ 自救准入的取值面要真闭合（`R-8.6`）。`Literal` 只给类型检查器看，
     #    而这一格写歪的后果是**一次付费自救的准入被静默放宽**：`repair='unique'`

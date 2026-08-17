@@ -55,9 +55,10 @@
 ### stage6.approve
 
 - 决定：`--pick <N>` / <其他>
-- 所选对象：<label + text sha1>
+- 所选对象：<label + 定稿文本完整 SHA-256>
+- 批准凭据：<actor + reason + 提交/当前 subject_sha256 一致>
 - 机械证据：<所选候选 HARD/info/分母/freshness>
-- 语义证据：<grounding/spoiler/分母/freshness>
+- 语义证据：<质量/矛盾决议、evaluator 指纹、分母/freshness>
 - 落选项：<逐候选缺陷>
 - 判断理由：<与 blueprint、体裁、首章的一致性>
 - 修复与复验：<无或 hook_edit + semantic 结果>
@@ -65,7 +66,8 @@
 ### stage7.approve
 
 - 决定：<approve / reject-and-repair / stop>
-- 检查对象：<name_map 路径 + sha1/round>
+- 检查对象：<name_map 路径 + round + 当前决策面完整 SHA-256>
+- 批准凭据：<actor + reason + 提交/当前 subject_sha256 一致>
 - 机械证据：<HARD/info/unver 与分母>
 - 人工审阅：<新旧名、kept、marker、漏网 surface>
 - 修复与复验：<无或 name_map_edit + approve/assemble 结果>
@@ -80,7 +82,7 @@
 
 | 根因层 | rule/终态 | 路由 | 命令/人工输入 | 退出码 | 最新验证 |
 |---|---|---|---|---:|---|
-| <无则写“无”> | <...> | <deterministic/llm/human> | <...> | <...> | <...> |
+| <无则写“无”> | <...> | <deterministic/llm/human-new-revision/human-revalidation-audit> | <...> | <...> | <...> |
 
 ## 5. 残红、不可验证项与实现边界
 
@@ -92,7 +94,9 @@
 
 ## 6. 调用与耗时账本
 
-口径：只取本 sid 且 `outcome == "ok"`；`cached == true` 单列缓存次数，不重复累计其携带 token；不写金额。
+口径：`<base>/_service/ledger.jsonl` 是最终成本的**唯一权威源**。只取本 sid 且
+`outcome == "ok"`；`cached == true` 单列缓存次数，不重复累计其携带 token；不把
+`_provenance.usage`、日志或历史报告混加，不写金额。
 
 | 节点 | 实付调用 | 缓存命中 | prompt tokens | completion tokens | reasoning tokens | 可证实耗时 |
 |---|---:|---:|---:|---:|---:|---:|

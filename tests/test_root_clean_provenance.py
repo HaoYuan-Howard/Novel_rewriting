@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 from pydantic import Field
 
+from contracts.schema import encode_artifact
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance
 from novel import prov
@@ -42,6 +44,20 @@ def _book(tmp_path: Path) -> Path:
     return novel_dir
 
 
+def _seed_historical_artifact(
+    novel_dir: Path, rel: str, artifact: _Artifact,
+) -> Path:
+    """Seed a pre-postcondition artifact so stale-root behavior can be exercised."""
+    target = novel_dir / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = artifact.model_dump(mode='json', by_alias=True, exclude_none=True)
+    target.write_text(
+        json.dumps(encode_artifact(rel, payload), ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8', newline='',
+    )
+    return target
+
+
 def test_new_provenance_always_carries_current_stage0_clean_hash(tmp_path):
     novel_dir = _book(tmp_path)
     ctx = _ctx(novel_dir)
@@ -67,7 +83,7 @@ def test_stale_upstream_is_refused_at_read_before_a_new_provenance_can_be_minted
     novel_dir = _book(tmp_path)
     old_ctx = _ctx(novel_dir)
     old = _Artifact(text='旧根产物', _provenance=old_ctx.free_provenance())
-    ArtifactStore(old_ctx).write('stage2/up.json', old)
+    _seed_historical_artifact(novel_dir, 'stage2/up.json', old)
     (novel_dir / 'stage0/clean_text.txt').write_text(
         '第二版正文\n', encoding='utf-8', newline='')
     new_ctx = _ctx(novel_dir)
@@ -78,7 +94,8 @@ def test_stale_upstream_is_refused_at_read_before_a_new_provenance_can_be_minted
 def test_readonly_view_can_still_load_a_stale_artifact_to_explain_it(tmp_path):
     novel_dir = _book(tmp_path)
     old_ctx = _ctx(novel_dir)
-    ArtifactStore(old_ctx).write(
+    _seed_historical_artifact(
+        novel_dir,
         'stage2/up.json',
         _Artifact(text='旧根产物', _provenance=old_ctx.free_provenance()),
     )
@@ -103,7 +120,8 @@ def test_readonly_view_can_still_load_a_stale_artifact_to_explain_it(tmp_path):
 def test_llm_preflight_rechecks_roots_even_for_an_explicit_read_own(tmp_path):
     novel_dir = _book(tmp_path)
     old_ctx = _ctx(novel_dir)
-    ArtifactStore(old_ctx).write(
+    _seed_historical_artifact(
+        novel_dir,
         'stage2/up.json',
         _Artifact(text='旧根产物', _provenance=old_ctx.free_provenance()),
     )
@@ -127,7 +145,8 @@ def test_llm_preflight_rechecks_roots_even_for_an_explicit_read_own(tmp_path):
 def test_freshness_turns_stale_immediately_when_stage0_clean_changes(tmp_path):
     novel_dir = _book(tmp_path)
     ctx = _ctx(novel_dir)
-    ArtifactStore(ctx).write(
+    _seed_historical_artifact(
+        novel_dir,
         'stage3/root_test.json',
         _Artifact(text='旧根产物', _provenance=ctx.free_provenance()),
     )

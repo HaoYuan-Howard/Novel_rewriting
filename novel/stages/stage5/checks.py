@@ -43,6 +43,24 @@ from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage5 import measure as M
 from novel.stages.stage5 import prompts
 
+
+def with_output_ordinal(findings: Iterable[Finding], ordinal: int | None) -> list[Finding]:
+    """Bind chapter-scoped findings to their output chapter exactly once.
+
+    The same ``Finding`` shape is also used for book-level and semantic rows, so
+    the field is optional at the shared contract.  Stage5, however, already has
+    the authoritative chapter identity in the criterion input; dropping it here
+    makes the subsequent Review -> CheckReport -> inbox flattening irreversible.
+    """
+    if ordinal is None:
+        return list(findings)
+    value = int(ordinal)
+    return [Finding.model_validate({
+        **item.model_dump(by_alias=True),
+        'output_ordinal': value,
+    }) for item in findings]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 零、几张只有本层读的表
 # ─────────────────────────────────────────────────────────────────────────────
@@ -191,7 +209,24 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     #   它由书级那条 `must_hold_unver` 显式说「没查」。
 
     # ── ④ 本章不该点破的秘密 ────────────────────────────────────────────────
-    hid = entry.get('must_not_reveal') or []
+    # ``must_not_reveal`` is the writer-facing projection.  The review-side
+    # deterministic gate must also be able to recover the same boundary from
+    # the authoritative Stage2 reveal timeline: otherwise one omitted ctx id
+    # turns a checkable verbatim leak into a silent pass.  This remains the
+    # narrow literal detector; paraphrased leaks stay with the semantic judge.
+    ordinal = int(entry.get('output_ordinal') or 0)
+    timeline_hidden = []
+    if ordinal:
+        for secret in book.secrets:
+            reveals = [event.get('chapter') for event in
+                       (secret.get('reader_reveal_events') or [])
+                       if event.get('chapter') is not None]
+            if reveals and ordinal < min(int(chapter) for chapter in reveals):
+                timeline_hidden.append(secret.get('secret_id'))
+    hid = list(dict.fromkeys([
+        *(entry.get('must_not_reveal') or []),
+        *(sid for sid in timeline_hidden if sid),
+    ]))
     if hid:
         table = {s['secret_id']: s for s in book.secrets}
         leak: list[tuple[str, list[str]]] = []
@@ -297,7 +332,7 @@ def segment_fidelity_findings(
                 unresolved_rounds=hit.unresolved_rounds,
                 wontfix=hit.wontfix,
             ))
-    return out
+    return with_output_ordinal(out, entry.get('output_ordinal'))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -538,9 +573,10 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
     # 【早退是有意的】后面每一条判据都建立在「这是一篇文章」之上，对 12 个字跑它们只会
     # 产出一堆没有意义的数。但验收相要知道这不是「其余都干净」——那条区分由这条 HARD 自己承担。
     if len(body) < 50:
-        return [finding('draft_too_short',
-                        detail=f'成稿过短或为空：{len(body)} 字',
-                        evidence=[body[:30] or '（空）'])]
+        return with_output_ordinal([finding(
+            'draft_too_short',
+            detail=f'成稿过短或为空：{len(body)} 字',
+            evidence=[body[:30] or '（空）'])], entry.get('output_ordinal'))
 
     if body[-1] not in TERMINAL_PUNCT:
         fs.append(finding('draft_truncated',
@@ -613,7 +649,7 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
         fs.append(finding('quote_unbalanced',
                           detail=f'{len(qp)} 处引号配对异常：{qp[:3]}',
                           evidence=qp))
-    return fs
+    return with_output_ordinal(fs, entry.get('output_ordinal'))
 
 
 def blocking(fs: Iterable[Finding]) -> list[str]:
@@ -750,7 +786,7 @@ def segment_event_findings(
                        f'{unver[:3]}',
                 evidence=[slot, str(len(unver))],
             ))
-    return out
+    return with_output_ordinal(out, entry.get('output_ordinal'))
 
 
 def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
@@ -772,7 +808,7 @@ def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
                           evidence=[str(len(noatom)), str(len(ident))]))
     land = collections.Counter({'ok': len(landed), 'missed': len(missed),
                                 'noatom': len(noatom), 'ident': len(ident)})
-    return fs, land
+    return with_output_ordinal(fs, entry.get('output_ordinal')), land
 
 
 def identity_rules(entry: dict[str, Any], book: M.Book, *, mode: str) -> set[str]:

@@ -17,6 +17,38 @@ _ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_MANIFEST = _ROOT / 'docs' / 'corpus' / 'current_schema_manifest.json'
 _SEEN_SKIPS: list[dict[str, str]] = []
 _REQUIRE = False
+_WINDOWS_MAX_PATH = 260
+# pytest truncates a tmp_path node prefix to 30 characters and adds a numeric
+# suffix.  Stage0 then creates an Output/per-book directory before appending
+# its longest content-addressed archive filename.  Reserve a deliberately
+# generous 64-character book component (the two current acceptance books use
+# 29 and 24); a future fixture with a longer component must choose an even
+# shorter basetemp rather than silently consuming this safety margin.
+_STAGE0_TMP_SUFFIX = (
+    Path('x' * 30 + '0') / 'Output' / ('book-' + 'x' * 59)
+    / 'stage0' / '_rounds'
+    / ('merge_candidate.' + 'f' * 64 + '.json')
+)
+
+
+def _windows_basetemp_problem(
+    configured: str | os.PathLike[str] | None,
+    *,
+    os_name: str = os.name,
+) -> str | None:
+    """Return an actionable preflight error before a deep Windows path explodes."""
+    if os_name != 'nt' or configured is None:
+        return None
+    base = Path(configured).expanduser().resolve(strict=False)
+    longest = base / _STAGE0_TMP_SUFFIX
+    length = len(str(longest))
+    if length < _WINDOWS_MAX_PATH:
+        return None
+    return (
+        f'Windows --basetemp is too deep: {base}；Stage0 最长临时归档路径约 '
+        f'{length} 字符，达到/超过 MAX_PATH({_WINDOWS_MAX_PATH})。'
+        '请改用仓库内短路径，例如 --basetemp=.test_runtime'
+    )
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -41,6 +73,9 @@ def _manifest_path() -> Path:
 def pytest_configure(config: pytest.Config) -> None:
     global _REQUIRE
     _SEEN_SKIPS.clear()
+    if problem := _windows_basetemp_problem(
+            getattr(config.option, 'basetemp', None)):
+        raise pytest.UsageError(problem)
     _REQUIRE = bool(config.getoption('--require-corpus'))
     if not _REQUIRE:
         return
@@ -102,9 +137,22 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
     manifest: CorpusManifest = getattr(session.config, '_current_corpus_manifest')
     expected = [item.model_dump(mode='json') for item in manifest.skip_allowlist]
+    terminal = session.config.pluginmanager.get_plugin('terminalreporter')
+    corpus_collected = sum(
+        item.get_closest_marker('corpus') is not None
+        for item in getattr(session, 'items', ())
+    )
+    if corpus_collected == 0:
+        message = (
+            'current corpus acceptance collected 0 corpus tests；'
+            '不能用 non-corpus tests 或 skip allowlist 冒充语料验收'
+        )
+        if terminal is not None:
+            terminal.write_sep('=', message, red=True)
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        return
     if actual == expected:
         return
-    terminal = session.config.pluginmanager.get_plugin('terminalreporter')
     message = (
         'current corpus skip allowlist mismatch\n'
         f'expected={json.dumps(expected, ensure_ascii=False, sort_keys=True)}\n'

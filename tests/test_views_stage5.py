@@ -20,6 +20,7 @@ import pytest
 from novel.errors import UpstreamMissing
 from novel.views.stage5 import review_view, stage5_view
 from tests import corpus, sandbox
+from tests.markers import corpus_params
 
 INPUTS = ('stage1/main_text.json', 'stage1/hook_copy.json',
           'stage2/global_grounding.json', 'stage3/style_grounding.json',
@@ -43,14 +44,9 @@ def _stage5_rels(book: str) -> tuple[str, ...]:
         and '_rounds' not in a.rel and a.rel.endswith('.json')))
 
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        not books(), reason='盘上没有 stage5 语料——这几条**没在查**，不是「查过没事」'),
-]
-
-
-@pytest.fixture(params=books(), ids=lambda b: b[:10])
+@pytest.fixture(params=corpus_params(
+    books(), reason='盘上没有 stage5 语料——这些集成用例没在查'),
+    ids=lambda b: b[:10] if b else 'no-corpus')
 def box(request):
     s = sandbox.Sandbox(request.param, INPUTS + _stage5_rels(request.param))
     yield s
@@ -150,6 +146,13 @@ def test_an_ordinal_outside_the_book_is_a_terminal_state(box):
         stage5_view(box.root, box.sid, 999)
     with pytest.raises(UpstreamMissing):
         review_view(box.root, box.sid, 999)
+
+
+def test_stage5_views_reject_an_unknown_synthetic_book(tmp_path):
+    with pytest.raises(UpstreamMissing):
+        stage5_view(tmp_path, '9999999999999999999', 1)
+    with pytest.raises(UpstreamMissing):
+        review_view(tmp_path, '9999999999999999999', 1)
 
 
 def test_the_views_write_nothing(box):

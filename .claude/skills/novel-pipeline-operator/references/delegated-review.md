@@ -34,7 +34,7 @@
 ```text
 闸门：<node>
 决定：<approve / pick N / reject-and-repair / stop>
-检查对象：<产物路径 + sha1/round/label>
+检查对象：<产物路径 + sha1/完整主体 SHA-256/round/label>
 机械证据：<badge、HARD 命中数/分母、关键 info>
 语义证据：<结论、分母、freshness；不适用时写不适用>
 被否决项：<方案 + 具体缺陷>
@@ -58,27 +58,34 @@
 
 ## stage6 代批
 
-按候选级而不是总报告级裁决。把 mechanical 与 semantic 中相同 label、相同文本 sha1 的结论对齐后，依次筛选：
+按候选级而不是总报告级裁决。把 mechanical 与 semantic 中相同 label、相同完整
+SHA-256 主体的结论对齐后，依次筛选：
 
-1. 排除所选候选自身的任何 HARD，包括泄底、凭空事实、结构和来源约束。
-2. 要求事实 grounding 有据；`invented` 或关键事实 `unver` 先修改候选，不以“语义判官没判红”代替证据。
-3. 在剩余候选中优先选择 info 命中较少者。
-4. 仍并列时，比较它与 blueprint 开篇冲突、原作文案体裁和正文首章气质的一致性，并写出审美理由。
-5. 对所有落选候选记录淘汰原因；总报告中的落选残红可保留，但不能混写成所选候选残红。
+1. 排除所选候选自身的任何机械 HARD。
+2. 已校准的 semantic FAIL 或任何绑定本文本的历史校准 FAIL 必须改字形成新主体，
+   不能用人工批准覆盖。合并 PASS 只能来自指纹一致的 A/B 双盲同结论与闭合证据。
+3. 缺审判、profile 缺失/漂移、coverage 不足、A/B 分歧或缺证据均为 `UNVER`；逐项
+   人工核验后可记 `human_verification`，但不得改写为自动 PASS。
+4. 在可定稿候选中优先选择 info 命中较少、质量排名较高者。
+5. 仍并列时，比较它与 blueprint 开篇冲突、原作文案体裁和正文首章气质的一致性，并写出审美理由。
+6. 对所有落选候选记录淘汰原因；总报告中的落选残红可保留，但不能混写成所选候选残红。
 
 三条候选都不合格时：
 
 - 使用书目录内 `stage6/hook_edit.json` 只重写一条候选；
-- 只采用最新语义报告中已 grounded 的事实，不复用原作文案句子；
+- 只采用当前事实包可回查的人物、因果和故事结果，不复用原作文案长句；
 - 通过 `stage6.hook --apply-edit <绝对路径>` 落新一轮；
 - 重新运行机械 check 与 `stage6.semantic`，再选择该候选。
 
-同一文本出现相互矛盾的语义判断时，先核对 sha1、轮次和输入 freshness。确为同输入非确定性时采信更严格的一轮，不用后一次翻绿覆盖前一轮风险；把冲突本身写入终审包。
+同一文本出现相互矛盾的语义判断时，先核对完整 SHA-256、轮次、evaluator 指纹和输入
+freshness。确为同输入非确定性时采信更严格的一轮，不用后一次翻绿覆盖前一轮风险；
+把冲突本身写入终审包。
 
-`stage6.approve --pick N` 后同时核对：
+`stage6.approve --pick N --actor <id> --reason <text> --subject-sha256 <64hex>` 前后同时核对：
 
 - `hook.json.approved.approach/text` 与所选 label 一致；
-- 最新 semantic 对该 label 的 grounding/spoiler 结论仍 fresh；
+- 提交的 hash 是经当前归一链后定稿文本的完整 SHA-256，与页面展示值一致；
+- 最新 semantic 对该文本的决议仍 fresh，并匹配当前 evaluator 指纹；
 - `state` 把 stage6 判为完成。
 
 三者一致才算定稿。总报告因落选候选 HARD 返回 exit 1 时使用 `ready_with_disclosures` 的披露口径，不机械撤销已验证的所选定稿。
@@ -93,9 +100,13 @@
 4. 单字别名不要全局替换。把不改的单字明确登记为 `old == new`，用长度至少 2 且有上下文的 `extra_subs` 处理真实昵称。
 5. 全文补扫人物表不一定覆盖的 surface：顿号拆名、未登记简称、家族/门派/宅邸简称、外文家名和单字昵称。
 6. 对 `rn_residual_stem` 逐条读上下文；普通词假阳可以保留并解释，高置信人名残留必须修复。
-7. 人工编辑只写书目录内 `stage7/name_map_edit.json`，经 `stage7.rename --apply-edit <绝对路径>` 重判。
+7. 先运行 `stage7.rename --emit-edit-template` 取当前注册的 `NameMapEdit` v1 骨架；人工编辑
+   只写书目录内 `stage7/name_map_edit.json`，经 `stage7.rename --apply-edit <绝对路径>` 重判。
 
-任何映射编辑后，无论旧元数据是否仍显示 approved/book_txt，都重新运行 `stage7.approve` 与 `stage7.assemble`，再执行成书逐字对账。不得依赖保留的旧批准或旧成书指纹。
+任何映射编辑后都重新取当前决策面 SHA-256，运行
+`stage7.approve --actor <id> --reason <text> --subject-sha256 <64hex>` 与 `stage7.assemble`，
+再执行成书逐字对账。旧 approved/book_txt 必须视为已过期，不得复用旧页面 hash、
+旧批准或旧成书指纹。
 
 ## 成书逐字对账
 
@@ -118,7 +129,9 @@
 - 第一屏让用户看见交付状态、成书路径、真正需要审阅的风险和建议结论。
 - 每个 badge 都带命中数/分母、freshness 和活动产物标识。
 - 每个代批决定都包含证据、落选项和不可验证余额。
-- 账本按 sid 与 `outcome == "ok"` 过滤；`cached == true` 只计缓存次数，不重复累计其携带的原调用 token。
+- 最终成本只以 `<base>/_service/ledger.jsonl` 为权威源，按 sid 与 `outcome == "ok"`
+  过滤；`cached == true` 只计缓存次数，不重复累计其携带的原调用 token。不把产物
+  usage、终端日志或历史 report 叠加成第二份成本账。
 - 不写金额，只写实付调用数、缓存命中、prompt/completion/reasoning token 与可证实耗时。
 - 所有未收口项都给出影响范围、当前状态和可复制的恢复命令。
 - 删除全部 `<...>` 占位符；不能取得的值写“未知 + 原因”，不留空白冒充完成。

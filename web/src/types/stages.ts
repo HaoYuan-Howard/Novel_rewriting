@@ -918,7 +918,14 @@ export interface Stage7Response {
   kept_count: number
   residual: Residual[]
   baselines: Record<string, StemBaseline>
-  approved: { origin: string } | null
+  approved: {
+    origin: string
+    actor: string
+    reason: string
+    subject_sha256: string
+  } | null
+  /** Canonical hash of surname_map + characters + extra_subs; approval is locked to this value. */
+  approval_subject_sha256: string
   book: Finding[]
   /** null = 当前流程从没跑过恒等基线 */
   identity: IdentityBaseline | null
@@ -953,7 +960,7 @@ export interface InboxItem {
 
 export interface InboxResponse {
   items: InboxItem[]
-  /** 六键全出（0 也要出） */
+  /** 八键全出（0 也要出） */
   counts: Record<InboxKind, number>
   total: number
   wontfix: number

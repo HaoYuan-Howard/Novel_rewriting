@@ -56,8 +56,7 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
     require_current(grounding_payload, current)
     updated = apply_decision_set(current, decisions)
     require_current(grounding_payload, updated)
-    store.archive_round(REL, keep=True)
-    store.write(REL, updated)
+    store.write_round(REL, updated)
     return updated
 
 

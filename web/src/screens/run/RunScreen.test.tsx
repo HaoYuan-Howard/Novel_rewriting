@@ -1,0 +1,76 @@
+import { api } from '@/api/endpoints'
+import { mockApi, SAMPLE_SID } from '@/api/mock'
+import { qk } from '@/api/queryKeys'
+import type { CheckReport } from '@/types/stages'
+import { act, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { renderRoute } from '@/test/render'
+import { RunScreen } from './RunScreen'
+
+describe('RunScreen check composition', () => {
+  it('shows authoritative badges and counts while unavailable checks stay unknown', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    const base = await mockApi.getCheck(SAMPLE_SID, 'stage5')
+    if (!base || base.rules.length < 2) throw new Error('stage5 mock report is incomplete')
+
+    const report: CheckReport = {
+      ...base,
+      badge: 'fail',
+      passed: false,
+      rules: [
+        { ...base.rules[0], sev: 'hard', status: 'hit' },
+        { ...base.rules[1], sev: 'info', status: 'hit' },
+      ],
+      counts: { ok: 0, hit: 2, unver: 2, skipped: 1 },
+    }
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    vi.spyOn(api, 'getCheck').mockImplementation(async (_sid, kind) =>
+      kind === 'stage1' ? null : report,
+    )
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    expect(await screen.findAllByText('有阻断')).toHaveLength(7)
+    expect(screen.getAllByText('hard 1 · info 1 · unver 3')).toHaveLength(7)
+    expect(screen.getByText('? 校验未知')).toBeInTheDocument()
+    expect(screen.getByText(/badge 与计数来自各层 CheckReport/)).toBeInTheDocument()
+  })
+
+  it('hides cached green data while the current check refreshes or fails', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    const base = await mockApi.getCheck(SAMPLE_SID, 'stage5')
+    if (!base) throw new Error('stage5 mock report is missing')
+    const report: CheckReport = { ...base, badge: 'pass', passed: true }
+    let stage1Calls = 0
+    let rejectRefresh!: (reason?: unknown) => void
+    const refresh = new Promise<CheckReport | null>((_resolve, reject) => {
+      rejectRefresh = reject
+    })
+
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    vi.spyOn(api, 'getCheck').mockImplementation(async (_sid, kind) => {
+      if (kind !== 'stage1') return report
+      stage1Calls += 1
+      return stage1Calls === 1 ? report : refresh
+    })
+
+    const { queryClient } = renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+    expect(await screen.findAllByText('通过')).toHaveLength(8)
+
+    act(() => {
+      void queryClient.invalidateQueries({ queryKey: qk.check(SAMPLE_SID, 'stage1') })
+    })
+    await waitFor(() => {
+      expect(screen.getByText('? 校验未知')).toBeInTheDocument()
+      expect(screen.getAllByText('通过')).toHaveLength(7)
+    })
+
+    act(() => rejectRefresh(new Error('current check unavailable')))
+    await waitFor(() => {
+      expect(screen.getByText('? 校验未知')).toBeInTheDocument()
+      expect(screen.getAllByText('通过')).toHaveLength(7)
+    })
+  })
+})

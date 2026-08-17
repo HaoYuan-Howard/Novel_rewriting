@@ -17,6 +17,9 @@ from contracts.schema import (  # noqa: E402
     CorpusArtifactEntry, CorpusBookEntry, CorpusLedgerSummary, CorpusManifest,
     CorpusSkipExpectation, LedgerTokenSummary, artifact_spec, decode_artifact,
 )
+from contracts.schema.corpus import (  # noqa: E402
+    CURRENT_CORPUS_BOOKS, CURRENT_CORPUS_PAID_NODES, corpus_command_dispatch,
+)
 from novel.llm.ledger import LEDGER_REL  # noqa: E402
 from novel.paths import derive_source_meta  # noqa: E402
 
@@ -36,6 +39,10 @@ _TOKEN_COLUMNS = (
 
 def _json(path: Path) -> Any:
     return json.loads(path.read_text(encoding='utf-8'))
+
+
+def _sha256_bytes(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -63,10 +70,26 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
             if spec is None:
                 raise ValueError(
                     f'{book.name}/{rel}: 未登记 JSON；不能从 manifest 中静默忽略')
-            decoded = decode_artifact(rel, _json(path))
+            raw_bytes = path.read_bytes()
+            try:
+                raw = json.loads(raw_bytes.decode('utf-8'))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError(f'{book.name}/{rel}: JSON/UTF-8 损坏：{exc}') from exc
+            marker = raw.get('_schema_version') if isinstance(raw, dict) else None
+            if (isinstance(marker, bool) or not isinstance(marker, int)
+                    or marker != spec.current_version):
+                raise ValueError(
+                    f'{book.name}/{rel}: raw _schema_version={marker!r}，'
+                    f'必须直接等于 registry current v{spec.current_version}；'
+                    'corpus build/verify 禁止迁移旧产物后冒充 current')
+            decoded = decode_artifact(rel, raw)
             payload = spec.model.model_validate(decoded.payload).model_dump(
                 by_alias=True, mode='json')
-            entries.append(CorpusArtifactEntry(rel=rel, schema_version=decoded.version))
+            entries.append(CorpusArtifactEntry(
+                rel=rel,
+                schema_version=marker,
+                sha256=_sha256_bytes(raw_bytes),
+            ))
             payloads[rel] = payload
             if isinstance(payload, dict):
                 code = payload.get('code')
@@ -76,8 +99,16 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
                 if isinstance(provenance, dict) and isinstance(provenance.get('code'), str):
                     codes.add(provenance['code'])
     for rel in _BYTE_ARTIFACTS:
-        if (book / Path(rel)).is_file():
-            entries.append(CorpusArtifactEntry(rel=rel, schema_version=None))
+        path = book / Path(rel)
+        if path.is_file():
+            raw_bytes = path.read_bytes()
+            if not raw_bytes:
+                raise ValueError(f'{book.name}/{rel}: 最终字节产物不得为空')
+            entries.append(CorpusArtifactEntry(
+                rel=rel,
+                schema_version=None,
+                sha256=_sha256_bytes(raw_bytes),
+            ))
     entries.sort(key=lambda item: item.rel)
     return entries, payloads, codes
 
@@ -140,6 +171,7 @@ def _ledger_summary(rows: list[dict[str, Any]], sid: str) -> CorpusLedgerSummary
         rows=len(selected),
         wire_attempts=sum(row.get('cached') is False for row in selected),
         local_cache_hits=sum(row.get('cached') is True for row in selected),
+        nodes=_counter(selected, 'node'),
         outcomes=_counter(selected, 'outcome'),
         models=_counter(selected, 'model'),
         reasoning_efforts=_counter(selected, 'reasoning_effort'),
@@ -153,6 +185,12 @@ def observe(base: str | Path) -> tuple[list[CorpusBookEntry], str, str]:
     if not root.is_dir():
         raise ValueError(f'corpus base 不存在或不是目录：{root}')
     ledger = _ledger_rows(root)
+    expected_sids = {sid for sid, _chapters in CURRENT_CORPUS_BOOKS}
+    ledger_sids = {str(row.get('sid') or '') for row in ledger}
+    if ledger_sids != expected_sids:
+        raise ValueError(
+            'ledger SID 必须恰为冻结双书且均非零：'
+            f'expected={sorted(expected_sids)}, actual={sorted(ledger_sids)}')
     books: list[CorpusBookEntry] = []
     all_codes: set[str] = set()
     for book in _book_dirs(root):
@@ -178,6 +216,11 @@ def observe(base: str | Path) -> tuple[list[CorpusBookEntry], str, str]:
     if len(all_codes) != 1:
         raise ValueError(
             f'current corpus 必须由同一冻结代码身份生成，实得 {sorted(all_codes)}')
+    ledger_codes = {str(row.get('code') or '') for row in ledger}
+    if ledger_codes != all_codes:
+        raise ValueError(
+            'ledger code identity 必须与冻结 artifact code 完全一致：'
+            f'artifacts={sorted(all_codes)}, ledger={sorted(ledger_codes)}')
     inventory = [
         {
             'sid': book.sid,
@@ -197,7 +240,8 @@ def verify(base: str | Path, manifest: CorpusManifest) -> None:
             f'corpus code identity 漂移：manifest={manifest.code_identity}, disk={code}')
     if inventory_sha != manifest.artifact_inventory_sha256:
         raise ValueError(
-            'corpus artifact inventory hash 漂移：书目/原文 hash/章节数/产物路径或版本已变化')
+            'corpus artifact inventory hash 漂移：书目/原文 hash/章节数/'
+            '产物路径、版本或任一文件内容已变化')
     expected = [book.model_dump(mode='json') for book in manifest.books]
     actual = [book.model_dump(mode='json') for book in books]
     if actual != expected:
@@ -209,12 +253,33 @@ def build_manifest(
     skips: list[CorpusSkipExpectation] | None = None,
 ) -> CorpusManifest:
     books, code, inventory_sha = observe(base)
+    indexed: dict[tuple[str, str], str] = {}
+    for command in commands:
+        dispatch = corpus_command_dispatch(command)
+        if dispatch in indexed:
+            raise ValueError(f'重复 production dispatch：{dispatch}')
+        indexed[dispatch] = command
+    expected_dispatches = {
+        (sid, node)
+        for sid, _chapters in CURRENT_CORPUS_BOOKS
+        for node in CURRENT_CORPUS_PAID_NODES
+    }
+    if set(indexed) != expected_dispatches:
+        raise ValueError(
+            'commands 必须恰覆盖冻结的 18 dispatch topology：'
+            f'missing={sorted(expected_dispatches - set(indexed))}, '
+            f'extra={sorted(set(indexed) - expected_dispatches)}')
+    ordered_commands = [
+        indexed[(sid, node)]
+        for sid, _chapters in CURRENT_CORPUS_BOOKS
+        for node in CURRENT_CORPUS_PAID_NODES
+    ]
     return CorpusManifest(
         manifest_version=1,
         generated_at=datetime.now(timezone.utc).isoformat(timespec='seconds'),
         code_identity=code,
         artifact_inventory_sha256=inventory_sha,
-        commands=commands,
+        commands=ordered_commands,
         books=books,
         skip_allowlist=sorted(skips or [], key=lambda item: item.nodeid),
     )

@@ -1,3 +1,5 @@
+import type { RequiredActionInput } from '@/types/jobs'
+
 /**
  * 动作三分类。
  *
@@ -23,6 +25,7 @@ export interface ClassifiableAction {
   mode?: string | null
   paid: boolean
   writes_disk?: boolean
+  required_inputs?: RequiredActionInput[]
 }
 
 function sameExtra(a: string[] | null, b: string[] | null): boolean {

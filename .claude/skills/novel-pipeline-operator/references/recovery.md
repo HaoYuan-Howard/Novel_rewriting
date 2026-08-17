@@ -55,17 +55,25 @@
 | 层 | 允许的人产输入 | 消费入口 | 约束 |
 |---|---|---|---|
 | stage0 | 正式 edit/edit-plan 形状 | `stage0.edit --apply-edit ...` 或 `--apply-edit-plan ...` | 不直接覆盖 `clean_text.txt` 或 removal report |
-| stage2 global/blueprint | finding 明确允许时编辑活动 `.INVALID` | 对应节点 `--revalidate` | 本层没有通用 `--apply-edit`；只改证据指向字段，不改来源账 |
-| stage3 | `<novel-dir>/stage3/style_edit.json`；终态明确允许时可修活动 `.INVALID` | `stage3.style --apply-edit <绝对路径>` 或 `--revalidate` | 决策集只改 schema 开放字段 |
-| stage4 | `<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID` | `stage4.plan --apply-edit <绝对路径>` 或 `--revalidate` | 当前 `--revalidate` 会重建 writer context；仍以追跑 check/state 验证 |
-| stage5 | 文件名含 `chNN` 的**完整单章全文** | `stage5.write --apply-edit <绝对路径>` | 不直接改正式 chapter JSON、draft.md 或其他章 |
+| stage2 global/blueprint | finding 明确允许时编辑活动 `.INVALID` | 对应节点 `--revalidate --actor <id> --reason <text>` | 本层没有通用 `--apply-edit`；只改证据指向字段，不改生成轮次与来源账 |
+| stage3 | `<novel-dir>/stage3/style_edit.json`；终态明确允许时可修活动 `.INVALID` | `stage3.style --apply-edit <绝对路径>` 或 `--revalidate --actor <id> --reason <text>` | 决策集只改 schema 开放字段 |
+| stage4 | `<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID` | `stage4.plan --apply-edit <绝对路径>` 或 `--revalidate --actor <id> --reason <text>` | `--revalidate` 强审计并重建 writer context；仍以追跑 check/state 验证 |
+| stage5 | 文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}` | `stage5.write --apply-edit <绝对路径>` | **0 LLM 调用，但必须提交该章全部 producer-owned slot 的全文**；不直接改正式 chapter JSON、draft.md 或其他章 |
 | stage6 | `<novel-dir>/stage6/hook_edit.json` | `stage6.hook --apply-edit <绝对路径>` | 一次只改目标候选；随后重跑机械与语义审判 |
-| stage7 | `<novel-dir>/stage7/name_map_edit.json` | `stage7.rename --apply-edit <绝对路径>` | 映射变更后强制重新 approve、assemble 和逐字对账 |
+| stage7 | `<novel-dir>/stage7/name_map_edit.json` | 先用 `stage7.rename --emit-edit-template` 取当前 v1 骨架，再跑 `stage7.rename --apply-edit <绝对路径>` | 不手抄 schema 版本；映射变更后强制重新 hash-bound approve、assemble 和逐字对账 |
 | 终审 | `<base>/final_review_<sid>.md` | 用户读取 | 可随跑更新；不得承担产物修复功能 |
 
 不得直接修改：正式 JSON/TXT、`book.txt`、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 历史、旧 run 的输出目录。`mark` 是写进度信标的唯一入口。
 
-`--apply-edit` 当前按 cwd 解析提供的相对路径；统一传书目录内文件的绝对路径，避免错误落到仓根相对路径。
+`--apply-edit` 的相对路径按**书目录**解析，也接受书目录内的绝对路径；目录外路径和 `..`
+穿越关闭式拒绝。操作包仍优先记录解析后的绝对路径，便于复核。
+
+### `--revalidate` 与 `--apply-edit` 不是同一条路
+
+- `--revalidate --actor --reason` 是强审计：只提升当前 `.INVALID`，记录审计人、原因、
+  raw/canonical hash 及结构化差异，保留原生成轮次和来源账。它不是“人改了一轮”。
+- `--apply-edit` 消费明确的 typed 人工输入，开新人工修订轮，并让已绑定旧主体的下游结论/
+  approval 按契约过期。它是 0 LLM 费用，不等于没有人工输入或可以跳过重判。
 
 ## 付费修复与缓存
 
@@ -77,7 +85,9 @@
 4. 只有 finding 明确要求重新采样时才使用定向刷新入口；仍需两项授权并记录原因。
 5. 连接错误使用实现内重试阶梯；实现耗尽后不要再叠加无限外层重试。
 
-stage5 调用次数高于章数可以来自写作重试和长度收缩。账本中的 `cached == true` 为缓存回放，实付为零；reasoning token 为零或空不等于失败。
+stage5 调用次数高于章数可以来自写作重试和长度收缩。最终调用/token 成本的唯一
+权威源是 `<BASE>/_service/ledger.jsonl`；产物 usage 和日志不另行混加。账本中的
+`cached == true` 为缓存回放，实付为零；reasoning token 为零或空不等于失败。
 
 修改正文后：
 

@@ -13,9 +13,9 @@ JSON Schema 里照样是个 `enum`（前端 TS 类型因此能生成），而**�
 """
 from __future__ import annotations
 
-from typing import Any, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
-from pydantic import Field, RootModel, field_validator, model_validator
+from pydantic import Field, RootModel, StringConstraints, field_validator, model_validator
 
 from contracts.invariants import OWNER, PARTIAL_REWRITE_FLAGS, SEVERITY
 from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
@@ -23,6 +23,7 @@ from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
 Severity = Literal[SEVERITY]
 Owner = Literal[OWNER]
 PartialRewrite = Literal[PARTIAL_REWRITE_FLAGS]
+Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 
 #: `promoted()` 的返回类型。**`model_copy` 保留具体类**，于是
 #: `RoundLlmProvenance.promoted()` 仍是 `RoundLlmProvenance`（`round` 原样带下来——
@@ -90,6 +91,72 @@ class Usage(FrozenModel):
     reasoning_tokens: int | None
 
 
+class HumanApproval(StrictModel):
+    """A human decision must always be attributable and explainable.
+
+    ``min_length`` alone accepts whitespace-only strings.  These two fields are
+    deliberately validated in the shared carrier so every approval surface has
+    the same refusal boundary instead of relying on individual CLI call sites.
+    """
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+    @field_validator('actor', 'reason')
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('人工凭据不能只含空白')
+        return value
+
+
+class HashBoundHumanApproval(HumanApproval):
+    """A human decision bound to the exact subject that was reviewed."""
+
+    subject_sha256: Sha256
+
+
+class RevalidationAudit(HumanApproval):
+    """Immutable facts captured while promoting an ``.INVALID`` artifact.
+
+    Raw hashes expose byte-only edits (including formatting); canonical hashes
+    and RFC 6901 pointers describe logical JSON changes.  Keeping both prevents
+    either representation from silently standing in for the other.
+    """
+
+    baseline_locator_sha256: Sha256
+    baseline_raw_sha256: Sha256
+    candidate_raw_sha256: Sha256
+    baseline_canonical_sha256: Sha256
+    candidate_canonical_sha256: Sha256
+    raw_changed: bool
+    content_changed: bool
+    edited_by_human: bool
+    changed_json_pointers: tuple[str, ...]
+
+    @model_validator(mode='after')
+    def _hashes_and_diff_agree(self) -> 'RevalidationAudit':
+        raw_changed = self.baseline_raw_sha256 != self.candidate_raw_sha256
+        content_changed = (
+            self.baseline_canonical_sha256 != self.candidate_canonical_sha256)
+        if self.raw_changed != raw_changed:
+            raise ValueError('raw_changed 必须与 baseline/candidate raw SHA-256 一致')
+        if self.content_changed != content_changed:
+            raise ValueError('content_changed 必须与 baseline/candidate canonical SHA-256 一致')
+        if self.edited_by_human != content_changed:
+            raise ValueError('edited_by_human 必须与 content_changed 一致')
+        if not raw_changed and content_changed:
+            raise ValueError('原始字节相同而 canonical JSON 不同，审计账自相矛盾')
+        pointers = self.changed_json_pointers
+        if pointers != tuple(sorted(set(pointers))):
+            raise ValueError('changed_json_pointers 必须去重并按字典序排列')
+        if any(pointer and not pointer.startswith('/') for pointer in pointers):
+            raise ValueError('changed_json_pointers 必须是 RFC 6901 JSON Pointer')
+        if content_changed != bool(pointers):
+            raise ValueError('逻辑内容变化与 changed_json_pointers 是否为空必须一致')
+        return self
+
+
 class Provenance(StrictModel):
     """产物的来源账。**付费层用 `LlmProvenance`，0 成本层用 `FreeProvenance`。**
 
@@ -124,8 +191,10 @@ class Provenance(StrictModel):
     #:
     #: ⚠ `False` 与「键不在」**不是一回事**：前者是「跑出来的」，
     #: 后者是「这份产物太老，没记过这件事」（`Q-2` 的三态）。
-    #: ⚠ 它**刻意不宣称 `origin=human`**——「判据改了」与「人手改过 `.INVALID`」
-    #: 在节点这一侧分不开，所以它只能诚实地记「这份稿被重判提升过」。
+    #: 它只回答「这份稿被重判提升过」，不把提升伪装成一轮新的人工稿。
+    #: 是否有人改过业务内容由 ``revalidation_audit.edited_by_human`` 单独回答：
+    #: 仅当去掉 ``_provenance`` 后的 canonical payload 变化才为真；纯排版或来源块变化
+    #: 只会令 ``raw_changed`` 为真。
     revalidated: bool | None = None
 
     #: 阻断级判据里**没跑成**的那些。**只写在 `.INVALID` 上，且空列表也要写。**
@@ -135,7 +204,8 @@ class Provenance(StrictModel):
     #: 要求必须能区分的两件事。
     gates_skipped: list[str] | None = None
 
-    #: `'human'` = `--apply-edit` 落的人工稿。
+    #: `'human'` = `--apply-edit` 落成的**新一轮**人工稿。直接修改活的 `.INVALID`
+    #: 再提升不会冒充新一轮，而由 ``revalidation_audit`` 留下 actor/reason 与内容 diff。
     origin: Literal['human'] | None = None
 
     #: 「这份 `inputs` 是本次重判时读的，**不是对历史来源的追认**」。
@@ -148,11 +218,20 @@ class Provenance(StrictModel):
     #: 被改的那部分是**现在**从盘上重算的。三个记法各错一半：
     #: 沿用旧账 ⇒「这份 `measurable` 照哪份原文算的」永远说不出口（而那正是
     #: `--remeasure` 存在的理由）· 整份覆盖 ⇒ 把 `prompts`/`model` 说成本次产的（伪造）·
-    #: 借 `revalidated` ⇒ 那一条说的是**状态变更**，内容一个字没动。
+    #: 借 `revalidated` ⇒ 那一条只说发生过提升；其 audit 比较的是 INVALID 创建基线与
+    #: 人工提交面，不能替本次确定性派生字段重算声明新的输入依据。
     #:
     #: ⚠ **一个带值的键，不是三个布尔。** 原型标的是 `remeasured: true`，
     #: 于是 `--recheck` / `--renormalize` 各自还要再加一个键——同一件事的第三个落点。
     partial_rewrite: PartialRewrite | None = None
+
+    #: ``write_invalid`` 保存的不可变原始快照定位键。只属于活的 `.INVALID`；
+    #: 提升为正式产物后由 ``revalidation_audit`` 接过审计责任并清除此键。
+    invalid_baseline_sha256: Sha256 | None = None
+
+    #: ``--revalidate`` 的完整人工审计账。raw hash 记录任意字节变化；去掉来源块后的
+    #: canonical hash / JSON Pointer 记录业务变化，并据此唯一派生 ``edited_by_human``。
+    revalidation_audit: RevalidationAudit | None = None
 
     def to_disk(self) -> dict:
         """落盘形态：**本层 `None` 的键一个都不写**。
@@ -182,7 +261,7 @@ class Provenance(StrictModel):
         dumped = self.model_dump(mode='json')
         return {k: v for k, v in dumped.items() if v is not None}
 
-    def promoted(self: P, *, code: str) -> P:
+    def promoted(self: P, *, code: str, audit: RevalidationAudit) -> P:
         """把 `.INVALID` 稿的来源账带上来。`_common.md` §5.2。
 
         ⚠⚠ **签名里没有 `prompts` / `model` / `inputs` —— 这是本方法存在的全部意义。**
@@ -193,10 +272,13 @@ class Provenance(StrictModel):
         三件事同时错：记了一个没产出它的 prompt；记了一个没写它的模型；
         把「重判提升」记成了「第 N 轮写作」。
 
-        **没有参数，就没有可以传错的东西。**
+        审计参数只接受已经校验过的 ``RevalidationAudit``；其中
+        ``edited_by_human`` 只由不含 ``_provenance`` 的 canonical 业务 payload diff
+        决定，纯排版只记 ``raw_changed``。仍然没有任何入口能替换 prompts / model /
+        inputs，因而不会把重判伪造成一次新生成或新一轮人工稿。
 
-        ⚠ `code` 是**唯一**允许变的——它记的是「这次重判用的是哪版代码」，
-        而重判确实是这一次跑的。
+        ⚠ `code` 与重验证审计账是本次动作新增的事实；生成来源的 prompts / model /
+        inputs 与轮次仍然原样继承。
 
         ⚠⚠ **它挂在基类上，不挂在 `LlmProvenance` 上。** 原来挂在付费那一支，
         而 `store.promote_invalid` 拿到的 `src` 类型是 `Provenance`：
@@ -207,8 +289,13 @@ class Provenance(StrictModel):
         方法体里没有一处是付费那一支特有的，「没有参数就没有可以传错的东西」
         对 0 成本孪生同样成立。
         """
-        return self.model_copy(update={'code': code, 'revalidated': True,
-                                       'gates_skipped': None})
+        return self.model_copy(update={
+            'code': code,
+            'revalidated': True,
+            'gates_skipped': None,
+            'invalid_baseline_sha256': None,
+            'revalidation_audit': audit,
+        })
 
     def partially_rewritten(self: P, *, by: str, code: str,
                             inputs: dict[str, InputEdge]) -> P:
@@ -410,6 +497,9 @@ class Finding(FrozenModel):
     （以及规则明确声明的带值修复实参）。
     这样一条 finding **不可能与判据表说的不一致**。
     """
+
+    #: 逐章结论所属输出章序；书级结论显式为 ``None``。
+    output_ordinal: int | None = Field(default=None, ge=1)
 
     rule: str = Field(min_length=1)
     sev: Severity

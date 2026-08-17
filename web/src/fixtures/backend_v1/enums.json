@@ -778,7 +778,8 @@
    "free_flag": null,
    "writes": "stage0/removal_report.json · stage0/clean_text.txt",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage0.remove",
@@ -791,7 +792,8 @@
    "free_flag": null,
    "writes": "stage0/removal_report.json · stage0/clean_text.txt",
    "writes_disk": true,
-   "needs_value": "要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid"
+   "needs_value": "要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid",
+   "required_inputs": []
   },
   {
    "kind": "stage0.remove",
@@ -804,7 +806,8 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage0.remove",
@@ -817,7 +820,8 @@
    "free_flag": "--check-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage0.approve",
@@ -828,7 +832,17 @@
    "free_flag": null,
    "writes": "stage0/removal_report.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage0.edit",
@@ -839,7 +853,8 @@
    "free_flag": null,
    "writes": "stage0/removal_report.json · stage0/clean_text.txt",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage0.edit",
@@ -852,7 +867,17 @@
    "free_flag": "--apply-edit",
    "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）"
+   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage0.edit",
@@ -865,7 +890,22 @@
    "free_flag": null,
    "writes": "stage0/removal_report.json · stage0/clean_text.txt",
    "writes_disk": true,
-   "needs_value": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）"
+   "needs_value": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage0.edit",
+   "mode": null,
+   "label": "stage0 人工编辑 --apply-merge-plan",
+   "extra": [
+    "--apply-merge-plan"
+   ],
+   "paid": false,
+   "free_flag": null,
+   "writes": "stage0/removal_report.json · stage0/clean_text.txt",
+   "writes_disk": true,
+   "needs_value": "审校台生成的 stage0 三方合并决定（冲突逐项决定 + 乐观锁）",
+   "required_inputs": []
   },
   {
    "kind": "stage1.partition",
@@ -876,7 +916,8 @@
    "free_flag": null,
    "writes": "stage1/main_text.json · stage1/hook_copy.json · stage1/partition_report.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage1.partition",
@@ -889,7 +930,8 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage1.partition",
@@ -902,7 +944,8 @@
    "free_flag": "--check-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage2.global",
@@ -911,35 +954,24 @@
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/global_grounding.json",
+   "writes": "stage2/global_grounding.json · stage2/global_review.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage2.global",
    "mode": null,
-   "label": "stage2 全书级抽取 --migrate",
+   "label": "stage2 全书级抽取 --renormalize",
    "extra": [
-    "--migrate"
+    "--renormalize"
    ],
    "paid": false,
-   "free_flag": "--migrate",
-   "writes": "按当前锚点算法重新定位原文引用并写回",
+   "free_flag": "--renormalize",
+   "writes": "按当前契约重算代码派生字段与原文定位并写回",
    "writes_disk": true,
-   "needs_value": null
-  },
-  {
-   "kind": "stage2.global",
-   "mode": null,
-   "label": "stage2 全书级抽取 --drop",
-   "extra": [
-    "--drop"
-   ],
-   "paid": false,
-   "free_flag": "--drop",
-   "writes": "把人工裁掉的 secret / relation 从产物里删掉，裁决理由写进 _provenance.human_adjudicated",
-   "writes_disk": true,
-   "needs_value": "人工裁掉原文无据的条目：`<secret_xx|rel_xx>=<理由>`，理由必填"
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage2.global",
@@ -950,9 +982,24 @@
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/global_grounding.json",
+   "writes": "stage2/global_grounding.json · stage2/global_review.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "mode": null,
+   "label": "stage2 全书级抽取 --resample",
+   "extra": [
+    "--resample"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/global_grounding.json · stage2/global_review.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage2.global",
@@ -963,9 +1010,19 @@
    ],
    "paid": false,
    "free_flag": "--revalidate",
-   "writes": "把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/",
+   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage2.global",
@@ -978,7 +1035,36 @@
    "free_flag": null,
    "writes": "并发写 stage2/global_grounding.json、stage2/chapter_blueprints.json 与 stage3/style_grounding.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "mode": null,
+   "label": "stage2 全书级抽取 --apply-edit",
+   "extra": [
+    "--apply-edit"
+   ],
+   "paid": false,
+   "free_flag": "--apply-edit",
+   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
+   "writes_disk": true,
+   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "mode": null,
+   "label": "stage2 全书级抽取 --review-decisions",
+   "extra": [
+    "--review-decisions"
+   ],
+   "paid": false,
+   "free_flag": "--review-decisions",
+   "writes": "stage2/global_grounding.json · stage2/global_review.json",
+   "writes_disk": true,
+   "needs_value": "stage2/global_review 的人工决策集（相对当前书目录）",
+   "required_inputs": []
   },
   {
    "kind": "stage2.blueprint",
@@ -989,20 +1075,22 @@
    "free_flag": null,
    "writes": "stage2/chapter_blueprints.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage2.blueprint",
    "mode": null,
-   "label": "stage2 逐章抽取 --prompt-only",
+   "label": "stage2 逐章抽取 --dry-run",
    "extra": [
-    "--prompt-only"
+    "--dry-run"
    ],
    "paid": false,
-   "free_flag": "--prompt-only",
+   "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage2.blueprint",
@@ -1015,33 +1103,22 @@
    "free_flag": "--check-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage2.blueprint",
    "mode": null,
-   "label": "stage2 逐章抽取 --migrate",
+   "label": "stage2 逐章抽取 --renormalize",
    "extra": [
-    "--migrate"
+    "--renormalize"
    ],
    "paid": false,
-   "free_flag": "--migrate",
-   "writes": "按当前锚点算法重新定位原文引用并写回",
+   "free_flag": "--renormalize",
+   "writes": "按当前契约重算代码派生字段与原文定位并写回",
    "writes_disk": true,
-   "needs_value": null
-  },
-  {
-   "kind": "stage2.blueprint",
-   "mode": null,
-   "label": "stage2 逐章抽取 --apply-edit",
-   "extra": [
-    "--apply-edit"
-   ],
-   "paid": false,
-   "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
-   "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）"
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage2.blueprint",
@@ -1054,20 +1131,8 @@
    "free_flag": null,
    "writes": "stage2/chapter_blueprints.json",
    "writes_disk": true,
-   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章"
-  },
-  {
-   "kind": "stage2.blueprint",
-   "mode": null,
-   "label": "stage2 逐章抽取 --replay-cache",
-   "extra": [
-    "--replay-cache"
-   ],
-   "paid": false,
-   "free_flag": "--replay-cache",
-   "writes": "把重放回来的那一章合并写回 stage2/chapter_blueprints.json",
-   "writes_disk": true,
-   "needs_value": "要重放的那次调用的缓存 key；必须配 `--chapters` 指定单章"
+   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
+   "required_inputs": []
   },
   {
    "kind": "stage2.blueprint",
@@ -1078,9 +1143,19 @@
    ],
    "paid": false,
    "free_flag": "--revalidate",
-   "writes": "把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/",
+   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage3.style",
@@ -1091,7 +1166,8 @@
    "free_flag": null,
    "writes": "stage3/style_grounding.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage3.style",
@@ -1104,7 +1180,8 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage3.style",
@@ -1117,7 +1194,8 @@
    "free_flag": "--check-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage3.style",
@@ -1130,7 +1208,8 @@
    "free_flag": "--measure-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage3.style",
@@ -1143,7 +1222,8 @@
    "free_flag": "--remeasure",
    "writes": "重算的 measurable 写回正式产物（其余字段不动）",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage3.style",
@@ -1154,9 +1234,19 @@
    ],
    "paid": false,
    "free_flag": "--revalidate",
-   "writes": "把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/",
+   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage3.style",
@@ -1169,7 +1259,8 @@
    "free_flag": "--apply-edit",
    "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）"
+   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+   "required_inputs": []
   },
   {
    "kind": "stage3.style",
@@ -1182,7 +1273,8 @@
    "free_flag": null,
    "writes": "stage3/style_grounding.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage4.plan",
@@ -1193,7 +1285,8 @@
    "free_flag": null,
    "writes": "stage4/plan_chapters.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage4.plan",
@@ -1206,20 +1299,8 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
-  },
-  {
-   "kind": "stage4.plan",
-   "mode": null,
-   "label": "stage4 重构计划 --prompt-only",
-   "extra": [
-    "--prompt-only"
-   ],
-   "paid": false,
-   "free_flag": "--prompt-only",
-   "writes": "",
-   "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage4.plan",
@@ -1232,7 +1313,8 @@
    "free_flag": "--check-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage4.plan",
@@ -1243,9 +1325,19 @@
    ],
    "paid": false,
    "free_flag": "--revalidate",
-   "writes": "把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/",
+   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage4.plan",
@@ -1258,7 +1350,8 @@
    "free_flag": "--names-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage4.plan",
@@ -1269,9 +1362,10 @@
    ],
    "paid": false,
    "free_flag": "--identity",
-   "writes": "stage4/plan_chapters.json",
+   "writes": "stage4/writer_context.identity.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage4.plan",
@@ -1284,7 +1378,22 @@
    "free_flag": "--apply-edit",
    "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）"
+   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage4.plan",
+   "mode": null,
+   "label": "stage4 重构计划 --chapters",
+   "extra": [
+    "--chapters"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage4/plan_chapters.json",
+   "writes_disk": true,
+   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
+   "required_inputs": []
   },
   {
    "kind": "stage4.context",
@@ -1295,7 +1404,8 @@
    "free_flag": null,
    "writes": "stage4/writer_context.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1306,7 +1416,8 @@
    "free_flag": null,
    "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1319,7 +1430,8 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1332,7 +1444,8 @@
    "free_flag": "--recheck",
    "writes": "刷新已有成稿的指标，并重拼 draft.md",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1343,9 +1456,19 @@
    ],
    "paid": false,
    "free_flag": "--revalidate",
-   "writes": "把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/",
+   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage5.write",
@@ -1358,7 +1481,8 @@
    "free_flag": "--apply-edit",
    "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）"
+   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1371,7 +1495,8 @@
    "free_flag": null,
    "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1384,7 +1509,8 @@
    "free_flag": null,
    "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
    "writes_disk": true,
-   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章"
+   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1395,7 +1521,8 @@
    "free_flag": null,
    "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1408,7 +1535,8 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1421,7 +1549,8 @@
    "free_flag": "--recheck",
    "writes": "刷新已有成稿的指标，并重拼 draft.md",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1432,9 +1561,19 @@
    ],
    "paid": false,
    "free_flag": "--revalidate",
-   "writes": "把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/",
+   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage5.write",
@@ -1447,7 +1586,8 @@
    "free_flag": "--apply-edit",
    "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）"
+   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1460,7 +1600,8 @@
    "free_flag": null,
    "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1473,7 +1614,8 @@
    "free_flag": null,
    "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
    "writes_disk": true,
-   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章"
+   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
+   "required_inputs": []
   },
   {
    "kind": "stage5.review",
@@ -1484,7 +1626,8 @@
    "free_flag": null,
    "writes": "stage5/review_{n}.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.review",
@@ -1497,7 +1640,8 @@
    "free_flag": "--check-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.review",
@@ -1507,10 +1651,52 @@
     "--wontfix"
    ],
    "paid": false,
-   "free_flag": null,
-   "writes": "把一条豁免记进 stage5/wontfix.json（**一份验收报告都不产**）",
+   "free_flag": "--wontfix",
+   "writes": "把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）",
    "writes_disk": true,
-   "needs_value": "这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填"
+   "needs_value": "这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage5.review",
+   "mode": null,
+   "label": "stage5 全书验收 --retain-pretrim",
+   "extra": [
+    "--retain-pretrim"
+   ],
+   "paid": false,
+   "free_flag": "--retain-pretrim",
+   "writes": "写 stage5/trim_resolution_chNN.json；旧 resolution 归档，不改正文、不采用收缩候选",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--chapters",
+     "description": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章"
+    },
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
+  },
+  {
+   "kind": "stage5.review",
+   "mode": null,
+   "label": "stage5 全书验收 --chapters",
+   "extra": [
+    "--chapters"
+   ],
+   "paid": false,
+   "free_flag": null,
+   "writes": "stage5/review_{n}.json",
+   "writes_disk": true,
+   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
+   "required_inputs": []
   },
   {
    "kind": "stage5.semantic",
@@ -1521,7 +1707,8 @@
    "free_flag": null,
    "writes": "stage5/semantic_{n}.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.semantic",
@@ -1534,7 +1721,22 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage5.semantic",
+   "mode": null,
+   "label": "stage5 书级语义审判 --advisory",
+   "extra": [
+    "--advisory"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage5/semantic_{n}.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage6.hook",
@@ -1545,7 +1747,8 @@
    "free_flag": null,
    "writes": "stage6/hook.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage6.hook",
@@ -1558,7 +1761,8 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage6.hook",
@@ -1571,7 +1775,8 @@
    "free_flag": "--check-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage6.hook",
@@ -1582,9 +1787,10 @@
    ],
    "paid": false,
    "free_flag": "--identity",
-   "writes": "stage6/hook.json",
-   "writes_disk": true,
-   "needs_value": null
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage6.hook",
@@ -1597,7 +1803,8 @@
    "free_flag": "--recheck",
    "writes": "刷新已有成稿的指标，并重拼 draft.md",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage6.hook",
@@ -1608,9 +1815,19 @@
    ],
    "paid": false,
    "free_flag": "--revalidate",
-   "writes": "把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/",
+   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
    "kind": "stage6.hook",
@@ -1623,7 +1840,22 @@
    "free_flag": "--apply-edit",
    "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）"
+   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage6.hook",
+   "mode": null,
+   "label": "stage6 开篇文案 --wontfix",
+   "extra": [
+    "--wontfix"
+   ],
+   "paid": false,
+   "free_flag": "--wontfix",
+   "writes": "把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）",
+   "writes_disk": true,
+   "needs_value": "这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填",
+   "required_inputs": []
   },
   {
    "kind": "stage6.semantic",
@@ -1634,7 +1866,8 @@
    "free_flag": null,
    "writes": "stage6/semantic_{n}.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage6.semantic",
@@ -1647,7 +1880,22 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage6.semantic",
+   "mode": null,
+   "label": "stage6 文案语义审判 --advisory",
+   "extra": [
+    "--advisory"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage6/semantic_{n}.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage6.approve",
@@ -1658,7 +1906,25 @@
    "free_flag": null,
    "writes": "stage6/hook.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--pick",
+     "description": "定稿选第几个候选（1 起）"
+    },
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    },
+    {
+     "flag": "--subject-sha256",
+     "description": "人工决定乐观锁定的完整内容 SHA-256"
+    }
+   ]
   },
   {
    "kind": "stage6.approve",
@@ -1671,7 +1937,21 @@
    "free_flag": null,
    "writes": "stage6/hook.json",
    "writes_disk": true,
-   "needs_value": "定稿选第几个候选（1 起）"
+   "needs_value": "定稿选第几个候选（1 起）",
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    },
+    {
+     "flag": "--subject-sha256",
+     "description": "人工决定乐观锁定的完整内容 SHA-256"
+    }
+   ]
   },
   {
    "kind": "stage7.rename",
@@ -1682,7 +1962,8 @@
    "free_flag": null,
    "writes": "stage7/name_map.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage7.rename",
@@ -1695,7 +1976,8 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage7.rename",
@@ -1708,7 +1990,8 @@
    "free_flag": "--check-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage7.rename",
@@ -1721,7 +2004,8 @@
    "free_flag": "--identity",
    "writes": "stage7/name_map.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage7.rename",
@@ -1734,7 +2018,8 @@
    "free_flag": "--recheck",
    "writes": "刷新已有成稿的指标，并重拼 draft.md",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage7.rename",
@@ -1747,7 +2032,8 @@
    "free_flag": "--apply-edit",
    "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）"
+   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+   "required_inputs": []
   },
   {
    "kind": "stage7.rename",
@@ -1758,20 +2044,47 @@
    ],
    "paid": false,
    "free_flag": "--revalidate",
-   "writes": "把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/",
+   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    }
+   ]
   },
   {
-   "kind": "stage7.assemble",
+   "kind": "stage7.rename",
    "mode": null,
-   "label": "stage7 替换与成书",
-   "extra": null,
+   "label": "stage7 人名表 --emit-edit-template",
+   "extra": [
+    "--emit-edit-template"
+   ],
    "paid": false,
-   "free_flag": null,
-   "writes": "stage7/book.txt",
+   "free_flag": "--emit-edit-template",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage7.rename",
+   "mode": null,
+   "label": "stage7 人名表 --adopt-residual",
+   "extra": [
+    "--adopt-residual"
+   ],
+   "paid": false,
+   "free_flag": "--adopt-residual",
+   "writes": "重写 stage7/name_map.json，清旧审批并退休现有 book.txt",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": "只接受 `high`；采纳无冲突、未覆盖且 unit/suggest 完整的残留建议",
+   "required_inputs": []
   },
   {
    "kind": "stage7.approve",
@@ -1782,7 +2095,33 @@
    "free_flag": null,
    "writes": "stage7/name_map.json",
    "writes_disk": true,
-   "needs_value": null
+   "needs_value": null,
+   "required_inputs": [
+    {
+     "flag": "--actor",
+     "description": "人工决定的自报身份（不是认证身份）"
+    },
+    {
+     "flag": "--reason",
+     "description": "人工决定的非空理由"
+    },
+    {
+     "flag": "--subject-sha256",
+     "description": "人工决定乐观锁定的完整内容 SHA-256"
+    }
+   ]
+  },
+  {
+   "kind": "stage7.assemble",
+   "mode": null,
+   "label": "stage7 替换与成书",
+   "extra": null,
+   "paid": false,
+   "free_flag": null,
+   "writes": "stage7/book.txt",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
   },
   {
    "kind": "stage5.write",
@@ -1796,7 +2135,8 @@
    "free_flag": null,
    "writes": "按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿",
    "writes_disk": true,
-   "needs_value": "深度重构章节（逗号分隔；与 --shallow-rest 成对使用）"
+   "needs_value": "深度重构章节（逗号分隔；与 --shallow-rest 成对使用）",
+   "required_inputs": []
   }
  ]
 }

@@ -715,11 +715,20 @@ assert tuple(HOOK_APPROACH_NOTES) == HOOK_APPROACHES, \
 #: 落在「基本是普通词」那一侧而两个都是真漏网；`confidence` 实测 6/6 全真。
 RESIDUAL_CONFIDENCE: Final = ('high', 'low')
 
-#: 判成 `high` 的那几个字：**「旧姓 + 这些字」= 高置信的漏网候选**。
-#: 实测两本命中 `陆家`×2 / `祈家` / `谈家`×2 / `沈家` 共 6 条，**6/6 全真、0 假**。
+#: `stage7.rename --adopt-residual` / 对应 HTTP 请求唯一允许的置信度。
+#: 这是**处置动作**的闭合输入域，不等于探针本身会产出的完整
+#: `RESIDUAL_CONFIDENCE`：low 仍须展示给人，但绝不能由批量采纳入口写回。
+RESIDUAL_ADOPTION_CONFIDENCE: Final = ('high',)
+
+#: 判成 `high` 的称呼后缀：**「旧姓 + 这些字」= 高置信的漏网候选**。
+#: 长后缀必须排在短后缀前面（例如「公子」先于单字），扫描口统一按长度倒排，
+#: 不能退回到只看紧邻一个字，否则「温公子」会被截成「温公」。
 #: ⚠ **绝不自动替换**：「不允**许家**人」里就含「许家」，自动换会写出「不允苏家人」。
 #: 它只影响候选的**排序与标记**，处置永远是人勾选。
-RESIDUAL_HIGH_STEMS: Final = ('家', '府', '氏', '宅', '门')
+RESIDUAL_HIGH_STEMS: Final = (
+    '公子', '少主', '仙子', '姑娘', '道友', '前辈',
+    '兄', '姐', '妹', '弟', '家', '府', '宗', '氏', '宅', '门',
+)
 
 #: 残留候选报出的命中片段长度（**恒 3 字**）与上下文半径（前后各 12 字）。
 #: ⚠ 上下文**只影响可读性，不是门**——探针报的是位置，人要判「这是不是一个人名」
@@ -774,7 +783,7 @@ FREE_ENTRIES: Final = {
     '--dry-run': '只打印将要发出去的东西，不调用、不写盘',
     '--check-only': '按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零',
     '--recheck': '按当前判据重判存量产物并写回指标',
-    '--revalidate': '按当前判据重判被闸门拦下的 .INVALID 稿，合格即提升为正式产物',
+    '--revalidate': '按当前判据对 .INVALID 稿做 0 LLM 同轮重判，必填 actor/reason 并留不可变审计，合格才提升',
     '--measure-only': '只跑确定性实测并报出来，**不写盘**（与 `--remeasure` 是两件事）',
     '--remeasure': '重算确定性实测值写回，其余字段不动',
     '--renormalize': '按当前契约重算代码派生字段与原文定位',
@@ -790,7 +799,10 @@ FREE_ENTRIES: Final = {
     #   ⇒ 一次**纯记账、一个请求都不发**的动作会当场要 `--yes` 二次确认。
     #   实测就是这么发现的（真跑 CLI 被拦下）。**表不全 ⇒ 系统在对用户说假话。**
     '--wontfix': '把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用',
-    '--retain-pretrim': '确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，不调用模型',
+    '--retain-pretrim': ('人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，'
+                         '0 次 LLM 调用（不是 0 人工成本）'),
+    '--emit-edit-template': '向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘',
+    '--adopt-residual': '显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链',
 }
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
@@ -844,6 +856,7 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #: `characters` 仍来自旧调用，所以必须允许它如实标成局部改写。
 PARTIAL_REWRITE_FLAGS: Final = (
     '--remeasure', '--recheck', '--renormalize', '--identity', '--apply-edit',
+    '--adopt-residual',
 )
 
 #: 带值的 flag：`--apply-edit <载荷文件>`。值说的是「这个值是什么」。
@@ -904,6 +917,7 @@ VALUED_FLAGS: Final = {
     # （它写的就是本节点 `produces` 里那一份，只是少写几章 ⇒ 不登记就落到 `produces`，正确）。
     # 两条都与 `--pick` 逐条同形。
     '--chapters': '只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章',
+    '--adopt-residual': '只接受 `high`；采纳无冲突、未覆盖且 unit/suggest 完整的残留建议',
 }
 
 #: ⭐ 一次跑**会往盘上写什么**。空串 = 不写盘。
@@ -937,10 +951,12 @@ WRITE_EFFECTS: Final = {
     #   「写 `stage4/plan_chapters.json`」——**那是系统在对用户说假话**
     #   （`Q-3`）。实测确认过一次才补上这一行。
     '--names-only': '',
+    '--emit-edit-template': '',
+    '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有 book.txt',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
     '--recheck': '刷新已有成稿的指标，并重拼 draft.md',
-    '--revalidate': '把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/',
+    '--revalidate': '必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/',
     '--apply-edit': '把人工稿落成新的一轮，并把上一轮归档进 _rounds/',
     '--renormalize': '按当前契约重算代码派生字段与原文定位并写回',
     # ⚠ 它写的是**另一份**产物（`<stage>/wontfix.json`），不是本节点 `produces` 里那一份
@@ -1029,8 +1045,9 @@ class NodeSpec(NamedTuple):
 #: ⇒ `stage4.context` / `stage7.assemble` 空：它们**本身**就是那个动作，
 #:   `stage4.context` / `stage7.assemble` 本身就是动作，因此没有同义 flag。
 #: ⇒ 三层 `*.approve` 的结论不一样：`stage6.approve` 确实有一个
-#:   候选序号 ⇒ F1 补成 `('--pick',)`；而 `stage7.approve` **没有参数可起名**
-#:   （一本书只有一份人物表，定稿是给整份盖章）⇒ 它的空元组是**终态**。
+#:   候选序号 ⇒ F1 补成 `('--pick',)`；`stage7.approve` 没有候选序号
+#:   （一本书只有一份人物表，定稿是给整份盖章），但仍必须提交统一的
+#:   `--actor/--reason` 与当前 decision-surface `--subject-sha256` 凭据。
 #:   `stage0.approve` 同样给整份剔除报告盖章，没有候选参数；但它**有**人工凭据
 #:   （`--actor` / `--reason`，节点函数缺一个就 `TerminalState`）⇒ 那两个是跑法 flag，
 #:   而且是 `required_flags`。「没有候选参数」与「没有 flag」是两件事。
@@ -1079,7 +1096,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
                                  flags=('--renormalize', '--purge-role', '--resample',
                                          '--revalidate', '--full-extract',
-                                         '--apply-edit', '--review-decisions'),
+                                         '--apply-edit', '--review-decisions',
+                                         '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,
                                            artifact_paths.STAGE2_GLOBAL_REVIEW)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
@@ -1087,17 +1105,17 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
                                  flags=('--dry-run', '--check-only', '--renormalize',
-                                        '--chapters', '--revalidate'),
+                                        '--chapters', '--revalidate', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
                                   flags=('--dry-run', '--check-only', '--measure-only',
                                          '--remeasure', '--revalidate', '--apply-edit',
-                                         '--repair-surface-habits'),
+                                         '--repair-surface-habits', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE3_STYLE_GROUNDING,)),
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 重构计划',
                                  flags=('--dry-run', '--check-only',
                                         '--revalidate', '--names-only', '--identity',
-                                        '--apply-edit'),
+                                        '--apply-edit', '--chapters', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE4_PLAN_CHAPTERS,)),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
     #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
@@ -1119,7 +1137,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                   modes=('deep', 'shallow'),
                                   flags=('--dry-run', '--recheck', '--revalidate',
                                          '--apply-edit', '--revise', '--chapters',
-                                         '--deep', '--shallow-rest'),
+                                         '--deep', '--shallow-rest', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE5_CHAPTER,
                                            artifact_paths.STAGE5_MODE_DRAFT)),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。
@@ -1146,7 +1164,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage6.hook':      NodeSpec('stage6', 'R-9',  True,  'stage6 开篇文案',
                                  flags=('--dry-run', '--check-only', '--identity',
                                         '--recheck', '--revalidate', '--apply-edit',
-                                        '--wontfix'),
+                                        '--wontfix', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE6_HOOK,)),
     # 付费语义审判是字面探针的 companion（R-9.19/R-9.20），形态照 stage5.semantic：
     # 不接 `--check-only`，否则一层两个复检节点、HTTP kind 路由产生歧义。
@@ -1165,15 +1183,18 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   照 stage3 不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
     #   而**闸门是我们自己加的，不给一条 0 成本提升路，一次付费产出就被永久锁死**。
     'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表',
-                                 flags=('--dry-run', '--check-only', '--identity',
-                                        '--recheck', '--apply-edit', '--revalidate'),
-                                 produces=(artifact_paths.STAGE7_NAME_MAP,)),
-    # ⚠⚠ **`flags=()` 在这一格是【终态】不是待定**（2026-08-12，F2 查清）：
-    #   上面那条「候选序号属 F 期」的注释对 stage6 是对的，对本层不是——
-    #   **本层一本书只有一份人物表**，定稿是「给整份盖章」不是「从三条候选里选一条」，
-    #   本层定稿只是给整份人物表盖章，**没有候选参数**。
+                                  flags=('--dry-run', '--check-only', '--identity',
+                                         '--recheck', '--apply-edit', '--revalidate',
+                                         '--emit-edit-template', '--adopt-residual',
+                                         '--actor', '--reason'),
+                                  produces=(artifact_paths.STAGE7_NAME_MAP,)),
+    # ⚠⚠ 本层没有候选序号：一本书只有一份人物表，定稿是「给整份盖章」。
+    #   但审批动作必须携带统一人工凭据，并用 decision-surface SHA-256 防旧页面误批。
     'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
-                                 produces=(artifact_paths.STAGE7_NAME_MAP,)),
+                                  flags=('--actor', '--reason', '--subject-sha256'),
+                                  required_flags=('--actor', '--reason',
+                                                  '--subject-sha256'),
+                                  produces=(artifact_paths.STAGE7_NAME_MAP,)),
     # 成书只能消费已批准的人名表；声明顺序同时是队列和进度屏的唯一顺序权威。
     'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
                                  produces=(artifact_paths.STAGE7_BOOK,)),
@@ -1187,11 +1208,18 @@ NODES: Final[dict[str, NodeSpec]] = {
 #:
 #: ⇒ `stage0.edit` 的三条编辑路只有 `--apply-edit` 那条要人工凭据；
 #:   `--apply-edit-plan` / `--apply-merge-plan` 的凭据在计划文件里（连同乐观锁）。
-#: ⇒ `stage5.review --retain-pretrim` 要 `--chapters` 指定恰好一章：
-#:   「保留 pretrim」是逐章的 hash-bound 决定，没有书级形态。
+#: ⇒ `stage5.review --retain-pretrim` 要 `--chapters` 指定恰好一章，并强制留下
+#:   自报 `--actor` / `--reason`：它是逐章的 hash-bound 人工决定，不是匿名布尔开关。
 CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage0.edit', '--apply-edit'): ('--actor', '--reason'),
-    ('stage5.review', '--retain-pretrim'): ('--chapters',),
+    ('stage2.global', '--revalidate'): ('--actor', '--reason'),
+    ('stage2.blueprint', '--revalidate'): ('--actor', '--reason'),
+    ('stage3.style', '--revalidate'): ('--actor', '--reason'),
+    ('stage4.plan', '--revalidate'): ('--actor', '--reason'),
+    ('stage5.write', '--revalidate'): ('--actor', '--reason'),
+    ('stage5.review', '--retain-pretrim'): ('--chapters', '--actor', '--reason'),
+    ('stage6.hook', '--revalidate'): ('--actor', '--reason'),
+    ('stage7.rename', '--revalidate'): ('--actor', '--reason'),
 }
 
 # ⚠⚠ **`--revise` 挂哪个节点：D 期登记的那处分歧已在 F4 裁掉**（2026-08-12，用户裁决）。

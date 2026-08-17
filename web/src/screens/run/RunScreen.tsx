@@ -1,4 +1,7 @@
 import { useState } from 'react'
+import { useQueries } from '@tanstack/react-query'
+import { api } from '@/api/endpoints'
+import { qk } from '@/api/queryKeys'
 import {
   FRESH,
   GATE,
@@ -10,13 +13,15 @@ import {
 } from '@/constants/vocabulary'
 import { errorBody } from '@/api/errors'
 import type { RunBeacon, RunEvent } from '@/types/run'
+import { CHECK_KINDS, type CheckReport } from '@/types/stages'
 import { useRunProgress } from '@/hooks/useRunProgress'
+import { useSid } from '@/hooks/useRouteParams'
 import { useAgentRunLog, useAgentRuns, useStopAgentRun } from '@/hooks/useAgentRuns'
 import { QueryStates } from '@/components/state/QueryStates'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { LinkButton } from '@/components/ui/ActionButton'
-import { GateChip, JobStateChip } from '@/components/vocab/Badges'
+import { CheckBadge, GateChip, JobStateChip } from '@/components/vocab/Badges'
 import { cx } from '@/lib/cx'
 
 /**
@@ -194,11 +199,19 @@ function AgentRunBlock() {
  * 跑书进度。
  *
  * 这一屏回答「真实节点图跑到哪了、当前这步在不在跑、每步最近退出码是什么」。
- * 它是观察屏：不放任何操作按钮，也不做判定 ——
- * 信标只说命令跑没跑完，各层合不合格去各层屏看 badge。
+ * 它是观察屏：不放任何操作按钮，也不自行做判定。
+ * 信标只说命令跑没跑完；各层合不合格在呈现层直接组合现有 CheckReport。
  */
 export function RunScreen() {
+  const sid = useSid()
   const q = useRunProgress()
+  const checks = useQueries({
+    queries: CHECK_KINDS.map((kind) => ({
+      queryKey: qk.check(sid, kind),
+      queryFn: () => api.getCheck(sid, kind),
+      retry: false,
+    })),
+  })
 
   return (
     <section className="flex flex-col gap-16 px-30 py-24">
@@ -207,7 +220,7 @@ export function RunScreen() {
           <h1 className="m-0 text-screen font-semibold">跑书进度</h1>
           <div className="prose-cn max-w-[52em] text-body text-ink-3">
             UI、队列与 agent 共用同一张真实节点图。这一屏只跟踪跑到哪一步、当前步在不在跑、每步最近的退出码——
-            「跑完」不等于「合格」，判定只看各层屏的 badge。
+            「跑完」不等于「合格」；下方判定直接组合各层现有 CheckReport，不从信标或完成度重算。
           </div>
         </div>
       </header>
@@ -258,10 +271,26 @@ export function RunScreen() {
 
             {/* 各层产物完成度：盘点自产物盘，与信标无关；书目录还没建时全是「判不了」 */}
             <Panel>
-              <PaneHeader title="各层产物完成度" meta="来自产物盘的真实盘点，与信标无关" />
+              <PaneHeader
+                title="各层产物完成度与校验"
+                meta="完成度来自产物盘；badge 与计数来自各层 CheckReport，二者互不改写"
+              />
               <div className="flex flex-wrap gap-8 px-18 py-14">
-                {STAGES.map((stage) => {
+                {STAGES.map((stage, index) => {
                   const done = d.stage_done[stage.key]
+                  const checkQuery = checks[index]
+                  const report = (
+                    checkQuery && !checkQuery.isFetching && !checkQuery.isError
+                      ? checkQuery.data ?? null
+                      : null
+                  ) as CheckReport | null
+                  const hard = report?.rules.filter(
+                    (row) => row.sev === 'hard' && row.status === 'hit',
+                  ).length ?? 0
+                  const info = report?.rules.filter(
+                    (row) => row.sev === 'info' && row.status === 'hit',
+                  ).length ?? 0
+                  const unver = report ? report.counts.unver + report.counts.skipped : 0
                   const tone =
                     done === true
                       ? { color: GATE.ok.chipColor, bg: GATE.ok.chipBg, text: '✓ 已完成' }
@@ -269,15 +298,33 @@ export function RunScreen() {
                         ? { color: GATE.wait.chipColor, bg: GATE.wait.chipBg, text: '· 待继续' }
                         : { color: FRESH.unknown.color, bg: FRESH.unknown.bg, text: '? 判不了' }
                   return (
-                    <span
+                    <div
                       key={stage.key}
-                      className="inline-flex items-baseline gap-6 rounded-tag px-9 py-3 text-tag"
-                      style={{ color: tone.color, background: tone.bg }}
+                      className="flex min-w-210 flex-col gap-6 rounded-tag border border-line bg-card px-10 py-8"
                     >
-                      <span className="font-semibold">{stage.label}</span>
-                      <Mono className="text-micro">{stage.key}</Mono>
-                      <span>{tone.text}</span>
-                    </span>
+                      <div className="flex items-baseline gap-6 text-tag">
+                        <span className="font-semibold">{stage.label}</span>
+                        <Mono className="text-micro text-ink-4">{stage.key}</Mono>
+                        <span
+                          className="ml-auto rounded-tag px-7 py-2"
+                          style={{ color: tone.color, background: tone.bg }}
+                        >
+                          {tone.text}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-7">
+                        {report ? (
+                          <>
+                            <CheckBadge badge={report.badge} />
+                            <Mono className="text-micro text-ink-5">
+                              hard {hard} · info {info} · unver {unver}
+                            </Mono>
+                          </>
+                        ) : (
+                          <span className="text-tag text-ink-4">? 校验未知</span>
+                        )}
+                      </div>
+                    </div>
                   )
                 })}
               </div>

@@ -79,7 +79,12 @@ class GroundTruthManifest(StrictModel):
             raise ValueError('ground-truth case_id must be unique')
         if self.agreement < 0.8:
             raise ValueError('inter-annotator agreement < 0.8; revise rubric and relabel')
-        for ability in EVALUATOR_ABILITIES:
+        # Calibration is capability-scoped.  A manifest registers an ability
+        # by actually containing cases for it; unregistered abilities remain
+        # explicit disabled n=0 rows in the published profile instead of
+        # forcing unrelated annotation work up front.
+        registered = sorted({case.ability for case in self.cases})
+        for ability in registered:
             rows = [case for case in self.cases if case.ability == ability]
             passed = [case for case in rows if case.expected == 'PASS']
             failed = [case for case in rows if case.expected == 'FAIL']
@@ -110,7 +115,9 @@ class CapabilityMetrics(StrictModel):
     #: on the capability row prevents one global fingerprint from pretending
     #: to describe eight incompatible judge protocols.
     fingerprint: EvaluatorFingerprint
-    n: int = Field(ge=100)
+    #: Registered abilities have the held-out floor (>=100).  An ability that
+    #: is absent from the manifest remains visible as disabled with n=0.
+    n: int = Field(ge=0)
     pass_precision_wilson95_lower: float = Field(ge=0.0, le=1.0)
     fail_precision_wilson95_lower: float = Field(ge=0.0, le=1.0)
     violation_recall_wilson95_lower: float = Field(ge=0.0, le=1.0)
@@ -120,7 +127,8 @@ class CapabilityMetrics(StrictModel):
 
     def threshold_passed(self) -> bool:
         return (
-            self.pass_precision_wilson95_lower >= 0.90
+            self.n >= 100
+            and self.pass_precision_wilson95_lower >= 0.90
             and self.fail_precision_wilson95_lower >= 0.90
             and self.violation_recall_wilson95_lower >= 0.90
             and self.evidence_closure >= 0.95
@@ -129,6 +137,19 @@ class CapabilityMetrics(StrictModel):
 
     @model_validator(mode='after')
     def _enabled_only_after_fixed_thresholds(self) -> 'CapabilityMetrics':
+        if 0 < self.n < 100:
+            raise ValueError(f'{self.ability}: n must be 0 or >=100')
+        if self.n == 0:
+            observed = (
+                self.pass_precision_wilson95_lower,
+                self.fail_precision_wilson95_lower,
+                self.violation_recall_wilson95_lower,
+                self.evidence_closure,
+                self.rerun_consistency,
+            )
+            if self.enabled or any(value != 0.0 for value in observed):
+                raise ValueError(
+                    f'{self.ability}: missing capability must be disabled with n=0 metrics')
         if self.enabled and not self.threshold_passed():
             raise ValueError(f'{self.ability}: enabled despite failing fixed activation thresholds')
         return self

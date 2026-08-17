@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
@@ -20,6 +20,7 @@ import { cx } from '@/lib/cx'
 export function ConfirmDialog() {
   const { confirm, closeConfirm, openDrawer } = useChrome()
   const [preparing, setPreparing] = useState(false)
+  const [requiredValues, setRequiredValues] = useState<Record<string, string>>({})
   const start = useStartJob(confirm?.req.sid)
   const jobs = useJobs(confirm?.req.sid)
 
@@ -29,7 +30,28 @@ export function ConfirmDialog() {
     enabled: !!confirm,
   })
 
+  useEffect(() => {
+    // A credential belongs to exactly one confirmation. Reopening even the
+    // same action must never inherit the previous actor/reason silently.
+    setRequiredValues({})
+  }, [confirm])
+
   if (!confirm) return null
+
+  const presentTokens = [...(confirm.req.extra ?? []), ...(confirm.req.args ?? [])]
+  const requiredInputs = (confirm.req.required_inputs ?? []).filter(
+    (input) => !presentTokens.includes(input.flag),
+  )
+  const requiredReady = requiredInputs.every(
+    (input) => (requiredValues[input.flag] ?? '').trim().length > 0,
+  )
+  const executionArgs = [
+    ...(confirm.req.args ?? []),
+    ...requiredInputs.flatMap((input) => [input.flag, requiredValues[input.flag]?.trim() ?? '']),
+  ]
+  const executionReq = executionArgs.length
+    ? { ...confirm.req, args: executionArgs }
+    : confirm.req
 
   // A background refetch is deliberately treated as unknown. Never leave a stale command or
   // price visible while a request-shaping input (including mode) is being revalidated.
@@ -105,6 +127,35 @@ export function ConfirmDialog() {
               ))}
             </ol>
           )}
+          {requiredInputs.length ? (
+            <fieldset className="m-0 flex flex-col gap-9 rounded-btn-lg border border-line bg-sunken-2 px-14 py-12">
+              <legend className="px-4 text-body font-semibold">执行前必填的人工审计</legend>
+              <div className="prose-cn text-sm2 text-ink-3">
+                上方命令里的 <span className="font-mono">待填·…</span> 只是预览模板；
+                真正发起时只提交你在这里填写的实值，服务端仍会拒绝空值或占位符。
+              </div>
+              {requiredInputs.map((input) => (
+                <label key={input.flag} className="flex flex-col gap-4 text-sm2 text-ink-2">
+                  <span>
+                    <span className="font-mono font-semibold">{input.flag}</span>
+                    <span className="ml-6 text-ink-4">{input.description}</span>
+                  </span>
+                  <input
+                    aria-label={input.flag}
+                    autoComplete="off"
+                    value={requiredValues[input.flag] ?? ''}
+                    onChange={(event) =>
+                      setRequiredValues((current) => ({
+                        ...current,
+                        [input.flag]: event.target.value,
+                      }))
+                    }
+                    className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
+                  />
+                </label>
+              ))}
+            </fieldset>
+          ) : null}
           <div className="prose-cn text-body text-ink-3">
             {paid === null
               ? '服务端还没有确认这次动作的贵贱；执行计划取回前不会发起。'
@@ -130,7 +181,7 @@ export function ConfirmDialog() {
           </button>
           <button
             type="button"
-            disabled={!planReady || busy || preparing || start.isPending}
+            disabled={!planReady || !requiredReady || busy || preparing || start.isPending}
             onClick={async () => {
               setPreparing(true)
               try {
@@ -143,7 +194,7 @@ export function ConfirmDialog() {
                   confirm.after?.()
                   closeConfirm()
                 } else {
-                  start.mutate(confirm.req, {
+                  start.mutate(executionReq, {
                     onSuccess: () => {
                       openDrawer()
                       confirm.after?.()
@@ -161,12 +212,18 @@ export function ConfirmDialog() {
             className={cx(
               'rounded-btn px-18 py-8 text-body-lg font-semibold text-card',
               paid === true ? 'bg-spend' : 'bg-ink',
-              !planReady || busy || preparing || start.isPending
+              !planReady || !requiredReady || busy || preparing || start.isPending
                 ? 'cursor-not-allowed opacity-40'
                 : 'cursor-pointer',
             )}
           >
-            {paid === true ? '确认发起（花钱）' : paid === false ? '发起' : '等待执行计划'}
+            {!planReady
+              ? '等待执行计划'
+              : !requiredReady
+                ? '请先填写必填项'
+                : paid === true
+                  ? '确认发起（花钱）'
+                  : '发起'}
           </button>
         </div>
       </div>

@@ -101,6 +101,16 @@ def test_draft_too_short_goes_red_and_swallows_everything_else(book, entry):
         '早退没生效——短稿上跑出了别的判据，那些数全是噪声')
 
 
+def test_every_chapter_finding_carries_its_output_ordinal(book, entry):
+    """逐章 finding 自己携带章号，不再靠 ReviewChapter 外层猜它属于谁。"""
+    ordinal = int(entry['output_ordinal'])
+    short = checks.chapter_findings('太短了。', entry, book, mode='deep', given='')
+    full = checks.chapter_findings(
+        _clean_body(book, entry), entry, book, mode='deep', given='')
+    assert short and full
+    assert {hit.output_ordinal for hit in [*short, *full]} == {ordinal}
+
+
 def test_draft_truncated_goes_red_on_a_missing_final_punctuation(book, entry):
     """⭐ 结尾没有终止标点 ⇒ 疑似截断。"""
     body = _clean_body(book, entry)
@@ -187,10 +197,61 @@ def test_real_stage5_report_keeps_verbatim_caveat_in_note_only(book, entry):
     )
     row = next(item for item in report.rules if item.rule == 'verbatim_split')
     assert row.findings
+    assert row.findings[0].output_ordinal == int(entry['output_ordinal'])
     assert '本体裁的标准写法' not in row.findings[0].detail
     assert '已放行' not in row.findings[0].detail
     assert row.note and '中文小说的标准写法' in row.note
     assert f'说明：{row.note}' in render(report)
+
+
+def test_stage5_check_report_aggregates_band_drift_without_losing_chapter_state():
+    """Review 保留逐章事实；CheckReport/CLI/API 只外发一条无损书级结论。"""
+    from types import SimpleNamespace
+
+    from contracts.schema.common import WontFixNote
+    from contracts.schema.report import finding
+    from novel.prov import FreshnessReport
+    from novel.report import build
+    from novel.stages.stage5 import review
+
+    first = checks.with_output_ordinal([finding(
+        'band_drift', detail='句子形态：短句→中句',
+        evidence=['句子形态', '短句', '中句'],
+        converge='same_draft', unresolved_rounds=1,
+        wontfix=WontFixNote(why='本章故意放慢', at='review_2'),
+    )], 2)[0]
+    first = review._downgrade(first, actionable=False)
+    second = checks.with_output_ordinal([finding(
+        'band_drift', detail='段落形态：短段→极短段',
+        evidence=['段落形态', '短段', '极短段'],
+        converge='unresolved_2', unresolved_rounds=2,
+    )], 7)[0]
+    review_artifact = SimpleNamespace(
+        chapters=[
+            SimpleNamespace(output_ordinal=2, relpath='stage5/deep/ch02.json', findings=[first]),
+            SimpleNamespace(output_ordinal=7, relpath='stage5/deep/ch07.json', findings=[second]),
+        ],
+        book=[],
+        baselines={'band_drift': '2/2', '_beat_event_landing': '0/0 拍有落点'},
+        baselines_identity={'band_drift': '0/2'},
+    )
+    report = build(
+        sid='7615069877019300633', node='stage5.review',
+        freshness=FreshnessReport('unknown', 'no_inputs'),
+        outcomes=review._outcomes(review_artifact, None),
+    )
+
+    row = next(item for item in report.rules if item.rule == 'band_drift')
+    assert len(row.findings) == 1
+    aggregate = row.findings[0]
+    assert aggregate.output_ordinal is None
+    assert '2/2 章命中' in aggregate.detail and '[2, 7]' in aggregate.detail
+    assert aggregate.unresolved_rounds == 2 and aggregate.converge.startswith('mixed(')
+    details = [json.loads(value) for value in aggregate.evidence]
+    assert [value['output_ordinal'] for value in details] == [2, 7]
+    assert details[0]['wontfix'] == {'why': '本章故意放慢', 'at': 'review_2'}
+    assert details[0]['converge'] == 'same_draft'
+    assert details[1]['converge'] == 'unresolved_2'
 
 
 def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
@@ -228,6 +289,25 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
     assert leak, 'secret_leak 没红——转抄式泄底是它唯一挡得住的那一类'
     assert all(ev in body for ev in leak[0].evidence), (
         '凭据不是成稿自己的字节——把 secret 的原文发回写手就是把秘密告诉它')
+
+
+def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry):
+    """ctx 漏投 must_not_reveal 时，显式 reveal timeline 仍能拦截揭示章之前的字面泄密。"""
+    fact = '她其实一直都知道那三笔钱是从公司账上挪出来的'
+    synthetic = M.Book(
+        title=book.title, ctx=book.ctx, style=book.style,
+        source_text=book.source_text,
+        secrets=[{
+            'secret_id': 'secret_x', 'fact': fact,
+            'character_known_by': [], 'setup_chapters': [],
+            'reader_reveal_events': [{'chapter': 9}],
+        }],
+    )
+    before = dict(entry, output_ordinal=1, must_not_reveal=[])
+    at_reveal = dict(entry, output_ordinal=9, must_not_reveal=[])
+    body = _clean_body(book, entry) + fact + '。'
+    assert 'secret_leak' in _fire(body, before, synthetic)
+    assert 'secret_leak' not in _fire(body, at_reveal, synthetic)
 
 
 def test_secret_timeline_uses_the_same_number_ruler(book):
@@ -436,6 +516,26 @@ def test_the_secret_ids_never_reach_the_writer(book, entry):
     e = dict(entry, must_not_reveal=['secret_01', 'secret_02'])
     given = prompts.build_material(e, book, with_source_text=False).given
     assert 'must_not_reveal' not in given and 'secret_01' not in given
+
+
+def test_current_trim_audit_absorbs_the_duplicate_length_over_action():
+    """同一份当前稿已有 hash-bound trim audit 时，判据侧不再产第二条 length_over。"""
+    from contracts.schema.report import finding
+    from contracts.schema.stage5 import ReviewChapter
+    from novel.stages.stage5 import review
+
+    hit = checks.with_output_ordinal([finding(
+        'length_over', detail='当前 1800 字，预算 1200 字', evidence=['1800', '1200'],
+    )], 3)[0]
+    row = ReviewChapter(
+        output_ordinal=3, from_source_ordinals=[7], budget_chars=1200,
+        source_chars=1500, findings=[hit],
+    )
+
+    untouched = review._merge_length_over_into_trim([row], set())[0]
+    merged = review._merge_length_over_into_trim([row], {3})[0]
+    assert untouched.findings == [hit] and untouched.findings[0].actionable is True
+    assert merged.output_ordinal == 3 and merged.findings == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────

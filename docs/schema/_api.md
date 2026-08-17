@@ -437,7 +437,7 @@ HTTP 进程只写 `_service/`（一次性人工稿）。
 | `POST /api/novels/:sid/stage0/merge/resolve` / `reject` | `Stage0MergeDecisionRequest`（candidate id + round/source/clean 乐观锁 + actor/reason + resolutions） | resolve 要求当前每个冲突恰好一条 `ours/theirs/custom`决议；reject 禁止伪造 resolutions。决定按内容寻址保留，崩溃后同一请求幂等重放；只有 `ok/landed_red` 才清理一次性 plan |
 | `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（`mode` + `segments[{slot,text}]`） | typed segments 落 `_service/edits/` 一次性 JSON 稿（文件名带 `ch{o}`，`--apply-edit` 从文件名认章）；slot 必须唯一，最终与计划 slot 集合完全一致且顺序由 producer 决定的校验归 `stage5.write --apply-edit`。随后走**与生成稿同一个判定落点**（归一 → 判据 → 归档 → 写回，`origin=human` 记账）；仍有阻断级**只报不拦**（人改的往往正是机器修不动的地方）。⚠ **没有乐观锁**：并发改稿以整份归档兜底，覆盖的代价是多花一轮归档——登记为已知限制，不在 API 层造第二套锁 |
 | `POST /api/novels/:sid/stage6/approve` | `HookApproveRequest`（`pick`、`actor`、`reason`、`subject_sha256`） | **不收文本**；完整 hash 与当前候选乐观绑定，actor 是自报而非认证身份。改字是另一个节点（`stage6.hook --apply-edit`），契约把编辑文件钉死在书目录内，`R-11.3` 禁止服务进程写产物盘。**`stage6/edit` / `stage7/edit` 刻意不在 HTTP**，走 CLI |
-| `POST /api/novels/:sid/stage7/approve` | 无请求体 | `flags=()` 是【终态】不是待定：一本书只有一份人物表，定稿是「给整份盖章」不是「从候选里选一条」，**没有参数可起名** |
+| `POST /api/novels/:sid/stage7/approve` | `NameMapApproveRequest`（`actor`、`reason`、`subject_sha256`） | 一本书只有一份人物表，因此不带候选序号；完整 hash 乐观绑定 `surname_map + characters + extra_subs` 决策面。成功后服务 s7 proof 同时绑定完整 typed 审批凭据，但不绑定 `book_txt` 等派生账，正常 assemble 不会自废批准 |
 
 定稿类动作**落了**（退出码 0/1——先写后判：approve 落了，只是报告可能有红行）
 才盖审批章；盖不盖章看「落没落」，红不红由 check 屏呈现，两件事不许混。

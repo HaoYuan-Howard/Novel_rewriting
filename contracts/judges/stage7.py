@@ -258,7 +258,8 @@ _unver('rn_title_unver', '书名里的人名替换正确', 'R-10.16', who_checks
 
 _unver('rn_not_approved', '有人给这份人物表定过稿', 'R-10.11', who_checks='HUMAN',
        note='本条由复检产出，不落产物。⚠ 与 stage6 不同：本层的定稿是'
-            '**给整份人物表盖章**，没有候选序号——`stage7.approve` 不带参数。'
+            '**给整份人物表盖章**，没有候选序号；但 `stage7.approve` 仍强制提交'
+            ' actor/reason 与当前 decision-surface SHA-256。'
             '盘上三本都已定稿 ⇒ 0 命中')
 
 _unver('rn_body_stale', '判的是照盘上这些成稿做的替换', 'R-10.9', who_checks='INFO',

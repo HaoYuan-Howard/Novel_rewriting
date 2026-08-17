@@ -226,22 +226,6 @@ def _chapter_record(entry: dict[str, Any], segments: list[dict[str, str]], book:
     )
 
 
-def _archive_superseded(store: ArtifactStore, rel: str, *,
-                        new_invalid: bool) -> None:
-    """新一轮落盘前归档会被替换的活文件。
-
-    新问题稿只替换旧问题稿，正式稿必须保留；新正式稿则同时终结旧正式稿和旧问题稿。
-    否则定向修复虽然产出了合格正文，遗留的 `.INVALID` 仍会让节点保持失败状态。
-    """
-    invalid_rel = paths.invalid_of(rel)
-    rejected_rel = rel.replace('.json', '.rejected.json')
-    candidates = ((invalid_rel, rejected_rel) if new_invalid
-                  else (rel, invalid_rel, rejected_rel))
-    for candidate in candidates:
-        if store.exists(candidate):
-            store.archive_round(candidate)
-
-
 def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
                    book: M.Book, *, mode: str, segments: list[dict[str, str]], mat: str,
                    account: M.NormalizeAccount, provenance: Any
@@ -263,15 +247,18 @@ def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
         text2, entry, book, mode=mode, mat=mat, account=account,
         segments=segments2)
     rel = _rel(mode, entry['output_ordinal'])
+    rejected_rel = rel.replace('.json', '.rejected.json')
     art = _chapter_record(entry, segments2, book, mode=mode, warns=warns,
                           errs=errs or None, provenance=provenance)
-    if errs:
-        # ⚠ `gates_skipped` 是**空列表也要写**的那一格：「一条都没跳过」与「没人说」是两件事。
-        _archive_superseded(store, rel, new_invalid=True)
-        p = store.write_invalid(rel, art, gates_skipped=[])
-        return str(p), errs, fs
-    _archive_superseded(store, rel, new_invalid=False)
-    return str(store.write(rel, art)), [], fs
+    with store.history_transaction(rel, rejected_rel):
+        if store.exists(rejected_rel):
+            store.archive_round(rejected_rel)
+        if errs:
+            # ⚠ `gates_skipped` 是**空列表也要写**的那一格：
+            # 「一条都没跳过」与「没人说」是两件事。
+            p = store.write_invalid(rel, art, gates_skipped=[])
+            return str(p), errs, fs
+        return str(store.write_round(rel, art)), [], fs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -937,10 +924,8 @@ def _run_group_parallel(
 
             if rejected := generated.get('rejected'):
                 rel = _rejected_rel(mode, ordinal)
-                if store.exists(rel):
-                    store.archive_round(rel)
                 artifact = RejectedRevision.model_validate(rejected)
-                where = store.write(rel, artifact)
+                where = store.write_round(rel, artifact)
                 line = (
                     f'第 {ordinal} 章两次修订候选都相对旧稿退化，旧正式稿未覆盖；'
                     f'证据 → {where}（{"；".join(artifact.why)}）')
@@ -968,16 +953,20 @@ def _run_group_parallel(
                 **extra,
             )
             trim_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+            trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=ordinal)
+            chapter_rel = _rel(mode, ordinal)
             # A later in-band rewrite resolves the live verification row; a
             # later trim attempt supersedes it.  In both cases retain the old
             # audit under `_rounds` instead of silently overwriting history.
-            _retire_trim_state(store, ordinal)
-            if generated['trim_audit'] is not None:
-                store.write(trim_rel, generated['trim_audit'])
-            where, errors, findings = _write_chapter(
-                ctx, store, entry, book, mode=mode,
-                segments=generated['segments'], mat=generated['mat'].given,
-                account=generated['account'], provenance=provenance)
+            with store.history_transaction(
+                    chapter_rel, trim_rel, trim_resolution_rel):
+                _retire_trim_state(store, ordinal)
+                if generated['trim_audit'] is not None:
+                    store.write(trim_rel, generated['trim_audit'])
+                where, errors, findings = _write_chapter(
+                    ctx, store, entry, book, mode=mode,
+                    segments=generated['segments'], mat=generated['mat'].given,
+                    account=generated['account'], provenance=provenance)
             judged[ordinal] = findings
             trim_notes = generated['trim_notes']
             line = (
@@ -1001,7 +990,10 @@ def _run_group_parallel(
         ctx, store, mode, written=written, blocked=blocked, judged=judged)
     if blocked and not written:
         raise GateBlocked(
-            f'这一批 {len(todo)} 章全部没落成正式稿：' + '；'.join(blocked),
+            f'这一批 {len(todo)} 章全部没落成正式稿：' + '；'.join(blocked)
+            + f'。人修好对应 `.INVALID` 后跑 `stage5.write --mode {mode} '
+              '--revalidate --actor <id> --reason <why>`'
+              '（0 LLM、同轮重判并留不可变审计）',
             invalid_path=str(store.path(_mode_dir(mode))))
     return report
 
@@ -1151,16 +1143,26 @@ def run_recheck(ctx: RunContext) -> CheckReport:
         if changed:
             touched.append(f'第 {o} 章正文字节被归一改写了（{M.chars_of(art.text)} → '
                            f'{M.chars_of(text)} 字）——**这是一次 0 成本操作改付费产物**')
-            _retire_trim_state(store, o)
         new_prov = ctx.rewrite_provenance(
             art.provenance, by='--recheck') if changed else art.provenance
-        store.write(rel, _chapter_record(entry, segments, book, mode=mode, warns=warns,
-                                         errs=errs or None, provenance=new_prov))
+        updated = _chapter_record(
+            entry, segments, book, mode=mode, warns=warns,
+            errs=errs or None, provenance=new_prov)
+        if changed:
+            trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
+            trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=o)
+            with store.history_transaction(rel, trim_audit_rel, trim_resolution_rel):
+                _retire_trim_state(store, o)
+                store.write(rel, updated)
+        else:
+            store.write(rel, updated)
     assemble_book(ctx, store, book)
     return _report(ctx, store, mode, written=[], blocked=touched, judged=judged)
 
 
-def run_revalidate(ctx: RunContext) -> CheckReport:
+def run_revalidate(
+    ctx: RunContext, *, actor: str, reason: str,
+) -> CheckReport:
     """`--revalidate`：按**当前**判据重判被闸门拦下的 `.INVALID`，合格即提升为正式产物。
 
     ⚠⚠ **来源账继承，一个字不改**——`store.promote_invalid` 的签名里**没有**
@@ -1185,16 +1187,27 @@ def run_revalidate(ctx: RunContext) -> CheckReport:
         entry = book.chapters[o]
         mat = prompts.build_material(
             entry, book, with_source_text=_ARMS[mode].with_source_text).given
-        fs, errs, _warns = _judge(
-            art.text, entry, book, mode=mode, mat=mat,
-            account=M.NormalizeAccount(),
-            segments=[segment.model_dump() for segment in art.segments])
+        segments, account = _normalize_segments(
+            [segment.model_dump() for segment in art.segments], book)
+        text = _segments_text(segments)
+        fs, errs, warns = _judge(
+            text, entry, book, mode=mode, mat=mat,
+            account=account, segments=segments)
         judged[o] = fs
         if errs:
             still.append(f'第 {o} 章仍有 {len(errs)} 条阻断级：{errs[0]}')
             continue
-        _retire_trim_state(store, o)
-        promoted.append(f'第 {o} 章 → {store.promote_invalid(rel, Chapter)}')
+        rebuilt = _chapter_record(
+            entry, segments, book, mode=mode, warns=warns,
+            errs=None, provenance=art.provenance)
+        trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
+        trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=o)
+        with store.history_transaction(rel, trim_audit_rel, trim_resolution_rel):
+            store.promote_invalid(
+                rel, Chapter, actor=actor, reason=reason,
+                artifact_override=rebuilt)
+            _retire_trim_state(store, o)
+        promoted.append(f'第 {o} 章 → {store.path(rel)}')
     if not promoted and not still:
         raise TerminalState(f'{mode} 臂盘上一份 `.INVALID` 都没有——没有可提升的稿')
     return _report(ctx, store, mode, written=promoted, blocked=still, judged=judged)
@@ -1267,12 +1280,14 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
     fs, errs, warns = _judge(
         text, entry, book, mode=mode, mat=mat, account=acc,
         segments=segments)
-    if store.exists(rel):
-        _retire_trim_state(store, o)
-        store.archive_round(rel)
     art = _chapter_record(entry, segments, book, mode=mode, warns=warns, errs=errs, # 空也写
                           provenance=provenance)
-    where = store.write(rel, art)
+    trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
+    trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=o)
+    with store.history_transaction(rel, trim_audit_rel, trim_resolution_rel):
+        if store.exists(rel):
+            _retire_trim_state(store, o)
+        where = store.write_round(rel, art)
     note = ([f'⚠ 人工稿仍有 {len(errs)} 条阻断级判定，**只报不拦**：{errs[0]}'
              f'　⚠⚠ 下游没有第二道——stage7 只排除 `.INVALID`，这一份会一路进 book.txt']
             if errs else [])
@@ -1293,7 +1308,7 @@ def _ordinal_of_edit(path: str, text: str) -> int:
         raise TerminalState(
             f'从文件名认不出这是第几章：{os.path.basename(path)!r}。'
             f'⚠ 不从正文猜——猜错会把一章的人工修改落到另一章头上，而两边都不出声。'
-            f'把文件命名成 `chNN.txt`')
+            f'把结构化人工稿命名成 `chNN.json`')
     del text
     return int(m.group(1))
 

@@ -35,12 +35,6 @@ from novel.orchestrator import queue as Q          # noqa: E402
 from novel.orchestrator.nodes import build_steps   # noqa: E402
 from tests import corpus, sandbox                  # noqa: E402
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(corpus.corpus_root() is None,
-                       reason='盘上没有语料——这一批**没在查**，不是「查过没事」'),
-]
-
 UI = {UI_HEADER: '1'}
 
 
@@ -54,15 +48,27 @@ def no_api_key(monkeypatch):
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
 
 
-@pytest.fixture
-def box():
-    s = sandbox.Sandbox(sandbox.books_with_stage3()[0])
+def _corpus_boxes() -> list:
+    books = sandbox.books_with_stage3()
+    if books:
+        return [pytest.param(books[0], marks=pytest.mark.corpus, id='stage3-corpus')]
+    return [pytest.param(
+        None,
+        marks=(pytest.mark.corpus, pytest.mark.skip(
+            reason='盘上没有 stage3 API 语料——这批集成用例没在查')),
+        id='no-stage3-corpus',
+    )]
+
+
+@pytest.fixture(params=_corpus_boxes())
+def box(request):
+    s = sandbox.Sandbox(request.param)
     yield s
     s.close()
 
 
 @pytest.fixture
-def app(box):
+def corpus_app(box):
     """⚠ 单独一个 fixture 是因为 **`TestClient.app` 拿不到 FastAPI 实例**
     （新版 Starlette 上它是传输层那个对象），而枚举路由那条测试需要真的路由表。
     实测踩过：`bare.app.routes` 是空列表，于是那条测试「一条 POST 都没扫到」。
@@ -71,12 +77,35 @@ def app(box):
 
 
 @pytest.fixture
-def bare(app):
+def corpus_bare(corpus_app):
     """**裸客户端**：不带 `X-Novel-UI`。CSRF 那几条必须用它。
 
     ⚠ 在 fixture 里给所有请求塞上那个头，是这一批测试最容易犯的错——
     塞了之后 CSRF 闸门**一次都不会被查到**，而四条断言全绿。
     """
+    with TestClient(corpus_app) as c:
+        yield c
+
+
+@pytest.fixture
+def corpus_client(corpus_bare):
+    corpus_bare.headers.update(UI)
+    return corpus_bare
+
+
+@pytest.fixture
+def base(tmp_path):
+    """Empty synthetic output root for schema/gate/job/loopback HTTP tests."""
+    return tmp_path
+
+
+@pytest.fixture
+def app(base):
+    return create_app(base)
+
+
+@pytest.fixture
+def bare(app):
     with TestClient(app) as c:
         yield c
 
@@ -99,13 +128,14 @@ def _tree(root) -> set:
 
 # ───────────────────────── 一、基础只读端点各一条 200 ─────────────────────────
 
-def test_original_read_and_preview_endpoints_answer(client, app, box):
+def test_original_read_and_preview_endpoints_answer(corpus_client, corpus_app, box):
     """基础只读端点与 preview 全部 200。
 
     Stage 0/1 的九条新接口由 `test_api_stage01.py` 用真实上传与子进程覆盖；
     本条保留原有只读视图和命令预览的逐条可达性。
     """
     job_id = _fake_started(box.root, box.sid)
+    client, app = corpus_client, corpus_app
     hit = {
         '/api/enums': ('get', '/api/enums', None),
         '/api/novels': ('get', '/api/novels', None),
@@ -133,18 +163,18 @@ def test_enums_matches_the_current_contract_over_the_wire(client):
     assert 'ops' not in got and 'op_band' not in got
 
 
-def test_the_style_view_keeps_the_underscore_provenance_key(client, box):
+def test_the_style_view_keeps_the_underscore_provenance_key(corpus_client, box):
     """⚠ `by_alias` 一旦被关掉，`_provenance` 会**静悄悄**变成 `provenance`，
 
     而前端读 `_provenance` 拿到 `undefined`——不报错，只是那一格空了。
     ⇒ 断言的是**字面量的键**，不是模型字段名。
     """
-    body = client.get(f'/api/novels/{box.sid}/stage3/style').json()
+    body = corpus_client.get(f'/api/novels/{box.sid}/stage3/style').json()
     assert '_provenance' in body and 'provenance' not in body
     assert body['_provenance']['model'] == 'deepseek-v4-pro'
 
 
-def test_a_missing_artifact_is_200_with_the_left_half_intact(client, box):
+def test_a_missing_artifact_is_200_with_the_left_half_intact(corpus_client, box):
     """⭐ `04_delivery.md:123`：**`exists: false` 时左半边（实测）仍有内容。**
 
     ⚠ 它是 **200 不是 404**：404 留给「**这本书**不在」。
@@ -152,7 +182,7 @@ def test_a_missing_artifact_is_200_with_the_left_half_intact(client, box):
     而那一态要显示的是「下一步点这里」，不是一屏报错（`U-17`）。
     """
     (box.dir / 'stage3' / 'style_grounding.json').unlink()
-    r = client.get(f'/api/novels/{box.sid}/stage3/style')
+    r = corpus_client.get(f'/api/novels/{box.sid}/stage3/style')
     assert r.status_code == 200
     body = r.json()
     assert body['exists'] is False and body['readable'] is None
@@ -162,7 +192,7 @@ def test_a_missing_artifact_is_200_with_the_left_half_intact(client, box):
 
 # ───────────────────────── 二、三种「没有」各不相同 ─────────────────────────
 
-def test_every_stage_answers_a_real_state(client, box):
+def test_every_stage_answers_a_real_state(corpus_client, box):
     """八层都答得出当前真实状态。
 
     断言不写死成某一个码：本 fixture 是一个**真书目录**，各层跑到哪一步不同
@@ -170,7 +200,7 @@ def test_every_stage_answers_a_real_state(client, box):
     """
     codes = {}
     for kind in sorted(STAGES):
-        r = client.get(f'/api/novels/{box.sid}/check/{kind}')
+        r = corpus_client.get(f'/api/novels/{box.sid}/check/{kind}')
         codes[kind] = r.status_code
         assert r.status_code in (200, 404, 409), (
             f'{kind} → {r.status_code}；复检这条路只该答这三个：'
@@ -182,9 +212,9 @@ def test_every_stage_answers_a_real_state(client, box):
     assert len(STAGES) == 8
 
 
-def test_an_unknown_kind_is_400_and_lists_the_eight(client, box):
+def test_an_unknown_kind_is_400_and_lists_the_eight(client):
     """`:kind` 不在八个里 ⇒ **400 并把八个列出来**。400 与 404 是两件事。"""
-    r = client.get(f'/api/novels/{box.sid}/check/stage9')
+    r = client.get('/api/novels/42/check/stage9')
     assert r.status_code == 400
     assert all(s in r.json()['message'] for s in STAGES)
 
@@ -218,7 +248,7 @@ def test_an_illegal_sid_is_400_because_the_client_sent_it(client, sid, why):
 
 # ───────────────────────── 三、CSRF（`R-11.2`） ─────────────────────────
 
-def test_a_get_needs_no_header(bare, box):
+def test_a_get_needs_no_header(bare):
     """GET 不要求 `X-Novel-UI`——**前端得读得到**。
 
     它安全的全部理由是同源策略：浏览器里别的页面发得出请求，但读不到响应。
@@ -234,27 +264,27 @@ def test_a_get_needs_no_header(bare, box):
     ({**UI, 'Origin': 'http://evil.example'}, 'Origin 不是本机'),
     ({**UI, 'Referer': 'http://evil.example/x'}, 'Referer 不是本机'),
 ])
-def test_a_write_without_a_good_header_is_403(bare, box, headers, why):
+def test_a_write_without_a_good_header_is_403(bare, headers, why):
     """⭐ `R-11.2`：**一个花钱的端点开在本机上，浏览器里任何页面都够得着它。**
 
     浏览器**一定**会给跨站的 POST 带上 `Origin`，所以这两条各挡一半：
     自定义头挡住简单表单，来源校验挡住带头的跨站脚本。
     """
-    r = bare.post('/api/jobs/preview', json={'sid': box.sid, 'node': 'stage3.style'},
+    r = bare.post('/api/jobs/preview', json={'sid': '42', 'node': 'stage3.style'},
                   headers=headers)
     assert r.status_code == 403, why
     assert r.json()['kind'] == 'CsrfRefused'
 
 
 @pytest.mark.parametrize('origin', ['http://127.0.0.1:5173', 'http://localhost:8765', None])
-def test_a_write_from_this_machine_gets_through(bare, box, origin):
+def test_a_write_from_this_machine_gets_through(bare, origin):
     """来源是回环（或**缺席**）就放行。
 
     ⚠ 缺席算通过是有意的：`curl` 这类工具不发 `Origin`，而 `R-11.8` 要求
     界面上摊开的那条命令「真的能粘进终端跑」——挡住命令行等于挡住那次核对。
     """
     h = {**UI, **({'Origin': origin} if origin else {})}
-    r = bare.post('/api/jobs/preview', json={'sid': box.sid, 'node': 'stage3.style'},
+    r = bare.post('/api/jobs/preview', json={'sid': '42', 'node': 'stage3.style'},
                   headers=h)
     assert r.status_code == 200
 
@@ -316,7 +346,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/upload': ['POST'],
         # ── 第二阶段 · 批 1/2：读屏（`tests/test_api_screens.py` 管行为） ──
         '/api/novels/{sid}/stage2/global': ['GET'],
-        '/api/novels/{sid}/stage2/global-review': ['POST'],
+        '/api/novels/{sid}/stage2/global-review': ['GET', 'POST'],
         '/api/novels/{sid}/stage6': ['GET'],
         '/api/novels/{sid}/stage7': ['GET'],
         '/api/novels/{sid}/stage7/book.txt': ['GET'],
@@ -329,8 +359,10 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         # ── 第二阶段 · 批 3：人工写回（`tests/test_api_edits.py` 管行为）。
         #    ⚠ `stage6/edit` / `stage7/edit` 刻意不在（2026-08-17 裁决：改字走 CLI）。
         '/api/novels/{sid}/review/{ordinal}/edit': ['POST'],
+        '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim': ['POST'],
         '/api/novels/{sid}/stage6/approve': ['POST'],
         '/api/novels/{sid}/stage7/approve': ['POST'],
+        '/api/novels/{sid}/stage7/adopt-residual': ['POST'],
         # ── agent 全链运行（`docs/BACKEND_CONTRACT.md` §6.3 的 `/n/:sid/run` 那一格）──
         #    ⚠ 这五条是本条绊线**按设计逮到的**一次「顺手加端点」：路由已上线、
         #    §6.3 的屏幕职责表也已登记，而这张清单没跟着改 ⇒ 全量跑时它红着。
@@ -343,7 +375,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
     }
 
 
-def test_every_post_route_is_behind_the_gate(bare, app, box):
+def test_every_post_route_is_behind_the_gate(bare, app):
     """**枚举全部 POST**，逐条验它在闸门后面。
 
     ⚠ 这条不写死端点清单：加一条新的 POST 路由而忘了闸门，它当场红。
@@ -352,19 +384,20 @@ def test_every_post_route_is_behind_the_gate(bare, app, box):
     posts = [p for p, ms in _surface(app).items() if 'POST' in ms]
     assert posts, '一条 POST 都没扫到——本条没在查'
     for path in posts:
-        r = bare.post(path.replace('{sid}', box.sid), json={})
+        r = bare.post(path.replace('{sid}', '42'), json={})
         assert r.status_code == 403, f'{path} 不在 CSRF 闸门后面'
 
 
 # ───────────────────────── 四、`R-11.3`：一个字节都不写 ─────────────────────────
 
-def test_the_service_writes_nothing_at_all(client, box):
+def test_the_service_writes_nothing_at_all(corpus_client, box):
     """⭐ 打完全部只读端点 + 一次 preview 之后，**整棵树逐字节相同**。
 
     ⚠ 比 `mtime_ns` 而不只比内容：写回同样的字节**内容是一样的**，
     而那已经是一次写了——长驻服务里那种写会与正在跑的子进程抢同一个文件
     （原型的 `PermissionError: [WinError 5]` 就是这么来的）。
     """
+    client = corpus_client
     before = _tree(box.root)
     for url in ('/api/enums', '/api/novels', f'/api/novels/{box.sid}',
                 f'/api/novels/{box.sid}/stage3/style',
@@ -386,30 +419,84 @@ def test_the_service_writes_nothing_at_all(client, box):
 
 # ───────────────────────── 五、preview 与真跑同一个对象（`R-11.8`） ─────────────────────────
 
-def test_preview_argv_is_identical_to_what_would_run(client, box):
+def test_preview_argv_is_identical_to_what_would_run(client, base):
     """⭐ 沿用原型那条测试名。**摊开显示的那条命令 = 真的会被 `Popen` 的那条。**
 
     ⚠ 它不是「长得像」：`POST /api/jobs/preview` 与 `jobs.start()` 调的是
     **同一个 `jobs.plan_start`**，而那个函数里 `steps` 来自**同一个 `build_steps`**。
     原型那条裂缝（前端 `argv.slice(4)` 硬编码切掉解释器前缀）在这里连发生的地方都没有。
     """
+    sid = '42'
     body = client.post('/api/jobs/preview',
-                       json={'sid': box.sid, 'node': 'stage3.style',
+                       json={'sid': sid, 'node': 'stage3.style',
                              'flags': ['--remeasure']}).json()
-    want = J.plan_start('stage3.style', box.sid, ['--remeasure'], base=box.root)
+    want = J.plan_start('stage3.style', sid, ['--remeasure'], base=base)
     assert body == json.loads(want.model_dump_json())
     assert body['steps'] == [json.loads(s.model_dump_json())
-                             for s in build_steps('stage3.style', box.sid, ['--remeasure'],
-                                                  base=box.root)]
+                             for s in build_steps('stage3.style', sid, ['--remeasure'],
+                                                  base=base)]
     # `--remeasure` 免费但**会写盘** ⇒ 自动追一条 `--check-only`（`build_steps` 的判准）。
     assert len(body['steps']) == 2 and body['paid'] is False and body['writes'] is True
 
 
-def test_preview_refuses_a_run_mode_that_node_does_not_have(client, box):
+def test_preview_refuses_a_run_mode_that_node_does_not_have(client):
     """拒收开在 `build_argv` 里（`R-11.8`），于是**界面上摆出来的不可能是一条拼错的命令**。"""
     r = client.post('/api/jobs/preview',
-                    json={'sid': box.sid, 'node': 'stage3.style', 'flags': ['--names-only']})
+                    json={'sid': '42', 'node': 'stage3.style', 'flags': ['--names-only']})
     assert r.status_code == 400 and r.json()['kind'] == 'UnsupportedRunMode'
+
+
+@pytest.mark.parametrize(('node', 'mode'), [
+    ('stage2.global', None),
+    ('stage2.blueprint', None),
+    ('stage3.style', None),
+    ('stage4.plan', None),
+    ('stage5.write', 'deep'),
+    ('stage6.hook', None),
+    ('stage7.rename', None),
+])
+def test_revalidate_preview_is_a_template_but_execution_requires_real_audit_values(
+        client, node, mode):
+    request = {
+        'sid': '42',
+        'node': node,
+        'mode': mode,
+        'flags': ['--revalidate'],
+    }
+    preview = client.post('/api/jobs/preview', json=request)
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    first = body['steps'][0]['argv']
+    assert first[first.index('--actor') + 1] == '待填·actor'
+    assert first[first.index('--reason') + 1] == '待填·reason'
+    assert body['flags'] == ['--revalidate']
+
+    missing = client.post('/api/jobs', json=request)
+    assert missing.status_code == 400
+    assert missing.json()['kind'] == 'UnsupportedRunMode'
+
+    placeholder_request = {
+        **request,
+        'flags': [
+            '--revalidate', '--actor', '待填·actor',
+            '--reason', '待填·reason',
+        ],
+    }
+    placeholder = client.post('/api/jobs', json=placeholder_request)
+    assert placeholder.status_code == 400
+    assert placeholder.json()['kind'] == 'UnsupportedRunMode'
+
+
+def test_revalidate_preview_with_real_audit_values_matches_the_strict_plan(client, base):
+    flags = [
+        '--revalidate', '--actor', 'reviewer-a',
+        '--reason', '逐项核对当前闸门后同轮重判',
+    ]
+    request = {'sid': '42', 'node': 'stage7.rename', 'flags': flags}
+    response = client.post('/api/jobs/preview', json=request)
+    assert response.status_code == 200, response.text
+    strict = J.plan_start('stage7.rename', '42', flags, base=base)
+    assert response.json() == json.loads(strict.model_dump_json())
 
 
 # ───────────────────────── 六、作业（`R-11.11`） ─────────────────────────
@@ -422,14 +509,14 @@ def _fake_started(base, sid) -> str:
     return job_id
 
 
-def test_a_job_from_a_previous_process_reads_as_unknown(client, box):
+def test_a_job_from_a_previous_process_reads_as_unknown(client, base):
     """⭐ `R-11.11`：**服务重启后「运行中」一律改判 `unknown`，不是「成功」。**
 
     进程内那把互斥锁是内存里的，新进程恒为空 ⇒ 一条没有 `ended` 的作业
     在新进程里必然折成 `unknown`，而且**必须说得出原因**
     （`unknown` 与「这个作业出了别的问题」在界面上长得一样近）。
     """
-    job_id = _fake_started(box.root, box.sid)
+    job_id = _fake_started(base, '42')
     body = client.get('/api/jobs').json()
     rec = next(r for r in body['jobs'] if r['job_id'] == job_id)
     assert rec['state'] == 'unknown' and rec['note'], '`unknown` 必须说出为什么'
@@ -437,7 +524,7 @@ def test_a_job_from_a_previous_process_reads_as_unknown(client, box):
 
 
 def test_http_start_runs_a_real_failing_subprocess_and_records_its_final_state(
-        client, box, monkeypatch):
+        client, base, monkeypatch):
     """TODO-14：HTTP 入口不能只证明“能创建 running 记录”。
 
     这里让公共启动端点真正拉起一个退出码为 7 的子进程，再从公共详情端点读取
@@ -449,13 +536,13 @@ def test_http_start_runs_a_real_failing_subprocess_and_records_its_final_state(
     step = Step(
         argv=[sys.executable, '-c',
               f'import sys; print({marker!r}); sys.exit(7)'],
-        cwd=str(box.root), label='synthetic failing subprocess',
+        cwd=str(base), label='synthetic failing subprocess',
         paid=False, writes='',
     )
     monkeypatch.setattr(J, 'build_steps', lambda *_a, **_kw: [step])
 
     started = client.post('/api/jobs', json={
-        'sid': box.sid, 'node': 'stage3.style', 'flags': [],
+        'sid': '42', 'node': 'stage3.style', 'flags': [],
     })
     assert started.status_code == 202, started.text
     job_id = started.json()['job_id']
@@ -470,23 +557,23 @@ def test_http_start_runs_a_real_failing_subprocess_and_records_its_final_state(
     assert marker in log
 
 
-def test_the_job_log_endpoint_tells_missing_from_silent(client, box):
+def test_the_job_log_endpoint_tells_missing_from_silent(client, base):
     """⚠ 一个**不存在的** job_id 直接读日志会拿到「空文本 + offset 原样」——
 
     那与「作业在跑、还没输出」**长得一模一样**，而前者该是 404。
     """
     assert client.get('/api/jobs/nope/log').status_code == 404
-    job_id = _fake_started(box.root, box.sid)
+    job_id = _fake_started(base, '42')
     r = client.get(f'/api/jobs/{job_id}/log')
     assert r.status_code == 200 and r.json() == {'text': '', 'next_byte': 0}
 
 
-def test_job_log_sse_resumes_by_byte_without_duplicates_and_releases(client, box):
+def test_job_log_sse_resumes_by_byte_without_duplicates_and_releases(client, base):
     """断线游标取 UTF-8 字节；终态先排空日志、发 end，然后连接必须结束。"""
-    job_id = _fake_started(box.root, box.sid)  # 不在活锁里 ⇒ 明确终态 unknown
+    job_id = _fake_started(base, '42')  # 不在活锁里 ⇒ 明确终态 unknown
     first = '第一行\n'.encode('utf-8')
     second = '第二行\n'.encode('utf-8')
-    path = J.log_path(box.root, job_id)
+    path = J.log_path(base, job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(first + second)
 
@@ -507,16 +594,17 @@ def test_job_log_sse_resumes_by_byte_without_duplicates_and_releases(client, box
     assert response.text.count('第二行') == 1
 
 
-def test_jobs_can_be_filtered_by_book(client, box):
-    job_id = _fake_started(box.root, box.sid)
-    assert [r['job_id'] for r in client.get(f'/api/jobs?sid={box.sid}').json()['jobs']] == [job_id]
+def test_jobs_can_be_filtered_by_book(client, base):
+    job_id = _fake_started(base, '42')
+    assert [r['job_id'] for r in client.get('/api/jobs?sid=42').json()['jobs']] == [job_id]
     assert client.get('/api/jobs?sid=another').json()['jobs'] == []
 
 
 # ───────────────────────── 七、持久批量队列（TODO-01） ─────────────────────────
 
 def test_queue_preview_is_pure_and_create_persists_the_confirmed_instance(
-        client, box, monkeypatch):
+        corpus_client, box, monkeypatch):
+    client = corpus_client
     before = _tree(box.root)
     preview = client.post('/api/queues/preview', json={
         'sids': [box.sid], 'until_stage': 'stage1', 'confirmed': False,
@@ -539,7 +627,8 @@ def test_queue_preview_is_pure_and_create_persists_the_confirmed_instance(
     assert client.get(f'/api/queues/{queue_id}').status_code == 200
 
 
-def test_queue_api_requires_confirmation_before_persisting_paid_commands(client, box):
+def test_queue_api_requires_confirmation_before_persisting_paid_commands(corpus_client, box):
+    client = corpus_client
     preview = client.post('/api/queues/preview', json={
         'sids': [box.sid], 'until_stage': 'stage4', 'confirmed': False,
     }).json()
@@ -552,8 +641,10 @@ def test_queue_api_requires_confirmation_before_persisting_paid_commands(client,
     assert refused.json()['kind'] == 'ApprovalRequired'
 
 
-def test_queue_resume_api_carries_a_new_explicit_confirmation(client, box, monkeypatch):
+def test_queue_resume_api_carries_a_new_explicit_confirmation(
+        corpus_client, box, monkeypatch):
     """Calling the resume endpoint is not itself spending authorization."""
+    client = corpus_client
     plan = Q.plan(str(box.root), [box.sid], until_stage='stage1')
     run = Q.create(
         str(box.root), [box.sid], until_stage='stage1',

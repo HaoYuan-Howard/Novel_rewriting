@@ -7,17 +7,36 @@ import pytest
 
 from novel.stages.stage0.removal import _context, run_approve, run_source
 from novel.stages.stage1.partition import run_partition
+from tests.fixtures_ingest import body
 from tools import current_corpus_paid_preview as P
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = (
+REAL_SOURCES = (
     ROOT / 'Test_data' / '收养三只反派幼崽后_2019402867061048656.txt',
     ROOT / 'Test_data' / '常春杜若_1668963766200045568.txt',
 )
 
 
-def _spec(tmp_path: Path, *, ledger: Path | None = None) -> P.PreviewSpec:
+def _synthetic_sources(tmp_path: Path) -> tuple[Path, Path]:
+    source_dir = tmp_path / 'sources'
+    source_dir.mkdir(exist_ok=True)
+    sources = (
+        source_dir / 'FQ_合成甲_2019402867061048656.txt',
+        source_dir / 'FQ_合成乙_1668963766200045568.txt',
+    )
+    for source, chapters in zip(sources, (17, 25), strict=True):
+        source.write_text(body(chapters), encoding='utf-8')
+    return sources
+
+
+def _spec(
+    tmp_path: Path,
+    *,
+    ledger: Path | None = None,
+    sources: tuple[Path, Path] | None = None,
+) -> P.PreviewSpec:
+    sources = sources or _synthetic_sources(tmp_path)
     return P.PreviewSpec.model_validate({
         'historical_ledger': ledger,
         'books': [
@@ -27,7 +46,7 @@ def _spec(tmp_path: Path, *, ledger: Path | None = None) -> P.PreviewSpec:
                 'input_kind': 'source',
                 'source': source,
             }
-            for index, source in enumerate(SOURCES, 1)
+            for index, source in enumerate(sources, 1)
         ],
     })
 
@@ -36,7 +55,9 @@ def _shared_spec(
     tmp_path: Path,
     *,
     input_kind: str = 'source',
+    sources: tuple[Path, Path] | None = None,
 ) -> P.PreviewSpec:
+    sources = sources or _synthetic_sources(tmp_path)
     shared = tmp_path / 'NOVEL_OUTPUT'
     return P.PreviewSpec.model_validate({
         'books': [
@@ -46,9 +67,25 @@ def _shared_spec(
                 'input_kind': input_kind,
                 **({'source': source} if input_kind == 'source' else {}),
             }
-            for source in SOURCES
+            for source in sources
         ],
     })
+
+
+@pytest.mark.corpus
+@pytest.mark.skipif(
+    not all(source.is_file() for source in REAL_SOURCES),
+    reason='缺少现役双书 Test_data 语料',
+)
+def test_real_current_corpus_has_the_frozen_17_and_25_chapter_shape(tmp_path):
+    plan = P.build_plan(
+        _spec(tmp_path, sources=REAL_SOURCES),
+        token_counter=lambda _request: 1,
+    )
+    assert [(book['sid'], book['chapters']) for book in plan['books']] == [
+        ('2019402867061048656', 17),
+        ('1668963766200045568', 25),
+    ]
 
 
 def test_final_topology_lists_18_dispatches_and_real_conditional_limits(tmp_path):
@@ -56,17 +93,19 @@ def test_final_topology_lists_18_dispatches_and_real_conditional_limits(tmp_path
     aggregate = plan['aggregate']
     assert aggregate == {
         'production_cli_dispatches': 18,
-        'mandatory_base_logical_requests': 136,
-        'mandatory_base_ladder_wire_hard_limit': 544,
+        'base_nonsemantic_logical_requests': 136,
+        'base_nonsemantic_ladder_wire_hard_limit': 544,
         'stage3_conditional_habit_quote_logical': 2,
         'stage3_conditional_habit_quote_wire_hard_limit': 8,
-        'profile_gated_semantic_logical': 50,
-        'profile_gated_semantic_wire_hard_limit': 200,
+        'advisory_semantic_logical': 50,
+        'advisory_semantic_wire_hard_limit': 200,
         'conditional_trim_logical': 168,
         'conditional_trim_wire_hard_limit': 420,
-        'full_conditional_logical_hard_limit': 356,
-        'full_conditional_wire_hard_limit': 1172,
-        'full_conditional_context_token_hard_ceiling': 1_172_000_000,
+        'stage6_conditional_candidate_retry_logical': 6,
+        'stage6_conditional_candidate_retry_wire_hard_limit': 6,
+        'full_conditional_logical_hard_limit': 362,
+        'full_conditional_wire_hard_limit': 1178,
+        'full_conditional_context_token_hard_ceiling': 1_178_000_000,
     }
     assert sorted(book['chapters'] for book in plan['books']) == [17, 25]
 
@@ -75,6 +114,26 @@ def test_final_topology_lists_18_dispatches_and_real_conditional_limits(tmp_path
                for row in stage3)
     assert [(row['base_logical_requests'], row['logical_request_hard_limit'])
             for row in stage3] == [(18, 19), (26, 27)]
+
+    hooks = [row for row in plan['dispatches'] if row['node'] == 'stage6.hook']
+    assert all('low/no-thinking' in row['conditional_reason'] for row in hooks)
+    assert [(
+        row['base_logical_requests'],
+        row['conditional_logical_requests'],
+        row['logical_request_hard_limit'],
+        row['base_ladder_wire_hard_limit'],
+        row['conditional_wire_hard_limit'],
+        row['wire_attempt_hard_limit'],
+    ) for row in hooks] == [(1, 3, 4, 4, 3, 7), (1, 3, 4, 4, 3, 7)]
+    for row in hooks:
+        retry = next(
+            item for item in row['request_envelopes']
+            if item['kind'] == 'conditional_candidate_retry')
+        assert retry == {
+            'kind': 'conditional_candidate_retry',
+            'max_tokens': 24_000,
+            'rungs': [['low', False]],
+        }
 
 
 def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_path):
@@ -97,6 +156,10 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
     write = next(row for row in plan['dispatches'] if row['node'] == 'stage5.write')
     assert write['production_cli_argv'][write['production_cli_argv'].index('--deep') + 1] == '1,2,3'
     assert '--shallow-rest' in write['production_cli_argv']
+    semantic = [row for row in plan['dispatches']
+                if row['node'] in {'stage5.semantic', 'stage6.semantic'}]
+    assert len(semantic) == 4
+    assert all('--advisory' in row['production_cli_argv'] for row in semantic)
     with pytest.raises(SystemExit):
         P._parser().parse_args(['--execute'])
 
@@ -163,10 +226,16 @@ def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
     by_node = {row['node']: row for row in plan['dispatches'][:9]}
     assert by_node['stage5.semantic']['profile_dependency'] == 'secret_timeline'
     assert by_node['stage6.semantic']['profile_dependency'] == 'reference_boundary'
-    assert '0 wire' in by_node['stage5.semantic']['profile_gate_behavior']
+    assert '--advisory' in by_node['stage5.semantic']['profile_gate_behavior']
+    assert 'UNVER' in by_node['stage6.semantic']['profile_gate_behavior']
     assert any('全项 PASS' in line for line in by_node['stage4.plan']['human_gate_dependencies'])
     assert any('actor/reason' in line for line in by_node['stage2.global']['human_gate_dependencies'])
     assert any('approve' in line for line in by_node['stage7.rename']['human_gate_dependencies'])
+    global_version = P.artifact_spec(P.STAGE2_GLOBAL_GROUNDING).current_version
+    assert any(
+        f'v{global_version} 产物' in line
+        for line in by_node['stage2.blueprint']['human_gate_dependencies']
+    )
     trim = by_node['stage5.write']
     assert trim['conditional_logical_requests'] == 17 * 4
     assert trim['conditional_wire_hard_limit'] == 17 * 10
@@ -227,7 +296,7 @@ def test_existing_experiments_and_minimum_evaluator_are_separate_scopes(tmp_path
     assert old['external_hard_limit'] == 588
     assert old['included_in_new_corpus_totals'] is False
     assert old['overlaps_current_corpus_scope'] is False
-    assert old['combined_wire_hard_ceiling_once_each'] == 588 + 1172
+    assert old['combined_wire_hard_ceiling_once_each'] == 588 + 1178
     calibration = plan['calibration_evaluation']
     assert calibration['production_cli_dispatch'] is None
     assert calibration['status'] == 'blocked_missing_final_private_inputs'
@@ -255,9 +324,9 @@ def test_existing_experiments_and_minimum_evaluator_are_separate_scopes(tmp_path
 
     accounting = plan['scope_accounting']
     assert accounting['existing_fc08_fc13_overlaps_current_corpus'] is False
-    assert accounting['existing_plus_current_once_each'] == 588 + 1172
+    assert accounting['existing_plus_current_once_each'] == 588 + 1178
     assert accounting['all_three_minimum_campaign_once_each_if_later_unblocked'] == (
-        588 + 1172 + 4800)
+        588 + 1178 + 4800)
 
 
 def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
@@ -269,7 +338,7 @@ def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
         P.build_plan(spec, token_counter=lambda _request: 1)
 
     bad = spec.model_dump()
-    bad['books'][1]['source'] = SOURCES[0]
+    bad['books'][1]['source'] = spec.books[0].source
     bad['books'][0]['base'] = tmp_path / 'clean-a'
     bad['books'][1]['base'] = tmp_path / 'clean-b'
     with pytest.raises(ValueError, match='派生 sid'):
@@ -280,14 +349,16 @@ def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
 def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     text = P.render(P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1))
     assert '[18/18]' in text
-    assert '全条件硬上限：logical=356 / wire=1172' in text
+    assert 'Stage6 条件候选定向重试：logical=6 / wire 上限=6' in text
+    assert '全条件硬上限：logical=362 / wire=1178' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text
     assert 'blocked_missing_final_private_inputs' in text
     assert '8 abilities × 100 cases × 2 judges × 3 runs = 4800' in text
-    assert '三块各一次=6560' in text
+    assert '三块各一次=6566' in text
     assert '若最终 manifest 超过 800 case' in text
     assert 'input token=unknown' in text
     assert 'price：unknown' in text
     assert 'completion 已含 reasoning，不重复相加' in text
+    assert '最终 schema v2 上游' not in text
     assert '本工具没有执行入口' in text

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_stage2_secret_edit.py —— `stage2.global --apply-edit`：secret 的 0 成本人工订正。
+test_stage2_secret_edit.py —— `stage2.global --apply-edit`：Stage2 typed facts 的 0 成本人工订正。
 
-【它守的是什么】TODO-05 补的是一个**契约内的空洞**：`reader_reveal_events` /
-知情人 / secret 事实抽错时，本层此前没有任何人工决策集可改——`--purge-role`
-只修 role/fate，`--renormalize` 只重算代码派生字段，剩下的路是手改产物
-（没有 schema 管形状，来源账上也留不下「这是人改的」）。
+【它守的是什么】细粒度 patch 先补上已有 secret 字段的修订入口；完整 replace surface
+继续接住 patch 无法表达的集合级决定：拆分复合 secret、增删 world rule、重建 address 列表。
+两条路都必须有严格 schema、来源账、同一归一/判据、轮次归档和 global-review 刷新。
 
 【四条各对应一次会静默发生的损失】
   · **越界章号**  —— 越界的揭示章让逐章剧透闸门**永不触发**（`R-6.3` 按它开闸），
@@ -33,10 +32,12 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schema import encode_artifact
+from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalEdit, GlobalGrounding
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
 from novel.orchestrator.state import readonly_ctx
+from novel.quality.global_review import decide
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.test_stage2_generation import (
@@ -205,6 +206,98 @@ def test_the_other_two_editable_fields_land_too():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
+    """A compound secret can be split without bypassing the real consumer.
+
+    ``Stage4`` exposes a secret's whole fact after the earliest reveal event;
+    adding a second event to one compound fact therefore cannot express two
+    independently revealed facts.  The complete-set edit splits that row,
+    also replaces an omitted world-rule set and a character's complete address
+    surface, then ``run_apply_edit`` rebuilds ``global_review`` from the landed
+    artifact.  Old decisions bind to the old hashes and must not follow it.
+    """
+    root, book = _sandbox('集合订正_003b')
+    try:
+        _seed(book)
+        ctx = _ctx(book, 'stage2.global', paid=False)
+        store = ArtifactStore(ctx)
+        old_review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+        old_secret_rows = [
+            item for item in old_review.items
+            if item.kind in {'secret_set_complete', 'secret', 'known_by', 'reveal'}]
+        assert old_secret_rows
+        for item in old_secret_rows:
+            old_review = decide(
+                old_review,
+                item_id=item.item_id,
+                expected_subject_sha256=item.subject_sha256,
+                state='PASS',
+                actor='test-reviewer',
+                reason='synthetic source evidence checked before replacement',
+                now='2026-08-17T00:00:00+00:00',
+            )
+        store.write(extract.GLOBAL_REVIEW_REL, old_review)
+        old_item_ids = {item.item_id for item in old_secret_rows}
+
+        _write_edit(book, {
+            'secrets_replace': [{
+                'secret_id': 'secret_01',
+                'fact': '父亲已经回城',
+                'character_known_by': ['char_002'],
+                'setup_chapters': [1],
+                'reader_reveal_events': [{'chapter': 3}],
+            }, {
+                'secret_id': 'secret_02',
+                'fact': '母亲早就知道那封信的事',
+                'character_known_by': ['char_001'],
+                'setup_chapters': [],
+                'reader_reveal_events': [{'chapter': 2}],
+            }],
+            'world_rules_replace': [{
+                'rule_id': 'wr_02',
+                'kind': 'legal_rule',
+                'versions': [{
+                    'effective_from_chapter': 1,
+                    'desc': '城中夜间梆子响过以后实行宵禁，行人须留在住所直到天明',
+                }],
+            }],
+            'addresses_replace': [{
+                'char_id': 'char_002',
+                'address': [{
+                    'surface': '母亲', 'by': 'public', 'context': 'address',
+                    'from_chapter': 2,
+                }, {
+                    'surface': '母亲', 'by': 'char_001', 'context': 'reference',
+                    'from_chapter': 2,
+                }],
+            }],
+        })
+        artifact, report = _apply(book)
+
+        assert report.node == 'stage2.global'
+        assert [row.secret_id for row in artifact.canon.secrets] == [
+            'secret_01', 'secret_02']
+        assert [row.rule_id for row in artifact.canon.world_rules] == ['wr_02']
+        assert [(row.surface, row.by, row.context, row.from_chapter)
+                for row in artifact.entities.characters['char_002'].address] == [
+            ('母亲', 'public', 'address', 2),
+            ('母亲', 'char_001', 'reference', 2),
+        ]
+
+        rebuilt = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
+            GlobalReview, extract.GLOBAL_REVIEW_REL)
+        secret_rows = [
+            item for item in rebuilt.items
+            if item.kind in {'secret_set_complete', 'secret', 'known_by', 'reveal'}]
+        assert len(secret_rows) == 7  # set completeness + 2 × fact/known-by/reveal
+        assert all(item.state == 'pending' for item in secret_rows)
+        assert old_item_ids.isdisjoint({item.item_id for item in secret_rows})
+        assert {item.subject_path for item in secret_rows if item.kind == 'secret'} == {
+            'canon.secrets.secret_01.fact', 'canon.secrets.secret_02.fact'}
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、来源账：这一份此后是混版的，而账要说得出口
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,6 +342,42 @@ def test_the_previous_round_is_archived_before_the_human_round_lands():
         archived = sorted(p.name for p in (book / 'stage2' / '_rounds').iterdir())
         assert archived == ['global_grounding.r1.json', 'global_review.r1.json']
         assert (book / 'stage2' / '_rounds' / 'global_grounding.r1.json').read_bytes() == before
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_global_and_review_roll_back_as_one_history_byte_set(monkeypatch):
+    """The companion review cannot leave a successfully replaced global behind."""
+    root, book = _sandbox('组合事务_005b')
+    try:
+        _seed(book)
+        _write_edit(book, {'secrets': [{
+            'secret_id': 'secret_01',
+            'character_known_by': ['char_001', 'char_002'],
+        }]})
+        stage = book / 'stage2'
+        before = {
+            path.relative_to(stage).as_posix(): path.read_bytes()
+            for path in stage.rglob('*') if path.is_file()
+        }
+        original_write = ArtifactStore.write
+
+        def fail_review(self, rel, artifact):
+            if rel == extract.GLOBAL_REVIEW_REL:
+                raise OSError('模拟 global review 刷新失败')
+            return original_write(self, rel, artifact)
+
+        monkeypatch.setattr(ArtifactStore, 'write', fail_review)
+        with pytest.raises(OSError, match='review 刷新失败'):
+            _apply(book)
+
+        after = {
+            path.relative_to(stage).as_posix(): path.read_bytes()
+            for path in stage.rglob('*') if path.is_file()
+        }
+        assert after == before, (
+            'global 已换新而 review 失败时，formal/INVALID/review/'
+            '_rounds/_revalidation 必须整组回到事务前')
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -328,11 +457,12 @@ def test_an_unknown_secret_id_is_refused_with_the_current_set_spelled_out():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_a_patch_that_fails_the_gate_lands_in_invalid_without_touching_the_formal_base():
-    """⭐ HARD 命中 ⇒ 问题稿进 `.INVALID`，**正式全书底座一个字节都不动**。
+def test_a_dangling_known_by_reference_is_rejected_before_any_artifact_write():
+    """A typed registry reference is an invalid decision, not a bad candidate.
 
-    样本用 `secret_known_by_dangling`（HARD）：把知情人改成一个解析不出来的
-    `char_` 保留形。人工路与生成路共用同一道闸——没有免检写口。
+    Waiting for ``secret_known_by_dangling`` would first mutate/normalize the
+    candidate and then create an INVALID round.  Target and reference validity
+    are instead checked atomically before any artifact or archive write.
     """
     root, book = _sandbox('闸门拦下_008')
     try:
@@ -340,14 +470,11 @@ def test_a_patch_that_fails_the_gate_lands_in_invalid_without_touching_the_forma
         before = (book / extract.GLOBAL_REL).read_bytes()
         _write_edit(book, {'secrets': [
             {'secret_id': 'secret_01', 'character_known_by': ['char_777']}]})
-        with pytest.raises(GateBlocked) as caught:
+        with pytest.raises(TerminalState, match='char_777'):
             _apply(book)
-        assert 'secret_known_by_dangling' in str(caught.value)
         assert (book / extract.GLOBAL_REL).read_bytes() == before
-        invalid = book / extract._GLOBAL_INVALID
-        assert invalid.is_file(), '问题稿要留下来——不然人改什么都没得看'
-        assert json.loads(invalid.read_text(encoding='utf-8'))[
-            'canon']['secrets'][0]['character_known_by'] == ['char_777']
+        assert not (book / extract._GLOBAL_INVALID).exists()
+        assert not (book / 'stage2' / '_rounds').exists()
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

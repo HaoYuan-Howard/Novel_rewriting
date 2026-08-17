@@ -372,7 +372,7 @@ def _make_proof(
     )
 
 
-def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> None:
+def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
     if gate == 's0':
         report, _ = store.read_own(RemovalReport, STAGE0_REMOVAL_REPORT)
         if report.approved != 'approved':
@@ -393,6 +393,13 @@ def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> None:
         names, _ = store.read_own(NameMap, STAGE7_NAME_MAP)
         if names.approved is None:
             raise ApprovalRequired('stage7 name map has no typed approved decision')
+        from novel.stages.stage7.rename import approval_proof_sha256
+        proof = approval_proof_sha256(names)
+        if proof is None:
+            raise ApprovalRequired(
+                'stage7 typed approval is not bound to the current name decision surface')
+        return proof
+    return None
 
 
 def _proof_for_seen(novel_dir: Path, key: str) -> _ApprovalProof:
@@ -434,7 +441,22 @@ def _proof_for_gate(
     novel_dir: Path, gate: str, record: _ApprovalRecordV2,
 ) -> _ApprovalProof:
     store = _store_for(novel_dir)
-    _require_typed_gate_decision(store, gate)
+    typed_subject = _require_typed_gate_decision(store, gate)
+    if gate == 's7':
+        # Validate schema, INVALID absence and provenance freshness exactly as
+        # every other gate does, but bind the service approval to the typed
+        # human decision instead of the whole mutable artifact byte string.
+        # ``stage7.assemble`` writes only the derived ``book_txt`` ledger back
+        # into this file; that authorized consequence must not revoke s7.
+        _require_fresh_json(store, STAGE7_NAME_MAP)
+        assert typed_subject is not None
+        return _ApprovalProof(
+            root_clean_sha1=_root_clean_sha1(novel_dir),
+            artifacts={STAGE7_NAME_MAP: typed_subject},
+            decision_sha256=_decision_sha256({
+                'kind': 'gate', 'gate': gate, 'deep': None,
+            }),
+        )
     if gate == 's5':
         rels = _stage5_subject_rels(novel_dir.parent, record.sid, record)
     else:

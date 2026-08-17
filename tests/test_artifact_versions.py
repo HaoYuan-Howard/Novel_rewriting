@@ -50,7 +50,7 @@ def test_unversioned_artifact_is_refused_instead_of_inferred_as_v0():
 def test_future_version_is_refused_with_the_file_and_both_versions():
     with pytest.raises(
         ArtifactVersionError,
-        match=r'stage6/hook\.json: schema v99 .* v2',
+        match=r'stage6/hook\.json: schema v99 .* v3',
     ):
         decode_artifact('stage6/hook.json', {'_schema_version': 99})
 
@@ -68,10 +68,10 @@ def test_old_version_is_refused_without_a_migration_branch():
 def test_schema_model_map_is_derived_from_the_current_registry():
     assert set(ARTIFACTS) == set(ARTIFACT_SPECS)
     assert all(ARTIFACTS[key] is spec.model for key, spec in ARTIFACT_SPECS.items())
-    assert {spec.current_version for spec in ARTIFACT_SPECS.values()} == {1, 2}
+    assert {spec.current_version for spec in ARTIFACT_SPECS.values()} == {1, 2, 3}
 
 
-def test_provenance_bearing_artifacts_are_v2_and_new_audit_artifacts_start_at_v1():
+def test_only_artifacts_with_new_disk_shapes_advance_to_v3():
     provenance_bearing = {
         rel for rel, spec in ARTIFACT_SPECS.items()
         if any(field.alias == '_provenance' for field in spec.model.model_fields.values())
@@ -80,8 +80,8 @@ def test_provenance_bearing_artifacts_are_v2_and_new_audit_artifacts_start_at_v1
     # current provenance contract; "v2" means an existing v1 family was
     # intentionally broken, not that provenance itself consumes a version.
     new_provenance_v1 = {'stage5/trim_resolution_ch{nn}.json'}
-    v2 = provenance_bearing - new_provenance_v1
-    assert v2 == {
+    established = provenance_bearing - new_provenance_v1
+    assert established == {
         'stage2/global_grounding.json',
         'stage2/chapter_blueprints.json',
         'stage3/style_grounding.json',
@@ -95,7 +95,20 @@ def test_provenance_bearing_artifacts_are_v2_and_new_audit_artifacts_start_at_v1
         'stage6/semantic_{n}.json',
         'stage7/name_map.json',
     }
-    assert all(ARTIFACT_SPECS[rel].current_version == 2 for rel in v2)
+    v3 = {
+        'stage2/global_grounding.json',
+        'stage2/chapter_blueprints.json',
+        'stage3/style_grounding.json',
+        'stage4/plan_chapters.json',
+        'stage5/{mode}/ch{nn}.json',
+        'stage5/review_{n}.json',
+        'stage6/hook.json',
+        'stage7/name_map.json',
+    }
+    assert all(ARTIFACT_SPECS[rel].current_version == 3 for rel in v3)
+    assert all(2 in ARTIFACT_SPECS[rel].migrations for rel in v3)
+    unchanged_v2 = established - v3
+    assert all(ARTIFACT_SPECS[rel].current_version == 2 for rel in unchanged_v2)
     assert ARTIFACT_SPECS['stage0/removal_report.json'].current_version == 2
 
     new_v1 = {
@@ -108,6 +121,44 @@ def test_provenance_bearing_artifacts_are_v2_and_new_audit_artifacts_start_at_v1
         'stage5/trim_resolution_ch{nn}.json',
     }
     assert all(ARTIFACT_SPECS[rel].current_version == 1 for rel in new_v1)
+
+
+def test_v2_to_v3_migrations_only_add_neutral_defaults_and_do_not_mutate_input():
+    plan_v2 = {
+        '_schema_version': 2,
+        'chapters': [],
+        '_provenance': {'params': {'plan_beats': 4}},
+    }
+    original = json.loads(json.dumps(plan_v2))
+    decoded = decode_artifact('stage4/plan_chapters.json', plan_v2)
+    assert decoded.version == 3
+    assert decoded.payload['_provenance']['partial_regen_chapters'] == []
+    assert decoded.payload['_provenance']['repairs'] == []
+    assert plan_v2 == original
+
+    hook = decode_artifact('stage6/hook.json', {
+        '_schema_version': 2,
+        '_provenance': {'params': {'max_tokens': 1000}},
+        'candidates': [{'findings': [{'rule': 'x'}]}],
+        'approved': {'findings': [{'rule': 'y'}]},
+    }).payload
+    assert hook['_provenance']['candidate_retries'] == []
+    assert hook['_provenance']['params']['candidate_retry_limit'] == 0
+    assert hook['_provenance']['params']['candidate_retry_effort'] == 'low'
+    assert hook['_provenance']['params']['candidate_retry_thinking'] is False
+    assert hook['candidates'][0]['findings'][0]['output_ordinal'] is None
+    assert hook['approved']['findings'][0]['output_ordinal'] is None
+
+
+def test_stage7_v2_approval_is_cleared_instead_of_fabricating_credentials():
+    decoded = decode_artifact('stage7/name_map.json', {
+        '_schema_version': 2,
+        'approved': {'origin': 'human'},
+        'book': [{'rule': 'rn_report'}],
+    })
+    assert decoded.version == 3
+    assert decoded.payload['approved'] is None
+    assert decoded.payload['book'][0]['output_ordinal'] is None
 
 
 def test_paths_feed_schema_nodes_consumption_and_runtime_from_one_catalog():

@@ -47,7 +47,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > | | 本层的代价 |
 > |---|---|
 > | **载体拒收** | 整章响应作废 ⇒ 重试 ⇒ **再花一次高推理调用**（本层最贵的一次重试） |
-> | **判据拦下** | 落 `.INVALID` ⇒ `--apply-edit` 人手改 / `--revalidate` 重判 ⇒ **0 成本** |
+> | **判据拦下** | 落 `.INVALID` ⇒ `--apply-edit` 人手改 / `--revalidate` 强审计重判 ⇒ **0 次 LLM 调用** |
 >
 > ⇒ 48 条判据里**一条都不该上移**：它们判的全是自由文本的内容属性，类型系统够不着；
 > 而少数够得着的（`mode` / `from_source_ordinals` 长度恒 1）**本来就没有判据**，
@@ -57,6 +57,9 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > `{segments:[{slot,text}]}`。代码在预算、缓存、ledger、transport 之前先检查 prompt-private
 > 字段，再要求槽位集合完整且唯一，最后严格按 producer 顺序组装。缺槽、重槽、多槽或未知键均
 > 是显式终态，不能靠模型返回顺序决定成书顺序。
+> `--apply-edit` 吃的也是这份 **schema v2 人工输入形状**，即完整单章的
+> `{"segments":[{"slot":"s01","text":"..."},...]}`；它不是一段可丢失 slot 边界的纯文本。
+> 命令本身没有 LLM 费用，但操作者仍须提供所有计划 slot 的整章全文。
 >
 > ### ③ 历史机械基线是 **7 条 HARD，盘上 31 章 0 命中；47 条里 29 条从未命中**
 >
@@ -112,8 +115,9 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 ## 一、`stage5/<mode>/chNN.json`
 
-正式章与其 `.INVALID` / 轮次归档使用 **schema v2**；无 `_provenance` 的 rejected、wontfix
-以及新增 trim audit 均从 v1 起步。
+正式章与其 `.INVALID` / 轮次归档当前使用 **schema v3**（登记的 v2→v3 迁移只补
+`Finding.output_ordinal` 的中性默认）；`review_<n>.json` 同为 v3。无 `_provenance` 的
+rejected、wontfix、trim audit 与 trim resolution 均从 v1 起步。
 
 顶层 **10 个键**。**正式稿与 `.INVALID` 共用同一份章契约**——状态由**文件名**区分，
 不由字段贫富区分。
@@ -283,6 +287,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 | 字段 | 类型 | 必填 | 取值面 | 证据 |
 |---|---|---|---|---|
+| `output_ordinal` | `int｜null` | 是 | `chapters[].findings[]` 必须等于所属输出章序；`book[]` 为 `null` | **契·码** |
 | `rule` | `str` | 是 | 48 条注册判据的 key。**key 撞名当场炸** | **三源** |
 | `sev` | `str` | 是 | `hard｜info｜metric｜unver`。**`metric` 与 `info` 必须分开**（判据 21） | **三源** |
 | `item` | `str` | 是 | 人读的一句话「这条在守什么」 | **三源** |
@@ -296,6 +301,16 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 | `converge` | `str` | 是 | `new｜unresolved_N｜same_draft`。**`draft_text_sha1` 没变时不许前进计数** | **三源** |
 | `unresolved_rounds` | `int` | 是 | 连续未消的轮数；到 `STOP_REWRITE_AFTER`(2) 判「根因不在写手」 | **三源** |
 | `wontfix` | `obj` | **否** | `{why, at}`。**盘上零样本**（没有一本有 `wontfix.json`） | **契·码** |
+
+Review 产物保留逐章事实；对外 `CheckReport`、CLI 与 API 不能把同一本书的 `band_drift`
+炸成 N 条同类待办。因此报告层将所有逐章 `band_drift` 合成**一条**书级 finding
+（`output_ordinal=null`），detail 给命中章数/章号，evidence 保存可展开的逐章 JSON，包含原始
+章序、detail/evidence、actionable、identity、converge、unresolved 与 wontfix；不会为了聚合丢审计状态。
+
+当前、hash 完全匹配且未 adopted/未 resolution 的 `TrimAudit` 已是同一篇幅超限的权威待办。
+这种情况下 Review 在**判据侧**移除独立 `length_over`，并由 `verification` 明写当前字数、目标区间、
+before/after SHA-256 与保留 pretrim 的销账入口。audit stale、正文/路径不匹配、已采用或已销账时，
+独立 `length_over` 仍照常保留；这不是靠 inbox 隐藏重复项。
 
 > #### 逐章豁免与书级闸门问的是**两个不同的问题**，都要
 >
@@ -451,7 +466,9 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 | `review` | `str` | **否** | 触发这一轮的报告指纹。盘上 4/31 | **三源** |
 | `fixes` | `[[rule, evidence_key]…]` | **否** | 这一轮针对性下发了哪几条。**只存引用不存渲染后的指令文本**（指令由 `RULES.directive` 生成，存第二份就会跟着表漂）。盘上 4/31 | **三源** |
 | `origin` | `str` | **否** | `human` = `--apply-edit` 落的人工稿。盘上 1/31 | **三源** |
-| `input_basis` | `str` | **否** | `apply_edit_current_validation` —— **「这份 inputs 是本次重判时读的，不是对旧问题稿历史来源的追认」**。盘上 1/31。<br>⚠ **0 代码读者，但不是孤儿**：它记的是**不可复算**的一件事，删了两种来源在盘上同形（判据 28）；而且它与 stage3/stage4 的 `revalidated` 是同一个东西 | **盘·码** |
+| `input_basis` | `str` | **否** | `apply_edit_current_validation` —— **「这份 inputs 是本次人工稿校验时读的，不是对旧问题稿历史来源的追认」**。它只属于新人工轮，不等于 `revalidated` | **盘·码** |
+| `invalid_baseline_sha256` | 64 位 sha256 | **否** | 活动 `.INVALID` 首次写入时的不可变基线定位；提升后清除 | **契·码** |
+| `revalidation_audit` | `RevalidationAudit` | **否** | `--revalidate` 成功后必有：actor/reason、raw/canonical 前后 SHA-256、RFC 6901 改动路径与变化布尔 | **契·码** |
 
 ⚠ **已裁撤**：`state`（原 `'invalid'`，只在 `.INVALID` 上）——0 读者，且**它恒等于文件名**。
 一个叫 `chNN.INVALID.json` 的文件里再写一句「我是 invalid」就是第二落点（`Q-6`）。
@@ -463,27 +480,17 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > 上一轮 `inputs` 为空时**记下这次真实读过的那份并打上 `input_basis`**，
 > 明说它不是对历史的追认（判据 28：不知道不能记成匹配）。
 
-> #### ⚠⚠ 而 `--revalidate` 那条路**伪造**来源账——方向与 stage4 恰好相反
+> #### `--revalidate` 是强审计提升，不是新一轮写作
 >
-> stage4 那条路是**丢掉** `_provenance`；本层这条是**盖上一份当前的**：
+> 命令必须给 `--actor` / `--reason`。`write_invalid` 保存不可变基线；提升前同时比较 raw 字节与
+> 去掉 `_provenance` 后的 canonical 业务 JSON。原样重判、纯排版变化、人工业务修改分别由
+> `raw_changed` / `content_changed` / `edited_by_human` 与 `changed_json_pointers` 区分。
+> 成功后继承 `.INVALID` 自己的 prompts/model/inputs/usage/round，**round 不加一**；只更新代码身份、
+> 清掉活动基线键并写 `revalidated=true + revalidation_audit`。因此它既不会把人工修改洗成纯模型输出，
+> 也不会把一次复检伪造成新生成。
 >
-> ```
-> run_chapters:  data['_sys'] = sys_prompt          ← 在 --revalidate 分支【之前】
-> revalidate  →  save_chapter(...)
->                prov = provenance(prompts={'SYS': data['_sys']}, model=DEFAULT_MODEL)
->                                  ↑ 当前的 SYS 指纹      ↑ 当前的 inputs（进程读账）
-> ```
->
-> 于是一份**上一轮付费产出**的问题稿被提升为正式稿之后，它的来源账写着：
-> **这一轮的 system prompt 指纹 · `model=deepseek-v4-pro` · 这一轮读到的上游指纹**，
-> `round` 还 +1 —— 而**没有任何一次新的落笔发生过**。
-> `.INVALID` 自己那份真实的 `_provenance` 被整个丢弃。
->
-> ⚠ 三件事同时错：① 记了一个没产出它的 prompt；② 记了一个没写它的模型；
-> ③ 把「重判提升」记成了「第 N 轮写作」。而 `--apply-edit` 在**同一个文件里、相隔 30 行**，
-> 把这三件事全做对了。
-> ⇒ 正确形状（照 `stage3.md` §五 / `R-5.10`）：**继承 `.INVALID` 自己的 prov ·
-> 补 `revalidated: true` · 刻意不宣称 `origin=human`**（「判据改了」与「人手改过」在节点这一侧分不开）。
+> `--apply-edit` 则消费完整 `segments[{slot,text}]` 人工稿、归档旧章并用
+> `RoundFreeProvenance(origin=human)` 形成新的最大轮次。两者都是 0 次 LLM 调用，但只有后者是新轮。
 
 ### 6.2 `review_<n>.json._provenance`
 
@@ -518,9 +525,9 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 | `meta_leak` | **HARD** | 正文里没有章节标题/编号/任务术语 | **0** | — |
 | `verbatim_missing` | **HARD** | 【原样写入】逐字出现（**允许被一处提示语切开**） | **0**（177 条全落地） | — |
 | `keep_value_missing` | **HARD** | 【数值不得改动】都在（**比值不比字面**：`30岁` ↔「三十岁」= 满足） | **0**（61 条全在） | — |
-| `secret_leak` | **HARD** | 没有提前点破本章不该揭示的事。**报绿灯时同一行必须打盲区计数；一本书盲区 100% 时落 `unver` 而不是沉默** | **0** ⚠ 而 19/21 条 secret 的探针连揭示章都命中不了 | — |
+| `secret_leak` | **HARD** | 没有提前点破本章不该揭示的事。检查面是 ctx 的 `must_not_reveal` **并集** Stage2 `reader_reveal_events` 推导的揭示前章，防止 ctx 漏投一个 id 就静默放行；改写式盲区仍交语义审判 | **0** ⚠ 而 19/21 条 secret 的探针连揭示章都命中不了 | — |
 | `dialogue_halved` | **HARD** | 直接引语没被腰斩（**仅 `shallow` + 计划无净压缩**） | **0** | — |
-| `length_over` / `length_under` | INFO | 篇幅上/下限 = **`DRAFT_BAND` 0.90~1.10×预算，无第二层宽限** | **10/31 章**（0.814~1.206 那批） | — |
+| `length_over` / `length_under` | INFO | 篇幅上/下限 = **`DRAFT_BAND` 0.90~1.10×预算，无第二层宽限**。精确当前的 unresolved TrimAudit 存在时，`length_over` 在 Review 判据侧并入该 verification；stale/mismatch/adopted/resolved 时仍独立输出 | **10/31 章**（0.814~1.206 那批） | — |
 | `names_absent` | INFO | 本章人物名出现在正文里 | 0 | — |
 | `verbatim_typo` / `verbatim_split` | INFO | 没被改字 / 被提示语切开也逐字出现 | 0 | — |
 | `must_appear_missing` | INFO | 【必须在场】的物件留下痕迹 | 0（30 条全留痕） | — |
@@ -528,7 +535,7 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 | `invented_name` | INFO | 没有编出下发面以外的人 | 0 | 0 |
 | `secret_unknown` | INFO(stage4) | `must_not_reveal` 点到的都查得到 | 0 | — |
 | `dialogue_fewer` / `dialogue_broken` / `dialogue_ratio_drift` | INFO | 引语数 / 引号体 / 对白占比 | 3 / 0 / **13** | — / — / **10** |
-| `band_drift` / `para_len_drift` | INFO | 句段形态档位 / 段均字数 | **18** / 0 | **7** / 0 |
+| `band_drift` / `para_len_drift` | INFO | 句段形态档位 / 段均字数。Review 保留逐章 `band_drift`，CheckReport/CLI/API 无损聚合为一条书级 finding | **18** / 0 | **7** / 0 |
 | `layout_drift` | INFO | 提示语排版惯例 | 0 | — |
 | `simile_drift` / `xinli_drift` / `dash_drift` | INFO | 明喻 /「心里」/ 破折号密度 | 7 / 7 / **11** | 5 / 4 / **0** |
 | `quotes_in_unquoted_corpus` | INFO(corpus) | 引号用法与语料一致 | 0 | — |
@@ -540,7 +547,7 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 | `deep_overlap_high` | INFO | **闭卷臂**重合度 > `DEEP_OVERLAP_MAX`（10%）。**守的是臂的身份不是文风**；开卷不判 | **0/11 闭卷章**（今天 max 2.4%） | — |
 | **〔度量〕** `length_report` · `overlap_report` · `dash_report` · `short_run_report` | metric | **逐章无条件报出** | 31 / 31 / 31 / 31 | — |
 | **〔度量〕** `dialogue_report` | metric | **无条件**报出直接引语数与比值，**逐章 + 书级都报** | 31/31 + 每本 1 条书级 | — |
-| **〔度量〕** `secret_timeline` | metric | 未揭示秘密在全书成稿里的出现分布 | **21 条 secret** | — |
+| **〔度量〕** `secret_timeline` | metric | 每条 secret 的关键词数、权威揭示章、全书命中章与「揭示章未命中」盲区；与逐章字面闸共用同一数字归一尺 | **21 条 secret** | — |
 | **〔度量〕** `book_length_report` · `convergence_report` | metric | 全书篇幅总账 · 与上一轮相比消掉了什么 | 3 / 3（每本各 1） | — |
 | **〔度量〕** `name_surface_survey` | metric | 全书自造称谓与撞名 | **0** ⚠ 见下 | — |
 | `must_hold_unver` | unver | 【必须成立】那一组 | 3（每本 1）· **全书 27 条恒不检查** | — |
@@ -595,8 +602,9 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 > 要远低于开卷的分布（逐章中位 49.8%、书级均值最低 36%）。** 10% 在两条之间，各有约 4 倍余量。
 > ⚠ **它仍然只有 11 章的标定**（判据 18：调参之前先量方差）。deep 章数上到 30+ 之后要重看一次分布——
 > 这句话写进了 `invariants.py` 的常量注释，免得下一个人把它当成量出来的。
-> ⚠ **sev 是 INFO 不是 HARD**：越线的唯一真修法是**重写一整章（付费）**，
-> 而本层的 0 成本出路（`--apply-edit` 改一行）对它无效。
+> ⚠ **sev 是 INFO 不是 HARD**：越线的唯一真修法是**重写一整章**。付费重采样会产生
+> LLM 费用；`--apply-edit` 是 0 LLM 费用，但不是“改一行”：人必须提供该章所有
+> producer-owned slot 的完整 `segments[{slot,text}]` 整章全文。
 >
 > #### 重合度必须按**逐章**口径读，不是书级均值
 >
@@ -712,7 +720,7 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 | `_revise_regression` | 修订轮把上一轮弄坏 | 整轮弃用 + **一次 no-cache 重采样**（同 prompt 走缓存只会拿回同一份坏稿）+ 仍坏则**保留上一轮**，被驳回的稿留 `.rejected.json` |
 | 落盘闸门 | 有 `errs` | **不覆盖已有成稿**，问题稿存 `.INVALID`，**一章失败不中断整批** |
 | `assemble_book` | 同一章两条臂都有成稿 | **显式终态** |
-| `--apply-edit` | 人工稿仍有 `errs` | **只报不拦**（用户裁决：人手动改往往正是为了机器修不动的地方）。判定落进 `errs`/`warns`，界面照常红着 |
+| `--apply-edit` | 提交带全部计划 slot 的完整 `segments[{slot,text}]` 单章人工稿；命令为 0 次 LLM 调用 | 归一、判据、归档后形成新的人工 round；仍有 `errs` 时**只报不拦**，判定落进 `errs`/`warns`，界面照常红着 |
 | `--revise` 无可自救项 | 全部转人工或连续未消 | **显式终态**并明说「这不是『没问题』」 |
 
 > ⚠ **`--apply-edit` 只报不拦这一条，下游没有第二道**：`stage7` 只排除 `.INVALID.json`，
@@ -720,8 +728,9 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 > 盘上零样本（唯一那份人工稿的 `errs` 是空的）。这是裁决的后果，不是 bug——但要写进契约。
 
 > 所有写作与修订调用共用 `ChapterResponse` 及同一槽位 validator；不存在另一路纯文本或
-> batch-only 响应形状。正式章 artifact 为 **schema v2**，旧 `text` 权威字段没有别名、迁移或
-> 双读分支，必须从 producer 重新生成当前 `segments`。
+> batch-only 响应形状。正式章 artifact 为 **schema v3**；登记的 v2→v3 迁移只补中性
+> finding 定位默认。旧 `text` 权威字段没有别名或双读分支，必须从 producer 重新生成
+> 当前 `segments`。
 
 ---
 

@@ -12,13 +12,35 @@ test_stage7_subs.py —— 替换器与残留探针。**不吃语料，纯函数
 """
 from __future__ import annotations
 
+import json
+from contextlib import nullcontext
+from types import SimpleNamespace
+
+import pytest
+
+from contracts.schema import decode_artifact
+from contracts.schema.stage7 import ExtraSub, NameMapEdit, Residual
+from novel.errors import TerminalState
 from novel.stages.stage7 import checks
+from novel.stages.stage7 import rename
 from novel.stages.stage7.subs import (
     apply_subs, mask_known, residual_scan, sub_table, surface_hits,
 )
 
 # 「阿禾」⊂「阿禾姊姊」· 「青禾」⊂「孟青禾」——嵌套是本层全部风险的来源。
 CH1 = '阿禾姊姊回来了。孟青禾站在门口，青禾轻轻应了一声，阿禾没有回头。'
+
+
+def test_edit_template_is_a_registry_encoded_strict_v1_artifact():
+    raw = json.loads(rename.edit_template_json())
+    assert raw['_schema_version'] == 1
+    assert set(raw) == {
+        '_schema_version', 'surname_map', 'characters',
+        'character_patches', 'extra_subs',
+    }
+    model = NameMapEdit.model_validate(
+        decode_artifact(rename.EDIT, raw).payload)
+    assert model == NameMapEdit()
 
 
 def test_generic_appellation_wrapper_may_keep_label_and_replace_embedded_name():
@@ -235,6 +257,334 @@ def test_residual_total_is_measured_before_and_keeps_nesting():
     assert [r['hit'] for r in residual] == ['孟家。']
     assert residual[0]['confidence'] == 'high', '`<姓>家` 是结构信号'
     assert residual[0]['unit'] == '孟家' and residual[0]['suggest'] is None
+
+
+def test_residual_high_uses_longest_appellation_suffix_and_split_canonical():
+    residual, _base = residual_scan(
+        [('ch1', '温兄温公子与汤临')],
+        [('ch1', '温兄、温公子见到汤、临')],
+        {'温', '汤'},
+        set(),
+        {'温': '顾', '汤': '陆'},
+        {'汤临': '陆景'},
+    )
+    by_unit = {row['unit']: row for row in residual}
+    assert by_unit['温兄']['confidence'] == 'high'
+    assert by_unit['温兄']['suggest'] == '顾兄'
+    assert by_unit['温公子']['confidence'] == 'high'
+    assert by_unit['温公子']['suggest'] == '顾公子'
+    assert by_unit['汤、临']['confidence'] == 'high'
+    assert by_unit['汤、临']['suggest'] == '陆、景'
+
+
+def test_residual_split_canonical_accepts_any_gap_in_a_three_character_name():
+    residual, _base = residual_scan(
+        [('ch1', '温夏白温夏白温夏白')],
+        [('ch1', '温夏、白，温、夏白，温、夏 白')],
+        {'温'},
+        set(),
+        {'温': '顾'},
+        {'温夏白': '顾清禾'},
+    )
+    by_unit = {row['unit']: row for row in residual}
+    assert by_unit['温夏、白']['suggest'] == '顾清、禾'
+    assert by_unit['温、夏白']['suggest'] == '顾、清禾'
+    assert by_unit['温、夏 白']['suggest'] == '顾、清 禾'
+    assert all(row['confidence'] == 'high' for row in by_unit.values())
+
+
+def test_residual_common_words_stay_low():
+    residual, _base = residual_scan(
+        [('ch1', '温柔温度常常周围')],
+        [('ch1', '温柔温度常常周围')],
+        {'温', '常', '周'},
+        set(),
+        {'温': '顾', '常': '林', '周': '陆'},
+    )
+    assert residual
+    assert all(row['confidence'] == 'low' for row in residual)
+
+
+class _AdoptionStore:
+    def __init__(self, art, *, fail_write=False):
+        self.art = art
+        self.writes = []
+        self.archives = []
+        self.events = []
+        self.fail_write = fail_write
+
+    def exists(self, rel):
+        return rel == rename.REL
+
+    def read_own(self, _model, rel):
+        assert rel == rename.REL
+        return self.art, b'original-map'
+
+    def history_transaction(self, *_rels):
+        return nullcontext()
+
+    def archive_round(self, rel, *, keep):
+        self.events.append('archive')
+        self.archives.append((rel, keep))
+
+    def write(self, rel, art):
+        self.events.append('write')
+        if self.fail_write:
+            raise RuntimeError('injected write failure')
+        self.writes.append((rel, art))
+
+    def write_round(self, rel, art):
+        self.archive_round(rel, keep=True)
+        self.write(rel, art)
+
+
+class _RebuiltMap(SimpleNamespace):
+    def model_copy(self, *, update):
+        values = vars(self) | update
+        return _RebuiltMap(**values)
+
+
+def _residual(*, unit, suggest, confidence='high'):
+    return Residual(
+        stem='温', where='ch1', hit='温兄。', context='温兄站在门外',
+        confidence=confidence, unit=unit, suggest=suggest,
+    )
+
+
+def _adoption_harness(monkeypatch, residual, *, fail_write=False):
+    art = SimpleNamespace(
+        residual=residual,
+        extra_subs=[ExtraSub(old='沈家', new='林家', origin='human')],
+        subs={'周兄': '陆兄'}, surname_map={'温': '顾'}, characters=[],
+        provenance='old-provenance', approved='old-approval',
+        book_txt='old-delivery', identity='identity-baseline',
+    )
+    store = _AdoptionStore(art, fail_write=fail_write)
+    captured = {}
+    retired = []
+
+    monkeypatch.setattr(rename, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(rename, '_Upstreams', lambda _ctx, _store: object())
+    def retire(_store):
+        store.events.append('retire')
+        retired.append(True)
+
+    monkeypatch.setattr(rename, '_retire_book_txt', retire)
+    monkeypatch.setattr(rename, '_judge', lambda *_args: [])
+    monkeypatch.setattr(rename, '_report', lambda *_args: 'report')
+
+    def fake_build(_ctx, _up, model_out, extra, provenance):
+        captured.update(model_out=model_out, extra=extra, provenance=provenance)
+        return _RebuiltMap(
+            approved='stale', book_txt='stale', identity=None,
+        ), [], None
+
+    monkeypatch.setattr(rename, '_build', fake_build)
+    ctx = SimpleNamespace(
+        rewrite_provenance=lambda provenance, *, by: (provenance, by),
+    )
+    return ctx, store, captured, retired
+
+
+def test_adopt_residual_only_commits_unambiguous_uncovered_high_suggestions(monkeypatch):
+    ctx, store, captured, retired = _adoption_harness(monkeypatch, [
+        _residual(unit='温兄', suggest='顾兄'),
+        _residual(unit='温柔', suggest='顾柔', confidence='low'),
+        _residual(unit=None, suggest=None),
+        _residual(unit='沈家', suggest='赵家'),       # already in extra_subs
+        _residual(unit='周兄', suggest='赵兄'),       # already in derived subs
+        _residual(unit='汤兄', suggest='陆兄'),       # conflicting suggestions
+        _residual(unit='汤兄', suggest='赵兄'),
+    ])
+
+    rebuilt, report = rename.run_adopt_residual(ctx, 'high')
+
+    assert report == 'report'
+    assert captured['provenance'] == ('old-provenance', '--adopt-residual')
+    assert captured['extra'] == [
+        {'old': '沈家', 'new': '林家', 'origin': 'human'},
+        {'old': '温兄', 'new': '顾兄', 'origin': 'human'},
+    ]
+    assert rebuilt.approved is None and rebuilt.book_txt is None
+    assert rebuilt.identity == 'identity-baseline'
+    assert retired == [True]
+    assert store.events == ['archive', 'write', 'retire']
+    assert store.archives == [(rename.REL, True)]
+    assert store.writes == [(rename.REL, rebuilt)]
+
+
+def test_adopt_residual_with_no_safe_candidate_is_a_no_write_terminal_state(monkeypatch):
+    ctx, store, _captured, retired = _adoption_harness(monkeypatch, [
+        _residual(unit='温柔', suggest='顾柔', confidence='low'),
+        _residual(unit='沈家', suggest='赵家'),
+        _residual(unit='汤兄', suggest='陆兄'),
+        _residual(unit='汤兄', suggest='赵兄'),
+    ])
+
+    with pytest.raises(TerminalState, match='没有可安全采纳'):
+        rename.run_adopt_residual(ctx, 'high')
+
+    assert store.archives == [] and store.writes == [] and retired == []
+
+
+def test_adopt_residual_write_failure_keeps_live_delivery(monkeypatch):
+    ctx, store, _captured, retired = _adoption_harness(
+        monkeypatch,
+        [_residual(unit='温兄', suggest='顾兄')],
+        fail_write=True,
+    )
+
+    with pytest.raises(RuntimeError, match='injected write failure'):
+        rename.run_adopt_residual(ctx, 'high')
+
+    assert store.events == ['archive', 'write']
+    assert store.writes == [] and retired == []
+    assert store.art.book_txt == 'old-delivery'
+
+
+class _Dumpable(SimpleNamespace):
+    def model_dump(self, **_kwargs):
+        return dict(vars(self))
+
+
+class _AtomicStore:
+    def __init__(self, art, *, rels, edit=None, fail_write=False, fail_archive=False):
+        self.art = art
+        self.rels = set(rels)
+        self.edit = edit or _Dumpable()
+        self.fail_write = fail_write
+        self.fail_archive = fail_archive
+        self.events = []
+        self.writes = []
+        self.archives = []
+
+    def exists(self, rel):
+        return rel in self.rels
+
+    def read_own(self, _model, rel):
+        assert rel in (rename.REL, rename._INVALID)
+        return self.art, b'old-map'
+
+    def read(self, _model, rel):
+        assert rel == rename.EDIT
+        return self.edit
+
+    def history_transaction(self, *_rels):
+        return nullcontext()
+
+    def archive_round(self, rel, *, keep):
+        self.events.append('archive')
+        if self.fail_archive:
+            raise RuntimeError('injected archive failure')
+        self.archives.append((rel, keep))
+
+    def write(self, rel, art):
+        self.events.append('write')
+        if self.fail_write:
+            raise RuntimeError('injected write failure')
+        self.writes.append((rel, art))
+
+    def write_round(self, rel, art):
+        self.archive_round(rel, keep=True)
+        self.write(rel, art)
+
+
+def _atomic_harness(
+        monkeypatch, *, rels, fail_write=False, fail_archive=False,
+        blocking=False):
+    subject = 'a' * 64
+    art = _Dumpable(
+        surname_map={'温': '顾'}, characters=[], extra_subs=[],
+        provenance='old-provenance',
+        approved=SimpleNamespace(subject_sha256=subject),
+        book_txt='old-delivery', identity='identity-baseline',
+    )
+    store = _AtomicStore(
+        art, rels=rels, edit=_Dumpable(character_patches=[]),
+        fail_write=fail_write, fail_archive=fail_archive,
+    )
+    retired = []
+    monkeypatch.setattr(rename, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(rename, '_Upstreams', lambda _ctx, _store: object())
+    monkeypatch.setattr(rename, 'approval_subject_sha256', lambda _art: subject)
+    monkeypatch.setattr(rename.paths, 'edit_rel', lambda *_args: rename.EDIT)
+    monkeypatch.setattr(rename, 'merge_mapping_edit', lambda *_args: ({}, []))
+    monkeypatch.setattr(rename, '_judge', lambda *_args: ['hard'] if blocking else [])
+    monkeypatch.setattr(rename, '_blocking', lambda outcomes: bool(outcomes))
+    monkeypatch.setattr(rename, '_report', lambda *_args: 'report')
+
+    def fake_build(_ctx, _up, _model_out, _extra, _provenance):
+        return _RebuiltMap(
+            approved='stale', book_txt='stale', identity=None,
+        ), [], None
+
+    monkeypatch.setattr(rename, '_build', fake_build)
+
+    def retire(_store):
+        store.events.append('retire')
+        retired.append(True)
+
+    monkeypatch.setattr(rename, '_retire_book_txt', retire)
+    ctx = SimpleNamespace(
+        novel_dir='novel-dir',
+        rewrite_provenance=lambda provenance, *, by: (provenance, by),
+    )
+    return ctx, store, retired
+
+
+def test_recheck_write_failure_keeps_live_delivery(monkeypatch):
+    ctx, store, retired = _atomic_harness(
+        monkeypatch, rels={rename.REL}, fail_write=True,
+    )
+
+    with pytest.raises(RuntimeError, match='injected write failure'):
+        rename.run_recheck(ctx)
+
+    assert store.events == ['archive', 'write']
+    assert store.writes == [] and retired == []
+    assert store.rels == {rename.REL} and store.art.book_txt == 'old-delivery'
+
+
+def test_recheck_archive_failure_keeps_map_and_live_delivery(monkeypatch):
+    ctx, store, retired = _atomic_harness(
+        monkeypatch, rels={rename.REL}, fail_archive=True,
+    )
+
+    with pytest.raises(RuntimeError, match='injected archive failure'):
+        rename.run_recheck(ctx)
+
+    assert store.events == ['archive']
+    assert store.writes == [] and store.archives == [] and retired == []
+    assert store.rels == {rename.REL} and store.art.book_txt == 'old-delivery'
+
+
+def test_apply_edit_write_failure_keeps_live_delivery(monkeypatch):
+    ctx, store, retired = _atomic_harness(
+        monkeypatch, rels={rename.REL, rename.EDIT}, fail_write=True,
+    )
+
+    with pytest.raises(RuntimeError, match='injected write failure'):
+        rename.run_apply_edit(ctx)
+
+    assert store.events == ['archive', 'write']
+    assert store.writes == [] and retired == []
+    assert store.rels == {rename.REL, rename.EDIT}
+    assert store.art.book_txt == 'old-delivery'
+
+
+def test_apply_edit_invalid_hard_keeps_live_delivery_and_invalid_map(monkeypatch):
+    ctx, store, retired = _atomic_harness(
+        monkeypatch, rels={rename._INVALID, rename.EDIT}, blocking=True,
+    )
+
+    rebuilt, report = rename.run_apply_edit(ctx)
+
+    assert rebuilt.approved is None and rebuilt.book_txt is None
+    assert report == 'report'
+    assert store.events == []
+    assert store.writes == [] and store.archives == [] and retired == []
+    assert store.rels == {rename._INVALID, rename.EDIT}
+    assert store.art.book_txt == 'old-delivery'
 
 
 def test_residual_reports_its_baseline_even_with_nothing_left():

@@ -34,13 +34,14 @@ export interface Provenance {
 }
 
 /**
- * 一条判据结论（后端 `Finding` 十四字段，键恒在）。
+ * 一条判据结论（后端 `Finding` 十五字段，键恒在）。
  * `wontfix` 非空 = 有人看过并豁免 —— 结论不删、单独计数。
  */
 export interface Finding {
   rule: string
   sev: Severity
   item: string
+  output_ordinal: number | null
   detail: string
   evidence: string[]
   fix_args: Record<string, string>

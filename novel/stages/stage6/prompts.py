@@ -73,6 +73,29 @@ def hook_system() -> str:
     return with_json_shape(rendered, HOOK_HINT)
 
 
+HOOK_RETRY_SYS = """\
+你在修复一条已经生成的中文网文开篇文案。只修用户指定的那一种 approach，并返回一条完整候选。
+
+用户会给出完整创作包、当前候选，以及代码实际命中的阻断级问题。逐条消除这些问题，同时保留原候选
+已经成立的钩子机制、人物事实与故事承诺。失败证据里的片段和原始偏移来自当前候选；不要只解释问题，
+要返回修好的完整文案。不得改 approach，不得返回另外两种候选，不得输出 patch。
+
+同时返回更新后的 `rationale`：它必须解释修复后**整组三条候选**各自赌的吸引点，而不是只解释
+目标候选。另两条候选的文本不可改；它们只用于让这句整组 rationale 保持真实。
+
+仍须遵守创作包里的事实边界、原作文案长句复用禁令、段间分隔档位和收尾形态。只输出 JSON。"""
+
+HOOK_RETRY_HINT = {
+    'approach': '|'.join(HOOK_APPROACHES),
+    'text': 'str',
+    'rationale': 'str（解释修复后整组三条候选）',
+}
+
+
+def hook_retry_system() -> str:
+    return with_json_shape(HOOK_RETRY_SYS, HOOK_RETRY_HINT)
+
+
 @dataclass(frozen=True)
 class Material:
     """生成与校验共用的一份下发材料。"""
@@ -217,3 +240,19 @@ def _hook_meas(style: dict):
 
 def build_user(mat: Material) -> str:
     return '\n\n'.join(mat.blocks)
+
+
+def build_retry_user(mat: Material, *, approach: str, candidates: list[dict[str, str]],
+                     rationale: str, hard_findings: list[dict]) -> str:
+    """定向重试看完整事实包与当前整组三候选，只允许替换目标并更新整组说明。"""
+    repair = {
+        'target_approach': approach,
+        'current_candidates': candidates,
+        'current_rationale': rationale,
+        'hard_findings': hard_findings,
+        'instruction': (
+            '只返回 target_approach 的完整修复候选，并返回能准确解释修复后整组三条候选的'
+            ' rationale；逐条消除 hard_findings，另两条候选文本不许改。'),
+    }
+    return build_user(mat) + '\n\n── 单候选定向修复 ──\n' \
+        + json.dumps(repair, ensure_ascii=False, indent=2)

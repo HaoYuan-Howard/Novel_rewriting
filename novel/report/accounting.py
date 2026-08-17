@@ -83,6 +83,8 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     #    声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
     'stage4': (
         AccountingSpec('params', '这份计划的拍是照哪一套阈值切的？'),
+        AccountingSpec('partial_regen_chapters', '哪几章是按章定向重规划过的？'),
+        AccountingSpec('repairs', '各次定向重规划修了哪些 HARD，前后数量与章节指纹是什么？'),
         AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
         AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
     ),
@@ -106,6 +108,7 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     #    而换了模型、换了 `--max-tokens`，产物里没有任何一处说得出来。
     'stage6': (
         AccountingSpec('params', '这一次是用什么旋钮跑的？（`max_tokens` / `tag`）'),
+        AccountingSpec('candidate_retries', '哪些机械 HARD 候选自动定向重试过，是否改善并采纳？'),
         AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
         AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
         AccountingSpec('partial_rewrite', '这份产物是混版的吗？（`--recheck` 改过其中一部分）'),

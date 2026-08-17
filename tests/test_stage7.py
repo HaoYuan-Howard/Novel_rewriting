@@ -14,6 +14,7 @@ from novel import prov
 from novel.errors import UpstreamMissing
 from novel.run import RunContext
 from novel.stages.stage7 import assemble, prompts, rename
+from novel.store import ArtifactStore
 from tests import corpus, sandbox
 
 STAGE7_REQUIRED = ('stage1/main_text.json', 'stage2/global_grounding.json',
@@ -35,13 +36,6 @@ def books() -> list[str]:
     return sorted(book for book, rels in by_book.items() if required <= rels)
 
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        not books(), reason='盘上没有 stage7 产物 —— 本文件整份**没在查**，不是「查过没事」'),
-]
-
-
 def _drafts_of(book: str) -> tuple[str, ...]:
     return tuple(sorted({a.rel for a in corpus.iter_artifacts()
                          if a.book_dir == book and a.pattern == 'stage5/{mode}/ch{nn}.json'
@@ -59,7 +53,19 @@ def _box(book: str) -> sandbox.Sandbox:
     return box
 
 
-@pytest.fixture(params=books(), ids=lambda b: b[:10])
+def _corpus_params():
+    current = books()
+    if current:
+        return [pytest.param(book, marks=pytest.mark.corpus) for book in current]
+    return [pytest.param(
+        None,
+        marks=(pytest.mark.corpus, pytest.mark.skip(
+            reason='盘上没有 stage7 语料——这些集成用例没在查')),
+        id='no-corpus',
+    )]
+
+
+@pytest.fixture(params=_corpus_params(), ids=lambda b: b[:10] if b else 'no-corpus')
 def box(request):
     b = _box(request.param)
     yield b
@@ -72,6 +78,19 @@ def _ctx(box: sandbox.Sandbox, node: str = 'stage7.rename') -> RunContext:
 
 def _check(box: sandbox.Sandbox):
     return rename.run_check_only(_ctx(box))
+
+
+def _approve(box: sandbox.Sandbox):
+    art = NameMap.model_validate(box.read(rename.REL))
+    return rename.run_approve(
+        _ctx(box, 'stage7.approve'), actor='reviewer',
+        reason='reviewed the complete name decision surface',
+        subject_sha256=rename.approval_subject_sha256(art))
+
+
+def _revalidate(box: sandbox.Sandbox):
+    return rename.run_revalidate(
+        _ctx(box), actor='reviewer', reason='review the blocked name map')
 
 
 def _allow_hook_quality(monkeypatch):
@@ -156,7 +175,7 @@ def test_the_assembled_book_is_byte_identical_to_the_one_on_disk(box, monkeypatc
         pytest.skip('当前小说尚未组装 book.txt')
     on_disk = source.read_bytes()
     _allow_hook_quality(monkeypatch)
-    rename.run_approve(_ctx(box, 'stage7.approve'))
+    _approve(box)
     path, art, _rep = assemble.run_assemble(_ctx(box, 'stage7.assemble'))
     assert Path(path).read_bytes() == on_disk
     assert art.book_txt is not None
@@ -166,7 +185,7 @@ def test_the_assembled_book_is_byte_identical_to_the_one_on_disk(box, monkeypatc
 def test_the_book_txt_byte_form_holds(box, monkeypatch):
     """字节形态：LF-only · 章分隔是**裸阿拉伯数字**且恰好 `1..N` · 没有审阅元信息。"""
     _allow_hook_quality(monkeypatch)
-    rename.run_approve(_ctx(box, 'stage7.approve'))
+    _approve(box)
     path, art, _rep = assemble.run_assemble(_ctx(box, 'stage7.assemble'))
     txt = Path(path).read_bytes().decode('utf-8')
     assert '\r' not in txt
@@ -309,8 +328,10 @@ def test_approve_leaves_provenance_alone(box):
     `N9_SYS` 却取过**三个**，那是逐字节的铁证。
     """
     before = box.read('stage7/name_map.json')['_provenance']
-    art, _rep = rename.run_approve(_ctx(box, 'stage7.approve'))
+    art, _rep = _approve(box)
     assert art.approved is not None and art.approved.origin == 'human'
+    assert art.approved.actor == 'reviewer'
+    assert art.approved.subject_sha256 == rename.approval_subject_sha256(art)
     assert box.read('stage7/name_map.json')['_provenance'] == before
 
 
@@ -325,7 +346,22 @@ def test_approve_refuses_while_a_hard_rule_is_still_hit(box):
                               evidence=['阿禾']).model_dump(by_alias=True))
     box.write('stage7/name_map.json', nm)
     with pytest.raises(TerminalState, match='不该定稿'):
-        rename.run_approve(_ctx(box, 'stage7.approve'))
+        _approve(box)
+
+
+def test_approve_rejects_a_stale_subject_before_any_write_or_archive(box):
+    from novel.errors import TerminalState
+
+    before = {p.relative_to(box.dir).as_posix(): p.read_bytes()
+              for p in box.dir.rglob('*') if p.is_file()}
+    with pytest.raises(TerminalState, match='审批对象已变化'):
+        rename.run_approve(
+            _ctx(box, 'stage7.approve'), actor='reviewer',
+            reason='reviewed an earlier decision surface',
+            subject_sha256='0' * 64)
+    after = {p.relative_to(box.dir).as_posix(): p.read_bytes()
+             for p in box.dir.rglob('*') if p.is_file()}
+    assert after == before
 
 
 def test_recheck_reproduces_every_stored_conclusion(box):
@@ -414,14 +450,16 @@ def test_the_gate_blocks_a_dirty_map_and_revalidate_promotes_it_after_the_fix(bo
     _allow_hook_quality(monkeypatch)
     (box.dir / 'stage7' / 'name_map.json').unlink()
     ctx = RunContext.open(str(box.root), box.sid, 'stage7.rename', paid=True)
-    with pytest.raises(GateBlocked, match='阻断级'):
+    with pytest.raises(GateBlocked, match='阻断级') as blocked:
         rename.run_rename(ctx, _fake_client(ctx, dirty))
+    assert ('stage7.rename --revalidate --actor <id> --reason <why>'
+            in str(blocked.value))
     invalid = box.dir / paths.invalid_of('stage7/name_map.json')
     assert invalid.exists(), '闸门拦下了却没落盘 —— 那份稿就丢了'
     assert not (box.dir / 'stage7' / 'name_map.json').exists()
 
     # 提升路：问题还在 ⇒ 不许提升
-    promoted, _rep = rename.run_revalidate(_ctx(box))
+    promoted, _rep = _revalidate(box)
     assert promoted is False and invalid.exists()
 
 
@@ -434,11 +472,11 @@ def test_revalidate_rebuilds_stale_stored_findings_before_promoting(box):
     raw['book'].append(finding(
         'rn_ambiguous', detail='旧代码留下、当前映射重算不出的 HARD',
         evidence=['幽灵结论']).model_dump(by_alias=True))
+    ArtifactStore(_ctx(box)).write_invalid(
+        rename.REL, NameMap.model_validate(raw), gates_skipped=[])
     (box.dir / 'stage7' / 'name_map.json').unlink()
-    inv = paths.invalid_of('stage7/name_map.json')
-    box.write(inv, raw)
 
-    promoted, _rep = rename.run_revalidate(_ctx(box))
+    promoted, _rep = _revalidate(box)
     assert promoted is True
     live = NameMap.model_validate(box.read('stage7/name_map.json'))
     assert not [f for f in live.book if f.rule == 'rn_ambiguous']
@@ -462,6 +500,8 @@ def test_apply_edit_can_patch_the_first_invalid_map_without_full_characters(box)
     art, rep = rename.run_apply_edit(_ctx(box), '')
     assert rep.passed is True
     assert (box.dir / 'stage7' / 'name_map.json').exists()
+    assert not (box.dir / paths.invalid_of('stage7/name_map.json')).exists()
+    assert list((box.dir / 'stage7' / '_rounds').glob('name_map.INVALID.r*.json'))
     assert next(c for c in art.characters if c.char_id == cid).reason.startswith('人工确认')
 
 
@@ -469,7 +509,13 @@ def test_apply_edit_invalidates_approval_and_retires_the_old_delivery(box):
     raw = box.read('stage7/name_map.json')
     old = '旧交付正文\n'.encode('utf-8')
     old_sha1 = prov.content_sha1(old)
-    raw['approved'] = {'origin': 'human'}
+    current = NameMap.model_validate(raw)
+    raw['approved'] = {
+        'origin': 'human',
+        'actor': 'reviewer',
+        'reason': 'approved before the edit',
+        'subject_sha256': rename.approval_subject_sha256(current),
+    }
     raw['book_txt'] = {
         'sha1': old_sha1, 'chars': len(old.decode('utf-8')), 'chapters': 1,
     }

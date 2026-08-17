@@ -20,6 +20,7 @@ from novel.stages.stage4.measure import IDENTITY_GOAL
 from novel.stages.stage5.prompts import target_band
 from novel.views.stage4 import stage4_view
 from tests import corpus, sandbox
+from tests.markers import corpus_params
 
 INPUTS = ('stage1/main_text.json', 'stage2/global_grounding.json',
           'stage2/chapter_blueprints.json',
@@ -38,14 +39,9 @@ def books() -> list[str]:
     return out
 
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        not books(), reason='盘上没有可读的 stage4 语料——这几条**没在查**，不是「查过没事」'),
-]
-
-
-@pytest.fixture(params=books(), ids=lambda b: b[:10])
+@pytest.fixture(params=corpus_params(
+    books(), reason='盘上没有可读的 stage4 语料——这些集成用例没在查'),
+    ids=lambda b: b[:10] if b else 'no-corpus')
 def box(request):
     s = sandbox.Sandbox(request.param, INPUTS)
     yield s
@@ -114,6 +110,11 @@ def test_a_missing_ctx_does_not_take_the_plan_down(box):
 def test_an_ordinal_outside_the_plan_is_a_terminal_state(box):
     with pytest.raises(UpstreamMissing):
         stage4_view(box.root, box.sid, 999)
+
+
+def test_stage4_view_rejects_an_unknown_synthetic_book(tmp_path):
+    with pytest.raises(UpstreamMissing):
+        stage4_view(tmp_path, '9999999999999999999', 1)
 
 
 def test_the_view_writes_nothing(box):

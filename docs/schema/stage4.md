@@ -11,9 +11,9 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 | `stage4/writer_context.json` | `WriterContext` | `stage4.context` | Stage 5/6 的唯一写作材料 |
 | `stage4/writer_context.identity.json` | `WriterContext` | `stage4.plan --identity` | 确定性组装基线 |
 
-三份带 `_provenance` 的正式 JSON 使用 **schema v2**；`plan_edit.json` 是无来源账的人工
-决策集，仍为 v1。未知字段拒收，运行时不读取旧形状、不补缺失字段，也不根据历史常量切换
-预算语义。
+`plan_chapters.json` 当前为 **schema v3**（v2 只经登记迁移补中性的定向修复账）；
+`writer_context.json` 与恒等基线仍为 v2；`plan_edit.json` 是无来源账的人工决策集，为 v1。
+未知字段拒收，运行时只经 `ARTIFACT_SPECS` 登记的版本与迁移读取，不根据历史常量切换预算语义。
 
 ## 一、规划调用边界
 
@@ -84,6 +84,10 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 }
 ```
 
+另有两个 v3 修复账字段：`partial_regen_chapters: int[]` 累积记录定向重规划过的阅读序章号，
+`repairs: PlanRepair[]` 逐次冻结目标章、HARD 失败项/证据指纹、user/response/前后章指纹、
+前后 HARD 数、model 与 cache policy。全书初跑两者均为空，不用缺字段冒充零次。
+
 `inputs` 必须覆盖 `stage1/main_text.json`、`stage2/global_grounding.json` 与
 `stage2/chapter_blueprints.json`。复检会先比较来源账中的分组参数与当前参数，再运行拍顺序、
 相邻性和时间层规则。
@@ -98,6 +102,11 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 它编辑的是正式计划形状，不使用模型响应中的 `plan_beat`。`--apply-edit <路径>` 只接受当前
 小说产物目录内、能由 `ARTIFACTS` 解析的文件；应用后重新运行全部 Stage 4 判据并重建
 `writer_context.json`。
+
+`--apply-edit` 是一轮新的人工修订：以当前正式稿或活动 `.INVALID` 为基线，归档被替换版本，
+更新实际 inputs 并标 `partial_rewrite=--apply-edit`。它与 `--revalidate` 不同；后者只把当前
+`.INVALID` 按现行判据重判后提升，不创建新生成轮，并在 provenance 中保存 actor/reason、
+raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 
 **路径口径**（stage3/4/6/7 共用 `novel/paths.py::edit_rel`）：相对路径按**当前书目录**
 解释，不按进程 cwd；书目录内的绝对路径同样接受；落在书目录之外（含 `..` 穿越）是显式终态。
@@ -153,13 +162,18 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 | 入口 | 成本 | 行为 |
 |---|---|---|
 | `stage4.plan` | 付费 | 生成并严格校验新计划 |
+| `stage4.plan --chapters N[,M...]` | 付费 | 逐目标章用 refresh-write 定向重规划；其余章与书级策略原样合并，最后跑一次全书闸并重建上下文 |
 | `--dry-run` | 0 | 展示当前下发面，不写正式产物 |
 | `--check-only` | 0 | 联合复检计划与写作上下文 |
-| `--revalidate` | 0 | 重判当前 `.INVALID` 计划，合格后晋升并重建上下文 |
+| `--revalidate --actor <id> --reason <why>` | 0 LLM | 强审计重判当前 `.INVALID` 计划；合格后保留原生成来源/轮次晋升并重建上下文 |
 | `--names-only` | 0 | 只重算当前人物显示名投影 |
 | `--identity` | 0 | 生成确定性写作上下文基线 |
 | `--apply-edit <路径>` | 0 | 应用严格完整计划修订集。路径相对**书目录**（`paths.edit_rel`） |
 | `stage4.context` | 0 | 从当前正式上游重建 `writer_context.json` |
+
+定向重规划在任何请求前拒绝混合 model、`N4_SYS` 或 grouping 参数；单章响应必须只返回所请求的
+`output_ordinal/from_source_ordinals`，不得改 `reconstruction_strategy`。目标章失败时合并结果只落
+`.INVALID`、正式计划不被覆盖；成功时 usage 与历史修复账累加，而不是覆盖成“只调用了一次”。
 
 ## 六、现行判据
 

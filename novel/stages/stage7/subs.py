@@ -143,9 +143,10 @@ def mask_known(text: str | None, surfaces: set[str] | frozenset[str]) -> str:
 
 
 def residual_scan(pre_units: list[tuple[str, str]], post_units: list[tuple[str, str]],
-                  stems: frozenset[str] | set[str], surfaces: set[str] | frozenset[str],
-                  surname_map: dict[str, str] | None = None
-                  ) -> tuple[list[dict], dict[str, dict]]:
+                   stems: frozenset[str] | set[str], surfaces: set[str] | frozenset[str],
+                  surname_map: dict[str, str] | None = None,
+                  canonical_map: dict[str, str] | None = None,
+                   ) -> tuple[list[dict], dict[str, dict]]:
     """漏网叫法的候选清单 + **覆盖率基线**。`*_units` = `[(where, text)]`。
 
     → `(residual[], baseline{stem: {total, covered, residual, ratio}})`
@@ -184,13 +185,60 @@ def residual_scan(pre_units: list[tuple[str, str]], post_units: list[tuple[str, 
             total[st] += (text or '').count(st)
     for where, text in post_units:
         masked = mask_known(text, surfaces)
+        split_at: dict[int, tuple[str, str | None]] = {}
+        for old, new in sorted((canonical_map or {}).items(), key=lambda item: -len(item[0])):
+            if len(old) < 2 or old == new:
+                continue
+            # A canonical may be broken at any one or more of its gaps.  The
+            # old implementation required *every* gap to contain punctuation,
+            # so ``温夏、白`` escaped even though ``汤、临`` was detected.
+            # Permit empty gaps in the regex, then require 1..3 separator
+            # characters across the complete match below.
+            separator = r'([、，。！？…·\s]{0,3})'
+            pattern = re.compile(
+                re.escape(old[0])
+                + ''.join(separator + re.escape(ch) for ch in old[1:]))
+            for split_match in pattern.finditer(text or ''):
+                separators = list(split_match.groups())
+                separator_chars = sum(len(value) for value in separators)
+                if not 1 <= separator_chars <= 3:
+                    continue
+                # A literal known surface is masked before this point; a split spelling is not.
+                # Still require the old stem itself to remain visible so two detectors cannot
+                # claim the same already-recognised span.
+                if masked[split_match.start():split_match.start() + 1] != old[:1]:
+                    continue
+                suggestion: str | None = None
+                if len(old) == len(new):
+                    suggestion = ''.join(
+                        ch + (separators[index] if index < len(separators) else '')
+                        for index, ch in enumerate(new))
+                split_at.setdefault(split_match.start(), (split_match.group(), suggestion))
         for st in stems:
             for m in re.finditer(re.escape(st), masked):
                 residual[st] += 1
                 i = m.start()
                 hit = (text or '')[i:i + RESIDUAL_HIT_CHARS]
-                nxt = hit[1:2]
                 new_sur = (surname_map or {}).get(st)
+                split = split_at.get(i)
+                suffix = next(
+                    (candidate for candidate in sorted(
+                        RESIDUAL_HIGH_STEMS, key=lambda value: (-len(value), value))
+                     if (text or '').startswith(candidate, i + len(st))),
+                    '',
+                )
+                if split is not None:
+                    unit, suggestion = split
+                    confidence = 'high'
+                elif suffix:
+                    unit = st + suffix
+                    suggestion = new_sur + suffix if new_sur else None
+                    confidence = 'high'
+                else:
+                    nxt = (text or '')[i + len(st):i + len(st) + 1]
+                    unit = st + nxt if nxt else None
+                    suggestion = new_sur + nxt if (new_sur and nxt) else None
+                    confidence = 'low'
                 out.append({
                     'stem': st,
                     'where': where,
@@ -200,14 +248,14 @@ def residual_scan(pre_units: list[tuple[str, str]], post_units: list[tuple[str, 
                     # `<姓>家/府/氏/宅/门` 实测在两本上 6/6 全真。排前面标 high，
                     # **但仍不自动换**——「不允许家人」里就含「许家」，
                     # 自动替换会写出「不允苏家人」。
-                    'confidence': 'high' if nxt in RESIDUAL_HIGH_STEMS else 'low',
+                    'confidence': confidence,
                     # 建议替换对：`unit` = 旧姓 + 紧邻的一个字（`沈家`），
                     # `suggest` = 本书新姓 + 同一个字（`林家`）。**只是给人省一次敲字**，
                     # 不参与任何判定，也绝不自动生效——人勾中之后它走 `extra_subs`，
                     # 于是 `build_subs` 那一整套检查一条都不会被绕过。
                     # 没有新姓可查时留 `None`，**不猜**。
-                    'unit': (st + nxt) if nxt else None,
-                    'suggest': (new_sur + nxt) if (new_sur and nxt) else None,
+                    'unit': unit,
+                    'suggest': suggestion,
                 })
     baseline: dict[str, dict] = {}
     for st in stems:

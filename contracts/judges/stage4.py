@@ -11,14 +11,23 @@
 """
 from __future__ import annotations
 
-from contracts.rules import REGISTRY, Rule
+from contracts.rules import PromptSurface, REGISTRY, Rule
 
 STAGE = 'stage4'
 
-#: 本层「人怎么改」——**两条真的 0 成本出路**，全表共用。
+PLAN_PROMPT_SURFACE = REGISTRY.register_prompt_surface(PromptSurface(
+    surface='stage4.plan',
+    provides_id_spaces=(
+        'chapter_boundaries', 'chapter_ordinals', 'characters', 'event_units',
+        'events', 'plan_beats', 'relations', 'secrets', 'settings', 'world_rules',
+    ),
+))
+
+#: 本层「人怎么改」——**两条真的 0 LLM 出路**，全表共用。
 #: ⚠ 它与 stage6/stage7 那句不同：那两层只有 `--apply-edit` 一条，本层多一条重建路。
-_HUMAN_FIX = ('〔人能 0 成本改掉：落 `.INVALID` 之后手改那几行，`--revalidate` 提升；'
-              '上下文对不上则 `stage4.context` 重建。**两条都不必再付一次费**〕')
+_HUMAN_FIX = ('〔人能 0 LLM 改掉：落 `.INVALID` 之后手改那几行，'
+              '`--revalidate --actor <id> --reason <why>` 同轮重判并留不可变审计；'
+              '上下文对不上则 `stage4.context` 重建。**两条都不必再付一次 LLM 费用**〕')
 
 
 def _hard(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -> Rule:
@@ -42,6 +51,8 @@ def _metric(rule: str, item: str, requirement: str, **kw) -> Rule:
 # ── ① 结构：一章对一章（4 条 HARD）──────────────────────────────────────────
 
 _hard('one_to_one', '一章对一章（禁合并/重排/删章/拆分）', 'R-5.2',
+      prompt_surface=PLAN_PROMPT_SURFACE.surface,
+      needs_id_spaces=('chapter_ordinals',),
       note='四条禁令的**合取式**，它蕴含一个恒等式 `output_ordinal == from_source_ordinals[0]`。'
            '⚠ 把新蕴含出来的不变量做成**会报错的检查**而不是一句注释——'
            '否则它只是「碰巧成立」，下一次谁改坏了都没人出声。'
@@ -49,7 +60,9 @@ _hard('one_to_one', '一章对一章（禁合并/重排/删章/拆分）', 'R-5.
            '同一条断言的 `model_validator`，模型化之后这条 HARD **构造不出会红的样本**。'
            + _HUMAN_FIX)
 
-_hard('ordinal_seq', 'output_ordinal 1..N 连续', 'R-5.1', note=_HUMAN_FIX)
+_hard('ordinal_seq', 'output_ordinal 1..N 连续', 'R-5.1',
+      prompt_surface=PLAN_PROMPT_SURFACE.surface,
+      needs_id_spaces=('chapter_ordinals',), note=_HUMAN_FIX)
 
 _hard('empty_chapter', '每个输出章都有 beats', 'R-5.7',
       note='计划必须详细到写手能直接写。'
@@ -58,25 +71,37 @@ _hard('empty_chapter', '每个输出章都有 beats', 'R-5.7',
            + _HUMAN_FIX)
 
 _hard('beat_coverage', '源 beat 全覆盖', 'R-5.2',
+      prompt_surface=PLAN_PROMPT_SURFACE.surface,
+      needs_id_spaces=('plan_beats',),
       note='**压缩靠调低预算，不靠丢内容。** 盘上 251/251。' + _HUMAN_FIX)
 
 # ── ② 引用与结构重构（4 条 HARD）─────────────────────────────────────────
 
-_hard('beat_ref', 'from_beats 引用有效且属本章', 'R-5.6', note=_HUMAN_FIX)
+_hard('beat_ref', 'from_beats 引用有效且属本章', 'R-5.6',
+      prompt_surface=PLAN_PROMPT_SURFACE.surface,
+      needs_id_spaces=('plan_beats',), note=_HUMAN_FIX)
 
 _hard('structure_changed', '可重构章节不能保持源内容单元原序', 'R-5.6',
+      prompt_surface=PLAN_PROMPT_SURFACE.surface,
+      needs_id_spaces=('plan_beats',),
       note='源内容单元达到 4 个时，只重分预算、换措辞或重新画相邻分组，仍是恒等改写。'
            '正式计划必须移动叙事入口或信息次序。' + _HUMAN_FIX)
 
 _hard('structure_units', '源内容单元守恒且内部不被拆散', 'R-5.6',
+      prompt_surface=PLAN_PROMPT_SURFACE.surface,
+      needs_id_spaces=('plan_beats',),
       note='规划器可以重排、跨相邻关系合并，但一个由代码确定的源内容单元必须整体进入'
            '同一个写作单元，内部事实顺序不由计划层二次切碎。' + _HUMAN_FIX)
 
 _hard('structure_transition', '重排后的时间衔接与叙事入口显式可执行', 'R-5.6',
+      prompt_surface=PLAN_PROMPT_SURFACE.surface,
+      needs_id_spaces=('plan_beats',),
       note='首单元必须 start；移动入口时首单元必须 cold_open；重排后至少有一处'
            ' earlier/later/parallel/return，不能把跳序留给闭卷写手猜。' + _HUMAN_FIX)
 
 _hard('goal_landing', '开头/结尾目标分别锚定首尾写作单元', 'R-5.6',
+      prompt_surface=PLAN_PROMPT_SURFACE.surface,
+      needs_id_spaces=('event_units', 'events', 'plan_beats'),
       note='结构已经重排后，open_hook_goal 仍引用中段、end_hook_goal 仍引用开头，会给写手'
            '两组不可同时完成的硬要求。两者至少各有一条 event ref 落在首/尾单元。' + _HUMAN_FIX)
 

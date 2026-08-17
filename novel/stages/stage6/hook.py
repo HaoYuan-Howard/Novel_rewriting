@@ -9,7 +9,7 @@ hook.py —— `stage6.hook` 与 `stage6.approve` 的节点函数。
     `--identity`     0 成本恒等基线：同一把尺子量**原作文案段**
     `--recheck`      0 成本重判并写回（三条候选 + 定稿一起重跑归一与判据）
     `--revalidate`   0 成本把被闸门拦下的 `.INVALID` 提升为正式产物
-    （默认）         **付费**：一次调用产三个候选
+    （默认）         **付费**：一次调用产三个候选；机械 HARD 候选各自动重试一次
     `stage6.approve --pick N`  人定稿，0 成本
 
 ⚠⚠ **归一必须在判定之前。** 校验与落盘看**同一份最终字节**，不留两套。
@@ -35,11 +35,13 @@ from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import ContextSource
 from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit, HookParams,
-    HookProvenance, HookResponse, Mech,
+    HookCandidateRetryResponse, HookProvenance, HookResponse, Mech,
 )
 from novel import paths, prov, wontfix
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
+from novel.llm.transport import TransportError
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
@@ -209,7 +211,9 @@ def _accounting_of(prov: dict) -> dict:
     ⚠ **只放产物里真有的键**：键不在 ⇒ 报告打 `[????] 未记录`，
     那与「记了 0 次」不是一回事。
     """
-    return {k: prov[k] for k in ('params', 'revalidated', 'gates_skipped', 'partial_rewrite')
+    return {k: prov[k] for k in (
+        'params', 'candidate_retries', 'revalidated', 'gates_skipped', 'partial_rewrite'
+    )
             if k in prov}
 
 
@@ -351,16 +355,17 @@ def run_recheck(ctx: RunContext) -> tuple[Hook, CheckReport]:
                                 findings=_labelled(label, fs),
                                 resolution=art.approved.resolution)
 
-    store.archive_round(REL, keep=True)
     new = art.model_copy(update={
         'candidates': cands, 'approved': approved, 'judged': up.judged,
         'provenance': ctx.rewrite_provenance(art.provenance, by='--recheck'),
     })
-    store.write(REL, new)
+    store.write_round(REL, new)
     return new, _report(ctx, store, _judge_artifact(new, up, store), new)
 
 
-def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
+def run_revalidate(
+    ctx: RunContext, *, actor: str, reason: str,
+) -> tuple[bool, CheckReport]:
     """`--revalidate`：把被闸门拦下的 `.INVALID` 提升为正式产物。**0 成本。**
 
     ⚠ 它是本层新加的落盘闸门的**必然配套**——闸门是我们自己加的，
@@ -373,10 +378,43 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
         raise UpstreamMissing(f'{_INVALID} 不在盘上——没有被拦下的问题稿要提升')
     up = _Upstreams(ctx, store)
     art = store.read_own(Hook, _INVALID)[0]
-    outcomes = _judge_artifact(art, up, store)
+    candidates: list[Candidate] = []
+    for candidate in art.candidates:
+        text, mech, findings = _normalize_and_judge(candidate.text, up)
+        candidates.append(Candidate(
+            approach=candidate.approach,
+            text=text,
+            mech=mech,
+            findings=_labelled(candidate.approach, findings),
+        ))
+    approved = None
+    if art.approved is not None:
+        text, mech, findings = _normalize_and_judge(art.approved.text, up)
+        if text != art.approved.text:
+            raise TerminalState(
+                '--revalidate 的归一会改变已 hash-bound 的批准文本；'
+                '请改走 --apply-edit 并重新批准')
+        label = f'定稿·{art.approved.approach}'
+        approved = ApprovedHook(
+            approach=art.approved.approach,
+            text=text,
+            origin=art.approved.origin,
+            mech=mech,
+            findings=_labelled(label, findings),
+            resolution=art.approved.resolution,
+        )
+    rebuilt = art.model_copy(update={
+        'lead_upto': up.upto,
+        'candidates': candidates,
+        'approved': approved,
+        'judged': up.judged,
+    })
+    outcomes = _judge_artifact(rebuilt, up, store)
     if _blocking(outcomes):
-        return False, _report(ctx, store, outcomes, art)
-    store.promote_invalid(REL, Hook)
+        return False, _report(ctx, store, outcomes, rebuilt)
+    store.promote_invalid(
+        REL, Hook, actor=actor, reason=reason,
+        artifact_override=rebuilt)
     promoted, _raw = store.read_own(Hook, REL)
     return True, _report(ctx, store, _judge_artifact(promoted, up, store), promoted)
 
@@ -385,13 +423,31 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
 #: 换了这个数，产物里说得出来（原型完全没有这个键）。
 MAX_TOKENS = 64000
 
+#: 单候选修复只回一条完整文案；显式进 ``HookParams``，不能成为隐藏成本旋钮。
+CANDIDATE_RETRY_MAX_TOKENS = 24000
+CANDIDATE_RETRY_LIMIT = 1
+CANDIDATE_RETRY_RUNGS = (('low', False),)
+
+
+def _hard_candidate_findings(findings: list[Finding]) -> list[Finding]:
+    return [item for item in findings if _sev_of(item.rule) == 'hard']
+
+
+def _retry_failure_rows(findings: list[Finding]) -> list[dict[str, object]]:
+    return [{
+        'rule': item.rule,
+        'item': item.item,
+        'detail': item.detail,
+        'evidence': list(item.evidence),
+    } for item in findings]
+
 
 def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
-    """**付费**：一次调用产三个候选，先校验后落盘。
+    """**付费**：初始调用产三个候选，机械判定后逐条定向重试，再校验落盘。
 
     ⚠⚠ **本函数写好了，但在你点头之前一次都不许真跑**（那是本仓第一次真花钱）。
     先 `--dry-run`：`build_prompt()` 是 0 成本的。
-    〔这是 `R-9.1` 那一行「谁在查」标的代码落点：**全层唯一一处 `client.ask_json`**。〕
+    初始与重试调用都在本函数，最终 provenance 的 usage 覆盖完整调用窗口。
     """
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store)
@@ -399,7 +455,7 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
     resp = client.ask_json(system, user, model_cls=HookResponse, purpose=ctx.node,
                            max_tokens=MAX_TOKENS)
 
-    cands = []
+    candidate_rows: list[dict[str, object]] = []
     for c in resp.candidates:
         # ⚠ 枚举**不许 `.get` 兜底**：写歪的 approach 兜成某个合法值，
         # 等于给违约数据发一张静默通行证。载体已经用 `Literal` 拦了一道，
@@ -409,17 +465,130 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
                 f'候选的 approach={c.approach!r} 不在 {sorted(HOOK_APPROACHES)} 里'
                 f'——模型没按枚举产出，别静默收下')
         text, mech, fs = _normalize_and_judge(c.text, up)
-        cands.append(Candidate(approach=c.approach, text=text, mech=mech,
-                               findings=_labelled(c.approach, fs)))
+        candidate_rows.append({
+            'approach': c.approach, 'text': text, 'mech': mech, 'findings': fs,
+        })
+
+    retry_system = prompts.hook_retry_system()
+    retry_policy = CachePolicy.refresh()
+    retry_history: list[dict[str, object]] = []
+    initially_dirty = [
+        index for index, row in enumerate(candidate_rows)
+        if _hard_candidate_findings(row['findings'])  # type: ignore[arg-type]
+    ]
+    rationale = resp.rationale
+    for index in initially_dirty:
+        row = candidate_rows[index]
+        approach = str(row['approach'])
+        before_findings = _hard_candidate_findings(row['findings'])  # type: ignore[arg-type]
+        failure_rows = _retry_failure_rows(before_findings)
+        retry_user = prompts.build_retry_user(
+            up.mat,
+            approach=approach,
+            candidates=[{
+                'approach': str(candidate['approach']),
+                'text': str(candidate['text']),
+            } for candidate in candidate_rows],
+            rationale=rationale,
+            hard_findings=failure_rows)
+        common_history: dict[str, object] = {
+            'approach': approach,
+            'attempt': 1,
+            'failure_items': sorted({item.rule for item in before_findings}),
+            'failure_evidence': prov.projection_fingerprint(failure_rows),
+            'user_prompt': prov.fingerprint(retry_user),
+            'model': client.model,
+            'cache_policy': retry_policy.name,
+            'before_hard': len(before_findings),
+        }
+        try:
+            retried = client.ask_json(
+                retry_system, retry_user, model_cls=HookCandidateRetryResponse,
+                purpose=f'{ctx.node}:retry:{approach}',
+                max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
+                rungs=CANDIDATE_RETRY_RUNGS,
+                cache_policy=retry_policy)
+        except (TerminalState, TransportError) as exc:
+            retry_history.append({
+                **common_history,
+                'output': None,
+                'after_hard': None,
+                'status': 'request_failed',
+                'reason': f'{type(exc).__name__}: {str(exc)[:1000]}',
+                'accepted': False,
+            })
+            continue
+
+        output_fingerprint = prov.projection_fingerprint(
+            retried.model_dump(by_alias=True))
+        if retried.approach != approach:
+            retry_history.append({
+                **common_history,
+                'output': output_fingerprint,
+                'after_hard': None,
+                'status': 'wrong_approach',
+                'reason': (f'请求 {approach!r}，响应却返回 {retried.approach!r}；'
+                           '保留初始候选与整组 rationale'),
+                'accepted': False,
+            })
+            continue
+        retry_text, retry_mech, retry_findings = _normalize_and_judge(retried.text, up)
+        after_findings = _hard_candidate_findings(retry_findings)
+        duplicate = any(
+            retry_text == str(other['text'])
+            for other_index, other in enumerate(candidate_rows) if other_index != index
+        )
+        if duplicate:
+            status = 'duplicate'
+            reason = '重试文本与另一条当前候选重复；保留初始候选与整组 rationale'
+        elif len(after_findings) >= len(before_findings):
+            status = 'hard_not_reduced'
+            reason = (f'HARD 未严格下降：{len(before_findings)} → '
+                      f'{len(after_findings)}；保留初始候选与整组 rationale')
+        else:
+            status = 'accepted'
+            reason = None
+        accepted = status == 'accepted'
+        retry_history.append({
+            **common_history,
+            'output': output_fingerprint,
+            'after_hard': len(after_findings),
+            'status': status,
+            'reason': reason,
+            'accepted': accepted,
+        })
+        if accepted:
+            row.update(text=retry_text, mech=retry_mech, findings=retry_findings)
+            rationale = retried.rationale
+
+    cands = [
+        Candidate(
+            approach=row['approach'], text=row['text'], mech=row['mech'],  # type: ignore[arg-type]
+            findings=_labelled(str(row['approach']), row['findings']))  # type: ignore[arg-type]
+        for row in candidate_rows
+    ]
+
+    prompt_accounting = {
+        'HOOK_SYS': system,
+        'RULES': prov.rules_fingerprint('stage6'),
+    }
+    if initially_dirty:
+        prompt_accounting['HOOK_RETRY_SYS'] = retry_system
 
     artifact = Hook(
-        lead_upto=up.upto, rationale=resp.rationale, candidates=cands, approved=None,
+        lead_upto=up.upto, rationale=rationale, candidates=cands, approved=None,
         sources={'writer_context': _context_source()}, judged=up.judged,
         **{'_provenance': ctx.llm_provenance(
             HookProvenance,
-            prompts={'HOOK_SYS': system, 'RULES': prov.rules_fingerprint('stage6')},
+            prompts=prompt_accounting,
             model=client.model,
-            params=HookParams(max_tokens=MAX_TOKENS))})
+            params=HookParams(
+                max_tokens=MAX_TOKENS,
+                candidate_retry_max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
+                candidate_retry_limit=CANDIDATE_RETRY_LIMIT,
+                candidate_retry_effort=CANDIDATE_RETRY_RUNGS[0][0],
+                candidate_retry_thinking=CANDIDATE_RETRY_RUNGS[0][1]),
+            candidate_retries=retry_history)})
 
     # ⚠⚠ **闸门条件与 stage3 不同**：本层一次产**三份**，一条红不该废掉另两条。
     # ⇒ 拦的是「**一条干净候选都没有**」。部分红照常落盘，报告把红的那条摆在人面前，
@@ -430,7 +599,9 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
         p = store.write_invalid(REL, artifact, gates_skipped=[])
         raise GateBlocked(
             f'三条候选**每一条**都有阻断级问题（{sorted(dirty)}）——'
-            f'没有一条能拿去定稿。问题稿在 {p}，改完跑 `--revalidate`（0 成本）',
+            f'没有一条能拿去定稿。问题稿在 {p}，改完跑 '
+            f'`stage6.hook --revalidate --actor <id> --reason <why>`'
+            f'（0 LLM、同轮重判并留不可变审计）',
             invalid_path=str(p))
     store.write(REL, artifact)
     return artifact
@@ -463,7 +634,8 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
         raise TerminalState(
             f'{REL} 不在盘上——`--apply-edit` 的基线只认正式产物。'
             f'被闸门拦下的问题稿走另一条路：直接改 `.INVALID` 文件，'
-            f'`--revalidate` 提升（0 成本）' if store.exists(_INVALID) else
+            f'`stage6.hook --revalidate --actor <id> --reason <why>` 提升'
+            f'（0 LLM、同轮重判并留不可变审计）' if store.exists(_INVALID) else
             f'{REL} 不在盘上——先跑 stage6.hook（付费）')
     art, _raw = store.read_own(Hook, REL)
     up = _Upstreams(ctx, store)
@@ -504,8 +676,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
                                       )),
             'provenance': ctx.rewrite_provenance(art.provenance, by='--apply-edit')})
 
-    store.archive_round(REL, keep=True)
-    store.write(REL, new)
+    store.write_round(REL, new)
     return new, _report(ctx, store, _judge_artifact(new, up, store), new)
 
 
@@ -551,7 +722,6 @@ def run_approve(
         store, art, c.text, str(pick), actor=actor, reason=reason,
         expected_subject_sha256=subject_sha256)
 
-    store.archive_round(REL, keep=True)
     new = art.model_copy(update={
         'approved': ApprovedHook(approach=c.approach, text=c.text, origin='human',
                                  mech=c.mech, findings=list(c.findings),
@@ -562,7 +732,7 @@ def run_approve(
                                      semantic_review_seq=assessment.semantic_review_seq,
                                  )),
     })
-    store.write(REL, new)
+    store.write_round(REL, new)
     up = _Upstreams(ctx, store)
     return new, _report(ctx, store, _judge_artifact(new, up, store), new)
 

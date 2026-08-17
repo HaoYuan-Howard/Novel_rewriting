@@ -29,6 +29,7 @@ from contracts.invariants import (
     APPROVAL_STATE, NONBODY_KINDS, REMOVED_ORIGIN, SOURCE_ENCODINGS, STAGE0_WARNINGS,
 )
 from contracts.schema.base import Sha1, StrictModel
+from contracts.schema.common import HumanApproval
 
 ApprovalState = Literal[APPROVAL_STATE]
 Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
@@ -84,7 +85,7 @@ class RemovedSegment(StrictModel):
         return self
 
 
-class Stage0EditPlan(StrictModel):
+class Stage0EditPlan(HumanApproval):
     '''审校台交给 ``stage0.edit`` 子进程的一次编辑计划。
 
     它不是产物，不进 ``ARTIFACTS``；HTTP 进程只准备人的决定，真正归档并改写
@@ -99,8 +100,6 @@ class Stage0EditPlan(StrictModel):
     clean_text: str
     clean_sha1: Sha1
     removed: list[RemovedSegment]
-    actor: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
 
     @model_validator(mode='after')
     def _payload_is_self_consistent(self) -> Stage0EditPlan:
@@ -158,15 +157,13 @@ class Stage0ConflictResolution(StrictModel):
         return self
 
 
-class Stage0MergeDecisionPlan(StrictModel):
+class Stage0MergeDecisionPlan(HumanApproval):
     action: Literal['accept', 'reject']
     candidate_id: Sha256
     expected_round: int = Field(ge=1)
     expected_source_sha1: Sha1
     expected_clean_sha1: Sha1
     resolutions: list[Stage0ConflictResolution] = Field(default_factory=list)
-    actor: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
 
     @model_validator(mode='after')
     def _reject_has_no_fake_resolutions(self) -> Stage0MergeDecisionPlan:

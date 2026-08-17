@@ -47,6 +47,11 @@ def test_every_action_is_unique_and_buildable(paid_payload):
 
     for action in actions:
         flags = list(action['extra'] or [])
+        missing = N.missing_required(action['kind'], flags)
+        assert action['required_inputs'] == [
+            {'flag': flag, 'description': VALUED_FLAGS[flag]}
+            for flag in missing
+        ]
         if action['needs_value']:
             index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
             flags.insert(index + 1, '1' if flags[index] == '--deep' else 'C:/placeholder.json')
@@ -60,6 +65,34 @@ def test_every_action_is_unique_and_buildable(paid_payload):
             action['kind'], 'sid123', flags, base=BASE, mode=action['mode'],
         )
         assert ('--yes' in argv) == action['paid']
+
+
+def test_revalidate_actions_collect_audit_values_without_credential_buttons(paid_payload):
+    actions = paid_payload['actions']
+    credentials = {'--actor', '--reason', '--subject-sha256'}
+
+    assert not [
+        action for action in actions
+        if set(action['extra'] or ()) <= credentials and action['extra']
+    ], 'audit credentials are action inputs, never standalone operations'
+
+    expected = {
+        (node, mode)
+        for node, spec in NODES.items()
+        if '--revalidate' in spec.flags
+        for mode in (spec.modes or (None,))
+    }
+    revalidate = {
+        (action['kind'], action['mode']): action
+        for action in actions
+        if action['extra'] == ['--revalidate']
+    }
+    assert set(revalidate) == expected
+    for action in revalidate.values():
+        assert action['required_inputs'] == [
+            {'flag': '--actor', 'description': VALUED_FLAGS['--actor']},
+            {'flag': '--reason', 'description': VALUED_FLAGS['--reason']},
+        ]
 
 
 def test_action_fields_are_derived_from_current_registries(paid_payload):
@@ -76,6 +109,10 @@ def test_action_fields_are_derived_from_current_registries(paid_payload):
         assert action['needs_value'] == next(
             (VALUED_FLAGS[flag] for flag in flags if flag in VALUED_FLAGS), None,
         )
+        assert action['required_inputs'] == [
+            {'flag': flag, 'description': VALUED_FLAGS[flag]}
+            for flag in N.missing_required(node, flags)
+        ]
 
 
 def test_writes_and_paid_are_orthogonal(paid_payload):

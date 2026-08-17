@@ -5,9 +5,9 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 
 | 路径 | 模型 | 角色 |
 |---|---|---|
-| `stage7/name_map.json` | `NameMap` | 当前正式改名产物 |
-| `stage7/_rounds/name_map.rN.json` | `NameMap` | 归档轮次，与正式产物同形 |
-| `stage7/name_map_edit.json` | `NameMapEdit` | 人工输入，不是节点产物 |
+| `stage7/name_map.json` | `NameMap` v3 | 当前正式改名产物 |
+| `stage7/_rounds/name_map.rN.json` | `NameMap` v3 | 归档轮次，与正式产物同形 |
+| `stage7/name_map_edit.json` | `NameMapEdit` v1 | 人工输入，不是节点产物 |
 | `stage7/book.txt` | 纯文本 | 最终交付物 |
 
 正式 JSON 使用当前严格 schema，不读取旧字段、旧规则行或混合契约标记。
@@ -62,9 +62,18 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 - `Residual` 必填 `stem`、`where`、`hit`、`context`、`confidence=high｜low`、
   `unit`、`suggest`。
 - `StemBaseline` 必填 `total`、`covered`、`residual`、`ratio`；`ratio` 可为 `null`。
-- `ApprovedNameMap` 只有 `origin=human`。
+- `ApprovedNameMap` 必填 `origin=human`、自报 `actor`、非空 `reason` 与完整
+  `subject_sha256`。hash 只绑定审批时看到的决策面：`surname_map`、`characters`、
+  `extra_subs` 的排序键紧凑 canonical JSON；不绑定 residual、派生替换计数或
+  `book.txt` 字节。旧页面的 hash 与当前决策面不同时关闭式拒批。
+- 服务检查单的 `s7` proof 绑定上述完整决策面和完整 typed `ApprovedNameMap`
+  （含 actor/reason/origin/subject），并在每次读取时复核 `subject_sha256` 仍等于当前
+  决策面。它不绑定 `book_txt`、residual、book findings 等确定性派生字段：正常
+  `stage7.assemble` 只补交付账，不能反过来撤销授权它的同一份批准；决策面或 typed
+  审批凭据任何一项变化仍会使 proof 失效。
 - `BookTxt` 只有 `sha1`、`chars`、`chapters`；文案未定稿时不得组装成书，因此不存
   `has_hook` 双态字段。
+- `book[]` 中的 finding 是书级事实，`output_ordinal=null`。
 
 ### 1.3 恒等基线与来源
 
@@ -86,12 +95,15 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 没有模型基线、由完整人工编辑直接产生时使用 `NameMapFreeProvenance`：继承
 `FreeProvenance`，同样保留 `params`，但结构上没有 `model`，并写 `origin=human`。
 
-两种来源账都属于当前契约。局部人工编辑已有模型产物时走 `partial_rewrite=--apply-edit`，
-保留原模型来源并更新本次真实读取的 `inputs`。
+两种来源账都属于当前契约。`--apply-edit` 产生新的人工修订轮：有模型基线时记
+`partial_rewrite=--apply-edit`，没有可用基线时使用 `NameMapFreeProvenance`。映射决策发生变化
+必须清空旧 `approved` 与 `book_txt`。相反，`--revalidate` 只是对当前 `.INVALID`
+做强审计：重建派生字段、记录 actor/reason 及 raw/canonical hash，但保留原生成轮次与
+来源账，审计通过不伪装成新的模型或人工改写轮。
 
 ## 三、人工编辑输入
 
-`NameMapEdit` 是严格 schema，允许以下任选组合：
+`NameMapEdit` 是当前注册的 v1 严格 schema，允许以下任选组合：
 
 | 字段 | 类型 | 用途 |
 |---|---|---|
@@ -103,12 +115,32 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 首次没有 `name_map.json` 或 `.INVALID` 基线时，必须提交足以构造完整决定集的内容；有基线时
 可只交 patch。编辑文件经 `ArtifactStore` 读取并进入来源边，不允许读取产物目录外路径。
 
+不手抄版本号或字段。以下命令只向 stdout 输出当前 registry 版本的可复制模板：
+
+```text
+python -X utf8 -u -m novel.cli run stage7.rename <sid> --emit-edit-template --base <base>
+```
+
+v1 骨架为：
+
+```json
+{
+  "_schema_version": 1,
+  "character_patches": null,
+  "characters": null,
+  "extra_subs": null,
+  "surname_map": null
+}
+```
+
+提交前至少替换一个决策字段；空骨架不是有效修订。
+
 ## 四、替换与成书
 
 - 替换器按长度优先构造单一 alternation；`subs` 与 `kept` 同时参与，防止子串跨界。
 - 正文和已定稿文案使用同一替换器；书名只作为人工不可验证项报告。
 - 成书前要求每个输出章恰有一份正式成稿、没有 `.INVALID` 成稿，并且 Stage 6 文案已定稿。
-- `book.txt` 只能在当前 `name_map` 已人工批准、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑/重判会清空旧 `book_txt`（映射编辑同时清空旧批准），并将旧 txt 移到内容寻址的 `_rounds/` 归档。
+- `book.txt` 只能在当前 `name_map` 已人工批准、批准的 subject 仍精确等于当前决策面、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑/重判会清空旧 `book_txt`（映射编辑同时清空旧批准），并将旧 txt 移到内容寻址的 `_rounds/` 归档。
 - 预览/下载端点复用组装前的 approved/current/fresh 闸并复核 `book_txt` 指纹与规模；只有文件存在而账或批准不成立时拒绝返回。
 
 ## 五、当前入口
@@ -119,8 +151,11 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 | `--dry-run` | 0 | 打印当前实际下发内容，不写盘 |
 | `--identity` | 0 | 运行恒等替换基线并写回结论 |
 | `--recheck` | 0 | 按当前代码重建派生字段并重判 |
-| `--apply-edit <路径>` | 0 | 应用严格人工编辑输入。路径相对**书目录**，也接受书目录内的绝对路径；目录外（含 `..` 穿越）是显式终态（`novel/paths.py::edit_rel`，stage3/4/6/7 共用） |
-| `--revalidate` | 0 | 重建 `.INVALID` 的派生字段，合格后提升 |
+| `--emit-edit-template` | 0 | stdout-only 输出 registry 绑定的 `NameMapEdit` v1 骨架，不写盘 |
+| `--apply-edit <路径>` | 0 | 应用严格人工编辑输入并开新人工修订轮。路径相对**书目录**，也接受书目录内的绝对路径；目录外（含 `..` 穿越）是显式终态（`novel/paths.py::edit_rel`，stage3/4/6/7 共用） |
+| `--adopt-residual high` | 0 | 把当前高置信残留作为新决策输入重判；其他参数关闭式拒绝 |
+| `--revalidate --actor <id> --reason <text>` | 0 | 对 `.INVALID` 做强审计，记录 hash 差异并在合格后提升；不开新生成轮 |
+| `stage7.approve --actor <id> --reason <text> --subject-sha256 <64hex>` | 0 | 人工定稿；hash 必须与当前决策面完全一致 |
 | `stage7.assemble` | 0 | 在前置条件满足时写 `book.txt` |
 | `--check-only` | 0 | 只读复检当前正式产物 |
 

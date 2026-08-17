@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import subprocess
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -116,6 +117,22 @@ def test_fixture_manifest_has_no_dangling_files_or_consumers():
         assert raw.startswith((b'{', b'[')) and raw.endswith(b'\n'), path
         raw.decode(MANIFEST['encoding'])
         assert hashlib.sha256(raw).hexdigest() == row['sha256'], path
+
+
+def test_every_byte_pinned_fixture_is_protected_from_git_line_endings():
+    root = Path(__file__).resolve().parents[1]
+    for row in MANIFEST['fixtures']:
+        rel = (Path('tests/fixtures') / row['path']).as_posix()
+        checked = subprocess.run(
+            [
+                'git', '-c', f'safe.directory={root.as_posix()}',
+                'check-attr', 'text', '--', rel,
+            ],
+            cwd=root, check=True, capture_output=True, text=True, encoding='utf-8',
+        )
+        assert checked.stdout.strip() == f'{rel}: text: unset', (
+            f'{rel} 的 sha256 被 manifest 钉住，却没有 .gitattributes -text 保护；'
+            '全新 Windows checkout 会把 LF 改成 CRLF')
 
 
 @pytest.mark.parametrize('fixture_id', sorted(HANDLERS))

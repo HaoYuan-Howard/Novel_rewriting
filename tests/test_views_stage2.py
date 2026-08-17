@@ -18,17 +18,14 @@ import pytest
 from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.views.stage2 import global_view, reading_view
 from tests import corpus, sandbox
-
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(corpus.corpus_root() is None,
-                       reason='盘上没有语料——这几条**没在查**，不是「查过没事」'),
-]
+from tests.markers import corpus_params
 
 REL = 'stage2/global_grounding.json'
 
 
-@pytest.fixture(params=sandbox.books_with_stage3(), ids=lambda b: b.rsplit('_', 1)[0])
+@pytest.fixture(params=corpus_params(
+    sandbox.books_with_stage3(), reason='盘上没有 stage2/3 语料——这些集成用例没在查'),
+    ids=lambda b: b.rsplit('_', 1)[0] if b else 'no-corpus')
 def box(request):
     s = sandbox.Sandbox(request.param)
     yield s
@@ -103,9 +100,9 @@ def test_a_malformed_artifact_is_409_material_not_404(box):
         global_view(box.root, box.sid)
 
 
-def test_an_unknown_book_is_a_terminal_state(box):
+def test_stage2_view_rejects_an_unknown_synthetic_book(tmp_path):
     with pytest.raises(UpstreamMissing):
-        global_view(box.root, '9999999999999999999')
+        global_view(tmp_path, '9999999999999999999')
 
 
 def test_the_view_writes_nothing(box):
@@ -130,7 +127,9 @@ def _bp_books() -> list[str]:
                    if a.rel == 'stage2/chapter_blueprints.json'})
 
 
-@pytest.fixture(params=_bp_books(), ids=lambda b: b[:10])
+@pytest.fixture(params=corpus_params(
+    _bp_books(), reason='盘上没有 stage2 blueprint 语料——这些集成用例没在查'),
+    ids=lambda b: b[:10] if b else 'no-corpus')
 def rbox(request):
     s = _bp_box(request.param)
     yield s

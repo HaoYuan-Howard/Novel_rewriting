@@ -22,14 +22,12 @@ fastapi = pytest.importorskip(
     'fastapi', reason='没装 fastapi ⇒ 这一批**没在查**，不是「查过没事」')
 from fastapi.testclient import TestClient          # noqa: E402
 
+from contracts.schema import decode_artifact      # noqa: E402
+from contracts.schema.stage7 import NameMap        # noqa: E402
 from novel.api.app import UI_HEADER, create_app    # noqa: E402
+from novel.run import RunContext                    # noqa: E402
+from novel.stages.stage7 import assemble, rename    # noqa: E402
 from tests import corpus, sandbox                  # noqa: E402
-
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(corpus.corpus_root() is None,
-                       reason='盘上没有语料——这一批**没在查**，不是「查过没事」'),
-]
 
 INPUTS = ('stage0/removal_report.json',
           'stage1/main_text.json', 'stage1/hook_copy.json',
@@ -58,15 +56,45 @@ def _stage5_rels(book: str) -> tuple[str, ...]:
         and '_rounds' not in a.rel and a.rel.endswith('.json')))
 
 
+def _stage6_semantic_rels(book: str) -> tuple[str, ...]:
+    return tuple(sorted(
+        a.rel for a in corpus.iter_artifacts()
+        if a.book_dir == book and a.rel.startswith('stage6/semantic_')
+        and a.rel.removeprefix('stage6/semantic_').removesuffix('.json').isdigit()))
+
+
+def _name_approval_body(box) -> dict[str, str]:
+    raw = json.loads((box.dir / rename.REL).read_text(encoding='utf-8'))
+    art = NameMap.model_validate(decode_artifact(rename.REL, raw).payload)
+    return {
+        'actor': 'reviewer',
+        'reason': 'reviewed the complete name decision surface',
+        'subject_sha256': rename.approval_subject_sha256(art),
+    }
+
+
 @pytest.fixture(autouse=True)
 def no_api_key(monkeypatch):
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
 
 
-@pytest.fixture
-def box():
-    book = books()[0]
-    s = sandbox.Sandbox(book, INPUTS + _stage5_rels(book))
+def _corpus_params():
+    current = books()
+    if current:
+        return [pytest.param(current[0], marks=pytest.mark.corpus)]
+    return [pytest.param(
+        None,
+        marks=(pytest.mark.corpus, pytest.mark.skip(
+            reason='盘上没有 API 编辑语料——这些集成用例没在查')),
+        id='no-corpus',
+    )]
+
+
+@pytest.fixture(params=_corpus_params(), ids=lambda b: b[:10] if b else 'no-corpus')
+def box(request):
+    book = request.param
+    s = sandbox.Sandbox(
+        book, INPUTS + _stage5_rels(book) + _stage6_semantic_rels(book))
     corpus_book = corpus.corpus_root() / book
     for rel in ('stage0/clean_text.txt', 'stage5/draft.md'):
         source = corpus_book / rel
@@ -81,6 +109,14 @@ def box():
 @pytest.fixture
 def client(box):
     with TestClient(create_app(box.root)) as c:
+        c.headers.update({UI_HEADER: '1'})
+        yield c
+
+
+@pytest.fixture
+def validation_client(tmp_path):
+    """只测 HTTP 载体 schema；不得借真语料把 422 回归排出默认套件。"""
+    with TestClient(create_app(tmp_path)) as c:
         c.headers.update({UI_HEADER: '1'})
         yield c
 
@@ -178,8 +214,8 @@ def test_a_draft_edit_for_a_chapter_outside_the_plan_fails_loudly(client, box):
     ({'mode': 'weird', 'segments': [{'slot': 's01', 'text': '正文'}]}, 'mode 取值面外'),
     ({'segments': [{'slot': 's01', 'text': '正文'}]}, '缺 mode'),
 ])
-def test_an_illegal_edit_body_is_422_from_the_carrier(client, box, body, why):
-    r = client.post(f'/api/novels/{box.sid}/review/1/edit', json=body)
+def test_an_illegal_edit_body_is_422_from_the_carrier(validation_client, body, why):
+    r = validation_client.post('/api/novels/422/review/1/edit', json=body)
     assert r.status_code == 422, why
 
 
@@ -197,17 +233,16 @@ def _approve_body(box, pick: int) -> dict:
     }
 
 
-def _why_pick_is_blocked(box, pick: int) -> str:
-    """`stage6.approve --pick N` 的语义闸**当下**为什么不放行；放行 ⇒ `''`。
+def _approval_target(box) -> tuple[int, str, str]:
+    """Choose a candidate the production approval predicate can actually close.
 
-    ⚠ **用生产那一个谓词（`semantic.assessment_for_text`），不在这里重判一遍。**
-    定稿路的硬闸是 `require_selectable`：缺审、矛盾、uncertain 都不许人误选
-    （`novel/stages/stage6/semantic.py`）。它不放行时 CLI 是 **exit 2**，
-    而本文件那两条测的是「定稿落没落 + 章盖没盖」，不是这道闸——
-    前提不成立就该说出前提，不该把它读成路由坏了。
+    A calibrated ``clear`` candidate uses the automatic basis.  Current
+    ``unreviewed``/``uncertain`` candidates are equally reachable through the
+    request's actor/reason/full-SHA-256 human verification.  Mechanical HARD or
+    an exact current/historical calibrated FAIL remains ineligible.
     """
+    from contracts.rules import REGISTRY
     from contracts.schema.stage6 import Hook
-    from novel.run import RunContext
     from novel.stages.stage6 import semantic
     from novel.store import ArtifactStore
 
@@ -215,38 +250,54 @@ def _why_pick_is_blocked(box, pick: int) -> str:
                           write_ledger=False)
     store = ArtifactStore(ctx)
     art, _raw = store.read_own(Hook, 'stage6/hook.json')
-    got = semantic.assessment_for_text(store, art, art.candidates[pick - 1].text)
-    return '' if got.selectable else got.reason
-
-
-def _needs_a_selectable_candidate(box, pick: int) -> None:
-    """真语料必须已有与当前候选绑定的可定稿质量审判；测试不代跑付费节点。"""
-    why = _why_pick_is_blocked(box, pick)
-    corpus.declared_dependency(
-        not why,
-        needs=f'能过 stage6 语义闸的当前文案审判（当下：{why}）',
-        produced_by=(f'novel.cli run stage6.hook {box.sid} 之后 '
-                     f'novel.cli run stage6.semantic {box.sid}'),
-        cost='两次都是付费节点')
+    assessments = semantic.current_assessments(store, art)
+    refused: list[str] = []
+    for pick, candidate in enumerate(art.candidates, 1):
+        mechanical = sorted({
+            item.rule for item in candidate.findings
+            if REGISTRY.get(item.rule).sev == 'hard'
+        })
+        assessment = assessments[semantic.text_sha1(candidate.text)]
+        if mechanical:
+            refused.append(f'{pick}:mechanical={mechanical}')
+            continue
+        if not (assessment.selectable or assessment.human_resolvable):
+            refused.append(
+                f'{pick}:semantic={assessment.state},historical_fail='
+                f'{assessment.historical_fail}')
+            continue
+        basis = 'calibrated_pass' if assessment.selectable else 'human_verification'
+        return pick, basis, assessment.state
+    raise AssertionError(
+        '现役 corpus 没有一条可依法定稿的 Stage6 候选；不能用 skip 冒充 API 闭环：'
+        + '；'.join(refused))
 
 
 def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
-    """⭐ `--pick 1` 后：`approved` 指向第 1 条候选、`s6` 审批章盖上。
+    """⭐ hash-bound 自动/人工依据都能定稿，并在前置链完成时盖上 `s6`。
 
     ⚠ 退出码契约：`0/1` 都是「定稿**落了**」（`1` 只是报告仍有红行），
     `2/3` 才是没跑成。**盖章看落没落，红不红归 check 屏。**
     """
-    _needs_a_selectable_candidate(box, 1)
+    pick, expected_basis, prior_state = _approval_target(box)
     _stamp_chain(box, 's5')
     before = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
-    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=_approve_body(box, 1))
+    body = _approve_body(box, pick)
+    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=body)
     assert r.status_code == 200, r.text[:300]
     assert r.json()['exit_code'] in (0, 1), r.text[:300]
 
     after = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     assert after['approved'] is not None
-    assert after['approved']['approach'] == before['candidates'][0]['approach']
+    assert after['approved']['approach'] == before['candidates'][pick - 1]['approach']
     assert after['approved']['origin'] == 'human'
+    resolution = after['approved']['resolution']
+    assert resolution['basis'] == expected_basis
+    assert resolution['actor'] == body['actor']
+    assert resolution['reason'] == body['reason']
+    assert resolution['subject_sha256'] == body['subject_sha256']
+    if prior_state != 'clear':
+        assert expected_basis == 'human_verification'
     doc = client.get(f'/api/novels/{box.sid}/approvals').json()
     assert doc['gate']['s6'] is True
 
@@ -254,12 +305,15 @@ def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
 def test_an_approve_before_the_chain_still_lands_in_the_artifact(client, box):
     """⭐ 审批链没到位（中途接手的书）⇒ 定稿**照样落**（产物是真相），
     检查单那一格保持未盖——**不把检查单的顺序翻成定稿的失败**。"""
-    _needs_a_selectable_candidate(box, 1)
-    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=_approve_body(box, 1))
+    pick, expected_basis, _prior_state = _approval_target(box)
+    body = _approve_body(box, pick)
+    r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=body)
     assert r.status_code == 200, r.text[:300]
     assert r.json()['exit_code'] in (0, 1)
     after = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     assert after['approved'] is not None, '定稿没落——链只是检查单，不该拦产物'
+    assert after['approved']['resolution']['basis'] == expected_basis
+    assert after['approved']['resolution']['subject_sha256'] == body['subject_sha256']
     doc = client.get(f'/api/novels/{box.sid}/approvals').json()
     assert doc['gate']['s6'] is False, '链没到位却盖了章——前置约束被绕过了'
 
@@ -285,28 +339,81 @@ def test_a_corrupt_hook_makes_the_approve_job_fail(client, box):
     assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s6'] is False
 
 
-def test_a_zero_pick_is_422_from_the_carrier(client, box):
-    assert client.post(f'/api/novels/{box.sid}/stage6/approve',
-                       json=_approve_body(box, 0)).status_code == 422
+def test_a_zero_pick_is_422_from_the_carrier(validation_client):
+    body = {
+        'pick': 0,
+        'actor': 'api-test-editor',
+        'reason': 'exercise the carrier lower bound',
+        'subject_sha256': '0' * 64,
+    }
+    assert validation_client.post(
+        '/api/novels/422/stage6/approve', json=body).status_code == 422
 
 
 # ───────────────────────── 三、人名定稿 ─────────────────────────
 
-def test_approving_the_name_map_stamps_s7(client, box):
-    """定稿落了（exit 0/1）就盖 `s7`；校验红行仍由 check 屏呈现。"""
+def test_approving_the_name_map_stamps_s7_and_assembly_keeps_it_current(
+    client, box, monkeypatch,
+):
+    """API 定稿盖 `s7`；正常组装只写派生交付账，不能撤销同一批准。"""
+    from novel.stages.stage6 import semantic
+
     _stamp_chain(box, 's6')
-    r = client.post(f'/api/novels/{box.sid}/stage7/approve', json={})
+    body = _name_approval_body(box)
+    r = client.post(f'/api/novels/{box.sid}/stage7/approve', json=body)
     assert r.status_code == 200, r.text[:300]
     assert r.json()['exit_code'] in (0, 1), r.text[:300]
     after = json.loads((box.dir / 'stage7' / 'name_map.json').read_text(encoding='utf-8'))
-    assert after['approved'] == {'origin': 'human'}
+    assert after['approved'] == {'origin': 'human', **body}
     assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is True
+
+    monkeypatch.setattr(semantic, 'require_approved_clear', lambda *_args: None)
+    ctx = RunContext.open(
+        str(box.root), box.sid, 'stage7.assemble', paid=False,
+        write_ledger=False)
+    _path, assembled, _report = assemble.run_assemble(ctx)
+    assert assembled.book_txt is not None
+    assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is True
+
+
+def test_approving_names_with_an_old_subject_fails_without_stamping(client, box):
+    before = (box.dir / 'stage7' / 'name_map.json').read_bytes()
+    body = _name_approval_body(box)
+    body['subject_sha256'] = '0' * 64
+
+    r = client.post(f'/api/novels/{box.sid}/stage7/approve', json=body)
+
+    assert r.status_code == 200 and r.json()['state'] == 'failed'
+    assert r.json()['exit_code'] >= 2
+    assert (box.dir / 'stage7' / 'name_map.json').read_bytes() == before
+    assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is False
 
 
 def test_approving_names_without_a_name_map_fails(client, box):
     _stamp_chain(box, 's6')
+    body = _name_approval_body(box)
     (box.dir / 'stage7' / 'name_map.json').unlink()
-    r = client.post(f'/api/novels/{box.sid}/stage7/approve', json={})
+    r = client.post(f'/api/novels/{box.sid}/stage7/approve', json=body)
     assert r.status_code == 200 and r.json()['state'] == 'failed'
     assert r.json()['exit_code'] >= 2
     assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is False
+
+
+def test_approving_names_requires_all_hash_bound_credentials(validation_client):
+    assert validation_client.post(
+        '/api/novels/422/stage7/approve', json={}).status_code == 422
+
+
+def test_residual_adoption_api_only_accepts_explicit_high(validation_client):
+    assert validation_client.post(
+        '/api/novels/422/stage7/adopt-residual',
+        json={'confidence': 'low'},
+    ).status_code == 422
+
+    response = validation_client.post(
+        '/api/novels/422/stage7/adopt-residual',
+        json={'confidence': 'high'},
+    )
+    assert response.status_code == 200
+    assert response.json()['state'] == 'failed', (
+        '空测试书没有 name_map，但合法请求必须真正抵达 0 成本作业而不是被载体误拒')

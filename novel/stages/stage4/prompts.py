@@ -133,6 +133,20 @@ PLAN_HINT: dict[str, Any] = {
     }],
 }
 
+#: 定向重规划沿用同一套事实、预算与结构约束，但响应只收目标章。放在原 system
+#: 之后的覆盖条款是有意的：整跑的“输出全书”不能让一次修复越界改到别章或全书策略。
+PLAN_REPAIR_OVERRIDE = """\
+
+【本次任务：单章定向修复】
+- 只输出用户消息指定的一个阅读序章节对象；不要输出 `reconstruction_strategy`，不要输出
+  `output_chapters` 包裹层，也不要产出别章。
+- `output_ordinal` 必须等于目标章号，`from_source_ordinals` 必须且只能是同一个章号。
+- 全书 `reconstruction_strategy` 是不可变基线；只修复目标章列出的确定性失败，其他章不可见也不可改。
+- 现有章只作问题定位基线。返回完整的新章节对象，不返回 patch；所有 `segments` 仍使用 `plan_beats[]`。
+只输出 JSON。"""
+
+PLAN_REPAIR_HINT: dict[str, Any] = dict(PLAN_HINT['output_chapters'][0])
+
 def plan_system() -> str:
     """真正发出去的 system prompt。**唯一落点**（同 stage3/6/7 的三个同名函数）。
 
@@ -144,6 +158,11 @@ def plan_system() -> str:
     （`_common.md` §八），所以拿 `PLAN_SYS` 去比对「当前 prompt」是错的口径。
     """
     return with_json_shape(PLAN_SYS, PLAN_HINT)
+
+
+def plan_repair_system() -> str:
+    """按章修复实际发送的 system；响应形状是单个 ``PlanChapterResponse``。"""
+    return with_json_shape(PLAN_SYS + PLAN_REPAIR_OVERRIDE, PLAN_REPAIR_HINT)
 
 
 #: 下发给规划者的**章级**字段。
@@ -163,6 +182,10 @@ BLOCK_SIZES = ('── 各拍源字数（算好的，直接用；逐拍相加即
                '格式 `plan_beat=源字数(逐字N)`。括号是这一拍【必须一字不改写进正文】的原话字数，\n'
                '只有部分拍有；它压不掉，见下面的预算规则。`?` = 这一拍的源字数算不出来。')
 BLOCK_BODY = '── 全书原文正文（不可变原文，按阅读序章号分块）──'
+BLOCK_REPAIR_SCOPE = '── 本次定向修复范围（只能返回这一章）──'
+BLOCK_REPAIR_FAILURES = '── 当前确定性 HARD 失败（逐条修复）──'
+BLOCK_REPAIR_BASELINE = '── 目标章现有计划（仅作修复基线；须返回完整新章）──'
+BLOCK_REPAIR_STRATEGY = '── 全书重构意图（不可修改，不要在响应中返回）──'
 
 
 def project_blueprints_for_planner(blueprints: dict[str, Any],

@@ -210,7 +210,9 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     return _report(ctx, store, both, both.judge())
 
 
-def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
+def run_revalidate(
+    ctx: RunContext, *, actor: str, reason: str,
+) -> tuple[bool, CheckReport]:
     """按当前判据重判问题稿；合格即从 `.INVALID` 零成本提升。
 
     落盘闸门由本层自己加，因此提升路也是闸门闭环的一部分。提升只继承原来源账，
@@ -226,15 +228,28 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
         if not store.exists(_GLOBAL_INVALID):
             raise UpstreamMissing(
                 f'{_GLOBAL_INVALID} 不在盘上——没有被拦下的全局问题稿要提升')
-        _artifact, raw = store.read_own(GlobalGrounding, _GLOBAL_INVALID)
-        outcomes = _judge_candidate(raw, None, main_text)
+        artifact, raw = store.read_own(GlobalGrounding, _GLOBAL_INVALID)
+        data = copy.deepcopy(raw)
+        data.pop('_provenance', None)
+        data, accounting = normalize_global(data, main_text)
+        rebuilt = GlobalGrounding.model_validate({
+            **data,
+            '_provenance': GlobalProvenance.model_validate({
+                **artifact.provenance.model_dump(), **accounting,
+            }),
+        })
+        candidate = rebuilt.model_dump(by_alias=True)
+        outcomes = _judge_candidate(candidate, None, main_text)
         if _hard_hits(outcomes, ignore={'upstream_missing'}):
             both = _Both(store)
             return False, _report(
                 ctx, store, both, outcomes,
                 judged_rel=_GLOBAL_INVALID, invalid_rel=_GLOBAL_INVALID)
-        store.promote_invalid(GLOBAL_REL, GlobalGrounding)
-        _refresh_global_review(store, store.read(GlobalGrounding, GLOBAL_REL))
+        with store.history_transaction(GLOBAL_REL, GLOBAL_REVIEW_REL):
+            store.promote_invalid(
+                GLOBAL_REL, GlobalGrounding, actor=actor, reason=reason,
+                artifact_override=rebuilt)
+            _refresh_global_review(store, store.read(GlobalGrounding, GLOBAL_REL))
         both = _Both(store)
         return True, _report(
             ctx, store, both, both.judge(),
@@ -249,12 +264,25 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
         raise UpstreamMissing(
             f'{GLOBAL_REL} 不在盘上——逐章问题稿不能脱离正式全局底座提升')
     _global, global_raw = store.read_own(GlobalGrounding, GLOBAL_REL)
-    _artifact, raw = store.read_own(ChapterBlueprints, _INVALID)
-    outcomes = _judge_candidate(global_raw, raw, main_text)
+    artifact, raw = store.read_own(ChapterBlueprints, _INVALID)
+    data = copy.deepcopy(raw)
+    data.pop('_provenance', None)
+    data, accounting = normalize_blueprints(
+        data, main_text, global_raw['entities']['characters'])
+    rebuilt = ChapterBlueprints.model_validate({
+        **data,
+        '_provenance': BlueprintProvenance.model_validate({
+            **artifact.provenance.model_dump(), **accounting,
+        }),
+    })
+    candidate = rebuilt.model_dump(by_alias=True)
+    outcomes = _judge_candidate(global_raw, candidate, main_text)
     if _hard_hits(outcomes):
         both = _Both(store)
         return False, _report(ctx, store, both, outcomes, judged_rel=_INVALID)
-    store.promote_invalid(BLUEPRINT_REL, ChapterBlueprints)
+    store.promote_invalid(
+        BLUEPRINT_REL, ChapterBlueprints, actor=actor, reason=reason,
+        artifact_override=rebuilt)
     both = _Both(store)
     return True, _report(ctx, store, both, both.judge())
 
@@ -496,35 +524,28 @@ def _judge_candidate(
         global_g=global_g, blueprints=blueprints, main_text=main_text)
 
 
-def _archive_live(store: ArtifactStore, rel: str) -> None:
-    if store.exists(rel):
-        store.archive_round(rel)
-
-
 def _refresh_global_review(store: ArtifactStore, artifact: GlobalGrounding) -> None:
     previous = (
         store.read_own(GlobalReview, GLOBAL_REVIEW_REL)[0]
         if store.exists(GLOBAL_REVIEW_REL) else None
     )
     review = build_review(artifact.model_dump(by_alias=True), previous)
-    _archive_live(store, GLOBAL_REVIEW_REL)
-    store.write(GLOBAL_REVIEW_REL, review)
+    store.write_round(GLOBAL_REVIEW_REL, review)
 
 
 def _write_formal(store: ArtifactStore, rel: str, artifact: Any) -> None:
-    """成功新稿替换前保留正式稿与问题稿，两条历史都可恢复。"""
-    _archive_live(store, rel)
-    _archive_live(store, paths.invalid_of(rel))
-    store.write(rel, artifact)
-    if rel == GLOBAL_REL:
-        _refresh_global_review(store, artifact)
+    """Commit a new round; global grounding and its review are indivisible."""
+    companions = (rel, GLOBAL_REVIEW_REL) if rel == GLOBAL_REL else (rel,)
+    with store.history_transaction(*companions):
+        store.write_round(rel, artifact)
+        if rel == GLOBAL_REL:
+            _refresh_global_review(store, artifact)
 
 
 def _write_invalid(
     store: ArtifactStore, rel: str, artifact: Any
 ) -> str:
-    """新问题稿覆盖旧问题稿前先归档，避免一次付费响应原地消失。"""
-    _archive_live(store, paths.invalid_of(rel))
+    """Store a failed round; the store atomically preserves its predecessor."""
     return str(store.write_invalid(rel, artifact, gates_skipped=[]))
 
 
@@ -573,7 +594,9 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
         path = _write_invalid(store, GLOBAL_REL, artifact)
         raise GateBlocked(
             f'stage2.global 落盘闸门命中 {hits}。问题稿已存 '
-            f'{_GLOBAL_INVALID}，正式产物没有被覆盖。',
+            f'{_GLOBAL_INVALID}，正式产物没有被覆盖。改好后跑 '
+            '`stage2.global --revalidate --actor <id> --reason <why>`'
+            '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=path,
         )
     _write_formal(store, GLOBAL_REL, artifact)
@@ -706,7 +729,9 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
     if hits:
         path = _write_invalid(store, GLOBAL_REL, artifact)
         raise GateBlocked(
-            f'role/fate 重划后仍命中 {hits}。问题稿保留在 {_GLOBAL_INVALID}。',
+            f'role/fate 重划后仍命中 {hits}。问题稿保留在 {_GLOBAL_INVALID}。'
+            '改好后跑 `stage2.global --revalidate --actor <id> --reason <why>`'
+            '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=path,
         )
     _write_formal(store, GLOBAL_REL, artifact)
@@ -1004,7 +1029,9 @@ def _run_blueprint_repair(
         suffix = f'；{"；".join(extra)}' if extra else ''
         raise GateBlocked(
             f'stage2.blueprint 定向重生成后仍命中 {hits}{suffix}。'
-            f'问题稿已存 {_INVALID}，正式产物没有被覆盖。',
+            f'问题稿已存 {_INVALID}，正式产物没有被覆盖。改好后跑 '
+            '`stage2.blueprint --revalidate --actor <id> --reason <why>`'
+            '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=path,
         )
 
@@ -1080,7 +1107,9 @@ def finish_blueprints(
             if errors else '')
         raise GateBlocked(
             f'stage2.blueprint 落盘闸门命中 {hits}{suffix}。问题稿已存 '
-            f'{_INVALID}，正式产物没有被覆盖。',
+            f'{_INVALID}，正式产物没有被覆盖。改好后跑 '
+            '`stage2.blueprint --revalidate --actor <id> --reason <why>`'
+            '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=str(path),
         )
 
@@ -1199,21 +1228,28 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 四、`--apply-edit`：secret 的 0 成本人工订正
+# 四、`--apply-edit`：Stage2 typed facts 的 0 成本人工订正
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
                           ordinals: set[int]) -> list[str]:
-    """Apply all typed Stage2 patches atomically after validating every target.
+    """Apply a typed Stage2 edit atomically after validating every subject.
+
+    The historical function name is retained for callers, but the edit surface
+    now also supports complete secret/world-rule sets and per-character address
+    sets.  Complete replacement is the only lossless way to add an omitted row,
+    delete an invented row, or split one compound secret into independently
+    revealed facts.
 
     ⚠⚠ **拒收发生在任何一次写盘之前，而且是 `TerminalState` 不是 `GateBlocked`。**
     两者答的是不同的问题：`GateBlocked` 说「这份**产物**过不了闸」（问题稿留 `.INVALID`，
     人接着改），而这里错的是**决策集本身**——把一份指着不存在的 `secret_id`、
     或写着第 99 章的编辑文件落成 `.INVALID`，等于给一个打不开的东西建一份归档。
     """
-    secrets = ((data.get('canon') or {}).get('secrets')) or []
+    canon = data.get('canon') or {}
+    secrets = canon.get('secrets') or []
     by_id = {str(item.get('secret_id') or ''): item for item in secrets}
-    rules = ((data.get('canon') or {}).get('world_rules')) or []
+    rules = canon.get('world_rules') or []
     rules_by_id = {str(item.get('rule_id') or ''): item for item in rules}
     characters = ((data.get('entities') or {}).get('characters')) or {}
 
@@ -1222,14 +1258,15 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         raise TerminalState(
             f'编辑文件指向盘上没有的 secret：{unknown}。'
             f'盘上现有 {sorted(by_id)}。'
-            f'⚠ `--apply-edit` 只**订正**已有的 secret，不新增也不删除——'
-            f'新增要凭空发明它的全部时间线，那是一次抽取而不是一次订正')
+            f'⚠ `secrets` 是 existing-row patch；需要新增、删除或拆分时，'
+            f'请改用完整 typed 列表 `secrets_replace`')
     unknown_rules = sorted({
         patch.rule_id for patch in edit.world_rules if patch.rule_id not in rules_by_id})
     if unknown_rules:
         raise TerminalState(f'编辑文件指向盘上没有的 world rule：{unknown_rules}')
     unknown_characters = sorted({
-        patch.char_id for patch in [*edit.characters, *edit.addresses]
+        patch.char_id for patch in [
+            *edit.characters, *edit.addresses, *edit.addresses_replace]
         if patch.char_id not in characters})
     if unknown_characters:
         raise TerminalState(f'编辑文件指向盘上没有的 character：{unknown_characters}')
@@ -1240,6 +1277,33 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     if bad_addresses:
         raise TerminalState(f'编辑文件指向不存在的 address 下标：{bad_addresses}')
 
+    # A ``char_\d+`` value is a registry reference, while every other
+    # ``character_known_by`` value is intentionally free text (an unnamed
+    # group such as “在场士兵”).  Validate the reference-shaped branch before
+    # touching the candidate so a malformed decision never creates INVALID or
+    # round history.
+    bad_character_refs: list[str] = []
+
+    def validate_known_by(subject: str, values: list[str]) -> None:
+        for value in values:
+            if re.fullmatch(r'char_\d+', value) and value not in characters:
+                bad_character_refs.append(f'{subject}.character_known_by={value}')
+
+    for patch in edit.secrets:
+        if patch.character_known_by is not None:
+            validate_known_by(patch.secret_id, patch.character_known_by)
+    for secret in edit.secrets_replace or []:
+        validate_known_by(secret.secret_id, secret.character_known_by)
+    for replacement in edit.addresses_replace:
+        for index, address in enumerate(replacement.address):
+            if re.fullmatch(r'char_\d+', address.by) and address.by not in characters:
+                bad_character_refs.append(
+                    f'{replacement.char_id}.address.{index}.by={address.by}')
+    if bad_character_refs:
+        raise TerminalState(
+            f'编辑文件包含不在人物 registry 的 char_id：{sorted(bad_character_refs)}。'
+            f'盘上现有 {sorted(characters)}')
+
     hi = max(ordinals) if ordinals else 0
     bad: list[str] = []
     for patch in edit.secrets:
@@ -1249,12 +1313,32 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         for chapter in (patch.setup_chapters or []):
             if chapter not in ordinals:
                 bad.append(f'{patch.secret_id}.setup_chapters={chapter}')
+    for secret in edit.secrets_replace or []:
+        for event in secret.reader_reveal_events:
+            if event.chapter not in ordinals:
+                bad.append(
+                    f'{secret.secret_id}.reader_reveal_events={event.chapter}')
+        for chapter in secret.setup_chapters:
+            if chapter not in ordinals:
+                bad.append(f'{secret.secret_id}.setup_chapters={chapter}')
     for patch in edit.world_rules:
         for version in (patch.versions or []):
             if version.effective_from_chapter not in ordinals:
                 bad.append(
                     f'{patch.rule_id}.versions.effective_from_chapter='
                     f'{version.effective_from_chapter}')
+    for rule in edit.world_rules_replace or []:
+        for version in rule.versions:
+            if version.effective_from_chapter not in ordinals:
+                bad.append(
+                    f'{rule.rule_id}.versions.effective_from_chapter='
+                    f'{version.effective_from_chapter}')
+    for replacement in edit.addresses_replace:
+        for index, address in enumerate(replacement.address):
+            if address.from_chapter not in ordinals:
+                bad.append(
+                    f'{replacement.char_id}.address.{index}.from_chapter='
+                    f'{address.from_chapter}')
     if bad:
         raise TerminalState(
             f'编辑文件里的章号不在这本书的章集合内：{bad}。'
@@ -1264,28 +1348,40 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             f'而产物里那一格看着一切正常')
 
     changed: list[str] = []
-    for patch in edit.secrets:
-        target = by_id[patch.secret_id]
-        for field in ('fact', 'character_known_by', 'setup_chapters'):
-            value = getattr(patch, field)
-            if value is not None:
-                target[field] = copy.deepcopy(value)
-                changed.append(f'{patch.secret_id}.{field}')
-        if patch.reader_reveal_events is not None:
-            target['reader_reveal_events'] = [
-                {'chapter': event.chapter} for event in patch.reader_reveal_events]
-            changed.append(f'{patch.secret_id}.reader_reveal_events')
-    for patch in edit.world_rules:
-        target = rules_by_id[patch.rule_id]
-        if patch.kind is not None:
-            target['kind'] = patch.kind
-            changed.append(f'{patch.rule_id}.kind')
-        if patch.versions is not None:
-            target['versions'] = [version.model_dump() for version in patch.versions]
-            changed.append(f'{patch.rule_id}.versions')
+    if edit.secrets_replace is not None:
+        canon['secrets'] = [secret.model_dump() for secret in edit.secrets_replace]
+        changed.append('canon.secrets')
+    else:
+        for patch in edit.secrets:
+            target = by_id[patch.secret_id]
+            for field in ('fact', 'character_known_by', 'setup_chapters'):
+                value = getattr(patch, field)
+                if value is not None:
+                    target[field] = copy.deepcopy(value)
+                    changed.append(f'{patch.secret_id}.{field}')
+            if patch.reader_reveal_events is not None:
+                target['reader_reveal_events'] = [
+                    {'chapter': event.chapter} for event in patch.reader_reveal_events]
+                changed.append(f'{patch.secret_id}.reader_reveal_events')
+    if edit.world_rules_replace is not None:
+        canon['world_rules'] = [rule.model_dump() for rule in edit.world_rules_replace]
+        changed.append('canon.world_rules')
+    else:
+        for patch in edit.world_rules:
+            target = rules_by_id[patch.rule_id]
+            if patch.kind is not None:
+                target['kind'] = patch.kind
+                changed.append(f'{patch.rule_id}.kind')
+            if patch.versions is not None:
+                target['versions'] = [version.model_dump() for version in patch.versions]
+                changed.append(f'{patch.rule_id}.versions')
     for patch in edit.characters:
         characters[patch.char_id]['name_distinctiveness'] = patch.name_distinctiveness
         changed.append(f'{patch.char_id}.name_distinctiveness')
+    for replacement in edit.addresses_replace:
+        characters[replacement.char_id]['address'] = [
+            address.model_dump() for address in replacement.address]
+        changed.append(f'{replacement.char_id}.address')
     for patch in edit.addresses:
         characters[patch.char_id]['address'][patch.address_index]['context'] = patch.context
         changed.append(f'{patch.char_id}.address.{patch.address_index}.context')
@@ -1293,12 +1389,11 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
 
 
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGrounding, CheckReport]:
-    """`--apply-edit`：吃人手写的 secret 订正，走与生成稿**同一道**归一、判定与闸门。0 成本。
+    """`--apply-edit`：吃 typed 人工订正，走与生成稿**同一道**归一、判定与闸门。0 成本。
 
-    【它补的是什么】`reader_reveal_events` / 知情人 / secret 事实抽错时，本层此前
-    **契约内没有任何人工决策集**：`--purge-role` 只修 role/fate，`--renormalize`
-    只重算代码派生字段，剩下的路是手改产物——既没有 schema 管形状，
-    也在来源账上留不下「这是人改的」。
+    【它补的是什么】既能逐格订正已有 secret/world-rule/枚举，也能完整替换 secret、
+    world-rule 和单个人物的 address 集合，从而表达新增、删除与复合时间线拆分；所有字段
+    仍由同一严格 schema 收口，来源账明确记录这是人工 partial rewrite。
 
     四条纪律（与 stage3/4/6/7 的人工路同款）：
       · **同一归一落点**（`normalize_global`）——人改完的埋点章照样过 `_prune_setups`，
@@ -1308,20 +1403,20 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
       · **轮次归档**——旧轮进 `_rounds/`，覆盖前有处可回；
       · **来源账不伪造**——`rewrite_provenance(prev, by='--apply-edit')`：
         继承 `prompts`/`model` 一个字不动，换成本次真读到的 `inputs`，
-        标 `partial_rewrite`（这一份此后是混版的：LLM 写的那些字段出自当初那次付费产出，
-        被改的 secret 是**现在**由人给的）。
+        标 `partial_rewrite`（这一份此后是混版的：未编辑字段出自当初那次付费产出，
+        被改的 typed facts 是**现在**由人给的）。
 
     ⚠ **下游 stale 是由构造保证的，不额外做一件事**：这一份的字节变了 ⇒
     `stage2/chapter_blueprints.json` / stage3 / stage4 记的 `inputs[].file` 全部失配；
-    改的又恰好是 `secrets`，所以按字段投影算的 `consumed` 也跟着失配
-    （`R-6.3` 的逐章剧透闸门正是消费它的那一个）。
+    按字段投影算的 `consumed` 也跟着失配（其中 `R-6.3` 的逐章剧透闸门直接消费
+    secrets；规则与 address 也各有下游消费投影）。
 
     ⚠ **无前稿（正式与 `.INVALID` 皆无）⇒ 显式终态**：这是修订路，不是生成路。
     """
     store = ArtifactStore(ctx)
     if ctx.node != 'stage2.global':
         raise TerminalState(
-            f'{ctx.node} 没有 secret 人工订正入口——`--apply-edit` 挂在 `stage2.global` 上'
+            f'{ctx.node} 没有 Stage2 全局人工订正入口——`--apply-edit` 挂在 `stage2.global` 上'
             f'（逐章蓝图的人工路是 `--chapters` 定向重生成）')
 
     rel = paths.edit_rel(ctx.novel_dir, edit_path, GLOBAL_EDIT)
@@ -1357,10 +1452,12 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
     if hits:
         path = _write_invalid(store, GLOBAL_REL, artifact)
         raise GateBlocked(
-            f'人工 secret 订正被落盘闸门拦下：{hits}（改动 {changed}）。'
+            f'人工 Stage2 订正被落盘闸门拦下：{hits}（改动 {changed}）。'
             f'问题稿在 {path}，**正式全书底座没有被覆盖**；'
             f'改完编辑文件重跑 `--apply-edit`，'
-            f'或直接改 `.INVALID` 后 `--revalidate` 提升（都是 0 成本）',
+            f'或直接改 `.INVALID` 后跑 '
+            f'`{ctx.node} --revalidate --actor <id> --reason <why>`'
+            f'（0 LLM、同轮重判并留不可变审计）',
             invalid_path=path)
 
     _write_formal(store, GLOBAL_REL, artifact)

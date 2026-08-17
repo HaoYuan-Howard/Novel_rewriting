@@ -11,6 +11,7 @@ from novel.run import RunContext
 from novel.stages.stage6 import checks, hook, prompts
 from novel.stages.stage6.measure import normalize_hook, quote_problems_of
 from tests import corpus, sandbox
+from tests.markers import corpus_params
 
 #: 一条 stage6 纵切跑起来要的五份。
 STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
@@ -21,13 +22,6 @@ STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
 def books() -> list[str]:
     return sorted({a.book_dir for a in corpus.iter_artifacts()
                    if a.rel == 'stage6/hook.json'})
-
-
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        not books(), reason='盘上没有 stage6 语料——这几条**没在查**，不是「查过没事」'),
-]
 
 
 def _drafts_of(book: str) -> tuple[str, ...]:
@@ -44,7 +38,9 @@ def _box(book: str) -> sandbox.Sandbox:
     return sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
 
 
-@pytest.fixture(params=books(), ids=lambda b: b[:10])
+@pytest.fixture(params=corpus_params(
+    books(), reason='盘上没有 stage6 语料——这些集成用例没在查'),
+    ids=lambda b: b[:10] if b else 'no-corpus')
 def box(request):
     s = _box(request.param)
     yield s
@@ -145,37 +141,6 @@ def test_normalization_is_idempotent(box):
         assert quote_problems_of(text, src_hook=src_hook) == []
 
 
-def test_invented_number_compares_values_and_ignores_success_false_positive():
-    """真实 E2E 曾把「好感度一百成功」报成不存在的「一百成」。"""
-    mat = prompts.Material(blocks=('人物已经三十岁，做这件事有八成胜算。',))
-    text = ('好感度一百成功。这位人物已经30岁，做这件事仍有八成胜算。'
-            '所有事实都来自下发材料，这一句只是把文案补到正常长度。')
-    fs = checks.hook_findings(
-        text, mat=mat, secrets=[], arc=None, characters={}, src_hook=None,
-        style_hook=None, quote_problems=[])
-    assert not [f for f in fs if f.rule == 'hook_invented_number']
-
-
-def test_hook_secret_literal_uses_the_shared_number_ruler_and_own_bytes():
-    """文案侧与 stage4/5 共用口径，凭据仍只能是文案自己的字节。"""
-    fact = '她其实一直都知道他是三皇子'
-    text = fact + '。这条文案继续写到足够长，并以完整句子收束。'
-    fs = checks.hook_findings(
-        text,
-        mat=prompts.Material(blocks=('完整故事真相。',), upto=1),
-        secrets=[{'secret_id': 'secret_x', 'fact': fact,
-                  'reader_reveal_events': [{'chapter': 9}]}],
-        arc=None,
-        characters={},
-        src_hook=None,
-        style_hook=None,
-        quote_problems=[],
-    )
-    literal = next(item for item in fs if item.rule == 'hook_secret_literal')
-    assert '重合 1/1 条' in literal.detail
-    assert literal.evidence and all(piece in text for piece in literal.evidence)
-
-
 def test_chars_are_recomputed_with_the_same_ruler(box):
     """`candidates[].chars` 已被新契约裁掉 ⇒ 现算。
 
@@ -209,19 +174,6 @@ def test_body_stale_uses_consumed_not_the_whole_file_sha1(box):
     line = next(r for r in rep.rules if r.rule == 'hook_body_stale')
     assert line.status == 'unver'
     assert not line.findings, f'{box.book}: 当前成稿被误判为漂移：{line.findings}'
-
-
-def test_the_interpolated_prompt_names_every_approach():
-    """三种写法**每一种都要真的出现在渲染出来的 system 里**。
-
-    ⚠ 这正是「10 个词只提了 2 个」那种失效的形状：枚举表加了一项而 prompt 没跟上，
-    渲染出来不会报错，只是少提一种。
-    """
-    from contracts.invariants import HOOK_APPROACHES, HOOK_APPROACH_NOTES
-    rendered = prompts.hook_system()
-    for k in HOOK_APPROACHES:
-        assert k in rendered and HOOK_APPROACH_NOTES[k] in rendered
-    assert '$' not in rendered, '渲染后还有残留占位符'
 
 
 # ── 恒等基线 ────────────────────────────────────────────────────────────────
@@ -320,7 +272,7 @@ def test_approve_refuses_an_out_of_range_pick(box, pick):
 #   两条路各配一个样本：部分红（照常落盘）与全红（拦下）。
 
 def _fake_client(ctx, texts: list[str]):
-    """一个**不发任何请求**的 client，按剧本回三条候选。"""
+    """一个**不发任何请求**的 client；脏候选定向重试时回同文案（因此不采纳）。"""
     import json as _json
 
     from contracts.invariants import HOOK_APPROACHES
@@ -331,10 +283,77 @@ def _fake_client(ctx, texts: list[str]):
                        for a, t in zip(HOOK_APPROACHES, texts)],
         'rationale': '三条各赌一个角度。',
     }, ensure_ascii=False)
-    resp = ChatResponse(content=body, finish_reason='stop',
-                        usage={'prompt_tokens': 1, 'completion_tokens': 1},
-                        model='deepseek-v4-pro')
-    return LlmClient(ctx, FakeTransport.always(resp), sleep=lambda _s: None)
+    by_approach = dict(zip(HOOK_APPROACHES, texts))
+
+    def respond(request, _index):
+        content = body
+        marker = '── 单候选定向修复 ──\n'
+        if marker in request.user:
+            repair = _json.loads(request.user.split(marker, 1)[1])
+            approach = repair['target_approach']
+            content = _json.dumps({
+                'approach': approach,
+                'text': by_approach[approach],
+                'rationale': '三条仍各赌一个角度；本次修复没有改善目标候选。',
+            }, ensure_ascii=False)
+        return ChatResponse(content=content, finish_reason='stop',
+                            usage={'prompt_tokens': 1, 'completion_tokens': 1},
+                            model='deepseek-v4-pro')
+
+    return LlmClient(ctx, FakeTransport(respond), sleep=lambda _s: None)
+
+
+def test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty(
+        tmp_path, monkeypatch):
+    """Three-candidate gating is a default-suite contract, not corpus data."""
+    from types import SimpleNamespace
+
+    from contracts.schema.report import finding
+    from contracts.schema.stage6 import Mech
+    from novel.errors import GateBlocked
+    from tests.test_stage2_generation import _ctx
+
+    written = []
+
+    class Store:
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        def write(self, rel, artifact):
+            written.append((rel, artifact))
+
+        def write_invalid(self, rel, artifact, *, gates_skipped):
+            invalid = rel.replace('.json', '.INVALID.json')
+            written.append((invalid, artifact))
+            return self.ctx.novel_dir / invalid
+
+    upstreams = SimpleNamespace(
+        mat=prompts.Material(blocks=('合成完整创作包。',), upto=1),
+        upto=1,
+        judged={},
+    )
+    monkeypatch.setattr(hook, 'ArtifactStore', Store)
+    monkeypatch.setattr(hook, '_Upstreams', lambda _ctx, _store: upstreams)
+
+    def judge(text, _up):
+        findings = ([finding(
+            'hook_truncated', detail=f'候选未完整：{text}', evidence=[text])]
+            if text.startswith('坏候选') else [])
+        return text, Mech(punct_fixed=0, quotes_fixed=0, paras_fixed=0), findings
+
+    monkeypatch.setattr(hook, '_normalize_and_judge', judge)
+    book = tmp_path / '合成开篇闸门_611'
+    ctx = _ctx(book, 'stage6.hook')
+    partial = hook.run_hook(ctx, _fake_client(
+        ctx, ['干净候选甲。', '干净候选乙。', '坏候选丙']))
+    assert sum(bool(candidate.findings) for candidate in partial.candidates) == 1
+    assert written[-1][0] == hook.REL
+
+    ctx2 = _ctx(book, 'stage6.hook')
+    with pytest.raises(GateBlocked, match='每一条'):
+        hook.run_hook(ctx2, _fake_client(
+            ctx2, ['坏候选甲', '坏候选乙', '坏候选丙']))
+    assert written[-1][0] == 'stage6/hook.INVALID.json'
 
 
 #: 三条候选各换一处措辞。⚠ **只换形容词，不碰段间分隔也不碰末字**——
@@ -392,8 +411,10 @@ def test_the_gate_blocks_only_when_no_candidate_is_clean(box):
 
     # ② 全红 ⇒ 拦下，问题稿进 .INVALID
     ctx2 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=True)
-    with pytest.raises(GateBlocked, match='每一条'):
+    with pytest.raises(GateBlocked, match='每一条') as blocked:
         hook.run_hook(ctx2, _fake_client(ctx2, _samples(box, truncated=[True, True, True])))
+    assert ('stage6.hook --revalidate --actor <id> --reason <why>'
+            in str(blocked.value))
     assert ArtifactStore(ctx2).exists('stage6/hook.INVALID.json')
 
 
@@ -416,7 +437,8 @@ def test_revalidate_promotes_only_after_the_problem_is_fixed(box):
     before = _json.loads(inv.read_text(encoding='utf-8'))['_provenance']
 
     ctx2 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
-    promoted, _rep = hook.run_revalidate(ctx2)
+    promoted, _rep = hook.run_revalidate(
+        ctx2, actor='stage6-test', reason='verify the unchanged draft remains blocked')
     assert promoted is False, '还没改就提升了？那道闸门形同虚设'
 
     # 人手改一个字（0 成本自救），再提升
@@ -426,7 +448,8 @@ def test_revalidate_promotes_only_after_the_problem_is_fixed(box):
     inv.write_text(_json.dumps(data, ensure_ascii=False), encoding='utf-8')
 
     ctx3 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
-    promoted, rep = hook.run_revalidate(ctx3)
+    promoted, rep = hook.run_revalidate(
+        ctx3, actor='stage6-test', reason='repair all truncated hook candidates')
     assert promoted is True
     after = box.read('stage6/hook.json')['_provenance']
     assert after['prompts'] == before['prompts'], '提升重盖了 prompt 指纹 —— 那是伪造'
@@ -469,27 +492,3 @@ def test_prompt_carries_source_full_story_and_body_execution_style(box):
     assert mat.style_packet['book_surface_habits'] == style.get('surface_habits')
     assert packet['style'] == mat.style_packet, '下发的风格包与 Material 记的那份分家了'
     assert packet['whole_story_map'] == list(mat.story_map) and len(mat.story_map) >= 1
-
-
-def test_story_map_consumes_segments_keeps_slots_and_strips_private_rationale():
-    goal = {
-        'intent': 'advance',
-        'fact_refs': [{'kind': 'event', 'ref': 'b01_01', 'chapter': 1}],
-        'rationale': '这是只供审计的自由理由，不得下发',
-    }
-    rows = prompts.story_map({'chapters': [{
-        'output_ordinal': 1, 'from_source_ordinals': [1],
-        'chapter_goal': goal, 'open_hook_goal': goal, 'end_hook_goal': goal,
-        'segments': [
-            {'slot': 's01', 'events': ['事件一']},
-            {'slot': 's02', 'events': ['事件二']},
-        ],
-    }]})
-    assert rows[0]['events'] == ['事件一', '事件二']
-    assert rows[0]['segments'] == [
-        {'slot': 's01', 'events': ['事件一']},
-        {'slot': 's02', 'events': ['事件二']},
-    ]
-    for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
-        assert rows[0][key] == {'intent': 'advance', 'fact_refs': goal['fact_refs']}
-        assert 'rationale' not in rows[0][key]

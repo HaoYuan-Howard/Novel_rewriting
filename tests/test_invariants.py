@@ -15,6 +15,14 @@ def test_state_domains_include_unknown_or_amber():
     assert 'unver' in inv.SEVERITY
 
 
+def test_stage6_wontfix_entry_is_registered_on_every_required_surface():
+    assert '--wontfix' in inv.NODES['stage6.hook'].flags
+    assert '--wontfix' in inv.NODES['stage5.review'].flags
+    assert '--wontfix' in inv.VALUED_FLAGS
+    assert '--wontfix' in inv.WRITE_EFFECTS
+    assert 'wontfix.json' not in ' '.join(inv.NODES['stage6.hook'].produces)
+
+
 def test_metric_is_separate_from_info():
     assert 'metric' in inv.SEVERITY
     assert 'info' in inv.SEVERITY

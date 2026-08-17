@@ -139,7 +139,12 @@ export interface Api {
     sid: string,
     req: { pick: number; actor: string; reason: string; subject_sha256: string },
   ): Promise<Job>
-  /** 人名表定稿（无参终态） */
-  approveNames(sid: string): Promise<Job>
+  /** 人名表定稿：自报身份/理由 + 当前 decision surface 的 hash 乐观锁。 */
+  approveNames(
+    sid: string,
+    req: { actor: string; reason: string; subject_sha256: string },
+  ): Promise<Job>
+  /** 显式采纳当前可安全应用的 high residual；后端仍会重新校验冲突。 */
+  adoptResidual(sid: string, req: { confidence: 'high' }): Promise<Job>
   uploadCorpus(file: File): Promise<UploadResponse>
 }

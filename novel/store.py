@@ -31,23 +31,29 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterable, Iterator, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE7_BOOK, STAGE7_NAME_MAP,
 )
 from contracts.schema import (
-    ArtifactVersionError, InputEdge, Provenance, decode_artifact, encode_artifact,
+    ArtifactVersionError, HumanApproval, InputEdge, Provenance, RevalidationAudit,
+    decode_artifact, encode_artifact,
 )
 from novel import paths, prov
 from novel.consumption import producer_node, projection_for
 from novel.errors import (
-    ArtifactUnreadable, ByteFormRefused, PathRefused, ProvenanceRefused, UpstreamMissing,
+    ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
+    ProvenanceRefused, UpstreamMissing,
 )
 from novel.prov import FreshnessReport
 from novel.run import RunContext
@@ -57,6 +63,90 @@ M = TypeVar('M', bound=BaseModel)
 #: 产物里那个来源账字段的**盘上键名**。模型侧字段叫 `provenance`（`_` 开头在 Pydantic 里
 #: 是私有属性），靠 `Field(alias='_provenance')` 对上；这里按 alias 找，不按字段名猜。
 PROVENANCE_KEY = '_provenance'
+REVALIDATION_DIRNAME = '_revalidation'
+
+# These no-provenance artifacts have a deterministic freshness bridge and are
+# written only after the companion facts needed by that bridge are available.
+# stage0 clean_text and stage1 main/hook are deliberately absent: each is the
+# first half of a multi-file write and cannot self-prove until the report lands.
+SELF_FRESH_DETERMINISTIC = frozenset({
+    STAGE1_PARTITION_REPORT,
+    STAGE2_GLOBAL_REVIEW,
+})
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    """Canonical logical JSON used only for audit comparison and hashing."""
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        allow_nan=False,
+    ).encode('utf-8')
+
+
+def _filesystem_path(path: Path) -> str:
+    """Return an explicit Windows extended-length filesystem path."""
+    value = os.path.abspath(os.fspath(path))
+    if os.name != 'nt' or value.startswith('\\\\?\\'):
+        return value
+    if value.startswith('\\\\'):
+        return f'\\\\?\\UNC\\{value[2:]}'
+    return f'\\\\?\\{value}'
+
+
+def _read_file_bytes(path: Path) -> bytes:
+    with open(_filesystem_path(path), 'rb') as stream:
+        return stream.read()
+
+
+def _is_file(path: Path) -> bool:
+    return os.path.isfile(_filesystem_path(path))
+
+
+def _path_exists(path: Path) -> bool:
+    return os.path.exists(_filesystem_path(path))
+
+
+def _is_dir(path: Path) -> bool:
+    return os.path.isdir(_filesystem_path(path))
+
+
+def _directory_paths(path: Path) -> Iterator[Path]:
+    """Iterate a directory while retaining the caller's unprefixed Path shape."""
+    for name in os.listdir(_filesystem_path(path)):
+        yield path / name
+
+
+@dataclass
+class _HistoryFrame:
+    files: dict[Path, bytes | None]
+    absent_dirs: set[Path] = field(default_factory=set)
+
+
+def _json_pointer_diff(before: Any, after: Any, pointer: str = '') -> tuple[str, ...]:
+    """Return deterministic RFC 6901 pointers whose logical values changed."""
+
+    def child(base: str, token: object) -> str:
+        escaped = str(token).replace('~', '~0').replace('/', '~1')
+        return f'{base}/{escaped}'
+
+    changed: list[str] = []
+    if isinstance(before, dict) and isinstance(after, dict):
+        for key in sorted(set(before) | set(after)):
+            at = child(pointer, key)
+            if key not in before or key not in after:
+                changed.append(at)
+            else:
+                changed.extend(_json_pointer_diff(before[key], after[key], at))
+    elif isinstance(before, list) and isinstance(after, list):
+        common = min(len(before), len(after))
+        for index in range(common):
+            changed.extend(_json_pointer_diff(
+                before[index], after[index], child(pointer, index)))
+        for index in range(common, max(len(before), len(after))):
+            changed.append(child(pointer, index))
+    elif type(before) is not type(after) or before != after:
+        changed.append(pointer)
+    return tuple(sorted(set(changed)))
 
 
 def provenance_field(model: type[BaseModel]) -> str | None:
@@ -77,6 +167,10 @@ class ArtifactStore:
 
     def __init__(self, ctx: RunContext) -> None:
         self.ctx = ctx
+        # Each active history transaction records exact paths it may mutate.
+        # Content-addressed paths are registered lazily by `_write_immutable`;
+        # this avoids scanning/deleting another artifact's concurrent baseline.
+        self._history_transactions: list[_HistoryFrame] = []
 
     # ── 定位 ──────────────────────────────────────────────────────────────
 
@@ -84,7 +178,7 @@ class ArtifactStore:
         return paths.artifact_path(self.ctx.novel_dir, rel)
 
     def exists(self, rel: str) -> bool:
-        return self.path(rel).exists()
+        return _path_exists(self.path(rel))
 
     # ── 读 ────────────────────────────────────────────────────────────────
 
@@ -224,7 +318,7 @@ class ArtifactStore:
     def _read_bytes(self, rel: str) -> bytes:
         p = self.path(rel)
         try:
-            return p.read_bytes()
+            return _read_file_bytes(p)
         except FileNotFoundError:
             raise UpstreamMissing(
                 f'{self.ctx.node}: 上游产物不在盘上：{rel}（{p}）——先跑产它的那一层') from None
@@ -272,6 +366,164 @@ class ArtifactStore:
 
     # ── 写 ────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _round_file_matches(path: Path, stem: str) -> bool:
+        number = paths.round_no_of(path.name)
+        return number is not None and path.name == f'{stem}.r{number}.json'
+
+    def _history_scope(
+        self, rels: Iterable[str],
+    ) -> tuple[set[Path], set[tuple[Path, str]]]:
+        """Resolve the exact live/history byte surfaces touched by a write."""
+        live: set[Path] = set()
+        rounds: set[tuple[Path, str]] = set()
+        for value in rels:
+            rel = paths.check_rel_deep(value)
+            expanded = {rel}
+            if not paths.is_invalid(rel):
+                expanded.add(paths.invalid_of(rel))
+            for candidate in expanded:
+                live.add(self.path(candidate))
+                rounds.add((
+                    self.path(paths.rounds_dir_of(candidate)),
+                    paths.stem_of(candidate),
+                ))
+        return live, rounds
+
+    def _history_files(
+        self,
+        live: set[Path],
+        rounds: set[tuple[Path, str]],
+    ) -> set[Path]:
+        files = {path for path in live if _is_file(path)}
+        for directory, stem in rounds:
+            if not _is_dir(directory):
+                continue
+            files.update(
+                path for path in _directory_paths(directory)
+                if _is_file(path) and self._round_file_matches(path, stem)
+            )
+        return files
+
+    def _track_history_path(self, path: Path) -> None:
+        """Register an exact late-bound mutation with every active transaction."""
+        for frame in self._history_transactions:
+            tracked = frame.files
+            if path in tracked:
+                continue
+            try:
+                tracked[path] = _read_file_bytes(path) if _is_file(path) else None
+            except OSError as exc:
+                raise ArtifactUnreadable(
+                    f'事务写入前读不了待变历史 {path}：{exc!r}') from exc
+            self._track_absent_parents(frame, path)
+
+    def _track_absent_parents(self, frame: _HistoryFrame, path: Path) -> None:
+        """Remember transaction-created directories without crossing the book root."""
+        root = self.ctx.novel_dir
+        parent = path.parent
+        while parent != root and parent != parent.parent and not _is_dir(parent):
+            frame.absent_dirs.add(parent)
+            parent = parent.parent
+
+    @contextmanager
+    def history_transaction(self, *rels: str) -> Iterator[None]:
+        """Rollback live artifacts and their immutable history as one byte set.
+
+        The scope includes each formal artifact, its INVALID sibling, their
+        matching numbered rounds, and content-addressed revalidation baselines.
+        Nested transactions let a producer widen a safe single-artifact helper
+        to a companion review/context without duplicating compensation logic.
+        """
+        if not rels:
+            raise PathRefused('history_transaction 必须显式列出至少一份产物')
+        live, rounds = self._history_scope(rels)
+        try:
+            before_paths = self._history_files(live, rounds)
+            tracked: dict[Path, bytes | None] = {
+                path: _read_file_bytes(path) for path in before_paths}
+            # Missing live paths are part of the byte set too.  Recording them
+            # explicitly lets rollback delete only paths this transaction may
+            # have created; it never has to sweep a matching directory and
+            # risk deleting another writer's history.
+            for path in live:
+                tracked.setdefault(path, None)
+        except OSError as exc:
+            raise ArtifactUnreadable(
+                f'事务开始前读不全历史字节：{exc!r}；一个字节都没动') from exc
+
+        frame = _HistoryFrame(files=tracked)
+        for path in live:
+            self._track_absent_parents(frame, path)
+        self._history_transactions.append(frame)
+        try:
+            yield
+        except BaseException as exc:
+            rollback_errors: list[BaseException] = []
+            absent_before = {
+                path for path, data in tracked.items()
+                if data is None and _is_file(path)
+            }
+            for path in sorted(absent_before, key=lambda item: str(item), reverse=True):
+                try:
+                    os.unlink(_filesystem_path(path))
+                except FileNotFoundError:
+                    pass
+                except BaseException as rollback_exc:
+                    rollback_errors.append(rollback_exc)
+
+            for path, data in tracked.items():
+                if data is None:
+                    continue
+                try:
+                    if not _is_file(path) or _read_file_bytes(path) != data:
+                        os.makedirs(_filesystem_path(path.parent), exist_ok=True)
+                        self._replace_atomically(path, data)
+                except BaseException as rollback_exc:
+                    rollback_errors.append(rollback_exc)
+
+            # Directory presence is not artifact content, but removing empty
+            # transaction-created scaffolding keeps a failed first write truly
+            # side-effect free.  A non-empty directory may now contain another
+            # writer's file and is therefore deliberately retained.
+            for directory in sorted(
+                    frame.absent_dirs,
+                    key=lambda item: len(item.parts), reverse=True):
+                try:
+                    os.rmdir(_filesystem_path(directory))
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    if not _is_dir(directory):
+                        rollback_errors.append(ArtifactUnreadable(
+                            f'事务回滚时无法核对目录 {directory}'))
+
+            if rollback_errors:
+                detail = '; '.join(repr(error) for error in rollback_errors)
+                raise ProvenanceRefused(
+                    f'多产物事务失败且回滚未完整完成：{detail}。'
+                    '请勿继续下游，先人工核对 live/_rounds/_revalidation') from exc
+            raise
+        finally:
+            popped = self._history_transactions.pop()
+            if popped is not frame:
+                raise ProvenanceRefused('写盘事务栈顺序损坏；请停止下游')
+
+    def write_round(self, rel: str, artifact: BaseModel) -> Path:
+        """Archive the previous formal round and commit its replacement safely."""
+        rel = paths.check_rel_deep(rel)
+        if paths.is_invalid(rel):
+            raise PathRefused(f'{rel} 是 `.INVALID`；问题稿走 write_invalid')
+        # Refuse carrier/render errors before the first archive mutation.
+        data = self._render(rel, artifact)
+        self._verify_round_trip(rel, type(artifact), data)
+        with self.history_transaction(rel):
+            if self.exists(rel):
+                # Copy first: a process crash between archive and formal
+                # replacement must still leave the old live artifact reachable.
+                self.archive_round(rel, keep=True)
+            return self.write(rel, artifact)
+
     def write(self, rel: str, artifact: BaseModel) -> Path:
         """落一份正式产物。**先校验后落盘**——校验在 `artifact` 被构造的那一刻就发生过了。
 
@@ -279,7 +531,7 @@ class ArtifactStore:
         合成一条之后「这份合格」与「这份被拦下了」就只剩一个调用点参数的差别，
         而那种差别是会被传错的。
 
-        ⚠⚠ **落新正式稿之前先把同名 `.INVALID` 送进归档。** 一份合格的新稿
+        ⚠⚠ **新正式稿完整落稳且自证 fresh 之后，才把同名 `.INVALID` 送进归档。** 一份合格的新稿
         就是对同一份产物的旧问题稿的终结；把它留在盘上，`.INVALID` 就成了一个
         **谁也不会去清的永久标记**，而全仓有四处只看「兄弟文件在不在」：
         `state.artifact_state`（→ 语料库把一本已出书的书报成 `broken`）·
@@ -287,9 +539,8 @@ class ArtifactStore:
         实测发生过）· `approvals._require_artifacts`（→ 人定稿盖不上章）·
         `queue._upstream_invalid`（→ 下游整条链被挡）。
         ⚠ **归档不是删除**（`Q-8`）：那份稿花过钱，而且可能还被别人的 `inputs` 指着。
-        ⚠ **归档前必须先把新字节完整 render 并做 schema 往返校验。** 否则新内容
-        自己不合法时，旧 `.INVALID` 已经被挪走，盘面会从「明确有问题稿」退化成
-        「什么也没有」。真正替换正式稿失败时也把刚挪走的 sibling 原位恢复。
+        替换正式稿、freshness 后置条件、退休 `.INVALID` 视为一个事务：任何一步失败，
+        正式路径恢复为调用前的逐字节内容，问题稿也恢复在原位。
         """
         rel = paths.check_rel_deep(rel)
         if paths.is_invalid(rel):
@@ -299,17 +550,40 @@ class ArtifactStore:
         data = self._render(rel, artifact)
         self._verify_round_trip(rel, type(artifact), data)
         p = self.path(rel)
-        p.parent.mkdir(parents=True, exist_ok=True)
+        os.makedirs(_filesystem_path(p.parent), exist_ok=True)
+        previous = _read_file_bytes(p) if _is_file(p) else None
+        replacement_attempted = False
         retired: Path | None = None
         try:
-            retired = self.retire_invalid(rel)
+            replacement_attempted = True
             self._replace_atomically(p, data)
-        except BaseException:
-            if retired is not None and retired.is_file():
+            self._assert_self_fresh(rel, artifact)
+            # 只有正式路径已经通过 freshness 后置条件，问题稿才算真正被取代。
+            retired = self.retire_invalid(rel)
+        except BaseException as exc:
+            rollback_errors: list[BaseException] = []
+            if retired is not None and _is_file(retired):
                 invalid = self.path(paths.invalid_of(rel))
-                invalid.parent.mkdir(parents=True, exist_ok=True)
-                if not invalid.exists():
-                    os.replace(retired, invalid)
+                os.makedirs(_filesystem_path(invalid.parent), exist_ok=True)
+                if not _path_exists(invalid):
+                    try:
+                        os.replace(_filesystem_path(retired), _filesystem_path(invalid))
+                    except BaseException as rollback_exc:
+                        rollback_errors.append(rollback_exc)
+            if replacement_attempted:
+                try:
+                    if previous is None:
+                        if _is_file(p):
+                            os.unlink(_filesystem_path(p))
+                    else:
+                        self._replace_atomically(p, previous)
+                except BaseException as rollback_exc:
+                    rollback_errors.append(rollback_exc)
+            if rollback_errors:
+                detail = '; '.join(repr(error) for error in rollback_errors)
+                raise ProvenanceRefused(
+                    f'{rel} 写入失败且回滚未完整完成：{detail}。'
+                    '请勿继续运行下游，先按错误中列出的正式/INVALID 路径人工恢复') from exc
             raise
         return p
 
@@ -333,14 +607,42 @@ class ArtifactStore:
         ⚠ 稿子**没有丢，也没有再花钱**：0 成本提升路是 `promote_invalid`。
         """
         rel = paths.check_rel_deep(rel)
+        inv_rel = paths.invalid_of(rel)
         src = self._provenance_of(artifact)
         if src is None:
             raise ProvenanceRefused(
                 f'{type(artifact).__name__} 没有 `_provenance` 字段，落不了 `.INVALID`：'
                 f'`gates_skipped` 只有来源账这一个落点，没有它就等于没记过闸门缺料')
-        return self._write_json(paths.invalid_of(rel), artifact,
-                                prov_override=src.model_copy(
-                                    update={'gates_skipped': list(gates_skipped)}))
+
+        # 定位键不能把自己算进自己的 hash。先渲染一次「没有定位键」的完整字节，
+        # 再把其 raw SHA-256 写回来源账。最终 INVALID 与不可变快照逐字节相同，
+        # 因而 raw hash 能如实区分「只改了排版」与「逻辑 JSON 也改了」。
+        pending = src.model_copy(update={
+            'gates_skipped': list(gates_skipped),
+            'invalid_baseline_sha256': None,
+        })
+        preliminary = self._render(inv_rel, artifact, prov_override=pending)
+        # Locator binds the complete deterministic pre-locator bytes (including
+        # provenance), not the business-content canonical hash used by the audit.
+        # Two generations with identical business JSON but different source facts
+        # must never collide onto one immutable snapshot path.
+        locator = hashlib.sha256(preliminary).hexdigest()
+        final_src = pending.model_copy(update={'invalid_baseline_sha256': locator})
+        data = self._render(inv_rel, artifact, prov_override=final_src)
+        self._verify_round_trip(inv_rel, type(artifact), data)
+
+        baseline = self.path(self._revalidation_baseline_rel(inv_rel, locator))
+        p = self.path(inv_rel)
+        # Replacing an INVALID is a new failed round.  Its old live bytes, the
+        # numbered archive, the immutable baseline and the replacement are one
+        # transaction; callers must never pre-archive the sibling themselves.
+        with self.history_transaction(inv_rel):
+            if self.exists(inv_rel):
+                self.archive_round(inv_rel)
+            self._write_immutable(baseline, data)
+            os.makedirs(_filesystem_path(p.parent), exist_ok=True)
+            self._replace_atomically(p, data)
+        return p
 
     def write_text(self, rel: str, text: str) -> Path:
         """落一份**字节形态**产物。**显式按字节写 `\\n`，不带 BOM。**
@@ -361,20 +663,34 @@ class ArtifactStore:
                 f'而归一属产地——请在产它的那一层先归一（并按 `_common.md` §九 判断要不要记账），'
                 f'别让写盘口替你悄悄改内容')
         p = self.path(rel)
-        p.parent.mkdir(parents=True, exist_ok=True)
+        os.makedirs(_filesystem_path(p.parent), exist_ok=True)
         data = text.encode('utf-8')          # ← 不加 BOM：`utf-8` 不是 `utf-8-sig`
         self._replace_atomically(p, data)
         return p
 
     # ── `.INVALID` 的 0 成本提升路 ────────────────────────────────────────
 
-    def promote_invalid(self, rel: str, model: type[M]) -> Path:
+    def revalidation_audit(self, rel: str, model: type[M], *,
+                           actor: str, reason: str) -> RevalidationAudit:
+        """Compare the live ``.INVALID`` with its immutable creation snapshot.
+
+        This is public so a caller can show the exact audit before promotion.
+        It is read-only: malformed credentials, a missing/tampered baseline, or
+        an unreadable current artifact all refuse without changing one byte.
+        """
+        _artifact, _src, audit = self._revalidation_material(
+            rel, model, actor=actor, reason=reason)
+        return audit
+
+    def promote_invalid(self, rel: str, model: type[M], *,
+                        actor: str, reason: str,
+                        artifact_override: M | None = None) -> Path:
         """按**当前**判据重判合格之后，把 `.INVALID` 提升为正式产物。**唯一提升入口。**
 
         两件事，都是拿实测教训换来的：
 
-        ① **来源账继承，一个字不改**（`_common.md` §5.2）。`promoted()` 的签名里
-           **没有** `prompts` / `model` / `inputs`——**没有参数，就没有可以传错的东西**。
+        ① **生成来源账原样继承，并追加重验证审计**。`promoted()` 的签名里
+           **没有** `prompts` / `model` / `inputs`，只有强类型审计账；生成来源没有可伪造入口。
            原型的 `--revalidate` 之所以能**伪造**，正是因为提升分支够得到那个
            会构造一份全新来源账的函数：它盖上当前 SYS 指纹 + 当前 model + 当前 inputs，
            `round` 还 +1，而**没有任何一次新落笔发生过**。
@@ -388,20 +704,23 @@ class ArtifactStore:
            `_rounds/` 里连一份副本都没有。原来只归档 `.INVALID` 那一条历史。
            对 stage5 这直接违反「上一轮正式稿进入 `_rounds`」；对别的层，
            它违反的是本模块自己那句「**归档是出事之后唯一能回去的那一份**」。
+
+        ``artifact_override`` 只承载调用方按 live INVALID 重建的确定性派生字段。
+        人工改动审计仍严格比较「不可变基线 vs live INVALID」，而最终来源账强制使用
+        live 的 ``src.promoted(audit=...)``；override 自带的来源账永远不被信任。
         """
-        inv_rel = paths.invalid_of(paths.check_rel_deep(rel))
         official_rel = paths.check_rel_deep(rel)
+        inv_rel = paths.invalid_of(official_rel)
         if not self.exists(inv_rel):
             raise UpstreamMissing(f'{self.ctx.node}: 没有 {inv_rel} 可提升')
 
-        artifact, _payload = self._validate_payload(
-            model, inv_rel, self._loads(inv_rel, self._read_bytes(inv_rel)))
-        src = self._provenance_of(artifact)
-        if src is None:
+        live_artifact, src, audit = self._revalidation_material(
+            official_rel, model, actor=actor, reason=reason)
+        artifact = artifact_override if artifact_override is not None else live_artifact
+        if not isinstance(artifact, model):
             raise ProvenanceRefused(
-                f'{inv_rel} 没有来源账，提升上来就是一份来历不明的正式产物。'
-                f'⚠ 盘上真有这么一份（`stage4/plan_chapters.json`，一本书），'
-                f'根因就是问题稿当初是用裸 `json.dump` 写的——那条路已经不存在了')
+                f'{official_rel} 的 artifact_override 必须是 {model.__name__}，'
+                f'实得 {type(artifact).__name__}；一个字节都没动')
 
         # 【四步的顺序是挑过的】① 把两个**大概率的失败**挡在「一个字节都没动」之前
         # （轮次号撞了 · 载体层往返不过）② 上一轮正式稿进归档 ③ 落正式稿
@@ -415,11 +734,14 @@ class ArtifactStore:
         # ⚠ 这一处进 `R-14.6` 那张「不保证原子的地方」的表（D 期建表时别漏了它）。
         round_no = self._round_on_disk(inv_rel) or self.next_round(inv_rel)
         dest = self.path(paths.round_rel(inv_rel, round_no))
-        if dest.exists():
+        if _path_exists(dest):
             raise PathRefused(
                 f'归档位 {dest} 已被占用，**一个字节都没动**。轮次号多半算错了')
-        data = self._render(official_rel, artifact, prov_override=src.promoted(code=self.ctx.code))
-        self._verify_round_trip(official_rel, type(artifact), data)
+        data = self._render(
+            official_rel, artifact,
+            prov_override=src.promoted(code=self.ctx.code, audit=audit),
+        )
+        self._verify_round_trip(official_rel, model, data)
 
         p = self.path(official_rel)
         # ② ⚠⚠ **挪，不是 `keep=True` 抄。** 抄一份会让归档位从此被占住，
@@ -431,11 +753,52 @@ class ArtifactStore:
         #   「把一次重判记成第 N 轮写作」，正是 `promoted()` 存在要防的那件事。
         # ⚠ 正式稿与 `.INVALID` 的 stem 不同（`stem_of` 保留 `.INVALID`），
         #   两条历史各编各的号，`r1` 不会撞。
-        if p.is_file() and p.read_bytes() != data:
-            self.archive_round(official_rel)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        self._replace_atomically(p, data)
-        self.archive_round(inv_rel, round_no=round_no)
+        official_before = _read_file_bytes(p) if _is_file(p) else None
+        official_archive: Path | None = None
+        invalid_archive: Path | None = None
+        replacement_attempted = False
+        try:
+            if official_before is not None and official_before != data:
+                official_archive = self.archive_round(official_rel)
+            os.makedirs(_filesystem_path(p.parent), exist_ok=True)
+            replacement_attempted = True
+            self._replace_atomically(p, data)
+            self._assert_self_fresh(official_rel, artifact)
+            # INVALID 在正式稿通过 freshness 后置条件之前始终留在活路径。
+            invalid_archive = self.archive_round(inv_rel, round_no=round_no)
+        except BaseException as exc:
+            rollback_errors: list[BaseException] = []
+            if invalid_archive is not None and _is_file(invalid_archive) \
+                    and not _path_exists(self.path(inv_rel)):
+                try:
+                    os.replace(
+                        _filesystem_path(invalid_archive),
+                        _filesystem_path(self.path(inv_rel)),
+                    )
+                except BaseException as rollback_exc:
+                    rollback_errors.append(rollback_exc)
+            try:
+                if official_archive is not None and _is_file(official_archive):
+                    try:
+                        os.unlink(_filesystem_path(p))
+                    except FileNotFoundError:
+                        pass
+                    os.replace(
+                        _filesystem_path(official_archive), _filesystem_path(p))
+                elif replacement_attempted:
+                    if official_before is None:
+                        if _is_file(p):
+                            os.unlink(_filesystem_path(p))
+                    else:
+                        self._replace_atomically(p, official_before)
+            except BaseException as rollback_exc:
+                rollback_errors.append(rollback_exc)
+            if rollback_errors:
+                detail = '; '.join(repr(error) for error in rollback_errors)
+                raise ProvenanceRefused(
+                    f'{official_rel} 提升失败且回滚未完整完成：{detail}。'
+                    '请勿继续下游，先人工恢复正式稿与 INVALID') from exc
+            raise
         return p
 
     # ── 轮次与归档 ────────────────────────────────────────────────────────
@@ -447,7 +810,14 @@ class ArtifactStore:
         不算进去会让下一轮与它同号。
         """
         rel = paths.check_rel_deep(rel)
-        rounds = paths.archived_rounds(self.path(paths.rounds_dir_of(rel)), paths.stem_of(rel))
+        rounds: set[int] = set()
+        directory = self.path(paths.rounds_dir_of(rel))
+        stem = paths.stem_of(rel)
+        if _is_dir(directory):
+            for candidate in _directory_paths(directory):
+                number = paths.round_no_of(candidate.name)
+                if number is not None and candidate.name == f'{stem}.r{number}.json':
+                    rounds.add(number)
         live = {rel} if paths.is_invalid(rel) else {rel, paths.invalid_of(rel)}
         for candidate in sorted(live):
             n = self._round_on_disk(candidate)
@@ -474,23 +844,49 @@ class ArtifactStore:
         """
         rel = paths.check_rel_deep(rel)
         src = self.path(rel)
-        if not src.exists():
+        if not _is_file(src):
             raise UpstreamMissing(f'{self.ctx.node}: 要归档的 {rel} 不在盘上')
         if round_no is None:
-            round_no = self._round_on_disk(rel) or self.next_round(rel)
+            own_round = self._round_on_disk(rel)
+            if own_round is None and keep:
+                # A hard crash may have completed the copy but not the live
+                # replacement.  No-provenance companions (for example
+                # global_review) cannot name their own round, so find an exact
+                # prior copy before allocating a phantom next round.
+                source_data = _read_file_bytes(src)
+                for seen in sorted(self.seen_rounds(rel)):
+                    candidate = self.path(paths.round_rel(rel, seen))
+                    if _is_file(candidate) and _read_file_bytes(candidate) == source_data:
+                        return candidate
+            round_no = own_round or self.next_round(rel)
         dest = self.path(paths.round_rel(rel, round_no))
-        if dest.exists():
+        if _path_exists(dest):
+            if keep:
+                try:
+                    same = _is_file(dest) and _read_file_bytes(dest) == _read_file_bytes(src)
+                except OSError as exc:
+                    raise ArtifactUnreadable(
+                        f'读不了归档重放的源/目标 {src} / {dest}：{exc!r}') from exc
+                if same:
+                    return dest
             raise PathRefused(
                 f'归档目标已存在：{dest}。**归档是出事之后唯一能回去的那一份**，'
                 f'不许静默覆盖——轮次号多半算错了（`len(glob)+1` 那个式子的典型症状）')
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Round destinations are late-bound (the number depends on the live
+        # provenance).  Register the exact source/destination with every outer
+        # transaction before the first mutation, so rollback never sweeps the
+        # whole `_rounds` directory and cannot erase an unrelated concurrent
+        # writer's archive.
+        self._track_history_path(src)
+        self._track_history_path(dest)
+        os.makedirs(_filesystem_path(dest.parent), exist_ok=True)
         if keep:
-            self._replace_atomically(dest, src.read_bytes())
+            self._replace_atomically(dest, _read_file_bytes(src))
         else:
             # ⚠ **一步 `os.replace`，不是「抄一份再删」。** 后者中间崩一次会同时留下
             #   原件和归档，而下一次归档会撞上已存在的目标、把这条路堵死。
             #   `_rounds/` 与产物同卷，`replace` 在这里是原子的。
-            os.replace(src, dest)
+            os.replace(_filesystem_path(src), _filesystem_path(dest))
         return dest
 
     def archive_bytes(self, rel: str, destination: str, *, keep: bool = False) -> Path:
@@ -508,9 +904,16 @@ class ArtifactStore:
         if not source.is_file():
             raise UpstreamMissing(f'{self.ctx.node}: 要归档的 {source_rel} 不在盘上')
         source_data = self._read_bytes(source_rel)
-        if dest.exists():
+        # Explicit byte archives are late-bound just like numbered JSON
+        # rounds.  An outer multi-artifact transaction cannot infer their
+        # destination from ``rel`` (stage0 uses custom suffixes; stage7 uses a
+        # content digest), so register both exact paths before the first
+        # mutation.  Outside a transaction this is deliberately a no-op.
+        self._track_history_path(source)
+        self._track_history_path(dest)
+        if _path_exists(dest):
             try:
-                same = dest.is_file() and dest.read_bytes() == source_data
+                same = _is_file(dest) and _read_file_bytes(dest) == source_data
             except OSError as exc:
                 raise ArtifactUnreadable(f'{self.ctx.node}: 读不了归档目标 {dest}：{exc!r}') from exc
             if same:
@@ -522,11 +925,11 @@ class ArtifactStore:
                     f'归档目标已存在且字节相同：{dest}。移动式归档不重放，'
                     '否则会把同一版再记成一轮')
             raise PathRefused(f'归档目标已存在且字节不同：{dest}。上一版不许被静默覆盖')
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.makedirs(_filesystem_path(dest.parent), exist_ok=True)
         if keep:
             self._replace_atomically(dest, source_data)
         else:
-            os.replace(source, dest)
+            os.replace(_filesystem_path(source), _filesystem_path(dest))
         return dest
 
     def retire_bytes(self, rel: str, destination: str) -> Path:
@@ -541,22 +944,28 @@ class ArtifactStore:
         destination_rel = paths.check_rel_deep(destination)
         source = self.path(source_rel)
         dest = self.path(destination_rel)
-        if not source.is_file():
+        if not _is_file(source):
             raise UpstreamMissing(f'{self.ctx.node}: 要退休的 {source_rel} 不在盘上')
         source_data = self._read_bytes(source_rel)
-        if dest.exists():
+        # The content-addressed destination is not discoverable by
+        # ``history_transaction(rel)``.  Lazy registration makes a later
+        # companion write/freshness failure restore the live bytes and remove
+        # a newly-created retirement archive as one exact byte set.
+        self._track_history_path(source)
+        self._track_history_path(dest)
+        if _path_exists(dest):
             try:
-                same = dest.is_file() and dest.read_bytes() == source_data
+                same = _is_file(dest) and _read_file_bytes(dest) == source_data
             except OSError as exc:
                 raise ArtifactUnreadable(
                     f'{self.ctx.node}: 读不了退休目标 {dest}：{exc!r}') from exc
             if not same:
                 raise PathRefused(
                     f'退休目标 {dest} 已存在且字节不同；不可覆盖历史交付物')
-            source.unlink()
+            os.unlink(_filesystem_path(source))
             return dest
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(source, dest)
+        os.makedirs(_filesystem_path(dest.parent), exist_ok=True)
+        os.replace(_filesystem_path(source), _filesystem_path(dest))
         return dest
 
     def _round_on_disk(self, rel: str) -> int | None:
@@ -586,7 +995,7 @@ class ArtifactStore:
         """
         rel = paths.check_rel_deep(rel)
         p = self.path(rel)
-        if not p.is_file():
+        if not _is_file(p):
             raise UpstreamMissing(f'{self.ctx.node}: 要判新鲜度的 {rel} 不在盘上')
 
         # 这六份确定性/字节形态产物没有通用 `_provenance.inputs` 槽位，但盘上已经有
@@ -597,7 +1006,7 @@ class ArtifactStore:
             return deterministic
 
         try:
-            raw_data = json.loads(p.read_bytes().decode('utf-8'))
+            raw_data = json.loads(_read_file_bytes(p).decode('utf-8'))
             data = decode_artifact(rel, raw_data).payload
         except (UnicodeDecodeError, json.JSONDecodeError, ArtifactVersionError) as e:
             raise ArtifactUnreadable(f'{rel} 不是合法 JSON，判不了新鲜度：{e!r}') from e
@@ -634,6 +1043,8 @@ class ArtifactStore:
             return self._stage0_freshness()
         if rel in (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE1_PARTITION_REPORT):
             return self._stage1_freshness()
+        if rel == STAGE2_GLOBAL_REVIEW:
+            return self._global_review_freshness()
         if rel == STAGE7_BOOK:
             return self._book_freshness()
         return None
@@ -653,7 +1064,7 @@ class ArtifactStore:
         clean_edge = self._content_edge(STAGE0_CLEAN_TEXT, clean_was, clean_now)
 
         source = Path(source_path)
-        if not source.is_file():
+        if not _is_file(source):
             source_now = None
         else:
             try:
@@ -674,6 +1085,58 @@ class ArtifactStore:
         edge = self._content_edge(
             STAGE0_CLEAN_TEXT, expected, self._content_sha1_or_none(STAGE0_CLEAN_TEXT))
         return self._content_report((edge,))
+
+    def _global_review_freshness(self) -> FreshnessReport:
+        """Exact Stage2 review surface freshness, independent of approval state."""
+        source = self._freshness_payload(STAGE2_GLOBAL_GROUNDING)
+        if source is None:
+            edge = prov.EdgeVerdict(
+                key=STAGE2_GLOBAL_GROUNDING, state='unknown', reason='ghost',
+                recorded_file=None, now_file=None,
+                recorded_consumed=None, now_consumed=None,
+            )
+            return FreshnessReport('unknown', 'ghost', (edge,))
+        review_payload = self._freshness_payload(STAGE2_GLOBAL_REVIEW)
+        if review_payload is None:
+            return FreshnessReport('unknown', 'no_provenance')
+
+        from contracts.schema.evaluation import GlobalReview
+        from novel.quality.global_review import build_review, review_status
+        try:
+            review = GlobalReview.model_validate(review_payload)
+        except ValidationError as exc:
+            raise ArtifactUnreadable(
+                f'{STAGE2_GLOBAL_REVIEW} 不合 GlobalReview 契约，判不了新鲜度：{exc}') from exc
+
+        expected_subject, exact_current, _approved = review_status(source, review)
+        # Approval completeness is a gate/UI fact, not freshness.  Pending/FAIL/
+        # UNVER decisions remain fresh as long as they describe the exact surface.
+        expected = build_review(source)
+
+        def identity_rows(value: Any) -> list[tuple[str, str, str, str]]:
+            return [
+                (item.item_id, item.kind, item.subject_path, item.subject_sha256)
+                for item in value.items
+            ]
+
+        recorded_surface = prov.projection_fingerprint(identity_rows(review))
+        current_surface = prov.projection_fingerprint(identity_rows(expected))
+        reason = (
+            'match' if exact_current else
+            'file_changed' if review.source_sha256 != expected_subject else
+            'consumed_changed'
+        )
+        state = 'fresh' if exact_current else 'stale'
+        edge = prov.EdgeVerdict(
+            key=STAGE2_GLOBAL_GROUNDING,
+            state=state,
+            reason=reason,
+            recorded_file=review.source_sha256,
+            now_file=expected_subject,
+            recorded_consumed=recorded_surface,
+            now_consumed=current_surface,
+        )
+        return FreshnessReport(state, reason, (edge,))
 
     def _book_freshness(self) -> FreshnessReport:
         name_map = self._freshness_payload(STAGE7_NAME_MAP)
@@ -739,6 +1202,165 @@ class ArtifactStore:
             return None
 
     # ── 内部：写盘口的两道闸 + 原子落盘 ───────────────────────────────────
+
+    @staticmethod
+    def _approval(actor: str, reason: str) -> HumanApproval:
+        try:
+            return HumanApproval(actor=actor, reason=reason)
+        except ValidationError as exc:
+            raise ApprovalRequired(
+                '提升 `.INVALID` 必须显式给非空 actor 与 reason；'
+                '空白凭据不能形成可问责的人工审计账') from exc
+
+    @staticmethod
+    def _business_payload(payload: Any) -> Any:
+        """The editable artifact content, excluding all provenance bookkeeping."""
+        if not isinstance(payload, dict):
+            return payload
+        return {key: value for key, value in payload.items() if key != PROVENANCE_KEY}
+
+    @staticmethod
+    def _revalidation_baseline_rel(inv_rel: str, locator: str) -> str:
+        inv_rel = paths.check_rel_deep(inv_rel)
+        if len(locator) != 64 or any(ch not in '0123456789abcdef' for ch in locator):
+            raise ProvenanceRefused(
+                f'{inv_rel} 的 invalid_baseline_sha256 不是完整小写 SHA-256：{locator!r}')
+        parent = os.path.dirname(inv_rel).replace('\\', '/')
+        # The locator is the identity.  Repeating a long artifact stem bought no
+        # safety and made the real acceptance path exceed Windows MAX_PATH.
+        return f'{parent}/{REVALIDATION_DIRNAME}/b.{locator}.snapshot'
+
+    @staticmethod
+    def _legacy_revalidation_baseline_rel(inv_rel: str, locator: str) -> str:
+        """Return the pre-short-name path for read-only compatibility."""
+        # Reuse the current builder for path and locator validation.
+        ArtifactStore._revalidation_baseline_rel(inv_rel, locator)
+        parent = os.path.dirname(inv_rel).replace('\\', '/')
+        return (f'{parent}/{REVALIDATION_DIRNAME}/'
+                f'{paths.stem_of(inv_rel)}.{locator}.snapshot')
+
+    def _write_immutable(self, destination: Path, data: bytes) -> None:
+        """Create a content-addressed audit snapshot; never replace history."""
+        self._track_history_path(destination)
+        if os.path.exists(_filesystem_path(destination)):
+            try:
+                same = _is_file(destination) and _read_file_bytes(destination) == data
+            except OSError as exc:
+                raise ArtifactUnreadable(
+                    f'读不了既有重验证基线 {destination}：{exc!r}') from exc
+            if not same:
+                raise ProvenanceRefused(
+                    f'不可变重验证基线 {destination} 已存在但字节不同；'
+                    '拒绝覆盖审计历史（可能是文件被改动或发生 hash 冲突）')
+            return
+        os.makedirs(_filesystem_path(destination.parent), exist_ok=True)
+        self._replace_atomically(destination, data)
+
+    def _revalidation_material(self, rel: str, model: type[M], *,
+                               actor: str, reason: str
+                               ) -> tuple[M, Provenance, RevalidationAudit]:
+        approval = self._approval(actor, reason)
+        official_rel = paths.check_rel_deep(rel)
+        inv_rel = paths.invalid_of(official_rel)
+        if not self.exists(inv_rel):
+            raise UpstreamMissing(f'{self.ctx.node}: 没有 {inv_rel} 可重验证')
+
+        current_raw = self._read_bytes(inv_rel)
+        artifact, current_payload = self._validate_payload(
+            model, inv_rel, self._loads(inv_rel, current_raw))
+        src = self._provenance_of(artifact)
+        if src is None:
+            raise ProvenanceRefused(
+                f'{inv_rel} 没有来源账，提升上来就是一份来历不明的正式产物')
+        locator = src.invalid_baseline_sha256
+        if locator is None:
+            raise ProvenanceRefused(
+                f'{inv_rel} 没有 write_invalid 记录的不可变基线定位键；'
+                '无法分辨原样重判与人工改字节，拒绝洗掉来源')
+
+        baseline_rel = self._revalidation_baseline_rel(inv_rel, locator)
+        baseline_path = self.path(baseline_rel)
+        if not _is_file(baseline_path):
+            legacy_rel = self._legacy_revalidation_baseline_rel(inv_rel, locator)
+            legacy_path = self.path(legacy_rel)
+            if _is_file(legacy_path):
+                baseline_rel, baseline_path = legacy_rel, legacy_path
+        if not _is_file(baseline_path):
+            raise ProvenanceRefused(
+                f'{inv_rel} 声明的不可变基线不存在：{baseline_rel}；'
+                '没有对照物就不能形成重验证审计账')
+        try:
+            baseline_raw = _read_file_bytes(baseline_path)
+        except OSError as exc:
+            raise ArtifactUnreadable(f'读不了重验证基线 {baseline_rel}：{exc!r}') from exc
+        baseline_encoded = self._loads(inv_rel, baseline_raw)
+        baseline_artifact, baseline_payload = self._validate_payload(
+            model, inv_rel, baseline_encoded)
+        baseline_src = self._provenance_of(baseline_artifact)
+        if baseline_src is None or baseline_src.invalid_baseline_sha256 != locator:
+            raise ProvenanceRefused(
+                f'不可变基线 {baseline_rel} 与 INVALID 声明的定位键不一致；拒绝提升')
+
+        # Locator protects the exact schema-versioned bytes created at that time.
+        # Verify against the raw encoded object, not the possibly migrated decoded
+        # payload; otherwise a later schema migration would make an intact baseline
+        # look tampered merely because encode_artifact now emits a newer version.
+        if not isinstance(baseline_encoded, dict):
+            raise ProvenanceRefused(f'{baseline_rel} 的原始 JSON 不是 object，无法核验定位键')
+        subject_encoded = dict(baseline_encoded)
+        block = subject_encoded.get(PROVENANCE_KEY)
+        if not isinstance(block, dict):
+            raise ProvenanceRefused(f'{baseline_rel} 的来源账不是 object，无法核验定位键')
+        subject_block = dict(block)
+        subject_block.pop('invalid_baseline_sha256', None)
+        subject_encoded[PROVENANCE_KEY] = subject_block
+        subject_raw = (
+            json.dumps(subject_encoded, ensure_ascii=False, indent=2) + '\n'
+        ).encode('utf-8')
+        actual_locator = hashlib.sha256(subject_raw).hexdigest()
+        if actual_locator != locator:
+            raise ProvenanceRefused(
+                f'不可变基线 {baseline_rel} 内容校验失败：声明 {locator}，'
+                f'按逻辑内容重算为 {actual_locator}；拒绝用被改过的基线提升')
+
+        baseline_business = self._business_payload(baseline_payload)
+        candidate_business = self._business_payload(current_payload)
+        baseline_canonical = hashlib.sha256(
+            _canonical_json_bytes(baseline_business)).hexdigest()
+        candidate_canonical = hashlib.sha256(
+            _canonical_json_bytes(candidate_business)).hexdigest()
+        baseline_raw_sha = hashlib.sha256(baseline_raw).hexdigest()
+        candidate_raw_sha = hashlib.sha256(current_raw).hexdigest()
+        pointers = _json_pointer_diff(baseline_business, candidate_business)
+        content_changed = baseline_canonical != candidate_canonical
+        audit = RevalidationAudit(
+            actor=approval.actor,
+            reason=approval.reason,
+            baseline_locator_sha256=locator,
+            baseline_raw_sha256=baseline_raw_sha,
+            candidate_raw_sha256=candidate_raw_sha,
+            baseline_canonical_sha256=baseline_canonical,
+            candidate_canonical_sha256=candidate_canonical,
+            raw_changed=baseline_raw_sha != candidate_raw_sha,
+            content_changed=content_changed,
+            edited_by_human=content_changed,
+            changed_json_pointers=pointers,
+        )
+        return artifact, src, audit
+
+    def _assert_self_fresh(self, rel: str, artifact: BaseModel) -> None:
+        """A provenance-bearing formal artifact must be fresh immediately after write."""
+        if self._provenance_of(artifact) is None and rel not in SELF_FRESH_DETERMINISTIC:
+            return
+        report = self.freshness(rel)
+        if report.state == 'fresh':
+            return
+        edges = ', '.join(
+            f'{edge.key}:{edge.reason}' for edge in report.edges) or report.reason
+        raise ProvenanceRefused(
+            f'{self.ctx.node} 刚写完 {rel}，freshness 后置条件却是 '
+            f'{report.state}/{report.reason}（{edges}）。正式路径已回滚；'
+            '这通常表示写盘方 ctx 与真正产地方不一致，或来源投影没有登记')
 
     def _consumed_fp_of_key(self, node: str | None, key: str) -> str | None:
         if node is None or (project := projection_for(node, key)) is None:
@@ -853,10 +1475,27 @@ class ArtifactStore:
     @staticmethod
     def _replace_atomically(p: Path, data: bytes) -> None:
         """写临时文件 → `os.replace`。**同目录**，否则 `replace` 跨卷就不是原子的了。"""
-        tmp = p.with_name(f'{p.name}.{os.getpid()}.tmp')
+        # Do not repeat ``p.name`` in the temporary name.  Content-addressed
+        # destinations are long already; ``<target>.<pid>.tmp`` crossed
+        # MAX_PATH even when its parent directory was perfectly usable.
+        fd = -1
+        tmp: str | None = None
         try:
-            tmp.write_bytes(data)
-            os.replace(tmp, p)
+            fd, tmp = tempfile.mkstemp(
+                prefix='.atomic-', suffix='.tmp',
+                dir=_filesystem_path(p.parent),
+            )
+            stream = os.fdopen(fd, 'wb')
+            fd = -1  # ownership transferred to ``stream``
+            with stream:
+                stream.write(data)
+            os.replace(tmp, _filesystem_path(p))
         finally:
+            if fd >= 0:
+                os.close(fd)
             # `replace` 成功之后 tmp 已经不在了；只有失败路径才真的删到东西。
-            tmp.unlink(missing_ok=True)
+            if tmp is not None:
+                try:
+                    os.unlink(tmp)
+                except FileNotFoundError:
+                    pass

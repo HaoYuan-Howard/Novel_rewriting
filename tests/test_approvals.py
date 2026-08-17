@@ -2,21 +2,30 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from contracts.schema.stage7 import ApprovedNameMap
 from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals, jobs
+from novel.stages.stage7 import rename
 from tests import corpus, sandbox
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        corpus.corpus_root() is None
-        or not any(a.rel == 'stage4/plan_chapters.json' for a in corpus.iter_artifacts()),
+_HAS_APPROVAL_CORPUS = (
+    corpus.corpus_root() is not None
+    and any(a.rel == 'stage4/plan_chapters.json' for a in corpus.iter_artifacts())
+)
+
+
+def _corpus_test(fn):
+    """Keep the frozen-artifact dependency on each actual corpus test."""
+    fn = pytest.mark.skipif(
+        not _HAS_APPROVAL_CORPUS,
         reason=f'未设置包含当前 Stage4 计划的 {corpus.CORPUS_ENV}',
-    ),
-]
+    )(fn)
+    return pytest.mark.corpus(fn)
 
 
 BASE_RELS = (
@@ -91,6 +100,83 @@ def _approve_for_writing(box: sandbox.Sandbox) -> None:
     approvals.approve_gate(box.root, box.sid, 's4')
 
 
+def _approved_name_artifact():
+    art = SimpleNamespace(
+        surname_map={'沈': '陆'}, characters=[], extra_subs=[],
+        approved=None, book_txt=None, residual=[], book=[],
+    )
+    art.approved = ApprovedNameMap(
+        origin='human', actor='service-reviewer',
+        reason='reviewed the full current name decision surface',
+        subject_sha256=rename.approval_subject_sha256(art),
+    )
+    return art
+
+
+def _isolated_s7_proof(monkeypatch, holder: dict[str, object]):
+    class Store:
+        def read_own(self, _model, _rel):
+            return holder['art'], {}
+
+    monkeypatch.setattr(approvals, '_store_for', lambda _novel_dir: Store())
+    monkeypatch.setattr(
+        approvals, '_require_fresh_json', lambda _store, _rel: 'f' * 64)
+    monkeypatch.setattr(approvals, '_root_clean_sha1', lambda _novel_dir: 'c' * 40)
+    monkeypatch.setattr(approvals, '_GATE_ORDER', ('s7',))
+    monkeypatch.setitem(approvals._GATE_REQUIREMENTS, 's7', ())
+
+    blank = approvals._fresh_record('service-proof')
+    proof = approvals._proof_for_gate(Path('synthetic-book'), 's7', blank)
+    gates = dict(blank.gate)
+    proofs = dict(blank.gate_proofs)
+    gates['s7'] = True
+    proofs['s7'] = proof
+    return blank.model_copy(update={'gate': gates, 'gate_proofs': proofs}), proof
+
+
+def test_s7_service_proof_survives_delivery_and_derived_ledger_changes(monkeypatch):
+    holder = {'art': _approved_name_artifact()}
+    record, proof = _isolated_s7_proof(monkeypatch, holder)
+    assert approvals._effective_record(
+        Path('synthetic-book'), record).gate['s7'] is True
+
+    holder['art'].book_txt = SimpleNamespace(
+        sha1='1' * 40, chars=123, chapters=2)
+    holder['art'].residual = [SimpleNamespace(hit='derived diagnostic')]
+    holder['art'].book = [SimpleNamespace(rule='derived metric')]
+
+    current = approvals._proof_for_gate(
+        Path('synthetic-book'), 's7', record)
+    assert current == proof
+    assert approvals._effective_record(
+        Path('synthetic-book'), record).gate['s7'] is True
+
+
+@pytest.mark.parametrize('mutation', ['approval', 'decision', 'stale_subject'])
+def test_s7_service_proof_revokes_changed_typed_approval_or_decision(
+    monkeypatch, mutation,
+):
+    holder = {'art': _approved_name_artifact()}
+    record, _proof = _isolated_s7_proof(monkeypatch, holder)
+    art = holder['art']
+
+    if mutation == 'approval':
+        art.approved = art.approved.model_copy(update={
+            'reason': 'a different typed approval audit',
+        })
+    elif mutation == 'decision':
+        art.surname_map = {'沈': '周'}
+        art.approved = art.approved.model_copy(update={
+            'subject_sha256': rename.approval_subject_sha256(art),
+        })
+    else:
+        art.surname_map = {'沈': '周'}
+
+    assert approvals._effective_record(
+        Path('synthetic-book'), record).gate['s7'] is False
+
+
+@_corpus_test
 def test_default_depth_is_chapters_one_two_three_and_get_is_read_only():
     box = _box()
     try:
@@ -103,6 +189,7 @@ def test_default_depth_is_chapters_one_two_three_and_get_is_read_only():
         box.close()
 
 
+@_corpus_test
 def test_depth_selection_is_locked_as_soon_as_writing_begins():
     box = _box()
     try:
@@ -121,6 +208,7 @@ def test_depth_selection_is_locked_as_soon_as_writing_begins():
         box.close()
 
 
+@_corpus_test
 def test_existing_formal_or_invalid_chapter_locks_depth_selection():
     for name in ('ch01.json', 'ch01.INVALID.json'):
         box = _box()
@@ -132,6 +220,7 @@ def test_existing_formal_or_invalid_chapter_locks_depth_selection():
             box.close()
 
 
+@_corpus_test
 def test_stage5_gate_requires_exact_arm_assignment_no_invalids_and_combined_draft():
     box = _box()
     try:
@@ -163,6 +252,7 @@ def test_stage5_gate_requires_exact_arm_assignment_no_invalids_and_combined_draf
         box.close()
 
 
+@_corpus_test
 def test_cli_products_can_be_explicitly_backfilled_and_are_reported_as_such():
     box = _full_box()
     try:
@@ -186,6 +276,7 @@ def test_cli_products_can_be_explicitly_backfilled_and_are_reported_as_such():
         box.close()
 
 
+@_corpus_test
 def test_stage5_job_api_rejects_a_depth_assignment_different_from_approval(monkeypatch):
     pytest.importorskip('fastapi')
     from fastapi.testclient import TestClient

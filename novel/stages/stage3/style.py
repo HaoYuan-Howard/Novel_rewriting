@@ -457,12 +457,7 @@ def run_repair_surface_habits(
     repaired_data['_provenance'] = merged.model_dump(by_alias=True, mode='json')
     artifact = StyleGrounding.model_validate(repaired_data)
 
-    # 新正式稿先落稳，再收起第一轮问题稿；中途崩溃时至少总有一份可恢复稿在活路径。
-    if store.exists(REL):
-        store.archive_round(REL)
-    store.write(REL, artifact)
-    if store.exists(_INVALID):
-        store.archive_round(_INVALID)
+    store.write_round(REL, artifact)
     prov = artifact.model_dump(by_alias=True).get('_provenance') or {}
     report = build(
         sid=ctx.sid, node=ctx.node, freshness=store.freshness(REL),
@@ -483,21 +478,18 @@ def _write_initial_result(
     """首轮产物先过闸；仅当唯一阻断项有窄 LLM 路由时自动进入第二轮。"""
     hard = _hard_rules(outcomes)
     if hard:
-        if store.exists(_INVALID):
-            store.archive_round(_INVALID)
         path = store.write_invalid(REL, artifact, gates_skipped=[])
         if hard == {'habit_quote'}:
             repaired, _report = run_repair_surface_habits(ctx, client)
             return repaired
         raise GateBlocked(
             f'{label}落盘闸门拦下：{sorted(hard)}。问题稿在 {path}；'
-            '报告的 remediation/fix 会区分 LLM 可修与必须人审的问题',
+            '报告的 remediation/fix 会区分 LLM 可修与必须人审的问题。'
+            '人修好 `.INVALID` 后跑 '
+            '`stage3.style --revalidate --actor <id> --reason <why>`'
+            '（0 LLM、同轮重判并留不可变审计）',
             invalid_path=str(path))
-    if store.exists(REL):
-        store.archive_round(REL)
-    store.write(REL, artifact)
-    if store.exists(_INVALID):
-        store.archive_round(_INVALID)
+    store.write_round(REL, artifact)
     return artifact
 
 
@@ -646,7 +638,9 @@ def run_remeasure(ctx: RunContext) -> tuple[StyleGrounding, list[tuple[str, obje
     return written, diff, report
 
 
-def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
+def run_revalidate(
+    ctx: RunContext, *, actor: str, reason: str,
+) -> tuple[bool, CheckReport]:
     """`--revalidate`：按**当前**判据重判被闸门拦下的 `.INVALID` 稿，合格即提升。0 成本。
 
     【为什么必须有这条】落盘闸门把问题稿存进 `.INVALID` 之后，**纯人工修订需要一条
@@ -669,14 +663,19 @@ def run_revalidate(ctx: RunContext) -> tuple[bool, CheckReport]:
             f'（要复检正式产物用 `--check-only`，那是另一件事）')
 
     main, hook, gg = _upstreams(store)
-    _cand, data = store.read_own(StyleGrounding, _INVALID)
+    cand, data = store.read_own(StyleGrounding, _INVALID)
     # 恒算漂移：这一份是当初付费那次产的，它的 `measurable` 可能已经跟不上 stage1 了。
-    outcomes = judge_with(data, main, hook, gg, measured_now=measure_all(main, hook))
+    now = measure_all(main, hook)
+    rebuilt = cand.model_copy(update={'measurable': now})
+    outcomes = judge_with(
+        rebuilt.model_dump(by_alias=True), main, hook, gg, measured_now=now)
 
     prov = data.get('_provenance') or {}
     promoted = not _hard_rules(outcomes)
     if promoted:
-        store.promote_invalid(REL, StyleGrounding)
+        store.promote_invalid(
+            REL, StyleGrounding, actor=actor, reason=reason,
+            artifact_override=rebuilt)
         prov = (store.read_own(StyleGrounding, REL)[1].get('_provenance') or {})
 
     report = build(
@@ -741,20 +740,16 @@ def run_apply_edit(ctx: RunContext, edit_path: str = ''
     outcomes = _judge(store, data, measured_now=now)
     hard = _hard_rules(outcomes)
     if hard:
-        if store.exists(_INVALID):
-            store.archive_round(_INVALID)
         path = store.write_invalid(REL, artifact, gates_skipped=[])
         raise GateBlocked(
             f'人工画像补丁被落盘闸门拦下：{sorted(hard)}。问题稿在 {path}，'
             f'**正式产物没有被覆盖**；改完编辑文件重跑 `--apply-edit`，'
-            f'或直接改 `.INVALID` 后 `--revalidate` 提升（都是 0 成本）',
+            f'或直接改 `.INVALID` 后跑 '
+            f'`stage3.style --revalidate --actor <id> --reason <why>`'
+            f'（0 LLM、同轮重判并留不可变审计）',
             invalid_path=str(path))
 
-    if store.exists(REL):
-        store.archive_round(REL)
-    store.write(REL, artifact)
-    if store.exists(_INVALID):
-        store.archive_round(_INVALID)
+    store.write_round(REL, artifact)
 
     prov = artifact.model_dump(by_alias=True).get('_provenance') or {}
     report = build(

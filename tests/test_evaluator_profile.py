@@ -5,7 +5,7 @@ import hashlib
 import pytest
 
 from contracts.schema.evaluation import (
-    EvidenceRef, GroundTruthCase, GroundTruthManifest, JudgeDecision,
+    EVALUATOR_ABILITIES, EvidenceRef, GroundTruthCase, GroundTruthManifest, JudgeDecision,
 )
 from tools.build_evaluator_profile import (
     CapabilityBinding, EvaluationPrediction, EvaluationRun, build_profile,
@@ -16,12 +16,7 @@ def _sha(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _manifest() -> GroundTruthManifest:
-    abilities = (
-        'event_order', 'verbatim_fidelity', 'hard_number_fidelity',
-        'reference_boundary', 'secret_timeline', 'world_rule_consistency',
-        'trim_equivalence', 'style_transfer',
-    )
+def _manifest(abilities=EVALUATOR_ABILITIES) -> GroundTruthManifest:
     cases = []
     for ability in abilities:
         for number in range(100):
@@ -42,14 +37,13 @@ def _manifest() -> GroundTruthManifest:
 
 
 def _runs(manifest: GroundTruthManifest) -> list[EvaluationRun]:
-    abilities = sorted({case.ability for case in manifest.cases})
     bindings = [CapabilityBinding(ability=ability, fingerprint={
         'dataset_sha256': manifest.dataset_sha256,
         'model': 'judge-v1',
         'prompt_sha256': _sha(f'prompt:{ability}'),
         'schema_sha256': _sha(f'schema:{ability}'),
         'decoder_sha256': _sha(f'decoder:{ability}'),
-    }) for ability in abilities]
+    }) for ability in EVALUATOR_ABILITIES]
     runs = []
     for run_number in range(3):
         predictions = []
@@ -131,3 +125,31 @@ def test_at_least_three_distinct_runs_are_required():
         build_profile(
             manifest, _runs(manifest)[:2], profile_id='x',
             calibrated_at='2026-08-16T00:00:00Z')
+
+
+def test_partial_manifest_registers_only_present_abilities_and_disables_the_rest():
+    manifest = _manifest(('secret_timeline',))
+    profile = build_profile(
+        manifest, _runs(manifest), profile_id='partial-v1',
+        calibrated_at='2026-08-16T01:00:00Z')
+
+    by_ability = {row.ability: row for row in profile.capabilities}
+    assert set(by_ability) == set(EVALUATOR_ABILITIES)
+    active = by_ability['secret_timeline']
+    assert active.n == 100 and active.enabled is True
+    for ability in set(EVALUATOR_ABILITIES) - {'secret_timeline'}:
+        missing = by_ability[ability]
+        assert missing.n == 0 and missing.enabled is False
+        assert missing.pass_precision_wilson95_lower == 0.0
+        assert missing.fail_precision_wilson95_lower == 0.0
+        assert missing.violation_recall_wilson95_lower == 0.0
+        assert missing.evidence_closure == 0.0
+        assert missing.rerun_consistency == 0.0
+
+
+def test_registered_ability_still_needs_the_full_held_out_floor():
+    manifest = _manifest(('secret_timeline',))
+    payload = manifest.model_dump(mode='json')
+    payload['cases'] = payload['cases'][:-1]
+    with pytest.raises(ValueError, match='need >=100 held-out cases'):
+        GroundTruthManifest.model_validate(payload)

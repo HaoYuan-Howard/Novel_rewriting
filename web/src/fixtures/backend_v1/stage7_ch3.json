@@ -438,8 +438,12 @@
   }
  },
  "approved": {
+  "actor": "fixture-reviewer",
+  "reason": "逐项核对人物决定、别称与残留候选",
+  "subject_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "origin": "human"
  },
+ "approval_subject_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
  "book": [
   {
    "rule": "rn_residual_stem",

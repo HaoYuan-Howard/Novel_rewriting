@@ -900,10 +900,17 @@ def _add_style_recipes(
 def _select(
     dataset_id: str,
     supplies: dict[Ability, list[_DraftRecipe]],
+    registered_abilities: tuple[Ability, ...] = EVALUATOR_ABILITIES,
 ) -> tuple[list[PrivateCaseRecipe | PrivateExternalRecipe], list[AbilitySupply]]:
     selected: list[PrivateCaseRecipe | PrivateExternalRecipe] = []
     audits: list[AbilitySupply] = []
+    registered = set(registered_abilities)
     for ability in EVALUATOR_ABILITIES:
+        if ability not in registered:
+            audits.append(AbilitySupply(
+                ability=ability, source_families_by_genre={}, eligible_genres=[],
+                selected_genres=[], selected_cases=0, blockers=[]))
+            continue
         by_genre: dict[
             str,
             dict[str, dict[int, PrivateCaseRecipe | PrivateExternalRecipe]],
@@ -1145,7 +1152,13 @@ def build_bundle_catalog(
                 issues.append(
                     f'{family.family_id}/{variant.variant_id}: {detail}')
 
-    recipes, ability_audits = _select(inventory.dataset_id, supplies)
+    # The schema-neutral adapter registers exactly the abilities named by its
+    # families.  An invalid/insufficient registered ability still blocks, but
+    # unrelated abilities need no dummy cases merely to publish a partial
+    # capability-scoped manifest.
+    registered = tuple(sorted({family.ability for family in inventory.families}))
+    recipes, ability_audits = _select(
+        inventory.dataset_id, supplies, registered)
     blocked = any(row.blockers for row in ability_audits)
     snapshot = sorted({
         (variant.subject.artifact, variant.subject.artifact_sha256,

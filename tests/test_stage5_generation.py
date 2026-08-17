@@ -7,6 +7,7 @@ import importlib
 import shutil
 import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,29 +59,87 @@ def test_trim_keeps_pretrim_segments_when_calibrated_evaluator_is_not_enabled(mo
     assert client.calls == []
 
 
-def test_a_successful_retry_archives_both_live_formal_and_invalid():
+def test_a_successful_retry_uses_transactional_round_write_for_superseded_files(
+        monkeypatch):
     class Store:
         def __init__(self, live):
             self.live = set(live)
             self.archived = []
+            self.transactions = []
 
         def exists(self, rel):
             return rel in self.live
 
-        def archive_round(self, rel):
+        def archive_round(self, rel, *, keep=False):
             self.archived.append(rel)
-            self.live.remove(rel)
+            if not keep:
+                self.live.remove(rel)
+
+        @contextmanager
+        def history_transaction(self, *rels):
+            self.transactions.append(rels)
+            yield
+
+        def write_round(self, rel, _artifact):
+            # Mirror ArtifactStore.write_round closely enough for this producer
+            # boundary test: retain the old formal as history, replace live, and
+            # retire the INVALID sibling only after the replacement succeeds.
+            with self.history_transaction(rel):
+                if self.exists(rel):
+                    self.archive_round(rel, keep=True)
+                self.live.add(rel)
+                invalid_rel = rel.replace('.json', '.INVALID.json')
+                if self.exists(invalid_rel):
+                    self.archive_round(invalid_rel)
+            return rel
+
+        def write_invalid(self, rel, _artifact, *, gates_skipped):
+            assert gates_skipped == []
+            invalid_rel = rel.replace('.json', '.INVALID.json')
+            with self.history_transaction(invalid_rel):
+                if self.exists(invalid_rel):
+                    self.archive_round(invalid_rel)
+                self.live.add(invalid_rel)
+            return invalid_rel
+
+    monkeypatch.setattr(
+        write, '_normalize_segments',
+        lambda segments, _book: (segments, write.M.NormalizeAccount()))
+    blocking = []
+    monkeypatch.setattr(
+        write, '_judge',
+        lambda *_a, **_kw: (['judged'], list(blocking), []))
+    monkeypatch.setattr(write, '_chapter_record', lambda *_a, **_kw: object())
+
+    ctx = SimpleNamespace(accounting={}, account=lambda *_a, **_kw: None)
+    entry = {'output_ordinal': 5}
+    kwargs = {
+        'mode': 'deep',
+        'segments': [{'slot': 's01', 'text': '合格正文。'}],
+        'mat': 'given',
+        'account': write.M.NormalizeAccount(),
+        'provenance': object(),
+    }
 
     rel = 'stage5/deep/ch05.json'
     invalid = 'stage5/deep/ch05.INVALID.json'
     rejected = 'stage5/deep/ch05.rejected.json'
     store = Store({rel, invalid, rejected})
-    write._archive_superseded(store, rel, new_invalid=False)
-    assert store.archived == [rel, invalid, rejected]
+    where, errors, findings = write._write_chapter(
+        ctx, store, entry, SimpleNamespace(), **kwargs)
+    assert (where, errors, findings) == (rel, [], ['judged'])
+    assert set(store.archived) == {rel, invalid, rejected}
+    assert store.transactions == [(rel, rejected), (rel,)]
+    assert rel in store.live and invalid not in store.live
 
+    blocking.append('still invalid')
     store = Store({rel, invalid, rejected})
-    write._archive_superseded(store, rel, new_invalid=True)
-    assert store.archived == [invalid, rejected]
+    where, errors, findings = write._write_chapter(
+        ctx, store, entry, SimpleNamespace(), **kwargs)
+    assert (where, errors, findings) == (
+        invalid, ['still invalid'], ['judged'])
+    assert set(store.archived) == {invalid, rejected}
+    assert store.transactions == [(rel, rejected), (invalid,)]
     assert rel in store.live, '新问题稿不能销毁上一轮正式稿'
 
 
@@ -206,6 +265,15 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
         def exists(_rel):
             return False
 
+        @staticmethod
+        @contextmanager
+        def history_transaction(*_rels):
+            yield
+
+        @staticmethod
+        def write_round(rel, _artifact):
+            return rel
+
     client = Client()
     captured = {}
     events = []
@@ -291,6 +359,15 @@ def test_stage5_chapters_run_together_up_to_32(
         @staticmethod
         def exists(_rel):
             return False
+
+        @staticmethod
+        @contextmanager
+        def history_transaction(*_rels):
+            yield
+
+        @staticmethod
+        def write_round(rel, _artifact):
+            return rel
 
     monkeypatch.setattr(write.prompts, 'write_system', lambda *_a, **_kw: 'SYS')
     monkeypatch.setattr(

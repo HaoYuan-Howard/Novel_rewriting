@@ -36,9 +36,11 @@ from contracts.invariants import (
     FREE_ENTRIES, NODES, PAID_FLAGS, PROGRESS_PHASES, STAGES, VALUED_FLAGS,
 )
 from contracts.schema.orchestration import ProgressEvent
-from novel import paths
+from novel import paths, prov
 from novel.cli import exit_codes as X
-from novel.errors import ApprovalRequired, RefusedByStructure, TerminalState
+from novel.errors import (
+    ApprovalRequired, ArtifactUnreadable, RefusedByStructure, TerminalState, UpstreamMissing,
+)
 from novel.orchestrator import beacon
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
@@ -360,7 +362,9 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     if '--revalidate' in tokens:
-        promoted, report = style.run_revalidate(ctx)
+        promoted, report = style.run_revalidate(
+            ctx, actor=_valued(flags, '--actor') or '',
+            reason=_valued(flags, '--reason') or '')
         print(render(report))
         print('  ✓ 已提升为正式产物（0 成本）' if promoted
               else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
@@ -457,7 +461,9 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--revalidate' in tokens:
-        promoted, report = hook.run_revalidate(ctx)
+        promoted, report = hook.run_revalidate(
+            ctx, actor=_valued(flags, '--actor') or '',
+            reason=_valued(flags, '--reason') or '')
         print(render(report))
         print('  ✓ 已提升为正式产物（0 成本）' if promoted
               else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
@@ -514,7 +520,9 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             print(render(report))
             return X.OK if report.passed else X.CHECK_FAILED
         if '--revalidate' in tokens:
-            promoted, report = extract.run_revalidate(ctx)
+            promoted, report = extract.run_revalidate(
+                ctx, actor=_valued(flags, '--actor') or '',
+                reason=_valued(flags, '--reason') or '')
             print(render(report))
             print('  ✓ 已提升为正式全局底座（0 成本）' if promoted
                   else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
@@ -525,8 +533,10 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             artifact, report = extract.run_apply_edit(
                 ctx, _valued(flags, '--apply-edit') or '')
             print(render(report))
-            print(f'  ✓ 人工 secret 订正已落为新一轮（{len(artifact.canon.secrets)} 条 secret）；'
-                  f'埋点章已重走 `_prune_setups`，下游全部按真实输入变化转 stale')
+            print(f'  ✓ Stage2 typed 人工订正已落为新一轮'
+                  f'（{len(artifact.canon.secrets)} 条 secret / '
+                  f'{len(artifact.canon.world_rules)} 条 world rule）；'
+                  f'称谓与时间线已重走归一，下游全部按真实输入变化转 stale')
             return X.OK if report.passed else X.CHECK_FAILED
         if '--review-decisions' in tokens:
             from novel.stages.stage2 import global_review
@@ -551,7 +561,9 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
 
     # ── `stage2.blueprint` ────────────────────────────────────────────────
     if '--revalidate' in tokens:
-        promoted, report = extract.run_revalidate(ctx)
+        promoted, report = extract.run_revalidate(
+            ctx, actor=_valued(flags, '--actor') or '',
+            reason=_valued(flags, '--reason') or '')
         print(render(report))
         print('  ✓ 已提升为正式逐章蓝图（0 成本）' if promoted
               else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
@@ -627,8 +639,10 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
+    chapters = _chapters_of(_valued(flags, '--chapters'))
+
     if '--dry-run' in tokens:
-        system, user = plan.build_prompt(ctx)
+        system, user = plan.build_prompt(ctx, chapters=chapters)
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
@@ -653,7 +667,9 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     if '--revalidate' in tokens:
-        report = plan.run_revalidate(ctx)
+        report = plan.run_revalidate(
+            ctx, actor=_valued(flags, '--actor') or '',
+            reason=_valued(flags, '--reason') or '')
         print(render(report))
         print('  ✓ 已提升为正式产物并重建了写作上下文（0 成本）' if report.passed
               else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
@@ -666,8 +682,11 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     # 付费路。⚠ **本仓最贵的一次请求**（全书一次调用，user 里带着全书原文）。
+    if chapters:
+        from novel.llm.cache import CachePolicy
+        ctx.cache = CachePolicy.refresh()
     client = _llm_client(ctx)
-    report = plan.run_plan(ctx, client)
+    report = plan.run_plan(ctx, client, chapters=chapters)
     print('  ✓ stage4 重构计划已落盘，写作上下文已同批重建')
     print(render(report))
     return X.OK if report.passed else X.CHECK_FAILED
@@ -711,10 +730,16 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
             selected = _chapters_of(chapters)
             if len(selected) != 1:
                 raise TerminalState('--retain-pretrim 必须用 --chapters 指定恰好一章')
+            actor = _valued(flags, '--actor')
+            reason = _valued(flags, '--reason')
+            if not actor or not actor.strip() or not reason or not reason.strip():
+                raise TerminalState(
+                    '--retain-pretrim 必须显式给 --actor 与 --reason；'
+                    '这是 hash-bound 人工销账，不能留下匿名决定')
             resolution = trim_resolution.retain_pretrim(
                 ctx, selected[0],
-                actor=_valued(flags, '--actor') or '',
-                reason=_valued(flags, '--reason') or '',
+                actor=actor,
+                reason=reason,
             )
             print(f'  ✓ ch{resolution.output_ordinal:02d} 已明确保留 pretrim 原稿；'
                   'hash-bound resolution 已落盘，未采用收缩候选')
@@ -773,7 +798,9 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--revalidate' in tokens:
-        report = write.run_revalidate(ctx)
+        report = write.run_revalidate(
+            ctx, actor=_valued(flags, '--actor') or '',
+            reason=_valued(flags, '--reason') or '')
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
@@ -802,7 +829,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
 
 
 def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
-    """stage7 的八条路。**七条 0 成本，一条付费。**
+    """stage7 的十一条路。**十条 0 成本，一条付费。**
 
     ⚠⚠ **本层是第一个「一个 stage 三个节点」的层**（`stage7.rename` / `.assemble` /
     `.approve`）。派发按 **stage** 分（`_runners` 那张表的键就是 stage），
@@ -814,9 +841,12 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage7.approve':
-        # ⚠ **它不带参数**，而这与 `stage6.approve --pick N` 不同、且是**终态不是待定**：
-        # 本层一本书只有一份人物表，定稿是「给整份盖章」不是「从三条候选里选一条」。
-        _art, report = rename.run_approve(ctx)
+        _art, report = rename.run_approve(
+            ctx,
+            actor=_valued(flags, '--actor') or '',
+            reason=_valued(flags, '--reason') or '',
+            subject_sha256=_valued(flags, '--subject-sha256') or '',
+        )
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
@@ -827,6 +857,10 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
               + (f'（{bt.chars} 字 / {bt.chapters} 章）' if bt else ''))
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--emit-edit-template' in tokens:
+        print(rename.edit_template_json())
+        return X.OK
 
     if '--check-only' in tokens:
         report = rename.run_check_only(ctx)
@@ -856,7 +890,9 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--revalidate' in tokens:
-        promoted, report = rename.run_revalidate(ctx)
+        promoted, report = rename.run_revalidate(
+            ctx, actor=_valued(flags, '--actor') or '',
+            reason=_valued(flags, '--reason') or '')
         print(render(report))
         print('  ✓ 已提升为正式产物（0 成本）' if promoted
               else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
@@ -864,6 +900,12 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
 
     if '--apply-edit' in tokens:
         _art, report = rename.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
+
+    if '--adopt-residual' in tokens:
+        _art, report = rename.run_adopt_residual(
+            ctx, _valued(flags, '--adopt-residual') or '')
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
@@ -928,12 +970,42 @@ def _cmd_run(a: argparse.Namespace) -> int:
     return _dispatch(a.node, ctx, flags)
 
 
+def _state_check_report(base: str, sid: str, stage: str):
+    """Compose the CLI state display with the authoritative CheckReport.
+
+    ``NovelOverview`` deliberately remains verdict-free for the HTTP contract;
+    this is a display-layer join, not a second badge calculation.
+    """
+    from novel.stages import check_only
+
+    nodes = N.check_nodes(stage)
+    if len(nodes) != 1:
+        return None
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    ctx = S.readonly_ctx(novel_dir, nodes[0], prov.code_version())
+    try:
+        return check_only(stage)(ctx)
+    except (UpstreamMissing, ArtifactUnreadable, TerminalState):
+        return None
+
+
 def _cmd_state(a: argparse.Namespace) -> int:
     ov = S.overview(a.base, a.sid)
     print(f'{ov.title}  ({ov.sid})')
     for st in ov.stages:
         mark = {True: '✓', False: '·', None: '?'}[st.done]
-        print(f'  {mark} {st.stage}')
+        report = _state_check_report(a.base, a.sid, st.stage)
+        if report is not None:
+            hard = sum(1 for row in report.rules
+                       if row.sev == 'hard' and row.status == 'hit')
+            info = sum(1 for row in report.rules
+                       if row.sev == 'info' and row.status == 'hit')
+            unver = report.counts.unver + report.counts.skipped
+            check = (f'  [check {report.badge.upper()} · hard {hard} · '
+                     f'info {info} · unver {unver}]')
+        else:
+            check = '  [check ? 校验未知]'
+        print(f'  {mark} {st.stage}{check}')
         for art in st.artifacts:
             flags = ''.join([' [.INVALID]' if art.invalid else '',
                              ' [读不回来]' if not art.readable else '',

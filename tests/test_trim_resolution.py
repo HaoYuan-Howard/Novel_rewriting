@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 from contracts.artifacts import artifact_rel
+from contracts.schema import encode_artifact
 from contracts.schema.evaluation import TrimAudit, TrimResolution
 from contracts.schema.common import RoundFreeProvenance
 from contracts.schema.stage5 import Chapter, ChapterSegment
@@ -18,8 +20,13 @@ from novel.errors import ApprovalRequired
 from novel.cli import exit_codes as X
 from novel.cli.main import main
 from novel.orchestrator.state import readonly_ctx
-from novel.stages.stage5.trim_resolution import retain_pretrim
+from novel.run import RunContext
+from novel.stages.stage5.trim_resolution import (
+    current_trim_audits, current_unresolved_audits, retain_pretrim,
+    verification_context,
+)
 from novel.store import ArtifactStore
+from tests import factories
 from novel.views.inbox import inbox_view
 
 
@@ -34,18 +41,21 @@ def _book(tmp_path):
     (book / 'stage0' / 'clean_text.txt').write_text(
         '第一章\n原稿正文。\n', encoding='utf-8', newline='\n')
     ctx = readonly_ctx(book, 'stage5.review', prov.code_version())
-    ArtifactStore(ctx).write(
-        artifact_rel('stage5.chapter', mode='deep', nn=3),
-        Chapter(
-            output_ordinal=3, from_source_ordinals=[1], mode='deep',
-            source_chars=len(PRETRIM_TEXT), budget_chars=len(PRETRIM_TEXT),
-            chars=len(PRETRIM_TEXT), overlap_excl_verbatim=None,
-            segments=[ChapterSegment(slot='s01', text=PRETRIM_TEXT)],
-            warns=[], errs=None,
-            _provenance=ctx.free_provenance(
-                RoundFreeProvenance, round=1, origin='human'),
-        ),
+    rel = artifact_rel('stage5.chapter', mode='deep', nn=3)
+    chapter = Chapter(
+        output_ordinal=3, from_source_ordinals=[1], mode='deep',
+        source_chars=len(PRETRIM_TEXT), budget_chars=len(PRETRIM_TEXT),
+        chars=len(PRETRIM_TEXT), overlap_excl_verbatim=None,
+        segments=[ChapterSegment(slot='s01', text=PRETRIM_TEXT)],
+        warns=[], errs=None,
+        _provenance=ctx.free_provenance(
+            RoundFreeProvenance, round=1, origin='human'),
     )
+    target = book / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(encode_artifact(
+        rel, chapter.model_dump(by_alias=True, mode='json')),
+        ensure_ascii=False), encoding='utf-8', newline='\n')
     return base, book
 
 
@@ -79,6 +89,24 @@ def _trim_rows(base):
     ]
 
 
+def test_trim_verification_context_carries_limit_and_both_audit_identities():
+    audit = _audit(before='a' * 64, after='b' * 64)
+    chapter = SimpleNamespace(text='甲' * 20)
+    entry = SimpleNamespace(
+        output_ordinal=3,
+        model_dump=lambda **_kwargs: {'budget_chars': 10},
+    )
+    store = SimpleNamespace(
+        read_own=lambda *_args, **_kwargs: (chapter, {}),
+        read=lambda *_args, **_kwargs: SimpleNamespace(chapters=[entry]),
+    )
+    detail = verification_context(store, audit)
+    assert '当前 pretrim 20 字' in detail and '目标 ' in detail
+    assert '超上限' in detail
+    assert f'before={audit.before_sha256}' in detail
+    assert f'after={audit.after_sha256}' in detail
+
+
 def test_trim_resolution_schema_has_no_candidate_adoption_action(tmp_path):
     _base, book = _book(tmp_path)
     _write_audit(book, _audit())
@@ -100,8 +128,14 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
         readonly_ctx(book, 'stage5.review', prov.code_version()),
         3, actor='甲', reason='核对后决定保留原稿')
     assert _trim_rows(str(base)) == []
+    resolution_rel = artifact_rel('stage5.trim_resolution', nn=3)
+    assert _store(book).freshness(resolution_rel).state == 'fresh'
+    store = _store(book)
+    assert set(current_trim_audits(store)) == {3}, (
+        '有效 retain 决定关闭 verification，但 exact-current trim 根因必须继续抑制 length_over')
+    assert current_unresolved_audits(store) == {}
 
-    resolution_path = book / artifact_rel('stage5.trim_resolution', nn=3)
+    resolution_path = book / resolution_rel
     raw = json.loads(resolution_path.read_text(encoding='utf-8'))
     assert raw['_schema_version'] == 1
     assert raw['action'] == 'retain_pretrim'
@@ -133,10 +167,10 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
     assert _trim_rows(str(base)) == []
     (book / 'stage0' / 'clean_text.txt').write_text(
         '第一章\n根正文已经变化。\n', encoding='utf-8', newline='\n')
-    assert [row.chapter for row in _trim_rows(str(base))] == [3]
+    assert _trim_rows(str(base)) == [], '根身份已变，旧 audit 不再是当前 verification'
 
 
-def test_formal_chapter_rewrite_reopens_and_blocks_the_old_trim_resolution(tmp_path):
+def test_formal_chapter_rewrite_retires_and_blocks_the_old_trim_resolution(tmp_path):
     base, book = _book(tmp_path)
     _write_audit(book, _audit())
     ctx = readonly_ctx(book, 'stage5.review', prov.code_version())
@@ -150,17 +184,80 @@ def test_formal_chapter_rewrite_reopens_and_blocks_the_old_trim_resolution(tmp_p
         'segments': [ChapterSegment(slot='s01', text='人工改过的另一版正文。')],
         'chars': len('人工改过的另一版正文。'),
     })
-    store.write(rel, changed)
+    # This test needs a changed on-disk subject, not a producer write.  Seed
+    # the versioned fixture directly so it does not pretend stage5.review is
+    # the chapter producer (the real post-write freshness guard rejects that).
+    (book / rel).write_text(json.dumps(encode_artifact(
+        rel, changed.model_dump(by_alias=True, mode='json')),
+        ensure_ascii=False), encoding='utf-8', newline='\n')
 
-    assert [row.chapter for row in _trim_rows(str(base))] == [3]
+    assert _trim_rows(str(base)) == [], '正式稿 hash 不再等于 audit.before，旧 audit 必须退出清单'
     with pytest.raises(ApprovalRequired, match='audit 之后变化'):
         retain_pretrim(ctx, 3, actor='乙', reason='不能沿用旧审计')
+
+
+def test_revalidate_failure_restores_chapter_trim_and_all_history(tmp_path, monkeypatch):
+    """Failure after promotion and one trim retirement leaves no half-commit."""
+    from novel.stages.stage5 import write
+
+    base, book = _book(tmp_path)
+    _write_audit(book, _audit())
+    retain_pretrim(
+        readonly_ctx(book, 'stage5.review', prov.code_version()),
+        3, actor='reviewer', reason='确认保留当前 pretrim',
+    )
+    ctx = RunContext.open(base, '42', 'stage5.write', paid=False, mode='deep')
+    store = ArtifactStore(ctx)
+    rel = artifact_rel('stage5.chapter', mode='deep', nn=3)
+    chapter, _raw = store.read_own(Chapter, rel)
+    store.write_invalid(
+        rel, chapter.model_copy(update={'errs': ['模拟旧阻断结论']}),
+        gates_skipped=[],
+    )
+
+    synthetic = factories.stage5_book()
+    synthetic.ctx['chapters'][0]['output_ordinal'] = 3
+    monkeypatch.setattr(write.review, 'load_book', lambda *_args, **_kwargs: synthetic)
+    monkeypatch.setattr(
+        write, '_judge', lambda *_args, **_kwargs: ([], [], []))
+    resolution_rel = artifact_rel('stage5.trim_resolution', nn=3)
+    original_archive = ArtifactStore.archive_round
+
+    def fail_resolution(self, target, **kwargs):
+        if target == resolution_rel:
+            raise OSError('模拟 trim resolution 退休失败')
+        return original_archive(self, target, **kwargs)
+
+    stage = book / 'stage5'
+    before = {
+        path.relative_to(stage).as_posix(): path.read_bytes()
+        for path in stage.rglob('*') if path.is_file()
+    }
+    # This fixture intentionally has no real producer input ledger.  Freshness
+    # postcondition behavior has dedicated store tests; this case must reach the
+    # later trim-retirement failure to exercise the widened transaction.
+    monkeypatch.setattr(ArtifactStore, '_assert_self_fresh', lambda *_args: None)
+    monkeypatch.setattr(ArtifactStore, 'archive_round', fail_resolution)
+    with pytest.raises(OSError, match='trim resolution 退休失败'):
+        write.run_revalidate(ctx, actor='reviewer', reason='重判问题稿')
+
+    after = {
+        path.relative_to(stage).as_posix(): path.read_bytes()
+        for path in stage.rglob('*') if path.is_file()
+    }
+    assert after == before
 
 
 def test_cli_and_api_paths_are_zero_cost_and_only_retain_pretrim(tmp_path, monkeypatch):
     base, book = _book(tmp_path)
     _write_audit(book, _audit())
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
+    refused = main([
+        'run', 'stage5.review', '42', '--retain-pretrim', '--chapters', '3',
+        '--actor', '   ', '--reason', '不能留空白身份',
+        '--base', str(base),
+    ])
+    assert refused == X.TERMINAL_STATE
     rc = main([
         'run', 'stage5.review', '42', '--retain-pretrim', '--chapters', '3',
         '--actor', 'cli-reviewer', '--reason', 'CLI 核对后保留原稿',

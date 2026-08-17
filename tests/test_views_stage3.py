@@ -27,17 +27,14 @@ from novel import paths
 from novel.errors import UpstreamMissing
 from novel.views.stage3 import style_view
 from tests import corpus, sandbox
-
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(corpus.corpus_root() is None,
-                       reason='盘上没有语料——这几条**没在查**，不是「查过没事」'),
-]
+from tests.markers import corpus_params
 
 STYLE = 'stage3/style_grounding.json'
 
 
-@pytest.fixture(params=sandbox.books_with_stage3(), ids=lambda b: b.rsplit('_', 1)[0])
+@pytest.fixture(params=corpus_params(
+    sandbox.books_with_stage3(), reason='盘上没有 stage3 语料——这些集成用例没在查'),
+    ids=lambda b: b.rsplit('_', 1)[0] if b else 'no-corpus')
 def box(request):
     s = sandbox.Sandbox(request.param)
     yield s
@@ -130,18 +127,19 @@ def test_the_view_writes_nothing(box):
     assert len(before) >= 4, f'只扫到 {len(before)} 个文件——沙箱多半没建起来'
 
 
-def test_an_unknown_book_is_a_terminal_state_not_an_empty_screen(box):
+def test_stage3_view_rejects_an_unknown_synthetic_book(tmp_path):
     """「这本书不在」与「这本书在、只是没跑过 stage3」是两件事。
 
     前者抛 `UpstreamMissing`（HTTP 层翻 404），后者是 `exists=False` 的 **200**。
     合成一件，界面就没法区分「你打错了 id」和「下一步该跑 stage3」。
     """
     with pytest.raises(UpstreamMissing):
-        style_view(box.root, '9999999999999999999')
+        style_view(tmp_path, '9999999999999999999')
 
 
 # ───────────────────────── 三、盘上原样的三本 ─────────────────────────
 
+@pytest.mark.corpus
 @pytest.mark.parametrize('book', sandbox.books_with_stage3(),
                          ids=lambda b: b.rsplit('_', 1)[0])
 def test_the_untouched_current_corpus_is_readable_and_not_modified(book):

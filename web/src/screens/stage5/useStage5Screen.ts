@@ -8,6 +8,7 @@ import type { ChapterSegment } from '@/types/stages'
 import type { TextPart } from '@/components/ui/HighlightedText'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 import { useEnums } from '@/hooks/useEnums'
+import type { EnumAction } from '@/types/enums'
 
 export type S5Tab = 'chapter' | 'book' | 'index'
 
@@ -18,6 +19,19 @@ export interface FindingView {
   detail: string
   sev: Severity
   evidenceLabel: string
+}
+
+/**
+ * Stage5's chapter box can supply only the dynamic --chapters value. Actions
+ * needing another primary value (notably --apply-edit's file) have dedicated
+ * UI and must not be advertised here as runnable buttons.
+ */
+export function stage5WriteActions(actions: readonly EnumAction[]): EnumAction[] {
+  return actions.filter(
+    (action) => action.kind === 'stage5.write'
+      && (action.mode === 'deep' || action.mode === 'shallow')
+      && (!action.needs_value || action.extra?.includes('--chapters')),
+  )
 }
 
 /** 把服务端给的证据串在成稿里找出来高亮。**只做 indexOf，不解析、不抠结构。** */
@@ -323,8 +337,6 @@ export function useStage5Screen() {
 
     chaptersArg,
     setChaptersArg,
-    writeActions: (enums.data?.actions ?? []).filter(
-      (a) => a.kind === 'stage5.write' && (a.mode === 'deep' || a.mode === 'shallow'),
-    ),
+    writeActions: stage5WriteActions(enums.data?.actions ?? []),
   }
 }

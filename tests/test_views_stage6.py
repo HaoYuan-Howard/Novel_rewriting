@@ -18,6 +18,7 @@ from novel.core.measure import measure
 from novel.errors import UpstreamMissing
 from novel.views.stage6 import stage6_view
 from tests import corpus, sandbox
+from tests.markers import corpus_params
 
 #: 组装这一屏只要产物自己；上游缺席只影响 freshness（ghosts 点名），不拦读。
 INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
@@ -30,14 +31,9 @@ def books() -> list[str]:
                    if a.rel == 'stage6/hook.json'})
 
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        not books(), reason='盘上没有 stage6 语料——这几条**没在查**，不是「查过没事」'),
-]
-
-
-@pytest.fixture(params=books(), ids=lambda b: b[:10])
+@pytest.fixture(params=corpus_params(
+    books(), reason='盘上没有 stage6 语料——这些集成用例没在查'),
+    ids=lambda b: b[:10] if b else 'no-corpus')
 def box(request):
     s = sandbox.Sandbox(request.param, INPUTS)
     yield s
@@ -107,6 +103,11 @@ def test_a_missing_artifact_is_a_terminal_state(box):
     (box.dir / 'stage6' / 'hook.json').unlink()
     with pytest.raises(UpstreamMissing):
         stage6_view(box.root, box.sid)
+
+
+def test_stage6_view_rejects_an_unknown_synthetic_book(tmp_path):
+    with pytest.raises(UpstreamMissing):
+        stage6_view(tmp_path, '9999999999999999999')
 
 
 def test_the_view_writes_nothing(box):

@@ -12,6 +12,9 @@ TODO-24。留下的号空着——Git 提交信息按号引用，重排会让那
 `--require-corpus`，同时提供隔离的 `NOVEL_OUTPUT` 和与该盘面精确一致的无正文 manifest；缺环境、
 manifest、书目/产物、版本或 skip 任一项都会关闭式失败。当前 manifest 尚未生成，因此现阶段的
 通过数字只能称为“非 corpus 回归”，不能称为“全量”或“current-schema corpus 已绿”。
+真实 corpus 用例逐项标记，不再用整文件 marker 把同文件里的 schema/闸门/API 不变量一并静默
+排除；收集守卫会嵌套运行 `pytest --collect-only -m "not corpus"`，证明 Stage3/4/7 与编辑 API
+的关键 synthetic 回归实际进入默认套件。
 
 ⚠ **历史盘面数字已经退役。** `40b0c61` 曾在旧代码与旧产物上得到
 2059 passed / 10 skipped / 0 failed；后续版本边界已经证明它不能代表当前代码。旧 skip、旧 schema
@@ -27,15 +30,19 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
 ### TODO-21 · 建立 current-schema 现役语料基线
 
 - [ ] 在隔离输出与独立空缓存中，用最终代码从来源重新生成两本书的 Stage0～Stage7 产物；所有
-  provenance-bearing 产物必须由现役 v2 producer 写出，其他产物按注册表中的各自当前版本写出。
+  产物必须由现役 producer 按 `ARTIFACT_SPECS.current_version` 写出。当前 registry 同时包含
+  v1/v2/v3 家族：Stage2 global/blueprints、Stage3 style、Stage4 plan、Stage5 chapter/review、
+  Stage6 hook 与 Stage7 map 已为 v3，其余以注册表为准。
   不给旧 JSON 手补 `_schema_version`、`root_clean_sha1` 或其他字段冒充当前产地。
 - [ ] 生成并提交无正文 manifest：逐书记录 sid、source hash、章节数、预期产物与版本、代码身份、
-  冻结命令、ledger 聚合及精确 skip allowlist。
+  冻结命令、ledger 聚合及精确 skip allowlist。终审成本以 `<base>/_service/ledger.jsonl` 为
+  唯一权威源，不与产物 usage 或日志混加。
 - [ ] 对同一盘面运行 `--require-corpus` 的完整 `corpus or not corpus` 套件；任何书目/产物减少、
   版本漂移、ledger 不闭合或新增 skip 都必须失败。
 
-历史中间产物 `outputs/skill_e2e_schema_v1_20260816` 只证明当时的 v1 producer 可达；当前
-provenance 契约已升 v2，它不再是 current-schema 验收目录，也不能为最终 manifest 提供通过数字。
+历史中间产物 `outputs/skill_e2e_schema_v1_20260816` 只证明当时的 v1 producer 可达；现役各路径
+已分别演进到 registry 登记的 v1/v2/v3，它不再是 current-schema 验收目录，也不能为最终
+manifest 提供通过数字。
 
 与最终基线相连、但尚未取得实证的付费项：
 
@@ -63,9 +70,12 @@ ground truth 并证明 judge 达到自动放行门槛。
 - [ ] 定期运行零付费供给审计，既收集 `FAIL` / `UNVER` / 自动结论被推翻的难例，也随机抽取正常例；
   同一来源的原样、扰动和修复前后样本归入同一 family，避免训练/提示材料与 held-out 泄漏。现役
   八类能力及供给硬门以 `docs/schema/evaluation.md` 为准；未纳入真值的其他语义能力继续 human-only。
-- [ ] 供给满足预登记硬门后再冻结 held-out：每类至少 100 个独立 family、正反例与跨题材覆盖均
-  达标；随后完成两人独立标注、第三方仲裁和三轮 A/B 校准。只有固定准确率/一致性门槛全部通过，
-  才为对应能力启用自动 `PASS/FAIL`；dataset、模型、prompt、schema 或 decoder 漂移即重新失效。
+- [ ] 供给满足预登记硬门后再冻结 held-out：manifest 只对**实际登记了 case 的能力**
+  要求至少 100 个独立 family、正反例与跨题材覆盖均达标；尚无 case 的能力不在 manifest
+  中伪造样本。随后完成两人独立标注、第三方仲裁和三轮 A/B 校准。`EvaluatorProfile`
+  仍恒覆盖八类能力；manifest 未登记的能力必须 `enabled=false`、`n=0` 且全部指标为 0。
+  只有固定准确率/一致性门槛全部通过，才为对应能力启用自动 `PASS/FAIL`；
+  dataset、模型、prompt、schema 或 decoder 漂移即重新失效。
 
 长期验收：最终 manifest 的样本量、标签平衡、题材覆盖、独立 family、标注一致度和三轮评测均满足
 冻结契约；报告分别呈现确定性检查、语义评测与人工结论。计划轻重、施受关系、潜台词、视角等尚无

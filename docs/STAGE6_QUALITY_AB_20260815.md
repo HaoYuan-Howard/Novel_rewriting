@@ -13,7 +13,9 @@
 - 剧透不再判错，只看它是否增强阅读欲；
 - 三策略改为 `source_architecture` / `payoff_preview` / `scene_punchline`；
 - 语义审判改为实质矛盾检查 + 六维吸引力评分与匿名排序；
-- 人工批准和 Stage7 成书都只接受当前审判为 `clear` 的文本。
+- 当前校准 `clear` 可直接作为自动依据；缺审、过期或 `UNVER` 仍不洗绿，但后续
+  2026-08-16 裁决允许人以 actor / reason / 当前文本完整 SHA-256 绑定的
+  `human_verification` 收口。当前或历史校准 `FAIL` 仍不可绕过，只能改字形成新主体。
 
 没有改成“三次独立生成调用”；当前三候选仍在一次 API 请求中生成。
 
@@ -110,4 +112,6 @@
 - 质量总分由代码固定计算；
 - 缺审、旧审、过期、未覆盖与 uncertain 不洗绿；
 - 单条坏候选不废掉整组三候选；全部坏或定稿坏才命中 HARD；
-- `stage6.approve` 与 Stage7 付费改名/成书均不能绕过 `clear` 前置条件。
+- `stage6.approve` 与 Stage7 付费改名/成书只接受两种可审计依据：当前校准 `clear`，
+  或 actor / reason / 当前文本完整 SHA-256 绑定的 `human_verification`；当前或历史
+  校准 `FAIL` 不能被普通批准绕过。

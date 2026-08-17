@@ -32,12 +32,57 @@ const preview: JobPreview = {
   ],
 }
 
+const revalidateRequest: JobRequest = {
+  kind: 'stage5.write',
+  label: 'stage5 逐章写作（deep） --revalidate',
+  mode: 'deep',
+  extra: ['--revalidate'],
+  args: ['--chapters', '11'],
+  required_inputs: [
+    { flag: '--actor', description: '人工决定的自报身份（不是认证身份）' },
+    { flag: '--reason', description: '人工决定的非空理由' },
+  ],
+  sid: 'book-1',
+  ordinal: null,
+}
+
+const revalidatePreview: JobPreview = {
+  argv:
+    'python -m novel.cli stage5.write --mode deep --revalidate --chapters 11 '
+    + '--actor 待填·actor --reason 待填·reason',
+  paid: false,
+  label: revalidateRequest.label,
+  kind: revalidateRequest.kind,
+  steps: [
+    {
+      label: revalidateRequest.label,
+      paid: false,
+      writes: 'stage5/deep/ch11.json',
+      argv:
+        'python -m novel.cli stage5.write --mode deep --revalidate --chapters 11 '
+        + '--actor 待填·actor --reason 待填·reason',
+    },
+  ],
+}
+
 function Harness() {
   const { askConfirm } = useChrome()
   return (
     <>
       <button type="button" onClick={() => askConfirm({ req: request })}>
         修第 11 章
+      </button>
+      <ConfirmDialog />
+    </>
+  )
+}
+
+function RevalidateHarness() {
+  const { askConfirm } = useChrome()
+  return (
+    <>
+      <button type="button" onClick={() => askConfirm({ req: revalidateRequest })}>
+        同轮重判
       </button>
       <ConfirmDialog />
     </>
@@ -90,5 +135,47 @@ describe('ConfirmDialog', () => {
     expect(screen.queryByText(/--chapters 11/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '等待执行计划' })).toBeDisabled()
     finishRefetch?.(preview)
+  })
+
+  it('previews placeholders but starts revalidation only with freshly entered audit values', async () => {
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    const previewSpy = vi.spyOn(api, 'previewJob').mockResolvedValue(revalidatePreview)
+    const startSpy = vi.spyOn(api, 'startJob').mockResolvedValue({
+      id: 'j-revalidate',
+      kind: revalidateRequest.kind,
+      label: revalidateRequest.label,
+      argv: revalidatePreview.argv,
+      state: 'running',
+      paid: false,
+      started: 1,
+      finished: null,
+      sid: revalidateRequest.sid,
+      ordinal: null,
+    })
+    renderRoute(<RevalidateHarness />)
+
+    fireEvent.click(screen.getByRole('button', { name: '同轮重判' }))
+    expect(await screen.findByText(/--actor 待填·actor --reason 待填·reason/)).toBeVisible()
+    expect(previewSpy).toHaveBeenCalledWith(revalidateRequest)
+    expect(screen.getByRole('button', { name: '请先填写必填项' })).toBeDisabled()
+
+    fireEvent.change(screen.getByRole('textbox', { name: '--actor' }), {
+      target: { value: ' reviewer-a ' },
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: '--reason' }), {
+      target: { value: '逐项核对当前闸门后同轮重判' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发起' }))
+
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith({
+      ...revalidateRequest,
+      args: [
+        '--chapters', '11',
+        '--actor', 'reviewer-a',
+        '--reason', '逐项核对当前闸门后同轮重判',
+      ],
+    }))
+    const submitted = startSpy.mock.calls[0]?.[0]
+    expect(JSON.stringify(submitted)).not.toContain('待填·')
   })
 })

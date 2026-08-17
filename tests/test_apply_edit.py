@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """三条 `--apply-edit` 人工修订路（stage3 / stage4 / stage6）——BE-02 的完成判据。
 
-⚠ **stage2 那条在 `tests/test_stage2_secret_edit.py`**（TODO-05 补的 secret 订正入口）：
+⚠ **stage2 那条在 `tests/test_stage2_secret_edit.py`**（Stage2 typed facts 订正入口）：
 它同样守下面这四件事，但**全程合成语料**——本文件的四条都要盘上有对应产物，
 而 secret 的越界章号、未知 `secret_id` 那几个反例在真语料上造不出来。
 两个文件不是重复：同一把尺子，一个量真产物、一个量构造得出来的反例。
@@ -38,12 +38,15 @@ def _first_book(rel: str) -> str | None:
     books = sorted({a.book_dir for a in corpus.iter_artifacts() if a.rel == rel})
     return books[0] if books else None
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        _first_book('stage3/style_grounding.json') is None,
-        reason='盘上没有语料——这几条**没在查**，不是「查过没事」'),
-]
+def _corpus_case(book: str | None, *, label: str, reason: str) -> list:
+    """Mark only the parameter that consumes a frozen on-disk artifact."""
+    if book is not None:
+        return [pytest.param(book, marks=pytest.mark.corpus, id=label)]
+    return [pytest.param(
+        None,
+        marks=(pytest.mark.corpus, pytest.mark.skip(reason=reason)),
+        id='no-' + label,
+    )]
 
 
 def _drafts_of(book: str) -> tuple[str, ...]:
@@ -53,9 +56,13 @@ def _drafts_of(book: str) -> tuple[str, ...]:
         and '_rounds' not in a.rel and a.rel.endswith('.json')))
 
 
-@pytest.fixture
-def box3():
-    s = sandbox.Sandbox(_first_book('stage3/style_grounding.json'))
+@pytest.fixture(params=_corpus_case(
+    _first_book('stage3/style_grounding.json'),
+    label='stage3-corpus',
+    reason='盘上没有 stage3 语料——本组没在查，不是「查过没事」',
+))
+def box3(request):
+    s = sandbox.Sandbox(request.param)
     yield s
     s.close()
 
@@ -74,19 +81,24 @@ def _stage4_book() -> str | None:
     return None
 
 
-@pytest.fixture
-def box4():
-    book = _stage4_book()
-    if book is None:
-        pytest.skip('语料里没有带来源账的 stage4 计划——本组**没在查**')
-    s = sandbox.Sandbox(book, STAGE4_INPUTS)
+@pytest.fixture(params=_corpus_case(
+    _stage4_book(),
+    label='stage4-corpus',
+    reason='语料里没有带来源账的 stage4 计划——本组没在查',
+))
+def box4(request):
+    s = sandbox.Sandbox(request.param, STAGE4_INPUTS)
     yield s
     s.close()
 
 
-@pytest.fixture
-def box6():
-    book = _first_book('stage6/hook.json')
+@pytest.fixture(params=_corpus_case(
+    _first_book('stage6/hook.json'),
+    label='stage6-corpus',
+    reason='盘上没有 stage6 语料——本组没在查，不是「查过没事」',
+))
+def box6(request):
+    book = request.param
     s = sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
     yield s
     s.close()
@@ -185,6 +197,37 @@ def test_stage4_apply_edit_lands_a_round_and_rebuilds_context(box4):
     assert list((box4.dir / 'stage4' / '_rounds').glob('plan_chapters.r*.json'))
     link = next(r for r in report.rules if r.rule == 'context_link')
     assert link.status != 'hit', '同批重建之后 context_link 不该红'
+
+
+def test_stage4_plan_and_context_failure_restores_the_complete_byte_set(box4, monkeypatch):
+    """A context failure after both writes must undo plan/context/history together."""
+    from novel.stages.stage4 import plan
+
+    edit = _plan_edit_of(box4)
+    goal = edit['output_chapters'][0]['chapter_goal']
+    goal['rationale'] = (goal.get('rationale') or '') + '（事务故障注入）'
+    box4.write('stage4/plan_edit.json', edit)
+    stage = box4.dir / 'stage4'
+    before = {
+        path.relative_to(stage).as_posix(): path.read_bytes()
+        for path in stage.rglob('*') if path.is_file()
+    }
+    original_context = plan.run_context
+
+    def fail_after_context(ctx):
+        original_context(ctx)
+        raise OSError('模拟 context 落盘后失败')
+
+    monkeypatch.setattr(plan, 'run_context', fail_after_context)
+    ctx = RunContext.open(str(box4.root), box4.sid, 'stage4.plan', paid=False)
+    with pytest.raises(OSError, match='context 落盘后失败'):
+        plan.run_apply_edit(ctx)
+
+    after = {
+        path.relative_to(stage).as_posix(): path.read_bytes()
+        for path in stage.rglob('*') if path.is_file()
+    }
+    assert after == before
 
 
 def test_stage4_apply_edit_with_hard_goes_to_invalid_not_formal(box4):

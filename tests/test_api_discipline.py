@@ -327,6 +327,7 @@ def test_job_conflict_maps_and_returns_409():
         '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim',
         '/api/novels/{sid}/stage6/approve',
         '/api/novels/{sid}/stage7/approve',
+        '/api/novels/{sid}/stage7/adopt-residual',
         '/api/novels/{sid}/stage2/global-review',
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',

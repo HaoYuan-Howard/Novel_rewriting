@@ -66,6 +66,7 @@ export function GateBar({ screen }: { screen: ScreenName }) {
                   label: spawn.label,
                   extra: spawn.extra,
                   mode: spawn.mode ?? null,
+                  required_inputs: resolved[0]?.required_inputs,
                   sid: doc.sid,
                   ordinal: null,
                 },

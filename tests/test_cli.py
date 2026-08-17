@@ -14,12 +14,15 @@ test_cli.py —— **唯一能把异常翻译成退出码的那一层**。
 from __future__ import annotations
 
 import io
+import json
 import sys
 from types import SimpleNamespace
 
 import pytest
 
 from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, VALUED_FLAGS
+from contracts.schema import decode_artifact
+from contracts.schema.stage7 import NameMapEdit
 from novel.cli import exit_codes as X
 from novel.cli.main import main
 from novel.errors import ApprovalRequired
@@ -48,6 +51,24 @@ def no_api_key(monkeypatch):
 
 def _run(*argv: str) -> int:
     return main(list(argv))
+
+
+def test_stage7_edit_template_is_stdout_only_and_round_trips(
+        tmp_path, capsys):
+    sid = 'template_book_1'
+    novel_dir = tmp_path / sid
+    novel_dir.mkdir()
+
+    rc = _run(
+        'run', 'stage7.rename', sid, '--emit-edit-template',
+        '--base', str(tmp_path))
+
+    assert rc == X.OK
+    raw = json.loads(capsys.readouterr().out)
+    assert raw['_schema_version'] == 1
+    NameMapEdit.model_validate(
+        decode_artifact('stage7/name_map_edit.json', raw).payload)
+    assert list(novel_dir.iterdir()) == []
 
 
 #: **每一个** (0 成本 flag, 接受它的节点) 配对——不是每个 flag 取一个代表。
@@ -217,6 +238,33 @@ def test_build_argv_already_carries_the_yes_for_a_paid_run():
     argv = N.build_argv('stage3.style', 'sid1', base='.')
     assert argv[-1] == '--yes'
     assert '--yes' not in N.build_argv('stage3.style', 'sid1', ['--check-only'], base='.')
+
+
+def test_stage4_chapters_cli_forces_refresh_and_forwards_sorted_targets(monkeypatch):
+    """真实 CLI 分派不能把 ``--chapters`` 吃掉，也不能退回可读旧缓存的口径。"""
+    from novel.cli import main as M
+    from novel.llm.cache import CachePolicy
+    from novel.stages.stage4 import plan
+
+    ctx = SimpleNamespace(node='stage4.plan', cache=CachePolicy.default())
+    observed = {}
+
+    def run_plan(got_ctx, client, *, chapters=()):
+        observed.update(ctx=got_ctx, client=client, chapters=chapters,
+                        cache=got_ctx.cache.name)
+        return SimpleNamespace(passed=True)
+
+    monkeypatch.setattr(M, '_llm_client', lambda _ctx: 'fake-client')
+    monkeypatch.setattr(M, 'render', lambda _report: 'report')
+    monkeypatch.setattr(plan, 'run_plan', run_plan)
+
+    assert M._run_stage4(ctx, ['--chapters', '5,2,5']) == X.OK
+    assert observed == {
+        'ctx': ctx,
+        'client': 'fake-client',
+        'chapters': (2, 5),
+        'cache': 'refresh-write',
+    }
 
 
 # ───────────────────── 退出码只有一张表 ─────────────────────
@@ -398,6 +446,52 @@ def test_preview_says_both_whether_it_costs_and_whether_it_writes(box, capsys):
 
 
 # ───────────────────── 其余两个子命令 ─────────────────────
+
+def test_state_joins_the_authoritative_check_badge_without_changing_overview(
+        monkeypatch, capsys):
+    import importlib
+
+    cli = importlib.import_module('novel.cli.main')
+    overview = SimpleNamespace(
+        title='合成书', sid='123',
+        stages=[SimpleNamespace(
+            done=True, stage='stage5', artifacts=[], chapters_done={})],
+    )
+    report = SimpleNamespace(
+        badge='amber',
+        counts=SimpleNamespace(unver=2, skipped=1),
+        rules=[
+            SimpleNamespace(sev='hard', status='hit'),
+            SimpleNamespace(sev='hard', status='ok'),
+            SimpleNamespace(sev='info', status='hit'),
+            SimpleNamespace(sev='info', status='hit'),
+            SimpleNamespace(sev='unver', status='unver'),
+        ],
+    )
+    monkeypatch.setattr(cli.S, 'overview', lambda _base, _sid: overview)
+    monkeypatch.setattr(cli, '_state_check_report', lambda _base, _sid, _stage: report)
+
+    assert cli._cmd_state(SimpleNamespace(base='outputs', sid='123')) == X.OK
+    out = capsys.readouterr().out
+    assert '✓ stage5  [check AMBER · hard 1 · info 2 · unver 3]' in out
+
+
+def test_state_marks_an_unavailable_check_as_unknown_instead_of_looking_green(
+        monkeypatch, capsys):
+    import importlib
+
+    cli = importlib.import_module('novel.cli.main')
+    overview = SimpleNamespace(
+        title='合成书', sid='123',
+        stages=[SimpleNamespace(
+            done=True, stage='stage5', artifacts=[], chapters_done={})],
+    )
+    monkeypatch.setattr(cli.S, 'overview', lambda _base, _sid: overview)
+    monkeypatch.setattr(cli, '_state_check_report', lambda *_args: None)
+
+    assert cli._cmd_state(SimpleNamespace(base='outputs', sid='123')) == X.OK
+    assert '✓ stage5  [check ? 校验未知]' in capsys.readouterr().out
+
 
 @pytest.mark.corpus
 def test_state_prints_the_three_state_marks(box, capsys):

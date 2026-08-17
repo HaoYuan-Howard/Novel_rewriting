@@ -21,9 +21,11 @@ from typing import Callable, Final
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING, STAGE3_STYLE_EDIT,
+    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
+    STAGE3_STYLE_EDIT,
     STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
-    STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE6_HOOK, STAGE6_HOOK_EDIT,
+    STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE5_TRIM_AUDIT,
+    STAGE6_HOOK, STAGE6_HOOK_EDIT,
     STAGE7_NAME_MAP_EDIT,
 )
 from contracts.invariants import NODES
@@ -146,13 +148,14 @@ def stage4_grounding(data: object) -> object:
             for r in (ent.get('relations') or [])),
         'secrets': sorted(
             ((s or {}).get('secret_id'), (s or {}).get('fact'),
+             tuple(sorted(map(str, (s or {}).get('character_known_by') or []))),
              tuple(sorted(map(str, (s or {}).get('setup_chapters') or []))),
              tuple(sorted(str(e.get('chapter'))
                           for e in ((s or {}).get('reader_reveal_events') or []))))
             for s in (canon.get('secrets') or [])),
         'setting': sorted((canon.get('setting') or {}).items()),
         'world_rules': sorted(
-            ((r or {}).get('rule_id'),
+            ((r or {}).get('rule_id'), (r or {}).get('kind'),
              tuple(sorted((str(v.get('effective_from_chapter')), v.get('desc'))
                           for v in ((r or {}).get('versions') or []))))
             for r in (canon.get('world_rules') or [])),
@@ -346,6 +349,11 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     },
     'stage2.global': {
         STAGE1_MAIN_TEXT: artifact_payload,
+        # ``--apply-edit`` consumes the typed human decision set as a real
+        # provenance edge.  Without this projection a just-written grounding
+        # is ``consumed_undeclared`` and the formal-write postcondition must
+        # (correctly) roll it back.
+        STAGE2_GLOBAL_EDIT: artifact_payload,
     },
     'stage2.blueprint': {
         STAGE1_MAIN_TEXT: artifact_payload,
@@ -380,6 +388,8 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE2_GLOBAL_GROUNDING: stage5_grounding,
         STAGE3_STYLE_GROUNDING: stage5_style,
         STAGE4_WRITER_CONTEXT: stage5_review_context,
+        # retain_pretrim 的人工裁决绑定完整 audit bytes；任一审计事实变化都应过期。
+        STAGE5_TRIM_AUDIT: artifact_payload,
     },
     'stage5.semantic': {
         STAGE1_MAIN_TEXT: stage5_main_text,

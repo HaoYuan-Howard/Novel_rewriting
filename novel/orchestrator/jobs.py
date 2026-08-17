@@ -378,6 +378,7 @@ def new_job_id(now: float | None = None) -> str:
 def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str], mode: str | None = None,
                follow_check: bool = True,
+               placeholders: bool = False,
                steps: Sequence[Step] | None = None) -> JobStart:
     """一个作业的**全部静态字段**。纯函数：不占键、不落事件、不起进程。
 
@@ -391,7 +392,8 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
     它等于逐步折出来的——两处一致才构造得出来（`R-11.7`：贵贱只有一处算）。
     """
     plan = list(steps) if steps is not None else build_steps(
-        node, sid, flags, base=base, mode=mode, follow_check=follow_check)
+        node, sid, flags, base=base, mode=mode, follow_check=follow_check,
+        placeholders=placeholders)
     return JobStart(
         sid=sid, node=node, mode=mode, flags=list(flags), steps=plan,
         python=sys.version, code=code_version(),

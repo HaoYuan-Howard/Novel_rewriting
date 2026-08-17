@@ -3,8 +3,9 @@
 """Stage 6 当前判据注册表。
 
 机械检查守可用性、非抄写与形态；付费语义审判守**实质矛盾**并给出吸引力排序。
-剧透、时间压缩、合成场面和重写台词本身不再构成违规。缺少当前质量审判一律 ``unver``，
-批准路只接受被审为 clear 的候选。
+剧透、时间压缩、合成场面和重写台词本身不再构成违规。当前校准 ``clear`` 是自动依据；
+缺审、过期或 ``uncertain`` 保持 ``unver``，但可由 actor / reason / 当前文本完整 SHA-256
+绑定的 ``human_verification`` 收口。当前或历史校准 ``FAIL`` 不可被普通人工批准绕过。
 """
 from __future__ import annotations
 
@@ -137,6 +138,11 @@ _metric('hook_report', '下发范围 · 各候选字数 · 原作文案段字数
         note='⚠ `candidates[].chars` 已被新契约裁掉（能 0 成本现算的字段不落盘），'
              '所以这三个数**一律现算**，不许读产物')
 
+_metric('hook_fact_attribution', '人物赠与类事实的弱字面归因读数', 'R-9.15',
+        note='抽取“人物 + 送/给/赠 + 对象”，与 Stage4 故事地图事件做同人物、同对象、'
+             '同赠与词的字面并排。**低召回/低精度，只是度量，不是矛盾门**；'
+             '未同字面命中不能自动判错，须交语义审判或人工核对。')
+
 _metric('hook_quote_shape', '引语条数 · 最长一条字数 · 对白比，与原作并排', 'R-9.5',
         note='**度量不是门，当前不给阈值。** 报告把候选与原作文案的引语形态并排展示，'
              '供人工定稿时判断；不得把它提升成引语必须逐字来自正文的机械门。')
@@ -155,9 +161,11 @@ _metric('hook_secret_literal', '与秘密原文的逐字重合条数（按读者
 _hard('hook_semantic_contradiction',
       '定稿候选不改变人物身份、关系、关键因果或故事结果', 'R-9.19',
       check_kind='semantic',
-      note='未定稿时，只在三条都没有可选的 clear 候选时命中；定稿后只判断被选文本。'
-           '剧透、时间压缩、合成场面和为真实关系重写台词不算矛盾。缺审判、过期、'
-           'coverage=uncertain 均为 unver；批准命令本身也会拒绝非 clear 候选。')
+      note='未定稿时，三条都为校准 FAIL 才命中 HARD；没有 clear 但仍有缺审/过期/'
+           'uncertain 候选则保持 UNVER。定稿后只判断被选文本。剧透、时间压缩、'
+           '合成场面和为真实关系重写台词不算矛盾。clear 可作为自动批准依据；当前'
+           'UNVER/unreviewed 只有 actor/reason/完整 subject SHA-256 绑定的人工核验才能'
+           '收口；当前或历史校准 FAIL 始终拒绝。')
 
 _info('hook_candidate_contradiction',
       '逐候选列出实质矛盾或审判不确定项，供定稿时避开', 'R-9.20',

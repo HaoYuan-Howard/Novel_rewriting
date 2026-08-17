@@ -8,7 +8,7 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 | `stage2/chapter_blueprints.json` | `ChapterBlueprints` | `stage2.blueprint` | 逐章摘要、精确原文区间、事件、保真材料与叙述信息 |
 | `stage2/global_review.json` | `GlobalReview` | `stage2.global` | 由当前全局底座确定性枚举的逐项人工复核；详见 `evaluation.md` |
 | `stage2/global_review_decisions.json` | `GlobalReviewDecisionSet` | 人工输入 | actor、理由、证据及 subject hash 乐观锁；也可经同形 API 提交 |
-| `stage2/global_edit.json` | `GlobalEdit` | 人工输入 | secret 订正决策集（`stage2.global --apply-edit` 吃它） |
+| `stage2/global_edit.json` | `GlobalEdit` | 人工输入 | Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它） |
 
 三份正式产物与两份人工决策集都使用当前 Pydantic `StrictModel`，未知字段拒收。运行时不升级旧形状，也不为
 缺失字段补默认值；需要保留的输入必须先按本文件的当前 schema 重新生成。
@@ -155,38 +155,52 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 `output`、`model`、`cache_policy`、`fields[]`、`before_metrics`、`after_metrics`；其中指标均为
 `beats`、`hinges`、`present_names` 三个计数。
 
-## 三之二、`global_edit.json`（secret 的 0 成本人工订正）
+## 三之二、`global_edit.json`（Stage2 typed 事实的 0 成本人工订正）
 
-`reader_reveal_events`、知情人或 secret 事实抽错时的**契约内**修正入口。此前本层没有
-任何人工决策集：`--purge-role` 只修 `role/fate`、`--renormalize` 只重算代码派生字段，
-剩下的路是手改产物——既没有 schema 管形状，也在来源账上留不下「这是人改的」。
+`reader_reveal_events`、知情人、secret 事实、world rule 或人物称谓抽错/漏抽时的
+**契约内**修正入口。此前只能逐格订正已有记录，因而三类真实问题仍不可达：漏掉的规则不能新增；
+整条无源称谓不能删除；一条混合了多个揭示时点的复合 secret 不能拆开（下游按整条 secret 的
+最早 reveal 放出整个 `fact`，仅给它追加多个 reveal 仍会过早泄露后半条事实）。
 
-`GlobalEdit` 只有一个键 `secrets: SecretPatch[]`，每条补丁按 `secret_id` 定位：
+`GlobalEdit` 同时提供旧的细粒度补丁与三个完整替换面：
 
-| 字段 | 类型 | 语义 |
+| 键 | 类型 | 语义 |
 |---|---|---|
-| `secret_id` | `secret_\d{2}` | 定位键，必须在盘上已有 |
-| `fact` | `str \| null` | `null` = 这一格人没动过 |
-| `character_known_by` | `str[] \| null` | 整字段替换，不做组内合并 |
-| `setup_chapters` | `int[] \| null` | ⚠ `[]` 是「冷揭示」的合法值，与 `null` 不同形 |
-| `reader_reveal_events` | `ReaderRevealEvent[] \| null` | 整字段替换 |
+| `secrets` | `SecretPatch[]` | 按已有 `secret_id` 字段级订正；`null` = 该格未动，`setup_chapters=[]` = 合法冷揭示 |
+| `world_rules` | `WorldRulePatch[]` | 按已有 `rule_id` 改 `kind` 或整份 `versions` |
+| `characters` | `CharacterEnumPatch[]` | 按 `char_id` 改 `name_distinctiveness` |
+| `addresses` | `AddressContextPatch[]` | 按 `char_id + address_index` 改已有项的 `context` |
+| `secrets_replace` | `Secret[] \| null` | 完整替换 `canon.secrets`；可拆分、新增、删除；ID 必须唯一 |
+| `world_rules_replace` | `WorldRule[] \| null` | 完整替换 `canon.world_rules`；可新增、删除；ID 必须唯一 |
+| `addresses_replace` | `CharacterAddressReplacement[]` | 每项按 `char_id` 完整替换其 `address`；列表至少一条，可改 `surface/by/context/from_chapter` |
 
-**只订正已有的 secret，不新增也不删除**：新增要凭空发明它的全部时间线（那是一次抽取），
-删除等于宣称这条秘密不存在（而逐章剧透闸门按 secret 全集开）。两者都走重新抽取那条路。
+`secrets_replace` / `world_rules_replace` 的 `null` 表示「没动这一 subject」，显式 `[]` 表示
+「经复核后删除全集」；两者不能合成一个默认空列表。`addresses_replace[].address` 不允许空列表，
+因为 `Character.address` 的落盘契约至少一条。
 
-四条拒收，各挡一种**不会报错**的错：
+所有拒收都发生在候选内存修改、正式写盘、`.INVALID` 与 `_rounds/` 归档**之前**：
 
 | 拒收 | 落点 | 理由 |
 |---|---|---|
-| 未知字段 / 空补丁 / 同一 secret 两份补丁 | 载体（`GlobalEdit`） | 拼错一个键被静默忽略时，「改过了」与「什么都没改」在盘上同形 |
-| `secret_id` 不在盘上 | `TerminalState`，一个字节不落盘 | 错的是决策集本身，不该给它建一份 `.INVALID` 归档 |
-| 章号不在本书章集合内 | `TerminalState`，一个字节不落盘 | 越界的揭示章让逐章剧透闸门（`R-6.3`）**永不触发**，而产物那一格看着正常 |
-| 打完补丁仍有 HARD | `.INVALID` + `GateBlocked` | 与生成路同一道闸；正式全书底座不被覆盖 |
+| 未知字段 / 空编辑 / 重复 ID 或 subject | 载体（`GlobalEdit`） | 顺序不能决定哪份人工决定生效 |
+| 同一 secret/world-rule 集合既逐项 patch 又完整 replace | 载体（`GlobalEdit`） | 两个写口争同一 subject，结果依赖应用顺序 |
+| 同一人物的 address 既按下标 patch 又完整 replace | 载体（`GlobalEdit`） | replacement 会改变下标含义，必须二选一 |
+| 逐项 patch 的目标不存在；replacement 的人物目标不存在 | `TerminalState` | 错的是决策集，不该给它建 `.INVALID` |
+| replacement/patch 中的章号不在本书章集合 | `TerminalState` | 越界 reveal 会让 `R-6.3` 永不触发 |
+| `character_known_by` 或 `address.by` 的 `char_\d+` 不在人物 registry | `TerminalState` | 保留形是外键；其他知情群体字面仍按自由文本放行 |
+| 应用后仍有 HARD | `.INVALID` + `GateBlocked` | 与生成路同一道闸；正式全书底座不被覆盖 |
 
 应用后重走 `normalize_global`（含 `_prune_setups`）、当前判据与落盘闸门，旧轮进 `_rounds/`。
 来源账走 `rewrite_provenance(by='--apply-edit')`：`prompts`/`model` 一字不动、`inputs` 换成
 本次真读到的（含 `stage2/global_edit.json` 那条边）、标 `partial_rewrite`——这一份此后是
-**混版的**，`entities`/`arc` 出自当初那次付费产出，被改的 secret 是人给的。
+**混版的**，未编辑字段出自当初那次付费产出，被替换/订正的 typed facts 是人给的。
+
+成功落盘会从新 `GlobalGrounding` 重新枚举 `global_review` 必审 surface。人工决定只在
+`item_id + kind + subject_path + subject_sha256` 四者均未变时继承；拆分 secret、新增规则或重建
+address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不能跟随到新时间线。
+
+`global_edit.json` 仍为 schema v1：本次只增加可选键，所有旧 v1 决策集仍按原语义严格读取，
+没有需要伪造的落盘默认值，也没有旧 payload 需要迁移；因此不升 artifact version。
 
 ⚠ 把揭示章往前改到埋点章之前时，`_prune_setups` 会裁掉埋点章，而 `secret_setup_order`
 （HARD）断言的正是那个裁剪计数 ⇒ **照样进 `.INVALID`**，0 成本出路是 `--renormalize`。
@@ -200,7 +214,7 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 - `stage2.global`：主路径生成全书抽取；`--purge-role` 付费重划 `role/fate`；
   `--resample` 仅在已有 `global_grounding.INVALID.json` 时绕过同参数缓存，付费重采整份响应；
   `--renormalize` 仅对**已符合当前 schema**的产物重算代码派生字段；
-  `--apply-edit <路径>` 吃 `global_edit.json` 落 secret 的 0 成本人工订正（见 §三之二）。
+  `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）。
 - `stage2.blueprint`：逐章生成；`--chapters` 定向付费重生成；`--renormalize` 重算当前
   schema 的原文定位与人物引用；`--check-only` 联合读取两份产物复检。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。

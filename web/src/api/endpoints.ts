@@ -477,8 +477,10 @@ export const realApi: Api = {
       n(sid) + '/stage5/trim/' + o + '/retain-pretrim', req)),
   approveHook: async (sid, req) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/approve', req)),
-  approveNames: async (sid) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage7/approve', {})),
+  approveNames: async (sid, req) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage7/approve', req)),
+  adoptResidual: async (sid, req) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage7/adopt-residual', req)),
   uploadCorpus: async (file) => {
     const raw = await postRaw<{ sid: string; job: BackendJobRecord }>(
       '/upload?filename=' + encodeURIComponent(file.name),

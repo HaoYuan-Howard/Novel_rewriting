@@ -413,7 +413,9 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
             f'盘上有比正式稿更晚、被闸门拦下的稿：'
             f'{", ".join(paths.invalid_of(a.rel) for a in invalid)}。'
             f'⚠ 队列会按原命令**重跑本节点**（付费节点=重新付费）；'
-            f'想先省钱就手动跑 0 成本提升路 `--revalidate`，或确认后再排队')
+            '想先省钱就手动跑 0 LLM 提升路 '
+            '`--revalidate --actor <id> --reason <why>`（同轮重判并留不可变审计），'
+            '或确认后再排队')
     unreadable = [a for a in mine if not a.readable]
     if unreadable:
         return RESUME_REDO, (

@@ -398,17 +398,28 @@ class AddressContextPatch(StrictModel):
     context: Literal[ADDRESS_CONTEXT]
 
 
+class CharacterAddressReplacement(StrictModel):
+    """Replace one character's complete address surface.
+
+    A positional patch cannot add an omitted address, remove an invented one,
+    or correct ``surface``/``by``/``from_chapter``.  The replacement is keyed
+    by the stable character id and deliberately carries the whole typed list.
+    """
+
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+    address: list[Address] = Field(min_length=1)
+
+
 class GlobalEdit(StrictModel):
     """`stage2/global_edit.json` —— typed Stage2 human corrections.
 
-    【它解决的是什么】`reader_reveal_events` / 知情人 / secret 事实抽错时，此前
-    **契约内没有任何人工决策集可改**：`--purge-role` 只修 role/fate、`--renormalize`
-    只重算代码派生字段，剩下的路是手改产物——那既没有 schema 管形状，
-    也在来源账上留不下「这是人改的」。
+    【它解决的是什么】细粒度 patch 适合订正已有事实的一格，却无法补漏、删除幻觉项，
+    也无法把拥有不同读者揭示时点的复合 secret 拆成独立记录。本载体因此同时提供
+    existing-row patches 与 typed complete replacements；后者允许有证据的新增/删除/拆分，
+    并由运行时在任何写盘前校验全部外键与章号。
 
-    ⚠ **只订正已有的 secret，不新增也不删除。** 新增要凭空发明 `secret_id`
-    与它的全部时间线，那是一次抽取而不是一次订正；删除等于宣称「这条秘密不存在」，
-    而下游的逐章剧透闸门是按 secret 全集开的。两者都该走重新抽取那条路。
+    ⚠ 同一 subject 的 patch 与 replacement 严格互斥。否则 replacement 会重定义集合或
+    address 下标，而最后生效的是哪份人工决定将取决于实现遍历顺序。
     ⚠ 编辑文件落在书目录里、进 `ARTIFACTS`、被 `store.read` 当上游边记账，
     **形状即契约**（照 stage3/4/6/7 四份 `*_edit.json` 的先例）。
     """
@@ -418,10 +429,30 @@ class GlobalEdit(StrictModel):
     characters: list[CharacterEnumPatch] = Field(default_factory=list)
     addresses: list[AddressContextPatch] = Field(default_factory=list)
 
+    #: Complete-set replacements are nullable rather than defaulting to ``[]``:
+    #: an explicit empty list means "delete every row", while ``null`` means
+    #: that this subject was not edited.  That distinction is required for
+    #: omission repair and cannot be recovered after parsing.
+    secrets_replace: list[Secret] | None = None
+    world_rules_replace: list[WorldRule] | None = None
+    addresses_replace: list[CharacterAddressReplacement] = Field(
+        default_factory=list)
+
     @model_validator(mode='after')
     def _one_patch_per_subject(self) -> GlobalEdit:
-        if not (self.secrets or self.world_rules or self.characters or self.addresses):
+        if not (
+            self.secrets or self.world_rules or self.characters or self.addresses
+            or self.secrets_replace is not None
+            or self.world_rules_replace is not None
+            or self.addresses_replace
+        ):
             raise ValueError('global edit must contain at least one typed patch')
+        if self.secrets_replace is not None and self.secrets:
+            raise ValueError(
+                'canon.secrets cannot be patched and completely replaced in one edit')
+        if self.world_rules_replace is not None and self.world_rules:
+            raise ValueError(
+                'canon.world_rules cannot be patched and completely replaced in one edit')
         got = [patch.secret_id for patch in self.secrets]
         if len(set(got)) != len(got):
             dup = sorted({sid for sid in got if got.count(sid) > 1})
@@ -435,6 +466,28 @@ class GlobalEdit(StrictModel):
         ):
             if len(keys) != len(set(keys)):
                 raise ValueError(f'duplicate {label} patches are order-dependent')
+
+        replacement_characters = [row.char_id for row in self.addresses_replace]
+        if len(replacement_characters) != len(set(replacement_characters)):
+            raise ValueError('duplicate complete address replacements are order-dependent')
+        patched_address_characters = {row.char_id for row in self.addresses}
+        conflicts = sorted(set(replacement_characters) & patched_address_characters)
+        if conflicts:
+            raise ValueError(
+                f'character address cannot be patched and completely replaced together: '
+                f'{conflicts}')
+
+        for label, rows, key in (
+            ('secret', self.secrets_replace, 'secret_id'),
+            ('world rule', self.world_rules_replace, 'rule_id'),
+        ):
+            if rows is None:
+                continue
+            ids = [str(getattr(row, key)) for row in rows]
+            if len(ids) != len(set(ids)):
+                duplicate = sorted({item for item in ids if ids.count(item) > 1})
+                raise ValueError(
+                    f'duplicate {label} ids in complete replacement: {duplicate}')
         return self
 
 

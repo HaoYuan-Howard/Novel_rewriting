@@ -66,7 +66,7 @@ def _private_corpus(root: Path, *, genres: int = 4, stale_stage2: int | None = N
                 'text': text,
             })
             _write(book / f'stage5/deep/ch{ordinal:02d}.json', {
-                '_schema_version': 2,
+                '_schema_version': 3,
                 'segments': [{'slot': 's01', 'text': f'改写候选{token}，保留线索。'}],
             })
         _write(book / 'stage1/main_text.json', {
@@ -86,7 +86,7 @@ def _private_corpus(root: Path, *, genres: int = 4, stale_stage2: int | None = N
             }],
         } for index in range(25)]
         _write(book / 'stage2/global_grounding.json', {
-            '_schema_version': 1 if stale_stage2 == book_number else 2,
+            '_schema_version': 1 if stale_stage2 == book_number else 3,
             'canon': {'secrets': secrets, 'world_rules': rules},
         })
         chapter_styles = [{
@@ -98,7 +98,7 @@ def _private_corpus(root: Path, *, genres: int = 4, stale_stage2: int | None = N
             'surface_habits': [f'先动作后判断的章级习惯{book_number}_{ordinal}'],
         } for ordinal in range(1, 27)]
         _write(book / 'stage3/style_grounding.json', {
-            '_schema_version': 2,
+            '_schema_version': 3,
             'chapter_styles': chapter_styles,
         })
     inventory = {
@@ -257,6 +257,55 @@ def test_schema_neutral_bundle_adapter_needs_no_pipeline_or_paid_rebuild(
         '--subject-sha256', case.subject_sha256,
     ]) == 0
     assert '私有候选' in capsys.readouterr().out
+
+
+def test_schema_neutral_bundle_registers_only_abilities_present_in_inventory(tmp_path):
+    ability = 'secret_timeline'
+    families = []
+    for number in range(100):
+        payload = {
+            'ability': ability,
+            'question': '按冻结口径判断揭示时点',
+            'panels': [
+                {'role': '来源', 'text': f'私有来源 {number}'},
+                {'role': '候选', 'text': f'私有候选 {number}'},
+            ],
+        }
+        artifact = f'private-subjects/secret-{number:03d}.json'
+        _write(tmp_path / artifact, payload)
+        raw = (tmp_path / artifact).read_bytes()
+        families.append({
+            'family_id': f'fam-secret-{number:03d}',
+            'ability': ability,
+            'genre': f'genre-{number % 4}',
+            'variants': [{
+                'variant_id': f'v_{number:03d}',
+                'subject': {
+                    'artifact': artifact,
+                    'artifact_sha256': hashlib.sha256(raw).hexdigest(),
+                    'subject_sha256': _subject_sha(payload),
+                },
+            }],
+        })
+    inventory = PrivateBundleInventory.model_validate({
+        'inventory_version': 1,
+        'dataset_id': 'partial-private-v1',
+        'rubric_sha256': _sha('locked rubric'),
+        'created_at': '2026-08-16T00:00:00Z',
+        'families': families,
+    })
+
+    result = build_bundle_catalog(tmp_path, inventory)
+
+    assert result.audit.status == 'ready', result.audit
+    by_ability = {row.ability: row for row in result.audit.abilities}
+    assert set(by_ability) == set(EVALUATOR_ABILITIES)
+    assert by_ability[ability].selected_cases == 100
+    assert all(row.selected_cases == 0 and not row.blockers
+               for name, row in by_ability.items() if name != ability)
+    assert result.catalog is not None
+    assert len(result.catalog.cases) == 100
+    assert {row.ability for row in result.catalog.cases} == {ability}
 
 
 def test_insufficient_genres_and_stale_schema_emit_honest_blockers_without_catalog(

@@ -18,7 +18,10 @@ import warnings
 
 from fastapi import APIRouter, Depends
 
-from contracts.schema.api import DraftEditRequest, HookApproveRequest, TrimResolutionRequest
+from contracts.schema.api import (
+    DraftEditRequest, HookApproveRequest, NameMapApproveRequest,
+    ResidualAdoptionRequest, TrimResolutionRequest,
+)
 from contracts.schema.evaluation import GlobalReviewDecisionSet
 from contracts.schema.orchestration import JobRecord
 from contracts.schema.stage5 import ChapterResponse
@@ -162,15 +165,33 @@ def approve_hook(
 
 @router.post('/{sid}/stage7/approve', response_model=JobRecord)
 def approve_names(
+    request: NameMapApproveRequest,
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> JobRecord:
-    '''人名表定稿（`stage7.approve`，无参——终态不是待定）。
+    '''人名表定稿：actor/reason + 当前决策面 SHA-256 乐观锁。
 
-    盖章条件同文案定稿：动作**落了**（exit 0/1）就盖 `s7`——校验仍可能有
-    `rn_txt_stale` 这类硬红，人定稿的语义正是「看过红行之后拍板」。
+    后端会在任何归档/写盘前复核 subject SHA-256，并拒绝仍有 HARD 的人物表；
+    只有审批作业实际完成才盖 `s7`。
     '''
-    record = jobs.run(base, 'stage7.approve', sid)
+    record = jobs.run(
+        base, 'stage7.approve', sid,
+        ['--actor', request.actor,
+         '--reason', request.reason,
+         '--subject-sha256', request.subject_sha256])
     if _completed(record):
         _stamp(base, sid, 's7')
     return record
+
+
+@router.post('/{sid}/stage7/adopt-residual', response_model=JobRecord)
+def adopt_residual(
+    request: ResidualAdoptionRequest,
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> JobRecord:
+    """Adopt only conflict-free high-confidence residual suggestions."""
+    return jobs.run(
+        base, 'stage7.rename', sid,
+        ['--adopt-residual', request.confidence],
+    )

@@ -1,3 +1,5 @@
+import type { RequiredActionInput } from '@/types/jobs'
+
 /**
  * /api/enums —— 除 vocabulary.ts 里那几个核心枚举外，其余枚举一律运行时从这里取，
  * 不硬编码进前端。后端改了枚举，前端不该跟着改代码。
@@ -16,6 +18,8 @@ export interface EnumAction {
   writes?: string
   writes_disk?: boolean
   needs_value?: string | null
+  /** Backend-derived missing NodeSpec values to collect before execution. */
+  required_inputs?: RequiredActionInput[]
 }
 
 export interface EnumJobKind {

@@ -21,12 +21,7 @@ from fastapi.testclient import TestClient          # noqa: E402
 
 from novel.api.app import UI_HEADER, create_app    # noqa: E402
 from tests import corpus, sandbox                  # noqa: E402
-
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(corpus.corpus_root() is None,
-                       reason='盘上没有语料——这一批**没在查**，不是「查过没事」'),
-]
+from tests.markers import corpus_params             # noqa: E402
 
 #: 九个读屏一次全要的产物（stage7 的 rows 与 stage5 屏还要成稿与验收）。
 INPUTS = ('stage1/main_text.json', 'stage1/hook_copy.json',
@@ -55,9 +50,11 @@ def _stage5_rels(book: str) -> tuple[str, ...]:
         and '_rounds' not in a.rel and a.rel.endswith('.json')))
 
 
-@pytest.fixture
-def box():
-    book = books()[0]
+@pytest.fixture(params=corpus_params(
+    books()[:1], reason='盘上没有读屏语料——这些集成用例没在查'),
+    ids=lambda b: b[:10] if b else 'no-corpus')
+def box(request):
+    book = request.param
     s = sandbox.Sandbox(book, INPUTS + _stage5_rels(book))
     yield s
     s.close()
@@ -72,6 +69,14 @@ def no_api_key(monkeypatch):
 @pytest.fixture
 def client(box):
     with TestClient(create_app(box.root)) as c:
+        c.headers.update({UI_HEADER: '1'})
+        yield c
+
+
+@pytest.fixture
+def bare_client(tmp_path):
+    """Empty synthetic output root for carrier/error-shape contracts."""
+    with TestClient(create_app(tmp_path)) as c:
         c.headers.update({UI_HEADER: '1'})
         yield c
 
@@ -208,9 +213,9 @@ def test_an_ordinal_outside_the_judged_set_is_404(client, box):
     assert r.status_code == 404 and r.json()['kind'] == 'UpstreamMissing'
 
 
-def test_an_unknown_book_is_404_on_every_screen(client):
+def test_an_unknown_book_is_404_on_every_screen(bare_client):
     for tail in (*SCREENS, 'inbox'):
-        r = client.get(f'/api/novels/9999999999999999999/{tail}')
+        r = bare_client.get(f'/api/novels/9999999999999999999/{tail}')
         assert r.status_code == 404, tail
         assert r.json()['kind'] == 'UpstreamMissing'
 
@@ -318,17 +323,17 @@ def test_a_corrupt_artifact_is_409_not_404(client, box, tail):
 # ───────────────────────── 四、参数不合法 ⇒ 400 ─────────────────────────
 
 @pytest.mark.parametrize('sid', ['C:', 'a b ', 'x%5Cy'])
-def test_an_illegal_sid_is_400_because_the_client_sent_it(client, sid):
+def test_an_illegal_sid_is_400_because_the_client_sent_it(bare_client, sid):
     """`paths.check_sid` 挡的每一种走法都是一个任意目录读写入口，产地是客户端 ⇒ 400。"""
     for tail in ('stage2/global', 'stage6', 'stage7', 'inbox'):
-        r = client.get(f'/api/novels/{sid}/{tail}')
+        r = bare_client.get(f'/api/novels/{sid}/{tail}')
         assert r.status_code == 400, (sid, tail)
         assert r.json()['kind'] == 'BadRequest'
 
 
-def test_a_non_integer_ordinal_is_422_from_the_carrier(client, box):
+def test_a_non_integer_ordinal_is_422_from_the_carrier(bare_client):
     """`:o` 的类型闸在 FastAPI 载体层——不是 404，也绝不是 500。"""
-    assert client.get(f'/api/novels/{box.sid}/stage7/abc').status_code == 422
+    assert bare_client.get('/api/novels/123/stage7/abc').status_code == 422
 
 
 # ───────────────────────── 五、`R-11.3`：一个字节都不写 ─────────────────────────

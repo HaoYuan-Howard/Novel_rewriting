@@ -40,6 +40,7 @@ describe('CheckPanel', () => {
               rule: 'hinge_in_hole',
               sev: 'hard',
               item: 'ch11',
+              output_ordinal: 11,
               detail: '本书实例 **不解析 Markdown**',
               evidence: ['原字节'],
               fix_args: {},
@@ -64,11 +65,16 @@ describe('CheckPanel', () => {
       passed: false,
       counts: { ok: 0, hit: 1, unver: 0, skipped: 0 },
     })
-    renderRoute(<CheckPanel screen="stage5" />)
+    const jump = vi.fn()
+    renderRoute(<CheckPanel screen="stage5" onJumpChapter={jump} />)
 
     expect(await screen.findByText('稳定规则解释只在 note 出现。')).toBeVisible()
     expect(screen.getByText('本书实例 **不解析 Markdown**')).toBeVisible()
     expect(screen.getByText('已豁免：人工确认保留')).toBeVisible()
+    const chapter = screen.getByRole('button', { name: '第 11 章' })
+    expect(chapter).toBeVisible()
+    chapter.click()
+    expect(jump).toHaveBeenCalledWith(11)
     expect(screen.getByText('不能自动重跑：缺少 --chapters 的动态章号')).toBeVisible()
   })
 })

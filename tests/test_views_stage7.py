@@ -19,6 +19,7 @@ from novel.errors import UpstreamMissing
 from novel.stages.stage7.subs import apply_subs
 from novel.views.stage7 import stage7_view
 from tests import corpus, sandbox
+from tests.markers import corpus_params
 
 BASE_INPUTS = ('stage1/main_text.json', 'stage6/hook.json', 'stage7/name_map.json')
 
@@ -35,14 +36,9 @@ def _drafts_of(book: str) -> tuple[str, ...]:
         and '_rounds' not in a.rel and a.rel.endswith('.json')))
 
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        not books(), reason='盘上没有 stage7 语料——这几条**没在查**，不是「查过没事」'),
-]
-
-
-@pytest.fixture(params=books(), ids=lambda b: b[:10])
+@pytest.fixture(params=corpus_params(
+    books(), reason='盘上没有 stage7 语料——这些集成用例没在查'),
+    ids=lambda b: b[:10] if b else 'no-corpus')
 def box(request):
     s = sandbox.Sandbox(request.param, BASE_INPUTS + _drafts_of(request.param))
     yield s
@@ -119,6 +115,11 @@ def test_a_missing_artifact_is_a_terminal_state(box):
     (box.dir / 'stage7' / 'name_map.json').unlink()
     with pytest.raises(UpstreamMissing):
         stage7_view(box.root, box.sid)
+
+
+def test_stage7_view_rejects_an_unknown_synthetic_book(tmp_path):
+    with pytest.raises(UpstreamMissing):
+        stage7_view(tmp_path, '9999999999999999999')
 
 
 def test_the_view_writes_nothing(box):

@@ -31,6 +31,9 @@ stage6/hook_edit.json        人工编辑一条候选或定稿的决策集
 stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
 
+`hook.json` 与轮次归档当前为 **schema v3**；登记的 v2→v3 迁移只补候选重试账与
+`Finding.output_ordinal=null` 的中性默认。`hook_edit.json` 为 v1 人工输入，semantic 产物为 v2。
+
 ### 2.1 `hook.json`
 
 | 字段 | 类型 | 说明 |
@@ -50,7 +53,7 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 | `approach` | 枚举 | 三个当前策略之一，见 §三 |
 | `text` | 非空 `str` | 归一后的文案字节 |
 | `mech` | `Mech` | 标点、引号、分段归一的计数 |
-| `findings` | `Finding[]` | 该候选的机械判定 |
+| `findings` | `Finding[]` | 该候选的机械判定；候选不属于正文章，`output_ordinal` 恒为 `null` |
 
 `ApprovedHook = Candidate + origin='human' + resolution`。`resolution` 必须记录自报
 `actor`（不是认证身份）、非空 `reason`、定稿文本的完整 `subject_sha256`、
@@ -59,6 +62,17 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 `hook_edit.json` 的 `subject_sha256` 必须绑定经过本书标点、引号与分段归一链后的定稿文本；
 校验发生在 `run_apply_edit` 写盘前，并复用与普通候选批准相同的 calibrated FAIL/
 历史 FAIL 闸，不能用 raw 上传字节的哈希或普通人工说明绕过。
+
+`HookProvenance.params` 除初始 `max_tokens` 外，还冻结单候选重试的 max tokens、固定一次上限、
+`low` effort 与 `thinking=false`；`candidate_retries[]` 逐条保存 approach、失败规则/证据指纹、
+user/response 指纹、前后 HARD 数、cache policy、状态、是否采纳与失败理由。发生重试时
+`prompts.HOOK_RETRY_SYS` 必须存在；没有脏候选时该键与历史均为空。
+
+初始三候选归一并机械判定后，每条命中 HARD 的候选恰好获得一次 refresh-write 定向重试；
+请求只允许返回原 approach，并看见完整事实包、整组三候选和该候选的具体 HARD 证据。只有重试后
+HARD 数严格下降且文本不与另两条重复时才替换该候选和整组 rationale；wrong approach、请求失败、
+重复或 HARD 未下降均保留已经付费取得的初始候选，并把原因写入重试账。调用数因此是
+`1 + 初始脏候选数`，不再把“初始一次调用”误写成整条路径的成本上限。
 
 ### 2.2 `semantic_N.json`
 
@@ -150,6 +164,12 @@ validator 必须确认：
 coverage 不足、两名 judge 分歧或缺证据均降为 UNVER，进 `verification` 清单；
 人可在逐项核对后以上述 actor/reason/hash 路径记 `human_verification`。但已校准的
 FAIL/实质矛盾只能改字形成新主体，不能由普通定稿绕过。
+
+`--revalidate --actor <id> --reason <why>` 与 `--apply-edit` 不能互换：前者对活动 `.INVALID`
+重建派生字段、重判并强审计提升，保留原 prompts/model/inputs 与生成轮次，记录 raw/canonical
+SHA-256、RFC 6901 改动路径和 `edited_by_human`；后者消费 v1 `hook_edit.json`，归档当前正式
+hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本身份自动过期。两条都是 0 次 LLM
+调用，但 apply-edit 的人工内容工作量不等于零。
 
 ### 5.1 `stage6/wontfix.json` —— 语义结论的人工闭环（2026-08-15）
 

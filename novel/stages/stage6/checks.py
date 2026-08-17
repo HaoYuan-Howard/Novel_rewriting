@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 18 条**机械**判据的实现。行在 `contracts/judges/stage6.py`（`Q-12`）。
+checks.py —— 19 条**机械**判据的实现。行在 `contracts/judges/stage6.py`（`Q-12`）。
 （另 3 条 `check_kind='semantic'` 的产地在 `semantic.outcomes`——付费审判读盘上产物，
 与本模块的 0 成本判据在 `hook._judge_artifact` 合并成同一份报告。）
 
@@ -16,13 +16,16 @@ checks.py —— 18 条**机械**判据的实现。行在 `contracts/judges/stag
 """
 from __future__ import annotations
 
+import re
+
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.core.bands import ending_shape, sep_band_of_text
 from novel.core.facts import locate_secret, num_unit_keys, secret_keywords
 from novel.core.measure import measure
 from novel.core.naming import invented_names, name_stems
-from novel.core.text import TERMINAL_PUNCT, norm, window_overlap
+from novel.core.spans import lcs
+from novel.core.text import TERMINAL_PUNCT, norm, norm_index, window_overlap
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage6.measure import hidden_secrets, quote_stats
 from novel.stages.stage6.prompts import Material
@@ -44,6 +47,35 @@ TRANSCRIBE_MAX = 0.10
 
 #: 文案长度下限（内容字符）。低于它整份早退，**其余判据一条都不跑**。
 EMPTY_MIN = 20
+
+
+def _lcs_detail(candidate: str, reference: str, *, reference_name: str) -> tuple[str, list[str]]:
+    """把归一串的 LCS 确定性回映到两侧原始字节，供报告与定向重试直接定位。"""
+    cand_norm, cand_index = norm_index(candidate)
+    ref_norm, ref_index = norm_index(reference)
+    cand_start, length = lcs(cand_norm, ref_norm)
+    if length <= 0:
+        return '最长公共子串 norm=0（没有可回映片段）', []
+    fragment = cand_norm[cand_start:cand_start + length]
+    ref_start = ref_norm.find(fragment)
+    if ref_start < 0:  # lcs 的后置条件；保留显式说明，绝不伪造原始偏移。
+        return f'最长公共子串 norm={length}，但无法回映 {reference_name} 原始字节', []
+    cand_raw_start = cand_index[cand_start]
+    cand_raw_end = cand_index[cand_start + length - 1] + 1
+    ref_raw_start = ref_index[ref_start]
+    ref_raw_end = ref_index[ref_start + length - 1] + 1
+    cand_raw = candidate[cand_raw_start:cand_raw_end]
+    ref_raw = reference[ref_raw_start:ref_raw_end]
+
+    def shown(value: str) -> str:
+        return value if len(value) <= 80 else value[:77] + '…'
+
+    return (
+        f'最长公共子串 norm={length}；候选 raw[{cand_raw_start}:{cand_raw_end}]='
+        f'{shown(cand_raw)!r}；{reference_name} raw[{ref_raw_start}:{ref_raw_end}]='
+        f'{shown(ref_raw)!r}',
+        [cand_raw[:80]],
+    )
 
 
 def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | None,
@@ -78,16 +110,21 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
     if src_hook:
         ov = window_overlap(body, src_hook)          # 无豁免
         if ov is not None and ov > REUSE_MAX:
+            overlap_detail, overlap_evidence = _lcs_detail(
+                body, src_hook, reference_name='原作文案')
             fs.append(finding('hook_reuses_source',
                               detail=f'与原作文案段的 20 字窗口重合率 {ov:.1%}'
-                                     f'（上限 {REUSE_MAX:.0%}）——这是重写，不是改标点',
-                              evidence=[f'{ov:.3f}']))
+                                     f'（上限 {REUSE_MAX:.0%}）——这是重写，不是改标点；'
+                                     f'{overlap_detail}',
+                              evidence=overlap_evidence or [f'{ov:.3f}']))
     ovb = window_overlap(body, lead_text)
     if ovb is not None and ovb > TRANSCRIBE_MAX:
+        overlap_detail, overlap_evidence = _lcs_detail(
+            body, lead_text, reference_name='开篇正文')
         fs.append(finding('hook_transcribes_body',
                           detail=f'与开篇正文的 20 字窗口重合率 {ovb:.1%}'
-                                 f'——文案在誊抄正文，不是在提炼',
-                          evidence=[f'{ovb:.3f}']))
+                                 f'——文案在誊抄正文，不是在提炼；{overlap_detail}',
+                          evidence=overlap_evidence or [f'{ovb:.3f}']))
 
     # ── ③ 发明越界：人名 / 数字 ─────────────────────────────────────────────
     #
@@ -231,8 +268,76 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
     return fs
 
 
+_ATTRIBUTION_VERBS = ('送给', '赠给', '交给', '给了', '送了', '赠了', '给', '送', '赠')
+
+
+def _character_names(mat: Material) -> list[str]:
+    chars = (((mat.story_truth or {}).get('entities') or {}).get('characters') or {})
+    names: set[str] = set()
+    for character in chars.values():
+        if not isinstance(character, dict):
+            continue
+        if canonical := str(character.get('canonical') or '').strip():
+            names.add(canonical)
+        for address in character.get('address') or []:
+            if isinstance(address, dict) and (surface := str(address.get('surface') or '').strip()):
+                names.add(surface)
+    return sorted(names, key=lambda item: (-len(item), item))
+
+
+def _fact_attribution_probe(text: str, mat: Material) -> list[tuple[str, str, str, bool]]:
+    """弱字面探针：人物 + 赠与动词 + 对象；只记账，不作真假裁决。"""
+    truth_events = [
+        str(event)
+        for chapter in mat.story_map
+        for event in (chapter.get('events') or [])
+        if str(event).strip()
+    ]
+    out: list[tuple[str, str, str, bool]] = []
+    seen: set[tuple[str, str, str]] = set()
+    verbs = '|'.join(re.escape(verb) for verb in _ATTRIBUTION_VERBS)
+    for name in _character_names(mat):
+        pattern = re.compile(
+            re.escape(name) + rf'[^。！？\n]{{0,8}}?(?:{verbs})'
+            r'(?P<object>[^，。！？；：\n]{1,12})')
+        for match in pattern.finditer(text):
+            obj = match.group('object').strip(' “”—-')
+            fragment = match.group(0)
+            key = (name, obj, fragment)
+            if not obj or key in seen:
+                continue
+            seen.add(key)
+            supported = any(
+                name in event and obj in event
+                and any(verb in event for verb in _ATTRIBUTION_VERBS)
+                for event in truth_events
+            )
+            out.append((name, obj, fragment, supported))
+    return out
+
+
+def _fact_attribution_metric(
+    texts: list[tuple[str, str, list[Finding]]], mat: Material,
+) -> Finding:
+    rows = [(label, *_row) for label, text, _fs in texts
+            for _row in _fact_attribution_probe(text, mat)]
+    supported = sum(1 for _label, _name, _obj, _frag, ok in rows if ok)
+    samples = [
+        f'{label}:{name}→{obj}（{"故事地图有同字面" if ok else "故事地图未同字面命中"}）'
+        for label, name, obj, _fragment, ok in rows[:8]
+    ]
+    detail = (
+        f'弱事实归因探针抽到 {len(rows)} 条“人物 + 送/给/赠 + 对象”，'
+        f'{supported} 条在 Stage4 故事地图事件中有同人物、同对象和赠与词字面支持'
+        + (f'：{samples}' if samples else '。本轮未抽到可比短语')
+        + '。这是低召回/低精度度量，不是矛盾门；未命中必须交语义审判或人工核对。'
+    )
+    return finding('hook_fact_attribution', detail=detail,
+                   evidence=[fragment for _label, _name, _obj, fragment, _ok in rows[:8]])
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 一份产物 → 18 个机械 `Outcome`（语义三条由 semantic.outcomes 产）
+# 一份产物 → 机械 `Outcome`（语义三条由 semantic.outcomes 产）
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: 逐条文本判的那 14 条（5 hard + 9 info）。
@@ -277,6 +382,8 @@ def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,
     # 不落盘）。而且必须走 `measure()` 那把尺子——同一条候选 `measure()['chars']`=253
     # 而 `len(text)`=277，**差 9.5%**。读产物或改用 `len()`，
     # 都会让报告里的字数与 `hook_length` 判据用的字数**不是同一个数**。
+    out.append(ran('hook_fact_attribution', [_fact_attribution_metric(texts, mat)],
+                   scanned=scanned))
     out.append(ran('hook_report',
                    [finding('hook_report',
                             detail=f'下发范围到第 {lead_upto_ch} 章；'

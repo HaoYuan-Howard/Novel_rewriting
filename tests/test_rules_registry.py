@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from contracts.rules import Registry, Rule
+from contracts.rules import PromptSurface, Registry, Rule
 
 
 def _ok(**kw) -> Rule:
@@ -31,6 +31,55 @@ def test_duplicate_rule_id_raises():
     reg.register(_ok())
     with pytest.raises(ValueError, match='重复'):
         reg.register(_ok())
+
+
+def test_reference_rule_requires_a_registered_prompt_surface_that_provides_every_id_space():
+    with pytest.raises(ValueError, match='没有 prompt_surface'):
+        Registry().register(_ok(needs_id_spaces=('events',)))
+
+    missing = Registry()
+    missing.register_prompt_surface(PromptSurface('demo', ('events',)))
+    with pytest.raises(ValueError, match='缺少 ID spaces'):
+        missing.register(_ok(
+            needs_id_spaces=('event_units', 'events'), prompt_surface='demo'))
+
+    complete = Registry()
+    complete.register_prompt_surface(PromptSurface(
+        'demo', ('event_units', 'events')))
+    complete.register(_ok(
+        needs_id_spaces=('event_units', 'events'), prompt_surface='demo'))
+    assert len(complete) == 1
+
+
+def test_every_registered_rule_id_need_is_satisfied_by_its_prompt_surface():
+    from contracts.rules import REGISTRY
+
+    for rule in REGISTRY.all():
+        if not rule.needs_id_spaces:
+            continue
+        surface = REGISTRY.prompt_surface(rule.prompt_surface or '')
+        assert set(rule.needs_id_spaces) <= set(surface.provides_id_spaces)
+
+
+def test_stage4_event_ids_join_to_the_same_plan_unit_space_the_model_receives():
+    from contracts.rules import REGISTRY
+    from novel.stages.stage4.fact_refs import catalog
+
+    refs = catalog(
+        {'entities': {'characters': {}, 'relations': []},
+         'canon': {'world_rules': [], 'secrets': []}},
+        {'blueprints': [{
+            'chapter_ordinal': 1,
+            'beats': [{'beat_id': 'b01_01', 'event': '甲推门'}],
+        }]},
+        [{'chapter_ordinal': 1, 'text': '甲推门。'}],
+        plan_units={1: [['b01_01']]},
+    )
+    goal = REGISTRY.get('goal_landing')
+    surface = REGISTRY.prompt_surface(goal.prompt_surface or '')
+    assert {'events', 'event_units', 'plan_beats'} <= set(surface.provides_id_spaces)
+    assert refs['events'] == {'b01_01': 1}
+    assert refs['event_units'] == {'b01_01': 'p01_01'}
 
 
 def test_bad_severity_raises():

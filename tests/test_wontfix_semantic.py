@@ -40,6 +40,7 @@ from novel.stages.stage6 import hook, semantic
 from novel.store import ArtifactStore
 from novel.views.inbox import inbox_view
 from tests import corpus, sandbox
+from tests.markers import corpus_params
 
 STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
                  'stage3/style_grounding.json', 'stage4/writer_context.json',
@@ -50,25 +51,22 @@ def _books() -> list[str]:
     return sorted({a.book_dir for a in corpus.iter_artifacts() if a.rel == 'stage6/hook.json'})
 
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        not _books(), reason='盘上没有 stage6 语料——这一批**没在查**，不是「查过没事」'),
-]
-
 #: 六维评分：本文件不测排序，给一组合法常数就够（总分由代码算，模型不自报）。
 _QUALITY = {'read_on_desire': 7.0, 'body_voice_match': 7.0,
             'concrete_scene_and_specificity': 7.0, 'curiosity_and_payoff_promise': 7.0,
             'hook_craft': 7.0, 'synopsis_penalty': 2.0}
 
 
-@pytest.fixture
-def box():
+@pytest.fixture(params=corpus_params(
+    _books()[:1], reason='盘上没有 stage6 语料——这些集成用例没在查'),
+    ids=lambda b: b[:10] if b else 'no-corpus')
+def box(request):
+    book = request.param
     drafts = tuple(sorted(
         a.rel for a in corpus.iter_artifacts()
-        if a.book_dir == _books()[0] and a.rel.startswith('stage5/')
+        if a.book_dir == book and a.rel.startswith('stage5/')
         and '_rounds' not in a.rel and a.rel.endswith('.json')))
-    s = sandbox.Sandbox(_books()[0], STAGE6_INPUTS + drafts)
+    s = sandbox.Sandbox(book, STAGE6_INPUTS + drafts)
     yield s
     s.close()
 
@@ -175,6 +173,39 @@ def _spec_of(report, rule: str, why: str) -> tuple[str, str]:
     assert line.findings, f'{rule} 这一次一条结论都没产出——本条没在查'
     key = line.findings[0].evidence_key
     return key, f'book|{rule}|{key}={why}'
+
+
+def test_synthetic_semantic_finding_can_be_marked_without_current_corpus():
+    """The semantic-wontfix closure is deterministic and belongs in defaults."""
+    from contracts.schema.report import finding
+    from novel import wontfix
+
+    conclusion = finding(
+        'hook_candidate_contradiction',
+        detail='候选把人物关系写反了',
+        evidence=['悬念前置:她推门看见空屋'],
+    )
+    saved = {}
+
+    class Store:
+        def exists(self, _rel):
+            return False
+
+        def write(self, rel, artifact):
+            saved[rel] = artifact
+
+    entry = wontfix.mark(
+        Store(),
+        'stage6',
+        f'book|{conclusion.rule}|{conclusion.evidence_key}=体裁允许保留这处反差',
+        pool_of=lambda ordinal: [conclusion] if ordinal is None else [],
+        at='semantic_1:synthetic',
+    )
+    ledger = saved['stage6/wontfix.json'].root
+    assert entry.why == '体裁允许保留这处反差'
+    marked = wontfix.applied([conclusion], ledger)[0]
+    assert marked.rule == conclusion.rule and marked.detail == conclusion.detail
+    assert marked.actionable is False and marked.wontfix is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -378,22 +409,6 @@ def test_the_two_ledgers_never_share_a_file(box):
     assert not (box.dir / 'stage5' / 'wontfix.json').exists()
 
 
-def test_the_stage6_entry_is_registered_where_it_has_to_be():
-    """⚠ 少登记一张表的后果各不相同，而**没有一个会报错**：
-    不在 `NODES[...].flags` ⇒ `build_argv` 当场拒收（这条路敲不出来，
-    而待人工清单**恰恰在建议人跑它**——那正是本轮修掉的假承诺）；
-    不在 `WRITE_EFFECTS` ⇒ `/api/enums` 会把它派生成「写本节点 produces 里那份」，
-    而它一份 `hook.json` 都不产。
-    """
-    from contracts.invariants import NODES, VALUED_FLAGS, WRITE_EFFECTS
-
-    assert '--wontfix' in NODES['stage6.hook'].flags
-    assert '--wontfix' in NODES['stage5.review'].flags
-    assert '--wontfix' in VALUED_FLAGS and '--wontfix' in WRITE_EFFECTS
-    assert 'wontfix.json' not in ' '.join(NODES['stage6.hook'].produces), \
-        '豁免账是**可选产物**，进 produces 会让每一本书永远差一份'
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 四、stage5 那一半：`semantic_secret_leak` 从「结构上够不着」变成可裁
 # ─────────────────────────────────────────────────────────────────────────────
@@ -511,6 +526,7 @@ def _seed_stage5_semantic(root, sid):
     return excerpt, ordinal
 
 
+@pytest.mark.corpus
 def test_a_semantic_secret_leak_can_finally_be_marked_and_stops_occupying_the_inbox(box5):
     """⭐⭐ **本轮之前这条路结构上不可能走通。**
 

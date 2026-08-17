@@ -59,6 +59,82 @@ def test_generation_system_prioritizes_retention_and_removes_spoiler_gate():
         assert approach in system
 
 
+def test_interpolated_prompt_names_every_approach_and_has_no_placeholders():
+    from contracts.invariants import HOOK_APPROACH_NOTES
+
+    rendered = prompts.hook_system()
+    for approach in HOOK_APPROACHES:
+        assert approach in rendered
+        assert HOOK_APPROACH_NOTES[approach] in rendered
+    assert '$' not in rendered
+
+
+def test_invented_number_compares_values_and_ignores_success_false_positive():
+    mat = prompts.Material(blocks=('人物已经三十岁，做这件事有八成胜算。',))
+    text = ('好感度一百成功。这位人物已经30岁，做这件事仍有八成胜算。'
+            '所有事实都来自下发材料，这一句只是把文案补到正常长度。')
+    findings = checks.hook_findings(
+        text, mat=mat, secrets=[], arc=None, characters={}, src_hook=None,
+        style_hook=None, quote_problems=[])
+    assert not [finding for finding in findings
+                if finding.rule == 'hook_invented_number']
+
+
+def test_hook_secret_literal_uses_the_shared_number_ruler_and_own_bytes():
+    fact = '她其实一直都知道他是三皇子'
+    text = fact + '。这条文案继续写到足够长，并以完整句子收束。'
+    findings = checks.hook_findings(
+        text,
+        mat=prompts.Material(blocks=('完整故事真相。',), upto=1),
+        secrets=[{
+            'secret_id': 'secret_x',
+            'fact': fact,
+            'reader_reveal_events': [{'chapter': 9}],
+        }],
+        arc=None,
+        characters={},
+        src_hook=None,
+        style_hook=None,
+        quote_problems=[],
+    )
+    literal = next(item for item in findings if item.rule == 'hook_secret_literal')
+    assert '重合 1/1 条' in literal.detail
+    assert literal.evidence
+    assert all(piece in text for piece in literal.evidence)
+
+
+def test_story_map_consumes_segments_keeps_slots_and_strips_private_rationale():
+    goal = {
+        'intent': 'advance',
+        # Stage6 consumes the writer-facing CtxGoal.  Typed PlanGoal IDs have
+        # already been resolved by Stage4 and must not be reintroduced here.
+        'facts': ['她在门口收到一封匿名信。'],
+        'rationale': '这是只供审计的自由理由，不得下发',
+    }
+    rows = prompts.story_map({'chapters': [{
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'chapter_goal': goal,
+        'open_hook_goal': goal,
+        'end_hook_goal': goal,
+        'segments': [
+            {'slot': 's01', 'events': ['事件一']},
+            {'slot': 's02', 'events': ['事件二']},
+        ],
+    }]})
+    assert rows[0]['events'] == ['事件一', '事件二']
+    assert rows[0]['segments'] == [
+        {'slot': 's01', 'events': ['事件一']},
+        {'slot': 's02', 'events': ['事件二']},
+    ]
+    for key in ('chapter_goal', 'open_hook_goal', 'end_hook_goal'):
+        assert rows[0][key] == {
+            'intent': 'advance',
+            'facts': goal['facts'],
+        }
+        assert 'rationale' not in rows[0][key]
+
+
 def test_material_carries_source_full_truth_story_map_and_body_habits():
     ctx = {
         'chapters': [
@@ -139,6 +215,25 @@ def test_material_carries_source_full_truth_story_map_and_body_habits():
     assert packet['rewritten_opening'][0]['text'] == '重写后的第一章正文。'
 
 
+def test_weak_fact_attribution_metric_compares_gift_phrase_to_story_map():
+    material = prompts.Material(
+        blocks=('完整创作包。',),
+        story_truth={'entities': {'characters': {
+            'c1': {'canonical': '阿宁', 'address': []},
+        }}},
+        story_map=({'chapter': 1, 'events': ['阿宁送给小禾玉佩。']},),
+    )
+    outcomes = checks.check(
+        texts=[('候选', '阿宁送给小禾玉佩。', [])],
+        mat=material, secrets=[], arc=None, lead_upto_ch=1, hook_chars=None,
+        approved=False, stale=[], missing=[])
+    metric = next(outcome for outcome in outcomes
+                  if outcome.rule == 'hook_fact_attribution')
+    assert metric.findings and '1 条' in metric.findings[0].detail
+    assert '故事地图有同字面' in metric.findings[0].detail
+    assert metric.findings[0].evidence == ['阿宁送给小禾玉佩']
+
+
 def test_source_copy_guard_now_rejects_any_twenty_content_character_window():
     source = '甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥天地玄黄。'
     text = source + '这条文案继续写到足够长并以完整句子收束。'
@@ -154,3 +249,39 @@ def test_source_copy_guard_now_rejects_any_twenty_content_character_window():
     )
     reuse = [item for item in findings if item.rule == 'hook_reuses_source']
     assert reuse and checks.REUSE_MAX == 0.0
+    assert '最长公共子串 norm=' in reuse[0].detail
+    assert '候选 raw[' in reuse[0].detail and '原作文案 raw[' in reuse[0].detail
+    assert reuse[0].evidence and all(fragment in text for fragment in reuse[0].evidence)
+
+
+def test_body_transcription_guard_reports_normalized_lcs_and_both_raw_ranges():
+    lead = '甲，乙。丙！丁？戊；己：庚、辛壬癸子丑寅卯辰巳午未申酉戌亥。'
+    text = lead + '这条候选继续补足篇幅并完整收束。'
+    findings = checks.hook_findings(
+        text,
+        mat=prompts.Material(blocks=('完整故事真相。',), lead=({'text': lead},)),
+        secrets=[],
+        arc=None,
+        characters={},
+        src_hook=None,
+        style_hook=None,
+        quote_problems=[],
+    )
+
+    transcribed = [item for item in findings if item.rule == 'hook_transcribes_body']
+    assert transcribed
+    assert '最长公共子串 norm=' in transcribed[0].detail
+    assert '候选 raw[' in transcribed[0].detail
+    assert '开篇正文 raw[' in transcribed[0].detail
+    assert transcribed[0].evidence
+    assert all(fragment in text and fragment in lead for fragment in transcribed[0].evidence)
+
+
+def test_lcs_ties_choose_the_earliest_candidate_then_reference_raw_span():
+    detail, evidence = checks._lcs_detail(
+        '甲，乙丙X甲乙丙', '甲、乙丙Y甲乙丙', reference_name='对侧')
+
+    assert 'norm=3' in detail
+    assert "候选 raw[0:4]='甲，乙丙'" in detail
+    assert "对侧 raw[0:4]='甲、乙丙'" in detail
+    assert evidence == ['甲，乙丙']

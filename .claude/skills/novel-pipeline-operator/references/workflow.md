@@ -73,19 +73,23 @@
 | # | 节点 | 主跑参数 | 放行证据 |
 |---:|---|---|---|
 | 1 | `stage0.remove` | 新书：`--source <txt>`，省略 sid | 摄入完成；追跑 check 除待批准项外无 HARD。批准前仅 `s0_approval=pending` 导致 exit 1 是预期状态 |
-| 2 | `stage0.approve` | 无 | 按代批契约审阅剔除报告后批准，批准状态落盘 |
-| 3 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
-| 4 | `stage2.global` | `--full-extract` | global 正式落盘，preview 追加的 blueprint/style 两份 check 均无 HARD |
-| 5 | `stage4.plan` | 无 | 计划 check 无 HARD，`stage4/writer_context.json` 已按当前计划组装且 fresh |
-| 6 | `stage5.write` | `--deep 1,2,3 --shallow-rest`；不足三章时截到 `N` | deep+shallow 的正式章集合恰好覆盖计划章集合，内部收缩/重试不等于失败 |
-| 7 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
-| 8 | `stage5.semantic` | 无 | 语义结论 fresh，按正文 sha1 与最新机械 review 绑定 |
-| 9 | `stage6.hook` | 无 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
-| 10 | `stage6.semantic` | 无 | 每条候选的 grounding/spoiler 结论按 label 与文本 sha1 对齐 |
-| 11 | `stage6.approve` | `--pick <N>` | 所选候选满足代批判据，`hook.json.approved` 与最新语义结论一致 |
-| 12 | `stage7.rename` | 无 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
-| 13 | `stage7.approve` | 无 | 映射、漏网称呼与语义标记通过代批判据，批准状态落盘 |
-| 14 | `stage7.assemble` | 无 | `stage7/book.txt` 生成并通过独立成书对账 |
+| 2 | `stage0.approve` | `--actor <id> --reason <text>` | 按代批契约审阅剔除报告后批准，批准状态落盘 |
+| 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
+| 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
+| 5 | `stage2.global` | `--full-extract` | global 正式落盘；执行 preview 列出的后续 blueprint/style 步骤 |
+| 6 | `stage2.blueprint` | 由 `--full-extract` preview 列出；中断恢复时只跑缺失项 | 逐章蓝图正式落盘，check 无 HARD |
+| 7 | `stage3.style` | 由 `--full-extract` preview 列出；中断恢复时只跑缺失项 | 文风画像正式落盘，check 无 HARD |
+| 8 | `stage4.plan` | 无 | 计划 check 无 HARD，写作上下文由当前计划组装 |
+| 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
+| 10 | `stage5.write` | `--deep 1,2,3 --shallow-rest`；不足三章时截到 `N` | deep+shallow 的正式章集合恰好覆盖计划章集合，内部收缩/重试不等于失败 |
+| 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
+| 12 | `stage5.semantic` | 无 | 语义结论 fresh，按正文主体与最新机械 review 绑定 |
+| 13 | `stage6.hook` | 无 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
+| 14 | `stage6.semantic` | 无 | 每个去重文本的质量/矛盾结论按完整 SHA-256 与当前候选对齐 |
+| 15 | `stage6.approve` | `--pick <N> --actor <id> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
+| 16 | `stage7.rename` | 无 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
+| 17 | `stage7.approve` | `--actor <id> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
+| 18 | `stage7.assemble` | 无 | `stage7/book.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
 `stage2.global --full-extract` 在中途被闸门拦下时，不机械重跑整组。按最新 `state` 与 finding 修好已落下的部分，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`；只执行缺失项。
@@ -127,6 +131,10 @@
 | `redo` | 产物 stale；先定位变更来源，再决定最小重放面。任何外部重跑仍受两项授权约束 |
 | `unknown` | 读取产物、来源指纹、活动终态文件与日志；无法证明安全路径时以 `stopped` 结束 |
 
+CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才是“当前消费边是否
+仍匹配”的可视化结论。API `NovelOverview` 保持现有公开形状，不为 CLI 展示重复建第二套
+状态字段。
+
 从第一个非 `skip` 的主节点接续，但不要把旧 `.INVALID`、旧 review 或保留的 approval 当作当前结论。相同参数的中断重跑优先利用 `.llm_cache`；改变参数意味着新调用语义，必须重新 preview 和记账。
 
 ## 收尾
@@ -135,6 +143,8 @@
 
 1. 执行代批文档中的逐字成书对账。
 2. 再运行一次 `state` 与 `inbox`，只统计活动目录，排除 `_rounds/` 历史。
-3. 按 sid 过滤 `<BASE>/_service/ledger.jsonl` 中 `outcome == "ok"` 的记录；缓存命中与实付分开计数，token 合计只累加 `cached == false`。
+3. 最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：按 sid 过滤 `outcome == "ok"`
+   的记录，缓存命中与实付分开计数，token 合计只累加 `cached == false`。产物
+   `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
 4. 完成终审包，确保每个异常、残红和不可验证项都有“影响、证据、恢复路径”。
 5. 只向用户交付 `book.txt` 与终审包；中间产物仅作为终审包中的可追溯指针。

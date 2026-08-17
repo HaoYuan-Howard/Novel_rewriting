@@ -41,7 +41,9 @@ from pydantic import Field
 
 from contracts.invariants import RESIDUAL_CONFIDENCE
 from contracts.schema.base import Fp10, Sha1, StrictModel
-from contracts.schema.common import Finding, FreeProvenance, LlmProvenance
+from contracts.schema.common import (
+    Finding, FreeProvenance, HashBoundHumanApproval, LlmProvenance,
+)
 from contracts.schema.stage5 import ContextSource, JudgedDraft
 
 
@@ -202,8 +204,8 @@ class StemBaseline(StrictModel):
     ratio: float | None = Field(ge=0, le=1)
 
 
-class ApprovedNameMap(StrictModel):
-    """定稿。**只有这一个子键、只有这一个取值。** 没有 auto_approve。"""
+class ApprovedNameMap(HashBoundHumanApproval):
+    """人工定稿；凭据绑定审批时看到的决策 surface。没有 auto approve。"""
 
     origin: Literal['human']
 

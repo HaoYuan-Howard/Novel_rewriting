@@ -14,22 +14,23 @@ test_stage3_free_paths.py —— stage3 的四条 0 成本路，**第一次被�
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
+from contracts.schema import encode_artifact
+from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage2 import GlobalGrounding
-from contracts.schema.stage3 import StyleGrounding
+from contracts.schema.stage2 import GlobalProvenance
+from contracts.schema.stage3 import StyleGrounding, StyleProvenance
+from novel import prov
 from novel.core.naming import names_of
 from novel.errors import GateBlocked, UpstreamMissing
 from novel.run import RunContext
 from novel.stages.stage3 import style
 from novel.store import ArtifactStore
-from tests import corpus, sandbox
-
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(corpus.corpus_root() is None,
-                       reason='盘上没有语料——这几条**没在查**，不是「查过没事」'),
-]
+from tests import corpus, factories, sandbox
 
 class Box(sandbox.Sandbox):
     def ctx(self, node: str = 'stage3.style') -> RunContext:
@@ -37,11 +38,90 @@ class Box(sandbox.Sandbox):
         return RunContext.open(self.root, self.sid, node, paid=False, write_ledger=False)
 
 
-@pytest.fixture(params=sandbox.books_with_stage3(), ids=lambda b: b.rsplit('_', 1)[0])
+def _corpus_params():
+    books = sandbox.books_with_stage3()
+    if books:
+        return [pytest.param(book, marks=pytest.mark.corpus) for book in books]
+    return [pytest.param(
+        None,
+        marks=(pytest.mark.corpus, pytest.mark.skip(
+            reason='盘上没有 stage3 语料——这些集成用例没在查')),
+        id='no-corpus',
+    )]
+
+
+@pytest.fixture(params=_corpus_params(),
+                ids=lambda b: b.rsplit('_', 1)[0] if b else 'no-corpus')
 def box(request):
     s = Box(request.param)
     yield s
     s.close()
+
+
+def _write_fixture(book: Path, rel: str, payload: object) -> None:
+    path = book / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(encode_artifact(rel, payload), ensure_ascii=False),
+        encoding='utf-8', newline='\n')
+
+
+def test_synthetic_check_only_runs_in_the_default_suite(tmp_path):
+    """任意当前 schema 书都必须成立的节点接线，不得依赖现役 ``NOVEL_OUTPUT``。"""
+    from contracts.rules import REGISTRY
+    from tests.test_stage2 import global_grounding
+
+    sid = '303'
+    book = tmp_path / f'合成文风_{sid}'
+    stage5_book = factories.stage5_book()
+    main = MainText.model_validate([
+        {
+            'section_id': f'sec_{ordinal:04d}',
+            'chapter_ordinal': ordinal,
+            'source_chapter_label': str(ordinal),
+            'text': text,
+        }
+        for ordinal, text in sorted(stage5_book.source_text.items())
+    ])
+    hook = HookCopy(
+        section_id='sec_0001',
+        text='一把银匙，一本被调换的账册，足以让旧日秘密重新开口。')
+    clean = ('\n'.join(stage5_book.source_text.values()) + '\n').encode('utf-8')
+    (book / 'stage0').mkdir(parents=True)
+    (book / 'stage0' / 'clean_text.txt').write_bytes(clean)
+    root_sha1 = prov.content_sha1(clean)
+
+    grounding_payload = global_grounding()
+    grounding_payload['_provenance'] = GlobalProvenance(
+        code='fixture', root_clean_sha1=root_sha1, inputs={},
+        prompts={'GLOBAL_SYS': '0' * 10}, model='fixture-model',
+        address_by_fallback=0,
+        address_surface_rewrites=[], address_from_chapter_raised=[],
+        canonical_distinguishers_stripped=[], setup_chapters_pruned=[],
+    ).model_dump(mode='json')
+    grounding = GlobalGrounding.model_validate(grounding_payload)
+
+    style_payload = factories.stage3_artifact()
+    style_payload['_provenance'] = StyleProvenance(
+        code='fixture', root_clean_sha1=root_sha1, inputs={},
+        prompts={'STYLE_SYS': '1' * 10}, model='fixture-model',
+        attempts=[{
+            'kind': 'chapter_aggregate', 'user_prompt': '2' * 10,
+            'output': '3' * 10, 'cache_policy': 'default',
+        }],
+    ).model_dump(mode='json')
+    artifact = StyleGrounding.model_validate(style_payload)
+    _write_fixture(book, style.MAIN_TEXT, main.model_dump(mode='json'))
+    _write_fixture(book, style.HOOK_COPY, hook.model_dump(mode='json'))
+    _write_fixture(book, style.GLOBAL_GROUNDING, grounding.model_dump(
+        by_alias=True, mode='json'))
+    _write_fixture(book, style.REL, artifact.model_dump(by_alias=True, mode='json'))
+
+    report = style.run_check_only(RunContext.open(
+        tmp_path, sid, 'stage3.style', paid=False, write_ledger=False))
+    assert {row.rule for row in report.rules} == {
+        row.rule for row in REGISTRY.of_stage('stage3')}
+    assert not [row for row in report.rules if row.status == 'skipped']
 
 
 # ───────────────── `--check-only`：节点函数第一次真的跑 ─────────────────
@@ -161,14 +241,20 @@ def _leak_a_real_name(box: Box) -> str:
     name = sorted(names_of(gg))[0]
     data = box.read('stage3/style_grounding.json')
     data['voice']['register_tone'] = f'{data["voice"]["register_tone"]}（例如{name}那几段）'
-    box.write('stage3/style_grounding.INVALID.json', data)
+    ArtifactStore(box.ctx()).write_invalid(
+        style.REL, StyleGrounding.model_validate(data), gates_skipped=[])
     return name
+
+
+def _revalidate(box: Box):
+    return style.run_revalidate(
+        box.ctx(), actor='reviewer', reason='review the blocked style draft')
 
 
 def test_revalidate_refuses_when_there_is_no_blocked_draft(box):
     """没有被拦下的稿就没什么可提升的。**这与「复检正式产物」是两件事。**"""
     with pytest.raises(UpstreamMissing, match='没有被闸门拦下的稿'):
-        style.run_revalidate(box.ctx())
+        _revalidate(box)
 
 
 def test_revalidate_promotes_a_draft_that_now_passes(box):
@@ -179,17 +265,22 @@ def test_revalidate_promotes_a_draft_that_now_passes(box):
     """
     src = box.dir / 'stage3' / 'style_grounding.json'
     bad = box.dir / 'stage3' / 'style_grounding.INVALID.json'
-    bad.write_text(src.read_text('utf-8'), encoding='utf-8')
+    ArtifactStore(box.ctx()).write_invalid(
+        style.REL, StyleGrounding.model_validate(box.read(style.REL)),
+        gates_skipped=[])
     src.unlink()                                   # 正式稿还没有，只有被拦下的那一份
 
-    promoted, report = style.run_revalidate(box.ctx())
+    promoted, report = _revalidate(box)
     assert promoted is True, [r.rule for r in report.rules if r.status == 'hit']
     assert src.is_file(), '合格就该成为正式产物'
     assert not bad.exists(), '`.INVALID` 该被挪走'
     prov = box.read('stage3/style_grounding.json')['_provenance']
     assert prov['revalidated'] is True
-    assert 'origin' not in prov, \
-        '⚠ 提升路**刻意不宣称 `origin=human`**：「判据改了」与「人手改过」在这一侧分不开'
+    audit = prov['revalidation_audit']
+    assert audit['actor'] == 'reviewer'
+    assert audit['reason'] == 'review the blocked style draft'
+    assert audit['content_changed'] is False
+    assert audit['edited_by_human'] is False
 
 
 def test_revalidate_leaves_a_still_failing_draft_where_it_is(box):
@@ -201,7 +292,7 @@ def test_revalidate_leaves_a_still_failing_draft_where_it_is(box):
     name = _leak_a_real_name(box)
     before = (box.dir / 'stage3' / 'style_grounding.json').read_bytes()
 
-    promoted, report = style.run_revalidate(box.ctx())
+    promoted, report = _revalidate(box)
     assert promoted is False, f'塞了专名 {name} 还能提升，说明 name_leak 没跑'
     assert (box.dir / 'stage3' / 'style_grounding.INVALID.json').is_file()
     assert (box.dir / 'stage3' / 'style_grounding.json').read_bytes() == before, \
@@ -217,7 +308,7 @@ def test_the_gate_and_the_promotion_path_share_one_judge(box):
     而分家之后一份稿可能**既过不了闸门、又被提升上去**。
     """
     _leak_a_real_name(box)
-    _promoted, report = style.run_revalidate(box.ctx())
+    _promoted, report = _revalidate(box)
     bad = {r.rule for r in report.rules if r.status == 'hit' and r.sev == 'hard'}
 
     data = box.read('stage3/style_grounding.INVALID.json')

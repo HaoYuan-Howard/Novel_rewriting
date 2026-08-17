@@ -216,9 +216,20 @@ export function Stage6Screen() {
                               <div
                                 key={'semantic-' + i}
                                 className="prose-cn rounded-block px-10 py-8 text-tag"
-                                style={{ color: SEV.hard.color, background: SEV.hard.bg }}
+                                style={
+                                  c.semantic_state === 'contradiction'
+                                    ? { color: SEV.hard.color, background: SEV.hard.bg }
+                                    : { color: SEV.unver.color, background: SEV.unver.bg }
+                                }
                               >
-                                实质矛盾：{item.assertion}（证据：{item.evidence}）
+                                <div className="font-semibold">
+                                  {c.semantic_state === 'contradiction'
+                                    ? '校准双盲 FAIL（实质矛盾）'
+                                    : '未校准线索（UNVER）'}
+                                  ：{item.assertion}
+                                </div>
+                                <div>证据：{item.evidence}</div>
+                                <div>理由：{item.reason}</div>
                               </div>
                             ))}
                           </div>

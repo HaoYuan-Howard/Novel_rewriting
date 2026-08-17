@@ -26,9 +26,13 @@ def _hash(value: str) -> str:
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
-def _catalog(*, cases_per_ability: int = 100) -> CandidateCatalog:
+def _catalog(
+    *,
+    cases_per_ability: int = 100,
+    abilities=EVALUATOR_ABILITIES,
+) -> CandidateCatalog:
     cases = []
-    for ability in EVALUATOR_ABILITIES:
+    for ability in abilities:
         for number in range(cases_per_ability):
             subject = _hash(f'{ability}:{number}')
             cases.append(CandidateCase(
@@ -151,6 +155,36 @@ def test_two_independent_labels_finalize_a_valid_manifest():
     assert {row.expected for row in manifest.cases} == {'PASS', 'FAIL'}
     dumped = manifest.model_dump(mode='json')
     assert '按冻结口径独立核对' not in json.dumps(dumped, ensure_ascii=False)
+
+
+def test_one_ability_catalog_reaches_the_official_prepare_and_finalize_path(tmp_path):
+    catalog = _catalog(abilities=('secret_timeline',))
+    catalog_path = tmp_path / 'catalog.json'
+    catalog_path.write_text(catalog.model_dump_json(indent=2), encoding='utf-8')
+    out = tmp_path / 'blind'
+
+    assert main([
+        'prepare', '--catalog', str(catalog_path), '--out-dir', str(out),
+        '--seed', 'partial-secret-timeline-v1',
+    ]) == 0
+    index_payload = json.loads((out / 'index.json').read_text(encoding='utf-8'))
+    _, _, index = prepare(catalog, seed='partial-secret-timeline-v1')
+    assert index.model_dump(mode='json') == index_payload
+
+    labels_a = _label_file(index, 'A', 'reviewer-a')
+    labels_b = _label_file(index, 'B', 'reviewer-b')
+    report, conflicts = reconcile(index, labels_a, labels_b)
+    assert conflicts.conflicts == []
+    manifest = finalize(index, labels_a, labels_b, report, AdjudicationFile(
+        workflow_version=1,
+        dataset_id=index.dataset_id,
+        conflict_sha256=report.conflict_sha256,
+        adjudicator='reviewer-c',
+        decisions=[],
+    ))
+    validate_manifest(manifest)
+    assert len(manifest.cases) == 100
+    assert {case.ability for case in manifest.cases} == {'secret_timeline'}
 
 
 def test_reconcile_finalize_and_validate_cli_wiring(tmp_path):

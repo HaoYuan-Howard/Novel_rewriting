@@ -13,7 +13,7 @@
 | 一~三 | `_provenance` 的五个共有键 | 它们**逐层同形**。分层定 = 保证漂：`code` 的口径就是在**第二次**踩同一个坑之后才写下「这条对全链生效」的，而 stage7 §五又独立发现了第三次 |
 | 四 | 新鲜度 `fresh/stale/unknown` | `Q-2` 四个落点里最贵的一个。它由 `inputs` 算出来，算法只能有一份 |
 | 五 | `.INVALID` 与三条 0 成本提升路 | 全链**三处**实测伪造 + **一处**实测丢失，都是同一个形状 |
-| 六~七 | 轮次账 与 `Finding` | `Finding` 在原型里有 **5 份拷贝、3 种字段签名** |
+| 六~七 | 轮次账 与 `Finding` | `Finding` 在原型里有 **5 份拷贝、3 种字段签名**；当前统一为 15 字段，并显式携带章序 |
 | 八~九 | `usage` 与记账键的出口 | 出口规则是 `Q-1` 的形式要求，八层照办 |
 
 ---
@@ -179,7 +179,9 @@ stage5/6/7 都有一份「我判了哪几份稿」的清单，它**不是** `inp
 |---|---|---|---|---|
 | `gates_skipped` | `str[]` | **否**（只写在 `.INVALID` 上） | 阻断级判据里**没跑成**的那些。**空列表也要写** | **契·码** |
 | `revalidated` | `bool` | **否** | 这份稿是被重判提升上来的。`False` 与「键不在」不是一回事 | **盘·码** |
-| `origin` | `str` | **否** | `human` = 人工稿。⚠ 提升路**刻意不宣称它** | **三源** |
+| `invalid_baseline_sha256` | 64 位 sha256 | **否**（只写在活动 `.INVALID` 上） | `write_invalid` 首次落下的问题稿定位键；提升时清除 | **契·码** |
+| `revalidation_audit` | `RevalidationAudit` | **否**（提升后必有） | actor/reason、不可变基线定位、候选 raw/canonical SHA-256、RFC 6901 改动路径及三项变化布尔 | **契·码** |
+| `origin` | `str` | **否** | `human` = 由人工编辑入口形成的新稿；`--revalidate` 不借它表达修改事实 | **三源** |
 | `input_basis` | `str` | **否** | 「这份 `inputs` 是本次重判时读的，不是对历史来源的追认」 | **盘·码** |
 | `partial_rewrite` | `str` | **否** | ⭐ 这份产物被一条 0 成本路径**局部改写**过，值 = 那条路的 flag。见 5.1b | **盘·码** |
 
@@ -187,8 +189,11 @@ stage5/6/7 都有一份「我判了哪几份稿」的清单，它**不是** `inp
 必须分得开。它记的是判据 36 那整套设计的**唯一痕迹**——
 而「闸门没跑成」与「闸门跑过没事」正是 `Q-2` 要求必须能区分的两件事。
 
-`revalidated` **刻意不宣称 `origin=human`**：「判据改了」与「人手改过 `.INVALID`」
-在节点这一侧**分不开**，所以它只能诚实地记「这份稿被重判提升过」。
+`--revalidate` 现在必须同时给非空 `--actor` / `--reason`。`write_invalid` 保存不可变基线，
+提升前分别比较原始字节与去掉 `_provenance` 后的 canonical 业务 JSON：纯排版变化只令
+`raw_changed=true`；业务内容变化令 `content_changed=true`、`edited_by_human=true`，并列出排序去重的
+RFC 6901 `changed_json_pointers`。因此「判据变了、原稿原样提升」与「人改过问题稿后提升」不再同形。
+该审计仍不把提升伪造成新生成：原 prompts/model/inputs/usage/round 原样继承。
 
 ### 5.1b `partial_rewrite` —— 混版产物要如实记来源（2026-08-11 · 骨架 D）
 
@@ -248,9 +253,9 @@ partial_rewrite(旧的 _provenance, *, 哪条路, 代码版本, 本次读到的 
 **⇒ 让它在结构上不可能。** 提升函数的签名里**没有** `prompts` / `model` / `inputs` 三个参数：
 
 ```
-promote(旧的 _provenance, *, 判据表指纹, 代码版本) -> 新的 _provenance
+promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _provenance
     继承旧的 prompts / model / inputs 一个字不动
-    只加 revalidated = true
+    记录 revalidated = true 与完整强审计账
     round 不 +1（它不是新的一轮写作）
 ```
 
@@ -260,12 +265,17 @@ promote(旧的 _provenance, *, 判据表指纹, 代码版本) -> 新的 _provena
 ⚠ **`.INVALID` 归档进 `_rounds/`，不删**（`Q-8`）。原型「读完问题稿就把它删了」
 造出的正是 §四那条幽灵边——**删一个还被别人指着的文件，会同时制造两个问题**。
 
-### 5.3 `--apply-edit` 那一份是教科书，移植时连注释一起搬
+### 5.3 `--apply-edit` 是新修订，`--revalidate` 是强审计提升
 
 继承上一轮的 `inputs`（改的是同一份上游下的稿）· **`pop` 掉 `prompts` 与 `model`**
 （这一稿不是任何 prompt / 模型产的，记了就是假账）· 记 `origin=human` ·
 上一轮 `inputs` 为空时**记下这次真实读过的那份并打上 `input_basis`**，
 明说它不是对历史的追认。
+
+两条命令都可以是 0 次 LLM 调用，但不能混称为同一动作：`--revalidate` 只提升活动
+`.INVALID`，保留原生成轮次并写强审计；`--apply-edit` 消费 typed 人工输入、归档被替换版本并形成
+新的人工修订。Stage 5 尤其要求提交完整单章的 `segments[{slot,text}]`，会生成新的
+`RoundFreeProvenance.round`；「0 LLM 费用」不等于「无需人工重写整章」。
 
 ---
 
@@ -288,13 +298,14 @@ promote(旧的 _provenance, *, 判据表指纹, 代码版本) -> 新的 _provena
 
 ---
 
-## 七、`Finding` —— 全链一份，14 个字段
+## 七、`Finding` —— 全链一份，15 个字段
 
 stage5 / stage6 / stage7 **逐字段相同**。⚠ 原型里它有 **5 份拷贝、3 种字段签名**，
 而「同一件事的第 N 个落点必然分家」。
 
 | 字段 | 类型 | 必填 | 取值面 |
 |---|---|---|---|
+| `output_ordinal` | `int｜null` | 是（缺省显式为 `null`） | 逐章 finding 必须是对应输出章序；真正书级 finding 为 `null` |
 | `rule` | `str` | 是 | 判据表的 key。**撞名当场炸** |
 | `sev` | `str` | 是 | `hard｜info｜metric｜unver`。**`metric` 与 `info` 必须分开** |
 | `item` | `str` | 是 | 人读的一句话「这条在守什么」 |
@@ -340,6 +351,10 @@ stage5 / stage6 / stage7 **逐字段相同**。⚠ 原型里它有 **5 份拷贝
 两份答的是**两个问题**。账本答「这周 / 这本书花了多少」，产物里这份答
 「**这一份**花了多少」——那是看返工回路的边际成本时会问的，而账本按时间排，答不了。
 ⚠ token 数**不可再生**（`Q-3` 的判准），必须落盘。
+
+**终审成本汇总的唯一权威是 `<BASE>/_service/ledger.jsonl`。** 产物 `usage` 只解释某一份产物，
+不能跨重试、失败、缓存命中和被归档轮次拼总账；作业日志、CLI 文案与 provenance 也都不是成本源。
+终审按 sid 聚合 ledger，真实 wire attempt 与 `cached=true` 分列，绝不从产物 usage 反推全书成本。
 
 ### 8.1 服务账本的逐请求观测（不进入 `Usage` schema）
 

@@ -360,8 +360,9 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     # ── ⑤ 写法词 ─────────────────────────────────────────────────────────
     # ⚠ `reconstruction_strategy` **必须一起扫**：它曾是唯一漏网的字段，
     #   而它恰恰是唯一整段原样直达写手的自由文本。
-    _way_out = ('。改法 0 成本：在 `.INVALID` 稿里把这个词换成【写什么】的说法'
-                '（想说「这里该更有分量」就调高那一拍的 budget_chars），再 `--revalidate` 提升')
+    _way_out = ('。改法 0 LLM：在 `.INVALID` 稿里把这个词换成【写什么】的说法'
+                '（想说「这里该更有分量」就调高那一拍的 budget_chars），再跑 '
+                '`--revalidate --actor <id> --reason <why>` 同轮重判并留不可变审计')
     sw_rows = []
     if (hitw := sorted({w for w in STYLE_WORDS if w in (plan.get('reconstruction_strategy') or '')})):
         sw_rows.append((f'reconstruction_strategy 含写法指令 {hitw}'

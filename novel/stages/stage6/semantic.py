@@ -528,15 +528,28 @@ def _current_artifact(
 def current_assessments(store: ArtifactStore, art: Hook) -> dict[str, CandidateAssessment]:
     """按文本 sha1 返回当前评审状态；键可同时服务候选与重复的定稿文本。"""
     artifact, why, calibrated, seq = _current_artifact(store, art)
-    current_shas = {text_sha1(text) for _label, text in hook._texts_of(art)}
+    current_texts = {
+        text_sha1(text): text
+        for _label, text in hook._texts_of(art)
+    }
+    # The latest review can be unusable because its provenance or candidate set
+    # is stale.  That only removes its current verdict; it must not erase an
+    # earlier calibrated FAIL for byte-identical candidate text.
+    historical_fails = (
+        _historical_fail_subjects(
+            store, known={seq: artifact} if artifact is not None else None)
+        if seq is not None else set()
+    )
     if artifact is None:
         return {
-            sha: CandidateAssessment(state='unreviewed', reason=why)
-            for sha in current_shas
+            sha: CandidateAssessment(
+                state='unreviewed',
+                reason=why,
+                historical_fail=text_sha256(text) in historical_fails,
+            )
+            for sha, text in current_texts.items()
         }
 
-    historical_fails = _historical_fail_subjects(
-        store, known={seq: artifact} if seq is not None else None)
     rank_by_label = {label: i for i, label in enumerate(artifact.ranking, 1)}
     decision_by_subject = {decision.subject_key: decision for decision in artifact.decisions}
     by_sha: dict[str, CandidateAssessment] = {}
@@ -674,11 +687,16 @@ def outcomes(store: ArtifactStore, art: Hook | None) -> list[Outcome]:
         review = assessment.review
         if review is None:
             continue
-        if assessment.state == 'contradiction':
+        if review.contradictions:
+            disposition = (
+                '校准双盲 FAIL'
+                if assessment.state == 'contradiction'
+                else '未校准/未合并为 FAIL 的 contradiction 线索（UNVER，不自动阻断）'
+            )
             for contradiction in review.contradictions:
                 candidate_findings.append(finding(
                     'hook_candidate_contradiction',
-                    detail=(f'[{label}] 校准双盲 FAIL：{contradiction.assertion}；'
+                    detail=(f'[{label}] {disposition}：{contradiction.assertion}；'
                             f'候选证据：{contradiction.evidence}；{contradiction.reason}'),
                     evidence=[f'{label}:{contradiction.evidence}'],
                 ))

@@ -197,4 +197,12 @@ def preview_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobStart:
     ⚠ 它与真启动端点都经过全局 CSRF 中间件；预览本身仍然 0 成本、无写盘。
     """
     sid = checked_sid(req.sid) if req.sid is not None else None
-    return jobs.plan_start(req.node, sid, req.flags, base=base, mode=req.mode)
+    # Preview accepts an otherwise well-shaped action before the human has
+    # supplied its required audit values.  ``nodes.build_steps`` fills those
+    # omissions with visibly non-executable ``待填·...`` tokens.  POST /jobs
+    # intentionally does *not* enable this mode, so NodeSpec still rejects
+    # missing values and rejects the placeholder tokens themselves.
+    return jobs.plan_start(
+        req.node, sid, req.flags, base=base, mode=req.mode,
+        placeholders=True,
+    )

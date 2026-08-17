@@ -88,7 +88,12 @@ class CandidateCatalog(StrictModel):
         ids = [case.case_id for case in self.cases]
         if len(ids) != len(set(ids)):
             raise ValueError('candidate case_id must be unique')
-        for ability in EVALUATOR_ABILITIES:
+        # Calibration is capability-scoped.  A catalog registers only the
+        # abilities for which it actually contains candidates; requiring all
+        # eight here would make the partial-manifest contract unreachable from
+        # the official prepare command and would force unrelated annotation.
+        registered = sorted({case.ability for case in self.cases})
+        for ability in registered:
             rows = [case for case in self.cases if case.ability == ability]
             if len(rows) < 100:
                 raise ValueError(f'{ability}: need >=100 held-out candidates')

@@ -70,6 +70,7 @@ def test_fidelity_material_must_land_in_its_declared_segment():
         returned, entry, book, mode='deep', given='')
     assert any(hit.rule == 'verbatim_missing' and hit.evidence[0] == 's01'
                for hit in hits)
+    assert hits and {hit.output_ordinal for hit in hits} == {entry['output_ordinal']}
 
 
 def test_segment_event_order_is_proved_or_explicitly_unverifiable():
@@ -449,7 +450,10 @@ def test_rejected_trim_semantic_fail_stays_in_verification():
         store = ArtifactStore(readonly_ctx(
             root, 'stage5.write', prov.code_version()))
         store.write(artifact_rel('stage5.trim_audit', nn=4), audit)
-        rows = _trim_verification_items(root, prov.code_version())
+        # Rendering is tested with an explicitly current audit set; discovery
+        # itself intentionally rejects an audit that has no matching formal chapter.
+        rows = _trim_verification_items(
+            root, prov.code_version(), audits={4: (audit, 'c' * 64)})
         assert [(row.rule, row.chapter) for row in rows] == [
             ('trim_audit_ch04', 4)]
         assert 'FAIL' in rows[0].what and 'pretrim' in rows[0].how

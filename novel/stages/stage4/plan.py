@@ -18,6 +18,10 @@ plan.py —— stage4 的两个节点。**一个 stage 两份产物、两个节�
 """
 from __future__ import annotations
 
+import copy
+import json
+import re
+
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
@@ -32,6 +36,7 @@ from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import CtxProvenance, PlanChapters, PlanEdit, WriterContext
 from novel import paths, prov
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.llm.ledger import combine_usage
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
@@ -64,6 +69,15 @@ _INVALID = paths.invalid_of(REL)
 
 
 # 本节点的 consumed 投影统一登记在 `novel.consumption`；读写与 freshness 共用同一函数。
+
+
+class _ContextGateFailure(Exception):
+    """Internal rollback signal carrying the complete post-context verdict."""
+
+    def __init__(self, outcomes: list[Outcome], hits: list[str]) -> None:
+        super().__init__(', '.join(hits))
+        self.outcomes = outcomes
+        self.hits = hits
 
 
 class _Upstreams:
@@ -110,7 +124,7 @@ def _ctx_link(store: ArtifactStore, plan_raw: dict[str, Any]) -> tuple[str, str]
                            f'它存在的全部理由就是回答这个问题')
     if not store.exists(REL):
         return 'unknown', f'{REL} 不在盘上 ⇒ 拿不到指纹，无从比对'
-    now = prov.fingerprint_bytes(store.path(REL).read_bytes())
+    now = prov.fingerprint_bytes(store._read_bytes(REL))
     was = edge.file if hasattr(edge, 'file') else (edge or {}).get('file')
     if was != now:
         return 'stale', (f'{CTX_REL} 照的是**另一版**计划（它记的是 `{was}`，'
@@ -155,11 +169,13 @@ def _accounting_of(prov_d: dict) -> dict:
     （`--identity` 写的是另一份文件、`--apply-edit` 落的是新一轮）。
     声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
     """
-    return {k: prov_d[k] for k in ('params', 'revalidated', 'gates_skipped') if k in prov_d}
+    return {k: prov_d[k] for k in (
+        'params', 'partial_regen_chapters', 'repairs', 'revalidated', 'gates_skipped'
+    ) if k in prov_d}
 
 
 def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
-            prov_d: dict) -> CheckReport:
+            prov_d: dict, *, judged_rel: str | None = None) -> CheckReport:
     """⚠ **新鲜度判的是「这份报告在说哪个文件」**，而那不总是 `REL`。
 
     第一次付费跑就被闸门拦下时，盘上**只有 `.INVALID`**（正式稿本来就还不存在）。
@@ -167,7 +183,7 @@ def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
     0 成本出路在**最需要它的那一刻**跑不动。（这条 bug 是 stage7 上撞出来、
     回头发现 stage6 同形的，本层从一开始就照着写。）
     """
-    judged_rel = REL if store.exists(REL) else _INVALID
+    judged_rel = judged_rel or (REL if store.exists(REL) else _INVALID)
     return build(
         sid=ctx.sid, node=ctx.node, freshness=store.freshness(judged_rel),
         outcomes=outcomes, accounting=_accounting_of(prov_d),
@@ -204,7 +220,7 @@ def run_check_only(ctx: RunContext) -> CheckReport:
                    art.provenance.model_dump(by_alias=True))
 
 
-def build_prompt(ctx: RunContext) -> tuple[str, str]:
+def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:
     """`--dry-run`：把这次**要发出去的** `(system, user)` 原样交出来。
 
     ⚠ 它与真跑**共用同一个构造入口**（`R-11.8`）——否则「预览里看到的」与
@@ -212,12 +228,25 @@ def build_prompt(ctx: RunContext) -> tuple[str, str]:
     """
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store, need_grounding=True)
+    if chapters:
+        _previous, previous_raw = _repair_baseline_artifact(store)
+        targets = _validated_targets(up, chapters)
+        previous_by = _repair_chapter_map(previous_raw, up)
+        outcomes = _judge(store, previous_raw, up, with_ctx_link=False)
+        if strategy_failures := _strategy_hard_findings(outcomes):
+            raise TerminalState(
+                '当前 HARD 命中 reconstruction_strategy，但 --chapters 的单章响应不许改书级策略；'
+                f'请整跑或人工修复策略。命中={strategy_failures[:3]}')
+        ordinal = targets[0]
+        return (prompts.plan_repair_system(),
+                _build_repair_user(ctx, up, ordinal,
+                                   _repair_findings(outcomes, ordinal),
+                                   previous_by[ordinal],
+                                   strategy=previous_raw['reconstruction_strategy']))
     return prompts.plan_system(), _build_user(ctx, up)
 
 
 def _build_user(ctx: RunContext, up: _Upstreams) -> str:
-    import json
-
     from novel.core.text import render_book
     mt = MainText.model_validate(up.main_text)
     book_text, secidx = render_book(mt)
@@ -237,6 +266,116 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
     if (tbl := source_chars_table(up.groups, up.bidx)):
         parts.append(prompts.BLOCK_SIZES + '\n' + tbl)
     parts.append(prompts.BLOCK_BODY + '\n' + book_text)
+    return '\n\n'.join(parts)
+
+
+def _chapter_by(plan_raw: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    return {
+        int(chapter.get('output_ordinal') or 0): chapter
+        for chapter in (plan_raw.get('output_chapters') or [])
+    }
+
+
+def _repair_chapter_map(
+    plan_raw: dict[str, Any], up: _Upstreams,
+) -> dict[int, dict[str, Any]]:
+    """定向合并前先证明基线确实一章一格，不能顺手修掉非目标章的全局形状。"""
+    expected = [int(row.get('chapter_ordinal') or 0) for row in up.main_text]
+    rows = list(plan_raw.get('output_chapters') or [])
+    actual = [int(row.get('output_ordinal') or 0) for row in rows]
+    if actual != expected:
+        raise TerminalState(
+            '定向重规划只允许替换目标章，不能顺手把基线的缺章、重复章或乱序修掉；'
+            f'期望章序={expected}，基线章序={actual}。请先整跑或人工修复全书形状；'
+            '尚未调用 LLM')
+    return dict(zip(expected, rows, strict=True))
+
+
+def _validated_targets(up: _Upstreams, chapters: tuple[int, ...]) -> tuple[int, ...]:
+    available = {int(row.get('chapter_ordinal') or 0) for row in up.main_text}
+    missing = sorted(set(chapters) - available)
+    if missing:
+        raise TerminalState(f'--chapters 不在正文阅读序里：{missing}')
+    return tuple(sorted(set(chapters)))
+
+
+def _repair_baseline_artifact(
+    store: ArtifactStore,
+) -> tuple[PlanChapters, dict[str, Any]]:
+    """问题稿优先；两者都不存在时，定向重规划没有可安全合并的全书基线。"""
+    source_rel = _INVALID if store.exists(_INVALID) else REL
+    if not store.exists(source_rel):
+        raise UpstreamMissing(f'{REL} 与 {_INVALID} 都不在盘上——定向重规划没有全书基线')
+    return store.read_own(PlanChapters, source_rel, require_current=True)
+
+
+def _response_baseline(chapter: dict[str, Any], groups: dict[Any, list[list[str]]],
+                       ordinal: int) -> dict[str, Any]:
+    """落盘章 → 单章响应形状，避免把代码派生的 ``from_beats`` 反喂成输出字段。"""
+    member_to_unit = {
+        beat_id: f'p{ordinal:02d}_{index:02d}'
+        for index, members in enumerate(groups.get(ordinal) or [], 1)
+        for beat_id in members
+    }
+    baseline = copy.deepcopy(chapter)
+    for segment in baseline.get('segments') or []:
+        segment.pop('slot', None)
+        source = list(segment.pop('from_beats', []) or [])
+        unknown = [beat_id for beat_id in source if beat_id not in member_to_unit]
+        if unknown:
+            raise TerminalState(
+                f'第 {ordinal} 章现有计划引用了当前分组里不存在的 beat：{unknown[:6]}')
+        segment['plan_beats'] = list(dict.fromkeys(member_to_unit[beat_id] for beat_id in source))
+    return baseline
+
+
+def _repair_refs(up: _Upstreams, ordinal: int) -> dict[str, Any]:
+    assert up.global_g is not None
+    refs = fact_catalog(up.global_g, up.blueprints, up.main_text, plan_units=up.groups)
+    events = {key: value for key, value in refs['events'].items() if value == ordinal}
+    return {
+        **refs,
+        'chapters': [ordinal],
+        'events': events,
+        'event_units': {key: value for key, value in refs['event_units'].items()
+                        if key in events},
+    }
+
+
+def _build_repair_user(ctx: RunContext, up: _Upstreams, ordinal: int,
+                       findings: list[dict[str, Any]], baseline: dict[str, Any], *,
+                       strategy: str) -> str:
+    """只下发目标章正文、骨架、量纲、事实引用与现有章，不暴露其他章节正文。"""
+    row = next(item for item in up.main_text
+               if int(item.get('chapter_ordinal') or 0) == ordinal)
+    projected = prompts.project_blueprints_for_planner(
+        up.blueprints, {ordinal: up.groups.get(ordinal) or []})
+    projected['blueprints'] = [
+        item for item in projected['blueprints']
+        if int(item.get('chapter_ordinal') or 0) == ordinal
+    ]
+    source_label = row.get('source_chapter_label')
+    index = f'阅读序第{ordinal}章  原文标号(参考,不可信)={source_label}'
+    body = f'===== [阅读序第{ordinal}章 | 原文标号={source_label}] =====\n{row.get("text") or ""}'
+    parts = [
+        f'《{ctx.title}》',
+        prompts.BLOCK_REPAIR_SCOPE + f'\n阅读序第 {ordinal} 章',
+        prompts.BLOCK_REPAIR_STRATEGY + '\n' + strategy,
+        prompts.BLOCK_REPAIR_FAILURES + '\n'
+        + json.dumps(findings, ensure_ascii=False, separators=(',', ':')),
+        prompts.BLOCK_REPAIR_BASELINE + '\n'
+        + json.dumps(_response_baseline(baseline, up.groups, ordinal),
+                     ensure_ascii=False, separators=(',', ':')),
+        prompts.BLOCK_INDEX + '\n' + index,
+        prompts.BLOCK_FACT_REFS + '\n'
+        + json.dumps(_repair_refs(up, ordinal), ensure_ascii=False, separators=(',', ':')),
+        prompts.BLOCK_SKELETON + '\n'
+        + json.dumps(projected, ensure_ascii=False, separators=(',', ':')),
+    ]
+    if (table := source_chars_table(
+            {ordinal: up.groups.get(ordinal) or []}, up.bidx)):
+        parts.append(prompts.BLOCK_SIZES + '\n' + table)
+    parts.append(prompts.BLOCK_BODY.replace('全书', '目标章') + '\n' + body)
     return '\n\n'.join(parts)
 
 
@@ -285,7 +424,9 @@ def run_context(ctx: RunContext) -> CheckReport:
                    plan.provenance.model_dump(by_alias=True))
 
 
-def run_revalidate(ctx: RunContext) -> CheckReport:
+def run_revalidate(
+    ctx: RunContext, *, actor: str, reason: str,
+) -> CheckReport:
     """0 成本提升路：按**当前**判据重判被闸门拦下的 `.INVALID` 稿，合格即提升。
 
     ⚠⚠ **闸门是我们自己加的，不给一条 0 成本提升路，一次付费产出就被永久锁死。**
@@ -300,8 +441,23 @@ def run_revalidate(ctx: RunContext) -> CheckReport:
     outcomes = _judge(store, raw, up, with_ctx_link=False)
     if _hard_hits(outcomes):
         return _report(ctx, store, outcomes, art.provenance.model_dump(by_alias=True))
-    store.promote_invalid(REL, PlanChapters)
-    run_context(ctx)
+    try:
+        with store.history_transaction(REL, CTX_REL):
+            store.promote_invalid(
+                REL, PlanChapters, actor=actor, reason=reason,
+                artifact_override=art)
+            run_context(ctx)
+            landed, landed_raw = store.read_own(PlanChapters, REL)
+            final_outcomes = _judge(store, landed_raw, up, with_ctx_link=True)
+            if hits := _hard_hits(final_outcomes):
+                raise _ContextGateFailure(final_outcomes, hits)
+    except _ContextGateFailure as failure:
+        # The original INVALID and every prior formal/context/history byte have
+        # already been restored by the transaction.  A broken context link is
+        # therefore a failed revalidation, never a promoted red formal.
+        return _report(
+            ctx, store, failure.outcomes,
+            art.provenance.model_dump(by_alias=True), judged_rel=_INVALID)
     return run_check_only(ctx)
 
 
@@ -314,6 +470,74 @@ def _hard_hits(outcomes: list[Outcome]) -> list[str]:
     from contracts.rules import REGISTRY
     return sorted(o.rule for o in outcomes
                   if o.findings and o.unver_why is None and REGISTRY.get(o.rule).sev == 'hard')
+
+
+def _evidence_plan_chapter(value: str) -> int | None:
+    """只解析机器凭据 ID；报告 detail 是给人读的散文，绝不能拿来做修复路由。"""
+    token = value.strip()
+    for pattern in (
+        r'^(?:out|ch|src)0*(\d+)(?:$|[:#_])',
+        r'^[pb]0*(\d+)_',
+    ):
+        if match := re.match(pattern, token, re.IGNORECASE):
+            return int(match.group(1))
+    return None
+
+
+def _target_hard_findings(outcomes: list[Outcome], ordinal: int) -> list[Any]:
+    """目标章 HARD：优先显式 ``output_ordinal``，否则只认结构化 evidence ID。"""
+    from contracts.rules import REGISTRY
+
+    rows = []
+    for outcome in outcomes:
+        if REGISTRY.get(outcome.rule).sev != 'hard':
+            continue
+        for item in outcome.findings:
+            belongs = (
+                item.output_ordinal == ordinal
+                if item.output_ordinal is not None
+                else ordinal in {
+                    chapter for value in item.evidence
+                    if (chapter := _evidence_plan_chapter(str(value))) is not None
+                }
+            )
+            if belongs:
+                rows.append((outcome, item))
+    return rows
+
+
+def _strategy_hard_findings(outcomes: list[Outcome]) -> list[str]:
+    """书级 reconstruction_strategy 不能由单章响应修改，transport 前必须拒绝。"""
+    from contracts.rules import REGISTRY
+
+    return [
+        f'{outcome.rule}:{item.detail}'
+        for outcome in outcomes if REGISTRY.get(outcome.rule).sev == 'hard'
+        for item in outcome.findings
+        if any(str(value).startswith('strategy:') for value in item.evidence)
+    ]
+
+
+def _repair_findings(outcomes: list[Outcome], ordinal: int) -> list[dict[str, Any]]:
+    """只下发目标章自己的 HARD 失败原文与凭据；全书其他章不进入修复 prompt。"""
+    from contracts.rules import REGISTRY
+
+    rows: list[dict[str, Any]] = []
+    for outcome, item in _target_hard_findings(outcomes, ordinal):
+        rows.append({
+            'rule': outcome.rule,
+            'item': REGISTRY.get(outcome.rule).item,
+            'detail': item.detail,
+            'evidence': list(item.evidence),
+        })
+    if not rows:
+        rows.append({
+            'rule': 'manual_regeneration',
+            'item': '人工指定定向重规划',
+            'detail': f'用户明确要求重新规划阅读序第 {ordinal} 章；只改本章。',
+            'evidence': [f'ch{ordinal}'],
+        })
+    return rows
 
 
 def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: _Upstreams, *,
@@ -350,24 +574,163 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
         raise GateBlocked(
             f'{len(hits)} 条阻断级判据命中：{hits}。问题稿已存 `{_INVALID}`，'
             f'**正式产物没有被覆盖**。⚠ 这次不必再付费：手改那几行，'
-            f'`stage4.plan --revalidate` 提升即可（0 成本）',
+            f'`stage4.plan --revalidate --actor <id> --reason <why>` 提升即可'
+            f'（0 LLM、同轮重判并留不可变审计）',
             invalid_path=str(path))
-    if archive and store.exists(REL):
-        store.archive_round(REL, keep=True)
-    store.write(REL, art)
-    run_context(ctx)
-    return _report(ctx, store, _judge(store, art.model_dump(by_alias=True), up, with_ctx_link=True),
-                   art.provenance.model_dump(by_alias=True))
+    try:
+        with store.history_transaction(REL, CTX_REL):
+            if archive:
+                store.write_round(REL, art)
+            else:
+                store.write(REL, art)
+            run_context(ctx)
+            final_outcomes = _judge(
+                store, art.model_dump(by_alias=True), up, with_ctx_link=True)
+            if hits := _hard_hits(final_outcomes):
+                raise _ContextGateFailure(final_outcomes, hits)
+    except _ContextGateFailure as failure:
+        # The plan/context pair and their histories were restored before the
+        # failed candidate is recorded.  Thus a post-build context_link HARD has
+        # exactly the same recovery shape as every other Stage4 HARD.
+        path = store.write_invalid(REL, art, gates_skipped=[])
+        raise GateBlocked(
+            f'{len(failure.hits)} 条阻断级判据在重建 writer context 后命中：'
+            f'{failure.hits}。旧正式计划与上下文已逐字节恢复，问题稿已存 '
+            f'`{_INVALID}`；修复后用 `stage4.plan --revalidate --actor <id> '
+            f'--reason <why>` 重判',
+            invalid_path=str(path),
+        ) from None
+    return _report(
+        ctx, store, final_outcomes, art.provenance.model_dump(by_alias=True))
 
 
-def run_plan(ctx: RunContext, client: Any) -> CheckReport:
-    """⭐ 本层**唯一**一处 `ask_json`。全书一次调用。
+def _run_plan_repair(ctx: RunContext, client: Any, *,
+                     chapters: tuple[int, ...]) -> CheckReport:
+    """逐章重新请求、合并未动章，再用全书判据一次性验收。"""
+    from contracts.schema.stage4 import PlanChapterResponse, PlanProvenance
+    from novel.llm.cache import CachePolicy
+
+    if ctx.cache.name != 'refresh-write':
+        raise TerminalState(
+            'stage4.plan --chapters 必须使用 refresh-write：定向重规划不得读回旧请求缓存')
+    store = ArtifactStore(ctx)
+    up = _Upstreams(ctx, store)
+    targets = _validated_targets(up, chapters)
+    previous, previous_raw = _repair_baseline_artifact(store)
+    old_prov = previous.provenance
+    params = _params(up)
+    if old_prov.model != client.model:
+        raise TerminalState(
+            '当前 PlanProvenance 没有表达混合模型的槽位；'
+            f'原稿 model={old_prov.model!r}，本次={client.model!r}。尚未调用 LLM')
+    if old_prov.params.model_dump() != params:
+        raise TerminalState(
+            '定向重规划不能把不同 grouping/beat_min_chars 的章混成一份计划；'
+            '请先整跑 stage4.plan。尚未调用 LLM')
+    base_system = prompts.plan_system()
+    if old_prov.prompts.get('N4_SYS') != prov.fingerprint(base_system):
+        raise TerminalState(
+            '定向重规划的 N4_SYS 与基线产物不同，而当前 provenance 没有表达'
+            '“部分章节使用另一版全书规划契约”的槽位；尚未调用 LLM')
+    repair_system = prompts.plan_repair_system()
+    old_repair_system = old_prov.prompts.get('N4_REPAIR_SYS')
+    if (old_repair_system is not None
+            and old_repair_system != prov.fingerprint(repair_system)):
+        raise TerminalState(
+            '基线计划已有定向重规划章节，但 N4_REPAIR_SYS 与当前版本不同；'
+            '继续会把两版单章契约混在同一份 provenance 里。请整跑 stage4.plan；'
+            '尚未调用 LLM')
+
+    old_by = _repair_chapter_map(previous_raw, up)
+    before_outcomes = _judge(store, previous_raw, up, with_ctx_link=False)
+    if strategy_failures := _strategy_hard_findings(before_outcomes):
+        raise TerminalState(
+            '当前 HARD 命中 reconstruction_strategy，但 --chapters 的单章响应按契约不许改书级策略；'
+            f'请整跑 stage4.plan 或人工修复策略。命中={strategy_failures[:3]}。尚未调用 LLM')
+    merged_by = copy.deepcopy(old_by)
+    history = [row.model_dump() for row in old_prov.repairs]
+
+    for ordinal in targets:
+        before_hard = len(_target_hard_findings(before_outcomes, ordinal))
+        failures = _repair_findings(before_outcomes, ordinal)
+        user = _build_repair_user(
+            ctx, up, ordinal, failures, old_by[ordinal],
+            strategy=previous_raw['reconstruction_strategy'])
+        response = client.ask_json(
+            repair_system, user, model_cls=PlanChapterResponse,
+            purpose=f'{ctx.node}:repair:ch{ordinal}',
+            max_tokens=prompts.PLAN_MAX_TOKENS,
+            cache_policy=CachePolicy.refresh())
+        if (response.output_ordinal != ordinal
+                or list(response.from_source_ordinals) != [ordinal]):
+            raise TerminalState(
+                f'定向重规划请求第 {ordinal} 章，响应却是 '
+                f'output_ordinal={response.output_ordinal} / '
+                f'from_source_ordinals={response.from_source_ordinals}。'
+                '正式计划未覆盖；拒绝把越界响应静默合并')
+        raw_response = response.model_dump(by_alias=True)
+        expanded = {
+            'reconstruction_strategy': previous_raw['reconstruction_strategy'],
+            'output_chapters': [copy.deepcopy(raw_response)],
+        }
+        expand_plan_beats(expanded, {ordinal: up.groups.get(ordinal) or []})
+        after = expanded['output_chapters'][0]
+        merged_by[ordinal] = after
+        interim = {
+            'reconstruction_strategy': previous_raw['reconstruction_strategy'],
+            'output_chapters': [merged_by[chapter] for chapter in old_by],
+            '_provenance': previous_raw['_provenance'],
+        }
+        after_hard = len(_target_hard_findings(
+            _judge(store, interim, up, with_ctx_link=False), ordinal))
+        history.append({
+            'chapter_ordinal': ordinal,
+            'failure_items': sorted({str(row['rule']) for row in failures}),
+            'failure_evidence': prov.projection_fingerprint(failures),
+            'user_prompt': prov.fingerprint(user),
+            'output': prov.projection_fingerprint(raw_response),
+            'before': prov.projection_fingerprint(old_by[ordinal]),
+            'after': prov.projection_fingerprint(after),
+            'before_hard': before_hard,
+            'after_hard': after_hard,
+            'model': client.model,
+            'cache_policy': ctx.cache.name,
+        })
+
+    ordinals = [int(row.get('chapter_ordinal') or 0) for row in up.main_text]
+    merged = {
+        'reconstruction_strategy': previous_raw['reconstruction_strategy'],
+        'output_chapters': [merged_by[ordinal] for ordinal in ordinals],
+    }
+    partial = sorted(set(old_prov.partial_regen_chapters) | set(targets))
+    delta = ctx.llm_provenance(
+        PlanProvenance,
+        prompts={'N4_SYS': base_system, 'N4_REPAIR_SYS': repair_system},
+        model=client.model, params=params,
+        partial_regen_chapters=partial, repairs=history)
+    provenance = PlanProvenance.model_validate({
+        **delta.model_dump(),
+        'prompts': {**old_prov.prompts, **delta.prompts},
+        'usage': combine_usage(old_prov.usage, delta.usage),
+        'partial_rewrite': old_prov.partial_rewrite,
+    })
+    # 目标章已在上面展开，未动章来自合法基线；这里直接进入全书引用/判据闸。
+    return _gate_and_write(ctx, store, merged, up,
+                           provenance=provenance, archive=True)
+
+
+def run_plan(ctx: RunContext, client: Any, *,
+             chapters: tuple[int, ...] = ()) -> CheckReport:
+    """付费规划：缺省全书一次调用；``chapters`` 非空时逐章调用并安全合并。
 
     ⚠⚠ **本仓最贵的一次请求**（`max_tokens=96000`，user 里带着全书原文）。
     **写好了，但在人点头之前一次都不许真跑。** 先 `--dry-run`：`build_prompt()` 是 0 成本的。
-    〔这是 `stage4.md` 说的「全层唯一一处 `client.ask_json`」那个落点。〕
+    定向路强制 refresh-write，并在任何调用前拒绝混合 model / system / 分组参数。
     """
     from contracts.schema.stage4 import PlanProvenance, PlanResponse
+
+    if chapters:
+        return _run_plan_repair(ctx, client, chapters=chapters)
 
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store)
@@ -485,8 +848,4 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
         ctx, store, data, up,
         provenance=ctx.rewrite_provenance(prev.provenance, by='--apply-edit'),
         archive=True)
-    # 基线是 `.INVALID` 且人工稿已合格落成正式 ⇒ 过时的问题稿归档，别留在盘上
-    # 冒充「还有一份待救的稿」。
-    if store.exists(_INVALID):
-        store.archive_round(_INVALID)
     return report

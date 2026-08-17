@@ -394,16 +394,18 @@ def test_cancel_accepts_pending_but_refuses_to_fake_cancel_a_running_call(
 
     def spawn(argv, cwd, env, log):
         entered.set()
-        assert release.wait(2)
+        assert release.wait(5)
         return 0
 
     Q.start(queue_base, 'q-cancel-running', spawn=spawn,
             registry=qreg, job_registry=jreg)
-    assert entered.wait(1)
+    # Windows CI can take more than one second to schedule the worker while
+    # the full suite is also running subprocess-heavy collection guards.
+    assert entered.wait(5)
     with pytest.raises(QueueConflict, match='只能取消尚未开始'):
         Q.cancel(queue_base, 'q-cancel-running', 0, registry=qreg)
     release.set()
-    assert Q.wait('q-cancel-running', 2)
+    assert Q.wait('q-cancel-running', 5)
     finished = next(record for record in Q.records(queue_base, registry=qreg)
                     if record.queue_id == 'q-cancel-running')
     assert finished.state == 'ok'

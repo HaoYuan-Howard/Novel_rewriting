@@ -25,12 +25,13 @@ from contracts.artifacts import (
 
 import collections
 import glob
+import json
 import os
 import re
 from typing import Any
 
 from contracts.rules import REGISTRY
-from contracts.schema.common import Finding, WontFixEntry
+from contracts.schema.common import Finding, WontFixEntry, WontFixNote
 from contracts.schema.report import CheckReport, finding
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage3 import StyleGrounding
@@ -239,11 +240,11 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
                 'budget_chars': entry['budget_chars'],
                 'source_chars': entry['source_chars']}
         if not recs:
-            rows.append(ReviewChapter(**base, findings=[finding(
+            rows.append(ReviewChapter(**base, findings=checks.with_output_ordinal([finding(
                 'draft_missing',
                 detail=f'计划里有第 {o} 章，stage5 没有它的成稿——'
                        f'**本章的全部判定都没有跑，不是跑了没问题**',
-                evidence=[str(o)])]))
+                evidence=[str(o)])], o)))
             continue
         fs: list[Finding] = []
         if len(recs) > 1:
@@ -290,7 +291,7 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
             draft_round=judged[rec['_relpath']].round,
             draft_sha1=judged[rec['_relpath']].sha1,
             draft_text_sha1=prov.fingerprint(body),
-            chars=M.chars_of(body), findings=fs))
+            chars=M.chars_of(body), findings=checks.with_output_ordinal(fs, o)))
 
     # ── ③ 书级 ──────────────────────────────────────────────────────────────
     row_dicts = [r.model_dump(by_alias=True) for r in rows]
@@ -311,6 +312,14 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
     rows = [row.model_copy(update={'findings': [
         _downgrade(f, actionable=False, identity_dead=True)
         if (f.rule in dead and f.actionable) else f for f in row.findings]}) for row in rows]
+
+    # A current unadopted trim audit is already the authoritative conclusion
+    # and closure path for this exact over-length draft.  Do not emit a second
+    # ``length_over`` finding for the same root cause; the verification item
+    # carries the explicit current length/target and audit before/after hashes.
+    from novel.stages.stage5 import trim_resolution
+    current_trim = set(trim_resolution.current_trim_audits(store))
+    rows = _merge_length_over_into_trim(rows, current_trim)
 
     # ── ③.6 人的「这条我不修」──────────────────────────────────────────────
     wf = load_wontfix(store)
@@ -345,6 +354,21 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
         _provenance=ctx.free_provenance(ReviewProvenance,
                                         prompts={'RULES': prov.rules_fingerprint('stage5')}),
     )
+
+
+def _merge_length_over_into_trim(
+    rows: list[ReviewChapter],
+    current_trim: set[int],
+) -> list[ReviewChapter]:
+    """Remove duplicate ``length_over`` findings owned by a current trim audit."""
+    merged: list[ReviewChapter] = []
+    for row in rows:
+        if row.output_ordinal not in current_trim:
+            merged.append(row)
+            continue
+        findings = [hit for hit in row.findings if hit.rule != 'length_over']
+        merged.append(row.model_copy(update={'findings': findings}))
+    return merged
 
 
 def _material(entry: dict[str, Any], book: M.Book, *, mode: str) -> str:
@@ -443,6 +467,14 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
     for f in rev.book:
         by_rule[f.rule].append(f)
 
+    # Review 是逐章事实账，因此保留每章的 band_drift；CheckReport /
+    # CLI / API 则是操作面，同一方向的系统性漂移只能算一件书级待办。
+    # 聚合 finding 的 evidence 放入可机器展开的逐章 JSON，不丢 wontfix /
+    # convergence 信息，也不改写盘上 Review 本体。
+    if band_findings := by_rule.get('band_drift'):
+        by_rule['band_drift'] = [
+            _aggregate_band_drift(band_findings, total_chapters=len(rev.chapters))]
+
     nch = len([r for r in rev.chapters if r.relpath])
     scanned = {r_: f'{rev.baselines.get(r_, "")} 章（恒等基线 '
                    f'{rev.baselines_identity.get(r_, "?")}）'
@@ -480,6 +512,67 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
             'event_landing_unver': '每一拍都提得出可回查的原子',
         },
         secret_blind=blind)
+
+
+def _aggregate_band_drift(
+    findings: list[Finding], *, total_chapters: int,
+) -> Finding:
+    """Collapse chapter facts into one lossless book-level report finding."""
+    ordered = sorted(
+        findings,
+        key=lambda hit: (
+            hit.output_ordinal is None,
+            hit.output_ordinal or 0,
+            hit.detail,
+            hit.evidence_key,
+        ),
+    )
+    chapters = sorted({
+        hit.output_ordinal for hit in ordered if hit.output_ordinal is not None})
+    evidence = [json.dumps({
+        'output_ordinal': hit.output_ordinal,
+        'detail': hit.detail,
+        'evidence': list(hit.evidence),
+        'evidence_key': hit.evidence_key,
+        'actionable': hit.actionable,
+        'identity_hit': hit.identity_hit,
+        'identity_dead': hit.identity_dead,
+        'converge': hit.converge,
+        'unresolved_rounds': hit.unresolved_rounds,
+        'wontfix': (
+            hit.wontfix.model_dump(mode='json') if hit.wontfix is not None else None),
+    }, ensure_ascii=False, sort_keys=True, separators=(',', ':')) for hit in ordered]
+
+    all_wontfix = bool(ordered) and all(hit.wontfix is not None for hit in ordered)
+    combined_wontfix = None
+    if all_wontfix:
+        combined_wontfix = WontFixNote(
+            why='；'.join(
+                f'ch{hit.output_ordinal}:{hit.wontfix.why}' for hit in ordered
+                if hit.wontfix is not None),
+            at='；'.join(
+                f'ch{hit.output_ordinal}:{hit.wontfix.at}' for hit in ordered
+                if hit.wontfix is not None),
+        )
+    states = sorted({hit.converge for hit in ordered})
+    converge = states[0] if len(states) == 1 else f'mixed({",".join(states)})'
+    detail = (
+        f'书级档位漂移：{len(chapters)}/{total_chapters} 章命中，'
+        f'涉及章节 {chapters}，共 {len(ordered)} 条逐章事实；'
+        'detail、原始凭据、wontfix 与 convergence 状态可在 evidence 逐条展开')
+    aggregate = finding(
+        'band_drift', detail=detail, evidence=evidence,
+        converge=converge,
+        unresolved_rounds=max((hit.unresolved_rounds for hit in ordered), default=0),
+        wontfix=combined_wontfix,
+    )
+    return _downgrade(
+        aggregate,
+        actionable=any(hit.actionable for hit in ordered),
+        identity_hit=all(hit.identity_hit for hit in ordered),
+        identity_dead=(True if ordered and all(hit.identity_dead is True for hit in ordered)
+                       else None),
+    )
 
 
 def _report_of_review(ctx: RunContext, store: ArtifactStore, rev: Review,

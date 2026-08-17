@@ -205,7 +205,10 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
 
 def _blocked_why(waiting_on: str, verdict_why: str) -> str:
     if waiting_on == WAITING_ON_INBOX:
-        return f'上游有被闸门拦下的稿要人处理（0 成本提升路是 `--revalidate`）；{verdict_why}'
+        return (
+            '上游有被闸门拦下的稿要人处理（0 LLM 提升路是 '
+            '`--revalidate --actor <id> --reason <why>`，同轮重判并留不可变审计）；'
+            f'{verdict_why}')
     if waiting_on == WAITING_ON_DEPTH_SELECTION:
         return ('还没有持久化的深度章节选择；先在「挑深度章节」屏保存一次，'
                 f'队列不会猜成全 deep 或全 shallow；{verdict_why}')

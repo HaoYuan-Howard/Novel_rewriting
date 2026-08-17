@@ -30,11 +30,10 @@ BOOK_WITH_HITS = '我把夫君捧成头牌后，全家悔疯了_7615069877019300
 def _books() -> set[str]:
     return {a.book_dir for a in corpus.iter_artifacts() if a.rel == 'stage6/hook.json'}
 
-pytestmark = [
-    pytest.mark.corpus,
-    pytest.mark.skipif(
-        not _books(), reason='盘上没有 stage6 语料——这几条**没在查**，不是「查过没事」'),
-]
+def _STAGE6_CORPUS(test):
+    test = pytest.mark.corpus(test)
+    return pytest.mark.skipif(
+        not _books(), reason='盘上没有 stage6 语料——这几条**没在查**，不是「查过没事」')(test)
 
 
 def _drafts_of(book: str) -> tuple[str, ...]:
@@ -57,17 +56,60 @@ def test_human_only_collects_hits_whose_remediation_is_human():
     from novel.views import inbox as I
 
     finding = SimpleNamespace(
-        wontfix=None, unresolved_rounds=0, owner='stage6', detail='结尾形态需人工裁决')
+        output_ordinal=4, wontfix=None, unresolved_rounds=0,
+        owner='stage6', detail='结尾形态需人工裁决')
     line = SimpleNamespace(
         status='hit', sev='info', remediation='human', fix=None,
         rule='hook_ending_shape', findings=[finding])
     human = I._report_items(SimpleNamespace(rules=[line]), 'stage6')
     assert len(human) == 1
     assert human[0].kind == 'human_only'
+    assert human[0].chapter == 4
     assert human[0].stage == 'stage6' and human[0].rule == 'hook_ending_shape'
     assert '--apply-edit' in human[0].how or '--pick' in human[0].how
 
 
+def test_stage5_band_drift_is_one_book_task_with_chapter_details_preserved():
+    """inbox 直接消费 CheckReport 的书级 finding，不再做第二次聚合。"""
+    from novel.views import inbox as I
+
+    aggregate = SimpleNamespace(
+        output_ordinal=None, wontfix=None, unresolved_rounds=0,
+        owner='stage5',
+        detail=('书级档位漂移：2/25 章命中，涉及章节 [2, 7]，'
+                '逐章事实可在 evidence 展开'))
+    line = SimpleNamespace(
+        status='hit', sev='info', remediation='human', fix=None,
+        rule='band_drift', scanned='3/25 章（按命中章去重）',
+        findings=[aggregate],
+    )
+    rows = I._report_items(SimpleNamespace(rules=[line]), 'stage5')
+    assert len(rows) == 1
+    assert rows[0].kind == 'human_only' and rows[0].chapter is None
+    assert rows[0].rule == 'band_drift'
+    assert '[2, 7]' in rows[0].what and '2/25 章' in rows[0].what
+    assert 'evidence 展开' in rows[0].what
+    assert '0 LLM 费用' in rows[0].how
+    assert '所有 producer-owned slot' in rows[0].how and '整章全文' in rows[0].how
+
+
+def test_stage5_length_over_uses_the_finding_chapter_without_display_side_guessing():
+    """inbox 只投影 Review finding 自带的章号；不在展示层做 trim join。"""
+    from novel.views import inbox as I
+
+    finding = SimpleNamespace(
+        output_ordinal=3, wontfix=None, unresolved_rounds=0,
+        owner='stage5', detail='第 3 章超出目标区间')
+    line = SimpleNamespace(
+        status='hit', sev='info', remediation='human', fix=None,
+        rule='length_over', scanned='1/1 章', findings=[finding])
+    rows = I._report_items(SimpleNamespace(rules=[line]), 'stage5')
+    assert len(rows) == 1 and rows[0].chapter == 3
+    assert '0 LLM 费用' in rows[0].how
+    assert '所有 producer-owned slot' in rows[0].how and '整章全文' in rows[0].how
+
+
+@_STAGE6_CORPUS
 def test_unver_rows_never_enter_the_inbox(box):
     """「查不了」是判据的边界不是待办——堆进清单就永远清不空。"""
     from contracts.rules import REGISTRY
@@ -76,6 +118,7 @@ def test_unver_rows_never_enter_the_inbox(box):
     assert not [it for it in view.items if it.rule in unver_rules]
 
 
+@_STAGE6_CORPUS
 def test_counts_total_and_kind_partition_are_mutually_consistent(box):
     """八键全出（0 也出）、counts == items 分组 == total——载体后置条件与实产共同钉住。"""
     view = inbox_view(str(box.root), box.sid)
@@ -85,6 +128,7 @@ def test_counts_total_and_kind_partition_are_mutually_consistent(box):
     assert view.total == len(view.items) == sum(view.counts.values())
 
 
+@_STAGE6_CORPUS
 def test_an_invalid_without_formal_is_invalid_and_with_formal_is_rejected(box):
     """同一个 `.INVALID`，正式稿在不在决定它是「在等人改」还是「钱花了稿丢了」。"""
     formal = box.dir / 'stage6' / 'hook.json'
@@ -96,15 +140,20 @@ def test_an_invalid_without_formal_is_invalid_and_with_formal_is_rejected(box):
     assert rejected[0].rule == 'stage6.hook'
     # UG-12 的锚：被驳回之后的下一条恢复路径写在 how 里——归档指针 + 0 成本出路。
     assert '_rounds' in rejected[0].how and '--revalidate' in rejected[0].how
+    assert '--actor <id>' in rejected[0].how and '--reason <why>' in rejected[0].how
+    assert '0 LLM、同轮重判、写入不可变审计' in rejected[0].how
 
     formal.unlink()
     view2 = inbox_view(str(box.root), box.sid)
     invalid = [it for it in view2.items if it.kind == 'invalid' and it.stage == 'stage6']
     assert len(invalid) == 1
     assert '--revalidate' in invalid[0].how
+    assert '--actor <id>' in invalid[0].how and '--reason <why>' in invalid[0].how
+    assert '0 LLM、同轮重判、写入不可变审计' in invalid[0].how
     assert not [it for it in view2.items if it.kind == 'rejected' and it.stage == 'stage6']
 
 
+@_STAGE6_CORPUS
 def test_approval_lists_the_unapproved_hook_gate(box):
     """定稿闸门没盖章 ⇒ `approval` 入列；它不是故障，但确实该在清单上。"""
     rel = box.dir / 'stage6' / 'hook.json'
@@ -153,7 +202,8 @@ def test_stalled_items_come_from_unresolved_rounds_at_the_stop_threshold(monkeyp
     # ⚠ 豁免计数**不再由这个函数交**：那张账逐层各一份（`<stage>/wontfix.json`），
     #   由 `inbox_view` 跨层求和。顺手在这里数会把 stage5 那一份数两次。
     items = I._stage5_stalled(object())
-    assert [(it.rule, it.chapter) for it in items] == [('band_drift', 3), ('book_length', None)]
+    assert [(it.rule, it.chapter) for it in items] == [('book_length', None), ('band_drift', None)]
+    assert '[3]' in next(it.what for it in items if it.rule == 'band_drift')
     assert all(it.kind == 'stalled' and 'wontfix' in it.how for it in items)
     assert all('stage5.review --wontfix' in it.how for it in items),         'stalled 那条路要指名节点——`--wontfix` 现在两层都有'
 
@@ -185,6 +235,18 @@ def test_the_fallback_how_never_names_a_flag_the_stage_does_not_have():
             f'这一层实有 {sorted(have)}')
         if not ({'--apply-edit', '--wontfix'} & have):
             assert '--' not in text, f'{stage} 一条 0 成本人工路都没有，却给出了一条命令：{text}'
+
+
+def test_every_revalidate_inbox_instruction_requires_audit_credentials():
+    from contracts.invariants import NODES
+    from novel.views.inbox import _revalidate_how
+
+    nodes = [node for node, spec in NODES.items() if '--revalidate' in spec.flags]
+    assert nodes
+    for node in nodes:
+        text = _revalidate_how(node)
+        assert f'{node} --revalidate --actor <id> --reason <why>' in text
+        assert '0 LLM、同轮重判、写入不可变审计' in text
 
 
 def test_every_human_only_row_offers_something_the_operator_can_actually_run():
@@ -234,6 +296,7 @@ def test_a_hard_local_hit_with_a_fix_route_is_repairable_not_human_only():
     assert '`stage2.global --apply-edit stage2/global_edit.json`' in rows[0].how
 
 
+@_STAGE6_CORPUS
 def test_global_review_pending_fail_and_unver_are_verification_rows(box):
     from contracts.artifacts import STAGE2_GLOBAL_REVIEW
     from contracts.schema.evaluation import GlobalReview, GlobalReviewItem
@@ -272,20 +335,30 @@ def test_global_review_pending_fail_and_unver_are_verification_rows(box):
     assert all('--review-decisions' in row.how and 'subject hash' in row.how for row in rows)
 
 
+@_STAGE6_CORPUS
 def test_unadopted_trim_without_semantic_evidence_is_a_verification_row(box):
+    import hashlib
+
     from contracts.artifacts import artifact_rel
     from contracts.schema.evaluation import TrimAudit
     from novel import prov
     from novel.orchestrator.state import readonly_ctx
+    from novel.stages.stage5 import measure as M
     from novel.store import ArtifactStore
 
+    store = ArtifactStore(readonly_ctx(box.dir, 'stage5.write', prov.code_version()))
+    drafts, _invalid, _judged = M.load_drafts(store)
+    ordinal = next(number for number, rows in sorted(drafts.items()) if len(rows) == 1)
+    draft = drafts[ordinal][0]
+    before = hashlib.sha256(draft['text'].encode('utf-8')).hexdigest()
+    after = hashlib.sha256((draft['text'] + '\ntrim candidate').encode('utf-8')).hexdigest()
     audit = TrimAudit(
-        output_ordinal=3, mode='deep', before_sha256='a' * 64, after_sha256='b' * 64,
+        output_ordinal=ordinal, mode=draft['_mode'],
+        before_sha256=before, after_sha256=after,
         before_claims=[], after_claims=[], deterministic_passed=True,
         semantic=None, adopted=False,
         reason='未激活经 ground-truth 校准的 evaluator')
-    store = ArtifactStore(readonly_ctx(box.dir, 'stage5.write', prov.code_version()))
-    store.write(artifact_rel('stage5.trim_audit', nn=3), audit)
+    store.write(artifact_rel('stage5.trim_audit', nn=ordinal), audit)
 
     rows = [row for row in inbox_view(str(box.root), box.sid).items
             if row.kind == 'verification' and row.stage == 'stage5']
@@ -293,9 +366,13 @@ def test_unadopted_trim_without_semantic_evidence_is_a_verification_row(box):
     #   （现役这本 11 章都因为 evaluator profile 缺席保留了 pretrim），
     #   那时这一条会红在「语料碰巧有几行」上，而不是它要验的那件事。
     by_rule = {row.rule: row for row in rows}
-    assert 'trim_audit_ch03' in by_rule, f'种下的那一行没进清单：{sorted(by_rule)}'
+    rule = f'trim_audit_ch{ordinal:02d}'
+    assert rule in by_rule, f'种下的那一行没进清单：{sorted(by_rule)}'
     assert all(row.rule.startswith('trim_audit_') for row in rows), \
         f'stage5 的 verification 只该由收缩审计产生：{sorted(by_rule)}'
-    seeded = by_rule['trim_audit_ch03']
-    assert seeded.chapter == 3
+    seeded = by_rule[rule]
+    assert seeded.chapter == ordinal
+    assert '当前 pretrim' in seeded.what and '目标 ' in seeded.what
+    assert f'before={before}' in seeded.what and f'after={after}' in seeded.what
     assert 'pretrim' in seeded.how and '未采用收缩候选' in seeded.how
+    assert '--actor <自报身份>' in seeded.how and '--reason <理由>' in seeded.how

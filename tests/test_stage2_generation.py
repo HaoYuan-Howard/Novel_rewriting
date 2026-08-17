@@ -293,11 +293,15 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         )
         assert store.exists(extract._INVALID)
 
-        rerun_client, _rerun_transport = _client(blueprint_ctx, respond)
-        rerun_report = extract.run_blueprint(blueprint_ctx, rerun_client)
+        # 一次 RunContext 只代表一次节点执行。上面的报告读取已经在旧 ctx
+        # 记入了正式产物边；完整重跑必须像真实 CLI 子进程一样开全新上下文。
+        rerun_ctx = _ctx(book, 'stage2.blueprint')
+        rerun_client, _rerun_transport = _client(rerun_ctx, respond)
+        rerun_report = extract.run_blueprint(rerun_ctx, rerun_client)
+        rerun_store = ArtifactStore(rerun_ctx)
 
         assert rerun_report.passed
-        assert not store.exists(extract._INVALID)
+        assert not rerun_store.exists(extract._INVALID)
         assert list((book / 'stage2' / '_rounds').glob(
             'chapter_blueprints.INVALID.r*.json'))
     finally:
@@ -330,13 +334,22 @@ def test_stage2_global_invalid_can_be_revalidated_without_another_llm_call():
             encoding='utf-8', newline='\n')
 
         promoted, report = extract.run_revalidate(
-            _ctx(book, 'stage2.global', paid=False))
+            _ctx(book, 'stage2.global', paid=False),
+            actor='reviewer', reason='fix duplicate canonical name')
         assert promoted
         assert len(transport.calls) == 1
         assert (book / extract.GLOBAL_REL).is_file()
         assert not invalid.exists()
         stored = ArtifactStore(ctx).read(GlobalGrounding, extract.GLOBAL_REL)
         assert stored.provenance.revalidated is True
+        audit = stored.provenance.revalidation_audit
+        assert audit is not None
+        assert audit.actor == 'reviewer'
+        assert audit.reason == 'fix duplicate canonical name'
+        assert audit.content_changed is True
+        assert audit.edited_by_human is True
+        assert '/entities/characters/char_002/canonical' in \
+            audit.changed_json_pointers
         assert next(r for r in report.rules
                     if r.rule == 'canonical_unique').status == 'ok'
     finally:
@@ -365,8 +378,10 @@ def test_global_resample_bypasses_the_rejected_cache_and_preserves_its_round():
         original_invalid = (book / extract._GLOBAL_INVALID).read_bytes()
 
         # 参数未变的普通重跑必须仍然读缓存，不能暗中把“重跑”解释成“再花钱”。
-        with pytest.raises(GateBlocked):
+        with pytest.raises(GateBlocked) as blocked:
             extract.run_global(ctx, client)
+        assert ('stage2.global --revalidate --actor <id> --reason <why>'
+                in str(blocked.value))
         assert len(transport.calls) == 1
         assert ctx.ledger.usage().calls_cached == 1
 

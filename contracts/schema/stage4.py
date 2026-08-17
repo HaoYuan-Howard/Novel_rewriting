@@ -39,10 +39,11 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
+    CACHE_POLICY,
     ADDRESS_CONTEXT, DELIVERY_MODES, NAME_DISTINCTIVENESS, NARRATIVE_PERSON,
     STRUCTURAL_ROLES, TEMPORAL_LINKS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
-from contracts.schema.base import StrictModel
+from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 
 #: ⚠ 从 stage2 借的**不是拷贝，是同一个类**：`facts.setting` 是 stage2 那两个中文键的
@@ -176,6 +177,22 @@ class PlanParams(StrictModel):
     plan_beats: int = Field(ge=1)
 
 
+class PlanRepair(StrictModel):
+    """一次按阅读序章号执行的付费定向重规划。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    failure_items: list[str] = Field(min_length=1)
+    failure_evidence: Fp10
+    user_prompt: Fp10
+    output: Fp10
+    before: Fp10
+    after: Fp10
+    before_hard: int = Field(ge=0)
+    after_hard: int = Field(ge=0)
+    model: str = Field(min_length=1)
+    cache_policy: Literal[CACHE_POLICY]
+
+
 class PlanProvenance(LlmProvenance):
     """`plan_chapters._provenance`。
 
@@ -188,9 +205,15 @@ class PlanProvenance(LlmProvenance):
 
     params: PlanParams
 
+    #: 定向重规划过哪些章（累积）。默认值只为兼容早于本字段的存量产物。
+    partial_regen_chapters: list[int] = Field(default_factory=list)
+
+    #: 每一次定向重规划的输入、响应与前后章指纹。
+    repairs: list[PlanRepair] = Field(default_factory=list)
+
 
 class PlanChapters(StrictModel):
-    """`stage4/plan_chapters.json` —— 顶层 3 个键。**全书一次调用。**
+    """`stage4/plan_chapters.json` —— 顶层 3 个键；整跑或按章付费修复后合并。
 
     结构化调用点声明的必需顶层键 = `reconstruction_strategy` · `output_chapters`
     ——**这是完整的**（`_provenance` 是代码写的，不归调用点管）。

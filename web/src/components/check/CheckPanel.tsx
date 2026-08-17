@@ -5,8 +5,11 @@ import { isNoSample } from '@/api/errors'
 import { SEV, type ScreenName, type Severity } from '@/constants/vocabulary'
 import type { Finding, RuleLine } from '@/types/common'
 import type { CheckKind } from '@/types/stages'
+import type { EnumsResponse } from '@/types/enums'
 import { useAskJob } from '@/hooks/useChrome'
+import { useEnums } from '@/hooks/useEnums'
 import { useSid } from '@/hooks/useRouteParams'
+import { lookupAction } from '@/constants/actions'
 import { CheckBadge, CheckMark } from '@/components/vocab/Badges'
 import { SevMark } from '@/components/vocab/Sev'
 import { LoadingPane } from '@/components/state/States'
@@ -58,13 +61,21 @@ function FindingRow({
   f: Finding
   onJumpChapter?: (n: number) => void
 }) {
-  // 章号由服务端结构化下发在 evidence_key/detail 里没有单列 —— 不从中文里正则抠；
-  // stage5 的结论带输出章语义时走 inbox / review 屏跳转，这里只展示。
-  void onJumpChapter
+  const ordinal = f.output_ordinal
   return (
     <div className="flex flex-col gap-4 border-t border-line-row px-20 py-9">
       <div className="flex flex-wrap items-baseline gap-9">
         <span className="text-sm2 font-semibold">{f.item}</span>
+        {ordinal != null ? (
+          <button
+            type="button"
+            disabled={!onJumpChapter}
+            onClick={() => onJumpChapter?.(ordinal)}
+            className="rounded-tag border border-line bg-card px-6 py-1 font-mono text-mini text-ink-4 disabled:cursor-default"
+          >
+            第 {ordinal} 章
+          </button>
+        ) : null}
         {f.wontfix ? (
           <span className="rounded-tag border border-line bg-sunken-2 px-6 py-1 text-mini text-ink-4">
             已豁免：{f.wontfix.why}
@@ -86,15 +97,20 @@ function RuleBlock({
   line,
   sid,
   allowRerun,
+  enums,
   onJumpChapter,
 }: {
   line: RuleLine
   sid: string
   allowRerun: boolean
+  enums: EnumsResponse | undefined
   onJumpChapter?: (n: number) => void
 }) {
   const ask = useAskJob()
   const fix = line.fix
+  const action = fix
+    ? lookupAction(enums, { kind: fix.node, extra: fix.flags })
+    : null
   return (
     <div className="border-t border-line-row">
       <div className="flex flex-wrap items-center gap-10 px-20 py-9">
@@ -112,6 +128,7 @@ function RuleBlock({
                 kind: fix.node,
                 label: '修：' + line.item,
                 extra: fix.flags,
+                required_inputs: action?.required_inputs,
                 sid,
                 ordinal: null,
               })
@@ -178,6 +195,7 @@ export function CheckPanel({
   const sid = useSid()
   const kind = CHECK_OF[screen]
   const qc = useQueryClient()
+  const enums = useEnums()
 
   const q = useQuery({
     queryKey: qk.check(sid, kind ?? 'stage1'),
@@ -249,6 +267,7 @@ export function CheckPanel({
                   line={line}
                   sid={sid}
                   allowRerun={allowRerun}
+                  enums={enums.data}
                   onJumpChapter={onJumpChapter}
                 />
               ))}
@@ -271,6 +290,7 @@ export function CheckPanel({
                   line={line}
                   sid={sid}
                   allowRerun={allowRerun}
+                  enums={enums.data}
                   onJumpChapter={onJumpChapter}
                 />
               ))}
@@ -289,6 +309,7 @@ export function CheckPanel({
                   line={line}
                   sid={sid}
                   allowRerun={false}
+                  enums={enums.data}
                   onJumpChapter={onJumpChapter}
                 />
               ))}

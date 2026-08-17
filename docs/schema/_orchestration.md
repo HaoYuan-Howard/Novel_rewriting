@@ -473,10 +473,14 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与深度选章�
 
 `approvals/<sid>.json` 的盘上服务记录当前为 **v2**。每个已盖 gate、已阅状态、
 深浅章选择和 writing 授权都必须带一份 current-subject proof：当前
-`stage0/clean_text.txt` 的完整 SHA-1、所裁决正式产物的逐文件 SHA-256，以及决定本身
+`stage0/clean_text.txt` 的完整 SHA-1、所裁决正式产物的主体 SHA-256，以及决定本身
 （例如 `deep=[1,2,3]`）的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
 人工决定与 freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、
 出现 `.INVALID` 或 Stage5 选错臂，都会让对应决定及依赖它的下游决定在有效视图中失效。
+普通产物主体是正式文件字节；`s7` 是有意的窄主体：当前
+`surname_map + characters + extra_subs` 决策面与完整 typed `ApprovedNameMap` 的规范摘要。
+因此 `stage7.assemble` 写回 `book_txt` 交付账不会自废 s7，而决策面、actor/reason/origin
+或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
 旧 v1 只有 bool，无法证明人当时看的是哪份产物，故不猜迁移；只能显式 reset 或按当前
 盘面 backfill。`ApprovalDoc.v=1` 仍只是 HTTP 界面视图版本，不等于这份内部服务记录版本。
 队列用一次加锁读取取得“当前可用深浅章选择”；不得先查文件存在、再另读选择，从而留下

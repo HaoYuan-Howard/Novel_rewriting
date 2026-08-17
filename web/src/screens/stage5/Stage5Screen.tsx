@@ -414,6 +414,7 @@ export function Stage5Screen() {
                                 extra: a.extra,
                                 mode: a.mode ?? null,
                                 args: chapterSelectionArgs(a.extra, vm.chaptersArg),
+                                required_inputs: a.required_inputs,
                                 sid: vm.sid,
                                 ordinal: null,
                               })

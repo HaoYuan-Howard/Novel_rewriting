@@ -33,6 +33,7 @@ from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.orchestrator.state import artifact_state, readonly_ctx
 from novel.stages.stage5.measure import load_drafts
 from novel.stages.stage7.subs import apply_subs, sub_table
+from novel.stages.stage7.rename import approval_subject_sha256
 from novel.store import ArtifactStore
 
 NODE = 'stage7.rename'
@@ -74,6 +75,7 @@ def stage7_view(base: str | os.PathLike[str], sid: str,
         residual=art.residual,
         baselines=dict(art.baselines),
         approved=art.approved,
+        approval_subject_sha256=approval_subject_sha256(art),
         book=art.book,
         identity=art.identity,
         book_txt=art.book_txt,

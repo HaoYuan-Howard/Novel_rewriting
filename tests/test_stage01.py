@@ -17,6 +17,7 @@ from novel.errors import (
     ApprovalRequired,
     HumanEditProtected,
     PartitionChapterMismatch,
+    ProvenanceRefused,
     SourceConflict,
     SourcePathRejected,
     Stage0BodyRejected,
@@ -183,6 +184,52 @@ def test_disk_path_blocks_before_approval_then_writes_current_bytes(work):
         raw = (novel_dir / rel).read_bytes()
         assert b'\r' not in raw and raw.endswith(b'\n')
     assert (novel_dir / REPORT).is_file()
+
+
+def test_human_approval_rolls_back_the_report_and_audit_when_source_moved(work):
+    source = _source(work, 'FQ_approval_race_124.txt', 'end_marker_then_fanwai')
+    novel_dir, removal, _initial = run_source(source, work / 'Output')
+    before_report = (novel_dir / REPORT_REL).read_bytes()
+    assert removal.report.audit_seq == 0
+
+    source.write_bytes(source.read_bytes() + b'\nsource changed after review\n')
+
+    with pytest.raises(ProvenanceRefused, match='not current'):
+        run_approve(
+            _context(novel_dir, 'stage0.approve'),
+            approved_at='2026-08-12T00:00:00+00:00',
+        )
+
+    assert (novel_dir / REPORT_REL).read_bytes() == before_report
+    assert not (novel_dir / 'stage0/_audit/edit_1.json').exists()
+
+
+def test_auto_approval_rolls_back_every_artifact_when_source_moves_mid_commit(
+        work, monkeypatch):
+    source = _source(work, 'FQ_auto_race_125.txt', 'enc_utf8_sig')
+    output = work / 'Output'
+    original_write = ArtifactStore.write
+
+    def write_then_move_source(self, rel, artifact):
+        path = original_write(self, rel, artifact)
+        if rel == REPORT_REL:
+            source.write_bytes(source.read_bytes() + b'\nsource changed during commit\n')
+        return path
+
+    monkeypatch.setattr(ArtifactStore, 'write', write_then_move_source)
+
+    with pytest.raises(ProvenanceRefused, match='not current'):
+        run_source(source, output)
+
+    sid, title, _platform = novel_paths.derive_source_meta(str(source))
+    novel_dir = output / novel_paths.novel_dirname(title, sid)
+    for rel in (
+        stage0_removal.SNAPSHOT_REL,
+        CLEAN_REL,
+        REPORT_REL,
+        'stage0/_audit/edit_1.json',
+    ):
+        assert not (novel_dir / rel).exists()
 
 
 def test_r114_writes_all_artifacts_and_then_reports_failure(work):

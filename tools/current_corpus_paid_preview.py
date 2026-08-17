@@ -7,14 +7,14 @@
 
 * 用生产 ``build_argv`` 展开每本九条付费 CLI dispatch；
 * 固定当前模型/思考模式、独立空 cache 与 ``DEEPSEEK_MAX_RETRIES=0``；
-* 从真实节点 ladder 复算基础、profile-gated 和条件调用的 wire 可达上限；
+* 从真实节点 ladder 复算基础、advisory semantic 和条件调用的 wire 可达上限；
 * 只对在上游生成前已经可知的 Stage2 global prompt 做精确 tokenizer 计数；
 * 把旧 ledger 作为带哈希的历史观察列出，不冒充新 schema 的预测；
 * 单列受限校准 runner 的最低 800-case 调用拓扑；在最终私有 manifest、case
   catalog 与 rubric/prompt bundle 未就绪前明确保持 ``blocked``，不猜 token。
 
 它没有 ``--execute``、不会创建 base/cache、不会写计划文件，也不会联网。打印出的
-``production_cli_argv`` 仍须在生成最终人工决策/profile 后另行冻结并再次确认，不能把
+``production_cli_argv`` 仍须在生成最终人工决策后另行冻结并再次确认，不能把
 本次只读预览当成付费授权。
 """
 from __future__ import annotations
@@ -38,8 +38,9 @@ from contracts.artifacts import (  # noqa: E402
     STAGE1_HOOK_COPY,
     STAGE1_MAIN_TEXT,
     STAGE1_PARTITION_REPORT,
+    STAGE2_GLOBAL_GROUNDING,
 )
-from contracts.invariants import NODES  # noqa: E402
+from contracts.invariants import HOOK_APPROACHES, NODES  # noqa: E402
 from contracts.schema import artifact_spec, decode_artifact  # noqa: E402
 from contracts.schema.evaluation import EVALUATOR_ABILITIES  # noqa: E402
 from contracts.schema.stage0 import RemovalReport  # noqa: E402
@@ -60,7 +61,12 @@ from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
 from novel.stages.stage2 import prompts as stage2_prompts  # noqa: E402
 from novel.stages.stage4.prompts import PLAN_MAX_TOKENS  # noqa: E402
 from novel.stages.stage5 import write as stage5_write  # noqa: E402
-from novel.stages.stage6.hook import MAX_TOKENS as HOOK_MAX_TOKENS  # noqa: E402
+from novel.stages.stage6.hook import (  # noqa: E402
+    CANDIDATE_RETRY_LIMIT as HOOK_RETRY_LIMIT,
+    CANDIDATE_RETRY_MAX_TOKENS as HOOK_RETRY_MAX_TOKENS,
+    CANDIDATE_RETRY_RUNGS as HOOK_RETRY_RUNGS,
+    MAX_TOKENS as HOOK_MAX_TOKENS,
+)
 from novel.stages.stage7.rename import MAX_TOKENS as RENAME_MAX_TOKENS  # noqa: E402
 
 
@@ -121,7 +127,8 @@ PREREQUISITES = {
         '须先由人工显式 actor/reason 批准。',
     ),
     'stage2.blueprint': (
-        'stage2/global_grounding.json 必须是本次正式、fresh 的 v2 产物。',
+        f'{STAGE2_GLOBAL_GROUNDING} 必须是本次正式、fresh 的 '
+        f'v{artifact_spec(STAGE2_GLOBAL_GROUNDING).current_version} 产物。',
         '逐章输入范围由当前 Stage1 的 17/25 章复算，不使用旧 corpus 章表。',
     ),
     'stage3.style': (
@@ -138,14 +145,16 @@ PREREQUISITES = {
     ),
     'stage5.semantic': (
         '先完成正式 Stage5 逐章稿与 0 成本机械 review。',
-        'secret_timeline evaluator profile 必须完整匹配；否则在任何请求前关闭式停止，转 verification。',
+        '本次 current-corpus 不伪造 TODO-24 profile；固定以 --advisory 运行，'
+        '结论保持 UNVER 并进入人工 verification，不冒充自动 PASS。',
     ),
     'stage6.hook': (
         'Stage5 机械/语义结论已处理，s5 gate 经人工批准。',
     ),
     'stage6.semantic': (
         'Stage6 hook 正式候选必须 fresh。',
-        'reference_boundary evaluator profile 必须完整匹配；否则在任何请求前关闭式停止。',
+        '本次 current-corpus 固定以 --advisory 运行；具体 contradiction 仍完整展示，'
+        '所选候选只能经 actor/reason/subject hash 人工闭环。',
     ),
     'stage7.rename': (
         'Stage6 候选必须已人工 approve，且语义 clear；或存在 hash-bound 的有效人工 resolution。',
@@ -346,6 +355,15 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
             'profile 缺失/漂移或章未超长时为 0')
     elif node == 'stage5.semantic':
         base = chapters + 2  # per-chapter claims + alignment A/B
+    elif node == 'stage6.hook':
+        # The initial response always contains one candidate per registered
+        # approach.  Every initially HARD candidate can receive one fixed
+        # low/no-thinking refresh, so all three may trigger independently.
+        conditional = len(HOOK_APPROACHES) * HOOK_RETRY_LIMIT
+        conditional_wire = conditional * len(HOOK_RETRY_RUNGS)
+        condition = (
+            '初始三候选中每条含 HARD 的候选最多一次 low/no-thinking 定向重试；'
+            '三条均 dirty 时达到上限')
     elif node == 'stage6.semantic':
         base = 2  # judge A/B
     base_wire = base * rung_count
@@ -396,6 +414,12 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
                 'rungs': [list(row) for row in rungs],
             },
         ])
+    if node == 'stage6.hook':
+        rows.append({
+            'kind': 'conditional_candidate_retry',
+            'max_tokens': HOOK_RETRY_MAX_TOKENS,
+            'rungs': [list(row) for row in HOOK_RETRY_RUNGS],
+        })
     return rows
 
 
@@ -403,8 +427,13 @@ def _dispatch(book: dict[str, Any], node: str) -> dict[str, Any]:
     effort = NODES[node].effort
     rungs = rungs_from_effort(effort)
     topology = _logical_topology(node, book['chapters'], len(rungs))
-    flags = (['--deep', '1,2,3', '--shallow-rest']
-             if node == 'stage5.write' else [])
+    flags = (
+        ['--deep', '1,2,3', '--shallow-rest']
+        if node == 'stage5.write' else
+        ['--advisory']
+        if node in PROFILE_DEPENDENCY else
+        []
+    )
     argv = build_argv(node, book['sid'], flags, base=book['base'])
     profile = PROFILE_DEPENDENCY.get(node)
     return {
@@ -424,7 +453,8 @@ def _dispatch(book: dict[str, Any], node: str) -> dict[str, Any]:
         'cache_must_start_empty': True,
         'profile_dependency': profile,
         'profile_gate_behavior': (
-            'profile 完整匹配才调用；否则 0 wire，转人工/verification'
+            '冻结为 --advisory；无 profile 时照常双盲调用但只产 UNVER，'
+            '必须人工核验，绝不冒充自动 PASS'
             if profile else None),
         'human_gate_dependencies': list(PREREQUISITES[node]),
         'schema_targets': _schema_targets(node),
@@ -573,6 +603,7 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
     profiled = [row for row in dispatches if row['node'] in profile_nodes]
     stage3 = [row for row in dispatches if row['node'] == 'stage3.style']
     trims = [row for row in dispatches if row['node'] == 'stage5.write']
+    hooks = [row for row in dispatches if row['node'] == 'stage6.hook']
     base_logical = sum(row['base_logical_requests'] for row in mandatory)
     base_wire = sum(row['base_ladder_wire_hard_limit'] for row in mandatory)
     profile_logical = sum(row['base_logical_requests'] for row in profiled)
@@ -581,18 +612,25 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
     stage3_wire = sum(row['conditional_wire_hard_limit'] for row in stage3)
     trim_logical = sum(row['conditional_logical_requests'] for row in trims)
     trim_wire = sum(row['conditional_wire_hard_limit'] for row in trims)
-    full_logical = base_logical + profile_logical + stage3_logical + trim_logical
-    full_wire = base_wire + profile_wire + stage3_wire + trim_wire
+    hook_retry_logical = sum(row['conditional_logical_requests'] for row in hooks)
+    hook_retry_wire = sum(row['conditional_wire_hard_limit'] for row in hooks)
+    full_logical = (
+        base_logical + profile_logical + stage3_logical + trim_logical
+        + hook_retry_logical)
+    full_wire = (
+        base_wire + profile_wire + stage3_wire + trim_wire + hook_retry_wire)
     return {
         'production_cli_dispatches': len(dispatches),
-        'mandatory_base_logical_requests': base_logical,
-        'mandatory_base_ladder_wire_hard_limit': base_wire,
+        'base_nonsemantic_logical_requests': base_logical,
+        'base_nonsemantic_ladder_wire_hard_limit': base_wire,
         'stage3_conditional_habit_quote_logical': stage3_logical,
         'stage3_conditional_habit_quote_wire_hard_limit': stage3_wire,
-        'profile_gated_semantic_logical': profile_logical,
-        'profile_gated_semantic_wire_hard_limit': profile_wire,
+        'advisory_semantic_logical': profile_logical,
+        'advisory_semantic_wire_hard_limit': profile_wire,
         'conditional_trim_logical': trim_logical,
         'conditional_trim_wire_hard_limit': trim_wire,
+        'stage6_conditional_candidate_retry_logical': hook_retry_logical,
+        'stage6_conditional_candidate_retry_wire_hard_limit': hook_retry_wire,
         'full_conditional_logical_hard_limit': full_logical,
         'full_conditional_wire_hard_limit': full_wire,
         'full_conditional_context_token_hard_ceiling': full_wire * CONTEXT_LIMIT,
@@ -707,7 +745,7 @@ def build_plan(
         'kind': 'current-schema-corpus-new-paid-preview-v1',
         'read_only': True,
         'has_execution_entry': False,
-        'authorization': 'not_granted; regenerate after gates/profiles, then request confirmation',
+        'authorization': 'not_granted; regenerate after human gates, then request confirmation',
         'model': FIXED_MODEL,
         'thinking': FIXED_THINKING,
         'retry': FIXED_MAX_RETRIES,
@@ -755,7 +793,9 @@ def build_plan(
                 + aggregate['full_conditional_wire_hard_limit']
                 + EVALUATOR_MIN_EXACT_CALLS),
             'authorization_note': (
-                '588 是既有隔离实验上限，1172 是 canonical current corpus 上限，'
+                '588 是既有隔离实验上限，'
+                f'{aggregate["full_conditional_wire_hard_limit"]} 是 canonical '
+                'current corpus 上限，'
                 '二者互不复用且各计一次；4800 是仍 blocked 的最低 evaluator campaign，'
                 '合并数不是新增授权。'),
         },
@@ -770,7 +810,7 @@ def render(plan: dict[str, Any]) -> str:
         '# current-schema corpus 新增付费范围（只读冻结预览）',
         '',
         f'model={plan["model"]} thinking={plan["thinking"]} retry={plan["retry"]}',
-        '授权状态：未授权执行；必须在人工 gate/profile 完成后重生成并再次确认。',
+        '授权状态：未授权执行；必须在人工 gate 完成后重生成并再次确认。',
         '',
         '## 输入',
     ]
@@ -807,13 +847,17 @@ def render(plan: dict[str, Any]) -> str:
     lines.extend([
         '',
         '## 新 corpus 小计（不含已有 FC08/12/13）',
-        f'基础非语义：logical={aggregate["mandatory_base_logical_requests"]} / '
-        f'wire 上限={aggregate["mandatory_base_ladder_wire_hard_limit"]}',
+        f'基础非语义：logical={aggregate["base_nonsemantic_logical_requests"]} / '
+        f'wire 上限={aggregate["base_nonsemantic_ladder_wire_hard_limit"]}',
         f'Stage3 条件 habit_quote 修复：logical='
         f'{aggregate["stage3_conditional_habit_quote_logical"]} / wire 上限='
         f'{aggregate["stage3_conditional_habit_quote_wire_hard_limit"]}',
-        f'profile-gated semantic：logical={aggregate["profile_gated_semantic_logical"]} / '
-        f'wire 上限={aggregate["profile_gated_semantic_wire_hard_limit"]}',
+        f'Stage6 条件候选定向重试：logical='
+        f'{aggregate["stage6_conditional_candidate_retry_logical"]} / wire 上限='
+        f'{aggregate["stage6_conditional_candidate_retry_wire_hard_limit"]}',
+        f'advisory semantic（无 profile，产 UNVER）：logical='
+        f'{aggregate["advisory_semantic_logical"]} / '
+        f'wire 上限={aggregate["advisory_semantic_wire_hard_limit"]}',
         f'条件 trim：logical={aggregate["conditional_trim_logical"]} / '
         f'wire 上限={aggregate["conditional_trim_wire_hard_limit"]}',
         f'全条件硬上限：logical={aggregate["full_conditional_logical_hard_limit"]} / '
@@ -833,7 +877,7 @@ def render(plan: dict[str, Any]) -> str:
         else:
             lines.append(f'- {sid}/stage2.global：unknown（{estimate["reason"]}）')
     lines.extend([
-        '- 其余 prompt token：unknown（依赖尚未生成的最终 schema v2 上游）。',
+        '- 其余 prompt token：unknown（依赖尚未生成的当前 schema 上游）。',
         '- 历史 ledger 仅作带 SHA256 的旧观察；不拿它冒充新 prompt 预测。',
         '- price：unknown；未猜单价。completion 已含 reasoning，不重复相加。',
         '',
@@ -843,7 +887,8 @@ def render(plan: dict[str, Any]) -> str:
         '未计入上面的新 corpus 小计。',
         f'两块各计一次的合并硬上限：'
         f'{plan["existing_authorized_boundary"]["combined_wire_hard_ceiling_once_each"]}。',
-        '重叠判断：588 与 1172 不重叠；实验与 canonical corpus 使用隔离 base/cache，'
+        f'重叠判断：588 与 {aggregate["full_conditional_wire_hard_limit"]} 不重叠；'
+        '实验与 canonical corpus 使用隔离 base/cache，'
         '没有把同一调用计两次。',
         '',
         '## 校准评测',
