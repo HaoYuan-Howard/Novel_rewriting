@@ -2,34 +2,37 @@
 
 ## 使用方式
 
-先按节点、rule id、退出码或报错片段检索，例如：
+**先检索，不要整读。** 按节点、rule id、退出码或报错片段检索整个 reference 目录：
 
 ```text
-rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/references/field-notes.md
+rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/references/
 ```
 
 只把命中的条目作为诊断提示。当前 finding、代码、测试和盘上原始证据优先。`observed` 不能提升为不变量；`open-gap` 不能被写成已支持。
 
+下面的索引是**条目的投影**（标题与状态逐字取自条目本身，由校验器对账），可以只读索引就决定要不要打开某条：
+「状态」告诉你它够不够格影响决策，「处置入口」很多时候就是你要的那条命令。
+
 ## 索引
 
-| ID | 主题 | 关键词 |
-|---|---|---|
-| FN-001 | stage0 批准前的预期红灯 | `s0_approval`, pending |
-| FN-002 | 重号与缺号章节 | `s1_chapter_labels`, ordinal |
-| FN-003 | full-extract 部分完成 | `--full-extract`, upstream missing |
-| FN-004 | blueprint 锚点分流 | `hinge_anchor_void`, `verbatim_failed` |
-| FN-005 | 中断后的缓存重跑 | exit 70, cache, no artifact |
-| FN-006 | 语义结论按文本 sha1 绑定 | `stage6.semantic`, `text_sha1`, `semantic_review_seq`, stale |
-| FN-007 | 语义泄底的上游误标 | `semantic_secret_leak`, wontfix |
-| FN-008 | stage6 首轮 INVALID | `hook.INVALID`, `hook_para_sep` |
-| FN-009 | stage6 候选级语义 | unselected HARD, nondeterminism |
-| FN-010 | stage7 映射边角 | kept, marker, one-char alias |
-| FN-011 | stage7 编辑后重装配 | approved, book_txt, stale |
-| FN-012 | 来源指纹诊断噪声 | `consumed_changed`, fingerprints |
-| FN-013 | 语义审判：advisory 与标定的分界 | `stage6.semantic`, `--advisory`, `NOVEL_EVALUATOR_PROFILE`, exit 2 |
-| FN-014 | 超限章的 0 成本销账 | `trim_audit_chNN`, `--retain-pretrim`, verification |
-| FN-015 | 落盘闸拦下后 finding 细节的读法 | `.INVALID`, `--check-only`, `--revalidate`, exit 2 |
-| FN-016 | `--apply-edit` 的路径语义逐层不同 | `--apply-edit`, `edit_rel`, 产物目录之外, exit 2 |
+| ID | 标题 | 状态 | 触发键（节点 / rule / 退出码） | 处置入口 |
+|---|---|---|---|---|
+| FN-001 | stage0 批准前的预期红灯 | contract-confirmed | `s0_approval`, exit 1 | `stage0.approve` |
+| FN-002 | 重号与缺号章节 | contract-confirmed | `s1_chapter_labels` | 核对源文标记与 ordinal，不改正文 |
+| FN-003 | `--full-extract` 部分完成 | contract-confirmed | `--full-extract` | 分别 preview 缺失的 `stage2.blueprint` / `stage3.style` |
+| FN-004 | blueprint 锚点失败要先判原字节 | observed | `hinge_anchor_void`, `verbatim_failed` | `--chapters`（付费）或 finding 明列的免费 fix |
+| FN-005 | 钱已调用但目标产物缺失 | contract-confirmed | exit 70, 账本有调用而产物不在盘 | 完全相同参数重跑，命中 `.llm_cache` |
+| FN-006 | 语义结论按文本 sha1 绑定，不跟机械验收的轮次走 | contract-confirmed | `stage6.semantic`, `semantic_review_seq` | 文本未变就**不要**重跑；变了带 `--advisory` |
+| FN-007 | 语义泄底可能源于上游揭示章误标 | contract-confirmed | `semantic_secret_leak` | `stage2.global --apply-edit` 或 `--wontfix` 留账 |
+| FN-008 | stage6 首轮只有 INVALID | contract-confirmed | `hook.INVALID.json`, `hook_para_sep` | `stage6.hook --apply-edit` 或 `--revalidate` |
+| FN-009 | stage6 总报告与所选候选不是同一粒度 | observed | 落选候选 HARD, 同 sha1 两轮矛盾 | 按 label+sha1 对齐，采更严格那一轮 |
+| FN-010 | stage7 人物表不是全部 surface | observed | `rn_kept_contains_mapped`, `rn_semantic_marker_changed` | `name_map_edit.json` 展开内嵌映射 |
+| FN-011 | stage7 映射编辑后必须重批重拼 | contract-confirmed | `approved`, `book_txt` | 重跑 `stage7.approve` + `stage7.assemble` |
+| FN-012 | `consumed_changed` 可能是诊断噪声 | observed | `consumed_changed`, stale | 逐项指纹全同才披露诊断边，否则按真 stale 处理 |
+| FN-013 | 语义审判：advisory 与标定的分界 | contract-confirmed | `stage6.semantic`, `NOVEL_EVALUATOR_PROFILE`, exit 2 | `--advisory` |
+| FN-014 | 超限章有一条 0 成本销账路 | contract-confirmed | `trim_audit_chNN`, verification | `--retain-pretrim --chapters` 或 `--apply-edit` |
+| FN-015 | 落盘闸拦下后，finding 细节的读法逐层不同 | contract-confirmed | `.INVALID`, exit 2 | 先 `--check-only` 取逐条，再 `--revalidate` 提升 |
+| FN-016 | `--apply-edit` 的路径语义逐层不同 | contract-confirmed | `edit_rel`, 产物目录之外, exit 2 | `--apply-edit`，编辑文件写进书目录内 |
 
 ### FN-001 · stage0 批准前的预期红灯
 
@@ -38,7 +41,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：这是“尚未批准”，不是剔除质量失败；仍需确认其余 HARD 全部为零。
 - 处置：按 stage0 代批规则读剔除段与边界，运行 `stage0.approve`。
 - 验证：批准状态落盘，后续 `state` 不再把 stage0 视为等待 approval。
-- 依据：stage0 approval 状态机与主链顺序。
+- 依据：`novel/stages/stage0/checks.py::check` 的 `s0_approval` 分支（批准状态非 approved 即命中）；
+  `contracts/judges/stage0.py` 那一行的 sev 与 requirement。
 
 ### FN-002 · 重号与缺号章节
 
@@ -47,7 +51,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：scanned 行是原始标签读数，不等于下游 ordinal 已损坏；低频重号可能只是源书标签毛刺。
 - 处置：核对源文标记规律与 stage1 产生的 ordinal，不凭告警重写正文。
 - 验证：下游 chapter ordinal 唯一、连续且恰好覆盖 `1..N`；高频重复标记另行人工审阅。
-- 依据：stage1 partition report 与成书章序对账。
+- 依据：`novel/stages/stage1/checks.py::check` 产出的 `s1_chapter_labels`（读的是**原始标签**，
+  不是下游 ordinal）；成书侧由代批契约的逐字对账第 1 项复核。
 
 ### FN-003 · `--full-extract` 部分完成
 
@@ -56,7 +61,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：组合命令不是原子事务；已经正式落盘的上游不应为补齐下游而重复付费。
 - 处置：按 finding 修复活动失败，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`。
 - 验证：两份 follow-check 都 fresh 且无 HARD，`state` 显示 stage2/stage3 完成。
-- 依据：`build_steps` 的 full-extract 追跑规则与产物存在性。
+- 依据：`novel/orchestrator/nodes.py::build_steps` 的 full-extract 追跑规则与产物存在性。
 
 ### FN-004 · blueprint 锚点失败要先判原字节
 
@@ -65,7 +70,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：先在对应源章逐字查锚点。原字节不存在表示模型转述/编造；原字节存在但去标点后退化为高频短串表示 locator/归一化问题。
 - 处置：模型问题使用 `stage2.blueprint --chapters <N>` 定向重生成；确定性定位问题只执行 finding 明列的免费 fix，连续同错时停止重复抽样。
 - 验证：锚点在源章逐字存在且定位到正确出现位置，定向章与整表 check 均通过。
-- 依据：原始响应、源章字节与当前 finding 文案三方对照。
+- 依据：`novel/stages/stage2/checks.py::_HINGE_RULES` 那一组锚点判据；
+  判断仍需原始响应、源章字节与当前 finding 文案三方对照。
 
 ### FN-005 · 钱已调用但目标产物缺失
 
@@ -74,7 +80,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：账本与产物写入不是事务；“记过调用”不能证明生成成功。
 - 处置：先 `state`，再用完全相同参数重跑；不得通过换参数或删缓存强制新调用。
 - 验证：目标正式产物存在、fresh，追跑 check 完成；账本将缓存回放与实付分开。
-- 依据：持久缓存键与 CLI 写盘顺序。
+- 依据：`novel/llm/cache.py::cache_key` 决定同参数重跑能不能命中回放；
+  `novel/llm/cache.py::ResponseCache` 与 CLI 的写盘顺序不是一个事务。
 
 ### FN-006 · 语义结论按文本 sha1 绑定，不跟机械验收的轮次走
 
@@ -104,7 +111,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   证据键的 `stage5.review --wontfix`留账。
 - 验证：记录源文章号、逐字证据、更正后的 `reader_reveal_events` 与 fresh semantic finding
   的对应关系；旧主体绑定结论必须过期。
-- 依据：Stage2 secret typed edit、Stage5 权威揭示时线与语义 wontfix 收敛链的现役实现。
+- 依据：`novel/stages/stage2/extract.py::run_apply_edit` 与 `_apply_secret_patches` 的 typed 修订路；
+  `novel/wontfix.py::mark` 与 `novel/wontfix.py::applied_to_outcomes` 的证据键收敛链。
 
 ### FN-008 · stage6 首轮只有 INVALID
 
@@ -113,7 +121,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：check-only 只读正式产物；候选级 finding 仍可直接从活动 INVALID 读取。
 - 处置：按 INVALID 的 `candidates[].findings` 修复。`hook_para_sep` 若来自单段墙文，归一化不能凭空创建段落；在完整句边界重写为多段后走 `--apply-edit`，或跑 `stage6.hook --revalidate --actor <ACTOR> --reason <why>` 强审计提升。**判据自己会说这一句**（detail 里出现「一整段」「归一化修不掉」即此类），无须再从档位反推。
 - 验证：正式 `hook.json` 落盘，mechanical check 可读且至少一条候选无 HARD；再运行 semantic。
-- 依据：stage6 check-only 与 normalize_hook 的当前行为。
+- 依据：`novel/stages/stage6/hook.py::run_check_only` 只读正式产物；
+  `novel/stages/stage6/measure.py::normalize_hook`「换得了分隔符、造不出段落边界」。
 
 ### FN-009 · stage6 总报告与所选候选不是同一粒度
 
@@ -122,7 +131,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：总报告汇总所有候选；它可以红而所选候选合格。相同输入的矛盾判定表明语义判官非确定性，不应“采最后一次绿”。
 - 处置：按 label+sha1 对齐候选级结论；采更严格判断。三候选全不合格时只人工改一条，减少新的审判面。
 - 验证：approved 文本、所选 label 最新语义结论和 state 三者一致；冲突与落选残红进终审包。
-- 依据：stage6 候选聚合形状与真实多轮语义观察。
+- 依据：`novel/stages/stage6/semantic.py::CandidateAssessment` 是候选级状态的唯一形状；
+  总报告是它的汇总。非确定性那一半仍是实跑观察。
 
 ### FN-010 · stage7 人物表不是全部 surface
 
@@ -131,7 +141,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：人物 registry 可能漏掉拆名、家族简称、门派、府邸、外文家名或单字昵称；kept 还可能保护内嵌旧名。
 - 处置：在 `name_map_edit.json` 中展开内嵌映射、保留数字/排行/关系标记；单字别名用 `old == new` 明确保留，并用带上下文的长 `extra_subs` 处理真实位置。
 - 验证：所有 subs 旧键 count 为零，补集 surface 扫描无未解释旧名，新名不碰通用关系词。
-- 依据：stage7 mapping schema、residual probe 与成书逐字扫描。
+- 依据：`novel/stages/stage7/subs.py::residual_scan` 的补集扫描；
+  `novel/stages/stage7/rename.py::_judge` 的映射判据；成书侧另做逐字扫描。
 
 ### FN-011 · stage7 映射编辑后必须重批重拼
 
@@ -140,7 +151,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：当前产物可能保留旧 `approved`/`book_txt` 元数据；这些值不能证明新映射已被批准或已进入盘上成书。
 - 处置：无条件重新运行 `stage7.approve`、`stage7.assemble` 和全部成书逐字对账。
 - 验证：book sha1/chars/chapters 与盘一致，旧键归零，批准记录晚于当前映射轮。
-- 依据：stage7 apply-edit 的元数据继承行为与 assemble 消费路径。
+- 依据：`novel/stages/stage7/rename.py::_retire_book_txt` 退休旧成书；
+  `novel/stages/stage7/assemble.py::run_assemble` 才是盘上 `book.txt` 的唯一产地。
 
 ### FN-012 · `consumed_changed` 可能是诊断噪声
 
@@ -149,7 +161,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：只有逐项指纹相同才能怀疑诊断噪声；不能仅凭历史经验忽略 stale。
 - 处置：核对全部 inputs、code 与实际消费投影。证据完全一致时披露诊断边，不因此重跑付费 plan；存在任何差异时按真实 stale 处理。
 - 验证：下游 check 读取的 context 与当前 plan/global/blueprint 指纹一致。
-- 依据：实跑观察；未被提升为实现契约。
+- 依据：`novel/prov.py::freshness` 判 `consumed_changed` 的那一支；
+  「指纹一致却仍判 stale」这一半是实跑观察，未被提升为实现契约。
 
 ### FN-013 · 语义审判：advisory 与标定的分界
 
@@ -221,7 +234,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   `stage5.write` 与 `stage0.edit` **刻意不走这条**，路径语义是“任意路径”——服务进程把人工改稿
   放在书目录之外的 `<base>/_service/edits/` 再喂给 `stage5.write --apply-edit`，那条现役 HTTP
   改稿路依赖它（`R-11.3` 要求服务进程不写产物盘）。`stage2.global --review-decisions` 与前一组同规矩。
-- 处置：走 `edit_rel` 那四层时把编辑文件写进书目录内（`<novel-dir>/<stage>/..._edit.json`），
+- 处置：走 `edit_rel` 那四层时把 `--apply-edit` 的编辑文件写进书目录内（`<novel-dir>/<stage>/..._edit.json`），
   传相对书目录的路径或书目录内的绝对路径都可以。被拒时先读报错里算出来的那个绝对路径，
   它才是代码真正解释成的位置；不要靠加 `..` 或换 cwd 绕过去。
 - 验证：命令 exit 0 且新一轮落盘、上一轮归档进 `_rounds/`；操作包里记的是解析后的绝对路径。

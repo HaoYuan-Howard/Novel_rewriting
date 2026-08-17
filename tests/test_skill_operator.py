@@ -97,6 +97,10 @@ _FLOORS = {
     'status_marks': 4,        # _STATUS_MARK 四态
     'template_headings': 7,
     'evidence_symbols': 5,
+    'notes_files': 1,         # 索引兼入口那一份恒在；分片是可选的
+    'index_rows': 10,         # 索引是条目的投影，条目有几条它就有几行
+    'notes_budget': 5000,     # 整读预算算不出来（必读集读空）时，那条界会失效
+    'repo_fn_citations': 1,   # 仓内确实在按号引用经验，这条反查不是空的
 }
 
 

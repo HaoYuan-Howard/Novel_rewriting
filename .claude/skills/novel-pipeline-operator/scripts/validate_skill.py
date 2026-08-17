@@ -146,6 +146,23 @@ def _subcommands(path: Path) -> set[str]:
     return names
 
 
+#: 每跑必读的那几份。经验库的**整读预算**由它们的体量算出，不写死一个数字
+#: ——写死就是第二个落点，而必读集本身会随维护变厚变薄。
+_MUST_READ = ('SKILL.md', 'references/workflow.md',
+              'references/delegated-review.md', 'references/runtime-profiles.md')
+
+#: 经验库文件按这个 glob 收。`field-notes.md` 是索引兼入口，
+#: `field-notes/*.md` 是超过整读预算之后的分片（**二层渐进披露只对经验库开放**）。
+_NOTES_GLOBS = ('references/field-notes.md', 'references/field-notes/*.md')
+
+
+def _notes_files() -> list[Path]:
+    out: list[Path] = []
+    for pattern in _NOTES_GLOBS:
+        out += sorted(SKILL_DIR.glob(pattern))
+    return out
+
+
 def _defined_names(path: Path) -> set[str]:
     """一个模块里定义过的名字（函数/类/赋值，含嵌套）。ast 读，不 import。"""
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -426,18 +443,26 @@ def _behaviour_errors(
     return errors
 
 
-def validate(counters: dict[str, int] | None = None) -> list[str]:
-    """返回逐条问题；`counters` 填的是**扫描分母**。
+def validate(counters: dict[str, int] | None = None,
+             advice: list[str] | None = None) -> list[str]:
+    """返回逐条问题；`counters` 填**扫描分母**，`advice` 填**只提示不报错**的那些。
 
     绿灯必须带分母：只说「一致」看不出查了几条，正则失配或 glob 变空时会全绿。
-    `main()` 在 PASS 分支把它们印出来，`tests/test_skill_operator.py` 给每个计数设下界。
+    `main()` 在 PASS 分支把两者都印出来，`tests/test_skill_operator.py` 给每个计数设下界。
+
+    ⚠ `advice` 与 `errors` **分开**是刻意的：晋升与规模这两件事的判据是产品判断，
+    做成红灯必然假红（一条边角经验会被逼进主链文档）。既要暴露生命周期又不误导，
+    出路就是提示而不是失败。
     """
     if counters is None:
         counters = {}
+    if advice is None:
+        advice = []
     for key in ("markdown_files", "links", "inbox_kinds", "exit_codes", "fn_entries",
                 "writing_flags", "free_writing_pairs", "write_surface_rows",
                 "fix_routes", "cli_subcommands", "status_marks",
-                "template_headings", "evidence_symbols"):
+                "template_headings", "evidence_symbols", "notes_files",
+                "notes_chars", "notes_budget", "index_rows", "repo_fn_citations"):
         counters.setdefault(key, 0)
     errors: list[str] = []
     root = _repo_root()
@@ -540,15 +565,76 @@ def validate(counters: dict[str, int] | None = None) -> list[str]:
 
     errors += _behaviour_errors(root, prod, text, workflow, skill_texts, counters)
 
-    notes_path = SKILL_DIR / "references" / "field-notes.md"
-    notes = notes_path.read_text(encoding="utf-8")
-    entry_matches = list(re.finditer(r"(?m)^### (FN-\d{3}) · .+$", notes))
+    # ── 经验库 ──
+    # 索引恒在 `field-notes.md`；条目可以留在同一份，也可以分片到 `field-notes/`。
+    # 条目扫描面是整棵树，索引扫描面只有入口那一份。
+    index_path = SKILL_DIR / "references" / "field-notes.md"
+    notes_files = _notes_files()
+    counters["notes_files"] = len(notes_files)
+    if not notes_files:
+        errors.append("经验库一个文件都没有；条目与索引的对账无从谈起")
+    notes = "\n".join(path.read_text(encoding="utf-8") for path in notes_files)
+    entry_matches = list(re.finditer(r"(?m)^### (FN-\d{3}) · (.+)$", notes))
     ids = [m.group(1) for m in entry_matches]
     if not ids:
         errors.append("经验库没有 FN-NNN 条目")
     if len(ids) != len(set(ids)):
         errors.append(f"经验 ID 重复：{ids}")
     counters["fn_entries"] = len(ids)
+
+    # 【断言 G】索引是条目的**投影**，不是第二份清单。
+    # 标题逐字对账 ⇒ 改标题而忘了改索引这类漂移在结构上不可能存在。
+    index_text = index_path.read_text(encoding="utf-8") if index_path.is_file() else ""
+    index_rows = re.findall(
+        r"(?m)^\|\s*(FN-\d{3})\s*\|([^|]*)\|\s*([a-z-]+)\s*\|([^|]*)\|([^|]*)\|",
+        index_text)
+    counters["index_rows"] = len(index_rows)
+    if [row[0] for row in index_rows] != ids:
+        errors.append(
+            "经验索引与条目对不上（顺序与集合都要一致）：\n"
+            f"  索引：{[row[0] for row in index_rows]}\n"
+            f"  条目：{ids}"
+        )
+    else:
+        titles = {m.group(1): m.group(2).strip() for m in entry_matches}
+        for fn_id, title_cell, status_cell, trigger_cell, entry_cell in index_rows:
+            if title_cell.strip() != titles[fn_id]:
+                errors.append(
+                    f"{fn_id} 索引标题与条目标题不一致（索引是条目的投影，不是第二个名字）：\n"
+                    f"  索引：{title_cell.strip()}\n"
+                    f"  条目：{titles[fn_id]}"
+                )
+
+    # 【断言 K】分片必须由索引直接链接，且**不得**被 SKILL.md 直接链接。
+    # 保证渐进披露仍是 SKILL → 索引 → 分片的严格树，不出现旁路。
+    # 现在就检查，即使还没分片——空扫描面由 `notes_files` 这个分母兜住。
+    index_links = set(_local_links(index_path, index_text)) if index_text else set()
+    for shard in sorted((SKILL_DIR / "references" / "field-notes").glob("*.md")):
+        if shard.resolve() not in index_links:
+            errors.append(
+                f"经验分片 {shard.relative_to(SKILL_DIR)} 没有被 field-notes.md 直接链接"
+            )
+        if shard.resolve() in direct:
+            errors.append(
+                f"经验分片 {shard.relative_to(SKILL_DIR)} 被 SKILL.md 直接链接了。"
+                f"经验库是唯一开二层渐进披露的地方，路径必须是 SKILL → 索引 → 分片，不开旁路"
+            )
+
+    # 【整读预算】经验库单份的体量不得超过每跑必读集——超过之后「按需检索」名存实亡，
+    # 因为文件看起来不大时执行者会直接整读。预算由必读集**算出**，不写死数字。
+    budget = sum(len((SKILL_DIR / rel).read_text(encoding="utf-8"))
+                 for rel in _MUST_READ if (SKILL_DIR / rel).is_file())
+    counters["notes_budget"] = budget
+    for path in notes_files:
+        size = len(path.read_text(encoding="utf-8"))
+        counters["notes_chars"] = counters.get("notes_chars", 0) + size
+        if budget and size > budget:
+            errors.append(
+                f"{path.relative_to(SKILL_DIR)} 的体量已超过每跑必读集"
+                f"（{size} > {budget} 字符），整读它比读完主链文档还贵。\n"
+                f"    → **分片**到 references/field-notes/ 并从索引链接，"
+                f"不要为了缩体积删经验"
+            )
     required_fields = ("状态", "触发", "判断", "处置", "验证", "依据")
     allowed_statuses = {"contract-confirmed", "observed", "open-gap"}
     # 【断言 J】活动缺口编号的现役形态是 `TODO-NN`。
@@ -562,6 +648,7 @@ def validate(counters: dict[str, int] | None = None) -> list[str]:
             "docs/REQUIREMENTS.md 里读不到任何 `### TODO-NN ·` 标题；"
             "缺口编号反查无从谈起（守卫读不到就当没查，是本仓明令禁止的形状）"
         )
+    by_index = {row[0]: row for row in index_rows}
     for index, entry in enumerate(entry_matches):
         end = entry_matches[index + 1].start() if index + 1 < len(entry_matches) else len(notes)
         block = notes[entry.end() : end]
@@ -571,6 +658,30 @@ def validate(counters: dict[str, int] | None = None) -> list[str]:
         status = re.search(r"(?m)^- 状态：`([^`]+)`", block)
         if status and status.group(1) not in allowed_statuses:
             errors.append(f"{entry.group(1)} 状态非法：{status.group(1)}")
+
+        # 【断言 G 续】索引其余三列也必须是投影，不能各说各话。
+        row = by_index.get(entry.group(1))
+        if row is not None:
+            _fn, _title, status_cell, trigger_cell, entry_cell = row
+            if status and status_cell.strip() != status.group(1):
+                errors.append(
+                    f"{entry.group(1)} 索引「状态」是 {status_cell.strip()}，"
+                    f"条目里是 {status.group(1)}——状态决定命中后要不要打开它，不能两说"
+                )
+            for token in re.findall(r"`([^`]+)`", trigger_cell):
+                if token not in block:
+                    errors.append(
+                        f"{entry.group(1)} 索引把 `{token}` 列为触发键，而条目正文里没有它"
+                        f"——触发键是 rg 的实际命中面，检索得到索引却打不开条目是最坏的一种"
+                    )
+            disposal = re.search(r"(?s)^- 处置：(.*?)(?=\n- 验证：)", block, re.M)
+            for flag in re.findall(r"--[a-z][a-z0-9-]*", entry_cell):
+                if disposal is None or flag not in disposal.group(1):
+                    errors.append(
+                        f"{entry.group(1)} 索引把 `{flag}` 列为处置入口，"
+                        f"而条目的「处置」字段里没有它"
+                    )
+
         if status and status.group(1) == "open-gap":
             issue_ids = re.findall(r"\bTODO-\d+\b", block)
             if not issue_ids:
@@ -616,6 +727,26 @@ def validate(counters: dict[str, int] | None = None) -> list[str]:
         if heading not in template:
             errors.append(f"终审模板缺少章节：{heading}")
 
+    # 【FN 编号纪律的可查那一半】仓内按号引用的经验必须存在。
+    # 「退役 ⇒ 留空号 ⇒ 引用悬空 ⇒ 当场红」形成闭环；**复用编号抓不住**，只能靠纪律。
+    # 实测过复用的代价：六处代码注释指着 FN-014，而那个号上挂的是另一件事。
+    known_fn = set(ids)
+    cited: dict[str, list[str]] = {}
+    for pkg in ("novel", "contracts", "tests"):
+        for source in sorted((root / pkg).rglob("*.py")):
+            if "__pycache__" in source.parts:
+                continue
+            for fn_id in set(re.findall(r"\bFN-\d{3}\b", source.read_text(encoding="utf-8"))):
+                cited.setdefault(fn_id, []).append(
+                    str(source.relative_to(root)).replace("\\", "/"))
+    counters["repo_fn_citations"] = len(cited)
+    for fn_id in sorted(set(cited) - known_fn):
+        errors.append(
+            f"仓内 {cited[fn_id]} 按号引用 {fn_id}，而经验库里没有它。"
+            f"编号退役要留空号，引用也要跟着退役——读的人会去找它，"
+            f"然后按自己的猜测把文档读通"
+        )
+
     consumer = root / "novel" / "orchestrator" / "agent.py"
     if consumer.is_file():
         prompt_source = _build_prompt_source(consumer)
@@ -624,14 +755,27 @@ def validate(counters: dict[str, int] | None = None) -> list[str]:
         elif "§" in prompt_source:
             errors.append("headless build_prompt 仍引用易漂移的 SKILL 章节号 §")
 
+    # ── 只提示，不报错 ──
+    # ⚠ **刻意没有「晋升候选」提示。** 试过一版判据（`contract-confirmed` 且依据已点名
+    #   代码符号），它在当前盘面上命中 16 条里的 12 条——那不是信号，是噪音，
+    #   而一条总在喊的提示会把人训练成忽略它。晋升的真判据是「会不会影响所有运行」，
+    #   那是产品判断，没有机械代理；它的复核时机是维护协议里的前向测试。
+    if ids and counters["notes_chars"] > budget * 0.7:
+        advice.append(
+            f"经验库已用掉整读预算的 {counters['notes_chars'] * 100 // max(budget, 1)}%"
+            f"（{len(ids)} 条）。检索精度随条数下降——最常用的检索键是节点名，"
+            f"选择度只有 1/8。该考虑按 stage 分片到 references/field-notes/ 了"
+        )
+
     return errors
 
 
 def main() -> int:
     _utf8_console()
     counters: dict[str, int] = {}
+    advice: list[str] = []
     try:
-        errors = validate(counters)
+        errors = validate(counters, advice)
     except Exception as exc:  # validator failure must be visible, never a false pass
         print(f"FAIL validator crashed: {type(exc).__name__}: {exc}")
         return 1
@@ -648,6 +792,8 @@ def main() -> int:
     # 绿灯必须带分母：只说「一致」看不出查了几条，正则失配时会全绿。
     print("  扫描分母：" + " · ".join(
         f"{key} {value}" for key, value in sorted(counters.items())))
+    for note in advice:
+        print(f"  · {note}")
     return 0
 
 
