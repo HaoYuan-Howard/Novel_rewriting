@@ -16,6 +16,7 @@ from contracts.schema.stage4 import WriterContext
 from contracts.schema.stage5 import Chapter
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ProvenanceRefused, UpstreamMissing,
+    UpstreamStale,
 )
 from novel.run import RunContext
 from novel.stages.stage5 import measure as M
@@ -37,7 +38,10 @@ def _current_pretrim(
         return None
     try:
         chapter, _raw = store.read_own(Chapter, rel, require_current=True)
-    except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing):
+    # ⚠ `UpstreamStale` 是 `require_current=True` 时真正会抛的那一条（2026-08-17 从
+    #   `ProvenanceRefused` 拆出来，见该类 docstring）；`ProvenanceRefused` 留在这里
+    #   只覆盖来源账自相矛盾的旧行为面，不是这条读法的正常出路。
+    except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale):
         return None
     if chapter.output_ordinal != audit.output_ordinal or chapter.mode != audit.mode:
         return None
@@ -147,13 +151,13 @@ def verification_context(store: ArtifactStore, audit: TrimAudit) -> str:
         'stage5.chapter', mode=audit.mode, nn=audit.output_ordinal)
     try:
         chapter, _raw = store.read_own(Chapter, rel, require_current=True)
-    except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing):
+    except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale):
         return f'{identity}；当前正式稿字数/目标区间不可读'
 
     chars = M.chars_of(chapter.text)
     try:
         writer_context = store.read(WriterContext, STAGE4_WRITER_CONTEXT)
-    except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing):
+    except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale):
         return f'当前 pretrim {chars} 字（目标区间不可读）；{identity}'
     entry = next(
         (row for row in writer_context.chapters

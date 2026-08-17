@@ -9,6 +9,7 @@ import pytest
 
 from contracts.rules import REGISTRY
 from contracts.schema.stage4 import WriterContext
+from novel.errors import UpstreamMissing
 from novel.run import RunContext
 from novel.stages.stage4 import plan, prompts
 from tests import corpus, sandbox
@@ -522,6 +523,43 @@ def test_stage4_has_exactly_two_nodes_and_only_one_of_them_checks():
     assert [n for n in nodes if '--check-only' in NODES[n].flags] == ['stage4.plan']
     # `stage4.context` 的 `flags=()` 是**终态**：它本身就是那个动作
     assert NODES['stage4.context'].flags == ()
+
+
+@needs_corpus
+def test_check_only_reads_the_blocked_draft_when_no_formal_plan_exists():
+    """⭐ 首跑被落盘闸拦下时，`.INVALID` 是唯一可审阅稿，复检必须能读它。
+
+    此前这里抛 `UpstreamMissing`，而本层的 `.INVALID` **不带 findings**（schema 无此字段）
+    ⇒ 终态只给了 rule id，全链没有任何只读入口能拿到「错在哪几条」，
+    人只能回去读 `checks.py` 自己复算判据。形态照 stage3 的成例。
+    """
+    book = books()[0]
+    box = sandbox.Sandbox(book, STAGE4_INPUTS)
+    try:
+        src = box.dir / 'stage4' / 'plan_chapters.json'
+        (box.dir / 'stage4' / 'plan_chapters.INVALID.json').write_bytes(src.read_bytes())
+        src.unlink()
+
+        rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
+        assert rep.provenance.invalid is True, '报告必须自报判的是 .INVALID 稿'
+        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 26
+        assert all(ln.status != 'skipped' for ln in rep.rules), \
+            '判据要真的跑在问题稿上，不能整排落成「没跑成」'
+    finally:
+        box.close()
+
+
+@needs_corpus
+def test_check_only_still_refuses_when_neither_draft_is_on_disk():
+    """两份都不在盘上才是真的「先跑那一层」。**显式终态，不是「查过没事」。**"""
+    book = books()[0]
+    box = sandbox.Sandbox(book, STAGE4_INPUTS)
+    try:
+        (box.dir / 'stage4' / 'plan_chapters.json').unlink()
+        with pytest.raises(UpstreamMissing, match='都不在盘上'):
+            plan.run_check_only(_ctx_for(box, 'stage4.plan'))
+    finally:
+        box.close()
 
 
 @needs_corpus

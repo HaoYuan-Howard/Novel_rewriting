@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from contracts.schema import CorpusManifest
-from tools.corpus_manifest import verify as verify_corpus_manifest
+from tests.corpus_manifest import verify as verify_corpus_manifest
 
 
 _ROOT = Path(__file__).resolve().parents[1]

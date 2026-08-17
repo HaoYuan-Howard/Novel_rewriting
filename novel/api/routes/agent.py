@@ -13,9 +13,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    AgentRunList, AgentRunPreview, AgentRunRequest, LogChunk,
+    AgentBatchRequest, AgentRunList, AgentRunPreview, AgentRunRequest, LogChunk,
 )
-from contracts.schema.orchestration import AgentRunRecord
+from contracts.schema.orchestration import AgentQueueView, AgentRunRecord
 from novel.api.deps import checked_sid, get_base
 from novel.errors import UpstreamMissing
 from novel.orchestrator import agent, jobs
@@ -55,6 +55,28 @@ def start_run(req: AgentRunRequest, base: str = Depends(get_base)) -> AgentRunRe
     sid = checked_sid(req.sid)
     return agent.start(base, sid, authorized=req.authorized,
                        egress_authorized=req.egress_authorized)
+
+
+@router.post('/batch', response_model=AgentQueueView, status_code=202)
+def start_batch(req: AgentBatchRequest,
+                base: str = Depends(get_base)) -> AgentQueueView:
+    """一次交 N 本：能起的立刻起，超出并发闸的排队。**202 = 已受理，不是已跑完。**
+
+    ⚠ **部分失败不回滚**，逐本的落点全在响应里（`running` / `pending` / `rejected`）。
+    抛一个「批量失败」会把已经起来的那几本藏掉——人看到报错，盘上却真有进程在跑。
+    ⚠ 每个 sid 仍走 `checked_sid` 那道边界校验：一个写错的 sid 不该让整批停下，
+    但也不该被当成一本书塞进队列。
+    """
+    sids = [checked_sid(s) for s in req.sids]
+    return agent.enqueue(base, sids, authorized=req.authorized,
+                         egress_authorized=req.egress_authorized)
+
+
+@router.get('/queue', response_model=AgentQueueView)
+def get_queue(base: str = Depends(get_base)) -> AgentQueueView:
+    """谁在跑、谁在排、闸开多大。**排队部分只在内存**——服务重启即清空
+    （`R-14.6` 那条互斥锁的同族，界面要照实写「重启不保留」）。"""
+    return agent.queue_view(base)
 
 
 @router.get('', response_model=AgentRunList)

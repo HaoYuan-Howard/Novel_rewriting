@@ -45,7 +45,8 @@ from novel.stages import check_only                          # noqa: E402
 from novel.views.inbox import inbox_view                     # noqa: E402
 
 #: 判官节点。质量测量仪器与生成分账（A/B 里判官统一固定配置，成本不归臂）。
-JUDGE_NODES = frozenset({'stage5.semantic', 'stage6.semantic'})
+#: ⚠ `stage5.semantic` 于 2026-08-17 下线，判官节点只剩一个。
+JUDGE_NODES = frozenset({'stage6.semantic'})
 
 #: 章头两种实测形态：`第N章/回` 行头（可带标题），或**独行裸数字**（成书实测是后者）。
 _CH_MARK = re.compile(r'^(?:第[0-9一二三四五六七八九十百千两]{1,7}[章回]|\d{1,4}\s*$)', re.M)

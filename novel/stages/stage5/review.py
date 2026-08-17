@@ -125,24 +125,16 @@ wontfix_key = wontfix.key
 
 
 def _semantic_pool(ctx: RunContext, store: ArtifactStore) -> tuple[list[Finding], str | None]:
-    """本层**当前的语义结论**，以及它出自哪一份审判产物（审计账用）。
+    """本层现算的语义结论池；`stage5.semantic` 下线后恒为空。
 
-    ⚠⚠ **它是这条闭环存在的理由。** 语义结论在报告渲染时由
-    `stage5/semantic.py::outcomes` 现算，**不进 `review_<n>.json`** ⇒
-    只从最近一份验收里反查的旧实现，对 `semantic_secret_leak` 永远查不到，
-    人拿到的是一句「不给不存在的结论发豁免」——而那条结论明明就在报告上。
-    ⇒ 反查池 = 验收里的机械结论 **∪** 现算的语义结论。
-
-    ⚠ 语义结论**一律 book 级寻址**：它们的章信息在证据键里
-    （`semantic_secret_leak` 的证据是 `ch<n>:<正文原字节>`），
-    再按章分一次是同一个信息的第二个落点。
+    ⚠ **保留这个函数而不是删掉它，是为了让「反查池 = 机械 ∪ 语义」这条结构留在原处。**
+    本层的语义判据随 `stage5.semantic` 节点于 2026-08-17 一并下线（用户裁决），
+    于是这一半恒空；`--wontfix` 的反查因此只在机械结论里进行，
+    而那正是本层现在全部结论的所在。
+    ⚠ 若将来恢复书级语义审判，把结论重新灌进这里即可，不必再改 `mark_wontfix`。
     """
-    from novel.stages.stage5 import semantic
-    book = load_book(ctx, store) if store.exists(GLOBAL_GROUNDING) else None
-    outs = semantic.outcomes(store, book)
-    seqs = semantic.semantic_seqs(store)
-    at = f'semantic_{seqs[-1]}' if seqs else None
-    return [f for o in outs for f in o.findings], at
+    del ctx, store
+    return [], None
 
 
 def mark_wontfix(ctx: RunContext, spec: str) -> CheckReport:
@@ -578,20 +570,18 @@ def _aggregate_band_drift(
 def _report_of_review(ctx: RunContext, store: ArtifactStore, rev: Review,
                       book: M.Book | None = None, *,
                       freshness_rel: str | None = None) -> CheckReport:
-    """⚠ **语义那一半的豁免在这里套，不在 `build_review` 里。**
+    """机械结论 + 已落盘豁免 → 一份验收报告。
 
-    机械结论落进 `review_<n>.json`（豁免跟着落盘，人的决定是产物的一部分），
-    而语义结论是渲染时现算的 ⇒ 它们的豁免只能在**这一层**套上。
-    漏了这一步，人明明豁免过一条 `semantic_secret_leak`，报告照旧把它算成待办
-    ——「有人看过并决定不修」与「没人看过」又同形了。
+    ⚠ 历史：本层曾在这里额外合并**渲染时现算**的语义结论并单独套一次豁免
+    （机械结论落进 `review_<n>.json`，语义结论不落盘 ⇒ 两侧的豁免时机不同）。
+    `stage5.semantic` 下线后语义那一半恒空，合并因此收敛成单侧。
+    ⚠ 恢复书级语义审判时要把那一步一起恢复——豁免不套上去，
+    「有人看过并决定不修」与「没人看过」在报告上会重新同形。
     """
-    from novel.stages.stage5 import semantic
     seqs = review_seqs(store)
     rel = freshness_rel or (REVIEW_TPL.format(n=seqs[-1]) if seqs else WRITER_CONTEXT)
-    wf = load_wontfix(store)
     return build(sid=ctx.sid, node=ctx.node, freshness=store.freshness(rel),
-                 outcomes=[*_outcomes(rev, book),
-                           *wontfix.applied_to_outcomes(semantic.outcomes(store, book), wf)],
+                 outcomes=list(_outcomes(rev, book)),
                  accounting=None, invalid=False)
 
 

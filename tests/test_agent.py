@@ -146,7 +146,8 @@ def test_start_with_fake_spawn(base):
     assert 'fake run' in agent.run_log_path(base, rec.run_id).read_text('utf-8')
 
 
-def test_one_agent_at_a_time(base):
+def test_one_agent_per_book(base):
+    """**同一本书**一次只跑一个 agent。两个 agent 写同一片盘是 SKILL 明禁的。"""
     gate = threading.Event()
 
     def slow(argv, cwd, env, log):
@@ -157,21 +158,157 @@ def test_one_agent_at_a_time(base):
                       spawn=slow)
     try:
         with pytest.raises(JobConflict):
-            agent.start(base, '43', authorized=True, egress_authorized=True,
-                        spawn=_ok_spawn)                        # 全局一把锁
+            agent.start(base, '42', authorized=True, egress_authorized=True,
+                        spawn=_ok_spawn)
     finally:
         gate.set()
         agent.wait(rec.run_id, 10)
 
 
-def test_api_job_refused_while_agent_runs(base):
+def test_different_books_run_in_parallel(base):
+    """⭐ **不同书可以同时跑。** 锁按书分（`jobs.agent_lock_key`）。
+
+    ⚠ 这条是那次解读更正的落点：锁曾经是全局一把，理由写着「SKILL：两本书不并行」，
+    而 SKILL 那条管的是「一个 agent 会话别同时管两本」。N 个 headless agent
+    各看各的书，谁也碰不到谁的目录。
+    """
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    first = agent.start(base, '42', authorized=True, egress_authorized=True,
+                        spawn=slow)
+    second = agent.start(base, '43', authorized=True, egress_authorized=True,
+                         spawn=slow)
+    try:
+        live = {r.run_id for r in agent.records(base) if r.state == 'running'}
+        assert {first.run_id, second.run_id} <= live, '两本书没能同时在跑'
+    finally:
+        gate.set()
+        agent.wait(first.run_id, 10)
+        agent.wait(second.run_id, 10)
+
+
+def test_the_concurrency_gate_holds(base, monkeypatch):
+    """⭐ 并发闸：满了就抛 `AgentBusy`，**不是**悄悄多起一个。
+
+    ⚠ 闸判错的代价是钱：每个 agent 是一整个 claude 会话，还会再起 CLI 烧 DeepSeek。
+    """
+    monkeypatch.setattr(agent, 'MAX_CONCURRENT', 2)
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    started = [agent.start(base, sid, authorized=True, egress_authorized=True,
+                           spawn=slow) for sid in ('42', '43')]
+    try:
+        with pytest.raises(agent.AgentBusy):
+            agent.start(base, '44', authorized=True, egress_authorized=True,
+                        spawn=_ok_spawn)
+    finally:
+        gate.set()
+        for rec in started:
+            agent.wait(rec.run_id, 10)
+
+
+def test_the_queue_starts_the_next_book_when_one_ends(base, monkeypatch):
+    """⭐ 排队的那本由**结束的那个 agent** 带起来（`_drain` 在 worker 的 finally 里）。
+
+    ⚠ 这是「勾 10 本走开」能成立的全部机制。少了它，队列要等下一次有人点按钮才动。
+    """
+    monkeypatch.setattr(agent, 'MAX_CONCURRENT', 1)
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    view = agent.enqueue(base, ['42', '43'], authorized=True,
+                         egress_authorized=True, spawn=slow)
+    assert [r.start.sid for r in view.running] == ['42']
+    assert [p.sid for p in view.pending] == ['43'] and view.pending[0].position == 1
+
+    gate.set()                                   # 第一本收尾 ⇒ 第二本应被带起来
+    assert agent.wait(view.running[0].run_id, 10)
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        sids = {r.start.sid for r in agent.records(base)}
+        if '43' in sids:
+            break
+        time.sleep(0.05)
+    assert '43' in {r.start.sid for r in agent.records(base)}, '队列没有把下一本带起来'
+    for rec in agent.records(base):
+        agent.wait(rec.run_id, 10)
+
+
+def test_enqueue_reports_every_book_it_refused(base):
+    """**部分失败不回滚**：起不来的那本进 `rejected`，其余照常跑。
+
+    ⚠ 抛一个「批量失败」会把已经起来的那几本藏掉——人看到报错，盘上却真有进程。
+    """
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    first = agent.start(base, '42', authorized=True, egress_authorized=True,
+                        spawn=slow)
+    try:
+        view = agent.enqueue(base, ['42', '43'], authorized=True,
+                             egress_authorized=True, spawn=slow)
+        assert [r.sid for r in view.rejected] == ['42']
+        assert '43' in {r.start.sid for r in view.running}
+        assert view.max_concurrent == agent.MAX_CONCURRENT
+    finally:
+        gate.set()
+        for rec in agent.records(base):
+            agent.wait(rec.run_id, 10)
+
+
+def test_api_job_refused_while_the_same_book_has_an_agent(base):
     """反向互斥的落点在 `jobs.run/start`——八个调用点一处都不漏。"""
-    jobs.AGENT_REGISTRY.acquire('agent-run', 'r-test')
+    jobs.AGENT_REGISTRY.acquire(jobs.agent_lock_key('42'), 'r-test')
     try:
         with pytest.raises(JobConflict):
             jobs.start(base, 'stage0.approve', '42')
     finally:
-        jobs.AGENT_REGISTRY.release('agent-run', 'r-test')
+        jobs.AGENT_REGISTRY.release(jobs.agent_lock_key('42'), 'r-test')
+
+
+def test_an_agent_on_another_book_does_not_block_this_one(base):
+    """⭐ A 书的 agent **不该**挡住 B 书的节点作业——两者写的不是同一片盘。
+
+    ⚠ 反向互斥曾经是「有任何 agent 在跑就全拒」。并发放开之后那一条会让
+    第一本 agent 把其余每一本的每一个节点作业统统挡死，而没有任何东西在保护。
+    """
+    jobs.AGENT_REGISTRY.acquire(jobs.agent_lock_key('42'), 'r-test')
+    try:
+        # 43 上没有 agent ⇒ 这道闸不该开火。真正能不能跑由后面的校验决定，
+        # 这里只断言**不是** JobConflict。
+        try:
+            jobs.start(base, 'stage0.approve', '43')
+        except JobConflict as exc:                       # pragma: no cover
+            pytest.fail(f'另一本书的 agent 把这本挡住了：{exc}')
+        except Exception:
+            pass                                          # 别的失败与本条无关
+    finally:
+        jobs.AGENT_REGISTRY.release(jobs.agent_lock_key('42'), 'r-test')
+
+
+def test_ingest_is_still_refused_while_any_agent_runs(base):
+    """⚠ `sid=None`（上传新书）**仍然一律拒**：摄入要推导目录名，
+    而任何一个 agent 都可能正在建目录。这一格宁可严。"""
+    jobs.AGENT_REGISTRY.acquire(jobs.agent_lock_key('42'), 'r-test')
+    try:
+        with pytest.raises(JobConflict):
+            jobs._refuse_if_agent_running(None)
+    finally:
+        jobs.AGENT_REGISTRY.release(jobs.agent_lock_key('42'), 'r-test')
 
 
 def test_stop_terminates_the_process_tree(base):

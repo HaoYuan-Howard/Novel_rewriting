@@ -10,6 +10,7 @@ nodes.py —— 把 `(节点, 书, flags)` 变成一条命令，并回答关于�
     would_write(node, flags)   这一次会不会往盘上写      本期新补，原型没有这个概念
     step_label(node, flags, …) 这一步叫什么              `R-11.8`：界面与作业记录共用它
     build_argv(node, sid, …)   那条命令                  `R-11.8`：展示与执行共用它
+    shell_line(argv)           那条命令的人读形态        `R-11.8`：渲染只许有一个落点
     build_steps(node, sid, …)  这个作业要依次跑哪几条
 
 ⚠ **`is_paid` 的位置是被两处注释锁死的**（`contracts/invariants.py` 的 `NodeSpec`
@@ -22,6 +23,7 @@ nodes.py —— 把 `(节点, 书, flags)` 变成一条命令，并回答关于�
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -371,6 +373,39 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
         # 而 `--yes` 一样都不改，它只是一枚确认凭据。同 `--base` / `--mode`。
         argv.append('--yes')
     return argv
+
+
+#: 不需要引号的那些字节。**没有反斜杠**——Windows 路径因此一定会被引起来，
+#: 而那正是要的：`--base E:\out` 在 POSIX shell 里会把 `\o` 吃掉。
+#: ⚠ 写成显式 ASCII 字符类而不是 `\w`：Python 的 `\w` 认 Unicode、JS 的不认，
+#: 用 `\w` 会让本函数与前端 `quoteArg` 在中文取值上分家（多引一对引号无害，
+#: 但「两处逐字节一致」这句话一旦不成立，就没人知道还有哪儿不一致）。
+_BARE = re.compile(r'^[A-Za-z0-9_./:=@,+-]+$')
+
+
+def shell_line(argv: Sequence[str]) -> str:
+    """一条 argv → 一行**可逐字粘进 shell** 的命令。**渲染只许有一个落点。**
+
+    【它补的是什么】`build_argv` 产的是**词元序列**，而摊开给人看的一直是
+    `' '.join(argv)` —— 于是 `--reason "fix present_names_invented"` 打出来是三个裸词，
+    逐字复制到任何 shell 里都会把后两个词解析成位置参数。`build_argv` 上方那条注释
+    写着「摊开显示的那条命令**就是会跑的那条**，粘进终端也不会再问一遍」，
+    而在含空格的取值上它此前不成立。
+
+    ⚠ 引法与前端 `web/src/api/endpoints.ts::quoteArg` **必须逐字节一致**
+    （单引号包裹、内部单引号成对翻倍）：跨语言没法共用一个函数，能做的只有钉死规则。
+    改这里就要同时改那里。
+    ⚠ 选单引号而不是双引号：PowerShell 与 POSIX sh 对单引号都按**字面**读，
+    `$`、反引号、反斜杠一律不展开。cmd.exe 不在支持面内（本仓文档不用它）。
+    ⚠⚠ **取值内部含单引号时两种 shell 无法同时满足**：转义写法 PowerShell 是 `''`、
+    POSIX 是 `'\\''`，不存在同时正确的编码。这里按 **PowerShell** 写
+    （本仓文档、launcher 与前端 `quoteArg` 都是这一侧），POSIX shell 下这一种取值
+    要自己改写。其余全部形状——含空格、反斜杠路径、中文、`&`/`|`/`;`——两边都对。
+    """
+    return ' '.join(
+        token if _BARE.match(token) else "'" + token.replace("'", "''") + "'"
+        for token in argv
+    )
 
 
 def step_label(node: str, flags: Sequence[str] = (), *, mode: str | None = None) -> str:

@@ -11,6 +11,8 @@ import { NotRunYet } from '@/components/state/States'
 import { FreshnessBadge, FreshnessDot, FreshnessTag } from '@/components/vocab/Freshness'
 import { SPEND_INK } from '@/constants/vocabulary'
 import { AgentRunDialog } from '@/components/agent/AgentRunDialog'
+import { AgentBatchDialog } from '@/components/agent/AgentBatchDialog'
+import { useAgentQueue } from '@/hooks/useAgentRuns'
 import { cx } from '@/lib/cx'
 import { useCorpusScreen, type BookView } from './useCorpusScreen'
 
@@ -36,7 +38,20 @@ export function CorpusScreen() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [agentSid, setAgentSid] = useState<string | null>(null)
+  const [picked, setPicked] = useState<string[]>([])
+  const [batchOpen, setBatchOpen] = useState(false)
   const input = useRef<HTMLInputElement>(null)
+  const queue = useAgentQueue()
+
+  // ⚠ 顺序取自 picked 而不是 vm.books：勾选顺序就是排队顺序，
+  //   人先勾的那本先跑，这是界面上唯一能表达优先级的地方。
+  const pickedBooks = picked
+    .map((sid) => vm.books.find((b) => b.sid === sid))
+    .filter((b): b is BookView => !!b)
+    .map((b) => ({ sid: b.sid, title: b.title }))
+
+  const togglePick = (sid: string) =>
+    setPicked((cur) => (cur.includes(sid) ? cur.filter((s) => s !== sid) : [...cur, sid]))
 
   const chooseFile = (next: File | null) => {
     if (!next) return
@@ -236,10 +251,20 @@ export function CorpusScreen() {
             />
           ) : (
             <div className="flex flex-col gap-14">
+              <BatchBar
+                picked={pickedBooks.length}
+                running={queue.data?.running.length ?? 0}
+                pending={queue.data?.pending.length ?? 0}
+                gate={queue.data?.max_concurrent ?? null}
+                onClear={() => setPicked([])}
+                onRun={() => setBatchOpen(true)}
+              />
               {vm.books.map((b) => (
                 <BookCard
                   key={b.sid}
                   b={b}
+                  picked={picked.includes(b.sid)}
+                  onPick={() => togglePick(b.sid)}
                   onOpen={() => nav('/n/' + b.sid + '/stage0')}
                   onAgent={() => setAgentSid(b.sid)}
                 />
@@ -259,16 +284,94 @@ export function CorpusScreen() {
           }}
         />
       ) : null}
+
+      {batchOpen ? (
+        <AgentBatchDialog
+          books={pickedBooks}
+          onClose={() => {
+            setBatchOpen(false)
+            setPicked([])
+          }}
+        />
+      ) : null}
     </section>
+  )
+}
+
+/**
+ * 批量开跑的操作条。**只在勾了书之后才有动作**，平时是一条并发现状。
+ *
+ * ⚠ 「几个在跑 / 几个在排 / 闸多大」三个数全部来自服务端 `/api/agent/runs/queue`——
+ * 界面不自己数、也不写死上限（同「贵贱只有一处算」那条纪律）。
+ */
+function BatchBar({
+  picked,
+  running,
+  pending,
+  gate,
+  onClear,
+  onRun,
+}: {
+  picked: number
+  running: number
+  pending: number
+  gate: number | null
+  onClear: () => void
+  onRun: () => void
+}) {
+  return (
+    <div className="flex items-center gap-12 rounded-card border border-line bg-sunken-2 px-18 py-11">
+      <span className="text-body text-ink-2">
+        {picked > 0 ? (
+          <>
+            已勾 <span className="font-semibold">{picked}</span> 本
+            <span className="text-ink-5">（勾选顺序就是排队顺序）</span>
+          </>
+        ) : (
+          <span className="text-ink-4">勾上几本可以一次交给 agent 跑；一本一本点也照旧。</span>
+        )}
+      </span>
+
+      <span className="text-tag text-ink-4">
+        agent 现在：{running} 在跑
+        {pending > 0 ? ' · ' + pending + ' 排队' : ''}
+        {gate !== null ? ' · 上限 ' + gate : ''}
+      </span>
+
+      {picked > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={onClear}
+            className="ml-auto cursor-pointer rounded-btn border border-line-btn bg-card px-13 py-6 text-body text-ink-2"
+          >
+            清空
+          </button>
+          <button
+            type="button"
+            onClick={onRun}
+            title="一次交 N 本：闸内的立刻跑，其余排队，一本结束自动带起下一本"
+            className="cursor-pointer rounded-btn border border-line-btn bg-card px-13 py-6 text-body font-semibold"
+            style={{ color: SPEND_INK }}
+          >
+            开跑这 {picked} 本
+          </button>
+        </>
+      ) : null}
+    </div>
   )
 }
 
 function BookCard({
   b,
+  picked,
+  onPick,
   onOpen,
   onAgent,
 }: {
   b: BookView
+  picked: boolean
+  onPick: () => void
   onOpen: () => void
   onAgent: () => void
 }) {
@@ -279,13 +382,22 @@ function BookCard({
         style={{ gridTemplateColumns: 'minmax(300px,1.1fr) 270px 96px' }}
       >
         <div className="flex flex-col gap-6 px-18 py-14">
-          <button
-            type="button"
-            onClick={onOpen}
-            className="cursor-pointer border-none bg-transparent p-0 text-left text-h2 font-semibold text-ink hover:text-accent"
-          >
-            {b.title}
-          </button>
+          <div className="flex items-center gap-10">
+            <input
+              type="checkbox"
+              checked={picked}
+              onChange={onPick}
+              title="勾上它，和别的书一起交给 agent 批量跑"
+              className="cursor-pointer"
+            />
+            <button
+              type="button"
+              onClick={onOpen}
+              className="cursor-pointer border-none bg-transparent p-0 text-left text-h2 font-semibold text-ink hover:text-accent"
+            >
+              {b.title}
+            </button>
+          </div>
           <div className="flex items-center gap-10">
             <Mono className="text-mini text-ink-4">{b.sid}</Mono>
             <span className="text-tag text-ink-4">{b.chaptersLabel}</span>

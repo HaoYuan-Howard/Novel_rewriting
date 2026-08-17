@@ -460,8 +460,9 @@ def numbered_rounds(novel_dir: str | os.PathLike[str], pattern_rel: str) -> list
     没有它们的行。续跑判定于是只剩 stage 级的 `done` 可问，而那个 `done` 对 stage5
     说的是**章稿写全了没有**——拿它去答「全书验收跑过没有」，
     答案永远是「跑过了」，**而盘上一份 `review_*.json` 都没有**。
-    实测后果：批量队列把 `stage5.review`（0 成本）与 `stage5.semantic`（付费）
-    双双记成 `done` 而一次都没执行，整条链上唯一的书级质量闸门静默缺席。
+    实测后果：批量队列把 `stage5.review`（0 成本）与当时的 `stage5.semantic`（付费，
+    已于 2026-08-17 下线）双双记成 `done` 而一次都没执行，
+    整条链上唯一的书级质量闸门静默缺席。
 
     ⚠ **全等匹配、只认十进制编号**，与 `archived_rounds` 同一条纪律：
     `review_1.INVALID.json` 匹配不上（它不是一份现役产物），

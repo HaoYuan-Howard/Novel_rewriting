@@ -352,7 +352,8 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
     # ⭐ 轮次编号产物（`review_{n}` / `semantic_{n}`）：**它有自己的账，不看 stage 级 `done`**。
     #
     # ⚠⚠ 这一支是实跑改出来的。此前它落进下面那条「逐章类」分支，于是
-    # `stage5.review`（0 成本全书验收）与 `stage5.semantic`（付费书级语义审判）
+    # `stage5.review`（0 成本全书验收）与当时的 `stage5.semantic`（付费书级语义审判，
+    # 已于 2026-08-17 下线；本分支现在为 stage5.review 与 stage6.semantic 服务）
     # 拿到的结论是 **stage5 的 `done`**——而那个 `done` 说的是「章稿写全了没有」。
     # 章一写全，这两个节点就恒 `skip`，理由还写着「计划里的每个输出章都有成稿了」
     # ——**一句正确的话，答的是另一个问题**。实测两本书跑完整条队列，

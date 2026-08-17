@@ -108,6 +108,7 @@ def test_both_directions_of_the_mutex(client, monkeypatch):
         'sid': '42', 'authorized': True, 'egress_authorized': True,
     }, headers=UI)
     assert r.status_code == 202
+    other = None
     try:
         # agent 活着 ⇒ 起 API 作业 409（反向互斥在 jobs.start 里，路由层白拿）
         # ⚠ 必填的人工凭据要带全：`stage0.approve` 的 `required_flags` 缺一个就是 400
@@ -118,12 +119,102 @@ def test_both_directions_of_the_mutex(client, monkeypatch):
             'flags': ['--actor', 'tester', '--reason', '互斥用例'],
         }, headers=UI)
         assert r2.status_code == 409
-        # 同时第二个 agent 也 409（全局一把锁）
+        # 同一本书的第二个 agent 仍 409（一本书一把锁）
         r3 = c.post('/api/agent/runs', json={
-            'sid': '43', 'authorized': True, 'egress_authorized': True,
+            'sid': '42', 'authorized': True, 'egress_authorized': True,
         },
                      headers=UI)
         assert r3.status_code == 409
+        # ⭐ 但**另一本书**起得来：锁按书分，异书两个 agent 谁也碰不到谁的目录。
+        r4 = c.post('/api/agent/runs', json={
+            'sid': '43', 'authorized': True, 'egress_authorized': True,
+        }, headers=UI)
+        assert r4.status_code == 202, '另一本书被挡住了——锁又变回全局一把了'
+        other = r4.json()['run_id']
     finally:
+        # ⚠ 收尾走 `wait` 不是 `stop`：这一批用的是 monkeypatch 进去的假 spawn，
+        # `_PROCS` 里根本没有句柄，`stop` 会以「没有在跑的子进程」当场炸掉。
         gate.set()
         agent.wait(r.json()['run_id'], 10)
+        if other:
+            agent.wait(other, 10)
+
+
+# ───────────────────── 批量入口与队列（并发放开之后的新面） ─────────────────────
+
+def test_batch_starts_what_it_can_and_queues_the_rest(client, monkeypatch):
+    """⭐ 一次交 N 本：闸内的立刻跑，超出的排队。**202 = 已受理，不是已跑完。**"""
+    c, base = client
+    monkeypatch.setattr(agent, 'MAX_CONCURRENT', 2)
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    monkeypatch.setattr(agent, '_default_spawn', lambda run_id: slow)
+    started = []
+    try:
+        r = c.post('/api/agent/runs/batch', json={
+            'sids': ['42', '43', '44'], 'authorized': True,
+            'egress_authorized': True,
+        }, headers=UI)
+        assert r.status_code == 202
+        d = r.json()
+        assert {rec['start']['sid'] for rec in d['running']} == {'42', '43'}
+        assert [p['sid'] for p in d['pending']] == ['44']
+        assert d['pending'][0]['position'] == 1
+        assert d['max_concurrent'] == 2
+        assert d['rejected'] == []
+        started = [rec['run_id'] for rec in d['running']]
+    finally:
+        gate.set()
+        for run_id in started:
+            agent.wait(run_id, 10)
+        for rec in agent.records(base):
+            agent.wait(rec.run_id, 10)
+
+
+def test_the_queue_endpoint_publishes_the_gate(client):
+    """前端要显示「3 个都在跑」就得从服务端拿这个数——**不许自己写死**。"""
+    c, _ = client
+    r = c.get('/api/agent/runs/queue')
+    assert r.status_code == 200
+    d = r.json()
+    assert d['max_concurrent'] == agent.MAX_CONCURRENT
+    assert d['running'] == [] and d['pending'] == []
+
+
+def test_batch_rejects_a_book_that_already_has_an_agent(client, monkeypatch):
+    """**部分失败不回滚**：重复那本进 `rejected`，其余照常受理。"""
+    c, base = client
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    monkeypatch.setattr(agent, '_default_spawn', lambda run_id: slow)
+    first = c.post('/api/agent/runs', json={
+        'sid': '42', 'authorized': True, 'egress_authorized': True,
+    }, headers=UI)
+    assert first.status_code == 202
+    try:
+        r = c.post('/api/agent/runs/batch', json={
+            'sids': ['42', '43'], 'authorized': True, 'egress_authorized': True,
+        }, headers=UI)
+        assert r.status_code == 202
+        d = r.json()
+        assert [x['sid'] for x in d['rejected']] == ['42']
+        assert '43' in {rec['start']['sid'] for rec in d['running']}
+    finally:
+        gate.set()
+        for rec in agent.records(base):
+            agent.wait(rec.run_id, 10)
+
+
+def test_batch_still_needs_the_csrf_header(client):
+    """变更类请求一律过 `R-11.2` 那道中间件闸——新端点不例外。"""
+    c, _ = client
+    assert c.post('/api/agent/runs/batch',
+                  json={'sids': ['42']}).status_code == 403

@@ -137,9 +137,9 @@ def _stage5(*, chapters: list[int], rounds: dict[str, list[int]]) -> StageState:
 
 
 def test_numbered_round_products_are_not_answered_by_the_chapter_count():
-    """⭐ **回归**：章稿写全了，不等于全书验收与书级语义审判跑过了。
+    """⭐ **回归**：章稿写全了，不等于全书验收跑过了。
 
-    此前 `stage5.review` / `stage5.semantic` 的 `produces` 带 `{}`，于是它们
+    此前 `stage5.review`（以及当时还在的 `stage5.semantic`）的 `produces` 带 `{}`，于是它们
     落进「逐章类」分支、拿到 **stage5 的 `done`**——而那个 `done` 说的是
     「计划里的章都有成稿吗」。章一写全，两个节点就恒 `skip`，理由还写着
     「计划里的每个输出章都有成稿了」：**一句正确的话，答的是另一个问题**。
@@ -147,7 +147,7 @@ def test_numbered_round_products_are_not_answered_by_the_chapter_count():
     ——全链唯一的书级质量闸门静默缺席。
     """
     ov = _overview(_stage5(chapters=[1, 2, 3], rounds={}))
-    for node in ('stage5.review', 'stage5.semantic'):
+    for node in ('stage5.review',):
         verdict, why = S.resume_verdict(ov, node)
         assert verdict == S.RESUME_RUN, f'{node} 又被章数顶替了：{why}'
         assert '输出章' not in why, f'{node} 的理由还在拿章数说话：{why}'
@@ -163,8 +163,6 @@ def test_a_numbered_round_on_disk_is_skipped_and_says_what_it_cannot_know():
     assert verdict == S.RESUME_SKIP
     assert '1, 2' in why and '新鲜度' in why
 
-    # 同一层里另一个轮次节点各算各的：review 有轮次不代表 semantic 跑过。
-    assert S.resume_verdict(ov, 'stage5.semantic')[0] == S.RESUME_RUN
 
 
 def test_stage6_semantic_is_not_answered_by_the_hook_artifact():
@@ -185,8 +183,7 @@ def test_stage6_semantic_is_not_answered_by_the_hook_artifact():
 def test_numbered_produces_covers_exactly_the_round_numbered_artifacts():
     """三条路互补：具名 / 轮次编号 / 逐章。**谁也不许拿另一条的答案顶替。**"""
     assert S.numbered_produces('stage5') == {
-        'stage5.review': 'stage5/review_{n}.json',
-        'stage5.semantic': 'stage5/semantic_{n}.json'}
+        'stage5.review': 'stage5/review_{n}.json'}
     assert S.numbered_produces('stage6') == {
         'stage6.semantic': 'stage6/semantic_{n}.json'}
     # 逐章类（目录段也带占位符）不进这张表，它归 `chapters_done`。

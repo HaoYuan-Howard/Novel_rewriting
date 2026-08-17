@@ -578,6 +578,20 @@ class AgentRunRequest(StrictModel):
     egress_authorized: bool = True
 
 
+class AgentBatchRequest(StrictModel):
+    """`POST /api/agent/runs/batch` 的请求体：**一次交 N 本**，超出并发闸的排队。
+
+    ⚠ 两项授权对这一批**整体**生效，不是逐本勾——逐本勾会让「这一批到底授权了什么」
+    没有一个能写进终审包的答案。要给不同书不同授权，就分两批提交。
+    ⚠ 没有「全选当前 base 下所有书」这种服务端快捷方式：那会让一次误点
+    把一整个语料目录送上付费路径。要跑哪几本，前端逐个 sid 列出来。
+    """
+
+    sids: list[str] = Field(min_length=1)
+    authorized: bool = False
+    egress_authorized: bool = True
+
+
 class AgentRunPreview(StrictModel):
     """`POST /api/agent/runs/preview` 的响应。与真跑同一构造函数（`R-11.8` 同构）。"""
 

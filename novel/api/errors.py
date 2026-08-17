@@ -43,8 +43,10 @@ from novel.errors import (
     TooFewChapters,
     UnsupportedRunMode,
     UpstreamMissing,
+    UpstreamStale,
     ValueDomainRefused,
 )
+from novel.orchestrator.agent import AgentBusy
 from novel.orchestrator.jobs import JobConflict
 
 #: CSRF 闸门没过（`R-11.2`）。**不是一个异常** —— 它在请求进到业务代码**之前**就被拦下。
@@ -63,6 +65,9 @@ STATUS: dict[type[NovelError], int] = {
     #: 界面会把「先跑 stage2」说成「stage2 的产物损坏了」。
     #: 409 而不是 500：产物是**数据**，不是我们的代码写错了。
     ArtifactUnreadable: 409,
+    #: ⚠ **不是 404**：那一份在盘上，只是不再是当前根上那一版 ⇒ 与「还没跑」是两条恢复路。
+    #: 409 与 `ArtifactUnreadable` 同码同因：产物是**数据**，不是我们的代码写错了。
+    UpstreamStale: 409,
     GateBlocked: 409,
     ApprovalRequired: 409,
     #: 原始内容与当前状态冲突：覆盖会抹掉另一份书或人工编辑，或批准后输入已变化。
@@ -81,6 +86,10 @@ STATUS: dict[type[NovelError], int] = {
     #: 行为半边由通用 `POST /api/jobs` 与专用 Stage0 端点共同测试：同书第二次启动为 409，
     #: 不同书可并行，stage5 的 deep/shallow 单臂是唯一可共存的书内例外。
     JobConflict: 409,
+    #: agent 并发闸满了（`agent.MAX_CONCURRENT`）。**与 `JobConflict` 同码不同因**：
+    #: 那条是「这本书现在不该开始」，这条是「同时烧的钱到上限了，换个时间来」。
+    #: ⚠ 单本入口才会看到它；批量入口 `POST /api/agent/runs/batch` 把它接住改成排队。
+    AgentBusy: 409,
     QueueConflict: 409,
     #: 人敲了一条这个节点没有的跑法 ⇒ 产地是**客户端**。
     UnsupportedRunMode: 400,

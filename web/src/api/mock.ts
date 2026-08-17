@@ -13,6 +13,7 @@
  */
 import type { Api } from '@/types/api'
 import type {
+  AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
   AgentRunRecord,
@@ -1204,6 +1205,25 @@ export const mockApi: Api = {
       state: 'unknown',
       note: 'mock：熄火后结局不明，不改判 ok',
     }),
+
+  /* 批量：闸写死 3（真实模式由服务端下发）。前 3 本算在跑，其余按提交顺序排队。
+     ⚠ mock 不养进程，所以这里只是**形状**正确的一份样例——它让批量入口的空/满/
+     排队三态在离线开发时都渲染得出来，不假装真的起了 agent。 */
+  startAgentBatch: (req) =>
+    later<AgentQueueView>({
+      running: req.sids.slice(0, 3).map((sid) =>
+        mockAgentRunRecord({
+          sid,
+          authorized: req.authorized,
+          egress_authorized: req.egress_authorized,
+        }),
+      ),
+      pending: req.sids.slice(3).map((sid, i) => ({ sid, position: i + 1 })),
+      rejected: [],
+      max_concurrent: 3,
+    }),
+  getAgentQueue: () =>
+    later<AgentQueueView>({ running: [], pending: [], rejected: [], max_concurrent: 3 }),
 
   getApprovals: (sid) => later(loadDoc(sid)),
 

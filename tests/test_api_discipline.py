@@ -333,6 +333,9 @@ def test_job_conflict_maps_and_returns_409():
         '/api/agent/runs',
         '/api/agent/runs/preview',
         '/api/agent/runs/{run_id}/stop',
+        #: 批量入口：一次交 N 本，超出并发闸的排队。**一次点击可以起 N 份付费进程**，
+        #: 所以它和单本入口一样属于要显式登记的那一面。
+        '/api/agent/runs/batch',
     }
     assert '/api/jobs' in posts
 

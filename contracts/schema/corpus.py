@@ -26,7 +26,6 @@ CURRENT_CORPUS_PAID_NODES: tuple[str, ...] = (
     'stage3.style',
     'stage4.plan',
     'stage5.write',
-    'stage5.semantic',
     'stage6.hook',
     'stage6.semantic',
     'stage7.rename',
@@ -52,7 +51,8 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         'stage5/deep/draft.md',
         'stage5/draft.md',
         'stage5/review_1.json',
-        'stage5/semantic_1.json',
+        # ⚠ `stage5/semantic_1.json` 随 `stage5.semantic` 节点于 2026-08-17 下线，
+        #   不再是一本合格语料书的必备面。
         'stage5/shallow/draft.md',
         'stage6/hook.json',
         'stage6/semantic_1.json',
@@ -267,7 +267,7 @@ class CorpusManifest(StrictModel):
             expected_flags = {'--base', '--yes'}
             if node == 'stage5.write':
                 expected_flags.update({'--deep', '--shallow-rest'})
-            if node in {'stage5.semantic', 'stage6.semantic'}:
+            if node == 'stage6.semantic':
                 expected_flags.add('--advisory')
             if set(flags) != expected_flags or len(flags) != len(expected_flags):
                 raise ValueError(
@@ -278,7 +278,7 @@ class CorpusManifest(StrictModel):
                     raise ValueError('stage5.write command 必须固定 --deep 1,2,3')
                 if not _has_flag(command, '--shallow-rest'):
                     raise ValueError('stage5.write command 必须含 --shallow-rest')
-            if node in {'stage5.semantic', 'stage6.semantic'}:
+            if node == 'stage6.semantic':
                 if not _has_flag(command, '--advisory'):
                     raise ValueError(f'{node} command 必须含 --advisory')
         command_nodes = {node for _sid, node in dispatches}

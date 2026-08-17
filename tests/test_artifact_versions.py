@@ -90,7 +90,6 @@ def test_only_artifacts_with_new_disk_shapes_advance_to_v3():
         'stage4/writer_context.identity.json',
         'stage5/{mode}/ch{nn}.json',
         'stage5/review_{n}.json',
-        'stage5/semantic_{n}.json',
         'stage6/hook.json',
         'stage6/semantic_{n}.json',
         'stage7/name_map.json',

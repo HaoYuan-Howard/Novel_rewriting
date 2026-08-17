@@ -21,13 +21,13 @@ from contracts.schema.corpus import (
     required_current_corpus_artifacts,
 )
 from contracts.schema.stage1 import MainText
-from tools import corpus_manifest
+from tests import corpus_manifest
 
 
 def test_documented_script_entrypoint_bootstraps_repo_imports(tmp_path):
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run(
-        [sys.executable, '-X', 'utf8', str(root / 'tools' / 'corpus_manifest.py'), '--help'],
+        [sys.executable, '-X', 'utf8', str(root / 'tests' / 'corpus_manifest.py'), '--help'],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -58,7 +58,7 @@ def _commands() -> list[str]:
             flags = ''
             if node == 'stage5.write':
                 flags = ' --deep 1,2,3 --shallow-rest'
-            elif node in {'stage5.semantic', 'stage6.semantic'}:
+            elif node == 'stage6.semantic':
                 flags = ' --advisory'
             commands.append(
                 f'python -X utf8 -u -m novel.cli run {node} {sid}'
@@ -199,7 +199,7 @@ def test_manifest_pins_the_real_run_dispatch_topology_and_required_flags():
 
     raw = _manifest_raw()
     index = next(i for i, command in enumerate(raw['commands'])
-                 if 'stage5.semantic' in command)
+                 if 'stage6.semantic' in command)
     raw['commands'][index] = raw['commands'][index].replace(' --advisory', '')
     with pytest.raises(ValidationError, match='advisory'):
         CorpusManifest.model_validate(raw)
@@ -221,7 +221,7 @@ def test_manifest_accepts_commands_from_the_production_argv_builder(tmp_path):
             flags: tuple[str, ...] = ()
             if node == 'stage5.write':
                 flags = ('--deep', '1,2,3', '--shallow-rest')
-            elif node in {'stage5.semantic', 'stage6.semantic'}:
+            elif node == 'stage6.semantic':
                 flags = ('--advisory',)
             commands.append(subprocess.list2cmdline(build_argv(
                 node, sid, flags, base=tmp_path)))

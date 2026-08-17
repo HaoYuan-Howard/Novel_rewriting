@@ -42,7 +42,7 @@ from contracts.schema.orchestration import (
 from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import TerminalState
-from novel.orchestrator.nodes import build_steps, child_env
+from novel.orchestrator.nodes import build_steps, child_env, shell_line
 from novel.prov import code_version
 
 SERVICE_DIRNAME = '_service'
@@ -138,20 +138,60 @@ REGISTRY = JobRegistry()
 #: **agent 代跑那把锁住在这里**（`novel/orchestrator/agent.py` 共用），
 #: 这样 `run()`/`start()` 不 import agent 就能完成反向互斥——
 #: agent 会自己起 `novel.cli` 子进程写同一 base 的盘，「agent 在跑」与
-#: 「API 起作业」撞上的后果就是 SKILL 禁的并行写盘。一次只跑一个 agent，
-#: 所以这张表里至多一条。
+#: 「API 起作业」撞上的后果就是 SKILL 禁的并行写盘。
+#: ⚠ 一本书一把（键见 `agent_lock_key`），所以这张表里**可以有多条**——
+#: 条数上限由 `agent.MAX_CONCURRENT` 那道并发闸管，不由这张表管。
 AGENT_REGISTRY = JobRegistry()
 
 _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
 
 
-def _refuse_if_agent_running() -> None:
-    """agent 代跑活着时，任何 API 作业都不许起（反向互斥的唯一落点）。"""
-    if AGENT_REGISTRY.live():
+#: agent 代跑互斥键的前缀。**唯一落点在这里**，不在 `agent.py`——
+#: 表（`AGENT_REGISTRY`）住在本模块，键的形状就该跟着表走。
+#: ⚠ 两边各写一遍这个字符串，就是 `active_key` 那个真 bug 的同款形状：
+#: 改了一边不报错，它只在边角上悄悄换一个答案。
+AGENT_LOCK_PREFIX = 'agent-run'
+
+
+def agent_lock_key(sid: str) -> str:
+    """一本书在 agent 互斥表里的键。**一本书一把锁**，不是全局一把。
+
+    ⚠⚠ 这里曾经是一个不带 sid 的固定字符串，理由写着「SKILL：两本书不并行」。
+    那是把 SKILL 那条**读大了**：它管的是「**一个 agent 会话**别同时管两本书」——
+    会串的是证据、闸门裁决与终审包，而那些东西都长在单个会话里。
+    N 个 headless agent 各自只看见自己那一本，每个都完整遵守 SKILL。
+    ⇒ 锁该按它真正保护的资源分，而那个资源是**一本书**：同书两个 agent 会并行写
+    同一片盘（SKILL 明禁），异书两个 agent 谁也碰不到谁的目录。
+    SKILL.md 原文不动，改的是代码对它的解读。
+
+    ⚠ 「同时最多几个」是**另一件事**，不归锁管——它归
+    `novel/orchestrator/agent.py::MAX_CONCURRENT` 那道并发闸。
+    """
+    return f'{AGENT_LOCK_PREFIX}:{sid}'
+
+
+def _refuse_if_agent_running(sid: str | None) -> None:
+    """**这本书**上有 agent 代跑活着时，它的 API 作业不许起（反向互斥的唯一落点）。
+
+    ⚠ 从「有任何 agent 在跑就全拒」收窄成「这本书上有才拒」：agent 放开并发之后，
+    前者会让 A 书的 agent 把 B 书的每一个节点作业一起挡死——而两者写的
+    根本不是同一片盘，那道拒绝没有任何东西在保护。
+
+    ⚠ **`sid is None` 仍然一律拒**（摄入那条路，`active_key` 把它归 `'_global'`）：
+    上传要推导目录名，而任何一个 agent 都可能正在建目录。这一格宁可严。
+    """
+    if sid is None:
+        if AGENT_REGISTRY.live():
+            raise JobConflict(
+                '有 agent 代跑正在跑——摄入要推导目录名，而 agent 可能正在建目录，'
+                '等它结束（或先熄火）再上传')
+        return
+    holder = AGENT_REGISTRY.holder(agent_lock_key(sid))
+    if holder is not None:
         raise JobConflict(
-            '有 agent 代跑正在跑——它会自己起 CLI 子进程写盘，'
-            '等它结束（或先熄火）再起作业')
+            f'这本书有 agent 代跑正在跑（{holder}）——它会自己起 CLI 子进程写盘，'
+            f'等它结束（或先熄火）再起作业')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -412,7 +452,7 @@ def _run_steps(base: str | os.PathLike[str], job_id: str,
             event = JobEvent(job_id=job_id, kind='step',
                              ts=int(time.time()), step_index=index)
             append_event(base, event)
-            command = '$ ' + ' '.join(step.argv) + '\n'
+            command = '$ ' + shell_line(step.argv) + '\n'
             log.write(command.encode('utf-8'))
             log.flush()
             rc = spawn(step.argv, step.cwd, env, log)
@@ -452,7 +492,7 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
 
     ⚠ 任一步非零即停（`R-13.4` 在单个作业内的样子）：后面那些步一步都不跑。
     """
-    _refuse_if_agent_running()
+    _refuse_if_agent_running(sid)
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, mode=mode, follow_check=follow_check)
     key = active_key(sid, node, mode)
@@ -517,7 +557,7 @@ def start(
         for finished_id, finished in list(_THREADS.items()):
             if not finished.is_alive():
                 _THREADS.pop(finished_id, None)
-    _refuse_if_agent_running()
+    _refuse_if_agent_running(sid)
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, mode=mode, follow_check=follow_check)
     key = active_key(sid, node, mode)

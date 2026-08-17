@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import json
+import shlex
 import sys
 from types import SimpleNamespace
 
@@ -431,9 +432,30 @@ def test_preview_prints_exactly_the_command_that_would_run(box, capsys):
     assert _run('preview', 'stage3.style', box.sid, '--check-only',
                 '--base', str(box.root)) == X.OK
     printed = capsys.readouterr().out
-    want = ' '.join(N.build_argv('stage3.style', box.sid, ['--check-only'],
-                                 base=str(box.root)))
+    want = N.shell_line(N.build_argv('stage3.style', box.sid, ['--check-only'],
+                                     base=str(box.root)))
     assert want in printed, printed
+
+
+def test_preview_quotes_values_that_a_shell_would_otherwise_split():
+    """⭐ 摊开的命令要能**逐字粘进 shell**，不只是「长得像那条命令」。
+
+    `build_argv` 产的是词元序列。此前渲染是 `' '.join(argv)`，于是
+    `--reason "fix present_names_invented"` 打出来是三个裸词——照抄执行时后两个词
+    会被解析成位置参数，而 `build_argv` 上方的注释明写着「粘进终端也不会再问一遍」。
+    ⚠ 这条不断言实现长什么样，断言的是**往返**：POSIX `shlex` 拆回来必须等于原 argv。
+    """
+    argv = ['python', '-m', 'novel.cli', 'run', 'stage2.blueprint', '424242',
+            '--actor', 'agent-operator', '--reason', 'fix present_names_invented',
+            '--reason-cn', '修复锚点', '--base', r'E:\out dir\书']
+    assert shlex.split(N.shell_line(argv)) == argv
+    assert "'fix present_names_invented'" in N.shell_line(argv)
+
+
+def test_shell_line_leaves_plain_tokens_bare():
+    """引号只加在真需要的地方——整行全引会让人读不出哪一段是取值。"""
+    assert N.shell_line(['run', 'stage3.style', '--check-only']) == \
+        'run stage3.style --check-only'
 
 
 @pytest.mark.corpus

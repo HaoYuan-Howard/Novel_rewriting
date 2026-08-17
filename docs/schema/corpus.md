@@ -12,16 +12,21 @@ It records only the acceptance identity:
   outcomes; a provider `null` is counted separately from a reported zero;
 - the exact pytest skip allowlist (`nodeid` plus reason).
 
+> 实现在 `tests/corpus_manifest.py`（2026-08-17 从 `tools/` 挪过来）。
+> 它不是一次性脚本：`tests/conftest.py` 在模块级 import 它的 `verify`，
+> `--require-corpus` 那条闸就是它把着的 ⇒ 它是**测试基础设施**，
+> 与 `tests/corpus.py` / `tests/sandbox.py` 同族，放在 `tools/` 是错位。
+
 Build and verify it only against an isolated output directory:
 
 ```powershell
-conda run -n novel_refactor python tools/corpus_manifest.py build `
+conda run -n novel_refactor python -m tests.corpus_manifest build `
   --base <isolated-current-corpus> `
   --output docs/corpus/current_schema_manifest.json `
   --command "<exact rebuild command>" `
   --skip-file <recorded-skips.json>
 
-conda run -n novel_refactor python tools/corpus_manifest.py verify `
+conda run -n novel_refactor python -m tests.corpus_manifest verify `
   --base <isolated-current-corpus> `
   --manifest docs/corpus/current_schema_manifest.json
 ```

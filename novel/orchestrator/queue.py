@@ -46,7 +46,7 @@ from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import ApprovalRequired, ArtifactUnreadable, QueueConflict, UpstreamMissing
 from novel.orchestrator import approvals, jobs, state as st
-from novel.orchestrator.nodes import build_steps, flag_value
+from novel.orchestrator.nodes import build_steps, flag_value, shell_line
 from novel.store import ArtifactStore
 
 #: 人做的那几个动作。**队列永不自动排它们**——`stage6.approve` 换一条候选、
@@ -251,7 +251,7 @@ def confirm(p: QueuePlan, *, yes: bool) -> None:
     for it in p.items + p.blocked:
         for s in it.steps:
             if s.paid:
-                lines.append(f'  $ {" ".join(s.argv)}')
+                lines.append(f'  $ {shell_line(s.argv)}')
     raise ApprovalRequired('\n'.join(lines) + '\n⇒ 确认无误后加 `--yes` 重跑')
 
 
@@ -567,7 +567,7 @@ def frozen_resume_commands(
     """Exact persisted paid commands which must be shown before resume."""
     run = _one(base, queue_id, registry=registry)
     return [
-        ' '.join(step.argv)
+        shell_line(step.argv)
         for entry in _remaining_paid_entries(run)
         for step in entry.item.steps
         if step.paid

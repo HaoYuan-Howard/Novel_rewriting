@@ -34,7 +34,7 @@ from contracts.artifacts import (
     STAGE3_STYLE_GROUNDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
     STAGE4_WRITER_CONTEXT_IDENTITY, STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
-    STAGE5_REVIEW, STAGE5_SEMANTIC, STAGE5_TRIM_AUDIT, STAGE5_TRIM_RESOLUTION,
+    STAGE5_REVIEW, STAGE5_TRIM_AUDIT, STAGE5_TRIM_RESOLUTION,
     STAGE5_WONTFIX, STAGE6_HOOK,
     STAGE6_HOOK_EDIT, STAGE6_SEMANTIC, STAGE6_WONTFIX, STAGE7_NAME_MAP,
     STAGE7_NAME_MAP_EDIT,
@@ -143,10 +143,7 @@ from contracts.schema.stage4 import (
 )
 from contracts.schema.stage5 import (
     Chapter, ChapterResponse, ChapterSegment, DraftConsumed, GeneratedSegment,
-    JudgedDraft, RejectedAttempt, RejectedRevision, Review,
-    ReviewChapter, SemanticAlignmentResponse, SemanticChapterClaims, SemanticClaim,
-    SemanticClaimsResponse, SemanticEvidenceRef, SemanticReview,
-    SemanticSecretAdjudication, SemanticSecretDecision,
+    JudgedDraft, RejectedAttempt, RejectedRevision, Review, ReviewChapter,
 )
 from contracts.schema.stage6 import (
     ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit,
@@ -307,7 +304,6 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision),
     STAGE5_REVIEW: ArtifactSpec(
         Review, current_version=3, migrations=MIGRATE_STAGE5_REVIEW_V2),
-    STAGE5_SEMANTIC: ArtifactSpec(SemanticReview, current_version=2),
     STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit),
     STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution),
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
@@ -462,9 +458,6 @@ __all__ = [
     'Chapter', 'GeneratedSegment', 'ChapterSegment', 'ChapterResponse',
     'RejectedAttempt', 'RejectedRevision',
     'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed',
-    'SemanticClaim', 'SemanticChapterClaims', 'SemanticEvidenceRef',
-    'SemanticClaimsResponse', 'SemanticAlignmentResponse',
-    'SemanticSecretDecision', 'SemanticSecretAdjudication', 'SemanticReview',
     'Hook', 'Candidate', 'ApprovedHook', 'HookApprovalResolution', 'Mech',
     'HookSemanticResponse', 'HookSemanticReview', 'HookEdit',
     'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'StemBaseline', 'BookTxt',

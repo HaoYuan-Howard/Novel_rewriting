@@ -35,7 +35,7 @@ from contracts.schema import encode_artifact
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalEdit, GlobalGrounding
-from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
+from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, UpstreamStale
 from novel.orchestrator.state import readonly_ctx
 from novel.quality.global_review import decide
 from novel.stages.stage2 import extract
@@ -562,7 +562,7 @@ def test_stale_blueprints_are_displayable_but_not_consumable_after_base_edit():
             {'secret_id': 'secret_01', 'reader_reveal_events': [{'chapter': 3}]}]})
         _apply(book)
         production_store = ArtifactStore(_ctx(book, 'stage2.blueprint', paid=False))
-        with pytest.raises(ProvenanceRefused, match='已过期'):
+        with pytest.raises(UpstreamStale, match='已过期'):
             production_store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
 
         display_store = ArtifactStore(readonly_ctx(

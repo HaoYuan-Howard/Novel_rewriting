@@ -11,7 +11,7 @@ from contracts.schema import encode_artifact
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance
 from novel import prov
-from novel.errors import ProvenanceRefused
+from novel.errors import ProvenanceRefused, UpstreamStale
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
 from novel.llm.ledger import CostLedger
@@ -87,7 +87,7 @@ def test_stale_upstream_is_refused_at_read_before_a_new_provenance_can_be_minted
     (novel_dir / 'stage0/clean_text.txt').write_text(
         '第二版正文\n', encoding='utf-8', newline='')
     new_ctx = _ctx(novel_dir)
-    with pytest.raises(ProvenanceRefused, match='生成或付费请求前拒绝消费'):
+    with pytest.raises(UpstreamStale, match='生成或付费请求前拒绝消费'):
         ArtifactStore(new_ctx).read(_Artifact, 'stage2/up.json')
 
 

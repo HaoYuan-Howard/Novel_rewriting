@@ -5,7 +5,7 @@
 （output base 必须不存在或为空），也可以是已经落稳且已批准的当前 schema Stage0/1
 （Stage2～7 必须完全为空）。它会：
 
-* 用生产 ``build_argv`` 展开每本九条付费 CLI dispatch；
+* 用生产 ``build_argv`` 展开每本八条付费 CLI dispatch；
 * 固定当前模型/思考模式、独立空 cache 与 ``DEEPSEEK_MAX_RETRIES=0``；
 * 从真实节点 ladder 复算基础、advisory semantic 和条件调用的 wire 可达上限；
 * 只对在上游生成前已经可知的 Stage2 global prompt 做精确 tokenizer 计数；
@@ -76,7 +76,6 @@ PAID_NODES = (
     'stage3.style',
     'stage4.plan',
     'stage5.write',
-    'stage5.semantic',
     'stage6.hook',
     'stage6.semantic',
     'stage7.rename',
@@ -116,7 +115,6 @@ EVALUATOR_MIN_EXACT_CALLS = (
 )
 
 PROFILE_DEPENDENCY = {
-    'stage5.semantic': 'secret_timeline',
     'stage6.semantic': 'reference_boundary',
 }
 
@@ -142,11 +140,6 @@ PREREQUISITES = {
     'stage5.write': (
         'Stage4 plan/context 必须 fresh，且已冻结人工深度选择：deep=1,2,3，其余 shallow。',
         '只有超长章进入 trim；trim_equivalence profile 缺失/漂移时零 trim 调用并保留 pretrim。',
-    ),
-    'stage5.semantic': (
-        '先完成正式 Stage5 逐章稿与 0 成本机械 review。',
-        '本次 current-corpus 不伪造 TODO-24 profile；固定以 --advisory 运行，'
-        '结论保持 UNVER 并进入人工 verification，不冒充自动 PASS。',
     ),
     'stage6.hook': (
         'Stage5 机械/语义结论已处理，s5 gate 经人工批准。',
@@ -353,8 +346,6 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
         condition = (
             '每个超长章最多两次单档 trim candidate + 一次双盲 A/B；'
             'profile 缺失/漂移或章未超长时为 0')
-    elif node == 'stage5.semantic':
-        base = chapters + 2  # per-chapter claims + alignment A/B
     elif node == 'stage6.hook':
         # The initial response always contains one candidate per registered
         # approach.  Every initially HARD candidate can receive one fixed
@@ -385,7 +376,6 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
         'stage3.style': 64_000,
         'stage4.plan': PLAN_MAX_TOKENS,
         'stage5.write': stage5_write.MAX_TOKENS,
-        'stage5.semantic': 64_000,
         'stage6.hook': HOOK_MAX_TOKENS,
         'stage6.semantic': 64_000,
         'stage7.rename': RENAME_MAX_TOKENS,
@@ -590,7 +580,6 @@ def historical_observations(
             '旧 ledger 仅是观察：含缓存回放、旧 schema/旧 prompt 和可能的重复轮；'
             'completion_tokens 已含 reasoning_tokens，统计没有再次相加。'),
         'known_contract_drift': [
-            '最终 stage5.semantic 为逐章 claims + alignment A/B；旧账可能只有单 alignment。',
             '最终 stage6.semantic 为 A/B 两条；旧账可能只有单 judge。',
             '最终 Stage5 trim 受 evaluator profile 与双盲 judge 约束；旧 trim 不能外推。',
         ],
@@ -819,11 +808,14 @@ def render(plan: dict[str, Any]) -> str:
             f'- sid={book["sid"]} chapters={book["chapters"]} '
             f'kind={book["input_kind"]} base={book["base"]} '
             f'stage0={book["stage0_gate"]}')
-    lines.extend(['', '## 18 条 production CLI dispatch'])
+    # ⚠ 条数由 dispatch 面现算，不写死：节点表增删时这一行不许还在报旧数
+    #   （`stage5.semantic` 下线时它就是这么漂的）。
+    total = len(plan['dispatches'])
+    lines.extend(['', f'## {total} 条 production CLI dispatch'])
     for index, row in enumerate(plan['dispatches'], 1):
         lines.extend([
             '',
-            f'[{index:02d}/18] {row["sid"]} · {row["node"]}',
+            f'[{index:02d}/{total:02d}] {row["sid"]} · {row["node"]}',
             f'  prerequisite={" / ".join(row["human_gate_dependencies"])}',
             f'  model={plan["model"]} thinking={plan["thinking"]} '
             f'effort={row["effort_start"]} retry=0',

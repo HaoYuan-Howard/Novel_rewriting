@@ -7,6 +7,8 @@
  */
 import type { ApprovalBackfillResult, ApprovalDoc, GateKey, SeenKey } from './approvals'
 import type {
+  AgentBatchRequest,
+  AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
   AgentRunRecord,
@@ -115,6 +117,13 @@ export interface Api {
   getAgentRunLog(runId: string, offset: number): Promise<AgentRunLogChunk>
   /** 熄火：没在跑 409 */
   stopAgentRun(runId: string): Promise<AgentRunRecord>
+  /**
+   * 一次交 N 本：闸内的立刻跑，超出的排队。**部分失败不回滚**——
+   * 起不来的进 rejected，其余照常受理，逐本落点全在返回值里。
+   */
+  startAgentBatch(req: AgentBatchRequest): Promise<AgentQueueView>
+  /** 谁在跑、谁在排、闸开多大。排队部分只在内存，服务重启即清空。 */
+  getAgentQueue(): Promise<AgentQueueView>
 
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>

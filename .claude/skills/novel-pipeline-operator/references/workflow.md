@@ -51,14 +51,16 @@
 <PY> -X utf8 -u -m novel.cli preview <node> <SID> [flags] --base <BASE>
 ```
 
-`stage0.remove --source <txt>` 摄入新书时省略 `<SID>`。`preview` 不接受 `--yes`；它会通过与真跑共用的 `build_argv`，在付费步骤中生成已经带 `--yes` 的真实命令。
+`stage0.remove --source <txt>` 摄入新书时省略 `<SID>`。`preview` 不接受 `--yes`；它会通过与真跑共用的 `build_argv`，在付费步骤中生成已经带 `--yes` 的真实命令。它打印的命令**已按单引号规则转义**：含空格的取值（`--reason`、带空格的路径）自带引号，可逐字复制粘贴，不需要也不应该再自行改写 argv。
 
 执行 `preview` 输出的**全部步骤**，不只执行第一条。写盘节点可能自动追加 `--check-only`；`stage2.global --full-extract` 会追加 blueprint 与 style 两条复检。不要另抄追跑规则。
+
+真跑本身已经打印同一份 fresh 报告时，追检的价值是**复核产物完整性**，不是重读判据（那句「⚠ 自动追跑：退出码 0 也可能是残缺产物」说的就是这件事）：仍必须执行并打点，但只取它的退出码与合计行即可，不必重读全文。
 
 对每条实际命令，包括自动追跑的 check 与修复命令：
 
 1. 运行 `mark <SID> --node <node> --phase start --base <BASE>`。
-2. 直接运行命令，避免通过管道消费输出；保存真实子进程退出码。
+2. 直接运行命令并保存真实子进程退出码。**不要让管道消费退出码**；把 stdout 重定向到文件、取到退出码之后再过滤该文件是允许的，也是长报告的推荐读法（见[结果判定](#结果判定)）。
 3. 运行 `mark <SID> --node <node> --phase end --exit <rc> --base <BASE>`。
 
 `mark` 只记录观察轨迹，不证明质量通过。不要给 `preview` 打点。
@@ -83,16 +85,36 @@
 | 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
 | 10 | `stage5.write` | `--deep 1,2,3 --shallow-rest`；不足三章时截到 `N` | deep+shallow 的正式章集合恰好覆盖计划章集合，内部收缩/重试不等于失败 |
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
-| 12 | `stage5.semantic` | 无 | 语义结论 fresh，按正文主体与最新机械 review 绑定 |
-| 13 | `stage6.hook` | 无 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
-| 14 | `stage6.semantic` | 无 | 每个去重文本的质量/矛盾结论按完整 SHA-256 与当前候选对齐 |
-| 15 | `stage6.approve` | `--pick <N> --actor <id> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
-| 16 | `stage7.rename` | 无 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
-| 17 | `stage7.approve` | `--actor <id> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
-| 18 | `stage7.assemble` | 无 | `stage7/book.txt` 生成并通过独立成书对账 |
+| 12 | `stage6.hook` | 无 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
+| 13 | `stage6.semantic` | `--advisory`（无标定 profile 时的现役主路径） | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
+| 14 | `stage6.approve` | `--pick <N> --actor <id> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
+| 15 | `stage7.rename` | 无 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
+| 16 | `stage7.approve` | `--actor <id> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
+| 17 | `stage7.assemble` | 无 | `stage7/book.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
 `stage2.global --full-extract` 在中途被闸门拦下时，不机械重跑整组。按最新 `state` 与 finding 修好已落下的部分，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`；只执行缺失项。
+
+### `stage6.semantic --advisory`：不带这个 flag 等于白丢一层证据
+
+不带 `--advisory` 时，在未配置匹配 evaluator profile 的宿主上必然 exit 2 且**不发起任何模型调用**。
+它是注册在案的付费 flag（`contracts/invariants.py::PAID_FLAGS`），用它仍运行双盲判官，
+只是结论恒为带证据的 `UNVER`、`automated=false`——**它不能替代标定，但它是"有证据"与"没有证据"的分界**。
+本节点不接 `--check-only`。实测量级：2 次调用 / 约 150 秒 / 占单本输出 token 的 1.7%。
+
+### `--deep 1,2,3` 是默认，不是判据
+
+依据是开篇三章决定读者留存，值得更高的单章成本；其余章走 shallow。deep 与 shallow 的单章成本不同，
+所以这是一个**有成本含义的默认值**。用户在[接口契约](../SKILL.md#接口契约)的可选约束里指定了章节深浅分配时以用户为准，
+并在终审包记录实际分配与依据。不要为「提高质量」自行扩大 deep 集合——那是未经授权的成本变更。
+
+### 书级语义审判（原 `stage5.semantic`）已下线
+
+该节点于 2026-08-17 整节点删除（用户裁决）。**书级剧透防线现在是 0 成本的那一组**：
+stage2 的 `event_early_name` / `present_early_named` / `present_names_late` 在标注层拦后见之明，
+交付前由[代批与终审契约](delegated-review.md)成书逐字对账的「上游 info 下游投影」复核它有没有传导进成书。
+遇到**跨章重组**的计划（`from_source_ordinals` 不是恒等映射）时，这条防线的覆盖面会变——
+那时停下来找用户裁决，不要自行降低披露口径。
 
 ## 结果判定
 
@@ -112,6 +134,11 @@
 - 报告必须 fresh/match；旧报告即使全绿也不能为新产物背书。
 - 记录每条 badge 的分母。分母为零或全部 `unver` 不是绿灯。
 - stage6 总报告可以因落选候选 HARD 返回 exit 1；所选候选是否可批准按候选级证据判断，并将总报告残红披露。
+
+check 报告按设计逐条印出判据的设计说明与历史盘面基线（`stage2.blueprint --check-only` 单份实测
+**35.9 KB / 71 条判据**，且在 stage2 至少要读三次），其中与本次判定相关的只有命中行。
+**先按 `[!!]`（命中）、`[??]`（够不着）、`合计` 与 badge 行过滤，只在需要展开某条命中时读全文。**
+过滤只改变读法、不改变任何判定；分母、freshness 与命中数仍以报告原文为准，具体写法见[运行环境](runtime-profiles.md#共同规则)。
 
 ## 断点续跑
 

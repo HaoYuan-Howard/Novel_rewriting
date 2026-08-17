@@ -21,6 +21,7 @@ from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from novel import prov
 from novel.errors import (
     ArtifactUnreadable, ContextBudgetRefused, GateBlocked, ProvenanceRefused, UpstreamMissing,
+    UpstreamStale,
 )
 from novel.llm.budget import enforce_request_budget
 from novel.llm.cache import CachePolicy, ResponseCache
@@ -218,7 +219,7 @@ def test_stage2_refuses_stale_stage1_before_the_client_can_be_called(tmp_path):
     client, transport = _client(
         ctx, lambda *_args: pytest.fail('stale 上游不应触达 transport'))
 
-    with pytest.raises(ProvenanceRefused, match='生成或付费请求前拒绝消费'):
+    with pytest.raises(UpstreamStale, match='生成或付费请求前拒绝消费'):
         extract.run_global(ctx, client)
 
     assert transport.calls == []

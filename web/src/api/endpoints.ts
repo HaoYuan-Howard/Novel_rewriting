@@ -6,6 +6,7 @@
  */
 import type { Api } from '@/types/api'
 import type {
+  AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
   AgentRunRecord,
@@ -460,6 +461,8 @@ export const realApi: Api = {
     get<AgentRunLogChunk>('/agent/runs/' + encodeURIComponent(runId) + '/log?offset=' + offset),
   stopAgentRun: (runId) =>
     post<AgentRunRecord>('/agent/runs/' + encodeURIComponent(runId) + '/stop'),
+  startAgentBatch: (req) => post<AgentQueueView>('/agent/runs/batch', req),
+  getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
   approveGate: (sid, key: GateKey) => post<ApprovalDoc>(n(sid) + '/approvals/gate/' + key),

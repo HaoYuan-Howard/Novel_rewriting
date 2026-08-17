@@ -83,8 +83,9 @@ def test_the_eight_hard_judges_are_exactly_the_ones_we_have_samples_for():
     多一条 HARD 而这里没有对应的反例，就又回到了「36 条 HARD 盘上 0 反例样本」那个欠账。
     """
     hard = {r.rule for r in REGISTRY.of_stage('stage5') if r.sev == 'hard'}
+    # ⚠ `semantic_secret_leak` 随 `stage5.semantic` 节点于 2026-08-17 下线 ⇒ 8 条变 7 条。
     assert hard == {'draft_too_short', 'draft_truncated', 'meta_leak', 'verbatim_missing',
-                    'keep_value_missing', 'secret_leak', 'semantic_secret_leak',
+                    'keep_value_missing', 'secret_leak',
                     'dialogue_halved'}, (
         f'stage5 的 HARD 集合变成了 {sorted(hard)}——'
         f'每新加一条 HARD 就要有一份会让它红的样本（LESSONS 第 3 条）')
@@ -387,11 +388,13 @@ def test_every_registered_rule_has_exactly_one_producer():
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
     """
     reg = {r.rule for r in REGISTRY.of_stage('stage5')}
-    mine = [*checks._FROM_CHAPTER, *checks._FROM_REVIEW, *checks._FROM_SEMANTIC]
+    mine = [*checks._FROM_CHAPTER, *checks._FROM_REVIEW]
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    assert len(reg) == 48
+    # 46 = 原 48 减去随 `stage5.semantic` 节点一并下线的
+    # `semantic_secret_leak` / `semantic_secret_coverage`（2026-08-17 用户裁决）。
+    assert len(reg) == 46
 
 
 def test_the_unver_five_must_say_why_they_cannot_check():

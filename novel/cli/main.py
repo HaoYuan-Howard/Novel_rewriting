@@ -700,30 +700,13 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
     `stage5.write --deep 1,2,3 --shallow-rest`，一次选择两臂并发写作。
     人工深度选择持久化在 `_service/approvals/`，不混进小说产物或 provenance。
 
-    ⚠ 写作节点**没有 `--check-only`**：机械复检由 `stage5.review` 承担；语义结论由
-    `stage5.semantic` 独立产出，再在 review 报告中合并。⇒ 对外 check 节点仍是 review。
+    ⚠ 写作节点**没有 `--check-only`**：机械复检由 `stage5.review` 承担 ⇒ 对外 check 节点是 review。
+    ⚠ `stage5.semantic`（书级语义审判）于 2026-08-17 整节点下线，本函数不再有那一支。
     """
-    from novel.stages.stage5 import review, semantic, trim_resolution, write
+    from novel.stages.stage5 import review, trim_resolution, write
 
     tokens = set(N.flag_tokens(flags))
     chapters = _valued(flags, '--chapters')
-
-    if ctx.node == 'stage5.semantic':
-        if '--dry-run' in tokens:
-            system, users, *_rest = semantic.build_prompts(ctx)
-            print(f'── system（{len(system)} 字）──\n{system}')
-            for ordinal, user in users:
-                print(f'\n── ch{ordinal} user（{len(user)} 字）──\n{user}')
-            print(f'\n── alignment system（{len(semantic.ALIGN_SYSTEM)} 字）──\n'
-                  f'{semantic.ALIGN_SYSTEM}')
-            print('\n第二相 user 需消费第一相验真的 claims，dry-run 时尚不存在，故不伪造预览。')
-            return X.OK
-        artifact, report = semantic.run_semantic(
-            ctx, _llm_client(ctx), advisory='--advisory' in tokens)
-        print(f'  ✓ 书级语义审判已落盘：{len(artifact.chapters)} 章 · '
-              f'{len(artifact.secrets)} 条 secret')
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
 
     if ctx.node == 'stage5.review':
         if '--retain-pretrim' in tokens:
@@ -934,7 +917,7 @@ def _cmd_preview(a: argparse.Namespace) -> int:
                                            base=a.base, mode=a.mode,
                                            placeholders=True)):
         print(f'[{i + 1}] {step.label}')
-        print(f'    $ {" ".join(step.argv)}')
+        print(f'    $ {N.shell_line(step.argv)}')
         print(f'    cwd    : {step.cwd}')
         print(f'    花钱   : {"是" if step.paid else "否"}')
         print(f'    写盘   : {step.writes or "否"}')

@@ -222,8 +222,8 @@ def test_budget_is_required_instead_of_guessed():
         M.target_range({})
     with pytest.raises(ValueError):
         M.target_range({'budget_chars': 0})
-    assert M.target_range({'budget_chars': 1000}) == (900, 1100), '带就是 0.90~1.10，没有第二层'
-    assert M.book_range(1000) == (900, 1100), '全书与逐章是同一个带，不是两个数'
+    assert M.target_range({'budget_chars': 1000}) == (800, 1200), '逐章带就是 0.80~1.20，没有第二层'
+    assert M.book_range(1000) == (900, 1100), '书级带 0.90~1.10，刻意不跟随逐章带放宽'
 
 
 # ── ⭐ 三、对白比：本项目效应量最大的一条跨书结论 ──────────────────────────

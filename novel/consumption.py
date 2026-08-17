@@ -391,13 +391,6 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         # retain_pretrim 的人工裁决绑定完整 audit bytes；任一审计事实变化都应过期。
         STAGE5_TRIM_AUDIT: artifact_payload,
     },
-    'stage5.semantic': {
-        STAGE1_MAIN_TEXT: stage5_main_text,
-        STAGE2_GLOBAL_GROUNDING: stage5_grounding,
-        STAGE3_STYLE_GROUNDING: stage5_style,
-        STAGE4_WRITER_CONTEXT: stage5_review_context,
-        STAGE5_REVIEW: artifact_payload,
-    },
     'stage6.hook': {
         STAGE1_HOOK_COPY: stage6_hook_copy,
         STAGE2_GLOBAL_GROUNDING: stage6_grounding,

@@ -88,24 +88,24 @@ def test_real_current_corpus_has_the_frozen_17_and_25_chapter_shape(tmp_path):
     ]
 
 
-def test_final_topology_lists_18_dispatches_and_real_conditional_limits(tmp_path):
+def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path):
     plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 123)
     aggregate = plan['aggregate']
     assert aggregate == {
-        'production_cli_dispatches': 18,
+        'production_cli_dispatches': 16,
         'base_nonsemantic_logical_requests': 136,
         'base_nonsemantic_ladder_wire_hard_limit': 544,
         'stage3_conditional_habit_quote_logical': 2,
         'stage3_conditional_habit_quote_wire_hard_limit': 8,
-        'advisory_semantic_logical': 50,
-        'advisory_semantic_wire_hard_limit': 200,
+        'advisory_semantic_logical': 4,
+        'advisory_semantic_wire_hard_limit': 16,
         'conditional_trim_logical': 168,
         'conditional_trim_wire_hard_limit': 420,
         'stage6_conditional_candidate_retry_logical': 6,
         'stage6_conditional_candidate_retry_wire_hard_limit': 6,
-        'full_conditional_logical_hard_limit': 362,
-        'full_conditional_wire_hard_limit': 1178,
-        'full_conditional_context_token_hard_ceiling': 1_178_000_000,
+        'full_conditional_logical_hard_limit': 316,
+        'full_conditional_wire_hard_limit': 994,
+        'full_conditional_context_token_hard_ceiling': 994_000_000,
     }
     assert sorted(book['chapters'] for book in plan['books']) == [17, 25]
 
@@ -140,7 +140,7 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
     plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1)
     assert plan['read_only'] is True and plan['has_execution_entry'] is False
     assert plan['authorization'].startswith('not_granted')
-    assert len(plan['dispatches']) == 18
+    assert len(plan['dispatches']) == 16
     caches = set()
     for row in plan['dispatches']:
         argv = row['production_cli_argv']
@@ -157,8 +157,8 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
     assert write['production_cli_argv'][write['production_cli_argv'].index('--deep') + 1] == '1,2,3'
     assert '--shallow-rest' in write['production_cli_argv']
     semantic = [row for row in plan['dispatches']
-                if row['node'] in {'stage5.semantic', 'stage6.semantic'}]
-    assert len(semantic) == 4
+                if row['node'] == 'stage6.semantic']
+    assert len(semantic) == 2
     assert all('--advisory' in row['production_cli_argv'] for row in semantic)
     with pytest.raises(SystemExit):
         P._parser().parse_args(['--execute'])
@@ -223,11 +223,12 @@ def test_book_specs_still_reject_same_sid_and_ancestor_bases(tmp_path):
 
 def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
     plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1)
-    by_node = {row['node']: row for row in plan['dispatches'][:9]}
-    assert by_node['stage5.semantic']['profile_dependency'] == 'secret_timeline'
+    by_node = {row['node']: row for row in plan['dispatches'][:8]}
     assert by_node['stage6.semantic']['profile_dependency'] == 'reference_boundary'
-    assert '--advisory' in by_node['stage5.semantic']['profile_gate_behavior']
+    assert '--advisory' in by_node['stage6.semantic']['profile_gate_behavior']
     assert 'UNVER' in by_node['stage6.semantic']['profile_gate_behavior']
+    # `stage5.semantic` 于 2026-08-17 整节点下线 ⇒ 付费面上只剩 stage6 一条语义 dispatch。
+    assert 'stage5.semantic' not in by_node
     assert any('全项 PASS' in line for line in by_node['stage4.plan']['human_gate_dependencies'])
     assert any('actor/reason' in line for line in by_node['stage2.global']['human_gate_dependencies'])
     assert any('approve' in line for line in by_node['stage7.rename']['human_gate_dependencies'])
@@ -296,7 +297,7 @@ def test_existing_experiments_and_minimum_evaluator_are_separate_scopes(tmp_path
     assert old['external_hard_limit'] == 588
     assert old['included_in_new_corpus_totals'] is False
     assert old['overlaps_current_corpus_scope'] is False
-    assert old['combined_wire_hard_ceiling_once_each'] == 588 + 1178
+    assert old['combined_wire_hard_ceiling_once_each'] == 588 + 994
     calibration = plan['calibration_evaluation']
     assert calibration['production_cli_dispatch'] is None
     assert calibration['status'] == 'blocked_missing_final_private_inputs'
@@ -324,9 +325,9 @@ def test_existing_experiments_and_minimum_evaluator_are_separate_scopes(tmp_path
 
     accounting = plan['scope_accounting']
     assert accounting['existing_fc08_fc13_overlaps_current_corpus'] is False
-    assert accounting['existing_plus_current_once_each'] == 588 + 1178
+    assert accounting['existing_plus_current_once_each'] == 588 + 994
     assert accounting['all_three_minimum_campaign_once_each_if_later_unblocked'] == (
-        588 + 1178 + 4800)
+        588 + 994 + 4800)
 
 
 def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
@@ -348,14 +349,14 @@ def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
 
 def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     text = P.render(P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1))
-    assert '[18/18]' in text
+    assert '[16/16]' in text
     assert 'Stage6 条件候选定向重试：logical=6 / wire 上限=6' in text
-    assert '全条件硬上限：logical=362 / wire=1178' in text
+    assert '全条件硬上限：logical=316 / wire=994' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text
     assert 'blocked_missing_final_private_inputs' in text
     assert '8 abilities × 100 cases × 2 judges × 3 runs = 4800' in text
-    assert '三块各一次=6566' in text
+    assert '三块各一次=6382' in text
     assert '若最终 manifest 超过 800 case' in text
     assert 'input token=unknown' in text
     assert 'price：unknown' in text

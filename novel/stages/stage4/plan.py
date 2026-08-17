@@ -210,14 +210,22 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     ⚠ 计划读不回来时**照常抛**（载体拒收）——盘上真有这么一本：
     它的 `plan_chapters.json` 根本没有 `_provenance`，因为 0 成本提升路把来源账整个丢了。
     **不许静默降级成一份「PASS」**：那份产物存在的意义就是提醒人这条路会丢账。
+
+    ⚠⚠ **正式稿不在时判活动 `.INVALID`**（照 stage3 的成例）。首跑就被落盘闸拦下时
+    盘上只有 `.INVALID`，而本层的 `.INVALID` **不带 findings**（schema 里没有这个字段）
+    ⇒ 此前那一刻全链没有任何只读入口能拿到「错在哪几条」：终态只给 rule id，
+    `--check-only` 直接 exit 2，人只能回去读 `checks.py` 自己复算判据。
+    报告第一节会打「⚠ 判的这一份是 .INVALID 稿」，不会把它冒充成正式结论。
+    两份并存（修复稿被驳回）时仍判正式稿——那才是下游在消费的那一份。
     """
     store = ArtifactStore(ctx)
-    if not store.exists(REL):
-        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage4.plan')
-    art, raw = store.read_own(PlanChapters, REL)
+    judged = REL if store.exists(REL) else _INVALID
+    if not store.exists(judged):
+        raise UpstreamMissing(f'{REL} 与 {_INVALID} 都不在盘上——先跑 stage4.plan')
+    art, raw = store.read_own(PlanChapters, judged)
     up = _Upstreams(ctx, store)
     return _report(ctx, store, _judge(store, raw, up, with_ctx_link=True),
-                   art.provenance.model_dump(by_alias=True))
+                   art.provenance.model_dump(by_alias=True), judged_rel=judged)
 
 
 def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:

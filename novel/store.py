@@ -53,7 +53,7 @@ from novel import paths, prov
 from novel.consumption import producer_node, projection_for
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
-    ProvenanceRefused, UpstreamMissing,
+    ProvenanceRefused, UpstreamMissing, UpstreamStale,
 )
 from novel.prov import FreshnessReport
 from novel.run import RunContext
@@ -254,7 +254,9 @@ class ArtifactStore:
             return
         changed = ', '.join(edge.key for edge in report.edges) or report.reason
         producer = producer_node(rel, fallback=self.ctx.node) or self.ctx.node
-        raise ProvenanceRefused(
+        # ⚠ `UpstreamStale` 而不是 `ProvenanceRefused`：这条拒绝自带恢复命令
+        # ⇒ 它是显式终态（退出码 2），不是「代码自相矛盾」（退出码 3）。见该类的 docstring。
+        raise UpstreamStale(
             f'{self.ctx.node}: 上游 {rel} 已过期（{changed}）；在生成或付费请求前拒绝消费。'
             f'请先从 {producer} 重建当前根上的产物')
 

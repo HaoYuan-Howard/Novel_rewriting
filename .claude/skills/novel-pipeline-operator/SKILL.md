@@ -36,7 +36,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 
 开始任何跑书或续跑前，完整读取：
 
-- [工作流契约](references/workflow.md)：现行命令协议、14 个主节点、成败判定与断点续跑。
+- [工作流契约](references/workflow.md)：现行命令协议、17 个主节点、成败判定与断点续跑。
 - [代批与终审契约](references/delegated-review.md)：三个闸门的判据、成书对账与终审包要求。
 - [运行环境](references/runtime-profiles.md)：只读取与当前宿主相符的交互式或 headless 小节。
 
@@ -75,7 +75,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 只有同时满足以下条件才可标记 `ready`：
 
 - `state` 显示主链完成且所有消费中的正式产物 fresh/match；已解释的诊断噪声单列披露。
-- `inbox` 的 `invalid`、`rejected`、`stalled`、`upstream`、`approval` 均为零；`human_only` 已逐类审阅并记录。
+- `inbox` 的 `invalid`、`rejected`、`stalled`、`repairable`、`upstream`、`approval` 均为零；`human_only` 与 `verification` 已逐类审阅并按类计数记录。
 - 活动目录不存在未解释的 `.INVALID`、`.rejected` 或 `.stalled`；历史 `_rounds/` 不计入活动余额。
 - 三次代批均有可追溯依据；所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
 - `book.txt` 通过 [代批与终审契约](references/delegated-review.md) 的逐字对账，终审包中的统计与盘上事实一致。

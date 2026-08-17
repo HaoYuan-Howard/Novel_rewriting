@@ -34,7 +34,6 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage5.chapter': 'stage5/{mode}/ch{nn}.json',
     'stage5.rejected_revision': 'stage5/{mode}/ch{nn}.rejected.json',
     'stage5.review': 'stage5/review_{n}.json',
-    'stage5.semantic': 'stage5/semantic_{n}.json',
     'stage5.trim_audit': 'stage5/trim_audit_ch{nn}.json',
     'stage5.trim_resolution': 'stage5/trim_resolution_ch{nn}.json',
     'stage5.wontfix': 'stage5/wontfix.json',
@@ -89,7 +88,6 @@ STAGE4_WRITER_CONTEXT_IDENTITY = artifact_rel('stage4.writer_context_identity')
 STAGE5_CHAPTER = artifact_rel('stage5.chapter')
 STAGE5_REJECTED_REVISION = artifact_rel('stage5.rejected_revision')
 STAGE5_REVIEW = artifact_rel('stage5.review')
-STAGE5_SEMANTIC = artifact_rel('stage5.semantic')
 STAGE5_TRIM_AUDIT = artifact_rel('stage5.trim_audit')
 STAGE5_TRIM_RESOLUTION = artifact_rel('stage5.trim_resolution')
 STAGE5_WONTFIX = artifact_rel('stage5.wontfix')

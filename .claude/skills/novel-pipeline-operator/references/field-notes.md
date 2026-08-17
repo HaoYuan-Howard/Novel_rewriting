@@ -26,6 +26,9 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-010 | stage7 映射边角 | kept, marker, one-char alias |
 | FN-011 | stage7 编辑后重装配 | approved, book_txt, stale |
 | FN-012 | 来源指纹诊断噪声 | `consumed_changed`, fingerprints |
+| FN-013 | 语义审判：advisory 与标定的分界 | `stage6.semantic`, `--advisory`, `NOVEL_EVALUATOR_PROFILE`, exit 2 |
+| FN-014 | 超限章的 0 成本销账 | `trim_audit_chNN`, `--retain-pretrim`, verification |
+| FN-015 | 落盘闸拦下后 finding 细节的读法 | `.INVALID`, `--check-only`, `--revalidate`, exit 2 |
 
 ### FN-001 · stage0 批准前的预期红灯
 
@@ -138,3 +141,62 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 处置：核对全部 inputs、code 与实际消费投影。证据完全一致时披露诊断边，不因此重跑付费 plan；存在任何差异时按真实 stale 处理。
 - 验证：下游 check 读取的 context 与当前 plan/global/blueprint 指纹一致。
 - 依据：实跑观察；未被提升为实现契约。
+
+### FN-013 · 语义审判：advisory 与标定的分界
+
+- 状态：`contract-confirmed`
+- 触发：`stage6.semantic` 返回 exit 2，原文为
+  `NOVEL_EVALUATOR_PROFILE 未配置；设置对应本地路径后才可启用自动语义裁决`。
+- 判断：这是“没有标定 profile”，**不是“语义层不可用”**。区分两件事：能不能拿到判官证据
+  （能，走 `--advisory`）；能不能自动盖章（不能，要 profile）。终态原文只说 profile 那一半，
+  不要据此推断整层不可跑。⚠ profile **不降低每本书的调用成本**——校准路与 advisory 调的是
+  同样两名盲判官，`require_enabled` 只决定结论允不允许标 `automated=true`。
+- 处置：**主链参数本来就带 `--advisory`**；若因手拼 argv 漏掉而 exit 2，带上它重跑即可。
+  取得双盲判官的带证据 `UNVER` 与匿名质量排序后，按
+  `actor + reason + 完整 subject SHA-256` 的人工核验路收口。
+  不伪造 profile，不因缺 profile 停机，也不在零语义产物的情况下直接写核验结论。
+- 验证：`stage6/semantic_<n>.json` 落盘且 fresh；产物的
+  `evaluator_fingerprint.dataset_sha256` 等于 advisory 哨兵值、全部 `decisions` 为
+  `automated=false` / `profile_id=null`；终审包记为“advisory 证据 + 人工核验”，不记为机器绿灯。
+- 依据：`contracts/invariants.py::PAID_FLAGS['--advisory']` 与该节点 `NodeSpec.flags`；
+  `novel/quality/profile.py::advisory_fingerprint`；
+  `novel/stages/stage6/semantic.py::_is_advisory_artifact`。
+
+### FN-014 · 超限章有一条 0 成本销账路
+
+- 状态：`contract-confirmed`
+- 触发：`inbox` 出现 `[verification] stage5 chNN trim_audit_chNN`，文案含
+  “未运行语义裁决…未发起收缩调用或语义调用，保留 pretrim，转 verification”。
+- 判断：这不是失败，是收缩臂的 fail-closed 出路——`trim_equivalence` 的 profile 缺失时，
+  `_trim_to_fit` 在构造任何请求之前就退出，正文保持 pretrim 原样。**它没有 `--advisory` 对应物**，
+  与两个 semantic 节点不是一回事。逐条读“超限根因附注”里的实际幅度再决定。
+- 处置：接受当前原稿时跑
+  `stage5.review --retain-pretrim --chapters <N> --actor <自报身份> --reason <理由>`
+  （0 次 LLM，只写 hash-bound resolution，恰好一章）。判断该章确需改写时用
+  `stage5.write --apply-edit <绝对路径>` 提交该章全部 producer-owned slot 的完整
+  `ChapterResponse`（同样 0 次 LLM）。**两条都不要留着不销账**——留着它们会让终审包的
+  verification 余额里混进已经看过的项。
+- 验证：`trim_resolution_chNN.json` 落盘且 hash 绑定当前正文；`inbox` 该条离开 verification。
+- 依据：`novel/stages/stage5/write.py::_trim_to_fit` 的 profile 前置检查；
+  `contracts/invariants.py::CONDITIONAL_REQUIRED_FLAGS['stage5.review', '--retain-pretrim']`。
+
+### FN-015 · 落盘闸拦下后，finding 细节的读法逐层不同
+
+- 状态：`contract-confirmed`
+- 触发：任一层被落盘闸拦下返回 exit 2，需要知道“错在哪几条”而不只是终态里的 rule id。
+- 判断：`--check-only` 面对活动 `.INVALID` 的取值面**逐层不同**，不要按单一心智模型推断：
+  stage2 问题稿优先（有 `.INVALID` 就判它，理由是它是更新的一次尝试）；
+  stage3 / stage4 正式稿优先，正式稿不在盘上时才回落判 `.INVALID`；
+  两者都会在报告第一节标注「⚠ 判的这一份是 .INVALID 稿」，不会把它冒充成正式结论。
+  stage6 只读正式产物，候选级 finding 在 `hook.INVALID.json` 的 `candidates[].findings` 里（见 FN-008）；
+  stage7 也只读正式产物。**stage4 的 `.INVALID` 不带 findings**（schema 无此字段），
+  所以那一层的逐条证据只能从报告拿，拿不到就是读法用错了。
+- 处置：被拦下后**第一步就是 `--check-only`** 取逐条命中，再按 finding 的 `fix`/`how` 在
+  允许写入面上修，最后 `--revalidate --actor <id> --reason <text>` 同轮重判提升。
+  只有正式稿与 `.INVALID` 两份都不在盘上才是真的“先跑那一层”。
+  不要因为终态只给了 rule id 就盲改、自行复算判据或停机。
+- 验证：`--revalidate` 打印的完整报告里该 rule 归零，`state` 判该层完成，活动 `.INVALID` 已归档。
+- 依据：`novel/stages/stage2/extract.py::_raw` 的问题稿优先；
+  `novel/stages/stage3/style.py::run_check_only` 与 `novel/stages/stage4/plan.py::run_check_only`
+  的 `judged` 回落；`novel/stages/stage6/hook.py::run_check_only` 与
+  `novel/stages/stage7/rename.py::run_check_only` 只读正式产物；`novel/report/render.py` 的 invalid 标注行。

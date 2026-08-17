@@ -402,6 +402,47 @@ class AgentRunRecord(StrictModel):
         return self
 
 
+class AgentPending(FrozenModel):
+    """排在队里、**还没有进程**的一本。
+
+    ⚠ 它**不是** `AgentRunRecord` 的一种状态：那份记录的每一格都从事件流折叠而来，
+    而排队项在盘上一个字节都没有（队列只在内存里，`R-14.6` 那条的同族）。
+    捏进 `JobState` 会让「重启后 running → unknown」那条规则对一堆
+    根本没有 run_id 的行开火。
+    """
+
+    sid: str = Field(min_length=1)
+
+    #: 排在第几，**1 起算**。给人看的序号，不是索引。
+    position: int = Field(ge=1)
+
+
+class AgentRejected(FrozenModel):
+    """批量受理时**没被收下**的一本，连同原因。
+
+    ⚠ 它存在的理由是「部分失败不回滚」：八本起来了、两本没起来，
+    只报一句「批量失败」会把已经在跑的那八本藏掉——人看到报错，盘上却真有进程。
+    """
+
+    sid: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class AgentQueueView(StrictModel):
+    """agent 并发的全景：谁在跑、谁在排、闸开多大。
+
+    `running + pending + rejected` 三者之和 = 这一批提交的全部（`enqueue` 的后置条件）。
+    """
+
+    running: list[AgentRunRecord] = Field(default_factory=list)
+    pending: list[AgentPending] = Field(default_factory=list)
+    rejected: list[AgentRejected] = Field(default_factory=list)
+
+    #: 同时在跑的上限（`novel/orchestrator/agent.py::MAX_CONCURRENT`）。
+    #: **前端不自己写死这个数**——它要显示「3 个都在跑」就得从这儿拿。
+    max_concurrent: int = Field(ge=1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、完成度（`_orchestration.md` §四 · `R-14.1`）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -503,8 +544,9 @@ class StageState(StrictModel):
     #: `artifacts[]` 里没有它们的行；此前续跑判定只剩 stage 级 `done` 可问，
     #: 而 stage5 的 `done` 说的是**章稿写全了没有**——拿它答「全书验收跑过没有」，
     #: 答案恒为「跑过了」，**而盘上一份 `review_*.json` 都没有**。
-    #: 实测：批量队列把 `stage5.review`（0 成本）与 `stage5.semantic`（付费）
-    #: 双双记成 `done` 却一次都没执行。⇒ 逐章有逐章的账，轮次有轮次的账。
+    #: 实测：批量队列把 `stage5.review`（0 成本）与当时的 `stage5.semantic`（付费，
+    #: 已于 2026-08-17 下线）双双记成 `done` 却一次都没执行。
+    #: ⇒ 逐章有逐章的账，轮次有轮次的账。
     rounds_done: dict[str, list[int]] = Field(default_factory=dict)
 
     #: 只读导航能否进入。它不是运行闸门；运行/定稿仍看 approvals。

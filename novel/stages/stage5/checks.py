@@ -1017,11 +1017,6 @@ _FROM_REVIEW: tuple[str, ...] = (
     'style_block_carries_plot', 'must_hold_unver', 'convergence_report',
 )
 
-#: 付费书级语义审判产出的两条。实现刻意在 `semantic.py`，不混进 0 成本机械检查。
-_FROM_SEMANTIC: tuple[str, ...] = (
-    'semantic_secret_leak', 'semantic_secret_coverage',
-)
-
 #: `unver` 的五条：**必须走 `unverifiable(rule, why)`**（`builder._status_of` 会拒收
 #: 一条 `sev='unver'` 却没说出「这次为什么够不着」的判据）。
 _UNVER: frozenset[str] = frozenset({

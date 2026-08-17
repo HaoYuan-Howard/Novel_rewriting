@@ -6,9 +6,11 @@ wontfix.py —— 人的「这条我不修」。**全链一份机制，逐层一
 【为什么它从 stage5 里搬出来】2026-08-15 之前这套机制只活在
 `novel/stages/stage5/review.py` 里，而语义结论**够不着它**：
 
-  · stage5 的 `semantic_secret_leak` 是在**报告渲染时**由
+  · 当时 stage5 的 `semantic_secret_leak` 是在**报告渲染时**由
     `stage5/semantic.py::outcomes` 现算的，不进 `review_<n>.json`
     ⇒ `mark_wontfix` 从最近一份验收里反查，永远查不到它 ⇒ 显式终态；
+    （⚠ 该判据与整个 `stage5.semantic` 节点已于 2026-08-17 下线；
+    这一条留着是因为**机制搬家的理由不随它消失**——stage6 那一半仍然如此。）
   · stage6 的 `hook_semantic_contradiction` / `hook_candidate_contradiction` 同理，
     而且**这一层连 `--wontfix` 这个 flag 都没有**——待人工清单却在建议人去跑它
     （`novel/views/inbox.py` 里那句兜底文案，已随本轮一并修掉）。
@@ -22,11 +24,10 @@ wontfix.py —— 人的「这条我不修」。**全链一份机制，逐层一
   · **证据键就是身份的其余部分**，与机械结论完全同构。
     只按 `rule` 记会把「换了个位置的同类问题」一并豁免掉，**那不是人做的决定**。
 
-【失效】**由证据自身保证，不靠版本号。**两条语义判据的证据都是当前候选文案 /
-正文的连续原字节（`hook_candidate_contradiction` 是 `<候选>:<原字节>`、
-`semantic_secret_leak` 是 `ch<n>:<原字节>`）⇒ 文本一改证据就变、键就失配、
+【失效】**由证据自身保证，不靠版本号。**语义判据的证据是当前候选文案的连续原字节
+（`hook_candidate_contradiction` 是 `<候选>:<原字节>`）⇒ 文本一改证据就变、键就失配、
 豁免自动不再套用。⚠ 反过来，**语义重跑但结论一字未变时豁免仍然有效**：
-`stage5.semantic` / `stage6.semantic` 都是**付费**节点、重跑是常态，
+`stage6.semantic` 是**付费**节点、重跑是常态，
 把审判版本塞进匹配键会让一次不改变任何结论的重审把整本账清空 ⇒ 等于没有豁免。
 审判版本记进 `WontFixEntry.at`，那是**审计账**。
 

@@ -46,6 +46,8 @@ export const qk = {
     ] as const,
 
   agentRuns: (sid: string) => ['agentRuns', sid] as const,
+  /** 队列是**全 base 一份**，不带 sid：它回答的是「这台机器上现在跑着几本」。 */
+  agentQueue: () => ['agentQueue'] as const,
   agentRunLog: (id: string) => ['agentRunLog', id] as const,
   agentRunPreview: (sid: string, authorized: boolean, egressAuthorized: boolean) =>
     ['agentRunPreview', sid, authorized, egressAuthorized] as const,

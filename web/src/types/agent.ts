@@ -54,3 +54,37 @@ export interface AgentRunLogChunk {
   text: string
   next_byte: number
 }
+
+/**
+ * 批量代跑的请求：一次交 N 本。两项授权对**整批**生效。
+ * 逐本勾会让「这一批到底授权了什么」没有一个能写进终审包的答案。
+ */
+export interface AgentBatchRequest {
+  sids: string[]
+  authorized: boolean
+  egress_authorized: boolean
+}
+
+/** 排在队里、还没有进程的一本。它不是 AgentRunRecord 的一种状态：盘上没有它。 */
+export interface AgentPending {
+  sid: string
+  /** 排在第几，1 起算。 */
+  position: number
+}
+
+/** 批量受理时没被收下的一本，连同原因。部分失败不回滚，所以要逐本说明。 */
+export interface AgentRejected {
+  sid: string
+  reason: string
+}
+
+/**
+ * GET /api/agent/runs/queue 与 POST /api/agent/runs/batch 的返回。
+ * max_concurrent 由服务端下发 —— 前端不写死这个数（同「贵贱只有一处算」的纪律）。
+ */
+export interface AgentQueueView {
+  running: AgentRunRecord[]
+  pending: AgentPending[]
+  rejected: AgentRejected[]
+  max_concurrent: number
+}

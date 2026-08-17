@@ -369,6 +369,10 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         #    补进来就是那次「显式的决定」；它们的行为归 `tests/test_api_agent.py`。
         '/api/agent/runs': ['GET', 'POST'],
         '/api/agent/runs/preview': ['POST'],
+        #: 批量受理 N 本 + 队列全景。放开 agent 并发之后新增的那一面
+        #: （一本书一把锁 + `MAX_CONCURRENT` 并发闸，都在 `novel/orchestrator/agent.py`）。
+        '/api/agent/runs/batch': ['POST'],
+        '/api/agent/runs/queue': ['GET'],
         '/api/agent/runs/{run_id}/log': ['GET'],
         '/api/agent/runs/{run_id}/stop': ['POST'],
         '/api/novels/{sid}/run': ['GET'],

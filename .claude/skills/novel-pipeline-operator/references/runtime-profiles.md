@@ -6,10 +6,25 @@
 
 - cwd 保持仓根；`--base` 永远使用绝对路径。
 - 使用当前项目实际解释器执行 `-X utf8 -u -m novel.cli`，不要切到 base 环境。
-- 直接取得子进程退出码，不在命令后接会覆盖退出码的管道。
+- 直接取得子进程退出码，不在命令后接会覆盖退出码的管道。**文件重定向不是管道**：
+  `> 文件` 不影响退出码，取到退出码之后再过滤那个文件是长报告的推荐读法。
+- `mark start` / 真跑 / `mark end` 在**同一次 shell 调用内串联**，取到真实退出码后再打 end 点，
+  不要拆成三次独立往返。单次 `mark` 约 1 秒（Python 冷启动），**成本在往返次数不在耗时**：
+  一条 28 命令的全链拆开跑是 84 次往返，串联是 28 次。
 - 一次只运行一个写盘节点；一次只运行一本书。
 - 对长命令使用宿主提供的持久句柄或足够长的前台超时。每 60 秒以内给出一次状态更新，不用短 timeout 杀进程来模拟更新。
 - 任何宿主中断后先运行 `state`/`inbox`，不要从聊天记忆推断落盘位置。
+
+「打点串联」与「重定向后过滤」合起来在 PowerShell 里的写法（36 KB 报告压到 5 行，判定信息一条不少）：
+
+```powershell
+& $PY -X utf8 -u -m novel.cli mark $SID --node <node> --phase start --base $B
+& $PY -X utf8 -u -m novel.cli run <node> $SID --check-only --base $B > "$SP\out.txt"
+$rc = $LASTEXITCODE
+& $PY -X utf8 -u -m novel.cli mark $SID --node <node> --phase end --exit $rc --base $B
+Get-Content "$SP\out.txt" -Encoding UTF8 |
+  Select-String -Pattern '^\s*\[!!\]|^\s*\[\?\?\]|^合计|→\s+(PASS|AMBER|FAIL)|revalidated'
+```
 
 ## 交互式主会话
 

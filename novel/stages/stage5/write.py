@@ -1061,12 +1061,11 @@ def revise_targets(store: ArtifactStore, mode: str
                                f'{f.unresolved_rounds} 轮未消 ⇒ 判「根因不在写手」，跳过')
                 continue
             picked.setdefault(row.output_ordinal, []).append([f.rule, f.evidence_key])
-    from novel.stages.stage5 import semantic
-    semantic_picked, semantic_bytes = semantic.revision_targets(store, mode)
-    for ordinal, fixes in semantic_picked.items():
-        have = {tuple(item) for item in picked.get(ordinal, [])}
-        picked.setdefault(ordinal, []).extend(item for item in fixes if tuple(item) not in have)
-    fp = prov.content_sha1(review_bytes + (semantic_bytes or b''))
+    # ⚠ 这里曾并入 `stage5.semantic` 的可反哺结论（`semantic.revision_targets`）：
+    #   语义判据的 repair 是 `UNIQUE`，泄底证据可以只把正文片段发回写手。
+    #   该节点于 2026-08-17 下线（用户裁决）⇒ 反哺面收敛成「机械验收里的
+    #   `UNIQUE` 结论」这一侧。指纹随之只由验收字节决定。
+    fp = prov.content_sha1(review_bytes)
     return picked, skipped, fp
 
 
@@ -1401,10 +1400,8 @@ def _report(ctx: RunContext, store: ArtifactStore, mode: str, *,
         unver_empty={}, phase='write') if n else [
         unverifiable(r, empty, scanned='0 章')
         for r in (*checks._FROM_CHAPTER, *checks._FROM_REVIEW)]
-    from novel.stages.stage5 import semantic
-    outcomes.extend(semantic.unavailable_outcomes(
-        '写作相只判本轮单章机械结果；书级语义审判由 `stage5.semantic` 产出，'
-        '再由 `stage5.review --check-only` 合并展示'))
+    # ⚠ 这里曾追加 `stage5.semantic` 的两条 UNVER 占位（写作相判不了书级语义）。
+    #   该节点于 2026-08-17 下线，两条判据一并注销 ⇒ 不再追加占位行。
     any_rel = next(iter(sorted(glob.glob(os.path.join(store.path(rel), 'ch*.json')))), None)
     fresh_rel = (f'{rel}/{os.path.basename(any_rel)}' if any_rel
                  else review.WRITER_CONTEXT)

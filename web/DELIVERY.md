@@ -18,6 +18,12 @@ npm run typecheck    # tsc --noEmit
 npm run seams        # 数据缝 / 设计缝红线（见下）
 ```
 
+**批量代跑**：语料库屏每本书标题前有勾选框，勾几本 →「开跑这 N 本」。
+闸内的立刻起 agent，其余排队，一本结束自动带起下一本；`running`/`pending`/`rejected`
+三堆在确认框里逐本摆开（**部分失败不回滚**）。同时在跑的上限由服务端
+`GET /api/agent/runs/queue` 下发，前端不写死。排队只在服务进程内存里，重启不保留。
+要逐字核对某一本的 argv，仍走那本书自己的「agent 跑书」按钮（那条有 0 成本 preview）。
+
 **跑书进度屏**：`/n/:sid/run`（左导航「进度」按钮）。agent 的 `novel.cli mark`
 与 UI / 持久队列共用 `<base>/_service/agent_progress.jsonl`：作业执行器在每个节点开始、
 结束时自动打点，界面按 `NODES` 的真实顺序折成进度 + 事件时间线；有步在跑时 2.5s 轮询，

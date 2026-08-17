@@ -8,7 +8,6 @@ stage5/<mode>/chNN.INVALID.json  被落盘闸门拦下的问题稿（同一份�
 stage5/<mode>/chNN.rejected.json 两次都相对旧正式稿退化的修订证据；旧正式稿保持原位
 stage5/<mode>/_rounds/…          上一轮与被替代的 INVALID / rejected 历史归档
 stage5/review_<n>.json           确定性验收报告（**0 成本，不调 LLM**），整本写完之后跑
-stage5/semantic_<n>.json         付费书级语义审判（secret-blind claims → secret alignment）
 stage5/trim_audit_chNN.json      收缩候选的 durable 机械/语义审计（v1）
 stage5/trim_resolution_chNN.json 人工明确保留 pretrim 的 hash-bound 销账（v1，0 成本）
 stage5/wontfix.json              人的「这条我不修」（0 成本，理由必填）
@@ -34,7 +33,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > |---|---|---|
 > | **臂** | `stage5.write --mode deep`（闭卷）· `--mode shallow`（开卷） | **只差 (system prompt, 给不给源章原文)**，产物形状逐字节相同；`mode` 同时是目录名 |
 > | **写作** | 首轮逐章写作 + 落盘闸门；仅把 `REPAIR_UNIQUE` 或独立语义审判点名的可引用问题送入定向自救 | 正式稿始终只有 `chNN.json`；失败尝试进 `.INVALID` / `_rounds` |
-> | **验收** | `stage5.review` 做 0 成本机械验收；`stage5.semantic` 做付费书级语义审判 | 共用同一张 48 条注册表，但落两份独立产物，报告用 `check_kind` 区分 |
+> | **验收** | `stage5.review` 做 0 成本机械验收（书级语义审判已于 2026-08-17 下线，见 §三） | 46 条注册表，一份产物 |
 >
 > 正常整书写作不分别启动两个 mode，而用
 > `stage5.write --deep <章号列表|none> --shallow-rest`：人工选择一次，两臂同时起跑，
@@ -86,14 +85,20 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > **48 = 8 HARD / 26 INFO / 9 metric / 5 unver**。上面的 31 章数据仍是第 3 批前的机械基线，
 > 不能被改写成“新语义审判已在真实小说上 0 命中”。
 >
-> ### ④ 篇幅带**只有一个数**：`0.90~1.10×`，逐章与全书同一个带
+> ### ④ 篇幅带是**两个数**：逐章 `0.80~1.20×`，全书 `0.90~1.10×`
 >
-> 逐章 `DRAFT_BAND` / 全书 `BOOK_BAND` 都是 **0.90~1.10**，**没有第二层宽限**
-> （与 `stage4.md` §四同源：「写下来的带」与「执行的带」不许是两个数）。
+> 逐章 `DRAFT_BAND` = **0.80~1.20**、全书 `BOOK_BAND` = **0.90~1.10**，**各自都没有第二层宽限**
+> （「写下来的带」与「执行的带」仍不许是两个数——那条约束说的是同一个问题上的两份口径，
+> 不是禁止逐章与书级各有各的带）。
 >
-> **实测代价是可量的**：31 章里 **10 章（32%）落在 ±10% 之外**，两端极值 **0.814 / 1.206**
-> ——旧口径下它们恰好卡在 0.81 / 1.21 的内侧、各差不到 1%，`length_over` / `length_under` 一次都没响。
-> 收窄后那 10 章报**提示级**（不阻断落盘）；全书 3/3 本仍绿（0.949 / 1.022 / 0.980）。
+> **逐章带按实测方差定**：31 章里 **10 章（32%）落在 ±10% 之外**，两端极值 **0.814 / 1.206**。
+> 那不是"写坏了"，是这一层的自然方差 ⇒ 0.80~1.20 把两端恰好包住，
+> 正常写作波动不再触发收缩臂与 `length_over` / `length_under`。
+> **书级带刻意不跟随放宽**：全书总量是产品承诺，而逐章的正负偏差在书级相互抵消
+> （实测 3/3 本 0.949 / 1.022 / 0.980，离 ±10% 两端都还有余量）。
+> ⚠ 历史：原型逐章 ±10% 之外又乘一次 ±10%（实际 0.81~1.21），
+> 那两个极值恰好卡在旧口径内侧、各差不到 1%，`length_over` / `length_under` **一次都没响**。
+> 现在的 0.80~1.20 是**显式的执行带**，不是隐式的二次宽限——这两者的区别是本条的全部要点。
 > ⚠ 但**旧口径也不是静默**：`length_report`（metric）无条件报出，并带着 `← 超出目标 1084~1325` 标记，
 > 10/31 章的 `warns` 里都有。**判据 21 在这里是正确工作的**——出声的是度量，不是告警。
 >
@@ -330,36 +335,31 @@ before/after SHA-256 与保留 pretrim 的销账入口。audit stale、正文/�
 
 ---
 
-## 三、书级语义审判 `stage5/semantic_<n>.json`
+## 三、书级语义审判 `stage5/semantic_<n>.json` —— 已于 2026-08-17 下线
 
-这是**付费的验收伙伴产物**，不是新的正文稿，也不代替 `review_<n>.json`。运行前必须有一份
-对当前正式稿仍然 fresh 的机械验收；每个计划章必须恰好一份 `chNN.json`。盘上存在
-`.INVALID` 旁路问题稿**不阻断**对正式稿的审判；它们不在 `judged` 中，也不会取代正式稿。
+`stage5.semantic` 节点、`SemanticReview` 一族载体、`semantic_secret_leak` /
+`semantic_secret_coverage` 两条判据与本产物**已整体删除**（用户裁决）。盘上不再产出这份文件，
+主链从 18 个节点降为 17 个。
 
-| 字段 | 类型 | 必填 | 内容 |
-|---|---|---|---|
-| `mechanical_review_seq` | `int` | 是 | 这次语义审判绑定的 `review_<n>.json` 序号 |
-| `judged` | `obj` | 是 | 当前正式稿的路径、章号、正文指纹与消费账；用来判断结论是否过期 |
-| `chapters[]` | `obj[]` | 是 | 第一相的逐章 claims：`output_ordinal`、`coverage`、`uncertainty_reason`、`claims[]` |
-| `chapters[].claims[]` | `obj[]` | 是 | `{claim_id, assertion, evidence}`；`evidence` 必须是对应章正文的逐字连续子串 |
-| `secrets[]` | `obj[]` | 是 | 第二相的对齐：`secret_id/reveal_chapter/status/evidence_refs/earliest_chapter/reason` |
-| `decisions[]` | `SemanticDecision[]` | 是 | 每条 secret 的 A/B 原始意见与合并决议；未校准 advisory 一律 `automated=false` / `UNVER` |
-| `_provenance` | `obj` | 是 | claims/alignment 两个 system prompt 指纹、模型、输入边与本次逐章 claims + 对齐调用合计 |
+**裁决依据是实跑证据，不是偏好**：
 
-两相故意隔离：
+* 本项目的重构**不跨章重组**——实测一本 18 章书 `from_source_ordinals` 全部是恒等映射，
+  书级泄底的主风险面在计划形态上几乎不存在；
+* 同一次实跑里它占单本**实付调用的 54%、输出 token 的 55%**（28 次调用 / 646 秒），
+  而结论是 18 章里 5 章命题抽取 `coverage=uncertain`、8 条 secret 全部判不动；
+* 同一本书上，**0 次模型调用**的「上游 info 下游投影」对账反而给出了确定结论
+  （涉事角色新名首现第 12 章 > 原文首现 ch8，未提前指名）。
 
-1. `CLAIMS_SYS` 一章一次，只看当前章正式稿，**完全不看 Stage 2 secrets 或其他章正文**；
-   每条 evidence 由代码逐字回查。各章可有界并发，失败章单独重试，成功缓存不重发。
-2. `ALIGN_SYS` 只看已验真 claims 与 Stage 2 secrets，**不再看原始正文**；它只能引用存在的 `(output_ordinal, claim_id)`。
+**改写式泄底现在由这两条承担**，都在 stage5 之外、都是 0 成本：
 
-`reveal_chapter` 不直接把 Stage 2 源章号当输出章号；必须经 Stage 4 `from_source_ordinals` 恰好映射到一个输出章。
-泄露前任一章 `coverage=uncertain`时，对应 secret 不允许 `clear`，只能 `unver`。语义产物缺席、过期或不可用也是
-`UNVER`，不是默认通过。
+1. 标注层：stage2 的 `event_early_name` / `present_early_named` / `present_names_late`
+   （见 `stage2.md`，需求编号 `R-3.7d`）——它们是确定性的，不存在"模型没把握"这一态；
+2. 交付前：成书逐字对账的第 8 项「上游 info 的下游投影」，把上述 info finding
+   逐条投影到成书章序核实（见 skill 的 `delegated-review.md`）。
 
-正常运行先执行 `require_enabled('secret_timeline', ...)`，缺 profile 时在 transport 前退出。
-显式 `--advisory` 是付费人工辅助路径：仍运行逐章 claims 与 A/B alignment，但传入
-`profile=None`，所以 `decisions[]` 和 `secrets[].status` 都不能成为自动 PASS/clear。报告仍展示
-覆盖与判官证据，并把 `semantic_secret_leak` 保持为 `UNVER`，不能用“未发现已确认泄漏”冒充绿灯。
+⚠ **恢复条件**：计划开始出现跨章重组（`from_source_ordinals` 不再恒等）时，上面第 1 条的
+覆盖面就变了，需要重新裁决是否恢复书级语义审判。恢复时要连同载体、判据、
+`stage5.review` 里的语义结论合并与豁免那一步一起恢复。
 
 ## 四、其余四份产物
 
@@ -379,13 +379,13 @@ before/after SHA-256 与保留 pretrim 的销账入口。audit stale、正文/�
 | **豁免不删结论** | 照常出现在报告与界面上，只是不进修复、不占「待人工」，并**单独计数** |
 | **`at` 只进审计** | 人做这个决定时看的是哪一版结论（`review_4` / `semantic_2@review_4`）。它**不参与匹配** |
 
-**结论池含语义结论**（2026-08-15）。此前反查只看 `review_<n>.json`，而 `semantic_secret_leak`
+**结论池曾含语义结论**（2026-08-15；语义那一半随 §三下线后恒空，结构保留）。此前反查只看 `review_<n>.json`，而 `semantic_secret_leak`
 是报告渲染时现算的、一份产物都不进 ⇒ 那条结论**结构上豁免不了**，报错还说「不给不存在的
 结论发豁免」——一句与事实相反的话。语义结论**一律 book 级寻址**：章信息在证据键里
 （`ch<n>:<正文原字节>`）。
 
 **失效由证据自身保证，不靠版本号**：证据是正文/候选的连续原字节，文本一改键就失配。
-反过来，语义重跑但结论一字未变时豁免仍然有效——`stage5.semantic` 是付费节点、重跑是常态，
+反过来，语义重跑但结论一字未变时豁免仍然有效——`stage6.semantic` 是付费节点、重跑是常态，
 把审判版本塞进匹配键会让一次不改变任何结论的重审把整本账清空。
 
 ### 4.2 `stage5/<mode>/_rounds/` 与当前 `chNN.rejected.json`
@@ -527,7 +527,7 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 | `keep_value_missing` | **HARD** | 【数值不得改动】都在（**比值不比字面**：`30岁` ↔「三十岁」= 满足） | **0**（61 条全在） | — |
 | `secret_leak` | **HARD** | 没有提前点破本章不该揭示的事。检查面是 ctx 的 `must_not_reveal` **并集** Stage2 `reader_reveal_events` 推导的揭示前章，防止 ctx 漏投一个 id 就静默放行；改写式盲区仍交语义审判 | **0** ⚠ 而 19/21 条 secret 的探针连揭示章都命中不了 | — |
 | `dialogue_halved` | **HARD** | 直接引语没被腰斩（**仅 `shallow` + 计划无净压缩**） | **0** | — |
-| `length_over` / `length_under` | INFO | 篇幅上/下限 = **`DRAFT_BAND` 0.90~1.10×预算，无第二层宽限**。精确当前的 unresolved TrimAudit 存在时，`length_over` 在 Review 判据侧并入该 verification；stale/mismatch/adopted/resolved 时仍独立输出 | **10/31 章**（0.814~1.206 那批） | — |
+| `length_over` / `length_under` | INFO | 篇幅上/下限 = **`DRAFT_BAND` 0.80~1.20×预算，无第二层宽限**。精确当前的 unresolved TrimAudit 存在时，`length_over` 在 Review 判据侧并入该 verification；stale/mismatch/adopted/resolved 时仍独立输出 | **10/31 章**（0.814~1.206 那批；该基线取自 ±10% 旧口径，放宽后这批全部落在带内） | — |
 | `names_absent` | INFO | 本章人物名出现在正文里 | 0 | — |
 | `verbatim_typo` / `verbatim_split` | INFO | 没被改字 / 被提示语切开也逐字出现 | 0 | — |
 | `must_appear_missing` | INFO | 【必须在场】的物件留下痕迹 | 0（30 条全留痕） | — |
@@ -541,7 +541,7 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 | `quotes_in_unquoted_corpus` | INFO(corpus) | 引号用法与语料一致 | 0 | — |
 | `event_landing` | INFO | 每一拍在成稿里有落点 | **0** | — |
 | `cross_chapter_number` | INFO | 自造数字跨章不打架 | 0 | — |
-| `book_length` | INFO(stage4) | 全书篇幅落在 **`BOOK_BAND` 0.90~1.10×源字数** | **0**（实测 0.949 / 1.022 / 0.980） | — |
+| `book_length` | INFO(stage4) | 全书篇幅落在 **`BOOK_BAND` 0.90~1.10×源字数**（⚠ 与逐章 `DRAFT_BAND` 0.80~1.20 **不是同一个数**，见 §④） | **0**（实测 0.949 / 1.022 / 0.980） | — |
 | `style_block_carries_plot` | INFO(stage3) | 风格块里没夹带情节 | 0 | — |
 | `quote_unbalanced` | INFO | 引号配对异常、未归一——**留着报，不静默修**（原 `mech.quote_problems`） | **0/31** | — |
 | `deep_overlap_high` | INFO | **闭卷臂**重合度 > `DEEP_OVERLAP_MAX`（10%）。**守的是臂的身份不是文风**；开卷不判 | **0/11 闭卷章**（今天 max 2.4%） | — |
@@ -555,8 +555,6 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 | `draft_missing` | unver | 计划里每一章都有成稿 | 0 | — |
 | `draft_duplicated` | unver | **同一输出章在两条臂里各有一份成稿** | 0/31 | — |
 | `no_secrets_in_book` | unver | 这本书有可查的秘密 | 0（三本都有 secrets） | — |
-| `semantic_secret_leak` | **HARD · semantic** | 书级 claim 没有在合法揭示章前语义等价地点破 secret | 三臂九次书级审判均完成；基线第一本检出 3 条，其余 8 次为 0 | — |
-| `semantic_secret_coverage` | INFO · semantic | 正式章、secret、逐字证据、claim 引用与不确定性全部闭合 | 九次审判均闭合；逐书仍可因 0~6 个 `coverage=uncertain` 落 UNVER | — |
 
 > #### ⚠ `secret_leak` 报 0，而它的基线说这盏灯基本不会亮
 >
@@ -570,7 +568,8 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 >
 > ⇒ **21 条里 19 条**的字面探针在本书上**没有判别力**。
 > 「`secret_leak` 0 命中」这句话现在的信息量接近 0——而它是 7 条 HARD 之一。
-> 字面机械层仍然抓不住改写式泄底；第 3 批因此新接 `stage5.semantic`，而不试图扩充这盏低判别力绿灯。
+> 字面机械层仍然抓不住改写式泄底。第 3 批曾为此新接 `stage5.semantic`；该节点已于 2026-08-17 下线（见 §三），
+> 守卫转授给 stage2 的确定性判据与成书逐字对账，仍不试图扩充这盏低判别力绿灯。
 > 机械层仍有两条配套：报绿灯时**同一行**打出盲区计数；**一本书盲区 100% 时落 `unver` 而不是沉默**
 > （头牌就是这种情况，7/7 条）。**不降级 sev**——它命中时是真泄底，降级会让唯一一道防线更弱。
 >
@@ -651,8 +650,6 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 | `draft_too_short` · `draft_truncated` · `meta_leak` | `R-7.15` ⭐ |
 | `names_absent` | `R-7.16` ⭐ |
 | `secret_leak` · `no_secrets_in_book` | `R-7.18` ⭐（`R-8.10` 只写了**改写式**那一半） |
-| `semantic_secret_leak` | `R-7.18b` |
-| `semantic_secret_coverage` | `R-7.18c` |
 | `dialogue_halved` | `R-7.19` ⭐ |
 | `dialogue_fewer` · `dialogue_broken` · `dialogue_ratio_drift` | `R-7.20` ⭐ |
 | `band_drift` · `para_len_drift` · `layout_drift` · `simile_drift` · `xinli_drift` · `dash_drift` | `R-7.21` ⭐ |
@@ -756,10 +753,13 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 
 登记在这里免得被当成漏项。
 
-1. **改写式泄底语义防线已经过三本真实小说、三组实验配置验证。** 字面探针只挡转抄式，
-   而语义审判在基线第一本检出 3 条提前等价 claim；同时九次审判中逐书仍有 0~6 个
-   `coverage=uncertain`。因此必须同时看 `semantic_secret_leak` 与
-   `semantic_secret_coverage`，既不能用机械 `secret_leak=0` 代替，也不能把 UNVER 当 PASS。
+1. **改写式泄底在本层没有守卫**（2026-08-17 起）。字面探针 `secret_leak` 只挡转抄式，
+   而它的基线说这盏灯基本不会亮（19/21 条 secret 连自己的揭示章都命中不了）。
+   曾经补上的书级语义审判已随 `stage5.semantic` 下线（见 §三），守卫转授给 stage2 的
+   确定性判据与成书逐字对账的「上游 info 下游投影」。
+   ⚠ **那两条守的是"提前指名"，不是"语义等价地点破"**——后者在本层现在确实没人查。
+   历史读数留档：语义审判在基线第一本检出过 3 条提前等价 claim，
+   九次审判中逐书仍有 0~6 个 `coverage=uncertain`。
 2. **`must_hold` 恒 `unver`。** 全书 27 条，按定义查不了文面。
 3. **「这一章该不该 deep」没有自动判据。** 选择虽持久化于 `_service/approvals/` 并在启动时
    校验/锁定，但 `assemble_book` 仍只能验「两臂没打架 + 覆盖了计划」，验不了选择本身好不好。

@@ -604,12 +604,23 @@ INVENT_GUARDED: Final = {
 }
 
 #: 成稿字数 / 本章预算必须落在这个带里。它就是执行带，**没有第二层宽限**。
-DRAFT_BAND: Final = (0.90, 1.10)
+#: ⚠⚠ **它与 `BOOK_BAND` 不再是同一个数**（2026-08-17 用户裁决）。两条带答的是两个问题：
+#:   · 本带答「单章允许偏离预算多少」——写手对齐的是逐拍下发的 `budget_chars`，
+#:     而一章的节奏本来就会让某几章胖一点、某几章瘦一点；
+#:   · `BOOK_BAND` 答「全书总量允许偏离源书多少」——那是产品承诺，必须紧。
+#: 逐章放宽而全书收紧是**自洽**的：逐章的正负偏差在书级相互抵消，全书带兜住总量。
+#: ⚠ 定在 0.80~1.20 的依据是实测分布而不是拍脑袋：盘上 31 章的两端极值为
+#: **0.814 / 1.206**（见 `contracts/schema/stage5.py` 文件级注释④），本带把它们
+#: 恰好包进去 ⇒ 正常写作波动不再触发收缩臂与 `length_over` / `length_under`。
+#: ⚠ 收窄回 ±10% 之前先看那两个极值：那不是"写坏了"，是这一层的自然方差。
+DRAFT_BAND: Final = (0.80, 1.20)
 
-#: 全书成稿字数 / 全书源字数，同一个带。
+#: 全书成稿字数 / 全书源字数。
 #: ⚠ 原型这里写死 `0.81~1.21`，注释自述推导自「逐章带**配 ±10% 宽限**」——
 #: 而那个宽限已随 stage4 裁决拿掉，这条书级带于是建立在一个不存在的前提上。
 #: 实测三本 0.949 / 1.022 / 0.980，收紧到本带**代价为 0**。
+#: ⚠ **本带刻意不跟随 `DRAFT_BAND` 放宽**：逐章放宽是给单章节奏留余量，
+#: 而全书总量是对用户的承诺。两个数不同不是漂移，是上面那条裁决的直接结果。
 BOOK_BAND: Final = (0.90, 1.10)
 
 #: 闭卷臂成稿与源章的 20 字窗口重合度上界（已扣掉契约要求逐字保留的部分）。
@@ -1149,11 +1160,19 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  flags=('--check-only', '--wontfix', '--retain-pretrim',
                                         '--chapters', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE5_REVIEW,)),
-    # 付费语义审判是机械验收的 companion，不取代 `stage5.review` 的 0 成本属性。
-    # 它不接 `--check-only`，否则一个 stage 会有两个复检节点、HTTP kind 路由产生歧义。
-    'stage5.semantic':  NodeSpec('stage5', 'R-8',  True,  'stage5 书级语义审判',
-                                 flags=('--dry-run', '--advisory'),
-                                 produces=(artifact_paths.STAGE5_SEMANTIC,)),
+    # ⚠⚠ **`stage5.semantic` 已于 2026-08-17 整节点下线**（用户裁决，见
+    #   `docs/SKILL_OPERATOR_REVIEW_20260817.md` S-13）。裁决依据是实跑证据而非偏好：
+    #     · 本项目的重构**不跨章重组**（实测 18/18 章 `from_source_ordinals == [自身]`），
+    #       书级剧透那条主风险面在计划形态上几乎不存在；
+    #     · 剧透的可查通道在 stage2 已有确定性判据（`event_early_name` /
+    #       `present_early_named` / `present_names_late`），且**成书逐字对账的
+    #       「上游 info 下游投影」是 0 次调用**——实测它给出了确定结论，
+    #       而书级语义判官在同一本书上 18 章里 5 章命题抽取返回 uncertain、
+    #       8 条 secret 全部判不动；
+    #     · 成本上它占单本实付调用的 54%、输出 token 的 55%。
+    #   ⇒ 下线的是**节点**不是能力：`stage6.semantic` 保留（2 次调用、1.7% token，
+    #   实测直接纠正过一次定稿）。要恢复请连同 `contracts/schema/stage5.py` 的
+    #   `SemanticReview` 一族、`novel/stages/stage5/semantic.py` 与两条判据一起恢复。
     # ⚠ `--revalidate` 是 F 期移植时补的，而它是**新加那道落盘闸门的必然配套**：
     #   本层一次产三条候选，闸门拦的是「一条干净候选都没有」；不给一条 0 成本的提升路，
     #   一次付费产出就会被永久锁死。**加闸门与加提升路必须同批**。
@@ -1166,8 +1185,11 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--recheck', '--revalidate', '--apply-edit',
                                         '--wontfix', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE6_HOOK,)),
-    # 付费语义审判是字面探针的 companion（R-9.19/R-9.20），形态照 stage5.semantic：
+    # 付费语义审判是字面探针的 companion（R-9.19/R-9.20）：
     # 不接 `--check-only`，否则一层两个复检节点、HTTP kind 路由产生歧义。
+    # ⚠ 它是全链**唯一**的语义审判节点（stage5 那一个已于 2026-08-17 下线）。
+    # 保留它的实测依据：2 次调用 / 1.7% 输出 token，而它的匿名质量排序在实跑中
+    # 直接纠正过一次定稿——性价比与被下线的那个不在一个量级。
     'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',
                                  flags=('--dry-run', '--advisory'),
                                  produces=(artifact_paths.STAGE6_SEMANTIC,)),

@@ -60,13 +60,55 @@ def _local_links(path: Path, text: str) -> list[Path]:
     return links
 
 
-def _pipeline_steps(root: Path) -> tuple[str, ...]:
+def _invariants(root: Path):
+    """注册表本体。**行为断言全部从它反查**，不在校验器里手抄第二份清单。"""
     sys.path.insert(0, str(root))
     try:
-        from contracts.invariants import PIPELINE_STEPS
+        from contracts import invariants
     finally:
         sys.path.pop(0)
-    return tuple(PIPELINE_STEPS)
+    return invariants
+
+
+def _section(text: str, heading: str) -> str:
+    """取一个二级标题到下一个二级标题之间的正文。"""
+    match = re.search(
+        rf"(?m)^{re.escape(heading)}\s*$(.*?)(?=^## |\Z)", text, re.S)
+    return match.group(1) if match else ""
+
+
+def _argparse_options(path: Path) -> set[str]:
+    """CLI 自己的选项（`--base` / `--yes` / `--exit` …）。
+
+    它们不是 `NodeSpec.flags`，但文档里必然出现 ⇒ 正向对账要认它们，
+    否则会把一堆真实存在的选项报成写错。ast 读，不 import。
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    options: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "add_argument":
+            continue
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str) \
+                    and arg.value.startswith("--"):
+                options.add(arg.value)
+    return options
+
+
+def _int_constants(path: Path) -> set[int]:
+    """模块级 `NAME = <int 字面量>`。ast 读，不 import。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    values: set[int] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target, value = node.targets[0], node.value
+        if isinstance(target, ast.Name) and isinstance(value, ast.Constant) \
+                and isinstance(value.value, int) and not isinstance(value.value, bool):
+            values.add(value.value)
+    return values
 
 
 def _build_prompt_source(path: Path) -> str:
@@ -76,6 +118,81 @@ def _build_prompt_source(path: Path) -> str:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "build_prompt":
             return ast.get_source_segment(source, node) or ""
     return ""
+
+
+def _behaviour_errors(
+    root: Path,
+    inv,
+    skill_text: str,
+    workflow: str,
+    skill_texts: dict[Path, str],
+) -> list[str]:
+    """「文档声称的 CLI 行为」与「代码实际行为」的对账。
+
+    结构检查（链接、节点顺序、经验格式）测不到这一类：一次真实复盘里
+    `--advisory` 这条注册在案的付费主路径**整个 skill 一次都没提**，
+    每本书因此白丢一整层证据，而校验器全绿。三条断言各钉一个已发生的漏法。
+    """
+    errors: list[str] = []
+
+    # ① inbox 分类反查：文档少写一类，执行者就得自己猜它算不算阻断。
+    # ⚠ 直接读，不从 `skill_texts` 里捞：捞不到会静默退化成空串，
+    #   于是「文件不在」会被报成八条「分类漏写」——读不到就当没查是本仓明令禁止的形状。
+    recovery_path = SKILL_DIR / "references" / "recovery.md"
+    recovery = recovery_path.read_text(encoding="utf-8") if recovery_path.is_file() else None
+    done = _section(skill_text, "## 完成定义")
+    if recovery is None:
+        errors.append("recovery.md 不在盘上，inbox 分类反查无从谈起")
+        recovery = ""
+    for kind in inv.INBOX_KIND:
+        if f"`{kind}`：" not in recovery:
+            errors.append(
+                f"recovery.md 没有 `{kind}` 这一类的读法（inbox 共 {len(inv.INBOX_KIND)} 类）"
+            )
+        if kind not in done:
+            errors.append(f"SKILL.md 的「完成定义」没有交代 inbox 的 `{kind}`")
+
+    # ② flag 双向对账。**单向不够**——`--advisory` 正是被单向检查漏掉的那一半。
+    node_flags = {flag for spec in inv.NODES.values() for flag in spec.flags}
+    known = (
+        node_flags
+        | set(inv.FREE_ENTRIES)
+        | set(inv.PAID_FLAGS)
+        | set(inv.VALUED_FLAGS)
+        | _argparse_options(root / "novel" / "cli" / "main.py")
+        | {"--help"}
+    )
+    used: dict[str, set[str]] = {}
+    for path, body in skill_texts.items():
+        for token in re.findall(r"--[a-z][a-z0-9-]*", body):
+            used.setdefault(token, set()).add(path.name)
+    for token in sorted(set(used) - known):
+        errors.append(
+            f"文档写了 `{token}`（{sorted(used[token])}），"
+            f"但 NODES/FREE_ENTRIES/PAID_FLAGS/VALUED_FLAGS 与 CLI 选项里都没有它"
+        )
+    for flag in sorted(set(inv.PAID_FLAGS) & node_flags):
+        if flag not in used:
+            owners = sorted(n for n, s in inv.NODES.items() if flag in s.flags)
+            errors.append(
+                f"付费 flag `{flag}` 挂在 {owners}，而整个 skill 一次都没提它"
+                f"——漏一条现役路径的后果是每本书白丢那一层"
+            )
+
+    # ③ 退出码反查：`结果判定` 表少一行，执行者会把未登记的码当成未知崩溃。
+    codes = _int_constants(root / "novel" / "cli" / "exit_codes.py")
+    documented = {
+        int(value)
+        for value in re.findall(r"(?m)^\|\s*(\d+)\s*\|", _section(workflow, "## 结果判定"))
+    }
+    if documented != codes:
+        errors.append(
+            "workflow.md「结果判定」的退出码集合与 exit_codes.py 不一致：\n"
+            f"  文档：{sorted(documented)}\n"
+            f"  代码：{sorted(codes)}"
+        )
+
+    return errors
 
 
 def validate() -> list[str]:
@@ -111,11 +228,13 @@ def validate() -> list[str]:
     markdown_files = [SKILL, *sorted((SKILL_DIR / "references").glob("*.md"))]
     asset_template = SKILL_DIR / "assets" / "final-review-template.md"
     markdown_files.append(asset_template)
+    skill_texts: dict[Path, str] = {}
     for path in markdown_files:
         if not path.is_file():
             errors.append(f"缺少文件：{path.relative_to(SKILL_DIR)}")
             continue
         linked_text = path.read_text(encoding="utf-8")
+        skill_texts[path] = linked_text
         for target in _local_links(path, linked_text):
             if not target.exists():
                 errors.append(
@@ -129,6 +248,8 @@ def validate() -> list[str]:
                 f"reference 未从 SKILL.md 直接链接：{reference.relative_to(SKILL_DIR)}"
             )
 
+    inv = _invariants(root)
+
     workflow = (SKILL_DIR / "references" / "workflow.md").read_text(encoding="utf-8")
     match = re.search(
         r"<!-- pipeline-steps:start -->(.*?)<!-- pipeline-steps:end -->",
@@ -141,13 +262,15 @@ def validate() -> list[str]:
         documented = tuple(
             re.findall(r"(?m)^\|\s*\d+\s*\|\s*`([^`]+)`\s*\|", match.group(1))
         )
-        actual = _pipeline_steps(root)
+        actual = tuple(inv.PIPELINE_STEPS)
         if documented != actual:
             errors.append(
                 "主链顺序漂移：\n"
                 f"  文档：{documented}\n"
                 f"  代码：{actual}"
             )
+
+    errors += _behaviour_errors(root, inv, text, workflow, skill_texts)
 
     notes_path = SKILL_DIR / "references" / "field-notes.md"
     notes = notes_path.read_text(encoding="utf-8")
@@ -218,7 +341,8 @@ def main() -> int:
         return 1
     print("PASS novel-pipeline-operator")
     print("  frontmatter, links, progressive disclosure, pipeline order, field notes,")
-    print("  final-review template, and headless consumer references are consistent")
+    print("  final-review template, and headless consumer references are consistent;")
+    print("  inbox kinds, flags (both directions) and exit codes match the registries")
     return 0
 
 

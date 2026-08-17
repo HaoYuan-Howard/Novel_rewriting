@@ -77,6 +77,22 @@ class UpstreamMissing(TerminalState):
     """
 
 
+class UpstreamStale(TerminalState):
+    """要读的上游产物在盘上，但它已经不是当前根上那一份了。
+
+    ⚠⚠ **它此前是 `ProvenanceRefused`，也就是「代码自相矛盾」的退出码 3。** 那是错的：
+    这条拒绝**自带恢复命令**（「请先从 <producer> 重建当前根上的产物」），
+    而 `novel/cli/exit_codes.py` 对两个码的定义是「2 = 数据/流程说这一步不该继续，
+    不是 bug」「3 = 代码自相矛盾，是 bug，栈要留全」。一条人照着做就能解开的前置条件
+    落进 3，等于每次都在说「这是我们的 bug」，而编排层与 agent 执行者会据此停机。
+
+    ⚠ 与 `UpstreamMissing` 分开：「上游还没跑」（去跑它）与「上游跑过但已过期」
+    （去**重跑**它，且下游缓存会失效）是两条不同的恢复路，报告不能混。
+    ⚠ 与 `ProvenanceRefused` 分开：那一条留给来源账本身自相矛盾的情形
+    （同一把刻度结算两次、缺全链根、根 sha1 分叉），那些确实是 bug。
+    """
+
+
 class ArtifactUnreadable(TerminalState):
     """盘上那份在，但读不出来：不是合法 JSON、或不合当前 schema。
 
