@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    起「小说重构 · 审校台」。双击 tools\start.cmd 即可，一个窗口、一个地址。
+    起「小说重构 · 审校台」。双击 scripts\start.cmd 即可，一个窗口、一个地址。
 
 .DESCRIPTION
     默认形态是**单服务**：`novel/api/app.py` 把 `web/dist` 挂在自己那个端口上，
@@ -18,8 +18,8 @@
     （`R-11.1`），这里只传 `--base`。
 
 .PARAMETER Base
-    语料根目录（`--base <Output目录>`，outputs 下含各书目录的那一层）。
-    省略时取 outputs 下最近改动过的那个。
+    语料根目录（`--base <Output目录>`，**含各书目录的那一层**）。
+    省略时就是仓根的 `outputs\` 本身——语料库屏列的是它下面的全部书。
 
 .PARAMETER Dev
     开发形态：Vite dev server（热更）+ 后台后端。
@@ -37,11 +37,11 @@
     强制重装 web 依赖（默认只在 node_modules 缺失时装）。
 
 .EXAMPLE
-    .\tools\start.ps1
+    .\scripts\start.ps1
 .EXAMPLE
-    .\tools\start.ps1 -Base outputs\e2e_20260817_jiaoren
+    .\scripts\start.ps1 -Base D:\另一个语料根
 .EXAMPLE
-    .\tools\start.ps1 -Dev
+    .\scripts\start.ps1 -Dev
 #>
 [CmdletBinding()]
 param(
@@ -125,17 +125,17 @@ function Resolve-Base([string]$requested) {
         }
         return $p
     }
-    $cand = $null
-    if (Test-Path -LiteralPath $OutRoot) {
-        $cand = Get-ChildItem -LiteralPath $OutRoot -Directory -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    }
-    if (-not $cand) {
-        Write-Bad 'outputs\ 下没有可用的语料目录，拿 -Base 显式指一个。'
+    # ⚠ 默认取 `outputs\` **本身**，不是它下面某个子目录。
+    #   `--base` 的语义是「**含各书目录的那一层**」（`novel/paths.py::iter_novel_dirs`），
+    #   语料库屏 `GET /api/novels` 列的就是它下面的全部书。
+    # ⚠⚠ 这里原来取的是「outputs 下最近改动的那个**子目录**」，于是每次起服务
+    #   都只挑得到一本书——当时盘上是一批次一目录、每目录一本，而人想要的显然是
+    #   「进来先看见所有书，自己挑一本」。挑批次这件事仍然做得到：`-Base` 指过去就行。
+    if (-not (Test-Path -LiteralPath $OutRoot -PathType Container)) {
+        Write-Bad "没找到 $OutRoot——先跑一本书建出来，或拿 -Base 指一个语料根。"
         exit 2
     }
-    Write-Note "没给 -Base，取 outputs 下最近改动的：$($cand.Name)"
-    return $cand.FullName
+    return (Resolve-Path -LiteralPath $OutRoot).Path
 }
 
 function Test-BuildIsStale {
