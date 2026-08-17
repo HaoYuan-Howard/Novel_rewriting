@@ -8,6 +8,7 @@ import type { ChapterSegment } from '@/types/stages'
 import type { TextPart } from '@/components/ui/HighlightedText'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 import { useEnums } from '@/hooks/useEnums'
+import { lookupAction } from '@/constants/actions'
 import type { EnumAction } from '@/types/enums'
 
 export type S5Tab = 'chapter' | 'book' | 'index'
@@ -338,5 +339,13 @@ export function useStage5Screen() {
     chaptersArg,
     setChaptersArg,
     writeActions: stage5WriteActions(enums.data?.actions ?? []),
+    /**
+     * 全书验收动作。**它不在 `writeActions` 里，那是对的**——那个盒子只喂
+     * `--chapters`，而本条是书级的。但它必须在这一屏有自己的入口：
+     * 没跑过时后端原话就是「盘上一份 `stage5/review_*.json` 都没有——先跑
+     * `stage5.review`」，而在此之前**整个界面都没有地方能跑它**，
+     * 浏览器里的人到这一步只能改去命令行。
+     */
+    reviewAction: lookupAction(enums.data, { kind: 'stage5.review', extra: null }),
   }
 }

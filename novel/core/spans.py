@@ -241,15 +241,27 @@ def walk_spans(bps: list[dict[str, Any]],
                 yield o, be, None, f'{bid} 缺 span 锚点'
                 continue
             a, b = content_only(raw_a), content_only(raw_b)
-            if not a or not b:
-                yield o, be, None, f'{bid} 锚点无内容字符: {raw_a[:12]!r}/{raw_b[:12]!r}'
-                continue
             # 原样字节存在时先用它：标点可能正是重复字面的唯一消歧信息。找不到才走
             # 内容空间；后者仍负责容忍换行、半/全角标点，以及 recover=True 时的 LCS。
+            #
+            # ⚠⚠ **「锚点没有内容字符」只淘汰内容空间那条路，不许在定位之前先淘汰整条
+            # beat。** 空串在内容空间里处处命中（`content.find('', cur) == cur`），
+            # 算出来的偏移是假的 ⇒ 那条路必须挡。但原样字节这条路不受影响：
+            # 实测《夫君与鲛人孰》ch11 的最后一段正文就是 `......`，模型把它抄成
+            # `ends_with` 是**对的**，而它在游标之后只出现一次 ⇒ 定位是确定的。
+            # 先淘汰再定位会把一条正确锚点判成坏数据，连带 `span_unlocatable` /
+            # `verbatim_failed` / `edge_hole` 三条 HARD 一起红，
+            # 而它们的 `fix` 是 `--chapters` 重生成 —— 锚点本来就没错，
+            # 重生成（且同参数会命中 `.llm_cache`）修不好，链路就此死锁。
             exact_a = _find_exact_raw(text, raw_a, raw_cur, cmap)
             if exact_a is not None:
                 a0, a_raw_end, i, _a_content_end = exact_a
                 a1 = extend_punct(text, a_raw_end)
+            elif not a:
+                yield o, be, None, (
+                    f'{bid}.starts_with 无内容字符，且原样字节在游标之后找不到: '
+                    f'{raw_a[:12]!r}')
+                continue
             else:
                 # ⚠ `a` 被**重新绑定**成实际匹配到的串（救回来时它比原锚点短）：
                 #   下面每一处 `len(a)` 都是区间算术的输入，用原锚点的长度就是错位的偏移。
@@ -278,6 +290,11 @@ def walk_spans(bps: list[dict[str, Any]],
             if exact_b is not None:
                 b0, b_raw_end, j, b_content_end = exact_b
                 b1 = extend_punct(text, b_raw_end)
+            elif not b:
+                yield o, be, None, (
+                    f'{bid}.ends_with 无内容字符，且原样字节在 starts_with 之后找不到: '
+                    f'{raw_b[:12]!r}')
+                continue
             else:
                 j, b = _find_or_recover(content, b, i, recover)  # `b` 也要接回去
                 if j < 0:

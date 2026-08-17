@@ -541,6 +541,43 @@ def test_both_recover_thresholds_are_and_not_or():
     assert _walk('定然', '完全不相干的八个字算多', recover=True)[0][2] is None
 
 
+#: 章正文最后一段就是省略号 —— 实跑《夫君与鲛人孰》ch11 的形状，逐字保留。
+_PUNCT_TAIL_TEXT = '定然不会善罢甘休。\n\n她转身就走。\n\n......'
+
+
+def _walk_tail(starts: str, ends: str):
+    bps = [{'chapter_ordinal': 1,
+            'beats': [{'beat_id': 'b01_01',
+                       'span': {'starts_with': starts, 'ends_with': ends}}]}]
+    return list(walk_spans(bps, {1: _PUNCT_TAIL_TEXT}))[0]
+
+
+def test_a_punctuation_only_anchor_locates_by_raw_bytes():
+    """⭐ **锚点没有内容字符 ≠ 锚点是坏的。**
+
+    整段只有省略号的收尾在网文里很常见，模型把它抄成 `ends_with` 是**对的**。
+    原样字节这条路在游标之后唯一命中它 ⇒ 定位是确定的。
+    这里钉的是**淘汰顺序**：内容空间那条路的前置条件，不许提前到定位之前
+    去否掉整条 beat —— 那一下会让 `span_unlocatable` / `verbatim_failed` /
+    `edge_hole` 三条 HARD 同时红，而它们的 `fix` 是重生成，修不好一条没错的锚点。
+    """
+    (_o, _be, hit, prob) = _walk_tail('她转身就走。', '......')
+    assert prob is None
+    a0, _a1, _b0, b1 = hit
+    assert _PUNCT_TAIL_TEXT[a0:b1] == '她转身就走。\n\n......'
+
+
+def test_a_punctuation_only_anchor_absent_from_the_text_is_still_a_failure():
+    """⚠ 上一条不是「空内容锚点一律放行」：原样字节找不到时仍必须报。
+
+    空串在内容空间里处处命中（`content.find('', cur) == cur`），
+    退回那条路等于用一个假偏移冒充定位成功。
+    """
+    (_o, _be, hit, prob) = _walk_tail('她转身就走。', '？？？')
+    assert hit is None
+    assert 'ends_with' in prob and '无内容字符' in prob
+
+
 def test_exact_source_span_checks_offsets_text_normalization_and_order():
     raw = '甲说：“原样材料。”乙离开。'
     start = raw.index('原样材料')

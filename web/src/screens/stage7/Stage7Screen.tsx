@@ -2,10 +2,13 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
+import { isNotRunYet } from '@/api/errors'
 import { qk } from '@/api/queryKeys'
+import { lookupAction } from '@/constants/actions'
 import { FRESH, SCRIM, SEV } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
-import { useChrome } from '@/hooks/useChrome'
+import { useChrome, useAskJob } from '@/hooks/useChrome'
+import { useEnums } from '@/hooks/useEnums'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { CompareRows } from '@/components/compare/CompareRows'
@@ -27,6 +30,10 @@ import { cx } from '@/lib/cx'
 export function Stage7Screen() {
   const sid = useSid()
   const { askConfirm } = useChrome()
+  const ask = useAskJob()
+  const enums = useEnums()
+  const renameAction = lookupAction(enums.data, { kind: 'stage7.rename', extra: null })
+  const assembleAction = lookupAction(enums.data, { kind: 'stage7.assemble', extra: null })
   const nav = useNavigate()
   const qc = useQueryClient()
   const { o } = useParams<{ o: string }>()
@@ -116,6 +123,40 @@ export function Stage7Screen() {
 
   return (
     <ScreenFrame screen="stage7">
+      {/*
+        ⚠⚠ **这一层的产出入口必须在这一屏上，否则浏览器里走不到成书。**
+        `stage6.approve` 会自己盖上 s6 的章 ⇒ 闸门那颗按钮当场变「已确认」并禁用，
+        而 `stage7.rename` 正是挂在它 spawn 上的 ⇒ 那条发起路再也不会被走到。
+        与此同时本屏 404 的原话是「先跑产它的那一层」，却没给任何地方能跑它。
+        两件事叠起来就是：文案定稿之后，整条链在浏览器里断在这里。
+      */}
+      {isNotRunYet(q.error) ? (
+        <Panel className="mx-30 mt-20 flex flex-wrap items-center gap-12 px-18 py-14">
+          <div className="flex min-w-0 flex-col gap-3">
+            <span className="text-body font-semibold">还没跑人名替换</span>
+            <span className="text-tag text-ink-4">
+              stage6 文案已定稿。这一层要先产出 stage7/name_map.json，才能审人名、再拼装成书。
+            </span>
+          </div>
+          <ActionButton
+            className="ml-auto"
+            action={renameAction}
+            onClick={() =>
+              ask({
+                kind: 'stage7.rename',
+                label: '执行人物改名',
+                extra: null,
+                mode: null,
+                required_inputs: renameAction?.required_inputs,
+                sid,
+                ordinal: null,
+              })
+            }
+          >
+            跑人名替换
+          </ActionButton>
+        </Panel>
+      ) : null}
       <QueryStates q={q} loadingLabel="读人名表" missing={{ title: '人名替换 + 成书 · stage7' }}>
         {(d) => {
           const rows = chQ.data?.rows ?? null
@@ -392,7 +433,37 @@ export function Stage7Screen() {
                           {download.isPending ? '下载中…' : '下载 book.txt'}
                         </button>
                       </div>
-                    ) : null}
+                    ) : (
+                      /*
+                        ⚠⚠ **最后一步的发起入口，和上面 rename 那条是同一个病。**
+                        `stage7.approve` 一落盘就自己盖上 s7 的章 ⇒ 闸门那颗
+                        「确认并成书」当场变成「已经确认过了」并禁用，
+                        而 `stage7.assemble` 恰恰挂在它的 spawn 上 ⇒ 拼装再也发不起来。
+                        人物表已定稿、书却永远组装不出来，是这条链在浏览器里的终点。
+                      */
+                      <div className="mt-3 flex flex-wrap items-center gap-10">
+                        <ActionButton
+                          size="sm"
+                          action={assembleAction}
+                          onClick={() =>
+                            ask({
+                              kind: 'stage7.assemble',
+                              label: '拼装最终成书',
+                              extra: null,
+                              mode: null,
+                              required_inputs: assembleAction?.required_inputs,
+                              sid,
+                              ordinal: null,
+                            })
+                          }
+                        >
+                          拼装成书
+                        </ActionButton>
+                        <span className="text-tag text-ink-4">
+                          按原书结构拼装（文案 + 正文各章），落到 stage7/book.txt。
+                        </span>
+                      </div>
+                    )}
                   </Panel>
                 </div>
               </div>

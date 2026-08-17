@@ -149,6 +149,17 @@ export function DepthScreen() {
                         onSuccess: () => nav('/n/' + sid + '/stage5/' + defaultOrdinal(sid)),
                       })
                     },
+                    // ⚠⚠ **开写前必须先把当前这份分配落成 proof，否则后端必然拒发。**
+                    // `deep` 的初值是服务端给的默认（前 3 章），而 `deep_proof`
+                    // **只在显式保存时才写**——于是「用户认可默认值、一章都没点，
+                    // 直接开写」这条最顺的路上，`begin_writing` 会以
+                    // 「save a current depth selection before writing」拒绝，
+                    // 而那正是本屏最常见的走法。
+                    // ⚠ 放 `before` 不放 `after`：它是**启动作业的前置条件**
+                    // （后端 `POST /jobs` 的 prepare 就在校验它），不是发起后的收尾。
+                    // ⚠ 保存当前选择本身 0 成本、幂等、可反悔，而用户点的这颗按钮
+                    // 写的就是「按这个分配开写」——把它落盘是忠实于那次点击的。
+                    async () => { await setDeep.mutateAsync(deep) },
                   )
                 }
               >

@@ -1,5 +1,6 @@
 import { useChrome } from '@/hooks/useChrome'
 import { api } from '@/api/endpoints'
+import { ApiError } from '@/api/errors'
 import { qk } from '@/api/queryKeys'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -135,6 +136,30 @@ describe('ConfirmDialog', () => {
     expect(screen.queryByText(/--chapters 11/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '等待执行计划' })).toBeDisabled()
     finishRefetch?.(preview)
+  })
+
+  it('作业没起来时把原因摆在框里，并且不关框', async () => {
+    // ⭐ 真实场景：`POST /api/jobs` 409（后端拒绝了这次启动）。
+    // 修复前这里什么都不画、框照旧开着、按钮照旧能点 ——
+    // 用户只会反复点一个花钱的按钮，而钱一分没花、活一件没干。
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    vi.spyOn(api, 'previewJob').mockResolvedValue(preview)
+    vi.spyOn(api, 'startJob').mockRejectedValue(
+      new ApiError('server', '/jobs', {
+        status: 409,
+        message: 'save a current depth selection before writing',
+      }),
+    )
+    renderRoute(<Harness />)
+
+    fireEvent.click(screen.getByRole('button', { name: '修第 11 章' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确认发起（花钱）' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('没有发起')
+    expect(alert).toHaveTextContent('save a current depth selection before writing')
+    // 框还在 —— 关掉等于把「没发起」演成「发起了」
+    expect(screen.getByRole('button', { name: '确认发起（花钱）' })).toBeVisible()
   })
 
   it('previews placeholders but starts revalidation only with freshly entered audit values', async () => {

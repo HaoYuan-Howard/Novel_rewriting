@@ -160,6 +160,26 @@ export function Stage5Screen() {
                           {vm.tabLabels[k]}
                         </button>
                       ))}
+                      {/* 本屏唯一能产出这些判据的入口。常驻而不是只在空态出现：
+                          改完稿要重跑一轮，报告才跟得上正文。 */}
+                      <ActionButton
+                        className="ml-auto"
+                        size="sm"
+                        action={vm.reviewAction}
+                        onClick={() =>
+                          ask({
+                            kind: 'stage5.review',
+                            label: 'stage5 全书验收',
+                            extra: null,
+                            mode: null,
+                            required_inputs: vm.reviewAction?.required_inputs,
+                            sid: vm.sid,
+                            ordinal: null,
+                          })
+                        }
+                      >
+                        跑全书验收
+                      </ActionButton>
                     </div>
                     <div className="border-b border-line-soft px-16 py-9">
                       <SevCounts counts={vm.sevCounts} />

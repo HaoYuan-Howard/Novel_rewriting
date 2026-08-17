@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
+import { errorBody, errorTitle } from '@/api/errors'
 import { qk } from '@/api/queryKeys'
 import { useChrome } from '@/hooks/useChrome'
 import { useJobs, useStartJob } from '@/hooks/useJobs'
@@ -21,6 +22,17 @@ export function ConfirmDialog() {
   const { confirm, closeConfirm, openDrawer } = useChrome()
   const [preparing, setPreparing] = useState(false)
   const [requiredValues, setRequiredValues] = useState<Record<string, string>>({})
+  /**
+   * 这一次确认为什么没发起。
+   *
+   * ⚠⚠ **必须有一个本地落点，不能指望「mutation state 自己会呈现」**：
+   * `before` 往往是别的组件持有的 mutation（挑深度那屏的 `setDeep`、闸门那条的
+   * `approve`），它的 error 在**那个组件**里，本框看不到；而 `start` 的 error
+   * 本框虽然看得到，却一行都没画。结果是后端已经 409 了，
+   * 框还开着、按钮还能点、**屏幕上一个字都没有** —— 用户只会反复点一个
+   * 花钱的按钮。发起失败必须被看见，这与 `U-00`（空白不等于没问题）是同一条。
+   */
+  const [failure, setFailure] = useState<unknown>(null)
   const start = useStartJob(confirm?.req.sid)
   const jobs = useJobs(confirm?.req.sid)
 
@@ -34,6 +46,7 @@ export function ConfirmDialog() {
     // A credential belongs to exactly one confirmation. Reopening even the
     // same action must never inherit the previous actor/reason silently.
     setRequiredValues({})
+    setFailure(null)
   }, [confirm])
 
   if (!confirm) return null
@@ -168,6 +181,18 @@ export function ConfirmDialog() {
               这本书已经有一个作业在跑（{running?.label}）。一本书同时只跑一个。
             </div>
           ) : null}
+          {failure ? (
+            <div
+              role="alert"
+              className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink"
+            >
+              <div className="font-semibold">没有发起 —— {errorTitle(failure)}</div>
+              <div className="prose-cn mt-3">{errorBody(failure)}</div>
+              <div className="mt-3 text-tag">
+                这一步没有执行，也没有产生费用。先按上面的原因处理，再重新发起。
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-10 border-t border-line-soft bg-sunken-2 px-22 py-13">
@@ -184,6 +209,7 @@ export function ConfirmDialog() {
             disabled={!planReady || !requiredReady || busy || preparing || start.isPending}
             onClick={async () => {
               setPreparing(true)
+              setFailure(null)
               try {
                 await confirm.before?.()
                 if (confirm.run) {
@@ -200,11 +226,15 @@ export function ConfirmDialog() {
                       confirm.after?.()
                       closeConfirm()
                     },
+                    // 没起来就把原因摆在框里，并且**不关框**：
+                    // 关掉等于把「没发起」演成「发起了」。
+                    onError: (error) => setFailure(error),
                   })
                 }
-              } catch {
-                // Mutation state owns the error presentation; most importantly,
-                // a rejected approval must not fall through to POST /jobs.
+              } catch (error) {
+                // 一个被拒绝的前置**绝不能**继续掉进 POST /jobs；
+                // 同时它失败的原因要落在本框里，`before` 的 mutation 在别的组件上。
+                setFailure(error)
               } finally {
                 setPreparing(false)
               }

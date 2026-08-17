@@ -28,6 +28,24 @@ export function GateBar({ screen }: { screen: ScreenName }) {
   // 有未知动作时不假装它免费
   const unknownSpawn = spawns.length > 0 && resolved.some((a) => a === null)
 
+  /**
+   * 确认这道闸门会不会动产物盘。
+   *
+   * ⚠ **`paid` 和 `writes_disk` 必须一起给**：`classifyAction` 在 `paid=false`
+   * 时接着看 `writes_disk`，缺格即画成「未标注」——而「未标注」的意思是
+   * **不知道它会不会写盘**（U-08）。s3 / s4 这种没有 spawn 的闸门我们其实完全知道：
+   * 确认只写 `_service/` 下的人工审批记录，产物盘由 CLI 独占（`R-11.3`）。
+   * 只给 `paid` 会把一个已知免费、不动产物的动作说成「不知道」，
+   * 而那正好稀释了这个信号本身要保护的东西。
+   * ⚠ 有 spawn 时折叠 spawn 的那一格；任一 spawn 缺格就**不给**，
+   * 让它照旧落回「未标注」——不拿 `undefined` 当 `false` 用。
+   */
+  const spawnWrites = spawns.length === 0
+    ? false
+    : resolved.every((a) => a?.writes_disk !== undefined)
+      ? resolved.some((a) => a?.writes_disk)
+      : undefined
+
   const off = view.done || view.blocked || approve.isPending || spawns.length > 1
 
   return (
@@ -46,7 +64,12 @@ export function GateBar({ screen }: { screen: ScreenName }) {
             action={
               unknownSpawn
                 ? null
-                : { kind: 'gate.' + view.key, extra: null, paid: willSpend }
+                : {
+                    kind: 'gate.' + view.key,
+                    extra: null,
+                    paid: willSpend,
+                    writes_disk: spawnWrites,
+                  }
             }
             disabled={off}
             disabledReason={
