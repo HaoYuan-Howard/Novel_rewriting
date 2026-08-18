@@ -1,9 +1,11 @@
 # Stage6 产物与质量契约
 
 Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选，随后由两名互不可见的
-匿名 judge 独立完成实质矛盾核对与吸引力排序，最后由人定稿。只有当
-`reference_boundary` 的 evaluator profile 与 dataset/model/prompt/schema/decoder 全指纹
-相同、两名 judge 同结论且证据闭合时，合并决议才能自动 PASS/FAIL。
+匿名 judge 独立完成实质矛盾核对与吸引力排序，最后由人定稿。
+
+⚠⚠ **合并决议恒是带证据的 `UNVER`**：本仓没有把 judge 结论升级成自动 `PASS`/`FAIL` 的装置
+（evaluator profile 已于 2026-08-18 整批删除）。判官的价值是**证据**——逐判官的 verdict、
+理由与逐字定位——不是绿灯。
 
 对应需求：`docs/BACKEND_CONTRACT.md` 的 R-9。
 
@@ -57,11 +59,12 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 
 `ApprovedHook = Candidate + origin='human' + resolution`。`resolution` 必须记录自报
 `actor`（不是认证身份）、非空 `reason`、定稿文本的完整 `subject_sha256`、
-`calibrated_pass|human_verification` 基础和可用的语义审判序号。`approach` 还可为
+恒为 `human_verification` 的判定基础，以及可用的语义审判序号
+（`semantic_review_seq` 可空——「人在零证据下拍的板」与「人读了第 3 轮判官证据」必须分得开）。`approach` 还可为
 `human_edit`；从既有候选编辑时保留其 approach，没有候选前身才写 `human_edit`。
 `hook_edit.json` 的 `subject_sha256` 必须绑定经过本书标点、引号与分段归一链后的定稿文本；
-校验发生在 `run_apply_edit` 写盘前，并复用与普通候选批准相同的 calibrated FAIL/
-历史 FAIL 闸，不能用 raw 上传字节的哈希或普通人工说明绕过。
+校验发生在 `run_apply_edit` 写盘前，并复用与普通候选批准相同的字节绑定闸，
+不能用 raw 上传字节的哈希绕过。
 
 `HookProvenance.params` 除初始 `max_tokens` 外，还冻结单候选重试的 max tokens、固定一次上限、
 `low` effort 与 `thinking=false`；`candidate_retries[]` 逐条保存 approach、失败规则/证据指纹、
@@ -138,32 +141,30 @@ HARD 数严格下降且文本不与另两条重复时才替换该候选和整组
 
 ## 五、匿名质量审判与批准
 
-默认付费路上的第一个门是 `require_enabled('reference_boundary', ...)`；没有 profile、
-能力未达门或任一指纹漂移都在 transport/cache/ledger 前终止，未发请求。显式
-`--advisory` 是唯一例外：它会用专用的无 ground-truth 哨兵冻结当前请求 surface 并照常运行
-A/B，但合并决议一律 `automated=false` / `UNVER`。advisory 的评论、证据和质量排序必须显示在
-报告中，不能因为未校准而伪装成“0 份当前审判”，也不能参与自动 PASS/FAIL。通过校准门后，
-同一份匿名材料分别以 A/B 角色后缀发给两名 judge，候选标签都是 `T1/T2/...`。
+本节点没有 flag（`--dry-run` 只打印下发面）。运行时先冻结这一次的请求身份
+`EvaluatorFingerprint`（`model` / `prompt_sha256` / `schema_sha256` / `decoder_sha256` 四格，
+**没有 dataset**），然后把同一份匿名材料分别以 A/B 角色后缀发给两名 judge，
+候选标签都是 `T1/T2/...`。评论、证据与质量排序必须显示在报告中，不能因为结论是 `UNVER`
+就伪装成“0 份当前审判”。
 validator 必须确认：
 
 1. `reviews` 与 `ranking` 恰好覆盖全部匿名标签，且无重复；
 2. 每条矛盾 evidence 是对应候选的连续原字节；唯一空白差异可回取成原字节；
 3. 所有 `complete` 且无矛盾的候选排在矛盾或 uncertain 候选之前；
 4. 六维分数都在 0~10；总分由代码计算；
-5. 当前 hook 文本集合与审判的文本 sha1 / 决议 SHA-256 集合一致，
-   semantic 产物新鲜，且其 evaluator 指纹仍与当前 profile 相同。
+5. 当前 hook 文本集合与审判的文本 sha1 / 决议 SHA-256 集合一致，且 semantic 产物新鲜。
 
 批准动作 `stage6.approve --pick N --actor <id> --reason <why>
 --subject-sha256 <hash>` 在归档和写盘之前执行三道硬检查：
 
 - 该候选没有机械 HARD；
-- 请求里的完整 SHA-256 与候选当前字节一致，不允许旧页面误批；
-- 当前合并决议不是校准 FAIL，也不存在与本文本绑定的历史校准 FAIL。
+- 请求里的完整 SHA-256 与候选当前字节一致，不允许旧页面误批。
 
-校准双盲 PASS 记为 `calibrated_pass`。缺审判、profile 缺失/漂移、文本未审、
-coverage 不足、两名 judge 分歧或缺证据均降为 UNVER，进 `verification` 清单；
-人可在逐项核对后以上述 actor/reason/hash 路径记 `human_verification`。但已校准的
-FAIL/实质矛盾只能改字形成新主体，不能由普通定稿绕过。
+⚠ 这里曾有第三道：「当前合并决议不是校准 FAIL，也不存在与本文本绑定的历史校准 FAIL」。
+它的输入是 automated FAIL，随自动放行门一并消失。**⇒ 没有任何机制会替人否决一个候选。**
+全部语义结论进 `verification` 清单，人逐项核对后以 actor/reason/hash 路径记
+`human_verification`；矛盾线索仍逐条呈现（三条候选各一行，凭据键 `<候选>:<文本指纹>`，
+可逐条 wontfix），但它们**报**而不**拦**。
 
 `--revalidate --actor <id> --reason <why>` 与 `--apply-edit` 不能互换：前者对活动 `.INVALID`
 重建派生字段、重判并强审计提升，保留原 prompts/model/inputs 与生成轮次，记录 raw/canonical

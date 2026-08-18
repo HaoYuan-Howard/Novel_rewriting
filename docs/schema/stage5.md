@@ -187,29 +187,23 @@ rejected、wontfix、trim audit 与 trim resolution 均从 v1 起步。
 
 ### 1.2 归一链本身（**代码做的后置条件，不落产物**）
 
-顺序是 `归一 → profile 精确绑定 → 结构化同槽收缩 → 再归一 → 确定性回归 → 双盲语义裁决 → 校验`，
-所有门与落盘看的是同一份最终字节；
-两遍的账**相加不覆盖**（只留后一份会让「首稿修了 9 处引号」凭空消失）。
+顺序是 `归一 → 校验`，两遍的账**相加不覆盖**（只留后一份会让「首稿修了 9 处引号」凭空消失）。
 
-`trim_equivalence` 的 profile 按该能力自己的 dataset/model/prompt/schema/decoder 五项指纹
-逐项全等匹配；profile 缺失、未启用或漂移时，收缩生成器与 judge 都是 **0 次调用**。此时
-保留 pretrim，先落 `stage5/trim_audit_chNN.json`（before/after hash 相同、`adopted=false`）并进入
-`verification`。profile 可用时，候选仍必须保持 producer 的 slot 集合恰好一次；代码按 producer
-顺序组装并重新归一，然后真实重算人物、地点、因果、时间、结尾 claims 与
-`trim_regressions`。机械退化会在 judge 前整轮弃用。只有 A/B 两个缓存身份独立的盲评同时
-`PASS`、各自证据闭合，且合并结论为 automated PASS，才采用候选；FAIL、UNVER、分歧、
-证据越界或调用失败一律回滚。`TrimAudit.semantic.subject_key` 必须等于候选 `after_sha256`，
-且 semantic 出现时必须同时冻结完整 `evaluator_fingerprint`，因此人工复核可按同一字节身份
-与同一校准 surface 复算 claims、span 与最终采用决定。
+⚠⚠ **这里曾有一条收缩臂**：`profile 精确绑定 → 结构化同槽收缩 → 再归一 → 确定性回归 →
+双盲语义裁决 → 采用候选`。它由 `trim_equivalence` 的 evaluator profile 开闸，而那道闸从未在
+任何宿主上打开过；随 profile 装置于 2026-08-18 整臂下线。**现在没有任何自动收缩路径**：
+超上限章零调用落 `stage5/trim_audit_chNN.json`（四格：`output_ordinal` / `mode` /
+`before_sha256` / `reason`）并进入 `verification`。
 
 人工销账只允许 `action=retain_pretrim`：运行
 `stage5.review --retain-pretrim --chapters N --actor <自报身份> --reason <理由>` 会写独立的
 `trim_resolution_chNN.json`，绑定当前 versioned trim audit **整文件 SHA-256**、`mode`、
 `stage5/<mode>/chNN.json` 路径及其确定性正文 SHA-256，并要求该正文仍精确等于 audit 的
-`before_sha256`；同时冻结 `after_sha256`。actor 仅是自报身份，不是认证身份。任何 audit 字节、
+`before_sha256`。actor 仅是自报身份，不是认证身份。任何 audit 字节、
 正式章路径/正文或根哈希变化都会让旧 resolution 变 stale，verification 重新出现；再次决定时旧 resolution 进入
-`stage5/_rounds/`，不得覆盖历史。该路径不改正文，且 schema 没有任何采用候选的 action；
-收缩候选仍只能由校准的双判官自动 PASS 后采用。
+`stage5/_rounds/`，不得覆盖历史。该路径不改正文，且 schema 没有任何采用候选的 action——**自动的那条也没有了**，
+所以 `retain_pretrim` 是超上限章唯一的销账口（另一条出路是 `--apply-edit` 改写整章，
+那会产生新的一章、也就是新的 audit）。
 
 ⚠ **归一必须跑在收缩【之前】**，这一条是实测出来的：`normalize_paragraphs` 会把单换行改成空行分段，
 **它往文本里加字符**，而 `budget_chars` 的口径含空白。曾有一章归一前 1408 字（未触发收缩，正确），
@@ -699,7 +693,7 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 |---|---|---|
 | `ChapterResponse` 载体门 | 任一请求缺槽、重槽、多槽、未知槽，或 `finish_reason=length` | 响应校验失败；不按模型数组顺序拼接，不产生正常/INVALID 章产物 |
 | `_write_group` 收尾 | 某章没拿到正文 | **显式终态**（多章一批时提示长列表 wind-down） |
-| `trim_to_fit` | 超上限 | profile 未精确绑定时 **0 次付费调用**并保留 pretrim；绑定后生成同槽结构化候选，机械回归失败不调用 judge，校准 A/B 双盲只有同 PASS 且证据闭合才采用。所有回滚路径都落 durable `trim_audit` 并转 `verification` |
+| `_over_length_audit` | 超上限 | **0 次调用**，正文原样保留，落 durable identity `trim_audit` 并转 `verification`。⚠ 该函数签名里没有 `client`——本层不再有第二条付费回路，它在结构上就花不了钱 |
 | `_revise_regression` | 修订轮把上一轮弄坏 | 整轮弃用 + **一次 no-cache 重采样**（同 prompt 走缓存只会拿回同一份坏稿）+ 仍坏则**保留上一轮**，被驳回的稿留 `.rejected.json` |
 | 落盘闸门 | 有 `errs` | **不覆盖已有成稿**，问题稿存 `.INVALID`，**一章失败不中断整批** |
 | `assemble_book` | 同一章两条臂都有成稿 | **显式终态** |

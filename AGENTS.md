@@ -162,8 +162,10 @@ tests/contracts/tools/novel/docs 开头的仓内路径必须存在。文档引�
 - 不能用 mock、空数组、普通 404 或本地存储伪装尚未提供的后端能力；类型同型只证明适配器对齐，
   联调要走通「页面动作 → API 方法 → HTTP 路由 → 服务实现 → 最终产物」并检查重启后的状态。
 - 语义判据在没有标定过真值前，倾向 `unver` / 人工裁决；**没有 ground truth 时多一条语义判据可能更危险**。
-  当前没有标定过的 evaluator profile，`stage6.semantic` 会 exit 2，别造假 profile 顶上，走
-  `human_verification` 出路。
+  本仓因此**不设**自动放行门：`stage6.semantic` 的双盲判官只产**带证据的 UNVER**，
+  收口一律走 `stage6.approve` 的 `actor + reason + 完整 subject SHA-256`。
+  不要为了「让它变绿」去恢复 evaluator profile 那套装置——它已整批下线，
+  连同 stage5 的收缩臂（超上限章现在零调用转人工）。
 - commit 用中文 Conventional Commit 主题（`feat(stage6): …` / `fix(cli): …` / `docs: …`），按 stage
   或子系统收敛。PR 要说明行为与契约影响、列出跑过的验证命令、引用 R/Q/B 或 TODO 编号、带 UI 截图；
   **付费或真实 LLM 路径的验证必须显式点名**，不能混在"测试已过"里。

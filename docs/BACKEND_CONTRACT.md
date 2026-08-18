@@ -7,9 +7,11 @@
 本文件冻结前后端开发结束时的契约、产品规格、判据与编号口径。正文中的 `待建` / `无守卫` 只用于
 保留追踪关系；它们的现行处置以 `docs/REQUIREMENTS.md` 为准。
 
-TODO-24 的长期真值积累与校准**不阻塞人工或 agent-assisted 工作流**：agent 仍可执行节点、读取
-证据、辅助复核、修订并重跑，人可沿现役 hash-bound 核验路径收口；它只阻止未校准语义能力被
-无人值守地自动放行为 `PASS`。agent 判断本身不是 ground truth，证据不足时仍必须保持 `UNVER`。
+**本仓没有自动放行门。** 语义审判的合并决议恒是带证据的 `UNVER`：两名互不可见的 judge
+各自给 verdict、理由与逐字证据，合并只做证据并集与人读理由，不产生任何自动 `PASS`/`FAIL`。
+唯一的收口是 actor / reason / 当前字节完整 SHA-256 绑定的 `human_verification`。
+这不是「还没做」——那套要求双人独立标注、第三方仲裁与三轮 A/B 校准的 evaluator profile 装置
+已于 2026-08-18 整批删除（§十）。agent 判断同样不是 ground truth；证据不足时保持 `UNVER`。
 
 ---
 
@@ -1085,7 +1087,7 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 | **B-08** | 全书抽取 | 只收结构性规则 · 规则描述必须连「怎么运作」一起写 · 秘密的四类收录判据 · 冲突阶段名要能定位 · 弧线两个字段的形状。**另加五个枚举**（人名区分度 / 规则类型 / 称谓场合 / 弧线变化类型〔开放枚举〕/ 叙述人称）——已有常量、两处 prompt 已插值，**但仍无任何校验**。<br>⚠ `叙述人称` 的取值面 2026-08-10 收正成 `first｜second｜third`：原型写的是 `first｜third_limited｜omniscient`，**把人称与限知/全知两个轴塞进了一个字段**，而且表达不了第二人称（语料里有一本真的第二人称小说）。限知/全知**不在这一层另立字段**——stage3 的 `narrative_distance`/`interiority` 已经在记它 |
 | **B-09** | 文风 | 必须可迁移（专名探针抓不到「主角是六岁女童」这种）· 逐章只描述本章可见的声音变化 · 每一维要写成可执行规则 · 不得推测前后文 · 正文与文案素材分区不得混用。`cliche` 九词表判据已退役，**没有任何现役消费方** |
 | **B-10** | 写作两条臂 | 不把潜台词说破 · 按给定的叙述视角写（换人时声音也要换）· （开卷）表层修饰尽量原样留住 · （开卷）禁止整段照抄〔= `B-03`〕 |
-| **B-11** | 修剪 | **已关闭（TODO-24）**：同槽结构化候选先重算人物/地点/因果/时间/结尾 claims，并跑既有保真与事件顺序回归；机械失败 0 次 judge。随后只有精确绑定 profile 的 A/B 双盲同 PASS 且证据闭合才采用，其余保留 pretrim 并进入 `verification`。 |
+| **B-11** | 修剪 | **已关闭（2026-08-18 收缩臂整臂下线）**：曾经的关闭方式是「同槽结构化候选 + 确定性 claims 对账 + 校准 A/B 双盲同 PASS 才采用」，而那道校准闸从未在任何宿主上打开过。现在**没有任何自动收缩路径**：超上限章零调用落 identity `TrimAudit` 转 `verification`，由人 `--retain-pretrim` 销账或 `--apply-edit` 改写整章。 |
 | **B-12** | 文案 / 改名 | 不说破任何答案（字面探针**自陈判别力为零，别当门用**）· 只引用正文真实出现过的句子〔标「查不了」〕· 不歪曲人物关系〔标「查不了」〕· 新名贴合时代与性别气质 · 同辈共用字、兄弟姐妹只差一字等**跨名字**结构关系。<br>⚠ 单个旧称呼内部的数字、排行、亲属、头衔标记已由 `R-10.12b` 确定性守住；本 B 只保留无法靠字面不变量判定的语感与跨名关系。 |
 | **B-13** | 开卷写作 | **覆盖面缺口**：user 消息里发「现场/回忆/转述」标签，而 system prompt 里**没有任何解释**（闭卷那条臂有）。补它是内容变更、效果离线验证不了 |
 
@@ -1234,7 +1236,7 @@ HARD / INFO / 闸门 / 度量的 R 必须被注册 Rule 覆盖；每条 Rule 必
 - metric 与 METRIC 双向一致；unver 不进自动修复；词表规则必须有 baseline。
 - repair 非 NONE 只属于 stage5 且必须有 directive；NONE 时 directive 必须为空。
 - fix 指向同层真实节点与真实 flag，费用可由唯一入口推导。
-- semantic 判据只在 stage5/stage6，且两层都必须非空。
+- semantic 判据只在 stage6，且必须非空（`stage5.semantic` 于 2026-08-17 整节点下线）。
 - stage4/6/7 每条 HARD 在 `tests/hard_cases.py` 有真实会红的反例；stage0/1 的 warning、编码、kind、
   新增 HARD 与阈值带由 `tests/test_ingest_fixtures.py` 双向覆盖。
 - ⚠ **一条 HARD 有多个判定分支时，「红过一次」不等于每一支都红过。** `structure_units` 的四支里
@@ -1279,7 +1281,8 @@ npm --prefix web run build
 | 2026-08-15 | Stage6 开篇文案质量 A/B（12 次付费调用。**原始响应目录与两个探针脚本均已删除，本行是唯一存活记录**） | 改版最佳候选匿名主编均分 8.78 对当前定稿 4.88（+3.90/10），实验最佳 3/3 获胜 ⇒ 现役 stage6 采用三策略 `source_architecture` / `payoff_preview` / `scene_punchline`、一次调用产三候选、六维固定权重（阅读欲 30% + 正文声线 20% + 具体场面 15% + 期待承诺 20% + 文案技法 15% − 摘要感 10%）。补测「单份直出」均分 6.60 对三候选最佳 8.75（−2.15，仅 1/3 获胜），且三条单份都没有实质事实矛盾 ⇒ 失败原因是**创作搜索方差**，不是校验器误杀 ⇒ **想为省钱改成单份直出，必须先拿新样本推翻这一条**。放开剧透与体裁自由的同时保留实质矛盾硬闸，依据是那条虚构了「会改变故事理解的结果」却仍得 7.55 原始质量分的候选 |
 | 2026-08-16 | Stage5 文风漂移闭环标定（3 本 65 章，calibration 2 本 / 留出 1 本，`tools/calibrate_style_corpus.py`。**源盘面已删，本行是唯一存活记录**） | 够格 `UNIQUE` 自动付费修的只有两族：`dialogue_halved`（前件收窄到 shallow、计划无净压缩、源章至少 4 句，且只许写回眼前已有台词）与 `layout_drift`（只插换行，不改一个字）。`dialogue_ratio_drift`（命中 19/39 与 11/26，而同批 shallow 章对白**句数**中位仍是 1.00×）、`band_drift`、`para_len_drift`、`dialogue_fewer` / `dialogue_broken` 一律 `INFO + FREE` 进待人工——**「比例偏了」不等于「台词丢了」，按比例自动加台词或删叙述会把一个真实读数变成错误修法**。`short_run_report` 保持 `metric`：本批源文 p95（5.47 / 1.06 每千字）不足以替代冻结的 163 本体裁基线 7.68，因此不调线。执行落点是 `contracts/judges/stage5.py` 的注册表与 `novel/stages/stage5/write.py::revise_targets`，不靠文档约定；要扩大 `UNIQUE` 范围必须新增未参与定线的真实修订对，并同时交付内容回归与目标指标变化 |
 | 2026-08-16 | 代码灾备恢复演练 | 384 个文件 / 5,062,923 字节的 code snapshot，归档 SHA-256 `c303064a565ecad877d76b9bb488ae2a1c0d687052edfa53f7d1f898d2e088be`；空目录恢复完成归档内与落盘后两轮哈希核验，根 `.env`、`outputs/`、`Test_data/`、`.llm_cache/` 与 `settings.local.json` 均未进入归档，`tests/test_fixture_registry.py` 在恢复目录 6 passed。**验收范围只有代码**：版权语料与付费产物按同日裁决不备份，丢失即需重新取语料并重新付费生成 ⇒ 不得把代码恢复能力宣传成数据灾备能力。操作规程见 README「备份与恢复」 |
-| 2026-08-17 | `stage5.semantic` 整节点下线裁决 | 实跑证据而非偏好：① 本项目重构**不跨章重组**（实测 18/18 章 `from_source_ordinals == [自身]`）⇒ 书级剧透那条主风险面在计划形态上几乎不存在；② 同一本书上书级语义判官 18 章里 5 章命题抽取返回 uncertain、8 条 secret 全部判不动，而 stage2 的确定性判据加上成书逐字对账的「上游 info 下游投影」（**0 次调用**）给出了确定结论；③ 成本上它占单本实付调用的 54%、输出 token 的 55%。`stage6.semantic` 保留（2 次调用、1.7% token，实测直接纠正过一次定稿）。**下线的是节点不是能力**：要恢复须连同 `contracts/schema/stage5.py` 的 `SemanticReview` 一族、stage5 的 semantic 模块（已随节点删除）与两条判据一起恢复 |
+| 2026-08-17 | `stage5.semantic` 整节点下线裁决 | 实跑证据而非偏好：① 本项目重构**不跨章重组**（实测 18/18 章 `from_source_ordinals == [自身]`）⇒ 书级剧透那条主风险面在计划形态上几乎不存在；② 同一本书上书级语义判官 18 章里 5 章命题抽取返回 uncertain、8 条 secret 全部判不动，而 stage2 的确定性判据加上成书逐字对账的「上游 info 下游投影」（**0 次调用**）给出了确定结论；③ 成本上它占单本实付调用的 54%、输出 token 的 55%。`stage6.semantic` 保留（2 次调用、1.7% token，实测直接纠正过一次定稿）。**下线的是节点不是能力**：要恢复须连同 `contracts/schema/stage5.py` 的 `SemanticReview` 一族、stage5 的 semantic 模块（已随节点删除）与两条判据一起恢复。⚠ 保留下来的那个节点，其**自动放行装置**已于次日（2026-08-18）另行下线，见下一行 |
+| 2026-08-18 | evaluator profile 装置与 stage5 收缩臂整批下线 | 裁决依据是「它从未被标定过，而那条分支一次都没有走通过」：`stage6.semantic` 的默认路在每台宿主上都是 exit 2（`require_enabled` 在 transport 前终止），stage5 收缩臂的 `trim_equivalence` 闸同理——盘上 14 份 `trim_audit` 的 reason 全是「未发起收缩调用或语义调用」。⇒ 删 `EvaluatorProfile` / `CapabilityMetrics` / `GroundTruthManifest` / `GroundTruthCase` 与八类能力枚举、`novel.quality.profile`、四个 `tools/` 校准件（3254 行）及其测试；`SemanticDecision.verdict` 收成 `Literal['UNVER']`，`hook_semantic_contradiction` 由 HARD 降为 `unver`（它命中 Finding 的两条路都要求 automated FAIL，已不可达；继续挂 HARD 只能靠伪造反例或给双向守卫开豁免口）。**留下来的是判官不是闸门**：双盲 A/B 照跑，产带证据的 UNVER 与匿名质量排序。⚠ **产品语义变了**：过去带校准 FAIL 的候选会被永久拒绝，现在没有任何机制会替人否决一个候选，横在「有矛盾的文案」与成书之间的只剩人读判官证据这一道（R-9.6 / R-9.19 / R-10.14 已同批改写）。⚠ 三个产物版本随之破坏：`STAGE6_SEMANTIC` v2→v3（**刻意不登记 migration**——把一份 `automated=true` 的旧 PASS 迁成普通 UNVER 是改写历史）、`STAGE5_TRIM_AUDIT` v1→v2、`STAGE5_TRIM_RESOLUTION` v1→v2 ⇒ 盘上三本书的这三层一律拒读，按同日裁决作废，后续新书走新 schema 重跑。验证：全量非 corpus `pytest -q` 0 failed，`validate_skill.py` PASS，`preview` / `state` / 直接读旧产物三条 0 成本路径逐条核对。**本次没有任何付费实证** |
 | 2026-08-18 | 语料闸 251 条红逐条定性（`-m corpus` 全量，`NOVEL_OUTPUT=outputs`，盘上 3 本） | **收官 898 条：800 通过 / 16 失败 / 82 跳过**（基线 646 / 251 / 1）。四类根因：① **127 条**是往返测试在空沙箱里撞写盘口后置条件——`_assert_self_fresh` 把三态里的 `unknown` 与 `stale` 压成「不是 fresh」，而空沙箱里每条上游边恒是 `ghost`。**生产代码没动**：git 考古证明这道闸防的是 `stale/consumed_changed`，而 `unknown` 那一半也确实抓到过 `consumed_undeclared`（`novel/consumption.py` 里 `STAGE2_GLOBAL_EDIT` 那行投影就是被它逼出来的）⇒ 改测试装置，只在往返那一条上收窄成「只放行 `unknown` 家族」，并配一条两侧各钉一次的守卫。② **5 处守卫漂移**，其中 4 处同源于 `R-5.5` 那次契约转向（详见 `docs/LESSONS.md` §21 第三形状）。③ **103 条**是语料链条真过期：`stage4/writer_context.json` 被本轮保真点修复重生成，两本书的 stage5 成稿相对它 `consumed_changed`（它们是照空下发面写的）、三本书的 `stage7/name_map.json` 同理。改成由生产落点现算的声明式前提；单本用例改挑「链条当前」的那一本而不是排序第一的那一本，因此 24 条是真跑而非跳过。④ 剩余 16 条见 `docs/REQUIREMENTS.md` TODO-21。⚠ 现有 3 本都不是「用最终代码从来源重建」的，**不能**为 TODO-21 提供通过数字 |
 
 证据解释纪律：阶段性 smoke 会被后续完整验收覆盖；历史报告中的“未完成”不能越过
