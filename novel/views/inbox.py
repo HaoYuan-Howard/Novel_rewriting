@@ -424,7 +424,12 @@ def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[Inbox
 
 
 def _hook_verification_items(novel_dir, code: str) -> list[InboxItem]:
-    """Stage6 UNVER/profile drift can be closed by a hash-bound human choice."""
+    """每条候选都等着一次 hash 绑定的人工核验——本仓没有自动放行门。
+
+    ⚠ 这里曾按 `assessment.human_resolvable` 过滤。`semantic_state` 收成
+    `unreviewed` / `uncertain` 两态之后那个谓词恒真，过滤是空转；
+    **两个状态都要人看**，差别只在「没人判过」还是「两名判官的带证据结论等着人读」。
+    """
     from novel.stages.stage6 import semantic
 
     store = ArtifactStore(readonly_ctx(novel_dir, 'stage6.hook', code))
@@ -448,8 +453,6 @@ def _hook_verification_items(novel_dir, code: str) -> list[InboxItem]:
             continue
         seen.add(subject)
         assessment = assessments[semantic.text_sha1(candidate.text)]
-        if not assessment.human_resolvable:
-            continue
         out.append(InboxItem(
             kind='verification', stage='stage6', chapter=None,
             rule=f'reference_boundary:{candidate.approach}',

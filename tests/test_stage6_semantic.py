@@ -494,7 +494,6 @@ def test_a_stale_or_mismatched_review_set_makes_every_candidate_unreviewed(monke
         approach='payoff_preview', text=edited_b, findings=[])
     assessments = semantic.current_assessments(_Store(), current)
     assert {row.state for row in assessments.values()} == {'unreviewed'}
-    assert all(row.human_resolvable for row in assessments.values())
 
 
 def test_downstream_requires_the_current_approved_bytes(monkeypatch):

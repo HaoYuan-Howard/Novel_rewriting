@@ -132,9 +132,10 @@ class CandidateAssessment:
     #: ⚠ 这里曾有 `selectable`（`state == 'clear'`）与 `historical_fail`。
     #: `clear` 与 `contradiction` 都只由 automated PASS/FAIL 产生，自动放行门下线后
     #: **两个状态都不可达**，`state` 只剩 `unreviewed` / `uncertain`。
-    @property
-    def human_resolvable(self) -> bool:
-        return self.state in {'unreviewed', 'uncertain'}
+    #: ⚠ 同一批里还曾有 `human_resolvable`（`state in {'unreviewed', 'uncertain'}`）。
+    #: 两个状态都删光之后它恒真——而一个恒真的「可人工消解」跨过 API 边界，就是在
+    #: 界面上画一道**永远开着的闸**，与恒假的 `selectable` 是同一种误导。⇒ 一并删掉。
+    #: 要判「这条候选还用不用人看」，读 `state` 本身（两个值都要人看，理由不同）。
 
 
 def text_sha1(text: str) -> str:

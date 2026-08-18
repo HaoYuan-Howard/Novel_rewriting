@@ -24,7 +24,7 @@ type Tab = 'chars' | 'rels' | 'rules' | 'secrets' | 'arc'
  * 全局设定。人物、关系、世界规则、秘密、弧线 —— 抽对了吗、抽全了吗。
  *
  * 两条最要紧的：
- *   · 剧透开关是**部分遮蔽**，服务端下发的那句 partial_mask_note 必须常驻显示，
+ *   · 剧透开关是**部分遮蔽**，服务端下发的那句 spoiler_disclosure.notice 必须常驻显示，
  *     不能收进 tooltip：一个没标注的部分遮蔽，会被当成完整遮蔽用。
  *   · secrets 是空数组 ≠ 这本书没有秘密。
  */

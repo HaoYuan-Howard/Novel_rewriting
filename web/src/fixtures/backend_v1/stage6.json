@@ -53,8 +53,6 @@
    "quality": null,
    "quality_score": null,
    "quality_rank": null,
-   "selectable": false,
-   "human_resolvable": true,
    "approved": true
   },
   {
@@ -123,8 +121,6 @@
    "quality": null,
    "quality_score": null,
    "quality_rank": null,
-   "selectable": false,
-   "human_resolvable": true,
    "approved": false
   },
   {
@@ -193,8 +189,6 @@
    "quality": null,
    "quality_score": null,
    "quality_rank": null,
-   "selectable": false,
-   "human_resolvable": true,
    "approved": false
   }
  ],

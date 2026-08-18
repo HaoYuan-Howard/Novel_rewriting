@@ -79,6 +79,29 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
 验收：所有被测产物由现役写盘路径生成；完整套件的通过/跳过/失败数、每条 skip 理由和上述付费
 实验结论一并记录，未完成项不因代码位或预览工具存在而销账。
 
+### TODO-28 · 前端 backend_v1 fixture 与 API 模型之间没有任何对账
+
+`web/src/api/mock.ts` 把 `web/src/fixtures/backend_v1/*.json` 当**现役数据源**用
+（那段注释自己写着「现役读的是这一批 —— 与真后端同一形状」），但**没有任何东西在核这句话**：
+`web/scripts/check-seams.mjs` 只管「谁可以读它」，不管它长什么样。于是后端每破坏一次形状，
+mock 模式就与真后端多分家一点，而三条缝检查全绿。
+
+立条目时实测：15 份可映射 fixture 里 **13 份**已通不过当前 `contracts/schema` 模型
+（六份 `check_stage*.json` 都带已删的顶层 `retired`；`stage4_ch3.json` 缺 31 项、
+`stage7*.json` 各多 6 项；`stage6.json` 连 `candidates[].approach` 的取值面都变了）。
+⚠ 这个数字是**问题规模**不是进度分数——销账方式是删掉本条目，不是把它改小。
+另两份刻意排除、不在对账面内：`enums.json`（`/api/enums` 刻意无响应模型）与
+`style.json`（mock 用 `LegacyStyle` 读、经 `currentMockStyle()` 转成现役形状，**故意**的旧形状）。
+
+- [ ] 从一本走完 stage0～stage7 的书重抓整套 backend_v1 fixture。
+- [ ] 同批补一条「fixture ↔ `contracts/schema` 模型」的对账守卫。`StrictModel` 的
+  `extra='forbid'` 会自动抓住已删字段，所以真正要留心的是**映射表本身的完整性**：
+  必须断言「表的键集 == 目录里的 json 文件集」，否则新增 fixture 会静默漏登记，
+  这条守卫就退化成只守老文件（同一形状的漏网见 `docs/LESSONS.md` 第 21 条）。
+  两份排除项要在表里显式登记为排除并写明理由，不能靠「忘了写」实现豁免。
+- [ ] 顺序约束：**只能在新书首跑之后做**。重抓需要盘上有一本完整的书，而现在产物已全批清空
+  ⇒ 现在就加守卫等于制造一片必须靠 xfail/skip 压住的红，那是本仓明令禁止的洗绿形态。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。

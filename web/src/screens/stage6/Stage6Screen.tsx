@@ -143,7 +143,7 @@ export function Stage6Screen() {
                     reason={reason}
                     onActor={setActor}
                     onReason={setReason}
-                    note="定稿会同时绑定当前候选的 SHA-256。缺 profile 或双盲 UNVER 可由这条人工 resolution 消解；已校准的 FAIL/实质矛盾不可绕过。"
+                    note="定稿会同时绑定当前候选的 SHA-256。服务端不替人否决任何一条候选：矛盾线索只呈现不阻断，核验的责任在你这一侧。"
                   />
                   <div
                     className="grid gap-14"
@@ -153,10 +153,7 @@ export function Stage6Screen() {
                       const on = picked === c.index
                       const mechanicallyBlocked = c.findings.some((f) => f.sev === 'hard')
                       const approvable =
-                        !mechanicallyBlocked &&
-                        c.human_resolvable &&
-                        !!actor.trim() &&
-                        !!reason.trim()
+                        !mechanicallyBlocked && !!actor.trim() && !!reason.trim()
                       return (
                         <div
                           key={c.index}
@@ -250,11 +247,9 @@ export function Stage6Screen() {
                                 ? '有机械 HARD · 不可定稿'
                                 : !actor.trim() || !reason.trim()
                                   ? '先填身份与理由'
-                                  : !c.human_resolvable
-                                    ? '当前结论不可消解'
-                                    : on
-                                      ? '人工核验后定稿'
-                                      : '定这一条'}
+                                  : on
+                                    ? '人工核验后定稿'
+                                    : '定这一条'}
                             </button>
                           </div>
                         </div>

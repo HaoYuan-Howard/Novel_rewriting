@@ -83,7 +83,6 @@ def test_missing_quality_review_is_visible_and_still_needs_a_human(box):
     """缺审不能默认放行，但必须保留明示的人工 verification 路。"""
     v = stage6_view(box.root, box.sid)
     assert all(candidate.semantic_state == 'unreviewed' for candidate in v.candidates)
-    assert all(candidate.human_resolvable for candidate in v.candidates)
     assert all(len(candidate.subject_sha256) == 64 for candidate in v.candidates)
     assert all(candidate.quality is None and candidate.quality_rank is None
                for candidate in v.candidates)

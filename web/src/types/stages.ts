@@ -808,6 +808,9 @@ export interface HookCandidate {
     * `unreviewed` = 没有可用的当前审判；`uncertain` = 判过、有证据、但服务端不替人盖章。
     * ⚠ 曾有 `clear` / `contradiction` 两个取值，它们只由服务端的自动放行门产生，
     * 而那套装置已整批下线 ⇒ 两个都不会再出现。
+    * ⚠ 随之删掉的还有两格布尔：`selectable`（「可直接定稿」，收成两态后恒 false）与
+    * `human_resolvable`（「可由人工消解」，恒 true）——一条永远走不通的捷径与一道
+    * 永远开着的闸。**每一条候选都要人显式核验**；要判还用不用人看，读这一格本身。
     */
   semantic_state: 'uncertain' | 'unreviewed'
   semantic_reason: string
@@ -815,12 +818,6 @@ export interface HookCandidate {
   quality: HookQualityScores | null
   quality_score: number | null
   quality_rank: number | null
-  /**
-    * 当前结论可由显式人工 resolution 消解。
-    * ⚠ 这里曾有一格 `selectable`（「校准双盲 PASS，可直接定稿」）。自动放行门下线后
-    * 服务端不再下发它——**每一条候选都要人显式核验**，界面上不该有那条捷径。
-    */
-  human_resolvable: boolean
   /** 这一条是不是当前定稿 */
   approved: boolean
 }

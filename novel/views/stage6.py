@@ -63,8 +63,7 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
             quality=(assessments[semantic.text_sha1(c.text)].review.quality
                      if assessments[semantic.text_sha1(c.text)].review else None),
             quality_score=assessments[semantic.text_sha1(c.text)].quality_score,
-            quality_rank=assessments[semantic.text_sha1(c.text)].quality_rank,
-            human_resolvable=assessments[semantic.text_sha1(c.text)].human_resolvable)
+            quality_rank=assessments[semantic.text_sha1(c.text)].quality_rank)
         for i, c in enumerate(art.candidates, start=1)]
     approved = (HookApprovedLine(
         approach=art.approved.approach, chars=_chars(art.approved.text),

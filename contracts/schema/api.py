@@ -860,10 +860,11 @@ class HookCandidateLine(FrozenModel):
     quality: HookQualityScores | None
     quality_score: float | None = Field(default=None, ge=0, le=10)
     quality_rank: int | None = Field(default=None, ge=1)
-    #: ⚠ 这里曾有 `selectable`（「最新审判是校准双盲 PASS，可直接定稿」）。
-    #: 自动放行门下线后它恒 `false`，而一个恒假的「可直接定稿」会让界面一直画着
-    #: 一条永远走不通的捷径。⇒ 删掉；**每一条候选都要人显式核验**。
-    human_resolvable: bool
+    #: ⚠ 这里曾有 `selectable`（「最新审判是校准双盲 PASS，可直接定稿」）与
+    #: `human_resolvable`（「这条可由人工消解」）。前者在自动放行门下线后恒 `false`，
+    #: 后者在 `semantic_state` 收成两态后恒 `true`——一条永远走不通的捷径与一道
+    #: 永远开着的闸，误导的方向相反、形状相同。⇒ 两个都删掉；
+    #: **每一条候选都要人显式核验**，要判还用不用人看就读 `semantic_state`。
 
     #: 这一条是不是当前定稿（`hook.approved.approach == candidate.approach`）。
     approved: bool
