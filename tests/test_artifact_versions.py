@@ -73,24 +73,53 @@ def test_the_whole_registry_is_on_one_scale_and_the_migration_ladder_stays_gone(
     assert not [name for name in vars(contracts.schema) if name.startswith('MIGRATE')]
 
 
+#: 模板 → 产物 id。`ARTIFACT_PATHS` 的逆，用来把参数化的 spec 键喂回 `artifact_rel`。
+_ID_OF_REL = {rel: name for name, rel in ARTIFACT_PATHS.items()}
+
+
 def _concrete(rel: str) -> str:
     """把注册表模板变成一条**真实**路径。
 
     ⚠⚠ 别拿模板路径直接去 `decode_artifact`：`artifact_regex` 把 `{n}` 编译成 `\\d+`，
     模板自己匹配不上任何路由 ⇒ `artifact_spec()` 返回 `None` ⇒ 未登记分支**原样返回、
     一个异常都不抛**。用模板写的「拒读」用例会全程绿着，却一次闸都没查到。
+
+    ⚠ 填充**调生产那一个落点** `artifact_rel`，不在这里 `str.replace` 重拼一份：
+    「`nn` 补两位」这条约定归它管，手拼那份哪天与它分家（比如补三位），
+    生产写出的是 `ch001.json` 而这里仍造 `ch01.json`——而路由把 `{nn}` 编译成 `\\d+`，
+    两条参数化照样全绿，扫的却是一批生产永远不会写出来的路径。
     """
-    return rel.replace('{nn}', '01').replace('{n}', '1').replace('{mode}', 'deep')
+    return artifact_rel(_ID_OF_REL[rel], n=1, nn=1, mode='deep')
 
 
 def test_the_placeholder_helper_actually_produces_registered_paths():
     """`_concrete()` 是上面两条参数化的前提——前提本身也要有人查。
 
     它错了的后果不是红，是**两条参数化一起变成空验证**（走未登记分支、永不抛）。
+    ⚠ 顺带钉住那张逆表：两个产物 id 共用一个模板时 `_ID_OF_REL` 会**静默丢掉一个**，
+    那一份从此不在扫描面上，而分母看起来仍是满的。
     """
+    assert len(_ID_OF_REL) == len(ARTIFACT_PATHS), \
+        '有两个产物 id 共用同一个路径模板 ⇒ 逆表丢了一个，它已悄悄掉出扫描面'
     for rel in ARTIFACT_SPECS:
         assert artifact_key(_concrete(rel)) == rel, \
             f'{rel} 的占位符没替干净 ⇒ 它在版本用例里根本没被查到'
+
+
+@pytest.mark.parametrize('rel', sorted(
+    r for r in ARTIFACT_SPECS if '{' in r), ids=lambda r: r)
+def test_a_template_path_is_refused_instead_of_silently_passing_through(rel: str):
+    """⭐⭐ 拿**模板**去 decode/encode 必须当场抛，而不是走「未注册」原样返回。
+
+    ⚠ 这是 `docs/LESSONS.md` 第 23 条那个形状的根治点的守卫：占位符匹配不上任何路由
+    ⇒ 曾经**一个异常都不抛** ⇒ 用模板写的「拒读」用例会全程绿着、却一次闸都没查到。
+    ⇒ 闸下沉到 `contracts/schema` 之后，这一条钉住它：**下一条忘了替占位符的守卫
+    会当场红**，而不是安静地变成空验证。
+    """
+    for call in (lambda: decode_artifact(rel, {'_schema_version': 1}),
+                 lambda: encode_artifact(rel, {'anything': 1})):
+        with pytest.raises(ArtifactVersionError, match='模板'):
+            call()
 
 
 @pytest.mark.parametrize('rel', sorted(ARTIFACT_SPECS), ids=lambda r: r)
@@ -104,7 +133,11 @@ def test_every_registered_artifact_round_trips_through_the_v1_envelope(rel: str)
     payload = [] if spec.root else {'anything': 1}
     encoded = encode_artifact(path, payload)
 
-    assert encoded['_schema_version'] == 1
+    # ⚠ 版本号**逐条从它自己的 spec 现算**，不写 `== 1`：「全表恒 v1」只该有
+    #   `test_the_whole_registry_is_on_one_scale_...` 一个守卫。写死之后，将来按文档
+    #   规定的方式给某一份产物 `current_version` +1，会连带炸掉这两条参数化的
+    #   30×N 个用例——真正该红的那一条淹没在里面，而那正是本批要消灭的形状。
+    assert encoded['_schema_version'] == spec.current_version
     if spec.root:
         assert set(encoded) == {'_schema_version', 'payload'}, \
             'root 产物的信封只能有这两个键'
@@ -113,7 +146,7 @@ def test_every_registered_artifact_round_trips_through_the_v1_envelope(rel: str)
         assert encoded['anything'] == 1
 
     decoded = decode_artifact(path, encoded)
-    assert decoded.version == 1
+    assert decoded.version == spec.current_version
     assert decoded.payload == payload
 
 
@@ -127,6 +160,15 @@ def test_only_the_current_version_is_read(rel: str, marker: object):
     ⚠ 报错必须同时说出文件与版本——只说「读不了」的错误，会把人推回去手补字段。
     """
     spec = ARTIFACT_SPECS[rel]
+    # ⚠ 取值面是写死的「非法」标记，而「非法」是相对当前版本说的：哪天某份产物升到 v2，
+    #   这一格就不再非法，本条会以 `DID NOT RAISE` 红——那是对的，但读不出原因。
+    #   ⇒ 先把前提说清楚，让那一天的红自带下一步。
+    #   ⚠ 比较**先看类型**：`True == 1` 在 Python 里成立，而 `True` 恰恰是取值面里
+    #     一个必须被拒的标记（生产那侧 `isinstance(marker, bool)` 单独拦它）。
+    #     写成 `marker != current` 会在 v1 上把 `True` 这一档整批判成前提不成立。
+    assert type(marker) is not int or marker != spec.current_version, (
+        f'{rel} 的 current_version 升到了 {marker}，它已不再是一个「非法标记」；'
+        f'⇒ 把这一档从取值面里换掉（本条查的是拒读，不是拒当前版本）')
     path = _concrete(rel)
     payload: object = [] if spec.root else {'anything': 1}
     if marker is None:

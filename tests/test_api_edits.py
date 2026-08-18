@@ -250,25 +250,26 @@ def _approve_body(box, pick: int) -> dict:
     }
 
 
-def _approval_target(box) -> tuple[int, str]:
-    """挑一条生产的批准谓词真能收口的候选，返回 `(pick, 当时的语义状态)`。
+def _approval_target(box) -> int:
+    """挑一条生产的批准谓词真能收口的候选，返回它的 `pick`。
 
     ⚠ 这里曾分「校准 `clear` 走自动 basis」与「人工核验」两条路，并额外排除
     `historical_fail`。自动放行门下线后 `CandidateAssessment` 上那两格都没了，
     `basis` 在类型上只剩 `human_verification`——**服务端不替人否决任何候选**。
     `run_approve` 唯一还会抛的候选级判据就是机械 HARD，这里**调它那把尺子**
     （`hook._sev_of`）而不是重拼一份 REGISTRY 查询。
+    ⚠ 也**不再回传当时的语义状态**：两个调用点都只断言 `basis == 'human_verification'`
+    （它在类型上就只剩这一个值），没人读那一格；为它跑一次 `current_assessments`
+    等于纯为丢弃值读一遍 `semantic_<n>.json` 并算一遍新鲜度。
     """
     from contracts.schema.stage6 import Hook
     from novel.stages.stage6 import hook as hook_node
-    from novel.stages.stage6 import semantic
     from novel.store import ArtifactStore
 
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False,
                           write_ledger=False)
     store = ArtifactStore(ctx)
     art, _raw = store.read_own(Hook, 'stage6/hook.json')
-    assessments = semantic.current_assessments(store, art)
     refused: list[str] = []
     for pick, candidate in enumerate(art.candidates, 1):
         mechanical = sorted({
@@ -278,19 +279,21 @@ def _approval_target(box) -> tuple[int, str]:
         if mechanical:
             refused.append(f'{pick}:mechanical={mechanical}')
             continue
-        return pick, assessments[semantic.text_sha1(candidate.text)].state
+        return pick
     raise AssertionError(
         '现役 corpus 没有一条可依法定稿的 Stage6 候选；不能用 skip 冒充 API 闭环：'
         + '；'.join(refused))
 
 
 def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
-    """⭐ hash-bound 自动/人工依据都能定稿，并在前置链完成时盖上 `s6`。
+    """⭐ 一条 hash-bound 的人工核验能定稿，并在前置链完成时盖上 `s6`。
 
+    ⚠ 这里曾写「自动/人工依据都能定稿」。自动放行门下线后 `basis` 在类型上只剩
+    `human_verification`，那句话已经是假的——**没有第二种依据可写**。
     ⚠ 退出码契约：`0/1` 都是「定稿**落了**」（`1` 只是报告仍有红行），
     `2/3` 才是没跑成。**盖章看落没落，红不红归 check 屏。**
     """
-    pick, _prior_state = _approval_target(box)
+    pick = _approval_target(box)
     _stamp_chain(box, 's5')
     before = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     body = _approve_body(box, pick)
@@ -314,7 +317,7 @@ def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
 def test_an_approve_before_the_chain_still_lands_in_the_artifact(client, box):
     """⭐ 审批链没到位（中途接手的书）⇒ 定稿**照样落**（产物是真相），
     检查单那一格保持未盖——**不把检查单的顺序翻成定稿的失败**。"""
-    pick, _prior_state = _approval_target(box)
+    pick = _approval_target(box)
     body = _approve_body(box, pick)
     r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=body)
     assert r.status_code == 200, r.text[:300]

@@ -304,6 +304,27 @@ def check_nodes(stage: str) -> tuple[str, ...]:
                  if s.stage == stage and '--check-only' in s.flags)
 
 
+def check_node(stage: str) -> str:
+    """这一层那**唯一**一座复检桥。`check_nodes` 的单数投影。
+
+    【为什么单开一个函数】「每层恰好一座」是 `tests/test_orchestrator_nodes.py::
+    test_every_stage_has_exactly_one_check_node` 钉住的不变量，而消费方**全都**只要那一个。
+    各自解一次单例的下场是各自定一套降级策略：实测同时存在过三种——
+    解构当场炸、`nodes[0]` 抛 IndexError、以及最坏的 `nodes[0] if nodes else f'{stage}.review'`
+    ⇒ **编出一个不存在的节点 id** 一路带进 `readonly_ctx`，
+    把「这层没有复检桥」变成「这层有一座谁都找不到的桥」。
+    ⇒ 收成一处：不变量破了就在这里、以同一句话、对所有消费方当场出声。
+    """
+    nodes = check_nodes(stage)
+    if len(nodes) != 1:
+        raise KeyError(
+            f'{stage} 有 {len(nodes)} 个节点接受 `--check-only`：{nodes}；'
+            f'每层必须恰好一座复检桥。'
+            f'→ 0 个：忘了给它登记跑法（`contracts/invariants.py::NODES` 的 flags）；'
+            f'→ 2 个以上：这一层的复检入口不知道该调哪一个')
+    return nodes[0]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 四、命令（`R-11.8` / `R-12.3`）
 # ─────────────────────────────────────────────────────────────────────────────

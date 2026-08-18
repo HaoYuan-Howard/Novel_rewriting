@@ -57,6 +57,4 @@ export interface EnumsResponse {
     consumers: string[]
     notice: string
   }
-  /** Compatibility with frozen v1 fixtures; new servers publish spoiler_disclosure. */
-  partial_mask_note?: string
 }

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends
 from contracts.schema.report import CheckReport
 from novel import paths, prov
 from novel.api.deps import checked_kind, checked_sid, get_base
-from novel.orchestrator.nodes import check_nodes
+from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import readonly_ctx
 from novel.stages import check_only
 
@@ -33,13 +33,12 @@ def get_check(sid: str = Depends(checked_sid), kind: str = Depends(checked_kind)
       · `kind` 不在八个里            ⇒ **400**（`checked_kind`）：你给的层名不存在
       · 这一层没有产物 / 产物读不回来 ⇒ 404 / 409，由 `novel/api/errors.py` 那张表翻
 
-    ⚠ 用 `check_nodes(kind)` 从 `NODES` 派生出「哪个节点接受 `--check-only`」，
+    ⚠ 用 `check_node(kind)` 从 `NODES` 派生出「哪个节点接受 `--check-only`」，
     **不手写一张 层→节点 的表**：`:kind` 是**层**而复检是**节点**上的一条跑法，
-    那座桥只许有一处。
+    那座桥只许有一处——单数那一格由 `check_node` 自己把关，这里不再 `nodes[0]`。
     """
     run = check_only(kind)
 
-    nodes = check_nodes(kind)
     novel_dir = paths.resolve_novel_dir(base, sid)
-    ctx = readonly_ctx(novel_dir, nodes[0], prov.code_version())
+    ctx = readonly_ctx(novel_dir, check_node(kind), prov.code_version())
     return run(ctx)

@@ -50,21 +50,23 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
 
     approved_approach = art.approved.approach if art.approved is not None else None
     assessments = semantic.current_assessments(store, art)
+    # ⚠ 一条候选的全部语义格子来自**同一条** assessment，所以按文本 sha1 只查一次。
+    #   逐格现查（曾经八次）不只是白算八遍 sha1：那样写时，「某一格悄悄查了别的 key」
+    #   在 review 里看不出来，而这一屏的每一格都要能追到同一次审判。
     candidates = [
         HookCandidateLine(
             index=i, approach=c.approach, chars=_chars(c.text), text=c.text,
             subject_sha256=semantic.text_sha256(c.text),
             mech=c.mech, findings=c.findings,
             approved=c.approach == approved_approach,
-            semantic_state=assessments[semantic.text_sha1(c.text)].state,
-            semantic_reason=assessments[semantic.text_sha1(c.text)].reason,
-            contradictions=(list(assessments[semantic.text_sha1(c.text)].review.contradictions)
-                            if assessments[semantic.text_sha1(c.text)].review else []),
-            quality=(assessments[semantic.text_sha1(c.text)].review.quality
-                     if assessments[semantic.text_sha1(c.text)].review else None),
-            quality_score=assessments[semantic.text_sha1(c.text)].quality_score,
-            quality_rank=assessments[semantic.text_sha1(c.text)].quality_rank)
-        for i, c in enumerate(art.candidates, start=1)]
+            semantic_state=a.state,
+            semantic_reason=a.reason,
+            contradictions=list(a.review.contradictions) if a.review else [],
+            quality=a.review.quality if a.review else None,
+            quality_score=a.quality_score,
+            quality_rank=a.quality_rank)
+        for i, c in enumerate(art.candidates, start=1)
+        for a in (assessments[semantic.text_sha1(c.text)],)]
     approved = (HookApprovedLine(
         approach=art.approved.approach, chars=_chars(art.approved.text),
         text=art.approved.text, origin=art.approved.origin,

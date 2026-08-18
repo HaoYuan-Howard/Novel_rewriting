@@ -50,7 +50,7 @@ from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from novel import paths, prov, wontfix
 from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
-from novel.orchestrator.nodes import check_nodes
+from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import readonly_ctx
 from novel.stages import check_only
 from novel.store import ArtifactStore
@@ -119,13 +119,11 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     trim_audits = _current_trim_audits(novel_dir, code)
 
     for stage in STAGES:
-        # ⚠ 解构而不是 `nodes[0] if nodes else f'{stage}.review'`：每层恰好一座复检桥，
-        #   由 `tests/test_orchestrator_nodes.py` 钉着。那条兜底不可达，而它真走到时会
-        #   **造出一个不存在的节点 id**（`stage6.review`）——比当场抛错坏得多：
-        #   一个编不出来的节点会一路带进 `readonly_ctx`，把「这层没有复检桥」变成
-        #   「这层有一座谁都找不到的桥」。
-        node, = check_nodes(stage)
-        ctx = readonly_ctx(novel_dir, node, code)
+        # ⚠ 走 `check_node` 而不是 `nodes[0] if nodes else f'{stage}.review'`：
+        #   那条兜底真走到时会**造出一个不存在的节点 id**（`stage6.review`）——
+        #   一个编不出来的节点会一路带进 `readonly_ctx`，把「这层没有复检桥」
+        #   变成「这层有一座谁都找不到的桥」。单数那一格由落点自己把关。
+        ctx = readonly_ctx(novel_dir, check_node(stage), code)
         store = ArtifactStore(ctx)
 
         # 「有人看过并决定不修」是**逐层各一份账**（2026-08-15 裁决：层由文件路径承载）

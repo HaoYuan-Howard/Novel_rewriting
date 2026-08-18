@@ -43,8 +43,7 @@ from novel.orchestrator.uploads import save_upload
 from novel.quality.global_review import build_review
 from novel.run import RunContext
 from novel.store import (
-    ArtifactStore, SELF_FRESH_DETERMINISTIC, _filesystem_path,
-    _json_pointer_diff,
+    ArtifactStore, SELF_FRESH_DETERMINISTIC, _json_pointer_diff,
 )
 from tests import corpus, sandbox
 
@@ -511,25 +510,31 @@ def test_a_tampered_schema_version_is_refused_on_the_real_read_path():
     ⚠ 与 `tests/test_artifact_versions.py` 那两条参数化的分界线：那边拿合成 dict 扫
     30 份产物的分母，这边走 `ArtifactStore.write` → 真文件 → `read_own` 的整条路，
     查的是「闸真的装在读盘口上」而不是只装在解码函数里。
+
+    ⚠ 版本号**从注册表现算**：本条查的是「篡改版本号就读不回来」，与当前是第几版无关。
+    写死 `1`/`2` 时，将来一次合法的 `current_version` +1 会让本条一起红——而那一天真正
+    该红的只有 `tests/test_artifact_versions.py` 里那条「全表恒 v1」的反向守卫。
     """
     base = _book()
     ctx = _ctx(base)
     store = ArtifactStore(ctx)
     store.read(Loose, UPSTREAM)
     official = store.write(STYLE_REL, _style(ctx))
+    current = artifact_spec(STYLE_REL).current_version
     encoded = json.loads(official.read_text(encoding='utf-8'))
-    assert encoded['_schema_version'] == 1, '写盘口吐的不是当前版本'
+    assert encoded['_schema_version'] == current, '写盘口吐的不是当前版本'
 
     # 先证明原样能读回来——否则下面那条拒读证明不了是版本号造成的。
     assert ArtifactStore(_ctx(base)).read_own(
         StyleGrounding, STYLE_REL)[0].surface_habits == ['习惯一']
 
-    encoded['_schema_version'] = 2
+    encoded['_schema_version'] = current + 1
     official.write_text(
         json.dumps(encoded, ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8', newline='',
     )
-    with pytest.raises(ArtifactUnreadable, match='schema v2 不是当前 v1'):
+    with pytest.raises(ArtifactUnreadable,
+                       match=f'schema v{current + 1} 不是当前 v{current}'):
         ArtifactStore(_ctx(base)).read_own(StyleGrounding, STYLE_REL)
 
 

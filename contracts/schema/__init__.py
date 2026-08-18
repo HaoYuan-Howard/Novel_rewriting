@@ -280,8 +280,27 @@ def artifact_spec(rel: str) -> ArtifactSpec | None:
     return ARTIFACT_SPECS.get(key) if key is not None else None
 
 
+def _refuse_unfilled_template(rel: str) -> None:
+    """带未填占位符的**模板**不是路径，一律当场拒绝。
+
+    ⚠⚠ 这是 `docs/LESSONS.md` 第 23 条那个形状的**根治点**：`artifact_regex` 把 `{n}`
+    编译成 `\\d+` ⇒ 模板自己匹配不上任何路由 ⇒ `artifact_spec()` 返回 `None`
+    ⇒ 下面那句「未注册原样返回」把它**静默放过，一个异常都不抛**。
+    于是任何一条拿模板写的「拒读」守卫都会全程绿着，却一次闸都没查到。
+    ⇒ 闸装在这里，而不是要求每个调用点各自记得先把占位符替掉：
+    真实文件路径不可能含 `{`，这一条不会误伤任何合法调用。
+    """
+    if '{' in str(rel):
+        raise ArtifactVersionError(
+            f'{rel}: 这是路径**模板**不是路径（占位符没填）。'
+            f'模板匹配不上任何路由 ⇒ 会被当成「未注册」静默放行，'
+            f'用它写的守卫会绿着却什么都没查。'
+            f'→ 先用 `contracts/artifacts.py::artifact_rel` 填出具体路径')
+
+
 def decode_artifact(rel: str, data: Any) -> DecodedArtifact:
     """拆出当前版本的逻辑 payload；未注册的测试数据原样返回。"""
+    _refuse_unfilled_template(rel)
     spec = artifact_spec(rel)
     if spec is None:
         return DecodedArtifact(data, 0)
@@ -320,6 +339,7 @@ def decode_artifact(rel: str, data: Any) -> DecodedArtifact:
 
 def encode_artifact(rel: str, payload: Any) -> Any:
     """给当前逻辑 payload 加版本；RootModel 用 envelope，普通对象加顶层标记。"""
+    _refuse_unfilled_template(rel)
     spec = artifact_spec(rel)
     if spec is None:
         return payload

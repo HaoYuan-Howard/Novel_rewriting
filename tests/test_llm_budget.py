@@ -25,7 +25,7 @@ from novel.llm.budget import (
     _verified_tokenizer_bytes,
 )
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
-from novel.llm.client import LlmClient
+from novel.llm.client import LADDER, LlmClient
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.run import RunContext
@@ -86,18 +86,20 @@ def test_an_unregistered_effort_is_refused_instead_of_guessing_a_framing(
     assert '登记' in message, f'报错没给出行动：{message}'
 
 
-@pytest.mark.parametrize('effort', ['low', 'medium', 'high'])
-def test_every_ladder_rung_shares_the_same_framing(effort: str):
-    """三个现役档位都走官方 `high` framing（不加文字前缀）⇒ token 数逐字相等。
+def test_every_ladder_rung_shares_the_same_framing():
+    """现役档位**逐个**都走官方 `high` framing（不加文字前缀）⇒ token 数逐字相等。
 
     ⚠ 这是上面那条拒绝的**对照组**：只查「非法值被拒」而不查「合法值都通得过」，
     一次把取值面收窄过头的改动照样全绿。
+    ⚠ 档位从 `novel/llm/client.py::LADDER` **现算**，不在这里手抄第二份：阶梯
+    **加宽**时（比如哪天把 `max` 加回去）这条要当场把新档位一并量，否则一个
+    framing 没人核过的档位会带着错的预算估算上真跑——而预算是花钱前最后一道闸。
     """
     counts = {
-        count_input_tokens(_req(reasoning_effort=rung, thinking=True))
-        for rung in ('low', 'medium', 'high')
+        rung: count_input_tokens(_req(reasoning_effort=rung, thinking=True))
+        for rung in sorted({effort for effort, _thinking in LADDER})
     }
-    assert len(counts) == 1, f'某个档位悄悄改了 framing：{counts}'
+    assert len(set(counts.values())) == 1, f'某个档位悄悄改了 framing：{counts}'
 
 
 def _estimate(input_tokens: int, max_tokens: int = 96_000) -> BudgetEstimate:

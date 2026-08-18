@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from contracts.invariants import INBOX_KIND, STAGES          # noqa: E402
 from novel import paths, prov                                # noqa: E402
 from novel.llm.ledger import ledger_path                     # noqa: E402
-from novel.orchestrator.nodes import check_nodes             # noqa: E402
+from novel.orchestrator.nodes import check_node              # noqa: E402
 from novel.orchestrator.state import readonly_ctx            # noqa: E402
 from novel.stages import check_only                          # noqa: E402
 from novel.views.inbox import inbox_view                     # noqa: E402
@@ -189,10 +189,13 @@ def stage_reports(base: str, sid: str) -> dict[str, dict]:
     code = prov.code_version()
     out: dict[str, dict] = {}
     for stage in STAGES:
-        nodes = check_nodes(stage)
-        node = nodes[0] if nodes else f'{stage}.review'
+        # ⚠ 这里曾是 `nodes[0] if nodes else f'{stage}.review'`。那条兜底真走到时会
+        #   **编出一个不存在的节点 id**，一路带进 `readonly_ctx`——而下面那个
+        #   `except Exception` 会把它当成「够不着」记进读数，于是一个登记错误被
+        #   如实报成了产物问题。⇒ 走 `check_node`，不变量破了就在那里出声。
         try:
-            report = check_only(stage)(readonly_ctx(novel_dir, node, code))
+            report = check_only(stage)(
+                readonly_ctx(novel_dir, check_node(stage), code))
         except Exception as e:                       # 读数器：够不着如实报，不替它编绿灯
             out[stage] = {'unreachable': f'{type(e).__name__}: {e}'}
             continue

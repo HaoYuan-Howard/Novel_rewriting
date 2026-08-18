@@ -116,6 +116,11 @@ def test_the_view_reads_only_fields_the_assessment_can_answer():
 
     ⚠ 它**不重拼** view 的组装逻辑——从 view 自己的源码里取出「从 assessments 上取了哪几格」，
     再拿一个真的 `CandidateAssessment` 逐个 `getattr`。view 改了取法，这里跟着变。
+
+    ⚠⚠ **两种取法都要认**：逐格现查（`assessments[k].state`）与先绑一次再读
+    （`for a in (assessments[k],)` / `a = assessments[k]`）。只认前者时，view 一改成
+    绑定写法，这里扫出来的就是空集——而空集的表现不是漏报，是下面那句自检当场红，
+    把一次正当的重构读成缺陷。⇒ 先认出绑定了 `assessments[...]` 的局部名，再连它一起扫。
     """
     import ast
     import inspect
@@ -124,10 +129,28 @@ def test_the_view_reads_only_fields_the_assessment_can_answer():
     from novel.views import stage6 as view
 
     tree = ast.parse(inspect.getsource(view.stage6_view).lstrip())
+
+    def _subscripts_assessments(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Subscript)
+                and getattr(node.value, 'id', None) == 'assessments')
+
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.comprehension):
+            target, source = node.target, node.iter
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, source = node.targets[0], node.value
+        else:
+            continue
+        elts = source.elts if isinstance(source, (ast.Tuple, ast.List)) else [source]
+        if isinstance(target, ast.Name) and any(map(_subscripts_assessments, elts)):
+            aliases.add(target.id)
+
     read = {
         node.attr for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Subscript)
-        and getattr(node.value.value, 'id', None) == 'assessments'
+        if isinstance(node, ast.Attribute)
+        and (_subscripts_assessments(node.value)
+             or getattr(node.value, 'id', None) in aliases)
     }
     assert read, 'view 已经不从 assessments 上取值了？那这条守卫在看空气'
     probe = CandidateAssessment(state='unreviewed', reason='合成探针')

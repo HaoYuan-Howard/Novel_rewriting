@@ -80,8 +80,10 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
                     or marker != spec.current_version):
                 raise ValueError(
                     f'{book.name}/{rel}: raw _schema_version={marker!r}，'
-                    f'必须直接等于 registry current v{spec.current_version}；'
-                    'corpus build/verify 禁止迁移旧产物后冒充 current')
+                    f'必须直接等于 registry current v{spec.current_version}。'
+                    f'盘面清点要的是**盘上那个数字**，不是解码器愿意接受的那个；'
+                    f'⇒ 这份产物不是现役 producer 产的，要从 producer 重跑重建'
+                    f'（本仓没有迁移机制，不给旧 JSON 手补版本号冒充当前产地）')
             decoded = decode_artifact(rel, raw)
             payload = spec.model.model_validate(decoded.payload).model_dump(
                 by_alias=True, mode='json')

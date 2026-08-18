@@ -8,6 +8,7 @@ test_coverage.py —— 需求 §6 立的**双向覆盖率**的执行落点。
 """
 from __future__ import annotations
 
+import functools
 import re
 from collections import Counter
 from pathlib import Path
@@ -17,6 +18,7 @@ import pytest
 from contracts import requirements as reqs
 from contracts.invariants import NODES, STAGE_SECTIONS, STAGES, WHO_CHECKS
 from contracts.rules import REGISTRY
+from contracts.schema import ARTIFACT_SPECS
 
 DOC = reqs.load()
 
@@ -473,20 +475,37 @@ def test_the_reverse_coverage_scan_actually_finds_something():
 _SCHEMA_COUNT_ROW = re.compile(
     r'当前注册表共 \*\*(\d+) 条\*\*：\*\*([^*]+)\*\*')
 _SCHEMA_SEV_CELL = re.compile(r'(\d+)\s*([a-z]+)')
-_SCHEMA_DOC_DIR = Path(__file__).resolve().parent.parent / 'docs' / 'schema'
 
 
 def _schema_doc(stage: str) -> Path:
-    return _SCHEMA_DOC_DIR / f'{stage}.md'
+    return ROOT / 'docs' / 'schema' / f'{stage}.md'
 
 
+@functools.lru_cache(maxsize=1)
+def _documented_stages() -> tuple[str, ...]:
+    """有注册判据、且在 `docs/schema/` 里有文档的层——下面三条守卫**共用的分母**。
+
+    ⚠ 分母只能有一份。三条各自重拼一遍时，将来给某层加/挪 schema 文档只改到其中两处，
+    漏掉的那一处失效方式**不是红，是绿**——而这组守卫存在的理由，正是 stage0/1/3
+    曾经就这样长期漏网。
+    ⚠ `exists()` 放在收敛之后：注册表有 229 条判据、只有 8 个层，写成逐条过滤
+    等于把同一个文件 stat 几十遍（`stage2` 一家就 71 次）。
+    """
+    return tuple(sorted(
+        stage for stage in {r.stage for r in REGISTRY.all()}
+        if _schema_doc(stage).exists()))
+
+
+@functools.lru_cache(maxsize=1)
 def _schema_count_claims() -> dict[str, tuple[int, dict[str, int]]]:
-    """逐层扫出 `docs/schema/<stage>.md` 宣称的条数与 sev 分布。"""
+    """逐层扫出 `docs/schema/<stage>.md` 宣称的条数与 sev 分布。
+
+    ⚠ 缓存的是**仓内静态文档**的扫描结果，三条用例读到的必然是同一份：不加缓存时
+    这批 md（八层合计数百 KB）在一次 pytest 里被整整读三遍。
+    """
     claims: dict[str, tuple[int, dict[str, int]]] = {}
-    for stage in sorted({r.stage for r in REGISTRY.all()}):
+    for stage in _documented_stages():
         doc = _schema_doc(stage)
-        if not doc.exists():
-            continue
         for line in doc.read_text(encoding='utf-8').splitlines():
             hit = _SCHEMA_COUNT_ROW.search(line)
             if hit is None:
@@ -497,6 +516,22 @@ def _schema_count_claims() -> dict[str, tuple[int, dict[str, int]]]:
             dist = {sev: int(n) for n, sev in _SCHEMA_SEV_CELL.findall(hit.group(2))}
             claims[stage] = (int(hit.group(1)), dist)
     return claims
+
+
+def test_every_stage_with_rules_has_a_schema_doc_at_all():
+    """**分母自己的守卫**：有判据的层，一层都不许在 `docs/schema/` 里没有文档。
+
+    ⚠ `_documented_stages()` 用 `exists()` 收敛，那是一个**逃生口**：`Rule.stage` 没有
+    被约束进闭合取值面（`contracts/rules.py::_validate` 只钉 `sev`/`owner`/`who_checks`），
+    于是一个新层、或一个拼错的 stage 名，只要没有同名文档文件就会**悄悄掉出**下面三条
+    守卫的分母——它们一句话都不会说。⇒ 这一条专门把那个口子焊上。
+    """
+    missing = sorted({r.stage for r in REGISTRY.all()} - set(_documented_stages()))
+    assert not missing, (
+        f'这些层有注册判据，却在 `docs/schema/` 里没有文档：{missing}\n'
+        f'→ 要么补 `docs/schema/<stage>.md`，要么这个 stage 名本身拼错了'
+        f'（`Rule.stage` 没有闭合取值面，拼错不会在注册时出声）'
+    )
 
 
 def test_schema_docs_declare_the_live_rule_counts():
@@ -524,13 +559,47 @@ def test_every_stage_with_rules_declares_its_count_in_the_schema_doc():
     ⚠ 只查「写了的对不对」会放过「压根没写」——stage0 / stage1 / stage3 正是这样
     长期没有任何条数声明，而上面那条对它们一句话都说不出来。
     """
-    claims = _schema_count_claims()
-    with_rules = {r.stage for r in REGISTRY.all() if _schema_doc(r.stage).exists()}
-    missing = sorted(with_rules - set(claims))
+    missing = sorted(set(_documented_stages()) - set(_schema_count_claims()))
     assert not missing, (
         f'这些层有注册判据、也有 schema 文档，却没写条数声明：{missing}\n'
         f'→ 补一行「当前注册表共 **N 条**：**a hard、b info、c metric、d unver**。」'
         f'（零值桶省略）'
+    )
+
+
+#: `**都是 schema v1**` —— 逐层「本层全部产物同一版本」的集体声明。
+_SCHEMA_VERSION_CLAIM = re.compile(r'\*\*都是 schema v(\d+)\*\*')
+
+
+def test_schema_docs_that_claim_a_version_match_the_registry():
+    """逐层「本层产物**都是 schema vN**」必须等于 `ARTIFACT_SPECS` 现算。
+
+    ⚠ 与上面三条同形，防的是同一件事，只是把字段从「判据条数」换成「版本号」：
+    条数曾漂到 stage5 写 48 实为 46、stage6 写 21 实为 22，**因为没人对账**。
+    全表归零到 v1 那一批把版本号逐层手抄进了 stage4/5/6 三份文档，同样没人对账。
+    ⚠⚠ 第一次合法的 `current_version` +1 只会让 `tests/test_artifact_versions.py`
+    那条「全表恒 v1」的反向守卫红（那是设计好的），而这几份散文会**静默变假**——
+    那正是这一批刚从 migration 身上拆掉的坑，别换个字段重埋一遍。
+    """
+    claimed: dict[str, set[int]] = {}
+    for stage in _documented_stages():
+        hits = _SCHEMA_VERSION_CLAIM.findall(
+            _schema_doc(stage).read_text(encoding='utf-8'))
+        if hits:
+            claimed[stage] = {int(hit) for hit in hits}
+    assert claimed, '一层都没扫到「都是 schema vN」——正则多半失配了，那时下面全绿'
+
+    drift: dict[str, str] = {}
+    for stage, versions in claimed.items():
+        live = {spec.current_version for rel, spec in ARTIFACT_SPECS.items()
+                if rel.startswith(f'{stage}/')}
+        assert live, f'{stage} 宣称了版本，却在 ARTIFACT_SPECS 里一份产物都没有'
+        if versions != live:
+            drift[stage] = f'宣称 {sorted(versions)} / 实际 {sorted(live)}'
+    assert not drift, (
+        f'docs/schema 的版本声明与注册表对不上：{drift}\n'
+        f'→ 真值恒在 `contracts/schema/__init__.py::ARTIFACT_SPECS`，文档里那句只是副本；'
+        f'破坏形状要 `current_version` +1 并同批回答「存量产物由谁重建」'
     )
 
 
@@ -542,11 +611,9 @@ def test_schema_docs_name_every_live_rule():
     ⇒ 条数与 id 集合**两条都要查**：前者防漏改数字，后者防漏列行。
     """
     missing: dict[str, list[str]] = {}
-    for stage in sorted({r.stage for r in REGISTRY.all()}):
-        doc = _schema_doc(stage)
-        if not doc.exists():
-            continue
-        tokens = set(re.findall(r'`([a-z0-9_]+)`', doc.read_text(encoding='utf-8')))
+    for stage in _documented_stages():
+        text = _schema_doc(stage).read_text(encoding='utf-8')
+        tokens = set(re.findall(r'`([a-z0-9_]+)`', text))
         absent = sorted({r.rule for r in REGISTRY.of_stage(stage)} - tokens)
         if absent:
             missing[stage] = absent

@@ -10,8 +10,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from contracts.artifacts import ARTIFACT_PATHS, artifact_rel
-from contracts.schema import ARTIFACT_SPECS, encode_artifact
+from contracts.artifacts import artifact_rel
+from contracts.schema import artifact_spec, encode_artifact
 from contracts.schema.evaluation import TrimAudit, TrimResolution
 from contracts.schema.common import RoundFreeProvenance
 from contracts.schema.stage5 import Chapter, ChapterSegment
@@ -132,8 +132,9 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
     raw = json.loads(resolution_path.read_text(encoding='utf-8'))
     # ⚠ 版本号**从注册表现算**，不写字面量：这一条要查的是「人工写回落的是当前版本」，
     #   与那个数字具体是几无关。曾硬编码成 2，全表归零到 v1 时它就是一次假红。
-    assert raw['_schema_version'] == \
-        ARTIFACT_SPECS[ARTIFACT_PATHS['stage5.trim_resolution']].current_version
+    # ⚠ 走 `artifact_spec(rel)` 这一个落点，不手拼「id → 模板 → spec」两跳：那条路绕开了
+    #   `artifact_key` 那套路由，注册表键的约定一变，它给的不是假红就是**静默指到另一份 spec**。
+    assert raw['_schema_version'] == artifact_spec(resolution_rel).current_version
     assert raw['action'] == 'retain_pretrim'
     assert raw['mode'] == 'deep'
     assert raw['chapter_rel'] == 'stage5/deep/ch03.json'

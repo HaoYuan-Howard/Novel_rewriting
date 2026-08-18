@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from contracts.invariants import BEAT_MIN_CHARS, GROUPING_VERSION
 from novel.llm.prompts import fill, with_json_shape
 from novel.stages.stage4.beats import plan_beat_id
 
