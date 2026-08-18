@@ -162,7 +162,10 @@ def agent_lock_key(sid: str) -> str:
     N 个 headless agent 各自只看见自己那一本，每个都完整遵守 SKILL。
     ⇒ 锁该按它真正保护的资源分，而那个资源是**一本书**：同书两个 agent 会并行写
     同一片盘（SKILL 明禁），异书两个 agent 谁也碰不到谁的目录。
-    SKILL.md 原文不动，改的是代码对它的解读。
+    ⚠ 那一次只改了代码对 SKILL 的解读、没动 SKILL 原文，于是那句话继续被读成
+    「系统不支持多书并行」（本次实测：它确实又误导了一轮）。⇒ SKILL.md 与
+    `references/runtime-profiles.md` 现已把**作用域**写进原文（「本次会话内」），
+    语义未变；`R-13.7` 才是跨书并行那一侧的权威。
 
     ⚠ 「同时最多几个」是**另一件事**，不归锁管——它归
     `novel/orchestrator/agent.py::MAX_CONCURRENT` 那道并发闸。
