@@ -169,16 +169,40 @@ def test_stage7_book_can_be_previewed_and_downloaded(client, box, monkeypatch):
 
 def test_stage7_book_endpoint_never_bypasses_the_current_delivery_gate(
         client, box, monkeypatch):
-    from novel.errors import TerminalState
+    """⭐ 交付闸的每一条拒绝都要以**具名 4xx** 到达客户端。
+
+    ⚠⚠ **此前这里造的是一个裸 `TerminalState`，而那条断言从来没成立过**：
+    `status_of` 对两个抽象基类刻意不给格（「加一个类就得决定一次」），认不出就原样抛
+    ⇒ 那条异常一路冒到 Starlette，客户端拿到的是 500 而不是 409。
+    守卫**替生产伪造了一种它不该产生的失败形状**，于是它红着的其实是
+    `novel/errors.py` 开头那条「不设默认异常」——不是端点漏了闸。
+    ⇒ 现在逐条走 `read_current_book` **真会抛的那几个类**。
+    """
+    from novel.errors import (
+        ApprovalRequired, BlockingFindingsUnresolved, GateBlocked, UpstreamMissing,
+        UpstreamStale, UpstreamUnproven,
+    )
     from novel.stages.stage7 import assemble
 
-    def reject(_ctx):
-        raise TerminalState('旧 book.txt 不再绑定当前批准映射')
-
-    monkeypatch.setattr(assemble, 'read_current_book', reject)
-    response = client.get(f'/api/novels/{box.sid}/stage7/book.txt?download=true')
-    assert response.status_code == 409
-    assert response.json()['kind'] == 'TerminalState'
+    cases = [
+        (ApprovalRequired('人物映射还没定稿'), 409, None),
+        (UpstreamStale('name_map.json 已过期'), 409, None),
+        (UpstreamUnproven('name_map.json 证明不了自己出自当前根'), 409, None),
+        (BlockingFindingsUnresolved('仍有阻断级问题', rules=['rn_ambiguous']), 409, None),
+        (GateBlocked('有一份没裁决的废稿', invalid_path='stage7/name_map.INVALID.json'),
+         409, 'stage7/name_map.INVALID.json'),
+        (UpstreamMissing('book.txt 不在盘上'), 404, None),
+    ]
+    for exc, code, missing in cases:
+        monkeypatch.setattr(
+            assemble, 'read_current_book',
+            lambda _ctx, _exc=exc: (_ for _ in ()).throw(_exc))
+        response = client.get(f'/api/novels/{box.sid}/stage7/book.txt?download=true')
+        body = response.json()
+        assert response.status_code == code, (type(exc).__name__, body)
+        assert body['kind'] == type(exc).__name__
+        # `GateBlocked` 的全部价值：那份被拦下的稿在哪，必须到得了客户端。
+        assert body.get('missing') == missing, type(exc).__name__
 
 
 @pytest.mark.usefixtures('current_map')

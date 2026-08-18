@@ -106,7 +106,7 @@ def box_current_map(box):
     于是上游一次**内容一字未改**的 0 成本重跑就会把三本的 `name_map` 全判 stale。
     定稿与拼书这一族因此拿不到可用的映射：`run_approve` 明写「`_provenance` 一个字不动」
     ⇒ 把过期账原样写回 ⇒ 写盘口后置条件当场 `ProvenanceRefused`；
-    `assemble` 那一侧则是 `TerminalState: 旧 book.txt 不再绑定当前批准映射`。
+    `assemble` 那一侧则是 `UpstreamStale`（交付闸的 freshness 那一格）。
     """
     corpus.requires_current(box.book, 'stage7/name_map.json',
                             produced_by='stage7.rename --recheck', cost='0 成本')
@@ -385,17 +385,23 @@ def test_approve_leaves_provenance_alone(box):
 
 
 def test_approve_refuses_while_a_hard_rule_is_still_hit(box):
-    """还有 HARD 时**拒绝定稿**——人被挡住，不是被静默放行。"""
+    """还有 HARD 时**拒绝定稿**——人被挡住，不是被静默放行。
+
+    ⚠ 断的是**类型与 rule key**，不是措辞：`BlockingFindingsUnresolved.rules` 才是
+    消费方拿去路由修复的那份东西（`Q-6`：措辞是会改的，措辞不是契约）。
+    """
     from contracts.schema.report import finding
-    from novel.errors import TerminalState
+    from novel.errors import BlockingFindingsUnresolved
     nm = box.read('stage7/name_map.json')
     # ⚠ 用**真的那个工厂**造这条合成结论：手写一个 dict 就等于给自己发一张
     #   「载体后置条件不适用」的通行证，而那正是本项目要消灭的形状。
     nm['book'].append(finding('rn_ambiguous', detail='合成的一条阻断级结论',
                               evidence=['阿禾']).model_dump(by_alias=True))
     box.write('stage7/name_map.json', nm)
-    with pytest.raises(TerminalState, match='不该定稿'):
+    with pytest.raises(BlockingFindingsUnresolved) as blocked:
         _approve(box)
+    assert blocked.value.rules == ('rn_ambiguous',)
+    assert '--apply-edit' in str(blocked.value)
 
 
 def test_approve_rejects_a_stale_subject_before_any_write_or_archive(box):

@@ -20,7 +20,7 @@ import pytest
 
 from contracts.schema import decode_artifact
 from contracts.schema.stage7 import ExtraSub, NameMapEdit, Residual
-from novel.errors import TerminalState
+from novel.errors import BlockingFindingsUnresolved, TerminalState
 from novel.stages.stage7 import checks
 from novel.stages.stage7 import rename
 from novel.stages.stage7.subs import (
@@ -425,6 +425,29 @@ def test_adopt_residual_with_no_safe_candidate_is_a_no_write_terminal_state(monk
         rename.run_adopt_residual(ctx, 'high')
 
     assert store.archives == [] and store.writes == [] and retired == []
+
+
+def test_adopt_residual_blocked_by_hard_findings_is_a_terminal_state_not_a_crash(
+        monkeypatch):
+    """⭐ 采纳后判出 hard ⇒ **退出码 2 的预期内终态**，不是崩。
+
+    这条路此前抛 `GateBlocked` **却漏了它必填的 `invalid_path`** ⇒ 真走到这里得到的是
+    `TypeError`，退出码 70「崩了，结论未知」——编排层会据此把「这是我们的 bug」
+    报给人，而实际发生的只是「这份采纳结果不合格，什么都没动」。
+    ⚠ 分类也错：什么都没落盘，盘上根本没有 `.INVALID` 可指 ⇒ 不是 `GateBlocked`。
+    """
+    ctx, store, _captured, retired = _adoption_harness(
+        monkeypatch, [_residual(unit='温兄', suggest='顾兄')])
+    monkeypatch.setattr(
+        rename, '_judge',
+        lambda *_args: [SimpleNamespace(rule='rn_ambiguous', findings=['阿禾'])])
+
+    with pytest.raises(BlockingFindingsUnresolved) as blocked:
+        rename.run_adopt_residual(ctx, 'high')
+
+    assert blocked.value.rules == ('rn_ambiguous',)
+    assert store.archives == [] and store.writes == [] and retired == []
+    assert store.art.book_txt == 'old-delivery'
 
 
 def test_adopt_residual_write_failure_keeps_live_delivery(monkeypatch):

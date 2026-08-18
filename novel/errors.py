@@ -25,6 +25,8 @@ errors.py —— 显式终态的**唯一**词汇表。
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 
 class NovelError(Exception):
     """本运行时抛出的一切的基类。**不直接抛它**，见模块 docstring 末尾那条。"""
@@ -90,6 +92,26 @@ class UpstreamStale(TerminalState):
     （去**重跑**它，且下游缓存会失效）是两条不同的恢复路，报告不能混。
     ⚠ 与 `ProvenanceRefused` 分开：那一条留给来源账本身自相矛盾的情形
     （同一把刻度结算两次、缺全链根、根 sha1 分叉），那些确实是 bug。
+    ⚠ 与 `UpstreamUnproven` 分开：**它只在 freshness 确定为 `stale` 时抛**。
+    `unknown` 是「证明不了」，不是「变了」——见那个类。
+    """
+
+
+class UpstreamUnproven(TerminalState):
+    """要读的上游产物在盘上，但来源账**证明不了**它出自当前根（freshness = `unknown`）。
+
+    ⚠⚠ **与 `UpstreamStale` 分开的理由是「别把不知道说成知道」。** `stale` 是一句
+    可复算的断言——`FreshnessReport.edges` 说得出**哪条边**变了；`unknown` 只是
+    「这份产物没有足够来源事实」。把 `unknown` 也抛成 `UpstreamStale`，报告就会替一件
+    算不出来的事编一句「它已经变了」，而那正是本仓五态建模要防的那种压缩。
+    ⇒ 恢复指令也真的不同：`stale` 指得出重建哪一条（`--recheck` 常常就够），
+    `unknown` 指不出，只能整份从 producer 重建（那可能是一次付费）。
+
+    ⚠ **生产节点不抛它**：`novel/store.py::ArtifactStore._refuse_stale_upstream` 对
+    `unknown` 明确放行（旧产物不能伪装成 fresh，但也不能凭空断言内容已变）。
+    抛它的是**比那道闸更严**的下游闸——`stage7` 的交付闸要的是「证明得了当前」，
+    `unknown` 在那里必须拦（`R-10.14`：txt 是交付物，里面没有地方写风险抬头横幅）。
+    这一档严格性差异**必须看得见**；两处用同一个类，就把它藏进措辞里了。
     """
 
 
@@ -102,16 +124,51 @@ class ArtifactUnreadable(TerminalState):
 
 
 class GateBlocked(TerminalState):
-    """落盘闸门拦下了这一份：**没有覆盖已有产物**，问题稿已存 `.INVALID`。
+    """落盘闸门拦下了那一份：**没有覆盖已有产物**，问题稿已存 `.INVALID`。
 
     ⚠ 它携带 `invalid_path` 是**刻意的**：这条终态的全部价值在于
     「稿子没有丢，也没有再花钱」——报告必须说得出那份稿在哪，
     否则人会以为要重跑（那是一次真金白银）。0 成本提升路见 `store.promote_invalid`。
+
+    ⚠ **它是一个「状态」而不只是一个「事件」**：抛它的既可以是刚拦下的那个产地，
+    也可以是**下游**——盘上还躺着一份没裁决的 `.INVALID`，于是定稿 / 组装 / 批准
+    都不该开工。两种情形的恢复路逐字相同（`--revalidate` 提升或 `--apply-edit` 改），
+    ⇒ **不给它分子类**：没有任何消费方会在两者之间分叉，而为了区分「谁抛的」分子类，
+    正是 `PathRefused` 那一格论证过的错解法。
+
+    ⚠ `invalid_path` 指的是**那份被拦下的稿在哪**：一份时是文件，
+    一批时（stage5 逐章）是装着它们的那个目录。它不保证是单个文件路径。
+
+    ⚠ 「有 `.INVALID` 挡着」与「正式稿本身带着没消的 hard」是两回事，
+    后者盘上没有 `.INVALID` 可指 ⇒ 走 `BlockingFindingsUnresolved`。
     """
 
     def __init__(self, message: str, *, invalid_path: str) -> None:
         super().__init__(message)
         self.invalid_path = invalid_path
+
+
+class BlockingFindingsUnresolved(TerminalState):
+    """盘上那份是**正式稿**，但它带着还没消的阻断级（`hard`）判定。
+
+    ⚠⚠ **与 `GateBlocked` 分开，因为盘上没有 `.INVALID` 可指。** `GateBlocked` 的全部
+    价值在那个 `invalid_path`（「稿子没丢，也没有再花钱」）；这一条的正式稿好好地在
+    live 路径上，被拦住的是**下一步**（定稿 / 组装 / 交付）。硬拿 `GateBlocked` 抛它，
+    要么编一个不存在的路径，要么漏掉那个必填参数——后者的实测下场是 `TypeError`，
+    退出码 **70**「崩了，结论未知」，而它本来是一条退出码 2 的预期内终态。
+
+    ⚠ `rules` **必填且 typed**：那份 rule key 列表就是 `novel/report/builder.py::
+    remediation_of` 的路由输入与待办清单的条目。写成 `f'还有 {hard} 条'` 等于让消费方
+    去 parse 一个 list 的 repr——`Q-6`：措辞是会改的，措辞不是契约。
+
+    ⚠ 恢复路是**逐条修判据命中**（`--apply-edit` 改一行 / `--recheck` 按当前判据重判），
+    不是提升（那是 `GateBlocked`）、不是盖章（那是 `ApprovalRequired`）、
+    也不是重建上游（那是 `UpstreamStale` / `UpstreamUnproven`）。
+    """
+
+    def __init__(self, message: str, *, rules: Sequence[str]) -> None:
+        super().__init__(message)
+        self.rules = tuple(rules)
 
 
 class ApprovalRequired(TerminalState):
@@ -126,6 +183,38 @@ class ApprovalRequired(TerminalState):
 
 
     requirement = 'R-0.3b'
+
+
+class DeliveryIncomplete(TerminalState):
+    """这本书还没到可交付状态：同章双份 / 计划有而成稿无 / 开篇文案未定稿。
+
+    ⚠⚠ **一次报全，不是逐条失败。** `R-10.14` 的原话是「txt 是交付物，里面没有地方写
+    风险抬头横幅」——正因为成书里写不下警告，这道闸必须在拒绝的那一刻把差的东西
+    一次说清；拆成 first-match 之后，人补完缺章才发现文案还没定稿，
+    **一道 0 成本的闸要走三个来回**。
+    ⇒ 三项各自 typed，消费方按字段路由（人删掉多的那一份 / 去跑 stage5 /
+    `stage6.approve --pick N`），而**不是**去 parse 那段人话（`Q-6`）。
+
+    ⚠ **为什么是一个类而不是三个**：这三条不是三种失败，是同一件失败的三种量法
+    （同 `UpstreamStale` 覆盖 freshness / 消费指纹漂移 / 规模账不符）。差别在于
+    **哪一项要补**，那是数据不是类型。⇒ 拆开能给的机器可读性，字段一样给得出。
+    ⚠ 它与本函数前面那串 first-match 的闸不同**是有理由的**：那串是有序依赖
+    （没有批准就无从比对批准对象），这三条同时成立且互不依赖。
+
+    ⚠ 与 `UpstreamMissing` 分开：那一条说「上游那份产物不在盘上」（去跑那一层），
+    这一条的上游都在，是**内容还没齐**。
+    ⚠ `invalids`（被闸门拦下的废稿）**不在这里**：`R-10.14b` 明说它是「排除但要报计数」，
+    那是报告的一行，不是拒绝交付的理由。⇒ 四类残缺态里这道闸只拦三类。
+    """
+
+    requirement = 'R-10.14'
+
+    def __init__(self, message: str, *, duplicated: Sequence[int],
+                 missing: Sequence[int], hook_unapproved: bool) -> None:
+        super().__init__(message)
+        self.duplicated = tuple(duplicated)
+        self.missing = tuple(missing)
+        self.hook_unapproved = hook_unapproved
 
 
 class IngestTerminal(TerminalState):

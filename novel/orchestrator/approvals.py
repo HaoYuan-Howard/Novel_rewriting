@@ -27,7 +27,8 @@ from contracts.schema.stage7 import NameMap
 from contracts.schema.base import StrictModel
 from novel import paths, prov
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, HumanEditProtected, NovelError, UpstreamMissing,
+    ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected, NovelError,
+    UpstreamMissing,
 )
 from novel.orchestrator import state
 from novel.quality.global_review import (
@@ -298,8 +299,18 @@ def _store_for(novel_dir: Path) -> ArtifactStore:
 def _require_fresh_json(store: ArtifactStore, rel: str) -> str:
     path = store.path(rel)
     invalid = store.path(paths.invalid_of(rel))
+    # ⚠ **`GateBlocked`, not `ApprovalRequired`**: an unadjudicated INVALID sibling
+    # is not "nobody has approved this yet" — approval cannot bind to it at all,
+    # and the way out is the gate's own zero-cost promotion/edit path.  Telling a
+    # person to approve something they are structurally unable to approve sends
+    # them down the wrong recovery path, and the blocked draft's location — the
+    # whole point of `invalid_path` — never reaches the report.
     if invalid.is_file():
-        raise ApprovalRequired(f'{rel} has a sibling INVALID artifact')
+        raise GateBlocked(
+            f'{rel} has an unadjudicated INVALID sibling; an approval cannot bind '
+            f'to it.  Promote it with the producing node\'s `--revalidate --actor '
+            f'<id> --reason <why>`, or fix it with `--apply-edit` (both cost nothing)',
+            invalid_path=str(invalid))
     if not path.is_file():
         raise UpstreamMissing(f'{rel} is required before approval')
     spec = artifact_spec(rel)
@@ -335,8 +346,14 @@ def _require_fresh_json(store: ArtifactStore, rel: str) -> str:
 def _require_current_text(novel_dir: Path, rel: str) -> str:
     path = novel_dir / rel
     invalid = novel_dir / paths.invalid_of(rel)
+    # Same classification as `_require_fresh_json`: a blocked draft is a gate
+    # state, not a missing signature.  See that function for the reasoning.
     if invalid.is_file():
-        raise ApprovalRequired(f'{rel} has a sibling INVALID artifact')
+        raise GateBlocked(
+            f'{rel} has an unadjudicated INVALID sibling; an approval cannot bind '
+            f'to it.  Promote it with the producing node\'s `--revalidate --actor '
+            f'<id> --reason <why>`, or fix it with `--apply-edit` (both cost nothing)',
+            invalid_path=str(invalid))
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
@@ -595,8 +612,19 @@ def _require_stage5_complete(
     unexpected = sorted((deep_done | shallow_done) - set(planned))
     if unexpected:
         raise HumanEditProtected(f'stage5 has drafts outside the current plan: {unexpected}')
-    if any((novel_dir / 'stage5').glob('*/ch*.INVALID.json')):
-        raise ApprovalRequired('stage5 still has blocked INVALID chapter drafts')
+    # Same classification as `_require_fresh_json`: a blocked draft is a gate
+    # state, not a missing signature.  Stage5 blocks per chapter, so the pointer
+    # is the directory that holds them — `GateBlocked.invalid_path` is documented
+    # as "where the blocked draft(s) are", not "one file".
+    blocked = sorted(p.relative_to(novel_dir).as_posix()
+                     for p in (novel_dir / 'stage5').glob('*/ch*.INVALID.json'))
+    if blocked:
+        raise GateBlocked(
+            f'stage5 still has blocked INVALID chapter drafts: {blocked}; an '
+            f'approval cannot bind to them.  Promote them with `stage5.write '
+            f'--mode <arm> --revalidate --actor <id> --reason <why>`, or fix them '
+            f'with `--apply-edit` (both cost nothing)',
+            invalid_path=str(novel_dir / 'stage5'))
 
 
 def approve_gate(base: str | os.PathLike[str], sid: str, gate: str) -> ApprovalDoc:

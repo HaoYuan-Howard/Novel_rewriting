@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema.stage7 import ApprovedNameMap
-from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
+from novel.errors import ApprovalRequired, GateBlocked, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals, jobs, state
 from novel.stages.stage7 import rename
 from tests import corpus, sandbox
@@ -288,8 +288,15 @@ def test_stage5_gate_requires_exact_arm_assignment_no_invalids_and_combined_draf
 
         invalid = box.dir / 'stage5/deep/ch01.INVALID.json'
         invalid.write_bytes((box.dir / 'stage5/deep/ch01.json').read_bytes())
-        with pytest.raises(ApprovalRequired, match='INVALID'):
+        # ⚠ **`GateBlocked` 而不是 `ApprovalRequired`**：没裁决的 `.INVALID` 不是
+        #   「还没人批」，是「此刻批不了」——出路是闸门自己的 0 成本提升/编辑路，
+        #   而那份被拦下的稿在哪必须说得出来（`invalid_path`）。
+        #   ⚠ stage5 逐章拦 ⇒ 指的是**装着它们的那个目录**（`GateBlocked` 的原话是
+        #     「那份被拦下的稿在哪」，不是「一个文件路径」）；具体是哪几章在措辞里。
+        with pytest.raises(GateBlocked, match='INVALID') as blocked:
             approvals.approve_gate(box.root, box.sid, 's5')
+        assert blocked.value.invalid_path == str(box.dir / 'stage5')
+        assert 'stage5/deep/ch01.INVALID.json' in str(blocked.value)
         invalid.unlink()
 
         with pytest.raises(UpstreamMissing, match='stage5/draft.md'):

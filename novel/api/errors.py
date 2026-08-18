@@ -25,7 +25,9 @@ from novel.errors import (
     AccountingKeyUnregistered,
     ApprovalRequired,
     ArtifactUnreadable,
+    BlockingFindingsUnresolved,
     ByteFormRefused,
+    DeliveryIncomplete,
     GateBlocked,
     HookCopyMissing,
     HumanEditProtected,
@@ -44,6 +46,7 @@ from novel.errors import (
     UnsupportedRunMode,
     UpstreamMissing,
     UpstreamStale,
+    UpstreamUnproven,
     ValueDomainRefused,
 )
 from novel.orchestrator.agent import AgentBusy
@@ -68,8 +71,19 @@ STATUS: dict[type[NovelError], int] = {
     #: ⚠ **不是 404**：那一份在盘上，只是不再是当前根上那一版 ⇒ 与「还没跑」是两条恢复路。
     #: 409 与 `ArtifactUnreadable` 同码同因：产物是**数据**，不是我们的代码写错了。
     UpstreamStale: 409,
+    #: ⚠ **与 `UpstreamStale` 同码不同因**：那一条断言「它变了」，这一条只说
+    #: 「证明不了它是当前那一份」。同为 409（产物是**数据**），但界面上给的下一步不同：
+    #: 前者指得出重建哪一条边，后者只能整份从 producer 重建。
+    UpstreamUnproven: 409,
     GateBlocked: 409,
+    #: 正式稿在 live 路径上、但带着没消的 hard ⇒ 下一步被拦住。**与 `GateBlocked` 同码
+    #: 不同因**：那条指得出被拦下的稿在哪（`invalid_path`），这条盘上没有 `.INVALID`，
+    #: 给的是 `rules`——逐条修判据命中，不是提升一份废稿。
+    BlockingFindingsUnresolved: 409,
     ApprovalRequired: 409,
+    #: 上游都在，但内容还没齐（缺章 / 同章双份 / 文案未定稿）⇒ 是**冲突**不是 404：
+    #: 那本书在，只是这一刻不可交付。`R-10.14` 明写 txt 里没有地方写风险抬头横幅。
+    DeliveryIncomplete: 409,
     #: 原始内容与当前状态冲突：覆盖会抹掉另一份书或人工编辑，或批准后输入已变化。
     SourceConflict: 409,
     HumanEditProtected: 409,

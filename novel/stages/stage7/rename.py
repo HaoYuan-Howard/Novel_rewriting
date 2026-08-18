@@ -35,7 +35,9 @@ from contracts.schema.stage7 import (
 )
 from novel import paths, prov
 from novel.core.naming import family_groups, strip_distinguisher, surface_owners
-from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.errors import (
+    BlockingFindingsUnresolved, GateBlocked, TerminalState, UpstreamMissing,
+)
 from novel.llm.client import LlmClient
 from novel.report import build
 from novel.report.findings import Outcome
@@ -671,9 +673,15 @@ def run_adopt_residual(
         'approved': None, 'book_txt': None, 'identity': art.identity,
     })
     outcomes = _judge(ctx, store, rebuilt, up)
-    if _blocking(outcomes):
-        raise GateBlocked(
-            '采纳 residual 后产生阻断级问题，正式人物表与交付物均未改动')
+    # ⚠ **不是 `GateBlocked`**：这一条什么都没落盘（正式稿仍在 live 路径上，也没有
+    #   `.INVALID` 可指）。此前写成 `GateBlocked` 且漏了它必填的 `invalid_path`
+    #   ⇒ 真走到这条路抛的是 `TypeError`，退出码 70「崩了，结论未知」。
+    blocking = _blocking_rules(outcomes)
+    if blocking:
+        raise BlockingFindingsUnresolved(
+            f'采纳 residual 后产生阻断级问题（{blocking}），正式人物表与交付物均未改动。'
+            f'先把这些判据消掉（`--apply-edit` 改一行 / `--recheck` 按当前判据重判，都 0 成本）',
+            rules=blocking)
     with store.history_transaction(REL, BOOK_TXT):
         store.write_round(REL, rebuilt)
         _retire_book_txt(store)
@@ -794,12 +802,13 @@ def run_approve(
         raise TerminalState(
             '人物表审批对象已变化：'
             f'提交 {subject_sha256 or "<空>"}，当前 {actual_subject}；请刷新后重审')
-    hard = sorted({f.rule for f in art.book if _sev_of(f.rule) == 'hard'})
+    hard = stored_blocking_rules(art)
     if hard:
-        raise TerminalState(
+        raise BlockingFindingsUnresolved(
             f'还有 {len(hard)} 条阻断级问题没消（{hard}），不该定稿——'
             f'人改一行走 `--apply-edit <name_map_edit.json 路径>`，'
-            f'或按当前判据重判 `--recheck`（都 0 成本）')
+            f'或按当前判据重判 `--recheck`（都 0 成本）',
+            rules=hard)
 
     # Existing repositories may contain a pre-fix book assembled before this
     # approval.  Approval never blesses that old byte product retroactively.
@@ -821,6 +830,25 @@ def _sev_of(rule: str) -> str:
     return REGISTRY.get(rule).sev
 
 
+def _blocking_rules(outcomes: list[Outcome]) -> list[str]:
+    """阻断级命中的 rule key，排序去重。**按 rule key 判，不按 detail 串。**
+
+    ⚠ 它是 `BlockingFindingsUnresolved.rules` 的唯一产地：那条终态要把这份列表
+    原样交出去（消费方按 key 路由修复，不去 parse 措辞）。
+    """
+    return sorted({o.rule for o in outcomes if o.findings and _sev_of(o.rule) == 'hard'})
+
+
 def _blocking(outcomes: list[Outcome]) -> bool:
-    """有没有阻断级命中。**按 rule key 判，不按 detail 串。**"""
-    return any(o.findings and _sev_of(o.rule) == 'hard' for o in outcomes)
+    """有没有阻断级命中。**与上面那条共用一把尺子**，不重写一遍条件。"""
+    return bool(_blocking_rules(outcomes))
+
+
+def stored_blocking_rules(art: NameMap) -> list[str]:
+    """产物里**存着的**那些阻断级结论。
+
+    ⚠ 与 `_blocking_rules` 是两个问题：那条问「这次重判判出了什么」，
+    这条问「盘上这份带着什么」。`stage7.approve` 与 `stage7.assemble` 两道闸
+    问的都是后者 ⇒ **共用这一把尺子**，别在两处各写一遍那个集合推导。
+    """
+    return sorted({f.rule for f in art.book if _sev_of(f.rule) == 'hard'})

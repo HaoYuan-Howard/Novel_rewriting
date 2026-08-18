@@ -31,10 +31,13 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
   版本漂移、ledger 不闭合或新增 skip 都必须失败。
 - [ ] 语料闸可用性前置（**已完成大部分，剩余见下**）：`-m corpus` 批要在**当前**盘面上给出
   可解释读数——2026-08-18 由 251 红降到 16 红 / 82 跳过 / 800 通过。剩余失败逐条对应真实
-  产物或代码问题，**不得以「已知问题」记账**。当前剩余两类：① 沙箱里
-  `novel/orchestrator/approvals.py::backfill_from_disk` 只回填得出 `s0/s1/s3`；
-  ② `novel/stages/stage7/assemble.py` 的五处交付拒绝抛的是抽象基类 `TerminalState`，
-  而 `novel/api/errors.py::status_of` 刻意不给它状态码 ⇒ 经 HTTP 时变成 500 而不是 409。
+  产物或代码问题，**不得以「已知问题」记账**。当前剩余一类：沙箱里
+  `novel/orchestrator/approvals.py::backfill_from_disk` 只回填得出 `s0/s1/s3`。
+  〔原第二类（stage7 交付拒绝抛抽象基类 `TerminalState`，而 `status_of` 刻意不给它
+  状态码 ⇒ 经 HTTP 变 500 而不是 409）已于 2026-08-18 收口：`assemble.py` 现在
+  **每一处 raise 都是具体类**，三个新类 `UpstreamUnproven` /
+  `BlockingFindingsUnresolved` / `DeliveryIncomplete` 均已登记进
+  `novel/api/errors.py::STATUS`。〕
 
 ⚠ `tests/corpus.py::requires_current` 产的跳过**不进本 manifest 的 skip allowlist**：
 `contracts/schema/corpus.py::CorpusSkipExpectation` 会拒收它们，而**那是对的**——本条要求的

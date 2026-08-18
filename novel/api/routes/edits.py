@@ -27,7 +27,7 @@ from contracts.schema.orchestration import JobRecord
 from contracts.schema.stage5 import ChapterResponse
 from novel.api.deps import checked_sid, get_base
 from novel.cli import exit_codes as X
-from novel.errors import ApprovalRequired, NovelError
+from novel.errors import ApprovalRequired, GateBlocked, NovelError
 from novel.orchestrator import approvals, jobs, uploads
 
 router = APIRouter(prefix='/novels')
@@ -54,10 +54,14 @@ def _stamp(base: str, sid: str, gate: str) -> None:
 
     前置审批链尚未补齐 ⇒ 定稿照样落，检查单那一格由
     approvals 屏自己呈现、可在那里手工补链——**不把检查单的顺序翻成定稿的失败**。
+
+    ⚠ **两条都要接住**：「前置章没盖」是 `ApprovalRequired`，
+    「有一份没裁决的 `.INVALID` 挡着，批不了」是 `GateBlocked`。
+    只接前者的样子是：一次**已经落盘**的定稿因为上游还躺着一份废稿而整条请求 409。
     """
     try:
         approvals.approve_gate(base, sid, gate)
-    except ApprovalRequired as exc:
+    except (ApprovalRequired, GateBlocked) as exc:
         warnings.warn(f'定稿已落盘，但审批章 {gate} 没盖上（{exc}）——'
                       f'前置链在 approvals 屏补', RuntimeWarning, stacklevel=2)
 
