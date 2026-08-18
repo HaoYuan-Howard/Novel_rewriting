@@ -39,6 +39,7 @@ from contracts.invariants import NODES
 from contracts.schema.orchestration import (
     JobEvent, JobRecord, JobStart, ProgressEvent, Step,
 )
+from novel.appendlog import append_line
 from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import TerminalState
@@ -48,8 +49,6 @@ from novel.prov import code_version
 
 JOBS_FILENAME = 'jobs.jsonl'
 LOGS_DIRNAME = 'logs'
-
-_EVENT_APPEND_LOCK = threading.Lock()
 
 
 class JobConflict(TerminalState):
@@ -218,16 +217,15 @@ def append_event(base: str | os.PathLike[str], event: JobEvent) -> None:
     ⚠ 一行一个 JSON、末尾带 `\\n`：被 kill 时最坏只损坏**最后一行**，
     而读的那一侧把半截行当没有（见 `read_events`）。
     整份 `os.replace` 的写法在这一点上是反的——它可能损坏**整份**记录。
+
+    ⚠ 写入方不止服务进程：CLI `queue` 也走 `_run_lane` → `jobs.start`，
+    而不同小说可以并行（`R-13.7`）⇒ 互斥必须跨进程，落点是 `novel/appendlog.py`。
     """
-    p = jobs_path(base)
-    p.parent.mkdir(parents=True, exist_ok=True)
     # 不用 exclude_none：JobStart.sid 是必填可空，上传新书时必须把字面的 null 留下。
     # 全局剥 None 会把「字段存在且为 null」偷换成「字段缺失」，事件下一次就读不回来。
-    line = json.dumps(event.model_dump(mode='json'),
-                      ensure_ascii=False)
-    with _EVENT_APPEND_LOCK:
-        with open(p, 'ab') as f:
-            f.write(line.encode('utf-8') + b'\n')
+    append_line(
+        jobs_path(base),
+        json.dumps(event.model_dump(mode='json'), ensure_ascii=False))
 
 
 def read_events(base: str | os.PathLike[str]) -> list[JobEvent]:

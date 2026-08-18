@@ -22,21 +22,17 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 import time
 
 from contracts.invariants import BEACON_STATES, NODES, PIPELINE_STEPS
 from contracts.schema.orchestration import ProgressEvent, RunStepView
+from novel.appendlog import append_line
 from novel.orchestrator import nodes as N
 from novel.orchestrator.jobs import service_dir
 
 #: 文件名只有这一处。⚠ 与 `jobs.jsonl` 分文件：两份记录的写入方、容错语义、
 #: 消费方全不同（见模块 docstring），合一份就要在折叠规则里互相打招呼。
 BEACON_FILENAME = 'agent_progress.jsonl'
-
-#: 与 `jobs.py` 那把同形：进程内串行化追加；跨进程最坏交错出**半截的最后一行**，
-#: 由 `read_events` 的半截行容错兜住。
-_APPEND_LOCK = threading.Lock()
 
 #: `events_tail` 的长度——人读时间线只要最近这一段，全量永远在盘上。
 TAIL = 20
@@ -48,13 +44,18 @@ def beacon_path(base: str | os.PathLike[str]):
 
 def append(base: str | os.PathLike[str], event: ProgressEvent) -> None:
     """追加一行。**永不读-改-写**（理由同 `jobs.append_event`：
-    被 kill 时最坏只损坏最后一行，而读的那一侧把半截行当没有）。"""
-    p = beacon_path(base)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event.model_dump(mode='json'), ensure_ascii=False)
-    with _APPEND_LOCK:
-        with open(p, 'ab') as f:
-            f.write(line.encode('utf-8') + b'\n')
+    被 kill 时最坏只损坏最后一行，而读的那一侧把半截行当没有）。
+
+    ⚠⚠ **这一份的写入方是 N 个进程**，不是 N 个线程：`mark` 是 CLI 子命令，
+    每个 agent 各自拉起自己的 `novel.cli mark`，而 `R-13.7` 明说不同小说可以并行。
+    ⇒ 光有线程锁时，A 进程的半截行会被 B 进程紧接着写的完整行**顶到中间**，
+    而 `read_events` 对**中间**的坏行是 `raise`（只容忍最后一行）——
+    一次交错就让所有书的进度屏一起打不开。互斥因此在 `novel/appendlog.py`
+    （线程锁 + 操作系统文件锁），全仓只有那一份实现。
+    """
+    append_line(
+        beacon_path(base),
+        json.dumps(event.model_dump(mode='json'), ensure_ascii=False))
 
 
 def read_events(base: str | os.PathLike[str]) -> list[ProgressEvent]:
@@ -62,6 +63,9 @@ def read_events(base: str | os.PathLike[str]) -> list[ProgressEvent]:
 
     ⚠ 同样只容忍**最后一行**——中间有坏行说明这份文件被别的东西写过
     （比如手改），那是另一回事，一起吞掉会让「记录不全」变成静默。
+    ⚠ 这条「只容忍最后一行」**要靠写侧的跨进程锁才成立**：没有那把锁时，
+    并发的两个 `mark` 进程能把半截行留在中间，于是这里会对一次正常的并行跑开火。
+    锁在 `novel/appendlog.py`。
     """
     p = beacon_path(base)
     if not p.is_file():

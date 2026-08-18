@@ -200,7 +200,13 @@ def test_only_the_store_reads_json_directly():
 #: ——那份稿从此没有来源账，而提升路又「沿用原稿里那一份」。盘上留下 1 份铁证。
 _WRITE_ALLOWED = {
     'novel/store.py': '它就是那条唯一的写路，两道闸在这里',
-    'novel/llm/ledger.py': '成本账是 append-only JSONL，不是产物；它按字节追加，永不读-改-写',
+    'novel/appendlog.py': (
+        'append-only 事件流的**唯一追加口**：五份 `_service/*.jsonl`（账本、作业、队列、'
+        '进度信标、agent 代跑）都从这里落字节。它们不是产物——不进来源账、不进 '
+        '`_provenance`、`ARTIFACTS` 里没有它们。⚠ 它同时是那把**跨进程**锁的唯一实现：'
+        '`R-13.7` 允许不同小说并行，而 `mark` / CLI `queue` 都是独立进程 ⇒ '
+        '只有线程锁时半截行会被顶到文件中间，而读侧对中间坏行是 `raise`。'
+        '锁文件 `<目标>.lock` 也在这里创建'),
     'novel/llm/cache.py': (
         '响应缓存**不是产物**：不进来源账、不进 `_provenance`、`.gitignore` 盖着。'
         '它还是全仓唯一一处**会主动删文件**的地方（`evict`），而那与判据 7'
@@ -211,11 +217,13 @@ _WRITE_ALLOWED = {
         '收窄成「绝不落**产物**盘」**，理由是一句话：'
         '「子进程被 OOM 杀掉了」这条记录**只有父进程写得出来**——'
         '子进程写不了自己的死讯，而退出码正是编排层判成败的依据（`R-12.3`）。'
-        '它写的两处（`_service/jobs.jsonl` · `_service/logs/`）都不是产物，'
-        '且都是 append-only：被 kill 最坏只损坏最后一行'),
-    'novel/orchestrator/queue.py': (
-        '持久队列只写 Output/_service/queues.jsonl；它记录排队、取消、恢复与 '
-        'done/failed/not_run，append-only 且不是小说产物。真实产物仍只由 CLI 子进程写'),
+        '它拥有的两处记录（`_service/jobs.jsonl` · `_service/logs/`）都不是产物，'
+        '且都是 append-only：被 kill 最坏只损坏最后一行。'
+        '⚠ 直写盘的只剩子进程日志——`jobs.jsonl` 已改走 `novel/appendlog.py`'),
+    # ⚠ `queue.py` / `beacon.py` / `llm/ledger.py` **刻意不在这张表里**：
+    #   它们的追加已经收到 `novel/appendlog.py` 那一个落点，自己不再碰盘。
+    #   把它们留在白名单里等于永久豁免——那三个模块下一次真的直写盘时，
+    #   这条守卫就不会出声了。
     'novel/orchestrator/uploads.py': (
         '浏览器原始上传与一次性 stage0 编辑计划，均只写 Output/_service/。'
         '前者要长期保留供 S-00 按 original_path 审校；后者只把人的选择交给 CLI '
@@ -223,14 +231,10 @@ _WRITE_ALLOWED = {
     'novel/orchestrator/approvals.py': (
         '人工闸门与深度选章只写 Output/_service/approvals/。它们控制作业是否可启动，'
         '不是小说产物，不进 ARTIFACTS / provenance；原子替换防止并发读到半份状态'),
-    'novel/orchestrator/beacon.py': (
-        '进度信标只写 Output/_service/agent_progress.jsonl，append-only、'
-        '永不读-改-写；写入方是 CLI 的 `mark` 子命令（agent 代跑时的人为打点），'
-        '不是小说产物，不进 ARTIFACTS / 来源账'),
     'novel/orchestrator/agent.py': (
-        'agent 代跑记录只写 Output/_service/agent_runs.jsonl 与 logs/agent-*.log，'
-        'append-only、永不读-改-写；它与 jobs.py 写 _service 同一份理由'
-        '（「子进程被杀」这条记录只有父进程写得出来），不是小说产物'),
+        'agent 代跑的**子进程日志** `Output/_service/logs/agent-*.log` 按字节追加；'
+        '它与 jobs.py 写 _service 同一份理由（「子进程被杀」这条记录只有父进程写得出来），'
+        '不是小说产物。⚠ `agent_runs.jsonl` 那一份已改走 `novel/appendlog.py`'),
 }
 
 

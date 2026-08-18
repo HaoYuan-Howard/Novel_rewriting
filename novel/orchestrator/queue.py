@@ -42,6 +42,7 @@ from contracts.schema.stage0 import RemovalReport
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from novel import paths, prov
+from novel.appendlog import append_line
 from novel.cli import exit_codes as X
 from novel.cli.exit_codes import CRASH
 from novel.errors import ApprovalRequired, ArtifactUnreadable, QueueConflict, UpstreamMissing
@@ -296,7 +297,6 @@ def fold_counts(outcomes: Iterable[bool], total: int) -> QueueCounts:
 
 QUEUES_FILENAME = 'queues.jsonl'
 RESTART_NOTE = '服务重启前这项已经交给作业执行器，但队列没有记到终态；先对照作业与产物恢复'
-_EVENT_APPEND_LOCK = threading.Lock()
 _STATE_LOCK = threading.RLock()
 
 
@@ -332,14 +332,15 @@ def queue_path(base: str | os.PathLike[str]) -> Path:
 
 
 def append_event(base: str | os.PathLike[str], event: QueueEvent) -> None:
-    """Append one durable queue transition; never read-modify-write the log."""
-    p = queue_path(base)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event.model_dump(mode='json'), ensure_ascii=False)
-    with _EVENT_APPEND_LOCK:
-        with open(p, 'ab') as stream:
-            stream.write(line.encode('utf-8') + b'\n')
-            stream.flush()
+    """Append one durable queue transition; never read-modify-write the log.
+
+    ⚠ 写入方既有服务进程也有 CLI `queue`，而每本书一条 lane 是并行的
+    （`R-13.7`）⇒ 互斥必须跨进程，落点是 `novel/appendlog.py`；
+    `read_events` 那条「只容忍最后一行」要靠它才成立。
+    """
+    append_line(
+        queue_path(base),
+        json.dumps(event.model_dump(mode='json'), ensure_ascii=False))
 
 
 def read_events(base: str | os.PathLike[str]) -> list[QueueEvent]:

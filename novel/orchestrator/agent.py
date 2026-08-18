@@ -48,6 +48,7 @@ from contracts.schema.orchestration import (
     AgentPending, AgentQueueView, AgentRejected, AgentRunEvent, AgentRunRecord,
     AgentRunStart,
 )
+from novel.appendlog import append_line
 from novel.cli.exit_codes import CRASH
 from novel.errors import UpstreamMissing
 from novel.orchestrator import jobs
@@ -78,7 +79,6 @@ lock_key = jobs.agent_lock_key
 #: 「想并发就得放弃同书互斥」的假选择。
 MAX_CONCURRENT = 3
 
-_APPEND_LOCK = threading.Lock()
 _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
 _PROCS_LOCK = threading.Lock()
@@ -177,13 +177,15 @@ def run_log_path(base: str | os.PathLike[str], run_id: str) -> Path:
 
 
 def append(base: str | os.PathLike[str], event: AgentRunEvent) -> None:
-    """追加一行。**永不读-改-写**（同 `jobs.append_event` 那条理由）。"""
-    p = runs_path(base)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event.model_dump(mode='json'), ensure_ascii=False)
-    with _APPEND_LOCK:
-        with open(p, 'ab') as f:
-            f.write(line.encode('utf-8') + b'\n')
+    """追加一行。**永不读-改-写**（同 `jobs.append_event` 那条理由）。
+
+    ⚠ 这一份目前只有服务进程写，但互斥仍走 `novel/appendlog.py` 那一个落点：
+    五份 append-only JSONL 里留一份「自己持锁」会在下一次改布局时分家，
+    而 `R-14.6` 已经登记了「多实例绕得过进程内的锁」这条限制。
+    """
+    append_line(
+        runs_path(base),
+        json.dumps(event.model_dump(mode='json'), ensure_ascii=False))
 
 
 def read_events(base: str | os.PathLike[str]) -> list[AgentRunEvent]:

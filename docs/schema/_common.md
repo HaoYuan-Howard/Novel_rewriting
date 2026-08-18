@@ -354,9 +354,11 @@ stage5 / stage6 / stage7 **逐字段相同**。
 ### 8.1 服务账本的逐请求观测（不进入 `Usage` schema）
 
 `Output/_service/ledger.jsonl` 的每一行对应一次真实 wire attempt 或一次缓存命中。
-同一本进程中的多个写手先经线程锁，不同小说的 CLI 子进程再经
+同一个进程里的多个写手先经线程锁，不同小说的 CLI 子进程再经
 `ledger.jsonl.lock` 的操作系统文件锁；临界区只含一行已经序列化好的 append，LLM 请求本身
 不被串行化。锁文件是 `_service/` 状态，不是产物，也不进入来源账。
+⚠ 这两把锁的实现落点是 `novel/appendlog.py`，账本与其余四份 `_service/*.jsonl`
+**共用同一份**（`_orchestration.md` §七）——不是每份各持一把。
 在上表的 token 事实之外，每行还固定带以下可空字段：
 
 | 字段 | 含义 |

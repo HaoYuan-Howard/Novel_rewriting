@@ -458,7 +458,8 @@ Output/_service/jobs.jsonl        append-only 事件流
 Output/_service/queues.jsonl      持久批量队列 append-only 事件流
 Output/_service/agent_runs.jsonl  headless agent append-only 事件流（含双授权快照）
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
-Output/_service/ledger.jsonl      跨书逐请求成本事实（旁有 ledger.jsonl.lock）
+Output/_service/ledger.jsonl      跨书逐请求成本事实
+Output/_service/*.jsonl.lock      上面五份 JSONL 各自的追加锁载体（见下）
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 stage0 CLI 的一次性编辑计划
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与深度选章（原子替换）
@@ -466,6 +467,19 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与深度选章�
 
 它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们；
 `tests/test_layering.py` 的写口与路由所有权白名单为每一类带着明确理由。
+
+> ### 五份 JSONL 的追加口只有一个：`novel/appendlog.py`
+>
+> 写入方**不止服务进程**：`agent_progress.jsonl` 由 N 个 agent 各自的
+> `novel.cli mark` 子进程写，`jobs.jsonl` / `queues.jsonl` 由服务进程**和**
+> CLI `queue` 一起写，而 `R-13.7` 允许不同小说并行。
+>
+> ⇒ 追加同时握**线程锁**（同进程内多个写手）与**操作系统文件锁**
+> （Windows `msvcrt` / POSIX `flock`，`<目标>.lock`，30s 超时后显式 `TimeoutError`）。
+> 此前只有 `ledger.jsonl` 有那把文件锁，其余四份仅有线程锁——
+> 而读侧「只容忍**最后一行**」的容错在并发下兜不住：A 进程的半截行会被
+> B 进程紧接着写的完整行**顶到中间**，于是读侧对一次正常的并行跑开火，
+> 且是**所有书**的视图一起失效。锁补齐之后那条容忍才真正成立。
 
 `approvals/<sid>.json` 的盘上服务记录当前为 **v2**。每个已盖 gate、已阅状态、
 深浅章选择和 writing 授权都必须带一份 current-subject proof：当前

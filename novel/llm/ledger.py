@@ -20,15 +20,13 @@ ledger.py —— 成本账。**原型完全没有这一层。**
 from __future__ import annotations
 
 import json
-import os
 import threading
-import time
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from contracts.schema import Usage
+from novel.appendlog import append_line
 from novel.errors import ProvenanceRefused
 from novel.observability import RequestProgress
 
@@ -60,48 +58,10 @@ def combine_usage(*parts: Usage | None) -> Usage | None:
         **tokens,
     )
 
-# Composite runs create multiple ledger instances in one process; different novels
-# create different CLI processes. The thread lock covers the first case and the
-# adjacent OS file lock covers the second. Only one already-rendered JSONL line is
-# inside the lock, so model calls remain fully concurrent.
-_APPEND_LOCK = threading.Lock()
-
-
-@contextmanager
-def _process_append_lock(path: Path):
-    lock_path = path.with_name(path.name + '.lock')
-    with open(lock_path, 'a+b') as handle:
-        if os.name == 'nt':
-            import msvcrt
-
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b'\0')
-                handle.flush()
-            deadline = time.monotonic() + 30.0
-            while True:
-                handle.seek(0)
-                try:
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(
-                            f'timed out locking shared ledger {lock_path}')
-                    time.sleep(0.01)
-            try:
-                yield
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+# 一次合成跑会在同一个进程里造多个账本实例，不同小说则是不同的 CLI 进程。
+# 两种并发都由 `novel/appendlog.py` 的那一把追加口盖住（线程锁 + 操作系统文件锁），
+# 本模块因此不再自己持锁——那把锁现在还给 `jobs.jsonl` / `queues.jsonl` /
+# `agent_progress.jsonl` 共用，不是各抄一份。
 
 
 def ledger_path(base: str | Path) -> Path:
@@ -288,18 +248,13 @@ class CostLedger:
             self._append(row)
 
     def _append(self, row: dict) -> None:
-        """一行 JSON + `\\n`，**按字节追加**。
+        """一行 JSON，**按字节追加**（换行与两把锁都在 `appendlog.append_line` 里）。
 
         ⚠ 二进制模式不是洁癖：Windows 上文本模式会把 `\\n` 写成 `\\r\\n`，
         于是同一份账本在两台机器上是两种字节，`grep`/`wc -l` 之外的任何逐字节比对都会打架。
         """
         assert self.path is not None
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n'
-        with _APPEND_LOCK:
-            with _process_append_lock(self.path):
-                with open(self.path, 'ab') as fh:
-                    fh.write(line.encode('utf-8'))
+        append_line(self.path, json.dumps(row, ensure_ascii=False, sort_keys=True))
 
     # ── 结算：run 总量 vs **这一份** ──────────────────────────────────────
 
