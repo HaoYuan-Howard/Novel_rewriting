@@ -112,7 +112,8 @@ provenance 的口相同。
 ### 产物、schema 与目录
 
 盘上布局是 `<base>/<平台_书名_sid>/stage0..stage7/`，服务自己的账在 `<base>/_service/`
-（`ledger.jsonl` / `agent_progress.jsonl`），终审包是 `<base>/final_review_<sid>.md`。
+（`ledger.jsonl` / `agent_progress.jsonl`），终审包是 `<平台_书名_sid>/<书名>_review.md`
+（落书目录根、不是产物，落点唯一落在 `novel/paths.py::review_package_path`）。
 
 路径字面只登记在 `contracts/artifacts.py::ARTIFACT_PATHS`；`contracts/schema/__init__.py::ARTIFACT_SPECS`
 为 JSON 子集叠加当前模型与 schema version。产物带 `_schema_version` 信封，**只接受注册表声明的当前

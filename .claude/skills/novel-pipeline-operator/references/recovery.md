@@ -87,7 +87,7 @@
 | `stage6.hook` | `--apply-edit` · `--recheck` · `--revalidate` · `--wontfix` | `<novel-dir>/stage6/hook_edit.json` | 一次只改目标候选；随后重跑机械与语义审判 |
 | `stage7.rename` | `--apply-edit` · `--adopt-residual` · `--identity` · `--recheck` · `--revalidate` | `<novel-dir>/stage7/name_map_edit.json` | 先用 `--emit-edit-template`（只读）取当前注册的 `NameMapEdit` 骨架再改，不手抄 schema 版本。⚠ `--adopt-residual high` **重写 `stage7/name_map.json`、清旧审批、退休现有 `book.txt`**，`--identity` 也重写同一份 name map——两者都不是“看一眼”，用后强制重新 hash-bound approve、assemble 和逐字对账 |
 
-非节点的第十个写入面是终审包 `<base>/final_review_<sid>.md`：只供用户读取，可随跑更新，不得承担产物修复功能。
+非节点的第十个写入面是终审包 `<novel-dir>/<书名>_review.md`（落书目录根，不在任何 `stageN/` 下；确定路径由启动 prompt 给出）：只供用户读取，可随跑更新，不得承担产物修复功能。
 
 不得直接修改：正式 JSON/TXT、`book.txt`、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 历史、旧 run 的输出目录。`mark` 是写进度信标的唯一入口。
 

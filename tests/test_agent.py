@@ -16,12 +16,14 @@ import shutil
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 from contracts.schema.orchestration import (
     AgentRunEvent, AgentRunStart,
 )
+from novel import paths
 from novel.orchestrator import agent, jobs
 from novel.orchestrator.jobs import JobConflict
 
@@ -40,7 +42,15 @@ def _start(sid='42', argv=('claude', '-p', 'x'), authorized=True,
 
 # ── 提示词与命令行（纯函数） ──────────────────────────────────────────────
 
-def test_prompt_carries_the_two_authorizations_independently(base):
+@pytest.fixture
+def book(base):
+    """一本落了地的书目录。**提示词里那条终审包路径要靠它才是真实分支。**"""
+    d = Path(base) / 'FQ_测试书_42'
+    d.mkdir()
+    return d
+
+
+def test_prompt_carries_the_two_authorizations_independently(base, book):
     """付费与正文外发是正交的两轴；任一项都不能借另一项扩权。"""
     yes = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
     no_paid = agent.build_prompt('42', base, authorized=False, egress_authorized=True)
@@ -53,7 +63,22 @@ def test_prompt_carries_the_two_authorizations_independently(base):
         assert 'sid=42' in text
         assert 'novel-pipeline-operator' in text
         assert 'SKILL.md' in text                     # 双保险：自动加载之外的显式路径
-        assert 'final_review_42.md' in text
+        # 落点取生产那一个落点，不在测试里重拼一份（`docs/LESSONS.md` 第 21 条）。
+        assert paths.review_package_path(book).as_posix() in text
+    # 同时钉住人看得懂的那一面：书名 + `_review.md`，且**落在书目录里**。
+    assert '测试书_review.md' in yes
+    assert 'final_review' not in yes, '终审包已不叫 final_review_<sid>.md，提示词里不该再出现'
+
+
+def test_prompt_gives_the_rule_when_the_book_dir_is_not_there_yet(base):
+    """`preview` 可以在摄入之前调用 ⇒ 那时拼不出书名。
+
+    ⚠ 这一格**不许猜一个名字**：猜出来的那份会与书目录落地后按同一条规则算出的
+    名字分家，于是盘上出现两份终审包，而没有任何一层会报错。
+    """
+    text = agent.build_prompt('42', base, authorized=False, egress_authorized=False)
+    assert '<书目录>/<书名>_review.md' in text
+    assert 'state 42' in text                         # 指向真正能给出书目录的那条命令
 
 
 def test_argv_is_the_whitelisted_shape(base):

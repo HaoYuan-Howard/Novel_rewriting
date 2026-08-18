@@ -48,6 +48,7 @@ from contracts.schema.orchestration import (
     AgentPending, AgentQueueView, AgentRejected, AgentRunEvent, AgentRunRecord,
     AgentRunStart,
 )
+from novel import paths
 from novel.appendlog import append_line
 from novel.cli.exit_codes import CRASH
 from novel.errors import UpstreamMissing
@@ -112,15 +113,25 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
 
     核心构造函数故意不设默认值：API/UI 可以提供产品默认，但到达 prompt 边界时
     两项事实必须都已经物化，不能让一个布尔值静默扩大成另一项授权。
+
+    ⚠ 终审包的落点由 `paths.review_package_path` 现算，**不在这里拼第二份文件名**。
+    书目录还没落地时（preview 可以在摄入之前调）拼不出书名，那时给出规则而不是
+    猜一个名字——`state` 会打印书目录，届时按同一条规则得到同一个名字。
     """
     base_abs = os.path.abspath(os.fspath(base))
     py = Path(sys.executable).as_posix()
+    novel_dir = paths.find_novel_dir(base_abs, sid)
+    review_target = (
+        paths.review_package_path(novel_dir).as_posix() if novel_dir is not None
+        else f'<书目录>/<书名>{paths.REVIEW_SUFFIX}'
+             f'（书目录还没落地；`state {sid}` 会打印它，书名就是目录名去掉'
+             f'平台前缀与 `_{sid}` 尾巴的那一段）')
     payment_authorization = (
         '**付费授权已授予**：本会话允许产生外部模型调用费用，工作流契约中的付费命令逐条直接执行、'
         '不再询问；每条付费命令的判据读数仍逐条留痕并进终审包。'
         if authorized else
         '**付费授权未授予**：不得执行会产生外部模型调用费用的命令；在第一条付费命令之前停下，'
-        '把「跑到哪、为什么停、恢复命令」写进终审包（落 base 根），然后结束。')
+        '把「跑到哪、为什么停、恢复命令」写进终审包（落点见下），然后结束。')
     egress_authorization = (
         '**正文外发授权已授予**：允许把小说正文及其派生上下文发送给外部模型。'
         '这项授权不代表已经授予付费授权。'
@@ -147,7 +158,8 @@ base 目录（--base 恒用下面这个绝对路径）：
   `preview` 不打点。被唤起先 `state {sid}` 判位置再续跑。
 - 命令形态：一律以 `{py}` 前缀开头（权限白名单只认这一个 Bash 形态）；
   写文件只用 Write/Edit 且只写 base 目录内（其余路径权限层直接拒）。
-- 结束前按 skill 的终审包模板汇编 `final_review_{sid}.md` 落 base 根。"""
+- 结束前按 skill 的终审包模板汇编终审包，落点就是这一条路径（不要另起文件名）：
+  {review_target}"""
 
 
 def build_argv(prompt: str, base: str | os.PathLike[str]) -> list[str]:

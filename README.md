@@ -92,8 +92,8 @@ README 只保留稳定入口和当前能力；“做过什么”由 Git 历史�
   表达，而不是伪装成 HTTP 错误。
 - 服务进程只写 `_service/`，产物变更经 CLI 子进程完成（R-11.3）。`stage6/edit` 与
   `stage7/edit` 因此只走 CLI；浏览器仅提供对应批准入口。
-- 人工闸门可委托 agent 按规则代审，依据持续写入输出目录根的
-  `final_review_<sid>.md`。真实书全链验收和账本摘要见 `docs/BACKEND_CONTRACT.md` §十。
+- 人工闸门可委托 agent 按规则代审，依据持续写入该书目录根的
+  `<书名>_review.md`。真实书全链验收和账本摘要见 `docs/BACKEND_CONTRACT.md` §十。
 
 ## 接手顺序
 

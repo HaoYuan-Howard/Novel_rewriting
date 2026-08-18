@@ -1,6 +1,6 @@
 ---
 name: novel-pipeline-operator
-description: 作为受托终审代理，使用本仓 novel.cli 将单本中文小说从原始 txt 或既有 sid 可靠地推进到 stage7/book.txt，并把中间人工闸门、修复裁决、校验读数、授权边界和待审余额汇总为 final_review_{sid}.md。用于跑书、断点续跑、流水线修复、agent 代批以及“用户只审最终成稿”的任务；外部模型调用必须分别具备付费授权与正文外发授权，生成产物只能通过正式 CLI 节点和修复入口改变。
+description: 作为受托终审代理，使用本仓 novel.cli 将单本中文小说从原始 txt 或既有 sid 可靠地推进到 stage7/book.txt，并把中间人工闸门、修复裁决、校验读数、授权边界和待审余额汇总为该书目录下的 <书名>_review.md。用于跑书、断点续跑、流水线修复、agent 代批以及“用户只审最终成稿”的任务；外部模型调用必须分别具备付费授权与正文外发授权，生成产物只能通过正式 CLI 节点和修复入口改变。
 ---
 
 # Novel Pipeline Operator
@@ -26,7 +26,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 只产生以下用户交付接口：
 
 - `<novel-dir>/stage7/book.txt`：最终成书，只能由 `stage7.assemble` 生成。
-- `<base>/final_review_<sid>.md`：终审包，按 [终审包模板](assets/final-review-template.md) 填写。
+- `<novel-dir>/<书名>_review.md`：终审包，按 [终审包模板](assets/final-review-template.md) 填写。书名就是书目录名去掉平台前缀与 `_<sid>` 尾巴的那一段；落在**书目录根**，不在任何 `stageN/` 下。⚠ 不必在文件名里再带 sid——书目录名已经带了。启动 prompt 会直接给出这条绝对路径，以它为准。
 
 使用三种终态，禁止用“命令跑完”冒充“书已完成”：
 

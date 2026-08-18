@@ -253,6 +253,33 @@ def title_of(novel_dir: str | os.PathLike[str]) -> str:
     return derive_source_meta(os.path.basename(str(novel_dir).rstrip('\\/')))[1]
 
 
+#: 终审包的文件名后缀：`<书目录>/<书名>_review.md`。
+#:
+#: ⚠ **它不是产物**：不在 `ARTIFACT_PATHS` 里、没有 schema、没有 `_provenance`，
+#: 代码一行都不读它——它是 agent 代跑之后交给人的那一份汇总（唯一的人工界面）。
+#: 所以它**落在书目录根，不在任何 `stageN/` 下**：进 `stageN/` 就变成一份没人管形状的
+#: 「产物」，而 `check_rel` 那道两级闸与 `ARTIFACT_SPECS` 都会开始对它有意见。
+#:
+#: ⚠ 从前它叫 `<base>/final_review_<sid>.md`（落在 base 根）。搬进书目录之后
+#: **文件名里不必再带 sid**——书目录名本身已经带了，同名书不会撞。
+REVIEW_SUFFIX = '_review.md'
+
+
+def review_package_rel(novel_dir: str | os.PathLike[str]) -> str:
+    """终审包在书目录里的文件名。**唯一落点**——别在提示词或文档里各拼一份。
+
+    书名取 `title_of`（权威源是目录名），因此天然是文件系统安全的：
+    它本来就是一个真实目录名里的一段。⚠ 别改成
+    `derive_source_meta(命令行参数)[1]`，那是 F-118（用 id 敲命令时书名会变成数字串）。
+    """
+    return f'{title_of(novel_dir)}{REVIEW_SUFFIX}'
+
+
+def review_package_path(novel_dir: str | os.PathLike[str]) -> Path:
+    """终审包的绝对路径。纯路径运算，不摸盘。"""
+    return Path(novel_dir) / review_package_rel(novel_dir)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、产物相对路径
 # ─────────────────────────────────────────────────────────────────────────────

@@ -483,7 +483,7 @@ def validate(counters: dict[str, int] | None = None,
             f"name 必须与目录名一致：{frontmatter.get('name')!r} != {SKILL_DIR.name!r}"
         )
     description = frontmatter.get("description", "")
-    for token in ("novel.cli", "final_review_", "付费授权", "正文外发授权"):
+    for token in ("novel.cli", "_review.md", "付费授权", "正文外发授权"):
         if token not in description:
             errors.append(f"description 缺少触发/边界关键词：{token}")
 
