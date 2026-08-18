@@ -102,8 +102,13 @@ def _corpus_params():
 @pytest.fixture(params=_corpus_params(), ids=lambda b: b[:10] if b else 'no-corpus')
 def box(request):
     book = request.param
+    # ⚠ `sandbox.edits_of(book)`：人工决策集是**必要的可选项**。缺 `stage2/global_edit.json`
+    #   ⇒ `stage2/global_grounding.json` 判 `unknown/ghost` ⇒ 审批凭据 `s2` 填不出
+    #   ⇒ 由 `_GATE_REQUIREMENTS` 级联堵死 `s4`→`s7`，而报出来的是「预置审批链失败」，
+    #   与 `global_edit` 三个字毫无字面关系。
     s = sandbox.Sandbox(
-        book, INPUTS + _stage5_rels(book) + _stage6_semantic_rels(book))
+        book,
+        INPUTS + sandbox.edits_of(book) + _stage5_rels(book) + _stage6_semantic_rels(book))
     corpus_book = corpus.corpus_root() / book
     for rel in ('stage0/clean_text.txt', 'stage5/draft.md'):
         source = corpus_book / rel
@@ -111,6 +116,9 @@ def box(request):
         target = s.dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
+    # ⚠ 现役语料的 stage2 审阅项全是 `pending` ⇒ `s2` 的 typed 决策闸永远过不去，
+    #   `_stamp_chain` 因此一格都预置不出来。人工决策是本组的**输入**不是结论。
+    sandbox.decide_global_review(s)
     yield s
     s.close()
 

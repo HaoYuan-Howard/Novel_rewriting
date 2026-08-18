@@ -47,29 +47,52 @@ def _copy_text(box: sandbox.Sandbox, rel: str) -> None:
     shutil.copyfile(source, target)
 
 
+def _approvable_book(rel: str) -> str:
+    """挑一本**审批凭据在沙箱里出得来**的书。
+
+    两条前提缺一不可，缺任何一条都会让整条审批链一格都填不出，
+    而报出来的是「预置审批链失败」，与真正缺的那样东西毫无字面关系：
+      ① `stage0` 新鲜度答得出（见 `tests/sandbox.py::source_resolves_in_a_sandbox`）；
+      ② 这本书走过的人工决策集齐备（由 `sandbox.edits_of` 一并搬进沙箱）。
+    ⚠ 这不是「挑一本好看的书」：`s2` 的凭据要求上游**明确当前**，
+      而「明确当前」是本层被测行为的**输入**，不是它的结论。
+    """
+    books = sorted({
+        a.book_dir for a in corpus.iter_artifacts()
+        if a.rel == rel and corpus.load_current(a).get('_provenance') is not None
+    })
+    ok = [b for b in books if sandbox.source_resolves_in_a_sandbox(b)]
+    corpus.declared_dependency(
+        bool(ok),
+        needs=(f'一本 `stage0/removal_report.json` 记的源路径仍在盘上的书'
+               f'（{len(books)} 本候选里 0 本满足；其余书的源要靠 `<base>/_service/uploads/` '
+               f'重锚，而沙箱的 base 里没有那一层）'),
+        produced_by='stage0.ingest', cost='0 成本')
+    return ok[0]
+
+
 def _box() -> sandbox.Sandbox:
-    artifact = next(
-        a for a in corpus.iter_artifacts()
-        if a.rel == 'stage4/plan_chapters.json'
-        and corpus.load_current(a).get('_provenance') is not None
-    )
-    box = sandbox.Sandbox(artifact.book_dir, rels=BASE_RELS)
+    # ⚠ `sandbox.edits_of(...)`：人工决策集是**必要的可选项**——见 `tests/sandbox.py::HUMAN_EDITS`。
+    #   缺 `stage2/global_edit.json` ⇒ grounding 判 `unknown/ghost` ⇒ `_proof_for_seen('global')`
+    #   抛 `ApprovalRequired` ⇒ `s2` 填不出，再级联堵死 `s4`→`s7`。
+    book = _approvable_book('stage4/plan_chapters.json')
+    box = sandbox.Sandbox(book, rels=BASE_RELS + sandbox.edits_of(book))
     _copy_text(box, 'stage0/clean_text.txt')
+    sandbox.decide_global_review(box)
     return box
 
 
 def _full_box() -> sandbox.Sandbox:
-    artifact = next(
-        a for a in corpus.iter_artifacts()
-        if a.rel == 'stage7/name_map.json'
-    )
+    book = _approvable_book('stage7/name_map.json')
+    # ⚠ 这一份搬**全部**产物（含人工决策集），所以不必再拼 `edits_of`。
     rels = tuple(sorted({
         item.rel for item in corpus.iter_artifacts()
-        if item.book_dir == artifact.book_dir and '_rounds/' not in item.rel
+        if item.book_dir == book and '_rounds/' not in item.rel
     }))
-    box = sandbox.Sandbox(artifact.book_dir, rels=rels)
+    box = sandbox.Sandbox(book, rels=rels)
     _copy_text(box, 'stage0/clean_text.txt')
     _copy_text(box, 'stage5/draft.md')
+    sandbox.decide_global_review(box)
     return box
 
 
