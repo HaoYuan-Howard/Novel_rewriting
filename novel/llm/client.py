@@ -31,7 +31,8 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Any, Callable, Final, TypeVar
+from contextlib import contextmanager
+from typing import Any, Callable, Final, Iterator, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -144,6 +145,7 @@ class LlmClient:
                  max_retries: int = config.DEFAULT_MAX_RETRIES,
                  backoff_base: float = config.DEFAULT_BACKOFF_BASE,
                  concurrency: int = config.DEFAULT_CONCURRENCY,
+                 warmup: bool = True,
                  sleep: Callable[[float], None] = time.sleep,
                  heartbeat_interval: float = DEFAULT_HEARTBEAT_SECONDS,
                  clock: Callable[[], float] = time.perf_counter,
@@ -182,6 +184,12 @@ class LlmClient:
                 f'concurrency 必须在 1..{config.MAX_CONCURRENCY}，实得 {concurrency!r}')
         self.concurrency = concurrency
         self._gate = threading.Semaphore(self.concurrency)
+        #: 首发独占闸。⚠ **与 `_gate` 是两件事**：`_gate` 守的是**并发度**（也就是钱），
+        #: 这一闸守的是**顺序**。见 `_warmup_gate`。默认开；关掉只该是测试的事。
+        self.warmup = warmup
+        self._warmup_lock = threading.Lock()
+        self._warmed = False
+        self._warm_done = threading.Event()
 
     # ── 两个入口 ──────────────────────────────────────────────────────────
 
@@ -472,7 +480,53 @@ class LlmClient:
 
         ⚠ 本方法是重试的**唯一所有者**：SDK 那一层已经 `max_retries=0`
         （见 `transport.py::_sdk`），不然两层各退各的避，一次调用能打出 12 次 HTTP。
+
+        ⚠ 首发独占闸包在最外层（`_warmup_gate`）：它守的是**顺序**，而重试守的是**网络**。
+        与降级阶梯同理，**三条不许合并**——合并之后一次限流退避会把整批章都堵在闸里。
         """
+        with self._warmup_gate():
+            return self._send_attempts(
+                req, purpose=purpose, progress=progress, cache_policy=cache_policy)
+
+    @contextmanager
+    def _warmup_gate(self) -> Iterator[None]:
+        """**首发独占**：第一次真上线跑完，其余线程才放行。一个 client 只发生一次。
+
+        【它省的是什么】供应商的上下文缓存按**字节前缀**命中，而那份前缀要等一次请求
+        **完成**之后才写得进去。逐章扇出（`stage2.blueprint` / `stage5.write`，默认并发 32）
+        把 N 章**同时**发出去时，N 份请求共享的那一大段 system 前缀**谁也命中不了谁**——
+        实测 `stage2/prompts.py::BLUEPRINT_SYS` 4073 token、`stage5` 的臂 SYS 约 1900 token，
+        一本 20 章的书因此白付 19 份。⇒ 拿第一发的串行，换后面 N−1 发的前缀命中。
+
+        ⚠⚠ **`finally` 里无条件放行。** 首发走完整条降级阶梯仍然失败（或抛任何异常）时，
+        其余线程必须继续跑：不放行就是整批死等一个已经死掉的请求，而那比多花一次钱坏得多。
+        ⚠ **只有真上线才消耗名额**：本地缓存命中走 `_read_cached`，根本进不到这里——
+        一次全命中的重跑不会因为这道闸而串行。
+        ⚠ 单次调用的节点（`stage2.global` / `stage4.plan` / `stage6.hook` / `stage7.rename`）
+        本来就只发一次，这道闸对它们是恒等的。
+        ⚠ **不给它 CLI flag**：用户已裁决默认接受这一次串行的墙钟，而一个恒真的 flag 是误导
+        （同 `cache.py::CachePolicy.disabled` 那条）。构造参数留着只为让测试关掉它。
+        """
+        if not self.warmup:
+            yield
+            return
+        with self._warmup_lock:
+            first = not self._warmed
+            self._warmed = True             # 认领首发；后来者一律等
+        if not first:
+            self._warm_done.wait()
+            yield
+            return
+        try:
+            yield
+        finally:
+            self._warm_done.set()
+
+    def _send_attempts(self, req: ChatRequest, *, purpose: str,
+                       progress: RequestProgress | None = None,
+                       cache_policy: CachePolicy | None = None) -> ChatResponse:
+        """重试循环本体。**语义全部写在 `_send_with_retry` 的 docstring 里**，
+        拆出来只是为了让首发闸不必把整个循环缩进一层。"""
         last: TransportError | None = None
         max_attempts = self.max_retries + 1
         for attempt_index in range(max_attempts):

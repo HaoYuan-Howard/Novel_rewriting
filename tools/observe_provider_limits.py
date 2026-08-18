@@ -150,10 +150,16 @@ def run_probe(
         observer=lambda _event: None,
     )
     measured = MeasuredTransport(transport or DeepSeekTransport(cfg))
+    # ⚠⚠ **首发独占闸必须关掉**（`novel/llm/client.py::LlmClient._warmup_gate`）。
+    #   那道闸为跑书而设：拿第一发的串行换后面 N−1 发的供应商前缀缓存命中。
+    #   而本工具量的恰恰是「并发 N 时对面怎么反应」——下面那个 `threading.Barrier(wave)`
+    #   就是为了让第一波**真的同时上线**。闸开着的话峰值恒为 1，
+    #   `wire.peak_active` / `observed_429` 全部失真，**而它们正是这个工具唯一的产出**。
     client = LlmClient(
         ctx, measured, cache=ResponseCache(), model=cfg.model,
         thinking_mode='off', max_retries=cfg.max_retries,
         backoff_base=cfg.backoff_base, concurrency=cfg.concurrency,
+        warmup=False,
         sleep=sleep,
     )
 

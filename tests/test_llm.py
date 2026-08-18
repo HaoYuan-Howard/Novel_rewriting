@@ -17,6 +17,8 @@ import json
 import multiprocessing
 import tempfile
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -395,6 +397,85 @@ def _req(effort: str = 'high', thinking: bool = True) -> ChatRequest:
     return ChatRequest(model='deepseek-v4-pro', system='s', user='u',
                        reasoning_effort=effort, thinking=thinking,
                        json_mode=False, max_tokens=DEFAULT_MAX_TOKENS)
+
+
+# ── 首发独占闸 ───────────────────────────────────────────────────────────────
+# 它守的是**顺序**（供应商前缀缓存要等一次请求完成才写得进去），而 `_gate` 守的是
+# **并发度**（也就是钱）。三条循环——阶梯 / 重试 / 预热——各测各的，不许合并。
+
+
+def test_the_first_wire_call_runs_alone_so_the_rest_can_hit_the_provider_prefix_cache():
+    """逐章扇出默认并发 32；N 份请求同时上线时共享的 system 前缀谁也命中不了谁。
+
+    ⚠ 断言的是**顺序**不是并发度：首发的 `exit` 必须排在第二个 `enter` 之前，
+    否则它根本没有独占过，而「没独占」与「独占了」在最终结果上长得一模一样。
+    """
+    marks: list[tuple[str, str]] = []
+    lock = threading.Lock()
+
+    def responder(req: ChatRequest, _i: int) -> ChatResponse:
+        with lock:
+            marks.append(('enter', req.user))
+        time.sleep(0.02)
+        with lock:
+            marks.append(('exit', req.user))
+        return OK_TEXT
+
+    client = _client(FakeTransport(responder=responder))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(
+            lambda n: client.ask_text('s', f'u{n}', purpose='扇出'), range(8)))
+
+    assert marks[0][0] == 'enter'
+    assert marks[1] == ('exit', marks[0][1]), \
+        f'首发没有独占，第二条是 {marks[1]}——共享前缀会全部 miss'
+    assert len(marks) == 16, '有请求没被记到'
+
+
+def test_a_failing_first_call_still_releases_the_warmup_gate():
+    """⚠⚠ 首发失败也必须放行：不放行就是整批死等一个**已经死掉**的请求。
+
+    那比多花一次钱坏得多——它没有任何超时，整跑就停在那里。
+    """
+    def responder(req: ChatRequest, _i: int):
+        return (TransportError('炸了', retryable=False) if req.user == 'boom'
+                else OK_TEXT)
+
+    client = _client(FakeTransport(responder=responder))
+    with pytest.raises(TransportError):
+        client.ask_text('s', 'boom', purpose='首发')
+
+    assert client._warm_done.is_set(), '首发抛异常后闸没放行 ⇒ 后来者会死等'
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        got = list(pool.map(
+            lambda n: client.ask_text('s', f'u{n}', purpose='其余'), range(4)))
+    assert got == ['一段正文'] * 4
+
+
+def test_a_cache_hit_does_not_consume_the_warmup_slot():
+    """本地缓存命中走 `_read_cached`，根本进不到 `_send_with_retry`。
+
+    ⇒ 一次全命中的重跑**不会**因为这道闸而串行（也不该消耗那唯一的首发名额）。
+    """
+    d = Path(tempfile.mkdtemp())
+    ResponseCache(d).put(cache_key(_req()), OK_TEXT)
+    transport = FakeTransport.always(OK_TEXT)
+    client = _client(transport, cache=ResponseCache(d))
+
+    assert client.ask_text('s', 'u', purpose='全命中') == '一段正文'
+
+    assert not transport.calls, '缓存命中却上了线'
+    assert client._warmed is False, '缓存命中消耗了首发名额'
+
+
+def test_warmup_can_be_turned_off_and_then_nothing_is_serialised():
+    """`warmup=False` 是给测试留的口，不是产品 flag——但它必须真的关得掉。
+
+    ⚠ 一个关不掉的开关与一个恒真的 flag 同罪：它让「这次跑是怎么发的」说不清。
+    """
+    client = _client(FakeTransport.always(OK_TEXT), warmup=False)
+    client.ask_text('s', 'u', purpose='t')
+    assert client._warmed is False and not client._warm_done.is_set()
 
 
 def test_an_empty_answer_is_never_cached():

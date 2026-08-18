@@ -74,6 +74,40 @@ def test_probe_records_real_wire_peak_429_retry_backoff_and_ledger():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_the_probe_disables_the_warmup_gate_so_its_peak_reading_stays_real():
+    """⚠⚠ 首发独占闸（`novel/llm/client.py::LlmClient._warmup_gate`）为**跑书**而设：
+    拿第一发的串行换后面 N−1 发的供应商前缀缓存命中。而本工具量的恰恰是
+    「并发 N 时对面怎么反应」——闸开着的话 wire 峰值恒为 1，
+    `peak_active` / `observed_429` 全部失真，**而它们是这个工具唯一的产出**。
+
+    ⚠ 上面那条端到端用例也会因此红，但它红出来的是 `assert 3 == 4`
+    ——那是 barrier 超时的**派生症状**。这一条把根因直接说出来。
+    """
+    import tools.observe_provider_limits as probe
+
+    root = Path(tempfile.mkdtemp(prefix='provider-probe-warmup-'))
+    seen: dict[str, object] = {}
+    original = probe.LlmClient
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return original(*args, **kwargs)
+
+    try:
+        probe.LlmClient = spy
+        run_probe(
+            Config(api_key='synthetic', concurrency=1, max_retries=0),
+            output=root / 'run', requests=1, concurrency=1, max_tokens=8,
+            transport=_BurstThenRetry(wave=1), sleep=lambda _seconds: None,
+        )
+    finally:
+        probe.LlmClient = original
+        shutil.rmtree(root, ignore_errors=True)
+
+    assert seen.get('warmup') is False, \
+        'probe 没关首发闸 ⇒ 它测出来的并发峰值不是它自己设的那个'
+
+
 def test_cli_refuses_before_creating_output_without_explicit_paid_acknowledgement():
     root = Path(tempfile.mkdtemp(prefix='provider-probe-refusal-'))
     output = root / 'must-not-exist'

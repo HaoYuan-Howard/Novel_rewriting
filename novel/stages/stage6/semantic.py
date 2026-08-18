@@ -109,6 +109,45 @@ JUDGE_ROLE_SUFFIX = {
     'A': '\n\n你是盲评实例 A；不得推测或接触另一名 judge 的输出。',
     'B': '\n\n你是盲评实例 B；不得推测或接触另一名 judge 的输出。',
 }
+
+
+def judge_request(system: str, user: str, role: str) -> tuple[str, str]:
+    """一个判官这一次**真发出去的** `(system, user)`。**全模块唯一的拼装口。**
+
+    ⚠⚠ **身份标签挂在 user 末尾，不挂在 system 末尾**，而这一位是成本承重：
+    供应商按 `<BOS>{system}<｜User｜>{user}…` 的**字节前缀**做上下文缓存
+    （编码见 `novel/llm/budget.py::_render_prompt`）。标签原来挂在 system 末尾，
+    于是前缀在那里就分叉——B 判官那一份 ~45k token 的材料**全额 miss**，
+    而两个判官的材料逐字节相同。实测一本书两次判官调用共 95,972 prompt token
+    几乎全额付费；`.llm_cache` 全量统计里 30k+ 档的命中率只有 3.5%（6k–12k 档有 47.6%）。
+    挪到 user 末尾之后，`system` + 整包材料成为两次调用的公共前缀。
+
+    ⚠ **双盲语义不由这句话落在哪一侧承担**，而由「两次独立请求」承担：
+    两个判官本来就只该差这一句身份标签，材料完全相同。
+
+    ⚠⚠ **它同时是 `_runtime_contract` 的拼装口。** `evaluator_fingerprint` 记的必须是
+    **真发出去的字节**；两处各拼一份就会分家，而分家之后没有任何东西说得出「那一次到底
+    发的是什么」（同 `novel/stages/stage5/prompts.py::write_system` 那条纪律）。
+    ⚠ 认不出的 role **当场炸**，不兜底：兜底会让一次拼错的 role 安静地跑成另一个判官，
+    而产物里的 `judge_rankings` 照样写着两个键。
+    """
+    if role not in JUDGE_ROLE_SUFFIX:
+        raise KeyError(f'没有 {role!r} 这个判官。取值面是 {sorted(JUDGE_ROLE_SUFFIX)}')
+    return system, user + JUDGE_ROLE_SUFFIX[role]
+
+
+#: `_provenance.prompts` 的三个键。**两个判官共用一份 SYS**，身份标签单列。
+#:
+#: ⚠ 原来是 `HOOK_SEMANTIC_SYS_A` / `_B` 两个键，各存一份 `SEMANTIC_SYS + 标签`：
+#: 既把同一段 SYS 存了两遍，又在标签已经不在 system 里之后**继续叫自己 SYS**——
+#: 那就是来源账在说假话。键名跟着真实的请求形状走。
+def judge_prompts(system: str) -> dict[str, str]:
+    """进 `_provenance.prompts` 的那一份。**唯一产地**，测试与生产共用。"""
+    return {
+        'HOOK_SEMANTIC_SYS': system,
+        **{f'HOOK_SEMANTIC_ROLE_{role}': suffix
+           for role, suffix in JUDGE_ROLE_SUFFIX.items()},
+    }
 DECODER_IDENTITY = {
     'name': 'stage6-reference-boundary-double-blind-v1',
     'quality_weights': QUALITY_WEIGHTS,
@@ -157,8 +196,11 @@ def _runtime_contract(model: str):
     """
     return runtime_fingerprint(
         model=model,
-        prompts=[SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['A'],
-                 SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['B']],
+        # ⚠ **静态面必须由 `judge_request` 产出**，不在这里重拼一份：它记的是「真发出去的
+        #   字节长什么样」，而身份标签现在在 user 侧（见 `judge_request` 的 docstring）。
+        #   逐书变的材料不进指纹，所以这里给空 user——留下的正好是两个判官的静态差异面。
+        prompts=[part for role in ('A', 'B')
+                 for part in judge_request(SEMANTIC_SYS, '', role)],
         schemas=[HookSemanticResponse],
         decoder_identity=DECODER_IDENTITY,
     )
@@ -383,10 +425,11 @@ def run_semantic(ctx: RunContext, client: LlmClient
                  ) -> tuple[HookSemanticReview, CheckReport]:
     current = _runtime_contract(client.model)
     system, user, art, up, aliases = build_prompt(ctx)
+    # ⚠ 两次调用是**顺序**的，而这正是身份标签挪到 user 末尾之后省钱的前提：
+    #   A 跑完把 `system` + 整包材料写进供应商前缀缓存，B 才发出去 ⇒ B 命中那一整段。
     responses = [
         client.ask_json(
-            system + JUDGE_ROLE_SUFFIX[role],
-            user,
+            *judge_request(system, user, role),
             model_cls=HookSemanticResponse,
             purpose=f'{ctx.node}.{role}',
             validator=response_validator(aliases),
@@ -406,10 +449,7 @@ def run_semantic(ctx: RunContext, client: LlmClient
         decisions=decisions,
         evaluator_fingerprint=current,
         _provenance=ctx.llm_provenance(
-            prompts={
-                'HOOK_SEMANTIC_SYS_A': system + JUDGE_ROLE_SUFFIX['A'],
-                'HOOK_SEMANTIC_SYS_B': system + JUDGE_ROLE_SUFFIX['B'],
-            },
+            prompts=judge_prompts(system),
             model=client.model,
         ),
     )

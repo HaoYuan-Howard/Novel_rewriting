@@ -165,11 +165,12 @@ def _seed_semantic(box, *, dirty: int = 0, uncertain: tuple[int, ...] = ()) -> s
         judge_rankings=judge_rankings,
         decisions=decisions,
         evaluator_fingerprint=semantic._runtime_contract('test-model'),
+        # ⚠ 走生产那一个产地，**不在这里手拼第二份**：手拼的那份原来写着
+        #   `HOOK_SEMANTIC_SYS_A/B`，而生产改了键名之后它照样绿——一份不会红的 fixture
+        #   就是在断言一件不再发生的事。
         _provenance=ctx.llm_provenance(
-            prompts={
-                'HOOK_SEMANTIC_SYS_A': semantic.SEMANTIC_SYS + semantic.JUDGE_ROLE_SUFFIX['A'],
-                'HOOK_SEMANTIC_SYS_B': semantic.SEMANTIC_SYS + semantic.JUDGE_ROLE_SUFFIX['B'],
-            }, model='test-model'),
+            prompts=semantic.judge_prompts(semantic.SEMANTIC_SYS),
+            model='test-model'),
     )
     seq = (semantic.semantic_seqs(store)[-1] + 1) if semantic.semantic_seqs(store) else 1
     rel = semantic.SEMANTIC_TPL.format(n=seq)

@@ -147,6 +147,73 @@ def test_system_publishes_quality_and_material_contradiction_contract():
     assert semantic.JUDGE_ROLE_SUFFIX['A'] != semantic.JUDGE_ROLE_SUFFIX['B']
 
 
+def test_both_judges_share_a_byte_identical_system_and_differ_only_at_the_user_tail():
+    """⚠⚠ **这是一条成本判据，不是文案判据。**
+
+    供应商按 `<BOS>{system}<｜User｜>{user}…` 的**字节前缀**做上下文缓存。身份标签一旦
+    回到 system 末尾，前缀就在那里分叉，B 判官那一份 ~45k token 的材料**全额 miss**
+    ——而两个判官的材料逐字节相同。实测一本书两次判官调用共 95,972 prompt token
+    几乎全额付费。⇒ system 必须逐字节相同，差异只许落在 user 末尾。
+    """
+    material = '匿名评审以下候选。' + 'x' * 4096
+    system_a, user_a = semantic.judge_request('SYS', material, 'A')
+    system_b, user_b = semantic.judge_request('SYS', material, 'B')
+
+    assert system_a == system_b == 'SYS', 'system 分叉 ⇒ 整包材料全额 miss'
+    assert user_a.startswith(material) and user_b.startswith(material)
+    assert user_a != user_b, '两个判官必须仍然拿到不同的身份标签'
+    assert user_a[len(material):] == semantic.JUDGE_ROLE_SUFFIX['A']
+    assert user_b[len(material):] == semantic.JUDGE_ROLE_SUFFIX['B']
+
+
+def test_an_unknown_judge_role_is_rejected_instead_of_falling_back():
+    """拼错的 role 兜底会安静地跑成另一个判官，而产物里照样写着两个键。"""
+    with pytest.raises(KeyError, match='取值面'):
+        semantic.judge_request('SYS', 'U', 'C')
+
+
+def test_the_judge_prompt_is_assembled_in_exactly_one_place():
+    """⚠⚠ `evaluator_fingerprint` 记的必须是**真发出去的字节**。
+
+    两处各拼一份就会分家，而分家之后没有任何东西说得出「那一次到底发的是什么」
+    （同 `novel/stages/stage5/prompts.py::write_system` 那条纪律）。
+    ⇒ 换掉唯一拼装口，指纹必须跟着动；不动就说明它自己又拼了一份。
+    """
+    import inspect
+
+    source = inspect.getsource(semantic)
+    assert source.count('JUDGE_ROLE_SUFFIX[') == 1, \
+        '除 `judge_request` 外还有第二处按 role 取标签 ⇒ 两份拼法迟早分家'
+
+    baseline = semantic._runtime_contract('fixture-model')
+    original = semantic.judge_request
+    try:
+        semantic.judge_request = (
+            lambda system, user, role: (system, f'{user}<{role}>'))
+        assert semantic._runtime_contract('fixture-model') != baseline, \
+            '`_runtime_contract` 没走唯一拼装口，它自己重拼了一份'
+    finally:
+        semantic.judge_request = original
+    assert semantic._runtime_contract('fixture-model') == baseline
+
+
+def test_provenance_prompt_keys_stop_claiming_the_label_lives_in_the_system():
+    """来源账的键名跟着**真实请求形状**走。
+
+    ⚠ 原来是 `HOOK_SEMANTIC_SYS_A` / `_B` 各存一份 `SEMANTIC_SYS + 标签`：既把同一段 SYS
+    存了两遍，又在标签已经不在 system 里之后继续叫自己 SYS——那就是来源账在说假话。
+    """
+    prompts = semantic.judge_prompts(semantic.SEMANTIC_SYS)
+
+    assert set(prompts) == {
+        'HOOK_SEMANTIC_SYS', 'HOOK_SEMANTIC_ROLE_A', 'HOOK_SEMANTIC_ROLE_B'}
+    assert prompts['HOOK_SEMANTIC_SYS'] == semantic.SEMANTIC_SYS
+    for role, suffix in semantic.JUDGE_ROLE_SUFFIX.items():
+        assert prompts[f'HOOK_SEMANTIC_ROLE_{role}'] == suffix
+        assert suffix not in prompts['HOOK_SEMANTIC_SYS'], \
+            '标签又混回 SYS 了 ⇒ 前缀重新分叉'
+
+
 def test_runtime_contract_binds_the_exact_request_surface_and_nothing_else():
     """运行时指纹只回答「这一次看的是哪一版 prompt / schema / 解码面」。
 

@@ -76,6 +76,16 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   「0 成本预览 → 显式 `--execute --yes`」的 runner，并按 `docs/LESSONS.md` §17 先登记决策规则
   再看结果。在付费实测满足质量、UNVER/INFO、fallback/wire/error 和 completion 门之前，
   `stage3.style` / `stage7.rename` 继续保持默认 high。
+  ⚠⚠ **这一条是全链最大的降本杠杆，而它此前没有量。** 2026-08-18 实测（`.llm_cache/` 里
+  1639 份带 `usage` 的真实响应，0 成本可复算）：completion 13,031,022 token 里 reasoning 占
+  **11,457,627（87.9%）**，净成品输出只有 1,573,395；写作类调用（n=720）reasoning 中位 9109 而
+  成品中位 1213。**输出侧是成本主体、reasoning 一项约占八成，输入侧优化的天花板只有约 7%**
+  ⇒ 缓存/裁材料那一侧无论怎么做都换不来量级收益，只有 effort 降档能。候选优先序按收益：
+  `stage5.write` 的 **shallow 臂**（它做的是照原文改写而不是闭卷创作，却与 deep 臂同付 high）
+  → `stage7.rename` → `stage3.style`。⚠ 判官（`stage6.semantic`）与 `stage2.global` **不进候选**：
+  2026-08-15 的 A/B 已裁决判官永不换廉价配置、关思考在 `stage2.global` 三轮全灭
+  （见 `docs/BACKEND_CONTRACT.md` §十）。⚠ 那次 A/B 测的是**模型**与 **thinking 开关**两个维度，
+  `reasoning_effort` 的 high/medium/low 是**第三个维度、从未测过**——不要拿那次结论替本条销账。
 
 验收：所有被测产物由现役写盘路径生成；完整套件的通过/跳过/失败数、每条 skip 理由和上述付费
 实验结论一并记录，未完成项不因代码位或预览工具存在而销账。
@@ -102,6 +112,34 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
   两份排除项要在表里显式登记为排除并写明理由，不能靠「忘了写」实现豁免。
 - [ ] 顺序约束：**只能在新书首跑之后做**。重抓需要盘上有一本完整的书，而现在产物已全批清空
   ⇒ 现在就加守卫等于制造一片必须靠 xfail/skip 压住的红，那是本仓明令禁止的洗绿形态。
+
+### TODO-29 · 供应商前缀缓存：命中率尚无付费证据，另两项对齐未做
+
+2026-08-18 落了两处**不改变模型看到的内容**的缓存对齐（`novel/stages/stage6/semantic.py::judge_request`
+把双盲角色后缀移到 user 末尾；`novel/llm/client.py::LlmClient._warmup_gate` 首发独占）。
+形状已由非 corpus 套件钉住，**但供应商侧到底多命中了多少，一个真实数字都还没有**。
+
+- [ ] 在**一本新书**上取证，按 `tools/ab_compare.py` 的 `prompt_cache_hit_rate` /
+      `prompt_cache_hit_tokens` 出对比矩阵（该工具已具备全部能力，不要新造）。
+      ⚠ **不能拿旧书重跑充数**：首发闸不改 prompt 字节 ⇒ 本地 `.llm_cache/` 键完全不变 ⇒
+      重跑会 0 次真上线，那份「全绿」证明不了任何事。补充直接证据：ledger 每行带
+      `chapter_index`（`novel/llm/ledger.py::CostLedger.record`），按它排序看
+      `prompt_cache_hit_tokens` 是否**从第 2 章起跳升**。
+      验收数字要与 FC-13 那条实测的 34.3% 基线对齐着报，别只报改后的绝对值。
+
+两项**同期评估过但没做**的（记在这里是为了后来者不必重新推一遍，不是承诺要做）：
+
+- **stage5 user 块重排**（把跨章不变的块提到 user 最前）：预期约 3–4%。没做的理由是它会把
+  「本章任务」从第 2 块挪到靠后，**有位置效应**，超出「零语义风险」这一档，必须一次真跑证明
+  没写坏成稿。⚠ 另需先判断 `novel/stages/stage5/prompts.py::style_block` 到底变不变——
+  有 `chapter_styles` 时它本就是逐章投影，那部分挪上去不会带来任何命中。
+- **shallow 臂裁材料**：预期约 1%。没做的理由是 `novel/stages/stage5/prompts.py::Material` 的
+  `given` **同时是 `invented_number` / `invented_name` 两条判据的参照集**
+  （`novel/stages/stage5/checks.py`）。直接裁下发块会让原本有依据的数字和人名被判成「自造」——
+  省下占比约 9% 的 input，换来判据误报。要做必须**先把「判据参照集」与「真正发出去的 blocks」
+  拆成两件事**，那是独立改动。
+
+⚠ 两项加起来也只有个位数百分比：输入侧优化的天花板约 7%（FC-13）。要量级收益只有 effort 降档。
 
 ## 条目生命周期
 

@@ -146,6 +146,19 @@ HARD 数严格下降且文本不与另两条重复时才替换该候选和整组
 **没有 dataset**），然后把同一份匿名材料分别以 A/B 角色后缀发给两名 judge，
 候选标签都是 `T1/T2/...`。评论、证据与质量排序必须显示在报告中，不能因为结论是 `UNVER`
 就伪装成“0 份当前审判”。
+
+⚠⚠ **角色后缀挂在 user 末尾，不挂在 system 末尾**，两名 judge 的 system 逐字节相同
+（唯一拼装口 `novel/stages/stage6/semantic.py::judge_request`）。这是一条**成本判据**：
+供应商按 `<BOS>{system}<｜User｜>{user}…` 的字节前缀做上下文缓存，后缀一旦回到 system 末尾，
+前缀就在那里分叉、judge B 那一份约 45k token 的匿名材料**全额 miss**——而两份材料逐字节相同。
+两次调用是顺序的，A 跑完写入前缀缓存，B 才发出去。双盲语义由「两次独立请求」承担，
+不由这句话落在哪一侧承担。守卫见 `tests/test_stage6_semantic.py`。
+
+⇒ 因此本层 `_provenance.prompts` 的三个键与 `_common.md` §1.1「system prompt 指纹」的通用
+说法有别，是本层特例：`HOOK_SEMANTIC_SYS`（两名 judge 共用的那一份）+
+`HOOK_SEMANTIC_ROLE_A` / `_B`（挂在 user 末尾的角色后缀）。产地是同一个模块的
+`judge_prompts`。⚠ 它们曾是 `HOOK_SEMANTIC_SYS_A` / `_B` 两个键、各存一份
+`SEMANTIC_SYS + 后缀`：既把同一段 SYS 存了两遍，又在后缀已经不在 system 里之后继续自称 SYS。
 validator 必须确认：
 
 1. `reviews` 与 `ranking` 恰好覆盖全部匿名标签，且无重复；
