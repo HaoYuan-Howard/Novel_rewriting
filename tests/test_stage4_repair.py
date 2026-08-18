@@ -57,7 +57,7 @@ def _prepare(book):
         upstreams.blueprints, upstreams.main_text, upstreams.bidx, upstreams.groups)
     provenance = ctx.llm_provenance(
         PlanProvenance,
-        prompts={'N4_SYS': plan.prompts.plan_system()},
+        prompts={'PLAN_SYS': plan.prompts.plan_system()},
         model='test-model', params=plan._params(upstreams),
         partial_regen_chapters=[], repairs=[])
     artifact = PlanChapters.model_validate({**raw, '_provenance': provenance})

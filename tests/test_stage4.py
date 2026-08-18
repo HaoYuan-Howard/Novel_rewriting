@@ -388,7 +388,7 @@ def _synthetic_response(box: sandbox.Sandbox, *, poison: bool) -> dict:
 def _provenance(ctx: RunContext, up) -> object:
     from contracts.schema.stage4 import PlanProvenance
     return PlanProvenance(code='0' * 10, root_clean_sha1=ctx.root_clean_sha1, inputs=ctx.edges,
-                          prompts={'N4_SYS': '0' * 10}, model='deepseek-v4-pro',
+                          prompts={'PLAN_SYS': '0' * 10}, model='deepseek-v4-pro',
                           params=plan._params(up))
 
 

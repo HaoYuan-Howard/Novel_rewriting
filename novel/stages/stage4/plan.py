@@ -636,16 +636,16 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
             '定向重规划不能把不同 grouping/beat_min_chars 的章混成一份计划；'
             '请先整跑 stage4.plan。尚未调用 LLM')
     base_system = prompts.plan_system()
-    if old_prov.prompts.get('N4_SYS') != prov.fingerprint(base_system):
+    if old_prov.prompts.get('PLAN_SYS') != prov.fingerprint(base_system):
         raise TerminalState(
-            '定向重规划的 N4_SYS 与基线产物不同，而当前 provenance 没有表达'
+            '定向重规划的 PLAN_SYS 与基线产物不同，而当前 provenance 没有表达'
             '“部分章节使用另一版全书规划契约”的槽位；尚未调用 LLM')
     repair_system = prompts.plan_repair_system()
-    old_repair_system = old_prov.prompts.get('N4_REPAIR_SYS')
+    old_repair_system = old_prov.prompts.get('PLAN_REPAIR_SYS')
     if (old_repair_system is not None
             and old_repair_system != prov.fingerprint(repair_system)):
         raise TerminalState(
-            '基线计划已有定向重规划章节，但 N4_REPAIR_SYS 与当前版本不同；'
+            '基线计划已有定向重规划章节，但 PLAN_REPAIR_SYS 与当前版本不同；'
             '继续会把两版单章契约混在同一份 provenance 里。请整跑 stage4.plan；'
             '尚未调用 LLM')
 
@@ -713,7 +713,7 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
     partial = sorted(set(old_prov.partial_regen_chapters) | set(targets))
     delta = ctx.llm_provenance(
         PlanProvenance,
-        prompts={'N4_SYS': base_system, 'N4_REPAIR_SYS': repair_system},
+        prompts={'PLAN_SYS': base_system, 'PLAN_REPAIR_SYS': repair_system},
         model=client.model, params=params,
         partial_regen_chapters=partial, repairs=history)
     provenance = PlanProvenance.model_validate({
@@ -753,7 +753,7 @@ def run_plan(ctx: RunContext, client: Any, *,
     ctx.account('params', params)
     return write_plan(ctx, store, resp.model_dump(by_alias=True), up,
                       provenance=ctx.llm_provenance(
-                          PlanProvenance, prompts={'N4_SYS': system},
+                          PlanProvenance, prompts={'PLAN_SYS': system},
                           model=client.model, params=params))
 
 

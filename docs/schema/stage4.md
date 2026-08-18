@@ -171,7 +171,7 @@ raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 | `--apply-edit <路径>` | 0 | 应用严格完整计划修订集。路径相对**书目录**（`paths.edit_rel`） |
 | `stage4.context` | 0 | 从当前正式上游重建 `writer_context.json` |
 
-定向重规划在任何请求前拒绝混合 model、`N4_SYS` 或 grouping 参数；单章响应必须只返回所请求的
+定向重规划在任何请求前拒绝混合 model、`PLAN_SYS` 或 grouping 参数；单章响应必须只返回所请求的
 `output_ordinal/from_source_ordinals`，不得改 `reconstruction_strategy`。目标章失败时合并结果只落
 `.INVALID`、正式计划不被覆盖；成功时 usage 与历史修复账累加，而不是覆盖成“只调用了一次”。
 
