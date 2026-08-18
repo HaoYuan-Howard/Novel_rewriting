@@ -28,15 +28,13 @@ _USER: Final = '<｜User｜>'
 _ASSISTANT: Final = '<｜Assistant｜>'
 _THINKING_START: Final = '<think>'
 _THINKING_END: Final = '</think>'
-_MAX_EFFORT_PREFIX: Final = (
-    'Reasoning Effort: Absolute maximum with no shortcuts permitted.\n'
-    'You MUST be very thorough in your thinking and comprehensively decompose the problem '
-    'to resolve the root cause, rigorously stress-testing your logic against all potential '
-    'paths, edge cases, and adversarial scenarios.\n'
-    'Explicitly write out your entire deliberation process, documenting every intermediate '
-    'step, considered alternative, and rejected hypothesis to ensure absolutely no assumption '
-    'is left unchecked.\n\n'
-)
+# ⚠ 这里曾有 `_MAX_EFFORT_PREFIX`（`max` 档的官方 effort 前缀）与 `_render_prompt` 里
+#   那条 `effort == 'max'` 分支。**整条路不可达**：`client.py::LADDER` 只有
+#   low/medium/high，`rungs_from_effort` 显式拒绝这三个之外的值 ⇒ `max` 到不了这里，
+#   而全仓也没有一条测试扫过它。⇒ 删掉；`max` 现在落进下面那句关闭式拒绝，
+#   **而那句话本来就写着「登记该档位的官方编码规则后再启用」**。
+#   要启用 `max`：先把它加进 `LADDER`，再按官方 `encode_messages` 补回前缀——
+#   前缀是**发出去的字节**，凭记忆重写等于换了一个 prompt。
 
 
 @dataclass(frozen=True)
@@ -141,11 +139,13 @@ def _tokenizer():
 def _render_prompt(req: ChatRequest) -> str:
     """DeepSeek V4 官方 ``encode_messages`` 对 system + user 请求的精确子集。
 
-    现行 low/medium/high 都采用官方 ``high`` framing（它们不增加文字前缀）；只有
-    未来显式使用 ``max`` 才增加官方 effort 前缀。JSON mode 是顶层 API 控制参数，
-    不擅自把不可观测的服务端隐藏文字算进 prompt。
+    现行 low/medium/high 都采用官方 ``high`` framing（它们不增加文字前缀）。JSON mode
+    是顶层 API 控制参数，不擅自把不可观测的服务端隐藏文字算进 prompt。
+
+    ⚠ **未登记的档位一律关闭式拒绝**，不猜一个 framing 了事：prompt 是发出去的字节，
+    算错 framing 就等于按另一个 prompt 估预算。守卫见 `tests/test_llm_budget.py`。
     """
-    if req.reasoning_effort not in ('low', 'medium', 'high', 'max'):
+    if req.reasoning_effort not in ('low', 'medium', 'high'):
         raise _refusal(
             f'未知 reasoning_effort={req.reasoning_effort!r}，无法选择官方聊天 framing。'
             '行动：登记该档位的官方编码规则后再启用。',
@@ -153,9 +153,8 @@ def _render_prompt(req: ChatRequest) -> str:
             max_tokens=req.max_tokens,
             spec=MODEL_BUDGETS.get(req.model),
         )
-    prefix = _MAX_EFFORT_PREFIX if req.thinking and req.reasoning_effort == 'max' else ''
     tail = _THINKING_START if req.thinking else _THINKING_END
-    return f'{prefix}{_BOS}{req.system}{_USER}{req.user}{_ASSISTANT}{tail}'
+    return f'{_BOS}{req.system}{_USER}{req.user}{_ASSISTANT}{tail}'
 
 
 def count_input_tokens(req: ChatRequest) -> int:

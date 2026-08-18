@@ -414,8 +414,6 @@ def chapter_facts(entry: dict[str, Any]) -> str:
     return body + f'\n\n叙述视角（按段）：{_compact(nar)}' if nar else body
 
 
-_GOAL_QUOTE_RX = re.compile(r'「([^」]{2,40})」|“([^”]{2,40})”|‘([^’]{2,40})’')
-
 _GOAL_INTENT = {
     'establish': '建立', 'advance': '推进', 'open': '开篇',
     'close': '收束', 'withhold': '暂不揭示', 'resolve': '解决',
@@ -431,17 +429,12 @@ def _goal_directive(goal: Any) -> str:
     return intent + ('（' + '；'.join(facts) + '）' if facts else '')
 
 
-def goal_quotes(*goals: str | None) -> list[str]:
-    """`goal` 里被引号括起来的短语。
-
-    ⚠ `goal` 是 stage4 的**模型**写的 ⇒ **凡转抄必验**：核实它真的在源章原文里
-    才升「原句用上」，核实不上就只当普通目标发。
-    """
-    out: list[str] = []
-    for g in goals:
-        for m in _GOAL_QUOTE_RX.finditer(g or ''):
-            out.append(next(g2 for g2 in m.groups() if g2))
-    return out
+# ⚠ 这里曾有 `goal_quotes(*goals: str | None)` 与它的 `_GOAL_QUOTE_RX`：从 goal 里抠出
+#   引号包起来的短语，好把「原句用上」升一档。两个都**零引用**，而且签名已经与契约脱节
+#   ——它假定 goal 是**字符串**，而现行 goal 是 `{'intent': ..., 'facts': [...]}`
+#   （见上面的 `_goal_directive`）⇒ 就算有人调它，拿到的也永远是空列表。
+#   ⚠ 它写在 docstring 里的那条纪律仍然成立、且**已经在别处兑现**：goal 是 stage4 的模型
+#   写的，凡转抄必验。要恢复这个功能，得先按 dict 契约重写，不是把这段代码找回来。
 
 
 def chapter_directive(entry: dict[str, Any], book: M.Book) -> str:

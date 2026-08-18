@@ -733,7 +733,7 @@ class GlobalCharacterLine(FrozenModel):
     """一个人（`entities.characters` 的 dict 展平成带 `char_id` 的行）。
 
     ⚠ **`fate` 全量下发**：剧透遮蔽是前端的纯展示行为（`R-11.13`，四个字段名
-    写在 `PARTIAL_MASK_NOTE` 里），服务端不做第二把尺子。
+    写在 `SPOILER_DISCLOSURE['fields']` 里），服务端不做第二把尺子。
     """
 
     char_id: str = Field(min_length=1)

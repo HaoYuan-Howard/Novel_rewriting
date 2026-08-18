@@ -1239,14 +1239,12 @@ class ArtifactStore:
         # safety and made the real acceptance path exceed Windows MAX_PATH.
         return f'{parent}/{REVALIDATION_DIRNAME}/b.{locator}.snapshot'
 
-    @staticmethod
-    def _legacy_revalidation_baseline_rel(inv_rel: str, locator: str) -> str:
-        """Return the pre-short-name path for read-only compatibility."""
-        # Reuse the current builder for path and locator validation.
-        ArtifactStore._revalidation_baseline_rel(inv_rel, locator)
-        parent = os.path.dirname(inv_rel).replace('\\', '/')
-        return (f'{parent}/{REVALIDATION_DIRNAME}/'
-                f'{paths.stem_of(inv_rel)}.{locator}.snapshot')
+    # ⚠ 这里曾有 `_legacy_revalidation_baseline_rel()`：短名 `b.<locator>.snapshot` 之前
+    #   用的是 `<长 stem>.<locator>.snapshot`，读侧留了一条只读回落。删除那天的实测是
+    #   **盘上 8 份快照 8/8 都是短名，长名 0 份**，唯一走过那条分支的是它自己的测试
+    #   ——一个靠自己的测试活着的兼容层。产物已整批清空，连那 8 份也不在了。
+    #   ⚠ 长名正是当初撞 Windows MAX_PATH 的原因（见上面 `_revalidation_baseline_rel`
+    #   的注释）：真要恢复它，等于把那个已知缺陷一起恢复。
 
     def _write_immutable(self, destination: Path, data: bytes) -> None:
         """Create a content-addressed audit snapshot; never replace history."""
@@ -1289,11 +1287,6 @@ class ArtifactStore:
 
         baseline_rel = self._revalidation_baseline_rel(inv_rel, locator)
         baseline_path = self.path(baseline_rel)
-        if not _is_file(baseline_path):
-            legacy_rel = self._legacy_revalidation_baseline_rel(inv_rel, locator)
-            legacy_path = self.path(legacy_rel)
-            if _is_file(legacy_path):
-                baseline_rel, baseline_path = legacy_rel, legacy_path
         if not _is_file(baseline_path):
             raise ProvenanceRefused(
                 f'{inv_rel} 声明的不可变基线不存在：{baseline_rel}；'

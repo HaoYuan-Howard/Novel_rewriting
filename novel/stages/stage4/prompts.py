@@ -19,13 +19,12 @@ from novel.stages.stage4.beats import plan_beat_id
 #: 不是跨层取值面；进了 `invariants` 就要在 `/api/enums` 那张表上表态一次。
 PLAN_MAX_TOKENS = 96000
 
-#: **规划 = 推理重**（判高潮 / 因果 / 节奏预算）。
-PLAN_REASONING_EFFORT = 'high'
-
-#: 结构化调用点声明的**必需顶层键**。⚠ 实测拿回过一份**只有 `reconstruction_strategy`、
-#: 一个输出章都没有**的合法 JSON —— `require` 就是为它加的，
-#: 而 `expand_plan_beats` 里那条「先判空」是它的后置条件。
-PLAN_REQUIRE = ('reconstruction_strategy', 'output_chapters')
+#: ⚠ 这里曾有 `PLAN_REASONING_EFFORT = 'high'` 与
+#: `PLAN_REQUIRE = ('reconstruction_strategy', 'output_chapters')`，两个都**零引用**：
+#: 两处 `ask_json` 从不传 effort（未做 A/B 的节点一律保持 `None` 即 high，
+#: 见 `NodeSpec.effort`），而 `require` 早已改成从 `PlanResponse` 派生
+#: （`plan.py` 里那句「⚠ 不显式传 `require`」就是它不该回来的理由）。
+#: 一个**看起来在配置什么、实际一次都没被读过**的常量，比没有它更贵。
 
 PLAN_SYS = fill("""\
 你在为一部网文做【重构方案】。这不是提纲，是一份【详细到写手可以直接照着写】的重构计划。
@@ -229,18 +228,10 @@ def project_blueprints_for_planner(blueprints: dict[str, Any],
     return {'blueprints': bps}
 
 
-def projection_note(blueprints: dict[str, Any], groups: dict[Any, list[list[str]]],
-                    projected_chars: int, raw_chars: int) -> str:
-    """投影**省了多少**要出声——它会直接改变下游模型的注意力分配。
-
-    静默生效的话，下一次有人怀疑「规划质量变了」时**无从对照**。
-    返回字符串，由节点交给报告或 `--dry-run` 输出。
-    """
-    n_src = sum(len(b.get('beats') or []) for b in (blueprints.get('blueprints') or []))
-    n_pb = sum(len(g) for g in groups.values())
-    return (f'规划输入投影：骨架 {raw_chars} → {projected_chars} 字'
-            f'——写手材料（span/hinges/在场者/称谓表）不进规划视野；'
-            f'事实底座（global_grounding）整份不下发。\n'
-            f'拍已确定性切好：源 beat {n_src} → {n_pb} 拍'
-            f'（吸收 <{BEAT_MIN_CHARS} 字的碎拍，同层、相邻、保序；`{GROUPING_VERSION}`）'
-            f'——规划者只给各拍预算，不再决定分组与顺序')
+# ⚠ 这里曾有 `projection_note(...)`：把「投影省了多少字、拍从 N 合成 M」渲染成一句话，
+#   docstring 写着「返回字符串，**由节点交给报告或 `--dry-run` 输出**」——而全仓
+#   （含 tests / tools / docs）**没有任何一个节点交过**。它是 `project_blueprints_for_planner`
+#   （活的，`plan.py` 两处在用）掉队的伴生函数。
+#   ⚠ 它想解决的问题是真的：投影静默生效，下次怀疑「规划质量变了」时无从对照。
+#   要恢复这条信息，落点是**报告**（`novel/report/`）而不是一个没人调的渲染函数——
+#   一个从不被调用的「会出声」的函数，比不出声更容易让人以为已经出过声了。

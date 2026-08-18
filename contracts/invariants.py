@@ -518,13 +518,20 @@ SPOILER_DISCLOSURE: Final = {
     ),
 }
 
-#: 旧名字只作源码兼容别名；`/api/enums` 不再单独发布，避免一句话与结构化契约分家。
-PARTIAL_MASK_NOTE: Final = SPOILER_DISCLOSURE['notice']
+#: ⚠ 这里曾有 `PARTIAL_MASK_NOTE = SPOILER_DISCLOSURE['notice']`，自陈是「旧名字的源码
+#: 兼容别名」。全仓**没有任何代码消费它**（四处提及全在注释里），它唯一的存在理由是
+#: `novel/api/enums.py` 要求本模块每个公开大写名都被三张桶表之一归类 ⇒ 一个只为了通过
+#: 归类检查而活着的别名。⇒ 与 `enums.py` 那行 `_CONSUMED` 登记同批删除。
+#: 要那句话，读 `SPOILER_DISCLOSURE['notice']`。
 
 #: 一次调用当时的缓存口径，记进 `_provenance`（stage2 的 `repairs[]` · stage3 的 `attempts[]`）。
 #: ⚠ **定向重生成必须配 `refresh-write`**（`R-3.11`）：它的 prompt 与整跑时那一批**逐字相同**，
 #: 缓存必然命中，于是一个字都没重新生成而它照样打印「已重生成」。
-#: 盘上只见前两个，`disabled` 零样本。
+#: ⚠⚠ **`disabled` 没有 CLI 入口，这是有意的，别当死取值删掉。** 它与那批「装置删了只剩
+#: 取值」的枚举**不同型**：装置还在（`ResponseCache` 的逐读写开关），缺的只是一个 flag，
+#: 而它是冻结需求 `R-12.4`「关缓存是同时关读写」的**唯一表达**——删了那条需求就没有守卫。
+#: 也不要顺手补一个 `--no-cache`：`--refresh` 严格更优（重采样且仍留账），
+#: 多一个入口只会让人误跑一次「花了钱什么都没留下」的重跑。
 CACHE_POLICY: Final = ('default', 'refresh-write', 'disabled')
 
 

@@ -976,11 +976,12 @@ def _state_check_report(base: str, sid: str, stage: str):
     """
     from novel.stages import check_only
 
-    nodes = N.check_nodes(stage)
-    if len(nodes) != 1:
-        return None
+    # ⚠ 解构而不是 `if len(nodes) != 1: return None`：每层恰好一座复检桥是被
+    #   `tests/test_orchestrator_nodes.py` 钉死的不变量，写成条件判断会让读的人以为
+    #   它可能不是 1。下面那个 `try/except` 是对「这本书还没有报告」的正常降级，保留。
+    node, = N.check_nodes(stage)
     novel_dir = paths.resolve_novel_dir(base, sid)
-    ctx = S.readonly_ctx(novel_dir, nodes[0], prov.code_version())
+    ctx = S.readonly_ctx(novel_dir, node, prov.code_version())
     try:
         return check_only(stage)(ctx)
     except (UpstreamMissing, ArtifactUnreadable, TerminalState):

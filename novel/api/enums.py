@@ -60,7 +60,6 @@ _CONSUMED: dict[str, str] = {
     'NODES': 'job_kinds + actions',
     'NODE_WRITE_EFFECTS': 'actions[].writes',
     'SPOILER_DISCLOSURE': 'spoiler_disclosure',
-    'PARTIAL_MASK_NOTE': 'spoiler_disclosure.notice（旧源码兼容别名）',
 }
 
 #: 桶三 —— 登记为**不发**。全是标量，且每一条的理由都是同一句的实例：

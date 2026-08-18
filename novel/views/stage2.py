@@ -48,7 +48,8 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
 
     ⚠ 不带 `badge` / `passed` / `counts`——结论只能来自 `/check/stage2`（`R-11.4`）。
     ⚠ 剧透遮蔽不在这里做：`fate` / `secrets` / `arc.climax` / `arc.ending` 全量下发，
-    开关是前端的纯展示行为（`R-11.13`，那句 `PARTIAL_MASK_NOTE` 由 `/api/enums` 下发）。
+    开关是前端的纯展示行为（`R-11.13`，那句话作为 `spoiler_disclosure.notice`
+    随 `/api/enums` 整份下发——**不单独发一个标量**，免得一句话与结构化契约分家）。
     """
     novel_dir = paths.resolve_novel_dir(base, sid)
     store = ArtifactStore(readonly_ctx(novel_dir, NODE, prov.code_version()))

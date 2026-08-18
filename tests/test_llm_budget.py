@@ -51,16 +51,53 @@ def _ctx() -> RunContext:
 
 def _req(*, system: str = 'sys', user: str = 'usr', thinking: bool = True,
          json_mode: bool = False, max_tokens: int = 96_000,
-         model: str = 'deepseek-v4-pro') -> ChatRequest:
+         model: str = 'deepseek-v4-pro',
+         reasoning_effort: str = 'high') -> ChatRequest:
     return ChatRequest(
         model=model,
         system=system,
         user=user,
-        reasoning_effort='high',
+        reasoning_effort=reasoning_effort,
         thinking=thinking,
         json_mode=json_mode,
         max_tokens=max_tokens,
     )
+
+
+@pytest.mark.parametrize('effort', ['max', 'ultra', '', 'HIGH'])
+@pytest.mark.parametrize('thinking', [True, False])
+def test_an_unregistered_effort_is_refused_instead_of_guessing_a_framing(
+        effort: str, thinking: bool):
+    """⭐ **未登记的档位关闭式拒绝**，不猜一个 framing 了事。
+
+    ⚠ 这条是补给一段刚删掉的死分支的：`_render_prompt` 里曾有 `effort == 'max'` 的
+    官方前缀分支，而 `client.py::LADDER` 只有 low/medium/high、`rungs_from_effort`
+    显式拒绝其余值 ⇒ 那条分支不可达，**且全仓没有一条测试扫过它**。
+    删掉分支之后如果不补这一条，剩下的关闭式拒绝同样没人查——
+    「删掉一段没人查的代码」不该顺手把它那道闸也变成没人查的。
+
+    ⚠ prompt 是**发出去的字节**：猜错 framing 等于按另一个 prompt 估预算，
+    而预算拒绝是花钱前的最后一道闸。报错必须给出行动。
+    """
+    with pytest.raises(TerminalState) as caught:
+        count_input_tokens(_req(reasoning_effort=effort, thinking=thinking))
+    message = str(caught.value)
+    assert repr(effort) in message, f'报错没说是哪个档位：{message}'
+    assert '登记' in message, f'报错没给出行动：{message}'
+
+
+@pytest.mark.parametrize('effort', ['low', 'medium', 'high'])
+def test_every_ladder_rung_shares_the_same_framing(effort: str):
+    """三个现役档位都走官方 `high` framing（不加文字前缀）⇒ token 数逐字相等。
+
+    ⚠ 这是上面那条拒绝的**对照组**：只查「非法值被拒」而不查「合法值都通得过」，
+    一次把取值面收窄过头的改动照样全绿。
+    """
+    counts = {
+        count_input_tokens(_req(reasoning_effort=rung, thinking=True))
+        for rung in ('low', 'medium', 'high')
+    }
+    assert len(counts) == 1, f'某个档位悄悄改了 framing：{counts}'
 
 
 def _estimate(input_tokens: int, max_tokens: int = 96_000) -> BudgetEstimate:

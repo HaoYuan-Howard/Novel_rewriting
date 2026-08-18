@@ -1503,33 +1503,12 @@ def test_failed_first_snapshot_write_leaves_no_partial_or_live_invalid(monkeypat
         '失败路径留下了临时文件或半份审计快照'
 
 
-def test_revalidation_can_read_the_legacy_long_snapshot_name():
-    root = Path(tempfile.mkdtemp())
-    locator = '0' * 64
-    empty_old = (root / '_123' / 'stage3' / '_revalidation' /
-                 f'style_grounding.INVALID.{locator}.snapshot')
-    title = '长' * max(8, 264 - len(str(empty_old)))
-    base = _book(title=title, root=root)
-    ctx = _ctx(base)
-    store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
-    inv = store.write_invalid(STYLE_REL, _style(ctx), gates_skipped=[])
-    locator = _prov_on_disk(inv)['invalid_baseline_sha256']
-    short = next((inv.parent / '_revalidation').glob(f'*.{locator}.snapshot'))
-    legacy_rel = store._legacy_revalidation_baseline_rel(
-        paths.invalid_of(STYLE_REL), locator)
-    legacy = store.path(legacy_rel)
-    store._replace_atomically(legacy, short.read_bytes())
-    short.unlink()
-    assert len(str(legacy)) >= 260
-
-    promoted = ArtifactStore(_ctx(base, paid=False)).promote_invalid(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
-
-    assert promoted.is_file()
-    assert not inv.exists()
-    assert os.path.isfile(_filesystem_path(legacy)), \
-        '兼容读取不应迁移或覆盖旧审计历史'
+# ⚠ 这里曾有 `test_revalidation_can_read_the_legacy_long_snapshot_name`：它自己造一份
+#   长名快照，再证明读侧回落读得到。那条回落删除时的实测是**盘上 8 份快照 8/8 都是短名**
+#   ⇒ 它是这条兼容分支的唯一执行者，一个靠自己的测试活着的兼容层。
+#   ⚠ 那条用例顺带还是一个 >260 字符路径的压力源；`MAX_PATH` 那一面由
+#   `test_first_write_invalid_creates_a_nested_snapshot_near_windows_max_path` 独立守着，
+#   删它没有让长路径失去守卫。
 
 
 def test_write_invalid_never_overwrites_an_existing_baseline_snapshot():

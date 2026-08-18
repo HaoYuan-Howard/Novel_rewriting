@@ -119,8 +119,12 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     trim_audits = _current_trim_audits(novel_dir, code)
 
     for stage in STAGES:
-        nodes = check_nodes(stage)
-        node = nodes[0] if nodes else f'{stage}.review'
+        # ⚠ 解构而不是 `nodes[0] if nodes else f'{stage}.review'`：每层恰好一座复检桥，
+        #   由 `tests/test_orchestrator_nodes.py` 钉着。那条兜底不可达，而它真走到时会
+        #   **造出一个不存在的节点 id**（`stage6.review`）——比当场抛错坏得多：
+        #   一个编不出来的节点会一路带进 `readonly_ctx`，把「这层没有复检桥」变成
+        #   「这层有一座谁都找不到的桥」。
+        node, = check_nodes(stage)
         ctx = readonly_ctx(novel_dir, node, code)
         store = ArtifactStore(ctx)
 

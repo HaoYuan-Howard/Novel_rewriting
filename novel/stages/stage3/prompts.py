@@ -19,9 +19,12 @@ from contracts.schema.stage3 import HookStyle, Measurable, Voice
 from novel.core.bands import bands
 from novel.llm.prompts import fill, with_json_shape
 
-#: 抽取侧的档位（`STYLE_REASONING_EFFORT` / `STYLE_MAX_TOKENS`，逐字移植）。
-REASONING_EFFORT = 'high'
-MAX_TOKENS = 64000
+#: ⚠ 这里曾有 `REASONING_EFFORT = 'high'` 与 `MAX_TOKENS = 64000`，注释写着「逐字移植」
+#: ——而本层三处 `ask_json` **一次都没读过它们**：两处不传 `max_tokens`，第三处
+#: （`style.py` 的字面修复）显式传 `16_000`。
+#: ⚠⚠ 最坑的是 `MAX_TOKENS` 恰好等于 `novel/llm/client.py::DEFAULT_MAX_TOKENS`
+#: ⇒ 盘上产物的读数与「它生效了」完全一致，**看起来生效、实际是巧合**。
+#: 这类常量比普通死代码贵：它会被下一个人当成本层的现役旋钮去调。
 
 #: 逐章生产入口。它没有 hook_style，也没有「全书/章间/尾声」任务，
 #: 因而没有理由索取其他章节。机制词只作为负例出现在 system，不从具体作品来。
