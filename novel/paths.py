@@ -495,6 +495,17 @@ def book_txt_rel(novel_dir: str | os.PathLike[str]) -> str:
     ⚠ 书名天然是文件系统安全的：它本来就是一个真实目录名里的一段（已过 `safe_title`）。
     ⚠ 后缀里那个 `_rewriting` 让 stem 永不等于 Windows 保留设备名（`CON` / `NUL` …），
       那一格 `safe_title` 至今不管——是这个后缀顺手挡住的，不是它被处理过了。
+
+    ⚠⚠ **它把书名放进同一条路径两次**（`<书名>_<sid>/stage7/<书名>_rewriting.txt`），
+    而 `novel/store.py` 的两段注释记着两次真实的 MAX_PATH 事故正是「重复长 stem」。
+    2026-08-19 实测（默认 base `…/Novel_rewriting/outputs`，41 字符）：
+      · 现役那本 `把夫君做成丧尸后`：整条 100 字符，普通路径（无 `\\\\?\\` 前缀）读得回来；
+      · 最坏情况（书名吃满 `MAX_TITLE=80` 码点 + 19 位 sid）：**244 字符，余量只有 16**。
+    ⇒ base 再深一点就会撞墙。根治办法是系统级 `LongPathsEnabled`（管理员一次性），
+      不是把书名截短——截短会让「文件名就是书名」这句话变成有时成立。
+    ⚠ 这与 `tests/conftest.py` 那道 basetemp 预检**不是同一件事**：那条算的是测试临时
+      目录里最长的 Stage0 内容寻址归档（basetemp 之后约 204 字符，仍长于本条的 202），
+      且测试套件里的书名都很短 ⇒ 那条预算不因本函数而变，别去动它。
     """
     return artifact_rel('stage7.book', title=title_of(novel_dir))
 
