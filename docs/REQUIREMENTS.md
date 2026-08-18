@@ -95,6 +95,50 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   且前缀明令写出完整推敲过程 ⇒ reasoning 更多），它属于**质量上界**实验而不是降本实验，
   且启用前要先按 `novel/llm/budget.py` 的记录把官方前缀字节取回来。
 
+#### FC-13 决策规则（2026-08-18 登记，**先于任何 effort 实测结果**）
+
+按 `docs/LESSONS.md` 第 17 条，规则在看到结果之前固定；事后修改规则即本次实验作废、重跑。
+
+**样本**：`四人成行_2055965741988443882`（11 章，`Test_data/` 七本中最小）。
+n=11 ⇒ 任何结论只能写成「**这本书上没观察到质量塌陷**」，不得写成「low 等同 high」。
+
+**设计：单节点换臂（OFAT），不是全链齐变。**
+全链齐变得不到逐节点结论——流水线是串联的，`stage5` 消费 stage2/3/4 的产物，
+全 low 那一臂里成稿变差分不清是本节点降档还是上游输入已劣化，**两个变量绑在一起动**。
+正确形状：先全 high 跑通一遍当基线（它同时是交付品），再对每个候选**复制一份 base、
+只把该节点重跑成 low、上游产物逐字节相同**，用 `tools/ab_compare.py --arm` 双 base 对账。
+
+**候选与顺序**：`stage7.rename` → `stage3.style`。
+排除 `stage6.semantic` 与 `stage2.global`（2026-08-15 已裁决，见 `docs/BACKEND_CONTRACT.md` §十）。
+
+⚠ **收益最大的候选 `stage5.write` shallow 臂今天够不着，它是本条真正的施工前置。**
+`NodeSpec.effort` 是**逐节点**的，而 deep/shallow 是同一个节点 `stage5.write` 的两个 mode
+（`novel/cli/main.py` 里 `deep_ctx` 与 `shallow_ctx` 都传同一个 `ctx.node`）
+⇒ `NODES[ctx.node].effort` 对两臂返回同一个值，**现有旋钮挂不上「只给 shallow 降档」**。
+要做这一项必须先加挂载点，那是独立改动，不要在实验里临时改成全臂降档冒充。
+
+**成本口径：只看输出侧（`completion` / `reasoning`），不得用 prompt token 判胜负。**
+理由是实测发现 **`reasoning_effort` 会切分供应商前缀缓存**：同一本书、同一段 system 字节、
+同一次跑里，`stage2.blueprint` 全部 `high` 行 hit≈4352，而降级阶梯打到 `low` 的那一条
+hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（且输出侧本就是 87.9% 所在）。
+记账只以 `<base>/_service/ledger.jsonl` 按 sid + node + `outcome == "ok"` + `cached == false`
+过滤，不与产物 `usage` 或日志混加。
+
+**质量门（先于成本比较；任一项劣于基线即判该节点 low 不可用，不再讨论便宜）**：
+
+| # | 指标 | 通过条件 |
+|---|---|---|
+| 1 | 该节点 check 的 HARD 命中数 / 分母 | ≤ 基线，且分母不变 |
+| 2 | `unver` + `info` 条数 | ≤ 基线 |
+| 3 | 降级阶梯触发次数、wire error 数 | ≤ 基线 |
+| 4 | `finish_reason != stop`（截断）计数 | ≤ 基线 |
+| 5 | 产物 schema 校验、章集合覆盖 | 全通过且覆盖面逐字不变 |
+
+⚠ **生成质量与审判能力分开评价**：`stage6.semantic` 恒产带证据 `UNVER`、本仓无自动放行门
+⇒ 它**不能**给生成侧质量背书。上表五项都是可复算读数，不含任何审美判断；
+若五项全平而只剩「读起来哪个更好」，按第 17 条那是 n=1 盲读偏好，**记为无结论**，
+不作为降档依据（2026-08-15 已踩过一次：盲读偏好与硬闸结论相反）。
+
 验收：所有被测产物由现役写盘路径生成；完整套件的通过/跳过/失败数、每条 skip 理由和上述付费
 实验结论一并记录，未完成项不因代码位或预览工具存在而销账。
 
@@ -130,10 +174,25 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 - [ ] 在**一本新书**上取证，按 `tools/ab_compare.py` 的 `prompt_cache_hit_rate` /
       `prompt_cache_hit_tokens` 出对比矩阵（该工具已具备全部能力，不要新造）。
       ⚠ **不能拿旧书重跑充数**：首发闸不改 prompt 字节 ⇒ 本地 `.llm_cache/` 键完全不变 ⇒
-      重跑会 0 次真上线，那份「全绿」证明不了任何事。补充直接证据：ledger 每行带
-      `chapter_index`（`novel/llm/ledger.py::CostLedger.record`），按它排序看
-      `prompt_cache_hit_tokens` 是否**从第 2 章起跳升**。
+      重跑会 0 次真上线，那份「全绿」证明不了任何事。
       验收数字要与 FC-13 那条实测的 34.3% 基线对齐着报，别只报改后的绝对值。
+
+⚠⚠ **本条原先登记的那条「按 `chapter_index` 排序看命中从第 2 章起跳升」的取证法已被证伪，
+两处都错**（2026-08-18 在一本刚跑完全链的 19 章书上实测）：
+
+1. **`chapter_index` 不是章号，是批内序号。** 同一份 ledger 里 `purpose=stage2.blueprint:ch8`
+   的 `chapter_index` 是 `1`、`:ch9` 是 `2`。真章号只在 `purpose` 里
+   （`novel/llm/ledger.py::CostLedger.record` 的 `chapter_index` 是扇出批内计数）。按它排序
+   得到的「章序」是假的。
+2. **更要命的是那个形状本身不存在。** 实测 `stage2.blueprint` 的**首发那一条就已经
+   hit≈4352**（`BLUEPRINT_SYS` 4073 token，供应商按 64 token 分块 ⇒ 68×64），
+   `stage5.write` 首发即 hit=1920（`write_system` 1833–1905 ⇒ 30×64）。原因是
+   **system prompt 与书无关、跨书跨跑复用** ⇒ 供应商侧前缀在这次跑开始前就是热的。
+   ⇒ 「从第 2 章起跳升」永远观察不到，而**看不到跳升不等于闸没生效**。
+
+⇒ 要隔离首发闸的增量贡献，需要一段**从未发出过的前缀**（改动 system prompt 字节后的首跑，
+或一个全新节点），否则拿到的只是「目标状态」而不是「闸的贡献」。在补到那样的样本之前，
+本条的诚实结论是**不可测**，不要用一份满命中的账本给它销账。
 
 两项**同期评估过但没做**的（记在这里是为了后来者不必重新推一遍，不是承诺要做）：
 
