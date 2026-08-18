@@ -247,10 +247,10 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 | U-05 空数组 ≠ 没问题 | ✅ | `secrets: []` / `problems: []` / `voice_extra: []` / 漏网候选为空，各有各的说法 |
 | U-06 非完整遮蔽边界必须标注 | ✅ | `/api/enums` 的结构化 `spoiler_disclosure` 在 loading / empty / 404 / error / normal 全部状态常驻；界面明确服务端仍下发完整数据、该开关不是安全边界 |
 | U-07 花钱一眼可分，依据只有服务端 `paid` | ✅ | `previewJob` 下发 `paid`；`JobRequest` 里**没有** `paid` 字段，调用方带不进来 |
-| U-08 第三类：免费但写盘 | ⚠️ | 做了（深色 + `写盘` 角标 + 第四种「未标注」），但分类表在前端 —— 见 §5 第 1 条 |
+| U-08 第三类：免费但写盘 | ✅ | 深色 + `写盘` 角标 + 第四种「未标注」。分类**只查表不判定**：`writes_disk` 由服务端 `novel/api/enums.py::would_write` 逐动作下发，`constants/actions.ts` 缺格即画 `unclassified`——「不知道它会不会写盘」和「它只读」是两回事 |
 | U-09 确认框显示完整命令 | ✅ | argv 来自 `POST /api/jobs/preview`；取不到就不让发起 |
 | U-10 不显示预估花费 / 次数 | ✅ | 全屏搜不到 |
-| U-11 前端不做判定 | ⚠️ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。**三处例外，都是设计稿原有的显示阈值**：<br>· `align.coverage < 0.6` → 锚点覆盖率画成警示<br>· 每一拍 `预算/源文` 比例 <0.9 或 >1.1 → 画成出档（章级的 `in_band` 服务端有，拍级没有）<br>· 闸门 DAG（人工验收流程，brief 自己画了这张图）<br>前两个阈值的服务端下发见 `docs/REQUIREMENTS.md` TODO-27 |
+| U-11 前端不做判定 | ✅ | `badge`/`paid`/`freshness`/`sev`/`passed` 全部照画。设计稿原有的两处显示阈值已经收干净，而**两处的收法不同型**：<br>· 锚点覆盖率 —— 服务端下发 `coverage_threshold` + `coverage_state`（阈值来自 `ANCHOR_COVERAGE_WARN`，state 由 validator 反推），前端只消费 state；<br>· 拍级 `预算/源文` —— **服务端刻意没有拍级判定**：出档是章级判据（`sum(budget_chars)` vs `sum(span)`，`/check/stage4` 的 `budget_band`）。前端因此只显示比值读数与对比条，判定指向本屏底部的 stage4 校验。⚠ 章级的 `in_band` 服务端**也没有**（`contracts/schema/api.py::Stage4IndexRow` 明写）——那是判据结论，要并排显示就去 join 报告。<br>两条各有守卫：`tests/test_api_discipline.py` 的 `test_frontend_does_not_rejudge_anchor_coverage` 与 `test_frontend_does_not_rejudge_beat_budget_band`。<br>唯一剩下的例外是闸门 DAG——它是 brief 自己画的**流程图**，不是对服务端结论的再判定 |
 | U-12 不从文案正则抠结构 | ✅ | `chapters` / `fix` 全部读服务端字段；证据高亮只做 `indexOf`，且一处没命中时明说 |
 | U-13 不按下标切字符串 | ✅ | `HighlightedText` 的 props 里**没有 start/end**，类型上就踩不进去 |
 | U-14 中文阅读界面 | ✅ | 中文优先字体栈；行高 2.05–2.15；不 justify；段落用间距分隔；并排两栏共用一个 `measure` |
