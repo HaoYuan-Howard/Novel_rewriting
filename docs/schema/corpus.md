@@ -44,11 +44,13 @@ conda run -n novel_refactor python -m pytest --require-corpus
 模型与思考档位）必须逐一闭合；每个 token 列分别记录「上报/为空」的行数，上报行数为零的列
 不能声称有非零总数。pytest 的 `xfail` 不会被静默改记成 allowlist 里的一项 skip。
 
-manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 18 条真实
+manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 16 条真实
 production dispatch：每书各一条 Stage2 global/blueprint、Stage3、Stage4、Stage5
 write/semantic、Stage6 hook/semantic、Stage7 rename；`stage6.semantic` 只带 `--base --yes`（`--advisory` 已随自动放行门一并删除），
-write 固定 `--deep 1,2,3 --shallow-rest`。ledger 必须对两书、九节点逐一有非零记录并与这
-18 条命令对账。`preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
+write 固定 `--deep 1,2,3 --shallow-rest`。ledger 必须对两书、八节点逐一有非零记录并与这
+16 条命令对账。⚠ 这里的 16 = 2 书 × 8 付费节点，**现算不写死**——它曾是 18，
+`stage5.semantic` 于 2026-08-17 退役后没跟上。条数以 `contracts/schema/corpus.py` 的
+`CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES` 为准。`preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
 
 语料 JSON 的盘上原始 `_schema_version` 必须直接等于 artifact registry 当前版本；即使
 registry 有 migration，manifest build/verify 也不会先迁移再把旧文件冒充 current。skip

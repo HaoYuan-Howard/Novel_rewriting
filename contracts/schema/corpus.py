@@ -193,7 +193,8 @@ class CorpusBookEntry(StrictModel):
         expected_nodes = set(CURRENT_CORPUS_PAID_NODES)
         if set(self.ledger.nodes) != expected_nodes:
             raise ValueError(
-                'ledger.nodes 必须恰好覆盖九个 production dispatch nodes')
+                f'ledger.nodes 必须恰好覆盖 {len(expected_nodes)} 个 '
+                f'production dispatch nodes：{sorted(expected_nodes)}')
         if any(count <= 0 for count in self.ledger.nodes.values()):
             raise ValueError('每个 production dispatch node 必须有非零 ledger 行')
         if self.ledger.local_cache_hits != 0 or self.ledger.wire_attempts != self.ledger.rows:
@@ -252,16 +253,23 @@ class CorpusManifest(StrictModel):
         expected_books = sorted(CURRENT_CORPUS_BOOKS)
         if [(book.sid, book.chapters) for book in self.books] != expected_books:
             raise ValueError('books 必须恰为本计划冻结的 17/25 章双书')
-        if len(self.commands) != len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES):
-            raise ValueError('commands 必须恰为 18 条 production CLI dispatch')
-        dispatches = [corpus_command_dispatch(command) for command in self.commands]
+        # ⚠ 条数**现算**，不写死。它曾经被写成「18 条」，而 `stage5.semantic` 于
+        #   2026-08-17 从付费节点集里退役后实际是 16 条——校验本身一直是对的
+        #   （它比的是 `len(expected_dispatches)`），只有报错文案在说三年前的话。
         expected_dispatches = [
             (sid, node)
             for sid, _chapters in CURRENT_CORPUS_BOOKS
             for node in CURRENT_CORPUS_PAID_NODES
         ]
+        if len(self.commands) != len(expected_dispatches):
+            raise ValueError(
+                f'commands 必须恰为 {len(expected_dispatches)} 条 production CLI dispatch，'
+                f'实得 {len(self.commands)} 条')
+        dispatches = [corpus_command_dispatch(command) for command in self.commands]
         if dispatches != expected_dispatches:
-            raise ValueError('commands 的 SID/node 顺序必须恰合冻结的 18 dispatch topology')
+            raise ValueError(
+                f'commands 的 SID/node 顺序必须恰合冻结的 '
+                f'{len(expected_dispatches)} dispatch topology')
         if len(self.commands) != len(set(self.commands)):
             raise ValueError('commands 不得重复')
         for command, (_sid, node) in zip(self.commands, dispatches, strict=True):
@@ -283,7 +291,8 @@ class CorpusManifest(StrictModel):
         command_nodes = {node for _sid, node in dispatches}
         for book in self.books:
             if set(book.ledger.nodes) != command_nodes:
-                raise ValueError('ledger.nodes 与 18 条 commands 的节点面不一致')
+                raise ValueError(
+                    f'ledger.nodes 与 {len(self.commands)} 条 commands 的节点面不一致')
         nodeids = [item.nodeid for item in self.skip_allowlist]
         if nodeids != sorted(nodeids):
             raise ValueError('skip_allowlist 必须按 nodeid 排序')

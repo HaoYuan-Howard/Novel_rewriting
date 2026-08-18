@@ -266,7 +266,7 @@ def build_manifest(
     }
     if set(indexed) != expected_dispatches:
         raise ValueError(
-            'commands 必须恰覆盖冻结的 18 dispatch topology：'
+            'commands 必须恰覆盖冻结的 dispatch topology：'
             f'missing={sorted(expected_dispatches - set(indexed))}, '
             f'extra={sorted(set(indexed) - expected_dispatches)}')
     ordered_commands = [
