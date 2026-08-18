@@ -65,7 +65,8 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 > 混在同一个指纹里。三条连带：
 > ⇒ 审阅屏算 diff **只能拿 `_rounds/` 里的上一版比**，不能拿 `source ↔ clean` 比；
 > ⇒ `edited_by_human` 因此是**唯一**能一眼看出「这本书被人动过」的标志位，不许省；
-> ⇒ 逐条记账（`text_edits[]`：`span` + before/after）**本轮不做**，登记为 §四 #5。
+> ⇒ 逐条记账（`text_edits[]`：`span` + before/after）**本轮不做**，登记为待办
+>   （⚠ 这里原本写「登记为 §四 #5」，而当时全文只有三节——那个编号从来就指不到东西）。
 
 ---
 
@@ -245,7 +246,28 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 
 ---
 
-## 三、不变量
+## 三、判据清单
+
+当前注册表共 **13 条**：**11 hard、1 info、1 unver**。落点是 `contracts/judges/stage0.py`；
+条数与分布由 `tests/test_coverage.py` 对着注册表现算，改判据必须同步改这一行。
+
+| 判据 | 级别 | 作用 |
+|---|---|---|
+| `s0_source_identity` | HARD | 原始小说没有被换成另一份正文 |
+| `s0_decode` | HARD | 原始小说仍能按记录的编码无损解码 |
+| `s0_hashes` | HARD | 原始正文与清理正文的两个指纹都对得上 |
+| `s0_normalization` | HARD | 只做 BOM 与换行归一化 |
+| `s0_removal_ledger` | HARD | 每段剔除都有可回到原文的完整账 |
+| `s0_body_ratio` | HARD | 清理后正文至少保留六成 |
+| `s0_nonbody_shared` | HARD | 剔除与残留断言使用同一套非正文判据 |
+| `s0_approval` | HARD | stage0 已获有效批准（自动零命中或人工）才可继续 |
+| `s0_human_preserved` | HARD | 人工编辑状态没有被机器重跑抹掉 |
+| `s0_edit_archive` | HARD | 人工编辑的上一轮已归档 |
+| `s0_dir_roundtrip` | HARD | 书目录能被同一把寻址尺子解析回来 |
+| `s0_warnings` | info | 可疑剔除逐项显式报出 |
+| `s0_correctness` | unver | 剔除段在语义上确实不是正文——**本层验不了**，见 §四末 |
+
+## 四、不变量
 
 | 不变量 | 对应需求 | 证据 |
 |---|---|---|

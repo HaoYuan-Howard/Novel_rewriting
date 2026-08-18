@@ -56,7 +56,9 @@ LADDER: Final[tuple[tuple[str, bool], ...]] = (
 )
 
 #: 关思考阶梯：**单档**。`('low', False)` 是仓内唯一实测验证过的关思考档
-#: （`stage5/write.py::TRIM_RUNGS` 同款）；阶梯扛的两类故障全由推理流引起
+#: （`novel/stages/stage6/hook.py::CANDIDATE_RETRY_RUNGS` 同款；这里曾指向
+#: `stage5/write.py::TRIM_RUNGS`，那个常量随收缩臂整臂下线一起删了）；
+#: 阶梯扛的两类故障全由推理流引起
 #: （见模块 docstring ①②），关掉 thinking 后没有降级对象——复制同档当第二档
 #: 等于把「重试」混进「阶梯」，而那两条循环不许合并（见上）。
 #: 选用哪条由 `DEEPSEEK_THINKING` 决定（`novel/config.py::THINKING_MODES`）。
@@ -419,7 +421,7 @@ class LlmClient:
         ⚠⚠ **它不再写缓存。** 原来这里拿到响应就 `put`，而调用方**还没判断它可不可用**：
         于是四档阶梯各自拿回一份截断 JSON 时，盘上留下的是**四份毒缓存**——
         此后一次完全健康的重跑会 0 次真调用、以一模一样的方式失败，
-        不带 `--no-cache` 永远走不出来。
+        不带 `--refresh` 永远走不出来。
         ⇒ 写缓存的时机挪到「判定可用之后」，由两个入口各自调 `_keep`。
         `cached` 这一格是给它们用的：读回来的那一份不必再写一遍。
 

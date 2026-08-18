@@ -459,3 +459,98 @@ def test_the_reverse_coverage_scan_actually_finds_something():
         f'只从 §五 扫到 {len(claims)} 层的条数登记——正则多半失配了。'
         f'当前 stage0~stage7 每层都有判据，八层都该被扫到'
     )
+
+
+# ─────────────────── `docs/schema/*.md` 的条数声明与 id 覆盖 ───────────────────
+#
+# 【为什么单开一组】上面那三条只扫 `docs/BACKEND_CONTRACT.md` §五。而 `docs/schema/*.md`
+# 里同样逐层写着「当前注册表共 N 条」，**那些数字此前无人对账** —— 实测漂到过
+# stage5 写 48（实为 46）、stage6 写 21 条 / 6-8-4-3（实为 22 条 / 5-8-5-4），
+# 而 stage0 / stage1 / stage3 压根没写。
+# ⚠ 只查「写了的对不对」会放过「压根没写」，所以下面第二条是**必需的另一半**。
+
+#: `当前注册表共 **N 条**：**a hard、b info、c metric、d unver**。`（零值桶省略）
+_SCHEMA_COUNT_ROW = re.compile(
+    r'当前注册表共 \*\*(\d+) 条\*\*：\*\*([^*]+)\*\*')
+_SCHEMA_SEV_CELL = re.compile(r'(\d+)\s*([a-z]+)')
+_SCHEMA_DOC_DIR = Path(__file__).resolve().parent.parent / 'docs' / 'schema'
+
+
+def _schema_doc(stage: str) -> Path:
+    return _SCHEMA_DOC_DIR / f'{stage}.md'
+
+
+def _schema_count_claims() -> dict[str, tuple[int, dict[str, int]]]:
+    """逐层扫出 `docs/schema/<stage>.md` 宣称的条数与 sev 分布。"""
+    claims: dict[str, tuple[int, dict[str, int]]] = {}
+    for stage in sorted({r.stage for r in REGISTRY.all()}):
+        doc = _schema_doc(stage)
+        if not doc.exists():
+            continue
+        for line in doc.read_text(encoding='utf-8').splitlines():
+            hit = _SCHEMA_COUNT_ROW.search(line)
+            if hit is None:
+                continue
+            if stage in claims:
+                raise AssertionError(
+                    f'{doc.name} 里有两行「当前注册表共」——一层只该有一行是权威')
+            dist = {sev: int(n) for n, sev in _SCHEMA_SEV_CELL.findall(hit.group(2))}
+            claims[stage] = (int(hit.group(1)), dist)
+    return claims
+
+
+def test_schema_docs_declare_the_live_rule_counts():
+    """`docs/schema/*.md` 宣称的条数与 sev 分布逐层等于注册表。"""
+    claims = _schema_count_claims()
+    assert claims, '一层都没扫到——正则多半失配了，而那时下面的断言会全绿'
+    drift: dict[str, str] = {}
+    for stage, (total, dist) in claims.items():
+        rules = REGISTRY.of_stage(stage)
+        live = Counter(r.sev for r in rules)
+        if total != len(rules):
+            drift[stage] = f'条数 宣称 {total} / 实际 {len(rules)}'
+        elif dist != {sev: n for sev, n in live.items() if n}:
+            drift[stage] = f'分布 宣称 {dist} / 实际 {dict(live)}'
+    assert not drift, (
+        f'docs/schema 的条数声明与注册表对不上：{drift}\n'
+        f'→ 真值恒在 `contracts/judges/stageN.py` 的注册表，文档里那行只是副本；'
+        f'改判据时两边一起改'
+    )
+
+
+def test_every_stage_with_rules_declares_its_count_in_the_schema_doc():
+    """**漏网的另一半**：有判据的层，一层都不许在 `docs/schema/` 里不写条数。
+
+    ⚠ 只查「写了的对不对」会放过「压根没写」——stage0 / stage1 / stage3 正是这样
+    长期没有任何条数声明，而上面那条对它们一句话都说不出来。
+    """
+    claims = _schema_count_claims()
+    with_rules = {r.stage for r in REGISTRY.all() if _schema_doc(r.stage).exists()}
+    missing = sorted(with_rules - set(claims))
+    assert not missing, (
+        f'这些层有注册判据、也有 schema 文档，却没写条数声明：{missing}\n'
+        f'→ 补一行「当前注册表共 **N 条**：**a hard、b info、c metric、d unver**。」'
+        f'（零值桶省略）'
+    )
+
+
+def test_schema_docs_name_every_live_rule():
+    """每条现役判据的 id 都要在本层 schema 文档里出现过。
+
+    ⚠ 判据表本身也会漂：stage6 曾整整少列一条 `hook_fact_attribution`，而条数那一行
+    当时写的是 21（正好等于列出来的行数）⇒ **两个错互相圆上了**，谁也发现不了。
+    ⇒ 条数与 id 集合**两条都要查**：前者防漏改数字，后者防漏列行。
+    """
+    missing: dict[str, list[str]] = {}
+    for stage in sorted({r.stage for r in REGISTRY.all()}):
+        doc = _schema_doc(stage)
+        if not doc.exists():
+            continue
+        tokens = set(re.findall(r'`([a-z0-9_]+)`', doc.read_text(encoding='utf-8')))
+        absent = sorted({r.rule for r in REGISTRY.of_stage(stage)} - tokens)
+        if absent:
+            missing[stage] = absent
+    assert not missing, (
+        f'这些判据一次都没在本层 schema 文档里出现：{missing}\n'
+        f'→ 把它们补进该层的判据表；一条查不到名字的判据，读文档的人无从知道它存在'
+    )

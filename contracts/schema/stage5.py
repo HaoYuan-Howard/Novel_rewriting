@@ -9,10 +9,12 @@ stage5/<mode>/chNN.json          LLM 产，逐章一次调用 —— 唯一承�
 stage5/<mode>/chNN.INVALID.json  被落盘闸门拦下的问题稿（同一份章契约 + errs）
 stage5/<mode>/_rounds/…          三种归档：上一轮 · 被提升掉的问题稿 · 被护栏驳回的自救
 stage5/review_<n>.json           确定性验收报告（**0 成本，不调 LLM**）
-stage5/semantic_<n>.json         书级语义审判（付费；claims → reveal 对齐）
 stage5/wontfix.json              人的「这条我不修」
 stage5/draft.md                  两条臂合成的全书拼稿（字节形态，不在本模块）
 ```
+⚠ 这张图上曾列着 `stage5/semantic_<n>.json`（书级语义审判）。`stage5.semantic`
+已于 2026-08-17 **整节点下线**（裁决与实跑证据见 `docs/BACKEND_CONTRACT.md` §十），
+产物、路径登记与两条判据一并删除——本层现在**没有任何付费的语义审判**。
 
 【五条贯穿本层的事实】
 

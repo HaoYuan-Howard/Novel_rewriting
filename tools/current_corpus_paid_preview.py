@@ -554,31 +554,34 @@ def historical_observations(
 
 
 def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
-    profile_nodes = set(SEMANTIC_NODES)
-    mandatory = [row for row in dispatches if row['node'] not in profile_nodes]
-    profiled = [row for row in dispatches if row['node'] in profile_nodes]
+    # ⚠ 局部名曾叫 `profile_*`——那个名字说的是「依赖哪一份 evaluator profile」，
+    #   而 profile 那套装置已整批下线（见本文件开头）。改名只改了常量、没改用它的这一段，
+    #   于是一个退役概念以现役身份留在了唯一的成本聚合处。⇒ 对齐到已有的输出键名。
+    semantic_nodes = set(SEMANTIC_NODES)
+    mandatory = [row for row in dispatches if row['node'] not in semantic_nodes]
+    semantic_rows = [row for row in dispatches if row['node'] in semantic_nodes]
     stage3 = [row for row in dispatches if row['node'] == 'stage3.style']
     hooks = [row for row in dispatches if row['node'] == 'stage6.hook']
     base_logical = sum(row['base_logical_requests'] for row in mandatory)
     base_wire = sum(row['base_ladder_wire_hard_limit'] for row in mandatory)
-    profile_logical = sum(row['base_logical_requests'] for row in profiled)
-    profile_wire = sum(row['base_ladder_wire_hard_limit'] for row in profiled)
+    semantic_logical = sum(row['base_logical_requests'] for row in semantic_rows)
+    semantic_wire = sum(row['base_ladder_wire_hard_limit'] for row in semantic_rows)
     stage3_logical = sum(row['conditional_logical_requests'] for row in stage3)
     stage3_wire = sum(row['conditional_wire_hard_limit'] for row in stage3)
     hook_retry_logical = sum(row['conditional_logical_requests'] for row in hooks)
     hook_retry_wire = sum(row['conditional_wire_hard_limit'] for row in hooks)
     full_logical = (
-        base_logical + profile_logical + stage3_logical + hook_retry_logical)
+        base_logical + semantic_logical + stage3_logical + hook_retry_logical)
     full_wire = (
-        base_wire + profile_wire + stage3_wire + hook_retry_wire)
+        base_wire + semantic_wire + stage3_wire + hook_retry_wire)
     return {
         'production_cli_dispatches': len(dispatches),
         'base_nonsemantic_logical_requests': base_logical,
         'base_nonsemantic_ladder_wire_hard_limit': base_wire,
         'stage3_conditional_habit_quote_logical': stage3_logical,
         'stage3_conditional_habit_quote_wire_hard_limit': stage3_wire,
-        'semantic_logical': profile_logical,
-        'semantic_wire_hard_limit': profile_wire,
+        'semantic_logical': semantic_logical,
+        'semantic_wire_hard_limit': semantic_wire,
         'stage6_conditional_candidate_retry_logical': hook_retry_logical,
         'stage6_conditional_candidate_retry_wire_hard_limit': hook_retry_wire,
         'full_conditional_logical_hard_limit': full_logical,

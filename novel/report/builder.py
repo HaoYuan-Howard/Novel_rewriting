@@ -110,8 +110,10 @@ def _status_of(rule: Rule, outcome: Outcome | None) -> tuple[str, str | None]:
     if outcome.unver_why is not None:
         return 'unver', outcome.unver_why
     if rule.sev == 'unver':
-        # 一条**永久**够不着的判据（stage6 有 3/9 条：查连续文本的字面探针结构性失效）。
+        # 一条**永久**够不着的判据（典型：查连续文本的字面探针结构性失效）。
         # 它必须说出为什么够不着，而它自己最清楚——所以只能由实现给。
+        # ⚠ 这里曾写「stage6 有 3/9 条」。注释里的计数没有任何守卫，一次判据增删就过期
+        # ——现役条数由 `docs/schema/*.md` 的声明行承载，那一行有 `test_coverage.py` 对账。
         raise RefusedByStructure(
             f'{rule.rule}: sev=unver 的判据必须在产出里写出「这次为什么够不着」。'
             f'`unver` 是判据的边界，而边界要说得出在哪——'

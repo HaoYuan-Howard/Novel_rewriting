@@ -44,7 +44,7 @@ stage3/style_grounding.json     {voice, surface_habits[], hook_style, measurable
 > 我三岁嘴强月老   PASS（另有 2 处 [INFO] 原文微引用）
 > ```
 >
-> 9 条现役判据里 6 条是「扫过 N 个字段、0 处命中」的**文本探针**
+> 本层现役判据里 6 条是「扫过 N 个字段、0 处命中」的**文本探针**
 > （摘抄 / 词例 / 数字复述 / 结构引用 / 微引用 / 专名 / 节点名）。
 > **`voice` 八维、`hook_style` 七项、`surface_habits` 的【内容质量】一条判据都没有**（`R-4.7` → `B-09`）。
 > ⇒ PASS 的意思是「没有可探测的越界」，**不是「这份文风画像抓对了」**。
@@ -327,6 +327,7 @@ LLM 产的定性 `voice/surface_habits`；句长、段长、对白比等不会�
 
 ## 六、判据清单（**唯一落点**，四个消费方共用）
 
+当前注册表共 **9 条**：**6 hard、3 info**。
 落盘闸门 / `check_one` / `--check-only` / `--remeasure` 都读同一张表，谁也不许再抄一份。
 
 | 判据 | 级别 | 查什么 | 盘上 |

@@ -205,7 +205,9 @@ class PlanProvenance(LlmProvenance):
 
     params: PlanParams
 
-    #: 定向重规划过哪些章（累积）。默认值只为兼容早于本字段的存量产物。
+    #: 定向重规划过哪些章（累积）。默认空 = **这份计划没有定向重规划过**，
+    #: 是产地不写这一格时的中性值，不是「不知道」。（曾写作「兼容存量产物」，
+    #: 而迁移机制已整批删除，那个理由不再成立。）
     partial_regen_chapters: list[int] = Field(default_factory=list)
 
     #: 每一次定向重规划的输入、响应与前后章指纹。

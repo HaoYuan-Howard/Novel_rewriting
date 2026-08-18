@@ -189,7 +189,11 @@ def test_thinking_off_exhaustion_still_raises_and_never_returns_an_empty_draft()
 
 
 def test_explicit_rungs_beat_the_thinking_mode():
-    """显式 `rungs` 的优先级不因思考开关而变——收缩调用（TRIM_RUNGS 那类）照走自己的档。"""
+    """显式 `rungs` 的优先级不因思考开关而变——收窄阶梯的调用照走自己的档。
+
+    ⚠ 这里曾点名 `TRIM_RUNGS`，那个常量随 stage5 收缩臂整臂下线一起删了；
+    现役的同款是 `novel/stages/stage6/hook.py::CANDIDATE_RETRY_RUNGS`。
+    """
     t = FakeTransport.always(OK_TEXT)
     c = _client(t, thinking_mode='off')
     c.ask_text('sys', 'usr', purpose='t', rungs=(('high', True),))
@@ -405,7 +409,7 @@ def test_an_empty_answer_is_never_cached():
 def test_a_structurally_empty_shell_is_evicted_from_the_cache():
     """⭐ **空壳踢出缓存。**
 
-    留着它，下一次不带 `--no-cache` 的重跑会原样读回来，而调用方看到的是一模一样的失败
+    留着它，下一次不带 `--refresh` 的重跑会原样读回来，而调用方看到的是一模一样的失败
     ——**那不是重试，是把同一个结果读了两遍**。
     ⚠ 这里**不适用**产物那条「修不了的原样留着」（判据 7）：产物留着是给人看的，
     一份坏缓存留着不会被人看见，只会被下一次重跑静默地当成新结果。
@@ -447,7 +451,7 @@ def test_a_poisoned_cache_entry_heals_within_the_very_same_run():
     """⭐⭐ **一份读回来之后才发现不可用的缓存，是一次发现得晚的 miss，不是模型的毛病。**
 
     实测形态：第一次四档全拿回截断 JSON ⇒ 四份毒缓存。第二次即使传输层保证返回
-    正确 JSON，也是 **0 次真调用**并以一模一样的方式失败——而且不带 `--no-cache`
+    正确 JSON，也是 **0 次真调用**并以一模一样的方式失败——而且不带 `--refresh`
     永远走不出来。「重试」退化成把同一个坏结果读第二遍，
     **而那与一次真调用在报告上长得一模一样**。
 

@@ -236,7 +236,8 @@ class HookProvenance(LlmProvenance):
     #: `model` 由 `LlmProvenance` 定成必填，本层不重复定义。
     params: HookParams
 
-    #: 每条初始脏候选恰好一次定向重试；默认值兼容旧产物。
+    #: 每条初始脏候选恰好一次定向重试。默认空 = **这一跑没有重试过任何候选**，
+    #: 是产地不写这一格时的中性值。（曾写作「兼容旧产物」，而迁移机制已整批删除。）
     candidate_retries: list[HookCandidateRetry] = Field(default_factory=list)
 
 

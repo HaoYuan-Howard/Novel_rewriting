@@ -241,9 +241,13 @@ def run_wontfix(ctx: RunContext, spec: str) -> CheckReport:
     ⚠ **本层结论一律书级**：候选是同一次调用产的三条，没有章这一维；
     候选身份在证据键里（`<候选>:<原字节>`）。写章号 ⇒ 显式终态，不静默当成 book。
 
-    ⚠ **豁免不开闸门**：它只降 `actionable` 并打标。`hook_semantic_contradiction`
-    被豁免之后，落盘闸门与批准路（`require_selectable`）照旧拒绝那条候选——
+    ⚠ **豁免不是通行证**：它只降 `actionable` 并打标，批准路那把尺子一格不松——
+    字节绑定照拒、`basis` 仍只能是 `human_verification`、那条结论也照旧留在报告里。
     「有人看过并决定不修」不等于「这条不再是问题」。
+    ⚠⚠ 这里曾写「批准路（`require_selectable`）**照旧拒绝**那条候选」。那个函数已整份
+    删除，而那句话现在是**假的**：自动 FAIL 不再可产 ⇒ 没有任何机制会替人否决一个候选
+    （`semantic.require_human_resolution` 的 docstring）。横在「有矛盾的文案」与成书之间的
+    只剩人读判官证据这一道——**注释里留一句已经不成立的安全保证，比没有注释危险。**
     """
     from novel.stages.stage6 import semantic   # 局部导入：semantic 顶层 import 本模块
 
@@ -715,8 +719,10 @@ def run_approve(
             f'候选 {pick} 有阻断级机械问题 {mechanical_hard}，不能定稿。'
             f'请改选干净候选或 --apply-edit 修正')
 
-    # 当前校准 PASS 可作为自动证据；缺 profile / UNVER 必须记一条
-    # 与当前字节绑定的人工 resolution。已有校准 FAIL 不可被这条路覆盖。
+    # 定稿依据只有一种：一条与当前字节绑定的人工 resolution。
+    # ⚠ 这里曾是一个二选一（当前校准 PASS 走自动证据，其余记人工）。自动放行门下线后
+    #   `basis` 在类型上只剩 `human_verification`，`require_human_resolution` 仍返回它，
+    #   是为了让**写 resolution 的那一处**只有一个来源，不是还留着第二种可能。
     from novel.stages.stage6 import semantic
     assessment, basis = semantic.require_human_resolution(
         store, art, c.text, str(pick), actor=actor, reason=reason,

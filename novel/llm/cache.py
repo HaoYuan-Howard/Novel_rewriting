@@ -33,7 +33,7 @@ from novel.llm.transport import ChatRequest, ChatResponse
 _NAMES: dict[tuple[bool, bool], str] = {
     (True, True): 'default',        # 命中就用，没命中就跑并记下来
     (False, True): 'refresh-write',  # **重新采样，但仍然记账**——定向重生成走这条
-    (False, False): 'disabled',      # `--no-cache`：两个方向一起关
+    (False, False): 'disabled',      # 两个方向一起关。⚠ **本仓没有对应的 CLI flag**
 }
 assert set(_NAMES.values()) == set(CACHE_POLICY), \
     'CachePolicy 的具名口径与 contracts.invariants.CACHE_POLICY 分家了'
@@ -73,7 +73,13 @@ class CachePolicy:
 
     @classmethod
     def disabled(cls) -> CachePolicy:
-        """`--no-cache`：**同时**关读写（`R-12.4` 第一条明写「关缓存是同时关读写」）。"""
+        """**同时**关读写（`R-12.4` 第一条明写「关缓存是同时关读写」）。
+
+        ⚠ **没有 CLI 入口，这是有意的。** 本仓不提供 `--no-cache`：`--refresh` 严格更优
+        （重新采样且仍然记账），多一个入口只会让人误跑一次「花了钱什么都没留下」的重跑。
+        这个口径留着是因为 `R-12.4` 是冻结需求，而它是那条需求的**唯一表达**——
+        删掉取值面就等于删掉那条需求的守卫（`tests/test_llm.py` 走真 client 逐个跑过三个口径）。
+        """
         return cls(read=False, write=False)
 
     @classmethod
@@ -194,7 +200,7 @@ class ResponseCache:
         ⚠ 这里**不适用**产物那条「修不了的原样留着」（判据 7）：
         产物留着是给人看的，缓存留着**不会被人看见**，只会被下一次重跑静默地当成新结果。
         实测形态：模型返回 `{"reconstruction_strategy": "…"}`——**0 个输出章**，
-        合法 JSON、正常结束，于是一路放行**并进了缓存**；此后不带 `--no-cache` 的重跑
+        合法 JSON、正常结束，于是一路放行**并进了缓存**；此后不带 `--refresh` 的重跑
         只会拿回同一个空壳（「参数不变的重跑什么都没跑」）。
         """
         if self.dir is None:

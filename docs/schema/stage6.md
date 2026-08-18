@@ -155,12 +155,13 @@ validator 必须确认：
 5. 当前 hook 文本集合与审判的文本 sha1 / 决议 SHA-256 集合一致，且 semantic 产物新鲜。
 
 批准动作 `stage6.approve --pick N --actor <id> --reason <why>
---subject-sha256 <hash>` 在归档和写盘之前执行三道硬检查：
+--subject-sha256 <hash>` 在归档和写盘之前执行两道硬检查：
 
 - 该候选没有机械 HARD；
 - 请求里的完整 SHA-256 与候选当前字节一致，不允许旧页面误批。
 
-⚠ 这里曾有第三道：「当前合并决议不是校准 FAIL，也不存在与本文本绑定的历史校准 FAIL」。
+⚠ 这里曾有第三道（所以上面那句原本写作“三道”）：「当前合并决议不是校准 FAIL，
+也不存在与本文本绑定的历史校准 FAIL」。
 它的输入是 automated FAIL，随自动放行门一并消失。**⇒ 没有任何机制会替人否决一个候选。**
 全部语义结论进 `verification` 清单，人逐项核对后以 actor/reason/hash 路径记
 `human_verification`；矛盾线索仍逐条呈现（三条候选各一行，凭据键 `<候选>:<文本指纹>`，
@@ -174,8 +175,8 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 
 ### 5.1 `stage6/wontfix.json` —— 语义结论的人工闭环
 
-本层两条语义判据（`hook_semantic_contradiction` 阻断、`hook_candidate_contradiction` 提示）
-的人工豁免走这里。
+本层两条语义判据（`hook_semantic_contradiction` 与 `hook_candidate_contradiction`，
+**都只提示不阻断**）的人工豁免走这里。前者曾是 HARD，随自动放行门下线降为 `unver`。
 
 `stage6.hook --wontfix '<book>|<判据>[|<证据键>]=<理由>'`，形状与账本模型与 stage5 那份
 **完全相同**（`novel/wontfix.py` 是唯一的机制落点）。本层特有的三条：
@@ -184,14 +185,14 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 |---|---|
 | **一律 `book` 级** | 候选是同一次调用产的三条，没有章这一维；候选身份在证据键里（`<候选>:<原字节>`）。写章号 ⇒ 显式终态 |
 | **`coverage=uncertain` 逐条可寻址** | 它的证据是 `<候选>:<文本指纹>`。⚠ 原来是空列表 ⇒ 收敛键恒为空串 ⇒ 三条候选共用一个键，一次豁免会一并豁免三条 |
-| **豁免不开闸门** | `require_selectable` 与落盘闸门照旧拒绝有矛盾的候选。「有人看过并决定不修」≠「这条不再是问题」 |
+| **豁免不是通行证** | 它只降 `actionable` 并打标，批准闸那把尺子一格不松：字节绑定照拒、`basis` 仍只能是 `human_verification`、结论照旧留在报告里。⚠ 曾写作「`require_selectable` 照旧拒绝有矛盾的候选」——那个函数已删除，且**没有任何机制会替人否决一个候选**。「有人看过并决定不修」≠「这条不再是问题」，但拦住它的是读证据的人，不是闸 |
 
 `at` 记的是人当时看的那一版：语义判据记 `semantic_<n>:<产物指纹>`，机械判据记
 `hook:<产物指纹>`。**它是审计账，不参与匹配**——失效由证据自身保证（文本一改键就失配）。
 
-## 六、现役判据（21 条）
+## 六、现役判据
 
-分布：6 HARD、8 INFO、4 metric、3 unver。
+当前注册表共 **22 条**：**5 hard、8 info、5 metric、4 unver**。
 
 | 判据 | 级别 | 作用 |
 |---|---|---|
@@ -200,7 +201,6 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 | `hook_reuses_source` | HARD | 与原作文案无任何相同 20 内容字窗口 |
 | `hook_invented_name` | HARD | 人物称谓在完整下发面有据 |
 | `hook_para_sep` | HARD | 分段档位符合原作文案，作为归一后置条件 |
-| `hook_semantic_contradiction` | HARD/semantic | 合并决议 FAIL 阻断；UNVER 保持可见并只允许显式人工核验，不能冒充自动 PASS |
 | `hook_transcribes_body` | INFO | 不整段誊抄开篇正文 |
 | `hook_invented_number` | INFO | 数字+单位在下发面有据 |
 | `hook_length` | INFO | 篇幅贴近原作文案 |
@@ -212,7 +212,9 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 | `hook_report` | metric | 下发范围、各文本字数、原作文案字数 |
 | `hook_quote_shape` | metric | 引语条数、最长引语、对白比 |
 | `hook_secret_literal` | metric | 与 secret 原文的字面重合读数，不是剧透门 |
+| `hook_fact_attribution` | metric | 人物赠与类事实的弱字面归因读数 |
 | `hook_quality_rank` | metric/semantic | 六维分、代码总分与匿名排序 |
+| `hook_semantic_contradiction` | unver/semantic | ⚠ **它永远产不出 Finding**：合并决议在类型上恒 `UNVER`，实现只有一条 `unverifiable(...)` 出口。曾是 HARD（靠 automated FAIL 阻断），随自动放行门下线降级。⇒ 它报的是「这条够不着，去读判官证据」，不是「查过没问题」 |
 | `hook_not_approved` | unver | 是否已有人工定稿 |
 | `hook_body_missing` | unver | 连续开篇范围是否缺成稿 |
 | `hook_body_stale` | unver | 文案绑定的开篇成稿消费投影是否仍一致 |

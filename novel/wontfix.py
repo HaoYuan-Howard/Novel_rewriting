@@ -188,7 +188,7 @@ def applied(findings: Iterable[Finding], wf: dict[str, WontFixEntry],
 def applied_to_outcomes(outcomes: Iterable[Outcome], wf: dict[str, WontFixEntry],
                         *, ordinal: int | None = None) -> list[Outcome]:
     """给一层的 `Outcome` 列表套上豁免。**书级寻址**（语义结论一律 book 级：
-    它们的章信息在证据键里，见 `semantic_secret_leak` 的 `ch<n>:<原字节>`）。
+    身份在证据键里，见 `hook_candidate_contradiction` 的 `<候选>:<文本指纹>`）。
 
     ⚠ 空账时**原样返回同一批对象**——不做一次无意义的重建，
     也就不会在没有任何豁免的书上白跑一遍 `model_validate`。

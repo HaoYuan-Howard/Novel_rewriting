@@ -377,7 +377,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `lead_upto` / `rationale` | | 是 | 开篇引到哪一章、为什么 |
-| `candidates[]` | 数组 | 是 | 恒三条，`index` 恒 `1..3`。`chars` 在 Python 侧走 `measure()` 现算。质量审判字段包括 `semantic_state`（clear / contradiction / uncertain / unreviewed）、`semantic_reason`、`contradictions[]`、六维 `quality`、代码总分 `quality_score`、`quality_rank` 与 `selectable`；缺失或过期审判必须显示 unreviewed，不能画成 clear |
+| `candidates[]` | 数组 | 是 | 恒三条，`index` 恒 `1..3`。`chars` 在 Python 侧走 `measure()` 现算。质量审判字段包括 `semantic_state`（**只有 uncertain / unreviewed 两态**）、`semantic_reason`、`contradictions[]`、六维 `quality`、代码总分 `quality_score` 与 `quality_rank`；缺失或过期审判必须显示 unreviewed，与「判过、有证据、但服务端不替人盖章」的 uncertain 分开。⚠ 曾有 `clear` / `contradiction` 两个取值与 `selectable` / `human_resolvable` 两格布尔，随自动放行门整批下线——一个恒假的「可直接定稿」和一个恒真的「可人工消解」，在界面上分别是一条走不通的捷径与一道永远开着的闸 |
 | `approved` | 对象 或 null | 是 | `null` = 还没定稿。`candidates[].approved` 与它说同一件事（后置条件）；`human_edit`（无前身）时不许有候选自称定稿 |
 | `judged` / `sources` | | 是 | 生成时使用的成稿引用与来源账，原样 |
 | `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |
