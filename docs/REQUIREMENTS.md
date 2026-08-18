@@ -24,10 +24,9 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
 互相咬合，缺的是一份合格盘面。源语料两本都在（`Test_data/`，`NOVEL_DATA` 指路）。
 
 - [ ] 在隔离输出与独立空缓存中，用最终代码从来源重新生成两本书的 Stage0～Stage7 产物；所有
-  产物必须由现役 producer 按 `ARTIFACT_SPECS.current_version` 写出。当前 registry 同时包含
-  v1/v2/v3 家族，**以注册表为准**；2026-08-18 的下线批次又破坏了三个：
-  `STAGE6_SEMANTIC` v2→v3（且**刻意没有 migration**）、`STAGE5_TRIM_AUDIT` v1→v2、
-  `STAGE5_TRIM_RESOLUTION` v1→v2。
+  产物必须由现役 producer 按 `ARTIFACT_SPECS.current_version` 写出。**现役全表恒 v1，且没有
+  迁移机制**（2026-08-18 归零，理由见 `contracts/schema/__init__.py` 模块头【版本】）——
+  这一条因此比过去简单：盘上任何一个不是 v1 的标记都说明那份产物不是这一跑产的。
   不给旧 JSON 手补 `_schema_version`、`root_clean_sha1` 或其他字段冒充当前产地。
 - [ ] 生成并提交无正文 manifest：逐书记录 sid、source hash、章节数、预期产物与版本、代码身份、
   冻结命令、ledger 聚合及精确 skip allowlist。终审成本以 `<base>/_service/ledger.jsonl` 为
@@ -42,8 +41,10 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
 那么在同一份文件里维护一个「还剩几条红」的分数本身就是违规——它会被读成进度。
 真实读数只能由上面那一跑给出。
 （历史读数已作废：`-m corpus` 曾在 2026-08-18 记过 251→16 红，而当天晚些时候的三个
-schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘面现在连读数都产不出来。
-这不是回归，正是「它不能充当验收盘面」的直接证明。）
+schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘面连读数都产不出来
+（实测：177 份 JSON 里 46 份拒读，`test_wontfix_semantic` / `test_api_edits` 的用例
+在 `sandbox.Sandbox()` 搬文件时就整批 ERROR）。这不是回归，正是「它不能充当验收盘面」
+的直接证明——**那三本书已于同日整批删除**，本条要的盘面只能从来源重新生成。）
 
 既往两处澄清，避免下一个人再当成待办：
 

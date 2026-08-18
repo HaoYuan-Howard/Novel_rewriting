@@ -11,9 +11,9 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 | `stage4/writer_context.json` | `WriterContext` | `stage4.context` | Stage 5/6 的唯一写作材料 |
 | `stage4/writer_context.identity.json` | `WriterContext` | `stage4.plan --identity` | 确定性组装基线 |
 
-`plan_chapters.json` 当前为 **schema v3**（v2 只经登记迁移补中性的定向修复账）；
-`writer_context.json` 与恒等基线仍为 v2；`plan_edit.json` 是无来源账的人工决策集，为 v1。
-未知字段拒收，运行时只经 `ARTIFACT_SPECS` 登记的版本与迁移读取，不根据历史常量切换预算语义。
+本层四份产物**都是 schema v1**（全仓恒 v1，见 `_README.md`「版本与路径注册表」）。
+未知字段拒收，运行时只读 `ARTIFACT_SPECS` 声明的当前版本——**本仓没有迁移机制**，
+也不根据历史常量切换预算语义。
 
 ## 一、规划调用边界
 

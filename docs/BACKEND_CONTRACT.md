@@ -1017,13 +1017,13 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 双形状 union、退役判据占位、字段解释键别名或旧命令转发。所有载体继续 `extra='forbid'`。
 `contracts/schema/__init__.py::ARTIFACT_SPECS` 是“路径 → 当前版本、模型”的唯一注册表；普通对象
 顶层带 `_schema_version`，RootModel 使用 `{_schema_version,payload}` 信封。写盘恒写该路径在注册表的
-`current_version`（现役同时有 v1/v2/v3 家族），不手抄一个全局版本号。
+`current_version`，不手抄一个全局版本号。
 
-读取接受注册表声明的当前版本，或每一步都在该 `ArtifactSpec.migrations` 明确登记的
-低版本。migration 只能补中性默认或显式使无法推断的旧决定失效，不得猜 actor/hash。
-无版本、未登记的低版本、迁移断链和高版本均明确拒读并报告文件与版本，不推断或暗补。overview、inbox 与只读视图仍按
-产物边界降级，坏一份不抹掉整本其余可读区域。`.INVALID` 与 `_rounds/` 是当前运行证据，同样必须是
-当前版本或可沿显式迁移链读取的版本。
+**本仓没有迁移机制。** 读取只接受注册表声明的当前版本：无版本、低版本、高版本与非法值一律明确
+拒读，错误必须同时报出文件、盘上版本、当前版本与下一步（从 producer 重建）。要破坏某个产物的形状，
+做法是把该路径的 `current_version` +1，并在同一批里回答“存量产物由谁重建”——不是加一条迁移把旧
+字节读成新形状。overview、inbox 与只读视图仍按产物边界降级，坏一份不抹掉整本其余可读区域。
+`.INVALID` 与 `_rounds/` 是当前运行证据，同样必须是当前版本。
 
 ### Q-9 · 判据要报出自己的基线，且探针的名字要等标定完再起
 - 词表类判据没有基线命中率，等于不知道自己在说什么
@@ -1284,6 +1284,8 @@ npm --prefix web run build
 | 2026-08-17 | `stage5.semantic` 整节点下线裁决 | 实跑证据而非偏好：① 本项目重构**不跨章重组**（实测 18/18 章 `from_source_ordinals == [自身]`）⇒ 书级剧透那条主风险面在计划形态上几乎不存在；② 同一本书上书级语义判官 18 章里 5 章命题抽取返回 uncertain、8 条 secret 全部判不动，而 stage2 的确定性判据加上成书逐字对账的「上游 info 下游投影」（**0 次调用**）给出了确定结论；③ 成本上它占单本实付调用的 54%、输出 token 的 55%。`stage6.semantic` 保留（2 次调用、1.7% token，实测直接纠正过一次定稿）。**下线的是节点不是能力**：要恢复须连同 `contracts/schema/stage5.py` 的 `SemanticReview` 一族、stage5 的 semantic 模块（已随节点删除）与两条判据一起恢复。⚠ 保留下来的那个节点，其**自动放行装置**已于次日（2026-08-18）另行下线，见下一行 |
 | 2026-08-18 | evaluator profile 装置与 stage5 收缩臂整批下线 | 裁决依据是「它从未被标定过，而那条分支一次都没有走通过」：`stage6.semantic` 的默认路在每台宿主上都是 exit 2（`require_enabled` 在 transport 前终止），stage5 收缩臂的 `trim_equivalence` 闸同理——盘上 14 份 `trim_audit` 的 reason 全是「未发起收缩调用或语义调用」。⇒ 删 `EvaluatorProfile` / `CapabilityMetrics` / `GroundTruthManifest` / `GroundTruthCase` 与八类能力枚举、`novel.quality.profile`、四个 `tools/` 校准件（3254 行）及其测试；`SemanticDecision.verdict` 收成 `Literal['UNVER']`，`hook_semantic_contradiction` 由 HARD 降为 `unver`（它命中 Finding 的两条路都要求 automated FAIL，已不可达；继续挂 HARD 只能靠伪造反例或给双向守卫开豁免口）。**留下来的是判官不是闸门**：双盲 A/B 照跑，产带证据的 UNVER 与匿名质量排序。⚠ **产品语义变了**：过去带校准 FAIL 的候选会被永久拒绝，现在没有任何机制会替人否决一个候选，横在「有矛盾的文案」与成书之间的只剩人读判官证据这一道（R-9.6 / R-9.19 / R-10.14 已同批改写）。⚠ 三个产物版本随之破坏：`STAGE6_SEMANTIC` v2→v3（**刻意不登记 migration**——把一份 `automated=true` 的旧 PASS 迁成普通 UNVER 是改写历史）、`STAGE5_TRIM_AUDIT` v1→v2、`STAGE5_TRIM_RESOLUTION` v1→v2 ⇒ 盘上三本书的这三层一律拒读，按同日裁决作废，后续新书走新 schema 重跑。验证：全量非 corpus `pytest -q` 0 failed，`validate_skill.py` PASS，`preview` / `state` / 直接读旧产物三条 0 成本路径逐条核对。**本次没有任何付费实证** |
 | 2026-08-18 | 语料闸 251 条红逐条定性（`-m corpus` 全量，`NOVEL_OUTPUT=outputs`，盘上 3 本） | **收官 898 条：800 通过 / 16 失败 / 82 跳过**（基线 646 / 251 / 1）。四类根因：① **127 条**是往返测试在空沙箱里撞写盘口后置条件——`_assert_self_fresh` 把三态里的 `unknown` 与 `stale` 压成「不是 fresh」，而空沙箱里每条上游边恒是 `ghost`。**生产代码没动**：git 考古证明这道闸防的是 `stale/consumed_changed`，而 `unknown` 那一半也确实抓到过 `consumed_undeclared`（`novel/consumption.py` 里 `STAGE2_GLOBAL_EDIT` 那行投影就是被它逼出来的）⇒ 改测试装置，只在往返那一条上收窄成「只放行 `unknown` 家族」，并配一条两侧各钉一次的守卫。② **5 处守卫漂移**，其中 4 处同源于 `R-5.5` 那次契约转向（详见 `docs/LESSONS.md` §21 第三形状）。③ **103 条**是语料链条真过期：`stage4/writer_context.json` 被本轮保真点修复重生成，两本书的 stage5 成稿相对它 `consumed_changed`（它们是照空下发面写的）、三本书的 `stage7/name_map.json` 同理。改成由生产落点现算的声明式前提；单本用例改挑「链条当前」的那一本而不是排序第一的那一本，因此 24 条是真跑而非跳过。④ 剩余 16 条见 `docs/REQUIREMENTS.md` TODO-21。⚠ 现有 3 本都不是「用最终代码从来源重建」的，**不能**为 TODO-21 提供通过数字 |
+
+| 2026-08-18 | 产物 schema 归零 v1、迁移机制整批删除、三本书与 `_service/` 清空 | 删除依据是可复算的盘面读数而不是偏好：删前 3 本书共 **177 份 JSON，其中 46 份今天已拒读**（26 份 `trim_audit` v1/当前 v2、18 份 `trim_resolution` v1/当前 v2、2 份 `semantic_1` v2/当前 v3）——**这 46 份全部落在未登记 migration 的家族上**；反过来，登记了 v2→v3 migration 的 8 个家族在盘上**一份低版本文件都没有** ⇒ 整条迁移梯子零消费者，却让 `AGENTS.md` 与 `docs/schema/_README.md` 里「只接受当前版本」那句话假了一整段时间。⇒ 删 `ArtifactSpec.migrations`、6 个迁移函数与 5 张 `MIGRATE_*` 表，30 个产物全部归零到 v1，`decode_artifact` 收成「版本 != current 一律拒读」。**这次是让文档变真，不是改文档迁就实现。** 版本号自此是「这个产物的形状被破坏过几次」的计数器：破坏形状要 `current_version` +1 **并同批回答「存量产物由谁重建」**。⚠ 同批发现并修掉一个会让守卫静默失效的形状：拿**模板路径**（带 `{n}`/`{nn}`/`{mode}`）去 `decode_artifact`，`artifact_regex` 把占位符编译成 `\d+` ⇒ 模板自己匹配不上任何路由 ⇒ 走未登记分支原样返回、一个异常都不抛，用模板写的「拒读」用例会全程绿着却一次闸都没查到（`tests/test_artifact_versions.py::_concrete` 与它自己的前提守卫）。版本守卫的分母同批从十几条提到 **30 份产物 × 8 种非法标记**，且从注册表派生。⚠ 三本书与 `outputs/_service/` 已整批删除（保留三份 `final_review_*.md` 与 `.llm_cache/`）——它们本就不能充当验收盘面（上一行）。删后 `-m corpus` 在**不设 `NOVEL_OUTPUT`** 时 0 failed 全 skip；设成一个空 `outputs/` 会红 4 条断言语料存在的闸，**那是正确报警不是缺陷**。验证：全量非 corpus `pytest -q` 0 failed。**本次没有任何付费实证；语料批整批 skip，不构成验收** |
 
 证据解释纪律：阶段性 smoke 会被后续完整验收覆盖；历史报告中的“未完成”不能越过
 `docs/REQUIREMENTS.md` 重新成为活动状态。模型或语料结论只适用于当时样本与预登记规则，不外推成

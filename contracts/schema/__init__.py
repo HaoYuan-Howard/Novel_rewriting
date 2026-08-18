@@ -15,13 +15,22 @@ contracts.schema —— 产物 schema 的机器形态。
 【`ARTIFACTS`：相对路径 → 模型，唯一落点】
 盘上语料体检、`/api/novels/:sid/...` 的响应类型、将来 `tools/emit_json_schema.py`
 产前端 TS 类型，三个消费方读的是**同一张表**。手抄第二份的下场见 `Q-6`。
+
+【版本：全表恒 v1，没有迁移机制】
+⚠⚠ 这里曾有一梯 v2→v3 migration（5 张 `MIGRATE_*` 表 + 6 个迁移函数），删除那天的实测：
+**登记了 migration 的 8 个家族在盘上一份低版本文件都没有**，而盘上唯二的 v2 文件
+（两本书的 `stage6/semantic_1.json`）恰好属于**刻意不登记 migration** 的那一族
+⇒ 整条梯子零消费者，却让「只接受当前版本」这句写在入口文档里的话假了一整段时间。
+判准是**谁来重建**：答得出「从 producer 重跑」就不该有迁移；答不出，那才是真兼容层，
+而它必须同批写下重建的成本与授权。
+⇒ 要破坏某个产物的形状，做法是把该路径的 `current_version` +1，**并在同一批里回答
+「存量产物由谁重建」**，不是加一条迁移把旧字节读成新形状。
 """
 from __future__ import annotations
 
 import re
-from copy import deepcopy
-from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from dataclasses import dataclass
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -158,11 +167,16 @@ class ArtifactVersionError(ValueError):
 
 @dataclass(frozen=True)
 class ArtifactSpec:
-    """一类盘上 JSON 的当前版本与模型。"""
+    """一类盘上 JSON 的当前版本与模型。
+
+    ⚠ 这里曾有第三格 `migrations`（低版本 → 当前版本的迁移链）。删除的理由见模块头
+    【版本】那一段：它保护的不是存量产物，是**没人重建过的**存量产物。
+    `current_version` 保留为可写，是因为它仍要承担「这个形状破坏过几次」这件事——
+    只是今天全表都还没破坏过第一次。
+    """
 
     model: type[BaseModel]
     current_version: int = 1
-    migrations: Mapping[int, Callable[[Any], Any]] = field(default_factory=dict)
 
     @property
     def root(self) -> bool:
@@ -175,143 +189,58 @@ class DecodedArtifact:
     version: int
 
 
-def _v2_to_v3(payload: Any) -> Any:
-    """Neutral v2→v3 migration for provenance-only contract additions."""
-    return deepcopy(payload)
-
-
-def _finding_defaults(rows: object) -> None:
-    if not isinstance(rows, list):
-        return
-    for row in rows:
-        if isinstance(row, dict):
-            row.setdefault('output_ordinal', None)
-
-
-def _stage4_v2_to_v3(payload: Any) -> Any:
-    out = deepcopy(payload)
-    if isinstance(out, dict) and isinstance(out.get('_provenance'), dict):
-        source = out['_provenance']
-        source.setdefault('partial_regen_chapters', [])
-        source.setdefault('repairs', [])
-    return out
-
-
-def _stage5_review_v2_to_v3(payload: Any) -> Any:
-    out = deepcopy(payload)
-    if not isinstance(out, dict):
-        return out
-    chapters = out.get('chapters')
-    if isinstance(chapters, list):
-        for chapter in chapters:
-            if isinstance(chapter, dict):
-                # Migration may only add a neutral unknown.  Newly generated
-                # reviews stamp the actual chapter ordinal at production time.
-                _finding_defaults(chapter.get('findings'))
-    _finding_defaults(out.get('book'))
-    return out
-
-
-def _stage6_v2_to_v3(payload: Any) -> Any:
-    out = deepcopy(payload)
-    if not isinstance(out, dict):
-        return out
-    source = out.get('_provenance')
-    if isinstance(source, dict):
-        source.setdefault('candidate_retries', [])
-        params = source.get('params')
-        if isinstance(params, dict):
-            params.setdefault('candidate_retry_max_tokens', 24000)
-            # v2 predates targeted candidate retrying.  A migration may make
-            # that absence explicit, but must not rewrite history as if one
-            # retry had been configured at generation time.
-            params.setdefault('candidate_retry_limit', 0)
-            params.setdefault('candidate_retry_effort', 'low')
-            params.setdefault('candidate_retry_thinking', False)
-    candidates = out.get('candidates')
-    if isinstance(candidates, list):
-        for candidate in candidates:
-            if isinstance(candidate, dict):
-                _finding_defaults(candidate.get('findings'))
-    approved = out.get('approved')
-    if isinstance(approved, dict):
-        _finding_defaults(approved.get('findings'))
-    return out
-
-
-def _stage7_v2_to_v3(payload: Any) -> Any:
-    out = deepcopy(payload)
-    if not isinstance(out, dict):
-        return out
-    # v2 approvals carried only {origin: human}.  An actor/reason/hash cannot
-    # be inferred, so migration deliberately invalidates the old decision.
-    out['approved'] = None
-    _finding_defaults(out.get('book'))
-    return out
-
-
-MIGRATE_V2: Mapping[int, Callable[[Any], Any]] = {2: _v2_to_v3}
-MIGRATE_STAGE4_V2: Mapping[int, Callable[[Any], Any]] = {2: _stage4_v2_to_v3}
-MIGRATE_STAGE5_REVIEW_V2: Mapping[int, Callable[[Any], Any]] = {
-    2: _stage5_review_v2_to_v3,
-}
-MIGRATE_STAGE6_V2: Mapping[int, Callable[[Any], Any]] = {2: _stage6_v2_to_v3}
-MIGRATE_STAGE7_V2: Mapping[int, Callable[[Any], Any]] = {2: _stage7_v2_to_v3}
-
-
 #: **产物相对路径 → 当前契约。** 路径里的 `{n}` / `{mode}` 是占位符。
 #: 这是路径、模型与 schema version 的唯一权威表；`ARTIFACTS` 是模型投影。
 #:
 #: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/**/draft.md` / `stage7/book.txt`
 #: ——它们不是 JSON，schema 是**字节形态**，守卫在写盘口那一层。
+#:
+#: ⚠ **全表恒 v1**（`current_version` 默认值），一条 `migrations=` 都没有。
+#: 这不是「还没来得及升版」，是模块头【版本】那一段的裁决：破坏形状要 +1 并同批回答
+#: 「存量产物由谁重建」。反向守卫在 `tests/test_artifact_versions.py`。
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
-    STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport, current_version=2),
+    STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport),
     STAGE0_MACHINE_SNAPSHOT: ArtifactSpec(MachineRemovalSnapshot),
     STAGE0_MERGE_CANDIDATE: ArtifactSpec(Stage0MergeCandidate),
     STAGE0_AUDIT_ENTRY: ArtifactSpec(Stage0AuditEntry),
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy),
     STAGE1_PARTITION_REPORT: ArtifactSpec(PartitionReport),
-    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(
-        GlobalGrounding, current_version=3, migrations=MIGRATE_V2),
+    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding),
     STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),
     STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
     STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit),
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(
-        ChapterBlueprints, current_version=3, migrations=MIGRATE_V2),
-    STAGE3_STYLE_GROUNDING: ArtifactSpec(
-        StyleGrounding, current_version=3, migrations=MIGRATE_V2),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints),
+    STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding),
     # ⚠ 三份 `*_edit.json` 不是节点产的，是**人产的输入**——但它们落在产物目录、
     #   被 `--apply-edit` 当决策集吃掉，所以形状同样是契约（stage7 先例，§三）。
     STAGE3_STYLE_EDIT: ArtifactSpec(StyleEdit),
-    STAGE4_PLAN_CHAPTERS: ArtifactSpec(
-        PlanChapters, current_version=3, migrations=MIGRATE_STAGE4_V2),
+    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters),
     STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit),
-    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, current_version=2),
+    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext),
     # ⚠ **恒等基线是一份【产物】不是一次 print**（2026-08-12，F3-4）。
     #   `stage4.plan --identity` 必须让「跑过且写手手里有这些」与
     #   「从没跑过」在盘上长得一模一样（`Q-2`）。stage6/stage7 在同一道工序上都做对了。
     #   ⚠ 它与正式那份**同一个模型**：形状完全一样，差别只在三个 goal 是显式标记
     #   ——**换一个模型就等于说它是另一种东西**，而它恰恰要回答
     #   「计划什么都不改时，写手手里到底有什么」。
-    STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext, current_version=2),
-    STAGE5_CHAPTER: ArtifactSpec(Chapter, current_version=3, migrations=MIGRATE_V2),
+    STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext),
+    STAGE5_CHAPTER: ArtifactSpec(Chapter),
     STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision),
-    STAGE5_REVIEW: ArtifactSpec(
-        Review, current_version=3, migrations=MIGRATE_STAGE5_REVIEW_V2),
-    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit, current_version=2),
-    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution, current_version=2),
+    STAGE5_REVIEW: ArtifactSpec(Review),
+    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit),
+    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution),
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
     #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
-    STAGE6_HOOK: ArtifactSpec(Hook, current_version=3, migrations=MIGRATE_STAGE6_V2),
+    STAGE6_HOOK: ArtifactSpec(Hook),
     STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit),
-    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview, current_version=3),
+    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview),
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
-    STAGE7_NAME_MAP: ArtifactSpec(NameMap, current_version=3, migrations=MIGRATE_STAGE7_V2),
+    STAGE7_NAME_MAP: ArtifactSpec(NameMap),
     STAGE7_NAME_MAP_EDIT: ArtifactSpec(NameMapEdit),
 }
 ARTIFACTS: dict[str, type[BaseModel]] = {
@@ -378,22 +307,14 @@ def decode_artifact(rel: str, data: Any) -> DecodedArtifact:
     version = marker
     if isinstance(version, bool) or not isinstance(version, int) or version < 0:
         raise ArtifactVersionError(f'{rel}: 非法 schema version {version!r}')
-    if version > spec.current_version:
+    # ⚠ **只有当前版本读得进来**，高低一视同仁：本仓没有迁移机制（模块头【版本】）。
+    #   错误必须同时说出文件、盘上版本、当前版本与**下一步做什么**——
+    #   「读不了」而不说从哪儿重建，等于把人推回去手补字段冒充当前产地。
+    if version != spec.current_version:
         raise ArtifactVersionError(
             f'{rel}: schema v{version} 不是当前 v{spec.current_version}；'
-            '高版本产物不猜读')
-    while version < spec.current_version:
-        migrate = spec.migrations.get(version)
-        if migrate is None:
-            raise ArtifactVersionError(
-                f'{rel}: schema v{version} 不是当前 v{spec.current_version}；'
-                f'没有登记 v{version}→v{version + 1} migration，拒绝猜读')
-        try:
-            payload = migrate(payload)
-        except (TypeError, ValueError, KeyError) as exc:
-            raise ArtifactVersionError(
-                f'{rel}: schema v{version}→v{version + 1} migration 失败：{exc}') from exc
-        version += 1
+            '本仓不迁移旧产物，请从 producer 重新生成'
+            '（**不要手补字段冒充当前产地**）')
     return DecodedArtifact(payload, version)
 
 

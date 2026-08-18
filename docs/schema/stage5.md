@@ -56,7 +56,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > `{segments:[{slot,text}]}`。代码在预算、缓存、ledger、transport 之前先检查 prompt-private
 > 字段，再要求槽位集合完整且唯一，最后严格按 producer 顺序组装。缺槽、重槽、多槽或未知键均
 > 是显式终态，不能靠模型返回顺序决定成书顺序。
-> `--apply-edit` 吃的也是这份 **schema v2 人工输入形状**，即完整单章的
+> `--apply-edit` 吃的也是这份**分段人工输入形状**，即完整单章的
 > `{"segments":[{"slot":"s01","text":"..."},...]}`；它不是一段可丢失 slot 边界的纯文本。
 > 命令本身没有 LLM 费用，但操作者仍须提供所有计划 slot 的整章全文。
 >
@@ -113,9 +113,8 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 
 ## 一、`stage5/<mode>/chNN.json`
 
-正式章与其 `.INVALID` / 轮次归档当前使用 **schema v3**（登记的 v2→v3 迁移只补
-`Finding.output_ordinal` 的中性默认）；`review_<n>.json` 同为 v3。无 `_provenance` 的
-rejected、wontfix、trim audit 与 trim resolution 均从 v1 起步。
+本层全部产物——正式章与其 `.INVALID` / 轮次归档、`review_<n>.json`、rejected、wontfix、
+trim audit 与 trim resolution——**都是 schema v1**（全仓恒 v1，见 `_README.md`）。
 
 顶层 **10 个键**。**正式稿与 `.INVALID` 共用同一份章契约**——状态由**文件名**区分，
 不由字段贫富区分。
@@ -705,8 +704,7 @@ owner 分布：`stage5` **29** · `None` **15**（＝非结论）· `stage4` 2 �
 > 盘上零样本（唯一那份人工稿的 `errs` 是空的）。这是裁决的后果，不是 bug——但要写进契约。
 
 > 所有写作与修订调用共用 `ChapterResponse` 及同一槽位 validator；不存在另一路纯文本或
-> batch-only 响应形状。正式章 artifact 为 **schema v3**；登记的 v2→v3 迁移只补中性
-> finding 定位默认。旧 `text` 权威字段没有别名或双读分支，必须从 producer 重新生成
+> batch-only 响应形状。旧 `text` 权威字段没有别名或双读分支，必须从 producer 重新生成
 > 当前 `segments`。
 
 ---

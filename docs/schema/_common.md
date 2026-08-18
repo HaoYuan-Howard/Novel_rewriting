@@ -61,7 +61,7 @@ Stage5/6/7 都调用 `novel.prov.rules_fingerprint(stage)`；指纹覆盖 `Rule`
 
 ### 1.4 `root_clean_sha1` —— 全链根正文身份
 
-所有既有带 `_provenance` 的 artifact 与 `RemovalReport` 自 schema v2 起必填完整 40 位根哈希。
+所有带 `_provenance` 的 artifact 与 `RemovalReport` 必填完整 40 位根哈希。
 中间 `inputs` 全都看似 fresh 也不能替代这条：Stage0 正文换过而 Stage1 尚未重建时，只有根身份
 能立即把 Stage1~7 及其字节产物标为 stale。`RunContext` 从当前已批准的 Stage0 正文建立根身份；
 一次运行内读到不同根、或写入来源账声明另一根，均在写盘前显式拒绝。旧 v1 不手补、不猜迁移。

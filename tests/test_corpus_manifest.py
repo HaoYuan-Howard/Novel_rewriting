@@ -262,7 +262,7 @@ def test_manifest_rejects_incomplete_books_ledger_and_artifact_hashes():
     '0 tests collected',
     '缺少现役双书 Test_data 语料',
     '盘上没有 stage7 语料——这些集成用例没在查',
-    '语料缺 current v3 artifact；补法：重跑',
+    '语料缺 current v1 artifact；补法：重跑',
     '未设置 NOVEL_OUTPUT；当前产物语料体检未运行',
 ])
 def test_skip_allowlist_cannot_hide_missing_corpus_or_zero_collection(reason):
@@ -340,8 +340,11 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
         corpus_manifest.verify(tmp_path, manifest)
     state[sid]['artifacts'] = artifacts
 
+    # ⚠ 写成 `item.schema_version + 1` 而不是一个字面量：这条要表达的是「**版本变了**
+    #   就该被 inventory hash 抓到」，与那个数字具体是几无关。曾经硬编码成 `1`，
+    #   而全表归零到 v1 之后「改成 1」等于没改 ⇒ 用例安静地不再制造漂移。
     state[sid]['artifacts'] = [
-        item.model_copy(update={'schema_version': 1})
+        item.model_copy(update={'schema_version': item.schema_version + 1})
         if item.rel == 'stage0/removal_report.json' else item
         for item in artifacts
     ]
@@ -416,7 +419,14 @@ def test_root_model_artifact_version_is_decoded_from_envelope(tmp_path):
     assert changed[0].sha256 != first_sha
 
 
-def test_inventory_refuses_raw_old_version_even_when_registry_has_migration(tmp_path):
+def test_inventory_refuses_a_raw_non_current_version(tmp_path):
+    """⚠ **这条不能因为「迁移机制已经删了」就跟着删。**
+
+    `_artifact_inventory` 在 decode 之前先比 **raw marker**，是一道独立于
+    `decode_artifact` 的闸——它防的是「迁移之后冒充 current」。迁移梯子拆掉之后
+    这条的语义变成「raw marker 必须直接等于 current」，仍然值钱：
+    盘面清点要的是**盘上那个数字**，不是解码器愿意接受的那个数字。
+    """
     from tests.test_stage2 import global_grounding
 
     book = tmp_path / 'book_123'
@@ -427,7 +437,7 @@ def test_inventory_refuses_raw_old_version_even_when_registry_has_migration(tmp_
         **global_grounding(),
     }, ensure_ascii=False), encoding='utf-8')
 
-    with pytest.raises(ValueError, match=r'raw _schema_version=2.*current v3.*禁止迁移'):
+    with pytest.raises(ValueError, match=r'raw _schema_version=2.*current v1.*禁止迁移'):
         corpus_manifest._artifact_inventory(book)
 
 

@@ -500,23 +500,37 @@ def test_what_we_write_is_what_we_can_read_back():
     StyleGrounding.model_validate(decode_artifact(STYLE_REL, raw).payload)
 
 
-def test_v2_provenance_artifact_remains_readable_and_fresh_after_v3_upgrade():
+def test_a_tampered_schema_version_is_refused_on_the_real_read_path():
+    """⭐⭐ 版本闸在**真 store 路径**上也拦得住，不只在合成 dict 上。
+
+    ⚠ 这条曾叫 `test_v2_provenance_artifact_remains_readable_and_fresh_after_v3_upgrade`，
+    断言的正好相反：把版本号改成 2 之后**照样读得回来、照样 fresh**——那是迁移梯子的
+    配套用例。梯子拆掉之后（`contracts/schema/__init__.py` 模块头【版本】），
+    同一个场景的正确结论是**拒读**。
+
+    ⚠ 与 `tests/test_artifact_versions.py` 那两条参数化的分界线：那边拿合成 dict 扫
+    30 份产物的分母，这边走 `ArtifactStore.write` → 真文件 → `read_own` 的整条路，
+    查的是「闸真的装在读盘口上」而不是只装在解码函数里。
+    """
     base = _book()
     ctx = _ctx(base)
     store = ArtifactStore(ctx)
     store.read(Loose, UPSTREAM)
     official = store.write(STYLE_REL, _style(ctx))
     encoded = json.loads(official.read_text(encoding='utf-8'))
-    assert encoded['_schema_version'] == 3
+    assert encoded['_schema_version'] == 1, '写盘口吐的不是当前版本'
+
+    # 先证明原样能读回来——否则下面那条拒读证明不了是版本号造成的。
+    assert ArtifactStore(_ctx(base)).read_own(
+        StyleGrounding, STYLE_REL)[0].surface_habits == ['习惯一']
+
     encoded['_schema_version'] = 2
     official.write_text(
         json.dumps(encoded, ensure_ascii=False, indent=2) + '\n',
         encoding='utf-8', newline='',
     )
-
-    loaded = ArtifactStore(_ctx(base)).read_own(StyleGrounding, STYLE_REL)[0]
-    assert loaded.surface_habits == ['习惯一']
-    assert ArtifactStore(_ctx(base)).freshness(STYLE_REL).state == 'fresh'
+    with pytest.raises(ArtifactUnreadable, match='schema v2 不是当前 v1'):
+        ArtifactStore(_ctx(base)).read_own(StyleGrounding, STYLE_REL)
 
 
 def _spend(ctx: RunContext, **tokens) -> None:
@@ -1412,11 +1426,16 @@ def test_revalidation_refuses_a_tampered_immutable_baseline_before_writing():
     assert inv.is_file() and not store.exists(STYLE_REL)
 
 
-def test_legacy_v2_invalid_without_creation_snapshot_fails_closed():
+def test_an_invalid_without_a_creation_snapshot_fails_closed():
+    """被测的是**缺定位键就不许提升**，与版本号无关。
+
+    ⚠ 这条曾顺手把 `_schema_version` 改成 2 来扮演「旧文件」。版本归零后那一笔会让它
+    先死在版本闸上（拒读），根本走不到 `promote_invalid` 的定位键判断——**用例还是红的，
+    但查的已经不是它要查的那件事**。⇒ 去掉那笔道具，只留真正被测的条件。
+    """
     base = _book()
     _ctx_, inv = _write_invalid(base, [])
     legacy = json.loads(inv.read_text(encoding='utf-8'))
-    legacy['_schema_version'] = 2
     legacy['_provenance'].pop('invalid_baseline_sha256')
     inv.write_text(
         json.dumps(legacy, ensure_ascii=False, indent=2) + '\n',

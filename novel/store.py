@@ -1310,10 +1310,11 @@ class ArtifactStore:
             raise ProvenanceRefused(
                 f'不可变基线 {baseline_rel} 与 INVALID 声明的定位键不一致；拒绝提升')
 
-        # Locator protects the exact schema-versioned bytes created at that time.
-        # Verify against the raw encoded object, not the possibly migrated decoded
-        # payload; otherwise a later schema migration would make an intact baseline
-        # look tampered merely because encode_artifact now emits a newer version.
+        # 定位键钉的是**当时那一份带版本信封的原始字节**。核验必须拿 raw encoded
+        # object 去比，不能拿解码后的 payload：后者不含 `_schema_version`，而将来任何
+        # 一次 `current_version` +1 都会让 `encode_artifact` 吐出不同的字节
+        # ⇒ 一份完好的基线会仅仅因为版本号变了就被判成「被改过」。
+        # ⚠ 与迁移无关，删掉迁移机制之后这条依然成立——版本号本身就在被签名的字节里。
         if not isinstance(baseline_encoded, dict):
             raise ProvenanceRefused(f'{baseline_rel} 的原始 JSON 不是 object，无法核验定位键')
         subject_encoded = dict(baseline_encoded)

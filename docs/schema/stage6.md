@@ -33,8 +33,8 @@ stage6/hook_edit.json        人工编辑一条候选或定稿的决策集
 stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
 
-`hook.json` 与轮次归档当前为 **schema v3**；登记的 v2→v3 迁移只补候选重试账与
-`Finding.output_ordinal=null` 的中性默认。`hook_edit.json` 为 v1 人工输入，semantic 产物为 v2。
+本层全部产物——`hook.json` 与轮次归档、`hook_edit.json`、`semantic_<n>.json`、`wontfix.json`
+——**都是 schema v1**（全仓恒 v1，见 `_README.md`「版本与路径注册表」）。
 
 ### 2.1 `hook.json`
 

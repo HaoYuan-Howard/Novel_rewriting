@@ -52,8 +52,9 @@ write 固定 `--deep 1,2,3 --shallow-rest`。ledger 必须对两书、八节点�
 `stage5.semantic` 于 2026-08-17 退役后没跟上。条数以 `contracts/schema/corpus.py` 的
 `CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES` 为准。`preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
 
-语料 JSON 的盘上原始 `_schema_version` 必须直接等于 artifact registry 当前版本；即使
-registry 有 migration，manifest build/verify 也不会先迁移再把旧文件冒充 current。skip
+语料 JSON 的盘上原始 `_schema_version` 必须直接等于 artifact registry 当前版本。这道闸**独立于
+`decode_artifact`**：盘面清点要的是盘上那个数字，不是解码器愿意接受的那个数字。（本仓现已没有
+迁移机制，全表恒 v1；这条闸原本防的是「迁移之后冒充 current」，梯子拆掉后它继续守住直比。）skip
 allowlist 不能收录“缺语料 / missing corpus / 0 collected”一类候选，且硬验收若实际收集到
 0 条 corpus 测试会失败。
 

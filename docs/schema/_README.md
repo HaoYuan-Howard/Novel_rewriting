@@ -59,10 +59,12 @@ schema 路由与 stage 真实读写均引用该目录。路径模板由 `artifac
 注册表声明的当前版本；无标记、低版本和高版本都明确拒读，错误必须带文件与版本。当前 Pydantic
 模型同样不接受旧字段别名或双形状，需要保留的输入从产地按当前契约重新生成。
 
-版本不是全仓一个数字：`RemovalReport` 与所有既有带 `_provenance` 的 artifact 当前为 **v2**；
-Stage0 machine snapshot / merge candidate / hash-chain audit，以及 global review、trim audit 等新增
-artifact 从 **v1** 起步；其余无 provenance 的既有 artifact 仍为 v1。旧 v1 provenance artifact
-不手补 `root_clean_sha1`、不猜迁移，必须从 producer 重建。
+**现役全表恒 v1，且没有迁移机制。** 版本号是“**这个产物的形状被破坏过几次**”的计数器，
+不是家族标签——今天全表都还没破坏过第一次。曾经有过一梯 v2→v3 migration，删除那天的实测是：
+登记了 migration 的 8 个家族在盘上一份低版本文件都没有，而盘上唯二的 v2 文件恰好属于**刻意不登记
+migration** 的那一族 ⇒ 整条梯子零消费者，却让上一段那句话假了一整段时间。判准是**谁来重建**：
+答得出“从 producer 重跑”就不该有迁移。旧产物不手补 `_schema_version` / `root_clean_sha1`
+冒充当前产地，必须从 producer 重建。
 
 ## 反推工具
 

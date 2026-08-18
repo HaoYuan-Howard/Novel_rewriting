@@ -3,16 +3,19 @@
 """当前产物版本、路径注册表与只读损坏隔离的最小合成样本。"""
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
 import pytest
 
+import contracts.schema
 from contracts.artifacts import ARTIFACT_PATHS, artifact_rel
 from contracts.invariants import NODES
 from contracts.schema import (
     ARTIFACTS,
     ARTIFACT_SPECS,
+    ArtifactSpec,
     ArtifactVersionError,
     MainText,
     artifact_key,
@@ -32,7 +35,12 @@ MAIN_TEXT = [
 ]
 
 
-def test_current_root_artifact_uses_a_versioned_envelope_and_round_trips():
+def test_a_real_payload_survives_the_envelope_and_still_validates():
+    """信封是**包装**不是改写：脱掉它之后模型照样认得那份 payload。
+
+    ⚠ 下面那两条参数化用合成 payload 扫全部 30 份产物（分母），这一条用一份**真的**
+    `MainText` 补另一半：脱信封之后它仍能过模型校验、字段仍在原位。
+    """
     current = encode_artifact('stage1/main_text.json', MAIN_TEXT)
 
     assert current['_schema_version'] == 1
@@ -42,133 +50,105 @@ def test_current_root_artifact_uses_a_versioned_envelope_and_round_trips():
     assert MainText.model_validate(decoded.payload).root[1].chapter_ordinal == 2
 
 
-def test_unversioned_artifact_is_refused_instead_of_inferred_as_v0():
-    with pytest.raises(ArtifactVersionError, match='缺少当前 schema v1 标记'):
-        decode_artifact('stage1/main_text.json', MAIN_TEXT)
-
-
-def test_future_version_is_refused_with_the_file_and_both_versions():
-    with pytest.raises(
-        ArtifactVersionError,
-        match=r'stage6/hook\.json: schema v99 .* v3',
-    ):
-        decode_artifact('stage6/hook.json', {'_schema_version': 99})
-
-
-def test_old_version_is_refused_without_a_migration_branch():
-    with pytest.raises(
-        ArtifactVersionError,
-        match=r'stage6/semantic_1\.json: schema v0 不是当前 v3',
-    ):
-        decode_artifact('stage6/semantic_1.json', {
-            '_schema_version': 0, 'texts': [], 'decisions': [],
-        })
-
-
 def test_schema_model_map_is_derived_from_the_current_registry():
     assert set(ARTIFACTS) == set(ARTIFACT_SPECS)
     assert all(ARTIFACTS[key] is spec.model for key, spec in ARTIFACT_SPECS.items())
-    assert {spec.current_version for spec in ARTIFACT_SPECS.values()} == {1, 2, 3}
 
 
-def test_only_artifacts_with_new_disk_shapes_advance_to_v3():
-    provenance_bearing = {
-        rel for rel, spec in ARTIFACT_SPECS.items()
-        if any(field.alias == '_provenance' for field in spec.model.model_fields.values())
-    }
-    # New artifact families start at v1 even when they already carry the
-    # current provenance contract; "v2" means an existing v1 family was
-    # intentionally broken, not that provenance itself consumes a version.
-    # ⚠ `trim_resolution` 曾经在这张豁免名单里（它是新家族、从 v1 起）。收缩臂整臂下线时
-    #   `after_sha256` 被删掉，那是一次**故意的破坏**，所以它现在按 v2 与老家族同列。
-    established = provenance_bearing
-    assert established == {
-        'stage5/trim_resolution_ch{nn}.json',
-        'stage2/global_grounding.json',
-        'stage2/chapter_blueprints.json',
-        'stage3/style_grounding.json',
-        'stage4/plan_chapters.json',
-        'stage4/writer_context.json',
-        'stage4/writer_context.identity.json',
-        'stage5/{mode}/ch{nn}.json',
-        'stage5/review_{n}.json',
-        'stage6/hook.json',
-        'stage6/semantic_{n}.json',
-        'stage7/name_map.json',
-    }
-    v3 = {
-        'stage2/global_grounding.json',
-        'stage2/chapter_blueprints.json',
-        'stage3/style_grounding.json',
-        'stage4/plan_chapters.json',
-        'stage5/{mode}/ch{nn}.json',
-        'stage5/review_{n}.json',
-        'stage6/hook.json',
-        'stage6/semantic_{n}.json',
-        'stage7/name_map.json',
-    }
-    assert all(ARTIFACT_SPECS[rel].current_version == 3 for rel in v3)
-    # ⚠⚠ `stage6/semantic_{n}.json` 是**唯一一个 v3 却刻意没有 v2 migration** 的产物。
-    #    v2 里 `SemanticDecision` 带 `automated` / `profile_id`，`EvaluatorFingerprint`
-    #    带 `dataset_sha256`；自动放行门下线后这三格没了。写一条「顺手丢掉这三格」的
-    #    migration，会把一份记着 `automated=true` 的旧 PASS 悄悄读成一条普通 UNVER
-    #    ——那不是迁移，是改写历史。它一律拒读，要从 producer 重建。
-    no_migration = {'stage6/semantic_{n}.json'}
-    assert all(2 in ARTIFACT_SPECS[rel].migrations for rel in v3 - no_migration)
-    assert all(not ARTIFACT_SPECS[rel].migrations for rel in no_migration)
-    unchanged_v2 = established - v3
-    assert all(ARTIFACT_SPECS[rel].current_version == 2 for rel in unchanged_v2)
-    assert ARTIFACT_SPECS['stage0/removal_report.json'].current_version == 2
-    # `trim_audit` 不带 provenance，所以不在 `established` 里；它同批从 v1 破到 v2
-    # （六个恒定字段一次删掉，见 `TrimAudit` 的 docstring）。
-    assert ARTIFACT_SPECS['stage5/trim_audit_ch{nn}.json'].current_version == 2
+def test_the_whole_registry_is_on_one_scale_and_the_migration_ladder_stays_gone():
+    """⭐⭐ **全表恒 v1，且没有迁移机制。**
 
-    new_v1 = {
-        'stage0/machine_snapshot.json',
-        'stage0/merge_candidate.json',
-        'stage0/_audit/edit_{n}.json',
-        'stage2/global_review.json',
-        'stage2/global_review_decisions.json',
-    }
-    assert all(ARTIFACT_SPECS[rel].current_version == 1 for rel in new_v1)
+    ⚠ 这里曾是一大坨「谁是 v2、谁是 v3、谁刻意没有 migration」的分族断言，配一梯
+    v2→v3 迁移函数。删除那天的实测：登记了 migration 的 8 个家族在盘上**一份低版本
+    文件都没有**，而盘上唯二的 v2 文件恰好属于刻意不登记 migration 的那一族
+    ⇒ 整条梯子零消费者，却让「只接受当前版本」这句话假了一整段时间。
+
+    ⇒ 本条是它的**反向守卫**：梯子不许悄悄回来。要破坏某个产物的形状，做法是把该路径的
+    `current_version` +1 并同批回答「存量产物由谁重建」——那时本条会红，**而它红得对**，
+    改的人要在这里显式登记那一次破坏，不是加一条迁移把旧字节读成新形状。
+    """
+    assert {spec.current_version for spec in ARTIFACT_SPECS.values()} == {1}
+    assert [f.name for f in dataclasses.fields(ArtifactSpec)] == \
+        ['model', 'current_version'], 'ArtifactSpec 多了一格——migrations 回来了？'
+    assert not [name for name in vars(contracts.schema) if name.startswith('MIGRATE')]
 
 
-def test_v2_to_v3_migrations_only_add_neutral_defaults_and_do_not_mutate_input():
-    plan_v2 = {
-        '_schema_version': 2,
-        'chapters': [],
-        '_provenance': {'params': {'plan_beats': 4}},
-    }
-    original = json.loads(json.dumps(plan_v2))
-    decoded = decode_artifact('stage4/plan_chapters.json', plan_v2)
-    assert decoded.version == 3
-    assert decoded.payload['_provenance']['partial_regen_chapters'] == []
-    assert decoded.payload['_provenance']['repairs'] == []
-    assert plan_v2 == original
+def _concrete(rel: str) -> str:
+    """把注册表模板变成一条**真实**路径。
 
-    hook = decode_artifact('stage6/hook.json', {
-        '_schema_version': 2,
-        '_provenance': {'params': {'max_tokens': 1000}},
-        'candidates': [{'findings': [{'rule': 'x'}]}],
-        'approved': {'findings': [{'rule': 'y'}]},
-    }).payload
-    assert hook['_provenance']['candidate_retries'] == []
-    assert hook['_provenance']['params']['candidate_retry_limit'] == 0
-    assert hook['_provenance']['params']['candidate_retry_effort'] == 'low'
-    assert hook['_provenance']['params']['candidate_retry_thinking'] is False
-    assert hook['candidates'][0]['findings'][0]['output_ordinal'] is None
-    assert hook['approved']['findings'][0]['output_ordinal'] is None
+    ⚠⚠ 别拿模板路径直接去 `decode_artifact`：`artifact_regex` 把 `{n}` 编译成 `\\d+`，
+    模板自己匹配不上任何路由 ⇒ `artifact_spec()` 返回 `None` ⇒ 未登记分支**原样返回、
+    一个异常都不抛**。用模板写的「拒读」用例会全程绿着，却一次闸都没查到。
+    """
+    return rel.replace('{nn}', '01').replace('{n}', '1').replace('{mode}', 'deep')
 
 
-def test_stage7_v2_approval_is_cleared_instead_of_fabricating_credentials():
-    decoded = decode_artifact('stage7/name_map.json', {
-        '_schema_version': 2,
-        'approved': {'origin': 'human'},
-        'book': [{'rule': 'rn_report'}],
-    })
-    assert decoded.version == 3
-    assert decoded.payload['approved'] is None
-    assert decoded.payload['book'][0]['output_ordinal'] is None
+def test_the_placeholder_helper_actually_produces_registered_paths():
+    """`_concrete()` 是上面两条参数化的前提——前提本身也要有人查。
+
+    它错了的后果不是红，是**两条参数化一起变成空验证**（走未登记分支、永不抛）。
+    """
+    for rel in ARTIFACT_SPECS:
+        assert artifact_key(_concrete(rel)) == rel, \
+            f'{rel} 的占位符没替干净 ⇒ 它在版本用例里根本没被查到'
+
+
+@pytest.mark.parametrize('rel', sorted(ARTIFACT_SPECS), ids=lambda r: r)
+def test_every_registered_artifact_round_trips_through_the_v1_envelope(rel: str):
+    """⭐ 分母**从注册表派生**：新增一份产物自动进扫描面，不必记得改这里。
+
+    ⚠ 一条不知道自己扫了多少的绿灯没有判别力（判据 31 的同一个道理）。
+    """
+    spec = ARTIFACT_SPECS[rel]
+    path = _concrete(rel)
+    payload = [] if spec.root else {'anything': 1}
+    encoded = encode_artifact(path, payload)
+
+    assert encoded['_schema_version'] == 1
+    if spec.root:
+        assert set(encoded) == {'_schema_version', 'payload'}, \
+            'root 产物的信封只能有这两个键'
+        assert encoded['payload'] == payload
+    else:
+        assert encoded['anything'] == 1
+
+    decoded = decode_artifact(path, encoded)
+    assert decoded.version == 1
+    assert decoded.payload == payload
+
+
+@pytest.mark.parametrize('rel', sorted(ARTIFACT_SPECS), ids=lambda r: r)
+@pytest.mark.parametrize('marker', [None, 0, 2, 3, 99, True, -1, '1'],
+                         ids=['缺失', 'v0', 'v2', 'v3', 'v99', 'True', 'v-1', '字符串'])
+def test_only_the_current_version_is_read(rel: str, marker: object):
+    """**无标记 / 低版本 / 高版本 / 非法值一律拒读**，30 份产物逐个查。
+
+    ⚠ `v2` 与 `v3` 特意留在取值面里：它们正是删掉迁移梯子之前**会被放行**的那两档。
+    ⚠ 报错必须同时说出文件与版本——只说「读不了」的错误，会把人推回去手补字段。
+    """
+    spec = ARTIFACT_SPECS[rel]
+    path = _concrete(rel)
+    payload: object = [] if spec.root else {'anything': 1}
+    if marker is None:
+        raw = {'payload': payload} if spec.root else {'anything': 1}
+    elif spec.root:
+        raw = {'_schema_version': marker, 'payload': payload}
+    else:
+        raw = {'_schema_version': marker, 'anything': 1}
+
+    with pytest.raises(ArtifactVersionError) as caught:
+        decode_artifact(path, raw)
+    message = str(caught.value)
+    assert path in message, f'错误没说是哪个文件：{message}'
+    assert 'schema' in message, f'错误没提版本：{message}'
+
+
+def test_a_root_envelope_with_an_extra_key_is_refused():
+    """root 信封只有两个键。多一个 ⇒ 它不是本仓写出来的，拒读而不是挑着读。"""
+    with pytest.raises(ArtifactVersionError, match='envelope 只能有'):
+        decode_artifact('stage1/main_text.json', {
+            '_schema_version': 1, 'payload': MAIN_TEXT, 'extra': 1,
+        })
 
 
 def test_paths_feed_schema_nodes_consumption_and_runtime_from_one_catalog():

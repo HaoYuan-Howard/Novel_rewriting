@@ -116,7 +116,8 @@ provenance 的口相同。
 
 路径字面只登记在 `contracts/artifacts.py::ARTIFACT_PATHS`；`contracts/schema/__init__.py::ARTIFACT_SPECS`
 为 JSON 子集叠加当前模型与 schema version。产物带 `_schema_version` 信封，**只接受注册表声明的当前
-版本**，无标记/低版本/高版本都明确拒读。版本不是全仓一个数字（当前 v1/v2/v3 家族并存，以注册表为准）；
+版本**，无标记/低版本/高版本都明确拒读——**本仓没有迁移机制**，现役全表恒 v1（仍以注册表为准，
+破坏形状就 `current_version` +1 并同批回答「存量产物由谁重建」）；
 旧产物**不手补字段冒充当前产地**，要从 producer 重建。
 `novel/` 里加一层包，`pyproject.toml` 的 `[tool.setuptools] packages` 要同步加一行——漏了没有任何测试
 会出声（`pythonpath=["."]` 让 pytest 照样 import 得到），只有非 editable 安装才崩。
