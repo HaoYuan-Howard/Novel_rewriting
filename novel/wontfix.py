@@ -110,10 +110,21 @@ def mark(store: ArtifactStore, stage: str, spec: str, *,
     「只按 `rule` 记会把『换了个位置的同类问题』一并豁免掉，**那不是人做的决定**」。
     """
     head, rule, ev_key, why = parse_spec(spec)
-    known = {r.rule for r in REGISTRY.of_stage(stage)}
-    if rule not in known:
+    # ⚠ **两种拒绝分开说。** 合成一句「不是本层的判据」时，「这个 id 根本不存在」与
+    #   「它是别层的」长得一模一样 ⇒ 守这条跨层约束的测试，随便挑个不存在的 id 也能
+    #   绿，跨层保护会静默退化成「未知 id 被拒」。实测踩过一次：那条用例用的
+    #   `semantic_secret_leak` 早已随 `stage5.semantic` 整节点下线、不属于任何层，
+    #   它仍然绿，但已经一年没在查跨层了。
+    if rule not in REGISTRY:
         raise TerminalState(
-            f'{rule!r} 不是 {stage} 的判据。取值面在 `contracts/judges/{stage}.py`')
+            f'{rule!r} 不在判据表里——要么这个 id 拼错了，要么这条判据的【行】还没写'
+            f'（判据的行在 `contracts/judges/stageN.py`，与它守的契约同层）')
+    owner = REGISTRY.get(rule).stage
+    if owner != stage:
+        raise TerminalState(
+            f'{rule!r} 是 {owner} 的判据，不是 {stage} 的。层由**文件路径**承载'
+            f'（`<stage>/wontfix.json`）、不进收敛键，所以记进这一层的豁免'
+            f'**永远套不上任何结论，而报告上看不出来**。要豁免它请走 {owner} 的入口')
     try:
         ordinal = None if head == 'book' else int(head)
     except ValueError:

@@ -29,10 +29,7 @@ import hashlib
 import pytest
 
 from contracts.schema import decode_artifact, encode_artifact
-from contracts.schema.evaluation import (
-    EvaluatorFingerprint, EvidenceRef, JudgeDecision, SemanticDecision,
-)
-from contracts.schema.stage6 import Hook, HookSemanticReview
+from contracts.schema.stage6 import Hook, HookSemanticResponse, HookSemanticReview
 from novel import prov
 from novel.errors import TerminalState
 from novel.run import RunContext
@@ -105,7 +102,7 @@ def _ctx(box, node: str, *, paid: bool = False) -> RunContext:
 
 
 def _seed_semantic(box, *, dirty: int = 0, uncertain: tuple[int, ...] = ()) -> str:
-    """手写一份**当前形态**的质量审判，让 `dirty` 那条候选带一处实质矛盾。
+    """手写两名判官**那一次答了什么**，其余一律交给生产的合并路。
 
     ⚠ **来源账不是编的**：它由 `ctx.llm_provenance()` 从本次**真读到的上游边**铸出来，
     所以 `store.freshness(semantic_<n>.json)` 会如实判 `fresh`，
@@ -119,57 +116,55 @@ def _seed_semantic(box, *, dirty: int = 0, uncertain: tuple[int, ...] = ()) -> s
     定稿常常就是某条候选的拷贝，而 `current_assessments` 是**按文本 sha1 索引**的
     ⇒ 给「定稿」单独写一份 review 会把同 sha 那条候选的结论覆盖掉。
     真跑那一侧同样只审去重文本（`semantic._unique_texts`），本 fixture 照它来。
+
+    ⚠⚠⚠ 这里曾**手工拼** `SemanticDecision` / `EvaluatorFingerprint` / 逐判官
+    `JudgeDecision`，于是 `automated` / `profile_id` / `dataset_sha256` 三格随自动
+    放行门删除之后，这份 fixture 在 `extra='forbid'` 上当场 `ValidationError`
+    ——而本文件整批挂在 corpus 上，默认套件一次都看不见。⇒ 现在只造
+    `HookSemanticResponse`（模型真正回答的那一层），合并判定、逐判官 verdict、
+    排序与运行时指纹全部走 `materialize_double_blind` 与 `_runtime_contract`：
+    **合并契约再变一次，这份 fixture 自动跟着变，不会再落后。**
+    `dirty` ⇒ 那条候选两名判官都报矛盾（judge verdict FAIL）；
+    `uncertain` ⇒ 那几条报 `coverage=uncertain`（judge verdict UNVER）。
+    合并结论恒 `UNVER`（本仓没有自动放行门），差别落在人读的 `reason` 上。
     """
     ctx = _ctx(box, 'stage6.semantic', paid=True)
     store = ArtifactStore(ctx)
     art, _raw = store.read_own(Hook, hook.REL)
     hook._Upstreams(ctx, store)                      # 读齐上游 ⇒ 来源账与真跑同源
 
-    texts = semantic._unique_texts(art)
-    reviews = []
-    decisions = []
-    for index, (label, text) in enumerate(texts):
-        bad = index == dirty
-        unsure = index in uncertain
-        reviews.append({
-            'label': label,
-            'coverage': 'uncertain' if unsure else 'complete',
-            'uncertainty_reason': '开篇几章还没写全，核对不完整' if unsure else None,
+    # 匿名标签照 `build_prompt` 那一条现算，别在测试里另起一套编号。
+    aliases = [
+        (f'T{index}', real, text)
+        for index, (real, text) in enumerate(semantic._unique_texts(art), 1)
+    ]
+    response = HookSemanticResponse.model_validate({
+        'reviews': [{
+            'label': neutral,
+            'coverage': 'uncertain' if index in uncertain else 'complete',
+            'uncertainty_reason': ('开篇几章还没写全，核对不完整'
+                                   if index in uncertain else None),
             'contradictions': ([{
                 'assertion': '这条候选把人物关系写反了',
                 'evidence': text.strip()[:12],
                 'reason': '与全书事实里的关系相反',
-            }] if bad else []),
+            }] if index == dirty else []),
             'quality': dict(_QUALITY),
             'concise_reason': '这一条的判定说明',
-            'text_sha1': semantic.text_sha1(text),
-        })
-        verdict = 'UNVER' if unsure else 'FAIL' if bad else 'PASS'
-        ref = EvidenceRef(
-            artifact=f'{hook.REL}#candidate/{label}',
-            subject_sha256=semantic.text_sha256(text), start=0, end=len(text))
-        judges = [JudgeDecision(
-            judge=name, verdict=verdict, evidence=[ref], reason='这一条的判定说明')
-            for name in ('A', 'B')]
-        decisions.append(SemanticDecision(
-            ability='reference_boundary', subject_key=semantic.text_sha256(text),
-            verdict=verdict, automated=verdict != 'UNVER', evidence=[ref],
-            reason='这一条的合并判定说明', profile_id='fixture-profile',
-            judges=judges))
-    fingerprint = EvaluatorFingerprint(
-        dataset_sha256='1' * 64, model='test-model', prompt_sha256='2' * 64,
-        schema_sha256='3' * 64, decoder_sha256='4' * 64)
+        } for index, (neutral, _real, text) in enumerate(aliases)],
+        'ranking': [neutral for neutral, _real, _text in aliases],
+    })
+    # 两名判官同答：本文件测的是 wontfix 闭环，不测 A/B 分歧那条 reason 分支。
+    reviews, decisions, ranking, judge_rankings = semantic.materialize_double_blind(
+        response, response, aliases=aliases)
     artifact = HookSemanticReview(
-        judged_texts={label: semantic.text_sha1(text) for label, text in texts},
+        judged_texts={real: semantic.text_sha1(text) for _n, real, text in aliases},
         hook_file_sha1=prov.fingerprint_bytes(store.path(hook.REL).read_bytes()),
         reviews=reviews,
-        ranking=[label for label, _t in texts],
-        judge_rankings={
-            'A': [label for label, _t in texts],
-            'B': [label for label, _t in texts],
-        },
+        ranking=ranking,
+        judge_rankings=judge_rankings,
         decisions=decisions,
-        evaluator_fingerprint=fingerprint,
+        evaluator_fingerprint=semantic._runtime_contract('test-model'),
         _provenance=ctx.llm_provenance(
             prompts={
                 'HOOK_SEMANTIC_SYS_A': semantic.SEMANTIC_SYS + semantic.JUDGE_ROLE_SUFFIX['A'],
@@ -339,13 +334,50 @@ def test_a_finding_that_does_not_exist_is_refused(box):
         '拒收路不许留下半份账'
 
 
+def test_a_wrong_rule_id_gets_two_different_refusals():
+    """⭐ **非 corpus**：跨层保护的最小守卫，一份语料都不需要。
+
+    ⚠⚠ 为什么单独有这一条：下面那条同名用例挂在 corpus 上，而语料一旦腐坏它就整批
+    ERROR（实测：`trim_audit` 的版本破坏让本文件 11 条全死在 sandbox 构造期，
+    一条断言都没跑到）。「正例全挂 corpus」正是跨层守卫当初能静默退化整整一轮而
+    没人发现的原因。⇒ 把 `mark()` 的两句拒绝钉进默认套件。
+
+    `store` 在这三个分支触发之前一次都没被读，所以传 `None` 就够——
+    这不是偷懒，是**这三道闸本来就不该需要盘上有东西**。
+    """
+    from novel import wontfix as W
+
+    # ① 根本没注册：这个 id 拼错了，或者判据的行还没写。
+    with pytest.raises(TerminalState, match='不在判据表里'):
+        W.mark(None, 'stage6', 'book|no_such_rule_anywhere|k=拼错了',
+               pool_of=lambda _o: [], at='semantic_1')
+    # ② 注册了，但属于别层——这一条才是「跨层」。两句合并就分不出①和②。
+    with pytest.raises(TerminalState, match='是 stage5 的判据，不是 stage6 的'):
+        W.mark(None, 'stage6', 'book|secret_leak|k=层写错了',
+               pool_of=lambda _o: [], at='semantic_1')
+    # ③ 反向：同一条判据记进**它自己那一层**不该被上面两道拦住，
+    #    要一直走到结论池那一步才因「池里没有」被拒。
+    with pytest.raises(TerminalState, match='不给不存在的结论发豁免'):
+        W.mark(None, 'stage5', 'book|secret_leak|k=本层',
+               pool_of=lambda _o: [], at='review_1')
+
+
 def test_a_rule_outside_this_stage_is_refused(box):
     """判据必须是**这一层**的。stage5 的判据写进 stage6 的账里，
-    那条豁免永远套不上任何东西，而报告上看不出来。"""
+    那条豁免永远套不上任何东西，而报告上看不出来。
+
+    ⚠⚠ 这里曾用 `semantic_secret_leak` 当「stage5 的判据」。它随 `stage5.semantic`
+    整节点下线后**不属于任何层**，于是这条用例照样绿——但它测的已经退化成
+    「未知 id 被拒」，跨层保护静默失效。⇒ 换成一条**当前真属于 stage5** 的判据
+    （`secret_leak`），并把两句拒绝**各钉一条**：只要 `mark()` 哪天又把它们合成
+    一句，下面第二条就会连着第一条一起绿，那正是当初漏掉的形状。
+    """
     _seed_semantic(box)
-    with pytest.raises(TerminalState, match='不是 stage6 的判据'):
-        hook.run_wontfix(_ctx(box, 'stage6.hook'),
-                         'book|semantic_secret_leak|ch1:xx=层写错了')
+    ctx = _ctx(box, 'stage6.hook')
+    with pytest.raises(TerminalState, match='是 stage5 的判据，不是 stage6 的'):
+        hook.run_wontfix(ctx, 'book|secret_leak|ch1:xx=层写错了')
+    with pytest.raises(TerminalState, match='不在判据表里'):
+        hook.run_wontfix(ctx, 'book|no_such_rule_anywhere|ch1:xx=这个 id 拼错了')
 
 
 def test_a_chapter_number_is_refused_on_stage6(box):
@@ -392,10 +424,16 @@ def test_each_uncertain_candidate_gets_its_own_key(box):
 # 三、边界：豁免不是通行证
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_exemption_never_opens_the_approval_gate(box):
-    """⭐ **豁免不开闸门。** `hook_semantic_contradiction` 被豁免之后，
-    批准路照旧拒绝那条有矛盾的候选——「有人看过并决定不修」不等于
-    「这条不再是问题」。放松这一条，一条实质矛盾就会被一句理由送进成书。
+def test_an_exemption_does_not_soften_the_approval_binding(box):
+    """⭐ **豁免不是通行证。** 它只降 `actionable` 并打标，批准路那把尺子一格不松。
+
+    ⚠⚠ 这条曾断言「豁免之后批准路**照旧拒绝**那条有矛盾的候选」，走的是
+    `semantic.require_selectable`。那个函数已整份删除，而它守的产品语义也被裁决掉了：
+    自动 FAIL 不再可产 ⇒ 没有任何机制会替人否决一个候选
+    （`novel/stages/stage6/semantic.py::require_human_resolution` 的 docstring）。
+    ⇒ 保留的是仍然承重的那一半：**豁免不改变批准闸的任何判定输入**——
+    字节绑定照拒、basis 照旧只能是人工核验、那条结论也照旧留在报告里。
+    删掉这条用例等于把「豁免不开闸」这条纪律的最后一个守卫也删了。
     """
     from contracts.schema.stage6 import Hook as _Hook
 
@@ -405,13 +443,30 @@ def test_the_exemption_never_opens_the_approval_gate(box):
     dirty_text = art.candidates[0].text
 
     report = _report(box)
-    line = _line(report, 'hook_semantic_contradiction')
-    if line.status == 'hit':
-        _key, spec = _spec_of(report, 'hook_semantic_contradiction', '我认了')
-        hook.run_wontfix(_ctx(box, 'stage6.hook'), spec)
+    line = _line(report, 'hook_candidate_contradiction')
+    assert line.findings, 'dirty 候选没产出矛盾结论——本条没在查'
+    before_sev = line.sev
+    _key, spec = _spec_of(report, 'hook_candidate_contradiction', '我认了')
+    hook.run_wontfix(_ctx(box, 'stage6.hook'), spec)
 
-    with pytest.raises(TerminalState, match='不能定稿'):
-        semantic.require_selectable(store, art, dirty_text, '候选 1')
+    # ① 结论仍在、严重度未变——豁免打标，不删账。
+    after = _line(_report(box), 'hook_candidate_contradiction')
+    assert after.findings, '豁免把结论本身抹掉了——那是删账不是打标'
+    assert after.sev == before_sev, '豁免改了判据的严重度'
+
+    # ② 字节绑定照拒：拿一个不是当前候选字节的 sha256 定稿，仍是显式终态。
+    with pytest.raises(TerminalState, match='已变化，不能用旧页面定稿'):
+        semantic.require_human_resolution(
+            store, art, dirty_text, '候选 1',
+            actor='wontfix-test', reason='豁免过了就想直接定稿',
+            expected_subject_sha256='0' * 64)
+
+    # ③ 绑对了也只拿得到人工核验这一种依据——豁免不会换来一条自动 basis。
+    _assessment, basis = semantic.require_human_resolution(
+        store, art, dirty_text, '候选 1',
+        actor='wontfix-test', reason='逐项核对了判官证据后仍决定用这一条',
+        expected_subject_sha256=semantic.text_sha256(dirty_text))
+    assert basis == 'human_verification'
 
 
 def test_the_two_ledgers_never_share_a_file(box):

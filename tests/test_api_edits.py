@@ -250,16 +250,17 @@ def _approve_body(box, pick: int) -> dict:
     }
 
 
-def _approval_target(box) -> tuple[int, str, str]:
-    """Choose a candidate the production approval predicate can actually close.
+def _approval_target(box) -> tuple[int, str]:
+    """挑一条生产的批准谓词真能收口的候选，返回 `(pick, 当时的语义状态)`。
 
-    A calibrated ``clear`` candidate uses the automatic basis.  Current
-    ``unreviewed``/``uncertain`` candidates are equally reachable through the
-    request's actor/reason/full-SHA-256 human verification.  Mechanical HARD or
-    an exact current/historical calibrated FAIL remains ineligible.
+    ⚠ 这里曾分「校准 `clear` 走自动 basis」与「人工核验」两条路，并额外排除
+    `historical_fail`。自动放行门下线后 `CandidateAssessment` 上那两格都没了，
+    `basis` 在类型上只剩 `human_verification`——**服务端不替人否决任何候选**。
+    `run_approve` 唯一还会抛的候选级判据就是机械 HARD，这里**调它那把尺子**
+    （`hook._sev_of`）而不是重拼一份 REGISTRY 查询。
     """
-    from contracts.rules import REGISTRY
     from contracts.schema.stage6 import Hook
+    from novel.stages.stage6 import hook as hook_node
     from novel.stages.stage6 import semantic
     from novel.store import ArtifactStore
 
@@ -272,19 +273,12 @@ def _approval_target(box) -> tuple[int, str, str]:
     for pick, candidate in enumerate(art.candidates, 1):
         mechanical = sorted({
             item.rule for item in candidate.findings
-            if REGISTRY.get(item.rule).sev == 'hard'
+            if hook_node._sev_of(item.rule) == 'hard'
         })
-        assessment = assessments[semantic.text_sha1(candidate.text)]
         if mechanical:
             refused.append(f'{pick}:mechanical={mechanical}')
             continue
-        if not (assessment.selectable or assessment.human_resolvable):
-            refused.append(
-                f'{pick}:semantic={assessment.state},historical_fail='
-                f'{assessment.historical_fail}')
-            continue
-        basis = 'calibrated_pass' if assessment.selectable else 'human_verification'
-        return pick, basis, assessment.state
+        return pick, assessments[semantic.text_sha1(candidate.text)].state
     raise AssertionError(
         '现役 corpus 没有一条可依法定稿的 Stage6 候选；不能用 skip 冒充 API 闭环：'
         + '；'.join(refused))
@@ -296,7 +290,7 @@ def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
     ⚠ 退出码契约：`0/1` 都是「定稿**落了**」（`1` 只是报告仍有红行），
     `2/3` 才是没跑成。**盖章看落没落，红不红归 check 屏。**
     """
-    pick, expected_basis, prior_state = _approval_target(box)
+    pick, _prior_state = _approval_target(box)
     _stamp_chain(box, 's5')
     before = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     body = _approve_body(box, pick)
@@ -309,12 +303,10 @@ def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
     assert after['approved']['approach'] == before['candidates'][pick - 1]['approach']
     assert after['approved']['origin'] == 'human'
     resolution = after['approved']['resolution']
-    assert resolution['basis'] == expected_basis
+    assert resolution['basis'] == 'human_verification'
     assert resolution['actor'] == body['actor']
     assert resolution['reason'] == body['reason']
     assert resolution['subject_sha256'] == body['subject_sha256']
-    if prior_state != 'clear':
-        assert expected_basis == 'human_verification'
     doc = client.get(f'/api/novels/{box.sid}/approvals').json()
     assert doc['gate']['s6'] is True
 
@@ -322,14 +314,14 @@ def test_picking_a_hook_candidate_approves_and_stamps_the_gate(client, box):
 def test_an_approve_before_the_chain_still_lands_in_the_artifact(client, box):
     """⭐ 审批链没到位（中途接手的书）⇒ 定稿**照样落**（产物是真相），
     检查单那一格保持未盖——**不把检查单的顺序翻成定稿的失败**。"""
-    pick, expected_basis, _prior_state = _approval_target(box)
+    pick, _prior_state = _approval_target(box)
     body = _approve_body(box, pick)
     r = client.post(f'/api/novels/{box.sid}/stage6/approve', json=body)
     assert r.status_code == 200, r.text[:300]
     assert r.json()['exit_code'] in (0, 1)
     after = json.loads((box.dir / 'stage6' / 'hook.json').read_text(encoding='utf-8'))
     assert after['approved'] is not None, '定稿没落——链只是检查单，不该拦产物'
-    assert after['approved']['resolution']['basis'] == expected_basis
+    assert after['approved']['resolution']['basis'] == 'human_verification'
     assert after['approved']['resolution']['subject_sha256'] == body['subject_sha256']
     doc = client.get(f'/api/novels/{box.sid}/approvals').json()
     assert doc['gate']['s6'] is False, '链没到位却盖了章——前置约束被绕过了'
