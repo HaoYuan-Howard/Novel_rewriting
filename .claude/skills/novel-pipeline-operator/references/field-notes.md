@@ -29,7 +29,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-010 | stage7 人物表不是全部 surface | observed | `rn_kept_contains_mapped`, `rn_semantic_marker_changed` | `name_map_edit.json` 展开内嵌映射 |
 | FN-011 | stage7 映射编辑后必须重批重拼 | contract-confirmed | `approved`, `book_txt` | 重跑 `stage7.approve` + `stage7.assemble` |
 | FN-012 | `consumed_changed` 可能是诊断噪声 | observed | `consumed_changed`, stale | 逐项指纹全同才披露诊断边，否则按真 stale 处理 |
-| FN-013 | 语义审判：advisory 与标定的分界 | contract-confirmed | `stage6.semantic`, `NOVEL_EVALUATOR_PROFILE`, exit 2 | `--advisory` |
+| FN-013 | 语义审判的结论恒是带证据的 `UNVER` | contract-confirmed | `stage6.semantic`, `UNVER`, `judges` | `--advisory` |
 | FN-014 | 超限章有一条 0 成本销账路 | contract-confirmed | `trim_audit_chNN`, verification | `--retain-pretrim --chapters` 或 `--apply-edit` |
 | FN-015 | 落盘闸拦下后，finding 细节的读法逐层不同 | contract-confirmed | `.INVALID`, exit 2 | 先 `--check-only` 取逐条，再 `--revalidate` 提升 |
 | FN-016 | `--apply-edit` 的路径语义逐层不同 | contract-confirmed | `edit_rel`, 产物目录之外, exit 2 | `--apply-edit`，编辑文件写进书目录内 |
@@ -164,34 +164,34 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 依据：`novel/prov.py::freshness` 判 `consumed_changed` 的那一支；
   「指纹一致却仍判 stale」这一半是实跑观察，未被提升为实现契约。
 
-### FN-013 · 语义审判：advisory 与标定的分界
+### FN-013 · 语义审判的结论恒是带证据的 `UNVER`
 
 - 状态：`contract-confirmed`
-- 触发：`stage6.semantic` 返回 exit 2，原文为
-  `NOVEL_EVALUATOR_PROFILE 未配置；设置对应本地路径后才可启用自动语义裁决`。
-- 判断：这是“没有标定 profile”，**不是“语义层不可用”**。区分两件事：能不能拿到判官证据
-  （能，走 `--advisory`）；能不能自动盖章（不能，要 profile）。终态原文只说 profile 那一半，
-  不要据此推断整层不可跑。⚠ profile **不降低每本书的调用成本**——校准路与 advisory 调的是
-  同样两名盲判官，`require_enabled` 只决定结论允不允许标 `automated=true`。
-- 处置：**主链参数本来就带 `--advisory`**；若因手拼 argv 漏掉而 exit 2，带上它重跑即可。
-  取得双盲判官的带证据 `UNVER` 与匿名质量排序后，按
-  `actor + reason + 完整 subject SHA-256` 的人工核验路收口。
-  不伪造 profile，不因缺 profile 停机，也不在零语义产物的情况下直接写核验结论。
-- 验证：`stage6/semantic_<n>.json` 落盘且 fresh；产物的
-  `evaluator_fingerprint.dataset_sha256` 等于 advisory 哨兵值、全部 `decisions` 为
-  `automated=false` / `profile_id=null`；终审包记为“advisory 证据 + 人工核验”，不记为机器绿灯。
-- 依据：`contracts/invariants.py::PAID_FLAGS['--advisory']` 与该节点 `NodeSpec.flags`；
-  `novel/quality/profile.py::advisory_fingerprint`；
-  `novel/stages/stage6/semantic.py::_is_advisory_artifact`。
+- 触发：`stage6.semantic` 的产物 `stage6/semantic_<n>.json` 落盘，但里面每一条
+  `decisions[].verdict` 都是 `UNVER`。
+- 判断：**这是产品的正常终态，不是“没跑起来”。** 本仓没有把 judge 结论升级成自动
+  `PASS`/`FAIL` 的装置（evaluator profile 那一套已整批下线），合并决议在类型上
+  就只能是 `UNVER`。要分辨的是另一件事——读 `judges` 里两名盲判官各自的 `verdict` 与
+  `evidence`：**判官给了证据**（正常，人据此核验）与**判官没给证据**（`evidence` 为空，
+  那才是真有问题，要重跑或转人工细读）是两回事。合并 `reason` 会逐句说明属于哪一种，
+  其中「A/B 同判且各自证据闭合」是信息量最大的一条，别把它读成“没有结论”。
+- 处置：**主链参数本来就带 `--advisory`**。取得双盲判官的带证据 `UNVER` 与匿名质量排序后，按
+  `stage6.approve --pick N --actor <ACTOR> --reason <理由> --subject-sha256 <完整 SHA-256>`
+  收口。不因结论是 `UNVER` 就停机，也不在零语义产物的情况下直接写核验结论。
+- 验证：`stage6/semantic_<n>.json` 落盘且 fresh；批准后的 resolution 记
+  `basis='human_verification'`；终审包记为“判官证据 + 人工核验”，不记为机器绿灯。
+- 依据：`novel/quality/evaluator.py::double_blind_decision`（合并恒 `UNVER`，并给出四选一的
+  人读 reason）；`novel/stages/stage6/semantic.py::require_human_resolution`。
 
 ### FN-014 · 超限章有一条 0 成本销账路
 
 - 状态：`contract-confirmed`
 - 触发：`inbox` 出现 `[verification] stage5 chNN trim_audit_chNN`，文案含
-  “未运行语义裁决…未发起收缩调用或语义调用，保留 pretrim，转 verification”。
-- 判断：这不是失败，是收缩臂的 fail-closed 出路——`trim_equivalence` 的 profile 缺失时，
-  `_trim_to_fit` 在构造任何请求之前就退出，正文保持 pretrim 原样。**它没有 `--advisory` 对应物**，
-  与两个 semantic 节点不是一回事。逐条读“超限根因附注”里的实际幅度再决定。
+  “保留 pretrim，转 verification”。
+- 判断：这不是失败，是**唯一**的出路——本仓没有任何「自动生成收缩候选并采用」的路径
+  （收缩臂随 evaluator profile 一并整臂下线），超上限章一律零调用落 identity
+  `TrimAudit` 并转人工。**它没有 `--advisory` 对应物**，与 semantic 节点不是一回事。
+  逐条读“超限根因附注”里的实际幅度再决定。
 - 处置：接受当前原稿时跑
   `stage5.review --retain-pretrim --chapters <N> --actor <ACTOR> --reason <理由>`
   （0 次 LLM，只写 hash-bound resolution，恰好一章）。判断该章确需改写时用
@@ -199,7 +199,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   `ChapterResponse`（同样 0 次 LLM）。**两条都不要留着不销账**——留着它们会让终审包的
   verification 余额里混进已经看过的项。
 - 验证：`trim_resolution_chNN.json` 落盘且 hash 绑定当前正文；`inbox` 该条离开 verification。
-- 依据：`novel/stages/stage5/write.py::_trim_to_fit` 的 profile 前置检查；
+- 依据：`novel/stages/stage5/trim_resolution.py::retain_pretrim`；
   `contracts/invariants.py::CONDITIONAL_REQUIRED_FLAGS['stage5.review', '--retain-pretrim']`。
 
 ### FN-015 · 落盘闸拦下后，finding 细节的读法逐层不同
