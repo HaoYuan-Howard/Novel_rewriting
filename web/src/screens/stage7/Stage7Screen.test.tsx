@@ -9,7 +9,8 @@ import { Stage7Screen } from './Stage7Screen'
 
 describe('Stage7Screen download', () => {
   it('uses the API adapter so mock and real modes share one path', async () => {
-    vi.spyOn(api, 'getStage7').mockResolvedValue(await mockApi.getStage7(SAMPLE_SID))
+    const view = await mockApi.getStage7(SAMPLE_SID)
+    vi.spyOn(api, 'getStage7').mockResolvedValue(view)
     const download = vi
       .spyOn(api, 'downloadStage7Book')
       .mockResolvedValue(new Blob(['book'], { type: 'text/plain' }))
@@ -23,7 +24,10 @@ describe('Stage7Screen download', () => {
     expect(await screen.findByText(/当前审批：fixture-reviewer/)).toHaveTextContent(
       '逐项核对人物决定、别称与残留候选',
     )
-    fireEvent.click(screen.getByRole('button', { name: '下载 book.txt' }))
+    // 按钮文案带成书文件名 ⇒ 期望值取**服务端下发的那个字段**，不在测试里手拼一份。
+    // 那正是这条用例要钉的产品规则：另存名不由前端编（`R-11.4`）。
+    expect(view.book_filename).toMatch(/_rewriting\.txt$/)
+    fireEvent.click(screen.getByRole('button', { name: '下载 ' + view.book_filename }))
 
     await waitFor(() => expect(download).toHaveBeenCalledWith(SAMPLE_SID))
     expect(createUrl).toHaveBeenCalled()

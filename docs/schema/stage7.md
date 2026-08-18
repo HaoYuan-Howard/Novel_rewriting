@@ -1,14 +1,14 @@
 # Stage 7 当前契约
 
 Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映射展开、替换、残留扫描、恒等基线
-和 `book.txt` 组装均由确定性代码完成。
+和成书组装均由确定性代码完成。
 
 | 路径 | 模型 | 角色 |
 |---|---|---|
 | `stage7/name_map.json` | `NameMap` v3 | 当前正式改名产物 |
 | `stage7/_rounds/name_map.rN.json` | `NameMap` v3 | 归档轮次，与正式产物同形 |
 | `stage7/name_map_edit.json` | `NameMapEdit` v1 | 人工输入，不是节点产物 |
-| `stage7/book.txt` | 纯文本 | 最终交付物 |
+| `stage7/{title}_rewriting.txt` | 纯文本 | 最终交付物。**书级参数化路径**（`contracts/artifacts.py::BOOK_SCOPED_PATHS`）：占位符由「这本书是谁」决定，每本书恰好解析出一份具名产物，落点唯一在 `novel/paths.py::book_txt_rel` |
 
 正式 JSON 使用当前严格 schema，不读取旧字段、旧规则行或混合契约标记。
 
@@ -65,7 +65,7 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 - `ApprovedNameMap` 必填 `origin=human`、自报 `actor`、非空 `reason` 与完整
   `subject_sha256`。hash 只绑定审批时看到的决策面：`surname_map`、`characters`、
   `extra_subs` 的排序键紧凑 canonical JSON；不绑定 residual、派生替换计数或
-  `book.txt` 字节。旧页面的 hash 与当前决策面不同时关闭式拒批。
+  成书字节。旧页面的 hash 与当前决策面不同时关闭式拒批。
 - 服务检查单的 `s7` proof 绑定上述完整决策面和完整 typed `ApprovedNameMap`
   （含 actor/reason/origin/subject），并在每次读取时复核 `subject_sha256` 仍等于当前
   决策面。它不绑定 `book_txt`、residual、book findings 等确定性派生字段：正常
@@ -140,7 +140,7 @@ v1 骨架为：
 - 替换器按长度优先构造单一 alternation；`subs` 与 `kept` 同时参与，防止子串跨界。
 - 正文和已定稿文案使用同一替换器；书名只作为人工不可验证项报告。
 - 成书前要求每个输出章恰有一份正式成稿、没有 `.INVALID` 成稿，并且 Stage 6 文案已定稿。
-- `book.txt` 只能在当前 `name_map` 已人工批准、批准的 subject 仍精确等于当前决策面、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑/重判会清空旧 `book_txt`（映射编辑同时清空旧批准），并将旧 txt 移到内容寻址的 `_rounds/` 归档。
+- 成书只能在当前 `name_map` 已人工批准、批准的 subject 仍精确等于当前决策面、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑/重判会清空旧 `book_txt`（映射编辑同时清空旧批准），并将旧 txt 移到内容寻址的 `_rounds/` 归档。
 - 预览/下载端点复用组装前的 approved/current/fresh 闸并复核 `book_txt` 指纹与规模；只有文件存在而账或批准不成立时拒绝返回。
 
 ## 五、当前入口
@@ -156,7 +156,7 @@ v1 骨架为：
 | `--adopt-residual high` | 0 | 把当前高置信残留作为新决策输入重判；其他参数关闭式拒绝 |
 | `--revalidate --actor <id> --reason <text>` | 0 | 对 `.INVALID` 做强审计，记录 hash 差异并在合格后提升；不开新生成轮 |
 | `stage7.approve --actor <id> --reason <text> --subject-sha256 <64hex>` | 0 | 人工定稿；hash 必须与当前决策面完全一致 |
-| `stage7.assemble` | 0 | 在前置条件满足时写 `book.txt` |
+| `stage7.assemble` | 0 | 在前置条件满足时写成书 |
 | `--check-only` | 0 | 只读复检当前正式产物 |
 
 ## 六、现行判据

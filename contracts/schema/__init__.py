@@ -192,7 +192,7 @@ class DecodedArtifact:
 #: **产物相对路径 → 当前契约。** 路径里的 `{n}` / `{mode}` 是占位符。
 #: 这是路径、模型与 schema version 的唯一权威表；`ARTIFACTS` 是模型投影。
 #:
-#: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/**/draft.md` / `stage7/book.txt`
+#: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/**/draft.md` / 成书 `stage7/{title}_rewriting.txt`
 #: ——它们不是 JSON，schema 是**字节形态**，守卫在写盘口那一层。
 #:
 #: ⚠ **全表恒 v1**（`current_version` 默认值），一条 `migrations=` 都没有。

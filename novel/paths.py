@@ -31,6 +31,7 @@ import os
 import re
 from pathlib import Path
 
+from contracts.artifacts import artifact_rel
 from novel.errors import PathRefused, TerminalState, UpstreamMissing
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -352,8 +353,24 @@ def input_key(rel: str) -> str:
 
 
 def artifact_path(novel_dir: str | os.PathLike[str], rel: str) -> Path:
-    """书目录 + 相对路径 → 绝对路径。允许多级（字节形态产物在 `stage5/<mode>/` 下）。"""
-    return Path(novel_dir).joinpath(*check_rel_deep(rel).split('/'))
+    """书目录 + 相对路径 → 绝对路径。允许多级（字节形态产物在 `stage5/<mode>/` 下）。
+
+    ⚠⚠ **未填的占位符当场拒。** `ARTIFACT_PATHS` 里有三类带 `{}` 的模板
+    （逐章 · 轮次编号 · 书级参数化），而真实文件名不可能含 `{` ⇒ 这一条不误伤。
+    不拦的后果**全是静默的**：`store.exists()` 对一个字面叫 `{title}_rewriting.txt`
+    的路径老实答 `False`（读起来就像「还没跑」），`store.write_text()` 则真的把那个
+    文件建出来——两侧都不报错。这就是 `docs/LESSONS.md` 第 23 条那个形状。
+    JSON 那一侧的同款闸在 `contracts/schema/__init__.py::_refuse_unfilled_template`，
+    但它长在 `decode/encode_artifact` 上，**字节形态产物（成书）够不着它**
+    ⇒ 闸要装在这个漏斗上，而不是要求每个调用点各自记得先填占位符。
+    """
+    norm = check_rel_deep(rel)
+    if '{' in norm:
+        raise PathRefused(
+            f'{rel!r} 是路径**模板**不是路径（占位符还没填）。'
+            f'→ 逐章/轮次用 `contracts/artifacts.py::artifact_rel` 填出具体路径；'
+            f'成书用 `novel/paths.py::book_txt_rel(novel_dir)`')
+    return Path(novel_dir).joinpath(*norm.split('/'))
 
 
 def edit_rel(novel_dir: str | os.PathLike[str], edit_path: str | None,
@@ -466,21 +483,49 @@ def archived_rounds(rounds_dir: str | os.PathLike[str], stem: str) -> set[int]:
     return out
 
 
+def book_txt_rel(novel_dir: str | os.PathLike[str]) -> str:
+    """**这本书**的成书在书内的相对路径：`stage7/<书名>_rewriting.txt`。
+
+    【为什么必须有这个函数】`ARTIFACT_PATHS['stage7.book']` 是**书级参数化模板**
+    （`contracts/artifacts.py::BOOK_SCOPED_PATHS`），`STAGE7_BOOK` 因此只是模板而不是
+    路径。交付物按书名命名，而书名的唯一权威源是**目录名**
+    （`title_of`；别用 `derive_source_meta(命令行参数)[1]`，那是 F-118）。
+    ⇒ 「这本书的成书叫什么」只有这一处答得出来，消费方一律调它，不要各拼一份。
+
+    ⚠ 书名天然是文件系统安全的：它本来就是一个真实目录名里的一段（已过 `safe_title`）。
+    ⚠ 后缀里那个 `_rewriting` 让 stem 永不等于 Windows 保留设备名（`CON` / `NUL` …），
+      那一格 `safe_title` 至今不管——是这个后缀顺手挡住的，不是它被处理过了。
+    """
+    return artifact_rel('stage7.book', title=title_of(novel_dir))
+
+
 #: `produces` 模板里的占位符（`review_{n}.json` 的 `{n}`）。
 _PLACEHOLDER_RX = re.compile(r'\{[A-Za-z_][A-Za-z0-9_]*\}')
 
+#: **轮次编号**那一类的占位符名。收成一个闭集而不是「任何一个占位符」是刻意的，
+#: 理由见 `is_numbered_pattern`。
+_NUMBERED_PLACEHOLDER = '{n}'
+
 
 def is_numbered_pattern(pattern_rel: str) -> bool:
-    """这条 `produces` 是不是「同目录下一个编号占位符」的形状。
+    """这条 `produces` 是不是「同目录下一个**编号**占位符」的形状。
 
     真：`stage5/review_{n}.json` · `stage6/semantic_{n}.json`
     假：`stage5/{mode}/ch{nn}.json`（**目录段也带占位符**，那是逐章类，
         完成度挂在「计划里的章写了没有」上，不是「盘上有几号文件」）
+    假：`stage7/{title}_rewriting.txt`（**书级参数化**，见 `BOOK_SCOPED_PATHS`）
     假：`stage7/name_map.json`（没有占位符，一次 `is_file()` 就答完了）
+
+    ⚠⚠ **只认 `{n}`，不认「tail 里恰好一个占位符」。** 后者是本函数的原实现，
+    而它会把书级那条判成 `True`（`stage7/{title}_rewriting.txt`：head 无占位符、
+    tail 恰好一个）⇒ 成书的完成度改去问 `rounds_done`，而 `numbered_rounds` 拿
+    `title` 走 `isdigit()` 只会得到空集 ⇒ **成书在 `artifacts[]` 与徽章里静默消失**。
+    那正是下面 `numbered_rounds` docstring 记着的事故形状的镜像
+    （那次是把没跑过的层记成 `done`，这次是把跑过的层记成没有）。
     """
     head, _, tail = pattern_rel.rpartition('/')
     return _PLACEHOLDER_RX.search(head) is None and \
-        len(_PLACEHOLDER_RX.findall(tail)) == 1
+        _PLACEHOLDER_RX.findall(tail) == [_NUMBERED_PLACEHOLDER]
 
 
 def numbered_rounds(novel_dir: str | os.PathLike[str], pattern_rel: str) -> list[int]:

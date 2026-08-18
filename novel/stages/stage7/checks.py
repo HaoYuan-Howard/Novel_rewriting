@@ -355,7 +355,7 @@ def _style_report(post_units: list[Unit], source_text: str) -> Finding:
     """成书级的写法密度总账 —— **只量不判**，永远输出。
 
     【它不是逐章那份的重复，差别在文案】验收相逐章判的是 `stage5/chNN.json`，
-    而 `book.txt` = **文案 + 各章正文**。文案那一段不属于任何一章，
+    而成书 = **文案 + 各章正文**。文案那一段不属于任何一章，
     全链至今**没有任何探针量过它**。这里按 `where` 把「正文」与「文案」分开报。
 
     ⚠⚠ **原型这一条的「原作」列永远不输出**：它读 `data['_source_text']`，
@@ -436,7 +436,7 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
     ok, detail = txt_state
     out.append(ran('rn_txt_stale',
                    [] if ok else [finding('rn_txt_stale', detail=detail, evidence=[])],
-                   scanned='盘上的 book.txt × 产物记的指纹'))
+                   scanned='盘上的成书 × 产物记的指纹'))
 
     # ── 恒等基线（`R-10.7`）──────────────────────────────────────────────────
     out.extend(identity_outcomes(identity))

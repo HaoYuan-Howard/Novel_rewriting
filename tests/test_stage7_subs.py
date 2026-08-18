@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -305,8 +306,15 @@ def test_residual_common_words_stay_low():
     assert all(row['confidence'] == 'low' for row in residual)
 
 
+#: 假 store 也必须有 `ctx.novel_dir`：成书的 rel 带书名，`rename.book_txt_rel(store)`
+#: 从这里现算。⚠ **别在测试里手写那个文件名**——那就是第二个落点
+#: （`docs/LESSONS.md` 第 21 条：守卫要调用生产那一个落点）。
+_FAKE_CTX = SimpleNamespace(novel_dir=Path('FQ_测试书_42'))
+
+
 class _AdoptionStore:
     def __init__(self, art, *, fail_write=False):
+        self.ctx = _FAKE_CTX
         self.art = art
         self.writes = []
         self.archives = []
@@ -472,6 +480,7 @@ class _Dumpable(SimpleNamespace):
 
 class _AtomicStore:
     def __init__(self, art, *, rels, edit=None, fail_write=False, fail_archive=False):
+        self.ctx = _FAKE_CTX
         self.art = art
         self.rels = set(rels)
         self.edit = edit or _Dumpable()

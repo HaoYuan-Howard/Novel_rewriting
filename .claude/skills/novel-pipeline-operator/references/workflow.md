@@ -90,7 +90,7 @@
 | 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
 | 15 | `stage7.rename` | 无 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
 | 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
-| 17 | `stage7.assemble` | 无 | `stage7/book.txt` 生成并通过独立成书对账 |
+| 17 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
 `stage2.global --full-extract` 在中途被闸门拦下时，不机械重跑整组。按最新 `state` 与 finding 修好已落下的部分，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`；只执行缺失项。
@@ -181,4 +181,4 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
    的记录，缓存命中与实付分开计数，token 合计只累加 `cached == false`。产物
    `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
 4. 完成终审包，确保每个异常、残红和不可验证项都有“影响、证据、恢复路径”。
-5. 只向用户交付 `book.txt` 与终审包；中间产物仅作为终审包中的可追溯指针。
+5. 只向用户交付成书与终审包；中间产物仅作为终审包中的可追溯指针。

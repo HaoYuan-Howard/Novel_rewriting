@@ -17,8 +17,7 @@ import json
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE4_PLAN_CHAPTERS,
-    STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE7_BOOK, STAGE7_NAME_MAP,
-    STAGE7_NAME_MAP_EDIT,
+    STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE7_NAME_MAP, STAGE7_NAME_MAP_EDIT,
 )
 
 from typing import Any
@@ -51,7 +50,6 @@ from novel.stages.stage7.subs import apply_subs, residual_scan, sub_table
 from novel.store import ArtifactStore
 
 REL = STAGE7_NAME_MAP
-BOOK_TXT = STAGE7_BOOK
 EDIT = STAGE7_NAME_MAP_EDIT
 MAIN_TEXT = STAGE1_MAIN_TEXT
 GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
@@ -61,6 +59,17 @@ HOOK = STAGE6_HOOK
 
 #: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
 _INVALID = paths.invalid_of(REL)
+
+
+def book_txt_rel(store: ArtifactStore) -> str:
+    """这本书成书的书内相对路径。**本模块刻意没有 `BOOK_TXT` 这个模块级常量。**
+
+    ⚠ 交付物按书名命名（`stage7/{title}_rewriting.txt`），所以「它叫什么」是
+    **每本书各自的答案**：一个模块级常量只能存那个模板，而模板落不了盘
+    （`paths.artifact_path` 会当场拒）。⇒ 逐次从 `store.ctx.novel_dir` 现算。
+    落点仍只有一个（`paths.book_txt_rel`），这里只是把 `store` 那一步接上。
+    """
+    return paths.book_txt_rel(store.ctx.novel_dir)
 
 #: 一次调用要给几十个角色各出一套新名。⚠ 它进 `_provenance.params`——
 #: 换了这个数，产物里说得出来（原型完全没有这个键）。
@@ -77,16 +86,19 @@ def _retire_book_txt(store: ArtifactStore) -> None:
     bytes were archived by an earlier interrupted attempt, only the redundant
     live copy is removed.  A different archive is never overwritten.
     """
-    live = store.path(BOOK_TXT)
+    book_txt = book_txt_rel(store)
+    live = store.path(book_txt)
     if not live.is_file():
         return
     try:
         raw = live.read_bytes()
     except OSError as exc:
-        raise TerminalState(f'读不了待退休的 {BOOK_TXT}：{exc!r}') from exc
+        raise TerminalState(f'读不了待退休的 {book_txt}：{exc!r}') from exc
     digest = prov.content_sha1(raw)
+    # ⚠ 归档名**刻意不跟着书名走**：它是内容寻址的历史，稳定比好看重要。
+    #   跟着书名会让「同一本书改过一次目录名」之后的旧归档变成谁也认不出的孤儿。
     archived_rel = f'stage7/_rounds/book.{digest}.txt'
-    store.retire_bytes(BOOK_TXT, archived_rel)
+    store.retire_bytes(book_txt, archived_rel)
 
 
 def approval_decision_surface(art: NameMap) -> dict[str, Any]:
@@ -249,7 +261,7 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
     # （某本「联系」里的「系」来自一个 `renamed=false` 的角色）。
     #
     # ⚠⚠ **必须并上 `surname_map` 的键**（`R-10.6`），否则 `attested_surname` 的三道过滤
-    # 会在这里变成探针的盲区。实测某本**两个姓同时漏掉、6 处原姓活着进了交付的 book.txt**：
+    # 会在这里变成探针的盲区。实测某本**两个姓同时漏掉、6 处原姓活着进了交付的成书**：
     #   · 一个只由自造记账标签承载 ⇒ 被「canonical 必须有据」判掉；
     #   · 一个撞上亲属字表 ⇒ 被「多主」那道判掉。
     # 而模型自己的 `surname_map` 两个都有。
@@ -357,21 +369,22 @@ def _baseline_line(art: NameMap) -> str:
 
 
 def _txt_state(store: ArtifactStore, art: NameMap) -> tuple[bool, str]:
-    """盘上的 `book.txt` 与产物记的指纹对不对得上。
+    """盘上的成书与产物记的指纹对不对得上。
 
     ⚠ 它是纯文本、**带不了 `_provenance`** ⇒ 账只能记在产物的 `book_txt.sha1` 上。
     """
     from novel import prov
     if art.book_txt is None:
         return True, ''
-    p = store.path(BOOK_TXT)
+    book_txt = book_txt_rel(store)
+    p = store.path(book_txt)
     if not p.exists():
         return False, (f'产物记着已经导出成书（{art.book_txt.chars} 字 / '
-                       f'{art.book_txt.chapters} 章），而盘上没有 {BOOK_TXT}'
+                       f'{art.book_txt.chapters} 章），而盘上没有 {book_txt}'
                        f'——重跑 `stage7.assemble`（0 成本）')
     now = prov.content_sha1(p.read_bytes())
     if now != art.book_txt.sha1:
-        return False, (f'盘上的 book.txt 指纹 {now[:10]} 与产物记的 '
+        return False, (f'盘上的 {book_txt} 指纹 {now[:10]} 与产物记的 '
                        f'{art.book_txt.sha1[:10]} 不符——有人手改过它，'
                        f'或映射变了没重拼。重跑 `stage7.assemble`（0 成本）')
     return True, ''
@@ -548,7 +561,7 @@ def run_recheck(ctx: RunContext) -> tuple[NameMap, CheckReport]:
         approval = None
     new_art = new_art.model_copy(update={
         'approved': approval, 'book_txt': None, 'identity': art.identity})
-    with store.history_transaction(REL, BOOK_TXT):
+    with store.history_transaction(REL, book_txt_rel(store)):
         store.write_round(REL, new_art)
         # The retirement and replacement map are one logical commit.  A late
         # archive/write/freshness failure restores both live byte surfaces.
@@ -613,11 +626,11 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
             outcomes = _judge(ctx, store, new_art, up)
             if _blocking(outcomes):
                 return new_art, _report(ctx, store, outcomes, new_art)
-            with store.history_transaction(REL, BOOK_TXT):
+            with store.history_transaction(REL, book_txt_rel(store)):
                 store.write_round(REL, new_art)
                 _retire_book_txt(store)
             return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
-    with store.history_transaction(REL, BOOK_TXT):
+    with store.history_transaction(REL, book_txt_rel(store)):
         if prev is not None:
             store.write_round(REL, new_art)
         else:
@@ -683,7 +696,7 @@ def run_adopt_residual(
             rules=blocking,
             hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
                  '或 stage7.rename --recheck 按当前判据重判（都 0 成本）')
-    with store.history_transaction(REL, BOOK_TXT):
+    with store.history_transaction(REL, book_txt_rel(store)):
         store.write_round(REL, rebuilt)
         _retire_book_txt(store)
     return rebuilt, _report(ctx, store, outcomes, rebuilt)
@@ -718,7 +731,7 @@ def run_revalidate(
         return False, _report(ctx, store, outcomes, rebuilt)
     # 通用入口归档 `.INVALID` 与已有正式稿；随后只覆盖当前代码重算出的派生字段。
     # 若两步间崩溃，盘上仍有可 `--recheck` 自愈的正式稿。
-    with store.history_transaction(REL, BOOK_TXT):
+    with store.history_transaction(REL, book_txt_rel(store)):
         store.promote_invalid(
             REL, NameMap, actor=actor, reason=reason,
             artifact_override=rebuilt)
@@ -770,7 +783,7 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
             hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
                  '或 stage7.rename --revalidate --actor <id> --reason <why>'
                  '（0 LLM、同轮重判并留不可变审计）')
-    with store.history_transaction(REL, BOOK_TXT):
+    with store.history_transaction(REL, book_txt_rel(store)):
         _retire_book_txt(store)
         store.write(REL, art)
     return art
@@ -820,7 +833,7 @@ def run_approve(
             origin='human', actor=actor, reason=reason,
             subject_sha256=actual_subject),
         'book_txt': None})
-    with store.history_transaction(REL, BOOK_TXT):
+    with store.history_transaction(REL, book_txt_rel(store)):
         _retire_book_txt(store)
         store.write(REL, new)
     return new, _report(ctx, store, _judge(ctx, store, new, up), new)

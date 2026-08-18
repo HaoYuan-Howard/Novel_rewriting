@@ -1,7 +1,7 @@
 # Novel rewriting
 
 把一本中文网络小说经过 stage0～stage7 处理为一部新书：保留情节骨架，重写文字，
-替换人名，最终交付 `book.txt`。
+替换人名，最终交付以书名命名的成书 `<书名>_rewriting.txt`。
 
 单书 stage0～stage7、agent 驱动全链和前端真实服务主路径已经验收。当前开发重点是
 **正确性、恢复能力、质量闭环与契约收口**；尚未完成、尚未验证和待产品裁决的事项统一登记在
@@ -11,7 +11,7 @@
 
 - 单人、本机、桌面浏览器；服务只绑定 `127.0.0.1`，不做登录、协作、权限、通知或移动端。
 - 输入是一部中文网络小说，stage0～stage7 依次完成清洗、分章、抽取、文风、计划、写作、文案、
-  改名与成书，最终产出 `book.txt`。
+  改名与成书，最终产出 `stage7/<书名>_rewriting.txt`。
 - 工具的主要风险不是程序崩溃，而是 LLM 造事实、提前泄密或漏掉内容后仍写得通顺。因此产品是
   “审校台”而不是 dashboard：主体动作是并排对照证据，再由人做决定。
 - stage0 批准是全链唯一的前置人工硬闸；stage6 与 stage7 的人工定稿是各自产物进入下游的语义闸。
@@ -85,7 +85,7 @@ README 只保留稳定入口和当前能力；“做过什么”由 Git 历史�
 
 ## 当前已具备的主路径
 
-- `novel.cli` 可驱动单书 stage0～stage7，最终组装 `book.txt`；完整操作规程位于
+- `novel.cli` 可驱动单书 stage0～stage7，最终组装成书；完整操作规程位于
   `.claude/skills/novel-pipeline-operator/SKILL.md`。
 - `web/` 默认以 `VITE_USE_MOCK=false` 连接真实服务。九条读屏 GET 与三条人工写回 POST
   已接通；写操作遵循 preview → 确认 → CLI 作业执行，作业失败由 `JobRecord.state='failed'`

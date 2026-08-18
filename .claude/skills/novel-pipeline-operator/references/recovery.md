@@ -85,11 +85,11 @@
 | `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` | 文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}` | **0 LLM 调用，但必须提交该章全部 producer-owned slot 的全文**；不直接改正式 chapter JSON、draft.md 或其他章 |
 | `stage5.review` | `--retain-pretrim` · `--wontfix` | 无人产文件；决定本身就是输入 | `--retain-pretrim --chapters <N> --actor <ACTOR> --reason <text>` 恰好一章，写 hash-bound `trim_resolution_chNN.json`，不改正文、不采用收缩候选（见 FN-014）；`--wontfix` 只把豁免记进 `stage5/wontfix.json`，**一份验收报告都不产** |
 | `stage6.hook` | `--apply-edit` · `--recheck` · `--revalidate` · `--wontfix` | `<novel-dir>/stage6/hook_edit.json` | 一次只改目标候选；随后重跑机械与语义审判 |
-| `stage7.rename` | `--apply-edit` · `--adopt-residual` · `--identity` · `--recheck` · `--revalidate` | `<novel-dir>/stage7/name_map_edit.json` | 先用 `--emit-edit-template`（只读）取当前注册的 `NameMapEdit` 骨架再改，不手抄 schema 版本。⚠ `--adopt-residual high` **重写 `stage7/name_map.json`、清旧审批、退休现有 `book.txt`**，`--identity` 也重写同一份 name map——两者都不是“看一眼”，用后强制重新 hash-bound approve、assemble 和逐字对账 |
+| `stage7.rename` | `--apply-edit` · `--adopt-residual` · `--identity` · `--recheck` · `--revalidate` | `<novel-dir>/stage7/name_map_edit.json` | 先用 `--emit-edit-template`（只读）取当前注册的 `NameMapEdit` 骨架再改，不手抄 schema 版本。⚠ `--adopt-residual high` **重写 `stage7/name_map.json`、清旧审批、退休现有成书**，`--identity` 也重写同一份 name map——两者都不是“看一眼”，用后强制重新 hash-bound approve、assemble 和逐字对账 |
 
 非节点的第十个写入面是终审包 `<novel-dir>/<书名>_review.md`（落书目录根，不在任何 `stageN/` 下；确定路径由启动 prompt 给出）：只供用户读取，可随跑更新，不得承担产物修复功能。
 
-不得直接修改：正式 JSON/TXT、`book.txt`、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 历史、旧 run 的输出目录。`mark` 是写进度信标的唯一入口。
+不得直接修改：正式 JSON/TXT、成书、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 历史、旧 run 的输出目录。`mark` 是写进度信标的唯一入口。
 
 `--apply-edit` 的路径解析**逐层不同，不要当成通则**（见 [经验库](field-notes.md) FN-016）：
 `stage3.style` / `stage4.plan` / `stage6.hook` / `stage7.rename` 按**书目录**解析相对路径，

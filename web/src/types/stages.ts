@@ -938,6 +938,13 @@ export interface Stage7Response {
   /** 组装时的账；book_txt_on_disk 才是盘上此刻的实况（两者可分家） */
   book_txt: { sha1: string; chars: number; chapters: number } | null
   book_txt_on_disk: boolean
+  /**
+   * 成书文件名（`<书名>_rewriting.txt`），由服务端下发。
+   * ⚠ 另存名、按钮文案都用它，**不要拿 title 再拼一次**：那是同一条命名规则的第二个
+   * 落点（`R-11.4`），与后端的 `novel/paths.py::book_txt_rel` 分家时，盘上那份和
+   * 下载那份会叫两个名字。
+   */
+  book_filename: string
   sources: Sources
   chapters: number[]
   /** 逐章对照时才有；与 rows 同进同出 */

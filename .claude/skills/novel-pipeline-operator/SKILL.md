@@ -1,6 +1,6 @@
 ---
 name: novel-pipeline-operator
-description: 作为受托终审代理，使用本仓 novel.cli 将单本中文小说从原始 txt 或既有 sid 可靠地推进到 stage7/book.txt，并把中间人工闸门、修复裁决、校验读数、授权边界和待审余额汇总为该书目录下的 <书名>_review.md。用于跑书、断点续跑、流水线修复、agent 代批以及“用户只审最终成稿”的任务；外部模型调用必须分别具备付费授权与正文外发授权，生成产物只能通过正式 CLI 节点和修复入口改变。
+description: 作为受托终审代理，使用本仓 novel.cli 将单本中文小说从原始 txt 或既有 sid 可靠地推进到 stage7 成书 <书名>_rewriting.txt，并把中间人工闸门、修复裁决、校验读数、授权边界和待审余额汇总为该书目录下的 <书名>_review.md。用于跑书、断点续跑、流水线修复、agent 代批以及“用户只审最终成稿”的任务；外部模型调用必须分别具备付费授权与正文外发授权，生成产物只能通过正式 CLI 节点和修复入口改变。
 ---
 
 # Novel Pipeline Operator
@@ -25,7 +25,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 
 只产生以下用户交付接口：
 
-- `<novel-dir>/stage7/book.txt`：最终成书，只能由 `stage7.assemble` 生成。
+- `<novel-dir>/stage7/<书名>_rewriting.txt`：最终成书，只能由 `stage7.assemble` 生成。书名就是书目录名去掉平台前缀与 `_<sid>` 尾巴的那一段；`stage7.assemble` 的成功行会打印它的绝对路径，以那条为准。
 - `<novel-dir>/<书名>_review.md`：终审包，按 [终审包模板](assets/final-review-template.md) 填写。书名就是书目录名去掉平台前缀与 `_<sid>` 尾巴的那一段；落在**书目录根**，不在任何 `stageN/` 下。⚠ 不必在文件名里再带 sid——书目录名已经带了。启动 prompt 会直接给出这条绝对路径，以它为准。
 
 使用三种终态，禁止用“命令跑完”冒充“书已完成”：
@@ -64,7 +64,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 ## 不可突破的边界
 
 - 不修改仓库代码、历史证据目录、LLM 缓存、账本或 `_rounds/` 来“修好”某本书。
-- 不直接编辑正式生成产物或 `book.txt`。只写终审包以及 [修复状态机](references/recovery.md) 明列的人工输入面；让 CLI 完成校验、归档和正式落盘。
+- 不直接编辑正式生成产物或成书。只写终审包以及 [修复状态机](references/recovery.md) 明列的人工输入面；让 CLI 完成校验、归档和正式落盘。
 - **本次会话内**不并行运行两本书，也不在同一本书上并行两个写盘节点。会串的是证据、闸门裁决与终审包，它们都长在单个会话里。⚠ 这**不是**「系统不支持多书并行」：跨书并行是 `R-13.7` 的要求，做法是每本书一个 agent 会话（批量入口与队列 lane 各自代跑一本），互斥只落在各自 `sid`。
 - 不覆盖项目默认模型、思考模式、并发或重试配置，除非用户明确要求一次独立实验。
 - 不把 `unver`、`skipped`、分母为零或落选候选的状态改写成 `ok`。绿灯必须带分母和 freshness。
@@ -80,6 +80,6 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 - `inbox` 的 `invalid`、`rejected`、`stalled`、`repairable`、`upstream`、`approval` 均为零；`human_only` 与 `verification` 已逐类审阅并按类计数记录。
 - 活动目录不存在未解释的 `.INVALID`、`.rejected` 或 `.stalled`；历史 `_rounds/` 不计入活动余额。
 - 三次代批均有可追溯依据；所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
-- `book.txt` 通过 [代批与终审契约](references/delegated-review.md) 的逐字对账，终审包中的统计与盘上事实一致。
+- 成书通过 [代批与终审契约](references/delegated-review.md) 的逐字对账，终审包中的统计与盘上事实一致。
 
 任何一项未满足时只能使用 `ready_with_disclosures` 或 `stopped`，并说明用户审阅时真正需要关注什么。

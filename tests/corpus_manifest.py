@@ -20,17 +20,27 @@ from contracts.schema import (  # noqa: E402
 from contracts.schema.corpus import (  # noqa: E402
     CURRENT_CORPUS_BOOKS, CURRENT_CORPUS_PAID_NODES, corpus_command_dispatch,
 )
+from contracts.artifacts import ARTIFACT_PATHS  # noqa: E402
 from novel.llm.ledger import LEDGER_REL  # noqa: E402
-from novel.paths import derive_source_meta  # noqa: E402
+from novel.paths import book_txt_rel, derive_source_meta  # noqa: E402
 
 
-_BYTE_ARTIFACTS = (
-    'stage0/clean_text.txt',
-    'stage5/draft.md',
-    'stage5/deep/draft.md',
-    'stage5/shallow/draft.md',
-    'stage7/book.txt',
-)
+def _byte_artifacts(book: Path) -> tuple[tuple[str, str], ...]:
+    """这本书的字节形态产物：`(盘上路径, 清单里记的 rel)`。两者只在成书那条上不同。
+
+    ⚠⚠ **成书刻意「记模板、哈希实体」。** 盘上它叫 `stage7/<书名>_rewriting.txt`，
+    而这份清单**不含书名**（`docs/schema/corpus.md`：不含书名、原文、prompt——
+    它要能提交进 git）⇒ 把具体文件名写进 `rel` 会泄漏它承诺不含的东西。
+    模板 rel 由 `contracts/schema/corpus.py::required_current_corpus_artifacts`
+    那一侧登记，两处必须是同一个字面 ⇒ 都取 `ARTIFACT_PATHS['stage7.book']`。
+    """
+    return (
+        ('stage0/clean_text.txt', 'stage0/clean_text.txt'),
+        ('stage5/draft.md', 'stage5/draft.md'),
+        ('stage5/deep/draft.md', 'stage5/deep/draft.md'),
+        ('stage5/shallow/draft.md', 'stage5/shallow/draft.md'),
+        (book_txt_rel(book), ARTIFACT_PATHS['stage7.book']),
+    )
 _TOKEN_COLUMNS = (
     'prompt_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens',
     'completion_tokens', 'reasoning_tokens',
@@ -100,14 +110,14 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
                     codes.add(code)
                 if isinstance(provenance, dict) and isinstance(provenance.get('code'), str):
                     codes.add(provenance['code'])
-    for rel in _BYTE_ARTIFACTS:
-        path = book / Path(rel)
+    for disk_rel, manifest_rel in _byte_artifacts(book):
+        path = book / Path(disk_rel)
         if path.is_file():
             raw_bytes = path.read_bytes()
             if not raw_bytes:
-                raise ValueError(f'{book.name}/{rel}: 最终字节产物不得为空')
+                raise ValueError(f'{book.name}/{disk_rel}: 最终字节产物不得为空')
             entries.append(CorpusArtifactEntry(
-                rel=rel,
+                rel=manifest_rel,
                 schema_version=None,
                 sha256=_sha256_bytes(raw_bytes),
             ))

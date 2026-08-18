@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-assemble.py —— `stage7.assemble`：把替换后的文案与正文拼成 `stage7/book.txt`。
+assemble.py —— `stage7.assemble`：把替换后的文案与正文拼成成书 `stage7/<书名>_rewriting.txt`。
 
 **它是交付物，不是审阅稿。** 里面没有地方写「缺章」抬头横幅
 ——所以四类残缺态**一律拒写**（`R-10.14`），而不是写一份带警告的 txt。
@@ -20,8 +20,8 @@ from novel.errors import (
 )
 from novel.run import RunContext
 from novel.stages.stage7.rename import (
-    BOOK_TXT, REL, _INVALID, _Upstreams, _hook_drift, _judge, _judged_drift,
-    _report, approval_subject_sha256, stored_blocking_rules,
+    REL, _INVALID, _Upstreams, _hook_drift, _judge, _judged_drift,
+    _report, approval_subject_sha256, book_txt_rel, stored_blocking_rules,
 )
 from novel.stages.stage7.subs import apply_subs, sub_table
 from novel.store import ArtifactStore
@@ -29,7 +29,7 @@ from novel.store import ArtifactStore
 
 def assemble_txt(hook_text: str, recs: list[dict], subs: dict[str, str],
                  kept: list[str] | tuple[str, ...] | set[str]) -> str:
-    """替换后的文案 + 各章正文 → `book.txt` 的**全部字节**。
+    """替换后的文案 + 各章正文 → 成书的**全部字节**。
 
     形态：`文案 \\n\\n 1 \\n\\n 第1章正文 \\n\\n 2 \\n\\n …` + 末尾一个换行。
     **不写「第 N 章」**，章分隔就是一个裸阿拉伯数字单独成行；
@@ -151,26 +151,27 @@ def read_current_book(ctx: RunContext) -> str:
     art, _raw = store.read_own(NameMap, REL)
     up = _Upstreams(ctx, store)
     _require_mapping_current(ctx, store, art, up)
-    if art.book_txt is None or not store.exists(BOOK_TXT):
-        raise UpstreamMissing(f'{BOOK_TXT} 没有当前组装账', hint='先运行 stage7.assemble')
-    freshness = store.freshness(BOOK_TXT)
+    book_txt = book_txt_rel(store)
+    if art.book_txt is None or not store.exists(book_txt):
+        raise UpstreamMissing(f'{book_txt} 没有当前组装账', hint='先运行 stage7.assemble')
+    freshness = store.freshness(book_txt)
     # ⚠ 与上面那道闸同一把尺子：交付物**证明不了当前**与**已知过期**是两条恢复路，
     #   下载端点也不许把它们说成同一句（`R-10.14`：不以「文件存在」冒充可交付）。
     if freshness.state == 'stale':
         raise UpstreamStale(
-            f'{BOOK_TXT} 已不是当前组装账那一份（{freshness.reason}），拒绝下载',
+            f'{book_txt} 已不是当前组装账那一份（{freshness.reason}），拒绝下载',
             hint='stage7.assemble（0 成本）')
     if freshness.state != 'fresh':
         raise UpstreamUnproven(
-            f'{BOOK_TXT} 证明不了自己出自当前组装账'
+            f'{book_txt} 证明不了自己出自当前组装账'
             f'（{freshness.state}/{freshness.reason}），拒绝下载',
             hint='stage7.assemble（0 成本）')
-    text = store.read_text(BOOK_TXT)
+    text = store.read_text(book_txt)
     # ⚠ 同上：freshness 之外的第二把量尺（字数/章数），量的仍是「盘上这份还是不是
     #   当前组装账那一份」⇒ 同一个类，别在这里退回抽象基类。
     if len(text) != art.book_txt.chars or len(up.recs) != art.book_txt.chapters:
         raise UpstreamStale(
-            f'{BOOK_TXT} 规模账与当前内容不一致：'
+            f'{book_txt} 规模账与当前内容不一致：'
             f'chars={len(text)}/{art.book_txt.chars}, '
             f'chapters={len(up.recs)}/{art.book_txt.chapters}',
             hint='stage7.assemble（0 成本，按当前映射重拼并重记账）')
@@ -217,12 +218,13 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
         # ⚠ **`_provenance` 一个字不动**：组装没有改任何 LLM 产的字节，
         #   它只是把已有的映射应用了一遍并把交付物的账记下来。
     })
-    with store.history_transaction(REL, BOOK_TXT):
-        p = store.write_text(BOOK_TXT, text)
+    book_txt = book_txt_rel(store)
+    with store.history_transaction(REL, book_txt):
+        p = store.write_text(book_txt, text)
         store.write(REL, new)
-        freshness = store.freshness(BOOK_TXT)
+        freshness = store.freshness(book_txt)
         if freshness.state != 'fresh':
             raise ProvenanceRefused(
-                f'{BOOK_TXT} was assembled but cannot prove itself current: '
+                f'{book_txt} was assembled but cannot prove itself current: '
                 f'{freshness.state}/{freshness.reason}; map and delivery were rolled back')
     return str(p), new, _report(ctx, store, _judge(ctx, store, new, up), new)

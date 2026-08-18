@@ -366,7 +366,7 @@ class AccountingKeyUnregistered(RefusedByStructure):
 
 
 class ByteFormRefused(RefusedByStructure):
-    """字节形态产物（`clean_text.txt` / `draft.md` / `book.txt`）不合字节纪律。
+    """字节形态产物（`clean_text.txt` / `draft.md` / 成书）不合字节纪律。
 
     ⚠ 盘上三份字节形态产物**全是 LF-only**，而 Windows 上 `open(p, 'w')` 默认吐 CRLF。
     归一是**内容决策**，属产地；写盘口只负责保证**平台不掺东西**，

@@ -82,7 +82,7 @@ argv 的形态是：
 
 > **`FREE_FLAGS` 只管钱不管写。**（`--apply-edit` 落新一轮 + 归档旧轮 ·
 > `--revalidate` 把 `.INVALID` 提升为正式产物 · `--recheck` 刷指标 + 重拼 `draft.md` ·
-> `stage7.assemble` 重拼 `book.txt`）
+> `stage7.assemble` 重拼成书）
 
 一条信息在注释里重复四次以上，说明它是真的，只是**没有落点**（同 `_common.md` 立的那条判准）。
 ⇒ 本字段就是它的落点。三条形式要求：
@@ -166,8 +166,11 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 > 超出闸的经 `POST /api/agent/runs/batch` 排队，由结束的那个 agent 在 worker 的
 > `finally` 里带起下一个。反向互斥同步收窄成**按书**：A 书的 agent 不再挡 B 书的节点作业
 > （摄入 `sid=None` 仍一律拒——它要推导目录名）。
-> ⚠ SKILL.md「不并行运行两本书」原文不动：那条管的是**一个 agent 会话**别同时管两本
+> ⚠ SKILL.md「不并行运行两本书」管的是**一个 agent 会话**别同时管两本
 > （证据、闸门裁决、终审包会串），而 N 个 headless agent 各自只看见自己那一本。
+> 那句原文当初刻意没动，于是它又被读成「系统不支持多书并行」一次
+> ⇒ 2026-08-19 起 SKILL.md 与 `references/runtime-profiles.md` 把**作用域**写进原文
+> （「本次会话内」），语义未变；跨书并行那一侧的权威仍是 `R-13.7`。
 
 | 字段 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
@@ -255,18 +258,31 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 > 压成 `True` 更坏：跳过一个根本没跑的层，下游拿着半份成品继续走。
 > ⇒ 同 `FRESHNESS` / `JOB_STATE` 的 `unknown`，这是 `Q-2` 那条三态在完成度这一侧的样子。
 
-> ### ⚠ `produces` 有**三种形状**，各有各的账，谁也不许拿另一条的答案顶替
+> ### ⚠ `produces` 有**四种形状**，各有各的账，谁也不许拿另一条的答案顶替
 >
-> | 形状 | 例 | 完成度落点 |
-> |---|---|---|
-> | 具名 | `stage7/name_map.json` | `artifacts[]`（一次 `is_file()`） |
-> | 轮次编号 | `stage5/review_{n}.json` · `stage6/semantic_{n}.json` | **`rounds_done[节点]`** |
-> | 逐章（目录段也带占位符） | `stage5/{mode}/ch{nn}.json` | `chapters_done[臂]` |
+> | 形状 | 例 | 占位符由谁决定 | 完成度落点 |
+> |---|---|---|---|
+> | 具名 | `stage7/name_map.json` | — | `artifacts[]`（一次 `is_file()`） |
+> | 轮次编号 | `stage5/review_{n}.json` · `stage6/semantic_{n}.json` | 盘上有几份 | **`rounds_done[节点]`** |
+> | 逐章（目录段也带占位符） | `stage5/{mode}/ch{nn}.json` | 计划里有哪些章 | `chapters_done[臂]` |
+> | **书级参数化** | `stage7/{title}_rewriting.txt` | **这本书是谁** | `artifacts[]`（**先解析再筛**） |
 >
-> `required_artifacts()` 只收第一种，于是**后两种在 `artifacts[]` 里没有行**。
+> `required_artifacts()` 收第一种与第四种，于是**中间两种在 `artifacts[]` 里没有行**。
 > ⇒ `rounds_done` 就是那第三本账。判据是**存在性不是新鲜度**（轮次产物没有单份
 > 新鲜度账），这条限制写在 `resume_verdict` 返回的理由里，不藏着。
 > ⚠ 它与 `done` **刻意不联动**：`stage5.review` 跑没跑过不改变「这一层的成稿齐不齐」。
+>
+> ⚠⚠ **第四种必须在筛选之前解析掉，而「谁是第四种」只能查声明表**
+> （`contracts/artifacts.py::BOOK_SCOPED_PATHS`）**，不能从字面猜。**
+> 它解析之后仍是**一份具名产物**——问的是「它叫什么名字」，不是「盘上有几份」。
+> 而两处现役分类器都会误判它：`state._is_pattern` 只看 `'{' in rel`
+> ⇒ 把成书整个丢出 `artifacts[]`（完成度、freshness 徽章、inbox 同时看不到它）；
+> `paths.is_numbered_pattern` 曾只看「tail 里恰好一个占位符」
+> ⇒ 把它当轮次编号，再拿 `title` 走 `isdigit()` 得到空集。
+> 两条失效**都不报错**，形状是「跑过的那一层看起来没跑」。
+> 守卫：`tests/test_orchestrator_state.py` 的
+> `test_the_delivery_stays_in_stage7s_completion_surface_with_the_book_name` 与
+> `test_every_placeholder_in_the_path_registry_is_claimed_by_exactly_one_classifier`。
 
 ⚠ **`.INVALID` 不计入已完成**，它进 inbox（`INBOX_KIND` 已有 `invalid` 这个值）。
 ⚠ **一份合格的新正式稿落盘时，同名 `.INVALID` 由 `ArtifactStore.write` 送进 `_rounds/`**

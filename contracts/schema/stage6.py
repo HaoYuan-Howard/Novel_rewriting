@@ -31,7 +31,7 @@ stage6/_rounds/hook.rN.json 归档：上一轮的**整份拷贝**，形状与 ho
      **同一个基线格，修 bug 前有判别力、修 bug 后没有。**
 
   ⑥ **定稿那一份与候选只差一个 `origin`** ⇒ 载体上就是**同一个模型加一个可选字段**，
-     不是两份。`approved.text` 是拼进 `stage7/book.txt` 的那一份——**成书的第一段**。
+     不是两份。`approved.text` 是拼进成书的那一份——**成书的第一段**。
 """
 from __future__ import annotations
 
@@ -134,7 +134,7 @@ class HookApprovalResolution(HashBoundHumanApproval):
 class ApprovedHook(StrictModel):
     """定稿。**= 候选 + 一个 `origin`。**
 
-    ⚠ **`approved.text` 进成书**（拼在 `book.txt` 最前面）。
+    ⚠ **`approved.text` 进成书**（拼在成书最前面）。
     """
 
     #: **比候选多一个 `human_edit`。** 它答的是「这份人工稿是从哪一条改出来的」——

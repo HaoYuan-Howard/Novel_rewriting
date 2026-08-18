@@ -499,7 +499,7 @@ function plainMockReport(report: CheckReport): CheckReport {
 function mockCheck(kind: CheckKind): CheckReport {
   const report = plainMockReport(fx<CheckReport>(`check_${kind}.json`))
   if (kind !== 'stage7') return report
-  // stage7 视图在 fake server 中把 book.txt 端点设为可达；同一 fake server 的
+  // stage7 视图在 fake server 中把成书端点设为可达；同一 fake server 的
   // 校验响应也要同步这件事实，不能一边说“在盘上”一边保留历史抓包的 missing 红行。
   return {
     ...report,
@@ -1107,6 +1107,11 @@ export const mockApi: Api = {
         // 冻结抓包记录的是“账在、txt 不在”的历史故障；假服务端把专用文本端点
         // 也做成可达，开发时才能走通预览 / 下载这条新增 UX。
         book_txt_on_disk: true,
+        // 抓包日期（2026-08-17）早于成书改名，那份 fixture 里没有这个字段。
+        // ⚠ 兼容推导只许留在**适配边界**（本文件），不许进屏幕组件
+        // （`docs/LESSONS.md` 第 13 条）；真实服务端由
+        // `novel/views/stage7.py` 从 `paths.book_txt_rel` 下发。
+        book_filename: base.book_filename ?? base.title + '_rewriting.txt',
       }
     }),
 
@@ -1119,11 +1124,11 @@ export const mockApi: Api = {
 
   getStage7Book: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage7/book.txt`, () =>
-      '《mock 成书》\n\n这是最终 book.txt 的预览样例。\n'),
+      '《mock 成书》\n\n这是最终成书的预览样例。\n'),
 
   downloadStage7Book: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage7/book.txt?download=true`, () =>
-      new Blob(['《mock 成书》\n\n这是最终 book.txt 的下载样例。\n'], {
+      new Blob(['《mock 成书》\n\n这是最终成书的下载样例。\n'], {
         type: 'text/plain;charset=utf-8',
       }),
     ),

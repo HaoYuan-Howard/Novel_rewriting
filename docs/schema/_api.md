@@ -140,7 +140,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `GET /api/novels/:sid/inbox` | `InboxView` | 新 |
 | `GET /api/novels/:sid/stage6` | `Stage6View` | 新 |
 | `GET /api/novels/:sid/stage7` | `Stage7View` | 新 |
-| `GET /api/novels/:sid/stage7/book.txt?download=` | 仅在 Stage7 人物表已批准、输入/正文/文案均 current/fresh 且组装账闭合时返回 UTF-8 纯文本（`download=true` 时为附件）；旧文件仅存在不构成交付资格 | 新 |
+| `GET /api/novels/:sid/stage7/book.txt?download=` | 仅在 Stage7 人物表已批准、输入/正文/文案均 current/fresh 且组装账闭合时返回 UTF-8 纯文本（`download=true` 时为附件）；旧文件仅存在不构成交付资格。⚠ **URL 字面与盘上文件名是两件事**：盘上那份叫 `stage7/<书名>_rewriting.txt`，这条 URL 是稳定的 API 标识符、不随书名变；另存名由 `Content-Disposition` 给出（`filename*=UTF-8''…` 带书名，`filename=` 留 ASCII 回退） | 新 |
 | `GET /api/novels/:sid/stage7/:o` | `Stage7View` | 新 |
 | `GET /api/novels/:sid/run` | `RunProgressView`（信标折叠 + 完成度，观察轨迹非判定） | **复用** `_orchestration.md` |
 | `POST /api/agent/runs/preview` | `AgentRunPreview`（与真跑同一构造函数） | 新 |
@@ -395,7 +395,8 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | `residual[]` | 数组 | 是 | 旧名残留。**顺序是承重的**（照产物：置信度高在前、覆盖率降序） |
 | `baselines` / `identity` / `approved` / `book[]` / `sources` | | 是 | 词干基线、恒等基线（可空）、定稿（可空）、书级结论、来源账 |
 | `book_txt` | 对象 或 null | 是 | **可空**——`null` = 成书还没组装过 |
-| `book_txt_on_disk` | 布尔 | 是 | `stage7/book.txt` 此刻真的在不在盘上。`book_txt` 记的是组装时的账，两者可分家 |
+| `book_txt_on_disk` | 布尔 | 是 | 成书此刻真的在不在盘上。`book_txt` 记的是组装时的账，两者可分家 |
+| `book_filename` | 字符串 | 是 | 成书的文件名（`<书名>_rewriting.txt`）。**另存名与按钮文案用它**——前端不许拿 `title` 再拼一次（`R-11.4`）：那是同一条命名规则的第二个落点，与 `novel/paths.py::book_txt_rel` 分家时盘上那份和下载那份会叫两个名字 |
 | `chapters[]` / `ordinal` / `rows[]` / `hook` | | 是 | `chapters` = 可切换「逐章对照」的输出章号（本层判过的成稿章，升序）；`rows[].changed` 是 bool 不是 kind 字符串（两态本来就该是 bool） |
 | `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |
 

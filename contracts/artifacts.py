@@ -45,8 +45,28 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage6.wontfix': 'stage6/wontfix.json',
     'stage7.name_map': 'stage7/name_map.json',
     'stage7.name_map_edit': 'stage7/name_map_edit.json',
-    'stage7.book': 'stage7/book.txt',
+    # ⚠ **交付物按书名命名**，所以它是本表里唯一的「书级参数化」路径（见 `BOOK_SCOPED_PATHS`）。
+    #   占位符由「这本书是谁」决定 ⇒ 每本书恰好解析出一份具名产物，落点唯一在
+    #   `novel/paths.py::book_txt_rel`。
+    'stage7.book': 'stage7/{title}_rewriting.txt',
 }
+
+
+#: 带占位符的路径分三类，**分类是声明的，不是从字面猜的**：
+#:
+#:   | 类 | 例 | 占位符由谁决定 | 完成度落点 |
+#:   |---|---|---|---|
+#:   | 轮次编号 | `stage5/review_{n}.json` | 盘上有几份 | `rounds_done[节点]` |
+#:   | 逐章 | `stage5/{mode}/ch{nn}.json` | 计划里有哪些章 | `chapters_done[臂]` |
+#:   | **书级** | `stage7/{title}_rewriting.txt` | **这本书是谁** | `artifacts[]`（解析后是具名的） |
+#:
+#: ⚠⚠ **这张表存在的理由**：前两类问「盘上有几份」，第三类问「它叫什么名字」——
+#: 解析出来仍是**一份**具名产物。而 `state.py::_is_pattern` 只看 `'{' in rel`、
+#: `paths.is_numbered_pattern` 只看「tail 里恰好一个占位符」，两者都会把书级那条
+#: **误判**成轮次编号类：前者把它整个丢出 `artifacts[]`（成书从完成度、freshness 徽章、
+#: inbox 里同时消失），后者拿非数字去解析编号得到空集。
+#: ⇒ 书级路径必须在那两道分类之前先被解析掉，而「谁是书级」只能从这里查，不能靠字面猜。
+BOOK_SCOPED_PATHS: Final[frozenset[str]] = frozenset({'stage7.book'})
 
 
 def artifact_rel(name: str, **values: object) -> str:
@@ -99,4 +119,7 @@ STAGE6_SEMANTIC = artifact_rel('stage6.semantic')
 STAGE6_WONTFIX = artifact_rel('stage6.wontfix')
 STAGE7_NAME_MAP = artifact_rel('stage7.name_map')
 STAGE7_NAME_MAP_EDIT = artifact_rel('stage7.name_map_edit')
+#: ⚠ **它是模板，不是可以直接落盘的路径**（同 `STAGE5_CHAPTER`）：里面还有 `{title}`。
+#: 要具体路径请走 `novel/paths.py::book_txt_rel(novel_dir)`；拿这个常量去
+#: `store.path()` / 相等比较，得到的是一个字面叫 `{title}_rewriting.txt` 的东西。
 STAGE7_BOOK = artifact_rel('stage7.book')

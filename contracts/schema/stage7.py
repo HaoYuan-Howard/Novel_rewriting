@@ -213,7 +213,7 @@ class ApprovedNameMap(HashBoundHumanApproval):
 class BookTxt(StrictModel):
     """交付物的账。缺省 `null`（还没组装）。
 
-    `book.txt` 的字节形态（换行只有 LF · 章分隔＝**裸阿拉伯数字单独成行** ·
+    成书的字节形态（换行只有 LF · 章分隔＝**裸阿拉伯数字单独成行** ·
     文案在最前 · 没有任何审阅元信息 · 原子落盘）由写盘口那一层守，不在这里。
     """
 

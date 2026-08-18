@@ -43,7 +43,7 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 | `lead_upto` | `int >= 1` | 连续开篇成稿下发上界；全书结构地图不受此上界限制 |
 | `rationale` | `str` | 三条候选各自押注的吸引点 |
 | `candidates` | `Candidate[3]` | 三种当前策略各一条，文本不得重复 |
-| `approved` | `ApprovedHook \| null` | 人工定稿；进入 `stage7/book.txt` 的第一段 |
+| `approved` | `ApprovedHook \| null` | 人工定稿；进入成书的第一段 |
 | `sources.writer_context` | `ContextSource` | 写作上下文来源状态 |
 | `judged` | `{path: JudgedDraft}` | 生成时使用的开篇成稿及其消费指纹 |
 | `_provenance` | `HookProvenance` | 模型、prompt、输入、代码与参数来源账 |

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from contracts.artifacts import ARTIFACT_PATHS
 from contracts.schema import (
     CorpusArtifactEntry, CorpusLedgerSummary, CorpusManifest,
     CorpusSkipExpectation, LedgerTokenSummary, artifact_spec, encode_artifact,
@@ -233,10 +234,16 @@ def test_manifest_accepts_commands_from_the_production_argv_builder(tmp_path):
 
 def test_manifest_rejects_incomplete_books_ledger_and_artifact_hashes():
     raw = _manifest_raw()
+    # ⚠ 取注册表符号而不是字面量：清单里成书那一条记的是**模板 rel**（不含书名，
+    #   见 `contracts/schema/corpus.py`）。写死 `stage7/book.txt` 的后果不是红——
+    #   过滤器一条都匹配不上，于是这里什么都没删，用例安静地不再制造「缺必备产物」。
+    delivery = ARTIFACT_PATHS['stage7.book']
     raw['books'][0]['artifacts'] = [
         item for item in raw['books'][0]['artifacts']
-        if item['rel'] != 'stage7/book.txt'
+        if item['rel'] != delivery
     ]
+    assert len(raw['books'][0]['artifacts']) < len(_manifest_raw()['books'][0]['artifacts']), \
+        '过滤器没删掉任何东西——它匹配的 rel 已经不存在了'
     with pytest.raises(ValidationError, match='required artifacts'):
         CorpusManifest.model_validate(raw)
 
@@ -334,8 +341,10 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
     sid = CURRENT_CORPUS_BOOKS[0][0]
     artifacts = state[sid]['artifacts']
     state[sid]['artifacts'] = [
-        item for item in artifacts if item.rel != 'stage7/book.txt'
+        item for item in artifacts if item.rel != ARTIFACT_PATHS['stage7.book']
     ]
+    assert len(state[sid]['artifacts']) < len(artifacts), \
+        '过滤器没删掉任何东西——它匹配的 rel 已经不存在了'
     with pytest.raises(ValidationError, match='required artifacts'):
         corpus_manifest.verify(tmp_path, manifest)
     state[sid]['artifacts'] = artifacts
@@ -352,11 +361,14 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
         corpus_manifest.verify(tmp_path, manifest)
     state[sid]['artifacts'] = artifacts
 
+    # ⚠ 同上一格那条纪律：取注册表符号，别写死 `stage7/book.txt`。写死的后果不是红——
+    #   条件一条都不命中 ⇒ 这份 artifacts 与原件逐字相同 ⇒ 用例安静地不再制造漂移。
     state[sid]['artifacts'] = [
         item.model_copy(update={'sha256': 'f' * 64})
-        if item.rel == 'stage7/book.txt' else item
+        if item.rel == ARTIFACT_PATHS['stage7.book'] else item
         for item in artifacts
     ]
+    assert state[sid]['artifacts'] != artifacts, '没有制造出任何漂移，这一格失去了判别力'
     with pytest.raises(ValueError, match='inventory hash 漂移'):
         corpus_manifest.verify(tmp_path, manifest)
     state[sid]['artifacts'] = artifacts

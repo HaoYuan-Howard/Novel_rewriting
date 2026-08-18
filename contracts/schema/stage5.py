@@ -165,7 +165,7 @@ class Chapter(StrictModel):
     #:
     #: ⇒ 「状态只由文件名与 `errs` 区分」这句话**不再成立**：一份正式稿也可以带 `errs`，
     #: 甚至带非空的。今天靠 `_provenance.origin=human` 还分得开，**但那是第二个落点**。
-    #: ⚠ **非空 `errs` 的正式稿会一路进 `book.txt`，没有一行报告会说**——
+    #: ⚠ **非空 `errs` 的正式稿会一路进成书，没有一行报告会说**——
     #: stage7 只排除 `.INVALID.json`，不看正式稿里的 `errs`。
     #: 盘上零样本。**这是裁决的后果，不是 bug——但要写进契约。**
     errs: list[str] | None = None

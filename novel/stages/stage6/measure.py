@@ -120,7 +120,7 @@ def normalize_hook(text: str, *, src_hook: str | None) -> tuple[str, Mech]:
     而 `hook_shape` 量的是 `avg_paragraph_chars`——`measure()` 定义「段落 = 非空行」，
     于是 `\\n\\n` 与 `\\n` 对它**完全不可见**。
     实测代价：原作文案段 sep=2.0、原作正文 2.01、成稿正文 1.98，而**新文案 0.92**
-    ——五本无一例外，后果在交付物上可见：`book.txt` 里开篇文案是全书唯一一段密排的。
+    ——五本无一例外，后果在交付物上可见：成书里开篇文案是全书唯一一段密排的。
 
     ⚠ 基准取**原作文案段的字节**（`sep_band_of_text`），不取 `measurable.hook` 里那个
     平均值——它有 off-by-one，短文案会被判反。

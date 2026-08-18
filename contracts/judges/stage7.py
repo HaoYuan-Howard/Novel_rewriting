@@ -5,7 +5,7 @@
 分布为 15 HARD、8 INFO、3 metric、7 unver。`rn_*` id 同时用于报告、人工豁免与来源账；
 模型决定和人工 `extra_subs` 使用分开的碰撞规则，避免把人工确认扩进模型 HARD 取值面。
 
-本层不开放付费自动返工。有 HARD 时 `stage7.approve` 拒绝定稿、`stage7.assemble` 拒写 `book.txt`；
+本层不开放付费自动返工。有 HARD 时 `stage7.approve` 拒绝定稿、`stage7.assemble` 拒写成书；
 7 条 `unver` 常驻输出，因此无 HARD 命中时报告为 `amber` 且 `passed=True`。
 """
 from __future__ import annotations
@@ -158,7 +158,7 @@ _hard('rn_book_incomplete', '每一章都有且只有一份成稿', 'R-10.14', o
       note='⚠ owner 是 `stage5`：缺章的根因在写作那一层，不在映射表 ⇒ '
            '**它不在那 13 条「人能 0 成本改掉」里**，人改映射表救不了它')
 
-_hard('rn_txt_stale', '盘上的 book.txt 与产物记的指纹一致', 'R-10.9',
+_hard('rn_txt_stale', '盘上的成书与产物记的指纹一致', 'R-10.9',
       note='⚠ 原型这一条**只在复检里现算、从不进 `book[]`**，而收尾循环给'
            '「没开过口的 hard/info」补打 `[OK]` ⇒ 同一份报告里会**同时**出现'
            '`[FAIL] 不符` 与 `[OK] 一致`。新骨架 `build()` 遍历注册表，'

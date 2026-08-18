@@ -43,7 +43,7 @@ from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
-    STAGE7_BOOK, STAGE7_NAME_MAP,
+    STAGE7_NAME_MAP,
 )
 from contracts.schema import (
     ArtifactVersionError, HumanApproval, InputEdge, Provenance, RevalidationAudit,
@@ -288,7 +288,7 @@ class ArtifactStore:
         return obj, payload
 
     def read_text(self, rel: str) -> str:
-        """读一份**字节形态**产物（`clean_text.txt` / `draft.md` / `book.txt`）。记边。
+        """读一份**字节形态**产物（`clean_text.txt` / `draft.md` / 成书）。记边。
 
         ⚠ **按字节读再自己解码**，不用文本模式：文本模式会把 `\\r\\n` 悄悄翻成 `\\n`，
         于是「盘上那份带 CRLF」这件事在读的一侧**看不见**，
@@ -342,7 +342,7 @@ class ArtifactStore:
         except UnicodeDecodeError as e:
             raise ArtifactUnreadable(
                 f'{rel} 不是 UTF-8：{e!r}。'
-                f'⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / `book.txt`）盘上一律 UTF-8；'
+                f'⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / 成书）盘上一律 UTF-8；'
                 f'别把它当成「上游还没产出」——那会把一次成功的付费跑报成失败') from e
 
     @classmethod
@@ -649,7 +649,7 @@ class ArtifactStore:
     def write_text(self, rel: str, text: str) -> Path:
         """落一份**字节形态**产物。**显式按字节写 `\\n`，不带 BOM。**
 
-        ⚠ 盘上三份字节形态产物（`clean_text.txt` / `draft.md` / `book.txt`）**全是 LF-only**，
+        ⚠ 盘上三份字节形态产物（`clean_text.txt` / `draft.md` / 成书）**全是 LF-only**，
         而 Windows 上 `open(p, 'w')` 默认吐 CRLF——同一份代码在两台机器上产出两种字节，
         而本项目有一条逐字节等价的验收线。
 
@@ -1038,8 +1038,9 @@ class ArtifactStore:
         """没有通用来源块的产物，用其既有确定性指纹回答同一个问题。
 
         stage0 的两份产物共用 removal report 的 source/clean 身份；stage1 三份
-        共用 partition report 的 input 身份；book.txt 的身份由 name_map.book_txt
-        承载。这些本来就是对应关卡使用的权威比对，完成度只复用，不另造一份账。
+        共用 partition report 的 input 身份；成书（`stage7/<书名>_rewriting.txt`）
+        的身份由 name_map.book_txt 承载。
+        这些本来就是对应关卡使用的权威比对，完成度只复用，不另造一份账。
         """
         if rel in (STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT):
             return self._stage0_freshness()
@@ -1047,7 +1048,10 @@ class ArtifactStore:
             return self._stage1_freshness()
         if rel == STAGE2_GLOBAL_REVIEW:
             return self._global_review_freshness()
-        if rel == STAGE7_BOOK:
+        # ⚠ 成书的 rel 带书名 ⇒ **不能与 `STAGE7_BOOK` 直接比**（那是模板）。
+        #   拿模板比出来的恒是 False，而后果是 `_deterministic_freshness` 返回 None
+        #   ⇒ 成书的 freshness 变成「没有来源账」，那道对账**静默失效**。
+        if rel == paths.book_txt_rel(self.ctx.novel_dir):
             return self._book_freshness()
         return None
 
@@ -1153,8 +1157,10 @@ class ArtifactStore:
         expected = book_txt.get('sha1') if isinstance(book_txt, dict) else None
         if not isinstance(expected, str) or not expected:
             return FreshnessReport('unknown', 'no_provenance')
+        # 边的 key 用**这本书的**那条具体路径：报告里要点名的就是它。
+        book_rel = paths.book_txt_rel(self.ctx.novel_dir)
         edge = self._content_edge(
-            STAGE7_BOOK, expected, self._content_sha1_or_none(STAGE7_BOOK))
+            book_rel, expected, self._content_sha1_or_none(book_rel))
         return self._content_report((edge,))
 
     def _freshness_payload(self, rel: str) -> dict[str, Any] | None:

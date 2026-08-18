@@ -974,7 +974,7 @@ WRITE_EFFECTS: Final = {
     #   （`Q-3`）。实测确认过一次才补上这一行。
     '--names-only': '',
     '--emit-edit-template': '',
-    '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有 book.txt',
+    '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有成书',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
     '--recheck': '刷新已有成稿的指标，并重拼 draft.md',

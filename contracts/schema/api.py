@@ -987,8 +987,13 @@ class Stage7View(StrictModel):
     book: list[Finding]
     identity: IdentityBaseline | None
     book_txt: BookTxt | None
-    #: `stage7/book.txt` 此刻真的在不在盘上（`book_txt` 记的是组装时的账，两者可分家）。
+    #: 成书此刻真的在不在盘上（`book_txt` 记的是组装时的账，两者可分家）。
     book_txt_on_disk: bool
+    #: 成书的文件名（`<书名>_rewriting.txt`）。**下载时另存成什么名字用它，
+    #: 别在前端拿 `title` 再拼一次**——那就是同一条命名规则的第二个落点，
+    #: 而它与 `novel/paths.py::book_txt_rel` 分家时盘上那份和下载那份会叫两个名字。
+    #: （`R-11.4` / `docs/LESSONS.md` 第 13 条：前端只呈现判定，不补后端没给的结论。）
+    book_filename: str = Field(min_length=1)
     sources: NameMapSources
 
     #: 可切换「逐章对照」的输出章号（= 本层判过的成稿章，升序）。

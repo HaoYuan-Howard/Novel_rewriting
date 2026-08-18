@@ -883,7 +883,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
     ⚠ **人工稿仍有 `errs` 时只报不拦**（用户裁决：人手动改往往正是为了机器修不动的地方）。
     判定落进 `errs`/`warns`，界面照常红着。
     ⚠⚠ 而**下游没有第二道**：stage7 只排除 `.INVALID.json`，**不看正式稿里的 `errs`**
-    ⇒ 一份带阻断级判定的人工稿会一路进 `book.txt`，没有一行报告会说。
+    ⇒ 一份带阻断级判定的人工稿会一路进成书，没有一行报告会说。
     这是裁决的后果不是 bug——**但要写进契约**（`stage5.md` §七）。
     """
     mode = _mode_of(ctx)
@@ -945,7 +945,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
             _retire_trim_state(store, o)
         where = store.write_round(rel, art)
     note = ([f'⚠ 人工稿仍有 {len(errs)} 条阻断级判定，**只报不拦**：{errs[0]}'
-             f'　⚠⚠ 下游没有第二道——stage7 只排除 `.INVALID`，这一份会一路进 book.txt']
+             f'　⚠⚠ 下游没有第二道——stage7 只排除 `.INVALID`，这一份会一路进成书']
             if errs else [])
     return _report(ctx, store, mode, written=[f'第 {o} 章 → {where}'], blocked=note,
                    judged={o: fs})

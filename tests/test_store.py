@@ -841,11 +841,11 @@ def test_json_artifacts_are_written_without_cr():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 四、字节形态产物：`book.txt` 无 `\r`、无 BOM
+# 四、字节形态产物：成书无 `\r`、无 BOM
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_freshness():
-    """stage0×2、stage1×3 与 book.txt 不再结构性 `unknown`。
+    """stage0×2、stage1×3 与成书不再结构性 `unknown`。
 
     这些载体没有通用 `_provenance`，但其 companion 已经记着同一条 HARD 判据使用的
     40 位身份。完成度必须复用那份事实，并在上游变化时给出 stale。
@@ -869,8 +869,12 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
     _write_payload(book, 'stage1/partition_report.json', {'input_sha1': input_sha1})
 
     book_bytes = '1\n第一章。\n\n2\n第二章。\n'.encode('utf-8')
+    # 成书按书名命名 ⇒ 取生产那一个落点。⚠ 手写 `stage7/book.txt` 的后果**不是红**：
+    #   那条 rel 不再是任何产物，确定性 freshness 桥够不着它，于是它会被当成一份普通
+    #   JSON 去解码 ⇒ 报「不是合法 JSON」，把人指向错的层。
+    book_rel = paths.book_txt_rel(book)
     (book / 'stage7').mkdir()
-    (book / 'stage7' / 'book.txt').write_bytes(book_bytes)
+    (book / book_rel).write_bytes(book_bytes)
     _write_payload(book, 'stage7/name_map.json', {
         'book_txt': {'sha1': prov.content_sha1(book_bytes), 'chars': 18, 'chapters': 2},
     })
@@ -879,7 +883,7 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
     formerly_unknown = (
         'stage0/clean_text.txt', 'stage0/removal_report.json',
         'stage1/main_text.json', 'stage1/hook_copy.json',
-        'stage1/partition_report.json', 'stage7/book.txt',
+        'stage1/partition_report.json', book_rel,
     )
     assert {rel: store.freshness(rel).state for rel in formerly_unknown} == {
         rel: 'fresh' for rel in formerly_unknown}
@@ -887,10 +891,10 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes + b'changed\n')
     for rel in formerly_unknown[:5]:
         assert store.freshness(rel).state == 'stale', rel
-    assert store.freshness('stage7/book.txt').state == 'fresh'
+    assert store.freshness(book_rel).state == 'fresh'
 
-    (book / 'stage7' / 'book.txt').write_bytes(book_bytes + b'changed\n')
-    assert store.freshness('stage7/book.txt').state == 'stale'
+    (book / book_rel).write_bytes(book_bytes + b'changed\n')
+    assert store.freshness(book_rel).state == 'stale'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1029,7 +1033,7 @@ def test_stage0_source_edge_prefers_the_recorded_location_over_the_reanchored_on
         '源被换掉必须报 stale/file_changed，不是 ghost'
 
 def test_byte_form_artifacts_are_lf_only_and_have_no_bom():
-    """⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / `book.txt`）盘上**全是 LF-only**，
+    """⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / 成书）盘上**全是 LF-only**，
     而 Windows 上 `open(p, 'w')` 默认吐 CRLF ⇒ 同一份代码在两台机器上产出两种字节。
     """
     ctx = _ctx(_book())

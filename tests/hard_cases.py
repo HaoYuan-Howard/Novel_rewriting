@@ -80,7 +80,7 @@ def _rn_txt_stale() -> list:
     ]
     outcomes = checks.check(
         findings=required, scanned='0 条映射', baseline_line='0 字', chapter_scanned='0 章',
-        txt_state=(False, '盘上的 book.txt 与产物记的指纹不符——它被人动过或是旧的'),
+        txt_state=(False, '盘上的成书与产物记的指纹不符——它被人动过或是旧的'),
         approved=False, stale=[], missing=[], hook_stale=False, identity=None,
         title_line='书名：略', body_count=0)
     return [f for o in outcomes for f in o.findings]

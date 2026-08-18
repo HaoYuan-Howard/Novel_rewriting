@@ -63,7 +63,11 @@ export function Stage7Screen() {
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = 'book.txt'
+      // 另存名由服务端下发（`book_filename`，来自 `novel/paths.py::book_txt_rel`）。
+      // ⚠ 不在这里拿 title 再拼一次：那是同一条命名规则的第二个落点（`R-11.4`）。
+      // 拿不到就**不设**，让浏览器用默认名——编一个看起来对的名字更坏。
+      const filename = q.data?.book_filename
+      if (filename) anchor.download = filename
       anchor.click()
       URL.revokeObjectURL(url)
     },
@@ -419,7 +423,7 @@ export function Stage7Screen() {
                     <span className="text-body text-ink-2">{d.title}</span>
                     <Mono className="text-micro text-ink-5">
                       {d.book_txt
-                        ? 'book.txt · ' +
+                        ? d.book_filename + ' · ' +
                           d.book_txt.chars +
                           ' 字 · ' +
                           d.book_txt.chapters +
@@ -443,7 +447,7 @@ export function Stage7Screen() {
                           onClick={() => download.mutate()}
                           className="cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-6 text-body font-semibold text-ink disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                          {download.isPending ? '下载中…' : '下载 book.txt'}
+                          {download.isPending ? '下载中…' : '下载 ' + d.book_filename}
                         </button>
                       </div>
                     ) : (
@@ -473,7 +477,7 @@ export function Stage7Screen() {
                           拼装成书
                         </ActionButton>
                         <span className="text-tag text-ink-4">
-                          按原书结构拼装（文案 + 正文各章），落到 stage7/book.txt。
+                          按原书结构拼装（文案 + 正文各章），落到 stage7/ 下、以书名命名。
                         </span>
                       </div>
                     )}
@@ -559,7 +563,7 @@ export function Stage7Screen() {
                     onClick={(event) => event.stopPropagation()}
                   >
                     <div className="flex items-center gap-10 border-b border-line-soft px-20 py-14">
-                      <span className="text-h3 font-semibold">book.txt 成书预览</span>
+                      <span className="text-h3 font-semibold">成书预览</span>
                       <Mono className="text-mini text-ink-5">
                         {d.book_txt ? d.book_txt.chars + ' 字 · ' + d.book_txt.chapters + ' 章' : ''}
                       </Mono>
@@ -583,12 +587,12 @@ export function Stage7Screen() {
                       {bookQ.isPending
                         ? '读取成书中…'
                         : bookQ.isError
-                          ? '取不到 book.txt；请确认文件仍在盘上。'
+                          ? '取不到成书；请确认文件仍在盘上。'
                           : bookQ.data}
                     </pre>
                     {download.isError ? (
                       <div className="border-t border-warn-line bg-warn-bg px-20 py-10 text-body text-warn-ink">
-                        下载失败；请确认 book.txt 仍在盘上。
+                        下载失败；请确认成书仍在盘上。
                       </div>
                     ) : null}
                   </aside>

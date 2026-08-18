@@ -10,7 +10,7 @@ import pytest
 
 from contracts.schema.report import finding
 from contracts.schema.stage7 import ApprovedNameMap
-from novel import prov
+from novel import paths, prov
 from novel.errors import (
     ApprovalRequired, BlockingFindingsUnresolved, DeliveryIncomplete, GateBlocked,
     ProvenanceRefused, UpstreamStale, UpstreamUnproven,
@@ -177,7 +177,8 @@ def test_an_incomplete_book_reports_every_missing_piece_at_once(monkeypatch):
 
 def test_retired_book_leaves_the_live_download_path_but_remains_recoverable(tmp_path):
     novel_dir = tmp_path / '书名_123'
-    live = novel_dir / 'stage7' / 'book.txt'
+    # 成书按书名命名 ⇒ 取生产那一个落点，别在测试里手拼 `stage7/book.txt`。
+    live = novel_dir / paths.book_txt_rel(novel_dir)
     live.parent.mkdir(parents=True)
     raw = '旧交付物\n'.encode('utf-8')
     live.write_bytes(raw)
@@ -201,9 +202,15 @@ class _MutableMap(SimpleNamespace):
         return _MutableMap(**(vars(self) | update))
 
 
+#: 假 store 也必须有 `ctx.novel_dir`：成书的 rel 带书名，`rename.book_txt_rel(store)`
+#: 从这里现算。⚠ **别在测试里手写那个文件名**（`docs/LESSONS.md` 第 21 条）。
+_FAKE_CTX = SimpleNamespace(novel_dir=Path('FQ_测试书_42'))
+
+
 class _TransactionalStore:
     def __init__(self, art, *, book='old delivery', fail_map_write=False,
                  book_freshness='fresh'):
+        self.ctx = _FAKE_CTX
         self.art = art
         self.book = book
         self.fail_map_write = fail_map_write
@@ -228,7 +235,7 @@ class _TransactionalStore:
             raise
 
     def write_text(self, rel, text):
-        assert rel == rename.BOOK_TXT
+        assert rel == rename.book_txt_rel(self)
         self.events.append('book')
         self.book = text
         return Path(rel)
@@ -241,7 +248,7 @@ class _TransactionalStore:
             raise ProvenanceRefused('injected map postcondition failure')
 
     def freshness(self, rel):
-        assert rel == rename.BOOK_TXT
+        assert rel == rename.book_txt_rel(self)
         return SimpleNamespace(state=self.book_freshness, reason='synthetic')
 
 

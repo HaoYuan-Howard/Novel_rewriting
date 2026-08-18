@@ -18,7 +18,7 @@ stage7.py —— S-12「人名替换 + 成书」那一屏（`GET /api/novels/:si
 """
 from __future__ import annotations
 
-from contracts.artifacts import STAGE6_HOOK, STAGE7_BOOK, STAGE7_NAME_MAP
+from contracts.artifacts import STAGE6_HOOK, STAGE7_NAME_MAP
 
 import os
 import re
@@ -38,8 +38,9 @@ from novel.store import ArtifactStore
 
 NODE = 'stage7.rename'
 REL = STAGE7_NAME_MAP
-BOOK_TXT = STAGE7_BOOK
 HOOK_REL = STAGE6_HOOK
+#: ⚠ 成书的 rel 带书名 ⇒ 没有模块级常量可存（`STAGE7_BOOK` 只是模板）。
+#: 逐次 `paths.book_txt_rel(novel_dir)`，落点仍只有那一个。
 
 
 def stage7_view(base: str | os.PathLike[str], sid: str,
@@ -64,6 +65,7 @@ def stage7_view(base: str | os.PathLike[str], sid: str,
                 f'没有这一章的替换对照')
         rows = _rows(store, art, ordinal)
 
+    book_txt = paths.book_txt_rel(novel_dir)
     return Stage7View(
         sid=paths.derive_source_meta(novel_dir.name)[0],
         title=paths.title_of(novel_dir),
@@ -79,7 +81,8 @@ def stage7_view(base: str | os.PathLike[str], sid: str,
         book=art.book,
         identity=art.identity,
         book_txt=art.book_txt,
-        book_txt_on_disk=store.exists(BOOK_TXT),
+        book_txt_on_disk=store.exists(book_txt),
+        book_filename=os.path.basename(book_txt),
         sources=art.sources,
         chapters=chapters,
         ordinal=ordinal,

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from contracts.artifacts import ARTIFACT_PATHS, BOOK_SCOPED_PATHS
 from contracts.invariants import NODES, STAGES
 from contracts.schema import ARTIFACTS
 from contracts.schema.orchestration import (
@@ -33,14 +34,67 @@ def _NO_CORPUS(test):
 
 # ───────────────────── 产物清单从 `NODES.produces` 派生 ─────────────────────
 
-def test_required_artifacts_come_from_the_nodes_that_produce_them():
+def test_required_artifacts_come_from_the_nodes_that_produce_them(tmp_path):
     """**不另写一张清单。** 原型那张（`Web/novels.py`）是第二份，
     而它分家的代价具体可见：**stage5 被迫整个排除在外**，
-    于是「这本书有没有陈旧产物」那个徽章不覆盖成稿。"""
+    于是「这本书有没有陈旧产物」那个徽章不覆盖成稿。
+
+    ⚠ 交付物按书名命名 ⇒ 这张表是**每本书各自的答案**。期望值里「哪几条是书级」
+    取自声明表（`BOOK_SCOPED_PATHS`，不靠字面猜）、「它叫什么」取自生产那一个落点
+    （`paths.book_txt_rel`）——`docs/LESSONS.md` 第 21 条：守卫调用生产落点，不重拼一份。
+    """
+    novel_dir = tmp_path / 'FQ_测试书_42'
+    book_scoped = {ARTIFACT_PATHS[key] for key in BOOK_SCOPED_PATHS}
     for stage in STAGES:
-        want = {rel for spec in NODES.values() if spec.stage == stage
-                for rel in spec.produces if '{' not in rel}
-        assert set(S.required_artifacts(stage)) == want
+        produces = [rel for spec in NODES.values() if spec.stage == stage
+                    for rel in spec.produces]
+        want = {rel for rel in produces if '{' not in rel}
+        want |= {paths.book_txt_rel(novel_dir)
+                 for rel in produces if rel in book_scoped}
+        assert set(S.required_artifacts(stage, novel_dir=novel_dir)) == want
+
+
+def test_the_delivery_stays_in_stage7s_completion_surface_with_the_book_name(tmp_path):
+    """⚠⚠ **这一条是本次改名的护栏，不是重复上一条。**
+
+    交付物的 `produces` 现在是模板（`stage7/{title}_rewriting.txt`）。而
+    `state._is_pattern` 只看 `'{' in rel`、`paths.is_numbered_pattern` 只看
+    「tail 里恰好一个占位符」——两者都会把它误判成「逐份不定」，于是它**从
+    `artifacts[]` 里整个消失**：完成度、freshness 徽章、inbox 同时看不到成书，
+    而没有任何一层会报错（那正是 `numbered_rounds` docstring 记着的事故的镜像）。
+    ⇒ 这里钉三件事：解析过了、带书名、且 stage7 表里没有残留占位符。
+    """
+    novel_dir = tmp_path / 'FQ_测试书_42'
+    stage7 = set(S.required_artifacts('stage7', novel_dir=novel_dir))
+    assert 'stage7/测试书_rewriting.txt' in stage7, \
+        f'成书不在 stage7 的完成度表里（拿到 {sorted(stage7)}）——它被当成逐份不定丢掉了'
+    assert not any('{' in rel for rel in stage7), \
+        f'stage7 的完成度表里残留了未解析的模板：{sorted(stage7)}'
+    # 换一本书就换一个名字：它确实是「每本书各自的答案」，不是一个全局常量。
+    other = set(S.required_artifacts('stage7', novel_dir=tmp_path / '另一本_7'))
+    assert 'stage7/另一本_rewriting.txt' in other
+
+
+def test_every_placeholder_in_the_path_registry_is_claimed_by_exactly_one_classifier():
+    """⚠ **参数化守卫的分类器自己也要有一条守卫**（`docs/LESSONS.md` 第 23 条）。
+
+    带 `{}` 的路径分三类：轮次编号 / 逐章 / 书级。分类错了的后果**不是红，是静默**
+    ——被误分的那一条会从它该在的那本账里消失。⇒ 每条模板必须**恰好**归一类。
+    """
+    templates = [rel for rel in ARTIFACT_PATHS.values() if '{' in rel]
+    assert templates, 'ARTIFACT_PATHS 里一条模板都没有——这条守卫失去了扫描面'
+    book_scoped = {ARTIFACT_PATHS[key] for key in BOOK_SCOPED_PATHS}
+    for rel in templates:
+        head, _, tail = rel.rpartition('/')
+        classes = {
+            'numbered': paths.is_numbered_pattern(rel),
+            'book_scoped': rel in book_scoped,
+            # 逐章：目录段也带占位符（`stage5/{mode}/ch{nn}.json`），或文件名里
+            # 带 `{nn}`（`stage5/trim_audit_ch{nn}.json`）。
+            'per_chapter': '{' in head or '{nn}' in tail,
+        }
+        hit = sorted(name for name, ok in classes.items() if ok)
+        assert len(hit) == 1, f'{rel} 归了 {hit} 类，必须恰好一类'
 
 
 def test_every_json_artifact_a_node_produces_has_a_model():
@@ -48,7 +102,7 @@ def test_every_json_artifact_a_node_produces_has_a_model():
 
     ⚠ 两张表分家的形态是**静默的**：`ARTIFACTS` 查不到 ⇒ `artifact_state`
     跳过模型校验 ⇒ 那份产物**永远 `readable=True`**，哪怕它根本读不回来。
-    ⚠ 字节形态那三份（`clean_text.txt` / `draft.md` / `book.txt`）按设计不在
+    ⚠ 字节形态那三份（`clean_text.txt` / `draft.md` / 成书）按设计不在
     `ARTIFACTS` 里——它们的 schema 是字节形态，守卫在写盘口那一层。
     """
     missing = sorted({rel for spec in NODES.values() for rel in spec.produces
@@ -68,9 +122,11 @@ def test_pattern_artifacts_never_leave_a_stage_without_a_completion_anchor():
     """
     patterned = {spec.stage for spec in NODES.values()
                  for rel in spec.produces if '{' in rel}
-    assert patterned == {'stage5', 'stage6'}
+    # stage7 自 2026-08-19 起也带模板（交付物按书名命名），但它是**书级参数化**：
+    # 解析之后仍是一份具名产物，所以它的锚点比另外两层多一个——成书自己就是锚。
+    assert patterned == {'stage5', 'stage6', 'stage7'}
     for stage in sorted(patterned - {'stage5'}):
-        assert S.required_artifacts(stage), \
+        assert S.required_artifacts(stage, novel_dir=Path('FQ_测试书_42')), \
             f'{stage} 只剩逐份不定的产物，完成度失去了可 is_file() 的锚点'
 
 
@@ -188,5 +244,9 @@ def test_numbered_produces_covers_exactly_the_round_numbered_artifacts():
         'stage6.semantic': 'stage6/semantic_{n}.json'}
     # 逐章类（目录段也带占位符）不进这张表，它归 `chapters_done`。
     assert 'stage5.write' not in S.numbered_produces('stage5')
+    novel_dir = Path('FQ_测试书_42')
     for stage in STAGES:
-        assert not (set(S.numbered_produces(stage)) & set(S.required_artifacts(stage)))
+        assert not (set(S.numbered_produces(stage))
+                    & set(S.required_artifacts(stage, novel_dir=novel_dir)))
+    # 书级那条**不许**混进轮次编号表：它归 `artifacts[]`（解析后是具名的）。
+    assert S.numbered_produces('stage7') == {}

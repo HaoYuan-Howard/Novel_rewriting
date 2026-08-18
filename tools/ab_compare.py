@@ -270,7 +270,9 @@ def _text_stats(text: str) -> dict:
 
 def book_stats(base: str, sid: str, source: str | None) -> dict:
     novel_dir = Path(paths.resolve_novel_dir(base, sid))
-    p = novel_dir / 'stage7' / 'book.txt'
+    # ⚠ 成书按书名命名 ⇒ **不许在这里手拼路径**（那是第二份路径知识，改名时会静默
+    #   变成「这本书还没成书」）。落点是 `novel/paths.py::book_txt_rel`。
+    p = novel_dir / paths.book_txt_rel(novel_dir)
     if not p.is_file():
         return {'book': None}
     out: dict = {'book': _text_stats(p.read_text(encoding='utf-8'))}

@@ -20,7 +20,10 @@ routing 不符 ⇒ 重跑」。改成 Web 编排之后**整个消失，且没有
 """
 from __future__ import annotations
 
-from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS, artifact_rel
+from contracts.artifacts import (
+    ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS,
+    artifact_rel,
+)
 
 import os
 from pathlib import Path
@@ -45,24 +48,57 @@ def _is_pattern(rel: str) -> bool:
     return _PLACEHOLDER in rel
 
 
+#: **书级参数化路径 → 解析它的那个函数。**（`contracts/artifacts.py::BOOK_SCOPED_PATHS`）
+#:
+#: ⚠⚠ 这一层必须跑在 `_is_pattern` **之前**：书级路径解析之后是**一份具名产物**，
+#: 而 `_is_pattern` 只看 `'{' in rel` ⇒ 不先解析就会把成书整个丢出 `artifacts[]`，
+#: 于是它从完成度、freshness 徽章和 inbox 里**同时消失**，而没有一层会报错。
+_BOOK_SCOPED_RESOLVERS = {
+    ARTIFACT_PATHS['stage7.book']: paths.book_txt_rel,
+}
+
+
+def _resolve_book_scoped(rel: str, novel_dir: str | os.PathLike[str]) -> str:
+    """把书级参数化模板换成这本书的具体路径；其余原样返回。
+
+    ⚠ 声明了是书级、却没登记解析函数 ⇒ **当场抛**，不静默让它掉进 `_is_pattern`。
+    那条静默路径的样子是「这一层的产物凭空少一份」，查起来要一路回到注册表。
+    """
+    resolver = _BOOK_SCOPED_RESOLVERS.get(rel)
+    if resolver is not None:
+        return resolver(novel_dir)
+    if rel in {ARTIFACT_PATHS[key] for key in BOOK_SCOPED_PATHS}:
+        raise UpstreamMissing(
+            f'{rel!r} 在 `BOOK_SCOPED_PATHS` 里声明为书级参数化，'
+            f'但 `_BOOK_SCOPED_RESOLVERS` 没登记解析它的函数——'
+            f'不补上它就会被当成「逐份不定」丢出完成度')
+    return rel
+
+
 def stage_of(rel: str) -> str:
     return rel.split('/', 1)[0]
 
 
-def required_artifacts(stage: str) -> tuple[str, ...]:
+def required_artifacts(stage: str, *,
+                       novel_dir: str | os.PathLike[str]) -> tuple[str, ...]:
     """这一层跑完了盘上该有哪几份。**本层各节点 `produces` 的并集，去掉逐份不定的那些。**
 
     ⚠ 取的是 `NODES[...].produces`，不是另写一张清单——原型那张
     （`Web/novels.py::ARTIFACTS`）就是第二份，而它与真正的产地分家的代价具体可见：
     **stage5 被迫整个排除在外**，于是「这本书有没有陈旧产物」那个徽章**不覆盖成稿**。
+
+    ⚠ 要 `novel_dir` 是因为交付物按**书名**命名（`stage7/{title}_rewriting.txt`）：
+    书级参数化那几条先解析成具体路径，再滤掉真正逐份不定的那些。
+    「这一层该有哪几份」因此是**每本书各自的答案**，不再是一个全局常量。
     """
     seen: dict[str, None] = {}
     for spec in NODES.values():
         if spec.stage != stage:
             continue
         for rel in spec.produces:
-            if not _is_pattern(rel):
-                seen[rel] = None
+            resolved = _resolve_book_scoped(rel, novel_dir)
+            if not _is_pattern(resolved):
+                seen[resolved] = None
     return tuple(seen)
 
 
@@ -193,7 +229,8 @@ def stage_state(store: ArtifactStore, stage: str, *, modes: list[str]) -> StageS
     不改变「这一层的成稿齐不齐」，而 `done` 是给导航与语料库徽章用的。
     它只供续跑判定按节点各问各的（见 `resume_verdict`）。
     """
-    arts = [artifact_state(store, rel) for rel in required_artifacts(stage)]
+    arts = [artifact_state(store, rel)
+            for rel in required_artifacts(stage, novel_dir=store.ctx.novel_dir)]
     rounds = {node: paths.numbered_rounds(store.ctx.novel_dir, rel)
               for node, rel in numbered_produces(stage).items()}
     if stage != 'stage5':

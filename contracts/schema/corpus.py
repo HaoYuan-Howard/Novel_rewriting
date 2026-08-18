@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, model_validator
 
+from contracts.artifacts import ARTIFACT_PATHS
 from contracts.schema.base import Sha1, StrictModel
 
 
@@ -58,7 +59,13 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         'stage5/shallow/draft.md',
         'stage6/hook.json',
         'stage6/semantic_1.json',
-        'stage7/book.txt',
+        # ⚠⚠ **成书这一条登记的是模板 rel，不是盘上那个文件名。**
+        #   盘上它叫 `stage7/<书名>_rewriting.txt`，而本清单**刻意不含书名**
+        #   （本模块 docstring 的 "text-free"；`docs/schema/corpus.md`）——它要能提交进 git。
+        #   把具体文件名写进 `rel` 就会泄漏它承诺不含的东西，而 `CorpusBookEntry`
+        #   里也根本没有书名字段可供校验方复原。
+        #   ⇒ 记模板：「哪一份产物」仍然说得清，sha256 照旧取盘上那份实体的字节。
+        ARTIFACT_PATHS['stage7.book'],
         'stage7/name_map.json',
     }
     fixed.update(f'stage5/deep/ch{ordinal:02d}.json' for ordinal in range(1, 4))

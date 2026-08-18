@@ -14,7 +14,7 @@ hook.py —— `stage6.hook` 与 `stage6.approve` 的节点函数。
 
 ⚠⚠ **归一必须在判定之前。** 校验与落盘看**同一份最终字节**，不留两套。
 原型为此付过学费：`--recheck` 从前把定稿原样搬过去（注释还写着「定稿文本要跟着重判
-一遍」），于是候选归一了、而真正拼进 `book.txt` 的那一份没有——**报告全绿，
+一遍」），于是候选归一了、而真正拼进成书的那一份没有——**报告全绿，
 交付的书里文案是坏版式**。⇒ `_normalize_and_judge` 是这一对的**唯一落点**，三条路共用。
 """
 from __future__ import annotations
@@ -332,7 +332,7 @@ def run_recheck(ctx: RunContext) -> tuple[Hook, CheckReport]:
     """`--recheck`：**0 成本但写盘**——三条候选与定稿一起重跑归一与判据，写回。
 
     ⚠ 定稿那一份**必须一起重跑**：原型从前把它原样搬过去，于是候选归一了、
-    而真正拼进 `book.txt` 的那一份没有。
+    而真正拼进成书的那一份没有。
     ⚠ 归档在写之前：`--recheck` 会覆盖 `findings`，而那是「上一轮判成什么样」的唯一记录。
     """
     store = ArtifactStore(ctx)

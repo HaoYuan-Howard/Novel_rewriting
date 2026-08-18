@@ -14,6 +14,9 @@ screens.py —— 读屏路由（FE-01 点名的那批）。**全部纯读，一
 """
 from __future__ import annotations
 
+import os
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
 
@@ -102,15 +105,41 @@ def get_stage7_book(
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> PlainTextResponse:
-    """只返回当前已批准、输入新鲜且组装账闭合的最终交付物。"""
+    """只返回当前已批准、输入新鲜且组装账闭合的最终交付物。
+
+    ⚠ **URL 与盘上文件名是两件事。** 这条路由的字面（`.../stage7/book.txt`）是 API
+    标识符，`R-11.x` 那张路由表钉着它；盘上那份叫 `<书名>_rewriting.txt`。
+    改 URL 去追文件名会破坏冻结的 API 面，而**人要的是另存下来的名字**——那由
+    `Content-Disposition` 决定，落点就是下面这一处。
+    """
     novel_dir = paths.resolve_novel_dir(base, sid)
     ctx = state.readonly_ctx(
         novel_dir, 'stage7.assemble', prov.code_version())
     text = assemble.read_current_book(ctx)
-    headers = {'Content-Disposition': 'attachment; filename="book.txt"'} if download else None
+    headers = _download_headers(novel_dir) if download else None
     return PlainTextResponse(
         text, media_type='text/plain; charset=utf-8',
         headers=headers)
+
+
+def _download_headers(novel_dir) -> dict[str, str]:
+    """另存文件名。**必须同时给 `filename` 与 `filename*`**（RFC 6266 / RFC 5987）。
+
+    ⚠⚠ 书名是中文，而 `Content-Disposition` 的 header 值只能是 latin-1：
+    直接把中文塞进 `filename="…"` 会在 ASGI 编码 header 时抛
+    `UnicodeEncodeError`（500），或者被中间层换成一串问号。
+    ⇒ 中文走 `filename*=UTF-8''<百分号编码>`；`filename=` 留一个纯 ASCII 回退，
+    给不认 `filename*` 的老客户端。两者都给时现代浏览器取 `filename*`。
+
+    ⚠ ASCII 回退**刻意不是书名的音译或删字版**：那会产出一个看起来像书名、
+    其实是另一个名字的文件。回退就老实叫 `book.txt`——它与 URL 同名，说得清来历。
+    """
+    name = os.path.basename(paths.book_txt_rel(novel_dir))
+    quoted = quote(name, safe='')
+    return {
+        'Content-Disposition':
+            f'attachment; filename="book.txt"; filename*=UTF-8\'\'{quoted}',
+    }
 
 
 @router.get('/{sid}/stage7/{ordinal}', response_model=Stage7View,

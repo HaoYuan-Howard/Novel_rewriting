@@ -152,7 +152,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 处置：无条件重新运行 `stage7.approve`、`stage7.assemble` 和全部成书逐字对账。
 - 验证：book sha1/chars/chapters 与盘一致，旧键归零，批准记录晚于当前映射轮。
 - 依据：`novel/stages/stage7/rename.py::_retire_book_txt` 退休旧成书；
-  `novel/stages/stage7/assemble.py::run_assemble` 才是盘上 `book.txt` 的唯一产地。
+  `novel/stages/stage7/assemble.py::run_assemble` 才是盘上成书的唯一产地。
 
 ### FN-012 · `consumed_changed` 可能是诊断噪声
 
