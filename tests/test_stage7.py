@@ -401,7 +401,9 @@ def test_approve_refuses_while_a_hard_rule_is_still_hit(box):
     with pytest.raises(BlockingFindingsUnresolved) as blocked:
         _approve(box)
     assert blocked.value.rules == ('rn_ambiguous',)
-    assert '--apply-edit' in str(blocked.value)
+    # 「下一条命令」在 `hint`，不在正文——两个方向都查，否则拼回正文时这条照样绿。
+    assert '--apply-edit' in (blocked.value.hint or '')
+    assert '--apply-edit' not in str(blocked.value)
 
 
 def test_approve_rejects_a_stale_subject_before_any_write_or_archive(box):
@@ -508,7 +510,8 @@ def test_the_gate_blocks_a_dirty_map_and_revalidate_promotes_it_after_the_fix(bo
     with pytest.raises(GateBlocked, match='阻断级') as blocked:
         rename.run_rename(ctx, _fake_client(ctx, dirty))
     assert ('stage7.rename --revalidate --actor <id> --reason <why>'
-            in str(blocked.value))
+            in (blocked.value.hint or ''))
+    assert '--revalidate' not in str(blocked.value)
     invalid = box.dir / paths.invalid_of('stage7/name_map.json')
     assert invalid.exists(), '闸门拦下了却没落盘 —— 那份稿就丢了'
     assert not (box.dir / 'stage7' / 'name_map.json').exists()

@@ -62,38 +62,48 @@ def _require_mapping_current(
     covers ordinary inputs/root; chapter and hook projections have their own
     typed bindings and are checked here as well.
     """
+    # ⚠ 本函数每一条拒绝都把「发生了什么」留在 message、「下一条命令」放进 `hint`
+    #   （`novel/errors.py::NovelError`）。**不要把命令写回 message**：拼在一起之后，
+    #   「这条终态有没有出路」在消费方那边就只能靠读中文去猜。
     if store.exists(_INVALID):
         raise GateBlocked(
-            f'{_INVALID} 仍在盘上；当前人物表有未裁决问题，不能交付。'
-            f'提升它跑 `stage7.rename --revalidate --actor <id> --reason <why>`，'
-            f'或先改一行走 `--apply-edit <name_map_edit.json 路径>`（都 0 成本）',
-            invalid_path=str(store.path(_INVALID)))
+            f'{_INVALID} 仍在盘上；当前人物表有未裁决问题，不能交付',
+            invalid_path=str(store.path(_INVALID)),
+            hint='stage7.rename --revalidate --actor <id> --reason <why>（0 成本提升），'
+                 '或先 --apply-edit <name_map_edit.json 路径> 改一行')
     if art.approved is None:
-        raise ApprovalRequired('人物映射还没定稿——先跑 stage7.approve，再 stage7.assemble')
+        raise ApprovalRequired(
+            '人物映射还没定稿',
+            hint='stage7.approve --actor <id> --reason <why> --subject-sha256 <当前决策面>')
     freshness = store.freshness(REL)
     # ⚠ **`stale` 与 `unknown` 抛的不是同一条**：前者是一句可复算的断言（哪条边变了），
     #   后者只是「来源账证明不了」。合成一句 `!= fresh`，报告就会替一件算不出来的事
     #   编一句「它已经变了」——而两者要人做的下一件事本来就不同。
     if freshness.state == 'stale':
         raise UpstreamStale(
-            f'{REL} 已过期（{freshness.reason}）；先跑 `stage7.rename --recheck`（0 成本）'
-            '重建当前根上的那一份——旧批准不能给过期输入授权')
+            f'{REL} 已过期（{freshness.reason}）；旧批准不能给过期输入授权',
+            hint='stage7.rename --recheck（0 成本，重建当前根上的那一份）')
     if freshness.state != 'fresh':
         raise UpstreamUnproven(
-            f'{REL} 证明不了自己出自当前根（{freshness.state}/{freshness.reason}）。'
-            '交付闸不接受「不知道」：先跑 `stage7.rename --recheck`；'
-            '它若仍判不出（这份产物没有足够来源事实），只能从 stage7.rename 整份重建')
+            f'{REL} 证明不了自己出自当前根（{freshness.state}/{freshness.reason}）；'
+            '交付闸不接受「不知道」',
+            # ⚠ 这一格**不写死一条**：`--recheck` 判不出来时（这份产物没有足够来源事实）
+            #   剩下的只有整份重建，而那可能是一次付费 ⇒ 说清两段，别只给便宜的那一条。
+            hint='先 stage7.rename --recheck（0 成本）；仍判不出则只能从 stage7.rename '
+                 '整份重建（可能付费）')
     current_subject = approval_subject_sha256(art)
     if art.approved.subject_sha256 != current_subject:
         raise ApprovalRequired(
-            '人物映射的人工批准不再绑定当前决策面；'
-            '请刷新人物表并重新运行 stage7.approve')
+            '人物映射的人工批准不再绑定当前决策面',
+            hint='刷新人物表后重跑 stage7.approve --actor <id> --reason <why> '
+                 '--subject-sha256 <当前决策面>')
     hard = stored_blocking_rules(art)
     if hard:
         raise BlockingFindingsUnresolved(
-            f'人物映射仍有阻断级问题 {hard}，不能组装交付物——'
-            f'`--apply-edit` 改一行或 `--recheck` 按当前判据重判（都 0 成本）',
-            rules=hard)
+            f'人物映射仍有阻断级问题 {hard}，不能组装交付物',
+            rules=hard,
+            hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
+                 '或 stage7.rename --recheck 按当前判据重判（都 0 成本）')
     stale, missing = _judged_drift(art, up)
     hook_stale = _hook_drift(art, up)
     # ⚠ 与上面那条 `freshness == 'stale'` 是**同一件事的另一种量法**：这次不是来源账说的，
@@ -101,52 +111,60 @@ def _require_mapping_current(
     if stale or missing or hook_stale:
         raise UpstreamStale(
             '人物映射不再绑定当前正文/文案：'
-            f'stale={stale}, missing={missing}, hook_stale={hook_stale}；'
-            '先跑 stage7.rename --recheck（0 成本）再组装')
+            f'stale={stale}, missing={missing}, hook_stale={hook_stale}',
+            hint='stage7.rename --recheck（0 成本）再组装')
 
     if up.hook_art is None:
-        raise UpstreamMissing('stage6/hook.json 不在盘上——先完成 stage6')
+        raise UpstreamMissing('stage6/hook.json 不在盘上', hint='先完成 stage6')
     from novel.stages.stage6 import semantic as hook_semantic
     hook_semantic.require_approved_clear(store, up.hook_art)
 
+    # ⚠ 三项各自「差什么」进 `bad`（message），「怎么补」进 `todo`（hint）。
+    #   `hint` 是**一条时给一条、多条时逐条列全**：这道闸的全部价值就是一次说清，
+    #   而人只能按其中一条去敲下一个命令。
     bad: list[str] = []
+    todo: list[str] = []
     if up.dup:
-        bad.append(f'同章双份：{up.dup}（哪一份是成品无从判断，删掉不要的那一份）')
+        bad.append(f'同章双份：{up.dup}（哪一份是成品无从判断）')
+        todo.append(f'删掉 {up.dup} 里多出来的那一份成稿（只有人能决定留哪个）')
     if up.missing:
-        bad.append(f'计划有而成稿无：{up.missing}（先把它们写出来）')
+        bad.append(f'计划有而成稿无：{up.missing}')
+        todo.append(f'把 {up.missing} 写出来（stage5.write，可能付费）')
     if not up.hook_text:
-        bad.append('开篇文案还没定稿（txt 的第一段就是它：先跑 `stage6.approve --pick N`）')
+        bad.append('开篇文案还没定稿（txt 的第一段就是它）')
+        todo.append('stage6.approve --pick N（0 成本）')
     if bad:
         # ⚠ **一次报全**：三条同时成立且互不依赖，逐条失败会让人补完一样才发现还差另一样。
         #   三项各自 typed（恢复路各不相同），消费方按字段路由而不是 parse 这段人话。
         raise DeliveryIncomplete(
             '成书是交付物，不是审阅稿——txt 里没有地方写「缺章」那种抬头横幅：\n    '
             + '\n    '.join(bad),
-            duplicated=up.dup, missing=up.missing, hook_unapproved=not up.hook_text)
+            duplicated=up.dup, missing=up.missing, hook_unapproved=not up.hook_text,
+            hint='；'.join(todo))
 
 
 def read_current_book(ctx: RunContext) -> str:
     """Return the delivery only when every approval/freshness binding is current."""
     store = ArtifactStore(ctx)
     if not store.exists(REL):
-        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage7.rename')
+        raise UpstreamMissing(f'{REL} 不在盘上', hint='先跑 stage7.rename')
     art, _raw = store.read_own(NameMap, REL)
     up = _Upstreams(ctx, store)
     _require_mapping_current(ctx, store, art, up)
     if art.book_txt is None or not store.exists(BOOK_TXT):
-        raise UpstreamMissing(f'{BOOK_TXT} 没有当前组装账——先运行 stage7.assemble')
+        raise UpstreamMissing(f'{BOOK_TXT} 没有当前组装账', hint='先运行 stage7.assemble')
     freshness = store.freshness(BOOK_TXT)
     # ⚠ 与上面那道闸同一把尺子：交付物**证明不了当前**与**已知过期**是两条恢复路，
     #   下载端点也不许把它们说成同一句（`R-10.14`：不以「文件存在」冒充可交付）。
     if freshness.state == 'stale':
         raise UpstreamStale(
-            f'{BOOK_TXT} 已不是当前组装账那一份（{freshness.reason}），拒绝下载；'
-            '重跑 `stage7.assemble`（0 成本）')
+            f'{BOOK_TXT} 已不是当前组装账那一份（{freshness.reason}），拒绝下载',
+            hint='stage7.assemble（0 成本）')
     if freshness.state != 'fresh':
         raise UpstreamUnproven(
             f'{BOOK_TXT} 证明不了自己出自当前组装账'
-            f'（{freshness.state}/{freshness.reason}），拒绝下载；'
-            '重跑 `stage7.assemble`（0 成本）')
+            f'（{freshness.state}/{freshness.reason}），拒绝下载',
+            hint='stage7.assemble（0 成本）')
     text = store.read_text(BOOK_TXT)
     # ⚠ 同上：freshness 之外的第二把量尺（字数/章数），量的仍是「盘上这份还是不是
     #   当前组装账那一份」⇒ 同一个类，别在这里退回抽象基类。
@@ -154,7 +172,8 @@ def read_current_book(ctx: RunContext) -> str:
         raise UpstreamStale(
             f'{BOOK_TXT} 规模账与当前内容不一致：'
             f'chars={len(text)}/{art.book_txt.chars}, '
-            f'chapters={len(up.recs)}/{art.book_txt.chapters}')
+            f'chapters={len(up.recs)}/{art.book_txt.chapters}',
+            hint='stage7.assemble（0 成本，按当前映射重拼并重记账）')
     return text
 
 
@@ -171,12 +190,16 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     的那条路经 HTTP 会变成 500，把「按设计走不下去了」说成「服务器内部错误」。
     七道闸各自的类见 `_require_mapping_current` 与 `read_current_book`。
 
+    ⚠ **每一条拒绝的「下一条命令」落在 `hint`，不写回 message**：拼在一起之后，
+    「这条终态有没有出路」在消费方那边只能靠读中文去猜。CLI 由
+    `novel/cli/main.py::_print_hint` 单独打一行，HTTP 由 `ErrorBody.hint` 单独一格。
+
     ⚠ 「文案未定稿」也是四类之一，而**正因为这道闸挡在前面**，
     「成书里没有开篇文案」这一态**结构上不可达** ⇒ `book_txt.has_hook` 已按待决④ 裁掉。
     """
     store = ArtifactStore(ctx)
     if not store.exists(REL):
-        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage7.rename')
+        raise UpstreamMissing(f'{REL} 不在盘上', hint='先跑 stage7.rename')
     up = _Upstreams(ctx, store)
     art, _raw = store.read_own(NameMap, REL)
     _require_mapping_current(ctx, store, art, up)

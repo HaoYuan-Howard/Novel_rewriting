@@ -87,6 +87,18 @@ export function errorTitle(e: unknown): string {
   }
 }
 
+/**
+ * 后端给的「下一条命令」。`null` = 后端说不出来 —— **说不出来就不编一句**。
+ *
+ * 它与 `errorBody()` 是**两件事**：那条说发生了什么，这条说照着敲什么。
+ * 后端把两者分成 `ErrorBody.message` / `ErrorBody.hint` 两格正是为了这个区分
+ * ——拼在一起，「这条失败有没有出路」在界面上就不可判定，用户只能从一段中文里
+ * 自己去找那条命令。⇒ 渲染也要分开，别把它塞回正文。
+ */
+export function errorHint(e: unknown): string | null {
+  return isApiError(e) ? e.hint : null
+}
+
 export function errorBody(e: unknown): string {
   if (!isApiError(e)) {
     return e instanceof Error && e.message

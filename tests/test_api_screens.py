@@ -177,6 +177,10 @@ def test_stage7_book_endpoint_never_bypasses_the_current_delivery_gate(
     守卫**替生产伪造了一种它不该产生的失败形状**，于是它红着的其实是
     `novel/errors.py` 开头那条「不设默认异常」——不是端点漏了闸。
     ⇒ 现在逐条走 `read_current_book` **真会抛的那几个类**。
+
+    ⚠ 同时钉住 `message` / `hint` **分成两格**到达：拼在一起的话，界面只能把整段话
+    糊进正文，「这条失败有没有出路」在前端就不可判定。最后一条**刻意不带 `hint`**
+    ——「说不出下一条命令」是一个有含义的状态，那一格必须是 `null` 而不是编一句。
     """
     from novel.errors import (
         ApprovalRequired, BlockingFindingsUnresolved, GateBlocked, UpstreamMissing,
@@ -185,11 +189,15 @@ def test_stage7_book_endpoint_never_bypasses_the_current_delivery_gate(
     from novel.stages.stage7 import assemble
 
     cases = [
-        (ApprovalRequired('人物映射还没定稿'), 409, None),
-        (UpstreamStale('name_map.json 已过期'), 409, None),
-        (UpstreamUnproven('name_map.json 证明不了自己出自当前根'), 409, None),
-        (BlockingFindingsUnresolved('仍有阻断级问题', rules=['rn_ambiguous']), 409, None),
-        (GateBlocked('有一份没裁决的废稿', invalid_path='stage7/name_map.INVALID.json'),
+        (ApprovalRequired('人物映射还没定稿', hint='stage7.approve --actor <id>'),
+         409, None),
+        (UpstreamStale('name_map.json 已过期', hint='stage7.rename --recheck'), 409, None),
+        (UpstreamUnproven('name_map.json 证明不了自己出自当前根',
+                          hint='stage7.rename --recheck'), 409, None),
+        (BlockingFindingsUnresolved('仍有阻断级问题', rules=['rn_ambiguous'],
+                                    hint='stage7.rename --apply-edit <路径>'), 409, None),
+        (GateBlocked('有一份没裁决的废稿', invalid_path='stage7/name_map.INVALID.json',
+                     hint='stage7.rename --revalidate --actor <id> --reason <why>'),
          409, 'stage7/name_map.INVALID.json'),
         (UpstreamMissing('book.txt 不在盘上'), 404, None),
     ]
@@ -203,6 +211,11 @@ def test_stage7_book_endpoint_never_bypasses_the_current_delivery_gate(
         assert body['kind'] == type(exc).__name__
         # `GateBlocked` 的全部价值：那份被拦下的稿在哪，必须到得了客户端。
         assert body.get('missing') == missing, type(exc).__name__
+        # 「下一条命令」自己一格，且**不混进正文**。
+        assert body.get('hint') == exc.hint, type(exc).__name__
+        assert body['message'] == str(exc), type(exc).__name__
+    # 说不出来的那一条：`hint` 是 `null`，不是一句编出来的「试试重跑」。
+    assert body.get('hint') is None
 
 
 @pytest.mark.usefixtures('current_map')

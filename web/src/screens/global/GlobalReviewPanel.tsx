@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { errorBody } from '@/api/errors'
+import { ErrorHint } from '@/components/state/States'
 import { qk } from '@/api/queryKeys'
 import { lookupAction } from '@/constants/actions'
 import { SEV } from '@/constants/vocabulary'
@@ -310,7 +311,10 @@ export function GlobalReviewPanel({ sid }: { sid: string }) {
                 </div>
 
                 {decide.isError ? (
-                  <div className="text-body text-warn-ink" role="alert">{errorBody(decide.error)}</div>
+                  <div className="text-body text-warn-ink" role="alert">
+                    {errorBody(decide.error)}
+                    <ErrorHint error={decide.error} />
+                  </div>
                 ) : null}
                 <div className="flex items-center gap-10">
                   <span className="text-tag text-ink-4">

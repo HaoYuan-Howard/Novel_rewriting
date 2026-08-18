@@ -6,6 +6,7 @@ import { useApprovals } from '@/hooks/useApprovals'
 import { useAskJob, useChrome } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import { ActionButton } from '@/components/ui/ActionButton'
+import { ErrorHint } from '@/components/state/States'
 import { GateChip, GateMark } from '@/components/vocab/Badges'
 
 /**
@@ -113,6 +114,7 @@ export function GateBar({ screen }: { screen: ScreenName }) {
       {approve.isError ? (
         <div className="border-t border-warn-line bg-warn-bg px-20 py-10 text-body text-warn-ink">
           确认失败：{errorBody(approve.error)}
+          <ErrorHint error={approve.error} />
         </div>
       ) : null}
 

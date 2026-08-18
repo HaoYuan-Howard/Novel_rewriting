@@ -7,6 +7,7 @@ import { errorBody, isNoSample } from '@/api/errors'
 import { useSid } from '@/hooks/useRouteParams'
 import { useApprovals } from '@/hooks/useApprovals'
 import { Mono } from '@/components/ui/Mono'
+import { ErrorHint } from '@/components/state/States'
 
 const REQUIRED_GATE_BY_STAGE = {
   stage1: 's0',
@@ -97,6 +98,7 @@ export function BookLayout() {
       {backfill.isError ? (
         <div className="border-b border-warn-line bg-warn-bg px-30 py-9 text-body text-warn-ink">
           补录失败：{errorBody(backfill.error)}
+          <ErrorHint error={backfill.error} />
         </div>
       ) : null}
       <Outlet />

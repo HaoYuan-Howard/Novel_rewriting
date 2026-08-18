@@ -1157,6 +1157,19 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'mark': _cmd_mark}
 
 
+def _print_hint(exc: BaseException) -> None:
+    """把「下一条命令」单独打一行。**没有就什么都不打**。
+
+    ⚠ `hint` 与 `message` 分开落在两个字段上（见 `novel/errors.py::NovelError`），
+    CLI 这一侧必须把它打出来——否则「拆开」就等于**把恢复命令从终端输出里删掉**，
+    而终端是本仓的第一消费者（agent 执行者读的也是它）。
+    ⚠ 打成独立一行、带固定前缀：人和 agent 都是按行找那条命令的。
+    """
+    hint = getattr(exc, 'hint', None)
+    if hint:
+        print(f'  → 下一条命令：{hint}', file=sys.stderr)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """**唯一**把异常翻译成退出码的地方。取值面见 `exit_codes.py`。"""
     _force_utf8()
@@ -1167,11 +1180,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         # **不是 bug，所以不打栈**：打一段栈会让人以为程序坏了，
         # 而它说的其实是「按设计这一步走不下去」。
         print(f'\n✗ 显式终态（勿静默）：{e}', file=sys.stderr)
+        _print_hint(e)
         return X.TERMINAL_STATE
     except RefusedByStructure as e:
         # **是 bug，栈要留全。** 原型这一类是 `print` 一句然后照写，
         # 于是假账全部落了盘。
         print(f'\n✗ 结构性拒绝（这是 bug）：{e}', file=sys.stderr)
+        _print_hint(e)
         traceback.print_exc()
         return X.REFUSED_BY_STRUCTURE
     except Exception as e:

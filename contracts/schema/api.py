@@ -1549,4 +1549,8 @@ class ErrorBody(StrictModel):
     missing: str | None = None
 
     #: 下一步该做什么。`None` = 说不出来——**说不出来就别编一句**。
+    #: 产地是异常自己的 `NovelError.hint`（`novel/api/app.py` 一处 `getattr` 转过来），
+    #: **不在这一层从 `message` 里抠**：措辞不是契约（`Q-6`）。
+    #: ⚠ 它与 `message` 分成两格正是为了让「这条失败有没有出路」**可判定**——
+    #: 拼成一句之后，界面只能把整段话糊进正文，而人得自己从中文里找那条命令。
     hint: str | None = None

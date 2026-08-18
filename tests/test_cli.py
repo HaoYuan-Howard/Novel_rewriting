@@ -321,6 +321,36 @@ def test_an_uncaught_exception_exits_seventy_with_a_stack(monkeypatch, capsys):
     assert '70' in err and 'Traceback' in err, '崩溃要报数字本身，栈要留全'
 
 
+def test_a_terminal_state_prints_its_next_command_on_its_own_line(monkeypatch, capsys):
+    """⭐ 「一句人话」与「下一条命令」分成两格之后，**终端这一侧必须把第二格打出来**。
+
+    ⚠ 不打就等于「拆开」= 把恢复命令从终端输出里删掉——而终端是本仓的第一消费者
+    （agent 执行者读的也是它）。⇒ 独立一行、固定前缀，人和 agent 都按行找那条命令。
+    ⚠ 反方向同样要钉：**没有 `hint` 时一个字都不打**。画一行空的「下一条命令：」
+    等于告诉人「这里本来有条出路」，而 `hint=None` 说的恰恰是「说不出来」。
+    """
+    from novel.errors import UpstreamMissing
+    from novel.cli import main as M
+
+    def with_hint(_a):
+        raise UpstreamMissing('stage7/name_map.json 不在盘上', hint='先跑 stage7.rename')
+
+    monkeypatch.setitem(M._CMDS, 'state', with_hint)
+    assert _run('state', 'whatever', '--base', 'x') == X.TERMINAL_STATE
+    err = capsys.readouterr().err
+    assert '下一条命令：先跑 stage7.rename' in err
+    # 分行，不是拼进那句人话里。
+    assert '不在盘上' in err.splitlines()[1] and '下一条命令' not in err.splitlines()[1]
+    assert 'Traceback' not in err
+
+    def without_hint(_a):
+        raise UpstreamMissing('stage7/name_map.json 不在盘上')
+
+    monkeypatch.setitem(M._CMDS, 'state', without_hint)
+    assert _run('state', 'whatever', '--base', 'x') == X.TERMINAL_STATE
+    assert '下一条命令' not in capsys.readouterr().err
+
+
 def test_context_budget_refusal_exits_two_without_a_stack_and_keeps_the_action(monkeypatch,
                                                                                capsys):
     from novel.errors import ContextBudgetRefused

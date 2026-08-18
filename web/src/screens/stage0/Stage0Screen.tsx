@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '@/api/endpoints'
 import { errorBody } from '@/api/errors'
+import { ErrorHint } from '@/components/state/States'
 import { qk } from '@/api/queryKeys'
 import { lookupAction } from '@/constants/actions'
 import { useChrome } from '@/hooks/useChrome'
@@ -317,6 +318,7 @@ export function Stage0Screen() {
                       {decideMerge.isError ? (
                         <div className="rounded-btn border border-warn-line bg-warn-bg px-12 py-9 text-body text-warn-ink">
                           {errorBody(decideMerge.error)}
+                          <ErrorHint error={decideMerge.error} />
                         </div>
                       ) : null}
                       <div className="flex justify-end gap-8">
@@ -423,6 +425,7 @@ export function Stage0Screen() {
                         <div className={'text-body font-semibold text-warn'}>没有进入 Stage 1</div>
                         <div className={'prose-cn mt-5 text-body text-ink-2'}>
                           {errorBody(run.error)}
+                          <ErrorHint error={run.error} />
                         </div>
                         <div className={'mt-4 text-tag text-ink-4'}>
                           作业抽屉已展开，可查看子进程日志。

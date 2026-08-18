@@ -3,6 +3,7 @@ import { errorBody } from '@/api/errors'
 import { useAgentQueue, useStartAgentBatch } from '@/hooks/useAgentRuns'
 import { SCRIM } from '@/constants/vocabulary'
 import { Mono } from '@/components/ui/Mono'
+import { ErrorHint } from '@/components/state/States'
 import { cx } from '@/lib/cx'
 import type { AgentQueueView } from '@/types/agent'
 
@@ -120,6 +121,7 @@ export function AgentBatchDialog({
             {batch.isError ? (
               <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
                 {errorBody(batch.error)}
+                <ErrorHint error={batch.error} />
               </div>
             ) : null}
           </div>

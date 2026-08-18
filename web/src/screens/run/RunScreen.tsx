@@ -16,6 +16,7 @@ import {
   type ScreenName,
 } from '@/constants/vocabulary'
 import { errorBody } from '@/api/errors'
+import { ErrorHint } from '@/components/state/States'
 import type { RunBeacon, RunEvent } from '@/types/run'
 import { CHECK_KINDS, type CheckReport } from '@/types/stages'
 import { useRunProgress } from '@/hooks/useRunProgress'
@@ -192,6 +193,7 @@ function AgentRunBlock() {
           {stop.isError ? (
             <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
               {errorBody(stop.error)}
+              <ErrorHint error={stop.error} />
             </div>
           ) : null}
         </div>

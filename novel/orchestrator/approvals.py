@@ -307,10 +307,10 @@ def _require_fresh_json(store: ArtifactStore, rel: str) -> str:
     # whole point of `invalid_path` — never reaches the report.
     if invalid.is_file():
         raise GateBlocked(
-            f'{rel} has an unadjudicated INVALID sibling; an approval cannot bind '
-            f'to it.  Promote it with the producing node\'s `--revalidate --actor '
-            f'<id> --reason <why>`, or fix it with `--apply-edit` (both cost nothing)',
-            invalid_path=str(invalid))
+            f'{rel} has an unadjudicated INVALID sibling; an approval cannot bind to it',
+            invalid_path=str(invalid),
+            hint=f'<producing node> --revalidate --actor <id> --reason <why>, or '
+                 f'--apply-edit to fix {rel} first (both cost nothing)')
     if not path.is_file():
         raise UpstreamMissing(f'{rel} is required before approval')
     spec = artifact_spec(rel)
@@ -350,10 +350,10 @@ def _require_current_text(novel_dir: Path, rel: str) -> str:
     # state, not a missing signature.  See that function for the reasoning.
     if invalid.is_file():
         raise GateBlocked(
-            f'{rel} has an unadjudicated INVALID sibling; an approval cannot bind '
-            f'to it.  Promote it with the producing node\'s `--revalidate --actor '
-            f'<id> --reason <why>`, or fix it with `--apply-edit` (both cost nothing)',
-            invalid_path=str(invalid))
+            f'{rel} has an unadjudicated INVALID sibling; an approval cannot bind to it',
+            invalid_path=str(invalid),
+            hint=f'<producing node> --revalidate --actor <id> --reason <why>, or '
+                 f'--apply-edit to fix {rel} first (both cost nothing)')
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
@@ -621,10 +621,10 @@ def _require_stage5_complete(
     if blocked:
         raise GateBlocked(
             f'stage5 still has blocked INVALID chapter drafts: {blocked}; an '
-            f'approval cannot bind to them.  Promote them with `stage5.write '
-            f'--mode <arm> --revalidate --actor <id> --reason <why>`, or fix them '
-            f'with `--apply-edit` (both cost nothing)',
-            invalid_path=str(novel_dir / 'stage5'))
+            f'approval cannot bind to them',
+            invalid_path=str(novel_dir / 'stage5'),
+            hint='stage5.write --mode <arm> --revalidate --actor <id> --reason <why>, '
+                 'or --apply-edit to fix those chapters first (both cost nothing)')
 
 
 def approve_gate(base: str | os.PathLike[str], sid: str, gate: str) -> ApprovalDoc:

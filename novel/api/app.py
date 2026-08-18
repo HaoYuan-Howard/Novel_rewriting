@@ -181,10 +181,17 @@ def create_app(base: str | os.PathLike[str],
         而一个默认的 500 会把前者藏成后者。
         ⚠ 5xx 的响应体里**只出类名与一句人话，不出栈**——那份正文是不外流的
         版权内容，而栈里可能带着它（`R-11.1` 第四条理由）。
+
+        ⚠ **`message` 与 `hint` 分成两格转过去，不在这里拼**：`message` 说发生了什么，
+        `hint` 说下一条命令（`novel/errors.py::NovelError`）。拼在一起，界面就只能
+        把整段话糊进正文，「这条终态有没有出路」在前端**不可判定**。
+        两格都走 `getattr`：没有那个属性、或属性是 `None`，就是「说不出来」——
+        **说不出来就别编一句**，这一格保持空。
         """
         code = status_of(exc)
         body = ErrorBody(kind=type(exc).__name__, message=str(exc) or type(exc).__name__,
-                         missing=getattr(exc, 'invalid_path', None))
+                         missing=getattr(exc, 'invalid_path', None),
+                         hint=getattr(exc, 'hint', None))
         return JSONResponse(status_code=code, content=body.model_dump(mode='json'))
 
     @app.exception_handler(HTTPException)

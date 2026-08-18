@@ -60,13 +60,16 @@ def test_an_unadjudicated_invalid_blocks_delivery_and_says_where_the_draft_is():
     此刻批不了它：出路是闸门自己的 0 成本提升/编辑路。而这条终态的全部价值在
     `invalid_path`——报告说不出那份稿在哪，人就会以为要重跑（那是一次真金白银）。
     ⚠ 它排在「还没定稿」之前：本用例故意让两个条件同时成立来钉这个顺序。
+    ⚠ **下一条命令在 `hint`，不在 message**：断言两个方向都查，否则有人把命令拼回
+    正文时这条照样绿——而「这条终态有没有出路」就又变回不可判定的了。
     """
     art = SimpleNamespace(approved=None, book=[])
     with pytest.raises(GateBlocked) as blocked:
         assemble._require_mapping_current(
             SimpleNamespace(), _Store(invalid=True), art, _upstreams())
     assert blocked.value.invalid_path.endswith('name_map.INVALID.json')
-    assert '--revalidate' in str(blocked.value)
+    assert '--revalidate' in (blocked.value.hint or '')
+    assert '--revalidate' not in str(blocked.value)
 
 
 def test_assembly_refuses_an_unapproved_map_before_any_other_gate():

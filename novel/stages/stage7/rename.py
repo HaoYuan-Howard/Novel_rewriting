@@ -679,9 +679,10 @@ def run_adopt_residual(
     blocking = _blocking_rules(outcomes)
     if blocking:
         raise BlockingFindingsUnresolved(
-            f'采纳 residual 后产生阻断级问题（{blocking}），正式人物表与交付物均未改动。'
-            f'先把这些判据消掉（`--apply-edit` 改一行 / `--recheck` 按当前判据重判，都 0 成本）',
-            rules=blocking)
+            f'采纳 residual 后产生阻断级问题（{blocking}），正式人物表与交付物均未改动',
+            rules=blocking,
+            hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
+                 '或 stage7.rename --recheck 按当前判据重判（都 0 成本）')
     with store.history_transaction(REL, BOOK_TXT):
         store.write_round(REL, rebuilt)
         _retire_book_txt(store)
@@ -698,6 +699,8 @@ def run_revalidate(
     """
     store = ArtifactStore(ctx)
     if not store.exists(_INVALID):
+        # ⚠ **刻意不给 `hint`**：没有废稿要提升时，下一步取决于人本来想干什么
+        #   （重跑？换个节点？），我们说不出来。**说不出来就别编一句。**
         raise UpstreamMissing(f'{_INVALID} 不在盘上——没有被拦下的问题稿要提升')
     up = _Upstreams(ctx, store)
     art = store.read_own(NameMap, _INVALID)[0]
@@ -762,11 +765,11 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
     if blocking:
         p = store.write_invalid(REL, art, gates_skipped=[])
         raise GateBlocked(
-            f'这份映射表有阻断级问题（{blocking}）——不该拿它去替换正文。'
-            f'问题稿在 {p}：人改一行后走 `--apply-edit <name_map_edit.json 路径>`，'
-            f'或直接跑 `stage7.rename --revalidate --actor <id> --reason <why>`'
-            f'（0 LLM、同轮重判并留不可变审计）',
-            invalid_path=str(p))
+            f'这份映射表有阻断级问题（{blocking}）——不该拿它去替换正文。问题稿在 {p}',
+            invalid_path=str(p),
+            hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
+                 '或 stage7.rename --revalidate --actor <id> --reason <why>'
+                 '（0 LLM、同轮重判并留不可变审计）')
     with store.history_transaction(REL, BOOK_TXT):
         _retire_book_txt(store)
         store.write(REL, art)
@@ -805,10 +808,10 @@ def run_approve(
     hard = stored_blocking_rules(art)
     if hard:
         raise BlockingFindingsUnresolved(
-            f'还有 {len(hard)} 条阻断级问题没消（{hard}），不该定稿——'
-            f'人改一行走 `--apply-edit <name_map_edit.json 路径>`，'
-            f'或按当前判据重判 `--recheck`（都 0 成本）',
-            rules=hard)
+            f'还有 {len(hard)} 条阻断级问题没消（{hard}），不该定稿',
+            rules=hard,
+            hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
+                 '或 stage7.rename --recheck 按当前判据重判（都 0 成本）')
 
     # Existing repositories may contain a pre-fix book assembled before this
     # approval.  Approval never blesses that old byte product retroactively.

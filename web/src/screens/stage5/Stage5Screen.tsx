@@ -8,7 +8,7 @@ import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { ComparePanes, PaneScroll } from '@/components/compare/ComparePanes'
 import { CompareRows } from '@/components/compare/CompareRows'
 import { QueryStates } from '@/components/state/QueryStates'
-import { LoadFailed, NotRunYet } from '@/components/state/States'
+import { ErrorHint, LoadFailed, NotRunYet } from '@/components/state/States'
 import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
 import { ChapterGrid } from '@/components/ui/ChapterGrid'
 import { ChapterStrip } from '@/components/ui/ChapterStrip'
@@ -352,6 +352,7 @@ export function Stage5Screen() {
                             {vm.save.isError ? (
                               <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
                                 保存失败：{errorBody(vm.save.error)}
+                                <ErrorHint error={vm.save.error} />
                               </div>
                             ) : null}
                             {vm.save.data?.state === 'failed' ? (

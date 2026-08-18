@@ -6,6 +6,7 @@ import { errorBody, isApiError } from '@/api/errors'
 import { useStartAgentRun } from '@/hooks/useAgentRuns'
 import { SCRIM } from '@/constants/vocabulary'
 import { Mono } from '@/components/ui/Mono'
+import { ErrorHint } from '@/components/state/States'
 import { LinkButton } from '@/components/ui/ActionButton'
 import { cx } from '@/lib/cx'
 
@@ -133,9 +134,14 @@ export function AgentRunDialog({
 
           {start.isError ? (
             <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
-              {conflict
-                ? '已经有一个代跑在跑（服务端 409：一次只跑一个）。等它跑完，或去进度屏把它熄火。'
-                : errorBody(start.error)}
+              {conflict ? (
+                '已经有一个代跑在跑（服务端 409：一次只跑一个）。等它跑完，或去进度屏把它熄火。'
+              ) : (
+                <>
+                  {errorBody(start.error)}
+                  <ErrorHint error={start.error} />
+                </>
+              )}
             </div>
           ) : null}
         </div>

@@ -29,7 +29,29 @@ from collections.abc import Sequence
 
 
 class NovelError(Exception):
-    """本运行时抛出的一切的基类。**不直接抛它**，见模块 docstring 末尾那条。"""
+    """本运行时抛出的一切的基类。**不直接抛它**，见模块 docstring 末尾那条。
+
+    【`message` 与 `hint` 是两件事，落在两个字段上】
+      · `message` —— **发生了什么**（一句人话）。
+      · `hint`    —— **下一条命令**（人照着敲就能解开这条终态的那一句）。
+
+    ⚠ 此前两者是拼在一个字符串里的，于是**「有没有出路」这件事不可判定**：
+    调用方拿到的是一段中文，只能靠读它去猜里面有没有藏一条命令。CLI 那一侧看不出
+    差别（都打在一行上），HTTP 这一侧就露馅了——`ErrorBody` 早就有 `hint` 这一格、
+    前端也一路解析进 `ApiError.hint`，而**后端只有 CSRF 那一处在填**，
+    于是界面永远只能把整段话糊在正文里。
+
+    ⚠ `hint=None` 是**有含义的**，不是「忘了写」：它说的是「说不出下一条命令」。
+    `ErrorBody.hint` 的原话就是这条——**说不出来就别编一句**。
+    一条编出来的「试试重跑」比没有更坏：人会照着做，然后再花一次钱。
+
+    ⚠ 它不动「不设默认异常」那条：`hint` 是**载荷**，类才是身份。
+    别拿「反正 hint 说得清」当借口去抛一个笼统的类（`Q-6`）。
+    """
+
+    def __init__(self, message: str, *, hint: str | None = None) -> None:
+        super().__init__(message)
+        self.hint = hint
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,8 +82,9 @@ class ContextBudgetRefused(TerminalState):
                  max_tokens: int | None = None,
                  context_limit: int | None = None,
                  max_output_tokens: int | None = None,
-                 tokenizer_revision: str | None = None) -> None:
-        super().__init__(message)
+                 tokenizer_revision: str | None = None,
+                 hint: str | None = None) -> None:
+        super().__init__(message, hint=hint)
         self.model = model
         self.input_tokens = input_tokens
         self.max_tokens = max_tokens
@@ -143,8 +166,9 @@ class GateBlocked(TerminalState):
     后者盘上没有 `.INVALID` 可指 ⇒ 走 `BlockingFindingsUnresolved`。
     """
 
-    def __init__(self, message: str, *, invalid_path: str) -> None:
-        super().__init__(message)
+    def __init__(self, message: str, *, invalid_path: str,
+                 hint: str | None = None) -> None:
+        super().__init__(message, hint=hint)
         self.invalid_path = invalid_path
 
 
@@ -166,8 +190,9 @@ class BlockingFindingsUnresolved(TerminalState):
     也不是重建上游（那是 `UpstreamStale` / `UpstreamUnproven`）。
     """
 
-    def __init__(self, message: str, *, rules: Sequence[str]) -> None:
-        super().__init__(message)
+    def __init__(self, message: str, *, rules: Sequence[str],
+                 hint: str | None = None) -> None:
+        super().__init__(message, hint=hint)
         self.rules = tuple(rules)
 
 
@@ -210,8 +235,9 @@ class DeliveryIncomplete(TerminalState):
     requirement = 'R-10.14'
 
     def __init__(self, message: str, *, duplicated: Sequence[int],
-                 missing: Sequence[int], hook_unapproved: bool) -> None:
-        super().__init__(message)
+                 missing: Sequence[int], hook_unapproved: bool,
+                 hint: str | None = None) -> None:
+        super().__init__(message, hint=hint)
         self.duplicated = tuple(duplicated)
         self.missing = tuple(missing)
         self.hook_unapproved = hook_unapproved

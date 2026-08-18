@@ -7,7 +7,7 @@ import { qk } from '@/api/queryKeys'
 import { Mono } from '@/components/ui/Mono'
 import { LinkButton } from '@/components/ui/ActionButton'
 import { QueryStates } from '@/components/state/QueryStates'
-import { NotRunYet } from '@/components/state/States'
+import { ErrorHint, NotRunYet } from '@/components/state/States'
 import { FreshnessBadge, FreshnessDot, FreshnessTag } from '@/components/vocab/Freshness'
 import { CHAPTERED_SCREENS, SPEND_INK } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
@@ -231,7 +231,12 @@ export function CorpusScreen() {
             </div>
             {fileError || upload.isError ? (
               <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
-                {fileError ?? errorBody(upload.error)}
+                {fileError ?? (
+                  <>
+                    {errorBody(upload.error)}
+                    <ErrorHint error={upload.error} />
+                  </>
+                )}
               </div>
             ) : null}
           </div>

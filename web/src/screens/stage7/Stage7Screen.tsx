@@ -13,7 +13,7 @@ import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
 import { CompareRows } from '@/components/compare/CompareRows'
 import { QueryStates } from '@/components/state/QueryStates'
-import { HatchNote, LoadFailed } from '@/components/state/States'
+import { ErrorHint, HatchNote, LoadFailed } from '@/components/state/States'
 import { ActionButton } from '@/components/ui/ActionButton'
 import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { ChapterStrip } from '@/components/ui/ChapterStrip'
@@ -191,6 +191,7 @@ export function Stage7Screen() {
               {approve.isError ? (
                 <div className="rounded-card border border-warn-line bg-warn-bg px-18 py-12 text-body text-warn-ink">
                   定稿失败：{errorBody(approve.error)}
+                  <ErrorHint error={approve.error} />
                 </div>
               ) : null}
 
@@ -260,6 +261,7 @@ export function Stage7Screen() {
                 {adoptResidual.isError ? (
                   <div className="border-b border-warn-line bg-warn-bg px-18 py-10 text-body text-warn-ink">
                     采纳失败：{errorBody(adoptResidual.error)}
+                    <ErrorHint error={adoptResidual.error} />
                   </div>
                 ) : null}
                 {d.residual.length ? (

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { errorBody } from '@/api/errors'
+import { ErrorHint } from '@/components/state/States'
 import { chNo } from '@/constants/vocabulary'
 import { lookupAction } from '@/constants/actions'
 import { useApprovals } from '@/hooks/useApprovals'
@@ -137,6 +138,7 @@ export function DepthScreen() {
                 {setDeep.isError ? (
                   <span className="rounded-block border border-warn-line bg-warn-bg px-10 py-6 text-tag text-warn-ink">
                     保存失败：{errorBody(setDeep.error)}
+                    <ErrorHint error={setDeep.error} />
                   </span>
                 ) : null}
               </div>

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { errorBody, errorTitle, isApiError } from '@/api/errors'
+import { errorBody, errorHint, errorTitle, isApiError } from '@/api/errors'
 import { FRESH, GATE, SEV } from '@/constants/vocabulary'
 import { cx } from '@/lib/cx'
 import { LinkButton } from '@/components/ui/ActionButton'
@@ -25,6 +25,27 @@ export function LoadingPane({ label = '取数中', rows = 3 }: { label?: string;
         />
       ))}
     </div>
+  )
+}
+
+/**
+ * 「下一条命令」单独一行。**没有就什么都不画**——不占位、不写「暂无」。
+ *
+ * ⚠ 它与错误正文分开渲染，因为后端本来就分成两格给（`ErrorBody.message` / `.hint`）。
+ * 糊回正文里，用户就得从一段中文里自己找那条命令，而「这条失败到底有没有出路」
+ * 也就变回不可判定的了。
+ * ⚠ 每一处渲染 `errorBody()` 的地方都要带上它，否则后端给了出路而界面把它吞掉——
+ * 那比不给更坏：人会以为只能干等。
+ */
+export function ErrorHint({ error }: { error: unknown }) {
+  const hint = errorHint(error)
+  if (!hint) return null
+  // ⚠ 外层用 `span.block` 而不是 `div`：几处调用点的容器本身是 `<span>`
+  //（DepthScreen 那条就是），`div` 塞进 `span` 是非法嵌套。
+  return (
+    <span className="mt-6 block text-tag text-ink-3">
+      下一条命令：<span className="font-mono break-all select-all">{hint}</span>
+    </span>
   )
 }
 
@@ -58,7 +79,10 @@ export function LoadFailed({
           {status}
         </span>
       </div>
-      <div className="prose-cn max-w-[46em] text-body text-ink-2">{errorBody(error)}</div>
+      <div className="prose-cn max-w-[46em] text-body text-ink-2">
+        {errorBody(error)}
+        <ErrorHint error={error} />
+      </div>
       {onRetry ? <LinkButton onClick={onRetry}>重试</LinkButton> : null}
     </div>
   )

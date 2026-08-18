@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { errorBody } from '@/api/errors'
+import { ErrorHint } from '@/components/state/States'
 import { FRESH, SEV } from '@/constants/vocabulary'
 import { useChrome } from '@/hooks/useChrome'
 import { useSid } from '@/hooks/useRouteParams'
@@ -131,6 +132,7 @@ export function Stage6Screen() {
               {approve.isError ? (
                 <div className="rounded-card border border-warn-line bg-warn-bg px-18 py-12 text-body text-warn-ink">
                   定稿失败：{errorBody(approve.error)}
+                  <ErrorHint error={approve.error} />
                 </div>
               ) : null}
 

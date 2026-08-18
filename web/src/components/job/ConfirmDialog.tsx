@@ -6,6 +6,7 @@ import { qk } from '@/api/queryKeys'
 import { useChrome } from '@/hooks/useChrome'
 import { useJobs, useStartJob } from '@/hooks/useJobs'
 import { SCRIM } from '@/constants/vocabulary'
+import { ErrorHint } from '@/components/state/States'
 import { cx } from '@/lib/cx'
 
 /**
@@ -271,6 +272,7 @@ export function ConfirmDialog() {
             >
               <div className="font-semibold">没有发起 —— {errorTitle(failure)}</div>
               <div className="prose-cn mt-3">{errorBody(failure)}</div>
+              <ErrorHint error={failure} />
               <div className="mt-3 text-tag">
                 这一步没有执行，也没有产生费用。先按上面的原因处理，再重新发起。
               </div>
