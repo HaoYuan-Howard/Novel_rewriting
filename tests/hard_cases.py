@@ -33,59 +33,12 @@ def _hook(text: str, *, src_hook: str | None = None, characters: dict | None = N
         quote_problems=[])
 
 
-def _hook_semantic_contradiction() -> list:
-    """经 `semantic.outcomes` 的真实裁决物化路径（latest_semantic 临时替身，跑完复原）。"""
-    from novel.stages.stage6 import semantic
-
-    text = '她嫁进将军府那晚，就发现枕头下压着一封没有署名的信。'
-    from contracts.schema.stage6 import HookCandidateReview
-    art = SimpleNamespace(
-        candidates=[SimpleNamespace(approach='source_architecture', text=text)],
-        approved=None)
-    review = HookCandidateReview.model_validate({
-        'label': 'source_architecture',
-        'coverage': 'complete',
-        'uncertainty_reason': None,
-        'contradictions': [{
-            'assertion': '她与将军成婚',
-            'evidence': '她嫁进将军府',
-            'reason': '全书设定中两人并非婚姻关系',
-        }],
-        'quality': {
-            'read_on_desire': 8, 'body_voice_match': 8,
-            'concrete_scene_and_specificity': 8,
-            'curiosity_and_payoff_promise': 8, 'hook_craft': 8,
-            'synopsis_penalty': 1,
-        },
-        'concise_reason': '场面具体，但关系写反。',
-        'text_sha1': semantic.text_sha1(text),
-    })
-    subject = semantic.text_sha256(text)
-    decision = SimpleNamespace(
-        subject_key=subject,
-        automated=True,
-        verdict='FAIL',
-        reason='两名盲评一致判定关系矛盾',
-    )
-    fake = SimpleNamespace(
-        reviews=[review],
-        decisions=[decision],
-        ranking=['source_architecture'],
-    )
-    store = SimpleNamespace(freshness=lambda _rel: SimpleNamespace(state='fresh'))
-    original = semantic.latest_semantic
-    original_status = semantic._calibration_status
-    original_seqs = semantic.semantic_seqs
-    semantic.latest_semantic = lambda _s: (1, fake)
-    semantic._calibration_status = lambda _artifact: (True, '')
-    semantic.semantic_seqs = lambda _store: [1]
-    try:
-        outcomes = semantic.outcomes(store, art)
-    finally:
-        semantic.latest_semantic = original
-        semantic._calibration_status = original_status
-        semantic.semantic_seqs = original_seqs
-    return [f for o in outcomes for f in o.findings]
+# ⚠⚠ 这里曾有 `_hook_semantic_contradiction()`——它靠猴补 `semantic._calibration_status`
+#     返回 `(True, '')` 再手搓一个 `automated=True, verdict='FAIL'` 的假 decision，
+#     才造得出 `contradiction` 状态。自动放行门下线后那两件东西都不存在了，而该判据
+#     已由 HARD 降为 `unver`（见 `contracts/judges/stage6.py`），因此不再需要反例。
+#     ⚠ 如果哪天它被改回 HARD，`tests/test_hard_counterexamples.py` 会当场报缺反例——
+#     **那时不要再靠猴补造样本**：造不出来正说明那条路在产品里已经不可达。
 
 
 _SRC_HOOK = '她推开门，看见满地的信纸，和一段没有寄出的往事，写满了整面墙壁。'
@@ -267,7 +220,6 @@ CASES: dict[str, Case] = {
     'hook_para_sep': Case('stage6', lambda: _hook(
         '第一段落的文字要足够长一点。\n第二段落的文字也足够长一点。',
         src_hook='第一段。\n\n第二段。')),
-    'hook_semantic_contradiction': Case('stage6', _hook_semantic_contradiction),
 
     # ── stage7（15 HARD）──────────────────────────────────────────────────
     'rn_llm_shape': Case('stage7', lambda: _rename(registry={'c1': {}})),

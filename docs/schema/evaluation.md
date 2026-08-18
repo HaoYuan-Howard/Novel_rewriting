@@ -17,9 +17,12 @@
 >
 > 恢复需要的东西全在 git 里：`EVALUATOR_ABILITIES` 八元组、`GroundTruthCase` /
 > `GroundTruthManifest` / `CapabilityMetrics` / `EvaluatorProfile`、
-> `novel/quality/profile.py`、`tools/build_ground_truth_catalog.py`、
-> `tools/ground_truth_workflow.py`、`tools/restricted_evaluator.py`、
-> `tools/build_evaluator_profile.py`，以及本文件此前的四节工作流说明。
+> `novel.quality.profile`、`tools.build_ground_truth_catalog`、
+> `tools.ground_truth_workflow`、`tools.restricted_evaluator`、
+> `tools.build_evaluator_profile`，以及本文件此前的四节工作流说明。
+> ⚠ 这一段刻意用**点号模块名**而不是仓内路径：反引号里的仓内路径受
+> `tests/test_docs_references.py` 保护，指着已删文件会红——而「记下删了什么」
+> 与「指向一个还在的文件」是两件事。
 > 恢复它等于重新承诺去做那场标定战役，别为了「让某个徽章转绿」而恢复。
 
 ---

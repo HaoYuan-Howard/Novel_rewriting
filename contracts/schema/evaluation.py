@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Versioned contracts for calibrated semantic evaluation.
+"""语义评测与 Stage2 全局复核的契约。
 
-The evaluator is deliberately fail-closed.  A model verdict is evidence only
-when the profile is enabled *and* every fingerprint still matches the run.
-Human labels and source excerpts live outside the repository; committed
-manifests contain identities, counts, hashes, and adjudicated labels only.
+⚠⚠ **本仓没有自动放行门。** 这里曾有 `GroundTruthCase` / `GroundTruthManifest` /
+`CapabilityMetrics` / `EvaluatorProfile` 与八类能力 `EVALUATOR_ABILITIES`，服务的是
+「双人独立标注 + 第三方仲裁 + 三轮 A/B 校准 ⇒ 允许 judge 自动 PASS/FAIL」那条路。
+它从未被标定过，那条分支一次都没走通过，现已整批下线（人读版见
+`docs/schema/evaluation.md` 顶部那段「删了什么 · 怎么恢复」）。
+
+留下来的是判官不是闸门：`JudgeDecision` 保留三态（那正是要留的证据），而合并的
+`SemanticDecision.verdict` 在**类型上**收成 `Literal['UNVER']`。选类型不选校验器，是因为
+本仓偏好让非法态不可表达而不是校验掉；一条永远不可能被触发的校验器会绿一辈子，
+而没人知道它到底还在不在。
 """
 from __future__ import annotations
 
@@ -18,18 +24,16 @@ from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance
 
 
-EVALUATOR_ABILITIES = (
-    'event_order',
-    'verbatim_fidelity',
-    'hard_number_fidelity',
-    'reference_boundary',
-    'secret_timeline',
-    'world_rule_consistency',
-    'trim_equivalence',
-    'style_transfer',
-)
+#: 现役唯一一类语义能力。这里曾是八元组（`event_order` / `verbatim_fidelity` /
+#: `hard_number_fidelity` / `secret_timeline` / `world_rule_consistency` /
+#: `trim_equivalence` / `style_transfer`），随标定装置一起下线——留 7 个没有生产者的取值，
+#: 就是让退役的描述以现役身份被引用。
+#:
+#: ⚠ 字段本身不能删：`ability` 是产物里**唯一**说得出「这两名判官被问的是什么问题」的一格。
+#: 单值 `Literal` 是**取值面**不是**入口**，本仓已有同形先例——`TrimResolution.action`。
+Ability = Literal['reference_boundary']
 
-Ability = Literal[EVALUATOR_ABILITIES]
+#: 逐判官的三态。⚠ 它**不**服务合并决议：`SemanticDecision.verdict` 恒 `UNVER`。
 SemanticVerdict = Literal['PASS', 'FAIL', 'UNVER']
 
 
@@ -50,127 +54,17 @@ class EvidenceRef(StrictModel):
         return self
 
 
-class GroundTruthCase(StrictModel):
-    case_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_.-]{7,127}$')
-    ability: Ability
-    genre: str = Field(min_length=1)
-    expected: Literal['PASS', 'FAIL']
-    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    evidence: list[EvidenceRef] = Field(min_length=1)
-
-
-class GroundTruthManifest(StrictModel):
-    """The public, text-free identity of a private labelled dataset."""
-
-    manifest_version: int = Field(ge=1)
-    dataset_id: str = Field(min_length=1)
-    dataset_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    rubric_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    created_at: str = Field(min_length=1)
-    annotators: int = Field(ge=2)
-    adjudicator: str = Field(min_length=1)
-    agreement: float = Field(ge=0.0, le=1.0)
-    cases: list[GroundTruthCase] = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _held_out_floor(self) -> 'GroundTruthManifest':
-        ids = [case.case_id for case in self.cases]
-        if len(ids) != len(set(ids)):
-            raise ValueError('ground-truth case_id must be unique')
-        if self.agreement < 0.8:
-            raise ValueError('inter-annotator agreement < 0.8; revise rubric and relabel')
-        # Calibration is capability-scoped.  A manifest registers an ability
-        # by actually containing cases for it; unregistered abilities remain
-        # explicit disabled n=0 rows in the published profile instead of
-        # forcing unrelated annotation work up front.
-        registered = sorted({case.ability for case in self.cases})
-        for ability in registered:
-            rows = [case for case in self.cases if case.ability == ability]
-            passed = [case for case in rows if case.expected == 'PASS']
-            failed = [case for case in rows if case.expected == 'FAIL']
-            if len(rows) < 100 or len(passed) < 40 or len(failed) < 40:
-                raise ValueError(
-                    f'{ability}: need >=100 held-out cases with PASS/FAIL each >=40')
-            for label, group in (('PASS', passed), ('FAIL', failed)):
-                genres: dict[str, int] = {}
-                for case in group:
-                    genres[case.genre] = genres.get(case.genre, 0) + 1
-                if sum(count >= 10 for count in genres.values()) < 4:
-                    raise ValueError(
-                        f'{ability}/{label}: need >=4 genres represented by >=10 cases each')
-        return self
-
-
 class EvaluatorFingerprint(StrictModel):
-    dataset_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    """这一次判官调用的确切请求面身份。
+
+    ⚠ 曾有第五格 `dataset_sha256`。ground truth 没有了之后它只能是一个恒定哨兵，而一个
+    哨兵**看起来像一个 dataset 身份、其实不是**——那正是「把不同状态压成同一个值」。
+    """
+
     model: str = Field(min_length=1)
     prompt_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     schema_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     decoder_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-
-
-class CapabilityMetrics(StrictModel):
-    ability: Ability
-    #: Prompt/schema/decoder surfaces differ by ability.  Keeping this binding
-    #: on the capability row prevents one global fingerprint from pretending
-    #: to describe eight incompatible judge protocols.
-    fingerprint: EvaluatorFingerprint
-    #: Registered abilities have the held-out floor (>=100).  An ability that
-    #: is absent from the manifest remains visible as disabled with n=0.
-    n: int = Field(ge=0)
-    pass_precision_wilson95_lower: float = Field(ge=0.0, le=1.0)
-    fail_precision_wilson95_lower: float = Field(ge=0.0, le=1.0)
-    violation_recall_wilson95_lower: float = Field(ge=0.0, le=1.0)
-    evidence_closure: float = Field(ge=0.0, le=1.0)
-    rerun_consistency: float = Field(ge=0.0, le=1.0)
-    enabled: bool
-
-    def threshold_passed(self) -> bool:
-        return (
-            self.n >= 100
-            and self.pass_precision_wilson95_lower >= 0.90
-            and self.fail_precision_wilson95_lower >= 0.90
-            and self.violation_recall_wilson95_lower >= 0.90
-            and self.evidence_closure >= 0.95
-            and self.rerun_consistency >= 0.95
-        )
-
-    @model_validator(mode='after')
-    def _enabled_only_after_fixed_thresholds(self) -> 'CapabilityMetrics':
-        if 0 < self.n < 100:
-            raise ValueError(f'{self.ability}: n must be 0 or >=100')
-        if self.n == 0:
-            observed = (
-                self.pass_precision_wilson95_lower,
-                self.fail_precision_wilson95_lower,
-                self.violation_recall_wilson95_lower,
-                self.evidence_closure,
-                self.rerun_consistency,
-            )
-            if self.enabled or any(value != 0.0 for value in observed):
-                raise ValueError(
-                    f'{self.ability}: missing capability must be disabled with n=0 metrics')
-        if self.enabled and not self.threshold_passed():
-            raise ValueError(f'{self.ability}: enabled despite failing fixed activation thresholds')
-        return self
-
-
-class EvaluatorProfile(StrictModel):
-    profile_version: int = Field(ge=1)
-    profile_id: str = Field(min_length=1)
-    calibrated_at: str = Field(min_length=1)
-    runs: int = Field(ge=3)
-    thresholds_locked_before_evaluation: bool
-    capabilities: list[CapabilityMetrics] = Field(min_length=8, max_length=8)
-
-    @model_validator(mode='after')
-    def _complete_and_precommitted(self) -> 'EvaluatorProfile':
-        if not self.thresholds_locked_before_evaluation:
-            raise ValueError('evaluator thresholds must be locked before evaluation')
-        abilities = [row.ability for row in self.capabilities]
-        if len(set(abilities)) != len(abilities) or set(abilities) != set(EVALUATOR_ABILITIES):
-            raise ValueError('profile must contain every evaluator ability exactly once')
-        return self
 
 
 class JudgeDecision(StrictModel):
@@ -181,13 +75,18 @@ class JudgeDecision(StrictModel):
 
 
 class SemanticDecision(StrictModel):
+    """两名盲评判官的合并决议。**恒是带证据的 `UNVER`。**
+
+    ⚠ 曾有 `automated: bool` 与 `profile_id: str | None` 两格，以及三态 `verdict`。
+    自动放行门下线后它们恒为 `False` / `None` / `UNVER`——恒定值不是状态。
+    逐判官的 `judges[].verdict` 仍是三态，读的人要的正是那两个数。
+    """
+
     ability: Ability
     subject_key: str = Field(min_length=1)
-    verdict: SemanticVerdict
-    automated: bool
+    verdict: Literal['UNVER']
     evidence: list[EvidenceRef]
     reason: str = Field(min_length=1)
-    profile_id: str | None = None
     judges: list[JudgeDecision] = Field(min_length=2, max_length=2)
 
 

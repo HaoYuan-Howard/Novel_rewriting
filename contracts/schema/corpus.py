@@ -269,8 +269,8 @@ class CorpusManifest(StrictModel):
             expected_flags = {'--base', '--yes'}
             if node == 'stage5.write':
                 expected_flags.update({'--deep', '--shallow-rest'})
-            if node == 'stage6.semantic':
-                expected_flags.add('--advisory')
+            # ⚠ `stage6.semantic` 曾在这里多加一个 `--advisory`。那个 flag 随自动放行门
+            #   一起删除后它只带 `--base --yes`——**不要**为了让旧 manifest 通过而补回来。
             if set(flags) != expected_flags or len(flags) != len(expected_flags):
                 raise ValueError(
                     f'{node} production command flags 必须恰为 '
@@ -280,9 +280,6 @@ class CorpusManifest(StrictModel):
                     raise ValueError('stage5.write command 必须固定 --deep 1,2,3')
                 if not _has_flag(command, '--shallow-rest'):
                     raise ValueError('stage5.write command 必须含 --shallow-rest')
-            if node == 'stage6.semantic':
-                if not _has_flag(command, '--advisory'):
-                    raise ValueError(f'{node} command 必须含 --advisory')
         command_nodes = {node for _sid, node in dispatches}
         for book in self.books:
             if set(book.ledger.nodes) != command_nodes:

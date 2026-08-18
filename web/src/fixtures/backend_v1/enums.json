@@ -1699,46 +1699,6 @@
    "required_inputs": []
   },
   {
-   "kind": "stage5.semantic",
-   "mode": null,
-   "label": "stage5 书级语义审判",
-   "extra": null,
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage5/semantic_{n}.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.semantic",
-   "mode": null,
-   "label": "stage5 书级语义审判 --dry-run",
-   "extra": [
-    "--dry-run"
-   ],
-   "paid": false,
-   "free_flag": "--dry-run",
-   "writes": "",
-   "writes_disk": false,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.semantic",
-   "mode": null,
-   "label": "stage5 书级语义审判 --advisory",
-   "extra": [
-    "--advisory"
-   ],
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage5/semantic_{n}.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
    "kind": "stage6.hook",
    "mode": null,
    "label": "stage6 开篇文案",
@@ -1880,20 +1840,6 @@
    "free_flag": "--dry-run",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage6.semantic",
-   "mode": null,
-   "label": "stage6 文案语义审判 --advisory",
-   "extra": [
-    "--advisory"
-   ],
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage6/semantic_{n}.json",
-   "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },

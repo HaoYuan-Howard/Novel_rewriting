@@ -29,7 +29,7 @@ Pydantic 边界被拒绝，不能形成正常或 `.INVALID` 章产物。
 或由 `stage5.write --apply-edit` 改写成新的一章。
 
 恢复需要一起恢复的东西：`contracts/schema/evaluation.py` 的 `Claim` / `TrimEvidenceSpan` /
-`TrimJudgeResponse` 与 `TrimAudit` 的六个字段、`novel/quality/profile.py`、
+`TrimJudgeResponse` 与 `TrimAudit` 的六个字段、`novel.quality.profile`（已删）、
 `prompts.trim_system` / `trim_judge_system` / `trim_user` / `trim_judge_user`，
 以及本文件的 `_trim_claims` / `_claim_regressions` / `_trim_deterministic_regressions` /
 `_trim_profile_binding` / `_judge_trim_candidate`。恢复它等于重新承诺去做那场标定战役。

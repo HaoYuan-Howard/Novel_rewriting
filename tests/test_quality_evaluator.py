@@ -4,48 +4,13 @@ import hashlib
 
 import pytest
 
-from contracts.schema.evaluation import (
-    CapabilityMetrics,
-    EvaluatorFingerprint,
-    EvaluatorProfile,
-    EvidenceRef,
-    JudgeDecision,
-)
-from novel.quality.evaluator import double_blind_decision, wilson_lower
+from contracts.schema.evaluation import EvidenceRef, JudgeDecision
+from novel.quality.evaluator import double_blind_decision
 from novel.quality.global_review import build_review, decide, review_status
 from novel.errors import HumanEditProtected
 
 
 _H = hashlib.sha256(b'x').hexdigest()
-
-
-def _fingerprint(**changes):
-    raw = dict(
-        dataset_sha256=_H, model='judge-v1', prompt_sha256=_H,
-        schema_sha256=_H, decoder_sha256=_H,
-    )
-    raw.update(changes)
-    return EvaluatorFingerprint(**raw)
-
-
-def _profile():
-    names = (
-        'event_order', 'verbatim_fidelity', 'hard_number_fidelity',
-        'reference_boundary', 'secret_timeline', 'world_rule_consistency',
-        'trim_equivalence', 'style_transfer',
-    )
-    return EvaluatorProfile(
-        profile_version=1, profile_id='profile-v1',
-        calibrated_at='2026-08-16T00:00:00Z', runs=3,
-        thresholds_locked_before_evaluation=True,
-        capabilities=[CapabilityMetrics(
-            ability=name, fingerprint=_fingerprint(), n=100,
-            pass_precision_wilson95_lower=.91,
-            fail_precision_wilson95_lower=.91,
-            violation_recall_wilson95_lower=.91,
-            evidence_closure=.96, rerun_consistency=.96, enabled=True,
-        ) for name in names],
-    )
 
 
 def _judge(name='a', verdict='PASS', evidence=True):
@@ -54,34 +19,52 @@ def _judge(name='a', verdict='PASS', evidence=True):
     return JudgeDecision(judge=name, verdict=verdict, evidence=refs, reason='fixed rubric')
 
 
-def test_wilson_lower_is_conservative():
-    assert wilson_lower(40, 40) < 1
-    assert wilson_lower(0, 0) == 0
-    assert wilson_lower(90, 100) < .90
+@pytest.mark.parametrize(('first', 'second', 'why'), [
+    (_judge(), _judge('b'), 'A/B 同判 PASS'),
+    (_judge(verdict='FAIL'), _judge('b', 'FAIL'), 'A/B 同判 FAIL'),
+    (_judge(), _judge('b', 'FAIL'), '结论不一致'),
+    (_judge(verdict='UNVER', evidence=False), _judge('b'), '明确判为 UNVER'),
+    (_judge(evidence=False), _judge('b'), '缺少可闭合证据'),
+])
+def test_the_merged_verdict_is_always_unver_and_the_reason_is_never_the_same(
+        first, second, why):
+    """本仓没有自动放行门 ⇒ 合并决议**恒** UNVER。
+
+    ⚠ 这条守卫的重点在第二个断言：五种情形的 `reason` **必须逐句不同**。
+    如果它们被压成一句套话，人在 inbox 里就分不出「两名判官都说没问题」与
+    「判官压根没给证据」——而那两件事的处置完全相反。
+    """
+    decision = double_blind_decision(
+        ability='reference_boundary', subject_key='case-1',
+        first=first, second=second)
+    assert decision.verdict == 'UNVER'
+    assert why in decision.reason, decision.reason
 
 
-def test_double_blind_requires_profile_identity_agreement_and_evidence():
-    profile = _profile()
-    good = double_blind_decision(
-        ability='event_order', subject_key='case-1', first=_judge(), second=_judge('b'),
-        profile=profile, current=_fingerprint())
-    assert (good.verdict, good.automated) == ('PASS', True)
+def test_merged_evidence_is_the_deduplicated_union_of_both_judges():
+    decision = double_blind_decision(
+        ability='reference_boundary', subject_key='case-1',
+        first=_judge(), second=_judge('b'))
+    # 两名判官指的是同一段字节 ⇒ 并集去重后只剩一条，而不是重复两条。
+    assert len(decision.evidence) == 1
+    assert [judge.verdict for judge in decision.judges] == ['PASS', 'PASS']
 
-    drift = double_blind_decision(
-        ability='event_order', subject_key='case-1', first=_judge(), second=_judge('b'),
-        profile=profile, current=_fingerprint(model='judge-v2'))
-    assert (drift.verdict, drift.automated) == ('UNVER', False)
 
-    split = double_blind_decision(
-        ability='event_order', subject_key='case-1', first=_judge(), second=_judge('b', 'FAIL'),
-        profile=profile, current=_fingerprint())
-    assert split.verdict == 'UNVER'
+def test_an_automated_pass_is_not_expressible_at_all():
+    """⚠ 类型上就踩不进去：`SemanticDecision.verdict` 是 `Literal['UNVER']`。
 
-    no_evidence = double_blind_decision(
-        ability='event_order', subject_key='case-1',
-        first=_judge(evidence=False), second=_judge('b'),
-        profile=profile, current=_fingerprint())
-    assert no_evidence.verdict == 'UNVER'
+    这比「有一条校验器拦着」强——一条永远不可能被触发的校验器会绿一辈子，
+    而没人知道它到底还在不在。
+    """
+    from pydantic import ValidationError
+
+    from contracts.schema.evaluation import SemanticDecision
+
+    with pytest.raises(ValidationError):
+        SemanticDecision(
+            ability='reference_boundary', subject_key='case-1', verdict='PASS',
+            evidence=[], reason='两名判官都说没问题',
+            judges=[_judge(), _judge('b')])
 
 
 def _global(role='静态身份'):

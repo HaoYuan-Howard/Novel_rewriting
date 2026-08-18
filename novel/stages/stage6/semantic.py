@@ -41,10 +41,7 @@ from novel.llm.client import LlmClient
 from novel.llm.prompts import with_json_shape
 from novel.llm.transport import ChatResponse
 from novel.report.findings import Outcome, ran, unverifiable
-from novel.quality.evaluator import double_blind_decision
-from novel.quality.profile import (
-    ADVISORY_DATASET_SHA256, advisory_fingerprint, require_enabled,
-)
+from novel.quality.evaluator import double_blind_decision, runtime_fingerprint
 from novel.run import RunContext
 from novel.stages.stage6 import hook
 from novel.store import ArtifactStore
@@ -131,15 +128,13 @@ class CandidateAssessment:
     quality_score: float | None = None
     quality_rank: int | None = None
     semantic_review_seq: int | None = None
-    historical_fail: bool = False
 
-    @property
-    def selectable(self) -> bool:
-        return self.state == 'clear'
-
+    #: ⚠ 这里曾有 `selectable`（`state == 'clear'`）与 `historical_fail`。
+    #: `clear` 与 `contradiction` 都只由 automated PASS/FAIL 产生，自动放行门下线后
+    #: **两个状态都不可达**，`state` 只剩 `unreviewed` / `uncertain`。
     @property
     def human_resolvable(self) -> bool:
-        return self.state in {'unreviewed', 'uncertain'} and not self.historical_fail
+        return self.state in {'unreviewed', 'uncertain'}
 
 
 def text_sha1(text: str) -> str:
@@ -152,20 +147,18 @@ def text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def _runtime_contract(model: str, *, advisory: bool = False):
-    """The exact static request/decoder surface used by both paid judges."""
-    prompts = [SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['A'],
-               SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['B']]
-    schemas = [HookSemanticResponse]
-    if advisory:
-        return None, advisory_fingerprint(
-            model=model, prompts=prompts, schemas=schemas,
-            decoder_identity=DECODER_IDENTITY)
-    return require_enabled(
-        'reference_boundary',
+def _runtime_contract(model: str):
+    """The exact static request/decoder surface used by both paid judges.
+
+    ⚠ 这里曾是一个二选一：`--advisory` 走无 dataset 的哨兵指纹，默认路走
+    `require_enabled('reference_boundary', …)`——那道闸从未在任何宿主上打开过。
+    自动放行门下线后只剩一种，flag 也随之删除（恒真的 flag 是误导）。
+    """
+    return runtime_fingerprint(
         model=model,
-        prompts=prompts,
-        schemas=schemas,
+        prompts=[SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['A'],
+                 SEMANTIC_SYS + JUDGE_ROLE_SUFFIX['B']],
+        schemas=[HookSemanticResponse],
         decoder_identity=DECODER_IDENTITY,
     )
 
@@ -193,34 +186,6 @@ def latest_semantic(store: ArtifactStore) -> tuple[int, HookSemanticReview] | No
     seq = seqs[-1]
     art, _raw = store.read_own(HookSemanticReview, SEMANTIC_TPL.format(n=seq))
     return seq, art
-
-
-def _historical_fail_subjects(
-    store: ArtifactStore,
-    *,
-    known: dict[int, HookSemanticReview] | None = None,
-) -> set[str]:
-    """Return every exact subject ever given a durable calibrated FAIL.
-
-    Approval must not become a retry-until-UNVER escape hatch.  In particular,
-    a later judge disagreement (or profile drift) cannot erase an earlier
-    automated FAIL for the same bytes.  Every history file is read through the
-    typed store boundary; an unreadable audit therefore blocks instead of being
-    silently treated as if it never existed.
-    """
-    supplied = known or {}
-    failed: set[str] = set()
-    for seq in semantic_seqs(store):
-        artifact = supplied.get(seq)
-        if artifact is None:
-            artifact, _raw = store.read_own(
-                HookSemanticReview, SEMANTIC_TPL.format(n=seq))
-        failed.update(
-            decision.subject_key
-            for decision in artifact.decisions
-            if decision.automated and decision.verdict == 'FAIL'
-        )
-    return failed
 
 
 def _unique_texts(art: Hook) -> list[tuple[str, str]]:
@@ -348,14 +313,13 @@ def materialize_double_blind(
     second: HookSemanticResponse,
     *,
     aliases: list[tuple[str, str, str]],
-    profile,
-    current,
 ) -> tuple[list[HookCandidateReview], list[SemanticDecision], list[str],
            dict[str, list[str]]]:
-    """Combine A/B only through the calibrated decision contract.
+    """Combine A/B through the one merge contract.
 
     The combined review retains averaged quality and reported contradictions for
-    diagnosis.  Its *state* is nevertheless owned solely by ``decisions``.
+    diagnosis.  Its *state* is nevertheless owned solely by ``decisions``——
+    而合并决议恒是带证据的 `UNVER`（`novel/quality/evaluator.py::double_blind_decision`）。
     """
     alias_map = {neutral: (real, text) for neutral, real, text in aliases}
     by_judge = [
@@ -373,8 +337,6 @@ def materialize_double_blind(
             subject_key=subject,
             first=_judge_decision('A', left, real_label=real, text=text),
             second=_judge_decision('B', right, real_label=real, text=text),
-            profile=profile,
-            current=current,
         )
         decisions.append(decision)
         real_by_subject[subject] = real
@@ -389,31 +351,25 @@ def materialize_double_blind(
                     seen.add(key)
                     contradictions.append(contradiction)
 
-        automated = decision.automated and decision.verdict in {'PASS', 'FAIL'}
-        coverage = 'complete' if automated else 'uncertain'
+        # 合并决议恒 UNVER ⇒ coverage 恒 `uncertain`、矛盾线索无条件保留。
+        # ⚠ 别把 `uncertainty_reason` 省成 None：它是人在界面上读到的那一句，
+        #   四条理由逐句不同（含「A/B 同判且证据闭合」那一条）。
         reviews.append(HookCandidateReview(
             label=real,
-            coverage=coverage,
-            uncertainty_reason=None if automated else decision.reason,
-            contradictions=(contradictions if decision.verdict != 'PASS' else []),
+            coverage='uncertain',
+            uncertainty_reason=decision.reason,
+            contradictions=contradictions,
             quality=_average_quality(left, right),
             concise_reason=decision.reason,
             text_sha1=text_sha1(text),
         ))
 
-    decision_by_subject = {decision.subject_key: decision for decision in decisions}
     review_by_label = {review.label: review for review in reviews}
-    state_order = {'PASS': 0, 'UNVER': 1, 'FAIL': 2}
+    # ⚠ 排序曾是 `(state_order[verdict], -quality, label)` 三段。合并 verdict 恒 UNVER
+    #   之后第一段是常量，留着只会让人以为排序里还含着一个判定。
     ranking = sorted(
         review_by_label,
-        key=lambda label: (
-            state_order[decision_by_subject[
-                next(subject for subject, real in real_by_subject.items()
-                     if real == label)
-            ].verdict],
-            -quality_score(review_by_label[label]),
-            label,
-        ),
+        key=lambda label: (-quality_score(review_by_label[label]), label),
     )
     judge_rankings = {
         judge: [alias_map[label][0] for label in response.ranking]
@@ -422,11 +378,9 @@ def materialize_double_blind(
     return reviews, decisions, ranking, judge_rankings
 
 
-def run_semantic(ctx: RunContext, client: LlmClient, *, advisory: bool = False
+def run_semantic(ctx: RunContext, client: LlmClient
                  ) -> tuple[HookSemanticReview, CheckReport]:
-    # This is deliberately the first executable gate in the paid path.  A
-    # missing/drifted profile fails before prompt construction can reach transport.
-    profile, current = _runtime_contract(client.model, advisory=advisory)
+    current = _runtime_contract(client.model)
     system, user, art, up, aliases = build_prompt(ctx)
     responses = [
         client.ask_json(
@@ -439,8 +393,7 @@ def run_semantic(ctx: RunContext, client: LlmClient, *, advisory: bool = False
         for role in ('A', 'B')
     ]
     reviews, decisions, ranking, judge_rankings = materialize_double_blind(
-        responses[0], responses[1], aliases=aliases,
-        profile=profile, current=current)
+        responses[0], responses[1], aliases=aliases)
 
     store = ArtifactStore(ctx)
     artifact = HookSemanticReview(
@@ -467,87 +420,51 @@ def run_semantic(ctx: RunContext, client: LlmClient, *, advisory: bool = False
     return artifact, hook._report(ctx, store, outcomes, art, freshness_rel=rel)
 
 
-def _calibration_status(artifact: HookSemanticReview) -> tuple[bool, str]:
-    """Re-check profile drift without issuing a request.
-
-    A previously durable FAIL remains visible to the approval guard, but no
-    verdict is presented as currently automated after profile drift.
-    """
-    if _is_advisory_artifact(artifact):
-        return False, '未校准 advisory 审判；双盲证据仅供人工核验'
-    try:
-        profile, current = _runtime_contract(artifact.provenance.model)
-    except TerminalState as exc:
-        return False, str(exc)
-    if current != artifact.evaluator_fingerprint:
-        return False, '当前 evaluator 指纹与该语义产物不一致'
-    profile_ids = {decision.profile_id for decision in artifact.decisions}
-    if profile_ids != {profile.profile_id}:
-        return False, '该语义产物的 profile_id 与当前校准 profile 不一致'
-    return True, ''
-
-
-def _is_advisory_artifact(artifact: HookSemanticReview) -> bool:
-    """Recognise an intentionally uncalibrated run, not later profile drift."""
-    fingerprint = getattr(artifact, 'evaluator_fingerprint', None)
-    decisions = getattr(artifact, 'decisions', ())
-    return bool(
-        fingerprint is not None
-        and fingerprint.dataset_sha256 == ADVISORY_DATASET_SHA256
-        and decisions
-        and all(not row.automated and row.profile_id is None for row in decisions)
-    )
-
-
+# ⚠⚠ 这里曾有 `_calibration_status()`（不发请求地复查 profile 漂移）与
+#     `_is_advisory_artifact()`（用 `dataset_sha256` 哨兵辨认「刻意未校准」的那一跑）。
+#     自动放行门下线后所有产物都是同一种，没有第二类要辨认，也没有「漂移」可复查——
+#     两个函数连同 `calibrated` 这个第三返回值一起删除。
 def _current_artifact(
     store: ArtifactStore,
     art: Hook,
-) -> tuple[HookSemanticReview | None, str, bool, int | None]:
+) -> tuple[HookSemanticReview | None, str, int | None]:
+    """当前那一份语义审判，以及「为什么它不可用」的人读理由。
+
+    ⚠ 三种「没有当前结论」是分开的：没跑过 / 上游变了 / 判的不是这批文本。
+    它们都落到 `artifact=None`，但 `why` 逐句不同——那句话会一直传到 inbox 与终审包。
+    """
     got = latest_semantic(store)
     if got is None:
-        return None, '没有 stage6/semantic_<n>.json；本能力保持人工-only', False, None
+        return None, '没有 stage6/semantic_<n>.json；本能力保持人工-only', None
     seq, artifact = got
     rel = SEMANTIC_TPL.format(n=seq)
     if store.freshness(rel).state != 'fresh':
-        return None, f'{rel} 的上游已变化；当前结论降为 UNVER', False, seq
+        return None, f'{rel} 的上游已变化；当前结论降为 UNVER', seq
 
     current_shas = {text_sha1(text) for _label, text in hook._texts_of(art)}
     judged_shas = {review.text_sha1 for review in artifact.reviews}
     if current_shas != judged_shas:
         return None, ('当前文本与最近一次质量审判不是同一个精确集合：'
                       f'未覆盖 {len(current_shas - judged_shas)}，'
-                      f'额外旧文本 {len(judged_shas - current_shas)}；当前结论降为 UNVER'), False, seq
+                      f'额外旧文本 {len(judged_shas - current_shas)}；当前结论降为 UNVER'), seq
     decision_subjects = {decision.subject_key for decision in artifact.decisions}
     current_subjects = {text_sha256(text) for _label, text in hook._texts_of(art)}
     if current_subjects != decision_subjects:
-        return None, '当前文本与合并 SemanticDecision 不是同一个精确集合', False, seq
-    calibrated, why = _calibration_status(artifact)
-    return artifact, why, calibrated, seq
+        return None, '当前文本与合并 SemanticDecision 不是同一个精确集合', seq
+    return artifact, '', seq
 
 
 def current_assessments(store: ArtifactStore, art: Hook) -> dict[str, CandidateAssessment]:
     """按文本 sha1 返回当前评审状态；键可同时服务候选与重复的定稿文本。"""
-    artifact, why, calibrated, seq = _current_artifact(store, art)
+    artifact, why, seq = _current_artifact(store, art)
     current_texts = {
         text_sha1(text): text
         for _label, text in hook._texts_of(art)
     }
-    # The latest review can be unusable because its provenance or candidate set
-    # is stale.  That only removes its current verdict; it must not erase an
-    # earlier calibrated FAIL for byte-identical candidate text.
-    historical_fails = (
-        _historical_fail_subjects(
-            store, known={seq: artifact} if artifact is not None else None)
-        if seq is not None else set()
-    )
     if artifact is None:
         return {
-            sha: CandidateAssessment(
-                state='unreviewed',
-                reason=why,
-                historical_fail=text_sha256(text) in historical_fails,
-            )
-            for sha, text in current_texts.items()
+            sha: CandidateAssessment(state='unreviewed', reason=why)
+            for sha in current_texts
         }
 
     rank_by_label = {label: i for i, label in enumerate(artifact.ranking, 1)}
@@ -557,29 +474,16 @@ def current_assessments(store: ArtifactStore, art: Hook) -> dict[str, CandidateA
         text = next(text for _label, text in hook._texts_of(art)
                     if text_sha1(text) == review.text_sha1)
         decision = decision_by_subject[text_sha256(text)]
-        historical_fail = text_sha256(text) in historical_fails
-        if not calibrated:
-            state = 'uncertain'
-            reason = (why if _is_advisory_artifact(artifact)
-                      else f'evaluator profile 已缺失或漂移：{why}')
-        elif decision.automated and decision.verdict == 'PASS':
-            state = 'clear'
-            reason = decision.reason
-        elif decision.automated and decision.verdict == 'FAIL':
-            state = 'contradiction'
-            reason = decision.reason
-        else:
-            state = 'uncertain'
-            reason = decision.reason
+        # ⚠ 判过 ⇒ 恒 `uncertain`。这**不是**「查不了」，而是「查了、有证据、但本仓
+        #   不替人盖章」——`decision.reason` 逐句说明是哪一种，别把它压成一句套话。
         by_sha[review.text_sha1] = CandidateAssessment(
-            state=state,
-            reason=reason,
+            state='uncertain',
+            reason=decision.reason,
             review=review,
             decision=decision,
             quality_score=quality_score(review),
             quality_rank=rank_by_label.get(review.label),
             semantic_review_seq=seq,
-            historical_fail=historical_fail,
         )
     return by_sha
 
@@ -589,21 +493,6 @@ def assessment_for_text(store: ArtifactStore, art: Hook, text: str) -> Candidate
         text_sha1(text),
         CandidateAssessment(state='unreviewed', reason='当前文本没有质量审判记录'),
     )
-
-
-def require_selectable(store: ArtifactStore, art: Hook, text: str, label: str) -> CandidateAssessment:
-    """自动通过只认当前已校准的合并 PASS。"""
-    assessment = assessment_for_text(store, art, text)
-    if assessment.state == 'clear':
-        return assessment
-    if assessment.state == 'contradiction' and assessment.review is not None:
-        evidence = [item.evidence for item in assessment.review.contradictions]
-        raise TerminalState(
-            f'候选 {label} 有实质矛盾，不能定稿：{evidence[:3]}。'
-            f'请改选 clear 候选，或 --apply-edit 后重跑 stage6.semantic')
-    raise TerminalState(
-        f'候选 {label} 当前状态是 {assessment.state}，不能定稿：{assessment.reason}。'
-        f'先运行/重跑 stage6.semantic')
 
 
 def require_human_resolution(
@@ -616,11 +505,16 @@ def require_human_resolution(
     reason: str,
     expected_subject_sha256: str,
 ) -> tuple[CandidateAssessment, str]:
-    """Validate an explicit approval without letting a known FAIL be waived.
+    """Validate an explicit approval bound to the exact approved bytes.
 
-    Returns ``(assessment, basis)``.  UNVER/unreviewed is resolvable by a human;
-    a durable calibrated FAIL remains blocked even if the active profile later
-    drifts and the display truthfully falls back to UNVER.
+    Returns ``(assessment, basis)``.  ⚠ `basis` 恒是 `'human_verification'`——
+    它仍作为返回值给出，是为了让**写 resolution 的那一处**只有一个来源；
+    `calibrated_pass` 随自动放行门一起被裁决掉了（`HookApprovalResolution.basis`）。
+
+    ⚠⚠ **产品含义**：这里曾有一道「已有校准双盲 FAIL ⇒ 人工也不得绕过」的硬闸。
+    自动 FAIL 不再可产，那道闸随之消失 ⇒ **横在「有矛盾的文案」与成书之间的只剩
+    人在这里读判官证据这一道**。矛盾线索仍逐条呈现（`hook_candidate_contradiction`），
+    但没有任何机制会替人否决一个候选。
     """
     if not actor.strip() or not reason.strip():
         raise TerminalState('定稿必须显式给 --actor 与 --reason（actor 是自报身份）')
@@ -630,35 +524,24 @@ def require_human_resolution(
             f'候选 {label} 已变化，不能用旧页面定稿：'
             f'期望 {expected_subject_sha256}，实得 {actual}')
     assessment = assessment_for_text(store, art, text)
-    if assessment.state == 'contradiction' or assessment.historical_fail:
-        evidence = (
-            [item.evidence for item in assessment.review.contradictions]
-            if assessment.review is not None else [])
-        raise TerminalState(
-            f'候选 {label} 已有校准双盲 FAIL，普通人工定稿不得绕过：'
-            f'{evidence[:3]}。请 --apply-edit 改字后对新指纹重新处理')
-    basis = 'calibrated_pass' if assessment.state == 'clear' else 'human_verification'
-    return assessment, basis
+    return assessment, 'human_verification'
 
 
 def require_approved_clear(store: ArtifactStore, art: Hook) -> CandidateAssessment:
-    """下游消费闸：双盲 PASS 或与当前字节绑定的人工消解。"""
+    """下游消费闸：**存在定稿，且它的人工消解仍绑着当前字节。**
+
+    ⚠ 这里曾有三条分支：校准 FAIL 拒绝、`clear` 自动放行、以及「原来的校准 PASS 漂了」
+    的兜底 raise。三条都由 automated 结论驱动，随自动放行门一起消失。
+    留下的这一条不是变松了——`subject_sha256` 那道字节绑定本来就是真正在拦人的那一条：
+    改一个字，旧 resolution 立刻失效。
+    """
     if art.approved is None:
         raise TerminalState('开篇文案还没定稿——先跑 stage6.approve --pick N')
     resolution = art.approved.resolution
     actual = text_sha256(art.approved.text)
     if resolution.subject_sha256 != actual:
         raise TerminalState('定稿 resolution 绑定的不是当前文本字节')
-    assessment = assessment_for_text(store, art, art.approved.text)
-    if assessment.state == 'contradiction' or assessment.historical_fail:
-        raise TerminalState('定稿文本已有校准双盲 FAIL/实质矛盾，不能进入成书')
-    if assessment.state == 'clear':
-        return assessment
-    if resolution.basis == 'human_verification':
-        return assessment
-    raise TerminalState(
-        '原来的校准 PASS 已缺失或漂移，必须重新审判或以新的'
-        ' actor/reason 明确转为人工 verification')
+    return assessment_for_text(store, art, art.approved.text)
 
 
 def unavailable_outcomes(why: str) -> list[Outcome]:
@@ -673,10 +556,8 @@ def outcomes(store: ArtifactStore, art: Hook | None) -> list[Outcome]:
     """当前质量产物 → 矛盾门、候选提示与质量排序三条判据。"""
     if art is None:
         return unavailable_outcomes('stage6/hook.json 不可读，质量结论无从绑定')
-    artifact, why, calibrated, _seq = _current_artifact(store, art)
+    artifact, why, _seq = _current_artifact(store, art)
     if artifact is None:
-        return unavailable_outcomes(why)
-    if not calibrated and not _is_advisory_artifact(artifact):
         return unavailable_outcomes(why)
 
     assessments = current_assessments(store, art)
@@ -688,11 +569,7 @@ def outcomes(store: ArtifactStore, art: Hook | None) -> list[Outcome]:
         if review is None:
             continue
         if review.contradictions:
-            disposition = (
-                '校准双盲 FAIL'
-                if assessment.state == 'contradiction'
-                else '未校准/未合并为 FAIL 的 contradiction 线索（UNVER，不自动阻断）'
-            )
+            disposition = 'contradiction 线索（UNVER，不自动阻断）'
             for contradiction in review.contradictions:
                 candidate_findings.append(finding(
                     'hook_candidate_contradiction',
@@ -717,38 +594,24 @@ def outcomes(store: ArtifactStore, art: Hook | None) -> list[Outcome]:
                 evidence=[f'{label}:{review.text_sha1}'],
             ))
 
-    hard_findings: list[Finding] = []
-    hard_unver: str | None = None
+    # ⚠⚠ `hook_semantic_contradiction` 现在是 **`unver` 判据**（`contracts/judges/stage6.py`）。
+    #     它曾经是 HARD，命中两条路——定稿文本 `state == 'contradiction'`、或三条候选全
+    #     contradiction。那个 state 只由 automated FAIL 产生，自动放行门下线后**不可达**，
+    #     于是它一条 Finding 都产不出来了。
+    #     ⚠ 继续把它挂成 HARD 会有两个坏结果：`tests/test_hard_counterexamples.py` 是双向
+    #     断言，要么逼人伪造一个绕开真实契约的反例，要么给一条刻意双向的守卫开豁免口；
+    #     而界面上一个永远绿的 HARD 会被读成「查过了，没矛盾」。降为 `unver` 之后
+    #     badge 是 amber、路由仍是 `human`，说的是实话：**矛盾要人自己看**。
+    scanned = f'{len(artifact.reviews)} 份去重文本'
     if art.approved is not None:
         chosen = assessments[text_sha1(art.approved.text)]
-        if chosen.state == 'contradiction' and chosen.review is not None:
-            hard_findings.append(finding(
-                'hook_semantic_contradiction',
-                detail='定稿文本含实质矛盾；该选择不能进入成书',
-                evidence=[item.evidence for item in chosen.review.contradictions],
-            ))
-        elif chosen.state != 'clear':
-            hard_unver = f'定稿文本状态为 {chosen.state}：{chosen.reason}'
+        subject = f'定稿文本状态为 {chosen.state}：{chosen.reason}'
     else:
-        candidate_states = [assessments[text_sha1(candidate.text)] for candidate in art.candidates]
-        if not any(item.state == 'clear' for item in candidate_states):
-            if any(item.state in ('uncertain', 'unreviewed') for item in candidate_states):
-                hard_unver = '三条候选里没有已确认 clear 的文本，且至少一条审判不确定'
-            else:
-                hard_findings.append(finding(
-                    'hook_semantic_contradiction',
-                    detail='三条候选全部存在实质矛盾，没有可定稿文本',
-                    evidence=[
-                        contradiction.evidence
-                        for item in candidate_states if item.review is not None
-                        for contradiction in item.review.contradictions
-                    ],
-                ))
-
-    scanned = f'{len(artifact.reviews)} 份去重文本'
-    hard = (unverifiable('hook_semantic_contradiction', hard_unver, scanned=scanned)
-            if hard_unver else
-            ran('hook_semantic_contradiction', hard_findings, scanned=scanned))
+        subject = '还没有定稿；三条候选的矛盾线索见 hook_candidate_contradiction'
+    hard = unverifiable(
+        'hook_semantic_contradiction',
+        f'{subject}。本仓没有自动放行门，实质矛盾一律由人读判官证据后裁决',
+        scanned=scanned)
 
     metric_findings = [finding(
         'hook_quality_rank',

@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 """Stage 6 当前判据注册表。
 
-机械检查守可用性、非抄写与形态；付费语义审判守**实质矛盾**并给出吸引力排序。
-剧透、时间压缩、合成场面和重写台词本身不再构成违规。当前校准 ``clear`` 是自动依据；
-缺审、过期或 ``uncertain`` 保持 ``unver``，但可由 actor / reason / 当前文本完整 SHA-256
-绑定的 ``human_verification`` 收口。当前或历史校准 ``FAIL`` 不可被普通人工批准绕过。
+机械检查守可用性、非抄写与形态；付费语义审判给出**带证据的矛盾线索**与吸引力排序。
+剧透、时间压缩、合成场面和重写台词本身不构成违规。
+
+⚠⚠ **本仓没有自动放行门。** 双盲 A/B 的合并决议恒是 ``UNVER``，因此语义层不产生任何
+自动 ``PASS``/``FAIL``：唯一的收口是 actor / reason / 当前文本完整 SHA-256 绑定的
+``human_verification``。这不是「还没做」——`evaluator profile` 那套标定装置已被裁决删除。
 """
 from __future__ import annotations
 
@@ -35,8 +37,8 @@ def _metric(rule: str, item: str, requirement: str, **kw) -> Rule:
 def _unver(rule: str, item: str, requirement: str, *, who_checks: str, **kw) -> Rule:
     """查不了的：**永远输出**，不是「还没写完」。
 
-    ⚠ `who_checks` 必须显式给，因为这 6 条分**两族**，而它们指向的需求行记号不同：
-      · `HUMAN` —— 真正由人把关的那 2 条（`R-9.18` / `R-9.6` 两行都标着 `人`）；
+    ⚠ `who_checks` 必须显式给，因为这 7 条分**两族**，而它们指向的需求行记号不同：
+      · `HUMAN` —— 真正由人把关的那 3 条（`R-9.18` / `R-9.6` / `R-9.19` 都标着 `人`）；
       · `INFO`  —— 判定**前提**不成立时出声的那 4 条（`R-9.16` / `R-9.17` 标着 `INFO`）。
     合成一个默认值，其中一族就会指着一个说着别的话的需求行。
     """
@@ -156,16 +158,19 @@ _metric('hook_secret_literal', '与秘密原文的逐字重合条数（按读者
              '命中的片段来自 `secret.fact`，直接拿它当凭据展示等于把秘密原文抄进报告')
 
 
-# ── 三条语义判据：矛盾是门，候选问题是提示，吸引力是读数 ────────────────
+# ── 三条语义判据：矛盾交人裁决，候选问题是提示，吸引力是读数 ──────────────
 
-_hard('hook_semantic_contradiction',
-      '定稿候选不改变人物身份、关系、关键因果或故事结果', 'R-9.19',
-      check_kind='semantic',
-      note='未定稿时，三条都为校准 FAIL 才命中 HARD；没有 clear 但仍有缺审/过期/'
-           'uncertain 候选则保持 UNVER。定稿后只判断被选文本。剧透、时间压缩、'
-           '合成场面和为真实关系重写台词不算矛盾。clear 可作为自动批准依据；当前'
-           'UNVER/unreviewed 只有 actor/reason/完整 subject SHA-256 绑定的人工核验才能'
-           '收口；当前或历史校准 FAIL 始终拒绝。')
+_unver('hook_semantic_contradiction',
+       '定稿候选不改变人物身份、关系、关键因果或故事结果', 'R-9.19',
+       who_checks='HUMAN', check_kind='semantic',
+       note='⚠ **它曾经是 HARD**。命中 HARD 的两条路都要求候选处于 `contradiction`，'
+            '而那个状态只由 automated FAIL 产生——自动放行门随 evaluator profile 整批'
+            '下线后不可达，一条 Finding 都产不出来。继续挂 HARD 就只剩两条路：伪造一个'
+            '绕开真实契约的反例，或给 `tests/test_hard_counterexamples.py` 那条双向守卫'
+            '开豁免口，两条本仓都禁止。降为 `unver` 说的是实话——**矛盾要人自己看**：'
+            'badge 是 amber（不是绿），修复路由仍是 `human`，收口只认 actor / reason / '
+            '完整 subject SHA-256 绑定的 `human_verification`。'
+            '剧透、时间压缩、合成场面和为真实关系重写台词不算矛盾。')
 
 _info('hook_candidate_contradiction',
       '逐候选列出实质矛盾或审判不确定项，供定稿时避开', 'R-9.20',

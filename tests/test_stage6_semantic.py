@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema.evaluation import (
-    EvaluatorFingerprint, EvidenceRef, JudgeDecision, SemanticDecision,
+    EvidenceRef, JudgeDecision, SemanticDecision,
 )
 from contracts.schema.api import HookApproveRequest
 from contracts.schema.stage6 import (
@@ -68,7 +68,7 @@ def _stored_review(label: str, text: str, *, contradiction: bool = False,
     return HookCandidateReview.model_validate(data)
 
 
-def _art(*, approved: str | None = None):
+def _art(*, approved: str | None = None, bound_sha256: str | None = None):
     candidates = [
         SimpleNamespace(approach='source_architecture', text=TEXT_A, findings=[]),
         SimpleNamespace(approach='payoff_preview', text=TEXT_B, findings=[]),
@@ -79,8 +79,9 @@ def _art(*, approved: str | None = None):
                         approach=picked.approach,
                         text=picked.text,
                         resolution=SimpleNamespace(
-                            subject_sha256=semantic.text_sha256(picked.text),
-                            basis='calibrated_pass'))
+                            subject_sha256=(bound_sha256
+                                            or semantic.text_sha256(picked.text)),
+                            basis='human_verification'))
                     if picked is not None else None)
     return SimpleNamespace(candidates=candidates, approved=approved_obj)
 
@@ -95,6 +96,7 @@ def _semantic_artifact(reviews: list[HookCandidateReview], ranking: list[str] | 
         refs = [EvidenceRef(
             artifact='stage6/hook.json#candidate/' + review.label,
             subject_sha256=semantic.text_sha256(text), start=0, end=len(text))]
+        # ⚠ 逐判官仍是三态（那是要留的证据）；**合并决议恒 UNVER**。
         judges = [JudgeDecision(
             judge=judge, verdict=verdict, evidence=refs,
             reason=review.uncertainty_reason or review.concise_reason)
@@ -102,11 +104,9 @@ def _semantic_artifact(reviews: list[HookCandidateReview], ranking: list[str] | 
         decisions.append(SemanticDecision(
             ability='reference_boundary',
             subject_key=semantic.text_sha256(text),
-            verdict=verdict,
-            automated=verdict != 'UNVER',
+            verdict='UNVER',
             evidence=refs,
             reason=review.uncertainty_reason or review.concise_reason,
-            profile_id='fixture-profile',
             judges=judges,
         ))
     return SimpleNamespace(
@@ -134,12 +134,6 @@ def _all_clean_reviews() -> list[HookCandidateReview]:
 
 def _install(monkeypatch, artifact, *, seq: int = 1):
     monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (seq, artifact))
-    monkeypatch.setattr(semantic, '_calibration_status', lambda _artifact: (True, ''))
-    monkeypatch.setattr(
-        semantic, '_historical_fail_subjects',
-        lambda _store, **_kwargs: {
-            decision.subject_key for decision in artifact.decisions
-            if decision.automated and decision.verdict == 'FAIL'})
 
 
 def test_system_publishes_quality_and_material_contradiction_contract():
@@ -153,41 +147,25 @@ def test_system_publishes_quality_and_material_contradiction_contract():
     assert semantic.JUDGE_ROLE_SUFFIX['A'] != semantic.JUDGE_ROLE_SUFFIX['B']
 
 
-def test_paid_path_requires_calibrated_profile_before_prompt_or_transport(monkeypatch):
-    calls = []
+def test_runtime_contract_binds_the_exact_request_surface_and_nothing_else():
+    """运行时指纹只回答「这一次看的是哪一版 prompt / schema / 解码面」。
 
-    class Client:
-        model = 'fixture-model'
+    ⚠ 这里曾有两条用例：一条断言「无 profile ⇒ 在 transport 前 exit 2」，一条断言
+    `--advisory` 走哨兵 dataset。自动放行门整批下线后**没有第二条路**，那两条各自
+    描述的分岔都不存在了；剩下的真问题只有一个——指纹绑没绑对面。
+    ⚠ `dataset_sha256` 也一并消失：没有 dataset 了，一个恒定哨兵看起来像 dataset 身份
+    而其实不是。这条用例连带把它钉成「不许回来」。
+    """
+    current = semantic._runtime_contract('fixture-model')
 
-        def ask_json(self, *_args, **_kwargs):
-            calls.append('transport')
-            raise AssertionError('profile gate failed to stop transport')
-
-    monkeypatch.setattr(
-        semantic, '_runtime_contract',
-        lambda _model, **_kwargs: (_ for _ in ()).throw(TerminalState('未校准')))
-    monkeypatch.setattr(
-        semantic, 'build_prompt',
-        lambda _ctx: (_ for _ in ()).throw(AssertionError('prompt built before profile gate')))
-    with pytest.raises(TerminalState, match='未校准'):
-        semantic.run_semantic(SimpleNamespace(), Client())
-    assert calls == []
-
-
-def test_advisory_runtime_contract_is_uncalibrated_but_surface_bound(monkeypatch):
-    monkeypatch.setattr(
-        semantic, 'require_enabled',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError('advisory mode must not pretend to use calibration')))
-
-    profile, current = semantic._runtime_contract('fixture-model', advisory=True)
-
-    assert profile is None
     assert current.model == 'fixture-model'
-    assert current.dataset_sha256 != '0' * 64
+    assert set(type(current).model_fields) == {
+        'model', 'prompt_sha256', 'schema_sha256', 'decoder_sha256'}
     assert len(current.prompt_sha256) == 64
     assert len(current.schema_sha256) == 64
     assert len(current.decoder_sha256) == 64
+    # 换一个 model 就是另一份身份；否则「同一份结论」会跨模型复用。
+    assert semantic._runtime_contract('other-model') != current
 
 
 def test_human_edit_and_resolution_contract_require_explicit_hash_binding():
@@ -204,10 +182,18 @@ def test_human_edit_and_resolution_contract_require_explicit_hash_binding():
         text=TEXT_A, actor='editor-a', reason='核验完成',
         subject_sha256=subject)
     assert edit.subject_sha256 == subject
-    with pytest.raises(ValueError, match='semantic_review_seq'):
+    # ⚠ `calibrated_pass` 是**被裁决掉的取值**（同 `ApprovedHook.origin` 的形状）：
+    #   它只能由自动放行门产生，而那套装置已整批下线 ⇒ 类型上就写不进去。
+    with pytest.raises(ValueError):
         HookApprovalResolution(
             actor='editor-a', reason='选择此稿', subject_sha256=subject,
             basis='calibrated_pass')
+    # 人工核验时**没读过任何语义审判**是合法的处境，`semantic_review_seq` 因此可空：
+    # 「人在零证据下拍的板」与「人读了第 3 轮判官证据」必须分得开。
+    blind = HookApprovalResolution(
+        actor='editor-a', reason='零证据下拍板', subject_sha256=subject,
+        basis='human_verification')
+    assert blind.semantic_review_seq is None
     with pytest.raises(ValueError):
         HookApproveRequest(pick=1)
     with pytest.raises(ValueError, match='空白'):
@@ -308,26 +294,20 @@ def test_double_blind_disagreement_materializes_unver(monkeypatch):
         'ranking': ['T1', 'T3', 'T2'],
     })
 
-    def combine(**kwargs):
-        left, right = kwargs['first'], kwargs['second']
-        agreed = left.verdict == right.verdict and left.verdict != 'UNVER'
-        verdict = left.verdict if agreed else 'UNVER'
-        refs = [*left.evidence, *right.evidence]
-        return SemanticDecision(
-            ability='reference_boundary', subject_key=kwargs['subject_key'],
-            verdict=verdict, automated=agreed, evidence=refs,
-            reason='同结论' if agreed else '两名盲评 judge 结论不一致',
-            profile_id='fixture-profile', judges=[left, right])
-
-    monkeypatch.setattr(semantic, 'double_blind_decision', combine)
+    # ⚠ 不再 monkeypatch 合并器：合并的行为本身（恒 UNVER + 逐句不同的 reason）
+    #   正是这条用例要看的东西，替身会把它遮掉。
     reviews, decisions, ranking, judge_rankings = semantic.materialize_double_blind(
-        first, second, aliases=aliases, profile=object(), current=object())
+        first, second, aliases=aliases)
     decision = next(row for row in decisions
                     if row.subject_key == semantic.text_sha256(TEXT_B))
     review = next(row for row in reviews if row.label == 'payoff_preview')
-    assert decision.verdict == 'UNVER' and not decision.automated
+    assert decision.verdict == 'UNVER'
+    assert '不一致' in decision.reason
+    assert [judge.verdict for judge in decision.judges] == ['PASS', 'FAIL']
     assert review.coverage == 'uncertain'
-    assert ranking.index('payoff_preview') > ranking.index('source_architecture')
+    assert review.uncertainty_reason == decision.reason
+    # ⚠ 排序不再含「PASS 排前面」那一段（合并 verdict 恒定），只按质量分。
+    assert set(ranking) == {'source_architecture', 'payoff_preview', 'scene_punchline'}
     assert set(judge_rankings) == {'A', 'B'}
 
 
@@ -383,53 +363,25 @@ def test_outcomes_are_unver_when_quality_review_is_missing_or_stale(monkeypatch)
     got = semantic.outcomes(_Store(fresh=False), _art())
     assert all(out.unver_why and '上游已变化' in out.unver_why for out in got)
 
-    _install(monkeypatch, current)
-    monkeypatch.setattr(semantic, '_calibration_status', lambda _artifact: (False, 'profile 漂移'))
-    got = semantic.outcomes(_Store(), _art())
-    assert all(out.unver_why and 'profile 漂移' in out.unver_why for out in got)
+    # ⚠ 这里曾有第三段：monkeypatch `_calibration_status` 造 profile 漂移。
+    #   自动放行门下线后没有 calibrated 这个状态，也就没有「漂移」这条处境了。
 
 
-def test_advisory_outcomes_keep_quality_and_evidence_visible(monkeypatch):
-    artifact = _semantic_artifact(_all_clean_reviews())
-    artifact.evaluator_fingerprint = EvaluatorFingerprint(
-        dataset_sha256=semantic.ADVISORY_DATASET_SHA256,
-        model='fixture-model',
-        prompt_sha256='1' * 64,
-        schema_sha256='2' * 64,
-        decoder_sha256='3' * 64,
-    )
-    for decision in artifact.decisions:
-        decision.verdict = 'UNVER'
-        decision.automated = False
-        decision.profile_id = None
-        decision.reason = '没有已校准 evaluator profile'
-    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (1, artifact))
-    monkeypatch.setattr(semantic, '_historical_fail_subjects',
-                        lambda _store, **_kwargs: set())
+def test_outcomes_keep_quality_and_evidence_visible_although_the_verdict_is_unver(monkeypatch):
+    """⚠ 恒 UNVER **不等于**「这一层没产出」——证据与质量排序照常进报告。"""
+    _install(monkeypatch, _semantic_artifact(_all_clean_reviews()))
 
     hard, candidates, quality = semantic.outcomes(_Store(), _art())
 
-    assert hard.unver_why and '没有已确认 clear' in hard.unver_why
+    assert hard.unver_why and '没有自动放行门' in hard.unver_why
     assert len(candidates.findings) == 3
     assert quality.findings and '匿名排序' in quality.findings[0].detail
 
 
-def test_advisory_contradiction_keeps_assertion_evidence_and_reason_visible(monkeypatch):
+def test_contradiction_keeps_assertion_evidence_and_reason_visible(monkeypatch):
     reviews = _all_clean_reviews()
     reviews[1] = _stored_review('payoff_preview', TEXT_B, contradiction=True)
-    artifact = _semantic_artifact(reviews)
-    artifact.evaluator_fingerprint = EvaluatorFingerprint(
-        dataset_sha256=semantic.ADVISORY_DATASET_SHA256,
-        model='fixture-model', prompt_sha256='1' * 64,
-        schema_sha256='2' * 64, decoder_sha256='3' * 64)
-    for decision in artifact.decisions:
-        decision.verdict = 'UNVER'
-        decision.automated = False
-        decision.profile_id = None
-        decision.reason = '没有已校准 evaluator profile'
-    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (1, artifact))
-    monkeypatch.setattr(semantic, '_historical_fail_subjects',
-                        lambda _store, **_kwargs: set())
+    _install(monkeypatch, _semantic_artifact(reviews))
 
     _hard, candidates, _quality = semantic.outcomes(_Store(), _art())
     row = next(item for item in candidates.findings if '她嫁给了仇人' in item.detail)
@@ -440,9 +392,11 @@ def test_advisory_contradiction_keeps_assertion_evidence_and_reason_visible(monk
 def test_picking_duplicate_text_does_not_stale_sha_bound_review(monkeypatch):
     artifact = _semantic_artifact(_all_clean_reviews())
     _install(monkeypatch, artifact)
-    outcomes = semantic.outcomes(_Store(), _art(approved='source_architecture'))
-    assert all(out.unver_why is None for out in outcomes)
-    assert not outcomes[0].findings
+    hard, candidates, quality = semantic.outcomes(
+        _Store(), _art(approved='source_architecture'))
+    # 定稿是某条候选的**逐字拷贝** ⇒ 它按 sha1 索引到同一条评审，不会掉成 unreviewed。
+    assert '定稿文本状态为 uncertain' in (hard.unver_why or '')
+    assert candidates.unver_why is None and quality.unver_why is None
 
 
 def test_one_bad_candidate_is_visible_but_does_not_fail_the_candidate_set(monkeypatch):
@@ -452,170 +406,114 @@ def test_one_bad_candidate_is_visible_but_does_not_fail_the_candidate_set(monkey
         reviews, ['source_architecture', 'scene_punchline', 'payoff_preview'])
     _install(monkeypatch, artifact)
     hard, info, metric = semantic.outcomes(_Store(), _art())
-    assert not hard.findings and hard.unver_why is None
-    assert info.rule == 'hook_candidate_contradiction' and len(info.findings) == 1
-    assert TEXT_B[:6] in info.findings[0].detail
+    # HARD 那一条现在是 `unver` 判据：矛盾**报**而不**拦**，裁决权在人。
+    assert not hard.findings and hard.unver_why
+    # ⚠ 三条候选**各**出一行，不是只出有矛盾的那一行：合并结论恒 UNVER 之后，
+    #   「这条有矛盾线索」与「这条判官说不好说」都是待人核的项，少报一条就是把
+    #   「没人验过」说成「没问题」。凭据键是 `<候选>:<文本指纹>`，逐条可单独豁免。
+    assert info.rule == 'hook_candidate_contradiction' and len(info.findings) == 3
+    assert len({tuple(row.evidence) for row in info.findings}) == 3
+    bad = next(row for row in info.findings if TEXT_B[:6] in row.detail)
+    assert '她嫁给了仇人' in bad.detail
     assert metric.rule == 'hook_quality_rank' and metric.findings
 
 
-def test_all_bad_or_approved_bad_materializes_the_hard_rule(monkeypatch):
-    all_bad = [
-        _stored_review('source_architecture', TEXT_A, contradiction=True),
-        _stored_review('payoff_preview', TEXT_B, contradiction=True),
-        _stored_review('scene_punchline', TEXT_C, contradiction=True),
-    ]
-    _install(monkeypatch, _semantic_artifact(all_bad))
-    hard = semantic.outcomes(_Store(), _art())[0]
-    assert hard.findings and '全部存在实质矛盾' in hard.findings[0].detail
+def test_every_reviewed_candidate_lands_in_uncertain_with_its_own_reason(monkeypatch):
+    """⚠⚠ 这里曾有三条用例：`全部存在实质矛盾` 的 HARD、`uncertain 不能定稿`、
+    `contradiction 人选了也不行`。三条都建立在 `state == 'clear' | 'contradiction'` 上，
+    而那两个状态只由 automated PASS/FAIL 产生 ⇒ **自动放行门下线后不可达**。
+    `require_selectable` 随之整函数删除（它恒抛）。
 
-    one_bad = _all_clean_reviews()
-    one_bad[1] = _stored_review('payoff_preview', TEXT_B, contradiction=True)
-    _install(monkeypatch, _semantic_artifact(one_bad))
-    hard = semantic.outcomes(_Store(), _art(approved='payoff_preview'))[0]
-    assert hard.findings and '定稿文本含实质矛盾' in hard.findings[0].detail
-
-
-def test_uncertain_is_not_clear_and_cannot_be_selected(monkeypatch):
+    换成这一条：判过的候选**一律** `uncertain`，但每条带自己的理由——
+    「三条都 uncertain」不等于「三条一样」，人要靠 reason 与 judges 分辨。
+    """
     reviews = _all_clean_reviews()
     reviews[0] = _stored_review('source_architecture', TEXT_A, uncertain=True)
-    artifact = _semantic_artifact(reviews)
-    _install(monkeypatch, artifact)
-    assessment = semantic.assessment_for_text(_Store(), _art(), TEXT_A)
-    assert assessment.state == 'uncertain' and not assessment.selectable
-    with pytest.raises(TerminalState, match='不能定稿'):
-        semantic.require_selectable(_Store(), _art(), TEXT_A, '1')
-    assert semantic.require_selectable(_Store(), _art(), TEXT_B, '2').selectable
-
-
-def test_contradiction_cannot_be_selected_even_when_human_picks_it(monkeypatch):
-    reviews = _all_clean_reviews()
     reviews[2] = _stored_review('scene_punchline', TEXT_C, contradiction=True)
     _install(monkeypatch, _semantic_artifact(reviews))
-    with pytest.raises(TerminalState, match='实质矛盾'):
-        semantic.require_selectable(_Store(), _art(), TEXT_C, '3')
+
+    states = {
+        text: semantic.assessment_for_text(_Store(), _art(), text)
+        for text in (TEXT_A, TEXT_B, TEXT_C)
+    }
+    assert {row.state for row in states.values()} == {'uncertain'}
+    assert not hasattr(semantic.CandidateAssessment, 'selectable')
+    assert not hasattr(semantic, 'require_selectable')
+    assert states[TEXT_A].reason == '指代无法确认'
+    assert len({row.reason for row in states.values()}) > 1, (
+        '三条候选共用一句理由 ⇒ 人分不出它们，等于什么都没说')
 
 
-def test_unreviewed_can_be_human_resolved_but_hash_and_historical_fail_block(monkeypatch):
+def test_human_resolution_needs_actor_reason_and_the_exact_current_bytes(monkeypatch):
+    """⚠⚠ 这里曾有四条用例守「已有校准 FAIL 的候选，人工也不得绕过」（含历史 FAIL、
+    stale 后仍拦、集合不匹配时只拦没改过的那一条）。那道闸的输入是 automated FAIL，
+    自动放行门下线后**不可再产**，四条一起退役。
+
+    ⇒ **产品含义变了，这里必须说清**：现在没有任何机制会替人否决一个候选。
+    矛盾线索仍逐条呈现（`hook_candidate_contradiction`），但拦住错误定稿的只剩两样：
+    人自己读证据，以及下面这道**字节绑定**——改一个字，旧决定立刻失效。
+    """
     monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: None)
     assessment, basis = semantic.require_human_resolution(
         _Store(), _art(), TEXT_A, '1', actor='editor-a', reason='逐项对照原文',
         expected_subject_sha256=semantic.text_sha256(TEXT_A))
     assert assessment.state == 'unreviewed' and basis == 'human_verification'
+
     with pytest.raises(TerminalState, match='已变化'):
         semantic.require_human_resolution(
             _Store(), _art(), TEXT_A, '1', actor='editor-a', reason='已核验',
             expected_subject_sha256='0' * 64)
+    for blank in ('   ', ''):
+        with pytest.raises(TerminalState, match='actor'):
+            semantic.require_human_resolution(
+                _Store(), _art(), TEXT_A, '1', actor=blank, reason='已核验',
+                expected_subject_sha256=semantic.text_sha256(TEXT_A))
 
-    reviews = _all_clean_reviews()
-    reviews[0] = _stored_review('source_architecture', TEXT_A, contradiction=True)
-    artifact = _semantic_artifact(reviews)
-    _install(monkeypatch, artifact)
-    # Profile drift makes the display truthfully UNVER, but does not turn a
-    # durable calibrated FAIL into an ordinary human override.
-    monkeypatch.setattr(semantic, '_calibration_status', lambda _artifact: (False, '漂移'))
-    with pytest.raises(TerminalState, match='不得绕过'):
-        semantic.require_human_resolution(
-            _Store(), _art(), TEXT_A, '1', actor='editor-a', reason='想要覆盖',
-            expected_subject_sha256=semantic.text_sha256(TEXT_A))
-
-
-def test_later_unver_cannot_erase_an_earlier_durable_fail(monkeypatch):
-    failed_reviews = _all_clean_reviews()
-    failed_reviews[0] = _stored_review(
-        'source_architecture', TEXT_A, contradiction=True)
-    failed = _semantic_artifact(failed_reviews)
-
-    later_reviews = _all_clean_reviews()
-    later_reviews[0] = _stored_review('source_architecture', TEXT_A, uncertain=True)
-    later = _semantic_artifact(later_reviews)
-    artifacts = {1: failed, 2: later}
-    store = _Store()
-    store.read_own = lambda _model, rel: (
-        artifacts[int(rel.removeprefix('stage6/semantic_').removesuffix('.json'))], {})
-    monkeypatch.setattr(semantic, 'semantic_seqs', lambda _store: [1, 2])
-    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (2, later))
-    monkeypatch.setattr(semantic, '_calibration_status', lambda _artifact: (True, ''))
-
-    assert semantic.text_sha256(TEXT_A) in semantic._historical_fail_subjects(store)
-    with pytest.raises(TerminalState, match='不得绕过'):
-        semantic.require_human_resolution(
-            store, _art(), TEXT_A, '1', actor='editor-a', reason='想用后一次 UNVER 覆盖',
-            expected_subject_sha256=semantic.text_sha256(TEXT_A))
-
-
-def test_stale_latest_review_cannot_erase_exact_historical_fail(monkeypatch):
-    reviews = _all_clean_reviews()
-    reviews[0] = _stored_review(
-        'source_architecture', TEXT_A, contradiction=True)
-    failed = _semantic_artifact(reviews)
-    store = _Store(fresh=False)
-    store.read_own = lambda _model, _rel: (failed, {})
-    monkeypatch.setattr(semantic, 'semantic_seqs', lambda _store: [1])
-    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (1, failed))
-
-    assessments = semantic.current_assessments(store, _art())
-    failed_assessment = assessments[semantic.text_sha1(TEXT_A)]
-    assert failed_assessment.state == 'unreviewed'
-    assert failed_assessment.historical_fail
-    assert not failed_assessment.human_resolvable
-    assert not assessments[semantic.text_sha1(TEXT_B)].historical_fail
-
-    with pytest.raises(TerminalState, match='不得绕过'):
-        semantic.require_human_resolution(
-            store, _art(), TEXT_A, '1', actor='editor-a', reason='想在 stale 后覆盖',
-            expected_subject_sha256=semantic.text_sha256(TEXT_A))
-    with pytest.raises(TerminalState, match='不能进入成书'):
-        semantic.require_approved_clear(
-            store, _art(approved='source_architecture'))
-
-
-def test_set_mismatch_blocks_unchanged_failed_subject_not_edited_candidate(monkeypatch):
-    edited_b = TEXT_B + '她没有拆开。'
-    reviews = _all_clean_reviews()
-    reviews[0] = _stored_review(
-        'source_architecture', TEXT_A, contradiction=True)
-    reviews[1] = _stored_review(
-        'payoff_preview', TEXT_B, contradiction=True)
-    failed = _semantic_artifact(reviews)
-    current = _art()
-    current.candidates[1] = SimpleNamespace(
-        approach='payoff_preview', text=edited_b, findings=[])
-    store = _Store()
-    store.read_own = lambda _model, _rel: (failed, {})
-    monkeypatch.setattr(semantic, 'semantic_seqs', lambda _store: [1])
-    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (1, failed))
-
-    assessments = semantic.current_assessments(store, current)
-    assert assessments[semantic.text_sha1(TEXT_A)].historical_fail
-    edited_assessment = assessments[semantic.text_sha1(edited_b)]
-    assert edited_assessment.state == 'unreviewed'
-    assert not edited_assessment.historical_fail
-    assert edited_assessment.human_resolvable
-
-    with pytest.raises(TerminalState, match='不得绕过'):
-        semantic.require_human_resolution(
-            store, current, TEXT_A, '1', actor='editor-a', reason='逐项对照原文',
-            expected_subject_sha256=semantic.text_sha256(TEXT_A))
-    assessment, basis = semantic.require_human_resolution(
-        store, current, edited_b, '2', actor='editor-a', reason='逐项对照改后文本',
-        expected_subject_sha256=semantic.text_sha256(edited_b))
-    assert assessment == edited_assessment
-    assert basis == 'human_verification'
-
-
-def test_downstream_requires_the_current_approved_bytes_to_remain_clear(monkeypatch):
-    _install(monkeypatch, _semantic_artifact(_all_clean_reviews()))
-    with pytest.raises(TerminalState, match='还没定稿'):
-        semantic.require_approved_clear(_Store(), _art())
-    assert semantic.require_approved_clear(
-        _Store(), _art(approved='source_architecture')).selectable
-
+    # 有矛盾线索的候选**也**能被人工收口——那是产品裁决，不是漏了一道闸。
     reviews = _all_clean_reviews()
     reviews[0] = _stored_review('source_architecture', TEXT_A, contradiction=True)
     _install(monkeypatch, _semantic_artifact(reviews))
-    with pytest.raises(TerminalState, match='实质矛盾'):
+    picked, basis = semantic.require_human_resolution(
+        _Store(), _art(), TEXT_A, '1', actor='editor-a', reason='读过判官证据后仍选它',
+        expected_subject_sha256=semantic.text_sha256(TEXT_A))
+    assert picked.state == 'uncertain' and basis == 'human_verification'
+
+
+def test_a_stale_or_mismatched_review_set_makes_every_candidate_unreviewed(monkeypatch):
+    """「判过但过期了」与「判的不是这批文本」都必须掉成 `unreviewed`，不许沿用旧结论。"""
+    edited_b = TEXT_B + '她没有拆开。'
+    artifact = _semantic_artifact(_all_clean_reviews())
+
+    stale = _Store(fresh=False)
+    monkeypatch.setattr(semantic, 'latest_semantic', lambda _store: (1, artifact))
+    assert {row.state for row in semantic.current_assessments(stale, _art()).values()} \
+        == {'unreviewed'}
+
+    current = _art()
+    current.candidates[1] = SimpleNamespace(
+        approach='payoff_preview', text=edited_b, findings=[])
+    assessments = semantic.current_assessments(_Store(), current)
+    assert {row.state for row in assessments.values()} == {'unreviewed'}
+    assert all(row.human_resolvable for row in assessments.values())
+
+
+def test_downstream_requires_the_current_approved_bytes(monkeypatch):
+    """下游消费闸剩下的那一条：**resolution 必须仍绑着当前进成书的字节。**
+
+    ⚠ 这条不是「变松了」。原来的三条分支（校准 FAIL 拒绝 / clear 放行 / PASS 漂了兜底）
+    全部由 automated 结论驱动，随自动放行门消失；而真正在拦人的一直是这道字节绑定。
+    """
+    _install(monkeypatch, _semantic_artifact(_all_clean_reviews()))
+    with pytest.raises(TerminalState, match='还没定稿'):
+        semantic.require_approved_clear(_Store(), _art())
+
+    got = semantic.require_approved_clear(
+        _Store(), _art(approved='source_architecture'))
+    assert got.state == 'uncertain'
+
+    with pytest.raises(TerminalState, match='不是当前文本字节'):
         semantic.require_approved_clear(
-            _Store(), _art(approved='source_architecture'))
+            _Store(), _art(approved='source_architecture', bound_sha256='0' * 64))
 
 
 def test_build_prompt_refuses_missing_or_stale_hook(monkeypatch):

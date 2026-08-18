@@ -818,8 +818,6 @@ FREE_ENTRIES: Final = {
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
 PAID_FLAGS: Final = {
-    '--advisory': ('未配置匹配 evaluator profile 时仍运行双盲判官；'
-                   '只产带证据的 UNVER，绝不自动 PASS/FAIL'),
     '--full-extract': 'stage2 全局底座、逐章蓝图与 stage3 文风画像并发首跑',
     '--shallow-rest': 'stage5 把未选为深度重构的其余章节交给浅层写手',
     '--repair-surface-habits': 'stage3 表层习惯的定向返工——它要再调一次模型',
@@ -1191,7 +1189,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     # 保留它的实测依据：2 次调用 / 1.7% 输出 token，而它的匿名质量排序在实跑中
     # 直接纠正过一次定稿——性价比与被下线的那个不在一个量级。
     'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',
-                                 flags=('--dry-run', '--advisory'),
+                                 flags=('--dry-run',),
                                  produces=(artifact_paths.STAGE6_SEMANTIC,)),
     # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
     #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。

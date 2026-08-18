@@ -243,7 +243,7 @@ def _behaviour_errors(
     """「文档声称的 CLI 行为」与「代码实际行为」的对账。
 
     结构检查（链接、节点顺序、经验格式）测不到这一类：一次真实复盘里
-    `--advisory` 这条注册在案的付费主路径**整个 skill 一次都没提**，
+    `--deep` 这类注册在案的付费主路径参数**整个 skill 一次都没提**，
     每本书因此白丢一整层证据，而校验器全绿。下面每一条都钉一个已发生的漏法。
 
     ⚠ 失败文案一律指向**文档**。红的是 skill 说错了，不是注册表写错了——
@@ -270,7 +270,7 @@ def _behaviour_errors(
         if kind not in done:
             errors.append(f"SKILL.md 的「完成定义」没有交代 inbox 的 `{kind}`")
 
-    # ② flag 双向对账。**单向不够**——`--advisory` 正是被单向检查漏掉的那一半。
+    # ② flag 双向对账。**单向不够**——历史上 `--advisory` 正是被单向检查漏掉的那一半。
     node_flags = {flag for spec in inv.NODES.values() for flag in spec.flags}
     known = (
         node_flags

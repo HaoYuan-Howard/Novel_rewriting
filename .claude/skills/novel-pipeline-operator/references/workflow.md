@@ -86,7 +86,7 @@
 | 10 | `stage5.write` | `--deep 1,2,3 --shallow-rest`；不足三章时截到 `N` | deep+shallow 的正式章集合恰好覆盖计划章集合，内部收缩/重试不等于失败 |
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
 | 12 | `stage6.hook` | 无 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
-| 13 | `stage6.semantic` | `--advisory`（无标定 profile 时的现役主路径） | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
+| 13 | `stage6.semantic` | 无 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
 | 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
 | 15 | `stage7.rename` | 无 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
 | 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
@@ -95,12 +95,16 @@
 
 `stage2.global --full-extract` 在中途被闸门拦下时，不机械重跑整组。按最新 `state` 与 finding 修好已落下的部分，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`；只执行缺失项。
 
-### `stage6.semantic --advisory`：不带这个 flag 等于白丢一层证据
+### `stage6.semantic`：它的产出是**证据**，不是绿灯
 
-不带 `--advisory` 时，在未配置匹配 evaluator profile 的宿主上必然 exit 2 且**不发起任何模型调用**。
-它是注册在案的付费 flag（`contracts/invariants.py::PAID_FLAGS`），用它仍运行双盲判官，
-只是结论恒为带证据的 `UNVER`、`automated=false`——**它不能替代标定，但它是"有证据"与"没有证据"的分界**。
-本节点不接 `--check-only`。它是全链最小的付费面：两名盲判官各一次调用，不随章数增长。
+合并决议**恒是带证据的 `UNVER`**——本仓没有把 judge 结论升级成自动 `PASS`/`FAIL` 的装置。
+所以别按合并 verdict 筛候选（三条会一模一样）：要读的是 `decisions[].judges` 里两名盲评判官
+**各自**的 verdict、reason 与逐字 evidence，以及 `reason` 那一句（它会说明属于四种情形的哪一种，
+其中「A/B 同判且各自证据闭合」是信息量最大的一条）。
+
+⚠ 跳过这一层与跑了它是两回事：跳过 ⇒ 没有任何判官看过这三条文案，
+`stage6.approve` 只能在零证据下拍板。本节点不接 `--check-only`，也不再有 flag。
+它是全链最小的付费面：两名盲判官各一次调用，不随章数增长。
 
 ### `--deep 1,2,3` 是默认，不是判据
 

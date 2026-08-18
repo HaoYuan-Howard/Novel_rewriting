@@ -95,10 +95,9 @@ def box(request):
     s.close()
 
 
-@pytest.fixture(autouse=True)
-def _current_fixture_calibration(monkeypatch):
-    """本文件测 wontfix；profile 漂移的正反例在 test_stage6_semantic。"""
-    monkeypatch.setattr(semantic, '_calibration_status', lambda _artifact: (True, ''))
+# ⚠ 这里曾有一个 autouse fixture，猴补 `semantic._calibration_status` 返回 `(True, '')`，
+#   好让 fixture 造出来的语义产物被当成「已校准」。自动放行门整批下线后不再有 calibrated
+#   这个状态，也就不需要假装它成立——本文件测的 wontfix 闭环与它本来就无关。
 
 
 def _ctx(box, node: str, *, paid: bool = False) -> RunContext:

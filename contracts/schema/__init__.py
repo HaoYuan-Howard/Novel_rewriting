@@ -96,9 +96,8 @@ from contracts.schema.corpus import (
     CorpusSkipExpectation, LedgerTokenSummary,
 )
 from contracts.schema.evaluation import (
-    CapabilityMetrics, EvaluatorFingerprint, EvaluatorProfile, EvidenceRef,
+    EvaluatorFingerprint, EvidenceRef,
     GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet, GlobalReviewItem,
-    GroundTruthCase, GroundTruthManifest,
     JudgeDecision, SemanticDecision, TrimAudit, TrimResolution,
 )
 from contracts.schema.report import (
@@ -310,7 +309,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
     STAGE6_HOOK: ArtifactSpec(Hook, current_version=3, migrations=MIGRATE_STAGE6_V2),
     STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit),
-    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview, current_version=2),
+    STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview, current_version=3),
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
     STAGE7_NAME_MAP: ArtifactSpec(NameMap, current_version=3, migrations=MIGRATE_STAGE7_V2),
     STAGE7_NAME_MAP_EDIT: ArtifactSpec(NameMapEdit),
@@ -419,9 +418,7 @@ __all__ = [
     'Finding', 'WontFixNote', 'WontFix', 'WontFixEntry', 'Severity', 'Owner',
     'CorpusArtifactEntry', 'CorpusBookEntry', 'CorpusLedgerSummary',
     'CorpusManifest', 'CorpusSkipExpectation', 'LedgerTokenSummary',
-    'EvidenceRef', 'GroundTruthCase', 'GroundTruthManifest',
-    'EvaluatorFingerprint', 'CapabilityMetrics', 'EvaluatorProfile',
-    'JudgeDecision', 'SemanticDecision', 'GlobalReviewItem', 'GlobalReview',
+    'EvidenceRef', 'EvaluatorFingerprint', 'JudgeDecision', 'SemanticDecision', 'GlobalReviewItem', 'GlobalReview',
     'GlobalReviewDecision', 'GlobalReviewDecisionSet',
     'TrimAudit', 'TrimResolution',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里

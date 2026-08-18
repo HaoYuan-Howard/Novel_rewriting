@@ -58,7 +58,7 @@ def test_future_version_is_refused_with_the_file_and_both_versions():
 def test_old_version_is_refused_without_a_migration_branch():
     with pytest.raises(
         ArtifactVersionError,
-        match=r'stage6/semantic_1\.json: schema v0 不是当前 v2',
+        match=r'stage6/semantic_1\.json: schema v0 不是当前 v3',
     ):
         decode_artifact('stage6/semantic_1.json', {
             '_schema_version': 0, 'texts': [], 'decisions': [],
@@ -104,10 +104,18 @@ def test_only_artifacts_with_new_disk_shapes_advance_to_v3():
         'stage5/{mode}/ch{nn}.json',
         'stage5/review_{n}.json',
         'stage6/hook.json',
+        'stage6/semantic_{n}.json',
         'stage7/name_map.json',
     }
     assert all(ARTIFACT_SPECS[rel].current_version == 3 for rel in v3)
-    assert all(2 in ARTIFACT_SPECS[rel].migrations for rel in v3)
+    # ⚠⚠ `stage6/semantic_{n}.json` 是**唯一一个 v3 却刻意没有 v2 migration** 的产物。
+    #    v2 里 `SemanticDecision` 带 `automated` / `profile_id`，`EvaluatorFingerprint`
+    #    带 `dataset_sha256`；自动放行门下线后这三格没了。写一条「顺手丢掉这三格」的
+    #    migration，会把一份记着 `automated=true` 的旧 PASS 悄悄读成一条普通 UNVER
+    #    ——那不是迁移，是改写历史。它一律拒读，要从 producer 重建。
+    no_migration = {'stage6/semantic_{n}.json'}
+    assert all(2 in ARTIFACT_SPECS[rel].migrations for rel in v3 - no_migration)
+    assert all(not ARTIFACT_SPECS[rel].migrations for rel in no_migration)
     unchanged_v2 = established - v3
     assert all(ARTIFACT_SPECS[rel].current_version == 2 for rel in unchanged_v2)
     assert ARTIFACT_SPECS['stage0/removal_report.json'].current_version == 2

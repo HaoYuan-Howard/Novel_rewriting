@@ -22,14 +22,14 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-003 | `--full-extract` 部分完成 | contract-confirmed | `--full-extract` | 分别 preview 缺失的 `stage2.blueprint` / `stage3.style` |
 | FN-004 | blueprint 锚点失败要先判原字节 | observed | `hinge_anchor_void`, `verbatim_failed` | `--chapters`（付费）或 finding 明列的免费 fix |
 | FN-005 | 钱已调用但目标产物缺失 | contract-confirmed | exit 70, 账本有调用而产物不在盘 | 完全相同参数重跑，命中 `.llm_cache` |
-| FN-006 | 语义结论按文本 sha1 绑定，不跟机械验收的轮次走 | contract-confirmed | `stage6.semantic`, `semantic_review_seq` | 文本未变就**不要**重跑；变了带 `--advisory` |
+| FN-006 | 语义结论按文本 sha1 绑定，不跟机械验收的轮次走 | contract-confirmed | `stage6.semantic`, `semantic_review_seq` | 文本未变就**不要**重跑；变了才重跑 |
 | FN-007 | 语义泄底可能源于上游揭示章误标 | contract-confirmed | `semantic_secret_leak` | `stage2.global --apply-edit` 或 `--wontfix` 留账 |
 | FN-008 | stage6 首轮只有 INVALID | contract-confirmed | `hook.INVALID.json`, `hook_para_sep` | `stage6.hook --apply-edit` 或 `--revalidate` |
 | FN-009 | stage6 总报告与所选候选不是同一粒度 | observed | 落选候选 HARD, 同 sha1 两轮矛盾 | 按 label+sha1 对齐，采更严格那一轮 |
 | FN-010 | stage7 人物表不是全部 surface | observed | `rn_kept_contains_mapped`, `rn_semantic_marker_changed` | `name_map_edit.json` 展开内嵌映射 |
 | FN-011 | stage7 映射编辑后必须重批重拼 | contract-confirmed | `approved`, `book_txt` | 重跑 `stage7.approve` + `stage7.assemble` |
 | FN-012 | `consumed_changed` 可能是诊断噪声 | observed | `consumed_changed`, stale | 逐项指纹全同才披露诊断边，否则按真 stale 处理 |
-| FN-013 | 语义审判的结论恒是带证据的 `UNVER` | contract-confirmed | `stage6.semantic`, `UNVER`, `judges` | `--advisory` |
+| FN-013 | 语义审判的结论恒是带证据的 `UNVER` | contract-confirmed | `stage6.semantic`, `UNVER`, `judges` | 读 `judges` 两侧再人工收口 |
 | FN-014 | 超限章有一条 0 成本销账路 | contract-confirmed | `trim_audit_chNN`, verification | `--retain-pretrim --chapters` 或 `--apply-edit` |
 | FN-015 | 落盘闸拦下后，finding 细节的读法逐层不同 | contract-confirmed | `.INVALID`, exit 2 | 先 `--check-only` 取逐条，再 `--revalidate` 提升 |
 | FN-016 | `--apply-edit` 的路径语义逐层不同 | contract-confirmed | `edit_rel`, 产物目录之外, exit 2 | `--apply-edit`，编辑文件写进书目录内 |
@@ -94,7 +94,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   结论”，**不是**“绑定了哪一轮机械验收”，别按名字反推出一条机械→语义的耦合。
 - 处置：候选文本 sha1 未变时不要重跑 `stage6.semantic`。确实改过开篇候选
   （`--apply-edit` 开新轮、`--revalidate` 提升）时 `hook.json` 会失去 fresh，
-  那时才按主链带 `--advisory` 重跑一次。
+  那时才按主链重跑一次。
 - 验证：`stage6/semantic_<n>.json` 里每条 review 的 `text_sha1` 覆盖当前候选集合，
   `state` 判 stage6 完成；账本这一段没有新增实付记录。
 - 依据：`novel/stages/stage6/semantic.py::text_sha1` 与该模块按 sha1 比对
@@ -175,7 +175,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   `evidence`：**判官给了证据**（正常，人据此核验）与**判官没给证据**（`evidence` 为空，
   那才是真有问题，要重跑或转人工细读）是两回事。合并 `reason` 会逐句说明属于哪一种，
   其中「A/B 同判且各自证据闭合」是信息量最大的一条，别把它读成“没有结论”。
-- 处置：**主链参数本来就带 `--advisory`**。取得双盲判官的带证据 `UNVER` 与匿名质量排序后，按
+- 处置：读 `judges` 两侧各自的 verdict / reason / evidence，取得带证据的 `UNVER`
+  与匿名质量排序后，按
   `stage6.approve --pick N --actor <ACTOR> --reason <理由> --subject-sha256 <完整 SHA-256>`
   收口。不因结论是 `UNVER` 就停机，也不在零语义产物的情况下直接写核验结论。
 - 验证：`stage6/semantic_<n>.json` 落盘且 fresh；批准后的 resolution 记
@@ -190,7 +191,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   “保留 pretrim，转 verification”。
 - 判断：这不是失败，是**唯一**的出路——本仓没有任何「自动生成收缩候选并采用」的路径
   （收缩臂随 evaluator profile 一并整臂下线），超上限章一律零调用落 identity
-  `TrimAudit` 并转人工。**它没有 `--advisory` 对应物**，与 semantic 节点不是一回事。
+  `TrimAudit` 并转人工。与 semantic 节点不是一回事：那一层会真的调用判官，这一层零调用。
   逐条读“超限根因附注”里的实际幅度再决定。
 - 处置：接受当前原稿时跑
   `stage5.review --retain-pretrim --chapters <N> --actor <ACTOR> --reason <理由>`

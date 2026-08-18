@@ -1,58 +1,59 @@
 #!/usr/bin/env python3
+"""双盲语义判官的合并器与运行时身份。
+
+⚠⚠ **本仓没有自动放行门。** 这里曾有一整套「用标定过的 `EvaluatorProfile` 把两名判官的
+一致结论升级成 automated `PASS`/`FAIL`」的装置（`wilson_lower` / `profile_matches` /
+`capability_enabled` / `Confusion` / `confusion`，以及整份 `novel.quality.profile`（已删）：
+`NOVEL_EVALUATOR_PROFILE` + `NOVEL_GROUND_TRUTH_MANIFEST` 两个裸 env、`require_enabled`
+那道总闸）。它从未被标定过，因此那条分支一次都没有走通过。
+
+现在合并决议在**类型上**就只能是 `UNVER`（`SemanticDecision.verdict: Literal['UNVER']`）。
+留下来的是判官不是闸门：证据、逐判官 verdict 与人读理由全部保留，收口只走 hash-bound 的
+`human_verification`。恢复整套装置见 git 与 `docs/schema/evaluation.md` 顶部那段。
+"""
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
-from typing import Iterable
+import hashlib
+import json
+from typing import Any, Iterable
+
+from pydantic import BaseModel
 
 from contracts.schema.evaluation import (
     Ability,
     EvaluatorFingerprint,
-    EvaluatorProfile,
     EvidenceRef,
     JudgeDecision,
     SemanticDecision,
 )
 
 
-def wilson_lower(successes: int, total: int, *, z: float = 1.959963984540054) -> float:
-    """Lower endpoint of the two-sided 95% Wilson score interval."""
-    if total <= 0:
-        return 0.0
-    if successes < 0 or successes > total:
-        raise ValueError('successes must be within [0, total]')
-    p = successes / total
-    denominator = 1 + z * z / total
-    centre = p + z * z / (2 * total)
-    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * total)) / total)
-    return max(0.0, (centre - margin) / denominator)
+def canonical_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')
+    return hashlib.sha256(payload).hexdigest()
 
 
-def profile_matches(
-    profile: EvaluatorProfile,
-    ability: Ability,
-    current: EvaluatorFingerprint,
-) -> bool:
-    """Every per-capability calibration fingerprint is an equality gate."""
-    row = next((item for item in profile.capabilities if item.ability == ability), None)
-    return row is not None and row.fingerprint == current
+def runtime_fingerprint(
+    *,
+    model: str,
+    prompts: Iterable[str],
+    schemas: Iterable[type[BaseModel]],
+    decoder_identity: Any,
+) -> EvaluatorFingerprint:
+    """把这一次判官调用绑到它**确切的请求面**上。
 
-
-def capability_enabled(
-    profile: EvaluatorProfile | None,
-    ability: Ability,
-    current: EvaluatorFingerprint,
-) -> tuple[bool, str]:
-    if profile is None:
-        return False, '没有已校准 evaluator profile'
-    row = next((item for item in profile.capabilities if item.ability == ability), None)
-    if row is None:
-        return False, f'profile 未登记能力 {ability}'
-    if not profile_matches(profile, ability, current):
-        return False, 'dataset/model/prompt/schema/decoder 指纹与该能力校准 profile 不一致'
-    if not row.enabled or not row.threshold_passed():
-        return False, f'{ability} 未达到预先锁定的启用门，保持人工-only'
-    return True, ''
+    它回答的是「这份结论当时看的是哪一版 prompt / 响应 schema / 解码面」——产物新鲜度
+    与人工复算都要它。它**不**回答「这份结论够不够格自动放行」：那个问题在本仓没有答案。
+    """
+    return EvaluatorFingerprint(
+        model=model,
+        prompt_sha256=canonical_sha256(list(prompts)),
+        schema_sha256=canonical_sha256([
+            schema.model_json_schema(mode='validation') for schema in schemas]),
+        decoder_sha256=canonical_sha256(decoder_identity),
+    )
 
 
 def _closed_evidence(decision: JudgeDecision) -> bool:
@@ -66,11 +67,15 @@ def double_blind_decision(
     subject_key: str,
     first: JudgeDecision,
     second: JudgeDecision,
-    profile: EvaluatorProfile | None,
-    current: EvaluatorFingerprint,
 ) -> SemanticDecision:
-    """Admit an automatic verdict only on calibrated, agreeing, evidenced judges."""
-    enabled, why = capability_enabled(profile, ability, current)
+    """合并两名互不可见的判官。结论恒 `UNVER`，但**理由逐句不同**。
+
+    ⚠ 这不是一个壳。它做两件真活：
+      1. 证据并集去重——「带证据的 UNVER」里「证据」那一半；
+      2. 算出四选一的人读 `reason`。第四条（A/B 同判且各自证据闭合）是信息量最大的一条，
+         它必须说出两名判官实际说了什么，而不是笼统一句「未校准」——那会把唯一一次
+         判官一致的读数丢掉，让人以为「没有结论」。
+    """
     judges = [first, second]
     evidence: list[EvidenceRef] = []
     seen: set[tuple] = set()
@@ -81,69 +86,18 @@ def double_blind_decision(
                 seen.add(key)
                 evidence.append(ref)
 
-    if not enabled:
-        return SemanticDecision(
-            ability=ability, subject_key=subject_key,
-            verdict='UNVER', automated=False, evidence=evidence,
-            reason=why, profile_id=profile.profile_id if profile else None, judges=judges)
     if first.verdict == 'UNVER' or second.verdict == 'UNVER':
-        return SemanticDecision(
-            ability=ability, subject_key=subject_key,
-            verdict='UNVER', automated=False, evidence=evidence,
-            reason='至少一名盲评 judge 明确判为 UNVER', profile_id=profile.profile_id,
-            judges=judges)
-    if first.verdict != second.verdict:
-        return SemanticDecision(
-            ability=ability, subject_key=subject_key,
-            verdict='UNVER', automated=False, evidence=evidence,
-            reason='两名盲评 judge 结论不一致', profile_id=profile.profile_id,
-            judges=judges)
-    if not all(_closed_evidence(row) for row in judges):
-        return SemanticDecision(
-            ability=ability, subject_key=subject_key,
-            verdict='UNVER', automated=False, evidence=evidence,
-            reason='judge 结论缺少可闭合证据', profile_id=profile.profile_id,
-            judges=judges)
+        reason = '至少一名盲评 judge 明确判为 UNVER'
+    elif first.verdict != second.verdict:
+        reason = (
+            f'两名盲评 judge 结论不一致（A={first.verdict}，B={second.verdict}）')
+    elif not all(_closed_evidence(row) for row in judges):
+        reason = 'judge 结论缺少可闭合证据'
+    else:
+        reason = (
+            f'A/B 同判 {first.verdict} 且各自证据闭合；'
+            f'本仓没有标定过的自动放行门 ⇒ 结论保持 UNVER，'
+            f'交人工按 actor / reason / 完整 subject SHA-256 核验')
     return SemanticDecision(
-        ability=ability, subject_key=subject_key,
-        verdict=first.verdict, automated=True, evidence=evidence,
-        reason='已校准双盲 judge 同结论且证据闭合', profile_id=profile.profile_id,
-        judges=judges)
-
-
-@dataclass(frozen=True)
-class Confusion:
-    true_pass: int = 0
-    false_pass: int = 0
-    true_fail: int = 0
-    false_fail: int = 0
-
-    @property
-    def pass_precision_lower(self) -> float:
-        return wilson_lower(self.true_pass, self.true_pass + self.false_pass)
-
-    @property
-    def fail_precision_lower(self) -> float:
-        return wilson_lower(self.true_fail, self.true_fail + self.false_fail)
-
-    @property
-    def violation_recall_lower(self) -> float:
-        return wilson_lower(self.true_fail, self.true_fail + self.false_pass)
-
-
-def confusion(expected_and_actual: Iterable[tuple[str, str]]) -> Confusion:
-    counts = {'true_pass': 0, 'false_pass': 0, 'true_fail': 0, 'false_fail': 0}
-    for expected, actual in expected_and_actual:
-        if actual not in {'PASS', 'FAIL'}:
-            continue
-        if expected == 'PASS' and actual == 'PASS':
-            counts['true_pass'] += 1
-        elif expected == 'FAIL' and actual == 'PASS':
-            counts['false_pass'] += 1
-        elif expected == 'FAIL' and actual == 'FAIL':
-            counts['true_fail'] += 1
-        elif expected == 'PASS' and actual == 'FAIL':
-            counts['false_fail'] += 1
-        else:
-            raise ValueError(f'unsupported label pair: {expected!r}, {actual!r}')
-    return Confusion(**counts)
+        ability=ability, subject_key=subject_key, verdict='UNVER',
+        evidence=evidence, reason=reason, judges=judges)

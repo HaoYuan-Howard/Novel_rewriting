@@ -7,7 +7,7 @@
 
 * 用生产 ``build_argv`` 展开每本八条付费 CLI dispatch；
 * 固定当前模型/思考模式、独立空 cache 与 ``DEEPSEEK_MAX_RETRIES=0``；
-* 从真实节点 ladder 复算基础、advisory semantic 和条件调用的 wire 可达上限；
+* 从真实节点 ladder 复算基础、语义审判和条件调用的 wire 可达上限；
 * 只对在上游生成前已经可知的 Stage2 global prompt 做精确 tokenizer 计数；
 * 把旧 ledger 作为带哈希的历史观察列出，不冒充新 schema 的预测；
 * 单列受限校准 runner 的最低 800-case 调用拓扑；在最终私有 manifest、case
@@ -42,7 +42,6 @@ from contracts.artifacts import (  # noqa: E402
 )
 from contracts.invariants import HOOK_APPROACHES, NODES  # noqa: E402
 from contracts.schema import artifact_spec, decode_artifact  # noqa: E402
-from contracts.schema.evaluation import EVALUATOR_ABILITIES  # noqa: E402
 from contracts.schema.stage0 import RemovalReport  # noqa: E402
 from contracts.schema.stage1 import HookCopy, MainText, PartitionReport  # noqa: E402
 from novel import config, paths, prov  # noqa: E402
@@ -99,22 +98,10 @@ EXISTING_AUTHORIZED = {
     'overlaps_current_corpus_scope': False,
 }
 
-# TODO-24's frozen *minimum* calibration campaign.  The restricted runner
-# evaluates every manifest case twice per run and requires exactly three runs;
-# its one-rung/retry-zero contract makes logical calls equal wire attempts.
-# A final manifest may contain more than this floor, in which case this preview
-# must be regenerated with 6 * actual_case_count before execution is proposed.
-EVALUATOR_MIN_CASES_PER_ABILITY = 100
-EVALUATOR_JUDGES_PER_CASE = 2
-EVALUATOR_RUNS = 3
-EVALUATOR_MIN_CASES = (
-    len(EVALUATOR_ABILITIES) * EVALUATOR_MIN_CASES_PER_ABILITY
-)
-EVALUATOR_MIN_EXACT_CALLS = (
-    EVALUATOR_MIN_CASES * EVALUATOR_JUDGES_PER_CASE * EVALUATOR_RUNS
-)
-
-PROFILE_DEPENDENCY = {
+#: 跑双盲语义判官的节点 → 它问的那一类能力。
+#: ⚠ 这里曾叫 `SEMANTIC_NODES`——那个名字说的是「依赖哪一份 evaluator profile」，
+#: 而 profile 那套装置已整批下线；现在它只回答「这一步问的是什么问题」。
+SEMANTIC_NODES = {
     'stage6.semantic': 'reference_boundary',
 }
 
@@ -147,7 +134,7 @@ PREREQUISITES = {
     ),
     'stage6.semantic': (
         'Stage6 hook 正式候选必须 fresh。',
-        '本次 current-corpus 固定以 --advisory 运行；具体 contradiction 仍完整展示，'
+        '语义审判的合并决议恒是带证据的 UNVER；具体 contradiction 仍完整展示，'
         '所选候选只能经 actor/reason/subject hash 人工闭环。',
     ),
     'stage7.rename': (
@@ -402,12 +389,10 @@ def _dispatch(book: dict[str, Any], node: str) -> dict[str, Any]:
     flags = (
         ['--deep', '1,2,3', '--shallow-rest']
         if node == 'stage5.write' else
-        ['--advisory']
-        if node in PROFILE_DEPENDENCY else
         []
     )
     argv = build_argv(node, book['sid'], flags, base=book['base'])
-    profile = PROFILE_DEPENDENCY.get(node)
+    ability = SEMANTIC_NODES.get(node)
     return {
         'sid': book['sid'],
         'node': node,
@@ -423,11 +408,11 @@ def _dispatch(book: dict[str, Any], node: str) -> dict[str, Any]:
         'rungs': [list(row) for row in rungs],
         'retry': FIXED_MAX_RETRIES,
         'cache_must_start_empty': True,
-        'profile_dependency': profile,
-        'profile_gate_behavior': (
-            '冻结为 --advisory；无 profile 时照常双盲调用但只产 UNVER，'
-            '必须人工核验，绝不冒充自动 PASS'
-            if profile else None),
+        'semantic_ability': ability,
+        'semantic_gate_behavior': (
+            '照常双盲调用，但合并决议恒是带证据的 UNVER：'
+            '本仓没有自动放行门，必须人工核验，绝不冒充自动 PASS'
+            if ability else None),
         'human_gate_dependencies': list(PREREQUISITES[node]),
         'schema_targets': _schema_targets(node),
         'request_envelopes': _request_envelopes(node, rungs),
@@ -569,7 +554,7 @@ def historical_observations(
 
 
 def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
-    profile_nodes = set(PROFILE_DEPENDENCY)
+    profile_nodes = set(SEMANTIC_NODES)
     mandatory = [row for row in dispatches if row['node'] not in profile_nodes]
     profiled = [row for row in dispatches if row['node'] in profile_nodes]
     stage3 = [row for row in dispatches if row['node'] == 'stage3.style']
@@ -592,8 +577,8 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
         'base_nonsemantic_ladder_wire_hard_limit': base_wire,
         'stage3_conditional_habit_quote_logical': stage3_logical,
         'stage3_conditional_habit_quote_wire_hard_limit': stage3_wire,
-        'advisory_semantic_logical': profile_logical,
-        'advisory_semantic_wire_hard_limit': profile_wire,
+        'semantic_logical': profile_logical,
+        'semantic_wire_hard_limit': profile_wire,
         'stage6_conditional_candidate_retry_logical': hook_retry_logical,
         'stage6_conditional_candidate_retry_wire_hard_limit': hook_retry_wire,
         'full_conditional_logical_hard_limit': full_logical,
@@ -602,86 +587,10 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def _calibration_evaluation() -> dict[str, Any]:
-    """Describe the restricted evaluator without pretending inputs exist.
-
-    The command is deliberately a template, not a frozen executable command:
-    hashes, paths, model/effort/thinking and the output declaration all come
-    from the final private manifest and prompt bundle.  Once those placeholders
-    are resolved, ``restricted_evaluator.py`` itself emits the fully frozen
-    execute argv and exact tokenizer count for the actual case count.
-    """
-
-    preview_argv = [
-        sys.executable, '-X', 'utf8', '-u', 'tools/restricted_evaluator.py',
-        '--manifest', '<PRIVATE_FINAL_GROUND_TRUTH_MANIFEST_JSON>',
-        '--corpus-root', '<PRIVATE_HELD_OUT_CORPUS_ROOT>',
-        '--case-store', '<PRIVATE_CASE_CATALOG_ROOT>',
-        '--prompt-bundle', '<PRIVATE_FINAL_RUBRIC_PROMPT_BUNDLE_JSON>',
-        '--output-dir', '<ISOLATED_EMPTY_EVALUATOR_OUTPUT_DIR>',
-        '--run', 'eval-run-1=<ISO8601_TIMESTAMP_1>',
-        '--run', 'eval-run-2=<ISO8601_TIMESTAMP_2>',
-        '--run', 'eval-run-3=<ISO8601_TIMESTAMP_3>',
-    ]
-    return {
-        'status': 'blocked_missing_final_private_inputs',
-        'blocked': True,
-        'runner': 'tools/restricted_evaluator.py',
-        'runner_mode': 'read_only_preview_until_execute_and_yes',
-        'production_cli_dispatch': None,
-        'preview_argv_template': preview_argv,
-        'preview_command_template': subprocess.list2cmdline(preview_argv),
-        'template_has_unresolved_placeholders': True,
-        'frozen_execute_argv': None,
-        'execute_flags_required_after_separate_confirmation': ['--execute', '--yes'],
-        'abilities': list(EVALUATOR_ABILITIES),
-        'abilities_count': len(EVALUATOR_ABILITIES),
-        'minimum_cases_per_ability': EVALUATOR_MIN_CASES_PER_ABILITY,
-        'minimum_cases': EVALUATOR_MIN_CASES,
-        'judges_per_case': EVALUATOR_JUDGES_PER_CASE,
-        'independent_runs': EVALUATOR_RUNS,
-        'calls_formula': 'manifest_cases * 2 judges * 3 runs',
-        'count_scope': 'frozen_minimum_800_case_campaign',
-        'exact_calls': EVALUATOR_MIN_EXACT_CALLS,
-        'logical_requests': EVALUATOR_MIN_EXACT_CALLS,
-        'wire_hard_cap': EVALUATOR_MIN_EXACT_CALLS,
-        'wire_attempts': EVALUATOR_MIN_EXACT_CALLS,
-        'minimum_campaign_exact_logical_requests': EVALUATOR_MIN_EXACT_CALLS,
-        'minimum_campaign_wire_hard_cap': EVALUATOR_MIN_EXACT_CALLS,
-        'actual_campaign_exact_logical_requests': (
-            'unknown_until_final_manifest; 6 * actual_manifest_cases; >=4800'),
-        'actual_campaign_wire_hard_cap': (
-            'unknown_until_final_manifest; equals actual logical requests'),
-        'batch_size': 1,
-        'fallback_rungs': 1,
-        'transport_retries': 0,
-        'cache_policy': 'three independent empty caches; no cross-run reuse',
-        'model': 'unknown_until_private_prompt_bundle',
-        'thinking': 'unknown_until_private_prompt_bundle',
-        'effort': 'unknown_until_private_prompt_bundle',
-        'tokens': {
-            'input_tokens': (
-                'unknown_until_final_private_case_catalog_and_rubric_prompt_bundle'),
-            'declared_output_tokens': (
-                'unknown_until_private_prompt_bundle.max_output_tokens'),
-            'price': 'unknown; no unit price is assumed',
-            'completion_includes_reasoning': True,
-        },
-        'blocking_inputs': [
-            'final adjudicated private ground-truth manifest',
-            'hash-matched private case catalog and held-out corpus',
-            'final private rubric/prompt bundle',
-            'three frozen run ids/timestamps and an isolated empty output directory',
-        ],
-        'reason': (
-            '受限付费 runner 已存在，但实际私有 manifest/catalog/rubric bundle 尚未冻结；'
-            '因此只冻结 800-case 最低 campaign 的 4800 次拓扑，不把它冒充最终 manifest '
-            '的可执行命令或 token 数。'),
-        'included_in_current_corpus_totals': False,
-        'included_in_corpus_totals': False,
-        'overlaps_current_corpus_scope': False,
-        'overlaps_existing_fc08_fc13_scope': False,
-    }
+# ⚠⚠ 这里曾有 `_calibration_evaluation()`：它冻结「800 case × 2 judge × 3 run = 4800 次」
+#     那场标定战役的拓扑与 `tools/restricted_evaluator.py` 的 argv 模板。整套 evaluator
+#     profile 装置（含那个 runner）已被裁决删除，因此这段连同 `scope_accounting` 里的
+#     三块合并数一并移除——**留着它等于给一个不存在的付费计划报预算**。
 
 
 def build_plan(
@@ -696,7 +605,6 @@ def build_plan(
         for node in PAID_NODES
     ]
     aggregate = _aggregate(dispatches)
-    calibration = _calibration_evaluation()
     global_tokens = {
         book['sid']: _global_token_estimate(book, token_counter)
         for book in books
@@ -740,36 +648,26 @@ def build_plan(
                 EXISTING_AUTHORIZED['external_hard_limit']
                 + aggregate['full_conditional_wire_hard_limit']),
         },
-        'calibration_evaluation': calibration,
         'scope_accounting': {
             'existing_fc08_fc13_wire_hard_limit': (
                 EXISTING_AUTHORIZED['external_hard_limit']),
             'current_corpus_wire_hard_limit': (
                 aggregate['full_conditional_wire_hard_limit']),
-            'minimum_calibration_wire_hard_cap': EVALUATOR_MIN_EXACT_CALLS,
             'existing_fc08_fc13_overlaps_current_corpus': False,
-            'calibration_overlaps_current_corpus': False,
-            'calibration_overlaps_existing_fc08_fc13': False,
             'existing_plus_current_once_each': (
                 EXISTING_AUTHORIZED['external_hard_limit']
                 + aggregate['full_conditional_wire_hard_limit']),
-            'all_three_minimum_campaign_once_each_if_later_unblocked': (
-                EXISTING_AUTHORIZED['external_hard_limit']
-                + aggregate['full_conditional_wire_hard_limit']
-                + EVALUATOR_MIN_EXACT_CALLS),
             'authorization_note': (
                 '588 是既有隔离实验上限，'
                 f'{aggregate["full_conditional_wire_hard_limit"]} 是 canonical '
                 'current corpus 上限，'
-                '二者互不复用且各计一次；4800 是仍 blocked 的最低 evaluator campaign，'
-                '合并数不是新增授权。'),
+                '二者互不复用且各计一次；合并数不是新增授权。'),
         },
     }
 
 
 def render(plan: dict[str, Any]) -> str:
     aggregate = plan['aggregate']
-    calibration = plan['calibration_evaluation']
     accounting = plan['scope_accounting']
     lines = [
         '# current-schema corpus 新增付费范围（只读冻结预览）',
@@ -803,10 +701,10 @@ def render(plan: dict[str, Any]) -> str:
         ])
         if row['conditional_reason']:
             lines.append(f'  conditional={row["conditional_reason"]}')
-        if row['profile_dependency']:
+        if row['semantic_ability']:
             lines.append(
-                f'  evaluator_profile={row["profile_dependency"]}；'
-                f'{row["profile_gate_behavior"]}')
+                f'  semantic_ability={row["semantic_ability"]}；'
+                f'{row["semantic_gate_behavior"]}')
         lines.extend([
             '  frozen_environment=' + json.dumps(
                 row['frozen_environment'], ensure_ascii=False, sort_keys=True),
@@ -823,9 +721,9 @@ def render(plan: dict[str, Any]) -> str:
         f'Stage6 条件候选定向重试：logical='
         f'{aggregate["stage6_conditional_candidate_retry_logical"]} / wire 上限='
         f'{aggregate["stage6_conditional_candidate_retry_wire_hard_limit"]}',
-        f'advisory semantic（无 profile，产 UNVER）：logical='
-        f'{aggregate["advisory_semantic_logical"]} / '
-        f'wire 上限={aggregate["advisory_semantic_wire_hard_limit"]}',
+        f'语义审判（恒产 UNVER）：logical='
+        f'{aggregate["semantic_logical"]} / '
+        f'wire 上限={aggregate["semantic_wire_hard_limit"]}',
         f'全条件硬上限：logical={aggregate["full_conditional_logical_hard_limit"]} / '
         f'wire={aggregate["full_conditional_wire_hard_limit"]} / context-token ceiling='
         f'{aggregate["full_conditional_context_token_hard_ceiling"]:,}',
@@ -857,23 +755,10 @@ def render(plan: dict[str, Any]) -> str:
         '实验与 canonical corpus 使用隔离 base/cache，'
         '没有把同一调用计两次。',
         '',
-        '## 校准评测',
-        f'status={calibration["status"]}：受限 runner 已存在，但最终私有 '
-        'manifest/catalog/rubric bundle 未就绪，不能形成可执行冻结命令。',
-        f'最低冻结拓扑：{calibration["abilities_count"]} abilities × '
-        f'{calibration["minimum_cases_per_ability"]} cases × '
-        f'{calibration["judges_per_case"]} judges × '
-        f'{calibration["independent_runs"]} runs = '
-        f'{calibration["minimum_campaign_exact_logical_requests"]} exact logical / '
-        f'{calibration["minimum_campaign_wire_hard_cap"]} wire。',
-        '单档、batch=1、transport retry=0；逻辑调用数等于 wire 硬上限。'
-        '若最终 manifest 超过 800 case，必须按 6×实际 case 数重生成预览。',
-        f'preview_argv_template={calibration["preview_command_template"]}',
-        'input token=unknown（只有最终私有 case catalog + rubric/prompt bundle '
-        '才能精确 tokenizer 计数）；未猜单价。',
-        f'范围合计：existing+current 各一次={accounting["existing_plus_current_once_each"]}；'
-        f'若日后最低 evaluator 解锁，三块各一次={accounting["all_three_minimum_campaign_once_each_if_later_unblocked"]}。',
-        '后一个合计只是非重叠范围说明，不是付费授权；evaluator 未计入 current corpus totals。',
+        f'范围合计：existing+current 各一次={accounting["existing_plus_current_once_each"]}。',
+        '⚠ 这里曾还有第三块「最低 evaluator 标定 campaign」。整套 evaluator profile '
+        '装置已被裁决删除，那场战役不会发生，因此它不再作为一个待解锁的付费范围出现'
+        '——给一个不存在的计划报预算，比不报更容易被当成「还差这一步」。',
         '',
         '仅预览：本工具没有执行入口，未发请求、未创建 cache/base、未写产物。',
     ])

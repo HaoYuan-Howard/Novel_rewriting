@@ -58,8 +58,6 @@ def _commands() -> list[str]:
             flags = ''
             if node == 'stage5.write':
                 flags = ' --deep 1,2,3 --shallow-rest'
-            elif node == 'stage6.semantic':
-                flags = ' --advisory'
             commands.append(
                 f'python -X utf8 -u -m novel.cli run {node} {sid}'
                 f'{flags} --base E:/acceptance --yes')
@@ -197,11 +195,15 @@ def test_manifest_pins_the_real_run_dispatch_topology_and_required_flags():
     with pytest.raises(ValidationError, match='novel.cli run'):
         CorpusManifest.model_validate(raw)
 
+    # ⚠ 这里曾断言「`stage6.semantic` 的命令缺 `--advisory` 必须被拒」。那个 flag 随
+    #   自动放行门一并删除后，这条断的就是**一道产品明说不存在的闸**（`docs/LESSONS.md`
+    #   第 21 条第二形状）——删掉它，而不是给冻结命令把 flag 补回去让它变绿。
+    #   反向由下面那条「多一个 flag 就拒」覆盖：现在 semantic 只许带 `--base --yes`。
     raw = _manifest_raw()
     index = next(i for i, command in enumerate(raw['commands'])
                  if 'stage6.semantic' in command)
-    raw['commands'][index] = raw['commands'][index].replace(' --advisory', '')
-    with pytest.raises(ValidationError, match='advisory'):
+    raw['commands'][index] += ' --advisory'
+    with pytest.raises(ValidationError, match='flags 必须恰为'):
         CorpusManifest.model_validate(raw)
 
     raw = _manifest_raw()
@@ -221,8 +223,6 @@ def test_manifest_accepts_commands_from_the_production_argv_builder(tmp_path):
             flags: tuple[str, ...] = ()
             if node == 'stage5.write':
                 flags = ('--deep', '1,2,3', '--shallow-rest')
-            elif node == 'stage6.semantic':
-                flags = ('--advisory',)
             commands.append(subprocess.list2cmdline(build_argv(
                 node, sid, flags, base=tmp_path)))
     raw = _manifest_raw()

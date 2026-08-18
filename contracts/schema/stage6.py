@@ -120,14 +120,15 @@ class HookApprovalResolution(HashBoundHumanApproval):
     any archive/write so a stale browser or CLI cannot approve different text.
     """
 
-    basis: Literal['calibrated_pass', 'human_verification']
+    #: 盘上恒 `'human_verification'`。**没有别的取值**——`calibrated_pass` 是**被裁决掉的
+    #: 东西**（它只能由 evaluator profile 那套自动放行装置产生，而那套已整批下线），
+    #: 不是还没做的。同 `ApprovedHook.origin` 的形状与理由。
+    #: ⚠ 盘上不需要迁移：三本书的既有 approval 本来就全是 `human_verification`，
+    #: 从来没有任何宿主产出过 `calibrated_pass`。
+    basis: Literal['human_verification']
+    #: 人当时读的是哪一份 semantic 审判。`None` = 定稿时盘上没有可用的当前审判
+    #: （那时人是在**没有判官证据**的情况下拍板的，这两件事必须分得开）。
     semantic_review_seq: int | None = Field(default=None, ge=1)
-
-    @model_validator(mode='after')
-    def _calibrated_pass_names_its_review(self) -> 'HookApprovalResolution':
-        if self.basis == 'calibrated_pass' and self.semantic_review_seq is None:
-            raise ValueError('calibrated_pass 必须绑定 semantic_review_seq')
-        return self
 
 
 class ApprovedHook(StrictModel):
@@ -435,14 +436,11 @@ class HookSemanticReview(StrictModel):
             if any(ref.subject_sha256 != decision.subject_key
                    for ref in [*refs, *decision.evidence]):
                 raise ValueError('Stage6 decision 的全部证据必须绑定它自己的完整 subject hash')
-            if decision.automated:
-                if decision.verdict not in {'PASS', 'FAIL'}:
-                    raise ValueError('自动 Stage6 decision 只能是 PASS/FAIL')
-                if any(judge.verdict != decision.verdict or not judge.evidence
-                       for judge in decision.judges):
-                    raise ValueError('自动 Stage6 decision 必须由 A/B 同结论且各自证据闭合')
-            elif decision.verdict != 'UNVER':
-                raise ValueError('非自动 Stage6 decision 必须诚实降为 UNVER')
+        # ⚠ 这里曾有一支 `if decision.automated:`（自动决议只能是 PASS/FAIL，且必须 A/B
+        #   同结论 + 各自证据闭合）与它的 `elif ... != 'UNVER': raise` 对偶。自动放行门
+        #   下线后 `SemanticDecision.verdict` 在类型上就只有 `UNVER`，两支都不可达。
+        #   **不要**在这里补一条「decisions 必须全 UNVER」——那等于把刚删掉的校验器
+        #   换个地方再写一遍，而类型已经把它守住了。
         return self
 
 

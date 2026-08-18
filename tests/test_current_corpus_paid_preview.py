@@ -97,8 +97,8 @@ def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path
         'base_nonsemantic_ladder_wire_hard_limit': 544,
         'stage3_conditional_habit_quote_logical': 2,
         'stage3_conditional_habit_quote_wire_hard_limit': 8,
-        'advisory_semantic_logical': 4,
-        'advisory_semantic_wire_hard_limit': 16,
+        'semantic_logical': 4,
+        'semantic_wire_hard_limit': 16,
         'stage6_conditional_candidate_retry_logical': 6,
         'stage6_conditional_candidate_retry_wire_hard_limit': 6,
         'full_conditional_logical_hard_limit': 148,
@@ -157,7 +157,8 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
     semantic = [row for row in plan['dispatches']
                 if row['node'] == 'stage6.semantic']
     assert len(semantic) == 2
-    assert all('--advisory' in row['production_cli_argv'] for row in semantic)
+    # ⚠ 断的是**没有**：`--advisory` 随自动放行门一并删除，恒真的 flag 是误导。
+    assert all('--advisory' not in row['production_cli_argv'] for row in semantic)
     with pytest.raises(SystemExit):
         P._parser().parse_args(['--execute'])
 
@@ -222,9 +223,9 @@ def test_book_specs_still_reject_same_sid_and_ancestor_bases(tmp_path):
 def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
     plan = P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1)
     by_node = {row['node']: row for row in plan['dispatches'][:8]}
-    assert by_node['stage6.semantic']['profile_dependency'] == 'reference_boundary'
-    assert '--advisory' in by_node['stage6.semantic']['profile_gate_behavior']
-    assert 'UNVER' in by_node['stage6.semantic']['profile_gate_behavior']
+    assert by_node['stage6.semantic']['semantic_ability'] == 'reference_boundary'
+    assert 'UNVER' in by_node['stage6.semantic']['semantic_gate_behavior']
+    assert '没有自动放行门' in by_node['stage6.semantic']['semantic_gate_behavior']
     # `stage5.semantic` 于 2026-08-17 整节点下线 ⇒ 付费面上只剩 stage6 一条语义 dispatch。
     assert 'stage5.semantic' not in by_node
     assert any('全项 PASS' in line for line in by_node['stage4.plan']['human_gate_dependencies'])
@@ -299,36 +300,16 @@ def test_existing_experiments_and_minimum_evaluator_are_separate_scopes(tmp_path
     assert old['included_in_new_corpus_totals'] is False
     assert old['overlaps_current_corpus_scope'] is False
     assert old['combined_wire_hard_ceiling_once_each'] == 588 + 574
-    calibration = plan['calibration_evaluation']
-    assert calibration['production_cli_dispatch'] is None
-    assert calibration['status'] == 'blocked_missing_final_private_inputs'
-    assert calibration['minimum_cases'] == 8 * 100
-    assert calibration['count_scope'] == 'frozen_minimum_800_case_campaign'
-    assert calibration['exact_calls'] == 4800
-    assert calibration['logical_requests'] == 4800
-    assert calibration['wire_hard_cap'] == 4800
-    assert calibration['wire_attempts'] == 4800
-    assert calibration['minimum_campaign_exact_logical_requests'] == 800 * 2 * 3
-    assert calibration['minimum_campaign_wire_hard_cap'] == 4800
-    assert calibration['batch_size'] == 1
-    assert calibration['fallback_rungs'] == 1
-    assert calibration['transport_retries'] == 0
-    assert calibration['tokens']['input_tokens'].startswith('unknown_until')
-    assert calibration['included_in_current_corpus_totals'] is False
-    assert calibration['included_in_corpus_totals'] is False
-    assert calibration['overlaps_current_corpus_scope'] is False
-    assert calibration['overlaps_existing_fc08_fc13_scope'] is False
-    argv = calibration['preview_argv_template']
-    assert argv[:4] == [P.sys.executable, '-X', 'utf8', '-u']
-    assert argv[4] == 'tools/restricted_evaluator.py'
-    assert argv.count('--run') == 3
-    assert '--execute' not in argv and '--yes' not in argv
 
     accounting = plan['scope_accounting']
     assert accounting['existing_fc08_fc13_overlaps_current_corpus'] is False
     assert accounting['existing_plus_current_once_each'] == 588 + 574
-    assert accounting['all_three_minimum_campaign_once_each_if_later_unblocked'] == (
-        588 + 574 + 4800)
+    # ⚠ 这里曾有第三块：仍 blocked 的「最低 evaluator 标定 campaign（4800 次）」。
+    #   evaluator profile 装置已被裁决删除，那场战役不会发生 ⇒ 预览不再为它报预算。
+    #   断言写成「这两个键不许回来」，而不是删掉了事：一个不存在的计划出现在预算里，
+    #   会被读成「还差这一步」。
+    assert 'calibration_evaluation' not in plan
+    assert 'all_three_minimum_campaign_once_each_if_later_unblocked' not in accounting
 
 
 def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
@@ -355,11 +336,10 @@ def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     assert '全条件硬上限：logical=148 / wire=574' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text
-    assert 'blocked_missing_final_private_inputs' in text
-    assert '8 abilities × 100 cases × 2 judges × 3 runs = 4800' in text
-    assert '三块各一次=5962' in text
-    assert '若最终 manifest 超过 800 case' in text
-    assert 'input token=unknown' in text
+    assert '那场战役不会发生' in text
+    assert '4800' not in text
+    # ⚠ 「不知道」必须一直写在渲染里：`unknown` 消失就等于把「没算过」读成「不需要算」。
+    assert '其余 prompt token：unknown' in text
     assert 'price：unknown' in text
     assert 'completion 已含 reasoning，不重复相加' in text
     assert '最终 schema v2 上游' not in text

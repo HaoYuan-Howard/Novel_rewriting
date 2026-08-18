@@ -46,7 +46,7 @@ conda run -n novel_refactor python -m pytest --require-corpus
 
 manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 18 条真实
 production dispatch：每书各一条 Stage2 global/blueprint、Stage3、Stage4、Stage5
-write/semantic、Stage6 hook/semantic、Stage7 rename；两条 semantic 必须保留 `--advisory`，
+write/semantic、Stage6 hook/semantic、Stage7 rename；`stage6.semantic` 只带 `--base --yes`（`--advisory` 已随自动放行门一并删除），
 write 固定 `--deep 1,2,3 --shallow-rest`。ledger 必须对两书、九节点逐一有非零记录并与这
 18 条命令对账。`preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
 

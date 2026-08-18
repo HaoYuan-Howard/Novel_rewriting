@@ -422,7 +422,7 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
             print(f'\n── user（{len(user)} 字；{len(aliases)} 份去重文本）──\n{user}')
             return X.OK
         artifact, report = semantic.run_semantic(
-            ctx, _llm_client(ctx), advisory='--advisory' in tokens)
+            ctx, _llm_client(ctx))
         print(f'  ✓ 文案质量审判已落盘：{len(artifact.reviews)} 份文本 · '
               f'排序 {artifact.ranking}')
         print(render(report))
