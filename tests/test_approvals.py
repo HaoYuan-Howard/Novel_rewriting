@@ -9,7 +9,7 @@ import pytest
 
 from contracts.schema.stage7 import ApprovedNameMap
 from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
-from novel.orchestrator import approvals, jobs
+from novel.orchestrator import approvals, jobs, state
 from novel.stages.stage7 import rename
 from tests import corpus, sandbox
 
@@ -62,6 +62,10 @@ def _approvable_book(rel: str) -> str:
         if a.rel == rel and corpus.load_current(a).get('_provenance') is not None
     })
     ok = [b for b in books if sandbox.source_resolves_in_a_sandbox(b)]
+    # ⚠ **成稿链条当前的排前面**：`s5` 的凭据要求逐份成稿「明确当前」
+    #   （实测 `ApprovalRequired: stage5/deep/ch01.json … stale/consumed_changed`）。
+    #   这是排序不是过滤——一本都不当前时仍然选得出书，由用例各自的前提去声明。
+    ok.sort(key=lambda b: not corpus.is_current(b, 'stage5/deep/', 'stage5/shallow/'))
     corpus.declared_dependency(
         bool(ok),
         needs=(f'一本 `stage0/removal_report.json` 记的源路径仍在盘上的书'
@@ -207,7 +211,22 @@ def test_default_depth_is_chapters_one_two_three_and_get_is_read_only():
         assert doc.deep == [1, 2, 3]
         assert not (box.root / '_service').exists(), 'GET must not persist service state'
         assert set(doc.gate) == {f's{i}' for i in range(8)}
-        assert doc.spawns['s1'][0].extra == ['--full-extract']
+
+        # ⚠⚠ **`spawns` 不是一张常量表**：它按 `state.resume_verdict` 过滤，
+        #   已经跑完的节点**不再被提议**——`_spawns` 的 docstring 记着为什么：
+        #   原来那张无条件的表会让「批准一份 fresh 的 stage2」顺手提议并执行
+        #   **再一次付费的 `stage4.plan`**。现役语料是跑完的书 ⇒ `s1` 这一格应当为空。
+        #   这里曾经断言 `doc.spawns['s1'][0].extra == ['--full-extract']`，
+        #   即断言一条产品**明说不该出现**的提议（`docs/LESSONS.md` 第 21 条第二形状）。
+        #   ⇒ 改成守「提议出来的每一条，生产的 resume 判定都同意它真的要跑」，
+        #   并守取值面齐全——**调用生产那一个落点，不重拼一份**。
+        assert set(doc.spawns) == {'s1', 's2', 's5', 's6', 's7'}
+        overview = state.overview(box.root, box.sid)
+        for gate, actions in doc.spawns.items():
+            for action in actions:
+                assert state.resume_verdict(overview, action.kind)[0] != state.RESUME_SKIP, (
+                    f'{gate} 提议了 {action.kind}，而 resume 判定说它不用跑——'
+                    f'这正是「批准一份 fresh 的产物顺手再付一次费」的形状')
     finally:
         box.close()
 
@@ -248,6 +267,12 @@ def test_stage5_gate_requires_exact_arm_assignment_no_invalids_and_combined_draf
     box = _box()
     try:
         _approve_for_writing(box)
+        # ⚠ `begin_writing` 要求盘上已经存过一次**显式的**深度决策（`deep_proof` 非空，
+        #   `novel/orchestrator/approvals.py:789`）——默认值 `[1,2,3]` 只是**建议**，
+        #   它自己不带 typed 凭据。`_approve_for_writing` 只批 s0..s4，不替人做这个决策
+        #   （也不该替：另一条用例先 `set_deep([2,4])` 再调它，helper 里加就会覆盖掉）。
+        #   ⇒ 这里照真人的动作显式存一次当前建议值。
+        approvals.set_deep(box.root, box.sid, approvals.get(box.root, box.sid).deep)
         doc = approvals.begin_writing(box.root, box.sid)
         planned = approvals._planned(box.root, box.sid)
         assert planned
@@ -279,6 +304,13 @@ def test_stage5_gate_requires_exact_arm_assignment_no_invalids_and_combined_draf
 def test_cli_products_can_be_explicitly_backfilled_and_are_reported_as_such():
     box = _full_box()
     try:
+        # ⚠ 本条断言回填一路走到 `s7`，而 `s5`/`s7` 的凭据各自要求逐份成稿与人物映射
+        #   **明确当前**——那是本条的**输入**（「CLI 产出的这一版能被补录」），不是它的结论。
+        #   三本语料的 `name_map` 相对重生成过的 `stage4/writer_context.json` 都已过期。
+        corpus.requires_current(box.book, 'stage5/deep/', 'stage5/shallow/',
+                                produced_by='stage5.write --mode deep', cost='付费')
+        corpus.requires_current(box.book, 'stage7/name_map.json',
+                                produced_by='stage7.rename --recheck', cost='0 成本')
         planned = approvals._planned(box.root, box.sid)
         assert planned
 

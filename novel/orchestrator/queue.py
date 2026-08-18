@@ -186,6 +186,18 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
                 # command surface changes and the old queue requires replanning.
                 steps = []
 
+        if steps is None and why_blocked == node and node in HUMAN_NODES:
+            # ⚠⚠ **人还没签字之前，这道闸没有一条「诚实的可执行命令」可以快照。**
+            # `stage0.approve` / `stage6.approve` / `stage7.approve` 的 argv 必填
+            # `--actor` / `--reason`（人此刻还没给出的东西）⇒ `build_steps` 会抛
+            # `UnsupportedRunMode`。而这一项本来就是 `blocked`，它要回答的是
+            # 「在等谁」，不是「怎么跑」。
+            # ⚠ 曾经这里无条件 `build_steps`：于是一本「stage0 还没人批」的书会让
+            #   **整条队列计划当场抛异常**——CLI `queue --plan-only` 退出码 2、
+            #   HTTP 400，而真正的事实只是「在等人批准 stage0」。
+            # ⇒ 与上面 `stage5.write` 缺深度选择时**同一处置**：留空命令面。
+            #   人给出裁决之后命令面本来就会变，那时旧队列本就需要重排。
+            steps = []
         if steps is None:
             steps = build_steps(
                 node, sid, flags, base=base, mode=mode,

@@ -375,6 +375,12 @@ def test_approving_the_name_map_stamps_s7_and_assembly_keeps_it_current(
     """API 定稿盖 `s7`；正常组装只写派生交付账，不能撤销同一批准。"""
     from novel.stages.stage6 import semantic
 
+    # ⚠ 本条要经 `stage7.approve` 把批准写回 `stage7/name_map.json`，而那条路明写
+    #   「`_provenance` 一个字都不动」⇒ 映射一旦相对上游过期，写回的就是一份过期账，
+    #   写盘口后置条件当场 `ProvenanceRefused`（退出码 3），断言红在退出码上而不是
+    #   它要验的「定稿盖 s7」。一份当前的映射是本条的**输入**，不是它的结论。
+    corpus.requires_current(box.book, 'stage7/name_map.json',
+                            produced_by='stage7.rename --recheck', cost='0 成本')
     _stamp_chain(box, 's6')
     body = _name_approval_body(box)
     r = client.post(f'/api/novels/{box.sid}/stage7/approve', json=body)
