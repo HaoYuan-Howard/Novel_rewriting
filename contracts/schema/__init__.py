@@ -96,11 +96,10 @@ from contracts.schema.corpus import (
     CorpusSkipExpectation, LedgerTokenSummary,
 )
 from contracts.schema.evaluation import (
-    CapabilityMetrics, Claim, EvaluatorFingerprint, EvaluatorProfile, EvidenceRef,
+    CapabilityMetrics, EvaluatorFingerprint, EvaluatorProfile, EvidenceRef,
     GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet, GlobalReviewItem,
     GroundTruthCase, GroundTruthManifest,
-    JudgeDecision, SemanticDecision, TrimAudit, TrimEvidenceSpan, TrimResolution,
-    TrimJudgeResponse,
+    JudgeDecision, SemanticDecision, TrimAudit, TrimResolution,
 )
 from contracts.schema.report import (
     AccountingLine,
@@ -304,8 +303,8 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision),
     STAGE5_REVIEW: ArtifactSpec(
         Review, current_version=3, migrations=MIGRATE_STAGE5_REVIEW_V2),
-    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit),
-    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution),
+    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit, current_version=2),
+    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution, current_version=2),
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
     #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
@@ -424,7 +423,7 @@ __all__ = [
     'EvaluatorFingerprint', 'CapabilityMetrics', 'EvaluatorProfile',
     'JudgeDecision', 'SemanticDecision', 'GlobalReviewItem', 'GlobalReview',
     'GlobalReviewDecision', 'GlobalReviewDecisionSet',
-    'Claim', 'TrimEvidenceSpan', 'TrimJudgeResponse', 'TrimAudit', 'TrimResolution',
+    'TrimAudit', 'TrimResolution',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
     'CheckReport', 'RuleLine', 'ProvenanceSection', 'EdgeLine',
     'CheckKind', 'Remediation', 'FixRoute',

@@ -559,8 +559,8 @@ TODO-24 的长期真值积累与校准**不阻塞人工或 agent-assisted 工作
 | R-7.9 | 不把潜台词说破 · 按给定的叙述视角写 · （开卷）表层修饰尽量留住 · （开卷）禁止整段照抄 | **无守卫 → `B-10`** |
 | R-7.10 | 拍的顺序就是落笔的顺序 | **无守卫 → `B-02`** |
 | R-7.11 | 「必须成立、不必写在纸面上」那一组，按定义查不了文面 | **`人`**，见 `B-04` |
-| R-7.12 | 篇幅超上限要裁剪时：不许删逐字原话 · 不许腰斩对白 · 不许删断结尾。确定性拦截 + 换采样重删 | `结构`（`novel/stages/stage5/write.py::_trim_to_fit` 每轮先过 `novel/stages/stage5/checks.py::trim_regressions`：删坏了**整轮弃用**、不做局部修补；每轮还必须真的变短，否则也弃用）<br>⚠ **四条护栏没有一条在查「其余一字不动」**——它们查的是「没变得更坏」；那句叮嘱只写在 `REVISE_TAIL` 里，没有任何代码在查它 |
-| R-7.13 | 裁剪时不许改人物/地点/因果/时间 · 不许换结尾立意 | `结构 + 校准语义`：`novel/stages/stage5/write.py::_trim_to_fit` 在 judge 前重算 before/after 的人物、地点、因果、时间、结尾 claims，并跑 `novel/stages/stage5/checks.py::trim_regressions`/事件顺序回归；机械退化整轮弃用且 0 次 judge。只有指纹精确匹配的 `trim_equivalence` profile 下，A/B 双盲同 PASS 且证据闭合才采用；其余回滚并落 hash-bound `TrimAudit`（`B-11` 已关闭） |
+| R-7.12 | 篇幅超上限时不许由模型自动裁剪：**没有任何自动收缩路径**，超上限一律零调用保留 pretrim 并转人工 | `结构`（`novel/stages/stage5/write.py::_over_length_audit` 落 identity `TrimAudit` 转 `verification`；该函数签名里没有 client，结构上花不了钱）<br>⚠ 这里曾有「同槽候选生成 + 确定性 claims 对账 + A/B 双盲 + 采用」一整条路，由 `trim_equivalence` 的 evaluator profile 开闸。那个闸从未在任何宿主上打开过，现已随 profile 整批下线；`novel/stages/stage5/checks.py::trim_regressions` 保留，它现在只服务 `--revise` 的退化守卫 |
+| R-7.13 | 超上限章的唯一出路是人：保留 pretrim，或改写整章 | `人`：`novel/stages/stage5/trim_resolution.py::retain_pretrim` 写 hash-bound resolution（0 次调用，绑 audit 完整 SHA-256、当前正式章路径与正文 SHA-256），或 `stage5.write --apply-edit` 落成新的一轮。⚠ **没有任何机制能替人采用一个更短的候选**——`TrimResolution.action` 在类型上只有 `retain_pretrim`（`B-11` 已关闭） |
 | R-7.14 | 开卷臂的 system prompt 应解释「现场 / 回忆 / 转述」三个标签。实验补强在三本真实小说中没有给出稳定净收益（INFO 逐书 37/60/75，且仍有新数字/风格漂移），已随实验分支退役；现役 prompt 保持原写作方案，该缺口作为显式技术债存在 | **无守卫 → `B-13`** |
 | R-7.15 | 成稿必须是**完整的一章正文**：不是空的或残的（内容字 < 50 早退，其余判定一条都不跑）· 结尾是完整句 · 正文里不含章节标题 / 编号 / 任务术语这类叙述外壳 | `HARD` |
 | R-7.16 | 必须**用下发的那张称谓表**称呼人物：本章相关人物一个名字都没出现是漏写，不是简洁。⚠ 它与 `R-7.5` 是一对反向条款——那一条只管「不许编新的」，没管「要用给的」 | `INFO` |

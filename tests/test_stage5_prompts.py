@@ -45,11 +45,17 @@ def test_shared_rules_reach_both_arms(fragment):
     assert value in prompts.SHALLOW_SYS
 
 
-def test_trim_has_one_current_system():
-    from novel.llm.prompts import with_json_shape
-    assert prompts.trim_system() == with_json_shape(
-        prompts.TRIM_SYS, prompts.CHAPTER_RESPONSE_HINT)
-    assert prompts.TRIM_SYS and '$' not in prompts.TRIM_SYS
+def test_the_trim_surface_is_gone_and_stays_gone():
+    """收缩臂整臂下线 ⇒ 本层只剩写作那一个付费 surface。
+
+    ⚠ 这条是**反向**守卫：不是「trim prompt 还对不对」，而是「它不许回来」。
+    一份没有调用者的 system 会被下一个人当成现役口径读，而它描述的那条路
+    （校准双盲后采用候选）在本仓已经不存在——那正是「退役的描述以现役身份被引用」。
+    要恢复就连 `TrimJudgeResponse` 与 profile 一起恢复，见 `write.py` 模块头。
+    """
+    for gone in ('trim_system', 'trim_judge_system', 'trim_user', 'trim_judge_user',
+                 'TRIM_SYS', 'TRIM_JUDGE_SYS', 'TRIM_JUDGE_ROLE_SUFFIX'):
+        assert not hasattr(prompts, gone), f'{gone} 回来了，但没有任何调用者'
 
 
 def test_shallow_arm_keeps_the_current_layer_boundary():

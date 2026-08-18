@@ -10,10 +10,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.evaluation import (
-    CapabilityMetrics, EvaluatorFingerprint, EvaluatorProfile, EvidenceRef,
-    JudgeDecision, SemanticDecision, TrimAudit, TrimJudgeResponse,
-)
+from contracts.schema.evaluation import TrimAudit
 from contracts.schema.stage4 import CtxChapter, FactRef, PlanGoal
 from contracts.schema.stage5 import ChapterResponse
 from novel.errors import RefusedByStructure
@@ -229,41 +226,8 @@ def test_writer_system_requires_json_segments_and_user_names_each_slot():
     json.dumps(prompts.CHAPTER_RESPONSE_HINT, ensure_ascii=False)
 
 
-def test_trim_is_fail_closed_without_an_enabled_calibrated_profile(monkeypatch):
-    monkeypatch.delenv('NOVEL_EVALUATOR_PROFILE', raising=False)
-    monkeypatch.delenv('NOVEL_GROUND_TRUTH_MANIFEST', raising=False)
-    entry, book = _entry()
-    entry = {**entry, 'budget_chars': 20}
-    segments = [{'slot': 's01', 'text': '这是一段明显超过二十字上限的正文。' * 8}]
-    kept, notes, audit = write._trim_to_fit(
-        SimpleNamespace(model='test-model'), segments, entry, book, mode='deep')
-    assert kept == segments
-    assert audit is not None and audit.adopted is False and audit.semantic is None
-    assert audit.before_sha256 == audit.after_sha256
-    assert notes and '未发起收缩调用或语义调用' in notes[0]
-
-
-_HASH = '1' * 64
-
-
-def _enabled_trim_binding():
-    fingerprint = EvaluatorFingerprint(
-        dataset_sha256=_HASH, model='judge-v1', prompt_sha256=_HASH,
-        schema_sha256=_HASH, decoder_sha256=_HASH)
-    metric = CapabilityMetrics(
-        ability='trim_equivalence', fingerprint=fingerprint, n=100,
-        pass_precision_wilson95_lower=.91,
-        fail_precision_wilson95_lower=.91,
-        violation_recall_wilson95_lower=.91,
-        evidence_closure=.96, rerun_consistency=.96, enabled=True)
-    profile = EvaluatorProfile.model_construct(
-        profile_version=1, profile_id='trim-profile-v1',
-        calibrated_at='2026-08-16T00:00:00Z', runs=3,
-        thresholds_locked_before_evaluation=True, capabilities=[metric])
-    return profile, fingerprint
-
-
 def _trim_case():
+    """一章明显超上限的原稿：目标区间按候选长度定，原稿在它后面又堆了一大段。"""
     raw_entry, book = _entry()
     entry = deepcopy(raw_entry)
     candidate = (
@@ -272,179 +236,47 @@ def _trim_case():
     entry['budget_chars'] = len(candidate)
     entry['segments'][0]['budget_chars'] = len(candidate)
     original = candidate + '这段解释重复了同一个意思。' * 8
-    return entry, book, [
-        {'slot': 's01', 'text': original}], [
-        {'slot': 's01', 'text': candidate}]
+    return entry, book, [{'slot': 's01', 'text': original}]
 
 
-class _TrimClient:
-    model = 'judge-v1'
+def test_over_length_lands_an_identity_audit_and_cannot_spend_anything():
+    """超上限 ⇒ 落 identity audit 转人工。**结构上花不了钱**，不是「碰巧没调用」。
 
-    def __init__(self, candidate, verdicts=('PASS', 'PASS')):
-        self.candidate = candidate
-        self.verdicts = list(verdicts)
-        self.calls = []
+    ⚠ 第二段断言才是这条守卫的本体：`_over_length_audit` 的签名里**没有 client**。
+    「这次没发请求」可以靠 mock 装出来，「拿不到 client」不行。
+    """
+    import inspect
 
-    def ask_json(self, _system, _user, *, model_cls, **kwargs):
-        self.calls.append((model_cls, kwargs))
-        if model_cls is ChapterResponse:
-            return ChapterResponse.model_validate({'segments': self.candidate})
-        verdict = self.verdicts.pop(0)
-        evidence = ([] if verdict == 'UNVER' else [
-            {'side': 'before', 'start': 0, 'end': 2},
-            {'side': 'after', 'start': 0, 'end': 2},
-        ])
-        if verdict == 'FAIL':
-            evidence = [evidence[-1]]
-        return model_cls.model_validate({
-            'verdict': verdict, 'evidence': evidence,
-            'reason': f'judge says {verdict}',
-        })
-
-
-def test_trim_profile_missing_makes_zero_client_calls(monkeypatch):
-    monkeypatch.delenv('NOVEL_EVALUATOR_PROFILE', raising=False)
-    monkeypatch.delenv('NOVEL_GROUND_TRUTH_MANIFEST', raising=False)
-    entry, book, original, candidate = _trim_case()
-    client = _TrimClient(candidate)
-    kept, _notes, audit = write._trim_to_fit(
-        client, original, entry, book, mode='deep')
-    assert kept == original
-    assert client.calls == []
-    assert audit is not None and audit.deterministic_passed
-
-
-def test_trim_profile_binding_covers_exact_runtime_surfaces(monkeypatch):
-    binding = _enabled_trim_binding()
-    seen = {}
-
-    def fake_require(ability, **kwargs):
-        seen['ability'] = ability
-        seen.update(kwargs)
-        return binding
-
-    monkeypatch.setattr(write, 'require_enabled', fake_require)
-    client = SimpleNamespace(
-        model='judge-v1', _rungs=(('medium', True), ('low', False)))
-    assert write._trim_profile_binding(client) == binding
-    assert seen['ability'] == 'trim_equivalence'
-    assert seen['model'] == 'judge-v1'
-    assert seen['prompts'] == [
-        prompts.trim_system(), prompts.trim_judge_system('A'),
-        prompts.trim_judge_system('B')]
-    assert seen['schemas'] == [ChapterResponse, write.TrimJudgeResponse]
-    assert seen['decoder_identity']['judge_rungs'] == [
-        ['medium', True], ['low', False]]
-    assert seen['decoder_identity']['generator_rungs'] == [['low', False]]
-
-
-def test_trim_judge_evidence_must_close_on_both_exact_subjects():
-    with pytest.raises(ValidationError, match='before and after'):
-        TrimJudgeResponse.model_validate({
-            'verdict': 'PASS',
-            'evidence': [{'side': 'after', 'start': 0, 'end': 1}],
-            'reason': '只指了候选，不能闭合等价',
-        })
-    response = TrimJudgeResponse.model_validate({
-        'verdict': 'PASS',
-        'evidence': [
-            {'side': 'before', 'start': 0, 'end': 1},
-            {'side': 'after', 'start': 0, 'end': 99},
-        ],
-        'reason': '模型自报了越界 span',
-    })
-    assert '超出正文长度' in str(write._trim_judge_problem(
-        response, ChatResponse(content='', finish_reason='stop'), '甲', '乙'))
-
-
-def test_trim_mechanical_failure_never_calls_semantic_judges(monkeypatch):
-    monkeypatch.setattr(write, '_trim_profile_binding',
-                        lambda _client: _enabled_trim_binding())
-    entry, book, original, _candidate = _trim_case()
-    client = _TrimClient(original)  # unchanged response: not shorter / still over
-    kept, _notes, audit = write._trim_to_fit(
-        client, original, entry, book, mode='deep')
-    assert kept == original
-    assert audit is not None and audit.deterministic_passed is False
-    assert audit.semantic is None
-    assert client.calls
-    assert all(model_cls is ChapterResponse for model_cls, _kwargs in client.calls)
-    assert all(kwargs['rungs'] == write.TRIM_RUNGS for _model, kwargs in client.calls)
-    assert client.calls[-1][1]['cache_policy'].name == 'refresh-write'
-
-
-@pytest.mark.parametrize(('verdicts', 'expected'), [
-    (('PASS', 'FAIL'), 'UNVER'),
-    (('UNVER', 'PASS'), 'UNVER'),
-    (('FAIL', 'FAIL'), 'FAIL'),
-])
-def test_trim_split_unver_or_fail_rolls_back(monkeypatch, verdicts, expected):
-    monkeypatch.setattr(write, '_trim_profile_binding',
-                        lambda _client: _enabled_trim_binding())
-    entry, book, original, candidate = _trim_case()
-    client = _TrimClient(candidate, verdicts=verdicts)
-    kept, _notes, audit = write._trim_to_fit(
-        client, original, entry, book, mode='deep')
-    assert kept == original
-    assert audit is not None and audit.deterministic_passed
-    assert audit.semantic is not None and audit.semantic.verdict == expected
-    assert audit.adopted is False
-
-
-def test_trim_calibrated_double_pass_adopts_candidate(monkeypatch):
-    monkeypatch.setattr(write, '_trim_profile_binding',
-                        lambda _client: _enabled_trim_binding())
-    entry, book, original, candidate = _trim_case()
-    client = _TrimClient(candidate)
-    kept, _notes, audit = write._trim_to_fit(
-        client, original, entry, book, mode='deep')
-    assert kept == candidate
-    assert audit is not None and audit.adopted
-    assert audit.deterministic_passed
-    assert audit.semantic is not None
-    assert (audit.semantic.verdict, audit.semantic.automated) == ('PASS', True)
+    entry, _book, original = _trim_case()
+    notes, audit = write._over_length_audit(original, entry, mode='deep')
+    assert audit is not None
+    assert (audit.output_ordinal, audit.mode) == (int(entry['output_ordinal']), 'deep')
     assert audit.before_sha256 == write._sha256_text(write._segments_text(original))
-    assert audit.after_sha256 == write._sha256_text(write._segments_text(candidate))
+    assert notes == [audit.reason]
+    assert '超上限' in audit.reason and 'verification' in audit.reason
+
+    params = inspect.signature(write._over_length_audit).parameters
+    assert 'client' not in params, (
+        '收缩臂已整臂下线；这个函数一旦重新拿到 client，就等于把付费回路悄悄接了回来')
 
 
-def test_trim_private_token_is_blocked_before_any_client_call(monkeypatch):
-    monkeypatch.setattr(write, '_trim_profile_binding',
-                        lambda _client: _enabled_trim_binding())
-    entry, book, original, candidate = _trim_case()
-    private = 'secret_never_send_987'
-    entry['must_not_reveal'] = [private]
-    original[0]['text'] += private
-    client = _TrimClient(candidate)
-    with pytest.raises(PromptPrivateLeak, match='must_not_reveal'):
-        write._trim_to_fit(client, original, entry, book, mode='deep')
-    assert client.calls == []
+def test_within_the_target_band_produces_no_audit_at_all():
+    """没超上限 ⇒ 既没有提示也**没有 audit**——空 audit 会在 inbox 里凭空长出待办。"""
+    entry, _book, _original = _trim_case()
+    short = [{'slot': 's01', 'text': '短短一句。'}]
+    assert write._over_length_audit(short, entry, mode='deep') == ([], None)
 
 
-def test_rejected_trim_semantic_fail_stays_in_verification():
+def test_over_length_audit_stays_in_verification():
     from contracts.artifacts import artifact_rel
     from novel import prov
     from novel.orchestrator.state import readonly_ctx
     from novel.store import ArtifactStore
     from novel.views.inbox import _trim_verification_items
 
-    candidate_sha = 'b' * 64
-    evidence = [EvidenceRef(
-        artifact='stage5/trim_audit_ch04.json#after',
-        subject_sha256=candidate_sha, start=0, end=1)]
-    judges = [JudgeDecision(
-        judge=f'trim-{role}', verdict='FAIL', evidence=evidence,
-        reason='删掉了结尾因果') for role in ('A', 'B')]
-    decision = SemanticDecision(
-        ability='trim_equivalence', subject_key=candidate_sha,
-        verdict='FAIL', automated=True, evidence=evidence,
-        reason='已校准双盲 judge 同结论且证据闭合',
-        profile_id='trim-profile-v1', judges=judges)
     audit = TrimAudit(
         output_ordinal=4, mode='deep', before_sha256='a' * 64,
-        after_sha256=candidate_sha, before_claims=[], after_claims=[],
-        deterministic_passed=True, evaluator_fingerprint=_enabled_trim_binding()[1],
-        semantic=decision, adopted=False,
-        reason='语义 FAIL，保留 pretrim')
+        reason='超上限 120 字（620/500）；本仓没有自动收缩路径，保留 pretrim，转 verification')
     root = Path(tempfile.mkdtemp(prefix='trim-inbox-'))
     try:
         store = ArtifactStore(readonly_ctx(
@@ -456,6 +288,6 @@ def test_rejected_trim_semantic_fail_stays_in_verification():
             root, prov.code_version(), audits={4: (audit, 'c' * 64)})
         assert [(row.rule, row.chapter) for row in rows] == [
             ('trim_audit_ch04', 4)]
-        assert 'FAIL' in rows[0].what and 'pretrim' in rows[0].how
+        assert '超上限' in rows[0].what and 'pretrim' in rows[0].how
     finally:
         shutil.rmtree(root, ignore_errors=True)

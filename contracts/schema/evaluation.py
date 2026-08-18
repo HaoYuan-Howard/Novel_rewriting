@@ -261,88 +261,38 @@ class GlobalReviewDecisionSet(StrictModel):
         return self
 
 
-class Claim(StrictModel):
-    kind: Literal['character', 'place', 'causality', 'time', 'ending']
-    key: str = Field(min_length=1)
-    value_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+class TrimAudit(StrictModel):
+    """One over-length chapter's durable fact: **nothing was trimmed**.
 
+    ⚠⚠ 这里曾经有六个字段（`after_sha256` / `before_claims` / `after_claims` /
+    `deterministic_passed` / `evaluator_fingerprint` / `semantic` / `adopted`）与一条
+    `_adoption_is_fail_closed` 校验器，服务的是「同槽结构化候选 → 确定性对账 → 校准双盲
+    → 采用」那条收缩臂。收缩臂随 evaluator profile 整臂下线后，那六格恒为
+    「等于 before / 空 / True / None / None / False」——**六个恒定值不是六个状态**。
 
-class TrimEvidenceSpan(StrictModel):
-    """A judge-returned locator into one of the two in-memory trim subjects.
-
-    The model never gets to assert an artifact identity or hash.  Runtime code
-    supplies those after checking the offsets against the exact before/after
-    strings, then converts these spans into :class:`EvidenceRef` values.
+    留下的四格各有不可替代的作用：`before_sha256` 是过期机制本体（`trim_resolution`
+    靠「当前正文 sha == 它」判这条 audit 还代不代表当前稿），`mode` + `output_ordinal`
+    是唯一键，`reason` 是唯一携带「这一章为什么在这里」的人读格。
+    ⚠ **不要**加 `over_by_chars` / `target_hi`：`trim_resolution.verification_context`
+    已经 0 成本现算这两个数，落盘等于给自己造第二个会漂的落点。
     """
 
-    side: Literal['before', 'after']
-    start: int = Field(ge=0)
-    end: int = Field(gt=0)
-
-    @model_validator(mode='after')
-    def _ordered_span(self) -> 'TrimEvidenceSpan':
-        if self.end <= self.start:
-            raise ValueError('trim evidence end must be greater than start')
-        return self
-
-
-class TrimJudgeResponse(StrictModel):
-    """The only accepted wire shape for a blind trim-equivalence judge."""
-
-    verdict: SemanticVerdict
-    evidence: list[TrimEvidenceSpan]
-    reason: str = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _verdict_has_candidate_evidence(self) -> 'TrimJudgeResponse':
-        sides = {row.side for row in self.evidence}
-        if self.verdict == 'PASS' and sides != {'before', 'after'}:
-            raise ValueError('trim PASS requires closed evidence on before and after')
-        if self.verdict == 'FAIL' and 'after' not in sides:
-            raise ValueError('trim FAIL requires evidence on the candidate')
-        if self.verdict == 'UNVER' and self.evidence:
-            raise ValueError('trim UNVER must not pretend to have closed evidence')
-        return self
-
-
-class TrimAudit(StrictModel):
     output_ordinal: int = Field(ge=1)
     mode: Literal[DEPTH_MODES]
     before_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    after_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    before_claims: list[Claim]
-    after_claims: list[Claim]
-    deterministic_passed: bool
-    evaluator_fingerprint: EvaluatorFingerprint | None = None
-    semantic: SemanticDecision | None
-    adopted: bool
     reason: str = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _adoption_is_fail_closed(self) -> 'TrimAudit':
-        if (self.semantic is None) != (self.evaluator_fingerprint is None):
-            raise ValueError(
-                'trim semantic decision and evaluator_fingerprint must appear together')
-        if self.semantic is not None and self.semantic.subject_key != self.after_sha256:
-            raise ValueError('trim semantic decision must bind the audited after_sha256')
-        if not self.deterministic_passed and self.semantic is not None:
-            raise ValueError('deterministic trim failure must not call or record semantic judges')
-        if self.adopted:
-            if self.before_sha256 == self.after_sha256:
-                raise ValueError('adopted trim must differ from its pretrim subject')
-            if not self.deterministic_passed:
-                raise ValueError('trim cannot be adopted after deterministic regression')
-            if self.semantic is None or self.semantic.verdict != 'PASS' or not self.semantic.automated:
-                raise ValueError('trim adoption requires calibrated double-judge PASS')
-        return self
 
 
 class TrimResolution(StrictModel):
     """A hash-bound human decision to keep the already-retained pretrim text.
 
     ``actor`` is a self-reported audit label, not an authenticated identity.
-    There is deliberately no action that can adopt a trim candidate: only the
-    calibrated automated gate may set :class:`TrimAudit.adopted`.
+    There is deliberately no action that can adopt a trim candidate — and now
+    there is no automated one either: the calibrated gate that used to own
+    adoption was removed together with the evaluator profile, so
+    ``retain_pretrim`` is the **only** way an over-length chapter is ever
+    closed (the other exit is rewriting it via ``stage5.write --apply-edit``,
+    which produces a new chapter and therefore a new audit).
     """
 
     output_ordinal: int = Field(ge=1)
@@ -352,7 +302,6 @@ class TrimResolution(StrictModel):
     reason: str = Field(min_length=1)
     audit_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     before_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    after_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     chapter_rel: str = Field(min_length=1)
     chapter_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     provenance: FreeProvenance = Field(alias='_provenance')

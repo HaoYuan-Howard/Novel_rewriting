@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Hash-bound human closure for an unadopted Stage5 trim audit.
+"""Hash-bound human closure for an over-length Stage5 chapter.
 
 This module never changes chapter text and has no candidate-adoption path.
-Humans may only record that the already-retained pretrim text is intentional;
-candidate adoption remains exclusively owned by the calibrated automated gate.
+Humans may only record that the already-retained pretrim text is intentional.
+
+⚠ 这句话曾经带一个「候选采用仍由校准自动闸门独占」的后半句。收缩臂整臂下线后
+**没有任何路径能采用一个收缩候选**——自动的那条也没有了。因此本模块从「两条出路里
+人的那一条」变成了**唯一的销账口**（另一条是 `stage5.write --apply-edit` 改写整章，
+那会产生新的一章、也就是新的 audit，不走这里）。
 """
 from __future__ import annotations
 
@@ -72,7 +76,6 @@ def matches_current_audit(
         and resolution.action == 'retain_pretrim'
         and resolution.audit_sha256 == audit_sha256
         and resolution.before_sha256 == audit.before_sha256
-        and resolution.after_sha256 == audit.after_sha256
         and resolution.chapter_rel == chapter_rel
         and resolution.chapter_sha256 == chapter_sha256 == audit.before_sha256
         and resolution.provenance.root_clean_sha1 == store.ctx.root_clean_sha1
@@ -87,12 +90,10 @@ def needs_human_resolution(
     """Whether this exact audit still represents the retained current draft.
 
     A merely present audit is not enough: the formal chapter may have changed,
-    the candidate may have been adopted, or a hash-bound retain decision may
-    already close it.  Both Review de-duplication and inbox verification use
-    this predicate so they cannot disagree about which audit is current.
+    or a hash-bound retain decision may already close it.  Both Review
+    de-duplication and inbox verification use this predicate so they cannot
+    disagree about which audit is current.
     """
-    if audit.adopted or not audit.deterministic_passed:
-        return False
     chapter = _current_pretrim(store, audit)
     if chapter is None or chapter[1] != audit.before_sha256:
         return False
@@ -102,7 +103,7 @@ def needs_human_resolution(
 def current_trim_audits(
     store: ArtifactStore,
 ) -> dict[int, tuple[TrimAudit, str]]:
-    """Return exact-current, unadopted trim facts, even after human resolution.
+    """Return exact-current trim facts, even after human resolution.
 
     Review uses this wider set to fold ``length_over`` into its durable root
     cause.  A valid retain resolution closes the verification task, but it does
@@ -125,8 +126,7 @@ def current_trim_audits(
             continue
         if rel != artifact_rel('stage5.trim_audit', nn=audit.output_ordinal):
             continue
-        if (not audit.adopted and audit.deterministic_passed
-                and (chapter := _current_pretrim(store, audit)) is not None
+        if ((chapter := _current_pretrim(store, audit)) is not None
                 and chapter[1] == audit.before_sha256):
             out[audit.output_ordinal] = (audit, audit_sha256)
     return out
@@ -145,8 +145,7 @@ def current_unresolved_audits(
 
 def verification_context(store: ArtifactStore, audit: TrimAudit) -> str:
     """Render the root-cause facts folded into one trim verification task."""
-    identity = (
-        f'audit before={audit.before_sha256}，after={audit.after_sha256}')
+    identity = f'audit before={audit.before_sha256}'
     rel = artifact_rel(
         'stage5.chapter', mode=audit.mode, nn=audit.output_ordinal)
     try:
@@ -187,12 +186,6 @@ def retain_pretrim(
     if audit.output_ordinal != ordinal:
         raise ArtifactUnreadable(
             f'{audit_rel} 声明 output_ordinal={audit.output_ordinal}，与文件名 ch{ordinal:02d} 不符')
-    if audit.adopted:
-        raise ApprovalRequired(
-            f'{audit_rel} 的收缩候选已经由自动校准闸门采用；人工路径不能改写采用决定')
-    if not audit.deterministic_passed:
-        raise ApprovalRequired(
-            f'{audit_rel} 的机械回归未通过，不属于待人工销账的 verification')
     chapter = _current_pretrim(store, audit)
     if chapter is None:
         raise ApprovalRequired(
@@ -212,7 +205,6 @@ def retain_pretrim(
         reason=reason,
         audit_sha256=audit_sha256,
         before_sha256=audit.before_sha256,
-        after_sha256=audit.after_sha256,
         chapter_rel=chapter_rel,
         chapter_sha256=chapter_sha256,
         _provenance=ctx.free_provenance(),

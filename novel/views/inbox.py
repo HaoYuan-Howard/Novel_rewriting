@@ -401,27 +401,25 @@ def _current_trim_audits(novel_dir, code: str):
 
 
 def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[InboxItem]:
-    """Durable trim audits whose retained pretrim still needs human attention."""
+    """Durable over-length audits whose retained pretrim still needs attention."""
     from novel.stages.stage5 import trim_resolution
 
     current = audits if audits is not None else _current_trim_audits(novel_dir, code)
     store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.write', code))
     out: list[InboxItem] = []
     for ordinal, (audit, _audit_sha256) in sorted(current.items()):
-        state = ('未运行语义裁决' if audit.semantic is None
-                 else f'语义裁决为 {audit.semantic.verdict}')
-        why = (audit.reason if audit.semantic is None else audit.semantic.reason)
         context = trim_resolution.verification_context(store, audit)
         out.append(InboxItem(
             kind='verification', stage='stage5', chapter=ordinal,
             rule=f'trim_audit_ch{ordinal:02d}',
-            what=(f'第 {ordinal} 章收缩机械检查已过，但 {state}：{why}；'
+            what=(f'第 {ordinal} 章超上限且本仓没有自动收缩路径：{audit.reason}；'
                   f'超限根因附注：{context}'),
-            how=('当前保留 pretrim 原稿、未采用收缩候选；这是 0 次 LLM 调用的人工销账，'
+            how=('当前保留 pretrim 原稿；这是 0 次 LLM 调用的人工销账，'
                  '人工确认保留原稿可跑 `stage5.review --retain-pretrim '
                  f'--chapters {ordinal} --actor <自报身份> --reason <理由>`；'
+                 '确需改写则 `stage5.write --apply-edit <路径>`（同样 0 次调用）。'
                  'resolution 同时绑定 mode、当前正式章路径/正文 SHA-256、audit 完整 SHA-256 '
-                 '与 before/after hashes，任一变化即失效')))
+                 '与 before hash，任一变化即失效')))
     return out
 
 

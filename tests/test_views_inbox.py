@@ -358,7 +358,7 @@ def test_global_review_pending_fail_and_unver_are_verification_rows(box):
 
 
 @_STAGE6_CORPUS
-def test_unadopted_trim_without_semantic_evidence_is_a_verification_row(box):
+def test_an_over_length_trim_audit_is_a_verification_row(box):
     import hashlib
 
     from contracts.artifacts import artifact_rel
@@ -373,13 +373,9 @@ def test_unadopted_trim_without_semantic_evidence_is_a_verification_row(box):
     ordinal = next(number for number, rows in sorted(drafts.items()) if len(rows) == 1)
     draft = drafts[ordinal][0]
     before = hashlib.sha256(draft['text'].encode('utf-8')).hexdigest()
-    after = hashlib.sha256((draft['text'] + '\ntrim candidate').encode('utf-8')).hexdigest()
     audit = TrimAudit(
-        output_ordinal=ordinal, mode=draft['_mode'],
-        before_sha256=before, after_sha256=after,
-        before_claims=[], after_claims=[], deterministic_passed=True,
-        semantic=None, adopted=False,
-        reason='未激活经 ground-truth 校准的 evaluator')
+        output_ordinal=ordinal, mode=draft['_mode'], before_sha256=before,
+        reason='超上限；本仓没有自动收缩路径，保留 pretrim，转 verification')
     store.write(artifact_rel('stage5.trim_audit', nn=ordinal), audit)
 
     rows = [row for row in inbox_view(str(box.root), box.sid).items

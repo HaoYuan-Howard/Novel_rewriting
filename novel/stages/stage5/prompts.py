@@ -252,60 +252,9 @@ REVISE_TAIL = """
 - 篇幅仍然要落在上面给定的区间内。
 """
 
-#: 超上限时那一次「只删不改」的收缩。
-#: **它是一次独立的调用，用自己的 system，不拼在臂的 SYS 上。**
-#:
-#: ⚠ 收缩是本层**真正的那道篇幅门**：`length_over` 已由阻断降为提示（`R-7.8`），
-#: 而收缩带着自己的回归护栏（删坏 ⇒ **整轮弃用**，不做局部修补）。
-TRIM_SYS = """\
-你在给一章【已经写好的】小说正文做删减。它写得太长了，你的唯一任务是把它压进给定的字数区间。
-
-【删到区间里就停，不要删过头】
-目标是一个【区间】不是一个上限：低于下限说明你把该有的内容也删掉了，那和写太长一样是失败。
-
-【删，以及把留下来的写得更利落】
-- 删：同一个意思的第二组、第三组材料（保留最狠的那一组）；
-- 删：把潜台词说破的解释句、总结句、点题句、自问自答；
-- 删：可有可无的环境铺陈与心理铺陈——留最锋利的一处就够；
-- 删：过渡性的废句（「他知道」「她明白」「就这样」这类不承载信息的连接）；
-- 紧：啰嗦的两三句可以并成更利落的一句——**前提是不新增任何信息、不改变原意**。
-
-【不许动的】
-- **不许删掉任何一个「必须覆盖的事件」**——交稿前逐条对照清单点一遍，缺一条就是失败；
-- 不许删掉任何一次转折、任何一句承担信息的台词；
-- 不许改人物、地点、因果、时间；不许把事实改成相反的说法；
-- 【不许拿对白凑删减】：直接引语不得改成转述、不得整句消失——要省字先砍叙述、铺陈、
-  解释句，台词是最后才轮到的东西；
-- 不许把引号体换掉（这本书用哪种引号，删完还是哪种）；
-- 不许新写任何原稿里没有的句子，也不许换一个新的结尾立意——结尾要落在原稿本来的落点上；
-- 不许把「一句一段」并成大段来省字数——排版是这本书的形态，动了就不是这本书了。
-
-只输出结构化 JSON。`segments` 中每个既有 slot 必须恰好出现一次；每项只含
-`slot` 与删减后的 `text`。不要说明、标题或新增 slot。"""
-
-
-#: The two role suffixes are deliberately different bytes.  That keeps the
-#: cache keys independent and makes "double blind" mean two independent
-#: requests rather than reading the first judge's cached answer twice.
-TRIM_JUDGE_ROLE_SUFFIX = {
-    'A': '\n\n你是盲评 judge A。独立判断；你不会看到另一名 judge 的答案。',
-    'B': '\n\n你是盲评 judge B。独立判断；你不会看到另一名 judge 的答案。',
-}
-
-TRIM_JUDGE_SYS = """\
-你只判断一组小说正文删减前后是否语义等价，不评价文风好坏。
-
-PASS 仅在以下项目全部保持时成立：人物、地点、因果、计划指定的时间衔接、承担信息的对白、秘密边界，
-以及结尾原本的事实与落点。任何一项被删除、改反、挪到别的时间，或新增了原稿没有的事实，
-都判 FAIL。证据不足以闭合这些项目时判 UNVER，不得猜 PASS。
-
-证据只给 UTF-8 解码后 Python 字符串的 `[start,end)` 字符下标，不抄录正文：
-- PASS 必须至少各定位一处 before 与 after 证据；
-- FAIL 必须至少定位一处 after 证据；
-- UNVER 的 evidence 必须为空。
-
-只输出结构化 JSON：`verdict` 为 PASS|FAIL|UNVER，`evidence` 每项只含
-`side=before|after,start,end`，并给非空 `reason`。"""
+#: ⚠⚠ 这里曾有 `TRIM_SYS`（超上限时「只删不改」的收缩 system）、`TRIM_JUDGE_SYS` 与
+#: `TRIM_JUDGE_ROLE_SUFFIX`（A/B 两份刻意不同字节的盲评 system）。收缩臂整臂下线后
+#: 它们零调用——`novel/stages/stage5/write.py` 的模块头记了删的是什么、怎么恢复。
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -343,27 +292,6 @@ def write_system(mode: str, *, revise: bool = False) -> str:
         fill(_SYS_OF[mode] + (REVISE_TAIL if revise else '')),
         CHAPTER_RESPONSE_HINT,
     )
-
-
-def trim_system() -> str:
-    """收缩那一次调用的 system。**与臂无关**——它删的是已经写好的正文。"""
-    return with_json_shape(fill(TRIM_SYS), CHAPTER_RESPONSE_HINT)
-
-
-def trim_judge_system(role: str) -> str:
-    """Return one frozen blind-judge surface; role bytes are cache-separated."""
-    if role not in TRIM_JUDGE_ROLE_SUFFIX:
-        raise KeyError(f'unknown trim judge role {role!r}')
-    hint = {
-        'verdict': 'PASS',
-        'evidence': [
-            {'side': 'before', 'start': 0, 'end': 8},
-            {'side': 'after', 'start': 0, 'end': 8},
-        ],
-        'reason': '逐项核对后的简短理由',
-    }
-    return with_json_shape(
-        fill(TRIM_JUDGE_SYS + TRIM_JUDGE_ROLE_SUFFIX[role]), hint)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -789,34 +717,3 @@ def revise_user(mat: Material, prev_text: str, fix_lines: list[str]) -> str:
         '── 本轮必须修掉的问题（只动这些地方，其余尽量逐字保留）──\n' + '\n'.join(fix_lines),
     ])
 
-
-def trim_user(segments: list[dict[str, str]], entry: dict[str, Any]) -> str:
-    """收缩那一次调用的 user：**上限 + 必须覆盖的事件清单 + 原稿**。
-
-    ⚠ 事件清单要一起发：删减最容易删掉的正是「带过的那几拍」，而那是**整件事没写**，
-    不是写得简略。
-    """
-    lo, hi = target_band(entry)
-    text = '\n\n'.join(str(item.get('text') or '').strip() for item in segments).strip()
-    evs = [e for be in (entry.get('segments') or []) for e in (be.get('events') or [])
-           if (e or '').strip()]
-    return '\n\n'.join([
-        f'【目标区间】{lo}~{hi} 字（现在 {len((text or "").strip())} 字）',
-        '── 必须覆盖的事件（一条都不许删掉）──\n' + '\n'.join(f'· {e}' for e in evs),
-        '── 原稿（保持这些 slot，不得增删或改名）──\n' + _compact({'segments': segments}),
-    ])
-
-
-def trim_judge_user(
-    before_segments: list[dict[str, str]],
-    after_segments: list[dict[str, str]],
-) -> str:
-    """Two hash-bound subjects; no plan rationale or later-book facts are sent."""
-    before = '\n\n'.join(str(row.get('text') or '').strip() for row in before_segments).strip()
-    after = '\n\n'.join(str(row.get('text') or '').strip() for row in after_segments).strip()
-    return '\n\n'.join([
-        f'【before 字符数】{len(before)}',
-        '── before（删减前）──\n' + before,
-        f'【after 字符数】{len(after)}',
-        '── after（候选）──\n' + after,
-    ])

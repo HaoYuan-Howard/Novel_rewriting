@@ -79,9 +79,11 @@ def test_only_artifacts_with_new_disk_shapes_advance_to_v3():
     # New artifact families start at v1 even when they already carry the
     # current provenance contract; "v2" means an existing v1 family was
     # intentionally broken, not that provenance itself consumes a version.
-    new_provenance_v1 = {'stage5/trim_resolution_ch{nn}.json'}
-    established = provenance_bearing - new_provenance_v1
+    # ⚠ `trim_resolution` 曾经在这张豁免名单里（它是新家族、从 v1 起）。收缩臂整臂下线时
+    #   `after_sha256` 被删掉，那是一次**故意的破坏**，所以它现在按 v2 与老家族同列。
+    established = provenance_bearing
     assert established == {
+        'stage5/trim_resolution_ch{nn}.json',
         'stage2/global_grounding.json',
         'stage2/chapter_blueprints.json',
         'stage3/style_grounding.json',
@@ -109,6 +111,9 @@ def test_only_artifacts_with_new_disk_shapes_advance_to_v3():
     unchanged_v2 = established - v3
     assert all(ARTIFACT_SPECS[rel].current_version == 2 for rel in unchanged_v2)
     assert ARTIFACT_SPECS['stage0/removal_report.json'].current_version == 2
+    # `trim_audit` 不带 provenance，所以不在 `established` 里；它同批从 v1 破到 v2
+    # （六个恒定字段一次删掉，见 `TrimAudit` 的 docstring）。
+    assert ARTIFACT_SPECS['stage5/trim_audit_ch{nn}.json'].current_version == 2
 
     new_v1 = {
         'stage0/machine_snapshot.json',
@@ -116,8 +121,6 @@ def test_only_artifacts_with_new_disk_shapes_advance_to_v3():
         'stage0/_audit/edit_{n}.json',
         'stage2/global_review.json',
         'stage2/global_review_decisions.json',
-        'stage5/trim_audit_ch{nn}.json',
-        'stage5/trim_resolution_ch{nn}.json',
     }
     assert all(ARTIFACT_SPECS[rel].current_version == 1 for rel in new_v1)
 

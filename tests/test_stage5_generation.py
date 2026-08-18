@@ -32,31 +32,16 @@ def test_length_capped_nonempty_draft_is_not_usable():
     assert write._reject_length_capped(complete.text, complete) is None
 
 
-def test_trim_keeps_pretrim_segments_when_calibrated_evaluator_is_not_enabled(monkeypatch):
-    monkeypatch.delenv('NOVEL_EVALUATOR_PROFILE', raising=False)
-    monkeypatch.delenv('NOVEL_GROUND_TRUTH_MANIFEST', raising=False)
-    class BrokenTrimClient:
-        model = 'test-model'
-
-        def __init__(self):
-            self.calls = []
-
-        def ask_json(self, *args, **kwargs):
-            self.calls.append((args, kwargs))
-            raise LlmFailed('没有完整正文')
-
-    client = BrokenTrimClient()
+def test_over_length_chapter_keeps_pretrim_and_records_why(monkeypatch):
+    """超上限 ⇒ 正文原样、落一条说得出理由的 audit。收缩臂已整臂下线，没有候选可采用。"""
     original = '甲' * 1200 + '。'
     before = [{'slot': 's01', 'text': original}]
-    got, notes, audit = write._trim_to_fit(
-        client, before,
-        {'output_ordinal': 1, 'budget_chars': 1000},
-        SimpleNamespace(), mode='deep')
+    notes, audit = write._over_length_audit(
+        before, {'output_ordinal': 1, 'budget_chars': 1000}, mode='deep')
 
-    assert got == before
     assert notes and '保留 pretrim' in notes[0]
-    assert audit is not None and not audit.adopted
-    assert client.calls == []
+    assert audit is not None and audit.reason == notes[0]
+    assert audit.before_sha256 == write._sha256_text(original)
 
 
 def test_a_successful_retry_uses_transactional_round_write_for_superseded_files(
@@ -160,8 +145,8 @@ def test_revise_regression_gets_exactly_one_refresh_resample(monkeypatch):
     monkeypatch.setattr(write.prompts, 'revise_user', lambda *_a, **_kw: 'USER')
     monkeypatch.setattr(write.M, 'normalize_chapter',
                         lambda text, **_kw: (text, write.M.NormalizeAccount()))
-    monkeypatch.setattr(write, '_trim_to_fit',
-                        lambda _c, segments, *_a, **_kw: (segments, [], None))
+    monkeypatch.setattr(write, '_over_length_audit',
+                        lambda *_a, **_kw: ([], None))
     monkeypatch.setattr(
         write, 'CtxChapter', SimpleNamespace(model_validate=lambda value: value))
     monkeypatch.setattr(write, 'assert_prompt_private_absent', lambda *_a, **_kw: None)
@@ -288,8 +273,7 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
         write.M, 'normalize_chapter',
         lambda text, **_kw: (text, write.M.NormalizeAccount()))
     monkeypatch.setattr(
-        write, '_trim_to_fit',
-        lambda _c, segments, *_a, **_kw: (segments, [], None))
+        write, '_over_length_audit', lambda *_a, **_kw: ([], None))
     monkeypatch.setattr(
         write, 'CtxChapter', SimpleNamespace(model_validate=lambda value: value))
     monkeypatch.setattr(write, 'assert_prompt_private_absent', lambda *_a, **_kw: None)
@@ -378,8 +362,7 @@ def test_stage5_chapters_run_together_up_to_32(
         write.M, 'normalize_chapter',
         lambda text, **_kw: (text, write.M.NormalizeAccount()))
     monkeypatch.setattr(
-        write, '_trim_to_fit',
-        lambda _c, segments, *_a, **_kw: (segments, [], None))
+        write, '_over_length_audit', lambda *_a, **_kw: ([], None))
     monkeypatch.setattr(
         write, 'CtxChapter', SimpleNamespace(model_validate=lambda value: value))
     monkeypatch.setattr(write, 'assert_prompt_private_absent', lambda *_a, **_kw: None)

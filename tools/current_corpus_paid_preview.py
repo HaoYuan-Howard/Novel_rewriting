@@ -139,7 +139,8 @@ PREREQUISITES = {
     ),
     'stage5.write': (
         'Stage4 plan/context 必须 fresh，且已冻结人工深度选择：deep=1,2,3，其余 shallow。',
-        '只有超长章进入 trim；trim_equivalence profile 缺失/漂移时零 trim 调用并保留 pretrim。',
+        '超上限章零调用保留 pretrim 并转人工：本仓没有自动收缩路径，'
+        '这一层不存在第二条付费回路。',
     ),
     'stage6.hook': (
         'Stage5 机械/语义结论已处理，s5 gate 经人工批准。',
@@ -338,14 +339,8 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
         conditional_wire = rung_count
         condition = '首轮唯一 HARD=habit_quote 时自动窄修复一次'
     elif node == 'stage5.write':
+        # 收缩臂整臂下线后本层只剩逐章一次调用；超上限只落 audit，0 次调用。
         base = chapters
-        conditional = chapters * 4
-        # Per overlength chapter: up to two fixed one-rung candidates plus
-        # one A/B judgment (two judges, each allowed the node ladder).
-        conditional_wire = chapters * (2 + 2 * rung_count)
-        condition = (
-            '每个超长章最多两次单档 trim candidate + 一次双盲 A/B；'
-            'profile 缺失/漂移或章未超长时为 0')
     elif node == 'stage6.hook':
         # The initial response always contains one candidate per registered
         # approach.  Every initially HARD candidate can receive one fixed
@@ -391,19 +386,6 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
             'max_tokens': 16_000,
             'rungs': [list(row) for row in rungs],
         })
-    if node == 'stage5.write':
-        rows.extend([
-            {
-                'kind': 'conditional_trim_candidate',
-                'max_tokens': stage5_write.MAX_TOKENS,
-                'rungs': [list(row) for row in stage5_write.TRIM_RUNGS],
-            },
-            {
-                'kind': 'conditional_trim_judge_A_or_B',
-                'max_tokens': stage5_write.TRIM_JUDGE_MAX_TOKENS,
-                'rungs': [list(row) for row in rungs],
-            },
-        ])
     if node == 'stage6.hook':
         rows.append({
             'kind': 'conditional_candidate_retry',
@@ -581,7 +563,7 @@ def historical_observations(
             'completion_tokens 已含 reasoning_tokens，统计没有再次相加。'),
         'known_contract_drift': [
             '最终 stage6.semantic 为 A/B 两条；旧账可能只有单 judge。',
-            '最终 Stage5 trim 受 evaluator profile 与双盲 judge 约束；旧 trim 不能外推。',
+            '最终 Stage5 已无自动收缩路径；旧账里的 trim 调用不能外推到这一次。',
         ],
     }
 
@@ -591,7 +573,6 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
     mandatory = [row for row in dispatches if row['node'] not in profile_nodes]
     profiled = [row for row in dispatches if row['node'] in profile_nodes]
     stage3 = [row for row in dispatches if row['node'] == 'stage3.style']
-    trims = [row for row in dispatches if row['node'] == 'stage5.write']
     hooks = [row for row in dispatches if row['node'] == 'stage6.hook']
     base_logical = sum(row['base_logical_requests'] for row in mandatory)
     base_wire = sum(row['base_ladder_wire_hard_limit'] for row in mandatory)
@@ -599,15 +580,12 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
     profile_wire = sum(row['base_ladder_wire_hard_limit'] for row in profiled)
     stage3_logical = sum(row['conditional_logical_requests'] for row in stage3)
     stage3_wire = sum(row['conditional_wire_hard_limit'] for row in stage3)
-    trim_logical = sum(row['conditional_logical_requests'] for row in trims)
-    trim_wire = sum(row['conditional_wire_hard_limit'] for row in trims)
     hook_retry_logical = sum(row['conditional_logical_requests'] for row in hooks)
     hook_retry_wire = sum(row['conditional_wire_hard_limit'] for row in hooks)
     full_logical = (
-        base_logical + profile_logical + stage3_logical + trim_logical
-        + hook_retry_logical)
+        base_logical + profile_logical + stage3_logical + hook_retry_logical)
     full_wire = (
-        base_wire + profile_wire + stage3_wire + trim_wire + hook_retry_wire)
+        base_wire + profile_wire + stage3_wire + hook_retry_wire)
     return {
         'production_cli_dispatches': len(dispatches),
         'base_nonsemantic_logical_requests': base_logical,
@@ -616,8 +594,6 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
         'stage3_conditional_habit_quote_wire_hard_limit': stage3_wire,
         'advisory_semantic_logical': profile_logical,
         'advisory_semantic_wire_hard_limit': profile_wire,
-        'conditional_trim_logical': trim_logical,
-        'conditional_trim_wire_hard_limit': trim_wire,
         'stage6_conditional_candidate_retry_logical': hook_retry_logical,
         'stage6_conditional_candidate_retry_wire_hard_limit': hook_retry_wire,
         'full_conditional_logical_hard_limit': full_logical,
@@ -850,8 +826,6 @@ def render(plan: dict[str, Any]) -> str:
         f'advisory semantic（无 profile，产 UNVER）：logical='
         f'{aggregate["advisory_semantic_logical"]} / '
         f'wire 上限={aggregate["advisory_semantic_wire_hard_limit"]}',
-        f'条件 trim：logical={aggregate["conditional_trim_logical"]} / '
-        f'wire 上限={aggregate["conditional_trim_wire_hard_limit"]}',
         f'全条件硬上限：logical={aggregate["full_conditional_logical_hard_limit"]} / '
         f'wire={aggregate["full_conditional_wire_hard_limit"]} / context-token ceiling='
         f'{aggregate["full_conditional_context_token_hard_ceiling"]:,}',

@@ -99,13 +99,11 @@ def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path
         'stage3_conditional_habit_quote_wire_hard_limit': 8,
         'advisory_semantic_logical': 4,
         'advisory_semantic_wire_hard_limit': 16,
-        'conditional_trim_logical': 168,
-        'conditional_trim_wire_hard_limit': 420,
         'stage6_conditional_candidate_retry_logical': 6,
         'stage6_conditional_candidate_retry_wire_hard_limit': 6,
-        'full_conditional_logical_hard_limit': 316,
-        'full_conditional_wire_hard_limit': 994,
-        'full_conditional_context_token_hard_ceiling': 994_000_000,
+        'full_conditional_logical_hard_limit': 148,
+        'full_conditional_wire_hard_limit': 574,
+        'full_conditional_context_token_hard_ceiling': 574_000_000,
     }
     assert sorted(book['chapters'] for book in plan['books']) == [17, 25]
 
@@ -237,9 +235,12 @@ def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
         f'v{global_version} 产物' in line
         for line in by_node['stage2.blueprint']['human_gate_dependencies']
     )
-    trim = by_node['stage5.write']
-    assert trim['conditional_logical_requests'] == 17 * 4
-    assert trim['conditional_wire_hard_limit'] == 17 * 10
+    # ⚠ 收缩臂整臂下线后 stage5.write **没有条件回路**了。这一条断的是 0，不是「忘了写」：
+    #   非零就说明有人把第二条付费回路接了回来而预览没跟上。
+    write_row = by_node['stage5.write']
+    assert write_row['conditional_logical_requests'] == 0
+    assert write_row['conditional_wire_hard_limit'] == 0
+    assert write_row['conditional_reason'] is None
 
 
 def test_only_global_prompt_is_exact_before_upstream_generation(tmp_path):
@@ -297,7 +298,7 @@ def test_existing_experiments_and_minimum_evaluator_are_separate_scopes(tmp_path
     assert old['external_hard_limit'] == 588
     assert old['included_in_new_corpus_totals'] is False
     assert old['overlaps_current_corpus_scope'] is False
-    assert old['combined_wire_hard_ceiling_once_each'] == 588 + 994
+    assert old['combined_wire_hard_ceiling_once_each'] == 588 + 574
     calibration = plan['calibration_evaluation']
     assert calibration['production_cli_dispatch'] is None
     assert calibration['status'] == 'blocked_missing_final_private_inputs'
@@ -325,9 +326,9 @@ def test_existing_experiments_and_minimum_evaluator_are_separate_scopes(tmp_path
 
     accounting = plan['scope_accounting']
     assert accounting['existing_fc08_fc13_overlaps_current_corpus'] is False
-    assert accounting['existing_plus_current_once_each'] == 588 + 994
+    assert accounting['existing_plus_current_once_each'] == 588 + 574
     assert accounting['all_three_minimum_campaign_once_each_if_later_unblocked'] == (
-        588 + 994 + 4800)
+        588 + 574 + 4800)
 
 
 def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
@@ -351,12 +352,12 @@ def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     text = P.render(P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1))
     assert '[16/16]' in text
     assert 'Stage6 条件候选定向重试：logical=6 / wire 上限=6' in text
-    assert '全条件硬上限：logical=316 / wire=994' in text
+    assert '全条件硬上限：logical=148 / wire=574' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text
     assert 'blocked_missing_final_private_inputs' in text
     assert '8 abilities × 100 cases × 2 judges × 3 runs = 4800' in text
-    assert '三块各一次=6382' in text
+    assert '三块各一次=5962' in text
     assert '若最终 manifest 超过 800 case' in text
     assert 'input token=unknown' in text
     assert 'price：unknown' in text

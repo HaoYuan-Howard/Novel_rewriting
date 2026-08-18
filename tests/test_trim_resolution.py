@@ -63,17 +63,11 @@ def _store(book, node='stage5.review'):
     return ArtifactStore(readonly_ctx(book, node, prov.code_version()))
 
 
-def _audit(*, reason='profile 未启用', before=PRETRIM_SHA256, after='b' * 64):
+def _audit(*, reason='超上限，本仓没有自动收缩路径', before=PRETRIM_SHA256):
     return TrimAudit(
         output_ordinal=3,
         mode='deep',
         before_sha256=before,
-        after_sha256=after,
-        before_claims=[],
-        after_claims=[],
-        deterministic_passed=True,
-        semantic=None,
-        adopted=False,
         reason=reason,
     )
 
@@ -89,8 +83,8 @@ def _trim_rows(base):
     ]
 
 
-def test_trim_verification_context_carries_limit_and_both_audit_identities():
-    audit = _audit(before='a' * 64, after='b' * 64)
+def test_trim_verification_context_carries_the_limit_and_the_audit_identity():
+    audit = _audit(before='a' * 64)
     chapter = SimpleNamespace(text='甲' * 20)
     entry = SimpleNamespace(
         output_ordinal=3,
@@ -104,7 +98,6 @@ def test_trim_verification_context_carries_limit_and_both_audit_identities():
     assert '当前 pretrim 20 字' in detail and '目标 ' in detail
     assert '超上限' in detail
     assert f'before={audit.before_sha256}' in detail
-    assert f'after={audit.after_sha256}' in detail
 
 
 def test_trim_resolution_schema_has_no_candidate_adoption_action(tmp_path):
@@ -137,7 +130,7 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
 
     resolution_path = book / resolution_rel
     raw = json.loads(resolution_path.read_text(encoding='utf-8'))
-    assert raw['_schema_version'] == 1
+    assert raw['_schema_version'] == 2
     assert raw['action'] == 'retain_pretrim'
     assert raw['mode'] == 'deep'
     assert raw['chapter_rel'] == 'stage5/deep/ch03.json'
@@ -158,16 +151,11 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
     assert len(history) == 1
     assert json.loads(history[0].read_text(encoding='utf-8'))['actor'] == '甲'
 
-    _write_audit(book, _audit(reason='候选正文变化', after='c' * 64))
-    assert [row.chapter for row in _trim_rows(str(base))] == [3]
-
-    retain_pretrim(
-        readonly_ctx(book, 'stage5.review', prov.code_version()),
-        3, actor='丙', reason='按新候选审计仍保留原稿')
-    assert _trim_rows(str(base)) == []
     (book / 'stage0' / 'clean_text.txt').write_text(
         '第一章\n根正文已经变化。\n', encoding='utf-8', newline='\n')
-    assert _trim_rows(str(base)) == [], '根身份已变，旧 audit 不再是当前 verification'
+    assert _trim_rows(str(base)) == []
+    assert current_trim_audits(_store(book)) == {}, (
+        '根身份已变 ⇒ 旧 audit 连「exact-current 根因」都不再是，不只是离开 verification')
 
 
 def test_formal_chapter_rewrite_retires_and_blocks_the_old_trim_resolution(tmp_path):
