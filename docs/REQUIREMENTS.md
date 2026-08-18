@@ -29,6 +29,17 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
   唯一权威源，不与产物 usage 或日志混加。
 - [ ] 对同一盘面运行 `--require-corpus` 的完整 `corpus or not corpus` 套件；任何书目/产物减少、
   版本漂移、ledger 不闭合或新增 skip 都必须失败。
+- [ ] 语料闸可用性前置（**已完成大部分，剩余见下**）：`-m corpus` 批要在**当前**盘面上给出
+  可解释读数——2026-08-18 由 251 红降到 16 红 / 82 跳过 / 800 通过。剩余失败逐条对应真实
+  产物或代码问题，**不得以「已知问题」记账**。当前剩余两类：① 沙箱里
+  `novel/orchestrator/approvals.py::backfill_from_disk` 只回填得出 `s0/s1/s3`；
+  ② `novel/stages/stage7/assemble.py` 的五处交付拒绝抛的是抽象基类 `TerminalState`，
+  而 `novel/api/errors.py::status_of` 刻意不给它状态码 ⇒ 经 HTTP 时变成 500 而不是 409。
+
+⚠ `tests/corpus.py::requires_current` 产的跳过**不进本 manifest 的 skip allowlist**：
+`contracts/schema/corpus.py::CorpusSkipExpectation` 会拒收它们，而**那是对的**——本条要求的
+验收盘面是从来源整批重生成、`code_identity` 唯一的，那样的盘面上这些前提恒成立、跳过恒不发生。
+⇒ 它们是**过渡态**；验收跑里出现任何一条，就说明那份盘面没有真的整批重生成。
 
 历史中间产物 `outputs/skill_e2e_schema_v1_20260816` 不是 current-schema 验收证据，
 不能为最终 manifest 提供通过数字。
