@@ -64,17 +64,23 @@ def _req(*, system: str = 'sys', user: str = 'usr', thinking: bool = True,
     )
 
 
-@pytest.mark.parametrize('effort', ['max', 'ultra', '', 'HIGH'])
+@pytest.mark.parametrize(
+    'effort', ['max', 'medium', 'xhigh', 'ultra', '', 'HIGH'])
 @pytest.mark.parametrize('thinking', [True, False])
 def test_an_unregistered_effort_is_refused_instead_of_guessing_a_framing(
         effort: str, thinking: bool):
     """⭐ **未登记的档位关闭式拒绝**，不猜一个 framing 了事。
 
     ⚠ 这条是补给一段刚删掉的死分支的：`_render_prompt` 里曾有 `effort == 'max'` 的
-    官方前缀分支，而 `client.py::LADDER` 只有 low/medium/high、`rungs_from_effort`
-    显式拒绝其余值 ⇒ 那条分支不可达，**且全仓没有一条测试扫过它**。
+    官方前缀分支，而 `max` 进不了 `client.py::LADDER`、`rungs_from_effort` 也拒绝它
+    ⇒ 那条分支不可达，**且全仓没有一条测试扫过它**。
     删掉分支之后如果不补这一条，剩下的关闭式拒绝同样没人查——
     「删掉一段没人查的代码」不该顺手把它那道闸也变成没人查的。
+
+    ⚠⚠ 取值面里那两个**不是**「API 不认的值」：`medium` / `xhigh` 完全合法，
+    只是被服务端静默映射回 `high`。它们被拒的理由与 `ultra` 不同——不是「猜不出 framing」，
+    是「放行等于允许一个看起来降了档、实际一档没降的配置」，而账本分辨不出来。
+    真实档位只有 low / high / max 三个。
 
     ⚠ prompt 是**发出去的字节**：猜错 framing 等于按另一个 prompt 估预算，
     而预算拒绝是花钱前的最后一道闸。报错必须给出行动。

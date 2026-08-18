@@ -99,7 +99,10 @@ def test_only_the_writing_node_has_modes():
 
 
 def test_unmeasured_nodes_keep_the_default_high_effort():
-    assert all(spec.effort in (None, 'low', 'medium', 'high') for spec in inv.NODES.values())
+    # ⚠ 取值面只有 low / high：`medium` / `xhigh` 被服务端静默映射回 `high`
+    #   （放行 = 允许一个「降了档、实际没降」的配置），`max` 是升档且还没补回官方
+    #   effort 前缀。三处闸说的是同一件事，见 `novel/llm/client.py::rungs_from_effort`。
+    assert all(spec.effort in (None, 'low', 'high') for spec in inv.NODES.values())
     assert inv.NODES['stage3.style'].effort is None
     assert inv.NODES['stage7.rename'].effort is None
 

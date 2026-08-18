@@ -110,13 +110,20 @@ def test_ask_json_can_refresh_a_valid_cached_response():
 # 一、⭐ 降级阶梯 —— 每一档都零成本跑一遍
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_ladder_is_exactly_the_four_rungs_and_there_is_only_one_of_it():
+def test_the_ladder_is_exactly_the_three_rungs_and_there_is_only_one_of_it():
     """⚠ **原型把这条阶梯在两个入口各写了一遍。** 两份逐行相同的东西必然分家。
 
-    档位逐字照抄：`high→medium→low` 是**给正文腾预算**（`max_tokens` 在推理模型上
-    同时约束 reasoning + completion），最后那档关掉 thinking 是最后一手。
+    `high→low` 是**给正文腾预算**（`max_tokens` 在推理模型上同时约束
+    reasoning + completion），最后那档关掉 thinking 是最后一手。
+
+    ⚠⚠ **原型的第二档 `('medium', True)` 已删，而它不是「简化」。** 本模型真实档位是
+    low/high/max；`medium` 合法但被服务端**静默映射回 `high`** ⇒ 它与首档是两个缓存键、
+    同一种模型行为：首档失败后第二档把同样的行为再跑一遍，**一分预算都没腾出来**，
+    白付一次。⇒ 四档里只有三种行为，删掉那一档不改变任何救场能力。
     """
-    assert LADDER == (('high', True), ('medium', True), ('low', True), ('low', False))
+    assert LADDER == (('high', True), ('low', True), ('low', False))
+    assert not any(effort == 'medium' for effort, _thinking in LADDER), \
+        'medium 被服务端映射回 high ⇒ 它当不了降级档，只会白付一次'
     import inspect
     from novel.llm import client
     src = inspect.getsource(client)
@@ -133,7 +140,8 @@ def test_the_ladder_is_exactly_the_four_rungs_and_there_is_only_one_of_it():
 
 @pytest.mark.parametrize('rung', range(len(LADDER)))
 def test_every_rung_can_recover_an_empty_answer(rung):
-    """⭐ **四档各测一遍**：前 `rung` 档返回空正文，第 `rung+1` 档拿到正文。
+    """⭐ **每一档各测一遍**（分母从 `LADDER` 派生，不手写）：前 `rung` 档返回空正文，
+    第 `rung+1` 档拿到正文。
 
     ⚠ 空正文那个形态是实测的：`finish_reason='stop'`、`reasoning` 很长、`content` 是空串
     ——**不是截断**，是推理流与答案流的边界丢了。照着「截断」去修（加 max_tokens）救不了它。
@@ -174,12 +182,27 @@ def test_thinking_off_walks_only_the_single_nothink_rung():
 
 
 def test_a_node_effort_override_changes_only_the_first_rung():
-    medium = _client(FakeTransport.always(OK_TEXT), effort='medium')
-    assert medium._rungs == (('medium', True), ('low', True), ('low', False))
+    """⚠ 能降的只有一档：带 thinking 的档位就 `low`/`high` 两个。"""
     low = _client(FakeTransport.always(OK_TEXT), effort='low')
     assert low._rungs == (('low', True), ('low', False))
+    # `None` 与 `high` 都保留全梯——覆盖只裁掉更高档，不另造第二份阶梯。
+    assert _client(FakeTransport.always(OK_TEXT), effort='high')._rungs is LADDER
+    assert _client(FakeTransport.always(OK_TEXT), effort=None)._rungs is LADDER
     with pytest.raises(ValueError, match='effort'):
         _client(FakeTransport.always(OK_TEXT), effort='ultra')
+
+
+def test_efforts_the_server_remaps_to_high_are_refused_instead_of_silently_accepted():
+    """⚠⚠ `medium` / `xhigh` **是合法参数**——服务端只是把它们静默映射回 `high`。
+
+    所以这道闸拒的不是「API 不认的值」，而是「**看起来降了、实际没降**的配置」：
+    放行它们，账本 `reasoning_effort` 那一列会如实写着 `medium`，而模型按 `high` 跑，
+    于是事后没有任何东西说得出这一次到底按什么档跑的——**这正是 A/B 最怕的那种脏数据**。
+    ⚠ `max` 是另一回事（升档、要官方 effort 前缀），它由 budget 那一侧拒绝。
+    """
+    for effort in ('medium', 'xhigh'):
+        with pytest.raises(ValueError, match='映射回'):
+            _client(FakeTransport.always(OK_TEXT), effort=effort)
 
 
 def test_thinking_off_exhaustion_still_raises_and_never_returns_an_empty_draft():
@@ -219,7 +242,7 @@ def test_nonempty_but_length_capped_text_can_be_rejected_and_downgraded():
 
     assert _client(t).ask_text(
         'sys', 'usr', purpose='t', validator=complete) == '一段正文'
-    assert t.rungs == [('high', True), ('medium', True)]
+    assert t.rungs == list(LADDER[:2])
 
 
 def test_a_text_helper_can_explicitly_use_one_cheaper_rung():
@@ -295,7 +318,7 @@ def test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget():
     t = FakeTransport(responder=responder)
     out = _client(t).ask_json('sys', 'usr', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == [('high', True), ('medium', True), ('low', True)]
+    assert t.rungs == list(LADDER[:3])
 
 
 def test_a_legal_but_structurally_empty_json_goes_down_the_same_ladder():
@@ -310,7 +333,7 @@ def test_a_legal_but_structurally_empty_json_goes_down_the_same_ladder():
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
     out = _client(t).ask_json('sys', 'usr', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == [('high', True), ('medium', True)]
+    assert t.rungs == list(LADDER[:2])
 
 
 def test_each_rung_is_its_own_cache_entry():
@@ -501,8 +524,8 @@ def test_a_structurally_empty_shell_is_evicted_from_the_cache():
     _client(t, cache=ResponseCache(d)).ask_json('s', 'u', model_cls=Resp, purpose='t')
 
     keys = {p.name for p in d.iterdir()}
-    assert f'{cache_key(_json_req("high", True))}.json' not in keys, '空壳还留在缓存里'
-    assert f'{cache_key(_json_req("medium", True))}.json' in keys, '好的那一份该留着'
+    assert f'{cache_key(_json_req(*LADDER[0]))}.json' not in keys, '空壳还留在缓存里'
+    assert f'{cache_key(_json_req(*LADDER[1]))}.json' in keys, '好的那一份该留着'
 
 
 def _json_req(effort: str, thinking: bool) -> ChatRequest:
@@ -524,8 +547,8 @@ def test_a_truncated_response_is_never_written_to_the_cache():
     _client(t, cache=ResponseCache(d)).ask_json('s', 'u', model_cls=Resp, purpose='t')
 
     keys = {p.name for p in d.iterdir()}
-    assert f'{cache_key(_json_req("high", True))}.json' not in keys, '截断的那一份进了缓存'
-    assert f'{cache_key(_json_req("medium", True))}.json' in keys, '好的那一份该留着'
+    assert f'{cache_key(_json_req(*LADDER[0]))}.json' not in keys, '截断的那一份进了缓存'
+    assert f'{cache_key(_json_req(*LADDER[1]))}.json' in keys, '好的那一份该留着'
 
 
 def test_a_poisoned_cache_entry_heals_within_the_very_same_run():
@@ -553,7 +576,7 @@ def test_a_poisoned_cache_entry_heals_within_the_very_same_run():
     out = _client(t, ctx=ctx, cache=ResponseCache(d)).ask_json(
         's', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == [('high', True)], '四档缓存都坏后，只该从第一档真发一次'
+    assert t.rungs == [('high', True)], '每一档缓存都坏后，只该从第一档真发一次'
     assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (1, len(LADDER))
     # 毒的那份走了，好的那份留下
     assert cache.get(cache_key(_json_req('high', True))).text == OK_JSON.text
@@ -600,7 +623,7 @@ def test_a_genuinely_bad_response_still_walks_the_ladder_without_double_sending(
     t = FakeTransport(responder=lambda _r, i: truncated if i < 2 else OK_JSON)
     out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == [('high', True), ('medium', True), ('low', True)], \
+    assert t.rungs == list(LADDER[:3]), \
         '每一档发了不止一次——阶梯的花费翻倍了'
 
 
@@ -716,7 +739,7 @@ def test_a_wrongly_shaped_value_walks_the_ladder_instead_of_being_accepted(bad):
                       if i < 1 else OK_JSON)
     out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == [('high', True), ('medium', True)], '形状错的那一份被放行了'
+    assert t.rungs == list(LADDER[:2]), '形状错的那一份被放行了'
 
 
 def test_a_legitimate_false_or_zero_is_not_mistaken_for_a_missing_key():
@@ -749,7 +772,7 @@ def test_an_empty_collection_is_still_treated_as_the_f125_shell():
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
     out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == [('high', True), ('medium', True)], '空集合被当成可用的响应放行了'
+    assert t.rungs == list(LADDER[:2]), '空集合被当成可用的响应放行了'
 
 
 def test_an_explicit_require_may_only_narrow():

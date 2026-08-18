@@ -48,12 +48,27 @@ from novel.observability import (
 from novel.run import RunContext
 
 #: **降级阶梯，全仓唯一一份。** `(reasoning_effort, thinking)`，按顺序走。
-#: ⚠ 逐字照抄原型：`high→medium→low` 是**给正文腾预算**（见模块 docstring ②），
+#: `high→low` 是**给正文腾预算**（见模块 docstring ②），
 #: 最后那档关掉 thinking 是「推理流本身就是问题源」时的最后一手。
 #: ⚠ **全空则抛**，绝不返回空稿——一份空稿落下去，下游是确定性代码，
 #: 它不会像写手那样将就着用，它会在几层之外炸，或者更坏：静默产出一份缺内容的东西。
+#:
+#: ⚠⚠ **这里曾有第二档 `('medium', True)`，逐字照抄自原型，而它是一次白花的钱。**
+#: 本模型的真实档位是 `low` / `high` / `max` 三档；`medium`（还有 `xhigh`）**是合法参数、
+#: 但服务端静默映射回 `high`** ⇒ 它不报错、不重试、看起来一切正常，
+#: 而 `cache_key` 含 `reasoning_effort`（`novel/llm/transport.py::ChatRequest.cache_payload`）
+#: ⇒ 它与首档是**两个缓存键、同一种模型行为**。后果：首档拿回空响应/截断之后，
+#: 第二档换个键把**同样的行为**再跑一遍，大概率同样失败，**一分预算都没腾出来**——
+#: 而「降 effort 就是给正文腾预算」正是这条阶梯管用的全部理由。
+#: 四档里只有三种行为，却付四次钱。⇒ 删掉那一档。
+#:
+#: ⚠ **`max` 刻意不在梯上，那不是遗漏。** 它是**升档**：带 79 token 的官方 effort 前缀
+#: （`novel/llm/budget.py` 记着它被删的位置与恢复方式），且那段前缀明令模型写出完整推敲过程
+#: ⇒ reasoning 只会更多。而这条阶梯扛的两类故障里有一类**就是**「推理吃光了 `max_tokens`
+#: 预算、正文写到一半截断」——拿 `max` 去救它是火上浇油。
+#: 要用 `max` 是**质量实验**那条路（`docs/REQUIREMENTS.md` FC-13），不是救场路。
 LADDER: Final[tuple[tuple[str, bool], ...]] = (
-    ('high', True), ('medium', True), ('low', True), ('low', False),
+    ('high', True), ('low', True), ('low', False),
 )
 
 #: 关思考阶梯：**单档**。`('low', False)` 是仓内唯一实测验证过的关思考档
@@ -71,11 +86,20 @@ def rungs_from_effort(effort: str | None) -> tuple[tuple[str, bool], ...]:
 
     ``None`` 与 ``high`` 都保留全局默认。覆盖只裁掉更高档，不另造第二份阶梯；
     因而截断/空响应时仍能走现有降级路径。
+
+    ⚠ **能降的只有一档**（`low`）——本模型带 thinking 的档位就 `low`/`high` 两个，
+    `max` 是升档且不在梯上（见 `LADDER`）。取值面窄不是漏写：
+    `medium`/`xhigh` 虽然 API 收，但服务端把它们映射回 `high`
+    ⇒ 允许它们等于允许一个**看起来降了、实际没降**的配置，而账本上分辨不出来。
     """
     if effort in (None, 'high'):
         return LADDER
-    if effort not in ('medium', 'low'):
-        raise ValueError(f'节点 effort={effort!r}；可选 low/medium/high 或 None')
+    if effort != 'low':
+        raise ValueError(
+            f'节点 effort={effort!r}；可选 low / high / None。'
+            f'⚠ `medium` 与 `xhigh` 会被服务端静默映射回 `high`——这里关闭式拒绝它们，'
+            f'免得一个「降了档」的节点配置其实一档没降；`max` 是升档，'
+            f'要用它先按 `novel/llm/budget.py` 的记录补回官方 effort 前缀')
     start = next(i for i, (name, thinking) in enumerate(LADDER)
                  if name == effort and thinking)
     return LADDER[start:]

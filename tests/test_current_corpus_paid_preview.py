@@ -5,10 +5,23 @@ from pathlib import Path
 
 import pytest
 
+from novel.llm.client import LADDER
 from novel.stages.stage0.removal import _context, run_approve, run_source
 from novel.stages.stage1.partition import run_partition
 from tests.fixtures_ingest import body
 from tools import current_corpus_paid_preview as P
+
+#: 阶梯档数。**从生产落点取，不写死。**
+#: wire 上限恒是「逻辑请求数 × 档数」，于是这些期望值里被钉住的是**逻辑请求数**
+#: （136 / 2 / 4 …），而档数只是个已知乘数。
+#: ⚠ 2026-08-18 阶梯由 4 档降到 3 档（删掉被服务端静默映射回 `high` 的 `medium`，
+#: 见 `novel/llm/client.py::LADDER`）⇒ 全部 wire 上限跟着降 1/4，**那是正确结果不是回归**。
+_RUNGS = len(LADDER)
+
+#: 当前语料范围的 wire 硬上限：(基础 136 + stage3 条件 2 + 语义 4) × 档数 + 6。
+#: ⚠ 那个 `+6` 是 stage6 定向重试，走单档 `HOOK_RETRY_RUNGS`，**不随主阶梯伸缩**。
+#: ⚠ 与它并列的 `external_hard_limit=588` 是**已有实验**的历史边界，不随当前阶梯变。
+_FULL_WIRE = (136 + 2 + 4) * _RUNGS + 6
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,16 +107,16 @@ def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path
     assert aggregate == {
         'production_cli_dispatches': 16,
         'base_nonsemantic_logical_requests': 136,
-        'base_nonsemantic_ladder_wire_hard_limit': 544,
+        'base_nonsemantic_ladder_wire_hard_limit': 136 * _RUNGS,
         'stage3_conditional_habit_quote_logical': 2,
-        'stage3_conditional_habit_quote_wire_hard_limit': 8,
+        'stage3_conditional_habit_quote_wire_hard_limit': 2 * _RUNGS,
         'semantic_logical': 4,
-        'semantic_wire_hard_limit': 16,
+        'semantic_wire_hard_limit': 4 * _RUNGS,
         'stage6_conditional_candidate_retry_logical': 6,
         'stage6_conditional_candidate_retry_wire_hard_limit': 6,
         'full_conditional_logical_hard_limit': 148,
-        'full_conditional_wire_hard_limit': 574,
-        'full_conditional_context_token_hard_ceiling': 574_000_000,
+        'full_conditional_wire_hard_limit': _FULL_WIRE,
+        'full_conditional_context_token_hard_ceiling': _FULL_WIRE * 1_000_000,
     }
     assert sorted(book['chapters'] for book in plan['books']) == [17, 25]
 
@@ -122,7 +135,7 @@ def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path
         row['base_ladder_wire_hard_limit'],
         row['conditional_wire_hard_limit'],
         row['wire_attempt_hard_limit'],
-    ) for row in hooks] == [(1, 3, 4, 4, 3, 7), (1, 3, 4, 4, 3, 7)]
+    ) for row in hooks] == [(1, 3, 4, _RUNGS, 3, _RUNGS + 3)] * 2
     for row in hooks:
         retry = next(
             item for item in row['request_envelopes']
@@ -252,8 +265,8 @@ def test_only_global_prompt_is_exact_before_upstream_generation(tmp_path):
     for estimate in estimates.values():
         assert estimate['status'] == 'exact_for_current_source_or_stage1'
         assert estimate['first_success_input_tokens'] == 321
-        assert estimate['exhausted_ladder_input_tokens'] == 4 * 321
-        assert estimate['completion_tokens_ladder_upper_bound'] == 4 * 96_000
+        assert estimate['exhausted_ladder_input_tokens'] == _RUNGS * 321
+        assert estimate['completion_tokens_ladder_upper_bound'] == _RUNGS * 96_000
         assert estimate['completion_includes_reasoning'] is True
     assert plan['token_estimate']['downstream_prompt_tokens'] == 'unknown'
     assert '不含费率' in plan['token_estimate']['price']
@@ -299,11 +312,11 @@ def test_existing_experiments_and_minimum_evaluator_are_separate_scopes(tmp_path
     assert old['external_hard_limit'] == 588
     assert old['included_in_new_corpus_totals'] is False
     assert old['overlaps_current_corpus_scope'] is False
-    assert old['combined_wire_hard_ceiling_once_each'] == 588 + 574
+    assert old['combined_wire_hard_ceiling_once_each'] == 588 + _FULL_WIRE
 
     accounting = plan['scope_accounting']
     assert accounting['existing_fc08_fc13_overlaps_current_corpus'] is False
-    assert accounting['existing_plus_current_once_each'] == 588 + 574
+    assert accounting['existing_plus_current_once_each'] == 588 + _FULL_WIRE
     # ⚠ 这里曾有第三块：仍 blocked 的「最低 evaluator 标定 campaign（4800 次）」。
     #   evaluator profile 装置已被裁决删除，那场战役不会发生 ⇒ 预览不再为它报预算。
     #   断言写成「这两个键不许回来」，而不是删掉了事：一个不存在的计划出现在预算里，
@@ -333,7 +346,7 @@ def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     text = P.render(P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1))
     assert '[16/16]' in text
     assert 'Stage6 条件候选定向重试：logical=6 / wire 上限=6' in text
-    assert '全条件硬上限：logical=148 / wire=574' in text
+    assert f'全条件硬上限：logical=148 / wire={_FULL_WIRE}' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text
     assert '那场战役不会发生' in text

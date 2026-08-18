@@ -1043,7 +1043,12 @@ class NodeSpec(NamedTuple):
     flags: tuple[str, ...] = ()         # ★ 本节点接受哪些**跑法** flag，见下
     required_flags: tuple[str, ...] = ()  # ★ 少一个就拼不出可执行 argv 的 flag，见下
     produces: tuple[str, ...] = ()      # ★ 默认路径往盘上写哪几份产物，见下
-    effort: str | None = None           # 可选首档；未做 A/B 的节点必须保持 None（即 high）
+    # 可选首档；未做 A/B 的节点必须保持 None（即 high）。
+    # ⚠ 取值面只有 `low` / `high` / `None`：`medium` 与 `xhigh` 虽然 API 收，但被服务端
+    #   静默映射回 `high` ⇒ 允许它们就是允许一个「写着降了档、实际一档没降」的配置，
+    #   而账本那一列会如实记下 `medium`，事后分辨不出来。`max` 是升档，启用前要先补回
+    #   官方 effort 前缀。判定落点是 `novel/llm/client.py::rungs_from_effort`，不靠本注释。
+    effort: str | None = None
 
 
 #: 全部作业单元。⚠ 顺序即处理链顺序，队列与断点续跑都按它排。
