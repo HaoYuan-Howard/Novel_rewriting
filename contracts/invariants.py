@@ -684,9 +684,15 @@ HOOK_APPROACHES: Final = ('source_architecture', 'payoff_preview', 'scene_punchl
 #: 而文本已经是人手写的。「它是不是人写的」由 `origin` 回答，不由这里回答。
 HOOK_APPROVED_APPROACHES: Final = HOOK_APPROACHES + ('human_edit',)
 
-#: 候选在最新一次质量审判中的可选状态。界面与批准路共同消费；``unreviewed``
-#: 明确不同于 ``clear``，缺审判不能被画成绿灯。
-HOOK_SEMANTIC_STATES: Final = ('clear', 'contradiction', 'uncertain', 'unreviewed')
+#: 候选在最新一次质量审判中的可选状态。界面与批准路共同消费。
+#:
+#: ⚠⚠ 这里曾有四个取值，多的两个是 ``clear`` 与 ``contradiction``。它们只由
+#: automated PASS/FAIL 产生，而自动放行门随 evaluator profile 于 2026-08-18 整批下线
+#: ⇒ **两个都不可达**。留着它们最坏的一面是 ``clear``：界面会为一个永远不会出现的
+#: 绿灯保留一条渲染分支，而读的人会以为「只是这次没绿」。
+#: 现在只剩两个，而且它们答的是不同的问题：``unreviewed`` = 没有可用的当前审判，
+#: ``uncertain`` = 判过、有证据、但本仓不替人盖章。
+HOOK_SEMANTIC_STATES: Final = ('uncertain', 'unreviewed')
 
 #: 三种写法各自的一句说明。**键必须与 `HOOK_APPROACHES` 逐字相等**（下面有 import 期断言）。
 #: 它逐字进 `HOOK_SYS`——原型把这三句写在产地的一个 dict 里，而**枚举表在这里**，

@@ -851,17 +851,18 @@ class HookCandidateLine(FrozenModel):
     mech: Mech
     findings: list[Finding]
 
-    #: 最新质量审判按文本 sha1 映射出的状态。没有/过期审判均为 unreviewed；
-    #: 校准 PASS 可直接定稿，UNVER 可走显式人工核验，校准 FAIL 不可绕过。
+    #: 最新质量审判按文本 sha1 映射出的状态。没有/过期审判是 unreviewed；
+    #: 判过则恒 uncertain（本仓没有自动放行门）。⚠ 两者**不是同一件事**：
+    #: 前者没有任何判官看过，后者有两名判官的带证据结论等着人读。
     semantic_state: Literal[HOOK_SEMANTIC_STATES]
     semantic_reason: str = Field(min_length=1)
     contradictions: list[HookContradiction]
     quality: HookQualityScores | None
     quality_score: float | None = Field(default=None, ge=0, le=10)
     quality_rank: int | None = Field(default=None, ge=1)
-    selectable: bool
-    #: UNVER / 缺 profile 可由显式 actor+reason 人工消解；历史校准
-    #: FAIL 即使 profile 漂移也不得走普通定稿路绕过。
+    #: ⚠ 这里曾有 `selectable`（「最新审判是校准双盲 PASS，可直接定稿」）。
+    #: 自动放行门下线后它恒 `false`，而一个恒假的「可直接定稿」会让界面一直画着
+    #: 一条永远走不通的捷径。⇒ 删掉；**每一条候选都要人显式核验**。
     human_resolvable: bool
 
     #: 这一条是不是当前定稿（`hook.approved.approach == candidate.approach`）。

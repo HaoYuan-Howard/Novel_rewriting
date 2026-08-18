@@ -804,15 +804,22 @@ export interface HookCandidate {
   subject_sha256: string
   mech: HookMech
   findings: Finding[]
-  semantic_state: 'clear' | 'contradiction' | 'uncertain' | 'unreviewed'
+  /**
+    * `unreviewed` = 没有可用的当前审判；`uncertain` = 判过、有证据、但服务端不替人盖章。
+    * ⚠ 曾有 `clear` / `contradiction` 两个取值，它们只由服务端的自动放行门产生，
+    * 而那套装置已整批下线 ⇒ 两个都不会再出现。
+    */
+  semantic_state: 'uncertain' | 'unreviewed'
   semantic_reason: string
   contradictions: HookContradiction[]
   quality: HookQualityScores | null
   quality_score: number | null
   quality_rank: number | null
-  /** 最新质量审判为校准双盲 PASS；UNVER 另走 human_resolvable */
-  selectable: boolean
-  /** 当前为 UNVER/缺 profile，但可由显式人工 resolution 消解 */
+  /**
+    * 当前结论可由显式人工 resolution 消解。
+    * ⚠ 这里曾有一格 `selectable`（「校准双盲 PASS，可直接定稿」）。自动放行门下线后
+    * 服务端不再下发它——**每一条候选都要人显式核验**，界面上不该有那条捷径。
+    */
   human_resolvable: boolean
   /** 这一条是不是当前定稿 */
   approved: boolean
@@ -829,7 +836,9 @@ export interface HookApproved {
     actor: string
     reason: string
     subject_sha256: string
-    basis: 'calibrated_pass' | 'human_verification'
+    /** 恒 `human_verification`：`calibrated_pass` 是被服务端裁决掉的取值。 */
+    basis: 'human_verification'
+    /** 人当时读的是哪一份审判。`null` = 定稿时没有可用审判，人是在零证据下拍的板。 */
     semantic_review_seq: number | null
   }
 }

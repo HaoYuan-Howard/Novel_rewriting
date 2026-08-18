@@ -79,11 +79,10 @@ def test_the_approved_flag_and_the_approved_block_tell_one_story(box):
                                     if measure(v.approved.text) else 0)
 
 
-def test_missing_quality_review_is_visible_and_disables_selection(box):
-    """缺审不能默认 clear，但必须保留明示的人工 verification 路。"""
+def test_missing_quality_review_is_visible_and_still_needs_a_human(box):
+    """缺审不能默认放行，但必须保留明示的人工 verification 路。"""
     v = stage6_view(box.root, box.sid)
     assert all(candidate.semantic_state == 'unreviewed' for candidate in v.candidates)
-    assert all(not candidate.selectable for candidate in v.candidates)
     assert all(candidate.human_resolvable for candidate in v.candidates)
     assert all(len(candidate.subject_sha256) == 64 for candidate in v.candidates)
     assert all(candidate.quality is None and candidate.quality_rank is None
@@ -108,6 +107,35 @@ def test_a_missing_artifact_is_a_terminal_state(box):
 def test_stage6_view_rejects_an_unknown_synthetic_book(tmp_path):
     with pytest.raises(UpstreamMissing):
         stage6_view(tmp_path, '9999999999999999999')
+
+
+def test_the_view_reads_only_fields_the_assessment_can_answer():
+    """⚠⚠ 这一屏的正例**全部挂在 corpus 上**，非 corpus 批只跑得到上面那条 404。
+
+    后果实测过一次：把 `CandidateAssessment.selectable` 删掉之后，默认套件全绿，
+    而 `stage6_view` 在线上 `AttributeError`。这条用最小成本堵住那个缺口。
+
+    ⚠ 它**不重拼** view 的组装逻辑——从 view 自己的源码里取出「从 assessments 上取了哪几格」，
+    再拿一个真的 `CandidateAssessment` 逐个 `getattr`。view 改了取法，这里跟着变。
+    """
+    import ast
+    import inspect
+
+    from novel.stages.stage6.semantic import CandidateAssessment
+    from novel.views import stage6 as view
+
+    tree = ast.parse(inspect.getsource(view.stage6_view).lstrip())
+    read = {
+        node.attr for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Subscript)
+        and getattr(node.value.value, 'id', None) == 'assessments'
+    }
+    assert read, 'view 已经不从 assessments 上取值了？那这条守卫在看空气'
+    probe = CandidateAssessment(state='unreviewed', reason='合成探针')
+    missing = sorted(name for name in read if not hasattr(probe, name))
+    assert not missing, (
+        f'`stage6_view` 从 CandidateAssessment 上取了它没有的格：{missing}\n'
+        f'→ 删字段时同时改 view；这一屏的正例都在 corpus 批，默认套件不会替你发现')
 
 
 def test_the_view_writes_nothing(box):

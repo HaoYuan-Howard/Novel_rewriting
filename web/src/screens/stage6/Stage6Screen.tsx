@@ -88,8 +88,9 @@ export function Stage6Screen() {
       <QueryStates q={q} loadingLabel="读开篇文案候选" missing={{ title: '开篇文案 · stage6' }}>
         {(d) => {
           const approvedIdx = d.candidates.find((c) => c.approved)?.index ?? null
+          // 服务端不再产「可直接定稿」的候选，默认落点改为质量排名第一的那条。
+          // ⚠ 它是**排序读数**，不是判定：选谁仍然要人填身份与理由。
           const recommended = [...d.candidates]
-            .filter((c) => c.selectable)
             .sort((a, b) => (a.quality_rank ?? 999) - (b.quality_rank ?? 999))[0]
           const picked = pick ?? approvedIdx ?? recommended?.index ?? d.candidates[0]?.index ?? 1
           const cand = d.candidates.find((c) => c.index === picked) ?? d.candidates[0]
@@ -113,15 +114,7 @@ export function Stage6Screen() {
                         : { color: SEV.unver.color, background: SEV.unver.bg }
                     }
                   >
-                    {d.approved
-                      ? '已定稿：' +
-                        d.approved.approach +
-                        '（' +
-                        (d.approved.resolution.basis === 'human_verification'
-                          ? '人工核验'
-                          : '校准双盲 PASS 后人选') +
-                        '）'
-                      : '还没定稿'}
+                    {d.approved ? '已定稿：' + d.approved.approach + '（人工核验）' : '还没定稿'}
                   </span>
                   {finalPhase ? (
                     <LinkButton onClick={() => setReopened(true)}>回去重挑候选</LinkButton>
@@ -161,7 +154,7 @@ export function Stage6Screen() {
                       const mechanicallyBlocked = c.findings.some((f) => f.sev === 'hard')
                       const approvable =
                         !mechanicallyBlocked &&
-                        (c.selectable || c.human_resolvable) &&
+                        c.human_resolvable &&
                         !!actor.trim() &&
                         !!reason.trim()
                       return (
@@ -213,17 +206,14 @@ export function Stage6Screen() {
                               <div
                                 key={'semantic-' + i}
                                 className="prose-cn rounded-block px-10 py-8 text-tag"
-                                style={
-                                  c.semantic_state === 'contradiction'
-                                    ? { color: SEV.hard.color, background: SEV.hard.bg }
-                                    : { color: SEV.unver.color, background: SEV.unver.bg }
-                                }
+                                style={{ color: SEV.unver.color, background: SEV.unver.bg }}
                               >
+                                {/* ⚠ 曾按 `semantic_state === 'contradiction'` 分两种色与两种抬头
+                                    （校准 FAIL 画成 hard）。服务端不再产自动 FAIL，那条分支不可达；
+                                    留着它等于让界面为一个不会出现的红灯保留一套渲染。
+                                    矛盾线索恒是 UNVER 色：它**报**而不**拦**，裁决在人。 */}
                                 <div className="font-semibold">
-                                  {c.semantic_state === 'contradiction'
-                                    ? '校准双盲 FAIL（实质矛盾）'
-                                    : '未校准线索（UNVER）'}
-                                  ：{item.assertion}
+                                  判官线索（UNVER）：{item.assertion}
                                 </div>
                                 <div>证据：{item.evidence}</div>
                                 <div>理由：{item.reason}</div>
@@ -258,17 +248,13 @@ export function Stage6Screen() {
                             >
                               {mechanicallyBlocked
                                 ? '有机械 HARD · 不可定稿'
-                                : c.semantic_state === 'contradiction'
-                                  ? '有实质矛盾 · 不可定稿'
-                                  : !actor.trim() || !reason.trim()
-                                    ? '先填身份与理由'
-                                    : !c.selectable && !c.human_resolvable
-                                      ? '当前结论不可消解'
-                                      : on
-                                        ? c.selectable
-                                          ? '定稿这一条 · 进入审阅'
-                                          : '人工核验后定稿'
-                                        : '定这一条'}
+                                : !actor.trim() || !reason.trim()
+                                  ? '先填身份与理由'
+                                  : !c.human_resolvable
+                                    ? '当前结论不可消解'
+                                    : on
+                                      ? '人工核验后定稿'
+                                      : '定这一条'}
                             </button>
                           </div>
                         </div>
@@ -276,8 +262,10 @@ export function Stage6Screen() {
                     })}
                   </div>
                   <div className="prose-cn text-tag text-ink-4">
-                    排序来自匿名主编的六维质量审判；剧透不扣分，实质矛盾候选不可定稿。人仍负责最终审美选择。改字不在浏览器：把
-                    hook_edit.json 放进书目录 stage6/ 后跑 stage6.hook --apply-edit（0 成本）。
+                    排序来自匿名主编的六维质量审判；剧透不扣分。⚠
+                    语义结论恒是带证据的 UNVER——服务端不替人否决任何一条候选，矛盾线索只呈现不阻断，
+                    定稿前请读两名判官各自的理由与逐字证据。改字不在浏览器：把 hook_edit.json
+                    放进书目录 stage6/ 后跑 stage6.hook --apply-edit（0 成本）。
                   </div>
                 </>
               ) : (

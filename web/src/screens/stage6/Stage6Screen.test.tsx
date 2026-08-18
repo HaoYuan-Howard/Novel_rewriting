@@ -8,7 +8,7 @@ import { renderRoute } from '@/test/render'
 import { Stage6Screen } from './Stage6Screen'
 
 describe('Stage6Screen audited approval', () => {
-  it('shows every advisory contradiction field as an uncalibrated UNVER clue', async () => {
+  it('shows every contradiction field as an UNVER clue the human must read', async () => {
     const fixture = await mockApi.getStage6(SAMPLE_SID)
     vi.spyOn(api, 'getStage6').mockResolvedValue({
       ...fixture,
@@ -23,7 +23,7 @@ describe('Stage6Screen audited approval', () => {
                 {
                   assertion: '人物动机与前文冲突',
                   evidence: '第二章的明示选择',
-                  reason: '当前 evaluator 未校准，只能交由人审',
+                  reason: '判官读到的关系与前文相反',
                 },
               ],
             }
@@ -37,50 +37,18 @@ describe('Stage6Screen audited approval', () => {
 
     renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
 
-    expect(await screen.findByText('未校准线索（UNVER）：人物动机与前文冲突')).toBeVisible()
-    expect(screen.getByText('证据：第二章的明示选择')).toBeVisible()
-    expect(screen.getByText('理由：当前 evaluator 未校准，只能交由人审')).toBeVisible()
-  })
-
-  it('shows calibrated contradictions as blocking failures instead of UNVER clues', async () => {
-    const fixture = await mockApi.getStage6(SAMPLE_SID)
-    vi.spyOn(api, 'getStage6').mockResolvedValue({
-      ...fixture,
-      approved: null,
-      candidates: fixture.candidates.map((row, index) =>
-        index === 0
-          ? {
-              ...row,
-              approved: false,
-              semantic_state: 'contradiction',
-              semantic_reason: '校准 evaluator 判定存在实质矛盾',
-              selectable: false,
-              human_resolvable: false,
-              contradictions: [
-                {
-                  assertion: '人物动机与前文冲突',
-                  evidence: '第二章的明示选择',
-                  reason: '校准双盲复核为 FAIL',
-                },
-              ],
-            }
-          : { ...row, approved: false },
-      ),
-    })
-    vi.spyOn(api, 'getStage1HookCopy').mockResolvedValue(
-      await mockApi.getStage1HookCopy(SAMPLE_SID),
-    )
-    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
-
-    renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
-
-    const label = await screen.findByText('校准双盲 FAIL（实质矛盾）：人物动机与前文冲突')
+    const label = await screen.findByText('判官线索（UNVER）：人物动机与前文冲突')
     expect(label).toBeVisible()
+    expect(screen.getByText('证据：第二章的明示选择')).toBeVisible()
+    expect(screen.getByText('理由：判官读到的关系与前文相反')).toBeVisible()
+    // ⚠ 这里曾有第二条用例，断言 `semantic_state === 'contradiction'` 的候选画成 hard 红并
+    //   不可定稿。服务端的自动放行门下线后**产不出那个状态**，那条用例只能靠手搓一个
+    //   不可能的响应活着——那是「断言一道产品明说不存在的闸」。
+    //   换成这一条：矛盾线索恒是 UNVER 色，且它**不阻断**——按钮仍然可按。
     expect(label.parentElement).toHaveStyle({
-      color: SEV.hard.color,
-      background: SEV.hard.bg,
+      color: SEV.unver.color,
+      background: SEV.unver.bg,
     })
-    expect(screen.queryByText('未校准线索（UNVER）：人物动机与前文冲突')).not.toBeInTheDocument()
   })
 
   it('previews and sends actor, reason, and the exact candidate SHA-256', async () => {

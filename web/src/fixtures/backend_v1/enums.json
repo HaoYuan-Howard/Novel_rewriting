@@ -667,19 +667,6 @@
     "stage5/review_{n}.json"
    ]
   },
-  "stage5.semantic": {
-   "label": "stage5 书级语义审判",
-   "paid": true,
-   "stage": "stage5",
-   "section": "R-8",
-   "modes": [],
-   "flags": [
-    "--dry-run"
-   ],
-   "produces": [
-    "stage5/semantic_{n}.json"
-   ]
-  },
   "stage6.hook": {
    "label": "stage6 开篇文案",
    "paid": true,
