@@ -33,6 +33,10 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-014 | 超限章有一条 0 成本销账路 | contract-confirmed | `trim_audit_chNN`, verification | `--retain-pretrim --chapters` 或 `--apply-edit` |
 | FN-015 | 落盘闸拦下后，finding 细节的读法逐层不同 | contract-confirmed | `.INVALID`, exit 2 | 先 `--check-only` 取逐条，再 `--revalidate` 提升 |
 | FN-016 | `--apply-edit` 的路径语义逐层不同 | contract-confirmed | `edit_rel`, 产物目录之外, exit 2 | `--apply-edit`，编辑文件写进书目录内 |
+| FN-017 | `--revise` 不吃密度与篇幅类判据 | contract-confirmed | `--revise`, `length_under`, 没有可自救的条目 | `--apply-edit` 提交整章全文，或 `--wontfix` 记不修裁决 |
+| FN-018 | 宿主杀掉后台句柄后，逐章节点仍是可续的 | observed | 后台终止, `--chapters`, 账本无记录 | 前台 + `--chapters` 分批重跑 |
+| FN-019 | 并行会话改仓库代码会让 CLI 崩在 import 期 | observed | `NameError`, import, 与本书无关的栈 | 等对方写完后重试同一条命令，不改仓库代码 |
+| FN-020 | 审阅 info finding 要按判据实际读的字段读 | contract-confirmed | `present_continuity`, `present_char_ids`, 字段名相近 | 先定位判据实现，再照它读的那几个字段取证 |
 
 ### FN-001 · stage0 批准前的预期红灯
 
@@ -41,8 +45,15 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：这是“尚未批准”，不是剔除质量失败；仍需确认其余 HARD 全部为零。
 - 处置：按 stage0 代批规则读剔除段与边界，运行 `stage0.approve`。
 - 验证：批准状态落盘，后续 `state` 不再把 stage0 视为等待 approval。
+- ⚠ **零剔除的书走的是另一条分支，这条红灯不会出现**：一段都没剔时服务端当场自动批准
+  （批准来源记 `auto_zero_hit`、批准人留空），追跑 check 直接是 AMBER，`inbox` 的 `approval` 为零，
+  `stage0.approve` 这一步**不适用**——再跑一次只是无意义写盘。⚠ `preview stage0.approve` 照样会打印
+  带占位符的命令：preview 只回答"怎么跑"，"该不该跑"由 `inbox` 的 `approval` 计数回答。
+  代批责任此时掉转方向做**反向漏剔**抽查，判据见[代批与终审契约](delegated-review.md#stage0-代批)。
 - 依据：`novel/stages/stage0/checks.py::check` 的 `s0_approval` 分支（批准状态非 approved 即命中）；
-  `contracts/judges/stage0.py` 那一行的 sev 与 requirement。
+  `contracts/judges/stage0.py` 那一行的 sev 与 requirement；
+  自动分支的准入在 `novel/stages/stage0/removal.py::_auto_approval_eligible`，
+  取值面是 `contracts/schema/stage0.py::ApprovalOrigin`。
 
 ### FN-002 · 重号与缺号章节
 
@@ -59,7 +70,12 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 状态：`contract-confirmed`
 - 触发：`stage2.global --full-extract` 在 global 或后续落盘闸门处停止，blueprint/style 缺失。
 - 判断：组合命令不是原子事务；已经正式落盘的上游不应为补齐下游而重复付费。
-- 处置：按 finding 修复活动失败，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`。
+  已观测到的一种形态：`stage2.global` 与 `stage3.style` **都正式落盘**，只有逐章蓝图被拦成
+  `.INVALID`，而它的逐章生成事件全部 `succeeded`、`failed` 为零。
+  ⇒ **逐章生成成功不等于落盘**：闸门是在合并落盘那一步判的，
+  所以"每章都绿"与"整条命令 exit 2"完全可以同时成立，别据前者推断产物已就位。
+- 处置：先 `state` 看清哪几份已 fresh，只补缺的那份，不整组重跑。
+  按 finding 修复活动失败，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`。
 - 验证：两份 follow-check 都 fresh 且无 HARD，`state` 显示 stage2/stage3 完成。
 - 依据：`novel/orchestrator/nodes.py::build_steps` 的 full-extract 追跑规则与产物存在性。
 
@@ -234,10 +250,83 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   绝对路径只要落在书目录内也收，目录外与 `..` 穿越算平后一律关闭式拒绝。
   `stage5.write` 与 `stage0.edit` **刻意不走这条**，路径语义是“任意路径”——服务进程把人工改稿
   放在书目录之外的 `<base>/_service/edits/` 再喂给 `stage5.write --apply-edit`，那条现役 HTTP
-  改稿路依赖它（`R-11.3` 要求服务进程不写产物盘）。`stage2.global --review-decisions` 与前一组同规矩。
+  改稿路依赖它（服务进程只写 `_service/`，产物变更一律经 CLI 子进程）。
+  `stage2.global --review-decisions` 与前一组同规矩。
 - 处置：走 `edit_rel` 那四层时把 `--apply-edit` 的编辑文件写进书目录内（`<novel-dir>/<stage>/..._edit.json`），
   传相对书目录的路径或书目录内的绝对路径都可以。被拒时先读报错里算出来的那个绝对路径，
   它才是代码真正解释成的位置；不要靠加 `..` 或换 cwd 绕过去。
 - 验证：命令 exit 0 且新一轮落盘、上一轮归档进 `_rounds/`；操作包里记的是解析后的绝对路径。
 - 依据：`novel/paths.py::edit_rel` 的相对/绝对分支与目录外终态，其 docstring 记明
   `stage5.write` / `stage0.edit` 的例外与 `novel/api/routes/edits.py` 对该例外的依赖。
+
+### FN-017 · `--revise` 不吃密度与篇幅类判据
+
+- 状态：`contract-confirmed`
+- 触发：成稿命中篇幅或密度类 info（篇幅低于下限 `length_under`、形态/对白比/明喻/「心里」密度漂移），
+  想用 `stage5.write --revise` 返工，得到 exit 2「deep 臂这一轮没有可自救的条目」并列出被跳过的条数，
+  每条附「不进付费自救（满足路径不唯一）⇒ 转人工」。
+- 判断：**这不是失败，是产品在说这一层没有自动返工路。** `--revise` 只吃 `repair == 'UNIQUE'` 的条目，
+  而"写足篇幅"「贴回本书密度」的满足路径不唯一（最省力的写法就是注水，而 directive 明写不要注水），
+  所以这一族判据一律 `repair='NONE'`。⚠ 别把它读成 `remediation` 出错：
+  `remediation` 与 `repair` 是两格，前者说"归谁修"，后者才是付费自救的准入（见[修复状态机](recovery.md)）。
+  也别据此推断"篇幅不达标不算问题"——它照样进 `human_only` 余额，只是必须由人裁决。
+- 处置：确认账本没有因这次尝试新增调用（它在发请求之前就退了）。随后二选一，
+  **两条都由受托 agent 自己定，不回头找用户**：`--apply-edit` 提交该章全部 producer-owned slot
+  的完整成稿（0 次调用，会让下游 stale 需重跑），或 `--wontfix` 记一条带 actor/reason 的
+  不修裁决把它从余额里销掉。
+  ⚠ 代笔整章正文是**授权范围内**的，但这条路**没有任何守卫替你兜**：文风、保真材料与在场集
+  的一致性都不在任何判据的扫描面内，改坏了不会红。所以代笔前先取三样依据——该章 blueprint
+  的拍子、`stage3` 文风画像的 measurable、该章在场角色集——写完逐项自查并把方法与结论写进
+  终审包。取不到这三样依据时选 `--wontfix` 留一条明确裁决，而不是凭手感改正文。
+- 验证：账本按 sid 过滤后该节点的调用数仍等于章数（无多出的一条）；选 `--wontfix` 时
+  `inbox` 该项离开 `human_only` 并计入 wontfix 豁免；选 `--apply-edit` 时新一轮落盘且下游重跑通过。
+- 依据：`contracts/rules.py::_validate` 断言 `repair != 'NONE'` 仅允许 `owner == 'stage5'`；
+  `contracts/invariants.py::REVALIDATE_ONLY_NEW_ERRORS` 所在的同一张表登记 `--revise` 的语义。
+
+### FN-018 · 宿主杀掉后台句柄后，逐章节点仍是可续的
+
+- 状态：`observed`
+- 触发：把付费长节点交给宿主的后台/detached 句柄，进程在中途消失。通知可能先报"完成/退出码 0"
+  再改报"已终止"，两者都不可信。
+- 判断：只看盘上三样，别看通知——串联脚本最后那行退出码回显在不在、目标产物在不在、
+  账本有没有该节点的记录。三样全空 ⇒ 没有任何调用完成，重跑不是重复付费；
+  部分产物在盘且账本有对应条数 ⇒ 那几章已完成并已计费，只需补其余章。
+- 处置：改用**前台 + 分批**：逐章节点用 `--chapters` 把单次运行切到宿主超时以内。
+  这条安全的根据是 `--chapters` 缺省语义就是"补写所有缺的章" ⇒ 逐章节点天然增量，
+  已落盘的章不会被重写。⚠ 前台超时是硬杀，宁可多分几批，不要设一个刚好够呛的超时去赌。
+- 验证：分批跑完后每章恰有一份正式稿、无活动 `.INVALID`；账本该节点的调用数等于章数。
+- 依据：`contracts/invariants.py::VALUED_FLAGS` 里 `--chapters` 那一格的"不给就补写所有缺的章"；
+  中断可续的另一半由 `novel/llm/cache.py::cache_key` 兜住（同参数重跑命中回放，见 FN-005）。
+
+### FN-019 · 并行会话改仓库代码会让 CLI 崩在 import 期
+
+- 状态：`observed`
+- 触发：某条命令让 CLI **整体**崩在 import 期（例如某模块 `NameError`），
+  而同一条命令几分钟前还正常，报错栈与本书、本节点、本产物全都无关。
+- 判断：先分清是"仓库瞬时不一致"还是"本书的问题"。`git status` 显示 `novel/` 下有未提交改动
+  且报错文件正在其中 ⇒ 是别的会话正在改这个仓库，你撞上了它写文件的中间时刻。
+  ⚠ 崩在 import 期意味着**没有写盘**，本书状态干净。
+- 处置：**不改仓库代码**（本 skill 的硬边界），等对方那次编辑完成后重试同一条命令。
+  重试前重新取一次乐观锁 hash——代码变化有可能改变决策面；两次取值相同正好证明它没被影响。
+  把这次干扰如实记进终审包，不要写成本书的产物问题。
+- 验证：目标模块可单独 import 成功；重试后命令 exit 0；重取的 hash 与崩溃前逐字相同。
+- 依据：原始证据类型——命令 stderr 的 import 栈、`git status` 的未提交改动清单、
+  重试前后两次乐观锁取值。
+
+### FN-020 · 审阅 info finding 要按判据实际读的字段读
+
+- 状态：`contract-confirmed`
+- 触发：要人工判定某条 info 是真问题还是假阳，于是去产物里找证据，
+  却发现自己算出的命中集合与判据报的对不上（典型形状：判据点名的对象在你读的那个字段里根本不存在）。
+- 判断：**产物里常有一对名字相近、取值不同的字段**，判据读的是哪一个由实现决定，凭字段名猜会得出反向结论。
+  已知一例（`present_continuity`）：在场连续性判据扫的是每一拍的**事件描述**字段与**角色 id 集合**，
+  而不是形近的正文片段字段与显示名集合——照后者读会算出"判据点的那个人根本没出现"，
+  从而把一条真信号读成判据坏了。
+- 处置：先用 rule id 在 `novel/stages/<stage>/checks.py` 里定位那段实现，看清它读哪几个键、
+  命中条件怎么写，再照同样的键取证。判据的严重度与它的分辨力是一致的：
+  按叫法在自由文本里做广度扫描的判据必然分不开"在场"与"被提及/被回忆/正在离场"，
+  这正是它定为 info 而非 hard 的原因 ⇒ 逐条读出语义类别后保留并解释，
+  比反向改产物安全（把不在场的人补进在场集，下游写作会真的把人写进场景）。
+- 验证：能用判据读的那几个字段复现出与报告完全相同的命中集合；每条命中都写出语义类别与判定。
+- 依据：`novel/stages/stage2/checks.py::_present` 的在场族判定（读 `event` 与 `present_char_ids`，
+  按角色去重而非按名字）；严重度分级的理由在 `contracts/judges/stage2.py` 该条的 `_info` 登记。

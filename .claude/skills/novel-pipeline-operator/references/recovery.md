@@ -43,8 +43,27 @@
 |---|---|---|
 | `deterministic` | 执行 finding 的 `fix` 指向的节点/flag，再跑 preview 追加的 check | 0 外部调用 |
 | `llm` | 仅当 `repair == "UNIQUE"` 且 `unresolved_rounds < STOP_REWRITE_AFTER` 时运行 `stage5.write --revise` 或 finding 明列的付费入口 | 每个 `(章, rule)` 不超过代码中的轮次上限；每轮仍需两项授权 |
-| `human` | 由受托 agent 使用下表的正式人工输入面；必要时用 `--pick` 或机械结论可达的 `--wontfix` | 默认 0 外部调用；人工编辑不得绕过同一闸门 |
+| `human` | 由受托 agent **自己**走下表的受托编辑面收口——`human` 说的是"归非模型输入修"，不是"归用户修"；必要时用 `--pick` 或机械结论可达的 `--wontfix` | 默认 0 外部调用；编辑不得绕过同一闸门 |
 | `none` | 保留 metric/info 读数，不做修复 | 不为“全绿”制造动作 |
+
+### `repair` 与 `fix` 是两格，不要拿一格去否定另一格
+
+`llm` 那一行的 `repair == "UNIQUE"` 前置**只管 stage5 的付费自救环**——
+`contracts/rules.py::_validate` 断言 `repair != 'NONE'` 仅允许 `owner == 'stage5'`，
+所以**其余层全表 `repair='NONE'` 是结构常态，不是"这条不许修"**。
+其余层的付费修复入口在另一格：`Rule.fix`（节点 + flag）配 `Rule.fix_args_from_finding`
+（实参从 finding 现算，例如把命中章算成 `--chapters 3,6`）。
+
+⇒ 看到 `remediation='llm'` 而 `repair='NONE'` 时不要停机，那是 stage2 这类层的正常形状；
+按 `fix` 那一格走，而最省事的读法是 `inbox`——它已经把这两格合成一条可复制命令了。
+
+⚠ 反过来也要成立：`stage5.write --revise` 只吃 `repair='UNIQUE'` 的条目。
+密度与篇幅类判据（篇幅上下限、形态/对白比/明喻/「心里」密度这一族）的满足路径不唯一
+（"写足"最省力的写法就是注水，而 directive 明写不要注水），因此一律 `repair='NONE'` ⇒ 转人工。
+拿 `--revise` 去修它们会得到 exit 2「这一轮没有可自救的条目」并列出被跳过的条数，
+**且不产生任何调用**（账本可证）。那不是失败，是产品在说"这一层没有自动返工路"，
+剩下的只有 `--apply-edit` 提交整章全文，或 `--wontfix` 记一条明确的不修裁决——
+**两条都由受托 agent 自己定**（理由见下面「允许写入面」开头那一节），不是回头找用户的信号。
 
 `deterministic` 那一行的入口**由 finding 的 `fix` 给出，不要自己挑**。注册在案的确定性修复路由只有两条 flag：
 `--renormalize`（`stage2.global` / `stage2.blueprint`，按当前契约重算代码派生字段与原文定位并写回，
@@ -67,15 +86,31 @@
 
 ## 允许写入面
 
-正式产物必须由 CLI 生成。受托 agent 只可直接创建或编辑下表的人工输入，并只经下表的入口落盘；
-路径、形状和前稿要求以当前终态文案与 `docs/schema/` 为准。
+正式产物必须由 CLI 生成。受托 agent 只可直接创建或编辑下表的输入，并只经下表的入口落盘；
+路径、形状和前稿要求以**当前终态文案**为准（`stage7.rename --emit-edit-template` 是唯一能现取
+骨架的只读入口，其余层照终态报出的字段名与 schema version 写），不按记忆手抄。
 
-下表按**节点**索引，覆盖每一条 0 成本、但**会改动盘上产物**的入口——包括不需要人产文件的那几条
+### ⚠ 「人工」不是「不许 agent 用」
+
+本仓的「人工」指**非模型生成、由署名者负责的输入**，不指「必须由真人操作」。下表这些入口
+**就是本 skill 的工作面**——包括 `stage5.write --apply-edit` 提交整章正文、
+`stage6.hook --apply-edit` 重写开篇文案这两条最像"该交回用户"的路。
+
+读到「人工修订」「人产输入」「转人工」「human_only」时不要读成"这一步得回头找用户"。
+那样读的代价是确定的：一条 0 成本、已经授权、你完全有能力走完的收口路被留成余额，
+用户拿到的终审包里多一条本可销掉的待办——而本 skill 存在的理由正是消掉这类待办。
+署名用 `<ACTOR>` = `agent:novel-pipeline-operator`，责任就落在这次代批上，可追溯、可回查。
+
+真正的边界不在"谁能操作"，而在两条别的地方：**只走下表的入口**（不直接覆盖正式产物），
+以及**代笔正文时自己补上没有守卫的那几项核验**（文风、保真材料、在场集——见
+[经验库](field-notes.md) FN-017）。
+
+下表按**节点**索引，覆盖每一条 0 成本、但**会改动盘上产物**的入口——包括不需要另写输入文件的那几条
 （`--revalidate` / `--renormalize` / `--recheck` / `--remeasure` / `--identity` / `--adopt-residual`）。
 **“0 成本”不等于“只看不动”**：真正只读的是 `--dry-run`、`--check-only`、`--measure-only`、
 `--names-only`、`--emit-edit-template`，以及 `stage6.hook --identity`。表外的 0 成本 flag 一律按会写盘对待。
 
-| 节点 | 0 成本写盘入口 | 人产输入 | 约束 |
+| 节点 | 0 成本写盘入口 | 需要 agent 自己写的输入 | 约束 |
 |---|---|---|---|
 | `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-merge-plan` | 正式 edit / edit-plan / merge-plan 形状 | 不直接覆盖 `clean_text.txt` 或 removal report。`--apply-merge-plan` 逐项决定三方合并冲突，与 edit-plan 同样带乐观锁 |
 | `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` | typed 修订（如 `reader_reveal_events` 时线）；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`（见 [经验库](field-notes.md) FN-007）。`--review-decisions` 是全书评测项唯一的 0 成本销账入口：按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策被拒收 |
@@ -137,7 +172,7 @@ stage5 调用次数高于章数可以来自写作重试和长度收缩。最终�
 - `rejected`：修复稿再次被驳回，读取 `_rounds/` 指针但不编辑历史。
 - `stalled`：达到自动修复轮次上限，转受托人工编辑。
 - `repairable`：本层 HARD，且 finding 已经绑定确定性 `fix` 路由；按该行 `how` 给出的节点/flag 收敛，多为 0 成本。`fix` 不可执行时该行会写明原因，此时按 `upstream` 或人工路处理。
-- `human_only`：需要人工语义/审美阅读；逐类裁决，但不一定阻断。
+- `human_only`：需要语义/审美阅读才能判的项，**读的那个人就是你**；逐类裁决，但不一定阻断。名字里的 `human` 只是在说"没有判据能自动判它"。
 - `verification`：可由人工证据消解的决策项，**三个来源各有自己的 0 成本销账入口**，应销账而不是留成余额：
   - stage2 全书评测项 → `stage2.global --review-decisions <书目录内 json>`（按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策会被拒绝）；
   - stage5 超限章 `trim_audit_chNN` → `stage5.review --retain-pretrim --chapters <N>`（见 [经验库](field-notes.md) FN-014）；
@@ -153,7 +188,7 @@ stage5 调用次数高于章数可以来自写作重试和长度收缩。最终�
 
 满足任一条件时使用 `stopped`，写清现状与恢复命令后结束：
 
-- 缺少付费授权或正文外发授权，而下一步必须调用外部模型；停止前仍完成只读 `state`、`inbox` 与下一节点 `preview`，不得执行 preview 中的付费步骤。
+- 用户明确收回了付费授权或正文外发授权（headless 则是 launcher prompt 未授予），而下一步必须调用外部模型；停止前仍完成只读 `state`、`inbox` 与下一节点 `preview`，不得执行 preview 中的付费步骤。⚠ 两项授权默认都在，**「没有人特意重申授权」不构成本条**。
 - 同一节点同一根因在允许的修复路由与轮次上限内仍不能收敛。
 - exit 3，或 exit 70 在同一点重复且无法由盘上产物证明结果。
 - 需要改变产品语义、公开契约、模型策略或仓库代码才能继续。

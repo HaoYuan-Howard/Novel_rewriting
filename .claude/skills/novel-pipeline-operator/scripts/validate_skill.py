@@ -462,7 +462,8 @@ def validate(counters: dict[str, int] | None = None,
                 "writing_flags", "free_writing_pairs", "write_surface_rows",
                 "fix_routes", "cli_subcommands", "status_marks",
                 "template_headings", "evidence_symbols", "notes_files",
-                "notes_chars", "notes_budget", "index_rows", "repo_fn_citations"):
+                "notes_chars", "notes_budget", "index_rows", "repo_fn_citations",
+                "open_gap_entries"):
         counters.setdefault(key, 0)
     errors: list[str] = []
     root = _repo_root()
@@ -637,17 +638,6 @@ def validate(counters: dict[str, int] | None = None,
             )
     required_fields = ("状态", "触发", "判断", "处置", "验证", "依据")
     allowed_statuses = {"contract-confirmed", "observed", "open-gap"}
-    # 【断言 J】活动缺口编号的现役形态是 `TODO-NN`。
-    # 校验器此前查的是 `BE-`/`VAL-`，而 REQUIREMENTS 里这类编号一个都没有
-    # ——两个方向都会假红，只因当前没有 open-gap 条目才一直没爆。
-    # 存在性用**标题集合成员判定**，不用子串：`'TODO-2' in text` 会被 `TODO-24` 假匹配。
-    requirements = (root / "docs" / "REQUIREMENTS.md").read_text(encoding="utf-8")
-    open_todos = set(re.findall(r"(?m)^###\s+(TODO-\d+)\s+·", requirements))
-    if not open_todos:
-        errors.append(
-            "docs/REQUIREMENTS.md 里读不到任何 `### TODO-NN ·` 标题；"
-            "缺口编号反查无从谈起（守卫读不到就当没查，是本仓明令禁止的形状）"
-        )
     by_index = {row[0]: row for row in index_rows}
     for index, entry in enumerate(entry_matches):
         end = entry_matches[index + 1].start() if index + 1 < len(entry_matches) else len(notes)
@@ -682,20 +672,25 @@ def validate(counters: dict[str, int] | None = None,
                         f"而条目的「处置」字段里没有它"
                     )
 
+        # 【断言 J】`open-gap` 的时效性由条目**自带的复核命令**承担，不挂仓内待办编号。
+        # 编号方案试过一版（指向另一份文档的 `TODO-NN`）：它把 skill 绑在那份文档的标题
+        # 形状上——对方换个写法，这里要么假红要么静默漏查，而两种都是本仓明令禁止的。
+        # 自带命令没有这个耦合，且对读者更有用：它回答的是"现在还缺不缺"，不是"谁登记过"。
         if status and status.group(1) == "open-gap":
-            issue_ids = re.findall(r"\bTODO-\d+\b", block)
-            if not issue_ids:
+            counters["open_gap_entries"] += 1
+            recheck = re.search(r"(?m)^- 复核：(.+)$", block)
+            if recheck is None:
                 errors.append(
-                    f"{entry.group(1)} 是 open-gap 但没有活动缺口编号"
-                    f"（现役形态是 docs/REQUIREMENTS.md 的 `TODO-NN`）"
+                    f"{entry.group(1)} 是 open-gap 但没有 `- 复核：` 那一行。"
+                    f"缺口会被别人修掉，而经验不会自己退役"
+                    f"\n    → 补一条 0 成本命令，跑一次就能判定这个缺口还在不在"
                 )
-            for issue_id in issue_ids:
-                if issue_id not in open_todos:
-                    errors.append(
-                        f"{entry.group(1)} 引用的 {issue_id} 已不在 REQUIREMENTS"
-                        f"——编号不重排、完成即删，所以那个缺口已经修了。"
-                        f"重新验证这条经验：改成 contract-confirmed 并补依据，或按生命周期第 7 步退役"
-                    )
+            elif "`" not in recheck.group(1):
+                errors.append(
+                    f"{entry.group(1)} 的 `复核` 只有散文，没有可跑的命令。"
+                    f"散文复核不报错，但下一个维护者判不了缺口还在不在"
+                    f"\n    → 把命令写进反引号"
+                )
         # 【断言 H】`依据` 里写成 `路径::符号` 的引用必须落地。
         # 只查已经写了这个形态的，不强制每条都有——强制会让那批散文依据当场全红，
         # 那是内容工作，不是守卫该逼出来的。

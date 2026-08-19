@@ -33,9 +33,10 @@
 2. `.env` 中存在外部模型密钥，但不输出值；`.llm_cache/` 可用。
 3. 新跑与续跑使用**同一个** `<BASE>`：隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根。另建一个根会把同一本书的 `_service/ledger.jsonl` 分裂成两份，而[收尾](#收尾)把它当成本的唯一权威源。不要写入任何历史验收或证据目录。
 4. 源文件或既有书目录存在，`<SID>` 唯一。
-5. 付费授权与正文外发授权分别有明确值。两项不是同一授权。
+5. 付费授权与正文外发授权各自取到值：交互式会话两项**默认 `granted`**，本步是记录不是索要；
+   headless 取 launcher prompt 原文。两项不是同一授权，任何一项都不由另一项推定。
 6. 不覆盖项目默认模型与思考配置；运行时实际模型以配置和账本为准。
-7. 同一时刻没有**这本书**的其他 API/agent 写盘作业在运行。⚠ 只看这一本：不同 `sid` 的作业互不阻塞（`R-13.7`），把别书也算进来会让本条在一次正常的并行跑里永远不成立。
+7. 同一时刻没有**这本书**的其他 API/agent 写盘作业在运行。⚠ 只看这一本：不同 `sid` 的作业互不阻塞（跨书并行是产品明确要求的能力），把别书也算进来会让本条在一次正常的并行跑里永远不成立。
 
 ## 命令协议
 
@@ -75,7 +76,7 @@
 | # | 节点 | 主跑参数 | 放行证据 |
 |---:|---|---|---|
 | 1 | `stage0.remove` | 新书：`--source <txt>`，省略 sid | 摄入完成；追跑 check 除待批准项外无 HARD。批准前仅 `s0_approval=pending` 导致 exit 1 是预期状态 |
-| 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅剔除报告后批准，批准状态落盘 |
+| 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>`；**仅当 `inbox` 的 `approval` 非零** | 按代批契约审阅剔除报告后批准，批准状态落盘。零剔除的书由服务端自动批准，本步不适用（见下） |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
 | 5 | `stage2.global` | `--full-extract` | global 正式落盘；执行 preview 列出的后续 blueprint/style 步骤 |
@@ -94,6 +95,19 @@
 <!-- pipeline-steps:end -->
 
 `stage2.global --full-extract` 在中途被闸门拦下时，不机械重跑整组。按最新 `state` 与 finding 修好已落下的部分，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`；只执行缺失项。
+
+### 零剔除的书没有 stage0 闸门这一步
+
+`stage0.remove` 一段都没剔时，服务端**当场自动批准**（`removal_report.approved_origin`
+记 `auto_zero_hit`、`approved_by` 为空），追跑 check 直接是 AMBER 而不是主链表第 1 行说的那个
+`s0_approval=pending` 红灯。此时再跑 `stage0.approve` 是一次无意义的写盘。
+
+⚠ `preview stage0.approve` **照样会打印**一条带占位符的命令——preview 只回答"这个节点怎么跑"，
+不回答"这个节点该不该跑"。**该不该跑由 `inbox` 的 `approval` 计数回答**（零 ⇒ 不跑），
+`removal_report` 的批准字段是第二佐证。
+
+代批责任并不因此消失，只是换了方向：剔除分母为零时没有"被误删的段"可审，
+改做**反向漏剔**抽查，见[代批与终审契约](delegated-review.md#stage0-代批)。
 
 ### `stage6.semantic`：它的产出是**证据**，不是绿灯
 
@@ -131,6 +145,14 @@ stage2 的 `event_early_name` / `present_early_named` / `present_names_late` 在
 | 2 | 显式终态或命令形状不合法 | 按原文修正前置条件；不是自动重试信号 |
 | 3 | 结构性拒绝 | 视为代码/契约矛盾，停止并保留栈与复现命令 |
 | 70 | 未捕获异常，结论未知 | 先查 `state` 与产物完整性；不得假定成功或失败 |
+
+**非零退出后的第一条命令是 `inbox`，不是翻判据注册表。** 它 0 成本，且已经把 finding 的
+`remediation` 渲染成**可直接复制的命令**——连贵贱标注和从 finding 里算出来的实参都填好了，形如
+「`→ 跑 stage2.blueprint --chapters 3,6`（付费）」「`→ 0 成本人工路：--apply-edit 改内容`」。
+`--check-only` 报告负责**读证据与分母**（命中了什么、扫过多少、fresh 不 fresh），
+不负责告诉你走哪条路；两者分工不要互换。绕过 `inbox` 去 `contracts.rules` 里反查
+`Rule.fix` / `remediation_of` 得到的是同一个答案，但要多花好几个来回，还容易撞上
+「那些函数收的是 `Rule` 不是 rule id」这类与本书无关的弯路。
 
 质量判定只认最新报告：
 
