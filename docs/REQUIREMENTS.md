@@ -74,8 +74,10 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   反引号里的仓内路径受 `tests/test_docs_references.py` 保护，指着已删文件会红），
   而那次的 commit message 一个字没提这件事——本条目是这个事实唯一还活着的记录点。要做这次实验必须先重建一个
   「0 成本预览 → 显式 `--execute --yes`」的 runner，并按 `docs/LESSONS.md` §17 先登记决策规则
-  再看结果。在付费实测满足质量、UNVER/INFO、fallback/wire/error 和 completion 门之前，
-  `stage3.style` / `stage7.rename` 继续保持默认 high。
+  再看结果。⇒ runner 已于 2026-08-19 重建为 `tools/effort_ab.py`（**进程内**覆盖
+  `NodeSpec.effort`，仓里那一格恒 `None` ⇒ 实验臂与交付跑物理上不可能混）。
+  在付费实测满足质量、UNVER/INFO、fallback/wire/error 和 completion 门之前，
+  `stage3.style` / `stage7.rename` 继续保持默认 high（实测结果见下，改默认值仍待用户裁决）。
   ⚠⚠ **这一条是全链最大的降本杠杆，而它此前没有量。** 2026-08-18 实测（`.llm_cache/` 里
   1639 份带 `usage` 的真实响应，0 成本可复算）：completion 13,031,022 token 里 reasoning 占
   **11,457,627（87.9%）**，净成品输出只有 1,573,395；写作类调用（n=720）reasoning 中位 9109 而
@@ -138,6 +140,68 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
 ⇒ 它**不能**给生成侧质量背书。上表五项都是可复算读数，不含任何审美判断；
 若五项全平而只剩「读起来哪个更好」，按第 17 条那是 n=1 盲读偏好，**记为无结论**，
 不作为降档依据（2026-08-15 已踩过一次：盲读偏好与硬闸结论相反）。
+
+#### FC-13 实测结果（2026-08-19，`四人成行_2055965741988443882`，n=11 章）
+
+**方法**：每个候选节点复制一份 base 到 `outputs/_ab/<node>_<arm>/`（`_` 开头 ⇒ 不会被
+`novel/paths.py` 当成书目录），上游产物逐字节相同，只把该节点重跑成 low。
+**high 参照臂从 `.llm_cache/` 复现**（账本 `cached=true`、0 成本、与基线账本逐字段相同）——
+除 `stage4.plan` 外全部命中，因此这次的 high 侧几乎没有花钱。
+⚠ 复现的前提是 argv 与基线**逐字相同**：`--chapters` 会把 `cache_policy` 变成
+`refresh-write`（只写不读），`stage5.write --mode X`（不带 `--chapters`）会把**全部**缺章
+写进那一条臂——两条都实测踩过，各误发了一批真调用。整书入口是
+`stage5.write --deep 1,2,3 --shallow-rest`。
+
+**成本（输出侧，按本条既定口径；prompt 侧因 effort 切分前缀缓存不可比）**
+
+| 节点 | 调用 | completion high→low | reasoning high→low | 净正文 high→low |
+|---|---|---|---|---|
+| stage2.blueprint | 11 | 194,490 → 132,694（−31.8%） | 171,162 → 112,874（−34.1%） | 23,328 → 19,820（−15.0%） |
+| stage5.write | 11 | 113,525 → 86,726（−23.6%） | 104,237 → 78,026（−25.1%） | 9,288 → 8,700（−6.3%） |
+| stage3.style | 12 | 34,232 → 20,751（−39.4%） | 28,678 → 15,968（−44.3%） | 5,554 → 4,783（−13.9%） |
+| stage7.rename | 1 | 13,691 → 7,466（−45.5%） | 11,817 → 5,744（−51.4%） | 1,874 → 1,722（−8.1%） |
+| stage6.hook | 1 | 5,144 → 3,959（−23.0%） | 4,687 → 3,559（−24.1%） | 457 → 400（−12.5%） |
+
+**质量门（五门判据见上表；任一项劣于基线即判 low 不可用）**
+
+| 节点 | 门①HARD | 门②unver+info | 门④截断 | 门⑤章集合 | 结论 |
+|---|---|---|---|---|---|
+| stage3.style | 0 → 0 | 0 → 0（两臂 `PASS`，ok 9 逐项相同） | 无 | n/a | **五门全过** |
+| stage6.hook | 0 → 0 | 6 unver → 6 unver（逐条相同） | 无 | n/a | **五门全过**（但机械面 6 条 unver，语义面无 ground truth） |
+| stage7.rename | 1 → **0** | 8 → 8 | 无 | n/a | **未见劣化**（n=1，不得读成「low 更好」） |
+| stage2.blueprint | 1 → **3** | 2 → 5 | 无 | 11/11 | **否决** |
+| stage5.write | 0 → **1** | 5 → 8 | **ch1 截断** | **11 → 10** | **否决** |
+
+- `stage2.blueprint`：high 首轮只命中 `present_names_invented`（ok 67·命中 2·unver 2）；
+  low 首轮命中 `hinge_anchor_void` / `span_unlocatable`（86/87 定位成功）/ `verbatim_failed`
+  （4 条失败记录）三条 HARD（ok 64·命中 5·unver 2）。**三条全属「锚不回原文」一族。**
+  另实测 ch7 一次 `reasoning_tokens` 只有 33（28s，净正文 1,949）⇒ low 档会偶发几乎不思考。
+- `stage5.write`：low 的 ch1（deep 臂）`draft_truncated`（结尾无终止标点）落 `.INVALID`，
+  章集合掉到 10/11；`stage5.review` 的 info 命中 4→6（新增 `invented_number` 与
+  `quotes_in_unquoted_corpus`）、unver 1→2；`para_len_drift` 最坏章从 5.57× 恶化到 11.10×。
+- `stage4.plan`：**这一节点测不了**。两条臂都只发生 1 次调用、且都是同一份
+  `cached=true, reasoning_effort=low` 的响应——基线那次 high 响应被 `ask_json` 的内容闸
+  拒绝后 `novel/llm/cache.py::ResponseCache.evict` 已把它从盘上删掉，缓存里**没有 high 那一档**。
+  ⇒ 这同时确证了降档由**内容闸**判而不是传输层（账本两行 `outcome=ok` / `attempt=1` 不矛盾：
+  阶梯是与传输重试并列的另一条循环）。要 A/B 必须付费重取一次 high。
+  ⚠ 顺带的结论：**交付那本书的 stage4 计划本来就是 low 产的**，除一处 `goal_landing`
+  越界（0 成本人工改一行）外通过全部判据。
+
+**结论**：降档伤的是「回到原文取证」那一类能力（verbatim / span / 锚点 / 不截断），
+不是文风密度类判据。而**降本杠杆最大的两个节点恰恰全在被伤的那一类里**：
+`stage2.blueprint`（占本书生成 completion 的 45.5%）与 `stage5.write`（26.6%）合计 72.1% 一律否决；
+可采纳面只有 `stage3.style`（8.0%）+ `stage6.hook`（1.2%）+ 单样本未见劣化的 `stage7.rename`（3.2%），
+**全采纳的输出侧节省上界约 4.8%**（按各自实测降幅折算）。
+⇒ 「用 effort 降档换量级收益」这条路在本书上被证伪；量级收益要另找方向。
+
+- [ ] 改 `NodeSpec.effort` 默认值需用户裁决（`tests/test_invariants.py` 现钉着
+      `stage3.style` / `stage7.rename` 恒 `None`，改默认要同批改那两行断言）。
+- [ ] **降档路径没有任何可观测**：`novel/llm/client.py::LlmClient.ask_json` 三道内容闸失败时
+      只做 `cache.evict` + 降一档，既不产 observe 事件也不写日志，`errors` 只在**所有档全灭**时
+      才随 `LlmFailed` 出现 ⇒ 事后无法回答「为什么降的档」。补一条带 `why` 的 observe 事件是
+      本条继续做下去的前置（否则每次 A/B 都可能混进一次说不清的降档）。
+- [ ] `stage5.write` 的 shallow 单臂降档仍够不着（挂载点问题，见上）。本次实测的是**整节点**
+      降档，按上表已否决；**不要拿它替 shallow 臂那一项销账**。
 
 验收：所有被测产物由现役写盘路径生成；完整套件的通过/跳过/失败数、每条 skip 理由和上述付费
 实验结论一并记录，未完成项不因代码位或预览工具存在而销账。
