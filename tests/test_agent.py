@@ -7,6 +7,11 @@ test_agent.py —— headless agent 代跑的提示词/命令行组装、事件�
 （`docs/BACKEND_CONTRACT.md` §十那一档）。这里全部走 fake spawn（`Spawn` 那条缝存在的
 理由同 `jobs.default_spawn` 的注释）。
 
+⚠ **但 fake spawn 有一块它永远看不见的盲区**：它收到的是 Python list，而故障
+可能发生在 list → 命令行字符串那一层（2026-08-19 实测：`cmd /c` 把多行提示词
+截在首行，五本书全部 exit 0 却一步没动）。⇒ `test_launch_argv_delivers_the_whole_prompt`
+**真起一个子进程**——起的是 python 探针不是 claude，所以照样 0 成本。
+
 临时目录由 pytest 提供，测试结束后自动清理。
 """
 from __future__ import annotations
@@ -14,6 +19,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -81,8 +87,20 @@ def test_prompt_gives_the_rule_when_the_book_dir_is_not_there_yet(base):
     assert 'state 42' in text                         # 指向真正能给出书目录的那条命令
 
 
+def test_prompt_never_hardcodes_a_book_filename(base):
+    """⭐ 成书名按书名派生（`paths.book_txt_rel`），prompt 里不许写死一个文件名。
+
+    ⚠ 这条错误**不会让 agent 跑挂**——它会照 SKILL.md 自我纠正，所以没有任何
+    退出码会变红。但 headless 下没有第二个人能纠正启动 prompt，而那是任务的
+    第一句话。⇒ 只能靠这条守卫。
+    """
+    text = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
+    assert 'book.txt' not in text
+    assert '_rewriting.txt' in text
+
+
 def test_argv_is_the_whitelisted_shape(base):
-    """Spike 钉死的三件事：cmd /c 包 .cmd、python 前缀规则、Edit 的 // 锚。"""
+    """Spike 钉死的三件事：入口可直接执行、python 前缀规则、Edit 的 // 锚。"""
     prompt = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
     argv = agent.build_argv(prompt, base)
     assert '--permission-mode' in argv and 'manual' in argv
@@ -92,7 +110,41 @@ def test_argv_is_the_whitelisted_shape(base):
     assert not any(r.startswith('Write(') for r in rules)   # Write(路径) 规则从不被查阅
     assert '--add-dir' in argv
     if os.name == 'nt' and shutil.which('claude'):
-        assert argv[:2] == ['cmd', '/c']               # .cmd shim 只能这样拉起
+        assert Path(argv[0]).suffix.lower() not in ('.cmd', '.bat'), (
+            '拉的必须是可直接 CreateProcess 的真入口，不是 npm 转发 shim')
+
+
+def test_launch_argv_never_goes_through_a_shell(base):
+    """⭐ 提示词必须是 argv 里**独立的一项**，且没有 shell 包在外面。
+
+    ⚠ 这一条守的是钱与正确性，不是风格：`cmd` 在参数的第一个换行处截断，
+    而提示词恒是多行的。一旦回到 `['cmd', '/c', ...]`，agent 收到的就只有首行
+    ——任务、sid、两项授权、终审包落点全丢，而它照样 **exit 0**。
+    """
+    prompt = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
+    assert '\n' in prompt, '前提变了：提示词不再是多行的，这条守卫要重想'
+    argv = agent.build_argv(prompt, base)
+    assert argv[1:3] == ['-p', prompt]                  # 逐字，不经任何拼接
+    assert [a.lower() for a in argv[:2]] != ['cmd', '/c']
+    assert not any(a.lower() in ('cmd', 'cmd.exe', 'powershell.exe', '/c')
+                   for a in argv[:2])
+
+
+def test_launch_argv_delivers_the_whole_prompt(base, tmp_path):
+    """⭐ **真起一个子进程**，验多行提示词逐字到达 —— fake spawn 的盲区就在这。
+
+    起的是 python 探针不是 claude（0 成本），但用的是 `build_argv` 的**真实形态**：
+    只把可执行入口换成探针，其余 argv 原样传下去。回显不等于原文即失败。
+    """
+    probe = tmp_path / 'probe.py'
+    probe.write_text('import sys; sys.stdout.write(sys.argv[2])', encoding='utf-8')
+    prompt = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
+    argv = agent.build_argv(prompt, base)
+    out = subprocess.run([sys.executable, '-X', 'utf8', str(probe), *argv[1:]],
+                         capture_output=True, text=True, encoding='utf-8')
+    assert out.stdout == prompt, (
+        f'提示词在传给子进程的路上被改了：到达 {len(out.stdout)} 字 / '
+        f'原文 {len(prompt)} 字')
 
 
 def test_posix_anchor():

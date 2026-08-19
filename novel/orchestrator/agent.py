@@ -21,8 +21,10 @@ append-only 理由：永不读-改-写，被 kill 最坏只损坏最后一行）
 3. **`Write(<路径>)` 规则被接受但从不被查阅**（官方原文；2.1.219 实测三次全拒）。
    文件写的作用域要写在 **`Edit(<路径>)`** 上（它覆盖所有改文件的工具），
    且 Windows 路径先归一成 POSIX 再加 `//` 锚：`E:\\x\\y` → `//e/x/y`。
-4. `shutil.which('claude')` 得 `D:\\npm-global\\claude.CMD`——`.cmd` shim 必须
-   经 `cmd /c` 拉起（`CreateProcess` 不能直接执行批处理）。
+4. `shutil.which('claude')` 得 `D:\\npm-global\\claude.CMD`，而 `.cmd` 确实不能被
+   `CreateProcess` 直接执行。**但答案不是套一层 `cmd /c`**——`cmd` 在参数的第一个
+   换行处截断，而提示词是多行的。npm 的 `.cmd` 只是转发 shim，真入口是包内的
+   `.exe`，直接拉它（见 `_claude_entry`）。
 5. `claude -p` 永不弹工作区信任框，也**不读**项目 `.claude/settings.json` 的
    allow 规则（官方原文明写）——白名单只能靠 `--allowedTools` 逐次带。
 
@@ -121,6 +123,12 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
     base_abs = os.path.abspath(os.fspath(base))
     py = Path(sys.executable).as_posix()
     novel_dir = paths.find_novel_dir(base_abs, sid)
+    #: ⚠ 成书名**按书名派生**，不是固定的 `book.txt`——唯一落点是 `paths.book_txt_rel`。
+    #: 这一句此前硬编码了一个不存在的文件名：agent 会照 SKILL.md 自我纠正，
+    #: 但 headless 下没有第二个人能纠正启动 prompt，而它是任务的第一句话。
+    book_target = (
+        paths.book_txt_rel(novel_dir) if novel_dir is not None
+        else 'stage7/<书名>_rewriting.txt（书名规则同下）')
     review_target = (
         paths.review_package_path(novel_dir).as_posix() if novel_dir is not None
         else f'<书目录>/<书名>{paths.REVIEW_SUFFIX}'
@@ -144,7 +152,7 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
 读取工作流契约、代批与终审契约及 headless 运行环境；遇到失败时再读取修复状态机，
 按节点名/rule id 检索经验库。不要依赖旧版章节号或聊天记忆。
 
-任务：把 sid={sid} 这本书端到端跑到 `stage7/book.txt`。
+任务：把 sid={sid} 这本书端到端跑到 `{book_target}`。
 base 目录（--base 恒用下面这个绝对路径）：
 {base_abs}
 
@@ -162,18 +170,58 @@ base 目录（--base 恒用下面这个绝对路径）：
   {review_target}"""
 
 
+#: npm 生成的 `.cmd` shim 里那一行转发目标：`"%dp0%\\...\\claude.exe"   %*`。
+#: 只认 `.exe`——`%dp0%` 是 shim 自己的目录，展开后就是真入口的绝对路径。
+_SHIM_TARGET = re.compile(r'"%dp0%\\?(?P<rel>[^"]+\.exe)"', re.IGNORECASE)
+
+
+def _entry_from_shim(shim: str) -> str | None:
+    """从 npm 的 `.cmd` shim 原文里读出它真正转发到的可执行文件。
+
+    ⚠ **不硬编码 `node_modules/@anthropic-ai/claude-code/bin/`**：那是 npm 的布局，
+    不是我们的契约，它换一次我们就静默地退回坏路径。shim 自己写着目标在哪，读它。
+    """
+    try:
+        text = Path(shim).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    m = _SHIM_TARGET.search(text)
+    if m is None:
+        return None
+    target = Path(shim).parent / m.group('rel').lstrip('\\/')
+    return str(target) if target.is_file() else None
+
+
+def _claude_entry() -> str:
+    """能被 `CreateProcess` **直接**拉起的 claude 入口。
+
+    ⚠⚠ **绝不退回 `cmd /c <shim>`。** `cmd` 在参数的第一个换行处截断，而
+    `build_prompt` 是多行的：2026-08-19 实测五本书全部只收到提示词首行
+    （任务、sid、两项授权、终审包落点全丢），agent 于是自己找事做，
+    **然后 exit 0**——事件流折成 `ok`、界面显示成功、盘上一步没动。
+    这条路最坏的地方不是它错，是它**安静地**错。
+
+    ⇒ 解析不出真入口时**返回 shim 本身**，让 `Popen` 当场 `WinError 193` 崩掉
+    （记 `exit_code=70`「结论未知」，日志留全栈）。响亮地崩比截断后假装成功好。
+    """
+    found = shutil.which('claude')
+    if found is None:
+        return 'claude'
+    if not found.lower().endswith(('.cmd', '.bat')):
+        return found                            # 已经可以直接执行
+    return _entry_from_shim(found) or found
+
+
 def build_argv(prompt: str, base: str | os.PathLike[str]) -> list[str]:
     """拉起 agent 的完整命令行（解析后的真实形态，随事件全文留档）。
 
-    ⚠ `.cmd` shim 经 `cmd /c` 拉起（Spike 4）；`--add-dir` 把 base 纳入
-    文件访问面（base 不在 cwd 下时读权限照样成立）。
+    ⚠ 提示词是 argv 里**独立的一项**，不经任何 shell 拼接（见 `_claude_entry`）；
+    `--add-dir` 把 base 纳入文件访问面（base 不在 cwd 下时读权限照样成立）。
     """
-    exe = shutil.which('claude') or 'claude'
     base_abs = os.path.abspath(os.fspath(base))
-    inner = [exe, '-p', prompt, '--permission-mode', 'manual',
-             '--add-dir', base_abs,
-             '--allowedTools', _python_rule(), f'Edit({_posix_anchor(base_abs)}/**)']
-    return ['cmd', '/c', *inner] if exe.lower().endswith(('.cmd', '.bat')) else inner
+    return [_claude_entry(), '-p', prompt, '--permission-mode', 'manual',
+            '--add-dir', base_abs,
+            '--allowedTools', _python_rule(), f'Edit({_posix_anchor(base_abs)}/**)']
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -290,7 +338,7 @@ def _default_spawn(run_id: str) -> Spawn:
         kw = {}
         if os.name == 'nt':
             # CREATE_NEW_PROCESS_GROUP：让 `taskkill /T` 能整棵树端掉
-            # （.cmd → node 两层，只杀壳杀不死 agent）。
+            # （agent 自己还会起 `novel.cli` 孙进程，只杀根杀不干净）。
             kw['creationflags'] = (subprocess.CREATE_NO_WINDOW
                                    | subprocess.CREATE_NEW_PROCESS_GROUP)
         proc = subprocess.Popen(list(argv), cwd=cwd, env=env,
@@ -541,7 +589,7 @@ def stop(base: str | os.PathLike[str], run_id: str) -> AgentRunRecord:
         raise JobConflict(  # 复用「流程说这一步现在不该发生」的那一族，不是 bug
             f'run_id={run_id!r} 没有在跑的子进程（已结束，或服务重启后句柄已丢）')
     if os.name == 'nt':
-        # /T 整棵树（cmd → node → agent 起的 novel.cli 孙进程），/F 强制。
+        # /T 整棵树（claude → agent 起的 novel.cli 孙进程），/F 强制。
         killed = subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
                                 capture_output=True)
         if killed.returncode != 0 and proc.poll() is None:
