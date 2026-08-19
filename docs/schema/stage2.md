@@ -94,10 +94,15 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 | `text` | `str` | 严格等于 `main_text[chapter][start:end]` |
 | `start` / `end` | `int` | `0 ≤ start < end ≤ len(chapter)` |
 | `normalized` | `str` | 严格等于 `content_only(text)` |
-| `recovery` | `exact｜normalized｜lcs` | 本次精确回取方式 |
+| `recovery` | `exact｜normalized` | 本次回取方式（取值面：`contracts/invariants.py::SPAN_RECOVERY`） |
 
 相邻 beat 的区间不得回退；第一拍覆盖章首、最后一拍覆盖章尾。Stage 4 直接消费该区间，
 不再搜索自由文本锚点。
+
+`recovery` 的两档各自的来源（`bounded-fidelity-v3`）：**beat 的区间恒 `exact`**——
+它由段号查表算出，模型根本没写过那段字节；`normalized` 只可能出自 `hinge.phrase`
+（模型把半角标点写成全角、或压掉了换行）。⚠ 曾经有第三档 `lcs`（按最长公共子串把被改掉
+一两个字的锚点救回来），随 v3 一并下线：新架构下它**结构性不可产生**。
 
 `Hinge` 只含 `kind` 与 `source`。`kind` 取值为 `硬数字｜要害台词｜物件｜因果前提`；
 成功态的 `source` 必须完整落在所属 beat 的 `span` 内。`source=null` 会进入失败账并阻断晋升。
@@ -133,15 +138,25 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 | `batches` | `int[][]` | 恒为 `[[1], [2], …]` |
 | `context` | `BlueprintContext` | 逐章上下文架构与边界 |
 | `char_refs` | `CharRefs` | 八类人物引用解析计数 |
-| `verbatim_rewrites` | `(beat_id, position, old, new)[]` | 归一命中明细 |
-| `verbatim_recovered` | `(beat_id, position, old, recovered, ratio)[]` | LCS 回取明细 |
-| `verbatim_failures` | `(beat_id, position, cause)[]` | 回取失败；非空阻断晋升 |
+| `verbatim_rewrites` | `(beat_id, position, old, new)[]` | 归一命中明细。v3 起只剩 `hinge.phrase` 与 `hinge.owner` 两种来源 |
+| `verbatim_failures` | `(beat_id, position, cause)[]` | 回取失败；非空阻断晋升。`position ∈ span｜hinge`，根因取值面见下 |
 | `partial_regen_chapters` | `int[]` | 定向重生成章节，空也必须写 |
 | `repairs` | `Repair[]` | 定向重生成账，空也必须写 |
 
+`verbatim_failures` 的根因是**闭合取值面**，不是自由文本：
+`position == 'span'` 那一族见 `contracts/invariants.py::SPAN_FAILURE_CAUSES`，
+`position == 'hinge'` 那一族见同文件的 `HINGE_FAILURE_ROUTE`——后者同时是
+「哪一句话落到哪一条判据」的对应表，判据侧**按相等查它**，不按中文子串猜。
+
+⚠ 这里曾有第三个字段 `verbatim_recovered`（LCS 回取明细），随
+`bounded-fidelity-v3` 与判据 `anchor_not_verbatim` 一并删除：beat 的区间改由段号算出，
+hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**。
+
 `BlueprintContext` 固定为：
 
-- `architecture = bounded-fidelity-v2`；
+- `architecture = bounded-fidelity-v3`（**唯一取值**，落点
+  `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`；收窄自 v2，
+  存量蓝图因此读不进来，由 `stage2.blueprint` 整跑重建）；
 - `batch_size = 1`；
 - `current_chapter_full = true`；
 - `future_visible = false`；
@@ -227,7 +242,7 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 
 ## 五、现行判据
 
-当前注册表共 **71 条**：**38 hard、15 info、16 metric、2 unver**。两个 Stage 2 节点共用
+当前注册表共 **70 条**：**38 hard、14 info、16 metric、2 unver**。两个 Stage 2 节点共用
 同一张注册表。
 
 | 分组 | 当前规则 id |
@@ -236,7 +251,7 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 | 人物与称谓 | `canonical_unique` · `character_unattested` · `address_by_unresolved` · `address_from_out_of_range` · `address_from_too_early` · `address_bare_pronoun` · `address_all_pronoun` · `address_has_pronoun` · `address_selfref` · `address_missing` · `address_unlocatable` |
 | 身份与结局 | `role_missing` · `role_leaks_fate` · `role_repeats_name` · `hedge_words` · `distinguisher_lonely` · `role_fate_unverifiable` · `fate_report` |
 | 规则、秘密与关系 | `world_rule_no_desc` · `world_rule_names_person` · `secret_setup_order` · `secret_cold_reveal` · `secret_known_by_dangling` · `reveal_unmarked` · `secrets_absent` · `relation_dangling` |
-| 拍与区间 | `beat_id_unique` · `beat_id_format` · `span_unlocatable` · `anchor_not_verbatim` · `verbatim_failed` · `edge_hole` · `beats_collapsed` · `beats_coarse` |
+| 拍与区间 | `beat_id_unique` · `beat_id_format` · `span_unlocatable` · `verbatim_failed` · `edge_hole` · `beats_collapsed` · `beats_coarse` |
 | 保真材料 | `hinge_cross_chapter` · `hinge_in_hole` · `hinge_anchor_void` · `hinge_cascade` · `hinge_drift` · `chapter_no_hinge` |
 | 在场与叙述 | `time_layer_no_present` · `present_ids_dangling` · `present_names_invented` · `present_continuity` · `present_ungrounded` · `present_early_named` · `event_early_name` · `pronoun_surface_unattested` · `narration_multi` |
 | 范围、必填与返工 | `scope_violation` · `event_empty` · `summary_empty` · `repair_cache_policy` |

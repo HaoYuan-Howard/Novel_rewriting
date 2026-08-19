@@ -24,9 +24,10 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
 互相咬合，缺的是一份合格盘面。源语料两本都在（`Test_data/`，`NOVEL_DATA` 指路）。
 
 - [ ] 在隔离输出与独立空缓存中，用最终代码从来源重新生成两本书的 Stage0～Stage7 产物；所有
-  产物必须由现役 producer 按 `ARTIFACT_SPECS.current_version` 写出。**现役全表恒 v1，且没有
-  迁移机制**（2026-08-18 归零，理由见 `contracts/schema/__init__.py` 模块头【版本】）——
-  这一条因此比过去简单：盘上任何一个不是 v1 的标记都说明那份产物不是这一跑产的。
+  产物必须由现役 producer 按 `ARTIFACT_SPECS.current_version` 写出。**本仓没有迁移机制**
+  （2026-08-18 归零，理由见 `contracts/schema/__init__.py` 模块头【版本】）——
+  这一条因此比过去简单：盘上任何一个与注册表当前版本对不上的标记，都说明那份产物不是这一跑产的。
+  ⚠ 版本号**逐份从注册表现算**，别写死 `1`：`stage2/chapter_blueprints.json` 已于 2026-08-19 升到 v2。
   不给旧 JSON 手补 `_schema_version`、`root_clean_sha1` 或其他字段冒充当前产地。
 - [ ] 生成并提交无正文 manifest：逐书记录 sid、source hash、章节数、预期产物与版本、代码身份、
   冻结命令、ledger 聚合及精确 skip allowlist。终审成本以 `<base>/_service/ledger.jsonl` 为
@@ -194,6 +195,75 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
 **全采纳的输出侧节省上界约 4.8%**（按各自实测降幅折算）。
 ⇒ 「用 effort 降档换量级收益」这条路在本书上被证伪；量级收益要另找方向。
 
+#### FC-13/A · `stage2.blueprint` 锚点改段落索引（2026-08-19 立条目，代码已落、付费验收未跑）
+
+**方向**：既然降不了「想多少」，就降「需要想什么」。把定位方式从「模型逐字转写原文片段」
+改成**「下发带编号的段落、模型交索引」**，由代码把索引回取成 `SourceSpan`。
+被砍掉的是每章约 **38 次**「原样照抄、必须能在本章原文一字不差找到」的转写核对
+（约 9.6 条 beat × 2 锚点 + 约 9.5 条 hinge × 2 锚点）。产物 `SourceSpan` / `Beat` /
+`Hinge` 的形状一个字不动——逐字锚点本来就只活在「响应 → 产物」那一道归一边界上。
+
+**可行性前提（同日实测，见下方存档 §⑩）**：本书 458 个非空段、均段 23.4 字
+（内容字 21.3）、p99=66、max=87，基线 106 拍 ⇒ 平均一拍约 4.3 段，段号粒度明显细于拍粒度。
+⚠ **这是本书特性**，长段叙述体的书要另行验证，结论只能写成「这本书上成立」。
+
+**契约破坏（已按仓规同批回答）**：`BlueprintContext.architecture` 收窄成只认
+`bounded-fidelity-v3`，`ARTIFACT_SPECS[STAGE2_CHAPTER_BLUEPRINTS].current_version` **1 → 2**
+（登记在 `tests/test_artifact_versions.py` 的破坏账里，那张表与注册表互为守卫）。
+⇒ **存量蓝图由 `stage2.blueprint` 整跑重建（付费）**，连同 `.INVALID` 与 `_rounds/` 一律作废，
+**不手补字段冒充当前产地**。落代码后、重跑前，盘上存量书的 stage2 落「读不回来」，
+`state` / `inbox` 实测 exit 0 并如实降级（不崩）。
+
+**本批同时删掉的死路**（都是被这次改动作废的，不是顺手清理）：
+`novel/core/spans.py` 的 `walk_spans` / `_find_or_recover` / `_find_exact_raw` /
+`extend_punct` / `HINGE_LCS_MIN`（模型不再转写原文 ⇒ 「在原文里搜锚点」零生产消费方，
+反向守卫见 `tests/test_core.py`）；判据 `anchor_not_verbatim` 与它断言的
+`BlueprintProvenance.verbatim_recovered`（LCS 救回结构性不存在 ⇒ 一盏永不亮的绿灯）；
+`SourceSpan.recovery` 的 `lcs` 一档。stage2 判据因此 **71 → 70 条**（38 hard 不变，info 15 → 14）。
+
+**同批修掉的一条隐式契约**：hinge 失败根因此前由产地写中文、判据按**子串**猜
+（`'空档' in cause`）——改一句措辞就能让 `hinge_anchor_void` 静默降级成 `hinge_drift`
+而报告照样绿。现在根因是闭合取值面、判据按相等查
+`contracts/invariants.py::HINGE_FAILURE_ROUTE`，并配一条 AST 守卫断言
+「产地只发表里那几句」（`tests/test_stage2_generation.py`）。
+
+**决策规则（登记于付费实测之前，`docs/LESSONS.md` §17；事后改规则即本次实验作废、重跑）**
+沿用 FC-13 那五道门，外加本次专有的两条。任一项劣于基线即判 A 不可用。
+
+| # | 指标 | 通过条件 | 基线值 |
+|---|---|---|---|
+| ① | 该节点 check 的 HARD 命中数 / 分母 | ≤ 基线且分母不变 | 1（`present_names_invented`）· ok67/hit2/unv2 |
+| ② | `unver` + `info` 条数 | ≤ 基线 | unver 2 |
+| ③ | 降级阶梯触发次数、wire error 数 | ≤ 基线 | 0 / 0 |
+| ④ | `finish_reason != stop`（截断）计数 | ≤ 基线 | 0 |
+| ⑤ | 产物 schema 校验、章集合覆盖 | 全通过且覆盖面逐字不变 | 11/11 章 |
+| ⑥ | 有 event 的拍数 · 在场者称呼数 | **≥ 106** · **≥ 237** | 106（约 9.6/章）· 237 |
+| ⑦ | 段级覆盖：被任一 beat 覆盖 ≥50% 的段数 · 零覆盖段 | **= 458** · **= 0** | 458/458 · 0 |
+
+⚠ **门⑦替掉了「原文覆盖 ≥98%」**：区间对齐到段边界后字数覆盖率会因对齐而升，
+那条门变得几乎恒真、**不再是证据**。段级读数保留判别力——已否决的 low 臂在它上面是
+454/458、4 段零覆盖，而字数覆盖率只从 98% 动到 97%。
+⚠ **两处判别力下降，验收时必须如实报、不得写成战果**：
+`SourceSpan.recovery` 的取值分布不可比（`lcs` 归零、`normalized` 只可能出现在 hinge）；
+`edge_hole` 变钝（章首漏一段 ≈23 字 < `HOLE_MIN_CHARS=30` ⇒ 要漏 ≥2 段才出声）。
+把 `edge_hole` 升级成「首拍 `start_para` 必须是 1」是把 HARD 变严、会与基线不可比，
+**故意留到验收之后**（见下方待办）。
+
+**基线存档**：`outputs/_ab/baseline_blueprint_v2.md`（三臂矩阵 + 全 71 条 scanned +
+段级覆盖 + 段落粒度 + 复算脚本）。⚠ `outputs/` 不入 git，且 **architecture 收窄之后
+基线臂再也读不回来** ⇒ 上表那几个数字就是它在仓内的唯一副本。
+
+- [ ] **付费验收跑未做**：改 `BLUEPRINT_SYS` 之后 `--chapters` 会被
+      `novel/stages/stage2/extract.py` 的指纹闸挡住 ⇒ **没有小样探路这条路**，
+      验收只能整书 11 章一次（基线那一轮 194,490 completion，新臂预期更少但同量级）。
+- [ ] 验收通过后：在改造后的节点上重跑一次 effort 换臂（`tools/effort_ab.py --set
+      stage2.blueprint=low`）。A 拿掉的正是 low 档第一个塌的那类能力，若改造后 low 也能
+      过门，等于**整个节点降档**，收益远大于「拆成两次调用」那个方案，且不多一次调用、
+      不多一道缝。**先量，再决定要不要做那个。**
+- [ ] 验收通过后：把 `edge_hole` 从「≥30 字未覆盖区间」升级成段号精确判据。
+- [ ] 验收通过后的收尾：清 `outputs/_ab/` 的 13 个臂与两个 `_probe_*`、存量书的 stage2
+      及其下游产物。
+
 - [ ] 改 `NodeSpec.effort` 默认值需用户裁决（`tests/test_invariants.py` 现钉着
       `stage3.style` / `stage7.rename` 恒 `None`，改默认要同批改那两行断言）。
 - [ ] **降档路径没有任何可观测**：`novel/llm/client.py::LlmClient.ask_json` 三道内容闸失败时
@@ -212,6 +282,11 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
 （那段注释自己写着「现役读的是这一批 —— 与真后端同一形状」），但**没有任何东西在核这句话**：
 `web/scripts/check-seams.mjs` 只管「谁可以读它」，不管它长什么样。于是后端每破坏一次形状，
 mock 模式就与真后端多分家一点，而三条缝检查全绿。
+
+⚠ 2026-08-19 又多分家一处（**不要手补**，那正是本条禁的动作）：
+`check_stage2.json` 里还留着已裁撤的 `anchor_not_verbatim` 那一行、`reading_ch3.json` 里还留着
+已删的 `verbatim_recovered` 键与旧的 `BLUEPRINT_SYS` 指纹。它们随
+`bounded-fidelity-v3` 一起过期，修法只有「从一本走完全链的书重抓」。
 
 立条目时实测：15 份可映射 fixture 里 **13 份**已通不过当前 `contracts/schema` 模型
 （六份 `check_stage*.json` 都带已删的顶层 `retired`；`stage4_ch3.json` 缺 31 项、

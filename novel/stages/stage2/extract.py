@@ -20,6 +20,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from contracts.invariants import BLUEPRINT_ARCHITECTURE
 from contracts.rules import REGISTRY
 from contracts.schema.base import StrictModel
 from contracts.schema.report import CheckReport
@@ -47,6 +48,7 @@ from novel.stages.stage2.normalize import (
     normalize_blueprints, normalize_global, past_attested_surfaces,
     resolve_character_refs, response_shape,
 )
+from novel.stages.stage2.paragraphs import render_numbered
 from novel.store import ArtifactStore
 
 GLOBAL_REL = STAGE2_GLOBAL_GROUNDING
@@ -136,7 +138,7 @@ def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
 _GLOBAL_KEYS = ('address_by_fallback', 'address_surface_rewrites',
                 'address_from_chapter_raised', 'canonical_distinguishers_stripped',
                 'setup_chapters_pruned')
-_BLUEPRINT_KEYS = ('verbatim_rewrites', 'verbatim_recovered', 'verbatim_failures',
+_BLUEPRINT_KEYS = ('verbatim_rewrites', 'verbatim_failures',
                    'partial_regen_chapters', 'repairs')
 
 
@@ -351,10 +353,18 @@ def _book_text(main_text: list[dict[str, Any]]) -> str:
 
 
 def _blueprint_stable_prefix(title: str, main_text: list[dict[str, Any]]) -> str:
+    """逐章那一相的**稳定前缀**：跨章不变，指纹进 `_provenance.context.stable_prefix`。
+
+    ⚠ 这里调 `_chapter_index`，而那个函数**与 global 那一相共用**——
+    要给正文加段号请改 `build_blueprint_user` 里的当前章块，别动它
+    （改它 = global 侧的 user 字节也变 = 那一相的供应商前缀缓存一起冷启）。
+    """
     return '\n\n'.join([
         f'《{title}》',
         '── 章节索引（一切对章的引用用阅读序章号）──\n' + _chapter_index(main_text),
-        '── 上下文边界 ──\n当前章正文完整提供；只提供过去窗口，未来章正文不可见。',
+        '── 上下文边界 ──\n当前章正文完整提供、且逐段编号（行首 `<数字>` 是段号，'
+        '不是原文的一部分）；只提供过去窗口，未来章正文不可见。'
+        '过去窗口是节选、没有编号，不可引用其段号。',
     ])
 
 
@@ -405,9 +415,14 @@ def _past_names_block(names: list[str]) -> str:
 
 
 def blueprint_context(title: str, main_text: list[dict[str, Any]]) -> dict[str, Any]:
-    """可落盘、可比较的 v2 上下文策略身份。"""
+    """可落盘、可比较的上下文策略身份。
+
+    ⚠ `architecture` 从 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 取，
+    判据 `context_scope` 读的是同一个常量——**两边各写一份字面**是升版时最容易漏的那一处，
+    漏了就得到「产物明明是新架构、判据说不符合约定」的假红。
+    """
     return {
-        'architecture': 'bounded-fidelity-v2',
+        'architecture': BLUEPRINT_ARCHITECTURE,
         'batch_size': 1,
         'stable_prefix': prov.fingerprint(_blueprint_stable_prefix(title, main_text)),
         'current_chapter_full': True,
@@ -461,7 +476,8 @@ def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
         ('── 相邻原文窗口（仅过去）──\n' + neighbor)
         if neighbor else '── 相邻原文窗口 ──\n无（当前为第一章）',
         _past_names_block(past_names),
-        f'── 当前章全文（不可裁剪）──\n【第{ordinal}章】\n{current}',
+        f'── 当前章全文（不可裁剪，逐段编号）──\n【第{ordinal}章】\n'
+        + render_numbered(current),
         '── 本次任务范围 ──\n只产出以下章的 blueprint'
         '（按此顺序，范围外的章一律不要产出）：\n' + scope,
     ]
@@ -803,9 +819,17 @@ def _blueprint_metrics(blueprint: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def _repair_baseline(blueprint: dict[str, Any]) -> dict[str, Any]:
-    """最终产物 → 模型响应形状；代码派生字段不反喂给模型。"""
-    return response_shape(blueprint)
+def _repair_baseline(blueprint: dict[str, Any],
+                     main_text: list[dict[str, Any]]) -> dict[str, Any]:
+    """最终产物 → 模型响应形状；代码派生字段不反喂给模型。
+
+    ⚠ 要章正文才反投影得出段号（`bounded-fidelity-v3`）——**取的必须是这条蓝图
+    自己那一章**，拿错章反算出来的段号一样是整数、一样不会报错。
+    """
+    ordinal = int(blueprint.get('chapter_ordinal') or 0)
+    text = next((str(section.get('text') or '') for section in main_text
+                 if int(section.get('chapter_ordinal') or 0) == ordinal), '')
+    return response_shape(blueprint, text)
 
 
 def _mentions_chapter(value: str, ordinal: int) -> bool:
@@ -918,7 +942,7 @@ def _run_blueprint_repair(
             ctx.title, main_text, (ordinal,),
             characters=global_raw['entities']['characters'],
             repair_findings=findings,
-            repair_baseline=_repair_baseline(old_by[ordinal]),
+            repair_baseline=_repair_baseline(old_by[ordinal], main_text),
         )
         prompt_rows[ordinal] = (user, findings)
         requests.append((ordinal, system, user))
@@ -957,16 +981,11 @@ def _run_blueprint_repair(
         list(row) for row in old_prov.verbatim_rewrites
         if not _record_is_targeted(row, targets)
     ]
-    old_recovered = [
-        list(row) for row in old_prov.verbatim_recovered
-        if not _record_is_targeted(row, targets)
-    ]
     old_failures = [
         list(row) for row in old_prov.verbatim_failures
         if not _record_is_targeted(row, targets)
     ]
     rewrites = old_rewrites + list(target_accounting['verbatim_rewrites'])
-    recovered = old_recovered + list(target_accounting['verbatim_recovered'])
     failures = old_failures + list(target_accounting['verbatim_failures'])
 
     repaired_ordinals = sorted(normalized_by)
@@ -1001,7 +1020,6 @@ def _run_blueprint_repair(
         context=old_prov.context.model_dump(),
         char_refs=char_refs,
         verbatim_rewrites=rewrites,
-        verbatim_recovered=recovered,
         verbatim_failures=failures,
         partial_regen_chapters=partial,
         repairs=repair_history,

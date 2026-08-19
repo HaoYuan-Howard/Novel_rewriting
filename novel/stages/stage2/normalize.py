@@ -16,10 +16,12 @@ from novel.core.naming import (
     surface_owner_since, surface_owners,
 )
 from novel.core.spans import (
-    content_index, content_only, exact_span, extend_terminal_punct, lcs,
-    walk_spans,
+    content_index, content_only, exact_span, extend_terminal_punct,
 )
 from novel.core.text import norm
+from novel.stages.stage2.paragraphs import (
+    ParagraphIndexError, paragraph_range_of, paragraph_slice, paragraph_spans, span_of,
+)
 
 
 def _normalize_distinguishers(characters: dict[str, dict[str, Any]]) \
@@ -196,7 +198,7 @@ def past_attested_surfaces(characters: dict[str, dict[str, Any]] | None,
                            main_text: list[dict[str, Any]]) -> dict[int, list[str]]:
     """`{阅读序章号: 此前章节正文里已出现过的名册称名}` —— **只含过去，无未来**。
 
-    bounded-fidelity-v2 把模型可见的前文收窄到窗口与尾摘之后，prompt 里
+    有界上下文架构（`bounded-fidelity-*`）把模型可见的前文收窄到窗口与尾摘之后，prompt 里
     「到目前为止的正文里出现过没有」这条判据模型就自证不了了（名字可能首现在
     窗口外）。这份清单把「已现与否」的判定收回代码侧：字面取自 registry
     （canonical 剥区分词 + 全部 `address[].surface`，与 `surface_owners` 同一套
@@ -304,21 +306,37 @@ def resolve_character_refs(blueprints: list[dict[str, Any]],
             for key, value in stats.items()}
 
 
-def _resolve_hinge(span_text: str, starts_with: str, ends_with: str) -> tuple[int, int] | None:
-    content, cmap = content_index(span_text)
-    start_anchor, end_anchor = content_only(starts_with), content_only(ends_with)
-    if not start_anchor or not end_anchor or not cmap:
+def _locate_phrase(para_text: str, phrase: str) -> tuple[int, int, str] | None:
+    """在**一段之内**定位 hinge 的短语，返回 `(起, 止, recovery)`；找不到返回 `None`。
+
+    坐标是**段内**相对偏移，调用方负责加上段的起点。
+
+    【为什么原样字节优先】标点可能正是重复字面的唯一消歧信息
+    （`温夏白:[……]` 在内容空间里会坍缩成 `温夏白`）。模型已经抄对时按字节命中更精确；
+    抄不对时才退回内容空间，那一条负责容忍换行、半角/全角标点。
+    ——这条次序是从已删除的 `novel/core/spans.py::_find_exact_raw` 原样搬过来的，
+    它压着一次实测故障，别为了少一个分支合并掉。
+
+    ⚠⚠ **没有 LCS 兜底，而那是刻意的**：实测「传家玉镯」→「家传玉镯」的最长公共子串
+    只剩「玉镯」2/4，救回来的是一个**语义已经变了**的片段。hinge 要的正是
+    「位置对、字节错」这件事被报出来（`hinge_drift` / `hinge_anchor_void`）。
+    ⚠ 搜索面只有这一段（本仓语料均段约 21 字）——**这正是本次改造省下的那笔钱**：
+    模型不必再逐字转写一段能在整章里唯一定位的原文。
+    """
+    raw = phrase.strip()
+    if raw:
+        hit = para_text.find(raw)
+        if hit >= 0:
+            return hit, extend_terminal_punct(para_text, hit + len(raw)), 'exact'
+    content, cmap = content_index(para_text)
+    needle = content_only(phrase)
+    if not needle or not cmap:
         return None
-    start = content.find(start_anchor)
-    if start < 0:
+    at = content.find(needle)
+    if at < 0:
         return None
-    end_start = content.find(end_anchor, start)  # 允许重合，短数字/物件依赖这个语义。
-    if end_start < 0:
-        return None
-    end = max(start + len(start_anchor), end_start + len(end_anchor))
-    raw_start = cmap[start]
-    raw_end = extend_terminal_punct(span_text, cmap[end - 1] + 1)
-    return raw_start, raw_end
+    return cmap[at], extend_terminal_punct(para_text, cmap[at + len(needle) - 1] + 1), \
+        'normalized'
 
 
 def _source(text: str, start: int, end: int, recovery: str) -> dict[str, Any]:
@@ -332,171 +350,214 @@ def _source(text: str, start: int, end: int, recovery: str) -> dict[str, Any]:
     }
 
 
+def _blank_hinge(hinge: dict[str, Any]) -> None:
+    """把一条 hinge 打回失败态：只留 `kind`，`source` 置空。
+
+    ⚠ 用 `clear()` 而不是逐键 `pop`：响应形状的键（`para` / `phrase`）与产物形状的键
+    （`source`）**不能同时留在盘上**——`StrictModel` 的 `extra='forbid'` 会拒收整份产物。
+    """
+    kind = hinge.get('kind')
+    hinge.clear()
+    hinge.update({'kind': kind, 'source': None})
+
+
+def _beat_span(text: str, span: dict[str, Any], cursor: int,
+               table: list[tuple[int, int]]) -> tuple[int, int, int, str | None]:
+    """一条 beat 的 span → `(起, 止, 新游标段号, 失败根因)`。
+
+    两种入形，**同一个出口**：
+      · 响应形 `{'start_para', 'end_para'}` —— 按段落表回取
+      · 产物形 `SourceSpan`               —— `--renormalize` / INVALID 提升时已经是精确区间，
+        照旧交给 `novel/core/spans.py::exact_span` 验（那是它唯一的校验落点）
+
+    ⚠ **游标单调是在段号上判的**：第 n 条的起段必须**越过**第 n-1 条的止段。
+    这一条同时表达了「区间重叠」与「顺序倒置」两件事——与旧实现「`starts_with` 只在上一条
+    终点之后找」是同一个机制，只是现在它是一次整数比较而不是一次字符串搜索。
+    """
+    if any(key in span for key in ('start', 'end', 'text', 'normalized')):
+        start, end, problem = exact_span(span, text, 0 if cursor <= 0 else table[cursor - 1][1])
+        if problem:
+            return 0, 0, cursor, '已落盘的精确区间与原文对不上'
+        try:
+            _a, b = paragraph_range_of(text, start, end)
+        except ParagraphIndexError as exc:
+            return 0, 0, cursor, str(exc)
+        return start, end, b, None
+
+    if 'start_para' not in span and 'end_para' not in span:
+        return 0, 0, cursor, 'span 里既没有段号也不是正式区间'
+    if not table:
+        return 0, 0, cursor, '本章没有可编号的段落'
+
+    start_para, end_para = span.get('start_para'), span.get('end_para')
+    if start_para is not None and type(start_para) is int and start_para <= cursor:
+        return 0, 0, cursor, '起段没有越过上一拍的止段（区间重叠或顺序倒置）'
+    try:
+        start, end = span_of(text, start_para, end_para)
+    except ParagraphIndexError as exc:
+        return 0, 0, cursor, str(exc)
+    return start, end, int(end_para), None
+
+
 def normalize_verbatim(blueprints: list[dict[str, Any]],
                        text_of: dict[int, str]) -> dict[str, list[tuple[Any, ...]]]:
-    """回取 span 与 hinge 的原文字节，并记录精确改写、LCS 救回和失败。"""
-    rewrites: list[tuple[str, str, str, str]] = []
-    recovered: list[tuple[str, str, str, str, float]] = []
-    failures: list[tuple[str, str, str]] = []
-    located: dict[int, list[tuple[dict[str, Any], int, int]]] = {}
+    """把模型交的**段号**回取成正式 `SourceSpan`，并记录改写与失败。
 
-    for ordinal, beat, hit, problem in walk_spans(blueprints, text_of, recover=True):
-        beat_id = str(beat.get('beat_id') or '')
-        if problem or hit is None:
-            failures.append((beat_id, 'span',
-                             f'本 beat 的 span 自己没定位成功：{problem or "未知原因"}'))
-            beat['span'] = None
-            for hinge in (beat.get('hinges') or []):
-                kind = hinge.get('kind')
-                hinge.clear()
-                hinge.update({'kind': kind, 'source': None})
-            continue
-        a0, a1, b0, b1 = hit
-        text = text_of.get(int(ordinal), '')
-        span = beat.get('span') or {}
-        if 'start' in span:
-            located.setdefault(int(ordinal), []).append((beat, a0, b1))
-            continue
-        locator = dict(span)
-        used_normalization = False
-        used_lcs = False
-        for field, start, end in (('starts_with', a0, a1), ('ends_with', b0, b1)):
-            raw = str(locator.get(field) or '').strip()
-            if text.startswith(raw, start):
-                span[field] = raw
+    ⚠⚠ **这里曾经是「在原文里搜模型逐字抄回来的锚点」**（`bounded-fidelity-v2`）。
+    换成段号之后，beat 的区间是一次整数查表 ⇒ `recovery` 恒 `exact`、
+    「锚点不是原文字节」这件事在 beat 这一侧**结构上不存在**了。
+    模型仍要转写的只剩 `hinge.phrase`，而它只需要在**一段之内**可定位。
+    """
+    rewrites: list[tuple[str, str, str, str]] = []
+    failures: list[tuple[str, str, str]] = []
+    #: `ordinal -> [(beat, 起, 止, 起段, 止段)]`，只装定位成功的。
+    located: dict[int, list[tuple[dict[str, Any], int, int, int, int]]] = {}
+
+    for blueprint in blueprints:
+        ordinal = int(blueprint.get('chapter_ordinal') or 0)
+        text = text_of.get(ordinal, '')
+        table = paragraph_spans(text)
+        cursor = 0
+        for beat in (blueprint.get('beats') or []):
+            beat_id = str(beat.get('beat_id') or '')
+            span = beat.get('span') or {}
+            start, end, cursor, problem = _beat_span(text, span, cursor, table)
+            if problem:
+                failures.append((beat_id, 'span', problem))
+                beat['span'] = None
+                for hinge in (beat.get('hinges') or []):
+                    _blank_hinge(hinge)
                 continue
-            fixed = text[start:end]
-            old_content, new_content = content_only(raw), content_only(fixed)
-            position = f'span.{field}'
-            if old_content == new_content:
-                rewrites.append((beat_id, position, raw, fixed))
-                used_normalization = True
-            else:
-                overlap = (lcs(old_content, new_content)[1] / len(old_content)
-                           if old_content else 0.0)
-                recovered.append((beat_id, position, raw, fixed, round(min(overlap, 1.0), 4)))
-                used_lcs = True
-            span[field] = fixed
-        recovery = 'lcs' if used_lcs else (
-            'normalized' if used_normalization else 'exact')
-        beat['span'] = _source(text, a0, b1, recovery)
-        located.setdefault(int(ordinal), []).append((beat, a0, b1))
+            first, last = paragraph_range_of(text, start, end)
+            beat['span'] = _source(text, start, end, 'exact')
+            located.setdefault(ordinal, []).append((beat, start, end, first, last))
 
     for ordinal, items in located.items():
         chapter_text = text_of.get(ordinal, '')
-        by_id = {str(beat.get('beat_id')): (beat, start, end)
-                 for beat, start, end in items}
-        fresh: dict[str, list[dict[str, Any]]] = {beat_id: [] for beat_id in by_id}
-        for beat, start, end in items:
+        #: 段号 → 拥有它的 beat_id。段区间由游标单调保证**互不重叠** ⇒ 归属唯一，
+        #: 旧实现那条「在多个 beat 里都命中、归属不唯一」的失败态因此不复存在。
+        owner_of: dict[int, str] = {}
+        for beat, _s, _e, first, last in items:
+            for para in range(first, last + 1):
+                owner_of[para] = str(beat.get('beat_id') or '')
+        fresh: dict[str, list[dict[str, Any]]] = {
+            str(beat.get('beat_id') or ''): [] for beat, *_rest in items}
+
+        for beat, start, end, _first, _last in items:
             beat_id = str(beat.get('beat_id') or '')
             for hinge in (beat.get('hinges') or []):
                 if 'source' in hinge:
-                    source = hinge.get('source')
-                    h_start, h_end, problem = exact_span(source, chapter_text)
+                    # `--renormalize` / INVALID 提升：已经是正式区间，只验不重定位。
+                    h_start, h_end, problem = exact_span(hinge.get('source'), chapter_text)
                     if problem or h_start < start or h_end > end:
-                        kind = hinge.get('kind')
-                        hinge.clear()
-                        hinge.update({'kind': kind, 'source': None})
+                        _blank_hinge(hinge)
                         fresh[beat_id].append(hinge)
                         failures.append((
-                            beat_id, 'hinge',
-                            problem or 'source span is outside its beat span',
-                        ))
+                            beat_id, 'hinge', '已落盘的 source 与它所属 beat 的区间对不上'))
                     else:
                         fresh[beat_id].append(hinge)
                     continue
-                anchor_a = str(hinge.get('starts_with') or '')
-                anchor_z = str(hinge.get('ends_with') or '')
-                fixed = _resolve_hinge(chapter_text[start:end], anchor_a, anchor_z)
-                owner = beat_id
 
-                if fixed is None:
-                    candidates: list[tuple[str, tuple[int, int]]] = []
-                    for other_id, (_other, other_start, other_end) in by_id.items():
-                        if other_id == beat_id:
-                            continue
-                        candidate = _resolve_hinge(
-                            chapter_text[other_start:other_end], anchor_a, anchor_z)
-                        if candidate is not None:
-                            candidates.append((
-                                other_id,
-                                (other_start + candidate[0], other_start + candidate[1]),
-                            ))
-                    if len(candidates) == 1:
-                        owner, fixed = candidates[0]
-                        rewrites.append((beat_id, 'hinge.owner', beat_id, owner))
-
-                if fixed is None:
-                    chapter_hit = _resolve_hinge(chapter_text, anchor_a, anchor_z)
-                    if chapter_hit is None:
-                        cause = '锚点不在本章原文'
-                    elif len(candidates) > 1:
-                        cause = '锚点在多个 beat 的 span 内命中，归属不唯一'
-                    else:
-                        cause = '锚点落在未被任何 beat 覆盖的空档'
-                    kind = hinge.get('kind')
-                    hinge.clear()
-                    hinge.update({'kind': kind, 'source': None})
+                para, phrase = hinge.get('para'), str(hinge.get('phrase') or '')
+                try:
+                    p_start, p_end = paragraph_slice(chapter_text, para)
+                except ParagraphIndexError:
+                    _blank_hinge(hinge)
                     fresh[beat_id].append(hinge)
-                    failures.append((beat_id, 'hinge', cause))
+                    failures.append((beat_id, 'hinge', '段号越界，本章没有那一段'))
                     continue
 
-                if owner == beat_id:
-                    h_start, h_end = start + fixed[0], start + fixed[1]
-                else:
-                    h_start, h_end = fixed
-                kind = hinge.get('kind')
+                owner = owner_of.get(int(para))
+                if owner is None:
+                    _blank_hinge(hinge)
+                    fresh[beat_id].append(hinge)
+                    failures.append((
+                        beat_id, 'hinge', '段号落在没有被任何 beat 覆盖的空档'))
+                    continue
+
+                hit = _locate_phrase(chapter_text[p_start:p_end], phrase)
+                if hit is None:
+                    # 【分清「编的」与「段号指错」】两者的修法不同，说错了会让人去查一句
+                    # 原文里明明有的话。整章都找不到才是「转述或编的」。
+                    elsewhere = content_only(phrase) and \
+                        content_only(phrase) in content_only(chapter_text)
+                    _blank_hinge(hinge)
+                    fresh[beat_id].append(hinge)
+                    failures.append((beat_id, 'hinge',
+                                     '短语不在它指定的那一段里，而出现在别处' if elsewhere
+                                     else '短语不在本章原文里'))
+                    continue
+
+                offset, tail, method = hit
+                h_start, h_end = p_start + offset, p_start + tail
+                if owner != beat_id:
+                    # 段号决定归属：模型把材料挂错了拍，但它指的位置是明确的。
+                    rewrites.append((beat_id, 'hinge.owner', beat_id, owner))
                 raw_source = chapter_text[h_start:h_end]
-                method = (
-                    'exact'
-                    if raw_source.startswith(anchor_a.strip())
-                    and anchor_z.strip() in raw_source
-                    else 'normalized'
-                )
-                hinge.clear()
-                hinge.update({
-                    'kind': kind,
-                    'source': _source(chapter_text, h_start, h_end, method),
-                })
+                if method != 'exact':
+                    rewrites.append((owner, 'hinge.phrase', phrase, raw_source))
+                _blank_hinge(hinge)
+                hinge['source'] = _source(chapter_text, h_start, h_end, method)
                 fresh[owner].append(hinge)
 
-        for beat, _start, _end in items:
+        for beat, *_rest in items:
             beat['hinges'] = fresh[str(beat.get('beat_id') or '')]
 
     return {
         'verbatim_rewrites': rewrites,
-        'verbatim_recovered': recovered,
         'verbatim_failures': failures,
     }
 
 
-def response_shape(blueprint: dict[str, Any]) -> dict[str, Any]:
-    """正式蓝图转回不含代码派生字段的模型响应形状，供定向重生成使用。"""
+def _para_or_none(text: str, source: dict[str, Any] | None) -> int | None:
+    """正式区间 → 它落在第几段；区间缺失或反投影不出来时如实交 `None`。
+
+    ⚠ **不许兜底成 1**：那会把「上一版这条没定位成功」伪装成「它在第一段」，
+    而这份基线正是要告诉模型「上一版哪里是坏的」。
+    """
+    if not isinstance(source, dict):
+        return None
+    start, end = source.get('start'), source.get('end')
+    if type(start) is not int or type(end) is not int:
+        return None
+    try:
+        return paragraph_range_of(text, start, end)[0]
+    except ParagraphIndexError:
+        return None
+
+
+def response_shape(blueprint: dict[str, Any], chapter_text: str) -> dict[str, Any]:
+    """正式蓝图转回不含代码派生字段的模型响应形状，供定向重生成使用。
+
+    ⚠⚠ **它需要章正文**（`bounded-fidelity-v3` 起）：响应形状里的定位是**段号**，
+    而段号只能从原文的段落表反算。这是本函数与 `normalize_verbatim` 的**同一张表**——
+    反投影用别的切法，反喂给模型的基线就指向别的段落，而它不会报错。
+    ⚠ 反投影按**相交**算（`paragraph_range_of`）：正式区间的两端可能落在段内，
+    按包含算会把首尾两段丢掉，而这份基线的用途正是「不许删除或合并已有事件拍」。
+    """
     out = copy.deepcopy(blueprint)
     out['beats'] = []
     for beat in (blueprint.get('beats') or []):
         copied = dict(beat)
-        span = beat.get('span') or {}
-        if 'starts_with' not in span:
-            raw = str(span.get('text') or '')
-            copied['span'] = {
-                'starts_with': raw[:30] or 'missing',
-                'ends_with': raw[-30:] or 'missing',
-            }
+        span = beat.get('span')
+        if not isinstance(span, dict) or 'start_para' not in span:
+            first = _para_or_none(chapter_text, span)
+            last = None
+            if first is not None and isinstance(span, dict):
+                last = paragraph_range_of(chapter_text, span['start'], span['end'])[1]
+            copied['span'] = {'start_para': first, 'end_para': last}
         copied.pop('present_char_ids', None)
         copied['hinges'] = []
         for hinge in (beat.get('hinges') or []):
             h = dict(hinge)
-            source = hinge.get('source') or {}
-            if 'starts_with' not in h:
-                raw = str(source.get('text') or '')
+            if 'para' not in h:
+                source = hinge.get('source')
                 h = {
                     'kind': h.get('kind'),
-                    'starts_with': raw[:30] or 'missing',
-                    'ends_with': raw[-30:] or 'missing',
+                    'para': _para_or_none(chapter_text, source),
+                    'phrase': (source or {}).get('text') if isinstance(source, dict) else None,
                 }
             else:
-                h.pop('text', None)
                 h.pop('source', None)
             copied['hinges'].append(h)
         out['beats'].append(copied)

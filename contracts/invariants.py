@@ -363,6 +363,68 @@ def hinge_heading(kind: str) -> str:
     return HINGE_LABEL_PARTS[kind][0].replace('【', '').replace('】', '')
 
 
+#: `stage2.blueprint` 那一次调用的**模型可见边界身份**，落在
+#: `_provenance.context.architecture`（`contracts/schema/stage2.py::BlueprintContext`）。
+#:
+#: 【为什么它是取值域而不是一句注释】它同时被三处消费：产地写它、`BlueprintContext` 的
+#: `Literal` 拿它当取值面、判据 `context_scope` 拿它比对。此前产地与判据**各写一份
+#: `'bounded-fidelity-v2'` 字面**，改一处忘一处就得到一条「产物明明是新架构、判据说不符合
+#: 约定」的假红（`docs/LESSONS.md` 第 21 条那一族）。
+#:
+#: ⚠⚠ **改这个值就是破坏产物形状**：`Literal` 收窄之后存量蓝图经 `store.read_own` 当场拒读。
+#: 按仓规（`CLAUDE.md`）必须同批把 `ARTIFACT_SPECS` 里
+#: `STAGE2_CHAPTER_BLUEPRINTS` 的 `current_version` +1，并回答「存量产物由谁重建」。
+#: · `v2` → `v3`（2026-08-19）：锚点从「模型逐字转写原文片段」改成「下发带编号的段落、
+#:   模型只交段号」。**存量蓝图由 `stage2.blueprint` 整跑重建**，`.INVALID` 与 `_rounds/`
+#:   一律作废，不手补字段冒充当前产地。
+BLUEPRINT_ARCHITECTURE: Final = 'bounded-fidelity-v3'
+
+#: `SourceSpan.recovery` 的取值面：这个区间是怎么对上原文的。
+#:
+#: · `exact`      —— 字节逐字命中。beat 的区间**恒是它**（段号查表算出来的，
+#:                   模型根本没写过那段字节）；hinge 抄对时也是它。
+#: · `normalized` —— 只在**内容字符空间**命中：模型把半角标点写成全角、或把换行压掉了。
+#:                   `bounded-fidelity-v3` 起只可能出自 `hinge.phrase`。
+#:
+#: ⚠⚠ **这里曾经还有第三档 `lcs`**（按最长公共子串把被改掉一两个字的锚点救回来），
+#: 随 `bounded-fidelity-v3` 一并下线：beat 不再有可改的锚点，而 hinge 那一侧的 LCS 兜底
+#: 本来就是禁的（实测「传家玉镯」→「家传玉镯」救回来的是**语义已经变了**的片段）。
+#: ⇒ 它在新架构下**结构性不可产生**，留在取值面里就是一个永远读不到的分支。
+SPAN_RECOVERY: Final = ('exact', 'normalized')
+
+#: `_provenance.verbatim_failures` 里 `位置 == 'span'` 那一族的根因取值面。
+#: 判据 `verbatim_failed` 只按根因**计数**，不按根因分流，所以这一张表存在的意义是
+#: 「产地只许说这几句话」——措辞漂了，报告上同一种病会分裂成两行。
+SPAN_FAILURE_CAUSES: Final = (
+    '段号不是整数',
+    '段号越界',
+    '段号区间倒序',
+    '起段没有越过上一拍的止段（区间重叠或顺序倒置）',
+    '本章没有可编号的段落',
+    'span 里既没有段号也不是正式区间',
+    '已落盘的精确区间与原文对不上',
+)
+
+#: `位置 == 'hinge'` 那一族的根因 → **该由哪条判据收**。
+#:
+#: 【为什么是一张表而不是几个 `if`】判据侧此前按**中文子串**猜（`'空档' in cause` /
+#: `'本章原文' in cause`）——那是产地与判据之间一条**没有任何东西在守的隐式契约**：
+#: 改一句措辞，`hinge_anchor_void` 就静默降级成 `hinge_drift`，报告照样绿。
+#: ⇒ 改成按**相等**查这一张表，分家立刻是 `KeyError` 级别的显性失败，
+#: 并配一条「产地只许发这几种根因」的守卫（`tests/test_stage2_generation.py`）。
+#:
+#: ⚠ 四分流里**没有 `hinge_cascade`**：那一条由「本拍的 span 自己没定位成功」推出，
+#: 不经这张表（判据侧先看 `beat_id` 在不在已定位集合里）。
+#: ⚠ 也没有 `hinge_cross_chapter`：引了别章原文的那一档由判据侧现场回扫全书判定，
+#: 产地手里只有本章正文，说不出这句话。
+HINGE_FAILURE_ROUTE: Final = {
+    '短语不在本章原文里': 'hinge_anchor_void',
+    '段号越界，本章没有那一段': 'hinge_anchor_void',
+    '段号落在没有被任何 beat 覆盖的空档': 'hinge_in_hole',
+    '短语不在它指定的那一段里，而出现在别处': 'hinge_drift',
+    '已落盘的 source 与它所属 beat 的区间对不上': 'hinge_drift',
+}
+
 #: 逐字原话允许被一处提示语切开时，插入部分的内容字数上限。
 #: 形态必须在原文字节上长成「收引号 + ≤N 内容字 + 开引号」；
 #: 改词、插动作描写、只写半句照旧判缺失。

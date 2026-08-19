@@ -55,8 +55,25 @@ def test_schema_model_map_is_derived_from_the_current_registry():
     assert all(ARTIFACTS[key] is spec.model for key, spec in ARTIFACT_SPECS.items())
 
 
+#: **每一次「破坏某份产物的形状」都在这里显式登记：路径 → (版本, 破坏的是什么, 谁重建)。**
+#:
+#: ⚠ 这不是一张「已知豁免」表，是一份**账**：`current_version` +1 的含义是
+#: 「盘上的旧字节从此读不进来」，而本仓**没有迁移机制** ⇒ 每一次都必须同批回答
+#: 「存量产物由谁重建」。答不出来的破坏不许落。
+_SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
+    'stage2/chapter_blueprints.json': (
+        2,
+        'bounded-fidelity-v2 → v3：beat 的区间改由段号算出，'
+        'BlueprintContext.architecture 的 Literal 收窄、'
+        'SourceSpan.recovery 去掉 lcs 一档、BlueprintProvenance.verbatim_recovered 删除',
+        'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
+        '不手补字段冒充当前产地',
+    ),
+}
+
+
 def test_the_whole_registry_is_on_one_scale_and_the_migration_ladder_stays_gone():
-    """⭐⭐ **全表恒 v1，且没有迁移机制。**
+    """⭐⭐ **除显式登记过的破坏之外全表恒 v1，且没有迁移机制。**
 
     ⚠ 这里曾是一大坨「谁是 v2、谁是 v3、谁刻意没有 migration」的分族断言，配一梯
     v2→v3 迁移函数。删除那天的实测：登记了 migration 的 8 个家族在盘上**一份低版本
@@ -64,10 +81,17 @@ def test_the_whole_registry_is_on_one_scale_and_the_migration_ladder_stays_gone(
     ⇒ 整条梯子零消费者，却让「只接受当前版本」这句话假了一整段时间。
 
     ⇒ 本条是它的**反向守卫**：梯子不许悄悄回来。要破坏某个产物的形状，做法是把该路径的
-    `current_version` +1 并同批回答「存量产物由谁重建」——那时本条会红，**而它红得对**，
-    改的人要在这里显式登记那一次破坏，不是加一条迁移把旧字节读成新形状。
+    `current_version` +1 **并在 `_SHAPE_BREAKS` 里写出破坏了什么、存量由谁重建**——
+    不是加一条迁移把旧字节读成新形状。
+    ⚠ 漏登记会红、登记了但版本对不上也会红：那张表与注册表**互为对方的守卫**。
     """
-    assert {spec.current_version for spec in ARTIFACT_SPECS.values()} == {1}
+    live = {rel: spec.current_version for rel, spec in ARTIFACT_SPECS.items()
+            if spec.current_version != 1}
+    assert live == {rel: v for rel, (v, _what, _who) in _SHAPE_BREAKS.items()}, \
+        '有产物升了版却没在 `_SHAPE_BREAKS` 里登记（或登记了却没升）——' \
+        '升版的含义是「存量读不进来」，必须同批答出「由谁重建」'
+    for rel, (_v, what, who) in _SHAPE_BREAKS.items():
+        assert rel in ARTIFACT_SPECS and what.strip() and who.strip()
     assert [f.name for f in dataclasses.fields(ArtifactSpec)] == \
         ['model', 'current_version'], 'ArtifactSpec 多了一格——migrations 回来了？'
     assert not [name for name in vars(contracts.schema) if name.startswith('MIGRATE')]
@@ -160,15 +184,17 @@ def test_only_the_current_version_is_read(rel: str, marker: object):
     ⚠ 报错必须同时说出文件与版本——只说「读不了」的错误，会把人推回去手补字段。
     """
     spec = ARTIFACT_SPECS[rel]
-    # ⚠ 取值面是写死的「非法」标记，而「非法」是相对当前版本说的：哪天某份产物升到 v2，
-    #   这一格就不再非法，本条会以 `DID NOT RAISE` 红——那是对的，但读不出原因。
-    #   ⇒ 先把前提说清楚，让那一天的红自带下一步。
+    # ⚠ 取值面是写死的「非法」标记，而「非法」是**相对当前版本**说的：某份产物升到 v2 之后，
+    #   `2` 这一格对它就不再非法。此前这里是一条 `assert` + 一句「去把这档换掉」的提示，
+    #   而「换掉」会让**全部** v1 产物丢掉「高版本拒读」那一档的覆盖。
+    #   ⇒ 改成**逐产物替换**：对升过版的那一份，把这一档换成它自己的上一版号。
+    #   那不是降级，恰恰是最要紧的真实场景——**盘上存量正是上一版**，必须被拒。
     #   ⚠ 比较**先看类型**：`True == 1` 在 Python 里成立，而 `True` 恰恰是取值面里
     #     一个必须被拒的标记（生产那侧 `isinstance(marker, bool)` 单独拦它）。
-    #     写成 `marker != current` 会在 v1 上把 `True` 这一档整批判成前提不成立。
-    assert type(marker) is not int or marker != spec.current_version, (
-        f'{rel} 的 current_version 升到了 {marker}，它已不再是一个「非法标记」；'
-        f'⇒ 把这一档从取值面里换掉（本条查的是拒读，不是拒当前版本）')
+    #     写成 `marker == current` 会在 v1 上把 `True` 这一档整批换掉。
+    if type(marker) is int and marker == spec.current_version:
+        marker = spec.current_version - 1
+        assert marker >= 1, 'current_version 必须 ≥1，否则这里换出来的不是「上一版」'
     path = _concrete(rel)
     payload: object = [] if spec.root else {'anything': 1}
     if marker is None:

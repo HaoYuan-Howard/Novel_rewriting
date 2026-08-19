@@ -32,8 +32,8 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, CACHE_POLICY, HINGE_KINDS, NAME_DISTINCTIVENESS,
-    NARRATIVE_PERSON, TIME_LAYERS, WORLD_RULE_KINDS,
+    ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURE, CACHE_POLICY, HINGE_KINDS,
+    NAME_DISTINCTIVENESS, NARRATIVE_PERSON, SPAN_RECOVERY, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import LlmProvenance
@@ -549,7 +549,9 @@ class SourceSpan(StrictModel):
     start: int = Field(ge=0)
     end: int = Field(gt=0)
     normalized: str = Field(min_length=1)
-    recovery: Literal['exact', 'normalized', 'lcs']
+
+    #: 取值面与「为什么只剩两档」的落点：`contracts/invariants.py::SPAN_RECOVERY`。
+    recovery: Literal[SPAN_RECOVERY]
 
     @model_validator(mode='after')
     def _end_is_after_start(self) -> SourceSpan:
@@ -642,16 +644,40 @@ class Blueprint(StrictModel):
 
 
 class AnchorLocatorResponse(StrictModel):
-    """模型只选首尾 locator；正式 source span 由代码回取并验证。"""
+    """模型只交**段号区间**；正式 source span 由代码按段落表回取并验证。
 
-    starts_with: str = Field(min_length=1)
-    ends_with: str = Field(min_length=1)
+    ⚠⚠ **这里曾是 `starts_with` / `ends_with` 两个逐字原文片段**（2026-08-19 改）。
+    换掉的理由不是形状不好看，是成本：那种形状要模型每章做约 38 次
+    「原样照抄、必须能在本章原文一字不差找到」的转写核对，而本节点的 reasoning
+    占它自己 completion 的 88.0%、占全书生成侧的 45.5%。段号是模型**读得出**、
+    不需要转写的东西 ⇒ 同一件事不再需要深想。
+    ⚠ 段号是**闭区间、1-based、逐章独立**，口径的唯一落点是
+    `novel/stages/stage2/paragraphs.py`——那里同时负责下发时的编号，两边不许各切一次。
+    """
+
+    start_para: int = Field(ge=1)
+    end_para: int = Field(ge=1)
+
+    @model_validator(mode='after')
+    def _end_para_is_not_before_start(self) -> AnchorLocatorResponse:
+        if self.end_para < self.start_para:
+            raise ValueError('end_para must not be before start_para')
+        return self
 
 
 class HingeResponse(StrictModel):
+    """一条保真材料的定位：**哪一段 + 段内的哪几个字**。
+
+    ⚠ **不做成纯段号**：hinge 指的是「一句要害台词 / 一个硬数字」，而本仓语料均段
+    只有约 21 字——退成整段会把「我今年九岁」这种两三个字的硬数字连着整段吞下去，
+    下游 `stage5` 的 `must_appear` 材料跟着变粗。
+    ⚠ **也不做成段区间**：短语只需在**那一段之内**可定位，搜索面就从整章缩到约 21 字，
+    转写核对的成本基本归零，而精度一点没丢。
+    """
+
     kind: Literal[HINGE_KINDS]
-    starts_with: str = Field(min_length=1)
-    ends_with: str = Field(min_length=1)
+    para: int = Field(ge=1)
+    phrase: str = Field(min_length=1)
 
 
 class BeatResponse(StrictModel):
@@ -689,9 +715,15 @@ class ChapterBlueprintsResponse(StrictModel):
 
 
 class BlueprintContext(StrictModel):
-    """蓝图调用的模型可见边界；只接受当前有界上下文架构。"""
+    """蓝图调用的模型可见边界；只接受当前有界上下文架构。
 
-    architecture: Literal['bounded-fidelity-v2']
+    ⚠⚠ `architecture` 的取值面**故意是单值**：不放宽成「v2 或 v3」。
+    放宽等于让两种产地的产物在同一张表里并存，而本仓没有迁移机制——
+    旧架构的蓝图要的是**重跑**，不是被读进来当成还能用。
+    取值与升版记录的唯一落点是 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
+    """
+
+    architecture: Literal[BLUEPRINT_ARCHITECTURE]
     batch_size: Literal[1]
     stable_prefix: Fp10
     current_chapter_full: Literal[True]
@@ -770,31 +802,36 @@ class BlueprintProvenance(LlmProvenance):
     context: BlueprintContext
     char_refs: CharRefs
 
-    # ── verbatim 回取的三笔独立账 ─────────────────────────────────────────────
-    # 三个量纲的修复方式不同，因此分别记录，报告可准确指出需要处理的环节。
+    # ── verbatim 回取的两笔独立账 ─────────────────────────────────────────────
+    # 两个量纲的修复方式不同，因此分别记录，报告可准确指出需要处理的环节。
+    #
+    # ⚠⚠ **这里曾经是三笔**，第三笔 `verbatim_recovered`（按最长公共子串救回来的锚点）
+    # 随 `bounded-fidelity-v3` 一并删除：beat 的区间现在由**段号**算出、不存在「锚点被
+    # 模型改掉一两个字」这回事，而 hinge 那一侧的 LCS 兜底本来就是禁的
+    # （`novel/core/spans.py` 模块头：救回来的「玉镯」是一个**语义已经变了**的片段）。
+    # ⇒ 那个键在新架构下**结构性恒空**，留着就是一盏永远不亮的灯；
+    # 它唯一的消费方 `anchor_not_verbatim` 同批裁撤。
 
-    #: `(beat_id, 位置, 原值, 回取值)`。**精确回取**：锚点归一后命中，字节被换成原文的。
+    #: `(beat_id, 位置, 原值, 回取值)`。**精确回取**：模型给的字节与原文有出入，
+    #: 按它指的位置换成原文的那一份。
+    #: ⚠ 新架构下只剩 `hinge.phrase` 一个来源——beat 的区间是段号算出来的，
+    #: 模型根本没写过那段字节，也就无从「改写」。
     #: 出口：**逐条列出**（形态照 `address_surface_rewrites`）。
     verbatim_rewrites: list[tuple[str, str, str, str]]
 
-    #: `(beat_id, 位置, 原锚点, 救回的片段, 重合度)`。**按最长公共子串救回来的**
-    #: （`novel/core/spans.py::_find_or_recover`，双门槛：绝对 ≥4 字 + 相对 ≥`HINGE_LCS_MIN`）。
+    #: `(beat_id, 位置, 根因)`。**锚不到。[HARD] 非空即失败态。**
     #:
-    #: ⚠⚠ **它必须与上一个键分开**，与 F4-2 把 `split_by_speech_tag` 的放行单独留痕
-    #: 是同一条：「一个字都没动」与「救回来的」**不是同一件事**——
-    #: 后者**锚点本来就不是原文字节**。合成一个键，报告上那两种就同形了。
-    #: 出口：**断言计数 + 逐条列出**——判据 `anchor_not_verbatim` 断言的就是它。
-    verbatim_recovered: list[tuple[str, str, str, str, float]]
-
-    #: `(beat_id, 位置, 三种根因之一)`。**锚不到。[HARD] 非空即失败态。**
-    #:
-    #: ⚠ 它替掉今天那条「靠 `hinges[].text` 的**缺席**去反推失败态」——
-    #: 失败态从此有**正面**的落点。三种根因（锚点不在本章 / 本 beat 的 span 自己
-    #: 没定位成功 / 落在漏抓区）**修法各不相同**，所以要分开报。
-    #: ⚠ 非空时产地照旧入显式终态（原型 `report_verbatim_failures` 就是这么做的），
-    #: 但**账要先落盘**——原型那条 `sys.exit` 之后什么都没留下，而「显式终态」
-    #: 在多命令流水线里只等于「这一步红了」，**不等于「链路被挡住了」**（§2.4 已记）。
-    #: 出口：**断言计数 + 逐条列出**，按三种根因分开。
+    #: ⚠ 它替掉早先那条「靠 `hinges[].text` 的**缺席**去反推失败态」——
+    #: 失败态从此有**正面**的落点。根因**修法各不相同**，所以要分开报：
+    #: · `位置 == 'span'`  —— 段号越界 / 段号区间倒序 / 段号不是整数 /
+    #:   起段没越过上一拍的止段（区间重叠）
+    #: · `位置 == 'hinge'` —— 段号不在本 beat 的段区间内 / 短语在那一段里找不到
+    #: ⚠⚠ **`'hinge'` 那几条根因的中文字面是与 `novel/stages/stage2/checks.py` 的
+    #: 隐式契约**（四分流按子串匹配）。改措辞而不同批改分流，会让 `hinge_anchor_void`
+    #: 静默降级成 `hinge_drift`——守卫在 `tests/test_stage2_generation.py`。
+    #: ⚠ 非空时产地照旧入显式终态，但**账要先落盘**——「显式终态」在多命令流水线里
+    #: 只等于「这一步红了」，**不等于「链路被挡住了」**（§2.4 已记）。
+    #: 出口：**断言计数 + 逐条列出**，按根因分开。
     verbatim_failures: list[tuple[str, str, str]]
 
     #: 定向重生成过哪几章（累积）。

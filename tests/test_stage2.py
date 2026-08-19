@@ -25,9 +25,22 @@ from typing import Any, Callable
 
 import pytest
 
+from contracts.invariants import BLUEPRINT_ARCHITECTURE, HINGE_FAILURE_ROUTE
 from contracts.rules import REGISTRY
 from novel.core.spans import content_only
 from novel.stages.stage2 import checks
+
+
+def _cause(rule: str) -> str:
+    """反查「产地说哪句话会落到这条判据」——**从分流表现算，不在用例里手抄根因**。
+
+    手抄的那一份哪天与 `HINGE_FAILURE_ROUTE` 分家，这条用例会静默改成在测**别的病**
+    （catch-all 的 `hinge_drift`），而它看起来和「查过没事」一模一样
+    （`docs/LESSONS.md` 第 21 条）。
+    """
+    causes = [c for c, r in HINGE_FAILURE_ROUTE.items() if r == rule]
+    assert causes, f'{rule} 不在 `HINGE_FAILURE_ROUTE` 里 —— 它收不到任何根因'
+    return causes[0]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、干净底座
@@ -39,16 +52,39 @@ from novel.stages.stage2 import checks
 # ⚠ 十拍也是下限：`time_layer_no_present` 的前件是 `n >= 10`
 #   （章数太少时全是回忆是可能的，那条不该报）。
 
-CH1 = ('春风吹过老宅的院墙。李宝珠站在廊下看着落花。'
-       '她想起了昨夜那封信。信上说父亲已经回城。她把信折好收进袖中。远处传来更夫的梆子声。')
-CH2 = ('第二日清晨天色微亮。李宝珠推开院门往外走。'
-       '街上已经有小贩在吆喝。她买了两个热腾腾的包子。回来时看见母亲在门口等她。'
-       '其实母亲早就知道那封信的事。')
-CH3 = ('午后的日头晒得人发懒。李宝珠把账册摊在桌上一页页翻。'
-       '管家在门外回话说米价又涨了。她皱着眉让管家去问问别家。'
-       '窗外的槐树落了一地碎叶。她忽然想起父亲从前也这样翻账。'
-       '那时她还够不着桌子。母亲进来给她添了一盏茶。'
-       '茶是新沏的还烫着。她端起来吹了吹没有喝。')
+# ⚠⚠ **每句一段、段间一个空行**——照本仓语料的真实排版（实测均段约 21 内容字）。
+#   这不是美观：`bounded-fidelity-v3` 起 beat 的区间是**段号**算出来的，
+#   写成一整段的章只有 1 段 ⇒ 同一章的第 2 拍起就必然「起段没越过上一拍的止段」，
+#   整份底座在响应形状那一侧构造不出来。⚠ 下面每条 beat 的首尾锚点都**落在句边界上**，
+#   所以它们同时也是段边界——改这三段正文时要一并核对那件事还成立。
+CH1 = '\n\n'.join([
+    '春风吹过老宅的院墙。',
+    '李宝珠站在廊下看着落花。',
+    '她想起了昨夜那封信。',
+    '信上说父亲已经回城。',
+    '她把信折好收进袖中。',
+    '远处传来更夫的梆子声。',
+])
+CH2 = '\n\n'.join([
+    '第二日清晨天色微亮。',
+    '李宝珠推开院门往外走。',
+    '街上已经有小贩在吆喝。',
+    '她买了两个热腾腾的包子。',
+    '回来时看见母亲在门口等她。',
+    '其实母亲早就知道那封信的事。',
+])
+CH3 = '\n\n'.join([
+    '午后的日头晒得人发懒。',
+    '李宝珠把账册摊在桌上一页页翻。',
+    '管家在门外回话说米价又涨了。',
+    '她皱着眉让管家去问问别家。',
+    '窗外的槐树落了一地碎叶。',
+    '她忽然想起父亲从前也这样翻账。',
+    '那时她还够不着桌子。',
+    '母亲进来给她添了一盏茶。',
+    '茶是新沏的还烫着。',
+    '她端起来吹了吹没有喝。',
+])
 
 
 def _source(text: str, a: str, b: str | None = None) -> dict[str, Any]:
@@ -207,7 +243,9 @@ def blueprints() -> dict[str, Any]:
             'scope_violations': [],
             'batches': [[1], [2], [3]],
             'context': {
-                'architecture': 'bounded-fidelity-v2',
+                # ⚠ 取契约那一份，别手抄字面：升架构时手抄的这一份不会跟着改，
+                #   而 `context_scope` 是 metric ⇒ 它会**静默**地一直报「不符合约定」。
+                'architecture': BLUEPRINT_ARCHITECTURE,
                 'batch_size': 1,
                 'stable_prefix': '0123456789',
                 'current_chapter_full': True,
@@ -219,7 +257,6 @@ def blueprints() -> dict[str, Any]:
             'char_refs': {'resolved': 12, 'pronoun_ok': 0, 'ambiguous': 0, 'late': 0,
                           'unknown': 0, 'invented': 0, 'no_names': 1, 'pronoun': 0},
             'verbatim_rewrites': [],
-            'verbatim_recovered': [],
             'verbatim_failures': [],
             'partial_regen_chapters': [],
             'repairs': [],
@@ -257,8 +294,11 @@ def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
     from novel.report import build, render
 
     bp = blueprints()
-    bp['_provenance']['verbatim_recovered'] = [
-        ['b01_01', 'hinge', '春风吹过老宅', '春风吹过老宅的院墙', 0.82],
+    # ⚠ 这里曾经注入 `verbatim_recovered`（配 `anchor_not_verbatim`）。那条判据随
+    #   `bounded-fidelity-v3` 裁撤 ⇒ 换成同一族里仍然活着的 `verbatim_failed`，
+    #   它同样是「detail 记本次数据、note 记规则 caveat」的形状。
+    bp['_provenance']['verbatim_failures'] = [
+        ['b01_01', 'span', '段号区间倒序'],
     ]
     outcomes = checks.check(
         global_g=global_grounding(), blueprints=bp, main_text=main_text())
@@ -268,11 +308,11 @@ def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
     )
     lines = {line.rule: line for line in report.rules}
 
-    anchor = lines['anchor_not_verbatim']
-    assert anchor.findings and '回取路径' in anchor.findings[0].detail
-    assert '最长公共子串' not in anchor.findings[0].detail
-    assert '期望恒为 0' not in anchor.findings[0].detail
-    assert anchor.note and '最长公共子串' in anchor.note
+    anchor = lines['verbatim_failed']
+    assert anchor.findings and '锚不到' in anchor.findings[0].detail
+    assert '段号区间倒序' in anchor.findings[0].detail, 'detail 要记本次数据'
+    assert '原型没有这条' not in anchor.findings[0].detail
+    assert anchor.note and '原型没有这条' in anchor.note
 
     moves = lines['place_moves']
     assert moves.findings and 'place 字面变化' in moves.findings[0].detail
@@ -315,7 +355,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 71
+    assert len(outs) == len(want) == 70
 
 
 def test_global_field_failures_route_to_the_dedicated_resample_action():
@@ -452,7 +492,7 @@ CASES: list[tuple[str, Mutator, str]] = [
      '定位不到 ⇒ 这一拍没有量纲：字数、覆盖率、hinge 归属全部落空'),
     ('verbatim_failed',
      _m(lambda g, b, m: b['_provenance'].__setitem__(
-         'verbatim_failures', [['b01_01', 'starts_with', '锚点不在本章原文里']])),
+         'verbatim_failures', [['b01_01', 'span', '段号越界']])),
      '`_provenance.verbatim_failures` 非空即失败态。'
      '⚠ 它替掉了「靠 hinges[].text 的**缺席**去反推失败态」——失败态从此有正面的落点'),
     ('edge_hole',
@@ -476,12 +516,16 @@ CASES: list[tuple[str, Mutator, str]] = [
          {'kind': '要害台词', 'source': _source(CH2, '街上已经有', '在吆喝。')})),
      '引的是别的章的原文，逐字无误但归错了章。'
      '⚠ 它几乎一定同时意味着该拍的 event 也越界了——而 event 会照原样发给写手'),
+    # ⚠⚠ 两处必须同时改：hinge 的 `source` 置空只说明「它失败了」，
+    #    **是哪一种失败由 `_provenance.verbatim_failures` 的根因决定**，
+    #    而根因 → 判据的对应表是 `contracts/invariants.py::HINGE_FAILURE_ROUTE`。
+    #    只改一处会落进 catch-all 的 `hinge_drift`。
     ('hinge_anchor_void',
      _m(lambda g, b, m: (
          _ch(b, 1)['beats'][0]['hinges'].append({'kind': '物件', 'source': None}),
          b['_provenance']['verbatim_failures'].append(
-             ['b01_01', 'hinge', '锚点不在本章原文']))),
-     '锚点在本章原文里根本找不到（是转述或编的）——四分流里唯一一条根因在模型身上的'),
+             ['b01_01', 'hinge', _cause('hinge_anchor_void')]))),
+     '短语在本章原文里根本找不到（是转述或编的）——四分流里唯一一条根因在模型身上的'),
     ('hinge_drift',
      _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'].append({
          'kind': '要害台词',

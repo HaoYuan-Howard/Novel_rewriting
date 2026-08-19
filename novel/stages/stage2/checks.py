@@ -35,7 +35,9 @@ import re
 import statistics
 from typing import Any, Iterable
 
-from contracts.invariants import BARE_PRONOUNS, TIME_LAYERS
+from contracts.invariants import (
+    BARE_PRONOUNS, BLUEPRINT_ARCHITECTURE, HINGE_FAILURE_ROUTE, TIME_LAYERS,
+)
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding as _finding
@@ -717,7 +719,7 @@ def _canon(c: _Ctx) -> list[Outcome]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BEAT_RULES = ('beat_id_unique', 'beat_id_format', 'span_unlocatable',
-               'anchor_not_verbatim', 'verbatim_failed', 'edge_hole', 'beats_collapsed',
+               'verbatim_failed', 'edge_hole', 'beats_collapsed',
                'beats_coarse', 'span_coverage', 'span_coverage_per_chapter',
                'uncovered_holes')
 
@@ -893,27 +895,18 @@ def _where(s: int, e: int, n: int) -> str:
 
 
 def _verbatim(c: _Ctx) -> list[Outcome]:
-    """回取那两条：`anchor_not_verbatim`（救回的）与 `verbatim_failed`（锚不到的）。
+    """`verbatim_failed`（锚不到的）。
 
-    ⚠⚠ **两条断言的是 `_provenance` 里的两个不同的键，不是字段值**——回取跑在落盘前，
+    ⚠⚠ **它断言的是 `_provenance` 里的一个键，不是字段值**——回取跑在落盘前，
     再断言锚点是不是原文字节，就是一条在改写之后**恒真**的判定。
+
+    ⚠ 这里曾经还有一条 `anchor_not_verbatim`（断言 `verbatim_recovered` 的计数），
+    随 `bounded-fidelity-v3` 一并裁撤：beat 的区间改由段号算出、hinge 那一侧的 LCS
+    兜底本来就是禁的 ⇒ 「按最长公共子串救回来的锚点」**结构性不存在**，
+    那条判据只会是一盏永远不亮的绿灯（`docs/LESSONS.md` 第 21 条的反面：
+    一条不可能红的绿灯没有判别力）。
     """
     out: list[Outcome] = []
-
-    recovered = c.prov.get('verbatim_recovered')
-    if recovered is None:
-        out.append(unverifiable(
-            'anchor_not_verbatim',
-            '这份产物的 `_provenance` 里**没有 `verbatim_recovered` 这个键** ⇒ '
-            '「有几个锚点是按最长公共子串**救回来的**」不知道。'
-            '⚠ 直接断言「锚点是原文字节」在回取之后**恒真** ⇒ 键不在就只能说不知道'))
-    else:
-        rows = [f'{r[0]}.{r[1]}: {r[2]!r}→{r[3]!r}({r[4]:.0%})' for r in recovered if len(r) >= 5]
-        out.append(ran('anchor_not_verbatim',
-                       [finding('anchor_not_verbatim',
-                                detail=f'{len(rows)} 个锚点走了回取路径：{_cut(rows, 6)}',
-                                evidence=sorted(rows))] if rows else [],
-                       scanned=f'{len(recovered)} 条救回记录'))
 
     failures = c.prov.get('verbatim_failures')
     if failures is None:
@@ -995,10 +988,18 @@ def _hinges(c: _Ctx) -> list[Outcome]:
                     if beat_id not in by_id:
                         cascade.append(item)
                         continue
-                    cause = failure_cause.get(beat_id, '')
-                    if '空档' in cause:
+                    # ⚠⚠ **按取值面查表，不按中文子串猜。** 这里曾经是
+                    #   `if '空档' in cause / elif '本章原文' in cause`——那是产地与判据之间
+                    #   一条**没有任何东西在守的隐式契约**：产地改一句措辞，
+                    #   `hinge_anchor_void` 就静默降级成 `hinge_drift`，报告照样绿。
+                    #   现在分流表在 `contracts/invariants.py::HINGE_FAILURE_ROUTE`，
+                    #   产地只许发表里那几句（守卫在 `tests/test_stage2_generation.py`）。
+                    #   ⚠ 认不出的根因**落 `drift`**（catch-all）而不是抛：一份手工编辑过的
+                    #   产物不该让读数器崩，但它也不该被静默归进某一条具体的病。
+                    route = HINGE_FAILURE_ROUTE.get(failure_cause.get(beat_id, ''))
+                    if route == 'hinge_in_hole':
                         hole.append(item)
-                    elif '本章原文' in cause:
+                    elif route == 'hinge_anchor_void':
                         void.append(item)
                     else:
                         drift.append((item, None))
@@ -1075,7 +1076,10 @@ def _context_observation(context: dict[str, Any]) -> tuple[str, list[str]]:
     batch_size = context.get('batch_size')
     current_full = context.get('current_chapter_full')
     future_visible = context.get('future_visible')
-    ok = (architecture == 'bounded-fidelity-v2' and batch_size == 1
+    # ⚠ 当前架构标识从**契约**取，不在判据里手抄一份字面：产地
+    #   （`extract.blueprint_context`）与这里此前各写一份 `'bounded-fidelity-v2'`，
+    #   升版时改一处忘一处，就得到「产物明明是新架构、判据说不符合约定」的假红。
+    ok = (architecture == BLUEPRINT_ARCHITECTURE and batch_size == 1
           and current_full is True and future_visible is False)
     verdict = '当前章全文保留、未来正文不可见' if ok else '⚠ 模型可见边界不符合约定'
     detail = (

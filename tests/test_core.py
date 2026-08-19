@@ -26,7 +26,7 @@ from novel.core.normalize import (
     quote_pair,
 )
 from novel.core.spans import (
-    HINGE_LCS_MIN, content_only, exact_span, extend_terminal_punct, locate_spans, walk_spans,
+    content_only, exact_span, extend_terminal_punct, locate_spans,
 )
 from novel.core.text import (
     SPLIT_MIN_SIDE, TERMINAL_PUNCT, locate_norm, min_hamming, norm, quote_count,
@@ -460,122 +460,57 @@ def test_terminal_punct_has_one_home():
     assert '，' not in TERMINAL_PUNCT
 
 
-# ── `span` 锚点的 `recover` 臂（F5-2）─────────────────────────────────────
+# ── 正式 `SourceSpan` 的校验与读取 ──────────────────────────────────────────
 #
-# 原型注释记着「实测 5 次」模型照抄锚点时改掉一两个字，下面两例逐字搬自那份注释。
-# ⚠ 每一条测的都是**边界与反例**：`recover` 这条臂真正的风险不是「救不回来」，
-#   而是「**该报错的时候把错盖掉了**」。
-
-_TEXT = '定然不会善罢甘休。她转身就走，难产的我说过一句话都算多。'
-
-
-def _bps(starts: str, ends: str) -> list[dict[str, object]]:
-    return [{'chapter_ordinal': 1,
-             'beats': [{'beat_id': 'b01_01', 'span': {'starts_with': starts, 'ends_with': ends}}]}]
-
-
-def _walk(starts: str, ends: str, *, recover: bool):
-    return list(walk_spans(_bps(starts, ends), {1: _TEXT}, recover=recover))
+# ⚠⚠ 这里曾经有一整节「`span` 锚点的 `recover` 臂」（6 条用例，钉着
+#    `walk_spans` / `_find_or_recover` 的双门槛与淘汰顺序）。那套装置随
+#    `bounded-fidelity-v3` 整批删除：`stage2.blueprint` 的模型**不再转写原文**，
+#    beat 的区间由 `novel/stages/stage2/paragraphs.py` 的段落表查出来。
+#    ⇒ 用例跟着删，只留下面那条**反向守卫**（梯子不许悄悄回来），
+#    形态与 `tests/test_artifact_versions.py` 里那条「迁移梯子不许回来」一致。
+#    ⚠ 「原样字节优先于内容空间」这条实测教训没有丢，它搬到了 hinge 的段内定位上
+#    （`novel/stages/stage2/normalize.py::_locate_phrase`，守卫在
+#    `tests/test_stage2_generation.py`）。
 
 
-def test_a_damaged_anchor_is_a_failure_when_recover_is_off():
-    """⭐⭐ **这一条是本臂的主守卫，不是那条「救得回来」。**
+def test_the_anchor_rescue_apparatus_stays_gone():
+    """⭐⭐ 反向守卫：「在原文里搜模型抄回来的锚点」那一整套不许悄悄回来。
 
-    `recover=False` 时锚点差一个字就必须报「找不到」——校验器走的正是这条路。
-    开着 `recover` 跑校验，「能定位」会把「**锚点不是原文字节**」这件事整个盖掉，
-    而那是 `anchor_not_verbatim` 与 `_provenance.verbatim_recovered` 唯一要说的话。
+    它一旦回来，就意味着有人为了让红灯变绿重新打开了「猜字节」这条路——
+    而那一下会同时改掉**下游写手真正收到的字节**（`locate_spans` 是 stage4 算
+    `source_chars` 与 stage2 判 `span_unlocatable` 共用的入口）。
+    ⚠ `lcs` **不在此列**：stage5 的 `must_appear_missing` 与 stage6 都在用它，
+    它比那套装置早进来，也不属于它。
     """
-    (_o, _be, hit, prob) = _walk('都不会善罢甘休', '算多', recover=False)[0]
-    assert hit is None
-    assert 'starts_with' in prob and '找不到' in prob
+    import inspect
+
+    import novel.core.spans as spans
+
+    for gone in ('walk_spans', '_find_or_recover', '_find_exact_raw',
+                 'extend_punct', 'HINGE_LCS_MIN', '_RECOVER_MIN_CHARS'):
+        assert not hasattr(spans, gone), f'{gone} 回来了 —— 猜字节那条路被重新打开了'
+    assert 'recover' not in inspect.signature(spans.locate_spans).parameters
+    assert callable(spans.lcs), '`lcs` 被顺手删了 —— stage5/stage6 还在用它'
 
 
-def test_recover_returns_the_fragment_it_actually_matched_not_the_anchor():
-    """`recover=True` 时按最长公共子串救回来，**而返回的是实际匹配到的那一截**。
+def test_lcs_recovery_is_no_longer_an_accepted_span_provenance():
+    """`recovery` 的取值面收窄到两档，`lcs` 不再被接受。
 
-    ⚠ 第二个返回值必须被 `walk_spans` 接回去：救回来的片段比原锚点短，
-    而它的 `len()` 是区间算术的输入——不接就是一串**错位且不报错**的原文偏移。
-    这里正面钉住区间落在原文里对的位置上。
+    ⚠ 断言的是**契约**那一份（`SPAN_RECOVERY`），不在这里手抄一遍取值——
+    手抄的那份哪天与契约分家，本条会继续绿着。
     """
-    (_o, _be, hit, prob) = _walk('都不会善罢甘休', '算多', recover=True)[0]
-    assert prob is None
-    a0, a1, _b0, _b1 = hit
-    # `'都不会善罢甘休'` 的 LCS 是 `'不会善罢甘休'`（6/7 = 0.86 ≥ 0.8，且 6 ≥ 4）。
-    # ⚠ 区间**带着句末的「。」**：`extend_punct` 对救回来的片段一样生效，
-    #   而那是对的——hinge 要逐字发给下游，削掉句末标点就是发出去一句不完整的原话。
-    assert _TEXT[a0:a1] == '不会善罢甘休。'
+    from contracts.invariants import SPAN_RECOVERY
 
-
-def test_the_prototypes_own_second_example_is_NOT_recoverable_by_its_own_thresholds():
-    """⭐⭐ **原型注释举的两例里，只有一例救得回来——而这不是 bug，是双门槛在做它该做的事。**
-
-    第二例 `'难产的对我说过'` ← 原文 `'难产的我说过'`（模型**插**了一个字，
-    上一例是**改**字）：最长公共子串只有 `'难产的'` **3 字**，
-    相对覆盖率 3/7 = **0.43**，绝对长度 3 < 4 ⇒ **两道门都不过**。
-
-    ⚠ 那段注释写的是「救的是同一类反复出现的损坏（**实测 5 次**：…）」——
-    括号里列的是**观察到的损坏**，不是「这几例都救回来了」。照字面读成后者，
-    就会去把门槛调低到能救它，而调低的代价是**把猜出来的字节当成原文发给写手**。
-
-    ⇒ 这一类的正确出路不是救，是**报**：它进 `_provenance.verbatim_failures`
-    （非空即失败态）。那个键正是为这一类存在的——在它之前，
-    「这份产物是不是失败态」只能靠遍历全部 hinge 去**反推一个缺席**。
-    """
-    (_o, _be, hit, prob) = _walk('定然', '难产的对我说过', recover=True)[0]
-    assert hit is None
-    assert 'ends_with' in prob and '找不到' in prob
-
-
-def test_both_recover_thresholds_are_and_not_or():
-    """⭐ 两道门是**与**关系，各拦一类。少一道就有一类假救回。
-
-    · 只有相对门槛（`HINGE_LCS_MIN`）时：两字锚点对上一个字就是 0.5，
-      三字锚点对上两个字就是 0.67——**短锚点太容易凑**。绝对门槛（≥4 字）拦它。
-    · 只有绝对门槛时：一个 20 字锚点里对上 4 个字也算救回来了。相对门槛拦它。
-    """
-    assert HINGE_LCS_MIN == 0.8
-    # ① 绝对门槛拦下的：'的我说' 与原文 '的我说' 本来就在——换成 '的他说'，
-    #    LCS = '说' 1/3，两道门都不过。
-    assert _walk('定然', '的他说', recover=True)[0][2] is None
-    # ② 相对门槛拦下的：锚点前半整段是编的，只有尾巴 4 个字对得上 ⇒ 4/12 = 0.33。
-    assert _walk('定然', '完全不相干的八个字算多', recover=True)[0][2] is None
-
-
-#: 章正文最后一段就是省略号 —— 实跑《夫君与鲛人孰》ch11 的形状，逐字保留。
-_PUNCT_TAIL_TEXT = '定然不会善罢甘休。\n\n她转身就走。\n\n......'
-
-
-def _walk_tail(starts: str, ends: str):
-    bps = [{'chapter_ordinal': 1,
-            'beats': [{'beat_id': 'b01_01',
-                       'span': {'starts_with': starts, 'ends_with': ends}}]}]
-    return list(walk_spans(bps, {1: _PUNCT_TAIL_TEXT}))[0]
-
-
-def test_a_punctuation_only_anchor_locates_by_raw_bytes():
-    """⭐ **锚点没有内容字符 ≠ 锚点是坏的。**
-
-    整段只有省略号的收尾在网文里很常见，模型把它抄成 `ends_with` 是**对的**。
-    原样字节这条路在游标之后唯一命中它 ⇒ 定位是确定的。
-    这里钉的是**淘汰顺序**：内容空间那条路的前置条件，不许提前到定位之前
-    去否掉整条 beat —— 那一下会让 `span_unlocatable` / `verbatim_failed` /
-    `edge_hole` 三条 HARD 同时红，而它们的 `fix` 是重生成，修不好一条没错的锚点。
-    """
-    (_o, _be, hit, prob) = _walk_tail('她转身就走。', '......')
-    assert prob is None
-    a0, _a1, _b0, b1 = hit
-    assert _PUNCT_TAIL_TEXT[a0:b1] == '她转身就走。\n\n......'
-
-
-def test_a_punctuation_only_anchor_absent_from_the_text_is_still_a_failure():
-    """⚠ 上一条不是「空内容锚点一律放行」：原样字节找不到时仍必须报。
-
-    空串在内容空间里处处命中（`content.find('', cur) == cur`），
-    退回那条路等于用一个假偏移冒充定位成功。
-    """
-    (_o, _be, hit, prob) = _walk_tail('她转身就走。', '？？？')
-    assert hit is None
-    assert 'ends_with' in prob and '无内容字符' in prob
+    assert SPAN_RECOVERY == ('exact', 'normalized')
+    raw = '甲说：“原样材料。”乙离开。'
+    start, end = raw.index('原样材料'), raw.index('”') + 1
+    source = {
+        'text': raw[start:end], 'start': start, 'end': end,
+        'normalized': content_only(raw[start:end]), 'recovery': 'lcs',
+    }
+    assert exact_span(source, raw)[2] == 'source span recovery is invalid'
+    for good in SPAN_RECOVERY:
+        assert exact_span({**source, 'recovery': good}, raw)[2] is None
 
 
 def test_exact_source_span_checks_offsets_text_normalization_and_order():
@@ -622,18 +557,25 @@ def test_locate_spans_accepts_verified_exact_sources_without_searching():
     assert problems == []
 
 
-def test_locate_spans_does_not_expose_recover_at_all():
-    """⭐ **量纲侧与校验侧根本没有这个旋钮，那个默认值是终态不是「还没接」。**
+def test_locate_spans_refuses_a_span_that_walks_backwards():
+    """⭐ **游标单调**：第 n 条的起点不得退到第 n-1 条的终点之前。
 
-    `locate_spans` 是 stage4 算 `source_chars` 与本层判 `span_unlocatable` 共用的入口。
-    给它开一个 `recover` 参数，下一次就会有人为了「让红灯变绿」把它打开——
-    而那一下会同时改掉**下游写手真正收到的字节**。
-    ⇒ 这一条钉的是签名：`recover` 只在 `walk_spans` 上，且只有落盘路会传 `True`。
+    这一条同时表达「区间重叠」与「顺序倒置」两件事。段号形状下它由
+    `normalize` 在整数上先判一次，而**读侧仍要独立再判一次**——
+    产物可能是人工编辑过的，读侧不许假定它一定经过归一。
     """
-    import inspect
-    assert 'recover' not in inspect.signature(locate_spans).parameters
-    p = inspect.signature(walk_spans).parameters['recover']
-    assert p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is False
-    # 而它确实还是那条会报错的路：坏锚点在 `locate_spans` 上照旧进 `problems`
-    _spans, problems = locate_spans(_bps('都不会善罢甘休', '算多'), {1: _TEXT})
-    assert len(problems) == 1
+    raw = '第一拍结束。第二拍结束。'
+    split = raw.index('第二拍')
+
+    def _beat(bid: str, start: int, end: int) -> dict:
+        text = raw[start:end]
+        return {'beat_id': bid, 'span': {
+            'text': text, 'start': start, 'end': end,
+            'normalized': content_only(text), 'recovery': 'exact'}}
+
+    # 第二拍退回到第一拍的中间 ⇒ 必须进 problems，而不是被静默接受
+    _spans, problems = locate_spans(
+        [{'chapter_ordinal': 1, 'beats': [
+            _beat('b01_01', 0, len(raw)), _beat('b01_02', split, len(raw))]}],
+        {1: raw})
+    assert len(problems) == 1 and 'after' in problems[0][1]

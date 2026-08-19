@@ -32,7 +32,9 @@ from novel.run import RunContext
 from novel.stages import initial_extract
 from novel.stages.stage2 import extract
 from novel.stages.stage3 import style
+from contracts.invariants import BLUEPRINT_ARCHITECTURE, HINGE_FAILURE_ROUTE
 from novel.stages.stage2.normalize import normalize_verbatim, response_shape
+from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
 
@@ -150,9 +152,16 @@ def _response_global() -> dict:
 
 
 def _response_blueprints() -> dict[int, dict]:
+    """底座正式产物 → 假响应形状。
+
+    ⚠ `response_shape` 要**该章自己的正文**才反投影得出段号（`bounded-fidelity-v3`）：
+    拿错章反算出来的段号一样是整数、一样不报错，只是指向别的地方。
+    """
+    texts = {section['chapter_ordinal']: section['text'] for section in main_text()}
     out: dict[int, dict] = {}
     for blueprint in copy.deepcopy(blueprints())['blueprints']:
-        out[blueprint['chapter_ordinal']] = response_shape(blueprint)
+        ordinal = blueprint['chapter_ordinal']
+        out[ordinal] = response_shape(blueprint, texts[ordinal])
     return out
 
 
@@ -262,7 +271,9 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert stored.provenance.usage is not None
         assert stored.provenance.usage.calls_made == 3
         context = stored.provenance.context
-        assert context.architecture == 'bounded-fidelity-v2'
+        # ⚠ 读契约那一份：手抄的字面在升架构那天不会跟着改，
+        #   而这条断言恰恰是「产地写对了没有」的守卫。
+        assert context.architecture == BLUEPRINT_ARCHITECTURE
         assert context.current_chapter_full is True
         assert context.future_visible is False
         assert context.stable_prefix
@@ -630,59 +641,127 @@ def test_stage2_blueprint_renormalize_rebuilds_code_derived_character_refs():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _cause_for(rule: str) -> str:
+    """反查「产地说哪句话会落到这条判据」——从 `HINGE_FAILURE_ROUTE` 现算，不手抄。"""
+    causes = [c for c, r in HINGE_FAILURE_ROUTE.items() if r == rule]
+    assert causes, f'{rule} 不在 `HINGE_FAILURE_ROUTE` 里 —— 它收不到任何根因'
+    return causes[0]
+
+
+def _one_beat(span: dict, hinges: list[dict]) -> list[dict]:
+    return [{'chapter_ordinal': 1, 'beats': [
+        {'beat_id': 'b01_01', 'span': span, 'hinges': hinges}]}]
+
+
 def test_hinge_source_does_not_absorb_colon_or_unmatched_quote():
+    """材料区间只接住**句末**闭合标点，不把冒号、开引号等下一段语义吞进来。
+
+    ⚠ 这条实测教训跨过了架构改造：区间的两端现在由段号决定，
+    但 hinge 的 `phrase` 仍要在段内逐字定位，`extend_terminal_punct` 那一格没变。
+    """
     chapter = '他摸到冰冷链子：「别动！」'
-    blueprint = [{
-        'chapter_ordinal': 1,
-        'beats': [{
-            'beat_id': 'b01_01',
-            'span': {'starts_with': '他摸到', 'ends_with': '别动'},
-            'hinges': [{
-                'kind': '物件', 'starts_with': '冰冷链子', 'ends_with': '冰冷链子',
-            }],
-        }],
-    }]
+    blueprint = _one_beat(
+        {'start_para': 1, 'end_para': 1},
+        [{'kind': '物件', 'para': 1, 'phrase': '冰冷链子'}])
     accounting = normalize_verbatim(blueprint, {1: chapter})
     source = blueprint[0]['beats'][0]['hinges'][0]['source']
     assert accounting['verbatim_failures'] == []
-    assert source['text'] == '冰冷链子'
+    assert source['text'] == '冰冷链子', '冒号与后面那句台词不该被吞进材料'
     assert chapter[source['start']:source['end']] == source['text']
 
 
-@pytest.mark.parametrize(('chapter', 'starts_with', 'ends_with'), [
+@pytest.mark.parametrize(('chapter', 'para', 'phrase'), [
     (
         '说出这话的瞬间。\n\n温夏白脸上的笑意顿时僵住。\n\n'
         '师姐想了想：「哦，所以呢？」\n\n温夏白:「......」\n\n若不是现在看着这两人就烦。',
-        '说出这话的瞬间。',
-        '温夏白:「......」',
+        4, '温夏白:「......」',
     ),
     (
         '我母妃心系百姓，却被父皇推出去做了罪人。\n\n她从城楼跳了下去。\n\n'
         '我的喉咙里只能发出呜咽。\n\n「母......」\n\n下一刻，有人蒙住我的眼睛。',
-        '我母妃心系百姓',
-        '「母......」',
+        4, '「母......」',
     ),
 ])
-def test_span_locator_prefers_exact_punctuation_disambiguation(
-        chapter, starts_with, ends_with):
-    """标点是唯一消歧信息时，不能先抹掉标点再误命中前面的同名字面。"""
-    blueprint = [{
-        'chapter_ordinal': 1,
-        'beats': [{
-            'beat_id': 'b01_01',
-            'span': {'starts_with': starts_with, 'ends_with': ends_with},
-            'hinges': [],
-        }],
-    }]
+def test_hinge_phrase_is_located_inside_its_own_paragraph(chapter, para, phrase):
+    """⭐⭐ **同名字面的消歧**：短语只在它自己那一段里找，不在整章里找。
+
+    这两份样本原本守的是「标点是唯一消歧信息时不许先抹掉标点」——
+    `温夏白:「......」` 在内容空间里会坍缩成 `温夏白`，而 `温夏白` 在第 2 段也出现过。
+    `bounded-fidelity-v3` 把这一整类歧义**从结构上**消掉了：搜索面就是那一段。
+    ⚠ 断言因此是**位置**而不只是字节：命中必须落在第 `para` 段里，
+    而不是前面那个同名字面上——那正是旧实现踩过的坑。
+    """
+    blueprint = _one_beat(
+        {'start_para': 1, 'end_para': len(paragraph_spans(chapter))},
+        [{'kind': '要害台词', 'para': para, 'phrase': phrase}])
 
     accounting = normalize_verbatim(blueprint, {1: chapter})
 
-    span = blueprint[0]['beats'][0]['span']
     assert accounting['verbatim_failures'] == []
-    assert accounting['verbatim_rewrites'] == []
-    assert accounting['verbatim_recovered'] == []
-    assert span['text'].endswith(ends_with)
-    assert span['end'] > chapter.index(ends_with)
+    source = blueprint[0]['beats'][0]['hinges'][0]['source']
+    p_start, p_end = paragraph_spans(chapter)[para - 1]
+    assert p_start <= source['start'] and source['end'] <= p_end, \
+        '命中跑到别的段去了 —— 段内定位那道闸没生效'
+    assert chapter[source['start']:source['end']] == source['text']
+    assert phrase in source['text']
+
+
+def test_a_phrase_that_exists_elsewhere_is_misplaced_not_invented():
+    """⭐ 「短语在本章、只是不在它指的那一段」与「整章都没有」是**两种病**。
+
+    说错了会让人去查一句原文里明明有的话。两者的根因分别落到
+    `hinge_drift` 与 `hinge_anchor_void`（对应表见 `HINGE_FAILURE_ROUTE`）。
+    """
+    chapter = '甲推门进屋。\n\n乙抬头看了他一眼。\n\n他说了一句冷话。'
+    misplaced = _one_beat(
+        {'start_para': 1, 'end_para': 3},
+        [{'kind': '要害台词', 'para': 1, 'phrase': '乙抬头看了他一眼'}])
+    invented = _one_beat(
+        {'start_para': 1, 'end_para': 3},
+        [{'kind': '要害台词', 'para': 1, 'phrase': '这句话整章都没有'}])
+
+    causes = {}
+    for name, bp in (('misplaced', misplaced), ('invented', invented)):
+        rows = normalize_verbatim(bp, {1: chapter})['verbatim_failures']
+        assert len(rows) == 1 and rows[0][1] == 'hinge'
+        causes[name] = rows[0][2]
+        assert bp[0]['beats'][0]['hinges'][0]['source'] is None
+
+    assert HINGE_FAILURE_ROUTE[causes['misplaced']] == 'hinge_drift'
+    assert HINGE_FAILURE_ROUTE[causes['invented']] == 'hinge_anchor_void'
+
+
+def test_every_cause_the_producer_emits_is_registered_in_the_routing_table():
+    """⭐⭐ **产地只许说分流表里那几句话。**
+
+    此前判据按中文子串猜根因（`'空档' in cause`），产地改一句措辞就能让
+    `hinge_anchor_void` 静默降级成 `hinge_drift` 而报告照样绿。
+    这一条把那条隐式契约变成会红的断言：**扫遍产地源码里所有 hinge 根因字面**，
+    每一句都必须在 `HINGE_FAILURE_ROUTE` 里。
+    ⚠ 扫的是源码而不是「跑几个样本看看」——样本覆盖不到的那一句正是会漏的那一句。
+    """
+    import ast
+    import inspect
+
+    from novel.stages.stage2 import normalize as producer
+
+    tree = ast.parse(inspect.getsource(producer.normalize_verbatim))
+    emitted = {
+        node.args[0].elts[2].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == 'append'
+        and isinstance(node.func.value, ast.Name) and node.func.value.id == 'failures'
+        and isinstance(node.args[0], ast.Tuple) and len(node.args[0].elts) == 3
+        and isinstance(node.args[0].elts[1], ast.Constant)
+        and node.args[0].elts[1].value == 'hinge'
+        and isinstance(node.args[0].elts[2], ast.Constant)
+    }
+    assert emitted, 'AST 扫描一句都没抓到 —— 产地的写法变了，这条守卫已经变成空验证'
+    unknown = emitted - set(HINGE_FAILURE_ROUTE)
+    assert not unknown, (
+        f'产地发了分流表里没有的根因 {sorted(unknown)}\n'
+        f'→ 判据会把它落进 catch-all 的 `hinge_drift`，而报告看起来一切正常')
 
 
 def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
@@ -776,7 +855,9 @@ def test_stage2_renormalize_rejects_locator_shaped_formal_artifact():
         assert extract.run_blueprint(blueprint_ctx, blueprint_client).passed
         path = book / extract.BLUEPRINT_REL
         raw = json.loads(path.read_text(encoding='utf-8'))
-        raw['blueprints'] = [response_shape(bp) for bp in raw['blueprints']]
+        texts = {section['chapter_ordinal']: section['text'] for section in main_text()}
+        raw['blueprints'] = [response_shape(bp, texts[bp['chapter_ordinal']])
+                             for bp in raw['blueprints']]
         path.write_text(
             json.dumps(raw, ensure_ascii=False, indent=2) + '\n',
             encoding='utf-8', newline='\n')
@@ -818,8 +899,10 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         broken = copy.deepcopy(raw)
         hinge = broken['blueprints'][0]['beats'][0]['hinges'][0]
         hinge['source'] = None
+        # ⚠ 根因从分流表现取：手抄一句中文会静默落进 catch-all 的 `hinge_drift`，
+        #   而下面那条 `failure_items` 断言看起来照样在测「修复路由带上了哪几条」。
         broken['_provenance']['verbatim_failures'] = [
-            ['b01_01', 'hinge', '锚点不在本章原文']]
+            ['b01_01', 'hinge', _cause_for('hinge_anchor_void')]]
         store.write_invalid(
             extract.BLUEPRINT_REL,
             ChapterBlueprints.model_validate(broken),

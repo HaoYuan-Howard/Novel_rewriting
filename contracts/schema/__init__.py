@@ -16,7 +16,7 @@ contracts.schema —— 产物 schema 的机器形态。
 盘上语料体检、`/api/novels/:sid/...` 的响应类型、将来 `tools/emit_json_schema.py`
 产前端 TS 类型，三个消费方读的是**同一张表**。手抄第二份的下场见 `Q-6`。
 
-【版本：全表恒 v1，没有迁移机制】
+【版本：没有迁移机制；除一次显式登记的破坏外全表恒 v1】
 ⚠⚠ 这里曾有一梯 v2→v3 migration（5 张 `MIGRATE_*` 表 + 6 个迁移函数），删除那天的实测：
 **登记了 migration 的 8 个家族在盘上一份低版本文件都没有**，而盘上唯二的 v2 文件
 （两本书的 `stage6/semantic_1.json`）恰好属于**刻意不登记 migration** 的那一族
@@ -172,7 +172,7 @@ class ArtifactSpec:
     ⚠ 这里曾有第三格 `migrations`（低版本 → 当前版本的迁移链）。删除的理由见模块头
     【版本】那一段：它保护的不是存量产物，是**没人重建过的**存量产物。
     `current_version` 保留为可写，是因为它仍要承担「这个形状破坏过几次」这件事——
-    只是今天全表都还没破坏过第一次。
+    今天全表只有 `stage2/chapter_blueprints.json` 破坏过一次（2026-08-19，见下表那一行）。
     """
 
     model: type[BaseModel]
@@ -195,9 +195,13 @@ class DecodedArtifact:
 #: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/**/draft.md` / 成书 `stage7/{title}_rewriting.txt`
 #: ——它们不是 JSON，schema 是**字节形态**，守卫在写盘口那一层。
 #:
-#: ⚠ **全表恒 v1**（`current_version` 默认值），一条 `migrations=` 都没有。
-#: 这不是「还没来得及升版」，是模块头【版本】那一段的裁决：破坏形状要 +1 并同批回答
+#: ⚠ **一条 `migrations=` 都没有**，将来也不许有。这不是「还没来得及写」，
+#: 是模块头【版本】那一段的裁决：破坏形状要 `current_version` +1 并同批回答
 #: 「存量产物由谁重建」。反向守卫在 `tests/test_artifact_versions.py`。
+#:
+#: ⚠ **全表恒 v1，只有一个例外**：`STAGE2_CHAPTER_BLUEPRINTS` 是 v2（2026-08-19）。
+#: 那一次破坏在下面它自己那一行写着理由与重建人；**升版的正确形态就是这样**——
+#: 在表里显式登记，而不是加一条迁移把旧字节读成新形状。
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport),
     STAGE0_MACHINE_SNAPSHOT: ArtifactSpec(MachineRemovalSnapshot),
@@ -213,7 +217,13 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
     STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit),
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints),
+    # ⚠⚠ **全表唯一的 v2。** 2026-08-19 `bounded-fidelity-v2` → `v3`：beat 的区间
+    #   改由**段号**算出，`BlueprintContext.architecture` 的 `Literal` 随之收窄、
+    #   `BlueprintProvenance.verbatim_recovered` 删除 ⇒ 存量蓝图**读不进来**。
+    #   **存量产物由谁重建：`stage2.blueprint` 整跑（付费）**；`.INVALID` 与 `_rounds/`
+    #   一律作废，不手补字段冒充当前产地。取值与升版记录见
+    #   `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 2),
     STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding),
     # ⚠ 三份 `*_edit.json` 不是节点产的，是**人产的输入**——但它们落在产物目录、
     #   被 `--apply-edit` 当决策集吃掉，所以形状同样是契约（stage7 先例，§三）。

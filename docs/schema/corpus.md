@@ -59,7 +59,7 @@ write 固定 `--deep 1,2,3 --shallow-rest`。ledger 必须对两书、八节点�
 
 语料 JSON 的盘上原始 `_schema_version` 必须直接等于 artifact registry 当前版本。这道闸**独立于
 `decode_artifact`**：盘面清点要的是盘上那个数字，不是解码器愿意接受的那个数字。（本仓现已没有
-迁移机制，全表恒 v1；这条闸原本防的是「迁移之后冒充 current」，梯子拆掉后它继续守住直比。）skip
+迁移机制；这条闸原本防的是「迁移之后冒充 current」，梯子拆掉后它继续守住直比。）skip
 allowlist 不能收录“缺语料 / missing corpus / 0 collected”一类候选，且硬验收若实际收集到
 0 条 corpus 测试会失败。
 
