@@ -614,6 +614,18 @@ STRUCTURAL_ROLES: Final = (
 DELIVERY_MODES: Final = ('scene', 'summary')
 TEMPORAL_LINKS: Final = ('start', 'continue', 'earlier', 'later', 'parallel', 'return')
 
+#: 「这一章大到该做一次结构决策」的源内容单元数下限（`R-5.6` 的 `structure_changed`）。
+#: ⚠⚠ **它同时是 prompt 与判据的唯一落点。** 从前 prompt 里那个 `4` 是**手抄的**，
+#: 判据侧 `checks.py` 另有一份行内字面量——两份数字各自漂的下场，`Q-6` 已经写过一遍。
+#:
+#: ⚠ **它约束的不是「必须重排」。** 2026-08-19 换口径之前，这条 HARD 判的是
+#: 「源单元 ≥4 的章不得仍按源序展开」，即**保持源序 = 阻断落盘**；于是模型对每一个够大的章
+#: 都必须移位，哪怕移位没有叙事理由。实测代价：交付那本书 11/11 章都是 `cold_open` 倒叙起手、
+#: 全书 37 拍里向前推进的 `continue` **只出现 1 次**，读者永远在往回走。
+#: 换口径后它判的是「与恒等基线（`novel/stages/stage4/measure.py::identity_plan` 的结构切片）
+#: 逐格相同」——**顺叙不再违规**，没做过任何结构决策才违规。
+PLAN_RECONSTRUCT_MIN_UNITS: Final = 4
+
 #: 「逐字挤占」的下限倍数：一拍的预算至少要是它**必须逐字写入的原话**字数的这么多倍。
 #: 2.0 的含义是「原话最多占一半」——低于它，剩下的字连交代谁在说、说完什么反应都不够。
 #:

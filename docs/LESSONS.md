@@ -188,6 +188,16 @@ TypeScript 可以约束 mock 与 real 实现满足同一接口，却不能证明
   同一次转向还漏了 `tests/test_stage4.py::_synthetic_response`（它按段序现编 `plan_beats`，
   即假定「写作单元数 == 源内容单元数」，而那正是被废除的恒等）。
   ⇒ 改契约方向时，把该条 R 的**全部**守卫（含 corpus 对账与测试台助手）一次列全再改。
+  ⚠ 2026-08-19 把 `structure_changed` 的口径**转回来**（「必须移位」→「三根轴至少动一根」）时，
+  那份「全部」是：`novel/stages/stage4/checks.py` · `contracts/judges/stage4.py` ·
+  `contracts/schema/stage4.py` 的字段注释 · `BACKEND_CONTRACT.md` 三处（R-5.6 条文 / R-5.11b 的
+  适用面 / §五覆盖率表的条数）· `docs/schema/stage4.md` 两处（条数 + 三行 sev 分类）·
+  `tests/hard_cases.py` 的反例 · `tests/test_coverage.py::_R_SECTION_SIZES` ·
+  `tests/test_stage4.py` 四处写死的条数——**一次列全了，没有第二轮补丁**。
+  ⚠⚠ 顺带一条**新的**形状：那次转回来时，第一版设计把「标签方向与源序对不上」判成红，
+  在盘上 26 个接缝里**误红 5 处**——因为 `transition` 说的是**故事时间**，而源叙述位置只在
+  `present` 层内才是它的代理（那本书 39/106 个 beat 是 `recall`）。⇒ **新判据上线前，
+  先把它在现役产物上跑一遍并逐条解释每一处命中**；解释不了的命中，多半是判据的可判定域没画对。
 
 三条处置：守卫要**调用生产那一个落点**而不是重拼一份；断言要**照判据表的 `sev`** 写，
 `info` 的正确守法是「越线必出声」而不是「不许越线」；给一条测试加**语料前提**之前，

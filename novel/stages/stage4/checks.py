@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 27 条判据的**实现**。行在 `contracts/judges/stage4.py`（`Q-12`）。
+checks.py —— 30 条判据的**实现**。行在 `contracts/judges/stage4.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 落盘闸门 / `--check-only` / `--revalidate` 走的都是
 `check()` 这一个函数——三条路各判一遍就会长出三把尺子。
@@ -11,8 +11,8 @@ checks.py —— 27 条判据的**实现**。行在 `contracts/judges/stage4.py`
 `output_ordinal == from_source_ordinals[0]` 的 `model_validator`，
 模型化之后 `one_to_one` 那条 HARD **根本构造不出会红的样本**。
 
-【本层的两份产物共用这一张表】前 17 条判计划，`ctx_*` 那 5 条判写作上下文，
-3 条度量各报一份读数。**上下文不在场时那 5 条走 `unver` 臂，不是「通过」。**
+【本层的两份产物共用这一张表】前 21 条判计划，`ctx_*` 那 5 条判写作上下文，
+4 条度量各报一份读数。**上下文不在场时那 5 条走 `unver` 臂，不是「通过」。**
 """
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ from typing import Any
 
 from contracts.invariants import (
     BEAT_ALERT_MAX, BEAT_ALERT_MIN, BEAT_MIN_CHARS, GROUPING_VERSION, HINGE_GROUPS,
-    PLAN_BUDGET_BAND, STYLE_WORDS, VERBATIM_BUDGET_FACTOR,
+    PLAN_BUDGET_BAND, PLAN_RECONSTRUCT_MIN_UNITS, STYLE_WORDS, TEMPORAL_LINKS,
+    VERBATIM_BUDGET_FACTOR,
 )
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
@@ -32,6 +33,22 @@ from novel.stages.stage4.measure import IDENTITY_GOAL, chapter_source_chars, ver
 
 #: 源 beat 编号里的章号。⚠ **别按定宽切片**：`b{ord:02d}_{seq:02d}` 在三位数的章上会溢出宽度。
 _BEAT_CH = re.compile(r'b(\d+)_')
+
+#: `transition` 标签宣称的方向 → 源叙述位置该往哪走（`+1` 前进 / `-1` 后退）。
+#: ⚠ `start` 不在表里：首单元没有上一单元可比，它归 `structure_transition` 管。
+#: ⚠ `parallel` 不在表里是**放行**不是遗漏：并行发生的两条线在源叙述里必然被顺序排开，
+#:   源位置对它没有约束力。
+#: ⚠⚠ 表外的取值会从 `want is None` 那一支**静默穿过去**，长得和「查过没事」一模一样
+#:   ⇒ `tests/test_stage4.py` 钉着一条闭合断言（`Q-12`：守卫的守卫）。
+_DIR_RULE: dict[str, int] = {'earlier': -1, 'later': 1, 'continue': 1, 'return': 1}
+
+#: `transition_direction` / `flashback_closed` 只在这一层里判。
+#: ⚠⚠ **源叙述位置只在【现场层】内才是故事时间的代理。** 一条 `recall` 拍在源位置 7，
+#: 它叙述的事件本身就先于它所在的现场帧——从源位置 1 的现场拍跳到源位置 7 的回忆拍，
+#: 标 `earlier` 是**对的**，尽管源位置在前进。
+#: 实测代价：不加这道门的朴素口径在交付那本书 26 个接缝里**误红 5 处**
+#: （3× `recall→recall` · 1× `hearsay→present` · 1× 上游漂移），而那 5 处一处都不是可证的违约。
+_PRESENT = 'present'
 
 #: `writer_context` 不在场时，那四条后置条件判据的说辞。**一句，四条共用。**
 _NO_CTX = ('盘上没有 `stage4/writer_context.json`（或它读不回来）——'
@@ -161,11 +178,40 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
                    scanned=f'{len(valid)} 条源 beat'))
 
     # ── ②.5 结构重构：源内容单元守恒，但输出顺序不再恒等于源序 ────────────
+    #
+    # ⚠⚠ **源叙述位置与叙述层读的是蓝图 `beats[]` 的数组下标，不是 `group_beats`。**
+    #   ① `transition` 问的是时间先后，与「拍怎么切」无关。挂上 `group_beats` 就凭空继承了
+    #      `R-5.11b` 的跨版本比较问题，而这两条判据本可以对分组参数**完全免疫**。
+    #      分组只是粗化（`beats.py` 的三条不变量：顺序恒等于源序 · 只并相邻 · 只并同层）
+    #      ⇒ 单元下标序与 beat 下标序同构，用更细的粒度不改变任何一次判定，却少一层依赖。
+    #   ② **也不解析 `beat_id` 尾号**：`novel/stages/stage2/normalize.py::normalize_beat_ids`
+    #      按 `enumerate(beats, 1)` 写死，尾号**就是**数组下标的序列化形式。两者恒等，
+    #      但那条恒等式由那个生产函数保证——在判据里重新解析一遍就是重拼生产的实参。
+    #   ③ 上游漂移时这样做**更诚实**：查不到下标的 beat 落进「判不动」并逐条点名；
+    #      解析尾号会让它「看起来能判」，而那个数字所属的蓝图已经不存在了。
+    #      （漂移发生时 `beat_ref`/`beat_coverage` 已经先红，本层不重复报根因。）
+    src_pos: dict[str, int] = {}
+    src_layer: dict[str, Any] = {}
+    for _b in (blueprints.get('blueprints') or []):
+        for _i, _be in enumerate(_b.get('beats') or []):
+            src_pos[_be.get('beat_id')] = _i
+            src_layer[_be.get('beat_id')] = _be.get('time_layer')
+
     source_groups = group_beats(blueprints, main_text, bidx)
     unit_shape_bad: list[tuple[Any, int, list[str]]] = []
     identity_chapters: list[Any] = []
     transition_bad: list[tuple[Any, str]] = []
     structure_metrics: list[str] = []
+    n_reconstructable = 0
+    axis_hits = Counter()
+    dir_bad: list[tuple[Any, int, Any, str, str, int]] = []
+    seam_unjudged: Counter[str] = Counter()
+    n_seam = n_dir = 0
+    fb_used: list[Any] = []
+    fb_open: list[tuple[Any, str]] = []
+    fb_unjudged: list[tuple[Any, str]] = []
+    role_first = Counter()
+    link_mix = Counter()
     for o in outs:
         oo = o.get('output_ordinal')
         srcs = o.get('from_source_ordinals') or []
@@ -195,10 +241,83 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
                 unit_shape_bad.append((oo, ui + 1, list(group)))
 
         source_order = list(range(len(expected)))
-        if len(expected) >= 4 and out_units == source_order:
-            identity_chapters.append(oo)
+
+        # ── 三根轴 vs 恒等基线 ────────────────────────────────────────────
+        # ⚠ 恒等基线**就是 `expected` 本身**：`measure.identity_plan` 的 segments 是从同一个
+        #   `group_beats` 产物逐单元摊开的、`delivery` 恒 `scene`。这里不另拼一份基线
+        #   （那就是第二把尺子），比的就是它。
+        # ⚠⚠ **判定式只有两项，别把它「补全」成三个松散的 `or`。**「入口移位」被
+        #   「分组序列不等」**蕴含**（入口一动，序列必然不等）；写成三个松散的析取会退化成
+        #   恒绿——实测交付那本书 11/11 章有合并、9/11 章有 summary。
+        # ⚠ `narrative_role` / `transition` **刻意不进比较切片**：改标签是零结构后果的措辞
+        #   变更，让它算数等于允许恒等改写换个马甲过关。
+        grouping_now = [list(be.get('from_beats') or []) for be in segments]
+        axis_entry = bool(out_units) and out_units[0] != 0
+        axis_group = grouping_now != [list(g) for g in expected]
+        axis_delivery = any(be.get('delivery') == 'summary' for be in segments)
+        if len(expected) >= PLAN_RECONSTRUCT_MIN_UNITS:
+            n_reconstructable += 1
+            if not (axis_group or axis_delivery):
+                identity_chapters.append(oo)
+            axis_hits['入口移位'] += axis_entry
+            axis_hits['分组重画'] += axis_group
+            axis_hits['summary 承载'] += axis_delivery
+            axis_hits['与恒等基线完全相同'] += not (axis_group or axis_delivery)
 
         transitions = [be.get('transition') for be in segments]
+        link_mix.update(t for t in transitions if t is not None)
+        if segments:
+            role_first[segments[0].get('narrative_role')] += 1
+
+        # ── `transition` 标签的方向 vs 源叙述序（逐接缝）──────────────────
+        # ⚠ **比较单位是接缝，不是段的 min/max。** `transition` 描述的是「与上一单元的时间
+        #   关系」，跳转发生在接缝上：前一段 `from_beats[-1]` → 当前段 `from_beats[0]`。
+        #   用 min/max 会在跨相邻合并（盘上是常态）时让两段源区间互相重叠，
+        #   min 说后退、max 说前进——**两个答案都能自圆其说，那不是判据是掷硬币**。
+        for si in range(1, len(segments)):
+            prev_fb = segments[si - 1].get('from_beats') or []
+            cur_fb = segments[si].get('from_beats') or []
+            if not prev_fb or not cur_fb:
+                continue                      # 空段归 empty_chapter / beat_ref，不在本条重复报
+            n_seam += 1
+            tail, head = prev_fb[-1], cur_fb[0]
+            if tail not in src_pos or head not in src_pos:
+                seam_unjudged['源 beat 不在当前蓝图里（根因看 beat_ref）'] += 1
+                continue
+            lt, lh = src_layer.get(tail), src_layer.get(head)
+            if lt != _PRESENT or lh != _PRESENT:
+                seam_unjudged[f'{lt}→{lh}'] += 1
+                continue
+            n_dir += 1
+            want = _DIR_RULE.get(transitions[si])
+            delta = src_pos[head] - src_pos[tail]
+            if want is not None and delta * want <= 0:
+                dir_bad.append((oo, si + 1, transitions[si], tail, head, delta))
+
+        # ── 回溯要在本章之内收口（两条腿的析取）──────────────────────────
+        # 腿 A 标签层：本章非首段出现过 `return`。
+        # 腿 B 位置层：末段落点 ≥ 首段起点（同带现场层门）。
+        # ⚠ 两条腿**互相兜住对方的误红**：纯标签口径会误红「回到了但没标 return」的章
+        #   （实测交付那本第 4 章：冷开场演过 6-7，回到 1-2，再一路 `continue` 推到 3-5 收束）；
+        #   纯位置口径则漏掉「标了 return 却其实没回去」。
+        if segments and any(t == 'earlier' for t in transitions[1:]):
+            fb_used.append(oo)
+            head_fb = segments[0].get('from_beats') or []
+            tail_fb = segments[-1].get('from_beats') or []
+            if 'return' in transitions[1:]:
+                pass                          # 腿 A 成立
+            elif not head_fb or not tail_fb:
+                fb_unjudged.append((oo, '首段或末段没有 from_beats'))
+            elif head_fb[0] not in src_pos or tail_fb[-1] not in src_pos:
+                fb_unjudged.append((oo, '源 beat 不在当前蓝图里（根因看 beat_ref）'))
+            elif (src_layer.get(head_fb[0]) != _PRESENT
+                  or src_layer.get(tail_fb[-1]) != _PRESENT):
+                fb_unjudged.append(
+                    (oo, f'{src_layer.get(head_fb[0])}→{src_layer.get(tail_fb[-1])}'))
+            elif src_pos[tail_fb[-1]] < src_pos[head_fb[0]]:
+                fb_open.append((oo, f'末段停在源位置 {src_pos[tail_fb[-1]] + 1}，'
+                                    f'早于起笔处 {src_pos[head_fb[0]] + 1}，且全章没有 return'))
+
         if transitions and transitions[0] != 'start':
             transition_bad.append((oo, f'首单元 transition={transitions[0]!r}，必须是 start'))
         if any(t == 'start' for t in transitions[1:]):
@@ -242,12 +361,20 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     else:
         out.append(ran('params_drift', [], scanned=f'比过：{current[0]}，阈值 {current[1]} 字'))
 
+    # ⚠ `scanned` 报的是**真实分母**（≥ 阈值的章），不是 `len(outs)`：这条判据从来只判够大的章，
+    #   拿全部输出章当分母是把分母报大了——绿灯的分母必须是它真的扫过的那些。
     out.append(ran('structure_changed',
                    fs('structure_changed',
-                      (f'可重构章节仍保持源内容单元原顺序：{identity_chapters}。'
-                       f'只有预算/措辞变化不算结构重构',
+                      (f'这些输出章与【恒等基线】逐格相同——入口仍是第 1 个源内容单元、'
+                       f'一个单元一个写作单元按源序排开、且没有一个单元压成 summary：'
+                       f'{identity_chapters}。'
+                       f'⚠ **保持源序本身不违规**：违规的是三根轴（叙事入口 / 单元分组 / '
+                       f'承载方式）一根都没动 ⇒ 这一章只改了预算和措辞。'
+                       f'恒等基线的定义落点是 `novel/stages/stage4/measure.py::identity_plan`'
+                       f'（`--identity` 产的就是它）',
                        [f'out{o}' for o in identity_chapters])) if identity_chapters else [],
-                   scanned=f'{len(outs)} 个输出章'))
+                   scanned=f'{n_reconstructable}/{len(outs)} 个源单元 ≥{PLAN_RECONSTRUCT_MIN_UNITS} '
+                           f'的输出章 × 3 根轴'))
     out.append(ran('structure_units',
                    fs('structure_units',
                       (f'源内容单元被拆开、内部换序或跨写作单元重复：{unit_shape_bad[:8]}',
@@ -280,6 +407,68 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     out.append(ran('structure_distance', [finding(
         'structure_distance', detail='；'.join(structure_metrics), evidence=structure_metrics)],
         scanned=f'{len(outs)} 个输出章'))
+
+    # ── ②.6 重排之后：标签说的方向是不是真的 · 回溯有没有收口 ────────────────
+    _unj = '；'.join(f'{k}×{v}' for k, v in seam_unjudged.most_common())
+    if n_dir:
+        out.append(ran('transition_direction',
+                       fs('transition_direction',
+                          (f'`transition` 标签宣称的方向与源叙述序相反'
+                           f'（输出章, 第几段, 标签, 接缝两端, 位移）：{dir_bad[:8]}。'
+                           f'闭卷写手只能照这个标签落笔——标错就是叫他把顺叙写成倒叙，'
+                           f'读者读到的是一段方向反了的过渡。'
+                           f'⚠ 只在接缝两端**都是现场层**时才判：那时源位置才是故事时间的代理',
+                           [f'out{oo}#{si}' for oo, si, *_ in dir_bad])) if dir_bad else [],
+                       scanned=f'{n_dir}/{n_seam} 个接缝可判（两端都是现场层）'
+                               f'{"；判不动：" + _unj if _unj else ""}'))
+    else:
+        out.append(unverifiable(
+            'transition_direction',
+            f'{n_seam} 个接缝一个都判不动{"：" + _unj if _unj else ""}。'
+            f'源叙述位置只在【现场层】内等于故事时间序——一端是 recall/hearsay 时，'
+            f'那一拍叙述的事件本身就先于它所在的现场帧，源位置**不再是故事时间的代理**。'
+            f'⚠ 这不是「通过」：一条查不了的与一条查过没事的，在报告上必须长得不一样',
+            scanned=f'0/{n_seam} 个接缝可判'))
+
+    if fb_used:
+        fb_rows: list[tuple[str, list[str]]] = []
+        if fb_open:
+            fb_rows.append(
+                (f'用了 `earlier` 回溯，但本章没有收口：{fb_open[:8]}。'
+                 f'一章结束时读者还停在过去，他就不知道这一章把故事推到了哪里。'
+                 f'⚠ 收口有两条路，满足任一即可：本章非首段出现 `return`，'
+                 f'或末段落点不早于起笔处',
+                 [f'out{oo}' for oo, _ in fb_open]))
+        if fb_unjudged:
+            fb_rows.append(
+                (f'这些章的收口**判不动**（不是通过）：{fb_unjudged[:8]}',
+                 [f'out{oo}' for oo, _ in fb_unjudged]))
+        out.append(ran('flashback_closed', fs('flashback_closed', *fb_rows),
+                       scanned=f'{len(fb_used) - len(fb_unjudged)}/{len(fb_used)} 个用了 `earlier` '
+                               f'的输出章可判（全书 {len(outs)} 章）'))
+    else:
+        out.append(ran('flashback_closed', [],
+                       scanned=f'{len(outs)} 章里没有一章用 `earlier` 回溯'))
+
+    # ⚠⚠ **这一条刻意没有阈值，名字也刻意不叫「饱和度」**（`Q-9`：探针的名字要等标定完再起）。
+    #   实测交付那本书 `cold_open` **11/11 章**、`earlier` 18 处、向前推进的 `continue`
+    #   全书**只有 1 处**——这个形状很可能就是「读起来混乱」的来源，但**多少算过量没有
+    #   任何真值支撑**，所以这一层只报读数（标定见 `docs/REQUIREMENTS.md` TODO-30）。
+    # ⚠ 它同时是 `transition_direction` 那条 HARD 的**分母出口**（`Q-9`：告警与度量不共用
+    #   分支）：可判率掉到 0 意味着有人在靠把 recall 单元排到段尾逃逸。
+    entry_mix = [
+        f'入口：cold_open {role_first.get("cold_open", 0)}/{len(outs)} 章'
+        f' · 移位入口 {axis_hits.get("入口移位", 0)}/{n_reconstructable} 个可重构章',
+        '衔接：' + (' · '.join(f'{t} {link_mix.get(t, 0)}' for t in TEMPORAL_LINKS)),
+        f'方向可判率：{n_dir}/{n_seam} 个接缝'
+        + (f'（判不动：{_unj}）' if _unj else ''),
+        '过关轴：' + (' · '.join(f'{k} {axis_hits.get(k, 0)}' for k in (
+            '入口移位', '分组重画', 'summary 承载', '与恒等基线完全相同'))
+            if n_reconstructable else f'没有源单元 ≥{PLAN_RECONSTRUCT_MIN_UNITS} 的章'),
+    ]
+    out.append(ran('structure_entry_mix', [finding(
+        'structure_entry_mix', detail='；'.join(entry_mix), evidence=entry_mix)],
+        scanned=f'{len(outs)} 个输出章 × {n_seam} 个接缝'))
 
     # ── ③ 篇幅预算带 ─────────────────────────────────────────────────────
     text_len, cov = chapter_source_chars(main_text, bidx)

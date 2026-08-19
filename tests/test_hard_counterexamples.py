@@ -116,6 +116,69 @@ def test_the_same_units_kept_whole_and_in_order_do_not_redden_it():
     assert 'structure_units' not in _unit_plan(('b1_01', 'b1_02'), ('b1_03',))
 
 
+# ─────────── `transition_direction` 的可判定域：靶子散了它会静静地绿 ───────────
+#
+# 这条 HARD **只在接缝两端都是现场层时才判**（`R-5.16`）：源叙述位置只在 `present` 层内
+# 等于故事时间序。⇒ 它有一个与 `structure_units` ③④ 同形的隐患——`time_layer` 一变，
+# 靶子就整个落进「判不动」，而**判不动与查过没事在断言上长得一模一样**。
+
+def _direction_plan(*segments_from_beats: tuple[str, ...], transition: str) -> set[str]:
+    """按给定摆法与标签走**真实判据入口**，返回命中的判据名集合。"""
+    from tests.hard_cases import _MAIN4, _BPS4_PRESENT, _b4, _ch4, _plan4
+
+    chapters = [_ch4(1, [_b4(*g) for g in segments_from_beats])]
+    chapters[0]['segments'][1]['transition'] = transition
+    return {f.rule for f in _plan4(chapters, blueprints=_BPS4_PRESENT,
+                                   main_text=[_MAIN4[0]])}
+
+
+def test_the_direction_fixture_really_has_a_present_to_present_seam():
+    """⭐ **守卫的守卫：接缝不是现场层的话，下面两条打的是空气。**
+
+    `_BPS4_PRESENT` 四拍全 `present` 是**承重的**。谁把其中一拍改成 `recall`
+    （或 stage2 换了 `time_layer` 的取值面），这条 HARD 的靶子就落进「判不动」，
+    红与绿两条断言会同时失去判别力——而测试仍然全部通过。
+    """
+    from tests.hard_cases import _BPS4_PRESENT
+
+    layers = [be.get('time_layer') for bp in _BPS4_PRESENT['blueprints']
+              for be in bp['beats']]
+    assert layers == ['present'] * 4, \
+        f'靶子散了：接缝两端不再都是现场层（{layers}），下面两条将判不动而不是判过'
+
+
+def test_a_transition_label_pointing_the_wrong_way_reddens_direction():
+    """源位置往后走（`b1_02` → `b1_03`），标签却宣称回到更早 ⇒ 红。
+
+    闭卷写手只能照这个标签落笔：标错就是叫他把顺叙写成倒叙。
+    """
+    assert 'transition_direction' in _direction_plan(
+        ('b1_01', 'b1_02'), ('b1_03', 'b1_04'), transition='earlier')
+
+
+def test_the_same_seam_with_an_honest_label_does_not_redden_it():
+    """⭐ **绿对照**：同一份材料、标签说真话 ⇒ 这条判据不响。
+
+    没有它，上面那条的红可能来自材料本身坏掉，而那种红与「方向真的判错了」同形。
+    """
+    assert 'transition_direction' not in _direction_plan(
+        ('b1_01', 'b1_02'), ('b1_03', 'b1_04'), transition='continue')
+
+
+def test_the_direction_rule_table_covers_every_temporal_link():
+    """⚠ **表外的取值会从 `want is None` 静默穿过去**（`Q-12`）。
+
+    给 `TEMPORAL_LINKS` 加一个值而忘了在 `_DIR_RULE` 表态，那个值的每一次使用
+    都会**看起来查过**——这正是本仓反复付过代价的那种「守卫开在没人走的门上」。
+    `start` 归 `structure_transition` 管；`parallel` 是**登记过的放行**不是遗漏。
+    """
+    from contracts.invariants import TEMPORAL_LINKS
+    from novel.stages.stage4.checks import _DIR_RULE
+
+    assert set(_DIR_RULE) | {'start', 'parallel'} == set(TEMPORAL_LINKS), \
+        '衔接取值面与方向表分家了：表外的值会被静默放行'
+
+
 # ─────────── 红了还不够：**病因也要说对**（TODO-10b） ───────────
 #
 # 一条 HARD 亮起时附的那句 detail 就是人拿到的**全部**线索。说错了病因，

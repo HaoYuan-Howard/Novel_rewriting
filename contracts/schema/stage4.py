@@ -89,7 +89,9 @@ class PlanBeat(StrictModel):
     #: ⚠ 它上面挂着结构级 [HARD]，不是只靠 prompt 叮嘱：
     #: `beat_ref`（引用存在且属本章）· `beat_coverage`（每个源 beat 都被覆盖——
     #: 压缩靠调低预算，不靠丢内容）· `structure_units`（源内容单元不可拆）以及
-    #: `structure_changed` / `structure_transition`（正式 Deep 计划必须真的重排且衔接可执行）。
+    #: `structure_changed`（够大的章必须做过一次结构决策——**保持源序不违规**，
+    #: 与恒等基线逐格相同才违规）· `structure_transition`（衔接标记可执行）以及
+    #: `transition_direction`（标签宣称的方向要与源叙述序对得上，只在现场层接缝上判）。
     from_beats: list[str] = Field(min_length=1)
 
 

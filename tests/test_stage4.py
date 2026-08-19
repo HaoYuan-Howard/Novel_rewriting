@@ -56,8 +56,8 @@ def test_rebuilding_the_context_then_checking_gives_a_green_badge(book):
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
 
         want = {r.rule for r in REGISTRY.of_stage('stage4')}
-        assert {ln.rule for ln in rep.rules} == want, '27 条判据一行不少'
-        assert len(rep.rules) == 27
+        assert {ln.rule for ln in rep.rules} == want, '30 条判据一行不少'
+        assert len(rep.rules) == 30
         assert not [ln.rule for ln in rep.rules if ln.status == 'skipped'], \
             '有判据注册了却没有任何代码执行过它'
         assert not [ln.rule for ln in rep.rules if ln.sev == 'hard' and ln.status == 'hit'], \
@@ -145,6 +145,51 @@ def test_system_prompt_contains_every_current_style_word():
 
     assert prompts.PLAN_SYS.strip()
     assert all(f'「{word}」' in prompts.PLAN_SYS for word in STYLE_WORDS)
+
+
+def test_the_reconstruction_threshold_reaches_the_prompt_from_its_single_home():
+    """⭐ 「一章大到几个单元才要做结构决策」这个数，prompt 与判据**只能有一份**。
+
+    它从前是 prompt 里一个手抄的 `4`，判据侧 `checks.py` 另有一份行内字面量——
+    两份数字各自漂的下场 `Q-6` 已经写过一遍。⚠ 顺带钉住渲染没漏：`fill()` 会对
+    缺值的占位符抛异常，但**多写一个 `$` 字面量它不管**，那会原样发给模型。
+    """
+    from contracts.invariants import PLAN_RECONSTRUCT_MIN_UNITS
+
+    assert str(PLAN_RECONSTRUCT_MIN_UNITS) in prompts.PLAN_SYS
+    assert '$' not in prompts.plan_system(), 'system prompt 里残留了未渲染的占位符'
+
+
+def test_keeping_the_source_order_is_not_a_violation_when_something_else_changed():
+    """⭐⭐ **换口径的验收断言：顺叙不再是违规。**
+
+    2026-08-19 之前 `structure_changed` 判的是「源单元 ≥4 的章不得仍按源序展开」——
+    保持源序 = 阻断落盘。于是够大的章，模型没有「本章顺序本来就对」这个选项，只能移位；
+    实测代价是交付那本书 11/11 章 `cold_open` 倒叙起手、全书向前推进的 `continue` 只剩 1 处。
+
+    新口径判的是「与恒等基线逐格相同」：这里保持源序、也没有合并，只是把其中一拍的承载
+    压成 `summary`——**三根轴动了一根，就不该红**。
+    """
+    from tests.hard_cases import _MAIN4, _BPS4_PRESENT, _b4, _ch4, _plan4
+
+    chapters = [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03'), _b4('b1_04')])]
+    chapters[0]['segments'][2]['delivery'] = 'summary'
+    hit = {f.rule for f in _plan4(chapters, blueprints=_BPS4_PRESENT,
+                                  main_text=[_MAIN4[0]])}
+    assert 'structure_changed' not in hit, \
+        f'保持源序 + 一处 summary 仍被判成恒等改写——换口径没生效（命中 {sorted(hit)}）'
+
+
+def test_the_reconstruction_gate_has_not_been_relaxed_into_always_green():
+    """⭐ **反向**：三根轴一根都没动的那一份，仍然必须红。
+
+    ⚠ 这条与上一条是**一对**。只留上一条，谁把判定式「补全」成三个松散的 `or`
+    （合并 or summary or 入口移位）都能让它继续绿——而那样这条 HARD 就恒绿了：
+    盘上实测 11/11 章有合并、9/11 章有 summary。靶子取自生产落点 `identity_plan()`。
+    """
+    from tests.hard_cases import _identity_structure4
+
+    assert 'structure_changed' in {f.rule for f in _identity_structure4()}
 
 
 def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
@@ -320,6 +365,30 @@ def test_the_planner_can_actually_satisfy_goal_landing_from_what_it_is_given(boo
         skeleton = user.split(prompts.BLOCK_SKELETON)[1]
         assert f'"plan_beat":"{sorted(by_unit)[0]}"' in skeleton, \
             'event_units 的单元编号与骨架块下发的 plan_beat 不是同一套'
+    finally:
+        box.close()
+
+
+@pytest.mark.corpus
+@pytest.mark.parametrize('book', books())
+def test_the_planner_can_actually_tell_which_beats_are_present_layer(book):
+    """⭐ **`transition_direction` 的可满足性，同样必须由下发面本身保证。**
+
+    那条 HARD 只在接缝两端都是**现场层**时判，而 prompt 明说了这个口径
+    （「接缝两端都是第一种时，编号大的那一头就是故事时间更晚的」）。
+    ⇒ 模型必须能从下发面上看出每个源内容单元是哪一层。看不出来，
+    它就只能猜——而那正是 `goal_landing` 那次「50 个边界目标错 20 个」的形状：
+    **HARD 要求的信息不在模型手里，判据就退化成运气。**
+    """
+    box = sandbox.Sandbox(book, STAGE4_INPUTS)
+    try:
+        _system, user = plan.build_prompt(_ctx_for(box, 'stage4.plan'))
+        skeleton = json.loads(user.split(prompts.BLOCK_SKELETON)[1]
+                              .split(prompts.BLOCK_SIZES)[0].strip())
+        segments = [s for row in skeleton['blueprints'] for s in row['segments']]
+        assert segments, '骨架块一个源内容单元都没下发'
+        assert all(s.get('time_layer') for s in segments), \
+            '有源内容单元没带 time_layer ⇒ 模型看不出接缝两端是不是现场层'
     finally:
         box.close()
 
@@ -570,7 +639,7 @@ def test_check_only_reads_the_blocked_draft_when_no_formal_plan_exists():
 
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
         assert rep.provenance.invalid is True, '报告必须自报判的是 .INVALID 稿'
-        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 27
+        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 30
         assert all(ln.status != 'skipped' for ln in rep.rules), \
             '判据要真的跑在问题稿上，不能整排落成「没跑成」'
     finally:
@@ -592,7 +661,7 @@ def test_check_only_still_refuses_when_neither_draft_is_on_disk():
 
 @needs_corpus
 def test_the_registered_rules_all_produce_a_row_on_a_real_book():
-    """⭐ 照抄 `tests/test_stage3.py` 的形态：**27 条一行不少 + 0 条 `skipped`**。
+    """⭐ 照抄 `tests/test_stage3.py` 的形态：**30 条一行不少 + 0 条 `skipped`**。
 
     `build()` 遍历判据注册表而不是遍历 findings ⇒ 一条判据不可能因为
     「实现忘了调」而从报告里消失，它会变成 `skipped`。本条盯的就是那个 0。
@@ -601,7 +670,7 @@ def test_the_registered_rules_all_produce_a_row_on_a_real_book():
     box = sandbox.Sandbox(book, STAGE4_INPUTS)
     try:
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
-        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 27
+        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 30
         assert all(ln.status != 'skipped' for ln in rep.rules)
         assert all(ln.scanned for ln in rep.rules), '绿灯必须报出自己的分母（判据 31）'
     finally:

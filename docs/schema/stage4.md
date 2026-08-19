@@ -177,13 +177,19 @@ raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 
 ## 六、现行判据
 
-当前注册表共 **27 条**：**18 hard、5 info、4 metric**。计划和写作上下文共用同一张表。
+当前注册表共 **30 条**：**19 hard、6 info、5 metric**。计划和写作上下文共用同一张表。
 
 | 严重度 | 当前规则 id |
 |---|---|
-| hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `structure_changed` · `structure_units` · `structure_transition` · `goal_landing` · `budget_int` · `budget_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` · `ctx_hinge_delivered` |
-| info | `flat_chapter` · `beat_size` · `beat_reuse` · `verbatim_starved` · `params_drift` |
-| metric | `verbatim_share` · `plan_params` · `ctx_source` · `structure_distance` |
+| hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `structure_changed` · `transition_direction` · `structure_units` · `structure_transition` · `goal_landing` · `budget_int` · `budget_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` · `ctx_hinge_delivered` |
+| info | `flashback_closed` · `flat_chapter` · `beat_size` · `beat_reuse` · `verbatim_starved` · `params_drift` |
+| metric | `verbatim_share` · `plan_params` · `ctx_source` · `structure_distance` · `structure_entry_mix` |
+
+`structure_changed` 判的是「与**恒等基线**（`novel/stages/stage4/measure.py::identity_plan` 的结构
+切片：一个源单元一个写作单元 · 按源序排开 · `delivery` 恒 `scene`）逐格相同」——三根轴（叙事入口 /
+单元分组 / 承载方式）至少动一根。**保持源序本身不违规。**
+`transition_direction` 与 `flashback_closed` 只在接缝两端都是**现场层**时判：源叙述位置只在
+`present` 层内才是故事时间的代理，任一端是 `recall`/`hearsay` 记「判不动」而不是「通过」。
 
 本层没有旧规则占位、旧字段兼容分支或双形状读取路径。权威定义在
 `contracts/judges/stage4.py`；报告形状见 [`_report.md`](./_report.md)。

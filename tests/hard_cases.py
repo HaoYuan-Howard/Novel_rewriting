@@ -171,10 +171,50 @@ _GREEN4 = lambda: [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03')]),
                    _ch4(2, [_b4('b2_01')])]
 
 
+#: 四拍**全现场层**、各自独立成源内容单元的一章。两条新判据都需要它：
+#: `structure_changed` 要「源单元 ≥ `PLAN_RECONSTRUCT_MIN_UNITS`」才判；
+#: `transition_direction` 要「接缝两端都是 `present`」才判——`_BPS4` 的 `b1_02` 是 `recall`，
+#: 拿它造靶子会让接缝落进「判不动」，而那与「查过没事」在断言上同形。
+_BPS4_PRESENT = {'blueprints': [
+    {'chapter_ordinal': 1, 'beats': [
+        {'beat_id': f'b1_0{i}', 'event': f'事件{i}', 'time_layer': 'present'}
+        for i in range(1, 5)]}]}
+
+
 def _bad_transition4() -> list:
     chapters = _GREEN4()
     chapters[0]['segments'][0]['transition'] = 'continue'
     return _plan4(chapters)
+
+
+def _identity_structure4() -> list:
+    """`structure_changed` 的反例**来自生产落点**：`identity_plan()` 产的就是恒等基线。
+
+    ⚠⚠ 手搓一份「一单元一段 · 全 `scene` · 按源序」的计划，等于把恒等基线的定义**抄第二遍**，
+    而这条 HARD 判的正是「与那个定义逐格相同」。定义一改，抄的那份就悄悄不再是靶子，
+    这条反例会静静地绿——那是 `LESSONS §21` 第一形状（守卫重拼了生产的实参）。
+    `--identity` 是 `FREE_ENTRIES` 里的现役 0 成本节点，它每跑一次就产一份这样的计划。
+
+    ⚠ 它同时是「新口径没被换成恒绿」的证明：换口径后 `structure_changed` 判的是三根轴
+    一根都没动，而恒等基线正是那个唯一的样本。
+    """
+    from novel.stages.stage4.measure import IDENTITY_GOAL, identity_plan
+
+    plan = identity_plan(_BPS4_PRESENT, [_MAIN4[0]])
+    return _plan4(plan['output_chapters'], strategy=IDENTITY_GOAL,
+                  blueprints=_BPS4_PRESENT, main_text=[_MAIN4[0]])
+
+
+def _bad_direction4() -> list:
+    """`transition_direction`：接缝两端都是现场层、源位置在**前进**，标签却宣称 `earlier`。
+
+    摆法 `[b1_01,b1_02] [b1_03,b1_04]`：接缝是 `b1_02`(源位置 2) → `b1_03`(源位置 3)，
+    往后走，而第二段标 `earlier`（回到更早）⇒ 闭卷写手会照着写一句方向反了的过渡。
+    ⚠ 分组与源序不同（两两合并）⇒ `structure_changed` 不会跟着响，靶子是干净的。
+    """
+    chapters = [_ch4(1, [_b4('b1_01', 'b1_02'), _b4('b1_03', 'b1_04')])]
+    chapters[0]['segments'][1]['transition'] = 'earlier'
+    return _plan4(chapters, blueprints=_BPS4_PRESENT, main_text=[_MAIN4[0]])
 
 
 def _bad_goal_landing4() -> list:
@@ -248,7 +288,7 @@ CASES: dict[str, Case] = {
     'rn_book_incomplete': Case('stage7', lambda: _rename(missing=[2])),
     'rn_txt_stale': Case('stage7', _rn_txt_stale),
 
-    # ── stage4（18 HARD）──────────────────────────────────────────────────
+    # ── stage4（19 HARD）──────────────────────────────────────────────────
     'one_to_one': Case('stage4', lambda: _plan4(
         [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03'), _b4('b2_01')], srcs=[1, 2])])),
     'ordinal_seq': Case('stage4', lambda: _plan4(
@@ -261,11 +301,8 @@ CASES: dict[str, Case] = {
     'beat_ref': Case('stage4', lambda: _plan4(
         [_ch4(1, [_b4('b9_99'), _b4('b1_01'), _b4('b1_02'), _b4('b1_03')]),
          _ch4(2, [_b4('b2_01')])])),
-    'structure_changed': Case('stage4', lambda: _plan4(
-        [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03'), _b4('b1_04')])],
-        blueprints={'blueprints': [{'chapter_ordinal': 1, 'beats': [
-            {'beat_id': f'b1_0{i}', 'event': f'事件{i}', 'time_layer': 'present'}
-            for i in range(1, 5)]}]}, main_text=[_MAIN4[0]])),
+    'structure_changed': Case('stage4', _identity_structure4),
+    'transition_direction': Case('stage4', _bad_direction4),
     'structure_units': Case('stage4', lambda: _plan4(
         [_ch4(1, [_b4('b1_01'), _b4('b1_01'), _b4('b1_02'), _b4('b1_03')]),
          _ch4(2, [_b4('b2_01')])])),
