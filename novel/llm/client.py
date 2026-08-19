@@ -108,6 +108,21 @@ def rungs_from_effort(effort: str | None) -> tuple[tuple[str, bool], ...]:
 #: 高预算防止长正文/推理被 API 默认上限**悄悄**截断。确需更小上限时显式传。
 DEFAULT_MAX_TOKENS: Final = 64_000
 
+#: 内容闸的机器可数名。**取值面只有这一份**，`llm_rung_rejected` 事件的 `gate` 取自它。
+#: 与 `ask_json` docstring 里那三道一一对应，加上 `validator`（可选的第四道）与
+#: `ask_text` 独有的 `empty_text`。
+REJECT_GATES: Final[tuple[str, ...]] = (
+    'parse',        # ① json.loads 失败——截断的典型形态（finish_reason='length'）
+    'require',      # ② 空壳闸：顶层缺必需键，或值结构上是空的
+    'schema',       # ③ model_validate：形状 / 类型 / extra='forbid'
+    'validator',    # ④ 调用点自带的那一道（只有部分调用点传）
+    'empty_text',   # ask_text 专有：正文为空
+)
+
+#: 降档理由进事件时的截断长度。`ValidationError` 的文本可以有几千字，而观测事件是
+#: **一行 JSON**、要能被作业日志与 `grep` 消化 ⇒ 截断并标记，不整段灌进去。
+REJECT_REASON_MAX: Final = 400
+
 
 M = TypeVar('M', bound=BaseModel)
 TextValidator = Callable[[str, ChatResponse], str | None]
@@ -244,7 +259,7 @@ class LlmClient:
         # 先横扫所有档位的已验证缓存，再发任何新请求。真实语义审判暴露过：一章在
         # medium/low 档已有合格缓存，但旧顺序会因为 high miss 立刻重发 high，既重复
         # 付费又污染 A/B 成本。缓存档位表示“哪种模型行为产出”，不是质量优先级。
-        for effort, thinking in active_rungs:
+        for i, (effort, thinking) in enumerate(active_rungs):
             got = self._read_cached(
                 system, user, effort=effort, thinking=thinking, json_mode=False,
                 max_tokens=max_tokens, purpose=purpose, progress=progress,
@@ -254,29 +269,39 @@ class LlmClient:
             resp, key = got
             text = resp.text
             why = None if text else '正文为空'
+            gate = 'empty_text'
             if why is None and validator is not None:
                 why = validator(text, resp)
+                gate = 'validator'
             if why is None:
                 return text
             self.cache.evict(key)
+            self._observe_rung_rejected(
+                purpose=purpose, rungs=active_rungs, index=i, source='cache',
+                gate=gate, why=why, resp=resp, json_mode=False)
             tried.append(
                 f'effort={effort} think={thinking} [缓存] '
                 f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
                 f'拒绝={why}')
 
-        for effort, thinking in active_rungs:
+        for i, (effort, thinking) in enumerate(active_rungs):
             resp, key, _cached = self._call_keyed(
                 system, user, effort=effort, thinking=thinking, json_mode=False,
                 max_tokens=max_tokens, purpose=purpose, use_cache=False,
                 progress=progress, cache_policy=policy)
             text = resp.text
             why = None if text else '正文为空'
+            gate = 'empty_text'
             if why is None and validator is not None:
                 why = validator(text, resp)
+                gate = 'validator'
             if why is None:
                 self._keep(key, resp, cache_policy=policy)  # ← 判定可用之后才写
                 return text
             self.cache.evict(key)
+            self._observe_rung_rejected(
+                purpose=purpose, rungs=active_rungs, index=i, source='wire',
+                gate=gate, why=why, resp=resp, json_mode=False)
             tried.append(
                 f'effort={effort} think={thinking} '
                 f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
@@ -338,10 +363,14 @@ class LlmClient:
         self._preflight(system, user, rungs=active_rungs, json_mode=True,
                         max_tokens=max_tokens, purpose=purpose)
 
-        def inspect_response(resp: ChatResponse) -> tuple[M | None, str | None, str]:
+        def inspect_response(
+                resp: ChatResponse) -> tuple[M | None, str | None, str, str]:
+            """⚠ 第四个返回值是**闸名**（`REJECT_GATES` 之一），不是给人读的。
+            `why` 那句话事后要靠人读才能归类，而降档统计要能机器数。"""
             content = _strip_fences(resp.content)
             why = None
             obj = None
+            gate = 'parse'
             try:
                 data = json.loads(content)
             except json.JSONDecodeError as e:
@@ -351,21 +380,21 @@ class LlmClient:
                            if not isinstance(data, dict) or k not in data
                            or _is_empty(data[k])]
                 if missing:
-                    why = f'顶层缺必需键（或值为空）: {missing}'
+                    why, gate = f'顶层缺必需键（或值为空）: {missing}', 'require'
                 else:
                     try:
                         obj = model_cls.model_validate(data)
                     except ValidationError as e:
-                        why = f'不合 {model_cls.__name__} 的契约: {e}'
+                        why, gate = f'不合 {model_cls.__name__} 的契约: {e}', 'schema'
                     else:
                         if validator is not None:
-                            why = validator(obj, resp)
-            return obj, why, content
+                            why, gate = validator(obj, resp), 'validator'
+            return obj, why, content, gate
 
         errors: list[str] = []
 
         # 同 ask_text：任一档已有合格缓存时，本次必须是 0 次真请求。
-        for effort, thinking in active_rungs:
+        for i, (effort, thinking) in enumerate(active_rungs):
             got = self._read_cached(
                 system, user, effort=effort, thinking=thinking, json_mode=True,
                 max_tokens=max_tokens, purpose=purpose, progress=progress,
@@ -373,20 +402,23 @@ class LlmClient:
             if got is None:
                 continue
             resp, key = got
-            obj, why, content = inspect_response(resp)
+            obj, why, content, gate = inspect_response(resp)
             head = (f'effort={effort} think={thinking} [缓存] '
                     f'finish={resp.finish_reason} clen={len(content)}')
             if why is None:
                 return obj
             self.cache.evict(key)
+            self._observe_rung_rejected(
+                purpose=purpose, rungs=active_rungs, index=i, source='cache',
+                gate=gate, why=why, resp=resp, json_mode=True)
             errors.append(f'{head} {why}')
 
-        for effort, thinking in active_rungs:
+        for i, (effort, thinking) in enumerate(active_rungs):
             resp, key, _cached = self._call_keyed(
                 system, user, effort=effort, thinking=thinking, json_mode=True,
                 max_tokens=max_tokens, purpose=purpose, use_cache=False,
                 progress=progress, cache_policy=policy)
-            obj, why, content = inspect_response(resp)
+            obj, why, content, gate = inspect_response(resp)
             head = (f'effort={effort} think={thinking} '
                     f'finish={resp.finish_reason} clen={len(content)}')
             if why is None:
@@ -394,12 +426,55 @@ class LlmClient:
                 return obj
             # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
             self.cache.evict(key)
+            self._observe_rung_rejected(
+                purpose=purpose, rungs=active_rungs, index=i, source='wire',
+                gate=gate, why=why, resp=resp, json_mode=True)
             errors.append(f'{head} {why}')
         raise LlmFailed(
             f'{self.ctx.node}/{purpose}: 走完 {len(active_rungs)} 档阶梯仍然没有可用的 JSON。\n  '
             + '\n  '.join(errors)
             + f'\n⚠ 必需顶层键来自 {model_cls.__name__}（判据 39：每个结构化调用点'
               f'声明【全部】必需顶层键，而这一条现在由派生保证）')
+
+    def _observe_rung_rejected(self, *, purpose: str,
+                               rungs: tuple[tuple[str, bool], ...], index: int,
+                               source: str, gate: str, why: str,
+                               resp: ChatResponse, json_mode: bool) -> None:
+        """降一档时留下【为什么降】。**这条事件是降档理由的唯一出口。**
+
+        ⚠⚠ 它补的是一个实测踩过的观测洞：内容闸判定不可用时，这里只做
+        `cache.evict` + 降一档，**既不产事件也不写日志**；而账本那一行记的是
+        **传输层**的结论（`outcome=ok` / `finish_reason=stop` / `will_retry=false`），
+        读起来像「这一次很成功」。⇒ 2026-08-19 复盘 `stage4.plan` 那次降档时，
+        理由在三处同时不在：账本只有传输层、降档路径不出声、被拒的那一档响应
+        随即被 `ResponseCache.evict` 从盘上删掉；`errors` / `tried` 只有在
+        **所有档全灭**时才随 `LlmFailed` 浮出来，而降档成功那一路根本走不到。
+        ⇒ 降档是**模型行为层**的判定，它得有自己的出口，不能借账本那一行。
+
+        ⚠ 事件里**不带响应正文**：被拒的那份可能是半截 JSON 或整段推敲过程，
+        灌进作业日志既没用又可能把正文写进不该写的地方。只带闸名、截断后的理由
+        与几个长度读数——够回答「哪一道闸、拒的是什么形状」。
+        """
+        effort, thinking = rungs[index]
+        nxt = rungs[index + 1] if index + 1 < len(rungs) else None
+        self.ctx.observe(
+            'llm_rung_rejected',
+            purpose=purpose,
+            reasoning_effort=effort,
+            thinking=thinking,
+            json_mode=json_mode,
+            source=source,                    # cache | wire —— 缓存那一趟也会拒
+            gate=gate,                        # REJECT_GATES 之一，机器可数
+            reason=why[:REJECT_REASON_MAX],
+            reason_truncated=len(why) > REJECT_REASON_MAX,
+            finish_reason=resp.finish_reason,
+            content_chars=len(resp.content or ''),
+            reasoning_chars=len(resp.reasoning or ''),
+            next_effort=None if nxt is None else nxt[0],
+            next_thinking=None if nxt is None else nxt[1],
+            # 最后一档也被拒 ⇒ 这一趟走完了，调用方要么进真跑那一趟、要么 LlmFailed。
+            exhausted=nxt is None,
+        )
 
     # ── 一次调用：缓存 → 传输层重试 → 记账 ────────────────────────────────
 

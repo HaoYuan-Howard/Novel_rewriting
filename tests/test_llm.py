@@ -29,7 +29,8 @@ from novel.config import Config, load_config, parse_dotenv
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.client import (
-    DEFAULT_MAX_TOKENS, LADDER, NOTHINK_RUNGS, LlmClient, LlmFailed,
+    DEFAULT_MAX_TOKENS, LADDER, NOTHINK_RUNGS, REJECT_GATES, REJECT_REASON_MAX,
+    LlmClient, LlmFailed,
 )
 from novel.llm.ledger import CostLedger, combine_usage
 from novel.llm.transport import (
@@ -211,6 +212,90 @@ def test_thinking_off_exhaustion_still_raises_and_never_returns_an_empty_draft()
     with pytest.raises(LlmFailed, match='拿不到正文'):
         _client(t, thinking_mode='off').ask_text('sys', 'usr', purpose='t')
     assert t.rungs == list(NOTHINK_RUNGS)
+
+
+def _observed(events: list, name: str = 'llm_rung_rejected') -> list[dict]:
+    return [e for e in events if e['event'] == name]
+
+
+@pytest.mark.parametrize('body, gate', [
+    ('这不是 JSON', 'parse'),
+    (json.dumps({'voice': {}, 'surface_habits': ['h']}), 'require'),
+    (json.dumps({'voice': 'not-a-dict', 'surface_habits': ['h']}), 'schema'),
+])
+def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
+    """⭐ **降一档必须出声，而且说得出是哪一道闸。**
+
+    ⚠⚠ 这条守的是一个实测踩过的洞：内容闸拒掉一档时只 `evict` + 降档，而账本那一行
+    记的是**传输层**的结论（`outcome=ok` / `finish_reason=stop` / `will_retry=false`）
+    ⇒ 一次「high 被拒、退到 low 才成功」的调用，事后从账本上读起来像两次成功的调用，
+    理由一个字都不在（被拒的那份响应随即被 `evict` 从盘上删掉）。
+    ⇒ `gate` 是机器可数的那一半，`reason` 是人读的那一半，两个都要有。
+    """
+    events: list[dict] = []
+    ctx = _ctx()
+    ctx.observer = events.append
+    bad = ChatResponse(content=body, reasoning='推敲过程', finish_reason='stop')
+    t = FakeTransport(responder=lambda _req, i: bad if i == 0 else OK_JSON)
+
+    got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+    assert got.voice == {'a': 1}
+    assert t.rungs == [LADDER[0], LADDER[1]], '被拒之后必须真的退了一档'
+    rejected = _observed(events)
+    assert len(rejected) == 1, '降一档只出一次声：成功那一档不出声'
+    e = rejected[0]
+    assert e['gate'] == gate and e['gate'] in REJECT_GATES
+    assert (e['source'], e['json_mode']) == ('wire', True)
+    assert (e['reasoning_effort'], e['thinking']) == LADDER[0]
+    assert (e['next_effort'], e['next_thinking']) == LADDER[1]
+    assert e['exhausted'] is False
+    assert (e['purpose'], e['node'], e['sid']) == ('p', 'stage3.style', '123')
+    assert e['finish_reason'] == 'stop'
+    assert e['reason'] and not e['reason_truncated']
+    assert (e['content_chars'], e['reasoning_chars']) == (len(body), len('推敲过程'))
+    # ⚠ 事件里**不带响应正文**：被拒的那份可能是半截 JSON 或整段推敲过程。
+    assert body not in json.dumps(e, ensure_ascii=False)
+    assert '推敲过程' not in json.dumps(e, ensure_ascii=False)
+
+
+def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
+    """走完整条阶梯时**每一档各出一声**，最后那一档标 `exhausted`。
+
+    ⚠ `exhausted` 与 `LlmFailed` 不是一回事：缓存那一趟走完也会标它，
+    而那一趟走完之后还有真跑那一趟。它说的是「这一趟的阶梯到头了」。
+    """
+    events: list[dict] = []
+    ctx = _ctx()
+    ctx.observer = events.append
+    t = FakeTransport.empty_until(len(LADDER), OK_TEXT)
+
+    with pytest.raises(LlmFailed, match='拿不到正文'):
+        _client(t, ctx=ctx).ask_text('sys', 'usr', purpose='p')
+
+    rejected = _observed(events)
+    assert [(e['reasoning_effort'], e['thinking']) for e in rejected] == list(LADDER)
+    assert {e['gate'] for e in rejected} == {'empty_text'}
+    assert {e['json_mode'] for e in rejected} == {False}
+    assert [e['exhausted'] for e in rejected] == [False] * (len(LADDER) - 1) + [True]
+    assert rejected[-1]['next_effort'] is None and rejected[-1]['next_thinking'] is None
+
+
+def test_a_long_rejection_reason_is_truncated_and_marked():
+    """`ValidationError` 的文本能有几千字，而观测事件是**一行 JSON**。"""
+    events: list[dict] = []
+    ctx = _ctx()
+    ctx.observer = events.append
+    long_why = '很长的理由' * 500
+
+    with pytest.raises(LlmFailed):
+        _client(FakeTransport.always(OK_JSON), ctx=ctx).ask_json(
+            'sys', 'usr', model_cls=Resp, purpose='p',
+            validator=lambda _obj, _resp: long_why)
+
+    e = _observed(events)[0]
+    assert e['gate'] == 'validator'
+    assert len(e['reason']) == REJECT_REASON_MAX and e['reason_truncated'] is True
 
 
 def test_explicit_rungs_beat_the_thinking_mode():
