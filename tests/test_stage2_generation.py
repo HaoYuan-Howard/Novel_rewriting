@@ -743,21 +743,29 @@ def test_every_cause_the_producer_emits_is_registered_in_the_routing_table():
     import ast
     import inspect
 
+    from novel.stages.stage2 import compile_v2 as producer_v2
     from novel.stages.stage2 import normalize as producer
 
-    tree = ast.parse(inspect.getsource(producer.normalize_verbatim))
-    emitted = {
-        node.args[0].elts[2].value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute) and node.func.attr == 'append'
-        and isinstance(node.func.value, ast.Name) and node.func.value.id == 'failures'
-        and isinstance(node.args[0], ast.Tuple) and len(node.args[0].elts) == 3
-        and isinstance(node.args[0].elts[1], ast.Constant)
-        and node.args[0].elts[1].value == 'hinge'
-        and isinstance(node.args[0].elts[2], ast.Constant)
-    }
-    assert emitted, 'AST 扫描一句都没抓到 —— 产地的写法变了，这条守卫已经变成空验证'
+    emitted: set[str] = set()
+    # ⚠ 产地有两个（v3 的 normalize_verbatim 与 ir1 的 _compile_beats），
+    #   同一把扫描尺子逐个扫——漏扫一个产地，它的新根因就会静默落进 catch-all。
+    for fn in (producer.normalize_verbatim, producer_v2._compile_beats):
+        tree = ast.parse(inspect.getsource(fn))
+        found = {
+            node.args[0].elts[2].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == 'append'
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == 'failures'
+            and isinstance(node.args[0], ast.Tuple) and len(node.args[0].elts) == 3
+            and isinstance(node.args[0].elts[1], ast.Constant)
+            and node.args[0].elts[1].value == 'hinge'
+            and isinstance(node.args[0].elts[2], ast.Constant)
+        }
+        assert found, (
+            f'AST 在 {fn.__qualname__} 一句都没抓到 —— 产地的写法变了，'
+            f'这条守卫对它已经变成空验证')
+        emitted |= found
     unknown = emitted - set(HINGE_FAILURE_ROUTE)
     assert not unknown, (
         f'产地发了分流表里没有的根因 {sorted(unknown)}\n'
