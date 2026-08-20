@@ -298,3 +298,57 @@ def test_an_arc_subject_that_is_not_human_readable_is_a_terminal_state():
     gg, bps, mt = _minimal({}, {'arc_tracks': [{'subject': 'rel_99'}]})
     with pytest.raises(RefusedByStructure, match='解析不出人话'):
         build_writer_context({'output_chapters': []}, gg, bps, mt)
+
+
+# ── 五、冲突阶段的章覆盖 ──────────────────────────────────────────────────
+
+def _elided_plan(ordinal: int = 4) -> dict:
+    """一个只够走通组装的最小输出章：三个 goal 都用可零成本解析的 chapter_boundary。"""
+    goal = {'intent': 'advance', 'fact_refs': [
+        {'kind': 'chapter_boundary', 'ref': f'ch{ordinal}:start', 'chapter': ordinal}]}
+    return {'output_chapters': [{
+        'output_ordinal': ordinal, 'from_source_ordinals': [ordinal],
+        'chapter_goal': goal, 'open_hook_goal': goal, 'end_hook_goal': goal,
+        'segments': [],
+    }]}
+
+
+def _elided_inputs(ordinal: int = 4) -> tuple[dict, dict, list]:
+    chars = {'char_001': {'canonical': '阿禾', 'address': [{'surface': '阿禾'}]}}
+    gg = {'entities': {'characters': chars}, 'canon': {}, 'arc': {}}
+    mt = [{'chapter_ordinal': ordinal, 'text': '阿禾走了进来。'}]
+    return gg, {'blueprints': []}, mt
+
+
+def test_a_chapter_inside_an_elided_stage_span_still_gets_its_current_stage():
+    """⭐ 阶段章列表省写中间章（实测 flash 产出 [3,5]/[8,10]/[13,15]）时按区间解释。
+
+    旧代码只认精确成员，段内空隙的那章组出**空的 arc**——`CtxArc.current_stage`
+    是必填字段，`WriterContext.model_validate` 在落盘事务里裸抛 exit 70（结论未知）。
+    区间包含唯一可解 = 读出写段的本意，不发明归属；`chapters` 按记录原样透传，不补写。
+    """
+    gg, bps, mt = _elided_inputs()
+    gg['arc'] = {'conflict_stages': [
+        {'stage': '前段', 'chapters': [1, 2]}, {'stage': '中段', 'chapters': [3, 5]}]}
+    asm = build_writer_context(_elided_plan(), gg, bps, mt)
+    arc = asm.ctx['chapters'][0]['facts']['arc']
+    assert arc['current_stage'] == {'stage': '中段', 'chapters': [3, 5]}, \
+        '第 4 章落在 [3,5] 的段内空隙，应按区间归入该段；跨度按记录原样透传'
+
+
+def test_a_chapter_in_a_true_stage_gap_or_overlap_is_a_terminal_state():
+    """跨阶段的真空隙（0 个包含）与双包含（≥2 个）都定不出唯一归属 ⇒ 显式终态。
+
+    current_stage 是写手必拿的章级事实：省略它与猜一个都是静默造假；
+    修复面在产地（stage2 的阶段覆盖），本层只负责不说谎。
+    """
+    gg, bps, mt = _elided_inputs()
+    gg['arc'] = {'conflict_stages': [{'stage': '前段', 'chapters': [1, 2]},
+                                     {'stage': '后段', 'chapters': [6, 7]}]}
+    with pytest.raises(RefusedByStructure, match='唯一归属'):
+        build_writer_context(_elided_plan(), gg, bps, mt)
+
+    gg['arc'] = {'conflict_stages': [{'stage': '段甲', 'chapters': [3, 5]},
+                                     {'stage': '段乙', 'chapters': [2, 6]}]}
+    with pytest.raises(RefusedByStructure, match='唯一归属'):
+        build_writer_context(_elided_plan(), gg, bps, mt)

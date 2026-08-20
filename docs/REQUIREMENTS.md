@@ -521,6 +521,23 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 - [ ] 未测项：flash 修掉「空正文降档」（`MAX_SAMPLES_PER_RUNG`）之后的真实
       `high` 档能力——此前 3 本里 2 本的 `stage4.plan` 从未在 `high` 档被评估过。
 
+### TODO-33 · conflict_stages 章覆盖无判据守卫（消费端已兜，产地仍裸奔）
+
+2026-08-20 实锤（`逼一个恋爱脑当皇帝_2064547957232423400`，flash）：`ConflictStage.chapters`
+的注释自认「3/3 本恰好覆盖全部章——⚠ 但没有任何判据在查这件事」。本书模型产出
+`[1,2]/[3,5]/[8,10]/[13,15]…`——连续段**省写中间章**，4/9/14 落在段内空隙；stage4 的
+`_project_facts` 只认精确成员 ⇒ 组出**空的 arc** ⇒ `WriterContext.model_validate` 在落盘
+事务里裸抛 exit 70（结论未知，付费响应已花）。已修消费端（`novel/stages/stage4/context.py`）：
+段内空隙按 min≤o≤max **唯一**区间解释（读出写段本意，不发明归属）；跨段真空隙/双包含
+抛 `RefusedByStructure`（exit 3，带付费重跑指引）。测试：
+`tests/test_stage4_context.py` 三条（区间解释 / 真空隙 / 双包含）。
+
+- [ ] 产地判据：stage2 落盘时校验 `conflict_stages[].chapters` 并集恰为 `1..N`、无重无缺
+      （命中 HARD，修复路 `stage2.global` 重跑）。现在只有消费端兜底，真空隙书仍要
+      exit 3 + 付费重跑 stage2 才能过 stage4。
+- [ ] 顺带回答：`chapters` 到底是「显式枚举」还是「区间端点」——若是后者，schema 应改名或
+      收紧形态，别让两种语义共用一个形状（本次区间解释是对现状的最小兼容，不是语义裁决）。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。

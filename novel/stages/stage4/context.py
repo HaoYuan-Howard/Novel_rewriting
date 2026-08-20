@@ -584,11 +584,32 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
     # 也不知道本章处在轨迹的哪一段。而 trajectory 本身终点即结局，截断不了。
     # **两头不讨好，所以非末章一律不发 `arc_tracks`。**
     a: dict[str, Any] = {}
-    stage = next((st for st in (arc.get('conflict_stages') or [])
-                  if o in (st.get('chapters') or [])), None)
+    stages = arc.get('conflict_stages') or []
+    stage = next((st for st in stages if o in (st.get('chapters') or [])), None)
+    if stage is None:
+        # 【阶段章列表会把连续段的中间章省掉】`conflict_stages[].chapters` 是显式枚举，
+        # 而覆盖全部章这条性质**没有任何判据在查**（`ConflictStage.chapters` 的注释自己承认）。
+        # 实测 flash 产出 [3,5]/[8,10]/[13,15]，4/9/14 三章落在段内空隙——旧代码只认
+        # 精确成员，此时组出**空的 arc**，`CtxArc.current_stage` 是必填字段，
+        # `WriterContext.model_validate` 在落盘事务里裸抛 exit 70（结论未知）。
+        # ⇒ 按 min≤o≤max 的**区间包含**解释：唯一可解时照常下发，读出的是写段时的
+        # 本意（连续段省写了中间章），不是发明归属；`chapters` 仍按记录原样透传。
+        inside = []
+        for st in stages:
+            chs = [c for c in (st.get('chapters') or []) if isinstance(c, int)]
+            if chs and min(chs) <= o <= max(chs):
+                inside.append(st)
+        if len(inside) != 1:
+            # 跨阶段的真空隙（0 个包含）与双包含（≥2 个）都说不清唯一归属：
+            # current_stage 是写手必拿的章级事实，省略与猜一个都是静默造假。
+            raise RefusedByStructure(
+                f'第 {o} 章不在任何冲突阶段的章列表里，区间解释也定不出唯一归属'
+                f'（包含它的阶段数 = {len(inside)}）。请重跑 stage2.global（付费）'
+                f'让 conflict_stages 覆盖全部章；本层不省略也不猜测章级阶段事实')
+        stage = inside[0]
     if stage:
         # ⚠ **只给阶段名与跨度，不给 `summary`**：摘要描述的是【整个阶段】的经过，
-        #   里面必然含本阶段后几章才发生的结果——实测 ch16 拿到的阶段摘要写着 ch20 的事。
+        # 里面必然含本阶段后几章才发生的结果——实测 ch16 拿到的阶段摘要写着 ch20 的事。
         a['current_stage'] = {k: stage.get(k) for k in ('stage', 'chapters')}
     if is_last:
         rl = _relation_labels(ents, disp)
