@@ -12,16 +12,22 @@ from tests.fixtures_ingest import body
 from tools import current_corpus_paid_preview as P
 
 #: 阶梯档数。**从生产落点取，不写死。**
-#: wire 上限恒是「逻辑请求数 × 档数」，于是这些期望值里被钉住的是**逻辑请求数**
-#: （136 / 2 / 4 …），而档数只是个已知乘数。
+#: wire 上限恒是「逻辑请求数 × 档数 × 每档采样数」，于是这些期望值里被钉住的是
+#: **逻辑请求数**（136 / 2 / 4 …），而两个乘数只是已知乘数。
 #: ⚠ 2026-08-18 阶梯由 4 档降到 3 档（删掉被服务端静默映射回 `high` 的 `medium`，
 #: 见 `novel/llm/client.py::LADDER`）⇒ 全部 wire 上限跟着降 1/4，**那是正确结果不是回归**。
+#: ⚠ 2026-08-20 起答案流丢失同档先重采一次（`novel/llm/client.py::
+#: MAX_SAMPLES_PER_RUNG`）⇒ wire 上限再 ×2，同理是正确结果不是回归。
+from novel.llm.client import MAX_SAMPLES_PER_RUNG
+
 _RUNGS = len(LADDER)
 
-#: 当前语料范围的 wire 硬上限：(基础 136 + stage3 条件 2 + 语义 4) × 档数 + 6。
-#: ⚠ 那个 `+6` 是 stage6 定向重试，走单档 `HOOK_RETRY_RUNGS`，**不随主阶梯伸缩**。
-#: ⚠ 与它并列的 `external_hard_limit=588` 是**已有实验**的历史边界，不随当前阶梯变。
-_FULL_WIRE = (136 + 2 + 4) * _RUNGS + 6
+#: 当前语料范围的 wire 硬上限：(基础 136 + stage3 条件 2 + 语义 4) × 档数 ×
+#: 每档采样数，再加 6 条 stage6 定向重试 × 采样数（它们走**单档**
+#: `HOOK_RETRY_RUNGS`，只乘采样数不乘档数）。⚠ 并列的 `external_hard_limit=588`
+#: 是**已有实验**的历史边界，不随当前阶梯变。
+_FULL_WIRE = (136 + 2 + 4) * _RUNGS * MAX_SAMPLES_PER_RUNG \
+    + 6 * MAX_SAMPLES_PER_RUNG
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -107,13 +113,16 @@ def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path
     assert aggregate == {
         'production_cli_dispatches': 16,
         'base_nonsemantic_logical_requests': 136,
-        'base_nonsemantic_ladder_wire_hard_limit': 136 * _RUNGS,
+        'base_nonsemantic_ladder_wire_hard_limit':
+            136 * _RUNGS * MAX_SAMPLES_PER_RUNG,
         'stage3_conditional_habit_quote_logical': 2,
-        'stage3_conditional_habit_quote_wire_hard_limit': 2 * _RUNGS,
+        'stage3_conditional_habit_quote_wire_hard_limit':
+            2 * _RUNGS * MAX_SAMPLES_PER_RUNG,
         'semantic_logical': 4,
-        'semantic_wire_hard_limit': 4 * _RUNGS,
+        'semantic_wire_hard_limit': 4 * _RUNGS * MAX_SAMPLES_PER_RUNG,
         'stage6_conditional_candidate_retry_logical': 6,
-        'stage6_conditional_candidate_retry_wire_hard_limit': 6,
+        'stage6_conditional_candidate_retry_wire_hard_limit':
+            6 * MAX_SAMPLES_PER_RUNG,   # 单档 HOOK_RETRY_RUNGS，只乘采样数
         'full_conditional_logical_hard_limit': 148,
         'full_conditional_wire_hard_limit': _FULL_WIRE,
         'full_conditional_context_token_hard_ceiling': _FULL_WIRE * 1_000_000,
@@ -135,7 +144,12 @@ def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path
         row['base_ladder_wire_hard_limit'],
         row['conditional_wire_hard_limit'],
         row['wire_attempt_hard_limit'],
-    ) for row in hooks] == [(1, 3, 4, _RUNGS, 3, _RUNGS + 3)] * 2
+    ) for row in hooks] == [(
+        1, 3, 4,
+        _RUNGS * MAX_SAMPLES_PER_RUNG,
+        3 * MAX_SAMPLES_PER_RUNG,
+        (_RUNGS + 3) * MAX_SAMPLES_PER_RUNG,
+    )] * 2
     for row in hooks:
         retry = next(
             item for item in row['request_envelopes']
@@ -159,7 +173,10 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
         assert argv[-1] == '--yes'
         assert '--execute' not in argv and '--effort' not in argv
         env = row['frozen_environment']
-        assert env['DEEPSEEK_MODEL'] == 'deepseek-v4-pro'
+        # 冻结环境钉的是**全局默认模型**（`FIXED_MODEL = config.DEFAULT_MODEL`，派生）。
+        # 2026-08-19/20 起默认 = flash；语义判官不因此翻臂——`NODES` 里钉死 pro
+        #（`contracts/invariants.py::NodeSpec.model` 优先于环境变量）。
+        assert env['DEEPSEEK_MODEL'] == P.config.DEFAULT_MODEL
         assert env['DEEPSEEK_THINKING'] == 'on'
         assert env['DEEPSEEK_MAX_RETRIES'] == '0'
         caches.add(env['NOVEL_CACHE_DIR'])
@@ -265,8 +282,10 @@ def test_only_global_prompt_is_exact_before_upstream_generation(tmp_path):
     for estimate in estimates.values():
         assert estimate['status'] == 'exact_for_current_source_or_stage1'
         assert estimate['first_success_input_tokens'] == 321
-        assert estimate['exhausted_ladder_input_tokens'] == _RUNGS * 321
-        assert estimate['completion_tokens_ladder_upper_bound'] == _RUNGS * 96_000
+        assert estimate['exhausted_ladder_input_tokens'] == (
+            _RUNGS * MAX_SAMPLES_PER_RUNG * 321)
+        assert estimate['completion_tokens_ladder_upper_bound'] == (
+            _RUNGS * MAX_SAMPLES_PER_RUNG * 96_000)
         assert estimate['completion_includes_reasoning'] is True
     assert plan['token_estimate']['downstream_prompt_tokens'] == 'unknown'
     assert '不含费率' in plan['token_estimate']['price']
@@ -345,7 +364,9 @@ def test_dirty_source_base_or_wrong_input_scope_is_rejected(tmp_path):
 def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     text = P.render(P.build_plan(_spec(tmp_path), token_counter=lambda _request: 1))
     assert '[16/16]' in text
-    assert 'Stage6 条件候选定向重试：logical=6 / wire 上限=6' in text
+    # 6 条定向重试 × 单档 × 每档采样数（重采对单档臂一样适用）。
+    hook_retry_wire = 6 * len(P.HOOK_RETRY_RUNGS) * MAX_SAMPLES_PER_RUNG
+    assert f'Stage6 条件候选定向重试：logical=6 / wire 上限={hook_retry_wire}' in text
     assert f'全条件硬上限：logical=148 / wire={_FULL_WIRE}' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text

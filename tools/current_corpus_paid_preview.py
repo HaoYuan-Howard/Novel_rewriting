@@ -50,7 +50,7 @@ from novel.llm.budget import (  # noqa: E402
     count_input_tokens,
     model_budget,
 )
-from novel.llm.client import rungs_from_effort  # noqa: E402
+from novel.llm.client import MAX_SAMPLES_PER_RUNG, rungs_from_effort  # noqa: E402
 from novel.llm.prompts import with_json_shape  # noqa: E402
 from novel.llm.transport import ChatRequest  # noqa: E402
 from novel.orchestrator.nodes import build_argv  # noqa: E402
@@ -314,6 +314,9 @@ def _schema_targets(node: str) -> list[str]:
 
 
 def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, Any]:
+    # ⚠ wire 上限按 `MAX_SAMPLES_PER_RUNG` 放大：答案流丢失（content 空 + stop）时
+    #   同一档先重采一次再降档（`novel/llm/client.py`），每一档最坏烧两采。
+    #   与档数一样，这个乘数从生产落点 import，不写死。
     base = 1
     conditional = 0
     conditional_wire = 0
@@ -323,7 +326,7 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
     elif node == 'stage3.style':
         base = chapters + 1
         conditional = 1
-        conditional_wire = rung_count
+        conditional_wire = rung_count * MAX_SAMPLES_PER_RUNG
         condition = '首轮唯一 HARD=habit_quote 时自动窄修复一次'
     elif node == 'stage5.write':
         # 收缩臂整臂下线后本层只剩逐章一次调用；超上限只落 audit，0 次调用。
@@ -333,13 +336,13 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
         # approach.  Every initially HARD candidate can receive one fixed
         # low/no-thinking refresh, so all three may trigger independently.
         conditional = len(HOOK_APPROACHES) * HOOK_RETRY_LIMIT
-        conditional_wire = conditional * len(HOOK_RETRY_RUNGS)
+        conditional_wire = conditional * len(HOOK_RETRY_RUNGS) * MAX_SAMPLES_PER_RUNG
         condition = (
             '初始三候选中每条含 HARD 的候选最多一次 low/no-thinking 定向重试；'
             '三条均 dirty 时达到上限')
     elif node == 'stage6.semantic':
         base = 2  # judge A/B
-    base_wire = base * rung_count
+    base_wire = base * rung_count * MAX_SAMPLES_PER_RUNG
     return {
         'base_logical_requests': base,
         'conditional_logical_requests': conditional,
@@ -462,10 +465,12 @@ def _global_token_estimate(
             (system + '\0' + user).encode('utf-8')).hexdigest(),
         'input_tokens_by_rung': counts,
         'first_success_input_tokens': counts[0]['input_tokens'],
-        'exhausted_ladder_input_tokens': sum(row['input_tokens'] for row in counts),
+        # 「走完整条阶梯」在新语义下 = 每档两采（含同档重采）都烧完 ⇒ ×采样数。
+        'exhausted_ladder_input_tokens':
+            sum(row['input_tokens'] for row in counts) * MAX_SAMPLES_PER_RUNG,
         'completion_tokens_lower_bound': 0,
         'completion_tokens_ladder_upper_bound': (
-            len(rungs) * stage2_extract.GLOBAL_MAX_TOKENS),
+            len(rungs) * MAX_SAMPLES_PER_RUNG * stage2_extract.GLOBAL_MAX_TOKENS),
         'completion_includes_reasoning': True,
     }
 

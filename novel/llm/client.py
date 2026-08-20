@@ -8,6 +8,11 @@ client.py —— `ask_text` / `ask_json`。**降级阶梯只有一份，两个�
   ① **答案流丢了。** DeepSeek 会把整段答案写进 `reasoning_content` 而 `content` 返回**空串**，
      `finish_reason='stop'`——**不是截断**。实测：模型把整章正文写进了推理里。
      ⚠ 不从 `reasoning` 里把答案抠出来——那里面混着推敲过程，救回来的是**半成品**。
+     ⇒ 2026-08-20 起这一档先**同档重采一次**（`MAX_SAMPLES_PER_RUNG`）再决定降档。
+     实测（flash 迁移，三本书）：`stage4.plan` 的 `high` 档空正文而 `reasoning_chars`
+     上万、`finish_reason=stop`，旧阶梯把它当「这一档不行」直接降档 ⇒ 3 本里 2 本的
+     计划**从未在 `high` 档被评估过**，一上来就掉进取证能力受损的 `low`。
+     温度采样下同参数重发拿到的是新样本；降档换的是模型行为——两件事。
 
   ② **JSON 被截断。** `max_tokens` 在推理模型上**同时约束 reasoning + completion**。
      `reasoning_effort='high'` 时模型可能把大半预算花在思考上，正文写到一半就到顶了，
@@ -79,6 +84,27 @@ LADDER: Final[tuple[tuple[str, bool], ...]] = (
 #: 等于把「重试」混进「阶梯」，而那两条循环不许合并（见上）。
 #: 选用哪条由 `DEEPSEEK_THINKING` 决定（`novel/config.py::THINKING_MODES`）。
 NOTHINK_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('low', False),)
+
+#: 答案流丢失（模块 docstring ①）时，同一档最多采几个样本。**2 = 首发 + 一次重采。**
+#:
+#: ⚠ 这是「重采」不是「重试」：重试扛**网络**（`_send_attempts`，429/5xx/超时），
+#: 重采换的是**同参数下的新样本**，降档换的是**模型行为**——三条循环各管各的，不许合并
+#: （合并一次网络抖动就会烧掉两份采样预算）。`tools/current_corpus_paid_preview.py`
+#: 按这一格放大 wire 硬上限——改它必须同批改那边的口径。
+MAX_SAMPLES_PER_RUNG: Final = 2
+
+
+def _answer_lost(resp: ChatResponse) -> bool:
+    """模块 docstring ① 的实测形状：正文空 + `finish_reason='stop'`（**不是截断**）。
+
+    只有这一形状触发同档重采：
+    · 截断（`finish_reason='length'`）降档才对——要腾的是 `max_tokens` 预算，
+      同参数重采大概率把推理再写满一遍；
+    · 非空正文被内容闸拒（`parse` / `require` / `schema` / `validator`）也不重采
+      ——那是形状/契约问题，同一参数大概率拿回同一份形状，真要换样本走
+      `--resample` / 定向修复，不该在阶梯里白付一次。
+    """
+    return resp.finish_reason == 'stop' and not (resp.content or '').strip()
 
 
 def rungs_from_effort(effort: str | None) -> tuple[tuple[str, bool], ...]:
@@ -285,27 +311,32 @@ class LlmClient:
                 f'拒绝={why}')
 
         for i, (effort, thinking) in enumerate(active_rungs):
-            resp, key, _cached = self._call_keyed(
-                system, user, effort=effort, thinking=thinking, json_mode=False,
-                max_tokens=max_tokens, purpose=purpose, use_cache=False,
-                progress=progress, cache_policy=policy)
-            text = resp.text
-            why = None if text else '正文为空'
-            gate = 'empty_text'
-            if why is None and validator is not None:
-                why = validator(text, resp)
-                gate = 'validator'
-            if why is None:
-                self._keep(key, resp, cache_policy=policy)  # ← 判定可用之后才写
-                return text
-            self.cache.evict(key)
-            self._observe_rung_rejected(
-                purpose=purpose, rungs=active_rungs, index=i, source='wire',
-                gate=gate, why=why, resp=resp, json_mode=False)
-            tried.append(
-                f'effort={effort} think={thinking} '
-                f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
-                f'拒绝={why}')
+            # 答案流丢失（_answer_lost）先同档重采一次再决定降档，见 MAX_SAMPLES_PER_RUNG。
+            for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
+                resp, key, _cached = self._call_keyed(
+                    system, user, effort=effort, thinking=thinking, json_mode=False,
+                    max_tokens=max_tokens, purpose=purpose, use_cache=False,
+                    progress=progress, cache_policy=policy)
+                text = resp.text
+                why = None if text else '正文为空'
+                gate = 'empty_text'
+                if why is None and validator is not None:
+                    why = validator(text, resp)
+                    gate = 'validator'
+                if why is None:
+                    self._keep(key, resp, cache_policy=policy)  # ← 判定可用之后才写
+                    return text
+                self.cache.evict(key)
+                resample = sample < MAX_SAMPLES_PER_RUNG and _answer_lost(resp)
+                self._observe_rung_rejected(
+                    purpose=purpose, rungs=active_rungs, index=i, source='wire',
+                    gate=gate, why=why, resp=resp, json_mode=False, resample=resample)
+                tried.append(
+                    f'effort={effort} think={thinking}{"（重采）" if sample > 1 else ""} '
+                    f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
+                    f'拒绝={why}')
+                if not resample:
+                    break
         raise LlmFailed(
             f'{self.ctx.node}/{purpose}: 走完 {len(active_rungs)} 档阶梯仍然拿不到正文'
             '（没有可用响应）。\n  '
@@ -414,22 +445,28 @@ class LlmClient:
             errors.append(f'{head} {why}')
 
         for i, (effort, thinking) in enumerate(active_rungs):
-            resp, key, _cached = self._call_keyed(
-                system, user, effort=effort, thinking=thinking, json_mode=True,
-                max_tokens=max_tokens, purpose=purpose, use_cache=False,
-                progress=progress, cache_policy=policy)
-            obj, why, content, gate = inspect_response(resp)
-            head = (f'effort={effort} think={thinking} '
-                    f'finish={resp.finish_reason} clen={len(content)}')
-            if why is None:
-                self._keep(key, resp, cache_policy=policy)
-                return obj
-            # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
-            self.cache.evict(key)
-            self._observe_rung_rejected(
-                purpose=purpose, rungs=active_rungs, index=i, source='wire',
-                gate=gate, why=why, resp=resp, json_mode=True)
-            errors.append(f'{head} {why}')
+            # 答案流丢失（_answer_lost）先同档重采一次再决定降档，见 MAX_SAMPLES_PER_RUNG。
+            for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
+                resp, key, _cached = self._call_keyed(
+                    system, user, effort=effort, thinking=thinking, json_mode=True,
+                    max_tokens=max_tokens, purpose=purpose, use_cache=False,
+                    progress=progress, cache_policy=policy)
+                obj, why, content, gate = inspect_response(resp)
+                head = (f'effort={effort} think={thinking}'
+                        f'{"（重采）" if sample > 1 else ""} '
+                        f'finish={resp.finish_reason} clen={len(content)}')
+                if why is None:
+                    self._keep(key, resp, cache_policy=policy)
+                    return obj
+                # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
+                self.cache.evict(key)
+                resample = sample < MAX_SAMPLES_PER_RUNG and _answer_lost(resp)
+                self._observe_rung_rejected(
+                    purpose=purpose, rungs=active_rungs, index=i, source='wire',
+                    gate=gate, why=why, resp=resp, json_mode=True, resample=resample)
+                errors.append(f'{head} {why}')
+                if not resample:
+                    break
         raise LlmFailed(
             f'{self.ctx.node}/{purpose}: 走完 {len(active_rungs)} 档阶梯仍然没有可用的 JSON。\n  '
             + '\n  '.join(errors)
@@ -439,8 +476,9 @@ class LlmClient:
     def _observe_rung_rejected(self, *, purpose: str,
                                rungs: tuple[tuple[str, bool], ...], index: int,
                                source: str, gate: str, why: str,
-                               resp: ChatResponse, json_mode: bool) -> None:
-        """降一档时留下【为什么降】。**这条事件是降档理由的唯一出口。**
+                               resp: ChatResponse, json_mode: bool,
+                               resample: bool = False) -> None:
+        """降一档（或同档重采）时留下【为什么】。**这条事件是降档理由的唯一出口。**
 
         ⚠⚠ 它补的是一个实测踩过的观测洞：内容闸判定不可用时，这里只做
         `cache.evict` + 降一档，**既不产事件也不写日志**；而账本那一行记的是
@@ -451,12 +489,19 @@ class LlmClient:
         **所有档全灭**时才随 `LlmFailed` 浮出来，而降档成功那一路根本走不到。
         ⇒ 降档是**模型行为层**的判定，它得有自己的出口，不能借账本那一行。
 
+        ⚠ `resample=True` 表示这一拒的下一步是**同档重采**（`MAX_SAMPLES_PER_RUNG`），
+        此时 `next_effort` / `next_thinking` 指回**同一档**——事件必须说真话，
+        否则「重采」会被统计口径读成「降档」。
+
         ⚠ 事件里**不带响应正文**：被拒的那份可能是半截 JSON 或整段推敲过程，
         灌进作业日志既没用又可能把正文写进不该写的地方。只带闸名、截断后的理由
         与几个长度读数——够回答「哪一道闸、拒的是什么形状」。
         """
         effort, thinking = rungs[index]
-        nxt = rungs[index + 1] if index + 1 < len(rungs) else None
+        if resample:
+            nxt = (effort, thinking)
+        else:
+            nxt = rungs[index + 1] if index + 1 < len(rungs) else None
         self.ctx.observe(
             'llm_rung_rejected',
             purpose=purpose,
@@ -470,6 +515,7 @@ class LlmClient:
             finish_reason=resp.finish_reason,
             content_chars=len(resp.content or ''),
             reasoning_chars=len(resp.reasoning or ''),
+            resample=resample,                # True = 下一步同档重采，不是降档
             next_effort=None if nxt is None else nxt[0],
             next_thinking=None if nxt is None else nxt[1],
             # 最后一档也被拒 ⇒ 这一趟走完了，调用方要么进真跑那一趟、要么 LlmFailed。

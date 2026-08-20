@@ -25,12 +25,12 @@ import pytest
 from pydantic import BaseModel, Field
 
 from contracts.schema import Usage
-from novel.config import Config, load_config, parse_dotenv
+from novel.config import Config, DEFAULT_MODEL, load_config, parse_dotenv
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.client import (
-    DEFAULT_MAX_TOKENS, LADDER, NOTHINK_RUNGS, REJECT_GATES, REJECT_REASON_MAX,
-    LlmClient, LlmFailed,
+    DEFAULT_MAX_TOKENS, LADDER, MAX_SAMPLES_PER_RUNG, NOTHINK_RUNGS,
+    REJECT_GATES, REJECT_REASON_MAX, LlmClient, LlmFailed,
 )
 from novel.llm.ledger import CostLedger, combine_usage
 from novel.llm.transport import (
@@ -139,17 +139,32 @@ def test_the_ladder_is_exactly_the_three_rungs_and_there_is_only_one_of_it():
     assert _client(FakeTransport.always(OK_TEXT))._rungs is LADDER
 
 
+def _empty() -> ChatResponse:
+    """实测那个空正文形态：`finish_reason='stop'`、答案全写进了 reasoning。"""
+    return ChatResponse(content='', reasoning='想了很多，但答案没流出来',
+                        finish_reason='stop', usage=None)
+
+
 @pytest.mark.parametrize('rung', range(len(LADDER)))
 def test_every_rung_can_recover_an_empty_answer(rung):
-    """⭐ **每一档各测一遍**（分母从 `LADDER` 派生，不手写）：前 `rung` 档返回空正文，
-    第 `rung+1` 档拿到正文。
+    """⭐ **每一档各测一遍**（分母从 `LADDER` 派生，不手写）：前面档位**两采全空**
+    （重采也没救回，才降档），第 `rung+1` 档首发空、**同档重采**拿到正文。
 
     ⚠ 空正文那个形态是实测的：`finish_reason='stop'`、`reasoning` 很长、`content` 是空串
     ——**不是截断**，是推理流与答案流的边界丢了。照着「截断」去修（加 max_tokens）救不了它。
+    ⇒ 2026-08-20 起这一档先同档重采一次（`MAX_SAMPLES_PER_RUNG`）再降档：
+    实测 3 本里 2 本的 `stage4.plan` 因为旧阶梯直接降档，`high` 档从未被真正评估过。
     """
-    t = FakeTransport.empty_until(rung, OK_TEXT)
+    empties = 2 * rung + 1          # 前面每档烧掉两采；本档第一采也空
+
+    def responder(_req: ChatRequest, i: int) -> ChatResponse:
+        return _empty() if i < empties else OK_TEXT
+
+    t = FakeTransport(responder=responder)
     assert _client(t).ask_text('sys', 'usr', purpose='t') == '一段正文'
-    assert t.rungs == list(LADDER[:rung + 1]), '走过的档位与阶梯对不上'
+    expected = ([r for r in LADDER[:rung] for _ in range(MAX_SAMPLES_PER_RUNG)]
+                + [LADDER[rung]] * MAX_SAMPLES_PER_RUNG)
+    assert t.rungs == expected, '走过的采样与阶梯对不上'
 
 
 def test_all_rungs_empty_raises_and_never_returns_an_empty_draft():
@@ -157,11 +172,12 @@ def test_all_rungs_empty_raises_and_never_returns_an_empty_draft():
 
     ⚠ 一份空稿落下去，下游是**确定性代码**——它不会像写手那样将就着用，
     它会在几层之外炸，或者更坏：静默产出一份缺内容的东西。
+    ⚠ 每档两采（首发 + 重采）全空才降档——重采不是无限重试，烧完就退。
     """
-    t = FakeTransport.empty_until(len(LADDER), OK_TEXT)
+    t = FakeTransport.always(_empty())
     with pytest.raises(LlmFailed, match='拿不到正文'):
         _client(t).ask_text('sys', 'usr', purpose='t')
-    assert t.rungs == list(LADDER)
+    assert t.rungs == [r for r in LADDER for _ in range(MAX_SAMPLES_PER_RUNG)]
 
 
 def test_thinking_off_walks_only_the_single_nothink_rung():
@@ -207,11 +223,14 @@ def test_efforts_the_server_remaps_to_high_are_refused_instead_of_silently_accep
 
 
 def test_thinking_off_exhaustion_still_raises_and_never_returns_an_empty_draft():
-    """off 模式全空同样抛 `LlmFailed`——「绝不返回空稿」与思考开关无关。"""
-    t = FakeTransport.empty_until(len(NOTHINK_RUNGS), OK_TEXT)
+    """off 模式全空同样抛 `LlmFailed`——「绝不返回空稿」与思考开关无关。
+
+    单档也照走同档重采（首发 + 重采各一次），重采完仍空才认输。
+    """
+    t = FakeTransport.always(_empty())
     with pytest.raises(LlmFailed, match='拿不到正文'):
         _client(t, thinking_mode='off').ask_text('sys', 'usr', purpose='t')
-    assert t.rungs == list(NOTHINK_RUNGS)
+    assert t.rungs == [r for r in NOTHINK_RUNGS for _ in range(MAX_SAMPLES_PER_RUNG)]
 
 
 def _observed(events: list, name: str = 'llm_rung_rejected') -> list[dict]:
@@ -260,25 +279,51 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
 
 
 def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
-    """走完整条阶梯时**每一档各出一声**，最后那一档标 `exhausted`。
+    """走完整条阶梯时**每档两采各出一声**，最后那一声标 `exhausted`。
 
     ⚠ `exhausted` 与 `LlmFailed` 不是一回事：缓存那一趟走完也会标它，
     而那一趟走完之后还有真跑那一趟。它说的是「这一趟的阶梯到头了」。
+    ⚠ 2026-08-20 起每档多出一声 `resample=True` 的**同档重采**：那一声的
+    `next_effort`/`next_thinking` 必须指回**同一档**——否则「重采」会被
+    统计口径读成「降档」，而降档统计正是这条事件存在的目的。
     """
     events: list[dict] = []
     ctx = _ctx()
     ctx.observer = events.append
-    t = FakeTransport.empty_until(len(LADDER), OK_TEXT)
+    t = FakeTransport.always(_empty())
 
     with pytest.raises(LlmFailed, match='拿不到正文'):
         _client(t, ctx=ctx).ask_text('sys', 'usr', purpose='p')
 
     rejected = _observed(events)
-    assert [(e['reasoning_effort'], e['thinking']) for e in rejected] == list(LADDER)
+    walked = [r for r in LADDER for _ in range(MAX_SAMPLES_PER_RUNG)]
+    assert [(e['reasoning_effort'], e['thinking']) for e in rejected] == walked
     assert {e['gate'] for e in rejected} == {'empty_text'}
     assert {e['json_mode'] for e in rejected} == {False}
-    assert [e['exhausted'] for e in rejected] == [False] * (len(LADDER) - 1) + [True]
+    assert [e['resample'] for e in rejected] == [True, False] * len(LADDER)
+    assert [e['exhausted'] for e in rejected] == [False] * (len(walked) - 1) + [True]
     assert rejected[-1]['next_effort'] is None and rejected[-1]['next_thinking'] is None
+    # 第一声（重采）：next 指回本档；第二声（降档）：next 才指向下一档。
+    assert (rejected[0]['next_effort'], rejected[0]['next_thinking']) == LADDER[0]
+    assert (rejected[1]['next_effort'], rejected[1]['next_thinking']) == LADDER[1]
+
+
+def test_a_nonempty_content_gate_rejection_does_not_resample():
+    """⚠ 非空正文被内容闸拒（schema 形状不对）也不重采——同一参数大概率拿回
+    同一份形状。真要换样本走 `--resample` / 定向修复，不在阶梯里白付。"""
+    events: list[dict] = []
+    ctx = _ctx()
+    ctx.observer = events.append
+    bad = ChatResponse(content=json.dumps({'voice': 'not-a-dict',
+                                           'surface_habits': ['h']}),
+                       finish_reason='stop')
+    t = FakeTransport(responder=lambda _r, i: bad if i < 1 else OK_JSON)
+
+    got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+    assert got.voice == {'a': 1}
+    assert t.rungs == list(LADDER[:2]), '内容闸拒绝必须每档一采、直接降档'
+    assert [e['resample'] for e in _observed(events)] == [False]
 
 
 def test_a_long_rejection_reason_is_truncated_and_marked():
@@ -393,7 +438,11 @@ def test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget():
 
     `max_tokens` 在推理模型上**同时约束 reasoning + completion**：`effort='high'` 时
     模型可能把大半预算花在思考上，正文写到一半就到顶了。⇒ 降 effort = 给正文腾预算。
+    ⚠ 截断**不触发同档重采**（`resample` 恒 False）：重采换样本，腾不了预算。
     """
+    events: list[dict] = []
+    ctx = _ctx()
+    ctx.observer = events.append
     truncated = ChatResponse(content='{"voice": {"a": 1}, "surface_hab',
                              finish_reason='length', usage=None)
 
@@ -401,9 +450,10 @@ def test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget():
         return truncated if i < 2 else OK_JSON
 
     t = FakeTransport(responder=responder)
-    out = _client(t).ask_json('sys', 'usr', model_cls=Resp, purpose='t')
+    out = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
     assert t.rungs == list(LADDER[:3])
+    assert [e['resample'] for e in _observed(events)] == [False, False]
 
 
 def test_a_legal_but_structurally_empty_json_goes_down_the_same_ladder():
@@ -502,7 +552,9 @@ def test_one_call_can_refresh_without_mutating_the_shared_run_policy():
 
 
 def _req(effort: str = 'high', thinking: bool = True) -> ChatRequest:
-    return ChatRequest(model='deepseek-v4-pro', system='s', user='u',
+    # ⚠ model 从 `DEFAULT_MODEL` 派生：client 默认模型换过一次（pro → flash），
+    # 这里写死旧值会让缓存键与 client 算的对不上——缓存测试整批假红。
+    return ChatRequest(model=DEFAULT_MODEL, system='s', user='u',
                        reasoning_effort=effort, thinking=thinking,
                        json_mode=False, max_tokens=DEFAULT_MAX_TOKENS)
 
@@ -614,7 +666,7 @@ def test_a_structurally_empty_shell_is_evicted_from_the_cache():
 
 
 def _json_req(effort: str, thinking: bool) -> ChatRequest:
-    return ChatRequest(model='deepseek-v4-pro', system='s', user='u',
+    return ChatRequest(model=DEFAULT_MODEL, system='s', user='u',
                        reasoning_effort=effort, thinking=thinking,
                        json_mode=True, max_tokens=DEFAULT_MAX_TOKENS)
 
@@ -686,7 +738,7 @@ def test_a_valid_lower_rung_json_cache_prevents_any_higher_rung_network_call():
 def test_a_valid_lower_rung_text_cache_prevents_any_higher_rung_network_call():
     d = Path(tempfile.mkdtemp())
     cache = ResponseCache(d)
-    low = ChatRequest(model='deepseek-v4-pro', system='s', user='u',
+    low = ChatRequest(model=DEFAULT_MODEL, system='s', user='u',
                       reasoning_effort='low', thinking=False, json_mode=False,
                       max_tokens=DEFAULT_MAX_TOKENS)
     cache.put(cache_key(low), OK_TEXT)
