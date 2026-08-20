@@ -128,6 +128,20 @@ def test_registry_pins_both_deepseek_v4_models_to_the_product_limits():
     assert len(TOKENIZER_REVISION) == 40
 
 
+def test_every_model_the_pipeline_can_name_is_registered_in_the_budget():
+    """⚠ 全局默认 + `NODES` 里钉死的每一个模型 id，预算闸都必须认识。
+
+    `model_budget` 对未知模型**关闭式拒绝**（加载资源之前）——一个拼错的模型名
+    本该在预检就拦下；这道守卫保证注册表与 `MODEL_BUDGETS` 不分家
+    （`contracts` 不能 import 运行时 ⇒ 这道交叉核对只能放在这一侧）。
+    """
+    from contracts.invariants import NODES
+    from novel.config import DEFAULT_MODEL
+
+    named = {DEFAULT_MODEL} | {spec.model for spec in NODES.values() if spec.model}
+    assert named <= set(MODEL_BUDGETS), f'有模型 id 没进预算表：{named - set(MODEL_BUDGETS)}'
+
+
 def test_official_tokenizer_and_two_message_framing_have_locked_counts():
     # 这些数由固定 tokenizer + BOS/System/User/Assistant/thinking framing 共同决定；
     # JSON mode 是顶层 API 控制参数，不凭空增加一段本地文字。

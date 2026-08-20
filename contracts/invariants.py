@@ -1123,6 +1123,14 @@ class NodeSpec(NamedTuple):
     #   而账本那一列会如实记下 `medium`，事后分辨不出来。`max` 是升档，启用前要先补回
     #   官方 effort 前缀。判定落点是 `novel/llm/client.py::rungs_from_effort`，不靠本注释。
     effort: str | None = None
+    # 本节点钉死的模型 id；'' = 跟随全局默认（`novel/config.py::DEFAULT_MODEL`，
+    # 可被 `DEEPSEEK_MODEL` 覆盖——A/B 换臂的显式口）。
+    # ⚠ **只有「产品裁决过、不许被环境变量静默翻转」的节点才许填非空**：
+    #   2026-08-19/20 用户裁决「除语义判官外全链 flash」，而判官例外必须长成形状
+    #   而不是纪律——此前靠每条命令记得带 `DEEPSEEK_MODEL`，忘一次就静默烧成
+    #   flash 判官，账本事后才看得出来。实测依据见 `docs/BACKEND_CONTRACT.md`
+    #   §十 2026-08-20 那一行（flash 判官把唯一与正文矛盾的候选排成第一名）。
+    model: str = ''
 
 
 #: 全部作业单元。⚠ 顺序即处理链顺序，队列与断点续跑都按它排。
@@ -1280,9 +1288,14 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠ 它是全链**唯一**的语义审判节点（stage5 那一个已于 2026-08-17 下线）。
     # 保留它的实测依据：2 次调用 / 1.7% 输出 token，而它的匿名质量排序在实跑中
     # 直接纠正过一次定稿——性价比与被下线的那个不在一个量级。
+    # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-19/20 用户裁决，全链 flash 的
+    #   **唯一例外**）：flash 判官在有 ground truth 的样本上把唯一与正文矛盾的候选
+    #   判 PASS 并排成第一名，证据区间圈成候选全文（等于没有指向）——对「结论必须
+    #   绑证据」的判官是死刑。钉在本表 ⇒ `DEEPSEEK_MODEL` 换不掉它。
     'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',
                                  flags=('--dry-run',),
-                                 produces=(artifact_paths.STAGE6_SEMANTIC,)),
+                                 produces=(artifact_paths.STAGE6_SEMANTIC,),
+                                 model='deepseek-v4-pro'),
     # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
     #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',

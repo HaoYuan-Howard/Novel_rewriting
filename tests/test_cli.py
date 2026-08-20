@@ -413,6 +413,35 @@ def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
         % len(fake.calls))
 
 
+def test_the_judge_node_pins_its_model_over_the_global_default(monkeypatch):
+    """⭐ `_llm_client` 是全链唯一的 client 构造口：`NodeSpec.model` 在这里生效。
+
+    「除判官外全链 flash」（2026-08-19/20 用户裁决）必须长成形状而不是纪律：
+    判官节点钉死 pro ⇒ `DEEPSEEK_MODEL` / 全局默认 flash 都换不掉它；
+    其余节点 `''` = 跟随全局默认（flash）。
+    """
+    import tempfile
+    from pathlib import Path
+
+    from novel import config
+    from novel.cli import main as M
+    from novel.run import RunContext
+
+    base = Path(tempfile.mkdtemp())
+    (base / '书名_123' / 'stage1').mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        config, 'load_config',
+        lambda: config.Config(api_key=None, model='deepseek-v4-flash'))
+
+    judge = M._llm_client(RunContext.open(
+        base, '123', 'stage6.semantic', paid=True, write_ledger=False))
+    other = M._llm_client(RunContext.open(
+        base, '123', 'stage3.style', paid=True, write_ledger=False))
+
+    assert judge.model == 'deepseek-v4-pro', '判官的 pro 是钉死的，环境变量换不掉'
+    assert other.model == 'deepseek-v4-flash' == config.DEFAULT_MODEL
+
+
 @pytest.mark.corpus
 def test_inbox_prints_all_eight_kind_counts_with_a_denominator(box, capsys):
     """`inbox` 的首行是**带分母的汇总**——八键全出，0 也要出。

@@ -100,11 +100,22 @@ def test_only_the_writing_node_has_modes():
 
 def test_unmeasured_nodes_keep_the_default_high_effort():
     # ⚠ 取值面只有 low / high：`medium` / `xhigh` 被服务端静默映射回 `high`
-    #   （放行 = 允许一个「降了档、实际没降」的配置），`max` 是升档且还没补回官方
+    #   （放行 = 允许一个「降了档、实际一档没降」的配置），`max` 是升档且还没补回官方
     #   effort 前缀。三处闸说的是同一件事，见 `novel/llm/client.py::rungs_from_effort`。
     assert all(spec.effort in (None, 'low', 'high') for spec in inv.NODES.values())
     assert inv.NODES['stage3.style'].effort is None
     assert inv.NODES['stage7.rename'].effort is None
+
+
+def test_the_judge_node_pins_its_model_and_is_the_only_pinned_one():
+    """⚠ `NodeSpec.model` 是「除判官外全链 flash」这个裁决的**形状**落点（2026-08-19/20）。
+
+    `stage6.semantic` 钉死 `deepseek-v4-pro` ⇒ `DEEPSEEK_MODEL` / 全局默认都换不掉它
+    （忘带环境变量烧不成 flash 判官）；其余节点必须保持 `''` = 跟随全局默认——
+    多一个钉死值就少一个 A/B 换臂的口，那一格只许给产品裁决过的例外用。
+    """
+    pinned = {node: spec.model for node, spec in inv.NODES.items() if spec.model}
+    assert pinned == {'stage6.semantic': 'deepseek-v4-pro'}
 
 
 def test_free_nodes_are_the_ones_without_llm():

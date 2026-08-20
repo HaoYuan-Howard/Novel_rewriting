@@ -31,11 +31,14 @@ from typing import Mapping
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: 模型 id。**锁定 `deepseek-v4-pro`**——盘上 3 本产物的 `_provenance.model` 恒是它，
-#: 而换模型是一次产品裁决（成稿风格会整体变），不是一个可以随手改的环境变量。
-#: ⚠ 允许用 `DEEPSEEK_MODEL` 覆盖，是为了 A/B 时**显式**换一次；
+#: 模型 id（生成侧默认）。2026-08-19/20 用户裁决：开发期成本不可接受
+#: （pro 约 9 元/本、flash 约 3 元/本）⇒ **生成侧默认 `deepseek-v4-flash`**。
+#: **语义判官例外，钉死 pro**——那一格在 `contracts/invariants.py::NODES`
+#: （`NodeSpec.model` 优先于本默认与环境变量），换模型是一次产品裁决
+#: （成稿风格会整体变），不是一个可以随手改的环境变量。
+#: ⚠ 允许用 `DEEPSEEK_MODEL` 覆盖，是为了 A/B 时**显式**换一次（对照臂、诊断跑）；
 #: 换了之后 `_provenance.model` 会如实记下来——那正是它存在的理由。
-DEFAULT_MODEL = 'deepseek-v4-pro'
+DEFAULT_MODEL = 'deepseek-v4-flash'
 DEFAULT_BASE_URL = 'https://api.deepseek.com'
 
 #: 思考模式。`on` = 现行降级阶梯（`('high', True)` 起步，带降档保护）；
