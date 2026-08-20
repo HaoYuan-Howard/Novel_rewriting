@@ -601,6 +601,14 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
 
     if '--renormalize' in tokens:
         return _report_exit(extract.run_renormalize(ctx))
+    if '--patch' in tokens:
+        # ⚠ 字段级修复用**默认缓存策略**（read+write）：中断恢复不再重复付费；
+        #   refresh-write 的语义是「明确要新采样」，不是「这是修复调用」。
+        from novel.stages.stage2.repair import run_field_patches
+        report = run_field_patches(ctx, _llm_client(ctx))
+        print('  ✓ stage2 逐章蓝图字段级修复已落盘（量级=条，未动章原字节保留）')
+        print(render(report))
+        return X.OK if report.passed else X.CHECK_FAILED
     if chapters:
         from novel.llm.cache import CachePolicy
         ctx.cache = CachePolicy.refresh()

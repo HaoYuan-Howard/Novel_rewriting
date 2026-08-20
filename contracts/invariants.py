@@ -994,6 +994,8 @@ PAID_FLAGS: Final = {
     #   同 `stage5.write` 的 `--revise`，理由见 `NODES` 里那一格上方的注释。
     '--purge-role': 'stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型',
     '--resample': 'stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应',
+    '--patch': 'stage2 逐章蓝图的字段级修复（extraction-ir-v1）——逐条失败各调一次模型，'
+               '量级是条不是章',
 }
 
 #: 重算时**只对本次新引入的错误入终态** —— 旧违约照报但不挡路。
@@ -1288,7 +1290,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
                                  flags=('--dry-run', '--check-only', '--renormalize',
-                                        '--chapters', '--revalidate', '--actor', '--reason'),
+                                        '--chapters', '--patch',
+                                        '--revalidate', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
                                   flags=('--dry-run', '--check-only', '--measure-only',

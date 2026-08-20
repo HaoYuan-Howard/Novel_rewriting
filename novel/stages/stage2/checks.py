@@ -1498,14 +1498,20 @@ def _present(c: _Ctx) -> list[Outcome]:
                    scanned=f'{len(c.bps)} 章'))
 
     repairs = c.prov.get('repairs') or []
+    # ⚠ refresh-write 的纪律**只压整章重生成**（`fields == ['*']`）：那条路重发的是
+    #   与基线同键的请求，不刷新就会读回同一份坏缓存。字段级修复（`--patch`，
+    #   fields 记具体路径）发的是**新 prompt**——缓存里没有坏响应可读，默认策略
+    #   反而是「中断恢复不重复付费」的正确语义（refresh-write = 明确要新采样，
+    #   不是「这是修复调用」）。
     bad_cache = [f'ch{r.get("chapter_ordinal")}:{r.get("cache_policy")!r}' for r in repairs
-                 if r.get('cache_policy') != 'refresh-write']
+                 if r.get('fields') == ['*']
+                 and r.get('cache_policy') != 'refresh-write']
     out.append(ran('repair_cache_policy',
                    [finding('repair_cache_policy',
                             detail=f'{len(bad_cache)} 次定向重生成的 cache_policy '
                                    f'不是 refresh-write：{_cut(bad_cache)}',
                             evidence=sorted(bad_cache))] if bad_cache else [],
-                   scanned=f'{len(repairs)} 次定向重生成'))
+                   scanned=f'{len(repairs)} 次修复（整章级才压 refresh-write）'))
     return out
 
 

@@ -20,7 +20,8 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 【本层特有的四条，与前七层都不同】
 
 **① 这是第一个用 `Rule.fix` 的层。** 35 条带机器可读的修复路由：
-`blueprint --chapters` 18 · `blueprint --renormalize` 2 · `global --resample` 13 ·
+`blueprint --chapters` 17 · `blueprint --patch` 1 · `blueprint --renormalize` 2 ·
+`global --resample` 13 ·
 `global --purge-role` / `--renormalize` 各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
@@ -45,6 +46,7 @@ FIX_RENORMALIZE_BP = ('stage2.blueprint', '--renormalize')  # 确定性归一，
 FIX_RENORMALIZE_G = ('stage2.global', '--renormalize')      # 同上，全书那一份
 FIX_PURGE_ROLE = ('stage2.global', '--purge-role')  # 语义判官臂重划 role/fate（**付费**）
 FIX_RESAMPLE = ('stage2.global', '--resample')  # 绕过问题缓存重采整份 global（**付费**）
+FIX_PATCH = ('stage2.blueprint', '--patch')     # 字段级修复（**付费**，ir1 专属，量级=条）
 
 
 def _hard(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -> Rule:
@@ -382,14 +384,15 @@ _hard('hinge_anchor_void', '保真材料的锚点在本章原文里找得到', '
            '⚠ **「短语在本章、只是不在它指的那一段」不归这里**，归 `hinge_drift`：'
            '那是段号指错，不是材料编的，说错了会让人去查一句原文里明明有的话。盘上 0/3')
 
-_hard('hinge_ambiguous', '保真材料的短语在所属拍的区间内唯一命中', 'R-3.5', fix=FIX_REGEN,
+_hard('hinge_ambiguous', '保真材料的短语在所属拍的区间内唯一命中', 'R-3.5', fix=FIX_PATCH,
       note='`extraction-ir-v1` 专属：hinge 不再交段号，短语在**所属拍区间内**定位；'
            '多处命中 ⇒ 这条材料压在哪几个字上定不下来。'
            '⚠ **它是新契约信息不足的预期产物，不是模型编的**：交接实测 189 条反投影后'
            '187 条唯一、2 条双命中（`第一课` / `纸鸢`，约 1.06%）。'
-           '⚠ 修法是**候选选择**（代码枚举命中位，模型只挑 candidate_id，'
-           '`contracts/invariants.py::REPAIR_ROUTE` 路由 `field_patch`）——'
-           '`fix` 暂指整章重生成是因为 `--patch` 入口尚未落地，落地时同批改这一格。'
+           '⚠ 修法是**候选选择**（代码从 `hinge_ambiguous_pending` 账取回短语并枚举'
+           '命中位，模型只挑 candidate_id——`novel/stages/stage2/repair.py`；'
+           '`contracts/invariants.py::REPAIR_ROUTE` 同判 `field_patch`），'
+           '量级是**条**不是章，别拿 `--chapters` 整章重付。'
            '`bounded-fidelity-v3` 的产地不发这个根因 ⇒ 存量产物上恒空，不是绿灯是不适用')
 
 _info('hinge_cascade', '锚不到不是因为本拍的 span 自己就没定位成功', 'R-3.5',
@@ -495,7 +498,11 @@ _hard('repair_cache_policy', '定向重生成配的是「不读缓存」', 'R-3.
       note='✚ **原型没有这条**——`R-3.11` 索要它，而它是本层最反直觉的一条：'
            '定向重生成的 prompt 与整跑时该章那一批**逐字相同** ⇒ **缓存必然命中** ⇒ '
            '**一个字都没重新生成，而它照样打印「已重生成」**。'
-           '⇒ 有 `repairs[]` 时 `cache_policy` 必须是 `refresh-write`。'
+           '⇒ `repairs[]` 里 `fields == ["*"]`（整章重生成）的行 `cache_policy` '
+           '必须是 `refresh-write`。'
+           '⚠ **字段级修复（`--patch`，fields 记具体路径）豁免**：它发的是新 prompt，'
+           '缓存里没有坏响应可读，默认策略反而是「中断恢复不重复付费」的正确语义'
+           '（refresh-write = 明确要新采样，不是「这是修复调用」）。'
            '⚠ **不给 fix**：修法是下一次跑的时候带对 flag，不是拿一条命令去改这份产物。'
            '盘上 0/3（3 条 `repairs` 恒 `refresh-write`）')
 

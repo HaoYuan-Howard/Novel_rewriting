@@ -499,6 +499,25 @@ _SUMMARY_BATCH_TPL = """\
 
 只输出 JSON，不要额外解释文字。"""
 
+#: `--patch` 的两条小臂（`extraction-ir-v1` 字段级修复）。均无 `RULES_V2` 前缀——
+#: 它们不是抽取，是对一条已知失败的**受限**修复；user 里只有该拍原文与失败上下文。
+_HINGE_SELECT_TPL = """\
+一条保真材料的短语在它所属的那一段原文里出现了不止一次，压在哪一处定不下来。
+下面给你这一拍的原文、原短语和全部候选位置（各带前后文）。
+选出这条材料【真正压着】的那一处：按材料种类的定义判断哪一处才是
+「改一个字就废掉」的那几个字所在。
+只输出 JSON，不要额外解释文字。"""
+
+_HINGE_PHRASE_TPL = """\
+一条保真材料的短语在它所属的那一拍原文里【找不到】——上一版给的是转述或编的。
+下面给你这一拍的原文和材料种类。从原文里【原样照抄】一段能唯一定位的字作为新短语：
+- 必须能在给出的原文里逐字找到，且只出现一次（不唯一就多带几个字直到唯一）；
+- 按材料种类的定义选（硬数字抄那个数、要害台词抄那句话、物件抄那个东西的字面、
+  因果前提抄交代那个条件的字）；
+- 不必长——两三个字能唯一定位就够，不要抄整段。
+只输出 JSON，不要额外解释文字。"""
+
+
 #: `ROLE_SPLIT_SYS` 的模板（原型 `Stage2/n2_global.py:435`）。**无 `RULES_V2` 前缀。**
 _ROLE_SPLIT_TPL = """\
 你在整理一份小说人物表。每个人有 `role` 与 `fate` 两栏，**现在这两栏可能划错了**——
@@ -540,6 +559,10 @@ BLUEPRINT_SYS_V2 = RULES_V2 + fill(_BLUEPRINT_TPL_V2)
 
 #: 书级摘要批（`extraction-ir-v1` 专属小臂，付费，一书一调）。
 SUMMARY_BATCH_SYS = fill(_SUMMARY_BATCH_TPL)
+
+#: `--patch` 字段级修复的两条小臂（付费，逐条失败一调）。
+HINGE_SELECT_SYS = fill(_HINGE_SELECT_TPL)
+HINGE_PHRASE_SYS = fill(_HINGE_PHRASE_TPL)
 
 #: `stage2.global --purge-role`（付费）。语义判官，双向重划分。
 ROLE_SPLIT_SYS = fill(_ROLE_SPLIT_TPL, ROLE_FATE=ROLE_FATE_RULE)
@@ -640,6 +663,10 @@ BLUEPRINT_HINT_V2: dict[str, Any] = {
 SUMMARY_BATCH_HINT: dict[str, Any] = {
     'chapters': [{'chapter_ordinal': 1, 'summary': 'str(100~220字，一段话)'}],
 }
+
+#: `--patch` 两条小臂的结构提示。
+HINGE_SELECT_HINT: dict[str, Any] = {'candidate_id': 'c0'}
+HINGE_PHRASE_HINT: dict[str, Any] = {'phrase': '原样照抄的那几个字'}
 
 #: `--purge-role` 那条臂的结构提示（原型 `n2_global.py:454`）。
 #: ⚠ 它**只回这两栏 + char_id**：那条臂的契约是「只搬不改、char_id 原样返回」。

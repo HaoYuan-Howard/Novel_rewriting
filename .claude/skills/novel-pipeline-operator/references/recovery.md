@@ -65,9 +65,11 @@
 剩下的只有 `--apply-edit` 提交整章全文，或 `--wontfix` 记一条明确的不修裁决——
 **两条都由受托 agent 自己定**（理由见下面「允许写入面」开头那一节），不是回头找用户的信号。
 
-`deterministic` 那一行的入口**由 finding 的 `fix` 给出，不要自己挑**。注册在案的确定性修复路由只有两条 flag：
+`deterministic` 那一行的入口**由 finding 的 `fix` 给出，不要自己挑**。注册在案的修复路由有三条 flag：
 `--renormalize`（`stage2.global` / `stage2.blueprint`，按当前契约重算代码派生字段与原文定位并写回，
-修锚点逐字、悬空 id、secret 时序这类定位问题）与 `stage2.blueprint --chapters <N>`（定向重生成那几章，**这一条付费**）。
+修锚点逐字、悬空 id、secret 时序这类定位问题）、`stage2.blueprint --chapters <N>`（定向重生成那几章，**这一条付费**）、
+以及 `stage2.blueprint --patch`（**付费但量级是条不是章**：`extraction-ir-v1` 契约下 `hinge_ambiguous` 的修复路——
+代码枚举候选命中位、模型只挑 candidate_id；有整章级根因时它会显式拒绝并指路 `--chapters`，先整章、后字段）。
 另有两条同样 0 成本、会写盘但不由 `fix` 指名的重算入口，只在读数需要刷新时用：
 `--recheck`（`stage5.write` / `stage6.hook` / `stage7.rename`，刷新已有成稿的指标并重拼 `draft.md`）与
 `stage3.style --remeasure`（重算的 measurable 写回正式产物，其余字段不动）。
@@ -81,6 +83,7 @@
 | `--purge-role` | `stage2.global` | `role_leaks_fate` 的唯一修复路：把 role/fate 双向重划分一遍 |
 | `--repair-surface-habits` | `stage3.style` | 表层习惯的定向返工 |
 | `--resample` | `stage2.global` | 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应 |
+| `--patch` | `stage2.blueprint` | `extraction-ir-v1` 专属的字段级修复（`hinge_ambiguous` 候选选择 / 编的短语重给），逐条失败各调一次模型，量级是条不是章；详见 `docs/stage2_contract_experiment.md` |
 
 同一修复臂连续失败达到上限时停止该臂；读新 finding 后切换到不同、证据支持的路由不算重复同一路。不要通过改参数、删缓存或删除 finding 伪装收敛。
 

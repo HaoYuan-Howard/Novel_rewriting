@@ -797,6 +797,23 @@ class ChapterBlueprintsResponseV2(StrictModel):
     blueprints: list[BlueprintResponseV2] = Field(min_length=1)
 
 
+class HingeSelectResponse(StrictModel):
+    """候选选择（`--patch` 修 `hinge_ambiguous`）：代码枚举命中位，模型**只挑 id**。
+
+    比「让模型多带几个字重抄一遍」稳定——代码枚举确定候选、模型只做受限选择，
+    是整个 IR 的第一性原理在修复面上的形状。
+    """
+
+    candidate_id: str = Field(min_length=1)
+
+
+class HingePhraseResponse(StrictModel):
+    """短语重给（`--patch` 修 `hinge_anchor_void`）：原短语是编的，按该拍 span
+    原文重给一条；「拍内原样唯一」由 validator 当场验，不唯一就换样本。"""
+
+    phrase: str = Field(min_length=1)
+
+
 class SummaryChapterResponse(StrictModel):
     chapter_ordinal: int = Field(ge=1)
     summary: str = Field(min_length=1)
