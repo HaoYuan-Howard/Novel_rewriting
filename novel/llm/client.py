@@ -33,11 +33,13 @@ client.py —— `ask_text` / `ask_json`。**降级阶梯只有一份，两个�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
 from contextlib import contextmanager
 from typing import Any, Callable, Final, Iterator, TypeVar
+from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
@@ -171,6 +173,25 @@ class LlmFailed(TerminalState):
     """
 
 
+def _attempt_id() -> str:
+    """一次响应获取事件（一次真上线 attempt 或一次缓存命中）的联结键。
+
+    只求进程内外唯一，不求可复算——它联结的是**账本行与审计行**，
+    不是缓存键（那份身份归 `cache_key`，两者不许混）。
+    """
+    return uuid4().hex[:16]
+
+
+def _response_sha256(resp: ChatResponse | None) -> str | None:
+    """响应正文的内容身份。`None` = 这次 attempt 没拿回响应（传输层失败）。
+
+    ⚠ 空 content 也算：空串的哈希把「拿回了空正文」与「没拿回」分开。
+    """
+    if resp is None:
+        return None
+    return hashlib.sha256((resp.content or '').encode('utf-8')).hexdigest()
+
+
 def _strip_fences(s: str | None) -> str:
     """防御性地剥掉 ```json … ``` ——有些模型在 JSON 模式下照样吐围栏。"""
     s = (s or '').strip()
@@ -255,6 +276,11 @@ class LlmClient:
         self._warmup_lock = threading.Lock()
         self._warmed = False
         self._warm_done = threading.Event()
+        #: 每个 purpose 最终被采纳的那次响应（`attempt_id`）。落盘方
+        #: （`extract.py` 等）写 `artifact_adoption` 行时从这里反查——
+        #: 一个 run 里一个 purpose 只问一次，后采纳者覆盖前者即是正确语义。
+        self._adopt_lock = threading.Lock()
+        self._accepted: dict[str, str] = {}
 
     # ── 两个入口 ──────────────────────────────────────────────────────────
 
@@ -292,7 +318,7 @@ class LlmClient:
                 cache_policy=policy)
             if got is None:
                 continue
-            resp, key = got
+            resp, key, attempt_id = got
             text = resp.text
             why = None if text else '正文为空'
             gate = 'empty_text'
@@ -300,8 +326,16 @@ class LlmClient:
                 why = validator(text, resp)
                 gate = 'validator'
             if why is None:
+                self._settle_gate(
+                    purpose=purpose, attempt_id=attempt_id, source='cache',
+                    accepted=True, gate=None, rungs=active_rungs, index=i,
+                    progress=progress)
                 return text
             self.cache.evict(key)
+            self._settle_gate(
+                purpose=purpose, attempt_id=attempt_id, source='cache',
+                accepted=False, gate=gate, rungs=active_rungs, index=i,
+                progress=progress)
             self._observe_rung_rejected(
                 purpose=purpose, rungs=active_rungs, index=i, source='cache',
                 gate=gate, why=why, resp=resp, json_mode=False)
@@ -313,7 +347,7 @@ class LlmClient:
         for i, (effort, thinking) in enumerate(active_rungs):
             # 答案流丢失（_answer_lost）先同档重采一次再决定降档，见 MAX_SAMPLES_PER_RUNG。
             for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
-                resp, key, _cached = self._call_keyed(
+                resp, key, _cached, attempt_id = self._call_keyed(
                     system, user, effort=effort, thinking=thinking, json_mode=False,
                     max_tokens=max_tokens, purpose=purpose, use_cache=False,
                     progress=progress, cache_policy=policy)
@@ -325,9 +359,17 @@ class LlmClient:
                     gate = 'validator'
                 if why is None:
                     self._keep(key, resp, cache_policy=policy)  # ← 判定可用之后才写
+                    self._settle_gate(
+                        purpose=purpose, attempt_id=attempt_id, source='wire',
+                        accepted=True, gate=None, rungs=active_rungs, index=i,
+                        sample=sample, progress=progress)
                     return text
                 self.cache.evict(key)
                 resample = sample < MAX_SAMPLES_PER_RUNG and _answer_lost(resp)
+                self._settle_gate(
+                    purpose=purpose, attempt_id=attempt_id, source='wire',
+                    accepted=False, gate=gate, rungs=active_rungs, index=i,
+                    sample=sample, resample=resample, progress=progress)
                 self._observe_rung_rejected(
                     purpose=purpose, rungs=active_rungs, index=i, source='wire',
                     gate=gate, why=why, resp=resp, json_mode=False, resample=resample)
@@ -432,13 +474,21 @@ class LlmClient:
                 cache_policy=policy)
             if got is None:
                 continue
-            resp, key = got
+            resp, key, attempt_id = got
             obj, why, content, gate = inspect_response(resp)
             head = (f'effort={effort} think={thinking} [缓存] '
                     f'finish={resp.finish_reason} clen={len(content)}')
             if why is None:
+                self._settle_gate(
+                    purpose=purpose, attempt_id=attempt_id, source='cache',
+                    accepted=True, gate=None, rungs=active_rungs, index=i,
+                    progress=progress)
                 return obj
             self.cache.evict(key)
+            self._settle_gate(
+                purpose=purpose, attempt_id=attempt_id, source='cache',
+                accepted=False, gate=gate, rungs=active_rungs, index=i,
+                progress=progress)
             self._observe_rung_rejected(
                 purpose=purpose, rungs=active_rungs, index=i, source='cache',
                 gate=gate, why=why, resp=resp, json_mode=True)
@@ -447,7 +497,7 @@ class LlmClient:
         for i, (effort, thinking) in enumerate(active_rungs):
             # 答案流丢失（_answer_lost）先同档重采一次再决定降档，见 MAX_SAMPLES_PER_RUNG。
             for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
-                resp, key, _cached = self._call_keyed(
+                resp, key, _cached, attempt_id = self._call_keyed(
                     system, user, effort=effort, thinking=thinking, json_mode=True,
                     max_tokens=max_tokens, purpose=purpose, use_cache=False,
                     progress=progress, cache_policy=policy)
@@ -457,10 +507,18 @@ class LlmClient:
                         f'finish={resp.finish_reason} clen={len(content)}')
                 if why is None:
                     self._keep(key, resp, cache_policy=policy)
+                    self._settle_gate(
+                        purpose=purpose, attempt_id=attempt_id, source='wire',
+                        accepted=True, gate=None, rungs=active_rungs, index=i,
+                        sample=sample, progress=progress)
                     return obj
                 # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
                 self.cache.evict(key)
                 resample = sample < MAX_SAMPLES_PER_RUNG and _answer_lost(resp)
+                self._settle_gate(
+                    purpose=purpose, attempt_id=attempt_id, source='wire',
+                    accepted=False, gate=gate, rungs=active_rungs, index=i,
+                    sample=sample, resample=resample, progress=progress)
                 self._observe_rung_rejected(
                     purpose=purpose, rungs=active_rungs, index=i, source='wire',
                     gate=gate, why=why, resp=resp, json_mode=True, resample=resample)
@@ -522,6 +580,36 @@ class LlmClient:
             exhausted=nxt is None,
         )
 
+    def _settle_gate(self, *, purpose: str, attempt_id: str, source: str,
+                     accepted: bool, gate: str | None,
+                     rungs: tuple[tuple[str, bool], ...], index: int,
+                     sample: int | None = None, resample: bool = False,
+                     progress: RequestProgress | None) -> None:
+        """内容闸的判定落**审计账**（`gate_decision` 行），采纳时同时登记
+        `purpose → attempt_id`，供落盘方写 `artifact_adoption` 行时反查。
+
+        与 `_observe_rung_rejected` 的分工：那条是给**看现场的人**的 stdout 事件
+        （带被拒理由的截断文本）；这条是给**离线归因**的账（机器可联结，
+        不带理由文本——理由归事件，采纳归账）。
+        """
+        effort, thinking = rungs[index]
+        self.ctx.ledger.note_gate(
+            sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+            attempt_id=attempt_id, source=source,
+            decision='accepted' if accepted else 'rejected',
+            gate=None if accepted else gate,
+            reasoning_effort=effort, thinking=thinking, rung_index=index,
+            sample=sample, resample=resample,
+            chapter=progress.chapter if progress else None)
+        if accepted:
+            with self._adopt_lock:
+                self._accepted[purpose] = attempt_id
+
+    def accepted_attempt(self, purpose: str) -> str | None:
+        """这个 purpose 最终被采纳的响应的 `attempt_id`；本 run 没采纳过则 `None`。"""
+        with self._adopt_lock:
+            return self._accepted.get(purpose)
+
     # ── 一次调用：缓存 → 传输层重试 → 记账 ────────────────────────────────
 
     def _preflight(self, system: str, user: str, *,
@@ -547,7 +635,7 @@ class LlmClient:
                      json_mode: bool, max_tokens: int, purpose: str,
                      progress: RequestProgress | None,
                      cache_policy: CachePolicy | None = None,
-                     ) -> tuple[ChatResponse, str] | None:
+                     ) -> tuple[ChatResponse, str, str] | None:
         """只读一个档位的缓存；miss 绝不顺手上线。"""
         policy = cache_policy or self.ctx.cache
         if not policy.read:
@@ -559,17 +647,17 @@ class LlmClient:
         hit = self.cache.get(key)
         if hit is None:
             return None
-        self._record_cache_hit(
+        attempt_id = self._record_cache_hit(
             req, hit, purpose=purpose, progress=progress, cache_policy=policy)
-        return hit, key
+        return hit, key, attempt_id
 
     def _call_keyed(self, system: str, user: str, *, effort: str, thinking: bool,
                     json_mode: bool, max_tokens: int, purpose: str,
                     use_cache: bool = True,
                     progress: RequestProgress | None = None,
                     cache_policy: CachePolicy | None = None,
-                    ) -> tuple[ChatResponse, str, bool]:
-        """发一次（或读一次缓存）。返回 `(响应, 缓存键, 这一份是不是缓存来的)`。
+                    ) -> tuple[ChatResponse, str, bool, str]:
+        """发一次（或读一次缓存）。返回 `(响应, 缓存键, 是不是缓存来的, attempt_id)`。
 
         ⚠⚠ **它不再写缓存。** 原来这里拿到响应就 `put`，而调用方**还没判断它可不可用**：
         于是四档阶梯各自拿回一份截断 JSON 时，盘上留下的是**四份毒缓存**——
@@ -593,15 +681,15 @@ class LlmClient:
             if hit is not None:
                 # ⚠ **缓存命中也要记一行。** 不记的话，「这次跑读了 31 份缓存」与
                 #   「这次跑什么都没做」在账本上长得一模一样，而这两件事的下一步完全不同。
-                self._record_cache_hit(
+                attempt_id = self._record_cache_hit(
                     req, hit, purpose=purpose, progress=progress,
                     cache_policy=policy)
-                return hit, key, True
+                return hit, key, True, attempt_id
 
         # ⚠ 记账在 `_send_with_retry` 里逐次发生（那里才知道自己发了几次）。
-        return self._send_with_retry(
-            req, purpose=purpose, progress=progress,
-            cache_policy=policy), key, False
+        resp, attempt_id = self._send_with_retry(
+            req, purpose=purpose, progress=progress, cache_policy=policy)
+        return resp, key, False, attempt_id
 
     def _keep(self, key: str, resp: ChatResponse, *,
               cache_policy: CachePolicy | None = None) -> None:
@@ -612,7 +700,8 @@ class LlmClient:
 
     def _send_with_retry(self, req: ChatRequest, *, purpose: str,
                          progress: RequestProgress | None = None,
-                         cache_policy: CachePolicy | None = None) -> ChatResponse:
+                         cache_policy: CachePolicy | None = None,
+                         ) -> tuple[ChatResponse, str]:
         """**传输层**重试。与降级阶梯是两条独立的循环（见模块 docstring 末尾）。
 
         ⚠ 只重试 `retryable` 的（429 / 5xx / 超时）。4xx 里其余的是**我们自己发错了**，
@@ -669,13 +758,17 @@ class LlmClient:
 
     def _send_attempts(self, req: ChatRequest, *, purpose: str,
                        progress: RequestProgress | None = None,
-                       cache_policy: CachePolicy | None = None) -> ChatResponse:
+                       cache_policy: CachePolicy | None = None,
+                       ) -> tuple[ChatResponse, str]:
         """重试循环本体。**语义全部写在 `_send_with_retry` 的 docstring 里**，
-        拆出来只是为了让首发闸不必把整个循环缩进一层。"""
+        拆出来只是为了让首发闸不必把整个循环缩进一层。
+        返回 `(响应, 成功那次 attempt 的 attempt_id)`——每次上线各有自己的 id，
+        失败行也带（账本行与审计行靠它相联）。"""
         last: TransportError | None = None
         max_attempts = self.max_retries + 1
         for attempt_index in range(max_attempts):
             attempt = attempt_index + 1
+            attempt_id = _attempt_id()
             backoff_seconds: float | None = None
             with self._gate:                       # 并发闸：守的是钱不是速率
                 heartbeat = AttemptHeartbeat(
@@ -699,6 +792,7 @@ class LlmClient:
                             will_retry=will_retry,
                             backoff_ms=(round(backoff_seconds * 1000)
                                         if backoff_seconds is not None else None),
+                            attempt_id=attempt_id,
                             progress=progress, cache_policy=cache_policy)
                     finally:
                         heartbeat.finish(outcome='error', error_kind=e.kind)
@@ -713,11 +807,12 @@ class LlmClient:
                         self._record_wire(
                             req, resp, error=None, purpose=purpose, attempt=attempt,
                             max_attempts=max_attempts, latency_ms=latency_ms,
-                            will_retry=False, backoff_ms=None, progress=progress,
+                            will_retry=False, backoff_ms=None,
+                            attempt_id=attempt_id, progress=progress,
                             cache_policy=cache_policy)
                     finally:
                         heartbeat.finish(outcome='ok')
-                    return resp
+                    return resp, attempt_id
             # ⚠ 睡在信号量**外面**：在闸里睡会把整跑串行化（并发闸守的是钱，不是速率）。
             assert backoff_seconds is not None
             self._sleep(backoff_seconds)
@@ -727,12 +822,16 @@ class LlmClient:
                      error: TransportError | None, purpose: str,
                      attempt: int, max_attempts: int, latency_ms: int,
                      will_retry: bool, backoff_ms: int | None,
+                     attempt_id: str,
                      progress: RequestProgress | None,
                      cache_policy: CachePolicy | None = None) -> None:
         """一次**真上线**记一行。失败那次 token 三项全 `None`——它没拿回任何读数。"""
         u = (resp.usage if resp else None) or {}
         policy = cache_policy or self.ctx.cache
         self.ctx.ledger.record(
+            attempt_id=attempt_id,
+            request_fingerprint=cache_key(req),
+            response_sha256=_response_sha256(resp),
             node=self.ctx.node, sid=self.ctx.sid,
             model=(resp.model if resp else '') or self.model,
             code=self.ctx.code, cached=False, cache_policy=policy.name,
@@ -763,11 +862,19 @@ class LlmClient:
 
     def _record_cache_hit(self, req: ChatRequest, resp: ChatResponse, *,
                           purpose: str, progress: RequestProgress | None,
-                          cache_policy: CachePolicy | None = None) -> None:
-        """一次缓存命中记一行（0 元）。**不记的话，「读了 31 份缓存」与「什么都没做」同形。**"""
+                          cache_policy: CachePolicy | None = None) -> str:
+        """一次缓存命中记一行（0 元）。**不记的话，「读了 31 份缓存」与「什么都没做」同形。**
+
+        返回本次命中事件的 `attempt_id`——缓存来的响应同样要过内容闸、
+        同样可能被采纳，审计账的联结键不因来源而缺席。
+        """
+        attempt_id = _attempt_id()
         u = resp.usage or {}
         policy = cache_policy or self.ctx.cache
         self.ctx.ledger.record(
+            attempt_id=attempt_id,
+            request_fingerprint=cache_key(req),
+            response_sha256=_response_sha256(resp),
             node=self.ctx.node, sid=self.ctx.sid, model=resp.model or self.model,
             code=self.ctx.code, cached=True, cache_policy=policy.name,
             prompt_tokens=u.get('prompt_tokens'),
@@ -782,3 +889,4 @@ class LlmClient:
             finish_reason=resp.finish_reason,
             progress=progress,
         )
+        return attempt_id

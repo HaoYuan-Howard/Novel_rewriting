@@ -565,6 +565,25 @@ def _write_invalid(
     return str(store.write_invalid(rel, artifact, gates_skipped=[]))
 
 
+def _note_adopted(ctx: RunContext, client: LlmClient, *, rel: str,
+                  candidate: dict[str, Any],
+                  purposes: dict[str, int | None]) -> None:
+    """正式产物落盘后，逐 purpose 写 `artifact_adoption` 审计行（`llm_audit.jsonl`）。
+
+    「最终采纳档位」由 adoption 行 → `attempt_id` → 成本账行反查，不再从
+    「同 purpose 最后一条 ok 行」猜。本 run 没有采纳新响应的 purpose
+    （定向重生成合并进来的未动章、0 成本路）没有登记项 ⇒ 无行，缺行即「沿用旧稿」。
+    """
+    fp = prov.projection_fingerprint(candidate)
+    for purpose, chapter in purposes.items():
+        attempt_id = client.accepted_attempt(purpose)
+        if attempt_id is None:
+            continue
+        ctx.ledger.note_adoption(
+            sid=ctx.sid, node=ctx.node, purpose=purpose, attempt_id=attempt_id,
+            artifact=rel, artifact_fingerprint=fp, chapter=chapter)
+
+
 def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
     """付费产出全书事实底座；响应边界、归一与落盘载体各校验一次。"""
     store = ArtifactStore(ctx)
@@ -616,6 +635,8 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
             invalid_path=path,
         )
     _write_formal(store, GLOBAL_REL, artifact)
+    _note_adopted(ctx, client, rel=GLOBAL_REL, candidate=candidate,
+                  purposes={ctx.node: None})
     return artifact
 
 
@@ -738,8 +759,9 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
     artifact = GlobalGrounding.model_validate({
         **data, '_provenance': provenance,
     })
-    hits = _hard_hits(_judge_candidate(
-        artifact.model_dump(by_alias=True), None, main_text),
+    candidate = artifact.model_dump(by_alias=True)
+    hits = _hard_hits(
+        _judge_candidate(candidate, None, main_text),
         ignore={'upstream_missing'},
     )
     if hits:
@@ -751,6 +773,8 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
             invalid_path=path,
         )
     _write_formal(store, GLOBAL_REL, artifact)
+    _note_adopted(ctx, client, rel=GLOBAL_REL, candidate=candidate,
+                  purposes={f'{ctx.node}:purge-role': None})
     return artifact
 
 
@@ -1054,6 +1078,8 @@ def _run_blueprint_repair(
         )
 
     _write_formal(store, BLUEPRINT_REL, artifact)
+    _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,
+                  purposes={f'{ctx.node}:ch{o}': o for o in repaired_ordinals})
     both = _Both(store)
     return _report(ctx, store, both, both.judge())
 
@@ -1135,6 +1161,12 @@ def finish_blueprints(
     # 归档旧正式稿与问题稿；否则 `_Both` / `--check-only` 会继续优先读取旧问题稿，
     # 出现“正式稿已写成功、自动复检却仍判上一轮失败”的幽灵红灯。
     _write_formal(store, BLUEPRINT_REL, artifact)
+    produced = sorted({
+        int(blueprint.get('chapter_ordinal') or 0)
+        for blueprint in raw_blueprints
+    })
+    _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,
+                  purposes={f'{ctx.node}:ch{o}': o for o in produced})
     both = _Both(store)
     return _report(ctx, store, both, both.judge())
 
