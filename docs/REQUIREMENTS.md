@@ -438,6 +438,89 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 
 ⚠ 两项加起来也只有个位数百分比：输入侧优化的天花板约 7%（FC-13）。要量级收益只有 effort 降档。
 
+### TODO-31 · 生成侧 schema 降本与 flash 潜力（新 worktree 施工）
+
+2026-08-19/20 用户拍板：**除语义判官外全链 `deepseek-v4-flash`**（开发期成本：pro 约
+9 元/本 vs flash 约 3 元/本），判官恒 `deepseek-v4-pro`。已落成形状的部分见
+`docs/BACKEND_CONTRACT.md` §十 2026-08-20 行：默认模型换 flash
+（`novel/config.py::DEFAULT_MODEL`）、判官钉在 `NodeSpec.model`
+（`contracts/invariants.py::NODES` 的 `stage6.semantic`，`DEEPSEEK_MODEL` 换不掉）、
+答案流丢失先同档重采一次再降档（`novel/llm/client.py::MAX_SAMPLES_PER_RUNG`）。
+**动 schema 前的基线快照已做**：`outputs/_snapshots/pre_schema_work_20260820.tar.gz`
+（`tools/backup_snapshot.py` create-private，255 份 / 7.7MB，含 flash 三书、pro 对照
+与 ledger；⚠ 落在本机盘上，不是加密离线介质，要不要挪由用户定）。
+
+本条要的是**用户假设的验证与施工**：「schema 里的不确定字段换成确定性字段，flash
+就能追平 pro」。该假设大体成立但有一处实测修正——`narrative_role` 早就是闭合
+枚举，flash 照样编：产出的非法值 `'summary'` 恰是相邻字段 `delivery` 的合法值
+（两个闭合枚举串行）、`'close'` 是「收尾」的自然说法而取值面里叫 `payoff`
+（命名不直观）。⇒ 对 Literal 字段有效的不是「再收窄」，是**取值面之间不可混淆**，
+以及**把枚举下推到解码器**——`json_mode` 只保证「是合法 JSON」，不保证合乎 schema
+（`novel/llm/transport.py::ChatRequest` 有 `json_mode` 这一格可挂）。
+
+杠杆最大的一类是「代码本来就知道、却去问模型」——把模型判断换成模型给原料 + 代码算：
+
+| 改动 | 现在 | 应该 | 实测失败样本 |
+|---|---|---|---|
+| stage2 锚点 | `HingeResponse` 同时要段号+短语且须一致 | 删 `para` 只留 `phrase`，段号由代码全书唯一匹配定位；多匹配/查无才 HARD | 书3 的 10 处 `verbatim_failed` 里 **9 处是短语对、段号错** |
+| `narrative_role='cold_open'` | 模型标 | 由「首单元起始拍是不是本章最早拍」推导 | 书2 `structure_transition` |
+| `PlanGoal` 的 `FactRef.ref` | 模型填 | 代码校验并自动补尾单元的拍 | 书1 `goal_landing` |
+| `Secret.setup_chapters` | 模型填 | 由 `reader_reveal_events` 推上界（同章即无效） | 书3 `secret_setup_order` |
+| `present_names` | 自由文本 `list[str]` | 收成 `char_id` 引用，从已知集合里选 | 书3 `present_names_invented` |
+| stage7 家族/宅邸称呼 | 不在替换面 | 从 `surname_map` 自动派生 `X家`/`X府` | 书2 的 35 条高置信残留（`孙家/孙府/宋家/宋府`） |
+
+- [ ] 上表六项按序施工（锚点那行杠杆最大：错误面从「两字段互相一致」缩成
+      「短语是否逐字存在」，且模型不必数段落 ⇒ reasoning 同步下降）。
+- [ ] 枚举下推到解码器 + 取值面命名不可混淆（`summary`/`close` 那两条实测）。
+- [ ] **方向警告**：flash 在 `stage2.blueprint` 比 pro **少想 36%**（113,529 vs
+      176,354）、在 `stage5.write` 比 pro **多想 34%**（246,064 vs 182,997）——
+      抽取层想得不够、写作层想得过多，**别用同一套手法压这两个节点**。
+- [ ] 验收读数已有两个现成基线：`outputs/_ab/ab_matrix_无情道_pro_vs_flash.md`
+      （`tools/ab_compare.py`）与 `outputs/_ab/blind_read_2016982769068126957`
+      （用户盲读：区分不出高下——它只对 `stage5.write` 构成背书）。
+
+⚠ worktree 实测过的坑（都真踩过）：`.env` 与 `.llm_cache/` 不进 git ⇒ 新 worktree
+全 miss 真付费，把 `NOVEL_CACHE_DIR`（`novel/config.py::ENV_KEYS`）指回主仓
+`.llm_cache` 即可命中；**缓存键含 `model`**（`ChatRequest.cache_payload` 第一键）
+⇒ 换模型全 miss，反过来**同模型同参数重跑 0 元**、被超时杀掉照原样重跑即可；
+`stage2.global` 不接受 `--check-only`；`stage5.write` composite 写法不接受
+`--chapters`（长书撞宿主超时就整跑重来，已完成调用会命中缓存）；PowerShell
+内联 `python -c` 带中文/反斜杠会被引号吃掉，落脚本文件跑。
+⚠ `ab_compare` 的「供应商 prompt cache 命中率」不归因于模型（取决于运行时序与并发）。
+⚠ 破坏 schema 形状要 `current_version` +1 并在
+`tests/test_artifact_versions.py::_SHAPE_BREAKS` 登记、同批回答「存量产物由谁重建」
+——快照已在，两臂对照组可随时对账。
+
+### TODO-32 · flash 迁移三本书的未收口项（诚实清单）
+
+2026-08-19/20 flash 臂三本书（`outputs/_ab/flash/`）成书两本、stopped 一本，
+未收口事项逐条挂着；**它们不阻断成书，但按 skill 契约该有下文**。
+
+- [ ] **`把夫君做成丧尸后_1995972900595979415` 缺终审包**。主链跑完、成书已产
+      （19 章 / 12,074 字，sha1 `abd21462…`），八项逐字对账已做：①②③⑤⑦ pass；
+      ④ 配置面命中 4 条 `kept` 内嵌旧名但**交付面 0**（旧姓「孙」「宋」在成书里
+      各 0 次，那 4 条称呼正文出现 0 次）。按模板
+      `.claude/skills/novel-pipeline-operator/assets/final-review-template.md`
+      补写 `<书名>_review.md` 落书目录根；代批凭据在作业记录与
+      `<base>/_service/ledger.jsonl` 里，逐项引用，不凭记忆补。
+- [ ] **三本书 verification 全部未销账**（无情道 70 · 把夫君 88 · 男宠 47）。
+      0 成本入口是 `stage2.global --review-decisions <书目录内 json>`，逐项
+      `actor + 理由 + subject_sha256`。**批量盖章等于把没有证据的判断写成客观
+      通过，本仓明令禁止**——谁销谁逐条真核。⚠ pro 对照臂的 `verification=3`
+      是销账后余额（盘上有 56 条逐项理由的 `global_review_decisions.json`），
+      `ab_compare` 里 ⑤ 那行 3 vs 70 不可直接比较。
+- [ ] **「最终稿产自哪一档」变成一等公民读数**：同一 `(node, chapter)` 按 `at`
+      排序取最后一条 `outcome=='ok'` 的 `reasoning_effort`/`thinking`。实测读数
+      （无情道 flash 臂 10/23 章产自降档档位、含 deep 臂 ch1/ch3；把夫君 8/19；
+      pro 对照 0/23）目前只能从 ledger 手算，任何报告里都没有。
+- [ ] **两处原文短语被逐字带进成书**（无情道 ch12，`stage3.micro_quote` 报 3 处：
+      1 处设计内保真点、2 处写手照抄了 `style_grounding.json` 的文风举例）。
+      pro 臂同样 2/3 ⇒ 流水线固有特征不是 flash 退步。修它要
+      `stage3.style --apply-edit`，代价是下游缓存全废、stage4+stage5 整层重付——
+      已披露未修，修不修由用户裁决。
+- [ ] 未测项：flash 修掉「空正文降档」（`MAX_SAMPLES_PER_RUNG`）之后的真实
+      `high` 档能力——此前 3 本里 2 本的 `stage4.plan` 从未在 `high` 档被评估过。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。
