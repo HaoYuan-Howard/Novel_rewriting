@@ -313,10 +313,18 @@ def build_prompts(
             f'{GLOBAL_REL} 不在盘上——已现称名表由全局名册派生，先跑 stage2.global')
     characters = store.read(GlobalGrounding, GLOBAL_REL) \
         .model_dump(by_alias=True)['entities']['characters']
-    system = with_json_shape(prompts.BLUEPRINT_SYS, prompts.BLUEPRINT_HINT)
+    # 契约 dispatch（v3 / extraction-ir-v1）：system 是 spec 里**已拼好结构提示**的
+    # 完整字节；user 构造两契约共用（上下文策略刻意不随契约变，A/B 变量只有响应契约一维）。
+    system = _active_spec().system
     return [(o, system,
              build_blueprint_user(ctx.title, mt, (o,), characters=characters))
             for o in targets]
+
+
+def _active_spec():
+    """本次运行选用的 blueprint 契约（整跑用；修复按基线架构另选）。"""
+    from novel.stages.stage2.contract import active_contract
+    return active_contract()
 
 
 def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = ()) -> tuple[str, str]:
@@ -414,15 +422,18 @@ def _past_names_block(names: list[str]) -> str:
             + '、'.join(rows))
 
 
-def blueprint_context(title: str, main_text: list[dict[str, Any]]) -> dict[str, Any]:
+def blueprint_context(title: str, main_text: list[dict[str, Any]],
+                      architecture: str = BLUEPRINT_ARCHITECTURE) -> dict[str, Any]:
     """可落盘、可比较的上下文策略身份。
 
-    ⚠ `architecture` 从 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 取，
-    判据 `context_scope` 读的是同一个常量——**两边各写一份字面**是升版时最容易漏的那一处，
-    漏了就得到「产物明明是新架构、判据说不符合约定」的假红。
+    ⚠ `architecture` 的默认值从 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 取，
+    判据 `context_scope` 读的是同一张取值面——**两边各写一份字面**是升版时最容易漏的
+    那一处，漏了就得到「产物明明是新架构、判据说不符合约定」的假红。
+    双契约期由调用方传入本次选用的架构（整跑=配置选的，修复=基线产物的）；
+    其余预算字段**刻意不随契约变**（A/B 变量只有响应契约一维）。
     """
     return {
-        'architecture': BLUEPRINT_ARCHITECTURE,
+        'architecture': architecture,
         'batch_size': 1,
         'stable_prefix': prov.fingerprint(_blueprint_stable_prefix(title, main_text)),
         'current_chapter_full': True,
@@ -782,8 +793,15 @@ def _run_chapter_requests(
     ctx: RunContext,
     client: LlmClient,
     requests: list[tuple[int | None, str, str]],
+    *,
+    model_cls: type = ChapterBlueprintsResponse,
 ) -> tuple[list[dict[str, Any]], list[str], list[Exception]]:
-    """并发等待独立章节；一个失败不丢掉已经付费成功的其他章。"""
+    """并发等待独立章节；一个失败不丢掉已经付费成功的其他章。
+
+    `model_cls` 按契约传（v3=`ChapterBlueprintsResponse`，
+    ir1=`ChapterBlueprintsResponseV2`）——响应边界与 system 必须同一套 spec，
+    各选一半的失败形态是「prompt 是新的、校验还是旧的」而不会报错。
+    """
     results: dict[int, dict[str, Any]] = {}
     violations: list[str] = []
     errors: list[Exception] = []
@@ -796,7 +814,7 @@ def _run_chapter_requests(
     def one(ordinal: int, system: str, user: str) -> list[dict[str, Any]]:
         response = client.ask_json(
             system, user,
-            model_cls=ChapterBlueprintsResponse,
+            model_cls=model_cls,
             purpose=f'{ctx.node}:ch{ordinal}',
             max_tokens=BLUEPRINT_MAX_TOKENS,
             progress=tracker.request(ordinal),
@@ -844,16 +862,20 @@ def _blueprint_metrics(blueprint: dict[str, Any]) -> dict[str, int]:
 
 
 def _repair_baseline(blueprint: dict[str, Any],
-                     main_text: list[dict[str, Any]]) -> dict[str, Any]:
+                     main_text: list[dict[str, Any]],
+                     *, projection: Any = response_shape) -> dict[str, Any]:
     """最终产物 → 模型响应形状；代码派生字段不反喂给模型。
 
-    ⚠ 要章正文才反投影得出段号（`bounded-fidelity-v3`）——**取的必须是这条蓝图
-    自己那一章**，拿错章反算出来的段号一样是整数、一样不会报错。
+    `projection` 按契约传（v3=`normalize.response_shape`，
+    ir1=`compile_v2.canonical_ir_projection`）——基线形状必须与本次请求的响应
+    契约同构，否则模型收到的「上一版」长得跟它要交的东西不是一回事。
+    ⚠ 要章正文才反投影得出定位（段号）——**取的必须是这条蓝图自己那一章**，
+    拿错章反算出来的段号一样是整数、一样不会报错。
     """
     ordinal = int(blueprint.get('chapter_ordinal') or 0)
     text = next((str(section.get('text') or '') for section in main_text
                  if int(section.get('chapter_ordinal') or 0) == ordinal), '')
-    return response_shape(blueprint, text)
+    return projection(blueprint, text)
 
 
 def _mentions_chapter(value: str, ordinal: int) -> bool:
@@ -935,15 +957,25 @@ def _run_blueprint_repair(
             f'原稿 model={previous.provenance.model!r}，本次={client.model!r}。'
             '为避免来源账说假话，尚未调用 LLM')
 
-    from novel.stages.stage2 import prompts
-    system = with_json_shape(prompts.BLUEPRINT_SYS, prompts.BLUEPRINT_HINT)
-    old_system = previous.provenance.prompts.get('BLUEPRINT_SYS')
+    from novel.stages.stage2.contract import contract_for
+
+    # ⚠ 修复按**基线产物的 architecture** 选契约——修复必须与基线同构，配置说了不算。
+    baseline_arch = previous.provenance.context.architecture
+    spec = contract_for(baseline_arch)
+    if _active_spec().architecture != baseline_arch:
+        raise TerminalState(
+            f'配置选的契约是 {_active_spec().architecture!r}，而基线产物是 '
+            f'{baseline_arch!r}——定向重生成必须与基线同构。要换契约先整跑 '
+            'stage2.blueprint（整体切换架构）。尚未调用 LLM')
+    system = spec.system
+    old_system = previous.provenance.prompts.get(spec.sys_name)
     if old_system != prov.fingerprint(system):
         raise TerminalState(
-            '定向重生成的 BLUEPRINT_SYS 与基线产物不同，而现有 provenance '
+            f'定向重生成的 {spec.sys_name} 与基线产物不同，而现有 provenance '
             '没有表达“部分章节使用另一版 system”的槽位；尚未调用 LLM')
 
-    expected_context = blueprint_context(ctx.title, main_text)
+    expected_context = blueprint_context(ctx.title, main_text,
+                                         architecture=baseline_arch)
     if previous.provenance.context.model_dump() != expected_context:
         raise TerminalState(
             '定向重生成不能把 cumulative-past 与 bounded-fidelity 两种上下文'
@@ -966,12 +998,14 @@ def _run_blueprint_repair(
             ctx.title, main_text, (ordinal,),
             characters=global_raw['entities']['characters'],
             repair_findings=findings,
-            repair_baseline=_repair_baseline(old_by[ordinal], main_text),
+            repair_baseline=_repair_baseline(
+                old_by[ordinal], main_text, projection=spec.projection_fn),
         )
         prompt_rows[ordinal] = (user, findings)
         requests.append((ordinal, system, user))
 
-    returned, new_scope, errors = _run_chapter_requests(ctx, client, requests)
+    returned, new_scope, errors = _run_chapter_requests(
+        ctx, client, requests, model_cls=spec.response_model)
     if not returned:
         if errors:
             raise errors[0]
@@ -981,11 +1015,17 @@ def _run_blueprint_repair(
         int(blueprint.get('chapter_ordinal') or 0): blueprint
         for blueprint in returned
     }
-    target_data, target_accounting = normalize_blueprints(
+    target_data, target_accounting = spec.compile_fn(
         {'blueprints': returned},
         main_text,
         global_raw['entities']['characters'],
+        summaries=None,
     )
+    if spec.needs_summary_batch:
+        # ir1：目标章的 events 已经变了，旧摘要不可沿用——只为重生成的章跑一次小批。
+        summaries = _run_summary_batch(ctx, client, target_data['blueprints'])
+        for blueprint in target_data['blueprints']:
+            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
     normalized_by = {
         int(blueprint.get('chapter_ordinal') or 0): blueprint
         for blueprint in target_data['blueprints']
@@ -1035,9 +1075,24 @@ def _run_blueprint_repair(
     ]
     partial = sorted(set(old_prov.partial_regen_chapters)
                      | set(repaired_ordinals))
+    # ir1 的两笔专属账与 verbatim 同一条合并纪律：旧账剔除目标章的行，接上新行。
+    place_rows = [
+        row for row in old_prov.place_inherit_without_base
+        if not _record_is_targeted([row], targets)
+    ] + list(target_accounting.get('place_inherit_without_base') or [])
+    pending_rows = [
+        list(row) for row in old_prov.hinge_ambiguous_pending
+        if not _record_is_targeted(row, targets)
+    ] + [list(row) for row
+         in (target_accounting.get('hinge_ambiguous_pending') or [])]
+    prompt_keys = {spec.sys_name: system}
+    if spec.needs_summary_batch:
+        from novel.stages.stage2 import prompts as _p
+        prompt_keys['SUMMARY_BATCH_SYS'] = with_json_shape(
+            _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
     delta = ctx.llm_provenance(
         BlueprintProvenance,
-        prompts={'BLUEPRINT_SYS': system},
+        prompts=prompt_keys,
         model=client.model,
         scope_violations=old_scope + new_scope,
         batches=[list(batch) for batch in old_prov.batches],
@@ -1047,6 +1102,8 @@ def _run_blueprint_repair(
         verbatim_failures=failures,
         partial_regen_chapters=partial,
         repairs=repair_history,
+        place_inherit_without_base=place_rows,
+        hinge_ambiguous_pending=pending_rows,
     )
     provenance = BlueprintProvenance.model_validate({
         **delta.model_dump(),
@@ -1078,24 +1135,78 @@ def _run_blueprint_repair(
         )
 
     _write_formal(store, BLUEPRINT_REL, artifact)
+    repair_purposes: dict[str, int | None] = {
+        f'{ctx.node}:ch{o}': o for o in repaired_ordinals}
+    if spec.needs_summary_batch:
+        repair_purposes[f'{ctx.node}:summary-batch'] = None
     _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,
-                  purposes={f'{ctx.node}:ch{o}': o for o in repaired_ordinals})
+                  purposes=repair_purposes)
     both = _Both(store)
     return _report(ctx, store, both, both.judge())
+
+
+#: 书级摘要批的长度界（validator 硬校验）。⚠ **报警界不是质量闸**：指令说 100~220 字，
+#: 界按盘上 v3 人写摘要的实测幅度（81~329）外扩留余量——收得太紧会把一段合格摘要
+#: 打回去白付一轮，收的是「离谱到该有人看一眼」那一档。
+SUMMARY_BATCH_MIN_CHARS = 50
+SUMMARY_BATCH_MAX_CHARS = 400
+
+
+def _run_summary_batch(ctx: RunContext, client: LlmClient,
+                       blueprints: list[dict[str, Any]]) -> dict[int, str]:
+    """`extraction-ir-v1` 的书级摘要批：一次调用按 events 产全部目标章的摘要。
+
+    输入已是压缩事实（各章 beat events），不重读原章；validator 硬校验
+    「目标章集恰好覆盖 + 长度界」。阶梯耗尽由 `ask_json` 抛 `LlmFailed`
+    （显式终态）——此时章响应已在缓存里，重跑只补这一次调用。
+    """
+    from contracts.schema.stage2 import SummaryBatchResponse
+    from novel.stages.stage2 import prompts
+
+    targets = sorted(int(bp.get('chapter_ordinal') or 0) for bp in blueprints)
+    payload = {'chapters': [
+        {'chapter_ordinal': int(bp.get('chapter_ordinal') or 0),
+         'events': [str(beat.get('event') or '')
+                    for beat in (bp.get('beats') or [])]}
+        for bp in blueprints
+    ]}
+
+    def validate(obj: Any, _resp: Any) -> str | None:
+        got = [c.chapter_ordinal for c in obj.chapters]
+        if sorted(got) != targets or len(set(got)) != len(got):
+            return f'章集不齐或重复：要 {targets}，得 {sorted(got)}'
+        for c in obj.chapters:
+            if not SUMMARY_BATCH_MIN_CHARS <= len(c.summary) <= SUMMARY_BATCH_MAX_CHARS:
+                return (f'ch{c.chapter_ordinal} 摘要 {len(c.summary)} 字，出界 '
+                        f'[{SUMMARY_BATCH_MIN_CHARS}, {SUMMARY_BATCH_MAX_CHARS}]')
+        return None
+
+    response = client.ask_json(
+        with_json_shape(prompts.SUMMARY_BATCH_SYS, prompts.SUMMARY_BATCH_HINT),
+        '── 逐章事件清单（按叙述顺序）──\n'
+        + json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
+        model_cls=SummaryBatchResponse,
+        purpose=f'{ctx.node}:summary-batch',
+        validator=validate,
+    )
+    return {c.chapter_ordinal: c.summary for c in response.chapters}
 
 
 def request_blueprints(ctx: RunContext, client: LlmClient) -> dict[str, Any]:
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
     assert main_text is not None
+    spec = _active_spec()
     requests = build_prompts(ctx)
-    raw, violations, errors = _run_chapter_requests(ctx, client, requests)
+    raw, violations, errors = _run_chapter_requests(
+        ctx, client, requests, model_cls=spec.response_model)
     return {
         'main_text': main_text,
         'requests': requests,
         'raw_blueprints': raw,
         'scope_violations': violations,
         'errors': errors,
+        'contract': spec.architecture,
     }
 
 
@@ -1105,6 +1216,8 @@ def finish_blueprints(
     batch: dict[str, Any],
 ) -> CheckReport:
     """付费逐章抽取；每章独立请求，合并后统一归一、联合校验和落盘。"""
+    from novel.stages.stage2.contract import contract_for
+
     store = ArtifactStore(ctx)
     main_text = batch['main_text']
     global_art = store.read(GlobalGrounding, GLOBAL_REL)
@@ -1113,26 +1226,39 @@ def finish_blueprints(
     raw_blueprints = batch['raw_blueprints']
     scope_violations = batch['scope_violations']
     errors = batch['errors']
+    spec = contract_for(batch.get('contract') or _active_spec().architecture)
     if not raw_blueprints:
         if errors:
             raise errors[0]
         raise TerminalState('stage2.blueprint 没有任何一章返回可接纳的响应')
 
-    data, accounting = normalize_blueprints(
+    data, accounting = spec.compile_fn(
         {'blueprints': raw_blueprints},
         main_text,
         global_raw['entities']['characters'],
+        summaries=None,
     )
     system = requests[0][1]
+    prompt_keys = {spec.sys_name: system}
+    if spec.needs_summary_batch:
+        # ir1：summary 不在抽取响应里——书级摘要批按 events 产，编译时的
+        # debug 拼接在这里被**整体覆盖**（validator 保证目标章恰好全覆盖）。
+        summaries = _run_summary_batch(ctx, client, data['blueprints'])
+        for blueprint in data['blueprints']:
+            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
+        from novel.stages.stage2 import prompts as _p
+        prompt_keys['SUMMARY_BATCH_SYS'] = with_json_shape(
+            _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
     ordinals = [int(section.get('chapter_ordinal') or 0)
                 for section in main_text]
     provenance = ctx.llm_provenance(
         BlueprintProvenance,
-        prompts={'BLUEPRINT_SYS': system},
+        prompts=prompt_keys,
         model=client.model,
         scope_violations=scope_violations,
         batches=[[ordinal] for ordinal in ordinals],
-        context=blueprint_context(ctx.title, main_text),
+        context=blueprint_context(ctx.title, main_text,
+                                  architecture=spec.architecture),
         partial_regen_chapters=[],
         repairs=[],
         **accounting,
@@ -1165,8 +1291,11 @@ def finish_blueprints(
         int(blueprint.get('chapter_ordinal') or 0)
         for blueprint in raw_blueprints
     })
+    purposes: dict[str, int | None] = {f'{ctx.node}:ch{o}': o for o in produced}
+    if spec.needs_summary_batch:
+        purposes[f'{ctx.node}:summary-batch'] = None
     _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,
-                  purposes={f'{ctx.node}:ch{o}': o for o in produced})
+                  purposes=purposes)
     both = _Both(store)
     return _report(ctx, store, both, both.judge())
 

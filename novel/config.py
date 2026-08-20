@@ -29,6 +29,8 @@ from math import isfinite
 from pathlib import Path
 from typing import Mapping
 
+from contracts.invariants import BLUEPRINT_ARCHITECTURE, BLUEPRINT_ARCHITECTURES
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: 模型 id（生成侧默认）。2026-08-19/20 用户裁决：开发期成本不可接受
@@ -47,6 +49,14 @@ DEFAULT_BASE_URL = 'https://api.deepseek.com'
 #: 不是随手改的环境变量——账本每行的 `reasoning_effort`/`thinking` 列会如实记下来。
 DEFAULT_THINKING_MODE = 'on'
 THINKING_MODES = ('on', 'off')
+
+#: `stage2.blueprint` 的响应契约（架构）。默认 `bounded-fidelity-v3`；
+#: `extraction-ir-v1` 经 `NOVEL_STAGE2_BLUEPRINT_CONTRACT` **显式**选择——
+#: 与 `DEEPSEEK_MODEL` 同一条纪律：这是给 A/B 拧一次的口，不是随手改的环境变量，
+#: 产物 `_provenance.context.architecture` 会如实记下来。A/B 达标后翻的是
+#: 这里的默认（`contracts/invariants.py::BLUEPRINT_ARCHITECTURE`），不是取值面。
+#: ⚠ 名字带 `BLUEPRINT`：global 将来可能有自己的契约版本，不占它的命名空间。
+DEFAULT_STAGE2_BLUEPRINT_CONTRACT = BLUEPRINT_ARCHITECTURE
 
 #: 缓存目录。`.gitignore` 已经盖住它（连同 `Output/` / `Novel_data/` / `.env`）。
 DEFAULT_CACHE_DIRNAME = '.llm_cache'
@@ -81,6 +91,7 @@ ENV_KEYS: dict[str, str] = {
     'max_retries': 'DEEPSEEK_MAX_RETRIES',
     'backoff_base': 'DEEPSEEK_BACKOFF_BASE',
     'concurrency': 'NOVEL_CONCURRENCY',
+    'stage2_blueprint_contract': 'NOVEL_STAGE2_BLUEPRINT_CONTRACT',
 }
 
 
@@ -104,6 +115,7 @@ class Config:
     max_retries: int = DEFAULT_MAX_RETRIES
     backoff_base: float = DEFAULT_BACKOFF_BASE
     concurrency: int = DEFAULT_CONCURRENCY
+    stage2_blueprint_contract: str = DEFAULT_STAGE2_BLUEPRINT_CONTRACT
 
     def __post_init__(self) -> None:
         """取值面的闸。**放这里不放 `load_config`**，于是手搭一个 `Config` 也拦得住。
@@ -142,6 +154,11 @@ class Config:
                       '跑成另一个臂，而账本里看不出来是拼写错了')
         if not self.base_url:
             raise bad('base_url', 'base_url 不能是空的')
+        if self.stage2_blueprint_contract not in BLUEPRINT_ARCHITECTURES:
+            raise bad('stage2_blueprint_contract',
+                      f'stage2.blueprint 的契约只有 {BLUEPRINT_ARCHITECTURES}'
+                      '（大小写敏感）——静默兜底会把一次 A/B 跑成另一个臂，'
+                      '而账本里看不出来是拼写错了')
 
     @property
     def has_key(self) -> bool:
@@ -219,4 +236,7 @@ def load_config(*, env: Mapping[str, str] | None = None,
         max_retries=int(_num('max_retries', DEFAULT_MAX_RETRIES, int)),
         backoff_base=_num('backoff_base', DEFAULT_BACKOFF_BASE, float),
         concurrency=int(_num('concurrency', DEFAULT_CONCURRENCY, int)),
+        stage2_blueprint_contract=(
+            src.get(ENV_KEYS['stage2_blueprint_contract'])
+            or DEFAULT_STAGE2_BLUEPRINT_CONTRACT),
     )
