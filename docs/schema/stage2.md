@@ -242,8 +242,10 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 
 ## 五、现行判据
 
-当前注册表共 **70 条**：**38 hard、14 info、16 metric、2 unver**。两个 Stage 2 节点共用
-同一张注册表。
+当前注册表共 **72 条**：**39 hard、15 info、16 metric、2 unver**。两个 Stage 2 节点共用
+同一张注册表。（2026-08-20 随 `extraction-ir-v1` 契约新增 `hinge_ambiguous`（HARD）与
+`place_inherit_without_base`（INFO）；两条在 `bounded-fidelity-v3` 产物上结构性不产出，
+空行是「不适用」不是绿灯。）
 
 | 分组 | 当前规则 id |
 |---|---|
@@ -251,15 +253,17 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 | 人物与称谓 | `canonical_unique` · `character_unattested` · `address_by_unresolved` · `address_from_out_of_range` · `address_from_too_early` · `address_bare_pronoun` · `address_all_pronoun` · `address_has_pronoun` · `address_selfref` · `address_missing` · `address_unlocatable` |
 | 身份与结局 | `role_missing` · `role_leaks_fate` · `role_repeats_name` · `hedge_words` · `distinguisher_lonely` · `role_fate_unverifiable` · `fate_report` |
 | 规则、秘密与关系 | `world_rule_no_desc` · `world_rule_names_person` · `secret_setup_order` · `secret_cold_reveal` · `secret_known_by_dangling` · `reveal_unmarked` · `secrets_absent` · `relation_dangling` |
-| 拍与区间 | `beat_id_unique` · `beat_id_format` · `span_unlocatable` · `verbatim_failed` · `edge_hole` · `beats_collapsed` · `beats_coarse` |
-| 保真材料 | `hinge_cross_chapter` · `hinge_in_hole` · `hinge_anchor_void` · `hinge_cascade` · `hinge_drift` · `chapter_no_hinge` |
+| 拍与区间 | `beat_id_unique` · `beat_id_format` · `span_unlocatable` · `verbatim_failed` · `edge_hole` · `beats_collapsed` · `beats_coarse` · `place_inherit_without_base` |
+| 保真材料 | `hinge_cross_chapter` · `hinge_in_hole` · `hinge_anchor_void` · `hinge_ambiguous` · `hinge_cascade` · `hinge_drift` · `chapter_no_hinge` |
 | 在场与叙述 | `time_layer_no_present` · `present_ids_dangling` · `present_names_invented` · `present_continuity` · `present_ungrounded` · `present_early_named` · `event_early_name` · `pronoun_surface_unattested` · `narration_multi` |
 | 范围、必填与返工 | `scope_violation` · `event_empty` · `summary_empty` · `repair_cache_policy` |
 | 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_names_ambiguous` · `present_names_unlisted` · `present_names_pronoun` · `present_names_late` · `present_broad` · `batch_density` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
 
-机器可读修复路由共 **34 条**：
+机器可读修复路由共 **35 条**：
 
-- `stage2.blueprint --chapters`: 17 条；
+- `stage2.blueprint --chapters`: 18 条（`hinge_ambiguous` 暂指整章重生成——它的真正修法是
+  候选选择（`contracts/invariants.py::REPAIR_ROUTE` 路由 `field_patch`），`--patch` 入口
+  落地时同批改指）；
 - `stage2.blueprint --renormalize`: 2 条；
 - `stage2.global --resample`: 13 条；
 - `stage2.global --purge-role`: 1 条；

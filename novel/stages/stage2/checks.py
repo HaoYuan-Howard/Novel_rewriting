@@ -36,7 +36,7 @@ import statistics
 from typing import Any, Iterable
 
 from contracts.invariants import (
-    BARE_PRONOUNS, BLUEPRINT_ARCHITECTURE, HINGE_FAILURE_ROUTE, TIME_LAYERS,
+    BARE_PRONOUNS, BLUEPRINT_ARCHITECTURES, HINGE_FAILURE_ROUTE, TIME_LAYERS,
 )
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
@@ -721,7 +721,7 @@ def _canon(c: _Ctx) -> list[Outcome]:
 _BEAT_RULES = ('beat_id_unique', 'beat_id_format', 'span_unlocatable',
                'verbatim_failed', 'edge_hole', 'beats_collapsed',
                'beats_coarse', 'span_coverage', 'span_coverage_per_chapter',
-               'uncovered_holes')
+               'uncovered_holes', 'place_inherit_without_base')
 
 
 def _beats(c: _Ctx) -> list[Outcome]:
@@ -768,6 +768,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
                     'uncovered_holes'):
             out.append(unverifiable(rid, _NO_MAIN_TEXT))
         out += _verbatim(c)
+        out += _place_inherit(c)
         return out
 
     n_all = len(all_beats)
@@ -861,7 +862,26 @@ def _beats(c: _Ctx) -> list[Outcome]:
                            f'最粗 {max((r for _o, r in ratios), default=0):.0f}）'))
 
     out += _verbatim(c)
+    out += _place_inherit(c)
     return out
+
+
+def _place_inherit(c: _Ctx) -> list[Outcome]:
+    """`place_inherit_without_base`（INFO）：链头 `P_INHERIT` 的账。
+
+    与 `_verbatim` 同族——断言的是 `_provenance` 里的账，不是字段值
+    （产物侧 `place=null` 分不出「无从知道」与「指错了继承」）。
+    ⚠ `bounded-fidelity-v3` 的产地没有这个概念，键不在/为空 ⇒ 空行不是绿灯，
+    是该失效模式在旧架构下结构性不存在；`extraction-ir-v1` 的 compiler
+    恒写这个键（没有链头也写空表）。
+    """
+    rows = [str(x) for x in (c.prov.get('place_inherit_without_base') or [])]
+    return [ran('place_inherit_without_base',
+                [finding('place_inherit_without_base',
+                         detail=f'{len(rows)} 拍声称延续上一拍地点但链上没有基'
+                                f'（已落 place=null）：{_cut(rows)}',
+                         evidence=sorted(rows))] if rows else [],
+                scanned=f'{len(rows)} 条链头 P_INHERIT 记录')]
 
 
 def _uncovered(c: _Ctx, min_chars: int) -> list[tuple[Any, int, int, int, str, str]]:
@@ -936,7 +956,7 @@ def _verbatim(c: _Ctx) -> list[Outcome]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _HINGE_RULES = ('hinge_cross_chapter', 'hinge_in_hole', 'hinge_anchor_void', 'hinge_drift',
-                'hinge_cascade', 'chapter_no_hinge', 'hinge_density')
+                'hinge_ambiguous', 'hinge_cascade', 'chapter_no_hinge', 'hinge_density')
 
 
 def _hinge_text(hinge: dict[str, Any]) -> str:
@@ -962,12 +982,13 @@ def _hinges(c: _Ctx) -> list[Outcome]:
 
     if not c.has_mt:
         for rid in ('hinge_cross_chapter', 'hinge_in_hole', 'hinge_anchor_void',
-                    'hinge_drift', 'hinge_cascade', 'hinge_density'):
+                    'hinge_drift', 'hinge_ambiguous', 'hinge_cascade', 'hinge_density'):
             out.append(unverifiable(rid, _NO_MAIN_TEXT))
         return out
 
-    # ── 锚不到的四分流 + 转抄漂移 ─────────────────────────────────────────
+    # ── 锚不到的分流 + 转抄漂移 ───────────────────────────────────────────
     cascade, hole, void, cross, drift = [], [], [], [], []
+    ambiguous: list[str] = []
     failure_cause = {
         str(row[0]): str(row[2])
         for row in (c.prov.get('verbatim_failures') or [])
@@ -1001,6 +1022,8 @@ def _hinges(c: _Ctx) -> list[Outcome]:
                         hole.append(item)
                     elif route == 'hinge_anchor_void':
                         void.append(item)
+                    elif route == 'hinge_ambiguous':
+                        ambiguous.append(item)
                     else:
                         drift.append((item, None))
                     continue
@@ -1034,6 +1057,12 @@ def _hinges(c: _Ctx) -> list[Outcome]:
                    [finding('hinge_anchor_void',
                             detail=f'{len(void)} 条 hinge 锚点在本章原文中找不到：{_cut(void)}',
                             evidence=sorted(void))] if void else [],
+                   scanned=f'{n_h} 条保真材料'))
+    out.append(ran('hinge_ambiguous',
+                   [finding('hinge_ambiguous',
+                            detail=f'{len(ambiguous)} 条 hinge 短语在所属拍区间内多处命中，'
+                                   f'压在哪几个字上定不下来：{_cut(ambiguous)}',
+                            evidence=sorted(ambiguous))] if ambiguous else [],
                    scanned=f'{n_h} 条保真材料'))
     out.append(ran('hinge_cascade',
                    [finding('hinge_cascade',
@@ -1079,7 +1108,8 @@ def _context_observation(context: dict[str, Any]) -> tuple[str, list[str]]:
     # ⚠ 当前架构标识从**契约**取，不在判据里手抄一份字面：产地
     #   （`extract.blueprint_context`）与这里此前各写一份 `'bounded-fidelity-v2'`，
     #   升版时改一处忘一处，就得到「产物明明是新架构、判据说不符合约定」的假红。
-    ok = (architecture == BLUEPRINT_ARCHITECTURE and batch_size == 1
+    #   2026-08-20 起取值面是双值（`extraction-ir-v1` 与 v3 并存），成员判断即约定。
+    ok = (architecture in BLUEPRINT_ARCHITECTURES and batch_size == 1
           and current_full is True and future_visible is False)
     verdict = '当前章全文保留、未来正文不可见' if ok else '⚠ 模型可见边界不符合约定'
     detail = (

@@ -3,7 +3,10 @@
 """
 stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §5.1（**唯一落点**）。
 
-**71 条现役：38 HARD · 15 INFO · 16 度量 · 2 查不了。**
+**72 条现役：39 HARD · 15 INFO · 16 度量 · 2 查不了。**
+（⚠ 此行 2026-08-20 前写着 71/15，与注册表实际 70/14 漂了 1——docstring 没有守卫，
+权威恒在注册表与 `BACKEND_CONTRACT.md` §反向覆盖率那一行；本次 +1 HARD
+`hinge_ambiguous`、+1 INFO `place_inherit_without_base`，两边同批改。）
 
 【一张表，两个节点共用】`stage2.global`（全书级抽取）与 `stage2.blueprint`（逐章抽取）
 **读同一张表**，谁也不许再抄一份。⚠ `--check-only` 只挂在 `stage2.blueprint` 上
@@ -16,13 +19,13 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 
 【本层特有的四条，与前七层都不同】
 
-**① 这是第一个用 `Rule.fix` 的层。** 34 条带机器可读的修复路由：
-`blueprint --chapters` 17 · `blueprint --renormalize` 2 · `global --resample` 13 ·
+**① 这是第一个用 `Rule.fix` 的层。** 35 条带机器可读的修复路由：
+`blueprint --chapters` 18 · `blueprint --renormalize` 2 · `global --resample` 13 ·
 `global --purge-role` / `--renormalize` 各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
 （反哺是 stage5 独有的，`contracts/rules.py::_validate` ④ 把它锁在 `owner='stage5'` 上）
-⇒ `directive` 全表为空，而 `fix` 有 34 条。
+⇒ `directive` 全表为空，而 `fix` 有 35 条。
 
 ⚠ **徽章结构上永远不可能是 `pass`**：本表有 **2 条 `unver`**，其中
 `role_fate_unverifiable` **无条件产出**（见下）⇒ 每本每次都产 ⇒ 最好情况是 `amber`
@@ -379,6 +382,16 @@ _hard('hinge_anchor_void', '保真材料的锚点在本章原文里找得到', '
            '⚠ **「短语在本章、只是不在它指的那一段」不归这里**，归 `hinge_drift`：'
            '那是段号指错，不是材料编的，说错了会让人去查一句原文里明明有的话。盘上 0/3')
 
+_hard('hinge_ambiguous', '保真材料的短语在所属拍的区间内唯一命中', 'R-3.5', fix=FIX_REGEN,
+      note='`extraction-ir-v1` 专属：hinge 不再交段号，短语在**所属拍区间内**定位；'
+           '多处命中 ⇒ 这条材料压在哪几个字上定不下来。'
+           '⚠ **它是新契约信息不足的预期产物，不是模型编的**：交接实测 189 条反投影后'
+           '187 条唯一、2 条双命中（`第一课` / `纸鸢`，约 1.06%）。'
+           '⚠ 修法是**候选选择**（代码枚举命中位，模型只挑 candidate_id，'
+           '`contracts/invariants.py::REPAIR_ROUTE` 路由 `field_patch`）——'
+           '`fix` 暂指整章重生成是因为 `--patch` 入口尚未落地，落地时同批改这一格。'
+           '`bounded-fidelity-v3` 的产地不发这个根因 ⇒ 存量产物上恒空，不是绿灯是不适用')
+
 _info('hinge_cascade', '锚不到不是因为本拍的 span 自己就没定位成功', 'R-3.5',
       note='⚠ **不是独立故障，别重复计数**：`span_unlocatable` 已经报过那条 span 了，'
            '这里再报一次会让同一个病在报告上出现两行、而修法只有一个。'
@@ -505,6 +518,16 @@ _metric('place_moves', '转场点数', 'R-3.17',
              '公寓/公寓卫生间门口），按它相等推导出来的转场数在量措辞。'
              '⚠ 它作为**下发给写手的舞台信息**是对的，不改；'
              '但**凡引用这个数的地方都要带上这一句**。盘上 23 / 22 / 39 处')
+
+_info('place_inherit_without_base', '「延续上一拍地点」有可继承的基', 'R-3.17',
+      note='`extraction-ir-v1` 专属：模型交 `P_INHERIT` 而链上没有基'
+           '（首拍、或上一相邻拍不同 time_layer）⇒ compiler 落 `place=null` 并记'
+           '`_provenance.place_inherit_without_base`。'
+           '⚠ **产物侧的 `place=null` 分不出「无从知道」与「指错了继承」**，'
+           '这笔账是两者唯一的分界——无声转换就是把模型的错吞掉。'
+           '判 INFO 不判 HARD：链头 INHERIT 语义上等于 UNKNOWN，产物无害，'
+           '报出来是给「模型在多大程度上乱用 INHERIT」一个读数。'
+           '`bounded-fidelity-v3` 产物无此账 ⇒ 报「不适用」空行，不是绿灯')
 
 _metric('present_names_ambiguous', '称呼在名册里挂着不止一个人', 'R-3.7b',
         note='⚠ **原文自己的歧义，重跑一百次也一样** ⇒ **不猜、不判阻断**：'

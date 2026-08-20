@@ -371,13 +371,25 @@ def hinge_heading(kind: str) -> str:
 #: `'bounded-fidelity-v2'` 字面**，改一处忘一处就得到一条「产物明明是新架构、判据说不符合
 #: 约定」的假红（`docs/LESSONS.md` 第 21 条那一族）。
 #:
-#: ⚠⚠ **改这个值就是破坏产物形状**：`Literal` 收窄之后存量蓝图经 `store.read_own` 当场拒读。
-#: 按仓规（`CLAUDE.md`）必须同批把 `ARTIFACT_SPECS` 里
+#: ⚠⚠ **收窄或改名取值就是破坏产物形状**：`Literal` 收窄之后存量蓝图经 `store.read_own`
+#: 当场拒读。按仓规（`CLAUDE.md`）必须同批把 `ARTIFACT_SPECS` 里
 #: `STAGE2_CHAPTER_BLUEPRINTS` 的 `current_version` +1，并回答「存量产物由谁重建」。
 #: · `v2` → `v3`（2026-08-19）：锚点从「模型逐字转写原文片段」改成「下发带编号的段落、
-#:   模型只交段号」。**存量蓝图由 `stage2.blueprint` 整跑重建**，`.INVALID` 与 `_rounds/`
-#:   一律作废，不手补字段冒充当前产地。
+#:   模型只交段号」。**旧产物语义已坏**（锚点可能不是原文字节）⇒ 单值收窄 + 升版重建，
+#:   `.INVALID` 与 `_rounds/` 一律作废，不手补字段冒充当前产地。
+#: · `v3` → 并入 `extraction-ir-v1`（2026-08-20，Stage2_improvement 改造）：**放宽成双值，
+#:   不升版**。与上一次不同，ir1 的产物**语义不变**——beat 区间仍是段号查表出的精确区间
+#:   （ir1 的分割式覆盖是 v3「允许中段空隙」的子集情形），hinge/char_ids/narration
+#:   逐字段等价，下游消费面一个不动 ⇒ 旧字节不拒读、两种架构可并存于 A/B 的不同
+#:   base 之间。同一书目录同一时刻仍只有一种架构（整跑重建时整体切换）。
+#:   响应契约的选择口在 `novel/config.py::stage2_blueprint_contract`
+#:   （env `NOVEL_STAGE2_BLUEPRINT_CONTRACT`），默认仍是 v3。
+BLUEPRINT_ARCHITECTURES: Final = ('bounded-fidelity-v3', 'extraction-ir-v1')
+
+#: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
+#: A/B 达标后翻默认时只动这一格与 config 默认，不动取值面。
 BLUEPRINT_ARCHITECTURE: Final = 'bounded-fidelity-v3'
+assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 #: `SourceSpan.recovery` 的取值面：这个区间是怎么对上原文的。
 #:
@@ -403,6 +415,11 @@ SPAN_FAILURE_CAUSES: Final = (
     '本章没有可编号的段落',
     'span 里既没有段号也不是正式区间',
     '已落盘的精确区间与原文对不上',
+    # ── `extraction-ir-v1` 专属（beat 只交 `end_para`，起点由代码推导）──
+    # ⚠ compiler 对非法响应逐项发这些措辞、不抛裸异常：抛异常是「进程崩了，
+    #   结论未知」，而这几件事都是**数据的病**，该走 `.INVALID` + 修复路由。
+    '止段没有越过上一拍的止段（区间倒序或同段重复）',
+    '末拍没有到达本章最后一段',
 )
 
 #: `位置 == 'hinge'` 那一族的根因 → **该由哪条判据收**。
@@ -423,7 +440,64 @@ HINGE_FAILURE_ROUTE: Final = {
     '段号落在没有被任何 beat 覆盖的空档': 'hinge_in_hole',
     '短语不在它指定的那一段里，而出现在别处': 'hinge_drift',
     '已落盘的 source 与它所属 beat 的区间对不上': 'hinge_drift',
+    # ── `extraction-ir-v1` 专属（hinge 只交 `kind + phrase`，无段号）──
+    # ⚠ 「多处命中」是新契约信息不足的**预期产物**，不是编的：交接实测 189 条
+    #   hinge 反投影后 187 条拍内唯一、2 条双命中（约 1.06%）。它的修法是
+    #   **候选选择**（代码枚举命中位，模型只挑 candidate_id），与 anchor_void
+    #   （短语是编的，要重给）完全不同 ⇒ 单立一条判据，不并进既有四分流。
+    '短语在本拍区间内多处命中': 'hinge_ambiguous',
+    '短语不在它所属拍的区间里，而出现在别处': 'hinge_drift',
 }
+
+#: hinge 根因 → **修复走哪一级**。与 `HINGE_FAILURE_ROUTE`（根因 → 判据）是
+#: **两个消费方的两张表**：那张归判据分流，这张归修复阶梯——混成一张，
+#: 改判据措辞就会牵动修复行为。键域必须与 `HINGE_FAILURE_ROUTE` 相同（assert 在下）。
+#:
+#: 取值面（`extraction-ir-v1` 修复阶梯，`Stage2_improvement.md` §五）：
+#:   · `field_patch`    —— 字段级局部修复（候选选择 / phrase 重给），不整章重付；
+#:   · `chapter_regen`  —— 整章定向重生成（`stage2.blueprint --chapters`），最后手段。
+#: ⚠ 首版刻意只有两级：`beat_patch` / `boundary_patch` 等更细的层级要等
+#:   七章高难包付费冒烟的真实 finding 分布出来再立（数据驱动，不预建框架）。
+REPAIR_ROUTE: Final = {
+    '短语不在本章原文里': 'field_patch',              # 编的短语 → 局部重给 phrase
+    '段号越界，本章没有那一段': 'chapter_regen',
+    '段号落在没有被任何 beat 覆盖的空档': 'chapter_regen',
+    '短语不在它指定的那一段里，而出现在别处': 'chapter_regen',
+    '已落盘的 source 与它所属 beat 的区间对不上': 'chapter_regen',
+    '短语在本拍区间内多处命中': 'field_patch',        # 候选选择，模型只挑 candidate_id
+    # ⚠ ir1 的 drift 可能是 phrase 错、也可能是 end_para 边界切错——首版一律整章兜底，
+    #   不许用改锚点遮住错误分段；boundary patch 等 7A 读数后再立（5B）。
+    '短语不在它所属拍的区间里，而出现在别处': 'chapter_regen',
+}
+assert set(REPAIR_ROUTE) == set(HINGE_FAILURE_ROUTE), \
+    '修复路由与判据分流的键域分家了——新根因必须同时回答「归哪条判据」与「怎么修」'
+assert set(REPAIR_ROUTE.values()) <= {'field_patch', 'chapter_regen'}, \
+    '修复层级出现了未定义的取值——新层级要先在这里立取值面'
+
+#: `extraction-ir-v1` 响应侧的叙述层枚举 → 产物侧取值。**前缀化只在响应侧**：
+#: 产物侧 `TIME_LAYERS` 一个不动（下游 + 盘上数据的硬约束），compiler 是唯一映射落点。
+#: 【为什么前缀化】闭合枚举之间的串字段（交接实测 `delivery.summary` 串进
+#: `narrative_role`）本质是取值面互相混淆；互不为子串的带前缀值让串字段在
+#: schema 闸就死掉。⚠ 刻意没有 `T_UNRESOLVED`：产物侧 `time_layer` 是必填三值、
+#: 无落点，允许它等于每个 UNRESOLVED 必然逼出一轮修复调用，直接顶高
+#: `paid_calls / accepted_calls`。
+RESPONSE_TIME_LAYERS: Final = {
+    'T_PRESENT': 'present',
+    'T_RECALL': 'recall',
+    'T_HEARSAY': 'hearsay',
+}
+assert tuple(RESPONSE_TIME_LAYERS.values()) == TIME_LAYERS, \
+    '响应侧叙述层映射与 `TIME_LAYERS` 分家了——compiler 会把新值映到不存在的产物值'
+assert len(set(RESPONSE_TIME_LAYERS)) == len(set(RESPONSE_TIME_LAYERS.values())), \
+    '响应侧叙述层映射不是双射'
+
+#: `extraction-ir-v1` 响应侧 place 的三态（判别联合的 discriminator 取值面）。
+#:   · `P_EXPLICIT` —— 原文明写（或延续中可辨认），必带 `name`；
+#:   · `P_INHERIT`  —— 延续**上一相邻拍**的地点（仅同 `time_layer` 且相邻才许，
+#:                     代码做继承；链头 INHERIT 落 `place_inherit_without_base` 账）；
+#:   · `P_UNKNOWN`  —— 确实无从判断 ⇒ 产物侧 `place=null`。
+#: 不确定性是**受约束的状态**，不是自由文本（`Stage2_improvement.md` §三.2）。
+PLACE_MODES: Final = ('P_EXPLICIT', 'P_INHERIT', 'P_UNKNOWN')
 
 #: 逐字原话允许被一处提示语切开时，插入部分的内容字数上限。
 #: 形态必须在原文字节上长成「收引号 + ≤N 内容字 + 开引号」；
