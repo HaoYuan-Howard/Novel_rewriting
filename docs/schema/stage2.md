@@ -261,9 +261,8 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 
 机器可读修复路由共 **35 条**：
 
-- `stage2.blueprint --chapters`: 18 条（`hinge_ambiguous` 暂指整章重生成——它的真正修法是
-  候选选择（`contracts/invariants.py::REPAIR_ROUTE` 路由 `field_patch`），`--patch` 入口
-  落地时同批改指）；
+- `stage2.blueprint --chapters`: 17 条；
+- `stage2.blueprint --patch`: 1 条（`hinge_ambiguous`——字段级候选选择，量级是条不是章）；
 - `stage2.blueprint --renormalize`: 2 条；
 - `stage2.global --resample`: 13 条；
 - `stage2.global --purge-role`: 1 条；
@@ -271,3 +270,6 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 
 判据的权威定义在 `contracts/judges/stage2.py`，注册期会验证规则 id 唯一、严重度、需求落点、
 节点与 flag 的存在性。报告形状见 [`_report.md`](./_report.md)。
+
+双契约（`bounded-fidelity-v3` ⇄ `extraction-ir-v1`）的选择口、A/B 配对纪律、
+`--patch` 修复阶梯与已有重放读数，见 `docs/stage2_contract_experiment.md`（操作手册）。
