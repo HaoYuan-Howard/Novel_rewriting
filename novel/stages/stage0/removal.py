@@ -270,51 +270,6 @@ def _require_stage0_fresh(store: ArtifactStore) -> None:
         f'({edges}). The report and its audit entry were rolled back.')
 
 
-_AUTO_APPROVAL_REASON = (
-    '首次机器剔除零 removed、零 warning，且 clean 与归一化 source 完全一致'
-)
-
-
-def _auto_approval_eligible(report: RemovalReport) -> bool:
-    return (
-        not report.removed
-        and not report.warnings
-        and report.source_sha1 == report.clean_sha1
-    )
-
-
-def _with_auto_approval(
-    result: RemovalResult,
-    *,
-    ctx: RunContext | None,
-) -> RemovalResult:
-    """Return the first-run auto-approved shape; persist its audit only with a ctx."""
-    from novel.stages.stage0.merge import append_audit, make_audit_entry
-
-    kwargs = {
-        'seq': 1,
-        'previous_sha256': None,
-        'action': 'auto_approve',
-        'actor': None,
-        'reason': _AUTO_APPROVAL_REASON,
-        'before_source_sha1': None,
-        'before_clean_sha1': None,
-        'after_source_sha1': result.report.source_sha1,
-        'after_clean_sha1': result.report.clean_sha1,
-    }
-    entry = make_audit_entry(**kwargs) if ctx is None else append_audit(ctx, **kwargs)
-    return RemovalResult(
-        result.clean_text,
-        result.report.model_copy(update={
-            'approved': 'approved', 'approved_at': entry.at,
-            'approval_origin': 'auto_zero_hit', 'approved_by': None,
-            'audit_seq': entry.seq, 'audit_head_sha256': entry.entry_sha256,
-        }),
-        result.scan,
-        result.machine_snapshot,
-    )
-
-
 def run_source(source_path: str | Path, base: str | Path, *, force: bool = False,
                dry_run: bool = False, expected_sid: str | None = None) \
         -> tuple[Path, RemovalResult, CheckReport | None]:
@@ -399,40 +354,15 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
         from novel.stages.stage0.checks import run_check_only
         return novel_dir, kept, run_check_only(ctx)
 
-    # 第一次且机器零删除、零告警、clean 与归一化 source 完全相同，才可自动批准。
-    # 此时盘上还不存在任何历史轮次/审计链，因此不存在历史漂移可被掩盖。
-    auto_approved = _auto_approval_eligible(result.report)
-    if auto_approved:
-        # dry-run 也返回真实的批准决策/链头形状，但用纯内存 entry，
-        # 绝不创建 novel_dir、_audit 或任何正式产物。
-        result = _with_auto_approval(result, ctx=None)
-
+    # 首跑恒 pending（2026-08-21 裁决）：零命中不再自动批准。「零 removed、零 warning、
+    # clean == source」恰好是纯数字番外盲区（`docs/schema/stage1.md` §五）的形状——
+    # 那个盲区全链唯一的防线就是这道人工闸门，自动放行等于把防线拆了。
     if dry_run:
         return novel_dir, result, None
 
-    transaction_rels = [SNAPSHOT_REL, CLEAN_REL, REPORT_REL]
-    if auto_approved:
-        transaction_rels.append(STAGE0_AUDIT_ENTRY.format(n=result.report.audit_seq))
-    with store.history_transaction(*transaction_rels):
-        if auto_approved:
-            from novel.stages.stage0.merge import append_audit
-            entry = append_audit(
-                ctx, seq=result.report.audit_seq, previous_sha256=None,
-                action='auto_approve', actor=None, reason=_AUTO_APPROVAL_REASON,
-                before_source_sha1=None, before_clean_sha1=None,
-                after_source_sha1=result.report.source_sha1,
-                after_clean_sha1=result.report.clean_sha1,
-                at=result.report.approved_at,
-            )
-            if (entry.entry_sha256 != result.report.audit_head_sha256
-                    or entry.at != result.report.approved_at):
-                raise ArtifactUnreadable(
-                    'Stage0 first-run auto approval found an orphan audit entry '
-                    'that does not match the in-memory decision')
+    with store.history_transaction(SNAPSHOT_REL, CLEAN_REL, REPORT_REL):
         store.write(SNAPSHOT_REL, result.machine_snapshot)
         _write(store, result)
-        if auto_approved:
-            _require_stage0_fresh(store)
     from novel.stages.stage0.checks import run_check_only
     return novel_dir, result, run_check_only(ctx)
 
@@ -661,9 +591,14 @@ def run_approve(ctx: RunContext, *, actor: str, reason: str,
     if actual != old.clean_sha1:
         raise HumanEditProtected(
             '盘上 clean_text 已变化但 removal_report 还没登记这次人工编辑；先走 stage0.edit')
-    if old.approved == 'approved':
+    if old.approved == 'approved' and old.approval_origin == 'human':
+        # 同一决定的重放：幂等返回，不追加审计。
         from novel.stages.stage0.checks import run_check_only
         return old, run_check_only(ctx)
+    # 走到这里的 approved 只可能是历史自动批（`auto_zero_hit`，2026-08-21 停产）：
+    # 不当 no-op 返回——那会让「显示已批准」与「不具执行资格」永久并存。
+    # 人工重批 = 在原 `auto_approve` 审计条目之后追加一条 `approve`、origin 改 human；
+    # 正文没动，round 不变（`novel/stages/stage0/eligibility.py`）。
     from novel.stages.stage0.merge import append_audit, verify_audit_chain
     verify_audit_chain(ctx, seq=old.audit_seq, head=old.audit_head_sha256)
     at = approved_at or datetime.now(timezone.utc).isoformat()

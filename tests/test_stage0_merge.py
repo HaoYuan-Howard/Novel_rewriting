@@ -61,18 +61,110 @@ def _pending_candidate(tmp_path: Path, sid: str):
     return novel_dir, first.report, candidate, common
 
 
-def test_first_zero_risk_run_auto_approves_and_hash_chains(tmp_path):
+def test_first_run_stays_pending_until_a_human_approves(tmp_path):
+    """零命中不再自动批准（2026-08-21 停产）：首跑恒 pending、无审计条目。
+
+    「零 removed、零 warning、clean == source」恰好是纯数字番外盲区的形状，
+    人工闸门是那个盲区全链唯一的防线——自动放行等于把防线拆了。
+    """
     novel_dir, result, _ = run_source(_source(tmp_path), tmp_path / 'Output')
 
-    assert result.report.approved == 'approved'
-    assert result.report.approval_origin == 'auto_zero_hit'
-    assert result.report.approved_by is None
-    assert result.report.audit_seq == 1 and result.report.audit_head_sha256
-    verify_audit_chain(
-        _context(novel_dir, 'stage0.remove'),
-        seq=result.report.audit_seq,
-        head=result.report.audit_head_sha256,
+    assert result.report.approved == 'pending'
+    assert result.report.approval_origin is None and result.report.approved_by is None
+    assert result.report.audit_seq == 0 and result.report.audit_head_sha256 is None
+    assert not (novel_dir / 'stage0/_audit').exists()
+
+    approved, _ = removal.run_approve(
+        _context(novel_dir, 'stage0.approve'),
+        actor='reviewer-a', reason='零命中也要人看过',
     )
+    assert approved.approval_origin == 'human' and approved.approved_by == 'reviewer-a'
+    assert approved.audit_seq == 1
+    verify_audit_chain(
+        _context(novel_dir, 'stage0.approve'),
+        seq=approved.audit_seq, head=approved.audit_head_sha256,
+    )
+
+
+def _legacy_auto_pair(tmp_path: Path, sid: str = '940') -> tuple[Path, str]:
+    """在盘上构造一份**历史自动批**形态的正式对（auto_approve 审计 + auto 报告）。
+
+    现役代码已不产这种形状；这个合成回归永留——从旧备份恢复产物时问题会重新出现
+    （2026-08-21 preflight：Output 树上 2/2 本就是这种形状，不是假设）。
+    """
+    from novel.stages.stage0.merge import append_audit
+    from novel.stages.stage0.removal import SNAPSHOT_REL
+
+    source = _source(tmp_path, sid)
+    novel_dir, result, _ = run_source(source, tmp_path / 'Output')
+    ctx = _context(novel_dir, 'stage0.remove')
+    entry = append_audit(
+        ctx, seq=1, previous_sha256=None, action='auto_approve', actor=None,
+        reason='旧版零命中自动批准', before_source_sha1=None, before_clean_sha1=None,
+        after_source_sha1=result.report.source_sha1,
+        after_clean_sha1=result.report.clean_sha1)
+    store = removal.ArtifactStore(ctx)
+    store.write(REPORT_REL, result.report.model_copy(update={
+        'approved': 'approved', 'approved_at': entry.at,
+        'approval_origin': 'auto_zero_hit', 'approved_by': None,
+        'audit_seq': entry.seq, 'audit_head_sha256': entry.entry_sha256}))
+    assert store.exists(SNAPSHOT_REL)
+    return novel_dir, sid
+
+
+def test_legacy_auto_artifact_decodes_but_is_not_executable(tmp_path):
+    from novel.errors import ApprovalRequired
+    from novel.orchestrator.queue import _human_gate_satisfied
+    from novel.stages.stage0.eligibility import (
+        LEGACY_AUTO_APPROVAL, block_reason, is_stage0_executable,
+    )
+    from novel.stages.stage1.partition import run_partition
+
+    novel_dir, sid = _legacy_auto_pair(tmp_path)
+
+    # 读得：decode/审计链/展示都不受影响。
+    store = removal.ArtifactStore(_context(novel_dir, 'stage0.remove'))
+    report, _ = store.read_own(removal.RemovalReport, REPORT_REL)
+    verify_audit_chain(_context(novel_dir, 'stage0.remove'),
+                       seq=report.audit_seq, head=report.audit_head_sha256)
+
+    # 跑不得：五处消费方共用同一个谓词。
+    assert not is_stage0_executable(report)
+    assert block_reason(report) == LEGACY_AUTO_APPROVAL
+    assert not _human_gate_satisfied(tmp_path / 'Output', sid, 'stage0.approve')
+    with pytest.raises(ApprovalRequired, match=LEGACY_AUTO_APPROVAL):
+        run_partition(_context(novel_dir, 'stage1.partition'))
+
+
+def test_legacy_auto_artifact_regains_execution_after_human_reapproval(tmp_path):
+    from novel.stages.stage0.eligibility import is_stage0_executable
+    from novel.stages.stage1.partition import run_partition
+
+    novel_dir, sid = _legacy_auto_pair(tmp_path, '941')
+    legacy = removal.ArtifactStore(_context(novel_dir, 'stage0.remove'))
+    before, _ = legacy.read_own(removal.RemovalReport, REPORT_REL)
+    before_clean = (novel_dir / CLEAN_REL).read_bytes()
+
+    reapproved, _ = removal.run_approve(
+        _context(novel_dir, 'stage0.approve'),
+        actor='re-reviewer', reason='历史自动批，人工补看一眼',
+    )
+
+    # 人工重批 = 在原 auto_approve 之后追加 approve；正文没动，round 不变。
+    assert reapproved.approval_origin == 'human'
+    assert reapproved.approved_by == 're-reviewer'
+    assert reapproved.audit_seq == before.audit_seq + 1
+    assert reapproved.round == before.round
+    assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
+    verify_audit_chain(_context(novel_dir, 'stage0.approve'),
+                       seq=reapproved.audit_seq, head=reapproved.audit_head_sha256)
+
+    assert is_stage0_executable(reapproved)
+    # 这本书只有一章（合并夹具如此）：执行资格恢复后，stage1 会因「少于两章」
+    # 而不是「未批准」入显式终态——闸门语义换了一层。
+    from novel.errors import TooFewChapters
+    with pytest.raises(TooFewChapters):
+        run_partition(_context(novel_dir, 'stage1.partition'))
 
 
 def test_changed_machine_result_creates_candidate_without_touching_formal_pair(tmp_path):
@@ -154,7 +246,9 @@ def test_diff3_conflict_is_typed_and_must_be_resolved_exactly_once():
 
 def test_audit_tampering_is_detected(tmp_path):
     novel_dir, result, _ = run_source(_source(tmp_path, '902'), tmp_path / 'Output')
-    audit = novel_dir / 'stage0/_audit/edit_1.json'
+    approved, _ = removal.run_approve(
+        _context(novel_dir, 'stage0.approve'), actor='t', reason='r')
+    audit = novel_dir / f'stage0/_audit/edit_{approved.audit_seq}.json'
     raw = json.loads(audit.read_text(encoding='utf-8'))
     raw['reason'] = '篡改理由'
     audit.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
@@ -162,8 +256,8 @@ def test_audit_tampering_is_detected(tmp_path):
     with pytest.raises(ArtifactUnreadable, match='entry_sha256'):
         verify_audit_chain(
             _context(novel_dir, 'stage0.remove'),
-            seq=result.report.audit_seq,
-            head=result.report.audit_head_sha256,
+            seq=approved.audit_seq,
+            head=approved.audit_head_sha256,
         )
 
 

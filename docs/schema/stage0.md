@@ -35,14 +35,17 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 > 人要修剔除的结果必须回到这一层改——**这是有意的单点**：
 > 编辑发生在上游，stage1 及其后仍是确定性纯函数，一改就全链重跑。
 >
-> **③ 未批准 = 不能往下走，而批准有两个诚实来源**（`R-0.3a` / `R-0.3b`）：
-> 首次且仅当 `removed=[]`、`warnings=[]`、机器 clean 与归一化 source 完全相同、不存在历史漂移时，
-> 可记为 `approval_origin=auto_zero_hit`；其余情形只能由人显式给出 actor 与 reason，
-> 记为 `approval_origin=human`。自动批准不宣称「语义上已人审」；
-> 「**未批准时 stage1 拒绝启动**」是 `HARD`——**它必须有判据**。
+> **③ 未批准 = 不能往下走，而批准只有一个诚实来源：人**（`R-0.3a` / `R-0.3b`）。
+> 批准必须由人显式给出 actor 与 reason，记为 `approval_origin=human`。
+> 「零命中自动批」（`auto_zero_hit`）已于 **2026-08-21 停产**：零 removed、零 warning、
+> clean == source 恰好是纯数字番外盲区的形状——那正是这道闸门要拦的东西，
+> 自动放行等于宣称「人工是唯一防线」的同时把它拆了。**存量自动批产物只读不承行**：
+> 读得、展示得、审计得，但不具执行资格（`legacy_auto_approval_requires_review`），
+> 人工重批（`stage0.approve`，追加一条 `approve` 审计条目）后恢复。
+> 「**不满足执行资格时 stage1 拒绝启动**」是 `HARD`——**它必须有判据**。
 > 压在一条需求上标 `人`，正向覆盖率就不会要求它有任何判据，
 > 而按本层的设计，这道闸门是盲区①（番外用纯数字章节标记写）**全链唯一的防线**。
-> stage2 是第一个花钱的层，闸门必须在它之前。
+> stage2 是第一个花钱的层，闸门必须在它之前、且必须有人真的看过。
 
 ---
 
@@ -209,26 +212,28 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `approved` | `str` | 是 | **三态**：`not_run` ｜ `pending` ｜ `approved`（`APPROVAL_STATE`）。**不等于 `approved` 时 stage1 拒绝启动**（`R-0.3b`，`HARD`） | **盘·码** |
+| `approved` | `str` | 是 | **两态**：`pending` ｜ `approved`（`APPROVAL_STATE`）。**不满足执行资格时 stage1 拒绝启动**（`R-0.3b`，`HARD`）；执行资格还要求 `approval_origin == 'human'`（`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点） | **盘·码** |
 | `approved_at` | `str \| null` | 是 | ISO 时间戳；未批准时 `null`。**有值 ⟺ `approved == 'approved'`**（载体的后置条件） | **盘·码** |
-| `approval_origin` | `auto_zero_hit \| human \| null` | 是 | 未批时 `null`；自动零风险与人工批准不得压成同一值 | **盘·码** |
+| `approval_origin` | `auto_zero_hit \| human \| null` | 是 | 未批时 `null`；`auto_zero_hit` 是**历史只读取值**（2026-08-21 停产），现役唯一来源是 `human` | **盘·码** |
 | `approved_by` | `str \| null` | 是 | 只有 `human` 必填；是自报身份，不宣称认证身份 | **盘·码** |
 | `round` | `int` | 是 | 第几轮。人每编辑一次 +1，上一轮进 `_rounds/` | **盘·码** |
 | `edited_by_human` | `bool` | 是 | 本轮有没有人工编辑。= `any(r.origin == 'human' for r in removed)` 之外还含直接改正文 | **盘·码** |
 | `audit_seq` / `audit_head_sha256` | `int` / `str \| null` | 是 | `0/null` 或精确指向 `_audit/edit_N.json`；盘上多出/少一条都拒绝 | **盘·码** |
 
-> #### ✅ `approved` 已定为三态
+> #### ✅ `approved` 两态；「没跑过」不由产物表达
 >
-> 实际有三种状态：**没跑过** · **跑了没批** · **批了**。
-> 用 `bool` 表达，「没跑过」和「跑了没批」就分不开了——而这正是本项目
-> 反复强调的那类错误（`FRESHNESS` 三态、`JOB_STATE` 的 `unknown`）。
-> 「产物不存在」本身能表达「没跑过」，但那要求消费方一律先判文件在不在，
-> **而那种约定迟早会有人漏掉一处**。
+> 原型曾按「没跑过 · 跑了没批 · 批了」定三态，其中 `not_run` 是**死值**：
+> 一份合法报告一旦存在，机器摄入必然已经跑过（报告自带机器指纹），
+> 「没跑过」在产物内不可诚实表达，全仓从未有写入方（2026-08-21 preflight 存量
+> 扫描 0 实例）。「没跑 / 崩了 / 阻断」是**执行状态**，由「产物不存在 + JobState」
+> 表达——消费方读不到报告时的 `UpstreamMissing` 就是那句「先跑产它的那一层」。
 >
 > ⇒ 取值面的唯一落点是 `contracts/invariants.py::APPROVAL_STATE`，
 > 与 `FRESHNESS` / `JOB_STATE` / `BADGE` 同构，随 `/api/enums` 整份下发。
-> ⚠ **`R-0.3b` 的判据要写成「不等于 `approved` 就拦」**：三个值里有**两个**都该拦，
-> 而 `if approved == 'pending'` 会漏掉 `not_run`。
+> ⚠ **`R-0.3b` 的判据不判字符串、判执行资格**：一律走
+> `novel/stages/stage0/eligibility.py::is_stage0_executable` / `block_reason`。
+> 历史自动批（`auto_zero_hit`）在报告上也显示 `approved`——不判来源，
+> 「显示已批准」与「跑不得」就会并存（2026-08-21 裁决）。
 
 ### 2.5 机器快照、三方合并与 WAL
 
@@ -260,7 +265,7 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 | `s0_removal_ledger` | HARD | 每段剔除都有可回到原文的完整账 |
 | `s0_body_ratio` | HARD | 清理后正文至少保留六成 |
 | `s0_nonbody_shared` | HARD | 剔除与残留断言使用同一套非正文判据 |
-| `s0_approval` | HARD | stage0 已获有效批准（自动零命中或人工）才可继续 |
+| `s0_approval` | HARD | stage0 已获人工批准才可继续（历史自动批须重批） |
 | `s0_human_preserved` | HARD | 人工编辑状态没有被机器重跑抹掉 |
 | `s0_edit_archive` | HARD | 人工编辑的上一轮已归档 |
 | `s0_dir_roundtrip` | HARD | 书目录能被同一把寻址尺子解析回来 |

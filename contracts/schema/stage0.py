@@ -33,7 +33,11 @@ from contracts.schema.common import HumanApproval
 
 ApprovalState = Literal[APPROVAL_STATE]
 Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
+#: `auto_zero_hit` 是**历史只读取值**（2026-08-21 停产）：旧版零命中自动批留下的产物仍须
+#: 可 decode、可展示、可审计，但它**不具执行资格**——人工重批后 `approval_origin`
+#: 才回到 `human`。现役写入方只有 `human`。
 ApprovalOrigin = Literal['auto_zero_hit', 'human']
+#: `auto_approve` 同上：历史审计条目里存在、必须可读；现役代码不再产生。
 AuditAction = Literal['auto_approve', 'approve', 'edit', 'merge_accept', 'merge_reject']
 
 
@@ -342,21 +346,27 @@ class RemovalReport(StrictModel):
 
     # ── 审阅状态 ────────────────────────────────────────────────────────────
 
-    #: **三态**（2026-08-11 用户裁决）。`R-0.3b` 是 `HARD`：
-    #: **不等于 `'approved'` ⇒ stage1 拒绝启动**——`not_run` 与 `pending` 都要拦。
+    #: **两态**（2026-08-21 裁决；三态里的 `not_run` 是从未落过盘的死值，已删）。
+    #: `R-0.3b` 是 `HARD`：**不满足执行资格 ⇒ stage1 拒绝启动**。
+    #:
+    #: ⚠ 执行资格比「等于 `'approved'`」更严：**还必须 `approval_origin == 'human'`**
+    #: （`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点）。
+    #: 历史自动批产物读得、展示得，**跑不得**。
     #:
     #: ⚠ 按本层的设计，这道闸门是**盲区①（番外用纯数字章节标记写）全链唯一的防线**，
-    #: 而 stage2 是第一个花钱的层 ⇒ 闸门必须在它之前。
+    #: 而 stage2 是第一个花钱的层 ⇒ 闸门必须在它之前、且必须有人真的看过。
     approved: ApprovalState
 
     #: ISO 时间戳。⚠ **必填但可为 `null`**：未批准时是 `null`，
-    #: 「键不在」不是合法形态（那会把三态又压回两态）。
+    #: 「键不在」不是合法形态（那会把两态压成一态）。
     approved_at: str | None
 
-    #: 批准来源。未批准时为 null；零命中自动批与人工批在结构上可区分。
+    #: 批准来源。未批准时为 null。`auto_zero_hit` 是**历史只读取值**（已停产）：
+    #: 零命中书不再自动获得批准——那恰好是纯数字番外盲区绕过人工防线的路。
+    #: 现役唯一来源是 `human`。
     approval_origin: ApprovalOrigin | None
 
-    #: 自报身份，不宣称是认证身份。自动批准与未批准时均为 null。
+    #: 自报身份，不宣称是认证身份。未批准时为 null；人工批必有值。
     approved_by: str | None
 
     #: 第几轮。人每编辑一次 +1，上一轮进 `_rounds/`（`R-0.5`）。

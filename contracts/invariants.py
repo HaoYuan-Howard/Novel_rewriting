@@ -258,17 +258,20 @@ NONBODY_MARKER_WARN_CP: Final = 17
 #:   后者独立起作用的窗口只有 `body_ratio ∈ [0.60, 0.65)`。两条都留是因为严重度不同。
 STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 
-#: 人工审阅闸门的状态。**三态，不是 `bool`**（用户裁决，见 `docs/schema/stage0.md` §2.4）。
+#: 人工审阅闸门的状态。**两态，不是 `bool`**（2026-08-21 裁决，见 `docs/schema/stage0.md` §2.4）。
 #:
-#: 【为什么不能是 `bool`】实际有三种状态：**没跑过** · **跑了没批** · **批了**。
-#: 压成 `bool` 之后前两者就分不开了——而「产物不存在」这条替代表达要求
-#: **每一个消费方都先判文件在不在**，那种约定迟早有人漏掉一处。
-#: 与 `FRESHNESS` / `JOB_STATE` / `BADGE` 同构：本项目每一次把「不知道」并进
-#: 「没问题」都付过学费。
-#: ⚠ `R-0.3b`（`HARD`）判的是 **`approved != 'approved'` ⇒ stage1 拒绝启动**，
-#: 三个值里有**两个**都该拦——写成 `if not approved` 在 `bool` 下对、在三态下也对，
-#: 但写成 `if approved == 'pending'` 就漏掉了 `not_run`。
-APPROVAL_STATE: Final = ('not_run', 'pending', 'approved')
+#: 【历史】原型曾按「没跑过 · 跑了没批 · 批了」定成三态。其中 `not_run` 是**死值**：
+#: 一份合法的 `RemovalReport` 一旦存在，机器摄入必然已经跑过（它自己就带着机器指纹），
+#: 「没跑过」在产物内不可诚实表达——全仓也从未有过写入方（preflight 存量扫描 0 实例，
+#: 2026-08-21）。「没跑 / 崩了 / 阻断」是**执行状态**，由「产物不存在 + JobState」表达。
+#: 【为什么不能是 `bool`】「跑了没批」与「批了」必须分开，与 `FRESHNESS` / `JOB_STATE` /
+#: `BADGE` 同构：本项目每一次把「不知道」并进「没问题」都付过学费。
+#: ⚠ `R-0.3b`（`HARD`）判的是**不满足执行资格 ⇒ stage1 拒绝启动**。现役执行资格
+#: 是 `approved == 'approved'` **且** `approval_origin == 'human'`
+#: （`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点）：
+#: `approval_origin == 'auto_zero_hit'` 是历史自动批取值，**只读、不具执行资格**，
+#: 人工重批（`stage0.approve`）后恢复。
+APPROVAL_STATE: Final = ('pending', 'approved')
 
 # Human workflow checkpoints kept under Output/_service. These are service
 # state, not artifact approval fields such as stage0 RemovalReport.approved.

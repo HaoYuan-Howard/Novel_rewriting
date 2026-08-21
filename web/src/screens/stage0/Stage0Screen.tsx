@@ -214,7 +214,9 @@ export function Stage0Screen() {
             const removed = source.segments.filter((item) => picked.has(item.id))
             const dirty = !sameIds(picked, initial)
             const removedChars = removed.reduce((sum, item) => sum + item.chars, 0)
-            const approved = current.approved === 'approved'
+            // 执行资格与后端同一口径：历史自动批（auto_zero_hit）显示已批准但跑不得。
+            const approved = current.approved === 'approved' && current.approval_origin === 'human'
+            const legacyAuto = current.approved === 'approved' && current.approval_origin === 'auto_zero_hit'
             const suspicious = suspiciousForView
             const filteredSegments = filteredForView
             return (
@@ -366,8 +368,18 @@ export function Stage0Screen() {
                           approved ? 'bg-gate-ok-bg text-ink-2' : 'bg-warn-bg text-warn',
                         )}
                       >
-                        {approved ? '已批准' : '待人工批准'}
+                        {approved
+                          ? '已批准'
+                          : legacyAuto
+                            ? '历史自动批准 · 需人工重批'
+                            : '待人工批准'}
                       </span>
+                      {legacyAuto ? (
+                        <span className={'text-tag text-warn'}>
+                          这份批准来自已停产的零命中自动批（auto_zero_hit），不具执行资格；
+                          填 actor 与 reason 重新批准后才能进入 stage1。
+                        </span>
+                      ) : null}
                       <span className={'text-body font-semibold'}>
                         当前删除 {removed.length} 段 · {removedChars} 码点
                       </span>

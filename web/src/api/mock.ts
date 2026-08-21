@@ -717,6 +717,8 @@ function mockStage0Report(sid: string): Stage0Report {
     warnings: [],
     approved: approved ? 'approved' : 'pending',
     approved_at: approved ? new Date().toISOString() : null,
+    approval_origin: approved ? 'human' : null,
+    approved_by: approved ? 'mock-reviewer' : null,
     round: lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 2 : 1,
     edited_by_human: !!lsRead<Stage0EditRequest>('stage0.selection.' + sid),
   }

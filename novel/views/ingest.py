@@ -310,7 +310,13 @@ class _Stage1Material:
 def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
     store = _store(base, sid, STAGE1_NODE)
     stage0 = store.read_own(RemovalReport, partition.STAGE0_REPORT)[0]
-    if stage0.approved != 'approved':
+    from novel.stages.stage0.eligibility import LEGACY_AUTO_APPROVAL, block_reason
+    reason = block_reason(stage0)
+    if reason == LEGACY_AUTO_APPROVAL:
+        raise ApprovalRequired(
+            'stage0 是历史自动批准（auto_zero_hit，已停产）；人工重批'
+            f'（stage0.approve）前不能进入 stage1（{LEGACY_AUTO_APPROVAL}）')
+    if reason is not None:
         raise ApprovalRequired(
             f'stage0 当前状态为 {stage0.approved!r}；先回 S-00 审阅并批准')
     clean = store.read_text(partition.CLEAN_TEXT)

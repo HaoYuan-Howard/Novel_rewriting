@@ -133,9 +133,15 @@ def run_partition(
     store = ArtifactStore(ctx)
     stage0 = store.read(RemovalReport, STAGE0_REPORT)
     clean_text = store.read_text(CLEAN_TEXT)
-    if stage0.approved != 'approved':
+    from novel.stages.stage0.eligibility import LEGACY_AUTO_APPROVAL, block_reason
+    reason = block_reason(stage0)
+    if reason == LEGACY_AUTO_APPROVAL:
         raise ApprovalRequired(
-            f'stage0 当前状态为 {stage0.approved!r}；not_run/pending 都不能启动 stage1')
+            'stage0 是历史自动批准（auto_zero_hit，已停产）；人工重批'
+            f'（stage0.approve）前不能启动 stage1（{LEGACY_AUTO_APPROVAL}）')
+    if reason is not None:
+        raise ApprovalRequired(
+            f'stage0 当前状态为 {stage0.approved!r}；人工批准前不能启动 stage1')
     actual_input = prov.content_sha1(clean_text.encode('utf-8'))
     if actual_input != stage0.clean_sha1:
         raise PartitionInputMismatch(

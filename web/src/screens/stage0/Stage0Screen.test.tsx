@@ -33,6 +33,8 @@ describe('Stage0Screen segment virtualization', () => {
       warnings: [],
       approved: 'pending',
       approved_at: null,
+      approval_origin: null,
+      approved_by: null,
       round: 1,
       edited_by_human: false,
     })
@@ -70,6 +72,8 @@ describe('Stage0Screen segment virtualization', () => {
       warnings: [],
       approved: 'approved',
       approved_at: 'now',
+      approval_origin: 'human',
+      approved_by: 'tester',
       round: 2,
       edited_by_human: true,
     })

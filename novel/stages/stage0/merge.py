@@ -251,10 +251,11 @@ def make_audit_entry(
 ) -> Stage0AuditEntry:
     """Build one hash-complete audit entry without touching the filesystem.
 
-    The persisted path and ``stage0.remove --dry-run`` must preview the same
-    approval shape.  Keeping construction pure lets the dry-run report carry
-    the real ``auto_zero_hit`` decision and chain head without creating an
-    audit directory merely to explain what a first run would do.
+    Keeping construction pure lets dry-run shapes and tests build entries
+    without creating an audit directory.  ``auto_approve`` entries are no
+    longer produced by first runs (停产 2026-08-21); the action stays legal so
+    historical chains keep verifying, and legacy reports re-approved by a
+    human append a plain ``approve`` entry after the old one.
     """
     stable = {
         'seq': seq,

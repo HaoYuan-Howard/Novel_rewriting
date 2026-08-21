@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.api import PreviewRequest
-from contracts.schema.stage0 import RemovedSegment
+from contracts.schema.stage0 import RemovalReport, RemovedSegment
 from novel import paths as novel_paths
 from novel.core.ingest import decode_source_bytes
 from novel.errors import (
@@ -114,29 +114,35 @@ def test_stage0_current_pair_is_each_written_once():
     ]
 
 
-def test_first_zero_hit_dry_run_previews_auto_approval_without_writing(work):
+def test_first_zero_hit_dry_run_previews_pending_without_writing(work):
+    """零命中首跑也恒 pending（2026-08-21 停产自动批准）。
+
+    「零 removed、零 warning、clean == source」恰好是纯数字番外盲区的形状——
+    人工闸门是那个盲区全链唯一的防线，自动放行等于把防线拆了。
+    """
     source = _source(work, 'FQ_dry_auto_102.txt', 'enc_utf8_sig')
     output = work / 'Output'
 
     novel_dir, preview, check = run_source(source, output, dry_run=True)
 
     assert check is None
-    assert preview.report.approved == 'approved'
-    assert preview.report.approval_origin == 'auto_zero_hit'
+    assert preview.report.approved == 'pending'
+    assert preview.report.approval_origin is None
     assert preview.report.approved_by is None
-    assert preview.report.audit_seq == 1
-    assert preview.report.audit_head_sha256
+    assert preview.report.audit_seq == 0
+    assert preview.report.audit_head_sha256 is None
     assert not output.exists() and not novel_dir.exists(), \
         'dry-run 只能构造内存预览，不得创建 output/书目录/审计链'
 
     written_dir, written, written_check = run_source(source, output)
     assert written_dir == novel_dir
     assert written.report.approved == preview.report.approved
-    assert written.report.approval_origin == preview.report.approval_origin
-    assert written_check is not None and written_check.passed
-    assert _line(written_check, 's0_approval').item == (
-        'stage0 已获有效批准（自动零命中或人工）才可继续'
-    )
+    assert written.report.approval_origin is None
+    # 零命中首跑也停在人工闸前：s0_approval 命中是**预期语义**，不是回归。
+    assert written_check is not None
+    assert _line(written_check, 's0_approval').status == 'hit'
+    assert _line(written_check, 's0_approval').item == \
+        'stage0 已获人工批准才可继续（历史自动批须重批）'
 
 
 def test_first_nonzero_hit_dry_run_stays_pending_without_writing(work):
@@ -204,10 +210,17 @@ def test_human_approval_rolls_back_the_report_and_audit_when_source_moved(work):
     assert not (novel_dir / 'stage0/_audit/edit_1.json').exists()
 
 
-def test_auto_approval_rolls_back_every_artifact_when_source_moves_mid_commit(
+def test_approval_transition_rolls_back_report_and_audit_when_source_moves_mid_commit(
         work, monkeypatch):
+    """原自动批提交期的回滚性质，随 2026-08-21 停产挪到**人工批准**过渡上。
+
+    批准写入与 `_require_stage0_fresh` 之间原文被换 ⇒ 整个过渡回滚：
+    报告字节回到 pending 版、审计条目不落盘。
+    """
     source = _source(work, 'FQ_auto_race_125.txt', 'enc_utf8_sig')
     output = work / 'Output'
+    novel_dir, _result, _check = run_source(source, output)
+    before_report = (novel_dir / REPORT_REL).read_bytes()
     original_write = ArtifactStore.write
 
     def write_then_move_source(self, rel, artifact):
@@ -219,17 +232,10 @@ def test_auto_approval_rolls_back_every_artifact_when_source_moves_mid_commit(
     monkeypatch.setattr(ArtifactStore, 'write', write_then_move_source)
 
     with pytest.raises(ProvenanceRefused, match='not current'):
-        run_source(source, output)
+        run_approve(_context(novel_dir, 'stage0.approve'))
 
-    sid, title, _platform = novel_paths.derive_source_meta(str(source))
-    novel_dir = output / novel_paths.novel_dirname(title, sid)
-    for rel in (
-        stage0_removal.SNAPSHOT_REL,
-        CLEAN_REL,
-        REPORT_REL,
-        'stage0/_audit/edit_1.json',
-    ):
-        assert not (novel_dir / rel).exists()
+    assert (novel_dir / REPORT_REL).read_bytes() == before_report
+    assert not (novel_dir / 'stage0/_audit').exists()
 
 
 def test_r114_writes_all_artifacts_and_then_reports_failure(work):
@@ -548,15 +554,10 @@ def test_test_data_matches_the_registered_source_set():
 def test_real_test_data_runs_through_both_deterministic_layers(source: Path, work: Path):
     novel_dir, removed, initial = run_source(source, work / 'Output')
     assert initial is not None
-    approval_line = _line(initial, 's0_approval')
-    if removed.report.approved == 'approved':
-        assert removed.report.approval_origin == 'auto_zero_hit'
-        assert removed.report.approved_by is None
-        assert not removed.report.removed and not removed.report.warnings
-        assert approval_line.status == 'ok'
-    else:
-        assert removed.report.approval_origin is None
-        assert approval_line.status == 'hit'
+    # 首跑恒 pending（自动批准已于 2026-08-21 停产），零命中书也一样。
+    assert removed.report.approved == 'pending'
+    assert removed.report.approval_origin is None
+    assert _line(initial, 's0_approval').status == 'hit'
     approved, approval_report = run_approve(
         _context(novel_dir, 'stage0.approve'),
         approved_at='2026-08-12T00:00:00+00:00',
@@ -583,8 +584,8 @@ def test_no_artifact_holds_the_extra_body_beyond_its_mandated_preview(work):
       按编号 grep 找不到守卫——所以补一条**直接查产物面**的。
 
     ⚠ 判据刻意**不是**「任何产物的 `content_sha1` 不得等于 `source_sha1`」：
-      零 removed 的干净书**合法地**满足 `clean_sha1 == source_sha1`
-      （`_auto_approval_eligible` 正是这么判自动批准的）⇒ 那样写是假红。
+      零 removed 的干净书**合法地**满足 `clean_sha1 == source_sha1`（首跑零命中正是这个
+      形状，2026-08-21 起它同样停在人工闸门前）⇒ 那样写是假红。
       这里查番外正文本身，且取**预览窗口之外**的那一段：`head_preview`/`tail_preview`
       恒 80/40 码点，是 `R-0.2` 明文要求的残片（「丢了就没有第二次机会」），不是副本。
     """
@@ -617,3 +618,95 @@ def test_no_artifact_holds_the_extra_body_beyond_its_mandated_preview(work):
         f'走 `novel/core/source.py` 的 base 重锚，不要在这里存第二份正文')
     # 反面：原始 txt 在书目录**之外**，它当然还留着整段番外。
     assert unique in source.read_bytes().decode('utf-8')
+
+
+# ── 2026-08-21 审批收口：not_run 出局 + 停产自动批准 ─────────────────────────
+
+
+def test_approval_state_no_longer_carries_not_run():
+    """P0-2：`not_run` 是从未落过盘的死值（preflight 扫描 0 实例），已从取值面删除。
+
+    「没跑 / 崩了 / 阻断」是执行状态，由「产物不存在 + JobState」表达，
+    不许再混进产物的审批字段里。
+    """
+    from contracts.invariants import APPROVAL_STATE
+
+    assert 'not_run' not in APPROVAL_STATE
+    assert APPROVAL_STATE == ('pending', 'approved')
+
+
+def test_unapproved_states_are_interpreted_not_conflated(work):
+    """五行状态解释表：删掉 `not_run` 之后没有重新制造状态歧义。
+
+    每一行都必须在真实盘面（产物在不在 + 报告字段）上解释出不同的人读结论，
+    而不是靠一个枚举值压平。
+    """
+    from novel.errors import UpstreamMissing
+    from novel.stages.stage1.partition import run_partition
+
+    def _stage1_outcome(novel_dir):
+        try:
+            run_partition(_context(novel_dir, 'stage1.partition'))
+        except (UpstreamMissing, ApprovalRequired) as exc:
+            return f'{type(exc).__name__}: {exc}'
+        return 'ran'
+
+    # 行 1：无 report（JobState 尚未起步/没跑过）→ 说「先跑上游」，不是「没批」。
+    empty_dir = work / 'Output' / 'FQ_状态解释_9501'
+    empty_dir.mkdir(parents=True)
+    assert '先跑产它的那一层' in _stage1_outcome(empty_dir)
+
+    # 行 3：有 report + pending → 说「等人工批准」。
+    source = _source(work, 'FQ_状态解释_9502.txt', 'enc_utf8_sig')
+    novel_dir, result, _ = run_source(source, work / 'Output')
+    assert '人工批准' in _stage1_outcome(novel_dir)
+
+    # 行 4：approved + human → 真的跑得动（enc_utf8_sig 样本 ≥2 章）。
+    run_approve(_context(novel_dir, 'stage0.approve'))
+    assert _stage1_outcome(novel_dir) == 'ran'
+
+    # 行 5：approved + auto_zero_hit（历史）→ 说「历史自动批准，需人工重批」，
+    # 不与行 4 混同——两者在报告上都显示 approved。
+    from novel.stages.stage0.merge import append_audit
+    store = ArtifactStore(_context(novel_dir, 'stage0.remove'))
+    legacy, _raw = store.read_own(RemovalReport, REPORT_REL)
+    entry = append_audit(
+        _context(novel_dir, 'stage0.remove'), seq=legacy.audit_seq + 1,
+        previous_sha256=legacy.audit_head_sha256, action='auto_approve',
+        actor=None, reason='合成一份历史自动批形态', before_source_sha1=None,
+        before_clean_sha1=None, after_source_sha1=legacy.source_sha1,
+        after_clean_sha1=legacy.clean_sha1)
+    auto_report = legacy.model_copy(update={
+        'approved': 'approved', 'approved_at': entry.at,
+        'approval_origin': 'auto_zero_hit', 'approved_by': None,
+        'audit_seq': entry.seq, 'audit_head_sha256': entry.entry_sha256})
+    store.write(REPORT_REL, auto_report)
+    outcome = _stage1_outcome(novel_dir)
+    assert 'legacy_auto_approval_requires_review' in outcome, outcome
+    assert '历史自动批准' in outcome
+
+    # 行 2（无 report + JobState failed）与行 1 同走「产物不存在」的 UpstreamMissing，
+    # 失败与否由作业记录解释，本层不重复建模。
+
+
+def test_execution_eligibility_has_exactly_one_home():
+    """纪律：五处消费方必须 import 同一个谓词，不许各自复述条件。
+
+    `approved == 'approved'` 在消费方里再次出现，就是自动绕过的复活口
+    （`docs/LESSONS.md` §21：改向时把同一条 R 的全部守卫一次列全）。
+    """
+    from pathlib import Path as _Path
+
+    consumers = [
+        'novel/stages/stage1/partition.py',
+        'novel/stages/stage0/checks.py',
+        'novel/views/ingest.py',
+        'novel/orchestrator/queue.py',
+        'novel/orchestrator/approvals.py',
+    ]
+    for rel in consumers:
+        text = (_Path(rel)).read_text(encoding='utf-8')
+        assert '.approved == \'approved\'' not in text, (
+            f'{rel} 复述了审批条件——改用 '
+            f'novel/stages/stage0/eligibility.py::is_stage0_executable / block_reason')
+        assert 'eligibility' in text, f'{rel} 应经 eligibility 落点判执行资格'

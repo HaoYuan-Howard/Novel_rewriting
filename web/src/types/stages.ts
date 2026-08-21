@@ -43,8 +43,11 @@ export interface Stage0Report {
   total_code_points: number
   body_code_points: number
   warnings: Stage0Warning[]
-  approved: 'not_run' | 'pending' | 'approved'
+  approved: 'pending' | 'approved'
   approved_at: string | null
+  /** 历史自动批（auto_zero_hit）只读不承行：显示「已批准」≠可以继续，须人工重批 */
+  approval_origin: 'auto_zero_hit' | 'human' | null
+  approved_by: string | null
   round: number
   edited_by_human: boolean
 }

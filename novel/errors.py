@@ -197,10 +197,12 @@ class BlockingFindingsUnresolved(TerminalState):
 
 
 class ApprovalRequired(TerminalState):
-    """人工闸门没过（`APPROVAL_STATE` 的 `not_run` / `pending`）。
+    """人工闸门没过（`APPROVAL_STATE` 的 `pending`，或历史自动批未重批）。
 
-    ⚠ **两个未批状态都要拦**（`R-0.3b`）：写成 `if approved == 'pending'` 会漏掉
-    `not_run`——那正是把三态压成 `bool` 之后必然长出来的那种漏。
+    ⚠ 执行资格 = `approved == 'approved'` **且** `approval_origin == 'human'`
+    （`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点）。
+    历史自动批产物读得、跑不得——「显示已批准」不等于「可以继续」。
+    「没跑过」不是产物状态：产物不存在本身就是那个事实（2026-08-21 起 `not_run` 已删）。
 
     ⚠ 队列里的付费项没拿到一次性预先确认（`R-13.3`）也走这一条：
     「排进队列了」不该变成静默扣费。
