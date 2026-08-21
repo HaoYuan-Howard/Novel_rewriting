@@ -74,12 +74,20 @@ def _windows_basetemp_problem(
     *,
     os_name: str = os.name,
     long_paths: bool | None = None,
+    root: str | os.PathLike[str] | None = None,
 ) -> str | None:
     """Return an actionable preflight error before a deep Windows path explodes.
 
     ⚠ `long_paths` 是**注入口**，`None` 表示实测这台机器。守卫必须能确定性地
     测「已解除」与「未解除」两种状态：把结论交给宿主机器的注册表，等于让这条
     断言随环境改变，而其中一侧在另一种机器上根本测不到。
+
+    ⚠ `root` 是**第二个注入口**（`None` = 按真实 cwd 解析相对 basetemp），理由与
+    `long_paths` 同构。这条预检算的是**绝对路径长度**，而一个相对 basetemp 的绝对
+    形态取决于仓库自己住在哪儿：`Novel_rewriting_stage01` 这个 worktree 名比主仓
+    长 8 个字符，同一个 `.test_runtime` 于是从 252 变成 260。**把仓库路径长度当成
+    被测对象，等于让断言随 clone 的位置改变**——`docs/LESSONS.md` §21 的形状。
+    ⇒ 测试必须传一个固定的假仓根；只有真跑（`pytest_configure`）才用真 cwd。
     """
     if os_name != 'nt' or configured is None:
         return None
@@ -89,15 +97,34 @@ def _windows_basetemp_problem(
         # ⚠ 限制已解除 ⇒ 这一格**不许再拦**。继续按 260 判就是 LESSONS 第 21 条那个
         # 形状：守卫自己漂了，把一个实际能跑的 basetemp 判成假红。
         return None
-    base = Path(configured).expanduser().resolve(strict=False)
+    base = Path(configured).expanduser()
+    if root is None:
+        base = base.resolve(strict=False)
+    elif not base.is_absolute():
+        base = Path(os.path.normpath(Path(root) / base))
     longest = base / _STAGE0_TMP_SUFFIX
     length = len(str(longest))
     if length < _WINDOWS_MAX_PATH:
         return None
+    # ⚠ 建议必须**算过**才给得出。此前这里无条件推荐 `--basetemp=.test_runtime`，
+    #   而在仓库路径较长的 clone / worktree 里那个值自己就超标（实测本仓的
+    #   `Novel_rewriting_stage01` worktree 恰好 260）⇒ 预检推荐了一个它自己会拒绝
+    #   的值，照做的人原地打转。改成按剩余预算分诊：仓内短名还放得下就报它，
+    #   放不下就明说仓内已无解、往仓外走。
+    budget = _WINDOWS_MAX_PATH - 1 - len(str(_STAGE0_TMP_SUFFIX))
+    anchor = Path(os.path.normpath(Path(root) if root is not None else Path.cwd()))
+    spare = budget - len(str(anchor)) - 1
+    advice = (
+        '请改用仓库内短路径，例如 --basetemp=.test_runtime'
+        if spare >= len('.test_runtime') else
+        f'⚠ 本仓所在路径 {anchor} 太长，仓内放不下 .test_runtime'
+        f'（前缀预算只剩 {spare} 字符）——请用**仓外**短路径，'
+        f'例如 --basetemp={anchor.drive or "C:"}/_tr'
+    )
     return (
         f'Windows --basetemp is too deep: {base}；Stage0 最长临时归档路径约 '
         f'{length} 字符，达到/超过 MAX_PATH({_WINDOWS_MAX_PATH})。'
-        '请改用仓库内短路径，例如 --basetemp=.test_runtime；'
+        f'{advice}；'
         '或一次性解除这台机器的限制（管理员设 '
         'HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled=1），'
         '解除后本预检自动不再拦'

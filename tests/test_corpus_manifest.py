@@ -485,18 +485,29 @@ def test_require_corpus_overrides_default_marker_and_fails_closed(
     assert getattr(config, '_current_corpus_manifest') is sentinel
 
 
+#: 这两条预检用例的**假仓根**。相对 basetemp 的绝对长度取决于仓库住在哪儿，
+#: 拿真 cwd 当基准就是把宿主环境当被测对象（实测：`Novel_rewriting_stage01`
+#: 这个 worktree 名比主仓长 8 字符，`.test_runtime` 于是从 252 变成 260 而假红）。
+_FAKE_ROOT = 'C:/repo'
+#: 「仓内已放不下任何 basetemp」那一支的假仓根。长到必然触发仓外建议。
+_FAKE_DEEP_ROOT = 'C:/' + '/'.join(['verylongsegment'] * 12)
+
+
 def test_windows_basetemp_preflight_rejects_deep_paths_before_stage0_runs():
     """MAX_PATH 未解除的机器上，深 basetemp 必须在 Stage0 炸之前被拦下。
 
     ⚠ 一律显式传 `long_paths=False`。不传就等于把这条断言的成立与否交给**宿主机器的
     注册表**——在一台已解除限制的机器上，预检本该放行，于是这个测试会假红。
+    ⚠ 一律显式传 `root=_FAKE_ROOT`，理由同构：不传就等于把断言交给**仓库自己的
+    路径长度**。docstring 此前只挡住了注册表那一维，`.test_runtime` 必须被放行
+    这一条于是在任何路径较长的 clone / worktree 里假红。
     """
     from tests import conftest as hooks
 
     assert hooks._windows_basetemp_problem(
-        '.test_runtime', os_name='nt', long_paths=False) is None
+        '.test_runtime', os_name='nt', long_paths=False, root=_FAKE_ROOT) is None
     assert hooks._windows_basetemp_problem(
-        'x' * 400, os_name='posix', long_paths=False) is None
+        'x' * 400, os_name='posix', long_paths=False, root=_FAKE_ROOT) is None
     assert tuple(hooks._STAGE0_TMP_SUFFIX.parts[-3:-1]) == ('stage0', '_rounds')
     assert 'Output' in hooks._STAGE0_TMP_SUFFIX.parts
 
@@ -505,12 +516,13 @@ def test_windows_basetemp_preflight_rejects_deep_paths_before_stage0_runs():
     first_refused = next(
         size for size in range(1, 500)
         if hooks._windows_basetemp_problem(
-            'x' * size, os_name='nt', long_paths=False) is not None
+            'x' * size, os_name='nt', long_paths=False, root=_FAKE_ROOT) is not None
     )
     assert hooks._windows_basetemp_problem(
-        'x' * (first_refused - 1), os_name='nt', long_paths=False) is None
+        'x' * (first_refused - 1), os_name='nt', long_paths=False,
+        root=_FAKE_ROOT) is None
     problem = hooks._windows_basetemp_problem(
-        'x' * first_refused, os_name='nt', long_paths=False)
+        'x' * first_refused, os_name='nt', long_paths=False, root=_FAKE_ROOT)
     assert problem is not None
     assert '约 260 字符' in problem
     assert 'MAX_PATH(260)' in problem and '--basetemp=.test_runtime' in problem
@@ -528,7 +540,30 @@ def test_windows_basetemp_preflight_stands_down_once_the_limit_is_lifted():
 
     for size in (1, 200, 400, 4000):
         assert hooks._windows_basetemp_problem(
-            'x' * size, os_name='nt', long_paths=True) is None
+            'x' * size, os_name='nt', long_paths=True, root=_FAKE_ROOT) is None
+
+
+def test_the_preflight_never_recommends_a_basetemp_it_would_itself_refuse():
+    """⭐ 预检给的出路必须是**算过的**，不是写死的一句话。
+
+    实测踩过：无条件推荐 `--basetemp=.test_runtime`，而在
+    `Novel_rewriting_stage01` 这个 worktree 里那个值自己恰好 260 ⇒ 照着做的人
+    原地打转，一次都跑不起来。⇒ 仓内还放得下才报仓内短名，放不下就明说仓内无解。
+    """
+    from tests import conftest as hooks
+
+    shallow = hooks._windows_basetemp_problem(
+        'x' * 400, os_name='nt', long_paths=False, root=_FAKE_ROOT)
+    assert shallow is not None and '--basetemp=.test_runtime' in shallow
+    # 推荐的那个值，预检自己必须放行——否则这句建议是空头支票。
+    assert hooks._windows_basetemp_problem(
+        '.test_runtime', os_name='nt', long_paths=False, root=_FAKE_ROOT) is None
+
+    deep = hooks._windows_basetemp_problem(
+        '.test_runtime', os_name='nt', long_paths=False, root=_FAKE_DEEP_ROOT)
+    assert deep is not None, '仓根长到这个程度，仓内任何 basetemp 都该被拦'
+    assert '--basetemp=.test_runtime' not in deep,         '仓内已放不下，还推荐仓内短名 = 推荐一个自己会拒绝的值'
+    assert '仓外' in deep and '--basetemp=C:/_tr' in deep
 
 
 def test_long_path_probe_measures_the_host_and_leaves_nothing_behind():
