@@ -32,8 +32,9 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
-    ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURE, CACHE_POLICY, HINGE_KINDS,
-    NAME_DISTINCTIVENESS, NARRATIVE_PERSON, SPAN_RECOVERY, TIME_LAYERS, WORLD_RULE_KINDS,
+    ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES, CACHE_POLICY, HINGE_KINDS,
+    NAME_DISTINCTIVENESS, NARRATIVE_PERSON, PLACE_MODES, RESPONSE_TIME_LAYERS,
+    SPAN_RECOVERY, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import LlmProvenance
@@ -124,7 +125,12 @@ class Relation(StrictModel):
     #: 于是 relations 是 secrets 之外的**第二条剧透通道**。
     #: **不加字段**（同一语义两个落点必然漂移），在**下发侧**解决：两端人名都在某条
     #: secret 的 `fact` 里、且 `valid_from` 落在隐瞒窗口内的关系，改按 `reader_reveal_events` 闸门。
-    #: ⚠ 那条闸门的前件是 `setup_chapters`，而盘上 20/21 是空数组 ⇒ **等于没开**。
+    #: ⚠ 那条闸门的前件是 `setup_chapters`（冷揭示的 secret 没有隐瞒窗口，不参与）。
+    #: ⚠⚠ **旧注释写的「盘上 20/21 是空数组 ⇒ 等于没开」是已删语料时代的读数，已作废**
+    #: （2026-08-21 复核）。当前盘上是 **6/22 冷揭示**，且**逐模型分布很不一样**：
+    #: Pro 那本 **0/4**（埋点全填了，闸门全程有效），Flash 三本 1/7 · 1/4 · **4/7**。
+    #: ⇒ 闸门在 Pro 产的 global 上是开着的；Flash 会掉一部分，那是**生成侧换模型**
+    #: 要盯的读数，不是这条闸门本身失效。
     valid_from_chapter: int = Field(ge=1)
 
     #: 失效点（和离/亡故/决裂），没失效填 `null`（键恒在）。盘上 22/70 非 `null`。
@@ -207,8 +213,10 @@ class Secret(StrictModel):
     #: ⚠ **判据断言的是 `_provenance.setup_chapters_pruned` 那个计数，不是本字段的值**：
     #: 裁剪跑在落盘前，再断言字段值就永远为真。
     #:
-    #: ⚠ **「冷揭示」与「被裁空」在字段值上完全同形**（盘上 20/21 条是空数组）：
+    #: ⚠ **「冷揭示」与「被裁空」在字段值上完全同形**（盘上 **6/22 条**是空数组，
+    #: 2026-08-21 复核——旧注释的「20/21」是已删语料时代的读数，已作废）：
     #: 前者合法；后者说明产地在把揭示章号抄进埋点。两者只能靠那个计数分开。
+    #: ⚠ 分布逐模型差很多：Pro 那本 **0/4**，Flash 三本 1/7 · 1/4 · **4/7**。
     setup_chapters: list[int]
 
     #: 长度 1~2。分几次揭示记几条。
@@ -346,7 +354,7 @@ class SecretPatch(StrictModel):
 
     ⚠ **字段级替换而不是组内合并**：`character_known_by` 少写一个人与「这一项没给」
     在合并语义下同形，而它们是两个决定。`None` = 这一格人没动过。
-    ⚠ **`setup_chapters` 的 `[]` 是有语义的**（「冷揭示」，盘上 20/21 条如此），
+    ⚠ **`setup_chapters` 的 `[]` 是有语义的**（「冷揭示」，盘上 6/22 条如此），
     所以它必须是 `list[int] | None` 而不是靠空列表表示未给——两者一旦同形，
     「人把埋点清空了」就再也说不出口。
     """
@@ -712,18 +720,138 @@ class ChapterBlueprintsResponse(StrictModel):
     blueprints: list[BlueprintResponse] = Field(min_length=1)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 二·b、`extraction-ir-v1` 的响应契约（`Stage2_improvement.md` 改造）
+#
+# 与 v3 的差别只有四族，全部朝同一个方向：**模型只做不可避免的局部语义判断，
+# 定位/编号/一致性归代码**（compiler：`novel/stages/stage2/compile_v2.py`）。
+#   ① beat 只交 `end_para`（起点=上一拍止段+1，首拍起 1，末拍必须到底）
+#      ⇒ 重叠/倒序/漏头尾在结构上不可产生；
+#   ② hinge 去掉 `para`（交接实测 10 个 verbatim_failed 里 9 个短语对、段号错），
+#      改在**所属拍区间内**唯一匹配，多处命中走候选选择修复；
+#   ③ place 从自由文本改成判别三态（`P_EXPLICIT`/`P_INHERIT`/`P_UNKNOWN`）；
+#   ④ summary 不再由抽取响应携带（书级摘要批独立生成，events 是唯一语义源）。
+# 产物模型一个不动——这里只是响应边界，编译后仍落现有 `ChapterBlueprints`。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class HingeResponseV2(StrictModel):
+    """一条保真材料：**只有种类和那几个字**，没有段号。
+
+    短语必须能在**所属拍的区间内**原样找到且唯一；不唯一时 compiler 记
+    `短语在本拍区间内多处命中`（修法是候选选择，不是重抄）。
+    """
+
+    kind: Literal[HINGE_KINDS]
+    phrase: str = Field(min_length=1)
+
+
+class ExplicitPlace(StrictModel):
+    """原文明写（或延续中可辨认）的地点，必带 `name`。"""
+
+    mode: Literal['P_EXPLICIT']
+    name: str = Field(min_length=1)
+
+
+class InheritPlace(StrictModel):
+    """延续上一相邻拍的地点。**继承由代码做**（仅同 `time_layer` 且相邻才许）。"""
+
+    mode: Literal['P_INHERIT']
+
+
+class UnknownPlace(StrictModel):
+    """确实无从判断 ⇒ 产物侧 `place=null`。不确定性是受约束的状态，不是自由文本。"""
+
+    mode: Literal['P_UNKNOWN']
+
+
+#: 判别联合：非法组合（`P_EXPLICIT` 无名、`P_UNKNOWN` 带名）**从形状上不可表达**，
+#: 不靠跨字段校验兜。discriminator 取值面在 `contracts/invariants.py::PLACE_MODES`。
+PlaceRef = Annotated[ExplicitPlace | InheritPlace | UnknownPlace,
+                     Field(discriminator='mode')]
+
+assert set(PLACE_MODES) == {'P_EXPLICIT', 'P_INHERIT', 'P_UNKNOWN'}, \
+    'PLACE_MODES 改了取值面而 PlaceRef 三个成员没跟着改——两处必须一起看'
+
+
+class BeatResponseV2(StrictModel):
+    """`extraction-ir-v1` 的拍：**没有 `beat_id`（代码编号）、没有起点（代码推导）**。
+
+    `time_layer` 用响应侧前缀枚举（`T_*`），compiler 经
+    `contracts/invariants.py::RESPONSE_TIME_LAYERS` 映回产物值。
+    """
+
+    end_para: int = Field(ge=1)
+    time_layer: Literal[tuple(RESPONSE_TIME_LAYERS)]
+    place: PlaceRef
+    present_names: list[str]
+    event: str = Field(min_length=1)
+    hinges: list[HingeResponseV2]
+
+
+class BlueprintResponseV2(StrictModel):
+    """一章的最小抽取 IR。**没有 `summary`**——它是 events 的派生视图，
+    由书级摘要批独立生成（`SummaryBatchResponse`），不再是第二份语义真相。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    beats: list[BeatResponseV2] = Field(min_length=1)
+    narration: list[NarrationResponse] = Field(min_length=1)
+
+
+class ChapterBlueprintsResponseV2(StrictModel):
+    """一次调用原则上只产一章；越界章仍需先接住并记账（与 v3 同规）。"""
+
+    blueprints: list[BlueprintResponseV2] = Field(min_length=1)
+
+
+class HingeSelectResponse(StrictModel):
+    """候选选择（`--patch` 修 `hinge_ambiguous`）：代码枚举命中位，模型**只挑 id**。
+
+    比「让模型多带几个字重抄一遍」稳定——代码枚举确定候选、模型只做受限选择，
+    是整个 IR 的第一性原理在修复面上的形状。
+    """
+
+    candidate_id: str = Field(min_length=1)
+
+
+class HingePhraseResponse(StrictModel):
+    """短语重给（`--patch` 修 `hinge_anchor_void`）：原短语是编的，按该拍 span
+    原文重给一条；「拍内原样唯一」由 validator 当场验，不唯一就换样本。"""
+
+    phrase: str = Field(min_length=1)
+
+
+class SummaryChapterResponse(StrictModel):
+    chapter_ordinal: int = Field(ge=1)
+    summary: str = Field(min_length=1)
+
+
+class SummaryBatchResponse(StrictModel):
+    """书级摘要批：全部章 blueprint 完成后**一次调用**按 events 产全书摘要。
+
+    输入已是压缩事实（各章 beat events），不重读原章。validator 硬校验
+    目标章集恰好覆盖与长度界；「不引入 events 外新事实」查不了文面，
+    归付费冒烟的人工抽查。⚠ 直接拼接 events 当 summary 被否决：
+    实测拼接体积是人写摘要的 2.38 倍，会反向放大 stage4.plan 的输入。
+    """
+
+    chapters: list[SummaryChapterResponse] = Field(min_length=1)
+
+
 
 
 class BlueprintContext(StrictModel):
-    """蓝图调用的模型可见边界；只接受当前有界上下文架构。
+    """蓝图调用的模型可见边界；只接受登记过的有界上下文架构。
 
-    ⚠⚠ `architecture` 的取值面**故意是单值**：不放宽成「v2 或 v3」。
-    放宽等于让两种产地的产物在同一张表里并存，而本仓没有迁移机制——
-    旧架构的蓝图要的是**重跑**，不是被读进来当成还能用。
-    取值与升版记录的唯一落点是 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
+    ⚠ `architecture` 曾**故意是单值**（v2→v3 时旧产物语义已坏，放宽等于把
+    该重跑的旧蓝图读进来当成还能用）。2026-08-20 起放宽为双值：
+    `extraction-ir-v1` 的产物语义与 v3 **逐字段等价**（区间仍是段号查表出的
+    精确区间、下游消费面一个不动），并存不欠迁移——单值/双值的裁决依据
+    「旧字节语义还成不成立」，全案记录在
+    `contracts/invariants.py::BLUEPRINT_ARCHITECTURES` 的注释里。
     """
 
-    architecture: Literal[BLUEPRINT_ARCHITECTURE]
+    architecture: Literal[BLUEPRINT_ARCHITECTURES]
     batch_size: Literal[1]
     stable_prefix: Fp10
     current_chapter_full: Literal[True]
@@ -840,6 +968,48 @@ class BlueprintProvenance(LlmProvenance):
 
     #: 定向重生成的历史。出口：上一行展开「各修了什么」。
     repairs: list[Repair]
+
+    #: 链头 `P_INHERIT` 的拍（`extraction-ir-v1` 专属账）：模型说「延续上一拍地点」
+    #: 而链上没有可继承的基（首拍、或上一相邻拍不同 `time_layer`）⇒ 产物 `place=null`。
+    #: ⚠ **不许无声吞掉**：`place=null` 本身分不出「模型判无从知道」与「模型指错了继承」，
+    #: 这笔账是两者唯一的分界。出口：INFO 判据 `place_inherit_without_base` 逐条列出。
+    #: 默认空列表：`bounded-fidelity-v3` 的产地没有这个概念，旧字节缺键照常读入。
+    place_inherit_without_base: list[str] = Field(default_factory=list)
+
+    #: `(beat_id, name)`（`extraction-ir-v1` 系专属账）：模型按 `P_EXPLICIT` 写了地点，
+    #: 而那个说法在**截止本章的正文**里一个字节都找不到。
+    #: ⚠ **它是 `extraction-ir-v1.1` 的配套探针，不是违约判定。** ir1.1 把 `P_EXPLICIT`
+    #: 从「三选一」提回「首选档」以救回地点填充率（ir1 相对 v3 掉 −59%，且
+    #: `docs/stage2_contract_experiment.md` §十一 实测两个模型上都掉 ⇒ 是契约的责任）。
+    #: 给模型加压时它会找最省力的出路，而 place 是单字段、没有别的字段可牺牲，
+    #: **唯一的规避路径就是编一个地点**——这笔账就是那条路径上的探针：
+    #: 填充率涨了而这笔账同步涨，涨的是幻觉不是覆盖。
+    #: ⚠⚠ **匹配面是「截止本章正文」**：三个面在盘上（Pro×v3 无情道 132 个有地点的拍）
+    #: 实测为 本拍区间 **78%** / 本章全文 42% / 截止本章正文 **13%** 找不到
+    #: ——按本拍区间判等于让噪声淹死信号（地点常写在上文，那正是 `P_INHERIT` 的理由）。
+    #: 取与 `present_names_invented` 同源的面；「截止本章」而非「全书」是因为
+    #: 只在后文出现的说法本身就是后见之明。
+    #: ⚠⚠ **判 INFO 且不该升 HARD**：那 13% 逐条看全是**用原文成分组合**出来的
+    #: （「武场外」「黎玄的洞府」），一条凭空编的都没有 ⇒ 读法是**相对基线的变化**。
+    #: 出口：INFO 判据 `place_explicit_unlocatable` 逐条列出。
+    place_explicit_unlocatable: list[tuple[str, str]] = Field(default_factory=list)
+
+    #: `(beat_id, kind, phrase)`（`extraction-ir-v1` 专属账）：短语在所属拍区间内
+    #: **多处命中**、被打回失败态的那几条 hinge 的原始短语。
+    #: ⚠ 失败态的 hinge 只剩 `{kind, source: null}`——**短语本身不在产物里**，
+    #: 而候选选择修复（代码按短语在拍区间内枚举命中位、模型只挑 candidate_id）
+    #: 的输入正是这个短语。不落这笔账，字段级修复就只剩「回 LLM cache 捞原始响应」
+    #: 一条路，而缓存是可驱逐的。候选**位置**不落盘：由短语+区间确定性重算，零成本。
+    hinge_ambiguous_pending: list[tuple[str, str, str]] = Field(default_factory=list)
+
+    #: `(beat_id, 原止段, 新止段, 根因)`（`extraction-ir-v1` 专属账）：
+    #: 层0 确定性边界外扩改过哪几拍的止段。
+    #: ⚠⚠ **这是编译器改写了模型的分段主张**——盘上那份 `span` 不是模型给的那个数。
+    #: 不落这笔账，「模型切得准」与「模型差 1 段、代码补上了」在产物里长得一模一样，
+    #: 而 A/B 要回答的恰恰是前者。护栏与帽子见
+    #: `novel/stages/stage2/compile_v2.py::BOUNDARY_NUDGE_MAX_PARAS`。
+    #: 出口：断言计数 + 逐条列出（`novel/report/accounting.py`）。
+    boundary_nudges: list[tuple[str, int, int, str]] = Field(default_factory=list)
 
 
 class ChapterBlueprints(StrictModel):

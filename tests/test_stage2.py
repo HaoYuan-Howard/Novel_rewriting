@@ -347,7 +347,7 @@ def test_hedge_words_does_not_treat_factual_or_as_uncertainty():
 def test_the_clean_base_leaves_no_rule_unimplemented():
     """**注册了而没有实现调用它 ⇒ `skipped`，徽章至少 amber。**
 
-    这一条盯的是 `checks.check()` 恰好产 71 个 `Outcome`——
+    这一条盯的是 `checks.check()` 恰好产 73 个 `Outcome`——
     报告是由**判据注册表**生成的，不是由实现的输出生成的，
     所以漏实现一条不会让它从报告里消失，只会让它挂一行「实现未被调用」。
     """
@@ -355,7 +355,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 70
+    assert len(outs) == len(want) == 73
 
 
 def test_global_field_failures_route_to_the_dedicated_resample_action():
@@ -416,7 +416,7 @@ def _ch(bp: dict, o: int) -> dict:
     return next(x for x in bp['blueprints'] if x['chapter_ordinal'] == o)
 
 
-#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，36 条。
+#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，37 条。
 CASES: list[tuple[str, Mutator, str]] = [
     # ── 一、产物完整性与章对齐 ──────────────────────────────────────────
     ('upstream_missing', lambda g, b, m: (None, b, m),
@@ -526,6 +526,13 @@ CASES: list[tuple[str, Mutator, str]] = [
          b['_provenance']['verbatim_failures'].append(
              ['b01_01', 'hinge', _cause('hinge_anchor_void')]))),
      '短语在本章原文里根本找不到（是转述或编的）——四分流里唯一一条根因在模型身上的'),
+    ('hinge_ambiguous',
+     _m(lambda g, b, m: (
+         _ch(b, 1)['beats'][0]['hinges'].append({'kind': '要害台词', 'source': None}),
+         b['_provenance']['verbatim_failures'].append(
+             ['b01_01', 'hinge', _cause('hinge_ambiguous')]))),
+     '短语在所属拍区间内多处命中（`extraction-ir-v1` 去段号后的预期新失败面：'
+     '交接实测 189 条里 2 条双命中）——压在哪几个字上定不下来，修法是候选选择不是重抄'),
     ('hinge_drift',
      _m(lambda g, b, m: _ch(b, 1)['beats'][0]['hinges'].append({
          'kind': '要害台词',
@@ -587,7 +594,7 @@ def test_a_sample_that_makes_this_hard_rule_red(rule, mutate, why):
 def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     """⭐⭐ **守卫的守卫：这张清单不许悄悄变短。**
 
-    38 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
+    39 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
     加一条 HARD 而不配样本，这条测试当场点名——
     否则那条新判据就又回到「从没见过反例」那一档，而它与一条不存在的判据长得一样。
     """
@@ -596,7 +603,7 @@ def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     on_disk = {'address_bare_pronoun', 'role_leaks_fate', 'hedge_words', 'hinge_in_hole'}
     hard = {r.rule for r in REGISTRY.all() if r.stage == 'stage2' and r.sev == 'hard'}
     covered = {c[0] for c in CASES}
-    assert len(hard) == 38, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
+    assert len(hard) == 39, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
     assert covered <= hard, f'CASES 里有不是 HARD 的：{sorted(covered - hard)}'
     assert not (missing := sorted(hard - on_disk - covered)), (
         f'这几条 HARD 既没有盘上反例、也没有合成样本：{missing}\n'

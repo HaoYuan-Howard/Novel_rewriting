@@ -65,6 +65,18 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
         AccountingSpec('verbatim_failures', '哪几处**锚不到**？（非空即失败态，按根因分）'),
         AccountingSpec('partial_regen_chapters', '哪几章是定向重生成过的？'),
         AccountingSpec('repairs', '那几次定向重生成各修了什么？（`failure_items` + 前后三个计数）'),
+        AccountingSpec('place_inherit_without_base',
+                       '哪几拍声称延续上一拍地点而链上没有基？'
+                       '（`extraction-ir-v1` 专属；产物侧 place=null 分不出'
+                       '「无从知道」与「指错了继承」，只有这笔账分得出）'),
+        AccountingSpec('hinge_ambiguous_pending',
+                       '哪几条 hinge 的短语在拍区间内多处命中、等着候选选择修复？'
+                       '（`extraction-ir-v1` 专属；失败态 hinge 不带短语，'
+                       '这笔账是字段级修复唯一不依赖 LLM cache 的输入）'),
+        AccountingSpec('boundary_nudges',
+                       '哪几拍的止段被层0 外扩过？（`extraction-ir-v1` 专属；'
+                       '盘上的 span 不是模型给的那个数，'
+                       '「模型切得准」与「差 1 段、代码补上了」只有这笔账分得开）'),
     ),
     # ⚠⚠ **这三个键就是 `stage3.md` §五 记的那笔账**：实跑三本 `--check-only`，
     #    报告里 `attempts` / `revalidated` / `gates_skipped` **一行都没有**，

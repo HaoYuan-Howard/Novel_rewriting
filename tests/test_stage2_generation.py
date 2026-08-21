@@ -32,11 +32,22 @@ from novel.run import RunContext
 from novel.stages import initial_extract
 from novel.stages.stage2 import extract
 from novel.stages.stage3 import style
-from contracts.invariants import BLUEPRINT_ARCHITECTURE, HINGE_FAILURE_ROUTE
+from contracts.invariants import HINGE_FAILURE_ROUTE
 from novel.stages.stage2.normalize import normalize_verbatim, response_shape
 from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
+
+
+#: ⚠ **本文件的假响应是 `bounded-fidelity-v3` 形状的**（`_response_blueprints()`
+#: 由 v3 正式产物反投影而来，带 `beat_id`/`span`/产物侧 `time_layer`）。
+#: 2026-08-21 默认契约翻成 `extraction-ir-v1` 之后，不拧回去这些响应会被
+#: V2 的 schema 闸整轮拒光——那是**测试装置的臂选错了**，不是产线的病。
+#: ⇒ 整个文件跑在 v3 臂上；ir1 的链路另有 `test_stage2_contract_dispatch.py`
+#: 与 `test_stage2_compile_v2.py` 覆盖。
+@pytest.fixture(autouse=True)
+def _pin_v3_arm(monkeypatch):
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'bounded-fidelity-v3')
 
 
 def test_parallel_chapter_requests_report_batch_positions_without_schema_changes():
@@ -271,9 +282,13 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert stored.provenance.usage is not None
         assert stored.provenance.usage.calls_made == 3
         context = stored.provenance.context
-        # ⚠ 读契约那一份：手抄的字面在升架构那天不会跟着改，
-        #   而这条断言恰恰是「产地写对了没有」的守卫。
-        assert context.architecture == BLUEPRINT_ARCHITECTURE
+        # ⚠ 读**本次运行选中的那套契约**，不抄字面、也不读全局默认：
+        #   本文件钉在 v3 臂上（见 `_pin_v3_arm`），而默认已是 ir1
+        #   ——拿默认常量来比，等于断言「产地写的是别人的架构」。
+        #   这条守的是「产地如实记下了自己用的那一套」。
+        from novel.stages.stage2.contract import active_contract
+        assert context.architecture == active_contract().architecture
+        assert context.architecture == 'bounded-fidelity-v3'
         assert context.current_chapter_full is True
         assert context.future_visible is False
         assert context.stable_prefix
@@ -743,21 +758,29 @@ def test_every_cause_the_producer_emits_is_registered_in_the_routing_table():
     import ast
     import inspect
 
+    from novel.stages.stage2 import compile_v2 as producer_v2
     from novel.stages.stage2 import normalize as producer
 
-    tree = ast.parse(inspect.getsource(producer.normalize_verbatim))
-    emitted = {
-        node.args[0].elts[2].value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute) and node.func.attr == 'append'
-        and isinstance(node.func.value, ast.Name) and node.func.value.id == 'failures'
-        and isinstance(node.args[0], ast.Tuple) and len(node.args[0].elts) == 3
-        and isinstance(node.args[0].elts[1], ast.Constant)
-        and node.args[0].elts[1].value == 'hinge'
-        and isinstance(node.args[0].elts[2], ast.Constant)
-    }
-    assert emitted, 'AST 扫描一句都没抓到 —— 产地的写法变了，这条守卫已经变成空验证'
+    emitted: set[str] = set()
+    # ⚠ 产地有两个（v3 的 normalize_verbatim 与 ir1 的 _compile_beats），
+    #   同一把扫描尺子逐个扫——漏扫一个产地，它的新根因就会静默落进 catch-all。
+    for fn in (producer.normalize_verbatim, producer_v2._compile_beats):
+        tree = ast.parse(inspect.getsource(fn))
+        found = {
+            node.args[0].elts[2].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == 'append'
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == 'failures'
+            and isinstance(node.args[0], ast.Tuple) and len(node.args[0].elts) == 3
+            and isinstance(node.args[0].elts[1], ast.Constant)
+            and node.args[0].elts[1].value == 'hinge'
+            and isinstance(node.args[0].elts[2], ast.Constant)
+        }
+        assert found, (
+            f'AST 在 {fn.__qualname__} 一句都没抓到 —— 产地的写法变了，'
+            f'这条守卫对它已经变成空验证')
+        emitted |= found
     unknown = emitted - set(HINGE_FAILURE_ROUTE)
     assert not unknown, (
         f'产地发了分流表里没有的根因 {sorted(unknown)}\n'

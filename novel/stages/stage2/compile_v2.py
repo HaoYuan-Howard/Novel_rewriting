@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+compile_v2.py —— `extraction-ir-v1` 的确定性编译器（`Stage2_improvement.md` 的本体）。
+
+【它与 `normalize.py` 的关系】同一个职责（模型响应 → 正式产物形状）在两种响应契约上的
+两份实现，**出入口逐键同构**（产物形 blueprints + `char_refs` / `verbatim_rewrites` /
+`verbatim_failures` 账），复用同一批底座（段落表、`resolve_character_refs`、
+`normalize_beat_ids`、短语两段式定位）。不合并进 normalize.py：v3 与 ir1 要在 A/B 期间
+**并存**，caller 按契约 dispatch（`novel/stages/stage2/contract.py`），
+合并成一个带分支的函数会让「改 ir1 顺手动了 v3」这类事故没有结构性防线。
+
+【ir1 相对 v3 的四族差别】（响应模型：`contracts/schema/stage2.py` 二·b 节）
+  ① beat 只交 `end_para`：第 n 拍 = 段 [上一拍止段+1 .. end_para]，首拍起 1，
+     末拍必须到达本章最后一段 ⇒ 重叠/倒序/漏头尾**结构上不可产生**；
+     「中段空隙」语义退役，过渡段前向吸收进下一拍（尺寸影响由重放测试量化）。
+  ② hinge 只交 `kind + phrase`：在**所属拍区间内**定位（先原样字节、后内容空间，
+     无 LCS——纪律与 `normalize._locate_phrase` 相同），**唯一命中才接受**；
+     多处命中 → `hinge_ambiguous`（短语进 `hinge_ambiguous_pending` 账，供候选选择修复）。
+  ③ place 判别三态：`P_EXPLICIT` 取名、`P_UNKNOWN` 落 null、`P_INHERIT` 由代码继承
+     **上一相邻拍**（仅同 time_layer；链头落 null + `place_inherit_without_base` 账）。
+  ④ summary 不在响应里：由书级摘要批注入（`summaries` 参数）；
+     `events_join_debug` 仅供重放/诊断（实测拼接体积是人写摘要的 2.38 倍，
+     进生产会反向放大 stage4.plan 的输入）。
+
+⚠ 失败一律走**稳定 finding 措辞**（`contracts/invariants.py::SPAN_FAILURE_CAUSES` /
+`HINGE_FAILURE_ROUTE`），不抛裸异常：数据的病归 `.INVALID` + 修复路由，
+异常留给代码的病。
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from contracts.invariants import RESPONSE_TIME_LAYERS
+from novel.core.spans import content_index, content_only, extend_terminal_punct
+from novel.stages.stage2.normalize import (
+    _source, normalize_beat_ids, resolve_character_refs,
+)
+from novel.stages.stage2.paragraphs import (
+    ParagraphIndexError, paragraph_range_of, paragraph_spans, span_of,
+)
+
+
+def _derive_summary_debug(events: list[str]) -> str:
+    """events 拼接摘要。**仅限重放/诊断**（`summary_mode=events_join_debug`）。
+
+    ⚠ 不许进生产与 A/B 的 C/D 臂：拼接体积实测是人写摘要的 2.38 倍，
+    而 summary 的唯一消费方（stage4.plan 的 prompt）正是 Flash 已不稳的节点。
+    """
+    return '本章依次：' + '；'.join(e.strip() for e in events if e.strip())
+
+
+def _locate_in_span(seg: str, phrase: str) -> tuple[int, int, str] | int | None:
+    """在**所属拍的区间**内定位 hinge 短语。
+
+    返回：`(起, 止, recovery)` = 唯一命中（坐标是区间内相对偏移）；
+    `int`（命中次数 ≥2）= 多处命中；`None` = 区间内找不到。
+
+    【纪律与 `normalize._locate_phrase` 相同】原样字节优先（标点可能正是重复字面的
+    唯一消歧信息），抄不对才退内容空间；**没有 LCS 兜底**（救回来的是语义已变的片段，
+    hinge 要的正是「位置对、字节错」被报出来）。
+    差别只有作用面：那边是模型指定的一段（均段约 21 字），这边是整个拍区间
+    ——面变大，「唯一性」从**隐含**（段内几乎必唯一）变成**显式判定**。
+    """
+    raw = phrase.strip()
+    if raw:
+        count = seg.count(raw)
+        if count == 1:
+            hit = seg.find(raw)
+            return hit, extend_terminal_punct(seg, hit + len(raw)), 'exact'
+        if count > 1:
+            return count
+    content, cmap = content_index(seg)
+    needle = content_only(phrase)
+    if not needle or not cmap:
+        return None
+    count = content.count(needle)
+    if count == 0:
+        return None
+    if count > 1:
+        return count
+    at = content.find(needle)
+    return cmap[at], extend_terminal_punct(seg, cmap[at + len(needle) - 1] + 1), \
+        'normalized'
+
+
+#: 护栏式边界外扩的两个帽子（层0 确定性恢复，7A 实测立的）。
+#:
+#: 【为什么有这条恢复】7A 六章冒烟的 4 例 HARD 是**同一个根因**：模型的 `end_para`
+#: 比它自己 `event` 里已经写到的内容早收 1–2 段（`b13_02` 写「传送位置随机」而那句
+#: 在第 13 段、止段给了 12；`b13_05` 的 event 结尾就是第 39 段那句、止段给了 38）。
+#: 错的是**那一个数字**，不是 phrase、也不是分段思路——event 与 hinge 自洽。
+#: 把这种情形一律送整章重生成，是拿一次全章的钱去改一个可以算出来的整数。
+#:
+#: 【为什么敢确定性地改】外扩只在四条护栏同时成立时发生，缺一条就不动：
+#:   ① 短语在本拍区间内**根本找不到**（多处命中是另一条路：候选选择修复）；
+#:   ② 外扩后短语在新区间内**唯一**命中——修不好就不改，编译器不做无效改写；
+#:   ③ 不越过下一拍的止段（下一拍必须仍非空），且幅度 ≤ 帽子；
+#:   ④ 下一拍**自己**原本定得住的锚点，外扩后仍然定得住。
+#: 每一次外扩逐条落 `boundary_nudges` 账（前值/后值/根因）⇒ 它是**看得见的**改写，
+#: 不是静默兜底。超帽子的照旧判 HARD 走整章——那才是真的切错了。
+BOUNDARY_NUDGE_MAX_PARAS = 2
+TAIL_NUDGE_MAX_PARAS = 2
+
+
+def _seg_of(text: str, start_para: int, end_para: int) -> str:
+    start, end = span_of(text, start_para, end_para)
+    return text[start:end]
+
+
+def _nudge_target(text: str, start_para: int, end_para: int, cap: int,
+                  phrase: str) -> int | None:
+    """本拍装不下这条短语时，**最小**外扩到哪一段能让它在拍内唯一命中。
+
+    `None` = 不该外扩（拍内已定位 / 多处命中 / 帽子内怎么扩都不唯一）。
+    复用 `_locate_in_span` 做判定 ⇒「外扩后唯一」是构造出来的，不是另写一套。
+    """
+    if _locate_in_span(_seg_of(text, start_para, end_para), phrase) is not None:
+        return None                       # 已定位，或多处命中（那条归候选选择）
+    for candidate in range(end_para + 1, cap + 1):
+        got = _locate_in_span(_seg_of(text, start_para, candidate), phrase)
+        if isinstance(got, tuple):
+            return candidate
+        if isinstance(got, int):
+            return None                   # 再扩只会更糊：多处命中不是边界问题
+    return None
+
+
+def _fresh_hinges(beat: dict[str, Any]) -> list[str]:
+    """本拍**待定位**的短语（重放入形的已是产物形，不参与边界推断）。"""
+    return [str(h.get('phrase') or '') for h in (beat.get('hinges') or [])
+            if 'source' not in h]
+
+
+def _locatable(text: str, start_para: int, end_para: int,
+               phrases: list[str]) -> tuple[bool, ...]:
+    return tuple(
+        isinstance(_locate_in_span(_seg_of(text, start_para, end_para), p), tuple)
+        for p in phrases)
+
+
+def _nudge_boundaries(beats: list[dict[str, Any]], ends: list[int], table: list,
+                      text: str,
+                      nudges: list[tuple[str, int, int, str]]) -> None:
+    """护栏式边界外扩。只在 `ends` 全部合法时被调用（见 `_compile_beats`）。"""
+    for i, beat in enumerate(beats):
+        start_para = (ends[i - 1] + 1) if i else 1
+        last = i + 1 == len(beats)
+        room = len(table) if last else ends[i + 1] - 1
+        cap = min(ends[i] + BOUNDARY_NUDGE_MAX_PARAS, room)
+        want = ends[i]
+        for phrase in _fresh_hinges(beat):
+            target = _nudge_target(text, start_para, ends[i], cap, phrase)
+            if target is not None:
+                want = max(want, target)
+        if want == ends[i]:
+            continue
+        if not last:
+            # 下一拍原本定得住的锚点，让出前几段之后必须仍然定得住。
+            phrases = _fresh_hinges(beats[i + 1])
+            before = _locatable(text, ends[i] + 1, ends[i + 1], phrases)
+            after = _locatable(text, want + 1, ends[i + 1], phrases)
+            if any(b and not a for b, a in zip(before, after)):
+                continue
+        nudges.append((str(beat.get('beat_id') or ''), ends[i], want,
+                       '止段没盖住本拍自己的 hinge'))
+        ends[i] = want
+
+    # 末拍到底：契约要求末拍必须到本章最后一段，模型少给几段是同一个病。
+    if beats and ends[-1] != len(table) \
+            and len(table) - ends[-1] <= TAIL_NUDGE_MAX_PARAS:
+        nudges.append((str(beats[-1].get('beat_id') or ''), ends[-1], len(table),
+                       '末拍没有到达本章最后一段'))
+        ends[-1] = len(table)
+
+
+def _note_unlocatable_place(beat: dict[str, Any], name: str | None, upto: str,
+                            place_unlocatable: list[tuple[str, str]]) -> None:
+    """`P_EXPLICIT` 的地点名在**截止本章的正文**里一个字节都找不到时记一笔。
+
+    【这条读数要回答什么】`extraction-ir-v1.1` 把 `P_EXPLICIT` 从「三选一」提回
+    「首选档」（`prompts.py::_BLUEPRINT_TPL_V1_1`）。给模型加压时它会找最省力的
+    出路，而 place 是单字段、没有别的字段可牺牲 ⇒ **唯一的规避路径是编一个地点**。
+    这一笔就是那条路径上的探针：填充率涨了，但如果它同步涨，涨的是幻觉不是覆盖。
+
+    ⚠⚠ **匹配面是「截止本章正文」，不是「本拍区间」。** 这不是随手选的——
+    三个面在盘上（Pro×v3 无情道，132 个有地点的拍）实测下来是：
+        本拍区间 **78%** 找不到 · 本章全文 42% · 截止本章正文 **13%**。
+    按本拍区间判，78% 的基线等于信号被噪声淹死：地点本来就常常写在上文
+    （那正是 `P_INHERIT` 存在的理由），「合欢宗」「擂台」「灵网」这类场景名
+    更是整章都不会在某一拍里再出现一次。⇒ 取与 `present_names_invented`
+    同源的面（那条判的是「称呼在原文里找得到」，盘上 `invented` 恒 0）。
+    用「截止本章」而不是「全书」还有一层语义：只在后文出现的说法本身就是后见之明。
+
+    ⚠⚠ **只记账，不判失败、不改产物。** 就算在这个面上，13% 那一档也**不是幻觉**：
+    盘上那 17 条逐条看全是**用原文成分组合**出来的（「武场外」「黎玄的洞府」
+    「前往秘境的路上」「合欢宗门口」），一条凭空编的都没有。
+    ⇒ 这条**判 INFO 且永远不该升 HARD**，它的读法是**相对基线的变化**，
+    不是「命中即违规」。基线记在 `docs/stage2_contract_experiment.md`。
+
+    ⚠ **多处命中算找得到**：`_locate_in_span` 返回 `int` 是「≥2 处」，
+    地点名重复出现完全正常——它不像 hinge 那样需要唯一定位。只有 `None` 才记。
+    """
+    if not name or not upto:
+        return
+    if _locate_in_span(upto, name) is None:
+        place_unlocatable.append((str(beat.get('beat_id') or ''), name))
+
+
+def _compile_beats(blueprint: dict[str, Any], text: str, upto: str,
+                   rewrites: list[tuple[str, str, str, str]],
+                   failures: list[tuple[str, str, str]],
+                   place_orphans: list[str],
+                   place_unlocatable: list[tuple[str, str]],
+                   ambiguous_pending: list[tuple[str, str, str]],
+                   nudges: list[tuple[str, int, int, str]]) -> None:
+    """单章：读止段 → 边界外扩 → span → time_layer → place 继承 → hinge 定位。原地改形。"""
+    table = paragraph_spans(text)
+    beats = list(blueprint.get('beats') or [])
+
+    # ── ① 读止段并逐项验（不落 span——外扩要先发生）────────────────────────
+    cursor = 0                                   # 上一拍的止段号（0 = 还没有拍）
+    ends: list[int | None] = []
+    for beat in beats:
+        beat_id = str(beat.get('beat_id') or '')
+        end_para = beat.pop('end_para', None)
+        beat['span'] = None
+        if type(end_para) is not int or isinstance(end_para, bool):
+            failures.append((beat_id, 'span', '段号不是整数'))
+            ends.append(None)
+            continue
+        if not table:
+            failures.append((beat_id, 'span', '本章没有可编号的段落'))
+            ends.append(None)
+            continue
+        if not 1 <= end_para <= len(table):
+            failures.append((beat_id, 'span', '段号越界'))
+            ends.append(None)
+            continue
+        if end_para <= cursor:
+            failures.append(
+                (beat_id, 'span', '止段没有越过上一拍的止段（区间倒序或同段重复）'))
+            ends.append(None)
+            continue
+        ends.append(end_para)
+        cursor = end_para
+
+    # ── ② 护栏式边界外扩 ─────────────────────────────────────────────────
+    # ⚠ 只在**整章止段序列全部合法**时做：已经有一拍的段号是坏的，这一章的分段
+    #   主张就不成立了，在坏序列上推边界只会把错误摊得更均匀。
+    if beats and table and all(end is not None for end in ends):
+        _nudge_boundaries(beats, ends, table, text, nudges)  # type: ignore[arg-type]
+
+    # ── ③ 落 span ────────────────────────────────────────────────────────
+    cursor = 0
+    located: list[tuple[dict[str, Any], int, int]] = []
+    for beat, end_para in zip(beats, ends):
+        if end_para is None:
+            continue
+        try:
+            start, end = span_of(text, cursor + 1, end_para)
+        except ParagraphIndexError as exc:      # 上面已逐项验过，这里只可能是代码病
+            failures.append((str(beat.get('beat_id') or ''), 'span', str(exc)))
+            continue
+        beat['span'] = _source(text, start, end, 'exact')
+        located.append((beat, start, end))
+        cursor = end_para
+    if beats and table and cursor and cursor != len(table):
+        # ⚠ 末拍不到底（帽子外，外扩没接住）：span 本身是可定位的，**不抹掉**
+        #   （信息无罪），失败态由账承载——`verbatim_failed` 按行数判 HARD，
+        #   产物照走 `.INVALID`。
+        failures.append((str(beats[-1].get('beat_id') or ''), 'span',
+                         '末拍没有到达本章最后一段'))
+
+    # ── ② time_layer：响应侧前缀枚举 → 产物值 ────────────────────────────
+    for beat in beats:
+        layer = beat.get('time_layer')
+        if layer in RESPONSE_TIME_LAYERS:
+            beat['time_layer'] = RESPONSE_TIME_LAYERS[layer]
+        # 已是产物值（重放输入、`--renormalize`）就原样过——schema 闸在两端各守各的。
+
+    # ── ③ place：判别三态 → str | None（继承由代码做）─────────────────────
+    prev: dict[str, Any] | None = None
+    for beat in beats:
+        ref = beat.get('place')
+        if isinstance(ref, dict):
+            mode = ref.get('mode')
+            if mode == 'P_EXPLICIT':
+                name = str(ref.get('name') or '') or None
+                beat['place'] = name
+                _note_unlocatable_place(beat, name, upto, place_unlocatable)
+            elif mode == 'P_INHERIT':
+                # 只继承**上一相邻拍**且同 time_layer；不跨层去找「最近同类」。
+                if prev is not None and prev.get('time_layer') == beat.get('time_layer'):
+                    beat['place'] = prev.get('place')
+                else:
+                    beat['place'] = None
+                    place_orphans.append(str(beat.get('beat_id') or ''))
+            else:                                # P_UNKNOWN
+                beat['place'] = None
+        prev = beat
+
+    # ── ④ hinge：kind + phrase → 拍区间内唯一定位 ────────────────────────
+    for beat, start, end in located:
+        beat_id = str(beat.get('beat_id') or '')
+        seg = text[start:end]
+        fresh: list[dict[str, Any]] = []
+        for hinge in (beat.get('hinges') or []):
+            kind = hinge.get('kind')
+            if 'source' in hinge:
+                # 重放/重归一入形：已是产物形，保持原样（校验归判据侧 `hinge_drift`）。
+                fresh.append({'kind': kind, 'source': hinge.get('source')})
+                continue
+            phrase = str(hinge.get('phrase') or '')
+            got = _locate_in_span(seg, phrase)
+            if isinstance(got, tuple):
+                offset, tail, method = got
+                h_start, h_end = start + offset, start + tail
+                raw_source = text[h_start:h_end]
+                if method != 'exact':
+                    rewrites.append((beat_id, 'hinge.phrase', phrase, raw_source))
+                fresh.append(
+                    {'kind': kind, 'source': _source(text, h_start, h_end, method)})
+                continue
+            if isinstance(got, int):
+                failures.append((beat_id, 'hinge', '短语在本拍区间内多处命中'))
+                ambiguous_pending.append((beat_id, str(kind), phrase))
+            elif content_only(phrase) and \
+                    content_only(phrase) in content_only(text):
+                failures.append(
+                    (beat_id, 'hinge', '短语不在它所属拍的区间里，而出现在别处'))
+            else:
+                failures.append((beat_id, 'hinge', '短语不在本章原文里'))
+            fresh.append({'kind': kind, 'source': None})
+        beat['hinges'] = fresh
+    # span 失败的拍：hinge 全部打回失败态（判据侧按「所属拍无可用 span」计 cascade，
+    # 不再逐条记根因——与 normalize 的处置一致）。
+    located_ids = {id(beat) for beat, _s, _e in located}
+    for beat in beats:
+        if id(beat) not in located_ids:
+            beat['hinges'] = [{'kind': h.get('kind'), 'source': None}
+                              for h in (beat.get('hinges') or [])]
+
+
+def compile_v2(data: dict[str, Any], main_text: list[dict[str, Any]],
+               characters: dict[str, dict[str, Any]], *,
+               summaries: dict[int, str] | None = None) \
+        -> tuple[dict[str, Any], dict[str, Any]]:
+    """把（可能多章合并的）`ChapterBlueprintsResponseV2` 编译成正式产物形状。
+
+    与 `normalize.normalize_blueprints` 出入口逐键同构；多出的三笔账
+    （`place_inherit_without_base` / `place_explicit_unlocatable` /
+    `hinge_ambiguous_pending`）是 ir1 系专属。
+    `summaries=None` ⇒ `events_join_debug`（仅重放/诊断，见 `_derive_summary_debug`）。
+    """
+    blueprints = list(data.get('blueprints') or [])
+    data['blueprints'] = blueprints
+    normalize_beat_ids(blueprints)
+    char_refs = resolve_character_refs(blueprints, main_text, characters)
+    text_of = {int(section.get('chapter_ordinal') or 0): str(section.get('text') or '')
+               for section in main_text}
+    # 【截止本章正文】给 place 探针用。⚠ 从 **main_text**（全书）累积而不是从
+    # `blueprints` 累积：定向重生成只带几章进来，按 blueprints 累积会让前面的章
+    # 凭空消失，于是「原文里有没有这个说法」被算成「这一批里有没有」。
+    upto_of: dict[int, str] = {}
+    _acc: list[str] = []
+    for _o in sorted(text_of):
+        _acc.append(text_of[_o])
+        upto_of[_o] = ''.join(_acc)
+
+    rewrites: list[tuple[str, str, str, str]] = []
+    failures: list[tuple[str, str, str]] = []
+    place_orphans: list[str] = []
+    place_unlocatable: list[tuple[str, str]] = []
+    ambiguous_pending: list[tuple[str, str, str]] = []
+    nudges: list[tuple[str, int, int, str]] = []
+    for blueprint in blueprints:
+        ordinal = int(blueprint.get('chapter_ordinal') or 0)
+        _compile_beats(blueprint, text_of.get(ordinal, ''), upto_of.get(ordinal, ''),
+                       rewrites, failures, place_orphans, place_unlocatable,
+                       ambiguous_pending, nudges)
+        if 'summary' not in blueprint:
+            given = (summaries or {}).get(ordinal)
+            blueprint['summary'] = given if given else _derive_summary_debug(
+                [str(beat.get('event') or '')
+                 for beat in (blueprint.get('beats') or [])])
+
+    return data, {
+        'char_refs': char_refs,
+        'verbatim_rewrites': rewrites,
+        'verbatim_failures': failures,
+        'place_inherit_without_base': place_orphans,
+        'place_explicit_unlocatable': place_unlocatable,
+        'hinge_ambiguous_pending': ambiguous_pending,
+        'boundary_nudges': nudges,
+    }
+
+
+def canonical_ir_projection(blueprint: dict[str, Any],
+                            chapter_text: str) -> dict[str, Any]:
+    """正式蓝图 → 不含代码派生字段的 ir1 响应形状（修复基线 / 重放输入）。
+
+    ⚠⚠ **它不是逆函数**：`P_INHERIT` 编译后已坍缩成具体地点，投影只能给出
+    `P_EXPLICIT`（同名）或 `P_UNKNOWN`——所以它叫 canonical projection 不叫
+    inverse。round-trip 的正确断言方向是 `compile(project(artifact)) == artifact`
+    （对 compile_v2 自己产的 artifact 成立），不是 `project(compile(ir)) == ir`。
+    ⚠ 与 `normalize.response_shape` 同一条纪律：定位反投影要章正文（段落表），
+    失败的 hinge `phrase` 如实交 `None`，不兜底。
+    """
+    out = {
+        'chapter_ordinal': blueprint.get('chapter_ordinal'),
+        'beats': [],
+        'narration': [],
+    }
+    for beat in (blueprint.get('beats') or []):
+        span = beat.get('span')
+        end_para = None
+        if isinstance(span, dict) and type(span.get('start')) is int \
+                and type(span.get('end')) is int:
+            try:
+                end_para = paragraph_range_of(
+                    chapter_text, span['start'], span['end'])[1]
+            except ParagraphIndexError:
+                end_para = None
+        place = beat.get('place')
+        hinges = []
+        for hinge in (beat.get('hinges') or []):
+            source = hinge.get('source')
+            hinges.append({
+                'kind': hinge.get('kind'),
+                'phrase': source.get('text') if isinstance(source, dict) else None,
+            })
+        out['beats'].append({
+            'end_para': end_para,
+            'time_layer': next(
+                (k for k, v in RESPONSE_TIME_LAYERS.items()
+                 if v == beat.get('time_layer')), beat.get('time_layer')),
+            'place': ({'mode': 'P_EXPLICIT', 'name': str(place)}
+                      if place else {'mode': 'P_UNKNOWN'}),
+            'present_names': list(beat.get('present_names') or []),
+            'event': beat.get('event'),
+            'hinges': hinges,
+        })
+    for narration in (blueprint.get('narration') or []):
+        out['narration'].append({
+            'grammatical_person': narration.get('grammatical_person'),
+            'narrator_name': narration.get('narrator_name'),
+            'focalizer_name': narration.get('focalizer_name'),
+            'pronoun_surfaces': list(narration.get('pronoun_surfaces') or []),
+        })
+    return out

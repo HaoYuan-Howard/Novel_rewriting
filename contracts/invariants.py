@@ -374,13 +374,54 @@ def hinge_heading(kind: str) -> str:
 #: `'bounded-fidelity-v2'` 字面**，改一处忘一处就得到一条「产物明明是新架构、判据说不符合
 #: 约定」的假红（`docs/LESSONS.md` 第 21 条那一族）。
 #:
-#: ⚠⚠ **改这个值就是破坏产物形状**：`Literal` 收窄之后存量蓝图经 `store.read_own` 当场拒读。
-#: 按仓规（`CLAUDE.md`）必须同批把 `ARTIFACT_SPECS` 里
+#: ⚠⚠ **收窄或改名取值就是破坏产物形状**：`Literal` 收窄之后存量蓝图经 `store.read_own`
+#: 当场拒读。按仓规（`CLAUDE.md`）必须同批把 `ARTIFACT_SPECS` 里
 #: `STAGE2_CHAPTER_BLUEPRINTS` 的 `current_version` +1，并回答「存量产物由谁重建」。
 #: · `v2` → `v3`（2026-08-19）：锚点从「模型逐字转写原文片段」改成「下发带编号的段落、
-#:   模型只交段号」。**存量蓝图由 `stage2.blueprint` 整跑重建**，`.INVALID` 与 `_rounds/`
-#:   一律作废，不手补字段冒充当前产地。
-BLUEPRINT_ARCHITECTURE: Final = 'bounded-fidelity-v3'
+#:   模型只交段号」。**旧产物语义已坏**（锚点可能不是原文字节）⇒ 单值收窄 + 升版重建，
+#:   `.INVALID` 与 `_rounds/` 一律作废，不手补字段冒充当前产地。
+#: · `v3` → 并入 `extraction-ir-v1`（2026-08-20，Stage2_improvement 改造）：**放宽成双值，
+#:   不升版**。与上一次不同，ir1 的产物**语义不变**——beat 区间仍是段号查表出的精确区间
+#:   （ir1 的分割式覆盖是 v3「允许中段空隙」的子集情形），hinge/char_ids/narration
+#:   逐字段等价，下游消费面一个不动 ⇒ 旧字节不拒读、两种架构可并存于 A/B 的不同
+#:   base 之间。同一书目录同一时刻仍只有一种架构（整跑重建时整体切换）。
+#:   响应契约的选择口在 `novel/config.py::stage2_blueprint_contract`
+#:   （env `NOVEL_STAGE2_BLUEPRINT_CONTRACT`）。
+#: · `extraction-ir-v1` → 并入 `extraction-ir-v1.1`（2026-08-21）：**再放宽一格，
+#:   同样不升版**。ir1.1 与 ir1 的差别**只有 blueprint system 里 place 那一段措辞**
+#:   （响应模型 / 编译器 / 投影函数逐个共用，见 `novel/stages/stage2/contract.py`）
+#:   ⇒ 产物形状与语义都不变，两臂可并存于 A/B 的不同 base 之间。
+#:   起因是 ir1 的地点填充率相对 v3 掉了一半以上，而 `docs/stage2_contract_experiment.md`
+#:   §十一 实测**两个模型上都掉**（Pro −60% / Flash −28%）⇒ 那是契约的独立责任，
+#:   不是模型效应。为什么改、以及「加压会不会反被规避」那条风险，写在
+#:   `novel/stages/stage2/prompts.py::_BLUEPRINT_TPL_V1_1` 上方。
+#:   ⚠ 新架构**未翻默认**：默认仍是 ir1，ir1.1 经 env 显式选择，验收在跑书之后。
+BLUEPRINT_ARCHITECTURES: Final = (
+    'bounded-fidelity-v3', 'extraction-ir-v1', 'extraction-ir-v1.1')
+
+#: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
+#: 翻默认只动这一格（`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT` 从它派生），
+#: **取值面不动**：盘上存量产物全是 v3，收窄取值面它们当场读不回来，
+#: 而定向修复是按「基线产物的 architecture」选契约的。
+#:
+#: 【2026-08-21 翻默认：v3 → extraction-ir-v1】依据是同书同上游的单变量对照
+#: （`docs/stage2_contract_experiment.md` §六~§十，无情道 23 章）：
+#:   · **当前默认组合 Flash×v3 落不了盘**——3 条 `hinge_drift` 被闸门拦
+#:     （本书；另有 2026-08-19 三本书实测同样在 stage2 被拦，n=4）；
+#:     Flash×ir1 是 135/135 全定位、0 HARD 直接落盘。去掉段号这一维，
+#:     模型就不会把段号写错——它交短语，位置由代码算。
+#:   · stage4 首过率升（v3 首轮三档全废重跑；ir1 一次调用 + 0 LLM 提升）。
+#:   · 人工语义审查通过，留「切得比 Pro 粗」一条已知代价。
+#:     ⚠ **补完 2×2 之后（D 臂 Pro×ir1）这条的归因改了**：拍数是**交互效应**——
+#:     契约在 Flash 上对拍数几乎无影响（93→95，+2%），在 Pro 上却压粗 20%
+#:     （147→117）。翻默认的结论不受影响（生产默认就是 Flash，那一行 +2%），
+#:     但**不许把它说成「契约不影响切分粒度」**：换回 Pro 生成时它会显影。
+#:     地点则是契约的独立责任，两个模型上都掉（Pro −60% / Flash −28%）。
+#:   ⚠ 未达成项如实记：总付费 token 比 B 臂**高 5%**（原定不高于 B）。赢的是
+#:     「成本/被接受的书」（B 那 149k 没落盘），不是「成本/次调用」。
+#:   ⚠ n=1（7C 三本配对未跑）。回退就是把这一格改回去，不涉及任何产物迁移。
+BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v1'
+assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 #: `SourceSpan.recovery` 的取值面：这个区间是怎么对上原文的。
 #:
@@ -406,6 +447,11 @@ SPAN_FAILURE_CAUSES: Final = (
     '本章没有可编号的段落',
     'span 里既没有段号也不是正式区间',
     '已落盘的精确区间与原文对不上',
+    # ── `extraction-ir-v1` 专属（beat 只交 `end_para`，起点由代码推导）──
+    # ⚠ compiler 对非法响应逐项发这些措辞、不抛裸异常：抛异常是「进程崩了，
+    #   结论未知」，而这几件事都是**数据的病**，该走 `.INVALID` + 修复路由。
+    '止段没有越过上一拍的止段（区间倒序或同段重复）',
+    '末拍没有到达本章最后一段',
 )
 
 #: `位置 == 'hinge'` 那一族的根因 → **该由哪条判据收**。
@@ -426,7 +472,69 @@ HINGE_FAILURE_ROUTE: Final = {
     '段号落在没有被任何 beat 覆盖的空档': 'hinge_in_hole',
     '短语不在它指定的那一段里，而出现在别处': 'hinge_drift',
     '已落盘的 source 与它所属 beat 的区间对不上': 'hinge_drift',
+    # ── `extraction-ir-v1` 专属（hinge 只交 `kind + phrase`，无段号）──
+    # ⚠ 「多处命中」是新契约信息不足的**预期产物**，不是编的：交接实测 189 条
+    #   hinge 反投影后 187 条拍内唯一、2 条双命中（约 1.06%）。它的修法是
+    #   **候选选择**（代码枚举命中位，模型只挑 candidate_id），与 anchor_void
+    #   （短语是编的，要重给）完全不同 ⇒ 单立一条判据，不并进既有四分流。
+    '短语在本拍区间内多处命中': 'hinge_ambiguous',
+    '短语不在它所属拍的区间里，而出现在别处': 'hinge_drift',
 }
+
+#: hinge 根因 → **修复走哪一级**。与 `HINGE_FAILURE_ROUTE`（根因 → 判据）是
+#: **两个消费方的两张表**：那张归判据分流，这张归修复阶梯——混成一张，
+#: 改判据措辞就会牵动修复行为。键域必须与 `HINGE_FAILURE_ROUTE` 相同（assert 在下）。
+#:
+#: 取值面（`extraction-ir-v1` 修复阶梯，`Stage2_improvement.md` §五）：
+#:   · `field_patch`    —— 字段级局部修复（候选选择 / phrase 重给），不整章重付；
+#:   · `chapter_regen`  —— 整章定向重生成（`stage2.blueprint --chapters`），最后手段。
+#: ⚠ 首版刻意只有两级：`beat_patch` / `boundary_patch` 等更细的层级要等
+#:   六章高难包付费冒烟的真实 finding 分布出来再立（数据驱动，不预建框架）。
+#: 【7A 实测（2026-08-21，无情道 6 章 40 hinge）】drift 3 例、末拍不到底 1 例，
+#:   四例同一个根因：**模型的 `end_para` 比它自己 `event` 里写到的内容早收 1–2 段**
+#:   （证据逐条在 `outputs/_ab/smoke_extraction_ir_v1_20260821.md`）。
+#:   ⇒ 「drift 一律整章重生成」在真数据上是**过度反应**：四例全部可由确定性边界
+#:   外扩修好、0 次付费调用。改路由前要先有裁决（见实验手册 §六），本表未动。
+REPAIR_ROUTE: Final = {
+    '短语不在本章原文里': 'field_patch',              # 编的短语 → 局部重给 phrase
+    '段号越界，本章没有那一段': 'chapter_regen',
+    '段号落在没有被任何 beat 覆盖的空档': 'chapter_regen',
+    '短语不在它指定的那一段里，而出现在别处': 'chapter_regen',
+    '已落盘的 source 与它所属 beat 的区间对不上': 'chapter_regen',
+    '短语在本拍区间内多处命中': 'field_patch',        # 候选选择，模型只挑 candidate_id
+    # ⚠ ir1 的 drift 可能是 phrase 错、也可能是 end_para 边界切错——首版一律整章兜底，
+    #   不许用改锚点遮住错误分段；boundary patch 等 7A 读数后再立（5B）。
+    '短语不在它所属拍的区间里，而出现在别处': 'chapter_regen',
+}
+assert set(REPAIR_ROUTE) == set(HINGE_FAILURE_ROUTE), \
+    '修复路由与判据分流的键域分家了——新根因必须同时回答「归哪条判据」与「怎么修」'
+assert set(REPAIR_ROUTE.values()) <= {'field_patch', 'chapter_regen'}, \
+    '修复层级出现了未定义的取值——新层级要先在这里立取值面'
+
+#: `extraction-ir-v1` 响应侧的叙述层枚举 → 产物侧取值。**前缀化只在响应侧**：
+#: 产物侧 `TIME_LAYERS` 一个不动（下游 + 盘上数据的硬约束），compiler 是唯一映射落点。
+#: 【为什么前缀化】闭合枚举之间的串字段（交接实测 `delivery.summary` 串进
+#: `narrative_role`）本质是取值面互相混淆；互不为子串的带前缀值让串字段在
+#: schema 闸就死掉。⚠ 刻意没有 `T_UNRESOLVED`：产物侧 `time_layer` 是必填三值、
+#: 无落点，允许它等于每个 UNRESOLVED 必然逼出一轮修复调用，直接顶高
+#: `paid_calls / accepted_calls`。
+RESPONSE_TIME_LAYERS: Final = {
+    'T_PRESENT': 'present',
+    'T_RECALL': 'recall',
+    'T_HEARSAY': 'hearsay',
+}
+assert tuple(RESPONSE_TIME_LAYERS.values()) == TIME_LAYERS, \
+    '响应侧叙述层映射与 `TIME_LAYERS` 分家了——compiler 会把新值映到不存在的产物值'
+assert len(set(RESPONSE_TIME_LAYERS)) == len(set(RESPONSE_TIME_LAYERS.values())), \
+    '响应侧叙述层映射不是双射'
+
+#: `extraction-ir-v1` 响应侧 place 的三态（判别联合的 discriminator 取值面）。
+#:   · `P_EXPLICIT` —— 原文明写（或延续中可辨认），必带 `name`；
+#:   · `P_INHERIT`  —— 延续**上一相邻拍**的地点（仅同 `time_layer` 且相邻才许，
+#:                     代码做继承；链头 INHERIT 落 `place_inherit_without_base` 账）；
+#:   · `P_UNKNOWN`  —— 确实无从判断 ⇒ 产物侧 `place=null`。
+#: 不确定性是**受约束的状态**，不是自由文本（`Stage2_improvement.md` §三.2）。
+PLACE_MODES: Final = ('P_EXPLICIT', 'P_INHERIT', 'P_UNKNOWN')
 
 #: 逐字原话允许被一处提示语切开时，插入部分的内容字数上限。
 #: 形态必须在原文字节上长成「收引号 + ≤N 内容字 + 开引号」；
@@ -923,6 +1031,8 @@ PAID_FLAGS: Final = {
     #   同 `stage5.write` 的 `--revise`，理由见 `NODES` 里那一格上方的注释。
     '--purge-role': 'stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型',
     '--resample': 'stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应',
+    '--patch': 'stage2 逐章蓝图的字段级修复（extraction-ir-v1）——逐条失败各调一次模型，'
+               '量级是条不是章',
 }
 
 #: 重算时**只对本次新引入的错误入终态** —— 旧违约照报但不挡路。
@@ -1121,10 +1231,12 @@ class NodeSpec(NamedTuple):
     required_flags: tuple[str, ...] = ()  # ★ 少一个就拼不出可执行 argv 的 flag，见下
     produces: tuple[str, ...] = ()      # ★ 默认路径往盘上写哪几份产物，见下
     # 可选首档；未做 A/B 的节点必须保持 None（即 high）。
-    # ⚠ 取值面只有 `low` / `high` / `None`：`medium` 与 `xhigh` 虽然 API 收，但被服务端
-    #   静默映射回 `high` ⇒ 允许它们就是允许一个「写着降了档、实际一档没降」的配置，
-    #   而账本那一列会如实记下 `medium`，事后分辨不出来。`max` 是升档，启用前要先补回
-    #   官方 effort 前缀。判定落点是 `novel/llm/client.py::rungs_from_effort`，不靠本注释。
+    # ⚠ 取值面是 `low` / `high` / `max` / `None`：`medium` 与 `xhigh` 虽然 API 收，但被
+    #   服务端静默映射回 `high` ⇒ 允许它们就是允许一个「写着降了档、实际一档没降」的配置，
+    #   而账本那一列会如实记下 `medium`，事后分辨不出来。`max` 是**升档**（2026-08-21
+    #   为 FC-13 质量实验启用，官方 effort 前缀已从 `4744479^` 原样取回）：它走
+    #   `rungs_from_effort` 的覆盖梯，不进降级梯 `LADDER`。
+    #   判定落点是 `novel/llm/client.py::rungs_from_effort`，不靠本注释。
     effort: str | None = None
     # 本节点钉死的模型 id；'' = 跟随全局默认（`novel/config.py::DEFAULT_MODEL`，
     # 可被 `DEEPSEEK_MODEL` 覆盖——A/B 换臂的显式口）。
@@ -1217,7 +1329,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
                                  flags=('--dry-run', '--check-only', '--renormalize',
-                                        '--chapters', '--revalidate', '--actor', '--reason'),
+                                        '--chapters', '--patch',
+                                        '--revalidate', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
                                   flags=('--dry-run', '--check-only', '--measure-only',

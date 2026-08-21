@@ -33,6 +33,15 @@ from novel.observability import RequestProgress
 #: 账本在 `<Output>/` 下的位置。跨书，所以不在任何一本书的目录里。
 LEDGER_REL = ('_service', 'ledger.jsonl')
 
+#: 采纳审计账：与成本账同目录、**分文件**。成本账答「花了多少」，这份答
+#: 「内容闸怎么判的、最终 artifact 用的是哪一次响应」（`gate_decision` /
+#: `artifact_adoption` 两种行，靠 `attempt_id` 与成本账的 wire 行相联）。
+#: ⚠ 不并进 `ledger.jsonl`：既有读者按「行=一次调用」聚合
+#: （`tools/ab_compare.py::cost_table` 把没有 `cached` 键的行当 wire 行数，
+#: `tools/observe_provider_limits.py` 拿行数对 wire attempts）——审计行混进去
+#: 会把判定事件算成调用数。
+AUDIT_REL = ('_service', 'llm_audit.jsonl')
+
 #: token 三项的名字。**一处落点**——三个计数器、三个「见过几次」、`Usage` 的三个键
 #: 都从它派生，免得哪天加一项时漏掉其中一处。
 TOKEN_KINDS = ('prompt_tokens', 'completion_tokens', 'reasoning_tokens')
@@ -67,6 +76,11 @@ def combine_usage(*parts: Usage | None) -> Usage | None:
 def ledger_path(base: str | Path) -> Path:
     """`<Output>` → 账本路径。**唯一落点**——账本只有一个，别按书分账。"""
     return Path(base).joinpath(*LEDGER_REL)
+
+
+def audit_path(base: str | Path) -> Path:
+    """`<Output>` → 采纳审计账路径。与 `ledger_path` 同目录，见 `AUDIT_REL`。"""
+    return Path(base).joinpath(*AUDIT_REL)
 
 
 @dataclass(frozen=True)
@@ -140,6 +154,10 @@ class CostLedger:
     #: 刻度的世代号。每 `commit` 一次 +1，于是旧刻度立刻作废。
     _seq: int = field(default=0, repr=False)
 
+    #: 采纳审计行的内存镜像。`path=None`（`--dry-run` / 测试）时盘上没有
+    #: `llm_audit.jsonl`，判定与采纳仍要能被断言——这份镜像就是那条路。
+    audit_events: list[dict] = field(default_factory=list, repr=False)
+
     # Concurrent chapter writers cannot use one moving usage mark: completion
     # order would make one chapter claim another chapter's calls. Requests already
     # carry RequestProgress, so aggregate and settle them by chapter instead.
@@ -174,6 +192,9 @@ class CostLedger:
                retryable: bool | None = None,
                will_retry: bool | None = None,
                backoff_ms: int | None = None,
+               attempt_id: str | None = None,
+               request_fingerprint: str | None = None,
+               response_sha256: str | None = None,
                progress: RequestProgress | None = None) -> None:
         """记**一次上线**（或一次缓存命中）。`cached=True` 表示这一次是缓存命中（0 元）。
 
@@ -241,6 +262,11 @@ class CostLedger:
                 'retryable': retryable,
                 'will_retry': will_retry,
                 'backoff_ms': backoff_ms,
+                # 采纳审计的联结键：`llm_audit.jsonl` 的 gate_decision / adoption 行
+                # 靠 `attempt_id` 指回这一行。`None` = 旧调用点没传（形状不破）。
+                'attempt_id': attempt_id,
+                'request_fingerprint': request_fingerprint,
+                'response_sha256': response_sha256,
                 'chapter': progress.chapter if progress else None,
                 'chapter_index': progress.index if progress else None,
                 'chapter_total': progress.total if progress else None,
@@ -255,6 +281,67 @@ class CostLedger:
         """
         assert self.path is not None
         append_line(self.path, json.dumps(row, ensure_ascii=False, sort_keys=True))
+
+    # ── 采纳审计：内容闸判定与最终采纳（`llm_audit.jsonl`）────────────────
+
+    def note_gate(self, *, sid: str, node: str, purpose: str, attempt_id: str,
+                  source: str, decision: str, gate: str | None = None,
+                  reasoning_effort: str | None = None,
+                  thinking: bool | None = None,
+                  rung_index: int | None = None,
+                  sample: int | None = None,
+                  resample: bool = False,
+                  chapter: int | None = None) -> None:
+        """内容闸对**一次已获取的响应**（wire 或缓存）的判定，各记一行。
+
+        ⚠ 成本账那一行是**传输层**的结论（`outcome=ok` 哪怕正文随即被闸拒）——
+        「最终采纳档位」原来只能靠「同 purpose 最后一条 ok 行」猜，并发、缓存重放
+        与中断恢复下都不可靠。⇒ `decision=accepted/rejected` 在这里显式落账，
+        `attempt_id` 指回成本账的那一行。
+        """
+        self._append_audit({
+            'kind': 'gate_decision',
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'sid': sid, 'node': node, 'purpose': purpose,
+            'attempt_id': attempt_id,
+            'source': source,                  # cache | wire
+            'decision': decision,              # accepted | rejected
+            'gate': gate,                      # REJECT_GATES 之一；accepted 时 None
+            'reasoning_effort': reasoning_effort,
+            'thinking': thinking,
+            'rung_index': rung_index,
+            'sample': sample,
+            'resample': resample,
+            'chapter': chapter,
+        })
+
+    def note_adoption(self, *, sid: str, node: str, purpose: str,
+                      attempt_id: str, artifact: str,
+                      artifact_fingerprint: str,
+                      chapter: int | None = None) -> None:
+        """正式产物落盘时逐 purpose 记「这份 artifact 采纳了哪一次响应」。
+
+        「最终采纳档位」由 `artifact_adoption → attempt_id → 成本账行` 反查，
+        不再从「最后一条 accepted」推测。本 run 没有采纳新响应的章
+        （定向重生成合并进来的未动章）没有行——缺行即「沿用旧稿」。
+        """
+        self._append_audit({
+            'kind': 'artifact_adoption',
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'sid': sid, 'node': node, 'purpose': purpose,
+            'attempt_id': attempt_id,
+            'artifact': artifact,
+            'artifact_fingerprint': artifact_fingerprint,
+            'chapter': chapter,
+        })
+
+    def _append_audit(self, row: dict) -> None:
+        with self._lock:
+            self.audit_events.append(row)
+            if self.path is None:
+                return
+            append_line(self.path.with_name(AUDIT_REL[-1]),
+                        json.dumps(row, ensure_ascii=False, sort_keys=True))
 
     # ── 结算：run 总量 vs **这一份** ──────────────────────────────────────
 

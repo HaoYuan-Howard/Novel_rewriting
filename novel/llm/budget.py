@@ -28,18 +28,25 @@ _USER: Final = '<｜User｜>'
 _ASSISTANT: Final = '<｜Assistant｜>'
 _THINKING_START: Final = '<think>'
 _THINKING_END: Final = '</think>'
-# ⚠ 这里曾有 `_MAX_EFFORT_PREFIX`（`max` 档的官方 effort 前缀）与 `_render_prompt` 里
-#   那条 `effort == 'max'` 分支。删它的理由是「整条路不可达」：`max` 进不了 `LADDER`，
-#   `rungs_from_effort` 也拒绝它 ⇒ 到不了这里，而全仓没有一条测试扫过它。
-#   ⇒ `max` 现在落进下面那句关闭式拒绝，**而那句话本来就写着「登记该档位的官方编码
-#   规则后再启用」**。
-#   ⚠⚠ **恢复坐标已经查明，不必再考古**：原始字节在 `4744479^:novel/llm/budget.py`
-#   （`git show` 取得），实测 476 字符 / **79 token**；当时的 framing 规则是
-#   「`low`/`high` 不加文字前缀，只有 `max` 在 `_BOS` **之前**加这一段」。
-#   前缀是**发出去的字节**，凭记忆重写等于换了一个 prompt ⇒ 要启用就从那个 commit 取回，
-#   同时把它加进 `LADDER` 或 `NodeSpec.effort` 的取值面。
-#   ⚠ 启用它是**升档**：多 79 token 输入，且那段前缀明令模型写出完整推敲过程 ⇒ reasoning 会涨。
-#   它属于质量实验（`docs/REQUIREMENTS.md` FC-13），不属于降级阶梯。
+#: `max` 档的官方 effort 前缀。**低/高档不加文字前缀，只有 `max` 在 `_BOS` 之前加这一段。**
+#:
+#: ⚠⚠ 这是**发出去的字节**（服务端按 `reasoning_effort=max` 自己加，本函数复刻它只为
+#: 把输入 token 数算准），凭记忆重写等于按另一个 prompt 估预算。它于 `4744479`
+#: 随「零引用死代码」被删过一次，2026-08-21 为质量实验（FC-13：max 能不能切细拍）
+#: **从 `4744479^:novel/llm/budget.py` 原样取回**，逐字节未改：476 字符 / 79 token。
+#: ⚠ 启用它是**升档**：多 79 token 输入，且前缀明令写出完整推敲过程 ⇒ reasoning 会涨。
+#: 它进的是 `rungs_from_effort` 的**覆盖梯**（max 起步、再降进 `LADDER`），
+#: **不进 `LADDER` 本身**——那条梯扛的一类故障就是「推理吃光 max_tokens」，
+#: 拿升档去救它是火上浇油。
+_MAX_EFFORT_PREFIX: Final = (
+    'Reasoning Effort: Absolute maximum with no shortcuts permitted.\n'
+    'You MUST be very thorough in your thinking and comprehensively decompose the problem '
+    'to resolve the root cause, rigorously stress-testing your logic against all potential '
+    'paths, edge cases, and adversarial scenarios.\n'
+    'Explicitly write out your entire deliberation process, documenting every intermediate '
+    'step, considered alternative, and rejected hypothesis to ensure absolutely no assumption '
+    'is left unchecked.\n\n'
+)
 
 
 @dataclass(frozen=True)
@@ -144,16 +151,20 @@ def _tokenizer():
 def _render_prompt(req: ChatRequest) -> str:
     """DeepSeek V4 官方 ``encode_messages`` 对 system + user 请求的精确子集。
 
-    现行 low/high 都采用官方 ``high`` framing（它们不增加文字前缀）。JSON mode
-    是顶层 API 控制参数，不擅自把不可观测的服务端隐藏文字算进 prompt。
+    low/high 都采用官方 ``high`` framing（它们不增加文字前缀）；``max`` 在 `_BOS`
+    之前多一段 `_MAX_EFFORT_PREFIX`（79 token）。JSON mode 是顶层 API 控制参数，
+    不擅自把不可观测的服务端隐藏文字算进 prompt。
 
     ⚠ **未登记的档位一律关闭式拒绝**，不猜一个 framing 了事：prompt 是发出去的字节，
     算错 framing 就等于按另一个 prompt 估预算。守卫见 `tests/test_llm_budget.py`。
-    ⚠ `medium` / `xhigh` 同样拒绝，**而理由不是「API 不认」**——它们合法，只是被服务端
+    ⚠ `medium` / `xhigh` 仍然拒绝，**而理由不是「API 不认」**——它们合法，只是被服务端
     静默映射回 `high`。放行等于让一个「降了档」的配置一档没降，而账本上分辨不出来
     （同 `novel/llm/client.py::rungs_from_effort` 那道闸，两处说的是同一件事）。
+    ⚠ `max` 只在**不关思考**时有前缀：那段文字要求写出完整推敲过程，
+    `thinking=False` 时没有推敲流可写 ⇒ 前缀无处落地，按无前缀算
+    （与删它之前那一版的条件逐字相同：`req.thinking and effort == 'max'`）。
     """
-    if req.reasoning_effort not in ('low', 'high'):
+    if req.reasoning_effort not in ('low', 'high', 'max'):
         raise _refusal(
             f'未知 reasoning_effort={req.reasoning_effort!r}，无法选择官方聊天 framing。'
             '行动：登记该档位的官方编码规则后再启用。',
@@ -161,8 +172,10 @@ def _render_prompt(req: ChatRequest) -> str:
             max_tokens=req.max_tokens,
             spec=MODEL_BUDGETS.get(req.model),
         )
+    prefix = (_MAX_EFFORT_PREFIX
+              if req.thinking and req.reasoning_effort == 'max' else '')
     tail = _THINKING_START if req.thinking else _THINKING_END
-    return f'{_BOS}{req.system}{_USER}{req.user}{_ASSISTANT}{tail}'
+    return f'{prefix}{_BOS}{req.system}{_USER}{req.user}{_ASSISTANT}{tail}'
 
 
 def count_input_tokens(req: ChatRequest) -> int:

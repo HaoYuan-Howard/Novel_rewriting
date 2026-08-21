@@ -65,22 +65,16 @@ def _req(*, system: str = 'sys', user: str = 'usr', thinking: bool = True,
 
 
 @pytest.mark.parametrize(
-    'effort', ['max', 'medium', 'xhigh', 'ultra', '', 'HIGH'])
+    'effort', ['medium', 'xhigh', 'ultra', '', 'HIGH'])
 @pytest.mark.parametrize('thinking', [True, False])
 def test_an_unregistered_effort_is_refused_instead_of_guessing_a_framing(
         effort: str, thinking: bool):
     """⭐ **未登记的档位关闭式拒绝**，不猜一个 framing 了事。
 
-    ⚠ 这条是补给一段刚删掉的死分支的：`_render_prompt` 里曾有 `effort == 'max'` 的
-    官方前缀分支，而 `max` 进不了 `client.py::LADDER`、`rungs_from_effort` 也拒绝它
-    ⇒ 那条分支不可达，**且全仓没有一条测试扫过它**。
-    删掉分支之后如果不补这一条，剩下的关闭式拒绝同样没人查——
-    「删掉一段没人查的代码」不该顺手把它那道闸也变成没人查的。
-
     ⚠⚠ 取值面里那两个**不是**「API 不认的值」：`medium` / `xhigh` 完全合法，
     只是被服务端静默映射回 `high`。它们被拒的理由与 `ultra` 不同——不是「猜不出 framing」，
     是「放行等于允许一个看起来降了档、实际一档没降的配置」，而账本分辨不出来。
-    真实档位只有 low / high / max 三个。
+    真实档位只有 low / high / max 三个，`max` 于 2026-08-21 启用（见下一条）。
 
     ⚠ prompt 是**发出去的字节**：猜错 framing 等于按另一个 prompt 估预算，
     而预算拒绝是花钱前的最后一道闸。报错必须给出行动。
@@ -90,6 +84,39 @@ def test_an_unregistered_effort_is_refused_instead_of_guessing_a_framing(
     message = str(caught.value)
     assert repr(effort) in message, f'报错没说是哪个档位：{message}'
     assert '登记' in message, f'报错没给出行动：{message}'
+
+
+def test_max_costs_exactly_the_official_effort_prefix_and_only_when_thinking():
+    """`max` 是**唯一**加文字前缀的档位：79 token，且只在带思考时加。
+
+    ⚠ 79 这个数不是抄注释：它是 `4744479^` 那版删掉时实测的字节数，这里当场重量。
+    对不上说明前缀字节被人改过——**前缀是发出去的字节**，改一个字符就是换了 prompt，
+    此前按它估的预算与账全部作废。
+    ⚠ `thinking=False` 时前缀无处落地（那段文字要求写出完整推敲过程）⇒ 与 high 等长。
+    """
+    from novel.llm.budget import _MAX_EFFORT_PREFIX
+
+    high = count_input_tokens(_req(reasoning_effort='high', thinking=True))
+    mx = count_input_tokens(_req(reasoning_effort='max', thinking=True))
+    assert mx - high == 79, f'官方 effort 前缀不再是 79 token：{mx - high}'
+    assert len(_MAX_EFFORT_PREFIX) == 476, '前缀字节数变了，不是当年那一段'
+
+    high_off = count_input_tokens(_req(reasoning_effort='high', thinking=False))
+    max_off = count_input_tokens(_req(reasoning_effort='max', thinking=False))
+    assert max_off == high_off, '关思考时不该有前缀'
+
+
+def test_max_starts_an_override_ladder_and_never_joins_the_degradation_one():
+    """`max` 起步、再降进 `LADDER`；而 `LADDER` 本身一格不动。
+
+    ⚠ 后半句是要害：这条梯扛的一类故障就是「推理吃光 max_tokens 导致截断」，
+    把升档放进降级路等于火上浇油。
+    """
+    from novel.llm.client import rungs_from_effort
+
+    assert rungs_from_effort('max') == (('max', True),) + LADDER
+    assert ('max', True) not in LADDER
+    assert rungs_from_effort(None) == LADDER == rungs_from_effort('high')
 
 
 def test_every_ladder_rung_shares_the_same_framing():
