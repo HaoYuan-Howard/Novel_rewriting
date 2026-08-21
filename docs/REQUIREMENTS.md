@@ -583,6 +583,41 @@ merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本�
   （消灭一组 nullable）同属这一批——都动形状，合并一次 `current_version` +1、
   一次 `_SHAPE_BREAKS` 登记、一次「存量由 stage1.partition 免费重建」的回答。
 
+### TODO-38 · `/api/enums` 与前端夹具已分家（19 新增 / 5 消失 / 14 变化）
+
+2026-08-22 做 TODO-34 时顺手量到：`web/src/fixtures/backend_v1/enums.json` 相对
+`novel/api/enums.py::payload()` 已漂**新增 19 键 · 消失 5 键 · 内容变化 14 键**
+（消失的是 `nonbody_kinds_added` / `op_band` / `ops` / `partial_mask_note` /
+`superseded_free_entries`）。`novel/api/enums.py` 开头论证过「第 N 个落点必然分家」，
+而这份夹具就是那个第二落点——**它是 mock 模式下前端看到的整份取值面**。
+当批只补了 `chapter_label_anomaly` 一个键，刻意没有顺手整份重生成。
+
+- [ ] 先回答**为什么没有守卫**：`payload()` 与夹具之间没有任何一条测试对账，
+      所以它能静静地漂两个月。修法优先级高于「把 json 重新生成一遍」。
+- [ ] 逐键判定消失的 5 个：是常量真的删了（夹具跟着删）还是被合成键吃掉了
+      （`_CONSUMED`）。**别拿新 dump 直接覆盖**——那会把「前端还在读某个已删键」
+      这类真问题一起冲掉。
+- [ ] 验收：加一条「夹具 == `payload()`」的对账（后端测试或 `check-seams.mjs` 均可），
+      再重生成一次。
+
+### TODO-39 · 两条守卫把「宿主环境」当成了被测对象
+
+2026-08-22 在 `Novel_rewriting_stage01` worktree 里跑全量时，两条测试稳定假红——
+它们都不是产物问题（`docs/LESSONS.md` §21 的形状）：
+
+- `test_docs_references::test_every_referenced_repo_path_exists[README.md]`：
+  README 引用 `.claude/settings.local.json`，而它被 `.gitignore` 忽略、只存在于
+  主仓工作区 ⇒ 任何新 clone / worktree 都红。
+- `test_corpus_manifest::test_windows_basetemp_preflight_rejects_deep_paths_before_stage0_runs`：
+  断言 `.test_runtime` 这个短 basetemp **必须被放行**，但预检算的是绝对路径长度——
+  worktree 目录名比主仓长 8 字符，`.test_runtime` 于是解析成整 260 字符被拒。
+  该用例的 docstring 显式挡住了「宿主注册表」那一维（传 `long_paths=False`），
+  **却没挡住「仓库自身路径长度」这一维**。
+
+- [ ] 两条都改成**不依赖宿主环境**：前者要么放行被 gitignore 的路径、要么 README
+      别把它写成仓内引用；后者把长度基准注入（传一个固定的假仓根），别读真 cwd。
+- [ ] 验收：在一个新建的 worktree 里全量跑，零 deselect 通过。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。
