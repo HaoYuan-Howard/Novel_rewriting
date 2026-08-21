@@ -383,12 +383,27 @@ def hinge_heading(kind: str) -> str:
 #:   逐字段等价，下游消费面一个不动 ⇒ 旧字节不拒读、两种架构可并存于 A/B 的不同
 #:   base 之间。同一书目录同一时刻仍只有一种架构（整跑重建时整体切换）。
 #:   响应契约的选择口在 `novel/config.py::stage2_blueprint_contract`
-#:   （env `NOVEL_STAGE2_BLUEPRINT_CONTRACT`），默认仍是 v3。
+#:   （env `NOVEL_STAGE2_BLUEPRINT_CONTRACT`）。
 BLUEPRINT_ARCHITECTURES: Final = ('bounded-fidelity-v3', 'extraction-ir-v1')
 
 #: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
-#: A/B 达标后翻默认时只动这一格与 config 默认，不动取值面。
-BLUEPRINT_ARCHITECTURE: Final = 'bounded-fidelity-v3'
+#: 翻默认只动这一格（`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT` 从它派生），
+#: **取值面不动**：盘上存量产物全是 v3，收窄取值面它们当场读不回来，
+#: 而定向修复是按「基线产物的 architecture」选契约的。
+#:
+#: 【2026-08-21 翻默认：v3 → extraction-ir-v1】依据是同书同上游的单变量对照
+#: （`docs/stage2_contract_experiment.md` §六~§十，无情道 23 章）：
+#:   · **当前默认组合 Flash×v3 落不了盘**——3 条 `hinge_drift` 被闸门拦
+#:     （本书；另有 2026-08-19 三本书实测同样在 stage2 被拦，n=4）；
+#:     Flash×ir1 是 135/135 全定位、0 HARD 直接落盘。去掉段号这一维，
+#:     模型就不会把段号写错——它交短语，位置由代码算。
+#:   · stage4 首过率升（v3 首轮三档全废重跑；ir1 一次调用 + 0 LLM 提升）。
+#:   · 人工语义审查通过，留「切得比 Pro 粗」一条已知代价——而 B 臂证明**那是模型
+#:     效应不是契约**（Flash×v3 93 拍 vs Flash×ir1 95 拍，Pro×v3 才是 147 拍）。
+#:   ⚠ 未达成项如实记：总付费 token 比 B 臂**高 5%**（原定不高于 B）。赢的是
+#:     「成本/被接受的书」（B 那 149k 没落盘），不是「成本/次调用」。
+#:   ⚠ n=1（7C 三本配对未跑）。回退就是把这一格改回去，不涉及任何产物迁移。
+BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v1'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 #: `SourceSpan.recovery` 的取值面：这个区间是怎么对上原文的。

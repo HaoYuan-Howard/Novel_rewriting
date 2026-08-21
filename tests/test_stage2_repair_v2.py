@@ -213,7 +213,9 @@ def test_patch_repairs_ambiguous_and_void_then_lands_formally(monkeypatch):
 
 
 def test_patch_refuses_a_v3_baseline(monkeypatch):
-    monkeypatch.delenv(_ENV_KEY, raising=False)
+    # 显式拧到 v3 造基线：默认已是 ir1（2026-08-21 翻默认），
+    # 而这条测的正是「盘上是 v3 稿时 --patch 必须终态并指路 --chapters」。
+    monkeypatch.setenv(_ENV_KEY, 'bounded-fidelity-v3')
     book = Path(tempfile.mkdtemp()) / 'v3拒_123'
     book.mkdir(parents=True)
     global_ctx = _ctx(book, 'stage2.global')

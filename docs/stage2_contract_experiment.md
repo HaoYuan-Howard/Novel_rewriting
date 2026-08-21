@@ -9,19 +9,23 @@
 
 `stage2.blueprint` 有两套**响应契约**（产物契约一个字节不动，下游 stage4/API 无感）：
 
-| | `bounded-fidelity-v3`（默认） | `extraction-ir-v1` |
+| | `bounded-fidelity-v3`（老臂） | `extraction-ir-v1`（**默认**，2026-08-21 起） |
 |---|---|---|
 | beat 定位 | 模型交 `start_para + end_para` | 模型只交 `end_para`（起点代码推导，末拍必须到底） |
 | hinge | `kind + para + phrase`（段内定位） | `kind + phrase`（拍区间内**原样唯一**定位） |
 | place | 自由文本 | 判别三态 `P_EXPLICIT / P_INHERIT / P_UNKNOWN`（继承由代码做） |
 | summary | 模型逐章自带 | **书级摘要批**独立一调（events 是唯一语义源） |
-| 编译器 | `novel/stages/stage2/normalize.py` | `novel/stages/stage2/compile_v2.py` |
+| 编译器 | `novel/stages/stage2/normalize.py` | `novel/stages/stage2/compile_v2.py`（含层0 边界外扩） |
 
-选择口（与 `DEEPSEEK_MODEL` 同一条纪律——给 A/B 显式拧一次，不是随手改的变量）：
+选择口（与 `DEEPSEEK_MODEL` 同一条纪律——显式拧一次，不是随手改的变量）：
 
 ```text
-NOVEL_STAGE2_BLUEPRINT_CONTRACT=extraction-ir-v1   # 缺省 = bounded-fidelity-v3
+NOVEL_STAGE2_BLUEPRINT_CONTRACT=bounded-fidelity-v3   # 缺省 = extraction-ir-v1
 ```
+
+**v3 没有退役**：盘上存量产物全是它（`Literal` 双值保留，收窄取值面它们当场读不回来），
+定向重生成/`--patch` 按**基线产物**的架构选契约，整跑也能显式拧回去。
+翻默认的依据与未达成项见 §四 的结账表与 §八。
 
 产物 `_provenance.context.architecture` 会如实记下来；定向重生成/`--patch`
 按**基线产物**的架构选契约，配置与基线不一致会显式终态（先整跑换架构）。

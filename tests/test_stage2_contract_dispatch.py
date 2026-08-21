@@ -50,10 +50,13 @@ def test_the_registry_covers_exactly_the_declared_architectures():
             'DeepSeek V4 只支持 json_object——这不是 constrained decoding，标签要诚实'
 
 
-def test_the_default_contract_is_v3_and_env_selects_ir1():
-    assert active_contract(env={}).architecture == 'bounded-fidelity-v3'
+def test_the_default_contract_is_ir1_and_env_can_still_select_v3():
+    """2026-08-21 翻默认（`BLUEPRINT_ARCHITECTURE`，依据见实验手册 §六~§十）。
+    v3 **没有退役**：盘上存量产物全是它，定向修复按基线架构选契约，
+    整跑也要能显式拧回去——所以两个方向都钉。"""
+    assert active_contract(env={}).architecture == 'extraction-ir-v1'
     assert active_contract(
-        env={_ENV_KEY: 'extraction-ir-v1'}).architecture == 'extraction-ir-v1'
+        env={_ENV_KEY: 'bounded-fidelity-v3'}).architecture == 'bounded-fidelity-v3'
 
 
 def test_a_misspelled_contract_is_rejected_not_silently_defaulted():
@@ -64,21 +67,25 @@ def test_a_misspelled_contract_is_rejected_not_silently_defaulted():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 二、v3 缓存保真：dispatch 重构不许动默认路径的一个字节
+# 二、v3 缓存保真：**v3 臂**的请求字节一个都不许动
+#
+# ⚠ 2026-08-21 翻默认之后这两条不再是「默认路径」的守卫，而是**老臂**的守卫，
+#   价值反而更高：盘上两本书的 v3 缓存与产物还在，v3 模板漂一个字节，
+#   它们的定向修复与复现就要重新付钱。⇒ 显式拧到 v3 再断言。
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_default_arm_bytes_are_the_v3_constants_verbatim():
-    spec = active_contract(env={})
+def test_the_v3_arm_bytes_are_the_v3_constants_verbatim():
+    spec = active_contract(env={_ENV_KEY: 'bounded-fidelity-v3'})
     assert spec.system == with_json_shape(prompts.BLUEPRINT_SYS,
                                           prompts.BLUEPRINT_HINT)
     assert spec.sys_name == 'BLUEPRINT_SYS'
 
 
-def test_build_prompts_under_the_default_env_emits_the_v3_request_bytes(
+def test_build_prompts_under_the_v3_arm_emits_the_v3_request_bytes(
         monkeypatch):
     """端到端的那一半：接线后 `build_prompts` 产的 (system, user) 与直接由
     v3 构造函数拼出的逐字节相同——system 走 spec、user 刻意不随契约变，两半都要钉。"""
-    monkeypatch.delenv(_ENV_KEY, raising=False)
+    monkeypatch.setenv(_ENV_KEY, 'bounded-fidelity-v3')
     book = Path(tempfile.mkdtemp()) / '保真_123'
     book.mkdir(parents=True)
     global_ctx = _ctx(book, 'stage2.global')

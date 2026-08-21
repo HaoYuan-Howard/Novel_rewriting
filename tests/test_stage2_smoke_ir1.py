@@ -38,10 +38,11 @@ def _target_of(user: str) -> int:
 def _seed_v3_book(tmp_path: Path, monkeypatch) -> tuple[Path, Path, str]:
     """造一本「盘上已有 v3 正式蓝图」的书——冒烟的现实起点就是这个形状。
 
-    ⚠ 基线必须在**默认契约**下产出（选择口是进程级的环境变量）：拿 ir1 的
-    响应模型去收 v3 的假响应，schema 闸会当场把整轮拒光。产完再拧到 ir1。
+    ⚠ 基线要**显式拧到 v3**（选择口是进程级的环境变量，而 2026-08-21 起默认
+    已经是 ir1）：拿 ir1 的响应模型去收 v3 的假响应，schema 闸会当场把整轮拒光。
+    产完再拧回 ir1。
     """
-    monkeypatch.delenv(_ENV_KEY, raising=False)
+    monkeypatch.setenv(_ENV_KEY, 'bounded-fidelity-v3')
     base = tmp_path / 'outputs'
     book = base / '冒烟_777'
     book.mkdir(parents=True)
