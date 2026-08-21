@@ -76,7 +76,7 @@
 | # | 节点 | 主跑参数 | 放行证据 |
 |---:|---|---|---|
 | 1 | `stage0.remove` | 新书：`--source <txt>`，省略 sid | 摄入完成；追跑 check 除待批准项外无 HARD。批准前仅 `s0_approval=pending` 导致 exit 1 是预期状态 |
-| 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>`；**仅当 `inbox` 的 `approval` 非零** | 按代批契约审阅剔除报告后批准，批准状态落盘。零剔除的书由服务端自动批准，本步不适用（见下） |
+| 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅剔除报告后批准，批准状态落盘。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
 | 5 | `stage2.global` | `--full-extract` | global 正式落盘；执行 preview 列出的后续 blueprint/style 步骤 |
@@ -96,18 +96,21 @@
 
 `stage2.global --full-extract` 在中途被闸门拦下时，不机械重跑整组。按最新 `state` 与 finding 修好已落下的部分，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`；只执行缺失项。
 
-### 零剔除的书没有 stage0 闸门这一步
+### 零剔除的书同样要过 stage0 闸门
 
-`stage0.remove` 一段都没剔时，服务端**当场自动批准**（`removal_report.approved_origin`
-记 `auto_zero_hit`、`approved_by` 为空），追跑 check 直接是 AMBER 而不是主链表第 1 行说的那个
-`s0_approval=pending` 红灯。此时再跑 `stage0.approve` 是一次无意义的写盘。
+**自动批准已停产**：`stage0.remove` 首跑恒
+`pending`，一段都没剔的书也一样，追跑 check 照常是主链表第 1 行那个 `s0_approval=pending`
+红灯，`stage0.approve` 对每本书都适用，**没有例外分支**。停产的理由正是零命中这条路——
+纯数字番外恰好产生零 removed、零 warning、`clean == source`，旧的自动批准会让全链唯一那道
+人工防线对它失效。
 
-⚠ `preview stage0.approve` **照样会打印**一条带占位符的命令——preview 只回答"这个节点怎么跑"，
-不回答"这个节点该不该跑"。**该不该跑由 `inbox` 的 `approval` 计数回答**（零 ⇒ 不跑），
-`removal_report` 的批准字段是第二佐证。
+⚠ **存量的历史自动批产物读得、跑不得**：`approval_origin` 记 `auto_zero_hit` 的报告在界面上
+长成「已批准」，但 stage1、队列与付费链一律拦下并给稳定理由码
+`legacy_auto_approval_requires_review`；人工重跑一次 `stage0.approve` 即恢复资格（轮次不变，
+审计链追加一条 `approve`）。
 
-代批责任并不因此消失，只是换了方向：剔除分母为零时没有"被误删的段"可审，
-改做**反向漏剔**抽查，见[代批与终审契约](delegated-review.md#stage0-代批)。
+代批责任在剔除分母为零时换方向：没有"被误删的段"可审，改做**反向漏剔**抽查，
+见[代批与终审契约](delegated-review.md#stage0-代批)。
 
 ### `stage6.semantic`：它的产出是**证据**，不是绿灯
 

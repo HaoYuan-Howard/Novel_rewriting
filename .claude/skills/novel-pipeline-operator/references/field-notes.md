@@ -45,14 +45,14 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：这是“尚未批准”，不是剔除质量失败；仍需确认其余 HARD 全部为零。
 - 处置：按 stage0 代批规则读剔除段与边界，运行 `stage0.approve`。
 - 验证：批准状态落盘，后续 `state` 不再把 stage0 视为等待 approval。
-- ⚠ **零剔除的书走的是另一条分支，这条红灯不会出现**：一段都没剔时服务端当场自动批准
-  （批准来源记 `auto_zero_hit`、批准人留空），追跑 check 直接是 AMBER，`inbox` 的 `approval` 为零，
-  `stage0.approve` 这一步**不适用**——再跑一次只是无意义写盘。⚠ `preview stage0.approve` 照样会打印
-  带占位符的命令：preview 只回答"怎么跑"，"该不该跑"由 `inbox` 的 `approval` 计数回答。
-  代批责任此时掉转方向做**反向漏剔**抽查，判据见[代批与终审契约](delegated-review.md#stage0-代批)。
+- ⚠ **零剔除的书没有例外分支**：自动批准已停产，一段都没剔的书首跑同样恒
+  `pending`，这条红灯照常出现，`stage0.approve` 照常要跑。存量的历史自动批产物
+  （`approval_origin` 记 `auto_zero_hit`）读得、跑不得——stage1／队列／付费链给稳定理由码
+  `legacy_auto_approval_requires_review`，人工重批一次即恢复。剔除分母为零时代批责任掉转方向做
+  **反向漏剔**抽查，判据见[代批与终审契约](delegated-review.md#stage0-代批)。
 - 依据：`novel/stages/stage0/checks.py::check` 的 `s0_approval` 分支（批准状态非 approved 即命中）；
   `contracts/judges/stage0.py` 那一行的 sev 与 requirement；
-  自动分支的准入在 `novel/stages/stage0/removal.py::_auto_approval_eligible`，
+  执行资格的唯一落点是 `novel/stages/stage0/eligibility.py::is_stage0_executable`，
   取值面是 `contracts/schema/stage0.py::ApprovalOrigin`。
 
 ### FN-002 · 重号与缺号章节
