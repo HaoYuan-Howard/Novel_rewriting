@@ -222,8 +222,8 @@ def test_stalled_items_come_from_unresolved_rounds_at_the_stop_threshold(monkeyp
     assert all('stage5.review --wontfix' in it.how for it in items),         'stalled 那条路要指名节点——`--wontfix` 现在两层都有'
 
 
-def test_the_fallback_how_never_names_a_flag_the_stage_does_not_have():
-    """⭐ **兜底文案不许承诺一条这一层敲不出来的命令。**
+def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
+    """⭐ **兜底文案不许承诺一条敲不出来的命令**，且每条路都要点名它属于哪个节点。
 
     ⚠⚠ 这里原来是一个常量，逐字写着「`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决」，
     而 `--wontfix` **全仓只有 `stage5.review` 有**：stage6 的
@@ -232,23 +232,44 @@ def test_the_fallback_how_never_names_a_flag_the_stage_does_not_have():
     与 `contracts/rules.py::_validate` ⑧ 拦的是同一种病，区别只在于
     **`Rule.fix` 那一侧有三道校验，兜底文案这一侧一道都没有**——本条就是那道。
 
-    ⚠ 它逐层比对，不写死名单：新入口一上线这句话自动跟上，
-    退役一个入口也会当场说话。
+    ⚠⚠ **而这条守卫自己曾经是假绿的。** 它原来重拼了 `_human_how` 内部那一行聚合
+    （`{flag for spec in NODES.values() if spec.stage == stage ...}`）再断言
+    「文案点名的 ⊆ 自己算的」——等于拿生产的答案去判生产的卷子，
+    生产的粒度错了它必然跟着错。实际发生的就是这件事：按 stage 聚合把
+    `stage2.global` 的 `--apply-edit` 借给了 `stage2.blueprint`，
+    于是 `present_continuity` 的处置行指了一个 blueprint 根本没有的入口，
+    而本条一声没吭——直到 2026-08-21 跑《四人成行》时由人撞出来。
+    ⇒ 改成**调用生产落点**：文案里点名的每条 `node --flag` 交给 `build_argv`
+    真拼一遍，拼不出来就红。这正是 `docs/LESSONS.md` 第 21 条那句
+    「守卫要调用生产那一个落点，不要重拼一份」。
+
+    ⚠ 补 `--mode` 与带值 flag 的占位值是**调用协议**，不是被测逻辑：`build_argv`
+    要形状完整才肯往下走，而本条断言的是「这个节点到底有没有这个 flag」。
+    两者都从生产自己的取值面取（`placeholder_for` / `NodeSpec.modes`），不另写一份。
     """
     import re as _re
 
-    from contracts.invariants import NODES, STAGES
+    from contracts.invariants import NODES, STAGES, VALUED_FLAGS
+    from novel.orchestrator.nodes import build_argv, placeholder_for
     from novel.views.inbox import _human_how
 
+    checked = 0
     for stage in STAGES:
-        have = {flag for spec in NODES.values() if spec.stage == stage for flag in spec.flags}
         text = _human_how(stage)
-        named = set(_re.findall(r'`(--[a-z-]+)`', text))
-        assert named <= have, (
-            f'{stage} 的兜底文案点名了它没有的 flag：{sorted(named - have)}；'
-            f'这一层实有 {sorted(have)}')
-        if not ({'--apply-edit', '--wontfix'} & have):
+        named = _re.findall(r'`([a-z0-9]+\.[a-z-]+) (--[a-z-]+)`', text)
+        for node, flag in named:
+            flags = [flag, placeholder_for(flag)] if flag in VALUED_FLAGS else [flag]
+            modes = NODES[node].modes
+            build_argv(node, 'SID', flags, base='.',
+                       mode=modes[0] if modes else None, placeholders=True)
+            checked += 1
+        assert not _re.findall(r'`(--[a-z-]+)`', text), (
+            f'{stage} 的兜底文案出现了不带节点前缀的裸 flag：{text!r}；'
+            '每条路都必须点名它属于哪个节点——`stage2` 两个节点的入口并不相同，'
+            '裸 flag 会把 global 的入口读成 blueprint 也有')
+        if not named:
             assert '--' not in text, f'{stage} 一条 0 成本人工路都没有，却给出了一条命令：{text}'
+    assert checked, '正则一条 `node --flag` 都没匹配到——文案格式漂了，这条守卫已经静默失效'
 
 
 def test_every_revalidate_inbox_instruction_requires_audit_credentials():

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-repair.py —— `extraction-ir-v1` 的字段级修复（`stage2.blueprint --patch`，5A 最小集）。
+repair.py —— IR 系契约的字段级修复（`stage2.blueprint --patch`，5A 最小集）。
+适用面由 `contract.py::ContractSpec.supports_field_patch` 声明，**不在本文件里点名**
+（ir1.1 上线时正是那份名单漏了它，而漏改不会有任何东西出声）。
 
 【只修数据已证明需要的两类】（重放实测两本书 2+2 条歧义、0 条其他可局部修的失败）
   · `候选选择`（`短语在本拍区间内多处命中`）：代码从 `hinge_ambiguous_pending` 账取回
@@ -15,7 +17,7 @@ repair.py —— `extraction-ir-v1` 的字段级修复（`stage2.blueprint --pat
 未修的章经 `canonical_ir_projection` 精确往返（重放已逐字节证明）。
 
 【拒绝面】以下情况显式终态、不发一次请求：
-  · 基线不是 `extraction-ir-v1`（v3 的失败面走 `--chapters` 整章路）；
+  · 基线契约的 `supports_field_patch` 是 `False`（v3 的失败面走 `--chapters` 整章路）；
   · 存在整章级根因（drift / 跨章 / span 族——`REPAIR_ROUTE` 判 `chapter_regen`）：
     带着它们重编译会把 drift 的账错记成 void（投影丢短语），先 `--chapters`。
 
@@ -179,10 +181,7 @@ def _patch_user(action: RepairAction, seg: str,
 def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
     """`stage2.blueprint --patch` 的本体。修完走全量判据，绿则正式落盘。"""
     from novel.stages.stage2 import prompts
-    from novel.stages.stage2.compile_v2 import (
-        canonical_ir_projection, compile_v2,
-    )
-    from novel.stages.stage2.contract import contract_for
+    from novel.stages.stage2.contract import CONTRACTS, contract_for
     from novel.stages.stage2.extract import (
         BLUEPRINT_REL, GLOBAL_REL, _INVALID, _Both, _blueprint_metrics,
         _hard_hits, _judge_candidate, _note_adopted, _read_main_text, _report,
@@ -200,16 +199,28 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
     previous, previous_raw = store.read_own(
         ChapterBlueprints, source_rel, require_current=True)
     old_prov = previous.provenance
-    if old_prov.context.architecture != 'extraction-ir-v1':
+    # ⚠ 一律以**基线产物的** architecture 为准，不读 env、不写死名字：判「能不能修」
+    #   与选「拿哪套构件去修」必须同源，这是 `contract.py::contract_for` 的原话
+    #   「修复必须与基线同构」。
+    #
+    # ⚠⚠ **这里原来写死 `contract_for('extraction-ir-v1')`，而那个 `spec` 是死变量**
+    #   ——赋值之后一次都没用过，编译器与投影函数是模块顶上直接 import 的
+    #   `compile_v2` / `canonical_ir_projection` 硬调。所以写死并没有真的发错 prompt
+    #   （patch 有自己的 `HINGE_*_SYS`，不发 blueprint 的 system），
+    #   但它把「换契约 = 换整套」这条纪律在本文件里**断开了**：IR 系将来出现第二种
+    #   编译器时，这里会静默地继续用旧的。⇒ 下面两处改走 `spec.*`，让它真正接上。
+    baseline = old_prov.context.architecture
+    if not contract_for(baseline).supports_field_patch:
+        patchable = sorted(a for a, s in CONTRACTS.items() if s.supports_field_patch)
         raise TerminalState(
-            f'--patch 只修 extraction-ir-v1 的字段级失败；基线是 '
-            f'{old_prov.context.architecture!r}——那个契约的失败面走 '
+            f'--patch 只修 {"/".join(patchable)} 的字段级失败；基线是 '
+            f'{baseline!r}——那个契约的失败面走 '
             '`--chapters` 整章重生成。尚未调用 LLM')
     if old_prov.model != client.model:
         raise TerminalState(
             '当前 BlueprintProvenance 没有表达混合模型的槽位；'
             f'原稿 model={old_prov.model!r}，本次={client.model!r}。尚未调用 LLM')
-    spec = contract_for('extraction-ir-v1')
+    spec = contract_for(baseline)
 
     actions, leftovers = plan_repairs(previous_raw)
     if leftovers:
@@ -237,7 +248,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
     summaries: dict[int, str] = {}
     for bp in previous_raw['blueprints']:
         ordinal = int(bp.get('chapter_ordinal') or 0)
-        ir_by_ordinal[ordinal] = canonical_ir_projection(
+        ir_by_ordinal[ordinal] = spec.projection_fn(
             copy.deepcopy(bp), text_of.get(ordinal, ''))
         summaries[ordinal] = str(bp.get('summary') or '')
 
@@ -326,7 +337,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
 
     # ── 改完 IR → 全量重编译 → 全量判据 ──────────────────────────────────
     ordinals = sorted(ir_by_ordinal)
-    data, accounting = compile_v2(
+    data, accounting = spec.compile_fn(
         {'blueprints': [ir_by_ordinal[o] for o in ordinals]},
         main_text, global_raw['entities']['characters'], summaries=summaries)
     for row in repair_rows:
