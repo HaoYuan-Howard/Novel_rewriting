@@ -138,8 +138,12 @@ def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
 _GLOBAL_KEYS = ('address_by_fallback', 'address_surface_rewrites',
                 'address_from_chapter_raised', 'canonical_distinguishers_stripped',
                 'setup_chapters_pruned')
+#: ⚠ ir1 的三笔专属账也要在这里列出来才有出口：`ACCOUNTING` 里有、这里没有
+#: ⇒ 报告打「[????] 未记录」，而产物里明明记着——那是三态里最坏的一种（说假话）。
 _BLUEPRINT_KEYS = ('verbatim_rewrites', 'verbatim_failures',
-                   'partial_regen_chapters', 'repairs')
+                   'partial_regen_chapters', 'repairs',
+                   'place_inherit_without_base', 'hinge_ambiguous_pending',
+                   'boundary_nudges')
 
 
 def _accounting_of(both: _Both) -> dict[str, Any]:
@@ -1085,6 +1089,10 @@ def _run_blueprint_repair(
         if not _record_is_targeted(row, targets)
     ] + [list(row) for row
          in (target_accounting.get('hinge_ambiguous_pending') or [])]
+    nudge_rows = [
+        list(row) for row in old_prov.boundary_nudges
+        if not _record_is_targeted(row, targets)
+    ] + [list(row) for row in (target_accounting.get('boundary_nudges') or [])]
     prompt_keys = {spec.sys_name: system}
     if spec.needs_summary_batch:
         from novel.stages.stage2 import prompts as _p
@@ -1104,6 +1112,7 @@ def _run_blueprint_repair(
         repairs=repair_history,
         place_inherit_without_base=place_rows,
         hinge_ambiguous_pending=pending_rows,
+        boundary_nudges=nudge_rows,
     )
     provenance = BlueprintProvenance.model_validate({
         **delta.model_dump(),

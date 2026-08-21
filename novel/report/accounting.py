@@ -73,6 +73,10 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
                        '哪几条 hinge 的短语在拍区间内多处命中、等着候选选择修复？'
                        '（`extraction-ir-v1` 专属；失败态 hinge 不带短语，'
                        '这笔账是字段级修复唯一不依赖 LLM cache 的输入）'),
+        AccountingSpec('boundary_nudges',
+                       '哪几拍的止段被层0 外扩过？（`extraction-ir-v1` 专属；'
+                       '盘上的 span 不是模型给的那个数，'
+                       '「模型切得准」与「差 1 段、代码补上了」只有这笔账分得开）'),
     ),
     # ⚠⚠ **这三个键就是 `stage3.md` §五 记的那笔账**：实跑三本 `--check-only`，
     #    报告里 `attempts` / `revalidated` / `gates_skipped` **一行都没有**，

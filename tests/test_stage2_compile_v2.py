@@ -161,9 +161,11 @@ def test_a_repeated_or_backward_end_para_is_reported():
     assert '止段没有越过上一拍的止段（区间倒序或同段重复）' in _span_causes(acc)
 
 
-def test_a_last_beat_that_stops_short_keeps_its_span_but_reddens_the_ledger():
-    data, acc = _compile(_data(_beat(2), _beat(4)))
+def test_a_last_beat_that_stops_far_short_keeps_its_span_but_reddens_the_ledger():
+    """差得超过帽子（这里差 3 段）⇒ 那是真的切错了，照旧判 HARD 走整章。"""
+    data, acc = _compile(_data(_beat(1), _beat(2)))
     assert '末拍没有到达本章最后一段' in _span_causes(acc)
+    assert acc['boundary_nudges'] == []
     # span 本身可定位 ⇒ 不抹掉（信息无罪）；失败态由账承载（HARD 按行数判）。
     assert data['blueprints'][0]['beats'][1]['span'] is not None
 
@@ -171,6 +173,82 @@ def test_a_last_beat_that_stops_short_keeps_its_span_but_reddens_the_ledger():
 def test_an_empty_chapter_text_is_reported():
     _, acc = _compile(_data(_beat(1)), text='')
     assert '本章没有可编号的段落' in _span_causes(acc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 二·b、层0 护栏式边界外扩（7A 实测的那一个根因：止段比 event 早收 1–2 段）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_boundary_one_paragraph_short_of_its_own_hinge_is_nudged_not_failed():
+    """`b13_02` 那一族：event 写到了第 3 段的事，止段却给了 2。"""
+    data, acc = _compile(_data(
+        _beat(2, hinges=[{'kind': '硬数字', 'phrase': '两担水'}]),   # 在第 3 段
+        _beat(5),
+    ))
+    assert acc['verbatim_failures'] == [], '能算出来的整数，不该去买一次整章重生成'
+    assert acc['boundary_nudges'] == [
+        ('b01_01', 2, 3, '止段没盖住本拍自己的 hinge')]
+    beats = data['blueprints'][0]['beats']
+    assert beats[0]['hinges'][0]['source']['text'] == '两担水'
+    # 外扩改的是**两拍**：下一拍的起点跟着挪，且两拍仍然首尾相接。
+    assert beats[1]['span']['start'] == beats[0]['span']['end'] + 1
+
+
+def test_a_tail_one_paragraph_short_is_nudged_to_the_last_paragraph():
+    data, acc = _compile(_data(_beat(2), _beat(4)))
+    assert _span_causes(acc) == []
+    assert acc['boundary_nudges'] == [
+        ('b01_02', 4, 5, '末拍没有到达本章最后一段')]
+    assert data['blueprints'][0]['beats'][-1]['span']['end'] == len(CH1)
+
+
+def test_a_nudge_that_would_starve_the_next_beat_is_refused():
+    """外扩不许越过下一拍的止段——挤空它比留着 drift 更坏。"""
+    _, acc = _compile(_data(
+        _beat(2, hinges=[{'kind': '硬数字', 'phrase': '两担水'}]),   # 在第 3 段
+        _beat(3),                                                    # 下一拍只有第 3 段
+        _beat(5),
+    ))
+    assert acc['boundary_nudges'] == []
+    assert _hinge_rows(acc)['b01_01'] == '短语不在它所属拍的区间里，而出现在别处'
+
+
+def test_a_nudge_that_would_steal_the_next_beats_own_anchor_is_refused():
+    """下一拍原本定得住的锚点，不许被外扩抢走。"""
+    _, acc = _compile(_data(
+        _beat(2, hinges=[{'kind': '硬数字', 'phrase': '两担水'}]),   # 在第 3 段
+        _beat(4, hinges=[{'kind': '硬数字', 'phrase': '两担水'}]),   # 它自己也压在第 3 段
+        _beat(5),
+    ))
+    assert acc['boundary_nudges'] == []
+    assert _hinge_rows(acc)['b01_01'] == '短语不在它所属拍的区间里，而出现在别处'
+
+
+def test_an_ambiguous_phrase_is_never_fixed_by_moving_a_boundary():
+    """拍内已经多处命中 ⇒ 那是候选选择那条路，边界一动歧义只会更糊。"""
+    text = '她把纸鸢递过去。\n他接过纸鸢看了半天。\n收场白。'
+    _, acc = _compile(_data(_beat(2, hinges=[{'kind': '物件', 'phrase': '纸鸢'}]),
+                            _beat(3)), text=text)
+    assert acc['boundary_nudges'] == []
+    assert acc['hinge_ambiguous_pending'] == [('b01_01', '物件', '纸鸢')]
+
+
+def test_a_nudge_that_would_create_ambiguity_is_refused():
+    """外扩后仍要**唯一**命中：修不好就不改，编译器不做无效改写。"""
+    text = '开场白。\n她把纸鸢递过去，他又把纸鸢还回来。\n收场白。'
+    _, acc = _compile(_data(_beat(1, hinges=[{'kind': '物件', 'phrase': '纸鸢'}]),
+                            _beat(3)), text=text)
+    assert acc['boundary_nudges'] == []
+    assert _hinge_rows(acc)['b01_01'] == '短语不在它所属拍的区间里，而出现在别处'
+
+
+def test_a_chapter_with_an_illegal_end_para_is_never_nudged():
+    """止段序列已经坏了，这一章的分段主张就不成立——不在坏序列上推边界。"""
+    _, acc = _compile(_data(
+        _beat(99, hinges=[{'kind': '硬数字', 'phrase': '两担水'}]),
+        _beat(5),
+    ))
+    assert acc['boundary_nudges'] == []
 
 
 def test_every_cause_this_compiler_emits_is_registered():

@@ -977,6 +977,15 @@ class BlueprintProvenance(LlmProvenance):
     #: 一条路，而缓存是可驱逐的。候选**位置**不落盘：由短语+区间确定性重算，零成本。
     hinge_ambiguous_pending: list[tuple[str, str, str]] = Field(default_factory=list)
 
+    #: `(beat_id, 原止段, 新止段, 根因)`（`extraction-ir-v1` 专属账）：
+    #: 层0 确定性边界外扩改过哪几拍的止段。
+    #: ⚠⚠ **这是编译器改写了模型的分段主张**——盘上那份 `span` 不是模型给的那个数。
+    #: 不落这笔账，「模型切得准」与「模型差 1 段、代码补上了」在产物里长得一模一样，
+    #: 而 A/B 要回答的恰恰是前者。护栏与帽子见
+    #: `novel/stages/stage2/compile_v2.py::BOUNDARY_NUDGE_MAX_PARAS`。
+    #: 出口：断言计数 + 逐条列出（`novel/report/accounting.py`）。
+    boundary_nudges: list[tuple[str, int, int, str]] = Field(default_factory=list)
+
 
 class ChapterBlueprints(StrictModel):
     """`stage2/chapter_blueprints.json` —— 顶层 2 个键。

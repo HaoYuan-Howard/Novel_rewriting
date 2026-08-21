@@ -295,6 +295,8 @@ def build_report(*, sid: str, targets: tuple[int, ...], spec: Any, model: str,
         'per_chapter': per_chapter,
         'hinge_ambiguous_pending': [list(r) for r
                                     in accounting['hinge_ambiguous_pending']],
+        'boundary_nudges': [list(r) for r
+                            in (accounting.get('boundary_nudges') or [])],
         'place_inherit_without_base': list(accounting['place_inherit_without_base']),
         'verbatim_rewrites': [list(r) for r in accounting['verbatim_rewrites']],
         'verbatim_failures': [list(r) for r in accounting['verbatim_failures']],
@@ -362,7 +364,11 @@ def render_md(report: dict[str, Any]) -> str:
         lines += ['', '命中数变多的判据：']
         lines += [f"- `{rule}`（{row['sev']}）{row['was']} → {row['now']}"
                   for rule, row in sorted(report['worse_rules'].items())]
-    lines += ['', '## 三、层1 可修条目（5B 的数据输入）', '']
+    lines += ['', '## 三、层0 改写与层1 可修条目', '']
+    lines.append(f"层0 边界外扩（编译器改了模型给的止段）：{len(report['boundary_nudges'])}")
+    lines += [f'- `{bid}` 止段 {before} → {after}（{cause}）'
+              for bid, before, after, cause in report['boundary_nudges']]
+    lines.append('')
     lines.append('hinge 多处命中（候选选择可修）：'
                  + (str(len(report['hinge_ambiguous_pending'])) or '0'))
     lines += [f'- `{bid}` [{kind}] {phrase!r}'

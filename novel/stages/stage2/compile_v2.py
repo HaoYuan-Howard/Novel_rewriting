@@ -84,46 +84,157 @@ def _locate_in_span(seg: str, phrase: str) -> tuple[int, int, str] | int | None:
         'normalized'
 
 
+#: 护栏式边界外扩的两个帽子（层0 确定性恢复，7A 实测立的）。
+#:
+#: 【为什么有这条恢复】7A 六章冒烟的 4 例 HARD 是**同一个根因**：模型的 `end_para`
+#: 比它自己 `event` 里已经写到的内容早收 1–2 段（`b13_02` 写「传送位置随机」而那句
+#: 在第 13 段、止段给了 12；`b13_05` 的 event 结尾就是第 39 段那句、止段给了 38）。
+#: 错的是**那一个数字**，不是 phrase、也不是分段思路——event 与 hinge 自洽。
+#: 把这种情形一律送整章重生成，是拿一次全章的钱去改一个可以算出来的整数。
+#:
+#: 【为什么敢确定性地改】外扩只在四条护栏同时成立时发生，缺一条就不动：
+#:   ① 短语在本拍区间内**根本找不到**（多处命中是另一条路：候选选择修复）；
+#:   ② 外扩后短语在新区间内**唯一**命中——修不好就不改，编译器不做无效改写；
+#:   ③ 不越过下一拍的止段（下一拍必须仍非空），且幅度 ≤ 帽子；
+#:   ④ 下一拍**自己**原本定得住的锚点，外扩后仍然定得住。
+#: 每一次外扩逐条落 `boundary_nudges` 账（前值/后值/根因）⇒ 它是**看得见的**改写，
+#: 不是静默兜底。超帽子的照旧判 HARD 走整章——那才是真的切错了。
+BOUNDARY_NUDGE_MAX_PARAS = 2
+TAIL_NUDGE_MAX_PARAS = 2
+
+
+def _seg_of(text: str, start_para: int, end_para: int) -> str:
+    start, end = span_of(text, start_para, end_para)
+    return text[start:end]
+
+
+def _nudge_target(text: str, start_para: int, end_para: int, cap: int,
+                  phrase: str) -> int | None:
+    """本拍装不下这条短语时，**最小**外扩到哪一段能让它在拍内唯一命中。
+
+    `None` = 不该外扩（拍内已定位 / 多处命中 / 帽子内怎么扩都不唯一）。
+    复用 `_locate_in_span` 做判定 ⇒「外扩后唯一」是构造出来的，不是另写一套。
+    """
+    if _locate_in_span(_seg_of(text, start_para, end_para), phrase) is not None:
+        return None                       # 已定位，或多处命中（那条归候选选择）
+    for candidate in range(end_para + 1, cap + 1):
+        got = _locate_in_span(_seg_of(text, start_para, candidate), phrase)
+        if isinstance(got, tuple):
+            return candidate
+        if isinstance(got, int):
+            return None                   # 再扩只会更糊：多处命中不是边界问题
+    return None
+
+
+def _fresh_hinges(beat: dict[str, Any]) -> list[str]:
+    """本拍**待定位**的短语（重放入形的已是产物形，不参与边界推断）。"""
+    return [str(h.get('phrase') or '') for h in (beat.get('hinges') or [])
+            if 'source' not in h]
+
+
+def _locatable(text: str, start_para: int, end_para: int,
+               phrases: list[str]) -> tuple[bool, ...]:
+    return tuple(
+        isinstance(_locate_in_span(_seg_of(text, start_para, end_para), p), tuple)
+        for p in phrases)
+
+
+def _nudge_boundaries(beats: list[dict[str, Any]], ends: list[int], table: list,
+                      text: str,
+                      nudges: list[tuple[str, int, int, str]]) -> None:
+    """护栏式边界外扩。只在 `ends` 全部合法时被调用（见 `_compile_beats`）。"""
+    for i, beat in enumerate(beats):
+        start_para = (ends[i - 1] + 1) if i else 1
+        last = i + 1 == len(beats)
+        room = len(table) if last else ends[i + 1] - 1
+        cap = min(ends[i] + BOUNDARY_NUDGE_MAX_PARAS, room)
+        want = ends[i]
+        for phrase in _fresh_hinges(beat):
+            target = _nudge_target(text, start_para, ends[i], cap, phrase)
+            if target is not None:
+                want = max(want, target)
+        if want == ends[i]:
+            continue
+        if not last:
+            # 下一拍原本定得住的锚点，让出前几段之后必须仍然定得住。
+            phrases = _fresh_hinges(beats[i + 1])
+            before = _locatable(text, ends[i] + 1, ends[i + 1], phrases)
+            after = _locatable(text, want + 1, ends[i + 1], phrases)
+            if any(b and not a for b, a in zip(before, after)):
+                continue
+        nudges.append((str(beat.get('beat_id') or ''), ends[i], want,
+                       '止段没盖住本拍自己的 hinge'))
+        ends[i] = want
+
+    # 末拍到底：契约要求末拍必须到本章最后一段，模型少给几段是同一个病。
+    if beats and ends[-1] != len(table) \
+            and len(table) - ends[-1] <= TAIL_NUDGE_MAX_PARAS:
+        nudges.append((str(beats[-1].get('beat_id') or ''), ends[-1], len(table),
+                       '末拍没有到达本章最后一段'))
+        ends[-1] = len(table)
+
+
 def _compile_beats(blueprint: dict[str, Any], text: str,
                    rewrites: list[tuple[str, str, str, str]],
                    failures: list[tuple[str, str, str]],
                    place_orphans: list[str],
-                   ambiguous_pending: list[tuple[str, str, str]]) -> None:
-    """单章：分割 → span → time_layer 映射 → place 继承 → hinge 定位。原地改形。"""
+                   ambiguous_pending: list[tuple[str, str, str]],
+                   nudges: list[tuple[str, int, int, str]]) -> None:
+    """单章：读止段 → 边界外扩 → span → time_layer → place 继承 → hinge 定位。原地改形。"""
     table = paragraph_spans(text)
     beats = list(blueprint.get('beats') or [])
 
-    # ── ① 游标分割：end_para → 精确区间 ──────────────────────────────────
+    # ── ① 读止段并逐项验（不落 span——外扩要先发生）────────────────────────
     cursor = 0                                   # 上一拍的止段号（0 = 还没有拍）
-    located: list[tuple[dict[str, Any], int, int]] = []
+    ends: list[int | None] = []
     for beat in beats:
         beat_id = str(beat.get('beat_id') or '')
         end_para = beat.pop('end_para', None)
         beat['span'] = None
         if type(end_para) is not int or isinstance(end_para, bool):
             failures.append((beat_id, 'span', '段号不是整数'))
+            ends.append(None)
             continue
         if not table:
             failures.append((beat_id, 'span', '本章没有可编号的段落'))
+            ends.append(None)
             continue
         if not 1 <= end_para <= len(table):
             failures.append((beat_id, 'span', '段号越界'))
+            ends.append(None)
             continue
         if end_para <= cursor:
             failures.append(
                 (beat_id, 'span', '止段没有越过上一拍的止段（区间倒序或同段重复）'))
+            ends.append(None)
+            continue
+        ends.append(end_para)
+        cursor = end_para
+
+    # ── ② 护栏式边界外扩 ─────────────────────────────────────────────────
+    # ⚠ 只在**整章止段序列全部合法**时做：已经有一拍的段号是坏的，这一章的分段
+    #   主张就不成立了，在坏序列上推边界只会把错误摊得更均匀。
+    if beats and table and all(end is not None for end in ends):
+        _nudge_boundaries(beats, ends, table, text, nudges)  # type: ignore[arg-type]
+
+    # ── ③ 落 span ────────────────────────────────────────────────────────
+    cursor = 0
+    located: list[tuple[dict[str, Any], int, int]] = []
+    for beat, end_para in zip(beats, ends):
+        if end_para is None:
             continue
         try:
             start, end = span_of(text, cursor + 1, end_para)
         except ParagraphIndexError as exc:      # 上面已逐项验过，这里只可能是代码病
-            failures.append((beat_id, 'span', str(exc)))
+            failures.append((str(beat.get('beat_id') or ''), 'span', str(exc)))
             continue
         beat['span'] = _source(text, start, end, 'exact')
         located.append((beat, start, end))
         cursor = end_para
     if beats and table and cursor and cursor != len(table):
-        # ⚠ 末拍不到底：span 本身是可定位的，**不抹掉**（信息无罪），
-        #   失败态由账承载——`verbatim_failed` 按行数判 HARD，产物照走 `.INVALID`。
+        # ⚠ 末拍不到底（帽子外，外扩没接住）：span 本身是可定位的，**不抹掉**
+        #   （信息无罪），失败态由账承载——`verbatim_failed` 按行数判 HARD，
+        #   产物照走 `.INVALID`。
         failures.append((str(beats[-1].get('beat_id') or ''), 'span',
                          '末拍没有到达本章最后一段'))
 
@@ -216,10 +327,12 @@ def compile_v2(data: dict[str, Any], main_text: list[dict[str, Any]],
     failures: list[tuple[str, str, str]] = []
     place_orphans: list[str] = []
     ambiguous_pending: list[tuple[str, str, str]] = []
+    nudges: list[tuple[str, int, int, str]] = []
     for blueprint in blueprints:
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
         _compile_beats(blueprint, text_of.get(ordinal, ''),
-                       rewrites, failures, place_orphans, ambiguous_pending)
+                       rewrites, failures, place_orphans, ambiguous_pending,
+                       nudges)
         if 'summary' not in blueprint:
             given = (summaries or {}).get(ordinal)
             blueprint['summary'] = given if given else _derive_summary_debug(
@@ -232,6 +345,7 @@ def compile_v2(data: dict[str, Any], main_text: list[dict[str, Any]],
         'verbatim_failures': failures,
         'place_inherit_without_base': place_orphans,
         'hinge_ambiguous_pending': ambiguous_pending,
+        'boundary_nudges': nudges,
     }
 
 

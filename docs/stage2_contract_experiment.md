@@ -34,11 +34,15 @@ NOVEL_STAGE2_BLUEPRINT_CONTRACT=extraction-ir-v1   # 缺省 = bounded-fidelity-v
 ## 二、失败怎么修（ir1 的恢复阶梯）
 
 ```text
-层0 确定性编译恢复（compile_v2 内建：normalized 命中、place 继承、编号）
+层0 确定性编译恢复（compile_v2 内建，0 成本）：
+      · normalized 命中、place 继承、编号
+      · **护栏式边界外扩**：止段没盖住本拍自己的 hinge / 末拍差几段到底
+        ⇒ 外扩 ≤2 段（不挤空下一拍、不抢它的锚点、外扩后仍唯一命中），
+        逐条落 `_provenance.boundary_nudges`（7A 实测：4 例 HARD 全由它接住）
 层1 stage2.blueprint --patch     字段级（量级=条）：
       · hinge_ambiguous  → 候选选择（代码枚举命中位，模型只挑 candidate_id）
       · hinge_anchor_void → 短语重给（拍内原样唯一，validator 当场验）
-层3 stage2.blueprint --chapters  整章重生成（drift / span 族 / cascade 的兜底）
+层3 stage2.blueprint --chapters  整章重生成（帽子外的 drift / span 族 / cascade）
 ```
 
 - `--patch` 用**默认缓存策略**（中断恢复不重复付费）；`refresh-write` 只属于
@@ -132,15 +136,18 @@ events 拼接进生产被体积实测否决（书级摘要批是正解）。
 真正的 B 臂（Flash × v3）这本书没跑过，账本里 2026-08-21 之前一次 flash
 蓝图调用都没有。留档：`outputs/_ab/smoke_extraction_ir_v1_20260821.{json,md}`。
 
-| 读数 | ir1×Flash | 盘上 v3×Pro |
+| 读数 | ir1×Flash（层0 外扩后） | 盘上 v3×Pro |
 |---|--:|--:|
 | 拍 | 24 | 40 |
 | hinge | 40 | 48 |
-| 逐字命中（exact / normalized） | 34 / 3 | — |
+| 定位成功 | **40 / 40** | — |
+| 逐字命中（exact / normalized） | 37 / 3 | — |
 | `hinge_ambiguous`（多处命中） | **0** | — |
 | `hinge_anchor_void`（编的短语） | **0** | — |
-| `hinge_drift` | **3** | 0 |
-| 末拍不到底 | **1** | — |
+| `hinge_drift` | **0**（外扩前 3） | 0 |
+| 末拍不到底 | **0**（外扩前 1） | — |
+| 层0 边界外扩 | 4 行（逐条落账） | — |
+| 合并稿新增 HARD | **无** | — |
 | 有地点的拍 | 17 | 34 |
 | 付费调用 | 7 章调用（含 1 次闸拒重采）+ 1 摘要批 | 6 |
 | completion tokens | 45 656 | 64 819 |
@@ -154,8 +161,29 @@ events 拼接进生产被体积实测否决（书级摘要批是正解）。
 - `b13_05` event 结尾就是「青悠的感动戛然而止」，那是第 39 段，`end_para=38`。
 
 ⇒ **错的是那一个数字，不是 phrase，也不是分段思路**（event 与 hinge 自洽）。
-四例外扩 1–2 段即可，且逐例核过：不挤空下一拍、不挤掉下一拍自己的 hinge。
-现行 `REPAIR_ROUTE` 把 drift 一律送整章重生成，在这份数据上是过度反应。
+⇒ 裁决：**层0 护栏式边界外扩**（`compile_v2.py::BOUNDARY_NUDGE_MAX_PARAS`）。
+把**同一批已付费的响应**过一遍新编译器：4 例 HARD → **0**，四行外扩值与手算
+逐例相同（12→13 / 38→39 / 9→11 / 24→26），**0 次新增付费调用**。
+`REPAIR_ROUTE` 里「drift 一律整章重生成」保持不动——它现在管的是**帽子之外**
+那些真的切错了的情形。
+
+### 二轮：prompt 收紧被实测否决（同 6 章重付一轮）
+
+同批加过一条「`end_para` 必须盖住你自己在 event 里写到的最后一样东西」，重付一轮：
+
+| | 拍 | event 字数 | hinge | drift |
+|---|--:|--:|--:|--:|
+| 原模板 | 24 | 2274 | 40 | 3 |
+| 加了那一条 | 18 | 1890 | 34 | 0 |
+
+drift 确实压到 0，但**六章的 event 字数无一例外都降**（符号检验 p≈0.016 ⇒ 不是
+采样噪声的方向；本臂 temperature 未固定，单章 n=1 不可归因，**方向的一致性**才是）。
+ch15 把 5 拍并成 2 拍，「学!那你就好好学!」「黎玄在收徒大典上随手一指」
+「每次都等我走了才偷偷吃」等 5 条 hinge 直接消失——模型满足那条规则最省力的办法
+是**把 event 写短、把拍并粗**，正好落进模板自己警告过的「把好几件事塞进一条，
+等于把它们从清单上划掉」。⇒ **撤回，模板恢复逐字节原样**（那一轮的响应仍在缓存里，
+换回去零成本）。教训记在 `prompts.py::_BLUEPRINT_TPL_V2` 上方，防止有人再加回来：
+**不拿抽取的完整性去换定位的正确性**——后者代码免费做得到。
 
 其余读数：
 
