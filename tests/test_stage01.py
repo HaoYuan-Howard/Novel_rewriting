@@ -25,6 +25,7 @@ from novel.errors import (
 from novel.orchestrator.jobs import plan_start
 from novel.orchestrator.nodes import build_steps
 from novel.store import ArtifactStore
+from novel.views import ingest as ingest_views
 from novel.stages.stage0 import checks as stage0_checks
 from novel.stages.stage0 import removal as stage0_removal
 from novel.stages.stage0.removal import (
@@ -537,6 +538,90 @@ def test_two_line_fanwai_rolls_back_the_numeric_pseudo_chapter():
     assert len(partitioned.main_text.root) == 3
     lo, hi = removed.report.removed[0].span
     assert decode_source_bytes(raw).text[lo:hi].startswith('4\n\n番外\n')
+
+
+# ── TODO-34：批准前的只读分章预览 ────────────────────────────────────────────
+
+
+#: 纯数字番外的标准形态：章标记只是一个数字，正文里**一个非正文关键词都没有**。
+#: ⚠ 正文里只要出现「番外」二字，扫描器当场就认出来了（`test_two_line_fanwai`
+#: 测的正是那条能认出的路）——所以样本里那句话必须是干净的，否则测的是另一件事。
+NUMERIC_FANWAI_TAIL = '1\n\n十年后他们在旧城重逢，她终于说出那句话。她终于说出那句话。\n'
+
+
+def test_numeric_only_fanwai_becomes_visible_in_the_pre_approval_preview(work):
+    """人工闸门要真的兜住纯数字番外，人在点批准之前必须**看得见**它。
+
+    这本书恰好是盲区的标准形态：机器一段都没剔、零 warning、`clean == source`。
+    停产自动批准（2026-08-21）之后它必须由人点批准——但只看「原文 + 删除高亮 +
+    warnings」的审批页对它仍然是**全黑**的：那三样里没有任何东西不一样。
+    这一屏是人点批准之前唯一能看见「第 4 章的原始章号退回了 1」的地方。
+    """
+    source = work / 'FQ_numeric_fanwai_777.txt'
+    source.write_bytes((_case('enc_utf8_sig').text + NUMERIC_FANWAI_TAIL).encode('utf-8'))
+    base = work / 'Output'
+    novel_dir, removed, initial = run_source(source, base)
+
+    # 盲区成立的前提——机器什么都没剔，也没有一条 warning 可看。
+    assert removed.report.removed == [] and removed.report.warnings == []
+    assert removed.report.approved == 'pending' and removed.report.approval_origin is None
+    assert initial is not None and _line(initial, 's0_approval').status == 'hit'
+
+    preview = ingest_views.stage0_partition_preview(base, novel_dir.name)
+    assert preview.available and preview.reason is None
+    assert [
+        (row.chapter_ordinal, row.source_chapter_label, row.label_delta, row.anomaly)
+        for row in preview.chapters
+    ] == [
+        (1, '1', None, 'repeat'),   # 章号 1 在全书出现两次
+        (2, '2', 1, None),
+        (3, '3', 1, None),
+        (4, '1', -2, 'reset'),      # ← 番外：章号退回去了
+    ]
+    assert preview.anomaly_count == 2
+    assert preview.chapters[-1].preview.startswith('十年后他们在旧城重逢')
+    assert preview.hook_chars and preview.tail_chars == 0
+
+    # ⭐ 预览不承重：一份 stage1 产物都不许落，闸门形状一个字没动。
+    assert not (novel_dir / 'stage1').exists()
+    with pytest.raises(ApprovalRequired):
+        run_partition(_context(novel_dir, 'stage1.partition'))
+    assert not (novel_dir / 'stage1').exists()
+
+
+def test_a_serially_numbered_book_flags_nothing_in_the_preview(work):
+    """守卫的守卫：处处报异常等于没报。
+
+    同一份样本去掉那条番外尾巴就是一本连号书——它必须**一条都不亮**，
+    否则上一条测试里那两条命中说明不了任何事。
+    """
+    source = _source(work, 'FQ_serial_778.txt', 'enc_utf8_sig')
+    base = work / 'Output'
+    novel_dir, _removed, _initial = run_source(source, base)
+
+    preview = ingest_views.stage0_partition_preview(base, novel_dir.name)
+    assert preview.available
+    assert [row.source_chapter_label for row in preview.chapters] == ['1', '2', '3']
+    assert all(row.anomaly is None for row in preview.chapters)
+    assert preview.anomaly_count == 0
+
+
+def test_preview_reports_an_unpartitionable_book_instead_of_raising(work):
+    """「按当前剔除结果分不出章」正是应当在批准**之前**知道的事。
+
+    它走 `available=False` 那条路，而不是把异常抛到审批页上——审阅的人要读到的是
+    「先修剔除」，不是一行 500。
+    """
+    source = work / 'FQ_no_marker_779.txt'
+    body = '她把药碗端到他面前，看着他一口一口喝完。' * 8
+    source.write_bytes(f'开篇钩子。\n\n{body}\n'.encode('utf-8'))
+    base = work / 'Output'
+    novel_dir, _removed, _initial = run_source(source, base)
+
+    preview = ingest_views.stage0_partition_preview(base, novel_dir.name)
+    assert preview.available is False
+    assert preview.reason and preview.chapters == []
+    assert preview.hook_chars == 0 and preview.anomaly_count == 0
 
 
 REAL_NOVELS = sorted(Path('Test_data').glob('*.txt'))

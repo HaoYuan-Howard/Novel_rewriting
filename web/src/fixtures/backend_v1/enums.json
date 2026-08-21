@@ -149,6 +149,12 @@
  "stage1_warnings": [
   "noisy_duplicate"
  ],
+ "chapter_label_anomaly": [
+  "non_numeric",
+  "reset",
+  "gap",
+  "repeat"
+ ],
  "time_layers": [
   "present",
   "recall",

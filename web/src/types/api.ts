@@ -41,6 +41,7 @@ import type {
   Stage0ApprovalRequest,
   Stage0MergeCandidate,
   Stage0MergeDecisionRequest,
+  Stage0PartitionPreview,
   Stage0Report,
   Stage0Segments,
   Stage1Chapters,
@@ -65,6 +66,7 @@ export interface Api {
 
   getStage0Report(sid: string): Promise<Stage0Report>
   getStage0Segments(sid: string): Promise<Stage0Segments>
+  getStage0PartitionPreview(sid: string): Promise<Stage0PartitionPreview>
   editStage0(sid: string, request: Stage0EditRequest): Promise<Job>
   approveStage0(sid: string, request: Stage0ApprovalRequest): Promise<Job>
   getStage0Merge(sid: string): Promise<Stage0MergeCandidate | null>

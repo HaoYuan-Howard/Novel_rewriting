@@ -17,6 +17,7 @@ from contracts.schema.api import (
     Stage0ApprovalRequest,
     Stage0EditRequest,
     Stage0MergeDecisionRequest,
+    Stage0PartitionPreview,
     Stage0Segments,
     Stage1Chapters,
     Stage1Segments,
@@ -46,6 +47,16 @@ def get_stage0_segments(
     base: str = Depends(get_base),
 ) -> Stage0Segments:
     return ingest.stage0_segments(base, sid)
+
+
+@router.get('/novels/{sid}/stage0/partition-preview',
+            response_model=Stage0PartitionPreview)
+def get_stage0_partition_preview(
+    sid: str = Depends(checked_sid),
+    base: str = Depends(get_base),
+) -> Stage0PartitionPreview:
+    """批准前的只读分章预览。**GET，不写盘**——它不经 jobs.run，也不起 CLI 子进程。"""
+    return ingest.stage0_partition_preview(base, sid)
 
 
 @router.post('/novels/{sid}/stage0/edit', response_model=JobRecord)

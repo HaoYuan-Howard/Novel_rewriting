@@ -36,6 +36,7 @@ from contracts.invariants import (
     ANCHOR_COVERAGE_WARN,
     APPROVAL_GATES,
     APPROVAL_SEEN,
+    CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
     DEPTH_MODES,
     HINGE_KINDS,
@@ -93,6 +94,7 @@ VoiceKey = Literal[VOICE_KEYS]
 HookKey = Literal[HOOK_KEYS]
 Stage0SegmentKind = Literal[STAGE0_SEGMENT_KINDS]
 Stage1SegmentKind = Literal[STAGE1_SEGMENT_KINDS]
+ChapterLabelAnomaly = Literal[CHAPTER_LABEL_ANOMALY]
 NonbodyKind = Literal[NONBODY_KINDS]
 RemovedOrigin = Literal[REMOVED_ORIGIN]
 GateKey = Literal[APPROVAL_GATES]
@@ -263,6 +265,71 @@ class Stage1Chapters(StrictModel):
         got = [chapter.chapter_ordinal for chapter in self.chapters]
         if got != list(range(1, len(got) + 1)):
             raise ValueError('stage1 章节索引必须从 1 起连续有序')
+        return self
+
+
+class Stage0PreviewChapter(FrozenModel):
+    """S-00 批准前分章预览里的一章。**诊断用，不承重。**
+
+    与 `Stage1ChapterRow` 刻意不共用一个模型：那一份是**已批准之后**的正式章表，
+    这一份是**批准之前**的一次性推演，多带两个只在审阅时有意义的字段。
+    合成一个模型就等于让「已验证事实」与「尚未批准的推演」在类型上分不开
+    （同 `TODO-36` 要拆 command DTO 的那条理由）。
+    """
+
+    chapter_ordinal: int = Field(ge=1)
+    source_chapter_label: str = Field(min_length=1)
+    chars: int = Field(ge=0)
+    preview: str
+    #: 本章原始章号 − 上一章原始章号。第一章、或两章任一不是数字章号时为 `None`。
+    label_delta: int | None = None
+    anomaly: ChapterLabelAnomaly | None = None
+
+    @model_validator(mode='after')
+    def _delta_exists_exactly_when_it_is_computable(self) -> Stage0PreviewChapter:
+        if self.chapter_ordinal == 1 and self.label_delta is not None:
+            raise ValueError('第一章没有上一章，label_delta 必须缺席')
+        if self.anomaly == 'non_numeric' and self.label_delta is not None:
+            raise ValueError('非数字章号算不出 label_delta')
+        return self
+
+
+class Stage0PartitionPreview(StrictModel):
+    """S-00 批准前的**只读**分章预览：不写 `stage1/`，不改变任何产物。
+
+    【为什么闸门形状没变】正式 stage1 产物仍然只来自已批准的 stage0（`R-0.3b`），
+    变的只是**人批之前能看见什么**：审批页多一屏 hook / 逐章 outline / tail，
+    而分章本身是零成本纯函数，重算一次不欠任何账。
+
+    ⚠ `available=False` 不是错误页：它说的是「按当前剔除结果根本分不出章」——
+    那正是应当在批准**之前**知道的事，不是等 stage1 跑起来才炸。
+    """
+
+    #: 预览基于哪一份 clean_text。人看完预览再批准，批的是同一份字节。
+    input_sha1: Sha1
+    available: bool
+    reason: Annotated[str, Field(min_length=1)] | None
+    hook_chars: int = Field(default=0, ge=0)
+    hook_preview: str = ''
+    chapters: list[Stage0PreviewChapter] = Field(default_factory=list)
+    tail_chars: int = Field(default=0, ge=0)
+    anomaly_count: int = Field(default=0, ge=0)
+    note: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _availability_is_explicit(self) -> Stage0PartitionPreview:
+        if self.available != (self.reason is None):
+            raise ValueError('available 与 reason 必须恰好表达同一状态')
+        if not self.available:
+            if self.chapters or self.hook_chars or self.tail_chars or self.anomaly_count:
+                raise ValueError('分不出章时不得发一份看似完整的 outline')
+            return self
+        ordinals = [chapter.chapter_ordinal for chapter in self.chapters]
+        if ordinals != list(range(1, len(ordinals) + 1)):
+            raise ValueError('预览章节索引必须从 1 起连续有序')
+        hit = sum(1 for chapter in self.chapters if chapter.anomaly is not None)
+        if hit != self.anomaly_count:
+            raise ValueError(f'anomaly_count={self.anomaly_count} 与逐章实际命中 {hit} 不符')
         return self
 
 

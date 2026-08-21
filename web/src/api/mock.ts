@@ -35,6 +35,7 @@ import type {
   ReviewResponse,
   Stage0EditRequest,
   Stage0Extras,
+  Stage0PartitionPreview,
   Stage0Report,
   Stage0Segments,
   Stage1Chapters,
@@ -870,6 +871,11 @@ export const mockApi: Api = {
 
   getStage0Segments: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage0/segments`, () => mockStage0Segments(sid)),
+
+  // 夹具样本刻意是**纯数字番外**（机器零命中）：mock 模式下这一屏天然演示那个盲区。
+  getStage0PartitionPreview: (sid) =>
+    bookOnly(sid, `/novels/${sid}/stage0/partition-preview`, () =>
+      fx<Stage0PartitionPreview>('stage0_partition_preview.json')),
 
   editStage0: (sid, request) => {
     lsWrite('stage0.selection.' + sid, request)

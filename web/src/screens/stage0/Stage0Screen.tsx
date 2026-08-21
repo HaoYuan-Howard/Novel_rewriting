@@ -18,12 +18,82 @@ import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
 import type { Job } from '@/types/jobs'
 import type {
+  ChapterLabelAnomaly,
   Stage0EditRequest,
   Stage0MergeCandidate,
   Stage0MergeResolution,
+  Stage0PartitionPreview,
   Stage0Report,
   Stage0Segments,
 } from '@/types/stages'
+
+/** 章号异常的展示文案。**机器语义在 `anomaly` 上，界面不从文案里回猜。** */
+const ANOMALY_LABEL: Record<ChapterLabelAnomaly, string> = {
+  non_numeric: '章号不是数字',
+  reset: '章号退回',
+  gap: '章号跳号',
+  repeat: '章号重复',
+}
+
+function PartitionPreviewPanel({ data }: { data: Stage0PartitionPreview }) {
+  return (
+    <Panel
+      className={cx(
+        'flex flex-col gap-10 px-18 py-16',
+        data.anomaly_count ? 'border-warn-line' : undefined,
+      )}
+    >
+      <PaneHeader
+        title={'批准前分章预览'}
+        meta={
+          data.available
+            ? `${data.chapters.length} 章 · 章号异常 ${data.anomaly_count}`
+            : '分不出章'
+        }
+      />
+      {data.available ? (
+        <>
+          <div className={'text-mini text-ink-5'}>
+            开篇文案 {data.hook_chars} 字 · 尾段 {data.tail_chars} 字
+          </div>
+          <div className={'max-h-[320px] overflow-auto'}>
+            {data.chapters.map((row) => (
+              <div
+                key={row.chapter_ordinal}
+                className={cx(
+                  'flex items-baseline gap-10 border-b border-line-2 py-5 last:border-0',
+                  row.anomaly ? 'bg-warn-bg' : undefined,
+                )}
+              >
+                <Mono className={'w-[70px] shrink-0 text-mini text-ink-4'}>
+                  第 {row.chapter_ordinal} 章
+                </Mono>
+                <Mono className={'w-[86px] shrink-0 text-mini text-ink-5'}>
+                  原标号 {row.source_chapter_label}
+                </Mono>
+                <Mono className={'w-[64px] shrink-0 text-mini text-ink-5'}>
+                  {row.chars} 字
+                </Mono>
+                {row.anomaly ? (
+                  <span
+                    className={'shrink-0 rounded-chip bg-warn px-8 py-2 text-tag font-semibold text-white'}
+                  >
+                    {ANOMALY_LABEL[row.anomaly]}
+                    {row.label_delta === null ? null : ` ${row.label_delta}`}
+                  </span>
+                ) : null}
+                <span className={'truncate text-mini text-ink-3'}>{row.preview}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className={'prose-cn m-0 text-body text-ink-3'}>{data.reason}</p>
+      )}
+      <p className={'m-0 text-mini text-ink-5'}>{data.note}</p>
+    </Panel>
+  )
+}
 
 function sameIds(left: Set<string>, right: Set<string>): boolean {
   return left.size === right.size && [...left].every((id) => right.has(id))
@@ -69,6 +139,12 @@ export function Stage0Screen() {
   const merge = useQuery({
     queryKey: qk.stage0Merge(sid),
     queryFn: () => api.getStage0Merge(sid),
+    retry: false,
+  })
+  // 批准前的分章预览：零成本纯函数，人点批准之前唯一能看见分章结果的地方。
+  const partitionPreview = useQuery({
+    queryKey: qk.stage0PartitionPreview(sid),
+    queryFn: () => api.getStage0PartitionPreview(sid),
     retry: false,
   })
   const initial = useMemo(
@@ -424,6 +500,10 @@ export function Stage0Screen() {
                         </ActionButton>
                       </div>
                     </Panel>
+
+                    {partitionPreview.data ? (
+                      <PartitionPreviewPanel data={partitionPreview.data} />
+                    ) : null}
 
                     <ActorReasonFields
                       actor={actor}

@@ -44,6 +44,7 @@ import type {
   ReviewResponse,
   Stage0Report,
   Stage0MergeCandidate,
+  Stage0PartitionPreview,
   Stage0Segments,
   Stage1Chapters,
   Stage1HookCopy,
@@ -336,6 +337,8 @@ export const realApi: Api = {
 
   getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
+  getStage0PartitionPreview: (sid) =>
+    get<Stage0PartitionPreview>(n(sid) + '/stage0/partition-preview'),
   editStage0: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/edit', request)),
   approveStage0: async (sid, request) =>

@@ -10,11 +10,14 @@ from __future__ import annotations
 import os
 import re
 from bisect import bisect_left
+from collections import Counter
 from dataclasses import dataclass
 
 from contracts.schema.api import (
     HookCopyView,
     Stage0EditRequest,
+    Stage0PartitionPreview,
+    Stage0PreviewChapter,
     Stage0Segment,
     Stage0Segments,
     Stage1ChapterRow,
@@ -25,7 +28,7 @@ from contracts.schema.api import (
 from contracts.schema.stage0 import (
     RemovalReport, RemovedSegment, Stage0EditPlan, Stage0MergeCandidate,
 )
-from contracts.schema.stage1 import HookCopy, MainText, PartitionReport
+from contracts.schema.stage1 import HookCopy, MainText, MainTextSection, PartitionReport
 from novel import paths, prov
 from novel.core.ingest import (
     DecodeProblem, ScanResult, decode_source_bytes, nonbody_kind, scan_text,
@@ -34,10 +37,13 @@ from novel.core.source import resolve_recorded_source
 from novel.errors import (
     ApprovalRequired,
     ArtifactUnreadable,
+    HookCopyMissing,
     HumanEditProtected,
     PartitionChapterMismatch,
     PartitionInputMismatch,
+    ResidualNonbody,
     SourceConflict,
+    TooFewChapters,
 )
 from novel.orchestrator.state import readonly_ctx
 from novel.stages.stage0 import removal
@@ -225,6 +231,86 @@ def stage0_segments(base: str | os.PathLike[str], sid: str) -> Stage0Segments:
         available=True,
         reason=None,
         segments=_stage0_segments(report, text, clean),
+    )
+
+
+def _preview_chapters(sections: list[MainTextSection]) -> list[Stage0PreviewChapter]:
+    """逐章算出原始章号的落差与异常分类。判定优先级即 `CHAPTER_LABEL_ANOMALY` 的顺序。
+
+    ⚠ `repeat` 放在最后**不是**因为它最不重要，而是因为「回退到一个用过的号」
+    同时满足 reset 与 repeat——番外重新编号是回退，报 `reset` 才说得出发生了什么。
+    """
+    labels = [section.source_chapter_label for section in sections]
+    counts = Counter(labels)
+    numbers: list[int | None] = []
+    for label in labels:
+        try:
+            numbers.append(int(label))
+        except ValueError:
+            numbers.append(None)
+
+    out: list[Stage0PreviewChapter] = []
+    for index, section in enumerate(sections):
+        number = numbers[index]
+        previous = numbers[index - 1] if index else None
+        delta = None if number is None or previous is None else number - previous
+        if number is None:
+            anomaly = 'non_numeric'
+        elif delta is not None and delta <= 0:
+            anomaly = 'reset'
+        elif delta is not None and delta > 1:
+            anomaly = 'gap'
+        elif counts[section.source_chapter_label] > 1:
+            anomaly = 'repeat'
+        else:
+            anomaly = None
+        out.append(Stage0PreviewChapter(
+            chapter_ordinal=section.chapter_ordinal,
+            source_chapter_label=section.source_chapter_label,
+            chars=len(section.text),
+            preview=removal.preview_text(section.text, 80),
+            label_delta=delta,
+            anomaly=anomaly,
+        ))
+    return out
+
+
+def stage0_partition_preview(
+    base: str | os.PathLike[str],
+    sid: str,
+) -> Stage0PartitionPreview:
+    """在批准之前跑一次 stage1 纯函数，只为把分章结果摆到人眼前。**不落任何产物。**
+
+    这一条**刻意不查审批状态**：它存在的全部理由就是「人还没批」的那一刻要能看。
+    正式 stage1 产物那条路（`partition.run_partition`）的闸门一个字没动。
+    """
+    store = _store(base, sid, STAGE0_NODE)
+    report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
+    clean = store.read_text(removal.CLEAN_REL)
+    input_sha1 = prov.content_sha1(clean.encode('utf-8'))
+    try:
+        result = partition.partition_text(clean, source_sha1=report.source_sha1)
+    except (ResidualNonbody, HookCopyMissing, TooFewChapters,
+            PartitionChapterMismatch) as exc:
+        # 分不出章本身就是审阅要看的结论——先修剔除，而不是等 stage1 跑起来才炸。
+        return Stage0PartitionPreview(
+            input_sha1=input_sha1,
+            available=False,
+            reason=str(exc),
+            note='按当前剔除结果分不出章。这一屏不写任何产物，改完剔除再看一次。',
+        )
+    chapters = _preview_chapters(list(result.main_text.root))
+    return Stage0PartitionPreview(
+        input_sha1=input_sha1,
+        available=True,
+        reason=None,
+        hook_chars=len(result.hook_copy.text),
+        hook_preview=removal.preview_text(result.hook_copy.text, 120),
+        chapters=chapters,
+        tail_chars=len(result.tail),
+        anomaly_count=sum(1 for chapter in chapters if chapter.anomaly is not None),
+        note='批准前的只读预览：分章是零成本纯函数，这一屏不写 stage1 产物。'
+             '章号异常只是提示，要判「这一章是不是正文」仍然只能靠人读。',
     )
 
 

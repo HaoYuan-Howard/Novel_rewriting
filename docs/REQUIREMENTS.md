@@ -15,25 +15,6 @@
 P2 是明确可延期的工程化与体验增强。勾选前必须满足条目中的验收条件，而不是只增加类型、按钮
 或占位函数。
 
-## P0 · 正确性、真实花费与恢复能力
-
-### TODO-34 · 统一 Pre-LLM Intake Review（P0-1b：人工闸门的「可观察性」）
-
-2026-08-21 第一批已**关闭自动绕过**（停产 `auto_zero_hit`、`not_run` 出局、存量自动批
-只读不承行——见 `docs/BACKEND_CONTRACT.md` §十 2026-08-21 第一行）。但纯数字番外的
-问题是它与正常数字章节在机器结构上**没有区别**：Stage0 审阅页若只有原文 + removed
-高亮 + warnings，人工虽然被要求点批准，实际上仍很难识别这类盲区。**本条是第一批
-登记的紧邻后续、下一批最高优先级。**
-
-- [ ] 最小过渡方案（不落 stage1 artifact、0 付费）：stage0 处于 pending 时允许调用
-      stage1 纯函数生成**只读 preview**（不写 `stage1/` 目录），在审批页展示
-      hook + chapter outline（逐章起止/章号变化）+ tail。正式 stage1 产物仍然只来自
-      已批准的 stage0（`R-0.3b` 闸门形状不变，变的是人批之前能看见什么）。
-- [ ] 顺带裁决：`stage0.approve` 的人工闸与 stage1 preview 的展示合并成一次审阅
-      （审删除正确性与审分章正确性同屏），还是保持两步。裁决写 §十。
-- [ ] 验收：构造一本「番外用纯数字章节标记」的样本，在审批页上能**看出**
-      「这一章不是正文」（章 outline 里有可见异常），而不是只靠人翻原文。
-
 ## P1 · 质量闭环、诊断与兼容
 
 ### TODO-21 · 建立 current-schema 现役语料基线
@@ -573,6 +554,11 @@ merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本�
       本仓无迁移机制，答案大概率是「由 producer 重建」）。
 - [ ] 逐项删除上表机制，每删一项同批回答它守的洞由谁接管（`tests/test_stage0_merge.py`
       的崩溃重放矩阵是删 WAL 前的验收面）。
+- [ ] 顺带回答**统一 Pre-LLM Intake Review**：批准前分章预览已于 2026-08-22 落地
+      （TODO-34 完成，见 `docs/BACKEND_CONTRACT.md` §十），当时裁决是**保持两步**——
+      理由正是本条要换掉 stage0 的聚合根，先合并审阅页等于把它建在即将删掉的
+      `_rounds` / live candidate 上。revision 定下来之后，「删除正确性 + 分章正确性
+      同屏审一次、批准即原子发布」才有稳定的批准对象，那时一并回答。
 
 ### TODO-36 · command DTO 与 artifact DTO 分离 + SourceRef union
 

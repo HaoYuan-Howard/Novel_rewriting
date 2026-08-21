@@ -114,6 +114,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
 | `GET /api/novels/:sid/stage0/report` | `RemovalReport` | **复用** `stage0.md` |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
+| `GET /api/novels/:sid/stage0/partition-preview` | `Stage0PartitionPreview`（批准前的只读分章推演；**不写产物、不查审批状态**，见 `stage0.md` §2.4） | 新 |
 | `POST /api/novels/:sid/stage0/edit` | `JobRecord`（请求体 `Stage0EditRequest`） | 新 |
 | `POST /api/novels/:sid/stage0/approve` | `JobRecord`（请求体 `Stage0ApprovalRequest`：自报 `actor` + `reason`） | 新 |
 | `GET /api/novels/:sid/stage0/merge` | `Stage0MergeCandidate`（当前 `base/ours/theirs` 与 typed conflicts） | 新 |

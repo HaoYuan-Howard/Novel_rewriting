@@ -125,6 +125,51 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     assert hook.json()['hook_copy']['text'] == '开篇钩子。\n\n'
 
 
+#: 纯数字番外：章标记只是一个数字，正文里一个非正文关键词都没有 ⇒ 机器认不出。
+NUMERIC_FANWAI = (
+    '开篇钩子。\n\n'
+    '1\n\n第一章正文。她走进门里，没有回头。\n\n'
+    '2\n\n第二章正文。他推开窗，看见天亮了。\n\n'
+    '1\n\n十年后他们在旧城重逢，她终于说出那句话。\n'
+)
+
+
+def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
+    client: TestClient,
+):
+    """批准前的分章预览要走得通**真实 HTTP**，且一份 stage1 产物都不落。
+
+    机器对这本书零命中（`removed` 空、无 warning），审批页原有的三样看不出异常；
+    章 outline 里第 3 章的原始章号退回 1，才是人能看见的那一处。
+    """
+    response = client.post(
+        '/api/upload',
+        params={'filename': 'FQ_纯数字番外_9002.txt'},
+        content=NUMERIC_FANWAI.encode('utf-8'),
+        headers={**UI, 'Content-Type': 'application/octet-stream'},
+    )
+    assert response.status_code == 200, response.text
+    sid = response.json()['sid']
+
+    report = client.get(f'/api/novels/{sid}/stage0/report').json()
+    assert report['approved'] == 'pending' and report['removed'] == []
+
+    preview = client.get(f'/api/novels/{sid}/stage0/partition-preview')
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body['available'] is True and body['reason'] is None
+    assert [
+        (row['chapter_ordinal'], row['source_chapter_label'],
+         row['label_delta'], row['anomaly'])
+        for row in body['chapters']
+    ] == [(1, '1', None, 'repeat'), (2, '2', 1, None), (3, '1', -1, 'reset')]
+    assert body['anomaly_count'] == 2
+
+    # 只读：预览不建 stage1 目录，stage1 仍然只能由已批准的 stage0 启动。
+    partition = client.post(f'/api/novels/{sid}/stage1/partition')
+    assert partition.status_code != 200 or partition.json()['state'] != 'ok'
+
+
 def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
     sid = _upload(client)['sid']
     report = client.get(f'/api/novels/{sid}/stage0/report').json()

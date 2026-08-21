@@ -1,0 +1,44 @@
+{
+ "input_sha1": "21500b9271bf0425b876cc5bb249fc4f8ed87c69",
+ "available": true,
+ "reason": null,
+ "hook_chars": 27,
+ "hook_preview": "穿成恶毒女配后，我决定摆烂。 谁知男主追着我跑。",
+ "chapters": [
+  {
+   "chapter_ordinal": 1,
+   "source_chapter_label": "1",
+   "chars": 129,
+   "preview": "正文第1章。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一",
+   "label_delta": null,
+   "anomaly": "repeat"
+  },
+  {
+   "chapter_ordinal": 2,
+   "source_chapter_label": "2",
+   "chars": 129,
+   "preview": "正文第2章。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一",
+   "label_delta": 1,
+   "anomaly": null
+  },
+  {
+   "chapter_ordinal": 3,
+   "source_chapter_label": "3",
+   "chars": 129,
+   "preview": "正文第3章。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一",
+   "label_delta": 1,
+   "anomaly": null
+  },
+  {
+   "chapter_ordinal": 4,
+   "source_chapter_label": "1",
+   "chars": 31,
+   "preview": "十年后他们在旧城重逢，她终于说出那句话。她终于说出那句话。",
+   "label_delta": -2,
+   "anomaly": "reset"
+  }
+ ],
+ "tail_chars": 0,
+ "anomaly_count": 2,
+ "note": "批准前的只读预览：分章是零成本纯函数，这一屏不写 stage1 产物。章号异常只是提示，要判「这一章是不是正文」仍然只能靠人读。"
+}

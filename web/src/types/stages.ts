@@ -74,6 +74,34 @@ export interface Stage0Segments {
   segments: Stage0Segment[]
 }
 
+/** 批准前分章预览里逐章原始章号的异常分类（`contracts/invariants.py::CHAPTER_LABEL_ANOMALY`）。 */
+export type ChapterLabelAnomaly = 'non_numeric' | 'reset' | 'gap' | 'repeat'
+
+export interface Stage0PreviewChapter {
+  chapter_ordinal: number
+  source_chapter_label: string
+  chars: number
+  preview: string
+  label_delta: number | null
+  anomaly: ChapterLabelAnomaly | null
+}
+
+/**
+ * S-00 批准前的只读分章预览。**不写 stage1 产物**——它存在的理由是纯数字番外：
+ * 那种书机器零命中、零 warning，只看原文与删除高亮的审批页对它是盲的。
+ */
+export interface Stage0PartitionPreview {
+  input_sha1: string
+  available: boolean
+  reason: string | null
+  hook_chars: number
+  hook_preview: string
+  chapters: Stage0PreviewChapter[]
+  tail_chars: number
+  anomaly_count: number
+  note: string
+}
+
 export interface Stage0EditRequest {
   expected_round: number
   expected_source_sha1: string

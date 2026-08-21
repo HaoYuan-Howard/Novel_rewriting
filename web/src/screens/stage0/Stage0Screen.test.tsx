@@ -140,3 +140,148 @@ describe('Stage0Screen segment virtualization', () => {
     })
   })
 })
+
+describe('Stage0Screen 批准前分章预览', () => {
+  it('把纯数字番外的章号异常摆在批准动作之前', async () => {
+    vi.spyOn(api, 'getStage0Report').mockResolvedValue({
+      original_filename: 'book.txt',
+      original_path: 'book.txt',
+      code: 'code',
+      source_sha1: 'source',
+      clean_sha1: 'clean',
+      source_encoding: 'utf-8',
+      text_norm: 'NFC+LF',
+      removed: [],
+      total_code_points: 300,
+      body_code_points: 300,
+      warnings: [],
+      approved: 'pending',
+      approved_at: null,
+      approval_origin: null,
+      approved_by: null,
+      round: 1,
+      edited_by_human: false,
+    })
+    vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
+      source_sha1: 'source',
+      available: true,
+      reason: null,
+      segments: [
+        {
+          id: 'seg-0',
+          kind: 'keep',
+          start: 0,
+          end: 4,
+          chars: 4,
+          flagged: false,
+          text: '正文一段',
+          origin: null,
+          removed_kind: null,
+          marker_line: null,
+        },
+      ],
+    })
+    // 机器零命中（removed 为空、无 warning）——审批页原有的三样看不出任何异常，
+    // 唯一能看见的就是这一屏里第 3 章的原始章号退回了 1。
+    vi.spyOn(api, 'getStage0PartitionPreview').mockResolvedValue({
+      input_sha1: 'clean',
+      available: true,
+      reason: null,
+      hook_chars: 27,
+      hook_preview: '开篇钩子。',
+      chapters: [
+        {
+          chapter_ordinal: 1,
+          source_chapter_label: '1',
+          chars: 129,
+          preview: '正文第1章。',
+          label_delta: null,
+          anomaly: 'repeat',
+        },
+        {
+          chapter_ordinal: 2,
+          source_chapter_label: '2',
+          chars: 129,
+          preview: '正文第2章。',
+          label_delta: 1,
+          anomaly: null,
+        },
+        {
+          chapter_ordinal: 3,
+          source_chapter_label: '1',
+          chars: 31,
+          preview: '十年后他们在旧城重逢。',
+          label_delta: -2,
+          anomaly: 'reset',
+        },
+      ],
+      tail_chars: 0,
+      anomaly_count: 2,
+      note: '批准前的只读预览：这一屏不写 stage1 产物。',
+    })
+
+    renderRoute(<Stage0Screen />)
+
+    expect(await screen.findByText(/章号异常 2/)).toBeVisible()
+    expect(screen.getByText(/章号退回/)).toBeVisible()
+    expect(screen.getByText(/章号重复/)).toBeVisible()
+    expect(screen.getByText(/十年后他们在旧城重逢/)).toBeVisible()
+  })
+
+  it('分不出章时给出理由而不是一屏空表', async () => {
+    vi.spyOn(api, 'getStage0Report').mockResolvedValue({
+      original_filename: 'book.txt',
+      original_path: 'book.txt',
+      code: 'code',
+      source_sha1: 'source',
+      clean_sha1: 'clean',
+      source_encoding: 'utf-8',
+      text_norm: 'NFC+LF',
+      removed: [],
+      total_code_points: 300,
+      body_code_points: 300,
+      warnings: [],
+      approved: 'pending',
+      approved_at: null,
+      approval_origin: null,
+      approved_by: null,
+      round: 1,
+      edited_by_human: false,
+    })
+    vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
+      source_sha1: 'source',
+      available: true,
+      reason: null,
+      segments: [
+        {
+          id: 'seg-0',
+          kind: 'keep',
+          start: 0,
+          end: 4,
+          chars: 4,
+          flagged: false,
+          text: '正文一段',
+          origin: null,
+          removed_kind: null,
+          marker_line: null,
+        },
+      ],
+    })
+    vi.spyOn(api, 'getStage0PartitionPreview').mockResolvedValue({
+      input_sha1: 'clean',
+      available: false,
+      reason: '只识别到 0 个正文章节，少于最低要求 2',
+      hook_chars: 0,
+      hook_preview: '',
+      chapters: [],
+      tail_chars: 0,
+      anomaly_count: 0,
+      note: '按当前剔除结果分不出章。',
+    })
+
+    renderRoute(<Stage0Screen />)
+
+    expect(await screen.findByText('分不出章')).toBeVisible()
+    expect(screen.getByText(/只识别到 0 个正文章节/)).toBeVisible()
+  })
+})
