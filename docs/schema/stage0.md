@@ -14,7 +14,7 @@
 
 ```
 stage0/clean_text.txt        删掉非正文之后的全文。**stage1 的唯一输入**
-stage0/removal_report.json   正式稿身份 + 机器快照身份 + 审批/审计链头（v2）
+stage0/removal_report.json   正式稿身份 + 机器快照身份 + 审批/审计链头（v1）
 stage0/machine_snapshot.json 本次机器剔除的完整、可复算快照（v1）
 stage0/merge_candidate.json  `base / ours / theirs` 与 typed 冲突；未接受前不改正式稿（v1）
 stage0/_audit/edit_N.json    不可覆盖、SHA-256 串联的决定账（v1）
@@ -276,6 +276,30 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
   不同决定不得覆盖未完事务。
 - 新正文提交后，`root_clean_sha1` 变化会使 Stage1～7 的 provenance-bearing 产物立即 stale；
   生产/付费读拒绝 stale，只读视图仍可展示旧产物用于诊断。
+
+#### 哈希前像定义（canonical preimage，2026-08-21 成文）
+
+三处 SHA-256（`snapshot_sha256` / `entry_sha256` / `candidate_id`）的前像**唯一**由
+`novel/stages/stage0/merge.py` 的三个函数定义，文档与实现不各自漂移的锚是
+`tests/test_stage0_merge.py` 的 golden vector：
+
+| 项目 | 定义 |
+|---|---|
+| 字符编码 | UTF-8 |
+| JSON 序列化 | `sort_keys=True`、紧凑 separators `(',',':')`、`ensure_ascii=False` |
+| Unicode 归一 | **不做** NFC/NFKC（与 `R-0.12` 的归一化口径一致） |
+| digest 算法 | SHA-256，全宽 hex（64 位小写） |
+| `_schema_version` 信封 | **不进前像**——digest 对 Pydantic payload 计算，**不是**盘上 JSON 文件的字节 |
+| 自身 digest 字段 | 一律剔除（见下表） |
+| `snapshot_sha256` | 剔 `snapshot_sha256`、`created_at`、`code`（时间与代码是审计元数据，机器输入/输出不变则身份稳定）——`merge.py::snapshot_digest` |
+| `entry_sha256` | 只剔 `entry_sha256`（含 `at` 与 `previous_sha256`，即链式）——`merge.py::audit_digest` |
+| `candidate_id` | 剔 `candidate_id`、`created_at`——`merge.py::candidate_digest` |
+
+版本口径：`removal_report.json` 头部的 `(v1)` 与注册表一致；这一族**曾是 v2**
+（risk-tiered audited approvals，`a039121`），2026-08-18 随「产物 schema 归零 v1」
+（`32643c5`，见 `docs/BACKEND_CONTRACT.md` §十）降回 v1——旧 v2 产物当时已随三本书
+整批删除，归零后做过「真写盘 → 真读盘」闭环。落盘信封恒写注册表 `current_version`，
+由 `tests/test_artifact_versions.py::test_every_registered_artifact_round_trips_through_the_v1_envelope` 对全注册表钉住。
 
 ---
 

@@ -15,6 +15,25 @@
 P2 是明确可延期的工程化与体验增强。勾选前必须满足条目中的验收条件，而不是只增加类型、按钮
 或占位函数。
 
+## P0 · 正确性、真实花费与恢复能力
+
+### TODO-34 · 统一 Pre-LLM Intake Review（P0-1b：人工闸门的「可观察性」）
+
+2026-08-21 第一批已**关闭自动绕过**（停产 `auto_zero_hit`、`not_run` 出局、存量自动批
+只读不承行——见 `docs/BACKEND_CONTRACT.md` §十 2026-08-21 第一行）。但纯数字番外的
+问题是它与正常数字章节在机器结构上**没有区别**：Stage0 审阅页若只有原文 + removed
+高亮 + warnings，人工虽然被要求点批准，实际上仍很难识别这类盲区。**本条是第一批
+登记的紧邻后续、下一批最高优先级。**
+
+- [ ] 最小过渡方案（不落 stage1 artifact、0 付费）：stage0 处于 pending 时允许调用
+      stage1 纯函数生成**只读 preview**（不写 `stage1/` 目录），在审批页展示
+      hook + chapter outline（逐章起止/章号变化）+ tail。正式 stage1 产物仍然只来自
+      已批准的 stage0（`R-0.3b` 闸门形状不变，变的是人批之前能看见什么）。
+- [ ] 顺带裁决：`stage0.approve` 的人工闸与 stage1 preview 的展示合并成一次审阅
+      （审删除正确性与审分章正确性同屏），还是保持两步。裁决写 §十。
+- [ ] 验收：构造一本「番外用纯数字章节标记」的样本，在审批页上能**看出**
+      「这一章不是正文」（章 outline 里有可见异常），而不是只靠人翻原文。
+
 ## P1 · 质量闭环、诊断与兼容
 
 ### TODO-21 · 建立 current-schema 现役语料基线
@@ -537,6 +556,46 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
       exit 3 + 付费重跑 stage2 才能过 stage4。
 - [ ] 顺带回答：`chapters` 到底是「显式枚举」还是「区间端点」——若是后者，schema 应改名或
       收紧形态，别让两种语义共用一个形状（本次区间解释是对现状的最小兼容，不是语义裁决）。
+
+### TODO-35 · Stage0 减法重构：immutable revision + 原子发布替代 WAL/_rounds/live candidate
+
+2026-08-21 第一批对 diff3 做了**双端限制**（`stage0.md` §2.5 分诊表），但机制本身还是
+「可编辑、可三方合并、带 WAL 的文本版本控制系统」。对外部评审 P0-3 的终态裁决：
+聚合根是 `Stage0Revision {source identity, clean text, removed ledger, warnings}`，
+不是单独的 `clean_text`——只对文本做 diff3 保证不了整个聚合一致。目标形状
+（`stage0/revisions/<id>/{clean_text, result, review}` + 原子 `current` 指针，
+用户三选一：保留 A / 替换 B / 在 B 上重编辑后批准）可同时删除：文本级 diff3、
+merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本、
+大部分崩溃恢复状态机。⚠ 施工前先补「编辑计划路在 revision 模型下的等价物」，
+`run_edit_plan` 的服务端重建口径（同批已收口）必须原样带过去。
+
+- [ ] 设计 revision 目录与 `current` 指针的原子发布协议（含存量 `_rounds/` 的迁移答案——
+      本仓无迁移机制，答案大概率是「由 producer 重建」）。
+- [ ] 逐项删除上表机制，每删一项同批回答它守的洞由谁接管（`tests/test_stage0_merge.py`
+      的崩溃重放矩阵是删 WAL 前的验收面）。
+
+### TODO-36 · command DTO 与 artifact DTO 分离 + SourceRef union
+
+- `Stage0EditPlan`（HTTP 编辑计划）直接复用产物的 `RemovedSegment` ⇒ 客户端可提交
+  任意 `origin`/`line_no`/`marker_line`/预览。2026-08-21 已在 `run_edit_plan` 服务端
+  落定 provenance（伪造无效），但**类型上**命令与产物仍共用一个模型——`RequestedRemoval
+  {span, kind}` 这类 command DTO 该拆出来，让「用户意图」与「已验证事实」在类型上分家。
+- `original_path`（绝对路径 + 隐式重锚）换成 discriminated union `SourceRef`
+  （`external_file{absolute_path}` | `managed_upload{blob_sha256, filename}`），
+  读取端不再猜 locator，`original_path` 只作展示。涉及 schema 形状变更，
+  按仓规回答存量重建。
+
+### TODO-37 · stage1 字段类型变更包（需 schema 升版的一揽子，待字段去留裁决后一并做）
+
+第一批刻意**不升版本**，以下几项因此搁置（`docs/schema/stage1.md` 各字段注已登记理由）：
+
+- `source_chapter_label: str` → `source_chapter_no: int`（它由章号解析而来，不是
+  原样标题；原始标记行如需保留放非承重 report）；`num_chapters` →
+  `detected_chapter_marker_count`（名字即「独立来路」语义）；`section_id` 去留
+  裁决（无明确消费方，删比留 Literal 更干净；映射 validator 若留则一并加）。
+- warning 结构化 evidence（`message` 退到展示层）与审批状态的 discriminated union
+  （消灭一组 nullable）同属这一批——都动形状，合并一次 `current_version` +1、
+  一次 `_SHAPE_BREAKS` 登记、一次「存量由 stage1.partition 免费重建」的回答。
 
 ## 条目生命周期
 

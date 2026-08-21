@@ -565,3 +565,54 @@ def test_api_keeps_the_merge_plan_when_the_job_runner_crashes(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match='spawn crashed'):
         ingest_routes._run_merge_decision(str(tmp_path), '901', request, 'accept')
     assert discarded == [] and plan_path.is_file()
+
+
+# ── 2026-08-21 哈希前像 golden vector：文档与实现不各自漂移的锚 ──────────────
+
+
+def test_digest_golden_vector_pins_the_canonical_preimage():
+    """`_digest` 的前像是契约（stage0.md §2.5 前像定义表），不是实现细节。
+
+    覆盖：中文 · 非 BMP（UTF-16 代理对）· `None` · bool · list · tuple→JSON array ·
+    键序无关。锚值固化在此——任何人改了序列化口径（separators / sort_keys /
+    ensure_ascii / 剔除清单），这条当场红，而不是文档静默失效。
+    """
+    from novel.stages.stage0.merge import audit_digest, candidate_digest, snapshot_digest
+
+    base = {
+        '中文': '番外体的内容。',
+        '非BMP': '𠀀🎹',
+        '空值': None,
+        '布尔': False,
+        '列表': [1, '二', None],
+        '元组': (7, 8),
+    }
+    shuffled = {
+        '元组': (7, 8),
+        '布尔': False,
+        '列表': [1, '二', None],
+        '空值': None,
+        '非BMP': '𠀀🎹',
+        '中文': '番外体的内容。',
+    }
+    # tuple 与 list 序列化成同一个 JSON array；键序无关。
+    assert snapshot_digest(base) == snapshot_digest(shuffled)
+
+    anchor = '94cf05ad21bff20136f08153ec5778a39c5b5fd55de103e779a58a18ec95d136'
+    # 无被剔字段时三者的前像相同——差异只来自各自的剔除清单。
+    assert snapshot_digest(base) == audit_digest(base) == candidate_digest(base) == anchor
+
+    # 剔除语义：各自的被剔字段改什么都不影响 digest……
+    assert snapshot_digest(
+        {**base, 'snapshot_sha256': 'x', 'created_at': 'y', 'code': 'z'}) == anchor
+    assert audit_digest({**base, 'entry_sha256': 'x'}) == anchor
+    assert candidate_digest({**base, 'candidate_id': 'x', 'created_at': 'y'}) == anchor
+    # ……而**别人**的被剔字段不在我的剔除清单里，加进来必变。
+    assert audit_digest({**base, 'created_at': 'y'}) != anchor
+    assert candidate_digest({**base, 'snapshot_sha256': 'x'}) != anchor
+    assert snapshot_digest({**base, 'candidate_id': 'x'}) != anchor
+
+    # 承重字段一动，三者必变。
+    changed = {**base, '中文': '另一个值'}
+    for digest in (snapshot_digest, audit_digest, candidate_digest):
+        assert digest(changed) != anchor
