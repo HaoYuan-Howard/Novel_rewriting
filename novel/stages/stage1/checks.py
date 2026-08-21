@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''stage1 的八条确定性判据。'''
+'''stage1 的九条确定性判据。'''
 from __future__ import annotations
 
 from collections import Counter
@@ -10,7 +10,7 @@ from contracts.schema.report import CheckReport, finding
 from contracts.schema.stage0 import RemovalReport
 from contracts.schema.stage1 import HookCopy, MainText, PartitionReport
 from novel import prov
-from novel.core.ingest import scan_text, tail_is_only_end_marker
+from novel.core.ingest import chapter_number, scan_text, tail_is_only_end_marker
 from novel.report.builder import build
 from novel.report.findings import Outcome, ran
 from novel.run import RunContext
@@ -141,6 +141,57 @@ def check(
         's1_chapter_count',
         [_hit('s1_chapter_count', detail, detail) for detail in count_problems],
         scanned=' · '.join(f'{key}={value}' for key, value in observed_counts.items()),
+    ))
+
+    # R-1.15 源文本覆盖不变量：把 clean_text 完整分解为 hook + 逐章标记行 + 章正文
+    # + tail，游走记账。⚠ 不与 build_sections 的产物比对（那是生产算法验证自己）；
+    # 用的全是更底层、无状态的件：落盘 span 之间的 gap + `chapter_number` 文法解析。
+    # 它与 s1_chapter_count 的复算值比对是两条不同的路：那边问「span 对不对」，
+    # 这边问「每个字节去了哪、标记行是不是真的标记行」。
+    decomposition_problems: list[str] = []
+    accounted = 0
+    hook_lo, hook_hi = report.hook_span
+    accounted += hook_hi - hook_lo
+    cursor = hook_hi
+    for index, (lo, hi) in enumerate(report.chapter_spans):
+        marker_region = clean_text[cursor:lo]
+        if not marker_region.strip():
+            decomposition_problems.append(
+                f'第 {index + 1} 章与前一区域之间没有章标记行'
+                f'（游标 {cursor} 直接贴着章正文起点 {lo}）')
+        else:
+            lines = [line for line in marker_region.split('\n') if line.strip()]
+            if len(lines) != 1:
+                decomposition_problems.append(
+                    f'第 {index + 1} 章前的分隔区含 {len(lines)} 个非空行，'
+                    '应恰好一行章标记')
+            else:
+                number = chapter_number(lines[0])
+                if number is None:
+                    decomposition_problems.append(
+                        f'第 {index + 1} 章前的分隔行 {lines[0]!r} 不符合章标记文法')
+                elif index < len(sections) and \
+                        str(number) != sections[index].source_chapter_label:
+                    decomposition_problems.append(
+                        f'第 {index + 1} 章前的分隔行解析出章号 {number}，'
+                        f'章表记的是 {sections[index].source_chapter_label!r}')
+        accounted += len(marker_region) + (hi - lo)
+        cursor = hi
+    if cursor != report.body_code_points:
+        decomposition_problems.append(
+            f'最后一章止于 {cursor}，正文切点是 {report.body_code_points}——'
+            '之间有既不是章正文也不是 tail 的未记账字节')
+    accounted += report.total_code_points - cursor
+    if accounted != report.total_code_points:
+        decomposition_problems.append(
+            f'分解账 {accounted} 码点 != total_code_points={report.total_code_points}')
+    out.append(ran(
+        's1_decomposition',
+        [_hit('s1_decomposition', detail, detail)
+         for detail in decomposition_problems],
+        scanned=f'{len(report.chapter_spans)} 个章标记行 · '
+                f'{accounted}/{report.total_code_points} 码点已记账 · '
+                f'tail {report.total_code_points - report.body_code_points} 码点',
     ))
 
     residual = scan.nonbody

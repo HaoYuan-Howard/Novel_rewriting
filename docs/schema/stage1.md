@@ -94,7 +94,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
 | （顶层） | `obj` | 是 | **不可为 `null`**，见下 | **三源** |
-| `section_id` | `str` | 是 | 恒 `sec_0001` | **三源** |
+| `section_id` | `Literal['sec_0001']` | 是 | 恒 `sec_0001`（2026-08-21 从正则串收紧为 Literal——正则只保证形状，不保证这个常量事实） | **三源** |
 | `text` | `str` | 是 | 非空。全语料长度 57 ~ 414 | **三源** |
 
 ### ⚠ 文案段为空 = 显式终态，不是一个合法分支
@@ -219,8 +219,8 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `hook_span` | `[int,int]` | 是 | 文案段在归一化原文上的码点半开区间。恒 `[0, x)` | **盘·码** |
-| `chapter_spans` | `[[int,int], …]` | 是 | 逐章，**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal` | **盘·码** |
+| `hook_span` | `[int,int]` | 是 | 文案段在归一化原文上的码点半开区间。恒 `[0, x)`，且 `x <= body_code_points` | **盘·码** |
+| `chapter_spans` | `[[int,int], …]` | 是 | 逐章，**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal`；**有序、两两不重叠、每条 `end <= body_code_points`**（2026-08-21 收紧为载体后置条件） | **盘·码** |
 
 **为什么不加进 `main_text.json`。** 那是最自然的位置——span 是章的属性。
 但 span 是分章过程的诊断与审计结果，不是下游正文消费契约；因此放在
@@ -246,7 +246,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 
 ## 四、判据清单
 
-当前注册表共 **8 条**：**7 hard、1 info**。落点是 `contracts/judges/stage1.py`；
+当前注册表共 **9 条**：**8 hard、1 info**。落点是 `contracts/judges/stage1.py`；
 条数与分布由 `tests/test_coverage.py` 对着注册表现算，改判据必须同步改这一行。
 
 | 判据 | 级别 | 作用 |
@@ -257,6 +257,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 | `s1_min_chapters` | HARD | 正文章数不少于两章 |
 | `s1_hook` | HARD | 第一个正文章之前有非空开篇文案 |
 | `s1_tail` | HARD | 正文切点之后为空或只有一条完结标记 |
+| `s1_decomposition` | HARD | 源文本覆盖不变量：hook+章标记行+章正文+tail 完整分解输入，无未记账字节、无重复覆盖、标记行符合章标记文法 |
 | `s1_nonbody_residual` | HARD | 批准文本里没有可识别的非正文残留（**断言，不切**） |
 | `s1_warnings` | info | 可疑分章逐项显式报出 |
 
@@ -277,6 +278,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 | `source_chapter_label` 的断号/重号现算结果**只记账、不修正** | 40/163 本非空 | `R-1.4` |
 | `hook_copy` 顶层非 `null` 且 `text` 非空 | 163/163 成立 | `R-1.12` |
 | `clean_text` 里**认不出任何非正文标记** | 设计上恒成立（stage0 已删干净） | `R-1.7`（**断言，不切**） |
+| `[0, total)` 完整分解为 hook + 逐章标记行 + 章正文 + tail，无未记账字节 | 设计上恒成立（span 与账本同一次游走产出；定向篡改反例钉住判据会红） | `R-1.15`（2026-08-21 新增；**覆盖游走 + 文法解析，不与分章产物自证**） |
 
 ### `R-1.14` —— 尾段判据
 

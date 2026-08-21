@@ -791,3 +791,96 @@ def test_edit_plan_refuses_when_source_hash_drifts(work):
     source.write_bytes(source.read_bytes() + '\n原文已被替换\n'.encode('utf-8'))
     with pytest.raises(SourceConflict):
         run_edit_plan(_context(novel_dir, 'stage0.edit'), path)
+
+
+# ── 2026-08-21 R-1.15 源文本覆盖不变量：schema-valid 定向反例 ────────────────
+
+
+def test_r115_decomposition_reddens_on_a_schema_valid_doctored_report(work):
+    """R-1.15 的最小反例：篡改稿必须**能过 Pydantic decode**、并让分解不变量红。
+
+    真实产地（纯函数）构造不出分解违例——span 与账本是同一次游走产的；
+    所以这里走定向篡改：把**整条第一章标记行吞进 hook**（hook_span 止于章正文
+    前一字符）。游走到第一章时分隔区只剩一个换行——标记行凭空消失，
+    「未记账」以「没有章标记行」的形状显形。其它判据同时红（判据网本来就密），
+    本用例只认领 `s1_decomposition` 那一条。
+    """
+    source = _source(work, 'FQ_r115_9701.txt', 'end_marker_then_fanwai')
+    novel_dir, removal, _initial = run_source(source, work / 'Output')
+    run_approve(
+        _context(novel_dir, 'stage0.approve'),
+        approved_at='2026-08-21T00:00:00+00:00',
+    )
+    partitioned, report = run_partition(_context(novel_dir, 'stage1.partition'))
+    assert report is not None and report.passed, '九条判据应全绿打底'
+
+    from contracts.schema.stage1 import PartitionReport
+
+    store = ArtifactStore(_context(novel_dir, 'stage1.partition'))
+    clean = store.read_text(stage0_removal.CLEAN_REL)
+    doctored = partitioned.report.model_copy(update={
+        'hook_span': (0, partitioned.report.chapter_spans[0][0] - 1),
+    })
+    # schema-valid 的证明：载体层全部约束（有序/不重叠/不越界/覆盖）都过得去。
+    PartitionReport.model_validate(doctored.model_dump(mode='json'))
+
+    outcomes = stage1_checks.check(
+        doctored, partitioned.main_text, partitioned.hook_copy,
+        clean_text=clean, stage0=removal.report)
+    line = next(outcome for outcome in outcomes if outcome.rule == 's1_decomposition')
+    assert line.findings, '未记账字节必须让 s1_decomposition 红'
+    assert any(
+        '章标记行' in finding.detail or '分隔区' in finding.detail or '未记账' in finding.detail
+        for finding in line.findings), [f.detail for f in line.findings]
+    # 对照：未篡改的原始报告在同一条判据上是绿的（同一条用例里见过红与绿）。
+    green = stage1_checks.check(
+        partitioned.report, partitioned.main_text, partitioned.hook_copy,
+        clean_text=clean, stage0=removal.report)
+    assert not next(
+        outcome for outcome in green if outcome.rule == 's1_decomposition').findings
+
+
+# ── 2026-08-21 Unicode 码点 seam：含 emoji/扩展区字符的端到端切片一致性 ──────
+
+
+def test_emoji_and_extension_chars_keep_code_point_spans_honest(work):
+    """Python 码点 span 在非 BMP 字符上不漂移；视图切片按码点对齐。
+
+    前端按设计**不拿 start/end 在 JS 串上切**（`HighlightedText` 的 props 没有
+    下标——服务端把切好的 text 一起发过去，UTF-16 码元的坑就踩不进去）。
+    这里钉住的是供给侧：span 恒是 Python 码点，服务端切片在 emoji/扩展区
+    字符上仍逐字对齐、视图 join 回原文。
+    """
+    text = (
+        '开篇钩子📖与扩展区字𠀀。\n\n'
+        '1\n\n'
+        '第一章正文🎹她走进门里。\n\n'
+        '2\n\n'
+        '第二章正文𪚥他推开窗。\n\n'
+        '（全文完）\n'
+    )
+    source = work / 'FQ_emoji_seam_9801.txt'
+    source.write_bytes(text.encode('utf-8'))
+    novel_dir, removal, _initial = run_source(source, work / 'Output')
+    run_approve(
+        _context(novel_dir, 'stage0.approve'),
+        approved_at='2026-08-21T00:00:00+00:00',
+    )
+    partitioned, report = run_partition(_context(novel_dir, 'stage1.partition'))
+
+    assert report is not None and report.passed
+    hook = partitioned.hook_copy.text
+    assert hook == text[:len(hook)] and '📖' in hook and '𠀀' in hook
+    assert all(
+        section.text == clean_slice for section, clean_slice in zip(
+            partitioned.main_text.root,
+            [text[lo:hi] for lo, hi in partitioned.report.chapter_spans],
+        ))
+
+    from novel.views.ingest import stage0_segments as s0_view, stage1_segments as s1_view
+
+    s0 = s0_view(work / 'Output', '9801')
+    assert s0.available and ''.join(item.text for item in s0.segments) == text
+    s1 = s1_view(work / 'Output', '9801')
+    assert ''.join(item.text for item in s1.segments) == \
+        text.split('（全文完）', 1)[0] + '（全文完）\n'

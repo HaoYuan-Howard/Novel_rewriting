@@ -22,13 +22,27 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, RootModel, model_validator
+from pydantic import AfterValidator, Field, RootModel, model_validator
 
 from contracts.invariants import MIN_CHAPTERS, STAGE1_WARNINGS
 from contracts.schema.base import Sha1, StrictModel
 
 #: 码点半开区间。两处用它：文案段与逐章。
 Span = tuple[int, int]
+
+
+def _non_blank(value: str) -> str:
+    """正文类字段非空白：`"   "` / `"\\n\\n"` 与空串一样不承载内容。
+
+    产地已经在纯函数里拦了空段（`HookCopyMissing` / `PartitionChapterMismatch`），
+    这里是载体层的同一道闸——防的是绕过产地直写盘的篡改稿。
+    """
+    if not value.strip():
+        raise ValueError('正文类字段去空白后为空')
+    return value
+
+
+NonBlankText = Annotated[str, AfterValidator(_non_blank)]
 
 
 class MainTextSection(StrictModel):
@@ -53,8 +67,8 @@ class MainTextSection(StrictModel):
     #: 全是 `None`，但 hook 段不进本产物。**「盘上见过 `None`」不是「这个字段可空」的证据。**
     source_chapter_label: str = Field(min_length=1)
 
-    #: 章正文。
-    text: str
+    #: 章正文。non-blank（2026-08-21 收紧）：空白章在产地已拦，这里防直写盘的篡改稿。
+    text: NonBlankText
 
 
 class MainText(RootModel[Annotated[list[MainTextSection], Field(min_length=MIN_CHAPTERS)]]):
@@ -96,11 +110,11 @@ class HookCopy(StrictModel):
     stage3 的 `hook_style` 已相应收窄成必填。
     """
 
-    #: 恒 `sec_0001`。
-    section_id: str = Field(pattern=r'^sec_\d{4}$')
+    #: 恒 `sec_0001`（2026-08-21 收紧为 Literal：正则串只保证形状，不保证这个常量事实）。
+    section_id: Literal['sec_0001']
 
-    #: 非空。全语料长度 57 ~ 414。
-    text: str = Field(min_length=1)
+    #: 非空且非空白。全语料长度 57 ~ 414。
+    text: NonBlankText
 
 
 class Stage1Warning(StrictModel):
@@ -193,8 +207,12 @@ class PartitionReport(StrictModel):
 
     @model_validator(mode='after')
     def _spans_are_consistent(self) -> PartitionReport:
-        """三条后置条件。它们查的是**本产物内部**是否自洽——
-        跨产物那几条（与 `main_text` 的长度、与盘上原文的复算值）归判据，不归载体。
+        """内部自洽的完整约束集（2026-08-21 扩充，P0-5）。
+
+        跨产物那几条（与 `main_text` 的切片一致性、与盘上原文的复算）归判据；
+        这里查的是**本产物内部**：区间有序、不重叠、不越界、覆盖不超出正文切点。
+        内部约束不靠隐含推理成立——`hook_end <= body_code_points` 虽可由首章
+        span 间接推出，载体自己也要说得出口。
         """
         if self.hook_span[0] != 0:
             raise ValueError(f'hook_span={self.hook_span} 不是从 0 起——文案段恒在最前')
@@ -208,4 +226,21 @@ class PartitionReport(StrictModel):
                 f'chapter_spans 有 {len(self.chapter_spans)} 条而 num_chapters='
                 f'{self.num_chapters}——对照屏会按 span 画高亮，少一条就少画一章'
             )
+        if self.hook_span[1] > self.body_code_points:
+            raise ValueError(
+                f'hook_span 止于 {self.hook_span[1]}，越过正文切点 {self.body_code_points}')
+        if self.body_code_points > self.total_code_points:
+            raise ValueError(
+                f'body_code_points={self.body_code_points} 超过 total_code_points='
+                f'{self.total_code_points}——正文不可能比全文长')
+        cursor = self.hook_span[1]
+        for index, (lo, hi) in enumerate(self.chapter_spans):
+            if lo < cursor:
+                raise ValueError(
+                    f'chapter_spans[{index}]=({lo}, {hi}) 与前一区间乱序或重叠'
+                    f'（游标在 {cursor}）')
+            if hi > self.body_code_points:
+                raise ValueError(
+                    f'chapter_spans[{index}].end={hi} 越过正文切点 {self.body_code_points}')
+            cursor = hi
         return self
