@@ -210,14 +210,14 @@ def observe(base: str | Path) -> tuple[list[CorpusBookEntry], str, str]:
         artifacts, payloads, codes = _artifact_inventory(book)
         report = payloads.get('stage0/removal_report.json')
         main = payloads.get('stage1/main_text.json')
-        if not isinstance(report, dict) or not isinstance(report.get('source_sha1'), str):
-            raise ValueError(f'{book.name}: 缺 current stage0/removal_report.json source_sha1')
+        if not isinstance(report, dict) or not isinstance(report.get('normalized_source_sha1'), str):
+            raise ValueError(f'{book.name}: 缺 current stage0/removal_report.json normalized_source_sha1')
         if not isinstance(main, list) or not main:
             raise ValueError(f'{book.name}: 缺 current stage1/main_text.json 章节')
         all_codes.update(codes)
         books.append(CorpusBookEntry(
             sid=sid,
-            source_sha1=report['source_sha1'],
+            normalized_source_sha1=report['normalized_source_sha1'],
             chapters=len(main),
             artifacts=artifacts,
             ledger=_ledger_summary(ledger, sid),
@@ -236,7 +236,7 @@ def observe(base: str | Path) -> tuple[list[CorpusBookEntry], str, str]:
     inventory = [
         {
             'sid': book.sid,
-            'source_sha1': book.source_sha1,
+            'normalized_source_sha1': book.normalized_source_sha1,
             'chapters': book.chapters,
             'artifacts': [item.model_dump(mode='json') for item in book.artifacts],
         }

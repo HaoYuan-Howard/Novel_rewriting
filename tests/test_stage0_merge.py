@@ -77,7 +77,7 @@ def _pending_candidate(tmp_path: Path, monkeypatch, sid: str):
     common = dict(
         candidate_id=candidate.candidate_id,
         expected_round=first.report.round,
-        expected_source_sha1=first.report.source_sha1,
+        expected_normalized_source_sha1=first.report.normalized_source_sha1,
         expected_clean_sha1=first.report.clean_sha1,
         actor='recovery-reviewer',
         reason='崩溃后重放同一份已审决定',
@@ -124,8 +124,8 @@ def _legacy_auto_pair(tmp_path: Path, sid: str = '940') -> tuple[Path, str]:
     ctx = _context(novel_dir, 'stage0.remove')
     entry = append_audit(
         ctx, seq=1, previous_sha256=None, action='auto_approve', actor=None,
-        reason='旧版零命中自动批准', before_source_sha1=None, before_clean_sha1=None,
-        after_source_sha1=result.report.source_sha1,
+        reason='旧版零命中自动批准', before_normalized_source_sha1=None, before_clean_sha1=None,
+        after_normalized_source_sha1=result.report.normalized_source_sha1,
         after_clean_sha1=result.report.clean_sha1)
     store = removal.ArtifactStore(ctx)
     store.write(REPORT_REL, result.report.model_copy(update={
@@ -212,7 +212,7 @@ def test_machine_change_without_human_footprint_creates_candidate(tmp_path, monk
         _context(novel_dir, 'stage0.edit'),
         candidate_id=candidate.candidate_id,
         expected_round=first.report.round,
-        expected_source_sha1=first.report.source_sha1,
+        expected_normalized_source_sha1=first.report.normalized_source_sha1,
         expected_clean_sha1=first.report.clean_sha1,
         resolutions=[],
         actor='adjudicator',
@@ -291,13 +291,13 @@ def test_pre_upgrade_candidate_on_divergent_base_is_refused_and_retired(tmp_path
     theirs = removal.inspect_source(source, code=first.report.code)
     candidate = make_candidate(
         expected_round=edited.round,
-        expected_source_sha1=edited.source_sha1,
+        expected_normalized_source_sha1=edited.normalized_source_sha1,
         expected_clean_sha1=edited.clean_sha1,
         base_snapshot=old_snapshot,
         theirs_snapshot=theirs.machine_snapshot,
         base_text=old_snapshot.clean_text,
         ours_text=ours,
-        theirs_source_sha1=theirs.machine_snapshot.source_sha1,
+        theirs_normalized_source_sha1=theirs.machine_snapshot.normalized_source_sha1,
         theirs_text=theirs.clean_text,
     )
     store = removal.ArtifactStore(_context(novel_dir, 'stage0.edit'))
@@ -308,7 +308,7 @@ def test_pre_upgrade_candidate_on_divergent_base_is_refused_and_retired(tmp_path
             _context(novel_dir, 'stage0.edit'),
             candidate_id=candidate.candidate_id,
             expected_round=edited.round,
-            expected_source_sha1=edited.source_sha1,
+            expected_normalized_source_sha1=edited.normalized_source_sha1,
             expected_clean_sha1=edited.clean_sha1,
             resolutions=[],
             actor='adjudicator', reason='试图接受危险候选',
@@ -339,14 +339,14 @@ def test_reject_keeps_formal_text_and_records_decision(tmp_path, monkeypatch):
         _context(novel_dir, 'stage0.edit'),
         candidate_id=candidate.candidate_id,
         expected_round=first.report.round,
-        expected_source_sha1=first.report.source_sha1,
+        expected_normalized_source_sha1=first.report.normalized_source_sha1,
         expected_clean_sha1=first.report.clean_sha1,
         actor='reviewer-b',
         reason='新原文不是本轮要采纳的版本',
     )
 
     assert (novel_dir / CLEAN_REL).read_bytes() == before
-    assert rejected.source_sha1 == first.report.source_sha1
+    assert rejected.normalized_source_sha1 == first.report.normalized_source_sha1
     assert rejected.audit_seq == first.report.audit_seq + 1
 
 
@@ -394,7 +394,7 @@ def test_merge_optimistic_lock_rejects_stale_request(tmp_path, monkeypatch):
             _context(novel_dir, 'stage0.edit'),
             candidate_id=candidate.candidate_id,
             expected_round=999,
-            expected_source_sha1=first.report.source_sha1,
+            expected_normalized_source_sha1=first.report.normalized_source_sha1,
             expected_clean_sha1=first.report.clean_sha1,
             resolutions=[], actor='reviewer', reason='stale negative test',
         )
@@ -513,7 +513,7 @@ def _merge_request() -> Stage0MergeDecisionRequest:
     return Stage0MergeDecisionRequest(
         candidate_id='a' * 64,
         expected_round=1,
-        expected_source_sha1='b' * 40,
+        expected_normalized_source_sha1='b' * 40,
         expected_clean_sha1='c' * 40,
         resolutions=[], actor='api-reviewer', reason='retain until terminal',
     )

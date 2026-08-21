@@ -95,7 +95,7 @@ def _rows() -> list[dict]:
 def _book_raw(sid: str, chapters: int) -> dict:
     return {
         'sid': sid,
-        'source_sha1': 'b' * 40,
+        'normalized_source_sha1': 'b' * 40,
         'chapters': chapters,
         'artifacts': [item.model_dump(mode='json') for item in _artifacts(chapters)],
         'ledger': corpus_manifest._ledger_summary(_rows(), sid).model_dump(mode='json'),
@@ -109,7 +109,7 @@ def _manifest_raw() -> dict:
     )
     inventory = [{
         'sid': book['sid'],
-        'source_sha1': book['source_sha1'],
+        'normalized_source_sha1': book['normalized_source_sha1'],
         'chapters': book['chapters'],
         'artifacts': book['artifacts'],
     } for book in books]
@@ -292,7 +292,7 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
         sid: {
             'artifacts': _artifacts(chapters),
             'payloads': {
-                'stage0/removal_report.json': {'source_sha1': 'b' * 40},
+                'stage0/removal_report.json': {'normalized_source_sha1': 'b' * 40},
                 'stage1/main_text.json': [
                     {'chapter_ordinal': ordinal}
                     for ordinal in range(1, chapters + 1)
@@ -373,10 +373,10 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
         corpus_manifest.verify(tmp_path, manifest)
     state[sid]['artifacts'] = artifacts
 
-    state[sid]['payloads']['stage0/removal_report.json']['source_sha1'] = 'c' * 40
+    state[sid]['payloads']['stage0/removal_report.json']['normalized_source_sha1'] = 'c' * 40
     with pytest.raises(ValueError, match='inventory hash 漂移'):
         corpus_manifest.verify(tmp_path, manifest)
-    state[sid]['payloads']['stage0/removal_report.json']['source_sha1'] = 'b' * 40
+    state[sid]['payloads']['stage0/removal_report.json']['normalized_source_sha1'] = 'b' * 40
 
     state[sid]['payloads']['stage1/main_text.json'].append({'chapter_ordinal': 18})
     with pytest.raises(ValidationError, match='17/25'):

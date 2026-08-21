@@ -861,7 +861,7 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
     _write_payload(book, 'stage0/removal_report.json', {
         'source_ref': {'kind': 'external_file',
                        'absolute_path': str(source.resolve())},
-        'source_sha1': prov.content_sha1(source_bytes),
+        'normalized_source_sha1': prov.content_sha1(source_bytes),
         'clean_sha1': prov.content_sha1(clean_bytes),
     })
 
@@ -923,7 +923,7 @@ def _stage0_book(recorded_source: Path,
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
     _write_payload(book, STAGE0_REMOVAL_REPORT, {
         'source_ref': source_ref_for(recorded_source).model_dump(mode='json'),
-        'source_sha1': decode_source_bytes(_SOURCE_BYTES).source_sha1,
+        'normalized_source_sha1': decode_source_bytes(_SOURCE_BYTES).normalized_source_sha1,
         'clean_sha1': prov.content_sha1(clean_bytes),
     })
     return base, ArtifactStore(_ctx(base, paid=False))

@@ -83,7 +83,7 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
         if segment['kind'] == 'keep' and '第二句文案' in segment['text'])
     request = {
         'expected_round': report['round'],
-        'expected_source_sha1': report['source_sha1'],
+        'expected_normalized_source_sha1': report['normalized_source_sha1'],
         'expected_clean_sha1': report['clean_sha1'],
         'removed_segment_ids': [*machine, manual],
         'actor': 'api-stage01-test',
@@ -185,7 +185,7 @@ def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
         f'/api/novels/{sid}/stage0/edit',
         json={
             'expected_round': report['round'],
-            'expected_source_sha1': report['source_sha1'],
+            'expected_normalized_source_sha1': report['normalized_source_sha1'],
             'expected_clean_sha1': report['clean_sha1'],
                 'removed_segment_ids': selected,
                 'actor': 'api-stage01-test',
@@ -243,7 +243,7 @@ def test_original_survives_moving_the_output_root(client: TestClient, root: Path
         with TestClient(create_app(moved)) as moved_client:
             after = moved_client.get(f'/api/novels/{sid}/stage0/segments').json()
         assert after['available'] is True, after.get('reason')
-        assert after['source_sha1'] == before['source_sha1']
+        assert after['normalized_source_sha1'] == before['normalized_source_sha1']
         assert [segment['text'] for segment in after['segments']] == \
             [segment['text'] for segment in before['segments']]
     finally:

@@ -685,7 +685,7 @@ function mockStage0Segments(sid: string): Stage0Segments {
       marker_line: initial ? piece.marker : null,
     }
   })
-  return { source_sha1: data.source_sha1, available: true, reason: null, segments }
+  return { normalized_source_sha1: data.normalized_source_sha1, available: true, reason: null, segments }
 }
 
 function mockStage0Report(sid: string): Stage0Report {
@@ -697,8 +697,8 @@ function mockStage0Report(sid: string): Stage0Report {
     source_ref: { kind: 'external_file' as const,
                   absolute_path: '/mock/' + data.original_filename },
     code: 'mock',
-    source_sha1: data.source_sha1,
-    clean_sha1: data.source_sha1,
+    normalized_source_sha1: data.normalized_source_sha1,
+    clean_sha1: data.normalized_source_sha1,
     source_encoding: data.source_encoding,
     text_norm: 'v1:bom+crlf',
     removed: segments.map((segment, index) => ({
@@ -761,7 +761,7 @@ function mockStage1Segments(): Stage1Segments {
       flagged: false,
     }
   })
-  return { input_sha1: source.source_sha1, segments }
+  return { input_sha1: source.normalized_source_sha1, segments }
 }
 
 /* ---------------------------------------------------------- 跑书进度样例 */

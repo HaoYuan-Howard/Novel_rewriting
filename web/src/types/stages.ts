@@ -51,7 +51,7 @@ export interface Stage0Report {
     | { kind: 'external_file'; absolute_path: string }
     | { kind: 'managed_upload'; blob_sha256: string; filename: string }
   code: string
-  source_sha1: string
+  normalized_source_sha1: string
   clean_sha1: string
   source_encoding: string
   text_norm: string
@@ -102,7 +102,7 @@ export interface Stage0Segment {
 }
 
 export interface Stage0Segments {
-  source_sha1: string
+  normalized_source_sha1: string
   available: boolean
   reason: string | null
   segments: Stage0Segment[]
@@ -138,7 +138,7 @@ export interface Stage0PartitionPreview {
 
 export interface Stage0EditRequest {
   expected_round: number
-  expected_source_sha1: string
+  expected_normalized_source_sha1: string
   expected_clean_sha1: string
   removed_segment_ids: string[]
   actor: string
@@ -182,12 +182,12 @@ export interface Stage0MergeCandidate {
   candidate_id: string
   created_at: string
   expected_round: number
-  expected_source_sha1: string
+  expected_normalized_source_sha1: string
   expected_clean_sha1: string
   base_snapshot_sha256: string
   base_clean_sha1: string
   ours_clean_sha1: string
-  theirs_source_sha1: string
+  theirs_normalized_source_sha1: string
   theirs_clean_sha1: string
   base_text: string
   ours_text: string
@@ -206,7 +206,7 @@ export interface Stage0MergeResolution {
 export interface Stage0MergeDecisionRequest {
   candidate_id: string
   expected_round: number
-  expected_source_sha1: string
+  expected_normalized_source_sha1: string
   expected_clean_sha1: string
   resolutions: Stage0MergeResolution[]
   actor: string
@@ -236,7 +236,7 @@ export interface S0Candidate {
 export interface Stage0Extras {
   source_id: string
   original_filename: string
-  source_sha1: string
+  normalized_source_sha1: string
   source_encoding: string
   total_code_points: number
   scanned_at: number

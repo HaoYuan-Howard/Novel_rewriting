@@ -1060,7 +1060,7 @@ class ArtifactStore:
         if report is None:
             return FreshnessReport('unknown', 'no_provenance')
         raw_ref = report.get('source_ref')
-        source_was = report.get('source_sha1')
+        source_was = report.get('normalized_source_sha1')
         clean_was = report.get('clean_sha1')
         if not isinstance(raw_ref, dict) or not all(
                 isinstance(value, str) and value for value in (source_was, clean_was)):
@@ -1088,7 +1088,7 @@ class ArtifactStore:
             return self._content_report((source_edge, clean_edge))
         try:
             from novel.core.ingest import DecodeProblem, decode_source_bytes
-            source_now = decode_source_bytes(source.read_bytes()).source_sha1
+            source_now = decode_source_bytes(source.read_bytes()).normalized_source_sha1
         except DecodeProblem:
             return FreshnessReport('unknown', 'no_provenance')
         except OSError:

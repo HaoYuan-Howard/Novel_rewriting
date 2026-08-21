@@ -216,24 +216,24 @@ def check(
         out.append(ran(
             's0_hashes',
             [_hit('s0_hashes', hash_detail, hash_detail)],
-            scanned='clean_sha1 已计算 · source_sha1 '
+            scanned='clean_sha1 已计算 · normalized_source_sha1 '
                     + ('已计算' if source is not None else '因原文不可用未计算'),
         ))
     elif source is None:
         out.append(unverifiable(
             's0_hashes',
             source_why or '没有原始小说，只能核对 clean_sha1，无法同时核对两个指纹',
-            scanned='clean_sha1 已计算 · source_sha1 不可计算',
+            scanned='clean_sha1 已计算 · normalized_source_sha1 不可计算',
         ))
     else:
         hash_problems = []
-        if report.source_sha1 != source.source_sha1:
+        if report.normalized_source_sha1 != source.normalized_source_sha1:
             hash_problems.append(
-                f'source_sha1 记录 {report.source_sha1}，实际 {source.source_sha1}')
+                f'normalized_source_sha1 记录 {report.normalized_source_sha1}，实际 {source.normalized_source_sha1}')
         out.append(ran(
             's0_hashes',
             [_hit('s0_hashes', detail, detail) for detail in hash_problems],
-            scanned='source_sha1 + clean_sha1 两个 40 位内容指纹',
+            scanned='normalized_source_sha1 + clean_sha1 两个 40 位内容指纹',
         ))
 
     human_problems = []
@@ -347,9 +347,9 @@ def check(
             [_hit(
                 's0_source_identity',
                 '记录位置的原始小说内容身份已经变化',
-                report.source_sha1,
-                source.source_sha1,
-            )] if report.source_sha1 != source.source_sha1 else [],
+                report.normalized_source_sha1,
+                source.normalized_source_sha1,
+            )] if report.normalized_source_sha1 != source.normalized_source_sha1 else [],
             scanned='原始小说 1 份 · 40 位归一化内容指纹',
         ))
 

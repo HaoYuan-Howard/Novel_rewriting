@@ -61,10 +61,10 @@ def check(
     if stage0.clean_sha1 != actual_sha1:
         input_problems.append(
             f'stage0 批准 clean_sha1={stage0.clean_sha1}，clean_text 实际={actual_sha1}')
-    if report.source_sha1 != stage0.source_sha1:
+    if report.normalized_source_sha1 != stage0.normalized_source_sha1:
         input_problems.append(
-            f'partition_report.source_sha1={report.source_sha1}，'
-            f'stage0.source_sha1={stage0.source_sha1}')
+            f'partition_report.normalized_source_sha1={report.normalized_source_sha1}，'
+            f'stage0.normalized_source_sha1={stage0.normalized_source_sha1}')
     if report.total_code_points != len(clean_text):
         input_problems.append(
             f'total_code_points={report.total_code_points}，输入实际={len(clean_text)}')

@@ -61,7 +61,7 @@ def _warning(labels: list[int]) -> list[Stage1Warning]:
     return out
 
 
-def partition_text(clean_text: str, *, source_sha1: str) -> PartitionResult:
+def partition_text(clean_text: str, *, normalized_source_sha1: str) -> PartitionResult:
     '''分章纯函数。显式终态发生在任何模型构造或磁盘写入之前。'''
     scan = scan_text(clean_text)
     if scan.nonbody:
@@ -102,7 +102,7 @@ def partition_text(clean_text: str, *, source_sha1: str) -> PartitionResult:
     main_text = MainText.model_validate(mains)
     hook_copy = HookCopy(text=hook_text)
     report = PartitionReport(
-        source_sha1=source_sha1,
+        normalized_source_sha1=normalized_source_sha1,
         input_sha1=prov.content_sha1(clean_text.encode('utf-8')),
         total_code_points=len(clean_text),
         body_code_points=body_limit,
@@ -150,7 +150,7 @@ def run_partition(
             f'stage0 清理后只保留 {ratio:.1%} 正文，低于 {BODY_RATIO_MIN:.0%}，'
             '即使人工点了批准也不能把疑似截断的文本送入下游')
 
-    result = partition_text(clean_text, source_sha1=stage0.source_sha1)
+    result = partition_text(clean_text, normalized_source_sha1=stage0.normalized_source_sha1)
     if dry_run:
         return result, None
 

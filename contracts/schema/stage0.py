@@ -13,7 +13,7 @@ F7 已用临时目录走通产物形态、审阅状态机与编辑回写，并�
 
 【本层唯一没有 `_provenance` 的理由，写在明处】
 `docs/schema/stage0.md` 的三份产物表里**没有 `_provenance` 这一项**，本模块因此也没有。
-它不是漏了：本层是全链的**源头**，`inputs` 恒空，而 `source_sha1` / `clean_sha1` /
+它不是漏了：本层是全链的**源头**，`inputs` 恒空，而 `normalized_source_sha1` / `clean_sha1` /
 `source_encoding` / `text_norm` 已经把「这份产物照什么产的」答完了。
 `code` 不能塞进一份不存在的 `_provenance`，因此作为报告顶层字段记录；
 它仍由全链同一个 `RunContext.code` / `prov.code_version()` 口径产生。
@@ -204,7 +204,7 @@ class Stage0EditPlan(HumanApproval):
     '''
 
     expected_round: int = Field(ge=1)
-    expected_source_sha1: Sha1
+    expected_normalized_source_sha1: Sha1
     expected_clean_sha1: Sha1
     expected_total_code_points: int = Field(ge=1)
     clean_text: str
@@ -271,7 +271,7 @@ class Stage0MergeDecisionPlan(HumanApproval):
     action: Literal['accept', 'reject']
     candidate_id: Sha256
     expected_round: int = Field(ge=1)
-    expected_source_sha1: Sha1
+    expected_normalized_source_sha1: Sha1
     expected_clean_sha1: Sha1
     resolutions: list[Stage0ConflictResolution] = Field(default_factory=list)
 
@@ -289,7 +289,7 @@ class MachineRemovalSnapshot(StrictModel):
     code: str = Field(min_length=1)
     original_filename: str = Field(min_length=1)
     source_ref: SourceRef
-    source_sha1: Sha1
+    normalized_source_sha1: Sha1
     clean_sha1: Sha1
     source_encoding: Literal[SOURCE_ENCODINGS]
     text_norm: str = Field(min_length=1)
@@ -316,13 +316,13 @@ class Stage0MergeCandidate(StrictModel):
     candidate_id: Sha256
     created_at: str = Field(min_length=1)
     expected_round: int = Field(ge=1)
-    expected_source_sha1: Sha1
+    expected_normalized_source_sha1: Sha1
     expected_clean_sha1: Sha1
     base_snapshot_sha256: Sha256
     theirs_snapshot: MachineRemovalSnapshot
     base_clean_sha1: Sha1
     ours_clean_sha1: Sha1
-    theirs_source_sha1: Sha1
+    theirs_normalized_source_sha1: Sha1
     theirs_clean_sha1: Sha1
     base_text: str
     ours_text: str
@@ -346,8 +346,8 @@ class Stage0MergeCandidate(StrictModel):
                 raise ValueError(f'{name} 与对应文本不一致')
         if self.theirs_snapshot.snapshot_sha256 == self.base_snapshot_sha256:
             raise ValueError('机器快照没有变化时不该生成 merge candidate')
-        if self.theirs_snapshot.source_sha1 != self.theirs_source_sha1:
-            raise ValueError('theirs_snapshot 与 theirs_source_sha1 不一致')
+        if self.theirs_snapshot.normalized_source_sha1 != self.theirs_normalized_source_sha1:
+            raise ValueError('theirs_snapshot 与 theirs_normalized_source_sha1 不一致')
         return self
 
 
@@ -361,9 +361,9 @@ class Stage0AuditEntry(StrictModel):
     actor: str | None
     reason: str = Field(min_length=1)
     at: str = Field(min_length=1)
-    before_source_sha1: Sha1 | None
+    before_normalized_source_sha1: Sha1 | None
     before_clean_sha1: Sha1 | None
-    after_source_sha1: Sha1
+    after_normalized_source_sha1: Sha1
     after_clean_sha1: Sha1
     candidate_id: Sha256 | None = None
 
@@ -457,10 +457,16 @@ class RemovalReport(StrictModel):
     # ⚠ 两个都是 40 位**内容身份**（不是 10 位来源指纹）：它们回答的是
     # 「有人换过原文吗」，人可能拿 `sha1sum` 手工复核，截断买不到任何东西。
 
-    #: **原始 txt** 归一化后的 sha1。变了 ⇒ 全链重跑（`R-0.14` + `R-1.3`）。
-    source_sha1: Sha1
+    #: **原始 txt 归一化之后那段文本**的 sha1。变了 ⇒ 全链重跑（`R-0.14` + `R-1.3`）。
+    #:
+    #: ⚠ **它不是原始文件字节的 digest**，这正是 2026-08-22 从 `source_sha1` 改名的理由：
+    #: 旧名字读起来像「这个文件的哈希」，而算的是**解码 + 去 BOM + CRLF→LF 之后**的
+    #: 那个串（`text_norm` 恒 `v1:bom+crlf` 说的就是这道工序）。⇒ 同一本书存成 UTF-8
+    #: 和存成 GB18030，字节完全不同而这一格**相同**——那是对的，也正是它该有的语义，
+    #: 但拿旧名字去核 `sha1sum 原文.txt` 的人会以为对不上是出了问题。
+    normalized_source_sha1: Sha1
 
-    #: **`clean_text.txt`** 的 sha1。变了而 `source_sha1` 没变 ⇒ 人编辑过，**保住**。
+    #: **`clean_text.txt`** 的 sha1。变了而 `normalized_source_sha1` 没变 ⇒ 人编辑过，**保住**。
     #: 这才是 stage1 记的那个输入指纹（`partition_report.input_sha1`）。
     #:
     #: ⚠ **它的差异不可分解**：人那一趟能改字，于是「删了番外」与「人改了字」
@@ -495,7 +501,7 @@ class RemovalReport(StrictModel):
 
     #: 机器输入与机器输出的稳定身份。正式 clean 可被人工编辑，因此不能拿 clean_sha1
     #: 冒充机器结果；三方合并必须显式区分两者。
-    machine_source_sha1: Sha1
+    machine_normalized_source_sha1: Sha1
     machine_clean_sha1: Sha1
     machine_snapshot_sha256: Sha256
 

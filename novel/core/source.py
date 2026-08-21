@@ -19,7 +19,7 @@
 断了再猜它是不是 `_service/uploads/<sha256>/<name>` 那种形状**并按当前 base 重锚。
 那套回落逻辑本身是对的（实测救回过一本：《夫君与鲛人孰_2024515569832010055》——
 记的是旧 base 下的上传目录，文件就在当前 base 的同一个内容地址目录下，
-`source_sha1` 逐字节相等，而 `state` 报 unknown/ghost、复跑直接 `UpstreamMissing`），
+`normalized_source_sha1` 逐字节相等，而 `state` 报 unknown/ghost、复跑直接 `UpstreamMissing`），
 **但它必须去猜**：同一个字符串既可能是外部语料也可能是本服务的上传，而两者
 「找不到」的含义完全相反。⇒ 把「它是哪一种」从推断变成**产地当时就写下来**。
 
@@ -87,7 +87,7 @@ def resolve_recorded_source(
     答「不在」——它的位置**只能**由当前 base 算出来，没有第二种解法，
     而猜一个出来就是本模块整篇在反对的事。
 
-    返回的 Path 就是接下来该读的那一个。调用方照旧自己比对 `source_sha1`——
+    返回的 Path 就是接下来该读的那一个。调用方照旧自己比对 `normalized_source_sha1`——
     本函数只保证「这份文件是它自称的那份」，不代替任何人回答
     「它还是不是产物当初的那份」。
     """

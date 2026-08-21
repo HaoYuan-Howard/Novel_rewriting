@@ -195,7 +195,7 @@ class Stage0Segment(FrozenModel):
 class Stage0Segments(StrictModel):
     '''S-00 连续原文。原文件移走时返回显式 unavailable，而不是假装没有剔除项。'''
 
-    source_sha1: Sha1
+    normalized_source_sha1: Sha1
     available: bool
     reason: Annotated[str, Field(min_length=1)] | None
     segments: list[Stage0Segment] = Field(default_factory=list)
@@ -222,7 +222,7 @@ class Stage0EditRequest(StrictModel):
     '''人在 S-00 选择要剔除的分区；三格共同构成乐观锁。'''
 
     expected_round: int = Field(ge=1)
-    expected_source_sha1: Sha1
+    expected_normalized_source_sha1: Sha1
     expected_clean_sha1: Sha1
     removed_segment_ids: list[str] = Field(default_factory=list)
     actor: str = Field(min_length=1)
@@ -245,7 +245,7 @@ class Stage0ApprovalRequest(StrictModel):
 class Stage0MergeDecisionRequest(StrictModel):
     candidate_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
     expected_round: int = Field(ge=1)
-    expected_source_sha1: Sha1
+    expected_normalized_source_sha1: Sha1
     expected_clean_sha1: Sha1
     resolutions: list[Stage0ConflictResolution] = Field(default_factory=list)
     actor: str = Field(min_length=1)

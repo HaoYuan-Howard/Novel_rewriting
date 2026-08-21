@@ -168,8 +168,9 @@ class PartitionReport(StrictModel):
 
     # ── 3.1 两个指纹 = `R-0.6` 的下半段 ──────────────────────────────────────
 
-    #: **原始 txt** 的 sha1，从 stage0 透传。只用于追溯，**本层不判它**。
-    source_sha1: Sha1
+    #: **原始 txt 归一化之后那段文本**的 sha1，从 stage0 透传。只用于追溯，**本层不判它**。
+    #: ⚠ 不是原始文件字节的 digest，理由见 `contracts/schema/stage0.py` 同名字段。
+    normalized_source_sha1: Sha1
 
     #: **本层输入**（`stage0/clean_text.txt`）的 sha1。**[HARD]** 对不上即阻断（`R-1.3`）。
     #:

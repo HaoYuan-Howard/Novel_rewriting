@@ -82,9 +82,9 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 | `original_filename` | `str` | 是 | 含平台前缀与扩展名 | **码** |
 | `original_path` | `str` | 是 | 绝对路径。**文件被移走时是「不知道」，不是「不匹配」**；界面上传的那一份例外，见 §2.1 注 | **码** |
 | `code` | `str` | 是 | 本轮写报告所用代码版本；本层没有 `_provenance`，故落在顶层 | **盘·码** |
-| `source_sha1` | `str` | 是 | **原始 txt** 归一化后的 sha1。追溯用 | **码** |
+| `normalized_source_sha1` | `str` | 是 | **原始 txt** 归一化后的 sha1。追溯用 | **码** |
 | `clean_sha1` | `str` | 是 | **`clean_text.txt`** 的 sha1。**这才是 stage1 记的那个输入指纹** | **盘·码** |
-| `machine_source_sha1` / `machine_clean_sha1` | `str` | 是 | 本轮机器快照的 source/clean 身份；人工正式稿可与 machine clean 不同 | **盘·码** |
+| `machine_normalized_source_sha1` / `machine_clean_sha1` | `str` | 是 | 本轮机器快照的 source/clean 身份；人工正式稿可与 machine clean 不同 | **盘·码** |
 | `machine_snapshot_sha256` | `str` | 是 | 完整 `machine_snapshot.json` 的内容身份；三方合并的 base 绑定到这一值 | **盘·码** |
 | `source_encoding` | `str` | 是 | 五候选 `utf-8-sig` / `utf-32` / `utf-16` / `utf-8` / `gb18030` 之一。⚠ 全语料 163 本**只出现过 `utf-8`，另四个零样本**——取值面只能从代码来，样本再多也补不出没发生过的分支 | **码** |
 | `text_norm` | `str` | 是 | 恒 `v1:bom+crlf` | **码** |
@@ -96,8 +96,8 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 >
 > | 变了的是 | 说明 | 处置 |
 > |---|---|---|
-> | `source_sha1` | 原始 txt 被换/被改 | 全链重跑（`R-0.14` + stage1 的 `R-1.3`） |
-> | `clean_sha1`（`source_sha1` 未变） | 人编辑过剔除结果 | **保住**，归档进 `_rounds/`（`R-0.5`） |
+> | `normalized_source_sha1` | 原始 txt 被换/被改 | 全链重跑（`R-0.14` + stage1 的 `R-1.3`） |
+> | `clean_sha1`（`normalized_source_sha1` 未变） | 人编辑过剔除结果 | **保住**，归档进 `_rounds/`（`R-0.5`） |
 > | 两个都变 | 换了原文又编辑过 | 说清楚是两件事，别合并成一条「陈旧」 |
 
 > #### ⚠ `original_path` 断掉的两种情形，处置**相反**
@@ -270,7 +270,7 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
   |---|---|
   | 原文相同、机器结果变化、**无**人工内容分叉 | 允许 diff3 candidate（`ours == base`，diff3 退化为「取机器新结果」，theirs 账本可证正确） |
   | 原文相同、机器结果变化、**有**人工内容分叉 | 不写 candidate，正式对一字节不动；`stage0_human_edit_protected` 显式终态，出路=走 `stage0.edit --apply-edit-plan` 重选段 |
-  | 原文变化（`machine_snapshot.source_sha1` 对不上） | 连 candidate 都不谈（`stage0_source_changed`，R-0.14）：旧正式稿的 span 坐标系已失效；正式稿仍对旧原文成立 |
+  | 原文变化（`machine_snapshot.normalized_source_sha1` 对不上） | 连 candidate 都不谈（`stage0_source_changed`，R-0.14）：旧正式稿的 span 坐标系已失效；正式稿仍对旧原文成立 |
   | 已落盘的 candidate 其基线有人工分叉 | accept 端拒绝并**撤销归档**该 candidate（`_retire_merge_candidate`） |
 
 - **安全条件同时存在于生成端与接受端**：生成端不产危险 candidate，不等于接受端

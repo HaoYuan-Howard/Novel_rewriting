@@ -53,14 +53,14 @@ def test_stage0_continuous_view_rejects_a_gap_and_duplicate_ids():
         id='same', kind='keep', start=3, end=4, chars=1, flagged=False, text='丙')
     with pytest.raises(ValidationError, match='连续|重复'):
         Stage0Segments(
-            source_sha1='0' * 40,
+            normalized_source_sha1='0' * 40,
             available=True,
             reason=None,
             segments=[first, gap],
         )
     with pytest.raises(ValidationError):
         Stage0Segments(
-            source_sha1='0' * 40,
+            normalized_source_sha1='0' * 40,
             available=False,
             reason='',
             segments=[],

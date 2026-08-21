@@ -167,7 +167,7 @@ def remove_decoded(
         'code': code,
         'original_filename': Path(original_path).name,
         'source_ref': source_ref,
-        'source_sha1': decoded.source_sha1,
+        'normalized_source_sha1': decoded.normalized_source_sha1,
         'clean_sha1': prov.content_sha1(clean.encode('utf-8')),
         'source_encoding': decoded.encoding,
         'text_norm': TEXT_NORM,
@@ -185,7 +185,7 @@ def remove_decoded(
         original_filename=Path(original_path).name,
         source_ref=snapshot.source_ref,
         code=code,
-        source_sha1=decoded.source_sha1,
+        normalized_source_sha1=decoded.normalized_source_sha1,
         clean_sha1=prov.content_sha1(clean.encode('utf-8')),
         source_encoding=decoded.encoding,
         text_norm=TEXT_NORM,
@@ -193,7 +193,7 @@ def remove_decoded(
         total_code_points=len(text),
         body_code_points=len(clean),
         warnings=snapshot.warnings,
-        machine_source_sha1=snapshot.source_sha1,
+        machine_normalized_source_sha1=snapshot.normalized_source_sha1,
         machine_clean_sha1=snapshot.clean_sha1,
         machine_snapshot_sha256=snapshot.snapshot_sha256,
         approval=PendingApproval(status='pending'),
@@ -325,7 +325,7 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
         if old_snapshot.snapshot_sha256 != old.machine_snapshot_sha256:
             raise ArtifactUnreadable('machine_snapshot 与 removal_report 的快照指纹不一致')
         same_machine_result = (
-            old.machine_source_sha1 == result.machine_snapshot.source_sha1
+            old.machine_normalized_source_sha1 == result.machine_snapshot.normalized_source_sha1
             and old.machine_clean_sha1 == result.machine_snapshot.clean_sha1
             and old_snapshot.snapshot_sha256 == result.machine_snapshot.snapshot_sha256
         )
@@ -336,13 +336,13 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
 
         # 机器结果变化：先分诊再谈合并（2026-08-21 裁决，P0-3）。
         from novel.stages.stage0.merge import has_human_content_divergence, make_candidate
-        if result.machine_snapshot.source_sha1 != old.machine_source_sha1:
+        if result.machine_snapshot.normalized_source_sha1 != old.machine_normalized_source_sha1:
             # 原文变了 = 另一份原文：旧正式稿的 span 坐标系全部失效，diff3 无从谈起。
             # 正式稿一个字不动、仍对旧原文成立；换原文按 R-0.14 是新书的摄入。
             raise SourceConflict(
                 'stage0_source_changed：本次摄入的原文与产生当前正式稿的原文不是'
-                f'同一份（新 {result.machine_snapshot.source_sha1[:12]}… / 旧 '
-                f'{old.machine_source_sha1[:12]}…）。三方合并只在同一原文的坐标系内'
+                f'同一份（新 {result.machine_snapshot.normalized_source_sha1[:12]}… / 旧 '
+                f'{old.machine_normalized_source_sha1[:12]}…）。三方合并只在同一原文的坐标系内'
                 '有意义；正式稿未动、仍对旧原文成立。要换原文等于摄入另一本书：'
                 '另起书目录，或显式废弃当前书目录后重跑（R-0.14）')
         if has_human_content_divergence(old):
@@ -360,13 +360,13 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
         # 正式正文/报告一个字不动；只写可审阅的 base/ours/theirs 候选。
         candidate = make_candidate(
             expected_round=old.round,
-            expected_source_sha1=old.source_sha1,
+            expected_normalized_source_sha1=old.normalized_source_sha1,
             expected_clean_sha1=old.clean_sha1,
             base_snapshot=old_snapshot,
             theirs_snapshot=result.machine_snapshot,
             base_text=old_snapshot.clean_text,
             ours_text=old_clean,
-            theirs_source_sha1=result.machine_snapshot.source_sha1,
+            theirs_normalized_source_sha1=result.machine_snapshot.normalized_source_sha1,
             theirs_text=result.clean_text,
         )
         if dry_run:
@@ -420,7 +420,7 @@ def _apply_edit(
     *,
     removed: Sequence[RemovedSegment] | None = None,
     expected_round: int | None = None,
-    expected_source_sha1: str | None = None,
+    expected_normalized_source_sha1: str | None = None,
     expected_clean_sha1: str | None = None,
     expected_total_code_points: int | None = None,
     actor: str,
@@ -444,7 +444,7 @@ def _apply_edit(
             '请先从同轮 _rounds 归档恢复成对版本，再重跑编辑')
     expected = {
         'round': expected_round,
-        'source_sha1': expected_source_sha1,
+        'normalized_source_sha1': expected_normalized_source_sha1,
         'clean_sha1': expected_clean_sha1,
         'total_code_points': expected_total_code_points,
     }
@@ -465,8 +465,8 @@ def _apply_edit(
     entry = append_audit(
         ctx, seq=old.audit_seq + 1, previous_sha256=old.audit_head_sha256,
         action='edit', actor=actor.strip(), reason=reason.strip(),
-        before_source_sha1=old.source_sha1, before_clean_sha1=old.clean_sha1,
-        after_source_sha1=old.source_sha1, after_clean_sha1=next_clean_sha1,
+        before_normalized_source_sha1=old.normalized_source_sha1, before_clean_sha1=old.clean_sha1,
+        after_normalized_source_sha1=old.normalized_source_sha1, after_clean_sha1=next_clean_sha1,
     )
     payload = old.model_dump(mode='json')
     payload.update({
@@ -536,7 +536,7 @@ def run_merge_plan(ctx: RunContext, plan_path: str | Path) -> tuple[RemovalRepor
     common = dict(
         candidate_id=plan.candidate_id,
         expected_round=plan.expected_round,
-        expected_source_sha1=plan.expected_source_sha1,
+        expected_normalized_source_sha1=plan.expected_normalized_source_sha1,
         expected_clean_sha1=plan.expected_clean_sha1,
         actor=plan.actor,
         reason=plan.reason,
@@ -572,9 +572,9 @@ def run_edit_plan(
         decoded = decode_source_bytes(raw)
     except DecodeProblem as exc:
         raise SourceDecodeFailed(f'{source}: {exc}') from exc
-    if decoded.source_sha1 != old.source_sha1:
+    if decoded.normalized_source_sha1 != old.normalized_source_sha1:
         raise SourceConflict(
-            f'原始小说已从 {old.source_sha1[:10]} 变为 {decoded.source_sha1[:10]}；'
+            f'原始小说已从 {old.normalized_source_sha1[:10]} 变为 {decoded.normalized_source_sha1[:10]}；'
             '页面上的区间全部失效，请重新摄入并审阅')
     if len(decoded.text) != old.total_code_points:
         raise SourceConflict(
@@ -631,7 +631,7 @@ def run_edit_plan(
         reconstructed,
         removed=verified,
         expected_round=plan.expected_round,
-        expected_source_sha1=plan.expected_source_sha1,
+        expected_normalized_source_sha1=plan.expected_normalized_source_sha1,
         expected_clean_sha1=plan.expected_clean_sha1,
         expected_total_code_points=plan.expected_total_code_points,
         actor=plan.actor,
@@ -670,8 +670,8 @@ def run_approve(ctx: RunContext, *, actor: str, reason: str,
         entry = append_audit(
             ctx, seq=old.audit_seq + 1, previous_sha256=old.audit_head_sha256,
             action='approve', actor=actor.strip(), reason=reason.strip(),
-            before_source_sha1=old.source_sha1, before_clean_sha1=old.clean_sha1,
-            after_source_sha1=old.source_sha1, after_clean_sha1=old.clean_sha1,
+            before_normalized_source_sha1=old.normalized_source_sha1, before_clean_sha1=old.clean_sha1,
+            after_normalized_source_sha1=old.normalized_source_sha1, after_clean_sha1=old.clean_sha1,
             at=at,
         )
         payload = old.model_dump(mode='json')
@@ -714,21 +714,21 @@ def _request_matches_candidate(
     *,
     candidate_id: str,
     expected_round: int,
-    expected_source_sha1: str,
+    expected_normalized_source_sha1: str,
     expected_clean_sha1: str,
 ) -> None:
     stale: list[str] = []
     checks = (
         ('candidate_id', candidate_id, candidate.candidate_id),
         ('round', expected_round, old.round),
-        ('source_sha1', expected_source_sha1, old.source_sha1),
+        ('normalized_source_sha1', expected_normalized_source_sha1, old.normalized_source_sha1),
         ('clean_sha1', expected_clean_sha1, old.clean_sha1),
     )
     for name, expected, current in checks:
         if expected != current:
             stale.append(f'{name}: 请求={expected!r}, 当前={current!r}')
     if candidate.expected_round != old.round \
-            or candidate.expected_source_sha1 != old.source_sha1 \
+            or candidate.expected_normalized_source_sha1 != old.normalized_source_sha1 \
             or candidate.expected_clean_sha1 != old.clean_sha1:
         stale.append('候选自身的 expected_* 已不再对应正式稿')
     if candidate.base_snapshot_sha256 != old.machine_snapshot_sha256 \
@@ -745,7 +745,7 @@ def _merge_audit_entry(
     action: str,
     actor: str,
     reason: str,
-    after_source_sha1: str,
+    after_normalized_source_sha1: str,
     after_clean_sha1: str,
     candidate_id: str,
 ) -> Stage0AuditEntry:
@@ -757,8 +757,8 @@ def _merge_audit_entry(
     entry = append_audit(
         ctx, seq=old.audit_seq + 1, previous_sha256=old.audit_head_sha256,
         action=action, actor=actor, reason=reason,
-        before_source_sha1=old.source_sha1, before_clean_sha1=old.clean_sha1,
-        after_source_sha1=after_source_sha1, after_clean_sha1=after_clean_sha1,
+        before_normalized_source_sha1=old.normalized_source_sha1, before_clean_sha1=old.clean_sha1,
+        after_normalized_source_sha1=after_normalized_source_sha1, after_clean_sha1=after_clean_sha1,
         candidate_id=candidate_id,
     )
     if pending is not None and pending != entry:
@@ -827,7 +827,7 @@ def _completed_merge(
     action: str,
     candidate_id: str,
     expected_round: int,
-    expected_source_sha1: str,
+    expected_normalized_source_sha1: str,
     expected_clean_sha1: str,
     actor: str,
     reason: str,
@@ -850,15 +850,15 @@ def _completed_merge(
     if entry.actor != actor or entry.reason != reason:
         raise HumanEditProtected(
             'candidate 已终结，但 actor/reason 与本次重放不同；拒绝冒充原决定')
-    if (entry.before_source_sha1, entry.before_clean_sha1) != (
-            expected_source_sha1, expected_clean_sha1):
+    if (entry.before_normalized_source_sha1, entry.before_clean_sha1) != (
+            expected_normalized_source_sha1, expected_clean_sha1):
         raise HumanEditProtected('已提交 merge 的 before 哈希与本次乐观锁不同')
     wanted_round = expected_round + 1 if action == 'merge_accept' else expected_round
     if report.round != wanted_round:
         raise ArtifactUnreadable(
             f'已提交 {action} 的 report.round={report.round}，预期 {wanted_round}')
-    if (report.source_sha1, report.clean_sha1) != (
-            entry.after_source_sha1, entry.after_clean_sha1):
+    if (report.normalized_source_sha1, report.clean_sha1) != (
+            entry.after_normalized_source_sha1, entry.after_clean_sha1):
         raise ArtifactUnreadable('merge 报告的 after 哈希与审计条目不一致')
     if prov.content_sha1(clean.encode('utf-8')) != report.clean_sha1:
         raise ArtifactUnreadable('merge 报告已提交，但 clean_text 与报告 clean_sha1 不一致')
@@ -867,7 +867,7 @@ def _completed_merge(
         raise ArtifactUnreadable('当前 machine_snapshot 自身指纹校验失败')
     if (
         report.machine_snapshot_sha256 != snapshot.snapshot_sha256
-        or report.machine_source_sha1 != snapshot.source_sha1
+        or report.machine_normalized_source_sha1 != snapshot.normalized_source_sha1
         or report.machine_clean_sha1 != snapshot.clean_sha1
     ):
         raise ArtifactUnreadable('merge 报告与当前 machine_snapshot 不闭合')
@@ -882,7 +882,7 @@ def run_merge_accept(
     *,
     candidate_id: str,
     expected_round: int,
-    expected_source_sha1: str,
+    expected_normalized_source_sha1: str,
     expected_clean_sha1: str,
     resolutions: list[Stage0ConflictResolution],
     actor: str,
@@ -906,7 +906,7 @@ def run_merge_accept(
         ctx, store, old, old_clean,
         action='merge_accept', candidate_id=candidate_id,
         expected_round=expected_round,
-        expected_source_sha1=expected_source_sha1,
+        expected_normalized_source_sha1=expected_normalized_source_sha1,
         expected_clean_sha1=expected_clean_sha1,
         actor=actor, reason=reason, finalize_candidate=True)
     if completed is not None:
@@ -917,7 +917,7 @@ def run_merge_accept(
     _request_matches_candidate(
         candidate, old, candidate_id=candidate_id,
         expected_round=expected_round,
-        expected_source_sha1=expected_source_sha1,
+        expected_normalized_source_sha1=expected_normalized_source_sha1,
         expected_clean_sha1=expected_clean_sha1)
 
     # 接受端二次防御（2026-08-21，P0-3）：生成端不产危险 candidate，不等于这里
@@ -956,7 +956,7 @@ def run_merge_accept(
 
     entry = _merge_audit_entry(
         ctx, old, action='merge_accept', actor=actor, reason=reason,
-        after_source_sha1=snapshot.source_sha1,
+        after_normalized_source_sha1=snapshot.normalized_source_sha1,
         after_clean_sha1=merged_sha1, candidate_id=candidate.candidate_id,
     )
     payload = old.model_dump(mode='json')
@@ -964,7 +964,7 @@ def run_merge_accept(
         'original_filename': snapshot.original_filename,
         'source_ref': snapshot.source_ref.model_dump(mode='json'),
         'code': ctx.code,
-        'source_sha1': snapshot.source_sha1,
+        'normalized_source_sha1': snapshot.normalized_source_sha1,
         'clean_sha1': merged_sha1,
         'source_encoding': snapshot.source_encoding,
         'text_norm': snapshot.text_norm,
@@ -973,7 +973,7 @@ def run_merge_accept(
         'body_code_points': len(merged),
         'warnings': [item.model_dump(mode='json') for item in warnings_for(
             snapshot.total_code_points, len(merged), snapshot.removed)],
-        'machine_source_sha1': snapshot.source_sha1,
+        'machine_normalized_source_sha1': snapshot.normalized_source_sha1,
         'machine_clean_sha1': snapshot.clean_sha1,
         'machine_snapshot_sha256': snapshot.snapshot_sha256,
         'approval': {'status': 'approved', 'origin': 'human',
@@ -1019,7 +1019,7 @@ def run_merge_accept(
         ctx, store, report, merged,
         action='merge_accept', candidate_id=candidate_id,
         expected_round=expected_round,
-        expected_source_sha1=expected_source_sha1,
+        expected_normalized_source_sha1=expected_normalized_source_sha1,
         expected_clean_sha1=expected_clean_sha1,
         actor=actor, reason=reason, finalize_candidate=False)
     if committed is None:  # pragma: no cover - guarded by the exact writes above
@@ -1034,7 +1034,7 @@ def run_merge_reject(
     *,
     candidate_id: str,
     expected_round: int,
-    expected_source_sha1: str,
+    expected_normalized_source_sha1: str,
     expected_clean_sha1: str,
     actor: str,
     reason: str,
@@ -1054,7 +1054,7 @@ def run_merge_reject(
         ctx, store, old, clean,
         action='merge_reject', candidate_id=candidate_id,
         expected_round=expected_round,
-        expected_source_sha1=expected_source_sha1,
+        expected_normalized_source_sha1=expected_normalized_source_sha1,
         expected_clean_sha1=expected_clean_sha1,
         actor=actor, reason=reason, finalize_candidate=True)
     if completed is not None:
@@ -1065,13 +1065,13 @@ def run_merge_reject(
     _request_matches_candidate(
         candidate, old, candidate_id=candidate_id,
         expected_round=expected_round,
-        expected_source_sha1=expected_source_sha1,
+        expected_normalized_source_sha1=expected_normalized_source_sha1,
         expected_clean_sha1=expected_clean_sha1)
     if prov.content_sha1(clean.encode('utf-8')) != old.clean_sha1:
         raise ArtifactUnreadable('reject 恢复时正式 clean_text 与旧报告不一致')
     entry = _merge_audit_entry(
         ctx, old, action='merge_reject', actor=actor, reason=reason,
-        after_source_sha1=old.source_sha1,
+        after_normalized_source_sha1=old.normalized_source_sha1,
         after_clean_sha1=old.clean_sha1, candidate_id=candidate.candidate_id,
     )
     report = old.model_copy(update={
@@ -1088,7 +1088,7 @@ def run_merge_reject(
         ctx, store, report, clean,
         action='merge_reject', candidate_id=candidate_id,
         expected_round=expected_round,
-        expected_source_sha1=expected_source_sha1,
+        expected_normalized_source_sha1=expected_normalized_source_sha1,
         expected_clean_sha1=expected_clean_sha1,
         actor=actor, reason=reason, finalize_candidate=False)
     if committed is None:  # pragma: no cover - guarded by the exact write above

@@ -498,7 +498,7 @@ def test_a_tampered_source_chapter_no_is_a_finding_not_a_checker_crash():
     )
     partitioned = partition_text(
         removed.clean_text,
-        source_sha1=removed.report.source_sha1,
+        normalized_source_sha1=removed.report.normalized_source_sha1,
     )
     sections = list(partitioned.main_text.root)
     sections[0] = sections[0].model_copy(update={'source_chapter_no': 4242})
@@ -594,7 +594,7 @@ def test_two_line_fanwai_rolls_back_the_numeric_pseudo_chapter():
     removed = remove_bytes(raw, original_path='FQ_two_line_894.txt', code='test')
     partitioned = partition_text(
         removed.clean_text,
-        source_sha1=removed.report.source_sha1,
+        normalized_source_sha1=removed.report.normalized_source_sha1,
     )
 
     assert removed.clean_text == prefix
@@ -730,8 +730,8 @@ def test_no_artifact_holds_the_extra_body_beyond_its_mandated_preview(work):
       这条 HARD 此前只被 API 那条「原文不在就得说不可用」间接盖住，
       按编号 grep 找不到守卫——所以补一条**直接查产物面**的。
 
-    ⚠ 判据刻意**不是**「任何产物的 `content_sha1` 不得等于 `source_sha1`」：
-      零 removed 的干净书**合法地**满足 `clean_sha1 == source_sha1`（首跑零命中正是这个
+    ⚠ 判据刻意**不是**「任何产物的 `content_sha1` 不得等于 `normalized_source_sha1`」：
+      零 removed 的干净书**合法地**满足 `clean_sha1 == normalized_source_sha1`（首跑零命中正是这个
       形状，2026-08-21 起它同样停在人工闸门前）⇒ 那样写是假红。
       这里查番外正文本身，且取**预览窗口之外**的那一段：`head_preview`/`tail_preview`
       恒 80/40 码点，是 `R-0.2` 明文要求的残片（「丢了就没有第二次机会」），不是副本。
@@ -820,8 +820,8 @@ def test_unapproved_states_are_interpreted_not_conflated(work):
     entry = append_audit(
         _context(novel_dir, 'stage0.remove'), seq=legacy.audit_seq + 1,
         previous_sha256=legacy.audit_head_sha256, action='auto_approve',
-        actor=None, reason='合成一份历史自动批形态', before_source_sha1=None,
-        before_clean_sha1=None, after_source_sha1=legacy.source_sha1,
+        actor=None, reason='合成一份历史自动批形态', before_normalized_source_sha1=None,
+        before_clean_sha1=None, after_normalized_source_sha1=legacy.normalized_source_sha1,
         after_clean_sha1=legacy.clean_sha1)
     auto_report = legacy.model_copy(update={
         'approval': ApprovedApproval(
@@ -892,7 +892,7 @@ def _forged_edit_plan(work, sid: str, removal):
     manual = next(item.id for item in view.segments if item.kind == 'keep')
     request = Stage0EditRequest(
         expected_round=removal.report.round,
-        expected_source_sha1=removal.report.source_sha1,
+        expected_normalized_source_sha1=removal.report.normalized_source_sha1,
         expected_clean_sha1=removal.report.clean_sha1,
         removed_segment_ids=[*machine, manual],
         actor='forger', reason='伪造 provenance 的计划',

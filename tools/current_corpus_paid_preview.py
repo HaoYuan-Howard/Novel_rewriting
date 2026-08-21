@@ -209,12 +209,12 @@ def _source_book(book: BookSpec) -> dict[str, Any]:
         raise ValueError(f'source-only 隔离 base 必须不存在或为空：{base}')
     removal = remove_bytes(source.read_bytes(), original_path=str(source), code='preview000')
     partition = partition_text(
-        removal.clean_text, source_sha1=removal.report.source_sha1)
+        removal.clean_text, normalized_source_sha1=removal.report.normalized_source_sha1)
     novel_dir = base / paths.novel_dirname(title, sid)
     auto = (
         not removal.report.removed
         and not removal.report.warnings
-        and removal.report.source_sha1 == removal.report.clean_sha1
+        and removal.report.normalized_source_sha1 == removal.report.clean_sha1
     )
     return {
         'sid': sid,
@@ -223,7 +223,7 @@ def _source_book(book: BookSpec) -> dict[str, Any]:
         'novel_dir': novel_dir,
         'input_kind': 'source',
         'source': source,
-        'source_sha1': removal.report.source_sha1,
+        'normalized_source_sha1': removal.report.normalized_source_sha1,
         'clean_sha1': removal.report.clean_sha1,
         'stage0_auto_approval_eligible': auto,
         'stage0_gate': (
@@ -271,7 +271,7 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
     assert isinstance(main, MainText)
     assert isinstance(hook, HookCopy)
     assert isinstance(partition, PartitionReport)
-    if partition.input_sha1 != clean_sha1 or partition.source_sha1 != report.source_sha1:
+    if partition.input_sha1 != clean_sha1 or partition.normalized_source_sha1 != report.normalized_source_sha1:
         raise ValueError('Stage1 partition_report 不是当前已批准 Stage0 正文的分章账')
     if partition.num_chapters != len(main.root):
         raise ValueError('Stage1 num_chapters 与 main_text 条目数不一致')
@@ -282,7 +282,7 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
         'novel_dir': novel_dir,
         'input_kind': 'stage1',
         'source': None,
-        'source_sha1': report.source_sha1,
+        'normalized_source_sha1': report.normalized_source_sha1,
         'clean_sha1': report.clean_sha1,
         'stage0_auto_approval_eligible': report.approval.origin == 'auto_zero_hit',
         'stage0_gate': f'已批准（origin={report.approval.origin}）',

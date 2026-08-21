@@ -23,7 +23,7 @@ describe('Stage0Screen segment virtualization', () => {
       original_filename: 'book.txt',
       source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       clean_sha1: 'clean',
       source_encoding: 'utf-8',
       text_norm: 'NFC+LF',
@@ -38,7 +38,7 @@ describe('Stage0Screen segment virtualization', () => {
       edited_by_human: false,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       available: true,
       reason: null,
       segments: rows,
@@ -61,7 +61,7 @@ describe('Stage0Screen segment virtualization', () => {
       original_filename: 'book.txt',
       source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
-      source_sha1: '1111111111111111111111111111111111111111',
+      normalized_source_sha1: '1111111111111111111111111111111111111111',
       clean_sha1: '2222222222222222222222222222222222222222',
       source_encoding: 'utf-8',
       text_norm: 'NFC+LF',
@@ -77,7 +77,7 @@ describe('Stage0Screen segment virtualization', () => {
       edited_by_human: true,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      source_sha1: '1111111111111111111111111111111111111111',
+      normalized_source_sha1: '1111111111111111111111111111111111111111',
       available: true,
       reason: null,
       segments: [],
@@ -86,12 +86,12 @@ describe('Stage0Screen segment virtualization', () => {
       candidate_id: 'a'.repeat(64),
       created_at: 'now',
       expected_round: 2,
-      expected_source_sha1: '1'.repeat(40),
+      expected_normalized_source_sha1: '1'.repeat(40),
       expected_clean_sha1: '2'.repeat(40),
       base_snapshot_sha256: 'b'.repeat(64),
       base_clean_sha1: '3'.repeat(40),
       ours_clean_sha1: '4'.repeat(40),
-      theirs_source_sha1: '5'.repeat(40),
+      theirs_normalized_source_sha1: '5'.repeat(40),
       theirs_clean_sha1: '6'.repeat(40),
       base_text: 'base',
       ours_text: 'ours',
@@ -146,7 +146,7 @@ describe('Stage0Screen 批准前分章预览', () => {
       original_filename: 'book.txt',
       source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       clean_sha1: 'clean',
       source_encoding: 'utf-8',
       text_norm: 'NFC+LF',
@@ -161,7 +161,7 @@ describe('Stage0Screen 批准前分章预览', () => {
       edited_by_human: false,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       available: true,
       reason: null,
       segments: [
@@ -231,7 +231,7 @@ describe('Stage0Screen 批准前分章预览', () => {
       original_filename: 'book.txt',
       source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       clean_sha1: 'clean',
       source_encoding: 'utf-8',
       text_norm: 'NFC+LF',
@@ -246,7 +246,7 @@ describe('Stage0Screen 批准前分章预览', () => {
       edited_by_human: false,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       available: true,
       reason: null,
       segments: [

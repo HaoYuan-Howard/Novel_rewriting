@@ -113,11 +113,11 @@ def _original(report: RemovalReport,
         decoded = decode_source_bytes(raw)
     except DecodeProblem as exc:
         return None, f'原始文件已无法按摄入契约解码：{exc}'
-    if decoded.source_sha1 != report.source_sha1:
+    if decoded.normalized_source_sha1 != report.normalized_source_sha1:
         return (
             None,
-            f'原始文件内容已变化：报告 {report.source_sha1[:10]}，'
-            f'当前 {decoded.source_sha1[:10]}',
+            f'原始文件内容已变化：报告 {report.normalized_source_sha1[:10]}，'
+            f'当前 {decoded.normalized_source_sha1[:10]}',
         )
     if len(decoded.text) != report.total_code_points:
         return (
@@ -239,13 +239,13 @@ def stage0_segments(base: str | os.PathLike[str], sid: str) -> Stage0Segments:
     text, reason = _original(report, base)
     if text is None:
         return Stage0Segments(
-            source_sha1=report.source_sha1,
+            normalized_source_sha1=report.normalized_source_sha1,
             available=False,
             reason=reason,
         )
     clean = store.read_text(removal.CLEAN_REL)
     return Stage0Segments(
-        source_sha1=report.source_sha1,
+        normalized_source_sha1=report.normalized_source_sha1,
         available=True,
         reason=None,
         segments=_stage0_segments(report, text, clean),
@@ -300,7 +300,7 @@ def stage0_partition_preview(
     clean = store.read_text(removal.CLEAN_REL)
     input_sha1 = prov.content_sha1(clean.encode('utf-8'))
     try:
-        result = partition.partition_text(clean, source_sha1=report.source_sha1)
+        result = partition.partition_text(clean, normalized_source_sha1=report.normalized_source_sha1)
     except (ResidualNonbody, HookCopyMissing, TooFewChapters,
             PartitionChapterMismatch) as exc:
         # 分不出章本身就是审阅要看的结论——先修剔除，而不是等 stage1 跑起来才炸。
@@ -358,8 +358,8 @@ def stage0_edit_plan(
     stale = []
     if request.expected_round != report.round:
         stale.append(f'round 页面={request.expected_round} 当前={report.round}')
-    if request.expected_source_sha1 != report.source_sha1:
-        stale.append('source_sha1 已变化')
+    if request.expected_normalized_source_sha1 != report.normalized_source_sha1:
+        stale.append('normalized_source_sha1 已变化')
     if request.expected_clean_sha1 != report.clean_sha1:
         stale.append('clean_sha1 已变化')
     if stale:
@@ -391,7 +391,7 @@ def stage0_edit_plan(
     ]
     return Stage0EditPlan(
         expected_round=report.round,
-        expected_source_sha1=report.source_sha1,
+        expected_normalized_source_sha1=report.normalized_source_sha1,
         expected_clean_sha1=report.clean_sha1,
         expected_total_code_points=report.total_code_points,
         clean_text=clean,

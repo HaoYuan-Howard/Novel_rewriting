@@ -117,7 +117,7 @@ def _run_merge_decision(
         action=action,
         candidate_id=request.candidate_id,
         expected_round=request.expected_round,
-        expected_source_sha1=request.expected_source_sha1,
+        expected_normalized_source_sha1=request.expected_normalized_source_sha1,
         expected_clean_sha1=request.expected_clean_sha1,
         resolutions=request.resolutions if action == 'accept' else [],
         actor=request.actor,

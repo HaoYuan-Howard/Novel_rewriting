@@ -67,7 +67,7 @@ class DecodeProblem(ValueError):
 class DecodedSource:
     text: str
     encoding: str
-    source_sha1: str
+    normalized_source_sha1: str
 
 
 @dataclass(frozen=True)
@@ -132,7 +132,7 @@ def decode_source_bytes(raw: bytes) -> DecodedSource:
     return DecodedSource(
         text=text,
         encoding=encoding,
-        source_sha1=prov.content_sha1(text.encode('utf-8')),
+        normalized_source_sha1=prov.content_sha1(text.encode('utf-8')),
     )
 
 

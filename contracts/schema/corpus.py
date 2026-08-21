@@ -164,7 +164,7 @@ class CorpusLedgerSummary(StrictModel):
 
 class CorpusBookEntry(StrictModel):
     sid: str = Field(min_length=1)
-    source_sha1: Sha1
+    normalized_source_sha1: Sha1
     chapters: int = Field(ge=1)
     artifacts: list[CorpusArtifactEntry] = Field(min_length=1)
     ledger: CorpusLedgerSummary

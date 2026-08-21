@@ -202,7 +202,7 @@ export function Stage0Screen() {
       if (!sameIds(picked, initial)) {
         const request: Stage0EditRequest = {
           expected_round: current.round,
-          expected_source_sha1: current.source_sha1,
+          expected_normalized_source_sha1: current.normalized_source_sha1,
           expected_clean_sha1: current.clean_sha1,
           removed_segment_ids: [...picked],
           actor: actor.trim(),
@@ -255,7 +255,7 @@ export function Stage0Screen() {
       const request = {
         candidate_id: candidate.candidate_id,
         expected_round: candidate.expected_round,
-        expected_source_sha1: candidate.expected_source_sha1,
+        expected_normalized_source_sha1: candidate.expected_normalized_source_sha1,
         expected_clean_sha1: candidate.expected_clean_sha1,
         resolutions,
         actor: actor.trim(),
@@ -309,7 +309,7 @@ export function Stage0Screen() {
                   <div className={'flex flex-col items-end gap-2 text-right'}>
                     <Mono className={'text-tag text-ink-4'}>{current.original_filename}</Mono>
                     <Mono className={'text-tag text-ink-4'}>
-                      round {current.round} · sha1 {current.source_sha1.slice(0, 12)} · {current.source_encoding}
+                      round {current.round} · sha1 {current.normalized_source_sha1.slice(0, 12)} · {current.source_encoding}
                     </Mono>
                   </div>
                 </header>
