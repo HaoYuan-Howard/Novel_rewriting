@@ -457,7 +457,12 @@ HINGE_FAILURE_ROUTE: Final = {
 #:   · `field_patch`    —— 字段级局部修复（候选选择 / phrase 重给），不整章重付；
 #:   · `chapter_regen`  —— 整章定向重生成（`stage2.blueprint --chapters`），最后手段。
 #: ⚠ 首版刻意只有两级：`beat_patch` / `boundary_patch` 等更细的层级要等
-#:   七章高难包付费冒烟的真实 finding 分布出来再立（数据驱动，不预建框架）。
+#:   六章高难包付费冒烟的真实 finding 分布出来再立（数据驱动，不预建框架）。
+#: 【7A 实测（2026-08-21，无情道 6 章 40 hinge）】drift 3 例、末拍不到底 1 例，
+#:   四例同一个根因：**模型的 `end_para` 比它自己 `event` 里写到的内容早收 1–2 段**
+#:   （证据逐条在 `outputs/_ab/smoke_extraction_ir_v1_20260821.md`）。
+#:   ⇒ 「drift 一律整章重生成」在真数据上是**过度反应**：四例全部可由确定性边界
+#:   外扩修好、0 次付费调用。改路由前要先有裁决（见实验手册 §六），本表未动。
 REPAIR_ROUTE: Final = {
     '短语不在本章原文里': 'field_patch',              # 编的短语 → 局部重给 phrase
     '段号越界，本章没有那一段': 'chapter_regen',

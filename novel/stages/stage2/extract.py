@@ -1192,12 +1192,22 @@ def _run_summary_batch(ctx: RunContext, client: LlmClient,
     return {c.chapter_ordinal: c.summary for c in response.chapters}
 
 
-def request_blueprints(ctx: RunContext, client: LlmClient) -> dict[str, Any]:
+def request_blueprints(ctx: RunContext, client: LlmClient, *,
+                       chapters: tuple[int, ...] = ()) -> dict[str, Any]:
+    """发出**首轮形状**的逐章请求。`chapters` 为空 = 整跑（生产唯一用法）。
+
+    ⚠ `chapters` 只收窄「发哪几章」，一个字节都不改每章的 `(system, user)`
+    ——blueprint 的 user 只依赖 (书名, main_text, 目标章号, 名册)，与「本次跑几章」
+    无关。⇒ 子集跑出来的响应会原样命中整跑的缓存。契约实验的高难包冒烟
+    （`tools/smoke_stage2_ir1.py`）靠的就是这条性质，由
+    `tests/test_stage2_smoke_ir1.py` 钉住；**它不是给生产多开一条「只跑几章」的路**
+    （那条路是 `--chapters` 定向重生成，形状完全不同：带基线与 findings）。
+    """
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
     assert main_text is not None
     spec = _active_spec()
-    requests = build_prompts(ctx)
+    requests = build_prompts(ctx, chapters=chapters)
     raw, violations, errors = _run_chapter_requests(
         ctx, client, requests, model_cls=spec.response_model)
     return {

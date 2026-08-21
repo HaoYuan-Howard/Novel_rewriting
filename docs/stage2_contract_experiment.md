@@ -46,8 +46,9 @@ NOVEL_STAGE2_BLUEPRINT_CONTRACT=extraction-ir-v1   # 缺省 = bounded-fidelity-v
 - 有整章级根因时 `--patch` 会显式拒绝并指路 `--chapters`——先整章、后字段。
 - **摘要批失败的恢复 = 直接重跑整跑**：批失败发生在落盘前（无半份产物），
   重跑时逐章响应命中缓存、只重付摘要批那一次调用。不给它单独入口是刻意的。
-- 层2（beat/boundary patch）**刻意不预建**：等七章高难包付费冒烟的真实
-  finding 分布出来再立（数据驱动）。
+- 层2（beat/boundary patch）**刻意不预建**：等六章高难包付费冒烟的真实
+  finding 分布出来再立（数据驱动）。冒烟读数见 §六——四例失败同一个根因，
+  且都不需要付费修。
 
 ## 三、A/B 操作步骤与配对纪律
 
@@ -57,7 +58,26 @@ NOVEL_STAGE2_BLUEPRINT_CONTRACT=extraction-ir-v1   # 缺省 = bounded-fidelity-v
 2. worktree checklist：从主仓复制 `.env`；`NOVEL_CACHE_DIR` 指主仓 `.llm_cache`
    （worktree 不带缓存，miss 全是真钱）；
 3. 零成本重放先过：`-m corpus` 跑 `tests/test_stage2_replay_v2.py` +
-   `python tools/replay_stage2_contract.py --base <outputs> --md-out <留档>`。
+   `python tools/replay_stage2_contract.py --base <outputs> --md-out <留档>`；
+4. **高难章包冒烟**（`tools/smoke_stage2_ir1.py`）：整跑之前先用 6 章问一次
+   「Flash 按 V2 契约自己写出来的响应长什么样」。它发的是**首轮形状**的请求
+   （`--chapters` 定向重生成会把 v3 派生的基线喂进 prompt，那是另一个实验），
+   与整跑逐字节同构 ⇒ 这几次响应会被后续整跑的缓存原样接住，钱不花第二遍。
+   判据跑在内存里的合并稿上（未动章沿用盘上正式稿），**书目录零改动**。
+
+   ```text
+   # 0 成本预览
+   python -X utf8 tools/smoke_stage2_ir1.py --base <outputs> --sid <id> \
+       --chapters 6,8,13,15,17,18
+   # 真发：一次 2 章、一律前台（后台句柄会静默终止且报假 exit 0）
+   ... --chapters 6,15 --execute --skip-summary-batch
+   # 末批给全部目标章：章响应全部命中缓存（0 元），只有摘要批那一次真发
+   ... --chapters 6,8,13,15,17,18 --execute --json-out … --md-out …
+   ```
+
+   ⚠ 合并稿只能读**逐章绝对判据**。`beats_coarse` 的分母是**本书自己**的
+   字/拍中位数，换掉几章就把尺子一起挪了——它在冒烟里出现或消失都不作数
+   （报告会把这类判据单独标出来）。
 
 **四臂**：
 - A = Pro × v3（历史基线，复用已付产物，不重跑）；
@@ -104,3 +124,52 @@ patch_calls/accepted_chapter · 最终采纳降档响应的章节比例。
 「中段空隙」在 v3 盘上全是段间换行 ⇒ 连续覆盖对 stage4 尺寸读数零影响；
 events 拼接进生产被体积实测否决（书级摘要批是正解）。
 留档：主仓 `outputs/_ab/replay_extraction_ir_v1_20260821.{json,md}`。
+
+## 六、7A 高难包付费冒烟读数（2026-08-21，无情道 6 章）
+
+臂 = Flash × ir1（`deepseek-v4-flash` / effort high）。对照是盘上 **Pro × v3**
+基线——**两个变量一起动了**（模型 + 契约），token 差额不能单独归给契约；
+真正的 B 臂（Flash × v3）这本书没跑过，账本里 2026-08-21 之前一次 flash
+蓝图调用都没有。留档：`outputs/_ab/smoke_extraction_ir_v1_20260821.{json,md}`。
+
+| 读数 | ir1×Flash | 盘上 v3×Pro |
+|---|--:|--:|
+| 拍 | 24 | 40 |
+| hinge | 40 | 48 |
+| 逐字命中（exact / normalized） | 34 / 3 | — |
+| `hinge_ambiguous`（多处命中） | **0** | — |
+| `hinge_anchor_void`（编的短语） | **0** | — |
+| `hinge_drift` | **3** | 0 |
+| 末拍不到底 | **1** | — |
+| 有地点的拍 | 17 | 34 |
+| 付费调用 | 7 章调用（含 1 次闸拒重采）+ 1 摘要批 | 6 |
+| completion tokens | 45 656 | 64 819 |
+
+**一个根因解释四例失败**：三处 drift 与那一处「末拍不到底」，都是模型的
+`end_para` 比它**自己 `event` 里已经写到的内容**早收 1–2 段。逐例证据：
+
+- `b13_02` event 写「传送位置随机」，而那句话在第 13 段，`end_para=12`；
+- `b15_01` event 写「花杳拍大腿说那就好好学」，那句在第 11 段，`end_para=9`；
+- `b15_02` event 写「他说想学剑就当面来找我」，那句在第 26 段，`end_para=24`；
+- `b13_05` event 结尾就是「青悠的感动戛然而止」，那是第 39 段，`end_para=38`。
+
+⇒ **错的是那一个数字，不是 phrase，也不是分段思路**（event 与 hinge 自洽）。
+四例外扩 1–2 段即可，且逐例核过：不挤空下一拍、不挤掉下一拍自己的 hinge。
+现行 `REPAIR_ROUTE` 把 drift 一律送整章重生成，在这份数据上是过度反应。
+
+其余读数：
+
+- **歧义预测被推翻**：重放先验（按 v3 的短语）预计 ~1% 多处命中，实测 **0/40**
+  ——ir1 模型自己挑的短语更长（`师尊,第三十二式始终不得其要领,求捞。`），
+  「不唯一就多带几个字」那条起了作用。5A 的候选选择在本轮**一次都没触发**。
+- **place 三态被如实使用**（`P_EXPLICIT` 8 / `P_INHERIT` 9 / `P_UNKNOWN` 7），
+  链头继承 0 例。但第 6 章 5 拍全 `P_UNKNOWN`，而 v3 那 8 拍全填了「床上」
+  ——ir1 给了「不知道」这个合法出口，模型就用了。**这是产物质量的实质变化**，
+  不是判据能抓的东西，归 7B/人工审查。
+- **拍粗了 1.8 倍**（中位；min 1.2×、max 2.67×）。冒烟里 `beats_coarse` 的
+  两次命中是混架构假象（见 §三 ⚠）；按同倍率投影到全书，3 倍线从 206 抬到 400，
+  最粗章 224 仍在线内 ⇒ 判据大概率不会红，但**拍是 stage4 的规划单位**，
+  −40% 的拍数够格成为 7B 的头号观察项。
+- 摘要批一次调用产 6 章，长度 63–125 字（validator 界 50–400，prompt 目标
+  100–220）——**比 prompt 要求的短**，且第 8/15/18 章明显短于 v3 原摘要
+  （99 vs 189、120 vs 228、90 vs 257）。
