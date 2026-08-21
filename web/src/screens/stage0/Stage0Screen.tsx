@@ -468,7 +468,7 @@ export function Stage0Screen() {
                         </span>
                       ) : null}
                       {current.warnings.map((warning) => (
-                        <span key={warning.kind} className={'text-tag text-warn'}>
+                        <span key={warning.warning.kind} className={'text-tag text-warn'}>
                           {warning.message}
                         </span>
                       ))}

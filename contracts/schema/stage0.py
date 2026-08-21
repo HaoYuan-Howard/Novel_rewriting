@@ -26,7 +26,7 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
-    APPROVAL_STATE, NONBODY_KINDS, REMOVED_ORIGIN, SOURCE_ENCODINGS, STAGE0_WARNINGS,
+    APPROVAL_STATE, NONBODY_KINDS, REMOVED_ORIGIN, SOURCE_ENCODINGS,
 )
 from contracts.schema.base import Sha1, StrictModel
 from contracts.schema.common import HumanApproval
@@ -87,6 +87,57 @@ class RemovedSegment(StrictModel):
         if not 0 <= lo < hi:
             raise ValueError(f'span={self.span} 不是合法的半开区间（要求 0 <= 起 < 止）')
         return self
+
+
+# ── 可疑项：**结构化证据**，不带措辞 ────────────────────────────────────────
+#
+# 【为什么 2026-08-22 把 `message` 从产物里拿掉】
+# 上一版是 `{kind, message}`，措辞逐字落盘。三个后果：
+#   ① 措辞是**展示层**的东西，却被写进了长期持久化的产物 —— 改一次文案，
+#      盘上同一件事就有了两种写法，而它们都自称是当时的事实；
+#   ② 判据只能拿 `kind` 复算（`s0_warnings` 此前正是只比 kind），
+#      于是**数值错了不会红**：一条 `line_no` 记错的 `long_marker` 照样绿；
+#   ③ 界面想换个说法（加个百分比、改个语气）就得重跑产地。
+# ⇒ 产物只记**这条告警是怎么算出来的那几个数**，措辞由 `novel/core/warnings.py`
+#   现渲染。⚠ **阈值不进产物**：`BODY_RATIO_MIN` 之类的唯一落点是
+#   `contracts/invariants.py`，写进产物就是第二个落点，而两个落点必然分家。
+#   渲染时现取即可 —— 阈值改了，旧产物的措辞跟着变**才是对的**：
+#   它说的是「按今天的判准，这份数据长这样」。
+#
+# ⚠ **认告警一律用 `kind`，不许用措辞前缀**——这条纪律没变，只是现在连措辞都不落盘了。
+
+
+class EarlyCutWarning(StrictModel):
+    """正文占比过低。与 `R-0.9` 的 FAIL 是同一件事的两个出口：FAIL 阻断、本条解释原因。"""
+
+    kind: Literal['early_cut']
+    body_code_points: int = Field(ge=0)
+    total_code_points: int = Field(ge=1)
+
+
+class DropRatioWarning(StrictModel):
+    """剔除段占全文比例过高。与 `early_cut` 几乎同义，独立起作用的窗口很窄。"""
+
+    kind: Literal['drop_ratio']
+    removed_code_points: int = Field(ge=1)
+    total_code_points: int = Field(ge=1)
+
+
+class LongMarkerWarning(StrictModel):
+    """某条剔除记录的标记 core 超过实测真标记上限。⚠ 判的是 `core` 不是 `marker_line`。"""
+
+    kind: Literal['long_marker']
+    line_no: int = Field(ge=1)
+    marker_core_code_points: int = Field(ge=1)
+
+
+#: 一条可疑项。⚠ 它是**判别联合**，不能直接实例化——产地必须选一个具体类，
+#: 这正是「每一类的证据字段各不相同」的意思。取值面与 `STAGE0_WARNINGS` 的对账在
+#: `tests/test_invariants.py`，那条测试是这三个 `Literal` 不变成第二落点的全部保证。
+Stage0Warning = Annotated[
+    EarlyCutWarning | DropRatioWarning | LongMarkerWarning,
+    Field(discriminator='kind'),
+]
 
 
 class Stage0EditPlan(HumanApproval):
@@ -191,7 +242,7 @@ class MachineRemovalSnapshot(StrictModel):
     body_code_points: int = Field(ge=0)
     clean_text: str
     removed: list[RemovedSegment]
-    warnings: list['Stage0Warning']
+    warnings: list[Stage0Warning]
     snapshot_sha256: Sha256
 
     @model_validator(mode='after')
@@ -270,16 +321,6 @@ class Stage0AuditEntry(StrictModel):
             raise ValueError('人工决定必须给自报 actor')
         return self
 
-
-class Stage0Warning(StrictModel):
-    """一条可疑项。**认告警一律用 `kind`，不许用措辞前缀**——
-    措辞随时可改，而拿字符串开头去认告警的代码会在第一次改文案时**静默**失效。
-    """
-
-    kind: Literal[STAGE0_WARNINGS]
-
-    #: 人读的一句话。它进 S-13 校验报告当 `info` 级结论。
-    message: str = Field(min_length=1)
 
 
 class RemovalReport(StrictModel):

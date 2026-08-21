@@ -68,6 +68,8 @@ from contracts.schema.api import (
     PreviewRequest,
     Stage0EditRequest,
     Stage0ApprovalRequest,
+    Stage0Report,
+    Stage0WarningView,
     Stage0MergeDecisionRequest,
     Stage0Segment,
     Stage0Segments,
@@ -125,12 +127,14 @@ from contracts.schema.report import (
     finding,
 )
 from contracts.schema.stage0 import (
+    DropRatioWarning, EarlyCutWarning, LongMarkerWarning,
     MachineRemovalSnapshot, RemovalReport, RemovedSegment, Stage0AuditEntry,
     Stage0ConflictResolution, Stage0EditPlan, Stage0MergeCandidate,
     Stage0MergeConflict, Stage0MergeDecisionPlan, Stage0Warning,
 )
 from contracts.schema.stage1 import (
-    HookCopy, MainText, MainTextSection, PartitionReport, Stage1Warning,
+    HookCopy, MainText, MainTextSection, NoisyDuplicateWarning, PartitionReport,
+    Stage1Warning,
 )
 from contracts.schema.stage2 import (
     Address, AddressContextPatch, Arc, ArcTrack, Beat, Blueprint, Canon,
@@ -203,9 +207,10 @@ class DecodedArtifact:
 #: `STAGE2_CHAPTER_BLUEPRINTS`（2026-08-19）与 2026-08-22 阶段 B 那一批。
 #: **升版的正确形态就是这样**——在表里显式登记，而不是加一条迁移把旧字节读成新形状。
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
-    STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport),
-    STAGE0_MACHINE_SNAPSHOT: ArtifactSpec(MachineRemovalSnapshot),
-    STAGE0_MERGE_CANDIDATE: ArtifactSpec(Stage0MergeCandidate),
+    # ⚠ 2026-08-22 阶段 B 形状破坏（四份的理由逐条在 `_SHAPE_BREAKS` 里）。
+    STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport, 2),
+    STAGE0_MACHINE_SNAPSHOT: ArtifactSpec(MachineRemovalSnapshot, 2),
+    STAGE0_MERGE_CANDIDATE: ArtifactSpec(Stage0MergeCandidate, 2),
     STAGE0_AUDIT_ENTRY: ArtifactSpec(Stage0AuditEntry),
     # ⚠ 2026-08-22 阶段 B 形状破坏：`section_id` 删除、`source_chapter_label: str`
     #   改名改型为 `source_chapter_no: int` ⇒ 存量 v1 读不进来。
@@ -214,7 +219,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   真正的代价，已在 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里逐条答过。
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 2),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
-    STAGE1_PARTITION_REPORT: ArtifactSpec(PartitionReport),
+    STAGE1_PARTITION_REPORT: ArtifactSpec(PartitionReport, 2),
     STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding),
     STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),
     STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet),
@@ -393,9 +398,11 @@ __all__ = [
     'ResidualAdoptionRequest',
     # 八层
     'RemovalReport', 'RemovedSegment', 'Stage0EditPlan', 'Stage0Warning',
+    'EarlyCutWarning', 'DropRatioWarning', 'LongMarkerWarning',
     'MachineRemovalSnapshot', 'Stage0MergeCandidate', 'Stage0MergeConflict',
     'Stage0ConflictResolution', 'Stage0MergeDecisionPlan', 'Stage0AuditEntry',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',
+    'NoisyDuplicateWarning',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'ReaderRevealEvent',
     'GlobalEdit', 'SecretPatch', 'WorldRulePatch', 'CharacterEnumPatch',

@@ -72,6 +72,30 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '成书 txt 不是注册产物不受影响（用户 2026-08-22 裁定 stale 无害）；'
         '「四人成行」卡在 stage2、同日裁定作废 ⇒ 本次存量代价为零，形状破坏趁这个窗口',
     ),
+    'stage0/removal_report.json': (
+        2,
+        '2026-08-22 阶段 B：`warnings[]` 从 `{kind, message}` 换成按 kind 判别的'
+        '结构化证据（措辞退到 `novel/core/warnings.py`，不再落盘）',
+        '`stage0.remove --source <原文>` 免费重跑（零 LLM）。'
+        '⚠ 重建后审批回到 `pending`，必须人工重批才具执行资格',
+    ),
+    'stage0/machine_snapshot.json': (
+        2,
+        '2026-08-22 阶段 B：同 `removal_report` 的 warnings 结构化 ⇒ '
+        '`snapshot_digest` 的前像随之改变，盘上快照身份全部作废',
+        '同 `stage0/removal_report.json`：`stage0.remove` 重跑时一并重写',
+    ),
+    'stage0/merge_candidate.json': (
+        2,
+        '2026-08-22 阶段 B：内嵌的 `theirs_snapshot` 换形状 ⇒ `candidate_id` 前像改变',
+        'live candidate 一律作废、不迁移：它本来就是一次未决合并的中间态，'
+        '重跑 `stage0.remove` 会按新形状重新生成（若彼时仍有机器结果变化）',
+    ),
+    'stage1/partition_report.json': (
+        2,
+        '2026-08-22 阶段 B：`warnings[]` 同上换成结构化证据',
+        '`stage1.partition` 免费重跑（纯函数、零 LLM）',
+    ),
     'stage1/hook_copy.json': (
         2,
         '2026-08-22 阶段 B：恒 `sec_0001` 的 `section_id` 删除，产物收成 `{text}`',

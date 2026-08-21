@@ -19,6 +19,7 @@ from novel.core.ingest import (
     scan_text,
 )
 from novel.core.source import resolve_recorded_source
+from novel.core.warnings import describe
 from novel.report.builder import build
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.run import RunContext
@@ -261,31 +262,32 @@ def check(
         scanned=f'{report.body_code_points}/{report.total_code_points}={ratio:.4f}',
     ))
 
-    expected_warning_kinds = sorted(
-        warning.kind
-        for warning in warnings_for(
-            report.total_code_points,
-            report.body_code_points,
-            report.removed,
-        )
-    )
-    stored_warning_kinds = sorted(warning.kind for warning in report.warnings)
+    # ⚠ 2026-08-22 起比**整条证据**而不只是 `kind`。此前只比 kind，于是一条
+    #   `line_no` 或码点数记错的告警照样绿——而 warning 的全部价值就是那几个数。
+    #   证据落盘之后这条复算才真的有判别力。
+    expected_warnings = sorted(
+        (warning.model_dump(mode='json') for warning in warnings_for(
+            report.total_code_points, report.body_code_points, report.removed)),
+        key=lambda item: sorted(item.items()))
+    stored_warnings = sorted(
+        (warning.model_dump(mode='json') for warning in report.warnings),
+        key=lambda item: sorted(item.items()))
     warning_findings = [
-        _hit('s0_warnings', warning.message, warning.kind, warning.message)
+        _hit('s0_warnings', describe(warning), warning.kind, describe(warning))
         for warning in report.warnings
     ]
-    if stored_warning_kinds != expected_warning_kinds:
+    if stored_warnings != expected_warnings:
         warning_findings.append(_hit(
             's0_warnings',
-            f'warnings.kind={stored_warning_kinds}，按当前数值与标记复算应为 '
-            f'{expected_warning_kinds}',
-            str(stored_warning_kinds),
-            str(expected_warning_kinds),
+            f'warnings={stored_warnings}，按当前数值与标记复算应为 {expected_warnings}',
+            str(stored_warnings),
+            str(expected_warnings),
         ))
     out.append(ran(
         's0_warnings',
         warning_findings,
-        scanned=f'落盘 {len(report.warnings)} 条 · 复算 {len(expected_warning_kinds)} 条可疑项',
+        scanned=f'落盘 {len(report.warnings)} 条 · 复算 {len(expected_warnings)} 条可疑项'
+                f'（逐条比证据，不只比 kind）',
     ))
 
     if source is None:

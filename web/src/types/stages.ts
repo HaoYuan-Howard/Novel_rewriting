@@ -26,8 +26,16 @@ export interface Stage0Removed {
   origin: 'machine' | 'human'
 }
 
+/**
+ * 一条可疑项 = 产物里的**结构化证据** + 服务端现渲染的那句话。
+ *
+ * ⚠ `message` 只活在 HTTP 这一层（产物 2026-08-22 起只记证据）。**前端不许自己拼
+ * 措辞**：那会变成同一句话的第二个落点，与 `novel/core/warnings.py` 必然分家，
+ * 而分家之后界面上那句话按的是哪版阈值谁都说不清。
+ * ⚠ 认告警仍然一律用 `warning.kind`，不许拿 `message` 做分支。
+ */
 export interface Stage0Warning {
-  kind: string
+  warning: { kind: string; [evidence: string]: unknown }
   message: string
 }
 

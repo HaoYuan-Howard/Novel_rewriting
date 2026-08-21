@@ -24,7 +24,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, RootModel, model_validator
 
-from contracts.invariants import MIN_CHAPTERS, STAGE1_WARNINGS
+from contracts.invariants import MIN_CHAPTERS
 from contracts.schema.base import Sha1, StrictModel
 
 #: 码点半开区间。两处用它：文案段与逐章。
@@ -128,18 +128,32 @@ class HookCopy(StrictModel):
     text: NonBlankText
 
 
-class Stage1Warning(StrictModel):
-    """一条可疑项。落点是 **S-13 校验报告里 `stage1` 那一份的 `info` 级结论**——
-    `R-1.9`（不静默、不自动修正、不硬报错）靠这条路兑现，
-    **写进文件没人看才是真的静默**。
+class NoisyDuplicateWarning(StrictModel):
+    """同一个原始章号出现太多次，疑似固定标记被误判成章节号。
 
-    ⚠ **认告警一律用 `kind`，不许用措辞前缀。** 措辞不承重（逐字节等价那条验收
-    不覆盖 `partition_report`），随时可改；拿字符串开头去认告警的代码
-    会在第一次改文案时静默失效。
+    落点是 **S-13 校验报告里 `stage1` 那一份的 `info` 级结论**——`R-1.9`
+    （不静默、不自动修正、不硬报错）靠这条路兑现，**写进文件没人看才是真的静默**。
+
+    ⚠ **认告警一律用 `kind`，不许用措辞前缀。**
+    ⚠ 2026-08-22 起**只记证据不记措辞**（同 stage0，理由见 `contracts/schema/stage0.py`
+    「可疑项」那一段）：措辞由 `novel/core/warnings.py` 现渲染，阈值
+    `NOISY_DUPLICATE_MIN` 现取——它的唯一落点是 `contracts/invariants.py`，
+    写进产物就是第二个落点。
     """
 
-    kind: Literal[STAGE1_WARNINGS]
-    message: str = Field(min_length=1)
+    kind: Literal['noisy_duplicate']
+
+    #: 重复的那个**原始**章号（不是阅读序）。
+    source_chapter_no: int = Field(ge=0)
+
+    #: 它在全书出现了几次。恒 ≥ `NOISY_DUPLICATE_MIN`，否则这条告警不会被产出。
+    count: int = Field(ge=2)
+
+
+#: 一条可疑项。⚠ 本层**只有一类**，所以别名此刻就是那个类本身；
+#: 加第二类时改成 `Annotated[A | B, Field(discriminator='kind')]`（同 stage0）。
+#: 取值面与 `STAGE1_WARNINGS` 的对账在 `tests/test_invariants.py`。
+Stage1Warning = NoisyDuplicateWarning
 
 
 class PartitionReport(StrictModel):

@@ -11,6 +11,7 @@ from contracts.schema.stage0 import RemovalReport
 from contracts.schema.stage1 import HookCopy, MainText, PartitionReport
 from novel import prov
 from novel.core.ingest import chapter_number, scan_text, tail_is_only_end_marker
+from novel.core.warnings import describe
 from novel.report.builder import build
 from novel.report.findings import Outcome, ran
 from novel.run import RunContext
@@ -201,20 +202,24 @@ def check(
     ))
 
     warning_findings = [
-        _hit('s1_warnings', warning.message, warning.kind, warning.message)
+        _hit('s1_warnings', describe(warning), warning.kind, describe(warning))
         for warning in report.warnings
     ]
-    noisy_labels = sorted(
-        label for label, count in Counter(marker.chapter_no for marker in markers).items()
+    # ⚠ 2026-08-22 起比**整条证据**（章号 + 次数），不再只比条数。此前只对长度，
+    #   于是「报了一条但报错了章号/次数」照样绿——而那正是这条告警全部的内容。
+    expected = sorted(
+        (label, count)
+        for label, count in Counter(marker.chapter_no for marker in markers).items()
         if count >= NOISY_DUPLICATE_MIN
     )
-    if len(report.warnings) != len(noisy_labels):
+    stored = sorted((w.source_chapter_no, w.count) for w in report.warnings)
+    if stored != expected:
         warning_findings.append(_hit(
             's1_warnings',
-            f'复扫应报告 noisy_duplicate 章号 {noisy_labels}，'
-            f'partition_report 实际有 {len(report.warnings)} 条',
-            str(noisy_labels),
-            str(len(report.warnings)),
+            f'复扫应报告 noisy_duplicate (章号, 次数)={expected}，'
+            f'partition_report 落盘的是 {stored}',
+            str(expected),
+            str(stored),
         ))
     out.append(ran(
         's1_warnings',

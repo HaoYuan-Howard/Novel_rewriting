@@ -67,7 +67,7 @@ from contracts.schema.orchestration import (
     JobRecord, JobState, NovelOverview, QueueRun,
 )
 from contracts.schema.stage1 import HookCopy
-from contracts.schema.stage0 import Stage0ConflictResolution
+from contracts.schema.stage0 import RemovalReport, Stage0ConflictResolution, Stage0Warning
 from contracts.schema.stage2 import (
     BlueprintProvenance, ConflictStage, GlobalProvenance, Setting, WorldRule,
 )
@@ -106,6 +106,32 @@ AnchorCoverageState = Literal[ANCHOR_COVERAGE_STATE]
 # ─────────────────────────────────────────────────────────────────────────────
 # 零、S-00 / S-03 连续文本视图与零成本动作
 # ─────────────────────────────────────────────────────────────────────────────
+
+class Stage0WarningView(StrictModel):
+    """S-00 收到的一条可疑项 = **产物里的证据 + 现渲染的那句话**。
+
+    【为什么响应里要多这一格】产物 2026-08-22 起只记证据不记措辞
+    （`contracts/schema/stage0.py` 「可疑项」那一段）。措辞总得有人生成，而前端
+    自己拼就是同一句话的第二个落点——它必然与 `novel/core/warnings.py` 分家，
+    而分家之后前端说的那一句谁都不知道是按哪版阈值算的。
+    ⇒ 服务端现渲染、随响应发下去，前端只负责画。
+    ⚠ `message` **只活在这一层**：它不进产物，也不许被前端拿去做分支
+    （认告警仍然一律用 `kind`）。
+    """
+
+    warning: Stage0Warning
+    message: str = Field(min_length=1)
+
+
+class Stage0Report(RemovalReport):
+    """`GET /api/novels/:sid/stage0/report` 的那一份 = 产物 + 渲染好的告警。
+
+    ⚠ 它**继承**产物模型而不是抄一份：22 个字段抄第二遍就是 22 个会分家的字段。
+    只覆盖 `warnings` 一格——这一格恰好是「产物记事实、视图给措辞」的分界线。
+    """
+
+    warnings: list[Stage0WarningView]
+
 
 class Stage0Segment(FrozenModel):
     '''S-00 原始文本上的一个连续分区；坐标恒是 Python 码点半开区间。'''

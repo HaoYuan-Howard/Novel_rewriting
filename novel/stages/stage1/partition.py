@@ -52,14 +52,12 @@ class PartitionResult:
 
 
 def _warning(labels: list[int]) -> list[Stage1Warning]:
+    """⚠ 只产证据，措辞归 `novel/core/warnings.py::describe`（2026-08-22）。"""
     out: list[Stage1Warning] = []
     for label, count in sorted(Counter(labels).items()):
         if count >= NOISY_DUPLICATE_MIN:
             out.append(Stage1Warning(
-                kind='noisy_duplicate',
-                message=f'chapter_no={label} 出现 {count} 次（≥{NOISY_DUPLICATE_MIN}），'
-                        '疑似固定标记被误判成章节号，请人工核对原文标记规律',
-            ))
+                kind='noisy_duplicate', source_chapter_no=label, count=count))
     return out
 
 

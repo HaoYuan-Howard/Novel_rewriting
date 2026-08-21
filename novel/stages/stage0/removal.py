@@ -30,6 +30,9 @@ from contracts.invariants import (
 )
 from contracts.schema.report import CheckReport
 from contracts.schema.stage0 import (
+    DropRatioWarning,
+    EarlyCutWarning,
+    LongMarkerWarning,
     RemovalReport,
     MachineRemovalSnapshot,
     RemovedSegment,
@@ -105,19 +108,18 @@ def warnings_for(total: int, body: int,
     ratio = body / total if total else 0.0
     removed_points = sum(segment.code_points for segment in removed)
     if ratio < BODY_RATIO_MIN:
-        out.append(Stage0Warning(
-            kind='early_cut',
-            message=f'清理后正文只占 {ratio:.1%}，低于 {BODY_RATIO_MIN:.0%}'))
+        out.append(EarlyCutWarning(
+            kind='early_cut', body_code_points=body, total_code_points=total))
     if total and removed_points / total > DROP_RATIO_MAX:
-        out.append(Stage0Warning(
+        out.append(DropRatioWarning(
             kind='drop_ratio',
-            message=f'剔除段占全文 {removed_points / total:.1%}，高于 {DROP_RATIO_MAX:.0%}'))
+            removed_code_points=removed_points, total_code_points=total))
     for segment in removed:
         length = len(marker_core(segment.marker_line))
         if length > NONBODY_MARKER_WARN_CP:
-            out.append(Stage0Warning(
+            out.append(LongMarkerWarning(
                 kind='long_marker',
-                message=f'第 {segment.line_no} 行标记 core 长 {length}，超过实测真标记上限'))
+                line_no=segment.line_no, marker_core_code_points=length))
     return out
 
 

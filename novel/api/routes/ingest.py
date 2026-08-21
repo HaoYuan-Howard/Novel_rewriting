@@ -18,13 +18,14 @@ from contracts.schema.api import (
     Stage0EditRequest,
     Stage0MergeDecisionRequest,
     Stage0PartitionPreview,
+    Stage0Report,
     Stage0Segments,
     Stage1Chapters,
     Stage1Segments,
     UploadResult,
 )
 from contracts.schema.orchestration import JobRecord
-from contracts.schema.stage0 import RemovalReport, Stage0MergeCandidate, Stage0MergeDecisionPlan
+from contracts.schema.stage0 import Stage0MergeCandidate, Stage0MergeDecisionPlan
 from novel.api.deps import checked_sid, get_base
 from novel.errors import NovelError, SourcePathRejected
 from novel.orchestrator import approvals, jobs, uploads
@@ -33,11 +34,11 @@ from novel.views import ingest
 router = APIRouter()
 
 
-@router.get('/novels/{sid}/stage0/report', response_model=RemovalReport)
+@router.get('/novels/{sid}/stage0/report', response_model=Stage0Report)
 def get_stage0_report(
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
-) -> RemovalReport:
+) -> Stage0Report:
     return ingest.stage0_report(base, sid)
 
 

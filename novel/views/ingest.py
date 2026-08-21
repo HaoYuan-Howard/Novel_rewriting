@@ -18,6 +18,7 @@ from contracts.schema.api import (
     Stage0EditRequest,
     Stage0PartitionPreview,
     Stage0PreviewChapter,
+    Stage0Report,
     Stage0Segment,
     Stage0Segments,
     Stage1ChapterRow,
@@ -34,6 +35,7 @@ from novel.core.ingest import (
     DecodeProblem, ScanResult, decode_source_bytes, nonbody_kind, scan_text,
 )
 from novel.core.source import resolve_recorded_source
+from novel.core.warnings import describe
 from novel.errors import (
     ApprovalRequired,
     ArtifactUnreadable,
@@ -68,9 +70,20 @@ def _store(base: str | os.PathLike[str], sid: str, node: str) -> ArtifactStore:
     return ArtifactStore(readonly_ctx(novel_dir, node, prov.code_version()))
 
 
-def stage0_report(base: str | os.PathLike[str], sid: str) -> RemovalReport:
+def stage0_report(base: str | os.PathLike[str], sid: str) -> Stage0Report:
+    """S-00 的那份报告。**产物照读，告警措辞在这一层现渲染。**
+
+    ⚠ 返回的不是产物模型本身而是它的子类（多一格渲染好的 `message`）：产物只记
+    证据，措辞的唯一落点是 `novel/core/warnings.py`——前端自己拼就是第二个落点。
+    """
     store = _store(base, sid, STAGE0_NODE)
-    return store.read_own(RemovalReport, removal.REPORT_REL)[0]
+    report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
+    return Stage0Report.model_validate({
+        **report.model_dump(mode='json'),
+        'warnings': [{'warning': warning.model_dump(mode='json'),
+                      'message': describe(warning)}
+                     for warning in report.warnings],
+    })
 
 
 def _original(report: RemovalReport,
