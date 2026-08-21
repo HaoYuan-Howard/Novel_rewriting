@@ -198,7 +198,14 @@ class PartitionReport(StrictModel):
     #: 只写进去 8 条）；取自 `len(main_text)` 的话这条判据就成了恒等式、
     #: **永远不可能红**，而它要抓的那个 bug 会原封不动地活下来。
     #: ⇒ 产地一侧的计数来源与写盘来源**必须是两条路**。
-    num_chapters: int = Field(ge=MIN_CHAPTERS)
+    #:
+    #: ⚠ **名字就是那条语义**（2026-08-22 从 `num_chapters` 改名）：它数的是
+    #: **原文里独立扫出来的章标记个数**，不是「这本书有几章」。旧名字读起来像后者，
+    #: 于是「写成 `len(main_text)` 不就完了」是个看着无害的念头——而那一改
+    #: 恰好把 `R-1.5` 变成恒等式。名字说得出来路，判据才守得住。
+    #: ⚠ schema 本身证明不了「两个值来自独立代码路径」，那要靠判据
+    #: （`s1_chapter_count` 的四路计数交叉核对）与定向反例，不是靠这行注释。
+    detected_chapter_marker_count: int = Field(ge=MIN_CHAPTERS)
 
     #: 全语料 `True`×46 · `False`×117。**它是 `R-1.14` 的前件**：
     #: 三段式记账的第三段（切点之后、第一个非正文标记之前）**只在它为 `True` 时非空**。
@@ -228,7 +235,7 @@ class PartitionReport(StrictModel):
     #: 文案段在归一化原文上的码点半开区间。恒 `[0, x)`。F6 已临时跑盘。
     hook_span: Span
 
-    #: 逐章。**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal`。F6 已临时跑盘。
+    #: 逐章。**长度恒 == `detected_chapter_marker_count`**，顺序即 `chapter_ordinal`。F6 已临时跑盘。
     chapter_spans: list[Span]
 
     @model_validator(mode='after')
@@ -247,10 +254,10 @@ class PartitionReport(StrictModel):
                                  for i, s in enumerate(self.chapter_spans))]:
             if not 0 <= lo < hi:
                 raise ValueError(f'{name}=({lo}, {hi}) 不是合法的半开区间')
-        if len(self.chapter_spans) != self.num_chapters:
+        if len(self.chapter_spans) != self.detected_chapter_marker_count:
             raise ValueError(
-                f'chapter_spans 有 {len(self.chapter_spans)} 条而 num_chapters='
-                f'{self.num_chapters}——对照屏会按 span 画高亮，少一条就少画一章'
+                f'chapter_spans 有 {len(self.chapter_spans)} 条而 detected_chapter_marker_count='
+                f'{self.detected_chapter_marker_count}——对照屏会按 span 画高亮，少一条就少画一章'
             )
         if self.hook_span[1] > self.body_code_points:
             raise ValueError(

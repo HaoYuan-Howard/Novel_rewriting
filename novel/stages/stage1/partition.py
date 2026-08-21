@@ -106,7 +106,7 @@ def partition_text(clean_text: str, *, normalized_source_sha1: str) -> Partition
         input_sha1=prov.content_sha1(clean_text.encode('utf-8')),
         total_code_points=len(clean_text),
         body_code_points=body_limit,
-        num_chapters=len(markers),
+        detected_chapter_marker_count=len(markers),
         has_end_marker=scan.end_marker is not None,
         warnings=_warning([marker.chapter_no for marker in markers]),
         hook_span=(0, first_marker),

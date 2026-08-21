@@ -446,10 +446,10 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
     scan = scan_text(text)
     body_limit = scan.end_marker if scan.end_marker is not None else len(text)
     markers = [marker for marker in scan.chapters if marker.line_start < body_limit]
-    if len(markers) != len(material.main.root) or len(markers) != report.num_chapters:
+    if len(markers) != len(material.main.root) or len(markers) != report.detected_chapter_marker_count:
         raise PartitionChapterMismatch(
             f'当前识别 {len(markers)} 个章节标记，main_text 有 {len(material.main.root)} 章，'
-            f'partition_report 记 {report.num_chapters} 章')
+            f'partition_report 记 {report.detected_chapter_marker_count} 章')
     first_marker = markers[0].line_start if markers else body_limit
     if report.hook_span != (0, first_marker) or material.hook.text != text[:first_marker]:
         raise PartitionChapterMismatch('hook_copy 与 partition_report.hook_span / clean_text 对不上')

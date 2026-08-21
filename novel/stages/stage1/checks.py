@@ -113,7 +113,7 @@ def check(
     count_problems: list[str] = []
     independent = len(markers)
     observed_counts = {
-        'partition_report.num_chapters': report.num_chapters,
+        'partition_report.detected_chapter_marker_count': report.detected_chapter_marker_count,
         'main_text': len(sections),
         'chapter_spans': len(report.chapter_spans),
         'clean_text 章节标记': independent,

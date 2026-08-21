@@ -273,8 +273,8 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
     assert isinstance(partition, PartitionReport)
     if partition.input_sha1 != clean_sha1 or partition.normalized_source_sha1 != report.normalized_source_sha1:
         raise ValueError('Stage1 partition_report 不是当前已批准 Stage0 正文的分章账')
-    if partition.num_chapters != len(main.root):
-        raise ValueError('Stage1 num_chapters 与 main_text 条目数不一致')
+    if partition.detected_chapter_marker_count != len(main.root):
+        raise ValueError('Stage1 detected_chapter_marker_count 与 main_text 条目数不一致')
     return {
         'sid': book.sid,
         'title': paths.title_of(novel_dir),

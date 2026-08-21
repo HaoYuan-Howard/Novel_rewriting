@@ -150,7 +150,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 |---|---|---|---|---|
 | `total_code_points` | `int` | 是 | 8088 ~ 41224。**[HARD]** 与复算的原文长度交叉核对 | **三源** |
 | `body_code_points` | `int` | 是 | `[0, body_limit)` = 文案 + 正文，即保留下来的部分 | **三源** |
-| `num_chapters` | `int` | 是 | **≥ 2**（`R-1.13`）。全语料 2 ~ 39。**[HARD]** 必须等于 `main_text` 的长度 | **三源** |
+| `detected_chapter_marker_count` | `int` | 是 | **≥ 2**（`R-1.13`）。全语料 2 ~ 39。**[HARD]** 必须等于 `main_text` 的长度 | **三源** |
 | `has_end_marker` | `bool` | 是 | `True`×46 · `False`×117。**[HARD]** `R-1.14` 的第三段只在它为 `True` 时非空 | **盘·码** |
 
 **`body_ratio` 不落盘，判它的那条判据也不在本层**（`R-0.9` 在 stage0）。
@@ -159,15 +159,15 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 ⚠ `total_code_points` / `body_code_points` **仍然留着**——它们不是为了算这个比值，
 是 `R-1.3` 的交叉核对和 `R-1.14` 的三段记账要用。
 
-> #### ⚠ `num_chapters` **必须由分章那一趟独立数出来，不许写成 `len(sections)`**
+> #### ⚠ `detected_chapter_marker_count` **必须由分章那一趟独立数出来，不许写成 `len(sections)`**
 >
 > 这是它存在的**唯一**理由。`R-1.5`（`HARD`：章数必须等于章表长度）防的是
 > 「两行式番外造出一个被跳过的空章」——**认出 9 章、只写进去 8 条**。
-> 若 `num_chapters` 取自 `len(main_text)`，这条判据就成了恒等式，**永远不可能红**，
+> 若 `detected_chapter_marker_count` 取自 `len(main_text)`，这条判据就成了恒等式，**永远不可能红**，
 > 而它要抓的那个 bug 会原封不动地活下来。
 > ⇒ 载体阶段要配一条后置条件：产地一侧的计数来源与写盘来源**必须是两条路**。
 
-> #### `num_chapters < 2` → 显式终态（`R-1.13`）
+> #### `detected_chapter_marker_count < 2` → 显式终态（`R-1.13`）
 >
 > 只有一章的「书」不接受重构。**不带字数阈值**——原型那条是「≤1 章且 >3000 字才告警」，
 > 而语料里最短的书也有 8088 字，那个阈值从来没起过作用；留着它只会让判据看起来标定过。
@@ -220,7 +220,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
 | `hook_span` | `[int,int]` | 是 | 文案段在归一化原文上的码点半开区间。恒 `[0, x)`，且 `x <= body_code_points` | **盘·码** |
-| `chapter_spans` | `[[int,int], …]` | 是 | 逐章，**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal`；**有序、两两不重叠、每条 `end <= body_code_points`**（2026-08-21 收紧为载体后置条件） | **盘·码** |
+| `chapter_spans` | `[[int,int], …]` | 是 | 逐章，**长度恒 == `detected_chapter_marker_count`**，顺序即 `chapter_ordinal`；**有序、两两不重叠、每条 `end <= body_code_points`**（2026-08-21 收紧为载体后置条件） | **盘·码** |
 
 **为什么不加进 `main_text.json`。** 那是最自然的位置——span 是章的属性。
 但 span 是分章过程的诊断与审计结果，不是下游正文消费契约；因此放在
@@ -268,8 +268,8 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 
 | 不变量 | 全语料实况 | 对应需求 |
 |---|---|---|
-| `num_chapters == len(main_text)` | 163/163 成立 | `R-1.5`（**两条独立来路，见 §3.2**） |
-| `num_chapters >= 2` | 153/163 成立（**10 本拒收**） | `R-1.13` |
+| `detected_chapter_marker_count == len(main_text)` | 163/163 成立 | `R-1.5`（**两条独立来路，见 §3.2**） |
+| `detected_chapter_marker_count >= 2` | 153/163 成立（**10 本拒收**） | `R-1.13` |
 | **切点与第一个非正文标记之间：为空，或只有一个完结标记行** | **163/163 成立** | `R-1.14` |
 | `input_sha1` 与盘上 `stage0/clean_text.txt` 复算值一致 | — | `R-1.3` |
 | `total_code_points` 与复算的原文长度一致 | — | `R-1.3` |
