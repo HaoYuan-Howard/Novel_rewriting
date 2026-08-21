@@ -715,13 +715,14 @@ def _canon(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 五、拍与区间（7 HARD · 1 INFO）+ 相关度量
+# 五、拍与区间（7 HARD · 2 INFO）+ 相关度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BEAT_RULES = ('beat_id_unique', 'beat_id_format', 'span_unlocatable',
                'verbatim_failed', 'edge_hole', 'beats_collapsed',
                'beats_coarse', 'span_coverage', 'span_coverage_per_chapter',
-               'uncovered_holes', 'place_inherit_without_base')
+               'uncovered_holes', 'place_inherit_without_base',
+               'place_explicit_unlocatable')
 
 
 def _beats(c: _Ctx) -> list[Outcome]:
@@ -769,6 +770,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
             out.append(unverifiable(rid, _NO_MAIN_TEXT))
         out += _verbatim(c)
         out += _place_inherit(c)
+        out += _place_unlocatable(c)
         return out
 
     n_all = len(all_beats)
@@ -863,6 +865,7 @@ def _beats(c: _Ctx) -> list[Outcome]:
 
     out += _verbatim(c)
     out += _place_inherit(c)
+    out += _place_unlocatable(c)
     return out
 
 
@@ -882,6 +885,28 @@ def _place_inherit(c: _Ctx) -> list[Outcome]:
                                 f'（已落 place=null）：{_cut(rows)}',
                          evidence=sorted(rows))] if rows else [],
                 scanned=f'{len(rows)} 条链头 P_INHERIT 记录')]
+
+
+def _place_unlocatable(c: _Ctx) -> list[Outcome]:
+    """`place_explicit_unlocatable`（INFO）：`P_EXPLICIT` 的地点名在截止本章正文里找不到。
+
+    与 `_place_inherit` 同族——断言 `_provenance` 里的账，不是字段值。
+    ⚠ **这是 `extraction-ir-v1.1` 的配套探针，不是违约判定**：ir1.1 把 `P_EXPLICIT`
+    提回首选档以救回填充率，而模型规避加压的唯一出路是**编一个地点**。
+    读法是**对比着读**——`有地点的拍` 涨而这条同步涨，涨的是幻觉不是覆盖。
+    ⚠⚠ **命中不等于违规**：盘上基线（Pro×v3 无情道）是 17/132 ≈ 13%，
+    而那 17 条逐条看全是**用原文成分组合**出来的（「武场外」「黎玄的洞府」）。
+    ⇒ 判 INFO，且读的是**相对基线的变化**，不是绝对值。
+    """
+    rows = [f'{beat_id}:{name}' for beat_id, name in
+            ((str(r[0]), str(r[1])) for r in
+             (c.prov.get('place_explicit_unlocatable') or []) if len(r) >= 2)]
+    return [ran('place_explicit_unlocatable',
+                [finding('place_explicit_unlocatable',
+                         detail=f'{len(rows)} 拍的 P_EXPLICIT 地点名在截止本章的正文里'
+                                f'找不到：{_cut(rows)}',
+                         evidence=sorted(rows))] if rows else [],
+                scanned=f'{len(rows)} 条 P_EXPLICIT 无字面依据记录')]
 
 
 def _uncovered(c: _Ctx, min_chars: int) -> list[tuple[Any, int, int, int, str, str]]:

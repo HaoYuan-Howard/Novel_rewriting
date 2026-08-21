@@ -78,6 +78,22 @@ CONTRACTS: dict[str, ContractSpec] = {
         projection_fn=canonical_ir_projection,
         needs_summary_batch=True,
     ),
+    # ⚠ 与上面那条**只差 `system` 一处**：响应模型、编译器、投影函数、摘要批开关
+    #   全部原样共用（place 的**形状**没动，动的只是 system 里那一段措辞的次序）。
+    #   这不是省事——它是**单变量对照能成立的前提**：两臂的差别若不止一处，
+    #   跑出来的读数就归不了因。同理，结构提示复用 `BLUEPRINT_HINT_V2`，
+    #   另起一份只会让两处漂移。
+    #   改动的理由与风险写在 `prompts.py::_BLUEPRINT_TPL_V1_1` 上方。
+    'extraction-ir-v1.1': ContractSpec(
+        architecture='extraction-ir-v1.1',
+        system=with_json_shape(prompts.BLUEPRINT_SYS_V1_1, prompts.BLUEPRINT_HINT_V2),
+        sys_name='BLUEPRINT_SYS_V1_1',
+        response_model=ChapterBlueprintsResponseV2,
+        schema_mode='prompt_plus_local_validation',
+        compile_fn=compile_v2,
+        projection_fn=canonical_ir_projection,
+        needs_summary_batch=True,
+    ),
 }
 
 assert set(CONTRACTS) == set(BLUEPRINT_ARCHITECTURES), \

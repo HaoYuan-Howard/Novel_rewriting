@@ -339,3 +339,112 @@ def test_projection_is_honest_about_failed_hinges():
     projected = canonical_ir_projection(artifact['blueprints'][0], CH1)
     assert projected['beats'][0]['hinges'] == \
         [{'kind': '物件', 'phrase': None}], '失败的 hinge 不许把 phrase 兜底成别的'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 五、`place_explicit_unlocatable`：`extraction-ir-v1.1` 的配套探针
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 【它在防什么】ir1.1 把 `P_EXPLICIT` 从「三选一」提回「首选档」，为的是救回地点
+# 填充率（ir1 相对 v3 掉 −59%，两个模型上都掉 ⇒ 契约的责任）。加压时模型会找最省力
+# 的出路，而 place 是**单字段**、没有别的字段可牺牲 ⇒ 唯一的规避路径是**编一个地点**。
+#
+# ⚠⚠ 【匹配面是「截止本章正文」，这一族测试的核心就是钉住它】三个面在盘上
+#     （Pro×v3 无情道，132 个有地点的拍）实测：本拍区间 **78%** 找不到 ·
+#     本章全文 42% · 截止本章正文 **13%**。按本拍区间判等于让噪声淹死信号。
+# ⚠ 全族**只断言账，不断言产物被改**——它是 INFO，不改产物是它定义的一部分。
+
+
+def test_a_place_written_in_the_source_is_not_flagged():
+    """地点名在截止本章的正文里找得到 ⇒ 不记账。"""
+    _, prov = _compile(_data(_beat(2, place={'mode': 'P_EXPLICIT', 'name': '井边'}),
+                             _beat(5)))
+    assert prov['place_explicit_unlocatable'] == []
+
+
+def test_a_place_outside_its_own_beat_is_still_not_flagged():
+    """⚠⚠ **本族最重要的一条**：地点写在**别的拍**里照样算找得到。
+
+    「三十文」只在第 5 段出现，而第一拍只盖 1–2 段。按「本拍区间」判会把它报成
+    找不到——那正是 78% 假阳率的来源，也正是这条探针曾经的错误设计。
+    """
+    _, prov = _compile(_data(_beat(2, place={'mode': 'P_EXPLICIT', 'name': '三十文'}),
+                             _beat(5)))
+    assert prov['place_explicit_unlocatable'] == [], \
+        '匹配面退回「本拍区间」了——合法的上文地点会被整批误报'
+
+
+def test_a_place_absent_from_the_source_is_flagged_but_left_in_the_artifact():
+    """原文里根本没有那个说法 ⇒ 记一笔，**产物照留**。"""
+    artifact, prov = _compile(_data(
+        _beat(2, place={'mode': 'P_EXPLICIT', 'name': '雁门关'}), _beat(5)))
+    assert prov['place_explicit_unlocatable'] == [('b01_01', '雁门关')]
+    assert artifact['blueprints'][0]['beats'][0]['place'] == '雁门关', \
+        'INFO 探针不许改产物——报出来是给人读的，不是拿来兜底的'
+
+
+def test_a_repeated_place_still_counts_as_found():
+    """多处命中算找得到：地点名重复出现正常，它不像 hinge 需要唯一。"""
+    assert CH1.count('母亲') >= 2, '这条测试的前提是该字面出现 ≥2 次'
+    _, prov = _compile(_data(_beat(5, place={'mode': 'P_EXPLICIT', 'name': '母亲'})))
+    assert prov['place_explicit_unlocatable'] == []
+
+
+def test_the_scope_stops_at_the_current_chapter():
+    """只在**后文**出现的说法算找不到——那本身就是后见之明。
+
+    两章：`雁门关` 只在第 2 章。第 1 章的拍引用它 ⇒ 记账；第 2 章的拍 ⇒ 不记。
+    """
+    ch2 = '他们一路向北，终于望见雁门关的城楼。\n关下风沙很大。'
+    mt = [{'chapter_ordinal': 1, 'text': CH1}, {'chapter_ordinal': 2, 'text': ch2}]
+    data = {'blueprints': [
+        {'chapter_ordinal': 1, 'beats': [_beat(5, place={'mode': 'P_EXPLICIT',
+                                                         'name': '雁门关'})],
+         'narration': [_narration()]},
+        {'chapter_ordinal': 2, 'beats': [_beat(2, place={'mode': 'P_EXPLICIT',
+                                                         'name': '雁门关'})],
+         'narration': [_narration()]},
+    ]}
+    _, prov = compile_v2(data, mt, CHARACTERS, summaries={1: '甲。', 2: '乙。'})
+    assert [b for b, _n in prov['place_explicit_unlocatable']] == ['b01_01'], \
+        '「截止本章」这条界线没生效：要么整本都能引，要么第 2 章自己也被误报'
+
+
+def test_the_scope_is_built_from_main_text_not_from_the_compiled_batch():
+    """⚠ 只编译第 2 章时，第 1 章的正文仍要算进匹配面。
+
+    定向重生成（`--chapters`）只把几章带进 `blueprints`，而 `main_text` 恒是全书。
+    从 batch 累积会让前面的章凭空消失，于是「原文里有没有」被算成「这一批里有没有」。
+    """
+    ch2 = '她又回到那口井边，水汽照旧。'
+    mt = [{'chapter_ordinal': 1, 'text': CH1}, {'chapter_ordinal': 2, 'text': ch2}]
+    only_ch2 = {'blueprints': [
+        {'chapter_ordinal': 2, 'beats': [_beat(1, place={'mode': 'P_EXPLICIT',
+                                                         'name': '肩膀'})],
+         'narration': [_narration()]}]}
+    _, prov = compile_v2(only_ch2, mt, CHARACTERS, summaries={2: '乙。'})
+    assert '肩膀' in CH1 and '肩膀' not in ch2, '前提：该字面只在第 1 章'
+    assert prov['place_explicit_unlocatable'] == [], \
+        '匹配面是从 blueprints 累积的——定向重生成会把上游章当成不存在'
+
+
+def test_inherited_and_unknown_places_never_reach_the_probe():
+    """只有 `P_EXPLICIT` 走探针。
+
+    ⚠ 继承来的地点即使在原文里找不到也不记账：`P_INHERIT` 的语义本来就是
+    「这一拍没写、延续上一拍」，拿字面去判它等于判它的定义违规。
+    """
+    data = _data(_beat(2, place={'mode': 'P_EXPLICIT', 'name': '井边'}),
+                 _beat(4, place={'mode': 'P_INHERIT'}),
+                 _beat(5, place={'mode': 'P_UNKNOWN'}))
+    artifact, prov = _compile(data)
+    assert prov['place_explicit_unlocatable'] == []
+    assert [b['place'] for b in artifact['blueprints'][0]['beats']] == \
+        ['井边', '井边', None], '继承链本身没被这次改动动过'
+
+
+def test_the_probe_key_is_always_present_even_when_empty():
+    """键**恒在**（空表也写）：`bounded-fidelity-v3` 缺键报「不适用」，
+    而 ir1 系产物空表是「查过、没有」——两者在报告上必须分得开。"""
+    _, prov = _compile(_clean_data())
+    assert 'place_explicit_unlocatable' in prov

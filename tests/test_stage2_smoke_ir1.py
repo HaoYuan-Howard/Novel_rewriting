@@ -18,6 +18,7 @@ from pathlib import Path
 
 from contracts.schema import MainText
 from novel.stages.stage2 import extract
+from novel.stages.stage2.contract import contract_for
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, main_text
 from tests.test_stage2_contract_dispatch import _ir1_responses, _summary_for
@@ -128,11 +129,11 @@ def test_the_merged_candidate_keeps_untouched_chapters_byte_identical(
     baseline = both.blueprints
     characters = (both.global_g or {})['entities']['characters']
 
-    compiled, accounting = S.contract_for('extraction-ir-v1').compile_fn(
+    compiled, accounting = contract_for('extraction-ir-v1').compile_fn(
         {'blueprints': [_ir1_responses()[2]]}, both.main_text, characters,
         summaries={2: '合并稿测试用摘要'})
     merged = S._merged_candidate(baseline, compiled['blueprints'], accounting,
-                                 both.main_text, characters)
+                                 both.main_text, characters, 'extraction-ir-v1')
 
     by_ordinal = {bp['chapter_ordinal']: bp for bp in merged['blueprints']}
     assert sorted(by_ordinal) == [1, 2, 3]

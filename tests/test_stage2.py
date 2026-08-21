@@ -347,7 +347,7 @@ def test_hedge_words_does_not_treat_factual_or_as_uncertainty():
 def test_the_clean_base_leaves_no_rule_unimplemented():
     """**注册了而没有实现调用它 ⇒ `skipped`，徽章至少 amber。**
 
-    这一条盯的是 `checks.check()` 恰好产 72 个 `Outcome`——
+    这一条盯的是 `checks.check()` 恰好产 73 个 `Outcome`——
     报告是由**判据注册表**生成的，不是由实现的输出生成的，
     所以漏实现一条不会让它从报告里消失，只会让它挂一行「实现未被调用」。
     """
@@ -355,7 +355,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 72
+    assert len(outs) == len(want) == 73
 
 
 def test_global_field_failures_route_to_the_dedicated_resample_action():

@@ -15,6 +15,7 @@ test_stage2_contract_dispatch.py —— 双契约注册表与接线。
 from __future__ import annotations
 
 import copy
+import difflib
 import json
 import re
 import tempfile
@@ -22,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from contracts.invariants import BLUEPRINT_ARCHITECTURES
+from contracts.invariants import BLUEPRINT_ARCHITECTURES, PLACE_MODES
 from contracts.schema import MainText
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.config import load_config
@@ -67,6 +68,67 @@ def test_a_misspelled_contract_is_rejected_not_silently_defaulted():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 一·b、`extraction-ir-v1.1` 是 ir1 的**单变量**对照臂
+#
+# 起因：ir1 的地点填充率相对 v3 掉 −59%，而 §十一 实测**两个模型上都掉**
+# （Pro −60% / Flash −28%）⇒ 那是契约的独立责任。ir1.1 只改 place 那一段措辞
+# （把三态从「并列三选一」改回「有序降级链」），别的一个字不动。
+#
+# ⚠⚠ 下面三条各防一个**具体踩过或差点踩到的**失败形态，缺一条都会让实验白跑。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_ir11_differs_from_ir1_in_exactly_one_construct():
+    """两臂除 `architecture` / `sys_name` / `system` 外**逐格相同**。
+
+    响应模型、编译器、投影函数、摘要批开关全部共用——这不是省事，
+    它是**单变量对照能成立的前提**：差别不止一处时，跑出来的读数归不了因。
+    """
+    a, b = CONTRACTS['extraction-ir-v1'], CONTRACTS['extraction-ir-v1.1']
+    expected_diff = {'architecture', 'sys_name', 'system'}
+    differing = {f for f in a.__dataclass_fields__
+                 if getattr(a, f) != getattr(b, f)}
+    assert differing == expected_diff, \
+        f'ir1.1 与 ir1 的差别不是恰好那三格：{differing}——单变量对照已不成立'
+    assert b.response_model is a.response_model
+    assert b.compile_fn is a.compile_fn and b.projection_fn is a.projection_fn
+
+
+def test_ir11_system_differs_from_ir1_only_in_the_place_paragraph():
+    """system 的差异必须是**恰好一个连续区块**，且那一块讲的是 `place`。
+
+    ⚠⚠ 这一条同时防两个**方向相反**的失败：
+      · 差异为空 ⇒ 换臂等于没换——同一份 prompt、同一个缓存键，实验**静默地
+        没有发生**（E 臂踩过这个形状：27 次调用全命中缓存、0 元、
+        产物与对照臂逐字节相同，而账本没说谎）；
+      · 差异溢出到别的段 ⇒ 不再是单变量，地点读数归不了因。
+    """
+    a = prompts.BLUEPRINT_SYS_V2.splitlines()
+    b = prompts.BLUEPRINT_SYS_V1_1.splitlines()
+    blocks = [op for op in
+              difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
+              if op[0] != 'equal']
+    assert len(blocks) == 1, \
+        f'两臂 system 的差异不是一个连续区块（{len(blocks)} 块）——改动溢出了 place 段'
+    _tag, i1, i2, j1, j2 = blocks[0]
+    assert '`place`' in a[i1] and '`place`' in b[j1], \
+        '变动区块的开头不是 place 那一行——改的不是这次要改的东西'
+    assert all(m in '\n'.join(b[j1:j2]) for m in PLACE_MODES), \
+        'place 的**形状**必须一个字不动（三个 mode 全在），ir1.1 只动措辞的次序'
+
+
+def test_the_ir1_arm_bytes_are_unchanged_by_the_ir11_addition():
+    """老臂 ir1 的请求字节没被 ir1.1 的加入动过。
+
+    与下面 v3 那两条同理：盘上 C/D 两臂的缓存与产物还在，ir1 模板漂一个字节，
+    配对 A/B 的零成本复现就要重新付钱。
+    """
+    spec = active_contract(env={_ENV_KEY: 'extraction-ir-v1'})
+    assert spec.system == with_json_shape(prompts.BLUEPRINT_SYS_V2,
+                                          prompts.BLUEPRINT_HINT_V2)
+    assert spec.sys_name == 'BLUEPRINT_SYS_V2'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 二、v3 缓存保真：**v3 臂**的请求字节一个都不许动
 #
 # ⚠ 2026-08-21 翻默认之后这两条不再是「默认路径」的守卫，而是**老臂**的守卫，
@@ -103,6 +165,35 @@ def test_build_prompts_under_the_v3_arm_emits_the_v3_request_bytes(
     characters = gg.model_dump(by_alias=True)['entities']['characters']
     assert user == extract.build_blueprint_user(
         ctx.title, main_text(), (1,), characters=characters)
+
+
+def test_build_prompts_under_the_ir11_arm_emits_the_ir11_request_bytes(
+        monkeypatch):
+    """**真实请求路径**上 ir1.1 是可达的，不只是注册表里有一条。
+
+    ⚠ 这条钉的是「改动到得了生产入口」：`build_prompts` 走 `_active_spec()`
+    读 env，注册表登记对了而 env 取值面没放行、或 `config` 拒了，
+    在这里才会现形——单测注册表是看不出来的。
+    """
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v1.1')
+    book = Path(tempfile.mkdtemp()) / '地点_124'
+    book.mkdir(parents=True)
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _t = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    rows = extract.build_prompts(_ctx(book, 'stage2.blueprint'), chapters=(1,))
+    _ordinal, system, _user = rows[0]
+    assert system == with_json_shape(prompts.BLUEPRINT_SYS_V1_1,
+                                     prompts.BLUEPRINT_HINT_V2)
+    assert system != with_json_shape(prompts.BLUEPRINT_SYS_V2,
+                                     prompts.BLUEPRINT_HINT_V2), \
+        '发出去的还是 ir1 的字节——换臂没有到达生产入口'
+    assert '前一档成立就不要用后一档' in system, \
+        'place 的降级链没进到真发出去的那一份 system 里'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

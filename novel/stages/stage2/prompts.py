@@ -494,6 +494,65 @@ _BLUEPRINT_TPL_V2 = """\
 
 只输出 JSON（顶层键：blueprints，为【本次指定范围内】每章一项，按阅读序章号顺序）。不要额外解释文字。"""
 
+
+# ---------------------------------------------------------------------------
+# `extraction-ir-v1.1` —— 与 ir1 的差别**只有 place 这一段**
+# ---------------------------------------------------------------------------
+#
+# 【为什么要改】ir1 的地点填充率相对 v3 掉了一半以上，而这**不是模型的锅**：
+# `docs/stage2_contract_experiment.md` §十一 实测两个模型上都掉
+# （Pro −60% / Flash −28%）⇒ 是契约的独立责任。机制在措辞里看得见：
+#   · v3 写的是「用原文的说法…确实无从判断**才**填 null」——null 是**最后一档**，
+#     「才」是抑制；
+#   · ir1 把三个 mode **并列陈列**、视觉与语义上等权，`P_UNKNOWN` 只剩
+#     「确实无从判断」五个字，抑制没了；`P_INHERIT` 还加了「程序会替你抄」——更省事。
+# ⇒ 三态把 null 从「最后一档」升成了「三选一」。§十 的实例佐证：第 6 章 5 拍全
+#   `P_UNKNOWN`，而 v3 那 8 拍全填了「床上」。
+#
+# 【形状一个字不动】三个 mode 的 JSON 与 `PLACE_MODES` 取值面照旧，响应模型、
+# 编译器、投影函数全部与 ir1 共用 ⇒ 两臂的差别**只有这一段 system 字节**，
+# 这是单变量对照能成立的前提。
+#
+# ⚠ **7A 二轮的教训要正面处理**：给模型加压时它会选最省力的路。那一轮加的是
+#   **跨字段耦合约束**（「end_para 必须盖住 event 写到的最后一样东西」），模型
+#   可以牺牲 event 来满足它，于是拍 24→18 反而更粗（已撤回，碑立在
+#   `_BLUEPRINT_TPL_V2` 上方）。place 的次序约束是**单字段**的，无处可牺牲——
+#   唯一的规避路径是**编一个地点**，所以新段里明写了「不要为了填满而编」，
+#   同时在编译器侧装了 `place_explicit_unlocatable` 读数（只记账不拦截）。
+#
+# 【为什么用 replace 派生而不是复制一份模板】复制 120 行再手改一段，
+# 「其余逐字保留」就只能靠人肉核对；派生让它在**结构上**成立。
+
+_PLACE_SEG_V2 = """\
+  · `place`：这一条发生在【哪里】，三种形态（mode 只能是 $PLACE_MODES 之一）：
+      {"mode": "P_EXPLICIT", "name": "原文的说法"} —— 原文明写了地点（「出宫的路上」「侧院的厢房」「密牢」），照原文用字；
+      {"mode": "P_INHERIT"} —— 原文没明写、但延续着上一条的地点。**程序会替你抄，不要自己写名字**；
+      {"mode": "P_UNKNOWN"} —— 确实无从判断。
+"""
+
+_PLACE_SEG_V1_1 = """\
+  · `place`：这一条发生在【哪里】，用原文的说法（「出宫的路上」「侧院的厢房」「密牢」）。
+    mode 只能是 $PLACE_MODES 之一，**按下面的次序往下试，前一档成立就不要用后一档**：
+      ① {"mode": "P_EXPLICIT", "name": "原文的说法"} —— 原文明写了地点，照原文用字。**先试这一档**；
+      ② {"mode": "P_INHERIT"} —— 这一条没明写、但延续着上一条的地点。**程序会替你抄，不要自己写名字**；
+      ③ {"mode": "P_UNKNOWN"} —— 上面两档都不成立、确实无从判断，**才**用这一档。
+    · 【不要为了填满而编地点】`name` 必须是原文里真有的说法；原文没写的走 ② 或 ③，不要自己造一个。
+"""
+
+#: `extraction-ir-v1.1` 的模板：从 `_BLUEPRINT_TPL_V2` 派生，**只换 place 那一段**。
+_BLUEPRINT_TPL_V1_1 = _BLUEPRINT_TPL_V2.replace(_PLACE_SEG_V2, _PLACE_SEG_V1_1)
+
+# ⚠⚠ 这两条 assert 防的是**静默失效**：`_PLACE_SEG_V2` 与模板对不上时 replace
+#     什么也不做，ir1.1 会产出与 ir1 **逐字相同**的 system ⇒ 同一个缓存键、
+#     同一份 prompt，换臂跑出来的实验**静默地没有发生**（E 臂踩过这个形状：
+#     27 次调用全命中缓存、0 元、产物与对照臂逐字节相同）。
+assert _BLUEPRINT_TPL_V2.count(_PLACE_SEG_V2) == 1, \
+    '`_PLACE_SEG_V2` 在 `_BLUEPRINT_TPL_V2` 里不是恰好出现一次——' \
+    '模板的 place 段改过而这里没跟着改，派生出来的 ir1.1 是错的'
+assert _BLUEPRINT_TPL_V1_1 != _BLUEPRINT_TPL_V2, \
+    'ir1.1 的模板与 ir1 逐字相同——replace 没有发生，换臂等于没换'
+
+
 #: 书级摘要批的 system（`extraction-ir-v1` 专属，独立小臂）。
 #: 输入已是压缩事实（各章 beat events），**不重读原章**——所以没有 `RULES_V2` 前缀
 #: （那是对着原文抽取时的规矩）。
@@ -568,6 +627,13 @@ BLUEPRINT_SYS = RULES_V2 + fill(_BLUEPRINT_TPL)
 #: `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 显式选择）。与 v3 并存，选择在
 #: `novel/stages/stage2/contract.py`。
 BLUEPRINT_SYS_V2 = RULES_V2 + fill(_BLUEPRINT_TPL_V2)
+
+#: `stage2.blueprint` 的 `extraction-ir-v1.1` 臂（付费，经
+#: `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 显式选择）。与 ir1 的差别**只有 place 一段**
+#: （派生处在 `_BLUEPRINT_TPL_V1_1` 上方，连同为什么改一起写在那里）。
+#: ⚠ 结构提示**复用 `BLUEPRINT_HINT_V2`**：place 的形状一个字没动，
+#:   另起一份只会让两处漂移。
+BLUEPRINT_SYS_V1_1 = RULES_V2 + fill(_BLUEPRINT_TPL_V1_1)
 
 #: 书级摘要批（`extraction-ir-v1` 专属小臂，付费，一书一调）。
 SUMMARY_BATCH_SYS = fill(_SUMMARY_BATCH_TPL)

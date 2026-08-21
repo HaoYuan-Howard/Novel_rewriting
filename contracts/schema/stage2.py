@@ -125,7 +125,12 @@ class Relation(StrictModel):
     #: 于是 relations 是 secrets 之外的**第二条剧透通道**。
     #: **不加字段**（同一语义两个落点必然漂移），在**下发侧**解决：两端人名都在某条
     #: secret 的 `fact` 里、且 `valid_from` 落在隐瞒窗口内的关系，改按 `reader_reveal_events` 闸门。
-    #: ⚠ 那条闸门的前件是 `setup_chapters`，而盘上 20/21 是空数组 ⇒ **等于没开**。
+    #: ⚠ 那条闸门的前件是 `setup_chapters`（冷揭示的 secret 没有隐瞒窗口，不参与）。
+    #: ⚠⚠ **旧注释写的「盘上 20/21 是空数组 ⇒ 等于没开」是已删语料时代的读数，已作废**
+    #: （2026-08-21 复核）。当前盘上是 **6/22 冷揭示**，且**逐模型分布很不一样**：
+    #: Pro 那本 **0/4**（埋点全填了，闸门全程有效），Flash 三本 1/7 · 1/4 · **4/7**。
+    #: ⇒ 闸门在 Pro 产的 global 上是开着的；Flash 会掉一部分，那是**生成侧换模型**
+    #: 要盯的读数，不是这条闸门本身失效。
     valid_from_chapter: int = Field(ge=1)
 
     #: 失效点（和离/亡故/决裂），没失效填 `null`（键恒在）。盘上 22/70 非 `null`。
@@ -208,8 +213,10 @@ class Secret(StrictModel):
     #: ⚠ **判据断言的是 `_provenance.setup_chapters_pruned` 那个计数，不是本字段的值**：
     #: 裁剪跑在落盘前，再断言字段值就永远为真。
     #:
-    #: ⚠ **「冷揭示」与「被裁空」在字段值上完全同形**（盘上 20/21 条是空数组）：
+    #: ⚠ **「冷揭示」与「被裁空」在字段值上完全同形**（盘上 **6/22 条**是空数组，
+    #: 2026-08-21 复核——旧注释的「20/21」是已删语料时代的读数，已作废）：
     #: 前者合法；后者说明产地在把揭示章号抄进埋点。两者只能靠那个计数分开。
+    #: ⚠ 分布逐模型差很多：Pro 那本 **0/4**，Flash 三本 1/7 · 1/4 · **4/7**。
     setup_chapters: list[int]
 
     #: 长度 1~2。分几次揭示记几条。
@@ -347,7 +354,7 @@ class SecretPatch(StrictModel):
 
     ⚠ **字段级替换而不是组内合并**：`character_known_by` 少写一个人与「这一项没给」
     在合并语义下同形，而它们是两个决定。`None` = 这一格人没动过。
-    ⚠ **`setup_chapters` 的 `[]` 是有语义的**（「冷揭示」，盘上 20/21 条如此），
+    ⚠ **`setup_chapters` 的 `[]` 是有语义的**（「冷揭示」，盘上 6/22 条如此），
     所以它必须是 `list[int] | None` 而不是靠空列表表示未给——两者一旦同形，
     「人把埋点清空了」就再也说不出口。
     """
@@ -968,6 +975,24 @@ class BlueprintProvenance(LlmProvenance):
     #: 这笔账是两者唯一的分界。出口：INFO 判据 `place_inherit_without_base` 逐条列出。
     #: 默认空列表：`bounded-fidelity-v3` 的产地没有这个概念，旧字节缺键照常读入。
     place_inherit_without_base: list[str] = Field(default_factory=list)
+
+    #: `(beat_id, name)`（`extraction-ir-v1` 系专属账）：模型按 `P_EXPLICIT` 写了地点，
+    #: 而那个说法在**截止本章的正文**里一个字节都找不到。
+    #: ⚠ **它是 `extraction-ir-v1.1` 的配套探针，不是违约判定。** ir1.1 把 `P_EXPLICIT`
+    #: 从「三选一」提回「首选档」以救回地点填充率（ir1 相对 v3 掉 −59%，且
+    #: `docs/stage2_contract_experiment.md` §十一 实测两个模型上都掉 ⇒ 是契约的责任）。
+    #: 给模型加压时它会找最省力的出路，而 place 是单字段、没有别的字段可牺牲，
+    #: **唯一的规避路径就是编一个地点**——这笔账就是那条路径上的探针：
+    #: 填充率涨了而这笔账同步涨，涨的是幻觉不是覆盖。
+    #: ⚠⚠ **匹配面是「截止本章正文」**：三个面在盘上（Pro×v3 无情道 132 个有地点的拍）
+    #: 实测为 本拍区间 **78%** / 本章全文 42% / 截止本章正文 **13%** 找不到
+    #: ——按本拍区间判等于让噪声淹死信号（地点常写在上文，那正是 `P_INHERIT` 的理由）。
+    #: 取与 `present_names_invented` 同源的面；「截止本章」而非「全书」是因为
+    #: 只在后文出现的说法本身就是后见之明。
+    #: ⚠⚠ **判 INFO 且不该升 HARD**：那 13% 逐条看全是**用原文成分组合**出来的
+    #: （「武场外」「黎玄的洞府」），一条凭空编的都没有 ⇒ 读法是**相对基线的变化**。
+    #: 出口：INFO 判据 `place_explicit_unlocatable` 逐条列出。
+    place_explicit_unlocatable: list[tuple[str, str]] = Field(default_factory=list)
 
     #: `(beat_id, kind, phrase)`（`extraction-ir-v1` 专属账）：短语在所属拍区间内
     #: **多处命中**、被打回失败态的那几条 hinge 的原始短语。

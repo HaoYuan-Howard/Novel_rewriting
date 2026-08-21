@@ -384,7 +384,17 @@ def hinge_heading(kind: str) -> str:
 #:   base 之间。同一书目录同一时刻仍只有一种架构（整跑重建时整体切换）。
 #:   响应契约的选择口在 `novel/config.py::stage2_blueprint_contract`
 #:   （env `NOVEL_STAGE2_BLUEPRINT_CONTRACT`）。
-BLUEPRINT_ARCHITECTURES: Final = ('bounded-fidelity-v3', 'extraction-ir-v1')
+#: · `extraction-ir-v1` → 并入 `extraction-ir-v1.1`（2026-08-21）：**再放宽一格，
+#:   同样不升版**。ir1.1 与 ir1 的差别**只有 blueprint system 里 place 那一段措辞**
+#:   （响应模型 / 编译器 / 投影函数逐个共用，见 `novel/stages/stage2/contract.py`）
+#:   ⇒ 产物形状与语义都不变，两臂可并存于 A/B 的不同 base 之间。
+#:   起因是 ir1 的地点填充率相对 v3 掉了一半以上，而 `docs/stage2_contract_experiment.md`
+#:   §十一 实测**两个模型上都掉**（Pro −60% / Flash −28%）⇒ 那是契约的独立责任，
+#:   不是模型效应。为什么改、以及「加压会不会反被规避」那条风险，写在
+#:   `novel/stages/stage2/prompts.py::_BLUEPRINT_TPL_V1_1` 上方。
+#:   ⚠ 新架构**未翻默认**：默认仍是 ir1，ir1.1 经 env 显式选择，验收在跑书之后。
+BLUEPRINT_ARCHITECTURES: Final = (
+    'bounded-fidelity-v3', 'extraction-ir-v1', 'extraction-ir-v1.1')
 
 #: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
 #: 翻默认只动这一格（`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT` 从它派生），

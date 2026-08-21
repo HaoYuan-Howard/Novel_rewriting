@@ -174,10 +174,44 @@ def _nudge_boundaries(beats: list[dict[str, Any]], ends: list[int], table: list,
         ends[-1] = len(table)
 
 
-def _compile_beats(blueprint: dict[str, Any], text: str,
+def _note_unlocatable_place(beat: dict[str, Any], name: str | None, upto: str,
+                            place_unlocatable: list[tuple[str, str]]) -> None:
+    """`P_EXPLICIT` 的地点名在**截止本章的正文**里一个字节都找不到时记一笔。
+
+    【这条读数要回答什么】`extraction-ir-v1.1` 把 `P_EXPLICIT` 从「三选一」提回
+    「首选档」（`prompts.py::_BLUEPRINT_TPL_V1_1`）。给模型加压时它会找最省力的
+    出路，而 place 是单字段、没有别的字段可牺牲 ⇒ **唯一的规避路径是编一个地点**。
+    这一笔就是那条路径上的探针：填充率涨了，但如果它同步涨，涨的是幻觉不是覆盖。
+
+    ⚠⚠ **匹配面是「截止本章正文」，不是「本拍区间」。** 这不是随手选的——
+    三个面在盘上（Pro×v3 无情道，132 个有地点的拍）实测下来是：
+        本拍区间 **78%** 找不到 · 本章全文 42% · 截止本章正文 **13%**。
+    按本拍区间判，78% 的基线等于信号被噪声淹死：地点本来就常常写在上文
+    （那正是 `P_INHERIT` 存在的理由），「合欢宗」「擂台」「灵网」这类场景名
+    更是整章都不会在某一拍里再出现一次。⇒ 取与 `present_names_invented`
+    同源的面（那条判的是「称呼在原文里找得到」，盘上 `invented` 恒 0）。
+    用「截止本章」而不是「全书」还有一层语义：只在后文出现的说法本身就是后见之明。
+
+    ⚠⚠ **只记账，不判失败、不改产物。** 就算在这个面上，13% 那一档也**不是幻觉**：
+    盘上那 17 条逐条看全是**用原文成分组合**出来的（「武场外」「黎玄的洞府」
+    「前往秘境的路上」「合欢宗门口」），一条凭空编的都没有。
+    ⇒ 这条**判 INFO 且永远不该升 HARD**，它的读法是**相对基线的变化**，
+    不是「命中即违规」。基线记在 `docs/stage2_contract_experiment.md`。
+
+    ⚠ **多处命中算找得到**：`_locate_in_span` 返回 `int` 是「≥2 处」，
+    地点名重复出现完全正常——它不像 hinge 那样需要唯一定位。只有 `None` 才记。
+    """
+    if not name or not upto:
+        return
+    if _locate_in_span(upto, name) is None:
+        place_unlocatable.append((str(beat.get('beat_id') or ''), name))
+
+
+def _compile_beats(blueprint: dict[str, Any], text: str, upto: str,
                    rewrites: list[tuple[str, str, str, str]],
                    failures: list[tuple[str, str, str]],
                    place_orphans: list[str],
+                   place_unlocatable: list[tuple[str, str]],
                    ambiguous_pending: list[tuple[str, str, str]],
                    nudges: list[tuple[str, int, int, str]]) -> None:
     """单章：读止段 → 边界外扩 → span → time_layer → place 继承 → hinge 定位。原地改形。"""
@@ -252,7 +286,9 @@ def _compile_beats(blueprint: dict[str, Any], text: str,
         if isinstance(ref, dict):
             mode = ref.get('mode')
             if mode == 'P_EXPLICIT':
-                beat['place'] = str(ref.get('name') or '') or None
+                name = str(ref.get('name') or '') or None
+                beat['place'] = name
+                _note_unlocatable_place(beat, name, upto, place_unlocatable)
             elif mode == 'P_INHERIT':
                 # 只继承**上一相邻拍**且同 time_layer；不跨层去找「最近同类」。
                 if prev is not None and prev.get('time_layer') == beat.get('time_layer'):
@@ -312,8 +348,9 @@ def compile_v2(data: dict[str, Any], main_text: list[dict[str, Any]],
         -> tuple[dict[str, Any], dict[str, Any]]:
     """把（可能多章合并的）`ChapterBlueprintsResponseV2` 编译成正式产物形状。
 
-    与 `normalize.normalize_blueprints` 出入口逐键同构；多出的两笔账
-    （`place_inherit_without_base` / `hinge_ambiguous_pending`）是 ir1 专属。
+    与 `normalize.normalize_blueprints` 出入口逐键同构；多出的三笔账
+    （`place_inherit_without_base` / `place_explicit_unlocatable` /
+    `hinge_ambiguous_pending`）是 ir1 系专属。
     `summaries=None` ⇒ `events_join_debug`（仅重放/诊断，见 `_derive_summary_debug`）。
     """
     blueprints = list(data.get('blueprints') or [])
@@ -322,17 +359,26 @@ def compile_v2(data: dict[str, Any], main_text: list[dict[str, Any]],
     char_refs = resolve_character_refs(blueprints, main_text, characters)
     text_of = {int(section.get('chapter_ordinal') or 0): str(section.get('text') or '')
                for section in main_text}
+    # 【截止本章正文】给 place 探针用。⚠ 从 **main_text**（全书）累积而不是从
+    # `blueprints` 累积：定向重生成只带几章进来，按 blueprints 累积会让前面的章
+    # 凭空消失，于是「原文里有没有这个说法」被算成「这一批里有没有」。
+    upto_of: dict[int, str] = {}
+    _acc: list[str] = []
+    for _o in sorted(text_of):
+        _acc.append(text_of[_o])
+        upto_of[_o] = ''.join(_acc)
 
     rewrites: list[tuple[str, str, str, str]] = []
     failures: list[tuple[str, str, str]] = []
     place_orphans: list[str] = []
+    place_unlocatable: list[tuple[str, str]] = []
     ambiguous_pending: list[tuple[str, str, str]] = []
     nudges: list[tuple[str, int, int, str]] = []
     for blueprint in blueprints:
         ordinal = int(blueprint.get('chapter_ordinal') or 0)
-        _compile_beats(blueprint, text_of.get(ordinal, ''),
-                       rewrites, failures, place_orphans, ambiguous_pending,
-                       nudges)
+        _compile_beats(blueprint, text_of.get(ordinal, ''), upto_of.get(ordinal, ''),
+                       rewrites, failures, place_orphans, place_unlocatable,
+                       ambiguous_pending, nudges)
         if 'summary' not in blueprint:
             given = (summaries or {}).get(ordinal)
             blueprint['summary'] = given if given else _derive_summary_debug(
@@ -344,6 +390,7 @@ def compile_v2(data: dict[str, Any], main_text: list[dict[str, Any]],
         'verbatim_rewrites': rewrites,
         'verbatim_failures': failures,
         'place_inherit_without_base': place_orphans,
+        'place_explicit_unlocatable': place_unlocatable,
         'hinge_ambiguous_pending': ambiguous_pending,
         'boundary_nudges': nudges,
     }

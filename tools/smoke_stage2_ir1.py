@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""smoke_stage2_ir1.py —— 7A：`extraction-ir-v1` 的「高难章包」付费冒烟。
+"""smoke_stage2_ir1.py —— 7A：`extraction-ir-v1` **系**的「高难章包」付费冒烟。
+
+⚠ 跑哪一臂由 `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 决定（取值面见 `IR1_FAMILY`），
+  工具与 `extract.build_prompts` **同源**地取 spec。ir1.1 只改了 place 那一段措辞，
+  所以本工具也是「place 填充率有没有真的回升」最便宜的前置闸——
+  6 章的钱先问一次，再决定要不要花 23 章的钱跑全链。
 
 【它回答什么】零成本重放（`tools/replay_stage2_contract.py`）只能证明「v3 已经
 产对的东西，ir1 编译器收不收得回来」——喂给编译器的是**投影出来的理想响应**。
@@ -59,14 +64,20 @@ from novel.config import load_config                              # noqa: E402
 from novel.llm.ledger import audit_path, ledger_path              # noqa: E402
 from novel.run import RunContext                                  # noqa: E402
 from novel.stages.stage2 import extract                           # noqa: E402
-from novel.stages.stage2.contract import contract_for             # noqa: E402
+from novel.stages.stage2.contract import active_contract           # noqa: E402
 from novel.stages.stage2.normalize import (                       # noqa: E402
     resolve_character_refs,
 )
 
-#: 本工具只服务契约实验的那一臂；v3 没有「首轮子集」这个问题（它是历史基线，
-#: 盘上已付费）。写死是为了让「拿错契约跑了一轮」在第一行就停住。
-IR1 = 'extraction-ir-v1'
+#: 本工具服务 ir1 **系**的臂；v3 没有「首轮子集」这个问题（它是历史基线，
+#: 盘上已付费）。收成白名单是为了让「拿错契约跑了一轮」在第一行就停住。
+#:
+#: ⚠⚠ **实际用哪一臂一律走 `active_contract()`（读 env），与 `build_prompts`
+#: 同源**——曾经这里是 `spec = contract_for('extraction-ir-v1')` 写死，而
+#: `extract.build_prompts` 那边走 `_active_spec()`：env 拧到别的臂时，
+#: 发出去的是新 prompt、校验与编译却还是旧 spec，**而这不会报错**
+#: （`contract.py` 模块头警告的正是这个形态）。ir1.1 加进来之后它就不再是理论风险。
+IR1_FAMILY = ('extraction-ir-v1', 'extraction-ir-v1.1')
 NODE = 'stage2.blueprint'
 
 #: 以**本书自身**为尺子的判据：分母是这本书所有章的中位数
@@ -128,7 +139,8 @@ def _hits(outcomes: list[Any]) -> dict[str, dict[str, Any]]:
 
 def _merged_candidate(baseline: dict[str, Any], compiled: list[dict[str, Any]],
                       accounting: dict[str, Any], main_text: list[dict[str, Any]],
-                      characters: dict[str, dict[str, Any]]) -> dict[str, Any]:
+                      characters: dict[str, dict[str, Any]],
+                      architecture: str) -> dict[str, Any]:
     """只活在内存里的合并稿——**判据要在全书上跑**，否则「覆盖缺失」那一族
     会被本次只跑 6 章这件事本身点亮，读数全被噪声盖住。
 
@@ -153,7 +165,10 @@ def _merged_candidate(baseline: dict[str, Any], compiled: list[dict[str, Any]],
                                          in accounting['verbatim_rewrites']],
             'verbatim_failures': keep_fail + [list(r) for r
                                               in accounting['verbatim_failures']],
-            'context': {**(old_prov.get('context') or {}), 'architecture': IR1},
+            # ⚠ 盖**本次实际跑的**那一臂，不是写死的 ir1：判据按 architecture 分流，
+            #   盖错戳读数就归错臂。
+            'context': {**(old_prov.get('context') or {}),
+                        'architecture': architecture},
         },
     }
 
@@ -437,10 +452,11 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
 
     cfg = load_config()
-    if cfg.stage2_blueprint_contract != IR1:
-        print(f'本工具只跑 {IR1} 臂，而当前配置是 '
+    if cfg.stage2_blueprint_contract not in IR1_FAMILY:
+        print(f'本工具只跑 ir1 系的臂（{"、".join(IR1_FAMILY)}），而当前配置是 '
               f'{cfg.stage2_blueprint_contract!r}。先显式拧一次：\n'
-              f'  $env:NOVEL_STAGE2_BLUEPRINT_CONTRACT = "{IR1}"', file=sys.stderr)
+              f'  $env:NOVEL_STAGE2_BLUEPRINT_CONTRACT = "{IR1_FAMILY[-1]}"',
+              file=sys.stderr)
         return 2
     targets = _chapters_of(a.chapters)
     if not targets:
@@ -449,7 +465,9 @@ def main(argv: list[str] | None = None) -> int:
 
     base = Path(a.base)
     ctx = RunContext.open(base, a.sid, NODE, paid=True)
-    spec = contract_for(IR1)
+    # ⚠ 与 `extract.build_prompts` **同源**（都走 `active_contract()` 读 env）。
+    #   另取一个 spec 就会得到「prompt 是新的、校验还是旧的」，而那不会报错。
+    spec = active_contract()
     requests = extract.build_prompts(ctx, chapters=targets)
 
     # 逐字节同构核对：子集请求 == 整跑里同章那几条。这条性质成立，冒烟付的钱
@@ -507,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
     baseline = store_both.blueprints or {'blueprints': []}
     old_hits = _hits(extract._judge_candidate(global_raw, baseline, main_text))
     merged = _merged_candidate(baseline, compiled['blueprints'], accounting,
-                               main_text, characters)
+                               main_text, characters, spec.architecture)
     new_hits = _hits(extract._judge_candidate(global_raw, merged, main_text))
 
     ledger_rows, _ = _tail_rows(ledger_path(base), ledger_at)
