@@ -121,7 +121,7 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
         'hook', 'chapter', 'chapter', 'end_marker']
     assert ''.join(segment['text'] for segment in stage1) == (
         TEXT.replace('第二句文案。\n\n', '').split('番外', 1)[0])
-    assert [row['source_chapter_label'] for row in chapters.json()['chapters']] == ['1', '2']
+    assert [row['source_chapter_no'] for row in chapters.json()['chapters']] == [1, 2]
     assert hook.json()['hook_copy']['text'] == '开篇钩子。\n\n'
 
 
@@ -159,10 +159,10 @@ def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
     body = preview.json()
     assert body['available'] is True and body['reason'] is None
     assert [
-        (row['chapter_ordinal'], row['source_chapter_label'],
+        (row['chapter_ordinal'], row['source_chapter_no'],
          row['label_delta'], row['anomaly'])
         for row in body['chapters']
-    ] == [(1, '1', None, 'repeat'), (2, '2', 1, None), (3, '1', -1, 'reset')]
+    ] == [(1, 1, None, 'repeat'), (2, 2, 1, None), (3, 1, -1, 'reset')]
     assert body['anomaly_count'] == 2
 
     # 只读：预览不建 stage1 目录，stage1 仍然只能由已批准的 stage0 启动。

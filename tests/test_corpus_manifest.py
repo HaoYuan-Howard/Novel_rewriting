@@ -407,17 +407,18 @@ def test_root_model_artifact_version_is_decoded_from_envelope(tmp_path):
     target = book / 'stage1' / 'main_text.json'
     target.parent.mkdir(parents=True)
     main = MainText.model_validate([{
-        'section_id': 'sec_0001', 'chapter_ordinal': 1,
-        'source_chapter_label': '第一章', 'text': '正文。',
+        'chapter_ordinal': 1, 'source_chapter_no': 1, 'text': '正文。',
     }, {
-        'section_id': 'sec_0002', 'chapter_ordinal': 2,
-        'source_chapter_label': '第二章', 'text': '续文。',
+        'chapter_ordinal': 2, 'source_chapter_no': 2, 'text': '续文。',
     }])
     target.write_text(json.dumps(encode_artifact(
         'stage1/main_text.json', main.model_dump(mode='json'))), encoding='utf-8')
     entries, payloads, _codes = corpus_manifest._artifact_inventory(book)
+    # ⚠ 版本号现算，不写死：本条测的是「root 信封里的版本被解出来了」，
+    #   而不是「这份产物恰好是 v1」——写死会让任何一次合规升版连带炸掉它。
     assert entries == [CorpusArtifactEntry(
-        rel='stage1/main_text.json', schema_version=1,
+        rel='stage1/main_text.json',
+        schema_version=artifact_spec('stage1/main_text.json').current_version,
         sha256=hashlib.sha256(target.read_bytes()).hexdigest())]
     assert isinstance(payloads['stage1/main_text.json'], list)
 

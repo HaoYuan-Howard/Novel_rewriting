@@ -76,15 +76,13 @@ def test_synthetic_check_only_runs_in_the_default_suite(tmp_path):
     stage5_book = factories.stage5_book()
     main = MainText.model_validate([
         {
-            'section_id': f'sec_{ordinal:04d}',
             'chapter_ordinal': ordinal,
-            'source_chapter_label': str(ordinal),
+            'source_chapter_no': ordinal,
             'text': text,
         }
         for ordinal, text in sorted(stage5_book.source_text.items())
     ])
     hook = HookCopy(
-        section_id='sec_0001',
         text='一把银匙，一本被调换的账册，足以让旧日秘密重新开口。')
     clean = ('\n'.join(stage5_book.source_text.values()) + '\n').encode('utf-8')
     (book / 'stage0').mkdir(parents=True)

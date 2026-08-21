@@ -11,6 +11,7 @@ import pytest
 
 from contracts.schema.api import PreviewRequest
 from contracts.schema.stage0 import RemovalReport, RemovedSegment
+from contracts.schema.stage1 import MainText
 from novel import paths as novel_paths
 from novel.core.ingest import decode_source_bytes
 from novel.errors import (
@@ -427,7 +428,68 @@ def test_new_book_plan_has_null_sid_then_a_derived_sid_check(work):
     assert '789' in follow.argv and '--check-only' in follow.argv
 
 
-def test_non_numeric_source_label_is_a_finding_not_a_checker_crash():
+def test_the_int_chapter_no_renders_prompt_bytes_identical_to_the_old_string():
+    """⭐⭐ `source_chapter_label: str` → `source_chapter_no: int` 是**零字节改动**。
+
+    这是阶段 B 唯一一处能变成真钱的风险点：`BLUEPRINT_SYS` 逐字节冻结，而 LLM
+    缓存键含全部 messages ⇒ prompt 动一个字节就是全书重付。改型之所以安全，
+    全部依据只有一句 `f'{1}' == f'{chr(34)}1{chr(34)}'`——**这句话必须有人钉住**，
+    否则哪天有人给这个字段加个补零或千分位格式，红的地方会是账单不是测试。
+
+    三处逐字进 prompt 的渲染一起钉（`docs/schema/stage1.md` §一）：
+      · `novel/core/text.py::render_book` —— stage2.global 的全书正文块与章节索引
+      · `novel/stages/stage2/extract.py::_chapter_index` —— blueprint 的稳定前缀
+      · `novel/stages/stage4/plan.py::_build_repair_user` —— 单章 index / body
+    ⚠ 参照系不是「上一版的输出快照」，是**照旧代码的写法当场重算一遍**
+      （`str(no)` 那一版）：快照会随夹具漂，重算不会。
+    """
+    from novel.core.text import render_book
+    from novel.stages.stage2.extract import _book_text, _chapter_index
+
+    numbers = [1, 2, 7, 0, 16, 16]          # 含重号、含 0、含跨号
+    main = MainText.model_validate([
+        {'chapter_ordinal': i + 1, 'source_chapter_no': no, 'text': f'第{no}段正文。'}
+        for i, no in enumerate(numbers)
+    ])
+    raw = main.model_dump(mode='json')
+
+    # ── 旧写法：字段是 str(no)，渲染处一个字都不改 ────────────────────────────
+    old_rows = [dict(row, source_chapter_label=str(row['source_chapter_no']))
+                for row in raw]
+    want_body = '\n\n'.join(
+        f'===== [阅读序第{r["chapter_ordinal"]}章 | '
+        f'原文标号={r["source_chapter_label"]}] =====\n{r["text"]}'
+        for r in old_rows)
+    want_index = '\n'.join(
+        f'阅读序第{r["chapter_ordinal"]}章  '
+        f'原文标号(参考,不可信)={r["source_chapter_label"]}' for r in old_rows)
+    want_chapter_index = '\n'.join(
+        f'第{r["chapter_ordinal"]}章（原文标号 {r["source_chapter_label"]}）'
+        f' {len(r["text"])} 字' for r in old_rows)
+    want_book_text = '\n\n'.join(
+        f'【第{r["chapter_ordinal"]}章】\n{r["text"]}' for r in old_rows)
+
+    body, index = render_book(main)
+    assert body == want_body
+    assert index == want_index
+    assert _chapter_index(raw) == want_chapter_index
+    assert _book_text(raw) == want_book_text          # 不含标号，一并守住没被改到
+
+    # stage4 单章修复那两串（`_build_repair_user` 里逐字拼的同一对格式）。
+    row = raw[4]
+    ordinal, no = row['chapter_ordinal'], row['source_chapter_no']
+    assert f'阅读序第{ordinal}章  原文标号(参考,不可信)={no}' ==         f'阅读序第{ordinal}章  原文标号(参考,不可信)={str(no)}'
+    assert f'===== [阅读序第{ordinal}章 | 原文标号={no}] =====' ==         f'===== [阅读序第{ordinal}章 | 原文标号={str(no)}] ====='
+
+
+def test_a_tampered_source_chapter_no_is_a_finding_not_a_checker_crash():
+    """章表记的原始章号与原文复扫不一致 ⇒ `s1_chapter_labels` 报 finding。
+
+    ⚠ 这条曾经篡改的是 `source_chapter_label='not-a-number'`，测的是「判据遇到
+    非数字章号不炸」。`source_chapter_no` 2026-08-22 改型成 `int` 之后，**载体自己
+    保证了它是数字**，那个分支结构上不可达 ⇒ 继续钉它就是钉一条永不可能红的路。
+    换成仍然真实存在的那种篡改：值是合法 int、但**跟原文对不上**。
+    """
     removed = remove_bytes(
         _case('noisy_duplicate').to_bytes(),
         original_path='FQ_labels_890.txt',
@@ -438,7 +500,7 @@ def test_non_numeric_source_label_is_a_finding_not_a_checker_crash():
         source_sha1=removed.report.source_sha1,
     )
     sections = list(partitioned.main_text.root)
-    sections[0] = sections[0].model_copy(update={'source_chapter_label': 'not-a-number'})
+    sections[0] = sections[0].model_copy(update={'source_chapter_no': 4242})
     bad_main = partitioned.main_text.model_copy(update={'root': sections})
 
     outcomes = stage1_checks.check(
@@ -570,13 +632,13 @@ def test_numeric_only_fanwai_becomes_visible_in_the_pre_approval_preview(work):
     preview = ingest_views.stage0_partition_preview(base, novel_dir.name)
     assert preview.available and preview.reason is None
     assert [
-        (row.chapter_ordinal, row.source_chapter_label, row.label_delta, row.anomaly)
+        (row.chapter_ordinal, row.source_chapter_no, row.label_delta, row.anomaly)
         for row in preview.chapters
     ] == [
-        (1, '1', None, 'repeat'),   # 章号 1 在全书出现两次
-        (2, '2', 1, None),
-        (3, '3', 1, None),
-        (4, '1', -2, 'reset'),      # ← 番外：章号退回去了
+        (1, 1, None, 'repeat'),     # 章号 1 在全书出现两次
+        (2, 2, 1, None),
+        (3, 3, 1, None),
+        (4, 1, -2, 'reset'),        # ← 番外：章号退回去了
     ]
     assert preview.anomaly_count == 2
     assert preview.chapters[-1].preview.startswith('十年后他们在旧城重逢')
@@ -601,7 +663,7 @@ def test_a_serially_numbered_book_flags_nothing_in_the_preview(work):
 
     preview = ingest_views.stage0_partition_preview(base, novel_dir.name)
     assert preview.available
-    assert [row.source_chapter_label for row in preview.chapters] == ['1', '2', '3']
+    assert [row.source_chapter_no for row in preview.chapters] == [1, 2, 3]
     assert all(row.anomaly is None for row in preview.chapters)
     assert preview.anomaly_count == 0
 

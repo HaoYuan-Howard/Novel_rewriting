@@ -29,7 +29,6 @@ import type {
 
 /** 章号异常的展示文案。**机器语义在 `anomaly` 上，界面不从文案里回猜。** */
 const ANOMALY_LABEL: Record<ChapterLabelAnomaly, string> = {
-  non_numeric: '章号不是数字',
   reset: '章号退回',
   gap: '章号跳号',
   repeat: '章号重复',
@@ -69,7 +68,7 @@ function PartitionPreviewPanel({ data }: { data: Stage0PartitionPreview }) {
                   第 {row.chapter_ordinal} 章
                 </Mono>
                 <Mono className={'w-[86px] shrink-0 text-mini text-ink-5'}>
-                  原标号 {row.source_chapter_label}
+                  原标号 {row.source_chapter_no}
                 </Mono>
                 <Mono className={'w-[64px] shrink-0 text-mini text-ink-5'}>
                   {row.chars} 字

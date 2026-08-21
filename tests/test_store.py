@@ -196,7 +196,7 @@ def test_reading_with_a_projection_fingerprints_the_projection_not_the_whole_fil
     一条只查「非 None」的断言在这里等于没查。
     """
     payload = json.dumps([
-        {'chapter_ordinal': 1, 'text': '真正读的正文', 'source_chapter_label': '没读的标签'},
+        {'chapter_ordinal': 1, 'text': '真正读的正文', 'source_chapter_no': 7},
     ], ensure_ascii=False).encode('utf-8')
     base = _book('123', '书名', payload)
     ctx = _ctx(base)
@@ -211,7 +211,7 @@ def test_reading_with_a_projection_fingerprints_the_projection_not_the_whole_fil
 
 def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
     payload = [
-        {'chapter_ordinal': 1, 'text': '正文不变', 'source_chapter_label': '第一章'},
+        {'chapter_ordinal': 1, 'text': '正文不变', 'source_chapter_no': 1},
     ]
     base = _book(
         payload=json.dumps(payload, ensure_ascii=False).encode('utf-8'))
@@ -223,7 +223,7 @@ def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
     upstream = base / '书名_123' / UPSTREAM
     assert st.freshness(STYLE_REL).state == 'fresh'
 
-    payload[0]['source_chapter_label'] = '标签改了但本节点不读'
+    payload[0]['source_chapter_no'] = 99      # 标号改了，但本节点不读它
     upstream.write_text(
         json.dumps(encode_artifact(UPSTREAM, payload), ensure_ascii=False),
         encoding='utf-8',

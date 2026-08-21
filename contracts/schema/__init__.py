@@ -199,16 +199,21 @@ class DecodedArtifact:
 #: 是模块头【版本】那一段的裁决：破坏形状要 `current_version` +1 并同批回答
 #: 「存量产物由谁重建」。反向守卫在 `tests/test_artifact_versions.py`。
 #:
-#: ⚠ **全表恒 v1，只有一个例外**：`STAGE2_CHAPTER_BLUEPRINTS` 是 v2（2026-08-19）。
-#: 那一次破坏在下面它自己那一行写着理由与重建人；**升版的正确形态就是这样**——
-#: 在表里显式登记，而不是加一条迁移把旧字节读成新形状。
+#: ⚠ **全表 v1，例外逐条在下面自己那一行写着理由与重建人**：
+#: `STAGE2_CHAPTER_BLUEPRINTS`（2026-08-19）与 2026-08-22 阶段 B 那一批。
+#: **升版的正确形态就是这样**——在表里显式登记，而不是加一条迁移把旧字节读成新形状。
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport),
     STAGE0_MACHINE_SNAPSHOT: ArtifactSpec(MachineRemovalSnapshot),
     STAGE0_MERGE_CANDIDATE: ArtifactSpec(Stage0MergeCandidate),
     STAGE0_AUDIT_ENTRY: ArtifactSpec(Stage0AuditEntry),
-    STAGE1_MAIN_TEXT: ArtifactSpec(MainText),
-    STAGE1_HOOK_COPY: ArtifactSpec(HookCopy),
+    # ⚠ 2026-08-22 阶段 B 形状破坏：`section_id` 删除、`source_chapter_label: str`
+    #   改名改型为 `source_chapter_no: int` ⇒ 存量 v1 读不进来。
+    #   **存量产物由谁重建：`stage1.partition` 免费重跑**（纯函数、零 LLM）；
+    #   ⚠ 这两份是**承重产物**，重建会让 stage2+ 全部下游被判 stale——那是这次破坏
+    #   真正的代价，已在 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里逐条答过。
+    STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 2),
+    STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
     STAGE1_PARTITION_REPORT: ArtifactSpec(PartitionReport),
     STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding),
     STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),

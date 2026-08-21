@@ -85,30 +85,23 @@ def check(
     if ordinals != expected_ordinals:
         label_problems.append(
             f'chapter_ordinal={ordinals}，应为连续阅读序 {expected_ordinals}')
-    labels = [section.source_chapter_label for section in sections]
-    expected_labels = [str(marker.chapter_no) for marker in markers]
+    labels = [section.source_chapter_no for section in sections]
+    expected_labels = [marker.chapter_no for marker in markers]
     if labels != expected_labels:
         label_problems.append(
-            f'source_chapter_label={labels}，原文标记复扫为 {expected_labels}')
-    section_ids = [section.section_id for section in sections]
-    expected_ids = [f'sec_{index + 2:04d}' for index in range(len(sections))]
-    if section_ids != expected_ids:
-        label_problems.append(
-            f'正文 section_id={section_ids}，文案占 sec_0001 后应为 {expected_ids}')
+            f'source_chapter_no={labels}，原文标记复扫为 {expected_labels}')
+    # ⚠ 这里曾另有一段「正文 section_id 应为 sec_{i+2}」的复算。字段 2026-08-22 删除
+    #   （一份产物只留一个系统主身份），那段复算随之作废——不是漏掉了。
     counts = Counter(labels)
     dup = sorted(label for label, count in counts.items() if count > 1)
-    parsed_labels: list[int] = []
-    for label in labels:
-        try:
-            parsed_labels.append(int(label))
-        except ValueError:
-            label_problems.append(f'source_chapter_label={label!r} 不是数字章号')
-    numeric = sorted(set(parsed_labels))
+    # ⚠ 也曾有一圈 `int(label)` 解析 + 「不是数字章号」的分支。`source_chapter_no`
+    #   改型成 int 之后**载体自己就保证了它是数字**，那个分支结构上不可达；
+    #   留着它等于让一条永不可能红的判据看起来像在守什么。
+    numeric = sorted(set(labels))
     gaps = list(range(numeric[0], numeric[-1] + 1)) if numeric else []
     gaps = [number for number in gaps if number not in numeric]
     strictly_increasing = all(
-        left < right for left, right in zip(parsed_labels, parsed_labels[1:])
-    ) if len(parsed_labels) == len(labels) else False
+        left < right for left, right in zip(labels, labels[1:]))
     out.append(ran(
         's1_chapter_labels',
         [_hit('s1_chapter_labels', detail, detail) for detail in label_problems],
@@ -171,10 +164,10 @@ def check(
                     decomposition_problems.append(
                         f'第 {index + 1} 章前的分隔行 {lines[0]!r} 不符合章标记文法')
                 elif index < len(sections) and \
-                        str(number) != sections[index].source_chapter_label:
+                        number != sections[index].source_chapter_no:
                     decomposition_problems.append(
                         f'第 {index + 1} 章前的分隔行解析出章号 {number}，'
-                        f'章表记的是 {sections[index].source_chapter_label!r}')
+                        f'章表记的是 {sections[index].source_chapter_no}')
         accounted += len(marker_region) + (hi - lo)
         cursor = hi
     if cursor != report.body_code_points:
@@ -230,8 +223,8 @@ def check(
     ))
 
     hook_problems: list[str] = []
-    if hook_copy.section_id != 'sec_0001':
-        hook_problems.append(f'hook_copy.section_id={hook_copy.section_id!r}，应为 sec_0001')
+    # ⚠ 这里曾查 `hook_copy.section_id == 'sec_0001'`。字段已随「一份产物只留一个
+    #   系统主身份」删除（2026-08-22）；文案段恒只有一段，不需要身份。
     if not hook_copy.text.strip():
         hook_problems.append('hook_copy.text 去空白后为空')
     if report.hook_span != (0, first_marker):

@@ -352,7 +352,7 @@ def _chapter_index(main_text: list[dict[str, Any]]) -> str:
     「本次任务范围」块承载（`build_blueprint_user` 的 scope 行），fake transport
     也解析的是那一处。SYS 逐字节钉死不修；改这条格式前先读 prompts.py 头部警告。
     """
-    return '\n'.join(f'第{s.get("chapter_ordinal")}章（原文标号 {s.get("source_chapter_label")}）'
+    return '\n'.join(f'第{s.get("chapter_ordinal")}章（原文标号 {s.get("source_chapter_no")}）'
                      f' {len(s.get("text") or "")} 字' for s in main_text)
 
 

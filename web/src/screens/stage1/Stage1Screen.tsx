@@ -108,7 +108,7 @@ export function Stage1Screen() {
                                     ch{String(chapter.chapter_ordinal).padStart(2, '0')}
                                   </Mono>
                                   <span className={'truncate text-body font-semibold'}>
-                                    {chapter.source_chapter_label}
+                                    {chapter.source_chapter_no}
                                   </span>
                                   <Mono className={'ml-auto text-micro text-ink-5'}>
                                     {chapter.chars} 字
@@ -170,9 +170,9 @@ export function Stage1Screen() {
                                         ? '结尾标记'
                                         : '未覆盖空洞'}
                                 </span>
-                                {segment.source_chapter_label ? (
+                                {segment.source_chapter_no !== null ? (
                                   <span className={'font-normal text-ink-4'}>
-                                    原文标记「{segment.source_chapter_label}」
+                                    原文标记「{segment.source_chapter_no}」
                                   </span>
                                 ) : null}
                                 <Mono className={'ml-auto text-micro text-ink-5'}>
@@ -226,7 +226,7 @@ function HookPanel({ q }: { q: UseQueryResult<Stage1HookCopy> }) {
   }
   return (
     <Panel>
-      <PaneHeader title={'开篇文案'} meta={q.data.hook_copy.section_id} />
+      <PaneHeader title={'开篇文案'} meta={q.data.hook_copy.text.length + ' 字'} />
       <div className={'border-l-5 border-l-hook bg-hook-bg px-16 py-14'}>
         <Prose text={q.data.hook_copy.text} measure={'full'} size={'sm'} tone={'ink-2'} />
       </div>

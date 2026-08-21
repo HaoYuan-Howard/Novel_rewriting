@@ -799,9 +799,8 @@ def test_blueprint_context_keeps_current_full_hides_future_and_bounds_past():
             # 未来章才首现的名字：不许经名册绕过「未来不可见」。
             text = '丙丁掀帘进来。' + text
         sections.append({
-            'section_id': f'sec_{ordinal:04d}',
             'chapter_ordinal': ordinal,
-            'source_chapter_label': str(ordinal),
+            'source_chapter_no': ordinal,
             'text': text,
         })
     characters = {

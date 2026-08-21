@@ -75,11 +75,11 @@ export interface Stage0Segments {
 }
 
 /** 批准前分章预览里逐章原始章号的异常分类（`contracts/invariants.py::CHAPTER_LABEL_ANOMALY`）。 */
-export type ChapterLabelAnomaly = 'non_numeric' | 'reset' | 'gap' | 'repeat'
+export type ChapterLabelAnomaly = 'reset' | 'gap' | 'repeat'
 
 export interface Stage0PreviewChapter {
   chapter_ordinal: number
-  source_chapter_label: string
+  source_chapter_no: number
   chars: number
   preview: string
   label_delta: number | null
@@ -229,7 +229,7 @@ export interface Stage1Segment {
   flagged: boolean
   text: string
   chapter_ordinal: number | null
-  source_chapter_label: string | null
+  source_chapter_no: number | null
 }
 
 export interface Stage1Segments {
@@ -267,7 +267,7 @@ export interface Stage1Report {
 
 export interface Stage1Chapter {
   chapter_ordinal: number
-  source_chapter_label: string
+  source_chapter_no: number
   chars: number
   preview: string
 }
@@ -277,7 +277,7 @@ export interface Stage1Chapters {
 }
 
 export interface Stage1HookCopy {
-  hook_copy: { section_id: string; text: string }
+  hook_copy: { text: string }
   note: string
 }
 

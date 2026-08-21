@@ -28,10 +28,8 @@ from novel.views.inbox import inbox_view
 from novel.views.stage3 import style_view
 
 MAIN_TEXT = [
-    {'section_id': 'sec_0001', 'chapter_ordinal': 1,
-     'source_chapter_label': '一', 'text': '甲推门进屋。'},
-    {'section_id': 'sec_0002', 'chapter_ordinal': 2,
-     'source_chapter_label': '二', 'text': '乙随后离开。'},
+    {'chapter_ordinal': 1, 'source_chapter_no': 1, 'text': '甲推门进屋。'},
+    {'chapter_ordinal': 2, 'source_chapter_no': 2, 'text': '乙随后离开。'},
 ]
 
 
@@ -41,12 +39,16 @@ def test_a_real_payload_survives_the_envelope_and_still_validates():
     ⚠ 下面那两条参数化用合成 payload 扫全部 30 份产物（分母），这一条用一份**真的**
     `MainText` 补另一半：脱信封之后它仍能过模型校验、字段仍在原位。
     """
+    # ⚠ 版本号**从它自己的 spec 现算**，不写 `== 1`——与下面两条参数化同一条理由：
+    #   「全表恒 v1」只该有 `test_the_whole_registry_is_on_one_scale_...` 一个守卫，
+    #   写死之后按规程给某份产物升版会连带炸掉一批与升版无关的用例。
+    spec = ARTIFACT_SPECS['stage1/main_text.json']
     current = encode_artifact('stage1/main_text.json', MAIN_TEXT)
 
-    assert current['_schema_version'] == 1
+    assert current['_schema_version'] == spec.current_version
     assert current['payload'] == MAIN_TEXT
     decoded = decode_artifact('stage1/main_text.json', current)
-    assert decoded.version == 1
+    assert decoded.version == spec.current_version
     assert MainText.model_validate(decoded.payload).root[1].chapter_ordinal == 2
 
 
@@ -61,6 +63,20 @@ def test_schema_model_map_is_derived_from_the_current_registry():
 #: 「盘上的旧字节从此读不进来」，而本仓**没有迁移机制** ⇒ 每一次都必须同批回答
 #: 「存量产物由谁重建」。答不出来的破坏不许落。
 _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
+    'stage1/main_text.json': (
+        2,
+        '2026-08-22 阶段 B：`section_id` 删除（一份产物只留一个系统主身份）、'
+        '`source_chapter_label: str` 改名改型为 `source_chapter_no: int`',
+        '`stage1.partition` 免费重跑（纯函数、零 LLM），前置是 stage0 已批准。'
+        '⚠ 它是承重产物 ⇒ 重建后 stage2+ 全部下游判 stale：盘上「无情道」已到 stage7、'
+        '成书 txt 不是注册产物不受影响（用户 2026-08-22 裁定 stale 无害）；'
+        '「四人成行」卡在 stage2、同日裁定作废 ⇒ 本次存量代价为零，形状破坏趁这个窗口',
+    ),
+    'stage1/hook_copy.json': (
+        2,
+        '2026-08-22 阶段 B：恒 `sec_0001` 的 `section_id` 删除，产物收成 `{text}`',
+        '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
+    ),
     'stage2/chapter_blueprints.json': (
         2,
         'bounded-fidelity-v2 → v3：beat 的区间改由段号算出，'
@@ -264,7 +280,7 @@ def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp
         encoding='utf-8')
     (book / 'stage1' / 'hook_copy.json').write_text(
         json.dumps(encode_artifact('stage1/hook_copy.json', {
-            'section_id': 'sec_0001', 'text': '门外忽然响了一声。',
+            'text': '门外忽然响了一声。',
         }), ensure_ascii=False),
         encoding='utf-8')
     malformed = json.dumps({'_schema_version': 1}, ensure_ascii=False)

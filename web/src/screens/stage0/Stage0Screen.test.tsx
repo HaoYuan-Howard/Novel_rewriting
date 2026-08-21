@@ -192,7 +192,7 @@ describe('Stage0Screen 批准前分章预览', () => {
       chapters: [
         {
           chapter_ordinal: 1,
-          source_chapter_label: '1',
+          source_chapter_no: 1,
           chars: 129,
           preview: '正文第1章。',
           label_delta: null,
@@ -200,7 +200,7 @@ describe('Stage0Screen 批准前分章预览', () => {
         },
         {
           chapter_ordinal: 2,
-          source_chapter_label: '2',
+          source_chapter_no: 2,
           chars: 129,
           preview: '正文第2章。',
           label_delta: 1,
@@ -208,7 +208,7 @@ describe('Stage0Screen 批准前分章预览', () => {
         },
         {
           chapter_ordinal: 3,
-          source_chapter_label: '1',
+          source_chapter_no: 1,
           chars: 31,
           preview: '十年后他们在旧城重逢。',
           label_delta: -2,

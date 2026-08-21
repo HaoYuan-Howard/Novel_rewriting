@@ -96,14 +96,13 @@ def partition_text(clean_text: str, *, source_sha1: str) -> PartitionResult:
                 f'独立计数会得到 {len(markers)} 章，但章表无法一一落盘')
         spans.append((start, end))
         mains.append(MainTextSection(
-            section_id=f'sec_{index + 2:04d}',
             chapter_ordinal=index + 1,
-            source_chapter_label=str(marker.chapter_no),
+            source_chapter_no=marker.chapter_no,
             text=raw,
         ))
 
     main_text = MainText.model_validate(mains)
-    hook_copy = HookCopy(section_id='sec_0001', text=hook_text)
+    hook_copy = HookCopy(text=hook_text)
     report = PartitionReport(
         source_sha1=source_sha1,
         input_sha1=prov.content_sha1(clean_text.encode('utf-8')),

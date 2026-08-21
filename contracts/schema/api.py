@@ -215,7 +215,7 @@ class Stage1Segment(FrozenModel):
     flagged: bool
     text: str = Field(min_length=1)
     chapter_ordinal: int | None = Field(default=None, ge=1)
-    source_chapter_label: str | None = None
+    source_chapter_no: int | None = Field(default=None, ge=0)
 
     @model_validator(mode='after')
     def _interval_and_chapter_metadata_agree(self) -> Stage1Segment:
@@ -226,8 +226,8 @@ class Stage1Segment(FrozenModel):
         is_chapter = self.kind == 'chapter'
         if is_chapter != (self.chapter_ordinal is not None):
             raise ValueError('只有 chapter 分区带 chapter_ordinal')
-        if is_chapter != (self.source_chapter_label is not None):
-            raise ValueError('只有 chapter 分区带 source_chapter_label')
+        if is_chapter != (self.source_chapter_no is not None):
+            raise ValueError('只有 chapter 分区带 source_chapter_no')
         if self.flagged != (self.kind == 'hole'):
             raise ValueError('stage1 只有 hole 分区 flagged=true')
         return self
@@ -252,7 +252,7 @@ class Stage1Segments(StrictModel):
 
 class Stage1ChapterRow(FrozenModel):
     chapter_ordinal: int = Field(ge=1)
-    source_chapter_label: str = Field(min_length=1)
+    source_chapter_no: int = Field(ge=0)
     chars: int = Field(ge=0)
     preview: str
 
@@ -278,19 +278,21 @@ class Stage0PreviewChapter(FrozenModel):
     """
 
     chapter_ordinal: int = Field(ge=1)
-    source_chapter_label: str = Field(min_length=1)
+    source_chapter_no: int = Field(ge=0)
     chars: int = Field(ge=0)
     preview: str
-    #: 本章原始章号 − 上一章原始章号。第一章、或两章任一不是数字章号时为 `None`。
+    #: 本章原始章号 − 上一章原始章号。**只有第一章为 `None`**（没有上一章）。
+    #: ⚠ 曾经还有第二种缺席理由「两章任一不是数字章号」。`source_chapter_no` 改型成
+    #: `int` 之后那种情形不存在了，`non_numeric` 一档也随之出局。
     label_delta: int | None = None
     anomaly: ChapterLabelAnomaly | None = None
 
     @model_validator(mode='after')
     def _delta_exists_exactly_when_it_is_computable(self) -> Stage0PreviewChapter:
-        if self.chapter_ordinal == 1 and self.label_delta is not None:
-            raise ValueError('第一章没有上一章，label_delta 必须缺席')
-        if self.anomaly == 'non_numeric' and self.label_delta is not None:
-            raise ValueError('非数字章号算不出 label_delta')
+        if (self.chapter_ordinal == 1) != (self.label_delta is None):
+            raise ValueError(
+                '有且只有第一章没有 label_delta——第一章没有上一章，'
+                '而其余每一章的落差都算得出来（两个章号都是 int）')
         return self
 
 

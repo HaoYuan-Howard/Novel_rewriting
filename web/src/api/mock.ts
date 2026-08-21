@@ -735,14 +735,14 @@ function mockStage1Segments(): Stage1Segments {
       kind: 'hook' as const,
       text: hook.hook_copy.text + '\n\n',
       chapter_ordinal: null,
-      source_chapter_label: null,
+      source_chapter_no: null,
     },
     ...chapters.chapters.map((chapter) => ({
       id: 'chapter-' + chapter.chapter_ordinal,
       kind: 'chapter' as const,
-      text: chapter.source_chapter_label + '\n' + chapter.preview + '\n\n',
+      text: chapter.source_chapter_no + '\n' + chapter.preview + '\n\n',
       chapter_ordinal: chapter.chapter_ordinal,
-      source_chapter_label: chapter.source_chapter_label,
+      source_chapter_no: chapter.source_chapter_no,
     })),
   ]
   let offset = 0

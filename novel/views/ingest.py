@@ -240,33 +240,26 @@ def _preview_chapters(sections: list[MainTextSection]) -> list[Stage0PreviewChap
     ⚠ `repeat` 放在最后**不是**因为它最不重要，而是因为「回退到一个用过的号」
     同时满足 reset 与 repeat——番外重新编号是回退，报 `reset` 才说得出发生了什么。
     """
-    labels = [section.source_chapter_label for section in sections]
-    counts = Counter(labels)
-    numbers: list[int | None] = []
-    for label in labels:
-        try:
-            numbers.append(int(label))
-        except ValueError:
-            numbers.append(None)
+    numbers = [section.source_chapter_no for section in sections]
+    counts = Counter(numbers)
 
     out: list[Stage0PreviewChapter] = []
     for index, section in enumerate(sections):
         number = numbers[index]
-        previous = numbers[index - 1] if index else None
-        delta = None if number is None or previous is None else number - previous
-        if number is None:
-            anomaly = 'non_numeric'
-        elif delta is not None and delta <= 0:
+        # ⚠ 这里曾有一圈 `int(label)` 解析和 `non_numeric` 一档。`source_chapter_no`
+        #   改型成 int 之后两者都不可达（载体自己保证是数字），随取值面一并删除。
+        delta = None if index == 0 else number - numbers[index - 1]
+        if delta is not None and delta <= 0:
             anomaly = 'reset'
         elif delta is not None and delta > 1:
             anomaly = 'gap'
-        elif counts[section.source_chapter_label] > 1:
+        elif counts[number] > 1:
             anomaly = 'repeat'
         else:
             anomaly = None
         out.append(Stage0PreviewChapter(
             chapter_ordinal=section.chapter_ordinal,
-            source_chapter_label=section.source_chapter_label,
+            source_chapter_no=number,
             chars=len(section.text),
             preview=removal.preview_text(section.text, 80),
             label_delta=delta,
@@ -462,10 +455,10 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
         if stored_span != expected_span or text[marker.content_start:end] != section.text:
             raise PartitionChapterMismatch(
                 f'第 {index + 1} 章的落盘 span / 正文与当前 clean_text 对不上')
-        if section.source_chapter_label != str(marker.chapter_no):
+        if section.source_chapter_no != marker.chapter_no:
             raise PartitionChapterMismatch(
-                f'第 {index + 1} 章原标号落盘为 {section.source_chapter_label!r}，'
-                f'当前识别为 {marker.chapter_no!r}')
+                f'第 {index + 1} 章原标号落盘为 {section.source_chapter_no}，'
+                f'当前识别为 {marker.chapter_no}')
         out.append(Stage1Segment(
             id=f's1:chapter:{section.chapter_ordinal}:{marker.line_start}:{end}',
             kind='chapter',
@@ -475,7 +468,7 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
             flagged=False,
             text=text[marker.line_start:end],
             chapter_ordinal=section.chapter_ordinal,
-            source_chapter_label=section.source_chapter_label,
+            source_chapter_no=section.source_chapter_no,
         ))
 
     if body_limit < len(text):
@@ -525,7 +518,7 @@ def stage1_chapters(base: str | os.PathLike[str], sid: str) -> Stage1Chapters:
     return Stage1Chapters(chapters=[
         Stage1ChapterRow(
             chapter_ordinal=section.chapter_ordinal,
-            source_chapter_label=section.source_chapter_label,
+            source_chapter_no=section.source_chapter_no,
             chars=len(section.text),
             preview=removal.preview_text(section.text, 80),
         )
