@@ -36,7 +36,7 @@ from contracts.schema.common import HumanApproval
 ApprovalState = Literal[APPROVAL_STATE]
 Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 #: `auto_zero_hit` 是**历史只读取值**（2026-08-21 停产）：旧版零命中自动批留下的产物仍须
-#: 可 decode、可展示、可审计，但它**不具执行资格**——人工重批后 `approval_origin`
+#: 可 decode、可展示、可审计，但它**不具执行资格**——人工重批后 `approval.origin`
 #: 才回到 `human`。现役写入方只有 `human`。
 ApprovalOrigin = Literal['auto_zero_hit', 'human']
 #: `auto_approve` 同上：历史审计条目里存在、必须可读；现役代码不再产生。

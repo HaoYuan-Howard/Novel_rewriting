@@ -264,10 +264,12 @@ STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 #: 【为什么不能是 `bool`】「跑了没批」与「批了」必须分开，与 `FRESHNESS` / `JOB_STATE` /
 #: `BADGE` 同构：本项目每一次把「不知道」并进「没问题」都付过学费。
 #: ⚠ `R-0.3b`（`HARD`）判的是**不满足执行资格 ⇒ stage1 拒绝启动**。现役执行资格
-#: 是 `approved == 'approved'` **且** `approval_origin == 'human'`
+#: 是 `approval.status == 'approved'` **且** `approval.origin == 'human'`
 #: （`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点）：
-#: `approval_origin == 'auto_zero_hit'` 是历史自动批取值，**只读、不具执行资格**，
+#: `origin == 'auto_zero_hit'` 是历史自动批取值，**只读、不具执行资格**，
 #: 人工重批（`stage0.approve`）后恢复。
+#: ⚠ 2026-08-22 起 `approved` 那四个平铺字段收成一格判别联合（`Stage0Approval`），
+#: 本元组仍是 `status` 那一格的取值面；两者的对账在 `tests/test_invariants.py`。
 APPROVAL_STATE: Final = ('pending', 'approved')
 
 # Human workflow checkpoints kept under Output/_service. These are service

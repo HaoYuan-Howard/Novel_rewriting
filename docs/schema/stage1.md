@@ -16,8 +16,8 @@
 三份产物：
 
 ```
-stage1/main_text.json         [ {section_id, chapter_ordinal, source_chapter_label, text} ]
-stage1/hook_copy.json         {section_id, text}          ← 恒非 null，见 §二
+stage1/main_text.json         [ {chapter_ordinal, source_chapter_no, text} ]
+stage1/hook_copy.json         {text}                      ← 恒非 null，见 §二
 stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 ```
 
@@ -53,12 +53,27 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `[].section_id` | `str` | 是 | 形如 `sec_0001`，长度恒 8 | **三源** |
 | `[].chapter_ordinal` | `int` | 是 | ≥1，**连续无缺号无重号** | **三源** |
-| `[].source_chapter_label` | `str` | 是 | **非空**。原文标号的字符串形式 | **三源** |
+| `[].source_chapter_no` | `int` | 是 | ≥0。原文标号的**解析值** | **三源** |
 | `[].text` | `str` | 是 | 章正文 | **三源** |
 
-### `source_chapter_label` 是必填 `str`，不可空
+> #### ⚠ 2026-08-22（阶段 B）：`section_id` 删除、`source_chapter_label` → `source_chapter_no: int`
+>
+> **一份产物只留一个系统主身份。** `section_id` 恒等于 `sec_{chapter_ordinal + 1}`、
+> 下游零消费方，两套机器身份并存却没有任何关系约束——而 stage2 恰好有一条
+> `section_id_leak` 判据在防「章的唯一键混进第二个」。⇒ 与其给一个将要删掉的字段补
+> 映射 validator，不如让那条判据守的事实**在源头就成立**。
+>
+> `source_chapter_label` 的旧名字同时承诺「原样保留的标题」与「解析出的章号」两件事，
+> 而产地写的一直是 `str(marker.chapter_no)`，即只有后者。原始标记行如果哪天要留，
+> 去非承重的 `partition_report` 开一格 `source_marker_text`，不要挤回承重产物。
+>
+> ⚠ **改型零 prompt 字节**：三处逐字进 prompt 的渲染都是 `f'…={x}'`，
+> `str(1) == '1'` ⇒ 字节完全相同。守卫：
+> `tests/test_stage01.py::test_the_int_chapter_no_renders_prompt_bytes_identical_to_the_old_string`
+> （做过变异验证：把索引格式改成 `{lbl:03d}` 当场红）。8 本真书实测 381,344 字节逐字节相同。
+
+### `source_chapter_no` 是必填 `int`，不可空
 
 原型代码写的是 `str(chapter_no) if chapter_no is not None else None`，类型上可空；
 本 schema **收窄，并配一条后置条件**——否则「不可能为 `None`」只是一句注释。
@@ -77,10 +92,10 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 
 | | 含义 | 全语料实况 |
 |---|---|---|
-| `source_chapter_label` | **原文标号，原样保留** | **28/163 本有重号**（单本最多 16 个重号）· **12/163 本有缺号** |
+| `source_chapter_no` | **原文标号的解析值** | **28/163 本有重号**（单本最多 16 个重号）· **12/163 本有缺号** |
 | `chapter_ordinal` | **修正后的阅读序** | 恒连续、无重复。**下游一律 key 在它上面** |
 
-> **`R-1.4`（断号/重号/严格递增逐项记账）的记账落点就是 `source_chapter_label` 本身。**
+> **`R-1.4`（断号/重号/严格递增逐项记账）的记账落点就是 `source_chapter_no` 本身。**
 > 「原样保留 + 另给一个修正序」这一对字段共存，就是记账；
 > 派生出来的三个汇总（`chapter_no_gaps` / `_duplicates` / `_strictly_increasing`）
 > **由校验器现算，不落盘**——`main_text` 只读钉死，现算与落盘永远同值。
@@ -94,8 +109,12 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
 | （顶层） | `obj` | 是 | **不可为 `null`**，见下 | **三源** |
-| `section_id` | `Literal['sec_0001']` | 是 | 恒 `sec_0001`（2026-08-21 从正则串收紧为 Literal——正则只保证形状，不保证这个常量事实） | **三源** |
 | `text` | `str` | 是 | 非空。全语料长度 57 ~ 414 | **三源** |
+
+> **这份产物 2026-08-22 起只有这一个字段。** 原先还有个恒 `sec_0001` 的 `section_id`
+> （2026-08-21 刚从正则串收紧成 Literal）——一个常量不携带任何身份信息，唯一的消费方
+> 是 S-03 把它当 pane 副标题显示。⇒ 与 `main_text` 同一条裁决：一份产物只留一个系统
+> 主身份，而文案段压根不需要身份（它恒只有一段）。
 
 ### ⚠ 文案段为空 = 显式终态，不是一个合法分支
 
@@ -141,7 +160,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 **这两个是 `R-0.6` 的下半段。** 只记一个，「有人换过原始小说」和「有人改过 stage0 的剔除结果」
 就分不开了，而这两件事的处置完全相反（前者从头重跑，后者**是人有意为之、必须保住**）。
 
-⚠ 摄入元数据（`original_filename` / `original_path` / `source_encoding` / `text_norm`）
+⚠ 摄入元数据（`original_filename` / `source_ref` / `source_encoding` / `text_norm`）
 记在 `stage0/removal_report.json`，不在这里——**谁读原始 txt，谁记它的元数据**。
 
 ### 3.2 规模与分章
@@ -195,20 +214,36 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `warnings` | `obj[]` | 是 | **动态**。每条带 `kind`（`STAGE1_WARNINGS` 之一）与人读的一句话 | **三源** |
+| `warnings` | `obj[]` | 是 | **动态**。每条按 `kind` 判别（`STAGE1_WARNINGS` 之一）+ 该类的**结构化证据**；⚠ **不带措辞**，见下 | **三源** |
 
 **落点**：`warnings` 转成 **S-13 校验报告里 `stage1` 那一份的 `info` 级结论**。
 `R-1.9`（不静默、不自动修正、不硬报错）靠这条路兑现——**写进文件没人看才是真的静默。**
 
-⚠ **认告警一律用 `kind`，不许用措辞前缀。** 措辞不承重（逐字节等价不覆盖本份产物），
-随时可改；拿字符串开头去认告警的代码会在第一次改文案时静默失效。
-`kind` 的闭合枚举在 `contracts/invariants.py::STAGE1_WARNINGS`。
+⚠ **认告警一律用 `kind`，不许用措辞前缀。** `kind` 的闭合枚举在
+`contracts/invariants.py::STAGE1_WARNINGS`；判别联合的 `Literal` 与它的对账在
+`tests/test_invariants.py::test_the_warning_unions_cover_their_value_domain_exactly`。
 
 **本层只有一类告警**：
 
-| `kind` | 触发 | 阈值 | 全语料命中 |
-|---|---|---|---|
-| `noisy_duplicate` | 同一章号重复 N+ 次 | `3` | **1**（真实：`小三争夺战`，章号 1 出现 17 次） |
+| `kind` | 触发 | 结构化证据 | 阈值（不落盘） | 全语料命中 |
+|---|---|---|---|---|
+| `noisy_duplicate` | 同一章号重复 N+ 次 | `source_chapter_no` · `count` | `NOISY_DUPLICATE_MIN`=3 | **1**（真实：`小三争夺战`，章号 1 出现 17 次） |
+
+> #### ⚠ 2026-08-22（阶段 B）：产物**只记证据不记措辞**
+>
+> 上一版是 `{kind, message}`，措辞逐字落盘。三个后果：① 措辞是展示层的东西却被写进
+> 长期持久化产物——改一次文案，盘上同一件事就有了两种写法，而它们都自称是当时的事实；
+> ② 判据只能拿 `kind` 复算，于是**数值错了不会红**；③ 界面想换个说法就得重跑产地。
+>
+> ⇒ 措辞的唯一落点是 `novel/core/warnings.py::describe`（**穷举 kind、不留 else 兜底**：
+> 新增一类却忘了给措辞时当场炸，而不是安静地发一句「未知告警」）。
+> HTTP 层把渲染好的那句话随响应发下去，**前端不自己拼**。
+>
+> ⚠ **阈值不进产物**：它的唯一落点是 `contracts/invariants.py`，写进产物就是第二个
+> 落点。阈值改了旧产物的措辞跟着变**才是对的**——它说的是「按今天的判准，当时那份
+> 数据长这样」，不是「当时的人看到过这句话」。
+>
+> ⇒ 判据 `s1_warnings` 随之从「只对条数」升级成**逐条比 (章号, 次数)**。
 
 ⚠ **「只剩一类」不等于这一层变安全了。** `early_cut` / `drop_ratio` / `long_marker` 三类
 随剔除记在 `STAGE0_WARNINGS`（见 `stage0.md` §2.3）；「只认出 ≤1 章却很长」升成了 `R-1.13` 显式终态；
@@ -231,7 +266,7 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 拿**落盘时记下的** span 去比**此刻盘上的**原文，才是一次真的核对：
 原文被换过、被截断、编码变了，都会在屏上直接错位。
 
-**依赖：源 txt 必须还在 `original_path`。** 三种降级，**必须能区分**：
+**依赖：源 txt 必须还能按 `source_ref` 取回。** 三种降级，**必须能区分**：
 
 | 情况 | 屏上说什么 |
 |---|---|
@@ -274,8 +309,8 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 | `input_sha1` 与盘上 `stage0/clean_text.txt` 复算值一致 | — | `R-1.3` |
 | `total_code_points` 与复算的原文长度一致 | — | `R-1.3` |
 | `chapter_ordinal` 在 `main_text` 内从 1 起连续无重复 | 163/163 成立 | `R-1.4` |
-| `source_chapter_label` **非空**（每段都有原文标号） | 2559/2559 成立 | §一 |
-| `source_chapter_label` 的断号/重号现算结果**只记账、不修正** | 40/163 本非空 | `R-1.4` |
+| `source_chapter_no` **必有值**（每段都有原文标号） | 2559/2559 成立 | §一 |
+| `source_chapter_no` 的断号/重号现算结果**只记账、不修正** | 40/163 本非空 | `R-1.4` |
 | `hook_copy` 顶层非 `null` 且 `text` 非空 | 163/163 成立 | `R-1.12` |
 | `clean_text` 里**认不出任何非正文标记** | 设计上恒成立（stage0 已删干净） | `R-1.7`（**断言，不切**） |
 | `[0, total)` 完整分解为 hook + 逐章标记行 + 章正文 + tail，无未记账字节 | 设计上恒成立（span 与账本同一次游走产出；定向篡改反例钉住判据会红） | `R-1.15`（2026-08-21 新增；**覆盖游走 + 文法解析，不与分章产物自证**） |

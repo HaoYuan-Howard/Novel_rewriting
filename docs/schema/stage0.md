@@ -36,7 +36,7 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 > 编辑发生在上游，stage1 及其后仍是确定性纯函数，一改就全链重跑。
 >
 > **③ 未批准 = 不能往下走，而批准只有一个诚实来源：人**（`R-0.3a` / `R-0.3b`）。
-> 批准必须由人显式给出 actor 与 reason，记为 `approval_origin=human`。
+> 批准必须由人显式给出 actor 与 reason，记为 `approval.origin = human`。
 > 「零命中自动批」（`auto_zero_hit`）已于 **2026-08-21 停产**：零 removed、零 warning、
 > clean == source 恰好是纯数字番外盲区的形状——那正是这道闸门要拦的东西，
 > 自动放行等于宣称「人工是唯一防线」的同时把它拆了。**存量自动批产物只读不承行**：
@@ -80,9 +80,9 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
 | `original_filename` | `str` | 是 | 含平台前缀与扩展名 | **码** |
-| `original_path` | `str` | 是 | 绝对路径。**文件被移走时是「不知道」，不是「不匹配」**；界面上传的那一份例外，见 §2.1 注 | **码** |
+| `source_ref` | `obj` | 是 | **判别联合**（按 `kind`）：`external_file{absolute_path}` ｜ `managed_upload{blob_sha256, filename}`。**文件被移走时是「不知道」，不是「不匹配」**，两支处置相反，见 §2.1 注 | **码** |
 | `code` | `str` | 是 | 本轮写报告所用代码版本；本层没有 `_provenance`，故落在顶层 | **盘·码** |
-| `normalized_source_sha1` | `str` | 是 | **原始 txt** 归一化后的 sha1。追溯用 | **码** |
+| `normalized_source_sha1` | `str` | 是 | **原始 txt 归一化之后那段文本**的 sha1（⚠ **不是文件字节的 digest**，2026-08-22 从 `source_sha1` 改名，见下）。追溯用 | **码** |
 | `clean_sha1` | `str` | 是 | **`clean_text.txt`** 的 sha1。**这才是 stage1 记的那个输入指纹** | **盘·码** |
 | `machine_normalized_source_sha1` / `machine_clean_sha1` | `str` | 是 | 本轮机器快照的 source/clean 身份；人工正式稿可与 machine clean 不同 | **盘·码** |
 | `machine_snapshot_sha256` | `str` | 是 | 完整 `machine_snapshot.json` 的内容身份；三方合并的 base 绑定到这一值 | **盘·码** |
@@ -100,22 +100,40 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 > | `clean_sha1`（`normalized_source_sha1` 未变） | 人编辑过剔除结果 | **保住**，归档进 `_rounds/`（`R-0.5`） |
 > | 两个都变 | 换了原文又编辑过 | 说清楚是两件事，别合并成一条「陈旧」 |
 
-> #### ⚠ `original_path` 断掉的两种情形，处置**相反**
+> #### ⚠ `normalized_source_sha1` 为什么叫这个名字（2026-08-22 从 `source_sha1` 改名）
 >
-> 它记的是**书目录之外**的绝对路径，所以「路径失效」有两个完全不同的成因：
+> 它算的是**解码 + 去 BOM + CRLF→LF 之后**那个串（`text_norm` 恒 `v1:bom+crlf` 说的
+> 就是这道工序），**不是原始文件字节的 digest**。⇒ 同一本书存成 UTF-8 和存成
+> GB18030，文件字节完全不同而这一格**相同**——那是对的、也正是它该有的语义，
+> 但拿旧名字去核 `sha1sum 原文.txt` 的人会以为对不上是出了问题。
+> 五个派生名同批改：`expected_` / `machine_` / `theirs_` / `before_` / `after_`。
+
+> #### ⚠ `source_ref` 的两支，「找不到」的含义**相反**（2026-08-22 从 `original_path` 换成判别联合）
 >
-> | 源是哪来的 | Output 根搬家之后 | 结论 |
+> | 那一支 | 它记什么 | 找不到时 |
 > |---|---|---|
-> | 外部语料（`Test_data/…`） | 文件**真的**不在了 | `ghost`／不可用，**正确**。契约有意接受，补偿是两个 preview 残片 |
-> | 界面上传（`<base>/_service/uploads/<内容地址>/`） | 文件**跟着 base 一起搬了** | 报 `ghost` 是**假阴性**：变的不是世界，是我们自己给自己起的目录名 |
+> | `external_file` | 一条书目录之外的绝对路径 | 文件**真的**不在了 ⇒ `ghost`／不可用，**正确**。契约有意接受，补偿是两个 preview 残片 |
+> | `managed_upload` | `blob_sha256` + `filename`，**不记路径** | 位置由**当前 base** 现算（`<base>/_service/uploads/<blob_sha256>/<filename>`）⇒ Output 根搬家对它没有影响；真找不到才是真没了 |
 >
-> ⇒ 读取侧只对后者按当前 base **重锚**，且候选必须自证内容地址（目录名就是
-> `sha256(原始字节)`）才采信；`original_path` 字段本身**仍然记绝对路径，写入侧没变**，
-> 产物目录也**不会**因此多存任何正文（那会撞 `R-0.2`）。唯一落点
-> `novel/core/source.py::resolve_recorded_source`，四个读取侧共用它。
+> **病不在重锚逻辑，在「它必须去猜」。** 上一版一个字符串同时表达两种来源，读取侧只好
+> 「先试记录的路径、断了再猜它是不是上传目录那种形状」。那套回落救回过一本
+> （《夫君与鲛人孰》：记的是旧 base，文件就在当前 base 的同一个内容地址目录下、
+> 字节逐一相等，而 `state` 报 ghost、复跑直接 `UpstreamMissing`），但它**只能靠猜**。
+> ⇒ 「它是哪一种」改由**产地当时判一次**并写进产物（`novel/core/source.py::source_ref_for`，
+> 唯一落点）。读取侧每一支只有一条路，**没有"回落"这回事了**；`managed_upload` 的候选
+> 仍须自证 `sha256(bytes) == blob_sha256`（那是「永远不可能把另一份文件冒充成原文」的
+> 全部依据）。唯一读取落点 `novel/core/source.py::resolve_recorded_source`。
+> 产物目录仍然**不存**任何正文副本（那会撞 `R-0.2`）。
 >
-> ⚠ **记录的位置优先，重锚只是回落。** 顺序反过来，「源被就地换掉」会从
-> `stale/file_changed`（重跑即可）变成 `ghost`（找不着东西）——两句话对人的下一步相反。
+> ⚠⚠ **一处语义随之澄清**：「源被就地改写」在两支上本来就是两件事，此前被同一格
+> `original_path` 压平，只能靠「记录的那条路径碰巧还在不在」区分——而那恰好是 Output
+> 根搬没搬家的偶然。现在：`external_file` 就地改写 → `stale/file_changed`
+> （人真的改了原文，重跑即可）；`managed_upload` 就地改写 → `unknown/ghost`
+> （目录名声称是 `sha256(bytes)` 而里面的字节不是它 ⇒ 内容寻址存储被破坏，
+> **这份候选不可信**；报 file_changed 反而更坏，它暗示「重跑一次就好」，
+> 而重跑会再读一遍同一个坏掉的存储）。
+> ⚠ 两种都不是 `fresh`，`_require_stage0_fresh` 两种都照拦——变的是给人的那句话，
+> 不是闸门的松紧。
 
 ### 2.2 剔除记账
 
@@ -148,7 +166,7 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 不像其它字段那样能 0 成本现算回来。
 
 **两个 preview 保留**，尽管人不会去读 JSON。它们是被删掉那段文本的**唯一残片**：
-`span` 只有在原文还在原地、且没被换过时才能取回内容，而 `original_path` 那条恰恰说了
+`span` 只有在原文还在原地、且没被换过时才能取回内容，而 `source_ref` 那条恰恰说了
 「文件被移走时是不知道」。34 条、每条 120 码点——留着的成本可以忽略，丢了就没有第二次机会。
 
 ⚠ **`作者有话说` 这一类在全语料 163 本上零样本。** 枚举有 4 个值，实际只见过 3 个。
@@ -183,7 +201,7 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 |---|---|---|---|---|
 | `total_code_points` | `int` | 是 | 原始 txt 归一化后的长度。全语料 8088 ~ 41224 | **三源** |
 | `body_code_points` | `int` | 是 | 剔除后剩下的长度 = `len(clean_text)` | **盘·码** |
-| `warnings` | `obj[]` | 是 | 每条带 `kind`（`STAGE0_WARNINGS` 之一）与人读的一句话 | **盘·码** |
+| `warnings` | `obj[]` | 是 | 每条按 `kind` 判别（`STAGE0_WARNINGS` 之一）+ 该类的**结构化证据**；⚠ **不带措辞**，见下 | **盘·码** |
 
 **`body_ratio` 与 `removed_code_points` 都不落盘**——前者恒等于
 `body_code_points / total_code_points`，后者恒等于 `sum(removed[].code_points)`，
@@ -192,11 +210,23 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 
 `STAGE0_WARNINGS` 三类，**全语料实测全部 0 命中**：
 
-| `kind` | 触发 | 阈值 | 全语料 | 样本 |
-|---|---|---|---|---|
-| `early_cut` | 切点太靠前 | `body/total < 0.60` | 0 | 合成 `early_cut` |
-| `drop_ratio` | 丢弃占比过大 | `> 0.35` | 0（实测最大 0.2405） | 合成 `drop_ratio_only` |
-| `long_marker` | 标记行过长 | `core > 17` | 0（实测最长 17） | 合成 `long_marker_silent_band` |
+| `kind` | 触发 | 结构化证据 | 阈值（不落盘） | 全语料 | 样本 |
+|---|---|---|---|---|---|
+| `early_cut` | 切点太靠前 | `body_code_points` · `total_code_points` | `body/total < 0.60` | 0 | 合成 `early_cut` |
+| `drop_ratio` | 丢弃占比过大 | `removed_code_points` · `total_code_points` | `> 0.35` | 0（实测最大 0.2405） | 合成 `drop_ratio_only` |
+| `long_marker` | 标记行过长 | `line_no` · `marker_core_code_points` | `core > 17` | 0（实测最长 17） | 合成 `long_marker_silent_band` |
+
+> #### ⚠ 2026-08-22（阶段 B）：产物**只记证据不记措辞**
+>
+> 上一版是 `{kind, message}`。三个后果：① 措辞是展示层的东西却被写进长期持久化产物；
+> ② 判据只能拿 `kind` 复算，于是**数值错了不会红**——一条 `line_no` 记错的
+> `long_marker` 照样绿，而那几个数就是这条告警的全部内容；③ 界面想换个说法就得重跑产地。
+>
+> ⇒ 措辞唯一落点 `novel/core/warnings.py::describe`（穷举 kind、不留 else 兜底）。
+> **阈值不进产物**：它的唯一落点是 `contracts/invariants.py`。阈值改了旧产物的措辞
+> 跟着变**才是对的**——它说的是「按今天的判准，当时那份数据长这样」。
+> HTTP 层把渲染好的那句话随响应发下去（`Stage0WarningView`），前端不自己拼。
+> ⇒ 判据 `s0_warnings` 随之从「只比 kind」升级成**逐条比整证据**。
 
 > ⚠ **`early_cut` 与 `drop_ratio` 几乎是同一条判据。** `body + removed ≈ total`，
 > 所以 `removed > 0.35` 基本等价于 `body < 0.65`。`drop_ratio` 独立起作用的窗口只有
@@ -212,10 +242,10 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `approved` | `str` | 是 | **两态**：`pending` ｜ `approved`（`APPROVAL_STATE`）。**不满足执行资格时 stage1 拒绝启动**（`R-0.3b`，`HARD`）；执行资格还要求 `approval_origin == 'human'`（`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点） | **盘·码** |
-| `approved_at` | `str \| null` | 是 | ISO 时间戳；未批准时 `null`。**有值 ⟺ `approved == 'approved'`**（载体的后置条件） | **盘·码** |
-| `approval_origin` | `auto_zero_hit \| human \| null` | 是 | 未批时 `null`；`auto_zero_hit` 是**历史只读取值**（2026-08-21 停产），现役唯一来源是 `human` | **盘·码** |
-| `approved_by` | `str \| null` | 是 | 只有 `human` 必填；是自报身份，不宣称认证身份 | **盘·码** |
+| `approval` | `obj` | 是 | **判别联合**（按 `status`，`APPROVAL_STATE`）：`{status:'pending'}` ｜ `{status:'approved', origin, at, by}`。**不满足执行资格时 stage1 拒绝启动**（`R-0.3b`，`HARD`）；执行资格还要求 `origin == 'human'`（`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点） | **盘·码** |
+| ↳ `origin` | `auto_zero_hit \| human` | 是 | `auto_zero_hit` 是**历史只读取值**（2026-08-21 停产），现役唯一来源是 `human` | **盘·码** |
+| ↳ `at` | `str` | 是 | ISO 时间戳。批过就一定说得出是什么时候批的 | **盘·码** |
+| ↳ `by` | `str \| null` | 是 | 只有 `human` 必填；是自报身份，不宣称认证身份 | **盘·码** |
 | `round` | `int` | 是 | 第几轮。人每编辑一次 +1，上一轮进 `_rounds/` | **盘·码** |
 | `edited_by_human` | `bool` | 是 | 本轮有没有人工编辑。= `any(r.origin == 'human' for r in removed)` 之外还含直接改正文 | **盘·码** |
 | `audit_seq` / `audit_head_sha256` | `int` / `str \| null` | 是 | `0/null` 或精确指向 `_audit/edit_N.json`；盘上多出/少一条都拒绝 | **盘·码** |
@@ -230,6 +260,25 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 >
 > ⇒ 取值面的唯一落点是 `contracts/invariants.py::APPROVAL_STATE`，
 > 与 `FRESHNESS` / `JOB_STATE` / `BADGE` 同构，随 `/api/enums` 整份下发。
+>
+> #### ⚠ 2026-08-22（阶段 B）：四个平铺可空字段收成**两个分支**
+>
+> 上一版顶层平铺 `approved` + `approved_at` + `approval_origin` + `approved_by`，
+> 后三格全部可空，靠一个 20 行 validator 维持五条互斥规则。五条守的其实是**同一件事**
+> ——这里有两种状态、字段集不一样。用四个可空字段表达两个分支，就是把类型系统能做的事
+> 挪进了 validator，而 validator 只在构造那一刻起作用，`model_copy(update=…)` 绕得过去。
+> ⇒ 收成判别联合之后，「pending 却带着批准时间」**在类型上就构造不出来**。
+> `PendingApproval` 一个字段都没有，这正是重点：「没批」说不出批准时间、来源、批准人。
+>
+> #### ⚠ 执行资格的第五处消费方（前端）同批收口
+>
+> 2026-08-21 把 `is_stage0_executable` 立为唯一落点时收了四处（`s0_approval` 判据、
+> stage1 启动前置、队列、付费防线）；外部评审列的第五处是「API 返回的可继续状态」，
+> 而前端一直在自己拼 `approved === 'approved' && approval_origin === 'human'`
+> ——那是第二个落点，漏一次就是历史自动批自动绕过的复活口。
+> ⇒ `GET /stage0/report` 的响应多两格投影：`executable` + 稳定理由码 `block_reason`
+> （见 `_api.md`），前端只读结论。守卫在
+> `tests/test_stage01.py::test_execution_eligibility_has_exactly_one_home`（含前端那一条）。
 > ⚠ **`R-0.3b` 的判据不判字符串、判执行资格**：一律走
 > `novel/stages/stage0/eligibility.py::is_stage0_executable` / `block_reason`。
 > 历史自动批（`auto_zero_hit`）在报告上也显示 `approved`——不判来源，
@@ -244,8 +293,10 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 
 ⇒ 审批页在人点批准**之前**同屏给出一次分章推演：开篇文案字数 + 逐章（阅读序 /
 原始章号 / 字数 / 首行预览 / 章号异常）+ 尾段字数。异常分类的唯一落点是
-`contracts/invariants.py::CHAPTER_LABEL_ANOMALY`，四类互斥、判定优先级即元组顺序
-（`non_numeric` > `reset` > `gap` > `repeat`）。
+`contracts/invariants.py::CHAPTER_LABEL_ANOMALY`，**三类**互斥、判定优先级即元组顺序
+（`reset` > `gap` > `repeat`）。⚠ 曾有第四类 `non_numeric`，2026-08-22 随
+`source_chapter_no` 从 `str` 改型成 `int` 一并删除：载体自己保证了它是数字，
+这一档从此**结构上不可达**，留着就是第二个 `not_run`。
 
 - **不落盘**：视图直接调 `novel/stages/stage1/partition.py::partition_text` 这个纯函数，
   不写 `stage1/` 任何一份产物，也不经 `jobs.run`。正式 stage1 产物仍然只来自已批准的
@@ -353,7 +404,7 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 | **机器轮且无人改正文时**：`sum(removed[].code_points) + len(clean_text) == len(归一化原文)` | `R-0.2` | **盘·码** |
 | `removed[].span` 两两不重叠，且都落在原始 txt 长度内 | `R-0.2` | **盘·码** |
 | `removed[].kind` ∈ `NONBODY_KINDS` | `R-0.1` | **三源** |
-| `approved != 'approved'` → stage1 必须拒绝启动 | `R-0.3b`（`HARD`） | **盘·码** |
+| 不满足执行资格（`approval.status != 'approved'` 或 `origin != 'human'`）→ stage1 必须拒绝启动 | `R-0.3b`（`HARD`） | **盘·码** |
 | `clean_text` 里**认不出任何非正文标记** | `R-0.1` / `R-1.7` | **盘·码** |
 
 > #### 最后那条就是 stage1 的断言（`R-1.7`）
