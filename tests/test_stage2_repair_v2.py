@@ -19,6 +19,7 @@ from contracts.schema import MainText
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.errors import GateBlocked, TerminalState
 from novel.stages.stage2 import extract
+from novel.stages.stage2.contract import CONTRACTS
 from novel.stages.stage2.paragraphs import paragraph_spans, span_of
 from novel.stages.stage2.repair import (
     disambiguate_phrase, plan_repairs, run_field_patches,
@@ -29,6 +30,11 @@ from tests.test_stage2_contract_dispatch import (
     _ENV_KEY, _ir1_responses, _summary_for,
 )
 from tests.test_stage2_generation import _client, _ctx, _ok, _response_global
+
+#: 适用面**从注册表派生**，不在测试里另写一份名单——那份名单漂了不会有东西出声，
+#: 而 `--patch` 曾经就是被本文件外的一句写死架构名挡住了新臂。
+_PATCHABLE = sorted(a for a, s in CONTRACTS.items() if s.supports_field_patch)
+_UNPATCHABLE = sorted(a for a, s in CONTRACTS.items() if not s.supports_field_patch)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -115,9 +121,14 @@ def _unique_snippet(seg: str, avoid: str) -> str:
     raise AssertionError('这一拍切不出唯一片段')
 
 
-def _land_broken_ir1_book(monkeypatch) -> tuple[Path, dict]:
-    """跑 ir1 全链但给第 1 章第 1 拍塞一条歧义 hinge 和一条编的 hinge ⇒ .INVALID。"""
-    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v1')
+def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
+    """跑指定 IR 臂的全链但给第 1 章第 1 拍塞一条歧义 hinge 和一条编的 hinge ⇒ .INVALID。
+
+    ⚠ 响应形状由 `ContractSpec.response_model` 决定，而 IR 系全表共用
+    `ChapterBlueprintsResponseV2` ⇒ 同一份 `_ir1_responses()` 对每条 IR 臂都成立。
+    这正是「能不能字段级修」该按能力判、而不是按架构名判的原因。
+    """
+    monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / '修复_123'
     book.mkdir(parents=True)
     global_ctx = _ctx(book, 'stage2.global')
@@ -159,8 +170,16 @@ def _land_broken_ir1_book(monkeypatch) -> tuple[Path, dict]:
                   'base': base}
 
 
-def test_patch_repairs_ambiguous_and_void_then_lands_formally(monkeypatch):
-    book, info = _land_broken_ir1_book(monkeypatch)
+@pytest.mark.parametrize('architecture', _PATCHABLE)
+def test_patch_repairs_ambiguous_and_void_then_lands_formally(monkeypatch, architecture):
+    """⭐ 端到端：**每一条声明可字段级修的契约**都真的修得动。
+
+    ⚠ 参数化到 `supports_field_patch` 全表，不写死架构名——`extraction-ir-v1.1`
+    上线时正是被 `repair.py` 里一句写死的 `!= 'extraction-ir-v1'` 挡在门外，
+    而它与 ir1 的编译器/投影/响应模型逐格共用、结构上完全修得动
+    （2026-08-21 跑《四人成行》时撞出来）。新臂进注册表就自动进这条测试。
+    """
+    book, info = _land_broken_ir_book(monkeypatch, architecture)
     bid, base = info['beat_id'], info['base']
     prov_raw = info['invalid']['_provenance']
     assert [row[2] for row in prov_raw['verbatim_failures']] == [
@@ -184,6 +203,8 @@ def test_patch_repairs_ambiguous_and_void_then_lands_formally(monkeypatch):
     store = ArtifactStore(ctx)
     stored, raw = store.read_own(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert not store.exists(extract._INVALID), '修好之后问题稿应随正式稿落盘归档'
+    assert raw['_provenance']['context']['architecture'] == architecture, \
+        '--patch 必须与基线同构：修完的产地不能变成另一条臂的名字'
 
     beat = raw['blueprints'][0]['beats'][info['beat_index']]
     fixed = beat['hinges'][base:base + 2]
@@ -213,6 +234,15 @@ def test_patch_repairs_ambiguous_and_void_then_lands_formally(monkeypatch):
 
 
 def test_patch_refuses_a_v3_baseline(monkeypatch):
+    """反向：`supports_field_patch=False` 的基线必须显式终态、且一次调用都不发。
+
+    ⚠ 本条与 `_PATCHABLE` 那条是**同一张表的两面**，但它没法参数化到
+    `_UNPATCHABLE` 全表：造基线得按该契约自己的响应形状发假响应，
+    而 v3 用的是 `_response_blueprints()`。下面那句 assert 就是这条约束的守卫——
+    将来真新增一条不可 patch 的架构时，它会红并提醒「先给新架构造对应形状的响应」。
+    """
+    assert _UNPATCHABLE == ['bounded-fidelity-v3'], \
+        f'新增了不可字段级修的架构 {_UNPATCHABLE}——本条要为它补一份对应形状的假响应'
     # 显式拧到 v3 造基线：默认已是 ir1（2026-08-21 翻默认），
     # 而这条测的正是「盘上是 v3 稿时 --patch 必须终态并指路 --chapters」。
     monkeypatch.setenv(_ENV_KEY, 'bounded-fidelity-v3')
@@ -238,6 +268,8 @@ def test_patch_refuses_a_v3_baseline(monkeypatch):
     patch_ctx = _ctx(book, 'stage2.blueprint')
     patch_client, transport = _client(
         patch_ctx, lambda *_a: pytest.fail('v3 基线不应触达 transport'))
-    with pytest.raises(TerminalState, match='只修 extraction-ir-v1'):
+    # ⚠ 拒绝文案也从注册表派生：它逐字列出**当前**可字段级修的臂，
+    #   写死一个名字会在下一条臂进表时静默过期。
+    with pytest.raises(TerminalState, match=re.escape('/'.join(_PATCHABLE))):
         run_field_patches(patch_ctx, patch_client)
     assert transport.calls == []

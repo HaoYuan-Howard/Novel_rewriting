@@ -79,25 +79,39 @@ def _human_how(stage: str) -> str:
     ⚠ 这与 `contracts/rules.py::_validate` ⑧ 拦的是同一种病——那三道校验的原话是
     「`build_argv` 会当场拒收它 ⇒ 这条修复路**永远兑现不了**，而表里只看得见一句
     『修法：…』」。区别只在于：`Rule.fix` 那一侧有校验，**兜底文案这一侧一个都没有**。
-    ⇒ 从 `NODES` 派生。谎话在结构上就说不出口了，而且新入口一上线它自动跟上
-    （stage2 的 `--apply-edit` 就是这么被这句话认领的）。
+    ⇒ 从 `NODES` 派生。谎话在结构上就说不出口了，而且新入口一上线它自动跟上。
+
+    ⚠⚠ **从 `NODES` 派生还不够——粒度也得对。** 这里原来把整层的 flag 并成一个集合
+    （`spec.stage == stage`）再报**裸 flag 名**。`stage2` 是全仓唯一一个两个节点入口
+    **不同**的层（`stage2.global` 有 `--apply-edit`，`stage2.blueprint` 没有），
+    于是 `present_continuity`（blueprint 的 info 判据）拿到的处置行是
+    「0 成本人工路：`--apply-edit` 改内容」——把 global 的入口**借给了** blueprint，
+    照着跑仍旧被 `build_argv` 当场拒收。**同一种病，只是从「层」降到了「节点」。**
+    ⇒ 每条路一律带上**它真正属于的节点 id**，读者据此自己判断适不适用于手上这条结论。
+
+    ⚠ 已知边界（本函数只拿得到 `stage`）：它答的是「这一层有哪些 0 成本入口、
+    分别属于哪个节点」，**不是**「你手上这条 finding 有没有路」。要精确到后者，
+    得给 `Rule` 加 node 级 owner（`OWNER` 取值面目前是 stage 级），
+    那要动约 200 条判据 ⇒ 未做。带节点前缀已经足以让人不把别的节点的入口当成自己的。
 
     ⚠ 一条都没有时**如实说没有**，不要编一个看起来像下一步的句子：
     「这一层没有 0 成本入口」与「有而我没告诉你」是两件事。
     """
-    have = {flag for spec in NODES.values() if spec.stage == stage for flag in spec.flags}
-    parts = [f'`{flag}` {what}' for flag, what in _HUMAN_FLAGS if flag in have]
-    if not parts:
+    # ⚠ 外层是 flag、内层才是 node：`_HUMAN_FLAGS` 的顺序即优先级（改内容在前），
+    #   反过来写会让优先级随 `NODES` 的排列漂。
+    routes = [
+        f'`{node} {flag}` '
+        + ('提供包含所有 producer-owned slot 的整章全文'
+           if flag == '--apply-edit' and stage == 'stage5' else what)
+        for flag, what in _HUMAN_FLAGS
+        for node, spec in NODES.items()
+        if spec.stage == stage and flag in spec.flags
+    ]
+    if not routes:
         return (f'{stage} 没有 0 成本人工入口——处置归人判断：'
                 f'要么改上游重跑本层，要么这条结论就这样留在报告上')
-    if stage == 'stage5':
-        parts = [
-            ('`--apply-edit` 提供包含所有 producer-owned slot 的整章全文'
-             if flag == '--apply-edit' else f'`{flag}` {what}')
-            for flag, what in _HUMAN_FLAGS if flag in have
-        ]
-        return '0 LLM 费用的人工路：' + ' / '.join(parts)
-    return '0 成本人工路：' + ' / '.join(parts)
+    head = '0 LLM 费用的人工路：' if stage == 'stage5' else '0 成本人工路：'
+    return head + ' / '.join(routes)
 
 
 def _revalidate_how(node: str) -> str:

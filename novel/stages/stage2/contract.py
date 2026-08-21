@@ -56,6 +56,21 @@ class ContractSpec:
     #: ir1 专属：summary 不在响应里，编译后要一次书级摘要批。
     needs_summary_batch: bool
 
+    #: 这套契约的失败面能不能走 `stage2.blueprint --patch`（字段级修复，量级是条不是章）。
+    #:
+    #: 【为什么是一格能力，不是 `--patch` 里的一个名字】`repair.py` 原来写的是
+    #: `architecture != 'extraction-ir-v1'` 与 `contract_for('extraction-ir-v1')`
+    #: 两处**字面**比较。ir1.1 上线后当场显影：它与 ir1 只差 `system`/`sys_name`
+    #: 两格，`response_model`/`compile_fn`/`projection_fn` 等逐格共用 ⇒ 字段级修复
+    #: 结构上完全适用（`plan_repairs` 读的 `verbatim_failures` 与
+    #: `hinge_ambiguous_pending` 两笔账都由共用的 `compile_v2` 产），却被名字挡在门外。
+    #: ⇒ 判「能不能字段级修」按**这一格**，新架构进表时自己回答一次，
+    #: 不必回头改 `repair.py` 里的名单——漏改那份名单不会有任何东西出声。
+    #:
+    #: v3 判 `False` 不是「还没做」：它的 hinge 带段号、失败面是整章级根因
+    #: （`--patch` 的候选枚举依赖 IR 的拍区间），走 `--chapters` 整章重生成。
+    supports_field_patch: bool
+
 
 CONTRACTS: dict[str, ContractSpec] = {
     'bounded-fidelity-v3': ContractSpec(
@@ -67,6 +82,7 @@ CONTRACTS: dict[str, ContractSpec] = {
         compile_fn=_compile_v3,
         projection_fn=response_shape,
         needs_summary_batch=False,
+        supports_field_patch=False,
     ),
     'extraction-ir-v1': ContractSpec(
         architecture='extraction-ir-v1',
@@ -77,9 +93,11 @@ CONTRACTS: dict[str, ContractSpec] = {
         compile_fn=compile_v2,
         projection_fn=canonical_ir_projection,
         needs_summary_batch=True,
+        supports_field_patch=True,
     ),
     # ⚠ 与上面那条**只差 `system` 一处**：响应模型、编译器、投影函数、摘要批开关
-    #   全部原样共用（place 的**形状**没动，动的只是 system 里那一段措辞的次序）。
+    #   与字段级修复能力全部原样共用（place 的**形状**没动，
+    #   动的只是 system 里那一段措辞的次序）。
     #   这不是省事——它是**单变量对照能成立的前提**：两臂的差别若不止一处，
     #   跑出来的读数就归不了因。同理，结构提示复用 `BLUEPRINT_HINT_V2`，
     #   另起一份只会让两处漂移。
@@ -93,6 +111,7 @@ CONTRACTS: dict[str, ContractSpec] = {
         compile_fn=compile_v2,
         projection_fn=canonical_ir_projection,
         needs_summary_batch=True,
+        supports_field_patch=True,
     ),
 }
 
