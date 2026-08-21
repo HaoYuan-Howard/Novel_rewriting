@@ -250,8 +250,9 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
     report = _read_current(
         STAGE0_REMOVAL_REPORT, novel_dir / STAGE0_REMOVAL_REPORT, RemovalReport)
     assert isinstance(report, RemovalReport)
-    if report.approved != 'approved':
-        raise ValueError(f'{novel_dir}: Stage0 状态 {report.approved!r}，不允许预览付费重建')
+    if report.approval.status != 'approved':
+        raise ValueError(
+            f'{novel_dir}: Stage0 状态 {report.approval.status!r}，不允许预览付费重建')
     clean_path = novel_dir / STAGE0_CLEAN_TEXT
     try:
         clean = clean_path.read_text(encoding='utf-8')
@@ -283,8 +284,8 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
         'source': None,
         'source_sha1': report.source_sha1,
         'clean_sha1': report.clean_sha1,
-        'stage0_auto_approval_eligible': report.approval_origin == 'auto_zero_hit',
-        'stage0_gate': f'已批准（origin={report.approval_origin}）',
+        'stage0_auto_approval_eligible': report.approval.origin == 'auto_zero_hit',
+        'stage0_gate': f'已批准（origin={report.approval.origin}）',
         'main_text': main,
         'chapters': len(main.root),
     }

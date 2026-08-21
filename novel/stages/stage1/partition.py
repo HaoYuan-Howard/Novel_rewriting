@@ -138,7 +138,7 @@ def run_partition(
             f'（stage0.approve）前不能启动 stage1（{LEGACY_AUTO_APPROVAL}）')
     if reason is not None:
         raise ApprovalRequired(
-            f'stage0 当前状态为 {stage0.approved!r}；人工批准前不能启动 stage1')
+            f'stage0 当前状态为 {stage0.approval.status!r}；人工批准前不能启动 stage1')
     actual_input = prov.content_sha1(clean_text.encode('utf-8'))
     if actual_input != stage0.clean_sha1:
         raise PartitionInputMismatch(

@@ -31,6 +31,8 @@ from contracts.invariants import (
 from contracts.schema.base import Sha1, StrictModel
 from contracts.schema.common import HumanApproval
 
+#: 闸门两态的取值面投影。判别联合的两个 `status` 字面量必须与它对上
+#: （`tests/test_invariants.py`）。
 ApprovalState = Literal[APPROVAL_STATE]
 Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 #: `auto_zero_hit` 是**历史只读取值**（2026-08-21 停产）：旧版零命中自动批留下的产物仍须
@@ -323,6 +325,64 @@ class Stage0AuditEntry(StrictModel):
 
 
 
+# ── 审阅闸门：**两个分支，不是四个可空字段** ──────────────────────────────
+#
+# 【2026-08-22 之前是什么样】顶层平铺四格：
+#   `approved` + `approved_at` + `approval_origin` + `approved_by`
+# 其中后三格全部可空，靠一个 20 行的 `model_validator` 维持它们之间的互斥关系：
+# 「approved 才该有时间」「approved 必须说得出来源」「human 必须给 approved_by」
+# 「auto_zero_hit 不得伪造 approved_by」「未批准不得保留 origin/by」。
+# ⇒ 五条规则守的其实是**一件事**：这里有两种状态，而它们的字段集不一样。
+#   用四个可空字段表达两个分支，就是把类型系统能做的事挪进了 validator，
+#   而 validator 只在构造那一刻起作用——`model_copy(update=...)` 绕得过去。
+#
+# ⇒ 收成判别联合之后，「pending 却带着批准时间」这种形态**在类型上就构造不出来**，
+#   而不是构造得出来但会被拦下。
+class PendingApproval(StrictModel):
+    """还没人批。
+
+    ⚠ **这个分支一个字段都没有，这正是重点**：「没批」说不出批准时间、说不出来源、
+    说不出批准人。上一版用三个 `None` 表达这件事，于是「未批准却带着 approved_by」
+    是一个需要被拦下的形态；现在它压根写不出来。
+    """
+
+    status: Literal['pending']
+
+
+class ApprovedApproval(StrictModel):
+    """已经批过。三格**全部必填**（`by` 的可空只属于历史自动批那一支）。"""
+
+    status: Literal['approved']
+
+    #: 批准来源。`auto_zero_hit` 是**历史只读取值**（2026-08-21 停产）：
+    #: 旧产物读得、展示得、审计得，**跑不得**——执行资格的唯一落点是
+    #: `novel/stages/stage0/eligibility.py::is_stage0_executable`，它要求 `human`。
+    origin: ApprovalOrigin
+
+    #: ISO 时间戳。批过就一定说得出是什么时候批的。
+    at: str = Field(min_length=1)
+
+    #: 自报身份，不宣称是认证身份。
+    #: ⚠ **只有 `auto_zero_hit` 那一支才可为 `null`**——没有人批的东西没有批准人。
+    by: str | None
+
+    @model_validator(mode='after')
+    def _actor_matches_origin(self) -> ApprovedApproval:
+        if self.origin == 'human':
+            if self.by is None or not self.by.strip():
+                raise ValueError('人工批准必须给 by（自报身份）')
+        elif self.by is not None:
+            raise ValueError('auto_zero_hit 自动批准不得伪造 by')
+        return self
+
+
+#: 一次 stage0 审阅闸门的状态。取值面与 `APPROVAL_STATE` 的对账在
+#: `tests/test_invariants.py`（同 warning 判别联合：那两个 `Literal` 与元组之间
+#: 没有任何语言级联系，对账是唯一的连接）。
+Stage0Approval = Annotated[
+    PendingApproval | ApprovedApproval, Field(discriminator='status')]
+
+
 class RemovalReport(StrictModel):
     """`stage0/removal_report.json`。删了哪些段 + 审阅状态 + 两个指纹。"""
 
@@ -387,28 +447,16 @@ class RemovalReport(StrictModel):
 
     # ── 审阅状态 ────────────────────────────────────────────────────────────
 
-    #: **两态**（2026-08-21 裁决；三态里的 `not_run` 是从未落过盘的死值，已删）。
+    #: **两个分支**（2026-08-22 从四个平铺可空字段收成判别联合，见上）。
     #: `R-0.3b` 是 `HARD`：**不满足执行资格 ⇒ stage1 拒绝启动**。
     #:
-    #: ⚠ 执行资格比「等于 `'approved'`」更严：**还必须 `approval_origin == 'human'`**
+    #: ⚠ 执行资格比「`status == 'approved'`」更严：**还必须 `origin == 'human'`**
     #: （`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点）。
     #: 历史自动批产物读得、展示得，**跑不得**。
     #:
     #: ⚠ 按本层的设计，这道闸门是**盲区①（番外用纯数字章节标记写）全链唯一的防线**，
     #: 而 stage2 是第一个花钱的层 ⇒ 闸门必须在它之前、且必须有人真的看过。
-    approved: ApprovalState
-
-    #: ISO 时间戳。⚠ **必填但可为 `null`**：未批准时是 `null`，
-    #: 「键不在」不是合法形态（那会把两态压成一态）。
-    approved_at: str | None
-
-    #: 批准来源。未批准时为 null。`auto_zero_hit` 是**历史只读取值**（已停产）：
-    #: 零命中书不再自动获得批准——那恰好是纯数字番外盲区绕过人工防线的路。
-    #: 现役唯一来源是 `human`。
-    approval_origin: ApprovalOrigin | None
-
-    #: 自报身份，不宣称是认证身份。未批准时为 null；人工批必有值。
-    approved_by: str | None
+    approval: Stage0Approval
 
     #: 第几轮。人每编辑一次 +1，上一轮进 `_rounds/`（`R-0.5`）。
     round: int = Field(ge=1)
@@ -423,28 +471,14 @@ class RemovalReport(StrictModel):
     audit_head_sha256: Sha256 | None
 
     @model_validator(mode='after')
-    def _approval_state_and_timestamp_agree(self) -> RemovalReport:
-        """`approved_at` 有值 ⟺ 真的批过。
+    def _audit_head_and_seq_agree(self) -> RemovalReport:
+        """审计链位置的两格必须同进同出。
 
-        它挡的是三态被写歪的那一半：一份 `approved='pending'` 却带着批准时间的产物，
-        与一份 `approved='approved'` 却说不出什么时候批的产物，
-        在界面上都会被读成「批过了」。
+        ⚠ 这里曾另有 20 行在维持 `approved` / `approved_at` / `approval_origin` /
+        `approved_by` 四个平铺字段之间的互斥。那五条规则守的是同一件事——
+        **有两种状态、字段集不一样**——现在由判别联合在类型上表达，
+        「pending 却带着批准时间」从「构造得出来但会被拦下」变成「压根写不出来」。
         """
-        if (self.approved == 'approved') != (self.approved_at is not None):
-            raise ValueError(
-                f'approved={self.approved!r} 与 approved_at={self.approved_at!r} 对不上：'
-                f'只有 approved 才该有批准时间，而 approved 必须说得出是什么时候批的'
-            )
-        if self.approved == 'approved':
-            if self.approval_origin is None:
-                raise ValueError('approved 报告必须声明 approval_origin')
-            if self.approval_origin == 'human':
-                if self.approved_by is None or not self.approved_by.strip():
-                    raise ValueError('人工批准必须给 approved_by')
-            elif self.approved_by is not None:
-                raise ValueError('auto_zero_hit 自动批准不得伪造 approved_by')
-        elif self.approval_origin is not None or self.approved_by is not None:
-            raise ValueError('未批准报告不得保留 approval_origin/approved_by')
         if (self.audit_seq == 0) != (self.audit_head_sha256 is None):
             raise ValueError('audit_seq=0 与 audit_head_sha256=null 必须同时成立')
         return self

@@ -9,7 +9,8 @@ import pytest
 
 from contracts.schema.api import Stage0MergeDecisionRequest
 from contracts.schema.stage0 import (
-    MachineRemovalSnapshot, Stage0MergeDecisionPlan, Stage0ConflictResolution,
+    ApprovedApproval, MachineRemovalSnapshot, Stage0MergeDecisionPlan,
+    Stage0ConflictResolution,
 )
 from novel.errors import ArtifactUnreadable, HumanEditProtected, SourceConflict
 from novel.api.routes import ingest as ingest_routes
@@ -92,8 +93,8 @@ def test_first_run_stays_pending_until_a_human_approves(tmp_path):
     """
     novel_dir, result, _ = run_source(_source(tmp_path), tmp_path / 'Output')
 
-    assert result.report.approved == 'pending'
-    assert result.report.approval_origin is None and result.report.approved_by is None
+    assert result.report.approval.status == 'pending'
+    assert result.report.approval.status == 'pending' and result.report.approval.status == 'pending'
     assert result.report.audit_seq == 0 and result.report.audit_head_sha256 is None
     assert not (novel_dir / 'stage0/_audit').exists()
 
@@ -101,7 +102,7 @@ def test_first_run_stays_pending_until_a_human_approves(tmp_path):
         _context(novel_dir, 'stage0.approve'),
         actor='reviewer-a', reason='零命中也要人看过',
     )
-    assert approved.approval_origin == 'human' and approved.approved_by == 'reviewer-a'
+    assert approved.approval.origin == 'human' and approved.approval.by == 'reviewer-a'
     assert approved.audit_seq == 1
     verify_audit_chain(
         _context(novel_dir, 'stage0.approve'),
@@ -128,8 +129,8 @@ def _legacy_auto_pair(tmp_path: Path, sid: str = '940') -> tuple[Path, str]:
         after_clean_sha1=result.report.clean_sha1)
     store = removal.ArtifactStore(ctx)
     store.write(REPORT_REL, result.report.model_copy(update={
-        'approved': 'approved', 'approved_at': entry.at,
-        'approval_origin': 'auto_zero_hit', 'approved_by': None,
+        'approval': ApprovedApproval(
+            status='approved', origin='auto_zero_hit', at=entry.at, by=None),
         'audit_seq': entry.seq, 'audit_head_sha256': entry.entry_sha256}))
     assert store.exists(SNAPSHOT_REL)
     return novel_dir, sid
@@ -174,8 +175,8 @@ def test_legacy_auto_artifact_regains_execution_after_human_reapproval(tmp_path)
     )
 
     # 人工重批 = 在原 auto_approve 之后追加 approve；正文没动，round 不变。
-    assert reapproved.approval_origin == 'human'
-    assert reapproved.approved_by == 're-reviewer'
+    assert reapproved.approval.origin == 'human'
+    assert reapproved.approval.by == 're-reviewer'
     assert reapproved.audit_seq == before.audit_seq + 1
     assert reapproved.round == before.round
     assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
@@ -217,9 +218,9 @@ def test_machine_change_without_human_footprint_creates_candidate(tmp_path, monk
         actor='adjudicator',
         reason='无人工足迹，机器账本可证正确',
     )
-    assert accepted.approved == 'approved'
-    assert accepted.approval_origin == 'human'
-    assert accepted.approved_by == 'adjudicator'
+    assert accepted.approval.status == 'approved'
+    assert accepted.approval.origin == 'human'
+    assert accepted.approval.by == 'adjudicator'
     assert '甲乙丙' not in (novel_dir / CLEAN_REL).read_text(encoding='utf-8')
     assert not (novel_dir / CANDIDATE_REL).exists()
 

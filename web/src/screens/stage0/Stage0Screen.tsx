@@ -289,9 +289,12 @@ export function Stage0Screen() {
             const removed = source.segments.filter((item) => picked.has(item.id))
             const dirty = !sameIds(picked, initial)
             const removedChars = removed.reduce((sum, item) => sum + item.chars, 0)
-            // 执行资格与后端同一口径：历史自动批（auto_zero_hit）显示已批准但跑不得。
-            const approved = current.approved === 'approved' && current.approval_origin === 'human'
-            const legacyAuto = current.approved === 'approved' && current.approval_origin === 'auto_zero_hit'
+            // ⚠ 执行资格**不在这里算**：后端 `eligibility.py` 是唯一落点，响应里
+            //   `executable` / `block_reason` 是它的投影。此前这里自己拼
+            //   `approved === 'approved' && origin === 'human'`，那是第二个落点
+            //   ——漏一次就是历史自动批（auto_zero_hit）的自动绕过复活口。
+            const approved = current.executable
+            const legacyAuto = current.block_reason === 'legacy_auto_approval_requires_review'
             const suspicious = suspiciousForView
             const filteredSegments = filteredForView
             return (

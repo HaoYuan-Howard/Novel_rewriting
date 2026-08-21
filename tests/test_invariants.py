@@ -233,3 +233,38 @@ def test_the_warning_unions_cover_their_value_domain_exactly():
         model = next(m for m in members(alias) if kind_of(m) == kind)
         assert describe(model(kind=kind, **fields)).strip()
 
+
+def test_the_approval_union_covers_its_value_domain_exactly():
+    """⭐ 审批判别联合的两个 `status` 字面量 vs `APPROVAL_STATE`。
+
+    与 warning 那条同构、同一个理由：`Literal['pending']` 与元组之间没有任何语言级
+    联系。⚠ 更要紧的是这里还钉住**两个分支的字段集必须不一样**——
+    收成判别联合的全部意义就在这儿：`pending` 说不出批准时间/来源/批准人，
+    上一版用三个 `None` 表达它，于是「未批准却带着 approved_by」是个需要被拦下的
+    形态；现在它压根写不出来，而这条测试保证它继续写不出来。
+    """
+    import typing
+
+    import pytest
+
+    from contracts.schema.stage0 import (
+        ApprovedApproval, PendingApproval, Stage0Approval,
+    )
+
+    members = typing.get_args(typing.get_args(Stage0Approval)[0])
+    got = {typing.get_args(m.model_fields['status'].annotation)[0] for m in members}
+    assert got == set(inv.APPROVAL_STATE)
+
+    assert set(PendingApproval.model_fields) == {'status'}
+    assert set(ApprovedApproval.model_fields) == {'status', 'origin', 'at', 'by'}
+
+    # 「没批却带着批准人」在类型上写不出来（StrictModel 拒未知字段）。
+    with pytest.raises(Exception):
+        PendingApproval(status='pending', by='someone')
+    # 人工批必须给 by；自动批不许伪造 by。这两条留在 validator 里——
+    # 它们是同一个分支内部的约束，判别联合表达不了。
+    with pytest.raises(Exception):
+        ApprovedApproval(status='approved', origin='human', at='t', by=None)
+    with pytest.raises(Exception):
+        ApprovedApproval(status='approved', origin='auto_zero_hit', at='t', by='x')
+

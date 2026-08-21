@@ -189,8 +189,8 @@ def check(
         else:
             approval_findings.append(_hit(
                 's0_approval',
-                f'当前批准状态是 {report.approved!r}，stage1 不得启动',
-                report.approved,
+                f'当前批准状态是 {report.approval.status!r}，stage1 不得启动',
+                report.approval.status,
             ))
     out.append(ran('s0_approval', approval_findings, scanned='1 个批准状态'))
 

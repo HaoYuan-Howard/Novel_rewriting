@@ -232,7 +232,7 @@ def _run_stage0_source(
     print(
         f'  ✓ stage0 {action} {novel_dir}：保留 {result.report.body_code_points}/'
         f'{result.report.total_code_points} 码点，剔除 {len(result.report.removed)} 段，'
-        f'状态 {result.report.approved}',
+        f'状态 {result.report.approval.status}',
     )
     if result.report.warnings:
         print('  ⚠ 可疑项：' + '、'.join(w.kind for w in result.report.warnings))
@@ -306,7 +306,7 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     print(
         f'  ✓ stage0 {action} {novel_dir}：保留 {result.report.body_code_points}/'
         f'{result.report.total_code_points} 码点，剔除 {len(result.report.removed)} 段，'
-        f'状态 {result.report.approved}',
+        f'状态 {result.report.approval.status}',
     )
     return X.OK
 

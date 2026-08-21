@@ -127,7 +127,8 @@ from contracts.schema.report import (
     finding,
 )
 from contracts.schema.stage0 import (
-    DropRatioWarning, EarlyCutWarning, LongMarkerWarning,
+    ApprovedApproval, DropRatioWarning, EarlyCutWarning, LongMarkerWarning,
+    PendingApproval, Stage0Approval,
     MachineRemovalSnapshot, RemovalReport, RemovedSegment, Stage0AuditEntry,
     Stage0ConflictResolution, Stage0EditPlan, Stage0MergeCandidate,
     Stage0MergeConflict, Stage0MergeDecisionPlan, Stage0Warning,
@@ -399,6 +400,7 @@ __all__ = [
     # 八层
     'RemovalReport', 'RemovedSegment', 'Stage0EditPlan', 'Stage0Warning',
     'EarlyCutWarning', 'DropRatioWarning', 'LongMarkerWarning',
+    'Stage0Approval', 'PendingApproval', 'ApprovedApproval',
     'MachineRemovalSnapshot', 'Stage0MergeCandidate', 'Stage0MergeConflict',
     'Stage0ConflictResolution', 'Stage0MergeDecisionPlan', 'Stage0AuditEntry',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',

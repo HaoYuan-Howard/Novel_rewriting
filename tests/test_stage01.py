@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.api import PreviewRequest
-from contracts.schema.stage0 import RemovalReport, RemovedSegment
+from contracts.schema.stage0 import (
+    ApprovedApproval, PendingApproval, RemovalReport, RemovedSegment,
+)
 from contracts.schema.stage1 import MainText
 from novel import paths as novel_paths
 from novel.core.ingest import decode_source_bytes
@@ -128,9 +130,10 @@ def test_first_zero_hit_dry_run_previews_pending_without_writing(work):
     novel_dir, preview, check = run_source(source, output, dry_run=True)
 
     assert check is None
-    assert preview.report.approved == 'pending'
-    assert preview.report.approval_origin is None
-    assert preview.report.approved_by is None
+    # ⚠ 曾经这里有三条：status / origin / by。后两条 2026-08-22 起**在类型上就
+    #   不可能存在**（`PendingApproval` 一个字段都没有），断言它们为 None 等于
+    #   断言一件写不出来的事。
+    assert preview.report.approval == PendingApproval(status='pending')
     assert preview.report.audit_seq == 0
     assert preview.report.audit_head_sha256 is None
     assert not output.exists() and not novel_dir.exists(), \
@@ -138,8 +141,7 @@ def test_first_zero_hit_dry_run_previews_pending_without_writing(work):
 
     written_dir, written, written_check = run_source(source, output)
     assert written_dir == novel_dir
-    assert written.report.approved == preview.report.approved
-    assert written.report.approval_origin is None
+    assert written.report.approval == preview.report.approval
     # 零命中首跑也停在人工闸前：s0_approval 命中是**预期语义**，不是回归。
     assert written_check is not None
     assert _line(written_check, 's0_approval').status == 'hit'
@@ -155,8 +157,7 @@ def test_first_nonzero_hit_dry_run_stays_pending_without_writing(work):
 
     assert check is None
     assert preview.report.removed
-    assert preview.report.approved == 'pending'
-    assert preview.report.approval_origin is None
+    assert preview.report.approval == PendingApproval(status='pending')
     assert preview.report.audit_seq == 0
     assert preview.report.audit_head_sha256 is None
     assert not output.exists() and not novel_dir.exists()
@@ -181,7 +182,7 @@ def test_disk_path_blocks_before_approval_then_writes_current_bytes(work):
         _context(novel_dir, 'stage0.approve'),
         approved_at='2026-08-12T00:00:00+00:00',
     )
-    assert approved.approved == 'approved'
+    assert approved.approval.status == 'approved'
     assert approval_report.passed
 
     partitioned, report = run_partition(_context(novel_dir, 'stage1.partition'))
@@ -286,7 +287,7 @@ def test_human_edit_archives_a_pair_and_same_machine_rerun_preserves_it(work):
     edited, edit_report = run_edit(_context(novel_dir, 'stage0.edit'), edit)
 
     assert edited.round == 2 and edited.edited_by_human
-    assert edited.approved == 'pending' and not edit_report.passed
+    assert edited.approval.status == 'pending' and not edit_report.passed
     assert (novel_dir / report_round_rel(1)).read_bytes() == old_report
     assert (novel_dir / clean_round_rel(1)).read_bytes() == old_clean
     rerun_dir, rerun, _rerun_report = run_source(source, work / 'Output')
@@ -303,7 +304,7 @@ def test_human_edit_archives_a_pair_and_same_machine_rerun_preserves_it(work):
         _context(novel_dir, 'stage0.approve'),
         approved_at='2099-01-01T00:00:00+00:00',
     )
-    assert again.approved_at == approved.approved_at
+    assert again.approval.at == approved.approval.at
     assert (novel_dir / REPORT_REL).read_bytes() == approved_bytes
 
 
@@ -626,7 +627,7 @@ def test_numeric_only_fanwai_becomes_visible_in_the_pre_approval_preview(work):
 
     # 盲区成立的前提——机器什么都没剔，也没有一条 warning 可看。
     assert removed.report.removed == [] and removed.report.warnings == []
-    assert removed.report.approved == 'pending' and removed.report.approval_origin is None
+    assert removed.report.approval == PendingApproval(status='pending')
     assert initial is not None and _line(initial, 's0_approval').status == 'hit'
 
     preview = ingest_views.stage0_partition_preview(base, novel_dir.name)
@@ -702,8 +703,7 @@ def test_real_test_data_runs_through_both_deterministic_layers(source: Path, wor
     novel_dir, removed, initial = run_source(source, work / 'Output')
     assert initial is not None
     # 首跑恒 pending（自动批准已于 2026-08-21 停产），零命中书也一样。
-    assert removed.report.approved == 'pending'
-    assert removed.report.approval_origin is None
+    assert removed.report.approval == PendingApproval(status='pending')
     assert _line(initial, 's0_approval').status == 'hit'
     approved, approval_report = run_approve(
         _context(novel_dir, 'stage0.approve'),
@@ -713,7 +713,7 @@ def test_real_test_data_runs_through_both_deterministic_layers(source: Path, wor
         _context(novel_dir, 'stage1.partition'),
     )
 
-    assert approved.approved == 'approved'
+    assert approved.approval.status == 'approved'
     assert approval_report.passed and approval_report.badge == 'amber'
     assert partition_report is not None and partition_report.passed
     assert removed.body_ratio >= 0.60
@@ -824,8 +824,8 @@ def test_unapproved_states_are_interpreted_not_conflated(work):
         before_clean_sha1=None, after_source_sha1=legacy.source_sha1,
         after_clean_sha1=legacy.clean_sha1)
     auto_report = legacy.model_copy(update={
-        'approved': 'approved', 'approved_at': entry.at,
-        'approval_origin': 'auto_zero_hit', 'approved_by': None,
+        'approval': ApprovedApproval(
+            status='approved', origin='auto_zero_hit', at=entry.at, by=None),
         'audit_seq': entry.seq, 'audit_head_sha256': entry.entry_sha256})
     store.write(REPORT_REL, auto_report)
     outcome = _stage1_outcome(novel_dir)
@@ -857,6 +857,22 @@ def test_execution_eligibility_has_exactly_one_home():
             f'{rel} 复述了审批条件——改用 '
             f'novel/stages/stage0/eligibility.py::is_stage0_executable / block_reason')
         assert 'eligibility' in text, f'{rel} 应经 eligibility 落点判执行资格'
+
+    # ⚠ **第五处消费方是前端**，而它一直在自己拼这个条件
+    #   （`approved === 'approved' && approval_origin === 'human'`，2026-08-22 发现）。
+    #   外部评审点名的五处里，这一处是最后收口的：现在响应里带
+    #   `executable` / `block_reason`，屏幕只读结论。这条断言防它长回来。
+    screen = _Path('web/src/screens/stage0/Stage0Screen.tsx').read_text(encoding='utf-8')
+    #   ⚠ 认的是**读取表达式**不是措辞：写成匹配 `=== 'approved'` 会连自己那条
+    #   解释性注释一起匹配上（实测踩到），而那种守卫红得毫无信息。
+    for expression in ('current.approval.status', 'current.approval.origin',
+                       'current.approval_origin'):
+        assert expression not in screen, (
+            f'Stage0Screen 又在自己推执行资格（读了 {expression}）——历史自动批显示'
+            '「已批准」却跑不得，两处各写一遍迟早漏一处，而漏掉的那处就是自动绕过的'
+            '复活口。改读响应里的 `executable` / `block_reason`')
+    assert 'current.executable' in screen
+    assert 'current.block_reason' in screen
 
 
 # ── 2026-08-21 P0-3：edit-plan 恢复出口的服务端重建（provenance 不信客户端）──

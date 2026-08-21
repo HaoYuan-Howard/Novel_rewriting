@@ -73,9 +73,12 @@ def _store(base: str | os.PathLike[str], sid: str, node: str) -> ArtifactStore:
 def stage0_report(base: str | os.PathLike[str], sid: str) -> Stage0Report:
     """S-00 的那份报告。**产物照读，告警措辞在这一层现渲染。**
 
-    ⚠ 返回的不是产物模型本身而是它的子类（多一格渲染好的 `message`）：产物只记
-    证据，措辞的唯一落点是 `novel/core/warnings.py`——前端自己拼就是第二个落点。
+    ⚠ 返回的不是产物模型本身而是它的子类，多两类视图专有的投影：
+      ① 渲染好的告警措辞（产物只记证据，措辞唯一落点是 `novel/core/warnings.py`）；
+      ② **执行资格**（唯一落点 `stage0/eligibility.py`）。两者都是同一个道理——
+        前端自己拼就是第二个落点，而资格那一处漏了就是自动绕过的复活口。
     """
+    from novel.stages.stage0.eligibility import block_reason, is_stage0_executable
     store = _store(base, sid, STAGE0_NODE)
     report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
     return Stage0Report.model_validate({
@@ -83,6 +86,8 @@ def stage0_report(base: str | os.PathLike[str], sid: str) -> Stage0Report:
         'warnings': [{'warning': warning.model_dump(mode='json'),
                       'message': describe(warning)}
                      for warning in report.warnings],
+        'executable': is_stage0_executable(report),
+        'block_reason': block_reason(report),
     })
 
 
@@ -417,7 +422,7 @@ def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
             f'（stage0.approve）前不能进入 stage1（{LEGACY_AUTO_APPROVAL}）')
     if reason is not None:
         raise ApprovalRequired(
-            f'stage0 当前状态为 {stage0.approved!r}；先回 S-00 审阅并批准')
+            f'stage0 当前状态为 {stage0.approval.status!r}；先回 S-00 审阅并批准')
     clean = store.read_text(partition.CLEAN_TEXT)
     actual = prov.content_sha1(clean.encode('utf-8'))
     if actual != stage0.clean_sha1:

@@ -42,6 +42,7 @@ from contracts.schema.stage0 import (
     Stage0MergeCandidate,
     Stage0MergeDecisionPlan,
     Stage0Warning,
+    PendingApproval,
 )
 from novel import paths, prov
 from novel.core.ingest import (
@@ -189,10 +190,7 @@ def remove_decoded(
         machine_source_sha1=snapshot.source_sha1,
         machine_clean_sha1=snapshot.clean_sha1,
         machine_snapshot_sha256=snapshot.snapshot_sha256,
-        approved='pending',
-        approved_at=None,
-        approval_origin=None,
-        approved_by=None,
+        approval=PendingApproval(status='pending'),
         round=1,
         edited_by_human=False,
         audit_seq=0,
@@ -473,10 +471,7 @@ def _apply_edit(
         'warnings': [warning.model_dump(mode='json')
                      for warning in warnings_for(
                          old.total_code_points, len(text), next_removed)],
-        'approved': 'pending',
-        'approved_at': None,
-        'approval_origin': None,
-        'approved_by': None,
+        'approval': {'status': 'pending'},
         'round': old.round + 1,
         'edited_by_human': True,
         'audit_seq': entry.seq,
@@ -649,7 +644,7 @@ def run_approve(ctx: RunContext, *, actor: str, reason: str,
     if actual != old.clean_sha1:
         raise HumanEditProtected(
             '盘上 clean_text 已变化但 removal_report 还没登记这次人工编辑；先走 stage0.edit')
-    if old.approved == 'approved' and old.approval_origin == 'human':
+    if old.approval.status == 'approved' and old.approval.origin == 'human':
         # 同一决定的重放：幂等返回，不追加审计。
         from novel.stages.stage0.checks import run_check_only
         return old, run_check_only(ctx)
@@ -672,10 +667,8 @@ def run_approve(ctx: RunContext, *, actor: str, reason: str,
         payload = old.model_dump(mode='json')
         payload.update({
             'code': ctx.code,
-            'approved': 'approved',
-            'approved_at': at,
-            'approval_origin': 'human',
-            'approved_by': actor.strip(),
+            'approval': {'status': 'approved', 'origin': 'human',
+                         'at': at, 'by': actor.strip()},
             'audit_seq': entry.seq,
             'audit_head_sha256': entry.entry_sha256,
         })
@@ -973,10 +966,8 @@ def run_merge_accept(
         'machine_source_sha1': snapshot.source_sha1,
         'machine_clean_sha1': snapshot.clean_sha1,
         'machine_snapshot_sha256': snapshot.snapshot_sha256,
-        'approved': 'approved',
-        'approved_at': entry.at,
-        'approval_origin': 'human',
-        'approved_by': actor,
+        'approval': {'status': 'approved', 'origin': 'human',
+                     'at': entry.at, 'by': actor},
         'round': old.round + 1,
         'edited_by_human': merged != snapshot.clean_text,
         'audit_seq': entry.seq,

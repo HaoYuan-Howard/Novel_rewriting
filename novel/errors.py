@@ -199,7 +199,7 @@ class BlockingFindingsUnresolved(TerminalState):
 class ApprovalRequired(TerminalState):
     """人工闸门没过（`APPROVAL_STATE` 的 `pending`，或历史自动批未重批）。
 
-    ⚠ 执行资格 = `approved == 'approved'` **且** `approval_origin == 'human'`
+    ⚠ 执行资格 = `approval.status == 'approved'` **且** `approval.origin == 'human'`
     （`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点）。
     历史自动批产物读得、跑不得——「显示已批准」不等于「可以继续」。
     「没跑过」不是产物状态：产物不存在本身就是那个事实（2026-08-21 起 `not_run` 已删）。

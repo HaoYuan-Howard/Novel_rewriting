@@ -716,10 +716,12 @@ function mockStage0Report(sid: string): Stage0Report {
       data.total_code_points - segments.reduce((sum, segment) => sum + segment.chars, 0),
     ),
     warnings: [],
-    approved: approved ? 'approved' : 'pending',
-    approved_at: approved ? new Date().toISOString() : null,
-    approval_origin: approved ? 'human' : null,
-    approved_by: approved ? 'mock-reviewer' : null,
+    approval: approved
+      ? { status: 'approved' as const, origin: 'human' as const,
+          at: new Date().toISOString(), by: 'mock-reviewer' }
+      : { status: 'pending' as const },
+    executable: approved,
+    block_reason: approved ? null : ('pending' as const),
     round: lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 2 : 1,
     edited_by_human: !!lsRead<Stage0EditRequest>('stage0.selection.' + sid),
   }

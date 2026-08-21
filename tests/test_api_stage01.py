@@ -73,7 +73,7 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     report = report_response.json()
     view = segments_response.json()
     assert report['total_code_points'] == len(TEXT)
-    assert report['approved'] == 'pending'
+    assert report['approval'] == {'status': 'pending'}
     assert view['available'] is True and view['reason'] is None
     assert ''.join(segment['text'] for segment in view['segments']) == TEXT
 
@@ -96,7 +96,7 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
 
     edited = client.get(f'/api/novels/{sid}/stage0/report').json()
     assert edited['round'] == report['round'] + 1
-    assert edited['approved'] == 'pending'
+    assert edited['approval'] == {'status': 'pending'}
     assert edited['edited_by_human'] is True
     assert any(segment['origin'] == 'human' for segment in edited['removed'])
 
@@ -152,7 +152,11 @@ def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
     sid = response.json()['sid']
 
     report = client.get(f'/api/novels/{sid}/stage0/report').json()
-    assert report['approved'] == 'pending' and report['removed'] == []
+    assert report['approval'] == {'status': 'pending'} and report['removed'] == []
+    # ⚠ 执行资格是**后端算好投影下来的**，不是前端自己从 approval 推的
+    #   （评审点名的第五处消费方，2026-08-22 收口）。
+    assert report['executable'] is False
+    assert report['block_reason'] == 'pending'
 
     preview = client.get(f'/api/novels/{sid}/stage0/partition-preview')
     assert preview.status_code == 200, preview.text

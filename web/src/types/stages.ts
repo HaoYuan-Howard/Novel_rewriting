@@ -51,11 +51,29 @@ export interface Stage0Report {
   total_code_points: number
   body_code_points: number
   warnings: Stage0Warning[]
-  approved: 'pending' | 'approved'
-  approved_at: string | null
-  /** 历史自动批（auto_zero_hit）只读不承行：显示「已批准」≠可以继续，须人工重批 */
-  approval_origin: 'auto_zero_hit' | 'human' | null
-  approved_by: string | null
+  /**
+   * 审阅闸门。**两个分支，不是四个可空字段**（2026-08-22）。
+   * ⚠ `pending` 分支一个字段都没有：「没批」说不出批准时间、来源、批准人。
+   * ⚠ 历史自动批（`origin: 'auto_zero_hit'`）**只读不承行**：显示「已批准」
+   *   ≠ 可以继续，须人工重批。执行资格的唯一落点在后端
+   *   （`novel/stages/stage0/eligibility.py`），前端不重算这条判定。
+   */
+  approval:
+    | { status: 'pending' }
+    | {
+        status: 'approved'
+        origin: 'auto_zero_hit' | 'human'
+        at: string
+        by: string | null
+      }
+  /**
+   * 这份报告此刻能不能放行 stage1 与付费链。**后端唯一落点的投影，前端不重算。**
+   * ⚠ 别再从 `approval` 自己推：历史自动批显示「已批准」却跑不得，
+   *   两处各写一遍迟早漏一处，而漏掉的那处就是自动绕过的复活口。
+   */
+  executable: boolean
+  /** 不可执行时的稳定理由码；可执行时为 null。按码分支，不从措辞里猜。 */
+  block_reason: 'pending' | 'legacy_auto_approval_requires_review' | null
   round: number
   edited_by_human: boolean
 }
