@@ -328,8 +328,30 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
             from novel.stages.stage0.checks import run_check_only
             return novel_dir, kept, run_check_only(ctx)
 
-        # 机器结果变化时，正式正文/报告一个字不动；只写可审阅的 base/ours/theirs 候选。
-        from novel.stages.stage0.merge import make_candidate
+        # 机器结果变化：先分诊再谈合并（2026-08-21 裁决，P0-3）。
+        from novel.stages.stage0.merge import has_human_content_divergence, make_candidate
+        if result.machine_snapshot.source_sha1 != old.machine_source_sha1:
+            # 原文变了 = 另一份原文：旧正式稿的 span 坐标系全部失效，diff3 无从谈起。
+            # 正式稿一个字不动、仍对旧原文成立；换原文按 R-0.14 是新书的摄入。
+            raise SourceConflict(
+                'stage0_source_changed：本次摄入的原文与产生当前正式稿的原文不是'
+                f'同一份（新 {result.machine_snapshot.source_sha1[:12]}… / 旧 '
+                f'{old.machine_source_sha1[:12]}…）。三方合并只在同一原文的坐标系内'
+                '有意义；正式稿未动、仍对旧原文成立。要换原文等于摄入另一本书：'
+                '另起书目录，或显式废弃当前书目录后重跑（R-0.14）')
+        if has_human_content_divergence(old):
+            # 有人工内容分叉：accept 会把 removed[] 整体换成机器账本，人工圈选
+            # 从此无处对账。正式稿不动；出路是人工重选段（服务端按原文减 span 重建）。
+            raise HumanEditProtected(
+                'stage0_human_edit_protected：当前正式稿含人工内容（任意正文编辑 / '
+                '人工圈选过剔除段 / 正式 clean 与机器 clean 指纹不同），机器重跑的新'
+                '结果不会自动三方合并。保持现稿即可继续；要采纳机器新结果，走 '
+                'stage0.edit --apply-edit-plan 重新圈选——服务端会按「原文减去 '
+                'span」精确重建 clean，账本保持准确')
+
+        # 剩下唯一安全区：同一原文、正式稿无人工内容分叉（ours == base）——
+        # 此时 theirs 账本可证正确，diff3 退化为「取机器新结果」。
+        # 正式正文/报告一个字不动；只写可审阅的 base/ours/theirs 候选。
         candidate = make_candidate(
             expected_round=old.round,
             expected_source_sha1=old.source_sha1,
@@ -563,10 +585,44 @@ def run_edit_plan(
         raise ArtifactUnreadable(
             '编辑计划的 clean_text 不能由原文减去 removed[] 精确重建；拒绝写一份对不上的剔除账')
 
+    # provenance 字段一律服务端定（2026-08-21，P0-3 恢复出口收口）：计划里只信
+    # span/kind（意图）；origin/行号/标记行/预览是「已验证事实」，由这条唯一入口
+    # 落定——客户端伪造 origin='machine'、伪造行号或预览都无效。两条规则：
+    #   ① span 与现报告某条**机器**剔除完全一致 ⇒ 原样保留那条（人只是确认了
+    #      机器的圈选，账目仍归机器）；
+    #   ② 其余（人工新圈/改边）⇒ 按 `s0_removal_ledger` 的同一口径复算：
+    #      标记行取 span 内首个非空行、预览取标记行之后/段尾、origin='human'。
+    machine_by_span = {
+        segment.span: segment for segment in old.removed if segment.origin == 'machine'}
+    verified: list[RemovedSegment] = []
+    for segment in plan.removed:
+        prior = machine_by_span.get(segment.span)
+        if prior is not None and prior.code_points == segment.code_points:
+            verified.append(prior)
+            continue
+        lo, hi = segment.span
+        piece = decoded.text[lo:hi]
+        first_line = next(
+            (line.strip() for line in piece.splitlines() if line.strip()), '')
+        marker_line = first_line or '人工剔除'
+        marker_at = piece.find(marker_line)
+        line_break = piece.find('\n', marker_at if marker_at >= 0 else 0)
+        after_marker = piece[line_break + 1:] if line_break >= 0 else ''
+        verified.append(RemovedSegment(
+            kind=segment.kind,
+            marker_line=marker_line,
+            line_no=decoded.text.count('\n', 0, lo) + 1,
+            span=segment.span,
+            code_points=hi - lo,
+            head_preview=preview_text(after_marker, 80),
+            tail_preview=preview_text(piece[-120:], 40),
+            origin='human',
+        ))
+
     return _apply_edit(
         ctx,
-        plan.clean_text,
-        removed=plan.removed,
+        reconstructed,
+        removed=verified,
         expected_round=plan.expected_round,
         expected_source_sha1=plan.expected_source_sha1,
         expected_clean_sha1=plan.expected_clean_sha1,
@@ -859,7 +915,30 @@ def run_merge_accept(
         expected_source_sha1=expected_source_sha1,
         expected_clean_sha1=expected_clean_sha1)
 
-    from novel.stages.stage0.merge import resolved_text, snapshot_digest
+    # 接受端二次防御（2026-08-21，P0-3）：生成端不产危险 candidate，不等于这里
+    # 收不到——升级前已落盘的、WAL 崩溃恢复出来的、手工构造的都会走到这一步。
+    # 唯一例外：盘上已有这条 accept 的不可覆盖 WAL 意图行（升级前崩溃在接受途中）。
+    # 意图行本身就是决定时刻；拒绝它会让审计链永远不闭合、书永久卡死，
+    # 而完成重放只是把已经做出的决定落完——已提交的合并同理，重放只认账不翻案。
+    from novel.stages.stage0.merge import (
+        has_human_content_divergence, pending_merge_audit,
+        resolved_text, snapshot_digest,
+    )
+    if has_human_content_divergence(old):
+        pending = pending_merge_audit(
+            ctx, seq=old.audit_seq, head=old.audit_head_sha256)
+        decision_already_durable = (
+            pending is not None
+            and pending.action == 'merge_accept'
+            and pending.candidate_id == candidate.candidate_id)
+        if not decision_already_durable:
+            _retire_merge_candidate(ctx, store, candidate.candidate_id)
+            raise HumanEditProtected(
+                'stage0_human_edit_protected：这份 candidate 的基线（当前正式稿）'
+                '含人工内容分叉，接受合并会把 removed[] 整体换成机器账本、人工圈选'
+                '从此无处对账。危险 candidate 已撤销归档；出路与生成端一致：保持'
+                '现稿，或走 stage0.edit --apply-edit-plan 重新圈选')
+
     merged = resolved_text(candidate, resolutions)
     merged_sha1 = prov.content_sha1(merged.encode('utf-8'))
     snapshot = candidate.theirs_snapshot

@@ -8,17 +8,21 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema.api import Stage0MergeDecisionRequest
-from contracts.schema.stage0 import Stage0MergeDecisionPlan
-from contracts.schema.stage0 import Stage0ConflictResolution
-from novel.errors import ArtifactUnreadable, HumanEditProtected
+from contracts.schema.stage0 import (
+    MachineRemovalSnapshot, Stage0MergeDecisionPlan, Stage0ConflictResolution,
+)
+from novel.errors import ArtifactUnreadable, HumanEditProtected, SourceConflict
 from novel.api.routes import ingest as ingest_routes
 from novel.orchestrator import uploads
-from novel.stages.stage0.merge import three_way_merge, verify_audit_chain
+from novel.stages.stage0.merge import (
+    make_candidate, three_way_merge, verify_audit_chain,
+)
 from novel.stages.stage0 import removal
 from novel.stages.stage0.removal import (
     CANDIDATE_REL,
     CLEAN_REL,
     REPORT_REL,
+    SNAPSHOT_REL,
     _context,
     read_merge_candidate,
     run_edit,
@@ -35,6 +39,25 @@ def _source(tmp_path: Path, sid: str = '900') -> Path:
     return path
 
 
+def _machine_learns_new_extra(monkeypatch, marker: str = '甲乙丙。') -> None:
+    """模拟「机器剔除算法更新」：扫描器学会把 `marker` 那行认成番外。
+
+    这是「同一原文、机器结果变化」的**真实世界形状**——机器结果只会随代码/
+    扫描器变化（原文变了走 2026-08-21 起的 source_changed 分支）。单点 patch
+    `ingest.nonbody_kind`：`scan_text` 在调用时经 ingest 模块全局取它，产地
+    （remove_decoded）与视图（stage0_segments 复扫）两条路看到同一份新结果。
+    """
+    from novel.core import ingest
+    real = ingest.nonbody_kind
+
+    def fake(content: str):
+        if content.strip() == marker:
+            return '番外'
+        return real(content)
+
+    monkeypatch.setattr(ingest, 'nonbody_kind', fake)
+
+
 def _edit(novel_dir: Path, tmp_path: Path, text: str):
     path = tmp_path / 'human.txt'
     path.write_text(text, encoding='utf-8', newline='')
@@ -44,10 +67,10 @@ def _edit(novel_dir: Path, tmp_path: Path, text: str):
     )[0]
 
 
-def _pending_candidate(tmp_path: Path, sid: str):
+def _pending_candidate(tmp_path: Path, monkeypatch, sid: str):
     source = _source(tmp_path, sid)
     novel_dir, first, _ = run_source(source, tmp_path / 'Output')
-    source.write_text(first.clean_text + '机器新增。\n', encoding='utf-8', newline='')
+    _machine_learns_new_extra(monkeypatch)
     run_source(source, tmp_path / 'Output')
     candidate = read_merge_candidate(_context(novel_dir, 'stage0.remove'))
     common = dict(
@@ -167,49 +190,146 @@ def test_legacy_auto_artifact_regains_execution_after_human_reapproval(tmp_path)
         run_partition(_context(novel_dir, 'stage1.partition'))
 
 
-def test_changed_machine_result_creates_candidate_without_touching_formal_pair(tmp_path):
+def test_machine_change_without_human_footprint_creates_candidate(tmp_path, monkeypatch):
+    """安全区：同一原文、正式稿无人工内容分叉 → 允许 candidate，正式对不动。"""
     source = _source(tmp_path)
     novel_dir, first, _ = run_source(source, tmp_path / 'Output')
-    ours = first.clean_text.replace('乙', '人工乙')
-    edited = _edit(novel_dir, tmp_path, ours)
-    edited_view = stage0_segments(tmp_path / 'Output', '900')
-    assert ''.join(item.text for item in edited_view.segments) == ours
     before_report = (novel_dir / REPORT_REL).read_bytes()
     before_clean = (novel_dir / CLEAN_REL).read_bytes()
 
-    source.write_text(
-        first.clean_text.replace('甲', '机器甲'), encoding='utf-8', newline='')
+    _machine_learns_new_extra(monkeypatch)
     run_source(source, tmp_path / 'Output')
 
     assert (novel_dir / REPORT_REL).read_bytes() == before_report
     assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
     candidate = read_merge_candidate(_context(novel_dir, 'stage0.remove'))
-    assert candidate.expected_round == edited.round
-    assert candidate.conflicts == []
-    assert '机器甲' in candidate.proposed_clean_text
-    assert '人工乙' in candidate.proposed_clean_text
+    assert candidate.expected_round == first.report.round
+    assert candidate.conflicts == []          # ours == base，diff3 退化为取 theirs
+    assert '甲乙丙' not in candidate.theirs_text
 
     accepted, _ = run_merge_accept(
         _context(novel_dir, 'stage0.edit'),
         candidate_id=candidate.candidate_id,
-        expected_round=edited.round,
-        expected_source_sha1=edited.source_sha1,
-        expected_clean_sha1=edited.clean_sha1,
+        expected_round=first.report.round,
+        expected_source_sha1=first.report.source_sha1,
+        expected_clean_sha1=first.report.clean_sha1,
         resolutions=[],
         actor='adjudicator',
-        reason='机器与人工改动不相交，接受自动合并',
+        reason='无人工足迹，机器账本可证正确',
     )
     assert accepted.approved == 'approved'
     assert accepted.approval_origin == 'human'
     assert accepted.approved_by == 'adjudicator'
-    assert '机器甲' in (novel_dir / CLEAN_REL).read_text(encoding='utf-8')
+    assert '甲乙丙' not in (novel_dir / CLEAN_REL).read_text(encoding='utf-8')
     assert not (novel_dir / CANDIDATE_REL).exists()
 
 
-def test_reject_keeps_formal_text_and_records_decision(tmp_path):
+def test_human_divergence_blocks_candidate_and_names_the_escape_hatch(tmp_path, monkeypatch):
+    """人工内容分叉：不写 candidate，正式对不动，错误给出稳定理由码与出路。
+
+    出路必须真的存在：segments 视图（复扫当前原文）仍把机器新候选标出来，
+    人工可以经 `--apply-edit-plan` 重选段（服务端按原文减 span 重建 clean）。
+    """
+    source = _source(tmp_path)
+    novel_dir, first, _ = run_source(source, tmp_path / 'Output')
+    # 改 hook 行（不动「甲乙丙。」——机器新学会的标记行必须原样留在正文里，
+    # 视图复扫 clean 时才能把它标成候选）。
+    ours = first.clean_text.replace('开篇文案', '人工文案')
+    _edit(novel_dir, tmp_path, ours)
+    before_report = (novel_dir / REPORT_REL).read_bytes()
+    before_clean = (novel_dir / CLEAN_REL).read_bytes()
+
+    _machine_learns_new_extra(monkeypatch)
+    with pytest.raises(HumanEditProtected, match='stage0_human_edit_protected'):
+        run_source(source, tmp_path / 'Output')
+
+    assert (novel_dir / REPORT_REL).read_bytes() == before_report
+    assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
+    assert not (novel_dir / CANDIDATE_REL).exists(), '有人工分叉时一个字节都不该写'
+
+    # 恢复出口可见：视图复扫当前原文，机器新删的「甲乙丙」段被标成待删候选。
+    view = stage0_segments(tmp_path / 'Output', '900')
+    flagged = [item for item in view.segments if item.flagged]
+    assert flagged and any('甲乙丙' in item.text for item in flagged), (
+        '机器新候选没有出现在分区视图里，重选段的出路是假的')
+
+
+def test_source_change_refuses_the_rerun_entirely(tmp_path):
+    """原文变化（R-0.14）：连 candidate 都不谈——坐标系已经不同。"""
+    source = _source(tmp_path)
+    novel_dir, first, _ = run_source(source, tmp_path / 'Output')
+    before_report = (novel_dir / REPORT_REL).read_bytes()
+    before_clean = (novel_dir / CLEAN_REL).read_bytes()
+
+    source.write_text(
+        first.clean_text.replace('甲', '机器甲'), encoding='utf-8', newline='')
+    with pytest.raises(SourceConflict, match='stage0_source_changed'):
+        run_source(source, tmp_path / 'Output')
+
+    assert (novel_dir / REPORT_REL).read_bytes() == before_report
+    assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
+    assert not (novel_dir / CANDIDATE_REL).exists()
+
+
+def test_pre_upgrade_candidate_on_divergent_base_is_refused_and_retired(tmp_path, monkeypatch):
+    """接受端二次防御：升级前/手工构造的「base 有人工分叉」candidate，accept 拒绝并撤销。
+
+    生成端守卫挡不住这一类——它们绕过了 run_source（旧版本落盘、WAL 恢复、手写）。
+    """
+    source = _source(tmp_path)
+    novel_dir, first, _ = run_source(source, tmp_path / 'Output')
+    ours = first.clean_text.replace('乙', '人工乙')
+    edited = _edit(novel_dir, tmp_path, ours)
+    before_report = (novel_dir / REPORT_REL).read_bytes()
+    before_clean = (novel_dir / CLEAN_REL).read_bytes()
+
+    # 手工按旧规则构造 candidate（make_candidate 不做分叉检查——防御在接受端）。
+    old_snapshot, _ = removal.ArtifactStore(
+        _context(novel_dir, 'stage0.remove')).read_own(MachineRemovalSnapshot, SNAPSHOT_REL)
+    _machine_learns_new_extra(monkeypatch)
+    theirs = removal.inspect_source(source, code=first.report.code)
+    candidate = make_candidate(
+        expected_round=edited.round,
+        expected_source_sha1=edited.source_sha1,
+        expected_clean_sha1=edited.clean_sha1,
+        base_snapshot=old_snapshot,
+        theirs_snapshot=theirs.machine_snapshot,
+        base_text=old_snapshot.clean_text,
+        ours_text=ours,
+        theirs_source_sha1=theirs.machine_snapshot.source_sha1,
+        theirs_text=theirs.clean_text,
+    )
+    store = removal.ArtifactStore(_context(novel_dir, 'stage0.edit'))
+    store.write(CANDIDATE_REL, candidate)
+
+    with pytest.raises(HumanEditProtected, match='stage0_human_edit_protected'):
+        run_merge_accept(
+            _context(novel_dir, 'stage0.edit'),
+            candidate_id=candidate.candidate_id,
+            expected_round=edited.round,
+            expected_source_sha1=edited.source_sha1,
+            expected_clean_sha1=edited.clean_sha1,
+            resolutions=[],
+            actor='adjudicator', reason='试图接受危险候选',
+        )
+
+    # 正式对与审计链头一个字节没动；危险 candidate 已撤销归档。
+    assert (novel_dir / REPORT_REL).read_bytes() == before_report
+    assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
+    assert not (novel_dir / CANDIDATE_REL).exists()
+    assert (novel_dir / removal._candidate_archive_rel(candidate.candidate_id)).is_file()
+    current, _ = removal.ArtifactStore(
+        _context(novel_dir, 'stage0.remove')).read_own(removal.RemovalReport, REPORT_REL)
+    assert current.audit_seq == edited.audit_seq
+    verify_audit_chain(
+        _context(novel_dir, 'stage0.remove'),
+        seq=current.audit_seq, head=current.audit_head_sha256)
+
+
+def test_reject_keeps_formal_text_and_records_decision(tmp_path, monkeypatch):
     source = _source(tmp_path, '901')
     novel_dir, first, _ = run_source(source, tmp_path / 'Output')
-    source.write_text(first.clean_text + '机器新增。\n', encoding='utf-8', newline='')
+    _machine_learns_new_extra(monkeypatch)
     run_source(source, tmp_path / 'Output')
     candidate = read_merge_candidate(_context(novel_dir, 'stage0.remove'))
     before = (novel_dir / CLEAN_REL).read_bytes()
@@ -261,10 +381,10 @@ def test_audit_tampering_is_detected(tmp_path):
         )
 
 
-def test_merge_optimistic_lock_rejects_stale_request(tmp_path):
+def test_merge_optimistic_lock_rejects_stale_request(tmp_path, monkeypatch):
     source = _source(tmp_path, '903')
     novel_dir, first, _ = run_source(source, tmp_path / 'Output')
-    source.write_text(first.clean_text + '机器新增。\n', encoding='utf-8', newline='')
+    _machine_learns_new_extra(monkeypatch)
     run_source(source, tmp_path / 'Output')
     candidate = read_merge_candidate(_context(novel_dir, 'stage0.remove'))
 
@@ -286,7 +406,7 @@ def test_merge_optimistic_lock_rejects_stale_request(tmp_path):
 def test_accept_replays_every_durable_crash_point_without_losing_candidate(
     tmp_path, monkeypatch, phase,
 ):
-    novel_dir, old, candidate, common = _pending_candidate(tmp_path, '910')
+    novel_dir, old, candidate, common = _pending_candidate(tmp_path, monkeypatch, '910')
     crashed: list[str] = []
 
     def fail_at(current: str) -> None:
@@ -338,7 +458,7 @@ def test_accept_replays_every_durable_crash_point_without_losing_candidate(
 def test_reject_replays_every_crash_point_and_never_changes_clean_text(
     tmp_path, monkeypatch, phase,
 ):
-    novel_dir, old, candidate, common = _pending_candidate(tmp_path, '920')
+    novel_dir, old, candidate, common = _pending_candidate(tmp_path, monkeypatch, '920')
     clean_before = (novel_dir / CLEAN_REL).read_bytes()
     crashed: list[str] = []
 
@@ -365,7 +485,7 @@ def test_reject_replays_every_crash_point_and_never_changes_clean_text(
 
 
 def test_a_conflicting_replay_cannot_overwrite_the_inflight_wal(tmp_path, monkeypatch):
-    novel_dir, _old, _candidate, common = _pending_candidate(tmp_path, '930')
+    novel_dir, _old, _candidate, common = _pending_candidate(tmp_path, monkeypatch, '930')
 
     def fail_after_audit(phase: str) -> None:
         if phase == 'audit':

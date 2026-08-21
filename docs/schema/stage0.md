@@ -239,9 +239,37 @@ stage0/_rounds/              正式稿、快照、候选与已提交状态的可
 
 - `MachineRemovalSnapshot` 保留机器本轮的 source/clean 指纹、全文、removed 与 warnings；
   它从不冒充正式人工稿。
-- 重跑结果变化时，`Stage0MergeCandidate` 固定 `base=上轮机器稿`、
-  `ours=当前批准稿`、`theirs=新机器稿`。Unicode 码点级 diff3 只自动合并
-  不相交或相同改动；重叠改动产出 `Stage0MergeConflict`，每个 id 必须恰好决议一次。
+- 重跑结果变化时**先分诊再谈合并**（2026-08-21 裁决，P0-3）：
+  `has_human_content_divergence`（`novel/stages/stage0/merge.py`，唯一落点）判
+  「正式稿含机器结果之外的人工内容」——三条独立证据任一为真即分叉：
+  `edited_by_human` · `removed[]` 含 `origin='human'` · **`clean_sha1 != machine_clean_sha1`
+  （客观哈希分叉，不信标志位）**。
+
+  | 情况 | 处理 |
+  |---|---|
+  | 原文相同、机器结果变化、**无**人工内容分叉 | 允许 diff3 candidate（`ours == base`，diff3 退化为「取机器新结果」，theirs 账本可证正确） |
+  | 原文相同、机器结果变化、**有**人工内容分叉 | 不写 candidate，正式对一字节不动；`stage0_human_edit_protected` 显式终态，出路=走 `stage0.edit --apply-edit-plan` 重选段 |
+  | 原文变化（`machine_snapshot.source_sha1` 对不上） | 连 candidate 都不谈（`stage0_source_changed`，R-0.14）：旧正式稿的 span 坐标系已失效；正式稿仍对旧原文成立 |
+  | 已落盘的 candidate 其基线有人工分叉 | accept 端拒绝并**撤销归档**该 candidate（`_retire_merge_candidate`） |
+
+- **安全条件同时存在于生成端与接受端**：生成端不产危险 candidate，不等于接受端
+  收不到——升级前已落盘的、WAL 崩溃恢复出来的、手工构造的都会走到
+  `run_merge_accept`。唯一例外：盘上已有该 accept 的不可覆盖 WAL 意图行
+  （升级前崩溃在接受途中）——意图行本身就是决定时刻，拒绝它会让审计链永远
+  不闭合、书永久卡死；已提交的合并同理，重放只认账不翻案。
+- `Stage0MergeCandidate` 固定 `base=上轮机器稿`、`ours=当前批准稿`、`theirs=新机器稿`。
+  Unicode 码点级 diff3 只自动合并不相交或相同改动；重叠改动产出
+  `Stage0MergeConflict`，每个 id 必须恰好决议一次。
+- **恢复出口（edit-plan）的 provenance 一律服务端落定**（`run_edit_plan`）：计划里
+  只信 span/kind；span 与现报告机器段完全一致的条目原样保留（origin 仍是 machine，
+  人只是确认了机器的圈选），人工新圈的段按 `s0_removal_ledger` 同一口径复算
+  （标记行=span 内首个非空行、预览=标记行之后/段尾、origin='human'）。客户端伪造
+  origin/行号/标记行/预览一律无效。
+- **机器新候选在 S-00 视图可见**：`_gap_segments` 把扫描器此刻新认出、且不落在当前
+  `removed[]` 里的非正文段标成 `flagged=true + removed_kind=<kind>` 的 keep 候选
+  （API 契约已放宽为「remove 分区或带 removed_kind 的候选才可 flagged」）。预选集合
+  只认 `kind='remove'`——候选只提示、不替人勾选；有人工分叉的轮次采纳机器新结果
+  只能走这条路。
 - `Stage0AuditEntry` 以 `previous_sha256` 串联，文件不可覆盖。合并决定的 `seq+1`
   同时是 write-ahead log：accept 以 report 为 commit marker，reject 同样在移走 live candidate 前先提交 report。
   进程可在任一 durable phase 崩溃；同一 actor/reason/乐观锁/决议重放必须幂等完成，

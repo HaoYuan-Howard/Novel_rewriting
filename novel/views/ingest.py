@@ -130,19 +130,26 @@ def _gap_segments(
             boundaries.add(match.end())
     points = sorted(boundaries)
     out: list[Stage0Segment] = []
+    nonbody_start = {marker.line_start: marker.kind for marker in scan.nonbody}
     for start, end in zip(points, points[1:]):
         if start == end:
             continue
         kind = 'end_marker' if scan.end_marker == start else 'keep'
         value = text[start:end]
+        # 机器此刻新认出的非正文段（不落在当前 removed[] 里的那些）标成候选：
+        # 有人工分叉的轮次不再自动三方合并（2026-08-21），「重选段」是唯一出路，
+        # 出路必须看得见——否则人工只能靠肉眼在整本原文里找机器的新认知。
+        # 预选集合只认 kind='remove'，这里只提示、不替人勾选。
+        fresh_kind = nonbody_start.get(start) if kind != 'end_marker' else None
         out.append(Stage0Segment(
             id=f's0:{start}:{end}',
             kind=kind,
             start=start,
             end=end,
             chars=end - start,
-            flagged=False,
+            flagged=fresh_kind is not None,
             text=value,
+            removed_kind=fresh_kind,
         ))
     return out
 

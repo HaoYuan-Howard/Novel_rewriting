@@ -14,6 +14,7 @@ from typing import Iterable, Mapping
 from contracts.artifacts import STAGE0_AUDIT_ENTRY
 from contracts.schema.stage0 import (
     MachineRemovalSnapshot,
+    RemovalReport,
     Stage0AuditEntry,
     Stage0ConflictResolution,
     Stage0MergeCandidate,
@@ -23,6 +24,26 @@ from novel import prov
 from novel.errors import ArtifactUnreadable, HumanEditProtected
 from novel.run import RunContext
 from novel.store import ArtifactStore
+
+
+def has_human_content_divergence(report: RemovalReport) -> bool:
+    """当前正式轮是否含机器结果之外的人工内容（2026-08-21 裁决，P0-3）。
+
+    三条独立证据，任一为真即分叉：`edited_by_human`（任意正文编辑，账本无痕）·
+    `removed[]` 含 `origin='human'`（人工圈选）· `clean_sha1 != machine_clean_sha1`
+    （**客观哈希分叉**，不信标志位——本轮修的恰好就是「账本与人工痕迹可能不完整」）。
+
+    含人工分叉的轮次，机器新结果**不**自动三方合并：接受合并会把 `removed[]`
+    整体换成机器账本，人工圈选从此无处对账；原文变了则连 span 坐标系都不同。
+    安全条件必须同时存在于 candidate 生成端（`run_source`）与接受端/WAL 恢复端
+    （`run_merge_accept`）——生成端不产危险 candidate，不等于接受端收不到
+    （升级前已落盘的、崩溃恢复出来的、手工构造的）。
+    """
+    return (
+        report.edited_by_human
+        or any(item.origin == 'human' for item in report.removed)
+        or report.clean_sha1 != report.machine_clean_sha1
+    )
 
 
 def _now() -> str:

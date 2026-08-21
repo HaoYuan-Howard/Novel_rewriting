@@ -126,8 +126,16 @@ class Stage0Segment(FrozenModel):
         if self.chars != self.end - self.start or self.chars != len(self.text):
             raise ValueError('chars 必须同时等于 end-start 与 text 的码点长度')
         is_remove = self.kind == 'remove'
-        if self.flagged != is_remove:
-            raise ValueError('stage0 只有 remove 分区 flagged=true')
+        # keep 分区带 `removed_kind` = **机器此刻新认出的非正文候选**（不在当前
+        # removed[] 里）。2026-08-21 起有人工分叉的轮次不再自动三方合并，
+        # 「重选段」是采纳机器新结果的唯一出路——候选必须看得见。它只是提示：
+        # 预选集合只认 kind='remove'，不替人勾选。
+        is_candidate = self.kind == 'keep' and self.removed_kind is not None
+        if is_remove and not self.flagged:
+            raise ValueError('remove 分区必须 flagged=true')
+        if self.flagged and not (is_remove or is_candidate):
+            raise ValueError(
+                '非 remove 分区只有机器新候选（带 removed_kind）才可 flagged=true')
         metadata = (self.origin, self.removed_kind, self.marker_line)
         if is_remove != all(value is not None for value in metadata):
             raise ValueError('remove 必须带完整剔除元数据，非 remove 不得冒充剔除记录')

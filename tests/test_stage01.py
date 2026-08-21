@@ -710,3 +710,84 @@ def test_execution_eligibility_has_exactly_one_home():
             f'{rel} 复述了审批条件——改用 '
             f'novel/stages/stage0/eligibility.py::is_stage0_executable / block_reason')
         assert 'eligibility' in text, f'{rel} 应经 eligibility 落点判执行资格'
+
+
+# ── 2026-08-21 P0-3：edit-plan 恢复出口的服务端重建（provenance 不信客户端）──
+
+
+def _forged_edit_plan(work, sid: str, removal):
+    """经视图生成一份自洽计划（机器段 + 一个新的人工 keep 段），再篡改 provenance。
+
+    计划的 span/clean/乐观锁全部合法——被伪造的只有 provenance 字段：
+    origin、line_no、marker_line、两个 preview。服务端必须不信任它们。
+    """
+    from contracts.schema.api import Stage0EditRequest
+    from novel.views.ingest import stage0_edit_plan, stage0_segments
+
+    view = stage0_segments(work / 'Output', sid)
+    machine = [item.id for item in view.segments if item.kind == 'remove']
+    manual = next(item.id for item in view.segments if item.kind == 'keep')
+    request = Stage0EditRequest(
+        expected_round=removal.report.round,
+        expected_source_sha1=removal.report.source_sha1,
+        expected_clean_sha1=removal.report.clean_sha1,
+        removed_segment_ids=[*machine, manual],
+        actor='forger', reason='伪造 provenance 的计划',
+    )
+    plan = stage0_edit_plan(work / 'Output', sid, request)
+    machine_spans = {segment.span for segment in removal.report.removed}
+    tampered = plan.model_copy(update={'removed': [
+        RemovedSegment(
+            kind=segment.kind, marker_line='伪造标记行', line_no=999,
+            span=segment.span, code_points=segment.code_points,
+            head_preview='伪造头', tail_preview='伪造尾', origin='machine')
+        for segment in plan.removed
+    ]})
+    path = work / 'forged-plan.json'
+    path.write_text(tampered.model_dump_json(), encoding='utf-8')
+    return path, machine_spans
+
+
+def test_edit_plan_recomputes_provenance_server_side(work):
+    """恢复出口收口：origin/行号/标记行/预览一律服务端落定，客户端伪造无效。
+
+    两条规则一起验：与现报告机器段 span 完全一致的条目**原样保留**（origin 仍是
+    machine，人只是确认了机器的圈选）；新的人工 span 按 ledger 同一口径复算、
+    origin='human'。
+    """
+    from novel.stages.stage0.removal import run_edit_plan
+
+    source = _source(work, 'FQ_plan_prov_9601.txt', 'end_marker_then_fanwai')
+    novel_dir, removal, _initial = run_source(source, work / 'Output')
+    assert removal.report.removed, '这份样本必须已有机器剔除段，否则本用例没在查'
+    text = decode_source_bytes(source.read_bytes()).text
+
+    path, machine_spans = _forged_edit_plan(work, '9601', removal)
+    edited, _check = run_edit_plan(_context(novel_dir, 'stage0.edit'), path)
+
+    assert edited.edited_by_human and edited.round == removal.report.round + 1
+    human_origins = 0
+    for segment in edited.removed:
+        assert segment.line_no != 999 and segment.marker_line != '伪造标记行'
+        assert segment.head_preview != '伪造头' and segment.tail_preview != '伪造尾'
+        if segment.span in machine_spans:
+            assert segment.origin == 'machine', 'span 未变的机器段账目应原样保留'
+        else:
+            assert segment.origin == 'human', '人工新圈的段必须落 origin=human'
+            human_origins += 1
+        lo, _hi = segment.span
+        assert segment.line_no == text.count('\n', 0, lo) + 1
+    assert human_origins >= 1, '必须至少有一条人工新圈段，否则没在查重建路径'
+
+
+def test_edit_plan_refuses_when_source_hash_drifts(work):
+    """原文已换：页面上的 span 全部失效，计划必须死在门口而不是落到正式稿上。"""
+    from novel.stages.stage0.removal import run_edit_plan
+
+    source = _source(work, 'FQ_plan_prov_9602.txt', 'end_marker_then_fanwai')
+    novel_dir, removal, _initial = run_source(source, work / 'Output')
+    path, _machine_spans = _forged_edit_plan(work, '9602', removal)
+
+    source.write_bytes(source.read_bytes() + '\n原文已被替换\n'.encode('utf-8'))
+    with pytest.raises(SourceConflict):
+        run_edit_plan(_context(novel_dir, 'stage0.edit'), path)
