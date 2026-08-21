@@ -12,6 +12,16 @@
   ② 进程内就地覆盖那一格，只活在这一个进程里。⇒ 仓里那份恒是 `None`（即 high），
      实验臂与交付跑物理上不可能混。
 
+⚠⚠ **换臂之前先换 `NOVEL_CACHE_DIR`，否则这一臂可能一次都不发。**
+  `client.py` 在发任何新请求之前会**横扫阶梯上所有档位**的已验证缓存
+  （`_read_cached`，line ~317）——那是为了「中断恢复不重复付费」，
+  但对 effort A/B 恰好是陷阱：`max` 臂的阶梯是 `max→high→low`，
+  只要 `high` 那一档已经有缓存（比如刚跑过对照臂），它就会被直接采纳，
+  **一次 max 都不发，而账本如实记着 `high`、产物与对照臂逐字节相同**。
+  2026-08-21 实测踩过一次：27 次调用全是缓存命中，实验静默地没有发生。
+  ⇒ 每条实验臂配一个独立缓存目录（`NOVEL_CACHE_DIR=<主仓>/.llm_cache_ab_<臂名>`），
+  跑完看账本 `reasoning_effort` 那一列**全是你要的那一档**才算数。
+
 ⚠ 本工具**不构造 argv**。`--` 之后原样透传给 `novel.cli.main::main`，
   那一串必须逐字取自 `python -m novel.cli preview`（skill 工作流契约：
   「不要凭文档手拼真实 argv」）。付费确认仍由 CLI 自己的 `--yes` 把关，本工具不代批。
@@ -77,6 +87,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f'  {node}: effort {was!r} → {effort!r}')
         print(f'    阶梯 {list(rungs_from_effort(was))} → {list(rungs_from_effort(effort))}')
     print(f'  透传 argv: {" ".join(passthrough)}')
+    from novel.config import load_config
+    print(f'  缓存目录: {load_config().cache_dir}')
+    print('  ⚠ 阶梯会横扫**所有档位**的缓存：上面这个目录里若已有别档的响应，'
+          '本臂可能一次都不发\n'
+          '    （账本会如实记成那一档，产物与对照臂逐字节相同）。'
+          '换臂请一并换 NOVEL_CACHE_DIR。')
     print(f'  真跑: {"是（--execute）" if a.execute else "否（0 成本预览）"}')
     if not a.execute:
         print('  ⚠ 未加 --execute，到此为止；仓内 NodeSpec.effort 一个字没动。')
