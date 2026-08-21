@@ -435,7 +435,7 @@ export function Stage0Screen() {
                   <Panel className={'flex flex-col gap-8 border-warn-line px-18 py-16'}>
                     <div className={'text-section font-semibold'}>原文不可审校</div>
                     <p className={'prose-cn m-0 text-body text-ink-3'}>{source.reason}</p>
-                    <Mono className={'text-mini text-ink-5'}>{current.original_path}</Mono>
+                    <Mono className={'text-mini text-ink-5'}>{current.original_filename}</Mono>
                   </Panel>
                 ) : (
                   <>

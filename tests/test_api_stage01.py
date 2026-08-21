@@ -197,29 +197,41 @@ def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
     assert response.json()['kind'] == 'HumanEditProtected'
 
 
-def test_missing_original_is_explicitly_unavailable(client: TestClient):
+def test_missing_original_is_explicitly_unavailable(client: TestClient, root: Path):
+    """原文真没了 ⇒ 明说不可用，绝不从别处变出一份。
+
+    ⚠ 上传那一支不记绝对路径（它跟着 base 走），所以这里按**内容地址**定位那份 blob
+    再删掉它——那正是产物说的那份东西没了。
+    """
+    from novel import paths as novel_paths
+
     sid = _upload(client)['sid']
     report = client.get(f'/api/novels/{sid}/stage0/report').json()
-    Path(report['original_path']).unlink()
+    ref = report['source_ref']
+    assert ref['kind'] == 'managed_upload', '界面上传必须写成上传那一支'
+    (novel_paths.uploads_dir(root) / ref['blob_sha256'] / ref['filename']).unlink()
+
     response = client.get(f'/api/novels/{sid}/stage0/segments')
     assert response.status_code == 200
     assert response.json()['available'] is False
     assert response.json()['segments'] == []
-    assert 'original_path' in response.json()['reason']
+    assert ref['filename'] in response.json()['reason']
 
 
 def test_original_survives_moving_the_output_root(client: TestClient, root: Path):
     """Output 根搬家后，界面上传的那本书**照旧读得回原文**。
 
     ⚠⚠ 与上一条成对，两条一起才是完整的意思：**原文真没了要明说不可用；
-      原文还在就不许说没了。** `original_path` 记的是绝对路径，根一改它就断，
+      原文还在就不许说没了。** 此前 `original_path` 记的是绝对路径，根一改它就断，
       而文件根本没动——它住在 `<base>/_service/uploads/<内容地址>/`，跟着 base 一起搬。
-      此时答 `available: false` 是**假阴性**，实测发生过（《夫君与鲛人孰》：
+      当时答 `available: false` 是**假阴性**，实测发生过（《夫君与鲛人孰》：
       记的是旧根，文件就在新根的同一个内容地址目录下、字节逐一相等，
       而 `state` 报 ghost、不带 `--source` 复跑直接 `UpstreamMissing`）。
 
-    ⚠ 这条回落**只认上传目录那一种形状**，且候选必须自证内容地址；
-      外部语料被删仍然是 ghost（`novel/core/source.py`）。
+    ⚠ 2026-08-22 起这不再靠「断了再猜」的回落：`source_ref` 的
+      `managed_upload` 那一支压根不记绝对路径，位置由当前 base 现算，
+      候选仍须自证内容地址；`external_file` 被删仍然是 ghost
+      （`novel/core/source.py`）。
     """
     sid = _upload(client)['sid']
     before = client.get(f'/api/novels/{sid}/stage0/segments').json()

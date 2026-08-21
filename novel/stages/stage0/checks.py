@@ -18,7 +18,7 @@ from novel.core.ingest import (
     nonbody_kind,
     scan_text,
 )
-from novel.core.source import resolve_recorded_source
+from novel.core.source import describe_source, resolve_recorded_source
 from novel.core.warnings import describe
 from novel.report.builder import build
 from novel.report.findings import Outcome, ran, unverifiable
@@ -46,9 +46,9 @@ def _source(report: RemovalReport,
     ⚠ 记录的位置优先，只对界面上传的原文做 base 重锚（`novel/core/source.py`）。
       外部语料被删没有回落——那是契约有意接受的代价，不是这里该"救"的事。
     """
-    path = resolve_recorded_source(report.original_path, base)
+    path = resolve_recorded_source(report.source_ref, base)
     if path is None:
-        return None, f'原始小说已不在记录位置：{report.original_path}'
+        return None, f'原始小说已不在记录位置：{describe_source(report.source_ref)}'
     try:
         raw = path.read_bytes()
     except OSError as exc:

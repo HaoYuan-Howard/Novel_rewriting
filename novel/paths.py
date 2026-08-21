@@ -612,10 +612,11 @@ def uploaded_source_tail(recorded: str | os.PathLike[str]) -> tuple[str, str] | 
     `None` = 它不是上传路径（比如外部语料 `Test_data/xxx.txt`）。
 
     ⚠⚠ **认的是尾巴，不是 base。** 存在的理由正是「记下来时的 base 已经不是现在这个」：
-    `stage0/removal_report.json::original_path` 记的是绝对路径，Output 根一搬家
-    那条路径就断，而 `_service/uploads/<内容地址>/<文件名>` 这一段**跟着 base 走、
-    一个字都没变**。⇒ 拿尾巴 + 当前 base 就能重新锚回去
-    （`novel/core/source.py::resolve_recorded_source`）。
+    上传的原文住在 `<base>/_service/uploads/<内容地址>/<文件名>`，这一段**跟着
+    base 走、一个字都没变**，而记下来时的 base 可能已经不是现在这个。
+    ⇒ 产地在写产物那一刻用它判「这条路径是不是上传」，据此写出
+    `ManagedUploadRef` 而不是 `ExternalFileRef`
+    （`novel/core/source.py::source_ref_for`，唯一调用方）。
 
     ⚠ **只认这一种形状，其余一律 `None`。** 外部语料被删就是**世界变了**，
     `ghost` 是正确答案、契约有意接受（`docs/schema/stage0.md`：文件被移走时是

@@ -1059,24 +1059,32 @@ class ArtifactStore:
         report = self._freshness_payload(STAGE0_REMOVAL_REPORT)
         if report is None:
             return FreshnessReport('unknown', 'no_provenance')
-        source_path = report.get('original_path')
+        raw_ref = report.get('source_ref')
         source_was = report.get('source_sha1')
         clean_was = report.get('clean_sha1')
-        if not all(isinstance(value, str) and value
-                   for value in (source_path, source_was, clean_was)):
+        if not isinstance(raw_ref, dict) or not all(
+                isinstance(value, str) and value for value in (source_was, clean_was)):
+            return FreshnessReport('unknown', 'no_provenance')
+        from contracts.schema.stage0 import SourceRef
+        from pydantic import TypeAdapter
+        try:
+            source_ref = TypeAdapter(SourceRef).validate_python(raw_ref)
+        except Exception:
             return FreshnessReport('unknown', 'no_provenance')
 
         clean_now = self._content_sha1_or_none(STAGE0_CLEAN_TEXT)
         clean_edge = self._content_edge(STAGE0_CLEAN_TEXT, clean_was, clean_now)
 
-        # 记录的那条路径优先，`_service/uploads/` 的 base 重锚只是回落——顺序不许反，
-        # 理由写在 `novel/core/source.py`（反过来会让 `_require_stage0_fresh` 那道
-        # 「提交这一批期间源被换掉就整批回滚」的闸拿到一份永远自洽的答案）。
-        from novel.core.source import resolve_recorded_source
-        source = resolve_recorded_source(source_path, self.ctx.novel_dir.parent)
+        # ⚠ 这里曾有一条「记录的那条路径优先、重锚只是回落，顺序不许反」的纪律。
+        #   2026-08-22 `source_ref` 换成判别联合之后**没有回落这回事了**：每一支只有
+        #   一条路，`external_file` 认那一条绝对路径、`managed_upload` 认当前 base 下的
+        #   内容地址目录。那条纪律守的性质（`_require_stage0_fresh` 必须拿到能反映
+        #   「世界变了」的读数，而不是一份永远自洽的答案）现在由类型保证。
+        from novel.core.source import describe_source, resolve_recorded_source
+        source = resolve_recorded_source(source_ref, self.ctx.novel_dir.parent)
         if source is None:
             # ⚠ 边的 key 用记录里那条：读不到时要点名的就是它（`R-5.10`）。
-            source_edge = self._content_edge(source_path, source_was, None)
+            source_edge = self._content_edge(describe_source(source_ref), source_was, None)
             return self._content_report((source_edge, clean_edge))
         try:
             from novel.core.ingest import DecodeProblem, decode_source_bytes
@@ -1085,7 +1093,7 @@ class ArtifactStore:
             return FreshnessReport('unknown', 'no_provenance')
         except OSError:
             return FreshnessReport('unknown', 'no_provenance')
-        # ⚠ 重锚成功时 key 用**真正读到的那个位置**：点一条其实读到了的旧路径，
+        # ⚠ key 用**真正读到的那个位置**：点一条其实读到了的旧路径，
         #   会把人送去找一个并不存在的问题。
         source_edge = self._content_edge(str(source), source_was, source_now)
         return self._content_report((source_edge, clean_edge))

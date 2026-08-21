@@ -41,7 +41,15 @@ export interface Stage0Warning {
 
 export interface Stage0Report {
   original_filename: string
-  original_path: string
+  /**
+   * 原文此刻该去哪儿找。**两支处置相反**（2026-08-22 从 `original_path: string`
+   * 换成判别联合）：external_file 找不到 = 世界真的变了；managed_upload 跟着
+   * base 走、位置由后端现算，前端不拼路径也不猜。
+   * ⚠ 展示位置用 `original_filename`（它就是为展示留的）。
+   */
+  source_ref:
+    | { kind: 'external_file'; absolute_path: string }
+    | { kind: 'managed_upload'; blob_sha256: string; filename: string }
   code: string
   source_sha1: string
   clean_sha1: string
@@ -263,33 +271,6 @@ export interface Stage1Segments {
   segments: Stage1Segment[]
 }
 
-export interface Stage1Report {
-  source_id: string
-  title: string
-  platform: string | null
-  original_filename: string
-  original_path: string
-  source_sha1: string
-  source_encoding: string
-  text_norm: string
-  total_code_points: number
-  body_code_points: number
-  body_ratio: number
-  num_sections: number
-  num_chapters: number
-  chapter_nos: number[]
-  chapter_nos_strictly_increasing: boolean
-  chapter_no_gaps: number[]
-  chapter_no_duplicates: number[]
-  has_end_marker: boolean
-  hook_copy_present: boolean
-  hook_copy_code_points: number
-  dropped: unknown[]
-  dropped_code_points: number
-  /** 切得可疑但不算错，要人看一眼再决定要不要重切 */
-  warnings: string[]
-  notes: string[]
-}
 
 export interface Stage1Chapter {
   chapter_ordinal: number

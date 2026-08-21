@@ -287,15 +287,13 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     if source is None:
         store = ArtifactStore(ctx)
         previous, _raw = store.read_own(RemovalReport, removal.REPORT_REL)
-        # ⚠ 记录的那条是**书目录之外**的绝对路径，Output 根一搬家就断。界面上传的原文
-        #   其实跟着 base 走（`<base>/_service/uploads/<内容地址>/`），重锚认得回来；
-        #   外部语料被删则认不回来，此时**照旧把记录的那条传下去**——
-        #   让 `run_source` 给出那句说得清的 `UpstreamMissing`，不在这里改写成别的理由。
-        from novel.core.source import resolve_recorded_source
-        found = resolve_recorded_source(previous.original_path, ctx.novel_dir.parent)
-        # 重锚成功时复跑会把 `original_path` 重新记成当前 base 下的位置（`removal._write`
-        # 记的是这次实际读的那条），于是这本书的源身份边自己就长回来了。
-        source = previous.original_path if found is None else found
+        # ⚠ 两支处置相反，而 `source_ref` 让它们在类型上就分得开：`managed_upload`
+        #   跟着 base 走（Output 根搬家不影响它），`external_file` 找不到就是世界
+        #   真的变了。找不到时**照旧把记录里那条路径传下去**——让 `run_source` 给出
+        #   那句说得清的 `UpstreamMissing`，不在这里改写成别的理由。
+        from novel.core.source import describe_source, resolve_recorded_source
+        found = resolve_recorded_source(previous.source_ref, ctx.novel_dir.parent)
+        source = describe_source(previous.source_ref) if found is None else found
     novel_dir, result, _report = removal.run_source(
         source,
         ctx.novel_dir.parent,

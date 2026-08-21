@@ -21,7 +21,7 @@ describe('Stage0Screen segment virtualization', () => {
     }))
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      original_path: 'book.txt',
+      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
       source_sha1: 'source',
       clean_sha1: 'clean',
@@ -59,7 +59,7 @@ describe('Stage0Screen segment virtualization', () => {
   it('resolves every typed merge conflict through the audited API request', async () => {
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      original_path: 'book.txt',
+      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
       source_sha1: '1111111111111111111111111111111111111111',
       clean_sha1: '2222222222222222222222222222222222222222',
@@ -144,7 +144,7 @@ describe('Stage0Screen 批准前分章预览', () => {
   it('把纯数字番外的章号异常摆在批准动作之前', async () => {
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      original_path: 'book.txt',
+      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
       source_sha1: 'source',
       clean_sha1: 'clean',
@@ -229,7 +229,7 @@ describe('Stage0Screen 批准前分章预览', () => {
   it('分不出章时给出理由而不是一屏空表', async () => {
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      original_path: 'book.txt',
+      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
       source_sha1: 'source',
       clean_sha1: 'clean',

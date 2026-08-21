@@ -859,7 +859,8 @@ def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_fre
     (book / 'stage0').mkdir()
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
     _write_payload(book, 'stage0/removal_report.json', {
-        'original_path': str(source.resolve()),
+        'source_ref': {'kind': 'external_file',
+                       'absolute_path': str(source.resolve())},
         'source_sha1': prov.content_sha1(source_bytes),
         'clean_sha1': prov.content_sha1(clean_bytes),
     })
@@ -906,11 +907,14 @@ _SOURCE_BYTES = '开篇。\n\n1\n第一章。\n\n2\n第二章。\n'.encode('utf-
 
 def _stage0_book(recorded_source: Path,
                  base: Path | None = None) -> tuple[Path, ArtifactStore]:
-    """一本只有 stage0 的书，报告里的 `original_path` 记成 `recorded_source`。
+    """一本只有 stage0 的书，报告里的 `source_ref` 按 `recorded_source` 的形状写。
 
+    ⚠ 产地那一刻的判定走**唯一落点** `source_ref_for`，不在这里手拼分支——
+    手拼一份就是「上传路径长什么样」的第二个定义，而它必然与产地漂开。
     `base` 可以给现成的那个——「源本来就在当前 base 底下」的情形要靠它才造得出来。
     """
     from novel.core.ingest import decode_source_bytes
+    from novel.core.source import source_ref_for
 
     base = _book(with_clean=False, root=base)
     book = base / '书名_123'
@@ -918,7 +922,7 @@ def _stage0_book(recorded_source: Path,
     (book / 'stage0').mkdir()
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
     _write_payload(book, STAGE0_REMOVAL_REPORT, {
-        'original_path': str(recorded_source),
+        'source_ref': source_ref_for(recorded_source).model_dump(mode='json'),
         'source_sha1': decode_source_bytes(_SOURCE_BYTES).source_sha1,
         'clean_sha1': prov.content_sha1(clean_bytes),
     })
@@ -980,7 +984,9 @@ def test_stage0_source_edge_refuses_a_reanchored_file_that_fails_its_content_add
 
     edge = _source_edge(store)
     assert (edge.state, edge.reason) == ('unknown', 'ghost')
-    assert edge.key == str(recorded), '认不下来时要点名的是**记录里那条**'
+    # ⚠ 认不下来时点名的是**记录里那条引用**。上传那一支不记绝对路径（它跟着 base
+    #   走），所以点的是「内容地址 + 文件名」——那才是产物真正说过的话。
+    assert '内容地址' in edge.key and '书名_123.txt' in edge.key
     assert store.freshness(STAGE0_REMOVAL_REPORT).state == 'unknown'
 
 
@@ -1010,27 +1016,39 @@ def test_stage0_source_edge_still_goes_ghost_for_an_external_corpus_that_is_gone
     assert edge.key == str(recorded)
 
 
-def test_stage0_source_edge_prefers_the_recorded_location_over_the_reanchored_one():
-    """记录的位置还在时**以它为准**，哪怕重锚能找到一份更"自洽"的。
+def test_an_external_source_replaced_in_place_is_stale_not_ghost():
+    """**「源变了」与「源不在了」对人的下一步是相反的指示**，不许被抹平。
 
-    ⚠⚠ **「源变了」与「源不在了」对人的下一步是相反的指示**，不许被回落抹平。
-      源被就地换掉时：记录的位置**还在**，读出来是新字节 ⇒ `stale/file_changed`
-      （产物过期了，重跑即可）。而先看重锚的实现会得到 `ghost`——因为内容地址
-      目录名没变、字节变了，候选自证不过 ⇒ 它会说「原文不在盘上」，
-      把一个重跑就能解决的问题报成一个找不着东西的问题。
-      `removal.py::_require_stage0_fresh` 正是靠这条边发现「提交这一批的过程中
-      源被换掉了」并整批回滚的。
+    外部语料被就地改写：路径还在、读出来是新字节 ⇒ `stale/file_changed`
+    （产物过期了，重跑即可），而不是「找不着东西」。
+    `removal.py::_require_stage0_fresh` 正是靠这条边发现「提交这一批的过程中
+    源被换掉了」并整批回滚的。
+
+    ⚠ 这一条 2026-08-22 从上传那一支**改到了外部语料这一支**。「就地改写」在两支上
+    是两件不同的事，而 `source_ref` 让它们分得开：
+      · `external_file` 就地改写 = **人真的改了原文**（最常见的情形）⇒ file_changed；
+      · `managed_upload` 就地改写 = 内容寻址存储被破坏（目录名声称是
+        `sha256(bytes)`，里面的字节却不是它）⇒ 那不是「源变了」，是**这份候选不可信**，
+        由下面那条 content-address 用例判 ghost。报 file_changed 反而更坏：
+        它暗示「重跑一次就好」，而重跑会再读一遍同一个坏掉的存储。
+      此前两者被同一格 `original_path` 压平，只能靠「记录的那条路径碰巧还在不在」
+      去区分——而那恰好是 Output 根搬没搬家的偶然。
+    ⚠ 两种状态**都不是 fresh**，`_require_stage0_fresh` 两种都照拦——
+      改变的只是给人的那句话，不是闸门的松紧。
     """
-    base = Path(tempfile.mkdtemp())
-    recorded, _sid = save_upload(base, '书名_123.txt', _SOURCE_BYTES)
-    _base, store = _stage0_book(recorded, base)
-    assert _source_edge(store).state == 'fresh', '源本来就在当前 base 底下'
+    corpus_root = Path(tempfile.mkdtemp())
+    recorded = corpus_root / 'Test_data' / '书名_123.txt'
+    recorded.parent.mkdir(parents=True)
+    recorded.write_bytes(_SOURCE_BYTES)
 
-    # 就地把源换掉：内容地址目录名没变，字节变了 ⇒ 记录的位置仍在，读出来是新字节。
-    recorded.write_bytes(_SOURCE_BYTES + '第三章。\n'.encode('utf-8'))
+    base, store = _stage0_book(recorded)
+    assert _source_edge(store).state == 'fresh', '源就在记录的位置上'
+
+    recorded.write_bytes(_SOURCE_BYTES + ('第三章。' + '\n').encode('utf-8'))
     edge = _source_edge(store)
-    assert (edge.state, edge.reason) == ('stale', 'file_changed'), \
-        '源被换掉必须报 stale/file_changed，不是 ghost'
+    assert (edge.state, edge.reason) == ('stale', 'file_changed'),         '源被就地改写必须报 stale/file_changed，不是 ghost'
+    assert edge.key == str(recorded)
+
 
 def test_byte_form_artifacts_are_lf_only_and_have_no_bom():
     """⚠ 三份字节形态产物（`clean_text.txt` / `draft.md` / 成书）盘上**全是 LF-only**，

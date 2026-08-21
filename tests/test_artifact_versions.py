@@ -77,14 +77,17 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '2026-08-22 阶段 B（两刀）：① `warnings[]` 从 `{kind, message}` 换成按 kind '
         '判别的结构化证据（措辞退到 `novel/core/warnings.py`，不再落盘）；'
         '② 顶层四个平铺可空审批字段（approved / approved_at / approval_origin / '
-        'approved_by）收成一格 `approval: PendingApproval | ApprovedApproval`',
+        'approved_by）收成一格 `approval: PendingApproval | ApprovedApproval`；'
+        '③ `original_path: str` 换成判别联合 `source_ref: ExternalFileRef | '
+        'ManagedUploadRef`（读取端不再从字符串里推断来源类型）',
         '`stage0.remove --source <原文>` 免费重跑（零 LLM）。'
         '⚠ 重建后审批回到 `pending`，必须人工重批才具执行资格',
     ),
     'stage0/machine_snapshot.json': (
         2,
-        '2026-08-22 阶段 B：同 `removal_report` 的 warnings 结构化 ⇒ '
-        '`snapshot_digest` 的前像随之改变，盘上快照身份全部作废',
+        '2026-08-22 阶段 B：同 `removal_report` 的 warnings 结构化 + '
+        '`original_path` → `source_ref` ⇒ `snapshot_digest` 的前像随之改变，'
+        '盘上快照身份全部作废',
         '同 `stage0/removal_report.json`：`stage0.remove` 重跑时一并重写',
     ),
     'stage0/merge_candidate.json': (

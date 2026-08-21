@@ -43,6 +43,59 @@ ApprovalOrigin = Literal['auto_zero_hit', 'human']
 AuditAction = Literal['auto_approve', 'approve', 'edit', 'merge_accept', 'merge_reject']
 
 
+# ── 原文住在哪儿：**两种来源，处置相反** ────────────────────────────────────
+#
+# 【2026-08-22 之前是什么样】一格 `original_path: str`（绝对路径），读取端拿到它之后
+# 靠一套「先试记录的路径、断了就猜猜看是不是 `_service/uploads/<sha256>/<name>` 那种
+# 形状」的**隐式重锚**逻辑去找回原文。问题不在那套逻辑本身（它是对的），
+# 在于**它必须去猜**：同一个字符串既可能是外部语料的路径、也可能是本服务自己
+# 内容寻址目录下的路径，而这两者被删/被移的含义完全相反——
+#   · 外部语料没了 = **世界真的变了**，`ghost` 是正确答案；
+#   · 界面上传的书「没了」= 多半只是 Output 根搬了家，文件一个字节没变，
+#     报 ghost 是**假阴性**（实测发生过：《夫君与鲛人孰》）。
+# ⇒ 把「它是哪一种」从**猜**变成**产地当时就写下来**。读取端不再有回落分支：
+#   external_file 就按绝对路径找，找不到就是真没了；
+#   managed_upload 就按内容地址在当前 base 下解析，且仍然自证 `sha256(raw) == 目录名`。
+#
+# ⚠ `original_filename` 仍在报告顶层，只作展示；locator 的唯一权威是这一格。
+
+
+class ExternalFileRef(StrictModel):
+    """外部语料：一条书目录之外的绝对路径。
+
+    ⚠ **被删被移就是世界真的变了**，读取端不许「救」它——多认一种形状就是把一条
+    真信号洗成好消息。补偿是 `RemovedSegment` 里的 head/tail 残片。
+    """
+
+    kind: Literal['external_file']
+    absolute_path: str = Field(min_length=1)
+
+
+class ManagedUploadRef(StrictModel):
+    """界面上传的书：住在 `<base>/_service/uploads/<blob_sha256>/<filename>`。
+
+    ⚠ **它是内容寻址的**，所以跟着 base 走：Output 根搬家只会让当年那条绝对路径失效，
+    文件还在、字节没变。⇒ 这一支不记绝对路径，只记「内容是什么 + 叫什么名字」，
+    此刻在哪由当前 base 现算（`novel/paths.py::uploads_dir`）。
+    """
+
+    kind: Literal['managed_upload']
+
+    #: 原始字节的 sha256，**同时就是它所在的目录名**（产地唯一：
+    #: `novel/orchestrator/uploads.py::save_upload`）。读取端拿到候选必须复算相等
+    #: 才采信——这是「回落永远不可能把另一份文件冒充成原文」的全部依据。
+    blob_sha256: Sha256
+
+    filename: str = Field(min_length=1)
+
+
+#: 原文此刻该去哪儿找。⚠ 读取端的唯一入口是
+#: `novel/core/source.py::resolve_recorded_source`，别在调用方各自展开这个联合
+#: ——那会变成四份会各自漂的实现。
+SourceRef = Annotated[
+    ExternalFileRef | ManagedUploadRef, Field(discriminator='kind')]
+
+
 class RemovedSegment(StrictModel):
     """删掉的一段。**`removed[]` 是唯一能核对「切对了没有」的东西**——
     番外体在产物目录里不留任何副本，剔除是破坏性的，一次假阳会静默吃掉半本书。
@@ -75,7 +128,7 @@ class RemovedSegment(StrictModel):
 
     #: 恒 80 / 恒 40 码点。**被删掉那段文本的唯一残片**，尽管人不会去读 JSON。
     #:
-    #: `span` 只有在原文还在原地、且没被换过时才能取回内容，而 `original_path`
+    #: `span` 只有在原文还在原地、且没被换过时才能取回内容，而 `source_ref`
     #: 那一条恰恰说了「文件被移走时是**不知道**」。
     #: 34 条 × 120 码点——留着的成本可以忽略，丢了就没有第二次机会。
     head_preview: str
@@ -235,7 +288,7 @@ class MachineRemovalSnapshot(StrictModel):
     created_at: str = Field(min_length=1)
     code: str = Field(min_length=1)
     original_filename: str = Field(min_length=1)
-    original_path: str = Field(min_length=1)
+    source_ref: SourceRef
     source_sha1: Sha1
     clean_sha1: Sha1
     source_encoding: Literal[SOURCE_ENCODINGS]
@@ -388,9 +441,10 @@ class RemovalReport(StrictModel):
 
     original_filename: str = Field(min_length=1)
 
-    #: 绝对路径。⚠ **文件被移走时是「不知道」，不是「不匹配」**——
-    #: S-03 原文↔切分对照屏的三种降级必须分得开。
-    original_path: str = Field(min_length=1)
+    #: 原文此刻该去哪儿找（2026-08-22 从绝对路径字符串换成判别联合，见上）。
+    #: ⚠ **文件被移走时是「不知道」，不是「不匹配」**——S-03 原文↔切分对照屏的
+    #: 三种降级必须分得开。
+    source_ref: SourceRef
 
     #: 本轮写报告所用的代码版本。stage0 没有 `_provenance`，所以这一格落在顶层。
     code: str = Field(min_length=1)

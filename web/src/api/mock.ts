@@ -694,7 +694,8 @@ function mockStage0Report(sid: string): Stage0Report {
   const approved = loadDoc(sid).gate.s0
   return {
     original_filename: data.original_filename,
-    original_path: '/mock/' + data.original_filename,
+    source_ref: { kind: 'external_file' as const,
+                  absolute_path: '/mock/' + data.original_filename },
     code: 'mock',
     source_sha1: data.source_sha1,
     clean_sha1: data.source_sha1,

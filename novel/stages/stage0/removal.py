@@ -55,6 +55,9 @@ from novel.core.ingest import (
     nonbody_cut,
     scan_text,
 )
+from novel.core.source import (
+    describe_source, resolve_recorded_source, source_ref_for,
+)
 from novel.errors import (
     ArtifactUnreadable,
     ByteFormRefused,
@@ -154,13 +157,16 @@ def remove_decoded(
                 origin='machine',
             ))
 
-    absolute = str(Path(original_path).resolve())
+    # ⚠ 「这条路径是外部语料还是本服务的上传」只在**写产物这一刻**判一次
+    #   （`novel/core/source.py::source_ref_for`，唯一落点）；之后它就是产物里
+    #   写死的事实，读取端不必再从字符串里推断。
+    source_ref = source_ref_for(original_path).model_dump(mode='json')
     from novel.stages.stage0.merge import snapshot_digest
     snapshot_payload = {
         'created_at': datetime.now(timezone.utc).isoformat(),
         'code': code,
         'original_filename': Path(original_path).name,
-        'original_path': absolute,
+        'source_ref': source_ref,
         'source_sha1': decoded.source_sha1,
         'clean_sha1': prov.content_sha1(clean.encode('utf-8')),
         'source_encoding': decoded.encoding,
@@ -177,7 +183,7 @@ def remove_decoded(
     )
     report = RemovalReport(
         original_filename=Path(original_path).name,
-        original_path=absolute,
+        source_ref=snapshot.source_ref,
         code=code,
         source_sha1=decoded.source_sha1,
         clean_sha1=prov.content_sha1(clean.encode('utf-8')),
@@ -551,9 +557,13 @@ def run_edit_plan(
     if previous is None:
         raise UpstreamMissing('stage0 还没跑，没有可应用编辑计划的 clean_text')
     old, _old_clean = previous
-    source = Path(old.original_path).resolve()
-    if not source.is_file():
-        raise UpstreamMissing(f'原始小说已经不在 original_path：{source}')
+    # ⚠ 经唯一读取落点，不自己拼路径：`managed_upload` 那一支的位置**只能**由当前
+    #   base 算出来（它跟着 base 走），而这里此前只认记录的绝对路径 ⇒ Output 根
+    #   搬过家的上传书会在这里假报「原文没了」。
+    source = resolve_recorded_source(old.source_ref, ctx.novel_dir.parent)
+    if source is None:
+        raise UpstreamMissing(
+            f'原始小说已不在记录位置：{describe_source(old.source_ref)}')
     try:
         raw = source.read_bytes()
     except OSError as exc:
@@ -952,7 +962,7 @@ def run_merge_accept(
     payload = old.model_dump(mode='json')
     payload.update({
         'original_filename': snapshot.original_filename,
-        'original_path': snapshot.original_path,
+        'source_ref': snapshot.source_ref.model_dump(mode='json'),
         'code': ctx.code,
         'source_sha1': snapshot.source_sha1,
         'clean_sha1': merged_sha1,
