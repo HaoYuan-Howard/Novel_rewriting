@@ -115,19 +115,25 @@ def rungs_from_effort(effort: str | None) -> tuple[tuple[str, bool], ...]:
     ``None`` 与 ``high`` 都保留全局默认。覆盖只裁掉更高档，不另造第二份阶梯；
     因而截断/空响应时仍能走现有降级路径。
 
-    ⚠ **能降的只有一档**（`low`）——本模型带 thinking 的档位就 `low`/`high` 两个，
-    `max` 是升档且不在梯上（见 `LADDER`）。取值面窄不是漏写：
-    `medium`/`xhigh` 虽然 API 收，但服务端把它们映射回 `high`
+    ⚠ **能降的只有一档**（`low`）——本模型带 thinking 的档位就 `low`/`high` 两个。
+    取值面窄不是漏写：`medium`/`xhigh` 虽然 API 收，但服务端把它们映射回 `high`
     ⇒ 允许它们等于允许一个**看起来降了、实际没降**的配置，而账本上分辨不出来。
+
+    ⚠ `max` 是**升档**：它在这里长成「`max` 起步、再降进 `LADDER`」的覆盖梯，
+    而 **`LADDER` 本身一格不动**——那条梯扛的两类故障里有一类就是「推理吃光
+    `max_tokens`」，把升档放进降级路是火上浇油。它带 79 token 的官方 effort 前缀
+    （`novel/llm/budget.py::_MAX_EFFORT_PREFIX`，2026-08-21 为 FC-13 质量实验取回），
+    因此它与其余档位**不同 framing**——预算那一侧要跟着算，别只改这里。
     """
     if effort in (None, 'high'):
         return LADDER
+    if effort == 'max':
+        return (('max', True),) + LADDER
     if effort != 'low':
         raise ValueError(
-            f'节点 effort={effort!r}；可选 low / high / None。'
+            f'节点 effort={effort!r}；可选 low / high / max / None。'
             f'⚠ `medium` 与 `xhigh` 会被服务端静默映射回 `high`——这里关闭式拒绝它们，'
-            f'免得一个「降了档」的节点配置其实一档没降；`max` 是升档，'
-            f'要用它先按 `novel/llm/budget.py` 的记录补回官方 effort 前缀')
+            f'免得一个「降了档」的节点配置其实一档没降')
     start = next(i for i, (name, thinking) in enumerate(LADDER)
                  if name == effort and thinking)
     return LADDER[start:]
