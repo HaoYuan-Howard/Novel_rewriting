@@ -74,8 +74,10 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
     ),
     'stage0/removal_report.json': (
         2,
-        '2026-08-22 阶段 B：`warnings[]` 从 `{kind, message}` 换成按 kind 判别的'
-        '结构化证据（措辞退到 `novel/core/warnings.py`，不再落盘）',
+        '2026-08-22 阶段 B（两刀）：① `warnings[]` 从 `{kind, message}` 换成按 kind '
+        '判别的结构化证据（措辞退到 `novel/core/warnings.py`，不再落盘）；'
+        '② 顶层四个平铺可空审批字段（approved / approved_at / approval_origin / '
+        'approved_by）收成一格 `approval: PendingApproval | ApprovedApproval`',
         '`stage0.remove --source <原文>` 免费重跑（零 LLM）。'
         '⚠ 重建后审批回到 `pending`，必须人工重批才具执行资格',
     ),
