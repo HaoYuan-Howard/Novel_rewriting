@@ -278,6 +278,10 @@ def _behaviour_errors(
         | set(inv.PAID_FLAGS)
         | set(inv.VALUED_FLAGS)
         | _argparse_options(root / "novel" / "cli" / "main.py")
+        | set().union(*(
+            _argparse_options(path)
+            for path in sorted((SKILL.parent / "scripts").glob("*.py"))
+        ))
         | {"--help"}
     )
     used: dict[str, set[str]] = {}

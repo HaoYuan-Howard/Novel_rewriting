@@ -1,6 +1,6 @@
 ---
 name: novel-pipeline-operator
-description: 作为受托终审代理，使用本仓 novel.cli 将单本中文小说从原始 txt 或既有 sid 可靠地推进到 stage7 成书 <书名>_rewriting.txt，并把中间人工闸门、修复裁决、校验读数、授权边界和待审余额汇总为该书目录下的 <书名>_review.md。用于跑书、断点续跑、流水线修复、agent 代批以及“用户只审最终成稿”的任务；调用本 skill 跑书即默认授予付费授权与正文外发授权（只有用户明确收回才停在首个外部调用前），生成产物只能通过正式 CLI 节点和修复入口改变。
+description: 作为受托终审代理，使用本仓 novel.cli 将单本中文小说从原始 txt 或既有 sid 可靠地推进到 stage7 按书名命名的 rewriting.txt 成书，并把中间人工闸门、修复裁决、校验读数、授权边界和待审余额汇总为该书目录下的书名_review.md。用于跑书、断点续跑、流水线修复、agent 代批以及“用户只审最终成稿”的任务；调用本 skill 跑书即默认授予付费授权与正文外发授权（只有用户明确收回才停在首个外部调用前），生成产物只能通过正式 CLI 节点和修复入口改变。
 ---
 
 # Novel Pipeline Operator
@@ -60,8 +60,11 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 5. 对每条实际命令和修复命令执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点。
 6. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
 7. 命中闸门时按代批契约裁决；命中失败时按修复状态机收敛。每次决定同时记录证据、被否决方案和复验结果。
-8. `stage7.assemble` 后执行独立成书对账，再刷新 `state`、`inbox`、活动终态文件与账本摘要。
-9. 清除终审包中的占位符，给出 `ready`、`ready_with_disclosures` 或 `stopped`，然后只把成书与终审包交给用户。
+8. `stage7.assemble` 后执行独立成书对账，再刷新 `state`、`inbox`、活动终态文件与账本摘要；
+   用 `scripts/collect_final_evidence.py --base <绝对 base> --sid <sid>` 收拢当前事实并复制机器锚点、质量表行与
+   `exit_sequence_compact_text`；不要手抄重复的退出事件。
+9. 清除终审包中的占位符，运行 `scripts/validate_review.py --base <绝对 base> --sid <sid>`；
+   校验通过后给出 `ready`、`ready_with_disclosures` 或 `stopped`，然后只把成书与终审包交给用户。
 
 ## 不可突破的边界
 

@@ -127,4 +127,11 @@
 
 ### 退出码序列
 
-`<按执行顺序列 node:rc；修复轮包含在内>`
+`<复制 collect_final_evidence.py 的 exit_sequence_compact_text；它按执行顺序列 node:rc，修复轮包含在内，相邻同项用 ×N 无损压缩>`
+
+### 机器事实锚点
+
+运行 `scripts/collect_final_evidence.py --base <绝对 base> --sid <sid>`，把输出中的
+`review_anchor_line` 原样粘贴到这里；`scripts/validate_review.py` 会与当前盘面逐项对账。
+
+`<review_anchor_line>`
