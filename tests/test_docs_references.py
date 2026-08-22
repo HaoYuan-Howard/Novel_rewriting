@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 
 import pytest
 
@@ -132,25 +133,44 @@ def test_every_referenced_repo_path_exists(doc):
     )
 
 
-def test_declared_absent_entries_are_still_live_and_still_absent():
+def _tracked_paths() -> set[str]:
+    """git **真正跟踪**的路径。
+
+    ⚠ 「它在不在仓里」只能问 git，**不能问 `os.path.exists`**：本表登记的正是
+    「存不存在因人而异」的那一类路径（各人工作区的本地文件、gitignore 掉的东西）。
+    拿盘上存不存在去判，等于把宿主环境当成被测对象——同一个 commit 在有那个本地
+    文件的 checkout 里红、在没有的 worktree 里绿，而红的既不是文档也不是代码
+    （实测：`.claude/settings.local.json` 在主仓有、在功能 worktree 没有）。
+    """
+    done = subprocess.run(
+        ['git', '-c', f'safe.directory={ROOT.replace(os.sep, "/")}', 'ls-files', '-z'],
+        cwd=ROOT, check=True, capture_output=True, text=True, encoding='utf-8')
+    return {item for item in done.stdout.split('\0') if item}
+
+
+def test_declared_absent_entries_are_still_live_and_still_in_no_repo():
     """登记表自己的守卫：一条**死登记**比没有登记更坏。
 
     两侧都查，因为两侧都会烂：
       · 没有任何文档还在引用它 ⇒ 这条登记已经是死配置，删掉；
-      · 它现在**真的在盘上**了 ⇒ 放行的前提没了，这条必须撤销，
+      · 它**已经被 git 跟踪**了 ⇒ 放行的前提没了，这条必须撤销，
         否则它从此把一条真能查的路径静默挪出扫描面（那正是本表拒绝
         「凡 gitignore 就放行」的同一个理由）。
     """
     referenced = set()
     for doc in _docs():
         referenced |= set(_PATH.findall(open(doc, encoding='utf-8').read()))
+    tracked = _tracked_paths()
+    assert tracked, 'git ls-files 一条都没返回 ⇒ 下面那半条守卫根本没在查'
     for path, why in _DECLARED_ABSENT.items():
         assert why.strip(), f'{path} 登记了却没写理由'
         assert path in referenced, (
             f'{_DECLARED_ABSENT} 里的 {path} 已经没有任何文档引用 ⇒ 死配置，删掉这一条')
-        full = os.path.join(ROOT, path)
-        assert not (os.path.exists(full) or os.path.exists(full.rstrip('/'))), (
-            f'{path} 现在真的在盘上了 ⇒ 放行的前提没了，'
+        prefix = path.rstrip('/') + '/'
+        hits = sorted(
+            item for item in tracked if item == path.rstrip('/') or item.startswith(prefix))
+        assert not hits, (
+            f'{path} 已经被 git 跟踪了（{hits[:3]}）⇒ 放行的前提没了，'
             f'把这条从 `_DECLARED_ABSENT` 撤销，让它回到扫描面上')
 
 
