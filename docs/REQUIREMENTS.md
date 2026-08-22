@@ -538,41 +538,6 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 - [ ] 顺带回答：`chapters` 到底是「显式枚举」还是「区间端点」——若是后者，schema 应改名或
       收紧形态，别让两种语义共用一个形状（本次区间解释是对现状的最小兼容，不是语义裁决）。
 
-### TODO-35 · Stage0 减法重构：immutable revision + 原子发布替代 WAL/_rounds/live candidate
-
-> **这是 Stage0/1 评审整改剩下的最后一批（阶段 C）。** 阶段 A（不改形状）与阶段 B
-> （唯一一次形状破坏）已完成，见 `docs/BACKEND_CONTRACT.md` §十 的 2026-08-22 两行。
-> ⚠ 阶段 C 与前两批的性质不同：它删的是**机制**不是字段，`TODO-36` 是它的前置。
-
-2026-08-21 第一批对 diff3 做了**双端限制**（`stage0.md` §2.5 分诊表），但机制本身还是
-「可编辑、可三方合并、带 WAL 的文本版本控制系统」。对外部评审 P0-3 的终态裁决：
-聚合根是 `Stage0Revision {source identity, clean text, removed ledger, warnings}`，
-不是单独的 `clean_text`——只对文本做 diff3 保证不了整个聚合一致。目标形状
-（`stage0/revisions/<id>/{clean_text, result, review}` + 原子 `current` 指针，
-用户三选一：保留 A / 替换 B / 在 B 上重编辑后批准）可同时删除：文本级 diff3、
-merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本、
-大部分崩溃恢复状态机。⚠ 施工前先补「编辑计划路在 revision 模型下的等价物」，
-`run_edit_plan` 的服务端重建口径（同批已收口）必须原样带过去。
-
-- [ ] 设计 revision 目录与 `current` 指针的原子发布协议（含存量 `_rounds/` 的迁移答案——
-      本仓无迁移机制，答案大概率是「由 producer 重建」）。
-- [ ] 逐项删除上表机制，每删一项同批回答它守的洞由谁接管（当时 test_stage0_merge.py
-      的崩溃重放矩阵是删 WAL 前的验收面）。
-- [ ] 顺带回答**统一 Pre-LLM Intake Review**：批准前分章预览已于 2026-08-22 落地
-      （TODO-34 完成，见 `docs/BACKEND_CONTRACT.md` §十），当时裁决是**保持两步**——
-      理由正是本条要换掉 stage0 的聚合根，先合并审阅页等于把它建在即将删掉的
-      `_rounds` / live candidate 上。revision 定下来之后，「删除正确性 + 分章正确性
-      同屏审一次、批准即原子发布」才有稳定的批准对象，那时一并回答。
-
-### TODO-36 · command DTO 与 artifact DTO 分离（**是 TODO-35 的前置，不是后续**）
-
-- `Stage0EditPlan`（HTTP 编辑计划）直接复用产物的 `RemovedSegment` ⇒ 客户端可提交
-  任意 `origin`/`line_no`/`marker_line`/预览。2026-08-21 已在 `run_edit_plan` 服务端
-  落定 provenance（伪造无效），但**类型上**命令与产物仍共用一个模型——`RequestedRemoval
-  {span, kind}` 这类 command DTO 该拆出来，让「用户意图」与「已验证事实」在类型上分家。
-- ⚠ 它就是 TODO-35 说的「编辑计划在 revision 模型下的等价物」⇒ **与 TODO-35 同批做**，
-  别单独排期（阶段 C）。
-
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。
