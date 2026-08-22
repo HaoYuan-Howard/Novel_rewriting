@@ -115,7 +115,7 @@
 
 | 节点 | 0 成本写盘入口 | 需要 agent 自己写的输入 | 约束 |
 |---|---|---|---|
-| `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-merge-plan` | 正式 edit / edit-plan / merge-plan 形状 | 不直接覆盖 `clean_text.txt` 或 removal report。`--apply-merge-plan` 逐项决定三方合并冲突，与 edit-plan 同样带乐观锁 |
+| `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-candidate-plan` | 正式 edit / edit-plan / candidate-plan 形状 | 不直接覆盖 `clean_text.txt` 或 removal report——三者都只往 revision 链上追加一版，再由链物化成那两份产物。`--apply-candidate-plan` 是机器重跑候选的三选一裁决（`adopt` 采纳整版 / `dismiss` 保留当前版），与 edit-plan 同样带乐观锁（`expected_revision_id`）。⚠ 「采纳后再编辑」不是第三个动作，是 adopt 之后照常走 `--apply-edit-plan` |
 | `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` | typed 修订（如 `reader_reveal_events` 时线）；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`（见 [经验库](field-notes.md) FN-007）。`--review-decisions` 是全书评测项唯一的 0 成本销账入口：按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策被拒收 |
 | `stage2.blueprint` | `--renormalize` · `--revalidate` | finding 明确允许时编辑活动 `.INVALID` | 本层确实没有 `--apply-edit`；逐章内容的修正走 `--chapters <N>` 定向重生成（**付费**）或回上游 `stage2.global`。只改证据指向字段，不改生成轮次与来源账 |
 | `stage3.style` | `--apply-edit` · `--remeasure` · `--revalidate` | `<novel-dir>/stage3/style_edit.json`；终态明确允许时可修活动 `.INVALID` | 决策集只改 schema 开放字段 |

@@ -43,7 +43,8 @@ import type {
   ReadingResponse,
   ReviewResponse,
   Stage0Report,
-  Stage0MergeCandidate,
+  Stage0CandidateView,
+  Stage0PartitionPreview,
   Stage0Segments,
   Stage1Chapters,
   Stage1HookCopy,
@@ -336,22 +337,24 @@ export const realApi: Api = {
 
   getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
+  getStage0PartitionPreview: (sid) =>
+    get<Stage0PartitionPreview>(n(sid) + '/stage0/partition-preview'),
   editStage0: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/edit', request)),
   approveStage0: async (sid, request) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/approve', request)),
-  getStage0Merge: async (sid) => {
+  getStage0Candidate: async (sid) => {
     try {
-      return await get<Stage0MergeCandidate>(n(sid) + '/stage0/merge')
+      return await get<Stage0CandidateView>(n(sid) + '/stage0/candidate')
     } catch (error) {
       if (isApiError(error) && error.kind === 'notfound') return null
       throw error
     }
   },
-  resolveStage0Merge: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/merge/resolve', request)),
-  rejectStage0Merge: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/merge/reject', request)),
+  adoptStage0Candidate: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/candidate/adopt', request)),
+  dismissStage0Candidate: async (sid, request) =>
+    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/candidate/dismiss', request)),
   partitionStage1: async (sid) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage1/partition')),
   getStage1Segments: (sid) => get<Stage1Segments>(n(sid) + '/stage1/segments'),

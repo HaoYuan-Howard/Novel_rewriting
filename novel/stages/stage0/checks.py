@@ -5,11 +5,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Callable
 
 from contracts.invariants import BODY_RATIO_MIN
 from contracts.schema.report import CheckReport, finding
-from contracts.schema.stage0 import RemovalReport
+from contracts.schema.stage0 import RemovalReport, Stage0Revisions
 from novel import paths, prov
 from novel.core.ingest import (
     DecodedSource,
@@ -18,18 +17,18 @@ from novel.core.ingest import (
     nonbody_kind,
     scan_text,
 )
-from novel.core.source import resolve_recorded_source
+from novel.core.source import describe_source, resolve_recorded_source
+from novel.core.warnings import describe
 from novel.report.builder import build
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.run import RunContext
 from novel.store import ArtifactStore
 
+from novel.stages.stage0 import revisions as rev
 from novel.stages.stage0.removal import (
     CLEAN_REL,
     REPORT_REL,
-    clean_round_rel,
     preview_text,
-    report_round_rel,
     warnings_for,
 )
 
@@ -45,9 +44,9 @@ def _source(report: RemovalReport,
     ⚠ 记录的位置优先，只对界面上传的原文做 base 重锚（`novel/core/source.py`）。
       外部语料被删没有回落——那是契约有意接受的代价，不是这里该"救"的事。
     """
-    path = resolve_recorded_source(report.original_path, base)
+    path = resolve_recorded_source(report.source_ref, base)
     if path is None:
-        return None, f'原始小说已不在记录位置：{report.original_path}'
+        return None, f'原始小说已不在记录位置：{describe_source(report.source_ref)}'
     try:
         raw = path.read_bytes()
     except OSError as exc:
@@ -65,7 +64,7 @@ def check(
     source: DecodedSource | None,
     source_why: str | None = None,
     novel_dir: Path | None = None,
-    archive_exists: Callable[[str], bool] = lambda _rel: False,
+    revisions: Stage0Revisions | None = None,
 ) -> list[Outcome]:
     '''核对报告、正文、可选原文与书目录；每条注册判据恰好返回一个 Outcome。'''
     out: list[Outcome] = []
@@ -164,9 +163,11 @@ def check(
             first, last = spans[0][0], spans[-1][1]
             if last != len(source.text):
                 problems.append(f'机器剔除没有覆盖到原文末尾：最后止于 {last}')
-            if not report.edited_by_human and clean_text != source.text[:first]:
+            if (report.revision_origin != 'human_edit'
+                    and clean_text != source.text[:first]):
                 problems.append('机器轮 clean_text 不等于原文在首个剔除点之前的逐字前缀')
-        elif machine_only and not report.edited_by_human and clean_text != source.text:
+        elif (machine_only and report.revision_origin != 'human_edit'
+                and clean_text != source.text):
             problems.append('报告称没有剔除、没有人工编辑，但 clean_text 与归一化原文不同')
         out.append(ran(
             's0_removal_ledger',
@@ -175,39 +176,52 @@ def check(
         ))
 
     approval_findings = []
-    from novel.stages.stage0.eligibility import block_reason
-    reason = block_reason(report)
-    if reason is not None:
-        if reason == 'legacy_auto_approval_requires_review':
-            approval_findings.append(_hit(
-                's0_approval',
-                '历史自动批准（auto_zero_hit，已停产）不具执行资格；'
-                f'人工重批前 stage1 不得启动（{reason}）',
-                reason,
-            ))
-        else:
-            approval_findings.append(_hit(
-                's0_approval',
-                f'当前批准状态是 {report.approved!r}，stage1 不得启动',
-                report.approved,
-            ))
+    from novel.stages.stage0.eligibility import is_stage0_executable
+    if not is_stage0_executable(report):
+        approval_findings.append(_hit(
+            's0_approval',
+            f'当前批准状态是 {report.approval.status!r}，stage1 不得启动',
+            report.approval.status,
+        ))
     out.append(ran('s0_approval', approval_findings, scanned='1 个批准状态'))
 
-    missing_archives = [
-        rel
-        for round_no in range(1, report.round)
-        for rel in (report_round_rel(round_no), clean_round_rel(round_no))
-        if not archive_exists(rel)
-    ]
-    out.append(ran(
-        's0_edit_archive',
-        [_hit(
-            's0_edit_archive',
-            f'第 {report.round} 轮缺少 {len(missing_archives)} 份历史归档',
-            *missing_archives,
-        )] if missing_archives else [],
-        scanned=f'当前第 {report.round} 轮 · 应有 {max(0, report.round - 1) * 2} 份归档',
-    ))
+    # ⚠ 2026-08-22 阶段 C：这条判据从「上一轮归档在不在盘上」换成「链自洽 + live 是它的
+    #   物化投影」。`_rounds/` 与不可覆盖审计链一起下线之后，它接管了两个洞：
+    #     ① 历史版本有没有被改过 —— 逐条复算 `revision_id`（前像含 parent ⇒ 哈希链）；
+    #     ② 两份 live 产物是不是同一版 —— 那正是删掉 WAL 之后唯一会出现的中间态，
+    #        而它可由「重跑一次任何 stage0 写路径」自愈，所以判据要说得出这句话。
+    if revisions is None:
+        out.append(unverifiable(
+            's0_revision_chain',
+            '手上没有 stage0/revisions.json（合成样本直接对报告判据），无法复算链',
+        ))
+    else:
+        chain_problems: list[str] = []
+        for item in revisions.revisions:
+            expected = rev.revision_digest(
+                parent_revision_id=item.parent_revision_id, origin=item.origin,
+                actor=item.actor, reason=item.reason, content=item.content)
+            if expected != item.revision_id:
+                chain_problems.append(
+                    f'revision {item.revision_id[:12]}… 的 id 与内容对不上，'
+                    f'复算得到 {expected[:12]}…')
+        current = rev.current_revision(revisions)
+        if clean_text != current.content.clean_text:
+            chain_problems.append(
+                'clean_text.txt 不是 current 那一版的正文；重跑任一 stage0 写路径即可'
+                '重新物化自愈')
+        if report != rev.report_of(revisions):
+            chain_problems.append(
+                'removal_report.json 与链上 current 的物化投影不一致；'
+                '重跑任一 stage0 写路径即可重新物化自愈')
+        out.append(ran(
+            's0_revision_chain',
+            [_hit('s0_revision_chain', detail, detail) for detail in chain_problems],
+            scanned=f'{len(revisions.revisions)} 条 revision 逐条复算 id · '
+                    f'current={current.revision_id[:12]}… · '
+                    f'候选 {"1" if revisions.candidate_revision_id else "0"} 条 · '
+                    f'已否 {len(revisions.dismissed)} 条',
+        ))
 
     actual_clean_sha1 = prov.content_sha1(clean_text.encode('utf-8'))
     if report.clean_sha1 != actual_clean_sha1:
@@ -215,39 +229,40 @@ def check(
         out.append(ran(
             's0_hashes',
             [_hit('s0_hashes', hash_detail, hash_detail)],
-            scanned='clean_sha1 已计算 · source_sha1 '
+            scanned='clean_sha1 已计算 · normalized_source_sha1 '
                     + ('已计算' if source is not None else '因原文不可用未计算'),
         ))
     elif source is None:
         out.append(unverifiable(
             's0_hashes',
             source_why or '没有原始小说，只能核对 clean_sha1，无法同时核对两个指纹',
-            scanned='clean_sha1 已计算 · source_sha1 不可计算',
+            scanned='clean_sha1 已计算 · normalized_source_sha1 不可计算',
         ))
     else:
         hash_problems = []
-        if report.source_sha1 != source.source_sha1:
+        if report.normalized_source_sha1 != source.normalized_source_sha1:
             hash_problems.append(
-                f'source_sha1 记录 {report.source_sha1}，实际 {source.source_sha1}')
+                f'normalized_source_sha1 记录 {report.normalized_source_sha1}，实际 {source.normalized_source_sha1}')
         out.append(ran(
             's0_hashes',
             [_hit('s0_hashes', detail, detail) for detail in hash_problems],
-            scanned='source_sha1 + clean_sha1 两个 40 位内容指纹',
+            scanned='normalized_source_sha1 + clean_sha1 两个 40 位内容指纹',
         ))
 
     human_problems = []
     human_segments = [i for i, segment in enumerate(report.removed)
                       if segment.origin == 'human']
-    if human_segments and not report.edited_by_human:
+    if human_segments and report.revision_origin != 'human_edit':
         human_problems.append(
-            f'removed{human_segments} 标成 human，但 edited_by_human=false')
+            f'removed{human_segments} 标成 human，但这一版的起源是 '
+            f'{report.revision_origin}（只有 human_edit 那一支会产生人工圈选）')
     if report.clean_sha1 != actual_clean_sha1:
         human_problems.append(
             '盘上 clean_text 已变化但报告没有同步登记；机器重跑不得把人工状态当作旧哈希')
     out.append(ran(
         's0_human_preserved',
         [_hit('s0_human_preserved', detail, detail) for detail in human_problems],
-        scanned=f'{len(report.removed)} 个 origin · edited_by_human={report.edited_by_human}',
+        scanned=f'{len(report.removed)} 个 origin · revision_origin={report.revision_origin}',
     ))
 
     ratio = report.body_code_points / report.total_code_points
@@ -261,31 +276,32 @@ def check(
         scanned=f'{report.body_code_points}/{report.total_code_points}={ratio:.4f}',
     ))
 
-    expected_warning_kinds = sorted(
-        warning.kind
-        for warning in warnings_for(
-            report.total_code_points,
-            report.body_code_points,
-            report.removed,
-        )
-    )
-    stored_warning_kinds = sorted(warning.kind for warning in report.warnings)
+    # ⚠ 2026-08-22 起比**整条证据**而不只是 `kind`。此前只比 kind，于是一条
+    #   `line_no` 或码点数记错的告警照样绿——而 warning 的全部价值就是那几个数。
+    #   证据落盘之后这条复算才真的有判别力。
+    expected_warnings = sorted(
+        (warning.model_dump(mode='json') for warning in warnings_for(
+            report.total_code_points, report.body_code_points, report.removed)),
+        key=lambda item: sorted(item.items()))
+    stored_warnings = sorted(
+        (warning.model_dump(mode='json') for warning in report.warnings),
+        key=lambda item: sorted(item.items()))
     warning_findings = [
-        _hit('s0_warnings', warning.message, warning.kind, warning.message)
+        _hit('s0_warnings', describe(warning), warning.kind, describe(warning))
         for warning in report.warnings
     ]
-    if stored_warning_kinds != expected_warning_kinds:
+    if stored_warnings != expected_warnings:
         warning_findings.append(_hit(
             's0_warnings',
-            f'warnings.kind={stored_warning_kinds}，按当前数值与标记复算应为 '
-            f'{expected_warning_kinds}',
-            str(stored_warning_kinds),
-            str(expected_warning_kinds),
+            f'warnings={stored_warnings}，按当前数值与标记复算应为 {expected_warnings}',
+            str(stored_warnings),
+            str(expected_warnings),
         ))
     out.append(ran(
         's0_warnings',
         warning_findings,
-        scanned=f'落盘 {len(report.warnings)} 条 · 复算 {len(expected_warning_kinds)} 条可疑项',
+        scanned=f'落盘 {len(report.warnings)} 条 · 复算 {len(expected_warnings)} 条可疑项'
+                f'（逐条比证据，不只比 kind）',
     ))
 
     if source is None:
@@ -345,9 +361,9 @@ def check(
             [_hit(
                 's0_source_identity',
                 '记录位置的原始小说内容身份已经变化',
-                report.source_sha1,
-                source.source_sha1,
-            )] if report.source_sha1 != source.source_sha1 else [],
+                report.normalized_source_sha1,
+                source.normalized_source_sha1,
+            )] if report.normalized_source_sha1 != source.normalized_source_sha1 else [],
             scanned='原始小说 1 份 · 40 位归一化内容指纹',
         ))
 
@@ -371,7 +387,7 @@ def run_check_only(ctx: RunContext) -> CheckReport:
         source=source,
         source_why=why,
         novel_dir=ctx.novel_dir,
-        archive_exists=store.exists,
+        revisions=rev.read(store),
     )
     return build(
         sid=ctx.sid,

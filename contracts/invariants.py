@@ -183,15 +183,12 @@ WHO_CHECKS_RULE: Final = ('HARD', 'INFO', 'GATE', 'METRIC', 'HUMAN')
 #: 剔除是破坏性的，一个假阳会静默吃掉半本书，而**词表增长是单向的、错了很难发现**。
 NONBODY_KINDS: Final = ('番外', '后记', '尾声', '作者有话说')
 
-#: **加词登记表**：`NONBODY_KINDS` 里比原型多出来的词，按加入顺序，一个不落。
-#: 加词时两处一起改：往 `NONBODY_KINDS` 末尾追加，同时在这里追加同一个词。
-#:
-#: 【为什么要两张表】原型那四个词是统一契约 §八冻结的 `enums.json` 里的那一份，
-#: 有一条测试逐值比对，防的是「前端画的选项与后端判的不是一回事」。
-#: 直接往 `NONBODY_KINDS` 加词会让那条测试红——**而它红得对**：确实分家了。
-#: 这张表让「分家」变成**登记过的分家**：测试改判 `原型那份 + 本表 == 现役那份`，
-#: 于是「有意加的」与「不小心漏的/删的」重新可区分。
-#: ⚠ **只许追加，不许删**。删掉一个词，存量产物里那个 `kind` 就读不回来了。
+# ⚠ 这里曾有一张 `NONBODY_KINDS_ADDED` 加词登记表，配一条「原型冻结那份 + 本表 ==
+#   现役那份」的逐值比对。常量随 `08240cf`（删除 legacy stage 契约兼容层）一并删除，
+#   而那 10 行说明**独自活到了 2026-08-22**，一直指着一个不存在的常量说「加词时同时
+#   往这里追加一个词」。原型仓与 163 本语料已于 2026-08-16 永久删除 ⇒ 比对的另一半
+#   （原型那份）不复存在，两张表的机制随之整体作废，不是「还没来得及补」。
+#   ⇒ 现在往 `NONBODY_KINDS` 加词只有一道闸：`tools/probe_nonbody_word.py`（见上）。
 
 #: 完结标记的闭合词表。**它与 `NONBODY_KINDS` 必须无交集**——
 #: 完结标记与非正文标记走的是两条完全不同的路（前者只定切点、不进 `dropped`；
@@ -266,11 +263,14 @@ STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 #: 2026-08-21）。「没跑 / 崩了 / 阻断」是**执行状态**，由「产物不存在 + JobState」表达。
 #: 【为什么不能是 `bool`】「跑了没批」与「批了」必须分开，与 `FRESHNESS` / `JOB_STATE` /
 #: `BADGE` 同构：本项目每一次把「不知道」并进「没问题」都付过学费。
-#: ⚠ `R-0.3b`（`HARD`）判的是**不满足执行资格 ⇒ stage1 拒绝启动**。现役执行资格
-#: 是 `approved == 'approved'` **且** `approval_origin == 'human'`
-#: （`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点）：
-#: `approval_origin == 'auto_zero_hit'` 是历史自动批取值，**只读、不具执行资格**，
-#: 人工重批（`stage0.approve`）后恢复。
+#: ⚠ `R-0.3b`（`HARD`）判的是**不满足执行资格 ⇒ stage1 拒绝启动**，判它的唯一落点是
+#: `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方不许复述条件。
+#: ⚠ `ApprovedApproval` 曾有第三格 `origin: 'auto_zero_hit' | 'human'`，
+#: 2026-08-22 与 `not_run` 同一判据删除：产地 2026-08-21 已停产，而真正带着它的
+#: 存量产物是 v1，本产物现为 v3 且本仓不迁移 ⇒ 那些产物连 decode 都过不去，
+#: 该取值在盘上**结构不可达**（实测报 `schema v1 不是当前 v3`）。
+#: ⚠ 2026-08-22 起 `approved` 那四个平铺字段收成一格判别联合（`Stage0Approval`），
+#: 本元组仍是 `status` 那一格的取值面；两者的对账在 `tests/test_invariants.py`。
 APPROVAL_STATE: Final = ('pending', 'approved')
 
 # Human workflow checkpoints kept under Output/_service. These are service
@@ -297,6 +297,22 @@ STAGE1_SEGMENT_KINDS: Final = ('hook', 'chapter', 'end_marker', 'hole')
 #:   · `early_cut` / `drop_ratio` / `long_marker` → 随剔除一起搬去 stage0
 #: ⚠ **只剩一条不等于这一层变安全了**——是别的三条换了位置、两条换了严重度。
 STAGE1_WARNINGS: Final = ('noisy_duplicate',)
+
+#: 批准前分章预览里，逐章**原始章号**相对上一章的异常分类。
+#: 【为什么要有它】纯数字番外与正常数字章节在机器结构上没有区别——零 removed、
+#: 零 warning、`clean == source`——只看「原文 + 删除高亮 + warnings」的审批页对它是盲的。
+#: 人工闸门要真的兜住这个盲区，人在点批准之前必须**看得见**章号序列断在哪里。
+#: 三类互斥，判定优先级即本元组顺序：`reset` > `gap` > `repeat`。
+#: ⚠ 这是**诊断不是判据**：命中不拦任何东西，也不进任何产物，只在审批页上标出来给人看。
+#: 番外若接着正文往下编号（50 → 51），三类一条都不命中——那种形态机器看不出来，
+#: 只能靠同屏的逐章首行预览让人读出来。**别把它宣传成番外检测器。**
+#:
+#: ⚠ 这里曾有第四类 `non_numeric`（原始章号解析不出数字）。2026-08-22 随
+#: `MainTextSection.source_chapter_no` 从 `str` 改型成 `int` 一并删除：**载体自己
+#: 保证了它是数字**，这一档从此结构上不可达，留着就是第二个 `not_run`——一个从来
+#: 不会被写出来的取值，让取值面看起来比实际宽。产地那一路也从没产生过它：
+#: `ChapterMarker.chapter_no` 恒由 `CHAPTER_RE` 匹配出的数字行解析得到。
+CHAPTER_LABEL_ANOMALY: Final = ('reset', 'gap', 'repeat')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1256,7 +1272,7 @@ VALUED_FLAGS: Final = {
                     '如 stage7/name_map_edit.json，也接受书目录内的绝对路径）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
-    '--apply-merge-plan': '审校台生成的 stage0 三方合并决定（冲突逐项决定 + 乐观锁）',
+    '--apply-candidate-plan': '审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）',
     '--actor': '人工决定的自报身份（不是认证身份）',
     '--reason': '人工决定的非空理由',
     '--subject-sha256': '人工决定乐观锁定的完整内容 SHA-256',
@@ -1329,7 +1345,10 @@ WRITE_EFFECTS: Final = {
     '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
     '--recheck': '刷新已有成稿的指标，并重拼 draft.md',
     '--revalidate': '必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/',
-    '--apply-edit': '把人工稿落成新的一轮，并把上一轮归档进 _rounds/',
+    # ⚠ 本表按 flag 索引 ⇒ 这句话必须对**每一个**挂它的节点都成立。2026-08-22 阶段 C
+    #   之后 stage0 的历史不再进 `_rounds/`（它在 revision 链上，且不可覆盖），
+    #   所以这一格只说得出两边都成立的那部分：落成新的一版、上一版仍可回看。
+    '--apply-edit': '把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）',
     '--renormalize': '按当前契约重算代码派生字段与原文定位并写回',
     # ⚠ 它写的是**另一份**产物（`<stage>/wontfix.json`），不是本节点 `produces` 里那一份
     # ⇒ 不登记的后果是**方向反的**：`/api/enums` 会把它派生成「写 `stage5/review_{n}.json`」，
@@ -1463,18 +1482,24 @@ class NodeSpec(NamedTuple):
 #: ⚠ 同一份产物可以被两个节点写（`stage6.hook` 产候选、`stage6.approve` 落定稿），
 #: 这不是重复登记：**一层要哪几份**取的是本层各节点的并集。
 NODES: Final[dict[str, NodeSpec]] = {
+    # ⚠ 2026-08-22 阶段 C：三个节点都先写 `stage0/revisions.json`（唯一可变格、
+    #   一次原子写就是提交），再把 `current` 物化成另外两份。三份都登记 ——
+    #   `produces` 回答的是「跑完这一步盘上该有哪几份」，物化投影同样在其中。
     'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除',
                                  flags=('--source', '--dry-run', '--check-only'),
-                                 produces=(artifact_paths.STAGE0_REMOVAL_REPORT,
+                                 produces=(artifact_paths.STAGE0_REVISIONS,
+                                           artifact_paths.STAGE0_REMOVAL_REPORT,
                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
                                   flags=('--actor', '--reason'),
                                   required_flags=('--actor', '--reason'),
-                                  produces=(artifact_paths.STAGE0_REMOVAL_REPORT,)),
+                                  produces=(artifact_paths.STAGE0_REVISIONS,
+                                            artifact_paths.STAGE0_REMOVAL_REPORT)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
                                   flags=('--apply-edit', '--apply-edit-plan',
-                                         '--apply-merge-plan', '--actor', '--reason'),
-                                 produces=(artifact_paths.STAGE0_REMOVAL_REPORT,
+                                         '--apply-candidate-plan', '--actor', '--reason'),
+                                 produces=(artifact_paths.STAGE0_REVISIONS,
+                                           artifact_paths.STAGE0_REMOVAL_REPORT,
                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
                                  flags=('--dry-run', '--check-only'),
@@ -1632,7 +1657,7 @@ NODES: Final[dict[str, NodeSpec]] = {
 #: **0 成本地摊开**（渲染占位符），谓词做不到——它只能回答是/否，说不出缺哪几个。
 #:
 #: ⇒ `stage0.edit` 的三条编辑路只有 `--apply-edit` 那条要人工凭据；
-#:   `--apply-edit-plan` / `--apply-merge-plan` 的凭据在计划文件里（连同乐观锁）。
+#:   `--apply-edit-plan` / `--apply-candidate-plan` 的凭据在计划文件里（连同乐观锁）。
 #: ⇒ `stage5.review --retain-pretrim` 要 `--chapters` 指定恰好一章，并强制留下
 #:   自报 `--actor` / `--reason`：它是逐章的 hash-bound 人工决定，不是匿名布尔开关。
 CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {

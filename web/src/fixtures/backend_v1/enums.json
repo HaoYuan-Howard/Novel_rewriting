@@ -4,6 +4,25 @@
   "stale",
   "unknown"
  ],
+ "artifact_display": [
+  "missing",
+  "fresh",
+  "stale",
+  "unknown"
+ ],
+ "artifact_condition": [
+  "missing",
+  "ready",
+  "invalid",
+  "unreadable"
+ ],
+ "overview_verdict": [
+  "broken",
+  "stale",
+  "pending",
+  "unknown",
+  "complete"
+ ],
  "freshness_reason": [
   "no_provenance",
   "no_inputs",
@@ -44,6 +63,7 @@
  "job_state": [
   "running",
   "ok",
+  "landed_red",
   "failed",
   "unknown"
  ],
@@ -57,7 +77,9 @@
   "invalid",
   "rejected",
   "stalled",
+  "repairable",
   "human_only",
+  "verification",
   "upstream",
   "approval"
  ],
@@ -95,7 +117,6 @@
   "尾声",
   "作者有话说"
  ],
- "nonbody_kinds_added": [],
  "end_marker_words": [
   "全文完",
   "正文完",
@@ -149,6 +170,11 @@
  "stage1_warnings": [
   "noisy_duplicate"
  ],
+ "chapter_label_anomaly": [
+  "reset",
+  "gap",
+  "repeat"
+ ],
  "time_layers": [
   "present",
   "recall",
@@ -200,6 +226,34 @@
   "must_appear": "必须在场并起作用（怎么描写随你）",
   "must_hold": "必须成立，但【不必写在纸面上】（别为它硬塞背景交代）"
  },
+ "blueprint_architectures": [
+  "bounded-fidelity-v3",
+  "extraction-ir-v1",
+  "extraction-ir-v1.1"
+ ],
+ "repair_route": {
+  "短语不在本章原文里": "field_patch",
+  "段号越界，本章没有那一段": "chapter_regen",
+  "段号落在没有被任何 beat 覆盖的空档": "chapter_regen",
+  "短语不在它指定的那一段里，而出现在别处": "chapter_regen",
+  "已落盘的 source 与它所属 beat 的区间对不上": "chapter_regen",
+  "短语在本拍区间内多处命中": "field_patch",
+  "短语不在它所属拍的区间里，而出现在别处": "chapter_regen"
+ },
+ "response_time_layers": {
+  "T_PRESENT": "present",
+  "T_RECALL": "recall",
+  "T_HEARSAY": "hearsay"
+ },
+ "place_modes": [
+  "P_EXPLICIT",
+  "P_INHERIT",
+  "P_UNKNOWN"
+ ],
+ "anchor_coverage_state": [
+  "low",
+  "adequate"
+ ],
  "uncovered_min_chars": 30,
  "address_by": [
   "char_id",
@@ -237,36 +291,95 @@
   "它",
   "咱"
  ],
- "partial_mask_note": "本开关只关四个字段（characters[].fate · canon.secrets · arc.climax · arc.ending）。F-047 实测同一批事实仍会从 role（F-075：role 里可能带中段才揭示的事实）、relations[].valid_from_chapter、world_rules[].versions[].desc 漏出去。**这是部分屏蔽，不是屏蔽。**",
  "cache_policy": [
   "default",
   "refresh-write",
   "disabled"
  ],
- "ops": [
-  "keep",
-  "compress",
-  "amplify",
-  "rewrite"
+ "structural_roles": [
+  "cold_open",
+  "setup",
+  "escalation",
+  "turn",
+  "payoff",
+  "bridge"
  ],
- "op_band": {
-  "keep": [
-   0.9,
-   1.1
-  ],
-  "compress": [
-   0.6,
-   0.8
-  ],
-  "amplify": [
-   1.3,
-   1.8
-  ],
-  "rewrite": [
-   0.9,
-   1.1
-  ]
+ "delivery_modes": [
+  "scene",
+  "summary"
+ ],
+ "temporal_links": [
+  "start",
+  "continue",
+  "earlier",
+  "later",
+  "parallel",
+  "return"
+ ],
+ "goal_intents": [
+  "establish",
+  "advance",
+  "open",
+  "close",
+  "withhold",
+  "resolve"
+ ],
+ "response_structural_roles": {
+  "R_COLD_OPEN": "cold_open",
+  "R_SETUP": "setup",
+  "R_ESCALATION": "escalation",
+  "R_TURN": "turn",
+  "R_PAYOFF": "payoff",
+  "R_BRIDGE": "bridge"
  },
+ "response_delivery_modes": {
+  "D_SCENE": "scene",
+  "D_SUMMARY": "summary"
+ },
+ "response_temporal_links": {
+  "X_START": "start",
+  "X_CONTINUE": "continue",
+  "X_EARLIER": "earlier",
+  "X_LATER": "later",
+  "X_PARALLEL": "parallel",
+  "X_RETURN": "return"
+ },
+ "response_goal_intents": {
+  "G_ESTABLISH": "establish",
+  "G_ADVANCE": "advance",
+  "G_OPEN": "open",
+  "G_CLOSE": "close",
+  "G_WITHHOLD": "withhold",
+  "G_RESOLVE": "resolve"
+ },
+ "response_chapter_weights": {
+  "CH_MAJOR": "major",
+  "CH_ABOVE": "above",
+  "CH_EVEN": "even",
+  "CH_BELOW": "below",
+  "CH_MINOR": "minor"
+ },
+ "chapter_weights": [
+  "major",
+  "above",
+  "even",
+  "below",
+  "minor"
+ ],
+ "response_unit_weights": {
+  "W_PEAK": "peak",
+  "W_STRONG": "strong",
+  "W_MID": "mid",
+  "W_QUICK": "quick",
+  "W_BRUSH": "brush"
+ },
+ "unit_weights": [
+  "peak",
+  "strong",
+  "mid",
+  "quick",
+  "brush"
+ ],
  "style_words": [
   "环境渲染",
   "渲染氛围",
@@ -298,8 +411,8 @@
   "新时间跳跃": "none"
  },
  "draft_band": [
-  0.9,
-  1.1
+  0.8,
+  1.2
  ],
  "book_band": [
   0.9,
@@ -325,26 +438,29 @@
   "relation_to_body"
  ],
  "stage3_attempt_kinds": [
-  "initial",
   "surface_habits_targeted_repair",
   "chapter_local",
   "chapter_aggregate"
  ],
  "hook_approaches": [
-  "conflict_first",
-  "result_flashback",
-  "identity_contrast"
+  "source_architecture",
+  "payoff_preview",
+  "scene_punchline"
  ],
  "hook_approved_approaches": [
-  "conflict_first",
-  "result_flashback",
-  "identity_contrast",
+  "source_architecture",
+  "payoff_preview",
+  "scene_punchline",
   "human_edit"
  ],
+ "hook_semantic_states": [
+  "uncertain",
+  "unreviewed"
+ ],
  "hook_approach_notes": {
-  "conflict_first": "冲突前置 —— 开门见山，把最尖锐的对立或危机直接砸到读者面前",
-  "result_flashback": "开篇内的局部结果倒叙 —— 只从给定开篇正文里挑一个已发生的结果或画面，再回扣「为什么会这样」；不得取后期高潮或结局",
-  "identity_contrast": "身份反差 —— 用主角表里、处境或身份的强烈反差制造张力"
+  "source_architecture": "原作文案结构 —— 保住原文的信息次序、升级节拍、反差与最后一击，换成重写正文的声线和全新措辞",
+  "payoff_preview": "兑现预告 —— 从全书挑最有吸引力的后期兑现或反转作预告，制造「怎么走到这一步」的阅读欲",
+  "scene_punchline": "场面重击 —— 用一个可视、可听的具体场面或对白砸出核心关系，以人物反应、危险或笑点收尾"
  },
  "ending_shapes": [
   "引号台词",
@@ -360,45 +476,49 @@
   "high",
   "low"
  ],
+ "residual_adoption_confidence": [
+  "high"
+ ],
  "free_entries": {
   "--dry-run": "只打印将要发出去的东西，不调用、不写盘",
-  "--prompt-only": "只量 prompt 体量",
   "--check-only": "按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零",
   "--recheck": "按当前判据重判存量产物并写回指标",
-  "--revalidate": "按当前判据重判被闸门拦下的 .INVALID 稿，合格即提升为正式产物",
+  "--revalidate": "按当前判据对 .INVALID 稿做 0 LLM 同轮重判，必填 actor/reason 并留不可变审计，合格才提升",
   "--measure-only": "只跑确定性实测并报出来，**不写盘**（与 `--remeasure` 是两件事）",
   "--remeasure": "重算确定性实测值写回，其余字段不动",
-  "--migrate": "确定性回取/迁移：按当前锚点算法重新定位已有产物里的原文引用",
+  "--renormalize": "按当前契约重算代码派生字段与原文定位",
   "--names-only": "只产逐章可用名册（stage4），不产计划",
   "--identity": "恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外",
   "--apply-edit": "把人工改过的内容落成新的一轮",
-  "--drop": "人工裁决：删掉原文无据的 secret / relation，理由必填并落进 `_provenance.human_adjudicated`",
-  "--replay-cache": "拿一个已有的缓存 key 把某一章的响应重放回来——0 成本恢复路，不发新调用"
- },
- "superseded_free_entries": {
-  "--assemble": "→ 节点 `stage7.assemble`。它不是「换个跑法」，是一个独立的动作",
-  "--context-only": "→ 节点 `stage4.context`。**与 `--assemble` 逐字同形**，2026-08-11（骨架 D）补登记：`NODES` 里早就有 `stage4.context` 这个节点了，而本表当时还把它同时留在 `FREE_ENTRIES` 里——同一个动作两个落点，而两个落点里只有一个会被 `build_argv` 拒收",
-  "--identity-plan": "→ `stage4.plan --identity`。原型给同一个语义起了第二个名字",
-  "--approve": "→ 节点 `stage0/6/7.approve`。定稿是一个人做的动作，候选序号是它的参数；贵贱由 `NODES[...].paid` 回答，不必在本表再登记一份"
+  "--review-decisions": "应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策",
+  "--wontfix": "把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用",
+  "--retain-pretrim": "人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，0 次 LLM 调用（不是 0 人工成本）",
+  "--emit-edit-template": "向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘",
+  "--adopt-residual": "显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链"
  },
  "paid_flags": {
   "--full-extract": "stage2 全局底座、逐章蓝图与 stage3 文风画像并发首跑",
   "--shallow-rest": "stage5 把未选为深度重构的其余章节交给浅层写手",
   "--repair-surface-habits": "stage3 表层习惯的定向返工——它要再调一次模型",
   "--revise": "stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手",
-  "--purge-role": "stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型"
+  "--purge-role": "stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型",
+  "--resample": "stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应",
+  "--patch": "stage2 逐章蓝图的字段级修复（extraction-ir-v1）——逐条失败各调一次模型，量级是条不是章"
  },
  "partial_rewrite_flags": [
   "--remeasure",
   "--recheck",
-  "--migrate",
+  "--renormalize",
   "--identity",
-  "--apply-edit"
+  "--apply-edit",
+  "--adopt-residual"
  ],
  "valued_flags": {
   "--deep": "深度重构章节（逗号分隔；与 --shallow-rest 成对使用）",
-  "--apply-edit": "人工改好的候选稿路径（必填；stage7 通常为书内 stage7/name_map_edit.json）",
+  "--apply-edit": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
   "--apply-edit-plan": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
+  "--review-decisions": "stage2/global_review 的人工决策集（相对当前书目录）",
+  "--apply-candidate-plan": "审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）",
   "--actor": "人工决定的自报身份（不是认证身份）",
   "--reason": "人工决定的非空理由",
   "--subject-sha256": "人工决定乐观锁定的完整内容 SHA-256",
@@ -406,25 +526,24 @@
   "--pick": "定稿选第几个候选（1 起）",
   "--wontfix": "这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填",
   "--chapters": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
-  "--drop": "人工裁掉原文无据的条目：`<secret_xx|rel_xx>=<理由>`，理由必填",
-  "--replay-cache": "要重放的那次调用的缓存 key；必须配 `--chapters` 指定单章"
+  "--adopt-residual": "只接受 `high`；采纳无冲突、未覆盖且 unit/suggest 完整的残留建议"
  },
  "write_effects": {
   "--full-extract": "并发写 stage2/global_grounding.json、stage2/chapter_blueprints.json 与 stage3/style_grounding.json",
   "--shallow-rest": "按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿",
   "--dry-run": "",
-  "--prompt-only": "",
   "--check-only": "",
   "--measure-only": "",
   "--names-only": "",
+  "--emit-edit-template": "",
+  "--adopt-residual": "重写 stage7/name_map.json，清旧审批并退休现有成书",
   "--remeasure": "重算的 measurable 写回正式产物（其余字段不动）",
   "--recheck": "刷新已有成稿的指标，并重拼 draft.md",
-  "--revalidate": "把合格的 .INVALID 提升为正式产物，旧稿归档进 _rounds/",
-  "--apply-edit": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
-  "--migrate": "按当前锚点算法重新定位原文引用并写回",
-  "--wontfix": "把一条豁免记进 stage5/wontfix.json（**一份验收报告都不产**）",
-  "--drop": "把人工裁掉的 secret / relation 从产物里删掉，裁决理由写进 _provenance.human_adjudicated",
-  "--replay-cache": "把重放回来的那一章合并写回 stage2/chapter_blueprints.json"
+  "--revalidate": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
+  "--apply-edit": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
+  "--renormalize": "按当前契约重算代码派生字段与原文定位并写回",
+  "--wontfix": "把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）",
+  "--retain-pretrim": "写 stage5/trim_resolution_chNN.json；旧 resolution 归档，不改正文、不采用收缩候选"
  },
  "stages": [
   "stage0",
@@ -465,6 +584,40 @@
    "R-10"
   ]
  },
+ "pipeline_steps": [
+  "stage0.remove",
+  "stage0.approve",
+  "stage0.edit",
+  "stage1.partition",
+  "stage2.global",
+  "stage2.blueprint",
+  "stage3.style",
+  "stage4.plan",
+  "stage4.context",
+  "stage5.write",
+  "stage5.review",
+  "stage6.hook",
+  "stage6.semantic",
+  "stage6.approve",
+  "stage7.rename",
+  "stage7.approve",
+  "stage7.assemble"
+ ],
+ "progress_phases": [
+  "start",
+  "end"
+ ],
+ "beacon_states": [
+  "pending",
+  "running",
+  "ok",
+  "failed"
+ ],
+ "agent_run_event_kinds": [
+  "started",
+  "ended",
+  "reconciled"
+ ],
  "invent": {
   "allow": [
    "感官细节",
@@ -484,6 +637,29 @@
   ],
   "principle": "凡能拿回原文核对真伪的，禁止发明；凡纯属行文表面的，必须发明。"
  },
+ "spoiler_disclosure": {
+  "mode": "display_only",
+  "security_boundary": false,
+  "server_sends_full_data": true,
+  "hidden_paths": [
+   "characters[].fate",
+   "secrets",
+   "arc.climax",
+   "arc.ending"
+  ],
+  "known_leakage_surfaces": [
+   "characters[].role",
+   "relations[].valid_from_chapter",
+   "world_rules[].versions[].desc",
+   "network_response_and_devtools"
+  ],
+  "consumers": [
+   "web/src/api/spoilers.ts",
+   "web/src/screens/global/GlobalScreen.tsx",
+   "web/src/api/mock.ts"
+  ],
+  "notice": "这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏 fate、secrets、climax、ending 四处核心字段，role、关系时点、规则正文与网络响应仍可能剧透。"
+ },
  "job_kinds": {
   "stage0.remove": {
    "label": "stage0 非正文剔除",
@@ -497,6 +673,7 @@
     "--check-only"
    ],
    "produces": [
+    "stage0/revisions.json",
     "stage0/removal_report.json",
     "stage0/clean_text.txt"
    ]
@@ -507,8 +684,12 @@
    "stage": "stage0",
    "section": "R-0",
    "modes": [],
-   "flags": [],
+   "flags": [
+    "--actor",
+    "--reason"
+   ],
    "produces": [
+    "stage0/revisions.json",
     "stage0/removal_report.json"
    ]
   },
@@ -520,9 +701,13 @@
    "modes": [],
    "flags": [
     "--apply-edit",
-    "--apply-edit-plan"
+    "--apply-edit-plan",
+    "--apply-candidate-plan",
+    "--actor",
+    "--reason"
    ],
    "produces": [
+    "stage0/revisions.json",
     "stage0/removal_report.json",
     "stage0/clean_text.txt"
    ]
@@ -550,14 +735,19 @@
    "section": "R-2",
    "modes": [],
    "flags": [
-    "--migrate",
-    "--drop",
+    "--renormalize",
     "--purge-role",
+    "--resample",
     "--revalidate",
-    "--full-extract"
+    "--full-extract",
+    "--apply-edit",
+    "--review-decisions",
+    "--actor",
+    "--reason"
    ],
    "produces": [
-    "stage2/global_grounding.json"
+    "stage2/global_grounding.json",
+    "stage2/global_review.json"
    ]
   },
   "stage2.blueprint": {
@@ -567,13 +757,14 @@
    "section": "R-3",
    "modes": [],
    "flags": [
-    "--prompt-only",
+    "--dry-run",
     "--check-only",
-    "--migrate",
-    "--apply-edit",
+    "--renormalize",
     "--chapters",
-    "--replay-cache",
-    "--revalidate"
+    "--patch",
+    "--revalidate",
+    "--actor",
+    "--reason"
    ],
    "produces": [
     "stage2/chapter_blueprints.json"
@@ -592,7 +783,9 @@
     "--remeasure",
     "--revalidate",
     "--apply-edit",
-    "--repair-surface-habits"
+    "--repair-surface-habits",
+    "--actor",
+    "--reason"
    ],
    "produces": [
     "stage3/style_grounding.json"
@@ -606,12 +799,14 @@
    "modes": [],
    "flags": [
     "--dry-run",
-    "--prompt-only",
     "--check-only",
     "--revalidate",
     "--names-only",
     "--identity",
-    "--apply-edit"
+    "--apply-edit",
+    "--chapters",
+    "--actor",
+    "--reason"
    ],
    "produces": [
     "stage4/plan_chapters.json"
@@ -645,7 +840,9 @@
     "--revise",
     "--chapters",
     "--deep",
-    "--shallow-rest"
+    "--shallow-rest",
+    "--actor",
+    "--reason"
    ],
    "produces": [
     "stage5/{mode}/ch{nn}.json",
@@ -660,7 +857,11 @@
    "modes": [],
    "flags": [
     "--check-only",
-    "--wontfix"
+    "--wontfix",
+    "--retain-pretrim",
+    "--chapters",
+    "--actor",
+    "--reason"
    ],
    "produces": [
     "stage5/review_{n}.json"
@@ -678,7 +879,10 @@
     "--identity",
     "--recheck",
     "--revalidate",
-    "--apply-edit"
+    "--apply-edit",
+    "--wontfix",
+    "--actor",
+    "--reason"
    ],
    "produces": [
     "stage6/hook.json"
@@ -725,7 +929,26 @@
     "--identity",
     "--recheck",
     "--apply-edit",
-    "--revalidate"
+    "--revalidate",
+    "--emit-edit-template",
+    "--adopt-residual",
+    "--actor",
+    "--reason"
+   ],
+   "produces": [
+    "stage7/name_map.json"
+   ]
+  },
+  "stage7.approve": {
+   "label": "stage7 人名表定稿",
+   "paid": false,
+   "stage": "stage7",
+   "section": "R-10",
+   "modes": [],
+   "flags": [
+    "--actor",
+    "--reason",
+    "--subject-sha256"
    ],
    "produces": [
     "stage7/name_map.json"
@@ -739,18 +962,7 @@
    "modes": [],
    "flags": [],
    "produces": [
-    "stage7/book.txt"
-   ]
-  },
-  "stage7.approve": {
-   "label": "stage7 人名表定稿",
-   "paid": false,
-   "stage": "stage7",
-   "section": "R-10",
-   "modes": [],
-   "flags": [],
-   "produces": [
-    "stage7/name_map.json"
+    "stage7/{title}_rewriting.txt"
    ]
   }
  },
@@ -762,7 +974,7 @@
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -776,7 +988,7 @@
    ],
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
    "writes_disk": true,
    "needs_value": "要摄入的原始小说 txt/md 路径；新书在目录产生前没有 sid",
    "required_inputs": []
@@ -816,7 +1028,7 @@
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/removal_report.json",
+   "writes": "stage0/revisions.json · stage0/removal_report.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": [
@@ -837,7 +1049,7 @@
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
@@ -851,7 +1063,7 @@
    ],
    "paid": false,
    "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
+   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
    "writes_disk": true,
    "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
    "required_inputs": [
@@ -874,7 +1086,7 @@
    ],
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
    "writes_disk": true,
    "needs_value": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
    "required_inputs": []
@@ -882,15 +1094,15 @@
   {
    "kind": "stage0.edit",
    "mode": null,
-   "label": "stage0 人工编辑 --apply-merge-plan",
+   "label": "stage0 人工编辑 --apply-candidate-plan",
    "extra": [
-    "--apply-merge-plan"
+    "--apply-candidate-plan"
    ],
    "paid": false,
    "free_flag": null,
-   "writes": "stage0/removal_report.json · stage0/clean_text.txt",
+   "writes": "stage0/revisions.json · stage0/removal_report.json · stage0/clean_text.txt",
    "writes_disk": true,
-   "needs_value": "审校台生成的 stage0 三方合并决定（冲突逐项决定 + 乐观锁）",
+   "needs_value": "审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）",
    "required_inputs": []
   },
   {
@@ -1033,7 +1245,7 @@
    ],
    "paid": false,
    "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
+   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
    "writes_disk": true,
    "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
    "required_inputs": []
@@ -1118,6 +1330,20 @@
    "writes": "stage2/chapter_blueprints.json",
    "writes_disk": true,
    "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.blueprint",
+   "mode": null,
+   "label": "stage2 逐章抽取 --patch",
+   "extra": [
+    "--patch"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/chapter_blueprints.json",
+   "writes_disk": true,
+   "needs_value": null,
    "required_inputs": []
   },
   {
@@ -1243,7 +1469,7 @@
    ],
    "paid": false,
    "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
+   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
    "writes_disk": true,
    "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
    "required_inputs": []
@@ -1362,7 +1588,7 @@
    ],
    "paid": false,
    "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
+   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
    "writes_disk": true,
    "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
    "required_inputs": []
@@ -1465,7 +1691,7 @@
    ],
    "paid": false,
    "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
+   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
    "writes_disk": true,
    "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
    "required_inputs": []
@@ -1570,7 +1796,7 @@
    ],
    "paid": false,
    "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
+   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
    "writes_disk": true,
    "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
    "required_inputs": []
@@ -1784,7 +2010,7 @@
    ],
    "paid": false,
    "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
+   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
    "writes_disk": true,
    "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
    "required_inputs": []
@@ -1962,7 +2188,7 @@
    ],
    "paid": false,
    "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一轮，并把上一轮归档进 _rounds/",
+   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
    "writes_disk": true,
    "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
    "required_inputs": []
@@ -2013,7 +2239,7 @@
    ],
    "paid": false,
    "free_flag": "--adopt-residual",
-   "writes": "重写 stage7/name_map.json，清旧审批并退休现有 book.txt",
+   "writes": "重写 stage7/name_map.json，清旧审批并退休现有成书",
    "writes_disk": true,
    "needs_value": "只接受 `high`；采纳无冲突、未覆盖且 unit/suggest 完整的残留建议",
    "required_inputs": []
@@ -2050,7 +2276,7 @@
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage7/book.txt",
+   "writes": "stage7/{title}_rewriting.txt",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []

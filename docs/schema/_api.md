@@ -112,13 +112,14 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/queues/:id/resume` | `QueueRun`（202；请求体 `QueueResumeRequest`，剩余付费命令要求 `confirmed=true`） | **复用** `_orchestration.md` |
 | `POST /api/queues/:id/items/:index/cancel` | `QueueRun`（只取消尚未开始项） | **复用** `_orchestration.md` |
 | `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
-| `GET /api/novels/:sid/stage0/report` | `RemovalReport` | **复用** `stage0.md` |
+| `GET /api/novels/:sid/stage0/report` | `Stage0Report` | **继承** `stage0.md` 的 `RemovalReport`，多三格视图投影，见下 |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
+| `GET /api/novels/:sid/stage0/partition-preview` | `Stage0PartitionPreview`（批准前的只读分章推演；**不写产物、不查审批状态**，见 `stage0.md` §2.4） | 新 |
 | `POST /api/novels/:sid/stage0/edit` | `JobRecord`（请求体 `Stage0EditRequest`） | 新 |
 | `POST /api/novels/:sid/stage0/approve` | `JobRecord`（请求体 `Stage0ApprovalRequest`：自报 `actor` + `reason`） | 新 |
-| `GET /api/novels/:sid/stage0/merge` | `Stage0MergeCandidate`（当前 `base/ours/theirs` 与 typed conflicts） | 新 |
-| `POST /api/novels/:sid/stage0/merge/resolve` | `JobRecord`（请求体 `Stage0MergeDecisionRequest`） | 新 |
-| `POST /api/novels/:sid/stage0/merge/reject` | `JobRecord`（同一请求体，`resolutions=[]`） | 新 |
+| `GET /api/novels/:sid/stage0/candidate` | `Stage0CandidateView`（待裁决的那条机器 revision + **当前稿的读数**） | 新 |
+| `POST /api/novels/:sid/stage0/candidate/adopt` | `JobRecord`（请求体 `Stage0CandidateDecisionRequest`） | 新 |
+| `POST /api/novels/:sid/stage0/candidate/dismiss` | `JobRecord`（同一请求体） | 新 |
 | `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
 | `GET /api/novels/:sid/stage1/segments` | `Stage1Segments` | 新 |
 | `GET /api/novels/:sid/stage1/chapters` | `Stage1Chapters` | 新 |
@@ -152,6 +153,27 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/novels/:sid/stage5/trim/:o/retain-pretrim` | `JobRecord`（请求体 `TrimResolutionRequest`；只允许保留原稿） | 新 |
 | `POST /api/novels/:sid/stage6/approve` | `JobRecord`（请求体 `HookApproveRequest`） | 新 |
 | `POST /api/novels/:sid/stage7/approve` | `JobRecord`（无请求体） | 新 |
+
+> #### `Stage0Report` 比产物多的那三格（2026-08-22 阶段 B）
+>
+> 它**继承** `RemovalReport` 而不是抄一份——22 个字段抄第二遍就是 22 个会分家的字段。
+> 只覆盖 `warnings` 一格，另加一格投影：
+>
+> | 字段 | 说明 |
+> |---|---|
+> | `warnings[]` | `{warning, message}`：产物里的**结构化证据** + 服务端现渲染的那句话。产物只记证据（`stage0.md` §2.3），措辞唯一落点是 `novel/core/warnings.py`。⚠ 前端**不许自己拼措辞**，也不许拿 `message` 做分支（认告警仍然一律用 `warning.kind`） |
+> | `executable` | 这份报告**此刻能不能放行 stage1 与付费链**。它是唯一那个判官（`novel/stages/stage0/eligibility.py::is_stage0_executable`）的投影 |
+>
+> ⚠ 这里曾有配套的第二格 `block_reason`（稳定理由码 `pending` ｜
+> `legacy_auto_approval_requires_review`），2026-08-22 随停产取值 `auto_zero_hit`
+> 一并删除：理由码只剩一个取值之后，它与 `executable` 表达的是同一个 bit，
+> 而**一个 bit 只留一个投影**。要再有第二种「批了却跑不得」的理由时整格加回来。
+>
+> ⚠ **这不违反本文档纪律 ②（视图不许自己算判定）**：禁的是视图**自己算**一个判定。
+> 这一格恰恰相反——此前前端自己拼 `approved === 'approved' && origin === 'human'`，
+> 那才是第二个判官，而且是外部评审点名要收口的第五处消费方。
+> ⚠ 前端**不许**再从 `approval` 自己推资格：历史自动批显示「已批准」却跑不得，
+> 两处各写一遍迟早漏一处，而漏掉的那处就是自动绕过的复活口。
 
 ⚠ **preview 直接返回 `JobStart` 是有意的**，不是图省事：那个模型自带后置条件
 `paid == 任一步 paid` / `writes == 任一步 writes`，于是「整份贵贱是逐步折叠出来的」
@@ -435,8 +457,8 @@ HTTP 进程只写 `_service/`（一次性人工稿）。
 
 | 端点 | 请求体 | 说明 |
 |---|---|---|
-| `POST /api/novels/:sid/stage0/approve` | `Stage0ApprovalRequest`（`actor` + `reason`） | actor 是自报身份；空值拒绝。严格零风险首跑由产地自动记 `auto_zero_hit`，本端点只产生 `human` 批准 |
-| `POST /api/novels/:sid/stage0/merge/resolve` / `reject` | `Stage0MergeDecisionRequest`（candidate id + round/source/clean 乐观锁 + actor/reason + resolutions） | resolve 要求当前每个冲突恰好一条 `ours/theirs/custom`决议；reject 禁止伪造 resolutions。决定按内容寻址保留，崩溃后同一请求幂等重放；只有 `ok/landed_red` 才清理一次性 plan |
+| `POST /api/novels/:sid/stage0/approve` | `Stage0ApprovalRequest`（`actor` + `reason`） | actor 是自报身份；空值拒绝。⚠ 零命中自动批已于 2026-08-21 停产、记录它的 `approval.origin` 一格已于 2026-08-22 删除 ⇒ **本端点是批准的唯一来源** |
+| `POST /api/novels/:sid/stage0/candidate/adopt` / `dismiss` | `Stage0CandidateDecisionRequest`（`candidate_revision_id` + `expected_revision_id` 乐观锁 + actor/reason） | 页面上要决定的是**整版留哪一版**，不是逐个冲突选边——聚合根是 `{原文身份, 正文, 剔除账本, 告警}` 整团（`stage0.md` §2.5），只对正文做 diff3 保证不了整个聚合一致。`adopt` 落一条 `human_adopt` revision 并把审批退回 pending；`dismiss` 当前稿一字不动、候选进 `dismissed[]`（否则同一候选每跑一次机器就复活一次）。⚠ 「采纳后再编辑」不是第三个端点，是 adopt 之后照常 `POST /stage0/edit`。决定按内容寻址保留，崩溃后同一请求幂等重放；只有 `ok/landed_red` 才清理一次性 plan |
 | `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（`mode` + `segments[{slot,text}]`） | typed segments 落 `_service/edits/` 一次性 JSON 稿（文件名带 `ch{o}`，`--apply-edit` 从文件名认章）；slot 必须唯一，最终与计划 slot 集合完全一致且顺序由 producer 决定的校验归 `stage5.write --apply-edit`。随后走**与生成稿同一个判定落点**（归一 → 判据 → 归档 → 写回，`origin=human` 记账）；仍有阻断级**只报不拦**（人改的往往正是机器修不动的地方）。⚠ **没有乐观锁**：并发改稿以整份归档兜底，覆盖的代价是多花一轮归档——登记为已知限制，不在 API 层造第二套锁 |
 | `POST /api/novels/:sid/stage6/approve` | `HookApproveRequest`（`pick`、`actor`、`reason`、`subject_sha256`） | **不收文本**；完整 hash 与当前候选乐观绑定，actor 是自报而非认证身份。改字是另一个节点（`stage6.hook --apply-edit`），契约把编辑文件钉死在书目录内，`R-11.3` 禁止服务进程写产物盘。**`stage6/edit` / `stage7/edit` 刻意不在 HTTP**，走 CLI |
 | `POST /api/novels/:sid/stage7/approve` | `NameMapApproveRequest`（`actor`、`reason`、`subject_sha256`） | 一本书只有一份人物表，因此不带候选序号；完整 hash 乐观绑定 `surname_map + characters + extra_subs` 决策面。成功后服务 s7 proof 同时绑定完整 typed 审批凭据，但不绑定 `book_txt` 等派生账，正常 assemble 不会自废批准 |

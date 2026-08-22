@@ -218,7 +218,7 @@ def test_stage1_preview_reads_two_books_from_one_canonical_output_root(tmp_path)
     for book in source_spec.books:
         assert book.source is not None
         novel_dir, removed, _ = run_source(book.source, shared)
-        if removed.report.approved != 'approved':
+        if removed.report.approval.status != 'approved':
             run_approve(
                 _context(novel_dir, 'stage0.approve'),
                 actor='current-corpus-preview-test',

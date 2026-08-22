@@ -73,7 +73,7 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     report = report_response.json()
     view = segments_response.json()
     assert report['total_code_points'] == len(TEXT)
-    assert report['approved'] == 'pending'
+    assert report['approval'] == {'status': 'pending'}
     assert view['available'] is True and view['reason'] is None
     assert ''.join(segment['text'] for segment in view['segments']) == TEXT
 
@@ -82,9 +82,8 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
         segment['id'] for segment in view['segments']
         if segment['kind'] == 'keep' and '第二句文案' in segment['text'])
     request = {
-        'expected_round': report['round'],
-        'expected_source_sha1': report['source_sha1'],
-        'expected_clean_sha1': report['clean_sha1'],
+        'expected_revision_id': report['revision_id'],
+        'expected_normalized_source_sha1': report['normalized_source_sha1'],
         'removed_segment_ids': [*machine, manual],
         'actor': 'api-stage01-test',
         'reason': 'exercise audited edit route',
@@ -95,9 +94,9 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     assert edited_response.json()['state'] == 'ok'
 
     edited = client.get(f'/api/novels/{sid}/stage0/report').json()
-    assert edited['round'] == report['round'] + 1
-    assert edited['approved'] == 'pending'
-    assert edited['edited_by_human'] is True
+    assert edited['revision_id'] != report['revision_id']
+    assert edited['revision_origin'] == 'human_edit'
+    assert edited['approval'] == {'status': 'pending'}
     assert any(segment['origin'] == 'human' for segment in edited['removed'])
 
     stale = client.post(f'/api/novels/{sid}/stage0/edit', json=request, headers=UI)
@@ -121,8 +120,59 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
         'hook', 'chapter', 'chapter', 'end_marker']
     assert ''.join(segment['text'] for segment in stage1) == (
         TEXT.replace('第二句文案。\n\n', '').split('番外', 1)[0])
-    assert [row['source_chapter_label'] for row in chapters.json()['chapters']] == ['1', '2']
+    assert [row['source_chapter_no'] for row in chapters.json()['chapters']] == [1, 2]
     assert hook.json()['hook_copy']['text'] == '开篇钩子。\n\n'
+
+
+#: 纯数字番外：章标记只是一个数字，正文里一个非正文关键词都没有 ⇒ 机器认不出。
+NUMERIC_FANWAI = (
+    '开篇钩子。\n\n'
+    '1\n\n第一章正文。她走进门里，没有回头。\n\n'
+    '2\n\n第二章正文。他推开窗，看见天亮了。\n\n'
+    '1\n\n十年后他们在旧城重逢，她终于说出那句话。\n'
+)
+
+
+def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
+    client: TestClient,
+):
+    """批准前的分章预览要走得通**真实 HTTP**，且一份 stage1 产物都不落。
+
+    机器对这本书零命中（`removed` 空、无 warning），审批页原有的三样看不出异常；
+    章 outline 里第 3 章的原始章号退回 1，才是人能看见的那一处。
+    """
+    response = client.post(
+        '/api/upload',
+        params={'filename': 'FQ_纯数字番外_9002.txt'},
+        content=NUMERIC_FANWAI.encode('utf-8'),
+        headers={**UI, 'Content-Type': 'application/octet-stream'},
+    )
+    assert response.status_code == 200, response.text
+    sid = response.json()['sid']
+
+    report = client.get(f'/api/novels/{sid}/stage0/report').json()
+    assert report['approval'] == {'status': 'pending'} and report['removed'] == []
+    # ⚠ 执行资格是**后端算好投影下来的**，不是前端自己从 approval 推的
+    #   （评审点名的第五处消费方，2026-08-22 收口）。
+    assert report['executable'] is False
+    # ⚠ 配套的 `block_reason` 已于 2026-08-22 随 `auto_zero_hit` 删除：理由码只剩一个
+    #   取值之后它与 `executable` 是同一个 bit，一个 bit 只留一个投影。
+    assert 'block_reason' not in report
+
+    preview = client.get(f'/api/novels/{sid}/stage0/partition-preview')
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body['available'] is True and body['reason'] is None
+    assert [
+        (row['chapter_ordinal'], row['source_chapter_no'],
+         row['label_delta'], row['anomaly'])
+        for row in body['chapters']
+    ] == [(1, 1, None, 'repeat'), (2, 2, 1, None), (3, 1, -1, 'reset')]
+    assert body['anomaly_count'] == 2
+
+    # 只读：预览不建 stage1 目录，stage1 仍然只能由已批准的 stage0 启动。
+    partition = client.post(f'/api/novels/{sid}/stage1/partition')
+    assert partition.status_code != 200 or partition.json()['state'] != 'ok'
 
 
 def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
@@ -135,9 +185,8 @@ def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
     response = client.post(
         f'/api/novels/{sid}/stage0/edit',
         json={
-            'expected_round': report['round'],
-            'expected_source_sha1': report['source_sha1'],
-            'expected_clean_sha1': report['clean_sha1'],
+            'expected_revision_id': report['revision_id'],
+            'expected_normalized_source_sha1': report['normalized_source_sha1'],
                 'removed_segment_ids': selected,
                 'actor': 'api-stage01-test',
                 'reason': 'negative end-marker test',
@@ -148,29 +197,41 @@ def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
     assert response.json()['kind'] == 'HumanEditProtected'
 
 
-def test_missing_original_is_explicitly_unavailable(client: TestClient):
+def test_missing_original_is_explicitly_unavailable(client: TestClient, root: Path):
+    """原文真没了 ⇒ 明说不可用，绝不从别处变出一份。
+
+    ⚠ 上传那一支不记绝对路径（它跟着 base 走），所以这里按**内容地址**定位那份 blob
+    再删掉它——那正是产物说的那份东西没了。
+    """
+    from novel import paths as novel_paths
+
     sid = _upload(client)['sid']
     report = client.get(f'/api/novels/{sid}/stage0/report').json()
-    Path(report['original_path']).unlink()
+    ref = report['source_ref']
+    assert ref['kind'] == 'managed_upload', '界面上传必须写成上传那一支'
+    (novel_paths.uploads_dir(root) / ref['blob_sha256'] / ref['filename']).unlink()
+
     response = client.get(f'/api/novels/{sid}/stage0/segments')
     assert response.status_code == 200
     assert response.json()['available'] is False
     assert response.json()['segments'] == []
-    assert 'original_path' in response.json()['reason']
+    assert ref['filename'] in response.json()['reason']
 
 
 def test_original_survives_moving_the_output_root(client: TestClient, root: Path):
     """Output 根搬家后，界面上传的那本书**照旧读得回原文**。
 
     ⚠⚠ 与上一条成对，两条一起才是完整的意思：**原文真没了要明说不可用；
-      原文还在就不许说没了。** `original_path` 记的是绝对路径，根一改它就断，
+      原文还在就不许说没了。** 此前 `original_path` 记的是绝对路径，根一改它就断，
       而文件根本没动——它住在 `<base>/_service/uploads/<内容地址>/`，跟着 base 一起搬。
-      此时答 `available: false` 是**假阴性**，实测发生过（《夫君与鲛人孰》：
+      当时答 `available: false` 是**假阴性**，实测发生过（《夫君与鲛人孰》：
       记的是旧根，文件就在新根的同一个内容地址目录下、字节逐一相等，
       而 `state` 报 ghost、不带 `--source` 复跑直接 `UpstreamMissing`）。
 
-    ⚠ 这条回落**只认上传目录那一种形状**，且候选必须自证内容地址；
-      外部语料被删仍然是 ghost（`novel/core/source.py`）。
+    ⚠ 2026-08-22 起这不再靠「断了再猜」的回落：`source_ref` 的
+      `managed_upload` 那一支压根不记绝对路径，位置由当前 base 现算，
+      候选仍须自证内容地址；`external_file` 被删仍然是 ghost
+      （`novel/core/source.py`）。
     """
     sid = _upload(client)['sid']
     before = client.get(f'/api/novels/{sid}/stage0/segments').json()
@@ -182,7 +243,7 @@ def test_original_survives_moving_the_output_root(client: TestClient, root: Path
         with TestClient(create_app(moved)) as moved_client:
             after = moved_client.get(f'/api/novels/{sid}/stage0/segments').json()
         assert after['available'] is True, after.get('reason')
-        assert after['source_sha1'] == before['source_sha1']
+        assert after['normalized_source_sha1'] == before['normalized_source_sha1']
         assert [segment['text'] for segment in after['segments']] == \
             [segment['text'] for segment in before['segments']]
     finally:

@@ -209,13 +209,8 @@ def _source_book(book: BookSpec) -> dict[str, Any]:
         raise ValueError(f'source-only 隔离 base 必须不存在或为空：{base}')
     removal = remove_bytes(source.read_bytes(), original_path=str(source), code='preview000')
     partition = partition_text(
-        removal.clean_text, source_sha1=removal.report.source_sha1)
+        removal.clean_text, normalized_source_sha1=removal.report.normalized_source_sha1)
     novel_dir = base / paths.novel_dirname(title, sid)
-    auto = (
-        not removal.report.removed
-        and not removal.report.warnings
-        and removal.report.source_sha1 == removal.report.clean_sha1
-    )
     return {
         'sid': sid,
         'title': title,
@@ -223,12 +218,11 @@ def _source_book(book: BookSpec) -> dict[str, Any]:
         'novel_dir': novel_dir,
         'input_kind': 'source',
         'source': source,
-        'source_sha1': removal.report.source_sha1,
+        'normalized_source_sha1': removal.report.normalized_source_sha1,
         'clean_sha1': removal.report.clean_sha1,
-        'stage0_auto_approval_eligible': auto,
-        'stage0_gate': (
-            '首次零命中可自动批准'
-            if auto else '必须先由人工 actor/reason 批准，预览不替代该决定'),
+        # ⚠ 零命中不是「可自动批准」：那条路 2026-08-21 停产，取值 `auto_zero_hit`
+        #   已于 2026-08-22 随死值一并删除。摄入之后恒 pending，只有人能批。
+        'stage0_gate': '必须先由人工 actor/reason 批准，预览不替代该决定',
         'main_text': partition.main_text,
         'chapters': len(partition.main_text.root),
     }
@@ -250,8 +244,9 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
     report = _read_current(
         STAGE0_REMOVAL_REPORT, novel_dir / STAGE0_REMOVAL_REPORT, RemovalReport)
     assert isinstance(report, RemovalReport)
-    if report.approved != 'approved':
-        raise ValueError(f'{novel_dir}: Stage0 状态 {report.approved!r}，不允许预览付费重建')
+    if report.approval.status != 'approved':
+        raise ValueError(
+            f'{novel_dir}: Stage0 状态 {report.approval.status!r}，不允许预览付费重建')
     clean_path = novel_dir / STAGE0_CLEAN_TEXT
     try:
         clean = clean_path.read_text(encoding='utf-8')
@@ -270,10 +265,10 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
     assert isinstance(main, MainText)
     assert isinstance(hook, HookCopy)
     assert isinstance(partition, PartitionReport)
-    if partition.input_sha1 != clean_sha1 or partition.source_sha1 != report.source_sha1:
+    if partition.input_sha1 != clean_sha1 or partition.normalized_source_sha1 != report.normalized_source_sha1:
         raise ValueError('Stage1 partition_report 不是当前已批准 Stage0 正文的分章账')
-    if partition.num_chapters != len(main.root):
-        raise ValueError('Stage1 num_chapters 与 main_text 条目数不一致')
+    if partition.detected_chapter_marker_count != len(main.root):
+        raise ValueError('Stage1 detected_chapter_marker_count 与 main_text 条目数不一致')
     return {
         'sid': book.sid,
         'title': paths.title_of(novel_dir),
@@ -281,10 +276,9 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
         'novel_dir': novel_dir,
         'input_kind': 'stage1',
         'source': None,
-        'source_sha1': report.source_sha1,
+        'normalized_source_sha1': report.normalized_source_sha1,
         'clean_sha1': report.clean_sha1,
-        'stage0_auto_approval_eligible': report.approval_origin == 'auto_zero_hit',
-        'stage0_gate': f'已批准（origin={report.approval_origin}）',
+        'stage0_gate': f'已批准（by={report.approval.by}）',
         'main_text': main,
         'chapters': len(main.root),
     }

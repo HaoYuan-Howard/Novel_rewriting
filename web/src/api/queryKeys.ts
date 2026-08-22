@@ -14,7 +14,8 @@ export const qk = {
 
   stage0Report: (sid: string) => ['stage0', sid, 'report'] as const,
   stage0Segments: (sid: string) => ['stage0', sid, 'segments'] as const,
-  stage0Merge: (sid: string) => ['stage0', sid, 'merge'] as const,
+  stage0Candidate: (sid: string) => ['stage0', sid, 'candidate'] as const,
+  stage0PartitionPreview: (sid: string) => ['stage0', sid, 'partition-preview'] as const,
   s1segments: (sid: string) => ['s1segments', sid] as const,
   s1chapters: (sid: string) => ['s1chapters', sid] as const,
   s1hook: (sid: string) => ['s1hook', sid] as const,

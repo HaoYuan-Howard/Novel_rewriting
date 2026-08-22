@@ -40,7 +40,7 @@ from typing import Any, Callable, Iterable, Iterator, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT,
+    STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
     STAGE7_NAME_MAP,
@@ -69,6 +69,10 @@ REVALIDATION_DIRNAME = '_revalidation'
 # written only after the companion facts needed by that bridge are available.
 # stage0 clean_text and stage1 main/hook are deliberately absent: each is the
 # first half of a multi-file write and cannot self-prove until the report lands.
+# ⚠ **stage0 整层都不在这里**（`revisions.json` 与 `removal_report.json` 一并），
+#   那是有理由的、不是又漏了一条：它们的确定性边要去 resolve 真实原文，而
+#   「换了一份原文」在 stage0 是一条**合法的、由判据去拒**的路（`R-0.14`），
+#   写盘口再拒一次就把它变成写不进去。判别力落在判据那一侧，不在这道后置条件。
 SELF_FRESH_DETERMINISTIC = frozenset({
     STAGE1_PARTITION_REPORT,
     STAGE2_GLOBAL_REVIEW,
@@ -1037,11 +1041,19 @@ class ArtifactStore:
     def _deterministic_freshness(self, rel: str) -> FreshnessReport | None:
         """没有通用来源块的产物，用其既有确定性指纹回答同一个问题。
 
-        stage0 的两份产物共用 removal report 的 source/clean 身份；stage1 三份
-        共用 partition report 的 input 身份；成书（`stage7/<书名>_rewriting.txt`）
-        的身份由 name_map.book_txt 承载。
+        stage0 的权威格 `revisions.json` 用 `current` 那一版自己的原文身份；同层两份
+        物化投影共用 removal report 的 source/clean 身份；stage1 三份共用 partition
+        report 的 input 身份；成书（`stage7/<书名>_rewriting.txt`）的身份由
+        name_map.book_txt 承载。
         这些本来就是对应关卡使用的权威比对，完成度只复用，不另造一份账。
+
+        ⚠ **这张表漏一条的后果不是报错，是那份产物在完成度里恒 `unknown/no_provenance`**
+        ——盘上明明有一份判得出新鲜度的产物，视图却说「没有来源账」。
+        `stage0/revisions.json` 2026-08-22 落地时就漏在这里（8 本语料 8/8 复现），
+        新增没有通用 `_provenance` 槽位的产物时必须同批接进来。
         """
+        if rel == STAGE0_REVISIONS:
+            return self._stage0_revisions_freshness()
         if rel in (STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT):
             return self._stage0_freshness()
         if rel in (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE1_PARTITION_REPORT):
@@ -1055,40 +1067,93 @@ class ArtifactStore:
             return self._book_freshness()
         return None
 
+    def _stage0_revisions_freshness(self) -> FreshnessReport:
+        """`stage0/revisions.json`：这条链是照盘上**现在这份原文**建的吗？
+
+        ⚠ **不给它补 `_provenance`。** 本层是全链源头、`inputs` 恒空，「这份产物照什么
+        产的」由 `source_ref` / `normalized_source_sha1` 答完（理由写在
+        `contracts/schema/stage0.py` 模块头，同层另外两份产物也没有）。
+        补一个 `inputs` 恒空的来源块只是为了让通用那条路走通，等于给同一件事记第二本账。
+
+        ⚠⚠ **只有原文这一条上游边。** `clean_text.txt` 与 `removal_report.json` 是本格的
+        **物化投影**，在它下游——把投影当成自己的上游，就是让权威格拿自己的影子自证新鲜，
+        那种边永远 match，判别力是零。「两份 live 是不是 `current` 的投影」由判据
+        `s0_revision_chain`（`R-0.5`）逐条复算，完成度只读它、不另造一份。
+
+        身份取 `current` 指向的那一版：链的 well-formed 校验保证全链同一份原文，
+        但**读的是权威指针那一版**，不是碰巧排在第一条的那一版。
+        """
+        chain = self._freshness_payload(STAGE0_REVISIONS)
+        if chain is None:
+            return FreshnessReport('unknown', 'no_provenance')
+        current = chain.get('current')
+        current_id = current.get('revision_id') if isinstance(current, dict) else None
+        revisions = chain.get('revisions')
+        if not isinstance(revisions, list) or not isinstance(current_id, str):
+            return FreshnessReport('unknown', 'no_provenance')
+        content = next(
+            (item.get('content') for item in revisions
+             if isinstance(item, dict) and item.get('revision_id') == current_id),
+            None)
+        if not isinstance(content, dict):
+            return FreshnessReport('unknown', 'no_provenance')
+        edge = self._stage0_source_edge(
+            content.get('source_ref'), content.get('normalized_source_sha1'))
+        if edge is None:
+            return FreshnessReport('unknown', 'no_provenance')
+        return self._content_report((edge,))
+
     def _stage0_freshness(self) -> FreshnessReport:
         report = self._freshness_payload(STAGE0_REMOVAL_REPORT)
         if report is None:
             return FreshnessReport('unknown', 'no_provenance')
-        source_path = report.get('original_path')
-        source_was = report.get('source_sha1')
         clean_was = report.get('clean_sha1')
-        if not all(isinstance(value, str) and value
-                   for value in (source_path, source_was, clean_was)):
+        if not isinstance(clean_was, str) or not clean_was:
             return FreshnessReport('unknown', 'no_provenance')
 
         clean_now = self._content_sha1_or_none(STAGE0_CLEAN_TEXT)
         clean_edge = self._content_edge(STAGE0_CLEAN_TEXT, clean_was, clean_now)
 
-        # 记录的那条路径优先，`_service/uploads/` 的 base 重锚只是回落——顺序不许反，
-        # 理由写在 `novel/core/source.py`（反过来会让 `_require_stage0_fresh` 那道
-        # 「提交这一批期间源被换掉就整批回滚」的闸拿到一份永远自洽的答案）。
-        from novel.core.source import resolve_recorded_source
-        source = resolve_recorded_source(source_path, self.ctx.novel_dir.parent)
+        source_edge = self._stage0_source_edge(
+            report.get('source_ref'), report.get('normalized_source_sha1'))
+        if source_edge is None:
+            return FreshnessReport('unknown', 'no_provenance')
+        return self._content_report((source_edge, clean_edge))
+
+    def _stage0_source_edge(
+            self, raw_ref: Any, source_was: Any) -> prov.EdgeVerdict | None:
+        """「盘上那份原文还是当初那份吗」——stage0 三份产物共用的**同一条**边。
+
+        答不出来时返回 `None`（调用方据此报 `unknown/no_provenance`）：
+        「读不到原文」与「原文变了」是两件事，不许压成一个值。
+        """
+        if not isinstance(raw_ref, dict) or not isinstance(source_was, str) or not source_was:
+            return None
+        from contracts.schema.stage0 import SourceRef
+        from pydantic import TypeAdapter
+        try:
+            source_ref = TypeAdapter(SourceRef).validate_python(raw_ref)
+        except Exception:
+            return None
+
+        # ⚠ 这里曾有一条「记录的那条路径优先、重锚只是回落，顺序不许反」的纪律。
+        #   2026-08-22 `source_ref` 换成判别联合之后**没有回落这回事了**：每一支只有
+        #   一条路，`external_file` 认那一条绝对路径、`managed_upload` 认当前 base 下的
+        #   内容地址目录。那条纪律守的性质（`_require_stage0_fresh` 必须拿到能反映
+        #   「世界变了」的读数，而不是一份永远自洽的答案）现在由类型保证。
+        from novel.core.source import describe_source, resolve_recorded_source
+        source = resolve_recorded_source(source_ref, self.ctx.novel_dir.parent)
         if source is None:
             # ⚠ 边的 key 用记录里那条：读不到时要点名的就是它（`R-5.10`）。
-            source_edge = self._content_edge(source_path, source_was, None)
-            return self._content_report((source_edge, clean_edge))
+            return self._content_edge(describe_source(source_ref), source_was, None)
         try:
             from novel.core.ingest import DecodeProblem, decode_source_bytes
-            source_now = decode_source_bytes(source.read_bytes()).source_sha1
-        except DecodeProblem:
-            return FreshnessReport('unknown', 'no_provenance')
-        except OSError:
-            return FreshnessReport('unknown', 'no_provenance')
-        # ⚠ 重锚成功时 key 用**真正读到的那个位置**：点一条其实读到了的旧路径，
+            source_now = decode_source_bytes(source.read_bytes()).normalized_source_sha1
+        except (DecodeProblem, OSError):
+            return None
+        # ⚠ key 用**真正读到的那个位置**：点一条其实读到了的旧路径，
         #   会把人送去找一个并不存在的问题。
-        source_edge = self._content_edge(str(source), source_was, source_now)
-        return self._content_report((source_edge, clean_edge))
+        return self._content_edge(str(source), source_was, source_now)
 
     def _stage1_freshness(self) -> FreshnessReport:
         report = self._freshness_payload(STAGE1_PARTITION_REPORT)

@@ -52,18 +52,16 @@ class PartitionResult:
 
 
 def _warning(labels: list[int]) -> list[Stage1Warning]:
+    """⚠ 只产证据，措辞归 `novel/core/warnings.py::describe`（2026-08-22）。"""
     out: list[Stage1Warning] = []
     for label, count in sorted(Counter(labels).items()):
         if count >= NOISY_DUPLICATE_MIN:
             out.append(Stage1Warning(
-                kind='noisy_duplicate',
-                message=f'chapter_no={label} 出现 {count} 次（≥{NOISY_DUPLICATE_MIN}），'
-                        '疑似固定标记被误判成章节号，请人工核对原文标记规律',
-            ))
+                kind='noisy_duplicate', source_chapter_no=label, count=count))
     return out
 
 
-def partition_text(clean_text: str, *, source_sha1: str) -> PartitionResult:
+def partition_text(clean_text: str, *, normalized_source_sha1: str) -> PartitionResult:
     '''分章纯函数。显式终态发生在任何模型构造或磁盘写入之前。'''
     scan = scan_text(clean_text)
     if scan.nonbody:
@@ -96,20 +94,19 @@ def partition_text(clean_text: str, *, source_sha1: str) -> PartitionResult:
                 f'独立计数会得到 {len(markers)} 章，但章表无法一一落盘')
         spans.append((start, end))
         mains.append(MainTextSection(
-            section_id=f'sec_{index + 2:04d}',
             chapter_ordinal=index + 1,
-            source_chapter_label=str(marker.chapter_no),
+            source_chapter_no=marker.chapter_no,
             text=raw,
         ))
 
     main_text = MainText.model_validate(mains)
-    hook_copy = HookCopy(section_id='sec_0001', text=hook_text)
+    hook_copy = HookCopy(text=hook_text)
     report = PartitionReport(
-        source_sha1=source_sha1,
+        normalized_source_sha1=normalized_source_sha1,
         input_sha1=prov.content_sha1(clean_text.encode('utf-8')),
         total_code_points=len(clean_text),
         body_code_points=body_limit,
-        num_chapters=len(markers),
+        detected_chapter_marker_count=len(markers),
         has_end_marker=scan.end_marker is not None,
         warnings=_warning([marker.chapter_no for marker in markers]),
         hook_span=(0, first_marker),
@@ -133,15 +130,10 @@ def run_partition(
     store = ArtifactStore(ctx)
     stage0 = store.read(RemovalReport, STAGE0_REPORT)
     clean_text = store.read_text(CLEAN_TEXT)
-    from novel.stages.stage0.eligibility import LEGACY_AUTO_APPROVAL, block_reason
-    reason = block_reason(stage0)
-    if reason == LEGACY_AUTO_APPROVAL:
+    from novel.stages.stage0.eligibility import is_stage0_executable
+    if not is_stage0_executable(stage0):
         raise ApprovalRequired(
-            'stage0 是历史自动批准（auto_zero_hit，已停产）；人工重批'
-            f'（stage0.approve）前不能启动 stage1（{LEGACY_AUTO_APPROVAL}）')
-    if reason is not None:
-        raise ApprovalRequired(
-            f'stage0 当前状态为 {stage0.approved!r}；人工批准前不能启动 stage1')
+            f'stage0 当前状态为 {stage0.approval.status!r}；人工批准前不能启动 stage1')
     actual_input = prov.content_sha1(clean_text.encode('utf-8'))
     if actual_input != stage0.clean_sha1:
         raise PartitionInputMismatch(
@@ -153,7 +145,7 @@ def run_partition(
             f'stage0 清理后只保留 {ratio:.1%} 正文，低于 {BODY_RATIO_MIN:.0%}，'
             '即使人工点了批准也不能把疑似截断的文本送入下游')
 
-    result = partition_text(clean_text, source_sha1=stage0.source_sha1)
+    result = partition_text(clean_text, normalized_source_sha1=stage0.normalized_source_sha1)
     if dry_run:
         return result, None
 

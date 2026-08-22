@@ -24,7 +24,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, RootModel, model_validator
 
-from contracts.invariants import MIN_CHAPTERS, STAGE1_WARNINGS
+from contracts.invariants import MIN_CHAPTERS
 from contracts.schema.base import Sha1, StrictModel
 
 #: 码点半开区间。两处用它：文案段与逐章。
@@ -46,10 +46,16 @@ NonBlankText = Annotated[str, AfterValidator(_non_blank)]
 
 
 class MainTextSection(StrictModel):
-    """`main_text.json` 的一条。"""
+    """`main_text.json` 的一条。
 
-    #: 形如 `sec_0001`，长度恒 8。
-    section_id: str = Field(pattern=r'^sec_\d{4}$')
+    ⚠ 这里曾有第三个字段 `section_id`（形如 `sec_0001`，正文从 `sec_0002` 起）。
+    2026-08-22 删除：**一份产物只留一个系统主身份**。它恒等于
+    `sec_{chapter_ordinal + 1}`、下游一个消费方都没有（`novel/core/text.py`
+    自陈「`section_id` 只留在 stage1，不进语义层」），两套机器身份并存却没有任何
+    关系约束——而 stage2 恰好有一条 `section_id_leak` 判据在防「章的唯一键混进第二个」。
+    ⇒ 与其给一个将要删掉的字段补映射 validator，不如让那条判据守的事实
+    **在源头就成立**：全链的章唯一键只有 `chapter_ordinal` 一个。
+    """
 
     #: **修正后的阅读序**：恒连续、无重复。**下游一律 key 在它上面。**
     chapter_ordinal: int = Field(ge=1)
@@ -58,14 +64,17 @@ class MainTextSection(StrictModel):
     #: **12/163 本有缺号**——「原样保留 + 另给一个修正序」这一对字段共存**就是记账**
     #: （`R-1.4`），派生的三个汇总由校验器现算、不落盘。
     #:
-    #: ⚠ **必填非空，这是本 schema 对代码的一次收窄**：产地写的是
-    #: `str(chapter_no) if chapter_no is not None else None`，类型上可空。
-    #: 收窄有三重依据——结构上 `chapter_no` 恒由 `CHAPTER_RE` 匹配出的数字行解析得到
-    #: （这条路上没有产生 `None` 的分支）· 全语料 **2559/2559 段实测非 `None`** ·
-    #: 写盘前逐段断言。
-    #: ⚠ **`None` 确实存在，只是不在这个字段上**：163 个 `hook_copy` 段的 `chapter_no`
-    #: 全是 `None`，但 hook 段不进本产物。**「盘上见过 `None`」不是「这个字段可空」的证据。**
-    source_chapter_label: str = Field(min_length=1)
+    #: ⚠ **它是 `int` 不是 `str`**（2026-08-22 从 `source_chapter_label: str` 改名并改型）。
+    #: 旧名字同时承诺了两件事——「原样保留的标题」和「解析出来的章号」——而产地写的
+    #: 一直是 `str(marker.chapter_no)`，即**只有后者**。一个字段同时表达解析值与原始
+    #: 文本，读的人只能靠猜。原始标记行如果哪天要留，去非承重的 `partition_report`
+    #: 开一格 `source_marker_text`，不要挤回这里。
+    #: ⚠ 改型**不改任何 prompt 字节**：三处消费方都是 `f'…原文标号={x}'`，
+    #: 而 `str(1) == '1'` ⇒ 渲染逐字节相同（`tests/test_stage01.py` 有专条钉住）。
+    #: ⚠ 结构上 `chapter_no` 恒由 `CHAPTER_RE` 匹配出的数字行解析得到（`ChapterMarker.
+    #: chapter_no: int`，这条路上没有产生 `None` 的分支）· 全语料 2559/2559 段实测非
+    #: `None`。`ge=0` 而不是 `ge=1`：番外/序章用 `0` 编号是原文的自由，本层只记不改。
+    source_chapter_no: int = Field(ge=0)
 
     #: 章正文。non-blank（2026-08-21 收紧）：空白章在产地已拦，这里防直写盘的篡改稿。
     text: NonBlankText
@@ -110,25 +119,41 @@ class HookCopy(StrictModel):
     stage3 的 `hook_style` 已相应收窄成必填。
     """
 
-    #: 恒 `sec_0001`（2026-08-21 收紧为 Literal：正则串只保证形状，不保证这个常量事实）。
-    section_id: Literal['sec_0001']
-
     #: 非空且非空白。全语料长度 57 ~ 414。
+    #:
+    #: ⚠ 这份产物 2026-08-22 起**只有这一个字段**。原先还有个恒 `sec_0001` 的
+    #: `section_id`（2026-08-21 刚从正则串收紧成 Literal）——一个常量不携带任何身份
+    #: 信息，唯一的消费方是 S-03 把它当 pane 副标题显示出来。⇒ 与 `MainTextSection`
+    #: 同一条裁决：一份产物只留一个系统主身份，而文案段压根不需要身份（它恒只有一段）。
     text: NonBlankText
 
 
-class Stage1Warning(StrictModel):
-    """一条可疑项。落点是 **S-13 校验报告里 `stage1` 那一份的 `info` 级结论**——
-    `R-1.9`（不静默、不自动修正、不硬报错）靠这条路兑现，
-    **写进文件没人看才是真的静默**。
+class NoisyDuplicateWarning(StrictModel):
+    """同一个原始章号出现太多次，疑似固定标记被误判成章节号。
 
-    ⚠ **认告警一律用 `kind`，不许用措辞前缀。** 措辞不承重（逐字节等价那条验收
-    不覆盖 `partition_report`），随时可改；拿字符串开头去认告警的代码
-    会在第一次改文案时静默失效。
+    落点是 **S-13 校验报告里 `stage1` 那一份的 `info` 级结论**——`R-1.9`
+    （不静默、不自动修正、不硬报错）靠这条路兑现，**写进文件没人看才是真的静默**。
+
+    ⚠ **认告警一律用 `kind`，不许用措辞前缀。**
+    ⚠ 2026-08-22 起**只记证据不记措辞**（同 stage0，理由见 `contracts/schema/stage0.py`
+    「可疑项」那一段）：措辞由 `novel/core/warnings.py` 现渲染，阈值
+    `NOISY_DUPLICATE_MIN` 现取——它的唯一落点是 `contracts/invariants.py`，
+    写进产物就是第二个落点。
     """
 
-    kind: Literal[STAGE1_WARNINGS]
-    message: str = Field(min_length=1)
+    kind: Literal['noisy_duplicate']
+
+    #: 重复的那个**原始**章号（不是阅读序）。
+    source_chapter_no: int = Field(ge=0)
+
+    #: 它在全书出现了几次。恒 ≥ `NOISY_DUPLICATE_MIN`，否则这条告警不会被产出。
+    count: int = Field(ge=2)
+
+
+#: 一条可疑项。⚠ 本层**只有一类**，所以别名此刻就是那个类本身；
+#: 加第二类时改成 `Annotated[A | B, Field(discriminator='kind')]`（同 stage0）。
+#: 取值面与 `STAGE1_WARNINGS` 的对账在 `tests/test_invariants.py`。
+Stage1Warning = NoisyDuplicateWarning
 
 
 class PartitionReport(StrictModel):
@@ -143,8 +168,9 @@ class PartitionReport(StrictModel):
 
     # ── 3.1 两个指纹 = `R-0.6` 的下半段 ──────────────────────────────────────
 
-    #: **原始 txt** 的 sha1，从 stage0 透传。只用于追溯，**本层不判它**。
-    source_sha1: Sha1
+    #: **原始 txt 归一化之后那段文本**的 sha1，从 stage0 透传。只用于追溯，**本层不判它**。
+    #: ⚠ 不是原始文件字节的 digest，理由见 `contracts/schema/stage0.py` 同名字段。
+    normalized_source_sha1: Sha1
 
     #: **本层输入**（`stage0/clean_text.txt`）的 sha1。**[HARD]** 对不上即阻断（`R-1.3`）。
     #:
@@ -172,7 +198,14 @@ class PartitionReport(StrictModel):
     #: 只写进去 8 条）；取自 `len(main_text)` 的话这条判据就成了恒等式、
     #: **永远不可能红**，而它要抓的那个 bug 会原封不动地活下来。
     #: ⇒ 产地一侧的计数来源与写盘来源**必须是两条路**。
-    num_chapters: int = Field(ge=MIN_CHAPTERS)
+    #:
+    #: ⚠ **名字就是那条语义**（2026-08-22 从 `num_chapters` 改名）：它数的是
+    #: **原文里独立扫出来的章标记个数**，不是「这本书有几章」。旧名字读起来像后者，
+    #: 于是「写成 `len(main_text)` 不就完了」是个看着无害的念头——而那一改
+    #: 恰好把 `R-1.5` 变成恒等式。名字说得出来路，判据才守得住。
+    #: ⚠ schema 本身证明不了「两个值来自独立代码路径」，那要靠判据
+    #: （`s1_chapter_count` 的四路计数交叉核对）与定向反例，不是靠这行注释。
+    detected_chapter_marker_count: int = Field(ge=MIN_CHAPTERS)
 
     #: 全语料 `True`×46 · `False`×117。**它是 `R-1.14` 的前件**：
     #: 三段式记账的第三段（切点之后、第一个非正文标记之前）**只在它为 `True` 时非空**。
@@ -202,7 +235,7 @@ class PartitionReport(StrictModel):
     #: 文案段在归一化原文上的码点半开区间。恒 `[0, x)`。F6 已临时跑盘。
     hook_span: Span
 
-    #: 逐章。**长度恒 == `num_chapters`**，顺序即 `chapter_ordinal`。F6 已临时跑盘。
+    #: 逐章。**长度恒 == `detected_chapter_marker_count`**，顺序即 `chapter_ordinal`。F6 已临时跑盘。
     chapter_spans: list[Span]
 
     @model_validator(mode='after')
@@ -221,10 +254,10 @@ class PartitionReport(StrictModel):
                                  for i, s in enumerate(self.chapter_spans))]:
             if not 0 <= lo < hi:
                 raise ValueError(f'{name}=({lo}, {hi}) 不是合法的半开区间')
-        if len(self.chapter_spans) != self.num_chapters:
+        if len(self.chapter_spans) != self.detected_chapter_marker_count:
             raise ValueError(
-                f'chapter_spans 有 {len(self.chapter_spans)} 条而 num_chapters='
-                f'{self.num_chapters}——对照屏会按 span 画高亮，少一条就少画一章'
+                f'chapter_spans 有 {len(self.chapter_spans)} 条而 detected_chapter_marker_count='
+                f'{self.detected_chapter_marker_count}——对照屏会按 span 画高亮，少一条就少画一章'
             )
         if self.hook_span[1] > self.body_code_points:
             raise ValueError(
