@@ -719,12 +719,14 @@ function mockStage0Report(sid: string): Stage0Report {
     warnings: [],
     approval: approved
       ? { status: 'approved' as const, origin: 'human' as const,
-          at: new Date().toISOString(), by: 'mock-reviewer' }
+          at: new Date().toISOString(), by: 'mock-reviewer', reason: 'mock 批准' }
       : { status: 'pending' as const },
     executable: approved,
     block_reason: approved ? null : ('pending' as const),
-    round: lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 2 : 1,
-    edited_by_human: !!lsRead<Stage0EditRequest>('stage0.selection.' + sid),
+    revision_id: (lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 'b' : 'a').repeat(64),
+    revision_origin: lsRead<Stage0EditRequest>('stage0.selection.' + sid)
+      ? ('human_edit' as const)
+      : ('machine' as const),
   }
 }
 
@@ -904,24 +906,24 @@ export const mockApi: Api = {
     }))
   },
 
-  getStage0Merge: () => later(null),
+  getStage0Candidate: () => later(null),
 
-  resolveStage0Merge: (sid, request) => {
-    lsWrite('stage0.merge.resolve.' + sid, request)
+  adoptStage0Candidate: (sid, request) => {
+    lsWrite('stage0.candidate.adopt.' + sid, request)
     return later(finish({
-      kind: 'stage0.merge.resolve',
-      label: 'stage0 三方合并定稿',
+      kind: 'stage0.candidate.adopt',
+      label: 'stage0 采纳机器新版',
       extra: null,
       sid,
       ordinal: null,
     }))
   },
 
-  rejectStage0Merge: (sid, request) => {
-    lsWrite('stage0.merge.reject.' + sid, request)
+  dismissStage0Candidate: (sid, request) => {
+    lsWrite('stage0.candidate.dismiss.' + sid, request)
     return later(finish({
-      kind: 'stage0.merge.reject',
-      label: 'stage0 拒绝机器重跑候选',
+      kind: 'stage0.candidate.dismiss',
+      label: 'stage0 保留当前版',
       extra: null,
       sid,
       ordinal: null,

@@ -39,8 +39,8 @@ import type {
   ReviewResponse,
   Stage0EditRequest,
   Stage0ApprovalRequest,
-  Stage0MergeCandidate,
-  Stage0MergeDecisionRequest,
+  Stage0CandidateDecisionRequest,
+  Stage0CandidateView,
   Stage0PartitionPreview,
   Stage0Report,
   Stage0Segments,
@@ -69,9 +69,9 @@ export interface Api {
   getStage0PartitionPreview(sid: string): Promise<Stage0PartitionPreview>
   editStage0(sid: string, request: Stage0EditRequest): Promise<Job>
   approveStage0(sid: string, request: Stage0ApprovalRequest): Promise<Job>
-  getStage0Merge(sid: string): Promise<Stage0MergeCandidate | null>
-  resolveStage0Merge(sid: string, request: Stage0MergeDecisionRequest): Promise<Job>
-  rejectStage0Merge(sid: string, request: Stage0MergeDecisionRequest): Promise<Job>
+  getStage0Candidate(sid: string): Promise<Stage0CandidateView | null>
+  adoptStage0Candidate(sid: string, request: Stage0CandidateDecisionRequest): Promise<Job>
+  dismissStage0Candidate(sid: string, request: Stage0CandidateDecisionRequest): Promise<Job>
   partitionStage1(sid: string): Promise<Job>
   getStage1Segments(sid: string): Promise<Stage1Segments>
   getStage1Chapters(sid: string): Promise<Stage1Chapters>
