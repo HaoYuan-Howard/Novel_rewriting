@@ -67,10 +67,6 @@ from contracts.schema.common import HumanApproval
 #: （`tests/test_invariants.py`）。
 ApprovalState = Literal[APPROVAL_STATE]
 Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
-#: `auto_zero_hit` 是**历史只读取值**（2026-08-21 停产）：旧版零命中自动批留下的产物仍须
-#: 可 decode、可展示、可审计，但它**不具执行资格**——人工重批后 `approval.origin`
-#: 才回到 `human`。现役写入方只有 `human`。
-ApprovalOrigin = Literal['auto_zero_hit', 'human']
 
 #: 一条 revision 是**怎么来的**。三支，且各自的可问责字段不同（见 `Stage0Revision`）：
 #:   · `machine`     —— 机器剔除算出来的，没有人参与 ⇒ 没有 actor / reason；
@@ -289,40 +285,39 @@ class PendingApproval(StrictModel):
 
 
 class ApprovedApproval(StrictModel):
-    """已经批过。`by` / `reason` 的可空只属于历史自动批那一支。"""
+    """已经批过。**批准只有人一种来源，因此 `by` / `reason` 恒必填。**
+
+    ⚠ 这里曾有第三格 `origin: 'auto_zero_hit' | 'human'`，2026-08-22 删除。
+    删除依据是**载体保证 ⇒ 结构不可达**，与 `APPROVAL_STATE.not_run` /
+    `CHAPTER_LABEL_ANOMALY.non_numeric` 同一把尺子：`auto_zero_hit` 的产地
+    （零命中自动批）2026-08-21 停产，此后唯一写入方 `run_approve` 恒写 `human`；
+    而**真正带着它的存量产物是 v1**，阶段 B/C 两次形状破坏把本产物推到 v3 之后，
+    `decode_artifact` 不迁移低版本 ⇒ 它们连读都读不进来（实测：盘上那份
+    `auto_zero_hit` 报告报 `schema v1 不是当前 v3`）。留着它，`by` / `reason`
+    就得为一个谁都造不出来的分支保持可空。
+    """
 
     status: Literal['approved']
-
-    #: 批准来源。`auto_zero_hit` 是**历史只读取值**（2026-08-21 停产）：
-    #: 旧产物读得、展示得、审计得，**跑不得**——执行资格的唯一落点是
-    #: `novel/stages/stage0/eligibility.py::is_stage0_executable`，它要求 `human`。
-    origin: ApprovalOrigin
 
     #: ISO 时间戳。批过就一定说得出是什么时候批的。
     at: str = Field(min_length=1)
 
     #: 自报身份，不宣称是认证身份。
-    #: ⚠ **只有 `auto_zero_hit` 那一支才可为 `null`**——没有人批的东西没有批准人。
-    by: str | None
+    by: str = Field(min_length=1)
 
     #: 批准理由。⚠ 2026-08-22 阶段 C 从审计条目搬进来：审计链折叠进 revision 之后，
     #: 「批准」是唯一一件**不改变正文**因而不产生新 revision 的人工决定 ⇒ 它的
     #: reason 没有别的落点。此前 `stage0.approve` 强制要 `--reason`，却只把它写进
     #: `_audit/edit_N.json`；删掉那条链而不搬这一格，理由就丢了。
-    reason: str | None
+    reason: str = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _actor_matches_origin(self) -> ApprovedApproval:
-        if self.origin == 'human':
-            if self.by is None or not self.by.strip():
-                raise ValueError('人工批准必须给 by（自报身份）')
-            if self.reason is None or not self.reason.strip():
-                raise ValueError('人工批准必须给 reason')
-        else:
-            if self.by is not None:
-                raise ValueError('auto_zero_hit 自动批准不得伪造 by')
-            if self.reason is not None:
-                raise ValueError('auto_zero_hit 自动批准不得伪造 reason')
+    def _actor_is_not_blank(self) -> ApprovedApproval:
+        # ⚠ `min_length=1` 拦不住全空白串，而「批准人叫『   』」与没有批准人等价。
+        if not self.by.strip():
+            raise ValueError('人工批准必须给 by（自报身份）')
+        if not self.reason.strip():
+            raise ValueError('人工批准必须给 reason')
         return self
 
 
@@ -668,9 +663,11 @@ class RemovalReport(StrictModel):
     #: **两个分支**（2026-08-22 从四个平铺可空字段收成判别联合，见上）。
     #: `R-0.3b` 是 `HARD`：**不满足执行资格 ⇒ stage1 拒绝启动**。
     #:
-    #: ⚠ 执行资格比「`status == 'approved'`」更严：**还必须 `origin == 'human'`**
-    #: （`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点）。
-    #: 历史自动批产物读得、展示得，**跑不得**。
+    #: ⚠ 判这件事的唯一落点是
+    #: `novel/stages/stage0/eligibility.py::is_stage0_executable`——消费方一律 import，
+    #: **不许复述条件**（含前端：响应里的 `executable` 是那个谓词的投影）。
+    #: 2026-08-22 删掉 `auto_zero_hit` 之后它恰好等于 `status == 'approved'`，
+    #: 但收口的理由不是条件复杂，是「同一条 R 只有一个守卫」。
     #:
     #: ⚠ 按本层的设计，这道闸门是**盲区①（番外用纯数字章节标记写）全链唯一的防线**，
     #: 而 stage2 是第一个花钱的层 ⇒ 闸门必须在它之前、且必须有人真的看过。

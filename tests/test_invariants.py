@@ -258,21 +258,26 @@ def test_the_approval_union_covers_its_value_domain_exactly():
     assert set(PendingApproval.model_fields) == {'status'}
     # ⚠ `reason` 是 2026-08-22 阶段 C 从审计条目搬进来的：审计链折叠进 revision 之后，
     #   「批准」是唯一一件不改变正文因而不产生新 revision 的人工决定 ⇒ 理由没有别的落点。
-    assert set(ApprovedApproval.model_fields) == {'status', 'origin', 'at', 'by', 'reason'}
+    # ⚠ **`origin` 不在里面**：`auto_zero_hit` 停产（2026-08-21）+ 存量产物随
+    #   removal_report 升到 v3 而本仓不迁移 ⇒ 该取值结构不可达，2026-08-22 与
+    #   `APPROVAL_STATE.not_run` 同一判据删除。这条断言防它长回来。
+    assert set(ApprovedApproval.model_fields) == {'status', 'at', 'by', 'reason'}
 
     # 「没批却带着批准人」在类型上写不出来（StrictModel 拒未知字段）。
     with pytest.raises(Exception):
         PendingApproval(status='pending', by='someone')
-    # 人工批必须给 by 与 reason；自动批不许伪造这两格。它们留在 validator 里——
-    # 是同一个分支内部的约束，判别联合表达不了。
+    # 批准只有人一种来源 ⇒ `by` / `reason` 恒必填，且不许是空白串
+    # （`min_length=1` 拦不住 `'   '`，那条留在 validator 里）。
     with pytest.raises(Exception):
-        ApprovedApproval(status='approved', origin='human', at='t', by=None, reason='r')
+        ApprovedApproval(status='approved', at='t', by=None, reason='r')
     with pytest.raises(Exception):
-        ApprovedApproval(status='approved', origin='human', at='t', by='x', reason=None)
+        ApprovedApproval(status='approved', at='t', by='x', reason=None)
+    with pytest.raises(Exception):
+        ApprovedApproval(status='approved', at='t', by='  ', reason='r')
+    with pytest.raises(Exception):
+        ApprovedApproval(status='approved', at='t', by='x', reason='  ')
+    # 停产取值不许再被构造出来。
     with pytest.raises(Exception):
         ApprovedApproval(
-            status='approved', origin='auto_zero_hit', at='t', by='x', reason=None)
-    with pytest.raises(Exception):
-        ApprovedApproval(
-            status='approved', origin='auto_zero_hit', at='t', by=None, reason='r')
+            status='approved', origin='auto_zero_hit', at='t', by='x', reason='r')
 

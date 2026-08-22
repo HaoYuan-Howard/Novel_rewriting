@@ -96,7 +96,7 @@ def stage0_report(base: str | os.PathLike[str], sid: str) -> Stage0Report:
       ② **执行资格**（唯一落点 `stage0/eligibility.py`）。两者都是同一个道理——
         前端自己拼就是第二个落点，而资格那一处漏了就是自动绕过的复活口。
     """
-    from novel.stages.stage0.eligibility import block_reason, is_stage0_executable
+    from novel.stages.stage0.eligibility import is_stage0_executable
     store = _store(base, sid, STAGE0_NODE)
     report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
     return Stage0Report.model_validate({
@@ -105,7 +105,6 @@ def stage0_report(base: str | os.PathLike[str], sid: str) -> Stage0Report:
                       'message': describe(warning)}
                      for warning in report.warnings],
         'executable': is_stage0_executable(report),
-        'block_reason': block_reason(report),
     })
 
 
@@ -416,13 +415,8 @@ class _Stage1Material:
 def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
     store = _store(base, sid, STAGE1_NODE)
     stage0 = store.read_own(RemovalReport, partition.STAGE0_REPORT)[0]
-    from novel.stages.stage0.eligibility import LEGACY_AUTO_APPROVAL, block_reason
-    reason = block_reason(stage0)
-    if reason == LEGACY_AUTO_APPROVAL:
-        raise ApprovalRequired(
-            'stage0 是历史自动批准（auto_zero_hit，已停产）；人工重批'
-            f'（stage0.approve）前不能进入 stage1（{LEGACY_AUTO_APPROVAL}）')
-    if reason is not None:
+    from novel.stages.stage0.eligibility import is_stage0_executable
+    if not is_stage0_executable(stage0):
         raise ApprovalRequired(
             f'stage0 当前状态为 {stage0.approval.status!r}；先回 S-00 审阅并批准')
     clean = store.read_text(partition.CLEAN_TEXT)

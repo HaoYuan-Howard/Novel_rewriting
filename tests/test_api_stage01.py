@@ -155,7 +155,9 @@ def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
     # ⚠ 执行资格是**后端算好投影下来的**，不是前端自己从 approval 推的
     #   （评审点名的第五处消费方，2026-08-22 收口）。
     assert report['executable'] is False
-    assert report['block_reason'] == 'pending'
+    # ⚠ 配套的 `block_reason` 已于 2026-08-22 随 `auto_zero_hit` 删除：理由码只剩一个
+    #   取值之后它与 `executable` 是同一个 bit，一个 bit 只留一个投影。
+    assert 'block_reason' not in report
 
     preview = client.get(f'/api/novels/{sid}/stage0/partition-preview')
     assert preview.status_code == 200, preview.text

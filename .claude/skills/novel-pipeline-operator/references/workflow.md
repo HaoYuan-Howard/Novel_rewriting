@@ -104,10 +104,10 @@
 纯数字番外恰好产生零 removed、零 warning、`clean == source`，旧的自动批准会让全链唯一那道
 人工防线对它失效。
 
-⚠ **存量的历史自动批产物读得、跑不得**：`approval_origin` 记 `auto_zero_hit` 的报告在界面上
-长成「已批准」，但 stage1、队列与付费链一律拦下并给稳定理由码
-`legacy_auto_approval_requires_review`；人工重跑一次 `stage0.approve` 即恢复资格（轮次不变，
-审计链追加一条 `approve`）。
+⚠ **不存在「历史自动批」这种状态**：记录它的取值与配套的稳定理由码都已删除。
+存量自动批产物停在旧 schema 版本上，而 `stage0/removal_report.json` 已经破坏过形状、
+本仓又不迁移旧产物 ⇒ 它们连读都读不进来。遇到读不进来的旧 stage0，
+处置是**免费重跑 `stage0.remove` 再人工批**，不是找兼容路。
 
 代批责任在剔除分母为零时换方向：没有"被误删的段"可审，改做**反向漏剔**抽查，
 见[代批与终审契约](delegated-review.md#stage0-代批)。

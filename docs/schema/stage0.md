@@ -47,12 +47,15 @@ stage0/removal_report.json   current 的物化投影：内容 + 审批（v3）
 > 编辑发生在上游，stage1 及其后仍是确定性纯函数，一改就全链重跑。
 >
 > **③ 未批准 = 不能往下走，而批准只有一个诚实来源：人**（`R-0.3a` / `R-0.3b`）。
-> 批准必须由人显式给出 actor 与 reason，记为 `approval.origin = human`。
-> 「零命中自动批」（`auto_zero_hit`）已于 **2026-08-21 停产**：零 removed、零 warning、
+> 批准必须由人显式给出 actor 与 reason，写在 `current.approval` 里，带 `at` / `by` / `reason`。
+> 「零命中自动批」已于 **2026-08-21 停产**：零 removed、零 warning、
 > clean == source 恰好是纯数字番外盲区的形状——那正是这道闸门要拦的东西，
-> 自动放行等于宣称「人工是唯一防线」的同时把它拆了。**存量自动批产物只读不承行**：
-> 读得、展示得、审计得，但不具执行资格（`legacy_auto_approval_requires_review`），
-> 人工重批（`stage0.approve`）后恢复——批准写在 `current.approval` 里，带 `at` / `by` / `reason`。
+> 自动放行等于宣称「人工是唯一防线」的同时把它拆了。
+> ⚠ 记录它的那一格 `approval.origin`（取值 `auto_zero_hit \| human`）**已于 2026-08-22 删除**，
+> 判据与 `APPROVAL_STATE.not_run` 同一条：产地停产之后没有任何现役写入方，
+> 而真正带着它的存量产物是 v1 —— 本产物两次形状破坏后已是 v3，本仓不迁移旧产物
+> ⇒ 它们连 decode 都过不去（实测报 `schema v1 不是当前 v3`），该取值在盘上**结构不可达**。
+> 读不进来的旧 stage0 的正确处置是免费重跑 `stage0.remove` 再人工批。
 > 「**不满足执行资格时 stage1 拒绝启动**」是 `HARD`——**它必须有判据**。
 > 压在一条需求上标 `人`，正向覆盖率就不会要求它有任何判据，
 > 而按本层的设计，这道闸门是盲区①（番外用纯数字章节标记写）**全链唯一的防线**。
@@ -256,13 +259,15 @@ stage0/removal_report.json   current 的物化投影：内容 + 审批（v3）
 
 | 字段 | 类型 | 必填 | 取值面 / 范围 | 证据 |
 |---|---|---|---|---|
-| `approval` | `obj` | 是 | **判别联合**（按 `status`，`APPROVAL_STATE`）：`{status:'pending'}` ｜ `{status:'approved', origin, at, by}`。**不满足执行资格时 stage1 拒绝启动**（`R-0.3b`，`HARD`）；执行资格还要求 `origin == 'human'`（`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点） | **盘·码** |
-| ↳ `origin` | `auto_zero_hit \| human` | 是 | `auto_zero_hit` 是**历史只读取值**（2026-08-21 停产），现役唯一来源是 `human` | **盘·码** |
+| `approval` | `obj` | 是 | **判别联合**（按 `status`，`APPROVAL_STATE`）：`{status:'pending'}` ｜ `{status:'approved', at, by, reason}`。**不满足执行资格时 stage1 拒绝启动**（`R-0.3b`，`HARD`）；判执行资格的唯一落点是 `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方不许复述条件 | **盘·码** |
 | ↳ `at` | `str` | 是 | ISO 时间戳。批过就一定说得出是什么时候批的 | **盘·码** |
-| ↳ `by` | `str \| null` | 是 | 只有 `human` 必填；是自报身份，不宣称认证身份 | **盘·码** |
-| ↳ `reason` | `str \| null` | 是 | 只有 `human` 必填。⚠ 2026-08-22 阶段 C 从审计条目搬进来：审计链折叠进 revision 之后，「批准」是唯一一件**不改变正文因而不产生新 revision** 的人工决定 ⇒ 理由没有别的落点 | **盘·码** |
+| ↳ `by` | `str` | 是 | 自报身份，不宣称认证身份。**恒必填**（批准只有人一种来源）；全空白串按缺失拒 | **盘·码** |
+| ↳ `reason` | `str` | 是 | **恒必填**。⚠ 2026-08-22 阶段 C 从审计条目搬进来：审计链折叠进 revision 之后，「批准」是唯一一件**不改变正文因而不产生新 revision** 的人工决定 ⇒ 理由没有别的落点 | **盘·码** |
 | `revision_id` | `str` | 是 | 当前这一版的内容身份（sha256）。**同时是编辑/裁决路的乐观锁** | **盘·码** |
 | `revision_origin` | `machine \| human_edit \| human_adopt` | 是 | 这一版怎么来的。⚠ 阶段 C 一次换掉六格：`round`、三格 `machine_*`、两格 `audit_*`（见 §2.5） | **盘·码** |
+
+> ⚠ 这里曾有第三格 `↳ origin`（`auto_zero_hit \| human`），2026-08-22 与事实 ③ 那段所说的同一判据一并删除。
+> 它出局同时让 `by` / `reason` 从 `str \| null` 收紧为必填——那两格的可空只服务于「没有人批的那一支」。
 
 > #### ✅ `approved` 两态；「没跑过」不由产物表达
 >
@@ -290,20 +295,24 @@ stage0/removal_report.json   current 的物化投影：内容 + 审批（v3）
 > stage1 启动前置、队列、付费防线）；外部评审列的第五处是「API 返回的可继续状态」，
 > 而前端一直在自己拼 `approved === 'approved' && approval_origin === 'human'`
 > ——那是第二个落点，漏一次就是历史自动批自动绕过的复活口。
-> ⇒ `GET /stage0/report` 的响应多两格投影：`executable` + 稳定理由码 `block_reason`
-> （见 `_api.md`），前端只读结论。守卫在
-> `tests/test_stage01.py::test_execution_eligibility_has_exactly_one_home`（含前端那一条）。
+> ⇒ `GET /stage0/report` 的响应多一格投影 `executable`（见 `_api.md`），前端只读结论。
+> 守卫在 `tests/test_stage01.py::test_execution_eligibility_has_exactly_one_home`（含前端那一条）。
+> ⚠ 该响应曾有配套的第二格 `block_reason`（稳定理由码 `pending` ｜
+> `legacy_auto_approval_requires_review`），2026-08-22 随 `auto_zero_hit` 一并删除：
+> 理由码只剩一个取值之后它与 `executable` 是同一个 bit，而**一个 bit 只留一个投影**
+> ——那正是当年 `Stage0Report._verdict_and_reason_are_one_state` 校的东西。
 > ⚠ **`R-0.3b` 的判据不判字符串、判执行资格**：一律走
-> `novel/stages/stage0/eligibility.py::is_stage0_executable` / `block_reason`。
-> 历史自动批（`auto_zero_hit`）在报告上也显示 `approved`——不判来源，
-> 「显示已批准」与「跑不得」就会并存（2026-08-21 裁决）。
+> `novel/stages/stage0/eligibility.py::is_stage0_executable`。
+> ⚠ 删掉 `auto_zero_hit` 之后这个谓词恰好等于 `status == 'approved'`，
+> **别把唯一落点这件事当成随之失效**：条件越像废话，「顺手在消费方里再写一遍」越顺手，
+> 而下一次收紧时漏掉的就是那一处。
 
 #### 批准前的只读分章预览（`GET /api/novels/:sid/stage0/partition-preview`）
 
 `R-0.3a` 说「这一段到底是不是番外，只能人看」。但只给人看**原文 + 删除高亮 + warnings**
 是不够的：**纯数字番外**在这三样里一个信号都不产生——章标记只是一个数字，正文里
 一个非正文关键词都没有 ⇒ `removed=[]`、`warnings=[]`、`clean == source`。它恰好是
-`auto_zero_hit` 停产之前会被自动放行的那一类，也恰好是人工闸门宣称要兜住的那一类。
+零命中自动批停产之前会被自动放行的那一类，也恰好是人工闸门宣称要兜住的那一类。
 
 ⇒ 审批页在人点批准**之前**同屏给出一次分章推演：开篇文案字数 + 逐章（阅读序 /
 原始章号 / 字数 / 首行预览 / 章号异常）+ 尾段字数。异常分类的唯一落点是
@@ -430,7 +439,7 @@ stage0/removal_report.json   current 的物化投影：内容 + 审批（v3）
 | `s0_removal_ledger` | HARD | 每段剔除都有可回到原文的完整账 |
 | `s0_body_ratio` | HARD | 清理后正文至少保留六成 |
 | `s0_nonbody_shared` | HARD | 剔除与残留断言使用同一套非正文判据 |
-| `s0_approval` | HARD | stage0 已获人工批准才可继续（历史自动批须重批） |
+| `s0_approval` | HARD | stage0 已获人工批准才可继续 |
 | `s0_human_preserved` | HARD | 人工编辑状态没有被机器重跑抹掉 |
 | `s0_revision_chain` | HARD | revision 链逐条自证，两份 live 产物是它的物化投影 |
 | `s0_dir_roundtrip` | HARD | 书目录能被同一把寻址尺子解析回来 |

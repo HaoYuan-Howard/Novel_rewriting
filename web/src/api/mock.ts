@@ -718,11 +718,10 @@ function mockStage0Report(sid: string): Stage0Report {
     ),
     warnings: [],
     approval: approved
-      ? { status: 'approved' as const, origin: 'human' as const,
+      ? { status: 'approved' as const,
           at: new Date().toISOString(), by: 'mock-reviewer', reason: 'mock 批准' }
       : { status: 'pending' as const },
     executable: approved,
-    block_reason: approved ? null : ('pending' as const),
     revision_id: (lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 'b' : 'a').repeat(64),
     revision_origin: lsRead<Stage0EditRequest>('stage0.selection.' + sid)
       ? ('human_edit' as const)

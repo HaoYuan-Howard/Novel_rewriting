@@ -33,7 +33,6 @@ describe('Stage0Screen segment virtualization', () => {
       warnings: [],
       approval: { status: 'pending' as const },
       executable: false,
-      block_reason: 'pending' as const,
       revision_id: 'a'.repeat(64),
       revision_origin: 'machine' as const,
     })
@@ -72,10 +71,9 @@ describe('Stage0Screen segment virtualization', () => {
       total_code_points: 10,
       body_code_points: 10,
       warnings: [],
-      approval: { status: 'approved' as const, origin: 'human' as const,
+      approval: { status: 'approved' as const,
                   at: 'now', by: 'tester', reason: '看过了' },
       executable: true,
-      block_reason: null,
       revision_id: 'c'.repeat(64),
       revision_origin: 'human_edit' as const,
     })
@@ -161,7 +159,6 @@ describe('Stage0Screen 批准前分章预览', () => {
       warnings: [],
       approval: { status: 'pending' as const },
       executable: false,
-      block_reason: 'pending' as const,
       revision_id: 'a'.repeat(64),
       revision_origin: 'machine' as const,
     })
@@ -246,7 +243,6 @@ describe('Stage0Screen 批准前分章预览', () => {
       warnings: [],
       approval: { status: 'pending' as const },
       executable: false,
-      block_reason: 'pending' as const,
       revision_id: 'a'.repeat(64),
       revision_origin: 'machine' as const,
     })

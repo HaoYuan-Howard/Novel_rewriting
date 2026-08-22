@@ -211,11 +211,6 @@ def _source_book(book: BookSpec) -> dict[str, Any]:
     partition = partition_text(
         removal.clean_text, normalized_source_sha1=removal.report.normalized_source_sha1)
     novel_dir = base / paths.novel_dirname(title, sid)
-    auto = (
-        not removal.report.removed
-        and not removal.report.warnings
-        and removal.report.normalized_source_sha1 == removal.report.clean_sha1
-    )
     return {
         'sid': sid,
         'title': title,
@@ -225,10 +220,9 @@ def _source_book(book: BookSpec) -> dict[str, Any]:
         'source': source,
         'normalized_source_sha1': removal.report.normalized_source_sha1,
         'clean_sha1': removal.report.clean_sha1,
-        'stage0_auto_approval_eligible': auto,
-        'stage0_gate': (
-            '首次零命中可自动批准'
-            if auto else '必须先由人工 actor/reason 批准，预览不替代该决定'),
+        # ⚠ 零命中不是「可自动批准」：那条路 2026-08-21 停产，取值 `auto_zero_hit`
+        #   已于 2026-08-22 随死值一并删除。摄入之后恒 pending，只有人能批。
+        'stage0_gate': '必须先由人工 actor/reason 批准，预览不替代该决定',
         'main_text': partition.main_text,
         'chapters': len(partition.main_text.root),
     }
@@ -284,8 +278,7 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
         'source': None,
         'normalized_source_sha1': report.normalized_source_sha1,
         'clean_sha1': report.clean_sha1,
-        'stage0_auto_approval_eligible': report.approval.origin == 'auto_zero_hit',
-        'stage0_gate': f'已批准（origin={report.approval.origin}）',
+        'stage0_gate': f'已批准（by={report.approval.by}）',
         'main_text': main,
         'chapters': len(main.root),
     }

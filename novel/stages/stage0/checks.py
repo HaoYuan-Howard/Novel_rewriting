@@ -176,22 +176,13 @@ def check(
         ))
 
     approval_findings = []
-    from novel.stages.stage0.eligibility import block_reason
-    reason = block_reason(report)
-    if reason is not None:
-        if reason == 'legacy_auto_approval_requires_review':
-            approval_findings.append(_hit(
-                's0_approval',
-                '历史自动批准（auto_zero_hit，已停产）不具执行资格；'
-                f'人工重批前 stage1 不得启动（{reason}）',
-                reason,
-            ))
-        else:
-            approval_findings.append(_hit(
-                's0_approval',
-                f'当前批准状态是 {report.approval.status!r}，stage1 不得启动',
-                report.approval.status,
-            ))
+    from novel.stages.stage0.eligibility import is_stage0_executable
+    if not is_stage0_executable(report):
+        approval_findings.append(_hit(
+            's0_approval',
+            f'当前批准状态是 {report.approval.status!r}，stage1 不得启动',
+            report.approval.status,
+        ))
     out.append(ran('s0_approval', approval_findings, scanned='1 个批准状态'))
 
     # ⚠ 2026-08-22 阶段 C：这条判据从「上一轮归档在不在盘上」换成「链自洽 + live 是它的

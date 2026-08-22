@@ -11,7 +11,7 @@ import pytest
 
 from contracts.schema.api import PreviewRequest
 from contracts.schema.stage0 import (
-    ApprovedApproval, PendingApproval, RemovalReport, RemovedSegment,
+    PendingApproval, RemovalReport, RemovedSegment,
 )
 from contracts.schema.stage1 import MainText
 from novel import paths as novel_paths
@@ -154,7 +154,7 @@ def test_first_zero_hit_dry_run_previews_pending_without_writing(work):
     assert written_check is not None
     assert _line(written_check, 's0_approval').status == 'hit'
     assert _line(written_check, 's0_approval').item == \
-        'stage0 已获人工批准才可继续（历史自动批须重批）'
+        'stage0 已获人工批准才可继续'
 
 
 def test_first_nonzero_hit_dry_run_stays_pending_without_writing(work):
@@ -784,35 +784,23 @@ def test_unapproved_states_are_interpreted_not_conflated(work):
     run_approve(_context(novel_dir, 'stage0.approve'))
     assert _stage1_outcome(novel_dir) == 'ran'
 
-    # 行 5：approved + auto_zero_hit（历史）→ 说「历史自动批准，需人工重批」，
-    # 不与行 4 混同——两者在报告上都显示 approved。
-    from contracts.schema.stage0 import Stage0Current, Stage0Revisions
-    from novel.stages.stage0 import revisions as rev
-
-    store = ArtifactStore(_context(novel_dir, 'stage0.remove'))
-    log = rev.read(store)
-    rev.commit(store, Stage0Revisions(
-        revisions=log.revisions,
-        current=Stage0Current(
-            revision_id=log.current.revision_id,
-            approval=ApprovedApproval(
-                status='approved', origin='auto_zero_hit',
-                at='2026-08-01T00:00:00+00:00', by=None, reason=None)),
-        candidate_revision_id=None,
-    ))
-    outcome = _stage1_outcome(novel_dir)
-    assert 'legacy_auto_approval_requires_review' in outcome, outcome
-    assert '历史自动批准' in outcome
-
     # 行 2（无 report + JobState failed）与行 1 同走「产物不存在」的 UpstreamMissing，
     # 失败与否由作业记录解释，本层不重复建模。
+    #
+    # ⚠ 这里曾有第 5 行：`approved + auto_zero_hit`（历史自动批）→「需人工重批」。
+    #   2026-08-22 随该死值删除（产地 08-21 停产 + 存量产物是 v1 而本产物已 v3、
+    #   本仓不迁移 ⇒ 结构不可达）。剩下的四行仍必须彼此分得开：那才是本用例的题目。
 
 
 def test_execution_eligibility_has_exactly_one_home():
     """纪律：五处消费方必须 import 同一个谓词，不许各自复述条件。
 
-    `approved == 'approved'` 在消费方里再次出现，就是自动绕过的复活口
+    审批条件在消费方里再次出现，就是绕过闸门的复活口
     （`docs/LESSONS.md` §21：改向时把同一条 R 的全部守卫一次列全）。
+
+    ⚠ **2026-08-22 之后这个谓词恰好等于 `status == 'approved'`**（`auto_zero_hit`
+    死值删除），本用例因此比以前更要紧而不是更没用：条件越像一句废话，
+    「顺手在消费方里直接写一遍」就越顺手，而下一次收紧时漏的就是那一处。
     """
     from pathlib import Path as _Path
 
@@ -825,26 +813,27 @@ def test_execution_eligibility_has_exactly_one_home():
     ]
     for rel in consumers:
         text = (_Path(rel)).read_text(encoding='utf-8')
-        assert '.approved == \'approved\'' not in text, (
+        # ⚠ 认的是**当前那个读取表达式**。这里曾写成匹配已改名的旧平铺字段
+        #   `.approved == 'approved'`，阶段 C 把它换成 `approval.status` 之后
+        #   那条断言就再也匹配不上任何东西——一条恒绿的守卫比没有守卫更坏。
+        assert "approval.status == 'approved'" not in text, (
             f'{rel} 复述了审批条件——改用 '
-            f'novel/stages/stage0/eligibility.py::is_stage0_executable / block_reason')
+            f'novel/stages/stage0/eligibility.py::is_stage0_executable')
         assert 'eligibility' in text, f'{rel} 应经 eligibility 落点判执行资格'
 
     # ⚠ **第五处消费方是前端**，而它一直在自己拼这个条件
     #   （`approved === 'approved' && approval_origin === 'human'`，2026-08-22 发现）。
     #   外部评审点名的五处里，这一处是最后收口的：现在响应里带
-    #   `executable` / `block_reason`，屏幕只读结论。这条断言防它长回来。
+    #   `executable`，屏幕只读结论。这条断言防它长回来。
     screen = _Path('web/src/screens/stage0/Stage0Screen.tsx').read_text(encoding='utf-8')
     #   ⚠ 认的是**读取表达式**不是措辞：写成匹配 `=== 'approved'` 会连自己那条
     #   解释性注释一起匹配上（实测踩到），而那种守卫红得毫无信息。
     for expression in ('current.approval.status', 'current.approval.origin',
                        'current.approval_origin'):
         assert expression not in screen, (
-            f'Stage0Screen 又在自己推执行资格（读了 {expression}）——历史自动批显示'
-            '「已批准」却跑不得，两处各写一遍迟早漏一处，而漏掉的那处就是自动绕过的'
-            '复活口。改读响应里的 `executable` / `block_reason`')
+            f'Stage0Screen 又在自己推执行资格（读了 {expression}）——两处各写一遍迟早'
+            '漏一处，而漏掉的那处就是绕过闸门的复活口。改读响应里的 `executable`')
     assert 'current.executable' in screen
-    assert 'current.block_reason' in screen
 
 
 # ── 2026-08-21 P0-3：edit-plan 恢复出口的服务端重建（provenance 不信客户端）──

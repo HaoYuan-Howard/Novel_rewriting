@@ -140,19 +140,15 @@ class Stage0Report(RemovalReport):
     #: 下来。此前前端自己拼 `approved === 'approved' && origin === 'human'`
     #: ——那才是第二个落点，而且是外部评审点名要收口的第五处（前四处是 s0_approval
     #: 判据、stage1 启动前置、orchestrator 队列、付费防线，2026-08-21 已收口）。
-    #: ⚠ 前端**不许**再从 `approval` 里自己推这件事：历史自动批显示「已批准」
-    #: 却跑不得，两处各写一遍迟早漏一处，而漏掉的那处就是自动绕过的复活口。
+    #: ⚠ 前端**不许**再从 `approval` 里自己推这件事：谓词收紧时改一处就够，
+    #: 两处各写一遍迟早漏一处，而漏掉的那处就是绕过闸门的复活口。
+    #:
+    #: ⚠ 这里曾有配套的第二格 `block_reason`（稳定理由码 `pending` /
+    #: `legacy_auto_approval_requires_review`），2026-08-22 随 `auto_zero_hit` 死值
+    #: 一并删除：理由码只剩一个取值之后，它与本格表达的是同一个 bit
+    #: ——当年那条 `_verdict_and_reason_are_one_state` 校验器校的正是这件事，
+    #: 而**一个 bit 只该有一个投影**。要再有第二种「批了却跑不得」的理由时整格加回来。
     executable: bool
-
-    #: 不具执行资格时的**稳定理由码**（`pending` / `legacy_auto_approval_requires_review`）；
-    #: 可执行时为 `None`。⚠ 前端按码分支，不从措辞里猜（同 `kind` 那条纪律）。
-    block_reason: str | None
-
-    @model_validator(mode='after')
-    def _verdict_and_reason_are_one_state(self) -> Stage0Report:
-        if self.executable != (self.block_reason is None):
-            raise ValueError('executable 与 block_reason 必须恰好表达同一状态')
-        return self
 
 
 class Stage0Segment(FrozenModel):

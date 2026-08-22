@@ -596,9 +596,9 @@ def run_approve(ctx: RunContext, *, actor: str, reason: str,
     store, log = _load(ctx)
     if not actor.strip() or not reason.strip():
         raise HumanEditProtected('stage0 人工批准必须显式给 actor 与 reason')
-    approval = log.current.approval
-    if approval.status == 'approved' and approval.origin == 'human':
-        # 同一决定的重放：幂等返回。
+    # ⚠ 判的是「这次批准是不是同一决定的重放」，**不是执行资格**——后者的唯一落点是
+    #   `eligibility.is_stage0_executable`，那是给消费方用的，本函数是写入方。
+    if log.current.approval.status == 'approved':
         return rev.report_of(log), run_check_only(ctx)
     # ⚠ 前置条件：批准的是**盘上这一刻的** source/clean 决策面。
     _require_stage0_fresh(store)
@@ -607,7 +607,7 @@ def run_approve(ctx: RunContext, *, actor: str, reason: str,
         current=Stage0Current(
             revision_id=log.current.revision_id,
             approval=ApprovedApproval(
-                status='approved', origin='human',
+                status='approved',
                 at=approved_at or rev.now_iso(),
                 by=actor.strip(), reason=reason.strip())),
         candidate_revision_id=log.candidate_revision_id,

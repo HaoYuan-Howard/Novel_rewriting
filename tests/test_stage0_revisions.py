@@ -18,7 +18,7 @@ import pytest
 
 from contracts.schema.api import Stage0CandidateDecisionRequest
 from contracts.schema.stage0 import (
-    ApprovedApproval, Stage0CandidatePlan, Stage0Current, Stage0Revisions,
+    Stage0CandidatePlan, Stage0Revisions,
 )
 from novel.api.routes import ingest as ingest_routes
 from novel.errors import (
@@ -447,57 +447,27 @@ def test_approval_rolls_back_to_pending_when_the_source_moves_mid_commit(
     assert (novel_dir / REPORT_REL).read_bytes() == before_report
 
 
-def _legacy_auto_pair(tmp_path: Path, sid: str = '960'):
-    """手工造一份**历史自动批**的链：`auto_zero_hit` 已于 2026-08-21 停产。"""
-    novel_dir, _first, _ = run_source(_source(tmp_path, sid), tmp_path / 'Output')
-    store = removal.ArtifactStore(_context(novel_dir, 'stage0.remove'))
-    log = rev.read(store)
-    rev.commit(store, Stage0Revisions(
-        revisions=log.revisions,
-        current=Stage0Current(
-            revision_id=log.current.revision_id,
-            approval=ApprovedApproval(
-                status='approved', origin='auto_zero_hit',
-                at='2026-08-01T00:00:00+00:00', by=None, reason=None)),
-        candidate_revision_id=None,
-    ))
-    return novel_dir, f'rev_{sid}'
+def test_approving_moves_only_the_gate_and_never_forks_the_chain(tmp_path):
+    """批准是唯一一件**不改变正文**的人工决定 ⇒ 它不产生新 revision。
 
-
-def test_legacy_auto_approval_decodes_but_is_not_executable(tmp_path):
-    from novel.errors import ApprovalRequired
-    from novel.orchestrator.queue import _human_gate_satisfied
-    from novel.stages.stage0.eligibility import (
-        LEGACY_AUTO_APPROVAL, block_reason, is_stage0_executable,
-    )
-    from novel.stages.stage1.partition import run_partition
-
-    novel_dir, sid = _legacy_auto_pair(tmp_path)
-    store = removal.ArtifactStore(_context(novel_dir, 'stage0.remove'))
-    report, _ = store.read_own(removal.RemovalReport, REPORT_REL)
-
-    assert not is_stage0_executable(report)
-    assert block_reason(report) == LEGACY_AUTO_APPROVAL
-    assert not _human_gate_satisfied(tmp_path / 'Output', sid, 'stage0.approve')
-    with pytest.raises(ApprovalRequired, match=LEGACY_AUTO_APPROVAL):
-        run_partition(_context(novel_dir, 'stage1.partition'))
-
-
-def test_legacy_auto_approval_regains_execution_after_a_human_reapproves(tmp_path):
+    ⚠ 这里曾是一对 legacy 用例（`auto_zero_hit` 可 decode 不可执行 / 人工重批后恢复
+    资格）。该取值 2026-08-22 删除后那两条题目不存在了，但它们各自钉住的一句
+    「批准只动闸门那一格」仍然要有人钉——本用例接手的就是那一句。
+    """
     from novel.stages.stage0.eligibility import is_stage0_executable
 
-    novel_dir, _sid = _legacy_auto_pair(tmp_path, '961')
+    novel_dir, _first, _ = run_source(_source(tmp_path, '961'), tmp_path / 'Output')
     before_clean = (novel_dir / CLEAN_REL).read_bytes()
     before = _log(novel_dir).current.revision_id
+    assert not is_stage0_executable(rev.report_of(_log(novel_dir)))
 
-    reapproved = _approve(novel_dir)
+    approved = _approve(novel_dir)
 
-    # 人工重批不产生新 revision：正文没动，动的只是闸门那一格。
-    assert reapproved.approval.origin == 'human'
-    assert reapproved.approval.by == 'reviewer' and reapproved.approval.reason == '看过了'
-    assert reapproved.revision_id == before
+    assert approved.approval.by == 'reviewer' and approved.approval.reason == '看过了'
+    assert approved.revision_id == before
+    assert len(_log(novel_dir).revisions) == 1
     assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
-    assert is_stage0_executable(reapproved)
+    assert is_stage0_executable(approved)
 
 
 # ── ⑥ HTTP：一次性决定的留存与清理 ──────────────────────────────────────────

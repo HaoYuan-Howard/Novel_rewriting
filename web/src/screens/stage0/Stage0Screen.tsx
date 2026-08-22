@@ -268,12 +268,11 @@ export function Stage0Screen() {
             const removed = source.segments.filter((item) => picked.has(item.id))
             const dirty = !sameIds(picked, initial)
             const removedChars = removed.reduce((sum, item) => sum + item.chars, 0)
-            // ⚠ 执行资格**不在这里算**：后端 `eligibility.py` 是唯一落点，响应里
-            //   `executable` / `block_reason` 是它的投影。此前这里自己拼
+            // ⚠ 执行资格**不在这里算**：后端 `eligibility.py` 是唯一落点，响应里的
+            //   `executable` 是它的投影。此前这里自己拼
             //   `approved === 'approved' && origin === 'human'`，那是第二个落点
-            //   ——漏一次就是历史自动批（auto_zero_hit）的自动绕过复活口。
+            //   ——后端谓词收紧时漏掉的那一处就是绕过闸门的复活口。
             const approved = current.executable
-            const legacyAuto = current.block_reason === 'legacy_auto_approval_requires_review'
             const suspicious = suspiciousForView
             const filteredSegments = filteredForView
             return (
@@ -383,18 +382,8 @@ export function Stage0Screen() {
                           approved ? 'bg-gate-ok-bg text-ink-2' : 'bg-warn-bg text-warn',
                         )}
                       >
-                        {approved
-                          ? '已批准'
-                          : legacyAuto
-                            ? '历史自动批准 · 需人工重批'
-                            : '待人工批准'}
+                        {approved ? '已批准' : '待人工批准'}
                       </span>
-                      {legacyAuto ? (
-                        <span className={'text-tag text-warn'}>
-                          这份批准来自已停产的零命中自动批（auto_zero_hit），不具执行资格；
-                          填 actor 与 reason 重新批准后才能进入 stage1。
-                        </span>
-                      ) : null}
                       <span className={'text-body font-semibold'}>
                         当前删除 {removed.length} 段 · {removedChars} 码点
                       </span>

@@ -263,11 +263,12 @@ STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 #: 2026-08-21）。「没跑 / 崩了 / 阻断」是**执行状态**，由「产物不存在 + JobState」表达。
 #: 【为什么不能是 `bool`】「跑了没批」与「批了」必须分开，与 `FRESHNESS` / `JOB_STATE` /
 #: `BADGE` 同构：本项目每一次把「不知道」并进「没问题」都付过学费。
-#: ⚠ `R-0.3b`（`HARD`）判的是**不满足执行资格 ⇒ stage1 拒绝启动**。现役执行资格
-#: 是 `approval.status == 'approved'` **且** `approval.origin == 'human'`
-#: （`novel/stages/stage0/eligibility.py::is_stage0_executable`，唯一落点）：
-#: `origin == 'auto_zero_hit'` 是历史自动批取值，**只读、不具执行资格**，
-#: 人工重批（`stage0.approve`）后恢复。
+#: ⚠ `R-0.3b`（`HARD`）判的是**不满足执行资格 ⇒ stage1 拒绝启动**，判它的唯一落点是
+#: `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方不许复述条件。
+#: ⚠ `ApprovedApproval` 曾有第三格 `origin: 'auto_zero_hit' | 'human'`，
+#: 2026-08-22 与 `not_run` 同一判据删除：产地 2026-08-21 已停产，而真正带着它的
+#: 存量产物是 v1，本产物现为 v3 且本仓不迁移 ⇒ 那些产物连 decode 都过不去，
+#: 该取值在盘上**结构不可达**（实测报 `schema v1 不是当前 v3`）。
 #: ⚠ 2026-08-22 起 `approved` 那四个平铺字段收成一格判别联合（`Stage0Approval`），
 #: 本元组仍是 `status` 那一格的取值面；两者的对账在 `tests/test_invariants.py`。
 APPROVAL_STATE: Final = ('pending', 'approved')
