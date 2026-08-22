@@ -65,7 +65,7 @@ PLAN_SYS = fill("""\
   output_ordinal（从 1 连续）
   from_source_ordinals[]（本章出自哪个源章；**恰好一个，且等于 output_ordinal**）
   chapter_goal / open_hook_goal / end_hook_goal：都只能写 typed goal：
-    intent：establish|advance|open|close|withhold|resolve；
+    intent：$G_INTENTS；
     fact_refs[]：从「可引用事实目录」逐字选择 kind/ref，并写本章 chapter；
     rationale：可选，仅供审计，写手不会收到。不要在 rationale 里另造事实。
     **open_hook_goal 至少引用首个写作单元中的一条 event；end_hook_goal 至少引用最后一个
@@ -74,25 +74,30 @@ PLAN_SYS = fill("""\
     先定下这一章 segments[0] 与 segments[-1] 各放了哪些 `pNN_NN`，
     再从 `event_units` 里挑一条落在该单元里的 event 编号写进 fact_refs。
     **不要凭骨架里的正文顺序去猜 event 编号**：两者不是一一对应的。
+  ⚠⚠ **上面的 intent 与下面的 narrative_role / delivery / transition 是四张互不相干的表，
+  各自带自己的前缀（`G_` / `R_` / `D_` / `X_`）。一个字段只许填它自己那张表里的值**——
+  把 `R_TURN` 填进 intent、把骨架里读到的 `recall` 填进 narrative_role，
+  都会让整份响应被当场拒收、这一次规划全部作废。填之前先看前缀对不对。
+
   segments[]：【重构后的写作单元，数组顺序就是成稿顺序】：
     plan_beats[]：把一个或多个源内容单元编号放进本单元，数组内部顺序也是落笔顺序。
       全章所有编号必须恰好出现一次。允许跨原相邻关系合并，也允许把后面的事件提到前面。
-    narrative_role：$STRUCTURAL_ROLES
-      `cold_open`=以后置冲突/结果直接起笔；`setup`=建立人物与处境；`escalation`=升级；
-      `turn`=改变局势或理解；`payoff`=兑现本章承诺；`bridge`=必要过渡。
-    delivery：$DELIVERY_MODES。`scene`=作为可见可听的场面展开；`summary`=压缩交代但事实不能丢。
-      【说清 `summary` 到底会被写成什么】写手拿到一个 `summary` 单元时**只写一段**：
+    narrative_role：$R_ROLES
+      `R_COLD_OPEN`=以后置冲突/结果直接起笔；`R_SETUP`=建立人物与处境；`R_ESCALATION`=升级；
+      `R_TURN`=改变局势或理解；`R_PAYOFF`=兑现本章承诺；`R_BRIDGE`=必要过渡。
+    delivery：$D_MODES。`D_SCENE`=作为可见可听的场面展开；`D_SUMMARY`=压缩交代但事实不能丢。
+      【说清 `D_SUMMARY` 到底会被写成什么】写手拿到一个 `D_SUMMARY` 单元时**只写一段**：
       里面几件事合并成一两句交代过去，**不逐条展开、不演成场面**。
       ⚠ 这不是「丢掉」：那几件事仍然必须成立、必须在正文里留下痕迹，只是不各占一段。
       它就是你手上唯一的压缩工具——该带过去的事就该合进来。
-    transition：$TEMPORAL_LINKS。第一单元必须是 `start`；之后明确是连续、回到更早、跳到更晚、
+    transition：$X_LINKS。第一单元必须是 `X_START`；之后明确是连续、回到更早、跳到更晚、
       并行、还是从插叙返回。不要让写手猜重排后的时间关系。
-      ⚠⚠ **`earlier`/`later` 说的是【故事时间】的先后，不是你把它排在第几位。**
+      ⚠⚠ **`X_EARLIER`/`X_LATER` 说的是【故事时间】的先后，不是你把它排在第几位。**
       骨架里每个源内容单元带着 time_layer（取值 $LAYERS，分别是当下正在发生 /
       视角人想起的往事 / 别人讲给她听的事）。**相邻两个写作单元的接缝两端都是第一种时，
-      源内容单元编号大的那一头就是故事时间更晚的**——这时标 `earlier` 却往后走、
-      标 `later`/`continue`/`return` 却往前走，会被代码当场挡下。
-      拿不准就用 `parallel`，或者据实标注，不要为了好看去标。
+      源内容单元编号大的那一头就是故事时间更晚的**——这时标 `X_EARLIER` 却往后走、
+      标 `X_LATER`/`X_CONTINUE`/`X_RETURN` 却往前走，会被代码当场挡下。
+      拿不准就用 `X_PARALLEL`，或者据实标注，不要为了好看去标。
     budget_chars：这一写作单元大约写多少字，正整数。
 
 【怎样才算真的重构】
@@ -101,12 +106,12 @@ PLAN_SYS = fill("""\
   背景交代时，才考虑把后面更有冲突或结果感的一拍提上来。
 - 【冷开场要稀缺】它是手段不是模板。章章都从后置结果起笔，读者就没有一条向前推进的线，
   读完不知道这一章要表达什么——那比顺叙平淡得多。
-- 【回溯要在本章之内收口】用了 `earlier` 回到原因之后，本章必须再回到被搁置的那条线上收束——
-  用 `return` 标出来，或者一路 `continue` 推回到不早于起笔那一处的位置。
+- 【回溯要在本章之内收口】用了 `X_EARLIER` 回到原因之后，本章必须再回到被搁置的那条线上收束——
+  用 `X_RETURN` 标出来，或者一路 `X_CONTINUE` 推回到不早于起笔那一处的位置。
   一章结束时读者还停在过去，他就不知道这一章到底把故事推到了哪里。
-- 把承担同一戏剧任务的事实合成一个 `scene`，把重复解释、路程和已知背景压进 `summary`。
+- 把承担同一戏剧任务的事实合成一个 `D_SCENE`，把重复解释、路程和已知背景压进 `D_SUMMARY`。
   ⚠⚠ **合并本身就是一次结构决策，而且是最常用的那一次。** 一个源内容单元对一个写作单元、
-  按源序一路排开、且没有一个单元是 `summary`——这样的章会被判成「与原文逐格相同、
+  按源序一路排开、且没有一个单元是 `D_SUMMARY`——这样的章会被判成「与原文逐格相同、
   只改了措辞和数字」而**整份计划退回**。够大的章至少要在【入口 / 分组 / 承载方式】
   三者里动一样，而分组（把相邻的几个源单元并进同一个写作单元）通常是最自然的那一样。
 - ⚠ **末尾那个写作单元不要切得太碎**：`end_hook_goal` 必须引用**最后一个**写作单元里的
@@ -125,13 +130,13 @@ PLAN_SYS = fill("""\
   而**章与章之间的轻重，只有这个倍率能表达**：值得展开的章往上取，
   过渡、赶路、重复交代的章往下取。
   ⚠⚠ **这个区间的两端都是硬的，下界和上界一样硬。** 一章压到 $BANDS 的下界以下，
-  整份计划会被退回——**再要压就不是改这个数字的事了**：把那几件事合进一个 `summary`
+  整份计划会被退回——**再要压就不是改这个数字的事了**：把那几件事合进一个 `D_SUMMARY`
   单元一起带过去，本章的总量仍然要留在区间之内。事实一条都不能少，少的只是篇幅。
 - 【上面两条合起来是一道加减题】全书总量给定 ⇒ **把一章写厚，就必须把另一章写薄**。
   先挑出本书真正值得展开的那几章，其余的章据实压下去，别指望章章都往上顶——
   那样全书会超出总量带，整份计划会被退回。
-- 【压和展开不是对称的两件事】展开靠给 `scene` 更多预算；压缩**只有一条合法路径**：
-  把那几个源内容单元合进一个 `summary` 单元并降低预算。**编号一个都不能少**——
+- 【压和展开不是对称的两件事】展开靠给 `D_SCENE` 更多预算；压缩**只有一条合法路径**：
+  把那几个源内容单元合进一个 `D_SUMMARY` 单元并降低预算。**编号一个都不能少**——
   压的是篇幅，不是事实。
 - 【标了「逐字N」的源内容单元有下限，压不掉】同一写作单元合并了多项时，把它们的逐字数相加。
   **该写作单元的 budget_chars 至少要是逐字总数的 $VERBATIM_FACTOR 倍**，否则写手除了原话再没有别的字可写，
@@ -163,15 +168,16 @@ PLAN_HINT: dict[str, Any] = {
     'reconstruction_strategy': 'str',
     'output_chapters': [{
         'output_ordinal': 1, 'from_source_ordinals': [1],
-        'chapter_goal': {'intent': 'advance', 'fact_refs': [
+        'chapter_goal': {'intent': 'G_ADVANCE', 'fact_refs': [
             {'kind': 'event', 'ref': 'b01_01', 'chapter': 1}], 'rationale': 'str|null'},
-        'open_hook_goal': {'intent': 'open', 'fact_refs': [
+        'open_hook_goal': {'intent': 'G_OPEN', 'fact_refs': [
             {'kind': 'event', 'ref': 'b01_01', 'chapter': 1}], 'rationale': 'str|null'},
-        'end_hook_goal': {'intent': 'close', 'fact_refs': [
+        'end_hook_goal': {'intent': 'G_CLOSE', 'fact_refs': [
             {'kind': 'event', 'ref': 'b01_02', 'chapter': 1}], 'rationale': 'str|null'},
         'segments': [{
             'plan_beats': ['p01_04', 'p01_05'],
-            'narrative_role': 'cold_open', 'delivery': 'scene', 'transition': 'start',
+            'narrative_role': 'R_COLD_OPEN', 'delivery': 'D_SCENE',
+            'transition': 'X_START',
             'budget_chars': 120,
         }],
     }],

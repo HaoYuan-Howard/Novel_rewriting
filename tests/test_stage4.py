@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -210,6 +211,98 @@ def test_the_plan_prompt_gives_both_bands_and_says_which_one_is_per_chapter():
         '旧那句「每一章都是这个倍率」还在——放宽了带却仍然命令模型章章同倍率'
 
 
+# ─────────── 响应侧枚举前缀化（2026-08-22，一次 6 连拒的实付买来的）───────────
+
+def test_no_artifact_side_enum_value_reaches_the_planner_prompt():
+    """⭐⭐ **前缀化买的就是这一条：下发面上不许出现任何一个产物侧取值。**
+
+    出现了模型就会照抄，而抄来的值**在另一张表里是合法的** ⇒ schema 闸只能在整份响应
+    收完之后才发现，一次全书规划当场作废。实测代价（2026-08-22 批 2 第二次实付）：
+    `intent='turn'`×6 章 + `narrative_role='recall'`（从骨架下发面抄的），
+    整条 `LADDER` 走到底、**6 次 wire 全被内容闸拒、completion 86 150 全白花、0 产物**。
+
+    ⚠ **两个刻意的例外，各有理由**：
+      · `TIME_LAYERS` 的三个值出现在骨架下发面上（那是**输入**，不是模型要填的字段）；
+      · 那条「别把骨架里读到的 `recall` 填进 narrative_role」的反面判例——
+        点名禁忌值是 stage2 prompt 一直在用的 ✗ 判例写法，删掉它等于收回这次的教训。
+    """
+    import re
+
+    from contracts.invariants import (
+        DELIVERY_MODES, GOAL_INTENTS, STRUCTURAL_ROLES, TEMPORAL_LINKS,
+    )
+
+    sysp = prompts.plan_system()
+    # 只看带反引号那一类：`scene` / `turn` 这种。裸词（"open"、"return"）在中文散文里
+    # 是普通英文单词，扫它们只会制造假红。
+    quoted = set(re.findall(r'`([A-Za-z_]+)`', sysp))
+    leaked = quoted & set(STRUCTURAL_ROLES + DELIVERY_MODES + TEMPORAL_LINKS + GOAL_INTENTS)
+    assert not leaked, (
+        f'下发面上还印着产物侧取值 {sorted(leaked)}——模型会照抄，'
+        f'而 `PlanBeatResponse` / `PlanGoalResponse` 只收带前缀的那一张表')
+
+
+def test_the_response_enums_round_trip_through_the_single_mapping_landing_point():
+    """⭐ `decode` 与 `encode` 必须是同一张表的两个方向，且**已是产物值的原样过**。
+
+    第三个断言是承重的：`--apply-edit` 的人工稿与 `--revalidate` 的存量产物走同一批字段、
+    从来没有前缀。在 decode 里对不认识的值 `raise`，等于把两条路合并成一条——
+    人工稿会当场炸，而它本来是这一层唯一的 0 LLM 出路。
+    """
+    from novel.stages.stage4.measure import decode_plan_response, encode_plan_baseline
+    from tests.hard_cases import _b4, _ch4
+
+    artifact = _ch4(1, [_b4('b1_01'), _b4('b1_02')])
+    artifact['segments'][1]['delivery'] = 'summary'
+    artifact['segments'][1]['transition'] = 'earlier'
+    before = json.loads(json.dumps(artifact))
+
+    wire = encode_plan_baseline(json.loads(json.dumps(artifact)))
+    assert wire['segments'][1]['delivery'] == 'D_SUMMARY'
+    assert wire['segments'][1]['transition'] == 'X_EARLIER'
+    assert wire['chapter_goal']['intent'] == 'G_ADVANCE'
+
+    plan = {'output_chapters': [wire]}
+    assert decode_plan_response(plan) > 0
+    assert plan['output_chapters'][0] == before, 'encode → decode 不是恒等'
+
+    # 已是产物值 ⇒ 一格都不该被动，也不该抛
+    passthrough = {'output_chapters': [json.loads(json.dumps(artifact))]}
+    assert decode_plan_response(passthrough) == 0
+    assert passthrough['output_chapters'][0] == before
+
+
+def test_the_repair_baseline_speaks_the_same_dialect_as_the_repair_system_prompt():
+    """⭐ 不回编码，同一份 user 里就会**自相矛盾**：system 要 `D_SCENE`、基线印着 `scene`。
+
+    模型照基线抄 ⇒ schema 当场拒 ⇒ 那一拒要**花一次钱**才看得见。
+    （stage2 `compile_v2` 回写 `--dry-run` 基线时踩的是同一格。）
+    """
+    from novel.stages.stage4.plan import _response_baseline
+    from tests.hard_cases import _b4, _ch4
+
+    baseline = _response_baseline(_ch4(1, [_b4('b1_01'), _b4('b1_02')]),
+                                  {1: [['b1_01'], ['b1_02']]}, 1)
+    got = {baseline['segments'][0][k] for k in ('narrative_role', 'delivery', 'transition')}
+    assert got == {'R_SETUP', 'D_SCENE', 'X_START'}, f'基线没有回到响应侧写法：{got}'
+    assert baseline['chapter_goal']['intent'].startswith('G_')
+
+
+def test_the_model_response_only_ever_enters_through_one_door():
+    """⭐ **守卫的守卫**：解前缀与展开编号必须成对发生，所以生产侧只许走 `adopt_plan_response`。
+
+    ⚠ 分开写在两个调用点，迟早会有一处只做一半——而只展开不解码的那一半**不会报错**：
+    判据读到 `'D_SCENE'` 当成一个陌生的 `delivery` 值，`structure_changed` 的
+    `axis_delivery`（`be.get('delivery') == 'summary'`）会**静静地恒假**。
+    """
+    src = (Path(__file__).resolve().parents[1]
+           / 'novel' / 'stages' / 'stage4' / 'plan.py').read_text(encoding='utf-8')
+    assert 'expand_plan_beats(' not in src, \
+        'plan.py 直接调了 `expand_plan_beats` ⇒ 那一路的前缀不会被解开，而判据不会为此出声'
+    assert src.count('adopt_plan_response(') == 2, \
+        '模型响应有两条入口（整跑 / 定向修复），两条都必须走同一个门'
+
+
 def test_the_length_section_carries_the_three_lines_the_first_paid_run_bought():
     """⭐⭐ **三句话，三条实测落红买回来的**（2026-08-22 批 2 第一次全书付费）。
 
@@ -348,7 +441,7 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
     from novel.stages.stage4 import checks
     from novel.stages.stage4.beats import beat_index, group_beats
     from novel.stages.stage4.fact_refs import catalog, validate_plan_refs
-    from novel.stages.stage4.measure import expand_plan_beats
+    from novel.stages.stage4.measure import adopt_plan_response
     from tests.test_stage2 import blueprints, global_grounding, main_text
 
     body = main_text()
@@ -377,12 +470,15 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
             segments.append({
                 'plan_beats': [unit_id],
                 'budget_chars': 100,
-                'narrative_role': ('cold_open' if moved and output_index == 0
-                                   else 'setup'),
-                'delivery': 'scene',
-                'transition': ('start' if output_index == 0
-                               else 'earlier' if moved and output_index == 1
-                               else 'continue'),
+                # ⚠ 这里写的是**响应侧带前缀的取值**：合成的是一份「模型响应」，
+                #   而响应侧与产物侧从 2026-08-22 起是两张表
+                #   （`contracts/invariants.py::RESPONSE_STRUCTURAL_ROLES`）。
+                'narrative_role': ('R_COLD_OPEN' if moved and output_index == 0
+                                   else 'R_SETUP'),
+                'delivery': 'D_SCENE',
+                'transition': ('X_START' if output_index == 0
+                               else 'X_EARLIER' if moved and output_index == 1
+                               else 'X_CONTINUE'),
             })
         first_event = sorted(events_by_unit[order[0]])[0]
         last_event = sorted(events_by_unit[order[-1]])[-1]
@@ -390,7 +486,7 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
             'output_ordinal': ordinal,
             'from_source_ordinals': [ordinal],
             'chapter_goal': {
-                'intent': 'advance',
+                'intent': 'G_ADVANCE',
                 'fact_refs': [{
                     'kind': 'chapter_boundary',
                     'ref': f'chapter:{ordinal}',
@@ -398,13 +494,13 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
                 }],
             },
             'open_hook_goal': {
-                'intent': 'open',
+                'intent': 'G_OPEN',
                 'fact_refs': [{
                     'kind': 'event', 'ref': first_event, 'chapter': ordinal,
                 }],
             },
             'end_hook_goal': {
-                'intent': 'close',
+                'intent': 'G_CLOSE',
                 'fact_refs': [{
                     'kind': 'event', 'ref': last_event, 'chapter': ordinal,
                 }],
@@ -419,7 +515,12 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
         'output_chapters': chapters,
     })
     expanded = response.model_dump(by_alias=True, mode='json')
-    assert expand_plan_beats(expanded, groups) == sum(map(len, groups.values()))
+    # ⚠⚠ 走**生产那一个入口**（`adopt_plan_response` = 解前缀 + 展开编号），不是只展开编号：
+    #   判据全都读产物侧取值，只 `expand_plan_beats` 的话下面整批断言打的是带前缀的字符串，
+    #   而它们会安静地全绿——那正是这条测试要挡的那种「守卫重拼了生产的实参」。
+    assert adopt_plan_response(expanded, groups) == sum(map(len, groups.values()))
+    assert {be['delivery'] for ch in expanded['output_chapters']
+            for be in ch['segments']} == {'scene'}, '前缀没有被解回产物取值'
     validate_plan_refs(expanded, refs)
     outcomes = checks.check(
         expanded,

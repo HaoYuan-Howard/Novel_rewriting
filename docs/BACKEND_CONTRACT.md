@@ -481,7 +481,7 @@
 | R-5.4 | 逐章三个目标（章目标 / 开头钩子 / 结尾钩子）**不含风格套话词** | `HARD` |
 | R-5.5 | 代码只把 <80 字碎 beat 吸收为不可再拆的**源内容单元**；这些单元是事实守恒边界，不是成稿骨架。LLM 决定输出写作单元的分组与顺序 | `结构`（`novel/stages/stage4/beats.py::group_beats` 确定源单元；`novel/stages/stage4/measure.py::expand_plan_beats` 展开模型分组与顺序） |
 | R-5.6 | `from_beats` 引用有效且属本章；每个源内容单元必须且只能出现一次、内部不拆不换序；源单元数 ≥ `PLAN_RECONSTRUCT_MIN_UNITS` 的章必须在**叙事入口 / 单元分组 / 承载方式**三根轴上至少动一根，即不得与 `novel/stages/stage4/measure.py::identity_plan` 的结构切片逐格相同——**保持源序本身不违规**。移动入口时首单元标 `cold_open`，重排必须显式给 `earlier/later/parallel/return` 衔接；开头/结尾 goal 必须分别锚在首尾写作单元 | `HARD` ×5（`beat_ref` / `structure_changed` / `structure_units` / `structure_transition` / `goal_landing`） |
-| R-5.7 | LLM 必须产出全书策略、逐章三个目标，以及非空的重构写作单元；每单元给 `plan_beats[]` 分组/顺序、`narrative_role`、`delivery`、`transition` 与正整数预算 | `HARD` ×2（`empty_chapter` / `budget_int`；其余字段由响应与落盘 schema 拒绝缺失） |
+| R-5.7 | LLM 必须产出全书策略、逐章三个目标，以及非空的重构写作单元；每单元给 `plan_beats[]` 分组/顺序、`narrative_role`、`delivery`、`transition` 与正整数预算。⚠ 这四个枚举字段（含 goal 的 `intent`）在**响应侧带前缀**（`R_`/`D_`/`X_`/`G_`），与产物侧不是同一张表——它们在响应 JSON 里串行相邻且语义两两邻近，串表串出来的值在另一张表里合法，schema 闸只能在整份响应收完之后才发现（实测一次全书规划 6 连拒、86 150 completion 全白花）。映射唯一落点 `stage4/measure.py::decode_plan_response`，产物侧取值一个字都不许出现在下发面上 | `HARD` ×2（`empty_chapter` / `budget_int`；其余字段由响应与落盘 schema 拒绝缺失） |
 | R-5.8 | 不发明人物/事件/设定 · 重头要稀缺（一章一到两拍）· 结尾钩子不提前泄底 | **无守卫 → `B-06`** |
 | R-5.9 | 「分配要有轻重」「一拍 80~150 字」两条 warn **量出来了，然后没有下文** | **无守卫 → `B-17`** |
 | R-5.9b | 上一条那两条 warn 各自要有一条注册判据**把读数报出来**：章内各拍字数有轻重 · 每拍字数落在报警线内。⚠ 它与 `R-5.9` 不矛盾：**「量了并且报了」与「量完之后没有下文」是两件事**，`R-5.9` 说的是后者 | `INFO` |

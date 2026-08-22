@@ -44,7 +44,9 @@ from novel.stages.stage4 import checks, prompts
 from novel.stages.stage4.beats import beat_index, group_beats
 from novel.stages.stage4.context import build_writer_context, display_names_at
 from novel.stages.stage4.fact_refs import catalog as fact_catalog, validate_plan_refs
-from novel.stages.stage4.measure import expand_plan_beats, identity_plan, source_chars_table
+from novel.stages.stage4.measure import (
+    adopt_plan_response, encode_plan_baseline, identity_plan, source_chars_table,
+)
 from novel.store import ArtifactStore
 
 REL = STAGE4_PLAN_CHAPTERS
@@ -336,7 +338,9 @@ def _response_baseline(chapter: dict[str, Any], groups: dict[Any, list[list[str]
             raise TerminalState(
                 f'第 {ordinal} 章现有计划引用了当前分组里不存在的 beat：{unknown[:6]}')
         segment['plan_beats'] = list(dict.fromkeys(member_to_unit[beat_id] for beat_id in source))
-    return baseline
+    # ⚠⚠ 基线块里的枚举也要**回到响应侧的前缀写法**：不然同一份 user 里 system 要
+    #   `D_SCENE`、基线印着 `scene`，模型照基线抄就被 schema 当场拒——而那一拒要花钱才看得见。
+    return encode_plan_baseline(baseline)
 
 
 def _repair_refs(up: _Upstreams, ordinal: int) -> dict[str, Any]:
@@ -556,7 +560,7 @@ def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: 
 
     照 stage3 不照 stage6：本层一次产**一份** ⇒ **任何一条 hard 就 `.INVALID`**。
     """
-    expand_plan_beats(data, up.groups)          # 显式终态：编号对不上就在这里停
+    adopt_plan_response(data, up.groups)        # 解前缀 + 展开编号；对不上就在这里停
     return _gate_and_write(ctx, store, data, up, provenance=provenance)
 
 
@@ -683,7 +687,7 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
             'reconstruction_strategy': previous_raw['reconstruction_strategy'],
             'output_chapters': [copy.deepcopy(raw_response)],
         }
-        expand_plan_beats(expanded, {ordinal: up.groups.get(ordinal) or []})
+        adopt_plan_response(expanded, {ordinal: up.groups.get(ordinal) or []})
         after = expanded['output_chapters'][0]
         merged_by[ordinal] = after
         interim = {

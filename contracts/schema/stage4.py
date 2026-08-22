@@ -40,8 +40,10 @@ from pydantic import Field, model_validator
 
 from contracts.invariants import (
     CACHE_POLICY,
-    ADDRESS_CONTEXT, DELIVERY_MODES, NAME_DISTINCTIVENESS, NARRATIVE_PERSON,
-    STRUCTURAL_ROLES, TEMPORAL_LINKS, TIME_LAYERS, WORLD_RULE_KINDS,
+    ADDRESS_CONTEXT, DELIVERY_MODES, GOAL_INTENTS, NAME_DISTINCTIVENESS,
+    NARRATIVE_PERSON, RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS,
+    RESPONSE_STRUCTURAL_ROLES, RESPONSE_TEMPORAL_LINKS, STRUCTURAL_ROLES,
+    TEMPORAL_LINKS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
@@ -110,9 +112,15 @@ class FactRef(StrictModel):
 
 
 class PlanGoal(StrictModel):
-    """Typed goal; rationale is retained for audit but never sent to the writer."""
+    """Typed goal; rationale is retained for audit but never sent to the writer.
 
-    intent: Literal['establish', 'advance', 'open', 'close', 'withhold', 'resolve']
+    ⚠ **模型不直接产这个形状**：响应侧是 `PlanGoalResponse`（`intent` 带 `G_` 前缀），
+    `decode_plan_response` 是唯一的映射落点。理由见
+    `contracts/invariants.py::RESPONSE_GOAL_INTENTS`——`intent='turn'` 那次
+    6 次 wire 全灭是拿真钱买的。
+    """
+
+    intent: Literal[GOAL_INTENTS]
     fact_refs: list[FactRef] = Field(min_length=1)
     rationale: str | None = Field(
         default=None, min_length=1, json_schema_extra={'prompt_private': True})
@@ -127,7 +135,7 @@ class CtxGoal(StrictModel):
     into a writer or hook prompt.
     """
 
-    intent: Literal['establish', 'advance', 'open', 'close', 'withhold', 'resolve']
+    intent: Literal[GOAL_INTENTS]
     facts: list[str] = Field(min_length=1)
 
 
@@ -248,9 +256,30 @@ class PlanBeatResponse(StrictModel):
     plan_beats: list[str] = Field(min_length=1)
 
     budget_chars: int = Field(gt=0)
-    narrative_role: Literal[STRUCTURAL_ROLES]
-    delivery: Literal[DELIVERY_MODES]
-    transition: Literal[TEMPORAL_LINKS]
+
+    #: ⚠⚠ **这三个 + `PlanGoalResponse.intent` 是【带前缀的响应侧取值】，不是产物值。**
+    #: 四张表在响应 JSON 里串行相邻且语义两两邻近，模型会串表——而串出来的值
+    #: **在另一张表里是合法的**，于是 schema 闸只能在整份响应收完之后才发现。
+    #: 实测代价：2026-08-22 一次全书规划 6 次 wire 全被内容闸拒、86 150 completion 全白花。
+    #: 前缀化之后串表当场死在 schema 上（手法与读数见
+    #: `contracts/invariants.py::RESPONSE_STRUCTURAL_ROLES`）。
+    #: 映射唯一落点：`novel/stages/stage4/measure.py::decode_plan_response`。
+    narrative_role: Literal[tuple(RESPONSE_STRUCTURAL_ROLES)]
+    delivery: Literal[tuple(RESPONSE_DELIVERY_MODES)]
+    transition: Literal[tuple(RESPONSE_TEMPORAL_LINKS)]
+
+
+class PlanGoalResponse(StrictModel):
+    """**模型响应里**的 typed goal。与 `PlanGoal` 只差 `intent` 的取值面（带 `G_` 前缀）。
+
+    ⚠ 其余两个字段刻意**共用** `PlanGoal` 的定义（`FactRef` 原样复用）：
+    响应侧与产物侧只在「哪些字段被前缀化」这一点上分家，多分一寸就是第二份形状。
+    """
+
+    intent: Literal[tuple(RESPONSE_GOAL_INTENTS)]
+    fact_refs: list[FactRef] = Field(min_length=1)
+    rationale: str | None = Field(
+        default=None, min_length=1, json_schema_extra={'prompt_private': True})
 
 
 class PlanChapterResponse(StrictModel):
@@ -264,9 +293,9 @@ class PlanChapterResponse(StrictModel):
 
     output_ordinal: int = Field(ge=1)
     from_source_ordinals: list[int] = Field(min_length=1)
-    chapter_goal: PlanGoal
-    open_hook_goal: PlanGoal
-    end_hook_goal: PlanGoal
+    chapter_goal: PlanGoalResponse
+    open_hook_goal: PlanGoalResponse
+    end_hook_goal: PlanGoalResponse
     segments: list[PlanBeatResponse] = Field(min_length=1)
 
 

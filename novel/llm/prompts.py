@@ -25,10 +25,11 @@ from pydantic import BaseModel
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS, BEAT_MIN_CHARS, BEAT_NATURAL_MAX,
-    BOOK_BAND, CHANGE_TYPES_ENUM, DELIVERY_MODES, HINGE_KINDS, INVENT_ALLOW,
+    BOOK_BAND, CHANGE_TYPES_ENUM, HINGE_KINDS, INVENT_ALLOW,
     INVENT_FORBID, INVENT_PRINCIPLE, NAME_DISTINCTIVENESS, PLACE_MODES,
-    PLAN_BUDGET_BAND, PLAN_RECONSTRUCT_MIN_UNITS, RESPONSE_TIME_LAYERS,
-    STRUCTURAL_ROLES, STYLE_WORDS, TEMPORAL_LINKS, TIME_LAYERS,
+    PLAN_BUDGET_BAND, PLAN_RECONSTRUCT_MIN_UNITS, RESPONSE_DELIVERY_MODES,
+    RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES, RESPONSE_TEMPORAL_LINKS,
+    RESPONSE_TIME_LAYERS, STYLE_WORDS, TIME_LAYERS,
     VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
 )
 
@@ -73,9 +74,15 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     'BOOK_BANDS': '{:g}~{:g}×'.format(*BOOK_BAND),
     'BEAT_MIN': str(BEAT_MIN_CHARS),
     'RECONSTRUCT_MIN': str(PLAN_RECONSTRUCT_MIN_UNITS),
-    'STRUCTURAL_ROLES': '|'.join(STRUCTURAL_ROLES),
-    'DELIVERY_MODES': '|'.join(DELIVERY_MODES),
-    'TEMPORAL_LINKS': '|'.join(TEMPORAL_LINKS),
+    # ⚠⚠ **stage4 响应侧的四张表渲染的是【带前缀的键】，不是产物取值。**
+    #   产物侧 `STRUCTURAL_ROLES` / `DELIVERY_MODES` / `TEMPORAL_LINKS` / `GOAL_INTENTS`
+    #   在这里**没有块**——它们一个字都不该出现在下发面上，出现了模型就会照抄，
+    #   而那正是 2026-08-22 那次 6 次 wire 全灭（`intent='turn'`）的形状。
+    #   映射回产物值只有一个落点：`stage4/measure.py::decode_plan_response`。
+    'R_ROLES': '|'.join(RESPONSE_STRUCTURAL_ROLES),
+    'D_MODES': '|'.join(RESPONSE_DELIVERY_MODES),
+    'X_LINKS': '|'.join(RESPONSE_TEMPORAL_LINKS),
+    'G_INTENTS': '|'.join(RESPONSE_GOAL_INTENTS),
     # 这两项必须从常量渲染，避免 prompt 与判据使用不同数值。
     #   ⚠ `BEAT_NATURAL` 是**一对**（下界恒等于 `BEAT_MIN_CHARS`——拍就是按它切的），
     #   与判据那一侧的报警线 `BEAT_ALERT_MIN/MAX` 是**故意的两对数**，别混。

@@ -749,6 +749,74 @@ STRUCTURAL_ROLES: Final = (
 DELIVERY_MODES: Final = ('scene', 'summary')
 TEMPORAL_LINKS: Final = ('start', 'continue', 'earlier', 'later', 'parallel', 'return')
 
+#: 逐章三个 typed goal 的意图取值面。
+#: ⚠ **它 2026-08-22 才从三处手抄收拢到这里**：`contracts/schema/stage4.py` 的
+#: `PlanGoal` 与 `CtxGoal` 各写着一份行内 `Literal[...]`，`stage4/prompts.py` 里还有
+#: 第三份手抄的 `establish|advance|open|close|withhold|resolve`——`$RECONSTRUCT_MIN`
+#: 那条注释记过同型的下场（prompt 与判据各拿一个数）。
+GOAL_INTENTS: Final = (
+    'establish', 'advance', 'open', 'close', 'withhold', 'resolve',
+)
+
+#: ── `stage4.plan` 响应侧的四张前缀枚举 → 产物侧取值 ─────────────────────────
+#:
+#: **前缀化只在响应侧**：产物侧那四张表一个字不动（下游 + 盘上数据的硬约束），
+#: `novel/stages/stage4/measure.py::decode_plan_response` 是唯一映射落点
+#: ——与 `RESPONSE_TIME_LAYERS` / `PLACE_MODES` 那次（`extraction-ir-v1`）同一套手法。
+#:
+#: 【为什么前缀化】这四张表在响应 JSON 里**串行相邻**，而它们语义两两邻近
+#: （`cold_open`↔`start`、`bridge`↔`continue`、`payoff`↔`close`、
+#: `narrative_role`↔`delivery` 都有 `summary` 味、`intent` 的每一个值都像一种
+#: `narrative_role`）⇒ 模型串表，而串出来的值**在另一张表里是合法的**，
+#: 于是 schema 闸只能在整份响应收完之后才发现。
+#:
+#: ⚠⚠ **代价实测过，两次**：
+#:   · 交接时 `delivery` 的 `summary` 串进 `narrative_role`；
+#:   · 2026-08-22 批 2 的第二次全书实付——`intent='turn'`（那是 `narrative_role` 的值）
+#:     ×6 章、`narrative_role='recall'`（那是 `time_layer` 的值，从**下发面**抄来的）。
+#:     整条 `LADDER` 走到底、6 次 wire 全被内容闸拒、completion 86 150 **全白花、0 产物**。
+#: ir1 那次的读数是**非法 enum 归零**，所以这里照抄的是一个已验证的修法，不是一次猜测。
+#:
+#: ⚠ 四个前缀字母互不相同，且**与 stage2 的 `T_` / `P_` 也不撞**：同一个模型在两个节点上
+#: 见到的前缀空间不该重叠。⚠ `transition` 用 `X_` 不用 `T_` 正是为此
+#: （`T_` 已经是叙述层的，而叙述层的值恰好就是这次串进 `narrative_role` 的那个）。
+RESPONSE_STRUCTURAL_ROLES: Final = {
+    'R_COLD_OPEN': 'cold_open', 'R_SETUP': 'setup', 'R_ESCALATION': 'escalation',
+    'R_TURN': 'turn', 'R_PAYOFF': 'payoff', 'R_BRIDGE': 'bridge',
+}
+RESPONSE_DELIVERY_MODES: Final = {'D_SCENE': 'scene', 'D_SUMMARY': 'summary'}
+RESPONSE_TEMPORAL_LINKS: Final = {
+    'X_START': 'start', 'X_CONTINUE': 'continue', 'X_EARLIER': 'earlier',
+    'X_LATER': 'later', 'X_PARALLEL': 'parallel', 'X_RETURN': 'return',
+}
+RESPONSE_GOAL_INTENTS: Final = {
+    'G_ESTABLISH': 'establish', 'G_ADVANCE': 'advance', 'G_OPEN': 'open',
+    'G_CLOSE': 'close', 'G_WITHHOLD': 'withhold', 'G_RESOLVE': 'resolve',
+}
+
+#: 四张响应表与它们的产物表**逐格对齐**（顺序也对齐——渲染进 prompt 的就是这个顺序）。
+_PLAN_RESPONSE_ENUMS: Final = (
+    (RESPONSE_STRUCTURAL_ROLES, STRUCTURAL_ROLES, 'narrative_role'),
+    (RESPONSE_DELIVERY_MODES, DELIVERY_MODES, 'delivery'),
+    (RESPONSE_TEMPORAL_LINKS, TEMPORAL_LINKS, 'transition'),
+    (RESPONSE_GOAL_INTENTS, GOAL_INTENTS, 'intent'),
+)
+for _resp, _art, _field in _PLAN_RESPONSE_ENUMS:
+    assert tuple(_resp.values()) == tuple(_art), \
+        f'{_field} 的响应侧映射与产物侧取值面分家了——decode 会映到一个不存在的产物值'
+    assert len(set(_resp)) == len(set(_resp.values())), f'{_field} 的响应侧映射不是双射'
+
+#: ⚠⚠ **这条断言才是前缀化买的那件东西**：任意两个响应侧取值互不相等、
+#: **且互不为子串**——串表串出来的值必须在 schema 闸当场死掉，而不是在另一张表里合法。
+#: 一起比进来的还有 `TIME_LAYERS`（它的值出现在**下发面**上，`narrative_role='recall'`
+#: 就是从那里抄过来的）与 `HINGE_KINDS`。
+_PLAN_RESPONSE_KEYS: Final = tuple(
+    k for _resp, _a, _f in _PLAN_RESPONSE_ENUMS for k in _resp)
+for _a in _PLAN_RESPONSE_KEYS:
+    for _b in (*_PLAN_RESPONSE_KEYS, *TIME_LAYERS):
+        assert _a == _b or _a not in _b, \
+            f'响应侧取值 {_a!r} 是 {_b!r} 的子串——串表就不会在 schema 闸上死掉了'
+
 #: 「这一章大到该做一次结构决策」的源内容单元数下限（`R-5.6` 的 `structure_changed`）。
 #: ⚠⚠ **它同时是 prompt 与判据的唯一落点。** 从前 prompt 里那个 `4` 是**手抄的**，
 #: 判据侧 `checks.py` 另有一份行内字面量——两份数字各自漂的下场，`Q-6` 已经写过一遍。

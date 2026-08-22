@@ -23,7 +23,9 @@ import re
 from typing import Any
 
 from contracts.invariants import (
-    BEAT_MIN_CHARS, BOOK_BAND, GROUPING_VERSION, VERBATIM_BUDGET_FACTOR,
+    BEAT_MIN_CHARS, BOOK_BAND, GROUPING_VERSION, RESPONSE_DELIVERY_MODES,
+    RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES, RESPONSE_TEMPORAL_LINKS,
+    VERBATIM_BUDGET_FACTOR,
 )
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.beats import (
@@ -187,6 +189,81 @@ def verbatim_share_stats(plan: dict[str, Any], bidx: dict[str, dict[str, Any]]
 
     return {'n': len(shares), 'median': round(q(0.50), 3), 'p90': round(q(0.90), 3),
             'max': round(shares[-1], 3), 'threshold': round(1 / VERBATIM_BUDGET_FACTOR, 3)}, over
+
+
+#: 响应侧字段 → 它那张前缀映射表。**这四格就是 stage4 的「compiler」**
+#: （与 stage2 `compile_v2` 里那两段同型）。
+_RESPONSE_ENUM_FIELDS: dict[str, dict[str, str]] = {
+    'narrative_role': RESPONSE_STRUCTURAL_ROLES,
+    'delivery': RESPONSE_DELIVERY_MODES,
+    'transition': RESPONSE_TEMPORAL_LINKS,
+}
+_GOAL_KEYS = ('chapter_goal', 'open_hook_goal', 'end_hook_goal')
+
+
+def decode_plan_response(plan: dict[str, Any]) -> int:
+    """把响应侧的前缀枚举**就地**换成产物侧取值，返回换掉了几格。
+
+    ⚠⚠ **唯一映射落点**（`contracts/invariants.py::RESPONSE_STRUCTURAL_ROLES` 记着
+    为什么要前缀化，以及那次 6 次 wire 全灭的账）。第二处映射一旦出现，
+    两边就会在下一次改取值面时分家——`RESPONSE_TIME_LAYERS` 那次立的规矩就是这一条。
+
+    ⚠ **已经是产物值的原样过**：`--apply-edit` 的人工稿、`--revalidate` 的存量产物
+    走的是同一批字段，它们从来就没有前缀。两端的 schema 闸各守各的
+    （`PlanBeatResponse` 只收带前缀的、`PlanBeat` 只收产物值），
+    所以这里放行不会把一个坏值放进去——**不认识的值会在下一道闸上死**，
+    而在这里 `raise` 等于把两条路合并成一条，人工稿会当场炸。
+    """
+    hit = 0
+    for chapter in (plan.get('output_chapters') or []):
+        for key in _GOAL_KEYS:
+            goal = chapter.get(key)
+            if isinstance(goal, dict) and goal.get('intent') in RESPONSE_GOAL_INTENTS:
+                goal['intent'] = RESPONSE_GOAL_INTENTS[goal['intent']]
+                hit += 1
+        for beat in (chapter.get('segments') or []):
+            if not isinstance(beat, dict):
+                continue
+            for field, table in _RESPONSE_ENUM_FIELDS.items():
+                if (value := beat.get(field)) in table:
+                    beat[field] = table[value]
+                    hit += 1
+    return hit
+
+
+def encode_plan_baseline(chapter: dict[str, Any]) -> dict[str, Any]:
+    """反方向：产物侧取值 → 响应侧前缀值。**给定向修复的「现有章基线」用的。**
+
+    ⚠⚠ 不做这一步，修复那一路就会在同一份 user 里**自相矛盾**：system 要 `D_SCENE`，
+    基线块里印着 `scene`。模型照基线抄，schema 当场拒——而那一拒要花一次钱才看得见。
+    （stage2 `compile_v2` 回写 `--dry-run` 基线时踩的是同一格。）
+    ⚠ 就地改传进来的 dict，调用方负责先 `deepcopy`（`_response_baseline` 已经做了）。
+    """
+    back = {field: {v: k for k, v in table.items()}
+            for field, table in _RESPONSE_ENUM_FIELDS.items()}
+    goal_back = {v: k for k, v in RESPONSE_GOAL_INTENTS.items()}
+    for key in _GOAL_KEYS:
+        goal = chapter.get(key)
+        if isinstance(goal, dict) and goal.get('intent') in goal_back:
+            goal['intent'] = goal_back[goal['intent']]
+    for beat in (chapter.get('segments') or []):
+        if not isinstance(beat, dict):
+            continue
+        for field, table in back.items():
+            if (value := beat.get(field)) in table:
+                beat[field] = table[value]
+    return chapter
+
+
+def adopt_plan_response(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) -> int:
+    """**模型响应 → 产物形状的唯一入口**：先解前缀枚举，再展开编号。
+
+    ⚠ 顺序是承重的：`expand_plan_beats` 会把 `plan_beats` 弹掉、写 `slot`/`from_beats`，
+    此后这份 dict 就不再是「一份响应」了。两个动作分开写在两个调用点，
+    迟早会有一处只做一半——所以它们共用这一个入口。
+    """
+    decode_plan_response(plan)
+    return expand_plan_beats(plan, groups)
 
 
 def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) -> int:

@@ -27,13 +27,40 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 每个 `PlanChapterResponse` 必填：
 
 - `output_ordinal` 与唯一的 `from_source_ordinals[0]`；
-- typed `chapter_goal`、`open_hook_goal`、`end_hook_goal`；
+- typed `chapter_goal`、`open_hook_goal`、`end_hook_goal`（形状是 `PlanGoalResponse`）；
 - 非空 `segments[]`。
 
 模型响应中的每个写作单元包含 `plan_beats[]`、`narrative_role`、`delivery`、`transition`
 与正整数 `budget_chars`。`plan_beats[]` 引用下发的 `pNN_NN` 源内容单元，数组顺序就是
-重构后的叙述顺序。`expand_plan_beats` 必须确认编号存在、不重复、没有漏项，再展开成正式
-`from_beats[]`，并按规划顺序分配稳定 `slot=s01...`；不按源序重新排序。
+重构后的叙述顺序。
+
+**响应侧的四个枚举字段带前缀，与产物侧不是同一张表**（2026-08-22 起）：
+
+| 字段 | 响应侧取值 | 产物侧取值 |
+|---|---|---|
+| `narrative_role` | `R_COLD_OPEN` … `R_BRIDGE` | `cold_open` … `bridge` |
+| `delivery` | `D_SCENE` / `D_SUMMARY` | `scene` / `summary` |
+| `transition` | `X_START` … `X_RETURN` | `start` … `return` |
+| goal 的 `intent` | `G_ESTABLISH` … `G_RESOLVE` | `establish` … `resolve` |
+
+理由：这四张表在响应 JSON 里**串行相邻**且语义两两邻近，模型会串表，而串出来的值
+**在另一张表里是合法的** ⇒ schema 闸只能在整份响应收完之后才发现。实测代价两次——
+交接时 `delivery.summary` 串进 `narrative_role`；2026-08-22 一次全书规划出现
+`intent='turn'`×6 章、`narrative_role='recall'`（从骨架下发面抄的），整条降档梯走到底、
+**6 次 wire 全被内容闸拒、completion 86 150 全白花、0 产物**。手法与 stage2
+`extraction-ir-v1` 的 `T_PRESENT`/`P_EXPLICIT` 同型（那次读数是非法 enum 归零）。
+
+⚠ **产物侧取值一个字都不许出现在下发面上**——出现了模型就会照抄。
+`tests/test_stage4.py::test_no_artifact_side_enum_value_reaches_the_planner_prompt` 钉着。
+⚠ **映射只有一个落点**：`novel/stages/stage4/measure.py::decode_plan_response`，
+反方向 `encode_plan_baseline` 只给定向修复的「现有章基线」用（不回编码，同一份 user 里
+system 要 `D_SCENE`、基线印着 `scene`，模型照基线抄就被拒，而那一拒要花钱才看得见）。
+⚠ **已是产物值的原样过，不抛**：`--apply-edit` 的人工稿与 `--revalidate` 的存量产物
+从来没有前缀，两端的 schema 闸各守各的。
+
+`adopt_plan_response`（= `decode_plan_response` + `expand_plan_beats`）是模型响应进入
+产物形状的**唯一入口**：确认编号存在、不重复、没有漏项，再展开成正式 `from_beats[]`，
+并按规划顺序分配稳定 `slot=s01...`；不按源序重新排序。
 
 ## 二、`plan_chapters.json`
 
