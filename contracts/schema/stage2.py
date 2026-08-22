@@ -232,8 +232,9 @@ class ConflictStage(StrictModel):
     #: 必然含本阶段后几章才发生的结果（实测 ch16 拿到的摘要写着 ch20 才发生的事）。
     stage: str = Field(min_length=1)
 
-    #: 长度 1~5。**盘上 3/3 本恰好覆盖全部章、无重无缺**——
-    #: ⚠ 但**没有任何判据在查这件事**。
+    #: **逐章显式枚举**，不是区间端点：`[3, 5]` 不暗含第 4 章。
+    #: 全部阶段合起来必须让每个阅读序章号**恰好出现一次**；跨字段的不重不漏由
+    #: `conflict_stage_coverage` HARD 在产地按 Stage1 正文章集合校验（`R-2.14`）。
     chapters: list[int] = Field(min_length=1)
 
 

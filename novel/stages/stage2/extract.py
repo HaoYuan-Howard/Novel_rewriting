@@ -105,7 +105,7 @@ class _Both:
         self.main_text = _read_main_text(store)
 
     def judge(self) -> list[Outcome]:
-        """跑全部 75 条。**唯一判定落点**——落盘闸门与复检共用它。"""
+        """跑全部 74 条。**唯一判定落点**——落盘闸门与复检共用它。"""
         return checks.check(global_g=self.global_g, blueprints=self.blueprints,
                             main_text=self.main_text)
 

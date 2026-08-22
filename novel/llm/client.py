@@ -213,8 +213,8 @@ def _worth_resampling(resp: ChatResponse) -> bool:
     · `stage4.plan` 盘上 5 次带失败的跑里 **3 次是 `high→low→low/nothink→high`**：
       整条阶梯走完**再重来**，而最后成功的那次仍是 `high`。既然第 4 次 high 能过，
       第 2 次 high 就能过——中间两档是白花。
-    · 另 2 次以 `high→low` 收尾 ⇒ **最终计划产自降档档位**。那不是省钱是降质，
-      同 `docs/REQUIREMENTS.md` TODO-32「最终稿产自哪一档」那条读数。
+    · 另 2 次以 `high→low` 收尾 ⇒ **最终计划产自降档档位**。那不是省钱是降质；
+      当前由 `novel/llm/ledger.py::note_adoption` 的 `artifact_adoption` 事件记录最终采纳档位。
 
     盘上 22 次实付合计 completion 378 368，其中 **180 334（47.7%）** 花在没被采纳的档位上。
 

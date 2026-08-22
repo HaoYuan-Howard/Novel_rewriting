@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 71 条判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
+checks.py —— 74 条判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 两个节点的落盘闸门 / `--check-only` / `--renormalize` 之后的复检
 走的都是 `check()` 这一个函数，保证生成、重算与复检使用同一把尺子。
@@ -14,7 +14,7 @@ checks.py —— 71 条判据的**实现**。行在 `contracts/judges/stage2.py`
 
 【一张表，两个节点共用】`stage2.global` 判 R-2 那一族、`stage2.blueprint` 判 R-3 那一族，
 而**复检相两份产物一起读**（判 `canonical_unique` 要 global，判 `present_ids_dangling`
-要 registry）⇒ `check()` 一次产全部 75 条。缺哪一份，那一族落 `unver` **不是「通过」**。
+要 registry）⇒ `check()` 一次产全部 74 条。缺哪一份，那一族落 `unver` **不是「通过」**。
 
 【判据与产地必须用同一把尺子】本模块一处都不自己写解析：
 `surface_owners` / `surface_owner_since` / `resolve_present_names` / `classify_unattested`
@@ -715,7 +715,56 @@ def _canon(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 五、拍与区间（7 HARD · 2 INFO）+ 相关度量
+# 五、冲突阶段章覆盖（1 HARD）
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ARC_RULES = ('conflict_stage_coverage',)
+
+
+def _arc(c: _Ctx) -> list[Outcome]:
+    """`conflict_stages[].chapters` 是逐章显式枚举，不是区间端点。"""
+    if not c.has_gg:
+        return [unverifiable(rule, _NO_GLOBAL) for rule in _ARC_RULES]
+    if not c.has_mt:
+        return [unverifiable(rule, _NO_MAIN_TEXT) for rule in _ARC_RULES]
+
+    stages = ((c.gg.get('arc') or {}).get('conflict_stages') or [])
+    memberships: dict[Any, list[str]] = {}
+    for index, stage in enumerate(stages, 1):
+        label = str((stage or {}).get('stage') or f'第{index}段')
+        for chapter in ((stage or {}).get('chapters') or []):
+            memberships.setdefault(chapter, []).append(label)
+
+    expected = set(c.ords)
+    missing = sorted(expected - set(memberships))
+    extra = sorted((chapter for chapter in memberships if chapter not in expected), key=str)
+    duplicate = sorted(
+        ((chapter, labels) for chapter, labels in memberships.items() if len(labels) != 1),
+        key=lambda row: str(row[0]),
+    )
+    evidence = [f'missing:ch{chapter}' for chapter in missing]
+    evidence += [
+        f'extra:ch{chapter}@{"|".join(memberships[chapter])}' for chapter in extra
+    ]
+    evidence += [
+        f'duplicate:ch{chapter}@{"|".join(labels)}' for chapter, labels in duplicate
+    ]
+    findings = [finding(
+        'conflict_stage_coverage',
+        detail=(f'{len(stages)} 个冲突阶段没有把 {len(c.ords)} 章恰好各列一次：'
+                f'缺 {missing}，越界 {extra}，重复 '
+                f'{[(chapter, labels) for chapter, labels in duplicate]}'),
+        evidence=evidence,
+    )] if evidence else []
+    return [ran(
+        'conflict_stage_coverage', findings,
+        scanned=(f'{len(stages)} 个阶段 / {len(c.ords)} 章 / '
+                 f'{sum(len(labels) for labels in memberships.values())} 次显式章号声明'),
+    )]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 六、拍与区间（7 HARD · 2 INFO）+ 相关度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BEAT_RULES = ('beat_id_unique', 'beat_id_format', 'span_unlocatable',
@@ -977,7 +1026,7 @@ def _verbatim(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 六、保真材料（6 HARD · 1 INFO）+ 密度度量
+# 七、保真材料（6 HARD · 1 INFO）+ 密度度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _HINGE_RULES = ('hinge_cross_chapter', 'hinge_in_hole', 'hinge_anchor_void', 'hinge_drift',
@@ -1112,7 +1161,7 @@ def _hinges(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 七、在场与叙述（8 HARD · 6 INFO）+ 度量
+# 八、在场与叙述（8 HARD · 6 INFO）+ 度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PRESENT_RULES = (
@@ -1568,12 +1617,12 @@ def _present(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 八、入口
+# 九、入口
 # ─────────────────────────────────────────────────────────────────────────────
 
 def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
           main_text: list[dict[str, Any]] | None) -> list[Outcome]:
-    """对两份 stage2 产物跑全部 75 条确定性判据 → `[Outcome]`。
+    """对两份 stage2 产物跑全部 74 条确定性判据 → `[Outcome]`。
 
     **一条判据恰好一个 `Outcome`，一条都不许少**：`build()` 遍历判据注册表，
     注册了而这里没产出 ⇒ 强制 `skipped`，徽章至少 amber。
@@ -1582,5 +1631,5 @@ def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
     对应的判据落 `unver` 并说出**是缺哪一份**，而不是悄悄不报。
     """
     c = _Ctx(global_g, blueprints, main_text)
-    return [*_alignment(c), *_addresses(c), *_roles(c), *_canon(c),
+    return [*_alignment(c), *_addresses(c), *_roles(c), *_canon(c), *_arc(c),
             *_beats(c), *_hinges(c), *_present(c)]

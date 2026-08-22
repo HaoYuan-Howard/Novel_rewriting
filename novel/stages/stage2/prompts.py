@@ -208,6 +208,8 @@ secrets[]：{secret_id(secret_01…), fact, character_known_by[](世界内谁知
 ────────── ③ arc（弧线） ──────────
 conflict_stages[]：{stage(阶段名), chapters[阅读序章号]} —— 故事的经过分段。阶段名要能定位（「政治清算」「新婚试探」），
   不要写成对整段经过的复述：那必然包含本阶段后几章才发生的结果。
+  chapters 必须把本阶段的**每一章逐个显式列全**，不能用 `[3,5]` 省略中间的第 4 章；
+  全部阶段合起来必须让 1..末章**每章恰好出现一次**，无缺章、无重章、无越界章。
 climax：高潮。 ending：结局。
 arc_tracks[]：【多轨迹】{subject(char_id|"reader"|relation_id), dimension, change_type($CHANGE_TYPES), trajectory}。
   能同时表达「主角立场不变(stable) + 读者对主角认知反转(revelation) + 某关系恶化(deterioration)」等并存轨迹，不要默认「主角必须成长」。

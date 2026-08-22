@@ -19,6 +19,11 @@ def test_all_three_current_prompt_arms_are_rendered():
     assert '$' not in prompts.GLOBAL_SYS + prompts.BLUEPRINT_SYS + prompts.ROLE_SPLIT_SYS
 
 
+def test_global_prompt_requires_an_explicit_exact_chapter_partition():
+    assert '每一章逐个显式列全' in prompts.GLOBAL_SYS
+    assert '每章恰好出现一次' in prompts.GLOBAL_SYS
+
+
 def test_removed_narration_fields_are_absent_from_model_surfaces():
     for surface in (prompts.BLUEPRINT_SYS, str(prompts.BLUEPRINT_HINT)):
         assert 'last_beat_id' not in surface
