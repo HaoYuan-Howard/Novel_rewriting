@@ -7,15 +7,17 @@ client.py —— `ask_text` / `ask_json`。**降级阶梯只有一份，两个�
 
   ① **答案流丢了。** DeepSeek 会把整段答案写进 `reasoning_content` 而 `content` 返回**空串**，
      `finish_reason='stop'`——**不是截断**。实测：模型把整章正文写进了推理里。
-     ⚠ 不从 `reasoning` 里把答案抠出来。**但那句老理由已经不成立了，别再照抄**：
-       「里面混着推敲过程、救回来是半成品」——2026-08-22 的留证把它证伪了。实测
-       （`stage4.plan` / flash / `high`，3 份留证，`docs/REQUIREMENTS.md` TODO-40）：
-       推理通道里那段**整体就是一份合法 JSON**，23 章齐全、括号配平、**一个字推敲过程
-       都没混进去**，其中 1 份**完全合 `PlanResponse` 契约**——那一次丢掉的是一份**可用的计划**。
-       旧说法的射程其实只到「从没测过」：空响应根本不落盘，没有任何人看得见那段。
-       ⇒ **行为一格未改**，规矩仍然是不抠。改不改是**产品语义裁决**，不是一句注释能改的：
-       n=3、一本书、一个节点、一个档位，且只量过 `ask_json` 这一侧——
-       `ask_text` 的自然语言响应是不是同样形状，一次都没量过。
+     ⚠⚠ **2026-08-22 起 `ask_json` 这一侧会把它接住**（`SALVAGE_ANSWER_FROM_REASONING`，
+       用户裁决，TODO-40 落地）：`content` 空而 `reasoning` 那段**整体过得了同一套闸**
+       （`json.loads` → `require` → `model_validate` → 调用点 `validator`）时**采纳它**，
+       不再重采一次。依据是留证 5/5 份横跨两个 `json_mode` 臂——推理通道里那段整体就是
+       一份合法 JSON，23 章齐全、括号配平、一个字推敲过程都没混进去，其中 1 份完全合
+       `PlanResponse` 契约。⇒ 老理由「里面混着推敲过程、救回来是半成品」**已证伪**，
+       它的射程其实只到「从没测过」：空响应从前根本不落盘，没有任何人看得见那一段。
+     ⚠ **`ask_text` 那一侧仍然不抠，而且这不是遗漏**：它一次都没量过，且**没有等价的
+       客观闸**——JSON 那边「解析得动 + 合契约」是可判的证据，自然语言那边「这段是答案
+       还是推敲」判不出来。两条边界与两条已知代价都写在 `SALVAGE_ANSWER_FROM_REASONING`。
+     ⚠ **捞不动时走法逐字未变**：`_answer_lost` 与 `_worth_resampling` 一行没动。
      ⇒ 2026-08-22 起它在账上**有自己的名字**（闸名 `answer_lost`，见 `REJECT_GATES`），
        且整份响应会落一份留证（`novel/paths.py::answer_lost_path`）。在此之前它与
        ②「JSON 被截断」共用 `parse` 一格，而这两类的处置正好相反。
@@ -129,6 +131,41 @@ NOTHINK_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('low', False),)
 #: ⇒ 要再关，先补足样本（两臂各 n≈8 才判得到 p<0.05），别再拿 n=4 那组数当依据。
 JSON_OBJECT_MODE: Final = True
 
+#: 正文空、而**推理通道里那一份整体过得了同一套闸**时，采不采纳它。**采纳**（TODO-40）。
+#:
+#: ⚠⚠ **2026-08-22 之前这里的规矩是「不抠」，而那条规矩的理由已经被自己的留证推翻。**
+#: 老理由是「reasoning 里混着推敲过程，救回来是半成品」——留证 **5/5 份横跨两个
+#: `json_mode` 臂**：推理通道里那段**整体就是一份合法 JSON**，23 章齐全、括号配平、
+#: **一个字推敲过程都没混进去**，其中 1 份**完全合 `PlanResponse` 契约**。
+#: 也就是说：那一次丢掉的是一份**可用的计划**，然后又付了一次钱去重采。
+#: 老理由的射程其实只到「从没测过」——空响应根本不落盘，没有任何人看得见那一段；
+#: 是 2026-08-22 的留证（`novel/llm/keepsake.py`）第一次让它落了盘。
+#:
+#: 【采纳的边界，三条都承重】
+#: ① **只在 `ask_json` 这一侧**。`ask_text` 一次都没量过，而它**没有等价的客观闸**：
+#:    JSON 那边「解析得动 + 合契约」是可判的证据，自然语言那边「这段是答案还是推敲」
+#:    判不出来。⇒ 结构上就不给 `ask_text` 开这条路（捞的代码只在 `ask_json` 里）。
+#: ② **走完整的四道闸**（`json.loads` → `require` → `model_validate` → 调用点
+#:    `validator`），不是「解析得动就用」。采纳进来的东西必须与正常路径的产物**同质**，
+#:    否则这条路就是在契约上开一个后门。
+#: ③ **只在 `_answer_lost` 为真时捞**（正文空**且非截断**）。截断那一半的 `reasoning`
+#:    自己也是半截的，捞它只会把 ② 的处置（腾预算）搅进来。
+#:
+#: 【两条已知代价，认下来不掩盖】
+#: · **捞成功的那一份仍然进不了缓存**：`ResponseCache.put` 拒写空正文（那是对的），
+#:   而把捞出来的文本塞进 `content` 再存等于**改写供应商的响应** ⇒ 缓存里的东西
+#:   与账本 `response_sha256` 分家。⇒ 不动缓存：这条路省的是**本次的重采**，
+#:   不是下次重跑的钱。
+#: · **账上必须分得出来**：`gate_decision` 与 `answer_lost` 两种审计行都带 `salvaged`，
+#:   否则事后答不了「这本书有几章的产物是从推理通道里捞出来的」。留证照写不误——
+#:   这条路新、有产品语义争议，头几次跑必须能完整复核。
+#:
+#: ⚠ **翻这一位不会让缓存作废**（与 `JSON_OBJECT_MODE` 的关键区别）：它不进
+#: `cache_payload`，因为它一个字都不改请求，只改我们怎么读回来的那一份。
+#: ⚠ **判定式一行没动**：`_answer_lost` 与 `_worth_resampling` 与从前逐字相同——
+#: 捞不动时的走法（同档重采、再降档）与 2026-08-22 之前完全一样。
+SALVAGE_ANSWER_FROM_REASONING: Final = True
+
 #: 答案流丢失（模块 docstring ①）时，同一档最多采几个样本。**2 = 首发 + 一次重采。**
 #:
 #: ⚠ 这是「重采」不是「重试」：重试扛**网络**（`_send_attempts`，429/5xx/超时），
@@ -136,6 +173,25 @@ JSON_OBJECT_MODE: Final = True
 #: （合并一次网络抖动就会烧掉两份采样预算）。`tools/current_corpus_paid_preview.py`
 #: 按这一格放大 wire 硬上限——改它必须同批改那边的口径。
 MAX_SAMPLES_PER_RUNG: Final = 2
+
+#: **服务端资源中断**。DeepSeek 在这一格里说的是「这次没做完，可以安全重试」。
+#:
+#: ⚠⚠ **它归传输层重试那条循环，不归内容闸**（三条循环各管各的，见模块 docstring 末段）。
+#: 判据是「这一份是不是一次做完了的请求」，不是「这份内容能不能用」：
+#: HTTP 是 200、`usage` 是真的、钱也花了，但服务端自己声明这一次被资源中断了 ⇒
+#: 它与 429/5xx/超时同族（等一下再来），**不是** ①答案流丢失（换样本）、
+#: 也不是 ②截断（腾预算）。
+#: ⇒ 落 `_send_attempts` 的成功分支里退避重试：**不消耗采样预算**
+#: （`MAX_SAMPLES_PER_RUNG`）、**不推向降档**、内容闸根本看不到它。
+#: 走错循环的代价是不对称的：判成 `answer_lost` 的话，两次资源中断就能把一个付费节点
+#: 推进 `low` 档（`stage4.plan` 在 low 上有已知劣化），而它一次模型行为问题都不是。
+#:
+#: ⚠ **本仓 880 行账本里出现 0 次**（`finish_reason` 只有 `stop` 814 / `length` 30 /
+#: `None`+connection 36）⇒ 这一格是**照文档预备的**，不是从实测反推的。
+#: 它便宜（一个常量 + 一个分支）而漏了很贵，所以先摆上。
+#: ⚠ **不新增账本字段**：账本本来就有 `finish_reason` 列，`grep` 得出来；
+#: 而 `will_retry` / `backoff_ms` 两列的语义与网络重试逐字相同。
+RESOURCE_INTERRUPTED: Final = 'insufficient_system_resource'
 
 
 def _worth_resampling(resp: ChatResponse) -> bool:
@@ -232,6 +288,10 @@ DEFAULT_MAX_TOKENS: Final = 64_000
 #: pro 255 次里 0 次——一个只在**一个模型的一个档位**上出现的失败模式，
 #: 在账面上和「JSON 被截断」长得一模一样。⇒ 按 `finish_reason` 劈开，两边各有名字。
 #: ⚠ 劈的是**账**不是**判定**：`_worth_resampling` 一行没动（见 `_answer_lost`）。
+#: ⚠⚠ **2026-08-22 起 `answer_lost` 有两种结局**（`SALVAGE_ANSWER_FROM_REASONING`）：
+#: 推理通道那份过得了同一套闸 ⇒ **采纳**（审计账 `decision=accepted` + `gate=None` +
+#: `salvaged=True`）；过不了 ⇒ 照旧按本表这一格拒。⇒ 数「答案流丢失害我们付了几次重采」
+#: 要看 `salvaged` 那一位，光数这个闸名会把被救回来的那些次算成损失。
 REJECT_GATES: Final[tuple[str, ...]] = (
     'answer_lost',  # ⓪ 正文空而**不是截断**：答案写进了 reasoning（模块 docstring ①）
     'parse',        # ① json.loads 失败——截断的典型形态（finish_reason='length'）
@@ -598,35 +658,24 @@ class LlmClient:
         self._preflight(system, user, rungs=active_rungs, json_mode=JSON_OBJECT_MODE,
                         max_tokens=max_tokens, purpose=purpose)
 
-        def inspect_response(resp: ChatResponse) -> tuple[
-                M | None, str | None, str, str, list[dict[str, Any]] | None]:
-            """⚠ 第四个返回值是**闸名**（`REJECT_GATES` 之一），不是给人读的。
-            `why` 那句话事后要靠人读才能归类，而降档统计要能机器数。
+        def gate_payload(text: str, resp: ChatResponse) -> tuple[
+                M | None, str | None, str, list[dict[str, Any]] | None]:
+            """三道闸（+ 调用点那道可选的第四道）判**一段已经归一过的正文**。
 
-            ⚠⚠ 第五个是**结构化拒因摘要**，进审计账（`gate_decision.reject_detail`）。
-            它与 `why` 的分工是承重的：`why` 只进 stdout 事件，而 stdout **会随进程
-            一起没**——2026-08-22 那次整跑被超时杀掉之后，账上只剩 `gate: schema`
-            四个字，两次拒到底拒在哪个字段**再也查不出来**（`docs/REQUIREMENTS.md`
-            TODO-38 记的正是这个洞，那天现场咬了一口）。⇒ 能机器数的那一半必须落账。
+            ⚠ 它与 `inspect_response` 的分工是承重的：这里只回答「这段文本能不能用」，
+            **不问它是从哪个通道来的**。⇒ 从 `content` 来的那份与从 `reasoning` 里
+            捞出来的那份走的是**同一套闸、同一份 `require`、同一个 `model_cls`**
+            （`SALVAGE_ANSWER_FROM_REASONING` 边界②）。两条路各写一遍判定，
+            就是给捞出来的那份开了一个自己的契约。
             """
-            content = _strip_fences(resp.content)
-            if not content:
-                # ⓪ 空正文若照旧往下走，`json.loads('')` 必然抛 ⇒ 落进 `parse`，
-                # 把「答案流丢了」与「JSON 被截断」记成同一格（见 `REJECT_GATES`）。
-                # ⚠ 先劈开再解析，而**不是**事后按 `finish_reason` 改写闸名：
-                # 那样一来 `parse` 这一格的含义会取决于读的人记不记得改写规则。
-                lost = _answer_lost(content, resp)
-                return None, '正文为空', content, ('answer_lost' if lost else 'parse'), (
-                    None if lost
-                    else [{'loc': '', 'type': 'empty_body_truncated', 'count': 1}])
-            why = None
-            obj = None
+            why: str | None = None
+            obj: M | None = None
             gate = 'parse'
             detail: list[dict[str, Any]] | None = None
             try:
-                data = json.loads(content)
+                data = json.loads(text)
             except json.JSONDecodeError as e:
-                why, detail = f'解析失败: {e}', _parse_detail(e, content, resp)
+                why, detail = f'解析失败: {e}', _parse_detail(e, text, resp)
             else:
                 missing = [k for k in require
                            if not isinstance(data, dict) or k not in data
@@ -646,7 +695,53 @@ class LlmClient:
                         if validator is not None:
                             why, gate = validator(obj, resp), 'validator'
                             # 调用点自带那道闸只交回一句人话，没有可机器数的结构 ⇒ 不编。
-            return obj, why, content, gate, detail
+            return obj, why, gate, detail
+
+        def inspect_response(resp: ChatResponse) -> tuple[
+                M | None, str | None, str, str, list[dict[str, Any]] | None, bool]:
+            """⚠ 第四个返回值是**闸名**（`REJECT_GATES` 之一），不是给人读的。
+            `why` 那句话事后要靠人读才能归类，而降档统计要能机器数。
+
+            ⚠⚠ 第五个是**结构化拒因摘要**，进审计账（`gate_decision.reject_detail`）。
+            它与 `why` 的分工是承重的：`why` 只进 stdout 事件，而 stdout **会随进程
+            一起没**——2026-08-22 那次整跑被超时杀掉之后，账上只剩 `gate: schema`
+            四个字，两次拒到底拒在哪个字段**再也查不出来**（`docs/REQUIREMENTS.md`
+            TODO-38 记的正是这个洞，那天现场咬了一口）。⇒ 能机器数的那一半必须落账。
+
+            ⚠⚠ 第六个是 `salvaged`：**这一份正文是从推理通道里捞回来的**
+            （`SALVAGE_ANSWER_FROM_REASONING`）。它一路带到 `_settle_gate` 与留证，
+            因为事后必须答得了「这本书有几章的产物不是从 `content` 来的」——
+            答不了的话，这条路就是在产物里掺了一种看不见的东西。
+            """
+            content = _strip_fences(resp.content)
+            if content:
+                obj, why, gate, detail = gate_payload(content, resp)
+                return obj, why, content, gate, detail, False
+            # ⓪ 空正文若照旧往下走，`json.loads('')` 必然抛 ⇒ 落进 `parse`，
+            # 把「答案流丢了」与「JSON 被截断」记成同一格（见 `REJECT_GATES`）。
+            # ⚠ 先劈开再解析，而**不是**事后按 `finish_reason` 改写闸名：
+            # 那样一来 `parse` 这一格的含义会取决于读的人记不记得改写规则。
+            lost = _answer_lost(content, resp)
+            salvage_note = ''
+            if lost and SALVAGE_ANSWER_FROM_REASONING:
+                # ⚠ 捞的是**同一套闸**，不是「解析得动就用」（见
+                #   `SALVAGE_ANSWER_FROM_REASONING` 边界②）。
+                salvaged_text = _strip_fences(resp.reasoning)
+                if salvaged_text:
+                    obj, why, _gate, _detail = gate_payload(salvaged_text, resp)
+                    if why is None:
+                        # ⚠ 闸名仍报 `answer_lost`：这一次**确实**是答案流丢了，
+                        #   只是我们把它接住了。采纳与否由 `why is None` 决定，
+                        #   而 `salvaged` 那一位让账上分得出这份产物的来路。
+                        return obj, None, salvaged_text, 'answer_lost', None, True
+                    # ⚠ 捞不动**不改这一次的拒因**：事实仍是「正文为空」。
+                    #   捞的拒因只附一句给现场看，不进 `reject_detail`——
+                    #   那一格答的是「这一份被拒在哪个字段」，而被拒的是空正文。
+                    salvage_note = f'；推理通道那份也不合用（{why[:60]}）'
+            return None, '正文为空' + salvage_note, content, (
+                'answer_lost' if lost else 'parse'), (
+                None if lost
+                else [{'loc': '', 'type': 'empty_body_truncated', 'count': 1}]), False
 
         errors: list[str] = []
 
@@ -659,14 +754,21 @@ class LlmClient:
             if got is None:
                 continue
             resp, key, attempt_id = got
-            obj, why, content, gate, detail = inspect_response(resp)
-            head = (f'effort={effort} think={thinking} [缓存] '
+            obj, why, content, gate, detail, salvaged = inspect_response(resp)
+            head = (f'effort={effort} think={thinking} [缓存]'
+                    f'{"（捞自推理通道）" if salvaged else ""} '
                     f'finish={resp.finish_reason} clen={len(content)}')
             if why is None:
                 self._settle_gate(
                     purpose=purpose, attempt_id=attempt_id, source='cache',
                     accepted=True, gate=None, rungs=active_rungs, index=i,
-                    progress=progress)
+                    salvaged=salvaged, progress=progress)
+                if salvaged:
+                    self._keep_answer_lost(
+                        purpose=purpose, attempt_id=attempt_id, source='cache',
+                        effort=effort, thinking=thinking, json_mode=JSON_OBJECT_MODE,
+                        index=i, sample=None, resample=False, resp=resp,
+                        progress=progress, salvaged=True)
                 return obj
             self.cache.evict(key)
             self._settle_gate(
@@ -687,16 +789,28 @@ class LlmClient:
                     system, user, effort=effort, thinking=thinking, json_mode=JSON_OBJECT_MODE,
                     max_tokens=max_tokens, purpose=purpose, use_cache=False,
                     progress=progress, cache_policy=policy)
-                obj, why, content, gate, detail = inspect_response(resp)
+                obj, why, content, gate, detail, salvaged = inspect_response(resp)
                 head = (f'effort={effort} think={thinking}'
-                        f'{"（重采）" if sample > 1 else ""} '
+                        f'{"（重采）" if sample > 1 else ""}'
+                        f'{"（捞自推理通道）" if salvaged else ""} '
                         f'finish={resp.finish_reason} clen={len(content)}')
                 if why is None:
+                    # ⚠ 捞回来的那一份**存不进缓存**：`ResponseCache.put` 拒写空正文，
+                    #   而把捞出来的文本塞进 `content` 再存等于改写供应商的响应
+                    #   （见 `SALVAGE_ANSWER_FROM_REASONING` 的两条已知代价）。
+                    #   这里照常调 `_keep`：拒写发生在 `put` 那一侧，不在这里分岔。
                     self._keep(key, resp, cache_policy=policy)
                     self._settle_gate(
                         purpose=purpose, attempt_id=attempt_id, source='wire',
                         accepted=True, gate=None, rungs=active_rungs, index=i,
-                        sample=sample, progress=progress)
+                        sample=sample, salvaged=salvaged, progress=progress)
+                    if salvaged:
+                        self._keep_answer_lost(
+                            purpose=purpose, attempt_id=attempt_id, source='wire',
+                            effort=effort, thinking=thinking,
+                            json_mode=JSON_OBJECT_MODE, index=i, sample=sample,
+                            resample=False, resp=resp, progress=progress,
+                            salvaged=True)
                     return obj
                 # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
                 self.cache.evict(key)
@@ -790,7 +904,8 @@ class LlmClient:
                           effort: str, thinking: bool, json_mode: bool,
                           index: int, sample: int | None, resample: bool,
                           resp: ChatResponse,
-                          progress: RequestProgress | None) -> None:
+                          progress: RequestProgress | None,
+                          salvaged: bool = False) -> None:
         """留证 + 记指针。**正文只进留证文件，账上只有指针与长度读数。**
 
         留证落在**书目录**下（`novel/paths.py::answer_lost_path`）而不是跨书的
@@ -801,6 +916,11 @@ class LlmClient:
         是这一类的**服务端自证**（答案整份记在了推理侧），而它与 `reasoning` 的
         字数一起才说得清「模型是没干活还是走错通道」。
         ⚠ token 数不抄进审计账（那是成本账那一行的，见 `note_answer_lost`）。
+
+        ⚠⚠ **`salvaged=True` 时这一份被采纳了，留证照写不误。**
+        那时它已经不是「丢失的证据」而是**被采纳产物的来源**——更该留：这条路新、
+        有产品语义争议，头几次跑必须能逐字复核「捞回来的到底是什么」。
+        ⇒ 判断一次 `answer_lost` 是丢了还是接住了，看这一位，不看有没有这行。
         """
         payload: dict[str, Any] = {
             'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
@@ -809,6 +929,7 @@ class LlmClient:
             'reasoning_effort': effort, 'thinking': thinking, 'json_mode': json_mode,
             'rung_index': index, 'sample': sample, 'resample': resample,
             'chapter': progress.chapter if progress else None,
+            'salvaged': salvaged,
             'finish_reason': resp.finish_reason,
             'model': resp.model,
             'usage': resp.usage,
@@ -822,6 +943,7 @@ class LlmClient:
             attempt_id=attempt_id, source=source,
             reasoning_effort=effort, thinking=thinking, json_mode=json_mode,
             rung_index=index, sample=sample, resample=resample,
+            salvaged=salvaged,
             finish_reason=resp.finish_reason,
             content_chars=len(resp.content or ''),
             reasoning_chars=len(resp.reasoning or ''),
@@ -833,6 +955,7 @@ class LlmClient:
                      rungs: tuple[tuple[str, bool], ...], index: int,
                      sample: int | None = None, resample: bool = False,
                      detail: list[dict[str, Any]] | None = None,
+                     salvaged: bool = False,
                      progress: RequestProgress | None) -> None:
         """内容闸的判定落**审计账**（`gate_decision` 行），采纳时同时登记
         `purpose → attempt_id`，供落盘方写 `artifact_adoption` 行时反查。
@@ -845,6 +968,11 @@ class LlmClient:
         `gate: schema` 四个字——两次拒到底拒在哪个字段**再也查不出来**
         （`docs/REQUIREMENTS.md` TODO-38）。⇒ 能机器数的那一半落账，人读的那一半留给事件。
         ⚠ 它**只带 `loc` + `type` + 计数**，不带模型正文（见 `_schema_detail`）。
+
+        ⚠⚠ **`salvaged` 说的是这份正文的来路**（`SALVAGE_ANSWER_FROM_REASONING`）：
+        `True` = 它是从推理通道里捞回来的，不是从 `content` 来的。这一位必须落账——
+        否则「这本书有几章的产物不是走正常通道产出的」事后答不了，而那正是这条路
+        全部的产品语义争议所在。
         """
         effort, thinking = rungs[index]
         self.ctx.ledger.note_gate(
@@ -855,6 +983,7 @@ class LlmClient:
             reasoning_effort=effort, thinking=thinking, rung_index=index,
             sample=sample, resample=resample,
             reject_detail=None if accepted else detail,
+            salvaged=salvaged,
             chapter=progress.chapter if progress else None)
         if accepted:
             with self._adopt_lock:
@@ -1058,16 +1187,34 @@ class LlmClient:
                     raise
                 else:
                     latency_ms = max(0, round((self._clock() - started) * 1000))
+                    # ⚠ 服务端资源中断走**本循环**（退避重试），不交给内容闸——见
+                    #   `RESOURCE_INTERRUPTED`。记账走成功分支（`usage` 是真的、
+                    #   钱花了），靠 `finish_reason` 列分辨，不新增字段。
+                    interrupted = resp.finish_reason == RESOURCE_INTERRUPTED
+                    will_retry = interrupted and attempt < max_attempts
+                    if will_retry:
+                        backoff_seconds = self.backoff_base * (2 ** attempt_index)
                     try:
                         self._record_wire(
                             req, resp, error=None, purpose=purpose, attempt=attempt,
                             max_attempts=max_attempts, latency_ms=latency_ms,
-                            will_retry=False, backoff_ms=None,
+                            will_retry=will_retry,
+                            backoff_ms=(round(backoff_seconds * 1000)
+                                        if backoff_seconds is not None else None),
                             attempt_id=attempt_id, progress=progress,
                             cache_policy=cache_policy)
                     finally:
                         heartbeat.finish(outcome='ok')
-                    return resp, attempt_id
+                    if not interrupted:
+                        return resp, attempt_id
+                    if not will_retry:
+                        raise LlmFailed(
+                            f'{self.ctx.node}/{purpose}: 服务端资源中断'
+                            f'（`finish_reason={RESOURCE_INTERRUPTED}`），'
+                            f'{max_attempts} 次上线都没做完。'
+                            '⚠ 这几次**已经计费**（账本同 `attempt_id` 那几行带 usage）——'
+                            '与连接故障那种「没到达模型、不计费」不是一回事。'
+                            '等一下同参数重跑即可：逐章节点天然增量，只补缺的那些。')
             # ⚠ 睡在信号量**外面**：在闸里睡会把整跑串行化（并发闸守的是钱，不是速率）。
             assert backoff_seconds is not None
             self._sleep(backoff_seconds)

@@ -293,6 +293,7 @@ class CostLedger:
                   sample: int | None = None,
                   resample: bool = False,
                   reject_detail: list[dict[str, object]] | None = None,
+                  salvaged: bool = False,
                   chapter: int | None = None) -> None:
         """内容闸对**一次已获取的响应**（wire 或缓存）的判定，各记一行。
 
@@ -308,6 +309,12 @@ class CostLedger:
         ⚠ 它**不带模型正文**：`input` 不取、`msg` 也不取（`msg` 会把 `input` 插值进去）。
         这份账与产物同一棵目录树，正文外发边界管的是同一批字节。
         ⚠ `accepted` 的行恒 `None`——「过了」没有拒因，写个空列表会让统计多一格。
+
+        ⚠⚠ **`salvaged` 答的是「这份正文从哪个通道来」**
+        （`novel/llm/client.py::SALVAGE_ANSWER_FROM_REASONING`）：`True` = `content`
+        是空的、这一份是从 `reasoning` 里捞回来并过了同一套闸的。
+        它与 `gate` 正交：捞成功的那一行是 `decision=accepted` + `gate=None` +
+        `salvaged=True`。**不落这一位，「有几章的产物不是走正常通道产出的」事后就答不了。**
         """
         self._append_audit({
             'kind': 'gate_decision',
@@ -323,6 +330,7 @@ class CostLedger:
             'sample': sample,
             'resample': resample,
             'reject_detail': reject_detail,   # [{loc, type, count}, …]；accepted 时 None
+            'salvaged': salvaged,              # True = 正文捞自推理通道，不是 content
             'chapter': chapter,
         })
 
@@ -334,6 +342,7 @@ class CostLedger:
                          rung_index: int | None = None,
                          sample: int | None = None,
                          resample: bool = False,
+                         salvaged: bool = False,
                          finish_reason: str | None = None,
                          content_chars: int = 0,
                          reasoning_chars: int = 0,
@@ -352,6 +361,11 @@ class CostLedger:
         留证文件里另存一份供应商原样的 `usage`，那是**证据**不是账。
         ⚠ `dump=None` + `dump_error` = 证据没写成（盘满 / 路径超长 / 权限）。
         留证失败**不许**让一次已经付过钱的调用抛掉 ⇒ 失败也要留下这一行说清楚。
+
+        ⚠⚠ **`salvaged=True` 的这一行说的不是「丢了」而是「接住了」**：那一份被
+        `SALVAGE_ANSWER_FROM_REASONING` 捞出来、过了同一套闸、并且**被采纳了**。
+        ⇒ 数「答案流丢失害我们付了多少次重采」时要**排除**这一位为真的行，
+        否则会把这条路救回来的那些次算成损失。
         """
         self._append_audit({
             'kind': 'answer_lost',
@@ -365,6 +379,7 @@ class CostLedger:
             'rung_index': rung_index,
             'sample': sample,
             'resample': resample,
+            'salvaged': salvaged,              # True = 捞回来并采纳了，不是丢了
             'finish_reason': finish_reason,
             'content_chars': content_chars,
             'reasoning_chars': reasoning_chars,

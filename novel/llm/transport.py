@@ -103,13 +103,13 @@ class ChatRequest:
 class ChatResponse:
     """一次调用的结果。
 
-    ⚠ `reasoning` 存下来但**永不用来救场**：实测 DeepSeek 会把整段答案写进
-    `reasoning_content` 而 `content` 返空。它用来在报错时说清「模型不是没干活，
-    是答案流丢了」，以及落一份留证（`novel/llm/keepsake.py`）。
-    ⚠⚠ 「救回来是半成品（里面混着推敲过程）」这个**理由**已被 2026-08-22 的留证证伪
-    （3/3 是完整 JSON、23 章齐全，其中 1 份完全合契约）——**但行为不变**。
-    改不改是产品语义裁决：见 `novel/llm/client.py` 模块 docstring ① 与
-    `docs/REQUIREMENTS.md` TODO-40。
+    ⚠⚠ **`reasoning` 现在会用来救场，但只在 `ask_json` 那一侧**
+    （`novel/llm/client.py::SALVAGE_ANSWER_FROM_REASONING`，2026-08-22 用户裁决）：
+    实测 DeepSeek 会把整段答案写进 `reasoning_content` 而 `content` 返空，
+    而那一段**整体过得了同一套闸**时就采纳它，不再多付一次重采。
+    ⚠ `ask_text` 那一侧仍然不抠（自然语言没有等价的客观闸），所以这个字段的另外两个
+    用途照旧：报错时说清「模型不是没干活，是答案流丢了」，以及落一份留证
+    （`novel/llm/keepsake.py`）——捞成功时留证也照写，那时它是**被采纳产物的来源**。
     """
 
     content: str | None
