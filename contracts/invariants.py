@@ -1341,10 +1341,15 @@ class NodeSpec(NamedTuple):
     # 本节点钉死的模型 id；'' = 跟随全局默认（`novel/config.py::DEFAULT_MODEL`，
     # 可被 `DEEPSEEK_MODEL` 覆盖——A/B 换臂的显式口）。
     # ⚠ **只有「产品裁决过、不许被环境变量静默翻转」的节点才许填非空**：
-    #   2026-08-19/20 用户裁决「除语义判官外全链 flash」，而判官例外必须长成形状
+    #   2026-08-19/20 用户裁决「除语义判官外全链 flash」，而例外必须长成形状
     #   而不是纪律——此前靠每条命令记得带 `DEEPSEEK_MODEL`，忘一次就静默烧成
-    #   flash 判官，账本事后才看得出来。实测依据见 `docs/BACKEND_CONTRACT.md`
-    #   §十 2026-08-20 那一行（flash 判官把唯一与正文矛盾的候选排成第一名）。
+    #   flash 判官，账本事后才看得出来。
+    # ⚠⚠ **现有两个钉死值，而它们的理由不是同一个**，不许互相援引：
+    #   · `stage6.semantic` = **判官给不出有区分度的证据**（质量死刑，2026-08-20）。
+    #   · `stage4.plan`     = **重采粒度**（2026-08-22）：它是全链唯一一个全书一次
+    #     调用的生成节点，一次 `answer_lost` 重采就是整本书。逐章节点有同档重采
+    #     这张便宜的网（实测 4/4 第二个样本就过、一次没掉档），它没有。
+    #   两条实测依据都在 `docs/BACKEND_CONTRACT.md` §十。
     model: str = ''
 
 
@@ -1437,11 +1442,26 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--remeasure', '--revalidate', '--apply-edit',
                                          '--repair-surface-habits', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE3_STYLE_GROUNDING,)),
+    # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-22 用户裁决，第二个钉死值）。
+    #   理由**不是**「flash 在这里更容易空」，是**重采粒度**：本节点是全链唯一一个
+    #   全书一次调用的生成节点 ⇒ 一次 `answer_lost` 的重采代价是整本书，而逐章节点
+    #   重采一章 ≈ 5.7k output。跨 4 份账本的严格口径（正文空 **且** `finish=stop`）：
+    #   `stage4.plan` flash@high **13/30 = 43.3%**（blueprint 22.9% / write 12.1% /
+    #   style 7.9%），pro@high **0/6**、全表 pro **0/249**。
+    #   ⚠ 43.3% 下 `MAX_SAMPLES_PER_RUNG=2` 双空掉档的概率 ≈ 18.7%，而本节点在 low
+    #   上有已知劣化（猜 event 编号）⇒ 掉档不是安全网，是另一种坏。
+    #   ⚠ **它不是一次加钱**：flash 产出一份可用计划累计 completion ≈ 67k
+    #   （`json_mode` 同场次对照两臂 67 028 / 68 214），pro 一次过 out 中位 22 848
+    #   （n=6）⇒ 按 pro:flash ≈ 3:1 的单价比几乎持平，而 flash 最终稿 10/23 与 8/19 章
+    #   产自降档档位（pro 对照 0/23）。
+    #   ⚠ 治本仍在别处：本节点的毛病（空正文率最高、失败最贵、全书级判据难守）根因
+    #   同一个——**全书一次调用这个粒度**。钉 pro 是治标的那一手。
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 重构计划',
                                  flags=('--dry-run', '--check-only',
                                         '--revalidate', '--names-only', '--identity',
                                         '--apply-edit', '--chapters', '--actor', '--reason'),
-                                 produces=(artifact_paths.STAGE4_PLAN_CHAPTERS,)),
+                                 produces=(artifact_paths.STAGE4_PLAN_CHAPTERS,),
+                                 model='deepseek-v4-pro'),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
     #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
@@ -1504,8 +1524,9 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠ 它是全链**唯一**的语义审判节点（stage5 那一个已于 2026-08-17 下线）。
     # 保留它的实测依据：2 次调用 / 1.7% 输出 token，而它的匿名质量排序在实跑中
     # 直接纠正过一次定稿——性价比与被下线的那个不在一个量级。
-    # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-19/20 用户裁决，全链 flash 的
-    #   **唯一例外**）：flash 判官在有 ground truth 的样本上把唯一与正文矛盾的候选
+    # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-19/20 用户裁决，**两个钉死值中的
+    #   第一个**；另一个是 `stage4.plan`，理由完全不同，见那一格）：
+    #   flash 判官在有 ground truth 的样本上把唯一与正文矛盾的候选
     #   判 PASS 并排成第一名，证据区间圈成候选全文（等于没有指向）——对「结论必须
     #   绑证据」的判官是死刑。钉在本表 ⇒ `DEEPSEEK_MODEL` 换不掉它。
     'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',

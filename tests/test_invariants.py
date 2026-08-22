@@ -107,15 +107,21 @@ def test_unmeasured_nodes_keep_the_default_high_effort():
     assert inv.NODES['stage7.rename'].effort is None
 
 
-def test_the_judge_node_pins_its_model_and_is_the_only_pinned_one():
-    """⚠ `NodeSpec.model` 是「除判官外全链 flash」这个裁决的**形状**落点（2026-08-19/20）。
+def test_the_two_pinned_models_are_exactly_the_two_decided_exceptions():
+    """⚠ `NodeSpec.model` 是「除例外外全链 flash」这个裁决的**形状**落点。
 
-    `stage6.semantic` 钉死 `deepseek-v4-pro` ⇒ `DEEPSEEK_MODEL` / 全局默认都换不掉它
-    （忘带环境变量烧不成 flash 判官）；其余节点必须保持 `''` = 跟随全局默认——
-    多一个钉死值就少一个 A/B 换臂的口，那一格只许给产品裁决过的例外用。
+    钉死两个，**理由不是同一个**（不许互相援引，见 `NodeSpec.model` 的注释）：
+      · `stage6.semantic`（2026-08-19/20）——flash 判官给不出有区分度的证据。
+      · `stage4.plan`（2026-08-22）——**重采粒度**：全链唯一一个全书一次调用的
+        生成节点，一次 `answer_lost` 重采就是整本书（flash@high 实测 43.3%）。
+    其余节点必须保持 `''` = 跟随全局默认——多一个钉死值就少一个 A/B 换臂的口，
+    那一格只许给产品裁决过的例外用。
     """
     pinned = {node: spec.model for node, spec in inv.NODES.items() if spec.model}
-    assert pinned == {'stage6.semantic': 'deepseek-v4-pro'}
+    assert pinned == {
+        'stage6.semantic': 'deepseek-v4-pro',
+        'stage4.plan': 'deepseek-v4-pro',
+    }
 
 
 def test_free_nodes_are_the_ones_without_llm():

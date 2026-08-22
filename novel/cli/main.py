@@ -193,8 +193,9 @@ def _llm_client(ctx: RunContext):
     from novel.llm.transport import DeepSeekTransport
 
     cfg = load_config()
-    # ⚠ 节点钉死的模型优先于全局配置：`NodeSpec.model` 是「判官例外」的形状落点
-    #   （`DEEPSEEK_MODEL` / `DEFAULT_MODEL` 换不掉它），其余节点 '' = 跟随全局默认。
+    # ⚠ 节点钉死的模型优先于全局配置：`NodeSpec.model` 是那两条例外的形状落点
+    #   （`stage6.semantic` 的证据力、`stage4.plan` 的重采粒度；`DEEPSEEK_MODEL` /
+    #   `DEFAULT_MODEL` 换不掉它们），其余节点 '' = 跟随全局默认。
     return LlmClient(
         ctx,
         DeepSeekTransport(cfg),

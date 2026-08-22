@@ -465,6 +465,12 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 （`novel/config.py::DEFAULT_MODEL`）、判官钉在 `NodeSpec.model`
 （`contracts/invariants.py::NODES` 的 `stage6.semantic`，`DEEPSEEK_MODEL` 换不掉）、
 答案流丢失先同档重采一次再降档（`novel/llm/client.py::MAX_SAMPLES_PER_RUNG`）。
+
+⚠ **2026-08-22 起 `stage4.plan` 也钉死 pro**（§十 同日行），所以「除判官外全链 flash」
+这句话**已经不再逐字成立**——现在是**两个**钉死值，而两者的理由不同：判官那格是证据力，
+`stage4.plan` 那格是**重采粒度**（全链唯一一个全书一次调用的生成节点，一次 `answer_lost`
+重采就是整本书；flash@high 实测 43.3% 空正文，pro@high 0/249）。本条 TODO 的
+「flash 潜力」验证**只对逐章节点仍然开着**。
 **动 schema 前的基线快照已做**：`outputs/_snapshots/pre_schema_work_20260820.tar.gz`
 （`tools/backup_snapshot.py` create-private，255 份 / 7.7MB，含 flash 三书、pro 对照
 与 ledger；⚠ 落在本机盘上，不是加密离线介质，要不要挪由用户定）。
