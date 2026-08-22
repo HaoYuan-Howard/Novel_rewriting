@@ -181,6 +181,22 @@ _BPS4_PRESENT = {'blueprints': [
         for i in range(1, 5)]}]}
 
 
+def _bidx4_present() -> dict:
+    """`_BPS4_PRESENT` 的量纲表：四拍各 100 字，**都够大 ⇒ 各自独立成源内容单元**。
+
+    `structure_distance` 的详略两项（拍级 `预算/源` 离散度、`summary` 承载比）需要
+    真的算得出 span 的拍——`_BPS4_PRESENT` 的 beat 不带 `span` ⇒ `source_chars=None`
+    ⇒ 那一维会**正确地**报「判不动」。⚠ 底座同样走 `beat_index` 再按引用改一个字段，
+    理由与 `_bidx4_unit` 那条一字不差。
+    """
+    from novel.stages.stage4.beats import beat_index
+
+    idx = beat_index(_BPS4_PRESENT, [_MAIN4[0]])
+    for bid in idx:
+        idx[bid]['source_chars'] = 100
+    return idx
+
+
 def _bad_transition4() -> list:
     chapters = _GREEN4()
     chapters[0]['segments'][0]['transition'] = 'continue'
@@ -221,6 +237,22 @@ def _bad_goal_landing4() -> list:
     chapters = _GREEN4()
     chapters[0]['open_hook_goal']['fact_refs'][0]['ref'] = 'b1_02'
     return _plan4(chapters)
+
+
+def _book_band_over4() -> list:
+    """全书顶出总量带，而**每一章都留在逐章带之内**——这条 HARD 存在的全部理由。
+
+    `_MAIN4` 两章各 280 源字 ⇒ 逐章带 0.80~1.20 = 224~336、书级带 0.90~1.10 = 504~616。
+    每章给 330（1.179×，**章带内**）⇒ 全书 660 > 616。
+    ⚠⚠ 靶子必须是这个形状：随便造一个「某章预算离谱」的样本，`budget_band` 会先红，
+    于是这条反例证明不了新判据拦住了旧判据拦不住的东西——而那正是它被加进来的理由。
+    配套的正向断言在 `test_stage4.py::test_a_book_that_overshoots_...`。
+    ⚠ 空蓝图 ⇒ 没有 span 覆盖账（`cov=(0,0)` 过闸）、源字数回退整章长度，
+    与 `budget_band` 那条反例走同一条路：两条判据共用一个基准，靶子也共用一种造法。
+    """
+    return _plan4([_ch4(1, [_b4(budget=110), _b4(budget=110), _b4(budget=110)]),
+                   _ch4(2, [_b4(budget=110), _b4(budget=110), _b4(budget=110)])],
+                  blueprints={'blueprints': []})
 
 
 def _plan4(chapters: list[dict], *, strategy: str = '把故事原样讲完。',
@@ -288,7 +320,7 @@ CASES: dict[str, Case] = {
     'rn_book_incomplete': Case('stage7', lambda: _rename(missing=[2])),
     'rn_txt_stale': Case('stage7', _rn_txt_stale),
 
-    # ── stage4（19 HARD）──────────────────────────────────────────────────
+    # ── stage4（20 HARD）──────────────────────────────────────────────────
     'one_to_one': Case('stage4', lambda: _plan4(
         [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03'), _b4('b2_01')], srcs=[1, 2])])),
     'ordinal_seq': Case('stage4', lambda: _plan4(
@@ -315,6 +347,7 @@ CASES: dict[str, Case] = {
     'budget_band': Case('stage4', lambda: _plan4(
         [_ch4(1, [_b4(budget=10)])], blueprints={'blueprints': []},
         main_text=[_MAIN4[0]])),
+    'plan_book_band': Case('stage4', _book_band_over4),
     'context_link': Case('stage4', lambda: _plan4(
         _GREEN4(), ctx_link=('stale', '上下文照的是另一版计划'))),
     'style_words': Case('stage4', lambda: _plan4(

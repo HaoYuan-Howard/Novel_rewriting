@@ -35,7 +35,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: 模型 id（生成侧默认）。2026-08-19/20 用户裁决：开发期成本不可接受
 #: （pro 约 9 元/本、flash 约 3 元/本）⇒ **生成侧默认 `deepseek-v4-flash`**。
-#: **语义判官例外，钉死 pro**——那一格在 `contracts/invariants.py::NODES`
+#: **两个节点例外，钉死 pro**：`stage6.semantic`（判官给不出有区分度的证据，
+#: 2026-08-19/20）与 `stage4.plan`（重采粒度：全书一次调用，一次空正文重采就是
+#: 整本书，2026-08-22）。两格都在 `contracts/invariants.py::NODES`
 #: （`NodeSpec.model` 优先于本默认与环境变量），换模型是一次产品裁决
 #: （成稿风格会整体变），不是一个可以随手改的环境变量。
 #: ⚠ 允许用 `DEEPSEEK_MODEL` 覆盖，是为了 A/B 时**显式**换一次（对照臂、诊断跑）；

@@ -40,8 +40,11 @@ from pydantic import Field, model_validator
 
 from contracts.invariants import (
     CACHE_POLICY,
-    ADDRESS_CONTEXT, DELIVERY_MODES, NAME_DISTINCTIVENESS, NARRATIVE_PERSON,
-    STRUCTURAL_ROLES, TEMPORAL_LINKS, TIME_LAYERS, WORLD_RULE_KINDS,
+    ADDRESS_CONTEXT, CHAPTER_WEIGHTS, DELIVERY_MODES, GOAL_INTENTS,
+    NAME_DISTINCTIVENESS, NARRATIVE_PERSON, RESPONSE_CHAPTER_WEIGHTS,
+    RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
+    RESPONSE_TEMPORAL_LINKS, RESPONSE_UNIT_WEIGHTS, STRUCTURAL_ROLES,
+    TEMPORAL_LINKS, TIME_LAYERS, UNIT_WEIGHTS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
@@ -49,7 +52,17 @@ from contracts.schema.common import FreeProvenance, LlmProvenance
 #: ⚠ 从 stage2 借的**不是拷贝，是同一个类**：`facts.setting` 是 stage2 那两个中文键的
 #: **字节级原样透传**（实测 31/31 章 mismatch 0）。各定一份就是第二个落点。
 #: ⚠ 但**只借这一个**：`facts.address[].by` 看起来也该借，实际不能——见 `CtxAddress.by`。
-from contracts.schema.stage2 import Setting
+from contracts.schema.stage2 import BEAT_ID_PATTERN, Setting
+
+#: 源内容单元编号 `pNN_NN` 的形状。**`p` 前缀与 stage2 的 `b` 分开**——
+#: 一个是源 beat、一个是由若干源 beat 组成的拍，同名不同义是最好的漂移温床
+#: （理由的落点在 `novel/stages/stage4/beats.py::plan_beat_id`）。
+#:
+#: ⚠ **两位宽是下限不是上限**（`\d{2,}`）：`plan_beat_id` 用 `:02d` 格式化，
+#: 三位数的章号会自然溢出宽度而不是被截断——写死 `\d{2}` 会让一本 100 章以上的书
+#: 在**响应载体**上被拒，而那是一次已经付过钱的响应。
+#: ⚠ 它与那个生产函数的恒等由 `tests/test_stage4.py` 钉着，不在这里 import novel/。
+PLAN_BEAT_ID_PATTERN = r'^p\d{2,}_\d{2,}$'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,12 +80,30 @@ class PlanBeat(StrictModel):
     #: response is matched back to the deterministic Stage2 beat groups.
     slot: str = Field(pattern=r'^s\d{2,4}$')
 
-    #: **[HARD] 正整数**。**这是模型在拍这一层唯一的产出。** 盘上 15~720。
+    #: **[HARD] 正整数**。盘上 15~720。
     #:
-    #: ⚠ 它留在**判据层**不动：归载体等于把一次 0 成本手改（把某一拍写成 0 的那个数改回来）
-    #: 换成一次付费重试。这里的 `gt=0` 是**同一条约束的载体侧镜像**，
-    #: 而不是把判据搬上来——判据仍要报出「哪一拍、原值是多少」，那是类型给不了的。
+    #: ⚠⚠ **2026-08-22 批 4 起它不再是模型产的**：模型给的是 `weight` 这个档位，
+    #: 整数由 `novel/stages/stage4/measure.py::allocate_budgets` 算
+    #: ⇒ `budget_int` / `budget_band` / `plan_book_band` 三条 HARD 从「模型的责任」
+    #: 变成**代码的后置条件**。响应侧 `PlanBeatResponse` 里已经没有这个字段了。
+    #:
+    #: ⚠ 判据侧那三条**一条都没撤**：`--apply-edit` 的人工稿与 `--revalidate` 的存量
+    #: 产物不经过 `allocate_budgets`，那两条路上它们仍然是真守卫。
+    #: 这里的 `gt=0` 是同一条约束的载体侧镜像，而不是把判据搬上来——判据仍要报出
+    #: 「哪一拍、原值是多少」，那是类型给不了的。
     budget_chars: int = Field(gt=0)
+
+    #: **这一写作单元在本章里的分量档**（`None` = 这份计划没记档位）。
+    #:
+    #: 它是 `budget_chars` 的**来源**：`预算_i ∝ 源字数_i × UNIT_WEIGHT_FACTOR[weight_i]`。
+    #: ⚠⚠ **两个字段都存是刻意的，不是冗余**：档位是**决策**、字数是**派生量**，
+    #: 与 `spine`（决策）/`from_beats`（派生）那一对同型。不存档位，
+    #: ①「模型到底判了哪一拍是重头」在产物上就不可复原；
+    #: ② 定向修复的基线块（`encode_plan_baseline`）没有东西可以回编码，
+    #: 而响应侧这一格是必填的——同一份 user 里 system 要档位、基线印着字数。
+    #: ⚠ `None` 是存量计划与恒等基线的态（`identity_plan` 显式给 `None`：
+    #: 「一个决策都没做过」，同 `spine`）。
+    weight: Literal[UNIT_WEIGHTS] | None = None
 
     #: 这一写作单元在重构后章节里的叙事功能。它只决定结构，不指定文风。
     narrative_role: Literal[STRUCTURAL_ROLES] = 'bridge'
@@ -94,6 +125,28 @@ class PlanBeat(StrictModel):
     #: `transition_direction`（标签宣称的方向要与源叙述序对得上，只在现场层接缝上判）。
     from_beats: list[str] = Field(min_length=1)
 
+    #: **这一写作单元的主干是 `events[]` 里的第几条**（1-based，`None` = 没做过这个决策）。
+    #:
+    #: 它是模型在拍这一层的**第二样**产出（第一样是 `budget_chars`），
+    #: 治的是「一拍 N 条材料被写成 N 句平权的话」——批 1 把句子单位从 event 上移到拍之后，
+    #: 拍**内部**仍然是一张平权清单，而平权清单最省力的写法就是逐条对译。
+    #: `spine` 说的是**主次**：主干那条演开，其余几条是它的条件、后果或背景。
+    #:
+    #: ⚠⚠ **只标主次，不标顺序。** 拍内 event 的落笔先后仍恒等于源序——
+    #: `stage5/checks.py::segment_event_findings` 有一条拍内顺序臂把逆序判成 `event_landing`，
+    #: 而本批**一行都不动它**。授权拍内重排是另一次单独的、要带读数的裁决。
+    #:
+    #: ⚠ `int | None` 而不是必填：`identity_plan` 的恒等基线**没有做过**这个决策，
+    #: 给它 1 会让基线看起来做过（而基线正是 `structure_changed` 的反例来源）。
+    #: 响应侧那一份（`PlanBeatResponse.spine`）是**必填**的——两边的分工与
+    #: `from_beats`/`plan_beats` 完全同型：产物侧要能表达「没有」，响应侧不许省。
+    #:
+    #: ⚠⚠ **两边的类型也不同型，这是有意的**：响应侧收 `beat_id`（引用），
+    #: 这一侧存下标——`expand_plan_beats` 把编号换算成 `from_beats` 里的位置，
+    #: 与它把 `plan_beats` 换算成 `from_beats` 是同一次动作、同一条出口。
+    #: 理由（模型会数错、但不会引用错）写在 `PlanBeatResponse.spine` 上。
+    spine: int | None = Field(default=None, ge=1)
+
 
 class FactRef(StrictModel):
     """A recomputable Stage1/2 fact reference, not a free-text justification."""
@@ -110,9 +163,15 @@ class FactRef(StrictModel):
 
 
 class PlanGoal(StrictModel):
-    """Typed goal; rationale is retained for audit but never sent to the writer."""
+    """Typed goal; rationale is retained for audit but never sent to the writer.
 
-    intent: Literal['establish', 'advance', 'open', 'close', 'withhold', 'resolve']
+    ⚠ **模型不直接产这个形状**：响应侧是 `PlanGoalResponse`（`intent` 带 `G_` 前缀），
+    `decode_plan_response` 是唯一的映射落点。理由见
+    `contracts/invariants.py::RESPONSE_GOAL_INTENTS`——`intent='turn'` 那次
+    6 次 wire 全灭是拿真钱买的。
+    """
+
+    intent: Literal[GOAL_INTENTS]
     fact_refs: list[FactRef] = Field(min_length=1)
     rationale: str | None = Field(
         default=None, min_length=1, json_schema_extra={'prompt_private': True})
@@ -127,7 +186,7 @@ class CtxGoal(StrictModel):
     into a writer or hook prompt.
     """
 
-    intent: Literal['establish', 'advance', 'open', 'close', 'withhold', 'resolve']
+    intent: Literal[GOAL_INTENTS]
     facts: list[str] = Field(min_length=1)
 
 
@@ -148,6 +207,15 @@ class PlanChapter(StrictModel):
     chapter_goal: PlanGoal
     open_hook_goal: PlanGoal
     end_hook_goal: PlanGoal
+
+    #: **本章在全书里的分量档**（`None` = 这份计划没记档位）。
+    #:
+    #: 它是本章预算总量的**来源**：`allocate_budgets` 先按 `CHAPTER_WEIGHT_RATIO`
+    #: 排出章间轻重，再归一化到全书目标并把冲出 `PLAN_BUDGET_BAND` 的章钳回带内。
+    #: ⚠ **它与 `PlanBeat.weight` 是两层，不是同一个决策的粗细两版**：
+    #: 前者答「哪一章重要」（唯一表达处是章级倍率），后者答「本章里哪里重要」。
+    #: `PLAN_SYS` 的篇幅段里这两条一直是并列的两句话。
+    weight: Literal[CHAPTER_WEIGHTS] | None = None
 
     #: **[HARD] 非空**。长度 3~13，条数与顺序照骨架切好的拍。
     segments: list[PlanBeat] = Field(min_length=1)
@@ -238,19 +306,80 @@ class PlanChapters(StrictModel):
 class PlanBeatResponse(StrictModel):
     """**模型响应里**的一拍。⚠ 与落盘那份（`PlanBeat`）**不是同一个形状**。
 
-    模型给的是一个或多个 `plan_beats`、结构决定与预算；`from_beats` 由
-    `expand_plan_beats` **按编号换回来**，模型不产它。`plan_beats` 的数组顺序就是
-    重构后的叙述顺序，允许不同于源序。
+    模型给的是**本单元的结束拍**、结构决定与两个档位；`from_beats` 与 `budget_chars`
+    都由 `expand_plan_beats` / `allocate_budgets` **算出来**，模型不产它们。
+    `segments[]` 的数组顺序就是重构后的叙述顺序，允许不同于源序。
     """
 
-    #: `pNN_NN`。**它是模型给这一拍分预算时唯一的抓手。**
-    #: ⚠ 三种违约（编号不存在 / 少给一拍 / 重复引用）一律**显式终态，无兜底**。
-    plan_beats: list[str] = Field(min_length=1)
+    #: **本写作单元在源序上到哪一个源内容单元为止**（`pNN_NN`）。
+    #:
+    #: ⚠⚠ **它 2026-08-22 批 4 取代了 `plan_beats: list[str]`**（模型逐条列出本单元
+    #: 用到的每一个编号、全章恰好覆盖一次）。换掉的理由是把三条 HARD 变成恒等式：
+    #: 一章内所有 `end_beat` 按源位置排序就是**切分点**，起点 = 前一个切分点 +1
+    #: ⇒ `beat_coverage`（全覆盖）· `beat_ref`（引用有效且属本章）·
+    #: `structure_units`（源内容单元不可拆、内部不换序）三条**按构造成立**，
+    #: 模型只剩三件便宜的事：编号存在 · 互不重复 · 最大的那个是本章最后一个单元。
+    #:
+    #: ⚠⚠ **「重排」这条自由度一格没丢**：`segments[]` 的数组顺序仍然是**成稿顺序**，
+    #: 切分点则由排序恢复 ⇒ 入口移位（`axis_entry`）、`cold_open`、现场层接缝上的
+    #: `earlier`/`return` 全都照样表达得出来。丢掉的只有「把**不相邻**的两个源单元
+    #: 并进同一个写作单元」——盘上 5 份计划 272 个写作单元里**只有 2 个**用过它（0.7%）。
+    #:
+    #: ⚠ 载体只判**形状**。「编号是不是本章的、有没有重复、末单元有没有到底」要先经
+    #: `gmap` 才知道，与 `spine` 的归属违约同一段、同一条出口
+    #: （`measure.py::expand_plan_beats`，挂在 `ask_json(validator=)` 上 ⇒ 拒了是同档重采）。
+    end_beat: str = Field(pattern=PLAN_BEAT_ID_PATTERN)
 
-    budget_chars: int = Field(gt=0)
-    narrative_role: Literal[STRUCTURAL_ROLES]
-    delivery: Literal[DELIVERY_MODES]
-    transition: Literal[TEMPORAL_LINKS]
+    #: **这一写作单元在本章里的分量档**。产物侧的 `budget_chars` 由它算出来。
+    #: ⚠ 模型不再给整数：理由与那三条算术 HARD 的账见
+    #: `contracts/invariants.py::RESPONSE_UNIT_WEIGHTS`。
+    weight: Literal[tuple(RESPONSE_UNIT_WEIGHTS)]
+
+    #: ⚠⚠ **这三个 + `PlanGoalResponse.intent` + 两个 `weight` 是【带前缀的响应侧取值】，
+    #: 不是产物值。** 六张表在响应 JSON 里串行相邻且语义两两邻近，模型会串表——而串出来的值
+    #: **在另一张表里是合法的**，于是 schema 闸只能在整份响应收完之后才发现。
+    #: 实测代价：2026-08-22 一次全书规划 6 次 wire 全被内容闸拒、86 150 completion 全白花。
+    #: 前缀化之后串表当场死在 schema 上（手法与读数见
+    #: `contracts/invariants.py::RESPONSE_STRUCTURAL_ROLES`）。
+    #: 映射唯一落点：`novel/stages/stage4/measure.py::decode_plan_response`。
+    narrative_role: Literal[tuple(RESPONSE_STRUCTURAL_ROLES)]
+    delivery: Literal[tuple(RESPONSE_DELIVERY_MODES)]
+    transition: Literal[tuple(RESPONSE_TEMPORAL_LINKS)]
+
+    #: **本单元的主干是哪一件事**——一个 Stage2 `beat_id`，从下发骨架里那张
+    #: `events{}`（`beat_id → 这件事`）逐字抄。产物侧 `PlanBeat.spine` 是**下标**，
+    #: 编号→下标的换算由 `novel/stages/stage4/measure.py::expand_plan_beats` 做。
+    #:
+    #: ⚠⚠ **它曾经是下标本身**（`int`，1-based，跨 `plan_beats[]` 展开后连续编号），
+    #: 2026-08-22 两次整跑把那个形状否掉：要填对下标，模型得把本单元几个源内容单元的
+    #: events 摊平累加，而那个数**代码本来就精确知道**。实测一份 schema 合法的响应里
+    #: 60 个写作单元错 10 个，**9 个是「本单元只有 1 件事、却填了 2 或 3」**——
+    #: prompt 白纸黑字写着「只有一件事时填 1」。同一份响应里 `plan_beats` 的编号引用
+    #: **一个都没错**。⇒ **让模型引用可靠，让它数数不可靠**，能引用就不要它数。
+    #:
+    #: ⚠ 载体只判**形状**（`bNN_NN`，与 `Beat.beat_id` 同一份正则），**归属不在载体上**：
+    #: 「这个编号是不是落在本单元 `plan_beats[]` 引的那几个源内容单元里」要先经 `gmap`
+    #: 展开才知道，由 `expand_plan_beats` 与三种编号违约同一段、同一条出口判
+    #: ——而那一段现在挂在 `ask_json(validator=)` 上（`plan.py::_plan_expansion_validator`）：
+    #: 拒了是**同档重采**，不再是一份其余都合格的计划连同整轮 token 一起报废。
+    #:
+    #: ⚠ 它**刻意排在三个枚举之后**：批 2 那次 6 次 wire 全灭是四张相邻枚举表串出来的，
+    #: 新字段插进那一串中间等于把已经用三轮实付验过的字段序重新洗一遍。
+    #: 追加在末尾、且取值面是 `bNN_NN`（与三张 `X_` 前缀表不同型），串不进去。
+    spine: str = Field(pattern=BEAT_ID_PATTERN)
+
+
+class PlanGoalResponse(StrictModel):
+    """**模型响应里**的 typed goal。与 `PlanGoal` 只差 `intent` 的取值面（带 `G_` 前缀）。
+
+    ⚠ 其余两个字段刻意**共用** `PlanGoal` 的定义（`FactRef` 原样复用）：
+    响应侧与产物侧只在「哪些字段被前缀化」这一点上分家，多分一寸就是第二份形状。
+    """
+
+    intent: Literal[tuple(RESPONSE_GOAL_INTENTS)]
+    fact_refs: list[FactRef] = Field(min_length=1)
+    rationale: str | None = Field(
+        default=None, min_length=1, json_schema_extra={'prompt_private': True})
 
 
 class PlanChapterResponse(StrictModel):
@@ -264,9 +393,15 @@ class PlanChapterResponse(StrictModel):
 
     output_ordinal: int = Field(ge=1)
     from_source_ordinals: list[int] = Field(min_length=1)
-    chapter_goal: PlanGoal
-    open_hook_goal: PlanGoal
-    end_hook_goal: PlanGoal
+    chapter_goal: PlanGoalResponse
+    open_hook_goal: PlanGoalResponse
+    end_hook_goal: PlanGoalResponse
+
+    #: **本章在全书里的分量档**。本章预算总量由它算出来（见 `PlanChapter.weight`）。
+    #: ⚠ 它刻意排在三个 goal 之后、`segments` 之前：与单元级那一格**隔着整个 segments 数组**，
+    #: 两张表在响应 JSON 里不相邻，串表的形状本身就成立不了。
+    weight: Literal[tuple(RESPONSE_CHAPTER_WEIGHTS)]
+
     segments: list[PlanBeatResponse] = Field(min_length=1)
 
 
@@ -368,6 +503,15 @@ class CtxBeat(StrictModel):
     delivery: Literal[DELIVERY_MODES] = 'scene'
     transition: Literal[TEMPORAL_LINKS] = 'continue'
 
+    #: **主干是 `events[]` 里的第几条**（1-based，`None` = 计划没做过这个决策 ⇒ 下发面不提）。
+    #: 从 `PlanBeat.spine` 原样投影，与 `events[]` **同下标空间**——
+    #: 两边都按 `from_beats` 顺序展开、都不过滤，那条恒等式由 `expand_plan_beats`
+    #: 的计数断言守着（下发给规划者的骨架**过滤**空 event，写手这一侧**不过滤**，
+    #: 口径一旦分家 `spine` 就指错人）。
+    #:
+    #: ⚠ 它是**主次**不是**顺序**：写手仍按编号先后落笔，只是主干那条演开、其余交代过去。
+    spine: int | None = Field(default=None, ge=1)
+
     #: 所引源 beat 的 span 字数之和。**算不出保持 `null`，不估算、不拿邻居补**（键恒在）。
     #: 盘上 197/197 有值。
     source_chars: int | None
@@ -418,6 +562,28 @@ class CtxBeat(StrictModel):
             if self.time_layer is not None or self.place is not None or self.present is not None:
                 raise ValueError(
                     '分段拍的顶层 time_layer/place/present 必须为 null；舞台信息只在 segments')
+        # ⚠⚠ **`spine` 的上界只有这一层能写成类型**：全链只有 `CtxBeat` 同时持有
+        #   `events[]` 与指向它的 `spine`。上游那两侧各自都缺一半——响应侧的
+        #   `plan_beats[]` 还没展开、产物侧的 `from_beats[]` 是 id 不是内容。
+        #   ⇒ 这不是把判据搬上载体，是这条不等式**第一次**有了可表达它的地方。
+        # ⚠⚠ **空 events 元素在这里就死**，理由同样是 `spine` 的下标口径：
+        #   stage5 下发面渲染 ①②③ 时**过滤**空串（`stage5/prompts.py::chapter_facts`），
+        #   而 `spine` 数的是 `events[]` 的下标——留一个空串在里面，两边就差一格。
+        #   docstring 早已写着「一条 event 都解析不出 ⇒ 显式终态、不落盘」，
+        #   `_resolve_beats` 那句 `bidx[b].get('event') or ''` 产出的正是这个必然被拒的值：
+        #   **它不是兜底，是把上游违约原样端上来让这道闸拒掉**。
+        if any(not (e or '').strip() for e in self.events):
+            raise ValueError(
+                f'{self.slot}：events 里有空条目（{self.events}）。'
+                f'stage2 契约保证 `event` 非空 ⇒ 空的只可能来自解析失败；'
+                f'留着它，下发面的 ①②③ 与 `spine` 会差一格')
+        #   ⇒ 下面这条同时是 `--apply-edit` 那一路唯一的守卫：人工稿不过 `expand_plan_beats`
+        #     （`plan_beat` 落盘时已 pop，人产不出它），所以计划层那道 spine 校验够不着它。
+        if self.spine is not None and self.spine > len(self.events):
+            raise ValueError(
+                f'{self.slot}：spine={self.spine} 指向第 {self.spine} 件事，而这一拍只有 '
+                f'{len(self.events)} 件。**下发面会照它演**——主干指空等于叫写手自己挑一件。'
+                f'根因在计划那一份的同名 slot 上（`plan_chapters.json`），不在这里')
         return self
 
 

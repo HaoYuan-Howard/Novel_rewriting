@@ -247,7 +247,19 @@ def target_range(entry: dict[str, Any]) -> tuple[int, int]:
 
 
 def book_range(source_total: int) -> tuple[int, int]:
-    """全书篇幅带。⚠ 与逐章**同一个带**（`BOOK_BAND == DRAFT_BAND`），不是两个数。"""
+    """全书篇幅带。
+
+    ⚠⚠ **这里曾写着「与逐章同一个带（`BOOK_BAND == DRAFT_BAND`），不是两个数」，
+    那句话自 2026-08-17 用户裁决起就不成立**（0.90~1.10 vs 0.80~1.20），而它一直挂在
+    这个函数头上——一条注释宣称的恒等式，代码早就不再满足。两条带答的是两个问题：
+    逐章带答「单章允许偏离预算多少」（节奏本来就有胖有瘦），书级带答「全书总量允许偏离
+    源书多少」（那是产品承诺，必须紧）。⚠ 逐章放宽而全书收紧是**自洽**的：
+    逐章的正负偏差在书级相互抵消。
+
+    ⚠ 2026-08-22 起 `BOOK_BAND` 有了**第二个消费方**：stage4 的 `plan_book_band`
+    （`R-5.3c`，全书预算之和 / 全书 span 合计）。**分母不是同一个数**——本函数的
+    `source_total` 是整章字数那一支。两个读数各自对带，不许拿来做相等断言。
+    """
     lo, hi = BOOK_BAND
     return round(source_total * lo), round(source_total * hi)
 

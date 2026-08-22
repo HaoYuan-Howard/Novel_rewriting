@@ -577,10 +577,16 @@ class Hinge(StrictModel):
     source: SourceSpan | None
 
 
+#: 源 beat 编号的形状。**这里是唯一一份**——Stage4 的响应侧 `PlanBeatResponse.spine`
+#: 收的也是一个 `beat_id`（2026-08-22 起：主干从「第几件事」改成「哪一件事」），
+#: 两处各写一遍正则，改宽度时就会有一处不跟着改。
+BEAT_ID_PATTERN = r'^b\d{2}_\d{2}$'
+
+
 class Beat(StrictModel):
     """一拍及其经过原文一致性验证的精确覆盖区间。"""
 
-    beat_id: str = Field(pattern=r'^b\d{2}_\d{2}$')
+    beat_id: str = Field(pattern=BEAT_ID_PATTERN)
     span: SourceSpan | None
     time_layer: Literal[TIME_LAYERS]
     place: str | None

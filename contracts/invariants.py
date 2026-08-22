@@ -730,7 +730,31 @@ CACHE_POLICY: Final = ('default', 'refresh-write', 'disabled')
 
 #: Stage4 每章预算之和 / 源 span 字数的唯一现行区间。**无第二层宽限。**
 #: `output_chapters[].op` 不属于当前契约，因此这里也不保留已删除操作的取值面。
-PLAN_BUDGET_BAND: Final = (0.90, 1.10)
+#:
+#: ⚠⚠ **2026-08-22 从 `0.90~1.10` 放宽到本值，这是产品语义变更不是清理。**
+#: 起因是用户反馈「重构稿与原文太像，差别只是改变了措辞」，而根因是**算术必然**，
+#: 不是模型偷懒——三个量相乘就锁死了结果：`CtxBeat.events[]` 的信息密度是源章正文的
+#: **87%**（去标点 7716/8821）× 源拍必须全覆盖（`beat_coverage`，HARD）
+#: × 本带锁在 `0.90~1.10`（HARD）⇒ **每个事件点分到的字数必然与原文相同**
+#: ⇒ 成稿必然是原文的等密度重述。前两项各有不能动的理由（见 `docs/schema/stage4.md` §六），
+#: 于是唯一能松的自由度就是本带。
+#:
+#: ⚠ **`0.80~1.20` 不是一个新发明的数**：它逐字等于 `DRAFT_BAND`，而那个数的辩护词
+#: （盘上 31 章的两端极值 **0.814 / 1.206**）辩护的正是同一件事——「一章的节奏本来就会让
+#: 某几章胖一点、某几章瘦一点」。本带此前比执行带还紧，等于**规划层不许计划出执行层
+#: 本来就允许的波动**。
+#:
+#: ⚠⚠ **放宽本带的前提是同批补上书级闸**：总量是对用户的承诺，此前它是被本带
+#: 「逐章 ±10% ⇒ 全书必然 ±10%」顺带兜住的，本带一松那条蕴含就断了。
+#: ⇒ 新增 `plan_book_band`（HARD，`R-5.3c`）：全书各章预算之和 / 全书 span 合计 ∈ `BOOK_BAND`。
+#: **逐章放宽而全书收紧**与 `DRAFT_BAND` / `BOOK_BAND` 那一对**同构**，
+#: 那次裁决（2026-08-17）的理由逐字适用：逐章的正负偏差在书级相互抵消。
+#: ⚠ 此前唯一的书级守卫是 stage5 的 `book_length`（INFO）——那是**钱花完才响**。
+#:
+#: ⚠ **带取对称是刻意的**：实测「压缩会让成稿更像原文」，所以详略应当是不对称的，
+#: 但**不对称由 prompt 与 `delivery` 引导，不由一个没标定过的常量发明**（`判据 15`）。
+#: 更宽的不对称带（如 0.65~1.35）要等读数显示计划真的在贴 0.80/1.20 的边界。
+PLAN_BUDGET_BAND: Final = (0.80, 1.20)
 
 #: Stage4 结构规划的三个闭合轴。它们描述的是叙事架构，不是文风：同一组事实可以被
 #: 放在冷开场、升级或兑现位置，可以作为完整场景或压缩交代，并且必须说清与上一单元
@@ -740,6 +764,137 @@ STRUCTURAL_ROLES: Final = (
 )
 DELIVERY_MODES: Final = ('scene', 'summary')
 TEMPORAL_LINKS: Final = ('start', 'continue', 'earlier', 'later', 'parallel', 'return')
+
+#: 逐章三个 typed goal 的意图取值面。
+#: ⚠ **它 2026-08-22 才从三处手抄收拢到这里**：`contracts/schema/stage4.py` 的
+#: `PlanGoal` 与 `CtxGoal` 各写着一份行内 `Literal[...]`，`stage4/prompts.py` 里还有
+#: 第三份手抄的 `establish|advance|open|close|withhold|resolve`——`$RECONSTRUCT_MIN`
+#: 那条注释记过同型的下场（prompt 与判据各拿一个数）。
+GOAL_INTENTS: Final = (
+    'establish', 'advance', 'open', 'close', 'withhold', 'resolve',
+)
+
+#: ── `stage4.plan` 响应侧的四张前缀枚举 → 产物侧取值 ─────────────────────────
+#:
+#: **前缀化只在响应侧**：产物侧那四张表一个字不动（下游 + 盘上数据的硬约束），
+#: `novel/stages/stage4/measure.py::decode_plan_response` 是唯一映射落点
+#: ——与 `RESPONSE_TIME_LAYERS` / `PLACE_MODES` 那次（`extraction-ir-v1`）同一套手法。
+#:
+#: 【为什么前缀化】这四张表在响应 JSON 里**串行相邻**，而它们语义两两邻近
+#: （`cold_open`↔`start`、`bridge`↔`continue`、`payoff`↔`close`、
+#: `narrative_role`↔`delivery` 都有 `summary` 味、`intent` 的每一个值都像一种
+#: `narrative_role`）⇒ 模型串表，而串出来的值**在另一张表里是合法的**，
+#: 于是 schema 闸只能在整份响应收完之后才发现。
+#:
+#: ⚠⚠ **代价实测过，两次**：
+#:   · 交接时 `delivery` 的 `summary` 串进 `narrative_role`；
+#:   · 2026-08-22 批 2 的第二次全书实付——`intent='turn'`（那是 `narrative_role` 的值）
+#:     ×6 章、`narrative_role='recall'`（那是 `time_layer` 的值，从**下发面**抄来的）。
+#:     整条 `LADDER` 走到底、6 次 wire 全被内容闸拒、completion 86 150 **全白花、0 产物**。
+#: ir1 那次的读数是**非法 enum 归零**，所以这里照抄的是一个已验证的修法，不是一次猜测。
+#:
+#: ⚠ 四个前缀字母互不相同，且**与 stage2 的 `T_` / `P_` 也不撞**：同一个模型在两个节点上
+#: 见到的前缀空间不该重叠。⚠ `transition` 用 `X_` 不用 `T_` 正是为此
+#: （`T_` 已经是叙述层的，而叙述层的值恰好就是这次串进 `narrative_role` 的那个）。
+RESPONSE_STRUCTURAL_ROLES: Final = {
+    'R_COLD_OPEN': 'cold_open', 'R_SETUP': 'setup', 'R_ESCALATION': 'escalation',
+    'R_TURN': 'turn', 'R_PAYOFF': 'payoff', 'R_BRIDGE': 'bridge',
+}
+RESPONSE_DELIVERY_MODES: Final = {'D_SCENE': 'scene', 'D_SUMMARY': 'summary'}
+RESPONSE_TEMPORAL_LINKS: Final = {
+    'X_START': 'start', 'X_CONTINUE': 'continue', 'X_EARLIER': 'earlier',
+    'X_LATER': 'later', 'X_PARALLEL': 'parallel', 'X_RETURN': 'return',
+}
+RESPONSE_GOAL_INTENTS: Final = {
+    'G_ESTABLISH': 'establish', 'G_ADVANCE': 'advance', 'G_OPEN': 'open',
+    'G_CLOSE': 'close', 'G_WITHHOLD': 'withhold', 'G_RESOLVE': 'resolve',
+}
+
+#: ── 篇幅的**两级档位**（2026-08-22 批 4）─────────────────────────────────────
+#:
+#: ⚠⚠ **模型不再给 `budget_chars` 这个整数，它给两个档位，整数由代码算。**
+#: 从前模型要同时满足三件算术：逐单元正整数（`budget_int`）、每章之和落在
+#: `PLAN_BUDGET_BAND`（`budget_band`）、全书之和落在 `BOOK_BAND`（`plan_book_band`）——
+#: 而后两条要把五六十个整数先按章分组求和、再把二十多个章级合计再加一遍。
+#: 实测代价：批 2 run1 一次全书实付倒在 `budget_band`（ch18 压到 0.442×），**整份退回**。
+#: ⇒ 这三条从「模型的责任」变成 `novel/stages/stage4/measure.py::allocate_budgets`
+#: 的**后置条件**，而模型只表达它真正该表达的那件事：**哪一章重、章里哪一拍重**。
+#:
+#: 【为什么是两级而不是一级】它们是**两层不同的问题**，`PLAN_SYS` 的篇幅段里一直是
+#: 两条并列的规则：「哪一章重要」只有章级倍率能表达，「本章里哪里重要」只有拍级分配能表达。
+#: 压成一级就等于宣布其中一层不存在。
+#:
+#: 【两张表的取值面刻意零重词】前缀 `CH_` / `W_` 不重叠，**十个词干也两两不同**
+#: （`MAJOR/ABOVE/EVEN/BELOW/MINOR` vs `PEAK/STRONG/MID/QUICK/BRUSH`）——
+#: 它们在响应 JSON 里一个在章级、一个在单元级，正是 `RESPONSE_STRUCTURAL_ROLES`
+#: 那条注释说的「串行相邻且语义邻近」的形状。共用一个 `HEAVY`/`LIGHT` 词对
+#: 就会让串表串出来的值在另一张表里合法，而那要等整份响应收完才发现。
+RESPONSE_CHAPTER_WEIGHTS: Final = {
+    'CH_MAJOR': 'major', 'CH_ABOVE': 'above', 'CH_EVEN': 'even',
+    'CH_BELOW': 'below', 'CH_MINOR': 'minor',
+}
+CHAPTER_WEIGHTS: Final = ('major', 'above', 'even', 'below', 'minor')
+
+RESPONSE_UNIT_WEIGHTS: Final = {
+    'W_PEAK': 'peak', 'W_STRONG': 'strong', 'W_MID': 'mid',
+    'W_QUICK': 'quick', 'W_BRUSH': 'brush',
+}
+UNIT_WEIGHTS: Final = ('peak', 'strong', 'mid', 'quick', 'brush')
+
+#: 章级档位 → **这一章的目标倍率**（预算 ÷ 本章源字数）。
+#:
+#: ⚠⚠ **这张表的极差（1.18/0.84 = 1.40）故意宽过一个「怎么填都不会越界」的表**，
+#: 因为它**不是**最终倍率：`allocate_budgets` 先按它排出章间轻重，再整体归一化到
+#: 全书目标（= 全书源字数 × 1.0，`BOOK_BAND` 的中心），最后把冲出 `PLAN_BUDGET_BAND`
+#: 的章钳回带内、把残差在还有余量的章之间摊掉。
+#: ⇒ 档位表达的是**相对轻重**，绝对倍率由那三步决定。
+#: 取一张极差 ≤1.20 的窄表也能免掉钳制那一步（归一化后必然落在带内），但那样
+#: **批 2 三轮实付买来的章间轻重会被表本身压掉一半**——用钳制换表宽是这里的取舍。
+CHAPTER_WEIGHT_RATIO: Final = {
+    'major': 1.18, 'above': 1.08, 'even': 1.00, 'below': 0.92, 'minor': 0.84,
+}
+
+#: 单元档位 → **本章内的相对权重**。分配式是 `预算_i ∝ 源字数_i × 权重_i`
+#: ⇒ 「预算/源」相对本章均值的倍数恰好等于 `权重_i ÷ 权重的源字数加权均值`。
+#:
+#: ⚠ 两个端点值不是新发明的：`PLAN_SYS` 一直写着「重头拍给到本章均值的 2~3 倍、
+#: 快速带过的给到均值的一半以下」，`peak=2.6` / `brush=0.38` 就是那句话的取值面化。
+#: ⚠ **它同时决定 `structure_reshaped`（`R-5.19`）那条读数的分辨率**：那条读数问的是
+#: 「本章有没有哪一拍的相对倍率冲出 `PLAN_BUDGET_BAND`」，而 2.6 与 0.38 都在带外
+#: ⇒ 模型一旦真的标出重头拍或一带而过的拍，那条读数就会成立。这是有意的。
+UNIT_WEIGHT_FACTOR: Final = {
+    'peak': 2.6, 'strong': 1.7, 'mid': 1.0, 'quick': 0.6, 'brush': 0.38,
+}
+
+#: 六张响应表与它们的产物表**逐格对齐**（顺序也对齐——渲染进 prompt 的就是这个顺序）。
+_PLAN_RESPONSE_ENUMS: Final = (
+    (RESPONSE_STRUCTURAL_ROLES, STRUCTURAL_ROLES, 'narrative_role'),
+    (RESPONSE_DELIVERY_MODES, DELIVERY_MODES, 'delivery'),
+    (RESPONSE_TEMPORAL_LINKS, TEMPORAL_LINKS, 'transition'),
+    (RESPONSE_GOAL_INTENTS, GOAL_INTENTS, 'intent'),
+    (RESPONSE_CHAPTER_WEIGHTS, CHAPTER_WEIGHTS, 'chapter.weight'),
+    (RESPONSE_UNIT_WEIGHTS, UNIT_WEIGHTS, 'segment.weight'),
+)
+for _resp, _art, _field in _PLAN_RESPONSE_ENUMS:
+    assert tuple(_resp.values()) == tuple(_art), \
+        f'{_field} 的响应侧映射与产物侧取值面分家了——decode 会映到一个不存在的产物值'
+    assert len(set(_resp)) == len(set(_resp.values())), f'{_field} 的响应侧映射不是双射'
+
+#: ⚠⚠ **这条断言才是前缀化买的那件东西**：任意两个响应侧取值互不相等、
+#: **且互不为子串**——串表串出来的值必须在 schema 闸当场死掉，而不是在另一张表里合法。
+#: 一起比进来的还有 `TIME_LAYERS`（它的值出现在**下发面**上，`narrative_role='recall'`
+#: 就是从那里抄过来的）与 `HINGE_KINDS`。
+_PLAN_RESPONSE_KEYS: Final = tuple(
+    k for _resp, _a, _f in _PLAN_RESPONSE_ENUMS for k in _resp)
+for _a in _PLAN_RESPONSE_KEYS:
+    for _b in (*_PLAN_RESPONSE_KEYS, *TIME_LAYERS):
+        assert _a == _b or _a not in _b, \
+            f'响应侧取值 {_a!r} 是 {_b!r} 的子串——串表就不会在 schema 闸上死掉了'
+
+#: 两张倍率表的键必须与它们的取值面逐格相同——少一格，`allocate_budgets` 会在一份
+#: **已经付过钱**的响应上 `KeyError`，而那是最贵的一种崩法。
+assert tuple(CHAPTER_WEIGHT_RATIO) == CHAPTER_WEIGHTS
+assert tuple(UNIT_WEIGHT_FACTOR) == UNIT_WEIGHTS
 
 #: 「这一章大到该做一次结构决策」的源内容单元数下限（`R-5.6` 的 `structure_changed`）。
 #: ⚠⚠ **它同时是 prompt 与判据的唯一落点。** 从前 prompt 里那个 `4` 是**手抄的**，
@@ -829,6 +984,14 @@ DRAFT_BAND: Final = (0.80, 1.20)
 #: 实测三本 0.949 / 1.022 / 0.980，收紧到本带**代价为 0**。
 #: ⚠ **本带刻意不跟随 `DRAFT_BAND` 放宽**：逐章放宽是给单章节奏留余量，
 #: 而全书总量是对用户的承诺。两个数不同不是漂移，是上面那条裁决的直接结果。
+#:
+#: ⚠⚠ **它有两个消费方，而两边的口径不是同一个数**（2026-08-22 起）：
+#:   · stage5 `book_length`（INFO）：**全书成稿字数 / 全书源字数**（`len(整章文本)` 那一支）；
+#:   · stage4 `plan_book_band`（HARD，`R-5.3c`）：**全书预算合计 / 全书 span 合计**。
+#: 两个分母差着「span 覆盖不到的那 2%~3% 正文」（见 `novel/stages/stage4/measure.py`
+#: 文件头那张三口径表），**不许拿来做相等断言**——产地已经为这件事把一份合格的计划
+#: 判成过 `.INVALID`。共用同一个带是有意的：它们答的是同一个问题（总量偏离源书多少），
+#: 只是一个在钱花之前问、一个在钱花之后问。
 BOOK_BAND: Final = (0.90, 1.10)
 
 #: 闭卷臂成稿与源章的 20 字窗口重合度上界（已扣掉契约要求逐字保留的部分）。
@@ -1260,10 +1423,15 @@ class NodeSpec(NamedTuple):
     # 本节点钉死的模型 id；'' = 跟随全局默认（`novel/config.py::DEFAULT_MODEL`，
     # 可被 `DEEPSEEK_MODEL` 覆盖——A/B 换臂的显式口）。
     # ⚠ **只有「产品裁决过、不许被环境变量静默翻转」的节点才许填非空**：
-    #   2026-08-19/20 用户裁决「除语义判官外全链 flash」，而判官例外必须长成形状
+    #   2026-08-19/20 用户裁决「除语义判官外全链 flash」，而例外必须长成形状
     #   而不是纪律——此前靠每条命令记得带 `DEEPSEEK_MODEL`，忘一次就静默烧成
-    #   flash 判官，账本事后才看得出来。实测依据见 `docs/BACKEND_CONTRACT.md`
-    #   §十 2026-08-20 那一行（flash 判官把唯一与正文矛盾的候选排成第一名）。
+    #   flash 判官，账本事后才看得出来。
+    # ⚠⚠ **现有两个钉死值，而它们的理由不是同一个**，不许互相援引：
+    #   · `stage6.semantic` = **判官给不出有区分度的证据**（质量死刑，2026-08-20）。
+    #   · `stage4.plan`     = **重采粒度**（2026-08-22）：它是全链唯一一个全书一次
+    #     调用的生成节点，一次 `answer_lost` 重采就是整本书。逐章节点有同档重采
+    #     这张便宜的网（实测 4/4 第二个样本就过、一次没掉档），它没有。
+    #   两条实测依据都在 `docs/BACKEND_CONTRACT.md` §十。
     model: str = ''
 
 
@@ -1362,11 +1530,26 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--remeasure', '--revalidate', '--apply-edit',
                                          '--repair-surface-habits', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE3_STYLE_GROUNDING,)),
+    # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-22 用户裁决，第二个钉死值）。
+    #   理由**不是**「flash 在这里更容易空」，是**重采粒度**：本节点是全链唯一一个
+    #   全书一次调用的生成节点 ⇒ 一次 `answer_lost` 的重采代价是整本书，而逐章节点
+    #   重采一章 ≈ 5.7k output。跨 4 份账本的严格口径（正文空 **且** `finish=stop`）：
+    #   `stage4.plan` flash@high **13/30 = 43.3%**（blueprint 22.9% / write 12.1% /
+    #   style 7.9%），pro@high **0/6**、全表 pro **0/249**。
+    #   ⚠ 43.3% 下 `MAX_SAMPLES_PER_RUNG=2` 双空掉档的概率 ≈ 18.7%，而本节点在 low
+    #   上有已知劣化（猜 event 编号）⇒ 掉档不是安全网，是另一种坏。
+    #   ⚠ **它不是一次加钱**：flash 产出一份可用计划累计 completion ≈ 67k
+    #   （`json_mode` 同场次对照两臂 67 028 / 68 214），pro 一次过 out 中位 22 848
+    #   （n=6）⇒ 按 pro:flash ≈ 3:1 的单价比几乎持平，而 flash 最终稿 10/23 与 8/19 章
+    #   产自降档档位（pro 对照 0/23）。
+    #   ⚠ 治本仍在别处：本节点的毛病（空正文率最高、失败最贵、全书级判据难守）根因
+    #   同一个——**全书一次调用这个粒度**。钉 pro 是治标的那一手。
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 重构计划',
                                  flags=('--dry-run', '--check-only',
                                         '--revalidate', '--names-only', '--identity',
                                         '--apply-edit', '--chapters', '--actor', '--reason'),
-                                 produces=(artifact_paths.STAGE4_PLAN_CHAPTERS,)),
+                                 produces=(artifact_paths.STAGE4_PLAN_CHAPTERS,),
+                                 model='deepseek-v4-pro'),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
     #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
@@ -1429,8 +1612,9 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠ 它是全链**唯一**的语义审判节点（stage5 那一个已于 2026-08-17 下线）。
     # 保留它的实测依据：2 次调用 / 1.7% 输出 token，而它的匿名质量排序在实跑中
     # 直接纠正过一次定稿——性价比与被下线的那个不在一个量级。
-    # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-19/20 用户裁决，全链 flash 的
-    #   **唯一例外**）：flash 判官在有 ground truth 的样本上把唯一与正文矛盾的候选
+    # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-19/20 用户裁决，**两个钉死值中的
+    #   第一个**；另一个是 `stage4.plan`，理由完全不同，见那一格）：
+    #   flash 判官在有 ground truth 的样本上把唯一与正文矛盾的候选
     #   判 PASS 并排成第一名，证据区间圈成候选全文（等于没有指向）——对「结论必须
     #   绑证据」的判官是死刑。钉在本表 ⇒ `DEEPSEEK_MODEL` 换不掉它。
     'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',

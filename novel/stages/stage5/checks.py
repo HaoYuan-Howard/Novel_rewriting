@@ -517,6 +517,47 @@ def _plan_keeps_content(entry: dict[str, Any]) -> bool:
     return bool(src) and entry['budget_chars'] >= src * 0.90
 
 
+#: `dialogue_halved` 报绿之前，这一次到底有没有一章落在它的前件里。
+#:
+#: ⚠⚠ **这条 HARD 的前件是三合取，第一项就是 `mode == 'shallow'`** ⇒ 闭卷臂上它
+#:   **结构上不可能命中**。2026-08-22 把 `DEFAULT_DEEP` 改成全书闭卷之后，
+#:   默认路径上这条判据的分母**恒为零**，而报告会把「跑了、零 findings」渲染成 pass
+#:   ——与 `ctx_hinge_delivered` 那次事故逐格同形（下发面全空、三条保真 HARD 一路报绿）。
+#: ⚠ 而它背着的正是本项目**效应量最大**的一条跨书结论（闭卷把对白压到 ~0.7×，
+#:   6/6 本方向一致），全书闭卷把这个效应从 3 章扩到了整本 ⇒ 恰恰是最不该假绿的时候。
+#: ⇒ 分母为零时走 `blind`（`check(blind=...)` → `unverifiable`），**不降 sev**：
+#:   与 `secret_leak`（探针零判别力）、`verbatim_missing`（一条材料都没下发）同一条路。
+#: ⚠ 走 `blind` 而**不是**把它加进 `_UNVER`：`_UNVER` 是「这条判据永远够不着」，
+#:   而这条在开卷维护臂上判别力完好——加进去等于把单臂入口上唯一一道对白 HARD 拆掉。
+def dialogue_halved_scope(
+    pairs: Iterable[tuple[dict[str, Any], str]], book: M.Book,
+) -> int:
+    """有多少章同时满足 `dialogue_halved` 的三条前件（`mode` / 无净压缩 / 源章 ≥4 句）。
+
+    ⚠ 前件必须**从 `_dialogue` 那一份现算**，不许在这里手抄一份判定式：两份必然分家，
+    而分家的形态是「分母说有 5 章，实际一章都判不了」——比没有分母更糟。
+    """
+    return sum(1 for entry, mode in pairs if _dialogue_halved_applies(entry, book, mode=mode))
+
+
+def _dialogue_halved_applies(entry: dict[str, Any], book: M.Book, *, mode: str) -> bool:
+    """`dialogue_halved` 这一条在这一章上**判得了吗**（与 `_dialogue` 共用同一个判定式）。"""
+    if mode != 'shallow' or not _plan_keeps_content(entry):
+        return False
+    n = M.src_quote_count(entry, book.source_text)
+    return n is not None and n >= 4
+
+
+#: 分母为零时那句「这一次为什么够不着」。两相共用，**一个字节都不许分家**。
+DIALOGUE_HALVED_BLIND = (
+    '这一次没有一章落在本条的前件里（前件三合取：`mode == shallow` × 计划无净压缩 × '
+    '源章 ≥4 句直接引语）⇒ **本条没有分母**。'
+    '2026-08-22 起默认深度选择是**全书闭卷**，闭卷臂上这条判据结构上不可能命中；'
+    '「0 命中」在这里不是一个结论。**闭卷同方向的漂移看 `dialogue_report` 的 m/n 分布**'
+    '（闭卷压对白到 ~0.7× 是 6/6 本方向一致的已知代价，不是失败），'
+    '以及 `dialogue_fewer`（`FREE`，闭卷臂上仍然照跑）')
+
+
 def _dialogue(body: str, entry: dict[str, Any], book: M.Book, *, mode: str) -> list[Finding]:
     """章级引语数：成稿 M vs 源章 N。**度量无条件出**，告警两级。
 
@@ -538,7 +579,9 @@ def _dialogue(body: str, entry: dict[str, Any], book: M.Book, *, mode: str) -> l
         evidence=[str(m), str(n if n is not None else '')])]
     if n is None:
         return out
-    if mode == 'shallow' and _plan_keeps_content(entry) and n >= 4 and m < math.ceil(n / 2):
+    # ⚠ 前件走 `_dialogue_halved_applies`（**唯一落点**）：`dialogue_halved_scope` 要拿
+    #   同一个判定式去数分母，两处手抄必然分家。
+    if _dialogue_halved_applies(entry, book, mode=mode) and m < math.ceil(n / 2):
         out.append(finding(
             'dialogue_halved',
             detail=f'直接引语腰斩：源章 {n} 句 → 成稿 {m} 句（开卷、且计划没有净压缩'
@@ -948,7 +991,36 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
                    f'/ 人物名 {nm_hits[:5]}',
             evidence=kw_hits + nm_hits))
 
-    # ── ⑥ `must_hold`：确定性层判不了，**必须显式说「没查」而不是让它消失** ────
+    # ── ⑥ 两条臂各写了几章 —— **只报不判**（`R-7.6c` / `arm_split_report`）──────
+    #
+    # ⚠⚠ 2026-08-22 之前默认深度选择是 `(1, 2, 3)`，开卷是 20/23 章的默认路径；
+    #   改成**全书闭卷**之后，走开卷的章都是**例外**，而例外必须常驻在报告上说出来。
+    #   `stage5/draft.md` 的标题行确实也印着臂的分布，但那是**产物**不是判据表
+    #   ——只在产物里说得出来，等于「谁都能看见、没有一条判据在管」。
+    # ⚠ **不为开卷发明阈值**：2026-08-10 已否决过一次（`B-03`），理由「逐章
+    #   0.9%~96.8% 的跨度不是一个可以一刀切的量」今天仍然成立。
+    # ⚠ 重合度按**逐章 min~max**报，不报均值——均值正是当年把「开卷有 96.8% 的章」
+    #   藏起来的那把尺子（`overlap_report` 的 note 记着这条）。
+    # ⚠ 重合度**现算**，不去解析 `overlap_report` 的 evidence 串：那是同一个数的
+    #   第二个落点，而调用同一个生产函数不是。
+    by_mode: collections.Counter = collections.Counter(
+        str(r.get('mode') or '（无成稿）') for r in written)
+    shallow_ov = sorted(
+        ov for r in written if r.get('mode') == 'shallow'
+        and (entry_ := book.chapters.get(r.get('output_ordinal'))) is not None
+        and (ov := M.overlap_ratio(
+            bodies.get(r.get('output_ordinal')) or '', entry_, book.source_text)) is not None)
+    n_shallow = by_mode.get('shallow', 0)
+    fs.append(finding(
+        'arm_split_report',
+        detail=f'写作臂：闭卷 {by_mode.get("deep", 0)} 章 · 开卷 {n_shallow} 章'
+               f'（共 {len(written)} 章有成稿）'
+               + ('　← **开卷已不在默认路径上**，这几章是例外' if n_shallow else '')
+               + (f'；开卷逐章重合度 {shallow_ov[0]:.1%}~{shallow_ov[-1]:.1%}'
+                  if shallow_ov else ''),
+        evidence=[f'deep={by_mode.get("deep", 0)}', f'shallow={n_shallow}']))
+
+    # ── ⑦ `must_hold`：确定性层判不了，**必须显式说「没查」而不是让它消失** ────
     n_hold = sum(len(be.get('must_hold') or []) for c in book.chapters.values()
                  for be in (c.get('segments') or []))
     fs.append(finding(
@@ -1015,6 +1087,7 @@ _FROM_REVIEW: tuple[str, ...] = (
     'no_secrets_in_book', 'secret_timeline', 'cross_chapter_number',
     'book_length_report', 'book_length', 'name_surface_survey',
     'style_block_carries_plot', 'must_hold_unver', 'convergence_report',
+    'arm_split_report',
 )
 
 #: `unver` 的五条：**必须走 `unverifiable(rule, why)`**（`builder._status_of` 会拒收

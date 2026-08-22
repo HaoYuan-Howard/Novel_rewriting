@@ -316,6 +316,70 @@
   "parallel",
   "return"
  ],
+ "goal_intents": [
+  "establish",
+  "advance",
+  "open",
+  "close",
+  "withhold",
+  "resolve"
+ ],
+ "response_structural_roles": {
+  "R_COLD_OPEN": "cold_open",
+  "R_SETUP": "setup",
+  "R_ESCALATION": "escalation",
+  "R_TURN": "turn",
+  "R_PAYOFF": "payoff",
+  "R_BRIDGE": "bridge"
+ },
+ "response_delivery_modes": {
+  "D_SCENE": "scene",
+  "D_SUMMARY": "summary"
+ },
+ "response_temporal_links": {
+  "X_START": "start",
+  "X_CONTINUE": "continue",
+  "X_EARLIER": "earlier",
+  "X_LATER": "later",
+  "X_PARALLEL": "parallel",
+  "X_RETURN": "return"
+ },
+ "response_goal_intents": {
+  "G_ESTABLISH": "establish",
+  "G_ADVANCE": "advance",
+  "G_OPEN": "open",
+  "G_CLOSE": "close",
+  "G_WITHHOLD": "withhold",
+  "G_RESOLVE": "resolve"
+ },
+ "response_chapter_weights": {
+  "CH_MAJOR": "major",
+  "CH_ABOVE": "above",
+  "CH_EVEN": "even",
+  "CH_BELOW": "below",
+  "CH_MINOR": "minor"
+ },
+ "chapter_weights": [
+  "major",
+  "above",
+  "even",
+  "below",
+  "minor"
+ ],
+ "response_unit_weights": {
+  "W_PEAK": "peak",
+  "W_STRONG": "strong",
+  "W_MID": "mid",
+  "W_QUICK": "quick",
+  "W_BRUSH": "brush"
+ },
+ "unit_weights": [
+  "peak",
+  "strong",
+  "mid",
+  "quick",
+  "brush"
+ ],
  "style_words": [
   "环境渲染",
   "渲染氛围",

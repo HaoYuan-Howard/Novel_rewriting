@@ -68,6 +68,21 @@ def test_the_length_band_block_carries_both_ends():
     assert str(lo) in ENUM_BLOCKS['BANDS'] or f'{lo:g}' in ENUM_BLOCKS['BANDS']
 
 
+def test_the_book_band_block_is_rendered_from_its_single_home_too():
+    """⭐ 2026-08-22 起篇幅是**一对**带：单章允许浮动、全书必须落进总量带。
+
+    ⚠ 两个数各自守着一条 HARD（`budget_band` / `plan_book_band`），
+    只发其中一个的下场是确定的：只发 `BANDS` ⇒ 模型不知道全书还有一道闸，
+    章章顶到上限就整本超；只发 `BOOK_BANDS` ⇒ 模型不知道单章的天花板在哪。
+    """
+    blo, bhi = inv.BOOK_BAND
+    assert ENUM_BLOCKS['BOOK_BANDS'] == f'{blo:g}~{bhi:g}×'
+    clo, chi = inv.PLAN_BUDGET_BAND
+    assert clo <= blo and bhi <= chi, (
+        f'书级带 {inv.BOOK_BAND} 比逐章带 {inv.PLAN_BUDGET_BAND} 还宽——'
+        f'那样书级那道 HARD 就永远轮不到它说话（逐章带会先红）')
+
+
 def test_two_renderings_of_one_table_are_not_two_tables():
     """`$STYLE_WORDS` 与 `$WORDS` 是同一张表的两种渲染。**改表两边一起变。**"""
     assert set(inv.STYLE_WORDS) <= set(ENUM_BLOCKS['WORDS'].split(' / '))

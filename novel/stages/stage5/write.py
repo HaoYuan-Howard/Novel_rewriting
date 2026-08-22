@@ -644,7 +644,7 @@ def _run_group_parallel(
     written = [written_by[key] for key in sorted(written_by)]
     blocked = [blocked_by[key] for key in sorted(blocked_by)]
     report = _report(
-        ctx, store, mode, written=written, blocked=blocked, judged=judged)
+        ctx, store, mode, written=written, blocked=blocked, book=book, judged=judged)
     if blocked and not written:
         raise GateBlocked(
             f'这一批 {len(todo)} 章全部没落成正式稿：' + '；'.join(blocked)
@@ -813,7 +813,7 @@ def run_recheck(ctx: RunContext) -> CheckReport:
         else:
             store.write(rel, updated)
     assemble_book(ctx, store, book)
-    return _report(ctx, store, mode, written=[], blocked=touched, judged=judged)
+    return _report(ctx, store, mode, written=[], blocked=touched, book=book, judged=judged)
 
 
 def run_revalidate(
@@ -866,7 +866,8 @@ def run_revalidate(
         promoted.append(f'第 {o} 章 → {store.path(rel)}')
     if not promoted and not still:
         raise TerminalState(f'{mode} 臂盘上一份 `.INVALID` 都没有——没有可提升的稿')
-    return _report(ctx, store, mode, written=promoted, blocked=still, judged=judged)
+    return _report(ctx, store, mode, written=promoted, blocked=still, book=book,
+                   judged=judged)
 
 
 def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
@@ -948,7 +949,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
              f'　⚠⚠ 下游没有第二道——stage7 只排除 `.INVALID`，这一份会一路进成书']
             if errs else [])
     return _report(ctx, store, mode, written=[f'第 {o} 章 → {where}'], blocked=note,
-                   judged={o: fs})
+                   book=book, judged={o: fs})
 
 
 _EDIT_ORDINAL = re.compile(r'ch(\d+)')
@@ -1030,7 +1031,7 @@ def assemble_book(ctx: RunContext, store: ArtifactStore, book: M.Book) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _report(ctx: RunContext, store: ArtifactStore, mode: str, *,
-            written: list[str], blocked: list[str],
+            written: list[str], blocked: list[str], book: M.Book,
             judged: dict[int, list] | None = None) -> CheckReport:
     """写作相的报告：**这一次碰过的那几章**逐条报出判据。
 
@@ -1051,9 +1052,25 @@ def _report(ctx: RunContext, store: ArtifactStore, mode: str, *,
         for f in fs:
             by_rule.setdefault(f.rule, []).append(f)
     empty = '这一次一章都没碰过——**没有任何一章被判过**，不是判过没问题'
+    scanned = {r: f'{n} 章（{mode} 臂，这一次碰过的）' for r in checks._FROM_CHAPTER}
+    # ⚠⚠ **`dialogue_halved` 的分母是「有几章落在它的前件里」**，而前件第一项就是
+    #   `mode == shallow` ⇒ 闭卷臂上它结构上不可能命中，而「跑了、零 findings」在报告上
+    #   渲染成 pass。2026-08-22 起默认深度选择是全书闭卷，那正是这条假绿的常驻形态。
+    #   ⇒ 分母无条件打出来，为零时落 `unver`（同 `verbatim_missing` 那次事故的处置）。
+    # ⚠ `book` 是**必填**，不给可选默认：四个调用方手里全都有它，配一个 `None` 兜底
+    #   等于给这条分母留一条会静默走空的路——而这条判据的失效形态就是「看起来查过了」。
+    blind: dict[str, str] = {}
+    if n:
+        n_halved = checks.dialogue_halved_scope(
+            ((book.chapters[o], mode) for o in sorted(judged or {})
+             if o in book.chapters), book)
+        scanned['dialogue_halved'] = (
+            f'{n_halved}/{n} 章落在前件里（开卷 × 计划无净压缩 × 源章 ≥4 句）')
+        if not n_halved:
+            blind['dialogue_halved'] = checks.DIALOGUE_HALVED_BLIND
     outcomes = checks.check(
         chapter_findings_by_rule=by_rule,
-        scanned={r: f'{n} 章（{mode} 臂，这一次碰过的）' for r in checks._FROM_CHAPTER},
+        scanned=scanned, blind=blind,
         unver_empty={}, phase='write') if n else [
         unverifiable(r, empty, scanned='0 章')
         for r in (*checks._FROM_CHAPTER, *checks._FROM_REVIEW)]

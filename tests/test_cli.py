@@ -413,12 +413,13 @@ def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
         % len(fake.calls))
 
 
-def test_the_judge_node_pins_its_model_over_the_global_default(monkeypatch):
+def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
     """⭐ `_llm_client` 是全链唯一的 client 构造口：`NodeSpec.model` 在这里生效。
 
-    「除判官外全链 flash」（2026-08-19/20 用户裁决）必须长成形状而不是纪律：
-    判官节点钉死 pro ⇒ `DEEPSEEK_MODEL` / 全局默认 flash 都换不掉它；
-    其余节点 `''` = 跟随全局默认（flash）。
+    「除例外外全链 flash」必须长成形状而不是纪律：两个钉死节点 ⇒ `DEEPSEEK_MODEL` /
+    全局默认 flash 都换不掉它们；其余节点 `''` = 跟随全局默认（flash）。
+    ⚠ 两个钉死值的理由不同（判官是证据力、`stage4.plan` 是重采粒度），
+    但**接线只有这一条**——所以这里一次断三个节点，不给第二条通路留缝。
     """
     import tempfile
     from pathlib import Path
@@ -435,10 +436,13 @@ def test_the_judge_node_pins_its_model_over_the_global_default(monkeypatch):
 
     judge = M._llm_client(RunContext.open(
         base, '123', 'stage6.semantic', paid=True, write_ledger=False))
+    plan = M._llm_client(RunContext.open(
+        base, '123', 'stage4.plan', paid=True, write_ledger=False))
     other = M._llm_client(RunContext.open(
         base, '123', 'stage3.style', paid=True, write_ledger=False))
 
     assert judge.model == 'deepseek-v4-pro', '判官的 pro 是钉死的，环境变量换不掉'
+    assert plan.model == 'deepseek-v4-pro', 'stage4.plan 的 pro 是钉死的，环境变量换不掉'
     assert other.model == 'deepseek-v4-flash' == config.DEFAULT_MODEL
 
 

@@ -394,7 +394,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 48 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 47 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -404,9 +404,10 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    # 46 = 原 48 减去随 `stage5.semantic` 节点一并下线的
-    # `semantic_secret_leak` / `semantic_secret_coverage`（2026-08-17 用户裁决）。
-    assert len(reg) == 46
+    # 47 = 原 48 减去随 `stage5.semantic` 节点一并下线的 `semantic_secret_leak` /
+    # `semantic_secret_coverage`（2026-08-17 用户裁决），再加 2026-08-22 随「默认全书闭卷」
+    # 一起立的 `arm_split_report`（`R-7.6c`：走开卷从此是例外，例外必须常驻留痕）。
+    assert len(reg) == 47
 
 
 def test_the_unver_five_must_say_why_they_cannot_check():
@@ -750,3 +751,177 @@ def test_dry_run_builds_the_same_prompt_the_paid_path_would_send(box):
     assert user == prompts.build_user(mat)
     assert '── 本章任务 ──' in user and '篇幅方式' not in user, (
         '「篇幅方式」那一行回来了——`op` 已整族裁撤，它只会渲染出一个带窟窿的指令')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 六、`dialogue_halved` 的分母 —— **全书闭卷把它的暴露面清空了**（2026-08-22，批 1）
+#
+# ⚠⚠ 这条 HARD 的前件是三合取，第一项就是 `mode == 'shallow'`。默认深度选择从
+#   `(1, 2, 3)` 改成**全部计划章**之后，默认路径上它的分母恒为零，而报告会把
+#   「跑了、零 findings」渲染成 pass——与 `ctx_hinge_delivered` 那次事故逐格同形。
+#   而它背着的正是本项目效应量最大的一条跨书结论（闭卷把对白压到 ~0.7×，6/6 本方向一致），
+#   全书闭卷恰恰把那个效应从 3 章扩到了整本。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_the_closed_book_arm_gives_dialogue_halved_no_denominator(book, entry):
+    """闭卷臂上这条判据**结构上判不了**——分母是 0，不是「查过、干净」。"""
+    assert checks.dialogue_halved_scope([(entry, 'deep')], book) == 0
+
+
+def test_the_shallow_maintenance_arm_still_gives_it_a_denominator(book, entry):
+    """⚠ **不许因为默认变了就把这条 HARD 拆掉**：单臂维护入口上它判别力完好。
+
+    这也是为什么处置走 `blind`（这一次没有判别力样本）而**不是**把它加进
+    `checks._UNVER`（这条判据永远够不着）——后者会把 `stage5.write --mode shallow`
+    上唯一一道对白 HARD 静默拆掉。
+    """
+    assert checks.dialogue_halved_scope([(entry, 'shallow')], book) == 1
+    assert 'dialogue_halved' not in checks._UNVER
+
+
+def test_a_net_compressed_chapter_is_outside_the_precondition_too(book, entry):
+    """前件的另外两项也真的在算：净压缩的章不进分母。
+
+    ⚠ 净压缩的章计划本身已删内容 ⇒ 源章引语数 N 高估了合法目标，强拦只会逼写手
+    拿对白凑数。这不是宽容，是「按它修会更差」。
+    """
+    squeezed = dict(entry, budget_chars=int(entry['source_chars'] * 0.5))
+    assert checks.dialogue_halved_scope([(squeezed, 'shallow')], book) == 0
+
+
+def test_a_zero_denominator_reports_unver_instead_of_a_green_light(book, entry):
+    """⭐ 分母为零 ⇒ 报告上是 `unver`（带「为什么够不着」），不是一盏绿灯。"""
+    from novel.report.builder import build
+    from novel.prov import FreshnessReport
+
+    outcomes = checks.check(
+        chapter_findings_by_rule={}, scanned={'dialogue_halved': '0/23 章落在前件里'},
+        unver_empty={}, blind={'dialogue_halved': checks.DIALOGUE_HALVED_BLIND},
+        phase='write')
+    one = next(o for o in outcomes if o.rule == 'dialogue_halved')
+    assert one.unver_why == checks.DIALOGUE_HALVED_BLIND
+    report = build(sid='7615069877019300633', node='stage5.write',
+                   freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=outcomes)
+    row = next(item for item in report.rules if item.rule == 'dialogue_halved')
+    assert row.status == 'unver' and row.sev == 'hard', (
+        '⚠ **不降 sev**：它仍是一条 HARD，只是这一次没有判别力样本')
+    assert '没有分母' in (row.why or '')
+
+
+def test_both_phases_share_one_denominator_and_one_reason():
+    """写作相与验收相**读同一个分母函数、同一句理由**——两处手抄必然分家。"""
+    import inspect
+
+    from novel.stages.stage5 import review, write
+
+    for module in (review, write):
+        src = inspect.getsource(module)
+        assert 'dialogue_halved_scope' in src, f'{module.__name__} 自己数了一遍分母'
+        assert 'DIALOGUE_HALVED_BLIND' in src, f'{module.__name__} 手抄了一份理由'
+
+
+def test_the_precondition_has_exactly_one_producer():
+    """`_dialogue` 与 `dialogue_halved_scope` 判的必须是同一个前件。
+
+    ⚠ 分家的形态是「分母说有 5 章，实际一章都判不了」——**比没有分母更糟**。
+    """
+    import inspect
+
+    src = inspect.getsource(checks._dialogue)
+    assert '_dialogue_halved_applies' in src
+    assert "mode == 'shallow'" not in src, '前件被手抄回 `_dialogue` 里了'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 七、`arm_split_report` —— 走开卷从此是例外，例外要常驻留痕（`R-7.6c`）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _rows(*modes: str) -> list[dict]:
+    return [{'output_ordinal': i, 'mode': mode, 'relpath': f'stage5/{mode}/ch{i:02d}.json',
+             'chars': 100, 'budget_chars': 100, 'source_chars': 100}
+            for i, mode in enumerate(modes, 1)]
+
+
+def _two_chapter_book() -> M.Book:
+    """一本两章的合成书：第 2 章挂在源第 2 章上，好让开卷那一章算得出重合度。"""
+    fresh = factories.stage5_book()
+    first = fresh.ctx['chapters'][0]
+    second = dict(first, output_ordinal=2, from_source_ordinals=[2],
+                  source_chars=len(fresh.source_text[2]),
+                  budget_chars=len(fresh.source_text[2]))
+    fresh.ctx['chapters'] = [first, second]
+    return fresh
+
+
+def test_the_arm_split_is_reported_unconditionally(book):
+    """**无条件产出**：一本全闭卷的书也要说出「开卷 0 章」这个读数。
+
+    ⚠ 「查过、干净」与「根本没在查」在报告上必须长得不一样——`name_surface_survey`
+    正是因为写成 `if 命中:` 而在盘上 12 份 review 里 0 次产出。
+    """
+    fs = checks.book_findings(book, rows=_rows('deep'), bodies={1: '正文'},
+                              inv_numbers=[], inv_names=[])
+    one = next(f for f in fs if f.rule == 'arm_split_report')
+    assert '闭卷 1 章' in one.detail and '开卷 0 章' in one.detail
+    assert '例外' not in one.detail, '一章开卷都没有时不该报「这几章是例外」'
+
+
+def test_a_shallow_chapter_is_called_out_as_the_exception_it_now_is(book):
+    """有开卷章 ⇒ 报告上明说它是例外，并附**逐章** min~max 重合度。
+
+    ⚠ 附**逐章**跨度不附均值：均值正是当年把「开卷有 96.8% 的章」藏起来的那把尺子。
+    ⚠ **只报不判**：本条是 `metric`，不为开卷发明阈值（`B-03`，2026-08-10 已否决一次）。
+    """
+    from contracts.rules import REGISTRY
+
+    two = _two_chapter_book()
+    fs = checks.book_findings(
+        two, rows=_rows('deep', 'shallow'),
+        bodies={1: two.source_text[1], 2: two.source_text[2]},
+        inv_numbers=[], inv_names=[])
+    one = next(f for f in fs if f.rule == 'arm_split_report')
+    assert '开卷 1 章' in one.detail and '例外' in one.detail
+    assert '开卷逐章重合度' in one.detail
+    assert REGISTRY.get('arm_split_report').sev == 'metric'
+    assert one.actionable is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 八、默认深度选择 = 全部计划章（2026-08-22 裁决）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_the_default_depth_is_now_the_whole_book():
+    """⭐ `DEFAULT_DEEP = (1, 2, 3)` 已废：默认闭卷 = **全部计划章**。
+
+    推翻旧默认的是成书级实测（无情道 23 章，`tools/book_overlap.py`）：
+    回映射人名后逐章 20 字窗重合，deep 中位 0.017 / shallow 中位 0.226——**13 倍**。
+    """
+    from novel.orchestrator import approvals
+
+    assert not hasattr(approvals, 'DEFAULT_DEEP'), (
+        '旧常量回来了；它与 `default_deep()` 是同一件事的两个落点')
+    assert approvals.default_deep([1, 2, 3, 4, 5]) == [1, 2, 3, 4, 5]
+    assert approvals.default_deep([3, 1, 2, 2]) == [1, 2, 3], '仍要排序去重'
+
+
+def test_no_plan_means_no_default_not_the_first_three_chapters():
+    """`planned is None` ⇒ `[]`：「还不知道有哪些章」与「选了三章」必须分得开。
+
+    ⚠ 这不会把默认卡在空集上——`_read_raw` 在没有盘上记录时每次都现算一份，
+    计划一落盘它自动就是全书。
+    """
+    from novel.orchestrator import approvals
+
+    assert approvals.default_deep(None) == []
+    assert approvals.default_deep([]) == []
+
+
+def test_the_default_is_a_suggestion_not_a_spending_authorization():
+    """默认值仍然只是**建议**：没有 `deep_proof` 之前队列里不会出现付费的 stage5.write。"""
+    import inspect
+
+    from novel.orchestrator import approvals
+
+    src = inspect.getsource(approvals.current_depth_selection)
+    assert 'deep_proof is None' in src
+    assert inspect.signature(approvals._fresh_record).parameters['planned'].default is None
