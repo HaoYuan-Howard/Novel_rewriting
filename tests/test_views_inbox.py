@@ -195,8 +195,8 @@ def test_plan_weight_warnings_route_to_human_and_thus_into_the_inbox():
         assert remediation_of(rule) == 'human'
 
 
-def test_stalled_items_come_from_unresolved_rounds_at_the_stop_threshold(monkeypatch):
-    """`unresolved_rounds >= STOP_REWRITE_AFTER` 且未豁免 ⇒ stalled；豁免只计数不入列。"""
+def test_stalled_items_only_take_hard_info_at_the_stop_threshold(monkeypatch):
+    """轮次到顶只升级 HARD/INFO；常驻 METRIC/UNVER 不是修复失败。"""
     from novel.stages.stage5 import review
     from novel.views import inbox as I
 
@@ -210,7 +210,11 @@ def test_stalled_items_come_from_unresolved_rounds_at_the_stop_threshold(monkeyp
             finding('dialogue_ratio_drift', 1),
             finding('invented_number', 2, wontfix=object()),
         ])],
-        book=[finding('book_length', 2)])
+        book=[
+            finding('book_length', 2),
+            finding('arm_split_report', 2),
+            finding('must_hold_unver', 2),
+        ])
     monkeypatch.setattr(review, 'latest_review', lambda _s: (4, rev))
 
     # ⚠ 豁免计数**不再由这个函数交**：那张账逐层各一份（`<stage>/wontfix.json`），

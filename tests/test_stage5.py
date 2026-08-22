@@ -163,16 +163,30 @@ def test_verbatim_missing_goes_red_when_the_mandated_line_is_gone(book, entry):
     assert 'verbatim_missing' not in _fire(body + line, e, book)
 
 
-def test_verbatim_typo_is_a_separate_conclusion_not_a_miss(book, entry):
-    """⚠ **一字之差按错别字放行**，但**单独留痕**。
+@pytest.mark.parametrize('rewritten', [
+    '这位工子的伤口已经溃烂了整整三日无人问津。',
+    '这位公子的伤口已经溃烂了整整三日无人问津。',
+])
+def test_verbatim_typo_is_a_separate_conclusion_not_a_miss(
+        book, entry, rewritten):
+    """⚠ **一两个字之差按错别字放行**，但**单独留痕**。
 
     原文里本来就有错字（实测「这**为**公子伤口溃烂…」），写手写成「这**位**公子…」
     ——那是**纠正**不是改写。要求它复现原文的错别字是荒谬的。
     """
     line = '这为公子的伤口已经溃烂了整整三日无人问津。'
     e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
-    fired = _fire(_clean_body(book, entry) + line.replace('这为', '这位'), e, book)
+    fired = _fire(_clean_body(book, entry) + rewritten, e, book)
     assert 'verbatim_typo' in fired and 'verbatim_missing' not in fired
+
+
+def test_verbatim_three_character_rewrite_is_still_missing(book, entry):
+    """三字及以上已经不是局部错别字修正，仍须走 missing。"""
+    line = '这为工子的伤口已经溃烂了整整三日无人问津。'
+    e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
+    rewritten = '这位年轻人的伤口已经溃烂了整整三日无人问津。'
+    fired = _fire(_clean_body(book, entry) + rewritten, e, book)
+    assert 'verbatim_missing' in fired and 'verbatim_typo' not in fired
 
 
 def test_verbatim_split_by_a_speech_tag_is_allowed_but_still_recorded(book, entry):

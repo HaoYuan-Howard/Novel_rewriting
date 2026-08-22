@@ -12,8 +12,10 @@ inbox.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；
   · `rejected`   `.INVALID` 与正式稿**并存**：付费自救/人工补丁被闸门驳回，
                  正式稿仍是旧轮——「钱花了，稿丢了」。`how` 带 `_rounds/` 归档指针
                  （**UG-12 的闭环**：被驳回后下一条恢复路径写在这行字里）
-  · `stalled`    stage5 最新验收里 `unresolved_rounds >= STOP_REWRITE_AFTER` 且未豁免：
-                 修复已判「根因不在写手」主动跳过，等人工改稿或豁免
+  · `stalled`    stage5 最新验收里 HARD/INFO 结论的
+                 `unresolved_rounds >= STOP_REWRITE_AFTER` 且未豁免：修复已判
+                 「根因不在写手」主动跳过，等人工改稿或豁免；METRIC/UNVER
+                 是读数或判据边界，重复出现也不是待修故障
   · `repairable` 0 成本复检里已绑定确定性 `Rule.fix` 路由的本层 HARD 命中
   · `human_only` 各层 0 成本复检里 `status=hit` 且 `remediation=human` 的结论逐条展开
                  （stage4 计划轻重告警自然入列——**UG-11 的闭环**：处置=归人判断）
@@ -43,6 +45,7 @@ import os
 import re
 
 from contracts.invariants import DEPTH_MODES, INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER
+from contracts.rules import REGISTRY
 from contracts.schema.api import InboxItem, InboxView
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.report import CheckReport
@@ -278,7 +281,11 @@ def _stage5_rejected_revisions(store: ArtifactStore) -> list[InboxItem]:
 
 
 def _stage5_stalled(store: ArtifactStore) -> list[InboxItem]:
-    """连续 N 轮未消、修复已判「根因不在写手」主动跳过的那些。
+    """连续 N 轮未消、修复已判「根因不在写手」主动跳过的 HARD/INFO。
+
+    Review 的收敛账会给每一类 finding 留轮次，包括无条件常驻的 METRIC/UNVER。
+    后两类重复出现是读数稳定或边界仍在，不是修复失败；把它们升级成 stalled
+    会让一本机械上可交付的书被永久伪阻塞。
 
     ⚠ 豁免计数**不在这里数**：它逐层各一份账，由 `inbox_view` 跨层求和
     （从前这里顺手数了 stage5 那一份，收成跨层之后会数两次）。
@@ -294,7 +301,7 @@ def _stage5_stalled(store: ArtifactStore) -> list[InboxItem]:
     def one(chapter: int | None, finding) -> None:
         if finding.wontfix is not None:
             return
-        if int(finding.unresolved_rounds or 0) < STOP_REWRITE_AFTER:
+        if not _is_stage5_stalled(finding.rule, finding):
             return
         if finding.rule == 'band_drift' and chapter is not None:
             stalled_band.append((chapter, finding))
@@ -328,6 +335,13 @@ def _stage5_stalled(store: ArtifactStore) -> list[InboxItem]:
     return out
 
 
+def _is_stage5_stalled(rule_id: str, finding) -> bool:
+    """只有可形成质量结论的 HARD/INFO 才能成为 stalled 待办。"""
+    rule = REGISTRY.get(rule_id)
+    return (rule.sev in ('hard', 'info')
+            and int(finding.unresolved_rounds or 0) >= STOP_REWRITE_AFTER)
+
+
 def _report_items(
     report: CheckReport,
     stage: str,
@@ -340,7 +354,8 @@ def _report_items(
         for finding in line.findings:
             if finding.wontfix is not None:
                 continue                                   # 豁免过：计数不占清单
-            stalled = int(finding.unresolved_rounds or 0) >= STOP_REWRITE_AFTER
+            stalled = (stage == 'stage5'
+                       and _is_stage5_stalled(line.rule, finding))
             if stage == 'stage5' and stalled:
                 continue                                   # 已由 stalled 类列出，别双份
             findings.append(finding)

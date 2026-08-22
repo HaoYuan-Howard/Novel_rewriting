@@ -140,10 +140,11 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
                 if (gap := split_by_speech_tag(k, body, nb, nmap)) is not None:
                     split_v.append((seg, gap))
                     continue
-                # 【一字之差按错别字放行】原文里本来就有错字（实测「这**为**公子伤口溃烂…」），
+                # 【一两个字之差按错别字放行】原文里本来就有错字（实测「这**为**公子伤口溃烂…」），
                 # 写手写成了「这**位**公子…」——那是**纠正**，不是改写。
-                # 要求它复现原文的错别字是荒谬的，而只差一个字的改写实际上不存在。
-                (typo_v if min_hamming(k, nb) <= 1 else miss_v).append(seg)
+                # 要求它复现原文的错别字是荒谬的；契约把一两个字的局部修正都留作
+                # INFO 痕迹，三字及以上才按「没有原样写入」处理。
+                (typo_v if min_hamming(k, nb) <= 2 else miss_v).append(seg)
     if split_v:
         fs.append(finding(
             'verbatim_split',
@@ -159,7 +160,7 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     if typo_v:
         fs.append(finding(
             'verbatim_typo',
-            detail=f'{len(typo_v)} 句【原样写入】与成稿差一个字'
+            detail=f'{len(typo_v)} 句【原样写入】与成稿差一两个字'
                    f'：{[t[:18] for t in typo_v[:3]]}',
             evidence=typo_v))
 
