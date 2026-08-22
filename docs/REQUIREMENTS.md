@@ -472,15 +472,24 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 
 | 改动 | 现在 | 应该 | 实测失败样本 |
 |---|---|---|---|
-| stage2 锚点 | `HingeResponse` 同时要段号+短语且须一致 | 删 `para` 只留 `phrase`，段号由代码全书唯一匹配定位；多匹配/查无才 HARD | 书3 的 10 处 `verbatim_failed` 里 **9 处是短语对、段号错** |
+| stage2 锚点（**已完成**） | v3 的 `HingeResponse` 同时要段号+短语且须一致 | IR 响应删 `para` 只留 `phrase`，由代码在冻结拍区间内唯一定位；多匹配/查无才 HARD。v2 再把边界与细节拆成两相 | 书3 的 10 处 `verbatim_failed` 里 **9 处是短语对、段号错**；v2 单书 169/169 条定位成功 |
 | ~~`narrative_role='cold_open'`~~ | ~~模型标~~ | **结案不做**（2026-08-22 用户裁决） | 见下面那段 |
 | ~~`PlanGoal` 的 `FactRef.ref`~~ | ~~模型填~~ | **结案不做**（同上） | 见下面那段 |
 | `Secret.setup_chapters` | 模型填 | 由 `reader_reveal_events` 推上界（同章即无效） | 书3 `secret_setup_order` |
-| `present_names` | 自由文本 `list[str]` | 收成 `char_id` 引用，从已知集合里选 | 书3 `present_names_invented` |
+| `present_names`（**已完成**） | v3/v1 是自由文本 `list[str]` | v2 收成截止本章可见的 `char_id` 闭集引用，代码再投影成既有产物字面 | 书3 `present_names_invented`；v2 单书 276 项歧义/名册外/代词/过早均为 0 |
 | stage7 家族/宅邸称呼 | 不在替换面 | 从 `surname_map` 自动派生 `X家`/`X府` | 书2 的 35 条高置信残留（`孙家/孙府/宋家/宋府`） |
 
-- [ ] 上表六项**里剩下的四项**按序施工（锚点那行杠杆最大：错误面从「两字段互相一致」
-      缩成「短语是否逐字存在」，且模型不必数段落 ⇒ reasoning 同步下降）。
+- [x] stage2 锚点：IR 去掉 hinge 段号；v2 再以「微事件回忆 → 因果拍压缩」冻结边界。
+- [x] stage2 在场者：v2 响应改为可见 `char_id` 闭集引用。
+- [ ] `Secret.setup_chapters` 由 `reader_reveal_events` 推上界。
+- [ ] stage7 家族/宅邸称呼从 `surname_map` 确定性派生。
+
+Stage2 两项的付费验收见 `docs/stage2_contract_experiment.md` §十四：同书同正文哈希、
+同全书底座、同 `high + thinking` 下，Flash v1.1 的 91 拍 / 145 hinge 提到 v2 的
+126 / 169，Pro v1.1 为 130 / 168；0 HARD。在场者四类失败从 9 条代词等问题收敛到
+0/276。代价是逐章调用从一相变两相：真调用 25 → 43、completion 136,431 → 271,462，
+墙钟 385.0s → 621.0s。地点只到 84/126=66.7%，仍未达到本 TODO 预登记的 81% 底线；
+且目前只有一本书（n=1），所以本条只结案两项结构改造，不声称 Flash 已普遍追平 Pro。
 
 ⚠⚠ **`cold_open` 推导与 `FactRef` 自动补两行已于 2026-08-22 结案不做**（用户裁决），
 理由是**杠杆已经归零，而它们各自还带一份代价**：
@@ -499,12 +508,15 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 `plan_beats[]` → `end_beat`（三条引用/覆盖 HARD 变恒等式）、
 `budget_chars` → 两级档位（三条算术 HARD 变代码后置条件）。
 - [ ] 枚举下推到解码器 + 取值面命名不可混淆（`summary`/`close` 那两条实测）。
-- [ ] **方向警告**：flash 在 `stage2.blueprint` 比 pro **少想 36%**（113,529 vs
-      176,354）、在 `stage5.write` 比 pro **多想 34%**（246,064 vs 182,997）——
-      抽取层想得不够、写作层想得过多，**别用同一套手法压这两个节点**。
-- [ ] 验收读数已有两个现成基线：`outputs/_ab/ab_matrix_无情道_pro_vs_flash.md`
-      （`tools/ab_compare.py`）与 `outputs/_ab/blind_read_2016982769068126957`
-      （用户盲读：区分不出高下——它只对 `stage5.write` 构成背书）。
+- [x] **方向警告已验证并换成结构解法**：旧基线里 flash 在 `stage2.blueprint` 比 pro
+      **少想 36%**（113,529 vs 176,354）；把 effort 调到 max 的付费反证却让 Flash 从
+      91 拍进一步掉到 87 拍，故 effort 不是杠杆。v2 用两相调用把 reasoning 提到
+      240,889，靠的是拆任务，不是同一请求里催模型多想。`stage5.write` 仍是另一方向
+      （flash 历史上比 pro 多想 34%），**不许照搬本节点手法**。
+- [x] Stage2 对照矩阵已按同正文哈希、同全书底座、同 effort 重跑，结果落
+      `docs/stage2_contract_experiment.md` §十四（读数器仍是 `tools/ab_compare.py`）。
+- [ ] `outputs/_ab/blind_read_2016982769068126957` 的用户盲读只对 `stage5.write`
+      构成背书；v2 Stage2 尚未跑到新成稿盲读，不能挪作本次质量结论。
 
 ⚠ worktree 实测过的坑（都真踩过）：`.env` 与 `.llm_cache/` 不进 git ⇒ 新 worktree
 全 miss 真付费，把 `NOVEL_CACHE_DIR`（`novel/config.py::ENV_KEYS`）指回主仓

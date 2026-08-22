@@ -27,7 +27,7 @@ from novel.stages.stage2.repair import (
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_contract_dispatch import (
-    _ENV_KEY, _ir1_responses, _summary_for,
+    _ENV_KEY, _ir1_responses, _ir2_responses, _summary_for,
 )
 from tests.test_stage2_generation import _client, _ctx, _ok, _response_global
 
@@ -124,9 +124,8 @@ def _unique_snippet(seg: str, avoid: str) -> str:
 def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     """跑指定 IR 臂的全链但给第 1 章第 1 拍塞一条歧义 hinge 和一条编的 hinge ⇒ .INVALID。
 
-    ⚠ 响应形状由 `ContractSpec.response_model` 决定，而 IR 系全表共用
-    `ChapterBlueprintsResponseV2` ⇒ 同一份 `_ir1_responses()` 对每条 IR 臂都成立。
-    这正是「能不能字段级修」该按能力判、而不是按架构名判的原因。
+    v1/v1.1 共用开放字面响应，v2 用关闭式 char_id 响应并多一段边界预传；
+    测试从 spec 的能力与拓扑派生，不把「IR 都是一相、都同响应模型」当永久事实。
     """
     monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / '修复_123'
@@ -138,7 +137,9 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
 
-    by_ordinal = _ir1_responses()
+    spec = CONTRACTS[architecture]
+    by_ordinal = (_ir2_responses() if spec.boundary_system is not None
+                  else _ir1_responses())
     ordinals = sorted(by_ordinal)
     texts = {s['chapter_ordinal']: s['text'] for s in main_text()}
     beat_index, seg, dup = _pick_ambiguous_site(
@@ -156,7 +157,17 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
                 {'chapter_ordinal': o, 'summary': _summary_for(o)}
                 for o in ordinals]})
         found = re.findall(r'阅读序第(\d+)章', req.user)
-        return _ok({'blueprints': [by_ordinal[int(found[-1])]]})
+        ordinal = int(found[-1])
+        if '第一张表 `micro_events`' in req.system:
+            boundary_beats = [
+                {'end_para': beat['end_para'], 'event': beat['event']}
+                for beat in by_ordinal[ordinal]['beats']]
+            return _ok({'blueprints': [{
+                'chapter_ordinal': ordinal,
+                'micro_events': boundary_beats,
+                'beats': boundary_beats,
+            }]})
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
 
     ctx = _ctx(book, 'stage2.blueprint')
     client, _transport = _client(ctx, respond)
@@ -243,7 +254,7 @@ def test_patch_refuses_a_v3_baseline(monkeypatch):
     """
     assert _UNPATCHABLE == ['bounded-fidelity-v3'], \
         f'新增了不可字段级修的架构 {_UNPATCHABLE}——本条要为它补一份对应形状的假响应'
-    # 显式拧到 v3 造基线：默认已是 ir1（2026-08-21 翻默认），
+    # 显式拧到 v3 造基线：默认已是 v2（2026-08-23 翻默认），
     # 而这条测的正是「盘上是 v3 稿时 --patch 必须终态并指路 --chapters」。
     monkeypatch.setenv(_ENV_KEY, 'bounded-fidelity-v3')
     book = Path(tempfile.mkdtemp()) / 'v3拒_123'

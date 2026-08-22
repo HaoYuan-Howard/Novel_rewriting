@@ -29,10 +29,13 @@ compile_v2.py —— `extraction-ir-v1` 的确定性编译器（`Stage2_improvem
 """
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from contracts.invariants import RESPONSE_TIME_LAYERS
+from novel.core.naming import strip_distinguisher
 from novel.core.spans import content_index, content_only, extend_terminal_punct
+from novel.core.text import norm
 from novel.stages.stage2.normalize import (
     _source, normalize_beat_ids, resolve_character_refs,
 )
@@ -448,4 +451,146 @@ def canonical_ir_projection(blueprint: dict[str, Any],
             'focalizer_name': narration.get('focalizer_name'),
             'pronoun_surfaces': list(narration.get('pronoun_surfaces') or []),
         })
+    return out
+
+
+def visible_character_refs(
+    characters: dict[str, dict[str, Any]],
+    main_text: list[dict[str, Any]],
+) -> dict[int, dict[str, list[str]]]:
+    """每章可下发的 ``char_id -> 已出现且已到可用时点的称名``。
+
+    global 名册带未来信息，不能整份发给逐章模型。本函数只保留在累计正文里已经
+    逐字出现的 canonical/address 字面；**同一字面挂多人时**，address 还必须满足
+    自己的 ``from_chapter``。后一条不能省：文本命中「师尊」只证明这个字面出现过，
+    不证明未来那个人此时也能用这个叫法；也不能反过来拿 ``from_chapter`` 卡所有
+    唯一字面——它允许保守地晚于真实首现（只禁止过早），实跑「黎玄仙尊」就在 ch1
+    明写而名册记到 ch18。`char_id` 本身不含语义，因此这份关闭式子集既能让模型做
+    受限选择，也不会借歧义字面把未来才揭晓的人带回早章。
+    """
+    inventory: dict[str, list[tuple[str, int | None]]] = {}
+    for cid, char in characters.items():
+        surfaces: list[tuple[str, int | None]] = [
+            (strip_distinguisher(str((char or {}).get('canonical') or '')), None)]
+        for address in ((char or {}).get('address') or []):
+            chapter = (address or {}).get('from_chapter')
+            surfaces.append((str((address or {}).get('surface') or '').strip(),
+                             chapter if isinstance(chapter, int) and chapter > 0 else 1))
+        distinct: dict[str, tuple[str, int | None]] = {}
+        for surface, from_chapter in surfaces:
+            key = norm(surface)
+            if not key:
+                continue
+            # canonical 与 address 常是同一个字面；只下发一次。canonical 的
+            # None 表示「由正文实际首现控制」，比 address 的登记章更严格且更直接。
+            if key not in distinct or from_chapter is None:
+                distinct[key] = (surface, from_chapter)
+        inventory[cid] = list(distinct.values())
+
+    owners: dict[str, set[str]] = {}
+    for cid, surfaces in inventory.items():
+        for surface, _from_chapter in surfaces:
+            owners.setdefault(norm(surface), set()).add(cid)
+
+    out: dict[int, dict[str, list[str]]] = {}
+    cumulative = ''
+    for section in main_text:
+        ordinal = int(section.get('chapter_ordinal') or 0)
+        cumulative += norm(str(section.get('text') or ''))
+        visible = {
+            cid: [surface for surface, from_chapter in surfaces
+                  if norm(surface) in cumulative
+                  and (len(owners.get(norm(surface), set())) <= 1
+                       or from_chapter is None or from_chapter <= ordinal)]
+            for cid, surfaces in inventory.items()
+        }
+        out[ordinal] = {
+            cid: surfaces for cid, surfaces in visible.items() if surfaces
+        }
+    return out
+
+
+def _surface_for_ref(surfaces: list[str], beat_text: str,
+                     chapter_text: str, upto_text: str) -> str:
+    """把权威 char_id 投影回产物的人读字面；优先取本拍里实际出现的叫法。"""
+    for hay in (beat_text, chapter_text, upto_text):
+        raw_hits = [(hay.find(surface), -len(surface), surface)
+                    for surface in surfaces if surface and surface in hay]
+        if raw_hits:
+            return min(raw_hits)[2]
+        body = norm(hay)
+        normalized = [(body.find(norm(surface)), -len(norm(surface)), surface)
+                      for surface in surfaces if norm(surface) in body]
+        if normalized:
+            return min(normalized)[2]
+    raise ValueError('可见人物引用没有可投影的已出现字面')
+
+
+def compile_v2_refs(data: dict[str, Any], main_text: list[dict[str, Any]],
+                    characters: dict[str, dict[str, Any]], *,
+                    summaries: dict[int, str] | None = None) \
+        -> tuple[dict[str, Any], dict[str, Any]]:
+    """两段式 v2 响应 → 现役产物；char_id 是权威，在场字面仅作可读投影。"""
+    work = copy.deepcopy(data)
+    text_of = {int(s.get('chapter_ordinal') or 0): str(s.get('text') or '')
+               for s in main_text}
+    visible = visible_character_refs(characters, main_text)
+    upto_of: dict[int, str] = {}
+    acc: list[str] = []
+    for ordinal in sorted(text_of):
+        acc.append(text_of[ordinal])
+        upto_of[ordinal] = ''.join(acc)
+
+    direct: dict[tuple[int, int], list[str]] = {}
+    for blueprint in (work.get('blueprints') or []):
+        ordinal = int(blueprint.get('chapter_ordinal') or 0)
+        chapter = text_of.get(ordinal, '')
+        cursor = 1
+        allowed = visible.get(ordinal, {})
+        for index, beat in enumerate(blueprint.get('beats') or []):
+            ids = list(dict.fromkeys(str(cid) for cid in
+                                     (beat.pop('present_char_ids', None) or [])))
+            invalid = [cid for cid in ids if cid not in allowed]
+            if invalid:
+                raise ValueError(f'ch{ordinal} 在场者引用不在本章可见集合：{invalid}')
+            end_para = beat.get('end_para')
+            try:
+                seg = _seg_of(chapter, cursor, int(end_para))
+                cursor = int(end_para) + 1
+            except (ParagraphIndexError, TypeError, ValueError):
+                seg = ''
+            beat['present_names'] = [
+                _surface_for_ref(allowed[cid], seg, chapter, upto_of.get(ordinal, ''))
+                for cid in ids
+            ]
+            place = beat.get('place')
+            beat['place'] = ({'mode': 'P_EXPLICIT', 'name': place}
+                             if isinstance(place, str) and place.strip()
+                             else {'mode': 'P_UNKNOWN'})
+            direct[(ordinal, index)] = ids
+
+    compiled, accounting = compile_v2(
+        work, main_text, characters, summaries=summaries)
+    compiled_count = 0
+    direct_count = 0
+    for blueprint in (compiled.get('blueprints') or []):
+        ordinal = int(blueprint.get('chapter_ordinal') or 0)
+        for index, beat in enumerate(blueprint.get('beats') or []):
+            compiled_count += len(beat.get('present_char_ids') or [])
+            ids = direct.get((ordinal, index), [])
+            beat['present_char_ids'] = ids
+            direct_count += len(ids)
+    accounting['char_refs']['resolved'] += direct_count - compiled_count
+    return compiled, accounting
+
+
+def canonical_ir_projection_refs(blueprint: dict[str, Any],
+                                 chapter_text: str) -> dict[str, Any]:
+    """正式蓝图 → 两段式 v2 的细节响应形状（定向修复基线）。"""
+    out = canonical_ir_projection(blueprint, chapter_text)
+    for source, projected in zip(blueprint.get('beats') or [], out['beats']):
+        place = source.get('place')
+        projected['place'] = str(place) if place else None
+        projected['present_char_ids'] = list(source.get('present_char_ids') or [])
+        projected.pop('present_names', None)
     return out

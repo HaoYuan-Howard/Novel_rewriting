@@ -1243,22 +1243,41 @@ def _present(c: _Ctx) -> list[Outcome]:
         pron = set(BARE_PRONOUNS)
         invented, late, amb, pron_hit, unlisted = [], [], [], [], []
         n_pn = 0
+        direct_refs = (c.prov.get('context') or {}).get('architecture') == \
+            'extraction-ir-v2'
         for x in c.bps:
             o = x.get('chapter_ordinal')
             upto = c.cum.get(o, '')
-            slots: list[tuple[str, list[str]]] = [
-                (str(be.get('beat_id')), list(be.get('present_names') or []))
+            slots: list[tuple[str, list[str], list[str] | None]] = [
+                (str(be.get('beat_id')), list(be.get('present_names') or []),
+                 list(be.get('present_char_ids') or []) if direct_refs else None)
                 for be in (x.get('beats') or [])]
-            slots += [(f'narration.{k}', [seg[k]] if seg.get(k) else [])
+            slots += [(f'narration.{k}', [seg[k]] if seg.get(k) else [], None)
                       for seg in (x.get('narration') or [])
                       for k in ('narrator_name', 'focalizer_name') if k in seg]
-            for where, names in slots:
+            for where, names, direct_ids in slots:
                 n_pn += len(names)
+                unresolved: list[str] = []
+                for index, raw in enumerate(names):
+                    cid = (direct_ids[index]
+                           if direct_ids is not None and index < len(direct_ids)
+                           else None)
+                    key = norm(raw)
+                    # v2 的 char_id 是模型直接从关闭式集合里选的权威引用；
+                    # present_names 只是编译器为人读投影的字面。同一个「师尊」即使
+                    # 挂两个人，只要投影字面确实属于所选 id，就不能再报「歧义」——
+                    # 那会把确定引用翻回开放字面，再制造一条守卫假红。
+                    if cid is not None and key in norm(upto) \
+                            and cid in c.owners.get(key, frozenset()) \
+                            and (c.since.get(key) or {}).get(cid, 1) <= o:
+                        continue
+                    unresolved.append(raw)
                 # 【代词先分出去，别混进「自造」】`address[].surface` 按设计**永不收代词**
                 # ⇒ 第一人称书里的「我」永远解析不出来——那不是模型编了一个人，
                 # 是两条契约在这里对不上。
-                pron_hit += [f'ch{o} {where} {n!r}' for n in names if norm(n) in pron]
-                rest = [n for n in names if norm(n) not in pron]
+                pron_hit += [f'ch{o} {where} {n!r}'
+                             for n in unresolved if norm(n) in pron]
+                rest = [n for n in unresolved if norm(n) not in pron]
                 _ids, ambs, un = resolve_present_names(rest, upto, c.owners, c.since, o)
                 amb += [f'ch{o} {where} {s!r}→{cs}' for s, cs in ambs]
                 for raw in un:
@@ -1481,13 +1500,21 @@ def _present(c: _Ctx) -> list[Outcome]:
             '无法核对逐章调用次数与章覆盖'))
     else:
         per_call = [len(b or []) for b in batches]
+        architecture = (c.prov.get('context') or {}).get('architecture')
+        phases = 2 if architecture == 'extraction-ir-v2' else 1
+        call_count = len(batches) * phases
+        shape = (
+            f'两段式逐章抽取（{len(batches)} 章 = {call_count} 次逐章调用）'
+            if phases == 2 and per_call and max(per_call) == 1 else
+            f'逐章抽取（{len(batches)} 章 = {call_count} 次调用）'
+            if per_call and max(per_call) == 1 else
+            f'{len(batches)} 次调用，每次 {per_call} 章'
+        )
         out.append(ran('batch_density', [
             finding('batch_density',
-                    detail=(f'逐章抽取（{len(batches)} 章 = {len(batches)} 次调用）'
-                            if per_call and max(per_call) == 1 else
-                            f'{len(batches)} 次调用，每次 {per_call} 章'),
+                    detail=shape,
                     evidence=[f'{len(batches)}', f'{per_call}'])],
-            scanned=f'{len(batches)} 批'))
+            scanned=f'{len(batches)} 章 × {phases} 相'))
 
     cctx = c.prov.get('context')
     if cctx is None:

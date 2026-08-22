@@ -1,35 +1,39 @@
-# stage2 契约实验手册（bounded-fidelity-v3 ⇄ extraction-ir-v1）
+# stage2 契约实验手册（v3 / extraction-ir-v1~v2）
 
-自足入口：本页给「跑 A/B、修失败、审读数」的操作者，一页说清双契约怎么选、
+自足入口：本页给「跑 A/B、修失败、审读数」的操作者，一页说清多契约怎么选、
 钱怎么不白花、读数从哪来。设计依据与逐步实施记录见 `Stage2_improvement.md`
 （仓根，设计书）与各 commit message；判据与产物契约的权威在
 `docs/schema/stage2.md` 与 `contracts/`。
 
-## 一、双契约是什么、怎么选
+## 一、响应契约是什么、怎么选
 
-`stage2.blueprint` 有两套**响应契约**（产物契约一个字节不动，下游 stage4/API 无感）：
+`stage2.blueprint` 有四套已登记的**响应契约**（产物契约一个字节不动，下游
+stage4/API 无感）。`extraction-ir-v1.1` 只改 v1 的地点措辞；当前默认 v2 把逐章抽取
+拆成边界与细节两相：
 
-| | `bounded-fidelity-v3`（老臂） | `extraction-ir-v1`（**默认**，2026-08-21 起） |
-|---|---|---|
-| beat 定位 | 模型交 `start_para + end_para` | 模型只交 `end_para`（起点代码推导，末拍必须到底） |
-| hinge | `kind + para + phrase`（段内定位） | `kind + phrase`（拍区间内**原样唯一**定位） |
-| place | 自由文本 | 判别三态 `P_EXPLICIT / P_INHERIT / P_UNKNOWN`（继承由代码做） |
-| summary | 模型逐章自带 | **书级摘要批**独立一调（events 是唯一语义源） |
-| 编译器 | `novel/stages/stage2/normalize.py` | `novel/stages/stage2/compile_v2.py`（含层0 边界外扩） |
+| | `bounded-fidelity-v3`（老臂） | `extraction-ir-v1 / v1.1` | `extraction-ir-v2`（**默认**，2026-08-23 起） |
+|---|---|---|---|
+| 逐章调用 | 一相 | 一相 | **两相**：先回忆并压缩边界，再在冻结边界上填细节 |
+| beat 定位 | 模型交 `start_para + end_para` | 模型只交 `end_para`（起点代码推导，末拍必须到底） | 第一相交 `micro_events + beats[].end_para`；两列均递增到底，且 beat 边界必须取自 micro-event 边界 |
+| hinge | `kind + para + phrase`（段内定位） | `kind + phrase`（拍区间内**原样唯一**定位） | 同 IR：`kind + phrase`，第二相不能改第一相边界 |
+| place | 自由文本 | 三态；v1.1 只调整降级次序 | 第二相交原文地点字符串或 `null` |
+| 在场者 | 原文字面 | 原文字面 | 从截止本章可见的 `char_id` 候选中闭集选择 |
+| summary | 模型逐章自带 | **书级摘要批**独立一调（events 是唯一语义源） | 同 IR |
+| 编译器 | `novel/stages/stage2/normalize.py` | `novel/stages/stage2/compile_v2.py`（含层0 边界外扩） | 同文件的 `compile_v2_refs`，最终仍投影成既有蓝图形状 |
 
 选择口（与 `DEEPSEEK_MODEL` 同一条纪律——显式拧一次，不是随手改的变量）：
 
 ```text
-NOVEL_STAGE2_BLUEPRINT_CONTRACT=bounded-fidelity-v3   # 缺省 = extraction-ir-v1
+NOVEL_STAGE2_BLUEPRINT_CONTRACT=bounded-fidelity-v3   # 缺省 = extraction-ir-v2
 ```
 
-**v3 没有退役**：盘上存量产物全是它（`Literal` 双值保留，收窄取值面它们当场读不回来）。
+**旧契约没有退役**：盘上存量产物仍可能来自其中任一架构；收窄取值面会让它们当场读不回来。
 产物 `_provenance.context.architecture` 如实记下这一份用的是哪一套；定向重生成 /
 `--patch` 按**基线产物**的架构选契约，配置与基线不一致会显式终态（先整跑换架构）。
-翻默认的依据与未达成项见 §四 的结账表、§八 与 §十一。
+v1 的历史裁决见 §四、§八与 §十一；v2 翻默认的付费依据与未达成项见 §十四。
 
 ⚠ **schema_mode 声明**：DeepSeek V4 官方 API 只支持 `response_format=json_object`
-（`json_schema` 被拒，2026-08-20 文档探针）。两套契约都是
+（`json_schema` 被拒，2026-08-20 文档探针）。四套契约都是
 **prompt 约束 + 本地 pydantic 校验**，不是 constrained decoding——
 实验结论不许把「枚举前缀带来的改善」归因给 decoder 约束。
 
@@ -432,7 +436,8 @@ blueprint 调用 `finish_reason` **全是 `stop`**，峰值 50,324 tok vs 上限
 新契约 `extraction-ir-v1.1`，**与 ir1 只差 system 里 place 那一段**：三个 mode 的
 JSON 形状一个字不动，改的是**次序**（并列 → 有序降级链，恢复「才」的抑制），
 外加一句「不要为了填满而编地点」。响应模型 / 编译器 / 投影函数 / 摘要批开关
-逐个共用 ⇒ 单变量对照。**默认未翻**（仍是 ir1），经 env 显式选择。
+逐个共用 ⇒ 单变量对照。**当时默认未翻**（仍是 ir1）；2026-08-23 的默认已由
+§十四所述付费验收翻到 v2，v1.1 仍可经 env 显式选择。
 
 三条守卫钉住它（`tests/test_stage2_contract_dispatch.py`）：两臂差别恰好是
 `architecture`/`sys_name`/`system` 三格 · system 的 diff 是**恰好一个连续区块**且
@@ -483,3 +488,83 @@ B 臂 75/93 ≈ 81%**（当前 C 臂 54/95 ≈ 57%）；④ 落盘 0 HARD 保持
 探针基线经**生产落点** `compile_v2` 复算，不是另写一份统计。
 **ir1.1 的 prompt 改动有没有真的救回填充率，本节没有任何付费实证**——
 那要等阶段 2 的全链跑（无情道，独立 `NOVEL_CACHE_DIR`）。
+
+## 十四、`extraction-ir-v2`：Flash 两相抽取付费验收（2026-08-23）
+
+### 配对与根因
+
+用户明确授权把《无情道第一她来自合欢宗》全文及派生上下文发往 DeepSeek API，并承担
+Pro/Flash Stage2 A/B 费用。三臂使用同一份 `stage1/main_text.json`（正文 SHA-256
+`e32f675b2da96174a29b68f190d81d18bc87ebcb61ee2c554e8c2243e714d6d1`）、同一份
+`stage2/global_grounding.json`、`high + thinking`；严格对照只改模型或逐章响应契约。
+曾有一份 Pro 目录混入 Flash 响应，已从正式对照剔除；A 臂只认重新建立的 clean base。
+
+同契约 `extraction-ir-v1.1` 的模型差异很清楚：Pro 130 拍 / 168 hinge，Flash 91 / 145；
+Flash 的在场者 198 项里有 9 项代词，Pro 为 0。把 Flash effort 从 high 拉到 max 后反而只剩
+87 拍 / 105 hinge，因此根因不是推理档位不够，而是以下响应形状放大了模型能力差：
+
+1. 一次响应同时承担切分、事件、地点、在场者、hinge 与叙述信息，Flash 会优先交一份
+   结构完整但切得过粗的答案；
+2. `present_names: list[str]` 要模型生成原文字面，白白打开代词、别名歧义与名册外字面三条失败面；
+3. 三态地点把短且便宜的 `P_UNKNOWN` / `P_INHERIT` 与显式地点并列，两个模型都会走捷径；
+4. `stage2.global` 的 secret/rule 差距仍在，但它不是本次逐章 v2 的作用面，不能把改善归给它。
+
+### 为什么是「回忆层 + 压缩层」，不是只让模型多切
+
+三轮 7 章付费 smoke 把边界 prompt 的失败形状测了出来：
+
+| 边界方案 | 7 章拍数 | 结论 |
+|---|--:|---|
+| 只交数字止段 | — | 全书试跑只得 70 拍，且出现整章坍缩；拒绝 |
+| 强制逐件微事件 | 105 | 明显过切；拒绝 |
+| 只写「局部因果拍」 | 20 | Flash 跳过了内部枚举；拒绝 |
+| 同一响应先列 `micro_events`、再压成 `beats` | **41** | 落在过切与坍缩之间，全部通过边界 validator；采纳 |
+
+最终 v2 因而不是让第一相直接交唯一一列边界：`micro_events` 是完整回忆用的中间脚手架，
+`beats` 才是下游需要的局部因果单元；两列都必须止段递增到章尾，且每个 beat 止段必须来自
+micro-event 止段。第二相收到代码冻结的 beat 边界，只填事实；在场者从截止本章可见的
+`char_id` 候选中选择，地点恢复成有据字面或 `null`。最终仍编译成原有
+`ChapterBlueprints`，所以 artifact schema/version 与 stage4/API 都不动。
+
+### 完整 23 章结果
+
+| 读数 | Pro × v1.1 | Flash × v1.1 | Flash × v2 |
+|---|--:|--:|--:|
+| 拍 | 130 | 91 | **126** |
+| hinge | 168 | 145 | **169** |
+| span 定位 / 原文字数覆盖 | 130/130 · 98% | 91/91 · 98% | **126/126 · 98%** |
+| 在场者引用 | 287 | 198 | 276 |
+| 歧义 / 名册外 / 代词 / 过早 | 0 / 14 / 0 / 0 | 0 / 9 / 9 / 0 | **0 / 0 / 0 / 0** |
+| event 点名但未列在场者 | 25 | 36 | 30 |
+| 冷揭示 secret | 0/4 | 1/4 | 1/4 |
+| named place | 72/130（55.4%） | 56/91（61.5%） | **84/126（66.7%）** |
+| Stage2 HARD 残留 | 0 | 0 | **0** |
+| human_only inbox | 2 | 4 | 3 |
+
+v2 首轮唯一失败在 ch17（1 条 hinge drift / verbatim failure），一次
+`--chapters 17` 定向重生成后收敛；最终 169/169 hinge 可定位。拍数与 Pro 的绝对差从
+39 缩到 4（约补回 90%），hinge 差从 23 缩到 1（约补回 96%）。这些是契约一致性与
+信息覆盖的代理读数，**不是人工盲读，也不是普遍质量分数**。
+
+地点仍是明确未达成项：v2 比两个 v1.1 臂都高，但 66.7% 仍低于 §十三预登记的 81% 底线，
+不能写成「地点已修好」。secret 冷揭示也没有追平 Pro，因为它来自未改动的全书级响应。
+
+### 成本与裁决
+
+| 成本事实 | Pro × v1.1 | Flash × v1.1 | Flash × v2 |
+|---|--:|--:|--:|
+| 真调用 / 缓存命中 | 26 / 0 | 25 / 2 | **43 / 6** |
+| prompt tokens | 162,768 | 158,365 | **213,880** |
+| completion tokens（已含 reasoning） | 216,442 | 136,431 | **271,462** |
+| reasoning tokens（completion 子集） | 191,389 | 118,640 | **240,889** |
+| 近似墙钟 | 669.4s | 385.0s | **621.0s** |
+
+`completion` 已包含 `reasoning`，严禁相加。v2 以约两倍 Flash completion、43 次真调用换取
+接近 Pro 的信息覆盖；它不是降本改造。好处是 621.0s 仍略低于本次 Pro 的 669.4s，且供应商
+prompt cache 命中降低了实际输入成本，但缓存命中率受运行时序影响，不归因于模型或契约。
+
+裁决：默认翻到 `extraction-ir-v2`。理由是当前生产默认模型正是 Flash，而 v2 在这一本书上
+关闭了自由字面引用失败面，并把拍/hinge 覆盖拉到 Pro 附近；不翻默认就没有真实 consumer
+会走到新路径。回退只需改 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`，旧架构继续登记，
+存量定向修复仍按基线架构走。验收边界是 **n=1**：下一本不同题材必须复报同一矩阵，尤其是
+地点填充、`present_broad`、secret 与调用成本，不得把本节外推成「Flash 已追平 Pro」。

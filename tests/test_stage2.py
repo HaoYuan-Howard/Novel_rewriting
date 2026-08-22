@@ -287,6 +287,25 @@ def test_the_clean_base_has_no_hard_hits():
     assert got == set(), f'干净底座上不该有任何 HARD 命中，实得 {sorted(got)}'
 
 
+def test_ir2_direct_character_id_is_not_reclassified_as_an_ambiguous_name():
+    """v2 的人读字面可以歧义，但模型选择的 char_id 已经把引用定死。"""
+    gg, bp, mt = global_grounding(), blueprints(), main_text()
+    gg['entities']['characters']['char_001']['address'].append({
+        'surface': '母亲', 'by': 'narration',
+        'context': 'reference', 'from_chapter': 1})
+    bp['_provenance']['context']['architecture'] = 'extraction-ir-v2'
+    outcomes = {o.rule: o for o in checks.check(
+        global_g=gg, blueprints=bp, main_text=mt)}
+    ambiguity = outcomes['present_names_ambiguous']
+    assert ambiguity.findings and ambiguity.findings[0].detail.startswith('0/')
+
+    # 同一份字节若声明成开放字面契约，旧分类仍应如实报告歧义。
+    bp['_provenance']['context']['architecture'] = 'extraction-ir-v1'
+    outcomes = {o.rule: o for o in checks.check(
+        global_g=gg, blueprints=bp, main_text=mt)}
+    assert outcomes['present_names_ambiguous'].findings[0].detail.startswith('2/')
+
+
 def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
     """FC-14：真实 checks 产的 detail 只记本次数据，规则 caveat 只在 note。"""
     from novel.prov import FreshnessReport

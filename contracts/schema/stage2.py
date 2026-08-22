@@ -810,6 +810,58 @@ class ChapterBlueprintsResponseV2(StrictModel):
     blueprints: list[BlueprintResponseV2] = Field(min_length=1)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 二·c、`extraction-ir-v2` 的两段式响应契约
+#
+# Flash 的同书 A/B 显示：在一份响应里同时决定事件边界、地点、在场者与 hinge 时，
+# 拍数比 Pro 少约三成；把 effort 拉高反而更粗。这里把「在哪里切」单独收成第一段，
+# 第二段只在代码冻结的边界上填事实。最终产物形状不变，仍由编译器落成 `Beat`。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class BoundaryBeatResponse(StrictModel):
+    """事件切分预传：用一句微事件草图迫使模型实际枚举，再交闭区间止段。"""
+
+    end_para: int = Field(ge=1)
+    event: str = Field(min_length=1)
+
+
+class BoundaryBlueprintResponse(StrictModel):
+    chapter_ordinal: int = Field(ge=1)
+    micro_events: list[BoundaryBeatResponse] = Field(min_length=1)
+    beats: list[BoundaryBeatResponse] = Field(min_length=1)
+
+
+class ChapterBoundariesResponse(StrictModel):
+    blueprints: list[BoundaryBlueprintResponse] = Field(min_length=1)
+
+
+class BeatResponseV2Refs(StrictModel):
+    """冻结边界后的细节响应。
+
+    `present_char_ids` 只能从 user 消息下发的本章可见集合里选；动态集合由调用点
+    validator 关闭式校验。`place` 恢复成 v3 已验证过的 nullable 字面：有据就填，
+    确实无从判断才为 null，避免三态把 `P_UNKNOWN` 变成等权捷径。
+    """
+
+    end_para: int = Field(ge=1)
+    time_layer: Literal[tuple(RESPONSE_TIME_LAYERS)]
+    place: str | None
+    present_char_ids: list[str]
+    event: str = Field(min_length=1)
+    hinges: list[HingeResponseV2]
+
+
+class BlueprintResponseV2Refs(StrictModel):
+    chapter_ordinal: int = Field(ge=1)
+    beats: list[BeatResponseV2Refs] = Field(min_length=1)
+    narration: list[NarrationResponse] = Field(min_length=1)
+
+
+class ChapterBlueprintsResponseV2Refs(StrictModel):
+    blueprints: list[BlueprintResponseV2Refs] = Field(min_length=1)
+
+
 class HingeSelectResponse(StrictModel):
     """候选选择（`--patch` 修 `hinge_ambiguous`）：代码枚举命中位，模型**只挑 id**。
 
@@ -850,9 +902,10 @@ class BlueprintContext(StrictModel):
     """蓝图调用的模型可见边界；只接受登记过的有界上下文架构。
 
     ⚠ `architecture` 曾**故意是单值**（v2→v3 时旧产物语义已坏，放宽等于把
-    该重跑的旧蓝图读进来当成还能用）。2026-08-20 起放宽为双值：
+    该重跑的旧蓝图读进来当成还能用）。2026-08-20 起逐步放宽为登记取值面：
     `extraction-ir-v1` 的产物语义与 v3 **逐字段等价**（区间仍是段号查表出的
-    精确区间、下游消费面一个不动），并存不欠迁移——单值/双值的裁决依据
+    精确区间、下游消费面一个不动），后续 v1.1/v2 同样只改响应边界而不改
+    正式产物。并存不欠迁移——收窄/放宽的裁决依据始终是
     「旧字节语义还成不成立」，全案记录在
     `contracts/invariants.py::BLUEPRINT_ARCHITECTURES` 的注释里。
     """
@@ -1020,7 +1073,9 @@ class BlueprintProvenance(LlmProvenance):
 
 class ChapterBlueprints(StrictModel):
     """`stage2/chapter_blueprints.json` —— 顶层 2 个键。
-    **一次调用产一章：当前章全文、未来章不可见，历史正文只走有界窗口。**
+    **逐章产出：当前章全文、未来章不可见，历史正文只走有界窗口。**
+
+    一相契约每章一次调用；`extraction-ir-v2` 每章先取边界、再在冻结边界上取细节。
 
     结构化调用点声明的必需顶层键 = `blueprints`。
 

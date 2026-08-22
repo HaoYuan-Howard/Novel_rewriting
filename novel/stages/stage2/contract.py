@@ -3,14 +3,14 @@
 """
 contract.py —— `stage2.blueprint` 的响应契约注册表。
 
-【为什么是一张表而不是 if】v3 与 ir1 要在 A/B 期间**并存**：整跑按配置选，
+【为什么是一张表而不是 if】多套响应契约要在 A/B 与存量修复期间**并存**：整跑按配置选，
 定向重生成按**基线产物的 architecture** 选（修复必须与基线同构，配置说了不算）。
 把「system / 响应模型 / 编译函数 / 投影函数」捆成一条 spec，是为了让
 「换契约」在结构上是**换整套**，而不是四处各换一半——各换一半的失败形态是
 「prompt 是新的、编译器还是旧的」，而那不会报错，只会安静产出错位的产物。
 
 【`schema_mode` 是诚实标签，不是开关】DeepSeek V4 官方 API 只支持
-`response_format=json_object`（`json_schema` 被拒，2026-08-20 文档探针）⇒ 两套契约
+`response_format=json_object`（`json_schema` 被拒，2026-08-20 文档探针）⇒ 全部契约
 都只能是 `prompt_plus_local_validation`：**这不是 constrained decoding**，
 是 prompt 约束 + 本地 pydantic 校验。
 ⚠ 2026-08-22 曾把 `json_object` 关掉又当天改回（`novel/llm/client.py::JSON_OBJECT_MODE`）——
@@ -28,11 +28,15 @@ from pydantic import BaseModel
 
 from contracts.invariants import BLUEPRINT_ARCHITECTURES
 from contracts.schema.stage2 import (
-    ChapterBlueprintsResponse, ChapterBlueprintsResponseV2,
+    ChapterBoundariesResponse, ChapterBlueprintsResponse,
+    ChapterBlueprintsResponseV2, ChapterBlueprintsResponseV2Refs,
 )
 from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import prompts
-from novel.stages.stage2.compile_v2 import canonical_ir_projection, compile_v2
+from novel.stages.stage2.compile_v2 import (
+    canonical_ir_projection, canonical_ir_projection_refs, compile_v2,
+    compile_v2_refs,
+)
 from novel.stages.stage2.normalize import normalize_blueprints, response_shape
 
 
@@ -75,6 +79,15 @@ class ContractSpec:
     #: （`--patch` 的候选枚举依赖 IR 的拍区间），走 `--chapters` 整章重生成。
     supports_field_patch: bool
 
+    #: 两段式契约的第一相；为空表示这套契约仍是一相逐章抽取。
+    boundary_system: str | None = None
+    boundary_sys_name: str | None = None
+    boundary_response_model: type[BaseModel] | None = None
+
+    #: 细节响应里的在场者是否从本章可见 `char_id` 集合选择；调用方据此
+    #: 给 user 注入关闭式候选集，并在本地 validator 再验一次。
+    uses_character_refs: bool = False
+
 
 CONTRACTS: dict[str, ContractSpec] = {
     'bounded-fidelity-v3': ContractSpec(
@@ -116,6 +129,27 @@ CONTRACTS: dict[str, ContractSpec] = {
         projection_fn=canonical_ir_projection,
         needs_summary_batch=True,
         supports_field_patch=True,
+    ),
+    # Flash 的主要失效不是「字段写错」，而是单次请求同时切拍和填十余个字段时
+    # 系统性少切拍。v2 先只交止段，再让第二相在代码冻结的边界上填事实；同时把
+    # 在场人物改成可见 char_id 的关闭式选择、地点恢复成字符串或 null。
+    # 正式产物形状不变，变化只存在于模型响应边界和调用拓扑。
+    'extraction-ir-v2': ContractSpec(
+        architecture='extraction-ir-v2',
+        system=with_json_shape(
+            prompts.BLUEPRINT_SYS_V2_REFS, prompts.BLUEPRINT_HINT_V2_REFS),
+        sys_name='BLUEPRINT_SYS_V2_REFS',
+        response_model=ChapterBlueprintsResponseV2Refs,
+        schema_mode='prompt_plus_local_validation',
+        compile_fn=compile_v2_refs,
+        projection_fn=canonical_ir_projection_refs,
+        needs_summary_batch=True,
+        supports_field_patch=True,
+        boundary_system=with_json_shape(
+            prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2),
+        boundary_sys_name='BOUNDARY_SYS_V2',
+        boundary_response_model=ChapterBoundariesResponse,
+        uses_character_refs=True,
     ),
 }
 

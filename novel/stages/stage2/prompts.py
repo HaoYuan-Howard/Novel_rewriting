@@ -553,6 +553,81 @@ assert _BLUEPRINT_TPL_V1_1 != _BLUEPRINT_TPL_V2, \
     'ir1.1 的模板与 ir1 逐字相同——replace 没有发生，换臂等于没换'
 
 
+# ---------------------------------------------------------------------------
+# `extraction-ir-v2` —— 先切边界，再按冻结边界填事实
+# ---------------------------------------------------------------------------
+
+_BOUNDARY_TPL = """\
+你会收到一章逐段编号的小说正文。同一次响应必须先做【召回】，再做【压缩】，两张表都交回。
+
+第一张表 `micro_events`（召回层）：
+- 逐段核对新的动作、反应、问题、回答、揭示、决定、阻碍、结果、目标、时空或叙述层；
+  每出现一项新推进就记一条微事件，不得直接写章节大纲；
+- 「甲行动 → 乙反应 → 新信息改变局面 → 人物作决定」先如实记成多条，完整性优先；
+- 每条只交一句忠实的 `event` 与闭区间 `end_para`。
+
+第二张表 `beats`（压缩层）：
+- 只能合并相邻 micro_events，`end_para` 必须从 micro_events 的止段里选择；
+- 一拍是一个局部因果单元：同一目标下的动作、即时反应与局部结果通常合并；
+- 场景/时间/叙述层改变，新目标或决定形成，新障碍出现/解决，新信息改变理解，
+  关系或立场转折，或一件事收束后转入另一件独立事时，必须保留边界；
+- 对话按议题和作用切：同一问题的追问、回答与即时反应可合并；点破秘密、立场反转、
+  作出承诺/命令/拒绝/决定时保留边界；
+- 不按字数或段数凑数；不要退回 1~3 条章节大纲，也不要把 micro_events 原样复制一遍。
+
+两张表都从第 1 段自动起步，`end_para` 都必须严格递增并到达本章最后一段。
+`beats` 的每条 `event` 概括它合并后的局部因果单元，不要填摘要、人物、地点或 hinge。
+
+只输出 JSON（顶层键 `blueprints`）；不要填摘要、人物、地点或 hinge。"""
+
+_PLACE_SEG_V2_REFS = """\
+  · `place`：这一条发生在【哪里】，用原文的说法（「出宫的路上」「侧院的厢房」「密牢」）。
+    原文明写、或从紧邻上文能明确辨认时就填字符串；确实无从判断**才**填 null。
+    不要为了填满而编地点，也不要返回 mode 对象。
+"""
+
+_PRESENT_SEG_V2 = """\
+  · `present_names`：这一条里【在场的人】，数组，**每人用原文里称呼他的那个字面**
+    （「谈默」「少夫人」「书童」「祈颜」）——照原文用字，不要改写、不要用你自己的说法。
+    · 判据是「人在这个场景里」，不是「被提到」——被议论的、被回忆到的人不算在场。
+    · `T_RECALL` / `T_HEARSAY` 填【被讲的那件事里在场的人】。
+    · 叙述者本人在场也要列——但**用他的名字，不要写代词**（「我」「他」「她」这些不算叫法，
+      谁都可以是「我」）。
+    · 【判据是「到目前为止的正文里出现过没有」，不是「本章出现过没有」】某个人的名字在前面的章
+      已经出现过，这里就可以用——读者早就知道了。只有**到目前为止一次都没出现过**的名字才不能用；
+      那种情况下这个人就不必列，后面的人另有办法知道他在。
+    · 原文没交代在场者时交空数组，不要猜。
+    · 【只能用你在【已给出的正文】里读到过的叫法】——不要写你推测的本名、也不要写
+      后面才会揭晓的名字。一个人在本章还没被指名（通篇只有「他」「那个男人」）时，
+      **就交空数组，不要替原文提前把名字填上**。这一条是硬的：写不出来比写错了好。
+    · 【同一个人只列一次】原文这一段用哪个叫法，你就用哪个；不要把同一个人的两种叫法都列上。
+"""
+
+_PRESENT_SEG_V2_REFS = """\
+  · `present_char_ids`：这一条里【在场的人】。只能从 user 消息的「本章可选人物引用」
+    里复制 `char_id`，不许写姓名、代词或清单外编号；同一个人只列一次。
+    · 判据是「人在这个场景里」，不是「被提到」；被议论的人不算在场。
+    · `T_RECALL` / `T_HEARSAY` 填被讲的那件事里在场的人。
+    · 叙述者本人在场也要列；第一人称的「我」对应谁，按正文与引用表判断。
+    · 清单没有对应人物、或原文没交代在场者时交空数组，不要猜。
+"""
+
+_BLUEPRINT_TPL_V2_REFS = _BLUEPRINT_TPL_V1_1 \
+    .replace('place, present_names, event, hinges',
+             'place, present_char_ids, event, hinges') \
+    .replace(_PLACE_SEG_V1_1, _PLACE_SEG_V2_REFS) \
+    .replace(_PRESENT_SEG_V2, _PRESENT_SEG_V2_REFS)
+
+assert _BLUEPRINT_TPL_V1_1.count(_PRESENT_SEG_V2) == 1, \
+    '在场者旧段没有恰好命中一次——v2 引用式模板没有真实替换'
+assert _BLUEPRINT_TPL_V2_REFS != _BLUEPRINT_TPL_V1_1
+
+_BOUNDARY_FROZEN_NOTE = """\
+【边界已经由上一段抽取冻结】user 会给出严格递增的 end_para 列表。
+你必须恰好产出同样多的 beats，并按顺序逐项原样返回这些 end_para；不得增删、合并或改号。
+本次只在这些固定区间内填写 time_layer、place、present_char_ids、event 与 hinges。"""
+
+
 #: 书级摘要批的 system（`extraction-ir-v1` 专属，独立小臂）。
 #: 输入已是压缩事实（各章 beat events），**不重读原章**——所以没有 `RULES_V2` 前缀
 #: （那是对着原文抽取时的规矩）。
@@ -634,6 +709,11 @@ BLUEPRINT_SYS_V2 = RULES_V2 + fill(_BLUEPRINT_TPL_V2)
 #: ⚠ 结构提示**复用 `BLUEPRINT_HINT_V2`**：place 的形状一个字没动，
 #:   另起一份只会让两处漂移。
 BLUEPRINT_SYS_V1_1 = RULES_V2 + fill(_BLUEPRINT_TPL_V1_1)
+
+#: 两段式 v2：边界臂只做一个判断；细节臂在冻结边界上填字段。
+BOUNDARY_SYS_V2 = fill(_BOUNDARY_TPL)
+BLUEPRINT_SYS_V2_REFS = RULES_V2 + fill(
+    _BLUEPRINT_TPL_V2_REFS + '\n\n' + _BOUNDARY_FROZEN_NOTE)
 
 #: 书级摘要批（`extraction-ir-v1` 专属小臂，付费，一书一调）。
 SUMMARY_BATCH_SYS = fill(_SUMMARY_BATCH_TPL)
@@ -727,6 +807,33 @@ BLUEPRINT_HINT_V2: dict[str, Any] = {
                              'name': '原文的说法(仅 P_EXPLICIT 带此键)'},
                    'present_names': ['原文里称呼他的'
                                      '那个字面'],
+                   'event': 'str',
+                   'hinges': [{'kind': '|'.join(HINGE_KINDS),
+                               'phrase': '本条范围内原样且唯一的那几个字'}]}],
+        'narration': [{'grammatical_person': NARRATIVE_PERSON[0],
+                       'narrator_name': '原文里的叫法|null',
+                       'focalizer_name': '原文里的叫法|null',
+                       'pronoun_surfaces': ['我']}],
+    }],
+}
+
+BOUNDARY_HINT_V2: dict[str, Any] = {
+    'blueprints': [{
+        'chapter_ordinal': 1,
+        'micro_events': [{'end_para': '结束段号(整数)',
+                          'event': '逐段召回的一项新推进'}],
+        'beats': [{'end_para': '结束段号(整数)',
+                   'event': '合并后的局部因果单元'}],
+    }],
+}
+
+BLUEPRINT_HINT_V2_REFS: dict[str, Any] = {
+    'blueprints': [{
+        'chapter_ordinal': 1,
+        'beats': [{'end_para': '冻结的结束段号(整数)',
+                   'time_layer': '|'.join(RESPONSE_TIME_LAYERS),
+                   'place': 'str|null',
+                   'present_char_ids': ['char_001'],
                    'event': 'str',
                    'hinges': [{'kind': '|'.join(HINGE_KINDS),
                                'phrase': '本条范围内原样且唯一的那几个字'}]}],

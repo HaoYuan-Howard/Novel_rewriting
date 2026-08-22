@@ -41,7 +41,7 @@ from tests.test_stage2 import blueprints, global_grounding, main_text
 
 #: ⚠ **本文件的假响应是 `bounded-fidelity-v3` 形状的**（`_response_blueprints()`
 #: 由 v3 正式产物反投影而来，带 `beat_id`/`span`/产物侧 `time_layer`）。
-#: 2026-08-21 默认契约翻成 `extraction-ir-v1` 之后，不拧回去这些响应会被
+#: 默认契约已翻成两阶段 `extraction-ir-v2`；不拧回去这些响应会被
 #: V2 的 schema 闸整轮拒光——那是**测试装置的臂选错了**，不是产线的病。
 #: ⇒ 整个文件跑在 v3 臂上；ir1 的链路另有 `test_stage2_contract_dispatch.py`
 #: 与 `test_stage2_compile_v2.py` 覆盖。
@@ -283,7 +283,7 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert stored.provenance.usage.calls_made == 3
         context = stored.provenance.context
         # ⚠ 读**本次运行选中的那套契约**，不抄字面、也不读全局默认：
-        #   本文件钉在 v3 臂上（见 `_pin_v3_arm`），而默认已是 ir1
+        #   本文件钉在 v3 臂上（见 `_pin_v3_arm`），而默认已是 v2
         #   ——拿默认常量来比，等于断言「产地写的是别人的架构」。
         #   这条守的是「产地如实记下了自己用的那一套」。
         from novel.stages.stage2.contract import active_contract

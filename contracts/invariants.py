@@ -411,13 +411,21 @@ def hinge_heading(kind: str) -> str:
 #:   §十一 实测**两个模型上都掉**（Pro −60% / Flash −28%）⇒ 那是契约的独立责任，
 #:   不是模型效应。为什么改、以及「加压会不会反被规避」那条风险，写在
 #:   `novel/stages/stage2/prompts.py::_BLUEPRINT_TPL_V1_1` 上方。
-#:   ⚠ 新架构**未翻默认**：默认仍是 ir1，ir1.1 经 env 显式选择，验收在跑书之后。
+#:   ⚠ 该实验臂未翻过默认；随后由 v2 的付费验收统一接替，见下一项。
+#: · `extraction-ir-v2`（2026-08-23）：同样只放宽取值面、不升 artifact schema。
+#:   它把模型响应拆成「止段边界预传 → 冻结边界上的事实细节」两相，并把
+#:   `present_names` 的开放生成改成截止本章可见 `char_id` 的关闭式选择；编译后仍落
+#:   同一个 `ChapterBlueprints` 形状。2026-08-23 同书付费验收后翻默认：Flash 从
+#:   91→126 拍（Pro 130）、145→169 hinge（Pro 168），在场者代词 9→0、名册外
+#:   9→0；0 HARD，唯一错误由 ch17 定向重生成一次收敛。完整证据见
+#:   `docs/stage2_contract_experiment.md` §十四。
 BLUEPRINT_ARCHITECTURES: Final = (
-    'bounded-fidelity-v3', 'extraction-ir-v1', 'extraction-ir-v1.1')
+    'bounded-fidelity-v3', 'extraction-ir-v1', 'extraction-ir-v1.1',
+    'extraction-ir-v2')
 
 #: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
 #: 翻默认只动这一格（`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT` 从它派生），
-#: **取值面不动**：盘上存量产物全是 v3，收窄取值面它们当场读不回来，
+#: **取值面不动**：盘上存量产物可能来自任一已登记架构，收窄取值面会让其中一批当场读不回来，
 #: 而定向修复是按「基线产物的 architecture」选契约的。
 #:
 #: 【2026-08-21 翻默认：v3 → extraction-ir-v1】依据是同书同上游的单变量对照
@@ -436,7 +444,13 @@ BLUEPRINT_ARCHITECTURES: Final = (
 #:   ⚠ 未达成项如实记：总付费 token 比 B 臂**高 5%**（原定不高于 B）。赢的是
 #:     「成本/被接受的书」（B 那 149k 没落盘），不是「成本/次调用」。
 #:   ⚠ n=1（7C 三本配对未跑）。回退就是把这一格改回去，不涉及任何产物迁移。
-BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v1'
+#:
+#: 【2026-08-23 翻默认：extraction-ir-v1 → extraction-ir-v2】依据见上方 v2 登记项与
+#: `docs/stage2_contract_experiment.md` §十四。它是**质量换成本**：本书 Flash 真调用
+#: 25→43、completion 136,431→271,462；地点 66.7% 仍没到预登记 81% 底线，n=1。
+#: 采纳的理由是生产默认模型就是 Flash，而拍/hinge 缺口分别约补回 90%/96%、在场者
+#: 四类解析失败归零。回退同样只改这一格；旧取值不删、定向修复仍按基线架构走。
+BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v2'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 #: `SourceSpan.recovery` 的取值面：这个区间是怎么对上原文的。

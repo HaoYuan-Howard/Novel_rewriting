@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_stage2_compile_v2.py —— `extraction-ir-v1` 确定性编译器的判定面。
+test_stage2_compile_v2.py —— extraction IR 族（含 v2 引用式响应）确定性编译器的判定面。
 
 覆盖四族差别（`novel/stages/stage2/compile_v2.py` 模块头）：
 ① 游标分割与全部非法形（稳定 finding 措辞，不抛裸异常）；
@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from contracts.invariants import (
     HINGE_FAILURE_ROUTE, REPAIR_ROUTE, SPAN_FAILURE_CAUSES,
 )
 from novel.stages.stage2.compile_v2 import (
-    canonical_ir_projection, compile_v2,
+    canonical_ir_projection, compile_v2, compile_v2_refs,
+    visible_character_refs,
 )
 
 #: 5 段的合成章。段号（1-based）：1 开门 · 2 第一课台词 · 3 两担水 · 4 母亲说话 · 5 三十文。
@@ -136,6 +139,75 @@ def test_summaries_are_injected_and_debug_join_is_clearly_debug():
     joined, _ = _compile(_clean_data())
     summary = joined['blueprints'][0]['summary']
     assert summary.startswith('本章依次：') and '两担水' in summary
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 一·b、两段式 v2：人物关闭式引用与地点字符串
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_visible_character_refs_never_leak_a_future_surface():
+    mt = [
+        {'chapter_ordinal': 1, 'text': '李宝珠独自推开门。'},
+        {'chapter_ordinal': 2, 'text': '母亲这才从门后走出来。'},
+    ]
+    visible = visible_character_refs(CHARACTERS, mt)
+    assert visible[1] == {'char_001': ['李宝珠']}
+    assert visible[2] == {
+        'char_001': ['李宝珠'], 'char_002': ['母亲']}
+
+
+def test_visible_refs_do_not_grant_a_future_owner_of_an_already_seen_surface():
+    """字面出现过不等于挂这个字面的所有人都已经可见。"""
+    characters = copy.deepcopy(CHARACTERS)
+    characters['char_003'] = {
+        'canonical': '后来者', 'name_distinctiveness': 'distinct',
+        'address': [{'surface': '母亲', 'by': 'narration',
+                     'context': 'reference', 'from_chapter': 2}],
+        'role': '略', 'fate': None,
+    }
+    mt = [
+        {'chapter_ordinal': 1, 'text': '母亲先在门边等着。'},
+        {'chapter_ordinal': 2, 'text': '后来者也被人叫作母亲。'},
+    ]
+    visible = visible_character_refs(characters, mt)
+    assert 'char_003' not in visible[1]
+    assert visible[2]['char_003'] == ['后来者', '母亲']
+
+
+def test_v2_refs_keeps_selected_ids_authoritative_and_projects_readable_names():
+    raw = {'blueprints': [{
+        'chapter_ordinal': 1,
+        'beats': [{
+            'end_para': 5,
+            'time_layer': 'T_PRESENT',
+            'place': '井边',
+            'present_char_ids': ['char_002', 'char_001', 'char_002'],
+            'event': '母亲让李宝珠挑水',
+            'hinges': [{'kind': '硬数字', 'phrase': '两担水'}],
+        }],
+        'narration': [_narration()],
+    }]}
+    data, accounting = compile_v2_refs(
+        raw, _main_text(), CHARACTERS, summaries={1: '母亲让李宝珠挑水。'})
+    beat = data['blueprints'][0]['beats'][0]
+    assert beat['present_char_ids'] == ['char_002', 'char_001']
+    assert beat['present_names'] == ['母亲', '李宝珠']
+    assert beat['place'] == '井边'
+    assert accounting['char_refs']['invented'] == 0
+    assert accounting['char_refs']['pronoun'] == 0
+
+
+def test_v2_refs_rejects_an_id_outside_the_visible_closed_set():
+    raw = {'blueprints': [{
+        'chapter_ordinal': 1,
+        'beats': [{
+            'end_para': 5, 'time_layer': 'T_PRESENT', 'place': None,
+            'present_char_ids': ['char_999'], 'event': '一件事', 'hinges': [],
+        }],
+        'narration': [_narration()],
+    }]}
+    with pytest.raises(ValueError, match='不在本章可见集合'):
+        compile_v2_refs(raw, _main_text(), CHARACTERS, summaries={1: '摘要。'})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

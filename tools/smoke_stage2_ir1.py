@@ -77,7 +77,7 @@ from novel.stages.stage2.normalize import (                       # noqa: E402
 #: `extract.build_prompts` 那边走 `_active_spec()`：env 拧到别的臂时，
 #: 发出去的是新 prompt、校验与编译却还是旧 spec，**而这不会报错**
 #: （`contract.py` 模块头警告的正是这个形态）。ir1.1 加进来之后它就不再是理论风险。
-IR1_FAMILY = ('extraction-ir-v1', 'extraction-ir-v1.1')
+IR1_FAMILY = ('extraction-ir-v1', 'extraction-ir-v1.1', 'extraction-ir-v2')
 NODE = 'stage2.blueprint'
 
 #: 以**本书自身**为尺子的判据：分母是这本书所有章的中位数
@@ -90,11 +90,14 @@ BOOK_RELATIVE_RULES = frozenset({'beats_coarse'})
 
 # ── 只读证据 ────────────────────────────────────────────────────────────────
 
-def _dir_fingerprint(root: Path) -> dict[str, tuple[int, int]]:
-    """书目录的 (大小, mtime_ns) 快照。**「本工具不写产物」要能被验，不是被声称。**"""
+def _dir_fingerprint(root: Path, *, diagnostics: bool = False) \
+        -> dict[str, tuple[int, int]]:
+    """书目录快照；正式产物与允许追加的 answer_lost 诊断证据分开核。"""
     return {
         str(path.relative_to(root)): (path.stat().st_size, path.stat().st_mtime_ns)
         for path in sorted(root.rglob('*')) if path.is_file()
+        and ((path.relative_to(root).parts[:1] == ('_answer_lost',))
+             is diagnostics)
     }
 
 
@@ -156,11 +159,21 @@ def _merged_candidate(baseline: dict[str, Any], compiled: list[dict[str, Any]],
             if _chapter_of(row[0] if row else '') not in targets]
     keep_fail = [list(row) for row in (old_prov.get('verbatim_failures') or [])
                  if _chapter_of(row[0] if row else '') not in targets]
+    if architecture == 'extraction-ir-v2':
+        resolved_copy = copy.deepcopy(merged)
+        char_refs = resolve_character_refs(resolved_copy, main_text, characters)
+        inferred = sum(len(beat.get('present_char_ids') or [])
+                       for bp in resolved_copy for beat in (bp.get('beats') or []))
+        direct = sum(len(beat.get('present_char_ids') or [])
+                     for bp in merged for beat in (bp.get('beats') or []))
+        char_refs['resolved'] += direct - inferred
+    else:
+        char_refs = resolve_character_refs(merged, main_text, characters)
     return {
         'blueprints': merged,
         '_provenance': {
             **old_prov,
-            'char_refs': resolve_character_refs(merged, main_text, characters),
+            'char_refs': char_refs,
             'verbatim_rewrites': keep + [list(r) for r
                                          in accounting['verbatim_rewrites']],
             'verbatim_failures': keep_fail + [list(r) for r
@@ -264,7 +277,9 @@ def build_report(*, sid: str, targets: tuple[int, ...], spec: Any, model: str,
         modes: dict[str, int] = {}
         for beat in ((ir_by.get(ordinal) or {}).get('beats') or []):
             ref = beat.get('place')
-            key = str(ref.get('mode')) if isinstance(ref, dict) else f'非法:{ref!r}'
+            key = (str(ref.get('mode')) if isinstance(ref, dict)
+                   else 'P_EXPLICIT' if isinstance(ref, str) and ref.strip()
+                   else 'P_UNKNOWN' if ref is None else f'非法:{ref!r}')
             modes[key] = modes.get(key, 0) + 1
         beats = list(blueprint.get('beats') or [])
         hinges = [h for beat in beats for h in (beat.get('hinges') or [])]
@@ -447,6 +462,8 @@ def main(argv: list[str] | None = None) -> int:
                     help='真发请求（付费）。不给时只摊开将发的请求，一个都不发')
     ap.add_argument('--skip-summary-batch', action='store_true',
                     help='只发章请求，不发摘要批（分批付费时给前几批用）')
+    ap.add_argument('--boundary-only', action='store_true',
+                    help='只跑两段式契约的边界相，用最低成本先验拍数；不发细节与摘要')
     ap.add_argument('--json-out')
     ap.add_argument('--md-out')
     a = ap.parse_args(argv)
@@ -481,10 +498,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f'# 7A 高难包冒烟 · {a.sid}')
     print(f'  契约 {spec.architecture} · schema_mode {spec.schema_mode}')
     print(f'  模型 {cfg.model} · effort {NODES[NODE].effort} · 缓存 {cfg.cache_dir}')
-    print(f'  system {len(spec.system)} 字 · 与整跑逐字节同构 ✓')
+    systems = ([spec.boundary_system, spec.system]
+               if spec.boundary_system is not None else [spec.system])
+    print(f'  system {" + ".join(str(len(s)) for s in systems)} 字'
+          ' · 与整跑逐字节同构 ✓')
     for ordinal, _system, user in requests:
         print(f'  ch{ordinal}: user {len(user)} 字')
-    print(f'  将发 {len(requests)} 次章调用'
+    phases = (1 if a.boundary_only else
+              2 if spec.boundary_system is not None else 1)
+    print(f'  将发 {len(requests) * phases} 次章调用'
           f'{"" if a.skip_summary_batch else " + 1 次摘要批"}'
           f'（命中缓存的不再计费）')
     if not a.execute:
@@ -492,10 +514,73 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     before = _dir_fingerprint(ctx.novel_dir)
+    diag_before = _dir_fingerprint(ctx.novel_dir, diagnostics=True)
     ledger_at = ledger_path(base).stat().st_size if ledger_path(base).is_file() else 0
     audit_at = audit_path(base).stat().st_size if audit_path(base).is_file() else 0
 
     client = _llm_client(ctx)
+    if a.boundary_only:
+        if spec.boundary_response_model is None:
+            print(f'{spec.architecture} 没有边界相，不能用 --boundary-only',
+                  file=sys.stderr)
+            return 2
+        both = extract._Both(extract.ArtifactStore(ctx))
+        main_text = both.main_text or []
+        paragraph_count = {
+            int(section.get('chapter_ordinal') or 0):
+            len(extract.paragraph_spans(str(section.get('text') or '')))
+            for section in main_text
+        }
+        raw, violations, caught = extract._run_chapter_requests(
+            ctx,
+            client,
+            requests,
+            model_cls=spec.boundary_response_model,
+            purpose_of=lambda ordinal: f'{NODE}:boundaries:ch{ordinal}',
+            validator_of=lambda ordinal: extract._boundary_validator(
+                ordinal, paragraph_count[ordinal]),
+            max_tokens=extract.BOUNDARY_MAX_TOKENS,
+        )
+        by = {int(bp.get('chapter_ordinal') or 0): bp for bp in raw}
+        result = {
+            'contract': spec.architecture,
+            'chapters': [{
+                'chapter_ordinal': ordinal,
+                'paragraphs': paragraph_count[ordinal],
+                'beats': len((by.get(ordinal) or {}).get('beats') or []),
+                'end_paras': [int(beat.get('end_para') or 0)
+                              for beat in ((by.get(ordinal) or {}).get('beats') or [])],
+            } for ordinal in targets],
+            'scope_violations': violations,
+            'errors': [f'{type(e).__name__}: {str(e).splitlines()[0]}' for e in caught],
+        }
+        ledger_rows, _ = _tail_rows(ledger_path(base), ledger_at)
+        result['cost'] = _cost_rows(ledger_rows)
+        print('\n| 章 | 段 | 边界拍 | 止段 |')
+        print('|--:|--:|--:|---|')
+        for row in result['chapters']:
+            print(f"| {row['chapter_ordinal']} | {row['paragraphs']} | "
+                  f"{row['beats']} | {row['end_paras']} |")
+        cost = result['cost']
+        print(f"\n边界调用 {cost['calls_total']}（付费 {cost['calls_paid']} / 缓存 "
+              f"{cost['calls_cached']}）· prompt {cost['prompt_tokens']} · completion "
+              f"{cost['completion_tokens']}（reasoning {cost['reasoning_tokens']}）")
+        if result['errors']:
+            print('调用失败：' + '；'.join(result['errors']), file=sys.stderr)
+        if a.json_out:
+            Path(a.json_out).write_text(
+                json.dumps(result, ensure_ascii=False, indent=1), encoding='utf-8')
+        after = _dir_fingerprint(ctx.novel_dir)
+        if after != before:
+            print('⚠ 边界冒烟改动了正式书内文件，停', file=sys.stderr)
+            return 1
+        diag_after = _dir_fingerprint(ctx.novel_dir, diagnostics=True)
+        if diag_after != diag_before:
+            print('  ℹ 新增/更新 answer_lost 诊断证据；正式产物零改动')
+        else:
+            print('  ✓ 正式产物与诊断目录均零改动')
+        return 1 if caught else 0
+
     batch = extract.request_blueprints(ctx, client, chapters=targets)
     raw_blueprints = batch['raw_blueprints']
     errors = [f'{type(e).__name__}: {str(e).splitlines()[0]}' for e in batch['errors']]
@@ -560,7 +645,11 @@ def main(argv: list[str] | None = None) -> int:
                          | {k for k in set(after) & set(before) if after[k] != before[k]})
         print(f'⚠ 本工具本不该动书目录，但它变了：{changed}', file=sys.stderr)
         return 1
-    print('  ✓ 书目录零改动（本工具只读产物；账本与审计行在 _service 下如实追加）')
+    diag_after = _dir_fingerprint(ctx.novel_dir, diagnostics=True)
+    if diag_after != diag_before:
+        print('  ℹ answer_lost 诊断证据有新增；正式产物零改动，账本与审计行如实追加')
+    else:
+        print('  ✓ 正式产物与诊断目录均零改动；账本与审计行在 _service 下如实追加')
     return 1 if errors else 0
 
 

@@ -229,7 +229,8 @@
  "blueprint_architectures": [
   "bounded-fidelity-v3",
   "extraction-ir-v1",
-  "extraction-ir-v1.1"
+  "extraction-ir-v1.1",
+  "extraction-ir-v2"
  ],
  "repair_route": {
   "短语不在本章原文里": "field_patch",

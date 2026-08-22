@@ -52,8 +52,9 @@ DEFAULT_BASE_URL = 'https://api.deepseek.com'
 DEFAULT_THINKING_MODE = 'on'
 THINKING_MODES = ('on', 'off')
 
-#: `stage2.blueprint` 的响应契约（架构）。默认 `bounded-fidelity-v3`；
-#: `extraction-ir-v1` 经 `NOVEL_STAGE2_BLUEPRINT_CONTRACT` **显式**选择——
+#: `stage2.blueprint` 的响应契约（架构）。默认值只认
+#: `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`；其他登记臂经
+#: `NOVEL_STAGE2_BLUEPRINT_CONTRACT` **显式**选择——
 #: 与 `DEEPSEEK_MODEL` 同一条纪律：这是给 A/B 拧一次的口，不是随手改的环境变量，
 #: 产物 `_provenance.context.architecture` 会如实记下来。A/B 达标后翻的是
 #: 这里的默认（`contracts/invariants.py::BLUEPRINT_ARCHITECTURE`），不是取值面。

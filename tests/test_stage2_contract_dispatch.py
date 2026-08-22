@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_stage2_contract_dispatch.py —— 双契约注册表与接线。
+test_stage2_contract_dispatch.py —— Stage2 多响应契约注册表与接线。
 
 四件事：
 ① 注册表与取值面/配置口互相咬合（分家当场红）；
@@ -29,7 +29,9 @@ from contracts.schema.stage2 import ChapterBlueprints
 from novel.config import load_config
 from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import extract, prompts
-from novel.stages.stage2.compile_v2 import canonical_ir_projection
+from novel.stages.stage2.compile_v2 import (
+    canonical_ir_projection, canonical_ir_projection_refs,
+)
 from novel.stages.stage2.contract import CONTRACTS, active_contract, contract_for
 from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
@@ -51,18 +53,18 @@ def test_the_registry_covers_exactly_the_declared_architectures():
             'DeepSeek V4 只支持 json_object——这不是 constrained decoding，标签要诚实'
 
 
-def test_the_default_contract_is_ir1_and_env_can_still_select_v3():
+def test_the_default_contract_is_ir2_and_env_can_still_select_v3():
     """2026-08-21 翻默认（`BLUEPRINT_ARCHITECTURE`，依据见实验手册 §六~§十）。
     v3 **没有退役**：盘上存量产物全是它，定向修复按基线架构选契约，
     整跑也要能显式拧回去——所以两个方向都钉。"""
-    assert active_contract(env={}).architecture == 'extraction-ir-v1'
+    assert active_contract(env={}).architecture == 'extraction-ir-v2'
     assert active_contract(
         env={_ENV_KEY: 'bounded-fidelity-v3'}).architecture == 'bounded-fidelity-v3'
 
 
 def test_a_misspelled_contract_is_rejected_not_silently_defaulted():
     with pytest.raises(ValueError, match='契约只有'):
-        load_config(env={_ENV_KEY: 'extraction-ir-v2'})
+        load_config(env={_ENV_KEY: 'extraction-ir-v9'})
     with pytest.raises(KeyError, match='未登记'):
         contract_for('cumulative-past-v1')
 
@@ -219,6 +221,26 @@ def test_the_v2_hint_has_no_code_derived_fields():
     assert 'summary' not in chapter and 'beat_id' not in str(beat)
 
 
+def test_the_two_phase_v2_contract_has_distinct_closed_shapes():
+    spec = CONTRACTS['extraction-ir-v2']
+    assert spec.boundary_system == with_json_shape(
+        prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
+    assert spec.system == with_json_shape(
+        prompts.BLUEPRINT_SYS_V2_REFS, prompts.BLUEPRINT_HINT_V2_REFS)
+    assert spec.uses_character_refs
+    assert set(prompts.BOUNDARY_HINT_V2['blueprints'][0]) == \
+        {'chapter_ordinal', 'micro_events', 'beats'}
+    assert set(prompts.BOUNDARY_HINT_V2['blueprints'][0]['micro_events'][0]) == \
+        {'end_para', 'event'}
+    assert set(prompts.BOUNDARY_HINT_V2['blueprints'][0]['beats'][0]) == \
+        {'end_para', 'event'}
+    detail = prompts.BLUEPRINT_HINT_V2_REFS['blueprints'][0]['beats'][0]
+    assert set(detail) == {'end_para', 'time_layer', 'place',
+                           'present_char_ids', 'event', 'hinges'}
+    assert detail['place'] == 'str|null'
+    assert 'present_names' not in str(prompts.BLUEPRINT_HINT_V2_REFS)
+
+
 def test_the_summary_batch_arm_declares_its_bounds():
     assert '100~220' in prompts.SUMMARY_BATCH_SYS
     assert set(prompts.SUMMARY_BATCH_HINT['chapters'][0]) == \
@@ -246,6 +268,16 @@ def _summary_for(ordinal: int) -> str:
     base = (f'第{ordinal}章从人物照常起居开始，随后一件事引出另一件事，'
             f'各方的立场在对话与动作里逐步亮明，前面埋下的细节被再次动用，')
     return (base + '章末事态收在一个新的位置上，为下一章留出直接的因果接口。')
+
+
+def _ir2_responses() -> dict[int, dict]:
+    texts = {section['chapter_ordinal']: section['text']
+             for section in main_text()}
+    return {
+        blueprint['chapter_ordinal']: canonical_ir_projection_refs(
+            blueprint, texts[blueprint['chapter_ordinal']])
+        for blueprint in copy.deepcopy(blueprints())['blueprints']
+    }
 
 
 def test_the_ir1_chain_compiles_batches_summaries_and_lands(monkeypatch):
@@ -297,6 +329,64 @@ def test_the_ir1_chain_compiles_batches_summaries_and_lands(monkeypatch):
             assert chapter[beat.span.start:beat.span.end] == beat.span.text
             assert beat.time_layer in ('present', 'recall', 'hearsay'), \
                 '产物侧必须是映射后的取值，T_* 不许漏到盘上'
+
+
+def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
+        monkeypatch):
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v2')
+    book = Path(tempfile.mkdtemp()) / 'ir2链_125'
+    book.mkdir(parents=True)
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _t = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    by_ordinal = _ir2_responses()
+    ordinals = sorted(by_ordinal)
+
+    def respond(req, _index):
+        if '逐章事件清单' in req.user:
+            return _ok({'chapters': [
+                {'chapter_ordinal': o, 'summary': _summary_for(o)}
+                for o in ordinals]})
+        found = re.findall(r'阅读序第(\d+)章', req.user)
+        ordinal = int(found[-1])
+        if '第一张表 `micro_events`' in req.system:
+            boundary_beats = [
+                {'end_para': beat['end_para'], 'event': beat['event']}
+                for beat in by_ordinal[ordinal]['beats']]
+            return _ok({'blueprints': [{
+                'chapter_ordinal': ordinal,
+                'micro_events': boundary_beats,
+                'beats': boundary_beats,
+            }]})
+        assert '本章可选人物引用（代码派生、关闭式）' in req.user
+        assert '已冻结的事件边界（代码校验）' in req.user
+        assert 'event_draft' in req.user
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
+
+    ctx = _ctx(book, 'stage2.blueprint')
+    client, transport = _client(ctx, respond)
+    report = extract.run_blueprint(ctx, client)
+
+    assert report.passed
+    assert len(transport.calls) == len(ordinals) * 2 + 1, \
+        '边界 N 次 + 冻结边界细节 N 次 + 摘要批 1 次'
+    assert transport.calls[0].system == with_json_shape(
+        prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
+    stored = ArtifactStore(ctx).read(ChapterBlueprints, extract.BLUEPRINT_REL)
+    assert stored.provenance.context.architecture == 'extraction-ir-v2'
+    assert set(stored.provenance.prompts) == {
+        'BOUNDARY_SYS_V2', 'BLUEPRINT_SYS_V2_REFS', 'SUMMARY_BATCH_SYS'}
+    for blueprint in stored.blueprints:
+        expected = by_ordinal[blueprint.chapter_ordinal]
+        assert [beat.present_char_ids for beat in blueprint.beats] == \
+            [beat['present_char_ids'] for beat in expected['beats']]
+        assert all('我' not in beat.present_names and '他' not in beat.present_names
+                   and '她' not in beat.present_names
+                   for beat in blueprint.beats)
 
 
 def test_an_ir1_summary_batch_that_misses_a_chapter_is_rejected_by_the_gate(
