@@ -32,6 +32,33 @@ stage0/removal_report.json   current 的物化投影：内容 + 审批（v3）
 > 「两份 live 产物必须同进同出，而文件系统只保证单文件原子」。
 > 一次提交只写一份文件之后，那件事本身不存在了。
 
+### 三份产物的新鲜度各自怎么答（2026-08-22 补接）
+
+本层三份产物都**没有** `_provenance`（理由见 §一末尾那一条：本层是全链源头，
+`inputs` 恒空），所以完成度视图对它们只能走 `novel/store.py::_deterministic_freshness`
+那座桥——**桥上漏一条的后果不是报错，是那份产物恒 `unknown/no_provenance`**：
+盘上明明有一份判得出新鲜度的产物，视图却说「没有来源账」。
+`revisions.json` 落地那一批就漏在这里，`Test_data` 8 本语料 8/8 复现。
+
+| 产物 | 身份从哪儿读 | 上游边 |
+|---|---|---|
+| `revisions.json`（权威） | `current` 指向那一版的 `content.source_ref` + `normalized_source_sha1` | **只有原文这一条** |
+| `clean_text.txt`（投影） | `removal_report.json` 的 `source_ref` / 两个指纹 | 原文 + `clean_text.txt` |
+| `removal_report.json`（投影） | 同上 | 同上 |
+
+> #### ⚠ 权威格**只认原文这一条上游边**
+>
+> `clean_text.txt` 与 `removal_report.json` 在 `revisions.json` **下游**。
+> 把投影算成权威格自己的上游，就是让它拿自己的影子自证新鲜——那条边永远 match，
+> 判别力是零。⇒ 人手改了 `clean_text.txt` 时，两份投影 `stale`、
+> 权威格仍 `fresh`（那条链确实是照盘上这份原文建的），
+> 「两份 live 还是不是 `current` 的物化投影」由判据 `s0_revision_chain`（`R-0.5`）
+> 逐条复算回答，完成度只读它、不另造一份账。
+>
+> 反向守卫：`tests/test_store.py::test_every_produced_artifact_without_provenance_reaches_the_deterministic_bridge`
+> ——凡是节点 `produces` 的、没有 `_provenance` 槽位又会落进完成度 `artifacts[]`
+> 的产物，必须在桥上有落点。新增这类产物时同批接进来，别再靠人记得。
+
 ---
 
 > ## ⚠ 三条贯穿本层的事实
@@ -101,8 +128,6 @@ stage0/removal_report.json   current 的物化投影：内容 + 审批（v3）
 | `code` | `str` | 是 | 本轮写报告所用代码版本；本层没有 `_provenance`，故落在顶层 | **盘·码** |
 | `normalized_source_sha1` | `str` | 是 | **原始 txt 归一化之后那段文本**的 sha1（⚠ **不是文件字节的 digest**，2026-08-22 从 `source_sha1` 改名，见下）。追溯用 | **码** |
 | `clean_sha1` | `str` | 是 | **`clean_text.txt`** 的 sha1。**这才是 stage1 记的那个输入指纹** | **盘·码** |
-| `machine_normalized_source_sha1` / `machine_clean_sha1` | `str` | 是 | 本轮机器快照的 source/clean 身份；人工正式稿可与 machine clean 不同 | **盘·码** |
-| `machine_snapshot_sha256` | `str` | 是 | 完整 `machine_snapshot.json` 的内容身份；三方合并的 base 绑定到这一值 | **盘·码** |
 | `source_encoding` | `str` | 是 | 五候选 `utf-8-sig` / `utf-32` / `utf-16` / `utf-8` / `gb18030` 之一。⚠ 全语料 163 本**只出现过 `utf-8`，另四个零样本**——取值面只能从代码来，样本再多也补不出没发生过的分支 | **码** |
 | `text_norm` | `str` | 是 | 恒 `v1:bom+crlf` | **码** |
 
