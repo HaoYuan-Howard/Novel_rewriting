@@ -61,6 +61,24 @@ DOC_GLOBS = (
 #: 只有这些前缀才当「仓内路径」看。`stage0/clean_text.txt` 这类是**产物路径**，不在仓里。
 REPO_PREFIXES = ('tests/', 'contracts/', 'tools/', 'novel/', 'docs/', '.claude/')
 
+#: **文档明说「它不在仓里」的那几条路径**，逐条登记、逐条写理由。
+#:
+#: 【为什么是手写登记表，而不是「凡被 .gitignore 忽略就放行」】
+#: 两种烂法成本相同、方向相反（同 `novel/api/enums.py` 的三张登记表）：
+#: 自动放行**静默地烂**——一整类路径被挪出扫描面，从此这里写错谁都不知道；
+#: 手写登记**响亮地烂**——文档新引一条不存在的路径当场红，必须二选一：
+#: 补出这个文件，或者登记进来并写出「为什么它本来就不该在仓里」。
+#: ⚠ 这不是「已知豁免」，是一份账：每条理由必须说得出**文档那句话在说什么**。
+#: ⚠ 只放行**逐字全等**的路径，不做前缀匹配——放行 `.claude/settings.local.json`
+#: 不该顺带把 `.claude/settings.local.json.bak` 一起放行。
+_DECLARED_ABSENT: dict[str, str] = {
+    '.claude/settings.local.json': (
+        '被 `.gitignore` 忽略、只存在于各人自己的工作区。README 与 `docs/REQUIREMENTS.md` '
+        '里引用它的那两句话说的**正是它不存在**（「根 `.env`、`outputs/`、`Test_data/`…'
+        '不存在」那一段）⇒ 要求它在盘上等于要求文档自我否定，任何新 clone / worktree '
+        '都会红，而红的是宿主环境不是文档'),
+}
+
 _ID = re.compile(r'`(R-\d+\.\d+[a-z]?|Q-\d+|B-\d+)`')
 #: ⚠ 允许尾随 `::符号` 或 `['键']`：`novel/paths.py::edit_rel` 这种写法在
 #: skill 经验库里是标准形态，只取路径那一段，符号那一段由 skill 校验器自己查。
@@ -100,14 +118,40 @@ def test_every_referenced_repo_path_exists(doc):
     text = open(doc, encoding='utf-8').read()
     bad = []
     for path in sorted(set(_PATH.findall(text))):
+        if path in _DECLARED_ABSENT:      # 文档明说它不在仓里，见上表
+            continue
         # 目录形（以 / 结尾）与文件形都接受
         full = os.path.join(ROOT, path)
         if not (os.path.exists(full) or os.path.exists(full.rstrip('/'))):
             bad.append(path)
     assert not bad, (
         f'{_rel(doc)} 引用了盘上不存在的路径：{bad}\n'
-        f'→ 文件改名/搬家了而文档没跟上。这类引用不会报错，只会静默误导'
+        f'→ 文件改名/搬家了而文档没跟上。这类引用不会报错，只会静默误导。'
+        f'若它本来就不该在仓里（被 .gitignore 忽略等），'
+        f'登记进 `_DECLARED_ABSENT` 并写出理由，别把它从扫描面上摘掉'
     )
+
+
+def test_declared_absent_entries_are_still_live_and_still_absent():
+    """登记表自己的守卫：一条**死登记**比没有登记更坏。
+
+    两侧都查，因为两侧都会烂：
+      · 没有任何文档还在引用它 ⇒ 这条登记已经是死配置，删掉；
+      · 它现在**真的在盘上**了 ⇒ 放行的前提没了，这条必须撤销，
+        否则它从此把一条真能查的路径静默挪出扫描面（那正是本表拒绝
+        「凡 gitignore 就放行」的同一个理由）。
+    """
+    referenced = set()
+    for doc in _docs():
+        referenced |= set(_PATH.findall(open(doc, encoding='utf-8').read()))
+    for path, why in _DECLARED_ABSENT.items():
+        assert why.strip(), f'{path} 登记了却没写理由'
+        assert path in referenced, (
+            f'{_DECLARED_ABSENT} 里的 {path} 已经没有任何文档引用 ⇒ 死配置，删掉这一条')
+        full = os.path.join(ROOT, path)
+        assert not (os.path.exists(full) or os.path.exists(full.rstrip('/'))), (
+            f'{path} 现在真的在盘上了 ⇒ 放行的前提没了，'
+            f'把这条从 `_DECLARED_ABSENT` 撤销，让它回到扫描面上')
 
 
 def test_the_scan_actually_finds_something():

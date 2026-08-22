@@ -131,7 +131,7 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
     except (UpstreamMissing, ArtifactUnreadable):
         return False
     if node == 'stage0.approve':
-        # 唯一落点在 eligibility：历史自动批（auto_zero_hit）读得、跑不得，
+        # 唯一落点在 eligibility，队列不自己复述批准条件；不具执行资格
         # 在这里等于「闸门未过」——队列会继续说出在等 stage0.approve。
         from novel.stages.stage0.eligibility import is_stage0_executable
         return is_stage0_executable(artifact)

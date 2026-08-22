@@ -20,8 +20,7 @@ import type { Job } from '@/types/jobs'
 import type {
   ChapterLabelAnomaly,
   Stage0EditRequest,
-  Stage0MergeCandidate,
-  Stage0MergeResolution,
+  Stage0CandidateView,
   Stage0PartitionPreview,
   Stage0Report,
   Stage0Segments,
@@ -29,7 +28,6 @@ import type {
 
 /** 章号异常的展示文案。**机器语义在 `anomaly` 上，界面不从文案里回猜。** */
 const ANOMALY_LABEL: Record<ChapterLabelAnomaly, string> = {
-  non_numeric: '章号不是数字',
   reset: '章号退回',
   gap: '章号跳号',
   repeat: '章号重复',
@@ -69,7 +67,7 @@ function PartitionPreviewPanel({ data }: { data: Stage0PartitionPreview }) {
                   第 {row.chapter_ordinal} 章
                 </Mono>
                 <Mono className={'w-[86px] shrink-0 text-mini text-ink-5'}>
-                  原标号 {row.source_chapter_label}
+                  原标号 {row.source_chapter_no}
                 </Mono>
                 <Mono className={'w-[64px] shrink-0 text-mini text-ink-5'}>
                   {row.chars} 字
@@ -99,11 +97,11 @@ function sameIds(left: Set<string>, right: Set<string>): boolean {
   return left.size === right.size && [...left].every((id) => right.has(id))
 }
 
-/** 三方合并的取值仍传英文 key，这里只负责把它显示成中文 */
-const MERGE_CHOICE_LABEL: Record<Stage0MergeResolution['choice'], string> = {
-  ours: '已批准正文',
-  theirs: '机器新跑',
-  custom: '手动合并',
+/** 一版是怎么来的。取值面在后端，这里只负责把它显示成中文 */
+const REVISION_ORIGIN_LABEL: Record<string, string> = {
+  machine: '机器剔除',
+  human_edit: '人工编辑',
+  human_adopt: '人工采纳机器结果',
 }
 
 function requireOk(job: Job): void {
@@ -122,9 +120,6 @@ export function Stage0Screen() {
   const [onlySuspicious, setOnlySuspicious] = useState(true)
   const [actor, setActor] = useState('')
   const [reason, setReason] = useState('')
-  const [mergeResolutions, setMergeResolutions] = useState<
-    Record<string, { choice: Stage0MergeResolution['choice']; custom_text: string }>
-  >({})
   const segmentScroll = useRef<HTMLDivElement>(null)
   const report = useQuery({
     queryKey: qk.stage0Report(sid),
@@ -136,9 +131,9 @@ export function Stage0Screen() {
     queryFn: () => api.getStage0Segments(sid),
     retry: false,
   })
-  const merge = useQuery({
-    queryKey: qk.stage0Merge(sid),
-    queryFn: () => api.getStage0Merge(sid),
+  const candidate = useQuery({
+    queryKey: qk.stage0Candidate(sid),
+    queryFn: () => api.getStage0Candidate(sid),
     retry: false,
   })
   // 批准前的分章预览：零成本纯函数，人点批准之前唯一能看见分章结果的地方。
@@ -156,16 +151,12 @@ export function Stage0Screen() {
     [segments.data],
   )
   const selectionKey = report.data
-    ? report.data.round + ':' + report.data.clean_sha1 + ':' + [...initial].join(',')
+    ? report.data.revision_id + ':' + [...initial].join(',')
     : ''
 
   useEffect(() => {
     if (segments.data?.available) setSelection(new Set(initial))
   }, [selectionKey, segments.data?.available])
-
-  useEffect(() => {
-    setMergeResolutions({})
-  }, [merge.data?.candidate_id])
 
   const pickedForView = selection ?? initial
   const suspiciousForView = useMemo(
@@ -202,9 +193,8 @@ export function Stage0Screen() {
       const picked = selection ?? initial
       if (!sameIds(picked, initial)) {
         const request: Stage0EditRequest = {
-          expected_round: current.round,
-          expected_source_sha1: current.source_sha1,
-          expected_clean_sha1: current.clean_sha1,
+          expected_revision_id: current.revision_id,
+          expected_normalized_source_sha1: current.normalized_source_sha1,
           removed_segment_ids: [...picked],
           actor: actor.trim(),
           reason: reason.trim(),
@@ -240,31 +230,19 @@ export function Stage0Screen() {
     },
   })
 
-  const decideMerge = useMutation({
-    mutationFn: async ({ candidate, reject }: { candidate: Stage0MergeCandidate; reject: boolean }) => {
-      const resolutions: Stage0MergeResolution[] = reject
-        ? []
-        : candidate.conflicts.map((conflict) => {
-            const resolution = mergeResolutions[conflict.id]
-            if (!resolution) throw new Error('每个冲突都必须恰好处理一次')
-            return {
-              conflict_id: conflict.id,
-              choice: resolution.choice,
-              custom_text: resolution.choice === 'custom' ? resolution.custom_text : null,
-            }
-          })
+  // 三选一里的两个写动作。第三支「采纳后再编辑」不是动作：adopt 之后这一屏就回到
+  // 普通编辑态，照常勾选再批准即可 —— 多一个复合动作就多一条要各自恢复的路。
+  const decideCandidate = useMutation({
+    mutationFn: async ({ view, dismiss }: { view: Stage0CandidateView; dismiss: boolean }) => {
       const request = {
-        candidate_id: candidate.candidate_id,
-        expected_round: candidate.expected_round,
-        expected_source_sha1: candidate.expected_source_sha1,
-        expected_clean_sha1: candidate.expected_clean_sha1,
-        resolutions,
+        candidate_revision_id: view.candidate.revision_id,
+        expected_revision_id: view.current_revision_id,
         actor: actor.trim(),
         reason: reason.trim(),
       }
-      const job = reject
-        ? await api.rejectStage0Merge(sid, request)
-        : await api.resolveStage0Merge(sid, request)
+      const job = dismiss
+        ? await api.dismissStage0Candidate(sid, request)
+        : await api.adoptStage0Candidate(sid, request)
       requireOk(job)
       return job
     },
@@ -273,7 +251,7 @@ export function Stage0Screen() {
       await Promise.all([
         qc.invalidateQueries({ queryKey: qk.stage0Report(sid) }),
         qc.invalidateQueries({ queryKey: qk.stage0Segments(sid) }),
-        qc.invalidateQueries({ queryKey: qk.stage0Merge(sid) }),
+        qc.invalidateQueries({ queryKey: qk.stage0Candidate(sid) }),
         qc.invalidateQueries({ queryKey: qk.jobs(sid) }),
         qc.invalidateQueries({ queryKey: qk.novel(sid) }),
       ])
@@ -290,9 +268,11 @@ export function Stage0Screen() {
             const removed = source.segments.filter((item) => picked.has(item.id))
             const dirty = !sameIds(picked, initial)
             const removedChars = removed.reduce((sum, item) => sum + item.chars, 0)
-            // 执行资格与后端同一口径：历史自动批（auto_zero_hit）显示已批准但跑不得。
-            const approved = current.approved === 'approved' && current.approval_origin === 'human'
-            const legacyAuto = current.approved === 'approved' && current.approval_origin === 'auto_zero_hit'
+            // ⚠ 执行资格**不在这里算**：后端 `eligibility.py` 是唯一落点，响应里的
+            //   `executable` 是它的投影。此前这里自己拼
+            //   `approved === 'approved' && origin === 'human'`，那是第二个落点
+            //   ——后端谓词收紧时漏掉的那一处就是绕过闸门的复活口。
+            const approved = current.executable
             const suspicious = suspiciousForView
             const filteredSegments = filteredForView
             return (
@@ -307,123 +287,81 @@ export function Stage0Screen() {
                   <div className={'flex flex-col items-end gap-2 text-right'}>
                     <Mono className={'text-tag text-ink-4'}>{current.original_filename}</Mono>
                     <Mono className={'text-tag text-ink-4'}>
-                      round {current.round} · sha1 {current.source_sha1.slice(0, 12)} · {current.source_encoding}
+                      rev {current.revision_id.slice(0, 12)} · sha1 {current.normalized_source_sha1.slice(0, 12)} · {current.source_encoding}
                     </Mono>
                   </div>
                 </header>
-                {merge.data ? (
+                {candidate.data ? (
                   <Panel className="border-warn-line">
                     <PaneHeader
-                      title="机器重跑产生了三方合并候选"
-                      meta={
-                        merge.data.conflicts.length
-                          ? merge.data.conflicts.length + ' 个 typed conflict'
-                          : '改动不重叠，可直接接受'
-                      }
+                      title="机器重跑算出了另一版"
+                      meta={REVISION_ORIGIN_LABEL[candidate.data.current_origin] ?? candidate.data.current_origin}
                     />
                     <div className="flex flex-col gap-10 px-18 py-14">
                       <p className="prose-cn m-0 text-body text-ink-3">
-                        正式正文仍保持不动。base 是上次机器正文，ours 是已批准正文，theirs 是本次机器重跑；只有显式处理并通过乐观锁后才会换正式正文。
+                        正式正文仍保持不动。这两版**各自完整**——要留哪一版是整版的选择，不是逐段拼接：
+                        剔除账本、告警与正文是同一团东西，只换其中一格保证不了它们互相对得上。
                       </p>
-                      <Mono className="text-micro text-ink-5">
-                        candidate {merge.data.candidate_id.slice(0, 12)} · round {merge.data.expected_round} · base snapshot {merge.data.base_snapshot_sha256.slice(0, 12)}
-                      </Mono>
-                      {merge.data.conflicts.map((conflict) => {
-                        const resolution = mergeResolutions[conflict.id]
-                        return (
-                          <div key={conflict.id} className="overflow-hidden rounded-block border border-line-btn">
-                            <div className="flex items-center gap-8 border-b border-line-soft bg-sunken-2 px-12 py-8">
-                              <Mono className="text-mini">{conflict.id}</Mono>
-                              <Mono className="text-micro text-ink-5">
-                                base[{conflict.base_span[0]}:{conflict.base_span[1]}]
-                              </Mono>
-                            </div>
-                            <div className="grid grid-cols-3 gap-1 bg-line-2">
-                              {[
-                                ['base', conflict.base_text],
-                                ['ours', conflict.ours_text],
-                                ['theirs', conflict.theirs_text],
-                              ].map(([label, text]) => (
-                                <div key={label} className="bg-card px-12 py-9">
-                                  <Mono className="text-micro text-ink-5">{label}</Mono>
-                                  <div className="prose-cn mt-3 text-body whitespace-pre-wrap text-ink-2">{text}</div>
-                                </div>
-                              ))}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-8 border-t border-line-soft px-12 py-9">
-                              {(['ours', 'theirs', 'custom'] as const).map((choice) => (
-                                <label key={choice} className="flex cursor-pointer items-center gap-4 text-body">
-                                  <input
-                                    type="radio"
-                                    name={'merge-' + conflict.id}
-                                    checked={resolution?.choice === choice}
-                                    onChange={() =>
-                                      setMergeResolutions((old) => ({
-                                        ...old,
-                                        [conflict.id]: {
-                                          choice,
-                                          custom_text: old[conflict.id]?.custom_text ?? '',
-                                        },
-                                      }))
-                                    }
-                                  />
-                                  {MERGE_CHOICE_LABEL[choice]}
-                                </label>
-                              ))}
-                              {resolution?.choice === 'custom' ? (
-                                <textarea
-                                  aria-label={conflict.id + ' custom text'}
-                                  value={resolution.custom_text}
-                                  onChange={(event) =>
-                                    setMergeResolutions((old) => ({
-                                      ...old,
-                                      [conflict.id]: { choice: 'custom', custom_text: event.target.value },
-                                    }))
-                                  }
-                                  className="min-h-70 min-w-[320px] flex-1 rounded-btn border border-line-btn px-9 py-7 text-body"
-                                />
-                              ) : null}
+                      <div className="grid grid-cols-2 gap-1 bg-line-2">
+                        {[
+                          {
+                            key: 'current',
+                            label: '当前版（保留它）',
+                            revision: candidate.data.current_revision_id,
+                            chars: candidate.data.current_body_code_points,
+                            removed: candidate.data.current_removed_count,
+                            origin: candidate.data.current_origin,
+                          },
+                          {
+                            key: 'candidate',
+                            label: '机器新版（采纳它）',
+                            revision: candidate.data.candidate.revision_id,
+                            chars: candidate.data.candidate.content.body_code_points,
+                            removed: candidate.data.candidate.content.removed.length,
+                            origin: candidate.data.candidate.origin,
+                          },
+                        ].map((side) => (
+                          <div key={side.key} className="bg-card px-12 py-9">
+                            <div className="text-body font-semibold">{side.label}</div>
+                            <Mono className="text-micro text-ink-5">rev {side.revision.slice(0, 12)}</Mono>
+                            <div className="prose-cn mt-3 text-body text-ink-2">
+                              正文 {side.chars} 码点 · 剔除 {side.removed} 段 ·{' '}
+                              {REVISION_ORIGIN_LABEL[side.origin] ?? side.origin}
                             </div>
                           </div>
-                        )
-                      })}
+                        ))}
+                      </div>
                       <details className="rounded-btn border border-line-soft bg-sunken-2 px-12 py-9">
-                        <summary className="cursor-pointer text-body font-semibold">查看自动合并后的完整候选</summary>
+                        <summary className="cursor-pointer text-body font-semibold">查看机器新版的完整正文</summary>
                         <pre className="m-0 mt-8 max-h-[360px] overflow-auto border-t border-line-soft pt-8 font-sans text-body whitespace-pre-wrap text-ink-2">
-                          {merge.data.proposed_clean_text}
+                          {candidate.data.candidate.content.clean_text}
                         </pre>
                       </details>
-                      {decideMerge.isError ? (
+                      <p className="prose-cn m-0 text-tag text-ink-4">
+                        想在机器新版基础上再改？先「采纳」，这一屏会回到普通编辑态，勾选后照常批准。
+                      </p>
+                      {decideCandidate.isError ? (
                         <div className="rounded-btn border border-warn-line bg-warn-bg px-12 py-9 text-body text-warn-ink">
-                          {errorBody(decideMerge.error)}
-                          <ErrorHint error={decideMerge.error} />
+                          {errorBody(decideCandidate.error)}
+                          <ErrorHint error={decideCandidate.error} />
                         </div>
                       ) : null}
                       <div className="flex justify-end gap-8">
                         <button
                           type="button"
-                          disabled={decideMerge.isPending || !actor.trim() || !reason.trim()}
-                          onClick={() => decideMerge.mutate({ candidate: merge.data!, reject: true })}
+                          disabled={decideCandidate.isPending || !actor.trim() || !reason.trim()}
+                          onClick={() => decideCandidate.mutate({ view: candidate.data!, dismiss: true })}
                           className="cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-7 text-body font-semibold disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                          拒绝本次机器候选
+                          保留当前版
                         </button>
                         <button
                           type="button"
-                          disabled={
-                            decideMerge.isPending ||
-                            !actor.trim() ||
-                            !reason.trim() ||
-                            merge.data.conflicts.some((conflict) => {
-                              const resolution = mergeResolutions[conflict.id]
-                              return !resolution ||
-                                (resolution.choice === 'custom' && !resolution.custom_text)
-                            })
-                          }
-                          onClick={() => decideMerge.mutate({ candidate: merge.data!, reject: false })}
+                          disabled={decideCandidate.isPending || !actor.trim() || !reason.trim()}
+                          onClick={() => decideCandidate.mutate({ view: candidate.data!, dismiss: false })}
                           className="cursor-pointer rounded-btn bg-ink px-12 py-7 text-body font-semibold text-card disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                          接受三方合并候选
+                          采纳机器新版
                         </button>
                       </div>
                     </div>
@@ -433,7 +371,7 @@ export function Stage0Screen() {
                   <Panel className={'flex flex-col gap-8 border-warn-line px-18 py-16'}>
                     <div className={'text-section font-semibold'}>原文不可审校</div>
                     <p className={'prose-cn m-0 text-body text-ink-3'}>{source.reason}</p>
-                    <Mono className={'text-mini text-ink-5'}>{current.original_path}</Mono>
+                    <Mono className={'text-mini text-ink-5'}>{current.original_filename}</Mono>
                   </Panel>
                 ) : (
                   <>
@@ -444,18 +382,8 @@ export function Stage0Screen() {
                           approved ? 'bg-gate-ok-bg text-ink-2' : 'bg-warn-bg text-warn',
                         )}
                       >
-                        {approved
-                          ? '已批准'
-                          : legacyAuto
-                            ? '历史自动批准 · 需人工重批'
-                            : '待人工批准'}
+                        {approved ? '已批准' : '待人工批准'}
                       </span>
-                      {legacyAuto ? (
-                        <span className={'text-tag text-warn'}>
-                          这份批准来自已停产的零命中自动批（auto_zero_hit），不具执行资格；
-                          填 actor 与 reason 重新批准后才能进入 stage1。
-                        </span>
-                      ) : null}
                       <span className={'text-body font-semibold'}>
                         当前删除 {removed.length} 段 · {removedChars} 码点
                       </span>
@@ -463,13 +391,13 @@ export function Stage0Screen() {
                         原文 {current.total_code_points} 码点 · 选择后正文{' '}
                         {Math.max(0, current.total_code_points - removedChars)} 码点
                       </span>
-                      {current.edited_by_human ? (
+                      {current.revision_origin !== 'machine' ? (
                         <span className={'rounded-tag bg-inset px-7 py-2 text-micro text-ink-3'}>
-                          含人工编辑
+                          {REVISION_ORIGIN_LABEL[current.revision_origin] ?? current.revision_origin}
                         </span>
                       ) : null}
                       {current.warnings.map((warning) => (
-                        <span key={warning.kind} className={'text-tag text-warn'}>
+                        <span key={warning.warning.kind} className={'text-tag text-warn'}>
                           {warning.message}
                         </span>
                       ))}

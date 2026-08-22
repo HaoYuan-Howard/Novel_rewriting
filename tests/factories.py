@@ -22,14 +22,12 @@ def stage5_book() -> Book:
     source_one = '\n\n'.join(scene + f'这是第{i}次核对，她仍没有仓促下结论。' for i in range(1, 7))
     source_two = '\n\n'.join(scene + f'天色又暗了一层，线索在第{i}次比对后逐渐清楚。' for i in range(1, 5))
     main = MainText.model_validate([
-        {'section_id': 'sec_0001', 'chapter_ordinal': 1,
-         'source_chapter_label': '1', 'text': source_one},
-        {'section_id': 'sec_0002', 'chapter_ordinal': 2,
-         'source_chapter_label': '2', 'text': source_two},
+        {'chapter_ordinal': 1, 'source_chapter_no': 1, 'text': source_one},
+        {'chapter_ordinal': 2, 'source_chapter_no': 2, 'text': source_two},
     ])
     measurable = measure_all(
         main,
-        HookCopy(section_id='sec_0001', text='一把银匙，一本被调换的账册，足以让旧日秘密重新开口。'),
+        HookCopy(text='一把银匙，一本被调换的账册，足以让旧日秘密重新开口。'),
     ).model_dump()
     character = {
         'display_name': '沈青',

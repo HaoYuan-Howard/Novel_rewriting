@@ -70,14 +70,14 @@ Stage5/6/7 都调用 `novel.prov.rules_fingerprint(stage)`；指纹覆盖 `Rule`
 
 ## 二、两把尺子：40 位与 10 位，**故意的**
 
-盘上实测：`stage1/partition_report.json` 的 `source_sha1` 是 **40 位全宽**，
+盘上实测：`stage1/partition_report.json` 的 `normalized_source_sha1` 是 **40 位全宽**，
 而 `_provenance.inputs` / `draft_sha1` / `judged[].sha1` 是 **10 位**。
 
 **裁决：不统一成一个宽度，统一成两个类型。**
 
 | 类型 | 宽度 | 用在哪 | 为什么是这个宽度 |
 |---|---|---|---|
-| **内容身份** | 40 | `stage0.source_sha1` / `clean_sha1` · `stage7.book_txt` 的指纹 | 它回答「**有人换过原文吗**」，人可能拿 `sha1sum` 手工复核。截断买不到任何东西 |
+| **内容身份** | 40 | `stage0.normalized_source_sha1` / `clean_sha1` · `stage7.book_txt` 的指纹 | 它回答「**有人换过原文吗**」，人可能手工复核。截断买不到任何东西。⚠ `normalized_source_sha1` 算的是**归一化之后那段文本**，`sha1sum 原文.txt` 对不上是正常的——名字 2026-08-22 从 `source_sha1` 改成现在这个，就是为了不再诱导那种复核 |
 | **来源指纹** | 10 | `inputs` 的两格 · `prompts.*` · `draft_sha1` · `judged[].sha1` | 40 bit。本项目量级（一本书几十份产物）碰撞概率约 1e-6，而它天天出现在报告里，短一点可读 |
 
 **让两把尺子安全的规则只有一条：10 位永不与 40 位比较。**

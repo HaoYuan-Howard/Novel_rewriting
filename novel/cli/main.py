@@ -232,7 +232,7 @@ def _run_stage0_source(
     print(
         f'  ✓ stage0 {action} {novel_dir}：保留 {result.report.body_code_points}/'
         f'{result.report.total_code_points} 码点，剔除 {len(result.report.removed)} 段，'
-        f'状态 {result.report.approved}',
+        f'状态 {result.report.approval.status}',
     )
     if result.report.warnings:
         print('  ⚠ 可疑项：' + '、'.join(w.kind for w in result.report.warnings))
@@ -257,13 +257,14 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     if ctx.node == 'stage0.edit':
         edit_path = _valued(flags, '--apply-edit')
         edit_plan_path = _valued(flags, '--apply-edit-plan')
-        merge_plan_path = _valued(flags, '--apply-merge-plan')
-        if sum(value is not None for value in (edit_path, edit_plan_path, merge_plan_path)) != 1:
+        candidate_plan_path = _valued(flags, '--apply-candidate-plan')
+        if sum(value is not None
+               for value in (edit_path, edit_plan_path, candidate_plan_path)) != 1:
             raise TerminalState(
                 'stage0.edit 必须且只能给一种输入：--apply-edit / --apply-edit-plan / '
-                '--apply-merge-plan')
-        if merge_plan_path is not None:
-            art, report = removal.run_merge_plan(ctx, merge_plan_path)
+                '--apply-candidate-plan')
+        if candidate_plan_path is not None:
+            art, report = removal.run_candidate_plan(ctx, candidate_plan_path)
         elif edit_plan_path is not None:
             art, report = removal.run_edit_plan(ctx, edit_plan_path)
         else:
@@ -274,7 +275,8 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
             art, report = removal.run_edit(
                 ctx, edit_path or '', actor=actor, reason=reason)
         print(render(report))
-        print(f'  ✓ 人工编辑已落为第 {art.round} 轮；状态退回 pending，请重新批准')
+        print(f'  ✓ 已落为 revision {art.revision_id[:12]}…'
+              f'（{art.revision_origin}）；状态 {art.approval.status}')
         return X.OK
     if '--check-only' in tokens:
         if '--source' in tokens or '--dry-run' in tokens:
@@ -287,15 +289,13 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     if source is None:
         store = ArtifactStore(ctx)
         previous, _raw = store.read_own(RemovalReport, removal.REPORT_REL)
-        # ⚠ 记录的那条是**书目录之外**的绝对路径，Output 根一搬家就断。界面上传的原文
-        #   其实跟着 base 走（`<base>/_service/uploads/<内容地址>/`），重锚认得回来；
-        #   外部语料被删则认不回来，此时**照旧把记录的那条传下去**——
-        #   让 `run_source` 给出那句说得清的 `UpstreamMissing`，不在这里改写成别的理由。
-        from novel.core.source import resolve_recorded_source
-        found = resolve_recorded_source(previous.original_path, ctx.novel_dir.parent)
-        # 重锚成功时复跑会把 `original_path` 重新记成当前 base 下的位置（`removal._write`
-        # 记的是这次实际读的那条），于是这本书的源身份边自己就长回来了。
-        source = previous.original_path if found is None else found
+        # ⚠ 两支处置相反，而 `source_ref` 让它们在类型上就分得开：`managed_upload`
+        #   跟着 base 走（Output 根搬家不影响它），`external_file` 找不到就是世界
+        #   真的变了。找不到时**照旧把记录里那条路径传下去**——让 `run_source` 给出
+        #   那句说得清的 `UpstreamMissing`，不在这里改写成别的理由。
+        from novel.core.source import describe_source, resolve_recorded_source
+        found = resolve_recorded_source(previous.source_ref, ctx.novel_dir.parent)
+        source = describe_source(previous.source_ref) if found is None else found
     novel_dir, result, _report = removal.run_source(
         source,
         ctx.novel_dir.parent,
@@ -306,7 +306,7 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     print(
         f'  ✓ stage0 {action} {novel_dir}：保留 {result.report.body_code_points}/'
         f'{result.report.total_code_points} 码点，剔除 {len(result.report.removed)} 段，'
-        f'状态 {result.report.approved}',
+        f'状态 {result.report.approval.status}',
     )
     return X.OK
 

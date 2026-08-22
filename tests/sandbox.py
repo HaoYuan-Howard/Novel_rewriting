@@ -109,7 +109,7 @@ def source_resolves_in_a_sandbox(book: str) -> bool:
     """这本书的 `stage0` 新鲜度在**沙箱里**答得出吗（记录的源路径自己还在盘上）。
 
     ⚠⚠ `stage0/removal_report.json` 的新鲜度**不走通用来源账**：它拿记录里的
-    `original_path` 去比 `source_sha1`（`novel/store.py::_stage0_freshness`）。
+    `original_path` 去比 `normalized_source_sha1`（`novel/store.py::_stage0_freshness`）。
     那条路径失效时才由 `novel/core/source.py::resolve_recorded_source` 按
     `<base>/_service/uploads/<sha256>/<name>` 回落重锚——**而沙箱的 base 里没有那一层**
     ⇒ 该产物判 `unknown/ghost`，`novel/orchestrator/approvals.py::_proof_for_seen`

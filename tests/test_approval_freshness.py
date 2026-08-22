@@ -111,12 +111,12 @@ def current_book(tmp_path: Path) -> tuple[Path, Path]:
         '第一章\n她核对了当前计划。\n', encoding='utf-8', newline='')
     main = MainText.model_validate([
         {
-            'section_id': 'sec_0001', 'chapter_ordinal': 1,
-            'source_chapter_label': '1', 'text': '她核对了当前计划。',
+            'chapter_ordinal': 1,
+            'source_chapter_no': 1, 'text': '她核对了当前计划。',
         },
         {
-            'section_id': 'sec_0002', 'chapter_ordinal': 2,
-            'source_chapter_label': '2', 'text': '另一章保持不变。',
+            'chapter_ordinal': 2,
+            'source_chapter_no': 2, 'text': '另一章保持不变。',
         },
     ])
     _disk_json(book, MAIN_REL, main.model_dump(mode='json'))
@@ -200,12 +200,12 @@ def test_stale_or_changed_subject_revokes_spending_and_queue_emits_no_paid_plan(
     elif mutation == 'upstream':
         main = MainText.model_validate([
             {
-                'section_id': 'sec_0001', 'chapter_ordinal': 1,
-                'source_chapter_label': '1', 'text': '上游正文已经变化。',
+                'chapter_ordinal': 1,
+                'source_chapter_no': 1, 'text': '上游正文已经变化。',
             },
             {
-                'section_id': 'sec_0002', 'chapter_ordinal': 2,
-                'source_chapter_label': '2', 'text': '另一章保持不变。',
+                'chapter_ordinal': 2,
+                'source_chapter_no': 2, 'text': '另一章保持不变。',
             },
         ])
         _disk_json(book, MAIN_REL, main.model_dump(mode='json'))

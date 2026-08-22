@@ -53,14 +53,14 @@ def test_stage0_continuous_view_rejects_a_gap_and_duplicate_ids():
         id='same', kind='keep', start=3, end=4, chars=1, flagged=False, text='丙')
     with pytest.raises(ValidationError, match='连续|重复'):
         Stage0Segments(
-            source_sha1='0' * 40,
+            normalized_source_sha1='0' * 40,
             available=True,
             reason=None,
             segments=[first, gap],
         )
     with pytest.raises(ValidationError):
         Stage0Segments(
-            source_sha1='0' * 40,
+            normalized_source_sha1='0' * 40,
             available=False,
             reason='',
             segments=[],
@@ -72,7 +72,7 @@ def test_stage1_continuous_view_and_chapter_index_reject_gaps():
         id='hook', kind='hook', start=0, end=1, chars=1, flagged=False, text='甲')
     gap = Stage1Segment(
         id='ch2', kind='chapter', start=2, end=3, chars=1, flagged=False, text='乙',
-        chapter_ordinal=2, source_chapter_label='2',
+        chapter_ordinal=2, source_chapter_no=2,
     )
     with pytest.raises(ValidationError, match='连续'):
         Stage1Segments(input_sha1='0' * 40, segments=[first, gap])
@@ -80,7 +80,7 @@ def test_stage1_continuous_view_and_chapter_index_reject_gaps():
         Stage1Chapters(chapters=[
             Stage1ChapterRow(
                 chapter_ordinal=2,
-                source_chapter_label='2',
+                source_chapter_no=2,
                 chars=1,
                 preview='乙',
             ),

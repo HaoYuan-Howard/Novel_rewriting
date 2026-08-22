@@ -21,9 +21,9 @@ describe('Stage0Screen segment virtualization', () => {
     }))
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      original_path: 'book.txt',
+      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       clean_sha1: 'clean',
       source_encoding: 'utf-8',
       text_norm: 'NFC+LF',
@@ -31,15 +31,13 @@ describe('Stage0Screen segment virtualization', () => {
       total_code_points: 6220,
       body_code_points: 6220,
       warnings: [],
-      approved: 'pending',
-      approved_at: null,
-      approval_origin: null,
-      approved_by: null,
-      round: 1,
-      edited_by_human: false,
+      approval: { status: 'pending' as const },
+      executable: false,
+      revision_id: 'a'.repeat(64),
+      revision_origin: 'machine' as const,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       available: true,
       reason: null,
       segments: rows,
@@ -57,12 +55,15 @@ describe('Stage0Screen segment virtualization', () => {
     expect(await screen.findByRole('button', { name: '正文分区 0' })).toBeVisible()
   })
 
-  it('resolves every typed merge conflict through the audited API request', async () => {
+  it('把机器候选摆成整版三选一，并按乐观锁提交采纳', async () => {
+    // ⚠ 阶段 C 起页面上要决定的不再是「逐个冲突选 ours 还是 theirs」——diff3 与
+    //   typed 冲突已整份下线（聚合根是 {原文身份, 正文, 剔除账本, 告警} 整团，
+    //   只对正文做 diff3 保证不了整个聚合一致）——而是**整版留哪一版**。
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      original_path: 'book.txt',
+      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
-      source_sha1: '1111111111111111111111111111111111111111',
+      normalized_source_sha1: '1111111111111111111111111111111111111111',
       clean_sha1: '2222222222222222222222222222222222222222',
       source_encoding: 'utf-8',
       text_norm: 'NFC+LF',
@@ -70,50 +71,50 @@ describe('Stage0Screen segment virtualization', () => {
       total_code_points: 10,
       body_code_points: 10,
       warnings: [],
-      approved: 'approved',
-      approved_at: 'now',
-      approval_origin: 'human',
-      approved_by: 'tester',
-      round: 2,
-      edited_by_human: true,
+      approval: { status: 'approved' as const,
+                  at: 'now', by: 'tester', reason: '看过了' },
+      executable: true,
+      revision_id: 'c'.repeat(64),
+      revision_origin: 'human_edit' as const,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      source_sha1: '1111111111111111111111111111111111111111',
+      normalized_source_sha1: '1111111111111111111111111111111111111111',
       available: true,
       reason: null,
       segments: [],
     })
-    vi.spyOn(api, 'getStage0Merge').mockResolvedValue({
-      candidate_id: 'a'.repeat(64),
-      created_at: 'now',
-      expected_round: 2,
-      expected_source_sha1: '1'.repeat(40),
-      expected_clean_sha1: '2'.repeat(40),
-      base_snapshot_sha256: 'b'.repeat(64),
-      base_clean_sha1: '3'.repeat(40),
-      ours_clean_sha1: '4'.repeat(40),
-      theirs_source_sha1: '5'.repeat(40),
-      theirs_clean_sha1: '6'.repeat(40),
-      base_text: 'base',
-      ours_text: 'ours',
-      theirs_text: 'theirs',
-      proposed_clean_text: 'proposal',
-      conflicts: [
-        {
-          id: 'conflict-1',
-          base_span: [0, 4],
-          base_text: 'base',
-          ours_text: 'ours',
-          theirs_text: 'theirs',
+    vi.spyOn(api, 'getStage0Candidate').mockResolvedValue({
+      candidate: {
+        revision_id: 'd'.repeat(64),
+        parent_revision_id: 'c'.repeat(64),
+        origin: 'machine' as const,
+        actor: null,
+        reason: null,
+        at: 'now',
+        code: 'code',
+        content: {
+          original_filename: 'book.txt',
+          normalized_source_sha1: '1'.repeat(40),
+          source_encoding: 'utf-8',
+          text_norm: 'NFC+LF',
+          total_code_points: 10,
+          clean_text: '机器新版正文',
+          clean_sha1: '6'.repeat(40),
+          body_code_points: 6,
+          removed: [],
+          warnings: [],
         },
-      ],
-      theirs_snapshot: {},
+      },
+      current_revision_id: 'c'.repeat(64),
+      current_body_code_points: 10,
+      current_removed_count: 0,
+      current_origin: 'human_edit',
     })
-    const resolve = vi.spyOn(api, 'resolveStage0Merge').mockResolvedValue({
+    const adopt = vi.spyOn(api, 'adoptStage0Candidate').mockResolvedValue({
       id: 'job',
-      kind: 'stage0.merge.resolve',
-      label: 'resolve',
-      argv: 'resolve',
+      kind: 'stage0.candidate.adopt',
+      label: 'adopt',
+      argv: 'adopt',
       state: 'ok',
       paid: false,
       started: 1,
@@ -127,16 +128,17 @@ describe('Stage0Screen segment virtualization', () => {
       target: { value: 'reviewer-a' },
     })
     fireEvent.change(screen.getByLabelText('本次批准 / 编辑理由 reason'), {
-      target: { value: '逐项核对三方文本' },
+      target: { value: '两版都读过，机器新版更准' },
     })
-    fireEvent.click(screen.getByLabelText('已批准正文'))
-    fireEvent.click(screen.getByRole('button', { name: '接受三方合并候选' }))
+    expect(screen.getByText(/机器新版正文/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '采纳机器新版' }))
 
-    await waitFor(() => expect(resolve).toHaveBeenCalledTimes(1))
-    expect(resolve.mock.calls[0]?.[1]).toMatchObject({
+    await waitFor(() => expect(adopt).toHaveBeenCalledTimes(1))
+    expect(adopt.mock.calls[0]?.[1]).toMatchObject({
+      candidate_revision_id: 'd'.repeat(64),
+      expected_revision_id: 'c'.repeat(64),
       actor: 'reviewer-a',
-      reason: '逐项核对三方文本',
-      resolutions: [{ conflict_id: 'conflict-1', choice: 'ours', custom_text: null }],
+      reason: '两版都读过，机器新版更准',
     })
   })
 })
@@ -145,9 +147,9 @@ describe('Stage0Screen 批准前分章预览', () => {
   it('把纯数字番外的章号异常摆在批准动作之前', async () => {
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      original_path: 'book.txt',
+      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       clean_sha1: 'clean',
       source_encoding: 'utf-8',
       text_norm: 'NFC+LF',
@@ -155,15 +157,13 @@ describe('Stage0Screen 批准前分章预览', () => {
       total_code_points: 300,
       body_code_points: 300,
       warnings: [],
-      approved: 'pending',
-      approved_at: null,
-      approval_origin: null,
-      approved_by: null,
-      round: 1,
-      edited_by_human: false,
+      approval: { status: 'pending' as const },
+      executable: false,
+      revision_id: 'a'.repeat(64),
+      revision_origin: 'machine' as const,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       available: true,
       reason: null,
       segments: [
@@ -192,7 +192,7 @@ describe('Stage0Screen 批准前分章预览', () => {
       chapters: [
         {
           chapter_ordinal: 1,
-          source_chapter_label: '1',
+          source_chapter_no: 1,
           chars: 129,
           preview: '正文第1章。',
           label_delta: null,
@@ -200,7 +200,7 @@ describe('Stage0Screen 批准前分章预览', () => {
         },
         {
           chapter_ordinal: 2,
-          source_chapter_label: '2',
+          source_chapter_no: 2,
           chars: 129,
           preview: '正文第2章。',
           label_delta: 1,
@@ -208,7 +208,7 @@ describe('Stage0Screen 批准前分章预览', () => {
         },
         {
           chapter_ordinal: 3,
-          source_chapter_label: '1',
+          source_chapter_no: 1,
           chars: 31,
           preview: '十年后他们在旧城重逢。',
           label_delta: -2,
@@ -231,9 +231,9 @@ describe('Stage0Screen 批准前分章预览', () => {
   it('分不出章时给出理由而不是一屏空表', async () => {
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
-      original_path: 'book.txt',
+      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
       code: 'code',
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       clean_sha1: 'clean',
       source_encoding: 'utf-8',
       text_norm: 'NFC+LF',
@@ -241,15 +241,13 @@ describe('Stage0Screen 批准前分章预览', () => {
       total_code_points: 300,
       body_code_points: 300,
       warnings: [],
-      approved: 'pending',
-      approved_at: null,
-      approval_origin: null,
-      approved_by: null,
-      round: 1,
-      edited_by_human: false,
+      approval: { status: 'pending' as const },
+      executable: false,
+      revision_id: 'a'.repeat(64),
+      revision_origin: 'machine' as const,
     })
     vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      source_sha1: 'source',
+      normalized_source_sha1: 'source',
       available: true,
       reason: null,
       segments: [

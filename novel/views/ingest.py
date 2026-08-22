@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import os
 import re
-from bisect import bisect_left
 from collections import Counter
 from dataclasses import dataclass
 
 from contracts.schema.api import (
     HookCopyView,
+    Stage0CandidateView,
     Stage0EditRequest,
     Stage0PartitionPreview,
     Stage0PreviewChapter,
+    Stage0Report,
     Stage0Segment,
     Stage0Segments,
     Stage1ChapterRow,
@@ -26,14 +27,15 @@ from contracts.schema.api import (
     Stage1Segments,
 )
 from contracts.schema.stage0 import (
-    RemovalReport, RemovedSegment, Stage0EditPlan, Stage0MergeCandidate,
+    RemovalReport, RequestedRemoval, Stage0EditPlan,
 )
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection, PartitionReport
 from novel import paths, prov
 from novel.core.ingest import (
     DecodeProblem, ScanResult, decode_source_bytes, nonbody_kind, scan_text,
 )
-from novel.core.source import resolve_recorded_source
+from novel.core.source import describe_source, resolve_recorded_source
+from novel.core.warnings import describe
 from novel.errors import (
     ApprovalRequired,
     ArtifactUnreadable,
@@ -44,6 +46,7 @@ from novel.errors import (
     ResidualNonbody,
     SourceConflict,
     TooFewChapters,
+    UpstreamMissing,
 )
 from novel.orchestrator.state import readonly_ctx
 from novel.stages.stage0 import removal
@@ -53,12 +56,29 @@ from novel.store import ArtifactStore
 STAGE0_NODE = 'stage0.remove'
 
 
-def stage0_merge_candidate(
+def stage0_candidate(
     base: str | os.PathLike[str], sid: str,
-) -> Stage0MergeCandidate:
+) -> Stage0CandidateView:
+    """待裁决的机器候选 + 当前稿的读数，**并排给出**。
+
+    ⚠ 前端不自己算「机器重跑改了什么」：那是服务端已经有的事实（两版的正文长度、
+    剔除条数、起源），各算一遍就是两个会分家的落点。
+    """
+    from novel.stages.stage0 import revisions as rev
     store = _store(base, sid, STAGE0_NODE)
-    candidate, _ = store.read_own(Stage0MergeCandidate, removal.CANDIDATE_REL)
-    return candidate
+    log = rev.read(store)
+    if log is None or log.candidate_revision_id is None:
+        raise UpstreamMissing('stage0 当前没有待裁决的机器候选')
+    current = rev.current_revision(log)
+    return Stage0CandidateView(
+        candidate=rev.by_id(log, log.candidate_revision_id),
+        current_revision_id=current.revision_id,
+        current_body_code_points=current.content.body_code_points,
+        current_removed_count=len(current.content.removed),
+        current_origin=current.origin,
+    )
+
+
 STAGE1_NODE = 'stage1.partition'
 _PARAGRAPH_BREAK = re.compile(r'\n[ \t　]*\n')
 
@@ -68,25 +88,40 @@ def _store(base: str | os.PathLike[str], sid: str, node: str) -> ArtifactStore:
     return ArtifactStore(readonly_ctx(novel_dir, node, prov.code_version()))
 
 
-def stage0_report(base: str | os.PathLike[str], sid: str) -> RemovalReport:
+def stage0_report(base: str | os.PathLike[str], sid: str) -> Stage0Report:
+    """S-00 的那份报告。**产物照读，告警措辞在这一层现渲染。**
+
+    ⚠ 返回的不是产物模型本身而是它的子类，多两类视图专有的投影：
+      ① 渲染好的告警措辞（产物只记证据，措辞唯一落点是 `novel/core/warnings.py`）；
+      ② **执行资格**（唯一落点 `stage0/eligibility.py`）。两者都是同一个道理——
+        前端自己拼就是第二个落点，而资格那一处漏了就是自动绕过的复活口。
+    """
+    from novel.stages.stage0.eligibility import is_stage0_executable
     store = _store(base, sid, STAGE0_NODE)
-    return store.read_own(RemovalReport, removal.REPORT_REL)[0]
+    report = store.read_own(RemovalReport, removal.REPORT_REL)[0]
+    return Stage0Report.model_validate({
+        **report.model_dump(mode='json'),
+        'warnings': [{'warning': warning.model_dump(mode='json'),
+                      'message': describe(warning)}
+                     for warning in report.warnings],
+        'executable': is_stage0_executable(report),
+    })
 
 
 def _original(report: RemovalReport,
               base: str | os.PathLike[str]) -> tuple[str | None, str | None]:
     """审阅屏要的那份原文。**取不到就明说不可用，绝不从别处变出一份。**
 
-    ⚠ `original_path` 指向书目录之外、不是产物，才可以直接摸盘（产物一律经 store）。
-    ⚠ 记录的位置读不到时**只做一种回落**：界面上传的原文按内容地址存在
-      `<base>/_service/uploads/` 底下，Output 根搬家会让记下来的绝对路径断掉，
-      而文件其实没动——`resolve_recorded_source` 用当前 base 认回来，且要求它
-      自证内容地址。外部语料被删则**没有**回落，那是 `R-0.2` 的意思：
-      产物目录里没有第二份原文副本，取不到就是取不到。
+    ⚠ `source_ref` 指向书目录之外、不是产物，才可以直接摸盘（产物一律经 store）。
+    ⚠ 两支的「取不到」含义相反，而 `source_ref` 让它们在类型上就分得开：
+      `managed_upload` 住在 `<当前 base>/_service/uploads/<内容地址>/`，跟着 base 走，
+      取不到才是真没了（且候选必须自证内容地址）；`external_file` 被删就是
+      **世界真的变了**——那是 `R-0.2` 的意思：产物目录里没有第二份原文副本，
+      取不到就是取不到。
     """
-    source = resolve_recorded_source(report.original_path, base)
+    source = resolve_recorded_source(report.source_ref, base)
     if source is None:
-        return None, f'原始文件已不在 original_path：{report.original_path}'
+        return None, f'原始文件已不在记录位置：{describe_source(report.source_ref)}'
     try:
         raw = source.read_bytes()
     except OSError as exc:
@@ -95,11 +130,11 @@ def _original(report: RemovalReport,
         decoded = decode_source_bytes(raw)
     except DecodeProblem as exc:
         return None, f'原始文件已无法按摄入契约解码：{exc}'
-    if decoded.source_sha1 != report.source_sha1:
+    if decoded.normalized_source_sha1 != report.normalized_source_sha1:
         return (
             None,
-            f'原始文件内容已变化：报告 {report.source_sha1[:10]}，'
-            f'当前 {decoded.source_sha1[:10]}',
+            f'原始文件内容已变化：报告 {report.normalized_source_sha1[:10]}，'
+            f'当前 {decoded.normalized_source_sha1[:10]}',
         )
     if len(decoded.text) != report.total_code_points:
         return (
@@ -198,7 +233,7 @@ def _stage0_segments(report: RemovalReport, text: str, clean: str) -> list[Stage
     out.extend(_gap_segments(text, cursor, len(text), scan))
     reconstructed.append(text[cursor:])
     if ''.join(reconstructed) != clean:
-        if report.edited_by_human:
+        if report.revision_origin == 'human_edit':
             # 人可以直接改正文；此时 source 坐标已无法诚实映射到 current clean。
             # 读屏仍展示当前正式正文，而不是因旧 source-minus-removed 恒等式崩掉。
             # 新的剔除选择仍应基于一次明确的合并/编辑计划，不能猜坐标迁移。
@@ -221,13 +256,13 @@ def stage0_segments(base: str | os.PathLike[str], sid: str) -> Stage0Segments:
     text, reason = _original(report, base)
     if text is None:
         return Stage0Segments(
-            source_sha1=report.source_sha1,
+            normalized_source_sha1=report.normalized_source_sha1,
             available=False,
             reason=reason,
         )
     clean = store.read_text(removal.CLEAN_REL)
     return Stage0Segments(
-        source_sha1=report.source_sha1,
+        normalized_source_sha1=report.normalized_source_sha1,
         available=True,
         reason=None,
         segments=_stage0_segments(report, text, clean),
@@ -240,33 +275,26 @@ def _preview_chapters(sections: list[MainTextSection]) -> list[Stage0PreviewChap
     ⚠ `repeat` 放在最后**不是**因为它最不重要，而是因为「回退到一个用过的号」
     同时满足 reset 与 repeat——番外重新编号是回退，报 `reset` 才说得出发生了什么。
     """
-    labels = [section.source_chapter_label for section in sections]
-    counts = Counter(labels)
-    numbers: list[int | None] = []
-    for label in labels:
-        try:
-            numbers.append(int(label))
-        except ValueError:
-            numbers.append(None)
+    numbers = [section.source_chapter_no for section in sections]
+    counts = Counter(numbers)
 
     out: list[Stage0PreviewChapter] = []
     for index, section in enumerate(sections):
         number = numbers[index]
-        previous = numbers[index - 1] if index else None
-        delta = None if number is None or previous is None else number - previous
-        if number is None:
-            anomaly = 'non_numeric'
-        elif delta is not None and delta <= 0:
+        # ⚠ 这里曾有一圈 `int(label)` 解析和 `non_numeric` 一档。`source_chapter_no`
+        #   改型成 int 之后两者都不可达（载体自己保证是数字），随取值面一并删除。
+        delta = None if index == 0 else number - numbers[index - 1]
+        if delta is not None and delta <= 0:
             anomaly = 'reset'
         elif delta is not None and delta > 1:
             anomaly = 'gap'
-        elif counts[section.source_chapter_label] > 1:
+        elif counts[number] > 1:
             anomaly = 'repeat'
         else:
             anomaly = None
         out.append(Stage0PreviewChapter(
             chapter_ordinal=section.chapter_ordinal,
-            source_chapter_label=section.source_chapter_label,
+            source_chapter_no=number,
             chars=len(section.text),
             preview=removal.preview_text(section.text, 80),
             label_delta=delta,
@@ -289,7 +317,7 @@ def stage0_partition_preview(
     clean = store.read_text(removal.CLEAN_REL)
     input_sha1 = prov.content_sha1(clean.encode('utf-8'))
     try:
-        result = partition.partition_text(clean, source_sha1=report.source_sha1)
+        result = partition.partition_text(clean, normalized_source_sha1=report.normalized_source_sha1)
     except (ResidualNonbody, HookCopyMissing, TooFewChapters,
             PartitionChapterMismatch) as exc:
         # 分不出章本身就是审阅要看的结论——先修剔除，而不是等 stage1 跑起来才炸。
@@ -314,26 +342,19 @@ def stage0_partition_preview(
     )
 
 
-def _removed_from_segment(
-    segment: Stage0Segment,
-    line_breaks: list[int],
-) -> RemovedSegment:
+def _requested_removal(segment: Stage0Segment) -> RequestedRemoval:
+    """页面上的一个分区选择 → 一条**意图**（TODO-36：命令 DTO 与产物分家）。
+
+    ⚠ 这里此前造的是产物模型 `RemovedSegment`，于是视图层要把 `line_no` / 两条预览 /
+    `origin` 全都算一遍——而服务端在 `removal.verified_removals` 里**必然会再算一遍**
+    并以自己那份为准。两个落点算同一件事、只有一个说了算 ⇒ 视图那一份纯属摆设，
+    还让人误以为页面能决定 `origin`。现在它只说得出人真正选了什么。
+    """
     first = next((line.strip() for line in segment.text.splitlines() if line.strip()), '')
     marker_line = segment.marker_line or first or '人工剔除'
-    kind = segment.removed_kind or nonbody_kind(marker_line) or '番外'
-    marker_at = segment.text.find(marker_line)
-    marker_at = 0 if marker_at < 0 else marker_at
-    line_break = segment.text.find('\n', marker_at)
-    after_marker = segment.text[line_break + 1:] if line_break >= 0 else ''
-    return RemovedSegment(
-        kind=kind,
-        marker_line=marker_line,
-        line_no=bisect_left(line_breaks, segment.start + marker_at) + 1,
+    return RequestedRemoval(
+        kind=segment.removed_kind or nonbody_kind(marker_line) or '番外',
         span=(segment.start, segment.end),
-        code_points=segment.chars,
-        head_preview=removal.preview_text(after_marker, 80),
-        tail_preview=removal.preview_text(segment.text[-120:], 40),
-        origin=segment.origin or 'human',
     )
 
 
@@ -345,12 +366,12 @@ def stage0_edit_plan(
     '''把分区 id 选择转成完整计划；未知/过期 id 在任何子进程启动前拒绝。'''
     report = stage0_report(base, sid)
     stale = []
-    if request.expected_round != report.round:
-        stale.append(f'round 页面={request.expected_round} 当前={report.round}')
-    if request.expected_source_sha1 != report.source_sha1:
-        stale.append('source_sha1 已变化')
-    if request.expected_clean_sha1 != report.clean_sha1:
-        stale.append('clean_sha1 已变化')
+    if request.expected_revision_id != report.revision_id:
+        stale.append(
+            f'revision 页面={request.expected_revision_id[:12]}… '
+            f'当前={report.revision_id[:12]}…')
+    if request.expected_normalized_source_sha1 != report.normalized_source_sha1:
+        stale.append('normalized_source_sha1 已变化')
     if stale:
         raise HumanEditProtected('Stage 0 页面已过期，请刷新后重选：' + '；'.join(stale))
 
@@ -368,24 +389,15 @@ def stage0_edit_plan(
         raise HumanEditProtected('完结标记属于保留正文，不能在 Stage 0 作为剔除段选择')
 
     ordered = [segment for segment in view.segments if segment.id in selected]
-    original = ''.join(segment.text for segment in view.segments)
     clean = ''.join(
         segment.text for segment in view.segments if segment.id not in selected)
-    existing = {segment.span: segment for segment in report.removed}
-    line_breaks = [index for index, char in enumerate(original) if char == '\n']
-    removed = [
-        existing.get((segment.start, segment.end))
-        or _removed_from_segment(segment, line_breaks)
-        for segment in ordered
-    ]
     return Stage0EditPlan(
-        expected_round=report.round,
-        expected_source_sha1=report.source_sha1,
-        expected_clean_sha1=report.clean_sha1,
+        expected_revision_id=report.revision_id,
+        expected_normalized_source_sha1=report.normalized_source_sha1,
         expected_total_code_points=report.total_code_points,
         clean_text=clean,
         clean_sha1=prov.content_sha1(clean.encode('utf-8')),
-        removed=removed,
+        removed=[_requested_removal(segment) for segment in ordered],
         actor=request.actor,
         reason=request.reason,
     )
@@ -403,15 +415,10 @@ class _Stage1Material:
 def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
     store = _store(base, sid, STAGE1_NODE)
     stage0 = store.read_own(RemovalReport, partition.STAGE0_REPORT)[0]
-    from novel.stages.stage0.eligibility import LEGACY_AUTO_APPROVAL, block_reason
-    reason = block_reason(stage0)
-    if reason == LEGACY_AUTO_APPROVAL:
+    from novel.stages.stage0.eligibility import is_stage0_executable
+    if not is_stage0_executable(stage0):
         raise ApprovalRequired(
-            'stage0 是历史自动批准（auto_zero_hit，已停产）；人工重批'
-            f'（stage0.approve）前不能进入 stage1（{LEGACY_AUTO_APPROVAL}）')
-    if reason is not None:
-        raise ApprovalRequired(
-            f'stage0 当前状态为 {stage0.approved!r}；先回 S-00 审阅并批准')
+            f'stage0 当前状态为 {stage0.approval.status!r}；先回 S-00 审阅并批准')
     clean = store.read_text(partition.CLEAN_TEXT)
     actual = prov.content_sha1(clean.encode('utf-8'))
     if actual != stage0.clean_sha1:
@@ -435,10 +442,10 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
     scan = scan_text(text)
     body_limit = scan.end_marker if scan.end_marker is not None else len(text)
     markers = [marker for marker in scan.chapters if marker.line_start < body_limit]
-    if len(markers) != len(material.main.root) or len(markers) != report.num_chapters:
+    if len(markers) != len(material.main.root) or len(markers) != report.detected_chapter_marker_count:
         raise PartitionChapterMismatch(
             f'当前识别 {len(markers)} 个章节标记，main_text 有 {len(material.main.root)} 章，'
-            f'partition_report 记 {report.num_chapters} 章')
+            f'partition_report 记 {report.detected_chapter_marker_count} 章')
     first_marker = markers[0].line_start if markers else body_limit
     if report.hook_span != (0, first_marker) or material.hook.text != text[:first_marker]:
         raise PartitionChapterMismatch('hook_copy 与 partition_report.hook_span / clean_text 对不上')
@@ -462,10 +469,10 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
         if stored_span != expected_span or text[marker.content_start:end] != section.text:
             raise PartitionChapterMismatch(
                 f'第 {index + 1} 章的落盘 span / 正文与当前 clean_text 对不上')
-        if section.source_chapter_label != str(marker.chapter_no):
+        if section.source_chapter_no != marker.chapter_no:
             raise PartitionChapterMismatch(
-                f'第 {index + 1} 章原标号落盘为 {section.source_chapter_label!r}，'
-                f'当前识别为 {marker.chapter_no!r}')
+                f'第 {index + 1} 章原标号落盘为 {section.source_chapter_no}，'
+                f'当前识别为 {marker.chapter_no}')
         out.append(Stage1Segment(
             id=f's1:chapter:{section.chapter_ordinal}:{marker.line_start}:{end}',
             kind='chapter',
@@ -475,7 +482,7 @@ def _stage1_intervals(material: _Stage1Material) -> list[Stage1Segment]:
             flagged=False,
             text=text[marker.line_start:end],
             chapter_ordinal=section.chapter_ordinal,
-            source_chapter_label=section.source_chapter_label,
+            source_chapter_no=section.source_chapter_no,
         ))
 
     if body_limit < len(text):
@@ -525,7 +532,7 @@ def stage1_chapters(base: str | os.PathLike[str], sid: str) -> Stage1Chapters:
     return Stage1Chapters(chapters=[
         Stage1ChapterRow(
             chapter_ordinal=section.chapter_ordinal,
-            source_chapter_label=section.source_chapter_label,
+            source_chapter_no=section.source_chapter_no,
             chars=len(section.text),
             preview=removal.preview_text(section.text, 80),
         )

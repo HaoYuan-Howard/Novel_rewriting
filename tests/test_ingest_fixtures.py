@@ -263,7 +263,7 @@ def test_case_behaves_as_declared(case: Case):
             code='test',
         )
         partitioned = partition_text(
-            removed.clean_text, source_sha1=removed.report.source_sha1)
+            removed.clean_text, normalized_source_sha1=removed.report.normalized_source_sha1)
         return removed, partitioned
 
     if case.terminal is not None:

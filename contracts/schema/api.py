@@ -67,7 +67,7 @@ from contracts.schema.orchestration import (
     JobRecord, JobState, NovelOverview, QueueRun,
 )
 from contracts.schema.stage1 import HookCopy
-from contracts.schema.stage0 import Stage0ConflictResolution
+from contracts.schema.stage0 import RemovalReport, Stage0Revision, Stage0Warning
 from contracts.schema.stage2 import (
     BlueprintProvenance, ConflictStage, GlobalProvenance, Setting, WorldRule,
 )
@@ -106,6 +106,50 @@ AnchorCoverageState = Literal[ANCHOR_COVERAGE_STATE]
 # ─────────────────────────────────────────────────────────────────────────────
 # 零、S-00 / S-03 连续文本视图与零成本动作
 # ─────────────────────────────────────────────────────────────────────────────
+
+class Stage0WarningView(StrictModel):
+    """S-00 收到的一条可疑项 = **产物里的证据 + 现渲染的那句话**。
+
+    【为什么响应里要多这一格】产物 2026-08-22 起只记证据不记措辞
+    （`contracts/schema/stage0.py` 「可疑项」那一段）。措辞总得有人生成，而前端
+    自己拼就是同一句话的第二个落点——它必然与 `novel/core/warnings.py` 分家，
+    而分家之后前端说的那一句谁都不知道是按哪版阈值算的。
+    ⇒ 服务端现渲染、随响应发下去，前端只负责画。
+    ⚠ `message` **只活在这一层**：它不进产物，也不许被前端拿去做分支
+    （认告警仍然一律用 `kind`）。
+    """
+
+    warning: Stage0Warning
+    message: str = Field(min_length=1)
+
+
+class Stage0Report(RemovalReport):
+    """`GET /api/novels/:sid/stage0/report` 的那一份 = 产物 + 渲染好的告警 + 执行资格。
+
+    ⚠ 它**继承**产物模型而不是抄一份：22 个字段抄第二遍就是 22 个会分家的字段。
+    只覆盖 `warnings` 一格、外加两格视图专有的投影。
+    """
+
+    warnings: list[Stage0WarningView]
+
+    #: 这份报告**此刻能不能放行 stage1 与付费链**。
+    #:
+    #: 【这不是本模块纪律 ② 说的「第二个判官」】那条禁的是视图**自己算**一个判定。
+    #: 这一格恰恰相反：它是把**唯一那个判官**
+    #: （`novel/stages/stage0/eligibility.py::is_stage0_executable`）的结论原样投影
+    #: 下来。此前前端自己拼 `approved === 'approved' && origin === 'human'`
+    #: ——那才是第二个落点，而且是外部评审点名要收口的第五处（前四处是 s0_approval
+    #: 判据、stage1 启动前置、orchestrator 队列、付费防线，2026-08-21 已收口）。
+    #: ⚠ 前端**不许**再从 `approval` 里自己推这件事：谓词收紧时改一处就够，
+    #: 两处各写一遍迟早漏一处，而漏掉的那处就是绕过闸门的复活口。
+    #:
+    #: ⚠ 这里曾有配套的第二格 `block_reason`（稳定理由码 `pending` /
+    #: `legacy_auto_approval_requires_review`），2026-08-22 随 `auto_zero_hit` 死值
+    #: 一并删除：理由码只剩一个取值之后，它与本格表达的是同一个 bit
+    #: ——当年那条 `_verdict_and_reason_are_one_state` 校验器校的正是这件事，
+    #: 而**一个 bit 只该有一个投影**。要再有第二种「批了却跑不得」的理由时整格加回来。
+    executable: bool
+
 
 class Stage0Segment(FrozenModel):
     '''S-00 原始文本上的一个连续分区；坐标恒是 Python 码点半开区间。'''
@@ -147,7 +191,7 @@ class Stage0Segment(FrozenModel):
 class Stage0Segments(StrictModel):
     '''S-00 连续原文。原文件移走时返回显式 unavailable，而不是假装没有剔除项。'''
 
-    source_sha1: Sha1
+    normalized_source_sha1: Sha1
     available: bool
     reason: Annotated[str, Field(min_length=1)] | None
     segments: list[Stage0Segment] = Field(default_factory=list)
@@ -171,11 +215,16 @@ class Stage0Segments(StrictModel):
 
 
 class Stage0EditRequest(StrictModel):
-    '''人在 S-00 选择要剔除的分区；三格共同构成乐观锁。'''
+    '''人在 S-00 选择要剔除的分区；两格共同构成乐观锁。
 
-    expected_round: int = Field(ge=1)
-    expected_source_sha1: Sha1
-    expected_clean_sha1: Sha1
+    ⚠ 2026-08-22 阶段 C：乐观锁从 `expected_round` + `expected_clean_sha1` 两格换成
+    一格 `expected_revision_id`——revision id 由内容与 parent 一起派生，
+    「基于哪一版」与「那一版长什么样」它一格就钉完了，而原来那两格之间
+    还可能互相矛盾。原文身份仍单独钉（它是整条链的前提，不是某一版的属性）。
+    '''
+
+    expected_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
+    expected_normalized_source_sha1: Sha1
     removed_segment_ids: list[str] = Field(default_factory=list)
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
@@ -194,14 +243,33 @@ class Stage0ApprovalRequest(StrictModel):
     reason: str = Field(min_length=1)
 
 
-class Stage0MergeDecisionRequest(StrictModel):
-    candidate_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
-    expected_round: int = Field(ge=1)
-    expected_source_sha1: Sha1
-    expected_clean_sha1: Sha1
-    resolutions: list[Stage0ConflictResolution] = Field(default_factory=list)
+class Stage0CandidateDecisionRequest(StrictModel):
+    """人对机器候选的三选一裁决（保留当前 = 不发这个请求 / 采纳 / 否掉）。
+
+    ⚠ 2026-08-22 阶段 C 取代 `Stage0MergeDecisionRequest`：diff3 与 typed 冲突下线
+    之后，页面上要决定的不再是「逐个冲突选 ours 还是 theirs」，而是
+    **整版留哪一版**——`resolutions` 那一格连同它守的东西一起没有了。
+    「采纳后再编辑」不是第三个动作，是 adopt 之后照常走 `POST /stage0/edit`。
+    """
+
+    candidate_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
+    expected_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
+
+
+class Stage0CandidateView(StrictModel):
+    """`GET /api/novels/:sid/stage0/candidate` 的那一份：**当前稿与候选并排**。
+
+    ⚠ 它把两版的**读数**一起给出来，前端不自己算：机器重跑到底改了什么，
+    唯一诚实的答案是逐版对比正文长度与剔除条数，而那是服务端已经有的事实。
+    """
+
+    candidate: Stage0Revision
+    current_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
+    current_body_code_points: int = Field(ge=0)
+    current_removed_count: int = Field(ge=0)
+    current_origin: str = Field(min_length=1)
 
 
 class Stage1Segment(FrozenModel):
@@ -215,7 +283,7 @@ class Stage1Segment(FrozenModel):
     flagged: bool
     text: str = Field(min_length=1)
     chapter_ordinal: int | None = Field(default=None, ge=1)
-    source_chapter_label: str | None = None
+    source_chapter_no: int | None = Field(default=None, ge=0)
 
     @model_validator(mode='after')
     def _interval_and_chapter_metadata_agree(self) -> Stage1Segment:
@@ -226,8 +294,8 @@ class Stage1Segment(FrozenModel):
         is_chapter = self.kind == 'chapter'
         if is_chapter != (self.chapter_ordinal is not None):
             raise ValueError('只有 chapter 分区带 chapter_ordinal')
-        if is_chapter != (self.source_chapter_label is not None):
-            raise ValueError('只有 chapter 分区带 source_chapter_label')
+        if is_chapter != (self.source_chapter_no is not None):
+            raise ValueError('只有 chapter 分区带 source_chapter_no')
         if self.flagged != (self.kind == 'hole'):
             raise ValueError('stage1 只有 hole 分区 flagged=true')
         return self
@@ -252,7 +320,7 @@ class Stage1Segments(StrictModel):
 
 class Stage1ChapterRow(FrozenModel):
     chapter_ordinal: int = Field(ge=1)
-    source_chapter_label: str = Field(min_length=1)
+    source_chapter_no: int = Field(ge=0)
     chars: int = Field(ge=0)
     preview: str
 
@@ -278,19 +346,21 @@ class Stage0PreviewChapter(FrozenModel):
     """
 
     chapter_ordinal: int = Field(ge=1)
-    source_chapter_label: str = Field(min_length=1)
+    source_chapter_no: int = Field(ge=0)
     chars: int = Field(ge=0)
     preview: str
-    #: 本章原始章号 − 上一章原始章号。第一章、或两章任一不是数字章号时为 `None`。
+    #: 本章原始章号 − 上一章原始章号。**只有第一章为 `None`**（没有上一章）。
+    #: ⚠ 曾经还有第二种缺席理由「两章任一不是数字章号」。`source_chapter_no` 改型成
+    #: `int` 之后那种情形不存在了，`non_numeric` 一档也随之出局。
     label_delta: int | None = None
     anomaly: ChapterLabelAnomaly | None = None
 
     @model_validator(mode='after')
     def _delta_exists_exactly_when_it_is_computable(self) -> Stage0PreviewChapter:
-        if self.chapter_ordinal == 1 and self.label_delta is not None:
-            raise ValueError('第一章没有上一章，label_delta 必须缺席')
-        if self.anomaly == 'non_numeric' and self.label_delta is not None:
-            raise ValueError('非数字章号算不出 label_delta')
+        if (self.chapter_ordinal == 1) != (self.label_delta is None):
+            raise ValueError(
+                '有且只有第一章没有 label_delta——第一章没有上一章，'
+                '而其余每一章的落差都算得出来（两个章号都是 int）')
         return self
 
 

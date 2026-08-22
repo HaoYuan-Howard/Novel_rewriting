@@ -26,16 +26,32 @@ export interface Stage0Removed {
   origin: 'machine' | 'human'
 }
 
+/**
+ * 一条可疑项 = 产物里的**结构化证据** + 服务端现渲染的那句话。
+ *
+ * ⚠ `message` 只活在 HTTP 这一层（产物 2026-08-22 起只记证据）。**前端不许自己拼
+ * 措辞**：那会变成同一句话的第二个落点，与 `novel/core/warnings.py` 必然分家，
+ * 而分家之后界面上那句话按的是哪版阈值谁都说不清。
+ * ⚠ 认告警仍然一律用 `warning.kind`，不许拿 `message` 做分支。
+ */
 export interface Stage0Warning {
-  kind: string
+  warning: { kind: string; [evidence: string]: unknown }
   message: string
 }
 
 export interface Stage0Report {
   original_filename: string
-  original_path: string
+  /**
+   * 原文此刻该去哪儿找。**两支处置相反**（2026-08-22 从 `original_path: string`
+   * 换成判别联合）：external_file 找不到 = 世界真的变了；managed_upload 跟着
+   * base 走、位置由后端现算，前端不拼路径也不猜。
+   * ⚠ 展示位置用 `original_filename`（它就是为展示留的）。
+   */
+  source_ref:
+    | { kind: 'external_file'; absolute_path: string }
+    | { kind: 'managed_upload'; blob_sha256: string; filename: string }
   code: string
-  source_sha1: string
+  normalized_source_sha1: string
   clean_sha1: string
   source_encoding: string
   text_norm: string
@@ -43,14 +59,44 @@ export interface Stage0Report {
   total_code_points: number
   body_code_points: number
   warnings: Stage0Warning[]
-  approved: 'pending' | 'approved'
-  approved_at: string | null
-  /** 历史自动批（auto_zero_hit）只读不承行：显示「已批准」≠可以继续，须人工重批 */
-  approval_origin: 'auto_zero_hit' | 'human' | null
-  approved_by: string | null
-  round: number
-  edited_by_human: boolean
+  /**
+   * 审阅闸门。**两个分支，不是四个可空字段**（2026-08-22）。
+   * ⚠ `pending` 分支一个字段都没有：「没批」说不出批准时间、来源、批准人。
+   * ⚠ 批准只有人一种来源，因此 `approved` 分支的 `by` / `reason` 恒必填
+   *   （`origin` 那一格随停产取值 `auto_zero_hit` 于 2026-08-22 一并删除）。
+   */
+  approval:
+    | { status: 'pending' }
+    | {
+        status: 'approved'
+        at: string
+        by: string
+        /** 批准理由。审计链折叠进 revision 之后，批准是唯一不产生新版本的人工决定 */
+        reason: string
+      }
+  /**
+   * 这份报告此刻能不能放行 stage1 与付费链。**后端唯一落点的投影，前端不重算。**
+   * ⚠ 别再从 `approval` 自己推：后端谓词收紧时改一处就够，两处各写一遍迟早漏一处，
+   *   而漏掉的那处就是绕过闸门的复活口。
+   * ⚠ 配套的 `block_reason` 已于 2026-08-22 删除：理由码只剩一个取值之后，
+   *   它与本格是同一个 bit，而一个 bit 只该有一个投影。
+   */
+  executable: boolean
+  /**
+   * 当前这一版的内容身份，**同时是编辑/裁决路的乐观锁**。
+   * ⚠ 它替掉了 `round`：revision id 由内容与 parent 一起派生，
+   * 「基于哪一版」与「那一版长什么样」它一格就钉完了。
+   */
+  revision_id: string
+  /**
+   * 这一版怎么来的。⚠ 它替掉了 `edited_by_human`——那一格是
+   * `origin === 'human_edit'` 的同义反复，而且说不出「人**采纳了机器新结果**」
+   * 与「人自己改的」之间的差别，两者的正文含义完全相反。
+   */
+  revision_origin: Stage0RevisionOrigin
 }
+
+export type Stage0RevisionOrigin = 'machine' | 'human_edit' | 'human_adopt'
 
 export type Stage0SegmentKind = 'keep' | 'remove' | 'end_marker'
 
@@ -68,18 +114,18 @@ export interface Stage0Segment {
 }
 
 export interface Stage0Segments {
-  source_sha1: string
+  normalized_source_sha1: string
   available: boolean
   reason: string | null
   segments: Stage0Segment[]
 }
 
 /** 批准前分章预览里逐章原始章号的异常分类（`contracts/invariants.py::CHAPTER_LABEL_ANOMALY`）。 */
-export type ChapterLabelAnomaly = 'non_numeric' | 'reset' | 'gap' | 'repeat'
+export type ChapterLabelAnomaly = 'reset' | 'gap' | 'repeat'
 
 export interface Stage0PreviewChapter {
   chapter_ordinal: number
-  source_chapter_label: string
+  source_chapter_no: number
   chars: number
   preview: string
   label_delta: number | null
@@ -103,9 +149,9 @@ export interface Stage0PartitionPreview {
 }
 
 export interface Stage0EditRequest {
-  expected_round: number
-  expected_source_sha1: string
-  expected_clean_sha1: string
+  /** 乐观锁：页面看到的那一版（阶段 C 起取代 round + clean_sha1 两格） */
+  expected_revision_id: string
+  expected_normalized_source_sha1: string
   removed_segment_ids: string[]
   actor: string
   reason: string
@@ -136,45 +182,51 @@ export interface TrimResolution {
   _provenance: Provenance
 }
 
-export interface Stage0MergeConflict {
-  id: string
-  base_span: [number, number]
-  base_text: string
-  ours_text: string
-  theirs_text: string
+/**
+ * 链上不可变的一版。**内容整团一起变**——聚合根不是 `clean_text` 一个字段
+ * （外部评审 P0-3：只对正文做 diff3 保证不了整个聚合一致）。
+ */
+export interface Stage0Revision {
+  revision_id: string
+  parent_revision_id: string | null
+  origin: Stage0RevisionOrigin
+  actor: string | null
+  reason: string | null
+  at: string
+  code: string
+  content: {
+    original_filename: string
+    normalized_source_sha1: string
+    source_encoding: string
+    text_norm: string
+    total_code_points: number
+    clean_text: string
+    clean_sha1: string
+    body_code_points: number
+    removed: Stage0Removed[]
+    warnings: { kind: string; [evidence: string]: unknown }[]
+  }
 }
 
-export interface Stage0MergeCandidate {
-  candidate_id: string
-  created_at: string
-  expected_round: number
-  expected_source_sha1: string
-  expected_clean_sha1: string
-  base_snapshot_sha256: string
-  base_clean_sha1: string
-  ours_clean_sha1: string
-  theirs_source_sha1: string
-  theirs_clean_sha1: string
-  base_text: string
-  ours_text: string
-  theirs_text: string
-  proposed_clean_text: string
-  conflicts: Stage0MergeConflict[]
-  theirs_snapshot: Record<string, unknown>
+/**
+ * 机器重跑算出的、与当前稿不同的那一版 + **当前稿的读数**。
+ *
+ * ⚠ 「机器重跑改了什么」由服务端给读数，前端不自己算：各算一遍就是两个会分家的
+ * 落点。⚠ 阶段 C 起页面上要决定的不再是「逐个冲突选 ours 还是 theirs」
+ * （diff3 与 typed 冲突已整份下线），而是**整版留哪一版**。
+ */
+export interface Stage0CandidateView {
+  candidate: Stage0Revision
+  current_revision_id: string
+  current_body_code_points: number
+  current_removed_count: number
+  current_origin: string
 }
 
-export interface Stage0MergeResolution {
-  conflict_id: string
-  choice: 'ours' | 'theirs' | 'custom'
-  custom_text: string | null
-}
-
-export interface Stage0MergeDecisionRequest {
-  candidate_id: string
-  expected_round: number
-  expected_source_sha1: string
-  expected_clean_sha1: string
-  resolutions: Stage0MergeResolution[]
+export interface Stage0CandidateDecisionRequest {
+  candidate_revision_id: string
+  /** 乐观锁：页面看到的当前稿。候选是相对某一版当前稿提出的 */
+  expected_revision_id: string
   actor: string
   reason: string
 }
@@ -202,7 +254,7 @@ export interface S0Candidate {
 export interface Stage0Extras {
   source_id: string
   original_filename: string
-  source_sha1: string
+  normalized_source_sha1: string
   source_encoding: string
   total_code_points: number
   scanned_at: number
@@ -229,7 +281,7 @@ export interface Stage1Segment {
   flagged: boolean
   text: string
   chapter_ordinal: number | null
-  source_chapter_label: string | null
+  source_chapter_no: number | null
 }
 
 export interface Stage1Segments {
@@ -237,37 +289,10 @@ export interface Stage1Segments {
   segments: Stage1Segment[]
 }
 
-export interface Stage1Report {
-  source_id: string
-  title: string
-  platform: string | null
-  original_filename: string
-  original_path: string
-  source_sha1: string
-  source_encoding: string
-  text_norm: string
-  total_code_points: number
-  body_code_points: number
-  body_ratio: number
-  num_sections: number
-  num_chapters: number
-  chapter_nos: number[]
-  chapter_nos_strictly_increasing: boolean
-  chapter_no_gaps: number[]
-  chapter_no_duplicates: number[]
-  has_end_marker: boolean
-  hook_copy_present: boolean
-  hook_copy_code_points: number
-  dropped: unknown[]
-  dropped_code_points: number
-  /** 切得可疑但不算错，要人看一眼再决定要不要重切 */
-  warnings: string[]
-  notes: string[]
-}
 
 export interface Stage1Chapter {
   chapter_ordinal: number
-  source_chapter_label: string
+  source_chapter_no: number
   chars: number
   preview: string
 }
@@ -277,7 +302,7 @@ export interface Stage1Chapters {
 }
 
 export interface Stage1HookCopy {
-  hook_copy: { section_id: string; text: string }
+  hook_copy: { text: string }
   note: string
 }
 

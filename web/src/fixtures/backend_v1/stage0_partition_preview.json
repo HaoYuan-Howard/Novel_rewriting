@@ -7,35 +7,35 @@
  "chapters": [
   {
    "chapter_ordinal": 1,
-   "source_chapter_label": "1",
    "chars": 129,
    "preview": "正文第1章。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一",
    "label_delta": null,
-   "anomaly": "repeat"
+   "anomaly": "repeat",
+   "source_chapter_no": 1
   },
   {
    "chapter_ordinal": 2,
-   "source_chapter_label": "2",
    "chars": 129,
    "preview": "正文第2章。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一",
    "label_delta": 1,
-   "anomaly": null
+   "anomaly": null,
+   "source_chapter_no": 2
   },
   {
    "chapter_ordinal": 3,
-   "source_chapter_label": "3",
    "chars": 129,
    "preview": "正文第3章。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一口一口喝完。她把药碗端到他面前，看着他一",
    "label_delta": 1,
-   "anomaly": null
+   "anomaly": null,
+   "source_chapter_no": 3
   },
   {
    "chapter_ordinal": 4,
-   "source_chapter_label": "1",
    "chars": 31,
    "preview": "十年后他们在旧城重逢，她终于说出那句话。她终于说出那句话。",
    "label_delta": -2,
-   "anomaly": "reset"
+   "anomaly": "reset",
+   "source_chapter_no": 1
   }
  ],
  "tail_chars": 0,

@@ -10,6 +10,43 @@
 ⚠ `src/mocks/` 那 20 份是**冻结的证据基线**（与 design_handoff 逐字节一致，
 check-seams 钉着），本目录才是 mock 现役消费的数据源；两边不许互相覆盖。
 
+## ⚠ `enums.json` 不是抓包，是**生成**的（2026-08-22 改）
+
+它是 `novel/api/enums.py::payload()` 的纯函数输出，不需要书、不需要起服务。
+重生成只有一条路：
+
+```
+python tools/regen_web_enums_fixture.py          # 写盘（--check 只报差异）
+```
+
+对账守卫：`tests/test_api_enums.py::test_the_web_enums_fixture_is_the_same_payload`
+（比解析后的对象，不比字节——本目录不在 `.gitattributes` 的 `-text` 名单里）。
+
+### 2026-08-22 的一次逐键销账（TODO-38）
+
+守卫落地之前，这份夹具相对 `payload()` 已静默分家两个月：
+**新增 18 键 · 消失 5 键 · 内容变化 14 键**。病不在「json 旧了」，在**没有守卫**
+——所以先补对账、再重生成，不是反过来。
+
+「消失的 5 键」逐个判定过（不许拿新 dump 直接覆盖：那会把「前端还在读某个已删键」
+这类真问题一起冲掉）：
+
+| 夹具里的键 | 对应常量 | 何时删的 | 前端代码读者 | 判定 |
+|---|---|---|---|---|
+| `nonbody_kinds_added` | `NONBODY_KINDS_ADDED` | `08240cf` | 0 | 常量真删 ⇒ 夹具跟着删 |
+| `op_band` | `OP_BAND` | `08240cf` | 0 | 同上 |
+| `ops` | `OPS` | `08240cf` | 0 | 同上 |
+| `partial_mask_note` | `PARTIAL_MASK_NOTE` | `2a695ac` | 0 | 同上 |
+| `superseded_free_entries` | `SUPERSEDED_FREE_ENTRIES` | `08240cf` | 0 | 同上 |
+
+「前端代码读者」只数 `.ts` / `.tsx`。这 5 个键在 `web/src/mocks/enums.json` 与
+`web/src/mocks/stage2_global.json` 里仍然出现——**那是冻结证据基线，不是消费方**，
+它记的就是当年那个后端长什么样，一个字都不该动。
+
+顺带查出并修掉一处真问题：`NONBODY_KINDS_ADDED` 的常量早在 `08240cf` 就删了，而
+`contracts/invariants.py` 里描述它的 10 行说明**独自活到了今天**，一直写着
+「加词时同时往这里追加一个词」，指着一个不存在的东西。
+
 | fixture | 端点 |
 |---|---|
 | `check_stage2.json` | `/api/novels/7615069877019300633/check/stage2` |
@@ -18,7 +55,7 @@ check-seams 钉着），本目录才是 mock 现役消费的数据源；两边�
 | `check_stage5.json` | `/api/novels/7615069877019300633/check/stage5` |
 | `check_stage6.json` | `/api/novels/7615069877019300633/check/stage6` |
 | `check_stage7.json` | `/api/novels/7615069877019300633/check/stage7` |
-| `enums.json` | `/api/enums` |
+| `enums.json` | `/api/enums`（⚠ **不抓包，由 `tools/regen_web_enums_fixture.py` 生成**，见上） |
 | `global.json` | `/api/novels/7615069877019300633/stage2/global` |
 | `inbox.json` | `/api/novels/7615069877019300633/inbox` |
 | `reading_ch3.json` | `/api/novels/7615069877019300633/reading/3` |

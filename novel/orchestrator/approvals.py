@@ -392,13 +392,12 @@ def _make_proof(
 def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
     if gate == 's0':
         report, _ = store.read_own(RemovalReport, STAGE0_REMOVAL_REPORT)
-        # 付费防线与 stage1 启动闸用同一个谓词（eligibility 是唯一落点）：
-        # 历史自动批（auto_zero_hit）不具执行资格，人工重批前不放行花钱。
+        # 付费防线与 stage1 启动闸用同一个谓词（eligibility 是唯一落点），
+        # 不在这里复述批准条件——stage2 是第一个花钱的层，漏一处就是绕过闸门花钱。
         from novel.stages.stage0.eligibility import is_stage0_executable
         if not is_stage0_executable(report):
             raise ApprovalRequired(
-                'stage0 removal report has not actually been approved '
-                '(or is a legacy auto_zero_hit approval awaiting human re-approval)')
+                'stage0 removal report has not actually been approved')
     elif gate == 's2':
         review, _ = store.read_own(GlobalReview, STAGE2_GLOBAL_REVIEW)
         grounding, _ = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)

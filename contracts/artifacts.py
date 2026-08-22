@@ -12,11 +12,13 @@ from typing import Final
 
 
 ARTIFACT_PATHS: Final[dict[str, str]] = {
+    # ⚠ 2026-08-22 阶段 C：`revisions.json` 是本层**唯一可变的那一格**，
+    #   下面两条退成它的物化投影（路径与字节形态一个字没动，见 `contracts/schema/stage0.py`）。
+    #   同批删除的三份：`machine_snapshot.json` / `merge_candidate.json` /
+    #   `_audit/edit_{n}.json` —— 它们守的事全部由 revision 链本身承担。
+    'stage0.revisions': 'stage0/revisions.json',
     'stage0.clean_text': 'stage0/clean_text.txt',
     'stage0.removal_report': 'stage0/removal_report.json',
-    'stage0.machine_snapshot': 'stage0/machine_snapshot.json',
-    'stage0.merge_candidate': 'stage0/merge_candidate.json',
-    'stage0.audit_entry': 'stage0/_audit/edit_{n}.json',
     'stage1.main_text': 'stage1/main_text.json',
     'stage1.hook_copy': 'stage1/hook_copy.json',
     'stage1.partition_report': 'stage1/partition_report.json',
@@ -86,11 +88,9 @@ def artifact_rel(name: str, **values: object) -> str:
         raise ValueError(f'{name} 的路径参数不完整或非法：{values!r}') from exc
 
 
+STAGE0_REVISIONS = artifact_rel('stage0.revisions')
 STAGE0_CLEAN_TEXT = artifact_rel('stage0.clean_text')
 STAGE0_REMOVAL_REPORT = artifact_rel('stage0.removal_report')
-STAGE0_MACHINE_SNAPSHOT = artifact_rel('stage0.machine_snapshot')
-STAGE0_MERGE_CANDIDATE = artifact_rel('stage0.merge_candidate')
-STAGE0_AUDIT_ENTRY = artifact_rel('stage0.audit_entry')
 STAGE1_MAIN_TEXT = artifact_rel('stage1.main_text')
 STAGE1_HOOK_COPY = artifact_rel('stage1.hook_copy')
 STAGE1_PARTITION_REPORT = artifact_rel('stage1.partition_report')

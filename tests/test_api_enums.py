@@ -3,7 +3,9 @@
 """`/api/enums` 只发布当前契约，并能构造所有公开动作。"""
 from __future__ import annotations
 
+import json
 from collections import namedtuple
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +16,14 @@ from novel.errors import ValueDomainRefused
 from novel.orchestrator import nodes as N
 
 BASE = 'E:/nowhere/Output'
+
+#: mock 模式下前端看到的**整份取值面**。它是 `payload()` 的第二落点，而本模块开头
+#: 那段论证说的正是「第 N 个落点必然分家」——所以它必须有一条对账。
+_WEB_ENUMS = (Path(__file__).resolve().parents[1]
+              / 'web' / 'src' / 'fixtures' / 'backend_v1' / 'enums.json')
+#: 重生成的口径。与 `tools/regen_web_enums_fixture.py::DUMP` **必须同值**——
+#: 本条只比解析后的对象，格式不一致不会红在这里，但会让重生成的 diff 变成整份重写。
+_DUMP = dict(ensure_ascii=False, indent=1)
 
 
 @pytest.fixture(scope='module')
@@ -32,6 +42,39 @@ def test_frontend_domains_are_published_from_current_invariants(paid_payload):
     }
     for key, values in published.items():
         assert paid_payload[key] == list(values)
+
+
+def test_the_web_enums_fixture_is_the_same_payload(paid_payload):
+    """⭐⭐ `web/src/fixtures/backend_v1/enums.json` == `payload()`。**唯一的对账落点。**
+
+    【为什么这条测试必须存在】本模块开头论证过「第 N 个落点必然分家」，而这份夹具
+    就是那个第二落点——mock 模式下前端读到的整份取值面是它，不是 `payload()`。
+    在这条对账落地之前，两者已经静默分家两个月：**新增 18 键 · 消失 5 键 ·
+    内容变化 14 键**，没有任何东西出过声。⇒ 病不在「json 旧了」，在「没有守卫」。
+
+    ⚠ 比的是**解析后的对象**不是字节：这份夹具不在 `.gitattributes` 的 `-text` 名单里，
+    Windows 检出会变 CRLF，逐字节比会红在换行上而不是内容上。
+    ⚠ 走一次 `json.dumps/loads` 把 `payload()` 里的 tuple 归一成 list——盘上 JSON
+    没有 tuple 这种东西，不归一的话整份取值面会**全部**报成不一致。
+
+    重生成：见 `web/src/fixtures/backend_v1/README.md` 里那一行命令。
+    ⚠ 重生成前先逐键看清 `stale` 那一列——**别拿新 dump 直接覆盖**：
+    「前端还在读某个已删键」这类真问题会被一起冲掉。
+    """
+    fixture = json.loads(_WEB_ENUMS.read_text(encoding='utf-8'))
+    live = json.loads(json.dumps(paid_payload, **_DUMP))
+
+    missing = sorted(set(live) - set(fixture))
+    stale = sorted(set(fixture) - set(live))
+    changed = sorted(key for key in set(live) & set(fixture)
+                     if live[key] != fixture[key])
+    assert (missing, stale, changed) == ([], [], []), (
+        f'夹具与 payload() 分家了：\n'
+        f'  夹具缺少 {len(missing)} 键：{missing}\n'
+        f'  夹具多出 {len(stale)} 键（先逐键判定：常量真删了？还是前端还在读它？）：{stale}\n'
+        f'  内容不同 {len(changed)} 键：{changed}\n'
+        f'→ 重生成命令见 web/src/fixtures/backend_v1/README.md'
+    )
 
 
 def test_prompt_experiment_controls_are_not_published(paid_payload):

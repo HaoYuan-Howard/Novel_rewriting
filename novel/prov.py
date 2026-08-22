@@ -58,7 +58,7 @@ def content_sha1(data: bytes) -> str:
     """**40 位全宽**内容身份。
 
     它回答「**有人换过原文吗**」，人可能拿 `sha1sum` 手工复核——**截断买不到任何东西**。
-    用在 `stage0.source_sha1` / `clean_sha1` 与 `stage7.book_txt` 的指纹上。
+    用在 `stage0.normalized_source_sha1` / `clean_sha1` 与 `stage7.book_txt` 的指纹上。
     """
     return hashlib.sha1(data).hexdigest()
 

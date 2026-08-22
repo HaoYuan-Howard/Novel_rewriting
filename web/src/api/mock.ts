@@ -685,7 +685,7 @@ function mockStage0Segments(sid: string): Stage0Segments {
       marker_line: initial ? piece.marker : null,
     }
   })
-  return { source_sha1: data.source_sha1, available: true, reason: null, segments }
+  return { normalized_source_sha1: data.normalized_source_sha1, available: true, reason: null, segments }
 }
 
 function mockStage0Report(sid: string): Stage0Report {
@@ -694,10 +694,11 @@ function mockStage0Report(sid: string): Stage0Report {
   const approved = loadDoc(sid).gate.s0
   return {
     original_filename: data.original_filename,
-    original_path: '/mock/' + data.original_filename,
+    source_ref: { kind: 'external_file' as const,
+                  absolute_path: '/mock/' + data.original_filename },
     code: 'mock',
-    source_sha1: data.source_sha1,
-    clean_sha1: data.source_sha1,
+    normalized_source_sha1: data.normalized_source_sha1,
+    clean_sha1: data.normalized_source_sha1,
     source_encoding: data.source_encoding,
     text_norm: 'v1:bom+crlf',
     removed: segments.map((segment, index) => ({
@@ -716,12 +717,15 @@ function mockStage0Report(sid: string): Stage0Report {
       data.total_code_points - segments.reduce((sum, segment) => sum + segment.chars, 0),
     ),
     warnings: [],
-    approved: approved ? 'approved' : 'pending',
-    approved_at: approved ? new Date().toISOString() : null,
-    approval_origin: approved ? 'human' : null,
-    approved_by: approved ? 'mock-reviewer' : null,
-    round: lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 2 : 1,
-    edited_by_human: !!lsRead<Stage0EditRequest>('stage0.selection.' + sid),
+    approval: approved
+      ? { status: 'approved' as const,
+          at: new Date().toISOString(), by: 'mock-reviewer', reason: 'mock 批准' }
+      : { status: 'pending' as const },
+    executable: approved,
+    revision_id: (lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 'b' : 'a').repeat(64),
+    revision_origin: lsRead<Stage0EditRequest>('stage0.selection.' + sid)
+      ? ('human_edit' as const)
+      : ('machine' as const),
   }
 }
 
@@ -735,14 +739,14 @@ function mockStage1Segments(): Stage1Segments {
       kind: 'hook' as const,
       text: hook.hook_copy.text + '\n\n',
       chapter_ordinal: null,
-      source_chapter_label: null,
+      source_chapter_no: null,
     },
     ...chapters.chapters.map((chapter) => ({
       id: 'chapter-' + chapter.chapter_ordinal,
       kind: 'chapter' as const,
-      text: chapter.source_chapter_label + '\n' + chapter.preview + '\n\n',
+      text: chapter.source_chapter_no + '\n' + chapter.preview + '\n\n',
       chapter_ordinal: chapter.chapter_ordinal,
-      source_chapter_label: chapter.source_chapter_label,
+      source_chapter_no: chapter.source_chapter_no,
     })),
   ]
   let offset = 0
@@ -758,7 +762,7 @@ function mockStage1Segments(): Stage1Segments {
       flagged: false,
     }
   })
-  return { input_sha1: source.source_sha1, segments }
+  return { input_sha1: source.normalized_source_sha1, segments }
 }
 
 /* ---------------------------------------------------------- 跑书进度样例 */
@@ -901,24 +905,24 @@ export const mockApi: Api = {
     }))
   },
 
-  getStage0Merge: () => later(null),
+  getStage0Candidate: () => later(null),
 
-  resolveStage0Merge: (sid, request) => {
-    lsWrite('stage0.merge.resolve.' + sid, request)
+  adoptStage0Candidate: (sid, request) => {
+    lsWrite('stage0.candidate.adopt.' + sid, request)
     return later(finish({
-      kind: 'stage0.merge.resolve',
-      label: 'stage0 三方合并定稿',
+      kind: 'stage0.candidate.adopt',
+      label: 'stage0 采纳机器新版',
       extra: null,
       sid,
       ordinal: null,
     }))
   },
 
-  rejectStage0Merge: (sid, request) => {
-    lsWrite('stage0.merge.reject.' + sid, request)
+  dismissStage0Candidate: (sid, request) => {
+    lsWrite('stage0.candidate.dismiss.' + sid, request)
     return later(finish({
-      kind: 'stage0.merge.reject',
-      label: 'stage0 拒绝机器重跑候选',
+      kind: 'stage0.candidate.dismiss',
+      label: 'stage0 保留当前版',
       extra: null,
       sid,
       ordinal: null,
