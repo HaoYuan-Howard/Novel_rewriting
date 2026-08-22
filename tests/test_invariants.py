@@ -256,15 +256,23 @@ def test_the_approval_union_covers_its_value_domain_exactly():
     assert got == set(inv.APPROVAL_STATE)
 
     assert set(PendingApproval.model_fields) == {'status'}
-    assert set(ApprovedApproval.model_fields) == {'status', 'origin', 'at', 'by'}
+    # ⚠ `reason` 是 2026-08-22 阶段 C 从审计条目搬进来的：审计链折叠进 revision 之后，
+    #   「批准」是唯一一件不改变正文因而不产生新 revision 的人工决定 ⇒ 理由没有别的落点。
+    assert set(ApprovedApproval.model_fields) == {'status', 'origin', 'at', 'by', 'reason'}
 
     # 「没批却带着批准人」在类型上写不出来（StrictModel 拒未知字段）。
     with pytest.raises(Exception):
         PendingApproval(status='pending', by='someone')
-    # 人工批必须给 by；自动批不许伪造 by。这两条留在 validator 里——
-    # 它们是同一个分支内部的约束，判别联合表达不了。
+    # 人工批必须给 by 与 reason；自动批不许伪造这两格。它们留在 validator 里——
+    # 是同一个分支内部的约束，判别联合表达不了。
     with pytest.raises(Exception):
-        ApprovedApproval(status='approved', origin='human', at='t', by=None)
+        ApprovedApproval(status='approved', origin='human', at='t', by=None, reason='r')
     with pytest.raises(Exception):
-        ApprovedApproval(status='approved', origin='auto_zero_hit', at='t', by='x')
+        ApprovedApproval(status='approved', origin='human', at='t', by='x', reason=None)
+    with pytest.raises(Exception):
+        ApprovedApproval(
+            status='approved', origin='auto_zero_hit', at='t', by='x', reason=None)
+    with pytest.raises(Exception):
+        ApprovedApproval(
+            status='approved', origin='auto_zero_hit', at='t', by=None, reason='r')
 

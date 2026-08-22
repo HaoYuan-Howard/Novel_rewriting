@@ -82,9 +82,8 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
         segment['id'] for segment in view['segments']
         if segment['kind'] == 'keep' and '第二句文案' in segment['text'])
     request = {
-        'expected_round': report['round'],
+        'expected_revision_id': report['revision_id'],
         'expected_normalized_source_sha1': report['normalized_source_sha1'],
-        'expected_clean_sha1': report['clean_sha1'],
         'removed_segment_ids': [*machine, manual],
         'actor': 'api-stage01-test',
         'reason': 'exercise audited edit route',
@@ -95,9 +94,9 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     assert edited_response.json()['state'] == 'ok'
 
     edited = client.get(f'/api/novels/{sid}/stage0/report').json()
-    assert edited['round'] == report['round'] + 1
+    assert edited['revision_id'] != report['revision_id']
+    assert edited['revision_origin'] == 'human_edit'
     assert edited['approval'] == {'status': 'pending'}
-    assert edited['edited_by_human'] is True
     assert any(segment['origin'] == 'human' for segment in edited['removed'])
 
     stale = client.post(f'/api/novels/{sid}/stage0/edit', json=request, headers=UI)
@@ -184,9 +183,8 @@ def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
     response = client.post(
         f'/api/novels/{sid}/stage0/edit',
         json={
-            'expected_round': report['round'],
+            'expected_revision_id': report['revision_id'],
             'expected_normalized_source_sha1': report['normalized_source_sha1'],
-            'expected_clean_sha1': report['clean_sha1'],
                 'removed_segment_ids': selected,
                 'actor': 'api-stage01-test',
                 'reason': 'negative end-marker test',

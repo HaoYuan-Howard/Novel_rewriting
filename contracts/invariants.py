@@ -1108,7 +1108,7 @@ VALUED_FLAGS: Final = {
                     '如 stage7/name_map_edit.json，也接受书目录内的绝对路径）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
-    '--apply-merge-plan': '审校台生成的 stage0 三方合并决定（冲突逐项决定 + 乐观锁）',
+    '--apply-candidate-plan': '审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）',
     '--actor': '人工决定的自报身份（不是认证身份）',
     '--reason': '人工决定的非空理由',
     '--subject-sha256': '人工决定乐观锁定的完整内容 SHA-256',
@@ -1181,7 +1181,10 @@ WRITE_EFFECTS: Final = {
     '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
     '--recheck': '刷新已有成稿的指标，并重拼 draft.md',
     '--revalidate': '必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/',
-    '--apply-edit': '把人工稿落成新的一轮，并把上一轮归档进 _rounds/',
+    # ⚠ 本表按 flag 索引 ⇒ 这句话必须对**每一个**挂它的节点都成立。2026-08-22 阶段 C
+    #   之后 stage0 的历史不再进 `_rounds/`（它在 revision 链上，且不可覆盖），
+    #   所以这一格只说得出两边都成立的那部分：落成新的一版、上一版仍可回看。
+    '--apply-edit': '把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）',
     '--renormalize': '按当前契约重算代码派生字段与原文定位并写回',
     # ⚠ 它写的是**另一份**产物（`<stage>/wontfix.json`），不是本节点 `produces` 里那一份
     # ⇒ 不登记的后果是**方向反的**：`/api/enums` 会把它派生成「写 `stage5/review_{n}.json`」，
@@ -1310,18 +1313,24 @@ class NodeSpec(NamedTuple):
 #: ⚠ 同一份产物可以被两个节点写（`stage6.hook` 产候选、`stage6.approve` 落定稿），
 #: 这不是重复登记：**一层要哪几份**取的是本层各节点的并集。
 NODES: Final[dict[str, NodeSpec]] = {
+    # ⚠ 2026-08-22 阶段 C：三个节点都先写 `stage0/revisions.json`（唯一可变格、
+    #   一次原子写就是提交），再把 `current` 物化成另外两份。三份都登记 ——
+    #   `produces` 回答的是「跑完这一步盘上该有哪几份」，物化投影同样在其中。
     'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除',
                                  flags=('--source', '--dry-run', '--check-only'),
-                                 produces=(artifact_paths.STAGE0_REMOVAL_REPORT,
+                                 produces=(artifact_paths.STAGE0_REVISIONS,
+                                           artifact_paths.STAGE0_REMOVAL_REPORT,
                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
                                   flags=('--actor', '--reason'),
                                   required_flags=('--actor', '--reason'),
-                                  produces=(artifact_paths.STAGE0_REMOVAL_REPORT,)),
+                                  produces=(artifact_paths.STAGE0_REVISIONS,
+                                            artifact_paths.STAGE0_REMOVAL_REPORT)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
                                   flags=('--apply-edit', '--apply-edit-plan',
-                                         '--apply-merge-plan', '--actor', '--reason'),
-                                 produces=(artifact_paths.STAGE0_REMOVAL_REPORT,
+                                         '--apply-candidate-plan', '--actor', '--reason'),
+                                 produces=(artifact_paths.STAGE0_REVISIONS,
+                                           artifact_paths.STAGE0_REMOVAL_REPORT,
                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
                                  flags=('--dry-run', '--check-only'),
@@ -1463,7 +1472,7 @@ NODES: Final[dict[str, NodeSpec]] = {
 #: **0 成本地摊开**（渲染占位符），谓词做不到——它只能回答是/否，说不出缺哪几个。
 #:
 #: ⇒ `stage0.edit` 的三条编辑路只有 `--apply-edit` 那条要人工凭据；
-#:   `--apply-edit-plan` / `--apply-merge-plan` 的凭据在计划文件里（连同乐观锁）。
+#:   `--apply-edit-plan` / `--apply-candidate-plan` 的凭据在计划文件里（连同乐观锁）。
 #: ⇒ `stage5.review --retain-pretrim` 要 `--chapters` 指定恰好一章，并强制留下
 #:   自报 `--actor` / `--reason`：它是逐章的 hash-bound 人工决定，不是匿名布尔开关。
 CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {

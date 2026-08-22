@@ -73,28 +73,19 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '「四人成行」卡在 stage2、同日裁定作废 ⇒ 本次存量代价为零，形状破坏趁这个窗口',
     ),
     'stage0/removal_report.json': (
-        2,
-        '2026-08-22 阶段 B（两刀）：① `warnings[]` 从 `{kind, message}` 换成按 kind '
-        '判别的结构化证据（措辞退到 `novel/core/warnings.py`，不再落盘）；'
-        '② 顶层四个平铺可空审批字段（approved / approved_at / approval_origin / '
-        'approved_by）收成一格 `approval: PendingApproval | ApprovedApproval`；'
-        '③ `original_path: str` 换成判别联合 `source_ref: ExternalFileRef | '
-        'ManagedUploadRef`（读取端不再从字符串里推断来源类型）',
+        3,
+        '2026-08-22 两次破坏。阶段 B（三刀）：① `warnings[]` 从 `{kind, message}` '
+        '换成按 kind 判别的结构化证据；② 顶层四个平铺可空审批字段收成 '
+        '`approval` 判别联合；③ `original_path: str` 换成 `source_ref` 判别联合。'
+        '阶段 C：本份产物退成 `stage0/revisions.json` 中 `current` 的**物化投影**，'
+        '身份六格（`round` · 三格 `machine_*` · 两格 `audit_*`）换成 '
+        '`revision_id` + `revision_origin`，`edited_by_human` 随之出局'
+        '（它是 `origin == human_edit` 的同义反复，且说不出「人采纳了机器新结果」）',
         '`stage0.remove --source <原文>` 免费重跑（零 LLM）。'
-        '⚠ 重建后审批回到 `pending`，必须人工重批才具执行资格',
-    ),
-    'stage0/machine_snapshot.json': (
-        2,
-        '2026-08-22 阶段 B：同 `removal_report` 的 warnings 结构化 + '
-        '`original_path` → `source_ref` ⇒ `snapshot_digest` 的前像随之改变，'
-        '盘上快照身份全部作废',
-        '同 `stage0/removal_report.json`：`stage0.remove` 重跑时一并重写',
-    ),
-    'stage0/merge_candidate.json': (
-        2,
-        '2026-08-22 阶段 B：内嵌的 `theirs_snapshot` 换形状 ⇒ `candidate_id` 前像改变',
-        'live candidate 一律作废、不迁移：它本来就是一次未决合并的中间态，'
-        '重跑 `stage0.remove` 会按新形状重新生成（若彼时仍有机器结果变化）',
+        '⚠ 重建后审批回到 `pending`，必须人工重批才具执行资格。'
+        '⚠ 同批整份下线三份产物：`stage0/machine_snapshot.json`、'
+        '`stage0/merge_candidate.json`、`stage0/_audit/edit_{n}.json`——'
+        '它们守的事全部由 revision 链本身承担，存量一律作废不迁移',
     ),
     'stage1/partition_report.json': (
         2,

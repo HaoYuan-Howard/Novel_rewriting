@@ -556,7 +556,7 @@ merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本�
 
 - [ ] 设计 revision 目录与 `current` 指针的原子发布协议（含存量 `_rounds/` 的迁移答案——
       本仓无迁移机制，答案大概率是「由 producer 重建」）。
-- [ ] 逐项删除上表机制，每删一项同批回答它守的洞由谁接管（`tests/test_stage0_merge.py`
+- [ ] 逐项删除上表机制，每删一项同批回答它守的洞由谁接管（当时 test_stage0_merge.py
       的崩溃重放矩阵是删 WAL 前的验收面）。
 - [ ] 顺带回答**统一 Pre-LLM Intake Review**：批准前分章预览已于 2026-08-22 落地
       （TODO-34 完成，见 `docs/BACKEND_CONTRACT.md` §十），当时裁决是**保持两步**——

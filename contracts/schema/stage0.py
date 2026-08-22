@@ -12,11 +12,43 @@ F7 已用临时目录走通产物形态、审阅状态机与编辑回写，并�
 （`novel/store.py::write_text`，B 期），不在这里。
 
 【本层唯一没有 `_provenance` 的理由，写在明处】
-`docs/schema/stage0.md` 的三份产物表里**没有 `_provenance` 这一项**，本模块因此也没有。
+`docs/schema/stage0.md` 的产物表里**没有 `_provenance` 这一项**，本模块因此也没有。
 它不是漏了：本层是全链的**源头**，`inputs` 恒空，而 `normalized_source_sha1` / `clean_sha1` /
 `source_encoding` / `text_norm` 已经把「这份产物照什么产的」答完了。
 `code` 不能塞进一份不存在的 `_provenance`，因此作为报告顶层字段记录；
 它仍由全链同一个 `RunContext.code` / `prov.code_version()` 口径产生。
+
+── 2026-08-22 阶段 C：**一个可变格 + 一条不可变链** ─────────────────────────
+
+【之前是什么样】本层曾是一个小型版本控制系统：`machine_snapshot.json`（机器那一轮的
+完整快照）· `merge_candidate.json`（base/ours/theirs 三份全文 + 码点级 diff3 的 typed
+冲突）· `_audit/edit_N.json`（SHA-256 串联的决定账，同时充当跨文件提交的 WAL）·
+`_rounds/`（正式稿逐轮归档）。四套机制守的是**同一件事**：
+
+  > `clean_text.txt` 与 `removal_report.json` 必须同进同出，而文件系统只保证单文件原子。
+
+于是有了 WAL、有了「唯一可恢复条目」、有了 `_completed_merge` 这类崩溃重放状态机；
+而 diff3 只合并了 `clean_text` 一个字段，**`removed[]` 账本怎么合并没有答案**
+（外部评审 P0-3：接受 `proposed_clean_text` 之后正式 `removed[]` 该写什么，
+四种选择全都不正确）——因为三方合并的聚合根根本不是单独的正文，而是
+`{原文身份, 正文, 剔除账本, 告警}` 这一整团。
+
+【现在是什么样】聚合根 = `Stage0Revision`，**整团一起不可变**：
+
+  · `stage0/revisions.json` 是本层**唯一可变的那一格**：不可变 revision 链 +
+    `current` 指针 + 待裁决候选 + 审批状态，一次原子单文件写就是一次提交
+    ⇒ **跨文件提交这件事本身消失了**，WAL 与崩溃重放状态机随之无事可守；
+  · `clean_text.txt` 与 `removal_report.json` 退成 `current` 的**物化投影**：
+    它们的路径与字节形态一个字不动（stage1~7 的来源账、`root_clean_sha1`、
+    freshness 全部照旧），但「它们是不是最新的」不再需要跨文件事务保证——
+    任何时刻按 `revisions.json` 重新物化一次即可，那是一个幂等纯函数。
+  · 机器重跑不再自动三方合并：它只是链上又一条 revision。与当前稿不同就挂成
+    **候选**，由人三选一（保留当前 / 换成候选 / 换成候选后再编辑）。
+    ⇒ diff3、冲突 schema、决议 schema、base/ours/theirs 三份全文副本一并出局。
+  · 审计链折叠进 revision：每条 revision 记 `parent_revision_id` + 起源 + 自报
+    actor/reason，`revision_id` 由**前像**（含 parent）派生 ⇒ **链本身就是哈希链**，
+    改一个字就对不上，且不再需要与报告顶层的 `audit_seq` / `audit_head_sha256`
+    两格跨文件对账（那两格随之出局）。
 """
 from __future__ import annotations
 
@@ -39,8 +71,15 @@ Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 #: 可 decode、可展示、可审计，但它**不具执行资格**——人工重批后 `approval.origin`
 #: 才回到 `human`。现役写入方只有 `human`。
 ApprovalOrigin = Literal['auto_zero_hit', 'human']
-#: `auto_approve` 同上：历史审计条目里存在、必须可读；现役代码不再产生。
-AuditAction = Literal['auto_approve', 'approve', 'edit', 'merge_accept', 'merge_reject']
+
+#: 一条 revision 是**怎么来的**。三支，且各自的可问责字段不同（见 `Stage0Revision`）：
+#:   · `machine`     —— 机器剔除算出来的，没有人参与 ⇒ 没有 actor / reason；
+#:   · `human_edit`  —— 人改了正文或改了圈选（`R-0.4`），**正文含人工痕迹**；
+#:   · `human_adopt` —— 人把一条既有 revision（候选）采纳为当前稿。
+#:     ⚠ 它的**内容**逐字等于被采纳那条，人工痕迹按被采纳那条算；
+#:     它单独成一条 revision 的理由是「谁在何时以什么理由换掉了正文」必须留痕
+#:     ——审计链折叠进来之后，这就是它唯一的落点。
+Stage0RevisionOrigin = Literal['machine', 'human_edit', 'human_adopt']
 
 
 # ── 原文住在哪儿：**两种来源，处置相反** ────────────────────────────────────
@@ -102,6 +141,12 @@ class RemovedSegment(StrictModel):
 
     ⇒ 这是本份产物存在的**第一理由**：它记的是一段已经从 `clean_text` 里消失的文本，
     删掉就是真的丢信息，不像其它字段那样能 0 成本现算回来。
+
+    ⚠ **它是【已验证事实】，不是【用户意图】**（2026-08-22 阶段 C / TODO-36）：
+    `origin` / `line_no` / `marker_line` / 两条预览由服务端在唯一落点复算落定。
+    人从审校台交上来的那份长成 `RequestedRemoval`——只有 `span` 与 `kind`。
+    两者共用一个模型时，客户端可以提交任意 `origin='machine'` 与任意预览，
+    而**类型上看不出这是意图还是事实**。
     """
 
     kind: Literal[NONBODY_KINDS]
@@ -138,6 +183,30 @@ class RemovedSegment(StrictModel):
 
     @model_validator(mode='after')
     def _span_is_a_half_open_interval(self) -> RemovedSegment:
+        lo, hi = self.span
+        if not 0 <= lo < hi:
+            raise ValueError(f'span={self.span} 不是合法的半开区间（要求 0 <= 起 < 止）')
+        return self
+
+
+class RequestedRemoval(StrictModel):
+    """人**想**删掉的一段：只有意图，没有事实（2026-08-22 阶段 C / TODO-36）。
+
+    【为什么要与 `RemovedSegment` 分家】审校台交上来的编辑计划此前直接复用产物模型，
+    于是客户端可以提交 `origin='machine'`、可以伪造 `line_no`、可以写任意预览。
+    2026-08-21 已在服务端把这些字段一律重新落定（伪造无效），但**类型上**命令与产物
+    仍是同一个东西 —— 「哪些格是人说了算、哪些格只能由服务端算」全靠一段注释维持。
+
+    ⇒ 命令 DTO 只留人真正说得出口的两格：**删哪一段**（`span`，坐标系是原文）与
+    **它是哪一类**（`kind`）。其余全部由 `novel/stages/stage0/removal.py` 的唯一落点
+    按 `s0_removal_ledger` 的同一口径复算 —— 那才是「已验证事实」。
+    """
+
+    kind: Literal[NONBODY_KINDS]
+    span: tuple[int, int]
+
+    @model_validator(mode='after')
+    def _span_is_a_half_open_interval(self) -> RequestedRemoval:
         lo, hi = self.span
         if not 0 <= lo < hi:
             raise ValueError(f'span={self.span} 不是合法的半开区间（要求 0 <= 起 < 止）')
@@ -195,189 +264,6 @@ Stage0Warning = Annotated[
 ]
 
 
-class Stage0EditPlan(HumanApproval):
-    '''审校台交给 ``stage0.edit`` 子进程的一次编辑计划。
-
-    它不是产物，不进 ``ARTIFACTS``；HTTP 进程只准备人的决定，真正归档并改写
-    ``stage0`` 两份产物的仍然是 CLI 子进程。三个 ``expected_*`` 字段是乐观锁，
-    防两个标签页拿旧页面互相覆盖。
-    '''
-
-    expected_round: int = Field(ge=1)
-    expected_normalized_source_sha1: Sha1
-    expected_clean_sha1: Sha1
-    expected_total_code_points: int = Field(ge=1)
-    clean_text: str
-    clean_sha1: Sha1
-    removed: list[RemovedSegment]
-
-    @model_validator(mode='after')
-    def _payload_is_self_consistent(self) -> Stage0EditPlan:
-        if '\r' in self.clean_text:
-            raise ValueError('clean_text 必须是 LF-only，编辑计划不做静默换行归一')
-        actual = hashlib.sha1(self.clean_text.encode('utf-8')).hexdigest()
-        if self.clean_sha1 != actual:
-            raise ValueError(
-                f'clean_sha1={self.clean_sha1} 与计划正文实际 {actual} 对不上')
-        spans = [segment.span for segment in self.removed]
-        if spans != sorted(spans):
-            raise ValueError('removed 必须按原文 span 顺序排列')
-        for index, segment in enumerate(self.removed):
-            lo, hi = segment.span
-            if hi > self.expected_total_code_points:
-                raise ValueError(
-                    f'removed[{index}].span={segment.span} 越过原文长度 '
-                    f'{self.expected_total_code_points}')
-            if segment.code_points != hi - lo:
-                raise ValueError(
-                    f'removed[{index}].code_points={segment.code_points}，但 span 长 {hi - lo}')
-            if index and self.removed[index - 1].span[1] > lo:
-                raise ValueError(f'removed[{index - 1}] 与 removed[{index}] 重叠')
-        return self
-
-
-class Stage0MergeConflict(StrictModel):
-    """一次码点级 diff3 中不能安全自动选择的重叠改动。"""
-
-    id: str = Field(min_length=1)
-    base_span: tuple[int, int]
-    base_text: str
-    ours_text: str
-    theirs_text: str
-
-    @model_validator(mode='after')
-    def _base_span_is_ordered(self) -> Stage0MergeConflict:
-        lo, hi = self.base_span
-        if not 0 <= lo <= hi:
-            raise ValueError('base_span 必须是允许空插入点的半开区间')
-        if len(self.base_text) != hi - lo:
-            raise ValueError('base_text 长度必须等于 base_span 长度')
-        return self
-
-
-class Stage0ConflictResolution(StrictModel):
-    conflict_id: str = Field(min_length=1)
-    choice: Literal['ours', 'theirs', 'custom']
-    custom_text: str | None = None
-
-    @model_validator(mode='after')
-    def _custom_is_explicit(self) -> Stage0ConflictResolution:
-        if (self.choice == 'custom') != (self.custom_text is not None):
-            raise ValueError('choice=custom 时且仅此时必须给 custom_text')
-        return self
-
-
-class Stage0MergeDecisionPlan(HumanApproval):
-    action: Literal['accept', 'reject']
-    candidate_id: Sha256
-    expected_round: int = Field(ge=1)
-    expected_normalized_source_sha1: Sha1
-    expected_clean_sha1: Sha1
-    resolutions: list[Stage0ConflictResolution] = Field(default_factory=list)
-
-    @model_validator(mode='after')
-    def _reject_has_no_fake_resolutions(self) -> Stage0MergeDecisionPlan:
-        if self.action == 'reject' and self.resolutions:
-            raise ValueError('reject 不接受 resolutions')
-        return self
-
-
-class MachineRemovalSnapshot(StrictModel):
-    """一轮机器剔除的完整、可复算快照；它从不冒充正式人工稿。"""
-
-    created_at: str = Field(min_length=1)
-    code: str = Field(min_length=1)
-    original_filename: str = Field(min_length=1)
-    source_ref: SourceRef
-    normalized_source_sha1: Sha1
-    clean_sha1: Sha1
-    source_encoding: Literal[SOURCE_ENCODINGS]
-    text_norm: str = Field(min_length=1)
-    total_code_points: int = Field(ge=1)
-    body_code_points: int = Field(ge=0)
-    clean_text: str
-    removed: list[RemovedSegment]
-    warnings: list[Stage0Warning]
-    snapshot_sha256: Sha256
-
-    @model_validator(mode='after')
-    def _lengths_and_hash_agree(self) -> MachineRemovalSnapshot:
-        if self.body_code_points != len(self.clean_text):
-            raise ValueError('body_code_points 必须等于机器 clean_text 码点长度')
-        actual = hashlib.sha1(self.clean_text.encode('utf-8')).hexdigest()
-        if actual != self.clean_sha1:
-            raise ValueError('clean_sha1 与机器 clean_text 不一致')
-        return self
-
-
-class Stage0MergeCandidate(StrictModel):
-    """机器重跑与正式人工稿的三方合并候选；接受前不得改正式稿。"""
-
-    candidate_id: Sha256
-    created_at: str = Field(min_length=1)
-    expected_round: int = Field(ge=1)
-    expected_normalized_source_sha1: Sha1
-    expected_clean_sha1: Sha1
-    base_snapshot_sha256: Sha256
-    theirs_snapshot: MachineRemovalSnapshot
-    base_clean_sha1: Sha1
-    ours_clean_sha1: Sha1
-    theirs_normalized_source_sha1: Sha1
-    theirs_clean_sha1: Sha1
-    base_text: str
-    ours_text: str
-    theirs_text: str
-    proposed_clean_text: str
-    conflicts: list[Stage0MergeConflict]
-
-    @model_validator(mode='after')
-    def _conflicts_are_unique(self) -> Stage0MergeCandidate:
-        ids = [item.id for item in self.conflicts]
-        if len(ids) != len(set(ids)):
-            raise ValueError('merge conflict id 不得重复')
-        checks = (
-            ('base_clean_sha1', self.base_clean_sha1, self.base_text),
-            ('ours_clean_sha1', self.ours_clean_sha1, self.ours_text),
-            ('theirs_clean_sha1', self.theirs_clean_sha1, self.theirs_text),
-        )
-        for name, expected, text in checks:
-            actual = hashlib.sha1(text.encode('utf-8')).hexdigest()
-            if actual != expected:
-                raise ValueError(f'{name} 与对应文本不一致')
-        if self.theirs_snapshot.snapshot_sha256 == self.base_snapshot_sha256:
-            raise ValueError('机器快照没有变化时不该生成 merge candidate')
-        if self.theirs_snapshot.normalized_source_sha1 != self.theirs_normalized_source_sha1:
-            raise ValueError('theirs_snapshot 与 theirs_normalized_source_sha1 不一致')
-        return self
-
-
-class Stage0AuditEntry(StrictModel):
-    """不可覆盖、哈希串联的一次 Stage0 人工或自动决定。"""
-
-    seq: int = Field(ge=1)
-    previous_sha256: Sha256 | None
-    entry_sha256: Sha256
-    action: AuditAction
-    actor: str | None
-    reason: str = Field(min_length=1)
-    at: str = Field(min_length=1)
-    before_normalized_source_sha1: Sha1 | None
-    before_clean_sha1: Sha1 | None
-    after_normalized_source_sha1: Sha1
-    after_clean_sha1: Sha1
-    candidate_id: Sha256 | None = None
-
-    @model_validator(mode='after')
-    def _actor_matches_action(self) -> Stage0AuditEntry:
-        if self.action == 'auto_approve':
-            if self.actor is not None:
-                raise ValueError('auto_approve 不得伪造 actor')
-        elif self.actor is None or not self.actor.strip():
-            raise ValueError('人工决定必须给自报 actor')
-        return self
-
-
-
 # ── 审阅闸门：**两个分支，不是四个可空字段** ──────────────────────────────
 #
 # 【2026-08-22 之前是什么样】顶层平铺四格：
@@ -403,7 +289,7 @@ class PendingApproval(StrictModel):
 
 
 class ApprovedApproval(StrictModel):
-    """已经批过。三格**全部必填**（`by` 的可空只属于历史自动批那一支）。"""
+    """已经批过。`by` / `reason` 的可空只属于历史自动批那一支。"""
 
     status: Literal['approved']
 
@@ -419,13 +305,24 @@ class ApprovedApproval(StrictModel):
     #: ⚠ **只有 `auto_zero_hit` 那一支才可为 `null`**——没有人批的东西没有批准人。
     by: str | None
 
+    #: 批准理由。⚠ 2026-08-22 阶段 C 从审计条目搬进来：审计链折叠进 revision 之后，
+    #: 「批准」是唯一一件**不改变正文**因而不产生新 revision 的人工决定 ⇒ 它的
+    #: reason 没有别的落点。此前 `stage0.approve` 强制要 `--reason`，却只把它写进
+    #: `_audit/edit_N.json`；删掉那条链而不搬这一格，理由就丢了。
+    reason: str | None
+
     @model_validator(mode='after')
     def _actor_matches_origin(self) -> ApprovedApproval:
         if self.origin == 'human':
             if self.by is None or not self.by.strip():
                 raise ValueError('人工批准必须给 by（自报身份）')
-        elif self.by is not None:
-            raise ValueError('auto_zero_hit 自动批准不得伪造 by')
+            if self.reason is None or not self.reason.strip():
+                raise ValueError('人工批准必须给 reason')
+        else:
+            if self.by is not None:
+                raise ValueError('auto_zero_hit 自动批准不得伪造 by')
+            if self.reason is not None:
+                raise ValueError('auto_zero_hit 自动批准不得伪造 reason')
         return self
 
 
@@ -436,8 +333,260 @@ Stage0Approval = Annotated[
     PendingApproval | ApprovedApproval, Field(discriminator='status')]
 
 
+# ── 聚合根：一条 revision ────────────────────────────────────────────────────
+
+
+class Stage0RevisionContent(StrictModel):
+    """一条 revision 的**全部内容**：原文身份 + 正文 + 剔除账本 + 告警。
+
+    ⚠⚠ **它整团一起变，不许只换其中一格**——这正是外部评审 P0-3 的结论：
+    此前的三方合并只对 `clean_text` 做 diff3，于是「接受之后 `removed[]` 该写什么」
+    在契约里答不出来（用 ours 的 span 可能指向旧原文、用 theirs 会丢人工圈选、
+    取并集坐标系不一致、从最终文本反推则因为允许任意人工改字而不唯一）。
+    ⇒ 聚合根不是 `clean_text`，是这一整团；换就整团换。
+    """
+
+    #: 只作展示（书目录寻址走 `s0_dir_roundtrip`）；locator 的权威是 `source_ref`。
+    original_filename: str = Field(min_length=1)
+    source_ref: SourceRef
+
+    #: **原始 txt 归一化之后那段文本**的 sha1。⚠ 不是原始文件字节的 digest。
+    #: 一条链上的每条 revision 这一格必须相同——换原文按 `R-0.14` 是另一本书的摄入。
+    normalized_source_sha1: Sha1
+    source_encoding: Literal[SOURCE_ENCODINGS]
+    text_norm: str = Field(min_length=1)
+    total_code_points: int = Field(ge=1)
+
+    #: 这一版的正文本身。⚠ 它**在产物里**，不是指向 `clean_text.txt` 的引用——
+    #: `clean_text.txt` 反过来是它的物化投影。历史版本的正文没有第二处可存：
+    #: 剔除是破坏性的，而 `_rounds/` 那套逐轮归档正是本批要删掉的东西。
+    clean_text: str
+    clean_sha1: Sha1
+    body_code_points: int = Field(ge=0)
+
+    removed: list[RemovedSegment]
+
+    #: ⚠ 落盘而不是现算，是**有意的**：`s0_warnings` 拿 `warnings_for()` 复算并逐条
+    #: 比证据，那条判据的全部判别力来自「盘上这份是产地当时算的」。物化时现算
+    #: 会把它变成恒等式（同 `detected_chapter_marker_count` 那一刀的教训）。
+    warnings: list[Stage0Warning]
+
+    @model_validator(mode='after')
+    def _text_and_hash_agree(self) -> Stage0RevisionContent:
+        if self.body_code_points != len(self.clean_text):
+            raise ValueError('body_code_points 必须等于 clean_text 码点长度')
+        actual = hashlib.sha1(self.clean_text.encode('utf-8')).hexdigest()
+        if actual != self.clean_sha1:
+            raise ValueError('clean_sha1 与 clean_text 不一致')
+        return self
+
+
+class Stage0Revision(StrictModel):
+    """链上不可变的一版。**`revision_id` 由前像派生 ⇒ 这条链就是哈希链。**
+
+    ⚠ 前像**不含** `at` 与 `code`（同已下线的 `snapshot_digest` 的先例：时间与代码
+    版本是审计元数据，机器输入/输出不变时身份必须稳定）。这不是省事：机器重跑算出
+    同一份内容、挂在同一个 parent 上，就必须得到**同一个 id** —— 否则「这个候选我
+    已经否过一次」（`Stage0Revisions.dismissed`）永远认不出来，被否掉的候选每跑一次
+    机器就复活一次。前像的逐字定义与 golden vector 在
+    `novel/stages/stage0/revisions.py::revision_digest` 与 `tests/test_stage0_revisions.py`。
+    """
+
+    revision_id: Sha256
+
+    #: 链上的父。恒有且只有一条 `None`（首次摄入那条）。
+    parent_revision_id: Sha256 | None
+
+    origin: Stage0RevisionOrigin
+
+    #: ⚠ **`machine` 那一支恒 `None`，两格一起**：没有人参与的事没有可问责的人，
+    #: 也没有理由可写。措辞（「机器剔除」之类）是展示层的事，不落盘
+    #: ——同 warning 把 `message` 赶出产物的那条纪律。
+    actor: str | None
+    reason: str | None
+
+    at: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+
+    content: Stage0RevisionContent
+
+    @model_validator(mode='after')
+    def _credentials_match_origin(self) -> Stage0Revision:
+        if self.origin == 'machine':
+            if self.actor is not None or self.reason is not None:
+                raise ValueError('machine 起源不得伪造 actor / reason')
+            return self
+        if self.actor is None or not self.actor.strip():
+            raise ValueError(f'{self.origin} 必须给自报 actor')
+        if self.reason is None or not self.reason.strip():
+            raise ValueError(f'{self.origin} 必须给 reason')
+        return self
+
+
+class Stage0DismissedCandidate(StrictModel):
+    """人看过并**否掉**的一个机器候选。
+
+    ⚠ 它不进链：否掉候选不改变正文，链只记内容血缘。但它必须留痕，否则
+    `revision_id` 的稳定派生（同内容同 parent ⇒ 同 id）会让机器每重跑一次
+    就把同一个已被否掉的候选重新挂回待裁决位。
+    """
+
+    revision_id: Sha256
+    at: str = Field(min_length=1)
+    by: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class Stage0Current(StrictModel):
+    """当前生效的那一版 + 它的闸门状态。
+
+    ⚠ **审批与 revision 绑在同一个对象里，不是两个平级字段**：换稿必须重新批准，
+    而「换了稿却把上一版的批准留着」是这一层最贵的错（stage2 是第一个花钱的层）。
+    绑在一起之后，那种形态**在类型上就写不出来**——换 `revision_id` 就得同时给出
+    这一版的 `approval`，而唯一会把它写成 `approved` 的入口是 `stage0.approve`。
+    """
+
+    revision_id: Sha256
+    approval: Stage0Approval
+
+
+class Stage0Revisions(StrictModel):
+    """`stage0/revisions.json`。**本层唯一可变的那一格。**
+
+    一次原子单文件写 = 一次提交。`clean_text.txt` 与 `removal_report.json` 是它的
+    物化投影，可在任何时刻由 `novel/stages/stage0/revisions.py::materialize` 幂等重建
+    ⇒ 「两份产物同进同出」不再需要 WAL、不再需要崩溃重放状态机。
+    """
+
+    #: 全部历史版本，**按拓扑序**（parent 必须在自己之前出现）。
+    revisions: list[Stage0Revision] = Field(min_length=1)
+
+    current: Stage0Current
+
+    #: 机器重跑算出的、与当前稿不同的那一版。⚠ 它**已经在 `revisions` 里**——
+    #: 候选不是另一种东西，只是一条还没被指向的 revision。三选一：保留当前 /
+    #: 采纳它（`human_adopt`）/ 采纳后再编辑（采纳完照常走 `stage0.edit`）。
+    candidate_revision_id: Sha256 | None
+
+    dismissed: list[Stage0DismissedCandidate] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _chain_is_well_formed(self) -> Stage0Revisions:
+        ids = [item.revision_id for item in self.revisions]
+        if len(ids) != len(set(ids)):
+            raise ValueError('revision_id 不得重复')
+        seen: set[str] = set()
+        roots = 0
+        for item in self.revisions:
+            if item.parent_revision_id is None:
+                roots += 1
+            elif item.parent_revision_id not in seen:
+                raise ValueError(
+                    f'{item.revision_id[:12]}… 的 parent 不在它之前出现，链不是拓扑序')
+            seen.add(item.revision_id)
+        if roots != 1:
+            raise ValueError(f'链必须恰好有一个根（parent=null），实际 {roots} 条')
+        known = set(ids)
+        if self.current.revision_id not in known:
+            raise ValueError('current.revision_id 不在 revisions 里')
+        if self.candidate_revision_id is not None:
+            if self.candidate_revision_id not in known:
+                raise ValueError('candidate_revision_id 不在 revisions 里')
+            if self.candidate_revision_id == self.current.revision_id:
+                raise ValueError('当前稿不能同时是待裁决候选')
+            by_id = {item.revision_id: item for item in self.revisions}
+            if by_id[self.candidate_revision_id].origin != 'machine':
+                raise ValueError('只有机器起源的 revision 才会成为候选')
+        dismissed_ids = [item.revision_id for item in self.dismissed]
+        if len(dismissed_ids) != len(set(dismissed_ids)):
+            raise ValueError('同一个候选不得否两次')
+        for revision_id in dismissed_ids:
+            if revision_id not in known:
+                raise ValueError('dismissed 指向不存在的 revision')
+            if revision_id == self.candidate_revision_id:
+                raise ValueError('已否掉的候选不能同时挂在待裁决位')
+        sources = {item.content.normalized_source_sha1 for item in self.revisions}
+        if len(sources) != 1:
+            raise ValueError(
+                '同一条链上的 revision 必须出自同一份原文（换原文按 R-0.14 是另一本书）')
+        return self
+
+
+# ── 命令 DTO：**用户意图**，与产物在类型上分家（TODO-36） ──────────────────
+
+
+class Stage0EditPlan(HumanApproval):
+    """审校台交给 ``stage0.edit`` 子进程的一次编辑计划。
+
+    它不是产物，不进 ``ARTIFACTS``；HTTP 进程只准备人的决定，真正落一条新 revision
+    的仍然是 CLI 子进程。三个 ``expected_*`` 是乐观锁，防两个标签页拿旧页面互相覆盖。
+
+    ⚠ ``removed`` 是 ``RequestedRemoval``（只有 span + kind）而不是产物的
+    ``RemovedSegment``：命令说不出「事实」。见 `RequestedRemoval` 的说明。
+    """
+
+    #: 乐观锁。⚠ 2026-08-22 阶段 C 从 `expected_round` + `expected_clean_sha1`
+    #: 两格换成这一格：revision id 由内容与 parent 一起派生，它**同时**钉住了
+    #: 「基于哪一版」与「那一版长什么样」——两格能表达的它一格就表达完了，
+    #: 而两格之间还可能互相矛盾。
+    expected_revision_id: Sha256
+
+    #: 原文身份仍要单独钉：它不是某一版的属性而是整条链的前提，
+    #: 且服务端要拿它去核盘上那份原文有没有被换过（`R-0.14`）。
+    expected_normalized_source_sha1: Sha1
+    expected_total_code_points: int = Field(ge=1)
+
+    clean_text: str
+    clean_sha1: Sha1
+    removed: list[RequestedRemoval]
+
+    @model_validator(mode='after')
+    def _payload_is_self_consistent(self) -> Stage0EditPlan:
+        if '\r' in self.clean_text:
+            raise ValueError('clean_text 必须是 LF-only，编辑计划不做静默换行归一')
+        actual = hashlib.sha1(self.clean_text.encode('utf-8')).hexdigest()
+        if self.clean_sha1 != actual:
+            raise ValueError(
+                f'clean_sha1={self.clean_sha1} 与计划正文实际 {actual} 对不上')
+        spans = [segment.span for segment in self.removed]
+        if spans != sorted(spans):
+            raise ValueError('removed 必须按原文 span 顺序排列')
+        for index, segment in enumerate(self.removed):
+            lo, hi = segment.span
+            if hi > self.expected_total_code_points:
+                raise ValueError(
+                    f'removed[{index}].span={segment.span} 越过原文长度 '
+                    f'{self.expected_total_code_points}')
+            if index and self.removed[index - 1].span[1] > lo:
+                raise ValueError(f'removed[{index - 1}] 与 removed[{index}] 重叠')
+        return self
+
+
+class Stage0CandidatePlan(HumanApproval):
+    """审校台对一个机器候选的裁决（``adopt`` / ``dismiss``）。
+
+    ⚠ 三选一里的「采纳后再编辑」**不是第三个动作**，是 ``adopt`` 之后照常走
+    ``stage0.edit``：多一个复合动作就多一条要各自崩溃恢复的路，而这两步各自
+    都已经是一次原子提交。
+    """
+
+    action: Literal['adopt', 'dismiss']
+    candidate_revision_id: Sha256
+
+    #: 乐观锁：页面看到的当前稿。候选是相对**某一版当前稿**提出的，
+    #: 当前稿换了人还照旧点「采纳」，采纳的就不是他看过的那件事。
+    expected_revision_id: Sha256
+
+
 class RemovalReport(StrictModel):
-    """`stage0/removal_report.json`。删了哪些段 + 审阅状态 + 两个指纹。"""
+    """`stage0/removal_report.json`。**`stage0/revisions.json` 中 `current` 的物化投影。**
+
+    ⚠⚠ **它是投影不是权威**（2026-08-22 阶段 C）：内容逐字来自 `current` 指向的那条
+    revision，`approval` 逐字来自 `current.approval`。它仍然是 stage1~7 眼里那份
+    承重产物——路径、字节形态、来源账的键、`root_clean_sha1` 一个字没动——
+    但「它与 `clean_text.txt` 是不是同一版」不再靠跨文件事务保证：
+    任何时候按 `revisions.json` 重新物化一次即可，那是幂等纯函数。
+    """
 
     original_filename: str = Field(min_length=1)
 
@@ -470,9 +619,8 @@ class RemovalReport(StrictModel):
     #: 这才是 stage1 记的那个输入指纹（`partition_report.input_sha1`）。
     #:
     #: ⚠ **它的差异不可分解**：人那一趟能改字，于是「删了番外」与「人改了字」
-    #: 混在同一个指纹里。⇒ 审阅屏算 diff **只能拿 `_rounds/` 里的上一版比**，
-    #: 不能拿 `source ↔ clean` 比；`edited_by_human` 因此是唯一能一眼看出
-    #: 「这本书被人动过」的标志位，不许省。
+    #: 混在同一个指纹里。⇒ 审阅屏算 diff **只能拿链上的上一条 revision 比**，
+    #: 不能拿 `source ↔ clean` 比。
     clean_sha1: Sha1
 
     #: ⚠ 全语料 163 本**只出现过 `utf-8`，另四个零样本**——
@@ -499,13 +647,23 @@ class RemovalReport(StrictModel):
     #: 合成样本证明的是「这条分支被执行过」，**不是「在真实语料上验证过」**。
     warnings: list[Stage0Warning]
 
-    #: 机器输入与机器输出的稳定身份。正式 clean 可被人工编辑，因此不能拿 clean_sha1
-    #: 冒充机器结果；三方合并必须显式区分两者。
-    machine_normalized_source_sha1: Sha1
-    machine_clean_sha1: Sha1
-    machine_snapshot_sha256: Sha256
+    # ── 身份：这份投影照的是哪一版 ──────────────────────────────────────────
+    #
+    # ⚠ 2026-08-22 阶段 C 一次换掉六格：`round: int`（轮次编号）、三格 `machine_*`
+    #   （机器输入/输出/快照身份，是三方合并用来分辨「人动过没有」的）、
+    #   两格 `audit_*`（审计链头，是跨文件提交的对账位）。
+    #   它们守的事全部由 revision 链本身承担：
+    #     · 「第几版」→ 链上位置，且 `revision_id` 可复算 ⇒ 比递增整数更难伪造；
+    #     · 「人动过没有」→ `revision_origin`，不必再拿两个哈希相减去推断；
+    #     · 「审计链头对不对」→ `parent_revision_id` 逐条复算，不再需要第二份文件。
 
-    # ── 审阅状态 ────────────────────────────────────────────────────────────
+    #: 当前这一版的内容身份。**同时是编辑/裁决路的乐观锁**（`Stage0EditPlan`）。
+    revision_id: Sha256
+
+    #: 这一版是怎么来的。⚠ 它替代了旧的 `edited_by_human`：那一格是
+    #: `origin == 'human_edit'` 的同义反复，而它说不出「人采纳了机器新结果」
+    #: 与「人自己改的」之间的差别——两者的正文含义完全相反。
+    revision_origin: Stage0RevisionOrigin
 
     #: **两个分支**（2026-08-22 从四个平铺可空字段收成判别联合，见上）。
     #: `R-0.3b` 是 `HARD`：**不满足执行资格 ⇒ stage1 拒绝启动**。
@@ -517,28 +675,3 @@ class RemovalReport(StrictModel):
     #: ⚠ 按本层的设计，这道闸门是**盲区①（番外用纯数字章节标记写）全链唯一的防线**，
     #: 而 stage2 是第一个花钱的层 ⇒ 闸门必须在它之前、且必须有人真的看过。
     approval: Stage0Approval
-
-    #: 第几轮。人每编辑一次 +1，上一轮进 `_rounds/`（`R-0.5`）。
-    round: int = Field(ge=1)
-
-    #: 本轮有没有人工编辑。
-    #: ⚠ 它**不等于** `any(r.origin == 'human' for r in removed)`——
-    #: 人还可以**直接改正文**（`R-0.4`），那一类改动在 `removed[]` 里没有任何痕迹。
-    edited_by_human: bool
-
-    #: 当前报告对应的审计链位置；0/null 表示尚无决定记录。
-    audit_seq: int = Field(ge=0)
-    audit_head_sha256: Sha256 | None
-
-    @model_validator(mode='after')
-    def _audit_head_and_seq_agree(self) -> RemovalReport:
-        """审计链位置的两格必须同进同出。
-
-        ⚠ 这里曾另有 20 行在维持 `approved` / `approved_at` / `approval_origin` /
-        `approved_by` 四个平铺字段之间的互斥。那五条规则守的是同一件事——
-        **有两种状态、字段集不一样**——现在由判别联合在类型上表达，
-        「pending 却带着批准时间」从「构造得出来但会被拦下」变成「压根写不出来」。
-        """
-        if (self.audit_seq == 0) != (self.audit_head_sha256 is None):
-            raise ValueError('audit_seq=0 与 audit_head_sha256=null 必须同时成立')
-        return self

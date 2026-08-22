@@ -35,8 +35,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from contracts.artifacts import (
-    STAGE0_AUDIT_ENTRY, STAGE0_MACHINE_SNAPSHOT, STAGE0_MERGE_CANDIDATE,
-    STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
+    STAGE0_REMOVAL_REPORT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE1_PARTITION_REPORT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
     STAGE3_STYLE_EDIT,
@@ -70,7 +69,8 @@ from contracts.schema.api import (
     Stage0ApprovalRequest,
     Stage0Report,
     Stage0WarningView,
-    Stage0MergeDecisionRequest,
+    Stage0CandidateDecisionRequest,
+    Stage0CandidateView,
     Stage0Segment,
     Stage0Segments,
     Stage1ChapterRow,
@@ -130,9 +130,10 @@ from contracts.schema.stage0 import (
     ApprovedApproval, DropRatioWarning, EarlyCutWarning, ExternalFileRef,
     LongMarkerWarning, ManagedUploadRef, PendingApproval, SourceRef,
     Stage0Approval,
-    MachineRemovalSnapshot, RemovalReport, RemovedSegment, Stage0AuditEntry,
-    Stage0ConflictResolution, Stage0EditPlan, Stage0MergeCandidate,
-    Stage0MergeConflict, Stage0MergeDecisionPlan, Stage0Warning,
+    RemovalReport, RemovedSegment, RequestedRemoval,
+    Stage0CandidatePlan, Stage0Current, Stage0DismissedCandidate,
+    Stage0EditPlan, Stage0Revision, Stage0RevisionContent, Stage0Revisions,
+    Stage0Warning,
 )
 from contracts.schema.stage1 import (
     HookCopy, MainText, MainTextSection, NoisyDuplicateWarning, PartitionReport,
@@ -209,11 +210,12 @@ class DecodedArtifact:
 #: `STAGE2_CHAPTER_BLUEPRINTS`（2026-08-19）与 2026-08-22 阶段 B 那一批。
 #: **升版的正确形态就是这样**——在表里显式登记，而不是加一条迁移把旧字节读成新形状。
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
-    # ⚠ 2026-08-22 阶段 B 形状破坏（四份的理由逐条在 `_SHAPE_BREAKS` 里）。
-    STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport, 2),
-    STAGE0_MACHINE_SNAPSHOT: ArtifactSpec(MachineRemovalSnapshot, 2),
-    STAGE0_MERGE_CANDIDATE: ArtifactSpec(Stage0MergeCandidate, 2),
-    STAGE0_AUDIT_ENTRY: ArtifactSpec(Stage0AuditEntry),
+    # ⚠ 2026-08-22 阶段 C 新增：本层唯一可变的那一格（不可变 revision 链 + current
+    #   指针 + 待裁决候选 + 审批）。它是**新产物**因而恒 v1——盘上没有它的存量。
+    STAGE0_REVISIONS: ArtifactSpec(Stage0Revisions),
+    # ⚠ 2026-08-22 阶段 B（warnings/审批/source_ref）与阶段 C（身份六格换成
+    #   revision_id + revision_origin）两次形状破坏，理由逐条在 `_SHAPE_BREAKS` 里。
+    STAGE0_REMOVAL_REPORT: ArtifactSpec(RemovalReport, 3),
     # ⚠ 2026-08-22 阶段 B 形状破坏：`section_id` 删除、`source_chapter_label: str`
     #   改名改型为 `source_chapter_no: int` ⇒ 存量 v1 读不进来。
     #   **存量产物由谁重建：`stage1.partition` 免费重跑**（纯函数、零 LLM）；
@@ -391,7 +393,7 @@ __all__ = [
     # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实
     'StyleView', 'VoiceLine', 'HookStyleLine', 'DriftItem',
     'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest',
-    'Stage0ApprovalRequest', 'Stage0MergeDecisionRequest',
+    'Stage0ApprovalRequest', 'Stage0CandidateDecisionRequest', 'Stage0CandidateView',
     'Stage1Segment', 'Stage1Segments', 'Stage1ChapterRow', 'Stage1Chapters',
     'HookCopyView', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'LogStreamEvent', 'PreviewRequest', 'ErrorBody',
@@ -399,12 +401,13 @@ __all__ = [
     'InboxItem', 'InboxView', 'TrimResolutionRequest', 'NameMapApproveRequest',
     'ResidualAdoptionRequest',
     # 八层
-    'RemovalReport', 'RemovedSegment', 'Stage0EditPlan', 'Stage0Warning',
+    'RemovalReport', 'RemovedSegment', 'RequestedRemoval', 'Stage0EditPlan',
+    'Stage0CandidatePlan', 'Stage0Warning',
     'EarlyCutWarning', 'DropRatioWarning', 'LongMarkerWarning',
     'Stage0Approval', 'PendingApproval', 'ApprovedApproval',
     'SourceRef', 'ExternalFileRef', 'ManagedUploadRef',
-    'MachineRemovalSnapshot', 'Stage0MergeCandidate', 'Stage0MergeConflict',
-    'Stage0ConflictResolution', 'Stage0MergeDecisionPlan', 'Stage0AuditEntry',
+    'Stage0Revisions', 'Stage0Revision', 'Stage0RevisionContent',
+    'Stage0Current', 'Stage0DismissedCandidate',
     'MainText', 'MainTextSection', 'HookCopy', 'PartitionReport', 'Stage1Warning',
     'NoisyDuplicateWarning',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',

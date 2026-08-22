@@ -67,7 +67,7 @@ from contracts.schema.orchestration import (
     JobRecord, JobState, NovelOverview, QueueRun,
 )
 from contracts.schema.stage1 import HookCopy
-from contracts.schema.stage0 import RemovalReport, Stage0ConflictResolution, Stage0Warning
+from contracts.schema.stage0 import RemovalReport, Stage0Revision, Stage0Warning
 from contracts.schema.stage2 import (
     BlueprintProvenance, ConflictStage, GlobalProvenance, Setting, WorldRule,
 )
@@ -219,11 +219,16 @@ class Stage0Segments(StrictModel):
 
 
 class Stage0EditRequest(StrictModel):
-    '''人在 S-00 选择要剔除的分区；三格共同构成乐观锁。'''
+    '''人在 S-00 选择要剔除的分区；两格共同构成乐观锁。
 
-    expected_round: int = Field(ge=1)
+    ⚠ 2026-08-22 阶段 C：乐观锁从 `expected_round` + `expected_clean_sha1` 两格换成
+    一格 `expected_revision_id`——revision id 由内容与 parent 一起派生，
+    「基于哪一版」与「那一版长什么样」它一格就钉完了，而原来那两格之间
+    还可能互相矛盾。原文身份仍单独钉（它是整条链的前提，不是某一版的属性）。
+    '''
+
+    expected_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
     expected_normalized_source_sha1: Sha1
-    expected_clean_sha1: Sha1
     removed_segment_ids: list[str] = Field(default_factory=list)
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
@@ -242,14 +247,33 @@ class Stage0ApprovalRequest(StrictModel):
     reason: str = Field(min_length=1)
 
 
-class Stage0MergeDecisionRequest(StrictModel):
-    candidate_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
-    expected_round: int = Field(ge=1)
-    expected_normalized_source_sha1: Sha1
-    expected_clean_sha1: Sha1
-    resolutions: list[Stage0ConflictResolution] = Field(default_factory=list)
+class Stage0CandidateDecisionRequest(StrictModel):
+    """人对机器候选的三选一裁决（保留当前 = 不发这个请求 / 采纳 / 否掉）。
+
+    ⚠ 2026-08-22 阶段 C 取代 `Stage0MergeDecisionRequest`：diff3 与 typed 冲突下线
+    之后，页面上要决定的不再是「逐个冲突选 ours 还是 theirs」，而是
+    **整版留哪一版**——`resolutions` 那一格连同它守的东西一起没有了。
+    「采纳后再编辑」不是第三个动作，是 adopt 之后照常走 `POST /stage0/edit`。
+    """
+
+    candidate_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
+    expected_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
+
+
+class Stage0CandidateView(StrictModel):
+    """`GET /api/novels/:sid/stage0/candidate` 的那一份：**当前稿与候选并排**。
+
+    ⚠ 它把两版的**读数**一起给出来，前端不自己算：机器重跑到底改了什么，
+    唯一诚实的答案是逐版对比正文长度与剔除条数，而那是服务端已经有的事实。
+    """
+
+    candidate: Stage0Revision
+    current_revision_id: Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]
+    current_body_code_points: int = Field(ge=0)
+    current_removed_count: int = Field(ge=0)
+    current_origin: str = Field(min_length=1)
 
 
 class Stage1Segment(FrozenModel):

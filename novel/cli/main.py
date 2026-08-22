@@ -257,13 +257,14 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     if ctx.node == 'stage0.edit':
         edit_path = _valued(flags, '--apply-edit')
         edit_plan_path = _valued(flags, '--apply-edit-plan')
-        merge_plan_path = _valued(flags, '--apply-merge-plan')
-        if sum(value is not None for value in (edit_path, edit_plan_path, merge_plan_path)) != 1:
+        candidate_plan_path = _valued(flags, '--apply-candidate-plan')
+        if sum(value is not None
+               for value in (edit_path, edit_plan_path, candidate_plan_path)) != 1:
             raise TerminalState(
                 'stage0.edit 必须且只能给一种输入：--apply-edit / --apply-edit-plan / '
-                '--apply-merge-plan')
-        if merge_plan_path is not None:
-            art, report = removal.run_merge_plan(ctx, merge_plan_path)
+                '--apply-candidate-plan')
+        if candidate_plan_path is not None:
+            art, report = removal.run_candidate_plan(ctx, candidate_plan_path)
         elif edit_plan_path is not None:
             art, report = removal.run_edit_plan(ctx, edit_plan_path)
         else:
@@ -274,7 +275,8 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
             art, report = removal.run_edit(
                 ctx, edit_path or '', actor=actor, reason=reason)
         print(render(report))
-        print(f'  ✓ 人工编辑已落为第 {art.round} 轮；状态退回 pending，请重新批准')
+        print(f'  ✓ 已落为 revision {art.revision_id[:12]}…'
+              f'（{art.revision_origin}）；状态 {art.approval.status}')
         return X.OK
     if '--check-only' in tokens:
         if '--source' in tokens or '--dry-run' in tokens:

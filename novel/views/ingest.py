@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import os
 import re
-from bisect import bisect_left
 from collections import Counter
 from dataclasses import dataclass
 
 from contracts.schema.api import (
     HookCopyView,
+    Stage0CandidateView,
     Stage0EditRequest,
     Stage0PartitionPreview,
     Stage0PreviewChapter,
@@ -27,7 +27,7 @@ from contracts.schema.api import (
     Stage1Segments,
 )
 from contracts.schema.stage0 import (
-    RemovalReport, RemovedSegment, Stage0EditPlan, Stage0MergeCandidate,
+    RemovalReport, RequestedRemoval, Stage0EditPlan,
 )
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection, PartitionReport
 from novel import paths, prov
@@ -46,6 +46,7 @@ from novel.errors import (
     ResidualNonbody,
     SourceConflict,
     TooFewChapters,
+    UpstreamMissing,
 )
 from novel.orchestrator.state import readonly_ctx
 from novel.stages.stage0 import removal
@@ -55,12 +56,29 @@ from novel.store import ArtifactStore
 STAGE0_NODE = 'stage0.remove'
 
 
-def stage0_merge_candidate(
+def stage0_candidate(
     base: str | os.PathLike[str], sid: str,
-) -> Stage0MergeCandidate:
+) -> Stage0CandidateView:
+    """待裁决的机器候选 + 当前稿的读数，**并排给出**。
+
+    ⚠ 前端不自己算「机器重跑改了什么」：那是服务端已经有的事实（两版的正文长度、
+    剔除条数、起源），各算一遍就是两个会分家的落点。
+    """
+    from novel.stages.stage0 import revisions as rev
     store = _store(base, sid, STAGE0_NODE)
-    candidate, _ = store.read_own(Stage0MergeCandidate, removal.CANDIDATE_REL)
-    return candidate
+    log = rev.read(store)
+    if log is None or log.candidate_revision_id is None:
+        raise UpstreamMissing('stage0 当前没有待裁决的机器候选')
+    current = rev.current_revision(log)
+    return Stage0CandidateView(
+        candidate=rev.by_id(log, log.candidate_revision_id),
+        current_revision_id=current.revision_id,
+        current_body_code_points=current.content.body_code_points,
+        current_removed_count=len(current.content.removed),
+        current_origin=current.origin,
+    )
+
+
 STAGE1_NODE = 'stage1.partition'
 _PARAGRAPH_BREAK = re.compile(r'\n[ \t　]*\n')
 
@@ -216,7 +234,7 @@ def _stage0_segments(report: RemovalReport, text: str, clean: str) -> list[Stage
     out.extend(_gap_segments(text, cursor, len(text), scan))
     reconstructed.append(text[cursor:])
     if ''.join(reconstructed) != clean:
-        if report.edited_by_human:
+        if report.revision_origin == 'human_edit':
             # 人可以直接改正文；此时 source 坐标已无法诚实映射到 current clean。
             # 读屏仍展示当前正式正文，而不是因旧 source-minus-removed 恒等式崩掉。
             # 新的剔除选择仍应基于一次明确的合并/编辑计划，不能猜坐标迁移。
@@ -325,26 +343,19 @@ def stage0_partition_preview(
     )
 
 
-def _removed_from_segment(
-    segment: Stage0Segment,
-    line_breaks: list[int],
-) -> RemovedSegment:
+def _requested_removal(segment: Stage0Segment) -> RequestedRemoval:
+    """页面上的一个分区选择 → 一条**意图**（TODO-36：命令 DTO 与产物分家）。
+
+    ⚠ 这里此前造的是产物模型 `RemovedSegment`，于是视图层要把 `line_no` / 两条预览 /
+    `origin` 全都算一遍——而服务端在 `removal.verified_removals` 里**必然会再算一遍**
+    并以自己那份为准。两个落点算同一件事、只有一个说了算 ⇒ 视图那一份纯属摆设，
+    还让人误以为页面能决定 `origin`。现在它只说得出人真正选了什么。
+    """
     first = next((line.strip() for line in segment.text.splitlines() if line.strip()), '')
     marker_line = segment.marker_line or first or '人工剔除'
-    kind = segment.removed_kind or nonbody_kind(marker_line) or '番外'
-    marker_at = segment.text.find(marker_line)
-    marker_at = 0 if marker_at < 0 else marker_at
-    line_break = segment.text.find('\n', marker_at)
-    after_marker = segment.text[line_break + 1:] if line_break >= 0 else ''
-    return RemovedSegment(
-        kind=kind,
-        marker_line=marker_line,
-        line_no=bisect_left(line_breaks, segment.start + marker_at) + 1,
+    return RequestedRemoval(
+        kind=segment.removed_kind or nonbody_kind(marker_line) or '番外',
         span=(segment.start, segment.end),
-        code_points=segment.chars,
-        head_preview=removal.preview_text(after_marker, 80),
-        tail_preview=removal.preview_text(segment.text[-120:], 40),
-        origin=segment.origin or 'human',
     )
 
 
@@ -356,12 +367,12 @@ def stage0_edit_plan(
     '''把分区 id 选择转成完整计划；未知/过期 id 在任何子进程启动前拒绝。'''
     report = stage0_report(base, sid)
     stale = []
-    if request.expected_round != report.round:
-        stale.append(f'round 页面={request.expected_round} 当前={report.round}')
+    if request.expected_revision_id != report.revision_id:
+        stale.append(
+            f'revision 页面={request.expected_revision_id[:12]}… '
+            f'当前={report.revision_id[:12]}…')
     if request.expected_normalized_source_sha1 != report.normalized_source_sha1:
         stale.append('normalized_source_sha1 已变化')
-    if request.expected_clean_sha1 != report.clean_sha1:
-        stale.append('clean_sha1 已变化')
     if stale:
         raise HumanEditProtected('Stage 0 页面已过期，请刷新后重选：' + '；'.join(stale))
 
@@ -379,24 +390,15 @@ def stage0_edit_plan(
         raise HumanEditProtected('完结标记属于保留正文，不能在 Stage 0 作为剔除段选择')
 
     ordered = [segment for segment in view.segments if segment.id in selected]
-    original = ''.join(segment.text for segment in view.segments)
     clean = ''.join(
         segment.text for segment in view.segments if segment.id not in selected)
-    existing = {segment.span: segment for segment in report.removed}
-    line_breaks = [index for index, char in enumerate(original) if char == '\n']
-    removed = [
-        existing.get((segment.start, segment.end))
-        or _removed_from_segment(segment, line_breaks)
-        for segment in ordered
-    ]
     return Stage0EditPlan(
-        expected_round=report.round,
+        expected_revision_id=report.revision_id,
         expected_normalized_source_sha1=report.normalized_source_sha1,
-        expected_clean_sha1=report.clean_sha1,
         expected_total_code_points=report.total_code_points,
         clean_text=clean,
         clean_sha1=prov.content_sha1(clean.encode('utf-8')),
-        removed=removed,
+        removed=[_requested_removal(segment) for segment in ordered],
         actor=request.actor,
         reason=request.reason,
     )

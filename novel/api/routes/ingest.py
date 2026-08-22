@@ -3,7 +3,7 @@
 '''上传、Stage 0 审校动作与 Stage 1 只读对照。
 
 本模块的产物变更都经 jobs.run 起 CLI 子进程；HTTP 进程只写 _service 下的原始上传、
-作业记录、日志、编辑计划与 stage0 审批状态；merge 决定在失败后保留到成功重放。
+作业记录、日志、编辑计划与 stage0 审批状态；候选裁决在失败后保留到成功重放。
 '''
 from __future__ import annotations
 
@@ -15,8 +15,9 @@ from fastapi.concurrency import run_in_threadpool
 from contracts.schema.api import (
     HookCopyView,
     Stage0ApprovalRequest,
+    Stage0CandidateDecisionRequest,
+    Stage0CandidateView,
     Stage0EditRequest,
-    Stage0MergeDecisionRequest,
     Stage0PartitionPreview,
     Stage0Report,
     Stage0Segments,
@@ -25,7 +26,7 @@ from contracts.schema.api import (
     UploadResult,
 )
 from contracts.schema.orchestration import JobRecord
-from contracts.schema.stage0 import Stage0MergeCandidate, Stage0MergeDecisionPlan
+from contracts.schema.stage0 import Stage0CandidatePlan
 from novel.api.deps import checked_sid, get_base
 from novel.errors import NovelError, SourcePathRejected
 from novel.orchestrator import approvals, jobs, uploads
@@ -102,63 +103,60 @@ def approve_stage0(
     return record
 
 
-@router.get('/novels/{sid}/stage0/merge', response_model=Stage0MergeCandidate)
-def get_stage0_merge_candidate(
+@router.get('/novels/{sid}/stage0/candidate', response_model=Stage0CandidateView)
+def get_stage0_candidate(
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
-) -> Stage0MergeCandidate:
-    return ingest.stage0_merge_candidate(base, sid)
+) -> Stage0CandidateView:
+    return ingest.stage0_candidate(base, sid)
 
 
-def _run_merge_decision(
-    base: str, sid: str, request: Stage0MergeDecisionRequest, action: str,
+def _run_candidate_decision(
+    base: str, sid: str, request: Stage0CandidateDecisionRequest, action: str,
 ) -> JobRecord:
-    plan = Stage0MergeDecisionPlan(
+    plan = Stage0CandidatePlan(
         action=action,
-        candidate_id=request.candidate_id,
-        expected_round=request.expected_round,
-        expected_normalized_source_sha1=request.expected_normalized_source_sha1,
-        expected_clean_sha1=request.expected_clean_sha1,
-        resolutions=request.resolutions if action == 'accept' else [],
+        candidate_revision_id=request.candidate_revision_id,
+        expected_revision_id=request.expected_revision_id,
         actor=request.actor,
         reason=request.reason,
     )
-    plan_path = uploads.save_merge_plan(base, sid, plan)
+    plan_path = uploads.save_candidate_plan(base, sid, plan)
     record = jobs.run(
         base, 'stage0.edit', sid,
-        ['--apply-merge-plan', str(plan_path)], follow_check=False,
+        ['--apply-candidate-plan', str(plan_path)], follow_check=False,
     )
-    # ``ok`` and ``landed_red`` both mean the merge action landed; the latter
-    # only says its deterministic report still has red rows.  Process failure
-    # or an exception is not terminal for the merge transaction: retain the
-    # content-addressed decision so the next identical API request replays it.
+    # ``ok`` and ``landed_red`` both mean the decision landed; the latter only
+    # says its deterministic report still has red rows.  Process failure or an
+    # exception is not terminal: retain the content-addressed decision so the
+    # next identical API request replays it.
     if record.state in ('ok', 'landed_red'):
         try:
             uploads.discard_edit_plan(base, plan_path)
         except NovelError as exc:
             warnings.warn(
-                f'Stage 0 合并作业已结束，但一次性决定清理失败：{exc}',
+                f'Stage 0 候选裁决作业已结束，但一次性决定清理失败：{exc}',
                 RuntimeWarning, stacklevel=2,
             )
     return record
 
 
-@router.post('/novels/{sid}/stage0/merge/resolve', response_model=JobRecord)
-def resolve_stage0_merge(
-    request: Stage0MergeDecisionRequest,
+@router.post('/novels/{sid}/stage0/candidate/adopt', response_model=JobRecord)
+def adopt_stage0_candidate(
+    request: Stage0CandidateDecisionRequest,
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> JobRecord:
-    return _run_merge_decision(base, sid, request, 'accept')
+    return _run_candidate_decision(base, sid, request, 'adopt')
 
 
-@router.post('/novels/{sid}/stage0/merge/reject', response_model=JobRecord)
-def reject_stage0_merge(
-    request: Stage0MergeDecisionRequest,
+@router.post('/novels/{sid}/stage0/candidate/dismiss', response_model=JobRecord)
+def dismiss_stage0_candidate(
+    request: Stage0CandidateDecisionRequest,
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> JobRecord:
-    return _run_merge_decision(base, sid, request, 'reject')
+    return _run_candidate_decision(base, sid, request, 'dismiss')
 
 
 @router.post('/novels/{sid}/stage1/partition', response_model=JobRecord)
