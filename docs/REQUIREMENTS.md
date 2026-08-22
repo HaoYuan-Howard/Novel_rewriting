@@ -597,6 +597,29 @@ merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本�
   （消灭一组 nullable）同属这一批——都动形状，合并一次 `current_version` +1、
   一次 `_SHAPE_BREAKS` 登记、一次「存量由 stage1.partition 免费重建」的回答。
 
+### TODO-38 · 内容闸拒了，但账上不写「拒在哪个字段」
+
+`_service/llm_audit.jsonl` 的 `gate_decision` 记 `gate`（`schema` / `parse` / `validator`）、
+`reasoning_effort`、`sample`、`rung_index`、`resample`——**唯独不记那一拒的内容**。
+于是每一次「这一批改动有没有让 schema 拒变少」都只能靠「这一次过没过」来回答，
+而那是个 n=1 的信号。
+
+2026-08-22 实测坐实了它的代价：stage4 的响应侧四个枚举加前缀之前，一次全书规划
+**6 次 wire 全被内容闸拒**（`intent='turn'`、`narrative_role='recall'`，串表）；
+加前缀之后同一本书的收官轮仍有 1 次 `schema` 拒、同档重采后通过。
+⇒ **「前缀化把串表清零了」这句话证不出来**：账上只有 `gate: schema` 四个字，
+拒在哪个字段、是不是同一种错，一个字都没有。ir1 那次能报出「非法 enum 0」，
+靠的是当时人工盯着控制台，不是这条账。
+
+- [ ] `gate_decision` 增记一份**结构化的拒因摘要**：pydantic 的
+      `ValidationError.errors()` 取 `loc` + `type`（**不取 `input`**——那是模型正文，
+      会把原文片段写进账），按 `(字段路径, 错误类型)` 去重后计数。
+      `parse` 那一支记截断位置/首个非法 token 类别。
+- [ ] 有了它才谈得上一条读数：**「按字段分的内容闸拒分布」**，
+      而那正是判断「下一个该给哪个字段加前缀 / 换形状」的唯一依据。
+- [ ] ⚠ 不要顺手把整段响应写进账：`llm_audit.jsonl` 与产物同一棵目录树，
+      而正文外发边界（`R-12.x`）管的是同一批字节。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。
