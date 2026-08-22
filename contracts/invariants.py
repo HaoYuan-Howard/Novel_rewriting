@@ -794,12 +794,70 @@ RESPONSE_GOAL_INTENTS: Final = {
     'G_CLOSE': 'close', 'G_WITHHOLD': 'withhold', 'G_RESOLVE': 'resolve',
 }
 
-#: 四张响应表与它们的产物表**逐格对齐**（顺序也对齐——渲染进 prompt 的就是这个顺序）。
+#: ── 篇幅的**两级档位**（2026-08-22 批 4）─────────────────────────────────────
+#:
+#: ⚠⚠ **模型不再给 `budget_chars` 这个整数，它给两个档位，整数由代码算。**
+#: 从前模型要同时满足三件算术：逐单元正整数（`budget_int`）、每章之和落在
+#: `PLAN_BUDGET_BAND`（`budget_band`）、全书之和落在 `BOOK_BAND`（`plan_book_band`）——
+#: 而后两条要把五六十个整数先按章分组求和、再把二十多个章级合计再加一遍。
+#: 实测代价：批 2 run1 一次全书实付倒在 `budget_band`（ch18 压到 0.442×），**整份退回**。
+#: ⇒ 这三条从「模型的责任」变成 `novel/stages/stage4/measure.py::allocate_budgets`
+#: 的**后置条件**，而模型只表达它真正该表达的那件事：**哪一章重、章里哪一拍重**。
+#:
+#: 【为什么是两级而不是一级】它们是**两层不同的问题**，`PLAN_SYS` 的篇幅段里一直是
+#: 两条并列的规则：「哪一章重要」只有章级倍率能表达，「本章里哪里重要」只有拍级分配能表达。
+#: 压成一级就等于宣布其中一层不存在。
+#:
+#: 【两张表的取值面刻意零重词】前缀 `CH_` / `W_` 不重叠，**十个词干也两两不同**
+#: （`MAJOR/ABOVE/EVEN/BELOW/MINOR` vs `PEAK/STRONG/MID/QUICK/BRUSH`）——
+#: 它们在响应 JSON 里一个在章级、一个在单元级，正是 `RESPONSE_STRUCTURAL_ROLES`
+#: 那条注释说的「串行相邻且语义邻近」的形状。共用一个 `HEAVY`/`LIGHT` 词对
+#: 就会让串表串出来的值在另一张表里合法，而那要等整份响应收完才发现。
+RESPONSE_CHAPTER_WEIGHTS: Final = {
+    'CH_MAJOR': 'major', 'CH_ABOVE': 'above', 'CH_EVEN': 'even',
+    'CH_BELOW': 'below', 'CH_MINOR': 'minor',
+}
+CHAPTER_WEIGHTS: Final = ('major', 'above', 'even', 'below', 'minor')
+
+RESPONSE_UNIT_WEIGHTS: Final = {
+    'W_PEAK': 'peak', 'W_STRONG': 'strong', 'W_MID': 'mid',
+    'W_QUICK': 'quick', 'W_BRUSH': 'brush',
+}
+UNIT_WEIGHTS: Final = ('peak', 'strong', 'mid', 'quick', 'brush')
+
+#: 章级档位 → **这一章的目标倍率**（预算 ÷ 本章源字数）。
+#:
+#: ⚠⚠ **这张表的极差（1.18/0.84 = 1.40）故意宽过一个「怎么填都不会越界」的表**，
+#: 因为它**不是**最终倍率：`allocate_budgets` 先按它排出章间轻重，再整体归一化到
+#: 全书目标（= 全书源字数 × 1.0，`BOOK_BAND` 的中心），最后把冲出 `PLAN_BUDGET_BAND`
+#: 的章钳回带内、把残差在还有余量的章之间摊掉。
+#: ⇒ 档位表达的是**相对轻重**，绝对倍率由那三步决定。
+#: 取一张极差 ≤1.20 的窄表也能免掉钳制那一步（归一化后必然落在带内），但那样
+#: **批 2 三轮实付买来的章间轻重会被表本身压掉一半**——用钳制换表宽是这里的取舍。
+CHAPTER_WEIGHT_RATIO: Final = {
+    'major': 1.18, 'above': 1.08, 'even': 1.00, 'below': 0.92, 'minor': 0.84,
+}
+
+#: 单元档位 → **本章内的相对权重**。分配式是 `预算_i ∝ 源字数_i × 权重_i`
+#: ⇒ 「预算/源」相对本章均值的倍数恰好等于 `权重_i ÷ 权重的源字数加权均值`。
+#:
+#: ⚠ 两个端点值不是新发明的：`PLAN_SYS` 一直写着「重头拍给到本章均值的 2~3 倍、
+#: 快速带过的给到均值的一半以下」，`peak=2.6` / `brush=0.38` 就是那句话的取值面化。
+#: ⚠ **它同时决定 `structure_reshaped`（`R-5.19`）那条读数的分辨率**：那条读数问的是
+#: 「本章有没有哪一拍的相对倍率冲出 `PLAN_BUDGET_BAND`」，而 2.6 与 0.38 都在带外
+#: ⇒ 模型一旦真的标出重头拍或一带而过的拍，那条读数就会成立。这是有意的。
+UNIT_WEIGHT_FACTOR: Final = {
+    'peak': 2.6, 'strong': 1.7, 'mid': 1.0, 'quick': 0.6, 'brush': 0.38,
+}
+
+#: 六张响应表与它们的产物表**逐格对齐**（顺序也对齐——渲染进 prompt 的就是这个顺序）。
 _PLAN_RESPONSE_ENUMS: Final = (
     (RESPONSE_STRUCTURAL_ROLES, STRUCTURAL_ROLES, 'narrative_role'),
     (RESPONSE_DELIVERY_MODES, DELIVERY_MODES, 'delivery'),
     (RESPONSE_TEMPORAL_LINKS, TEMPORAL_LINKS, 'transition'),
     (RESPONSE_GOAL_INTENTS, GOAL_INTENTS, 'intent'),
+    (RESPONSE_CHAPTER_WEIGHTS, CHAPTER_WEIGHTS, 'chapter.weight'),
+    (RESPONSE_UNIT_WEIGHTS, UNIT_WEIGHTS, 'segment.weight'),
 )
 for _resp, _art, _field in _PLAN_RESPONSE_ENUMS:
     assert tuple(_resp.values()) == tuple(_art), \
@@ -816,6 +874,11 @@ for _a in _PLAN_RESPONSE_KEYS:
     for _b in (*_PLAN_RESPONSE_KEYS, *TIME_LAYERS):
         assert _a == _b or _a not in _b, \
             f'响应侧取值 {_a!r} 是 {_b!r} 的子串——串表就不会在 schema 闸上死掉了'
+
+#: 两张倍率表的键必须与它们的取值面逐格相同——少一格，`allocate_budgets` 会在一份
+#: **已经付过钱**的响应上 `KeyError`，而那是最贵的一种崩法。
+assert tuple(CHAPTER_WEIGHT_RATIO) == CHAPTER_WEIGHTS
+assert tuple(UNIT_WEIGHT_FACTOR) == UNIT_WEIGHTS
 
 #: 「这一章大到该做一次结构决策」的源内容单元数下限（`R-5.6` 的 `structure_changed`）。
 #: ⚠⚠ **它同时是 prompt 与判据的唯一落点。** 从前 prompt 里那个 `4` 是**手抄的**，

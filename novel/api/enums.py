@@ -78,6 +78,17 @@ _WITHHELD: dict[str, str] = {
     'NONBODY_HEAD_MAX_CP': '判据阈值（篇首非正文标记的最大码点数）',
     'NONBODY_MID_MAX_CP': '判据阈值（篇中同上）',
     'NONBODY_MARKER_WARN_CP': '判据阈值（长标记报警线）',
+    # ── stage4 篇幅的两级档位（批 4）──
+    'CHAPTER_WEIGHT_RATIO': '⚠ **容器，但仍然不发。** 它是档位 → 倍率的**分配系数**，'
+                            '而分配本身由 `measure.allocate_budgets` 做完并落盘'
+                            '（`PlanChapter.weight` 是决策、各拍 `budget_chars` 是结果，'
+                            '两样都在产物里）。发这张表，前端就能拿它自己算一遍'
+                            '「这一章该有多少字」并与产物比对——**那正是第二个判官**'
+                            '（`R-11.4`），而真正的那一个是 `budget_band` / `plan_book_band`。'
+                            '⚠ 前端要渲染的取值面是 `CHAPTER_WEIGHTS`（它照常发）',
+    'UNIT_WEIGHT_FACTOR': '同上，单元级那一张。⚠ 它还有一层：这些系数经过归一化与'
+                          '逐字下限重分配之后**不等于**最终比例，发过去会让前端算出一个'
+                          '与产物对不上的数，然后把差异当成 bug 报出来',
     # ── stage2（全书事实底座 / 逐章骨架）──
     'CHANGE_TYPES_ENUM': '⚠ **它是一个【开放】枚举，末尾那个 `…` 是语义的一部分**'
                          '（`stage2.md` §1.6）。发过去的后果是方向反的：前端会把它当成'

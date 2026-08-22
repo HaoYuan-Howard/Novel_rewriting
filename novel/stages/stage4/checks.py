@@ -123,6 +123,20 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
                    scanned=f'{len(ords)} 个章号'))
 
     # ── ② 引用与覆盖 ─────────────────────────────────────────────────────
+    #
+    # ⚠⚠ **2026-08-22（批 4）起，下面这几条在【生成路】上是代码的恒等式，不是模型的责任**：
+    #   `beat_ref` / `beat_coverage` / `structure_units` 由 `measure.expand_plan_beats`
+    #   的切分展开保证（`end_beat` 互不重复 + 最大的落在本章末单元 ⇒ 覆盖必然完整、
+    #   源内容单元必然不被拆开）；`budget_int` 与下面 ③ 的两条带由 `allocate_budgets`
+    #   保证（钳带 + 最大余数取整）。
+    # ⚠⚠ **所以它们一条都没撤，而这不是「留着好看」**：本层有**三条**输入路，
+    #   只有一条经过那两个函数——
+    #     · 付费生成（`write_plan`）        ⇒ 恒等式，这几条恒绿；
+    #     · `--apply-edit` 的人工稿        ⇒ **不经过展开与分配**（`plan_beat` 落盘时已 pop，
+    #       人产不出它）⇒ 这几条是它唯一的守卫；
+    #     · `--revalidate` / `--check-only` 的存量产物 ⇒ 同上，且那些产物可能产自**旧契约**。
+    #   ⇒ 判「谁在守」要连着问「哪条路」。把它们删成 `unverifiable` 就等于把后两条路裸奔。
+
     valid = {be.get('beat_id') for b in (blueprints.get('blueprints') or [])
              for be in (b.get('beats') or [])}
     used: set[str] = set()

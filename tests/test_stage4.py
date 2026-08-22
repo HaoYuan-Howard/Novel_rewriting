@@ -362,12 +362,19 @@ def test_the_response_enums_round_trip_through_the_single_mapping_landing_point(
     artifact = _ch4(1, [_b4('b1_01'), _b4('b1_02')])
     artifact['segments'][1]['delivery'] = 'summary'
     artifact['segments'][1]['transition'] = 'earlier'
+    # ⚠ 两级 `weight`（批 4）走的是同一条映射，而它们是**两张不同的表**——
+    #   章级那一张漏掉的话，定向修复的基线块会在那一格印产物值，模型照抄就被 schema 拒。
+    artifact['weight'] = 'major'
+    artifact['segments'][0]['weight'] = 'peak'
+    artifact['segments'][1]['weight'] = 'brush'
     before = json.loads(json.dumps(artifact))
 
     wire = encode_plan_baseline(json.loads(json.dumps(artifact)))
     assert wire['segments'][1]['delivery'] == 'D_SUMMARY'
     assert wire['segments'][1]['transition'] == 'X_EARLIER'
     assert wire['chapter_goal']['intent'] == 'G_ADVANCE'
+    assert wire['weight'] == 'CH_MAJOR'
+    assert [b['weight'] for b in wire['segments']] == ['W_PEAK', 'W_BRUSH']
 
     plan = {'output_chapters': [wire]}
     assert decode_plan_response(plan) > 0
@@ -430,14 +437,23 @@ def test_the_length_section_carries_the_three_lines_the_first_paid_run_bought():
 
     ⚠ 这三句都**不是新发明的约束**，是把三条既有 HARD 的后果提前说出来——
     prompt 不说，模型就只能靠一次付费重跑才知道。
+
+    ⚠⚠ **2026-08-22（批 4）起第一句换了责任方，而教训本身没有作废。**
+    `budget_chars` 由 `allocate_budgets` 算 ⇒ 「把那个数字调小到冲出下界」这件事
+    **结构上不可能**，靠 prompt 叮嘱换成了靠代码钳带。所以这里断言的不再是那句话，
+    而是**那件事**：见 `test_no_weighting_the_model_can_pick_pushes_a_chapter_out_of_band`。
+    另外两句仍然只有 prompt 能说，一个字都不许丢。
     """
     sysp = prompts.plan_system()
-    assert '两端都是硬的' in sysp, 'ch18 那次 0.442× 的教训丢了：只说了带、没说下界也会退回'
-    assert '合并本身就是一次结构决策' in sysp, \
+    assert '切分本身就是一次结构决策' in sysp, \
         '「一拍一单元 = 没做过分组决策」这句丢了 ⇒ structure_changed 会再红一次'
     assert '不想压掉的事实不要放进' not in sysp, \
         '那句劝退还在——它实测把写作单元从 57 推到 85、分组重画从 13 掉到 4'
     assert '末尾那个写作单元不要切得太碎' in sysp, 'goal_landing 那 8 章的教训丢了'
+    # ⚠ ch18 那次的根因是「模型把压缩理解成把数字调小」。数字已经不归它管了 ⇒
+    #   下发面里不许再留一句请它自己去配平总量的话。
+    assert '必须落在' not in sysp, \
+        '篇幅段还在要模型自己配平一个它已经不产的数——那是一道不存在的闸'
 
 
 def test_only_the_full_run_gets_a_book_total_line_under_the_sizes_table():
@@ -454,8 +470,13 @@ def test_only_the_full_run_gets_a_book_total_line_under_the_sizes_table():
     groups = group_beats(_BPS4, _MAIN4, bidx)
     full = source_chars_table(groups, bidx, book_total=True)
     one = source_chars_table({1: groups.get(1) or []}, bidx)
-    assert '全书合计' in full and '硬约束' in full, f'整跑那一路没给全书合计：{full}'
+    assert '全书合计' in full, f'整跑那一路没给全书合计：{full}'
     assert '全书合计' not in one, f'定向修复那一路印了一行假的全书合计：{one}'
+    # ⚠ 批 4：这一行说的是「盘子有多大」，**不再是**一道要模型对齐的硬约束
+    #   （它根本不产那个整数了）。留一句已经不成立的硬约束比不说更糟——
+    #   模型会为一个不存在的闸去凑数。
+    assert '硬约束' not in full, f'表底还在宣布一道模型够不着的硬约束：{full}'
+    assert '由代码定在' in full, f'表底没说清这个数是谁定的：{full}'
 
 
 def test_a_book_that_overshoots_while_every_chapter_stays_in_band_is_caught():
@@ -542,8 +563,9 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
     """A legal response must be constructible from the current prompt ID spaces.
 
     This is stronger than checking ``needs_id_spaces ⊆ provides_id_spaces``:
-    it builds a schema-valid model response, expands ``plan_beats`` through the
-    production join, validates all typed fact refs, and runs the complete judge.
+    it builds a schema-valid model response, expands the ``end_beat`` cut points
+    through the production join, validates all typed fact refs, and runs the
+    complete judge.
     """
     from contracts.schema.stage4 import PlanResponse
     from novel.stages.stage4 import checks
@@ -576,8 +598,11 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
         for output_index, unit_id in enumerate(order):
             moved = len(source_units) >= 4
             segments.append({
-                'plan_beats': [unit_id],
-                'budget_chars': 100,
+                # ⚠ 一个写作单元 = 一个源内容单元 ⇒ 它的切点就是它自己。
+                #   `order` 把最后一个提到最前面，而**切点集合不变**——
+                #   变的只有数组序，也就是成稿序。这正是批 4 编码的形状。
+                'end_beat': unit_id,
+                'weight': 'W_MID',
                 # ⚠ 这里写的是**响应侧带前缀的取值**：合成的是一份「模型响应」，
                 #   而响应侧与产物侧从 2026-08-22 起是两张表
                 #   （`contracts/invariants.py::RESPONSE_STRUCTURAL_ROLES`）。
@@ -596,6 +621,7 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
         chapters.append({
             'output_ordinal': ordinal,
             'from_source_ordinals': [ordinal],
+            'weight': 'CH_EVEN',
             'chapter_goal': {
                 'intent': 'G_ADVANCE',
                 'fact_refs': [{

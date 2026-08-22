@@ -82,18 +82,24 @@ def _target_response(before, groups, ordinal):
     """把盘上那一章翻成一份**模型会返回的**响应。
 
     ⚠ 基线块与响应**不是同一样东西**，而这个装置正踩在两者的差上：
-    `_response_baseline` 产的是发给模型的**基线**，`spine` 为 `None` 时它把那一格整个删掉
+    `_response_baseline` 产的是发给模型的**基线**，三个「产物侧可以没有、响应侧必填」的
+    字段（`spine` 与两级 `weight`）为 `None` 时它把那一格整个删掉
     （产物侧允许「没做过这个决策」，恒等基线就是——而本文件的盘面正是恒等基线）；
-    模型**返回**的响应里 `spine` 却是必填的。补上这一格，模拟的才是一份合法响应；
+    模型**返回**的响应里它们却是必填的。补上这三格，模拟的才是一份合法响应；
     不补就等于让装置去验证「模型漏填必填字段会被拒」，而那是另一条测试的事。
     """
     chapter = plan._response_baseline(plan._chapter_by(before)[ordinal], groups, ordinal)
+    # ⚠ 章级档位在定向修复那一路**不起作用**（本章总量由代码钉死在基线合计上），
+    #   但它仍是必填字段 —— 契约与「这一次它管不管用」是两件事。
+    chapter['weight'] = 'CH_EVEN'
     members = {plan_beat_id(ordinal, index): group
                for index, group in enumerate(groups.get(ordinal) or [], 1)}
     for segment in (chapter.get('segments') or []):
+        segment['weight'] = 'W_MID'
         # ⚠ 补的是**本单元里一个 event 的编号**，不是数字：响应侧 `spine` 从 2026-08-22
         #   起收 `beat_id`（模型引用可靠、数数不可靠），填个 1 会被载体当场拒。
-        segment['spine'] = members[segment['plan_beats'][0]][0]
+        #   ⚠ 恒等基线一个源内容单元一个写作单元 ⇒ `end_beat` 指的就是它自己那一格。
+        segment['spine'] = members[segment['end_beat']][0]
     return chapter
 
 

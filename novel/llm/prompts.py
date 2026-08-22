@@ -27,10 +27,10 @@ from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS, BEAT_MIN_CHARS, BEAT_NATURAL_MAX,
     BOOK_BAND, CHANGE_TYPES_ENUM, HINGE_KINDS, INVENT_ALLOW,
     INVENT_FORBID, INVENT_PRINCIPLE, NAME_DISTINCTIVENESS, PLACE_MODES,
-    PLAN_BUDGET_BAND, PLAN_RECONSTRUCT_MIN_UNITS, RESPONSE_DELIVERY_MODES,
-    RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES, RESPONSE_TEMPORAL_LINKS,
-    RESPONSE_TIME_LAYERS, STYLE_WORDS, TIME_LAYERS,
-    VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
+    PLAN_BUDGET_BAND, PLAN_RECONSTRUCT_MIN_UNITS, RESPONSE_CHAPTER_WEIGHTS,
+    RESPONSE_DELIVERY_MODES, RESPONSE_GOAL_INTENTS, RESPONSE_STRUCTURAL_ROLES,
+    RESPONSE_TEMPORAL_LINKS, RESPONSE_TIME_LAYERS, RESPONSE_UNIT_WEIGHTS,
+    STYLE_WORDS, TIME_LAYERS, VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -83,6 +83,13 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     'D_MODES': '|'.join(RESPONSE_DELIVERY_MODES),
     'X_LINKS': '|'.join(RESPONSE_TEMPORAL_LINKS),
     'G_INTENTS': '|'.join(RESPONSE_GOAL_INTENTS),
+    # 篇幅的两级档位（批 4）。⚠ **它们把 `budget_chars` 整个换掉了**：模型给档位、
+    #   `measure.allocate_budgets` 算整数 ⇒ `budget_int` / `budget_band` /
+    #   `plan_book_band` 三条从模型的责任变成代码的后置条件。
+    #   ⚠ 两张表同样只渲染**带前缀的键**，产物取值面（`CHAPTER_WEIGHTS` / `UNIT_WEIGHTS`）
+    #   一个字都不该出现在下发面上——理由同上面那四张。
+    'CH_WEIGHTS': '|'.join(RESPONSE_CHAPTER_WEIGHTS),
+    'W_WEIGHTS': '|'.join(RESPONSE_UNIT_WEIGHTS),
     # 这两项必须从常量渲染，避免 prompt 与判据使用不同数值。
     #   ⚠ `BEAT_NATURAL` 是**一对**（下界恒等于 `BEAT_MIN_CHARS`——拍就是按它切的），
     #   与判据那一侧的报警线 `BEAT_ALERT_MIN/MAX` 是**故意的两对数**，别混。
