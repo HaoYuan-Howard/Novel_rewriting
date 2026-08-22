@@ -210,6 +210,35 @@ def test_the_plan_prompt_gives_both_bands_and_says_which_one_is_per_chapter():
         '旧那句「每一章都是这个倍率」还在——放宽了带却仍然命令模型章章同倍率'
 
 
+def test_the_length_section_carries_the_three_lines_the_first_paid_run_bought():
+    """⭐⭐ **三句话，三条实测落红买回来的**（2026-08-22 批 2 第一次全书付费）。
+
+    放宽逐章带 + 改口篇幅段之后跑了一次全书规划（1 次实付，flash/high，一次过），
+    章级倍率分布确实变宽了（极差 0.168 → 0.741），但同一份计划落了三条 HARD：
+
+    · `budget_band`：ch18 被压到 **0.442×**（应在 886~1329 字，只给了 490）。
+      模型不是贴着下界，是**冲出去**——它把「压缩」理解成了把那个数字调小。
+      ⇒ 补「两端都是硬的，再要压就合进 `summary`，不是改这个数字」。
+    · `structure_changed`：ch6/19/22 与恒等基线逐格相同。写作单元 **57 → 85**
+      （几乎一拍一单元）、「分组重画」这根轴 **13/13 → 4/13**。主嫌是
+      `delivery` 那句新说明的后半截「不想压掉的事实不要放进 `summary`」——
+      它把合并说成了一件有代价的事，于是模型不敢合了。
+      ⇒ 那半句改成中性，并明说「合并本身就是一次结构决策」。
+    · `goal_landing`：8 章的 `end_hook_goal` 落在倒数第二三个单元上。
+      与上一条同根：末单元被切碎了。⇒ 补一句「末尾那个单元不要切得太碎」。
+
+    ⚠ 这三句都**不是新发明的约束**，是把三条既有 HARD 的后果提前说出来——
+    prompt 不说，模型就只能靠一次付费重跑才知道。
+    """
+    sysp = prompts.plan_system()
+    assert '两端都是硬的' in sysp, 'ch18 那次 0.442× 的教训丢了：只说了带、没说下界也会退回'
+    assert '合并本身就是一次结构决策' in sysp, \
+        '「一拍一单元 = 没做过分组决策」这句丢了 ⇒ structure_changed 会再红一次'
+    assert '不想压掉的事实不要放进' not in sysp, \
+        '那句劝退还在——它实测把写作单元从 57 推到 85、分组重画从 13 掉到 4'
+    assert '末尾那个写作单元不要切得太碎' in sysp, 'goal_landing 那 8 章的教训丢了'
+
+
 def test_only_the_full_run_gets_a_book_total_line_under_the_sizes_table():
     """⭐ 表底那一行「全书合计」在**定向修复**那一路会是假的：它只发目标章那一格。
 
