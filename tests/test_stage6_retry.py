@@ -231,7 +231,14 @@ def test_failed_retry_keeps_paid_initial_candidate_and_rationale(
         artifact, transport, written = _run_case(
             monkeypatch, root, initial, failed)
         retry = artifact.provenance.candidate_retries[0]
-        assert len(transport.calls) == 2
+        # `invalid` 是这里唯一被**载体闸**拒的一种（`require`：缺 rationale）。
+        # 2026-08-22 起除截断外的每一种拒绝都先同档重采一次（`_worth_resampling`）
+        # ⇒ 它的 wire 多一次；上限没破（`HOOK_RETRY_RUNGS` 单档 × MAX_SAMPLES_PER_RUNG=2，
+        # `tools/current_corpus_paid_preview.py` 早按这个口径算）。
+        # 其余四种要么过了载体闸、被 stage6 自己的业务判据拒（wrong/duplicate/same_hard），
+        # 要么根本没到内容闸（transport）。
+        wire = 3 if mode == 'invalid' else 2
+        assert len(transport.calls) == wire
         assert retry.status == expected_status
         assert retry.after_hard == expected_after
         assert (retry.output is not None) is has_output
@@ -240,7 +247,7 @@ def test_failed_retry_keeps_paid_initial_candidate_and_rationale(
         assert [candidate.text for candidate in artifact.candidates[1:]] == initial[1:]
         assert artifact.rationale == '初始整组三候选说明。'
         assert artifact.provenance.usage is not None
-        assert artifact.provenance.usage.calls_made == 2
+        assert artifact.provenance.usage.calls_made == wire
         assert written and written[0][1] is artifact
     finally:
         shutil.rmtree(root, ignore_errors=True)

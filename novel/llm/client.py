@@ -8,7 +8,8 @@ client.py —— `ask_text` / `ask_json`。**降级阶梯只有一份，两个�
   ① **答案流丢了。** DeepSeek 会把整段答案写进 `reasoning_content` 而 `content` 返回**空串**，
      `finish_reason='stop'`——**不是截断**。实测：模型把整章正文写进了推理里。
      ⚠ 不从 `reasoning` 里把答案抠出来——那里面混着推敲过程，救回来的是**半成品**。
-     ⇒ 2026-08-20 起这一档先**同档重采一次**（`MAX_SAMPLES_PER_RUNG`）再决定降档。
+     ⇒ 2026-08-20 起这一档先**同档重采一次**（`MAX_SAMPLES_PER_RUNG`）再决定降档；
+     2026-08-22 起**除截断外的每一种拒绝**都走这条重采（见 `_worth_resampling`）。
      实测（flash 迁移，三本书）：`stage4.plan` 的 `high` 档空正文而 `reasoning_chars`
      上万、`finish_reason=stop`，旧阶梯把它当「这一档不行」直接降档 ⇒ 3 本里 2 本的
      计划**从未在 `high` 档被评估过**，一上来就掉进取证能力受损的 `low`。
@@ -18,11 +19,14 @@ client.py —— `ask_text` / `ask_json`。**降级阶梯只有一份，两个�
      `reasoning_effort='high'` 时模型可能把大半预算花在思考上，正文写到一半就到顶了，
      于是**截断表现为 JSON 解析失败**（`finish_reason='length'`）。
      ⇒ 降 effort 就是**给正文腾预算**，这才是阶梯管用的原因。
+     ⚠ 它是**唯一不做同档重采**的一类：同参数重采只会把推理再写满一遍。
 
   ③ **合法 JSON 但结构上是空的。** 这一类与①②**必须走同一条阶梯**（原型 F-125）。
      实测：某次规划调用拿回 `{"reconstruction_strategy": "…"}`——0 个输出章、正常结束、
      4477 token 里推理占 4317。它是合法 JSON，于是一路放行**并进了缓存**；
      下游把它摊成 **74 条**「这一拍没有给预算」。**74 条派生症状盖住了一句话能说清的事实。**
+     ⚠ 它与①同源（想得多、交得少），因此**也先同档重采**再降档——
+     `stage4.plan` 实测 `high` 档被拒后直接降档，白花掉整条阶梯再回 `high` 才成功。
 
 ⚠⚠ **原型把这条阶梯在两个入口各写了一遍。** 两份逐行相同的东西必然分家——
 本文件只有一份 `LADDER`，两个入口都从它走。
@@ -96,17 +100,34 @@ NOTHINK_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('low', False),)
 MAX_SAMPLES_PER_RUNG: Final = 2
 
 
-def _answer_lost(resp: ChatResponse) -> bool:
-    """模块 docstring ① 的实测形状：正文空 + `finish_reason='stop'`（**不是截断**）。
+def _worth_resampling(resp: ChatResponse) -> bool:
+    """这一档被拒之后，值不值得**同档再采一个样本**（而不是直接降档）。
 
-    只有这一形状触发同档重采：
-    · 截断（`finish_reason='length'`）降档才对——要腾的是 `max_tokens` 预算，
-      同参数重采大概率把推理再写满一遍；
-    · 非空正文被内容闸拒（`parse` / `require` / `schema` / `validator`）也不重采
-      ——那是形状/契约问题，同一参数大概率拿回同一份形状，真要换样本走
-      `--resample` / 定向修复，不该在阶梯里白付一次。
+    规则只有一条例外：**截断（`finish_reason='length'`）不重采。**
+    那是模块 docstring ②——要腾的是 `max_tokens` 预算，同参数重采大概率把推理
+    再写满一遍；降 effort 才是给正文腾预算。其余一律重采一次：①的答案流丢失、
+    ③的空壳，以及 `parse` / `schema` / `validator` / `empty_text` 这些形状拒绝。
+
+    ⚠⚠ **这里把 ① 已经确立的结论推广到了 ③ 与内容闸拒，别按旧字面撤回。**
+    2026-08-20 版只让 ①（`content` 空 + `stop`）重采，理由写着「非空正文被内容闸拒
+    也不重采——那是形状/契约问题，同一参数大概率拿回同一份形状」。三条实测推翻了它：
+
+    · **真发循环 `use_cache=False`** ⇒ 同档重采拿的是新样本，不是缓存里那一份。
+      模块 docstring ① 自己就写着「温度采样下同参数重发拿到的是新样本」——
+      那句话对 ③ 与内容闸拒同样成立，当时只是没推广过去。同档两次真实调用实测
+      completion 29202 vs 33231（`stage4.plan`，2026-08-20），样本确实不同。
+    · `stage4.plan` 盘上 5 次带失败的跑里 **3 次是 `high→low→low/nothink→high`**：
+      整条阶梯走完**再重来**，而最后成功的那次仍是 `high`。既然第 4 次 high 能过，
+      第 2 次 high 就能过——中间两档是白花。
+    · 另 2 次以 `high→low` 收尾 ⇒ **最终计划产自降档档位**。那不是省钱是降质，
+      同 `docs/REQUIREMENTS.md` TODO-32「最终稿产自哪一档」那条读数。
+
+    盘上 22 次实付合计 completion 378 368，其中 **180 334（47.7%）** 花在没被采纳的档位上。
+
+    ⚠ `MAX_SAMPLES_PER_RUNG` 的值**不动** ⇒ 每档 wire 硬上限仍是 2，
+    `tools/current_corpus_paid_preview.py` 的上限口径不受影响；变的只是**触发面**。
     """
-    return resp.finish_reason == 'stop' and not (resp.content or '').strip()
+    return resp.finish_reason != 'length'
 
 
 def rungs_from_effort(effort: str | None) -> tuple[tuple[str, bool], ...]:
@@ -351,7 +372,8 @@ class LlmClient:
                 f'拒绝={why}')
 
         for i, (effort, thinking) in enumerate(active_rungs):
-            # 答案流丢失（_answer_lost）先同档重采一次再决定降档，见 MAX_SAMPLES_PER_RUNG。
+            # 被拒后先同档重采一次再决定降档（_worth_resampling；截断除外）,
+            # 见 MAX_SAMPLES_PER_RUNG。
             for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
                 resp, key, _cached, attempt_id = self._call_keyed(
                     system, user, effort=effort, thinking=thinking, json_mode=False,
@@ -371,7 +393,7 @@ class LlmClient:
                         sample=sample, progress=progress)
                     return text
                 self.cache.evict(key)
-                resample = sample < MAX_SAMPLES_PER_RUNG and _answer_lost(resp)
+                resample = sample < MAX_SAMPLES_PER_RUNG and _worth_resampling(resp)
                 self._settle_gate(
                     purpose=purpose, attempt_id=attempt_id, source='wire',
                     accepted=False, gate=gate, rungs=active_rungs, index=i,
@@ -501,7 +523,8 @@ class LlmClient:
             errors.append(f'{head} {why}')
 
         for i, (effort, thinking) in enumerate(active_rungs):
-            # 答案流丢失（_answer_lost）先同档重采一次再决定降档，见 MAX_SAMPLES_PER_RUNG。
+            # 被拒后先同档重采一次再决定降档（_worth_resampling；截断除外）,
+            # 见 MAX_SAMPLES_PER_RUNG。
             for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
                 resp, key, _cached, attempt_id = self._call_keyed(
                     system, user, effort=effort, thinking=thinking, json_mode=True,
@@ -520,7 +543,7 @@ class LlmClient:
                     return obj
                 # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
                 self.cache.evict(key)
-                resample = sample < MAX_SAMPLES_PER_RUNG and _answer_lost(resp)
+                resample = sample < MAX_SAMPLES_PER_RUNG and _worth_resampling(resp)
                 self._settle_gate(
                     purpose=purpose, attempt_id=attempt_id, source='wire',
                     accepted=False, gate=gate, rungs=active_rungs, index=i,

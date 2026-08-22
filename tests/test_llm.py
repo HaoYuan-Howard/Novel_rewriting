@@ -250,6 +250,8 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
     ⇒ 一次「high 被拒、退到 low 才成功」的调用，事后从账本上读起来像两次成功的调用，
     理由一个字都不在（被拒的那份响应随即被 `evict` 从盘上删掉）。
     ⇒ `gate` 是机器可数的那一半，`reason` 是人读的那一半，两个都要有。
+    ⚠ 这条守的是**出声**，不是「退了哪一档」：2026-08-22 起内容闸拒的下一步改成
+    同档重采（`_worth_resampling`），`next_*` 因此指回本档——事件仍须说真话。
     """
     events: list[dict] = []
     ctx = _ctx()
@@ -260,14 +262,15 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
     got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
     assert got.voice == {'a': 1}
-    assert t.rungs == [LADDER[0], LADDER[1]], '被拒之后必须真的退了一档'
+    assert t.rungs == [LADDER[0], LADDER[0]], '被拒之后必须真的再采一次'
     rejected = _observed(events)
     assert len(rejected) == 1, '降一档只出一次声：成功那一档不出声'
     e = rejected[0]
     assert e['gate'] == gate and e['gate'] in REJECT_GATES
     assert (e['source'], e['json_mode']) == ('wire', True)
     assert (e['reasoning_effort'], e['thinking']) == LADDER[0]
-    assert (e['next_effort'], e['next_thinking']) == LADDER[1]
+    # 2026-08-22 起内容闸拒的下一步是**同档重采**（`_worth_resampling`）⇒ next 指回本档。
+    assert (e['next_effort'], e['next_thinking']) == LADDER[0]
     assert e['exhausted'] is False
     assert (e['purpose'], e['node'], e['sid']) == ('p', 'stage3.style', '123')
     assert e['finish_reason'] == 'stop'
@@ -308,9 +311,19 @@ def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
     assert (rejected[1]['next_effort'], rejected[1]['next_thinking']) == LADDER[1]
 
 
-def test_a_nonempty_content_gate_rejection_does_not_resample():
-    """⚠ 非空正文被内容闸拒（schema 形状不对）也不重采——同一参数大概率拿回
-    同一份形状。真要换样本走 `--resample` / 定向修复，不在阶梯里白付。"""
+def test_a_nonempty_content_gate_rejection_resamples_once_before_stepping_down():
+    """⭐ 非空正文被内容闸拒（schema 形状不对）**先同档重采一次**再降档。
+
+    ⚠⚠ **这条测试 2026-08-22 反转过，反例证据记在这里，别按旧字面改回去。**
+    它原来叫 `..._does_not_resample`，断言「内容闸拒绝必须每档一采、直接降档」，
+    理由是「同一参数大概率拿回同一份形状」。推翻它的是盘上读数：
+    `stage4.plan` 5 次带失败的跑里 **3 次走成 `high→low→low/nothink→high`**
+    ——整条阶梯白走一遍再回到 `high` 才成功；另 2 次以 `high→low` 收尾，
+    即**最终计划产自降档档位**。22 次实付里 47.7% 的 completion 花在没被采纳的档位上。
+    而真发循环 `use_cache=False` ⇒ 同档重采拿的本来就是新样本。
+    ⚠ 唯一仍然直接降档的是**截断**，那一条由
+    `test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget` 守着。
+    """
     events: list[dict] = []
     ctx = _ctx()
     ctx.observer = events.append
@@ -322,8 +335,8 @@ def test_a_nonempty_content_gate_rejection_does_not_resample():
     got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
     assert got.voice == {'a': 1}
-    assert t.rungs == list(LADDER[:2]), '内容闸拒绝必须每档一采、直接降档'
-    assert [e['resample'] for e in _observed(events)] == [False]
+    assert t.rungs == [LADDER[0], LADDER[0]], '内容闸拒绝必须先同档重采一次'
+    assert [e['resample'] for e in _observed(events)] == [True]
 
 
 def test_a_long_rejection_reason_is_truncated_and_marked():
@@ -456,7 +469,7 @@ def test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget():
     assert [e['resample'] for e in _observed(events)] == [False, False]
 
 
-def test_a_legal_but_structurally_empty_json_goes_down_the_same_ladder():
+def test_a_legal_but_structurally_empty_json_is_rejected_like_a_parse_failure():
     """⚠⚠ **「解析失败」与「合法 JSON 但结构上是空的」是同一类故障**（原型 F-125）。
 
     实测：某次规划调用拿回 `{"reconstruction_strategy": "…"}`——**0 个输出章**、
@@ -468,7 +481,8 @@ def test_a_legal_but_structurally_empty_json_goes_down_the_same_ladder():
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
     out = _client(t).ask_json('sys', 'usr', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == list(LADDER[:2])
+    # 与①同源（想得多、交得少）⇒ 先同档重采；它**不是**截断，不该靠降档腾预算。
+    assert t.rungs == [LADDER[0], LADDER[0]]
 
 
 def test_each_rung_is_its_own_cache_entry():
@@ -654,15 +668,23 @@ def test_a_structurally_empty_shell_is_evicted_from_the_cache():
     ——**那不是重试，是把同一个结果读了两遍**。
     ⚠ 这里**不适用**产物那条「修不了的原样留着」（判据 7）：产物留着是给人看的，
     一份坏缓存留着不会被人看见，只会被下一次重跑静默地当成新结果。
+
+    ⚠⚠ **判据方式 2026-08-22 换过一次，不是放宽。** 同档重采上线后，被拒的那份与
+    救回来的那份**共用同一个缓存键**（键含 `effort`/`thinking`，同档必然相同）
+    ⇒ 「那个键还在不在」不再区分得开「空壳被踢了」与「什么都没写」。
+    改成**直接读那个键**：留下的必须是好的那一份。这比数文件名更强——
+    它直接断言缓存里不是空壳，而不是绕着推。
     """
     d = Path(tempfile.mkdtemp())
+    cache = ResponseCache(d)
     shell = ChatResponse(content='{"voice": {"a": 1}}', finish_reason='stop')
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
-    _client(t, cache=ResponseCache(d)).ask_json('s', 'u', model_cls=Resp, purpose='t')
+    _client(t, cache=cache).ask_json('s', 'u', model_cls=Resp, purpose='t')
 
-    keys = {p.name for p in d.iterdir()}
-    assert f'{cache_key(_json_req(*LADDER[0]))}.json' not in keys, '空壳还留在缓存里'
-    assert f'{cache_key(_json_req(*LADDER[1]))}.json' in keys, '好的那一份该留着'
+    kept = cache.get(cache_key(_json_req(*LADDER[0])))
+    assert kept is not None, '救回来的那一份该留着'
+    assert 'surface_habits' in kept.content, '空壳还留在缓存里'
+    assert cache.get(cache_key(_json_req(*LADDER[1]))) is None, '不该走到第二档'
 
 
 def _json_req(effort: str, thinking: bool) -> ChatRequest:
@@ -876,7 +898,7 @@ def test_a_wrongly_shaped_value_walks_the_ladder_instead_of_being_accepted(bad):
                       if i < 1 else OK_JSON)
     out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == list(LADDER[:2]), '形状错的那一份被放行了'
+    assert t.rungs == [LADDER[0], LADDER[0]], '形状错的那一份被放行了'
 
 
 def test_a_legitimate_false_or_zero_is_not_mistaken_for_a_missing_key():
@@ -909,7 +931,7 @@ def test_an_empty_collection_is_still_treated_as_the_f125_shell():
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
     out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == list(LADDER[:2]), '空集合被当成可用的响应放行了'
+    assert t.rungs == [LADDER[0], LADDER[0]], '空集合被当成可用的响应放行了'
 
 
 def test_an_explicit_require_may_only_narrow():

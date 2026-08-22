@@ -86,9 +86,14 @@ def test_gate_decisions_and_adoption_answer_which_rung_was_finally_used():
 
     这正是「最终采纳档位」的读法：**不看**「最后一条 ok 行」（首档那行也是 ok），
     看 `artifact_adoption → attempt_id → 成本账行` 这条联结。
+
+    ⚠ **首档这一份刻意是【截断】的**（`finish_reason='length'`），不是随便一个坏 JSON：
+    2026-08-22 起除截断外的每一种拒绝都先**同档重采**（`_worth_resampling`），
+    而本条测试承重的是最后那两行——「被拒的是 `high`、采纳的是 `low`」这条**跨档**反查。
+    换成非截断的坏响应，两端会落在同一档上，这条断言就不再证明任何事。
     """
     ctx, d = _ledgered_ctx()
-    bad = ChatResponse(content='这不是 JSON', finish_reason='stop')
+    bad = ChatResponse(content='{"voice": {"a": 1}, "surface_hab', finish_reason='length')
     t = FakeTransport(responder=lambda _r, i: bad if i == 0 else OK_JSON)
     client = _client(t, ctx)
     client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
