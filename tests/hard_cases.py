@@ -82,7 +82,10 @@ def _rn_txt_stale() -> list:
         findings=required, scanned='0 条映射', baseline_line='0 字', chapter_scanned='0 章',
         txt_state=(False, '盘上的成书与产物记的指纹不符——它被人动过或是旧的'),
         approved=False, stale=[], missing=[], hook_stale=False, identity=None,
-        title_line='书名：略', body_count=0)
+        title_line='书名：略', body_count=0,
+        # ⚠ 本反例针对的是 `rn_txt_stale`，来源那一格给 `fresh` 是为了**不让它也红**：
+        #   一个反例只许红它点名的那一条（本文件整份的判准）。
+        upstream=('fresh', 'match', 6))
     return [f for o in outcomes for f in o.findings]
 
 

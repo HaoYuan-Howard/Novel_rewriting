@@ -467,9 +467,19 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 | `PlanGoal` 的 `FactRef.ref` | 模型填 | 代码校验并自动补尾单元的拍 | 书1 `goal_landing` |
 | `Secret.setup_chapters` | 模型填 | 由 `reader_reveal_events` 推上界（同章即无效） | 书3 `secret_setup_order` |
 | `present_names` | 自由文本 `list[str]` | 收成 `char_id` 引用，从已知集合里选 | 书3 `present_names_invented` |
-| stage7 家族/宅邸称呼 | 不在替换面 | 从 `surname_map` 自动派生 `X家`/`X府` | 书2 的 35 条高置信残留（`孙家/孙府/宋家/宋府`） |
+| ~~stage7 家族/宅邸称呼~~ | ~~不在替换面~~ | ~~从 `surname_map` 自动派生 `X家`/`X府`~~ | ~~书2 的 35 条高置信残留~~ |
 
-- [ ] 上表六项按序施工（锚点那行杠杆最大：错误面从「两字段互相一致」缩成
+⚠ **stage7 那一行 2026-08-22 销账，它是一次误判**：`RESIDUAL_HIGH_STEMS`
+（`contracts/invariants.py`）里本来就有 `家/府/氏/宅/门`，那 35 条**一直**被标成
+`confidence='high'` 并带着算好的 `suggest`，`--adopt-residual high` 是现成的
+**0 成本**命令，书2 那 35 条正是被它一条命令清掉的（盘上
+`outputs/_ab/flash/把夫君做成丧尸后_*/stage7/name_map_edit.json` 里那 4 条就是它写的）。
+⚠⚠ **而且不该改成自动**：`novel/stages/stage7/subs.py::residual_scan` 的注释记着反例
+——「不允**许家**人」里就含「许家」，自动替换会写出「不允苏家人」。
+真正的缺口是那条命令把机器派生的条目记成了 `origin='human'`，已随
+2026-08-22 的 stage7 前置整改批修掉（`origin` 加 `adopted` 一格）。
+
+- [ ] 上表**前五项**按序施工（锚点那行杠杆最大：错误面从「两字段互相一致」缩成
       「短语是否逐字存在」，且模型不必数段落 ⇒ reasoning 同步下降）。
 - [ ] 枚举下推到解码器 + 取值面命名不可混淆（`summary`/`close` 那两条实测）。
 - [ ] **方向警告**：flash 在 `stage2.blueprint` 比 pro **少想 36%**（113,529 vs

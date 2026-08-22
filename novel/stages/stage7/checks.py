@@ -110,7 +110,8 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                     family_members: dict[str, tuple[str, ...]],
                     dup: list[int], missing: list[int],
                     invalids: list[str], post_units: list[Unit],
-                    title_line: str) -> list[Finding]:
+                    title_line: str,
+                    dropped_reason: list[str] = ()) -> list[Finding]:
     """对一份映射表 + 一次替换跑全部确定性判据 → `[Finding]`。**唯一判定落点。**"""
     fs: list[Finding] = []
     chars = name_map.get('characters') or []
@@ -125,13 +126,25 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                           detail=f'映射表与人物表对不上：漏 {miss_cid[:6]}、多 {extra_cid[:6]}、'
                                  f'renamed 却没给新名 {bad_shape[:6]}',
                           evidence=[str(x) for x in miss_cid + extra_cid + bad_shape]))
+    # ── 「为什么不改」这一格的**两侧**（`R-10.13①` 的另一半）──
+    #    ⚠ 旧实现只查 `renamed=false` 那一侧，而 `renamed=true` 那一侧盘上同时存在
+    #      `null` 与 `''` 两种「没有」，**谁也没在看**。现在 `_build` 把 true 那侧一律
+    #      归零（载体兜底），归一掉一个空串没有信息不报；**归一掉实质内容要报**——
+    #      那说明模型把「为什么不改」写到了一个改了名的角色上，是它误读了契约。
     no_reason = [c.get('char_id') for c in chars
                  if not c.get('renamed') and not (c.get('not_renamed_reason') or '').strip()]
-    if no_reason:
-        fs.append(finding('rn_no_reason',
-                          detail=f'{len(no_reason)} 个角色不改名却没说为什么：{no_reason[:8]}'
-                                 f'——「不该改」与「漏了」在产物里长得一样',
-                          evidence=[str(x) for x in no_reason]))
+    if no_reason or dropped_reason:
+        bits = []
+        if no_reason:
+            bits.append(f'{len(no_reason)} 个角色不改名却没说为什么：{no_reason[:8]}'
+                        f'——「不该改」与「漏了」在产物里长得一样')
+        if dropped_reason:
+            bits.append(f'{len(dropped_reason)} 个**已改名**角色带着「不改的理由」，'
+                        f'落盘前已归零：{list(dropped_reason)[:6]}'
+                        f'——改了名还给出不改的理由是自相矛盾，'
+                        f'这一格由代码回填、不是模型的自由度')
+        fs.append(finding('rn_no_reason', detail='　※ '.join(bits),
+                          evidence=[str(x) for x in no_reason] + list(dropped_reason)))
 
     # ── ② `build_subs` 攒下来的冲突（判定与展开在同一次遍历里产出）──
     for rule, detail, ev in problems:
@@ -287,9 +300,15 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                                            key=lambda kv: -(kv[1]['ratio'] or 0))
                        if b['total'])
         sug = sorted({(r['unit'], r['suggest']) for r in hi if r['unit'] and r['suggest']})
+        # ⚠⚠ **两个数，不是一个。** `hits` 是**处数**（＝ `baseline` 各 stem 分子之和，
+        #    覆盖率就是拿它算的）；`len(residual)` 是**呈现行数**——`residual_scan`
+        #    把同一处重叠窗口的 low 行并过（「迟迟未」+「迟未登」→ 一行）。
+        #    两个数在本条 detail 里**并排出现**，只报一个会让人拿行数去除 total。
+        hits = sum(b['residual'] for b in baseline.values())
         fs.append(finding(
             'rn_residual_stem',
-            detail=f'{len(residual)} 处旧姓字落在替换面之外（其中 {len(hi)} 处高置信）：'
+            detail=f'{hits} 处旧姓字落在替换面之外，归并重叠窗口后 {len(residual)} 条候选'
+                   f'（其中 {len(hi)} 条高置信）：'
                    + '；'.join(f"{r['where']}「{r['hit']}」…{r['context']}…"
                                for r in residual[:4])
                    + f'　※ 基线 {bl}'
@@ -414,8 +433,9 @@ _FROM_FINDINGS = (
 def check(*, findings: list[Finding], scanned: str, baseline_line: str,
           chapter_scanned: str, txt_state: tuple[bool, str], approved: bool,
           stale: list[str], missing: list[str], hook_stale: bool,
-          identity: dict | None, title_line: str, body_count: int) -> list[Outcome]:
-    """一份 `name_map.json` → **33 个 `Outcome`，一条判据一个**。
+          identity: dict | None, title_line: str, body_count: int,
+          upstream: tuple[str, str, int]) -> list[Outcome]:
+    """一份 `name_map.json` → **34 个 `Outcome`，一条判据一个**。
 
     ⚠ `scanned` 一律填：**一个不知道自己扫了多少的绿灯没有判别力**。
     两条判据的分母与其余的不同，各自单给：
@@ -431,6 +451,29 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
     for rule in _FROM_FINDINGS:
         out.append(ran(rule, by_rule.get(rule, []),
                        scanned=_special.get(rule, scanned)))
+
+    # ── 上游来源：**先报来源再报判定**（`Q-4`）────────────────────────────────
+    #    ⚠ 这不是新机制，是把 `assemble` 一直在算的那条结论搬到复检也看得见的地方，
+    #      因为**人在 approve 拍板，而 approve 在 assemble 之前**。
+    #    ⚠ 三态分开（`Q-2`）：`stale` 是一句可复算的断言（哪条边变了），
+    #      `unknown` 只是「来源账证明不了」——合成一句 `!= fresh` 就是替一件
+    #      算不出来的事下结论。
+    up_state, up_reason, up_edges = upstream
+    out.append(ran(
+        'rn_upstream_stale',
+        [] if up_state == 'fresh' else [finding(
+            'rn_upstream_stale',
+            detail=(f'这份映射表**不是**拿盘上现在这几份上游算的（{up_reason}）——'
+                    f'人物表或成稿在它落盘之后变过。'
+                    f'⚠ `stage7.approve` 拍的板是照旧输入拍的，'
+                    f'而 `stage7.assemble` 会拒绝拿它拼书。'
+                    f'漂的只是派生字段就重跑 `--recheck`（0 成本）；'
+                    f'人物表真的多了/少了角色时 `rn_llm_shape` 会同时红，那要重跑本节点'
+                    if up_state == 'stale' else
+                    f'**证明不了**这份映射表出自当前上游（{up_state}/{up_reason}）——'
+                    f'「对不上」与「说不出」是两件事，这里是后者，不要读成前者'),
+            evidence=[up_state, up_reason])],
+        scanned=f'来源账记的 {up_edges} 条上游边'))
 
     # ── 交付物的账：它是纯文本、带不了来源账，指纹记在产物里 ────────────────
     ok, detail = txt_state

@@ -24,6 +24,16 @@ import { Prose } from '@/components/ui/Prose'
 import { cx } from '@/lib/cx'
 
 /**
+ * `extra_subs[].origin` 的人读名。**判定上两者同权**（后端 `ExtraSub.origin` 那一格
+ * 写着理由），这里分开只是让人看清「这条是谁加的」。
+ * ⚠ 取不到就原样显示那个值 —— 前端只呈现判定，不替后端补一个它没给的结论。
+ */
+const ORIGIN_LABEL: Record<string, string> = {
+  human: '人加的',
+  adopted: '批量采纳的',
+}
+
+/**
  * 人名替换 + 成书。
  * 新旧人名表并排 + 逐章替换前后对照，人定稿。
  * 「漏网叫法候选」是唯一能发现人名表本身漏了人的地方 —— 放在最上面。
@@ -403,18 +413,18 @@ export function Stage7Screen() {
                   </Panel>
 
                   <Panel className="flex flex-col gap-8 px-18 py-14">
-                    <span className="text-section font-semibold">人工补的替换</span>
+                    <span className="text-section font-semibold">补充的替换</span>
                     {d.extra_subs.length ? (
                       d.extra_subs.map((s, i) => (
                         <Mono key={i} className="text-body">
                           {s.old} → {s.new}
                           <span className="ml-6 text-micro text-ink-5">
-                            {s.origin === 'human' ? '人加的' : s.origin}
+                            {ORIGIN_LABEL[s.origin] ?? s.origin}
                           </span>
                         </Mono>
                       ))
                     ) : (
-                      <span className="text-sm2 text-ink-4">没有人工补的替换。</span>
+                      <span className="text-sm2 text-ink-4">没有补充的替换。</span>
                     )}
                   </Panel>
 

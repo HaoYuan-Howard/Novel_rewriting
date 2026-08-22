@@ -105,6 +105,22 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
         '不手补字段冒充当前产地',
     ),
+    'stage7/name_map.json': (
+        2,
+        '2026-08-22 stage7 前置整改批：`NameDecision` 加跨字段 validator——'
+        '`renamed=true` 时 `not_renamed_reason` **只准是 `null`**。'
+        '契约注释早就这么写着，但 `_build` 一直原样透传 ⇒ 盘上空串合法通行，'
+        '收窄之后带 `\'\'` 的存量一律读不进来。'
+        '（同批的 `ExtraSub.origin` 加 `adopted` 一格是 Literal **加**格，'
+        '旧值 `human` 仍合法 ⇒ 那一项不构成破坏。）',
+        '**存量代价为零，形状破坏趁这个窗口**：`outputs/` 下 8 本书全部停在 stage1，'
+        '无一本有 `stage7/`。唯二两份 v1 产物在 `outputs/_ab/flash/`'
+        '（下划线开头，不是书目录，是 flash A/B 的实验副本），'
+        '而它们**在本批之前就已经读不进来了**——同目录的 '
+        '`stage0/removal_report.json` 是 v1（当前 v3）、`stage1/*` 三份是 v1（当前 v2），'
+        '还带着阶段 C 已下线的 `stage0/_audit/edit_1.json` ⇒ 一律作废不迁移。'
+        '重建路径：`stage7.rename` 重跑（付费）或 `--apply-edit`（0 成本）',
+    ),
 }
 
 

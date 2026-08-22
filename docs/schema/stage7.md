@@ -18,9 +18,9 @@ Stage 7 负责人物真名替换与最终成书。模型只产改名决定；映
 
 | 字段 | 类型 | 内容 |
 |---|---|---|
-| `surname_map` | `dict[str,str]` | 原姓到新姓 |
-| `characters` | `NameDecision[]` | 每个 `char_id` 的完整决定 |
-| `extra_subs` | `ExtraSub[]` | 人工补充映射 |
+| `surname_map` | `dict[str,str]` | 原姓到新姓。口径是**本书全部改名角色的姓**；【姓氏族群】（字面同姓且 ≥2 人）只是其中必须共姓的子集，单人映射合法 |
+| `characters` | `NameDecision[]` | 每个 `char_id` 的完整决定。⚠ `renamed=true` 时 `not_renamed_reason` **只准是 `null`**（载体强制） |
+| `extra_subs` | `ExtraSub[]` | 补充映射。`origin` 分 `human`（人手写）与 `adopted`（`--adopt-residual` 批量采纳），**判定同权，分开只为审计** |
 | `subs` | `dict[str,str]` | 代码展开后的完整替换表 |
 | `kept` | `str[]` | 必须保持原样的称呼 |
 | `applied` | `Applied` | 正文与文案各映射的命中次数 |
@@ -161,13 +161,13 @@ v1 骨架为：
 
 ## 六、现行判据
 
-当前注册表共 **33 条**：**15 hard、8 info、3 metric、7 unver**。owner 分布为
-`stage7=20`、`stage5=2`、`stage2=1`、`None=10`。
+当前注册表共 **34 条**：**15 hard、9 info、3 metric、7 unver**。owner 分布为
+`stage7=20`、`stage5=2`、`stage2=2`、`None=10`。
 
 | 严重度 | 当前规则 id |
 |---|---|
 | hard | `rn_llm_shape` · `rn_map_coverage` · `rn_new_collide` · `rn_ambiguous` · `rn_shared_surface` · `rn_surface_short` · `rn_already_present` · `rn_title_dropped` · `rn_semantic_marker_changed` · `rn_kinship_touched` · `rn_surname_split` · `rn_overlap` · `rn_residual_key` · `rn_book_incomplete` · `rn_txt_stale` |
-| info | `rn_new_collide_human` · `rn_shared_surface_human` · `rn_new_in_source` · `rn_invalid_drafts` · `rn_residual_stem` · `rn_no_reason` · `rn_kept_contains_mapped` · `rn_identity_baseline` |
+| info | `rn_new_collide_human` · `rn_shared_surface_human` · `rn_new_in_source` · `rn_invalid_drafts` · `rn_residual_stem` · `rn_no_reason` · `rn_kept_contains_mapped` · `rn_upstream_stale` · `rn_identity_baseline` |
 | metric | `rn_stem_noise` · `rn_report` · `rn_style_report` |
 | unver | `rn_identity_blind` · `rn_taste_unver` · `rn_coverage_unver` · `rn_title_unver` · `rn_not_approved` · `rn_body_stale` · `rn_hook_missing` |
 
