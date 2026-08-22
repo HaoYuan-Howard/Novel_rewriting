@@ -474,8 +474,11 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 枚举，flash 照样编：产出的非法值 `'summary'` 恰是相邻字段 `delivery` 的合法值
 （两个闭合枚举串行）、`'close'` 是「收尾」的自然说法而取值面里叫 `payoff`
 （命名不直观）。⇒ 对 Literal 字段有效的不是「再收窄」，是**取值面之间不可混淆**，
-以及**把枚举下推到解码器**——`json_mode` 只保证「是合法 JSON」，不保证合乎 schema
-（`novel/llm/transport.py::ChatRequest` 有 `json_mode` 这一格可挂）。
+以及**把枚举下推到解码器**——⚠ 这条**挂不上 `json_mode`**：它只保证「是合法 JSON」、
+不保证合乎 schema（TODO-40 实测：开着它照样出 `G_TURN` / `R_SCENE` 这种越界枚举），
+真要下推得要 `json_schema` 那种 constrained decoding，而 DeepSeek V4 拒收
+（`novel/stages/stage2/contract.py`，2026-08-20 文档探针）。
+⚠ 而且 `json_object` 本身已于 2026-08-22 关掉（`novel/llm/client.py::JSON_OBJECT_MODE`）。
 
 杠杆最大的一类是「代码本来就知道、却去问模型」——把模型判断换成模型给原料 + 代码算：
 
@@ -683,10 +686,11 @@ merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本�
 （JSON 落进 reasoning、content 为空；成因是 JSON grammar 在推理边界判定之前就生效）。
 官方服务端内部看不见，但两种机制都在对方那一侧。
 
-⚠ `spine`（批 3）只是**调节因子不是根因**：批 2 高档 1/5 空 → 批 3 4/4 空，
-Fisher 单侧 p≈0.04 ⇒ 那 14 行大概率抬高了概率（要求逐拍数事、挑主干，
-更容易诱发「边写 JSON 边算」）；但同一失败模式在 08-19、08-20 就出现过 ⇒ 先于它存在。
-**缩短 spine 只能降率，不能归零。**
+⚠⚠ **本段下面那条关于 `spine` 的推断已被同日实测推翻，保留原文只是为了让撤回看得见。**
+原文：「批 2 高档 1/5 空 → 批 3 4/4 空，Fisher 单侧 p≈0.04 ⇒ 那 14 行大概率抬高了概率」。
+**实测：同一份批 3 prompt 当天重采是 3/7（43%），4/4 没复现** ⇒ 那个基线不稳，
+`spine` 是不是调节因子**现有数据答不了**。见本条目下方「结果」。
+（仍然成立的只有一句：同一失败模式在 08-19、08-20 就出现过 ⇒ **先于 `spine` 存在**。）
 
 **预登记的判据（花钱之前写在这里）：**
 

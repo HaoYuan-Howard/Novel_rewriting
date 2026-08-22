@@ -104,6 +104,30 @@ LADDER: Final[tuple[tuple[str, bool], ...]] = (
 #: 选用哪条由 `DEEPSEEK_THINKING` 决定（`novel/config.py::THINKING_MODES`）。
 NOTHINK_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('low', False),)
 
+#: `ask_json` 还发不发 `response_format={'type':'json_object'}`。**2026-08-22 起：不发。**
+#:
+#: ⚠⚠ **这是一次用户裁决，不是实验判出来的**——实验只做到「方向对但 n 不够」
+#: （`docs/REQUIREMENTS.md` TODO-40：同场次 A/B，`off` 0/4 空 vs `on` 3/7 空，
+#: Fisher 单侧 p≈0.21）。裁决的理由是**收益/代价不对称**，不是显著性：
+#:
+#: · **它买不到任何我们没有的东西。** `json_object` 只保证「是合法 JSON」，
+#:   **不保证合乎 schema**——实测两臂都在同一种 enum 越界上翻车（`G_TURN` / `R_SCENE` /
+#:   多出 `rationale_note`）。而「是不是合法 JSON」`ask_json` 本来就自己判：
+#:   `_strip_fences` 扛围栏、`json.loads` 扛语法、`require` 扛空壳、`model_validate` 扛形状。
+#:   关掉它之后 4/4 仍然解析得动。
+#: · **它疑似买来一个很贵的失败形态。** 官方 JSON Output 文档自己写着这个模式
+#:   「偶尔返回空 content」；账上 flash@high 63/397（15.9%）空正文全部出自这个模式，
+#:   而 pro 0/255、flash@low 0/77 —— 空响应要么白付一次重采，要么把最终产物推到 `low`
+#:   （已知劣化）。
+#:
+#: ⚠ **代价要认两条**：① `json_mode` 进 `cache_payload` ⇒ 翻这一位**让既有响应缓存全部作废**
+#: （翻的时候主仓 583 份）；② 本仓历史上 `json_mode=False` 只跑过 4 次真调用（全是 TODO-40
+#: 那 4 个样本、同一个节点）——**5/6 个付费节点在这一位上是 0 覆盖**，别把「plan 上没事」
+#: 读成「全链没事」。第一次带它的整跑要盯着看。
+#: ⇒ 撤回只需把这一格改回 `True`：每次调用的 `json_mode` 都进账本与 `_provenance`，
+#:   两种口径的响应事后分得开。
+JSON_OBJECT_MODE: Final = False
+
 #: 答案流丢失（模块 docstring ①）时，同一档最多采几个样本。**2 = 首发 + 一次重采。**
 #:
 #: ⚠ 这是「重采」不是「重试」：重试扛**网络**（`_send_attempts`，429/5xx/超时），
@@ -506,7 +530,7 @@ class LlmClient:
                 f'显式传只许**收窄**——放宽等于给这个调用点开一个「它特殊」的口子')
 
         policy = cache_policy or self.ctx.cache
-        self._preflight(system, user, rungs=active_rungs, json_mode=True,
+        self._preflight(system, user, rungs=active_rungs, json_mode=JSON_OBJECT_MODE,
                         max_tokens=max_tokens, purpose=purpose)
 
         def inspect_response(
@@ -549,7 +573,7 @@ class LlmClient:
         # 同 ask_text：任一档已有合格缓存时，本次必须是 0 次真请求。
         for i, (effort, thinking) in enumerate(active_rungs):
             got = self._read_cached(
-                system, user, effort=effort, thinking=thinking, json_mode=True,
+                system, user, effort=effort, thinking=thinking, json_mode=JSON_OBJECT_MODE,
                 max_tokens=max_tokens, purpose=purpose, progress=progress,
                 cache_policy=policy)
             if got is None:
@@ -572,7 +596,7 @@ class LlmClient:
             self._observe_rung_rejected(
                 purpose=purpose, attempt_id=attempt_id, rungs=active_rungs,
                 index=i, source='cache',
-                gate=gate, why=why, resp=resp, json_mode=True, progress=progress)
+                gate=gate, why=why, resp=resp, json_mode=JSON_OBJECT_MODE, progress=progress)
             errors.append(f'{head} {why}')
 
         for i, (effort, thinking) in enumerate(active_rungs):
@@ -580,7 +604,7 @@ class LlmClient:
             # 见 MAX_SAMPLES_PER_RUNG。
             for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
                 resp, key, _cached, attempt_id = self._call_keyed(
-                    system, user, effort=effort, thinking=thinking, json_mode=True,
+                    system, user, effort=effort, thinking=thinking, json_mode=JSON_OBJECT_MODE,
                     max_tokens=max_tokens, purpose=purpose, use_cache=False,
                     progress=progress, cache_policy=policy)
                 obj, why, content, gate = inspect_response(resp)
@@ -604,7 +628,7 @@ class LlmClient:
                 self._observe_rung_rejected(
                     purpose=purpose, attempt_id=attempt_id, rungs=active_rungs,
                     index=i, source='wire',
-                    gate=gate, why=why, resp=resp, json_mode=True,
+                    gate=gate, why=why, resp=resp, json_mode=JSON_OBJECT_MODE,
                     resample=resample, sample=sample, progress=progress)
                 errors.append(f'{head} {why}')
                 if not resample:

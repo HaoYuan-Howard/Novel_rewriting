@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 import novel.llm.keepsake as keepsake_mod
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
-from novel.llm.client import LlmClient
+from novel.llm.client import JSON_OBJECT_MODE, LlmClient
 from novel.llm.ledger import AUDIT_REL, CostLedger, audit_path
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.paths import ANSWER_LOST_DIRNAME
@@ -74,9 +74,11 @@ def test_wire_rows_carry_the_attempt_identity_triplet():
     assert len(rows) == 1
     row = rows[0]
     assert isinstance(row['attempt_id'], str) and len(row['attempt_id']) == 16
+    # ⚠ `json_mode` 跟着 `JSON_OBJECT_MODE`，别写死：这条守的是「账上那个指纹
+    #   算的就是真发出去的那个请求」，不是「ask_json 恒发 json_object」。
     expected_req = ChatRequest(
         model=client.model, system='sys', user='usr',
-        reasoning_effort='high', thinking=True, json_mode=True,
+        reasoning_effort='high', thinking=True, json_mode=JSON_OBJECT_MODE,
         max_tokens=row['max_tokens'])
     assert row['request_fingerprint'] == cache_key(expected_req)
     assert row['response_sha256'] == hashlib.sha256(
@@ -198,7 +200,8 @@ def test_the_lost_answer_is_kept_on_disk_and_the_audit_row_points_at_it():
     row = rows[0]
     assert (row['finish_reason'], row['content_chars']) == ('stop', 0)
     assert row['reasoning_chars'] == len(LOST.reasoning)
-    assert (row['source'], row['json_mode'], row['purpose']) == ('wire', True, 'p')
+    assert (row['source'], row['json_mode'],
+            row['purpose']) == ('wire', JSON_OBJECT_MODE, 'p')
     assert row['dump_error'] is None
     assert row['dump'] == f'{ANSWER_LOST_DIRNAME}/{row["attempt_id"]}.json'
     # 正文一个字都不进账——它只在留证文件里。

@@ -29,8 +29,8 @@ from novel.config import Config, DEFAULT_MODEL, load_config, parse_dotenv
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.client import (
-    DEFAULT_MAX_TOKENS, LADDER, MAX_SAMPLES_PER_RUNG, NOTHINK_RUNGS,
-    REJECT_GATES, REJECT_REASON_MAX, LlmClient, LlmFailed,
+    DEFAULT_MAX_TOKENS, JSON_OBJECT_MODE, LADDER, MAX_SAMPLES_PER_RUNG,
+    NOTHINK_RUNGS, REJECT_GATES, REJECT_REASON_MAX, LlmClient, LlmFailed,
 )
 from novel.llm.ledger import CostLedger, combine_usage
 from novel.llm.transport import (
@@ -267,7 +267,10 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
     assert len(rejected) == 1, '降一档只出一次声：成功那一档不出声'
     e = rejected[0]
     assert e['gate'] == gate and e['gate'] in REJECT_GATES
-    assert (e['source'], e['json_mode']) == ('wire', True)
+    # ⚠ 跟着 `JSON_OBJECT_MODE` 走，别写死：2026-08-22 起 `ask_json` 不再发
+    #   `response_format`（用户裁决，见那一格的注释）。这条断言守的是「事件说的是
+    #   **真的发出去的那一位**」，不是「ask_json 恒 True」。
+    assert (e['source'], e['json_mode']) == ('wire', JSON_OBJECT_MODE)
     assert (e['reasoning_effort'], e['thinking']) == LADDER[0]
     # 2026-08-22 起内容闸拒的下一步是**同档重采**（`_worth_resampling`）⇒ next 指回本档。
     assert (e['next_effort'], e['next_thinking']) == LADDER[0]
@@ -728,9 +731,15 @@ def test_a_structurally_empty_shell_is_evicted_from_the_cache():
 
 
 def _json_req(effort: str, thinking: bool) -> ChatRequest:
+    """`ask_json` 在某一档上**真的会发出去**的那个请求（缓存键就按它算）。
+
+    ⚠ `json_mode` 跟着 `JSON_OBJECT_MODE` 走，**别写死 `True`**：写死之后这几条
+    缓存断言测的就不是「客户端存/取的是同一个键」，而是「客户端恒发 json_object」
+    ——那一位是可裁决的（2026-08-22 已关），而缓存键的一致性不是。
+    """
     return ChatRequest(model=DEFAULT_MODEL, system='s', user='u',
                        reasoning_effort=effort, thinking=thinking,
-                       json_mode=True, max_tokens=DEFAULT_MAX_TOKENS)
+                       json_mode=JSON_OBJECT_MODE, max_tokens=DEFAULT_MAX_TOKENS)
 
 
 def test_a_truncated_response_is_never_written_to_the_cache():
