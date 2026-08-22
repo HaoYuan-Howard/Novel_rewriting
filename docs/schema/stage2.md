@@ -229,7 +229,9 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 - `stage2.global`：主路径生成全书抽取；`--purge-role` 付费重划 `role/fate`；
   `--resample` 仅在已有 `global_grounding.INVALID.json` 时绕过同参数缓存，付费重采整份响应；
   `--renormalize` 仅对**已符合当前 schema**的产物重算代码派生字段；
-  `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）。
+  `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）；
+  `--emit-review-template` stdout-only 从当前 `global_review.json` 投影逐项 hash/evidence，
+  默认全部 `UNVER`，原样应用也不会打开事实闸。
 - `stage2.blueprint`：逐章生成；`--chapters` 定向付费重生成；`--renormalize` 重算当前
   schema 的原文定位与人物引用；`--check-only` 联合读取两份产物复检。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。

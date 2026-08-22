@@ -46,7 +46,9 @@ from novel.stages.stage7.measure import (
     apply_everything, build_subs, collect_chapters, hook_consumed_of, load_drafts,
     merge_mapping_edit,
 )
-from novel.stages.stage7.subs import apply_subs, residual_scan, sub_table
+from novel.stages.stage7.subs import (
+    apply_subs, derived_alias_scan, residual_scan, sub_table,
+)
 from novel.store import ArtifactStore
 
 REL = STAGE7_NAME_MAP
@@ -281,6 +283,7 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
     }
     residual, baseline = residual_scan(
         pre_units, post_units, stems, known, smap, canonical_map)
+    derived_aliases = derived_alias_scan(post_units, chars_out, kept)
 
     # 新姓字在**原文**里另有多少次非人名用法（metric，不是门）。
     # ⚠ 取值面是**姓氏映射的值**——原型取「新名的第一个字」，实测三本全破。
@@ -303,7 +306,8 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
         residual_keys=res_keys, stem_noise=stem_noise,
         family_members=up.family_members,
         dup=up.dup, missing=up.missing, invalids=up.invalids,
-        post_units=post_units, title_line=_title_line(up.title, subs, kept))
+        post_units=post_units, title_line=_title_line(up.title, subs, kept),
+        derived_aliases=derived_aliases)
 
     art = NameMap(
         **name_map,
@@ -337,7 +341,7 @@ def _context_source(up: _Upstreams) -> ContextSource:
     return ContextSource(state='fresh', detail=[], code=up.ctx_code)
 
 
-# ── 判定：一份产物 → 33 个 `Outcome` ────────────────────────────────────────
+# ── 判定：一份产物 → 34 个 `Outcome` ────────────────────────────────────────
 
 def _judge(ctx: RunContext, store: ArtifactStore, art: NameMap,
            up: _Upstreams) -> list[Outcome]:

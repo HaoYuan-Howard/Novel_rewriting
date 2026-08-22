@@ -23,6 +23,7 @@ import pytest
 
 from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, VALUED_FLAGS
 from contracts.schema import decode_artifact
+from contracts.schema.evaluation import GlobalReview, GlobalReviewDecisionSet
 from contracts.schema.stage7 import NameMapEdit
 from novel.cli import exit_codes as X
 from novel.cli.main import main
@@ -70,6 +71,23 @@ def test_stage7_edit_template_is_stdout_only_and_round_trips(
     NameMapEdit.model_validate(
         decode_artifact('stage7/name_map_edit.json', raw).payload)
     assert list(novel_dir.iterdir()) == []
+
+
+def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(box, capsys):
+    """模板省掉 hash/evidence 手抄，但默认 UNVER 绝不能顺手打开事实闸。"""
+    rc = _run('run', 'stage2.global', box.sid, '--emit-review-template',
+              '--base', str(box.root))
+
+    assert rc == X.OK
+    template = GlobalReviewDecisionSet.model_validate_json(capsys.readouterr().out)
+    review = GlobalReview.model_validate(decode_artifact(
+        'stage2/global_review.json', box.read('stage2/global_review.json')).payload)
+    current = {item.item_id: item for item in review.items}
+    assert set(current) == {row.item_id for row in template.decisions}
+    assert all(row.state == 'UNVER' for row in template.decisions)
+    assert all(row.expected_subject_sha256 == current[row.item_id].subject_sha256
+               and row.evidence == current[row.item_id].evidence
+               for row in template.decisions)
 
 
 #: **每一个** (0 成本 flag, 接受它的节点) 配对——不是每个 flag 取一个代表。

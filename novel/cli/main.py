@@ -520,6 +520,10 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage2.global':
+        if '--emit-review-template' in tokens:
+            from novel.stages.stage2 import global_review
+            print(global_review.review_template_json(ctx))
+            return X.OK
         if '--full-extract' in tokens:
             from novel.stages.initial_extract import run_initial_extract
             blueprint_ctx = RunContext.open(

@@ -479,6 +479,18 @@
  "residual_adoption_confidence": [
   "high"
  ],
+ "derived_alias_suffixes": [
+  "姐姐",
+  "哥哥",
+  "妹妹",
+  "弟弟",
+  "姊姊",
+  "兄长",
+  "阿姐",
+  "阿哥",
+  "姑娘",
+  "公子"
+ ],
  "free_entries": {
   "--dry-run": "只打印将要发出去的东西，不调用、不写盘",
   "--check-only": "按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零",
@@ -494,6 +506,7 @@
   "--wontfix": "把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用",
   "--retain-pretrim": "人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，0 次 LLM 调用（不是 0 人工成本）",
   "--emit-edit-template": "向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘",
+  "--emit-review-template": "向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的安全 UNVER 决策骨架，不写盘",
   "--adopt-residual": "显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链"
  },
  "paid_flags": {
@@ -536,6 +549,7 @@
   "--measure-only": "",
   "--names-only": "",
   "--emit-edit-template": "",
+  "--emit-review-template": "",
   "--adopt-residual": "重写 stage7/name_map.json，清旧审批并退休现有成书",
   "--remeasure": "重算的 measurable 写回正式产物（其余字段不动）",
   "--recheck": "刷新已有成稿的指标，并重拼 draft.md",
@@ -742,6 +756,7 @@
     "--full-extract",
     "--apply-edit",
     "--review-decisions",
+    "--emit-review-template",
     "--actor",
     "--reason"
    ],
@@ -1262,6 +1277,20 @@
    "writes": "stage2/global_grounding.json · stage2/global_review.json",
    "writes_disk": true,
    "needs_value": "stage2/global_review 的人工决策集（相对当前书目录）",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "mode": null,
+   "label": "stage2 全书级抽取 --emit-review-template",
+   "extra": [
+    "--emit-review-template"
+   ],
+   "paid": false,
+   "free_flag": "--emit-review-template",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
    "required_inputs": []
   },
   {

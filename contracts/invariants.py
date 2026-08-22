@@ -1132,6 +1132,15 @@ RESIDUAL_CONTEXT_CHARS: Final = 12
 #: ⚠ 它管的是**替换面**，不管**屏蔽面**——`kept` 里有单字条目是对的。
 MIN_SURFACE: Final = 2
 
+#: 人物表能推导、但 registry 未必逐字收录的「名字尾字 + 关系称呼」后缀。
+#: 例如人物表只登记「谢箬→苏瑶」，正文却另写「箬姐姐」；旧姓残留探针看不到
+#: 这个形（它不含旧姓），完整 surface 替换也按构造够不着。
+#: ⚠ 这张表只喂给 **INFO 候选探针**，绝不自动替换。中文没有词边界，自动采纳会
+#: 把普通词误当昵称；短到单字的「姐/哥」也刻意不收，避免噪声压倒人工审阅面。
+DERIVED_ALIAS_SUFFIXES: Final = (
+    '姐姐', '哥哥', '妹妹', '弟弟', '姊姊', '兄长', '阿姐', '阿哥', '姑娘', '公子',
+)
+
 #: 成书的两个分隔常量。**章分隔＝裸阿拉伯数字单独成行**，不写「第 N 章」。
 #: ⚠ 这是**产品形态，不是可调参数**——写成开关就是又一个没有守卫的自由变量。
 BOOK_CHAPTER_SEP: Final = '{}'
@@ -1190,6 +1199,8 @@ FREE_ENTRIES: Final = {
     '--retain-pretrim': ('人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，'
                          '0 次 LLM 调用（不是 0 人工成本）'),
     '--emit-edit-template': '向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘',
+    '--emit-review-template': ('向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的'
+                               '安全 UNVER 决策骨架，不写盘'),
     '--adopt-residual': '显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链',
 }
 
@@ -1340,6 +1351,7 @@ WRITE_EFFECTS: Final = {
     #   （`Q-3`）。实测确认过一次才补上这一行。
     '--names-only': '',
     '--emit-edit-template': '',
+    '--emit-review-template': '',
     '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有成书',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
@@ -1514,6 +1526,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  flags=('--renormalize', '--purge-role', '--resample',
                                          '--revalidate', '--full-extract',
                                          '--apply-edit', '--review-decisions',
+                                         '--emit-review-template',
                                          '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,
                                            artifact_paths.STAGE2_GLOBAL_REVIEW)),

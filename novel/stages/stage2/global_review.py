@@ -8,7 +8,9 @@ from pydantic import ValidationError
 from contracts.artifacts import (
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
-from contracts.schema.evaluation import GlobalReview, GlobalReviewDecisionSet
+from contracts.schema.evaluation import (
+    GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet,
+)
 from contracts.schema.stage2 import GlobalGrounding
 
 from novel import paths
@@ -21,6 +23,34 @@ from novel.store import ArtifactStore
 
 REL = STAGE2_GLOBAL_REVIEW
 DEFAULT_DECISIONS = STAGE2_GLOBAL_REVIEW_DECISIONS
+
+
+def review_template(ctx: RunContext) -> GlobalReviewDecisionSet:
+    """返回绑定当前逐项 hash/evidence 的安全人工复核骨架。
+
+    每一项默认 `UNVER`，所以原样应用也**不会打开 s2 gate**；执行者只需把已核实项
+    改成 PASS/FAIL、替换 actor/reason，不再手抄乐观锁与证据坐标。骨架读取正式
+    `global_review.json`，不从 grounding 重拼第二份 item 身份。
+    """
+    store = ArtifactStore(ctx)
+    if not store.exists(REL):
+        raise UpstreamMissing(f'{REL} 不在盘上；先生成/重建 stage2.global')
+    current = store.read_own(GlobalReview, REL)[0]
+    return GlobalReviewDecisionSet(
+        actor='待填·actor',
+        decisions=[GlobalReviewDecision(
+            item_id=item.item_id,
+            expected_subject_sha256=item.subject_sha256,
+            state='UNVER',
+            reason='待人工核验：请替换本句并将已核实项改为 PASS 或 FAIL',
+            evidence=list(item.evidence),
+        ) for item in current.items],
+    )
+
+
+def review_template_json(ctx: RunContext) -> str:
+    """stdout 用 JSON；裸 `GlobalReviewDecisionSet` 可直接作为绝对路径输入。"""
+    return review_template(ctx).model_dump_json(indent=2)
 
 
 def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
