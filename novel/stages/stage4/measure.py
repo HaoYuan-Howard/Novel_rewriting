@@ -22,7 +22,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from contracts.invariants import BEAT_MIN_CHARS, GROUPING_VERSION, VERBATIM_BUDGET_FACTOR
+from contracts.invariants import (
+    BEAT_MIN_CHARS, BOOK_BAND, GROUPING_VERSION, VERBATIM_BUDGET_FACTOR,
+)
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.beats import (
     beat_index, group_beats, group_chars, group_map, plan_beat_id, verbatim_pieces,
@@ -58,7 +60,8 @@ def verbatim_chars(hinges: list[dict[str, Any]]) -> int:
 
 
 def source_chars_table(groups: dict[Any, list[list[str]]],
-                       bidx: dict[str, dict[str, Any]]) -> str | None:
+                       bidx: dict[str, dict[str, Any]],
+                       *, book_total: bool = False) -> str | None:
     """各拍在原文里实际占多少字（由 span 确定性算出）——规划器定 `budget_chars` 的基准。
 
     **必须由代码算好喂进去**：让模型自己数字数是它最不擅长的事之一，
@@ -75,6 +78,19 @@ def source_chars_table(groups: dict[Any, list[list[str]]],
     ⚠ **算不出源字数的拍照样列出来，标 `?`**：不列的话规划者会以为这一章只有那几拍，
     于是漏给一个预算，而 `expand_plan_beats` 会为此显式终态——
     真根因在 stage2，但让它**在这里就看得见**。
+
+    【`book_total`：全书那一行**也必须由代码算好**】2026-08-22 起全书预算之和有了一道
+    HARD（`plan_book_band`，`R-5.3c`）。它一旦落红就是整份计划退回、**一次全书付费白花**，
+    而它要求的加法是「把二十多个章级合计再加一遍」——正是本函数开头那句
+    「让模型自己数字数是它最不擅长的事之一」说的那件事。
+    ⇒ 全书合计与目标区间一起算好发下去，模型只需要**对齐**，不需要**求和**。
+
+    ⚠ **只在整跑那一路开**：定向修复只发目标章那一格（`plan.py::_build_repair_user`），
+    在只有一章的表底下印一行「全书合计」会是**假的**。
+    ⚠ **口径与判据侧同源**：这里的合计是逐拍 `group_chars` 相加，`plan_book_band` 的基准是
+    `chapter_source_chars`（同一批 beat 的 `source_chars` 相加）——**每一拍都算得出 span 时
+    两者逐字相等**；算不出时判据侧走 `unver` 根本不判，所以两个数不会在任何一次真判定里分家。
+    表里那句 `（另有 N 拍算不出）` 就是那种情形的预告。
     """
     rows: dict[Any, list[tuple[int | None, str]]] = {}
     for o, gs in groups.items():
@@ -87,11 +103,21 @@ def source_chars_table(groups: dict[Any, list[list[str]]],
     if not rows:
         return None
     out = []
+    book_known = book_unknown = 0
     for o, v in sorted(rows.items()):
         known = [n for n, _ in v if n is not None]
+        book_known += sum(known)
+        book_unknown += len(v) - len(known)
         tot = (f'共{sum(known)}字'
                + ('' if len(known) == len(v) else f'（另有 {len(v) - len(known)} 拍算不出）'))
         out.append(f'阅读序第{o}章（{tot}）: ' + ' '.join(s for _, s in v))
+    if book_total:
+        lo, hi = BOOK_BAND
+        out.append(
+            f'全书合计 {book_known} 字'
+            + (f'（另有 {book_unknown} 拍算不出，未计入）' if book_unknown else '')
+            + f'；⇒ 全书所有章的 budget_chars 相加，必须落在 '
+              f'{round(book_known * lo)}~{round(book_known * hi)} 字之间（硬约束）。')
     return '\n'.join(out)
 
 

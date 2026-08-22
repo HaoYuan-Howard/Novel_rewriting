@@ -56,8 +56,8 @@ def test_rebuilding_the_context_then_checking_gives_a_green_badge(book):
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
 
         want = {r.rule for r in REGISTRY.of_stage('stage4')}
-        assert {ln.rule for ln in rep.rules} == want, '30 条判据一行不少'
-        assert len(rep.rules) == 30
+        assert {ln.rule for ln in rep.rules} == want, '31 条判据一行不少'
+        assert len(rep.rules) == 31
         assert not [ln.rule for ln in rep.rules if ln.status == 'skipped'], \
             '有判据注册了却没有任何代码执行过它'
         assert not [ln.rule for ln in rep.rules if ln.sev == 'hard' and ln.status == 'hit'], \
@@ -190,6 +190,122 @@ def test_the_reconstruction_gate_has_not_been_relaxed_into_always_green():
     from tests.hard_cases import _identity_structure4
 
     assert 'structure_changed' in {f.rule for f in _identity_structure4()}
+
+
+def test_the_plan_prompt_gives_both_bands_and_says_which_one_is_per_chapter():
+    """⭐⭐ **`PLAN_SYS` 改口的验收断言。**
+
+    改之前这一段写的是「**每一章都是这个倍率，没有例外**：重构不改变篇幅」——
+    那是「逐句改写」在计划层的字面命令，也是「成稿只改了措辞」这条链的第一环。
+    改之后：总量归全书，单章的倍率是**表达章与章之间轻重的唯一工具**。
+    ⚠ 断言两件事：两个数都在（漏一个的后果见 `test_prompts.py` 那一条），
+    以及那句旧命令**真的不在了**——只加新句不删旧句，模型会照更严的那句执行。
+    """
+    from contracts.invariants import BOOK_BAND, PLAN_BUDGET_BAND
+
+    sysp = prompts.plan_system()
+    assert '{:g}~{:g}×'.format(*PLAN_BUDGET_BAND) in sysp, '单章带没发下去'
+    assert '{:g}~{:g}×'.format(*BOOK_BAND) in sysp, '全书带没发下去'
+    assert '每一章都是这个倍率，没有例外' not in sysp, \
+        '旧那句「每一章都是这个倍率」还在——放宽了带却仍然命令模型章章同倍率'
+
+
+def test_only_the_full_run_gets_a_book_total_line_under_the_sizes_table():
+    """⭐ 表底那一行「全书合计」在**定向修复**那一路会是假的：它只发目标章那一格。
+
+    ⚠ 这一对断言是**一对**：只断言整跑有，谁把 `book_total=True` 顺手加到修复那一路
+    也不会有任何东西出声，而模型会照着一个只覆盖一章的「全书合计」去配平全书。
+    """
+    from novel.stages.stage4.beats import beat_index, group_beats
+    from novel.stages.stage4.measure import source_chars_table
+    from tests.hard_cases import _BPS4, _MAIN4
+
+    bidx = beat_index(_BPS4, _MAIN4)
+    groups = group_beats(_BPS4, _MAIN4, bidx)
+    full = source_chars_table(groups, bidx, book_total=True)
+    one = source_chars_table({1: groups.get(1) or []}, bidx)
+    assert '全书合计' in full and '硬约束' in full, f'整跑那一路没给全书合计：{full}'
+    assert '全书合计' not in one, f'定向修复那一路印了一行假的全书合计：{one}'
+
+
+def test_a_book_that_overshoots_while_every_chapter_stays_in_band_is_caught():
+    """⭐⭐ **`plan_book_band` 存在的全部理由：逐章带一章都不红，全书却超了。**
+
+    2026-08-22 之前逐章带是 ±10%，于是「章章在带内 ⇒ 全书必在带内」是一条**蕴含**，
+    总量不需要自己的门。带放宽到 ±20% 之后那条蕴含断了——这一条钉死断了以后有人接。
+    ⚠ 断言必须是**这一对**：`budget_band` 不红 **且** `plan_book_band` 红。
+    只断言后者的话，一个「某章离谱」的样本也能让它绿，而那证明不了任何新东西。
+    """
+    from tests.hard_cases import _book_band_over4
+
+    hit = {f.rule for f in _book_band_over4()}
+    assert 'budget_band' not in hit, \
+        f'样本里有章越了逐章带 ⇒ 它证明不了书级带拦住了逐章带拦不住的东西（命中 {sorted(hit)}）'
+    assert 'plan_book_band' in hit, f'全书 660/560=1.179× 没被拦下（命中 {sorted(hit)}）'
+
+
+def test_the_book_band_finding_names_every_chapter_so_a_human_can_rebalance():
+    """⭐ **逐章明细是这条 HARD 的一半，不是装饰。**
+
+    本层的修法是「手改那几行 + `--revalidate`」这条 **0 LLM 出路**（`_HUMAN_FIX`）。
+    人拿到「全书 1.179×」这一句话，只能自己去二十多章里解谜该从哪几章匀——
+    那条 0 成本恢复路就名存实亡了。
+    """
+    from tests.hard_cases import _book_band_over4
+
+    d = next(f.detail for f in _book_band_over4() if f.rule == 'plan_book_band')
+    assert 'ch1 330/280' in d and 'ch2 330/280' in d, f'逐章倍率明细没打出来：{d}'
+    assert '超出' in d and '字' in d, f'没说清超了多少、该匀掉多少：{d}'
+
+
+def test_the_book_band_refuses_to_judge_on_a_shrunken_basis():
+    """⭐ **缺一章就不判**——它的 `unver` 臂比 `budget_band` 严，而这是有理由的。
+
+    逐章带可以「判得动的那些照样给结论」；书级带做不到同样的事：少一章，
+    分子分母**同时**缺一块，得出的倍率既不能说合格也不能说不合格。
+    ⚠ 而「跑了、零 findings」与「压根判不动」在报告上必须长得不一样——
+    `dialogue_halved` 那次假绿就是这两者同形买来的。
+    """
+    from novel.report.findings import Outcome
+    from novel.stages.stage4 import checks
+    from tests.hard_cases import _BPS4, _MAIN4, _b4, _ch4
+
+    # 第 2 章一个整数预算都没有 ⇒ 它进不了全书基准。
+    ch2 = _ch4(2, [_b4('b2_01')])
+    ch2['segments'][0]['budget_chars'] = None
+    outs: list[Outcome] = checks.check(
+        {'reconstruction_strategy': '把故事原样讲完。',
+         'output_chapters': [_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03')]), ch2]},
+        blueprints=_BPS4, main_text=_MAIN4)
+    o = next(o for o in outs if o.rule == 'plan_book_band')
+    assert o.unver_why, f'基准缺一章却给了结论：findings={o.findings}'
+    assert not o.findings, f'走了 unver 臂却还产出了结论：{o.findings}'
+    assert 'out2' in o.unver_why, f'没说清是哪一章把基准打缺了：{o.unver_why}'
+
+
+def test_structure_distance_reports_the_new_pair_of_detail_readings():
+    """⭐ 线 A 的验收出口：移位数与源相邻保留数答的是**顺序**，一个字碰不到**详略**。
+
+    放宽逐章带 + 改口 `PLAN_SYS` 之后要回答的问题是「模型有没有把自由度用起来」，
+    而在这两个读数之前，报告上**没有任何一处**能回答它。
+    ⚠ 比的是相对本章均值不是相对 1.0：章级倍率本来就允许在带内漂。
+    """
+    from tests.hard_cases import (
+        _MAIN4, _BPS4_PRESENT, _b4, _bidx4_present, _ch4, _plan4,
+    )
+
+    # 四拍各 100 源字；预算 200/40/80/80 = 400 ⇒ 章级 1.00×（**两条带都不红**，
+    # 这一条量的是章内分配，不该被越带的噪声溅到）。r̄=1.00 ⇒ 相对均值 0.40~2.00。
+    chapters = [_ch4(1, [_b4('b1_01', budget=200), _b4('b1_02', budget=40),
+                         _b4('b1_03', budget=80), _b4('b1_04', budget=80)])]
+    chapters[0]['segments'][1]['delivery'] = 'summary'
+    hits = _plan4(chapters, blueprints=_BPS4_PRESENT, main_text=[_MAIN4[0]],
+                  bidx=_bidx4_present())
+    assert not {f.rule for f in hits} & {'budget_band', 'plan_book_band'}, \
+        f'样本自己越了带，读数会被噪声盖住：{sorted({f.rule for f in hits})}'
+    d = next(f.detail for f in hits if f.rule == 'structure_distance')
+    assert '拍级 预算/源 相对本章均值 0.40~2.00' in d, f'详略离散度不对：{d}'
+    assert 'summary 承载源字数 25%' in d, f'summary 承载比不对：{d}'
 
 
 def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
@@ -639,7 +755,7 @@ def test_check_only_reads_the_blocked_draft_when_no_formal_plan_exists():
 
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
         assert rep.provenance.invalid is True, '报告必须自报判的是 .INVALID 稿'
-        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 30
+        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 31
         assert all(ln.status != 'skipped' for ln in rep.rules), \
             '判据要真的跑在问题稿上，不能整排落成「没跑成」'
     finally:
@@ -670,7 +786,7 @@ def test_the_registered_rules_all_produce_a_row_on_a_real_book():
     box = sandbox.Sandbox(book, STAGE4_INPUTS)
     try:
         rep = plan.run_check_only(_ctx_for(box, 'stage4.plan'))
-        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 30
+        assert len(rep.rules) == len(REGISTRY.of_stage('stage4')) == 31
         assert all(ln.status != 'skipped' for ln in rep.rules)
         assert all(ln.scanned for ln in rep.rules), '绿灯必须报出自己的分母（判据 31）'
     finally:

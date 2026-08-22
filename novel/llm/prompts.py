@@ -25,10 +25,11 @@ from pydantic import BaseModel
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BARE_PRONOUNS, BEAT_MIN_CHARS, BEAT_NATURAL_MAX,
-    CHANGE_TYPES_ENUM, DELIVERY_MODES, HINGE_KINDS, INVENT_ALLOW, INVENT_FORBID,
-    INVENT_PRINCIPLE, NAME_DISTINCTIVENESS, PLACE_MODES, PLAN_BUDGET_BAND,
-    PLAN_RECONSTRUCT_MIN_UNITS, RESPONSE_TIME_LAYERS, STRUCTURAL_ROLES, STYLE_WORDS,
-    TEMPORAL_LINKS, TIME_LAYERS, VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
+    BOOK_BAND, CHANGE_TYPES_ENUM, DELIVERY_MODES, HINGE_KINDS, INVENT_ALLOW,
+    INVENT_FORBID, INVENT_PRINCIPLE, NAME_DISTINCTIVENESS, PLACE_MODES,
+    PLAN_BUDGET_BAND, PLAN_RECONSTRUCT_MIN_UNITS, RESPONSE_TIME_LAYERS,
+    STRUCTURAL_ROLES, STYLE_WORDS, TEMPORAL_LINKS, TIME_LAYERS,
+    VERBATIM_BUDGET_FACTOR, WORLD_RULE_KINDS,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +62,15 @@ ENUM_BLOCKS: Final[dict[str, str]] = {
     'PRONOUNS': '／'.join(f'「{p}」' for p in BARE_PRONOUNS),
     'CHANGE_TYPES': CHANGE_TYPES_ENUM,
     # stage4 计划
+    # ⚠⚠ **这是一对数，两个都必须发下去。** `BANDS` 是**单章**允许的浮动区间、
+    #   `BOOK_BANDS` 是**全书**必须落进的总量带，而它们各自对应一条 HARD
+    #   （`budget_band` / `plan_book_band`）。只发其中一个的下场是确定的：
+    #   只发 `BANDS` ⇒ 模型不知道全书还有一道闸，把每章都顶到 1.2 就整本超；
+    #   只发 `BOOK_BANDS` ⇒ 模型不知道单章的天花板在哪。
+    #   ⚠ 「详略靠单章浮动表达、总量由全书带守住」这句话本身在 `PLAN_SYS` 的篇幅段里，
+    #   两个数在那里必须**同时出现**——测试 `test_plan_prompt_gives_both_bands...` 钉着。
     'BANDS': '{:g}~{:g}×'.format(*PLAN_BUDGET_BAND),
+    'BOOK_BANDS': '{:g}~{:g}×'.format(*BOOK_BAND),
     'BEAT_MIN': str(BEAT_MIN_CHARS),
     'RECONSTRUCT_MIN': str(PLAN_RECONSTRUCT_MIN_UNITS),
     'STRUCTURAL_ROLES': '|'.join(STRUCTURAL_ROLES),

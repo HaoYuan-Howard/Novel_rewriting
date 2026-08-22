@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 30 条判据的**实现**。行在 `contracts/judges/stage4.py`（`Q-12`）。
+checks.py —— 31 条判据的**实现**。行在 `contracts/judges/stage4.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 落盘闸门 / `--check-only` / `--revalidate` 走的都是
 `check()` 这一个函数——三条路各判一遍就会长出三把尺子。
@@ -11,7 +11,7 @@ checks.py —— 30 条判据的**实现**。行在 `contracts/judges/stage4.py`
 `output_ordinal == from_source_ordinals[0]` 的 `model_validator`，
 模型化之后 `one_to_one` 那条 HARD **根本构造不出会红的样本**。
 
-【本层的两份产物共用这一张表】前 21 条判计划，`ctx_*` 那 5 条判写作上下文，
+【本层的两份产物共用这一张表】前 22 条判计划，`ctx_*` 那 5 条判写作上下文，
 4 条度量各报一份读数。**上下文不在场时那 5 条走 `unver` 臂，不是「通过」。**
 """
 from __future__ import annotations
@@ -21,14 +21,16 @@ from collections import Counter
 from typing import Any
 
 from contracts.invariants import (
-    BEAT_ALERT_MAX, BEAT_ALERT_MIN, BEAT_MIN_CHARS, GROUPING_VERSION, HINGE_GROUPS,
-    PLAN_BUDGET_BAND, PLAN_RECONSTRUCT_MIN_UNITS, STYLE_WORDS, TEMPORAL_LINKS,
-    VERBATIM_BUDGET_FACTOR,
+    BEAT_ALERT_MAX, BEAT_ALERT_MIN, BEAT_MIN_CHARS, BOOK_BAND, GROUPING_VERSION,
+    HINGE_GROUPS, PLAN_BUDGET_BAND, PLAN_RECONSTRUCT_MIN_UNITS, STYLE_WORDS,
+    TEMPORAL_LINKS, VERBATIM_BUDGET_FACTOR,
 )
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.report.findings import Outcome, ran, unverifiable
-from novel.stages.stage4.beats import beat_index, group_beats, verbatim_pieces
+from novel.stages.stage4.beats import (
+    beat_index, group_beats, group_chars, verbatim_pieces,
+)
 from novel.stages.stage4.measure import IDENTITY_GOAL, chapter_source_chars, verbatim_share_stats
 
 #: 源 beat 编号里的章号。⚠ **别按定宽切片**：`b{ord:02d}_{seq:02d}` 在三位数的章上会溢出宽度。
@@ -339,6 +341,39 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
         if structure_metrics:
             structure_metrics[-1] += f'；移位 {moved}/{len(expected)}；源相邻保留 {kept}/{denom}'
 
+        # ── 详略：拍级 `预算/源` 的离散度 + `summary` 承载了多少源字数 ─────
+        # 2026-08-22 补。**这两个读数就是线 A 的验收出口**：`PLAN_BUDGET_BAND` 放宽到
+        # 0.80~1.20、`PLAN_SYS` 改口说「全书是这个倍率、单章不是」之后，要回答的问题是
+        # 「模型到底有没有把新拿到的自由度用起来」——而移位数与源相邻保留数（上面那两个）
+        # 答的是**顺序**那一维，一个字都碰不到**详略**这一维。
+        # ⚠ 比的是**相对本章均值**不是相对 1.0：章级倍率本来就允许在带内漂，
+        #   拿绝对值比会把「这一章整体写厚了」误读成「章内有轻重」——那是两件事，
+        #   前者归 `budget_band`/`plan_book_band`，本读数只管后者。
+        # ⚠ 均值取 `Σ预算/Σ源` 而不是「各拍比值的平均」：后者会被一个 20 字的短拍
+        #   拽走整章的基准。
+        # ⚠ 任一拍算不出 span 就整章不报这一维（**不拿部分拍充数**，同 `group_chars`
+        #   那条不变量），并把「判不动」说出来——静默省略与「查过没事」在报告上同形。
+        seg_pairs: list[tuple[float, int, bool]] = []
+        n_unknown = 0
+        for be in segments:
+            src_i = group_chars(list(be.get('from_beats') or []), bidx)
+            bud_i = be.get('budget_chars')
+            if src_i is None or not src_i or not isinstance(bud_i, int):
+                n_unknown += 1
+                continue
+            seg_pairs.append((bud_i / src_i, src_i, be.get('delivery') == 'summary'))
+        if n_unknown or not seg_pairs:
+            structure_metrics[-1] += (
+                f'；拍级详略判不动（{n_unknown}/{len(segments)} 拍缺 span 或缺预算）')
+        else:
+            tot_s = sum(si for _r, si, _m in seg_pairs)
+            rbar = sum(r * si for r, si, _m in seg_pairs) / tot_s
+            rel = [r / rbar for r, _si, _m in seg_pairs]
+            summ = sum(si for _r, si, m in seg_pairs if m)
+            structure_metrics[-1] += (
+                f'；拍级 预算/源 相对本章均值 {min(rel):.2f}~{max(rel):.2f}'
+                f'；summary 承载源字数 {summ * 100 // tot_s}%')
+
     # ⚠ **先比一次分组参数再判**（`R-5.11b`）：两条结构判据是拿**当前**的
     #   `group_beats` 去量的，而产物记着它是照哪一套切的。不比就是拿新尺子量旧布。
     params = ((plan.get('_provenance') or {}).get('params') or {})
@@ -470,38 +505,51 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
         'structure_entry_mix', detail='；'.join(entry_mix), evidence=entry_mix)],
         scanned=f'{len(outs)} 个输出章 × {n_seam} 个接缝'))
 
-    # ── ③ 篇幅预算带 ─────────────────────────────────────────────────────
+    # ── ③ 篇幅预算带（逐章 + 全书，共用一个基准）─────────────────────────
     text_len, cov = chapter_source_chars(main_text, bidx)
     lo, hi = PLAN_BUDGET_BAND
     bad_band: list[tuple[Any, int, str]] = []
     unmeasured: list[tuple[Any, int, int]] = []
     no_budget: list[Any] = []
+    #: 判得动的那些章的 `(输出章, 预算合计, 源字数)`——**书级带唯一的基准来源**。
+    #: ⚠⚠ 与逐章带**共用这一个循环**是有意的：两条判据同一个基准、同一条前件，
+    #:   各算一遍就是两把尺子，而错的往往正是那个跨口径的运算（判据 14）。
+    per_ch: list[tuple[Any, int, int]] = []
+    #: 「哪一章没进书级基准，以及为什么」。逐章带跳过一章照样能给结论，
+    #: 书级带不行——少一章，全书合计就只是个偏小的数。
+    basis_gaps: list[str] = []
     judged = 0
     for o in outs:
+        oo = o.get('output_ordinal')
         srcs = o.get('from_source_ordinals') or []
         if not srcs:
+            basis_gaps.append(f'out{oo} 没有 from_source_ordinals（根因看 `one_to_one`）')
             continue
         budgets = [be.get('budget_chars') for be in (o.get('segments') or [])
                    if isinstance(be.get('budget_chars'), int)]
         if not budgets:
             # ⚠ 原型这里是一条**静默 `continue`**。改成与「基准残缺」同规格的结论：
             #   一章一个 int 预算都没有，与「这一章判过没事」在报告上必须长得不一样。
-            no_budget.append(o.get('output_ordinal'))
+            no_budget.append(oo)
+            basis_gaps.append(f'out{oo} 一个整数预算都没有')
             continue
         # 【基准残缺就不判这一章】某些拍没有 span 时，这一章的源字数**偏小却仍然存在**，
         # 拿它去判会把一个合格的计划判成不合格，而报告里看不出基准是残缺的。
         got, tot = min((cov.get(s, (0, 0)) for s in srcs), key=lambda t: (t[0] - t[1], t[1]))
         if tot and got < tot:
-            unmeasured.append((o.get('output_ordinal'), got, tot))
+            unmeasured.append((oo, got, tot))
+            basis_gaps.append(f'out{oo} 的源字数基准残缺（只有 {got}/{tot} 拍算得出 span）')
             continue
         src = sum(text_len.get(s, 0) for s in srcs)
         total = sum(budgets)
         if not src:
+            basis_gaps.append(f'out{oo} 的源字数是 0')
             continue
         judged += 1
+        per_ch.append((oo, total, src))
         # ⚠⚠ **没有第二次宽限**：原型这里是 `src*lo*0.9 <= total <= src*hi*1.1`。
         if not (src * lo <= total <= src * hi):
-            bad_band.append((o.get('output_ordinal'), total, f'{int(src * lo)}~{int(src * hi)}'))
+            bad_band.append((oo, total, f'{int(src * lo)}~{int(src * hi)}'))
     if unmeasured or no_budget:
         why = []
         if unmeasured:
@@ -529,6 +577,63 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
             [f'out{oo}' for oo, *_ in bad_band])) if bad_band else [],
             # ⚠ 这个分母取的是**真正判过的章数**，不是 span 覆盖率——原型那一行取错了。
             scanned=f'{judged}/{len(outs)} 章逐章比过'))
+
+    # ── ③.5 全书总量（`plan_book_band`，2026-08-22 新增）─────────────────
+    #
+    # 【为什么现在才需要它】此前逐章带是 ±10%，而**章章 ±10% ⇒ 全书必然 ±10%**——
+    # 总量是被逐章带顺带兜住的。2026-08-22 逐章带放宽到 ±20%（理由见
+    # `contracts/invariants.py::PLAN_BUDGET_BAND`：让 stage4 能用「哪一章厚、哪一章薄」
+    # 表达详略，那是治「成稿只改了措辞」的那一个自由度），**那条蕴含就断了**：
+    # 一份把 23 章全顶到 1.20 的计划，逐章带一章都不会红。
+    # ⚠⚠ 而在这条判据之前，全书总量唯一的守卫是 stage5 的 `book_length`（INFO）——
+    #   **钱花完才响**：要等 23 章正文全部写完，才有人说一句「这本书超了 20%」。
+    #
+    # ⚠ 基准是 **span 合计**不是 `len(整章文本)`：那是本层三个「源字数」口径里的第二个
+    #   （`measure.py` 文件头那张表），产地曾为混用它们把一份合格的计划判成 `.INVALID`。
+    # ⚠ 与 stage5 `book_length` 共用 `BOOK_BAND` 但**分母不是同一个数**（那边是整章字数）
+    #   ⇒ 两条读数不许拿来做相等断言，只能各自对带。
+    blo, bhi = BOOK_BAND
+    if not per_ch:
+        out.append(unverifiable(
+            'plan_book_band',
+            '一章都没进全书基准，**不拿一个空合计去判总量**：'
+            + ('；'.join(basis_gaps[:8]) or '这份计划一个输出章都没有'),
+            scanned=f'0/{len(outs)} 章进了全书基准'))
+    elif basis_gaps:
+        # 【缺一章就不判】逐章带可以「判得动的照样给结论」，书级带做不到同样的事：
+        # 少一章，分子分母**同时**缺一块，得出的倍率既不能说合格也不能说不合格。
+        # ⇒ 说出来，不拿缩水的尺子判（继承 `budget_band` 的同一条 `unver` 臂）。
+        out.append(unverifiable(
+            'plan_book_band',
+            f'{len(basis_gaps)} 章没进基准，全书合计因此是偏小的，不判：'
+            + '；'.join(basis_gaps[:8])
+            + (f'（另有 {len(basis_gaps) - 8} 章同因）' if len(basis_gaps) > 8 else ''),
+            scanned=f'{len(per_ch)}/{len(outs)} 章进了全书基准'))
+    else:
+        bsrc = sum(sc for _oo, _b, sc in per_ch)
+        bbud = sum(b for _oo, b, _sc in per_ch)
+        ratio = bbud / bsrc
+        want_lo, want_hi = round(bsrc * blo), round(bsrc * bhi)
+        book_scanned = (f'全书 {bbud}/{bsrc} 字 = {ratio:.3f}×'
+                        f'（目标 {want_lo}~{want_hi} 字，{len(per_ch)}/{len(outs)} 章）')
+        if want_lo <= bbud <= want_hi:
+            out.append(ran('plan_book_band', [], scanned=book_scanned))
+        else:
+            # ⚠⚠ **逐章明细是这条判据的一半**，不是装饰：本层的修法是
+            #   「手改那几行 + `--revalidate`」这条 **0 LLM 出路**，而人拿到
+            #   「全书 1.14×」这一句话，只能自己去 23 章里解谜该从哪几章匀。
+            #   ⇒ 逐章倍率按**该往哪个方向匀**排好序一起打出来。
+            over = bbud > want_hi
+            gap = bbud - want_hi if over else want_lo - bbud
+            rows = sorted(per_ch, key=lambda t: t[1] / t[2], reverse=over)
+            out.append(ran('plan_book_band', fs('plan_book_band', (
+                f'全书预算合计 {bbud} 字 / 全书源字数 {bsrc} 字 = {ratio:.3f}×，'
+                f'不在 {blo:g}~{bhi:g}（应在 {want_lo}~{want_hi} 字，'
+                f'{"超出" if over else "缺"} {gap} 字）。'
+                f'逐章（输出章 预算/源=倍率，按{"该压的排前" if over else "该加的排前"}）：'
+                + ' · '.join(f'ch{oo} {b}/{sc}={b / sc:.2f}' for oo, b, sc in rows),
+                [f'out{oo}' for oo, _b, _sc in rows[:8]])),
+                scanned=book_scanned))
 
     # ── ④ 上下文照的是哪一份计划 ─────────────────────────────────────────
     if ctx_link is None:

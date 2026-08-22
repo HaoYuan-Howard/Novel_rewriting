@@ -271,7 +271,9 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
         + json.dumps(refs, ensure_ascii=False, separators=(',', ':')),
         prompts.BLOCK_SKELETON + '\n' + bs,
     ]
-    if (tbl := source_chars_table(up.groups, up.bidx)):
+    # ⚠ `book_total=True` **只在整跑这一路**：它在表底多印一行全书合计与全书目标区间，
+    #   而定向修复那一路只发目标章那一格，同一行在那里会是假的（见 `source_chars_table`）。
+    if (tbl := source_chars_table(up.groups, up.bidx, book_total=True)):
         parts.append(prompts.BLOCK_SIZES + '\n' + tbl)
     parts.append(prompts.BLOCK_BODY + '\n' + book_text)
     return '\n\n'.join(parts)

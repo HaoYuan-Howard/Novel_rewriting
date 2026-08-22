@@ -68,9 +68,21 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 - `delivery: scene|summary`；
 - `transition: start|continue|earlier|later|parallel|return`。
 
-每章预算总和必须落在其引用 `SourceSpan` 字数总和的 `PLAN_BUDGET_BAND` 内；该常量就是唯一
-执行带，没有第二层宽限。若某个引用无法提供精确基准，该章的预算规则报告 `unver`，不会拿
-不完整分母给出通过或失败结论。
+每章预算总和必须落在其引用 `SourceSpan` 字数总和的 `PLAN_BUDGET_BAND`（**0.80~1.20**）内；
+该常量就是唯一执行带，没有第二层宽限。若某个引用无法提供精确基准，该章的预算规则报告 `unver`，
+不会拿不完整分母给出通过或失败结论。
+
+**全书预算总和另有一道带**：`plan_book_band`（`R-5.3c`）要求全书各章预算之和落在
+全书 span 合计的 `BOOK_BAND`（**0.90~1.10**）内。两条带一松一紧是**同一次裁决的两半**——
+逐章放宽是给「哪一章厚、哪一章薄」留出表达详略的空间，全书收紧守住对用户的总量承诺，
+逐章的正负偏差在书级相互抵消。⚠ 书级那条的 `unver` 臂**比逐章严**：任何一章没进基准
+（缺预算 / span 覆盖残缺 / 源字数为 0）就整条不判——少一章，分子分母同时缺一块。
+⚠ 它与 stage5 `book_length` 共用 `BOOK_BAND` 但**分母不是同一个数**（那边是整章字数、
+这边是 span 合计，见 §2.2 那张三口径表），两个读数不许做相等断言。
+
+⚠⚠ **全书合计与目标区间由代码算好发下去**（`source_chars_table(..., book_total=True)`，
+只在整跑那一路开）。让模型自己把二十多个章级合计再加一遍，正是它最不擅长的事，
+而这条 HARD 落红的代价是整份计划退回、一次全书付费白花。
 
 `PlanProvenance` 继承 `LlmProvenance`，并必填：
 
@@ -177,13 +189,23 @@ raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 
 ## 六、现行判据
 
-当前注册表共 **30 条**：**19 hard、6 info、5 metric**。计划和写作上下文共用同一张表。
+当前注册表共 **31 条**：**20 hard、6 info、5 metric**。计划和写作上下文共用同一张表。
 
 | 严重度 | 当前规则 id |
 |---|---|
-| hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `structure_changed` · `transition_direction` · `structure_units` · `structure_transition` · `goal_landing` · `budget_int` · `budget_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` · `ctx_hinge_delivered` |
+| hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `structure_changed` · `transition_direction` · `structure_units` · `structure_transition` · `goal_landing` · `budget_int` · `budget_band` · `plan_book_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` · `ctx_hinge_delivered` |
 | info | `flashback_closed` · `flat_chapter` · `beat_size` · `beat_reuse` · `verbatim_starved` · `params_drift` |
 | metric | `verbatim_share` · `plan_params` · `ctx_source` · `structure_distance` · `structure_entry_mix` |
+
+`budget_band` 与 `plan_book_band` 是**一对**：前者管单章、后者管全书，2026-08-22 同批落地。
+逐章带此前是 0.90~1.10，于是「章章 ±10% ⇒ 全书必然 ±10%」，总量是被顺带兜住的；带放宽到
+0.80~1.20 之后那条蕴含断了，总量需要它自己的一道门。⚠ 在此之前全书唯一的守卫是 stage5 的
+`book_length`（INFO）——**钱花完才响**。
+
+`structure_distance` 除结构四项外，还逐章报**详略**两项：`拍级 预算/源 相对本章均值 min~max`
+与 `summary 承载源字数 X%`。⚠ 比的是**相对本章均值**不是相对 1.0——章级倍率本来就允许在带内漂，
+拿绝对值比会把「这一章整体写厚了」误读成「章内有轻重」，而那两件事分属不同判据。
+⚠ 任一拍算不出 span 就整章不报这一维并说出来（不拿部分拍充数）。
 
 `structure_changed` 判的是「与**恒等基线**（`novel/stages/stage4/measure.py::identity_plan` 的结构
 切片：一个源单元一个写作单元 · 按源序排开 · `delivery` 恒 `scene`）逐格相同」——三根轴（叙事入口 /
