@@ -292,6 +292,7 @@ class CostLedger:
                   rung_index: int | None = None,
                   sample: int | None = None,
                   resample: bool = False,
+                  reject_detail: list[dict[str, object]] | None = None,
                   chapter: int | None = None) -> None:
         """内容闸对**一次已获取的响应**（wire 或缓存）的判定，各记一行。
 
@@ -299,6 +300,14 @@ class CostLedger:
         「最终采纳档位」原来只能靠「同 purpose 最后一条 ok 行」猜，并发、缓存重放
         与中断恢复下都不可靠。⇒ `decision=accepted/rejected` 在这里显式落账，
         `attempt_id` 指回成本账的那一行。
+
+        ⚠⚠ **`reject_detail` 答的是「拒在哪个字段」**（`docs/REQUIREMENTS.md` TODO-38）：
+        `[{loc, type, count}, …]`，按 (字段路径, 错误类型) 去重、下标压成 `[]`。
+        在它之前，这一行只有 `gate` 四个字，而拒因只进 stdout 事件——
+        2026-08-22 一次整跑被超时杀掉之后，两次 `schema` 拒**再也查不出拒在哪**。
+        ⚠ 它**不带模型正文**：`input` 不取、`msg` 也不取（`msg` 会把 `input` 插值进去）。
+        这份账与产物同一棵目录树，正文外发边界管的是同一批字节。
+        ⚠ `accepted` 的行恒 `None`——「过了」没有拒因，写个空列表会让统计多一格。
         """
         self._append_audit({
             'kind': 'gate_decision',
@@ -313,6 +322,7 @@ class CostLedger:
             'rung_index': rung_index,
             'sample': sample,
             'resample': resample,
+            'reject_detail': reject_detail,   # [{loc, type, count}, …]；accepted 时 None
             'chapter': chapter,
         })
 

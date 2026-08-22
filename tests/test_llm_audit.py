@@ -16,6 +16,7 @@ import hashlib
 import json
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -240,3 +241,103 @@ def test_a_keepsake_that_cannot_be_written_does_not_kill_the_paid_call(monkeypat
     row, = [r for r in _rows(d / AUDIT_REL[-1]) if r['kind'] == 'answer_lost']
     assert row['dump'] is None
     assert row['dump_error'] and 'Error' in row['dump_error']
+
+
+class Beat(BaseModel):
+    role: Literal['R_SETUP', 'R_PAYOFF']
+
+
+class Planlike(BaseModel):
+    """顶层两个必需键 + 一个**可选**的逐项列表——`require` 只派生前两个。"""
+    voice: dict = Field(...)
+    surface_habits: list[str] = Field(...)
+    beats: list[Beat] = Field(default_factory=list)
+
+
+#: 模型编出来的越界枚举值。**它一个字都不许出现在审计账里。**
+LEAKY = 'R_模型自己编的值'
+
+
+def test_a_schema_rejection_says_which_field_and_never_leaks_the_body():
+    """⭐⭐ **`gate_decision` 要说得出「拒在哪个字段」，而且不带模型正文。**
+
+    ⚠⚠ 它补的洞是 2026-08-22 现场咬过的那一口：拒因只进 stdout 事件，而 stdout
+    **随进程一起没**——那次整跑被超时杀掉之后，账上只剩 `gate: schema` 四个字，
+    两次拒到底拒在哪个字段再也查不出来（`docs/REQUIREMENTS.md` TODO-38）。
+    ⇒ 能机器数的那一半必须落账。
+
+    ⚠ **下标压成 `[]`**：`beats.0.role` 与 `beats.1.role` 是同一个字段的两次，
+    分开记就答不了「是不是同一种错」——而那正是这份摘要唯一的用途。
+    ⚠⚠ **只带 `loc` + `type` + 计数。** `input` 是模型写的正文片段，`msg` 又会把它
+    插值进去（`literal_error` 的 msg 里就带着 `input_value=...`）；而这份账与产物
+    同一棵目录树，正文外发边界管的是同一批字节。
+    """
+    ctx, d = _ledgered_ctx()
+    bad = ChatResponse(
+        content=json.dumps({'voice': {'a': 1}, 'surface_habits': ['h'],
+                            'beats': [{'role': LEAKY}, {'role': LEAKY}]},
+                           ensure_ascii=False),
+        finish_reason='stop')
+    good = ChatResponse(
+        content=json.dumps({'voice': {'a': 1}, 'surface_habits': ['h'],
+                            'beats': [{'role': 'R_SETUP'}]}, ensure_ascii=False),
+        finish_reason='stop')
+    t = FakeTransport(responder=lambda _r, i: bad if i == 0 else good)
+
+    _client(t, ctx).ask_json('sys', 'usr', model_cls=Planlike, purpose='p')
+
+    rows = [r for r in _rows(d / AUDIT_REL[-1]) if r['kind'] == 'gate_decision']
+    rejected = [r for r in rows if r['decision'] == 'rejected']
+    assert [r['gate'] for r in rejected] == ['schema']
+    detail = rejected[0]['reject_detail']
+    # 两条同字段的错去重成一格、计数 2；下标压成 `[]`。
+    assert detail == [{'loc': 'beats[].role', 'type': 'literal_error', 'count': 2}]
+    # ⚠ 承重：模型写的那个值一个字都不许进账。
+    assert LEAKY not in json.dumps(rows, ensure_ascii=False)
+    # 过了的那一行没有拒因——写个空列表会让统计多一格。
+    assert [r['reject_detail'] for r in rows if r['decision'] == 'accepted'] == [None]
+
+
+def test_a_truncated_response_says_it_broke_at_the_end_not_in_the_middle():
+    """⭐ `parse` 那一支要分得开**「被截断」**与**「中间就坏了」**。
+
+    两类的处置不同：前者降档腾预算（`client.py` 模块 docstring ②），
+    后者降档大概率没用。⚠ 只取解析器自己那句固定措辞与位置，不取正文。
+
+    ⚠⚠ **这一条钉的是「`truncated` 不许从 `pos` 推」。** 本例正是最典型的截断
+    （`finish_reason='length'`、字符串写到一半就没了），而解析器给的
+    `pos=20` 指向那个字符串的**起点**、文档长 32 ⇒ 任何「pos 是不是贴着末尾」
+    的启发式都会把它判成「中间坏的」，然后把它推去做同档重采（截断唯一不该重采的那一类）。
+    """
+    ctx, d = _ledgered_ctx()
+    cut = ChatResponse(content='{"voice": {"a": 1}, "surface_hab',
+                       finish_reason='length')
+    t = FakeTransport(responder=lambda _r, i: cut if i == 0 else OK_JSON)
+
+    _client(t, ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+    rejected = [r for r in _rows(d / AUDIT_REL[-1])
+                if r['kind'] == 'gate_decision' and r['decision'] == 'rejected']
+    assert [r['gate'] for r in rejected] == ['parse']
+    one, = rejected[0]['reject_detail']
+    assert (one['type'], one['truncated']) == ('json_decode', True)
+    assert one['doc_chars'] == len(cut.content) and isinstance(one['error'], str)
+    # `pos` 留着答「坏在哪」，但它指向字符串起点、不是末尾——别拿它判截断。
+    assert one['pos'] < one['doc_chars'] - 1
+    assert cut.content not in json.dumps(rejected, ensure_ascii=False)
+
+
+def test_a_missing_required_key_is_named_in_the_account():
+    """⭐ 空壳闸也说得出**缺的是哪个键**——键名来自 `model_cls` 的派生，不是模型正文。"""
+    ctx, d = _ledgered_ctx()
+    shell = ChatResponse(content=json.dumps({'voice': {'a': 1}}),
+                         finish_reason='stop')
+    t = FakeTransport(responder=lambda _r, i: shell if i == 0 else OK_JSON)
+
+    _client(t, ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+    rejected = [r for r in _rows(d / AUDIT_REL[-1])
+                if r['kind'] == 'gate_decision' and r['decision'] == 'rejected']
+    assert rejected[0]['gate'] == 'require'
+    assert rejected[0]['reject_detail'] == [
+        {'loc': 'surface_habits', 'type': 'missing_or_empty', 'count': 1}]

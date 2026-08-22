@@ -616,10 +616,20 @@ merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本�
 拒在哪个字段、是不是同一种错，一个字都没有。ir1 那次能报出「非法 enum 0」，
 靠的是当时人工盯着控制台，不是这条账。
 
-- [ ] `gate_decision` 增记一份**结构化的拒因摘要**：pydantic 的
-      `ValidationError.errors()` 取 `loc` + `type`（**不取 `input`**——那是模型正文，
-      会把原文片段写进账），按 `(字段路径, 错误类型)` 去重后计数。
-      `parse` 那一支记截断位置/首个非法 token 类别。
+- [x] **已落（2026-08-22）**：`gate_decision` 新增 `reject_detail`
+      = `[{loc, type, count}, …]`。pydantic 的 `ValidationError.errors()` 只取
+      `loc` + `type`（**`input` 不取，`msg` 也不取**——`literal_error` 的 msg 里就带着
+      `input_value=...`），按 `(字段路径, 错误类型)` 去重计数，**下标压成 `[]`**
+      （`beats[].role` 而不是 `beats.0.role`，否则答不了「是不是同一种错」）。
+      `require` 那一支记缺的顶层键；`parse` 那一支记 `error`/`pos`/`doc_chars`/`truncated`。
+      ⚠⚠ **`truncated` 取自 `finish_reason` 而不是从 `pos` 推**：
+      `Unterminated string starting at` 的 `pos` 指向那个字符串的**起点**——实测
+      `{"voice": {"a": 1}, "surface_hab` 是 `pos=20` / `len=32`，最典型的截断会被
+      任何「pos 贴不贴末尾」的启发式判成「中间坏的」，然后被推去做同档重采
+      （而截断是唯一不该重采的那一类）。这条由测试钉住。
+      ⚠ 施工的直接动因是 2026-08-22 现场咬的那一口：一次整跑被超时杀掉，
+      stdout 连同 `why` 一起没了，账上只剩 `gate: schema` 四个字，
+      两次拒**再也查不出拒在哪个字段**。
 - [ ] 有了它才谈得上一条读数：**「按字段分的内容闸拒分布」**，
       而那正是判断「下一个该给哪个字段加前缀 / 换形状」的唯一依据。
 - [ ] ⚠ 不要顺手把整段响应写进账：`llm_audit.jsonl` 与产物同一棵目录树，

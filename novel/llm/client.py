@@ -240,6 +240,70 @@ REJECT_GATES: Final[tuple[str, ...]] = (
     'empty_text',   # ⑤ ask_text 专有：正文空**且是截断**（非截断那半归 ⓪）
 )
 
+#: 结构化拒因摘要最多列几格。摘要要能塞进**一行 JSON**（审计账是 append-only
+#: 且要能 `grep`），而一份 23 章的坏计划可以同时踩上百个错。
+REJECT_DETAIL_MAX: Final = 20
+
+
+def _loc_path(loc: tuple[Any, ...]) -> str:
+    """`ValidationError` 的 `loc` → 字段路径。**下标一律压成 `[]`。**
+
+    `output_chapters.9.…` 与 `output_chapters.11.…` 是**同一个字段**的两次命中，
+    分开记就答不了「是不是同一种错」——而那正是这份摘要唯一的用途
+    （`docs/REQUIREMENTS.md` TODO-38：「按字段分的内容闸拒分布」）。
+    """
+    out = ''
+    for part in loc:
+        if isinstance(part, int):
+            out += '[]'
+        else:
+            out = f'{out}.{part}' if out else str(part)
+    return out
+
+
+def _schema_detail(exc: ValidationError) -> list[dict[str, Any]]:
+    """`ValidationError` → 按 **(字段路径, 错误类型)** 去重计数的摘要。
+
+    ⚠⚠ **只取 `loc` 与 `type`；`input` 不取，`msg` 也不取。**
+    `input` 是模型写出来的正文片段，而 `msg` 在好几种错误类型里会把它插值进去
+    （`literal_error` 的 msg 里就带着 `input_value=...`）。这份摘要落在
+    `_service/llm_audit.jsonl`——它与产物同一棵目录树，正文外发边界（`R-12.x`）
+    管的是同一批字节。要看原句去看那一次的响应，不是来翻账。
+    ⚠ `loc` 的末段可能是**模型自己编出来的键名**（`extra_forbidden` 那一支），
+    那是字段名不是正文，而且它恰恰是这份摘要最想说的东西。
+
+    ⚠ 排序按「命中多的在前」而不是按出现顺序：截断到 `REJECT_DETAIL_MAX` 时，
+    留下的应该是**最能解释这一拒**的那几格。
+    """
+    tally: dict[tuple[str, str], int] = {}
+    for err in exc.errors():
+        key = (_loc_path(tuple(err.get('loc') or ())), str(err.get('type')))
+        tally[key] = tally.get(key, 0) + 1
+    ranked = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [{'loc': loc, 'type': kind, 'count': n}
+            for (loc, kind), n in ranked[:REJECT_DETAIL_MAX]]
+
+
+def _parse_detail(exc: json.JSONDecodeError, content: str,
+                  resp: ChatResponse) -> list[dict[str, Any]]:
+    """`JSONDecodeError` → 「坏在哪一格、是不是被截断」。
+
+    ⚠ 只取解析器自己那句固定措辞（`exc.msg`，例如 `Expecting ',' delimiter`）与位置，
+    **不取正文**。
+    ⚠⚠ `truncated` 取自 **`finish_reason`**，不是从 `pos` 推的——这两类的处置不同
+    （截断该降档腾预算，见模块 docstring ②；中间就坏了降档大概率没用），
+    所以这一格必须是权威信号。**曾经写成 `pos >= len - 1` 是错的**：
+    `Unterminated string starting at` 的 `pos` 指向那个字符串的**起点**而不是文档末尾
+    （实测 `{"voice": {"a": 1}, "surface_hab` ⇒ `pos=20`、`len=32`，最典型的截断
+    却被判成「中间坏的」）。`pos` / `doc_chars` 仍然留着答「坏在哪」，但别拿它们判截断。
+    """
+    return [{
+        'loc': '', 'type': 'json_decode', 'count': 1,
+        'error': exc.msg, 'pos': exc.pos, 'doc_chars': len(content),
+        'truncated': resp.finish_reason == 'length',
+    }]
+
+
 #: 降档理由进事件时的截断长度。`ValidationError` 的文本可以有几千字，而观测事件是
 #: **一行 JSON**、要能被作业日志与 `grep` 消化 ⇒ 截断并标记，不整段灌进去。
 REJECT_REASON_MAX: Final = 400
@@ -533,40 +597,55 @@ class LlmClient:
         self._preflight(system, user, rungs=active_rungs, json_mode=JSON_OBJECT_MODE,
                         max_tokens=max_tokens, purpose=purpose)
 
-        def inspect_response(
-                resp: ChatResponse) -> tuple[M | None, str | None, str, str]:
+        def inspect_response(resp: ChatResponse) -> tuple[
+                M | None, str | None, str, str, list[dict[str, Any]] | None]:
             """⚠ 第四个返回值是**闸名**（`REJECT_GATES` 之一），不是给人读的。
-            `why` 那句话事后要靠人读才能归类，而降档统计要能机器数。"""
+            `why` 那句话事后要靠人读才能归类，而降档统计要能机器数。
+
+            ⚠⚠ 第五个是**结构化拒因摘要**，进审计账（`gate_decision.reject_detail`）。
+            它与 `why` 的分工是承重的：`why` 只进 stdout 事件，而 stdout **会随进程
+            一起没**——2026-08-22 那次整跑被超时杀掉之后，账上只剩 `gate: schema`
+            四个字，两次拒到底拒在哪个字段**再也查不出来**（`docs/REQUIREMENTS.md`
+            TODO-38 记的正是这个洞，那天现场咬了一口）。⇒ 能机器数的那一半必须落账。
+            """
             content = _strip_fences(resp.content)
             if not content:
                 # ⓪ 空正文若照旧往下走，`json.loads('')` 必然抛 ⇒ 落进 `parse`，
                 # 把「答案流丢了」与「JSON 被截断」记成同一格（见 `REJECT_GATES`）。
                 # ⚠ 先劈开再解析，而**不是**事后按 `finish_reason` 改写闸名：
                 # 那样一来 `parse` 这一格的含义会取决于读的人记不记得改写规则。
-                return None, '正文为空', content, (
-                    'answer_lost' if _answer_lost(content, resp) else 'parse')
+                lost = _answer_lost(content, resp)
+                return None, '正文为空', content, ('answer_lost' if lost else 'parse'), (
+                    None if lost
+                    else [{'loc': '', 'type': 'empty_body_truncated', 'count': 1}])
             why = None
             obj = None
             gate = 'parse'
+            detail: list[dict[str, Any]] | None = None
             try:
                 data = json.loads(content)
             except json.JSONDecodeError as e:
-                why = f'解析失败: {e}'
+                why, detail = f'解析失败: {e}', _parse_detail(e, content, resp)
             else:
                 missing = [k for k in require
                            if not isinstance(data, dict) or k not in data
                            or _is_empty(data[k])]
                 if missing:
                     why, gate = f'顶层缺必需键（或值为空）: {missing}', 'require'
+                    # 缺的是**顶层必需键**，键名来自 `model_cls` 的派生、不是模型正文。
+                    detail = [{'loc': k, 'type': 'missing_or_empty', 'count': 1}
+                              for k in missing]
                 else:
                     try:
                         obj = model_cls.model_validate(data)
                     except ValidationError as e:
                         why, gate = f'不合 {model_cls.__name__} 的契约: {e}', 'schema'
+                        detail = _schema_detail(e)
                     else:
                         if validator is not None:
                             why, gate = validator(obj, resp), 'validator'
-            return obj, why, content, gate
+                            # 调用点自带那道闸只交回一句人话，没有可机器数的结构 ⇒ 不编。
+            return obj, why, content, gate, detail
 
         errors: list[str] = []
 
@@ -579,7 +658,7 @@ class LlmClient:
             if got is None:
                 continue
             resp, key, attempt_id = got
-            obj, why, content, gate = inspect_response(resp)
+            obj, why, content, gate, detail = inspect_response(resp)
             head = (f'effort={effort} think={thinking} [缓存] '
                     f'finish={resp.finish_reason} clen={len(content)}')
             if why is None:
@@ -592,11 +671,11 @@ class LlmClient:
             self._settle_gate(
                 purpose=purpose, attempt_id=attempt_id, source='cache',
                 accepted=False, gate=gate, rungs=active_rungs, index=i,
-                progress=progress)
+                detail=detail, progress=progress)
             self._observe_rung_rejected(
                 purpose=purpose, attempt_id=attempt_id, rungs=active_rungs,
-                index=i, source='cache',
-                gate=gate, why=why, resp=resp, json_mode=JSON_OBJECT_MODE, progress=progress)
+                index=i, source='cache', gate=gate, why=why, resp=resp,
+                json_mode=JSON_OBJECT_MODE, progress=progress)
             errors.append(f'{head} {why}')
 
         for i, (effort, thinking) in enumerate(active_rungs):
@@ -607,7 +686,7 @@ class LlmClient:
                     system, user, effort=effort, thinking=thinking, json_mode=JSON_OBJECT_MODE,
                     max_tokens=max_tokens, purpose=purpose, use_cache=False,
                     progress=progress, cache_policy=policy)
-                obj, why, content, gate = inspect_response(resp)
+                obj, why, content, gate, detail = inspect_response(resp)
                 head = (f'effort={effort} think={thinking}'
                         f'{"（重采）" if sample > 1 else ""} '
                         f'finish={resp.finish_reason} clen={len(content)}')
@@ -624,11 +703,12 @@ class LlmClient:
                 self._settle_gate(
                     purpose=purpose, attempt_id=attempt_id, source='wire',
                     accepted=False, gate=gate, rungs=active_rungs, index=i,
-                    sample=sample, resample=resample, progress=progress)
+                    sample=sample, resample=resample, detail=detail,
+                    progress=progress)
                 self._observe_rung_rejected(
                     purpose=purpose, attempt_id=attempt_id, rungs=active_rungs,
-                    index=i, source='wire',
-                    gate=gate, why=why, resp=resp, json_mode=JSON_OBJECT_MODE,
+                    index=i, source='wire', gate=gate, why=why, resp=resp,
+                    json_mode=JSON_OBJECT_MODE,
                     resample=resample, sample=sample, progress=progress)
                 errors.append(f'{head} {why}')
                 if not resample:
@@ -751,13 +831,19 @@ class LlmClient:
                      accepted: bool, gate: str | None,
                      rungs: tuple[tuple[str, bool], ...], index: int,
                      sample: int | None = None, resample: bool = False,
+                     detail: list[dict[str, Any]] | None = None,
                      progress: RequestProgress | None) -> None:
         """内容闸的判定落**审计账**（`gate_decision` 行），采纳时同时登记
         `purpose → attempt_id`，供落盘方写 `artifact_adoption` 行时反查。
 
         与 `_observe_rung_rejected` 的分工：那条是给**看现场的人**的 stdout 事件
-        （带被拒理由的截断文本）；这条是给**离线归因**的账（机器可联结，
-        不带理由文本——理由归事件，采纳归账）。
+        （带被拒理由的截断文本）；这条是给**离线归因**的账（机器可联结）。
+
+        ⚠⚠ **`detail` 是「拒在哪个字段」那一半，它必须在这里而不是只在事件里。**
+        2026-08-22 那次整跑被超时杀掉之后，stdout 连同 `why` 一起没了，账上只剩
+        `gate: schema` 四个字——两次拒到底拒在哪个字段**再也查不出来**
+        （`docs/REQUIREMENTS.md` TODO-38）。⇒ 能机器数的那一半落账，人读的那一半留给事件。
+        ⚠ 它**只带 `loc` + `type` + 计数**，不带模型正文（见 `_schema_detail`）。
         """
         effort, thinking = rungs[index]
         self.ctx.ledger.note_gate(
@@ -767,6 +853,7 @@ class LlmClient:
             gate=None if accepted else gate,
             reasoning_effort=effort, thinking=thinking, rung_index=index,
             sample=sample, resample=resample,
+            reject_detail=None if accepted else detail,
             chapter=progress.chapter if progress else None)
         if accepted:
             with self._adopt_lock:
