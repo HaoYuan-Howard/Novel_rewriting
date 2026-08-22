@@ -35,7 +35,7 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import CtxProvenance, PlanChapters, PlanEdit, WriterContext
 from novel import paths, prov
-from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.errors import GateBlocked, RefusedByStructure, TerminalState, UpstreamMissing
 from novel.llm.ledger import combine_usage
 from novel.report import build
 from novel.report.findings import Outcome
@@ -330,6 +330,12 @@ def _response_baseline(chapter: dict[str, Any], groups: dict[Any, list[list[str]
         for beat_id in members
     }
     baseline = copy.deepcopy(chapter)
+    # ⚠⚠ 基线块里的枚举也要**回到响应侧的前缀写法**：不然同一份 user 里 system 要
+    #   `D_SCENE`、基线印着 `scene`，模型照基线抄就被 schema 当场拒——而那一拒要花钱才看得见。
+    # ⚠⚠ **它必须跑在下面那个 pop 之前**：`spine` 从下标翻回 `beat_id` 用的就是同一行的
+    #   `from_beats`，pop 掉之后那份换算就没有来源了（而缺了它，基线块里会印一个
+    #   数字给一个只收编号的字段——同一格的错，只不过错的是类型）。
+    encode_plan_baseline(baseline)
     for segment in baseline.get('segments') or []:
         segment.pop('slot', None)
         source = list(segment.pop('from_beats', []) or [])
@@ -338,9 +344,7 @@ def _response_baseline(chapter: dict[str, Any], groups: dict[Any, list[list[str]
             raise TerminalState(
                 f'第 {ordinal} 章现有计划引用了当前分组里不存在的 beat：{unknown[:6]}')
         segment['plan_beats'] = list(dict.fromkeys(member_to_unit[beat_id] for beat_id in source))
-    # ⚠⚠ 基线块里的枚举也要**回到响应侧的前缀写法**：不然同一份 user 里 system 要
-    #   `D_SCENE`、基线印着 `scene`，模型照基线抄就被 schema 当场拒——而那一拒要花钱才看得见。
-    return encode_plan_baseline(baseline)
+    return baseline
 
 
 def _repair_refs(up: _Upstreams, ordinal: int) -> dict[str, Any]:
@@ -554,6 +558,64 @@ def _repair_findings(outcomes: list[Outcome], ordinal: int) -> list[dict[str, An
     return rows
 
 
+def _expansion_validator(up: _Upstreams, *, ordinal: int | None = None) -> Any:
+    """把**确定性展开**那两道闸接到 `ask_json(validator=)` 上——拒了同档重采，不再是终态。
+
+    ⚠⚠ **这一条是 2026-08-22 花 59 720 completion 买回来的。** 那一次的响应过了内容闸
+    （schema 合法、`decision=accepted`），却倒在 `expand_plan_beats`：10 处 `spine`
+    对不上号。而那时阶梯已经走完 ⇒ `RefusedByStructure` 是**终态**，重采与降档都够不着它，
+    一份其余全都合格的计划连同整轮 token 一起报废，坏响应还留在缓存里等着被读回。
+    接到这里之后，这一拒与 schema 拒同型（`gate='validator'`）：evict、同档重采、必要时降档。
+
+    ⚠ 两道闸都是**纯确定性**的（编号展开 + 事实引用复算），跑在副本上没有副作用。
+    ⚠⚠ **写盘那一侧的同两道闸一格都没撤**：`--apply-edit` / `--revalidate` 不经过本函数，
+    那两条路的输入是人工稿与盘上产物。**两处调的是同一份代码，不是两份逻辑**——
+    改判据只有 `measure.py` / `fact_refs.py` 一个落点。
+
+    ⚠ 归族随之变了，这是有意的：走完阶梯仍不合格 ⇒ `LlmFailed`（`TerminalState`，
+    exit 2、不打栈），而不是从前的「结构性拒绝（是 bug，exit 70 + 栈）」。
+    **模型填错编号从来不是本仓的 bug**；写盘那一侧仍归 `RefusedByStructure`，
+    因为那一侧的输入是代码派生的或人手写的——那里出现编号错，才真的是 bug。
+
+    `ordinal` 给定 ⇒ 校验 `--chapters` 那条路的单章响应（分组也只给那一章，
+    与 `_run_plan_repair` 随后那次展开逐字同参）。
+    """
+    refs: dict[str, Any] = {}
+
+    def _check(response: Any, _resp: Any) -> str | None:
+        # `model_dump` 每次都新建嵌套容器 ⇒ 下面的就地展开碰不到调用方那一份。
+        raw = response.model_dump(by_alias=True)
+        if ordinal is None:
+            plan, groups = raw, up.groups
+        else:
+            # ⚠⚠ **「响应是别的章」也在这里判，而不是等 `ask_json` 返回之后。**
+            #   它从前是 `_run_plan_repair` 里一句 `TerminalState`：一次越界响应
+            #   直接报废整轮，而这一类恰恰是重采就可能救回来的。放在这里，
+            #   判词一个字不改（`LlmFailed` 会把它逐条带出来），但走的是阶梯。
+            if (raw.get('output_ordinal') != ordinal
+                    or list(raw.get('from_source_ordinals') or []) != [ordinal]):
+                return (f'定向重规划请求第 {ordinal} 章，响应却是 '
+                        f'output_ordinal={raw.get("output_ordinal")} / '
+                        f'from_source_ordinals={raw.get("from_source_ordinals")}。'
+                        f'拒绝把越界响应静默合并')
+            # ⚠ 只包 `output_chapters` 一层：这两道闸都不读 `reconstruction_strategy`，
+            #   给它编一个占位值等于在校验路上放一份假数据。
+            plan = {'output_chapters': [raw]}
+            groups = {ordinal: up.groups.get(ordinal) or []}
+        try:
+            adopt_plan_response(plan, groups, up.bidx)
+            assert up.global_g is not None
+            if not refs:
+                refs.update(fact_catalog(up.global_g, up.blueprints, up.main_text,
+                                         plan_units=up.groups))
+            validate_plan_refs(plan, refs)
+        except RefusedByStructure as e:
+            return str(e)
+        return None
+
+    return _check
+
+
 def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: _Upstreams, *,
                provenance: Any) -> CheckReport:
     """落盘闸门 + 写盘。**付费路与人工稿共用这一段**（三条路一把尺子）。
@@ -674,14 +736,11 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
             repair_system, user, model_cls=PlanChapterResponse,
             purpose=f'{ctx.node}:repair:ch{ordinal}',
             max_tokens=prompts.PLAN_MAX_TOKENS,
+            validator=_expansion_validator(up, ordinal=ordinal),
             cache_policy=CachePolicy.refresh())
-        if (response.output_ordinal != ordinal
-                or list(response.from_source_ordinals) != [ordinal]):
-            raise TerminalState(
-                f'定向重规划请求第 {ordinal} 章，响应却是 '
-                f'output_ordinal={response.output_ordinal} / '
-                f'from_source_ordinals={response.from_source_ordinals}。'
-                '正式计划未覆盖；拒绝把越界响应静默合并')
+        # ⚠ 「响应是不是这一章」已经在 `_expansion_validator` 里判过了（拒了会重采、
+        #   走完阶梯才 `LlmFailed`）。这里再判一次就是一条永不触发的分支，
+        #   而永不触发的分支会让下一个人以为它还在守着什么。
         raw_response = response.model_dump(by_alias=True)
         expanded = {
             'reconstruction_strategy': previous_raw['reconstruction_strategy'],
@@ -754,7 +813,8 @@ def run_plan(ctx: RunContext, client: Any, *,
     system = prompts.plan_system()
     resp = client.ask_json(system, _build_user(ctx, up),
                            model_cls=PlanResponse, purpose=ctx.node,
-                           max_tokens=prompts.PLAN_MAX_TOKENS)
+                           max_tokens=prompts.PLAN_MAX_TOKENS,
+                           validator=_expansion_validator(up))
     params = _params(up)
     ctx.account('params', params)
     return write_plan(ctx, store, resp.model_dump(by_alias=True), up,

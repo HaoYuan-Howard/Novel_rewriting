@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -277,19 +278,26 @@ def test_a_chapter_whose_pacing_cannot_be_measured_lands_in_neither_bucket():
 
 
 def test_the_plan_prompt_tells_the_planner_what_a_spine_is_and_what_it_is_not():
-    """⭐⭐ `spine` 在下发面上必须同时说清两件事：怎么数，以及**它不是顺序**。
+    """⭐⭐ `spine` 在下发面上必须同时说清两件事：**抄哪个编号**，以及它不是顺序。
 
-    ⚠ 「怎么数」是承重的：模型会把它读成「第几个源内容单元」。一个写作单元合并了
-    两个源单元、而它们下面共有 3 件事时，`spine` 的取值面是 1~3 而不是 1~2。
+    ⚠⚠ 「不许数数」是这一条现在的承重点，而它是实付买回来的：从前 prompt 教的是
+    「把各源单元的 events 接起来连续编号」，实测 60 个写作单元错 10 个、9 个是
+    「只有 1 件事却填 2/3」。⇒ 下发面必须**要一个编号**（`bNN_NN`），
+    并明说不要填数字；形状提示里那一格同样得是编号样子的字符串，
+    印一个 `1` 就等于把已经被证伪的走法重新示范一遍。
     ⚠ 「不是顺序」同样承重：`stage5/checks.py` 那条拍内顺序臂在批 3 一行没动，
     模型若把「主干」读成「写在最前面」，成稿会落 `event_landing`。
     """
-    assert 'spine' in prompts.PLAN_HINT['output_chapters'][0]['segments'][0],         '形状提示里没有 spine——模型看不到这一格，必填字段会整轮拒收'
+    hint = prompts.PLAN_HINT['output_chapters'][0]['segments'][0]
+    assert 'spine' in hint, '形状提示里没有 spine——模型看不到这一格，必填字段会整轮拒收'
+    assert re.fullmatch(r'b\d{2}_\d{2}', str(hint['spine'])), \
+        f'形状提示把 spine 印成了 {hint["spine"]!r}：模型会照着填一个数字'
     body = prompts.PLAN_SYS
-    assert '本单元的主干是第几件事' in body
-    assert '数的是「事」不是「源内容单元」' in body, '没说清怎么数 ⇒ 模型会按源单元数'
+    assert '本单元的主干是哪一件事' in body
+    assert '不要数「第几件」，也不要填数字' in body, '没堵住数数这条路 ⇒ 模型会去数'
+    assert '逐字抄下它的编号' in body, '没说清编号从哪里来 ⇒ 模型会编一个'
     assert 'spine 只说主次，不说先后' in body
-    assert '仍然是它们的编号先后' in body
+    assert '仍然是它们在骨架里的先后' in body
 
 
 def test_the_plan_prompt_gives_both_bands_and_says_which_one_is_per_chapter():
@@ -398,8 +406,9 @@ def test_the_model_response_only_ever_enters_through_one_door():
            / 'novel' / 'stages' / 'stage4' / 'plan.py').read_text(encoding='utf-8')
     assert 'expand_plan_beats(' not in src, \
         'plan.py 直接调了 `expand_plan_beats` ⇒ 那一路的前缀不会被解开，而判据不会为此出声'
-    assert src.count('adopt_plan_response(') == 2, \
-        '模型响应有两条入口（整跑 / 定向修复），两条都必须走同一个门'
+    assert src.count('adopt_plan_response(') == 3, \
+        ('模型响应有两条入口（整跑 / 定向修复）加一道内容闸（`_expansion_validator`），'
+         '三处都必须走同一个门')
 
 
 def test_the_length_section_carries_the_three_lines_the_first_paid_run_bought():
@@ -578,8 +587,9 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
                 'transition': ('X_START' if output_index == 0
                                else 'X_EARLIER' if moved and output_index == 1
                                else 'X_CONTINUE'),
-                # 每个写作单元这里只引一个源单元，而源单元至少有一件事 ⇒ 1 恒合法。
-                'spine': 1,
+                # ⚠ `spine` 是**编号**不是下标：这里只引一个源单元 ⇒ 从它自己的
+                #   events 里挑第一条抄编号（合成的是模型响应，模型也只能这么填）。
+                'spine': sorted(events_by_unit[unit_id])[0],
             })
         first_event = sorted(events_by_unit[order[0]])[0]
         last_event = sorted(events_by_unit[order[-1]])[-1]

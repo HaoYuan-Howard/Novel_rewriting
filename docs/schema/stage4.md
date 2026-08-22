@@ -31,15 +31,21 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 - 非空 `segments[]`。
 
 模型响应中的每个写作单元包含 `plan_beats[]`、`narrative_role`、`delivery`、`transition`、
-正整数 `budget_chars` 与正整数 `spine`。`plan_beats[]` 引用下发的 `pNN_NN` 源内容单元，
-数组顺序就是重构后的叙述顺序。
+正整数 `budget_chars` 与 `spine`（一个 `bNN_NN`）。`plan_beats[]` 引用下发的 `pNN_NN`
+源内容单元，数组顺序就是重构后的叙述顺序。
 
-`spine` 是**本单元的主干是第几件事**（1-based，把 `plan_beats[]` 各源单元的 `events`
-按顺序接起来连续编号；数的是「事」不是「源内容单元」）。它治的是「一拍 N 条材料被写成
-N 句平权的话」——批 1 把句子单位从 event 上移到拍之后，拍**内部**仍是一张平权清单。
+`spine` 是**本单元的主干是哪一件事**——从下发骨架里那张 `events{}`（`beat_id → 这件事`）
+逐字抄一个编号。它治的是「一拍 N 条材料被写成 N 句平权的话」——批 1 把句子单位从 event
+上移到拍之后，拍**内部**仍是一张平权清单。
 ⚠⚠ **它只标主次、不标顺序**：拍内 event 的落笔先后仍恒等于源序，`stage5` 那条拍内顺序臂
-一行未动。上界（`1 ≤ spine ≤ 展开后的 event 数）由 `expand_plan_beats` 判——
-载体侧只写得下 `ge=1`，因为那个数要先把 `plan_beats[]` 过一遍 `gmap` 才存在。
+一行未动。
+⚠⚠ **它曾经是下标**（`int`，把各源单元的 events 接起来连续编号），2026-08-22 两次整跑
+把那个形状否掉：一份 schema 合法的响应里 60 个写作单元错 10 个，**9 个是「只有 1 件事
+却填 2/3」**，而同一份响应的 `plan_beats` 编号引用一个都没错 ⇒ **让模型引用可靠、
+让它数数不可靠**。编号→下标的换算现在由 `expand_plan_beats` 做（代码本来就精确知道），
+载体侧只判形状；「这个编号属不属于本单元」要先经 `gmap` 展开才知道，与三种编号违约
+同一条出口。⚠ 那道出口现在同时挂在 `ask_json(validator=)` 上 ⇒ **拒了是同档重采**，
+不再是一份其余都合格的计划连同整轮 completion 一起报废。
 
 **响应侧的四个枚举字段带前缀，与产物侧不是同一张表**（2026-08-22 起）：
 
@@ -101,11 +107,15 @@ system 要 `D_SCENE`、基线印着 `scene`，模型照基线抄就被拒，而�
 - `narrative_role: cold_open|setup|escalation|turn|payoff|bridge`；
 - `delivery: scene|summary`；
 - `transition: start|continue|earlier|later|parallel|return`；
-- `spine: int ≥ 1 | null`。⚠ 产物侧**可以为 `null`**（响应侧必填）：`null` = 这份计划
-  没做过主次决策，恒等基线（`measure.identity_plan`）就是它——给基线一个 1 会让它
-  看起来做过一次决策，而那份基线正是 `structure_changed` 的反例来源。
+- `spine: int ≥ 1 | null`（**下标**，响应侧收的是 `beat_id`）。⚠ 产物侧**可以为 `null`**
+  （响应侧必填）：`null` = 这份计划没做过主次决策，恒等基线（`measure.identity_plan`）
+  就是它——给基线一个 1 会让它看起来做过一次决策，而那份基线正是 `structure_changed`
+  的反例来源。
   ⚠ `--chapters` 的基线块在这一格为 `null` 时**整个删掉这个键**，不印 `null`：
   响应侧必填，印 `null` 就是让 system 与基线在同一份 user 里互相打脸。
+  ⚠⚠ 基线块还要把**类型**一起翻回去（下标 → `from_beats[spine-1]` 那个 `beat_id`）：
+  印一个数字给一个只收编号的字段，是同一格的错，只不过错在类型
+  （`encode_plan_baseline`，必须跑在 `from_beats` 被换成 `plan_beats` 之前）。
 
 每章预算总和必须落在其引用 `SourceSpan` 字数总和的 `PLAN_BUDGET_BAND`（**0.80~1.20**）内；
 该常量就是唯一执行带，没有第二层宽限。若某个引用无法提供精确基准，该章的预算规则报告 `unver`，
@@ -197,9 +207,11 @@ raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 `spine`（`int ≥ 1 | null`）从 `PlanBeat` 原样投影，与 `events[]` **同下标空间**。
 
 ⚠⚠ **全链只有这一层能把 `spine ≤ len(events)` 写成类型**——它同时持有两者，
-上游那两侧各缺一半（响应侧 `plan_beats[]` 还没展开、产物侧 `from_beats[]` 是 id 不是内容）。
-同一条 validator 还禁止 `events[]` 里出现空条目：下发给规划者的骨架**过滤**空 event、
-写手那一侧**不过滤**，留一个空串在里面两边就差一格，`spine` 会静默指向另一件事。
+上游那两侧各缺一半（响应侧收的是 `beat_id`、产物侧 `from_beats[]` 是 id 不是内容）。
+⚠ 它同时是 `--apply-edit` 那一路**唯一**的 spine 守卫：人工稿不过 `expand_plan_beats`。
+同一条 validator 还禁止 `events[]` 里出现空条目：下发给规划者的骨架**跳过**空 event、
+写手那一侧**不过滤**，留一个空串在里面两边就差一格。⚠ `spine` 改成引用之后，
+空条目不再让**模型**指错人（编号跟着那件事走），但产物侧仍是下标 ⇒ 这条恒等式照旧承重。
 
 保真材料按语义分四组：
 

@@ -392,40 +392,63 @@ def _spine_plan(spine, *, plan_beats=('p01_01',)) -> dict:
         {'plan_beats': list(plan_beats), 'budget_chars': 120, 'spine': spine}]}]}
 
 
-@pytest.mark.parametrize('spine', [1, 2])
-def test_a_spine_inside_the_expanded_event_count_passes(spine):
-    """展开后这一单元有 2 件事 ⇒ 1 和 2 都合法。"""
+@pytest.mark.parametrize('spine, expected', [('b01_01', 1), ('b01_02', 2)])
+def test_a_spine_naming_an_event_of_this_unit_becomes_its_index(spine, expected):
+    """⭐⭐ 模型给的是**哪一件事**（`beat_id`），落盘的是**第几件**（下标）。
+
+    ⚠ 换算就是「它在 `from_beats` 里排第几」——与 `plan_beats → from_beats` 同一次动作。
+    模型一次都不必数：那个数代码本来就精确知道（2026-08-22 的教训，见
+    `PlanBeatResponse.spine`）。
+    """
     plan = _spine_plan(spine)
     assert expand_plan_beats(
         plan, {1: [['b01_01', 'b01_02']]}, _fake_bidx('b01_01', 'b01_02')) == 1
+    assert plan['output_chapters'][0]['segments'][0]['spine'] == expected
 
 
-@pytest.mark.parametrize('spine', [3, 99])
-def test_a_spine_past_the_expanded_event_count_is_a_terminal_state(spine):
-    """⭐⭐ **`spine` 的上界只有这里知道，所以它也在这里判。**
+@pytest.mark.parametrize('spine', ['b01_03', 'b07_07'])
+def test_a_spine_naming_an_event_outside_this_unit_is_a_terminal_state(spine):
+    """⭐⭐ **归属只有这里知道，所以它也在这里判。**
 
-    载体侧（`PlanBeatResponse.spine`）只写得下 `ge=1`——上界是「本单元展开后有几件事」，
-    而那个数要先把 `plan_beats[]` 过一遍 `gmap` 才存在。
+    载体侧（`PlanBeatResponse.spine`）只判得了形状（`bNN_NN`）——「这个编号在不在本单元
+    引的那几个源内容单元里」要先把 `plan_beats[]` 过一遍 `gmap` 才知道。
     ⚠ 它与三种编号违约走**同一条出口**：分成两处 raise，就会有一份计划先报完编号错、
     重跑一次再报一遍 spine 错，而两次都要花钱。
+    ⚠ `b01_03` 是「本章有、但不在本单元」，`b07_07` 是「压根不存在」——
+    两种都只是**指错人**，判词一样。
     """
     plan = _spine_plan(spine)
-    with pytest.raises(RefusedByStructure, match='越界'):
-        expand_plan_beats(plan, {1: [['b01_01', 'b01_02']]}, _fake_bidx('b01_01', 'b01_02'))
+    with pytest.raises(RefusedByStructure, match='不是本单元里的事'):
+        expand_plan_beats(plan, {1: [['b01_01', 'b01_02'], ['b01_03']]},
+                          _fake_bidx('b01_01', 'b01_02', 'b01_03'))
 
 
 def test_a_unit_that_already_broke_the_numbering_does_not_also_get_a_spine_complaint():
     """⭐ 已经有编号违约的单元**不再判它的 `spine`**——那时 `cited` 本来就是残的。
 
-    ⚠ 报出来的越界是**派生症状**，会盖住真根因。这是「74 条症状盖住一句话」
+    ⚠ 报出来的归属错是**派生症状**，会盖住真根因。这是「74 条症状盖住一句话」
     （`test_an_empty_plan_says_so_in_one_sentence`）的同一个教训，
     只不过这一次症状与根因在同一个写作单元里。
     """
-    plan = _spine_plan(5, plan_beats=('p09_09',))       # 编号不存在 ⇒ cited 为空
+    plan = _spine_plan('b01_01', plan_beats=('p09_09',))   # 编号不存在 ⇒ cited 为空
     with pytest.raises(RefusedByStructure) as excinfo:
         expand_plan_beats(plan, {1: [['b01_01']]}, _fake_bidx('b01_01'))
     assert '编号不存在' in str(excinfo.value)
-    assert '越界' not in str(excinfo.value), 'spine 的派生症状盖过了真根因'
+    assert '不是本单元里的事' not in str(excinfo.value), 'spine 的派生症状盖过了真根因'
+
+
+def test_a_spine_is_never_a_number_on_the_response_side():
+    """⭐⭐ **响应侧收编号、不收数字**，这条守卫钉的是那次实付买回来的形状。
+
+    2026-08-22：一份 schema 合法的计划里 60 个写作单元错 10 个，**9 个是「本单元只有
+    1 件事、却填了 2 或 3」**——模型要填对下标就得把几个源单元的 events 摊平累加，
+    而那个数代码本来就精确知道。⇒ 数字这条路**不许再回来**：真回来了，
+    `expand_plan_beats` 会安静地把它当成「没做过主次决策」放过去。
+    """
+    plan = _spine_plan(2)                                   # 旧形状：下标
+    with pytest.raises(RefusedByStructure, match='不是本单元里的事'):
+        expand_plan_beats(plan, {1: [['b01_01', 'b01_02']]},
+                          _fake_bidx('b01_01', 'b01_02'))
 
 
 def test_an_empty_source_event_is_a_terminal_state_because_it_shifts_the_spine():
@@ -439,7 +462,7 @@ def test_an_empty_source_event_is_a_terminal_state_because_it_shifts_the_spine()
     bad = _fake_bidx('b01_01', 'b01_02')
     bad['b01_02']['event'] = '   '
     with pytest.raises(RefusedByStructure, match='stage2 契约') as excinfo:
-        expand_plan_beats(_spine_plan(1), {1: [['b01_01', 'b01_02']]}, bad)
+        expand_plan_beats(_spine_plan('b01_01'), {1: [['b01_01', 'b01_02']]}, bad)
     assert 'b01_02' in str(excinfo.value), '没点名是哪一个 beat'
 
 
@@ -476,8 +499,11 @@ def test_the_baseline_block_omits_a_null_spine_instead_of_printing_it():
     from novel.stages.stage4.measure import encode_plan_baseline
 
     kept = encode_plan_baseline({'segments': [
-        {'delivery': 'scene', 'spine': 2}, {'delivery': 'summary', 'spine': None}]})
-    assert kept['segments'][0]['spine'] == 2
+        {'delivery': 'scene', 'spine': 2, 'from_beats': ['b01_01', 'b01_02']},
+        {'delivery': 'summary', 'spine': None, 'from_beats': ['b01_03']}]})
+    # ⚠⚠ 顺带钉住**类型也要翻回去**：产物侧存下标、响应侧收 `beat_id`，
+    #   基线块里印一个数字，模型照抄就是一次 schema 拒（同一格的错，只是错在类型）。
+    assert kept['segments'][0]['spine'] == 'b01_02'
     assert 'spine' not in kept['segments'][1]
 
 

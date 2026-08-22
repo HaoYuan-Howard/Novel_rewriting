@@ -51,7 +51,7 @@ from contracts.schema.common import FreeProvenance, LlmProvenance
 #: ⚠ 从 stage2 借的**不是拷贝，是同一个类**：`facts.setting` 是 stage2 那两个中文键的
 #: **字节级原样透传**（实测 31/31 章 mismatch 0）。各定一份就是第二个落点。
 #: ⚠ 但**只借这一个**：`facts.address[].by` 看起来也该借，实际不能——见 `CtxAddress.by`。
-from contracts.schema.stage2 import Setting
+from contracts.schema.stage2 import BEAT_ID_PATTERN, Setting
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,6 +111,11 @@ class PlanBeat(StrictModel):
     #: 给它 1 会让基线看起来做过（而基线正是 `structure_changed` 的反例来源）。
     #: 响应侧那一份（`PlanBeatResponse.spine`）是**必填**的——两边的分工与
     #: `from_beats`/`plan_beats` 完全同型：产物侧要能表达「没有」，响应侧不许省。
+    #:
+    #: ⚠⚠ **两边的类型也不同型，这是有意的**：响应侧收 `beat_id`（引用），
+    #: 这一侧存下标——`expand_plan_beats` 把编号换算成 `from_beats` 里的位置，
+    #: 与它把 `plan_beats` 换算成 `from_beats` 是同一次动作、同一条出口。
+    #: 理由（模型会数错、但不会引用错）写在 `PlanBeatResponse.spine` 上。
     spine: int | None = Field(default=None, ge=1)
 
 
@@ -285,18 +290,27 @@ class PlanBeatResponse(StrictModel):
     delivery: Literal[tuple(RESPONSE_DELIVERY_MODES)]
     transition: Literal[tuple(RESPONSE_TEMPORAL_LINKS)]
 
-    #: **本单元的主干是第几件事**（1-based，跨 `plan_beats[]` 顺序展开后的编号）。
-    #: 语义与上界校验见 `PlanBeat.spine` 与
-    #: `novel/stages/stage4/measure.py::expand_plan_beats`。
+    #: **本单元的主干是哪一件事**——一个 Stage2 `beat_id`，从下发骨架里那张
+    #: `events{}`（`beat_id → 这件事`）逐字抄。产物侧 `PlanBeat.spine` 是**下标**，
+    #: 编号→下标的换算由 `novel/stages/stage4/measure.py::expand_plan_beats` 做。
     #:
-    #: ⚠ 这里只有 `ge=1`，**上界不在载体上**：上界是 `len(展开后的 events)`，
-    #: 而那个数在这一层还不存在（`plan_beats` 要先经 `gmap` 展开）。
-    #: 越界由 `expand_plan_beats` 显式终态，与三种编号违约同一段、同一条出口。
+    #: ⚠⚠ **它曾经是下标本身**（`int`，1-based，跨 `plan_beats[]` 展开后连续编号），
+    #: 2026-08-22 两次整跑把那个形状否掉：要填对下标，模型得把本单元几个源内容单元的
+    #: events 摊平累加，而那个数**代码本来就精确知道**。实测一份 schema 合法的响应里
+    #: 60 个写作单元错 10 个，**9 个是「本单元只有 1 件事、却填了 2 或 3」**——
+    #: prompt 白纸黑字写着「只有一件事时填 1」。同一份响应里 `plan_beats` 的编号引用
+    #: **一个都没错**。⇒ **让模型引用可靠，让它数数不可靠**，能引用就不要它数。
+    #:
+    #: ⚠ 载体只判**形状**（`bNN_NN`，与 `Beat.beat_id` 同一份正则），**归属不在载体上**：
+    #: 「这个编号是不是落在本单元 `plan_beats[]` 引的那几个源内容单元里」要先经 `gmap`
+    #: 展开才知道，由 `expand_plan_beats` 与三种编号违约同一段、同一条出口判
+    #: ——而那一段现在挂在 `ask_json(validator=)` 上（`plan.py::_plan_expansion_validator`）：
+    #: 拒了是**同档重采**，不再是一份其余都合格的计划连同整轮 token 一起报废。
     #:
     #: ⚠ 它**刻意排在三个枚举之后**：批 2 那次 6 次 wire 全灭是四张相邻枚举表串出来的，
     #: 新字段插进那一串中间等于把已经用三轮实付验过的字段序重新洗一遍。
-    #: 追加在末尾、且取值面是小整数（与三张前缀表不同型），串不进去。
-    spine: int = Field(ge=1)
+    #: 追加在末尾、且取值面是 `bNN_NN`（与三张 `X_` 前缀表不同型），串不进去。
+    spine: str = Field(pattern=BEAT_ID_PATTERN)
 
 
 class PlanGoalResponse(StrictModel):

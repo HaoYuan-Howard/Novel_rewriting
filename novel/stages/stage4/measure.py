@@ -252,13 +252,18 @@ def encode_plan_baseline(chapter: dict[str, Any]) -> dict[str, Any]:
         for field, table in back.items():
             if (value := beat.get(field)) in table:
                 beat[field] = table[value]
-        # ⚠ **`spine` 为 `None` 时把这一格整个删掉，不印 `null`。** 产物侧允许「没做过这个
-        #   决策」（恒等基线就是），响应侧 `PlanBeatResponse.spine` 却是必填——
-        #   把 `null` 印进基线块，就是在同一份 user 里让 system 与基线互相打脸：
-        #   模型照基线抄，schema 当场拒，而那一拒要花一次钱才看得见。
-        #   **这与上面那三张前缀表是同一件事**：基线块必须是一份「照抄就合法」的响应。
+        # ⚠⚠ **`spine` 要连类型一起翻回去**：产物侧存的是下标，响应侧收的是 `beat_id`。
+        #   基线块里印一个数字，模型照抄就是一次 schema 拒——与那三张前缀表同一格，
+        #   只不过这次错的是**类型**而不是取值面。换算的来源就是同一行的 `from_beats`
+        #   （`_response_baseline` 随后才把它 pop 掉换成 `plan_beats`，所以这里还在）。
+        # ⚠ **`spine` 为 `None`（或换不出来）时把这一格整个删掉，不印 `null`。**
+        #   产物侧允许「没做过这个决策」（恒等基线就是），响应侧却是必填——
+        #   把 `null` 印进基线块，就是在同一份 user 里让 system 与基线互相打脸。
         #   删掉之后基线在这一格什么都不说，模型按 system 的规则自己定——那是真话。
-        if beat.get('spine') is None:
+        spine, source = beat.get('spine'), (beat.get('from_beats') or [])
+        if isinstance(spine, int) and 1 <= spine <= len(source):
+            beat['spine'] = source[spine - 1]
+        else:
             beat.pop('spine', None)
     return chapter
 
@@ -283,18 +288,25 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]],
     成稿骨架。模型决定输出单元的分组与顺序；本函数只做无损、可审计的编号展开：每个源
     内容单元必须恰好出现一次，编号不存在、重复、漏项都显式终态，不猜测、不兜底。
 
-    ⚠⚠ **`spine` 的上界只有这里知道，所以它也在这里判。** 载体侧（`PlanBeatResponse.spine`）
-    只能写 `ge=1`——上界是「本单元展开后有几件事」，而那个数要先把 `plan_beats[]` 过一遍
-    `gmap` 才存在。越界与三种编号违约走**同一条出口**（同一批 `bad`、同一次终态）：
+    ⚠⚠ **`spine` 的编号→下标换算也在这里**，与 `plan_beats → from_beats` 同一次动作：
+    响应侧给的是一个 `beat_id`（引用），产物侧存的是它在 `from_beats` 里的位置。
+    「这个编号属不属于本单元」只有展开之后才知道 ⇒ 载体侧（`PlanBeatResponse.spine`）
+    只判得了形状。归属违约与三种编号违约走**同一条出口**（同一批 `bad`、同一次终态）：
     分成两处 raise，就会有一份计划报完编号错、下一次重跑再报一遍 spine 错。
     ⚠ 某个写作单元自己已经有编号违约时**不再判它的 `spine`**：那时 `cited` 本来就是残的，
-    报出来的越界是派生症状，会盖住真根因（`output_chapters` 为空那次 74 条症状的同一个教训）。
+    报出来的归属错是派生症状，会盖住真根因（`output_chapters` 为空那次 74 条症状的同一个教训）。
+    ⚠⚠ **这一段现在还挂在 `ask_json(validator=)` 上**（`plan.py::_plan_expansion_validator`）：
+    它从前只跑在内容闸**之后** ⇒ 一份 schema 合法、只错了几个 `spine` 的计划是**终态**，
+    连同整轮 completion 一起报废（2026-08-22 实测 59 720 token）。现在同一段代码先在
+    响应上跑一遍，拒了走同档重采。⇒ **改这里的判据就是在改闸门**，两边不是两份逻辑。
 
     ⚠⚠ **那道计数断言（`blank`）守的是一处真实的 off-by-one**：下发给规划者的骨架
-    **过滤**空 event（`prompts.py::project_blueprints_for_planner`），而写手那一侧
+    **跳过**空 event（`prompts.py::project_blueprints_for_planner`），而写手那一侧
     **刻意不过滤**（`context.py::_resolve_beats`——过滤会让 events 与舞台 `segments` 下标错位，
-    那正是「张冠李戴」）。两边计数一旦分家，模型数着第 2 条标的 `spine`，
-    写手手里第 2 条就是另一件事。stage2 契约 `event: str = Field(min_length=1)` 保证两者恒等
+    那正是「张冠李戴」）。⚠ `spine` 改成引用之后**它不再决定 spine 指谁**（编号跟着那件事走，
+    跳过一条也不会让别的编号漂移），但产物侧 `PlanBeat.spine` 仍是下标、
+    `CtxBeat.events` 仍按 `from_beats` 不过滤地展开 ⇒ 这条恒等式照旧承重。
+    stage2 契约 `event: str = Field(min_length=1)` 保证两者恒等
     ⇒ 这条断言在正常盘上永远不响；**它响的那一天，恒等式已经破了，不许兜底往下走。**
     """
     gmap = group_map(groups)
@@ -330,11 +342,18 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]],
             # 两边的 events 计数必须恒等——理由与那次「张冠李戴」见 docstring。
             blank += [(oo, b) for b in cited
                       if not ((bidx.get(b) or {}).get('event') or '').strip()]
-            # `spine` 的上界 = 本单元展开后有几件事。⚠ 本单元已经有编号违约就不判它。
+            # `spine`：模型给的是**哪一件事**（`beat_id`），落盘的是**第几件**（下标）。
+            # ⚠ 本单元已经有编号违约就不判它，也不换算——那时 `cited` 本来就是残的。
+            # ⚠ 缺席是合法态（存量计划、恒等基线），但**给了就必须是本单元里的一个编号**：
+            #   一个数字（旧形状）在这里同样落进 `bad`，不许静默当成「没做过决策」放过去。
             spine = be.get('spine')
-            if spine is not None and len(bad) == n_bad_before and not 1 <= spine <= len(cited):
-                bad.append((oo, f's{index:02d}',
-                            f'spine={spine} 越界（本单元展开后有 {len(cited)} 件事）'))
+            if spine is not None and len(bad) == n_bad_before:
+                if isinstance(spine, str) and spine in cited:
+                    be['spine'] = cited.index(spine) + 1
+                else:
+                    bad.append((oo, f's{index:02d}',
+                                f'spine={spine!r} 不是本单元里的事'
+                                f'（本单元是 {cited[:6]}）'))
             expanded.append(be)
         o['segments'] = expanded
     if (missing := [p for p in gmap if p not in seen]):

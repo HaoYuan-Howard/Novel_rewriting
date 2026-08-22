@@ -21,6 +21,7 @@ from novel.llm.cache import CachePolicy
 from novel.report.findings import ran
 from novel.stages.stage2 import extract
 from novel.stages.stage4 import plan
+from novel.stages.stage4.beats import plan_beat_id
 from novel.stages.stage4.measure import identity_plan
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
@@ -87,8 +88,12 @@ def _target_response(before, groups, ordinal):
     不补就等于让装置去验证「模型漏填必填字段会被拒」，而那是另一条测试的事。
     """
     chapter = plan._response_baseline(plan._chapter_by(before)[ordinal], groups, ordinal)
+    members = {plan_beat_id(ordinal, index): group
+               for index, group in enumerate(groups.get(ordinal) or [], 1)}
     for segment in (chapter.get('segments') or []):
-        segment['spine'] = 1
+        # ⚠ 补的是**本单元里一个 event 的编号**，不是数字：响应侧 `spine` 从 2026-08-22
+        #   起收 `beat_id`（模型引用可靠、数数不可靠），填个 1 会被载体当场拒。
+        segment['spine'] = members[segment['plan_beats'][0]][0]
     return chapter
 
 
@@ -147,7 +152,12 @@ def test_targeted_plan_repair_rejects_wrong_chapter_without_overwriting_formal()
         with pytest.raises(TerminalState, match='响应却是'):
             plan.run_plan(ctx, client, chapters=(2,))
 
-        assert len(transport.calls) == 1
+        # ⚠⚠ **越界响应从 2026-08-22 起走阶梯，不再是「一次就终态」**：这一拒与 schema 拒
+        #   同型（模型没按契约产出），而「除截断外每一种拒绝都先同档重采」是本仓已经
+        #   付过学费的默认处置（`0e2492a`：那 47.7% 白花的根因）。判词一个字没改，
+        #   只是从 `_run_plan_repair` 搬到了 `_expansion_validator` 上。
+        #   ⚠ 承重的两条在下面：**正式产物一个字节没动**、**不落 `.INVALID`**。
+        assert len(transport.calls) == 6, '越界响应没有走完阶梯（3 档 × 同档重采）'
         assert store.path(plan.REL).read_bytes() == original
         assert not store.exists(plan._INVALID)
     finally:
