@@ -20,7 +20,12 @@ import { cx } from '@/lib/cx'
 
 /**
  * 进 stage5 之前先挑要深度重构的章节（默认**全书闭卷**），其余走浅层。
- * 深度 = 闭卷重构（写手看不到原文），按拍多次调用；浅层 = 开卷改写，一次过。
+ * 深度 = 闭卷重构（写手看不到原文）；浅层 = 开卷改写（源章原文在下发面里）。
+ *
+ * ⚠ **两条臂都是「一章一次调用」**。这里曾写着「深度按拍多次调用」，那是假的：
+ * `novel/stages/stage5/write.py::_write_chapter` 首轮只有一次 `ask_json`
+ *（第二次只在 `--revise` 判定退化时才发），盘上 23 章 = 23 次实付，两条臂各一次。
+ * 单章成本的真实差别在**下发面里有没有源章原文**：闭卷 prompt 更小、推理更多。
  * 选错了钱就花在错的章上 —— 所以这一步单独成屏，不塞在写作屏的角落里。
  *
  * ⚠⚠ 默认曾是「前 3 章」，2026-08-22 改成全书闭卷（后端
@@ -68,7 +73,7 @@ export function DepthScreen() {
         <div className="flex flex-col gap-5">
           <h1 className="m-0 text-screen font-semibold">挑深度重构章节</h1>
           <div className="text-body text-ink-3">
-            深度 = 闭卷重构，写手看不到原文，按拍多次调用；浅层 = 开卷改写，一次过。
+            深度 = 闭卷重构，写手看不到原文；浅层 = 开卷改写，源章原文在下发面里。两条臂都是一章一次调用。
           </div>
         </div>
         <div className="flex items-center gap-8">
@@ -139,7 +144,7 @@ export function DepthScreen() {
                   {deep.length ? deep.map((n) => chNo(n)).join(' ') : '一章都没选'}；其余走浅层
                 </span>
                 <span className="text-tag text-ink-4">
-                  深度按拍重写，一章多次调用；浅层一次过。选之前先看清计划——选错了钱花在错的章上。
+                  两条臂都是一章一次调用；差别在下发面给不给源章原文。选之前先看清计划——选错了钱花在错的章上。
                 </span>
                 {/* 选中直接画自服务端验收记录，不做乐观更新——写失败时图上就是服务端值，无需回滚 */}
                 {setDeep.isError ? (
