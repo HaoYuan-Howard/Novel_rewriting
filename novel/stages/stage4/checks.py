@@ -206,6 +206,11 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     structure_metrics: list[str] = []
     n_reconstructable = 0
     axis_hits = Counter()
+    #: 可重构章 → 四根轴各自的成立与否。**只为 `structure_reshaped` 那条读数存在**：
+    #: 批 3 要回答的是「把恒真的 `axis_group` 换成 `axis_reshape` 之后，
+    #: `structure_changed` 会红哪几章」——那是一个**反事实**，判定式本身一行不动，
+    #: 而反事实必须逐章拿到四根轴才算得出来。`reshape` 可能是 `None`（这一章判不动）。
+    axis_by: dict[Any, dict[str, bool | None]] = {}
     dir_bad: list[tuple[Any, int, Any, str, str, int]] = []
     seam_unjudged: Counter[str] = Counter()
     n_seam = n_dir = 0
@@ -265,6 +270,8 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
             axis_hits['分组重画'] += axis_group
             axis_hits['summary 承载'] += axis_delivery
             axis_hits['与恒等基线完全相同'] += not (axis_group or axis_delivery)
+            axis_by[oo] = {'entry': axis_entry, 'group': axis_group,
+                           'delivery': axis_delivery, 'reshape': None}
 
         transitions = [be.get('transition') for be in segments]
         link_mix.update(t for t in transitions if t is not None)
@@ -373,6 +380,14 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
             structure_metrics[-1] += (
                 f'；拍级 预算/源 相对本章均值 {min(rel):.2f}~{max(rel):.2f}'
                 f'；summary 承载源字数 {summ * 100 // tot_s}%')
+            # ⚠ 第四根轴的**候选**：本章有没有哪一拍的相对倍率冲出 `PLAN_BUDGET_BAND`。
+            #   拿的是**相对本章均值**的那个 `rel`，与上面那行同一个数——章级整体厚薄归
+            #   `budget_band`/`plan_book_band`，本轴只问「章内有没有轻重」。
+            #   ⚠ 它现在**只是读数**：换不换进 `structure_changed` 的判定式，
+            #     看 `structure_reshaped` 报出来的分布（见那条 metric 的 note）。
+            if oo in axis_by:
+                _lo, _hi = PLAN_BUDGET_BAND
+                axis_by[oo]['reshape'] = any(r < _lo or r > _hi for r in rel)
 
     # ⚠ **先比一次分组参数再判**（`R-5.11b`）：两条结构判据是拿**当前**的
     #   `group_beats` 去量的，而产物记着它是照哪一套切的。不比就是拿新尺子量旧布。
@@ -504,6 +519,46 @@ def check(plan: dict[str, Any], *, blueprints: dict[str, Any], main_text: list[d
     out.append(ran('structure_entry_mix', [finding(
         'structure_entry_mix', detail='；'.join(entry_mix), evidence=entry_mix)],
         scanned=f'{len(outs)} 个输出章 × {n_seam} 个接缝'))
+
+    # ── `structure_changed` 换项的**决策读数**（2026-08-22，批 3）──────────────
+    # 【要回答的问题】`axis_group`（分组序列 ≠ 恒等基线）在生产落点上**恒真**：
+    #   `--check-only` 实测 13/13 个可重构章全靠它过关、`axis_entry` 0/13
+    #   ⇒ 那条 HARD 实际上只在判「有没有合并过」。批 3 的候选换项是
+    #   `axis_reshape`（章内有拍冲出 `PLAN_BUDGET_BAND`）——它问的是**详略**，
+    #   而详略正是「成稿只改了措辞」那条链上一直没人判的那一维。
+    # ⚠⚠ **本条只报读数，判定式一行不动。** `axis_reshape` 很可能**也**近乎恒真
+    #   （先前量到 40/57 拍在 0.9~1.1 之外，但那是相对 1.0 不是相对本章均值 `r̄`，
+    #   两个数不能互相代入）。换一个恒真项进去，那条 HARD 还是恒绿——
+    #   **换项要拿这一行的分布当依据，不是拿「它听起来更对」当依据**（`Q-9`/判据 15）。
+    # ⚠ 判不动的章（拍缺 span 或缺预算）报成 `None` 单列，**不并进任何一边**：
+    #   压成「未命中」会让反事实凭空多红几章，压成「命中」则凭空少红几章。
+    if n_reconstructable:
+        _re_hit = [o for o, a in axis_by.items() if a['reshape'] is True]
+        _re_unk = [o for o, a in axis_by.items() if a['reshape'] is None]
+        # 反事实：把 `axis_group` 换成 `axis_reshape` 之后，这条 HARD 会红哪几章。
+        _cf_red = sorted(o for o, a in axis_by.items()
+                         if a['reshape'] is False and not a['delivery'])
+        _cf_unk = sorted(o for o, a in axis_by.items()
+                         if a['reshape'] is None and not a['delivery'])
+        reshaped = [
+            f'轴命中：章内详略重画 {len(_re_hit)}/{n_reconstructable} 个可重构章'
+            f'（判不动 {len(_re_unk)}）· 现役的分组重画 {axis_hits.get("分组重画", 0)}'
+            f'/{n_reconstructable}',
+            f'换项反事实（判定式**未**改动）：把 `axis_group` 换成 `axis_reshape` 后，'
+            f'`structure_changed` 会红 {sorted(_cf_red)}；现役口径红 {sorted(identity_chapters)}',
+            f'说不清的 {sorted(_cf_unk)} 章：详略判不动且没有 summary 单元 ⇒ '
+            f'换项后它们既不能算红也不能算绿' if _cf_unk else '说不清的章：无',
+        ]
+        out.append(ran('structure_reshaped', [finding(
+            'structure_reshaped', detail='；'.join(reshaped), evidence=reshaped)],
+            scanned=f'{n_reconstructable}/{len(outs)} 个源单元 ≥{PLAN_RECONSTRUCT_MIN_UNITS} 的输出章'))
+    else:
+        out.append(unverifiable(
+            'structure_reshaped',
+            f'{len(outs)} 章里没有一章的源单元 ≥{PLAN_RECONSTRUCT_MIN_UNITS} ⇒ '
+            f'`structure_changed` 本来就一章都不判，换项的读数也就无从谈起。'
+            f'⚠ 这不是「换项没问题」——是这本书量不出来',
+            scanned=f'0/{len(outs)} 个可重构章'))
 
     # ── ③ 篇幅预算带（逐章 + 全书，共用一个基准）─────────────────────────
     text_len, cov = chapter_source_chars(main_text, bidx)

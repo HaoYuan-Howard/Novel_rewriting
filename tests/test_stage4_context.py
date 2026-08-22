@@ -11,8 +11,8 @@ import pytest
 from contracts.schema.stage4 import CtxBeat, WriterContext
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    Assembly, _gate_setting, build_writer_context, display_names, display_names_at,
-    name_collisions, rename_all,
+    Assembly, _gate_setting, _resolve_beats, build_writer_context, display_names,
+    display_names_at, name_collisions, rename_all,
 )
 from tests import corpus
 
@@ -128,6 +128,61 @@ def _through_the_carrier(ctx: dict[str, object], provenance: object) -> dict[str
 
 
 # ── ⭐ 一、ctx 重组 == 存盘 ───────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `spine`：拍内主次（2026-08-22，批 3）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _bidx_spine() -> dict[str, dict[str, object]]:
+    return {f'b01_0{i}': {
+        'ord': 1, 'event': f'第{i}件事。', 'source_chars': 50, 'hinges': [],
+        'time_layer': 'present', 'place': '茶馆', 'present_char_ids': [],
+    } for i in (1, 2, 3)}
+
+
+@pytest.mark.parametrize('given', [2, None])
+def test_the_spine_reaches_the_context_exactly_as_the_plan_left_it(given):
+    """⭐ **原样投影，两个方向都不许加工。** 有值就带值，`None` 就留 `None`。
+
+    ⚠ 旁边那三个（`narrative_role`/`delivery`/`transition`）带 `or` 默认值，是给存量载体读的；
+    `spine` **不能**照抄那个写法——补一个 1 等于替计划做了它没做过的决策，
+    而下发面会照着演（`stage5/prompts.py::_unit_rule`）。
+    """
+    beats, _dropped, _withheld = _resolve_beats(
+        {'segments': [{'slot': 's01', 'from_beats': ['b01_01', 'b01_02'],
+                       'budget_chars': 120, 'spine': given}]},
+        _bidx_spine(), {})
+    assert beats[0]['spine'] == given
+    assert 'spine' in beats[0], '键必须恒在——「没做过这个决策」与「这一格丢了」不能同形'
+
+
+def test_a_spine_that_points_past_the_last_event_dies_on_the_carrier():
+    """⭐⭐ **全链只有 `CtxBeat` 能把 `spine ≤ len(events)` 写成类型**——它同时持有两者。
+
+    ⚠ 这不是把判据搬上载体：上游那两侧各缺一半（响应侧 `plan_beats[]` 还没展开、
+    产物侧 `from_beats[]` 是 id 不是内容），这条不等式在这一层**第一次**可表达。
+    ⚠ 它也是 `--apply-edit` 那一路**唯一**的守卫：人工稿不过 `expand_plan_beats`。
+    """
+    base = {'slot': 's03', 'events': ['甲。', '乙。'], 'budget_chars': 80,
+            'source_chars': 40, 'time_layer': 'present', 'place': '空院', 'present': []}
+    assert CtxBeat.model_validate({**base, 'spine': 2}).spine == 2
+    with pytest.raises(ValueError, match='只有 2 件'):
+        CtxBeat.model_validate({**base, 'spine': 3})
+
+
+def test_an_empty_event_string_dies_on_the_carrier_because_it_shifts_the_spine():
+    """⭐ 空 event 会让下发面的 ①②③ 与 `spine` **差一格**，所以它在载体上就死。
+
+    ⚠ 下发面渲染时**过滤**空串（`stage5/prompts.py::chapter_facts` 的 `evs`），
+    而 `spine` 数的是 `events[]` 的下标——留一个空串在里面，主干就指向另一件事。
+    `_resolve_beats` 那句 `bidx[b].get('event') or ''` 产出的正是这个必然被拒的值：
+    它不是兜底，是把上游违约原样端上来让这道闸拒掉。
+    """
+    with pytest.raises(ValueError, match='空条目'):
+        CtxBeat.model_validate({
+            'slot': 's01', 'events': ['甲。', ''], 'budget_chars': 80, 'source_chars': 40,
+            'time_layer': 'present', 'place': '空院', 'present': []})
+
 
 @needs_corpus
 def test_the_assembler_reproduces_every_context_on_disk():

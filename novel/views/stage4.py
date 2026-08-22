@@ -100,7 +100,11 @@ def stage4_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage4V
                                 narrative_role=b.get('narrative_role') or 'bridge',
                                 delivery=b.get('delivery') or 'scene',
                                 transition=b.get('transition') or
-                                           ('start' if i == 1 else 'continue'))
+                                           ('start' if i == 1 else 'continue'),
+                                # ⚠ **不给 `or` 默认值**：`None` 是「没做过主次决策」的
+                                #   合法态（恒等基线），补一个 1 会让审阅的人以为
+                                #   这份计划挑过主干。旁边那三个的 `or` 是给存量载体读的。
+                                spine=b.get('spine'))
                    for i, b in enumerate(pc['segments'], start=1)]),
         ctx_chapter=ctx_entry,
         writer_target=target,

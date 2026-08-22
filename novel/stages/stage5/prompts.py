@@ -411,8 +411,8 @@ _TRANSITION_CN = {
 }
 
 
-def _unit_rule(delivery: str, budget: int, n_events: int) -> str:
-    """这一拍的**执行规则**：`scene` 演开、`summary` 合并交代。
+def _unit_rule(delivery: str, budget: int, n_events: int, spine: int | None = None) -> str:
+    """这一拍的**执行规则**：`scene` 演开、`summary` 合并交代，外加**哪一件是主干**。
 
     ⚠⚠ **这是「句子单位从 event 上移到拍」的落点**（2026-08-22）。此前每一拍只写
     「要写这 N 件事：」，而 `CtxBeat.events[]` 的信息密度实测是源章正文的 **87%**
@@ -438,18 +438,37 @@ def _unit_rule(delivery: str, budget: int, n_events: int) -> str:
     「一拍之内，编号的先后仍是它们在正文里出现的先后」把它钉住——**两句话是一对，
     删一句就等于悄悄授权了重排**。真要授权拍内重排，得连那条顺序臂一起改
     （带非默认主次标记时落 `event_landing_unver`），那是一次单独的、要带读数的裁决。
+
+    ⚠⚠ **`spine` 是那一对的第三句**（2026-08-22，批 3）。批 1 把句子单位从 event 上移到拍，
+    但拍**内部**仍是一张平权清单——而平权清单最省力的写法还是逐条对译，
+    「一件事一句话」只是从章级退到了拍级。`spine` 说的是拍内主次：主干那件演开，
+    其余几件是它的前提、后果或背景。
+    ⚠ 而**主次最容易被读成顺序**：「以第 3 件为主干」离「把第 3 件写到最前面」只有一步，
+    那一步跨过去就是 `event_landing`。所以主干那句话后面**必须**紧跟一句
+    「落笔先后仍按编号」——它与 `ORDER_RULE` 那句不是重复，是在最容易破防的那一格上重申。
+    ⚠ `spine is None`（恒等基线、存量 ctx）或只有一件事时**一个字都不说**：
+    一件事的拍标「主干是第 1 件」是纯噪音，而噪音会稀释旁边那几条真规则。
     """
     if delivery == 'summary':
-        return (f'用约 {budget} 字把下面这件事**交代过去**，不要演成场面。'
-                if n_events <= 1 else
-                f'用约 {budget} 字把下面这 {n_events} 件事**合并交代过去**：'
+        if n_events <= 1:
+            return f'用约 {budget} 字把下面这件事**交代过去**，不要演成场面。'
+        head = (f'用约 {budget} 字把下面这 {n_events} 件事**合并交代过去**：'
                 f'不要演成场面、不要给它们各写一句。')
-    return (f'把这一拍写成**一个场面**（约 {budget} 字）。'
-            f'下面这件事要在场面里成立、要留下痕迹——它是材料，不是一句话。'
-            if n_events <= 1 else
-            f'把这一拍写成**一个连贯的场面**（约 {budget} 字）。'
+        return head + (
+            f'其中**第 {spine} 件是这一拍真正要留下的那一件**，别把它压没了；'
+            f'其余几件带过即可。落笔先后仍按下面的编号。'
+            if spine is not None else '')
+    if n_events <= 1:
+        return (f'把这一拍写成**一个场面**（约 {budget} 字）。'
+                f'下面这件事要在场面里成立、要留下痕迹——它是材料，不是一句话。')
+    head = (f'把这一拍写成**一个连贯的场面**（约 {budget} 字）。'
             f'下面 {n_events} 件事都要在这个场面里成立、都要留下痕迹，'
             f'但**不要一条一句地各写一遍**——它们是材料，不是句子。')
+    return head + (
+        f'**以第 {spine} 件为主干把这个场面演开**——它是本拍的重心；'
+        f'其余几件是它的前提、后果或背景，融进去，不要各占一段。'
+        f'⚠ 主干说的是**分量**不是**位置**：落笔先后仍按下面的编号。'
+        if spine is not None else '')
 
 
 def chapter_facts(entry: dict[str, Any]) -> str:
@@ -480,9 +499,12 @@ def chapter_facts(entry: dict[str, Any]) -> str:
         #   第 n 段舞台 ⇒ 编号在这里是**舞台锚点**，不是「N 条 ⇒ N 句」的清单序号。
         #   正因如此它在 `summary` 拍上也保留：合并交代的是内容，不是舞台对应关系。
         evs = [e for e in (be.get('events') or []) if (e or '').strip()]
+        # ⚠ `spine` 数的是 `events[]` 的下标，而这里渲染的是过滤后的 `evs`——两者恒等由
+        #   `CtxBeat` 那条「events 不许有空条目」的载体闸保证（`contracts/schema/stage4.py`）。
+        #   **不在这里补一个 min() 或 try**：那会把「口径已经分家」压成「主干指了另一件事」。
         lines.append(head + _stage_line(be))
         if evs:
-            lines.append('   ' + _unit_rule(raw_delivery, b, len(evs)))
+            lines.append('   ' + _unit_rule(raw_delivery, b, len(evs), be.get('spine')))
             lines += [f'   {n} {e}' for n, e in zip('①②③④⑤⑥', evs)]
         for key, label in HINGE_LABEL.items():
             for t in (be.get(key) or []):

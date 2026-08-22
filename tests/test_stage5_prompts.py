@@ -283,6 +283,83 @@ def test_merging_a_beat_into_one_scene_is_not_a_licence_to_reorder_inside_it():
     assert 'event_order' in inspect.getsource(checks.segment_event_findings)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 拍**内部**的主次：`spine`（2026-08-22，批 3）
+#
+# ⚠⚠ 批 1 把句子单位从 event 上移到「拍」，但拍内部仍是一张**平权清单**——
+#   而平权清单最省力的写法还是逐条对译，「一件事一句话」只是从章级退到了拍级。
+#   `spine` 是这条链的下一环：主干那件演开，其余几件是它的前提、后果或背景。
+# ⚠ 它同时是全批最容易被读歪的一格：「以第 3 件为主干」离「把第 3 件写到最前面」只有一步，
+#   而那一步跨过去就是 `event_landing`。下面第二条守的就是那一步。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_scene_beat_with_a_spine_is_told_which_event_carries_it():
+    """`scene` 拍：主干那一件**演开**，其余几件融进去。"""
+    rendered = prompts.chapter_facts({'segments': [
+        _beat('s01', 'scene', ['她发现墨迹被换过。', '他把门关上。', '雨下大了。'], spine=2)]})
+    assert '以第 2 件为主干把这个场面演开' in rendered
+    assert '前提、后果或背景' in rendered
+    # 换单位那条规则一个字没让位——两条是叠加的，不是二选一
+    assert '不要一条一句地各写一遍' in rendered
+
+
+def test_the_spine_says_which_one_matters_never_which_one_comes_first():
+    """⭐⭐ **主次不是顺序。** 标了主干之后必须紧跟一句「落笔先后仍按编号」。
+
+    ⚠ `stage5/checks.py::segment_event_findings` 那条拍内顺序臂（拍内 event 逆序
+    → `event_landing`）在批 3 **一行都没动**，所以下发面这一侧必须自己钉住。
+    ⚠ 它与 `ORDER_RULE` 里那句不是重复：那一句在章级规则块里，这一句紧贴着最容易
+    诱发重排的那个标记——**重申的位置本身是有效载荷**。
+    """
+    import inspect
+
+    from novel.stages.stage5 import checks
+
+    for delivery, needle in (('scene', '落笔先后仍按下面的编号'),
+                             ('summary', '落笔先后仍按下面的编号')):
+        rendered = prompts.chapter_facts({'segments': [
+            _beat('s01', delivery, ['甲。', '乙。', '丙。'], spine=3)]})
+        assert needle in rendered, f'{delivery} 拍标了主干却没说「只是分量不是位置」'
+    assert '主干说的是**分量**不是**位置**' in prompts.chapter_facts({'segments': [
+        _beat('s01', 'scene', ['甲。', '乙。'], spine=1)]})
+    # 反向：那条顺序臂**还在**——删了它，上面这几句话就没有对手了
+    assert 'event_order' in inspect.getsource(checks.segment_event_findings)
+
+
+def test_a_summary_beat_with_a_spine_is_told_which_fact_must_survive_the_compression():
+    """`summary` 拍上主干的含义不同：不是「演开」，是「别把它压没了」。"""
+    rendered = prompts.chapter_facts({'segments': [
+        _beat('s02', 'summary', ['三天过去了。', '账册送到了府里。'], spine=2, budget=40)]})
+    assert '第 2 件是这一拍真正要留下的那一件' in rendered
+    assert '演开' not in rendered, 'summary 拍被塞进了 scene 的措辞'
+    assert '合并交代过去' in rendered
+
+
+@pytest.mark.parametrize('beat, why', [
+    ({'spine': None}, '计划没做过主次决策（恒等基线 / 存量 ctx）'),
+    ({}, '`spine` 这一格压根不在'),
+])
+def test_a_beat_without_a_spine_says_nothing_about_a_spine(beat, why):
+    """⭐ `spine` 缺席时**一个字都不说**——不是补一句「主干是第 1 件」。
+
+    ⚠ `None` 是合法态而不是缺陷：恒等基线按定义就没做过这个决策
+    （`measure.identity_plan` 显式给 `None`）。替它补一个 1 等于让基线看起来做过一次
+    主次判断，而那份基线正是 `structure_changed` 的反例来源。
+    """
+    rendered = prompts.chapter_facts({'segments': [
+        _beat('s01', 'scene', ['甲。', '乙。'], **beat)]})
+    assert '主干' not in rendered, f'{why}，下发面却替它编了一个主干'
+    assert '一个连贯的场面' in rendered, '连带把换单位那条规则也弄丢了'
+
+
+def test_a_single_event_beat_never_gets_a_spine_sentence():
+    """只有一件事的拍：`spine=1` 是真的，但说出来是纯噪音，会稀释旁边那几条真规则。"""
+    for delivery in ('scene', 'summary'):
+        rendered = prompts.chapter_facts({'segments': [
+            _beat('s01', delivery, ['只有这一件事。'], spine=1)]})
+        assert '主干' not in rendered and '第 1 件' not in rendered
+
+
 def test_prev_context_gives_goals_and_the_last_beat_not_the_whole_previous_chapter():
     """⭐ 衔接面收窄：上一章的目标 + 结尾 + **末拍**，不再逐条列它每一拍的每一条。
 

@@ -1162,6 +1162,12 @@ class PlanBeatLine(FrozenModel):
     delivery: Literal[DELIVERY_MODES]
     transition: Literal[TEMPORAL_LINKS]
 
+    #: 本拍的主干是 `events[]` 里的第几条。`null` = 这份计划没做过主次决策
+    #: （恒等基线就是它，与 `budget_chars=null` 同一种「基线什么都没决定」）。
+    #: ⚠ 它与上面三个枚举是**同一批东西**——模型在拍这一层做的决策。
+    #: 那三个在这里而它不在，等于让审阅面与决策面分家。
+    spine: int | None = Field(default=None, ge=1)
+
 
 class PlanChapterLine(StrictModel):
     """计划侧的一章。恒等基线时三个 goal 是显式标记（`IDENTITY_GOAL`），不是真决策。"""

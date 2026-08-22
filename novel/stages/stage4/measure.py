@@ -252,10 +252,19 @@ def encode_plan_baseline(chapter: dict[str, Any]) -> dict[str, Any]:
         for field, table in back.items():
             if (value := beat.get(field)) in table:
                 beat[field] = table[value]
+        # ⚠ **`spine` 为 `None` 时把这一格整个删掉，不印 `null`。** 产物侧允许「没做过这个
+        #   决策」（恒等基线就是），响应侧 `PlanBeatResponse.spine` 却是必填——
+        #   把 `null` 印进基线块，就是在同一份 user 里让 system 与基线互相打脸：
+        #   模型照基线抄，schema 当场拒，而那一拒要花一次钱才看得见。
+        #   **这与上面那三张前缀表是同一件事**：基线块必须是一份「照抄就合法」的响应。
+        #   删掉之后基线在这一格什么都不说，模型按 system 的规则自己定——那是真话。
+        if beat.get('spine') is None:
+            beat.pop('spine', None)
     return chapter
 
 
-def adopt_plan_response(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) -> int:
+def adopt_plan_response(plan: dict[str, Any], groups: dict[Any, list[list[str]]],
+                        bidx: dict[str, dict[str, Any]]) -> int:
     """**模型响应 → 产物形状的唯一入口**：先解前缀枚举，再展开编号。
 
     ⚠ 顺序是承重的：`expand_plan_beats` 会把 `plan_beats` 弹掉、写 `slot`/`from_beats`，
@@ -263,15 +272,30 @@ def adopt_plan_response(plan: dict[str, Any], groups: dict[Any, list[list[str]]]
     迟早会有一处只做一半——所以它们共用这一个入口。
     """
     decode_plan_response(plan)
-    return expand_plan_beats(plan, groups)
+    return expand_plan_beats(plan, groups, bidx)
 
 
-def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) -> int:
+def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]],
+                      bidx: dict[str, dict[str, Any]]) -> int:
     """把规划者重组后的 `plan_beats[]` 展开成正式 `from_beats[]`。
 
     `group_beats` 仍负责把过碎的 Stage2 beat 合成安全的【源内容单元】，但这些单元不再是
     成稿骨架。模型决定输出单元的分组与顺序；本函数只做无损、可审计的编号展开：每个源
     内容单元必须恰好出现一次，编号不存在、重复、漏项都显式终态，不猜测、不兜底。
+
+    ⚠⚠ **`spine` 的上界只有这里知道，所以它也在这里判。** 载体侧（`PlanBeatResponse.spine`）
+    只能写 `ge=1`——上界是「本单元展开后有几件事」，而那个数要先把 `plan_beats[]` 过一遍
+    `gmap` 才存在。越界与三种编号违约走**同一条出口**（同一批 `bad`、同一次终态）：
+    分成两处 raise，就会有一份计划报完编号错、下一次重跑再报一遍 spine 错。
+    ⚠ 某个写作单元自己已经有编号违约时**不再判它的 `spine`**：那时 `cited` 本来就是残的，
+    报出来的越界是派生症状，会盖住真根因（`output_chapters` 为空那次 74 条症状的同一个教训）。
+
+    ⚠⚠ **那道计数断言（`blank`）守的是一处真实的 off-by-one**：下发给规划者的骨架
+    **过滤**空 event（`prompts.py::project_blueprints_for_planner`），而写手那一侧
+    **刻意不过滤**（`context.py::_resolve_beats`——过滤会让 events 与舞台 `segments` 下标错位，
+    那正是「张冠李戴」）。两边计数一旦分家，模型数着第 2 条标的 `spine`，
+    写手手里第 2 条就是另一件事。stage2 契约 `event: str = Field(min_length=1)` 保证两者恒等
+    ⇒ 这条断言在正常盘上永远不响；**它响的那一天，恒等式已经破了，不许兜底往下走。**
     """
     gmap = group_map(groups)
     if not (plan.get('output_chapters') or []):
@@ -281,12 +305,14 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) 
             f'重跑前先确认不会读回同一份空响应（缓存）')
     bad: list[tuple[Any, Any, str]] = []
     seen: set[str] = set()
+    blank: list[tuple[Any, str]] = []
     for o in (plan.get('output_chapters') or []):
         oo = o.get('output_ordinal')
         expanded: list[dict[str, Any]] = []
         for index, be in enumerate(o.get('segments') or [], 1):
             pids = be.get('plan_beats') or []
             cited: list[str] = []
+            n_bad_before = len(bad)
             if not pids:
                 bad.append((oo, None, '写作单元没有 plan_beats'))
             for pid in pids:
@@ -301,6 +327,14 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) 
             be.pop('plan_beats', None)
             be['slot'] = f's{index:02d}'
             be['from_beats'] = cited
+            # 两边的 events 计数必须恒等——理由与那次「张冠李戴」见 docstring。
+            blank += [(oo, b) for b in cited
+                      if not ((bidx.get(b) or {}).get('event') or '').strip()]
+            # `spine` 的上界 = 本单元展开后有几件事。⚠ 本单元已经有编号违约就不判它。
+            spine = be.get('spine')
+            if spine is not None and len(bad) == n_bad_before and not 1 <= spine <= len(cited):
+                bad.append((oo, f's{index:02d}',
+                            f'spine={spine} 越界（本单元展开后有 {len(cited)} 件事）'))
             expanded.append(be)
         o['segments'] = expanded
     if (missing := [p for p in gmap if p not in seen]):
@@ -313,6 +347,14 @@ def expand_plan_beats(plan: dict[str, Any], groups: dict[Any, list[list[str]]]) 
             f'{f" …另 {len(bad) - 8} 处" if len(bad) > 8 else ""}。'
             f'拍是 `group_beats` 确定性切的（{GROUPING_VERSION}，阈值 {BEAT_MIN_CHARS} 字），'
             f'模型可以重排和合并，但不能自造、漏掉或重复编号')
+    if blank:
+        raise RefusedByStructure(
+            f'有 {len(blank)} 个源 beat 的 `event` 是空的：{blank[:8]}'
+            f'{f" …另 {len(blank) - 8} 个" if len(blank) > 8 else ""}。'
+            f'**这不是模型的错，是 stage2 契约（`event` 非空）已经破了**——'
+            f'而它一破，下发给规划者的骨架（过滤空 event）与写手拿到的 `events[]`（不过滤）'
+            f'就不再是同一个下标空间，`spine` 会静默指向另一件事。'
+            f'先修 stage2 那一份产物，不在这里跳过')
     return len(seen)
 
 
@@ -348,6 +390,11 @@ def identity_plan(blueprints: dict[str, Any], main_text: list[dict[str, Any]],
             'segments': [
                 {'slot': f's{index:02d}', 'from_beats': list(g),
                  'budget_chars': group_chars(g, bidx),
+                 # ⚠ **`spine` 显式给 `None`，不给 1。** 恒等基线的定义就是「一个决策都没做过」，
+                 #   而 `spine` 是拍这一层的第二个决策。给它 1（「主干是第一件事」）等于让基线
+                 #   看起来做过一次主次判断——而这份基线正是 `structure_changed` 的反例来源，
+                 #   反例上多一个决策，那条 HARD 的靶子就软了一格。
+                 'spine': None,
                  'narrative_role': ('setup' if index == 1 else
                                     'payoff' if index == len(groups.get(o, [])) else 'bridge'),
                  'delivery': 'scene',

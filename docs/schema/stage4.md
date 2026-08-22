@@ -30,9 +30,16 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 - typed `chapter_goal`、`open_hook_goal`、`end_hook_goal`（形状是 `PlanGoalResponse`）；
 - 非空 `segments[]`。
 
-模型响应中的每个写作单元包含 `plan_beats[]`、`narrative_role`、`delivery`、`transition`
-与正整数 `budget_chars`。`plan_beats[]` 引用下发的 `pNN_NN` 源内容单元，数组顺序就是
-重构后的叙述顺序。
+模型响应中的每个写作单元包含 `plan_beats[]`、`narrative_role`、`delivery`、`transition`、
+正整数 `budget_chars` 与正整数 `spine`。`plan_beats[]` 引用下发的 `pNN_NN` 源内容单元，
+数组顺序就是重构后的叙述顺序。
+
+`spine` 是**本单元的主干是第几件事**（1-based，把 `plan_beats[]` 各源单元的 `events`
+按顺序接起来连续编号；数的是「事」不是「源内容单元」）。它治的是「一拍 N 条材料被写成
+N 句平权的话」——批 1 把句子单位从 event 上移到拍之后，拍**内部**仍是一张平权清单。
+⚠⚠ **它只标主次、不标顺序**：拍内 event 的落笔先后仍恒等于源序，`stage5` 那条拍内顺序臂
+一行未动。上界（`1 ≤ spine ≤ 展开后的 event 数）由 `expand_plan_beats` 判——
+载体侧只写得下 `ge=1`，因为那个数要先把 `plan_beats[]` 过一遍 `gmap` 才存在。
 
 **响应侧的四个枚举字段带前缀，与产物侧不是同一张表**（2026-08-22 起）：
 
@@ -93,7 +100,12 @@ system 要 `D_SCENE`、基线印着 `scene`，模型照基线抄就被拒，而�
 - `from_beats: str[]`，引用一个或多个 Stage 2 `beat_id`；
 - `narrative_role: cold_open|setup|escalation|turn|payoff|bridge`；
 - `delivery: scene|summary`；
-- `transition: start|continue|earlier|later|parallel|return`。
+- `transition: start|continue|earlier|later|parallel|return`；
+- `spine: int ≥ 1 | null`。⚠ 产物侧**可以为 `null`**（响应侧必填）：`null` = 这份计划
+  没做过主次决策，恒等基线（`measure.identity_plan`）就是它——给基线一个 1 会让它
+  看起来做过一次决策，而那份基线正是 `structure_changed` 的反例来源。
+  ⚠ `--chapters` 的基线块在这一格为 `null` 时**整个删掉这个键**，不印 `null`：
+  响应侧必填，印 `null` 就是让 system 与基线在同一份 user 里互相打脸。
 
 每章预算总和必须落在其引用 `SourceSpan` 字数总和的 `PLAN_BUDGET_BAND`（**0.80~1.20**）内；
 该常量就是唯一执行带，没有第二层宽限。若某个引用无法提供精确基准，该章的预算规则报告 `unver`，
@@ -182,6 +194,12 @@ raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 
 `CtxBeat` 必填 producer `slot`、`events[]`、`budget_chars` 与 `source_chars`。同时间层、同地点时可平铺
 `time_layer`、`place`、`present`；跨地点时使用 `segments[]`，不把在场者取并集。
+`spine`（`int ≥ 1 | null`）从 `PlanBeat` 原样投影，与 `events[]` **同下标空间**。
+
+⚠⚠ **全链只有这一层能把 `spine ≤ len(events)` 写成类型**——它同时持有两者，
+上游那两侧各缺一半（响应侧 `plan_beats[]` 还没展开、产物侧 `from_beats[]` 是 id 不是内容）。
+同一条 validator 还禁止 `events[]` 里出现空条目：下发给规划者的骨架**过滤**空 event、
+写手那一侧**不过滤**，留一个空串在里面两边就差一格，`spine` 会静默指向另一件事。
 
 保真材料按语义分四组：
 
@@ -216,13 +234,13 @@ raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 
 ## 六、现行判据
 
-当前注册表共 **31 条**：**20 hard、6 info、5 metric**。计划和写作上下文共用同一张表。
+当前注册表共 **32 条**：**20 hard、6 info、6 metric**。计划和写作上下文共用同一张表。
 
 | 严重度 | 当前规则 id |
 |---|---|
 | hard | `one_to_one` · `ordinal_seq` · `empty_chapter` · `beat_coverage` · `beat_ref` · `structure_changed` · `transition_direction` · `structure_units` · `structure_transition` · `goal_landing` · `budget_int` · `budget_band` · `plan_book_band` · `context_link` · `style_words` · `ctx_events_verbatim` · `ctx_name_attested` · `ctx_secret_gate` · `ctx_layer_flat` · `ctx_hinge_delivered` |
 | info | `flashback_closed` · `flat_chapter` · `beat_size` · `beat_reuse` · `verbatim_starved` · `params_drift` |
-| metric | `verbatim_share` · `plan_params` · `ctx_source` · `structure_distance` · `structure_entry_mix` |
+| metric | `verbatim_share` · `plan_params` · `ctx_source` · `structure_distance` · `structure_entry_mix` · `structure_reshaped` |
 
 ### 批 2 的付费实证（2026-08-22，同一本、独立 base + 独立缓存，三轮）
 

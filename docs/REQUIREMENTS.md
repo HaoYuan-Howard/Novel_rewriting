@@ -620,6 +620,50 @@ merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本�
 - [ ] ⚠ 不要顺手把整段响应写进账：`llm_audit.jsonl` 与产物同一棵目录树，
       而正文外发边界（`R-12.x`）管的是同一批字节。
 
+### TODO-39 · `structure_changed` 该不该把恒真的 `axis_group` 换成 `axis_reshape`
+
+`structure_changed`（`R-5.6`）的判定式有两项：`axis_group`（分组序列 ≠ 恒等基线）
+与 `axis_delivery`（存在 `summary` 单元）。**前者在生产落点上恒真**——
+`stage4.plan --check-only` 实测 **13/13 个可重构章全靠它过关、`axis_entry` 0/13**，
+批 2 的 run3 又是 13/13。⇒ 这条 HARD 实际只在判「有没有合并过」，
+而「成稿只改了措辞」那条链上真正没人判的那一维是**详略**。
+
+2026-08-22（批 3）加了候选第四轴的读数出口 `structure_reshaped`（`R-5.19`）：
+`axis_reshape` = 本章有拍的 `预算/源` 相对本章均值冲出 `PLAN_BUDGET_BAND`。
+**判定式一行未动**，两条守卫测试把这条线钉住
+（`tests/test_stage4.py::test_the_reconstruction_gate_still_judges_grouping_not_pacing`）。
+
+**第一份读数已经有了**（2026-08-22，`--check-only` 在批 2 run3 那份计划上，**0 成本**）：
+
+| | `axis_group`（现役） | `axis_reshape`（候选） |
+|---|--:|--:|
+| 可重构章命中 | **13/13** | **7/13** |
+| 换成它之后 `structure_changed` 会红 | — | **6 章**（3/6/11/13/19/22） |
+| 现役口径实际红 | **0 章** | — |
+
+⇒ **「换项只是换了个恒真项」这个担忧被证伪**：7/13 有真实判别力。
+（担忧的来源是「40/57 拍落在 0.9~1.1 之外」——那是相对 **1.0** 量的，
+不是相对本章均值 `r̄`，两个数本来就不能互相代入。）
+⚠⚠ **但换项不是等价替换**：那 6 章一个 `summary` 都没有 ⇒ `axis_delivery` 救不了它们，
+换项之后每一章都要付一次定向重规划。**这是一次产品语义收紧，不是清理。**
+
+- [ ] 在**换 prompt 之后重跑的书**上再读一轮：上面那个 7/13 量的是**批 3 之前**的分布，
+      而 `spine` 已经改了 `PLAN_SYS` 指纹 ⇒ 模型的详略行为会变，裁决要用新分布。
+      ⚠ 同一次整跑还要回答一个新问题：`spine` 让模型更愿意给主干拍加预算吗？
+      若是，`axis_reshape` 的命中率会自己升上去，换项的代价随之下降。
+- [ ] ⚠ `axis_group` 的恒真是**当前 prompt 下的稳定行为，不是结构性的**：
+      批 2 的 run1（那份被 3 条 HARD 退回的坏计划）上它只有 4/13。
+      裁决时要把这个 n=1 的反例一起写进去，否则下一次 prompt 一改，
+      换项的前提可能已经不成立了。
+- [ ] 换项若成立，两条反向守卫**一条都不许改成迁就新判定式**：
+      `--identity` 必须**仍然**在 `structure_changed` 上红、
+      `test_keeping_the_source_order_is_not_a_violation_when_something_else_changed`
+      必须**仍然**绿——这一对是「顺叙不违规」那次学费的验收断言。
+      ⚠ 也不许写成三个松散的 `or`：`R-5.6` 的换口径记录反对的正是那个形状。
+
+验收：一句写得出来的结论（含「维持现状」这种结论），写进 `R-5.6` 的换口径记录，
+并把 `R-5.19` 的 note 与 `structure_reshaped` 的注释同批改口。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。

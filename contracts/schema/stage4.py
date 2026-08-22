@@ -96,6 +96,23 @@ class PlanBeat(StrictModel):
     #: `transition_direction`（标签宣称的方向要与源叙述序对得上，只在现场层接缝上判）。
     from_beats: list[str] = Field(min_length=1)
 
+    #: **这一写作单元的主干是 `events[]` 里的第几条**（1-based，`None` = 没做过这个决策）。
+    #:
+    #: 它是模型在拍这一层的**第二样**产出（第一样是 `budget_chars`），
+    #: 治的是「一拍 N 条材料被写成 N 句平权的话」——批 1 把句子单位从 event 上移到拍之后，
+    #: 拍**内部**仍然是一张平权清单，而平权清单最省力的写法就是逐条对译。
+    #: `spine` 说的是**主次**：主干那条演开，其余几条是它的条件、后果或背景。
+    #:
+    #: ⚠⚠ **只标主次，不标顺序。** 拍内 event 的落笔先后仍恒等于源序——
+    #: `stage5/checks.py::segment_event_findings` 有一条拍内顺序臂把逆序判成 `event_landing`，
+    #: 而本批**一行都不动它**。授权拍内重排是另一次单独的、要带读数的裁决。
+    #:
+    #: ⚠ `int | None` 而不是必填：`identity_plan` 的恒等基线**没有做过**这个决策，
+    #: 给它 1 会让基线看起来做过（而基线正是 `structure_changed` 的反例来源）。
+    #: 响应侧那一份（`PlanBeatResponse.spine`）是**必填**的——两边的分工与
+    #: `from_beats`/`plan_beats` 完全同型：产物侧要能表达「没有」，响应侧不许省。
+    spine: int | None = Field(default=None, ge=1)
+
 
 class FactRef(StrictModel):
     """A recomputable Stage1/2 fact reference, not a free-text justification."""
@@ -268,6 +285,19 @@ class PlanBeatResponse(StrictModel):
     delivery: Literal[tuple(RESPONSE_DELIVERY_MODES)]
     transition: Literal[tuple(RESPONSE_TEMPORAL_LINKS)]
 
+    #: **本单元的主干是第几件事**（1-based，跨 `plan_beats[]` 顺序展开后的编号）。
+    #: 语义与上界校验见 `PlanBeat.spine` 与
+    #: `novel/stages/stage4/measure.py::expand_plan_beats`。
+    #:
+    #: ⚠ 这里只有 `ge=1`，**上界不在载体上**：上界是 `len(展开后的 events)`，
+    #: 而那个数在这一层还不存在（`plan_beats` 要先经 `gmap` 展开）。
+    #: 越界由 `expand_plan_beats` 显式终态，与三种编号违约同一段、同一条出口。
+    #:
+    #: ⚠ 它**刻意排在三个枚举之后**：批 2 那次 6 次 wire 全灭是四张相邻枚举表串出来的，
+    #: 新字段插进那一串中间等于把已经用三轮实付验过的字段序重新洗一遍。
+    #: 追加在末尾、且取值面是小整数（与三张前缀表不同型），串不进去。
+    spine: int = Field(ge=1)
+
 
 class PlanGoalResponse(StrictModel):
     """**模型响应里**的 typed goal。与 `PlanGoal` 只差 `intent` 的取值面（带 `G_` 前缀）。
@@ -397,6 +427,15 @@ class CtxBeat(StrictModel):
     delivery: Literal[DELIVERY_MODES] = 'scene'
     transition: Literal[TEMPORAL_LINKS] = 'continue'
 
+    #: **主干是 `events[]` 里的第几条**（1-based，`None` = 计划没做过这个决策 ⇒ 下发面不提）。
+    #: 从 `PlanBeat.spine` 原样投影，与 `events[]` **同下标空间**——
+    #: 两边都按 `from_beats` 顺序展开、都不过滤，那条恒等式由 `expand_plan_beats`
+    #: 的计数断言守着（下发给规划者的骨架**过滤**空 event，写手这一侧**不过滤**，
+    #: 口径一旦分家 `spine` 就指错人）。
+    #:
+    #: ⚠ 它是**主次**不是**顺序**：写手仍按编号先后落笔，只是主干那条演开、其余交代过去。
+    spine: int | None = Field(default=None, ge=1)
+
     #: 所引源 beat 的 span 字数之和。**算不出保持 `null`，不估算、不拿邻居补**（键恒在）。
     #: 盘上 197/197 有值。
     source_chars: int | None
@@ -447,6 +486,28 @@ class CtxBeat(StrictModel):
             if self.time_layer is not None or self.place is not None or self.present is not None:
                 raise ValueError(
                     '分段拍的顶层 time_layer/place/present 必须为 null；舞台信息只在 segments')
+        # ⚠⚠ **`spine` 的上界只有这一层能写成类型**：全链只有 `CtxBeat` 同时持有
+        #   `events[]` 与指向它的 `spine`。上游那两侧各自都缺一半——响应侧的
+        #   `plan_beats[]` 还没展开、产物侧的 `from_beats[]` 是 id 不是内容。
+        #   ⇒ 这不是把判据搬上载体，是这条不等式**第一次**有了可表达它的地方。
+        # ⚠⚠ **空 events 元素在这里就死**，理由同样是 `spine` 的下标口径：
+        #   stage5 下发面渲染 ①②③ 时**过滤**空串（`stage5/prompts.py::chapter_facts`），
+        #   而 `spine` 数的是 `events[]` 的下标——留一个空串在里面，两边就差一格。
+        #   docstring 早已写着「一条 event 都解析不出 ⇒ 显式终态、不落盘」，
+        #   `_resolve_beats` 那句 `bidx[b].get('event') or ''` 产出的正是这个必然被拒的值：
+        #   **它不是兜底，是把上游违约原样端上来让这道闸拒掉**。
+        if any(not (e or '').strip() for e in self.events):
+            raise ValueError(
+                f'{self.slot}：events 里有空条目（{self.events}）。'
+                f'stage2 契约保证 `event` 非空 ⇒ 空的只可能来自解析失败；'
+                f'留着它，下发面的 ①②③ 与 `spine` 会差一格')
+        #   ⇒ 下面这条同时是 `--apply-edit` 那一路唯一的守卫：人工稿不过 `expand_plan_beats`
+        #     （`plan_beat` 落盘时已 pop，人产不出它），所以计划层那道 spine 校验够不着它。
+        if self.spine is not None and self.spine > len(self.events):
+            raise ValueError(
+                f'{self.slot}：spine={self.spine} 指向第 {self.spine} 件事，而这一拍只有 '
+                f'{len(self.events)} 件。**下发面会照它演**——主干指空等于叫写手自己挑一件。'
+                f'根因在计划那一份的同名 slot 上（`plan_chapters.json`），不在这里')
         return self
 
 

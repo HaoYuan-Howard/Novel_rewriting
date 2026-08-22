@@ -193,6 +193,105 @@ def test_the_reconstruction_gate_has_not_been_relaxed_into_always_green():
     assert 'structure_changed' in {f.rule for f in _identity_structure4()}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# `spine` 与 `structure_changed` 的换项读数（2026-08-22，批 3）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _flat_detail_chapter() -> list:
+    """一单元一源单元、按源序、无 `summary`——三根轴一根没动 ⇒ 现役口径**红**。
+
+    但章内详略极不均（拍级 `预算/源` 相对本章均值 0.5~2.5，冲出 `PLAN_BUDGET_BAND`）
+    ⇒ 候选的第四根轴 `axis_reshape` **命中**。
+    ⚠ 预算刻意配成全章合计 400 = 全章源字数 ⇒ `budget_band` / `plan_book_band` 都绿：
+    靶子要证明的是「换项会改变结论」，顺带红两条别的 HARD 会让人以为那是设计的一部分。
+    """
+    from tests.hard_cases import _MAIN4, _BPS4_PRESENT, _b4, _bidx4_present, _ch4, _plan4
+
+    return _plan4([_ch4(1, [_b4('b1_01', budget=50), _b4('b1_02', budget=50),
+                            _b4('b1_03', budget=50), _b4('b1_04', budget=250)])],
+                  blueprints=_BPS4_PRESENT, main_text=[_MAIN4[0]], bidx=_bidx4_present())
+
+
+def _regrouped_flat_budget_chapter() -> list:
+    """反过来：分组重画（4 源单元 → 3 写作单元）但章内详略**平坦**（rel 恒 1.00）。
+
+    ⇒ 现役口径绿（`axis_group` 成立），换项之后会红。与上面那一份是一对。
+    """
+    from tests.hard_cases import _MAIN4, _BPS4_PRESENT, _b4, _bidx4_present, _ch4, _plan4
+
+    return _plan4([_ch4(1, [_b4('b1_01', 'b1_02', budget=200), _b4('b1_03', budget=100),
+                            _b4('b1_04', budget=100)])],
+                  blueprints=_BPS4_PRESENT, main_text=[_MAIN4[0]], bidx=_bidx4_present())
+
+
+def test_the_reconstruction_gate_still_judges_grouping_not_pacing():
+    """⭐⭐ **换项还没有发生。** 这一对断言把「读数」与「判定式」之间那道线钉死。
+
+    批 3 只加了读数（`structure_reshaped`），`structure_changed` 的判定式**一行没动**。
+    换项那天这条测试会红——**那是它的用途**：换项是一次产品语义变更（详略从"没人判"
+    变成"够大的章不做就退回"），必须有人重新裁决一次，而不是顺手让绿灯继续绿。
+    """
+    detail_only = {f.rule for f in _flat_detail_chapter()}
+    group_only = {f.rule for f in _regrouped_flat_budget_chapter()}
+    assert 'structure_changed' in detail_only, (
+        '只重画了详略、没重画分组的章现在**不该**过关——`axis_reshape` 进判定式了？'
+        '若确实要换，先读 `structure_reshaped` 的分布，并把裁决写进 `R-5.6` 的换口径记录')
+    assert 'structure_changed' not in group_only, (
+        '只重画了分组、详略平坦的章现在**该**过关——`axis_group` 被换掉或被收紧了')
+
+
+def test_the_swap_readout_reports_the_counterfactual_not_just_a_hit_count():
+    """⭐ `structure_reshaped` 要能直接回答「换了会怎样」，而不是只报一个命中数。
+
+    ⚠ 只报「`axis_reshape` 命中 N 章」是回答不了换项问题的：真正要知道的是
+    **换项之后那条 HARD 会红哪几章**，而那是命中数与 `axis_delivery` 的联合结果。
+    人拿到一个命中数还得自己去每章解谜——那正是 `plan_book_band` 那次
+    「全书 1.14× 一句话」的同一个教训。
+    """
+    detail = next(f.detail for f in _flat_detail_chapter() if f.rule == 'structure_reshaped')
+    assert '章内详略重画 1/1' in detail and '现役的分组重画 0/1' in detail
+    assert '会红 []' in detail and '现役口径红 [1]' in detail, (
+        f'反事实两侧没有同时报出来：{detail}')
+
+    swapped = next(f.detail for f in _regrouped_flat_budget_chapter()
+                   if f.rule == 'structure_reshaped')
+    assert '章内详略重画 0/1' in swapped and '现役的分组重画 1/1' in swapped
+    assert '会红 [1]' in swapped and '现役口径红 []' in swapped, (
+        f'这一份换项后会红、现在绿——两个结论必须都摆出来：{swapped}')
+
+
+def test_a_chapter_whose_pacing_cannot_be_measured_lands_in_neither_bucket():
+    """⭐⭐ 判不动的章**单列**，不并进任何一边（判据 21）。
+
+    压成「未命中」会让反事实凭空多红几章、压成「命中」则凭空少红几章——
+    两个方向都是替一份量不出来的东西担保。
+    """
+    from tests.hard_cases import _MAIN4, _BPS4_PRESENT, _b4, _ch4, _plan4
+
+    # 不传 `bidx` ⇒ `_BPS4_PRESENT` 的 beat 没有 span ⇒ 拍级详略整章判不动
+    findings = _plan4([_ch4(1, [_b4('b1_01'), _b4('b1_02'), _b4('b1_03'), _b4('b1_04')])],
+                      blueprints=_BPS4_PRESENT, main_text=[_MAIN4[0]])
+    detail = next(f.detail for f in findings if f.rule == 'structure_reshaped')
+    assert '判不动 1' in detail, f'量不出来的那一章被算进了某一边：{detail}'
+    assert '说不清的 [1] 章' in detail, f'说不清的章没有被点名：{detail}'
+
+
+def test_the_plan_prompt_tells_the_planner_what_a_spine_is_and_what_it_is_not():
+    """⭐⭐ `spine` 在下发面上必须同时说清两件事：怎么数，以及**它不是顺序**。
+
+    ⚠ 「怎么数」是承重的：模型会把它读成「第几个源内容单元」。一个写作单元合并了
+    两个源单元、而它们下面共有 3 件事时，`spine` 的取值面是 1~3 而不是 1~2。
+    ⚠ 「不是顺序」同样承重：`stage5/checks.py` 那条拍内顺序臂在批 3 一行没动，
+    模型若把「主干」读成「写在最前面」，成稿会落 `event_landing`。
+    """
+    assert 'spine' in prompts.PLAN_HINT['output_chapters'][0]['segments'][0],         '形状提示里没有 spine——模型看不到这一格，必填字段会整轮拒收'
+    body = prompts.PLAN_SYS
+    assert '本单元的主干是第几件事' in body
+    assert '数的是「事」不是「源内容单元」' in body, '没说清怎么数 ⇒ 模型会按源单元数'
+    assert 'spine 只说主次，不说先后' in body
+    assert '仍然是它们的编号先后' in body
+
+
 def test_the_plan_prompt_gives_both_bands_and_says_which_one_is_per_chapter():
     """⭐⭐ **`PLAN_SYS` 改口的验收断言。**
 
@@ -479,6 +578,8 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
                 'transition': ('X_START' if output_index == 0
                                else 'X_EARLIER' if moved and output_index == 1
                                else 'X_CONTINUE'),
+                # 每个写作单元这里只引一个源单元，而源单元至少有一件事 ⇒ 1 恒合法。
+                'spine': 1,
             })
         first_event = sorted(events_by_unit[order[0]])[0]
         last_event = sorted(events_by_unit[order[-1]])[-1]
@@ -518,7 +619,7 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
     # ⚠⚠ 走**生产那一个入口**（`adopt_plan_response` = 解前缀 + 展开编号），不是只展开编号：
     #   判据全都读产物侧取值，只 `expand_plan_beats` 的话下面整批断言打的是带前缀的字符串，
     #   而它们会安静地全绿——那正是这条测试要挡的那种「守卫重拼了生产的实参」。
-    assert adopt_plan_response(expanded, groups) == sum(map(len, groups.values()))
+    assert adopt_plan_response(expanded, groups, bidx) == sum(map(len, groups.values()))
     assert {be['delivery'] for ch in expanded['output_chapters']
             for be in ch['segments']} == {'scene'}, '前缀没有被解回产物取值'
     validate_plan_refs(expanded, refs)

@@ -560,7 +560,7 @@ def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: 
 
     照 stage3 不照 stage6：本层一次产**一份** ⇒ **任何一条 hard 就 `.INVALID`**。
     """
-    adopt_plan_response(data, up.groups)        # 解前缀 + 展开编号；对不上就在这里停
+    adopt_plan_response(data, up.groups, up.bidx)   # 解前缀 + 展开编号；对不上就在这里停
     return _gate_and_write(ctx, store, data, up, provenance=provenance)
 
 
@@ -687,7 +687,7 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
             'reconstruction_strategy': previous_raw['reconstruction_strategy'],
             'output_chapters': [copy.deepcopy(raw_response)],
         }
-        adopt_plan_response(expanded, {ordinal: up.groups.get(ordinal) or []})
+        adopt_plan_response(expanded, {ordinal: up.groups.get(ordinal) or []}, up.bidx)
         after = expanded['output_chapters'][0]
         merged_by[ordinal] = after
         interim = {

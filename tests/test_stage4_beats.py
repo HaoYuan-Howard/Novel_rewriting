@@ -21,6 +21,17 @@ from novel.stages.stage4.measure import (
 from tests import corpus
 
 
+def _fake_bidx(*beat_ids: str) -> dict[str, dict[str, object]]:
+    """`expand_plan_beats` 从 bidx 只读一格：`event`。
+
+    它读那一格是为了守住 `spine` 的下标口径——下发给规划者的骨架**过滤**空 event，
+    写手那一侧**不过滤**，两边计数一分家 `spine` 就指错人。所以这里给的每条都非空：
+    合成一份「stage2 契约成立」的 bidx，让下面那批测试判的是编号违约本身，
+    而不是顺带撞上那道断言。
+    """
+    return {b: {'event': f'{b} 发生了一件事'} for b in beat_ids}
+
+
 def _by_rel(rel: str) -> dict[str, object]:
     return {a.source_id: corpus.load_current(a) for a in corpus.iter_artifacts() if a.rel == rel}
 
@@ -337,7 +348,7 @@ def test_an_empty_plan_says_so_in_one_sentence():
     而症状的文案指向的是另一个根因。
     """
     with pytest.raises(RefusedByStructure, match='一个输出章都没有'):
-        expand_plan_beats({'output_chapters': []}, {1: [['b01_01']]})
+        expand_plan_beats({'output_chapters': []}, {1: [['b01_01']]}, _fake_bidx('b01_01'))
 
 
 @pytest.mark.parametrize('bad, why', [
@@ -349,13 +360,14 @@ def test_every_plan_beat_violation_is_a_terminal_state(bad, why):
     """三种违约各自说出**是哪一种**——兜底会给违约数据发一张静默通行证。"""
     plan = {'output_chapters': [{'output_ordinal': 1, 'segments': bad}]}
     with pytest.raises(RefusedByStructure, match=why):
-        expand_plan_beats(plan, {1: [['b01_01']]})
+        expand_plan_beats(plan, {1: [['b01_01']]}, _fake_bidx('b01_01'))
 
 
 def test_expand_plan_beats_writes_from_beats_and_drops_nothing():
     plan = {'output_chapters': [{'output_ordinal': 1,
                                  'segments': [{'plan_beats': ['p01_01'], 'budget_chars': 120}]}]}
-    assert expand_plan_beats(plan, {1: [['b01_01', 'b01_02']]}) == 1
+    assert expand_plan_beats(
+        plan, {1: [['b01_01', 'b01_02']]}, _fake_bidx('b01_01', 'b01_02')) == 1
     assert plan['output_chapters'][0]['segments'][0]['from_beats'] == ['b01_01', 'b01_02']
     assert plan['output_chapters'][0]['segments'][0]['slot'] == 's01'
 
@@ -366,10 +378,107 @@ def test_expand_plan_beats_preserves_planner_grouping_and_reordered_sequence():
         {'plan_beats': ['p01_01', 'p01_02'], 'budget_chars': 160},
     ]}]}
     assert expand_plan_beats(
-        plan, {1: [['b01_01'], ['b01_02'], ['b01_03']]}) == 3
+        plan, {1: [['b01_01'], ['b01_02'], ['b01_03']]},
+        _fake_bidx('b01_01', 'b01_02', 'b01_03')) == 3
     assert [row['from_beats'] for row in plan['output_chapters'][0]['segments']] == [
         ['b01_03'], ['b01_01', 'b01_02']]
     assert [row['slot'] for row in plan['output_chapters'][0]['segments']] == ['s01', 's02']
+
+
+# ── 六·2、`spine`：拍内主次（2026-08-22，批 3）────────────────────────────
+
+def _spine_plan(spine, *, plan_beats=('p01_01',)) -> dict:
+    return {'output_chapters': [{'output_ordinal': 1, 'segments': [
+        {'plan_beats': list(plan_beats), 'budget_chars': 120, 'spine': spine}]}]}
+
+
+@pytest.mark.parametrize('spine', [1, 2])
+def test_a_spine_inside_the_expanded_event_count_passes(spine):
+    """展开后这一单元有 2 件事 ⇒ 1 和 2 都合法。"""
+    plan = _spine_plan(spine)
+    assert expand_plan_beats(
+        plan, {1: [['b01_01', 'b01_02']]}, _fake_bidx('b01_01', 'b01_02')) == 1
+
+
+@pytest.mark.parametrize('spine', [3, 99])
+def test_a_spine_past_the_expanded_event_count_is_a_terminal_state(spine):
+    """⭐⭐ **`spine` 的上界只有这里知道，所以它也在这里判。**
+
+    载体侧（`PlanBeatResponse.spine`）只写得下 `ge=1`——上界是「本单元展开后有几件事」，
+    而那个数要先把 `plan_beats[]` 过一遍 `gmap` 才存在。
+    ⚠ 它与三种编号违约走**同一条出口**：分成两处 raise，就会有一份计划先报完编号错、
+    重跑一次再报一遍 spine 错，而两次都要花钱。
+    """
+    plan = _spine_plan(spine)
+    with pytest.raises(RefusedByStructure, match='越界'):
+        expand_plan_beats(plan, {1: [['b01_01', 'b01_02']]}, _fake_bidx('b01_01', 'b01_02'))
+
+
+def test_a_unit_that_already_broke_the_numbering_does_not_also_get_a_spine_complaint():
+    """⭐ 已经有编号违约的单元**不再判它的 `spine`**——那时 `cited` 本来就是残的。
+
+    ⚠ 报出来的越界是**派生症状**，会盖住真根因。这是「74 条症状盖住一句话」
+    （`test_an_empty_plan_says_so_in_one_sentence`）的同一个教训，
+    只不过这一次症状与根因在同一个写作单元里。
+    """
+    plan = _spine_plan(5, plan_beats=('p09_09',))       # 编号不存在 ⇒ cited 为空
+    with pytest.raises(RefusedByStructure) as excinfo:
+        expand_plan_beats(plan, {1: [['b01_01']]}, _fake_bidx('b01_01'))
+    assert '编号不存在' in str(excinfo.value)
+    assert '越界' not in str(excinfo.value), 'spine 的派生症状盖过了真根因'
+
+
+def test_an_empty_source_event_is_a_terminal_state_because_it_shifts_the_spine():
+    """⭐⭐ **那道计数断言**：下发面过滤空 event，写手那一侧不过滤，差一格 `spine` 就指错人。
+
+    ⚠ stage2 契约（`event: str = Field(min_length=1)`）保证两者恒等 ⇒ 这条在正常盘上
+    **永远不响**。它响的那一天，恒等式已经破了——而破了之后往下走的代价是
+    「主干静默指向另一件事」，一条判据都看不见。
+    ⚠ 文案必须说清这不是模型的错：根因在上游那份产物，重跑规划一次都修不好。
+    """
+    bad = _fake_bidx('b01_01', 'b01_02')
+    bad['b01_02']['event'] = '   '
+    with pytest.raises(RefusedByStructure, match='stage2 契约') as excinfo:
+        expand_plan_beats(_spine_plan(1), {1: [['b01_01', 'b01_02']]}, bad)
+    assert 'b01_02' in str(excinfo.value), '没点名是哪一个 beat'
+
+
+def test_a_plan_without_a_spine_expands_unchanged():
+    """`spine` 缺席是合法态（`--revalidate` 的存量计划、恒等基线）——展开路不为它出声。"""
+    plan = {'output_chapters': [{'output_ordinal': 1, 'segments': [
+        {'plan_beats': ['p01_01'], 'budget_chars': 120}]}]}
+    assert expand_plan_beats(plan, {1: [['b01_01']]}, _fake_bidx('b01_01')) == 1
+    assert 'spine' not in plan['output_chapters'][0]['segments'][0]
+
+
+def test_the_identity_baseline_never_claims_to_have_picked_a_spine():
+    """⭐⭐ 恒等基线的 `spine` 恒为 `None`，**不是 1**。
+
+    基线的定义就是「一个决策都没做过」，而 `spine` 是拍这一层的第二个决策
+    （第一个是 `budget_chars`）。给它 1 会让基线看起来做过一次主次判断——
+    而这份基线正是 `structure_changed` 的反例来源，**反例上多一个决策，那条 HARD 的靶子
+    就软了一格**。
+    """
+    from tests.hard_cases import _BPS4_PRESENT, _MAIN4
+
+    plan = identity_plan(_BPS4_PRESENT, [_MAIN4[0]])
+    spines = [be['spine'] for o in plan['output_chapters'] for be in o['segments']]
+    assert spines and set(spines) == {None}, f'恒等基线自称做过主次决策：{spines}'
+
+
+def test_the_baseline_block_omits_a_null_spine_instead_of_printing_it():
+    """⭐⭐ 反编码：`spine=None` 那一格**整个删掉**，不印 `null`。
+
+    ⚠ 与那三张前缀表是同一件事：基线块必须是一份「照抄就合法」的响应。
+    `PlanBeatResponse.spine` 是必填的，把 `null` 印进基线块，就是在同一份 user 里让
+    system 与基线互相打脸——模型照基线抄，schema 当场拒，**而那一拒要花一次钱才看得见**。
+    """
+    from novel.stages.stage4.measure import encode_plan_baseline
+
+    kept = encode_plan_baseline({'segments': [
+        {'delivery': 'scene', 'spine': 2}, {'delivery': 'summary', 'spine': None}]})
+    assert kept['segments'][0]['spine'] == 2
+    assert 'spine' not in kept['segments'][1]
 
 
 # ── 七、恒等基线 ──────────────────────────────────────────────────────────

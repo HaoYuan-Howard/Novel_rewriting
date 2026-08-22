@@ -77,14 +77,28 @@ def _prepare(book):
     return ctx, store, upstreams, artifact.model_dump(by_alias=True)
 
 
+def _target_response(before, groups, ordinal):
+    """把盘上那一章翻成一份**模型会返回的**响应。
+
+    ⚠ 基线块与响应**不是同一样东西**，而这个装置正踩在两者的差上：
+    `_response_baseline` 产的是发给模型的**基线**，`spine` 为 `None` 时它把那一格整个删掉
+    （产物侧允许「没做过这个决策」，恒等基线就是——而本文件的盘面正是恒等基线）；
+    模型**返回**的响应里 `spine` 却是必填的。补上这一格，模拟的才是一份合法响应；
+    不补就等于让装置去验证「模型漏填必填字段会被拒」，而那是另一条测试的事。
+    """
+    chapter = plan._response_baseline(plan._chapter_by(before)[ordinal], groups, ordinal)
+    for segment in (chapter.get('segments') or []):
+        segment['spine'] = 1
+    return chapter
+
+
 def test_targeted_plan_repair_merges_only_the_requested_chapter_and_records_history(monkeypatch):
     root = Path(tempfile.mkdtemp())
     book = root / '规划定向合并测试_611'
     book.mkdir()
     try:
         ctx, _store, upstreams, before = _prepare(book)
-        target = plan._response_baseline(
-            plan._chapter_by(before)[2], upstreams.groups, 2)
+        target = _target_response(before, upstreams.groups, 2)
         preview_system, preview_user = plan.build_prompt(ctx, chapters=(2,))
         client, transport = _client(ctx, lambda _request, _index: _ok(target))
         captured = {}
@@ -126,8 +140,7 @@ def test_targeted_plan_repair_rejects_wrong_chapter_without_overwriting_formal()
     book.mkdir()
     try:
         ctx, store, upstreams, before = _prepare(book)
-        wrong = plan._response_baseline(
-            plan._chapter_by(before)[1], upstreams.groups, 1)
+        wrong = _target_response(before, upstreams.groups, 1)
         client, transport = _client(ctx, lambda _request, _index: _ok(wrong))
         original = store.path(plan.REL).read_bytes()
 
@@ -224,8 +237,7 @@ def test_targeted_plan_repair_failure_writes_invalid_without_overwriting_formal(
     book.mkdir()
     try:
         ctx, store, upstreams, before = _prepare(book)
-        target = plan._response_baseline(
-            plan._chapter_by(before)[2], upstreams.groups, 2)
+        target = _target_response(before, upstreams.groups, 2)
         target['chapter_goal']['rationale'] = '仍然写着需要张力'
         client, _transport = _client(ctx, lambda _request, _index: _ok(target))
         formal_before = store.path(plan.REL).read_bytes()
@@ -257,8 +269,7 @@ def test_targeted_plan_repair_accumulates_usage_and_rebuilds_context(monkeypatch
             'provenance': previous.provenance.model_copy(update={'usage': old_usage}),
         })
         store.write(plan.REL, previous)
-        target = plan._response_baseline(
-            plan._chapter_by(before)[2], upstreams.groups, 2)
+        target = _target_response(before, upstreams.groups, 2)
         client, transport = _client(ctx, lambda _request, _index: _ok(target))
         rebuilt = []
         monkeypatch.setattr(plan, '_judge', lambda *_args, **_kwargs: [])
