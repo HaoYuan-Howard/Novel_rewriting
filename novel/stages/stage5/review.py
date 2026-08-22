@@ -476,7 +476,7 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
         scanned[r_] = f'{len(book.secrets) if book else "?"} 条 secret'
     for r_ in ('draft_missing', 'draft_duplicated', 'book_length', 'book_length_report',
                'convergence_report', 'name_surface_survey', 'must_hold_unver',
-               'event_landing', 'event_landing_unver',
+               'event_landing', 'event_landing_unver', 'arm_split_report',
                'cross_chapter_number', 'style_block_carries_plot'):
         scanned.setdefault(r_, f'{nch}/{len(rev.chapters)} 章有成稿')
 
@@ -516,6 +516,30 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
                 f'空的意味着它这一章什么原文都没拿到。先看 `stage4` 的 '
                 f'`ctx_hinge_delivered` 那一行——那里说得出是 stage2 没抽到，'
                 f'还是组装这一步把材料吃掉了')
+    # ⚠⚠ **`dialogue_halved` 的分母是「有几章落在它的前件里」，不是「判了几章」。**
+    #   前件第一项就是 `mode == shallow`，而 2026-08-22 起默认深度选择是全书闭卷
+    #   ⇒ 默认路径上这条 HARD 的分母恒为零，而「跑了、零 findings」在报告上渲染成 pass。
+    #   与 `verbatim_missing` 那次假绿逐格同形，处置也照抄那一条：分母无条件打出来，
+    #   为零时落 `unver`。
+    # ⚠ `book is None`（这本书没有 stage2 global grounding）⇒ **前件里的「源章 ≥4 句」
+    #   根本量不出来**。那时说「没有一章落在前件里」是一句假话——分母是**不知道**，
+    #   不是零。两种够不着说两句话。
+    if book is None:
+        blind['dialogue_halved'] = (
+            '这本书没有 stage2 global grounding ⇒ 取不到源章原文，'
+            '本条前件里的「源章 ≥4 句直接引语」**量不出来** ⇒ 分母未知（不是零）。'
+            '先把上游补齐再读这一行')
+        scanned['dialogue_halved'] = '分母未知（取不到源章原文）'
+    else:
+        n_halved = checks.dialogue_halved_scope(
+            ((book.chapters[r.output_ordinal], r.mode) for r in rev.chapters
+             if r.relpath and r.mode and r.output_ordinal in book.chapters),
+            book)
+        scanned['dialogue_halved'] = (
+            f'{n_halved}/{nch} 章落在前件里（开卷 × 计划无净压缩 × 源章 ≥4 句）')
+        if not n_halved:
+            blind['dialogue_halved'] = checks.DIALOGUE_HALVED_BLIND
+
     return checks.check(
         chapter_findings_by_rule=by_rule, scanned=scanned,
         unver_empty={

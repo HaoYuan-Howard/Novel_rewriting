@@ -38,7 +38,6 @@ from novel.quality.global_review import (
 from novel.store import ArtifactStore
 
 APPROVALS_DIRNAME = 'approvals'
-DEFAULT_DEEP = (1, 2, 3)
 _LOCK = threading.RLock()
 
 
@@ -141,9 +140,40 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     }
 
 
+def default_deep(planned: list[int] | None) -> list[int]:
+    """默认深度选择 = **这本书的全部计划章**（2026-08-22 起；此前是常量 `(1, 2, 3)`）。
+
+    旧默认的理由是「开篇三章决定读者留存，值得更高的单章成本」。推翻它的是一次
+    **成书级**实测（无情道 23 章，`tools/book_overlap.py`）：按 `stage7/name_map.json`
+    把人名回映射之后逐章量 20 字窗重合——
+
+    | 臂 | n | 中位 | 整句照搬率 |
+    |---|--:|--:|--:|
+    | deep（闭卷） | 3 | **0.017** | **18.2%** |
+    | shallow（开卷） | 20 | **0.226** | **55.4%** |
+
+    **13 倍差距**；而全书 290 条照搬句里只有 60 条是 `verbatim` 制度要求的，其余
+    230 条（79%）是写手自发照抄。⇒ 用户那句「差别只是改变了措辞」几乎全部产自开卷臂，
+    而开卷当时是 20/23 章的默认路径。
+
+    ⚠ **这不是把开卷判死**：单臂维护入口 `stage5.write --mode shallow` 一个字没动，
+    `B-03` 那个洞仍在代码里。变的只是**默认路径** ⇒ 走开卷从此是例外，
+    由 `arm_split_report` 常驻报出（只报不判，不为它发明阈值——2026-08-10 已否决过一次，
+    理由「0.9%~96.8% 的跨度不是一个可以一刀切的量」今天仍然成立）。
+
+    ⚠ 返回值仍然只是**建议，不是花钱授权**：`_fresh_record` 不带 `deep_proof`，而
+    `current_depth_selection` / `begin_writing` 都要求 proof 在场
+    ⇒ 没有人签过字之前，队列里不会出现一条付费的 `stage5.write`。
+
+    ⚠ `planned is None`（stage4 还没产计划）⇒ **`[]` 而不是 `[1, 2, 3]`**：
+    「还不知道有哪些章」与「选了三章」必须分得开。这不会把默认卡在空集上——
+    `_read_raw` 在没有盘上记录时每次都现算一份，计划一落盘它自动就是全书。
+    """
+    return sorted(set(planned)) if planned else []
+
+
 def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV2:
-    allowed = set(planned) if planned is not None else None
-    deep = [n for n in DEFAULT_DEEP if allowed is None or n in allowed]
+    deep = default_deep(planned)
     return _ApprovalRecordV2(
         sid=sid,
         gate={key: False for key in APPROVAL_GATES},

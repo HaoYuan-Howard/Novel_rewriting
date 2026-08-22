@@ -19,9 +19,16 @@ import { GateChip } from '@/components/vocab/Badges'
 import { cx } from '@/lib/cx'
 
 /**
- * 进 stage5 之前先挑要深度重构的章节（默认前 3 章），其余走浅层。
+ * 进 stage5 之前先挑要深度重构的章节（默认**全书闭卷**），其余走浅层。
  * 深度 = 闭卷重构（写手看不到原文），按拍多次调用；浅层 = 开卷改写，一次过。
  * 选错了钱就花在错的章上 —— 所以这一步单独成屏，不塞在写作屏的角落里。
+ *
+ * ⚠⚠ 默认曾是「前 3 章」，2026-08-22 改成全书闭卷（后端
+ * `novel/orchestrator/approvals.py::default_deep`）。依据是成书级实测：
+ * 开卷臂的重合度比闭卷臂高一个数量级，而它此前是绝大多数章的默认路径。
+ * ⚠ 「恢复默认」这颗按钮是这条默认的**第二个落点**——它曾硬编码 `n <= 3`，
+ * 后端改了而它没改就会静默把整本退回旧行为。它现在按当前索引全选，
+ * 不再自己算一个「前 N 章」。
  *
  * 本屏刻意不包 ScreenFrame：depth 是 stage4 → stage5 之间的选择屏，
  * 自己没有校验报告也没有自己的闸门（CHECK_KINDS 里没有 depth，
@@ -77,8 +84,8 @@ export function DepthScreen() {
               title="全书章节"
               meta={d.index.length + ' 章'}
               right={<LinkButton onClick={() => setDeep.mutate(
-                d.index.map((i) => i.output_ordinal).filter((n) => n <= 3),
-              )}>恢复默认（第 1–3 章）</LinkButton>}
+                d.index.map((i) => i.output_ordinal),
+              )}>恢复默认（全书闭卷）</LinkButton>}
             />
             <div className="grid gap-8 border-b border-line-soft bg-sunken-2 px-18 py-9 text-tag text-ink-4" style={{ gridTemplateColumns: '64px 1fr 96px 92px' }}>
               <span>章</span>

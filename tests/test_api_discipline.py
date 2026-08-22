@@ -232,6 +232,49 @@ def test_frontend_does_not_rejudge_anchor_coverage():
     assert 'coverage_state' in source
 
 
+def test_frontend_does_not_hardcode_its_own_default_depth():
+    """⭐ 「恢复默认」这颗按钮不许自己算一份默认深度选择。
+
+    ⚠⚠ **它曾经硬编码 `filter((n) => n <= 3)`**，与后端
+    `novel/orchestrator/approvals.py::default_deep` 是同一件事的两个落点。
+    2026-08-22 后端默认从「前 3 章」改成**全书闭卷**——那一刻这颗按钮就变成了
+    「悄悄把整本退回旧行为」的开关，而**没有任何东西会报错**：它保存成功、
+    界面显示正确、只是花的钱与写出来的书都是旧默认那一套。
+    ⇒ 前端只许按当前索引全选（那正好等于后端的默认），不许自己写一条规则。
+
+    ⚠ 这不是「前端不许有默认值」：它就是没有默认值——真正的默认由后端在
+    `_fresh_record` 里现算，前端拿到的 `doc.deep` 已经是它。这颗按钮只是
+    「把我改乱的选择恢复成全选」。
+    """
+    import re
+
+    source = open(os.path.join(
+        ROOT, 'web', 'src', 'screens', 'depth', 'DepthScreen.tsx'),
+        encoding='utf-8').read()
+    assert source.strip(), 'DepthScreen.tsx 读成空串——守卫读不到就等于没在查'
+
+    # ① 守卫的守卫：确认它还在看那颗按钮，否则 ② 恒绿
+    assert 'setDeep.mutate(' in source and 'output_ordinal' in source, \
+        '这条守卫已经不在看深度选择那一段了'
+
+    # ② 按钮的 onClick 里不许出现对章号的比较/切片——那都是「自己算一个默认」
+    # ⚠ **按 `<LinkButton` 切，不按「恢复默认」这四个字切**：本文件与被测文件
+    #   都会在注释里写到它，`str.index` 拿到的会是注释那一处 ⇒ 守卫切到一段散文上、
+    #   恒绿。踩过一次，写在这里。
+    head = source.index('right={<LinkButton')
+    button = source[head:source.index('</LinkButton>', head)]
+    assert '恢复默认' in button, '切出来的不是那颗按钮'
+    assert not re.search(r'output_ordinal\s*[<>]|\(n\)\s*=>\s*n\s*[<>]', button), \
+        '「恢复默认」自己算了一份默认深度——它与后端 `default_deep` 会分家'
+    assert '.slice(' not in button, '「恢复默认」用切片取了前 N 章'
+
+    # ③ 反向——**问生产落点**，不重拼一份信念
+    from novel.orchestrator.approvals import default_deep
+
+    assert default_deep([1, 2, 3, 4, 5]) == [1, 2, 3, 4, 5], \
+        '后端默认不再是「全部计划章」了——这条守卫的前提变了，两边一起改'
+
+
 def test_frontend_does_not_rejudge_beat_budget_band():
     """`R-11.4` 的第二处：拍级「预算/源文」只是读数，出档判定在 `/check/stage4`。
 
