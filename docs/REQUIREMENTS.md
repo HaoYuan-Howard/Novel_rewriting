@@ -599,7 +599,9 @@ merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本�
 
 ### TODO-38 · 内容闸拒了，但账上不写「拒在哪个字段」
 
-`_service/llm_audit.jsonl` 的 `gate_decision` 记 `gate`（`schema` / `parse` / `validator`）、
+`_service/llm_audit.jsonl` 的 `gate_decision` 记 `gate`（`schema` / `parse` / `validator` /
+`answer_lost` / `require` / `empty_text`；`answer_lost` 是 2026-08-22 从 `parse` 里劈出来的，
+见本文件 TODO-40 与 `docs/BACKEND_CONTRACT.md` 同日那一行）、
 `reasoning_effort`、`sample`、`rung_index`、`resample`——**唯独不记那一拒的内容**。
 于是每一次「这一批改动有没有让 schema 拒变少」都只能靠「这一次过没过」来回答，
 而那是个 n=1 的信号。
@@ -663,6 +665,46 @@ merge conflict/resolution schema、复杂 WAL、多份 base/ours/theirs 副本�
 
 验收：一句写得出来的结论（含「维持现状」这种结论），写进 `R-5.6` 的换口径记录，
 并把 `R-5.19` 的 note 与 `structure_reshaped` 的注释同批改口。
+
+### TODO-40 · flash@high 的空正文：是模型边界，还是 `json_object` 的交互？
+
+2026-08-22 的复盘把根因钉到了**模型那一侧**：同一份调用代码、同一批参数，
+`flash@high` 60/418（14%）返回「正文 0 token + `finish_reason=stop`」，
+而 `pro@high` 0/249、`flash@low` 0/70。供应商 `usage` 自称
+`reasoning_tokens == completion_tokens`，且空响应的总 token ÷ 同 purpose 正文中位数
+**中位 1.06**（`stage4.plan` 的 5 次是 9 208~11 241，成功正文 9 258~11 665）
+⇒ 模型不是「想很久然后放弃」，是**整份答案写进了思考通道**（`</think>` 边界没吐出来）。
+逐项对照官方文档也全部合法：`reasoning_effort` 取值、`extra_body.thinking`、
+思考模式下的 JSON 模式、`max_tokens=96000 ≤ 384K`、思考模式下没传 `temperature`。
+
+**唯一还没排除的「调用方式」是 `response_format={'type':'json_object'}`**——
+它是官方自己打了「偶尔返回空 content，正在优化」标签的那个开关，
+且 vLLM 上 DeepSeek 思考模式 + JSON response_format 有**同形状**的公开 bug
+（JSON 落进 reasoning、content 为空；成因是 JSON grammar 在推理边界判定之前就生效）。
+官方服务端内部看不见，但两种机制都在对方那一侧。
+
+⚠ `spine`（批 3）只是**调节因子不是根因**：批 2 高档 1/5 空 → 批 3 4/4 空，
+Fisher 单侧 p≈0.04 ⇒ 那 14 行大概率抬高了概率（要求逐拍数事、挑主干，
+更容易诱发「边写 JSON 边算」）；但同一失败模式在 08-19、08-20 就出现过 ⇒ 先于它存在。
+**缩短 spine 只能降率，不能归零。**
+
+**预登记的判据（花钱之前写在这里）：**
+
+- [ ] 0 改动对照：同一份批 3 prompt 在 `flash@high` 上 `json_mode=False` 跑 **8 次**，
+      独立 `NOVEL_CACHE_DIR` + 强制真发（否则阶梯横扫缓存会让实验静默不发生，
+      见 `reference-ab-arm-cache-replay`）。flash 单次约 $0.03，全程 < $0.5。
+- [ ] **空响应归零 ⇒ 去掉 `response_format` 就是修法**（届时要另解决「怎么保证是 JSON」，
+      本仓 `_strip_fences` 已经在扛围栏，`ask_json` 的三道闸也还在）。
+- [ ] **仍约 30% ⇒ 是模型边界**，只剩两条路：`stage4.plan` 固定 `pro`
+      （与 2026-08-19 的 FC-13 A/B 结论同向），或加大同档采样
+      （`MAX_SAMPLES_PER_RUNG=2` 在空响应率 0.33~0.5 时双空概率 11~25%，
+      随后掉进 `low`——而 `low` 在这个节点的已知劣化（猜 event 编号）才是真正吃掉产物的那步）。
+- [ ] ⚠ 读结论**必须看留证**（`<书目录>/_answer_lost/`，2026-08-22 落地）：
+      「思考通道里装的是不是整份 JSON」在此之前只能拿 token 体积推断，
+      现在有全文可读 ⇒ 同一笔钱能拿到直接证据，别再只数「空/不空」。
+
+验收：一句写得出来的结论（含「维持现状」），写进 `docs/BACKEND_CONTRACT.md` 的记录表，
+并把 `novel/llm/client.py` 模块 docstring ① 的成因那一句同批改口。
 
 ## 条目生命周期
 

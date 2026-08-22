@@ -34,8 +34,9 @@ from novel.observability import RequestProgress
 LEDGER_REL = ('_service', 'ledger.jsonl')
 
 #: 采纳审计账：与成本账同目录、**分文件**。成本账答「花了多少」，这份答
-#: 「内容闸怎么判的、最终 artifact 用的是哪一次响应」（`gate_decision` /
-#: `artifact_adoption` 两种行，靠 `attempt_id` 与成本账的 wire 行相联）。
+#: 「内容闸怎么判的、最终 artifact 用的是哪一次响应、丢掉的那份答案留证在哪」
+#: （`gate_decision` / `artifact_adoption` / `answer_lost` 三种行，
+#: 靠 `attempt_id` 与成本账的 wire 行相联）。
 #: ⚠ 不并进 `ledger.jsonl`：既有读者按「行=一次调用」聚合
 #: （`tools/ab_compare.py::cost_table` 把没有 `cached` 键的行当 wire 行数，
 #: `tools/observe_provider_limits.py` 拿行数对 wire attempts）——审计行混进去
@@ -312,6 +313,53 @@ class CostLedger:
             'rung_index': rung_index,
             'sample': sample,
             'resample': resample,
+            'chapter': chapter,
+        })
+
+    def note_answer_lost(self, *, sid: str, node: str, purpose: str,
+                         attempt_id: str, source: str,
+                         reasoning_effort: str | None = None,
+                         thinking: bool | None = None,
+                         json_mode: bool | None = None,
+                         rung_index: int | None = None,
+                         sample: int | None = None,
+                         resample: bool = False,
+                         finish_reason: str | None = None,
+                         content_chars: int = 0,
+                         reasoning_chars: int = 0,
+                         dump: str | None = None,
+                         dump_error: str | None = None,
+                         chapter: int | None = None) -> None:
+        """「答案流丢失」各记一行：**指针与读数进账，正文进留证文件。**
+
+        它与同一次拒绝的 `gate_decision` 行不重复，各答一个问题：那一行答
+        「哪一道闸判的、下一步是重采还是降档」；这一行答**「证据在哪」**——
+        `dump` 是相对**书目录**的路径（`novel/paths.py::answer_lost_rel`），
+        因为那份推理里装的是这本书的正文，跟书走而不是跟服务走。
+
+        ⚠ **token 数不抄在这里。** `completion_tokens` / `reasoning_tokens` 归成本账
+        （同一个 `attempt_id` 那一行），一个数不该有第二个声称拥有它的地方；
+        留证文件里另存一份供应商原样的 `usage`，那是**证据**不是账。
+        ⚠ `dump=None` + `dump_error` = 证据没写成（盘满 / 路径超长 / 权限）。
+        留证失败**不许**让一次已经付过钱的调用抛掉 ⇒ 失败也要留下这一行说清楚。
+        """
+        self._append_audit({
+            'kind': 'answer_lost',
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'sid': sid, 'node': node, 'purpose': purpose,
+            'attempt_id': attempt_id,
+            'source': source,                  # cache | wire
+            'reasoning_effort': reasoning_effort,
+            'thinking': thinking,
+            'json_mode': json_mode,
+            'rung_index': rung_index,
+            'sample': sample,
+            'resample': resample,
+            'finish_reason': finish_reason,
+            'content_chars': content_chars,
+            'reasoning_chars': reasoning_chars,
+            'dump': dump,                      # 相对书目录；None = 没写成
+            'dump_error': dump_error,
             'chapter': chapter,
         })
 

@@ -289,6 +289,8 @@ def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
     ⚠ 2026-08-20 起每档多出一声 `resample=True` 的**同档重采**：那一声的
     `next_effort`/`next_thinking` 必须指回**同一档**——否则「重采」会被
     统计口径读成「降档」，而降档统计正是这条事件存在的目的。
+    ⚠ 2026-08-22 起空正文那一格叫 `answer_lost`（`_empty()` 正是**非截断**的那种
+    形态）；`empty_text` 只剩「空**且**截断」那一半——见下面那条参数化。
     """
     events: list[dict] = []
     ctx = _ctx()
@@ -301,7 +303,7 @@ def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
     rejected = _observed(events)
     walked = [r for r in LADDER for _ in range(MAX_SAMPLES_PER_RUNG)]
     assert [(e['reasoning_effort'], e['thinking']) for e in rejected] == walked
-    assert {e['gate'] for e in rejected} == {'empty_text'}
+    assert {e['gate'] for e in rejected} == {'answer_lost'}
     assert {e['json_mode'] for e in rejected} == {False}
     assert [e['resample'] for e in rejected] == [True, False] * len(LADDER)
     assert [e['exhausted'] for e in rejected] == [False] * (len(walked) - 1) + [True]
@@ -309,6 +311,44 @@ def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
     # 第一声（重采）：next 指回本档；第二声（降档）：next 才指向下一档。
     assert (rejected[0]['next_effort'], rejected[0]['next_thinking']) == LADDER[0]
     assert (rejected[1]['next_effort'], rejected[1]['next_thinking']) == LADDER[1]
+
+
+@pytest.mark.parametrize('finish, text_gate, json_gate', [
+    ('stop', 'answer_lost', 'answer_lost'),
+    ('length', 'empty_text', 'parse'),
+])
+def test_an_empty_body_is_answer_lost_only_when_it_is_not_a_truncation(
+        finish, text_gate, json_gate):
+    """⭐ **空正文按 `finish_reason` 劈成两格**，两个入口用同一把尺子。
+
+    ⚠⚠ 它守的是一个账面上的洞：`ask_json` 里空正文照旧走 `json.loads('')` 必然抛
+    ⇒「答案写进了推理通道」（`client.py` 模块 docstring ①）与「JSON 被截断」（②）
+    在账上塌成同一个 `parse`。而这两类的处置**正好相反**——①换新样本、②腾预算。
+    2026-08-22 复盘四份账本 752 次 wire 时正是这一格挡住了诊断：
+    flash@high 418 次里 60 次是 ①、pro 255 次里 0 次，而账面上它与截断长得一样。
+
+    ⚠ 劈的是**账**不是**判定**：走法仍由 `_worth_resampling` 一家管
+    ⇒ 最后那条断言钉的就是「加了这一格之后，走过的档位与从前逐字相同」。
+    """
+    empty = ChatResponse(content='', reasoning='想了很多', finish_reason=finish)
+
+    for gate, call in (
+        (text_gate, lambda c: c.ask_text('sys', 'usr', purpose='p')),
+        (json_gate, lambda c: c.ask_json('sys', 'usr', model_cls=Resp, purpose='p')),
+    ):
+        events: list[dict] = []
+        ctx = _ctx()
+        ctx.observer = events.append
+        t = FakeTransport.always(empty)
+
+        with pytest.raises(LlmFailed):
+            call(_client(t, ctx=ctx))
+
+        assert {e['gate'] for e in _observed(events)} == {gate}
+        assert gate in REJECT_GATES
+        # 截断不重采（每档一次），非截断每档两次——`MAX_SAMPLES_PER_RUNG` 那条路没变。
+        per_rung = 1 if finish == 'length' else MAX_SAMPLES_PER_RUNG
+        assert t.rungs == [r for r in LADDER for _ in range(per_rung)]
 
 
 def test_a_nonempty_content_gate_rejection_resamples_once_before_stepping_down():

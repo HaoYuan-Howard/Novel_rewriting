@@ -171,6 +171,12 @@ class ResponseCache:
         （`finish_reason='stop'`，**不是截断**）。空回答对任何调用方都无用，
         缓存下来只会让重试**每次都命中同一个空壳**——那时连降级阶梯都救不了它，
         因为四档都会各自读回自己那份空的。
+
+        ⚠ **不写缓存 ≠ 证据没了。** 这一条曾经的副作用是：空响应被 `evict` 之后
+        盘上一个字都不剩，「那条推理通道里到底装了什么」只能拿 token 体积去猜。
+        2026-08-22 起那份响应另落一份留证（`novel/llm/client.py::_keep_answer_lost`
+        → `<书目录>/_answer_lost/<attempt_id>.json`）——留证与缓存是两件事：
+        缓存是**会被读回来当答案用的**，留证只给人看，救场仍然禁止从 reasoning 里抠。
         """
         if not resp.text:
             return False

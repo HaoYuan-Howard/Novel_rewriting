@@ -19,10 +19,12 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+import novel.llm.keepsake as keepsake_mod
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.client import LlmClient
 from novel.llm.ledger import AUDIT_REL, CostLedger, audit_path
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
+from novel.paths import ANSWER_LOST_DIRNAME
 from novel.run import RunContext
 
 
@@ -163,3 +165,75 @@ def test_audit_events_survive_in_memory_when_there_is_no_ledger_file():
 
 def test_audit_path_is_next_to_the_ledger():
     assert audit_path('X').as_posix() == 'X/_service/llm_audit.jsonl'
+
+
+LOST = ChatResponse(
+    content='', reasoning='整章正文都写在这条通道里了',
+    finish_reason='stop',
+    usage={'prompt_tokens': 10, 'completion_tokens': 900, 'reasoning_tokens': 900},
+    model='deepseek-v4-flash')
+
+
+def test_the_lost_answer_is_kept_on_disk_and_the_audit_row_points_at_it():
+    """⭐ 「答案流丢失」那一份**整份留证**，审计账上只有指针与长度读数。
+
+    ⚠⚠ 它补的是一个诊断洞：`ResponseCache.put` **拒写空正文**（那是对的——缓存下来
+    只会让重试每次命中同一个空壳，四档各读回自己那份空的），于是空响应被 `evict`
+    之后盘上一个字都不剩，「那条推理通道里到底装了什么」只能拿 token 体积去猜。
+    ⇒ 另落一份留证：留证与缓存是两件事，缓存会被**读回来当答案用**，留证只给人看。
+
+    ⚠ 留证跟**书**走不跟服务走（`<书目录>/_answer_lost/`）：那份 `reasoning` 里装的是
+    这本书的正文——答案本来就该写进 `content`，只是走错了通道。删书即删证据。
+    ⚠ 指针存**相对书目录**的路径：绝对路径换台机器（或换个 Output 根）就断。
+    ⚠ token 数不抄进审计行——那归成本账那一行（同一个 `attempt_id`），
+      一个数不该有第二个声称拥有它的地方；留证文件里另存供应商原样的 `usage`。
+    """
+    ctx, d = _ledgered_ctx()
+    t = FakeTransport(responder=lambda _r, i: LOST if i == 0 else OK_JSON)
+
+    _client(t, ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+    rows = [r for r in _rows(d / AUDIT_REL[-1]) if r['kind'] == 'answer_lost']
+    assert len(rows) == 1, '一次丢失记一行'
+    row = rows[0]
+    assert (row['finish_reason'], row['content_chars']) == ('stop', 0)
+    assert row['reasoning_chars'] == len(LOST.reasoning)
+    assert (row['source'], row['json_mode'], row['purpose']) == ('wire', True, 'p')
+    assert row['dump_error'] is None
+    assert row['dump'] == f'{ANSWER_LOST_DIRNAME}/{row["attempt_id"]}.json'
+    # 正文一个字都不进账——它只在留证文件里。
+    assert LOST.reasoning not in json.dumps(row, ensure_ascii=False)
+    # 同一次拒绝仍然有它那条 `gate_decision`：两行各答一个问题，不重复。
+    gates = [r for r in _rows(d / AUDIT_REL[-1])
+             if r['kind'] == 'gate_decision' and r['decision'] == 'rejected']
+    assert [g['gate'] for g in gates] == ['answer_lost']
+    assert gates[0]['attempt_id'] == row['attempt_id']
+
+    kept = json.loads((ctx.novel_dir / row['dump']).read_text(encoding='utf-8'))
+    assert kept['reasoning'] == LOST.reasoning and kept['content'] == ''
+    # 供应商原样的 usage 是这一类的**服务端自证**：答案整份记在了推理侧。
+    assert kept['usage'] == LOST.usage
+    assert (kept['attempt_id'], kept['purpose']) == (row['attempt_id'], 'p')
+    assert (kept['sid'], kept['node']) == (ctx.sid, ctx.node)
+
+
+def test_a_keepsake_that_cannot_be_written_does_not_kill_the_paid_call(monkeypatch):
+    """⭐ 留证写不成 ⇒ **证据缺席，不是调用失败。**
+
+    盘满 / 路径超长（Windows `MAX_PATH`，本仓踩过）/ 权限不对——任何一种都不该让
+    一次**已经付过钱**、且马上就要正常重采的调用抛在诊断这一步。
+    ⚠ 但它也不许**静默**：失败原因要留在审计行上，否则「这次为什么没有留证」无解。
+    """
+    ctx, d = _ledgered_ctx()
+    blocker = ctx.novel_dir / '这是个文件不是目录'
+    blocker.write_text('x', encoding='utf-8')
+    monkeypatch.setattr(keepsake_mod.paths, 'answer_lost_path',
+                        lambda _dir, aid: blocker / f'{aid}.json')
+    t = FakeTransport(responder=lambda _r, i: LOST if i == 0 else OK_JSON)
+
+    got = _client(t, ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+    assert got.voice == {'a': 1}, '留证失败不该影响这一次调用的结果'
+    row, = [r for r in _rows(d / AUDIT_REL[-1]) if r['kind'] == 'answer_lost']
+    assert row['dump'] is None
+    assert row['dump_error'] and 'Error' in row['dump_error']
