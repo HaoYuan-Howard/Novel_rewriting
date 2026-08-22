@@ -478,7 +478,8 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 不保证合乎 schema（TODO-40 实测：开着它照样出 `G_TURN` / `R_SCENE` 这种越界枚举），
 真要下推得要 `json_schema` 那种 constrained decoding，而 DeepSeek V4 拒收
 （`novel/stages/stage2/contract.py`，2026-08-20 文档探针）。
-⚠ 而且 `json_object` 本身已于 2026-08-22 关掉（`novel/llm/client.py::JSON_OBJECT_MODE`）。
+⚠ `json_object` 于 2026-08-22 关过一次又当天改回（`novel/llm/client.py::JSON_OBJECT_MODE`
+记着全部理由）——不论开关，它都挂不上这条。
 
 杠杆最大的一类是「代码本来就知道、却去问模型」——把模型判断换成模型给原料 + 代码算：
 

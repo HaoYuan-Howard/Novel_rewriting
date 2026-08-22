@@ -104,29 +104,30 @@ LADDER: Final[tuple[tuple[str, bool], ...]] = (
 #: 选用哪条由 `DEEPSEEK_THINKING` 决定（`novel/config.py::THINKING_MODES`）。
 NOTHINK_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('low', False),)
 
-#: `ask_json` 还发不发 `response_format={'type':'json_object'}`。**2026-08-22 起：不发。**
+#: `ask_json` 还发不发 `response_format={'type':'json_object'}`。**发。**
 #:
-#: ⚠⚠ **这是一次用户裁决，不是实验判出来的**——实验只做到「方向对但 n 不够」
-#: （`docs/REQUIREMENTS.md` TODO-40：同场次 A/B，`off` 0/4 空 vs `on` 3/7 空，
-#: Fisher 单侧 p≈0.21）。裁决的理由是**收益/代价不对称**，不是显著性：
+#: ⚠⚠ **2026-08-22 关过一次，当天改回来了——这一段历史留着是为了别再走一遍。**
+#: 关掉的理由是「它买不到我们没有的东西，却疑似带来一个很贵的失败形态」，
+#: 当时手上的实证是同场次 A/B 的 `off` 0/4 空 vs `on` 3/7 空（Fisher 单侧 p≈0.21，
+#: 方向对但没到显著）。**改回来的理由是那点实证随后就蒸发了**：
 #:
-#: · **它买不到任何我们没有的东西。** `json_object` 只保证「是合法 JSON」，
-#:   **不保证合乎 schema**——实测两臂都在同一种 enum 越界上翻车（`G_TURN` / `R_SCENE` /
-#:   多出 `rationale_note`）。而「是不是合法 JSON」`ask_json` 本来就自己判：
-#:   `_strip_fences` 扛围栏、`json.loads` 扛语法、`require` 扛空壳、`model_validate` 扛形状。
-#:   关掉它之后 4/4 仍然解析得动。
-#: · **它疑似买来一个很贵的失败形态。** 官方 JSON Output 文档自己写着这个模式
-#:   「偶尔返回空 content」；账上 flash@high 63/397（15.9%）空正文全部出自这个模式，
-#:   而 pro 0/255、flash@low 0/77 —— 空响应要么白付一次重采，要么把最终产物推到 `low`
-#:   （已知劣化）。
+#: · 关掉之后又跑了两次 `stage4.plan` 全书整跑，**`json_mode=False` 照样出空正文**
+#:   （留证 `1e9edb67` comp 216 = reas 216、只有 `reconstruction_strategy` 0 个输出章；
+#:   留证 `98f93fa9` comp 9386 = reas 9386、完整 23 章）。累计 `off` **2/9 空（22%）**
+#:   vs `on` 3/7（43%），Fisher 单侧 **p≈0.37 —— 完全不显著**。
+#: · 而代价是**确定**的：`json_mode` 进 `cache_payload`（`transport.py::ChatRequest`）
+#:   ⇒ 翻这一位让既有响应缓存整批够不着（翻的时候主仓 583 份）。
+#:   **一边是没测出来的收益，一边是确定的代价** ⇒ 维持现状。
 #:
-#: ⚠ **代价要认两条**：① `json_mode` 进 `cache_payload` ⇒ 翻这一位**让既有响应缓存全部作废**
-#: （翻的时候主仓 583 份）；② 本仓历史上 `json_mode=False` 只跑过 4 次真调用（全是 TODO-40
-#: 那 4 个样本、同一个节点）——**5/6 个付费节点在这一位上是 0 覆盖**，别把「plan 上没事」
-#: 读成「全链没事」。第一次带它的整跑要盯着看。
-#: ⇒ 撤回只需把这一格改回 `True`：每次调用的 `json_mode` 都进账本与 `_provenance`，
-#:   两种口径的响应事后分得开。
-JSON_OBJECT_MODE: Final = False
+#: ⚠ **下面这两条读数仍然成立，别连着一起撤回**：
+#: · `json_object` **只保证「是合法 JSON」，不保证合乎 schema**——两臂都在同一种
+#:   enum 越界上翻车（`G_TURN` / `R_SCENE` / 多出 `rationale_note`）。那是
+#:   `docs/REQUIREMENTS.md` TODO-38 与批 4 前缀化的地盘，与这一位无关。
+#: · 「答案写完了写进推理通道」**不是 `json_object` 的产物**：5 份留证横跨两个臂，
+#:   5/5 都是完整 JSON、零推敲过程（TODO-40）。
+#:
+#: ⇒ 要再关，先补足样本（两臂各 n≈8 才判得到 p<0.05），别再拿 n=4 那组数当依据。
+JSON_OBJECT_MODE: Final = True
 
 #: 答案流丢失（模块 docstring ①）时，同一档最多采几个样本。**2 = 首发 + 一次重采。**
 #:
