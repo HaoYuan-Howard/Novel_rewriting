@@ -40,6 +40,38 @@ def artifact_payload(data: object) -> object:
     return data
 
 
+# ── stage2.blueprint ─────────────────────────────────────────────────────────
+
+def stage2_blueprint_grounding(data: object) -> object:
+    """逐章抽取只消费**已现称名表**要用的两个字段，不消费 global 的其余部分。
+
+    【为什么不能留着 `artifact_payload`】blueprint 是全链 reasoning 占比最高的节点
+    （账本实测 40.8%，逐章付费），而它对 global 的真实依赖只有一份称名清单：
+    `stages/stage2/normalize.py::past_attested_surfaces` 只读 `canonical` 与
+    `address[].surface`，blueprint 侧那几条判据读的同样只是称名。整份消费 ⇒ 改一条
+    secret、动一次 `role`，全书 blueprint 当场判 stale 要重跑付费，**而那次改动
+    根本不影响它读到的任何一个字节**。
+
+    ⚠ **不取 `address` 的 `by` / `context` / `from_chapter`**：`past_attested_surfaces`
+    的「出现过没有」按原文子串判，与这三个字段无关；取了它们等于把一批无关改动
+    重新变回 stale。
+    ⚠ 与 `stage3_grounding` 的 characters 那一格**形状故意不同**（那边还要
+    `name_distinctiveness` 与整条 secrets 时间线）：两个节点消费的不是同一批字段，
+    合并成一个函数会让任一侧的取值面变化静默传染给另一侧。
+    """
+    if not isinstance(data, dict):
+        return None
+    entities = data.get('entities')
+    chars = (entities.get('characters') if isinstance(entities, dict) else None) or {}
+    if not isinstance(chars, dict):
+        return None
+    return sorted(
+        (cid, c.get('canonical'),
+         tuple(sorted(str(a.get('surface') or '')
+                      for a in (c.get('address') or []) if isinstance(a, dict))))
+        for cid, c in chars.items() if isinstance(c, dict))
+
+
 # ── stage3.style ─────────────────────────────────────────────────────────────
 
 def stage3_main_text(data: object) -> object:
@@ -357,7 +389,9 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     },
     'stage2.blueprint': {
         STAGE1_MAIN_TEXT: artifact_payload,
-        STAGE2_GLOBAL_GROUNDING: artifact_payload,
+        # ⚠ 收窄到称名两字段（2026-08-23）。此前是 `artifact_payload` ⇒ global 里
+        # 任何一格改动都让全书 blueprint 判 stale，而这一层是全链最贵的付费节点。
+        STAGE2_GLOBAL_GROUNDING: stage2_blueprint_grounding,
     },
     'stage3.style': {
         STAGE1_MAIN_TEXT: stage3_main_text,
