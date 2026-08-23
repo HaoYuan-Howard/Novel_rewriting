@@ -697,7 +697,7 @@ Fisher 单侧 p≈0.21 ⇒ **方向对，但没到显著**。三条已经站得�
 `tests/test_llm.py` 四条钉住（捞成功不重采 · 四道闸全过才算 · 截断与 `ask_text` 都不捞 ·
 两种审计行都带 `salvaged` 且捞回来的不进缓存）。`ask_text` 那一侧未开，条目保留。
 
-### TODO-41 · Stage2 v3/v3.1 待质量修复后重跑严格矩阵
+### TODO-41 · Stage2 `extraction-ir-v3.1` 默认候选的双书验收
 
 2026-08-23 已按 `docs/stage2_contract_experiment.md` §十五的预注册矩阵完成三臂付费实测，
 默认继续 `extraction-ir-v2`。v3 reasoning 相对同场 v2 下降 69.6%，但 hinge 只有 v2 的
@@ -712,16 +712,28 @@ Fisher 单侧 p≈0.21 ⇒ **方向对，但没到显著**。三条已经站得�
 旧 v3 高 45.5%，所以默认仍保持 `extraction-ir-v2`。这次跨了代码冻结且没有重跑 v2/v3，
 只能作诊断，不能冒充新的严格矩阵。完整证据见 `docs/stage2_contract_experiment.md` §十五。
 
-剩余工作不能靠翻默认或缓存 replay 销账：
+随后复核已改变问题边界，详见 `docs/stage2_contract_experiment.md` §十六：6 项人物歧义全是
+判据把 v3/v3.1 误走成开放字面引用造成的假红，按响应契约取 `present_char_ids` 后为 **0/285**；
+但对候选/phrase 密集的 5 章做盲序抽样，覆盖 63/175 条 hinge，确认 175 里确有普通对白、
+非因果数字以及整句/子串重复，不能再把“更多”直接当成“更好”。冷揭示差距也是真问题：全书抽取
+把第一章已明示给读者的主角身份登记成秘密，却漏了第 16 章“黎玄从收徒当天就已知情”的后置揭示。
 
-- [ ] 收紧 v3 的逐章响应脚手架，使 hinge 召回回到同场 v2 的至少 95%，并恢复在场者关闭引用
-  四项全 0；不得通过减少判据、放宽闭集或粗切 beat 达标；
-- [ ] 完成上述质量修复与 0 成本验证后，按同一预注册矩阵重新执行 v2 → v3 → v3.1。三臂必须
-  共用新的冻结代码与独立空缓存；旧响应与本次 `v3.1-fixed` 单臂只能做
-  诊断，不得冒充新矩阵样本；
-- [ ] 只有新矩阵同时通过一级质量门与成本门，才决定是否翻
-  `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。v3.1 若仍只在候选 hinge 上失败，按预注册
-  规则拆开裁决：可保留 narration char_id 收窄，撤候选 hinge。
+零成本修复已完成：判据从 `CONTRACTS` 的关闭引用能力派生；数字候选不再从“第二天/下一秒”
+截出“二天/一秒”；v3.1 prompt 恢复 hinge 类别、反批量选择与反嵌套规则；全书秘密 prompt 明确
+区分世界内角色不知与读者尚未知。定向 118 项非 corpus 回归 exit 0。**这不改变盘上
+`ChapterBlueprints` artifact schema v2**；待翻的是响应契约默认值，不是 artifact 版本。
+冻结契约五文件 325 项、完整非 corpus 回归、前端 seams/typecheck/build 亦均 exit 0；前端验证
+只读复用了同锁文件主 worktree 的依赖，未安装或改写依赖。
+
+剩余工作按 §十六的新预注册门执行，不能靠旧缓存 replay 或只比数量销账：
+
+- [ ] 在冻结代码、独立空缓存上重跑当前书的 `stage2.global` 与
+  `stage2.blueprint=extraction-ir-v3.1`，独立复检人物关闭引用、冷揭示、边界与 hinge；
+- [ ] 至少再跑一本结构不同的书；本轮选 `偶像公寓打工日常`（现代、对话密集、18 章），同样
+  做候选密集与 phrase 密集章节盲审，确认成本与召回优势不是单书偶然；
+- [ ] 两书都通过质量门后，才把 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 切到
+  `extraction-ir-v3.1`；继续保留 `extraction-ir-v2` 注册值用于显式回退和存量产物重检。
+  `v3.1 + Pro` 是后续高质量档实验，不是本次 Flash 翻默认的前置条件。
 
 ## 条目生命周期
 

@@ -302,19 +302,50 @@ def test_conflict_stage_coverage_reports_duplicate_and_out_of_range_memberships(
     assert evidence in outcome.findings[0].evidence
 
 
-def test_ir2_direct_character_id_is_not_reclassified_as_an_ambiguous_name():
-    """v2 的人读字面可以歧义，但模型选择的 char_id 已经把引用定死。"""
+@pytest.mark.parametrize('architecture', [
+    'extraction-ir-v2',
+    'extraction-ir-v3',
+    'extraction-ir-v3.1',
+])
+def test_closed_present_character_id_is_not_reclassified_as_an_ambiguous_name(
+        architecture):
+    """关闭式契约的人读字面可以歧义，但模型选择的 char_id 已把引用定死。"""
     gg, bp, mt = global_grounding(), blueprints(), main_text()
     gg['entities']['characters']['char_001']['address'].append({
         'surface': '母亲', 'by': 'narration',
         'context': 'reference', 'from_chapter': 1})
-    bp['_provenance']['context']['architecture'] = 'extraction-ir-v2'
+    bp['_provenance']['context']['architecture'] = architecture
     outcomes = {o.rule: o for o in checks.check(
         global_g=gg, blueprints=bp, main_text=mt)}
     ambiguity = outcomes['present_names_ambiguous']
     assert ambiguity.findings and ambiguity.findings[0].detail.startswith('0/')
 
-    # 同一份字节若声明成开放字面契约，旧分类仍应如实报告歧义。
+
+def test_v31_closed_narration_id_is_not_reclassified_as_an_ambiguous_name():
+    """v3.1 的 narrator/focalizer 也由关闭式 char_id 定义，不能反解人读投影。"""
+    gg, bp, mt = global_grounding(), blueprints(), main_text()
+    gg['entities']['characters']['char_001']['address'].append({
+        'surface': '母亲', 'by': 'narration',
+        'context': 'reference', 'from_chapter': 1})
+    bp['_provenance']['context']['architecture'] = 'extraction-ir-v3.1'
+    for blueprint in bp['blueprints']:
+        blueprint['narration'] = [{
+            'grammatical_person': 'third',
+            'narrator_name': '母亲', 'narrator_char_id': 'char_001',
+            'focalizer_name': '母亲', 'focalizer_char_id': 'char_001',
+            'pronoun_surfaces': [],
+        }]
+    outcomes = {o.rule: o for o in checks.check(
+        global_g=gg, blueprints=bp, main_text=mt)}
+    assert outcomes['present_names_ambiguous'].findings[0].detail.startswith('0/')
+
+
+def test_open_character_names_still_report_ambiguity():
+    """开放字面契约没有权威 id；同一份投影必须继续如实报告歧义。"""
+    gg, bp, mt = global_grounding(), blueprints(), main_text()
+    gg['entities']['characters']['char_001']['address'].append({
+        'surface': '母亲', 'by': 'narration',
+        'context': 'reference', 'from_chapter': 1})
     bp['_provenance']['context']['architecture'] = 'extraction-ir-v1'
     outcomes = {o.rule: o for o in checks.check(
         global_g=gg, blueprints=bp, main_text=mt)}

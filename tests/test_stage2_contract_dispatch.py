@@ -258,6 +258,11 @@ def test_the_two_scaffolded_single_contracts_are_independently_selectable():
     narration = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['narration'][0]
     assert 'narrator_char_id' in narration and 'narrator_name' not in narration
     assert 'candidate_id' in str(prompts.BLUEPRINT_HINT_V31)
+    assert '候选不是预筛' in prompts.BLUEPRINT_SYS_V31
+    assert '整句台词与它内部的数字/短句不能同时交' in prompts.BLUEPRINT_SYS_V31
+    assert '要害台词不是“随便一句对白”' in prompts.BLUEPRINT_SYS_V31
+    assert '不得从「第二天 / 下一秒」中截出「二天 / 一秒」' \
+        in prompts.BLUEPRINT_SYS_V31
     assert '$' not in prompts.BLUEPRINT_SYS_V3
     assert '$' not in prompts.BLUEPRINT_SYS_V31
 

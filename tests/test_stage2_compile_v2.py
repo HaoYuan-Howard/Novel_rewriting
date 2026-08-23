@@ -269,6 +269,14 @@ def test_v31_candidate_table_drops_punctuation_only_sources_before_publish():
         SourceSpan.model_validate(row['source'])
 
 
+def test_v31_number_candidates_keep_ordinals_whole_and_drop_relative_suffixes():
+    text = '第二天他们二人出发，下一秒折返；三天后花了十两。'
+    surfaces = {row['source']['text'] for row in hinge_candidates(text)}
+
+    assert {'第二天', '二人', '三天', '十两'} <= surfaces
+    assert {'二天', '一秒'}.isdisjoint(surfaces)
+
+
 def test_v31_rejects_a_candidate_from_outside_its_beat_even_without_call_gate():
     raw = {'blueprints': [{
         'chapter_ordinal': 1,

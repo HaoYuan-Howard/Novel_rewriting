@@ -749,3 +749,87 @@ SHA-256 分别为 `11f192627c8958f6c64feebc63de32a8edbbcc107159e3657454b16b6d5fb
 `v31_fixed/diagnostic_compare.json` 的 SHA-256 为
 `fb30bed2785b6ffd24ff75a18b0783d8061ef87fa4a54e3669c562fe7d85d6b3`；它跨了代码冻结，
 只作诊断对照，不是新 A/B 矩阵。
+
+## 十六、`extraction-ir-v3.1` Flash 默认候选：误报复核与双书预注册（2026-08-23）
+
+### 契约边界与旧证据重判
+
+本轮目标是把 Stage2 **响应契约/默认架构**候选收敛到 `extraction-ir-v3.1`；盘上的
+`ChapterBlueprints` 仍由 `contracts/schema/stage2.py::ChapterBlueprints` 与
+`contracts/schema/__init__.py::ARTIFACT_SPECS` 登记为 artifact schema **v2**。响应 JSON 先由
+各自 compiler 归一成同一个 v2 artifact，故翻默认不构成盘上 schema 破坏，也不触发迁移。
+`extraction-ir-v2` 继续留在注册表，供显式回退与存量产物重检。
+
+§十五的“6 项人物歧义”经逐条复核后不是模型选错角色。6 项反投影字面都是“师尊”，而响应中的
+`present_char_ids` 已分别唯一指向 `char_002` 或 `char_006`；旧判据只在架构名恰等于
+`extraction-ir-v2` 时读取关闭引用，错误地把 v3/v3.1 重新按开放字面匹配。判据改为从
+`novel/stages/stage2/contract.py::CONTRACTS` 的 `uses_character_refs` /
+`uses_narration_refs` 派生后，在隔离复制的 `v3.1-fixed` 正式产物上执行真实
+`stage2.blueprint --check-only`，人物歧义/名册外/代词/过早均为 **0/285**，exit 0；历史证据
+目录没有被改写。这个结论消除了一级门的假红，但不自动证明 hinge 质量。
+
+### 175 条 hinge 的盲序抽样
+
+在揭示 A/B 身份前，按响应中候选密度选 ch16/ch19/ch21，按 phrase 密度补 ch1/ch18，并与冻结的
+Pro × `extraction-ir-v1.1` 逐章比较。样本覆盖 v3.1 的 **63/175** 条 hinge，其中
+candidate 52/149、phrase 11/26；它是定向风险抽样，不是假装随机总体或 ground truth。
+
+- ch1 的 7 条基本有效，v3.1 的事件颗粒度有增益；ch18 大体可用，但出现一条跨换行截断的 phrase
+  和少数边缘标题/对白；
+- ch16 把担忧、身份揭示与补救提议粗并在 4 拍，且把普通数量、整段对白与其中“十日”重复抬成
+  hinge；这是抽样中明确的粗切反例；
+- ch19 的 8 拍比 Pro 的 5 拍更清楚，但候选表从“第二天/下一秒”截出“二天/一秒”，普通问句与
+  辱骂也被批量选中；
+- ch21 同一因果句/问句与其中“三个”“五十年”重复选择，普通对白密度偏高。
+
+机械嵌套统计为 v3.1 **3 对**、Pro **1 对**。因此 175 既包含真实召回，也包含已确认的过度抽取，
+不能据数量宣称整体质量超过 Pro v1.1；单书、单次定向审查也不足以外推。修复选择保留
+candidate→确定性 `SourceSpan` 的架构收益，而不是撤回 v3.1：候选生成不再从“第二天/下一秒”
+产生后缀伪词；逐章 prompt 明说候选表不是预筛结果，恢复四类 hinge 的语义边界，禁止批量选择、
+非因果数字以及整句/子串重复。
+
+### 冷揭示差距
+
+Pro 的全书秘密表保留了“黎玄从收徒当天就知道主角来自合欢宗”（setup ch1、reader reveal ch16）；
+`v3.1-fixed` 却把“主角真实身份与任务”登记成 secret，并在 ch1 就 reader reveal。后者是开篇已经
+直接告诉读者的前提，只是世界内其他角色不知道，应落在 `character_known_by`，不是读者秘密；它还
+挤掉了真正的后置揭示。此缺口属于 `stage2.global`，与 ChapterBlueprint 响应架构正交。全书 prompt
+现明确“第一章明牌不是秘密”，并要求从后文“其实/原来/一直/早就/从一开始/收徒那天就知道”反扫
+会改写前文理解的后置揭示。
+
+### 零成本冻结前验证
+
+上述修改同时钉进生产回归：v2/v3/v3.1 的关闭在场者引用共用一组测试，v3.1 narration 关闭引用
+另测；候选后缀、hinge 反批量/反嵌套规则与冷揭示提示均有直接断言。Stage2 定向四文件共
+**118 项非 corpus 回归 exit 0**；冻结契约五文件 325 项、完整非 corpus 回归与前端
+seams/typecheck/build 也全部 exit 0。前端两项编译只读复用了同锁文件主 worktree 的
+`node_modules` 临时目录联接，验证后已删除，未安装或改写依赖。没有
+`NOVEL_CORPUS_MANIFEST`，这些结果都不得称为 corpus 全量绿。
+
+### 双书付费验收预注册
+
+本轮不再要求 v3 成为 v3.1 Flash 翻默认的陪跑臂，也不等待 `v3.1 + Pro`。现有同书证据已经回答
+v2/v3/v3.1 的成本拓扑；新钱只用于验证修复后的目标 consumer。两本书均使用冻结代码、Flash、
+thinking=true、high、独立空缓存；先 `preview`，再按真实 argv 运行并从 `_service/ledger.jsonl`
+统计调用/token，禁止把 usage、日志或旧缓存混加。
+
+1. 当前书 `无情道第一她来自合欢宗`：重跑 `stage2.global` 后再跑
+   `stage2.blueprint=extraction-ir-v3.1`。global 与 blueprint 成本分开报告，blueprint 可与冻结的
+   Pro v1.1、Flash v2、旧 v3.1 对照；新 global 不能偷并进旧 blueprint 口径。
+2. 异构书 `偶像公寓打工日常`：18 章、现代背景、对话密度高，结构与仙侠短书不同；复用其已验证的
+   stage0/stage1，只生成新的 global 与 v3.1 blueprint。它用于验证方向稳定，不冒充第二份 Pro A/B。
+3. 每本都先过正式 schema、fresh/match、0 HARD、beat span 100%、hinge 可定位 100%，关闭人物引用
+   四项全 0；不得以放宽判据、减少 hinge 或粗并 beat 达标。
+4. 当前书的 global 必须删掉“ch1 已明示身份”伪 secret，并恢复“黎玄早已知情”的 ch16 后置揭示；
+   第二本逐条核 reader reveal 不是开篇明牌，也不能把世界事实发生时间误作读者揭示时间。
+5. 每本按**新响应**重算候选/phrase 密度，盲序审查候选最密 3 章与 phrase 最密 2 章；明确的普通
+   寒暄/问答、非因果数字后缀、整句/子串重复必须为 0，不能出现系统性假 hinge、重大漏事件或
+   ch16 式跨场景粗并。机械嵌套只作筛查，每一对仍人工裁决。
+6. 成本门按节点报告真调用、prompt/completion/reasoning 与墙钟；当前书 blueprint 应继续显著低于
+   Flash v2，并不劣于 Pro v1.1 的既有 completion/reasoning 优势。第二书只要求没有异常重采或
+   token/章反弹，不从不同正文硬算百分比优胜。
+
+只有两本同时通过 3–6，才将 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 改为
+`extraction-ir-v3.1` 并验证默认真实 consumer；任一本失败都保持 v2 默认，把失败章、证据与修复路
+写回 `docs/REQUIREMENTS.md::TODO-41`。即便通过，结论也限定为“n=2 支持 Flash 默认切换”，不宣称
+所有题材或 Pro 档都整体超过。

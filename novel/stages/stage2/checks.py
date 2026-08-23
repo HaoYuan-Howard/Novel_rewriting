@@ -47,6 +47,7 @@ from novel.core.naming import (
 )
 from novel.core.spans import content_only, exact_span, locate_spans
 from novel.stages.stage2.coverage import hole_intervals
+from novel.stages.stage2.contract import CONTRACTS
 from novel.core.text import norm
 from novel.report.findings import Outcome, ran, unverifiable
 
@@ -1292,18 +1293,31 @@ def _present(c: _Ctx) -> list[Outcome]:
         pron = set(BARE_PRONOUNS)
         invented, late, amb, pron_hit, unlisted = [], [], [], [], []
         n_pn = 0
-        direct_refs = (c.prov.get('context') or {}).get('architecture') == \
-            'extraction-ir-v2'
+        architecture = str(
+            (c.prov.get('context') or {}).get('architecture') or '')
+        spec = CONTRACTS.get(architecture)
+        direct_present_refs = bool(spec and spec.uses_character_refs)
+        direct_narration_refs = bool(spec and spec.uses_narration_refs)
         for x in c.bps:
             o = x.get('chapter_ordinal')
             upto = c.cum.get(o, '')
             slots: list[tuple[str, list[str], list[str] | None]] = [
                 (str(be.get('beat_id')), list(be.get('present_names') or []),
-                 list(be.get('present_char_ids') or []) if direct_refs else None)
+                 list(be.get('present_char_ids') or [])
+                 if direct_present_refs else None)
                 for be in (x.get('beats') or [])]
-            slots += [(f'narration.{k}', [seg[k]] if seg.get(k) else [], None)
-                      for seg in (x.get('narration') or [])
-                      for k in ('narrator_name', 'focalizer_name') if k in seg]
+            slots += [
+                (f'narration.{name_key}',
+                 [seg[name_key]] if seg.get(name_key) else [],
+                 ([str(seg[id_key])] if seg.get(id_key) else [])
+                 if direct_narration_refs else None)
+                for seg in (x.get('narration') or [])
+                for name_key, id_key in (
+                    ('narrator_name', 'narrator_char_id'),
+                    ('focalizer_name', 'focalizer_char_id'),
+                )
+                if name_key in seg
+            ]
             for where, names, direct_ids in slots:
                 n_pn += len(names)
                 unresolved: list[str] = []
@@ -1312,10 +1326,12 @@ def _present(c: _Ctx) -> list[Outcome]:
                            if direct_ids is not None and index < len(direct_ids)
                            else None)
                     key = norm(raw)
-                    # v2 的 char_id 是模型直接从关闭式集合里选的权威引用；
-                    # present_names 只是编译器为人读投影的字面。同一个「师尊」即使
+                    # ContractSpec 声明为关闭式的 char_id 是模型直接从可见集合里选的
+                    # 权威引用；人读 name 只是编译器的确定性投影。同一个「师尊」即使
                     # 挂两个人，只要投影字面确实属于所选 id，就不能再报「歧义」——
-                    # 那会把确定引用翻回开放字面，再制造一条守卫假红。
+                    # 那会把确定引用翻回开放字面，再制造一条守卫假红。能力从注册表
+                    # 派生，不能把当前默认 v2 的架构名钉成永久边界；v3/v3.1 也关闭
+                    # present 引用，v3.1 还关闭 narration 引用。
                     if cid is not None and key in norm(upto) \
                             and cid in c.owners.get(key, frozenset()) \
                             and (c.since.get(key) or {}).get(cid, 1) <= o:

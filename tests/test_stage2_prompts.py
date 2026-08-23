@@ -24,6 +24,15 @@ def test_global_prompt_requires_an_explicit_exact_chapter_partition():
     assert '每章恰好出现一次' in prompts.GLOBAL_SYS
 
 
+def test_global_prompt_separates_opening_premises_from_later_hidden_truths():
+    assert '第一章明牌不是秘密' in prompts.GLOBAL_SYS
+    assert '不能因为书中其他角色暂时不知道就收进 secrets' in prompts.GLOBAL_SYS
+    assert '反向扫“早就知道”' in prompts.GLOBAL_SYS
+    assert '收徒那天就知道' in prompts.GLOBAL_SYS
+    assert 'secret 关心的' in prompts.GLOBAL_SYS
+    assert '是读者何时知道' in prompts.GLOBAL_SYS
+
+
 def test_removed_narration_fields_are_absent_from_model_surfaces():
     for surface in (prompts.BLUEPRINT_SYS, str(prompts.BLUEPRINT_HINT)):
         assert 'last_beat_id' not in surface
