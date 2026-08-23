@@ -282,13 +282,18 @@ function lsWrite(key: string, v: unknown): void {
 
 /* ------------------------------------------------------------ 验收记录 */
 
+/**
+ * ⚠ `deep: []` 不是「懒得填」：一本刚建的书**还没有 stage4 计划**，
+ * 真服务端此刻只能答「还不知道有哪些章」（`approvals.default_deep(None)`）。
+ * 填一个 `[1, 2, 3]` 会让 mock 讲一个后端根本不会讲的故事。
+ */
 function freshDoc(sid: string): ApprovalDoc {
   return {
     v: 1,
     sid,
     gate: { s0: false, s1: false, s2: false, s3: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },
-    deep: [1, 2, 3],
+    deep: [],
     writing: false,
     spawns: SPAWN_ON_APPROVE,
   }
@@ -297,6 +302,9 @@ function freshDoc(sid: string): ApprovalDoc {
 /**
  * 样本那本书的初始状态：已经跑到 stage5，文案与成书还没确认。
  * 这样一打开就能看到一本走到一半的书 —— 全 false 的空壳看不出这个工具在干什么。
+ *
+ * ⚠ `deep` 是**全书 8 章**（`mocks/stage1_chapters.json` 就是 8 章），不是前 3 章：
+ * 一本已经开写的书说明人签过字了，而默认建议自 2026-08-22 起就是全书闭卷。
  */
 function seededDoc(sid: string): ApprovalDoc {
   return {
@@ -304,7 +312,7 @@ function seededDoc(sid: string): ApprovalDoc {
     sid,
     gate: { s0: true, s1: true, s2: true, s3: true, s4: true, s5: true, s6: false, s7: false },
     seen: { read: true, global: true },
-    deep: [1, 2, 3],
+    deep: [1, 2, 3, 4, 5, 6, 7, 8],
     writing: true,
     spawns: SPAWN_ON_APPROVE,
   }

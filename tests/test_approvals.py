@@ -204,11 +204,19 @@ def test_s7_service_proof_revokes_changed_typed_approval_or_decision(
 
 
 @_corpus_test
-def test_default_depth_is_chapters_one_two_three_and_get_is_read_only():
+def test_default_depth_is_the_whole_plan_and_get_is_read_only():
+    """默认深度选择 = **全书计划章**，且 GET 不落服务状态。
+
+    ⚠⚠ 这条断言 2026-08-22 起就该是「全书」了（`approvals.default_deep` 那次改默认），
+    而它一直写着 `[1, 2, 3]` **却没红过**——因为 `sandbox.source_resolves_in_a_sandbox`
+    同一天漂成恒 `False`，本文件 6 条语料用例整批静默 skip。
+    ⇒ 留着这句话：**一条断言不红，可能是它对，也可能是它根本没跑。**
+    """
     box = _box()
     try:
         doc = approvals.get(box.root, box.sid)
-        assert doc.deep == [1, 2, 3]
+        assert doc.deep == approvals._planned(box.root, box.sid)
+        assert len(doc.deep) > 3, '底座书只有 3 章的话，这条与旧常量默认区分不开'
         assert not (box.root / '_service').exists(), 'GET must not persist service state'
         assert set(doc.gate) == {f's{i}' for i in range(8)}
 
@@ -227,6 +235,59 @@ def test_default_depth_is_chapters_one_two_three_and_get_is_read_only():
                 assert state.resume_verdict(overview, action.kind)[0] != state.RESUME_SKIP, (
                     f'{gate} 提议了 {action.kind}，而 resume 判定说它不用跑——'
                     f'这正是「批准一份 fresh 的产物顺手再付一次费」的形状')
+    finally:
+        box.close()
+
+
+@_corpus_test
+def test_depth_default_follows_the_plan_even_if_the_record_predates_it():
+    """⚠⚠ **真实顺序里记录先于计划落盘**——默认值不许被冻在那一刻的空集上。
+
+    人是按 s0 → s1 → … → s4 一路批下来的，而 `approve_gate('s0')` 当场就
+    `_write` 一份记录；那时 stage4 还没出计划 ⇒ `default_deep(None)` 只能是 `[]`
+    （「还不知道有哪些章」）。此后 `_read_raw` 读到的是文件，
+    `_effective_record` 又只失效 `deep_proof`、**从不重算 `deep`**
+    ⇒ 计划落盘之后界面上仍是「一章都没选」，与「默认全书闭卷」正好相反。
+
+    ⇒ 判准是 `deep_proof`：**没签字的 `deep` 是建议**，按当前计划现算（`_view`）；
+    签过字的（含显式的空集＝全开卷）一律照搬，不许被建议算法改写。
+    """
+    book = _approvable_book('stage4/plan_chapters.json')
+    box = sandbox.Sandbox(book, rels=('stage0/removal_report.json',))
+    try:
+        approvals.approve_gate(box.root, box.sid, 's0')   # ← 这一步把 deep=[] 落到盘上
+        assert approvals.get(box.root, box.sid).deep == [], \
+            '计划还没有 ⇒ 只能是「还不知道有哪些章」，不许猜一个章号出来'
+
+        box.write('stage4/plan_chapters.json',
+                  sandbox.current(book, 'stage4/plan_chapters.json'))
+        planned = approvals._planned(box.root, box.sid)
+        assert planned, '底座书的 stage4 计划没搬进来，这条用例什么都没验'
+        assert approvals.get(box.root, box.sid).deep == planned
+
+        # 授权面一格没动：没人签字 ⇒ 队列照旧拿不到可执行的付费命令。
+        assert approvals.current_depth_selection(box.root, box.sid) is None
+    finally:
+        box.close()
+
+
+@_corpus_test
+def test_a_signed_depth_selection_is_never_rewritten_by_the_default():
+    """人签过字之后（含显式存空集＝全书开卷），建议算法不许碰它。"""
+    box = _box()
+    try:
+        _approve_for_writing(box)
+        planned = approvals._planned(box.root, box.sid)
+        assert planned and len(planned) > 2
+
+        approvals.set_deep(box.root, box.sid, [2])
+        assert approvals.get(box.root, box.sid).deep == [2], \
+            '人选了单章，不许被「默认全书」顶掉'
+
+        approvals.set_deep(box.root, box.sid, [])
+        doc = approvals.get(box.root, box.sid)
+        assert doc.deep == [], '显式的空集是一个决定（全书开卷），不是「还没选」'
+        assert approvals.current_depth_selection(box.root, box.sid) == []
     finally:
         box.close()
 
@@ -268,8 +329,8 @@ def test_stage5_gate_requires_exact_arm_assignment_no_invalids_and_combined_draf
     try:
         _approve_for_writing(box)
         # ⚠ `begin_writing` 要求盘上已经存过一次**显式的**深度决策（`deep_proof` 非空，
-        #   `novel/orchestrator/approvals.py:789`）——默认值 `[1,2,3]` 只是**建议**，
-        #   它自己不带 typed 凭据。`_approve_for_writing` 只批 s0..s4，不替人做这个决策
+        #   `novel/orchestrator/approvals.py::begin_writing`）——默认值（现在是**全书**）
+        #   只是**建议**，它自己不带 typed 凭据。`_approve_for_writing` 只批 s0..s4，不替人做这个决策
         #   （也不该替：另一条用例先 `set_deep([2,4])` 再调它，helper 里加就会覆盖掉）。
         #   ⇒ 这里照真人的动作显式存一次当前建议值。
         approvals.set_deep(box.root, box.sid, approvals.get(box.root, box.sid).deep)

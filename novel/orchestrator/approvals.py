@@ -165,8 +165,16 @@ def default_deep(planned: list[int] | None) -> list[int]:
     ⇒ 没有人签过字之前，队列里不会出现一条付费的 `stage5.write`。
 
     ⚠ `planned is None`（stage4 还没产计划）⇒ **`[]` 而不是 `[1, 2, 3]`**：
-    「还不知道有哪些章」与「选了三章」必须分得开。这不会把默认卡在空集上——
-    `_read_raw` 在没有盘上记录时每次都现算一份，计划一落盘它自动就是全书。
+    「还不知道有哪些章」与「选了三章」必须分得开。
+
+    ⚠⚠ **这个空集曾经会被冻在盘上**（2026-08-23 实测复现并修好）。原注释写的是
+    「`_read_raw` 在没有盘上记录时每次都现算一份，计划一落盘它自动就是全书」——
+    那句话只在「盘上还没有记录」时成立，而**真实顺序里每本书都先批 s0**，
+    `approve_gate('s0')` 当场 `_write` 一份 `deep=[]` 的记录（那时 stage4 还没出计划）。
+    从此 `_read_raw` 读到的是文件，`_effective_record` 又**只失效 `deep_proof`、
+    从不重算 `deep`** ⇒ 计划落盘之后界面上仍然是「一章都没选」，
+    与本函数声明的「默认全书闭卷」正好相反。
+    ⇒ 修法在 `_view`：**没签字的 `deep` 是建议不是决定**，按当前计划现算。
     """
     return sorted(set(planned)) if planned else []
 
@@ -186,9 +194,27 @@ def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecord
 def _view(
     base: str | os.PathLike[str], record: _ApprovalRecordV2,
 ) -> ApprovalDoc:
+    """把记录渲染成界面那一份。**唯一把 `deep` 摆给人看的地方。**
+
+    ⚠⚠ **没签字的 `deep` 是「建议」，不是「决定」** ⇒ 按当前计划现算，
+    不用盘上那个值。判据是 `deep_proof`，而不是「盘上写着什么」：
+    `set_deep` 是唯一写 `deep` 的入口而它**恒写 proof**
+    ⇒ `deep_proof is None` 与「没有人选过」是同一件事。
+
+    ⚠ **这不动任何授权面**：`current_depth_selection` / `begin_writing` 读的是
+    `record.deep` 本体且都要求 proof 在场，本函数一个字都影响不到它们。
+    换句话说本函数只改「界面默认勾什么」，不改「机器允许花什么钱」。
+
+    ⚠ 人签过字之后（含显式存 `[]` 的全开卷选择）**一律照搬盘上的值**：
+    那是人的决定，不许被一个建议算法改写。proof 因计划重生成而失效时会回到建议值，
+    那是对的——旧选择此刻本来就已经不能授权花钱了（队列同步转 blocked），
+    而它引用的章号可能已经不在新计划里。
+    """
     return ApprovalDoc(
         sid=record.sid, gate=record.gate, seen=record.seen,
-        deep=record.deep, writing=record.writing,
+        deep=(record.deep if record.deep_proof is not None
+              else default_deep(_planned(base, record.sid))),
+        writing=record.writing,
         spawns=_spawns(base, record.sid),
     )
 
