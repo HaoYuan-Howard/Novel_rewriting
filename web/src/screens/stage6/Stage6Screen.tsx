@@ -114,7 +114,11 @@ export function Stage6Screen() {
                         : { color: SEV.unver.color, background: SEV.unver.bg }
                     }
                   >
-                    {d.approved ? '已定稿：' + d.approved.approach + '（人工核验）' : '还没定稿'}
+                    {d.approved
+                      ? '已定稿：' +
+                        (d.approved.approach ?? '人手写（无候选前身）') +
+                        '（人工核验）'
+                      : '还没定稿'}
                   </span>
                   {finalPhase ? (
                     <LinkButton onClick={() => setReopened(true)}>回去重挑候选</LinkButton>

@@ -1056,11 +1056,31 @@ STAGE3_ATTEMPT_KINDS: Final = (
 #: **一个模板 + 一份枚举表 = 一个 prompt**，表变了发出去的东西就变了。
 HOOK_APPROACHES: Final = ('source_architecture', 'payoff_preview', 'scene_punchline')
 
-#: 定稿那一份的 `approach` 比候选多一个值。
-#: 它答的是「这份人工稿是从哪一条候选改出来的」——**没有前身时才是 `human_edit`**。
-#: ⚠ 先 `stage6.approve --pick 2` 再 `--apply-edit`，`approach` 会**留着**被选候选的策略，
-#: 而文本已经是人手写的。「它是不是人写的」由 `origin` 回答，不由这里回答。
-HOOK_APPROVED_APPROACHES: Final = HOOK_APPROACHES + ('human_edit',)
+#: **候选的身份**。它是位置，不是策略名。
+#:
+#: ⚠⚠ 这里曾经没有这张表，候选身份就是 `approach` 本身（`_texts_of` 拿它当标签、
+#: `--apply-edit` 拿它选候选、inbox 拿它做证据键）。那在「三种策略各出一条」的前提下
+#: 成立，而那个前提**本身就是要改的东西**：同一种策略采两条样本时，
+#: 标签立刻重复 ⇒ 判官 aliases、`judged_texts` 键、`reviews[].label` 一起塌。
+#: ⇒ 身份与策略必须分开。**这不是新概念**——`--pick N` 从一开始就是位置寻址
+#: （`hook.py` 里就是 `art.candidates[pick - 1]`），本表只是把它显式化。
+#:
+#: ⚠ 与 `HookCandidateLine.index`（1..3）是**同一件事的两种写法**，不是两个身份：
+#: `slot_of(index)` 是唯一的换算口，别在别处再写 `f'c{i}'`。
+HOOK_SLOTS: Final = ('c1', 'c2', 'c3')
+
+
+def slot_of(index: int) -> str:
+    """1 起的候选位置 → 候选身份。**唯一换算口。**
+
+    ⚠ 越界当场炸，不兜底：兜底会让一次算错的位置安静地指到另一条候选上，
+    而证据键、判官标签和人工定稿都挂在这个返回值上。
+    """
+    if not 1 <= index <= len(HOOK_SLOTS):
+        raise ValueError(
+            f'候选位置 {index} 越界；本层恒 {len(HOOK_SLOTS)} 条候选'
+            f'（1~{len(HOOK_SLOTS)}），取值面是 {list(HOOK_SLOTS)}')
+    return HOOK_SLOTS[index - 1]
 
 #: 候选在最新一次质量审判中的可选状态。界面与批准路共同消费。
 #:

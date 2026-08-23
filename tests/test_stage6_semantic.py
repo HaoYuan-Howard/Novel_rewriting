@@ -20,6 +20,7 @@ from contracts.schema.stage6 import (
 )
 from novel.errors import TerminalState, UpstreamMissing
 from novel.llm.transport import ChatResponse
+from contracts.invariants import HOOK_APPROACHES, HOOK_SLOTS, slot_of
 from novel.quality.evaluator import double_blind_decision
 from novel.stages.stage6 import semantic
 
@@ -78,9 +79,11 @@ def _art(*, approved: str | None = None, bound_sha256: str | None = None):
         SimpleNamespace(approach='payoff_preview', text=TEXT_B, findings=[]),
         SimpleNamespace(approach='scene_punchline', text=TEXT_C, findings=[]),
     ]
-    picked = next((c for c in candidates if c.approach == approved), None)
+    picked_at = next((i for i, c in enumerate(candidates, 1)
+                      if c.approach == approved), None)
+    picked = candidates[picked_at - 1] if picked_at is not None else None
     approved_obj = (SimpleNamespace(
-                        approach=picked.approach,
+                        slot=slot_of(picked_at) if picked_at is not None else None,
                         text=picked.text,
                         resolution=SimpleNamespace(
                             subject_sha256=(bound_sha256
@@ -417,7 +420,17 @@ def test_build_prompt_is_anonymous_and_carries_all_quality_references(monkeypatc
     system, user, got_art, _up, aliases = semantic.build_prompt(SimpleNamespace())
     assert system == semantic.SEMANTIC_SYS and got_art is art
     assert [item[0] for item in aliases] == ['T1', 'T2', 'T3']
-    assert all(real not in user for _neutral, real, _text in aliases), 'approach 名泄露给匿名主编'
+    # ⚠⚠ **这条断言改过口径，改的理由要写下来。** 它原来查的是「aliases 里的真实标签
+    #   不得出现在 user 里」，而那时真实标签**就是 approach 名**（`source_architecture`
+    #   这类长且独特的串），所以子串检查恰好等价于「策略名没泄露」。
+    #   候选身份换成位置身份（`c1`/`c2`/`c3`）之后，那个等价**塌了**：两字符的短串
+    #   会在任何一份大 JSON 里偶然出现（本夹具的 `characters` 里就有一个键叫 `c1`），
+    #   于是旧写法既抓不到真泄露、又必然假红。
+    #   ⇒ 直接查那件真正要守的事：**匿名主编不许知道每条候选用的什么策略。**
+    for approach in HOOK_APPROACHES:
+        assert approach not in user, f'策略名 {approach!r} 泄露给匿名主编'
+    assert all(real in HOOK_SLOTS for _neutral, real, _text in aliases), (
+        '真实标签必须是位置身份；它一旦又变回策略名，上面那条查的就不是同一件事了')
     payload = json.loads(user.split('\n\n', 1)[1])
     assert payload['source_reference'] == '原作文案金句。'
     assert payload['rewritten_opening'][0]['text'] == '这是重写后的第一章。'

@@ -33,8 +33,16 @@ stage6/hook_edit.json        人工编辑一条候选或定稿的决策集
 stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
 
-本层全部产物——`hook.json` 与轮次归档、`hook_edit.json`、`semantic_<n>.json`、`wontfix.json`
-——**都是 schema v1**（全仓恒 v1，见 `_README.md`「版本与路径注册表」）。
+本层产物分两档（见 `_README.md`「版本与路径注册表」；本仓**没有迁移机制**，
+破坏形状就 +1 并同批回答「存量由谁重建」）：
+
+- `hook.json` 与轮次归档、`hook_edit.json` ——**都是 schema v2**。
+  2026-08-23 一次破坏：候选身份与策略名解耦（`ApprovedHook.approach` /
+  `HookCandidateRetry.approach` → `slot`，`HookEdit.candidate` 的取值面换成位置身份）。
+  ⚠ 破坏的理由是结构性的：同一种策略采两条样本时，`approach` **答不出
+  「这份定稿是从哪条候选来的」**，而标签、wontfix 证据键与判官的 `judged_texts`
+  键全挂在那个答案上。存量重建代价见 `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
+- `semantic_<n>.json`、`wontfix.json` ——**都是 schema v1**。
 
 ### 2.1 `hook.json`
 
@@ -57,22 +65,26 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 | `mech` | `Mech` | 标点、引号、分段归一的计数 |
 | `findings` | `Finding[]` | 该候选的机械判定；候选不属于正文章，`output_ordinal` 恒为 `null` |
 
-`ApprovedHook = Candidate + origin='human' + resolution`。`resolution` 必须记录自报
+`ApprovedHook = slot + text + origin='human' + mech + findings + resolution`。`resolution` 必须记录自报
 `actor`（不是认证身份）、非空 `reason`、定稿文本的完整 `subject_sha256`、
 恒为 `human_verification` 的判定基础，以及可用的语义审判序号
-（`semantic_review_seq` 可空——「人在零证据下拍的板」与「人读了第 3 轮判官证据」必须分得开）。`approach` 还可为
-`human_edit`；从既有候选编辑时保留其 approach，没有候选前身才写 `human_edit`。
+（`semantic_review_seq` 可空——「人在零证据下拍的板」与「人读了第 3 轮判官证据」必须分得开）。`slot` 记的是**从哪一条候选来**（位置身份 `c1`/`c2`/`c3`）；
+`None` = 没有候选前身（人手写）。⚠ 它曾是 `approach`（策略名 + 一个 `human_edit`），
+而同一种策略采两条样本时策略名**答不出「是哪一条」**——那正是定稿要回答的问题。
+策略名没有丢：由 `candidates[slot].approach` 现算（能 0 成本现算的字段不落盘）。
+「它是不是人写的」由 `origin` 回答，与「有没有前身」是两件事。
 `hook_edit.json` 的 `subject_sha256` 必须绑定经过本书标点、引号与分段归一链后的定稿文本；
 校验发生在 `run_apply_edit` 写盘前，并复用与普通候选批准相同的字节绑定闸，
 不能用 raw 上传字节的哈希绕过。
 
 `HookProvenance.params` 除初始 `max_tokens` 外，还冻结单候选重试的 max tokens、固定一次上限、
-`low` effort 与 `thinking=false`；`candidate_retries[]` 逐条保存 approach、失败规则/证据指纹、
+`low` effort 与 `thinking=false`；`candidate_retries[]` 逐条保存 `slot`（哪一条候选被重试，不是哪种策略）、失败规则/证据指纹、
 user/response 指纹、前后 HARD 数、cache policy、状态、是否采纳与失败理由。发生重试时
 `prompts.HOOK_RETRY_SYS` 必须存在；没有脏候选时该键与历史均为空。
 
 初始三候选归一并机械判定后，每条命中 HARD 的候选恰好获得一次 refresh-write 定向重试；
-请求只允许返回原 approach，并看见完整事实包、整组三候选和该候选的具体 HARD 证据。只有重试后
+定位靠 `target_slot`（位置身份，唯一能选中一条候选的键）；请求只允许返回该条原有的 approach，
+并看见完整事实包、整组候选和该候选的具体 HARD 证据。只有重试后
 HARD 数严格下降且文本不与另两条重复时才替换该候选和整组 rationale；wrong approach、请求失败、
 重复或 HARD 未下降均保留已经付费取得的初始候选，并把原因写入重试账。调用数因此是
 `1 + 初始脏候选数`，不再把“初始一次调用”误写成整条路径的成本上限。

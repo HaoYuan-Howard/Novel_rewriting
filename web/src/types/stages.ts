@@ -879,7 +879,14 @@ export interface HookCandidate {
 }
 
 export interface HookApproved {
-  approach: string
+  /**
+    * 从**哪一条候选**来的（位置身份 `c1`/`c2`/`c3`）；`null` = 没有前身（人手写）。
+    * ⚠ 这里曾是策略名 + 一个 `human_edit`。同一种策略可以有不止一条候选 ⇒
+    * 策略名答不出「是哪一条」，而定稿要回答的正是这个。
+    */
+  slot: string | null
+  /** 那条候选用的什么策略（服务端现算）；`slot` 为 null 时同为 null。 */
+  approach: string | null
   chars: number
   text: string
   origin: string

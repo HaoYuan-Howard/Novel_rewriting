@@ -25,7 +25,7 @@ from contracts.artifacts import (
 )
 
 
-from contracts.invariants import HOOK_APPROACHES
+from contracts.invariants import HOOK_APPROACHES, slot_of
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import CheckReport
@@ -134,11 +134,24 @@ def _labelled(label: str, fs: list[Finding]) -> list[Finding]:
     return [f.model_copy(update={'detail': f'[{label}] {f.detail}'}) for f in fs]
 
 
+def _approved_label(approved: ApprovedHook) -> str:
+    """定稿那一份的标签。`slot is None` = 没有前身（人手写），说的就是这件事。"""
+    return f'定稿·{approved.slot}' if approved.slot is not None else '定稿·人手写'
+
+
 def _texts_of(art: Hook) -> list[tuple[str, str]]:
-    """产物里全部要判的文本：三个候选 + 定稿（若有）。"""
-    out = [(c.approach, c.text) for c in art.candidates]
+    """产物里全部要判的文本：三个候选 + 定稿（若有）。
+
+    ⚠⚠ **标签是位置身份（`c1`/`c2`/`c3`），不是 `approach`。** 这里曾经用策略名，
+    而那让「候选身份」与「候选用的什么策略」变成同一个变量：同一种策略采两条样本时
+    标签立刻重复 ⇒ 判官 aliases、`judged_texts` 字典键、`reviews[].label` 一起塌，
+    而 wontfix 的证据键 `<候选>:<文本指纹>` 也会让两条候选共用一个收敛键
+    （`novel/wontfix.py` 明令禁止的形状）。
+    ⚠ 换算只走 `invariants.slot_of`，别在这里再写一份 `f'c{i}'`。
+    """
+    out = [(slot_of(i), c.text) for i, c in enumerate(art.candidates, 1)]
     if art.approved is not None:
-        out.append((f'定稿·{art.approved.approach}', art.approved.text))
+        out.append((_approved_label(art.approved), art.approved.text))
     return out
 
 
@@ -342,10 +355,10 @@ def run_recheck(ctx: RunContext) -> tuple[Hook, CheckReport]:
     art, _raw = store.read_own(Hook, REL)
 
     cands = []
-    for c in art.candidates:
+    for index, c in enumerate(art.candidates, 1):
         text, mech, fs = _normalize_and_judge(c.text, up)
         cands.append(Candidate(approach=c.approach, text=text, mech=mech,
-                               findings=_labelled(c.approach, fs)))
+                               findings=_labelled(slot_of(index), fs)))
     approved = None
     if art.approved is not None:
         text, mech, fs = _normalize_and_judge(art.approved.text, up)
@@ -353,8 +366,8 @@ def run_recheck(ctx: RunContext) -> tuple[Hook, CheckReport]:
             raise TerminalState(
                 '--recheck 将改变已经人工绑定的定稿字节；不能静默搬用旧 resolution。'
                 '请用 --apply-edit 显式给新稿 actor/reason/subject_sha256')
-        label = f'定稿·{art.approved.approach}'
-        approved = ApprovedHook(approach=art.approved.approach, text=text,
+        label = _approved_label(art.approved)
+        approved = ApprovedHook(slot=art.approved.slot, text=text,
                                 origin=art.approved.origin, mech=mech,
                                 findings=_labelled(label, fs),
                                 resolution=art.approved.resolution)
@@ -383,13 +396,13 @@ def run_revalidate(
     up = _Upstreams(ctx, store)
     art = store.read_own(Hook, _INVALID)[0]
     candidates: list[Candidate] = []
-    for candidate in art.candidates:
+    for index, candidate in enumerate(art.candidates, 1):
         text, mech, findings = _normalize_and_judge(candidate.text, up)
         candidates.append(Candidate(
             approach=candidate.approach,
             text=text,
             mech=mech,
-            findings=_labelled(candidate.approach, findings),
+            findings=_labelled(slot_of(index), findings),
         ))
     approved = None
     if art.approved is not None:
@@ -398,9 +411,9 @@ def run_revalidate(
             raise TerminalState(
                 '--revalidate 的归一会改变已 hash-bound 的批准文本；'
                 '请改走 --apply-edit 并重新批准')
-        label = f'定稿·{art.approved.approach}'
+        label = _approved_label(art.approved)
         approved = ApprovedHook(
-            approach=art.approved.approach,
+            slot=art.approved.slot,
             text=text,
             origin=art.approved.origin,
             mech=mech,
@@ -483,20 +496,26 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
     rationale = resp.rationale
     for index in initially_dirty:
         row = candidate_rows[index]
+        # ⚠ `index` 是 0 起的行号，`slot` 是 1 起的位置身份——**定向重试寻的是位置**。
+        #   按 `approach` 寻址在同一种策略采两条样本时会指向两条候选，
+        #   而这条路只允许替换其中一条。
+        slot = slot_of(index + 1)
         approach = str(row['approach'])
         before_findings = _hard_candidate_findings(row['findings'])  # type: ignore[arg-type]
         failure_rows = _retry_failure_rows(before_findings)
         retry_user = prompts.build_retry_user(
             up.mat,
+            slot=slot,
             approach=approach,
             candidates=[{
+                'slot': slot_of(position),
                 'approach': str(candidate['approach']),
                 'text': str(candidate['text']),
-            } for candidate in candidate_rows],
+            } for position, candidate in enumerate(candidate_rows, 1)],
             rationale=rationale,
             hard_findings=failure_rows)
         common_history: dict[str, object] = {
-            'approach': approach,
+            'slot': slot,
             'attempt': 1,
             'failure_items': sorted({item.rule for item in before_findings}),
             'failure_evidence': prov.projection_fingerprint(failure_rows),
@@ -508,7 +527,7 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
         try:
             retried = client.ask_json(
                 retry_system, retry_user, model_cls=HookCandidateRetryResponse,
-                purpose=f'{ctx.node}:retry:{approach}',
+                purpose=f'{ctx.node}:retry:{slot}',
                 max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
                 rungs=CANDIDATE_RETRY_RUNGS,
                 cache_policy=retry_policy)
@@ -531,7 +550,10 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
                 'output': output_fingerprint,
                 'after_hard': None,
                 'status': 'wrong_approach',
-                'reason': (f'请求 {approach!r}，响应却返回 {retried.approach!r}；'
+                # ⚠ 仍按 `approach` 判「模型跑偏了没有」：位置是**我们**指定的，
+                #   模型能说错的只有策略。两者查的不是同一件事。
+                'reason': (f'请求 {slot} 那一条（{approach!r}），'
+                           f'响应却返回 {retried.approach!r}；'
                            '保留初始候选与整组 rationale'),
                 'accepted': False,
             })
@@ -568,8 +590,8 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
     cands = [
         Candidate(
             approach=row['approach'], text=row['text'], mech=row['mech'],  # type: ignore[arg-type]
-            findings=_labelled(str(row['approach']), row['findings']))  # type: ignore[arg-type]
-        for row in candidate_rows
+            findings=_labelled(slot_of(position), row['findings']))  # type: ignore[arg-type]
+        for position, row in enumerate(candidate_rows, 1)
     ]
 
     prompt_accounting = {
@@ -597,7 +619,9 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
     # ⚠⚠ **闸门条件与 stage3 不同**：本层一次产**三份**，一条红不该废掉另两条。
     # ⇒ 拦的是「**一条干净候选都没有**」。部分红照常落盘，报告把红的那条摆在人面前，
     # 人 `--pick` 时避开它。
-    dirty = {c.approach for c in cands
+    # ⚠ 按**位置**去重，不按策略名：同一种策略的两条候选各自红，
+    #   按策略名会去重成一条 ⇒ 「每一条都红」的闸判不成立，脏产物照样落正式盘。
+    dirty = {slot_of(position) for position, c in enumerate(cands, 1)
              for f in c.findings if _sev_of(f.rule) == 'hard'}
     if len(dirty) == len(cands):
         p = store.write_invalid(REL, artifact, gates_skipped=[])
@@ -646,22 +670,22 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
 
     text, mech, fs = _normalize_and_judge(edit.text, up)
     if edit.candidate is not None:
-        if edit.candidate not in {c.approach for c in art.candidates}:
+        slots = [slot_of(position) for position, _c in enumerate(art.candidates, 1)]
+        if edit.candidate not in slots:
             raise TerminalState(
-                f'候选 {edit.candidate!r} 不在这份产物里'
-                f'（有 {[c.approach for c in art.candidates]}）')
+                f'候选 {edit.candidate!r} 不在这份产物里（有 {slots}）')
         label = edit.candidate
         cands = [Candidate(approach=c.approach, text=text, mech=mech,
                            findings=_labelled(label, fs))
-                 if c.approach == edit.candidate else c
-                 for c in art.candidates]
+                 if slot_of(position) == edit.candidate else c
+                 for position, c in enumerate(art.candidates, 1)]
         new = art.model_copy(update={
             'candidates': cands,
             'provenance': ctx.rewrite_provenance(art.provenance, by='--apply-edit')})
     else:
-        # 定稿：有前身则记它是从哪条改出来的；没有前身才是 `human_edit`。
-        approach = art.approved.approach if art.approved is not None else 'human_edit'
-        label = f'定稿·{approach}'
+        # 定稿：有前身则记它是从**哪条候选**改出来的；没有前身 ⇒ `slot is None`。
+        slot = art.approved.slot if art.approved is not None else None
+        label = f'定稿·{slot}' if slot is not None else '定稿·人手写'
         from novel.stages.stage6 import semantic
         assessment, basis = semantic.require_human_resolution(
             store, art, text, label,
@@ -669,7 +693,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
             expected_subject_sha256=(edit.subject_sha256 or ''),
         )
         new = art.model_copy(update={
-            'approved': ApprovedHook(approach=approach, text=text, origin='human',
+            'approved': ApprovedHook(slot=slot, text=text, origin='human',
                                      mech=mech, findings=_labelled(label, fs),
                                      resolution=HookApprovalResolution(
                                           actor=(edit.actor or '').strip(),
@@ -713,6 +737,7 @@ def run_approve(
             f'（1~{len(art.candidates)}）')
 
     c = art.candidates[pick - 1]
+    slot = slot_of(pick)
     mechanical_hard = sorted({f.rule for f in c.findings if _sev_of(f.rule) == 'hard'})
     if mechanical_hard:
         raise TerminalState(
@@ -725,11 +750,11 @@ def run_approve(
     #   是为了让**写 resolution 的那一处**只有一个来源，不是还留着第二种可能。
     from novel.stages.stage6 import semantic
     assessment, basis = semantic.require_human_resolution(
-        store, art, c.text, str(pick), actor=actor, reason=reason,
+        store, art, c.text, slot, actor=actor, reason=reason,
         expected_subject_sha256=subject_sha256)
 
     new = art.model_copy(update={
-        'approved': ApprovedHook(approach=c.approach, text=c.text, origin='human',
+        'approved': ApprovedHook(slot=slot, text=c.text, origin='human',
                                  mech=c.mech, findings=list(c.findings),
                                  resolution=HookApprovalResolution(
                                      actor=actor.strip(), reason=reason.strip(),

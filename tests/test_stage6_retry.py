@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.invariants import HOOK_APPROACHES
+from contracts.invariants import HOOK_APPROACHES, HOOK_SLOTS
 from contracts.schema.report import finding
 from contracts.schema.stage6 import Mech
 from novel.llm.cache import ResponseCache
@@ -140,8 +140,10 @@ def test_each_initially_dirty_candidate_retries_once_and_usage_includes_retries(
         artifact = hook.run_hook(ctx, client)
 
         assert len(transport.calls) == 3, '一次初始请求 + 两条脏候选各一次重试'
-        assert [row.approach for row in artifact.provenance.candidate_retries] \
-            == list(HOOK_APPROACHES[:2])
+        assert [row.slot for row in artifact.provenance.candidate_retries] \
+            == list(HOOK_SLOTS[:2]), (
+                '重试账记的是**哪一条候选**被重试了（位置身份），不是哪种策略——'
+                '同一种策略采两条样本时后者答不出前一个问题')
         assert all(row.accepted and row.before_hard == 1 and row.after_hard == 0
                    for row in artifact.provenance.candidate_retries)
         assert all(row.status == 'accepted' and row.reason is None

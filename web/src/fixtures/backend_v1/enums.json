@@ -454,11 +454,10 @@
   "payoff_preview",
   "scene_punchline"
  ],
- "hook_approved_approaches": [
-  "source_architecture",
-  "payoff_preview",
-  "scene_punchline",
-  "human_edit"
+ "hook_slots": [
+  "c1",
+  "c2",
+  "c3"
  ],
  "hook_semantic_states": [
   "uncertain",

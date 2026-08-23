@@ -260,8 +260,8 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
     #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
-    STAGE6_HOOK: ArtifactSpec(Hook),
-    STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit),
+    STAGE6_HOOK: ArtifactSpec(Hook, 2),
+    STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit, 2),
     STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview),
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
     STAGE7_NAME_MAP: ArtifactSpec(NameMap),

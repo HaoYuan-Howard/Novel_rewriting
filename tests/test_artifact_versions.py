@@ -105,6 +105,30 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
         '不手补字段冒充当前产地',
     ),
+    'stage6/hook.json': (
+        2,
+        '2026-08-23 候选身份与策略名解耦：`ApprovedHook.approach`'
+        '（策略名 + 一个 `human_edit`）换成 `slot`（位置身份 `c1`/`c2`/`c3`，'
+        '`None` = 无前身），`HookCandidateRetry.approach` 同样换成 `slot`。'
+        '⚠ 破坏的理由不是「换个名字更好看」：同一种策略采两条样本时，`approach` '
+        '**在结构上答不出「这份定稿是从哪条候选来的」**，而 `_texts_of` 的标签、'
+        'wontfix 的证据键、判官的 `judged_texts` 键全挂在那个答案上。'
+        '策略名没有丢——由 `candidates[slot].approach` 现算。'
+        '`HOOK_APPROVED_APPROACHES` 随之删除',
+        '`stage6.hook` 重跑（**付费**）。⚠⚠ **代价要说清**：重跑写 `approved=None` '
+        '⇒ 人工定稿一并失效，必须重新走 `stage6.approve --pick` 的 '
+        'actor / reason / 完整 subject SHA-256。盘上存量只有一份'
+        '（「我把龙傲天训成狗」，已到 stage7），**成书 txt 不是注册产物、不受影响**；'
+        '该书 stage6 层在重建前拒读。`stage6/semantic_*.json` 未破坏形状，'
+        '但它按 `judged_texts` 绑文本、重跑后会判 stale',
+    ),
+    'stage6/hook_edit.json': (
+        2,
+        '2026-08-23 同批：`HookEdit.candidate` 的取值面从策略名换成位置身份 '
+        '`c1`/`c2`/`c3`（`None` 仍表示「写/替换定稿」）。策略名不再唯一 ⇒ 选不中那一条',
+        '**盘上零存量**（全 `outputs/` 找不到一份 `hook_edit.json`）⇒ 本次代价为零。'
+        '它是人工决策集不是产出物，下次写的时候按新取值面写即可',
+    ),
 }
 
 
