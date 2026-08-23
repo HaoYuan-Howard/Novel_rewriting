@@ -950,6 +950,24 @@ class HingeReviewBatchResponse(StrictModel):
     chapters: list[HingeReviewChapterResponse] = Field(min_length=1)
 
 
+class HingeProbeBeatResponse(StrictModel):
+    """冻结 beat 上从未预选的原文候选中挑出的 hinge。"""
+
+    beat_id: str = Field(pattern=BEAT_ID_PATTERN)
+    hinges: list[HingeCandidateResponse]
+
+
+class HingeProbeChapterResponse(StrictModel):
+    chapter_ordinal: int = Field(ge=1)
+    beats: list[HingeProbeBeatResponse] = Field(min_length=1)
+
+
+class HingeProbeBatchResponse(StrictModel):
+    """独立候选选择探针；只用于标定两相架构，不是盘上 artifact。"""
+
+    chapters: list[HingeProbeChapterResponse] = Field(min_length=1)
+
+
 class HingeSelectResponse(StrictModel):
     """候选选择（`--patch` 修 `hinge_ambiguous`）：代码枚举命中位，模型**只挑 id**。
 

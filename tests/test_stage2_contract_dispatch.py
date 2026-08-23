@@ -283,6 +283,10 @@ def test_the_hinge_review_arm_is_a_bounded_keep_only_selector():
     assert set(prompts.HINGE_REVIEW_HINT['chapters'][0]) == \
         {'chapter_ordinal', 'keep_hinge_ids'}
 
+    assert '候选没有经过语义筛选' in prompts.HINGE_PROBE_SYS
+    probe_beat = prompts.HINGE_PROBE_HINT['chapters'][0]['beats'][0]
+    assert set(probe_beat) == {'beat_id', 'hinges'}
+
 
 def test_dense_hinge_review_uses_low_nothink_and_can_only_delete():
     book = Path(tempfile.mkdtemp()) / 'hinge复核_128'
@@ -314,6 +318,45 @@ def test_dense_hinge_review_uses_low_nothink_and_can_only_delete():
     assert result['chapters'][0]['after'] == 2
     assert [h['source']['text'] for h in blueprints[0]['beats'][0]['hinges']] == \
         ['原句0', '原句15']
+
+
+def test_hinge_probe_selects_raw_candidates_without_mutating_the_blueprint():
+    book = Path(tempfile.mkdtemp()) / 'hinge探针_129'
+    book.mkdir(parents=True)
+    ctx = _ctx(book, 'stage2.blueprint')
+    text = '他说：“普通介绍。”\n她答：“我答应你。”'
+    blueprints = [{
+        'chapter_ordinal': 1,
+        'beats': [{
+            'beat_id': 'b01_01',
+            'span': {'start': 0, 'end': len(text)},
+            'event': '他先介绍情况，她随后作出承诺。',
+            'hinges': [],
+        }],
+    }]
+    before = copy.deepcopy(blueprints)
+
+    def respond(req, _index):
+        assert '候选不是 hinge 真值' in req.user
+        assert '“普通介绍。”' in req.user and '“我答应你。”' in req.user
+        return _ok({'chapters': [{
+            'chapter_ordinal': 1,
+            'beats': [{'beat_id': 'b01_01', 'hinges': [
+                {'kind': '要害台词', 'candidate_id': 'h002'},
+            ]}],
+        }]})
+
+    client, transport = _client(ctx, respond)
+    result = extract._run_hinge_candidate_probe(
+        ctx, client, blueprints,
+        [{'chapter_ordinal': 1, 'text': text}], force_chapters=(1,))
+
+    assert len(transport.calls) == 1
+    assert (transport.calls[0].reasoning_effort, transport.calls[0].thinking) == \
+        ('low', False)
+    assert blueprints == before, '探针只产诊断，不能偷改将要判定的编译稿'
+    assert result['chapters'][0]['probe_selected'] == 1
+    assert result['chapters'][0]['selected'][0]['text'] == '“我答应你。”'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

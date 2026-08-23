@@ -385,6 +385,15 @@ def render_md(report: dict[str, Any]) -> str:
                          f"，删除 {len(row.get('dropped') or [])}{suffix}")
     elif 'hinge_review' in report:
         lines += ['', f"低推理 hinge 复核：未触发（触发线 {review.get('trigger')}）"]
+    probe = report.get('hinge_probe') or {}
+    if probe.get('called'):
+        lines += ['', '独立候选选择探针（实验臂，未改编译稿）：', '']
+        for row in probe.get('chapters') or []:
+            suffix = '（强制阴性对照）' if row.get('forced_control') else ''
+            lines.append(
+                f"- ch{row['chapter_ordinal']}：原稿 {row['existing']} hinge，"
+                f"探针独立选择 {row['probe_selected']}，与原稿重合 {row['overlap']}"
+                f"{suffix}")
     lines += ['', '## 二、判据差集（合并稿 vs 盘上基线）', '',
               '⚠ **本节只对「逐章绝对判据」有效**（hinge/span/覆盖/枚举那一族）。'
               f"以本书自身为尺子的判据——{'、'.join(sorted(BOOK_RELATIVE_RULES))}"
@@ -478,6 +487,10 @@ def main(argv: list[str] | None = None) -> int:
                     help='实验：编译后对极端高密章加一次 low/关思考的只减不增复核')
     ap.add_argument('--force-review-chapters', default='',
                     help='仅冒烟阴性对照：即使未达触发线也复核这些目标章（逗号分隔）')
+    ap.add_argument('--probe-hinge-candidates', action='store_true',
+                    help='实验：冻结 beat 后从未预选的原文候选独立选择，不改编译稿')
+    ap.add_argument('--force-probe-chapters', default='',
+                    help='仅冒烟阴性对照：即使未达触发线也探测这些目标章（逗号分隔）')
     ap.add_argument('--boundary-only', action='store_true',
                     help='只跑两段式契约的边界相，用最低成本先验拍数；不发细节与摘要')
     ap.add_argument('--json-out')
@@ -505,6 +518,20 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if a.review_dense_hinges and cfg.stage2_blueprint_contract != 'extraction-ir-v3.1':
         print('hinge 复核实验当前只对 extraction-ir-v3.1 开放', file=sys.stderr)
+        return 2
+    forced_probe = _chapters_of(a.force_probe_chapters) \
+        if a.force_probe_chapters.strip() else ()
+    if forced_probe and not a.probe_hinge_candidates:
+        print('--force-probe-chapters 必须与 --probe-hinge-candidates 同用', file=sys.stderr)
+        return 2
+    if outside := sorted(set(forced_probe) - set(targets)):
+        print(f'强制探针章必须属于 --chapters：{outside}', file=sys.stderr)
+        return 2
+    if a.probe_hinge_candidates and cfg.stage2_blueprint_contract != 'extraction-ir-v3.1':
+        print('hinge 候选探针当前只对 extraction-ir-v3.1 开放', file=sys.stderr)
+        return 2
+    if a.review_dense_hinges and a.probe_hinge_candidates:
+        print('两条实验臂必须分开跑，避免前一条的输出成为后一条输入', file=sys.stderr)
         return 2
 
     base = Path(a.base)
@@ -536,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f'  将发 {len(requests) * phases} 次章调用'
           f'{"" if a.skip_summary_batch else " + 1 次摘要批"}'
           f'{" + 至多 1 次 hinge 复核" if a.review_dense_hinges else ""}'
+          f'{" + 至多 1 次 hinge 候选探针" if a.probe_hinge_candidates else ""}'
           f'（命中缓存的不再计费）')
     if not a.execute:
         print('  真跑：否（0 成本预览；加 --execute）')
@@ -637,6 +665,16 @@ def main(argv: list[str] | None = None) -> int:
     if a.review_dense_hinges:
         hinge_review = extract._run_hinge_review_batch(
             ctx, client, compiled['blueprints'], force_chapters=forced_review)
+    hinge_probe = {
+        'called': False,
+        'trigger': extract.HINGE_REVIEW_TRIGGER,
+        'probed_chapters': [],
+        'chapters': [],
+    }
+    if a.probe_hinge_candidates:
+        hinge_probe = extract._run_hinge_candidate_probe(
+            ctx, client, compiled['blueprints'], main_text,
+            force_chapters=forced_probe)
 
     summary_mode = 'events_join_debug（未发摘要批）'
     if not a.skip_summary_batch:
@@ -667,6 +705,7 @@ def main(argv: list[str] | None = None) -> int:
         gate_rows=[r for r in audit_rows if r.get('kind') == 'gate_decision'],
     )
     report['hinge_review'] = hinge_review
+    report['hinge_probe'] = hinge_probe
     report['compiled'] = compiled['blueprints']
 
     if a.json_out:

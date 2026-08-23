@@ -1646,6 +1646,160 @@ def _run_hinge_review_batch(
     }
 
 
+def _run_hinge_candidate_probe(
+    ctx: RunContext,
+    client: LlmClient,
+    blueprints: list[dict[str, Any]],
+    main_text: list[dict[str, Any]],
+    *,
+    force_chapters: tuple[int, ...] = (),
+) -> dict[str, Any]:
+    """在冻结 beat 上独立选择**未预选**候选；只产诊断，不改输入稿。"""
+    from contracts.schema.stage2 import HingeProbeBatchResponse
+    from novel.stages.stage2 import prompts
+
+    forced = set(force_chapters)
+    by_ordinal = {
+        int(bp.get('chapter_ordinal') or 0): bp for bp in blueprints
+    }
+    unknown = sorted(forced - set(by_ordinal))
+    if unknown:
+        raise ValueError(f'强制探针章不在本次编译稿里：{unknown}')
+    candidates_by = hinge_candidates_by_chapter(main_text)
+    targets: list[int] = []
+    known_by_beat: dict[tuple[int, str], dict[str, dict[str, Any]]] = {}
+    payload_chapters: list[dict[str, Any]] = []
+    for ordinal, blueprint in sorted(by_ordinal.items()):
+        existing = [h for beat in (blueprint.get('beats') or [])
+                    for h in (beat.get('hinges') or [])]
+        if len(existing) < HINGE_REVIEW_TRIGGER and ordinal not in forced:
+            continue
+        targets.append(ordinal)
+        payload_beats: list[dict[str, Any]] = []
+        for beat in (blueprint.get('beats') or []):
+            beat_id = str(beat.get('beat_id') or '')
+            span = beat.get('span') if isinstance(beat, dict) else None
+            if isinstance(span, dict):
+                start, end = int(span.get('start') or 0), int(span.get('end') or 0)
+                rows = [row for row in candidates_by.get(ordinal, [])
+                        if int((row.get('source') or {}).get('start') or -1) >= start
+                        and int((row.get('source') or {}).get('end') or -1) <= end]
+            else:
+                rows = []
+            known_by_beat[(ordinal, beat_id)] = {
+                str(row['candidate_id']): row for row in rows
+            }
+            payload_beats.append({
+                'beat_id': beat_id,
+                'event': str(beat.get('event') or ''),
+                'candidates': prompt_candidates(rows),
+            })
+        payload_chapters.append({
+            'chapter_ordinal': ordinal,
+            'beats': payload_beats,
+        })
+
+    if not targets:
+        return {
+            'called': False,
+            'trigger': HINGE_REVIEW_TRIGGER,
+            'probed_chapters': [],
+            'chapters': [],
+        }
+
+    expected_beats = {
+        ordinal: [str(beat.get('beat_id') or '')
+                  for beat in (by_ordinal[ordinal].get('beats') or [])]
+        for ordinal in targets
+    }
+
+    def validate(obj: Any, _resp: Any) -> str | None:
+        got_chapters = [c.chapter_ordinal for c in obj.chapters]
+        if sorted(got_chapters) != targets or len(set(got_chapters)) != len(got_chapters):
+            return f'章集不齐或重复：要 {targets}，得 {sorted(got_chapters)}'
+        for chapter in obj.chapters:
+            beat_ids = [beat.beat_id for beat in chapter.beats]
+            expected = expected_beats[chapter.chapter_ordinal]
+            if beat_ids != expected or len(set(beat_ids)) != len(beat_ids):
+                return (f'ch{chapter.chapter_ordinal} beat 集或顺序漂移：'
+                        f'要 {expected}，得 {beat_ids}')
+            chosen_across: set[str] = set()
+            for beat in chapter.beats:
+                ids = [hinge.candidate_id for hinge in beat.hinges]
+                if len(set(ids)) != len(ids):
+                    return f'{beat.beat_id} candidate_id 有重复项'
+                extra = sorted(set(ids) - set(known_by_beat[
+                    (chapter.chapter_ordinal, beat.beat_id)]))
+                if extra:
+                    return f'{beat.beat_id} 选择了不属于该 beat 的候选：{extra}'
+                duplicate = sorted(set(ids) & chosen_across)
+                if duplicate:
+                    return f'ch{chapter.chapter_ordinal} 跨 beat 重复选择：{duplicate}'
+                chosen_across.update(ids)
+        return None
+
+    response = client.ask_json(
+        with_json_shape(prompts.HINGE_PROBE_SYS, prompts.HINGE_PROBE_HINT),
+        '── 冻结事件拍与未预选定位候选（候选不是 hinge 真值）──\n'
+        + json.dumps({'chapters': payload_chapters}, ensure_ascii=False,
+                     separators=(',', ':')),
+        model_cls=HingeProbeBatchResponse,
+        purpose=f'{ctx.node}:hinge-probe',
+        validator=validate,
+        rungs=HINGE_REVIEW_RUNGS,
+        max_tokens=HINGE_REVIEW_MAX_TOKENS,
+    )
+    response_by = {c.chapter_ordinal: c for c in response.chapters}
+    report_chapters: list[dict[str, Any]] = []
+    for ordinal in targets:
+        blueprint = by_ordinal[ordinal]
+        existing_rows = [h for beat in (blueprint.get('beats') or [])
+                         for h in (beat.get('hinges') or [])]
+        existing_spans = {
+            (int(source.get('start') or -1), int(source.get('end') or -1))
+            for hinge in existing_rows
+            if isinstance((source := hinge.get('source')), dict)
+        }
+        selected: list[dict[str, Any]] = []
+        selected_spans: set[tuple[int, int]] = set()
+        for beat in response_by[ordinal].beats:
+            rows = known_by_beat[(ordinal, beat.beat_id)]
+            event = str(next(
+                row.get('event') or '' for row in (blueprint.get('beats') or [])
+                if str(row.get('beat_id') or '') == beat.beat_id))
+            for hinge in beat.hinges:
+                row = rows[hinge.candidate_id]
+                source = row['source']
+                key = (int(source['start']), int(source['end']))
+                selected_spans.add(key)
+                selected.append({
+                    'beat_id': beat.beat_id,
+                    'candidate_id': hinge.candidate_id,
+                    'kind': hinge.kind,
+                    'text': source['text'],
+                    'event': event,
+                    'already_selected': key in existing_spans,
+                })
+        report_chapters.append({
+            'chapter_ordinal': ordinal,
+            'existing': len(existing_rows),
+            'existing_candidate_backed': len(existing_spans & {
+                (int(row['source']['start']), int(row['source']['end']))
+                for row in candidates_by.get(ordinal, [])
+            }),
+            'probe_selected': len(selected),
+            'overlap': len(existing_spans & selected_spans),
+            'selected': selected,
+            'forced_control': ordinal in forced,
+        })
+    return {
+        'called': True,
+        'trigger': HINGE_REVIEW_TRIGGER,
+        'probed_chapters': targets,
+        'chapters': report_chapters,
+    }
+
+
 def _run_summary_batch(ctx: RunContext, client: LlmClient,
                        blueprints: list[dict[str, Any]]) -> dict[int, str]:
     """`extraction-ir-v1` 的书级摘要批：一次调用按 events 产全部目标章的摘要。
