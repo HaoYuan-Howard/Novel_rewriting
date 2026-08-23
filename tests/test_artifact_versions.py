@@ -105,6 +105,32 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
         '不手补字段冒充当前产地',
     ),
+    'stage6/hook.json': (
+        2,
+        '2026-08-23 候选身份与策略名解耦：`ApprovedHook.approach`'
+        '（策略名 + 一个 `human_edit`）换成 `slot`（位置身份 `c1`/`c2`/`c3`，'
+        '`None` = 无前身），`HookCandidateRetry.approach` 同样换成 `slot`。'
+        '⚠ 破坏的理由不是「换个名字更好看」：同一种策略采两条样本时，`approach` '
+        '**在结构上答不出「这份定稿是从哪条候选来的」**，而 `_texts_of` 的标签、'
+        'wontfix 的证据键、判官的 `judged_texts` 键全挂在那个答案上。'
+        '策略名没有丢——由 `candidates[slot].approach` 现算。'
+        '`HOOK_APPROVED_APPROACHES` 随之删除',
+        '`stage6.hook` 重跑（**付费**）。⚠ 重跑写 `approved=None` ⇒ 人工定稿一并失效，'
+        '必须重新走 `stage6.approve --pick` 的 actor / reason / 完整 subject SHA-256。'
+        '⚠⚠ **没有自动迁移，也不能宣称盘上代价为零**：`outputs/_ab/flash/` 仍保留两份'
+        '已到 stage7 的 v1 实验快照，而且都缺 `stage2/global_review_decisions.json`，'
+        '不能直接从 producer 付费重建。本次把它们明确退役为**只读历史实验证据**：'
+        '不纳入 current-schema corpus，也不承诺当前运行时可读；字节原样保留，'
+        '需要检视时使用形状破坏前的代码身份。现役交付必须由 producer 生成 v2 并重新人工定稿。'
+        '`stage6/semantic_*.json` 未破坏形状，但它按 `judged_texts` 绑文本、重跑后会判 stale',
+    ),
+    'stage6/hook_edit.json': (
+        2,
+        '2026-08-23 同批：`HookEdit.candidate` 的取值面从策略名换成位置身份 '
+        '`c1`/`c2`/`c3`（`None` 仍表示「写/替换定稿」）。策略名不再唯一 ⇒ 选不中那一条',
+        '**盘上零存量**（全 `outputs/` 找不到一份 `hook_edit.json`）⇒ 本次代价为零。'
+        '它是人工决策集不是产出物，下次写的时候按新取值面写即可',
+    ),
 }
 
 

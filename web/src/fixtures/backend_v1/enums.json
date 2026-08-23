@@ -454,18 +454,28 @@
   "payoff_preview",
   "scene_punchline"
  ],
- "hook_approved_approaches": [
-  "source_architecture",
+ "hook_retired_approaches": [
+  "source_architecture"
+ ],
+ "hook_recipe": [
   "payoff_preview",
   "scene_punchline",
-  "human_edit"
+  "scene_punchline"
+ ],
+ "hook_current_approaches": [
+  "payoff_preview",
+  "scene_punchline"
+ ],
+ "hook_slots": [
+  "c1",
+  "c2",
+  "c3"
  ],
  "hook_semantic_states": [
   "uncertain",
   "unreviewed"
  ],
  "hook_approach_notes": {
-  "source_architecture": "原作文案结构 —— 保住原文的信息次序、升级节拍、反差与最后一击，换成重写正文的声线和全新措辞",
   "payoff_preview": "兑现预告 —— 从全书挑最有吸引力的后期兑现或反转作预告，制造「怎么走到这一步」的阅读欲",
   "scene_punchline": "场面重击 —— 用一个可视、可听的具体场面或对白砸出核心关系，以人物反应、危险或笑点收尾"
  },

@@ -41,7 +41,8 @@ from contracts.invariants import (
     DEPTH_MODES,
     HINGE_KINDS,
     HOOK_APPROACHES,
-    HOOK_APPROVED_APPROACHES,
+    HOOK_SLOTS,
+    slot_of,
     HOOK_SEMANTIC_STATES,
     HOOK_KEYS,
     INBOX_ATTENTION,
@@ -1049,7 +1050,8 @@ class HookCandidateLine(FrozenModel):
     #: 永远开着的闸，误导的方向相反、形状相同。⇒ 两个都删掉；
     #: **每一条候选都要人显式核验**，要判还用不用人看就读 `semantic_state`。
 
-    #: 这一条是不是当前定稿（`hook.approved.approach == candidate.approach`）。
+    #: 这一条是不是当前定稿（按**位置身份**比：`hook.approved.slot == slot_of(index)`）。
+    #: ⚠ 曾按 `approach` 比。同一种策略采两条样本时，那样写会把**两条**都标成已定稿。
     approved: bool
 
 
@@ -1057,7 +1059,11 @@ class HookApprovedLine(FrozenModel):
     """定稿的视图行。`origin` 的取值由 `stage6.ApprovedHook` 收口（恒 `human`），
     这里不抄第二份 Literal（api.py 纪律 ①）。"""
 
-    approach: Literal[HOOK_APPROVED_APPROACHES]
+    #: 从**哪一条候选**来的；`None` = 没有前身（人手写）。
+    slot: Literal[HOOK_SLOTS] | None
+    #: 那条候选用的什么策略。**现算**（`candidates[slot].approach`），
+    #: `slot is None` 时同为 `None`——没有前身就没有策略可报。
+    approach: str | None
     chars: int = Field(ge=0)
     text: str = Field(min_length=1)
     origin: str = Field(min_length=1)
@@ -1093,15 +1099,15 @@ class Stage6View(StrictModel):
     @model_validator(mode='after')
     def _the_approved_flag_matches_the_approved_hook(self) -> Stage6View:
         """`candidates[].approved` 与 `approved` 说的必须是同一件事。"""
-        flagged = [c.approach for c in self.candidates if c.approved]
+        flagged = [slot_of(c.index) for c in self.candidates if c.approved]
         if self.approved is None and flagged:
             raise ValueError(f'没有定稿而 {flagged} 标着已定——两格在说两件事')
         if self.approved is not None:
-            want = [self.approved.approach] if self.approved.approach != 'human_edit' else []
+            want = [self.approved.slot] if self.approved.slot is not None else []
             if flagged != want:
                 raise ValueError(
-                    f'定稿是 {self.approved.approach!r} 而候选标记是 {flagged}——'
-                    f'`human_edit`（无前身）时不许有候选自称定稿')
+                    f'定稿来自 {self.approved.slot!r} 而候选标记是 {flagged}——'
+                    f'无前身（人手写）时不许有候选自称定稿')
         if [c.index for c in self.candidates] != [1, 2, 3]:
             raise ValueError('候选 index 必须是 1..3（顺序即产物顺序）')
         return self

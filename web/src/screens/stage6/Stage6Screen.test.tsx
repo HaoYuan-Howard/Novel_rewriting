@@ -107,4 +107,31 @@ describe('Stage6Screen audited approval', () => {
       subject_sha256: candidate.subject_sha256,
     }))
   })
+
+  it('keeps the approved slot visible when two candidates share one approach', async () => {
+    const fixture = await mockApi.getStage6(SAMPLE_SID)
+    vi.spyOn(api, 'getStage6').mockResolvedValue({
+      ...fixture,
+      approved: {
+        ...fixture.approved!,
+        slot: 'c3',
+        approach: 'scene_punchline',
+      },
+      candidates: fixture.candidates.map((row, index) => ({
+        ...row,
+        approach: index === 0 ? 'payoff_preview' : 'scene_punchline',
+        approved: index === 2,
+      })),
+    })
+    vi.spyOn(api, 'getStage1HookCopy').mockResolvedValue(
+      await mockApi.getStage1HookCopy(SAMPLE_SID),
+    )
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+
+    renderRoute(<Stage6Screen />, `/n/${SAMPLE_SID}/stage6`)
+
+    expect(
+      await screen.findByText('已定稿：候选 3 · scene_punchline（人工核验）'),
+    ).toBeVisible()
+  })
 })

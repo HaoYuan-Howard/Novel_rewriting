@@ -28,11 +28,32 @@ def test_metric_is_separate_from_info():
     assert 'info' in inv.SEVERITY
 
 
+#: 这些 tuple **不是取值面**，是**序列**——同一个值出现两次是它们的语义，不是笔误。
+#: ⚠ 白名单一条一行、写明它是什么，别写成一句「有些表允许重复」：那样下一个真写重的
+#: 取值面就会顺着这条口子进来。
+_ORDERED_SEQUENCES_NOT_DOMAINS = {
+    # 候选配方：按槽位逐条指定写法，当前是 payoff_preview ×1 + scene_punchline ×2。
+    # 它的取值面是 `HOOK_APPROACHES`（那一张仍然不许重复，下面照查）。
+    'HOOK_RECIPE',
+}
+
+
 def test_no_duplicates_in_any_tuple_domain():
     for name in dir(inv):
         value = getattr(inv, name)
+        if name in _ORDERED_SEQUENCES_NOT_DOMAINS:
+            continue
         if name.isupper() and isinstance(value, tuple) and value and isinstance(value[0], str):
             assert len(set(value)) == len(value), f'{name} 里有重复值：{value}'
+
+
+def test_every_whitelisted_sequence_still_lives_inside_a_real_domain():
+    """⚠ 白名单不是豁免：序列里的每个值仍必须属于某个**真取值面**。
+
+    少了这一条，`_ORDERED_SEQUENCES_NOT_DOMAINS` 就成了「这张表不受查」的后门。
+    """
+    assert set(inv.HOOK_RECIPE) <= set(inv.HOOK_APPROACHES)
+    assert len(set(inv.HOOK_APPROACHES)) == len(inv.HOOK_APPROACHES)
 
 
 def test_nonbody_kinds_never_collide_with_end_markers():

@@ -41,6 +41,25 @@ def box():
     s.close()
 
 
+@pytest.fixture
+def reviewed_box():
+    """带 `stage2/global_review.json` 的沙箱。
+
+    ⚠⚠ **两条复核模板用例曾经挂在 `box` 上，而 `box` 不带这一份** ⇒ 它们从落地起
+    就恒 exit 2（「global_review 不在盘上」）。没被发现是因为**没设 `NOVEL_OUTPUT` 时
+    `box` 整个 skip**：绿的是 skip，不是断言。⇒ 缺哪份就把哪份搬进来，
+    别把断言放松成「exit 2 也算过」。
+    """
+    books = [book for book in sandbox.books_with_stage3()
+             if sandbox.current(book, 'stage2/global_review.json') is not None]
+    if not books:
+        pytest.skip('盘上没有带 stage2 全局复核的语料——这两条**没在查**')
+    s = sandbox.Sandbox(
+        books[0], sandbox.STAGE3_INPUTS + ('stage2/global_review.json',))
+    yield s
+    s.close()
+
+
 @pytest.fixture(autouse=True)
 def no_api_key(monkeypatch):
     """把环境与仓内 .env 两条密钥来源都隔离掉，测试绝不触网。"""
@@ -73,18 +92,21 @@ def test_stage7_edit_template_is_stdout_only_and_round_trips(
     assert list(novel_dir.iterdir()) == []
 
 
-def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(box, capsys):
+def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(
+        reviewed_box, capsys):
     """模板省掉 hash/evidence 手抄，但默认 UNVER 绝不能顺手打开事实闸。"""
-    rc = _run('run', 'stage2.global', box.sid, '--emit-review-template',
-              '--base', str(box.root))
+    rc = _run('run', 'stage2.global', reviewed_box.sid, '--emit-review-template',
+              '--base', str(reviewed_box.root))
 
     assert rc == X.OK
     template_raw = json.loads(capsys.readouterr().out)
     assert template_raw['_schema_version'] == 1
     template = GlobalReviewDecisionSet.model_validate(decode_artifact(
         'stage2/global_review_decisions.json', template_raw).payload)
-    review = GlobalReview.model_validate(decode_artifact(
-        'stage2/global_review.json', box.read('stage2/global_review.json')).payload)
+    # ⚠ `Sandbox.read` 出来的已经是**解码后的载荷**；再套一层 `decode_artifact`
+    #   会去找版本标记而当场炸——这条用例从落地起就没真跑过，别照抄那一层。
+    review = GlobalReview.model_validate(
+        reviewed_box.read('stage2/global_review.json'))
     current = {item.item_id: item for item in review.items}
     assert set(current) == {row.item_id for row in template.decisions}
     assert all(row.state == 'UNVER' for row in template.decisions)
@@ -93,13 +115,13 @@ def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(box, ca
                for row in template.decisions)
 
 
-def test_stage2_review_workpack_is_read_only_and_never_auto_decides(box, capsys):
+def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box, capsys):
     """workpack 只缩小人工阅读面；生成它不能顺手改变任何正式字节。"""
-    before = {p.relative_to(box.dir).as_posix(): p.read_bytes()
-              for p in box.dir.rglob('*') if p.is_file()}
+    before = {p.relative_to(reviewed_box.dir).as_posix(): p.read_bytes()
+              for p in reviewed_box.dir.rglob('*') if p.is_file()}
 
-    rc = _run('run', 'stage2.global', box.sid, '--emit-review-workpack',
-              '--base', str(box.root))
+    rc = _run('run', 'stage2.global', reviewed_box.sid, '--emit-review-workpack',
+              '--base', str(reviewed_box.root))
 
     assert rc == X.OK
     workpack = json.loads(capsys.readouterr().out)
@@ -109,8 +131,8 @@ def test_stage2_review_workpack_is_read_only_and_never_auto_decides(box, capsys)
     assert all('current_state' in row and 'review_note' in row
                and isinstance(row['exact_literal_hits'], list)
                for row in workpack['items'])
-    after = {p.relative_to(box.dir).as_posix(): p.read_bytes()
-             for p in box.dir.rglob('*') if p.is_file()}
+    after = {p.relative_to(reviewed_box.dir).as_posix(): p.read_bytes()
+             for p in reviewed_box.dir.rglob('*') if p.is_file()}
     assert after == before
 
 

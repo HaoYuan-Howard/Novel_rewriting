@@ -1110,6 +1110,8 @@ export const mockApi: Api = {
       return {
         ...base,
         approved: {
+          // 定稿记的是「从哪条候选来」（位置身份），策略名由服务端现算后一并下发。
+          slot: 'c' + edit.index,
           approach: cand.approach,
           chars: cand.chars,
           text: cand.text,

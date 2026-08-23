@@ -44,7 +44,8 @@ from contracts.artifacts import (
 import os
 import re
 
-from contracts.invariants import DEPTH_MODES, INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER
+from contracts.invariants import (
+    DEPTH_MODES, INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, slot_of,)
 from contracts.rules import REGISTRY
 from contracts.schema.api import InboxDecision, InboxItem, InboxView
 from contracts.schema.evaluation import GlobalReview
@@ -511,7 +512,9 @@ def _hook_verification_items(novel_dir, code: str) -> list[InboxItem]:
         assessment = assessments[semantic.text_sha1(candidate.text)]
         out.append(InboxItem(
             kind='verification', stage='stage6', chapter=None,
-            rule=f'reference_boundary:{candidate.approach}',
+            # ⚠ 收敛键按**位置身份**，不按策略名：同一种策略两条候选会共用一个键，
+            #   而那正是「换了个位置的同类问题」被当成同一条的形状。
+            rule=f'reference_boundary:{slot_of(index)}',
             what=f'候选 {index}（{candidate.approach}）当前为 {assessment.state}：'
                  f'{assessment.reason}',
             how=(f'人工核对全书事实后跑 `stage6.approve --pick {index} '
