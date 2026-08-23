@@ -115,6 +115,7 @@ export function GateBar({
         {approve.isError ? (
           <span className="text-sm2 text-warn-ink">
             确认失败：{errorBody(approve.error)}
+            <ErrorHint error={approve.error} />
           </span>
         ) : null}
       </span>

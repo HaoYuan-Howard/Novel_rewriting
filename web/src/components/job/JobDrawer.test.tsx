@@ -1,5 +1,5 @@
 import { api } from '@/api/endpoints'
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { JobDrawer } from './JobDrawer'
@@ -60,5 +60,37 @@ describe('JobDrawer 作业概览', () => {
     expect(await screen.findByText('stderr: 分章器失败')).toBeVisible()
     expect(screen.getByText('恢复命令：python -m novel.cli state')).toBeVisible()
     expect(stream).toHaveBeenLastCalledWith('job-1', 0, expect.any(Object))
+  })
+
+  it('收起时移除内部焦点入口，并把已有焦点归还给展开按钮', async () => {
+    vi.spyOn(api, 'getJobs').mockResolvedValue({
+      running: null,
+      jobs: [{
+        id: 'job-1',
+        kind: 'stage0.remove',
+        label: 'Stage0 扫描',
+        argv: 'python -m novel.cli run stage0.remove book-1',
+        state: 'failed',
+        paid: false,
+        started: 1,
+        finished: 2,
+        sid: 'book-1',
+        ordinal: null,
+      }],
+    })
+    vi.spyOn(api, 'streamJobLog').mockReturnValue(vi.fn())
+
+    renderRoute(<JobDrawer />, '/n/book-1/stage1')
+    const toggle = await screen.findByRole('button', { name: /作业 1 条记录/ })
+    expect(screen.queryByRole('button', { name: '查看“Stage0 扫描”日志' })).not.toBeInTheDocument()
+
+    fireEvent.click(toggle)
+    const jobButton = screen.getByRole('button', { name: '查看“Stage0 扫描”日志' })
+    jobButton.focus()
+    expect(jobButton).toHaveFocus()
+
+    fireEvent.click(toggle)
+    await waitFor(() => expect(toggle).toHaveFocus())
+    expect(screen.queryByRole('button', { name: '查看“Stage0 扫描”日志' })).not.toBeInTheDocument()
   })
 })

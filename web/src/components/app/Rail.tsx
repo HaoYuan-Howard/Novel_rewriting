@@ -160,6 +160,22 @@ export function Rail({
             // 已有真实产物时允许只读审阅；继续运行和定稿仍由 GateBar 按审批记录拦住。
             const locked = !!(doc && lock && !doc.gate[lock.need] && !hasArtifact)
             const reviewable = hasArtifact && !ok
+            const reviewState = stageDone === false ? '需处理' : '待审'
+            const accessibleLabel = gk
+              ? r.label + '，' + (
+                  !doc
+                    ? '确认状态未知'
+                    : ok
+                      ? '已确认'
+                      : locked
+                        ? '锁定，' + gateNeedText(lock!.need)
+                        : reviewable
+                          ? reviewState
+                          : '未确认'
+                )
+              : r.screen === 'inbox' && inboxTotal > 0
+                ? r.label + '，' + inboxTotal + ' 项'
+                : r.label
             const active = screen === r.screen
             const to =
               '/n/' +
@@ -172,10 +188,10 @@ export function Rail({
                 key={r.screen}
                 type="button"
                 disabled={locked}
-                aria-label={r.label}
+                aria-label={accessibleLabel}
                 title={
                   collapsed
-                    ? r.label
+                    ? accessibleLabel
                     : !locked && reviewable
                       ? '已有盘上产物，可只读审阅；继续运行仍需补齐人工确认'
                       : undefined
@@ -217,9 +233,7 @@ export function Rail({
                       : locked
                         ? gateNeedText(lock!.need)
                         : reviewable
-                          ? stageDone === false
-                            ? '需处理'
-                            : '待审'
+                          ? reviewState
                           : ''}
                   </span>
                 )}

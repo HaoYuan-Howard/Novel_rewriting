@@ -3,7 +3,7 @@ import { mockApi, SAMPLE_SID } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
 import { JOB } from '@/constants/vocabulary'
 import type { CheckReport } from '@/types/stages'
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { RunScreen } from './RunScreen'
@@ -62,8 +62,14 @@ describe('RunScreen check composition', () => {
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
     expect(await screen.findByText('通过 · 有未验证项')).toBeVisible()
-    const help = screen.getByLabelText('查看 1 项未验证原因')
-    expect(help).toHaveAttribute('title', expect.stringContaining('语义需要人工阅读确认'))
+    const help = screen.getByRole('button', { name: '查看 1 项未验证原因' })
+    help.focus()
+    expect(help).toHaveFocus()
+    fireEvent.click(help)
+    expect(help).toHaveAttribute('aria-expanded', 'true')
+    const explanation = screen.getByRole('note')
+    expect(help).toHaveAttribute('aria-controls', explanation.id)
+    expect(explanation).toHaveTextContent('语义需要人工阅读确认')
   })
 
   it('shows authoritative badges and counts while unavailable checks stay unknown', async () => {

@@ -40,6 +40,39 @@ describe('BookLayout approval source', () => {
     expect(onToggle).toHaveBeenCalledOnce()
   })
 
+  it('折叠后阶段按钮的可访问名称仍保留确认与锁定状态', async () => {
+    vi.spyOn(api, 'getNovel').mockResolvedValue({
+      sid: 'book-1',
+      title: '测试书',
+      dir: 'book-1',
+      dirname: 'book-1',
+      chapters: 11,
+      stages: {},
+      stage5_modes: [],
+      stage_done: {},
+      stage_reviewable: {},
+      chapters_done: {},
+      summary: {
+        verdict: 'pending',
+        text: '',
+        detail: '',
+        artifact_count: 0,
+        latest_mtime: null,
+      },
+    })
+    vi.spyOn(api, 'getApprovals').mockResolvedValue({
+      ...pending,
+      gate: { ...pending.gate, s0: true },
+    })
+    renderRoute(
+      <Rail sid="book-1" screen="stage0" ordinal={null} collapsed onToggle={() => {}} />,
+    )
+
+    expect(await screen.findByRole('button', { name: '剔除番外，已确认' })).toBeVisible()
+    expect(screen.getByRole('button', { name: /分章报告，未确认/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /开篇文案，锁定，先过 stage5 成稿确认/ })).toBeDisabled()
+  })
+
   it('labels backfilled gates as disk-derived rather than user-clicked', async () => {
     vi.spyOn(api, 'getNovel').mockResolvedValue({
       sid: 'book-1',

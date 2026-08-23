@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { keepPreviousData, useQueries } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
@@ -74,6 +74,8 @@ function BeaconChip({ beacon }: { beacon: RunBeacon }) {
 
 /** amber 的未验证原因直接来自 CheckReport，不在前端重判。 */
 function UnverifiedHelp({ report }: { report: CheckReport }) {
+  const explanationId = useId()
+  const [open, setOpen] = useState(false)
   const rows = report.rules.filter(
     (row) => row.status === 'unver' || row.status === 'skipped',
   )
@@ -82,12 +84,27 @@ function UnverifiedHelp({ report }: { report: CheckReport }) {
     .map((row) => `${row.item}：${row.why ?? row.note ?? '本次没有完成验证'}`)
     .join('\n')
   return (
-    <span
-      aria-label={`查看 ${rows.length} 项未验证原因`}
-      title={explanation}
-      className="inline-flex h-18 w-18 cursor-help items-center justify-center rounded-full border border-line-btn bg-card text-micro font-semibold text-ink-4"
-    >
-      ?
+    <span className="inline-flex flex-col items-start">
+      <button
+        type="button"
+        aria-label={`查看 ${rows.length} 项未验证原因`}
+        aria-expanded={open}
+        aria-controls={explanationId}
+        title={explanation}
+        onClick={() => setOpen((value) => !value)}
+        className="inline-flex h-18 w-18 cursor-help items-center justify-center rounded-full border border-line-btn bg-card text-micro font-semibold text-ink-4"
+      >
+        ?
+      </button>
+      {open ? (
+        <span
+          id={explanationId}
+          role="note"
+          className="mt-6 block w-[220px] rounded-block border border-line-btn bg-card px-10 py-8 text-left text-tag leading-relaxed whitespace-pre-line text-ink-2"
+        >
+          {explanation}
+        </span>
+      ) : null}
     </span>
   )
 }

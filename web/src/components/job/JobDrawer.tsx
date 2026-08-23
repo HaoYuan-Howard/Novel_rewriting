@@ -23,12 +23,26 @@ export function JobDrawer() {
   const selected = newestFirst.find((job) => job.id === selectedId) ?? latest
   const log = useJobLog(drawerOpen ? selected?.id ?? null : null)
   const logRef = useRef<HTMLDivElement>(null)
+  const drawerContentRef = useRef<HTMLDivElement>(null)
+  const toggleRef = useRef<HTMLButtonElement>(null)
+  const wasOpenRef = useRef(drawerOpen)
   const lineCount = log.data?.lines.length ?? 0
 
   useEffect(() => {
     const element = logRef.current
     if (element) element.scrollTop = element.scrollHeight
   }, [drawerOpen, lineCount, selected?.id])
+
+  useEffect(() => {
+    if (
+      wasOpenRef.current &&
+      !drawerOpen &&
+      drawerContentRef.current?.contains(document.activeElement)
+    ) {
+      toggleRef.current?.focus()
+    }
+    wasOpenRef.current = drawerOpen
+  }, [drawerOpen])
 
   const summary = !sid
     ? '还没打开哪一本书 —— 作业是按书记的'
@@ -48,8 +62,10 @@ export function JobDrawer() {
       style={{ left: 'var(--rail-current-w, var(--rail-w))' }}
     >
       <button
+        ref={toggleRef}
         type="button"
         aria-expanded={drawerOpen}
+        aria-controls="job-drawer-content"
         onClick={toggleDrawer}
         className="flex w-full cursor-pointer items-center gap-12 border-none bg-transparent px-24 py-12 text-left"
       >
@@ -65,7 +81,12 @@ export function JobDrawer() {
           drawerOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
         )}
       >
-        <div className="min-h-0 overflow-hidden">
+        <div
+          ref={drawerContentRef}
+          id="job-drawer-content"
+          hidden={!drawerOpen}
+          className="min-h-0 overflow-hidden"
+        >
           <div className="border-t border-line-soft">
             <div className="flex h-[196px] min-w-0">
               <div className="w-[360px] flex-none overflow-y-auto border-r border-line-soft bg-sunken-2">

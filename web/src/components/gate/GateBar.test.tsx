@@ -1,7 +1,8 @@
 import { api } from '@/api/endpoints'
+import { ApiError } from '@/api/errors'
 import type { ApprovalDoc } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { GateBar } from './GateBar'
@@ -80,5 +81,26 @@ describe('GateBar 的动作分类', () => {
     // 付费优先于写盘：paid 命中就不再看 writes_disk
     expect(button.textContent).not.toContain('未标注')
     expect(screen.getByText(/花钱/)).toBeVisible()
+  })
+
+  it('actionOnly 失败态展示服务端给出的恢复命令', async () => {
+    vi.spyOn(api, 'getEnums').mockResolvedValue(enums)
+    vi.spyOn(api, 'getApprovals').mockResolvedValue(doc)
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    vi.spyOn(api, 'approveGate').mockRejectedValue(new ApiError(
+      'server',
+      '/novels/book-1/approvals/gate/s3',
+      {
+        status: 409,
+        message: '盘面需要先恢复',
+        hint: 'python -m novel.cli state book-1',
+      },
+    ))
+
+    renderRoute(<GateBar screen="style" actionOnly />)
+    fireEvent.click(await screen.findByRole('button', { name: /确认文风/ }))
+
+    expect(await screen.findByText('python -m novel.cli state book-1')).toBeVisible()
+    expect(screen.getByText(/确认失败：盘面需要先恢复/)).toBeVisible()
   })
 })

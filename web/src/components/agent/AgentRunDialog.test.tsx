@@ -1,4 +1,5 @@
 import { api } from '@/api/endpoints'
+import { ApiError } from '@/api/errors'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
@@ -47,5 +48,30 @@ describe('AgentRunDialog', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /允许本会话产生外部模型调用费用/ }))
 
     expect(screen.getByRole('button', { name: '授权并开始跑书' })).toBeVisible()
+  })
+
+  it('同书冲突不再误报成全局只能跑一本', async () => {
+    vi.spyOn(api, 'previewAgentRun').mockResolvedValue({
+      argv: ['claude', '-p', 'prompt'],
+      prompt: 'prompt',
+      authorized: false,
+      egress_authorized: true,
+    })
+    vi.spyOn(api, 'startAgentRun').mockRejectedValue(new ApiError(
+      'server',
+      '/agent/runs',
+      { status: 409, backendKind: 'JobConflict', message: 'same book is running' },
+    ))
+
+    renderRoute(
+      <AgentRunDialog sid="book-1" onClose={vi.fn()} onStarted={vi.fn()} />,
+      '/n/book-1/stage0',
+    )
+    const start = await screen.findByRole('button', { name: '生成诊断与恢复方案' })
+    await waitFor(() => expect(start).toBeEnabled())
+    fireEvent.click(start)
+
+    expect(await screen.findByText(/同一本书互斥；其他书仍可并行/)).toBeVisible()
+    expect(screen.queryByText(/一次只跑一个/)).not.toBeInTheDocument()
   })
 })

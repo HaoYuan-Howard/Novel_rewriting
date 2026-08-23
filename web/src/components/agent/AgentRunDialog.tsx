@@ -151,7 +151,7 @@ export function AgentRunDialog({
           {start.isError ? (
             <div className="rounded-block border border-warn-line bg-warn-bg px-14 py-10 text-body text-warn-ink">
               {conflict ? (
-                '已经有一个代跑在跑（服务端 409：一次只跑一个）。等它跑完，或去进度屏把它熄火。'
+                '这本书已经有一个代跑在跑（服务端 409：同一本书互斥；其他书仍可并行）。等它跑完，或去进度屏把它熄火。'
               ) : (
                 <>
                   {errorBody(start.error)}
