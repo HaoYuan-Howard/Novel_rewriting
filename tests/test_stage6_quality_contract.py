@@ -8,12 +8,14 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from contracts.invariants import HOOK_APPROACHES
+from contracts.invariants import (
+    HOOK_APPROACHES, HOOK_CURRENT_APPROACHES, HOOK_RECIPE, HOOK_RETIRED_APPROACHES,
+    HOOK_SLOTS,)
 from contracts.schema.stage6 import HookResponse
 from novel.stages.stage6 import checks, prompts
 
 
-def _candidate_payload(approaches=HOOK_APPROACHES, texts=None):
+def _candidate_payload(approaches=HOOK_RECIPE, texts=None):
     texts = texts or ['第一条具体文案。', '第二条具体文案。', '第三条具体文案。']
     return {
         'candidates': [
@@ -24,19 +26,33 @@ def _candidate_payload(approaches=HOOK_APPROACHES, texts=None):
     }
 
 
-def test_current_generation_approaches_are_the_ab_tested_three():
-    assert HOOK_APPROACHES == (
-        'source_architecture', 'payoff_preview', 'scene_punchline')
+def test_the_recipe_fills_every_slot_and_stays_inside_the_value_domain():
+    """配方是**序列**，取值面是**集合**——2026-08-23 拆开的就是这两件事。"""
+    assert HOOK_RECIPE == ('payoff_preview', 'scene_punchline', 'scene_punchline')
+    assert len(HOOK_RECIPE) == len(HOOK_SLOTS), '一条配方对一个位置身份'
+    assert set(HOOK_RECIPE) <= set(HOOK_APPROACHES)
+    # 取值面**故意**比配方宽：盘上存量产物里有已退场的写法，收窄 `Literal` 会让它们拒读。
+    assert HOOK_RETIRED_APPROACHES == ('source_architecture',)
+    assert set(HOOK_RETIRED_APPROACHES) <= set(HOOK_APPROACHES)
+    assert not (set(HOOK_RECIPE) & set(HOOK_RETIRED_APPROACHES))
+    assert HOOK_CURRENT_APPROACHES == ('payoff_preview', 'scene_punchline')
 
 
-def test_model_response_requires_each_current_approach_once_and_unique_texts():
+def test_model_response_matches_the_recipe_counts_and_keeps_texts_unique():
     response = HookResponse.model_validate(_candidate_payload())
-    assert tuple(candidate.approach for candidate in response.candidates) == HOOK_APPROACHES
+    assert tuple(candidate.approach for candidate in response.candidates) == HOOK_RECIPE
 
-    duplicate_approach = _candidate_payload(
-        ('source_architecture', 'source_architecture', 'scene_punchline'))
-    with pytest.raises(ValidationError, match='各覆盖一次'):
-        HookResponse.model_validate(duplicate_approach)
+    # 同一种策略占两槽是**合法**的——这正是旧口径「每种各一次」判不出来的那一格。
+    off_recipe = _candidate_payload(
+        ('payoff_preview', 'payoff_preview', 'scene_punchline'))
+    with pytest.raises(ValidationError, match='配方'):
+        HookResponse.model_validate(off_recipe)
+
+    # 退场的写法过得了 `Literal`（存量要读得回来），但过不了配方计数。
+    retired = _candidate_payload(
+        (HOOK_RETIRED_APPROACHES[0], 'scene_punchline', 'scene_punchline'))
+    with pytest.raises(ValidationError, match='配方'):
+        HookResponse.model_validate(retired)
 
     duplicate_text = _candidate_payload(texts=['同一条。', '同一条。', '第三条。'])
     with pytest.raises(ValidationError, match='不得重复'):
@@ -55,18 +71,38 @@ def test_generation_system_prioritizes_retention_and_removes_spoiler_gate():
     assert 'surface_habits' in system
     assert '不得取后期高潮或结局' not in system
     assert '故事最终如何收场' not in system
-    for approach in HOOK_APPROACHES:
+    for approach in HOOK_CURRENT_APPROACHES:
         assert approach in system
 
 
-def test_interpolated_prompt_names_every_approach_and_has_no_placeholders():
+def test_interpolated_prompt_renders_the_recipe_by_slot_and_has_no_placeholders():
     from contracts.invariants import HOOK_APPROACH_NOTES
 
     rendered = prompts.hook_system()
-    for approach in HOOK_APPROACHES:
-        assert approach in rendered
+    for slot, approach in zip(HOOK_SLOTS, HOOK_RECIPE):
+        assert f'{slot}. {approach}' in rendered, '配方按位置逐条下发，位置就是候选身份'
         assert HOOK_APPROACH_NOTES[approach] in rendered
+    # 退场的写法一个字都不许出现在下发面上——列出来等于邀请模型产一条必被打回的候选。
+    for approach in HOOK_RETIRED_APPROACHES:
+        assert approach not in rendered
     assert '$' not in rendered
+
+
+def test_a_repeated_approach_gets_a_computed_different_event_requirement():
+    """同一种写法占两槽时，那句「锚不同事件」必须**现算**出来。
+
+    ⚠ 写死一行会在配方改回全不重复之后留下一句不再成立的话；这里连它点到的
+    槽位名一起查，防止有人把它退化成一句不指名的通用叮嘱。
+    """
+    from collections import Counter
+
+    repeated = [key for key, count in Counter(HOOK_RECIPE).items() if count > 1]
+    assert repeated, '当前配方本来就有重复；没有重复时这条测试要跟着改'
+    block = prompts.recipe_block()
+    for key in repeated:
+        slots = [slot for slot, item in zip(HOOK_SLOTS, HOOK_RECIPE) if item == key]
+        assert '、'.join(slots) in block
+        assert '不同事件' in block
 
 
 def test_invented_number_compares_values_and_ignores_success_false_positive():

@@ -15,7 +15,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from contracts.invariants import HOOK_APPROACHES, HOOK_APPROACH_NOTES
+from collections import Counter
+
+from contracts.invariants import (
+    HOOK_APPROACH_NOTES, HOOK_CURRENT_APPROACHES, HOOK_RECIPE, slot_of,)
 from novel.core.bands import ending_shape, hook_shape_band, sep_band_of_text
 from novel.llm.prompts import fill, with_json_shape
 
@@ -48,29 +51,49 @@ HOOK_SYS = """\
 - `source_hook_ending_shape` 说的是原作文案段最后一行的收尾形态（引号台词 / 问句 / 陈述 / 省略号）：
   新文案的最后一行照这个形态收，它就是 `hook_style.end_question` 那句描述可被验证的那一面。
 
-产出三个真正不同的候选，各用一种策略：
+产出三条真正不同的候选。**候选的身份是位置**（c1 / c2 / c3），按下面这份配方逐条写，
+输出顺序就是位置顺序：
 $APPROACHES
 
 输出前在心里逐条与原始文案比较：若更抽象、更像摘要、笑点/危险更弱或最后一句更空，就重写。
-输出 JSON：candidates 恰好三条、每种英文 approach 各一次；rationale 用一句话说明三条各自赌的吸引点。
+输出 JSON：candidates 恰好三条、每条的 approach 照配方给（**不是每种各一次**，同一种可能要写不止一条）；
+rationale 用一句话说明三条各自赌的吸引点。
 只输出 JSON。"""
 
 HOOK_HINT = {
-    'candidates': [{'approach': '|'.join(HOOK_APPROACHES), 'text': 'str'}],
+    # ⚠ 形状提示只列**在编**写法：退场的那种不该出现在下发面上，列出来等于
+    #   邀请模型产一条必被配方校验器打回的候选（那一整轮三条一起作废）。
+    'candidates': [{'approach': '|'.join(HOOK_CURRENT_APPROACHES), 'text': 'str'}],
     'rationale': 'str',
 }
 
 
+def recipe_block() -> str:
+    """配方逐条渲染成「位置 → 写法 → 那句说明」。
+
+    ⚠ 同一种写法出现多次时**必须**补一句「锚不同事件」：否则模型很容易把同一个
+    场面写成两种说法，三条候选实质上塌成两条——而三候选赖以取胜的正是创作搜索方差
+    （2026-08-15 冻结的 A/B：三候选最佳 8.75 对单份直出 6.60）。
+    ⚠ 这句话按配方**现算**（谁重复就点谁的名），不是写死的一行：配方改回全不重复时
+    它自己消失，不会在 prompt 里留下一句不再成立的话。
+    """
+    lines = [f'  {slot_of(position)}. {key} —— {HOOK_APPROACH_NOTES[key]}'
+             for position, key in enumerate(HOOK_RECIPE, 1)]
+    for key, count in Counter(HOOK_RECIPE).items():
+        if count < 2:
+            continue
+        slots = '、'.join(slot_of(position) for position, item
+                         in enumerate(HOOK_RECIPE, 1) if item == key)
+        lines.append(
+            f'  ⚠ {slots} 用的是同一种写法 {key}，但必须锚在**不同事件**上：'
+            f'不许把同一个场面写成两种说法，也不许两条落在同一段因果上——'
+            f'它们要让读者产生**两种不同的好奇**。')
+    return '\n'.join(lines)
+
+
 def hook_system() -> str:
-    """插值三种策略；枚举与说明的覆盖关系由 invariants 在 import 期锁定。"""
-    rendered = fill(
-        HOOK_SYS,
-        APPROACHES='\n'.join(
-            f'  {i}. {key} —— {note}'
-            for i, (key, note) in enumerate(HOOK_APPROACH_NOTES.items(), 1)
-        ),
-    )
-    return with_json_shape(rendered, HOOK_HINT)
+    """插值当前配方；配方、取值面与说明三者的覆盖关系由 invariants 在 import 期锁定。"""
+    return with_json_shape(fill(HOOK_SYS, APPROACHES=recipe_block()), HOOK_HINT)
 
 
 HOOK_RETRY_SYS = """\
@@ -87,7 +110,7 @@ HOOK_RETRY_SYS = """\
 仍须遵守创作包里的事实边界、原作文案长句复用禁令、段间分隔档位和收尾形态。只输出 JSON。"""
 
 HOOK_RETRY_HINT = {
-    'approach': '|'.join(HOOK_APPROACHES),
+    'approach': '|'.join(HOOK_CURRENT_APPROACHES),
     'text': 'str',
     'rationale': 'str（解释修复后整组三条候选）',
 }

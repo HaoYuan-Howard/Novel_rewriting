@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from contracts.invariants import slot_of
 from contracts.rules import REGISTRY
 from novel.core.measure import measure
 from novel.run import RunContext
@@ -136,11 +137,14 @@ def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
 def _texts_and_stored(box: sandbox.Sandbox):
     """盘上那份产物里全部要判的文本 + 它自己存的判定。"""
     data = box.read('stage6/hook.json')
-    out = [(c['approach'], c['text'], {f['rule'] for f in c['findings']})
-           for c in data['candidates']]
+    out = [(slot_of(index), c['text'], {f['rule'] for f in c['findings']})
+           for index, c in enumerate(data['candidates'], 1)]
     if data.get('approved'):
         a = data['approved']
-        out.append((f'定稿·{a["approach"]}', a['text'], {f['rule'] for f in a['findings']}))
+        # ⚠ 定稿记的是**位置身份**（`slot`），`approach` 已经不落盘了：
+        #   同一种策略采两条样本时它答不出「从哪一条来」。`slot=None` = 人手写、无前身。
+        out.append((f'定稿·{a["slot"] or "人手写"}', a['text'],
+                    {f['rule'] for f in a['findings']}))
     return out
 
 
@@ -275,7 +279,9 @@ def test_approve_copies_the_candidate_and_leaves_provenance_alone(box, monkeypat
     assert after['_provenance'] == before, '定稿改动了来源账'
     assert new.approved is not None
     assert new.approved.origin == 'human'
-    assert new.approved.approach == chosen['approach']
+    assert new.approved.slot == slot_of(pick), (
+        '定稿绑的是**位置**——`--pick N` 从一开始就是位置寻址；'
+        '`approach` 已经不落盘了')
     assert new.approved.text == chosen['text']
     # 返回的是整份三候选报告；未选候选的红行仍会如实保留，
     # 所以「批准成功」不蕴含 `rep.passed is True`。
@@ -329,25 +335,27 @@ def _fake_client(ctx, texts: list[str]):
     """一个**不发任何请求**的 client；脏候选定向重试时回同文案（因此不采纳）。"""
     import json as _json
 
-    from contracts.invariants import HOOK_APPROACHES
+    from contracts.invariants import HOOK_RECIPE, HOOK_SLOTS
     from novel.llm.client import LlmClient
     from novel.llm.transport import ChatResponse, FakeTransport
     body = _json.dumps({
         'candidates': [{'approach': a, 'text': t}
-                       for a, t in zip(HOOK_APPROACHES, texts)],
+                       for a, t in zip(HOOK_RECIPE, texts)],
         'rationale': '三条各赌一个角度。',
     }, ensure_ascii=False)
-    by_approach = dict(zip(HOOK_APPROACHES, texts))
+    # ⚠ 按**位置**回原文，不按策略：配方里 `scene_punchline` 占两槽，
+    #   按策略取会让两条修复稿指向同一句 ⇒ 第二条被判 `duplicate`，
+    #   而这个假 client 想造的是「重试没改善」（`hard_not_reduced`）。
+    by_slot = dict(zip(HOOK_SLOTS, texts))
 
     def respond(request, _index):
         content = body
         marker = '── 单候选定向修复 ──\n'
         if marker in request.user:
             repair = _json.loads(request.user.split(marker, 1)[1])
-            approach = repair['target_approach']
             content = _json.dumps({
-                'approach': approach,
-                'text': by_approach[approach],
+                'approach': repair['target_approach'],
+                'text': by_slot[repair['target_slot']],
                 'rationale': '三条仍各赌一个角度；本次修复没有改善目标候选。',
             }, ensure_ascii=False)
         return ChatResponse(content=content, finish_reason='stop',

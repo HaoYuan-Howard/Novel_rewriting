@@ -1048,13 +1048,40 @@ STAGE3_ATTEMPT_KINDS: Final = (
 # 七之二、开篇文案（stage6）与人名替换（stage7）
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: 三种文案写法，一次调用各产一条候选。**这是唯一落点**——
-#: prompt 里那一份由 `fill()`（`string.Template`）插值，缺值抛异常而不是渲染成空串。
+#: 文案写法的**取值面**——`Candidate.approach` 那个 `Literal` 读的就是它。
+#:
+#: ⚠⚠ **它不是「这一次要产哪几条」**，那是 `HOOK_RECIPE`。两者曾经是同一张表
+#: （表里三种、一次各产一条），而「各产一条」这个前提**本身就是被裁决掉的东西**：
+#: 同一种策略要能采两条样本，取值面就不能再兼任配方。
 #: ⚠ 产地**不许 `.get` 兜底**：写歪的 approach 一律显式终态（枚举上的兜底
 #: 就是给违约数据发一张静默通行证）。
-#: ⚠ 改这张表会改 `prompts.HOOK_SYS` 的指纹——那是对的：
-#: **一个模板 + 一份枚举表 = 一个 prompt**，表变了发出去的东西就变了。
 HOOK_APPROACHES: Final = ('source_architecture', 'payoff_preview', 'scene_punchline')
+
+#: **已退场的写法**：不再下发、响应里出现即违约（`HookResponse` 的配方校验器拦它），
+#: 但**仍留在取值面里**。
+#:
+#: ⚠⚠ 留着它不是心软，是因为**盘上有存量**：「寡妇门前」那份 `stage6/hook.json` 的
+#: `candidates[0].approach` 就是 `source_architecture`。把它从 `Literal` 里删掉
+#: 等于再来一次形状破坏 + 该书 stage6 层当场拒读，而那三条候选正是退场裁决所依据的
+#: **对照臂**——为了让退场看上去干净而删掉判它退场的证据，是把账做没了。
+#: ⚠ 它与 `HOOK_SEMANTIC_STATES` 删掉的那两个取值**不是同一件事**：那两个取值
+#: 任何宿主都产不出来（死分支），这一个**在盘上真实存在**（历史数据）。
+HOOK_RETIRED_APPROACHES: Final = ('source_architecture',)
+
+#: **当前配方**：一次调用产 `len(HOOK_SLOTS)` 条候选，按位置逐条指定写法。
+#:
+#: ⚠ 它是**序列不是集合**——同一种写法可以出现多次，那正是它与取值面分家的理由。
+#: `payoff_preview` ×1 + `scene_punchline` ×2：`source_architecture` 于 2026-08-23
+#: 退场（用户裁决，闭卷盲选验收），空出来的那一槽用 `scene_punchline` 再采一样，
+#: 而不是缩成两条——2026-08-15 冻结的 A/B 证明三候选最佳 8.75 对单份直出 6.60，
+#: 赢在**创作搜索方差**，槽位数不能借着退场偷偷减掉。
+#: ⚠ 改这张表会改 `prompts.HOOK_SYS` 的指纹——那是对的：
+#: **一个模板 + 一份配方 = 一个 prompt**，配方变了发出去的东西就变了。
+HOOK_RECIPE: Final = ('payoff_preview', 'scene_punchline', 'scene_punchline')
+
+#: 当前配方里出现过的写法，按首次出现顺序去重。**下发面就是它**
+#: （`HOOK_APPROACH_NOTES` 的键、prompt 的 JSON 形状提示都从这里来）。
+HOOK_CURRENT_APPROACHES: Final = tuple(dict.fromkeys(HOOK_RECIPE))
 
 #: **候选的身份**。它是位置，不是策略名。
 #:
@@ -1092,20 +1119,21 @@ def slot_of(index: int) -> str:
 #: ``uncertain`` = 判过、有证据、但本仓不替人盖章。
 HOOK_SEMANTIC_STATES: Final = ('uncertain', 'unreviewed')
 
-#: 三种写法各自的一句说明。**键必须与 `HOOK_APPROACHES` 逐字相等**（下面有 import 期断言）。
-#: 它逐字进 `HOOK_SYS`——原型把这三句写在产地的一个 dict 里，而**枚举表在这里**，
-#: 于是「有哪三种写法」与「每种是什么意思」分了两个落点。合成一份之后，
+#: **在编写法**各自的一句说明。**键必须与 `HOOK_CURRENT_APPROACHES` 逐字相等**
+#: （下面有 import 期断言）。它逐字进 `HOOK_SYS`——原型把这几句写在产地的一个 dict 里，
+#: 而枚举表在这里，于是「有哪几种写法」与「每种是什么意思」分了两个落点。合成一份之后，
 #: 加一种写法而忘了写说明，`fill()` 当场抛 `KeyError`（缺值不渲染成空串）。
-#: 这三种写法来自 2026-08-15 的三书 A/B：最佳实验候选对当前定稿的匿名主编分
-#: 8.78 vs 4.88，且 3/3 本获胜。它们分别守住原作文案已经验证有效的结构、允许用
-#: 后期兑现制造期待、以及强制落到可视可听的场面；不再按「泄底多少」切策略。
+#: ⚠ **退场的写法不再有说明，键里也不留**：说明是发给模型的东西，退场就是不再发它。
+#: 想知道 `source_architecture` 当初是什么意思，去 `HOOK_RETIRED_APPROACHES` 的注释
+#: 与 §十 的 A/B 记录里查——那是**史料**，不是下发面。
+#: 这几种写法来自 2026-08-15 的三书 A/B：最佳实验候选对当前定稿的匿名主编分
+#: 8.78 vs 4.88，且 3/3 本获胜。它们分别允许用后期兑现制造期待、以及强制落到
+#: 可视可听的场面；不再按「泄底多少」切策略。
 HOOK_APPROACH_NOTES: Final[dict[str, str]] = {
-    'source_architecture': '原作文案结构 —— 保住原文的信息次序、升级节拍、反差与最后一击，'
-                           '换成重写正文的声线和全新措辞',
-    'payoff_preview':      '兑现预告 —— 从全书挑最有吸引力的后期兑现或反转作预告，'
-                           '制造「怎么走到这一步」的阅读欲',
-    'scene_punchline':     '场面重击 —— 用一个可视、可听的具体场面或对白砸出核心关系，'
-                           '以人物反应、危险或笑点收尾',
+    'payoff_preview':  '兑现预告 —— 从全书挑最有吸引力的后期兑现或反转作预告，'
+                       '制造「怎么走到这一步」的阅读欲',
+    'scene_punchline': '场面重击 —— 用一个可视、可听的具体场面或对白砸出核心关系，'
+                       '以人物反应、危险或笑点收尾',
 }
 
 #: 收尾形态的四类。**唯一落点**——分类器（`novel/core/bands.py::ending_shape`）、
@@ -1118,8 +1146,15 @@ ENDING_SHAPES: Final = ('引号台词', '问句', '省略号', '陈述')
 #: 里那段 off-by-one 的账）。
 SEP_BANDS: Final = ('空行分段', '单换行')
 
-assert tuple(HOOK_APPROACH_NOTES) == HOOK_APPROACHES, \
-    'HOOK_APPROACH_NOTES 的键与 HOOK_APPROACHES 分家了——加一种写法就要写一句说明'
+assert tuple(HOOK_APPROACH_NOTES) == HOOK_CURRENT_APPROACHES, \
+    'HOOK_APPROACH_NOTES 的键与当前配方分家了——加一种写法就要写一句说明，退场的要一起撤'
+assert len(HOOK_RECIPE) == len(HOOK_SLOTS), \
+    '配方长度必须等于槽位数——一条配方对一个位置身份，少一条就有槽位没人写'
+assert set(HOOK_RECIPE) <= set(HOOK_APPROACHES), '配方里出现了取值面之外的写法'
+assert not (set(HOOK_RECIPE) & set(HOOK_RETIRED_APPROACHES)), \
+    '退场的写法又被排进配方了——要么它没退场，要么这条配方写错了'
+assert set(HOOK_RETIRED_APPROACHES) <= set(HOOK_APPROACHES), \
+    '退场清单必须是取值面的子集：退场是「不再下发」，不是「从取值面消失」'
 
 #: 残留候选的置信度。**`high` ⟺ 命中处第二个字 ∈ `家府氏宅门`**（结构信号）。
 #: ⚠ 只看正式产物会把取值面定成**只有 `low`**：3 份正式产物 19 条残留全是 `low`，

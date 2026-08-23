@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.invariants import HOOK_APPROACHES, HOOK_SLOTS
+from contracts.invariants import HOOK_RECIPE, HOOK_SLOTS
 from contracts.schema.report import finding
 from contracts.schema.stage6 import Mech
 from novel.llm.cache import ResponseCache
@@ -59,7 +59,7 @@ def _run_case(monkeypatch, root: Path, initial_texts: list[str], retry_responder
     initial = {
         'candidates': [
             {'approach': approach, 'text': text}
-            for approach, text in zip(HOOK_APPROACHES, initial_texts)
+            for approach, text in zip(HOOK_RECIPE, initial_texts)
         ],
         'rationale': '初始整组三候选说明。',
     }
@@ -114,9 +114,9 @@ def test_each_initially_dirty_candidate_retries_once_and_usage_includes_retries(
         monkeypatch.setattr(hook, '_normalize_and_judge', deterministic_judge)
         initial = {
             'candidates': [
-                {'approach': HOOK_APPROACHES[0], 'text': '坏候选甲'},
-                {'approach': HOOK_APPROACHES[1], 'text': '坏候选乙'},
-                {'approach': HOOK_APPROACHES[2], 'text': '原本干净。'},
+                {'approach': HOOK_RECIPE[0], 'text': '坏候选甲'},
+                {'approach': HOOK_RECIPE[1], 'text': '坏候选乙'},
+                {'approach': HOOK_RECIPE[2], 'text': '原本干净。'},
             ],
             'rationale': '三条各赌一个角度。',
         }
@@ -126,11 +126,14 @@ def test_each_initially_dirty_candidate_retries_once_and_usage_includes_retries(
             if marker not in request.user:
                 return _response(initial)
             repair = json.loads(request.user.split(marker, 1)[1])
-            approach = repair['target_approach']
+            # ⚠ 认 `target_slot` 而不是 `target_approach`：当前配方里
+            #   `scene_punchline` 占两槽，按策略造文本会让两条修复稿撞成同一句，
+            #   于是第二条被判 `duplicate`——那是**假样本**，不是被测行为。
+            slot = repair['target_slot']
             return _response({
-                'approach': approach,
-                'text': f'修好-{approach}。',
-                'rationale': f'整组三条候选说明已更新到 {approach}。',
+                'approach': repair['target_approach'],
+                'text': f'修好-{slot}。',
+                'rationale': f'整组三条候选说明已更新到 {slot}。',
             })
 
         transport = FakeTransport(respond)
@@ -149,13 +152,13 @@ def test_each_initially_dirty_candidate_retries_once_and_usage_includes_retries(
         assert all(row.status == 'accepted' and row.reason is None
                    for row in artifact.provenance.candidate_retries)
         assert all(not candidate.findings for candidate in artifact.candidates)
-        assert artifact.rationale == f'整组三条候选说明已更新到 {HOOK_APPROACHES[1]}。'
+        assert artifact.rationale == f'整组三条候选说明已更新到 {HOOK_SLOTS[1]}。'
         second_repair = json.loads(
             transport.calls[2].user.split('── 单候选定向修复 ──\n', 1)[1])
         assert second_repair['current_rationale'] \
-            == f'整组三条候选说明已更新到 {HOOK_APPROACHES[0]}。'
+            == f'整组三条候选说明已更新到 {HOOK_SLOTS[0]}。'
         assert second_repair['current_candidates'][0]['text'] \
-            == f'修好-{HOOK_APPROACHES[0]}。'
+            == f'修好-{HOOK_SLOTS[0]}。'
         assert artifact.provenance.usage is not None
         assert artifact.provenance.usage.calls_made == 3
         assert 'HOOK_RETRY_SYS' in artifact.provenance.prompts
@@ -174,11 +177,11 @@ def test_retry_call_count_tracks_only_initially_dirty_candidates(monkeypatch, di
         ]
 
         def repaired(_request, repair, _retry_no):
-            approach = repair['target_approach']
+            slot = repair['target_slot']
             return _response({
-                'approach': approach,
-                'text': f'修好-{approach}。',
-                'rationale': f'更新后的整组说明-{approach}。',
+                'approach': repair['target_approach'],
+                'text': f'修好-{slot}。',
+                'rationale': f'更新后的整组说明-{slot}。',
             })
 
         artifact, transport, _written = _run_case(
@@ -191,7 +194,7 @@ def test_retry_call_count_tracks_only_initially_dirty_candidates(monkeypatch, di
             assert artifact.candidates[index].text == initial[index]
         assert artifact.rationale == (
             '初始整组三候选说明。' if dirty_count == 0
-            else f'更新后的整组说明-{HOOK_APPROACHES[dirty_count - 1]}。')
+            else f'更新后的整组说明-{HOOK_SLOTS[dirty_count - 1]}。')
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -218,7 +221,10 @@ def test_failed_retry_keeps_paid_initial_candidate_and_rationale(
             if mode == 'invalid':
                 return _response({'approach': target, 'text': '缺 rationale 的响应。'})
             if mode == 'wrong':
-                target = HOOK_APPROACHES[1]
+                # ⚠ 挑一个**与目标槽的写法不同**的合法写法：目标是 c1
+                #   （配方里的 `HOOK_RECIPE[0]`），这里回 `HOOK_RECIPE[1]`。
+                #   写成「配方里的第二种」而不是写死名字，配方一改这条仍然成立。
+                target = next(a for a in HOOK_RECIPE if a != HOOK_RECIPE[0])
                 text = '本不属于目标策略的文本。'
             elif mode == 'duplicate':
                 text = initial[1]

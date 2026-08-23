@@ -35,6 +35,7 @@ stage6/_rounds/hook.rN.json 归档：上一轮的**整份拷贝**，形状与 ho
 """
 from __future__ import annotations
 
+from collections import Counter
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -42,6 +43,7 @@ from pydantic import Field, model_validator
 from contracts.invariants import (
     CACHE_POLICY,
     HOOK_APPROACHES,
+    HOOK_RECIPE,
     HOOK_SLOTS,
 )
 from contracts.schema.base import Fp10, StrictModel
@@ -91,7 +93,11 @@ class Mech(StrictModel):
 
 
 class Candidate(StrictModel):
-    """一条候选。恒 3 条（三种策略各一）。
+    """一条候选。恒 3 条——**身份是位置**（`c1`/`c2`/`c3`），策略只是它的一个属性。
+
+    ⚠ 策略**可以重复**：当前配方 `HOOK_RECIPE` 就是 `payoff_preview` ×1 +
+    `scene_punchline` ×2。这里不校验配方——校验开在**模型响应**那一侧
+    （`HookResponse`），落盘载体要能读回**任何一次历史配方**产的存量。
 
     ⚠ **已裁撤**：`chars`（= 去空白的字数，盘上 9/9 与现算逐值相同，唯一读者是界面卡片）。
     ⚠⚠ **裁掉它之后，现算必须留在 API 层（Python，走同一个 `measure`）**：
@@ -100,6 +106,8 @@ class Candidate(StrictModel):
     下沉到 JS 的后果不是判据坏掉，是**同一页上人会看到两个字数**。
     """
 
+    #: ⚠ 取值面是 `HOOK_APPROACHES`（含已退场的写法），**不是当前配方**：
+    #: 存量产物里就有 `source_architecture`，载体收窄成配方会让它们当场拒读。
     approach: Literal[HOOK_APPROACHES]
 
     #: 文案本身。盘上**串长** 123~308（含段间分隔符）。
@@ -333,11 +341,21 @@ class HookResponse(StrictModel):
     rationale: str = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _each_current_approach_exactly_once(self) -> 'HookResponse':
+    def _matches_the_current_recipe(self) -> 'HookResponse':
+        """按**配方计数**校验，不按策略去重。
+
+        ⚠⚠ 这里曾经写的是「每种策略恰好一次」（集合相等 + 无重复）。那条断言把
+        「取值面」与「这一次要产哪几条」当成同一件事，于是同一种策略采两条样本
+        **在校验器层面就不可能**。现在配方允许重复，校验的是 `Counter` 相等：
+        既拦住「少产一条 / 多产一条」，也拦住已退场的写法混进来
+        （退场写法在配方里计数为 0 ⇒ 一出现计数就对不上）。
+        ⚠ **不校验顺序**：位置身份由候选在列表里的次序决定，模型换个顺序返回
+        并不违约——真正不能松的是「哪几种、各几条」。
+        """
         approaches = [c.approach for c in self.candidates]
-        if len(set(approaches)) != len(approaches) or set(approaches) != set(HOOK_APPROACHES):
+        if Counter(approaches) != Counter(HOOK_RECIPE):
             raise ValueError(
-                f'candidates 必须各覆盖一次 {HOOK_APPROACHES}，实得 {approaches}')
+                f'candidates 的策略计数必须符合当前配方 {HOOK_RECIPE}，实得 {approaches}')
         texts = [c.text.strip() for c in self.candidates]
         if len(set(texts)) != len(texts):
             raise ValueError('三个候选文本不得重复')
