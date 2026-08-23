@@ -863,6 +863,77 @@ class ChapterBlueprintsResponseV2Refs(StrictModel):
     blueprints: list[BlueprintResponseV2Refs] = Field(min_length=1)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 二·d、`extraction-ir-v3 / v3.1` 的单调用召回脚手架
+#
+# v2 的边界相与细节相都要求模型重新读同一章、重新建立一遍任务状态。v3 把两相合回
+# 一次响应，但**不撤召回脚手架**：模型先列细粒度 cue，再只从这些止段里选最终拍。
+# `micro_events` 在编译前即丢弃；正式产物仍只有 `beats[].event` 一份语义真相。
+# v3.1 再把叙述者收成关闭式人物引用，并允许 hinge 优先选择代码枚举的原文候选。
+# 两套都只是响应边界，最终仍编译成既有 `ChapterBlueprints`。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class MicroEventResponse(StrictModel):
+    """召回层的一条短提示；`cue` 不是第二份正式事件描述。"""
+
+    end_para: int = Field(ge=1)
+    cue: str = Field(min_length=1)
+
+
+class ScaffoldedBlueprintResponseV3(StrictModel):
+    chapter_ordinal: int = Field(ge=1)
+    micro_events: list[MicroEventResponse] = Field(min_length=1)
+    beats: list[BeatResponseV2Refs] = Field(min_length=1)
+    narration: list[NarrationResponse] = Field(min_length=1)
+
+
+class ChapterBlueprintsResponseV3(StrictModel):
+    blueprints: list[ScaffoldedBlueprintResponseV3] = Field(min_length=1)
+
+
+class HingeCandidateResponse(StrictModel):
+    """从 user 下发的确定性原文候选中选择；位置由代码掌握，模型只交 id。"""
+
+    kind: Literal[HINGE_KINDS]
+    candidate_id: str = Field(pattern=r'^h\d{3}$')
+
+
+# 不加 `mode`：`candidate_id` 与 `phrase` 两种严格模型本身已互斥，额外判别字段只会
+# 增加模型输出。provider 不做 constrained decoding，本地 Pydantic 仍会关闭式拒收
+# “两键都给 / 两键都不给 / 多余键”。
+HingeResponseV31 = HingeCandidateResponse | HingeResponseV2
+
+
+class NarrationResponseRefs(StrictModel):
+    """叙述身份也走本章可见人物引用；名字由代码投影回正式产物。"""
+
+    grammatical_person: Literal[NARRATIVE_PERSON]
+    narrator_char_id: str | None
+    focalizer_char_id: str | None
+    pronoun_surfaces: list[str]
+
+
+class BeatResponseV31Refs(StrictModel):
+    end_para: int = Field(ge=1)
+    time_layer: Literal[tuple(RESPONSE_TIME_LAYERS)]
+    place: str | None
+    present_char_ids: list[str]
+    event: str = Field(min_length=1)
+    hinges: list[HingeResponseV31]
+
+
+class ScaffoldedBlueprintResponseV31(StrictModel):
+    chapter_ordinal: int = Field(ge=1)
+    micro_events: list[MicroEventResponse] = Field(min_length=1)
+    beats: list[BeatResponseV31Refs] = Field(min_length=1)
+    narration: list[NarrationResponseRefs] = Field(min_length=1)
+
+
+class ChapterBlueprintsResponseV31(StrictModel):
+    blueprints: list[ScaffoldedBlueprintResponseV31] = Field(min_length=1)
+
+
 class HingeSelectResponse(StrictModel):
     """候选选择（`--patch` 修 `hinge_ambiguous`）：代码枚举命中位，模型**只挑 id**。
 

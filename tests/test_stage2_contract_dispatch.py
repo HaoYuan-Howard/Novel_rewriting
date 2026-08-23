@@ -31,6 +31,7 @@ from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import extract, prompts
 from novel.stages.stage2.compile_v2 import (
     canonical_ir_projection, canonical_ir_projection_refs,
+    canonical_ir_projection_v3, canonical_ir_projection_v31,
 )
 from novel.stages.stage2.contract import CONTRACTS, active_contract, contract_for
 from novel.stages.stage2.paragraphs import paragraph_spans
@@ -223,6 +224,7 @@ def test_the_v2_hint_has_no_code_derived_fields():
 
 def test_the_two_phase_v2_contract_has_distinct_closed_shapes():
     spec = CONTRACTS['extraction-ir-v2']
+    assert spec.topology == 'boundary_then_detail'
     assert spec.boundary_system == with_json_shape(
         prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
     assert spec.system == with_json_shape(
@@ -239,6 +241,25 @@ def test_the_two_phase_v2_contract_has_distinct_closed_shapes():
                            'present_char_ids', 'event', 'hinges'}
     assert detail['place'] == 'str|null'
     assert 'present_names' not in str(prompts.BLUEPRINT_HINT_V2_REFS)
+
+
+def test_the_two_scaffolded_single_contracts_are_independently_selectable():
+    v3 = CONTRACTS['extraction-ir-v3']
+    v31 = CONTRACTS['extraction-ir-v3.1']
+    assert v3.topology == v31.topology == 'scaffolded_single'
+    assert v3.boundary_system is None and v31.boundary_system is None
+    assert v3.uses_character_refs and not v3.uses_narration_refs
+    assert v31.uses_character_refs and v31.uses_narration_refs
+    assert v31.uses_hinge_candidates
+    assert set(prompts.BLUEPRINT_HINT_V3['blueprints'][0]) == {
+        'chapter_ordinal', 'micro_events', 'beats', 'narration'}
+    assert set(prompts.BLUEPRINT_HINT_V3['blueprints'][0]['micro_events'][0]) == {
+        'end_para', 'cue'}
+    narration = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['narration'][0]
+    assert 'narrator_char_id' in narration and 'narrator_name' not in narration
+    assert 'candidate_id' in str(prompts.BLUEPRINT_HINT_V31)
+    assert '$' not in prompts.BLUEPRINT_SYS_V3
+    assert '$' not in prompts.BLUEPRINT_SYS_V31
 
 
 def test_the_summary_batch_arm_declares_its_bounds():
@@ -275,6 +296,18 @@ def _ir2_responses() -> dict[int, dict]:
              for section in main_text()}
     return {
         blueprint['chapter_ordinal']: canonical_ir_projection_refs(
+            blueprint, texts[blueprint['chapter_ordinal']])
+        for blueprint in copy.deepcopy(blueprints())['blueprints']
+    }
+
+
+def _scaffolded_responses(*, closed: bool) -> dict[int, dict]:
+    texts = {section['chapter_ordinal']: section['text']
+             for section in main_text()}
+    projection = (canonical_ir_projection_v31
+                  if closed else canonical_ir_projection_v3)
+    return {
+        blueprint['chapter_ordinal']: projection(
             blueprint, texts[blueprint['chapter_ordinal']])
         for blueprint in copy.deepcopy(blueprints())['blueprints']
     }
@@ -387,6 +420,57 @@ def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
         assert all('我' not in beat.present_names and '他' not in beat.present_names
                    and '她' not in beat.present_names
                    for beat in blueprint.beats)
+
+
+@pytest.mark.parametrize(
+    ('architecture', 'closed', 'system_name'),
+    [
+        ('extraction-ir-v3', False, 'BLUEPRINT_SYS_V3'),
+        ('extraction-ir-v3.1', True, 'BLUEPRINT_SYS_V31'),
+    ],
+)
+def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
+        monkeypatch, architecture, closed, system_name):
+    monkeypatch.setenv(_ENV_KEY, architecture)
+    book = Path(tempfile.mkdtemp()) / f'{architecture}_126'
+    book.mkdir(parents=True)
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _t = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    by_ordinal = _scaffolded_responses(closed=closed)
+    ordinals = sorted(by_ordinal)
+
+    def respond(req, _index):
+        if '逐章事件清单' in req.user:
+            return _ok({'chapters': [
+                {'chapter_ordinal': o, 'summary': _summary_for(o)}
+                for o in ordinals]})
+        found = re.findall(r'阅读序第(\d+)章', req.user)
+        assert '本章可选人物引用（代码派生、关闭式）' in req.user
+        assert '已冻结的事件边界（代码校验）' not in req.user
+        if closed:
+            assert '本章 hinge 原文候选（代码派生、按需选择）' in req.user
+        return _ok({'blueprints': [by_ordinal[int(found[-1])]]})
+
+    ctx = _ctx(book, 'stage2.blueprint')
+    client, transport = _client(ctx, respond)
+    report = extract.run_blueprint(ctx, client)
+
+    assert report.passed
+    assert len(transport.calls) == len(ordinals) + 1, \
+        '每章一次 scaffolded 响应 + 全书摘要批一次'
+    boundary_system = with_json_shape(
+        prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
+    assert all(call.system != boundary_system for call in transport.calls)
+    stored = ArtifactStore(ctx).read(ChapterBlueprints, extract.BLUEPRINT_REL)
+    assert stored.provenance.context.architecture == architecture
+    assert set(stored.provenance.prompts) == {system_name, 'SUMMARY_BATCH_SYS'}
+    assert all(blueprint.summary == _summary_for(blueprint.chapter_ordinal)
+               for blueprint in stored.blueprints)
 
 
 def test_an_ir1_summary_batch_that_misses_a_chapter_is_rejected_by_the_gate(

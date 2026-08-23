@@ -45,7 +45,7 @@ FIX_RENORMALIZE_BP = ('stage2.blueprint', '--renormalize')  # 确定性归一，
 FIX_RENORMALIZE_G = ('stage2.global', '--renormalize')      # 同上，全书那一份
 FIX_PURGE_ROLE = ('stage2.global', '--purge-role')  # 语义判官臂重划 role/fate（**付费**）
 FIX_RESAMPLE = ('stage2.global', '--resample')  # 绕过问题缓存重采整份 global（**付费**）
-FIX_PATCH = ('stage2.blueprint', '--patch')     # 字段级修复（**付费**，ir1 专属，量级=条）
+FIX_PATCH = ('stage2.blueprint', '--patch')     # 字段级修复（**付费**，IR 族，量级=条）
 
 
 def _hard(rule: str, item: str, requirement: str, *, owner: str = STAGE, **kw) -> Rule:

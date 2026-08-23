@@ -1,4 +1,4 @@
-# stage2 契约实验手册（v3 / extraction-ir-v1~v2）
+# stage2 契约实验手册（v3 / extraction-ir-v1~v3.1）
 
 自足入口：本页给「跑 A/B、修失败、审读数」的操作者，一页说清多契约怎么选、
 钱怎么不白花、读数从哪来。设计依据与逐步实施记录见 `Stage2_improvement.md`
@@ -7,19 +7,19 @@
 
 ## 一、响应契约是什么、怎么选
 
-`stage2.blueprint` 有四套已登记的**响应契约**（产物契约一个字节不动，下游
+`stage2.blueprint` 有六套已登记的**响应契约**（产物契约一个字节不动，下游
 stage4/API 无感）。`extraction-ir-v1.1` 只改 v1 的地点措辞；当前默认 v2 把逐章抽取
-拆成边界与细节两相：
+拆成边界与细节两相；v3/v3.1 是尚未付费验收的降耗实验臂：
 
-| | `bounded-fidelity-v3`（老臂） | `extraction-ir-v1 / v1.1` | `extraction-ir-v2`（**默认**，2026-08-23 起） |
-|---|---|---|---|
-| 逐章调用 | 一相 | 一相 | **两相**：先回忆并压缩边界，再在冻结边界上填细节 |
-| beat 定位 | 模型交 `start_para + end_para` | 模型只交 `end_para`（起点代码推导，末拍必须到底） | 第一相交 `micro_events + beats[].end_para`；两列均递增到底，且 beat 边界必须取自 micro-event 边界 |
-| hinge | `kind + para + phrase`（段内定位） | `kind + phrase`（拍区间内**原样唯一**定位） | 同 IR：`kind + phrase`，第二相不能改第一相边界 |
-| place | 自由文本 | 三态；v1.1 只调整降级次序 | 第二相交原文地点字符串或 `null` |
-| 在场者 | 原文字面 | 原文字面 | 从截止本章可见的 `char_id` 候选中闭集选择 |
-| summary | 模型逐章自带 | **书级摘要批**独立一调（events 是唯一语义源） | 同 IR |
-| 编译器 | `novel/stages/stage2/normalize.py` | `novel/stages/stage2/compile_v2.py`（含层0 边界外扩） | 同文件的 `compile_v2_refs`，最终仍投影成既有蓝图形状 |
+| | `bounded-fidelity-v3`（老臂） | `extraction-ir-v1 / v1.1` | `extraction-ir-v2`（**默认**） | `extraction-ir-v3 / v3.1`（实验） |
+|---|---|---|---|---|
+| 逐章调用 | 一相 | 一相 | **两相**：先回忆并压缩边界，再在冻结边界上填细节 | **一相带脚手架**：同一响应先 cue 召回、再交完整拍 |
+| beat 定位 | 模型交 `start_para + end_para` | 模型只交 `end_para`（起点代码推导，末拍必须到底） | 第一相交 `micro_events + beats[].end_para`；两列均递增到底，且 beat 边界必须取自 micro-event 边界 | 同一响应交 micro cue + 详细 beats；本地守同一边界不变量 |
+| hinge | `kind + para + phrase`（段内定位） | `kind + phrase`（拍区间内**原样唯一**定位） | 同 IR：`kind + phrase`，第二相不能改第一相边界 | v3 同 v2；v3.1 候选 id 优先、phrase 兜底 |
+| place | 自由文本 | 三态；v1.1 只调整降级次序 | 第二相交原文地点字符串或 `null` | 同 v2 细节形状 |
+| 人物引用 | 原文字面 | 原文字面 | 在场者从可见 `char_id` 闭集选 | v3 同 v2；v3.1 连 narrator/focalizer 也闭集选择 |
+| summary | 模型逐章自带 | **书级摘要批**独立一调（events 是唯一语义源） | 同 IR | 同 IR；micro cue 编译前丢弃 |
+| 编译器 | `novel/stages/stage2/normalize.py` | `novel/stages/stage2/compile_v2.py`（含层0 边界外扩） | 同文件的 `compile_v2_refs` | 同文件的 `compile_v3_scaffold` / `compile_v31_refs`，最终形状不变 |
 
 选择口（与 `DEEPSEEK_MODEL` 同一条纪律——显式拧一次，不是随手改的变量）：
 
@@ -30,10 +30,11 @@ NOVEL_STAGE2_BLUEPRINT_CONTRACT=bounded-fidelity-v3   # 缺省 = extraction-ir-v
 **旧契约没有退役**：盘上存量产物仍可能来自其中任一架构；收窄取值面会让它们当场读不回来。
 产物 `_provenance.context.architecture` 如实记下这一份用的是哪一套；定向重生成 /
 `--patch` 按**基线产物**的架构选契约，配置与基线不一致会显式终态（先整跑换架构）。
-v1 的历史裁决见 §四、§八与 §十一；v2 翻默认的付费依据与未达成项见 §十四。
+v1 的历史裁决见 §四、§八与 §十一；v2 翻默认的付费依据与未达成项见 §十四；
+v3/v3.1 的预注册与未授权边界见 §十五。
 
 ⚠ **schema_mode 声明**：DeepSeek V4 官方 API 只支持 `response_format=json_object`
-（`json_schema` 被拒，2026-08-20 文档探针）。四套契约都是
+（`json_schema` 被拒，2026-08-20 文档探针）。六套契约都是
 **prompt 约束 + 本地 pydantic 校验**，不是 constrained decoding——
 实验结论不许把「枚举前缀带来的改善」归因给 decoder 约束。
 
@@ -568,3 +569,183 @@ prompt cache 命中降低了实际输入成本，但缓存命中率受运行时�
 会走到新路径。回退只需改 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`，旧架构继续登记，
 存量定向修复仍按基线架构走。验收边界是 **n=1**：下一本不同题材必须复报同一矩阵，尤其是
 地点填充、`present_broad`、secret 与调用成本，不得把本节外推成「Flash 已追平 Pro」。
+
+## 十五、`extraction-ir-v3 / v3.1`：reasoning 降耗预注册（2026-08-23）
+
+### 已知基线与两轮单变量
+
+§十四的同书 Flash v2 是当前成本基线：23 章经一次定向修复后，真调用 43、prompt
+213,880、completion 271,462（其中 reasoning 240,889）、126 拍、169 hinge、0 HARD。
+v2 的质量提升来自强制“先召回再压缩”，代价是每章边界相与细节相各做一次 high 推理。
+
+两轮必须分开跑，禁止一次把全部改动混成一臂：
+
+1. `extraction-ir-v3` 只改**调用拓扑**：每章一次响应同时返回短 cue 的
+   `micro_events` 与完整 `beats`；边界子集、递增与章尾覆盖仍由同一动态 validator 守，
+   细节字段、可见人物闭集、摘要批、编译器产物与判据不变。`micro_events` 编译前丢弃，
+   不成为第二份持久事件真相。
+2. `extraction-ir-v3.1` 只在 v3 上继续改**引用形状**：narration 的姓名改成可见
+   `char_id`；hinge 对引号、带单位数字、显式因果短句优先返回确定性候选 id。模型仍判断
+   是否为 hinge 与 kind；物件/隐式因果覆盖不到时保留 phrase 兜底，防止降耗变成漏抓。
+   候选每章最多 32 项，id 与精确 `SourceSpan` 由正文位置稳定派生。
+
+两臂都只扩 `BlueprintContext.architecture` 的取值面，最终仍落现役
+`ChapterBlueprints` v2，故不升 artifact schema。调用拓扑、response model、compiler、
+repair projection 与能力开关统一登记在 `novel/stages/stage2/contract.py::ContractSpec`；
+预览、整跑、定向修复不按架构名字或可空字段猜分支。
+
+### 付费 A/B 方法与判据（运行前冻结）
+
+未经正文外发与费用授权不运行。获授权后，对同一本 current-schema 书冻结
+`main_text` SHA-256、`global_grounding` SHA-256、模型 `deepseek-v4-flash`、`high + thinking`、
+代码 commit 与并发；v2/v3/v3.1 各用独立空缓存目录，先 `preview` 留真实 argv，再整跑。
+缓存 replay 不得算样本；每臂至少报原始 wire、被采纳 attempt 与产物 hash。
+
+一级质量门（任一失败即否决降耗臂）：
+
+- 正式产物落盘、0 HARD、span 100% 定位、hinge 100% 定位；
+- 拍数与 hinge 数各不低于同场 v2 的 95%，不得靠粗切或少抽换 token；
+- 在场者的歧义/名册外/代词/过早继续全为 0；v3.1 的 narrator/focalizer 清单外为 0；
+- named place 不低于同场 v2 超过 5 个百分点；人工抽查重点看 cue→beat 压缩是否漏掉
+  问答、决定、局部结果，以及候选 id 是否诱导模型只抓容易枚举的 hinge。
+
+降耗主指标按**通过质量门后的被采纳整本**比较：总 reasoning tokens、reasoning/章、
+completion（已含 reasoning）、真调用、重采次数与墙钟。v3 相对 v2 的预登记成功线是
+reasoning 至少下降 25%、正常无重采拓扑从约 `2N+1` 降为 `N+1`；v3.1 只有在质量门
+不退且 reasoning 不高于 v3 时才算增益。另报 v3.1 的 candidate/phrase 使用率、候选覆盖率、
+候选表输入 token；若候选表反而抬高总 token，就保留闭合 narration、撤候选 hinge，不捆绑裁决。
+
+### 当前状态
+
+三臂付费 A/B 已于 2026-08-23 串行执行，结论是 **v3 与 v3.1 均不得翻默认**。
+v3 的 reasoning 相对同场 v2 下降 69.6%，但 hinge 只保留到 v2 的 85.7%，且关闭人物引用
+新增 6 个歧义与 2 个名册外值，一级质量门失败；v3.1 的全部模型调用完成后在编译正式产物时
+因空 `SourceSpan.normalized` 触发 schema 异常，产物未落盘，独立 `--check-only` 亦以 exit 2
+确认缺失。默认继续 `extraction-ir-v2`，后续施工与重验留在
+`docs/REQUIREMENTS.md::TODO-41`。
+
+### 付费 A/B 实测结果（2026-08-23）
+
+**授权与冻结。** 用户明确授权将《无情道第一她来自合欢宗》正文及 Stage2 上下文发送至
+DeepSeek API，并承担 v2 → v3 → v3.1 三臂费用。三臂使用
+`deepseek-v4-flash`、初始 `high + thinking`、并发 32、独立空缓存，按该顺序串行运行；
+账本 `cached=false` 为 118/118。冻结输入为：
+
+- `stage1/main_text.json` SHA-256
+  `e32f675b2da96174a29b68f190d81d18bc87ebcb61ee2c554e8c2243e714d6d1`；
+- `stage2/global_grounding.json` SHA-256
+  `fc6ea73305eb544b9d3107dec6bdec0221f7a7c385634e96a1a607507faeda1d`；
+- HEAD `307067afb2e73596fe58df840ca9ca56e5e75e39`，三臂账本记录同一运行时代码身份
+  `307067afb2e73596fe58df840ca9ca56e5e75e39-dirty.5d50cda7778d8ec4`；冻结时 tracked diff
+  的 Git blob hash 为 `873063f811ed299e39380ac12a24ec7d76a09283`，未跟踪新文件
+  `novel/stages/stage2/references.py` 的 SHA-256 为
+  `939a8229e16a7cb4cfe73c1fb92c0469d6f96da4323fb892f3eb9ff7788fc66b`。
+
+**成本与运行。** completion 含 reasoning；墙钟是该节点账本首尾 span，不把三臂之间的操作间隔
+混入。v3 的 3 次 wire 因同一内容闸连续失败由既有阶梯从 high 落到 low，其余 34 次仍是 high；
+这不是配置静默漂移，审计中有 3 个 fallback step。v2 与 v3.1 的 wire 全部是 high，三臂
+thinking 全为 true。
+
+| 臂 | 真调用 | prompt | completion | reasoning | reasoning/章 | 内容闸拒绝 | effort wire | span |
+|---|---:|---:|---:|---:|---:|---:|---|---:|
+| v2 | 56 | 265,490 | 414,244 | 370,647 | 16,115 | 3 | high 56 | 957.2s |
+| v3 | 37 | 238,192 | 135,434 | 112,731 | 4,901 | 10 | high 34 / low 3 | 421.2s |
+| v3.1 | 25 | 159,142 | 187,733 | 161,218 | 7,009 | 1 | high 25 | 322.7s |
+
+v3 相对 v2 的 reasoning 下降 **69.6%**，越过 25% 成本线；但该线只对“先通过质量门的
+被采纳整本”有效，所以不能据此判成功。v3.1 reasoning 又比 v3 高 **43.0%**，即使忽略未落盘，
+也不满足“不高于 v3”。
+
+**一级质量门。** v2 初跑后定向修复 `6,14,16`，再修复第 6 章，最终 exit 0；v3 初跑后
+定向修复 `12,16`，最终 exit 0。两份正式产物均经独立 `--check-only` exit 0。v3.1 在 23 章
+与摘要调用均完成后，编译第 19 章第 5 拍的第二条 hinge 时得到空
+`source.normalized`，`ChapterBlueprints.model_validate` 抛错、运行 exit 70；不修改冻结代码，
+也不把缓存 replay 冒充本轮正式样本。
+
+| 质量项 | v2 | v3 | v3.1 | 预注册裁决 |
+|---|---:|---:|---:|---|
+| 正式产物 / HARD | 已落盘 / 0 | 已落盘 / 0 | 未落盘 | v3.1 失败 |
+| beat | 127 | 136（107.1%） | 不可得 | v3 通过 |
+| hinge | 161 | 138（85.7%） | 不可得 | v3 失败（需 ≥95%） |
+| span 定位 / 字符覆盖 | 127/127 / 98% | 136/136 / 98% | 不可得 | 已落盘两臂通过 |
+| 人物歧义 / 名册外 / 代词 / 过早 | 0 / 0 / 0 / 0 | 6 / 2 / 0 / 0 | 不可得 | v3 失败 |
+| named place | 95/127（74.8%） | 115/136（84.6%） | 不可得 | v3 通过，不降反升 |
+| artifact SHA-256 | `e8af332087585902795a4a6c629eaca9a156dcbbe0237fbc84520b8a52f29322` | `ec815ff7242418508cde6d889d3a9a4750050cd79ebb222958cdc51d26af7306` | 无 | — |
+
+人工抽查第 6、8、12、16、22 章的 event 切分：v3 没出现足以推翻硬闸结论的系统性问答、决定或
+局部结果漏失，但同一臂同时出现把局部动作合并得更粗和把短动作拆得更碎两种漂移；这与总 hinge
+回吐相符，不能仅凭 beat 数上升判质量不降。v3.1 没有正式产物，candidate/phrase 使用率、候选覆盖率
+与候选表输入 token 均**不可得**；在这种状态下分析候选偏置会把未被正式 compiler/adoption 接受的
+中间响应误当成成品证据。
+
+**wire、采纳与复算证据。** 原始 wire 的唯一成本源仍是各臂 `_service/ledger.jsonl`，内容闸与
+采纳链在同目录 `llm_audit.jsonl`。其 SHA-256 分别为：v2 ledger
+`2bb7c61d78899133b386b899b71506d7852533e08391fc4901481a1839c5b206`、audit
+`41fac6e8b9ed46c3502703e85563204751adaa168cfcf55590157a9512af9c3e`；v3 ledger
+`f750952069d27f5d71209c9b1b53de15f7e7423c96fd47dfe7888418f0e257c0`、audit
+`6fa9431f50d07ff77d29d8e1e56f60cde547cdcd10762a2c0a639b8f4f3e09c8`；v3.1 ledger
+`670514465fabc47e102686137b3bb6896d3e447897c512eb6ba19312f4c8a40f`、audit
+`7cb7e13b17a6f6746b2a151370153c6266c87a43ee265774a11eea90ccd8313e`。
+最终修复落盘的 `artifact_adoption` 为：v2 第 6 章 `c59205827e9c46e0`、摘要
+`717307e9582d4acf`；v3 第 12 章 `cdc443b93d4a4ec0`、第 16 章
+`d4c5b34a902e45e2`、摘要 `ba5d770f16da43c1`；v3.1 因正式产物未形成，没有 adoption，不能
+伪造一个“被采纳 attempt”。聚合复算文件 `outputs/_stage2_flash_quality/v3_ab_20260823/ab_compare.json`
+的 SHA-256 为 `aea9188d8b56423ed3575522587f5344821d1ad9fc32c784a8d3c73ce5101149`。
+
+### `v3.1-fixed` 单臂真实诊断（2026-08-23）
+
+本节是用户随后指定的**单臂诊断**，只回答「v3.1 契约修好后能否形成正式产物、真实表现
+怎样」。它没有在同一份修复后代码上重跑 v2 / v3，故**不得覆盖上面的正式三臂 A/B，
+也不得据此翻默认**。
+
+**零成本修复与回归。** 旧候选生成器把 `「?」`、`「......」` 这类 `text` 非空、但
+`content_only(text)` 为空的纯标点引用放进候选表；旧 v3.1 恰好选择 ch19 的该项，compiler
+复制空 `normalized` 后才在最终 `SourceSpan` 建模处 exit 70。修复是在候选排序、去重与 32 项
+截断**之前**剔除这类项：不能把空串洗成证据，也不让无效项占候选额度。真书重建后为 23 章、
+243 项候选，逐项都能通过正式 `SourceSpan`。新增生产契约回归同时钉住纯标点被删与有效引文
+仍保留；Stage2 定向 66 项、冻结契约五文件 325 项、全量非 corpus 回归均 exit 0。
+
+**冻结与运行。** 正文、全书底座、模型、并发与初始档位沿用上面的冻结值；另建空缓存
+`stage2_v31_fixed_20260823`，只执行 `extraction-ir-v3.1`。账本记录运行时代码身份
+`307067afb2e73596fe58df840ca9ca56e5e75e39-dirty.fd663a1a0849a8d0`；修复后的
+`novel/stages/stage2/references.py` SHA-256 为
+`419e18a50e03e06560726a7a8189dcf49a25da74fa97d250dd06ec5f996635b3`。主跑 exit 0，
+独立 `--check-only` 亦 exit 0；产物 fresh/match、Stage2 为 AMBER（0 HARD / 4 INFO / 2 UNVER）。
+
+| 诊断项 | `v3.1-fixed` | 与预注册门的关系 |
+|---|---:|---|
+| 正式产物 / HARD | 已落盘 / 0 | 通过结构门 |
+| 真调用 / 本地缓存 | 28 / 0 | 23 章 + 摘要 + 4 次同档重采 |
+| prompt / completion / reasoning | 177,625 / 193,762 / 163,987 | completion 已含 reasoning |
+| effort / thinking | high 28 / true 28 | 0 次 low，配置未漂移 |
+| span / 字符覆盖 | 134/134 / 98% | 通过 |
+| beat / hinge | 134 / 175 | 分别为同场 v2 的 105.5% / 108.7%，通过数量门 |
+| 人物歧义 / 名册外 / 代词 / 过早 | 6 / 0 / 0 / 0 | 歧义不为 0，一级质量门失败 |
+| named place | 105/134（78.4%） | 高于同场 v2 的 74.8%，通过 |
+| candidate_id / phrase | 149 / 26（85.1% / 14.9%） | 兜底真实被用到，未被候选完全吞掉 |
+| 墙钟 span | 346.1s | 只作本臂读数 |
+
+149 个 candidate 引用逐章均不重复，占 243 项候选表的 61.3%；23 章响应形状为
+8 章 candidate-only、14 章 mixed、1 章 phrase-only。按固定 DeepSeek V4 tokenizer 复算，
+下发的候选 JSON 合计 5,338 token，连同块标题与约束文字为 6,465 token（中位每章分别
+236 / 285 token）。最终 `verbatim_failures=[]`，所以 175 条 hinge 全部进入正式 compiler/adoption，
+不是拿未采纳的中间响应算覆盖率。
+
+**空正文与降档。** 本臂 28 次 wire 中有 7 次 `content=''` 且答案在 reasoning：4 份从
+reasoning 取 JSON 后通过与正文相同的 `json.loads → require → model_validate → validator`
+四道闸并直接采纳，3 份因章尾或 candidate 所属拍不合法被拒、在同一 high 档重采成功；另有
+1 份正常正文被 validator 拒后同档重采。全程没有 low。说明 `answer_lost` 捞回机制由公共
+`LlmClient.ask_json` 在 Stage2 **真实复用且按契约关闭式工作**，不是 Stage4 专属旁路。
+对照旧 v3 的 3 次 low：三次都紧跟在各 purpose 的第二份 high `answer_lost` 仍未过闸之后，
+是既有阶梯的显式 fallback，不是模型配置被静默调低。
+
+**裁决。** 修复证明 v3.1 契约本身可运行，但仍不得翻默认：其 reasoning 比正式 v3 的
+112,731 高 **45.5%**，不满足「不高于 v3」；人物歧义又违反一级质量门。候选引用确实把
+hinge 从 v3 的 138 条恢复到 175 条，说明这条设计不是单纯漏抓，但它尚未同时换到质量与降耗收益。
+正式产物 SHA-256 为
+`694b2c97bd94ac3bb0d8bf8f788c4dc070b021718476a919acb69ece934bd80d`；本臂 ledger / audit
+SHA-256 分别为 `11f192627c8958f6c64feebc63de32a8edbbcc107159e3657454b16b6d5fbbc9` /
+`c93103359e11b298cf384f7b1e3e27b052bb1219b3b027a39639f2a598f180a3`。描述性复算文件
+`v31_fixed/diagnostic_compare.json` 的 SHA-256 为
+`fb30bed2785b6ffd24ff75a18b0783d8061ef87fa4a54e3669c562fe7d85d6b3`；它跨了代码冻结，
+只作诊断对照，不是新 A/B 矩阵。

@@ -27,7 +27,8 @@ from novel.stages.stage2.repair import (
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_contract_dispatch import (
-    _ENV_KEY, _ir1_responses, _ir2_responses, _summary_for,
+    _ENV_KEY, _ir1_responses, _ir2_responses, _scaffolded_responses,
+    _summary_for,
 )
 from tests.test_stage2_generation import _client, _ctx, _ok, _response_global
 
@@ -124,7 +125,8 @@ def _unique_snippet(seg: str, avoid: str) -> str:
 def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     """跑指定 IR 臂的全链但给第 1 章第 1 拍塞一条歧义 hinge 和一条编的 hinge ⇒ .INVALID。
 
-    v1/v1.1 共用开放字面响应，v2 用关闭式 char_id 响应并多一段边界预传；
+    v1/v1.1 共用开放字面响应，v2 用关闭式 char_id 响应并多一段边界预传，
+    v3/v3.1 则在单次响应里带召回脚手架；
     测试从 spec 的能力与拓扑派生，不把「IR 都是一相、都同响应模型」当永久事实。
     """
     monkeypatch.setenv(_ENV_KEY, architecture)
@@ -138,8 +140,13 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     extract.run_global(global_ctx, global_client)
 
     spec = CONTRACTS[architecture]
-    by_ordinal = (_ir2_responses() if spec.boundary_system is not None
-                  else _ir1_responses())
+    if spec.topology == 'boundary_then_detail':
+        by_ordinal = _ir2_responses()
+    elif spec.topology == 'scaffolded_single':
+        by_ordinal = _scaffolded_responses(
+            closed=spec.uses_narration_refs)
+    else:
+        by_ordinal = _ir1_responses()
     ordinals = sorted(by_ordinal)
     texts = {s['chapter_ordinal']: s['text'] for s in main_text()}
     beat_index, seg, dup = _pick_ambiguous_site(

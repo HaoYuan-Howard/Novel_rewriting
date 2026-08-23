@@ -419,9 +419,15 @@ def hinge_heading(kind: str) -> str:
 #:   91→126 拍（Pro 130）、145→169 hinge（Pro 168），在场者代词 9→0、名册外
 #:   9→0；0 HARD，唯一错误由 ch17 定向重生成一次收敛。完整证据见
 #:   `docs/stage2_contract_experiment.md` §十四。
+#: · `extraction-ir-v3 / v3.1`（2026-08-23）：两条**未翻默认的实验臂**，继续只
+#:   放宽 provenance 取值面、不升 artifact schema。v3 把 v2 的“召回边界 → 细节”
+#:   合进同一次响应，保留强制 micro_events 脚手架，以减少每章第二次 high 推理；
+#:   v3.1 在 v3 上再把 narration 收成可见 char_id，并让 hinge 优先选择代码枚举的
+#:   原文候选（覆盖不到仍可交 phrase，避免为省 token 静默漏事实）。两臂最终都编译
+#:   成既有 `ChapterBlueprints`；没有付费 A/B 证据前默认继续是 v2。
 BLUEPRINT_ARCHITECTURES: Final = (
     'bounded-fidelity-v3', 'extraction-ir-v1', 'extraction-ir-v1.1',
-    'extraction-ir-v2')
+    'extraction-ir-v2', 'extraction-ir-v3', 'extraction-ir-v3.1')
 
 #: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
 #: 翻默认只动这一格（`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT` 从它派生），
@@ -1224,7 +1230,7 @@ PAID_FLAGS: Final = {
     #   同 `stage5.write` 的 `--revise`，理由见 `NODES` 里那一格上方的注释。
     '--purge-role': 'stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型',
     '--resample': 'stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应',
-    '--patch': 'stage2 逐章蓝图的字段级修复（extraction-ir-v1）——逐条失败各调一次模型，'
+    '--patch': 'stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，'
                '量级是条不是章',
 }
 

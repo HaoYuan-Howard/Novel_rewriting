@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage 2 当前三条模型调用臂的 system prompt 与响应结构提示。
+"""Stage 2 当前模型调用臂的 system prompt 与响应结构提示。
 
-【本层是全链**唯一一个节点带两条付费臂**的地方】
-`stage2.global` 一个节点两次不同形状的调用：
+`stage2.global` 有两种不同形状的付费调用：
 
   · `GLOBAL_SYS`（8682 字）    默认路径：通读全书产 entities / canon / arc
   · `ROLE_SPLIT_SYS`（2008 字）`--purge-role`：语义判官，把 `role`/`fate` **双向**重划分
 
-⇒ `_provenance.prompts` 因此有**两个**指纹键（`stage2.md` §一）。
-`stage2.blueprint` 只有一条臂：`BLUEPRINT_SYS`。
+⇒ `_provenance.prompts` 能分别记录这两个指纹键（`stage2.md` §一）。
+`stage2.blueprint` 的多套响应架构由 `novel/stages/stage2/contract.py` 整套选择；
+这里提供各架构的 system 与结构提示，不在调用点手拼第二份。
 
 【`ROLE_FATE_RULE` 是两条臂共用的，落点只有这里】`GLOBAL_SYS` 与 `ROLE_SPLIT_SYS`
 都插它（`$ROLE_FATE`）。它是一段 1527 字的 **prompt 正文**不是枚举 ⇒
@@ -624,6 +624,70 @@ assert _BLUEPRINT_TPL_V1_1.count(_PRESENT_SEG_V2) == 1, \
     '在场者旧段没有恰好命中一次——v2 引用式模板没有真实替换'
 assert _BLUEPRINT_TPL_V2_REFS != _BLUEPRINT_TPL_V1_1
 
+
+# ---------------------------------------------------------------------------
+# `extraction-ir-v3 / v3.1` —— 一次调用里的召回脚手架与关闭引用
+# ---------------------------------------------------------------------------
+
+_SCAFFOLD_SINGLE_NOTE = """\
+【同一次响应先召回、再压缩】每章必须同时交 `micro_events` 与最终 `beats`：
+- `micro_events` 是临时召回脚手架。逐段核对新的动作、反应、问答、揭示、决定、阻碍、
+  结果、目标、时空或叙述层；每出现一项新推进就交 `{end_para, cue}`。`cue` 只写能提醒
+  你“这一项不能漏”的短提示，不要展开成第二份正式 event；
+- `micro_events.end_para` 严格递增并到本章最后一段；完整性优先，不得直接退成章节大纲；
+- 最终 `beats` 只能合并相邻 micro_events，`beats.end_para` 必须从 micro_events 的止段
+  中选择，严格递增并到最后一段；场景/时间/叙述层改变、新目标/决定/障碍/揭示/立场
+  转折或一件事收束时必须保留边界；
+- 最终事实只写在 `beats.event`。不要把 cue 机械拼接成 event，要按下面全部细节规则填写。
+"""
+
+
+def _replace_prompt_section(
+    template: str, start_marker: str, end_marker: str, replacement: str,
+) -> str:
+    """按稳定标题替换一个 prompt 段；找不到或多处命中都在 import 期显式失败。"""
+    assert template.count(start_marker) == 1, f'prompt 起始标记漂移：{start_marker}'
+    start = template.index(start_marker)
+    end = template.index(end_marker, start)
+    return template[:start] + replacement + template[end:]
+
+
+_HINGE_SEG_V31 = """\
+  · `hinges`：这一幕【靠什么成立】，每项二选一：
+      `{kind: $KINDS, candidate_id: "h001"}`，或
+      `{kind: $KINDS, phrase: "本拍范围内原样且唯一的那几个字"}`。
+    · 先查 user 的「本章 hinge 原文候选」；候选恰好覆盖材料时只复制 candidate_id，
+      不要再回抄文字。代码会按 id 取回精确原文字节与位置。
+    · 候选表没有合适项时才用 phrase；phrase 必须在所属 beat 里原样且唯一，不唯一就
+      向前后多带几个字，不能只有标点，也不要抄整段。
+    · kind 只能是上面四类：硬数字、要害台词、物件、因果前提。材料归它发生的那一拍；
+      单拍可为空，但有对白或明确因果的整章几乎不应全部为空。
+    · 模型仍负责判断“是不是 hinge”以及 kind；候选只是定位工具，不是要求全部选择。
+"""
+
+_NARRATION_SEG_V31 = """\
+- narration（精简）：【数组】，每项
+  `{grammatical_person, narrator_char_id, focalizer_char_id, pronoun_surfaces[]}`。
+  · narrator_char_id / focalizer_char_id 只能从 user 的「本章可选人物引用」复制；原文与
+    引用表仍无法确定时填 null，不许写姓名、代词或清单外编号。
+  · 一章内叙述者改变（番外、他人视角、书信、尾声，或第一人称“我”换人）必须按出现
+    顺序拆项，不能用主体一项覆盖整章。
+  · pronoun_surfaces 照原文字面列叙述者自称（我、咱、本宫、朕等）；第三人称填空数组。
+"""
+
+_BLUEPRINT_TPL_V31_REFS = _replace_prompt_section(
+    _BLUEPRINT_TPL_V2_REFS,
+    '  · `hinges`：',
+    '  · 【完整性：',
+    _HINGE_SEG_V31,
+)
+_BLUEPRINT_TPL_V31_REFS = _replace_prompt_section(
+    _BLUEPRINT_TPL_V31_REFS,
+    '- narration（精简）',
+    '\n\n只输出 JSON',
+    _NARRATION_SEG_V31,
+)
+
 _BOUNDARY_FROZEN_NOTE = """\
 【边界已经由上一段抽取冻结】user 会给出严格递增的 end_para 列表。
 你必须恰好产出同样多的 beats，并按顺序逐项原样返回这些 end_para；不得增删、合并或改号。
@@ -717,7 +781,14 @@ BOUNDARY_SYS_V2 = fill(_BOUNDARY_TPL)
 BLUEPRINT_SYS_V2_REFS = RULES_V2 + fill(
     _BLUEPRINT_TPL_V2_REFS + '\n\n' + _BOUNDARY_FROZEN_NOTE)
 
-#: 书级摘要批（`extraction-ir-v1` 专属小臂，付费，一书一调）。
+# v3 与 v2 的唯一架构变量是“边界与细节是否在同一次 high 调用中完成”；细节规则与
+# v2 第二相逐字复用。v3.1 再单独收窄 narration / hinge 的响应形状。
+BLUEPRINT_SYS_V3 = RULES_V2 + fill(
+    _SCAFFOLD_SINGLE_NOTE + '\n\n' + _BLUEPRINT_TPL_V2_REFS)
+BLUEPRINT_SYS_V31 = RULES_V2 + fill(
+    _SCAFFOLD_SINGLE_NOTE + '\n\n' + _BLUEPRINT_TPL_V31_REFS)
+
+#: 书级摘要批（extraction IR 族共用，付费，一书一调）。
 SUMMARY_BATCH_SYS = fill(_SUMMARY_BATCH_TPL)
 
 #: `--patch` 字段级修复的两条小臂（付费，逐条失败一调）。
@@ -843,6 +914,38 @@ BLUEPRINT_HINT_V2_REFS: dict[str, Any] = {
                        'narrator_name': '原文里的叫法|null',
                        'focalizer_name': '原文里的叫法|null',
                        'pronoun_surfaces': ['我']}],
+    }],
+}
+
+BLUEPRINT_HINT_V3: dict[str, Any] = {
+    'blueprints': [{
+        'chapter_ordinal': 1,
+        'micro_events': [{'end_para': '结束段号(整数)',
+                          'cue': '一项新推进的短提示'}],
+        'beats': BLUEPRINT_HINT_V2_REFS['blueprints'][0]['beats'],
+        'narration': BLUEPRINT_HINT_V2_REFS['blueprints'][0]['narration'],
+    }],
+}
+
+BLUEPRINT_HINT_V31: dict[str, Any] = {
+    'blueprints': [{
+        'chapter_ordinal': 1,
+        'micro_events': [{'end_para': '结束段号(整数)',
+                          'cue': '一项新推进的短提示'}],
+        'beats': [{
+            **BLUEPRINT_HINT_V2_REFS['blueprints'][0]['beats'][0],
+            'hinges': [
+                {'kind': '|'.join(HINGE_KINDS), 'candidate_id': 'h001'},
+                {'kind': '|'.join(HINGE_KINDS),
+                 'phrase': '无精确候选时，本拍内原样且唯一的字'},
+            ],
+        }],
+        'narration': [{
+            'grammatical_person': NARRATIVE_PERSON[0],
+            'narrator_char_id': 'char_001|null',
+            'focalizer_char_id': 'char_001|null',
+            'pronoun_surfaces': ['我'],
+        }],
     }],
 }
 

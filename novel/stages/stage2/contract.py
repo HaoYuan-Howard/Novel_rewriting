@@ -30,12 +30,14 @@ from contracts.invariants import BLUEPRINT_ARCHITECTURES
 from contracts.schema.stage2 import (
     ChapterBoundariesResponse, ChapterBlueprintsResponse,
     ChapterBlueprintsResponseV2, ChapterBlueprintsResponseV2Refs,
+    ChapterBlueprintsResponseV3, ChapterBlueprintsResponseV31,
 )
 from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import prompts
 from novel.stages.stage2.compile_v2 import (
-    canonical_ir_projection, canonical_ir_projection_refs, compile_v2,
-    compile_v2_refs,
+    canonical_ir_projection, canonical_ir_projection_refs,
+    canonical_ir_projection_v3, canonical_ir_projection_v31,
+    compile_v2, compile_v2_refs, compile_v3_scaffold, compile_v31_refs,
 )
 from novel.stages.stage2.normalize import normalize_blueprints, response_shape
 
@@ -61,7 +63,7 @@ class ContractSpec:
                          'prompt_plus_local_validation']
     compile_fn: Callable[..., tuple[dict[str, Any], dict[str, Any]]]
     projection_fn: Callable[[dict[str, Any], str], dict[str, Any]]
-    #: ir1 专属：summary 不在响应里，编译后要一次书级摘要批。
+    #: extraction IR 族：summary 不在逐章响应里，编译后要一次书级摘要批。
     needs_summary_batch: bool
 
     #: 这套契约的失败面能不能走 `stage2.blueprint --patch`（字段级修复，量级是条不是章）。
@@ -79,7 +81,11 @@ class ContractSpec:
     #: （`--patch` 的候选枚举依赖 IR 的拍区间），走 `--chapters` 整章重生成。
     supports_field_patch: bool
 
-    #: 两段式契约的第一相；为空表示这套契约仍是一相逐章抽取。
+    #: 显式调用拓扑。不能从 `boundary_system is None` 反推：那分不清普通一相与
+    #: “同一次响应内带召回脚手架”的一相，会让预览、生成和修复各自猜一遍。
+    topology: Literal['single', 'boundary_then_detail', 'scaffolded_single']
+
+    #: 两段式契约的第一相；仅 `boundary_then_detail` 拓扑使用。
     boundary_system: str | None = None
     boundary_sys_name: str | None = None
     boundary_response_model: type[BaseModel] | None = None
@@ -87,6 +93,10 @@ class ContractSpec:
     #: 细节响应里的在场者是否从本章可见 `char_id` 集合选择；调用方据此
     #: 给 user 注入关闭式候选集，并在本地 validator 再验一次。
     uses_character_refs: bool = False
+
+    #: v3.1 的两个进一步收窄面；调用方按能力分派，不按架构名字猜。
+    uses_hinge_candidates: bool = False
+    uses_narration_refs: bool = False
 
 
 CONTRACTS: dict[str, ContractSpec] = {
@@ -100,6 +110,7 @@ CONTRACTS: dict[str, ContractSpec] = {
         projection_fn=response_shape,
         needs_summary_batch=False,
         supports_field_patch=False,
+        topology='single',
     ),
     'extraction-ir-v1': ContractSpec(
         architecture='extraction-ir-v1',
@@ -111,6 +122,7 @@ CONTRACTS: dict[str, ContractSpec] = {
         projection_fn=canonical_ir_projection,
         needs_summary_batch=True,
         supports_field_patch=True,
+        topology='single',
     ),
     # ⚠ 与上面那条**只差 `system` 一处**：响应模型、编译器、投影函数、摘要批开关
     #   与字段级修复能力全部原样共用（place 的**形状**没动，
@@ -129,6 +141,7 @@ CONTRACTS: dict[str, ContractSpec] = {
         projection_fn=canonical_ir_projection,
         needs_summary_batch=True,
         supports_field_patch=True,
+        topology='single',
     ),
     # Flash 的主要失效不是「字段写错」，而是单次请求同时切拍和填十余个字段时
     # 系统性少切拍。v2 先只交止段，再让第二相在代码冻结的边界上填事实；同时把
@@ -145,11 +158,46 @@ CONTRACTS: dict[str, ContractSpec] = {
         projection_fn=canonical_ir_projection_refs,
         needs_summary_batch=True,
         supports_field_patch=True,
+        topology='boundary_then_detail',
         boundary_system=with_json_shape(
             prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2),
         boundary_sys_name='BOUNDARY_SYS_V2',
         boundary_response_model=ChapterBoundariesResponse,
         uses_character_refs=True,
+    ),
+    # v3 只改变调用拓扑：v2 的召回脚手架与细节字段在**同一次**响应里返回。
+    # 细节编译、摘要批和正式产物均与 v2 同构，便于单变量 A/B。
+    'extraction-ir-v3': ContractSpec(
+        architecture='extraction-ir-v3',
+        system=with_json_shape(prompts.BLUEPRINT_SYS_V3,
+                               prompts.BLUEPRINT_HINT_V3),
+        sys_name='BLUEPRINT_SYS_V3',
+        response_model=ChapterBlueprintsResponseV3,
+        schema_mode='prompt_plus_local_validation',
+        compile_fn=compile_v3_scaffold,
+        projection_fn=canonical_ir_projection_v3,
+        needs_summary_batch=True,
+        supports_field_patch=True,
+        topology='scaffolded_single',
+        uses_character_refs=True,
+    ),
+    # v3.1 在同一拓扑上再收窄两格：叙述身份只选可见 char_id；hinge 优先
+    # 选确定性原文候选、覆盖不到才回抄 phrase。两轮分别登记，结果才能归因。
+    'extraction-ir-v3.1': ContractSpec(
+        architecture='extraction-ir-v3.1',
+        system=with_json_shape(prompts.BLUEPRINT_SYS_V31,
+                               prompts.BLUEPRINT_HINT_V31),
+        sys_name='BLUEPRINT_SYS_V31',
+        response_model=ChapterBlueprintsResponseV31,
+        schema_mode='prompt_plus_local_validation',
+        compile_fn=compile_v31_refs,
+        projection_fn=canonical_ir_projection_v31,
+        needs_summary_batch=True,
+        supports_field_patch=True,
+        topology='scaffolded_single',
+        uses_character_refs=True,
+        uses_hinge_candidates=True,
+        uses_narration_refs=True,
     ),
 }
 

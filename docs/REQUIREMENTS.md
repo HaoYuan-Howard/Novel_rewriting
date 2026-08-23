@@ -697,6 +697,32 @@ Fisher 单侧 p≈0.21 ⇒ **方向对，但没到显著**。三条已经站得�
 `tests/test_llm.py` 四条钉住（捞成功不重采 · 四道闸全过才算 · 截断与 `ask_text` 都不捞 ·
 两种审计行都带 `salvaged` 且捞回来的不进缓存）。`ask_text` 那一侧未开，条目保留。
 
+### TODO-41 · Stage2 v3/v3.1 待质量修复后重跑严格矩阵
+
+2026-08-23 已按 `docs/stage2_contract_experiment.md` §十五的预注册矩阵完成三臂付费实测，
+默认继续 `extraction-ir-v2`。v3 reasoning 相对同场 v2 下降 69.6%，但 hinge 只有 v2 的
+85.7%，并新增 6 个在场者歧义与 2 个名册外引用，一级质量门失败；v3.1 全部模型调用完成后
+在编译正式产物时因空 `SourceSpan.normalized` 崩溃，产物未落盘，reasoning 还比 v3 高 43.0%。
+原始 wire、adoption、产物 hash 与全矩阵已经写回实验手册，不再缺付费证据。
+
+同日按用户指定只跑了修复后的 `v3.1-fixed` 单臂诊断：候选生成器已在截断前剔除
+`content_only == ''` 的纯标点项，真书 243 项候选全部能构造正式 `SourceSpan`；定向、冻结五文件
+与全量非 corpus 回归 exit 0，真实主跑与独立 `--check-only` 也均 exit 0。正式产物为 134 beat /
+175 hinge / 0 HARD，证明 compiler 结构漏洞已修好；但人物歧义仍为 6，reasoning 163,987 又比
+旧 v3 高 45.5%，所以默认仍保持 `extraction-ir-v2`。这次跨了代码冻结且没有重跑 v2/v3，
+只能作诊断，不能冒充新的严格矩阵。完整证据见 `docs/stage2_contract_experiment.md` §十五。
+
+剩余工作不能靠翻默认或缓存 replay 销账：
+
+- [ ] 收紧 v3 的逐章响应脚手架，使 hinge 召回回到同场 v2 的至少 95%，并恢复在场者关闭引用
+  四项全 0；不得通过减少判据、放宽闭集或粗切 beat 达标；
+- [ ] 完成上述质量修复与 0 成本验证后，按同一预注册矩阵重新执行 v2 → v3 → v3.1。三臂必须
+  共用新的冻结代码与独立空缓存；旧响应与本次 `v3.1-fixed` 单臂只能做
+  诊断，不得冒充新矩阵样本；
+- [ ] 只有新矩阵同时通过一级质量门与成本门，才决定是否翻
+  `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。v3.1 若仍只在候选 hinge 上失败，按预注册
+  规则拆开裁决：可保留 narration char_id 收窄，撤候选 hinge。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。

@@ -20,10 +20,12 @@ import pytest
 from contracts.invariants import (
     HINGE_FAILURE_ROUTE, REPAIR_ROUTE, SPAN_FAILURE_CAUSES,
 )
+from contracts.schema.stage2 import SourceSpan
 from novel.stages.stage2.compile_v2 import (
-    canonical_ir_projection, compile_v2, compile_v2_refs,
-    visible_character_refs,
+    canonical_ir_projection, canonical_ir_projection_v31, compile_v2,
+    compile_v2_refs, compile_v31_refs, visible_character_refs,
 )
+from novel.stages.stage2.references import hinge_candidates
 
 #: 5 段的合成章。段号（1-based）：1 开门 · 2 第一课台词 · 3 两担水 · 4 母亲说话 · 5 三十文。
 CH1 = ('李宝珠推开院门，井边的水汽漫上来。\n'
@@ -208,6 +210,114 @@ def test_v2_refs_rejects_an_id_outside_the_visible_closed_set():
     }]}
     with pytest.raises(ValueError, match='不在本章可见集合'):
         compile_v2_refs(raw, _main_text(), CHARACTERS, summaries={1: '摘要。'})
+
+
+def test_v31_candidate_ids_compile_to_exact_sources_and_closed_narration_refs():
+    candidates = hinge_candidates(CH1)
+    hard_number = next(row for row in candidates
+                       if row['source']['text'] == '两担')
+    raw = {'blueprints': [{
+        'chapter_ordinal': 1,
+        'micro_events': [
+            {'end_para': 3, 'cue': '母亲布置挑水，李宝珠完成'},
+            {'end_para': 5, 'cue': '她把钱放到桌上'},
+        ],
+        'beats': [{
+            'end_para': 3, 'time_layer': 'T_PRESENT', 'place': '井边',
+            'present_char_ids': ['char_001', 'char_002'],
+            'event': '母亲让李宝珠挑水，李宝珠完成两担',
+            'hinges': [{'kind': '硬数字',
+                        'candidate_id': hard_number['candidate_id']}],
+        }, {
+            'end_para': 5, 'time_layer': 'T_PRESENT', 'place': '屋内',
+            'present_char_ids': ['char_001'],
+            'event': '李宝珠把三十文钱放在桌上',
+            'hinges': [{'kind': '硬数字', 'phrase': '三十文'}],
+        }],
+        'narration': [{
+            'grammatical_person': 'third',
+            'narrator_char_id': 'char_001',
+            'focalizer_char_id': 'char_001',
+            'pronoun_surfaces': [],
+        }],
+    }]}
+    data, accounting = compile_v31_refs(
+        raw, _main_text(), CHARACTERS, summaries={1: '本章完成挑水并收好钱。'})
+    blueprint = data['blueprints'][0]
+    assert 'micro_events' not in blueprint, '召回脚手架不得泄漏到正式产物'
+    candidate_hinge = blueprint['beats'][0]['hinges'][0]
+    assert candidate_hinge['source'] == hard_number['source']
+    assert blueprint['beats'][1]['hinges'][0]['source']['text'] == '三十文', \
+        '候选覆盖不到时的 phrase 兜底仍走既有唯一定位'
+    narration = blueprint['narration'][0]
+    assert narration['narrator_char_id'] == 'char_001'
+    assert narration['focalizer_char_id'] == 'char_001'
+    assert narration['narrator_name'] == '李宝珠'
+    assert accounting['verbatim_failures'] == []
+
+
+def test_v31_candidate_table_drops_punctuation_only_sources_before_publish():
+    text = '她只回「?」。他沉默着答「......」。最后说「留下」。'
+    candidates = hinge_candidates(text)
+    surfaces = {row['source']['text'] for row in candidates}
+
+    assert '「?」' not in surfaces
+    assert '「......」' not in surfaces
+    assert '「留下」' in surfaces
+    assert candidates, '守卫必须有分母，不能让空候选表冒充通过'
+    for row in candidates:
+        SourceSpan.model_validate(row['source'])
+
+
+def test_v31_rejects_a_candidate_from_outside_its_beat_even_without_call_gate():
+    raw = {'blueprints': [{
+        'chapter_ordinal': 1,
+        'micro_events': [{'end_para': 2, 'cue': '开课'},
+                         {'end_para': 5, 'cue': '收钱'}],
+        'beats': [{
+            'end_para': 2, 'time_layer': 'T_PRESENT', 'place': None,
+            'present_char_ids': [], 'event': '母亲开课',
+            # h004 在第 5 段，不能挂到止于第 2 段的拍。
+            'hinges': [{'kind': '硬数字', 'candidate_id': 'h004'}],
+        }, {
+            'end_para': 5, 'time_layer': 'T_PRESENT', 'place': None,
+            'present_char_ids': [], 'event': '事情收束', 'hinges': [],
+        }],
+        'narration': [{
+            'grammatical_person': 'third', 'narrator_char_id': None,
+            'focalizer_char_id': None, 'pronoun_surfaces': [],
+        }],
+    }]}
+    with pytest.raises(ValueError, match='不在所属拍'):
+        compile_v31_refs(raw, _main_text(), CHARACTERS, summaries={1: '摘要。'})
+
+
+def test_v31_projection_is_a_valid_repair_baseline_and_round_trips():
+    compiled, _ = compile_v31_refs({
+        'blueprints': [{
+            'chapter_ordinal': 1,
+            'micro_events': [{'end_para': 5, 'cue': '完成挑水'}],
+            'beats': [{
+                'end_para': 5, 'time_layer': 'T_PRESENT', 'place': '井边',
+                'present_char_ids': ['char_001'], 'event': '李宝珠完成挑水',
+                'hinges': [{'kind': '硬数字', 'candidate_id': 'h003'}],
+            }],
+            'narration': [{
+                'grammatical_person': 'third', 'narrator_char_id': 'char_001',
+                'focalizer_char_id': 'char_001', 'pronoun_surfaces': [],
+            }],
+        }],
+    }, _main_text(), CHARACTERS, summaries={1: '李宝珠完成挑水。'})
+    artifact = compiled['blueprints'][0]
+    projected = canonical_ir_projection_v31(artifact, CH1)
+    assert projected['micro_events'][0]['cue'] == artifact['beats'][0]['event']
+    assert set(projected['narration'][0]) == {
+        'grammatical_person', 'narrator_char_id', 'focalizer_char_id',
+        'pronoun_surfaces'}
+    replayed, _ = compile_v31_refs(
+        {'blueprints': [projected]}, _main_text(), CHARACTERS,
+        summaries={1: artifact['summary']})
+    assert replayed['blueprints'][0] == artifact
 
 
 # ─────────────────────────────────────────────────────────────────────────────

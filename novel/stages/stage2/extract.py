@@ -49,6 +49,9 @@ from novel.stages.stage2.normalize import (
     resolve_character_refs, response_shape,
 )
 from novel.stages.stage2.paragraphs import paragraph_spans, render_numbered
+from novel.stages.stage2.references import (
+    hinge_candidates_by_chapter, prompt_candidates,
+)
 from novel.store import ArtifactStore
 
 GLOBAL_REL = STAGE2_GLOBAL_GROUNDING
@@ -318,15 +321,38 @@ def build_prompts(
             f'{GLOBAL_REL} 不在盘上——已现称名表由全局名册派生，先跑 stage2.global')
     characters = store.read(GlobalGrounding, GLOBAL_REL) \
         .model_dump(by_alias=True)['entities']['characters']
-    # 契约 dispatch：system 是 spec 里**已拼好结构提示**的
-    # 完整字节；user 构造两契约共用（上下文策略刻意不随契约变，A/B 变量只有响应契约一维）。
+    # 契约 dispatch：system 是 spec 里**已拼好结构提示**的完整字节。v2 的首相
+    # 不需要关闭式细节表；scaffolded single 必须在唯一请求里同时拿到人物与候选。
     spec = _active_spec()
     # 两段式契约真实发出的第一条是边界预传；dry-run 与付费路共用这里，
     # 所以预览不能拿尚未冻结边界的细节 system 冒充第一条调用。
-    system = spec.boundary_system or spec.system
-    return [(o, system,
-             build_blueprint_user(ctx.title, mt, (o,), characters=characters))
-            for o in targets]
+    system = (spec.boundary_system
+              if spec.topology == 'boundary_then_detail'
+              else spec.system)
+    if system is None:
+        raise RuntimeError(f'{spec.architecture} 的调用拓扑没有登记 system')
+    visible: dict[int, dict[str, list[str]]] = {}
+    candidates: dict[int, list[dict[str, Any]]] = {}
+    if spec.topology == 'scaffolded_single' and spec.uses_character_refs:
+        from novel.stages.stage2.compile_v2 import visible_character_refs
+        visible = visible_character_refs(characters, mt)
+    if spec.topology == 'scaffolded_single' and spec.uses_hinge_candidates:
+        candidates = hinge_candidates_by_chapter(mt)
+    return [
+        (o, system, build_blueprint_user(
+            ctx.title,
+            mt,
+            (o,),
+            characters=characters,
+            character_refs=(visible.get(o, {})
+                            if spec.topology == 'scaffolded_single'
+                            and spec.uses_character_refs else None),
+            hinge_candidates=(candidates.get(o, [])
+                              if spec.topology == 'scaffolded_single'
+                              and spec.uses_hinge_candidates else None),
+        ))
+        for o in targets
+    ]
 
 
 def _active_spec():
@@ -443,6 +469,17 @@ def _character_refs_block(refs: dict[str, list[str]]) -> str:
     )
 
 
+def _hinge_candidates_block(rows: list[dict[str, Any]]) -> str:
+    """v3.1 的关闭式定位候选；空表不等于 hinge 必须为空，仍可交 phrase。"""
+    return (
+        '── 本章 hinge 原文候选（代码派生、按需选择）──\n'
+        '候选恰好覆盖材料时只交 candidate_id；没有合适候选时交原样 phrase。'
+        '不要为了使用候选而把无关字面标成 hinge。\n'
+        + json.dumps(prompt_candidates(rows), ensure_ascii=False,
+                     separators=(',', ':'))
+    )
+
+
 def _frozen_boundaries_block(ends: list[int],
                              events: list[str] | None = None) -> str:
     rows = [{'end_para': end,
@@ -495,6 +532,7 @@ def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
                          repair_findings: list[dict[str, str]] | None = None,
                          repair_baseline: dict[str, Any] | None = None,
                          character_refs: dict[str, list[str]] | None = None,
+                         hinge_candidates: list[dict[str, Any]] | None = None,
                          frozen_boundaries: list[int] | None = None,
                          boundary_events: list[str] | None = None) -> str:
     """逐章那一相的 user。
@@ -535,6 +573,8 @@ def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
     ]
     if character_refs is not None:
         parts.append(_character_refs_block(character_refs))
+    if hinge_candidates is not None:
+        parts.append(_hinge_candidates_block(hinge_candidates))
     if frozen_boundaries is not None:
         parts.append(_frozen_boundaries_block(
             frozen_boundaries, boundary_events))
@@ -953,6 +993,66 @@ def _detail_validator(ordinal: int, frozen: list[int], allowed: set[str]) \
     return validate
 
 
+def _scaffolded_validator(
+    ordinal: int,
+    paragraph_count: int,
+    allowed: set[str],
+    *,
+    candidate_rows: list[dict[str, Any]] | None = None,
+    narration_refs: bool = False,
+) -> Callable[[Any, Any], str | None]:
+    """单调用脚手架的动态闸：边界召回、关闭人物与候选所属拍一次验完。"""
+    boundary = _boundary_validator(ordinal, paragraph_count)
+    candidates = {
+        str(row['candidate_id']): row for row in (candidate_rows or [])
+    }
+
+    def validate(obj: Any, resp: Any) -> str | None:
+        boundary_error = boundary(obj, resp)
+        if boundary_error is not None:
+            return boundary_error
+        blueprint = next(bp for bp in obj.blueprints
+                         if int(bp.chapter_ordinal) == ordinal)
+        invalid = sorted({
+            str(cid)
+            for beat in blueprint.beats
+            for cid in beat.present_char_ids
+            if str(cid) not in allowed
+        })
+        if invalid:
+            return f'ch{ordinal} 在场者含清单外 char_id：{invalid}'
+        if narration_refs:
+            invalid_narration = sorted({
+                str(cid)
+                for narration in blueprint.narration
+                for cid in (narration.narrator_char_id,
+                            narration.focalizer_char_id)
+                if cid is not None and str(cid) not in allowed
+            })
+            if invalid_narration:
+                return (f'ch{ordinal} 叙述身份含清单外 char_id：'
+                        f'{invalid_narration}')
+
+        start_para = 1
+        for beat in blueprint.beats:
+            for hinge in beat.hinges:
+                candidate_id = getattr(hinge, 'candidate_id', None)
+                if candidate_id is None:
+                    continue
+                row = candidates.get(str(candidate_id))
+                if row is None:
+                    return (f'ch{ordinal} hinge 含清单外 candidate_id：'
+                            f'{candidate_id}')
+                para = int(row['para'])
+                if not start_para <= para <= int(beat.end_para):
+                    return (f'ch{ordinal} hinge 候选 {candidate_id} 位于第 {para} 段，'
+                            f'不在所属拍 {start_para}..{beat.end_para}')
+            start_para = int(beat.end_para) + 1
+        return None
+
+    return validate
+
+
 def _blueprint_metrics(blueprint: dict[str, Any]) -> dict[str, int]:
     beats = list(blueprint.get('beats') or [])
     return {
@@ -1074,7 +1174,9 @@ def _run_blueprint_repair(
         raise TerminalState(
             f'定向重生成的 {spec.sys_name} 与基线产物不同，而现有 provenance '
             '没有表达“部分章节使用另一版 system”的槽位；尚未调用 LLM')
-    if spec.boundary_system is not None:
+    if spec.topology == 'boundary_then_detail':
+        if spec.boundary_system is None:
+            raise RuntimeError(f'{spec.architecture} 两段拓扑没有登记 boundary_system')
         old_boundary = previous.provenance.prompts.get(
             str(spec.boundary_sys_name or ''))
         if old_boundary != prov.fingerprint(spec.boundary_system):
@@ -1106,17 +1208,20 @@ def _run_blueprint_repair(
     boundary_events: dict[int, list[str]] = {}
     boundary_requests: list[tuple[int | None, str, str]] = []
     visible: dict[int, dict[str, list[str]]] = {}
+    candidate_rows: dict[int, list[dict[str, Any]]] = {}
     if spec.uses_character_refs:
         from novel.stages.stage2.compile_v2 import visible_character_refs
         visible = visible_character_refs(
             global_raw['entities']['characters'], main_text)
+    if spec.uses_hinge_candidates:
+        candidate_rows = hinge_candidates_by_chapter(main_text)
     for ordinal in chapters:
         findings = _repair_findings(before_outcomes, ordinal)
         baseline = _repair_baseline(
             old_by[ordinal], main_text, projection=spec.projection_fn)
         findings_of[ordinal] = findings
         baselines[ordinal] = baseline
-        if spec.boundary_system is not None:
+        if spec.topology == 'boundary_then_detail':
             needs_resegment = bool(
                 {row['rule'] for row in findings}
                 & {'beats_coarse', 'beats_collapsed'})
@@ -1168,7 +1273,7 @@ def _run_blueprint_repair(
 
     requests: list[tuple[int | None, str, str]] = []
     for ordinal in chapters:
-        if spec.boundary_system is not None and ordinal not in frozen:
+        if spec.topology == 'boundary_then_detail' and ordinal not in frozen:
             continue
         user = build_blueprint_user(
             ctx.title, main_text, (ordinal,),
@@ -1177,24 +1282,39 @@ def _run_blueprint_repair(
             repair_baseline=baselines[ordinal],
             character_refs=(visible.get(ordinal, {})
                             if spec.uses_character_refs else None),
+            hinge_candidates=(candidate_rows.get(ordinal, [])
+                              if spec.uses_hinge_candidates else None),
             frozen_boundaries=(frozen[ordinal]
-                               if spec.boundary_system is not None else None),
+                               if spec.topology == 'boundary_then_detail' else None),
             boundary_events=(boundary_events.get(ordinal)
-                             if spec.boundary_system is not None else None),
+                             if spec.topology == 'boundary_then_detail' else None),
         )
         prompt_rows[ordinal] = (user, findings_of[ordinal])
         requests.append((ordinal, system, user))
 
+    paragraph_count = {
+        int(section.get('chapter_ordinal') or 0):
+        len(paragraph_spans(str(section.get('text') or '')))
+        for section in main_text
+    }
+    validator_of = None
+    if spec.topology == 'boundary_then_detail' and spec.uses_character_refs:
+        validator_of = lambda ordinal: _detail_validator(
+            ordinal, frozen[ordinal], set(visible.get(ordinal, {})))
+    elif spec.topology == 'scaffolded_single':
+        validator_of = lambda ordinal: _scaffolded_validator(
+            ordinal,
+            paragraph_count[ordinal],
+            set(visible.get(ordinal, {})),
+            candidate_rows=candidate_rows.get(ordinal, []),
+            narration_refs=spec.uses_narration_refs,
+        )
     returned, detail_scope, detail_errors = _run_chapter_requests(
         ctx,
         client,
         requests,
         model_cls=spec.response_model,
-        validator_of=(
-            (lambda ordinal: _detail_validator(
-                ordinal, frozen[ordinal], set(visible.get(ordinal, {}))))
-            if spec.uses_character_refs else None
-        ),
+        validator_of=validator_of,
     )
     new_scope = boundary_scope + detail_scope
     errors = boundary_errors + detail_errors
@@ -1431,9 +1551,30 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
     assert main_text is not None
     spec = _active_spec()
     requests = build_prompts(ctx, chapters=chapters)
-    if spec.boundary_system is None:
+    if spec.topology != 'boundary_then_detail':
+        validator_of = None
+        if spec.topology == 'scaffolded_single':
+            characters = store.read(GlobalGrounding, GLOBAL_REL) \
+                .model_dump(by_alias=True)['entities']['characters']
+            from novel.stages.stage2.compile_v2 import visible_character_refs
+            visible = visible_character_refs(characters, main_text)
+            candidate_rows = (hinge_candidates_by_chapter(main_text)
+                              if spec.uses_hinge_candidates else {})
+            paragraph_count = {
+                int(section.get('chapter_ordinal') or 0):
+                len(paragraph_spans(str(section.get('text') or '')))
+                for section in main_text
+            }
+            validator_of = lambda ordinal: _scaffolded_validator(
+                ordinal,
+                paragraph_count[ordinal],
+                set(visible.get(ordinal, {})),
+                candidate_rows=candidate_rows.get(ordinal, []),
+                narration_refs=spec.uses_narration_refs,
+            )
         raw, violations, errors = _run_chapter_requests(
-            ctx, client, requests, model_cls=spec.response_model)
+            ctx, client, requests, model_cls=spec.response_model,
+            validator_of=validator_of)
         return {
             'main_text': main_text,
             'requests': requests,
@@ -1443,7 +1584,7 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
             'contract': spec.architecture,
         }
 
-    if spec.boundary_response_model is None:
+    if spec.boundary_system is None or spec.boundary_response_model is None:
         raise RuntimeError(f'{spec.architecture} 登记了 boundary_system 却没有响应模型')
     paragraph_count = {
         int(section.get('chapter_ordinal') or 0):
@@ -1594,7 +1735,7 @@ def finish_blueprints(
         for blueprint in raw_blueprints
     })
     purposes: dict[str, int | None] = {f'{ctx.node}:ch{o}': o for o in produced}
-    if spec.boundary_system is not None:
+    if spec.topology == 'boundary_then_detail':
         purposes.update({f'{ctx.node}:boundaries:ch{o}': o for o in produced})
     if spec.needs_summary_batch:
         purposes[f'{ctx.node}:summary-batch'] = None
