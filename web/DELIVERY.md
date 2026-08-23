@@ -42,12 +42,13 @@ agent 授权框。部分失败不回滚成功项，
 **跑书进度屏**：`/n/:sid/run`（左导航「进度」按钮）。agent 的 `novel.cli mark`
 与 UI / 持久队列共用 `<base>/_service/agent_progress.jsonl`：作业执行器在每个节点开始、
 结束时自动打点，界面按 `NODES` 的真实顺序折成进度 + 事件时间线；有步在跑时 2.5s 轮询，
-闲置 10s。它是**观察屏不是判定屏**——
+闲置 10s。节点没有 beacon 时显示「无运行记录」，只表示该条命令没有独立打点；可选节点未执行、
+上传或人工流程从别的入口完成，都不能据此改写所属阶段的完成状态。它是**观察屏不是判定屏**——
 「这层过没过」仍归各层屏的 badge（R-13.6）。后端路由：`GET /api/novels/:sid/run`
 （`novel/api/routes/run.py`，书目录不存在也 200）。
 
-**agent 一键跑书**：语料库屏每本书的「agent 跑书」，或新书 Stage0 屏的
-「agent 从 Stage0 开始跑」→ 确认框摊开
+**agent 一键跑书**：语料库屏每本书的「Agent」，或 Stage0 审批操作栏的
+「Agent 代跑」→ 确认框摊开
 将拉起的完整 argv 与提示词全文。付费授权与正文外发授权使用两个独立复选框：
 付费默认不勾，正文外发默认勾选，任一变化都会重新 preview；两项值和声明原文分别留档，
 不会因已获付费授权而推定正文外发同意。完整命令与 prompt 默认折叠、按需展开；弹框限制在
@@ -83,9 +84,9 @@ Stage2 typed 闸、当前成书、终审包和 inbox 阻塞轴判 `ready` / `rea
 - real 与 mock 适配器满足同一 TypeScript 接口；真实模式不允许缺端点时回退 mock。
 - 写请求携带 `X-Novel-UI: 1`；服务进程只写 `_service/`，产物变更经 CLI 子进程。
 - action、枚举、付费与写盘语义由服务端 `/api/enums` 和 preview 返回；前端不保存第二份判定表。
-- 作业日志主通道是 `/api/jobs/:id/stream` SSE；事件 `id` 等于 UTF-8 `next_byte`，断线用
-  `Last-Event-ID` 续读，终态先排空日志、再发唯一 `end` 并释放连接。旧 `/log?offset=` 保留兼容，
-  复用同一字节读取语义；前端不再轮询日志。
+- 底部作业抽屉只消费 `/api/jobs`，逐条展示全部作业的最新状态，不订阅或展示命令、stdout/stderr；
+  详情统一跳到本书运行进度页。日志能力仍由 `/api/jobs/:id/stream` SSE 提供给专用详情消费者：
+  事件 `id` 等于 UTF-8 `next_byte`，断线用 `Last-Event-ID` 续读，终态先排空日志、再发唯一 `end`。
 
 ### 数据缝
 
@@ -157,8 +158,8 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | `/` | 语料库、上传与逐书阶段状态；勾选多本一次交给 agent 批量代跑；项目可在 sid 二次确认后移入可恢复回收站（闸与排队归服务端，界面不写死上限） |
 | `/n/:sid` | 进入该书并重定向到 stage0（新书先审非正文；已有产物仍可从左栏直达各层） |
 | `/n/:sid/run` | agent / UI / 持久队列共用的全链运行进度与事件时间线；步骤从 `NODES` 派生，**只观察不判定** |
-| `/n/:sid/stage0` | 整本剔除审阅、编辑与批准；上传后可在此直接交给 agent 从当前盘面跑全链，或继续人工审校 |
-| `/n/:sid/stage1` | 原文与分章对照，只读 |
+| `/n/:sid/stage0` | 整本剔除审阅、编辑与批准；完整原文默认展开、可收起，不重复展示属于 Stage1 的分章预览。Agent 入口放在审批操作栏；浏览器人工动作不要求填写 actor/reason，统一按 `human-ui` 和具体动作理由记审计；Agent/CLI 仍显式自报 |
+| `/n/:sid/stage1` | 顶部合并展示校验结论与切分确认；下方是章节索引和原文切分结果，只读，开篇文案只展示一次 |
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
 | `/n/:sid/style` | stage3 文风实测与下发档位 |
@@ -228,9 +229,8 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
     而且 `time_layer` / `place` / `present` 三个也会是 `null`
 - **`/api/jobs` 的元素是嵌套 `JobRecord`**。`api/endpoints.ts` 在唯一数据缝把它适配成抽屉
   使用的扁平 `Job`，五态（`running / ok / landed_red / failed / unknown`）从服务端原样适配；
-  日志用字节偏移读取。`landed_red` 表示产物已落盘但报告有阻断红行，不折进 `ok` 或 `failed`。
-- 前端日志拉取按 `getJobLog(id, offset) → {lines, offset, done}` 的签名；
-  换到 SSE（§1）时签名不用变。
+  `landed_red` 表示产物已落盘但报告有阻断红行，不折进 `ok` 或 `failed`。抽屉只画概览，
+  不因“顺手看日志”建立第二个详情页。
 
 ---
 
@@ -239,7 +239,7 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 规则本身：
 
 1. freshness 保留 fresh / stale / unknown，missing 作为明确显示态；unknown 用问号，missing 用空集符号，不得画成 fresh，也不得彼此复用近似轮廓。
-2. badge 保留 pass / amber / fail；amber 表示存在 unver，不是较弱的通过。
+2. badge 保留 pass / amber / fail；amber 显示为「通过 · 有未验证项」，表示存在 unver，不是较弱的通过；进度页可悬停问号查看服务端给出的具体原因。
 3. severity 保留 hard / info / metric / unver；metric 是读数，不使用警告语义。
 4. job state 保留 running / ok / landed_red / failed / unknown 五态；`landed_red` 表示产物已落盘但报告有阻断红行（exit 1），界面必须引导人看报告，不能画成成功或“命令没跑成”。它在批量队列里仍会停住同书 lane；服务重启后的 running 一律改判 unknown。
 5. 空数组按字段解释，不得统一翻译成“没问题”；not-run、合法空与数据缺失分别呈现。

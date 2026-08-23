@@ -138,7 +138,7 @@ export interface BadgeToken {
  */
 export const BADGE: Record<Badge, BadgeToken> = {
   pass: { color: 'oklch(0.42 0.10 152)', bg: 'oklch(0.94 0.04 152)', label: '通过' },
-  amber: { color: 'oklch(0.45 0.14 62)', bg: 'oklch(0.94 0.07 72)', label: '通过，但有查不了的' },
+  amber: { color: 'oklch(0.45 0.14 62)', bg: 'oklch(0.94 0.07 72)', label: '通过 · 有未验证项' },
   fail: { color: 'oklch(0.45 0.17 28)', bg: 'oklch(0.94 0.05 28)', label: '有阻断' },
 }
 

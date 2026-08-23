@@ -32,13 +32,14 @@ import { cx } from '@/lib/cx'
 
 /**
  * 信标五态借用 JOB 的色与形：
- * pending 借 unknown 的中性灰（空心虚线圆）——「还没跑到」和「不知道」都不是结论；
+ * pending 借 unknown 的中性灰（空心虚线圆）——它只表示没有这条节点的信标记录，
+ * 不推断「还没跑到」，也不与阶段完成度互相改写；
  * running / ok / landed_red / failed 直接用 JOB 自己的文案。
  * ok 念作「跑完了」：它只表示那条命令 exit 0，**绝不渲染成「合格 / 通过」**——
  * 判定只归各层屏的 badge（信标是观察轨迹，不是判据）。
  */
 const BEACON: Record<RunBeacon, { token: JobStateToken; label: string }> = {
-  pending: { token: JOB.unknown, label: 'pending 还没跑到' },
+  pending: { token: JOB.unknown, label: '无运行记录' },
   running: { token: JOB.running, label: JOB.running.label },
   ok: { token: JOB.ok, label: JOB.ok.label },
   landed_red: { token: JOB.landed_red, label: JOB.landed_red.label },
@@ -67,6 +68,26 @@ function BeaconChip({ beacon }: { beacon: RunBeacon }) {
     >
       <span aria-hidden style={dot} />
       {label}
+    </span>
+  )
+}
+
+/** amber 的未验证原因直接来自 CheckReport，不在前端重判。 */
+function UnverifiedHelp({ report }: { report: CheckReport }) {
+  const rows = report.rules.filter(
+    (row) => row.status === 'unver' || row.status === 'skipped',
+  )
+  if (rows.length === 0) return null
+  const explanation = rows
+    .map((row) => `${row.item}：${row.why ?? row.note ?? '本次没有完成验证'}`)
+    .join('\n')
+  return (
+    <span
+      aria-label={`查看 ${rows.length} 项未验证原因`}
+      title={explanation}
+      className="inline-flex h-18 w-18 cursor-help items-center justify-center rounded-full border border-line-btn bg-card text-micro font-semibold text-ink-4"
+    >
+      ?
     </span>
   )
 }
@@ -147,7 +168,7 @@ function AgentRunBlock() {
 
   return (
     <Panel>
-      <PaneHeader title="agent 代跑" meta="发起口在语料库或 Stage0；互斥由服务端 409 裁决" />
+      <PaneHeader title="agent 代跑" />
       {runs.isPending ? (
         <div className="px-18 py-14 text-body text-ink-5">取代跑记录中 …</div>
       ) : runs.isError ? (
@@ -282,8 +303,7 @@ export function RunScreen() {
         <div className="flex flex-col gap-5">
           <h1 className="m-0 text-screen font-semibold">跑书进度</h1>
           <div className="prose-cn max-w-[52em] text-body text-ink-3">
-            UI、队列与 agent 共用同一张真实节点图。这一屏只跟踪跑到哪一步、当前步在不在跑、每步最近的退出码——
-            「跑完」不等于「合格」；下方判定直接组合各层现有 CheckReport，不从信标或完成度重算。
+            UI、队列与 agent 共用同一套运行机制。
           </div>
         </div>
       </header>
@@ -298,7 +318,7 @@ export function RunScreen() {
             <Panel>
               <PaneHeader
                 title={'流水线节点 · ' + d.steps.length + ' 项'}
-                meta="信标只说这条命令跑没跑完；合不合格看各层屏的 badge"
+                meta="每行是一条命令记录；无记录不代表阶段未完成"
                 right={
                   <LinkButton
                     disabled={!d.steps.some((s) => s.beacon === 'running')}
@@ -409,6 +429,7 @@ export function RunScreen() {
                         {report ? (
                           <>
                             <CheckBadge badge={report.badge} />
+                            {report.badge === 'amber' ? <UnverifiedHelp report={report} /> : null}
                             <Mono className="text-micro text-ink-5">
                               hard {hard} · info {info} · unver {unver}
                             </Mono>

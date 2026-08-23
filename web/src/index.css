@@ -57,6 +57,11 @@
   --color-spend: oklch(0.55 0.16 38);
   --color-spend-bg: oklch(0.985 0.012 40);
 
+  /* Stage0 删除选择：与花钱橙、warning 黄分开，必须一眼看出正文将被移除 */
+  --color-remove: oklch(0.45 0.18 27);
+  --color-remove-bg: oklch(0.92 0.055 27);
+  --color-remove-line: oklch(0.61 0.19 27);
+
   /* 时间层：现在 = 中性，回忆 / 转述 = 紫 */
   --color-recall: oklch(0.42 0.1 300);
   --color-recall-bg: oklch(0.95 0.03 300);

@@ -27,10 +27,43 @@ describe('RunScreen check composition', () => {
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
     expect(await screen.findByText('landed_red 已落盘但有红项')).toBeInTheDocument()
+    expect(screen.getAllByText('无运行记录').length).toBeGreaterThan(0)
+    expect(screen.queryByText('pending 还没跑到')).not.toBeInTheDocument()
+    expect(screen.getByText('UI、队列与 agent 共用同一套运行机制。')).toBeVisible()
+    expect(screen.getByText('每行是一条命令记录；无记录不代表阶段未完成')).toBeVisible()
+    expect(screen.queryByText('发起口在语料库或 Stage0；互斥由服务端 409 裁决')).not.toBeInTheDocument()
     expect(screen.queryByText('failed 失败')).not.toBeInTheDocument()
     expect(screen.getAllByText('exit 1').some(
       (row) => row.style.color === JOB.landed_red.color,
     )).toBe(true)
+  })
+
+  it('explains amber with the exact server-provided unver reason', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    const base = await mockApi.getCheck(SAMPLE_SID, 'stage5')
+    if (!base || base.rules.length === 0) throw new Error('stage5 mock report is incomplete')
+    const report: CheckReport = {
+      ...base,
+      badge: 'amber',
+      passed: true,
+      rules: [{
+        ...base.rules[0],
+        status: 'unver',
+        why: '语义需要人工阅读确认',
+      }],
+      counts: { ok: 0, hit: 0, unver: 1, skipped: 0 },
+    }
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    vi.spyOn(api, 'getCheck').mockImplementation(async (_sid, kind) =>
+      kind === 'stage0' ? report : null,
+    )
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    expect(await screen.findByText('通过 · 有未验证项')).toBeVisible()
+    const help = screen.getByLabelText('查看 1 项未验证原因')
+    expect(help).toHaveAttribute('title', expect.stringContaining('语义需要人工阅读确认'))
   })
 
   it('shows authoritative badges and counts while unavailable checks stay unknown', async () => {
