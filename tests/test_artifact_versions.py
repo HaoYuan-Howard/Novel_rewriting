@@ -115,12 +115,15 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'wontfix 的证据键、判官的 `judged_texts` 键全挂在那个答案上。'
         '策略名没有丢——由 `candidates[slot].approach` 现算。'
         '`HOOK_APPROVED_APPROACHES` 随之删除',
-        '`stage6.hook` 重跑（**付费**）。⚠⚠ **代价要说清**：重跑写 `approved=None` '
-        '⇒ 人工定稿一并失效，必须重新走 `stage6.approve --pick` 的 '
-        'actor / reason / 完整 subject SHA-256。盘上存量只有一份'
-        '（「我把龙傲天训成狗」，已到 stage7），**成书 txt 不是注册产物、不受影响**；'
-        '该书 stage6 层在重建前拒读。`stage6/semantic_*.json` 未破坏形状，'
-        '但它按 `judged_texts` 绑文本、重跑后会判 stale',
+        '`stage6.hook` 重跑（**付费**）。⚠ 重跑写 `approved=None` ⇒ 人工定稿一并失效，'
+        '必须重新走 `stage6.approve --pick` 的 actor / reason / 完整 subject SHA-256。'
+        '⚠⚠ **本次代价实际为零，但不是因为运气好**：破坏时盘上唯一那份是'
+        '「我把龙傲天训成狗」（已到 stage7），而它当时**连重建都跑不动**——'
+        '任何付费节点都被 stage2 全局复核闸挡着（3 FAIL + 2 UNVER，'
+        '`novel/cli/main.py` 对所有 paid 节点调 `global_review.require_approved`）。'
+        '随后 2026-08-23 该书目录被本仓之外的动作从 `outputs/` 移走（账本记录仍在），'
+        '同日「寡妇门前」以本形状全链跑通并交付 ⇒ **盘上现存的 stage6 层已经是 v2**。'
+        '`stage6/semantic_*.json` 未破坏形状，但它按 `judged_texts` 绑文本、重跑后会判 stale',
     ),
     'stage6/hook_edit.json': (
         2,
