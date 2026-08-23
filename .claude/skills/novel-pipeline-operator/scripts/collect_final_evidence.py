@@ -29,6 +29,7 @@ from novel.orchestrator import beacon  # noqa: E402
 from novel.orchestrator.nodes import check_node  # noqa: E402
 from novel.orchestrator.state import overview, readonly_ctx  # noqa: E402
 from novel.stages import check_only  # noqa: E402
+from novel.stages.stage2 import global_review  # noqa: E402
 from novel.stages.stage7 import assemble, rename  # noqa: E402
 from novel.stages.stage7.subs import apply_subs  # noqa: E402
 from novel.store import ArtifactStore  # noqa: E402
@@ -256,16 +257,38 @@ def collect(base: str | Path, sid: str) -> dict[str, Any]:
         exits, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
     ).encode('utf-8')).hexdigest()
     inbox_counts = {kind: inbox.counts[kind] for kind in INBOX_KIND}
-    inbox_text = ' · '.join(f'{kind}={inbox_counts[kind]}' for kind in INBOX_KIND)
+    inbox_text = (
+        '八类：' + ' · '.join(f'{kind}={inbox_counts[kind]}' for kind in INBOX_KIND)
+        + '；关注：' + ' · '.join(
+            f'{key}={value}' for key, value in inbox.attention_counts.items())
+        + '；交付：' + ' · '.join(
+            f'{key}={value}' for key, value in inbox.delivery_counts.items())
+    )
     book = _book_facts(base, sid, novel_dir)
+    try:
+        s2_current, s2_approved, s2_counts = global_review.approval_status(
+            readonly_ctx(novel_dir, 'stage2.global', prov.code_version()))
+        stage2_review = {
+            'current': s2_current, 'approved': s2_approved,
+            'counts': s2_counts, 'error': None,
+        }
+    except Exception as exc:  # noqa: BLE001 —— 终审事实必须把“判不了”落成显式非绿
+        stage2_review = {
+            'current': False, 'approved': False,
+            'counts': {state: 0 for state in ('pending', 'PASS', 'FAIL', 'UNVER')},
+            'error': f'{type(exc).__name__}: {exc}',
+        }
     anchor = {
-        'schema': 'novel-final-evidence-v1', 'sid': sid,
+        'schema': 'novel-final-evidence-v2', 'sid': sid,
         'title': paths.title_of(novel_dir), 'novel_dir': str(novel_dir),
         'book_path': book['path'], 'book_sha1': book.get('sha1'),
         'chapters': book.get('chapter_count'), 'inbox_counts': inbox_counts,
+        'inbox_attention_counts': dict(inbox.attention_counts),
+        'inbox_delivery_counts': dict(inbox.delivery_counts),
         'active_terminal_files': terminals,
         'exit_sequence_count': len(exits),
         'exit_sequence_sha256': exit_digest,
+        'stage2_review': stage2_review,
     }
     anchor_line = '<!-- novel-final-evidence:' + json.dumps(
         anchor, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + ' -->'
@@ -276,6 +299,7 @@ def collect(base: str | Path, sid: str) -> dict[str, Any]:
         'reports': reports, 'quality_table_rows': quality_rows,
         'active_terminal_files': terminals, 'active_edit_inputs': edits,
         'book': book, 'ledger': _ledger(base, sid),
+        'stage2_review': stage2_review,
         'exit_sequence': exits, 'exit_sequence_text': exit_text,
         'exit_sequence_compact_text': exit_compact,
         'exit_sequence_sha256': exit_digest,

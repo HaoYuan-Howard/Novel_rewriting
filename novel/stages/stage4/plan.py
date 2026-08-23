@@ -447,8 +447,8 @@ def context_ctx(ctx: RunContext) -> RunContext:
     一份刚刚组好的上下文当场显示 `stale`，而 `stage5.write` 读它会被
     `_refuse_stale_upstream` 直接拒绝 —— 主链在这里断，且断得像数据问题。
 
-    ⇒ 与 stage2 `--full-extract` 同一条纪律（`novel/cli/main.py` 给 `stage2.blueprint`
-    与 `stage3.style` 各开一个 ctx）：**谁产的产物就记在谁名下**，不共用调用方的 ctx。
+    ⇒ 与所有跨节点编排同一条纪律（`novel/cli/main.py` 给每个节点各开一个 ctx）：
+    **谁产的产物就记在谁名下**，不共用调用方的 ctx。
     """
     if ctx.node == CTX_NODE:
         return ctx

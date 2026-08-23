@@ -26,6 +26,7 @@ from novel.stages.stage7 import checks
 from novel.stages.stage7 import rename
 from novel.stages.stage7.subs import (
     apply_subs, derived_alias_scan, mask_known, residual_scan, sub_table, surface_hits,
+    unclaimed_residual_keys,
 )
 
 # 「阿禾」⊂「阿禾姊姊」· 「青禾」⊂「孟青禾」——嵌套是本层全部风险的来源。
@@ -252,6 +253,15 @@ def test_no_chaining_a_to_b_to_c():
 def test_empty_subs_is_identity():
     assert apply_subs('原样', {}) == ('原样', {}, [])
     assert apply_subs('', {'甲': '乙'}) == ('', {}, [])
+
+
+def test_generated_placeholder_is_not_mistaken_for_an_old_surface_residual():
+    """门牌号 `001` 会合法地出现在 `char_001` 占位符里；只看裸字面会让整本假红。"""
+    subs = {'001': '⟦char_001_00⟧'}
+    after, _counts, claimed = apply_subs('门牌号001', subs)
+
+    assert unclaimed_residual_keys(after, subs, claimed) == set()
+    assert unclaimed_residual_keys(after + '，旧门牌001仍在', subs, claimed) == {'001'}
 
 
 def test_claimed_covers_identity_entries_too():

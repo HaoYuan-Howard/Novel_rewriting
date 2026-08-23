@@ -68,16 +68,28 @@ def validate(text: str, facts: dict[str, Any], *, template_text: str = '') -> li
     status = re.search(r'>\s*交付状态：`([^`]+)`', text)
     if status is None or status.group(1) not in ('ready', 'ready_with_disclosures', 'stopped'):
         errors.append('交付状态缺失或不在三态取值面')
-    elif status.group(1) == 'ready':
-        blocking = ('invalid', 'rejected', 'stalled', 'repairable', 'upstream', 'approval')
-        counts = facts.get('review_anchor', {}).get('inbox_counts', {})
-        if any(counts.get(kind) for kind in blocking):
-            errors.append('交付状态写 ready，但 inbox 仍有阻塞类余额')
+    elif status.group(1) in ('ready', 'ready_with_disclosures'):
+        delivery_state = status.group(1)
+        stage2_review = facts.get('review_anchor', {}).get('stage2_review', {})
+        if not (stage2_review.get('current') and stage2_review.get('approved')):
+            errors.append(
+                f'交付状态写 {delivery_state}，但 Stage2 全局复核不是当前逐项 PASS')
+        delivery_counts = facts.get('review_anchor', {}).get(
+            'inbox_delivery_counts', {})
+        if delivery_counts.get('blocking') != 0:
+            errors.append(
+                f'交付状态写 {delivery_state}，但 inbox 仍有交付阻塞余额')
+        if (delivery_state == 'ready_with_disclosures'
+                and not delivery_counts.get('disclosure')):
+            errors.append('交付状态写 ready_with_disclosures，但没有任何披露余额')
+        if delivery_state == 'ready' and delivery_counts.get('disclosure'):
+            errors.append('交付状态写 ready，但仍有披露余额')
         if facts.get('active_terminal_files'):
-            errors.append('交付状态写 ready，但活动终态文件不为空')
+            errors.append(f'交付状态写 {delivery_state}，但活动终态文件不为空')
         book = facts.get('book', {})
         if not (book.get('current_delivery_readable') and book.get('exact_rebuild_match')):
-            errors.append('交付状态写 ready，但成书不是当前可读且逐字重建一致')
+            errors.append(
+                f'交付状态写 {delivery_state}，但成书不是当前可读且逐字重建一致')
     return errors
 
 

@@ -25,6 +25,7 @@ import importlib.util
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -58,6 +59,15 @@ def _validator():
     return module
 
 
+def _operator_script(name: str):
+    path = SKILL_DIR / 'scripts' / f'{name}.py'
+    spec = importlib.util.spec_from_file_location(f'novel_pipeline_{name}', path)
+    assert spec and spec.loader, f'加载不了 {path}'
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 # ───────────────────────── 一、校验器本体 ─────────────────────────
 
 def test_the_validator_file_is_where_the_maintenance_protocol_says_it_is():
@@ -78,6 +88,43 @@ def test_skill_validator_reports_no_drift():
         '逐条修完后跑：\n'
         '  <PY> -X utf8 .claude/skills/novel-pipeline-operator/scripts/validate_skill.py\n\n'
         % len(errors) + '\n'.join(f'  - {e}' for e in errors))
+
+
+def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
+        monkeypatch):
+    """复用 runner 不手拼节点 argv；start/end 信标必须包住同一条生产命令。"""
+    runner = _operator_script('run_step')
+    step_argv = [
+        'python', '-B', '-m', 'novel.cli', 'run', 'stage2.global', '42', '--yes',
+    ]
+    step = SimpleNamespace(
+        label='stage2 全局事实', argv=step_argv, cwd=str(REPO_ROOT),
+        paid=True, writes='stage2/global_grounding.json', note=None)
+    built: list[tuple] = []
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *args, **kwargs: built.append((args, kwargs)) or [step])
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, 'run', fake_run)
+
+    rc = runner.main([
+        '--base', 'E:/outputs', '--sid', '42', '--execute', 'stage2.global',
+    ])
+
+    assert rc == 0
+    assert built and built[0][1]['placeholders'] is False
+    assert 'mark' in calls[0][0] and '--phase' in calls[0][0]
+    assert calls[0][0][calls[0][0].index('--phase') + 1] == 'start'
+    assert calls[1][0] == step_argv
+    assert 'mark' in calls[2][0]
+    assert calls[2][0][calls[2][0].index('--phase') + 1] == 'end'
+    assert calls[2][0][calls[2][0].index('--exit') + 1] == '0'
+    assert all('shell' not in kwargs for _argv, kwargs in calls)
 
 
 #: 每个扫描面的下界。**不是等值断言**——注册表本来就会增删；

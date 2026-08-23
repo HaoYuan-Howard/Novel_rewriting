@@ -366,6 +366,7 @@
 | R-2.12 | 身份描述里不许藏结局或未揭示的秘密 | **无守卫 → `B-14`** |
 | R-2.13 | Stage2 有一条**契约内的 0 LLM 人工订正入口**：既保留 existing secret/world-rule/枚举的逐项 typed patch，也提供 `secrets_replace`、`world_rules_replace` 与按 `char_id` 的 `addresses_replace` 完整替换面，使复合 secret 可按独立揭示时点拆分、遗漏规则可新增、无源称谓可删除。完整列表严格 typed、ID 唯一；同 subject 的 patch+replace、未知目标、越界章号、悬空 `known_by`/`address.by` 都在任何候选修改/归档/写盘前关闭式拒绝。应用后重走归一、当前判据、来源账/轮次归档与 `global_review` surface 枚举；旧人工决定仅在 subject path+hash 完全相同时继承；HARD ⇒ `.INVALID` 不覆盖正式底座 | `结构`（`novel/stages/stage2/extract.py::run_apply_edit`，决策集形状由 `contracts/schema/stage2.py::GlobalEdit` 收走）+ 正反例/真实 consumer 回归 |
 | R-2.14 | `stage2.global --emit-review-template` 必须 stdout-only 从**当前正式** `global_review.json` 投影一份 `GlobalReviewDecisionSet`：逐项携带当前 item id、完整 subject SHA-256 与 evidence，默认全部 `UNVER`，所以原样应用也不能打开 s2 gate；不得从 grounding 重拼第二套 item 身份 | `结构`（`novel/stages/stage2/global_review.py::review_template`）+ CLI 回归 |
+| R-2.15 | Stage2 全局逐项复核是所有下游付费执行与成书组装/下载的统一硬闸：评测面必须与当前 grounding 完整一致且每项 `PASS`；`FAIL` / `UNVER` / `pending` 一律不放行。决策模板、书内相对输入、书内绝对输入与 `_service/edits` API 输入统一使用注册表版本化的 `stage2/global_review_decisions.json` 形状。`--emit-review-workpack` 只给主体、注册证据与原文精确命中上下文，不自动做决定 | `结构`（`novel/stages/stage2/global_review.py::require_approved` + `novel/cli/main.py::_cmd_run` + `novel/stages/stage7/assemble.py`）+ 模板/API/CLI/下载回归 |
 
 > **R-2.6 的词表只抓「结局」，抓不到中段才揭示的事实。** 实测基线：
 > 某本书上词表命中 **0/17**，而人读真违规 **6/17**（「…后成为某人的下属」差一个字避开了词表里的「后被」；
@@ -779,7 +780,7 @@
 | R-10.13b | **人手补的映射不受 ③ 的否决，但必须报出它撞上了谁**——同 `R-10.3b` 的形状：这条否决防的是**静默**撞名。⚠ 实测有一次撞名**是对的**（原作对同一个人有两种写法），而硬拦它的唯一出路是撤销一个对的决定 | `INFO` |
 | R-10.13c | 人手补的映射之间不许**首尾重叠**（`a` 的后缀 == `b` 的前缀 ⇒ 单次扫描会切出半截残串） | `HARD` |
 | R-10.13d | 被**保留**的称呼里不许夹着已经改掉的名字（否则成品里半改不改：「阿禾」成了「阿舒」而「阿禾姊姊」原样留着） | `INFO` |
-| R-10.14 | **成书的前置条件**：人物表必须已人工定稿且当前 fresh；缺章 / 同章双份 / 各章不出自同一套契约 / 正文或文案消费指纹漂移 / 文案未定稿或其 resolution 不再绑定当前字节 —— 一律拒写 txt。人物表编辑会清空旧批准与 `book_txt` 账并把旧 txt 移出 live 下载路径；下载端点复用同一道 approved/current/fresh 闸，不以“文件存在”冒充可交付。文案语义闸只接受一种可审计基础：actor / reason / 完整 SHA-256 绑定的 `human_verification`，且该 resolution 必须仍绑着当前进成书的那份字节（改一个字即失效）。⚠ 「当前 profile 下的 calibrated PASS」那条路已随自动放行门删除；UNVER 本身不阻断交付，**拦人的是字节绑定，不是判定**。txt 是交付物，里面没有地方写风险抬头横幅 | `HARD` ×2 + `闸门` ×4（含 `stage6.semantic.require_approved_clear` 与 Stage7 delivery gate） |
+| R-10.14 | **成书的前置条件**：Stage2 全局复核必须 current 且逐项 PASS；人物表必须已人工定稿且当前 fresh；缺章 / 同章双份 / 各章不出自同一套契约 / 正文或文案消费指纹漂移 / 文案未定稿或其 resolution 不再绑定当前字节 —— 一律拒写 txt。人物表编辑会清空旧批准与 `book_txt` 账并把旧 txt 移出 live 下载路径；下载端点复用同一道 Stage2 + approved/current/fresh 闸，不以“文件存在”冒充可交付。文案语义闸只接受一种可审计基础：actor / reason / 完整 SHA-256 绑定的 `human_verification`，且该 resolution 必须仍绑着当前进成书的那份字节（改一个字即失效）。⚠ 「当前 profile 下的 calibrated PASS」那条路已随自动放行门删除；这里说的 UNVER 不阻断只指 Stage6 双盲结论，Stage2 typed UNVER 按 `R-2.15` 阻断。txt 是交付物，里面没有地方写风险抬头横幅 | `HARD` ×2 + `闸门` ×5（含 Stage2 typed review、`stage6.semantic.require_approved_clear` 与 Stage7 delivery gate） |
 | R-10.14b | 被拦下的废稿**排除但要报计数**——「排除了 N 份」与「一份都没有」必须分得开 | `INFO` |
 | R-10.15 | **人工编辑面按 `char_id` 浅合并**，不要求人重抄整份决策集；不在补丁里的角色**结构上改不到**，且**不许改由人物表派生的旧名** | `结构`（`novel/stages/stage7/measure.py::merge_mapping_edit` 只认白名单 `_CHARACTER_PATCH_KEYS`，`old_canonical` 不在其中，写了就显式终态） |
 | R-10.16 | **书名里的人名跟着换，其余不动**（不重起书名）——它走的是同一份替换表，是**确定性应用**不是第二次决策 | **`人`**（`rn_title_unver`：现语料上是**恒等变换**，三本书名都不含人名 ⇒ 这一条**从来没有过失败样本**，只能常驻报出换了几处、不能当绿灯读；换得对不对由人定稿时看），见 `B-22` |

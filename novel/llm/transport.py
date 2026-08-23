@@ -25,6 +25,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
+from urllib.parse import unquote, urlsplit
 
 from novel.errors import NovelError, TerminalState
 
@@ -42,7 +43,7 @@ def _error_kind(*, status: int | None = None, exception_name: str = '') -> str:
     name = exception_name.lower()
     if 'timeout' in name:
         return 'timeout'
-    if 'connection' in name or 'apiconnection' in name:
+    if 'connect' in name:
         return 'connection'
     return 'transport'
 
@@ -157,11 +158,18 @@ class DeepSeekTransport:
                             '要发真请求了，但 `DEEPSEEK_API_KEY` 没设。'
                             '把 `.env.example` 抄成 `.env` 填进去，或者导出这个环境变量。'
                             '⚠ 只想跑 0 成本动作的话不需要它——`FREE_ENTRIES` 里那些 flag 一分钱不花')
-                    from openai import OpenAI          # 懒 import：见本方法 docstring
+                    from openai import DefaultHttpxClient, OpenAI
+                    http_client = None
+                    if self.cfg.proxy_url:
+                        # 显式代理是传输配置，不依赖启动者有没有把 HTTP(S)_PROXY
+                        # 灌进进程环境。前端 Agent、交互式 CLI 因而走同一条网络口。
+                        http_client = DefaultHttpxClient(
+                            proxy=self.cfg.proxy_url, timeout=self.cfg.timeout)
                     # ⚠⚠ SDK 重试必须关闭；唯一重试所有者是 client.py。
                     self._client = OpenAI(
                         api_key=self.cfg.api_key, base_url=self.cfg.base_url,
-                        timeout=self.cfg.timeout, max_retries=0)
+                        timeout=self.cfg.timeout, max_retries=0,
+                        http_client=http_client)
         return self._client
 
     def send(self, req: ChatRequest) -> ChatResponse:
@@ -208,6 +216,59 @@ class DeepSeekTransport:
             usage=usage,
             model=getattr(resp, 'model', req.model),
         )
+
+
+@dataclass(frozen=True)
+class TransportProbe:
+    """不带正文、不带 API key 的 TLS/HTTP 通路探针结果。"""
+
+    reached_http: bool
+    status: int | None
+    kind: str
+    detail: str
+
+
+def _redact_proxy_detail(detail: str, proxy_url: str | None) -> str:
+    """清除代理 URL 及其中可能被异常单独展开的认证字段。"""
+    if not proxy_url:
+        return detail
+    redacted = detail.replace(proxy_url, '<proxy>')
+    parsed = urlsplit(proxy_url)
+    for secret in (parsed.username, parsed.password):
+        if not secret:
+            continue
+        for form in {secret, unquote(secret)}:
+            if form:
+                redacted = redacted.replace(form, '<redacted>')
+    return redacted
+
+
+def probe_transport(cfg: Any) -> TransportProbe:
+    """用与正式请求相同的代理/超时构造客户端，只探测到 ``/models``。
+
+    401/403 也算传输成功：它证明 DNS/TCP/TLS/HTTP 已到服务端；本命令不验证密钥，
+    更不发送正文。代理地址与密钥绝不进入结果文本。
+    """
+    from openai import DefaultHttpxClient
+
+    kwargs: dict[str, Any] = {'timeout': cfg.timeout}
+    if cfg.proxy_url:
+        kwargs['proxy'] = cfg.proxy_url
+    client = DefaultHttpxClient(**kwargs)
+    try:
+        response = client.get(cfg.base_url.rstrip('/') + '/models')
+        return TransportProbe(
+            reached_http=True, status=int(response.status_code), kind='http',
+            detail=f'已收到 HTTP {response.status_code}')
+    except Exception as exc:  # noqa: BLE001 —— httpx/openai 异常族会随版本变化
+        classified = _classify(exc)
+        detail = _redact_proxy_detail(
+            f'{type(exc).__name__}: {exc}', cfg.proxy_url)
+        return TransportProbe(
+            reached_http=False, status=classified.status, kind=classified.kind,
+            detail=detail)
+    finally:
+        client.close()
 
 
 #: 该重试的 HTTP 状态。**429 与 5xx**：前者是限流（等一下就好），后者是对面的事。

@@ -63,7 +63,7 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         title: done ? '切分已确认' : g.s0 ? '这一刀切对了吗？' : '番外还没剔，切了也要重切',
         note: '确认后自动并行发起 stage2（全局设定 + 逐章骨架）和 stage3（文风画像）——两条腿互不等待。',
         chips: [{ ok: g.s0, label: 'stage0 剔番外' }],
-        btn: done ? '已确认' : g.s0 ? '确认切分，启动 stage2 + stage3' : '先过 stage0 剔除番外',
+        btn: done ? '已确认' : g.s0 ? '确认切分，生成 stage2 全局底座' : '先过 stage0 剔除番外',
         blockedReason: 'stage0 还没确认删除范围。番外没剔就切分，切完还要重切。',
         doneNote: done
           ? 'stage2 / stage3 已并行发起。左边两屏是 stage2 的产物，「文风画像」是 stage3 的。'

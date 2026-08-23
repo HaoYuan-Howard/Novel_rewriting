@@ -44,6 +44,8 @@ from contracts.invariants import (
     HOOK_APPROVED_APPROACHES,
     HOOK_SEMANTIC_STATES,
     HOOK_KEYS,
+    INBOX_ATTENTION,
+    INBOX_DELIVERY_EFFECT,
     INBOX_KIND,
     NAME_DISTINCTIVENESS,
     NARRATIVE_PERSON,
@@ -100,6 +102,8 @@ RemovedOrigin = Literal[REMOVED_ORIGIN]
 GateKey = Literal[APPROVAL_GATES]
 SeenKey = Literal[APPROVAL_SEEN]
 InboxKind = Literal[INBOX_KIND]
+InboxAttention = Literal[INBOX_ATTENTION]
+InboxDeliveryEffect = Literal[INBOX_DELIVERY_EFFECT]
 AnchorCoverageState = Literal[ANCHOR_COVERAGE_STATE]
 
 
@@ -800,6 +804,16 @@ class DeepSelectionRequest(StrictModel):
 # 二b、待人工清单（修复路由的 `human` 落面；BE-04 第一条的生产者形状）
 # ─────────────────────────────────────────────────────────────────────────────
 
+class InboxDecision(FrozenModel):
+    """能从 typed 产物直接举证的一次人工裁决；没有就必须为 None。"""
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    state: str = Field(min_length=1)
+    decided_at: str = Field(min_length=1)
+
+
 class InboxItem(FrozenModel):
     """「待人工」清单的一条。通用 check 的 `unver` 不入列；
     TODO-24 中能通过人工证据消解的 `pending` / `UNVER` 以 `verification` 入列。
@@ -819,6 +833,15 @@ class InboxItem(FrozenModel):
     rule: str = Field(min_length=1)
     what: str = Field(min_length=1)
     how: str = Field(min_length=1)
+    attention: InboxAttention = 'pending'
+    delivery_effect: InboxDeliveryEffect = 'blocking'
+    decision: InboxDecision | None = None
+
+    @model_validator(mode='after')
+    def _retained_requires_a_typed_decision(self) -> InboxItem:
+        if (self.attention == 'reviewed_retained') != (self.decision is not None):
+            raise ValueError('reviewed_retained 与 typed decision 必须同进同出')
+        return self
 
 
 class InboxView(StrictModel):
@@ -831,6 +854,8 @@ class InboxView(StrictModel):
 
     items: list[InboxItem]
     counts: dict[str, int]
+    attention_counts: dict[str, int] = Field(default_factory=dict)
+    delivery_counts: dict[str, int] = Field(default_factory=dict)
     total: int = Field(ge=0)
     wontfix: int = Field(ge=0)
 
@@ -845,6 +870,19 @@ class InboxView(StrictModel):
             got[item.kind] = got.get(item.kind, 0) + 1
         if any(self.counts[k] != got.get(k, 0) for k in self.counts):
             raise ValueError('counts 与 items 的分组计数不一致')
+        attention = {key: 0 for key in INBOX_ATTENTION}
+        delivery = {key: 0 for key in INBOX_DELIVERY_EFFECT}
+        for item in self.items:
+            attention[item.attention] += 1
+            delivery[item.delivery_effect] += 1
+        if not self.attention_counts:
+            self.attention_counts = attention
+        if not self.delivery_counts:
+            self.delivery_counts = delivery
+        if self.attention_counts != attention:
+            raise ValueError('attention_counts 与 items 不一致')
+        if self.delivery_counts != delivery:
+            raise ValueError('delivery_counts 与 items 不一致')
         return self
 
 

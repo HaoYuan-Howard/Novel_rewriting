@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.orchestration import (
-    AgentRunEvent, AgentRunStart,
+    AgentDeliveryOutcome, AgentRunEvent, AgentRunStart,
 )
 from novel import paths
 from novel.orchestrator import agent, jobs
@@ -175,6 +175,8 @@ def test_append_read_fold_roundtrip(base):
     assert rec.state == 'ok' and rec.exit_code == 0
     assert rec.start.authorized is True
     assert rec.start.egress_authorized is True
+    assert rec.outcome is not None and rec.outcome.state == 'unknown'
+    assert '历史 ended 事件' in rec.outcome.reason
 
 
 def test_exit_one_is_landed_red_not_agent_process_failure(base):
@@ -220,7 +222,45 @@ def test_start_with_fake_spawn(base):
     assert done.state == 'ok' and done.exit_code == 0
     assert done.start.authorized is True
     assert done.start.egress_authorized is False
+    assert done.start.code_version
+    assert done.outcome is not None and done.outcome.state == 'stopped'
     assert 'fake run' in agent.run_log_path(base, rec.run_id).read_text('utf-8')
+
+
+def test_successful_agent_records_the_independent_delivery_outcome(base, monkeypatch):
+    from novel.orchestrator import delivery
+
+    monkeypatch.setattr(
+        delivery, 'assess',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='ready_with_disclosures', reason='强闸已过，保留语义披露',
+            checked_at=123))
+
+    rec = agent.start(base, '42', authorized=True, egress_authorized=True,
+                      spawn=_ok_spawn)
+    assert agent.wait(rec.run_id, 10)
+    [done] = agent.records(base)
+    assert done.state == 'ok'
+    assert done.outcome is not None
+    assert done.outcome.state == 'ready_with_disclosures'
+    assert done.outcome.reason == '强闸已过，保留语义披露'
+
+
+def test_delivery_verifier_crash_is_unknown_but_never_loses_the_ended_event(
+        base, monkeypatch):
+    from novel.orchestrator import delivery
+
+    monkeypatch.setattr(
+        delivery, 'assess',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('synthetic verifier crash')))
+
+    rec = agent.start(base, '42', authorized=True, egress_authorized=True,
+                      spawn=_ok_spawn)
+    assert agent.wait(rec.run_id, 10)
+    [done] = agent.records(base)
+    assert done.state == 'ok' and done.ended is not None
+    assert done.outcome is not None and done.outcome.state == 'unknown'
+    assert 'synthetic verifier crash' in done.outcome.reason
 
 
 def test_one_agent_per_book(base):

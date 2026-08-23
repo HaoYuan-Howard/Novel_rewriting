@@ -79,7 +79,10 @@ def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(box, ca
               '--base', str(box.root))
 
     assert rc == X.OK
-    template = GlobalReviewDecisionSet.model_validate_json(capsys.readouterr().out)
+    template_raw = json.loads(capsys.readouterr().out)
+    assert template_raw['_schema_version'] == 1
+    template = GlobalReviewDecisionSet.model_validate(decode_artifact(
+        'stage2/global_review_decisions.json', template_raw).payload)
     review = GlobalReview.model_validate(decode_artifact(
         'stage2/global_review.json', box.read('stage2/global_review.json')).payload)
     current = {item.item_id: item for item in review.items}
@@ -88,6 +91,73 @@ def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(box, ca
     assert all(row.expected_subject_sha256 == current[row.item_id].subject_sha256
                and row.evidence == current[row.item_id].evidence
                for row in template.decisions)
+
+
+def test_stage2_review_workpack_is_read_only_and_never_auto_decides(box, capsys):
+    """workpack 只缩小人工阅读面；生成它不能顺手改变任何正式字节。"""
+    before = {p.relative_to(box.dir).as_posix(): p.read_bytes()
+              for p in box.dir.rglob('*') if p.is_file()}
+
+    rc = _run('run', 'stage2.global', box.sid, '--emit-review-workpack',
+              '--base', str(box.root))
+
+    assert rc == X.OK
+    workpack = json.loads(capsys.readouterr().out)
+    assert workpack['kind'] == 'stage2-global-review-workpack-v1'
+    assert workpack['read_only'] is True and workpack['auto_decisions'] is False
+    assert workpack['items']
+    assert all('current_state' in row and 'review_note' in row
+               and isinstance(row['exact_literal_hits'], list)
+               for row in workpack['items'])
+    after = {p.relative_to(box.dir).as_posix(): p.read_bytes()
+             for p in box.dir.rglob('*') if p.is_file()}
+    assert after == before
+
+
+def test_r_2_15_blocks_downstream_paid_work_before_dispatch(box, monkeypatch, capsys):
+    """`R-2.15` 是 CLI 运行边界；换调用方也绕不过 Stage2 typed 闸。"""
+    import importlib
+
+    cli_main = importlib.import_module('novel.cli.main')
+    calls: list[str] = []
+    monkeypatch.setattr(
+        cli_main, '_dispatch',
+        lambda node, _ctx, _flags: calls.append(node) or X.OK)
+
+    rc = _run('run', 'stage2.blueprint', box.sid, '--yes',
+              '--base', str(box.root))
+    assert rc == X.TERMINAL_STATE
+    assert calls == []
+    assert 'stage2' in capsys.readouterr().err.lower()
+
+    sandbox.decide_global_review(box)
+    rc = _run('run', 'stage2.blueprint', box.sid, '--yes',
+              '--base', str(box.root))
+    assert rc == X.OK and calls == ['stage2.blueprint']
+
+
+@pytest.mark.parametrize('reached,status,want_rc', [
+    (True, 401, X.OK),
+    (False, None, X.TERMINAL_STATE),
+])
+def test_llm_transport_doctor_is_zero_cost_and_reports_transport_only(
+        monkeypatch, capsys, reached, status, want_rc):
+    from novel.llm import transport
+
+    monkeypatch.setattr(
+        transport, 'probe_transport',
+        lambda _cfg: transport.TransportProbe(
+            reached_http=reached, status=status,
+            kind='http' if reached else 'connection',
+            detail='synthetic transport result'))
+
+    rc = _run('doctor', '--llm-transport')
+
+    assert rc == want_rc
+    output = capsys.readouterr().out
+    assert '未发送正文或 API key' in output
+    assert ('HTTP reached' if reached else 'FAILED') in output
+    assert 'synthetic transport result' in output
 
 
 #: **每一个** (0 成本 flag, 接受它的节点) 配对——不是每个 flag 取一个代表。

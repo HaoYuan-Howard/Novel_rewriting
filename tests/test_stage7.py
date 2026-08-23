@@ -597,6 +597,27 @@ def test_apply_edit_invalidates_approval_and_retires_the_old_delivery(box):
     assert archived.read_bytes() == old
 
 
+def test_validate_edit_runs_the_real_judge_without_writing_any_byte(box):
+    raw = box.read('stage7/name_map.json')
+    cid = raw['characters'][0]['char_id']
+    box.write('stage7/name_map_edit.json', {
+        'character_patches': [{
+            'char_id': cid,
+            'reason': '只读预检，不得覆盖正式人物表或退休成书',
+        }],
+    })
+    before = {p.relative_to(box.dir).as_posix(): p.read_bytes()
+              for p in box.dir.rglob('*') if p.is_file()}
+
+    art, report = rename.run_validate_edit(_ctx(box), '')
+
+    after = {p.relative_to(box.dir).as_posix(): p.read_bytes()
+             for p in box.dir.rglob('*') if p.is_file()}
+    assert after == before
+    assert next(c for c in art.characters if c.char_id == cid).reason.startswith('只读预检')
+    assert report.node == 'stage7.rename'
+
+
 def test_a_clean_map_lands_and_the_gate_stays_open(box, monkeypatch):
     """同一条路，干净的那一份**照常落盘**——闸门不许把合法产出也拦住。"""
     clean = _model_out_from_disk(box, break_it=False)

@@ -106,6 +106,26 @@ def apply_subs(text: str | None, subs: dict[str, str],
     return ''.join(out), counts, claimed
 
 
+def unclaimed_residual_keys(text: str,
+                            keys: dict[str, str] | set[str] | frozenset[str],
+                            claimed: list[tuple[int, int]]) -> set[str]:
+    """返回落在替换器认领区间之外的键。
+
+    不能直接写 ``key in text``：替换结果本身可能合法地包含旧键字面。例如门牌号
+    ``001`` 会出现在恒等基线生成的 ``⟦char_001_00⟧`` 占位符里；那段区间是
+    替换器刚刚写出的，不是未替换残留。认领坐标是 `apply_subs` 的既有契约，
+    正式改名与恒等预检必须共用这一把尺子。
+    """
+    residual: set[str] = set()
+    for key in keys:
+        for match in re.finditer(re.escape(key), text):
+            if not any(start <= match.start() and match.end() <= end
+                       for start, end in claimed):
+                residual.add(key)
+                break
+    return residual
+
+
 def surface_hits(universe: set[str] | frozenset[str],
                  targets: list[str] | tuple[str, ...]) -> Counter:
     """每个称呼在**替换目标**里的独立命中数（单次扫描，最长优先）。

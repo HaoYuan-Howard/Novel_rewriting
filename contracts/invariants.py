@@ -105,6 +105,13 @@ STATUS: Final = ('ok', 'hit', 'unver', 'skipped')
 #: 重启前它是死是活我们真的不知道。
 JOB_STATE: Final = ('running', 'ok', 'landed_red', 'failed', 'unknown')
 
+#: agent 外层进程结束后对**交付盘面**做的独立判定。它不能复用 `JOB_STATE`：
+#: `exit 0` 只证明 headless agent 自己正常退出，不证明 Stage2 已逐项 PASS、终审包
+#: 已存在或成书仍可下载。`unknown` 专门承接旧事件与终验自身无法完成的情况。
+AGENT_DELIVERY_OUTCOME: Final = (
+    'ready', 'ready_with_disclosures', 'stopped', 'failed', 'unknown',
+)
+
 #: 作业记录是一串**事件**，`JOB_STATE` 是它们折叠出来的**视图**（`_orchestration.md` §2.1）。
 #:
 #: 【为什么是事件流而不是一份被改写的 JSON】原型每次状态变化都 `os.replace` 整份
@@ -1141,6 +1148,11 @@ DERIVED_ALIAS_SUFFIXES: Final = (
     '姐姐', '哥哥', '妹妹', '弟弟', '姊姊', '兄长', '阿姐', '阿哥', '姑娘', '公子',
 )
 
+#: 一条待办此刻是否还等人动作。`reviewed_retained` 表示 typed 决策已存在，
+#: 记录因审计/披露而保留；它与“是否阻塞交付”是正交轴。
+INBOX_ATTENTION: Final = ('pending', 'reviewed_retained')
+INBOX_DELIVERY_EFFECT: Final = ('blocking', 'disclosure')
+
 #: 成书的两个分隔常量。**章分隔＝裸阿拉伯数字单独成行**，不写「第 N 章」。
 #: ⚠ 这是**产品形态，不是可调参数**——写成开关就是又一个没有守卫的自由变量。
 BOOK_CHAPTER_SEP: Final = '{}'
@@ -1199,14 +1211,16 @@ FREE_ENTRIES: Final = {
     '--retain-pretrim': ('人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，'
                          '0 次 LLM 调用（不是 0 人工成本）'),
     '--emit-edit-template': '向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘',
+    '--validate-edit': '按 stage7 apply-edit 的同一构建与判定链预检人工编辑，不写盘',
     '--emit-review-template': ('向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的'
                                '安全 UNVER 决策骨架，不写盘'),
+    '--emit-review-workpack': ('向 stdout 输出 Stage2 逐项主体与原文精确命中上下文；'
+                               '只辅助人工核验，不自动做 PASS/FAIL'),
     '--adopt-residual': '显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链',
 }
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
 PAID_FLAGS: Final = {
-    '--full-extract': 'stage2 全局底座、逐章蓝图与 stage3 文风画像并发首跑',
     '--shallow-rest': 'stage5 把未选为深度重构的其余章节交给浅层写手',
     '--repair-surface-habits': 'stage3 表层习惯的定向返工——它要再调一次模型',
     '--revise': 'stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手',
@@ -1281,6 +1295,7 @@ VALUED_FLAGS: Final = {
     #   两个口径分家（skill 现场记录 FN-016）。这一行是人唯一会读到的说明。
     '--apply-edit': '人工改好的候选稿路径（必填；相对路径相对**书目录**，'
                     '如 stage7/name_map_edit.json，也接受书目录内的绝对路径）',
+    '--validate-edit': '要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
     '--apply-candidate-plan': '审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）',
@@ -1339,7 +1354,6 @@ VALUED_FLAGS: Final = {
 #: 已经核实的节点特例放在下方 `NODE_WRITE_EFFECTS`；没登记的其余
 #: 节点仍由 `write_effect` 保守判为会写。
 WRITE_EFFECTS: Final = {
-    '--full-extract': '并发写 stage2/global_grounding.json、stage2/chapter_blueprints.json 与 stage3/style_grounding.json',
     '--shallow-rest': '按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿',
     # ── 只看不动的四条（`FREE_ENTRIES` 自述「不写盘」）──
     '--dry-run': '',
@@ -1351,7 +1365,9 @@ WRITE_EFFECTS: Final = {
     #   （`Q-3`）。实测确认过一次才补上这一行。
     '--names-only': '',
     '--emit-edit-template': '',
+    '--validate-edit': '',
     '--emit-review-template': '',
+    '--emit-review-workpack': '',
     '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有成书',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
@@ -1524,9 +1540,9 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   八层里 stage0/3/4/5/6/7 六层都已有这条 0 成本人工路，本层是最后一个缺口。
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
                                  flags=('--renormalize', '--purge-role', '--resample',
-                                         '--revalidate', '--full-extract',
+                                         '--revalidate',
                                          '--apply-edit', '--review-decisions',
-                                         '--emit-review-template',
+                                         '--emit-review-template', '--emit-review-workpack',
                                          '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,
                                            artifact_paths.STAGE2_GLOBAL_REVIEW)),
@@ -1648,7 +1664,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表',
                                   flags=('--dry-run', '--check-only', '--identity',
                                          '--recheck', '--apply-edit', '--revalidate',
-                                         '--emit-edit-template', '--adopt-residual',
+                                          '--emit-edit-template', '--adopt-residual',
+                                          '--validate-edit',
                                          '--actor', '--reason'),
                                   produces=(artifact_paths.STAGE7_NAME_MAP,)),
     # ⚠⚠ 本层没有候选序号：一本书只有一份人物表，定稿是「给整份盖章」。
@@ -1729,10 +1746,11 @@ PIPELINE_STEPS: Final = tuple(NODES)
 #: `contracts/schema/orchestration.py::ProgressEvent` 的后置校验钉住。
 PROGRESS_PHASES: Final = ('start', 'end')
 
-#: 一步的四种观察态。**它是观察不是判定**（`R-13.6`）：`ok` 只说明「那条命令
+#: 一步的五种观察态。**它是观察不是判定**（`R-13.6`）：`ok` 只说明「那条命令
 #: exit 0」，而 exit 0 ≠ 合格（`F-087`）——「这层过没过」的唯一判官仍是
-#: check 报告的 badge。消费方（路由/界面）不许把信标渲染成判定。
-BEACON_STATES: Final = ('pending', 'running', 'ok', 'failed')
+#: check 报告的 badge。`landed_red` 保留 exit 1 的「已落盘但判定不通过」，
+#: 不许与 exit 2 / 3 / 70 的「没跑成」压成 `failed`。
+BEACON_STATES: Final = ('pending', 'running', 'ok', 'landed_red', 'failed')
 
 #: agent 代跑事件的三态。与 `JOB_EVENT_KINDS` 分开：这边没有 `step`
 #: （agent 进程内部干什么不由我们记——那是信标的事），只有生死与改判。

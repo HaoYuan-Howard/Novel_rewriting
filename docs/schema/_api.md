@@ -432,7 +432,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失）。
 `counts` / `total` / `items` 三者相互一致由后置条件钉死。
 
-`InboxItem` 的四条纪律：
+`InboxItem` 的六条纪律：
 
 - `kind`：八值 `INBOX_KIND`。`repairable` 是有确定本地修法的硬命中；
   `verification` 是证据不足但可由人工消解的 `UNVER`。其余不可操作的 `UNVER`
@@ -443,6 +443,10 @@ stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失�
 - `chapter`：**输出章**口径，可空——书级 / 整份产物 = `null`，
   后端不给书级条目编一个假章号。
 - `wontfix`（视图顶层）：被人豁免的条数——豁免不删结论、不进清单，单独计数。
+- `attention`：`pending` / `reviewed_retained`。后者必须同时带 typed `decision`
+  （actor/reason/subject SHA-256/state/decided_at）；不能凭终审包散文或 agent 自述补推。
+- `delivery_effect`：`blocking` / `disclosure`，与 attention 正交。顶层
+  `attention_counts`、`delivery_counts` 都由 items 分组并由后置条件核一致；总数不再冒充失败数。
 
 路由侧：对每个已移植层各跑一次 0 成本复检（stage2/4 会重算判据）——**纯读**，
 大书上是秒级。**登记不优化**：盘上 3 本无压力，全语料嫌慢时在路由层加缓存，

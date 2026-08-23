@@ -1025,12 +1025,23 @@ export interface InboxItem {
   rule: string
   what: string
   how: string
+  attention: 'pending' | 'reviewed_retained'
+  delivery_effect: 'blocking' | 'disclosure'
+  decision: {
+    actor: string
+    reason: string
+    subject_sha256: string
+    state: string
+    decided_at: string
+  } | null
 }
 
 export interface InboxResponse {
   items: InboxItem[]
   /** 八键全出（0 也要出） */
   counts: Record<InboxKind, number>
+  attention_counts: Record<'pending' | 'reviewed_retained', number>
+  delivery_counts: Record<'blocking' | 'disclosure', number>
   total: number
   wontfix: number
 }

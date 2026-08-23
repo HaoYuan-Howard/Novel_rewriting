@@ -21,6 +21,9 @@
   别书的作业同时在跑不构成障碍（互斥只落在各自 `sid`），也不需要等它。
 - 对长命令使用宿主提供的持久句柄或足够长的前台超时。每 60 秒以内给出一次状态更新，不用短 timeout 杀进程来模拟更新。
 - 任何宿主中断后先运行 `state`/`inbox`，不要从聊天记忆推断落盘位置。
+- 真跑前先执行 `<PY> -X utf8 -u -m novel.cli doctor --llm-transport`。它使用正式代理与超时，
+  但不发送正文、API key，也不产生模型调用；收到任意 HTTP 状态即证明 DNS/TCP/TLS 通路成立。
+  `SSL UNEXPECTED_EOF` 等连接错误应在这里先复现并修代理/TUN 进程环境，不要烧一次正文请求来诊断网络。
 
 「打点串联」与「重定向后过滤」合起来在 PowerShell 里的写法（把数十 KB 的报告压到个位数行，
 保留全部命中、非 `ok` 状态、来源与告警行）：
@@ -119,6 +122,9 @@ shell 的而非真跑的。判断真伪只看三样，全部指向盘上而不�
 - 标准 `approval` 由本 skill 代批；`redo/unknown` 在两项授权和可验证恢复路径都具备时自行处置，否则安全停止。
 - 只在 launcher 授权的 base 范围写人工输入和终审包。权限拒绝说明动作不在允许面，不换 shell 或路径绕过。
 - 进程日志与生死记录由 launcher 管理；不要手改 `_service/agent_runs.jsonl` 或日志来改变状态。
+- launcher 记录的进程 `state` 与交付 `outcome` 是两根轴：只有 outcome 为 `ready` 或
+  `ready_with_disclosures` 才表示服务端已从盘面复验交付；`exit 0` 本身只表示 Agent 正常退出。
+- 启动 prompt 带代码指纹。运行期间指纹变化时停止；结束终验会再次比较，跨版本 run 不会被判 ready。
 
 当前 launcher 使用两个独立字段：`authorized` 只表示付费授权，`egress_authorized`
 只表示正文外发授权。新 API 请求对 `egress_authorized` 的产品默认值为 `true`，UI 也默认勾选；

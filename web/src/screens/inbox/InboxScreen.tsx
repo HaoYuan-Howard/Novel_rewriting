@@ -157,6 +157,12 @@ export function InboxScreen() {
             <>
               <div className="flex flex-wrap items-center gap-10">
                 <span className="text-section font-semibold">共 {d.total} 条待人工</span>
+                <span className="text-tag text-ink-4">
+                  尚待处理 {d.attention_counts.pending} · 已裁决保留 {d.attention_counts.reviewed_retained}
+                </span>
+                <span className="text-tag text-ink-4">
+                  阻塞交付 {d.delivery_counts.blocking} · 仅披露 {d.delivery_counts.disclosure}
+                </span>
                 {d.wontfix ? (
                   <span className="text-tag text-ink-4">另有 {d.wontfix} 条裁决为「不改」</span>
                 ) : null}
@@ -221,6 +227,12 @@ export function InboxScreen() {
                             {i.chapter ? chNo(i.chapter) : '全书'}
                           </Mono>
                           <Mono className="text-micro text-ink-5">{i.stage}</Mono>
+                          <Mono className="rounded-tag bg-inset px-7 py-1 text-micro text-ink-4">
+                            {i.attention === 'pending' ? '尚待处理' : '已裁决·记录保留'}
+                          </Mono>
+                          <Mono className="rounded-tag bg-inset px-7 py-1 text-micro text-ink-4">
+                            {i.delivery_effect === 'blocking' ? '阻塞交付' : '仅披露'}
+                          </Mono>
                           <span className="text-body font-semibold">{i.what}</span>
                           <Mono className="ml-auto text-micro text-ink-5">{i.rule}</Mono>
                           <span className="text-micro text-ink-4">

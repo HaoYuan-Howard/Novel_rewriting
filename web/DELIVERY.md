@@ -38,6 +38,9 @@ npm run seams        # 数据缝 / 设计缝红线（见下）
 权限白名单：Bash 仅 conda python 前缀、写仅 base 目录内——见
 `novel/orchestrator/agent.py` 模块头的 Spike 结论）。进度在 `/n/:sid/run` 实时跟踪，
 那里有 agent 进程状态、日志尾部与「熄火」按钮（`POST /api/agent/runs/:id/stop`）。
+进程状态与交付终验是两条正交状态：exit 0 只显示“进程完成”；服务端另以启动/结束代码指纹、
+Stage2 typed 闸、当前成书、终审包和 inbox 阻塞轴判 `ready` / `ready_with_disclosures` /
+`stopped` / `failed` / `unknown`，界面不得从退出码补推“可下载”。
 互斥两个方向都拦：agent 在跑时起任何 API 作业 409，反之亦然。
 
 ---

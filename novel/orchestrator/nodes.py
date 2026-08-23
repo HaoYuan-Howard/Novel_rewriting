@@ -139,10 +139,6 @@ def validate_run(node: str, flags: Sequence[str] = (),
         node == 'stage5.write'
         and bool({'--deep', '--shallow-rest'} & set(tokens))
     )
-    if node == 'stage2.global' and '--full-extract' in tokens:
-        if set(tokens) != {'--full-extract'}:
-            raise UnsupportedRunMode(
-                'stage2 --full-extract cannot be combined with repair flags')
     if node == 'stage2.global' and '--resample' in tokens:
         if set(tokens) != {'--resample'}:
             raise UnsupportedRunMode(
@@ -502,15 +498,6 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
     first = _step(node, sid, flags, base=base, mode=mode,
                   placeholders=placeholders)
     steps = [first]
-    if (follow_check and node == 'stage2.global'
-            and '--full-extract' in flag_tokens(flags)):
-        steps.append(_step(
-            'stage2.blueprint', sid, ['--check-only'], base=base, mode=None,
-            note=FOLLOW_CHECK_NOTE))
-        steps.append(_step(
-            'stage3.style', sid, ['--check-only'], base=base, mode=None,
-            note=FOLLOW_CHECK_NOTE))
-        return steps
     if (follow_check and first.writes
             and '--check-only' in NODES[node].flags
             and '--check-only' not in flag_tokens(flags)):

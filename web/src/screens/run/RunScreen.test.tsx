@@ -1,6 +1,7 @@
 import { api } from '@/api/endpoints'
 import { mockApi, SAMPLE_SID } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
+import { JOB } from '@/constants/vocabulary'
 import type { CheckReport } from '@/types/stages'
 import { act, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -8,6 +9,30 @@ import { renderRoute } from '@/test/render'
 import { RunScreen } from './RunScreen'
 
 describe('RunScreen check composition', () => {
+  it('renders exit 1 as landed_red instead of a failed command', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    run.steps[0] = { ...run.steps[0], beacon: 'landed_red', last_exit: 1 }
+    run.events_tail = [{
+      ts: 1,
+      sid: SAMPLE_SID,
+      node: run.steps[0].node,
+      phase: 'end',
+      exit_code: 1,
+      note: null,
+    }]
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    expect(await screen.findByText('landed_red 已落盘但有红项')).toBeInTheDocument()
+    expect(screen.queryByText('failed 失败')).not.toBeInTheDocument()
+    expect(screen.getAllByText('exit 1').some(
+      (row) => row.style.color === JOB.landed_red.color,
+    )).toBe(true)
+  })
+
   it('shows authoritative badges and counts while unavailable checks stay unknown', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     const base = await mockApi.getCheck(SAMPLE_SID, 'stage5')

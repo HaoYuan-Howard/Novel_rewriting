@@ -54,6 +54,29 @@ def _approved_art():
     return art
 
 
+@pytest.mark.parametrize('entry', [assemble.read_current_book, assemble.run_assemble])
+def test_r_2_15_stage2_gate_precedes_every_stage7_delivery_read_or_write(
+        monkeypatch, entry):
+    """`R-2.15` 同时守组装与下载；旧 txt 的存在不能绕过后来变红的事实闸。"""
+    from novel.stages.stage2 import global_review
+
+    seen: list[object] = []
+
+    def closed(ctx):
+        seen.append(ctx)
+        raise ApprovalRequired('stage2 typed review 未逐项 PASS')
+
+    monkeypatch.setattr(global_review, 'require_approved', closed)
+    monkeypatch.setattr(
+        assemble, 'ArtifactStore',
+        lambda _ctx: (_ for _ in ()).throw(AssertionError('Stage2 闸后才可读 Stage7')))
+    ctx = SimpleNamespace()
+
+    with pytest.raises(ApprovalRequired, match='stage2 typed review'):
+        entry(ctx)
+    assert seen == [ctx]
+
+
 def test_an_unadjudicated_invalid_blocks_delivery_and_says_where_the_draft_is():
     """⭐ `.INVALID` 挡着 ⇒ `GateBlocked`，**不是** `ApprovalRequired`。
 
@@ -292,7 +315,9 @@ def test_stage7_approve_restores_map_and_delivery_when_map_postcondition_fails(
     (False, 'stale'),
 ])
 def test_stage7_assemble_restores_map_and_delivery_on_any_half_commit(
-        monkeypatch, fail_map_write, book_freshness):
+            monkeypatch, fail_map_write, book_freshness):
+    from novel.stages.stage2 import global_review
+    monkeypatch.setattr(global_review, 'require_approved', lambda _ctx: None)
     art = _atomic_map()
     store = _TransactionalStore(
         art, fail_map_write=fail_map_write, book_freshness=book_freshness)

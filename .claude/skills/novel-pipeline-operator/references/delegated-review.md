@@ -5,6 +5,7 @@
 - [委托边界](#委托边界)
 - [通用裁决格式](#通用裁决格式)
 - [stage0 代批](#stage0-代批)
+- [Stage2 逐项复核](#stage2-逐项复核)
 - [stage6 代批](#stage6-代批)
 - [stage7 代批](#stage7-代批)
 - [成书逐字对账](#成书逐字对账)
@@ -69,6 +70,23 @@
 4. 顺带核一次结构分母（总行数/非空行、独占数字行的章号集合、第一个章号之前是否为文案区）。
 
 零命中要写成"扫了 N 个模式、0 命中"，不能写成"没问题"——前者有分母，后者没有。
+
+## Stage2 逐项复核
+
+`stage2.global` 落盘后立即运行 `--emit-review-workpack`。workpack 把每一项的当前主体、
+注册证据和原文精确命中上下文放在一起，但它明确不自动做决定：0 命中不等于 PASS，
+集合完整性项必须通读全书反向寻找漏项。
+
+随后用 `--emit-review-template` 取得带当前 schema version、逐项 subject SHA-256 的骨架，
+按以下口径逐项替换默认 UNVER：
+
+1. `PASS`：主体与原文逐项一致，且集合完整性已做正向与反向核对；理由写明分母和核验位置。
+2. `FAIL`：存在可指向的冲突、错抽或漏抽；先走 typed Stage2 编辑/重建，再生成新模板。不能用“已知问题”把 FAIL 当成披露放行。
+3. `UNVER`：证据不足以安全判断；如实保留并以 `stopped` 结束。Agent 代批权限不包括把未知改写成已通过。
+
+提交 `--review-decisions` 后重新读取当前 review：只有评测面 current 且每一项都是 PASS，
+才能运行 `stage2.blueprint`、`stage3.style` 以及后续付费节点。CLI、组装与下载都会重复执行同一道硬闸；
+外层 Agent `exit 0` 不会覆盖该结论。
 
 ## stage6 代批
 
@@ -147,7 +165,9 @@ freshness。确为同输入非确定性时采信更严格的一轮，不用后�
    以及那条 `unit` 是不是真的人物称呼——**只采纳 high**。低置信档里混着该姓字的普通词用法
    （判据自己说这类假阳靠调阈值消不掉，中文没有词边界），照单全收会把正文改坏。
 7. 先运行 `stage7.rename --emit-edit-template` 取当前注册的 `NameMapEdit` 骨架；人工编辑
-   只写书目录内 `stage7/name_map_edit.json`，经 `stage7.rename --apply-edit <绝对路径>` 重判。
+   只写书目录内 `stage7/name_map_edit.json`。提交前先跑
+   `stage7.rename --validate-edit <绝对路径>`；它与 apply 共用完整构建/判定链但不归档、不覆盖、
+   不退休成书。预检达到预期后再经 `stage7.rename --apply-edit <绝对路径>` 正式落盘。
 
 任何映射编辑后都重新取当前决策面 SHA-256，运行
 `stage7.approve --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` 与 `stage7.assemble`，

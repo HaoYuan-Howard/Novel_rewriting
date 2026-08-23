@@ -19,7 +19,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 |---|---|---|---|---|
 | FN-001 | stage0 批准前的预期红灯 | contract-confirmed | `s0_approval`, exit 1 | `stage0.approve` |
 | FN-002 | 重号与缺号章节 | contract-confirmed | `s1_chapter_labels` | 核对源文标记与 ordinal，不改正文 |
-| FN-003 | `--full-extract` 部分完成 | contract-confirmed | `--full-extract` | 分别 preview 缺失的 `stage2.blueprint` / `stage3.style` |
+| FN-003 | 旧并发首跑留下部分完成盘面 | contract-confirmed | Stage2 下游缺失 | 先完成全局逐项复核，再分别 preview 缺失节点 |
 | FN-004 | blueprint 锚点失败要先判原字节 | observed | `hinge_anchor_void`, `verbatim_failed` | `--chapters`（付费）或 finding 明列的免费 fix |
 | FN-005 | 钱已调用但目标产物缺失 | contract-confirmed | exit 70, 账本有调用而产物不在盘 | 完全相同参数重跑，命中 `.llm_cache` |
 | FN-006 | 语义结论按文本 sha1 绑定，不跟机械验收的轮次走 | contract-confirmed | `stage6.semantic`, `semantic_review_seq` | 文本未变就**不要**重跑；变了才重跑 |
@@ -69,19 +69,19 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 依据：`novel/stages/stage1/checks.py::check` 产出的 `s1_chapter_labels`（读的是**原始标签**，
   不是下游 ordinal）；成书侧由代批契约的逐字对账第 1 项复核。
 
-### FN-003 · `--full-extract` 部分完成
+### FN-003 · 旧并发首跑留下部分完成盘面
 
 - 状态：`contract-confirmed`
-- 触发：`stage2.global --full-extract` 在 global 或后续落盘闸门处停止，blueprint/style 缺失。
+- 触发：存量盘面来自已下线的并发首跑，global/style/blueprint 只有部分正式落盘。
 - 判断：组合命令不是原子事务；已经正式落盘的上游不应为补齐下游而重复付费。
   已观测到的一种形态：`stage2.global` 与 `stage3.style` **都正式落盘**，只有逐章蓝图被拦成
   `.INVALID`，而它的逐章生成事件全部 `succeeded`、`failed` 为零。
   ⇒ **逐章生成成功不等于落盘**：闸门是在合并落盘那一步判的，
   所以"每章都绿"与"整条命令 exit 2"完全可以同时成立，别据前者推断产物已就位。
-- 处置：先 `state` 看清哪几份已 fresh，只补缺的那份，不整组重跑。
-  按 finding 修复活动失败，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`。
+- 处置：先 `state` 看清哪几份已 fresh；先把 current Stage2 全局复核逐项收成 PASS，
+  再按 finding 修复活动失败并分别 preview 缺失的 `stage2.blueprint`、`stage3.style`。
 - 验证：两份 follow-check 都 fresh 且无 HARD，`state` 显示 stage2/stage3 完成。
-- 依据：`novel/orchestrator/nodes.py::build_steps` 的 full-extract 追跑规则与产物存在性。
+- 依据：当前 CLI 的 Stage2 全局硬闸与产物存在性；并发入口已经从注册表删除。
 
 ### FN-004 · blueprint 锚点失败要先判原字节
 
@@ -235,8 +235,10 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   stage6 只读正式产物，候选级 finding 在 `hook.INVALID.json` 的 `candidates[].findings` 里（见 FN-008）；
   stage7 也只读正式产物。**stage4 的 `.INVALID` 不带 findings**（schema 无此字段），
   所以那一层的逐条证据只能从报告拿，拿不到就是读法用错了。
-- 处置：被拦下后**第一步就是 `--check-only`** 取逐条命中，再按 finding 的 `fix`/`how` 在
-  允许写入面上修，最后 `--revalidate --actor <ACTOR> --reason <text>` 同轮重判提升。
+- 处置：被拦下后**第一步就是该 stage 注册的复检节点加 `--check-only`** 取逐条命中；
+  `stage2.global` 自身不接受该 flag，要跑 `stage2.blueprint --check-only`（它会同时读取
+  global 问题稿与逐章稿）。再按 finding 的 `fix`/`how` 在允许写入面上修，最后
+  `--revalidate --actor <ACTOR> --reason <text>` 同轮重判提升。
   只有正式稿与 `.INVALID` 两份都不在盘上才是真的“先跑那一层”。
   不要因为终态只给了 rule id 就盲改、自行复算判据或停机。
 - 验证：`--revalidate` 打印的完整报告里该 rule 归零，`state` 判该层完成，活动 `.INVALID` 已归档。

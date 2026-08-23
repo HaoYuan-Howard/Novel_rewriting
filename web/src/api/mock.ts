@@ -459,24 +459,7 @@ function previewStepsOf(req: JobRequest): JobPreview['steps'] {
       },
     ]
   }
-  if (req.kind !== 'stage2.global' || !req.extra?.includes('--full-extract')) {
-    return [first]
-  }
-  return [
-    first,
-    {
-      label: 'stage2 章蓝图 · 追跑校验',
-      paid: false,
-      writes: '',
-      argv: checkArgv('stage2.blueprint'),
-    },
-    {
-      label: 'stage3 文风 · 追跑校验',
-      paid: false,
-      writes: '',
-      argv: checkArgv('stage3.style'),
-    },
-  ]
+  return [first]
 }
 
 function plainMockReport(report: CheckReport): CheckReport {
@@ -633,8 +616,8 @@ const SPAWN_ON_APPROVE: Partial<Record<GateKey, ActionRef[]>> =
   {
     s1: [{
       kind: 'stage2.global',
-      label: '并发抽取 stage2 + stage3',
-      extra: ['--full-extract'],
+      label: '生成 stage2 全局底座；完成后逐项人工复核',
+      extra: null,
     }],
     s2: [{ kind: 'stage4.plan', label: 'stage4 重构计划', extra: null }],
     s5: [{ kind: 'stage6.hook', label: 'stage6 开篇文案（产三候选）', extra: null }],
@@ -846,12 +829,40 @@ function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
       prompt: preview.prompt,
       authorized: preview.authorized,
       egress_authorized: preview.egress_authorized,
+      code_version: 'mock-code-version',
     },
     started: Math.floor(Date.now() / 1000),
     ended: null,
     exit_code: null,
     state: 'running',
     note: null,
+    outcome: null,
+  }
+}
+
+function mockInbox(): InboxResponse {
+  const legacy = fx<InboxResponse>('inbox.json')
+  const items = legacy.items.map((item) => ({
+    ...item,
+    attention: item.attention ?? ('pending' as const),
+    delivery_effect:
+      item.delivery_effect ??
+      (item.kind === 'human_only' || (item.kind === 'verification' && item.stage === 'stage6')
+        ? ('disclosure' as const)
+        : ('blocking' as const)),
+    decision: item.decision ?? null,
+  }))
+  return {
+    ...legacy,
+    items,
+    attention_counts: {
+      pending: items.filter((item) => item.attention === 'pending').length,
+      reviewed_retained: items.filter((item) => item.attention === 'reviewed_retained').length,
+    },
+    delivery_counts: {
+      blocking: items.filter((item) => item.delivery_effect === 'blocking').length,
+      disclosure: items.filter((item) => item.delivery_effect === 'disclosure').length,
+    },
   }
 }
 
@@ -1073,7 +1084,7 @@ export const mockApi: Api = {
       }
     }),
 
-  getInbox: (sid) => bookOnly(sid, `/novels/${sid}/inbox`, () => fx<InboxResponse>('inbox.json')),
+  getInbox: (sid) => bookOnly(sid, `/novels/${sid}/inbox`, mockInbox),
 
   getStage6: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage6`, () => {

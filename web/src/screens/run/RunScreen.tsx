@@ -31,9 +31,9 @@ import { CheckBadge, GateChip, JobStateChip } from '@/components/vocab/Badges'
 import { cx } from '@/lib/cx'
 
 /**
- * 信标四态借用 JOB 的色与形：
+ * 信标五态借用 JOB 的色与形：
  * pending 借 unknown 的中性灰（空心虚线圆）——「还没跑到」和「不知道」都不是结论；
- * running / ok / failed 直接用 JOB 自己的文案。
+ * running / ok / landed_red / failed 直接用 JOB 自己的文案。
  * ok 念作「跑完了」：它只表示那条命令 exit 0，**绝不渲染成「合格 / 通过」**——
  * 判定只归各层屏的 badge（信标是观察轨迹，不是判据）。
  */
@@ -41,6 +41,7 @@ const BEACON: Record<RunBeacon, { token: JobStateToken; label: string }> = {
   pending: { token: JOB.unknown, label: 'pending 还没跑到' },
   running: { token: JOB.running, label: JOB.running.label },
   ok: { token: JOB.ok, label: JOB.ok.label },
+  landed_red: { token: JOB.landed_red, label: JOB.landed_red.label },
   failed: { token: JOB.failed, label: JOB.failed.label },
 }
 
@@ -80,6 +81,23 @@ function AuthorizationChip({ value, label }: { value: boolean | null; label: str
   )
 }
 
+const DELIVERY_LABEL = {
+  ready: '可交付',
+  ready_with_disclosures: '可交付·有披露',
+  stopped: '已停·未交付',
+  failed: '进程失败',
+  unknown: '交付未知',
+} as const
+
+function DeliveryChip({ outcome }: { outcome: NonNullable<import('@/types/agent').AgentRunRecord['outcome']> }) {
+  const ok = outcome.state === 'ready' || outcome.state === 'ready_with_disclosures'
+  return (
+    <span title={outcome.reason}>
+      <GateChip ok={ok} label={'交付终验：' + DELIVERY_LABEL[outcome.state]} />
+    </span>
+  )
+}
+
 /** 秒数 → 人读的「N 秒 / N 分 N 秒」。running 步的 elapsed 由后端算好下发，前端不掐表。 */
 function secs(n: number): string {
   if (n < 60) return n + ' 秒'
@@ -88,7 +106,12 @@ function secs(n: number): string {
 
 /** 信标事件一行：时间 / 节点 / 开始·结束 / 退出码 / 备注 */
 function EventRow({ e }: { e: RunEvent }) {
-  const bad = e.phase === 'end' && e.exit_code !== null && e.exit_code !== 0
+  const exitToken =
+    e.phase !== 'end' || e.exit_code === null || e.exit_code === 0
+      ? null
+      : e.exit_code === 1
+        ? JOB.landed_red
+        : JOB.failed
   return (
     <div className="flex items-baseline gap-10 border-b border-line-row px-18 py-8">
       <Mono className="flex-none text-mini text-ink-5">{when(e.ts)}</Mono>
@@ -97,7 +120,10 @@ function EventRow({ e }: { e: RunEvent }) {
       </Mono>
       <span className="flex-none text-tag text-ink-3">{e.phase === 'start' ? '开始' : '结束'}</span>
       {e.exit_code !== null ? (
-        <Mono className="flex-none text-mini" style={bad ? { color: JOB.failed.color } : undefined}>
+        <Mono
+          className="flex-none text-mini"
+          style={exitToken ? { color: exitToken.color } : undefined}
+        >
           exit {e.exit_code}
         </Mono>
       ) : null}
@@ -133,6 +159,7 @@ function AgentRunBlock() {
       ) : (
         <div className="flex flex-col gap-10 px-18 py-14">
           <div className="flex flex-wrap items-center gap-10">
+            {latest.outcome ? <DeliveryChip outcome={latest.outcome} /> : null}
             <JobStateChip state={latest.state} />
             <AuthorizationChip value={latest.start.authorized} label="付费授权" />
             <AuthorizationChip

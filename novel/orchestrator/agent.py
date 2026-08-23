@@ -47,10 +47,10 @@ from pathlib import Path
 from typing import BinaryIO, NamedTuple
 
 from contracts.schema.orchestration import (
-    AgentPending, AgentQueueView, AgentRejected, AgentRunEvent, AgentRunRecord,
-    AgentRunStart,
+    AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
+    AgentRunRecord, AgentRunStart,
 )
-from novel import paths
+from novel import paths, prov
 from novel.appendlog import append_line
 from novel.cli.exit_codes import CRASH
 from novel.errors import UpstreamMissing
@@ -110,7 +110,8 @@ def _posix_anchor(path: str | os.PathLike[str]) -> str:
 
 
 def build_prompt(sid: str, base: str | os.PathLike[str], *,
-                 authorized: bool, egress_authorized: bool) -> str:
+                 authorized: bool, egress_authorized: bool,
+                 code_version: str | None = None) -> str:
     """发给 agent 的提示词。两项授权原文都在这里，布尔字段只是机读摘要。
 
     核心构造函数故意不设默认值：API/UI 可以提供产品默认，但到达 prompt 边界时
@@ -121,6 +122,7 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
     猜一个名字——`state` 会打印书目录，届时按同一条规则得到同一个名字。
     """
     base_abs = os.path.abspath(os.fspath(base))
+    code_version = code_version or prov.code_version()
     py = Path(sys.executable).as_posix()
     novel_dir = paths.find_novel_dir(base_abs, sid)
     #: ⚠ 成书名**按书名派生**，不是固定的 `book.txt`——唯一落点是 `paths.book_txt_rel`。
@@ -153,6 +155,8 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
 按节点名/rule id 检索经验库。不要依赖旧版章节号或聊天记忆。
 
 任务：把 sid={sid} 这本书端到端跑到 `{book_target}`。
+本次代码指纹：`{code_version}`。运行期间若仓库代码变化，立即停下并在终审包披露；
+服务端结束终验也会比较这个指纹，跨版本运行不会被判为 ready。
 base 目录（--base 恒用下面这个绝对路径）：
 {base_abs}
 
@@ -281,13 +285,13 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
     for e in events:
         slot = acc.setdefault(e.run_id, {'start': None, 'started': None,
                                          'ended': None, 'exit_code': None,
-                                         'note': None})
+                                         'note': None, 'outcome': None})
         if e.run_id not in order:
             order.append(e.run_id)
         if e.kind == 'started':
             slot.update(start=e.start, started=e.ts)
         elif e.kind == 'ended':
-            slot.update(ended=e.ts, exit_code=e.exit_code)
+            slot.update(ended=e.ts, exit_code=e.exit_code, outcome=e.outcome)
         else:
             slot['note'] = e.note
     out: list[AgentRunRecord] = []
@@ -300,6 +304,10 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
                      'landed_red' if slot['exit_code'] == 1 else 'failed')
             if state == 'landed_red':
                 slot['note'] = slot['note'] or jobs.LANDED_RED_NOTE
+            if slot['outcome'] is None:
+                slot['outcome'] = AgentDeliveryOutcome(
+                    state='unknown', checked_at=slot['ended'],
+                    reason='历史 ended 事件没有交付终验载荷，不能从进程退出码补推可交付')
         elif run_id in live:
             state = 'running'
         else:
@@ -308,7 +316,7 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
         out.append(AgentRunRecord(
             run_id=run_id, start=slot['start'], started=slot['started'],
             ended=slot['ended'], exit_code=slot['exit_code'],
-            state=state, note=slot['note']))
+            state=state, note=slot['note'], outcome=slot['outcome']))
     return out
 
 
@@ -501,8 +509,10 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
     必查 `AGENT_REGISTRY`，锁一到手就不会有新的 API 作业插进来；已跑着的
     由 `records()` 那一查查出来。反过来先查后占会留一条竞争缝。
     """
+    code_version = prov.code_version()
     prompt = build_prompt(sid, base, authorized=authorized,
-                          egress_authorized=egress_authorized)
+                          egress_authorized=egress_authorized,
+                          code_version=code_version)
     argv = build_argv(prompt, base)
     run_id = jobs.new_job_id()
     key = lock_key(sid)
@@ -517,8 +527,9 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
         append(base, AgentRunEvent(
             run_id=run_id, kind='started', ts=int(time.time()),
             start=AgentRunStart(sid=sid, argv=list(argv), prompt=prompt,
-                                authorized=authorized,
-                                egress_authorized=egress_authorized)))
+                                 authorized=authorized,
+                                 egress_authorized=egress_authorized,
+                                 code_version=code_version)))
     except Exception:
         registry.release(key, run_id)
         raise
@@ -539,9 +550,23 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
                 fh.write(traceback.format_exc().encode('utf-8'))
         finally:
             try:
+                if rc == 0:
+                    try:
+                        from novel.orchestrator import delivery
+                        outcome = delivery.assess(
+                            base, sid, start_code_version=code_version)
+                    except Exception as exc:  # noqa: BLE001 —— 终验崩溃也必须留下 ended
+                        outcome = AgentDeliveryOutcome(
+                            state='unknown', checked_at=int(time.time()),
+                            reason=('agent 进程已正常结束，但交付终验自身崩溃：'
+                                    f'{type(exc).__name__}: {exc}'))
+                else:
+                    outcome = AgentDeliveryOutcome(
+                        state='failed', checked_at=int(time.time()),
+                        reason=f'headless agent 进程退出码为 {rc}，未执行成功交付终验')
                 append(base, AgentRunEvent(
                     run_id=run_id, kind='ended', ts=int(time.time()),
-                    exit_code=rc))
+                    exit_code=rc, outcome=outcome))
             finally:
                 registry.release(key, run_id)
                 with _THREADS_LOCK:
@@ -561,7 +586,10 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
             _THREADS.pop(run_id, None)
         registry.release(key, run_id)
         append(base, AgentRunEvent(run_id=run_id, kind='ended',
-                                   ts=int(time.time()), exit_code=CRASH))
+                                   ts=int(time.time()), exit_code=CRASH,
+                                   outcome=AgentDeliveryOutcome(
+                                       state='failed', checked_at=int(time.time()),
+                                       reason='agent worker 线程未能启动')))
         raise
     return next(r for r in records(base, registry=registry)
                 if r.run_id == run_id)

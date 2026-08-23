@@ -46,7 +46,7 @@ import re
 
 from contracts.invariants import DEPTH_MODES, INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER
 from contracts.rules import REGISTRY
-from contracts.schema.api import InboxItem, InboxView
+from contracts.schema.api import InboxDecision, InboxItem, InboxView
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.report import CheckReport
 from contracts.schema.stage6 import Hook
@@ -168,6 +168,8 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     items += _hook_verification_items(novel_dir, code)
     items += _approval_items(novel_dir, code)
 
+    # “还等不等人”与“挡不挡交付”不能从 kind 在前端重推；由后端在唯一生产口物化。
+    items = [_classify(item) for item in items]
     order = {s: i for i, s in enumerate(STAGES)}
     items.sort(key=lambda it: (order.get(it.stage, 99),
                                it.chapter if it.chapter is not None else -1,
@@ -175,7 +177,25 @@ def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
     counts = {kind: 0 for kind in INBOX_KIND}
     for item in items:
         counts[item.kind] += 1
-    return InboxView(items=items, counts=counts, total=len(items), wontfix=wontfix_total)
+    attention_counts = {key: 0 for key in ('pending', 'reviewed_retained')}
+    delivery_counts = {key: 0 for key in ('blocking', 'disclosure')}
+    for item in items:
+        attention_counts[item.attention] += 1
+        delivery_counts[item.delivery_effect] += 1
+    return InboxView(
+        items=items, counts=counts, attention_counts=attention_counts,
+        delivery_counts=delivery_counts, total=len(items), wontfix=wontfix_total)
+
+
+def _classify(item: InboxItem) -> InboxItem:
+    """把正交两轴物化；不因“看起来像人工项”猜一份不存在的裁决。"""
+    disclosure = (
+        item.kind == 'human_only'
+        or (item.kind == 'verification' and item.stage == 'stage6')
+    )
+    return item.model_copy(update={
+        'delivery_effect': 'disclosure' if disclosure else 'blocking',
+    })
 
 
 def _report_of(ctx, stage: str) -> CheckReport | None:
@@ -419,7 +439,12 @@ def _verification_items(novel_dir, code: str) -> list[InboxItem]:
             how=('在全局设定屏逐项或批量补 actor、理由与证据，按 subject_sha256 '
                  '提交 PASS/FAIL/UNVER；也可跑 '
                  '`stage2.global --review-decisions <书内json>`；'
-                 'subject hash 已变的旧决策会被拒绝')))
+                  'subject hash 已变的旧决策会被拒绝'),
+            attention=('pending' if row.state == 'pending' else 'reviewed_retained'),
+            decision=(None if row.state == 'pending' else InboxDecision(
+                actor=row.actor or '', reason=row.reason or '',
+                subject_sha256=row.subject_sha256, state=row.state,
+                decided_at=row.decided_at or ''))))
     return out
 
 

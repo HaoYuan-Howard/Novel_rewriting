@@ -54,6 +54,7 @@ def test_beacon_events_fold_into_steps(client):
     beacon.append(base, _ev(10, 'stage0.remove', 'start'))
     beacon.append(base, _ev(20, 'stage0.remove', 'end', exit_code=0))
     beacon.append(base, _ev(30, 'stage0.approve', 'start'))
+    beacon.append(base, _ev(31, 'stage0.edit', 'end', exit_code=1))
     beacon.append(base, _ev(30, 'stage1.partition', 'start', sid='other'))
     d = c.get('/api/novels/42/run').json()
     by_node = {s['node']: s for s in d['steps']}
@@ -61,8 +62,10 @@ def test_beacon_events_fold_into_steps(client):
     assert by_node['stage0.remove']['last_exit'] == 0
     assert by_node['stage0.approve']['beacon'] == 'running'
     assert by_node['stage0.approve']['elapsed'] is not None
+    assert by_node['stage0.edit']['beacon'] == 'landed_red'
+    assert by_node['stage0.edit']['last_exit'] == 1
     assert by_node['stage1.partition']['beacon'] == 'pending'   # 别书的打点不漏过来
-    assert len(d['events_tail']) == 3
+    assert len(d['events_tail']) == 4
 
 
 def test_existing_book_dir_gives_real_stage_done(client):

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from contracts.schema.evaluation import GlobalReviewDecisionSet
+from contracts.schema import decode_artifact
 from novel.api.routes import edits
+from novel.orchestrator import uploads
 
 
 def _request() -> GlobalReviewDecisionSet:
@@ -63,3 +66,14 @@ def test_global_review_request_rejects_blank_self_reported_audit_fields():
                 'evidence': [],
             }],
         })
+
+
+def test_api_upload_uses_the_same_versioned_decision_contract(tmp_path):
+    decisions = _request()
+
+    path = uploads.save_global_review_decisions(tmp_path, 'book-a', decisions)
+
+    raw = json.loads(path.read_text(encoding='utf-8'))
+    assert raw['_schema_version'] == 1
+    decoded = decode_artifact('stage2/global_review_decisions.json', raw).payload
+    assert GlobalReviewDecisionSet.model_validate(decoded) == decisions

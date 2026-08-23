@@ -18,6 +18,7 @@
 ### 不需要用户重做的中间工作
 
 - stage0 剔除审阅：<agent 已代批结论>
+- Stage2 全局逐项复核：<current + PASS/FAIL/UNVER 分母；只有全 PASS 才可交付>
 - stage6 开篇文案选择：<所选候选与理由>
 - stage7 人名映射审阅：<agent 已代批结论>
 
@@ -39,7 +40,7 @@
 | 新旧混名 | <pass/fail> | <扫描结果> |
 | 正式章唯一且同契约 | <pass/fail> | <N/N；重复/缺失> |
 | 成书指纹一致 | <pass/fail> | <盘上 sha1 vs 产物 sha1> |
-| 最终 `state` / `inbox` | <pass/fail> | <状态摘要；八类计数> |
+| 最终 `state` / `inbox` | <pass/fail> | <状态摘要；八类计数 + pending/reviewed_retained + blocking/disclosure> |
 | 活动终态文件 | <pass/fail> | <排除 `_rounds/` 后的计数与路径> |
 
 ## 3. Agent 代批记录
@@ -51,6 +52,14 @@
 - 机械证据：<HARD 命中/分母、保留率、warning>
 - 语义审阅：<剔除段逐类结论、正文首尾与边界>
 - 修复与复验：<无或命令/结果>
+
+### stage2.global review
+
+- 决定面：<current true/false；总项数>
+- 四态分母：<PASS / FAIL / UNVER / pending>
+- 核验材料：<workpack 路径/命令、精确命中分母与集合完整性反查>
+- typed 决策：<actor、逐项理由、subject SHA-256 乐观锁结果>
+- 结论：<all PASS / stopped；FAIL/UNVER 不得作为披露放行>
 
 ### stage6.approve
 

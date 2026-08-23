@@ -47,7 +47,7 @@ from novel.stages.stage7.measure import (
     merge_mapping_edit,
 )
 from novel.stages.stage7.subs import (
-    apply_subs, derived_alias_scan, residual_scan, sub_table,
+    apply_subs, derived_alias_scan, residual_scan, sub_table, unclaimed_residual_keys,
 )
 from novel.store import ArtifactStore
 
@@ -493,9 +493,11 @@ def _identity_baseline(up: _Upstreams) -> IdentityBaseline:
         if '⟦' in t or '⟧' in t:
             mismatches.append(f'{where}（正文里出现了占位符用的 ⟦⟧，基线在本书上不成立）')
             continue
-        mid, c1, _ = apply_subs(t, fwd, fpat)
+        mid, c1, claimed = apply_subs(t, fwd, fpat)
         back, c2, _ = apply_subs(mid, rev, rpat)
-        left = [k for k in fwd if k in mid]
+        # 不能扫裸字面：合法旧称（如门牌号 `001`）可能出现在刚生成的
+        # `⟦char_001_00⟧` 占位符里。与正式替换路径共用 claimed 口径。
+        left = unclaimed_residual_keys(mid, fwd, claimed)
         if not (back == t and sum(c1.values()) == sum(c2.values()) and not left):
             mismatches.append(where)
 
@@ -573,6 +575,42 @@ def run_recheck(ctx: RunContext) -> tuple[NameMap, CheckReport]:
     return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
 
 
+def _prepare_edit(ctx: RunContext, edit_path: str = ''):
+    """读取编辑并重放确定性链，**不写盘**；validate/apply 共用。"""
+    store = ArtifactStore(ctx)
+    up = _Upstreams(ctx, store)
+    rel = paths.edit_rel(ctx.novel_dir, edit_path, EDIT)
+    if not store.exists(rel):
+        raise TerminalState(
+            f'{rel} 不在盘上。⚠ 人工编辑入口吃的是**人写的决策集**，'
+            f'把它放到这本书的 `stage7/` 下（缺省文件名 `name_map_edit.json`）'
+            f'——它的形状是契约的一部分，见 `docs/schema/stage7.md` §三')
+    edit = store.read(NameMapEdit, rel)
+    raw = edit.model_dump(by_alias=True, exclude_none=True)
+    prev_rel = REL if store.exists(REL) else (_INVALID if store.exists(_INVALID) else None)
+    prev = store.read_own(NameMap, prev_rel)[0] if prev_rel else None
+    model_out, extra = merge_mapping_edit(
+        prev.model_dump(by_alias=True) if prev else None, raw)
+    if prev is not None:
+        provenance = ctx.rewrite_provenance(prev.provenance, by='--apply-edit')
+    else:
+        provenance = ctx.free_provenance(
+            NameMapFreeProvenance,
+            prompts={'RULES': prov.rules_fingerprint('stage7')},
+            params=NameMapParams(max_tokens=MAX_TOKENS), origin='human')
+    new_art, _fs, _hook_new = _build(ctx, up, model_out, extra, provenance)
+    if prev is not None:
+        new_art = new_art.model_copy(update={
+            'approved': None, 'book_txt': None, 'identity': prev.identity})
+    return store, up, prev_rel, prev, new_art, _judge(ctx, store, new_art, up)
+
+
+def run_validate_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, CheckReport]:
+    """`--validate-edit`：与 apply 共用完整构建/判定口，但一个字节都不写。"""
+    store, _up, _prev_rel, _prev, new_art, outcomes = _prepare_edit(ctx, edit_path)
+    return new_art, _report(ctx, store, outcomes, new_art)
+
+
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, CheckReport]:
     """`--apply-edit`：吃人手写的决策集，**0 成本重放整条确定性链**。
 
@@ -589,45 +627,12 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
     （原型这里裸读，于是「这份映射表是哪一份编辑文件产的」全链说不出来）·
     **人写的东西用载体收**（`extra='forbid'`，拒收的代价是人改一行，不是再花一次钱）。
     """
-    store = ArtifactStore(ctx)
-    up = _Upstreams(ctx, store)
-    rel = paths.edit_rel(ctx.novel_dir, edit_path, EDIT)
-    if not store.exists(rel):
-        raise TerminalState(
-            f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**，'
-            f'把它放到这本书的 `stage7/` 下（缺省文件名 `name_map_edit.json`）'
-            f'——它的形状是契约的一部分，见 `docs/schema/stage7.md` §三')
-    edit = store.read(NameMapEdit, rel)
-    raw = edit.model_dump(by_alias=True, exclude_none=True)
-
-    # 第一次付费产出若被闸门拦下，盘上只有 `.INVALID`。错误提示明确把
-    # `--apply-edit` 列为 0 成本出路，因此它必须能拿问题稿作 patch 基线；
-    # 只看正式稿会把最需要这条路的状态误判成「没有已有决定」。
-    prev_rel = REL if store.exists(REL) else (_INVALID if store.exists(_INVALID) else None)
-    prev = store.read_own(NameMap, prev_rel)[0] if prev_rel else None
-    model_out, extra = merge_mapping_edit(
-        prev.model_dump(by_alias=True) if prev else None, raw)
-
+    store, up, prev_rel, prev, new_art, outcomes = _prepare_edit(ctx, edit_path)
     if prev is not None:
-        provenance = ctx.rewrite_provenance(prev.provenance, by='--apply-edit')
-    else:
-        # 没有模型基线时，这份映射完全由人工产生，使用 0 成本来源账。
-        provenance = ctx.free_provenance(
-            NameMapFreeProvenance,
-            prompts={'RULES': prov.rules_fingerprint('stage7')},
-            params=NameMapParams(max_tokens=MAX_TOKENS), origin='human')
-    new_art, _fs, _hook_new = _build(ctx, up, model_out, extra, provenance)
-    if prev is not None:
-        new_art = new_art.model_copy(update={
-            # Any mapping edit invalidates the human decision over the old map.
-            # Delivery is a derived byte product and must be assembled again
-            # only after the edited map receives a new approval.
-            'approved': None, 'book_txt': None, 'identity': prev.identity})
         if prev_rel == _INVALID:
             # 人工 patch 也要过同一道硬闸。仍有 HARD 时保留原问题稿与编辑文件，
             # 不把一份坏映射伪装成正式产物；干净时用通用提升入口先归档原始
             # `.INVALID`，再以重建后的派生字段覆盖那份瞬时正式副本。
-            outcomes = _judge(ctx, store, new_art, up)
             if _blocking(outcomes):
                 return new_art, _report(ctx, store, outcomes, new_art)
             with store.history_transaction(REL, book_txt_rel(store)):

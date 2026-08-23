@@ -10,12 +10,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import uuid
 from pathlib import Path
 
 from contracts.schema.stage0 import Stage0CandidatePlan, Stage0EditPlan
 from contracts.schema.evaluation import GlobalReviewDecisionSet
+from contracts.schema import encode_artifact
+from contracts.artifacts import STAGE2_GLOBAL_REVIEW_DECISIONS
 from contracts.schema.stage5 import ChapterResponse
 from novel import paths
 from novel.errors import (
@@ -217,7 +220,10 @@ def save_global_review_decisions(
     target = root / f'global-review-{uuid.uuid4().hex}.json'
     tmp = target.with_suffix('.tmp')
     try:
-        tmp.write_bytes(decisions.model_dump_json().encode('utf-8'))
+        payload = decisions.model_dump(mode='json', by_alias=True)
+        data = encode_artifact(STAGE2_GLOBAL_REVIEW_DECISIONS, payload)
+        tmp.write_bytes((json.dumps(
+            data, ensure_ascii=False, indent=2, sort_keys=True) + '\n').encode('utf-8'))
         os.replace(tmp, target)
     except OSError as exc:
         raise ArtifactUnreadable(f'保存 stage2 复核决策失败：{exc!r}') from exc

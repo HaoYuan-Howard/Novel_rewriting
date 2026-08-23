@@ -123,6 +123,13 @@ API 只监听 `127.0.0.1:8765`。前端默认配置位于 `web/.env`；真实联
 `VITE_USE_MOCK=false`。前端开发命令（`npm ci` / `typecheck` / `seams` / `build` / `dev`）
 的唯一落点是 `web/DELIVERY.md`。
 
+若本机代理使用 TUN/fake-IP，而后台服务调用 DeepSeek 出现 `SSL UNEXPECTED_EOF`，在根
+`.env` 显式配置 `DEEPSEEK_PROXY=http://127.0.0.1:<本地 HTTP 代理端口>`。该配置由
+DeepSeek 传输层直接读取，CLI 与前端 Agent 共用，不依赖启动服务的终端是否继承代理环境变量。
+配置后先运行 `conda run -n novel_refactor python -m novel.cli doctor --llm-transport`：
+它使用同一代理与超时，只探测 DNS/TCP/TLS/HTTP，不发送正文或 API key；收到 401/403 也说明
+传输已打通。只有这一步成功后才值得启动一次真实付费节点。
+
 只跑编译检查不代表联调完成。交付前还要在真实服务上覆盖正常、未运行、错误和空态，
 并确认关闭 mock 后没有样本正文进入网络响应或构建产物。
 
