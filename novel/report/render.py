@@ -13,6 +13,7 @@ render.py —— `CheckReport` → 人读文本。
 from __future__ import annotations
 
 from contracts.invariants import STATUS
+from contracts.schema.common import Finding
 from contracts.schema.report import AccountingLine, CheckReport, ProvenanceSection, RuleLine
 
 #: 明细展开时最多列几条。**上限本身要说出来**——静默截断会让人以为就这么多。
@@ -60,6 +61,25 @@ def _provenance(p: ProvenanceSection) -> list[str]:
     return out
 
 
+def _identity_mark(f: Finding) -> str:
+    """恒等基线两格的**出口**。三态分开，缺省（都没命中）不出声。
+
+    ⚠ 两格问的是不同的问题（`contracts/schema/stage5.py` 那段注释）：
+    `identity_hit` 逐章问「这一条被本章源文的同一现象混淆了吗」；
+    `identity_dead` 书级问「这条判据在这本书上比它自己的基础发生率强吗」。
+    ⇒ 措辞必须分得开，别合成一句「恒等基线也命中」。
+
+    ⚠ `identity_dead` 是 `bool | None`，`None` = **没算过**（不是「否」）
+    ——`novel/stages/stage5/review.py` 只在书级闸那一步给它赋值，
+    别的层的 finding 这一格恒 `None`。`is True` 不写成真值判断就是为了这个。
+    """
+    if f.identity_dead is True:
+        return '〔恒等基线：这条判据在本书上没有判别力〕'
+    if f.identity_hit:
+        return '〔恒等基线：本章源文自己也触发了这一条〕'
+    return ''
+
+
 def _rules(rules: list[RuleLine]) -> list[str]:
     """判据行。**每条注册判据恰好一行**，没跑成的那些也在。"""
     out = [f'── 判据 ── {len(rules)} 条']
@@ -88,6 +108,20 @@ def _rules(rules: list[RuleLine]) -> list[str]:
             # CLI 唯一的呈现面——不打这个记号，两者在终端上又同形了
             # （界面那一侧早就有：`web/src/components/check/CheckPanel.tsx` 的「已豁免」）。
             mark = f'〔已豁免：{f.wontfix.why}〕' if f.wontfix is not None else ''
+            # ⚠⚠ **恒等基线那两格同理，而它们此前是「只写不读」的。**
+            # `identity_hit`（这一章源文自己也触发了这条）与 `identity_dead`
+            # （这条判据在这本书上没有判别力）是 `novel/stages/stage5/review.py`
+            # 的两道闸唯一的产出，`checks.py::IDENTITY_UPSTREAM` 的注释还明写着
+            # 「**分开报**，别混进「不可反哺」那一桶」——而在本函数补上这一句之前，
+            # 全仓**没有任何渲染面、view 或前端组件读过这两个字段**
+            # （写进产物、进了 TS 类型，仅此而已）。
+            # ⇒ 后果与 `wontfix` 那条一模一样：「被源文的同一现象混淆了」与
+            #   「写手真的漂了」在终端上同形，而两者的处置完全不同
+            #   （前者要去修上游或干脆不修，后者才该付钱重写）。
+            # ⚠ 只加记号，**判定式一个字不动**：`actionable` 由 review 那两道闸决定，
+            #   本函数不参与。两者的分歧（`IDENTITY_UPSTREAM` 只在书级闸被排除、
+            #   逐章闸没排除）登记在 `docs/REQUIREMENTS.md`，先让它看得见再谈改不改。
+            mark += _identity_mark(f)
             out.append(f'        · {f.detail}{mark}')
         if len(r.findings) > DETAIL_MAX:
             out.append(f'        …… 另 {len(r.findings) - DETAIL_MAX} 条（共 {len(r.findings)}）')

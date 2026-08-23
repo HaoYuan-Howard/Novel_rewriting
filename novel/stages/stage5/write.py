@@ -183,7 +183,8 @@ def _judge(text: str, entry: dict[str, Any], book: M.Book, *, mode: str, mat: st
            segments: list[dict[str, str]] | None = None) -> tuple[list, list[str], list[str]]:
     """归一之后的字节 → `(findings, errs, warns)`。**落盘闸门与验收相共用同一份判据。**"""
     fs = checks.chapter_findings(text, entry, book, mode=mode, given=mat,
-                                 quote_problems=account.quote_problems)
+                                 quote_problems=account.quote_problems,
+                                 segments=segments)
     if segments is not None:
         fs.extend(checks.segment_fidelity_findings(
             segments, entry, book, mode=mode, given=mat))

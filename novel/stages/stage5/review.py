@@ -254,7 +254,10 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
         bodies[o] = body
         mode = rec['_mode']
         mat = _material(entry, book, mode=mode)
-        fs += checks.chapter_findings(body, entry, book, mode=mode, given=mat)
+        # ⚠ `rec['segments']` 是 `Chapter` 模型 dump 出来的原件，验收相拿得到；
+        #   `end_hook_late` 要靠它定位「计划的末段 slot」，给不出时那条自己落 `unver`。
+        fs += checks.chapter_findings(body, entry, book, mode=mode, given=mat,
+                                      segments=rec.get('segments'))
         extra, one_land = checks.review_chapter_findings(body, entry, book)
         fs += extra
         land.update(one_land)

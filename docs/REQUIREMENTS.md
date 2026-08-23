@@ -820,6 +820,48 @@ Fisher 单侧 p≈0.21 ⇒ **方向对，但没到显著**。三条已经站得�
 `tests/test_llm.py` 四条钉住（捞成功不重采 · 四道闸全过才算 · 截断与 `ask_text` 都不捞 ·
 两种审计行都带 `salvaged` 且捞回来的不进缓存）。`ask_text` 那一侧未开，条目保留。
 
+### TODO-41 · 恒等基线两道闸对 `IDENTITY_UPSTREAM` 的处置不一致
+
+`novel/stages/stage5/review.py::build_review` 有两道恒等闸：
+
+- ② 逐章降级：`f.rule in ident and f.rule not in checks.IDENTITY_NA` ⇒
+  `identity_hit=True, actionable=False`；
+- ③.5 书级判死：`set(ident_hits) - checks.IDENTITY_NA - checks.IDENTITY_UPSTREAM`。
+
+**`IDENTITY_UPSTREAM` 只在 ③.5 被排除，② 没有。** 而 `checks.py` 里它自己的注释明写
+「非 0 是上游 bug，**不是「判据无判别力」**，分开报，别混进「不可反哺」那一桶」——
+③.5 照做了，② 没有。后果：源章一命中这四条，成稿的同条结论被打 `actionable=False`，
+而其中三条（`verbatim_missing` / `keep_value_missing` / `must_appear_missing`）是
+`repair='UNIQUE'`，全链唯一会进 `--revise` 的那一类 ⇒ 直接掉出
+`novel/stages/stage5/write.py::revise_targets`。
+
+⚠⚠ **本次没有直接翻转 ②，理由是两种处置各有道理、而分辨它们需要真实样本**：
+锚点在源文里找不到时，让写手「把它放回去」等于要求插入一段上游凭空造出来的文字
+（那正是 `FIDELITY_RULE` 禁止的事）；但反过来，静默降 `actionable` 又让**上游那个 bug
+没有任何 owner**。⇒ 先做的是让它**看得见**（2026-08-23：`novel/report/render.py::_identity_mark`
+——在此之前 `identity_hit` / `identity_dead` 是**只写不读**的，全仓没有任何渲染面、
+view 或前端组件读过它们）。
+
+- [ ] 盘上出现第一例真实的 `IDENTITY_UPSTREAM` 恒等命中之后，看那一章的锚点长什么样，
+      再决定 ② 该排除它、还是该像 `R-7.22b` 那样**另开一条 `owner=stage2` 的账**。
+- [ ] 顺序约束：要**一本走完 stage0~5 的书**，且它的恒等基线在这四条上非 0。
+      补它要跑的是 `stage5.review`（**0 成本**），前提是盘上有成稿。
+
+验收：② 与 ③.5 的处置写成同一句话，或者在 `checks.py` 那段注释里写明「两道闸刻意不同」
+以及为什么。
+
+### TODO-42 · 写手 prompt 里那个恒 null 的 `focalizer`
+
+`novel/stages/stage5/prompts.py` 用 `_compact`（裸 `json.dumps`，**无 `exclude_none`**）
+序列化整个 narration 数组 ⇒ 每一次写手调用的 prompt 里都带着一个恒 `null` 的
+`"focalizer"` 键。它是 `CtxNarration.focalizer` 这格空值**唯一的实际代价**
+（成因见 `docs/schema/stage4.md` 的 `narration` 行：那是一道从未成立过的判等闸，不是死值）。
+
+- [ ] 顺序约束：**改它会动写手 prompt 的字节** ⇒ 改之后跑的书与改之前的书
+      不是同一个 prompt 指纹，拿旧书当回归底座会多一个变量；且会整批作废 stage5 缓存。
+      ⇒ 挑一个「手上没有正在依赖旧 prompt 的对照实验」的时机单独做。
+- [ ] 同批更新 `tests/test_stage5_prompts.py` 的反漂移守卫（它会红，那是它在正确工作）。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。

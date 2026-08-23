@@ -33,7 +33,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > |---|---|---|
 > | **臂** | `stage5.write --mode deep`（闭卷）· `--mode shallow`（开卷） | **只差 (system prompt, 给不给源章原文)**，产物形状逐字节相同；`mode` 同时是目录名 |
 > | **写作** | 首轮逐章写作 + 落盘闸门；仅把 `REPAIR_UNIQUE` 或独立语义审判点名的可引用问题送入定向自救 | 正式稿始终只有 `chNN.json`；失败尝试进 `.INVALID` / `_rounds` |
-> | **验收** | `stage5.review` 做 0 成本机械验收（书级语义审判已下线，见 §三） | 49 条注册表，一份产物 |
+> | **验收** | `stage5.review` 做 0 成本机械验收（书级语义审判已下线，见 §三） | 52 条注册表，一份产物 |
 >
 > 正常整书写作不分别启动两个 mode，而用
 > `stage5.write --deep <章号列表|none> --shallow-rest`：人工选择一次，两臂同时起跑，
@@ -593,7 +593,7 @@ before/after SHA-256 与保留 pretrim 的销账入口。audit stale、正文/�
 
 ## 七、判据清单（**唯一落点**，机械与语义共用一张注册表）
 
-当前注册表共 **49 条**：**7 hard、26 info、11 metric、5 unver**。可反哺 23 条
+当前注册表共 **52 条**：**7 hard、28 info、11 metric、6 unver**。可反哺 23 条
 （**13 条 `UNIQUE` + 10 条 `FREE`**，见本节末尾那条准入）。
 owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 · `stage3`/`corpus` 各 1。
 ⚠ 上面这两行 2026-08-22 按 `REGISTRY.of_stage('stage5')` 现算改正过：此前写着
@@ -634,9 +634,12 @@ owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 �
 | `quote_unbalanced` | INFO | 引号配对异常、未归一——**留着报，不静默修**（原 `mech.quote_problems`） | **0/31** | — |
 | `deep_overlap_high` | INFO | **闭卷臂**重合度 > `DEEP_OVERLAP_MAX`（10%）。**守的是臂的身份不是文风**；开卷不判 | **0/11 闭卷章**（今天 max 2.4%） | — |
 | `narration_person_drift` | INFO | 成稿**叙述层**的人称与 `stage4/writer_context.json` 的 `narration[].grammatical_person` 对不对得上。两支分开判：声明 `first` 却一个自称都没有 · 声明 `third` 却混进本书的第一人称自称（右锚取**书级**并集，因为 `third` 段自己的 `pronoun_surfaces` 恒为空）。⚠ **不是 HARD**：恒等基线上源文自己会命中（某书 ch12 声明 `third`、源章叙述层就有 1 个「我」） | **0/19**（寡妇门前，全书 19 章皆 `first`） | **0/19** |
+| `event_atom_unattested` | INFO(stage2) | 事件原子在**源章原文**里找得到。找不到 = 抽取那一步错了，成稿再怎么写也救不回来 ⇒ **这条账记上游**（`owner=stage2` ⇒ `actionable=False`，本层没有可执行动作）。⚠ 2026-08-23 之前它与「提不出原子」合并成一条 `event_landing_unver`，修复路由因此指向错的层 | 见 `_beat_event_landing` 的括号读数 | — |
+| `end_hook_late` | INFO | 计划要求的**章尾**（`end_hook_goal`）有没有落在成稿的**最后一个 slot** 里。「最后一段」由契约给定——`stage4/checks.py::goal_landing` 已在查**计划**里它锚在 `segments[-1]`，而此前**没有人查成稿真的交付了**。本条只回答**位置**（整章都找不到是 `event_landing` 的地盘）。⚠ 在 `IDENTITY_NA` 里：源章没有计划切出来的 slot | **零样本**（`outputs/` 2026-08-23 被清空，只有合成反例） | — |
+| `end_hook_unver` | unver | 章尾这一维这一次够不着，三种分开说：拿不到成稿分段 / 结尾目标提不出可回查原子 / 计划的末段 slot 在成稿里找不到。⚠ `noatom` 桶预计不小（`CtxGoal.facts` 是人读事实），**先做成 unver 是刻意的** | 零样本 | — |
 | **〔度量〕** `length_report` · `overlap_report` · `dash_report` · `short_run_report` | metric | **逐章无条件报出** | 31 / 31 / 31 / 31 | — |
 | **〔度量〕** `narration_person_report` | metric | **逐章无条件报出**声明人称、用的哪个锚、叙述层实测自称数、书级自称池；上游没给 `narration` 或无锚可用时明写**未判**。⚠ 没有它，`narration_person_drift` 的 0 命中的三种来源（真的对得上 / 没给 `narration` / 锚是空的）在报告上长得一模一样 | 19/19 | — |
-| **〔度量〕** `dialogue_report` | metric | **无条件**报出直接引语数与比值，**逐章 + 书级都报** | 31/31 + 每本 1 条书级 | — |
+| **〔度量〕** `dialogue_report` | metric | **无条件**报出直接引语数与比值，**逐章**。⚠ 2026-08-23 更正：本行与判据表的 note 此前都写着「逐章 + 书级都报」，而**书级那一条代码里从来不存在**（唯一产出点 `checks.py::_dialogue` 只被 `chapter_findings` 调，全仓无 `output_ordinal=None` 的 `dialogue_report`）。没有补实现是因为「全书对白比」要回答什么问题还没想清楚，而 `book_length_report` 已经在报全书总账 —— 先让文档说真话（`docs/LESSONS.md` 第 1 条的反面） | 逐章 N/N | — |
 | **〔度量〕** `secret_timeline` | metric | 每条 secret 的关键词数、权威揭示章、全书命中章与「揭示章未命中」盲区；与逐章字面闸共用同一数字归一尺 | **21 条 secret** | — |
 | **〔度量〕** `book_length_report` · `convergence_report` | metric | 全书篇幅总账 · 与上一轮相比消掉了什么 | 3 / 3（每本各 1） | — |
 | **〔度量〕** `name_surface_survey` | metric | 全书自造称谓与撞名 | **0** ⚠ 见下 | — |
@@ -747,6 +750,8 @@ owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 �
 | `band_drift` · `para_len_drift` · `layout_drift` · `simile_drift` · `xinli_drift` · `dash_drift` | `R-7.21` ⭐ |
 | `dash_report` · `short_run_report` | `R-7.21b` ⭐ |
 | `narration_person_report` · `narration_person_drift` | `R-7.9` ⭐ |
+| `end_hook_late` · `end_hook_unver` | `R-7.9` ⭐ |
+| `event_atom_unattested` | `R-7.22b` ⭐（`owner=stage2`）|
 | `event_landing` · `event_landing_unver` | `R-7.22` ⭐ |
 | `cross_chapter_number` | `R-7.23` ⭐ |
 | `length_report` · `overlap_report` · `book_length_report` | `R-8.1b` ⭐ |

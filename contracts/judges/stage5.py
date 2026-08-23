@@ -3,7 +3,7 @@
 """
 stage5.py —— 逐章写作与全书验收那一层的判据行。源是 `docs/schema/stage5.md` §六（**唯一落点**）。
 
-**49 条现役：7 HARD · 26 INFO · 11 度量 · 5 查不了。**
+**52 条现役：7 HARD · 28 INFO · 11 度量 · 6 查不了。**
 （⚠ 这一行此前写着「48 条：8 HARD · 26 INFO」，与注册表实际差 2 条——已按 `REGISTRY.of_stage('stage5')` 现算改正。）
 
 【一张表，两相共用】落盘闸门 / `--recheck` / `--revalidate` / `--apply-edit` /
@@ -436,6 +436,43 @@ _metric('book_length_report', '〔度量〕全书篇幅总账', 'R-8.1b',
 _metric('dash_report', '〔度量〕破折号密度', 'R-7.21b',
         note='逐章无条件报出（本书基线 + 语料 p95 两条线并排）')
 
+_info('event_atom_unattested', '事件原子在源章原文里找得到', 'R-7.22b',
+      owner='stage2',
+      note='⚠⚠ **这是上游的账，`owner` 因此记 stage2 而不是本层。**'
+           '原子取自 `CtxBeat.events`（stage2 `Beat.event` 逐条透传），'
+           '而它在**源章原文里都找不到** ⇒ 抽取那一步就错了，成稿再怎么写也救不回来。'
+           '与 `checks.py::IDENTITY_UPSTREAM` 那一桶（「锚点切出来的东西回不到原文里去 '
+           '= 上游 bug」）是同一个道理。'
+           '⚠ 2026-08-23 之前它与「提不出原子」合并成一条 `event_landing_unver`、'
+           '`owner` 记在 stage5 ⇒ **一个 stage2 的 bug 被报成「stage5 这一维够不着」**，'
+           '`novel/report/builder.py::remediation_of` 的修复路由因此指向错的层。'
+           '⚠ 不给 `repair`/`directive`：本层重写改变不了上游抽出来的原子，'
+           '**没有一条本层可执行的动作**（`owner != stage` ⇒ `actionable=False`）')
+
+_info('end_hook_late', '计划要求的章尾，成稿的最后一段真的交付了', 'R-7.9',
+      repair='FREE', quote=True,
+      directive='结尾目标的落点不在末段。把它写进本章最后一段——'
+                '结尾要达到什么是计划钉死的，位置也是。',
+      note='真值全部来自上游：`stage4/writer_context.json` 的 `end_hook_goal`（`CtxGoal`：'
+           '`intent` 枚举 + `facts[]`）与 `segments[-1].slot`。**本条一个阈值都没发明**，'
+           '「最后一段」是契约给的——`stage4/checks.py::goal_landing` 已经在查**计划**里'
+           '`end_hook_goal` 锚在 `segments[-1]`，而**没有人查成稿的最后一段真的交付了**。'
+           '⇒ 与 `narration_person_drift` 那个洞完全同构（契约两头都有真值，中间没人对）。'
+           '⚠ 本条只回答**位置**：整章都找不到那是 `event_landing` 的地盘，两条分工别混。'
+           '⚠ 落 `FREE` 不落 `UNIQUE`：满足它的路径不唯一（把落点挪到末段有无数种写法），'
+           '而 `UNIQUE` 那一桶的判准是「目标字串被上游钉死」——这里被钉死的是**位置**不是字串。'
+           '⚠ 它在 `checks.py::IDENTITY_NA` 里：源章根本没有计划切出来的 slot，'
+           '「最后一段」这个概念在恒等基线上不存在。'
+           '⚠ 盘上零样本——`outputs/` 于 2026-08-23 被清空，本条只有合成反例，'
+           '**没有任何真书读数**，别把它读成「已验证」')
+
+_unver('end_hook_unver', '章尾交付这一维这一次够不着', 'R-7.9',
+       note='三种够不着分开说：拿不到成稿分段 / 结尾目标提不出可回查原子 / '
+            '计划的末段 slot 在成稿里找不到。'
+            '⚠⚠ **`noatom` 那一桶预计不小**：`CtxGoal.facts` 是「chapter-safe '
+            'human-readable facts」，很可能既没有数字也没有专名。先做成 `unver` 是刻意的——'
+            '把提不出原子的当成通过，就是 `R-7.22` 那两桶「统计出来了但没判过」的翻版')
+
 _metric('narration_person_report', '〔度量〕叙述人称：声明 vs 成稿实测', 'R-7.9',
         note='⚠⚠ **它存在的理由是把「0 命中」的三种来源分开**：真的对得上 / 上游没给 '
              '`narration` / 自称锚是空的。三者在报告上本来长得一模一样，而后两种是'
@@ -472,7 +509,10 @@ _metric('dialogue_report', '〔度量〕直接引语条数与比值', 'R-7.8b',
         note='⚠⚠ **原型没有这一条**（它只有三条告警），于是「这本书的对白比是多少」'
              '**只有在漂了的时候才说得出来**——正是判据 21 要防的形状。'
              '而它承载的是本项目**效应量最大**的一条跨书结论。'
-             '⇒ 逐章 + 书级都无条件报出。⚠ 它是**有跨书方差的效应不是一个系数**：'
+             '⇒ **逐章**无条件报出。⚠⚠ 2026-08-23 更正：这里此前写的是「逐章 + 书级都报」，'
+             '而书级那一条**代码里从来不存在**——唯一产出点 `checks.py::_dialogue` '
+             '只被 `chapter_findings` 调。文档说了代码没做，正是本仓最不该有的形状。'
+             '⚠ 它是**有跨书方差的效应不是一个系数**：'
              '更早那批 deep 是 0.74/0.67/0.68，这一批 0.86/0.79/0.87，弱了约一半')
 
 _metric('secret_timeline', '〔度量〕未揭示秘密在全书成稿里的出现分布', 'R-8.9b',

@@ -26,7 +26,7 @@ from contracts.invariants import DEEP_OVERLAP_MAX
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
-from novel.core.bands import PARA_BANDS, SENT_BANDS, band
+from novel.core.bands import PARA_BANDS, SENT_BANDS, band, cut_distance
 from novel.core.facts import (
     NUM_UNIT, locate_secret, num_unit_keys, num_values, secret_contains, secret_keywords,
 )
@@ -89,8 +89,12 @@ META_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 #: `length_*` 比的是「源章字数 vs 计划预算」，而计划预算本来就要偏离源章；
 #: `overlap_report` 拿源文与自己比恒等于 100%。
 #: 在源文上命中说明的是**计划**，不是判据。
+#: ⚠ `end_hook_late` 也在这里，理由与上面那几条同类但更硬：**源章根本没有**
+#: 计划切出来的 slot，「最后一段」这个概念在恒等基线上不存在
+#: （`identity_rules` 拿源文跑 `chapter_findings` 时 `segments=None`）
+#: ⇒ 不登记的话它在恒等基线上恒 `unver`，那正是「一盏保证会亮的绿灯」。
 IDENTITY_NA = frozenset({'length_over', 'length_under', 'length_report', 'overlap_report',
-                         'deep_overlap_high'})
+                         'deep_overlap_high', 'end_hook_late'})
 
 #: 这几条判的是「成稿有没有守住**从源文切出来的**材料」。源文当然守得住 ⇒
 #: 恒等基线上命中 **0 是应该的，非 0 是上游 bug**（锚点切出来的东西回不到原文里去），
@@ -379,12 +383,29 @@ def _band_drift(body: str, book: M.Book) -> list[Finding]:
     if not got:
         return []
     base = book.band_of
-    mine = {'句子形态': band(got.avg_sentence_chars, SENT_BANDS),
-            '段落形态': band(got.avg_paragraph_chars, PARA_BANDS)}
-    return [finding('band_drift',
-                    detail=f'形态漂移 {k}：底座「{base[k]}」→ 成稿「{mine[k]}」',
-                    evidence=[k, base[k], mine[k]])
-            for k in ('句子形态', '段落形态') if base.get(k) and base[k] != mine[k]]
+    meas = book.measurable
+    axes = {'句子形态': (got.avg_sentence_chars, meas.get('avg_sentence_chars'), SENT_BANDS),
+            '段落形态': (got.avg_paragraph_chars, meas.get('avg_paragraph_chars'), PARA_BANDS)}
+    mine = {k: band(v[0], v[2]) for k, v in axes.items()}
+    out: list[Finding] = []
+    for k in ('句子形态', '段落形态'):
+        if not base.get(k) or base[k] == mine[k]:
+            continue
+        got_v, base_v, cuts = axes[k]
+        # ⚠⚠ **把数字打出来，否则「翻档」与「真漂移」分不开**（见
+        #   `novel/core/bands.py::cut_distance` 的第一条 ⚠⚠）。
+        #   底座取不到数值时只说档位，**不编一个数**。
+        if base_v:
+            near = cut_distance(float(base_v), cuts)
+            nums = (f'（本书 {float(base_v):.1f} 字 → 本章 {got_v:.1f} 字，'
+                    f'{got_v / float(base_v):.2f}×；底座离最近档边 {near} 字）')
+        else:
+            nums = '（底座数值取不到，只判得出档位）'
+        out.append(finding(
+            'band_drift',
+            detail=f'形态漂移 {k}：底座「{base[k]}」→ 成稿「{mine[k]}」{nums}',
+            evidence=[k, base[k], mine[k]]))
+    return out
 
 
 def _para_len_drift(body: str, book: M.Book) -> list[Finding]:
@@ -504,6 +525,79 @@ def _short_run(body: str, entry: dict[str, Any], book: M.Book) -> list[Finding]:
                     detail=f'连续短段成串：本章 {short_run_per_1k(body):.2f}/千字{vs_src}'
                            f'｜本书 {base:.2f}｜语料 p95 {SHORT_RUN_CORPUS_P95:.2f}',
                     evidence=[f'{base:.2f}->{short_run_per_1k(body):.2f}'])]
+
+
+def _end_hook_landing(
+    entry: dict[str, Any], book: M.Book,
+    segments: list[dict[str, Any]] | None,
+) -> list[Finding]:
+    """计划要求的**章尾**，成稿的**最后一段**真的交付了吗。
+
+    ⭐ **这条判据的真值全部来自上游，本函数一个阈值都没有发明。**
+    `novel/stages/stage5/prompts.py` 把「结尾要达到（**硬要求**）」逐章下发给写手，
+    而本层此前与结尾相关的判据**只有 `draft_truncated`**（末字是不是终止标点）——
+    「结尾有没有达到计划要的那件事」一条都没有。
+
+    【「最后一段」是契约给的，不是我挑的窗口】
+    `novel/stages/stage4/checks.py::goal_landing` 已经在查**计划**里
+    `end_hook_goal` 的 event refs 锚在 `segments[-1].from_beats`；
+    而 `contracts/schema/stage4.py` 的 slot 注释写着「Stage5 must return it exactly once」
+    ⇒ 成稿 segment 与计划 segment **按 slot 一一对应**。
+    ⇒ 缺的正是那面镜子：**没有人查成稿的最后一段真的把它交付了。**
+    与 `narration_person_drift` 那个洞完全同构（契约两头都有真值，中间没人对）。
+
+    【三态分开】（`docs/LESSONS.md` 第 4 条）
+    · 原子落在最后一段 ⇒ 不出声；
+    · 原子在**本章别处**落了、但不在最后一段 ⇒ `end_hook_late`；
+    · 提不出原子 / 拿不到分段 ⇒ `end_hook_unver`（**不是通过**）。
+
+    ⚠⚠ `noatom` 这一桶预计不小：`CtxGoal.facts` 是「chapter-safe human-readable facts」，
+    很可能既没有数字也没有专名。**必须先做成 `unver`**，否则就是 `event_landing`
+    那两桶「统计出来了但没判过」的翻版（`R-7.22`）。
+
+    ⚠ **原子只认两类**（数字+单位、章级名册专名），走 `_atoms_of_event` 与
+    `_pronoun_named` 两个现成落点，不另写匹配器——中文没有词边界，
+    拿名词去匹配会得到一堆假阳，理由见 `_atoms_of_event` 自己的 docstring。
+
+    ⚠ 「落在别处」而不是「完全没落」：整章都找不到那是 `event_landing` 的地盘，
+    本条只回答**位置**。两条判据的分工别混。
+    """
+    goal = entry.get('end_hook_goal') or {}
+    facts = [f for f in (goal.get('facts') or []) if f]
+    planned = entry.get('segments') or []
+    if not facts or not planned:
+        return []                     # 上游没给结尾目标/分段 ⇒ 这条问不出口，不是「没问题」
+    if segments is None:
+        return [finding(
+            'end_hook_unver',
+            detail='拿不到成稿分段 ⇒ 「最后一段」无从定位，本章的章尾交付**没有判**',
+            evidence=['no_segments'])]
+    roster = {c.get('display_name') for c in (entry.get('characters') or {}).values()}
+    roster = {n for n in roster if n} - _pronoun_named(entry)
+    atoms = _atoms_of_event(' '.join(facts), roster)
+    if not atoms:
+        return [finding(
+            'end_hook_unver',
+            detail=f'结尾目标提不出可回查的原子（{goal.get("intent")}：'
+                   f'{"；".join(facts)[:60]}）⇒ 章尾交付**没有判**',
+            evidence=['noatom'])]
+    last_slot = (planned[-1] or {}).get('slot')
+    by_slot = {s.get('slot'): (s.get('text') or '') for s in segments}
+    tail = by_slot.get(last_slot)
+    if tail is None:
+        return [finding(
+            'end_hook_unver',
+            detail=f'计划的末段 slot `{last_slot}` 在成稿里找不到 ⇒ 章尾交付**没有判**',
+            evidence=[f'slot_missing:{last_slot}'])]
+    if any(a in tail for a in sorted(atoms)):
+        return []
+    whole = ''.join(by_slot.values())
+    where = '本章别处' if any(a in whole for a in atoms) else '整章都没有'
+    return [finding(
+        'end_hook_late',
+        detail=f'结尾目标的落点不在末段 `{last_slot}`（{where}）：'
+               f'{goal.get("intent")}：{"；".join(facts)[:48]}｜原子 {sorted(atoms)[:4]}',
+        evidence=[f'{last_slot}:{a}' for a in sorted(atoms)[:4]])]
 
 
 #: 第三人称叙述里指代**叙述者本人**的字面。⚠ 只用于「声明 `first` 却写成了第三人称」
@@ -703,7 +797,8 @@ def _dialogue(body: str, entry: dict[str, Any], book: M.Book, *, mode: str) -> l
 
 def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
                      mode: str, given: str = '',
-                     quote_problems: Iterable[str] = ()) -> list[Finding]:
+                     quote_problems: Iterable[str] = (),
+                     segments: list[dict[str, Any]] | None = None) -> list[Finding]:
     """一章成稿的全部确定性判定 → `[Finding]`。**两相共用同一个函数。**
 
     `given` 缺省为空串时会按**最严**的口径判发明越界（不知道是哪一臂就不替它放宽探测器）；
@@ -790,6 +885,9 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
     fs += _dash(body, entry, book) + _short_run(body, entry, book)
     fs += (_narration_person_report(body, entry, book)
            + _narration_person(body, entry, book))
+    # ⚠ `segments` 两相都给得出（落盘闸门直接有，验收相走 `rec['segments']`）；
+    #   给不出时本条自己落 `unver`，不静默通过。
+    fs += _end_hook_landing(entry, book, segments)
     if (qp := sorted(set(quote_problems))):
         # ⚠⚠ 它原来是 `mech.quote_problems`，**一个记账块里的字段**——而它根本不是记账，
         #   **是一条结论**：「引号配对异常、未归一、留着交人工」。
@@ -948,11 +1046,22 @@ def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
                                  f'（这些拍提得出可回查的原子，但一个都没出现）：'
                                  f'{[m[0] for m in missed[:3]]}',
                           evidence=[m[0] for m in missed]))
-    if noatom or ident:
+    if ident:
+        # ⚠⚠ **「原子提错」按语义是上游的账，不是成稿的账。**
+        #   原子取自 `CtxBeat.events`，而它在**源章原文里都找不到** ⇒ 抽取那一步坏了，
+        #   与 `IDENTITY_UPSTREAM` 那一桶（「锚点切出来的东西回不到原文里去」）同理。
+        #   它此前和 `noatom` 合并成一条 `event_landing_unver`、`owner` 记在 stage5 ⇒
+        #   一个 stage2 的 bug 被报成「stage5 这一维够不着」，**修复路由指向了错的层**。
+        fs.append(finding('event_atom_unattested',
+                          detail=f'{len(ident)} 拍的事件原子在**源章原文**里找不到'
+                                 f'——抽取那一步就错了，不是成稿的问题：'
+                                 f'{[t for t in ident[:3]]}',
+                          evidence=[t for t in ident]))
+    if noatom:
         fs.append(finding('event_landing_unver',
-                          detail=f'{len(noatom)} 拍提不出可回查的原子、{len(ident)} 拍的原子'
-                                 f'在源章原文里找不到',
-                          evidence=[str(len(noatom)), str(len(ident))]))
+                          detail=f'{len(noatom)} 拍提不出可回查的原子'
+                                 f'（事件是概括句，既没有数字+单位也没有章级名册专名）',
+                          evidence=[str(len(noatom))]))
     land = collections.Counter({'ok': len(landed), 'missed': len(missed),
                                 'noatom': len(noatom), 'ident': len(ident)})
     return with_output_ordinal(fs, entry.get('output_ordinal')), land
@@ -1183,11 +1292,12 @@ _FROM_CHAPTER: tuple[str, ...] = (
     'layout_drift', 'para_len_drift', 'simile_drift', 'xinli_drift',
     'band_drift', 'dash_report', 'dash_drift', 'short_run_report', 'quote_unbalanced',
     'narration_person_report', 'narration_person_drift',
+    'end_hook_late', 'end_hook_unver',
 )
 
 #: **只有全书验收相**产得出来的：单章视角看不到，或者要跨章比。
 _FROM_REVIEW: tuple[str, ...] = (
-    'event_landing', 'event_landing_unver',
+    'event_landing', 'event_landing_unver', 'event_atom_unattested',
     'draft_missing', 'draft_duplicated',
     'no_secrets_in_book', 'secret_timeline', 'cross_chapter_number',
     'book_length_report', 'book_length', 'name_surface_survey',
@@ -1199,7 +1309,7 @@ _FROM_REVIEW: tuple[str, ...] = (
 #: 一条 `sev='unver'` 却没说出「这次为什么够不着」的判据）。
 _UNVER: frozenset[str] = frozenset({
     'must_hold_unver', 'event_landing_unver', 'draft_missing', 'draft_duplicated',
-    'no_secrets_in_book'})
+    'no_secrets_in_book', 'end_hook_unver'})
 
 
 def _why_of(rule: str, fs: list[Finding], *, empty: str) -> str:

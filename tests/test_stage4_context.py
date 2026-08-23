@@ -11,8 +11,8 @@ import pytest
 from contracts.schema.stage4 import CtxBeat, WriterContext
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    Assembly, _gate_setting, _resolve_beats, build_writer_context, display_names,
-    display_names_at, name_collisions, rename_all,
+    Assembly, _gate_setting, _name_narration, _resolve_beats, build_writer_context,
+    display_names, display_names_at, name_collisions, rename_all,
 )
 from tests import corpus
 
@@ -407,3 +407,65 @@ def test_a_chapter_in_a_true_stage_gap_or_overlap_is_a_terminal_state():
                                      {'stage': '段乙', 'chapters': [2, 6]}]}
     with pytest.raises(RefusedByStructure, match='唯一归属'):
         build_writer_context(_elided_plan(), gg, bps, mt)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `_name_narration` —— 那道判等闸。⚠ 2026-08-23 之前**两个分支都没有测试覆盖**
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 这道闸是 `CtxNarration.focalizer` 盘上恒空的**唯一成因**：stage2 那一侧
+# `focalizer_name` 填充率 27/31，但它填的值恒等于 `narrator_name`
+# （两格在 `novel/stages/stage2/prompts.py` 里是**同一个占位符字符串**，
+# 且从头到尾没有定义什么是「视点人物」、没说「只在与叙述者不同时才填」），
+# 于是这里判等一律为真、键一律不写。
+# ⇒ **那不是死值，是一道从未成立过的闸**（`docs/LESSONS.md` 第 8 条：
+#   删字段前审计语义消费，不只搜字段名）。本批只补覆盖，不动 prompt、不删字段。
+
+_DISP = {'c1': '沈青', 'c2': '顾堇'}
+
+
+def _seg(**kw):
+    base = {'grammatical_person': 'first', 'segment': '正文主体（直至"……沉重的呼吸声"）'}
+    base.update(kw)
+    return base
+
+
+def test_focalizer_is_dropped_when_it_is_the_same_person_as_the_narrator():
+    """⭐ 盘上 100% 走的就是这一支。"""
+    out = _name_narration(
+        _seg(narrator_char_id='c1', focalizer_char_id='c1'), _DISP, 0, 1)
+    assert out['narrator'] == '沈青' and 'focalizer' not in out
+
+
+def test_focalizer_is_kept_when_it_really_is_a_different_person():
+    """⭐ 另一支——盘上零样本，只有这条测试见过它。"""
+    out = _name_narration(
+        _seg(narrator_char_id='c1', focalizer_char_id='c2'), _DISP, 0, 1)
+    assert out['narrator'] == '沈青' and out['focalizer'] == '顾堇'
+
+
+def test_an_unresolvable_narrator_does_not_suppress_a_resolvable_focalizer():
+    """⚠ **代码上可达的倒置路径**：叙述者叫不出名字、视点人物叫得出
+    ⇒ 只发 `focalizer` 不发 `narrator`。本语料从没走到过，但它不是死路。"""
+    out = _name_narration(
+        _seg(narrator_char_id='c9', focalizer_char_id='c2'), _DISP, 0, 1)
+    assert 'narrator' not in out and out['focalizer'] == '顾堇'
+
+
+def test_a_nameless_narrator_writes_neither_key_and_never_falls_back_to_char_id():
+    """第一人称书的第 1 章正是这样：主角通篇写「我」，名字要到后面才出现。
+    ⚠ **不许兜底成 `char_002`**——写作侧不该看见内部编号。"""
+    out = _name_narration(
+        _seg(narrator_char_id='c9', focalizer_char_id='c9'), _DISP, 0, 1)
+    assert 'narrator' not in out and 'focalizer' not in out
+    assert out['grammatical_person'] == 'first'
+
+
+def test_the_stage2_segment_label_never_reaches_the_writer():
+    """⚠⚠ **反原文泄漏**：stage2 的 `segment` 常原样引用原文当分界，
+    而泄的往往正是本章末句。写手要的只是「分几段、什么顺序」。"""
+    one = _name_narration(_seg(narrator_char_id='c1'), _DISP, 0, 1)
+    many = _name_narration(_seg(narrator_char_id='c1'), _DISP, 1, 3)
+    assert one['segment'] == '全章'
+    assert many['segment'] == '第2段（共3段，按顺序写）'
+    assert '沉重的呼吸声' not in str(one) and '沉重的呼吸声' not in str(many)

@@ -114,6 +114,133 @@ def test_draft_too_short_goes_red_and_swallows_everything_else(book, entry):
         '早退没生效——短稿上跑出了别的判据，那些数全是噪声')
 
 
+# ────────── 事件原子：「提不出」与「提错了」是两个层的账 ──────────
+
+def test_a_bad_upstream_atom_is_reported_as_stage2s_bill_not_as_ours():
+    """⭐ **反例样本**：原子在**源章原文**里都找不到 ⇒ 抽取那一步错了。
+
+    ⚠ 它此前与「提不出原子」合并成一条 `event_landing_unver`、`owner` 记 stage5
+    ⇒ 一个 stage2 的 bug 被报成「stage5 这一维够不着」，
+    `novel/report/builder.py::remediation_of` 的修复路由因此指向错的层。
+    ⚠ 两桶的**措辞也必须分开**：一个说「事件是概括句，提不出可回查的原子」，
+    另一个说「原子提错了」——合成一句就没人知道该去修谁。
+    """
+    entry = {'output_ordinal': 1,
+             'characters': {'c1': {'display_name': '顾堇'}},
+             'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
+             'segments': [{'slot': 's01', 'events': ['顾堇打翻了茶盏']}]}
+    book = M.Book(title='t', ctx={'chapters': [entry]}, style={},
+                  source_text={1: '这一章原文里根本没有那个人。'}, secrets=[])
+    entry['from_source_ordinals'] = [1]
+    fs, land = checks.review_chapter_findings('成稿正文。', entry, book)
+    assert [f.rule for f in fs] == ['event_atom_unattested']
+    assert land['ident'] == 1 and land['ok'] == 0 and land['missed'] == 0
+    assert REGISTRY.get('event_atom_unattested').owner == 'stage2',         '这条账记的是上游；owner 一改回 stage5，修复路由就又指错层了'
+
+
+# ───────────── band_drift：翻档与真漂移必须在报告上分得开 ─────────────
+
+def test_cut_distance_separates_a_baseline_hugging_the_edge_from_one_in_the_middle():
+    """⭐ 这是 `band_drift` 那条 detail 存在的全部理由。
+
+    档位粗（句子切 16/22/30），基线 16.4 时成稿只降几个百分点就翻档，
+    而报告上「短句 → 极短句」与一次真正的形态崩塌**长得一模一样**。
+    ⚠ 本条只断言**读数分得开**，不断言「多近算贴边」——那个数没有标定过。
+    """
+    from novel.core.bands import PARA_BANDS, SENT_BANDS, band, cut_distance
+    assert band(16.4, SENT_BANDS) == band(19.0, SENT_BANDS)      # 同一档
+    assert cut_distance(16.4, SENT_BANDS) < cut_distance(19.0, SENT_BANDS)
+    assert cut_distance(55.0, PARA_BANDS) == 15.0
+    assert cut_distance(5.0, [(None, '兜底')]) is None, '一条档边都没有时不许编一个数'
+
+
+def test_band_drift_says_the_numbers_not_just_the_band_words(book, entry):
+    """`detail` 要带上本书基线、本章实测、比值与离档边的距离。"""
+    body = chr(10).join(['短。', '', '很短。', '', '还是短。'])
+    got = list(checks._band_drift(body, book))
+    for f in got:
+        assert '字' in f.detail and '×' in f.detail and '离最近档边' in f.detail, f.detail
+    # ⚠ 凭据仍按「哪一维」区分两个实例——`_converge` 的收敛差集靠它，别破坏。
+    assert all(f.evidence[0] in ('句子形态', '段落形态') for f in got)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 章尾交付 —— `R-7.9` 的第二个守卫。⭐ 反例在这里，盘上零样本
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hook_book(facts, *, slots=('s01', 's02')):
+    """造一本只含「结尾目标 + 分段」的书。判据吃 dict ⇒ 反例配得出来。"""
+    entry = {
+        'output_ordinal': 1,
+        'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
+        'characters': {'c1': {'display_name': '顾堇'}},
+        'segments': [{'slot': sl, 'events': ['e']} for sl in slots],
+        'end_hook_goal': {'intent': 'open', 'facts': list(facts)},
+    }
+    book = M.Book(title='t', ctx={'chapters': [entry]}, style={},
+                  source_text={}, secrets=[])
+    return book, entry
+
+
+def _segs(*pairs):
+    return [{'slot': sl, 'text': tx} for sl, tx in pairs]
+
+
+def test_an_end_hook_delivered_in_the_last_slot_is_silent():
+    book, entry = _hook_book(['顾堇被系统提示'])
+    assert checks._end_hook_landing(
+        entry, book, _segs(('s01', '她醒了。'), ('s02', '顾堇开口。'))) == []
+
+
+def test_an_end_hook_that_lands_anywhere_but_the_last_slot_is_reported():
+    """⭐ **反例样本**：整章有、末段没有。
+
+    ⚠ 这正是 `event_landing` 接不住的那一半——它只问「本章有没有落点」，
+    不问位置；而「结尾要达到什么」被计划钉死的恰恰是位置
+    （`stage4/checks.py::goal_landing` 在计划那一侧查的就是 `segments[-1]`）。
+    """
+    book, entry = _hook_book(['顾堇被系统提示'])
+    fs = checks._end_hook_landing(
+        entry, book, _segs(('s01', '顾堇开口。'), ('s02', '她愣住。')))
+    assert [f.rule for f in fs] == ['end_hook_late'] and '本章别处' in fs[0].detail
+    gone = checks._end_hook_landing(
+        entry, book, _segs(('s01', '她醒了。'), ('s02', '她愣住。')))
+    assert [f.rule for f in gone] == ['end_hook_late'] and '整章都没有' in gone[0].detail
+
+
+def test_the_three_ways_of_not_being_able_to_judge_say_which_one_it_was():
+    """⚠⚠ 三种「够不着」必须分得开，而且**都不是通过**（`docs/LESSONS.md` 第 4 条）。
+
+    `noatom` 那一桶预计不小：`CtxGoal.facts` 是人读事实，很可能既无数字也无专名。
+    把它当成通过，就是 `R-7.22` 那两桶「统计出来了但没判过」的翻版。
+    """
+    book, entry = _hook_book(['顾堇被系统提示'])
+    no_seg = checks._end_hook_landing(entry, book, None)
+    lost = checks._end_hook_landing(entry, book, _segs(('s01', '顾堇开口。')))
+    book2, entry2 = _hook_book(['她心里松了一口气'])
+    noatom = checks._end_hook_landing(
+        entry2, book2, _segs(('s01', 'x'), ('s02', 'y')))
+    whys = [f[0].detail for f in (no_seg, lost, noatom)]
+    assert all(f[0].rule == 'end_hook_unver' for f in (no_seg, lost, noatom))
+    assert len(set(whys)) == 3, f'三种够不着说了同一句话：{whys}'
+
+
+def test_no_end_hook_goal_or_no_plan_segments_asks_nothing_at_all():
+    """上游没给结尾目标/分段 ⇒ **这条问不出口**，既不报也不 unver。
+
+    ⚠ 与「够不着」是两件事：那是「问了但答不了」，这是「根本没这个问题」。
+    """
+    book, entry = _hook_book([])
+    assert checks._end_hook_landing(entry, book, _segs(('s01', 'x'))) == []
+
+
+def test_end_hook_late_is_registered_as_identity_na():
+    """⚠ 恒等基线上**源章没有计划切出来的 slot**，「最后一段」这个概念不存在
+    ⇒ 不登记进 `IDENTITY_NA` 的话它在那一路恒 `unver`，
+    也就是 `measure.py::Book` docstring 警告的「一盏保证会亮的绿灯」。"""
+    assert 'end_hook_late' in checks.IDENTITY_NA
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 叙述人称 —— `R-7.9` 的第一个守卫，反例在这里
 # ─────────────────────────────────────────────────────────────────────────────
@@ -474,7 +601,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 49 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 52 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -489,23 +616,28 @@ def test_every_registered_rule_has_exactly_one_producer():
     # 一起立的 `arm_split_report`（`R-7.6c`：走开卷从此是例外，例外必须常驻留痕）。
     # 49 = 47 + 2026-08-23 给 `R-7.9` 补的人称一轴（`narration_person_report` 度量 +
     # `narration_person_drift` INFO）——那一格此前整行写着「无守卫 → `B-10`」。
-    assert len(reg) == 49
+    # 51 = 49 + 2026-08-23 给 `R-7.9` 补的章尾一轴（`end_hook_late` INFO +
+    # `end_hook_unver`）——`draft_truncated` 之外本层此前没有任何结尾判据。
+    # 52 = 51 + `event_atom_unattested`（`R-7.22b`）：把「原子提错」从
+    # `event_landing_unver` 里拆出来、`owner` 改记 stage2。
+    assert len(reg) == 52
 
 
-def test_the_unver_five_must_say_why_they_cannot_check():
-    """`sev='unver'` 的五条**必须**走 `unverifiable(rule, why)`。
+def test_every_unver_rule_must_say_why_it_cannot_check():
+    """`sev='unver'` 的那几条**必须**走 `unverifiable(rule, why)`。
 
     `builder._status_of` 会拒收一条 `sev=unver` 却没说出「这次为什么够不着」的判据——
     **`unver` 是判据的边界，而边界要说得出在哪。**
     """
     unver = {r.rule for r in REGISTRY.of_stage('stage5') if r.sev == 'unver'}
-    assert unver == set(checks._UNVER) and len(unver) == 5
+    # 2026-08-23 由 5 条变 6 条（新增 `end_hook_unver`）。
+    assert unver == set(checks._UNVER) and len(unver) == 6
 
 
 def test_the_badge_can_never_be_pass_on_this_layer():
     """⭐⭐ **本层徽章结构上永远到不了 `pass`**，而那是对的。
 
-    5 条 `unver`，其中 `must_hold_unver` **每本都产**（全书那一组按定义查不了文面）
+    6 条 `unver`，其中 `must_hold_unver` **每本都产**（全书那一组按定义查不了文面）
     ⇒ 最好情况是 `amber` + 退出码 0。**与 stage4 相反**（那一层没有一条 `unver`）。
     """
     from contracts.schema.report import RuleLine, badge_of
