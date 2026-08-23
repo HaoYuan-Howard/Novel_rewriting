@@ -37,7 +37,9 @@ from novel.core.style import (
     DASH_CORPUS_P95, SHORT_PARA_MAX, SHORT_RUN_CORPUS_P95, SHORT_RUN_MIN,
     dash_per_1k, short_run_per_1k,
 )
-from novel.core.text import TERMINAL_PUNCT, min_hamming, norm, norm_index, quote_count
+from novel.core.text import (
+    TERMINAL_PUNCT, min_hamming, narration_layer, norm, norm_index, quote_count,
+)
 from novel.core.text import split_by_speech_tag
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage5 import measure as M
@@ -504,6 +506,105 @@ def _short_run(body: str, entry: dict[str, Any], book: M.Book) -> list[Finding]:
                     evidence=[f'{base:.2f}->{short_run_per_1k(body):.2f}'])]
 
 
+#: 第三人称叙述里指代**叙述者本人**的字面。⚠ 只用于「声明 `first` 却写成了第三人称」
+#: 那一支的**佐证读数**，不单独构成结论：第一人称叙事里写别的角色当然会出现「他/她」。
+_THIRD_PERSON_MARK = re.compile(r'[他她](?!们)')
+
+
+def _narration_person(body: str, entry: dict[str, Any], book: M.Book) -> list[Finding]:
+    """成稿的**叙述人称**与上游声明的 `narration.grammatical_person` 对不对得上。
+
+    ⭐ **这条判据的真值完全来自上游，本函数一个阈值都没有发明。**
+    `stage4/writer_context.json` 每章带 `narration[]`，里面写着这一章（或这一段）
+    该用第几人称、叙述者自称的字面是什么；stage2 那一侧甚至已经拿
+    `pronoun_surfaces` 对过**源章原文**（`pronoun_surface_unattested`）。
+    唯独**成稿这一侧从来没有人对过**——一个两头都有真值、中间断开的口子。
+
+    【它接的是一次真实事故】某本书 ch11 原章叙述层有 8 个「我」，stage2 却判
+    `grammatical_person: third` 且 `pronoun_surfaces: null`；stage2 自己那条
+    pronoun 校验遇 `null` **扫描分母为 0**（第三人称交空数组本来就合法），
+    stage4 原样带下去，写手**忠实执行了 third**，写出「她…她…我…她」四段内横跳的
+    s02，而本层 47 条判据没有一条会看这个 ⇒ 全书 `0 hard`，直接进了成书。
+    ⇒ **写手没错，缺的是这一层的验收。**
+
+    【为什么是 `info` 不是 `hard`】判准是恒等基线：同一条判据跑在**源章原文**上
+    会不会命中。实测会——那本书 ch12 声明 `third`，而源章叙述层里就有 1 个「我」
+    （自由间接引语式的插入，网文里合法）。**原作自己会触发的东西不能当硬闸**。
+    ⇒ 落 `info` + `repair='UNIQUE'`：照常进报告、进界面、可付费重写，但不拦落盘。
+    ⚠ **别因为它抓到过一次真事故就升 HARD**，除非先有一批标定过的样本说源文不会命中。
+
+    【两支各判各的，不合并】
+    · 声明 `first` 而叙述层里**一个声明的自称都没有** ⇒ 这一章没按第一人称写；
+    · 声明 `third` 而叙述层里**出现了本书自己的第一人称自称** ⇒ 混进了第一人称。
+    合并成「人称不符」会让 `directive` 说不出该往哪个方向改，而这一条是 `UNIQUE`
+    （目标人称被上游钉死），指令必须能直接执行。
+
+    ⚠⚠ **一律在 `text.narration_layer` 上判**：台词里的人称是说话人的不是叙述者的。
+    ⚠ `narration` 缺失 / 人称不是 first|third（`second`）/ 自称池为空 ⇒ **不判**
+    （返回空），由 `narration_person_report` 那条度量把「为什么没判」写在脸上。
+    """
+    layer = narration_layer(body)
+    if not layer.strip():
+        return []
+    fs: list[Finding] = []
+    for seg in (entry.get('narration') or []):
+        person = (seg or {}).get('grammatical_person')
+        where = (seg or {}).get('segment') or '全章'
+        if person == 'first':
+            surfaces = [s for s in ((seg or {}).get('pronoun_surfaces') or []) if s]
+            if not surfaces or any(s in layer for s in surfaces):
+                continue
+            fs.append(finding(
+                'narration_person_drift',
+                detail=f'{where}声明第一人称（自称 {"/".join(surfaces)}），'
+                       f'而叙述层里一个自称都没有'
+                       f'（第三人称指代 {len(_THIRD_PERSON_MARK.findall(layer))} 处）',
+                evidence=[f'first:{"/".join(surfaces)}:0']))
+        elif person == 'third':
+            #: 右锚是**书级**并集：本段自己的 `pronoun_surfaces` 恒为空
+            #: （见 `M.Book.first_person_surfaces` 的第二条 ⚠）。
+            hits = {s: layer.count(s) for s in book.first_person_surfaces
+                    if s in layer}
+            if not hits:
+                continue
+            fs.append(finding(
+                'narration_person_drift',
+                detail=f'{where}声明第三人称，叙述层里却出现本书的第一人称自称：'
+                       + '、'.join(f'「{s}」×{n}' for s, n in sorted(hits.items())),
+                evidence=[f'third:{s}:{n}' for s, n in sorted(hits.items())]))
+    return fs
+
+
+def _narration_person_report(
+    body: str, entry: dict[str, Any], book: M.Book,
+) -> list[Finding]:
+    """叙述人称的**读数**——无条件出，包括「这一条为什么没判」。
+
+    ⚠⚠ 缺这条度量的话，`narration_person_drift` 的 0 命中有三种完全不同的来源
+    （真的对得上 / `narration` 没声明 / 自称池是空的），而它们在报告上会长得一模一样。
+    `scanned` 里把分母写出来，是本仓「绿灯必须带扫描分母」的那条纪律。
+    """
+    layer = narration_layer(body)
+    segs = entry.get('narration') or []
+    if not segs:
+        return [finding('narration_person_report',
+                        detail='上游没有给 narration ⇒ 人称这一维**没在查**',
+                        evidence=['no_narration'])]
+    pool = '/'.join(sorted(book.first_person_surfaces)) or '（空）'
+    parts = []
+    for seg in segs:
+        person = (seg or {}).get('grammatical_person')
+        surfaces = [s for s in ((seg or {}).get('pronoun_surfaces') or []) if s]
+        anchor = surfaces if person == 'first' else sorted(book.first_person_surfaces)
+        got = sum(layer.count(s) for s in anchor)
+        parts.append(f'{(seg or {}).get("segment") or "全章"}：声明 {person}'
+                     f'｜叙述层自称 {got} 处'
+                     + ('｜**无锚可用，未判**' if not anchor else ''))
+    return [finding('narration_person_report',
+                    detail='叙述人称：' + '；'.join(parts) + f'｜书级自称池 {pool}',
+                    evidence=[f'{(s or {}).get("grammatical_person")}' for s in segs])]
+
+
 def _plan_keeps_content(entry: dict[str, Any]) -> bool:
     """这一章的计划有没有**净压缩**（预算基本等于源字数）。
 
@@ -687,6 +788,8 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
            + _density_drift(body, book) + _band_drift(body, book) + _dialogue_drift(body, book))
     # ⚠ 新探针一律**追加在末尾**（见 docstring 那条「追加顺序即渲染顺序」）。
     fs += _dash(body, entry, book) + _short_run(body, entry, book)
+    fs += (_narration_person_report(body, entry, book)
+           + _narration_person(body, entry, book))
     if (qp := sorted(set(quote_problems))):
         # ⚠⚠ 它原来是 `mech.quote_problems`，**一个记账块里的字段**——而它根本不是记账，
         #   **是一条结论**：「引号配对异常、未归一、留着交人工」。
@@ -1079,6 +1182,7 @@ _FROM_CHAPTER: tuple[str, ...] = (
     'dialogue_ratio_drift', 'quotes_in_unquoted_corpus',
     'layout_drift', 'para_len_drift', 'simile_drift', 'xinli_drift',
     'band_drift', 'dash_report', 'dash_drift', 'short_run_report', 'quote_unbalanced',
+    'narration_person_report', 'narration_person_drift',
 )
 
 #: **只有全书验收相**产得出来的：单章视角看不到，或者要跨章比。

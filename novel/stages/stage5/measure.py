@@ -370,6 +370,35 @@ class Book:
         return self._cache['bands']
 
     @property
+    def first_person_surfaces(self) -> frozenset[str]:
+        """**这本书自己**的第一人称自称字面池（`narration_person_*` 的右锚）。
+
+        取自 `writer_context.chapters[].narration[].pronoun_surfaces`，只收
+        `grammatical_person == 'first'` 那些段声明的字面 ⇒ 它是**上游给的**，
+        不是本模块发明的词表。
+
+        ⚠⚠ **绝不能写死一张「我/咱/本宫/朕」**：那就是关键词表，换一本书就漂。
+        stage2 的 prompt 明写这一格要「照原文用字」（`novel/stages/stage2/prompts.py`
+        那一行举的正是「我」「咱」「本宫」「朕」「哀家」「老子」）⇒ 取值面由书决定。
+
+        ⚠⚠ **书级并集，不取同章那一份**：判「声明 `third` 的章里混进第一人称」时，
+        那一章自己的 `pronoun_surfaces` 恰好是 `null`——第三人称交空数组是合法的
+        （`stage2/checks.py::pronoun_surface_unattested` 的 `scanned` 就是这么写的）。
+        拿同章那一份当右锚，**被测的那一类永远没有锚可用、判据恒不执行**。
+        与 `band_of` 那条「基线一律取书级、同章配对会退化成恒真」是同一个理由的两个实例。
+
+        ⚠ 空集是合法结果（全书没有一段第一人称）⇒ 调用方必须把「池是空的」与
+        「池非空但没命中」分开报，别把前者说成「查过、干净」。
+        """
+        if 'fp_surfaces' not in self._cache:
+            self._cache['fp_surfaces'] = frozenset(
+                s for entry in self.chapters.values()
+                for seg in (entry.get('narration') or [])
+                if (seg or {}).get('grammatical_person') == 'first'
+                for s in ((seg or {}).get('pronoun_surfaces') or []) if s)
+        return self._cache['fp_surfaces']
+
+    @property
     def sep_chars(self) -> float:
         """段落分隔符的平均字符开销（段落归一的基准）。
 

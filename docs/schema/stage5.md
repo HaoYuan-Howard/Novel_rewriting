@@ -33,7 +33,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > |---|---|---|
 > | **臂** | `stage5.write --mode deep`（闭卷）· `--mode shallow`（开卷） | **只差 (system prompt, 给不给源章原文)**，产物形状逐字节相同；`mode` 同时是目录名 |
 > | **写作** | 首轮逐章写作 + 落盘闸门；仅把 `REPAIR_UNIQUE` 或独立语义审判点名的可引用问题送入定向自救 | 正式稿始终只有 `chNN.json`；失败尝试进 `.INVALID` / `_rounds` |
-> | **验收** | `stage5.review` 做 0 成本机械验收（书级语义审判已下线，见 §三） | 47 条注册表，一份产物 |
+> | **验收** | `stage5.review` 做 0 成本机械验收（书级语义审判已下线，见 §三） | 49 条注册表，一份产物 |
 >
 > 正常整书写作不分别启动两个 mode，而用
 > `stage5.write --deep <章号列表|none> --shallow-rest`：人工选择一次，两臂同时起跑，
@@ -162,7 +162,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 >
 > ### ③ 机械基线：**7 条 HARD，盘上 31 章 0 命中；那一轮的 47 条里 29 条从未命中**
 >
-> ⚠ 这里的 47 是**当时那一轮的分母**，与今天注册表的 47 条只是巧合相等（中间下线 2 条语义判据、2026-08-22 新增 `arm_split_report`）。
+> ⚠ 这里的 47 是**当时那一轮的分母**，不是今天的：注册表现在是 49 条（中间下线 2 条语义判据、2026-08-22 新增 `arm_split_report`、2026-08-23 新增人称两条）。
 > 下面那张表里的读数一律按它自己那一轮的盘面读，不要拿今天的分母去除。
 >
 > ```
@@ -593,7 +593,7 @@ before/after SHA-256 与保留 pretrim 的销账入口。audit stale、正文/�
 
 ## 七、判据清单（**唯一落点**，机械与语义共用一张注册表）
 
-当前注册表共 **47 条**：**7 hard、25 info、10 metric、5 unver**。可反哺 23 条
+当前注册表共 **49 条**：**7 hard、26 info、11 metric、5 unver**。可反哺 23 条
 （**13 条 `UNIQUE` + 10 条 `FREE`**，见本节末尾那条准入）。
 owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 · `stage3`/`corpus` 各 1。
 ⚠ 上面这两行 2026-08-22 按 `REGISTRY.of_stage('stage5')` 现算改正过：此前写着
@@ -633,7 +633,9 @@ owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 �
 | `style_block_carries_plot` | INFO(stage3) | 风格块里没夹带情节 | 0 | — |
 | `quote_unbalanced` | INFO | 引号配对异常、未归一——**留着报，不静默修**（原 `mech.quote_problems`） | **0/31** | — |
 | `deep_overlap_high` | INFO | **闭卷臂**重合度 > `DEEP_OVERLAP_MAX`（10%）。**守的是臂的身份不是文风**；开卷不判 | **0/11 闭卷章**（今天 max 2.4%） | — |
+| `narration_person_drift` | INFO | 成稿**叙述层**的人称与 `stage4/writer_context.json` 的 `narration[].grammatical_person` 对不对得上。两支分开判：声明 `first` 却一个自称都没有 · 声明 `third` 却混进本书的第一人称自称（右锚取**书级**并集，因为 `third` 段自己的 `pronoun_surfaces` 恒为空）。⚠ **不是 HARD**：恒等基线上源文自己会命中（某书 ch12 声明 `third`、源章叙述层就有 1 个「我」） | **0/19**（寡妇门前，全书 19 章皆 `first`） | **0/19** |
 | **〔度量〕** `length_report` · `overlap_report` · `dash_report` · `short_run_report` | metric | **逐章无条件报出** | 31 / 31 / 31 / 31 | — |
+| **〔度量〕** `narration_person_report` | metric | **逐章无条件报出**声明人称、用的哪个锚、叙述层实测自称数、书级自称池；上游没给 `narration` 或无锚可用时明写**未判**。⚠ 没有它，`narration_person_drift` 的 0 命中的三种来源（真的对得上 / 没给 `narration` / 锚是空的）在报告上长得一模一样 | 19/19 | — |
 | **〔度量〕** `dialogue_report` | metric | **无条件**报出直接引语数与比值，**逐章 + 书级都报** | 31/31 + 每本 1 条书级 | — |
 | **〔度量〕** `secret_timeline` | metric | 每条 secret 的关键词数、权威揭示章、全书命中章与「揭示章未命中」盲区；与逐章字面闸共用同一数字归一尺 | **21 条 secret** | — |
 | **〔度量〕** `book_length_report` · `convergence_report` | metric | 全书篇幅总账 · 与上一轮相比消掉了什么 | 3 / 3（每本各 1） | — |
@@ -744,6 +746,7 @@ owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 �
 | `dialogue_fewer` · `dialogue_broken` · `dialogue_ratio_drift` | `R-7.20` ⭐ |
 | `band_drift` · `para_len_drift` · `layout_drift` · `simile_drift` · `xinli_drift` · `dash_drift` | `R-7.21` ⭐ |
 | `dash_report` · `short_run_report` | `R-7.21b` ⭐ |
+| `narration_person_report` · `narration_person_drift` | `R-7.9` ⭐ |
 | `event_landing` · `event_landing_unver` | `R-7.22` ⭐ |
 | `cross_chapter_number` | `R-7.23` ⭐ |
 | `length_report` · `overlap_report` · `book_length_report` | `R-8.1b` ⭐ |

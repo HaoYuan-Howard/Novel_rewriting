@@ -3,7 +3,7 @@
 """
 stage5.py —— 逐章写作与全书验收那一层的判据行。源是 `docs/schema/stage5.md` §六（**唯一落点**）。
 
-**47 条现役：7 HARD · 25 INFO · 10 度量 · 5 查不了。**
+**49 条现役：7 HARD · 26 INFO · 11 度量 · 5 查不了。**
 （⚠ 这一行此前写着「48 条：8 HARD · 26 INFO」，与注册表实际差 2 条——已按 `REGISTRY.of_stage('stage5')` 现算改正。）
 
 【一张表，两相共用】落盘闸门 / `--recheck` / `--revalidate` / `--apply-edit` /
@@ -435,6 +435,31 @@ _metric('book_length_report', '〔度量〕全书篇幅总账', 'R-8.1b',
 
 _metric('dash_report', '〔度量〕破折号密度', 'R-7.21b',
         note='逐章无条件报出（本书基线 + 语料 p95 两条线并排）')
+
+_metric('narration_person_report', '〔度量〕叙述人称：声明 vs 成稿实测', 'R-7.9',
+        note='⚠⚠ **它存在的理由是把「0 命中」的三种来源分开**：真的对得上 / 上游没给 '
+             '`narration` / 自称锚是空的。三者在报告上本来长得一模一样，而后两种是'
+             '「这一维没在查」不是「查过没事」——本仓「绿灯必须带扫描分母」那条纪律。'
+             '⇒ 逐章无条件报出声明人称、用的哪个锚、叙述层里实测多少处，'
+             '并在无锚可用时明写**未判**')
+
+_info('narration_person_drift', '成稿的叙述人称与上游声明一致', 'R-7.9',
+      repair='UNIQUE', quote=True,
+      directive='本章的叙述人称与计划声明的不一致。按声明的人称把叙述层重写一遍'
+                '（只改叙述，台词里的人称不动）。',
+      note='真值**完全来自上游**（`stage4/writer_context.json` 的 '
+           '`narration[].grammatical_person` + `pronoun_surfaces`），本条一个阈值都没发明。'
+           '⇒ `UNIQUE`：目标人称被上游钉死，写手编不出第三种答案。'
+           '⚠⚠ **为什么不是 HARD**：判准是恒等基线——源章原文自己会命中'
+           '（实测某书 ch12 声明 `third`，源章叙述层就有 1 个「我」，'
+           '自由间接引语式插入在网文里合法）。**原作会触发的东西不当硬闸。**'
+           '别因为它抓到过一次真事故就升级，除非先有一批标定过的样本说源文不会命中。'
+           '⚠ 两支分开判、`directive` 才说得出往哪改：声明 `first` 而叙述层一个自称都没有；'
+           '声明 `third` 而叙述层出现本书的第一人称自称（右锚取**书级**并集，'
+           '因为 `third` 段自己的 `pronoun_surfaces` 恒为空）。'
+           '⚠ 一律在 `novel/core/text.py::narration_layer` 上判：台词里的人称是说话人的。'
+           '接的事故：上游把某章误判成 `third`、stage2 那条 `pronoun_surface_unattested` '
+           '因 `null` 而扫描分母为 0、写手忠实执行 ⇒ 全书 `0 hard` 进成书')
 
 _metric('short_run_report', '〔度量〕连续短段成串', 'R-7.21b',
         note='口径由 core.style 的 SHORT_PARA_MAX / SHORT_RUN_MIN 唯一定义。'

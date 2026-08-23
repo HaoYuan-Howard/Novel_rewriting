@@ -114,6 +114,72 @@ def test_draft_too_short_goes_red_and_swallows_everything_else(book, entry):
         '早退没生效——短稿上跑出了别的判据，那些数全是噪声')
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 叙述人称 —— `R-7.9` 的第一个守卫，反例在这里
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _person_book(*persons_and_surfaces) -> tuple[M.Book, list[dict]]:
+    """按 `(人称, 自称字面)` 造一本只含 narration 的书。**判据吃 dict，所以反例配得出来。**"""
+    chapters = [
+        {'output_ordinal': i,
+         'narration': [{'segment': '全章', 'grammatical_person': person,
+                        'pronoun_surfaces': surfaces}]}
+        for i, (person, surfaces) in enumerate(persons_and_surfaces, 1)]
+    book = M.Book(title='t', ctx={'chapters': chapters}, style={},
+                  source_text={}, secrets=[])
+    return book, chapters
+
+
+def test_the_book_supplies_its_own_first_person_surfaces_and_never_a_hardcoded_list():
+    """⭐ 右锚是**上游给的**，不是代码里写死的一张「我/咱/本宫/朕」。
+
+    ⚠ 并集取**书级**：声明 `third` 的那一段自己的 `pronoun_surfaces` 恒为 `null`
+    （第三人称交空数组合法），拿同段那一份当锚 ⇒ **被测的那一类永远没有锚、判据恒不执行**。
+    """
+    book, _ = _person_book(('first', ['咱']), ('third', None), ('first', ['奴家']))
+    assert book.first_person_surfaces == frozenset({'咱', '奴家'})
+    assert M.Book(title='t', ctx={'chapters': []}, style={}, source_text={},
+                  secrets=[]).first_person_surfaces == frozenset()
+
+
+def test_narration_person_drift_catches_a_third_person_chapter_that_slips_into_first():
+    """⭐ **反例样本**：这正是盘上真出过的那一次（上游误判 `third`，写手忠实执行）。"""
+    book, chapters = _person_book(('first', ['我']), ('third', None))
+    fs = checks._narration_person('她确实知道。我不信他。她也得确保。', chapters[1], book)
+    assert [f.rule for f in fs] == ['narration_person_drift']
+    assert '「我」×1' in fs[0].detail
+
+
+def test_narration_person_drift_catches_a_first_person_chapter_without_any_self_reference():
+    """⭐ **反例样本**：声明第一人称，叙述层里一个自称都没有。"""
+    book, chapters = _person_book(('first', ['我']))
+    assert [f.rule for f in checks._narration_person('她走进屋。他没抬头。', chapters[0], book)]         == ['narration_person_drift']
+    assert checks._narration_person('我走进屋。他没抬头。', chapters[0], book) == []
+
+
+def test_narration_person_only_ever_looks_at_the_narration_layer():
+    """⚠⚠ **台词里的人称是说话人的，不是叙述者的**——两个方向的假阳都要挡住。
+
+    不剔除直接引语的话：声明 `first` 那一支会被角色台词里的「我」**假阴**（判据静默失效），
+    声明 `third` 那一支会被同一个「我」**假阳**（每一章都红）。
+    """
+    book, chapters = _person_book(('first', ['我']), ('third', None))
+    # 「我」只在台词里 ⇒ 第一人称那一支照样要出声（叙述层确实没有自称）
+    assert [f.rule for f in checks._narration_person(
+        '她说：「我不去。」他没抬头。', chapters[0], book)] == ['narration_person_drift']
+    # 同一句话，第三人称那一支必须**沉默**
+    assert checks._narration_person('她说：「我不去。」他没抬头。', chapters[1], book) == []
+
+
+def test_narration_person_report_says_out_loud_when_it_could_not_judge():
+    """⚠ 「0 命中」的三种来源必须分得开：对得上 / 没给 narration / 没有锚。"""
+    book, chapters = _person_book(('third', None))          # 全书没有第一人称 ⇒ 池空
+    only = checks._narration_person_report('她走了。', chapters[0], book)[0]
+    assert only.rule == 'narration_person_report' and '未判' in only.detail
+    none = checks._narration_person_report('她走了。', {'output_ordinal': 9}, book)[0]
+    assert '没在查' in none.detail
+
+
 def test_every_chapter_finding_carries_its_output_ordinal(book, entry):
     """逐章 finding 自己携带章号，不再靠 ReviewChapter 外层猜它属于谁。"""
     ordinal = int(entry['output_ordinal'])
@@ -408,7 +474,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 47 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 49 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -421,7 +487,9 @@ def test_every_registered_rule_has_exactly_one_producer():
     # 47 = 原 48 减去随 `stage5.semantic` 节点一并下线的 `semantic_secret_leak` /
     # `semantic_secret_coverage`（2026-08-17 用户裁决），再加 2026-08-22 随「默认全书闭卷」
     # 一起立的 `arm_split_report`（`R-7.6c`：走开卷从此是例外，例外必须常驻留痕）。
-    assert len(reg) == 47
+    # 49 = 47 + 2026-08-23 给 `R-7.9` 补的人称一轴（`narration_person_report` 度量 +
+    # `narration_person_drift` INFO）——那一格此前整行写着「无守卫 → `B-10`」。
+    assert len(reg) == 49
 
 
 def test_the_unver_five_must_say_why_they_cannot_check():
