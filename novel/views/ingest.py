@@ -529,15 +529,18 @@ def stage1_segments(base: str | os.PathLike[str], sid: str) -> Stage1Segments:
 
 def stage1_chapters(base: str | os.PathLike[str], sid: str) -> Stage1Chapters:
     material = _stage1_material(base, sid)
+    diagnosed = _preview_chapters(list(material.main.root))
     return Stage1Chapters(chapters=[
         Stage1ChapterRow(
             chapter_ordinal=section.chapter_ordinal,
             source_chapter_no=section.source_chapter_no,
             chars=len(section.text),
             preview=removal.preview_text(section.text, 80),
+            label_delta=fact.label_delta,
+            anomaly=fact.anomaly,
         )
-        for section in material.main.root
-    ])
+        for section, fact in zip(material.main.root, diagnosed)
+    ], anomaly_count=sum(1 for fact in diagnosed if fact.anomaly is not None))
 
 
 def stage1_hook_copy(base: str | os.PathLike[str], sid: str) -> HookCopyView:

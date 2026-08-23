@@ -5,7 +5,7 @@ import { renderRoute } from '@/test/render'
 import { JobDrawer } from './JobDrawer'
 
 describe('JobDrawer 作业概览', () => {
-  it('逐条展示最新状态，不连接或展示详细日志', async () => {
+  it('逐条展示状态，并能打开任一失败作业的 stdout/stderr', async () => {
     vi.spyOn(api, 'getJobs').mockResolvedValue({
       running: null,
       jobs: [
@@ -35,19 +35,30 @@ describe('JobDrawer 作业概览', () => {
         },
       ],
     })
-    const stream = vi.spyOn(api, 'streamJobLog')
+    const stream = vi.spyOn(api, 'streamJobLog').mockImplementation((id, _offset, sink) => {
+      sink.onEvent({
+        text: id === 'job-1' ? 'stderr: 分章器失败\n恢复命令：python -m novel.cli state\n' : 'done\n',
+        next_byte: 64,
+        done: true,
+        state: id === 'job-1' ? 'failed' : 'ok',
+      })
+      return vi.fn()
+    })
 
     renderRoute(<JobDrawer />, '/n/book-1/stage1')
     fireEvent.click(await screen.findByRole('button', { name: /作业 2 条记录/ }))
 
-    expect(await screen.findByText('Stage1 分章')).toBeVisible()
-    expect(screen.getByText('Stage0 扫描')).toBeVisible()
-    expect(screen.getByText('这里只显示全部作业的最新状态')).toBeVisible()
+    expect((await screen.findAllByText('Stage1 分章')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Stage0 扫描').length).toBeGreaterThan(0)
+    expect(screen.getByText('选择任一作业可查看完整 stdout / stderr')).toBeVisible()
     expect(screen.getByRole('link', { name: '查看运行进度 →' })).toHaveAttribute(
       'href',
       '/n/book-1/run',
     )
-    expect(screen.queryByText(/python -m novel\.cli/)).not.toBeInTheDocument()
-    expect(stream).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '查看“Stage0 扫描”日志' }))
+
+    expect(await screen.findByText('stderr: 分章器失败')).toBeVisible()
+    expect(screen.getByText('恢复命令：python -m novel.cli state')).toBeVisible()
+    expect(stream).toHaveBeenLastCalledWith('job-1', 0, expect.any(Object))
   })
 })

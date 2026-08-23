@@ -295,10 +295,13 @@ export interface Stage1Chapter {
   source_chapter_no: number
   chars: number
   preview: string
+  label_delta: number | null
+  anomaly: ChapterLabelAnomaly | null
 }
 
 export interface Stage1Chapters {
   chapters: Stage1Chapter[]
+  anomaly_count: number
 }
 
 export interface Stage1HookCopy {

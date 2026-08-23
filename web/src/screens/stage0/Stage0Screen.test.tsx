@@ -1,9 +1,14 @@
 import { api } from '@/api/endpoints'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { useLocation } from 'react-router-dom'
 import { renderRoute } from '@/test/render'
 import { Stage0Screen } from './Stage0Screen'
 import type { Stage0Segments } from '@/types/stages'
+
+function LocationProbe() {
+  return <output data-testid="location">{useLocation().pathname}</output>
+}
 
 describe('Stage0Screen 新书起跑入口', () => {
   it('审批操作栏可以直接交给 Agent，同时保留人工 Stage0 操作', async () => {
@@ -107,7 +112,7 @@ describe('Stage0Screen 新书起跑入口', () => {
       kind: 'stage1.partition',
       label: '切分 Stage1',
       argv: 'partition',
-      state: 'ok',
+      state: 'landed_red',
       paid: false,
       started: 2,
       finished: 3,
@@ -115,7 +120,13 @@ describe('Stage0Screen 新书起跑入口', () => {
       ordinal: null,
     })
 
-    renderRoute(<Stage0Screen />, '/n/book-1/stage0')
+    renderRoute(
+      <>
+        <Stage0Screen />
+        <LocationProbe />
+      </>,
+      '/n/book-1/stage0',
+    )
 
     expect(screen.queryByLabelText('自报身份 actor')).not.toBeInTheDocument()
     fireEvent.click(await screen.findByRole('button', { name: /^保存选择并进入 stage1/ }))
@@ -126,6 +137,8 @@ describe('Stage0Screen 新书起跑入口', () => {
       reason: '前端人工审校并批准 Stage0',
     })
     expect(partition).toHaveBeenCalledWith('book-1')
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/n/book-1/stage1'))
+    expect(screen.queryByText('没有进入 Stage 1')).not.toBeInTheDocument()
   })
 })
 
@@ -176,6 +189,11 @@ describe('Stage0Screen 原文审阅', () => {
     fireEvent.click(selectedSegment)
     expect(screen.getByText(/当前删除 1 段/)).toBeVisible()
     expect(selectedSegment).toHaveClass('bg-remove-bg', 'border-l-remove', 'text-remove')
+    expect(screen.getByRole('button', { name: 'Agent 代跑' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Agent 代跑' })).toHaveAttribute(
+      'title',
+      expect.stringMatching(/只会读取已经落盘/),
+    )
     expect(screen.getByRole('img', { name: 'warning 说明' })).toHaveAttribute(
       'title',
       expect.stringMatching(/不能安全自动删除/),

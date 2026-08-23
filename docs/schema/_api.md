@@ -123,7 +123,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/novels/:sid/stage0/candidate/dismiss` | `JobRecord`（同一请求体） | 新 |
 | `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
 | `GET /api/novels/:sid/stage1/segments` | `Stage1Segments` | 新 |
-| `GET /api/novels/:sid/stage1/chapters` | `Stage1Chapters` | 新 |
+| `GET /api/novels/:sid/stage1/chapters` | `Stage1Chapters`（正式章表 + 后端同源计算的 `label_delta` / `anomaly` / `anomaly_count`，供 Stage1 显式呈现重号、缺号与倒退） | 新 |
 | `GET /api/novels/:sid/stage1/hook_copy` | `HookCopyView` | 新 |
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |

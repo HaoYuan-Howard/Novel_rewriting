@@ -327,16 +327,30 @@ class Stage1ChapterRow(FrozenModel):
     source_chapter_no: int = Field(ge=0)
     chars: int = Field(ge=0)
     preview: str
+    #: 正式 Stage1 章表也携带章号诊断；否则重号/缺号/倒退只藏在校验行的
+    #: ``scanned`` 字符串里，界面会把那条规则折进「查过、没问题」。
+    label_delta: int | None = None
+    anomaly: ChapterLabelAnomaly | None = None
+
+    @model_validator(mode='after')
+    def _delta_exists_exactly_when_it_is_computable(self) -> Stage1ChapterRow:
+        if (self.chapter_ordinal == 1) != (self.label_delta is None):
+            raise ValueError('有且只有第一章没有 label_delta')
+        return self
 
 
 class Stage1Chapters(StrictModel):
     chapters: list[Stage1ChapterRow] = Field(default_factory=list)
+    anomaly_count: int = Field(default=0, ge=0)
 
     @model_validator(mode='after')
     def _ordinals_are_contiguous(self) -> Stage1Chapters:
         got = [chapter.chapter_ordinal for chapter in self.chapters]
         if got != list(range(1, len(got) + 1)):
             raise ValueError('stage1 章节索引必须从 1 起连续有序')
+        hit = sum(1 for chapter in self.chapters if chapter.anomaly is not None)
+        if hit != self.anomaly_count:
+            raise ValueError(f'anomaly_count={self.anomaly_count} 与逐章实际命中 {hit} 不符')
         return self
 
 
@@ -344,8 +358,8 @@ class Stage0PreviewChapter(FrozenModel):
     """S-00 批准前分章预览里的一章。**诊断用，不承重。**
 
     与 `Stage1ChapterRow` 刻意不共用一个模型：那一份是**已批准之后**的正式章表，
-    这一份是**批准之前**的一次性推演，多带两个只在审阅时有意义的字段。
-    合成一个模型就等于让「已验证事实」与「尚未批准的推演」在类型上分不开
+    这一份是**批准之前**的一次性推演。两份都显示同源的章号诊断，但不能因此
+    合成一个模型——那会让「已验证事实」与「尚未批准的推演」在类型上分不开
     （同 `TODO-36` 要拆 command DTO 的那条理由）。
     """
 

@@ -36,8 +36,16 @@ describe('Stage1Screen 信息与操作布局', () => {
     })
     vi.spyOn(api, 'getStage1Chapters').mockResolvedValue({
       chapters: [
-        { chapter_ordinal: 1, source_chapter_no: 1, chars: 4, preview: '第一章正文' },
+        {
+          chapter_ordinal: 1,
+          source_chapter_no: 1,
+          chars: 4,
+          preview: '第一章正文',
+          label_delta: null,
+          anomaly: null,
+        },
       ],
+      anomaly_count: 0,
     })
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
       v: 1,
@@ -78,5 +86,70 @@ describe('Stage1Screen 信息与操作布局', () => {
     expect(await within(controls).findByRole('button', { name: '确认切分' })).toBeVisible()
     const result = screen.getByText('原文切分结果')
     expect(controls.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('把重号、缺号与倒退作为显式章号异常提示，不折进查过没问题', async () => {
+    vi.spyOn(api, 'getStage1Segments').mockResolvedValue({
+      input_sha1: 'a'.repeat(40),
+      segments: [
+        {
+          id: 'hook', kind: 'hook', start: 0, end: 1, chars: 1, flagged: false,
+          text: '钩子', chapter_ordinal: null, source_chapter_no: null,
+        },
+      ],
+    })
+    vi.spyOn(api, 'getStage1Chapters').mockResolvedValue({
+      chapters: [
+        {
+          chapter_ordinal: 1, source_chapter_no: 1, chars: 10, preview: '第一段',
+          label_delta: null, anomaly: 'repeat',
+        },
+        {
+          chapter_ordinal: 2, source_chapter_no: 3, chars: 10, preview: '第二段',
+          label_delta: 2, anomaly: 'gap',
+        },
+        {
+          chapter_ordinal: 3, source_chapter_no: 1, chars: 10, preview: '第三段',
+          label_delta: -2, anomaly: 'reset',
+        },
+      ],
+      anomaly_count: 3,
+    })
+    vi.spyOn(api, 'getApprovals').mockResolvedValue({
+      v: 1,
+      sid: 'book-1',
+      gate: { s0: true, s1: false, s2: false, s3: false, s4: false, s5: false, s6: false, s7: false },
+      seen: { read: false, global: false },
+      deep: [],
+      writing: false,
+      spawns: {},
+    } satisfies ApprovalDoc)
+
+    renderRoute(<Stage1Screen />, '/n/book-1/stage1')
+
+    expect(await screen.findByText('章号异常 3 处，请逐章核对')).toBeVisible()
+    expect(screen.getByText('章号重复')).toBeVisible()
+    expect(screen.getByText('章号缺号（差值 2）')).toBeVisible()
+    expect(screen.getByText('章号倒退（差值 -2）')).toBeVisible()
+  })
+
+  it('正文接口失败时仍保留校验与确认恢复面', async () => {
+    vi.spyOn(api, 'getStage1Segments').mockRejectedValue(new Error('正文接口读取失败'))
+    vi.spyOn(api, 'getStage1Chapters').mockResolvedValue({ chapters: [], anomaly_count: 0 })
+    vi.spyOn(api, 'getApprovals').mockResolvedValue({
+      v: 1,
+      sid: 'book-1',
+      gate: { s0: true, s1: false, s2: false, s3: false, s4: false, s5: false, s6: false, s7: false },
+      seen: { read: false, global: false },
+      deep: [],
+      writing: false,
+      spawns: {},
+    } satisfies ApprovalDoc)
+
+    renderRoute(<Stage1Screen />, '/n/book-1/stage1')
+
+    const controls = screen.getByRole('group', { name: 'Stage1 校验与切分确认' })
+    expect(await within(controls).findByRole('button', { name: '确认切分' })).toBeVisible()
+    expect(await screen.findByText(/正文接口读取失败/)).toBeVisible()
   })
 })

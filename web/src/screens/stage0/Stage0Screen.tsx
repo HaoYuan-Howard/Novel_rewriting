@@ -42,6 +42,12 @@ function requireOk(job: Job): void {
   }
 }
 
+function requireLanded(job: Job): void {
+  if (job.state !== 'ok' && job.state !== 'landed_red') {
+    throw new Error(job.label + '没有落盘：' + job.state + '。作业日志里有完整输出。')
+  }
+}
+
 /** 浏览器里的写动作就是人在操作；Agent/CLI 仍由调用者显式填写自己的审计身份与理由。 */
 const HUMAN_ACTOR = 'human-ui'
 const HUMAN_REASON = {
@@ -129,7 +135,9 @@ export function Stage0Screen() {
         actor: HUMAN_ACTOR,
         reason: HUMAN_REASON.approve,
       }))
-      requireOk(await api.partitionStage1(sid))
+      // landed_red = Stage1 三份产物已经落盘，只是校验有硬红。红项审阅面就在
+      // Stage1；把它挡在 Stage0 会让用户反而进不了唯一的恢复入口。
+      requireLanded(await api.partitionStage1(sid))
       return currentSegments
     },
     onSuccess: async () => {
@@ -331,9 +339,14 @@ export function Stage0Screen() {
                         ) : null}
                         <button
                           type="button"
+                          disabled={dirty || run.isPending}
                           onClick={() => setAgentOpen(true)}
-                          title="查看完整命令与授权后，让 Agent 从当前盘面代跑"
-                          className="cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-7 text-body font-semibold hover:border-accent-line-2"
+                          title={
+                            dirty
+                              ? '先保存修改或恢复本轮；Agent 只会读取已经落盘的 Stage0'
+                              : '查看完整命令与授权后，让 Agent 从当前盘面代跑'
+                          }
+                          className="cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-7 text-body font-semibold hover:border-accent-line-2 disabled:cursor-not-allowed disabled:opacity-40"
                           style={{ color: SPEND_INK }}
                         >
                           Agent 代跑
