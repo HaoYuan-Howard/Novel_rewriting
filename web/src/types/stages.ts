@@ -473,6 +473,13 @@ export type GlobalReviewKind =
   | 'world_rule_kind'
   | 'world_rule_set_complete'
   | 'secret_set_complete'
+  | 'role'
+  | 'fate'
+  | 'relation'
+  | 'setting_fact'
+  | 'secret_setup'
+  | 'conflict_partition'
+  | 'arc_analysis'
 
 export interface GlobalReviewItem {
   item_id: string

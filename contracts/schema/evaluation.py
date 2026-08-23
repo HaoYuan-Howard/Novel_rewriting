@@ -95,10 +95,20 @@ GlobalReviewState = Literal['pending', 'PASS', 'FAIL', 'UNVER']
 
 class GlobalReviewItem(StrictModel):
     item_id: str = Field(min_length=1)
+    #: ⚠ **加一个值是放宽**（旧字节照样读得进来）⇒ 不升产物版本；**少一个值却等于
+    #: 「这个主体没人审」**——这份枚举就是 `R-2.16` 那道硬闸的评测面，而下游全部
+    #: 付费执行都压在它上面。与 `novel/quality/global_review.py::enumerate_required`
+    #: 必须同时改：那边枚举得出、这边收不下，是落盘时才炸的一对。
     kind: Literal[
         'world_rule_version', 'secret', 'reveal', 'known_by',
         'name_distinctiveness', 'address_context', 'world_rule_kind',
         'world_rule_set_complete', 'secret_set_complete',
+        # 2026-08-23 补齐：此前评测面只有上面九类，于是 `role` 泄结局、`setting`
+        # 泄底、relations 这条第二剧透通道、以及两道下发闸门的前件 `setup_chapters`
+        # **全部无人裁决**。粒度按「能不能被单独修正」分：前五个事实逐条，
+        # 后两个是这一层自己声明的解读层，分组整体裁决。
+        'role', 'fate', 'relation', 'setting_fact', 'secret_setup',
+        'conflict_partition', 'arc_analysis',
     ]
     subject_path: str = Field(min_length=1)
     subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')

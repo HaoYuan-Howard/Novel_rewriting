@@ -94,6 +94,16 @@ def _strings(value: object) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+#: 必须通读全书才能裁的那几类：集合完整性问「有没有漏收」，解读层问「这个划分/
+#: 这条弧线成不成立」——两者的答案都不在某一段原文里，**精确命中 0 条是常态**。
+#: ⚠ 判成另一类会给出一句「命中只是缩小阅读范围」的提示，读的人容易误以为
+#: 「找不到命中 ⇒ 没问题」，而这几类恰恰是 0 命中最需要人真的去读的。
+_WHOLE_BOOK_KINDS = frozenset({
+    'world_rule_set_complete', 'secret_set_complete',
+    'conflict_partition', 'arc_analysis',
+})
+
+
 def review_workpack(ctx: RunContext) -> dict[str, object]:
     """只读人工核验材料；精确命中是证据候选，不是自动裁决。"""
     store = ArtifactStore(ctx)
@@ -108,6 +118,13 @@ def review_workpack(ctx: RunContext) -> dict[str, object]:
         if item.kind == 'address_context' and lookup_path.endswith('.context'):
             lookup_path = lookup_path.rsplit('.', 1)[0]
         elif item.kind == 'name_distinctiveness':
+            lookup_path = lookup_path.rsplit('.', 1)[0]
+        elif item.kind == 'secret_setup':
+            # `setup_chapters` 恒是 `list[int]` ⇒ `_strings` 恒空、命中恒 0。
+            # 回退到整条 secret，人读到的是那条秘密的 `fact` 在原文里的位置——
+            # 「这些章到底埋没埋」正要拿它去对。⚠ 与 `address_context` /
+            # `name_distinctiveness` 同一形状：`subject` 是给人看的上下文，
+            # 而 `subject_path` / `subject_sha256` 仍严格绑在被裁决的那个字段上。
             lookup_path = lookup_path.rsplit('.', 1)[0]
         try:
             subject = _subject_at(payload, lookup_path)
@@ -143,7 +160,7 @@ def review_workpack(ctx: RunContext) -> dict[str, object]:
                 evidence.model_dump(mode='json') for evidence in item.evidence],
             'exact_literal_hits': hits,
             'review_note': ('集合完整性项必须通读全书核对；0 个精确命中不等于 PASS。'
-                            if item.kind.endswith('_set_complete') else
+                            if item.kind in _WHOLE_BOOK_KINDS else
                             '这些命中只缩小人工阅读范围，不产生 PASS/FAIL/UNVER。'),
         })
     return {

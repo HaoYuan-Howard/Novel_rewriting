@@ -30,19 +30,57 @@ def _item(kind: str, path: str, value: Any) -> GlobalReviewItem:
 
 
 def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewItem]:
-    """Derive every review subject from the typed Stage2 surface."""
+    """Derive every review subject from the typed Stage2 surface.
+
+    ⚠⚠ **没被枚举出来的字段等于没人审。** 这份清单是 `R-2.16` 那道硬闸的评测面，
+    下游全部付费执行与成书组装都压在它上面；`R-2.16` 说的「与当前 grounding 完整
+    一致」指的是**这里枚举的那些主体**一致，不是「整份 grounding 都过了人眼」。
+    此前只覆盖九类（枚举、规则、秘密三格），于是四处已知风险面全程无人裁决：
+    `role` 的结局旁路、`setting.世界观` 的泄底、relations 这条第二剧透通道、
+    以及 `setup_chapters`——它是 `_relation_gates` 隐瞒窗口与 secret 闸门第②臂
+    **两道下发闸门共同的前件**。
+
+    【粒度的分界线是「能不能被单独修正」】事实逐条、解读分组。`role` / `fate` /
+    每个 setting 键 / 每条 relation / 每条 secret 的埋点章都能单独改，各占一项；
+    `conflict_stages` 与 `arc` 是这一层自己定义的**解读层**，拆成逐条反而每条都
+    判不出对错，合成一项整体裁决。
+
+    ⚠ 取值面在 `contracts.schema.evaluation.GlobalReviewItem.kind`，两处必须一起改。
+    """
     rows: list[GlobalReviewItem] = []
     entities = global_grounding.get('entities') or {}
     for cid, character in sorted((entities.get('characters') or {}).items()):
         rows.append(_item(
             'name_distinctiveness', f'entities.characters.{cid}.name_distinctiveness',
             character.get('name_distinctiveness')))
+        # `role` 是一条已知的、未修的结局旁路：词表只抓转抄式结局词，实测某本上
+        # 命中 0/17 而人读真违规 6/17（「后成为…的下属」差一个字避开了「后被」）
+        # ⇒ 「判据没报违规」在这一维上不等于「没问题」，只能靠人裁。
+        rows.append(_item('role', f'entities.characters.{cid}.role', character.get('role')))
+        # `fate` 与 `role` 拆成两个字段的全部意义是**它不下发给写手**；写错等于白拆。
+        # ⚠ 它可以是 `null`（据实留空合法），空值同样需要一句「确实没有」的人工决定。
+        rows.append(_item('fate', f'entities.characters.{cid}.fate', character.get('fate')))
         for index, address in enumerate(character.get('address') or []):
             rows.append(_item(
                 'address_context', f'entities.characters.{cid}.address.{index}.context',
                 address.get('context')))
 
+    # relations 是 secrets 之外的**第二条剧透通道**：`valid_from_chapter` 记的是
+    # 【世内生效时点】而不是【读者知情时点】，秘密类关系上两者系统性错位。
+    # 下发侧那道补救闸门靠「`fact` 是否同时含两端人名」的启发式命中，
+    # 判不准的那部分只能在这里由人兜住。
+    for index, relation in enumerate(entities.get('relations') or []):
+        rid = relation.get('relation_id') or str(index)
+        rows.append(_item('relation', f'entities.relations.{rid}', relation))
+
     canon = global_grounding.get('canon') or {}
+    # ⚠ 键是**中文别名**（`by_alias=True` 落盘），全链仅有的三处固定中文 JSON key 之二。
+    # `世界观` 是已知泄底面：逐章字面闸门在唯一有 secrets 的那本上命中 **0/8**，
+    # 其中包括一条已知的真泄漏 ⇒ 机械闸门在这一维上没有判别力。
+    setting = canon.get('setting') or {}
+    for key in sorted(setting):
+        rows.append(_item('setting_fact', f'canon.setting.{key}', setting.get(key)))
+
     world_rules = canon.get('world_rules') or []
     secrets = canon.get('secrets') or []
     # Completeness is not implied by reviewing the rows that happened to be
@@ -64,8 +102,24 @@ def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewIte
         rows.append(_item(
             'known_by', f'canon.secrets.{sid}.character_known_by',
             secret.get('character_known_by') or []))
+        # 埋点章是 `_relation_gates` 的隐瞒窗口与 secret 闸门第②臂**两道闸门的前件**，
+        # 而「合法冷揭示」与「归一裁空」在字段值上完全同形（都是 `[]`），
+        # 只能靠 `_provenance.setup_chapters_pruned` 分开 ⇒ 判据看不出来，人必须看。
+        rows.append(_item(
+            'secret_setup', f'canon.secrets.{sid}.setup_chapters',
+            secret.get('setup_chapters') or []))
         for ei, event in enumerate(secret.get('reader_reveal_events') or []):
             rows.append(_item('reveal', f'canon.secrets.{sid}.reader_reveal_events.{ei}', event))
+
+    # 解读层分组两项。`conflict_stages` 的**覆盖性**已由 `R-2.14` 机械查（逐章显式
+    # 枚举、恰好覆盖全书一次），这里人工只判「这个划分本身合不合理、阶段名能不能定位」。
+    # 其余三格（climax / ending / arc_tracks）是这一层自己声明的解读，逐条拆开
+    # 每条都判不出对错 ⇒ 整体一项。
+    arc = global_grounding.get('arc') or {}
+    rows.append(_item(
+        'conflict_partition', 'arc.conflict_stages', arc.get('conflict_stages') or []))
+    rows.append(_item('arc_analysis', 'arc', {
+        key: value for key, value in arc.items() if key != 'conflict_stages'}))
     return rows
 
 
