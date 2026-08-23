@@ -28,6 +28,7 @@ from contracts.schema import MainText
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.config import load_config
 from novel.llm.prompts import with_json_shape
+from novel.llm.transport import ChatResponse
 from novel.stages.stage2 import extract, prompts
 from novel.stages.stage2.compile_v2 import (
     canonical_ir_projection, canonical_ir_projection_refs,
@@ -52,6 +53,16 @@ def test_the_registry_covers_exactly_the_declared_architectures():
         assert spec.architecture == key
         assert spec.schema_mode == 'prompt_plus_local_validation', \
             'DeepSeek V4 只支持 json_object——这不是 constrained decoding，标签要诚实'
+
+
+def test_only_ir31_rejects_reasoning_channel_salvage():
+    """救回能力按响应契约登记；不能为一章 A/B 反证全局关掉客户端恢复路。"""
+    assert not CONTRACTS['extraction-ir-v3.1'].accepts_reasoning_salvage
+    assert all(
+        spec.accepts_reasoning_salvage
+        for name, spec in CONTRACTS.items()
+        if name != 'extraction-ir-v3.1'
+    )
 
 
 def test_the_default_contract_is_ir2_and_env_can_still_select_v3():
@@ -480,6 +491,59 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
     assert set(stored.provenance.prompts) == {system_name, 'SUMMARY_BATCH_SYS'}
     assert all(blueprint.summary == _summary_for(blueprint.chapter_ordinal)
                for blueprint in stored.blueprints)
+
+
+@pytest.mark.parametrize(
+    ('architecture', 'closed', 'expected_calls', 'expected_event'),
+    [
+        ('extraction-ir-v3', False, 1, '救回稿事件'),
+        ('extraction-ir-v3.1', True, 2, '正文稿事件'),
+    ],
+)
+def test_ir31_resamples_reasoning_only_blueprints_without_disabling_v3_salvage(
+        monkeypatch, architecture, closed, expected_calls, expected_event):
+    """同一份合法 JSON：v3 沿用全局救回；v3.1 拒稿并在同档取得正常正文。
+
+    这里走 `request_blueprints` 的真实 validator 接线，防止只在注册表加了一格、
+    首轮或定向修复却忘记消费；不跑摘要批，调用数只统计目标章本身。
+    """
+    monkeypatch.setenv(_ENV_KEY, architecture)
+    book = Path(tempfile.mkdtemp()) / f'{architecture}_救回策略_128'
+    book.mkdir(parents=True)
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _t = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    by_ordinal = _scaffolded_responses(closed=closed)
+    ordinal = min(by_ordinal)
+    salvaged = copy.deepcopy(by_ordinal[ordinal])
+    normal = copy.deepcopy(by_ordinal[ordinal])
+    salvaged['beats'][0]['event'] = '救回稿事件'
+    normal['beats'][0]['event'] = '正文稿事件'
+
+    def respond(_req, index):
+        payload = {'blueprints': [salvaged if index == 0 else normal]}
+        if index == 0:
+            return ChatResponse(
+                content='',
+                reasoning=json.dumps(payload, ensure_ascii=False),
+                finish_reason='stop',
+                usage={'prompt_tokens': 10, 'completion_tokens': 20,
+                       'reasoning_tokens': 20},
+                model='test-model',
+            )
+        return _ok(payload)
+
+    ctx = _ctx(book, 'stage2.blueprint')
+    client, transport = _client(ctx, respond)
+    batch = extract.request_blueprints(ctx, client, chapters=(ordinal,))
+
+    assert batch['errors'] == [] and batch['scope_violations'] == []
+    assert len(transport.calls) == expected_calls
+    assert batch['raw_blueprints'][0]['beats'][0]['event'] == expected_event
 
 
 def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
