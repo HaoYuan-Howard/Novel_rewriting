@@ -950,7 +950,7 @@ Pro v3.1 相对 Pro v1.1 的 reasoning 低 1.7%，但 completion 高 4.7%；调�
 micro-event 到最终 beat/hinge 的履约；Pro v3.1 也会过切，不能把 Pro 输出或数量当成真值。** Pro
 只作离线诊断教师，不把其推理文本或整份答案蒸馏进 prompt。
 
-### 当前结构化候选
+### 结构化候选、付费烟测与否决
 
 下一候选把上述差异转成响应字段与本地可执行约束，而不是继续扩写自然语言 system prompt：
 
@@ -964,8 +964,44 @@ micro-event 到最终 beat/hinge 的履约；Pro v3.1 也会过切，不能把 P
    `N+k+1`；正式 artifact、摘要和 fresh/match 口径不变。
 
 相对上一候选，v3.1 system prompt 仅由 6,577 增至 6,591 字（+14）；局部结构 hint 从 538 增至
-678 字（+140），主要变化在响应 schema、compiler 与 validator。定向契约/编译测试和 Stage2 四文件
-回归均 exit 0；完整非 corpus 回归也在补齐响应内部词表的 API withheld 登记后 exit 0。它仍没有真实
-Flash 证据；下一步只能先跑两本开发书的失败章/密集章烟测，
-通过后再整跑，最后才可启封第三本 holdout。默认继续是 `extraction-ir-v2`，盘上
-`ChapterBlueprints` schema 继续是 v2。
+678 字（+140），主要变化在响应 schema、compiler 与 validator。定向、Stage2 四文件与完整非 corpus
+回归均 exit 0，但测试通过只证明契约能执行，不能代替真模型的成本与内容裁决。
+
+用户授权后在提交 `e720d03219232c5694acf1107a3948200c88db25` 上做两书首轮子集烟测；隔离 base 为
+`outputs/_stage2_flash_quality/v31_structured_smoke_e720d03_20260823/`，模型为
+`deepseek-v4-flash`、thinking=true、独立空缓存。工具先核每个子集请求与后续整跑逐字节同构，不写
+任何书内 artifact；两组均省略摘要批。首次无情道命令因 worktree 没加载本地凭据，在传输前以
+`MissingApiKey` 结束，没有正文离机、成功调用或费用，operator 仍如实登记 exit 1；随后从主工作区
+本地 `.env` 仅注入不回显的既有凭据，按相同预览重试。
+
+| 同批风险章 | 旧冻结调用 / prompt / completion / reasoning | 结构化候选调用 / prompt / completion / reasoning |
+| --- | ---: | ---: |
+| 无情道 ch4/12/13/16/18/19/21/22 | 10 / 68,241 / 86,565 / 76,944 | 10 / 70,437 / 145,555 / 130,860 |
+| 偶像 ch1/7/10/13/16 | 8 / 66,003 / 87,071 / 75,147 | 7 / 58,467 / 160,635 / 139,875 |
+| 合计 | 18 / 134,244 / 173,636 / 152,091 | 17 / 128,904 / 306,190 / 270,735 |
+
+新候选少 1 调、prompt 低 4.0%，但 completion 高 76.3%、reasoning 高 78.0%。4/13 个目标章触发
+validator 重采：无情道 ch12/ch16 缺自报 `F_VERBATIM` 区间 hinge，偶像 ch7/ch10 把自报关键事件
+压过 beat 边界。说明闭集确实抓到履约问题，但把一次短响应变成双份事件表示与逐项自证，成本不可接受。
+
+内容侧同样是混合裁决：
+
+- 无情道 8 章全部可编译、0 HARD、span/hinge 全定位；ch4 exact 恢复“抽出隐藏款了”，ch12 exact
+  恢复“除了修炼就是来看师姐练剑”和糖人，ch13 exact 恢复戏骨仙、“你嘴没她碎”和鬼域禁唱；
+  ch22 为 7 beat / 12 hinge，完整保存请求—原因—安抚—常来—答应，没有 Pro v3.1 的 13 beat 过切；
+- 偶像 ch1 为 13 beat，ch7 为 9 beat，既有粗切反例消失；但 ch1 从 12 增至 21 hinge、ch13 从 15
+  增至 26，普通介绍、训斥与接话被批量抬成 hinge，不能用“定位 100%”洗成精度通过；
+- 两份内存合并稿均 0 HARD，正式书目录零改动；无情道只新增一条 ch22 群体人物字面依据 INFO，
+  不是响应 schema 失败，但整跑前仍须复核。
+
+无情道 / 偶像 JSON 报告 SHA-256 为
+`6d7672f692f44a45a4c79c00994bba45d269fe4bad19207ac0d4ddc52e711c2d` /
+`8f9bda388cde970c47ff4df3879c6a6afde7dfce24fb4c4f8f9242a5604dbc43`；ledger / LLM audit / operator
+audit 为 `1028427dadc0d25cd580018c3595c5dd0a3ae2cbf4340060a13f32439aca280d` /
+`6f1e21242fd9f8b1e11c4f87ea10a90a2c3fbbfc21b1809baf15504aebefd150` /
+`a57692fc745dd86c47c7a749baf4906d86447f5daab1f32f2b78f8c3c6461c6c`。
+
+裁决是撤回 `function` / `fidelity` 字段及其动态 validator，system/hint 回到 e268 的 6,577/538 字；
+保留候选分层抽样与摘要前 HARD 预检，因为两者不要求模型多交一份语义自证。下一步先复测 6 个核心章，
+通过才扩大到其余密集章；不再为已否决候选整跑。默认继续 `extraction-ir-v2`，盘上
+`ChapterBlueprints` schema 继续是 v2，第三本 holdout 仍未启封。

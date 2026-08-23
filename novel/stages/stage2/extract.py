@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from contracts.invariants import BLUEPRINT_ARCHITECTURE, MICRO_EVENT_MUST_SPLIT
+from contracts.invariants import BLUEPRINT_ARCHITECTURE
 from contracts.rules import REGISTRY
 from contracts.schema.base import StrictModel
 from contracts.schema.report import CheckReport
@@ -995,15 +995,13 @@ def _detail_validator(ordinal: int, frozen: list[int], allowed: set[str]) \
 
 def _scaffolded_validator(
     ordinal: int,
-    chapter_text: str,
+    paragraph_count: int,
     allowed: set[str],
     *,
     candidate_rows: list[dict[str, Any]] | None = None,
     narration_refs: bool = False,
 ) -> Callable[[Any, Any], str | None]:
-    """单调用脚手架的动态闸：边界、关闭引用与 v3.1 召回义务一次验完。"""
-    paragraphs = paragraph_spans(chapter_text)
-    paragraph_count = len(paragraphs)
+    """单调用脚手架的动态闸：边界召回、关闭人物与候选所属拍一次验完。"""
     boundary = _boundary_validator(ordinal, paragraph_count)
     candidates = {
         str(row['candidate_id']): row for row in (candidate_rows or [])
@@ -1034,55 +1032,6 @@ def _scaffolded_validator(
             if invalid_narration:
                 return (f'ch{ordinal} 叙述身份含清单外 char_id：'
                         f'{invalid_narration}')
-
-        # v3.1 的 micro-event 多两格闭集字段；v3 没有这两个属性，保持原语义。
-        # 关键功能只要求它的**结束**成为 beat 边界，仍可与紧邻前因合并；逐字义务则
-        # 必须由同一 micro-event 段区间里的 hinge 履行，不能拿同拍别处的对白充数。
-        has_obligations = bool(blueprint.micro_events) and hasattr(
-            blueprint.micro_events[0], 'function')
-        if has_obligations:
-            beat_end_set = {int(beat.end_para) for beat in blueprint.beats}
-            missing_boundaries = [
-                int(micro.end_para)
-                for micro in blueprint.micro_events
-                if str(micro.function) in MICRO_EVENT_MUST_SPLIT
-                and int(micro.end_para) not in beat_end_set
-            ]
-            if missing_boundaries:
-                return (f'ch{ordinal} 关键 micro-event 没保留为 beat 边界：'
-                        f'{missing_boundaries}')
-
-            hinge_paras: set[int] = set()
-            beat_start_para = 1
-            for beat in blueprint.beats:
-                for hinge in beat.hinges:
-                    candidate_id = getattr(hinge, 'candidate_id', None)
-                    if candidate_id is not None:
-                        row = candidates.get(str(candidate_id))
-                        if row is not None:
-                            hinge_paras.add(int(row['para']))
-                        continue
-                    phrase = str(getattr(hinge, 'phrase', '') or '')
-                    if not phrase:
-                        continue
-                    for para, (start, end) in enumerate(paragraphs, start=1):
-                        if (beat_start_para <= para <= int(beat.end_para)
-                                and phrase in chapter_text[start:end]):
-                            hinge_paras.add(para)
-                beat_start_para = int(beat.end_para) + 1
-
-            missing_fidelity: list[str] = []
-            start_para = 1
-            for micro in blueprint.micro_events:
-                end_para = int(micro.end_para)
-                if (str(micro.fidelity) == 'F_VERBATIM'
-                        and not any(start_para <= para <= end_para
-                                    for para in hinge_paras)):
-                    missing_fidelity.append(f'{start_para}..{end_para}')
-                start_para = end_para + 1
-            if missing_fidelity:
-                return (f'ch{ordinal} F_VERBATIM micro-event 在自身段内没有 hinge：'
-                        f'{missing_fidelity}')
 
         start_para = 1
         for beat in blueprint.beats:
@@ -1347,9 +1296,9 @@ def _run_blueprint_repair(
         prompt_rows[ordinal] = (user, findings_of[ordinal])
         requests.append((ordinal, system, user))
 
-    chapter_text_of = {
+    paragraph_count = {
         int(section.get('chapter_ordinal') or 0):
-        str(section.get('text') or '')
+        len(paragraph_spans(str(section.get('text') or '')))
         for section in main_text
     }
     validator_of = None
@@ -1359,7 +1308,7 @@ def _run_blueprint_repair(
     elif spec.topology == 'scaffolded_single':
         validator_of = lambda ordinal: _scaffolded_validator(
             ordinal,
-            chapter_text_of[ordinal],
+            paragraph_count[ordinal],
             set(visible.get(ordinal, {})),
             candidate_rows=candidate_rows.get(ordinal, []),
             narration_refs=spec.uses_narration_refs,
@@ -1622,14 +1571,14 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
             visible = visible_character_refs(characters, main_text)
             candidate_rows = (hinge_candidates_by_chapter(main_text)
                               if spec.uses_hinge_candidates else {})
-            chapter_text_of = {
+            paragraph_count = {
                 int(section.get('chapter_ordinal') or 0):
-                str(section.get('text') or '')
+                len(paragraph_spans(str(section.get('text') or '')))
                 for section in main_text
             }
             validator_of = lambda ordinal: _scaffolded_validator(
                 ordinal,
-                chapter_text_of[ordinal],
+                paragraph_count[ordinal],
                 set(visible.get(ordinal, {})),
                 candidate_rows=candidate_rows.get(ordinal, []),
                 narration_refs=spec.uses_narration_refs,

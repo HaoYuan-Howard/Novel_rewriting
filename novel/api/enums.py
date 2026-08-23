@@ -95,14 +95,8 @@ _WITHHELD: dict[str, str] = {
                          '闭合取值面——渲染成下拉框、或拿它校验一个合法但不在表里的值，'
                          '而「还可以有别的」正是这一格要表达的东西。'
                          '⚠ 它也不是给人看的取值面，而是**发给模型的那句话**：'
-                          '唯一消费方是 `novel/stages/stage2/prompts.py` 的 `$CHANGE_TYPES`。'
-                          '前端要显示某本书**实际用到**哪几种，那份读数在产物的 `arc_tracks` 里',
-    'MICRO_EVENT_FUNCTIONS': 'v3.1 临时响应的模型自报义务，只在 prompt、响应 schema 与'
-                             '调用点 validator 之间流动；compiler 会丢弃，前端没有实例可渲染',
-    'MICRO_EVENT_MUST_SPLIT': '上述响应义务的 validator 子集。发给前端只会让界面重做一次'
-                              '本应在付费调用点关闭式执行的内部一致性判定',
-    'MICRO_EVENT_FIDELITY': 'v3.1 临时响应的原句保真自报义务；不进入 artifact，'
-                            '前端应呈现最终 hinge 与后端判据，而不是实验响应词表',
+                         '唯一消费方是 `novel/stages/stage2/prompts.py` 的 `$CHANGE_TYPES`。'
+                         '前端要显示某本书**实际用到**哪几种，那份读数在产物的 `arc_tracks` 里',
     # ── 事件拍 ──
     'BLUEPRINT_ARCHITECTURE': '`stage2.blueprint` 那次调用的**模型可见边界身份**，'
                               '是产地写进 `_provenance.context.architecture` 的一笔账。'

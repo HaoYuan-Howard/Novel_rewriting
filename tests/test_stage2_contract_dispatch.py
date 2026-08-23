@@ -23,12 +23,9 @@ from pathlib import Path
 
 import pytest
 
-from contracts.invariants import (
-    BLUEPRINT_ARCHITECTURES, MICRO_EVENT_FIDELITY, MICRO_EVENT_FUNCTIONS,
-    MICRO_EVENT_MUST_SPLIT, PLACE_MODES,
-)
+from contracts.invariants import BLUEPRINT_ARCHITECTURES, PLACE_MODES
 from contracts.schema import MainText
-from contracts.schema.stage2 import ChapterBlueprints, ChapterBlueprintsResponseV31
+from contracts.schema.stage2 import ChapterBlueprints
 from novel.config import load_config
 from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import extract, prompts
@@ -38,7 +35,6 @@ from novel.stages.stage2.compile_v2 import (
 )
 from novel.stages.stage2.contract import CONTRACTS, active_contract, contract_for
 from novel.stages.stage2.paragraphs import paragraph_spans
-from novel.stages.stage2.references import hinge_candidates
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, main_text
 from tests.test_stage2_generation import _client, _ctx, _ok, _response_global
@@ -259,10 +255,6 @@ def test_the_two_scaffolded_single_contracts_are_independently_selectable():
         'chapter_ordinal', 'micro_events', 'beats', 'narration'}
     assert set(prompts.BLUEPRINT_HINT_V3['blueprints'][0]['micro_events'][0]) == {
         'end_para', 'cue'}
-    v31_micro = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['micro_events'][0]
-    assert set(v31_micro) == {'end_para', 'cue', 'function', 'fidelity'}
-    assert v31_micro['function'] == '|'.join(MICRO_EVENT_FUNCTIONS)
-    assert v31_micro['fidelity'] == '|'.join(MICRO_EVENT_FIDELITY)
     narration = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['narration'][0]
     assert 'narrator_char_id' in narration and 'narrator_name' not in narration
     assert 'candidate_id' in str(prompts.BLUEPRINT_HINT_V31)
@@ -271,73 +263,12 @@ def test_the_two_scaffolded_single_contracts_are_independently_selectable():
     assert '要害台词不是“随便一句对白”' in prompts.BLUEPRINT_SYS_V31
     assert '反批量不等于少交' in prompts.BLUEPRINT_SYS_V31
     assert '笑点最后一击' in prompts.BLUEPRINT_SYS_V31
-    assert '不得退成章节大纲' in prompts.BLUEPRINT_SYS_V31
-    assert '|'.join(sorted(MICRO_EVENT_MUST_SPLIT)) in prompts.BLUEPRINT_SYS_V31
-    assert '同一 micro-event 段内有 hinge' in prompts.BLUEPRINT_SYS_V31
+    assert '不得退回 1~3 条' in prompts.BLUEPRINT_SYS_V31
+    assert '关系或立场\n  反转' in prompts.BLUEPRINT_SYS_V31
     assert '不得从「第二天 / 下一秒」中截出「二天 / 一秒」' \
         in prompts.BLUEPRINT_SYS_V31
     assert '$' not in prompts.BLUEPRINT_SYS_V3
     assert '$' not in prompts.BLUEPRINT_SYS_V31
-
-
-def _v31_obligation_response(text: str, *, keep_decision: bool,
-                             keep_verbatim: bool) -> ChapterBlueprintsResponseV31:
-    quoted = next(row for row in hinge_candidates(text)
-                  if row['source']['text'] == '「留下。」')
-    beats = [{
-        'end_para': 3 if keep_decision else 4,
-        'time_layer': 'T_PRESENT', 'place': None,
-        'present_char_ids': [], 'event': '她要求对方留下，对方作出决定。',
-        'hinges': ([{'kind': '要害台词',
-                     'candidate_id': quoted['candidate_id']}]
-                   if keep_verbatim else []),
-    }]
-    if keep_decision:
-        beats.append({
-            'end_para': 4, 'time_layer': 'T_PRESENT', 'place': None,
-            'present_char_ids': [], 'event': '事情收束。', 'hinges': [],
-        })
-    return ChapterBlueprintsResponseV31.model_validate({'blueprints': [{
-        'chapter_ordinal': 1,
-        'micro_events': [
-            {'end_para': 1, 'cue': '她开口',
-             'function': 'M_ACTION', 'fidelity': 'F_FACT'},
-            {'end_para': 2, 'cue': '要求留下',
-             'function': 'M_RELATION', 'fidelity': 'F_VERBATIM'},
-            {'end_para': 3, 'cue': '对方答应',
-             'function': 'M_DECISION', 'fidelity': 'F_FACT'},
-            {'end_para': 4, 'cue': '事情收束',
-             'function': 'M_RESULT', 'fidelity': 'F_FACT'},
-        ],
-        'beats': beats,
-        'narration': [{
-            'grammatical_person': 'third', 'narrator_char_id': None,
-            'focalizer_char_id': None, 'pronoun_surfaces': [],
-        }],
-    }]})
-
-
-def test_v31_validator_executes_micro_event_boundary_and_fidelity_obligations():
-    text = '她开口。\n\n「留下。」\n\n对方答应。\n\n事情结束。'
-    rows = hinge_candidates(text)
-
-    missing_boundary = extract._scaffolded_validator(
-        1, text, set(), candidate_rows=rows, narration_refs=True)(
-            _v31_obligation_response(
-                text, keep_decision=False, keep_verbatim=True), None)
-    assert missing_boundary and '关键 micro-event 没保留' in missing_boundary
-
-    missing_hinge = extract._scaffolded_validator(
-        1, text, set(), candidate_rows=rows, narration_refs=True)(
-            _v31_obligation_response(
-                text, keep_decision=True, keep_verbatim=False), None)
-    assert missing_hinge and 'F_VERBATIM' in missing_hinge
-
-    accepted = extract._scaffolded_validator(
-        1, text, set(), candidate_rows=rows, narration_refs=True)(
-            _v31_obligation_response(
-                text, keep_decision=True, keep_verbatim=True), None)
-    assert accepted is None
 
 
 def test_the_summary_batch_arm_declares_its_bounds():

@@ -339,8 +339,6 @@ def test_v31_projection_is_a_valid_repair_baseline_and_round_trips():
     artifact = compiled['blueprints'][0]
     projected = canonical_ir_projection_v31(artifact, CH1)
     assert projected['micro_events'][0]['cue'] == artifact['beats'][0]['event']
-    assert projected['micro_events'][0]['function'] == 'M_ACTION'
-    assert projected['micro_events'][0]['fidelity'] == 'F_FACT'
     assert set(projected['narration'][0]) == {
         'grammatical_person', 'narrator_char_id', 'focalizer_char_id',
         'pronoun_surfaces'}

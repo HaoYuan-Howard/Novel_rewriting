@@ -340,31 +340,6 @@ assert tuple(LAYER_CN) == tuple(LAYER_GLOSS) == TIME_LAYERS, \
 #: 连续文本段一律不下发——写作节点必然沿着它的句序和节奏走，那正是重写要避免的。
 HINGE_KINDS: Final = ('硬数字', '要害台词', '物件', '因果前提')
 
-#: `extraction-ir-v3.1` 临时召回层的事件功能。它们只活在模型响应与调用点
-#: validator 之间，compiler 会整体丢弃，因此**不是**盘上 `ChapterBlueprints` 的升版。
-#:
-#: 【为什么还要一格闭集】现有 `{end_para, cue}` 只能证明模型列过若干小事，不能证明
-#: 最终压缩时保住了哪类边界。Flash 真书里 ch22 已列出 12 个 micro-event，却压成 3 拍，
-#: 把关系请求、原因解释与答复塞进同一条长 event；Pro 同契约能保住这些推进。把功能变成
-#: 响应字段后，代码才能在**摘要调用之前**执行结构义务，而不是再往 prompt 里补同义句。
-MICRO_EVENT_FUNCTIONS: Final = (
-    'M_ACTION', 'M_REACTION', 'M_CONTEXT', 'M_REVEAL', 'M_DECISION',
-    'M_RESULT', 'M_RELATION', 'M_PAYOFF', 'M_TRANSITION',
-)
-
-#: 这些功能的结束段必须也是最终 beat 的结束段。它只禁止把关键推进与**后续**推进继续
-#: 压在一起；仍允许把它与紧邻的前因合成一拍，所以不会强迫“问题/回答”各占一拍。
-MICRO_EVENT_MUST_SPLIT: Final = frozenset({
-    'M_REVEAL', 'M_DECISION', 'M_RESULT', 'M_PAYOFF', 'M_TRANSITION',
-})
-assert MICRO_EVENT_MUST_SPLIT < set(MICRO_EVENT_FUNCTIONS)
-
-#: 临时 micro-event 对原文字面的需求。`F_VERBATIM` 不等于“这段有对白”：只有关系
-#: 证据、揭示原话、承诺/拒绝、后文回收句或笑点落点等改一个字会损失作用的材料才选它。
-#: 调用点 validator 会要求**同一 micro-event 段区间内**至少有一条 hinge，不能拿同拍
-#: 另一句普通对白冒充已履约。
-MICRO_EVENT_FIDELITY: Final = ('F_FACT', 'F_VERBATIM')
-
 #: 每类保真点各守各的维度。
 #: ⚠ **这张表不许用 `dict.get(kind, 默认值)` 取**——把写歪的类型兜底成
 #: 「原样写入，一个字都不能改」，会让一段叙述文变成逐字要求，而全链没有一层出声。

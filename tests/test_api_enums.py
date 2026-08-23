@@ -81,15 +81,6 @@ def test_prompt_experiment_controls_are_not_published(paid_payload):
     assert 'prompt_experiments' not in paid_payload
 
 
-def test_stage2_response_only_obligations_are_not_published(paid_payload):
-    """v3.1 临时响应词表不到 artifact，也不能泄成前端的第二个判官。"""
-    for name in (
-        'MICRO_EVENT_FUNCTIONS',
-        'MICRO_EVENT_MUST_SPLIT',
-        'MICRO_EVENT_FIDELITY',
-    ):
-        assert name in E._WITHHELD
-        assert name.lower() not in paid_payload
     assert 'prompt_variants' not in paid_payload
 
 

@@ -26,7 +26,6 @@ from typing import Any
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, CHANGE_TYPES_ENUM, HINGE_KINDS, NAME_DISTINCTIVENESS,
-    MICRO_EVENT_FIDELITY, MICRO_EVENT_FUNCTIONS, MICRO_EVENT_MUST_SPLIT,
     NARRATIVE_PERSON, PLACE_MODES, RESPONSE_TIME_LAYERS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from novel.llm.prompts import fill
@@ -655,21 +654,6 @@ _SCAFFOLD_SINGLE_NOTE = """\
 - 最终事实只写在 `beats.event`。不要把 cue 机械拼接成 event，要按下面全部细节规则填写。
 """
 
-# v3.1 不再靠继续堆“哪些情况要切”的同义句：模型必须逐项交闭集功能与保真需求，
-# 调用点 validator 再把它们变成可执行义务。字段只活在响应层，不进入盘上蓝图。
-_SCAFFOLD_SINGLE_NOTE_V31 = f"""\
-【同一次响应先召回、再压缩】每章同时交 `micro_events` 与最终 `beats`：
-- `micro_events` 每项是 `{{end_para, cue, function, fidelity}}`；逐段列出新的动作、反应、
-  背景因果、揭示、决定、结果、关系推进、笑点/伏笔回收或时空转换，不得退成章节大纲。
-- `function` 只能是 `{'|'.join(MICRO_EVENT_FUNCTIONS)}`；其中
-  `{'|'.join(sorted(MICRO_EVENT_MUST_SPLIT))}` 的 end_para 必须成为最终 beat 边界。
-- `fidelity` 只能是 `{'|'.join(MICRO_EVENT_FIDELITY)}`。关系证据、揭示原话、承诺/拒绝、
-  后文回收句与笑点落点选 `F_VERBATIM`；validator 要求同一 micro-event 段内有 hinge。
-- `micro_events.end_para` 严格递增并到最后一段。最终 `beats` 只能合并相邻项，边界只能
-  从 micro_events 选择并到最后一段；同一问题的追问、回答与即时反应可以合并。
-- 最终事实只写在 `beats.event`；cue 只作短提醒，不要机械拼接成第二份 event。
-"""
-
 
 def _replace_prompt_section(
     template: str, start_marker: str, end_marker: str, replacement: str,
@@ -826,7 +810,7 @@ BLUEPRINT_SYS_V2_REFS = RULES_V2 + fill(
 BLUEPRINT_SYS_V3 = RULES_V2 + fill(
     _SCAFFOLD_SINGLE_NOTE + '\n\n' + _BLUEPRINT_TPL_V2_REFS)
 BLUEPRINT_SYS_V31 = RULES_V2 + fill(
-    _SCAFFOLD_SINGLE_NOTE_V31 + '\n\n' + _BLUEPRINT_TPL_V31_REFS)
+    _SCAFFOLD_SINGLE_NOTE + '\n\n' + _BLUEPRINT_TPL_V31_REFS)
 
 #: 书级摘要批（extraction IR 族共用，付费，一书一调）。
 SUMMARY_BATCH_SYS = fill(_SUMMARY_BATCH_TPL)
@@ -971,9 +955,7 @@ BLUEPRINT_HINT_V31: dict[str, Any] = {
     'blueprints': [{
         'chapter_ordinal': 1,
         'micro_events': [{'end_para': '结束段号(整数)',
-                          'cue': '一项新推进的短提示',
-                          'function': '|'.join(MICRO_EVENT_FUNCTIONS),
-                          'fidelity': '|'.join(MICRO_EVENT_FIDELITY)}],
+                          'cue': '一项新推进的短提示'}],
         'beats': [{
             **BLUEPRINT_HINT_V2_REFS['blueprints'][0]['beats'][0],
             'hinges': [

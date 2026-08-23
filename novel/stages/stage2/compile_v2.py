@@ -732,11 +732,6 @@ def canonical_ir_projection_v31(
 ) -> dict[str, Any]:
     """正式蓝图 → v3.1 修复基线；持久 source 以 phrase 兜底形状回放。"""
     out = canonical_ir_projection_v3(blueprint, chapter_text)
-    # 正式产物没有临时召回分类，投影只能给中性的保守值。它只是 repair user 里的
-    # 结构基线；新响应仍须按当前正文重新填写 function / fidelity，并接受动态 validator。
-    for micro_event in out.get('micro_events') or []:
-        micro_event['function'] = 'M_ACTION'
-        micro_event['fidelity'] = 'F_FACT'
     for source, projected in zip(
         blueprint.get('narration') or [], out.get('narration') or [],
     ):
