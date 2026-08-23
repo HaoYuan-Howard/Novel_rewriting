@@ -401,10 +401,18 @@ Review 产物保留逐章事实；对外 `CheckReport`、CLI 与 API 不能把�
 （`output_ordinal=null`），detail 给命中章数/章号，evidence 保存可展开的逐章 JSON，包含原始
 章序、detail/evidence、actionable、identity、converge、unresolved 与 wontfix；不会为了聚合丢审计状态。
 
-当前、hash 完全匹配且未 adopted/未 resolution 的 `TrimAudit` 已是同一篇幅超限的权威待办。
+当前、且与正式稿正文 hash 完全匹配的 `TrimAudit` 已是同一篇幅超限的权威待办。
 这种情况下 Review 在**判据侧**移除独立 `length_over`，并由 `verification` 明写当前字数、目标区间、
-before/after SHA-256 与保留 pretrim 的销账入口。audit stale、正文/路径不匹配、已采用或已销账时，
+before SHA-256 与保留 pretrim 的销账入口。audit 缺失/拒读、正文/路径不匹配、audit stale 时，
 独立 `length_over` 仍照常保留；这不是靠 inbox 隐藏重复项。
+
+⚠⚠ **判据侧的折叠不看销账状态。** `build_review` 走的是 `current_trim_audits`（**含**已销账），
+而 inbox 的待核验清单走 `current_unresolved_audits`（**不含**）——**两个集合故意不是一个**：
+一次 `retain_pretrim` 关掉的是待办，不是「这一稿确实超限」这个事实；销账后再产一条 `length_over`，
+等于把人刚关掉的那个决定重新打开一遍。钉它的回归是
+`tests/test_trim_resolution.py::test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale`
+（销账后 `current_trim_audits == {3}` 而 `current_unresolved_audits == {}`）。
+⚠ 也没有「已采用」这一档：收缩候选与采用路径已整臂下线（见 §1.2）。
 
 > #### 逐章豁免与书级闸门问的是**两个不同的问题**，都要
 >
