@@ -105,10 +105,17 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
       ① **改真的落进产物**（不是只改了报告）；
       ② **重走归一**：埋点章 `[1]` 仍严格早于新揭示章 ⇒ 留着；
       ③ **重判**：闸门跑过、报告出得来；
-      ④ **下游 stale**：逐章蓝图记的那条 `stage2/global_grounding.json` 边
-         同时在**字节指纹**与**字段投影**两侧失配。
-         ⚠ 第四段是本条最值钱的一段：底座改了而下游还按旧的算，
-         是全链最贵的一类错，而它**不会报错**。
+      ④ **下游按各自消费什么分开判**：逐章蓝图那条边的**字节指纹**必失配，
+         而**字段投影**必须**对得上**——blueprint 从 global 只取已现称名表，
+         改 secret 不该让全链最贵的付费节点重跑一遍。
+         ⚠ 这一段 2026-08-23 改过判向。此前它断言投影也失配，理由写着
+         「逐章剧透闸门正是消费它的那一个」——**那句话是错的**：剧透闸门在
+         `stage4.context`，blueprint 不消费 secrets。是过宽的整份投影
+         （`artifact_payload`）让那句错理由一直绿着。
+         ⚠ 「改 secrets 会让谁 stale」并没有因此没人查：真正消费它的那一层由
+         `tests/test_store.py::test_stage4_grounding_edits_invalidate_real_store_freshness`
+         的 `known_by` 那一格钉着。**底座改了而下游还按旧的算**仍是全链最贵的
+         一类错，只是「下游」要指对层。
     """
     root, book = _sandbox('揭示章订正_001')
     try:
@@ -137,14 +144,14 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
         assert {r.rule for r in report.rules if r.status == 'skipped'} == set(), \
             '有判据没排上——那一行会绿着而什么都没查'
 
-        # ④ 下游 stale：两条边各说一句话
+        # ④ 下游按各自消费什么分开判：字节变了，而 blueprint 读的那几格没变
         fresh = ArtifactStore(bp_ctx).freshness(extract.BLUEPRINT_REL)
-        assert fresh.state == 'stale', '底座换了而下游仍报 fresh——最贵的那类错'
         edge = next(e for e in fresh.edges if e.key == BLUEPRINT_EDGE)
-        assert edge.state == 'stale'
         assert edge.recorded_file != edge.now_file, '字节指纹没动？那底座根本没被写回去'
-        assert edge.recorded_consumed != edge.now_consumed, \
-            '改的是 secrets，而逐章剧透闸门正是消费它的那一个——字段投影必须跟着变'
+        assert edge.recorded_consumed == edge.now_consumed, \
+            'blueprint 从 global 只取已现称名表 ⇒ 改 secret 不该让它重跑'
+        assert (fresh.state, edge.state) == ('fresh', 'fresh'), \
+            'consumed 对得上就该是 fresh——判定顺序是 consumed 优先于 file，不是反过来'
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -559,13 +566,38 @@ def test_the_edit_file_is_recorded_as_an_input_edge():
 
 
 def test_stale_blueprints_are_displayable_but_not_consumable_after_base_edit():
-    """人工订正后，旧蓝图可供只读诊断，但不得再进生产链或付费请求。"""
+    """人工订正后，旧蓝图可供只读诊断，但不得再进生产链或付费请求。
+
+    ⚠ 这里必须改**称名**才让蓝图 stale。2026-08-23 之前这条用例是靠改 secret
+    的揭示章把它弄 stale 的——那只在 blueprint 整份消费 global 的年代成立。
+    投影收窄之后，改 secret 不再影响 blueprint（见本文件第一条用例第④段）；
+    继续用它当手段，这条用例就会静默变成「什么都没测」：读得回来、也不抛。
+    """
     root, book = _sandbox('下游可读_013')
     try:
         _seed(book, with_blueprints=True)
-        _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'reader_reveal_events': [{'chapter': 3}]}]})
-        _apply(book)
+        before = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
+            GlobalGrounding, extract.GLOBAL_REL)
+        assert [row.surface for row in before.entities.characters['char_002'].address] \
+            == ['母亲']
+        _write_edit(book, {'addresses_replace': [{
+            'char_id': 'char_002',
+            'address': [{
+                'surface': '母亲', 'by': 'public', 'context': 'address',
+                'from_chapter': 2,
+            }, {
+                'surface': '母亲', 'by': 'char_001', 'context': 'reference',
+                'from_chapter': 2,
+            }],
+        }]})
+        artifact, _report = _apply(book)
+        # ⚠ 必须让**称名集合本身**变（这里从一条变两条）。只改 `by` / `context`
+        # 不够：blueprint 的投影只取 `surface`，那两格它压根不读 ⇒ 仍然 fresh，
+        # 而这条用例就会静默变成「什么都没测」。
+        assert [(row.surface, row.by) for row in
+                artifact.entities.characters['char_002'].address] == [
+            ('母亲', 'public'), ('母亲', 'char_001')]
+
         production_store = ArtifactStore(_ctx(book, 'stage2.blueprint', paid=False))
         with pytest.raises(UpstreamStale, match='已过期'):
             production_store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
