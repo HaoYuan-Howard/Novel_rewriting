@@ -546,6 +546,57 @@ def test_ir31_resamples_reasoning_only_blueprints_without_disabling_v3_salvage(
     assert batch['raw_blueprints'][0]['beats'][0]['event'] == expected_event
 
 
+def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):
+    """动态闸不能重拼“必须精确到底”，挡死编译器已有的 1–2 段恢复路。"""
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
+    book = Path(tempfile.mkdtemp()) / 'ir31尾部外扩_129'
+    book.mkdir(parents=True)
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _t = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    grounding = extract.run_global(global_ctx, global_client)
+
+    rows = _scaffolded_responses(closed=True)
+    texts = {row['chapter_ordinal']: row['text'] for row in main_text()}
+    eligible = [
+        ordinal for ordinal, row in rows.items()
+        if all(
+            len(parts) == 1 or parts[-1]['end_para'] - 1 > parts[-2]['end_para']
+            for parts in (row['micro_events'], row['beats'])
+        )
+    ]
+    assert eligible, '夹具必须有末边界可安全缩短一段的章，不能让本测试零分母'
+    ordinal = eligible[0]
+    response = copy.deepcopy(rows[ordinal])
+    paragraph_count = len(paragraph_spans(texts[ordinal]))
+    assert response['micro_events'][-1]['end_para'] == paragraph_count
+    assert response['beats'][-1]['end_para'] == paragraph_count
+    response['micro_events'][-1]['end_para'] -= 1
+    response['beats'][-1]['end_para'] -= 1
+
+    ctx = _ctx(book, 'stage2.blueprint')
+    client, transport = _client(
+        ctx, lambda _req, _index: _ok({'blueprints': [response]}))
+    batch = extract.request_blueprints(ctx, client, chapters=(ordinal,))
+
+    assert batch['errors'] == [] and batch['scope_violations'] == []
+    assert len(transport.calls) == 1
+    spec = CONTRACTS['extraction-ir-v3.1']
+    compiled, accounting = spec.compile_fn(
+        {'blueprints': batch['raw_blueprints']},
+        main_text(),
+        grounding.model_dump(by_alias=True)['entities']['characters'],
+        summaries={ordinal: _summary_for(ordinal)},
+    )
+    assert accounting['verbatim_failures'] == []
+    assert accounting['boundary_nudges'][-1][1:] == (
+        paragraph_count - 1, paragraph_count, '末拍没有到达本章最后一段')
+    assert compiled['blueprints'][0]['beats'][-1]['span']['end'] == \
+        paragraph_spans(texts[ordinal])[-1][1]
+
+
 def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
     """摘要改不了 HARD；先付摘要再发现零 hinge，会把失败拓扑平白多一调。"""
     monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')

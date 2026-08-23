@@ -107,6 +107,17 @@ BOUNDARY_NUDGE_MAX_PARAS = 2
 TAIL_NUDGE_MAX_PARAS = 2
 
 
+def tail_end_is_recoverable(end_para: int, paragraph_count: int) -> bool:
+    """末拍止段能否由编译器既有的尾部外扩恢复。
+
+    这既是 `_nudge_boundaries` 的施工前件，也是调用前动态闸唯一该使用的
+    接纳口径。两边各写一次会让 validator 把编译器明明能确定性恢复的响应
+    提前拒掉，真实反例是 17 段章末的 `【完】` 被六个样本一致留在事件边界外。
+    """
+    return (1 <= end_para <= paragraph_count
+            and paragraph_count - end_para <= TAIL_NUDGE_MAX_PARAS)
+
+
 def _seg_of(text: str, start_para: int, end_para: int) -> str:
     start, end = span_of(text, start_para, end_para)
     return text[start:end]
@@ -171,8 +182,8 @@ def _nudge_boundaries(beats: list[dict[str, Any]], ends: list[int], table: list,
         ends[i] = want
 
     # 末拍到底：契约要求末拍必须到本章最后一段，模型少给几段是同一个病。
-    if beats and ends[-1] != len(table) \
-            and len(table) - ends[-1] <= TAIL_NUDGE_MAX_PARAS:
+    if (beats and ends[-1] != len(table)
+            and tail_end_is_recoverable(ends[-1], len(table))):
         nudges.append((str(beats[-1].get('beat_id') or ''), ends[-1], len(table),
                        '末拍没有到达本章最后一段'))
         ends[-1] = len(table)

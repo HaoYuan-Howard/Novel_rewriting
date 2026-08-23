@@ -946,7 +946,11 @@ def _run_chapter_requests(
 
 def _boundary_validator(ordinal: int, paragraph_count: int) \
         -> Callable[[Any, Any], str | None]:
-    """边界预传的动态闸：召回完整、压缩边界有据且都覆盖到章尾。"""
+    """边界动态闸：召回完整，末尾只放行生产编译器能确定性恢复的范围。"""
+    from novel.stages.stage2.compile_v2 import (
+        TAIL_NUDGE_MAX_PARAS, tail_end_is_recoverable,
+    )
+
     def validate(obj: Any, _resp: Any) -> str | None:
         matches = [bp for bp in obj.blueprints
                    if int(bp.chapter_ordinal) == ordinal]
@@ -958,12 +962,14 @@ def _boundary_validator(ordinal: int, paragraph_count: int) \
         for label, ends in (('micro_events', micro_ends), ('beats', beat_ends)):
             if any(left >= right for left, right in zip(ends, ends[1:])):
                 return f'ch{ordinal} {label}.end_para 不是严格递增：{ends}'
-            if not ends or ends[-1] != paragraph_count:
-                return (f'ch{ordinal} {label} 末项必须止于最后一段 '
-                        f'{paragraph_count}，实际 {ends}')
             if any(end < 1 or end > paragraph_count for end in ends):
                 return (f'ch{ordinal} {label}.end_para 越界 '
                         f'1..{paragraph_count}：{ends}')
+            if not ends or not tail_end_is_recoverable(
+                    ends[-1], paragraph_count):
+                return (f'ch{ordinal} {label} 末项须止于最后一段 '
+                        f'{paragraph_count}，或落在编译器尾部外扩帽 '
+                        f'{TAIL_NUDGE_MAX_PARAS} 段内；实际 {ends}')
         outside = [end for end in beat_ends if end not in set(micro_ends)]
         if outside:
             return (f'ch{ordinal} beats 边界必须来自 micro_events，'
