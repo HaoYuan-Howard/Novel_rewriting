@@ -13,6 +13,8 @@ import { lookupAction } from '@/constants/actions'
 import { CheckBadge, CheckMark } from '@/components/vocab/Badges'
 import { SevMark } from '@/components/vocab/Sev'
 import { LoadingPane } from '@/components/state/States'
+import { cx } from '@/lib/cx'
+import type { ReactNode } from 'react'
 
 /**
  * 屏 → 这一层的校验 kind。八个 kind 与服务端 `STAGES` 逐值相等（FE-02）。
@@ -187,10 +189,14 @@ export function CheckPanel({
   screen,
   onJumpChapter,
   allowRerun = true,
+  embedded = false,
+  headerAction,
 }: {
   screen: ScreenName
   onJumpChapter?: (n: number) => void
   allowRerun?: boolean
+  embedded?: boolean
+  headerAction?: ReactNode
 }) {
   const sid = useSid()
   const kind = CHECK_OF[screen]
@@ -222,7 +228,12 @@ export function CheckPanel({
   ) : null
 
   return (
-    <div className="mx-30 mt-20 overflow-hidden rounded-card border border-line bg-card">
+    <div
+      className={cx(
+        'overflow-hidden bg-card',
+        !embedded && 'mx-30 mt-20 rounded-card border border-line',
+      )}
+    >
       {q.isPending ? (
         <LoadingPane label={'读 ' + kind + ' 校验报告'} rows={2} />
       ) : (
@@ -238,20 +249,27 @@ export function CheckPanel({
                 {d.counts.ok}
               </span>
             ) : null}
-            <span className="ml-auto">{rerun}</span>
+            <span className="ml-auto flex items-center gap-8">
+              {rerun}
+              {headerAction}
+            </span>
           </div>
 
-          <div className="prose-cn border-t border-line-row px-20 py-11 text-sm2 text-ink-2">
-            {d
-              ? d.badge === 'amber'
-                ? `通过了，但有 ${d.counts.unver + d.counts.skipped} 项查不了——查不了不等于没问题。`
-                : d.badge === 'fail'
-                  ? '这一层判定不通过，先在这屏改了再往下走。'
-                  : '这一层的判据全部验过且通过。'
-              : noSample
+          {d?.badge === 'amber' ? (
+            <div className="prose-cn border-t border-line-row px-20 py-11 text-sm2 text-ink-2">
+              通过了，但有 {d.counts.unver + d.counts.skipped} 项查不了——查不了不等于没问题。
+            </div>
+          ) : d?.badge === 'fail' ? (
+            <div className="prose-cn border-t border-line-row px-20 py-11 text-sm2 text-ink-2">
+              这一层判定不通过，先在这屏改了再往下走。
+            </div>
+          ) : !d ? (
+            <div className="prose-cn border-t border-line-row px-20 py-11 text-sm2 text-ink-2">
+              {noSample
                 ? '这本书不在样本里——mock 模式只有样本那一本。'
                 : '这一层还没有结论——空白不代表通过。'}
-          </div>
+            </div>
+          ) : null}
 
           {groups && groups.hits.length ? (
             <div>
@@ -321,9 +339,6 @@ export function CheckPanel({
             <details className="border-t border-line-row">
               <summary className="cursor-pointer bg-sunken-2 px-20 py-10 text-body text-ink-3">
                 查过、没问题的 {groups.oks.length} 条
-                <span className="ml-8 text-tag text-ink-4">
-                  —— 每条都带「扫过什么」：知道分母的绿灯才可信
-                </span>
               </summary>
               <ul className="m-0 flex list-none flex-col gap-6 px-20 py-12">
                 {groups.oks.map((line) => (

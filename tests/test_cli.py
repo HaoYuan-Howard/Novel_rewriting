@@ -137,7 +137,7 @@ def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box
 
 
 def test_r_2_15_blocks_downstream_paid_work_before_dispatch(box, monkeypatch, capsys):
-    """`R-2.15` 是 CLI 运行边界；换调用方也绕不过 Stage2 typed 闸。"""
+    """`R-2.16` 是 CLI 运行边界；换调用方也绕不过 Stage2 typed 闸。"""
     import importlib
 
     cli_main = importlib.import_module('novel.cli.main')

@@ -234,9 +234,9 @@
   "must_hold": "必须成立，但【不必写在纸面上】（别为它硬塞背景交代）"
  },
  "blueprint_architectures": [
-  "bounded-fidelity-v3",
-  "extraction-ir-v1",
-  "extraction-ir-v1.1"
+  "extraction-ir-v1.1",
+  "extraction-ir-v2",
+  "extraction-ir-v3.1"
  ],
  "repair_route": {
   "短语不在本章原文里": "field_patch",
@@ -542,7 +542,7 @@
   "--revise": "stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手",
   "--purge-role": "stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型",
   "--resample": "stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应",
-  "--patch": "stage2 逐章蓝图的字段级修复（extraction-ir-v1）——逐条失败各调一次模型，量级是条不是章"
+  "--patch": "stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，量级是条不是章"
  },
  "partial_rewrite_flags": [
   "--remeasure",

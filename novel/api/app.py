@@ -8,9 +8,9 @@ app.py —— 服务本体。**全仓只有本模块与 `__main__.py` 许可 imp
     全包里禁止出现 `0.0.0.0`，也**禁止开 CORS**（见 `create_app` 的注释）。
   · `R-11.2` **CSRF**：非安全方法要求 `X-Novel-UI: 1` 且来源是回环。
     做成**中间件**不是依赖，理由见 `_csrf` —— 依赖会被忘，中间件忘不掉。
-  · `R-11.3` **服务进程绝不落产物盘**。变更路由只经 `jobs.run` / `jobs.start`
-    启 CLI 子进程；HTTP 进程自身只在 `_service/` 保存上传原文、作业事件、日志、
-    一次性编辑计划与人工审批状态。
+  · `R-11.3` **服务进程绝不落产物盘**。流水线变更只经 `jobs.run` / `jobs.start`，
+    项目回收只经 `trash.run`，两者都启 CLI 子进程；HTTP 进程自身只在 `_service/`
+    保存上传原文、作业事件、日志、一次性编辑计划与人工审批状态。
     只读路由 + preview 仍由行为断言保证整棵树逐字节不变。
 
 【`create_app(base)` 是工厂，不是模块级单例】
@@ -32,7 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from contracts.schema.api import ErrorBody
 from novel.api.errors import CSRF_REFUSED, status_of
 from novel.api.routes import (
-    agent, approvals, checks, edits, enums, ingest, jobs, novels, queues, run, screens,
+    agent, approvals, checks, edits, enums, ingest, jobs, maintenance, novels, queues, run, screens,
 )
 from novel.errors import NovelError
 from novel.orchestrator import queue as queue_runner
@@ -208,7 +208,7 @@ def create_app(base: str | os.PathLike[str],
     for router in (
         enums.router, novels.router, checks.router, jobs.router, queues.router,
         ingest.router, approvals.router, screens.router, edits.router,
-        run.router, agent.router,
+        run.router, agent.router, maintenance.router,
     ):
         app.include_router(router, prefix='/api')
 

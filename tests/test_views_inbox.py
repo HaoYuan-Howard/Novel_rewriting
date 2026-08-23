@@ -386,8 +386,9 @@ def test_global_review_pending_fail_and_unver_are_verification_rows(box):
 def test_an_over_length_trim_audit_is_a_verification_row(box):
     import hashlib
 
-    from contracts.artifacts import artifact_rel
+    from contracts.artifacts import STAGE4_WRITER_CONTEXT, artifact_rel
     from contracts.schema.evaluation import TrimAudit
+    from contracts.schema.stage4 import WriterContext
     from novel import prov
     from novel.orchestrator.state import readonly_ctx
     from novel.stages.stage5 import measure as M
@@ -415,7 +416,36 @@ def test_an_over_length_trim_audit_is_a_verification_row(box):
         f'stage5 的 verification 只该由收缩审计产生：{sorted(by_rule)}'
     seeded = by_rule[rule]
     assert seeded.chapter == ordinal
-    assert '当前 pretrim' in seeded.what and '目标 ' in seeded.what
-    assert f'before={before}' in seeded.what and f'after={after}' in seeded.what
-    assert 'pretrim' in seeded.how and '未采用收缩候选' in seeded.how
-    assert '--actor <自报身份>' in seeded.how and '--reason <理由>' in seeded.how
+    assert audit.reason in seeded.what, \
+        f'这一行不是从种下的那份 audit 渲染的：{seeded.what}'
+
+    # `what` 里的读数全由 `trim_resolution.verification_context` **现算**，
+    # 所以这里按产地各取一次再比字面，不只查 `当前 pretrim` / `目标 ` 两个前缀：
+    # 拿错章的字数、读错目标区间、把超限差算反这三种漂移只查前缀时全程绿着，
+    # 而这条 detail 存在的全部理由就是把这三个数摊给人看。
+    # 字数取自 `draft['text']`（装载器那一路）而不是再 `read_own` 一遍正式稿：
+    # 两者必须同文本，否则 audit 算不上 current、上面那行就进不了清单。
+    chars = M.chars_of(draft['text'])
+    entry = next(row for row in store.read(WriterContext, STAGE4_WRITER_CONTEXT).chapters
+                 if row.output_ordinal == ordinal)
+    lo, hi = M.target_range(entry.model_dump(by_alias=True))
+    # 这一行故意不把「语料这一章真的超上限」当前提声明（也不走 `declared_dependency`）：
+    # 种下的 audit 本就是合成的，真正被测的是「现算的关系句说不说得准」；
+    # 拿它当前提会让整条用例在一本「没有超限章」的书上静默跳过。
+    relation = (f'超上限 {chars - hi} 字' if chars > hi
+                else f'未超上限（距上限 {hi - chars} 字）')
+    assert (f'当前 pretrim {chars} 字，目标 {lo}~{hi} 字，{relation}'
+            in seeded.what), f'读数对不上产地：{seeded.what}'
+    # ⚠ 这里曾并排断言 `after={after}`，而 `after` 自 cfc747a（收缩臂整臂下线）起
+    #   就没有定义了：`TrimAudit.after_sha256` 随另外五格一起删除（它恒等于 before，
+    #   是拷贝不是读数），`verification_context` 的 identity 同批收成单边。
+    #   身份只剩一个哈希，另一半改由上面三个**带值**的读数承担；
+    #   别照旧文案把 `after=` 加回产地。
+    assert f'audit before={before}' in seeded.what
+
+    # `how` 里那句「未采用收缩候选」同批消失（收缩候选这个东西已经不存在）。
+    # 今天这一格要说的是两件事：保留 pretrim 的现状、以及那条 0 成本销账口；
+    # 命令连 `--chapters` 一起断，是因为它必须点名**本章**才能直接粘去跑。
+    assert '当前保留 pretrim 原稿' in seeded.how and '0 次 LLM 调用' in seeded.how
+    assert (f'stage5.review --retain-pretrim --chapters {ordinal} '
+            f'--actor <自报身份> --reason <理由>') in seeded.how

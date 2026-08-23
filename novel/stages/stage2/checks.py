@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 71 条判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
+checks.py —— 74 条判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 两个节点的落盘闸门 / `--check-only` / `--renormalize` 之后的复检
 走的都是 `check()` 这一个函数，保证生成、重算与复检使用同一把尺子。
@@ -14,7 +14,7 @@ checks.py —— 71 条判据的**实现**。行在 `contracts/judges/stage2.py`
 
 【一张表，两个节点共用】`stage2.global` 判 R-2 那一族、`stage2.blueprint` 判 R-3 那一族，
 而**复检相两份产物一起读**（判 `canonical_unique` 要 global，判 `present_ids_dangling`
-要 registry）⇒ `check()` 一次产全部 75 条。缺哪一份，那一族落 `unver` **不是「通过」**。
+要 registry）⇒ `check()` 一次产全部 74 条。缺哪一份，那一族落 `unver` **不是「通过」**。
 
 【判据与产地必须用同一把尺子】本模块一处都不自己写解析：
 `surface_owners` / `surface_owner_since` / `resolve_present_names` / `classify_unattested`
@@ -47,6 +47,7 @@ from novel.core.naming import (
 )
 from novel.core.spans import content_only, exact_span, locate_spans
 from novel.stages.stage2.coverage import hole_intervals
+from novel.stages.stage2.contract import CONTRACTS
 from novel.core.text import norm
 from novel.report.findings import Outcome, ran, unverifiable
 
@@ -715,7 +716,56 @@ def _canon(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 五、拍与区间（7 HARD · 2 INFO）+ 相关度量
+# 五、冲突阶段章覆盖（1 HARD）
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ARC_RULES = ('conflict_stage_coverage',)
+
+
+def _arc(c: _Ctx) -> list[Outcome]:
+    """`conflict_stages[].chapters` 是逐章显式枚举，不是区间端点。"""
+    if not c.has_gg:
+        return [unverifiable(rule, _NO_GLOBAL) for rule in _ARC_RULES]
+    if not c.has_mt:
+        return [unverifiable(rule, _NO_MAIN_TEXT) for rule in _ARC_RULES]
+
+    stages = ((c.gg.get('arc') or {}).get('conflict_stages') or [])
+    memberships: dict[Any, list[str]] = {}
+    for index, stage in enumerate(stages, 1):
+        label = str((stage or {}).get('stage') or f'第{index}段')
+        for chapter in ((stage or {}).get('chapters') or []):
+            memberships.setdefault(chapter, []).append(label)
+
+    expected = set(c.ords)
+    missing = sorted(expected - set(memberships))
+    extra = sorted((chapter for chapter in memberships if chapter not in expected), key=str)
+    duplicate = sorted(
+        ((chapter, labels) for chapter, labels in memberships.items() if len(labels) != 1),
+        key=lambda row: str(row[0]),
+    )
+    evidence = [f'missing:ch{chapter}' for chapter in missing]
+    evidence += [
+        f'extra:ch{chapter}@{"|".join(memberships[chapter])}' for chapter in extra
+    ]
+    evidence += [
+        f'duplicate:ch{chapter}@{"|".join(labels)}' for chapter, labels in duplicate
+    ]
+    findings = [finding(
+        'conflict_stage_coverage',
+        detail=(f'{len(stages)} 个冲突阶段没有把 {len(c.ords)} 章恰好各列一次：'
+                f'缺 {missing}，越界 {extra}，重复 '
+                f'{[(chapter, labels) for chapter, labels in duplicate]}'),
+        evidence=evidence,
+    )] if evidence else []
+    return [ran(
+        'conflict_stage_coverage', findings,
+        scanned=(f'{len(stages)} 个阶段 / {len(c.ords)} 章 / '
+                 f'{sum(len(labels) for labels in memberships.values())} 次显式章号声明'),
+    )]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 六、拍与区间（7 HARD · 2 INFO）+ 相关度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BEAT_RULES = ('beat_id_unique', 'beat_id_format', 'span_unlocatable',
@@ -977,7 +1027,7 @@ def _verbatim(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 六、保真材料（6 HARD · 1 INFO）+ 密度度量
+# 七、保真材料（6 HARD · 1 INFO）+ 密度度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _HINGE_RULES = ('hinge_cross_chapter', 'hinge_in_hole', 'hinge_anchor_void', 'hinge_drift',
@@ -1112,7 +1162,7 @@ def _hinges(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 七、在场与叙述（8 HARD · 6 INFO）+ 度量
+# 八、在场与叙述（8 HARD · 6 INFO）+ 度量
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PRESENT_RULES = (
@@ -1243,22 +1293,56 @@ def _present(c: _Ctx) -> list[Outcome]:
         pron = set(BARE_PRONOUNS)
         invented, late, amb, pron_hit, unlisted = [], [], [], [], []
         n_pn = 0
+        architecture = str(
+            (c.prov.get('context') or {}).get('architecture') or '')
+        spec = CONTRACTS.get(architecture)
+        direct_present_refs = bool(spec and spec.uses_character_refs)
+        direct_narration_refs = bool(spec and spec.uses_narration_refs)
         for x in c.bps:
             o = x.get('chapter_ordinal')
             upto = c.cum.get(o, '')
-            slots: list[tuple[str, list[str]]] = [
-                (str(be.get('beat_id')), list(be.get('present_names') or []))
+            slots: list[tuple[str, list[str], list[str] | None]] = [
+                (str(be.get('beat_id')), list(be.get('present_names') or []),
+                 list(be.get('present_char_ids') or [])
+                 if direct_present_refs else None)
                 for be in (x.get('beats') or [])]
-            slots += [(f'narration.{k}', [seg[k]] if seg.get(k) else [])
-                      for seg in (x.get('narration') or [])
-                      for k in ('narrator_name', 'focalizer_name') if k in seg]
-            for where, names in slots:
+            slots += [
+                (f'narration.{name_key}',
+                 [seg[name_key]] if seg.get(name_key) else [],
+                 ([str(seg[id_key])] if seg.get(id_key) else [])
+                 if direct_narration_refs else None)
+                for seg in (x.get('narration') or [])
+                for name_key, id_key in (
+                    ('narrator_name', 'narrator_char_id'),
+                    ('focalizer_name', 'focalizer_char_id'),
+                )
+                if name_key in seg
+            ]
+            for where, names, direct_ids in slots:
                 n_pn += len(names)
+                unresolved: list[str] = []
+                for index, raw in enumerate(names):
+                    cid = (direct_ids[index]
+                           if direct_ids is not None and index < len(direct_ids)
+                           else None)
+                    key = norm(raw)
+                    # ContractSpec 声明为关闭式的 char_id 是模型直接从可见集合里选的
+                    # 权威引用；人读 name 只是编译器的确定性投影。同一个「师尊」即使
+                    # 挂两个人，只要投影字面确实属于所选 id，就不能再报「歧义」——
+                    # 那会把确定引用翻回开放字面，再制造一条守卫假红。能力从注册表
+                    # 派生，不能把当前默认 v2 的架构名钉成永久边界；v3/v3.1 也关闭
+                    # present 引用，v3.1 还关闭 narration 引用。
+                    if cid is not None and key in norm(upto) \
+                            and cid in c.owners.get(key, frozenset()) \
+                            and (c.since.get(key) or {}).get(cid, 1) <= o:
+                        continue
+                    unresolved.append(raw)
                 # 【代词先分出去，别混进「自造」】`address[].surface` 按设计**永不收代词**
                 # ⇒ 第一人称书里的「我」永远解析不出来——那不是模型编了一个人，
                 # 是两条契约在这里对不上。
-                pron_hit += [f'ch{o} {where} {n!r}' for n in names if norm(n) in pron]
-                rest = [n for n in names if norm(n) not in pron]
+                pron_hit += [f'ch{o} {where} {n!r}'
+                             for n in unresolved if norm(n) in pron]
+                rest = [n for n in unresolved if norm(n) not in pron]
                 _ids, ambs, un = resolve_present_names(rest, upto, c.owners, c.since, o)
                 amb += [f'ch{o} {where} {s!r}→{cs}' for s, cs in ambs]
                 for raw in un:
@@ -1481,13 +1565,22 @@ def _present(c: _Ctx) -> list[Outcome]:
             '无法核对逐章调用次数与章覆盖'))
     else:
         per_call = [len(b or []) for b in batches]
+        architecture = (c.prov.get('context') or {}).get('architecture')
+        spec = CONTRACTS.get(str(architecture))
+        phases = 2 if spec is not None and spec.topology == 'boundary_then_detail' else 1
+        call_count = len(batches) * phases
+        shape = (
+            f'两段式逐章抽取（{len(batches)} 章 = {call_count} 次逐章调用）'
+            if phases == 2 and per_call and max(per_call) == 1 else
+            f'逐章抽取（{len(batches)} 章 = {call_count} 次调用）'
+            if per_call and max(per_call) == 1 else
+            f'{len(batches)} 次调用，每次 {per_call} 章'
+        )
         out.append(ran('batch_density', [
             finding('batch_density',
-                    detail=(f'逐章抽取（{len(batches)} 章 = {len(batches)} 次调用）'
-                            if per_call and max(per_call) == 1 else
-                            f'{len(batches)} 次调用，每次 {per_call} 章'),
+                    detail=shape,
                     evidence=[f'{len(batches)}', f'{per_call}'])],
-            scanned=f'{len(batches)} 批'))
+            scanned=f'{len(batches)} 章 × {phases} 相'))
 
     cctx = c.prov.get('context')
     if cctx is None:
@@ -1541,12 +1634,12 @@ def _present(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 八、入口
+# 九、入口
 # ─────────────────────────────────────────────────────────────────────────────
 
 def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
           main_text: list[dict[str, Any]] | None) -> list[Outcome]:
-    """对两份 stage2 产物跑全部 75 条确定性判据 → `[Outcome]`。
+    """对两份 stage2 产物跑全部 74 条确定性判据 → `[Outcome]`。
 
     **一条判据恰好一个 `Outcome`，一条都不许少**：`build()` 遍历判据注册表，
     注册了而这里没产出 ⇒ 强制 `skipped`，徽章至少 amber。
@@ -1555,5 +1648,5 @@ def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
     对应的判据落 `unver` 并说出**是缺哪一份**，而不是悄悄不报。
     """
     c = _Ctx(global_g, blueprints, main_text)
-    return [*_alignment(c), *_addresses(c), *_roles(c), *_canon(c),
+    return [*_alignment(c), *_addresses(c), *_roles(c), *_canon(c), *_arc(c),
             *_beats(c), *_hinges(c), *_present(c)]

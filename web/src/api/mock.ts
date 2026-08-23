@@ -1384,4 +1384,6 @@ export const mockApi: Api = {
     )
     return later({ sid: SAMPLE_SID, job })
   },
+  // 冻结样本不提供可恢复的目录移动，明确答 nosample，不伪装已经删除。
+  trashNovel: (sid) => noBook('/novels/' + sid + '/trash'),
 }

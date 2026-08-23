@@ -1,12 +1,149 @@
 import { api } from '@/api/endpoints'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { useLocation } from 'react-router-dom'
 import { renderRoute } from '@/test/render'
 import { Stage0Screen } from './Stage0Screen'
 import type { Stage0Segments } from '@/types/stages'
 
-describe('Stage0Screen segment virtualization', () => {
-  it('keeps a 622-row source DOM bounded and preserves the selected segment across filters', async () => {
+function LocationProbe() {
+  return <output data-testid="location">{useLocation().pathname}</output>
+}
+
+describe('Stage0Screen 新书起跑入口', () => {
+  it('审批操作栏可以直接交给 Agent，同时保留人工 Stage0 操作', async () => {
+    vi.spyOn(api, 'getStage0Report').mockResolvedValue({
+      original_filename: 'book.txt',
+      source_ref: {
+        kind: 'managed_upload' as const,
+        blob_sha256: 'f'.repeat(64),
+        filename: 'book.txt',
+      },
+      code: 'code',
+      normalized_source_sha1: 'source',
+      clean_sha1: 'clean',
+      source_encoding: 'utf-8',
+      text_norm: 'NFC+LF',
+      removed: [],
+      total_code_points: 300,
+      body_code_points: 300,
+      warnings: [],
+      approval: { status: 'pending' as const },
+      executable: false,
+      revision_id: 'a'.repeat(64),
+      revision_origin: 'machine' as const,
+    })
+    vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
+      normalized_source_sha1: 'source',
+      available: true,
+      reason: null,
+      segments: [],
+    })
+    vi.spyOn(api, 'getStage0Candidate').mockResolvedValue(null)
+    const partitionPreview = vi.spyOn(api, 'getStage0PartitionPreview')
+    const preview = vi.spyOn(api, 'previewAgentRun').mockResolvedValue({
+      argv: ['claude', '-p', 'prompt'],
+      prompt: '从当前盘面续跑',
+      authorized: false,
+      egress_authorized: true,
+    })
+
+    renderRoute(<Stage0Screen />, '/n/book-1/stage0')
+
+    expect(await screen.findByRole('button', { name: 'Agent 代跑' })).toBeVisible()
+    expect(screen.queryByText(/不会跳过任何硬闸/)).not.toBeInTheDocument()
+    expect(screen.getByText('点击正文分区可调整删除范围；结尾标记不可删除。')).toBeVisible()
+    expect(screen.queryByText(/rev .*sha1/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('自报身份 actor')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('本次批准 / 编辑理由 reason')).not.toBeInTheDocument()
+    expect(partitionPreview).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent 代跑' }))
+
+    expect(await screen.findByText('让 agent 跑这本书')).toBeVisible()
+    await waitFor(() =>
+      expect(preview).toHaveBeenCalledWith({
+        sid: 'book-1',
+        authorized: false,
+        egress_authorized: true,
+      }),
+    )
+  })
+
+  it('人工批准无需填写表单，并按动作写入默认审计值', async () => {
+    vi.spyOn(api, 'getStage0Report').mockResolvedValue({
+      original_filename: 'book.txt',
+      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
+      code: 'code',
+      normalized_source_sha1: 'source',
+      clean_sha1: 'clean',
+      source_encoding: 'utf-8',
+      text_norm: 'NFC+LF',
+      removed: [],
+      total_code_points: 300,
+      body_code_points: 300,
+      warnings: [],
+      approval: { status: 'pending' as const },
+      executable: false,
+      revision_id: 'a'.repeat(64),
+      revision_origin: 'machine' as const,
+    })
+    vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
+      normalized_source_sha1: 'source',
+      available: true,
+      reason: null,
+      segments: [],
+    })
+    vi.spyOn(api, 'getStage0Candidate').mockResolvedValue(null)
+    const approve = vi.spyOn(api, 'approveStage0').mockResolvedValue({
+      id: 'approve',
+      kind: 'stage0.approve',
+      label: '批准 Stage0',
+      argv: 'approve',
+      state: 'ok',
+      paid: false,
+      started: 1,
+      finished: 2,
+      sid: 'book-1',
+      ordinal: null,
+    })
+    const partition = vi.spyOn(api, 'partitionStage1').mockResolvedValue({
+      id: 'partition',
+      kind: 'stage1.partition',
+      label: '切分 Stage1',
+      argv: 'partition',
+      state: 'landed_red',
+      paid: false,
+      started: 2,
+      finished: 3,
+      sid: 'book-1',
+      ordinal: null,
+    })
+
+    renderRoute(
+      <>
+        <Stage0Screen />
+        <LocationProbe />
+      </>,
+      '/n/book-1/stage0',
+    )
+
+    expect(screen.queryByLabelText('自报身份 actor')).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: /^保存选择并进入 stage1/ }))
+
+    await waitFor(() => expect(approve).toHaveBeenCalledTimes(1))
+    expect(approve).toHaveBeenCalledWith('book-1', {
+      actor: 'human-ui',
+      reason: '前端人工审校并批准 Stage0',
+    })
+    expect(partition).toHaveBeenCalledWith('book-1')
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/n/book-1/stage1'))
+    expect(screen.queryByText('没有进入 Stage 1')).not.toBeInTheDocument()
+  })
+})
+
+describe('Stage0Screen 原文审阅', () => {
+  it('默认展示完整原文，收起再展开后保留选择，且长书 DOM 有界', async () => {
     const rows: Stage0Segments['segments'] = Array.from({ length: 622 }, (_, index) => ({
       id: 'seg-' + index,
       kind: 'keep',
@@ -44,15 +181,33 @@ describe('Stage0Screen segment virtualization', () => {
     })
     renderRoute(<Stage0Screen />)
 
-    fireEvent.click(await screen.findByRole('button', { name: '查看完整原文' }))
     const viewport = await screen.findByTestId('stage0-segment-viewport')
     await waitFor(() => expect(within(viewport).getAllByRole('button').length).toBeGreaterThan(0))
     expect(within(viewport).getAllByRole('button').length).toBeLessThan(80)
 
-    fireEvent.click(within(viewport).getByRole('button', { name: '正文分区 0' }))
+    const selectedSegment = within(viewport).getByRole('button', { name: '正文分区 0' })
+    fireEvent.click(selectedSegment)
     expect(screen.getByText(/当前删除 1 段/)).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: '只看候选 / warning' }))
-    expect(await screen.findByRole('button', { name: '正文分区 0' })).toBeVisible()
+    expect(selectedSegment).toHaveClass('bg-remove-bg', 'border-l-remove', 'text-remove')
+    expect(screen.getByRole('button', { name: 'Agent 代跑' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Agent 代跑' })).toHaveAttribute(
+      'title',
+      expect.stringMatching(/只会读取已经落盘/),
+    )
+    expect(screen.getByRole('img', { name: 'warning 说明' })).toHaveAttribute(
+      'title',
+      expect.stringMatching(/不能安全自动删除/),
+    )
+    expect(screen.queryByText(/个候选分区/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '收起原文' }))
+    expect(screen.queryByTestId('stage0-segment-viewport')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '展开原文' }))
+    const reopened = await screen.findByTestId('stage0-segment-viewport')
+    expect(within(reopened).getByRole('button', { name: '正文分区 0' })).toHaveAttribute(
+      'title',
+      '取消删除这一段',
+    )
   })
 
   it('把机器候选摆成整版三选一，并按乐观锁提交采纳', async () => {
@@ -124,162 +279,15 @@ describe('Stage0Screen segment virtualization', () => {
     })
     renderRoute(<Stage0Screen />)
 
-    fireEvent.change(await screen.findByLabelText('自报身份 actor'), {
-      target: { value: 'reviewer-a' },
-    })
-    fireEvent.change(screen.getByLabelText('本次批准 / 编辑理由 reason'), {
-      target: { value: '两版都读过，机器新版更准' },
-    })
-    expect(screen.getByText(/机器新版正文/)).toBeInTheDocument()
+    expect(await screen.findByText(/机器新版正文/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '采纳机器新版' }))
 
     await waitFor(() => expect(adopt).toHaveBeenCalledTimes(1))
     expect(adopt.mock.calls[0]?.[1]).toMatchObject({
       candidate_revision_id: 'd'.repeat(64),
       expected_revision_id: 'c'.repeat(64),
-      actor: 'reviewer-a',
-      reason: '两版都读过，机器新版更准',
+      actor: 'human-ui',
+      reason: '前端人工采纳机器 Stage0 版本',
     })
-  })
-})
-
-describe('Stage0Screen 批准前分章预览', () => {
-  it('把纯数字番外的章号异常摆在批准动作之前', async () => {
-    vi.spyOn(api, 'getStage0Report').mockResolvedValue({
-      original_filename: 'book.txt',
-      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
-      code: 'code',
-      normalized_source_sha1: 'source',
-      clean_sha1: 'clean',
-      source_encoding: 'utf-8',
-      text_norm: 'NFC+LF',
-      removed: [],
-      total_code_points: 300,
-      body_code_points: 300,
-      warnings: [],
-      approval: { status: 'pending' as const },
-      executable: false,
-      revision_id: 'a'.repeat(64),
-      revision_origin: 'machine' as const,
-    })
-    vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      normalized_source_sha1: 'source',
-      available: true,
-      reason: null,
-      segments: [
-        {
-          id: 'seg-0',
-          kind: 'keep',
-          start: 0,
-          end: 4,
-          chars: 4,
-          flagged: false,
-          text: '正文一段',
-          origin: null,
-          removed_kind: null,
-          marker_line: null,
-        },
-      ],
-    })
-    // 机器零命中（removed 为空、无 warning）——审批页原有的三样看不出任何异常，
-    // 唯一能看见的就是这一屏里第 3 章的原始章号退回了 1。
-    vi.spyOn(api, 'getStage0PartitionPreview').mockResolvedValue({
-      input_sha1: 'clean',
-      available: true,
-      reason: null,
-      hook_chars: 27,
-      hook_preview: '开篇钩子。',
-      chapters: [
-        {
-          chapter_ordinal: 1,
-          source_chapter_no: 1,
-          chars: 129,
-          preview: '正文第1章。',
-          label_delta: null,
-          anomaly: 'repeat',
-        },
-        {
-          chapter_ordinal: 2,
-          source_chapter_no: 2,
-          chars: 129,
-          preview: '正文第2章。',
-          label_delta: 1,
-          anomaly: null,
-        },
-        {
-          chapter_ordinal: 3,
-          source_chapter_no: 1,
-          chars: 31,
-          preview: '十年后他们在旧城重逢。',
-          label_delta: -2,
-          anomaly: 'reset',
-        },
-      ],
-      tail_chars: 0,
-      anomaly_count: 2,
-      note: '批准前的只读预览：这一屏不写 stage1 产物。',
-    })
-
-    renderRoute(<Stage0Screen />)
-
-    expect(await screen.findByText(/章号异常 2/)).toBeVisible()
-    expect(screen.getByText(/章号退回/)).toBeVisible()
-    expect(screen.getByText(/章号重复/)).toBeVisible()
-    expect(screen.getByText(/十年后他们在旧城重逢/)).toBeVisible()
-  })
-
-  it('分不出章时给出理由而不是一屏空表', async () => {
-    vi.spyOn(api, 'getStage0Report').mockResolvedValue({
-      original_filename: 'book.txt',
-      source_ref: { kind: 'external_file' as const, absolute_path: 'book.txt' },
-      code: 'code',
-      normalized_source_sha1: 'source',
-      clean_sha1: 'clean',
-      source_encoding: 'utf-8',
-      text_norm: 'NFC+LF',
-      removed: [],
-      total_code_points: 300,
-      body_code_points: 300,
-      warnings: [],
-      approval: { status: 'pending' as const },
-      executable: false,
-      revision_id: 'a'.repeat(64),
-      revision_origin: 'machine' as const,
-    })
-    vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
-      normalized_source_sha1: 'source',
-      available: true,
-      reason: null,
-      segments: [
-        {
-          id: 'seg-0',
-          kind: 'keep',
-          start: 0,
-          end: 4,
-          chars: 4,
-          flagged: false,
-          text: '正文一段',
-          origin: null,
-          removed_kind: null,
-          marker_line: null,
-        },
-      ],
-    })
-    vi.spyOn(api, 'getStage0PartitionPreview').mockResolvedValue({
-      input_sha1: 'clean',
-      available: false,
-      reason: '只识别到 0 个正文章节，少于最低要求 2',
-      hook_chars: 0,
-      hook_preview: '',
-      chapters: [],
-      tail_chars: 0,
-      anomaly_count: 0,
-      note: '按当前剔除结果分不出章。',
-    })
-
-    renderRoute(<Stage0Screen />)
-
-    expect(await screen.findByText('分不出章')).toBeVisible()
-    expect(screen.getByText(/只识别到 0 个正文章节/)).toBeVisible()
   })
 })

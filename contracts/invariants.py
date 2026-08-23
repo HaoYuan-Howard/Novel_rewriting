@@ -418,14 +418,33 @@ def hinge_heading(kind: str) -> str:
 #:   §十一 实测**两个模型上都掉**（Pro −60% / Flash −28%）⇒ 那是契约的独立责任，
 #:   不是模型效应。为什么改、以及「加压会不会反被规避」那条风险，写在
 #:   `novel/stages/stage2/prompts.py::_BLUEPRINT_TPL_V1_1` 上方。
-#:   ⚠ 新架构**未翻默认**：默认仍是 ir1，ir1.1 经 env 显式选择，验收在跑书之后。
+#:   ⚠ 该实验臂未翻过默认；随后由 v2 的付费验收统一接替，见下一项。
+#: · `extraction-ir-v2`（2026-08-23）：同样只放宽取值面、不升 artifact schema。
+#:   它把模型响应拆成「止段边界预传 → 冻结边界上的事实细节」两相，并把
+#:   `present_names` 的开放生成改成截止本章可见 `char_id` 的关闭式选择；编译后仍落
+#:   同一个 `ChapterBlueprints` 形状。2026-08-23 同书付费验收后翻默认：Flash 从
+#:   91→126 拍（Pro 130）、145→169 hinge（Pro 168），在场者代词 9→0、名册外
+#:   9→0；0 HARD，唯一错误由 ch17 定向重生成一次收敛。完整证据见
+#:   `docs/stage2_contract_experiment.md` §十四。
+#: · `extraction-ir-v2.1`（2026-08-23）：v2 的相级 effort 单变量实验臂。双书付费
+#:   配对因 hinge 召回与成本门失败，默认未翻；完整否决证据见实验手册 §十八。
+#: · `extraction-ir-v3 / v3.1`（2026-08-23）：两条**未翻默认的实验臂**，曾只
+#:   放宽 provenance 取值面、不升 artifact schema。v3 把 v2 的“召回边界 → 细节”
+#:   合进同一次响应，保留强制 micro_events 脚手架，以减少每章第二次 high 推理；
+#:   v3.1 在 v3 上再把 narration 收成可见 char_id，并让 hinge 优先选择代码枚举的
+#:   原文候选（覆盖不到仍可交 phrase，避免为省 token 静默漏事实）。两臂最终都编译
+#:   成既有 `ChapterBlueprints`；没有付费 A/B 证据前默认继续是 v2。
+#: · 2026-08-23 收口：只保留 `extraction-ir-v1.1`、`extraction-ir-v2`、
+#:   `extraction-ir-v3.1`。`bounded-fidelity-v3`、v1、v2.1、v3 从公开取值面撤下；
+#:   Literal 收窄会拒读带退役 architecture 的存量字节，因此 chapter blueprints
+#:   schema v2 → v3，全部存量由 `stage2.blueprint` 付费整跑重建，不做迁移。
 BLUEPRINT_ARCHITECTURES: Final = (
-    'bounded-fidelity-v3', 'extraction-ir-v1', 'extraction-ir-v1.1')
+    'extraction-ir-v1.1', 'extraction-ir-v2', 'extraction-ir-v3.1')
 
 #: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
 #: 翻默认只动这一格（`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT` 从它派生），
-#: **取值面不动**：盘上存量产物全是 v3，收窄取值面它们当场读不回来，
-#: 而定向修复是按「基线产物的 architecture」选契约的。
+#: 盘上存量产物可能来自任一已登记架构，而定向修复是按「基线产物的 architecture」
+#: 选契约的；因此取值面收窄必须升 artifact version 并整跑重建，不能只改这一格。
 #:
 #: 【2026-08-21 翻默认：v3 → extraction-ir-v1】依据是同书同上游的单变量对照
 #: （`docs/stage2_contract_experiment.md` §六~§十，无情道 23 章）：
@@ -443,7 +462,13 @@ BLUEPRINT_ARCHITECTURES: Final = (
 #:   ⚠ 未达成项如实记：总付费 token 比 B 臂**高 5%**（原定不高于 B）。赢的是
 #:     「成本/被接受的书」（B 那 149k 没落盘），不是「成本/次调用」。
 #:   ⚠ n=1（7C 三本配对未跑）。回退就是把这一格改回去，不涉及任何产物迁移。
-BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v1'
+#:
+#: 【2026-08-23 翻默认：extraction-ir-v1 → extraction-ir-v2】依据见上方 v2 登记项与
+#: `docs/stage2_contract_experiment.md` §十四。它是**质量换成本**：本书 Flash 真调用
+#: 25→43、completion 136,431→271,462；地点 66.7% 仍没到预登记 81% 底线，n=1。
+#: 采纳的理由是生产默认模型就是 Flash，而拍/hinge 缺口分别约补回 90%/96%、在场者
+#: 四类解析失败归零。默认回退仍只改这一格，但契约取值面的增删另按上方升版纪律走。
+BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v2'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 #: `SourceSpan.recovery` 的取值面：这个区间是怎么对上原文的。
@@ -1290,7 +1315,7 @@ PAID_FLAGS: Final = {
     #   同 `stage5.write` 的 `--revise`，理由见 `NODES` 里那一格上方的注释。
     '--purge-role': 'stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型',
     '--resample': 'stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应',
-    '--patch': 'stage2 逐章蓝图的字段级修复（extraction-ir-v1）——逐条失败各调一次模型，'
+    '--patch': 'stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，'
                '量级是条不是章',
 }
 

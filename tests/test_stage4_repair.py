@@ -26,19 +26,15 @@ from novel.stages.stage4.measure import identity_plan
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_generation import (
-    _client, _ctx, _ok, _response_blueprints, _response_global,
+    _client, _ctx, _ok, _respond_blueprints, _response_blueprints,
+    _response_global,
 )
 
 
-#: ⚠ **本文件的假响应是 `bounded-fidelity-v3` 形状的**（`_response_blueprints()`
-#: 由 v3 正式产物反投影而来，带 `beat_id`/`span`/产物侧 `time_layer`）。
-#: 2026-08-21 默认契约翻成 `extraction-ir-v1` 之后，不拧回去这些响应会被
-#: V2 的 schema 闸整轮拒光——那是**测试装置的臂选错了**，不是产线的病。
-#: ⇒ 整个文件跑在 v3 臂上；ir1 的链路另有 `test_stage2_contract_dispatch.py`
-#: 与 `test_stage2_compile_v2.py` 覆盖。
+#: 通用 Stage4 底座固定在仍现役的 v1.1；契约特有拓扑由 dispatch 测试覆盖。
 @pytest.fixture(autouse=True)
-def _pin_v3_arm(monkeypatch):
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'bounded-fidelity-v3')
+def _pin_ir11_arm(monkeypatch):
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v1.1')
 
 
 def _prepare(book):
@@ -53,10 +49,7 @@ def _prepare(book):
     by_ordinal = _response_blueprints()
 
     def blueprint_response(request, _index):
-        for ordinal in by_ordinal:
-            if f'阅读序第{ordinal}章' in request.user:
-                return _ok({'blueprints': [by_ordinal[ordinal]]})
-        raise AssertionError('逐章 prompt 没有阅读序目标')
+        return _respond_blueprints(request, by_ordinal)
 
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
     blueprint_client, _ = _client(blueprint_ctx, blueprint_response)

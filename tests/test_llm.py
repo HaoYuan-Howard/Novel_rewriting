@@ -449,6 +449,59 @@ def test_an_answer_written_into_the_reasoning_channel_is_salvaged_instead_of_res
     assert len(t.calls) == 1, '捞回来了就不该再付一次重采的钱'
 
 
+def test_a_contract_can_prefer_one_normal_resample_without_discarding_valid_salvage():
+    """首份合法救回稿作后备；第二采拿到正常正文时采用正常正文。"""
+    normal = ChatResponse(
+        content=json.dumps({'voice': {'normal': 1}, 'surface_habits': ['正文']}),
+        reasoning='', finish_reason='stop',
+        usage={'prompt_tokens': 10, 'completion_tokens': 5},
+        model='deepseek-v4-flash')
+    t = FakeTransport(lambda _req, i: _lost(_SALVAGEABLE) if i == 0 else normal)
+    ctx = _ctx()
+
+    got = _client(t, ctx=ctx).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='p',
+        prefer_content_over_reasoning_salvage=True)
+
+    assert got.voice == {'normal': 1}
+    assert len(t.calls) == 2 and t.rungs == [LADDER[0], LADDER[0]]
+    gates = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
+    assert [(g['decision'], g['gate'], g['resample'], g['salvaged'])
+            for g in gates] == [
+                ('rejected', 'answer_lost', True, False),
+                ('accepted', None, False, False),
+            ]
+
+
+def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails():
+    """第二采仍不可用时采纳已过契约的后备，不得继续降到 low。"""
+    invalid = ChatResponse(
+        content='不是 JSON', reasoning='', finish_reason='stop',
+        usage={'prompt_tokens': 10, 'completion_tokens': 5},
+        model='deepseek-v4-flash')
+    t = FakeTransport(lambda _req, i: _lost(_SALVAGEABLE) if i == 0 else invalid)
+    ctx = _ctx()
+    events: list[dict] = []
+    ctx.observer = events.append
+
+    got = _client(t, ctx=ctx).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='p',
+        prefer_content_over_reasoning_salvage=True)
+
+    assert got.voice == {'a': 1}
+    assert len(t.calls) == 2 and t.rungs == [LADDER[0], LADDER[0]]
+    gates = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
+    assert [(g['decision'], g['gate'], g['salvaged']) for g in gates] == [
+        ('rejected', 'parse', False),
+        ('accepted', None, True),
+    ]
+    lost, = [e for e in ctx.ledger.audit_events if e['kind'] == 'answer_lost']
+    assert lost['salvaged'] is True
+    rejected, = _observed(events)
+    assert rejected['fallback_salvage'] is True
+    assert rejected['next_effort'] is None and rejected['exhausted'] is False
+
+
 def test_salvage_runs_the_full_contract_so_a_merely_parseable_reasoning_is_still_rejected():
     """⭐ 捞的是**同一套四道闸**，不是「解析得动就用」。
 

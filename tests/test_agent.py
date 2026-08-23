@@ -99,6 +99,41 @@ def test_prompt_never_hardcodes_a_book_filename(base):
     assert '_rewriting.txt' in text
 
 
+def test_prompt_surfaces_the_headless_safety_sequence(base, book):
+    """高风险边界必须出现在启动 prompt，不能只埋在 agent 之后才读的长 skill 里。"""
+    text = agent.build_prompt(
+        '42', base, authorized=True, egress_authorized=True,
+        code_version='expected-code-version')
+
+    assert '每次 Bash 调用都必须保持在仓根，不得 cd' in text
+    assert 'state 42' in text and 'inbox 42' in text
+    assert '在任何写盘或付费动作前' in text and '创建终审包草稿' in text
+    assert 'doctor --llm-transport' in text
+    assert 'from novel import prov; print(prov.code_version())' in text
+    assert 'expected-code-version' in text
+    assert '没有可定位证据时必须保留 `UNVER`' in text
+    assert '不得猜测 PASS' in text and '把 exit 0 当成交付 ready' in text
+
+
+def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
+    """Edit(base/**) 是权限上界，不是允许直接覆盖正式产物的产品语义。"""
+    text = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
+
+    assert '正式 stage JSON/TXT' in text
+    assert '正式变更只经 `novel.cli`' in text
+    assert 'Write/Edit 只用于 skill 明列的 typed 人工输入' in text
+    assert '`_service/*.jsonl`' in text and '唯一终审包' in text
+
+
+def test_prompt_without_authorization_still_collects_recovery_evidence(base, book):
+    """未授权不是一句话就退出：必须留下盘面事实、精确 preview 与恢复包。"""
+    text = agent.build_prompt('42', base, authorized=False, egress_authorized=False)
+
+    assert '只读的 state、inbox、下一节点 preview' in text
+    assert '终审包草稿' in text
+    assert '首个需要正文外发的步骤前停下' in text
+
+
 def test_argv_is_the_whitelisted_shape(base):
     """Spike 钉死的三件事：入口可直接执行、python 前缀规则、Edit 的 // 锚。"""
     prompt = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
@@ -383,6 +418,75 @@ def test_enqueue_reports_every_book_it_refused(base):
         assert view.max_concurrent == agent.MAX_CONCURRENT
     finally:
         gate.set()
+        for rec in agent.records(base):
+            agent.wait(rec.run_id, 10)
+
+
+def test_batch_response_excludes_agents_that_were_already_running(base):
+    """响应三分区只讲**本批**，不能把批外原本在跑的书混进 running。"""
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    outside = agent.start(base, '41', authorized=True, egress_authorized=True,
+                          spawn=slow)
+    try:
+        view = agent.enqueue(base, ['42'], authorized=True,
+                             egress_authorized=True, spawn=slow)
+        assert [record.start.sid for record in view.running] == ['42']
+        assert len(view.running) + len(view.pending) + len(view.rejected) == 1
+    finally:
+        gate.set()
+        agent.wait(outside.run_id, 10)
+        for rec in agent.records(base):
+            agent.wait(rec.run_id, 10)
+
+
+def test_batch_turns_an_api_job_launch_conflict_into_rejected(base):
+    """从 pending 弹出后启动失败也必须落进本批 rejected，不能静默丢书。"""
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    jobs.REGISTRY.acquire(jobs.active_key('42', 'stage1.partition'), 'api-job')
+    try:
+        view = agent.enqueue(base, ['42', '43'], authorized=True,
+                             egress_authorized=True, spawn=slow)
+        assert [record.start.sid for record in view.running] == ['43']
+        assert view.pending == []
+        assert [item.sid for item in view.rejected] == ['42']
+        assert 'API' in view.rejected[0].reason
+        assert len(view.running) + len(view.pending) + len(view.rejected) == 2
+    finally:
+        jobs.REGISTRY.release(jobs.active_key('42', 'stage1.partition'), 'api-job')
+        gate.set()
+        for rec in agent.records(base):
+            agent.wait(rec.run_id, 10)
+
+
+def test_background_drain_keeps_a_late_api_conflict_pending(base, monkeypatch):
+    """受理响应返回后的冲突没有 rejected 可回填；此时宁可留队，也不能消失。"""
+    monkeypatch.setattr(agent, 'MAX_CONCURRENT', 1)
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    view = agent.enqueue(base, ['42', '43'], authorized=True,
+                         egress_authorized=True, spawn=slow)
+    jobs.REGISTRY.acquire(jobs.active_key('43', 'stage1.partition'), 'api-job')
+    try:
+        gate.set()
+        assert agent.wait(view.running[0].run_id, 10)
+        assert [item.sid for item in agent.queue_view(base).pending] == ['43']
+    finally:
+        jobs.REGISTRY.release(jobs.active_key('43', 'stage1.partition'), 'api-job')
+        agent._drain()
         for rec in agent.records(base):
             agent.wait(rec.run_id, 10)
 

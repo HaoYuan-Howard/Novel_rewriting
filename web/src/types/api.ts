@@ -26,6 +26,7 @@ import type {
   UploadResponse,
 } from './jobs'
 import type { NovelOverview, NovelsResponse } from './novels'
+import type { TrashNovelResult } from './novels'
 import type { RunProgress } from './run'
 import type { Mode } from '@/constants/vocabulary'
 import type {
@@ -158,4 +159,6 @@ export interface Api {
   /** 显式采纳当前可安全应用的 high residual；后端仍会重新校验冲突。 */
   adoptResidual(sid: string, req: { confidence: 'high' }): Promise<Job>
   uploadCorpus(file: File): Promise<UploadResponse>
+  /** 可恢复删除：整本项目移入 `_service/trash/`，确认绑定当前书名。 */
+  trashNovel(sid: string, expectedTitle: string): Promise<TrashNovelResult>
 }

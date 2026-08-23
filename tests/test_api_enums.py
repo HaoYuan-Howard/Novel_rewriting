@@ -79,6 +79,8 @@ def test_the_web_enums_fixture_is_the_same_payload(paid_payload):
 
 def test_prompt_experiment_controls_are_not_published(paid_payload):
     assert 'prompt_experiments' not in paid_payload
+
+
     assert 'prompt_variants' not in paid_payload
 
 

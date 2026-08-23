@@ -287,6 +287,70 @@ def test_the_clean_base_has_no_hard_hits():
     assert got == set(), f'干净底座上不该有任何 HARD 命中，实得 {sorted(got)}'
 
 
+@pytest.mark.parametrize(('chapters', 'evidence'), [
+    ([1, 2, 2, 3], 'duplicate:ch2@家事初起|家事初起'),
+    ([1, 2, 3, 99], 'extra:ch99@家事初起'),
+])
+def test_conflict_stage_coverage_reports_duplicate_and_out_of_range_memberships(
+        chapters, evidence):
+    gg = global_grounding()
+    gg['arc']['conflict_stages'][0]['chapters'] = chapters
+    outcome = next(o for o in checks.check(
+        global_g=gg, blueprints=blueprints(), main_text=main_text())
+        if o.rule == 'conflict_stage_coverage')
+    assert outcome.findings
+    assert evidence in outcome.findings[0].evidence
+
+
+@pytest.mark.parametrize('architecture', [
+    'extraction-ir-v2',
+    'extraction-ir-v3.1',
+])
+def test_closed_present_character_id_is_not_reclassified_as_an_ambiguous_name(
+        architecture):
+    """关闭式契约的人读字面可以歧义，但模型选择的 char_id 已把引用定死。"""
+    gg, bp, mt = global_grounding(), blueprints(), main_text()
+    gg['entities']['characters']['char_001']['address'].append({
+        'surface': '母亲', 'by': 'narration',
+        'context': 'reference', 'from_chapter': 1})
+    bp['_provenance']['context']['architecture'] = architecture
+    outcomes = {o.rule: o for o in checks.check(
+        global_g=gg, blueprints=bp, main_text=mt)}
+    ambiguity = outcomes['present_names_ambiguous']
+    assert ambiguity.findings and ambiguity.findings[0].detail.startswith('0/')
+
+
+def test_v31_closed_narration_id_is_not_reclassified_as_an_ambiguous_name():
+    """v3.1 的 narrator/focalizer 也由关闭式 char_id 定义，不能反解人读投影。"""
+    gg, bp, mt = global_grounding(), blueprints(), main_text()
+    gg['entities']['characters']['char_001']['address'].append({
+        'surface': '母亲', 'by': 'narration',
+        'context': 'reference', 'from_chapter': 1})
+    bp['_provenance']['context']['architecture'] = 'extraction-ir-v3.1'
+    for blueprint in bp['blueprints']:
+        blueprint['narration'] = [{
+            'grammatical_person': 'third',
+            'narrator_name': '母亲', 'narrator_char_id': 'char_001',
+            'focalizer_name': '母亲', 'focalizer_char_id': 'char_001',
+            'pronoun_surfaces': [],
+        }]
+    outcomes = {o.rule: o for o in checks.check(
+        global_g=gg, blueprints=bp, main_text=mt)}
+    assert outcomes['present_names_ambiguous'].findings[0].detail.startswith('0/')
+
+
+def test_open_character_names_still_report_ambiguity():
+    """开放字面契约没有权威 id；同一份投影必须继续如实报告歧义。"""
+    gg, bp, mt = global_grounding(), blueprints(), main_text()
+    gg['entities']['characters']['char_001']['address'].append({
+        'surface': '母亲', 'by': 'narration',
+        'context': 'reference', 'from_chapter': 1})
+    bp['_provenance']['context']['architecture'] = 'extraction-ir-v1.1'
+    outcomes = {o.rule: o for o in checks.check(
+        global_g=gg, blueprints=bp, main_text=mt)}
+    assert outcomes['present_names_ambiguous'].findings[0].detail.startswith('2/')
+
+
 def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
     """FC-14：真实 checks 产的 detail 只记本次数据，规则 caveat 只在 note。"""
     from novel.prov import FreshnessReport
@@ -346,7 +410,7 @@ def test_hedge_words_does_not_treat_factual_or_as_uncertainty():
 def test_the_clean_base_leaves_no_rule_unimplemented():
     """**注册了而没有实现调用它 ⇒ `skipped`，徽章至少 amber。**
 
-    这一条盯的是 `checks.check()` 恰好产 73 个 `Outcome`——
+    这一条盯的是 `checks.check()` 恰好产 74 个 `Outcome`——
     报告是由**判据注册表**生成的，不是由实现的输出生成的，
     所以漏实现一条不会让它从报告里消失，只会让它挂一行「实现未被调用」。
     """
@@ -354,7 +418,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 73
+    assert len(outs) == len(want) == 74
 
 
 def test_global_field_failures_route_to_the_dedicated_resample_action():
@@ -366,7 +430,7 @@ def test_global_field_failures_route_to_the_dedicated_resample_action():
         'address_from_out_of_range', 'address_from_too_early',
         'address_bare_pronoun', 'address_all_pronoun', 'role_missing',
         'role_repeats_name', 'hedge_words', 'distinguisher_lonely',
-        'world_rule_no_desc', 'secret_known_by_dangling',
+        'world_rule_no_desc', 'secret_known_by_dangling', 'conflict_stage_coverage',
     }
 
 
@@ -478,6 +542,9 @@ CASES: list[tuple[str, Mutator, str]] = [
      _m(lambda g, b, m: g['canon']['secrets'][0].__setitem__(
          'character_known_by', ['char_999'])),
      '`char_\\d+` 形状的知情人解析不出来。⚠ 自由文本（「在场士兵」）**放行**——按形状分流'),
+    ('conflict_stage_coverage',
+     _m(lambda g, b, m: g['arc']['conflict_stages'][0].__setitem__('chapters', [1, 3])),
+     '`chapters` 是逐章显式枚举；省掉第 2 章会让 Stage4 拿不到唯一 current_stage'),
     # ── 五、拍与区间 ────────────────────────────────────────────────────
     ('beat_id_unique',
      _m(lambda g, b, m: _ch(b, 2)['beats'][0].__setitem__('beat_id', 'b01_01')),
@@ -593,7 +660,7 @@ def test_a_sample_that_makes_this_hard_rule_red(rule, mutate, why):
 def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     """⭐⭐ **守卫的守卫：这张清单不许悄悄变短。**
 
-    39 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
+    40 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
     加一条 HARD 而不配样本，这条测试当场点名——
     否则那条新判据就又回到「从没见过反例」那一档，而它与一条不存在的判据长得一样。
     """
@@ -602,7 +669,7 @@ def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     on_disk = {'address_bare_pronoun', 'role_leaks_fate', 'hedge_words', 'hinge_in_hole'}
     hard = {r.rule for r in REGISTRY.all() if r.stage == 'stage2' and r.sev == 'hard'}
     covered = {c[0] for c in CASES}
-    assert len(hard) == 39, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
+    assert len(hard) == 40, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
     assert covered <= hard, f'CASES 里有不是 HARD 的：{sorted(covered - hard)}'
     assert not (missing := sorted(hard - on_disk - covered)), (
         f'这几条 HARD 既没有盘上反例、也没有合成样本：{missing}\n'

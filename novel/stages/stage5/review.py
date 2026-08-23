@@ -308,10 +308,13 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
         _downgrade(f, actionable=False, identity_dead=True)
         if (f.rule in dead and f.actionable) else f for f in row.findings]}) for row in rows]
 
-    # A current unadopted trim audit is already the authoritative conclusion
-    # and closure path for this exact over-length draft.  Do not emit a second
+    # A trim audit still bound to this exact draft is already the authoritative
+    # conclusion and closure path for its over-length text.  Do not emit a second
     # ``length_over`` finding for the same root cause; the verification item
-    # carries the explicit current length/target and audit before/after hashes.
+    # carries the explicit current length/target and the audit before hash.
+    # ⚠ ``current_trim_audits`` **含已销账的那一档**（待办那一侧才用
+    #   ``current_unresolved_audits``）：销账关掉的是待办，不是「这一稿确实超限」
+    #   这个事实；换成窄的那个集合，下一轮 Review 会把人刚关掉的决定重新打开。
     from novel.stages.stage5 import trim_resolution
     current_trim = set(trim_resolution.current_trim_audits(store))
     rows = _merge_length_over_into_trim(rows, current_trim)

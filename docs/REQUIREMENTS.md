@@ -27,7 +27,8 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
   产物必须由现役 producer 按 `ARTIFACT_SPECS.current_version` 写出。**本仓没有迁移机制**
   （2026-08-18 归零，理由见 `contracts/schema/__init__.py` 模块头【版本】）——
   这一条因此比过去简单：盘上任何一个与注册表当前版本对不上的标记，都说明那份产物不是这一跑产的。
-  ⚠ 版本号**逐份从注册表现算**，别写死 `1`：`stage2/chapter_blueprints.json` 已于 2026-08-19 升到 v2。
+  ⚠ 版本号**逐份从注册表现算**，别写死 `1`：`stage2/chapter_blueprints.json` 已于
+  2026-08-23 随 architecture 收窄升到 v3。
   不给旧 JSON 手补 `_schema_version`、`root_clean_sha1` 或其他字段冒充当前产地。
 - [ ] 生成并提交无正文 manifest：逐书记录 sid、source hash、章节数、预期产物与版本、代码身份、
   冻结命令、ledger 聚合及精确 skip allowlist。终审成本以 `<base>/_service/ledger.jsonl` 为
@@ -390,7 +391,7 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 
 ⚠⚠ **立条目时的读数不能当基线用。** 它们全部取自 `四人成行` 那一份计划，而那份计划有两重
 污染：① 它是**旧 prompt 逼出来的分布**——旧口径下够大的章不移位就不许落盘；
-② 它是对着**旧版 stage2** 产的（当前 `chapter_blueprints.json` 已是 schema v2，
+② 它是对着**旧版 stage2** 产的（当前 `chapter_blueprints.json` 已是 schema v3，
 `from_beats` 里 16/106 个 `beat_id` 在当前蓝图中已不存在）。当时读数：
 `cold_open` **11/11 章** · `transition` = `earlier 18 / start 11 / return 6 / later 1 / continue 1`
 · 方向可判率 **13/26** 个接缝（判不动：`recall→recall` 6 · 上游漂移 3 · `recall→present` 3 ·
@@ -438,85 +439,11 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 
 ⚠ 两项加起来也只有个位数百分比：输入侧优化的天花板约 7%（FC-13）。要量级收益只有 effort 降档。
 
-### TODO-31 · 生成侧 schema 降本与 flash 潜力（新 worktree 施工）
+### TODO-31 · 生成侧确定性化的 Stage7 余项
 
-2026-08-19/20 用户拍板：**除语义判官外全链 `deepseek-v4-flash`**（开发期成本：pro 约
-9 元/本 vs flash 约 3 元/本），判官恒 `deepseek-v4-pro`。已落成形状的部分见
-`docs/BACKEND_CONTRACT.md` §十 2026-08-20 行：默认模型换 flash
-（`novel/config.py::DEFAULT_MODEL`）、判官钉在 `NodeSpec.model`
-（`contracts/invariants.py::NODES` 的 `stage6.semantic`，`DEEPSEEK_MODEL` 换不掉）、
-答案流丢失先同档重采一次再降档（`novel/llm/client.py::MAX_SAMPLES_PER_RUNG`）。
 
-⚠ **2026-08-22 起 `stage4.plan` 也钉死 pro**（§十 同日行），所以「除判官外全链 flash」
-这句话**已经不再逐字成立**——现在是**两个**钉死值，而两者的理由不同：判官那格是证据力，
-`stage4.plan` 那格是**重采粒度**（全链唯一一个全书一次调用的生成节点，一次 `answer_lost`
-重采就是整本书；flash@high 实测 43.3% 空正文，pro@high 0/249）。本条 TODO 的
-「flash 潜力」验证**只对逐章节点仍然开着**。
-**动 schema 前的基线快照已做**：`outputs/_snapshots/pre_schema_work_20260820.tar.gz`
-（`tools/backup_snapshot.py` create-private，255 份 / 7.7MB，含 flash 三书、pro 对照
-与 ledger；⚠ 落在本机盘上，不是加密离线介质，要不要挪由用户定）。
-
-本条要的是**用户假设的验证与施工**：「schema 里的不确定字段换成确定性字段，flash
-就能追平 pro」。该假设大体成立但有一处实测修正——`narrative_role` 早就是闭合
-枚举，flash 照样编：产出的非法值 `'summary'` 恰是相邻字段 `delivery` 的合法值
-（两个闭合枚举串行）、`'close'` 是「收尾」的自然说法而取值面里叫 `payoff`
-（命名不直观）。⇒ 对 Literal 字段有效的不是「再收窄」，是**取值面之间不可混淆**，
-以及**把枚举下推到解码器**——⚠ 这条**挂不上 `json_mode`**：它只保证「是合法 JSON」、
-不保证合乎 schema（TODO-40 实测：开着它照样出 `G_TURN` / `R_SCENE` 这种越界枚举），
-真要下推得要 `json_schema` 那种 constrained decoding，而 DeepSeek V4 拒收
-（`novel/stages/stage2/contract.py`，2026-08-20 文档探针）。
-⚠ `json_object` 于 2026-08-22 关过一次又当天改回（`novel/llm/client.py::JSON_OBJECT_MODE`
-记着全部理由）——不论开关，它都挂不上这条。
-
-杠杆最大的一类是「代码本来就知道、却去问模型」——把模型判断换成模型给原料 + 代码算：
-
-| 改动 | 现在 | 应该 | 实测失败样本 |
-|---|---|---|---|
-| stage2 锚点 | `HingeResponse` 同时要段号+短语且须一致 | 删 `para` 只留 `phrase`，段号由代码全书唯一匹配定位；多匹配/查无才 HARD | 书3 的 10 处 `verbatim_failed` 里 **9 处是短语对、段号错** |
-| ~~`narrative_role='cold_open'`~~ | ~~模型标~~ | **结案不做**（2026-08-22 用户裁决） | 见下面那段 |
-| ~~`PlanGoal` 的 `FactRef.ref`~~ | ~~模型填~~ | **结案不做**（同上） | 见下面那段 |
-| `Secret.setup_chapters` | 模型填 | 由 `reader_reveal_events` 推上界（同章即无效） | 书3 `secret_setup_order` |
-| `present_names` | 自由文本 `list[str]` | 收成 `char_id` 引用，从已知集合里选 | 书3 `present_names_invented` |
-| stage7 家族/宅邸称呼 | 不在替换面 | 从 `surname_map` 自动派生 `X家`/`X府` | 书2 的 35 条高置信残留（`孙家/孙府/宋家/宋府`） |
-
-- [ ] 上表六项**里剩下的四项**按序施工（锚点那行杠杆最大：错误面从「两字段互相一致」
-      缩成「短语是否逐字存在」，且模型不必数段落 ⇒ reasoning 同步下降）。
-
-⚠⚠ **`cold_open` 推导与 `FactRef` 自动补两行已于 2026-08-22 结案不做**（用户裁决），
-理由是**杠杆已经归零，而它们各自还带一份代价**：
-
-- `goal_landing` 在批 3 那次验收整跑上是 **0/46 条边界目标出错**。立这一行时它错 20/50
-  （常春杜若首跑），而那 20 条的根因是下发面缺一道 join——`event_units`（2026-08-17 补）
-  加上批 2 的 prompt 修订**已经把它修掉了**。⇒ 现在做「自动补尾单元」不是在救红，
-  是把一条 HARD 换成一次**静默的自动改写**：代码会把模型没选的那条 event 写进它的结尾钩子，
-  而本仓的纪律是「不许静默 pass」。
-- `cold_open` 那条 `structure_transition` 分支要「入口移位」才触发，而批 3 验收整跑上
-  入口移位是 **0/23 章**——它一次都没响过。推导它能省的只是响应里一个枚举值。
-
-⚠ **两行都不是「以后也不做」**：它们连着的读数一旦变了（比如换臂之后 `goal_landing`
-又开始红），重新开条目即可。结案记的是**今天的杠杆**，不是永久裁决。
-⚠ 同批（批 4）真正动了的是另外两件，见 `docs/BACKEND_CONTRACT.md` §十 2026-08-22 那行：
-`plan_beats[]` → `end_beat`（三条引用/覆盖 HARD 变恒等式）、
-`budget_chars` → 两级档位（三条算术 HARD 变代码后置条件）。
-- [ ] 枚举下推到解码器 + 取值面命名不可混淆（`summary`/`close` 那两条实测）。
-- [ ] **方向警告**：flash 在 `stage2.blueprint` 比 pro **少想 36%**（113,529 vs
-      176,354）、在 `stage5.write` 比 pro **多想 34%**（246,064 vs 182,997）——
-      抽取层想得不够、写作层想得过多，**别用同一套手法压这两个节点**。
-- [ ] 验收读数已有两个现成基线：`outputs/_ab/ab_matrix_无情道_pro_vs_flash.md`
-      （`tools/ab_compare.py`）与 `outputs/_ab/blind_read_2016982769068126957`
-      （用户盲读：区分不出高下——它只对 `stage5.write` 构成背书）。
-
-⚠ worktree 实测过的坑（都真踩过）：`.env` 与 `.llm_cache/` 不进 git ⇒ 新 worktree
-全 miss 真付费，把 `NOVEL_CACHE_DIR`（`novel/config.py::ENV_KEYS`）指回主仓
-`.llm_cache` 即可命中；**缓存键含 `model`**（`ChatRequest.cache_payload` 第一键）
-⇒ 换模型全 miss，反过来**同模型同参数重跑 0 元**、被超时杀掉照原样重跑即可；
-`stage2.global` 不接受 `--check-only`；`stage5.write` composite 写法不接受
-`--chapters`（长书撞宿主超时就整跑重来，已完成调用会命中缓存）；PowerShell
-内联 `python -c` 带中文/反斜杠会被引号吃掉，落脚本文件跑。
-⚠ `ab_compare` 的「供应商 prompt cache 命中率」不归因于模型（取决于运行时序与并发）。
-⚠ 破坏 schema 形状要 `current_version` +1 并在
-`tests/test_artifact_versions.py::_SHAPE_BREAKS` 登记、同批回答「存量产物由谁重建」
-——快照已在，两臂对照组可随时对账。
+- [ ] Stage7 家族/宅邸称呼从 `surname_map` 确定性派生 `X家` / `X府`；
+      失败样本是旧 Flash 实验臂里 35 条高置信残留（`孙家/孙府/宋家/宋府`）。
 
 ### TODO-32 · flash 迁移三本书的未收口项（诚实清单）
 
@@ -548,23 +475,6 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
       已披露未修，修不修由用户裁决。
 - [ ] 未测项：flash 修掉「空正文降档」（`MAX_SAMPLES_PER_RUNG`）之后的真实
       `high` 档能力——此前 3 本里 2 本的 `stage4.plan` 从未在 `high` 档被评估过。
-
-### TODO-33 · conflict_stages 章覆盖无判据守卫（消费端已兜，产地仍裸奔）
-
-2026-08-20 实锤（`逼一个恋爱脑当皇帝_2064547957232423400`，flash）：`ConflictStage.chapters`
-的注释自认「3/3 本恰好覆盖全部章——⚠ 但没有任何判据在查这件事」。本书模型产出
-`[1,2]/[3,5]/[8,10]/[13,15]…`——连续段**省写中间章**，4/9/14 落在段内空隙；stage4 的
-`_project_facts` 只认精确成员 ⇒ 组出**空的 arc** ⇒ `WriterContext.model_validate` 在落盘
-事务里裸抛 exit 70（结论未知，付费响应已花）。已修消费端（`novel/stages/stage4/context.py`）：
-段内空隙按 min≤o≤max **唯一**区间解释（读出写段本意，不发明归属）；跨段真空隙/双包含
-抛 `RefusedByStructure`（exit 3，带付费重跑指引）。测试：
-`tests/test_stage4_context.py` 三条（区间解释 / 真空隙 / 双包含）。
-
-- [ ] 产地判据：stage2 落盘时校验 `conflict_stages[].chapters` 并集恰为 `1..N`、无重无缺
-      （命中 HARD，修复路 `stage2.global` 重跑）。现在只有消费端兜底，真空隙书仍要
-      exit 3 + 付费重跑 stage2 才能过 stage4。
-- [ ] 顺带回答：`chapters` 到底是「显式枚举」还是「区间端点」——若是后者，schema 应改名或
-      收紧形态，别让两种语义共用一个形状（本次区间解释是对现状的最小兼容，不是语义裁决）。
 
 ⚠⚠ **`TODO-38` / `TODO-39` 这两个号在 2026-08-22 被两条分支各分配过一次，含义不同。**
 两边的 commit 信息都已经写死，改号只会让活着的条目与创建它的 commit 对不上 ⇒ 只标注：
@@ -820,7 +730,107 @@ Fisher 单侧 p≈0.21 ⇒ **方向对，但没到显著**。三条已经站得�
 `tests/test_llm.py` 四条钉住（捞成功不重采 · 四道闸全过才算 · 截断与 `ask_text` 都不捞 ·
 两种审计行都带 `salvaged` 且捞回来的不进缓存）。`ask_text` 那一侧未开，条目保留。
 
-### TODO-41 · 恒等基线两道闸对 `IDENTITY_UPSTREAM` 的处置不一致
+### TODO-41 · Stage2 `extraction-ir-v3.1` 默认候选的双书验收
+
+2026-08-23 已按 `docs/stage2_contract_experiment.md` §十五的预注册矩阵完成三臂付费实测，
+默认继续 `extraction-ir-v2`。v3 reasoning 相对同场 v2 下降 69.6%，但 hinge 只有 v2 的
+85.7%，并新增 6 个在场者歧义与 2 个名册外引用，一级质量门失败；v3.1 全部模型调用完成后
+在编译正式产物时因空 `SourceSpan.normalized` 崩溃，产物未落盘，reasoning 还比 v3 高 43.0%。
+原始 wire、adoption、产物 hash 与全矩阵已经写回实验手册，不再缺付费证据。
+
+同日按用户指定只跑了修复后的 `v3.1-fixed` 单臂诊断：候选生成器已在截断前剔除
+`content_only == ''` 的纯标点项，真书 243 项候选全部能构造正式 `SourceSpan`；定向、冻结五文件
+与全量非 corpus 回归 exit 0，真实主跑与独立 `--check-only` 也均 exit 0。正式产物为 134 beat /
+175 hinge / 0 HARD，证明 compiler 结构漏洞已修好；但人物歧义仍为 6，reasoning 163,987 又比
+旧 v3 高 45.5%，所以默认仍保持 `extraction-ir-v2`。这次跨了代码冻结且没有重跑 v2/v3，
+只能作诊断，不能冒充新的严格矩阵。完整证据见 `docs/stage2_contract_experiment.md` §十五。
+
+随后复核已改变问题边界，详见 `docs/stage2_contract_experiment.md` §十六：6 项人物歧义全是
+判据把 v3/v3.1 误走成开放字面引用造成的假红，按响应契约取 `present_char_ids` 后为 **0/285**；
+但对候选/phrase 密集的 5 章做盲序抽样，覆盖 63/175 条 hinge，确认 175 里确有普通对白、
+非因果数字以及整句/子串重复，不能再把“更多”直接当成“更好”。冷揭示差距也是真问题：全书抽取
+把第一章已明示给读者的主角身份登记成秘密，却漏了第 16 章“黎玄从收徒当天就已知情”的后置揭示。
+
+零成本修复已完成：判据从 `CONTRACTS` 的关闭引用能力派生；数字候选不再从“第二天/下一秒”
+截出“二天/一秒”；v3.1 prompt 恢复 hinge 类别、反批量选择与反嵌套规则；全书秘密 prompt 明确
+区分世界内角色不知与读者尚未知。定向 118 项非 corpus 回归 exit 0。**这不改变盘上
+`ChapterBlueprints` artifact schema v3**；本次升版只来自 architecture 收窄，不代表响应形状改造。
+冻结契约五文件 325 项、完整非 corpus 回归、前端 seams/typecheck/build 亦均 exit 0；前端验证
+只读复用了同锁文件主 worktree 的依赖，未安装或改写依赖。
+
+双书真实付费验收已完成，完整账本、hash、盲审与恢复过程见 §十六。两份最终稿都能达到正式 schema、
+fresh/match、0 HARD、span 100% 和关闭人物引用四项全 0；无情道 global 也恢复了 ch16 的真实冷揭示。
+但预注册默认门失败，`BLUEPRINT_ARCHITECTURE` 必须继续是 `extraction-ir-v2`：
+
+- 无情道新稿 130 beat / 133 hinge，密集章已消除数字后缀与嵌套，稀疏章却漏掉 ch4 的笑点落点和
+  ch12 的关系证据；reasoning/completion 还分别比 Pro v1.1 高 5.0%/5.9%，没有保住既有优势；
+- 偶像公寓首轮 ch1/ch7 被 `beats_coarse` 拦截，需两章付费重生成和摘要重做才落正式稿；正常
+  19 调拓扑实际用了 23 调，不能称跨书首轮稳定。
+
+失败后已完成下一候选的零成本施工：同相脚手架补回对话转折切拍规则，v3.1 hinge 明确“反批量不等于
+少交”，保留关系证据、后文回收原话和笑点最后一击。随后用户授权继续付费诊断；同一正文、同一
+global、同一 `5ce162d` 代码上的 `v3.1 + Pro` 已完成，详见 §十七。它找回 ch4/ch12/ch13/ch18/ch22
+多项 Flash 真漏项，并把人物引用四项收为 0；但最终 152 beat / 134 hinge，ch22 又出现切分偏细风险，
+completion 也比 Pro v1.1 高 4.7%，所以结论是“架构有上限、Flash 仍需约束”，不是“v3.1 已胜”。
+
+第一版结构化教师蒸馏已真实烟测并**否决**：v3.1 micro-event 增加 `function` / `fidelity` 闭集后，
+无情道 ch4/ch12/ch13 的真漏项均补回，ch22 从 3 beat 修到与 Pro v1.1 相同的 7 beat；偶像 ch1/ch7
+也不再粗切。但 13 个目标章用了 17 调，4 章因自报义务重采；completion/reasoning 为
+306,190/270,735，比旧冻结同批章高 76.3%/78.0%。偶像 ch1、ch13 又分别升到 21、26 条 hinge，
+普通对白被批量抬成保真点。质量召回成立不等于默认候选通过，详见 §十七。
+
+该响应字段与 validator 已撤回，system/hint 恢复到 e268 的 6,577/538 字。当前只保留两项不增加模型
+推理任务的代码优化：候选按引语/数字/因果分层并保留各族首尾；章节 HARD 在摘要调用前用同一生产判据
+预检，使失败恢复由 `N+1+k+1` 收为 `N+k+1`。盘上 `ChapterBlueprints` 当前为 v3：
+
+- [x] 先用无情道 ch4/ch12/ch13/ch22、偶像 ch1/ch7 做 6 章核心烟测；必须补回笑点、关系证据与
+  揭示回收，ch22 保持约 5–9 beat，ch1/ch7 不粗切，同时不得出现普通对白 hinge 系统性反弹；
+- [x] 核心通过后再补无情道 ch16/ch18/ch19/ch21 与偶像 ch10/ch13/ch16 的密集章烟测；同批章
+  completion/reasoning 不得比旧冻结读数异常反弹，且首轮重采率不能再接近 4/13；
+- [x] 烟测通过后才用独立空缓存整跑两本开发书；两书都须首轮通过 §十六质量/成本门，失败仍保留
+  `BLUEPRINT_ARCHITECTURE = 'extraction-ir-v2'`；
+- [ ] 开发书冻结后才启封第三本结构不同的小说，固定同 global 做 Pro v1.1 / Flash v2 /
+  Flash v3.1 三臂外部验证；不得看第三书结果继续调参后仍称 holdout；
+- [ ] 只有开发书和外部验证共同支持，才把 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`
+  切到 `extraction-ir-v3.1`；继续保留 `extraction-ir-v2` 用于显式回退和存量产物重检。
+
+候选 20 双开发书空缓存整跑已经冻结，详见 `docs/stage2_contract_experiment.md` §十七。两书最终均
+fresh/match、0 HARD、span 100%、关闭人物引用四项全 0；但两书都没有首轮直接落正式稿：无情道先
+暴露章尾守卫与缺章恢复死路，偶像 ch10 真实命中 `beats_coarse` 并需付费定向重采。合计 69 次 wire、
+497,452 prompt / 564,994 completion / 490,676 reasoning，41 章里有 19 次 `answer_lost`；人工对照又
+确认普通对白/一般数字 hinge 与 ch4 笑点漏标并存。故开发门失败，第三本 holdout 不启封，默认继续 v2。
+
+失败后的代码优化不再增加 prompt：v3.1 改为“正常 content 优先、合法 reasoning 救回稿作同档后备”，
+第二采仍不可用时采用后备而非降到 low；其他契约保持合法即采纳。该行为已有 132 项定向回归，但历史
+空响应不进缓存，尚无新的付费节省读数，不能据此重写上述失败裁决。
+
+2026-08-23 第二轮核心烟测已完成但**没有通过第一项**。撤回结构化自报义务后的最小候选在 6 章
+全部首轮成功，合计 6 调、prompt 42,485、completion 77,443、reasoning 67,920；无情道
+ch4/ch12/ch13 的笑点、关系证据与揭示回收均找回，ch22 为 5 beat / 8 hinge、关系链完整。
+但偶像 ch1 为 11 beat / 20 hinge，普通介绍、追问、楼梯接话、正式介绍与一般时长仍被系统性抬成
+hinge；ch7 的 7 beat / 12 hinge 可接受。故核心门仍失败，不能扩大到密集章整包或两书整跑。
+
+随后两种不增加章级 prompt 的低思考后处理也已用真实 API **否决**：①对既有 20 条做 keep/drop
+只删 2 条训斥，普通噪声大多保留；②冻结 beat 后从未预选候选独立重选，偶像 ch1/ch7 各选 16 条，
+还把“四个”当硬数字；无情道对照又漏掉 ch4“抽出隐藏款了”、ch12 关系原话与 ch13 戏骨仙揭示。
+两者虽分别只用 2,703/179 与 6,807/2,066 prompt/completion、reasoning 都为 0，但精度/召回不合格，
+不接生产。下一候选只收紧**候选曝光预算**（对话密集章不再给满 32 条机械候选，仍保留 phrase 兜底
+和章节位置分层），先做零成本候选覆盖投影再复跑核心章；不再润色已否决的选择器 prompt。
+
+候选上限 32→20 的真实核心与密集章烟测随后通过，详见 §十七。无情道 8 章保住笑点、关系原话、
+身份揭示与 ch22 五步关系链；偶像 ch1 从 20 hinge 收到 15，预算因果与拒绝链未漏，剩余约 3–4 条
+普通/重复项但已不是系统性抬升，ch7/ch10/ch16 也通过人工逐段核对。13 章按**实际产生被采纳响应**的
+账本归并，计入 ch18 一次 `answer_lost` 重采以及 ch13 对救回稿的正常正文对照后，为 15 调、
+prompt 110,031、completion 160,153、reasoning 138,435；相对旧冻结同 13 章分别少 3 调、低
+18.0%/7.8%/9.0%，也没有结构化候选 4/13 的高成本重采。
+
+其中偶像 ch13 揭示了一个与 prompt 无关的质量缝：首个 `content` 为空、从 `reasoning` 救回的合法
+JSON 为 15 beat / 12 hinge、15/15 地点 unknown；同一请求正常正文重采为 10 / 14、10/10 地点明确，
+切拍也更连贯。故只对 `extraction-ir-v3.1` 把“是否接纳 reasoning salvage”登记为响应契约能力并关闭，
+由既有客户端同档重采；其他契约及全局 salvage 不变。零成本组合回归 211 项通过。下一步仍是独立
+空缓存双书整跑，不因烟测通过提前翻默认；第三本 holdout 继续封存。
+
+### TODO-42 · 恒等基线两道闸对 `IDENTITY_UPSTREAM` 的处置不一致
 
 `novel/stages/stage5/review.py::build_review` 有两道恒等闸：
 
@@ -850,7 +860,7 @@ view 或前端组件读过它们）。
 验收：② 与 ③.5 的处置写成同一句话，或者在 `checks.py` 那段注释里写明「两道闸刻意不同」
 以及为什么。
 
-### TODO-42 · 写手 prompt 里那个恒 null 的 `focalizer`
+### TODO-43 · 写手 prompt 里那个恒 null 的 `focalizer`
 
 `novel/stages/stage5/prompts.py` 用 `_compact`（裸 `json.dumps`，**无 `exclude_none`**）
 序列化整个 narration 数组 ⇒ 每一次写手调用的 prompt 里都带着一个恒 `null` 的

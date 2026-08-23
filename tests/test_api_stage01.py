@@ -120,7 +120,10 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
         'hook', 'chapter', 'chapter', 'end_marker']
     assert ''.join(segment['text'] for segment in stage1) == (
         TEXT.replace('第二句文案。\n\n', '').split('番外', 1)[0])
-    assert [row['source_chapter_no'] for row in chapters.json()['chapters']] == [1, 2]
+    chapter_body = chapters.json()
+    assert [row['source_chapter_no'] for row in chapter_body['chapters']] == [1, 2]
+    assert chapter_body['anomaly_count'] == 0
+    assert all(row['anomaly'] is None for row in chapter_body['chapters'])
     assert hook.json()['hook_copy']['text'] == '开篇钩子。\n\n'
 
 
@@ -173,6 +176,21 @@ def test_pre_approval_partition_preview_is_reachable_before_anyone_approves(
     # 只读：预览不建 stage1 目录，stage1 仍然只能由已批准的 stage0 启动。
     partition = client.post(f'/api/novels/{sid}/stage1/partition')
     assert partition.status_code != 200 or partition.json()['state'] != 'ok'
+
+    # 人批准并正式切分后，同一份诊断归 Stage1 章表承接，不能随 Stage0 预览 UI 一起消失。
+    approved = client.post(
+        f'/api/novels/{sid}/stage0/approve', headers=UI,
+        json={'actor': 'api-stage01-test', 'reason': '核对章号异常后批准'},
+    )
+    assert approved.status_code == 200 and approved.json()['state'] == 'ok'
+    partition = client.post(f'/api/novels/{sid}/stage1/partition', headers=UI)
+    assert partition.status_code == 200
+    chapters = client.get(f'/api/novels/{sid}/stage1/chapters').json()
+    assert [
+        (row['source_chapter_no'], row['label_delta'], row['anomaly'])
+        for row in chapters['chapters']
+    ] == [(1, None, 'repeat'), (2, 1, None), (1, -1, 'reset')]
+    assert chapters['anomaly_count'] == 2
 
 
 def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):

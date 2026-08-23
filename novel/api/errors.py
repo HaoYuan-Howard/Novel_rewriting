@@ -26,6 +26,7 @@ from novel.errors import (
     ApprovalRequired,
     ArtifactUnreadable,
     BlockingFindingsUnresolved,
+    BookTrashFailed,
     ByteFormRefused,
     DeliveryIncomplete,
     GateBlocked,
@@ -100,6 +101,8 @@ STATUS: dict[type[NovelError], int] = {
     #: 行为半边由通用 `POST /api/jobs` 与专用 Stage0 端点共同测试：同书第二次启动为 409，
     #: 不同书可并行，stage5 的 deep/shallow 单臂是唯一可共存的书内例外。
     JobConflict: 409,
+    #: 删除是维护动作；目标忙、确认面变化或移动失败都不得半删后伪装成功。
+    BookTrashFailed: 409,
     #: agent 并发闸满了（`agent.MAX_CONCURRENT`）。**与 `JobConflict` 同码不同因**：
     #: 那条是「这本书现在不该开始」，这条是「同时烧的钱到上限了，换个时间来」。
     #: ⚠ 单本入口才会看到它；批量入口 `POST /api/agent/runs/batch` 把它接住改成排队。

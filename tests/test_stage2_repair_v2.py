@@ -17,7 +17,7 @@ import pytest
 
 from contracts.schema import MainText
 from contracts.schema.stage2 import ChapterBlueprints
-from novel.errors import GateBlocked, TerminalState
+from novel.errors import GateBlocked
 from novel.stages.stage2 import extract
 from novel.stages.stage2.contract import CONTRACTS
 from novel.stages.stage2.paragraphs import paragraph_spans, span_of
@@ -27,7 +27,8 @@ from novel.stages.stage2.repair import (
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_contract_dispatch import (
-    _ENV_KEY, _ir1_responses, _summary_for,
+    _ENV_KEY, _ir1_responses, _ir2_responses, _scaffolded_responses,
+    _summary_for,
 )
 from tests.test_stage2_generation import _client, _ctx, _ok, _response_global
 
@@ -124,9 +125,9 @@ def _unique_snippet(seg: str, avoid: str) -> str:
 def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     """跑指定 IR 臂的全链但给第 1 章第 1 拍塞一条歧义 hinge 和一条编的 hinge ⇒ .INVALID。
 
-    ⚠ 响应形状由 `ContractSpec.response_model` 决定，而 IR 系全表共用
-    `ChapterBlueprintsResponseV2` ⇒ 同一份 `_ir1_responses()` 对每条 IR 臂都成立。
-    这正是「能不能字段级修」该按能力判、而不是按架构名判的原因。
+    v1/v1.1 共用开放字面响应，v2 用关闭式 char_id 响应并多一段边界预传，
+    v3/v3.1 则在单次响应里带召回脚手架；
+    测试从 spec 的能力与拓扑派生，不把「IR 都是一相、都同响应模型」当永久事实。
     """
     monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / '修复_123'
@@ -138,7 +139,14 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
 
-    by_ordinal = _ir1_responses()
+    spec = CONTRACTS[architecture]
+    if spec.topology == 'boundary_then_detail':
+        by_ordinal = _ir2_responses()
+    elif spec.topology == 'scaffolded_single':
+        by_ordinal = _scaffolded_responses(
+            closed=spec.uses_narration_refs)
+    else:
+        by_ordinal = _ir1_responses()
     ordinals = sorted(by_ordinal)
     texts = {s['chapter_ordinal']: s['text'] for s in main_text()}
     beat_index, seg, dup = _pick_ambiguous_site(
@@ -156,7 +164,17 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
                 {'chapter_ordinal': o, 'summary': _summary_for(o)}
                 for o in ordinals]})
         found = re.findall(r'阅读序第(\d+)章', req.user)
-        return _ok({'blueprints': [by_ordinal[int(found[-1])]]})
+        ordinal = int(found[-1])
+        if '第一张表 `micro_events`' in req.system:
+            boundary_beats = [
+                {'end_para': beat['end_para'], 'event': beat['event']}
+                for beat in by_ordinal[ordinal]['beats']]
+            return _ok({'blueprints': [{
+                'chapter_ordinal': ordinal,
+                'micro_events': boundary_beats,
+                'beats': boundary_beats,
+            }]})
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
 
     ctx = _ctx(book, 'stage2.blueprint')
     client, _transport = _client(ctx, respond)
@@ -233,43 +251,7 @@ def test_patch_repairs_ambiguous_and_void_then_lands_formally(monkeypatch, archi
     assert stored.provenance.usage is not None
 
 
-def test_patch_refuses_a_v3_baseline(monkeypatch):
-    """反向：`supports_field_patch=False` 的基线必须显式终态、且一次调用都不发。
-
-    ⚠ 本条与 `_PATCHABLE` 那条是**同一张表的两面**，但它没法参数化到
-    `_UNPATCHABLE` 全表：造基线得按该契约自己的响应形状发假响应，
-    而 v3 用的是 `_response_blueprints()`。下面那句 assert 就是这条约束的守卫——
-    将来真新增一条不可 patch 的架构时，它会红并提醒「先给新架构造对应形状的响应」。
-    """
-    assert _UNPATCHABLE == ['bounded-fidelity-v3'], \
-        f'新增了不可字段级修的架构 {_UNPATCHABLE}——本条要为它补一份对应形状的假响应'
-    # 显式拧到 v3 造基线：默认已是 ir1（2026-08-21 翻默认），
-    # 而这条测的正是「盘上是 v3 稿时 --patch 必须终态并指路 --chapters」。
-    monkeypatch.setenv(_ENV_KEY, 'bounded-fidelity-v3')
-    book = Path(tempfile.mkdtemp()) / 'v3拒_123'
-    book.mkdir(parents=True)
-    global_ctx = _ctx(book, 'stage2.global')
-    ArtifactStore(global_ctx).write(
-        extract.MAIN_TEXT, MainText.model_validate(main_text()))
-    global_client, _t = _client(
-        global_ctx, lambda _req, _index: _ok(_response_global()))
-    extract.run_global(global_ctx, global_client)
-    from tests.test_stage2_generation import _response_blueprints
-    by_ordinal = _response_blueprints()
-
-    def respond(req, _index):
-        found = re.findall(r'阅读序第(\d+)章', req.user)
-        return _ok({'blueprints': [by_ordinal[int(found[-1])]]})
-
-    ctx = _ctx(book, 'stage2.blueprint')
-    client, _transport = _client(ctx, respond)
-    extract.run_blueprint(ctx, client)
-
-    patch_ctx = _ctx(book, 'stage2.blueprint')
-    patch_client, transport = _client(
-        patch_ctx, lambda *_a: pytest.fail('v3 基线不应触达 transport'))
-    # ⚠ 拒绝文案也从注册表派生：它逐字列出**当前**可字段级修的臂，
-    #   写死一个名字会在下一条臂进表时静默过期。
-    with pytest.raises(TerminalState, match=re.escape('/'.join(_PATCHABLE))):
-        run_field_patches(patch_ctx, patch_client)
-    assert transport.calls == []
+def test_all_retained_contracts_support_field_patch():
+    assert _UNPATCHABLE == []
+    assert _PATCHABLE == [
+        'extraction-ir-v1.1', 'extraction-ir-v2', 'extraction-ir-v3.1']

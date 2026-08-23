@@ -57,7 +57,7 @@ def _approved_art():
 @pytest.mark.parametrize('entry', [assemble.read_current_book, assemble.run_assemble])
 def test_r_2_15_stage2_gate_precedes_every_stage7_delivery_read_or_write(
         monkeypatch, entry):
-    """`R-2.15` 同时守组装与下载；旧 txt 的存在不能绕过后来变红的事实闸。"""
+    """`R-2.16` 同时守组装与下载；旧 txt 的存在不能绕过后来变红的事实闸。"""
     from novel.stages.stage2 import global_review
 
     seen: list[object] = []

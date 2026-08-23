@@ -227,7 +227,8 @@ class RunContext:
     # ── 来源账的两个构造口 ────────────────────────────────────────────────
 
     def llm_provenance(self, cls: type[P] = LlmProvenance, /, *,
-                       prompts: dict[str, str], model: str, **extra: Any) -> P:
+                       prompts: dict[str, str], model: str,
+                       settle: bool = True, **extra: Any) -> P:
         """付费产出的来源账。`inputs` **不接受参数**——它只能来自 `_edges`。
 
         `prompts` 收的是**插值之后的 system prompt 原文**，这里替它算指纹。
@@ -256,7 +257,11 @@ class RunContext:
         out = cls(code=self.code, root_clean_sha1=self._require_single_root(), inputs=self.edges,
                   prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
                   model=model, usage=self.ledger.usage_since(self._usage_mark), **extra)
-        return self._settled(out)
+        # `settle=False` 只供**尚未决定是否落盘**的候选做同 schema 校验：若它最终被
+        # HARD 拦成 `.INVALID`，调用方必须再以默认 `settle=True` 铸造落盘稿；若它继续
+        # 进入下一次付费调用，最终稿才能一次认领完整窗口。预览时推进刻度会让正式稿
+        # 只剩“预览之后”的尾调用，Σ（每份）与 run 总量分家。
+        return self._settled(out) if settle else out
 
     def llm_provenance_for_chapter(
             self, chapter: int, cls: type[P] = LlmProvenance, /, *,

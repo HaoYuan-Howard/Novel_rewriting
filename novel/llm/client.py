@@ -27,6 +27,9 @@ client.py —— `ask_text` / `ask_json`。**降级阶梯只有一份，两个�
      上万、`finish_reason=stop`，旧阶梯把它当「这一档不行」直接降档 ⇒ 3 本里 2 本的
      计划**从未在 `high` 档被评估过**，一上来就掉进取证能力受损的 `low`。
      温度采样下同参数重发拿到的是新样本；降档换的是模型行为——两件事。
+     ⚠ `prefer_content_over_reasoning_salvage=True` 的响应契约只把首份合法救回稿
+       **延迟到同档第二采再裁决**：正常正文成功就采用正常正文；第二采仍不可用就采用
+       已过完整契约的后备，不能继续降档。它只改变采纳顺序，不放宽任何一道 JSON 闸。
 
   ② **JSON 被截断。** `max_tokens` 在推理模型上**同时约束 reasoning + completion**。
      `reasoning_effort='high'` 时模型可能把大半预算花在思考上，正文写到一半就到顶了，
@@ -213,8 +216,8 @@ def _worth_resampling(resp: ChatResponse) -> bool:
     · `stage4.plan` 盘上 5 次带失败的跑里 **3 次是 `high→low→low/nothink→high`**：
       整条阶梯走完**再重来**，而最后成功的那次仍是 `high`。既然第 4 次 high 能过，
       第 2 次 high 就能过——中间两档是白花。
-    · 另 2 次以 `high→low` 收尾 ⇒ **最终计划产自降档档位**。那不是省钱是降质，
-      同 `docs/REQUIREMENTS.md` TODO-32「最终稿产自哪一档」那条读数。
+    · 另 2 次以 `high→low` 收尾 ⇒ **最终计划产自降档档位**。那不是省钱是降质；
+      当前由 `novel/llm/ledger.py::note_adoption` 的 `artifact_adoption` 事件记录最终采纳档位。
 
     盘上 22 次实付合计 completion 378 368，其中 **180 334（47.7%）** 花在没被采纳的档位上。
 
@@ -614,7 +617,8 @@ class LlmClient:
                  validator: JsonValidator | None = None,
                  rungs: tuple[tuple[str, bool], ...] | None = None,
                  progress: RequestProgress | None = None,
-                 cache_policy: CachePolicy | None = None) -> M:
+                 cache_policy: CachePolicy | None = None,
+                 prefer_content_over_reasoning_salvage: bool = False) -> M:
         """结构化调用。默认走与 `ask_text` **同一条**阶梯（`self._rungs`）；
         只有收缩/裁决这类成本语义明确不同的辅助调用可显式收窄 `rungs`。
         解析失败与「结构上是空的」同等对待。
@@ -784,6 +788,7 @@ class LlmClient:
         for i, (effort, thinking) in enumerate(active_rungs):
             # 被拒后先同档重采一次再决定降档（_worth_resampling；截断除外）,
             # 见 MAX_SAMPLES_PER_RUNG。
+            deferred_salvage: tuple[M, ChatResponse, str, str, int] | None = None
             for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
                 resp, key, _cached, attempt_id = self._call_keyed(
                     system, user, effort=effort, thinking=thinking, json_mode=JSON_OBJECT_MODE,
@@ -795,6 +800,32 @@ class LlmClient:
                         f'{"（捞自推理通道）" if salvaged else ""} '
                         f'finish={resp.finish_reason} clen={len(content)}')
                 if why is None:
+                    assert obj is not None
+                    if (salvaged and prefer_content_over_reasoning_salvage
+                            and sample < MAX_SAMPLES_PER_RUNG):
+                        # v3.1 的合法救回稿不是废稿：先留作**同档后备**，只多争取
+                        # 一次正常 content。第二份仍不合用时必须采用这份，不能再
+                        # 降档把一个已过完整契约的响应扔掉。判定账延后到去向确定时写，
+                        # 避免同一个 attempt 先写 rejected、随后又写 accepted。
+                        deferred_salvage = (obj, resp, key, attempt_id, sample)
+                        continue
+                    if deferred_salvage is not None:
+                        (_old_obj, old_resp, old_key, old_attempt_id,
+                         old_sample) = deferred_salvage
+                        self.cache.evict(old_key)
+                        self._settle_gate(
+                            purpose=purpose, attempt_id=old_attempt_id,
+                            source='wire', accepted=False, gate='answer_lost',
+                            rungs=active_rungs, index=i, sample=old_sample,
+                            resample=True, progress=progress)
+                        self._observe_rung_rejected(
+                            purpose=purpose, attempt_id=old_attempt_id,
+                            rungs=active_rungs, index=i, source='wire',
+                            gate='answer_lost',
+                            why=('正文为空；合法推理通道救回稿已保留为后备，'
+                                 '同档正常正文优先且已取得'),
+                            resp=old_resp, json_mode=JSON_OBJECT_MODE,
+                            resample=True, sample=old_sample, progress=progress)
                     # ⚠ 捞回来的那一份**存不进缓存**：`ResponseCache.put` 拒写空正文，
                     #   而把捞出来的文本塞进 `content` 再存等于改写供应商的响应
                     #   （见 `SALVAGE_ANSWER_FROM_REASONING` 的两条已知代价）。
@@ -824,8 +855,25 @@ class LlmClient:
                     purpose=purpose, attempt_id=attempt_id, rungs=active_rungs,
                     index=i, source='wire', gate=gate, why=why, resp=resp,
                     json_mode=JSON_OBJECT_MODE,
-                    resample=resample, sample=sample, progress=progress)
+                    resample=resample, sample=sample, progress=progress,
+                    fallback_salvage=deferred_salvage is not None)
                 errors.append(f'{head} {why}')
+                if deferred_salvage is not None:
+                    (fallback_obj, fallback_resp, fallback_key,
+                     fallback_attempt_id, fallback_sample) = deferred_salvage
+                    self._keep(fallback_key, fallback_resp, cache_policy=policy)
+                    self._settle_gate(
+                        purpose=purpose, attempt_id=fallback_attempt_id,
+                        source='wire', accepted=True, gate=None,
+                        rungs=active_rungs, index=i, sample=fallback_sample,
+                        salvaged=True, progress=progress)
+                    self._keep_answer_lost(
+                        purpose=purpose, attempt_id=fallback_attempt_id,
+                        source='wire', effort=effort, thinking=thinking,
+                        json_mode=JSON_OBJECT_MODE, index=i,
+                        sample=fallback_sample, resample=False,
+                        resp=fallback_resp, progress=progress, salvaged=True)
+                    return fallback_obj
                 if not resample:
                     break
         raise LlmFailed(
@@ -840,7 +888,8 @@ class LlmClient:
                                resp: ChatResponse, json_mode: bool,
                                resample: bool = False,
                                sample: int | None = None,
-                               progress: RequestProgress | None = None) -> None:
+                               progress: RequestProgress | None = None,
+                               fallback_salvage: bool = False) -> None:
         """降一档（或同档重采）时留下【为什么】。**这条事件是降档理由的唯一出口。**
 
         ⚠⚠ 它补的是一个实测踩过的观测洞：内容闸判定不可用时，这里只做
@@ -855,6 +904,8 @@ class LlmClient:
         ⚠ `resample=True` 表示这一拒的下一步是**同档重采**（`MAX_SAMPLES_PER_RUNG`），
         此时 `next_effort` / `next_thinking` 指回**同一档**——事件必须说真话，
         否则「重采」会被统计口径读成「降档」。
+        `fallback_salvage=True` 则表示下一步采用已通过完整契约的同档后备；这时
+        `next_*` 为空但 `exhausted=False`，不能谎报成“下一档”或“阶梯耗尽”。
 
         ⚠ 事件里**不带响应正文**：被拒的那份可能是半截 JSON 或整段推敲过程，
         灌进作业日志既没用又可能把正文写进不该写的地方。只带闸名、截断后的理由
@@ -870,7 +921,9 @@ class LlmClient:
         就彻底没了，只剩 token 体积可以拿来猜。
         """
         effort, thinking = rungs[index]
-        if resample:
+        if fallback_salvage:
+            nxt = None
+        elif resample:
             nxt = (effort, thinking)
         else:
             nxt = rungs[index + 1] if index + 1 < len(rungs) else None
@@ -888,10 +941,11 @@ class LlmClient:
             content_chars=len(resp.content or ''),
             reasoning_chars=len(resp.reasoning or ''),
             resample=resample,                # True = 下一步同档重采，不是降档
+            fallback_salvage=fallback_salvage,  # True = 不降档，采用已验过的后备
             next_effort=None if nxt is None else nxt[0],
             next_thinking=None if nxt is None else nxt[1],
             # 最后一档也被拒 ⇒ 这一趟走完了，调用方要么进真跑那一趟、要么 LlmFailed。
-            exhausted=nxt is None,
+            exhausted=nxt is None and not fallback_salvage,
         )
         if gate == 'answer_lost':
             self._keep_answer_lost(
