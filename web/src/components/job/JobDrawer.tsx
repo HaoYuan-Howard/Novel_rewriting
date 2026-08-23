@@ -82,7 +82,7 @@ export function JobDrawer() {
   return (
     <section
       className="fixed right-0 bottom-0 z-20 border-t border-line-btn bg-card shadow-drawer"
-      style={{ left: 'var(--rail-w)' }}
+      style={{ left: 'var(--rail-current-w, var(--rail-w))' }}
     >
       <button
         type="button"

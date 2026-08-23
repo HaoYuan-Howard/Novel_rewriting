@@ -99,6 +99,41 @@ def test_prompt_never_hardcodes_a_book_filename(base):
     assert '_rewriting.txt' in text
 
 
+def test_prompt_surfaces_the_headless_safety_sequence(base, book):
+    """高风险边界必须出现在启动 prompt，不能只埋在 agent 之后才读的长 skill 里。"""
+    text = agent.build_prompt(
+        '42', base, authorized=True, egress_authorized=True,
+        code_version='expected-code-version')
+
+    assert '每次 Bash 调用都必须保持在仓根，不得 cd' in text
+    assert 'state 42' in text and 'inbox 42' in text
+    assert '在任何写盘或付费动作前' in text and '创建终审包草稿' in text
+    assert 'doctor --llm-transport' in text
+    assert 'from novel import prov; print(prov.code_version())' in text
+    assert 'expected-code-version' in text
+    assert '没有可定位证据时必须保留 `UNVER`' in text
+    assert '不得猜测 PASS' in text and '把 exit 0 当成交付 ready' in text
+
+
+def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):
+    """Edit(base/**) 是权限上界，不是允许直接覆盖正式产物的产品语义。"""
+    text = agent.build_prompt('42', base, authorized=True, egress_authorized=True)
+
+    assert '正式 stage JSON/TXT' in text
+    assert '正式变更只经 `novel.cli`' in text
+    assert 'Write/Edit 只用于 skill 明列的 typed 人工输入' in text
+    assert '`_service/*.jsonl`' in text and '唯一终审包' in text
+
+
+def test_prompt_without_authorization_still_collects_recovery_evidence(base, book):
+    """未授权不是一句话就退出：必须留下盘面事实、精确 preview 与恢复包。"""
+    text = agent.build_prompt('42', base, authorized=False, egress_authorized=False)
+
+    assert '只读的 state、inbox、下一节点 preview' in text
+    assert '终审包草稿' in text
+    assert '首个需要正文外发的步骤前停下' in text
+
+
 def test_argv_is_the_whitelisted_shape(base):
     """Spike 钉死的三件事：入口可直接执行、python 前缀规则、Edit 的 // 锚。"""
     prompt = agent.build_prompt('42', base, authorized=True, egress_authorized=True)

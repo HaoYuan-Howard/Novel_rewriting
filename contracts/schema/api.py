@@ -417,6 +417,21 @@ class UploadResult(StrictModel):
     job: JobRecord
 
 
+class TrashNovelRequest(StrictModel):
+    """删除确认绑定当前书名；sid 由路径参数单独绑定。"""
+
+    expected_title: str = Field(min_length=1)
+
+
+class TrashNovelResult(StrictModel):
+    """项目已移出语料库，但仍可从 `_service/trash/` 恢复。"""
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    trash_id: str = Field(min_length=1)
+    trash_rel: str = Field(min_length=1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、S-06 文风那一屏（`_api.md` §四）
 # ─────────────────────────────────────────────────────────────────────────────

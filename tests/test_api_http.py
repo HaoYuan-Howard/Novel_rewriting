@@ -344,8 +344,10 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/approvals/seen/{key}': ['POST'],
         '/api/novels/{sid}/approvals/deep': ['POST'],
         '/api/novels/{sid}/approvals/writing': ['POST'],
-        '/api/novels/{sid}/approvals/reset': ['POST'],
-        '/api/upload': ['POST'],
+            '/api/novels/{sid}/approvals/reset': ['POST'],
+            # 项目级可恢复删除：必须确认 sid，真实移动发生在零成本 CLI 子进程。
+            '/api/novels/{sid}/trash': ['POST'],
+            '/api/upload': ['POST'],
         # ── 第二阶段 · 批 1/2：读屏（`tests/test_api_screens.py` 管行为） ──
         '/api/novels/{sid}/stage2/global': ['GET'],
         '/api/novels/{sid}/stage2/global-review': ['GET', 'POST'],

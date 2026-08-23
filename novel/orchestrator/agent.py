@@ -141,36 +141,51 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
         '不再询问；每条付费命令的判据读数仍逐条留痕并进终审包。'
         if authorized else
         '**付费授权未授予**：不得执行会产生外部模型调用费用的命令；在第一条付费命令之前停下，'
-        '把「跑到哪、为什么停、恢复命令」写进终审包（落点见下），然后结束。')
+        '但仍须完成只读的 state、inbox、下一节点 preview 并创建终审包草稿，把「跑到哪、为什么停、'
+        '恢复命令」写进去（落点见下），然后结束。')
     egress_authorization = (
         '**正文外发授权已授予**：允许把小说正文及其派生上下文发送给外部模型。'
         '这项授权不代表已经授予付费授权。'
         if egress_authorized else
         '**正文外发授权未授予**：不得把小说正文或其派生上下文发送给外部模型；'
-        '即使付费授权已经授予，也必须在首个需要正文外发的步骤前停下并写明恢复命令。')
-    return f"""你在仓库 {REPO_ROOT.as_posix()} 的根目录下工作（cwd 已就位，不要 cd）。
-使用项目 skill `novel-pipeline-operator`：先读
-`.claude/skills/novel-pipeline-operator/SKILL.md` 全文再动手，并按其中“按需加载资源”
-读取工作流契约、代批与终审契约及 headless 运行环境；遇到失败时再读取修复状态机，
-按节点名/rule id 检索经验库。不要依赖旧版章节号或聊天记忆。
+        '即使付费授权已经授予，也只能先完成只读的 state、inbox、下一节点 preview 与终审包草稿，'
+        '并在首个需要正文外发的步骤前停下、写明恢复命令。')
+    return f"""你在仓库 {REPO_ROOT.as_posix()} 的根目录下工作。launcher 已把 cwd 固定在仓根；
+每次 Bash 调用都必须保持在仓根，不得 cd，读取 base 与产物一律使用绝对路径。
 
 任务：把 sid={sid} 这本书端到端跑到 `{book_target}`。
-本次代码指纹：`{code_version}`。运行期间若仓库代码变化，立即停下并在终审包披露；
-服务端结束终验也会比较这个指纹，跨版本运行不会被判为 ready。
+本次启动代码指纹：`{code_version}`。每个写盘节点或付费节点都须在执行前用
+`{py} -X utf8 -c "from novel import prov; print(prov.code_version())"`
+复算并逐字比较；不一致立即停下并在终审包披露。服务端结束终验也会再次比较，
+跨版本运行不会被判为 ready。
 base 目录（--base 恒用下面这个绝对路径）：
 {base_abs}
 
 付费授权：{payment_authorization}
 正文外发授权：{egress_authorization}
 
+启动顺序（不可跳步）：
+1. 先读 `.claude/skills/novel-pipeline-operator/SKILL.md` 全文，并照它的“按需加载资源”读取
+   工作流契约、代批与终审契约及 headless 运行环境；失败时再读修复状态机，按节点名/rule id
+   检索经验库。不要依赖旧版章节号或聊天记忆。
+2. 先运行 `state {sid}` 与 `inbox {sid}`，只按盘上事实确定续跑位置。
+3. 在任何写盘或付费动作前，按 skill 模板创建终审包草稿；以后每次授权判断、闸门裁决、
+   修复与异常都立即更新，不要等结束时凭记忆补写。
+4. 下一步将调用外部模型时，先运行 `doctor --llm-transport`；随后 preview 下一动作，
+   陈述付费/外发边界，再执行 preview 给出的完整步骤并复验。
+
 无人值守纪律：
 - 没有用户可以提问。任何 redo/unknown 或闸门争议，按 skill 的修复状态机与代批契约
   处置并把依据写进终审包；无法安全处置就写清现状后停下——停机是合法结局。
+- 没有可定位证据时必须保留 `UNVER` 或以 `stopped` 结束；不得猜测 PASS、删除 finding、
+  为了“全绿”自行发明阈值，或把 exit 0 当成交付 ready。
 - 打点纪律照工作流契约：主链每条命令与修复回路的每条命令，前后各 `mark` 一次；
   `preview` 不打点。被唤起先 `state {sid}` 判位置再续跑。
 - 命令形态：一律以 `{py}` 前缀开头（权限白名单只认这一个 Bash 形态）；
-  写文件只用 Write/Edit 且只写 base 目录内（其余路径权限层直接拒）。
-- 结束前按 skill 的终审包模板汇编终审包，落点就是这一条路径（不要另起文件名）：
+  正式 stage JSON/TXT、成书、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 与旧 run 输出严禁
+  直接编辑，正式变更只经 `novel.cli`。Write/Edit 只用于 skill 明列的 typed 人工输入和下面
+  唯一终审包，且不得超出 base（其余路径权限层直接拒）。
+- 持续填写并在结束前完成终审包，落点就是这一条路径（不要另起文件名）：
   {review_target}"""
 
 
@@ -518,6 +533,10 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
     key = lock_key(sid)
     _admit(key, run_id, registry)
     try:
+        holder = jobs.REGISTRY.conflicting_holder(sid)
+        if holder is not None:
+            raise JobConflict(
+                f'这本书已有 API 维护/节点作业在跑（{holder}）——等它结束再拉 agent')
         running = [r for r in jobs.records(base)
                    if r.state == 'running' and r.start.sid == sid]
         if running:

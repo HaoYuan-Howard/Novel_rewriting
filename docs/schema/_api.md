@@ -112,6 +112,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/queues/:id/resume` | `QueueRun`（202；请求体 `QueueResumeRequest`，剩余付费命令要求 `confirmed=true`） | **复用** `_orchestration.md` |
 | `POST /api/queues/:id/items/:index/cancel` | `QueueRun`（只取消尚未开始项） | **复用** `_orchestration.md` |
 | `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
+| `POST /api/novels/:sid/trash` | `TrashNovelResult`（请求体 `TrashNovelRequest.expected_title`；整本项目移入 `_service/trash/`） | 新 |
 | `GET /api/novels/:sid/stage0/report` | `Stage0Report` | **继承** `stage0.md` 的 `RemovalReport`，多三格视图投影，见下 |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
 | `GET /api/novels/:sid/stage0/partition-preview` | `Stage0PartitionPreview`（批准前的只读分章推演；**不写产物、不查审批状态**，见 `stage0.md` §2.4） | 新 |
@@ -279,6 +280,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | 模型 | 字段 | 说明 |
 |---|---|---|
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
+| `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录 |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |

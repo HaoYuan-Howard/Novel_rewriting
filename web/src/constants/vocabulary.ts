@@ -25,8 +25,8 @@ export type InboxKind =
   | 'upstream'
   | 'approval'
 
-/** 产物新鲜度的形状：实心圆 / 实心方块 / 虚线空心圆 */
-export type DotShape = 'circle' | 'square' | 'hollow'
+/** 状态形状：实心圆 / 实心方块 / 虚线空心圆 / 问号 / 空集。 */
+export type DotShape = 'circle' | 'square' | 'hollow' | 'question' | 'absent'
 
 export interface FreshnessToken {
   color: string
@@ -62,22 +62,22 @@ export const FRESH: Record<Freshness, FreshnessToken> = {
     shape: 'square',
   },
   unknown: {
-    color: 'oklch(0.45 0.03 260)',
-    bg: 'oklch(0.94 0.01 260)',
-    wash: 'oklch(0.975 0.005 260)',
+    color: 'oklch(0.43 0.12 270)',
+    bg: 'oklch(0.94 0.025 270)',
+    wash: 'oklch(0.975 0.012 270)',
     label: '无从判断',
     desc: '没有来源记录',
-    shape: 'hollow',
+    shape: 'question',
   },
 }
 
 export const MISSING: FreshnessToken = {
-  color: '#8a8479',
+  color: '#6f675d',
   bg: '#f1eee9',
   wash: '#f6f4f1',
   label: '不在盘上',
   desc: '这份产物还没落盘',
-  shape: 'hollow',
+  shape: 'absent',
 }
 
 export type FreshnessDisplay = Freshness | 'missing'

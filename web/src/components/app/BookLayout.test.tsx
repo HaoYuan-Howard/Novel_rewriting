@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { BookLayout } from './BookLayout'
+import { Rail } from './Rail'
 import type { ApprovalDoc } from '@/types/approvals'
 
 const pending: ApprovalDoc = {
@@ -16,6 +17,29 @@ const pending: ApprovalDoc = {
 }
 
 describe('BookLayout approval source', () => {
+  it('语料库侧栏不展示本机地址或空书解释', () => {
+    renderRoute(
+      <Rail sid={null} screen="corpus" ordinal={null} collapsed={false} onToggle={() => {}} />,
+    )
+
+    expect(screen.getByText('小说重构 · 审校台')).toBeVisible()
+    expect(screen.queryByText(/127\.0\.0\.1:8765/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/还没打开哪一本书/)).not.toBeInTheDocument()
+  })
+
+  it('侧栏可以折叠成窄轨并保留展开入口', () => {
+    const onToggle = vi.fn()
+    renderRoute(
+      <Rail sid={null} screen="corpus" ordinal={null} collapsed onToggle={onToggle} />,
+    )
+
+    expect(screen.queryByText('小说重构 · 审校台')).not.toBeInTheDocument()
+    expect(screen.queryByText('库')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '语料库' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '展开侧栏' }))
+    expect(onToggle).toHaveBeenCalledOnce()
+  })
+
   it('labels backfilled gates as disk-derived rather than user-clicked', async () => {
     vi.spyOn(api, 'getNovel').mockResolvedValue({
       sid: 'book-1',

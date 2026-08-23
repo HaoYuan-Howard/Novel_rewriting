@@ -5,6 +5,74 @@ import { renderRoute } from '@/test/render'
 import { Stage0Screen } from './Stage0Screen'
 import type { Stage0Segments } from '@/types/stages'
 
+describe('Stage0Screen 新书起跑入口', () => {
+  it('上传扫描后可以直接交给 agent，同时保留人工 Stage0 入口', async () => {
+    vi.spyOn(api, 'getStage0Report').mockResolvedValue({
+      original_filename: 'book.txt',
+      source_ref: {
+        kind: 'managed_upload' as const,
+        blob_sha256: 'f'.repeat(64),
+        filename: 'book.txt',
+      },
+      code: 'code',
+      normalized_source_sha1: 'source',
+      clean_sha1: 'clean',
+      source_encoding: 'utf-8',
+      text_norm: 'NFC+LF',
+      removed: [],
+      total_code_points: 300,
+      body_code_points: 300,
+      warnings: [],
+      approval: { status: 'pending' as const },
+      executable: false,
+      revision_id: 'a'.repeat(64),
+      revision_origin: 'machine' as const,
+    })
+    vi.spyOn(api, 'getStage0Segments').mockResolvedValue({
+      normalized_source_sha1: 'source',
+      available: true,
+      reason: null,
+      segments: [],
+    })
+    vi.spyOn(api, 'getStage0Candidate').mockResolvedValue(null)
+    vi.spyOn(api, 'getStage0PartitionPreview').mockResolvedValue({
+      input_sha1: 'clean',
+      available: false,
+      reason: '尚未分章',
+      hook_chars: 0,
+      hook_preview: '',
+      chapters: [],
+      tail_chars: 0,
+      anomaly_count: 0,
+      note: '只读预览',
+    })
+    const preview = vi.spyOn(api, 'previewAgentRun').mockResolvedValue({
+      argv: ['claude', '-p', 'prompt'],
+      prompt: '从当前盘面续跑',
+      authorized: false,
+      egress_authorized: true,
+    })
+
+    renderRoute(<Stage0Screen />, '/n/book-1/stage0')
+
+    expect(
+      await screen.findByRole('button', { name: '继续人工审校 Stage0' }),
+    ).toBeVisible()
+    expect(screen.getByText(/不会跳过任何硬闸/)).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'agent 从 Stage0 开始跑' }))
+
+    expect(await screen.findByText('让 agent 跑这本书')).toBeVisible()
+    await waitFor(() =>
+      expect(preview).toHaveBeenCalledWith({
+        sid: 'book-1',
+        authorized: false,
+        egress_authorized: true,
+      }),
+    )
+  })
+})
+
 describe('Stage0Screen segment virtualization', () => {
   it('keeps a 622-row source DOM bounded and preserves the selected segment across filters', async () => {
     const rows: Stage0Segments['segments'] = Array.from({ length: 622 }, (_, index) => ({

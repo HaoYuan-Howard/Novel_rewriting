@@ -31,10 +31,14 @@ export function Rail({
   sid,
   screen,
   ordinal,
+  collapsed,
+  onToggle,
 }: {
   sid: string | null
   screen: ScreenName | null
   ordinal: number | null
+  collapsed: boolean
+  onToggle: () => void
 }) {
   const nav = useNavigate()
   const { doc } = useApprovals(sid ?? '')
@@ -57,61 +61,94 @@ export function Rail({
   const inBook = !!sid
 
   return (
-    <nav className="sticky top-0 flex h-screen flex-col overflow-y-auto border-r border-line bg-inset">
-      <div className="flex flex-col gap-4 px-16 pt-18 pb-14">
-        <div className="text-read font-semibold tracking-[0.02em]">小说重构 · 审校台</div>
-        {inBook && overview.data?.title ? (
-          <div className="truncate text-body text-ink-3" title={overview.data.title}>
-            {overview.data.title}
+    <nav
+      data-collapsed={collapsed ? 'true' : 'false'}
+      className="sticky top-0 flex h-screen min-w-0 flex-col overflow-x-hidden overflow-y-auto border-r border-line bg-inset"
+    >
+      <div className={cx('flex gap-6 pt-14 pb-12', collapsed ? 'justify-center px-6' : 'px-16')}>
+        {collapsed ? null : (
+          <div className="min-w-0 flex-1 text-read font-semibold tracking-[0.02em]">
+            小说重构 · 审校台
           </div>
-        ) : null}
-        <div className="font-mono text-mini text-ink-4">127.0.0.1:8765 · 单人 · 本机</div>
-      </div>
-
-      <div className="flex flex-col gap-2 px-10">
+        )}
         <button
           type="button"
-          onClick={() => nav('/')}
-          className={cx(
-            'flex cursor-pointer items-center gap-8 rounded-btn border-none px-12 py-9 text-left text-body-lg font-semibold',
-            screen === 'corpus' ? 'bg-card shadow-current' : 'bg-transparent',
-          )}
+          aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
+          title={collapsed ? '展开侧栏' : '折叠侧栏'}
+          onClick={onToggle}
+          className="flex h-28 w-28 flex-none cursor-pointer items-center justify-center rounded-btn border border-line-btn bg-card text-body-lg text-ink-3 hover:text-ink"
         >
-          <span
-            aria-hidden
-            className={cx(
-              'h-16 w-5 rounded-nub',
-              screen === 'corpus' ? 'bg-accent' : 'bg-transparent',
-            )}
-          />
-          语料库
+          {collapsed ? '›' : '‹'}
         </button>
       </div>
+      {!collapsed && inBook && overview.data?.title ? (
+        <div className="truncate px-16 pb-12 text-body text-ink-3" title={overview.data.title}>
+          {overview.data.title}
+        </div>
+      ) : null}
+
+      {collapsed && screen === 'corpus' ? null : (
+        <div className={cx('flex flex-col gap-2', collapsed ? 'px-6' : 'px-10')}>
+          <button
+            type="button"
+            aria-label="语料库"
+            title={collapsed ? '返回语料库' : undefined}
+            onClick={() => nav('/')}
+            className={cx(
+              'flex cursor-pointer items-center rounded-btn border-none py-9 text-left text-body-lg font-semibold',
+              collapsed ? 'justify-center px-0' : 'gap-8 px-12',
+              screen === 'corpus' ? 'bg-card shadow-current' : 'bg-transparent',
+            )}
+          >
+            {collapsed ? (
+              <span aria-hidden className="font-mono text-body text-ink-3">←</span>
+            ) : (
+              <>
+                <span
+                  aria-hidden
+                  className={cx(
+                    'h-16 w-5 rounded-nub',
+                    screen === 'corpus' ? 'bg-accent' : 'bg-transparent',
+                  )}
+                />
+                语料库
+              </>
+            )}
+          </button>
+        </div>
+      )}
 
       {inBook ? (
-        <div className="mt-14 flex flex-col gap-2 px-10 pb-24">
-          <div className="px-12 pt-6 pb-8 text-micro tracking-[0.08em] text-ink-5">流水线</div>
+        <div className={cx('mt-14 flex flex-col gap-2 pb-24', collapsed ? 'px-6' : 'px-10')}>
+          {collapsed ? null : (
+            <div className="px-12 pt-6 pb-8 text-micro tracking-[0.08em] text-ink-5">流水线</div>
+          )}
           {/* 进度是观察屏：不进 RAIL，不吃 RAIL_GATE / RAIL_LOCK，跑到哪一步都能看 */}
           <button
             type="button"
+            aria-label="进度"
+            title={collapsed ? '进度' : undefined}
             aria-current={screen === 'run' ? 'page' : undefined}
             onClick={() => nav('/n/' + sid + '/run')}
             className={cx(
-              'flex cursor-pointer items-center gap-7 rounded-btn border-none px-10 py-7 text-left text-body',
+              'flex cursor-pointer items-center rounded-btn border-none py-7 text-left text-body',
+              collapsed ? 'justify-center px-0' : 'gap-7 px-10',
               screen === 'run'
                 ? 'bg-card font-semibold text-ink shadow-current'
                 : 'bg-transparent text-ink-3',
             )}
           >
-            <span
-              aria-hidden
-              className={cx(
-                'h-14 w-4 flex-none rounded-nub',
-                screen === 'run' ? 'bg-accent' : 'bg-transparent',
-              )}
-            />
-            <span className="w-12 flex-none font-mono text-mini text-ink-5">»</span>
-            <span className="min-w-0 flex-1 truncate">进度</span>
+            {collapsed ? null : (
+              <span
+                aria-hidden
+                className={cx(
+                  'h-14 w-4 flex-none rounded-nub',
+                  screen === 'run' ? 'bg-accent' : 'bg-transparent',
+                )}
+              />
+            )}
+            <span className="w-12 flex-none text-center font-mono text-mini text-ink-5">»</span>
+            {collapsed ? null : <span className="min-w-0 flex-1 truncate">进度</span>}
           </button>
           {RAIL.map((r) => {
             const gk = RAIL_GATE[r.screen]
@@ -135,46 +172,57 @@ export function Rail({
                 key={r.screen}
                 type="button"
                 disabled={locked}
+                aria-label={r.label}
                 title={
-                  !locked && reviewable
-                    ? '已有盘上产物，可只读审阅；继续运行仍需补齐人工确认'
-                    : undefined
+                  collapsed
+                    ? r.label
+                    : !locked && reviewable
+                      ? '已有盘上产物，可只读审阅；继续运行仍需补齐人工确认'
+                      : undefined
                 }
                 aria-current={active ? 'page' : undefined}
                 onClick={() => nav(to)}
                 className={cx(
-                  'flex w-full items-center gap-7 rounded-btn border-none px-10 py-7 text-left text-body',
+                  'flex w-full items-center rounded-btn border-none py-7 text-left text-body',
+                  collapsed ? 'justify-center px-0' : 'gap-7 px-10',
                   active ? 'bg-card font-semibold text-ink shadow-current' : 'bg-transparent text-ink-3',
                   locked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
                 )}
               >
-                <span
-                  aria-hidden
-                  className={cx('h-14 w-4 flex-none rounded-nub', active ? 'bg-accent' : 'bg-transparent')}
-                />
-                <span className="w-12 flex-none font-mono text-mini text-ink-5">{r.n}</span>
-                <span className="min-w-0 flex-1 truncate">{r.label}</span>
-                {r.screen === 'inbox' && inboxTotal > 0 ? (
+                {collapsed ? null : (
+                  <span
+                    aria-hidden
+                    className={cx(
+                      'h-14 w-4 flex-none rounded-nub',
+                      active ? 'bg-accent' : 'bg-transparent',
+                    )}
+                  />
+                )}
+                <span className="w-12 flex-none text-center font-mono text-mini text-ink-5">{r.n}</span>
+                {collapsed ? null : <span className="min-w-0 flex-1 truncate">{r.label}</span>}
+                {!collapsed && r.screen === 'inbox' && inboxTotal > 0 ? (
                   <span className="flex-none rounded-tag bg-accent-bg px-6 py-1 text-micro font-semibold text-accent-ink">
                     {inboxTotal}
                   </span>
                 ) : null}
-                <span
-                  className={cx(
-                    'flex-none whitespace-nowrap',
-                    ok ? 'text-mini text-gate-mark' : 'text-micro text-ink-6',
-                  )}
-                >
-                  {ok
-                    ? '✓'
-                    : locked
-                      ? gateNeedText(lock!.need)
-                      : reviewable
-                        ? stageDone === false
-                          ? '需处理'
-                          : '待审'
-                        : ''}
-                </span>
+                {collapsed ? null : (
+                  <span
+                    className={cx(
+                      'flex-none whitespace-nowrap',
+                      ok ? 'text-mini text-gate-mark' : 'text-micro text-ink-6',
+                    )}
+                  >
+                    {ok
+                      ? '✓'
+                      : locked
+                        ? gateNeedText(lock!.need)
+                        : reviewable
+                          ? stageDone === false
+                            ? '需处理'
+                            : '待审'
+                          : ''}
+                  </span>
+                )}
               </button>
             )
             // Chrome 对 disabled 按钮不触发鼠标事件：锁定时 title 由外层 span 承载
@@ -187,13 +235,11 @@ export function Rail({
             )
           })}
         </div>
-      ) : (
-        <div className="prose-cn mt-14 px-16 text-micro text-ink-5">
-          还没打开哪一本书。流水线导航要进到一本书里才有。
-        </div>
-      )}
+      ) : null}
 
-      <div className="mt-auto px-16 pt-10 pb-14 text-micro text-ink-5">←/→ 翻章 · Esc 关闭</div>
+      {collapsed ? null : (
+        <div className="mt-auto px-16 pt-10 pb-14 text-micro text-ink-5">←/→ 翻章 · Esc 关闭</div>
+      )}
     </nav>
   )
 }

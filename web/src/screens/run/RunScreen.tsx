@@ -147,14 +147,14 @@ function AgentRunBlock() {
 
   return (
     <Panel>
-      <PaneHeader title="agent 代跑" meta="发起口在语料库屏；互斥由服务端 409 裁决" />
+      <PaneHeader title="agent 代跑" meta="发起口在语料库或 Stage0；互斥由服务端 409 裁决" />
       {runs.isPending ? (
         <div className="px-18 py-14 text-body text-ink-5">取代跑记录中 …</div>
       ) : runs.isError ? (
         <div className="px-18 py-14 text-body text-ink-5">取不到代跑记录。</div>
       ) : !latest ? (
         <div className="px-18 py-14 text-body text-ink-5">
-          还没有 agent 代跑记录 —— 发起口在语料库屏每本书的行尾。
+          还没有 agent 代跑记录 —— 可从语料库书卡或 Stage0 审校屏发起。
         </div>
       ) : (
         <div className="flex flex-col gap-10 px-18 py-14">

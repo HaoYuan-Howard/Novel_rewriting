@@ -17,11 +17,27 @@ npm run typecheck    # tsc --noEmit
 npm run seams        # 数据缝 / 设计缝红线（见下）
 ```
 
-**批量代跑**：语料库屏每本书标题前有勾选框，勾几本 →「开跑这 N 本」。
+**批量开书**：上传口接受一次选择 / 拖入 N 个 `.txt` / `.md`。浏览器复用单书
+`POST /api/upload` **逐本顺序**上传并执行免费 Stage0 扫描，不把 N 本原始字节同时压进内存；
+单本成功立即打开 agent 授权框（返回即落到该书 Stage0 人工审校），多本全部成功直接打开整批
+agent 授权框。部分失败不回滚成功项，
+先逐本列出失败原因，再允许只把成功项交给 agent；人工路径始终可从语料库逐本进入 Stage0。
+
+**批量代跑**：语料库屏每本书标题前有勾选框，勾几本后打开批量确认框。未授予流水线
+付费权限时主动作显示「批量生成诊断与恢复方案」；授予后显示「授权并开始跑这 N 本」。
 闸内的立刻起 agent，其余排队，一本结束自动带起下一本；`running`/`pending`/`rejected`
 三堆在确认框里逐本摆开（**部分失败不回滚**）。同时在跑的上限由服务端
 `GET /api/agent/runs/queue` 下发，前端不写死。排队只在服务进程内存里，重启不保留。
 要逐字核对某一本的 argv，仍走那本书自己的「agent 跑书」按钮（那条有 0 成本 preview）。
+
+**语料库信息密度**：不展示完整流水线说明、服务地址或“尚未打开书”的解释。筛选框放在
+页头；书名本身是打开入口，卡片右侧只保留紧凑的 Agent / 删除操作；总览矩阵的阶段状态与
+产物新鲜度只画符号，完整文字由上方图例、悬停 title 与无障碍名称承载。
+
+**删除项目**：语料库每本书提供「删除项目」，二次确认必须输入完整 sid。删除不是前端
+隐藏卡片，也不是立即永久销毁：后端零成本子进程把整本书目录及该书审批状态移入
+`<base>/_service/trash/<trash_id>/`；上传原文、ledger、作业与 agent 审计继续保留。
+正在运行或位于 agent 队列中的书拒绝删除，成功后自动刷新语料库查询。
 
 **跑书进度屏**：`/n/:sid/run`（左导航「进度」按钮）。agent 的 `novel.cli mark`
 与 UI / 持久队列共用 `<base>/_service/agent_progress.jsonl`：作业执行器在每个节点开始、
@@ -30,12 +46,17 @@ npm run seams        # 数据缝 / 设计缝红线（见下）
 「这层过没过」仍归各层屏的 badge（R-13.6）。后端路由：`GET /api/novels/:sid/run`
 （`novel/api/routes/run.py`，书目录不存在也 200）。
 
-**agent 一键跑书**：语料库屏每本书的「agent 跑书」按钮 → 确认框摊开
+**agent 一键跑书**：语料库屏每本书的「agent 跑书」，或新书 Stage0 屏的
+「agent 从 Stage0 开始跑」→ 确认框摊开
 将拉起的完整 argv 与提示词全文。付费授权与正文外发授权使用两个独立复选框：
 付费默认不勾，正文外发默认勾选，任一变化都会重新 preview；两项值和声明原文分别留档，
-不会因已获付费授权而推定正文外发同意。确认后开跑
+不会因已获付费授权而推定正文外发同意。完整命令与 prompt 默认折叠、按需展开；弹框限制在
+视口内，中段独立滚动，底部授权与发起动作始终可见。未授予付费权限时主动作是
+「生成诊断与恢复方案」，只取 state / inbox / 下一节点 preview；授予后才显示
+「授权并开始跑书」。确认后启动
 （`POST /api/agent/runs`，后端以 `claude -p` 子进程唤起 headless agent，
-权限白名单：Bash 仅 conda python 前缀、写仅 base 目录内——见
+权限白名单：Bash 仅 conda python 前缀、Edit 上界为 base；产品写入边界仍只允许 skill 明列的
+typed 人工输入与唯一终审包，正式产物一律经 CLI——见
 `novel/orchestrator/agent.py` 模块头的 Spike 结论）。进度在 `/n/:sid/run` 实时跟踪，
 那里有 agent 进程状态、日志尾部与「熄火」按钮（`POST /api/agent/runs/:id/stop`）。
 进程状态与交付终验是两条正交状态：exit 0 只显示“进程完成”；服务端另以启动/结束代码指纹、
@@ -133,10 +154,10 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 
 | 路由 | 屏幕职责 |
 |---|---|
-| `/` | 语料库、上传与逐书阶段状态；勾选多本一次交给 agent 批量代跑（闸与排队归服务端，界面不写死上限） |
+| `/` | 语料库、上传与逐书阶段状态；勾选多本一次交给 agent 批量代跑；项目可在 sid 二次确认后移入可恢复回收站（闸与排队归服务端，界面不写死上限） |
 | `/n/:sid` | 进入该书并重定向到 stage0（新书先审非正文；已有产物仍可从左栏直达各层） |
 | `/n/:sid/run` | agent / UI / 持久队列共用的全链运行进度与事件时间线；步骤从 `NODES` 派生，**只观察不判定** |
-| `/n/:sid/stage0` | 整本剔除审阅、编辑与批准 |
+| `/n/:sid/stage0` | 整本剔除审阅、编辑与批准；上传后可在此直接交给 agent 从当前盘面跑全链，或继续人工审校 |
 | `/n/:sid/stage1` | 原文与分章对照，只读 |
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
@@ -217,7 +238,7 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 
 规则本身：
 
-1. freshness 保留 fresh / stale / unknown，missing 作为明确显示态；unknown 不得画成 fresh。
+1. freshness 保留 fresh / stale / unknown，missing 作为明确显示态；unknown 用问号，missing 用空集符号，不得画成 fresh，也不得彼此复用近似轮廓。
 2. badge 保留 pass / amber / fail；amber 表示存在 unver，不是较弱的通过。
 3. severity 保留 hard / info / metric / unver；metric 是读数，不使用警告语义。
 4. job state 保留 running / ok / landed_red / failed / unknown 五态；`landed_red` 表示产物已落盘但报告有阻断红行（exit 1），界面必须引导人看报告，不能画成成功或“命令没跑成”。它在批量队列里仍会停住同书 lane；服务重启后的 running 一律改判 unknown。
@@ -235,15 +256,16 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 16. loading / error / not-run / normal 四态每屏齐备；not-run 说明下一步，不写“暂无数据”。
 17. 不发明健康分、AI 建议卡、项目百分比；只显示有来源的状态与读数。
 18. 不提供运行中取消按钮；持久队列只允许取消尚未开始的 `pending/blocked` 项，运行中返回 409。
-19. 状态不能只靠颜色：同时用形状与文字，满足长时间审校和色觉差异。
-20. 目标视口 1280～2560 桌面宽屏；不要求移动端和响应式重排。
+19. 状态不能只靠颜色：完整判定面同时用形状与文字；紧凑总览矩阵可只画形状，但必须在同屏
+    提供文字图例，并通过 title / aria-label 保留逐项文字语义。
+20. 目标视口 1280～2560 桌面宽屏；不要求移动端和响应式重排。左侧导航可折叠为窄轨，折叠时主内容与底部作业面板同步释放宽度，并常驻展开入口。
 
 逐条自查（U-00 是本文件自加的一条，规格里没有）：
 
 | 条 | 状态 | 落在哪 |
 |---|---|---|
 | U-00 「不知道」≠「没问题」 | ✅ | `components/state/` 整层；`EmptyIsSuspicious` 与 `EmptyIsGood` **刻意不合并** |
-| U-01 新鲜度三态 | ✅ | 圆点 / 方块 / 虚线空心圆 + 常驻文字标签；`missing` 是第四种显示态 |
+| U-01 新鲜度三态 | ✅ | fresh 实心圆 / stale 实心方块 / unknown 问号；`missing` 作为第四种显示态使用空集符号。完整屏常驻文字，总览矩阵由同屏图例 + title / aria-label 承载文字 |
 | U-02 徽章三态，amber 不是绿 | ✅ | `CheckBadge`；amber 的解释文案写明「查不了不等于没问题」 |
 | U-03 sev 四级，metric 不用警告色 | ✅ | `SevMark` 的 metric 是一条底线不是点，色 `#57534c` |
 | U-04 作业五态含 unknown / landed_red | ✅ | 刷新页面 = 服务重启，原本 running 的一律改判 `unknown`（不是 ok）；exit 1 显示 `landed_red` 并引导查看报告，不冒充成功或命令崩溃 |
@@ -262,7 +284,7 @@ stage5 的「三栏」= `ComparePanes(sticky=left)` 的右栏里装 `CompareRows
 | U-17 空态说「还没跑」并给下一步 | ✅ | `NotRunYet`；语料库空、待办清空各有专门文案。**错误态同理**：后端把「发生了什么」与「下一条命令」分成 `ErrorBody.message` / `.hint` 两格，界面用 `ErrorHint` 单独渲染第二格（`components/state/States.tsx`）——糊回正文，用户就得从一段中文里自己找那条命令。`hint` 为空时**什么都不画**，不占位：那一格空着说的是「后端说不出下一步」，不是「忘了写」。每一处渲染 `errorBody()` 的地方都要带上它，吞掉一条出路比不给更坏（人会以为只能干等）|
 | U-18 不发明进度百分比 / 健康分 | ✅ | 没有。唯一的对比条是「预算 / 源文」两个服务端数字之比 |
 | U-19 没有取消按钮 | ✅ | 没有 |
-| U-20 1280~2560 桌面 | ✅ | `min-w-[1280px]`，页面**没有 max-width**，多出来的宽度流进并排两栏；正文块仍有 measure 上限 |
+| U-20 1280~2560 桌面 | ✅ | `min-w-[1280px]`，页面**没有 max-width**，多出来的宽度流进并排两栏；正文块仍有 measure 上限。左导航可折叠为 58px 窄轨，主网格和底部作业面板共用 `--rail-current-w` 同步释放宽度 |
 
 ---
 

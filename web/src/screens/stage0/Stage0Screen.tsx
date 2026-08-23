@@ -11,10 +11,12 @@ import { useChrome } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import { useSid } from '@/hooks/useRouteParams'
 import { QueryStates } from '@/components/state/QueryStates'
+import { AgentRunDialog } from '@/components/agent/AgentRunDialog'
 import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
 import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
+import { SPEND_INK } from '@/constants/vocabulary'
 import { cx } from '@/lib/cx'
 import type { Job } from '@/types/jobs'
 import type {
@@ -120,6 +122,8 @@ export function Stage0Screen() {
   const [onlySuspicious, setOnlySuspicious] = useState(true)
   const [actor, setActor] = useState('')
   const [reason, setReason] = useState('')
+  const [agentOpen, setAgentOpen] = useState(false)
+  const manualReview = useRef<HTMLDivElement>(null)
   const segmentScroll = useRef<HTMLDivElement>(null)
   const report = useQuery({
     queryKey: qk.stage0Report(sid),
@@ -260,7 +264,8 @@ export function Stage0Screen() {
   })
 
   return (
-    <QueryStates q={report} loadingLabel={'读 Stage 0 审校报告'}>
+    <>
+      <QueryStates q={report} loadingLabel={'读 Stage 0 审校报告'}>
       {(current) => (
         <QueryStates q={segments} loadingLabel={'读原文连续分区'}>
           {(source) => {
@@ -291,6 +296,33 @@ export function Stage0Screen() {
                     </Mono>
                   </div>
                 </header>
+                <Panel className="flex flex-wrap items-center gap-14 border-accent-line-2 bg-accent-bg px-18 py-14">
+                  <div className="flex min-w-[320px] flex-1 flex-col gap-4">
+                    <div className="text-h3 font-semibold">从这里继续：agent 代跑或人工审校</div>
+                    <p className="prose-cn m-0 text-body text-ink-3">
+                      agent 会从当前盘面接手，先审校并批准 Stage0，再进入 Stage1 和后续阶段；
+                      它不会跳过任何硬闸。你也可以留在本页，亲自核对并调整删除范围。
+                    </p>
+                  </div>
+                  <div className="ml-auto flex flex-wrap items-center justify-end gap-8">
+                    <LinkButton
+                      onClick={() =>
+                        manualReview.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                      }
+                    >
+                      继续人工审校 Stage0
+                    </LinkButton>
+                    <button
+                      type="button"
+                      onClick={() => setAgentOpen(true)}
+                      title="先查看服务端生成的完整命令与两项授权，再由 agent 从当前盘面续跑"
+                      className="cursor-pointer rounded-btn border border-line-btn bg-card px-14 py-7 text-body-lg font-semibold hover:border-accent-line-2"
+                      style={{ color: SPEND_INK }}
+                    >
+                      agent 从 Stage0 开始跑
+                    </button>
+                  </div>
+                </Panel>
                 {candidate.data ? (
                   <Panel className="border-warn-line">
                     <PaneHeader
@@ -375,6 +407,7 @@ export function Stage0Screen() {
                   </Panel>
                 ) : (
                   <>
+                    <div ref={manualReview} className="scroll-mt-20" />
                     <Panel className={'flex flex-wrap items-center gap-12 px-18 py-13'}>
                       <span
                         className={cx(
@@ -587,6 +620,17 @@ export function Stage0Screen() {
           }}
         </QueryStates>
       )}
-    </QueryStates>
+      </QueryStates>
+      {agentOpen ? (
+        <AgentRunDialog
+          sid={sid}
+          onClose={() => setAgentOpen(false)}
+          onStarted={(startedSid) => {
+            setAgentOpen(false)
+            nav('/n/' + startedSid + '/run')
+          }}
+        />
+      ) : null}
+    </>
   )
 }

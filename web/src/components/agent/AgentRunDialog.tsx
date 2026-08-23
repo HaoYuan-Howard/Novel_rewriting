@@ -30,6 +30,7 @@ export function AgentRunDialog({
   const [authorized, setAuthorized] = useState(false)
   // 产品默认允许正文外发，但仍作为独立复选框显式提交，用户可随时取消。
   const [egressAuthorized, setEgressAuthorized] = useState(true)
+  const [commandOpen, setCommandOpen] = useState(false)
   const [promptOpen, setPromptOpen] = useState(false)
   const start = useStartAgentRun(sid)
 
@@ -47,22 +48,23 @@ export function AgentRunDialog({
 
   return (
     <div
-      className="fixed inset-0 z-60 flex items-center justify-center"
+      className="fixed inset-0 z-60 flex items-center justify-center p-16"
       style={{ background: SCRIM }}
       onClick={onClose}
     >
       <div
-        className="w-[660px] overflow-hidden rounded-modal border border-line-btn bg-card shadow-modal"
+        data-testid="agent-run-dialog"
+        className="flex max-h-[calc(100vh-32px)] w-[min(660px,calc(100vw-32px))] flex-col overflow-hidden rounded-modal border border-line-btn bg-card shadow-modal"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-10 border-b border-line-soft px-22 py-16">
+        <div className="flex shrink-0 items-center gap-10 border-b border-line-soft px-22 py-16">
           <span
             className={cx(
               'rounded-chip px-9 py-3 text-tag font-semibold',
               authorized ? 'bg-spend text-card' : 'bg-line-soft text-ink-2',
             )}
           >
-            {authorized ? '含付费命令' : '免费起步'}
+            {authorized ? '已授权付费节点' : '仅诊断与恢复方案'}
           </span>
           <span
             className={cx(
@@ -78,12 +80,26 @@ export function AgentRunDialog({
           <Mono className="ml-auto text-mini text-ink-4">{sid}</Mono>
         </div>
 
-        <div className="flex flex-col gap-12 px-22 py-18">
-          <div className="text-sm2 text-ink-4">
-            将要执行的命令（服务端 <span className="font-mono">POST /api/agent/runs/preview</span>{' '}
-            下发，原样摆出）
+        <div
+          data-testid="agent-run-dialog-body"
+          className="flex min-h-0 flex-col gap-12 overflow-y-auto px-22 py-18"
+        >
+          <div className="flex items-center gap-10">
+            <span className="text-sm2 text-ink-4">
+              将要执行的命令（服务端{' '}
+              <span className="font-mono">POST /api/agent/runs/preview</span> 下发）
+            </span>
+            <LinkButton onClick={() => setCommandOpen((v) => !v)} disabled={!preview.data}>
+              {commandOpen ? '收起完整命令' : '展开完整命令'}
+            </LinkButton>
           </div>
-          <div className="rounded-btn-lg border border-line bg-inset px-14 py-12 font-mono text-body break-all text-ink select-all">
+          <div
+            data-testid="agent-command-preview"
+            className={cx(
+              'overflow-y-auto rounded-btn-lg border border-line bg-inset px-14 py-12 font-mono text-body break-all text-ink select-all',
+              commandOpen ? 'max-h-[260px]' : 'max-h-[92px]',
+            )}
+          >
             {preview.isPending
               ? '…'
               : preview.isError
@@ -146,9 +162,14 @@ export function AgentRunDialog({
           ) : null}
         </div>
 
-        <div className="flex items-center gap-10 border-t border-line-soft bg-sunken-2 px-22 py-13">
+        <div
+          data-testid="agent-run-dialog-footer"
+          className="flex shrink-0 items-center gap-10 border-t border-line-soft bg-sunken-2 px-22 py-13"
+        >
           <span className="text-tag text-ink-4">
-            发起后跳到进度屏盯它：跑到哪一步、退出码都在那。
+            {authorized
+              ? '发起后跳到进度屏：跑到哪一步、退出码都在那。'
+              : '只收集状态、下一步命令与恢复方案，不执行付费节点。'}
           </span>
           <button
             type="button"
@@ -172,7 +193,7 @@ export function AgentRunDialog({
               disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
             )}
           >
-            {authorized ? '确认发起（授权付费）' : '发起代跑'}
+            {authorized ? '授权并开始跑书' : '生成诊断与恢复方案'}
           </button>
         </div>
       </div>
