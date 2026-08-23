@@ -833,3 +833,70 @@ thinking=true、high、独立空缓存；先 `preview`，再按真实 argv 运�
 `extraction-ir-v3.1` 并验证默认真实 consumer；任一本失败都保持 v2 默认，把失败章、证据与修复路
 写回 `docs/REQUIREMENTS.md::TODO-41`。即便通过，结论也限定为“n=2 支持 Flash 默认切换”，不宣称
 所有题材或 Pro 档都整体超过。
+
+### 双书真实结果与裁决
+
+用户已明确授权把两本书正文及 Stage2 上下文发送至 DeepSeek API，并承担两书各自
+`stage2.global` 与 `stage2.blueprint=extraction-ir-v3.1` 的费用。真实运行冻结在代码
+`5ce162dd95eb93ebce9f420abef61817e8e1d57a`、`deepseek-v4-flash`、thinking=true、初始 high；
+隔离 base 为 `outputs/_stage2_flash_quality/v31_default_gate_20260823/`，两书使用各自独立空缓存。
+每条命令均先经 `preview` 取真实 argv，再串行执行；token 只从该 base 的
+`_service/ledger.jsonl` 聚合。
+
+| 书 / 节点 | 真调用 | prompt | completion | reasoning | wire latency 合计 | 操作墙钟 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 无情道 / global | 2 | 26,844 | 32,364 | 27,788 | 235.8s | 238s |
+| 无情道 / blueprint | 31 | 199,991 | 229,226 | 200,953 | 1,802.2s | 495s + 独立复检 3s |
+| 偶像公寓 / global | 1 | 18,983 | 2,674 | 6 | 19.3s | 22s + 零成本归一 2s |
+| 偶像公寓 / blueprint | 23 | 173,614 | 222,304 | 190,040 | 1,761.5s | 363s + 定向修复 166s + 复检 3s |
+
+无情道 global 的首个 high 响应只有 reasoning、正文为空，不能构造 schema；同参数 high 重试成功，
+故账本是 2 条真调用而不是隐藏成 1 条。新正式稿删掉了 ch1 已明示身份的伪 secret，并准确恢复
+`secret_01`：“黎玄在收徒当天就已知迟折月是合欢宗弟子”，`setup=[]`、reader reveal=ch16。
+`setup=[]` 表示前文没有显式伏笔，不等于再次漏掉这个冷揭示。偶像公寓 global 首稿被
+`secret_setup_order` 拦成 `.INVALID`；走 inbox 登记的零调用 `--renormalize` 后正式落盘，没有为同一
+问题再付一次钱。三条秘密分别在 ch4/ch11/ch15 向读者揭示，均不是开篇明牌，发生时间与读者揭示
+时间也未混写。
+
+| 质量项 | 无情道最终稿 | 偶像公寓最终稿 |
+| --- | ---: | ---: |
+| beat / hinge | 130 / 133 | 157 / 193 |
+| beat span | 130/130 | 157/157 |
+| 关闭人物引用：歧义/名册外/代词/过早 | 0/0/0/0（分母 278） | 0/0/0/0（分母 426） |
+| candidate / phrase 采纳 | 106 / 27 | 176 / 17 |
+| 机械嵌套 hinge | 0 对 | 0 对 |
+| 最终状态 | AMBER、0 HARD、fresh/match | AMBER、0 HARD、fresh/match |
+
+关闭人物引用与反嵌套修复都成立；但**默认门仍失败**，而且失败不是指标误报：
+
+- 无情道按新响应的 candidate 密度盲序检查 ch16/ch19/ch21、按 phrase 密度补 ch7/ch14，再与冻结的
+  Pro × v1.1 揭盲比较。旧版的普通数量后缀、整句/子串重复已消失，密集章的精度总体提高；但新稿
+  只有 133 hinge，低于 Flash v2 的 161 和 Pro v1.1 的 168。追加检查稀疏章后确认了反向漏召回：
+  ch4 没保留笑点落点“抽出隐藏款了”，ch12 没保留“除了修炼就是来看师姐练剑”这条暗恋证据，
+  虽然 event 概括了事实，下游需要的原句材料已经丢失，故不能用“0 嵌套”换算成质量通过。
+- 无情道 blueprint 仍比 Flash v2 少 44.6% 调用、45.8% reasoning、44.7% completion、48.3% 墙钟，
+  但相对 Pro v1.1 的既有优势反转：调用多 19.2%，reasoning 多 5.0%，completion 多 5.9%；预注册
+  成本门“继续保住 Pro completion/reasoning 优势”未达成。
+- 偶像公寓的风险章 ch7/ch10/ch13/ch16 没发现系统性普通对白、数字后缀或嵌套；ch13 有少量边界项，
+  但不是 193 条整体过抽的证据。真正的稳定性反例发生在首轮落盘：ch1、ch7 分别为 386、418
+  字/beat，超过全书中位数 127 的 3 倍，被 `beats_coarse` 关闭式拦截。随后按登记恢复路只重生成
+  ch1/ch7，并重做摘要，才从 4/5 beat 修到 7/11 beat、形成正式稿。正常拓扑本应是 18 章加摘要
+  19 调；本次实际 23 调还包含一次同 high 边界重采与三次修复调用，故“无异常重采、首轮无粗切”
+  同样未过。
+
+裁决是继续保持 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE = 'extraction-ir-v2'`；
+`ChapterBlueprints` artifact schema 仍是 v2。两份最终稿证明 v3.1 可以经既有恢复路形成机械干净的
+产物，却没有证明默认 consumer 能首轮稳定达到 Pro v1.1 质量与成本组合。
+
+针对本次真实反例，后续零成本施工把 v3/v3.1 的同相脚手架补齐为“行动→反应→信息改变→决定”先
+召回、长对话遇揭示/关系转折/承诺/拒绝必须切拍；v3.1 hinge 同时新增“反批量不等于少交”，要求
+保留关系证据、后文回收原话和笑点最后一击的唯一原文材料。该修改发生在本轮冻结运行**之后**，
+只能称下一候选，必须重新付费验证，不能拿上述旧响应证明已修好。
+
+证据 SHA-256：无情道 global / blueprint 为
+`856b18d454cc386f88270d871eb44dafa702ad09bb46579e28fd6247ef9a3c0a` /
+`cd942a3b33a0d9b778be5269c5201ba9dfe9c41402facf846abc8d2db1c09dbb`；偶像公寓为
+`97a6f7786c9c6e859d9055b0c84dbbc7c4b1c578a47332e403feceff0bd2a428` /
+`e736e739bb73e8e79487e804eb66601594eed4f4988ad36f521e2809fe0b0ab9`；ledger / operator audit 为
+`dd8dbae0fa1f5b91c7568ae6f155f12ef5ed4e314234c549c7b044ab9a13e671` /
+`770f4dbbab4c689c16c934ebdf4eb5e8d978b3bd996f0094e08d3baa81872bed`。

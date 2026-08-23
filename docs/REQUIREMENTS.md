@@ -725,15 +725,24 @@ Fisher 单侧 p≈0.21 ⇒ **方向对，但没到显著**。三条已经站得�
 冻结契约五文件 325 项、完整非 corpus 回归、前端 seams/typecheck/build 亦均 exit 0；前端验证
 只读复用了同锁文件主 worktree 的依赖，未安装或改写依赖。
 
-剩余工作按 §十六的新预注册门执行，不能靠旧缓存 replay 或只比数量销账：
+双书真实付费验收已完成，完整账本、hash、盲审与恢复过程见 §十六。两份最终稿都能达到正式 schema、
+fresh/match、0 HARD、span 100% 和关闭人物引用四项全 0；无情道 global 也恢复了 ch16 的真实冷揭示。
+但预注册默认门失败，`BLUEPRINT_ARCHITECTURE` 必须继续是 `extraction-ir-v2`：
 
-- [ ] 在冻结代码、独立空缓存上重跑当前书的 `stage2.global` 与
-  `stage2.blueprint=extraction-ir-v3.1`，独立复检人物关闭引用、冷揭示、边界与 hinge；
-- [ ] 至少再跑一本结构不同的书；本轮选 `偶像公寓打工日常`（现代、对话密集、18 章），同样
-  做候选密集与 phrase 密集章节盲审，确认成本与召回优势不是单书偶然；
-- [ ] 两书都通过质量门后，才把 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 切到
-  `extraction-ir-v3.1`；继续保留 `extraction-ir-v2` 注册值用于显式回退和存量产物重检。
-  `v3.1 + Pro` 是后续高质量档实验，不是本次 Flash 翻默认的前置条件。
+- 无情道新稿 130 beat / 133 hinge，密集章已消除数字后缀与嵌套，稀疏章却漏掉 ch4 的笑点落点和
+  ch12 的关系证据；reasoning/completion 还分别比 Pro v1.1 高 5.0%/5.9%，没有保住既有优势；
+- 偶像公寓首轮 ch1/ch7 被 `beats_coarse` 拦截，需两章付费重生成和摘要重做才落正式稿；正常
+  19 调拓扑实际用了 23 调，不能称跨书首轮稳定。
+
+失败后已完成下一候选的零成本施工：同相脚手架补回对话转折切拍规则，v3.1 hinge 明确“反批量不等于
+少交”，保留关系证据、后文回收原话和笑点最后一击。它发生在本轮冻结响应之后，尚无付费证据：
+
+- [ ] 下次获得正文外发与付费授权后，先在上述失败章与 candidate/phrase 高密章做新 prompt 冒烟；
+  冒烟同时补回 ch4/ch12 且不恢复普通数字/嵌套、ch1/ch7 不再粗切，才值得再次整跑两书；
+- [ ] 只有新候选两书首轮都通过 §十六的质量/成本门，才把
+  `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 切到 `extraction-ir-v3.1`；继续保留
+  `extraction-ir-v2` 用于显式回退和存量产物重检。`v3.1 + Pro` 仍是后续高质量档实验，
+  不是 Flash 翻默认的前置条件。
 
 ## 条目生命周期
 
