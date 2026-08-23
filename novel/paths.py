@@ -584,6 +584,9 @@ def numbered_rounds(novel_dir: str | os.PathLike[str], pattern_rel: str) -> list
 #: **它不是一本书**——`iter_novel_dirs` 靠 `_` 前缀把它跳过。
 SERVICE_DIRNAME = '_service'
 
+#: 可恢复项目删除的唯一落点。回收站不参加 `iter_novel_dirs()`，也不冒充小说产物。
+TRASH_DIRNAME = 'trash'
+
 #: 界面上传的原文长期保留在 `<base>/_service/uploads/<sha256(原始字节)>/<原文件名>`。
 #: 目录名**就是内容地址**，产地只有一个：`novel/orchestrator/uploads.py::save_upload`。
 UPLOADS_DIRNAME = 'uploads'
@@ -599,6 +602,11 @@ _ANY_SEP = re.compile(r'[\\/]+')
 def service_dir(base: str | os.PathLike[str]) -> Path:
     """`<base>/_service/`。服务自己的东西的**唯一落点**，产物一律不进这里。"""
     return Path(os.fspath(base)) / SERVICE_DIRNAME
+
+
+def trash_dir(base: str | os.PathLike[str]) -> Path:
+    """项目回收站：`<base>/_service/trash/`。"""
+    return service_dir(base) / TRASH_DIRNAME
 
 
 def uploads_dir(base: str | os.PathLike[str]) -> Path:

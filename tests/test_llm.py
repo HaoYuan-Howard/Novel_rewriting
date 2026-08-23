@@ -1504,6 +1504,84 @@ def test_the_api_key_can_never_be_printed_by_accident():
     assert '<set>' in repr(cfg) and '<unset>' in repr(Config())
 
 
+def test_proxy_credentials_can_never_be_printed_by_accident():
+    cfg = Config(proxy_url='http://proxy-user:proxy-secret@127.0.0.1:7890')
+    shown = repr(cfg)
+    assert 'proxy-user' not in shown and 'proxy-secret' not in shown
+    assert 'proxy_url=<set>' in shown and 'proxy_url=<unset>' in repr(Config())
+
+
+def test_load_config_reads_the_explicit_deepseek_proxy(tmp_path):
+    dotenv = tmp_path / '.env'
+    dotenv.write_text('DEEPSEEK_PROXY=http://127.0.0.1:7890\n', encoding='utf-8')
+    assert load_config(env={}, dotenv_path=dotenv).proxy_url == 'http://127.0.0.1:7890'
+
+
+def test_malformed_proxy_is_a_secret_safe_hard_error():
+    with pytest.raises(ValueError, match='DEEPSEEK_PROXY') as caught:
+        Config(proxy_url='not-a-url-with-secret')
+    assert 'not-a-url-with-secret' not in str(caught.value)
+
+
+def test_transport_passes_the_explicit_proxy_to_the_sdk(monkeypatch):
+    import openai
+    from novel.llm.transport import DeepSeekTransport
+
+    seen = {}
+
+    def fake_http_client(**kwargs):
+        seen['http'] = kwargs
+        return object()
+
+    def fake_openai(**kwargs):
+        seen['sdk'] = kwargs
+        return object()
+
+    monkeypatch.setattr(openai, 'DefaultHttpxClient', fake_http_client)
+    monkeypatch.setattr(openai, 'OpenAI', fake_openai)
+    cfg = Config(api_key='synthetic', proxy_url='http://127.0.0.1:7890', timeout=123)
+    DeepSeekTransport(cfg)._sdk()
+
+    assert seen['http'] == {'proxy': cfg.proxy_url, 'timeout': 123}
+    assert seen['sdk']['http_client'] is not None
+    assert seen['sdk']['max_retries'] == 0
+
+
+def test_transport_doctor_uses_the_same_proxy_and_redacts_its_credentials(monkeypatch):
+    """网络诊断可以复现 Agent 的传输面，但错误输出不能泄露代理口令。"""
+    import openai
+    from novel.llm.transport import probe_transport
+
+    secret_proxy = 'http://proxy-user:proxy-secret@127.0.0.1:7890'
+    seen: dict[str, object] = {}
+
+    class ConnectError(OSError):
+        pass
+
+    class BrokenClient:
+        def get(self, url):
+            seen['url'] = url
+            raise ConnectError(f'TLS EOF while using {secret_proxy}')
+
+        def close(self):
+            seen['closed'] = True
+
+    def build(**kwargs):
+        seen['kwargs'] = kwargs
+        return BrokenClient()
+
+    monkeypatch.setattr(openai, 'DefaultHttpxClient', build)
+    result = probe_transport(Config(proxy_url=secret_proxy, timeout=17))
+
+    assert result.reached_http is False
+    assert result.kind == 'connection'
+    assert seen['kwargs'] == {'timeout': 17, 'proxy': secret_proxy}
+    assert seen['url'] == 'https://api.deepseek.com/models'
+    assert seen['closed'] is True
+    assert secret_proxy not in result.detail
+    assert 'proxy-user' not in result.detail and 'proxy-secret' not in result.detail
+
+
 def test_load_config_does_not_touch_the_process_environment():
     """⚠ 原型用 `os.environ.setdefault` 把 `.env` 灌进进程全局，于是「这次跑用的是哪个 key」
     **取决于此前有没有别的模块先 import 过它**。这里读进来就用，全局一个字节不动。"""

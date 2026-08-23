@@ -42,7 +42,8 @@ from pydantic import Field, model_validator
 from contracts.invariants import (
     CACHE_POLICY,
     HOOK_APPROACHES,
-    HOOK_APPROVED_APPROACHES,
+    HOOK_RECIPE,
+    HOOK_SLOTS,
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval, LlmProvenance
@@ -91,7 +92,11 @@ class Mech(StrictModel):
 
 
 class Candidate(StrictModel):
-    """一条候选。恒 3 条（三种策略各一）。
+    """一条候选。恒 3 条——**身份是位置**（`c1`/`c2`/`c3`），策略只是它的一个属性。
+
+    ⚠ 策略**可以重复**：当前配方 `HOOK_RECIPE` 就是 `payoff_preview` ×1 +
+    `scene_punchline` ×2。这里不校验配方——校验开在**模型响应**那一侧
+    （`HookResponse`），落盘载体要能读回**任何一次历史配方**产的存量。
 
     ⚠ **已裁撤**：`chars`（= 去空白的字数，盘上 9/9 与现算逐值相同，唯一读者是界面卡片）。
     ⚠⚠ **裁掉它之后，现算必须留在 API 层（Python，走同一个 `measure`）**：
@@ -100,6 +105,8 @@ class Candidate(StrictModel):
     下沉到 JS 的后果不是判据坏掉，是**同一页上人会看到两个字数**。
     """
 
+    #: ⚠ 取值面是 `HOOK_APPROACHES`（含已退场的写法），**不是当前配方**：
+    #: 存量产物里就有 `source_architecture`，载体收窄成配方会让它们当场拒读。
     approach: Literal[HOOK_APPROACHES]
 
     #: 文案本身。盘上**串长** 123~308（含段间分隔符）。
@@ -137,9 +144,18 @@ class ApprovedHook(StrictModel):
     ⚠ **`approved.text` 进成书**（拼在成书最前面）。
     """
 
-    #: **比候选多一个 `human_edit`。** 它答的是「这份人工稿是从哪一条改出来的」——
-    #: **没有前身时才是 `human_edit`**。
-    approach: Literal[HOOK_APPROVED_APPROACHES]
+    #: 它答的是「这份定稿是从**哪一条候选**来的」——`None` = 没有前身（人手写）。
+    #:
+    #: ⚠⚠ **这里曾是 `approach`（策略名 + 一个 `human_edit`）。** 那个写法把
+    #: 「从哪条候选来」与「那条候选用的什么策略」压成了一格，而一旦同一种策略
+    #: 采两条样本，它就**答不出前一个问题**了。⇒ 换成位置身份。
+    #: ⚠ 策略名没有丢：它由 `candidates[slot].approach` **现算**得到
+    #: （能 0 成本现算的字段不落盘，同 `Candidate.chars` 被裁掉的理由）。
+    #: ⚠ `human_edit` 这个取值随之消失：「它是不是人写的」由 `origin` 回答、
+    #: 「有没有前身」由 `slot is None` 回答，两件事本来就不该挤在一个枚举里。
+    # ⚠ `None` 是一个**有意义的显式值**（人手写、无候选前身），不是缺省值。
+    # 字段缺失表示 producer 没交代来源，必须拒读；否则“未知”会被洗成“没有前身”。
+    slot: Literal[HOOK_SLOTS] | None
 
     text: str = Field(min_length=1)
 
@@ -183,9 +199,13 @@ class HookParams(StrictModel):
 
 
 class HookCandidateRetry(StrictModel):
-    """一条机械 HARD 候选的一次定向重试账。"""
+    """一条机械 HARD 候选的一次定向重试账。
 
-    approach: Literal[HOOK_APPROACHES]
+    ⚠ 记的是**哪一条候选**被重试了（位置身份），不是「哪种策略」——后者由
+    `candidates[slot].approach` 现算，而同一种策略采两条样本时它答不出前一个问题。
+    """
+
+    slot: Literal[HOOK_SLOTS]
     attempt: int = Field(default=1, ge=1, le=1)
     failure_items: list[str] = Field(min_length=1)
     failure_evidence: Fp10
@@ -322,11 +342,19 @@ class HookResponse(StrictModel):
     rationale: str = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _each_current_approach_exactly_once(self) -> 'HookResponse':
+    def _matches_the_current_recipe(self) -> 'HookResponse':
+        """按**逐槽配方**校验，不按策略去重。
+
+        ⚠⚠ 这里曾经写的是「每种策略恰好一次」（集合相等 + 无重复）。那条断言把
+        「取值面」与「这一次要产哪几条」当成同一件事，于是同一种策略采两条样本
+        **在校验器层面就不可能**。现在配方允许重复，但身份又由列表位置承载，
+        因此必须逐槽比较：同一种策略可以占两槽，模型却不能把 c1/c2 对调后
+        再让位置身份替错误顺序背书。
+        """
         approaches = [c.approach for c in self.candidates]
-        if len(set(approaches)) != len(approaches) or set(approaches) != set(HOOK_APPROACHES):
+        if tuple(approaches) != HOOK_RECIPE:
             raise ValueError(
-                f'candidates 必须各覆盖一次 {HOOK_APPROACHES}，实得 {approaches}')
+                f'candidates 必须按槽位顺序符合当前配方 {HOOK_RECIPE}，实得 {approaches}')
         texts = [c.text.strip() for c in self.candidates]
         if len(set(texts)) != len(texts):
             raise ValueError('三个候选文本不得重复')
@@ -448,12 +476,13 @@ class HookSemanticReview(StrictModel):
 class HookEdit(StrictModel):
     """`stage6/hook_edit.json` —— 人手改好的**一条**文案文本（`--apply-edit` 的决策集）。
 
-    `candidate` 指明改哪条候选；`None` ⇒ 写/替换**定稿**。
+    `candidate` 指明改哪条候选（**位置身份** `c1`/`c2`/`c3`）；`None` ⇒ 写/替换**定稿**。
+    ⚠ 它曾经填策略名。同一种策略采两条样本时策略名不再唯一 ⇒ 选不中那一条。
     ⚠ 只收文本：`mech` / `findings` 由 `_normalize_and_judge` 重算——
     人工稿与生成稿走同一条归一+判定，没有免检写口。
     """
 
-    candidate: Literal[HOOK_APPROACHES] | None = None
+    candidate: Literal[HOOK_SLOTS] | None = None
     text: str = Field(min_length=1)
     actor: str | None = None
     reason: str | None = None

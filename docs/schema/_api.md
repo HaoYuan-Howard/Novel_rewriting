@@ -112,6 +112,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/queues/:id/resume` | `QueueRun`（202；请求体 `QueueResumeRequest`，剩余付费命令要求 `confirmed=true`） | **复用** `_orchestration.md` |
 | `POST /api/queues/:id/items/:index/cancel` | `QueueRun`（只取消尚未开始项） | **复用** `_orchestration.md` |
 | `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
+| `POST /api/novels/:sid/trash` | `TrashNovelResult`（请求体 `TrashNovelRequest.expected_title`；整本项目移入 `_service/trash/`） | 新 |
 | `GET /api/novels/:sid/stage0/report` | `Stage0Report` | **继承** `stage0.md` 的 `RemovalReport`，多三格视图投影，见下 |
 | `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
 | `GET /api/novels/:sid/stage0/partition-preview` | `Stage0PartitionPreview`（批准前的只读分章推演；**不写产物、不查审批状态**，见 `stage0.md` §2.4） | 新 |
@@ -122,7 +123,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `POST /api/novels/:sid/stage0/candidate/dismiss` | `JobRecord`（同一请求体） | 新 |
 | `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
 | `GET /api/novels/:sid/stage1/segments` | `Stage1Segments` | 新 |
-| `GET /api/novels/:sid/stage1/chapters` | `Stage1Chapters` | 新 |
+| `GET /api/novels/:sid/stage1/chapters` | `Stage1Chapters`（正式章表 + 后端同源计算的 `label_delta` / `anomaly` / `anomaly_count`，供 Stage1 显式呈现重号、缺号与倒退） | 新 |
 | `GET /api/novels/:sid/stage1/hook_copy` | `HookCopyView` | 新 |
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
@@ -279,6 +280,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | 模型 | 字段 | 说明 |
 |---|---|---|
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
+| `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录 |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
@@ -432,7 +434,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失）。
 `counts` / `total` / `items` 三者相互一致由后置条件钉死。
 
-`InboxItem` 的四条纪律：
+`InboxItem` 的六条纪律：
 
 - `kind`：八值 `INBOX_KIND`。`repairable` 是有确定本地修法的硬命中；
   `verification` 是证据不足但可由人工消解的 `UNVER`。其余不可操作的 `UNVER`
@@ -443,6 +445,10 @@ stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失�
 - `chapter`：**输出章**口径，可空——书级 / 整份产物 = `null`，
   后端不给书级条目编一个假章号。
 - `wontfix`（视图顶层）：被人豁免的条数——豁免不删结论、不进清单，单独计数。
+- `attention`：`pending` / `reviewed_retained`。后者必须同时带 typed `decision`
+  （actor/reason/subject SHA-256/state/decided_at）；不能凭终审包散文或 agent 自述补推。
+- `delivery_effect`：`blocking` / `disclosure`，与 attention 正交。顶层
+  `attention_counts`、`delivery_counts` 都由 items 分组并由后置条件核一致；总数不再冒充失败数。
 
 路由侧：对每个已移植层各跑一次 0 成本复检（stage2/4 会重算判据）——**纯读**，
 大书上是秒级。**登记不优化**：盘上 3 本无压力，全语料嫌慢时在路由层加缓存，

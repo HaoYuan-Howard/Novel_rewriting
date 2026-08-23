@@ -11,7 +11,8 @@ stage6.py —— S-11「开篇文案」那一屏（`GET /api/novels/:sid/stage6`
     同一条候选 `measure()['chars']=253` 而 `len(text)=277`——现算必须留在 Python 侧，
     否则同一页上人会看到两个字数）。
   · `index`：数组位置（1 起）。
-  · `approved`（候选级 bool）：`hook.approved.approach == candidate.approach`。
+  · `approved`（候选级 bool）：按**位置身份**比 `hook.approved.slot == slot_of(index)`。
+    ⚠ 曾按 `approach` 比——同一种策略采两条样本时那样写会把两条都标成已定稿。
 
 产物不在 ⇒ 404（本屏没有产物就没有内容）；读不回 ⇒ 409。判据表不在这里
 （结论只能来自 `/check/stage6`，`R-11.4`）。
@@ -22,6 +23,7 @@ from contracts.artifacts import STAGE6_HOOK
 
 import os
 
+from contracts.invariants import HOOK_SLOTS, slot_of
 from contracts.schema.api import HookApprovedLine, HookCandidateLine, Stage6View
 from contracts.schema.stage6 import Hook
 from novel import paths, prov
@@ -48,7 +50,7 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
     st = artifact_state(store, REL)
     art, _raw = store.read_own(Hook, REL)
 
-    approved_approach = art.approved.approach if art.approved is not None else None
+    approved_slot = art.approved.slot if art.approved is not None else None
     assessments = semantic.current_assessments(store, art)
     # ⚠ 一条候选的全部语义格子来自**同一条** assessment，所以按文本 sha1 只查一次。
     #   逐格现查（曾经八次）不只是白算八遍 sha1：那样写时，「某一格悄悄查了别的 key」
@@ -58,7 +60,7 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
             index=i, approach=c.approach, chars=_chars(c.text), text=c.text,
             subject_sha256=semantic.text_sha256(c.text),
             mech=c.mech, findings=c.findings,
-            approved=c.approach == approved_approach,
+            approved=slot_of(i) == approved_slot,
             semantic_state=a.state,
             semantic_reason=a.reason,
             contradictions=list(a.review.contradictions) if a.review else [],
@@ -67,8 +69,13 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
             quality_rank=a.quality_rank)
         for i, c in enumerate(art.candidates, start=1)
         for a in (assessments[semantic.text_sha1(c.text)],)]
+    # 策略名**现算**：定稿只记「从哪条候选来」，那条候选用的什么策略去它自己那里读。
+    approved_approach = (
+        art.candidates[HOOK_SLOTS.index(approved_slot)].approach
+        if approved_slot is not None else None)
     approved = (HookApprovedLine(
-        approach=art.approved.approach, chars=_chars(art.approved.text),
+        slot=approved_slot, approach=approved_approach,
+        chars=_chars(art.approved.text),
         text=art.approved.text, origin=art.approved.origin,
         mech=art.approved.mech, findings=art.approved.findings,
         resolution=art.approved.resolution)

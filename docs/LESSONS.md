@@ -335,3 +335,44 @@ Flash 的质量保险，v1.1 则是未来模型能力足够时仍有价值的快
 落点：`contracts/invariants.py::BLUEPRINT_ARCHITECTURES` 与 `::BLUEPRINT_ARCHITECTURE`、
 `novel/stages/stage2/contract.py::CONTRACTS`、`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT`；
 本次 A/B 与 n=1 边界见 `docs/stage2_contract_experiment.md` §十四。
+
+## 26. 外层进程成功与内层交付成功必须是两条状态轴
+
+一个 agent、队列 worker 或脚本 exit 0，只能证明那个外层进程正常结束；它不能证明目标产物出现、
+事实闸已开、终审包存在，更不能证明运行期间代码没有变化。把两者压成一个 `ok`，失败方向往往不是
+“崩了”，而是“什么也没做却显示成功”，第 24 条的真实事故正是这种形状。
+
+处置是让进程状态照退出码折叠，同时在结束后从**当前盘面**独立终验：启动/结束代码指纹一致、
+强闸通过、交付物能按正式下载口重读、终审包存在、待办没有阻塞项。终验自己崩溃时仍要保留 ended
+事件，并把交付状态记为 `unknown`，不能因观察器失败改写已经发生的进程事实。
+
+落点：`contracts/schema/orchestration.py::AgentDeliveryOutcome`、
+`novel/orchestrator/delivery.py::assess`、`novel/orchestrator/agent.py::fold`。
+
+## 27. “是否还等人”与“是否挡交付”是正交维度
+
+人工项不会因为已经裁决就从历史上消失：有些决定必须作为审计披露长期保留；反过来，有些尚待人工
+阅读的语义项也不一定能据未经标定的模型结论阻断成书。只给一列 `pending`，会把“已看过但留账”误报
+成未处理；只给一列 `blocking`，又会把“还需关注但不具自动否决权”藏掉。
+
+因此人工清单至少要物化两轴：`attention = pending / reviewed_retained` 与
+`delivery_effect = blocking / disclosure`。`reviewed_retained` 必须能举出 typed 决策（actor、reason、
+主体 hash、状态与时间）；没有决策证据就继续写 pending，不能因为 agent 声称“看过了”而代造记录。
+
+落点：`contracts/schema/api.py::InboxItem`、`novel/views/inbox.py::inbox_view`、
+`novel/orchestrator/delivery.py::assess`。
+
+## 28. 硬闸要落在所有调用方必经的最低边界，并与恢复材料同批交付
+
+把 Stage2 事实复核写进某个前端按钮、某份 skill 或某个组合命令，只约束那个调用方；手敲 CLI、API
+作业和下一版编排器都可能绕开。硬闸必须落在所有真实执行最终汇合的运行边界，并在组装与下载口再守
+一次，已有旧文件不能充当通行证。同时不能把零成本复检、人工编辑和决策提交一起挡住，否则闸一关，
+人连开闸所需的证据都拿不到。
+
+与硬闸同批提供两类恢复面：只读 workpack 只缩小阅读范围、不自动裁决；模板、书内文件和 API 一次性
+上传统一吃注册表版本化的同一 artifact 形状。路径不同不应制造第二份 schema，否则“前端能提交、CLI
+读不回”的漂移只会在真实跑书时出现。
+
+落点：`novel/cli/main.py::_cmd_run`、`novel/stages/stage2/global_review.py::require_approved`、
+`::review_workpack`、`novel/store.py::ArtifactStore.read_external`、
+`novel/stages/stage7/assemble.py`。

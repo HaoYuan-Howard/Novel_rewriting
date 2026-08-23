@@ -67,6 +67,10 @@ class TerminalState(NovelError):
     """
 
 
+class BookTrashFailed(TerminalState):
+    """项目无法安全移入回收站；正式书目录保持原位或仍可从回收站恢复。"""
+
+
 class ContextBudgetRefused(TerminalState):
     """LLM 请求无法在已登记的供应商上下文预算内安全执行。
 

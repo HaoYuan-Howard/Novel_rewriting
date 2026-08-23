@@ -34,6 +34,7 @@ import type {
   JobsResponse,
 } from '@/types/jobs'
 import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
+import type { TrashNovelResult } from '@/types/novels'
 import type { RunProgress } from '@/types/run'
 import type {
   CheckReport,
@@ -494,6 +495,8 @@ export const realApi: Api = {
     )
     return { sid: raw.sid, job: adaptJob(raw.job, raw.sid) }
   },
+  trashNovel: (sid, expectedTitle) =>
+    post<TrashNovelResult>(n(sid) + '/trash', { expected_title: expectedTitle }),
 }
 
 /** 编译期常量：VITE_USE_MOCK 会被 Vite 替换成字面量，于是这个三元能被静态折叠 */

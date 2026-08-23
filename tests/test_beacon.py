@@ -5,7 +5,7 @@ test_beacon.py —— 进度信标的写读、容错、折叠，以及 `mark` �
 
 信标是**观察轨迹不是判定**（`novel/orchestrator/beacon.py` 模块头那条）。
 这里钉四件事：append-only 的写读往返、半截行容错（只容忍最后一行）、
-四态折叠规则（`fold` 唯一落点）、`PIPELINE_STEPS` 与 `NODES` / SKILL 工作流表的对账。
+五态折叠规则（`fold` 唯一落点）、`PIPELINE_STEPS` 与 `NODES` / SKILL 工作流表的对账。
 
 临时目录由 pytest 提供，测试结束后自动清理。
 """
@@ -78,11 +78,13 @@ def test_a_bad_line_in_the_middle_is_not_silent(base):
         beacon.read_events(base)
 
 
-def test_fold_four_states():
+def test_fold_five_states():
     events = [
         _ev(10, 'stage0.remove', 'start'),
         _ev(20, 'stage0.remove', 'end', exit_code=0),
         _ev(30, 'stage0.approve', 'start'),                       # 还在跑
+        _ev(35, 'stage0.edit', 'start'),
+        _ev(36, 'stage0.edit', 'end', exit_code=1),               # 落盘但红
         _ev(40, 'stage1.partition', 'start'),
         _ev(50, 'stage1.partition', 'end', exit_code=2),          # 显式终态
     ]
@@ -93,6 +95,8 @@ def test_fold_four_states():
     assert by_node['stage0.remove'].last_exit == 0
     assert by_node['stage0.approve'].beacon == 'running'
     assert by_node['stage0.approve'].elapsed == 70
+    assert by_node['stage0.edit'].beacon == 'landed_red'
+    assert by_node['stage0.edit'].last_exit == 1
     assert by_node['stage1.partition'].beacon == 'failed'
     assert by_node['stage1.partition'].last_exit == 2
     assert by_node['stage4.plan'].beacon == 'pending'

@@ -97,6 +97,11 @@ export function Stage6Screen() {
           const finalPhase = !!d.approved && !reopened
           const body = d.approved?.text ?? cand?.text ?? ''
           const origText = s1hook.data?.hook_copy.text ?? ''
+          const approvedSource = d.approved
+            ? d.approved.slot === null
+              ? '人手写（无候选前身）'
+              : `候选 ${approvedIdx ?? d.approved.slot.slice(1)} · ${d.approved.approach}`
+            : null
 
           return (
             <section className="flex flex-col gap-16 px-30 py-24">
@@ -114,7 +119,7 @@ export function Stage6Screen() {
                         : { color: SEV.unver.color, background: SEV.unver.bg }
                     }
                   >
-                    {d.approved ? '已定稿：' + d.approved.approach + '（人工核验）' : '还没定稿'}
+                    {approvedSource ? `已定稿：${approvedSource}（人工核验）` : '还没定稿'}
                   </span>
                   {finalPhase ? (
                     <LinkButton onClick={() => setReopened(true)}>回去重挑候选</LinkButton>

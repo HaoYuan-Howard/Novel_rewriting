@@ -121,8 +121,7 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     """
     candidates = {
         's1': [ApprovalAction(
-            kind='stage2.global', label='\u5e76\u53d1\u62bd\u53d6 stage2 + stage3',
-            extra=['--full-extract'])],
+            kind='stage2.global', label='生成 stage2 全局底座；完成后逐项人工复核')],
         's2': [ApprovalAction(
             kind='stage4.plan', label='\u751f\u6210\u91cd\u6784\u8ba1\u5212')],
         's5': [ApprovalAction(

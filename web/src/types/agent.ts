@@ -27,6 +27,22 @@ export interface AgentRunStart {
   prompt: string
   authorized: boolean
   egress_authorized: boolean
+  /** 启动时仓库代码指纹；历史记录可能没有。 */
+  code_version: string | null
+}
+
+export type AgentDeliveryState =
+  | 'ready'
+  | 'ready_with_disclosures'
+  | 'stopped'
+  | 'failed'
+  | 'unknown'
+
+export interface AgentDeliveryOutcome {
+  state: AgentDeliveryState
+  reason: string
+  /** unix 秒 */
+  checked_at: number
 }
 
 /**
@@ -42,6 +58,8 @@ export interface AgentRunRecord {
   exit_code: number | null
   state: JobState
   note: string | null
+  /** 与进程 state 正交；null 只会出现在仍运行/被 reconcile 的记录。 */
+  outcome: AgentDeliveryOutcome | null
 }
 
 /** GET /api/agent/runs?sid= 的返回。新的在前。 */

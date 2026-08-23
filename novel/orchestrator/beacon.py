@@ -27,6 +27,7 @@ import time
 from contracts.invariants import BEACON_STATES, NODES, PIPELINE_STEPS
 from contracts.schema.orchestration import ProgressEvent, RunStepView
 from novel.appendlog import append_line
+from novel.cli import exit_codes as X
 from novel.orchestrator import nodes as N
 from novel.orchestrator.jobs import service_dir
 
@@ -89,7 +90,7 @@ def fold(events: list[ProgressEvent], *, now: int | None = None) -> list[RunStep
     """事件流 → `PIPELINE_STEPS` 的当前样子。**折叠规则只有这一处。**
 
     同一节点取**最后**一条事件：`start` 无 `end` ⇒ `running`（`elapsed=now-ts`）；
-    `end` ⇒ 按退出码 `ok` / `failed`；无事件 ⇒ `pending`。
+    `end` ⇒ 按退出码 `ok` / `landed_red` / `failed`；无事件 ⇒ `pending`。
     ⚠ 修复回路里同一节点会跑多次——进度屏只关心**最近一次**，
     历史在 `events_tail` 里，不在这里折。
     ⚠ 调用方传入前应按 sid 过滤；本函数不猜「这些事件是哪些书的」。
@@ -107,9 +108,10 @@ def fold(events: list[ProgressEvent], *, now: int | None = None) -> list[RunStep
         elif e.phase == 'start':
             beacon, last_exit, last_ts, elapsed = 'running', None, e.ts, now - e.ts
         else:
-            beacon = 'ok' if e.exit_code == 0 else 'failed'
+            beacon = ('ok' if e.exit_code == X.OK else
+                      'landed_red' if X.landed_but_red(e.exit_code) else 'failed')
             last_exit, last_ts, elapsed = e.exit_code, e.ts, None
-        assert beacon in BEACON_STATES          # 折叠出口不许长出第五个值
+        assert beacon in BEACON_STATES          # 折叠出口只许登记过的值
         steps.append(RunStepView(
             seq=seq, node=node, label=NODES[node].label,
             paid=N.is_paid(node, ()),

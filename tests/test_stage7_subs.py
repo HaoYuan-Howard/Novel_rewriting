@@ -25,11 +25,53 @@ from novel.errors import BlockingFindingsUnresolved, TerminalState
 from novel.stages.stage7 import checks
 from novel.stages.stage7 import rename
 from novel.stages.stage7.subs import (
-    apply_subs, mask_known, residual_scan, sub_table, surface_hits,
+    apply_subs, derived_alias_scan, mask_known, residual_scan, sub_table, surface_hits,
+    unclaimed_residual_keys,
 )
 
 # 「阿禾」⊂「阿禾姊姊」· 「青禾」⊂「孟青禾」——嵌套是本层全部风险的来源。
 CH1 = '阿禾姊姊回来了。孟青禾站在门口，青禾轻轻应了一声，阿禾没有回头。'
+
+
+def test_derived_alias_probe_catches_name_tail_nickname_without_auto_replacing():
+    characters = [{
+        'char_id': 'char_001', 'old_canonical': '谢箬', 'new_canonical': '苏瑶',
+        'renamed': True, 'aliases': [],
+    }]
+
+    rows = derived_alias_scan([('ch6', '箬姐姐替她掩上房门。')], characters)
+
+    assert [(row['unit'], row['suggest']) for row in rows] == [('箬姐姐', '瑶姐姐')]
+    findings = checks.rename_findings(
+        name_map={'surname_map': {}, 'characters': characters,
+                  'extra_subs': [], 'subs': {}, 'kept': []},
+        subs={}, problems=[], applied={}, residual=[], baseline={}, registry={},
+        pre_target='', source_text='', residual_keys=set(), stem_noise={},
+        family_members={}, dup=[], missing=[], invalids=[],
+        post_units=[('ch6', '箬姐姐替她掩上房门。')], title_line='书名语义需人工确认',
+        derived_aliases=rows)
+    hit = [row for row in findings if row.rule == 'rn_derived_alias_candidate']
+    assert len(hit) == 1 and '箬姐姐→瑶姐姐' in hit[0].detail
+
+
+def test_derived_alias_probe_with_ambiguous_new_tail_refuses_to_guess():
+    characters = [
+        {'char_id': 'char_001', 'old_canonical': '谢箬', 'new_canonical': '苏瑶',
+         'renamed': True, 'aliases': []},
+        {'char_id': 'char_002', 'old_canonical': '陆箬', 'new_canonical': '顾宁',
+         'renamed': True, 'aliases': []},
+    ]
+    rows = derived_alias_scan([('ch1', '箬姐姐来了。')], characters)
+    assert len(rows) == 1 and rows[0]['suggest'] is None
+
+
+def test_derived_alias_probe_masks_an_explicitly_kept_long_surface():
+    characters = [{
+        'char_id': 'char_001', 'old_canonical': '谢箬', 'new_canonical': '苏瑶',
+        'renamed': True, 'aliases': [],
+    }]
+    assert derived_alias_scan(
+        [('ch1', '箬姐姐来了。')], characters, kept={'箬姐姐'}) == []
 
 
 def test_edit_template_is_a_registry_encoded_strict_v1_artifact():
@@ -211,6 +253,15 @@ def test_no_chaining_a_to_b_to_c():
 def test_empty_subs_is_identity():
     assert apply_subs('原样', {}) == ('原样', {}, [])
     assert apply_subs('', {'甲': '乙'}) == ('', {}, [])
+
+
+def test_generated_placeholder_is_not_mistaken_for_an_old_surface_residual():
+    """门牌号 `001` 会合法地出现在 `char_001` 占位符里；只看裸字面会让整本假红。"""
+    subs = {'001': '⟦char_001_00⟧'}
+    after, _counts, claimed = apply_subs('门牌号001', subs)
+
+    assert unclaimed_residual_keys(after, subs, claimed) == set()
+    assert unclaimed_residual_keys(after + '，旧门牌001仍在', subs, claimed) == {'001'}
 
 
 def test_claimed_covers_identity_entries_too():

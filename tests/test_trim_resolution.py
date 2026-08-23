@@ -142,7 +142,7 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
     assert len(raw['audit_sha256']) == 64
     assert 'model' not in raw['_provenance']
 
-    # Even a valid audit rewrite with unchanged before/after identities changes
+    # Even a valid audit rewrite with an unchanged before identity changes
     # the complete artifact digest and therefore reopens verification.
     _write_audit(book, audit.model_copy(update={'reason': '同一正文，审计说明已更新'}))
     assert [row.chapter for row in _trim_rows(str(base))] == [3]

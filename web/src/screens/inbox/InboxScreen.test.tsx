@@ -19,10 +19,21 @@ describe('InboxScreen verification copy', () => {
           rule: 'hook_semantic_review',
           what: '语义复核尚未闭合',
           how: '回到文案屏补决定与证据',
+          attention: 'pending',
+          delivery_effect: 'disclosure',
+          decision: null,
         },
       ],
       counts: { ...base.counts, verification: 1 },
       total: base.total + 1,
+      attention_counts: {
+        ...base.attention_counts,
+        pending: base.attention_counts.pending + 1,
+      },
+      delivery_counts: {
+        ...base.delivery_counts,
+        disclosure: base.delivery_counts.disclosure + 1,
+      },
     })
     vi.spyOn(api, 'getCheck').mockImplementation((_sid, kind) =>
       mockApi.getCheck(SAMPLE_SID, kind),

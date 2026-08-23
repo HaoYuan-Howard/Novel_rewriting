@@ -26,8 +26,10 @@ import re
 from collections import Counter
 
 from contracts.invariants import (
-    RESIDUAL_CONTEXT_CHARS, RESIDUAL_HIGH_STEMS, RESIDUAL_HIT_CHARS,
+    DERIVED_ALIAS_SUFFIXES, RESIDUAL_CONTEXT_CHARS, RESIDUAL_HIGH_STEMS,
+    RESIDUAL_HIT_CHARS,
 )
+from novel.core.naming import strip_distinguisher
 
 
 def sub_table(subs: dict[str, str],
@@ -104,6 +106,26 @@ def apply_subs(text: str | None, subs: dict[str, str],
     return ''.join(out), counts, claimed
 
 
+def unclaimed_residual_keys(text: str,
+                            keys: dict[str, str] | set[str] | frozenset[str],
+                            claimed: list[tuple[int, int]]) -> set[str]:
+    """返回落在替换器认领区间之外的键。
+
+    不能直接写 ``key in text``：替换结果本身可能合法地包含旧键字面。例如门牌号
+    ``001`` 会出现在恒等基线生成的 ``⟦char_001_00⟧`` 占位符里；那段区间是
+    替换器刚刚写出的，不是未替换残留。认领坐标是 `apply_subs` 的既有契约，
+    正式改名与恒等预检必须共用这一把尺子。
+    """
+    residual: set[str] = set()
+    for key in keys:
+        for match in re.finditer(re.escape(key), text):
+            if not any(start <= match.start() and match.end() <= end
+                       for start, end in claimed):
+                residual.add(key)
+                break
+    return residual
+
+
 def surface_hits(universe: set[str] | frozenset[str],
                  targets: list[str] | tuple[str, ...]) -> Counter:
     """每个称呼在**替换目标**里的独立命中数（单次扫描，最长优先）。
@@ -140,6 +162,55 @@ def mask_known(text: str | None, surfaces: set[str] | frozenset[str]) -> str:
     pat = re.compile('|'.join(re.escape(s)
                               for s in sorted(surfaces, key=len, reverse=True)))
     return pat.sub(lambda m: '　' * len(m.group()), text or '')
+
+
+def derived_alias_scan(
+    post_units: list[tuple[str, str]],
+    characters: list[dict],
+    kept: set[str] | frozenset[str] | tuple[str, ...] | list[str] = (),
+) -> list[dict]:
+    """扫描「旧名字尾字 + 关系后缀」这类人物表可推导的漏网 surface。
+
+    例：`谢箬→苏瑶` 能推出候选 `箬姐姐→瑶姐姐`。它不含旧姓，
+    `residual_scan` 按构造看不到；又未必在 registry 里，完整 surface 替换也够不着。
+
+    ⚠ 只报候选，不自动替换。若同一个旧尾字从人物表推得多个新尾字，`suggest=None`，
+    如实交给人裁决；显式 kept 的长称呼先等长掩码，避免把“决定保留”重报成漏网。
+    """
+    suggestions: dict[str, set[str]] = {}
+    for character in characters:
+        if not character.get('renamed'):
+            continue
+        pairs = [(character.get('old_canonical'), character.get('new_canonical'))]
+        pairs.extend((row.get('old'), row.get('new'))
+                     for row in (character.get('aliases') or []))
+        for old, new in pairs:
+            old = strip_distinguisher((old or '').strip())
+            new = strip_distinguisher((new or '').strip())
+            if len(old) < 2 or len(new) < 2 or old[-1] == new[-1]:
+                continue
+            for suffix in DERIVED_ALIAS_SUFFIXES:
+                suggestions.setdefault(old[-1] + suffix, set()).add(new[-1] + suffix)
+
+    kept_set = {surface for surface in kept if surface}
+    out: list[dict] = []
+    for where, text in post_units:
+        searchable = mask_known(text, kept_set)
+        for old in sorted(suggestions, key=lambda value: (-len(value), value)):
+            values = suggestions[old]
+            suggestion = next(iter(values)) if len(values) == 1 else None
+            for match in re.finditer(re.escape(old), searchable):
+                start = match.start()
+                out.append({
+                    'where': where,
+                    'unit': old,
+                    'suggest': suggestion,
+                    'context': (text or '')[
+                        max(0, start - RESIDUAL_CONTEXT_CHARS):
+                        start + len(old) + RESIDUAL_CONTEXT_CHARS
+                    ].replace('\n', ' '),
+                })
+    return out
 
 
 def residual_scan(pre_units: list[tuple[str, str]], post_units: list[tuple[str, str]],

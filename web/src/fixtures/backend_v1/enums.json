@@ -67,6 +67,13 @@
   "failed",
   "unknown"
  ],
+ "agent_delivery_outcome": [
+  "ready",
+  "ready_with_disclosures",
+  "stopped",
+  "failed",
+  "unknown"
+ ],
  "job_event_kinds": [
   "started",
   "step",
@@ -447,18 +454,28 @@
   "payoff_preview",
   "scene_punchline"
  ],
- "hook_approved_approaches": [
-  "source_architecture",
+ "hook_retired_approaches": [
+  "source_architecture"
+ ],
+ "hook_recipe": [
   "payoff_preview",
   "scene_punchline",
-  "human_edit"
+  "scene_punchline"
+ ],
+ "hook_current_approaches": [
+  "payoff_preview",
+  "scene_punchline"
+ ],
+ "hook_slots": [
+  "c1",
+  "c2",
+  "c3"
  ],
  "hook_semantic_states": [
   "uncertain",
   "unreviewed"
  ],
  "hook_approach_notes": {
-  "source_architecture": "原作文案结构 —— 保住原文的信息次序、升级节拍、反差与最后一击，换成重写正文的声线和全新措辞",
   "payoff_preview": "兑现预告 —— 从全书挑最有吸引力的后期兑现或反转作预告，制造「怎么走到这一步」的阅读欲",
   "scene_punchline": "场面重击 —— 用一个可视、可听的具体场面或对白砸出核心关系，以人物反应、危险或笑点收尾"
  },
@@ -479,6 +496,26 @@
  "residual_adoption_confidence": [
   "high"
  ],
+ "derived_alias_suffixes": [
+  "姐姐",
+  "哥哥",
+  "妹妹",
+  "弟弟",
+  "姊姊",
+  "兄长",
+  "阿姐",
+  "阿哥",
+  "姑娘",
+  "公子"
+ ],
+ "inbox_attention": [
+  "pending",
+  "reviewed_retained"
+ ],
+ "inbox_delivery_effect": [
+  "blocking",
+  "disclosure"
+ ],
  "free_entries": {
   "--dry-run": "只打印将要发出去的东西，不调用、不写盘",
   "--check-only": "按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零",
@@ -494,10 +531,12 @@
   "--wontfix": "把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用",
   "--retain-pretrim": "人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，0 次 LLM 调用（不是 0 人工成本）",
   "--emit-edit-template": "向 stdout 输出带当前 schema version 的 stage7 人工编辑空壳，不写盘",
+  "--validate-edit": "按 stage7 apply-edit 的同一构建与判定链预检人工编辑，不写盘",
+  "--emit-review-template": "向 stdout 输出绑定当前 stage2 全局复核项 hash/evidence 的安全 UNVER 决策骨架，不写盘",
+  "--emit-review-workpack": "向 stdout 输出 Stage2 逐项主体与原文精确命中上下文；只辅助人工核验，不自动做 PASS/FAIL",
   "--adopt-residual": "显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链"
  },
  "paid_flags": {
-  "--full-extract": "stage2 全局底座、逐章蓝图与 stage3 文风画像并发首跑",
   "--shallow-rest": "stage5 把未选为深度重构的其余章节交给浅层写手",
   "--repair-surface-habits": "stage3 表层习惯的定向返工——它要再调一次模型",
   "--revise": "stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手",
@@ -516,6 +555,7 @@
  "valued_flags": {
   "--deep": "深度重构章节（逗号分隔；与 --shallow-rest 成对使用）",
   "--apply-edit": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+  "--validate-edit": "要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）",
   "--apply-edit-plan": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
   "--review-decisions": "stage2/global_review 的人工决策集（相对当前书目录）",
   "--apply-candidate-plan": "审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）",
@@ -529,13 +569,15 @@
   "--adopt-residual": "只接受 `high`；采纳无冲突、未覆盖且 unit/suggest 完整的残留建议"
  },
  "write_effects": {
-  "--full-extract": "并发写 stage2/global_grounding.json、stage2/chapter_blueprints.json 与 stage3/style_grounding.json",
   "--shallow-rest": "按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿",
   "--dry-run": "",
   "--check-only": "",
   "--measure-only": "",
   "--names-only": "",
   "--emit-edit-template": "",
+  "--validate-edit": "",
+  "--emit-review-template": "",
+  "--emit-review-workpack": "",
   "--adopt-residual": "重写 stage7/name_map.json，清旧审批并退休现有成书",
   "--remeasure": "重算的 measurable 写回正式产物（其余字段不动）",
   "--recheck": "刷新已有成稿的指标，并重拼 draft.md",
@@ -611,6 +653,7 @@
   "pending",
   "running",
   "ok",
+  "landed_red",
   "failed"
  ],
  "agent_run_event_kinds": [
@@ -739,9 +782,10 @@
     "--purge-role",
     "--resample",
     "--revalidate",
-    "--full-extract",
     "--apply-edit",
     "--review-decisions",
+    "--emit-review-template",
+    "--emit-review-workpack",
     "--actor",
     "--reason"
    ],
@@ -932,6 +976,7 @@
     "--revalidate",
     "--emit-edit-template",
     "--adopt-residual",
+    "--validate-edit",
     "--actor",
     "--reason"
    ],
@@ -1225,20 +1270,6 @@
   {
    "kind": "stage2.global",
    "mode": null,
-   "label": "stage2 全书级抽取 --full-extract",
-   "extra": [
-    "--full-extract"
-   ],
-   "paid": true,
-   "free_flag": null,
-   "writes": "并发写 stage2/global_grounding.json、stage2/chapter_blueprints.json 与 stage3/style_grounding.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取 --apply-edit",
    "extra": [
     "--apply-edit"
@@ -1262,6 +1293,34 @@
    "writes": "stage2/global_grounding.json · stage2/global_review.json",
    "writes_disk": true,
    "needs_value": "stage2/global_review 的人工决策集（相对当前书目录）",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "mode": null,
+   "label": "stage2 全书级抽取 --emit-review-template",
+   "extra": [
+    "--emit-review-template"
+   ],
+   "paid": false,
+   "free_flag": "--emit-review-template",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage2.global",
+   "mode": null,
+   "label": "stage2 全书级抽取 --emit-review-workpack",
+   "extra": [
+    "--emit-review-workpack"
+   ],
+   "paid": false,
+   "free_flag": "--emit-review-workpack",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
    "required_inputs": []
   },
   {
@@ -2242,6 +2301,20 @@
    "writes": "重写 stage7/name_map.json，清旧审批并退休现有成书",
    "writes_disk": true,
    "needs_value": "只接受 `high`；采纳无冲突、未覆盖且 unit/suggest 完整的残留建议",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage7.rename",
+   "mode": null,
+   "label": "stage7 人名表 --validate-edit",
+   "extra": [
+    "--validate-edit"
+   ],
+   "paid": false,
+   "free_flag": "--validate-edit",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": "要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）",
    "required_inputs": []
   },
   {

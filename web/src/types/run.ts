@@ -5,11 +5,11 @@
  */
 
 /**
- * 信标四态：这条命令跑没跑完、退出码是什么。
+ * 信标五态：这条命令跑没跑完、退出码是什么。
  * 它是**观察轨迹不是判据结论** —— ok 只念作「跑完（exit 0）」，
  * 合不合格永远看各层屏的 badge，这一屏不做判定。
  */
-export type RunBeacon = 'pending' | 'running' | 'ok' | 'failed'
+export type RunBeacon = 'pending' | 'running' | 'ok' | 'landed_red' | 'failed'
 
 export interface RunStep {
   seq: number

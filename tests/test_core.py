@@ -10,7 +10,9 @@ test_core.py —— `novel/core/` 里那些**确定性算子**。
 """
 from __future__ import annotations
 
-from contracts.invariants import ENDING_SHAPES, HOOK_APPROACHES, HOOK_APPROACH_NOTES, SEP_BANDS
+from contracts.invariants import (
+    ENDING_SHAPES, HOOK_APPROACHES, HOOK_APPROACH_NOTES, HOOK_CURRENT_APPROACHES,
+    SEP_BANDS,)
 from novel.core.bands import BAND_SEP, ending_shape, sep_band_of_text
 from novel.core.facts import (
     NUM_UNIT, locate_secret, num_unit_keys, num_value, secret_contains, secret_keywords,
@@ -448,10 +450,16 @@ def test_the_naming_family_shares_one_key_space():
 
 # ── 取值面 ────────────────────────────────────────────────────────────────
 
-def test_hook_approach_notes_cover_exactly_the_approaches():
-    """加一种写法而忘了写说明 ⇒ prompt 渲染期 `KeyError`，所以在这里先红。"""
-    assert tuple(HOOK_APPROACH_NOTES) == HOOK_APPROACHES
+def test_hook_approach_notes_cover_exactly_the_current_recipe():
+    """加一种写法而忘了写说明 ⇒ prompt 渲染期 `KeyError`，所以在这里先红。
+
+    ⚠ 说明覆盖的是**在编写法**（配方里出现过的），不是整个取值面：取值面还留着
+    已退场的写法给存量产物读，而说明是发给模型的东西——退场就是不再发它。
+    """
+    assert tuple(HOOK_APPROACH_NOTES) == HOOK_CURRENT_APPROACHES
     assert all(v.strip() for v in HOOK_APPROACH_NOTES.values())
+    assert set(HOOK_CURRENT_APPROACHES) < set(HOOK_APPROACHES), \
+        '取值面必须真的比在编面宽——一样宽就说明退场那一格没落到取值面上'
 
 
 def test_terminal_punct_has_one_home():

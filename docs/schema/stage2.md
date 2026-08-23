@@ -235,7 +235,9 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 - `stage2.global`：主路径生成全书抽取；`--purge-role` 付费重划 `role/fate`；
   `--resample` 仅在已有 `global_grounding.INVALID.json` 时绕过同参数缓存，付费重采整份响应；
   `--renormalize` 仅对**已符合当前 schema**的产物重算代码派生字段；
-  `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）。
+  `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）；
+  `--emit-review-template` stdout-only 从当前 `global_review.json` 投影逐项 hash/evidence，
+  默认全部 `UNVER`，原样应用也不会打开事实闸。
 - `stage2.blueprint`：逐章生成；默认 `extraction-ir-v2` 每章发两相请求——第一相同时列
   `micro_events`（完整回忆层）与 `beats`（因果拍压缩层），两列止段严格递增且落到章尾，
   beat 的止段必须取自 micro-event 止段；第二相只能在代码冻结的 beat 边界上填

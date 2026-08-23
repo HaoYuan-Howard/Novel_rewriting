@@ -441,8 +441,40 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 
 ### TODO-31 · 生成侧确定性化的 Stage7 余项
 
+
 - [ ] Stage7 家族/宅邸称呼从 `surname_map` 确定性派生 `X家` / `X府`；
       失败样本是旧 Flash 实验臂里 35 条高置信残留（`孙家/孙府/宋家/宋府`）。
+
+### TODO-32 · flash 迁移三本书的未收口项（诚实清单）
+
+2026-08-19/20 flash 臂三本书（`outputs/_ab/flash/`）旧代码下曾成书两本、stopped 一本，
+未收口事项逐条挂着。⚠ 2026-08-23 起 Stage2 typed review 成为所有下游付费执行、组装与下载的
+统一硬闸；下述 verification 在现役代码下会明确阻断交付，旧 txt 的存在不再构成通行证。
+
+- [ ] **`把夫君做成丧尸后_1995972900595979415` 缺终审包**。主链跑完、成书已产
+      （19 章 / 12,074 字，sha1 `abd21462…`），八项逐字对账已做：①②③⑤⑦ pass；
+      ④ 配置面命中 4 条 `kept` 内嵌旧名但**交付面 0**（旧姓「孙」「宋」在成书里
+      各 0 次，那 4 条称呼正文出现 0 次）。按模板
+      `.claude/skills/novel-pipeline-operator/assets/final-review-template.md`
+      补写 `<书名>_review.md` 落书目录根；代批凭据在作业记录与
+      `<base>/_service/ledger.jsonl` 里，逐项引用，不凭记忆补。
+- [ ] **三本书 verification 全部未销账**（无情道 70 · 把夫君 88 · 男宠 47）。
+      0 成本入口是 `stage2.global --review-decisions <书目录内 json>`，逐项
+      `actor + 理由 + subject_sha256`。**批量盖章等于把没有证据的判断写成客观
+      通过，本仓明令禁止**——谁销谁逐条真核。⚠ pro 对照臂的 `verification=3`
+      是销账后余额（盘上有 56 条逐项理由的 `global_review_decisions.json`），
+      `ab_compare` 里 ⑤ 那行 3 vs 70 不可直接比较。
+- [ ] **「最终稿产自哪一档」变成一等公民读数**：同一 `(node, chapter)` 按 `at`
+      排序取最后一条 `outcome=='ok'` 的 `reasoning_effort`/`thinking`。实测读数
+      （无情道 flash 臂 10/23 章产自降档档位、含 deep 臂 ch1/ch3；把夫君 8/19；
+      pro 对照 0/23）目前只能从 ledger 手算，任何报告里都没有。
+- [ ] **两处原文短语被逐字带进成书**（无情道 ch12，`stage3.micro_quote` 报 3 处：
+      1 处设计内保真点、2 处写手照抄了 `style_grounding.json` 的文风举例）。
+      pro 臂同样 2/3 ⇒ 流水线固有特征不是 flash 退步。修它要
+      `stage3.style --apply-edit`，代价是下游缓存全废、stage4+stage5 整层重付——
+      已披露未修，修不修由用户裁决。
+- [ ] 未测项：flash 修掉「空正文降档」（`MAX_SAMPLES_PER_RUNG`）之后的真实
+      `high` 档能力——此前 3 本里 2 本的 `stage4.plan` 从未在 `high` 档被评估过。
 
 ⚠⚠ **`TODO-38` / `TODO-39` 这两个号在 2026-08-22 被两条分支各分配过一次，含义不同。**
 两边的 commit 信息都已经写死，改号只会让活着的条目与创建它的 commit 对不上 ⇒ 只标注：

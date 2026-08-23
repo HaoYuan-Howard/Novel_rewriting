@@ -40,7 +40,7 @@ from contracts.artifacts import (  # noqa: E402
     STAGE1_PARTITION_REPORT,
     STAGE2_GLOBAL_GROUNDING,
 )
-from contracts.invariants import HOOK_APPROACHES, NODES  # noqa: E402
+from contracts.invariants import HOOK_SLOTS, NODES  # noqa: E402
 from contracts.schema import artifact_spec, decode_artifact  # noqa: E402
 from contracts.schema.stage0 import RemovalReport  # noqa: E402
 from contracts.schema.stage1 import HookCopy, MainText, PartitionReport  # noqa: E402
@@ -326,10 +326,12 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
         # 收缩臂整臂下线后本层只剩逐章一次调用；超上限只落 audit，0 次调用。
         base = chapters
     elif node == 'stage6.hook':
-        # The initial response always contains one candidate per registered
-        # approach.  Every initially HARD candidate can receive one fixed
-        # low/no-thinking refresh, so all three may trigger independently.
-        conditional = len(HOOK_APPROACHES) * HOOK_RETRY_LIMIT
+        # The initial response always fills every slot.  Every initially HARD
+        # candidate can receive one fixed low/no-thinking refresh, so all three
+        # may trigger independently.  ⚠ The bound is the number of *slots*, not
+        # the number of registered approaches: the current recipe repeats one
+        # approach, so counting approaches would under-count the retry ceiling.
+        conditional = len(HOOK_SLOTS) * HOOK_RETRY_LIMIT
         conditional_wire = conditional * len(HOOK_RETRY_RUNGS) * MAX_SAMPLES_PER_RUNG
         condition = (
             '初始三候选中每条含 HARD 的候选最多一次 low/no-thinking 定向重试；'

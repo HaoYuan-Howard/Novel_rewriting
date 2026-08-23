@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Outlet, useLocation, useMatch } from 'react-router-dom'
 import type { ScreenName } from '@/constants/vocabulary'
 import { useChrome } from '@/hooks/useChrome'
@@ -45,19 +46,27 @@ function useWhere() {
 export function AppShell() {
   const { sid, screen, ordinal } = useWhere()
   const { drawerOpen, notices } = useChrome()
+  const [railCollapsed, setRailCollapsed] = useState(false)
   useHotkeys()
 
   return (
     <div
-      className="grid min-h-screen min-w-full bg-page"
+      className="grid min-h-screen min-w-full bg-page transition-[grid-template-columns] duration-200 ease-out"
       style={
         {
-          gridTemplateColumns: 'var(--rail-w) 1fr',
+          gridTemplateColumns: 'var(--rail-current-w) minmax(0, 1fr)',
+          ['--rail-current-w' as string]: railCollapsed ? '58px' : 'var(--rail-w)',
           ['--drawer-h' as string]: drawerOpen ? '190px' : '60px',
         } as React.CSSProperties
       }
     >
-      <Rail sid={sid} screen={screen} ordinal={ordinal} />
+      <Rail
+        sid={sid}
+        screen={screen}
+        ordinal={ordinal}
+        collapsed={railCollapsed}
+        onToggle={() => setRailCollapsed((value) => !value)}
+      />
       <main
         className="min-w-0 transition-[padding-bottom] duration-200 ease-out"
         style={{ paddingBottom: 'var(--drawer-h)' }}

@@ -78,6 +78,65 @@ def _lcs_detail(candidate: str, reference: str, *, reference_name: str) -> tuple
     )
 
 
+#: 结构距离读数并排展示的几档窗口。**不是阈值**，是让方差看得见的刻度。
+#: ⚠ 20 那一档与 `REUSE_MAX` 守的是同一件事（`hook_reuses_source`），
+#: 放在同一行里报，是为了让「闸报 0 违规」与「结构其实很近」这两个读数**挨着出现**。
+SOURCE_DISTANCE_WINDOWS = (4, 8, 20)
+
+
+def _source_distance_detail(body: str, src_hook: str) -> tuple[str, list[str]]:
+    """文案与原作文案段的**呈现结构距离**读数。**度量，不是门。**
+
+    【为什么需要它】`hook_reuses_source` 只看「连续 20 个内容字符是否相同」，
+    而 `R-9.11` 的尾注**明写着允许**学结构、节拍、对白密度与最后一击的功能。
+    两条合起来留了一个看不见的地带：一条候选可以逐句改写措辞、却完整复用原作的
+    信息出场顺序并落在同一句收尾上——闸报 0 违规，而它离原作其实很近。
+    实测一本书三条候选：最长逐字重合 10 / 6 / 3 字（闸线 20），4 字窗口重合率
+    19.7% / 8.2% / 0.0%，**贴合度差 20 倍，而闸对三条一律报 0 违规**。
+
+    ⚠⚠ **当前不给阈值，这是刻意的。** 本仓的机械探针有过跑间方差极大的实测
+    （同条件重跑同一个探针从 4.41 漂到 0.00），而结构贴近**本身不违约**——
+    `source_architecture` 这条策略是被 prompt 明确要求继承原作结构的。
+    要不要设线，得先有多轮采样量出噪声基线，再由人裁决。同
+    `hook_quote_shape` 那条注释的纪律。
+
+    ⚠ 窗口重合率一律走 `core.text.window_overlap`，最长重合走 `core.spans.lcs`
+    ——与 `hook_reuses_source` **同一对函数**。这里另写一份"内容字符提取"，
+    两处口径就会漂，而漂的表现是其中一处悄悄不再拦。
+    """
+    rates: list[str] = []
+    for window in SOURCE_DISTANCE_WINDOWS:
+        rate = window_overlap(body, src_hook, window=window)
+        rates.append(f'{window} 字 '
+                     + ('量不了' if rate is None else f'{rate:.1%}'))
+    _start, longest = lcs(norm(body), norm(src_hook))
+
+    def last_line(text: str) -> str:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return lines[-1] if lines else ''
+
+    cand_last, src_last = last_line(body), last_line(src_hook)
+    _s, tail_shared = lcs(norm(cand_last), norm(src_last))
+    tail = (f'末行与原作末行最长逐字重合 {tail_shared} 字'
+            if cand_last and src_last else '末行无法比对')
+    return (
+        f'与原作文案段的窗口重合率：{" / ".join(rates)}；'
+        f'最长逐字重合 {longest} 字（`hook_reuses_source` 的闸线是 20）；{tail}。'
+        f'**度量不是门**：结构贴近本身不违约（`R-9.11` 尾注明许学结构），'
+        f'阈值要先量跑间方差再谈',
+        [f'{longest}/{tail_shared}'],
+    )
+
+
+def _source_distance_finding(body: str, src_hook: str | None) -> Finding:
+    """`hook_source_distance` 的唯一构造口；短文本也必须留下读数。"""
+    if src_hook:
+        detail, evidence = _source_distance_detail(body, src_hook)
+    else:
+        detail, evidence = '本书没有原作文案段可比，结构距离量不了', []
+    return finding('hook_source_distance', detail=detail, evidence=evidence)
+
+
 def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | None,
                   characters: dict | None, src_hook: str | None,
                   style_hook: dict | None, quote_problems: list[str]) -> list[Finding]:
@@ -97,6 +156,9 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
         fs.append(finding('hook_empty',
                           detail=f'文案只有 {len(nb)} 个内容字符——没写出来',
                           evidence=[body[:40]] if body else []))
+        # `R-9.23` 要求这一读数无条件报出。短文本虽不能继续跑其余语义噪声探针，
+        # 仍然能与原作文案比较；漏掉它会被 metric 聚合洗成“扫描过且 OK”。
+        fs.append(_source_distance_finding(body, src_hook))
         return fs                        # 空的就不必往下判了，后面全是噪声
 
     if body.rstrip()[-1] not in TERMINAL_PUNCT:
@@ -265,6 +327,13 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
                    else '')
                 + '。仍是度量不是门：禁令已撤，但要不要设阈值得先量方差'),
         evidence=[f'{gq_n}/{gq_max}']))
+
+    # ── ⑩ 结构距离：**度量，不是门** ───────────────────────────────────────
+    #
+    # ⚠ 与 ⑨ 并排放，因为它们回答的是同一类问题（"这条候选像谁"），
+    #   而两条都刻意不给阈值。没有原作文案段时**不静默跳过**：
+    #   "没得比"与"比过了很远"必须分得开。
+    fs.append(_source_distance_finding(body, src_hook))
     return fs
 
 
@@ -348,7 +417,7 @@ _PER_TEXT_JUDGED = (
     'hook_ending_shape',
 )
 #: 逐条文本判、但 sev 是 metric 的那两条。
-_PER_TEXT_METRIC = ('hook_secret_literal', 'hook_quote_shape')
+_PER_TEXT_METRIC = ('hook_secret_literal', 'hook_quote_shape', 'hook_source_distance')
 
 
 def check(*, texts: list[tuple[str, str, list[Finding]]], mat: Material,

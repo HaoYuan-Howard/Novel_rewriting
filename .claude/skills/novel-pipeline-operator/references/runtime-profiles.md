@@ -4,10 +4,11 @@
 
 ## 共同规则
 
-- cwd 保持仓根；`--base` 永远使用绝对路径。**cwd 会被别的工具改掉**：宿主的多个 shell 工具
-  常常共享同一个工作目录，在其中任意一个里 `cd` 进产物目录，随后的 `-m novel.cli` 就会
-  `ModuleNotFoundError: No module named 'novel'`。⇒ **每次 shell 调用都以「切回仓根」开头**，
-  读产物一律用绝对路径，不要 `cd` 过去。
+- cwd 保持仓根；`--base` 永远使用绝对路径。**cwd 会被别的工具改掉**：交互宿主的多个 shell
+  工具可能共享工作目录，此时每次 shell 调用都显式指定/切回仓根；headless launcher 已把
+  子进程 cwd 钉在仓根，且 Bash 白名单要求命令以项目 Python 开头，因此不要在命令前拼 `cd`。
+  两种宿主都不得 `cd` 进产物目录，读产物一律使用绝对路径，否则随后的 `-m novel.cli` 会报
+  `ModuleNotFoundError: No module named 'novel'`。
 - 使用当前项目实际解释器执行 `-X utf8 -u -m novel.cli`，不要切到 base 环境。
   **这条同样管临时诊断脚本**：读产物 JSON、import `contracts.*` / `novel.*` 的一次性
   `python -c` 也必须用 `<PY>`。裸 `python` 多半解析到另一套环境，症状是
@@ -21,6 +22,9 @@
   别书的作业同时在跑不构成障碍（互斥只落在各自 `sid`），也不需要等它。
 - 对长命令使用宿主提供的持久句柄或足够长的前台超时。每 60 秒以内给出一次状态更新，不用短 timeout 杀进程来模拟更新。
 - 任何宿主中断后先运行 `state`/`inbox`，不要从聊天记忆推断落盘位置。
+- 真跑前先执行 `<PY> -X utf8 -u -m novel.cli doctor --llm-transport`。它使用正式代理与超时，
+  但不发送正文、API key，也不产生模型调用；收到任意 HTTP 状态即证明 DNS/TCP/TLS 通路成立。
+  `SSL UNEXPECTED_EOF` 等连接错误应在这里先复现并修代理/TUN 进程环境，不要烧一次正文请求来诊断网络。
 
 「打点串联」与「重定向后过滤」合起来在 PowerShell 里的写法（把数十 KB 的报告压到个位数行，
 保留全部命中、非 `ok` 状态、来源与告警行）：
@@ -119,6 +123,11 @@ shell 的而非真跑的。判断真伪只看三样，全部指向盘上而不�
 - 标准 `approval` 由本 skill 代批；`redo/unknown` 在两项授权和可验证恢复路径都具备时自行处置，否则安全停止。
 - 只在 launcher 授权的 base 范围写人工输入和终审包。权限拒绝说明动作不在允许面，不换 shell 或路径绕过。
 - 进程日志与生死记录由 launcher 管理；不要手改 `_service/agent_runs.jsonl` 或日志来改变状态。
+- launcher 记录的进程 `state` 与交付 `outcome` 是两根轴：只有 outcome 为 `ready` 或
+  `ready_with_disclosures` 才表示服务端已从盘面复验交付；`exit 0` 本身只表示 Agent 正常退出。
+- 启动 prompt 带代码指纹。每个写盘或付费节点在执行前都用启动 prompt 给出的项目 Python
+  单行命令复算 `novel.prov.code_version()` 并逐字比较；变化时停止。结束终验会再次比较，
+  跨版本 run 不会被判 ready。
 
 当前 launcher 使用两个独立字段：`authorized` 只表示付费授权，`egress_authorized`
 只表示正文外发授权。新 API 请求对 `egress_authorized` 的产品默认值为 `true`，UI 也默认勾选；
