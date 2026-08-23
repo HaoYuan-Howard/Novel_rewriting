@@ -34,7 +34,6 @@ export interface StageColumn {
   isStage5: boolean
   modes: string[]
   done: boolean | null
-  stateLabel: string
 }
 
 export interface BookView {
@@ -43,7 +42,6 @@ export interface BookView {
   chaptersLabel: string
   columns: StageColumn[]
   verdict: string
-  verdictDetail: string
   verdictColor: string
   verdictBg: string
   mtimeLabel: string | null
@@ -77,7 +75,6 @@ function viewOf(n: NovelRow): BookView {
       isStage5: s.key === 'stage5',
       modes,
       done,
-      stateLabel: done === true ? '已完成' : done === false ? '待继续' : '判不了',
     }
   })
 
@@ -100,7 +97,6 @@ function viewOf(n: NovelRow): BookView {
     chaptersLabel: n.chapters === null ? '章数待分章' : n.chapters + ' 章',
     columns,
     verdict: n.summary.text,
-    verdictDetail: n.summary.detail,
     verdictColor: tone.color,
     verdictBg: tone.bg,
     mtimeLabel: n.summary.latest_mtime ? '最近落盘 ' + when(n.summary.latest_mtime) : null,
@@ -110,7 +106,7 @@ function viewOf(n: NovelRow): BookView {
 }
 
 export function useCorpusScreen() {
-  // 10s 一轮：agent 跑书时产物矩阵自己跟进，不用人点「重新读取」
+  // 10s 一轮：agent 跑书时产物矩阵自己跟进，不需要人工刷新页面。
   const q = useQuery({
     queryKey: qk.novels(),
     queryFn: () => api.getNovels(),
@@ -131,16 +127,6 @@ export function useCorpusScreen() {
       { f: 'stale' as FreshnessDisplay, desc: FRESH.stale.desc },
       { f: 'unknown' as FreshnessDisplay, desc: FRESH.unknown.desc },
       { f: 'missing' as FreshnessDisplay, desc: MISSING.desc },
-    ],
-    /** 上传后这本书会走的路 */
-    flow: [
-      { n: '0', t: '扫番外 / 后记 / 作者有话说，确认删除范围' },
-      { n: '1', t: '切分正文与文案 —— 左右对完确认' },
-      { n: '2·3', t: '并行：全局设定 + 逐章骨架 ／ 文风画像' },
-      { n: '4', t: 'stage2 一确认就发起重构计划' },
-      { n: '5', t: '文风 + 计划齐了 → 挑深度章节 → 写作 → 对着判据改' },
-      { n: '6', t: '开篇文案' },
-      { n: '7', t: '人名替换 → 拼装成书 txt' },
     ],
   }
 }

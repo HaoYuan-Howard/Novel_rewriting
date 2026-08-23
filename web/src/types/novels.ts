@@ -52,5 +52,12 @@ export interface NovelsResponse {
   novels: NovelRow[]
 }
 
+export interface TrashNovelResult {
+  sid: string
+  title: string
+  trash_id: string
+  trash_rel: string
+}
+
 /** /api/novels/:sid 的响应就是一条 NovelRow */
 export type NovelOverview = NovelRow

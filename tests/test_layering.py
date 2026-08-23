@@ -239,6 +239,10 @@ _WRITE_ALLOWED = {
     'novel/orchestrator/approvals.py': (
         '人工闸门与深度选章只写 Output/_service/approvals/。它们控制作业是否可启动，'
         '不是小说产物，不进 ARTIFACTS / provenance；原子替换防止并发读到半份状态'),
+    'novel/orchestrator/trash.py': (
+        '项目删除的 CLI 子进程把整本书目录与审批状态原子移入 Output/_service/trash/。'
+        '它不改写任何产物字节；回收站保留原目录、元数据与恢复路径，父服务进程只负责互斥'
+        '和拉起该子进程'),
     'novel/orchestrator/agent.py': (
         'agent 代跑的**子进程日志** `Output/_service/logs/agent-*.log` 按字节追加；'
         '它与 jobs.py 写 _service 同一份理由（「子进程被杀」这条记录只有父进程写得出来），'
@@ -414,6 +418,7 @@ _SERVICE_MUTATORS = {
     ('approvals', 'begin_writing'),
     ('approvals', 'reset'),
     ('approvals', 'backfill_from_disk'),
+    ('trash', 'run'),
 }
 
 
@@ -424,12 +429,13 @@ def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == 'novel.orchestrator':
             for alias in node.names:
-                if alias.name in ('jobs', 'uploads', 'approvals'):
+                if alias.name in ('jobs', 'uploads', 'approvals', 'trash'):
                     module_aliases[alias.asname or alias.name] = alias.name
         elif isinstance(node, ast.ImportFrom) and node.module in (
             'novel.orchestrator.jobs',
             'novel.orchestrator.uploads',
             'novel.orchestrator.approvals',
+            'novel.orchestrator.trash',
         ):
             module = node.module.rsplit('.', 1)[-1]
             for alias in node.names:
@@ -451,7 +457,7 @@ def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
 
 
 def test_service_mutations_are_narrowly_owned_by_mutation_routes():
-    """API 只准备 `_service` 输入并起子进程；视图层保持纯读。新增写入口必须显式改表。"""
+    """API 只准备 `_service` 输入并起作业/回收子进程；视图层保持纯读。新增写入口必须显式改表。"""
     hits = {
         _rel(path): _service_mutator_hits(path)
         for path in _api_files() + _view_files()
@@ -475,6 +481,7 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
             ('jobs', 'run'), ('uploads', 'save_draft_edit'),
             ('uploads', 'discard_edit_plan'), ('approvals', 'approve_gate'),
         },
+        'novel/api/routes/maintenance.py': {('trash', 'run')},
     }
     assert set(hits) == set(expected)
     assert {path: set(values) for path, values in hits.items()} == expected

@@ -53,7 +53,7 @@ export function AgentBatchDialog({
               authorized ? 'bg-spend text-card' : 'bg-line-soft text-ink-2',
             )}
           >
-            {authorized ? '含付费命令' : '免费起步'}
+            {authorized ? '已授权付费节点' : '仅诊断与恢复方案'}
           </span>
           <span
             className={cx(
@@ -162,7 +162,9 @@ export function AgentBatchDialog({
                   : 'cursor-pointer',
               )}
             >
-              {authorized ? '确认开跑（授权付费）' : '开跑这 ' + books.length + ' 本'}
+              {authorized
+                ? '授权并开始跑这 ' + books.length + ' 本'
+                : '批量生成诊断与恢复方案'}
             </button>
           )}
         </div>

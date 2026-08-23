@@ -141,36 +141,51 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
         '不再询问；每条付费命令的判据读数仍逐条留痕并进终审包。'
         if authorized else
         '**付费授权未授予**：不得执行会产生外部模型调用费用的命令；在第一条付费命令之前停下，'
-        '把「跑到哪、为什么停、恢复命令」写进终审包（落点见下），然后结束。')
+        '但仍须完成只读的 state、inbox、下一节点 preview 并创建终审包草稿，把「跑到哪、为什么停、'
+        '恢复命令」写进去（落点见下），然后结束。')
     egress_authorization = (
         '**正文外发授权已授予**：允许把小说正文及其派生上下文发送给外部模型。'
         '这项授权不代表已经授予付费授权。'
         if egress_authorized else
         '**正文外发授权未授予**：不得把小说正文或其派生上下文发送给外部模型；'
-        '即使付费授权已经授予，也必须在首个需要正文外发的步骤前停下并写明恢复命令。')
-    return f"""你在仓库 {REPO_ROOT.as_posix()} 的根目录下工作（cwd 已就位，不要 cd）。
-使用项目 skill `novel-pipeline-operator`：先读
-`.claude/skills/novel-pipeline-operator/SKILL.md` 全文再动手，并按其中“按需加载资源”
-读取工作流契约、代批与终审契约及 headless 运行环境；遇到失败时再读取修复状态机，
-按节点名/rule id 检索经验库。不要依赖旧版章节号或聊天记忆。
+        '即使付费授权已经授予，也只能先完成只读的 state、inbox、下一节点 preview 与终审包草稿，'
+        '并在首个需要正文外发的步骤前停下、写明恢复命令。')
+    return f"""你在仓库 {REPO_ROOT.as_posix()} 的根目录下工作。launcher 已把 cwd 固定在仓根；
+每次 Bash 调用都必须保持在仓根，不得 cd，读取 base 与产物一律使用绝对路径。
 
 任务：把 sid={sid} 这本书端到端跑到 `{book_target}`。
-本次代码指纹：`{code_version}`。运行期间若仓库代码变化，立即停下并在终审包披露；
-服务端结束终验也会比较这个指纹，跨版本运行不会被判为 ready。
+本次启动代码指纹：`{code_version}`。每个写盘节点或付费节点都须在执行前用
+`{py} -X utf8 -c "from novel import prov; print(prov.code_version())"`
+复算并逐字比较；不一致立即停下并在终审包披露。服务端结束终验也会再次比较，
+跨版本运行不会被判为 ready。
 base 目录（--base 恒用下面这个绝对路径）：
 {base_abs}
 
 付费授权：{payment_authorization}
 正文外发授权：{egress_authorization}
 
+启动顺序（不可跳步）：
+1. 先读 `.claude/skills/novel-pipeline-operator/SKILL.md` 全文，并照它的“按需加载资源”读取
+   工作流契约、代批与终审契约及 headless 运行环境；失败时再读修复状态机，按节点名/rule id
+   检索经验库。不要依赖旧版章节号或聊天记忆。
+2. 先运行 `state {sid}` 与 `inbox {sid}`，只按盘上事实确定续跑位置。
+3. 在任何写盘或付费动作前，按 skill 模板创建终审包草稿；以后每次授权判断、闸门裁决、
+   修复与异常都立即更新，不要等结束时凭记忆补写。
+4. 下一步将调用外部模型时，先运行 `doctor --llm-transport`；随后 preview 下一动作，
+   陈述付费/外发边界，再执行 preview 给出的完整步骤并复验。
+
 无人值守纪律：
 - 没有用户可以提问。任何 redo/unknown 或闸门争议，按 skill 的修复状态机与代批契约
   处置并把依据写进终审包；无法安全处置就写清现状后停下——停机是合法结局。
+- 没有可定位证据时必须保留 `UNVER` 或以 `stopped` 结束；不得猜测 PASS、删除 finding、
+  为了“全绿”自行发明阈值，或把 exit 0 当成交付 ready。
 - 打点纪律照工作流契约：主链每条命令与修复回路的每条命令，前后各 `mark` 一次；
   `preview` 不打点。被唤起先 `state {sid}` 判位置再续跑。
 - 命令形态：一律以 `{py}` 前缀开头（权限白名单只认这一个 Bash 形态）；
-  写文件只用 Write/Edit 且只写 base 目录内（其余路径权限层直接拒）。
-- 结束前按 skill 的终审包模板汇编终审包，落点就是这一条路径（不要另起文件名）：
+  正式 stage JSON/TXT、成书、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 与旧 run 输出严禁
+  直接编辑，正式变更只经 `novel.cli`。Write/Edit 只用于 skill 明列的 typed 人工输入和下面
+  唯一终审包，且不得超出 base（其余路径权限层直接拒）。
+- 持续填写并在结束前完成终审包，落点就是这一条路径（不要另起文件名）：
   {review_target}"""
 
 
@@ -398,6 +413,14 @@ class _Pending(NamedTuple):
     authorized: bool
     egress_authorized: bool
     spawn: Spawn | None
+    batch_id: str
+
+
+class _DrainResult(NamedTuple):
+    """一次 drain **为调用它的那一批**实际启动/拒绝了哪些书。"""
+
+    started: list[AgentRunRecord]
+    rejected: list[AgentRejected]
 
 
 #: 待跑队列。**只在内存**——与 `AGENT_REGISTRY` 同一条理由（`R-14.6` 那张表）：
@@ -405,6 +428,10 @@ class _Pending(NamedTuple):
 #: 比没有队列更坏。⇒ 服务重启即清空，界面上照实写「重启不保留」。
 _PENDING_LOCK = threading.Lock()
 _PENDING: list[_Pending] = []
+
+#: 同一时刻只许一个 drain 从队列取书。否则两个批量请求会互相启动对方的项，
+#: 各自响应就无法再满足「running + pending + rejected = 本批提交」的后置条件。
+_DRAIN_LOCK = threading.Lock()
 
 
 def _admit(key: str, run_id: str, registry: JobRegistry) -> None:
@@ -421,39 +448,62 @@ def _admit(key: str, run_id: str, registry: JobRegistry) -> None:
         registry.acquire(key, run_id)
 
 
-def _drain(*, registry: JobRegistry = REGISTRY) -> None:
+def _drain_locked(*, registry: JobRegistry,
+                  reject_batch: str | None = None) -> _DrainResult:
+    """``_DRAIN_LOCK`` 内的真实 drain；返回值只归 ``reject_batch``。"""
+    started: list[AgentRunRecord] = []
+    rejected: list[AgentRejected] = []
+    with _PENDING_LOCK:
+        remaining = len(_PENDING)
+    while remaining > 0:
+        with _ADMIT_LOCK:
+            if len(registry.live()) >= MAX_CONCURRENT:
+                break
+        with _PENDING_LOCK:
+            if not _PENDING:
+                break
+            item = _PENDING.pop(0)
+        remaining -= 1
+        try:
+            record = start(item.base, item.sid, authorized=item.authorized,
+                           egress_authorized=item.egress_authorized,
+                           spawn=item.spawn, registry=registry)
+        except AgentBusy:
+            with _PENDING_LOCK:
+                _PENDING.insert(0, item)
+            break
+        except Exception as exc:                # noqa: BLE001 —— 逐本显式归类
+            if item.batch_id == reject_batch:
+                reason = str(exc).strip() or f'{type(exc).__name__}：agent 启动失败'
+                rejected.append(AgentRejected(sid=item.sid, reason=reason))
+            else:
+                # 受理响应已经返回的旧项没有可回填的 rejected 槽；留在 pending
+                # 才不会静默丢书。挪到队尾，让后面的无冲突书仍有机会启动。
+                with _PENDING_LOCK:
+                    _PENDING.append(item)
+            continue
+        if item.batch_id == reject_batch:
+            started.append(record)
+    return _DrainResult(started=started, rejected=rejected)
+
+
+def _drain(*, registry: JobRegistry = REGISTRY) -> _DrainResult:
     """把队首能起的起起来。由结束的 worker 调用，`enqueue` 受理完也调一次。
 
     ⚠ 两种失败**处理方式相反**，这正是 `AgentBusy` 单独成类的原因：
       · 满闸（`AgentBusy`）⇒ **放回队首**并停下——名额是别人的，等他还回来；
-      · 这本书起不来（同书已有 agent / 该书有 API 作业在写盘）⇒ **丢弃并继续**下一本。
-        留在队里反复重试只会把同一条冲突刷成一片日志，而真正能跑的下一本永远轮不到。
+      · 这本书起不来（同书已有 agent / 该书有 API 作业在写盘）⇒ 移到队尾并继续；
+        已经返回过受理响应的项没有可回填的 rejected 槽，留在 pending 才不会静默丢书。
     """
-    while True:
-        with _ADMIT_LOCK:
-            if len(registry.live()) >= MAX_CONCURRENT:
-                return
-        with _PENDING_LOCK:
-            if not _PENDING:
-                return
-            item = _PENDING.pop(0)
-        try:
-            start(item.base, item.sid, authorized=item.authorized,
-                  egress_authorized=item.egress_authorized,
-                  spawn=item.spawn, registry=registry)
-        except AgentBusy:
-            with _PENDING_LOCK:
-                _PENDING.insert(0, item)
-            return
-        except Exception:                       # noqa: BLE001 —— 见 docstring
-            continue
+    with _DRAIN_LOCK:
+        return _drain_locked(registry=registry)
 
 
 def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
             authorized: bool, egress_authorized: bool,
             spawn: Spawn | None = None,
             registry: JobRegistry = REGISTRY) -> AgentQueueView:
-    """批量受理 N 本：能起的立刻起，起不动的排队。**返回受理后的全景。**
+    """批量受理 N 本：能起的立刻起，起不动的排队。**返回本批的完整分区。**
 
     ⚠ 一本起不来不回滚其余：那本书上有 API 作业在写盘（唯一会失败的原因）
     与「另外八本能不能跑」无关，而抛一个「批量失败」会把已经起来的那几本藏掉——
@@ -461,23 +511,32 @@ def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
     ⇒ 逐本的落点全在返回值里：`running` / `pending` / `rejected` 三者之和 = 你提交的。
     """
     base_abs = os.path.abspath(os.fspath(base))
+    batch_id = jobs.new_job_id()
     rejected: list[AgentRejected] = []
-    for sid in sids:
+    with _DRAIN_LOCK:
+        for sid in sids:
+            with _PENDING_LOCK:
+                queued = {p.sid for p in _PENDING if p.base == base_abs}
+            if sid in queued:
+                rejected.append(AgentRejected(sid=sid, reason='已经在队列里了'))
+                continue
+            if registry.holder(lock_key(sid)) is not None:
+                rejected.append(AgentRejected(sid=sid, reason='这本书已有 agent 在跑'))
+                continue
+            with _PENDING_LOCK:
+                _PENDING.append(_Pending(base_abs, sid, authorized,
+                                         egress_authorized, spawn, batch_id))
+        drained = _drain_locked(registry=registry, reject_batch=batch_id)
+        rejected.extend(drained.rejected)
         with _PENDING_LOCK:
-            queued = {p.sid for p in _PENDING if p.base == base_abs}
-        if sid in queued:
-            rejected.append(AgentRejected(sid=sid, reason='已经在队列里了'))
-            continue
-        if registry.holder(lock_key(sid)) is not None:
-            rejected.append(AgentRejected(sid=sid, reason='这本书已有 agent 在跑'))
-            continue
-        with _PENDING_LOCK:
-            _PENDING.append(_Pending(base_abs, sid, authorized,
-                                     egress_authorized, spawn))
-    _drain(registry=registry)
-    view = queue_view(base, registry=registry)
-    return AgentQueueView(running=view.running, pending=view.pending,
-                          rejected=rejected, max_concurrent=view.max_concurrent)
+            base_pending = [item for item in _PENDING if item.base == base_abs]
+            pending = [
+                AgentPending(sid=item.sid, position=index + 1)
+                for index, item in enumerate(base_pending)
+                if item.batch_id == batch_id
+            ]
+    return AgentQueueView(running=drained.started, pending=pending,
+                          rejected=rejected, max_concurrent=MAX_CONCURRENT)
 
 
 def queue_view(base: str | os.PathLike[str], *,
@@ -518,6 +577,10 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
     key = lock_key(sid)
     _admit(key, run_id, registry)
     try:
+        holder = jobs.REGISTRY.conflicting_holder(sid)
+        if holder is not None:
+            raise JobConflict(
+                f'这本书已有 API 维护/节点作业在跑（{holder}）——等它结束再拉 agent')
         running = [r for r in jobs.records(base)
                    if r.state == 'running' and r.start.sid == sid]
         if running:
