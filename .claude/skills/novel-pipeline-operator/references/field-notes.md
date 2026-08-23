@@ -262,6 +262,12 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 处置：走 `edit_rel` 那四层时把 `--apply-edit` 的编辑文件写进书目录内（`<novel-dir>/<stage>/..._edit.json`），
   传相对书目录的路径或书目录内的绝对路径都可以。被拒时先读报错里算出来的那个绝对路径，
   它才是代码真正解释成的位置；不要靠加 `..` 或换 cwd 绕过去。
+  ⚠⚠ **反过来，`stage5.write` / `stage0.edit` 的改稿要写进 `<base>/_service/edits/`，
+  不要按那四层类比放进 `<novel-dir>/stage5/`。** 它收任意路径 ⇒ 放书目录里**不会报错**，
+  但那四层的编辑文件是登记在 `ARTIFACTS` 里的（所以才必须在书目录内），
+  这两层**刻意没有登记** ⇒ 一份 `stage5/chNN_edit.json` 会让
+  `tests/corpus.py::_classify` 关闭式失败，**这本书从此当不成语料底座**。
+  真发生过：三份改稿留在 `stage5/` 下，那本书的语料验收从此全线跑不动。
 - 验证：命令 exit 0 且新一轮落盘、上一轮归档进 `_rounds/`；操作包里记的是解析后的绝对路径。
 - 依据：`novel/paths.py::edit_rel` 的相对/绝对分支与目录外终态，其 docstring 记明
   `stage5.write` / `stage0.edit` 的例外与 `novel/api/routes/edits.py` 对该例外的依赖。

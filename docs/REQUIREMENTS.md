@@ -872,6 +872,40 @@ view 或前端组件读过它们）。
       ⇒ 挑一个「手上没有正在依赖旧 prompt 的对照实验」的时机单独做。
 - [ ] 同批更新 `tests/test_stage5_prompts.py` 的反漂移守卫（它会红，那是它在正确工作）。
 
+### TODO-44 · shallow 臂在盘上零覆盖 ⇒ 7 条 HARD 里有 1 条默认永远够不着
+
+盘上唯一合格底座 `偶像公寓打工日常_2066575217393144601`（18 章）与它之前那本（19 章，
+已不在盘上）**都是 deep-only**：`stage5/shallow/` 底下只有 `draft.md`，**一份章 JSON 都没有**。
+这不是偶然——2026-08-22 把 `DEFAULT_DEEP` 改成全书闭卷之后，默认路径就不产 shallow 章。
+
+⚠⚠ **不要把「两本书 37 章、7 条 HARD 全 0 命中」读成「HARD 层没有判别力」。**
+2026-08-24 在新底座上取的真读数（`review._outcomes` 直接跑在 `stage5/review_1.json` 上，
+**0 成本、不落盘**）把这个 0 分成了两类，而**报告上它们本来就长得不一样**：
+
+| 判据 | 状态 | 这一次的分母 |
+|---|---|---|
+| `draft_too_short` · `draft_truncated` · `meta_leak` | 跑了，0 命中 | 18 章全扫 |
+| `verbatim_missing` | 跑了，0 命中 | **135 句**【原样写入】材料 |
+| `keep_value_missing` | 跑了，0 命中 | **23 处**【数值不得改动】材料 |
+| `secret_leak` | 跑了，0 命中 | 5 条 secret，**0 条探针零判别力** |
+| `dialogue_halved` | **UNVER** | 0/18 章落在前件 ⇒ 明写「本条没有分母」 |
+
+⇒ **6 条有真分母的 HARD 查过 158 条保真材料 + 18 章，0 命中是真结论**；
+第 7 条 `dialogue_halved` 诚实地报 UNVER（`checks.DIALOGUE_HALVED_BLIND`，
+两相接线在 `review.py` 与 `write.py`）。假绿那一层**已经修好了，不要重做**。
+
+仍然成立的是另一件事：**默认配置下实际只有 6 条 HARD 在工作**，第 7 条要 shallow 臂
+才够得着，而它背着的是本项目效应量最大的一条跨书结论（闭卷把对白压到 ~0.7×，6/6 本
+方向一致）。同理，凡是 shallow 特有的性质，全部没有在真书上被查过。
+
+- [ ] 顺序约束：补它要**付费**跑 `stage5.write --mode shallow`（整臂或 `--chapters` 一小批）。
+      2026-08-24 用户裁决**暂不跑**，先登记。
+- [ ] 补上之后要重读的是两件事：`dialogue_halved` 第一次拿到真分母时命不命中；
+      以及 shallow 臂的逐章 JSON 能不能过 `tests/test_stage5.py` 那批只在 deep 臂验过的用例。
+
+验收：盘上出现一本 shallow 章 JSON 非空的书，且 `dialogue_halved` 的 `unver_why` 变成
+真实判定（命中或 0 命中都算），本条删除。
+
 ## 条目生命周期
 
 1. 开工前补足可复现输入、预期最终状态和受影响的守卫。
