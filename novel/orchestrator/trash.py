@@ -122,15 +122,17 @@ def run(base: str | os.PathLike[str], sid: str, expected_title: str, *,
         registry: jobs.JobRegistry = jobs.REGISTRY) -> TrashNovelResult:
     """服务侧同步入口：拒绝队列/运行冲突，占书锁后拉零成本 CLI 子进程。"""
     sid = paths.check_sid(sid)
-    queued = {item.sid for item in agent.queue_view(base).pending}
-    if sid in queued:
-        raise jobs.JobConflict('这本书还在 agent 排队中——先取消/等队列处理完再删除')
-    jobs._refuse_if_agent_running(sid)
-
     trash_id = new_trash_id()
     key = jobs.active_key(sid, 'book.trash')
     registry.acquire(key, 'trash-' + trash_id)
     try:
+        # 必须先占书级作业锁，再检查 agent。agent.start 的顺序正好相反：
+        # 先占 agent 锁，再查这把作业锁。两边的 acquire 都不等待，谁先拿到，
+        # 另一边都明确 409；若先查后占，agent 会在两步之间钻进来写盘。
+        queued = {item.sid for item in agent.queue_view(base).pending}
+        if sid in queued:
+            raise jobs.JobConflict('这本书还在 agent 排队中——先取消/等队列处理完再删除')
+        jobs._refuse_if_agent_running(sid)
         novel_dir = paths.resolve_novel_dir(base, sid)
         title = paths.title_of(novel_dir)
         if title != expected_title:

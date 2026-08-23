@@ -413,6 +413,14 @@ class _Pending(NamedTuple):
     authorized: bool
     egress_authorized: bool
     spawn: Spawn | None
+    batch_id: str
+
+
+class _DrainResult(NamedTuple):
+    """一次 drain **为调用它的那一批**实际启动/拒绝了哪些书。"""
+
+    started: list[AgentRunRecord]
+    rejected: list[AgentRejected]
 
 
 #: 待跑队列。**只在内存**——与 `AGENT_REGISTRY` 同一条理由（`R-14.6` 那张表）：
@@ -420,6 +428,10 @@ class _Pending(NamedTuple):
 #: 比没有队列更坏。⇒ 服务重启即清空，界面上照实写「重启不保留」。
 _PENDING_LOCK = threading.Lock()
 _PENDING: list[_Pending] = []
+
+#: 同一时刻只许一个 drain 从队列取书。否则两个批量请求会互相启动对方的项，
+#: 各自响应就无法再满足「running + pending + rejected = 本批提交」的后置条件。
+_DRAIN_LOCK = threading.Lock()
 
 
 def _admit(key: str, run_id: str, registry: JobRegistry) -> None:
@@ -436,39 +448,62 @@ def _admit(key: str, run_id: str, registry: JobRegistry) -> None:
         registry.acquire(key, run_id)
 
 
-def _drain(*, registry: JobRegistry = REGISTRY) -> None:
+def _drain_locked(*, registry: JobRegistry,
+                  reject_batch: str | None = None) -> _DrainResult:
+    """``_DRAIN_LOCK`` 内的真实 drain；返回值只归 ``reject_batch``。"""
+    started: list[AgentRunRecord] = []
+    rejected: list[AgentRejected] = []
+    with _PENDING_LOCK:
+        remaining = len(_PENDING)
+    while remaining > 0:
+        with _ADMIT_LOCK:
+            if len(registry.live()) >= MAX_CONCURRENT:
+                break
+        with _PENDING_LOCK:
+            if not _PENDING:
+                break
+            item = _PENDING.pop(0)
+        remaining -= 1
+        try:
+            record = start(item.base, item.sid, authorized=item.authorized,
+                           egress_authorized=item.egress_authorized,
+                           spawn=item.spawn, registry=registry)
+        except AgentBusy:
+            with _PENDING_LOCK:
+                _PENDING.insert(0, item)
+            break
+        except Exception as exc:                # noqa: BLE001 —— 逐本显式归类
+            if item.batch_id == reject_batch:
+                reason = str(exc).strip() or f'{type(exc).__name__}：agent 启动失败'
+                rejected.append(AgentRejected(sid=item.sid, reason=reason))
+            else:
+                # 受理响应已经返回的旧项没有可回填的 rejected 槽；留在 pending
+                # 才不会静默丢书。挪到队尾，让后面的无冲突书仍有机会启动。
+                with _PENDING_LOCK:
+                    _PENDING.append(item)
+            continue
+        if item.batch_id == reject_batch:
+            started.append(record)
+    return _DrainResult(started=started, rejected=rejected)
+
+
+def _drain(*, registry: JobRegistry = REGISTRY) -> _DrainResult:
     """把队首能起的起起来。由结束的 worker 调用，`enqueue` 受理完也调一次。
 
     ⚠ 两种失败**处理方式相反**，这正是 `AgentBusy` 单独成类的原因：
       · 满闸（`AgentBusy`）⇒ **放回队首**并停下——名额是别人的，等他还回来；
-      · 这本书起不来（同书已有 agent / 该书有 API 作业在写盘）⇒ **丢弃并继续**下一本。
-        留在队里反复重试只会把同一条冲突刷成一片日志，而真正能跑的下一本永远轮不到。
+      · 这本书起不来（同书已有 agent / 该书有 API 作业在写盘）⇒ 移到队尾并继续；
+        已经返回过受理响应的项没有可回填的 rejected 槽，留在 pending 才不会静默丢书。
     """
-    while True:
-        with _ADMIT_LOCK:
-            if len(registry.live()) >= MAX_CONCURRENT:
-                return
-        with _PENDING_LOCK:
-            if not _PENDING:
-                return
-            item = _PENDING.pop(0)
-        try:
-            start(item.base, item.sid, authorized=item.authorized,
-                  egress_authorized=item.egress_authorized,
-                  spawn=item.spawn, registry=registry)
-        except AgentBusy:
-            with _PENDING_LOCK:
-                _PENDING.insert(0, item)
-            return
-        except Exception:                       # noqa: BLE001 —— 见 docstring
-            continue
+    with _DRAIN_LOCK:
+        return _drain_locked(registry=registry)
 
 
 def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
             authorized: bool, egress_authorized: bool,
             spawn: Spawn | None = None,
             registry: JobRegistry = REGISTRY) -> AgentQueueView:
-    """批量受理 N 本：能起的立刻起，起不动的排队。**返回受理后的全景。**
+    """批量受理 N 本：能起的立刻起，起不动的排队。**返回本批的完整分区。**
 
     ⚠ 一本起不来不回滚其余：那本书上有 API 作业在写盘（唯一会失败的原因）
     与「另外八本能不能跑」无关，而抛一个「批量失败」会把已经起来的那几本藏掉——
@@ -476,23 +511,32 @@ def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
     ⇒ 逐本的落点全在返回值里：`running` / `pending` / `rejected` 三者之和 = 你提交的。
     """
     base_abs = os.path.abspath(os.fspath(base))
+    batch_id = jobs.new_job_id()
     rejected: list[AgentRejected] = []
-    for sid in sids:
+    with _DRAIN_LOCK:
+        for sid in sids:
+            with _PENDING_LOCK:
+                queued = {p.sid for p in _PENDING if p.base == base_abs}
+            if sid in queued:
+                rejected.append(AgentRejected(sid=sid, reason='已经在队列里了'))
+                continue
+            if registry.holder(lock_key(sid)) is not None:
+                rejected.append(AgentRejected(sid=sid, reason='这本书已有 agent 在跑'))
+                continue
+            with _PENDING_LOCK:
+                _PENDING.append(_Pending(base_abs, sid, authorized,
+                                         egress_authorized, spawn, batch_id))
+        drained = _drain_locked(registry=registry, reject_batch=batch_id)
+        rejected.extend(drained.rejected)
         with _PENDING_LOCK:
-            queued = {p.sid for p in _PENDING if p.base == base_abs}
-        if sid in queued:
-            rejected.append(AgentRejected(sid=sid, reason='已经在队列里了'))
-            continue
-        if registry.holder(lock_key(sid)) is not None:
-            rejected.append(AgentRejected(sid=sid, reason='这本书已有 agent 在跑'))
-            continue
-        with _PENDING_LOCK:
-            _PENDING.append(_Pending(base_abs, sid, authorized,
-                                     egress_authorized, spawn))
-    _drain(registry=registry)
-    view = queue_view(base, registry=registry)
-    return AgentQueueView(running=view.running, pending=view.pending,
-                          rejected=rejected, max_concurrent=view.max_concurrent)
+            base_pending = [item for item in _PENDING if item.base == base_abs]
+            pending = [
+                AgentPending(sid=item.sid, position=index + 1)
+                for index, item in enumerate(base_pending)
+                if item.batch_id == batch_id
+            ]
+    return AgentQueueView(running=drained.started, pending=pending,
+                          rejected=rejected, max_concurrent=MAX_CONCURRENT)
 
 
 def queue_view(base: str | os.PathLike[str], *,

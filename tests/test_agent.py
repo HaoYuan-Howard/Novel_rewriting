@@ -422,6 +422,75 @@ def test_enqueue_reports_every_book_it_refused(base):
             agent.wait(rec.run_id, 10)
 
 
+def test_batch_response_excludes_agents_that_were_already_running(base):
+    """响应三分区只讲**本批**，不能把批外原本在跑的书混进 running。"""
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    outside = agent.start(base, '41', authorized=True, egress_authorized=True,
+                          spawn=slow)
+    try:
+        view = agent.enqueue(base, ['42'], authorized=True,
+                             egress_authorized=True, spawn=slow)
+        assert [record.start.sid for record in view.running] == ['42']
+        assert len(view.running) + len(view.pending) + len(view.rejected) == 1
+    finally:
+        gate.set()
+        agent.wait(outside.run_id, 10)
+        for rec in agent.records(base):
+            agent.wait(rec.run_id, 10)
+
+
+def test_batch_turns_an_api_job_launch_conflict_into_rejected(base):
+    """从 pending 弹出后启动失败也必须落进本批 rejected，不能静默丢书。"""
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    jobs.REGISTRY.acquire(jobs.active_key('42', 'stage1.partition'), 'api-job')
+    try:
+        view = agent.enqueue(base, ['42', '43'], authorized=True,
+                             egress_authorized=True, spawn=slow)
+        assert [record.start.sid for record in view.running] == ['43']
+        assert view.pending == []
+        assert [item.sid for item in view.rejected] == ['42']
+        assert 'API' in view.rejected[0].reason
+        assert len(view.running) + len(view.pending) + len(view.rejected) == 2
+    finally:
+        jobs.REGISTRY.release(jobs.active_key('42', 'stage1.partition'), 'api-job')
+        gate.set()
+        for rec in agent.records(base):
+            agent.wait(rec.run_id, 10)
+
+
+def test_background_drain_keeps_a_late_api_conflict_pending(base, monkeypatch):
+    """受理响应返回后的冲突没有 rejected 可回填；此时宁可留队，也不能消失。"""
+    monkeypatch.setattr(agent, 'MAX_CONCURRENT', 1)
+    gate = threading.Event()
+
+    def slow(argv, cwd, env, log):
+        gate.wait(10)
+        return 0
+
+    view = agent.enqueue(base, ['42', '43'], authorized=True,
+                         egress_authorized=True, spawn=slow)
+    jobs.REGISTRY.acquire(jobs.active_key('43', 'stage1.partition'), 'api-job')
+    try:
+        gate.set()
+        assert agent.wait(view.running[0].run_id, 10)
+        assert [item.sid for item in agent.queue_view(base).pending] == ['43']
+    finally:
+        jobs.REGISTRY.release(jobs.active_key('43', 'stage1.partition'), 'api-job')
+        agent._drain()
+        for rec in agent.records(base):
+            agent.wait(rec.run_id, 10)
+
+
 def test_api_job_refused_while_the_same_book_has_an_agent(base):
     """反向互斥的落点在 `jobs.run/start`——八个调用点一处都不漏。"""
     jobs.AGENT_REGISTRY.acquire(jobs.agent_lock_key('42'), 'r-test')

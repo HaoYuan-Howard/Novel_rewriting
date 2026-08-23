@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
 from novel.errors import SourceConflict
-from novel.orchestrator import trash
+from novel.orchestrator import agent, jobs, trash
+from novel.orchestrator.jobs import JobConflict
 
 
 def _book(base, *, sid='1001', title='测试书'):
@@ -65,3 +67,34 @@ def test_http_route_reaches_the_cli_subprocess_and_removes_the_corpus_entry(tmp_
     assert body['sid'] == '1001' and body['title'] == '测试书'
     assert not book.exists()
     assert (tmp_path / body['trash_rel']).is_dir()
+
+
+def test_trash_reserves_the_book_before_an_agent_can_start(tmp_path, monkeypatch):
+    """删除拿锁与检查 agent 之间插入一次启动；后到的 agent 必须明确冲突。"""
+    _book(tmp_path)
+    original_queue_view = agent.queue_view
+    attempted: list[Exception] = []
+    spawn_called = threading.Event()
+
+    def agent_spawn(argv, cwd, env, log):
+        spawn_called.set()
+        return 0
+
+    def interleaved_queue_view(base):
+        try:
+            agent.start(base, '1001', authorized=True, egress_authorized=True,
+                        spawn=agent_spawn)
+        except Exception as exc:  # 断言在调用完成后做，避免 monkeypatch 缝吞细节
+            attempted.append(exc)
+        return original_queue_view(base)
+
+    monkeypatch.setattr(agent, 'queue_view', interleaved_queue_view)
+    result = trash.run(
+        tmp_path, '1001', '测试书',
+        spawn=lambda argv, cwd, env: (0, b''),
+    )
+
+    assert result.sid == '1001'
+    assert len(attempted) == 1 and isinstance(attempted[0], JobConflict)
+    assert not spawn_called.is_set(), 'agent 在删除持有书锁时仍进入了写盘 worker'
+    assert jobs.REGISTRY.conflicting_holder('1001') is None
