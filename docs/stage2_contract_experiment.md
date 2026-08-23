@@ -1005,3 +1005,59 @@ audit 为 `1028427dadc0d25cd580018c3595c5dd0a3ae2cbf4340060a13f32439aca280d` /
 保留候选分层抽样与摘要前 HARD 预检，因为两者不要求模型多交一份语义自证。下一步先复测 6 个核心章，
 通过才扩大到其余密集章；不再为已否决候选整跑。默认继续 `extraction-ir-v2`，盘上
 `ChapterBlueprints` schema 继续是 v2，第三本 holdout 仍未启封。
+
+### 撤回自报义务后的核心烟测
+
+在提交 `dd5ea686cd76a00494cb1e8de6d3f20b1cb81a1f` 上使用独立 base
+`outputs/_stage2_flash_quality/v31_minimal_smoke_dd5ea68_20260823/` 与独立缓存，仍为
+`deepseek-v4-flash`、thinking=true；省略摘要批。6 个目标章全部首轮接受，没有 validator 重采：
+
+| 核心章 | 调用 / prompt / completion / reasoning | beat / hinge | 人工裁决 |
+| --- | ---: | ---: | --- |
+| 无情道 ch4/12/13/22 | 4 / 26,884 / 40,462 / 35,827 | 3/2 · 4/3 · 8/6 · 5/8 | 通过：笑点、关系原话、戏骨仙与鬼域回收、ch22 关系链都在 |
+| 偶像 ch1/7 | 2 / 15,601 / 36,981 / 32,093 | 11/20 · 7/12 | ch7 可接受；ch1 普通对白系统性过抽，失败 |
+
+最小候选相对同 6 章的结构化自报稿，completion/reasoning 约下降 31.6%/32.7%，证明撤回双份
+语义自证是对的；但 ch1 仍保留负责人介绍隐私、负责人让人注意言辞、楼梯上的普通接话、询问为何有
+女人、正式介绍、工资追问与“一进门不到十分钟”等材料。不能把“0 重采 + 0 HARD”当成 precision
+通过。无情道 / 偶像 JSON 报告 SHA-256 为
+`8f14800f4b3b244fe1f24b28660def5e7527a4ecefec7b4f22fa465d6f5c2da1` /
+`79c6c8d1a399cac342a90855ea5d004793901bd5bae6f6a274af42d7f72a04cb`；ledger / LLM audit /
+operator audit 为 `7c7d9087226d33a594f39d3aeae6aeb97c615cd0b050f910e59cf4706702e9f1` /
+`4354e467b98655f112a3daf1cdad4671dc817d7fce2e0678407d096c7d67a63c` /
+`e9f870c8912389c69628ea10c80e8ff5c8681505efac46bd7b77a1420b24e284`。
+
+### 两条低思考后处理反例
+
+为避免继续扩写章级 prompt，先测两条 `low + thinking=false`、只读内存编译稿的受限小臂；两者都
+复用上述章响应缓存，正式书目录零改动：
+
+1. 提交 `b5bff17937e1788ef2d8105e7df233108b7ca3b2` 的既有 hinge keep/drop 复核：偶像 ch1
+   20→18，只删掉“注意言辞”“语气友好”两句，仍保留普通介绍、追问、接话与“十分钟”；无情道
+   ch22 阴性对照 8→8。2 次付费调用合计 prompt 2,703、completion 179、reasoning 0。结论是安全但
+   几乎没有区分力，不接生产。偶像 / 无情道报告 hash 为
+   `3102f0294e4fe6a62822f1b36cb1f7bfbf0784716ddf8105196bc349f5c90351` /
+   `d3773002d979bd67b2e563f0a95baf483fccc410cc6ec2191923997b640217bf`；ledger / LLM audit /
+   operator audit 为 `d0c11cfe9bf1490bf9b93408630c5a49660bab1c36a1dc5e28f23083a78a14a6` /
+   `4cd8dfc5a72b97ee8fc4c5bab1d536c328b1affac158890a4f965a863b2ba351` /
+   `8038371780b6cdd082ad3a6b8e63f7251ee92617ab93d261bbe3424fb18c2ede`。
+2. 提交 `baa0cc397aa776aab5af267af10f96b1d8ef23cc` 的独立候选探针不看模型原选择，只在冻结 beat
+   上从代码机械候选重选。偶像 ch1/ch7 都选 16 条，仍选普通介绍、楼梯接话，甚至把“四个”当硬数字；
+   无情道 ch4/ch12/ch13/ch22 分别选 2/3/6/5 条，却漏掉“抽出隐藏款了”、ch12 关系原话与戏骨仙，
+   precision 和 recall 同时失败。2 调合计 prompt 6,807、completion 2,066、reasoning 0。偶像 /
+   无情道报告 hash 为 `1ad155602424580466ec38a93af6fb2aa6404479f7a62cbc49994077ffe9171b` /
+   `d533558af7b96de9c8e918829715339da29815a057983713cbfefe61db358cb0`；ledger / LLM audit /
+   operator audit 为 `c9b6b0d106e8efe51dbd94762163f42667635358ee7b2e78294098b120bf16b2` /
+   `c02ce8a1495a50e9eeb7f3f7d0a9a1518ef7f44deceac9e00eb18601f006fd8` /
+   `155b75fabe5860be39ae8e7527329b9561479c28dcd8f8611b3bb8320b67a193`。
+
+共同结论不是“再写一版 selector prompt”，而是低思考 Flash 对 hinge 语义本身偏宽，且独立相会漏回收。
+下一候选改动候选**曝光量**而非语义义务：保留按族、按章节位置分层与自由 phrase 兜底，但不再让
+对话密集章看到满 32 条机械候选。先做零成本覆盖投影，再只复跑同一 6 章；默认与 artifact schema
+均不变，第三本 holdout 继续封存。
+
+零成本投影先把每章曝光上限从 32 收到 20、引语保底从 20 收到 8（数字 4、因果 8 不变，未用额度
+仍回流）。无情道 ch4/ch12/ch13/ch22 的候选总数只有 5/11/12/18，现稿 17 条 candidate-backed
+hinge **17/17 仍在新表**；偶像 ch1/ch7 才从 32 收到 20，现稿 candidate-backed hinge 分别
+19→保留 11、10→保留 5。退出候选表不等于禁止：响应仍可按原文交 `phrase`；这项投影只证明改动
+确实打在对话密集反例上、没有机械截掉无情道已恢复的候选，不代替真实模型的 recall/precision 验收。

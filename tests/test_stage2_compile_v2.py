@@ -286,13 +286,13 @@ def test_v31_candidate_budget_is_stratified_by_family_and_chapter_position():
     candidates = hinge_candidates(text)
     surfaces = {row['source']['text'] for row in candidates}
 
-    assert len(candidates) == 32
+    assert len(candidates) == 20
     assert any('因为真相终于揭开' in surface for surface in surfaces), \
         '显式因果族必须有保底，不能被章首引号填满候选表'
     assert '「最后的答复」' in surfaces, \
-        '同族也要沿章节位置取样，不能永远只留下前 32 条对白'
+        '同族也要沿章节位置取样，不能永远只留下章前对白'
     assert [row['candidate_id'] for row in candidates] == [
-        f'h{index:03d}' for index in range(1, 33)]
+        f'h{index:03d}' for index in range(1, 21)]
     assert [row['source']['start'] for row in candidates] == sorted(
         row['source']['start'] for row in candidates)
 

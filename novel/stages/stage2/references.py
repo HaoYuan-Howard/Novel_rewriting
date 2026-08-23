@@ -18,13 +18,14 @@ from typing import Any
 from novel.core.spans import content_only
 from novel.stages.stage2.paragraphs import paragraph_spans
 
-MAX_HINGE_CANDIDATES = 32
+MAX_HINGE_CANDIDATES = 20
 
 #: 候选不是语义真值，但也不能让“前 32 个易定位字面”成为一种隐形上下文裁剪。
-#: 对话密集章曾让前半章引号填满整张表，后半章揭示/关系答复只能退回自由 phrase。
-#: 这里先按定位族保底，再在每族内沿章节位置均匀抽样；某族用不满的额度会回流，
-#: 所以普通章节（总数 ≤32）逐字节不变。
-_FAMILY_QUOTA = {'quoted': 20, 'numbered': 4, 'causal': 8}
+#: 对话密集章曾让前半章引号填满整张表，后半章揭示/关系答复只能退回自由 phrase；
+#: 反过来给满 32 项又实测诱发普通对白批量入选。这里按定位族保底、族内沿章节位置
+#: 均匀抽样，并把引语保底收成 8 项；某族用不满的额度仍回流，普通短章不受影响。
+#: ⚠ 20 是**曝光预算**不是 hinge 数量上限：模型没在表里找到真材料时仍可交 phrase。
+_FAMILY_QUOTA = {'quoted': 8, 'numbered': 4, 'causal': 8}
 assert sum(_FAMILY_QUOTA.values()) == MAX_HINGE_CANDIDATES
 
 _QUOTED = re.compile(
@@ -87,7 +88,7 @@ def hinge_candidates(text: str) -> list[dict[str, Any]]:
     # 同一字节区间只列一次；若两族恰好得到相同区间，保留先枚举的族。
     #
     # ⚠ 引号正则允许「?」「......」这类只含标点的原文字面。它们的 ``text`` 非空，
-    # 但 ``content_only`` 为空，不能构造正式 ``SourceSpan.normalized``。必须在 32 项
+    # 但 ``content_only`` 为空，不能构造正式 ``SourceSpan.normalized``。必须在 20 项
     # 截断之前剔除：若在 compiler 末端才发现，不仅会让一次已付费整跑 exit 70，
     # 还会让无效项白占候选额度、挤掉后面的有效材料。
     selected: dict[tuple[int, int], tuple[str, int, int, int]] = {}
