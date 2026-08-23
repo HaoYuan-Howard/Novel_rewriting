@@ -754,12 +754,22 @@ completion 也比 Pro v1.1 高 4.7%，所以结论是“架构有上限、Flash 
   揭示回收，ch22 保持约 5–9 beat，ch1/ch7 不粗切，同时不得出现普通对白 hinge 系统性反弹；
 - [x] 核心通过后再补无情道 ch16/ch18/ch19/ch21 与偶像 ch10/ch13/ch16 的密集章烟测；同批章
   completion/reasoning 不得比旧冻结读数异常反弹，且首轮重采率不能再接近 4/13；
-- [ ] 烟测通过后才用独立空缓存整跑两本开发书；两书都须首轮通过 §十六质量/成本门，失败仍保留
+- [x] 烟测通过后才用独立空缓存整跑两本开发书；两书都须首轮通过 §十六质量/成本门，失败仍保留
   `BLUEPRINT_ARCHITECTURE = 'extraction-ir-v2'`；
 - [ ] 开发书冻结后才启封第三本结构不同的小说，固定同 global 做 Pro v1.1 / Flash v2 /
   Flash v3.1 三臂外部验证；不得看第三书结果继续调参后仍称 holdout；
 - [ ] 只有开发书和外部验证共同支持，才把 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`
   切到 `extraction-ir-v3.1`；继续保留 `extraction-ir-v2` 用于显式回退和存量产物重检。
+
+候选 20 双开发书空缓存整跑已经冻结，详见 `docs/stage2_contract_experiment.md` §十七。两书最终均
+fresh/match、0 HARD、span 100%、关闭人物引用四项全 0；但两书都没有首轮直接落正式稿：无情道先
+暴露章尾守卫与缺章恢复死路，偶像 ch10 真实命中 `beats_coarse` 并需付费定向重采。合计 69 次 wire、
+497,452 prompt / 564,994 completion / 490,676 reasoning，41 章里有 19 次 `answer_lost`；人工对照又
+确认普通对白/一般数字 hinge 与 ch4 笑点漏标并存。故开发门失败，第三本 holdout 不启封，默认继续 v2。
+
+失败后的代码优化不再增加 prompt：v3.1 改为“正常 content 优先、合法 reasoning 救回稿作同档后备”，
+第二采仍不可用时采用后备而非降到 low；其他契约保持合法即采纳。该行为已有 132 项定向回归，但历史
+空响应不进缓存，尚无新的付费节省读数，不能据此重写上述失败裁决。
 
 2026-08-23 第二轮核心烟测已完成但**没有通过第一项**。撤回结构化自报义务后的最小候选在 6 章
 全部首轮成功，合计 6 调、prompt 42,485、completion 77,443、reasoning 67,920；无情道

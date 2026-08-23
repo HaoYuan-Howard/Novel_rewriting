@@ -55,11 +55,12 @@ def test_the_registry_covers_exactly_the_declared_architectures():
             'DeepSeek V4 只支持 json_object——这不是 constrained decoding，标签要诚实'
 
 
-def test_only_ir31_rejects_reasoning_channel_salvage():
-    """救回能力按响应契约登记；不能为一章 A/B 反证全局关掉客户端恢复路。"""
-    assert not CONTRACTS['extraction-ir-v3.1'].accepts_reasoning_salvage
+def test_only_ir31_prefers_normal_content_to_reasoning_channel_salvage():
+    """v3.1 只延迟采纳一次；不能为一章 A/B 反证全局关掉客户端恢复路。"""
+    assert CONTRACTS['extraction-ir-v3.1'] \
+        .prefers_content_over_reasoning_salvage
     assert all(
-        spec.accepts_reasoning_salvage
+        not spec.prefers_content_over_reasoning_salvage
         for name, spec in CONTRACTS.items()
         if name != 'extraction-ir-v3.1'
     )
@@ -502,7 +503,7 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
 )
 def test_ir31_resamples_reasoning_only_blueprints_without_disabling_v3_salvage(
         monkeypatch, architecture, closed, expected_calls, expected_event):
-    """同一份合法 JSON：v3 沿用全局救回；v3.1 拒稿并在同档取得正常正文。
+    """同一份合法 JSON：v3 立即救回；v3.1 留作后备并优先取同档正常正文。
 
     这里走 `request_blueprints` 的真实 validator 接线，防止只在注册表加了一格、
     首轮或定向修复却忘记消费；不跑摘要批，调用数只统计目标章本身。

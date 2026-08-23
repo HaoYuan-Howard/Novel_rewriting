@@ -1085,9 +1085,9 @@ hinge **17/17 仍在新表**；偶像 ch1/ch7 才从 32 收到 20，现稿 candi
 
 ch13 的对照改变了 `SALVAGE_ANSWER_FROM_REASONING` 的适用边界：同一套 schema/动态 validator 只能
 证明 JSON 可编译，不能证明章节切分质量等价。修法不增加 prompt，也不全局关闭恢复路；
-`ContractSpec.accepts_reasoning_salvage` 默认仍为 true，只有 `extraction-ir-v3.1` 为 false，首轮与
-定向修复共同消费该能力，空 `content` 时由客户端既有同档重采。v3 仍可救回，盘上 artifact schema
-仍是 v2。LLM salvage、Stage2 生成/契约/修复组合回归共 211 项 exit 0。
+冻结实现当时只为 `extraction-ir-v3.1` 关闭救回、由客户端同档重采，首轮与定向修复共用该策略；v3
+仍可救回，盘上 artifact schema 仍是 v2。LLM salvage、Stage2 生成/契约/修复组合回归共 211 项
+exit 0。后续双书整跑证明“全拒”成本不可接受，现行同档后备策略见本节末尾。
 
 报告 SHA-256：无情道核心 / 密集为
 `79889976148c5903b0eceb8a5f77983dc97ffe835e3d7d64d2aad3d5c10faea0` /
@@ -1101,3 +1101,53 @@ agent progress 为 `bfec80789b0cc1d056aa2fb034f85b800393dedc09a53f1e87e22821e896
 
 裁决是核心与密集两道烟测门通过，进入独立空缓存双开发书整跑；这仍不是默认切换。第三本 holdout
 继续封存，只有双开发书整跑冻结后才启封，且不得根据其结果继续调参后仍称外部验证。
+
+### 候选 20 双开发书空缓存整跑与人工对照
+
+隔离 base 为
+`outputs/_stage2_flash_quality/v31_full_dual_00757d0_20260823/`；两书复用此前真实生成且 hash 冻结的
+`stage2.global`，blueprint 使用各自独立空缓存、`deepseek-v4-flash + thinking=true`。无情道首轮产在
+`00757d0`，确定性恢复链修复到 `f040563`；偶像从 `f040563` 空缓存起跑。代码跨提交只修落盘闸与
+恢复可达性，没有改两书的逐章 system/user 字节或 artifact schema。盘上
+`ChapterBlueprints` 仍为 v2，默认仍为 `extraction-ir-v2`。
+
+| 开发书 | 真实调用 / prompt / completion / reasoning | 操作墙钟 | beat / hinge / span | 地点 | 人物歧义/名册外/代词/过早 | 恢复 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 无情道第一她来自合欢宗 | 37 / 247,508 / 278,203 / 240,579 | 约 551s | 133 / 141 / 133/133 | 100/133 = 75.2% | 0/0/0/0 | 首轮 ch23 因章尾仅有 `【完】` 被旧 validator 拒；层0 已有 1 段外扩能力却不可达。修守卫后，缺章定向恢复又暴露“没有正式基线就不能修”的死路；补首轮形状 backfill 后，ch23 一章 + 摘要落盘。独立 check exit 0 |
+| 偶像公寓打工日常 | 32 / 249,944 / 286,791 / 250,097 | 约 550s | 160 / 168 / 160/160 | 117/160 = 73.1% | 0/0/0/0 | 18 章均生成，但 ch10 只有 5 拍、417 字/拍，真实命中 `beats_coarse`；定向重生成后 5→14 拍、6→16 hinge，合并稿与独立 check exit 0 |
+| 合计 | **69 / 497,452 / 564,994 / 490,676** | 约 1,101s | 293 / 309 / 293/293 | 217/293 = 74.1% | 0/0/0/0 | 两书最终 fresh/match、0 HARD；两书都没有首轮直接落正式稿 |
+
+无情道调用审计为 24 accepted、7 次 `answer_lost`、6 次 validator 拒绝；偶像为 20 accepted、
+12 次 `answer_lost`。后者的 12 次全来自 v3.1 为 ch13 同请求 A/B 反例而全拒 reasoning 通道救回稿；
+ch2/ch8/ch9/ch10/ch11 连续两份 reasoning-only 后又降到 low，成为成本爆炸的主要形状。它不是偶发保险：
+两书合计 41 章实际用了 69 次 wire。候选 20 因此没有通过“成本低于 Pro v1.1 且首轮稳定”的默认门。
+
+人工对照不按 hinge 条数裁决。无情道 v3.1 的事件边界整体优于 Pro v1.1：ch16 的“收徒当天已知身份”、
+ch19 的结契/表白、ch22 的请求—原因—安抚—常来—答应和 ch23 的多人收束均完整；但 hinge precision
+仍不稳定。ch8 把普通问答与铺垫成批抬高，ch12 把“一次/两次/三次”分别标成 hinge，ch19/ch21 也有
+普通台词入选；反方向 ch4 的“抽出隐藏款了”只在 event、没有 hinge。偶像复现同一边界：ch1 的一般
+时长/承接问句、ch7 的“商场有监控”及购物/拉链过渡被抬高；而 ch10 定向高档重采与 ch18 收束的
+关键冲突、身份站队和承诺材料又基本准确。结论是“v3.1 有更强事件召回上限”，不是“309 条越多越好”，
+也不是“实际质量已超过 Pro v1.1”。低思考 selector 两条既有反例已经证明再加独立模型相既会漏真材料
+也删不掉普通对白；没有 ground truth 前不加自动删 hinge 判据。
+
+默认门裁决：**失败，第三本 holdout 继续封存。** 原因有三条独立证据：两本都需恢复、两本成本均未
+严格支配 Pro v1.1、hinge precision 尚未收口。既有 Pro v3.1 教师跑已经回答架构上限问题；把 Pro
+整份输出或推理文本塞回 Flash prompt 的第一版结构化蒸馏又已被 +76.3% completion 与普通对白反例
+否决，故不再跑一遍 Pro 冒充“学习”。
+
+本轮随后只做不增加 prompt 的代码优化：v3.1 不再全拒合法 reasoning 救回稿，而登记为“正常正文
+优先”。首份通过完整 schema + 动态 validator 的救回稿只留作同档后备；第二采拿到正常 content 就
+采用正常稿，第二采仍不可用则采用后备，不再降到 low。其他响应契约仍是合法救回立即采纳。两条通用
+客户端测试分别钉住“第二采正常稿胜出”和“第二采失败采用后备”，Stage2 首轮/定向共用接线；132 项
+定向回归 exit 0。已有 reasoning-only 响应按设计不进缓存，因此这项只能称**零成本实现与反事实上限**，
+不能拿历史账改写成已真实节省；下次自然触发才回收付费读数。
+
+冻结 SHA-256：无情道 global / blueprint 为
+`856b18d454cc386f88270d871eb44dafa702ad09bb46579e28fd6247ef9a3c0a` /
+`011cade95b94c287993e889c8cfa53fee72232e55088750e1bf1065cb6c0e1b4`；偶像为
+`97a6f7786c9c6e859d9055b0c84dbbc7c4b1c578a47332e403feceff0bd2a428` /
+`5e1323e8e65aae71beb401b1dadfa1eb34be5e49ca3222ee38801977a1d85c8e`；合并 ledger / LLM audit /
+agent progress 为 `5e1a5984a293d6e933880167cdda6114368781137e7f14d4142808c853abe39c` /
+`324a7036eb61a0d016c6db9133b0fc99c7353b288ad432117c57cd69f2750739` /
+`a498d46ff7ba03bd5fda261a1a8977024f9446c34a4bbf6c8474bb9839fe7ca4`。

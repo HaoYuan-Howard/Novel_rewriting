@@ -98,12 +98,12 @@ class ContractSpec:
     uses_hinge_candidates: bool = False
     uses_narration_refs: bool = False
 
-    #: 空 `content` 时，LLM 客户端能把通过同一套 schema/validator 的 JSON 从
-    #: `reasoning` 通道救回。多数结构化节点只需“形状正确”即可接纳；但 v3.1
-    #: 的同请求 A/B 已观察到救回稿会把一章过切为 15 拍且地点全 unknown，
-    #: 正常正文重采则为 10 拍且地点全明确。是否接纳因此是**响应契约能力**，
-    #: 不是客户端全局开关；关闭后仍由客户端在同档自动重采。
-    accepts_reasoning_salvage: bool = True
+    #: v3.1 的同请求 A/B 观察到救回稿会把一章过切为 15 拍且地点全 unknown，
+    #: 正常正文重采则为 10 拍且地点全明确；但两本空缓存整跑又观察到全拒救回稿
+    #: 会把 41 章放大为 69 次真实调用。折中不是加 prompt，也不是无条件采纳：
+    #: 首份合法救回稿先留作同档后备，再争取一次正常 `content`；第二份仍不可用时
+    #: 才采纳后备，绝不继续降档白烧。多数结构化契约保持“合法即采纳”。
+    prefers_content_over_reasoning_salvage: bool = False
 
 
 CONTRACTS: dict[str, ContractSpec] = {
@@ -205,7 +205,7 @@ CONTRACTS: dict[str, ContractSpec] = {
         uses_character_refs=True,
         uses_hinge_candidates=True,
         uses_narration_refs=True,
-        accepts_reasoning_salvage=False,
+        prefers_content_over_reasoning_salvage=True,
     ),
 }
 

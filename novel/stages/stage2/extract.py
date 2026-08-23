@@ -885,6 +885,7 @@ def _run_chapter_requests(
     validator_of: Callable[[int], Callable[[Any, Any], str | None] | None]
     | None = None,
     max_tokens: int = BLUEPRINT_MAX_TOKENS,
+    prefer_content_over_reasoning_salvage: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str], list[Exception]]:
     """并发等待独立章节；一个失败不丢掉已经付费成功的其他章。
 
@@ -910,6 +911,8 @@ def _run_chapter_requests(
             max_tokens=max_tokens,
             validator=validator_of(ordinal) if validator_of else None,
             progress=tracker.request(ordinal),
+            prefer_content_over_reasoning_salvage=(
+                prefer_content_over_reasoning_salvage),
         )
         return response.model_dump(by_alias=True)['blueprints']
 
@@ -1006,7 +1009,6 @@ def _scaffolded_validator(
     *,
     candidate_rows: list[dict[str, Any]] | None = None,
     narration_refs: bool = False,
-    accepts_reasoning_salvage: bool = True,
 ) -> Callable[[Any, Any], str | None]:
     """单调用脚手架的动态闸：边界召回、关闭人物与候选所属拍一次验完。"""
     boundary = _boundary_validator(ordinal, paragraph_count)
@@ -1015,10 +1017,6 @@ def _scaffolded_validator(
     }
 
     def validate(obj: Any, resp: Any) -> str | None:
-        if (not accepts_reasoning_salvage
-                and not str(getattr(resp, 'content', '') or '').strip()):
-            return (f'ch{ordinal} 本响应契约不接纳推理通道救回稿；'
-                    '请在同档重采正常正文响应')
         boundary_error = boundary(obj, resp)
         if boundary_error is not None:
             return boundary_error
@@ -1329,7 +1327,6 @@ def _run_blueprint_repair(
             set(visible.get(ordinal, {})),
             candidate_rows=candidate_rows.get(ordinal, []),
             narration_refs=spec.uses_narration_refs,
-            accepts_reasoning_salvage=spec.accepts_reasoning_salvage,
         )
     returned, detail_scope, detail_errors = _run_chapter_requests(
         ctx,
@@ -1337,6 +1334,8 @@ def _run_blueprint_repair(
         requests,
         model_cls=spec.response_model,
         validator_of=validator_of,
+        prefer_content_over_reasoning_salvage=(
+            spec.prefers_content_over_reasoning_salvage),
     )
     new_scope = boundary_scope + detail_scope
     errors = boundary_errors + detail_errors
@@ -1602,11 +1601,12 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
                 set(visible.get(ordinal, {})),
                 candidate_rows=candidate_rows.get(ordinal, []),
                 narration_refs=spec.uses_narration_refs,
-                accepts_reasoning_salvage=spec.accepts_reasoning_salvage,
             )
         raw, violations, errors = _run_chapter_requests(
             ctx, client, requests, model_cls=spec.response_model,
-            validator_of=validator_of)
+            validator_of=validator_of,
+            prefer_content_over_reasoning_salvage=(
+                spec.prefers_content_over_reasoning_salvage))
         return {
             'main_text': main_text,
             'requests': requests,
