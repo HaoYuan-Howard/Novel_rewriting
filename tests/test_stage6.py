@@ -114,7 +114,18 @@ def test_the_badge_can_never_be_pass_and_that_is_by_design(box):
     hard_hit = any(r.sev == 'hard' and r.status == 'hit' for r in rep.rules)
     assert rep.badge == ('fail' if hard_hit else 'amber')
     assert rep.passed is (not hard_hit)
-    assert len([r for r in rep.rules if r.sev == 'unver']) == 3
+    # ⚠ **这里曾写死 `== 3`，而注册表有 4 条 `sev=unver`** —— 断言在 main 上
+    #   对着盘上那本书恒红。漂的原因就在这条 docstring 里：2026-08-18
+    #   `hook_semantic_contradiction` 由 HARD 降为 `unver`（自动放行门下线，
+    #   它命中 Finding 的两条路都不可达），unver 一族从 3 条变成 4 条，
+    #   而这一行没跟着改。⇒ 按两族分开数，让「哪一族变了」下次一眼看得出来。
+    unver = {r.rule for r in rep.rules if r.sev == 'unver'}
+    assert unver == {
+        # 三条工作流/前提：判定的**前提**不成立时出声
+        'hook_not_approved', 'hook_body_missing', 'hook_body_stale',
+        # 一条实质矛盾：查了、有证据、但本仓不替人盖章
+        'hook_semantic_contradiction',
+    }
     semantic_lines = [r for r in rep.rules if r.check_kind == 'semantic']
     assert {r.rule for r in semantic_lines} == {
         'hook_semantic_contradiction', 'hook_candidate_contradiction', 'hook_quality_rank'}
@@ -146,6 +157,18 @@ def test_rejudging_reproduces_what_is_on_disk(box):
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     up = hook._Upstreams(ctx, __import__('novel.store', fromlist=['x']).ArtifactStore(ctx))
     book_level = {'hook_report'}
+    # ⚠⚠ **晚于盘上产物的判据要显式登记在这里，一条一行、写明哪一次。**
+    #   本测试比的是「现在重判」与「当时存盘」，而**新增一条无条件报出的判据
+    #   必然让两边不等**——那不是判据抄错了，是判据集本身变了。
+    #   ⚠ 不要因此把断言放松成 `got >= stored`：那会让「某条判据静默不再拦」
+    #   （本测试唯一要抓的东西）一起漏掉。登记制保住了「除这几条外必须逐条相等」。
+    #   ⚠ 登记一条不等于可以永远留着：产物由 `stage6.hook` 重跑后就该销掉这一行。
+    #   同 `hook_quote_unbalanced` 那条「盘上恒缺格」的处理方式。
+    postdates_disk = {
+        # 2026-08-23 新增（`R-9.23`）：盘上那本书的 hook.json 写于它之前。
+        'hook_source_distance',
+    }
+    book_level = book_level | postdates_disk
     for label, text, stored in _texts_and_stored(box):
         _t, _m, fs = hook._normalize_and_judge(text, up)
         got = {f.rule for f in fs} - book_level
@@ -526,3 +549,113 @@ def test_prompt_carries_source_full_story_and_body_execution_style(box):
     assert mat.style_packet['book_surface_habits'] == style.get('surface_habits')
     assert packet['style'] == mat.style_packet, '下发的风格包与 Material 记的那份分家了'
     assert packet['whole_story_map'] == list(mat.story_map) and len(mat.story_map) >= 1
+
+
+#: 合成原作文案段：一句一段、空行分隔、末行是一句宣言。
+_SRC_HOOK = """系统让我当反派的踏板。
+
+我把他养成了乖顺的模样。
+
+十年过去。
+
+结婚第七年，他忽然换了个人。
+
+一个是后来的枭雄。
+
+一个是十七岁的愣头青。
+
+嚷着退婚，重夺基业。
+
+绝不低头。
+
+"""
+
+#: **贴着原作结构写**：信息出场顺序逐段对位、落在与原作**同一句**收尾上，
+#: 但每一句都换了措辞 ⇒ 连续内容字符数仍远低于 `hook_reuses_source` 的 20 字闸线。
+_NEAR = """系统挑我当反派的垫脚。
+
+我却把他养得服服帖帖。
+
+整整十年。
+
+第七年头上，他里头忽然多出两个人。
+
+一个是日后的枭雄。
+
+一个是十七岁的莽小子。
+
+叫着退婚，重夺基业。
+
+绝不低头。
+
+"""
+
+#: **另起一个场面**：人物动作与对白，与原作的信息顺序和收尾都不相干。
+_FAR = """他睁眼就骂人。
+
+「谁准你碰我的？」
+
+我没说话，扇了他一巴掌。
+
+他捂着脸，眼睛红了。
+
+我再抬手时，他抓住了我的腕子。
+
+指尖贴着我的掌心，抖得厉害。
+
+他张嘴，一个字也没骂出来。
+
+"""
+
+
+def _distance_reading(text: str, src_hook: str | None) -> dict:
+    """跑生产那一个落点取读数。**不在守卫里重拼一份计算。**"""
+    fs = checks.hook_findings(
+        text, mat=prompts.Material(blocks=('合成创作包。',), upto=1),
+        secrets=[], arc=None, characters=None, src_hook=src_hook,
+        style_hook=None, quote_problems=[])
+    return {f.rule: f for f in fs}
+
+
+def test_source_distance_reads_what_the_20_char_gate_cannot_see():
+    """⭐⭐ 结构距离读数必须在 `hook_reuses_source` **失明的那一带**分得开候选。
+
+    那道 HARD 只查「连续 20 个内容字符相同」，而 `R-9.11` 的尾注**明许**学结构、
+    节拍与最后一击的功能。两条合起来留了一个看不见的地带：逐句改写措辞、却完整
+    复用原作的信息出场顺序并落在同一句收尾上——**闸报 0 违规**。盘上实测三条候选
+    最长逐字重合 10 / 6 / 3 字（闸线 20）、4 字窗口重合率 19.5% / 8.2% / 0.0%，
+    贴合度差 20 倍，而那道闸对三条一律沉默。
+
+    ⚠ 本条**不断言任何阈值**：`R-9.23` 说的就是「度量不是门」。它只断言
+    「读数分得开」——分不开的读数等于没有读数。
+    """
+    near = _distance_reading(_NEAR, _SRC_HOOK)
+    far = _distance_reading(_FAR, _SRC_HOOK)
+
+    # ① 那道闸对两条**都**沉默——这正是本条读数存在的前提。前提不成立就该重造样本。
+    assert 'hook_reuses_source' not in near and 'hook_reuses_source' not in far, (
+        '样本已经越过 20 字闸线 ⇒ 这条守卫此刻查的不是「闸看不见的那一带」')
+
+    # ② 读数**无条件报出**，两条都有。
+    assert 'hook_source_distance' in near and 'hook_source_distance' in far
+
+    def numbers(row):
+        longest, tail = row.evidence[0].split('/')
+        return int(longest), int(tail)
+
+    near_longest, near_tail = numbers(near['hook_source_distance'])
+    far_longest, far_tail = numbers(far['hook_source_distance'])
+
+    # ③ ⭐ 分得开：贴着写的那条，最长逐字重合与末行重合都严格更高。
+    assert near_longest > far_longest, (
+        '贴着原作结构写与另起场面读出同一个数 ⇒ 这条读数没有判别力')
+    assert near_tail > 0 and far_tail == 0, (
+        '末行重合是「最后一击照抄」的直接信号，不该被并进总的最长重合里')
+    assert '20 字 0.0%' in near['hook_source_distance'].detail, (
+        '20 字那一档必须与闸线同口径并排出现，否则读的人对不上那道闸')
+
+
+def test_missing_source_hook_reads_as_unmeasurable_not_as_zero():
+    """没有原作文案段时是**量不了**，不是「距离为 0」——两者不许压成一个值。"""
+    row = _distance_reading(_FAR, None)['hook_source_distance']
+    assert '量不了' in row.detail and not row.evidence

@@ -149,7 +149,11 @@ def judge_prompts(system: str) -> dict[str, str]:
            for role, suffix in JUDGE_ROLE_SUFFIX.items()},
     }
 DECODER_IDENTITY = {
-    'name': 'stage6-reference-boundary-double-blind-v1',
+    # ⚠ v1 → v2：匿名标签的落位口径从「产物顺序」改成「文本 sha1 排序」
+    #   （`_anonymisation_order`）。它改变真发出去的字节 ⇒ 必须在指纹里说出来，
+    #   否则事后没有任何东西分得清一份结论是在哪套匿名口径下判的。
+    'name': 'stage6-reference-boundary-double-blind-v2',
+    'anonymisation': 'neutral-labels-assigned-by-candidate-text-sha1-order',
     'quality_weights': QUALITY_WEIGHTS,
     'evidence': 'candidate-verbatim-span-or-whole-subject',
     'ranking': 'PASS-before-UNVER-before-FAIL,then-average-score,then-label',
@@ -243,6 +247,26 @@ def _unique_texts(art: Hook) -> list[tuple[str, str]]:
     return out
 
 
+def _anonymisation_order(art: Hook) -> list[tuple[str, str]]:
+    """匿名标签 `T1/T2/…` 落在哪条候选上。**按文本指纹排，不按产物里的先后。**
+
+    ⚠⚠ **这一位是判据承重的。** 原来直接用 `_unique_texts` 的返回顺序，而那个顺序
+    就是候选在产物里的顺序、也就是 `HOOK_APPROACHES` 的顺序 ⇒ `T1` 恒是第一种策略、
+    `T3` 恒是第三种。**位置与策略身份完全混淆**：本仓已记录过判官"先按位置选答案、
+    再编一套相反理由"的形状（`reason` 因此不能当证据），在那个前提下，
+    "哪条策略的文案更好"这个问题**根本无法从质量排序里读出来**——排序里混着一个
+    与策略同步变化的位置项，而两者的贡献分不开。
+
+    ⚠ 用**文本 sha1 排序**而不是随机打乱：随机会让同一份产物两次重审得到不同请求，
+    既毁掉可复现性，也让缓存恒 miss（本仓禁止不留账的不确定性）。按内容排则是
+    确定性的，且与策略枚举的顺序无关——换一批文案，位置就换。
+
+    ⚠ 这**不改变任何落盘字段**：产物里记的是解匿名后的真实标签。变的只有请求字节，
+    因此存量 `semantic_<n>.json` 仍可读、仍绑得住它自己的文本，只是重审必然 miss 缓存。
+    """
+    return sorted(_unique_texts(art), key=lambda row: text_sha1(row[1]))
+
+
 def build_prompt(ctx: RunContext) -> tuple[str, str, Hook, hook._Upstreams,
                                                list[tuple[str, str, str]]]:
     """构造一次匿名审判请求；返回 ``(neutral, real, text)`` 映射供落盘解匿名。"""
@@ -257,7 +281,7 @@ def build_prompt(ctx: RunContext) -> tuple[str, str, Hook, hook._Upstreams,
 
     aliases = [
         (f'T{i}', real_label, text)
-        for i, (real_label, text) in enumerate(_unique_texts(art), 1)
+        for i, (real_label, text) in enumerate(_anonymisation_order(art), 1)
     ]
     payload = {
         'texts': [{'label': neutral, 'text': text} for neutral, _real, text in aliases],
@@ -593,6 +617,29 @@ def unavailable_outcomes(why: str) -> list[Outcome]:
     ]
 
 
+def judge_voices(decision: SemanticDecision | None) -> str:
+    """两名盲评判官**各自原样说了什么**，拼成报告里那半句。
+
+    ⚠⚠ **这不是装饰，它补的是一处契约未兑现。** `R-9.19` 写着「报告必须原样呈现
+    两名判官实际说了什么，不能压成一句『未校准』」，而 `double_blind_decision`
+    算出的四选一 `reason` 在**最常见的第四种情形**（A/B 同判且各自证据闭合）里
+    **逐字与候选无关**——三条候选拿到同一句治理模板。实测一本书的终审包 §5 因此
+    是四条一模一样的话，而人恰恰要在那一面挑一条定稿。
+
+    判官真正有区分度的判断一直在 `decision.judges[].reason` 里（A 判某条「提前剧透
+    结局」、判另一条「更像剧情摘要缺具体场景」），在此之前**全仓没有任何读者**。
+    这里只是把它接回人做决定的那一面——**不新增任何 LLM 调用，数据早就在产物里**。
+
+    ⚠ 按 `judge` 名排序输出，不按 `judges[]` 的入列顺序：那个顺序是 A/B 合流时的
+    实参位置，读的人要的是「A 说了什么、B 说了什么」这个稳定口径。
+    """
+    if decision is None:
+        return ''
+    return '；' + ' ｜ '.join(
+        f'判官 {row.judge}（{row.verdict}）：{row.reason}'
+        for row in sorted(decision.judges, key=lambda row: row.judge))
+
+
 def outcomes(store: ArtifactStore, art: Hook | None) -> list[Outcome]:
     """当前质量产物 → 矛盾门、候选提示与质量排序三条判据。"""
     if art is None:
@@ -614,14 +661,19 @@ def outcomes(store: ArtifactStore, art: Hook | None) -> list[Outcome]:
             for contradiction in review.contradictions:
                 candidate_findings.append(finding(
                     'hook_candidate_contradiction',
+                    # ⚠ 判官原话跟着**每一条**结论走，不另立一条 finding 汇总：
+                    #   finding 是被逐条消费的（inbox 一行、wontfix 一个证据键、
+                    #   报告一行），汇总条会让「有人看过并决定不修」落在错的粒度上。
                     detail=(f'[{label}] {disposition}：{contradiction.assertion}；'
-                            f'候选证据：{contradiction.evidence}；{contradiction.reason}'),
+                            f'候选证据：{contradiction.evidence}；{contradiction.reason}'
+                            f'{judge_voices(assessment.decision)}'),
                     evidence=[f'{label}:{contradiction.evidence}'],
                 ))
         elif assessment.state == 'uncertain':
             candidate_findings.append(finding(
                 'hook_candidate_contradiction',
-                detail=f'[{label}] 双盲合并为 UNVER：{assessment.reason}',
+                detail=(f'[{label}] 双盲合并为 UNVER：{assessment.reason}'
+                        f'{judge_voices(assessment.decision)}'),
                 # ⚠⚠ **这一格原来是 `[]`，而那让人工豁免闭环在这条上失效。**
                 # 空凭据 ⇒ `evidence_key` 恒是空串 ⇒ 三条候选各自的「核对不完整」
                 # **共用同一个收敛键**，一次豁免会把三条一并豁免掉——正是

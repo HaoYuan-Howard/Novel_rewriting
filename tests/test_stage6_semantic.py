@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema.evaluation import (
-    EvidenceRef, JudgeDecision, SemanticDecision,
+    EvidenceRef, JudgeDecision,
 )
 from contracts.schema.api import HookApproveRequest
 from contracts.schema.stage6 import (
@@ -20,6 +20,7 @@ from contracts.schema.stage6 import (
 )
 from novel.errors import TerminalState, UpstreamMissing
 from novel.llm.transport import ChatResponse
+from novel.quality.evaluator import double_blind_decision
 from novel.stages.stage6 import semantic
 
 WIRE = ChatResponse(content='{}')
@@ -55,7 +56,10 @@ def _response_review(label: str, *, text: str = TEXT_A, contradiction: bool = Fa
         'uncertainty_reason': '指代无法确认' if uncertain else None,
         'contradictions': contradictions,
         'quality': _quality(),
-        'concise_reason': '具体场面强，最后一击有效。',
+        # ⚠ 逐候选**必须不同**：判官对三条候选说的本来就不是同一句话，
+        #   夹具灌同一句会让「报告能不能分辨三条候选」的守卫靠 `[候选名]`
+        #   前缀恒真——那是在查标签，不是在查内容。
+        'concise_reason': f'具体场面强，最后一击有效（{label} 侧写）。',
     }
 
 
@@ -97,17 +101,21 @@ def _semantic_artifact(reviews: list[HookCandidateReview], ranking: list[str] | 
             artifact='stage6/hook.json#candidate/' + review.label,
             subject_sha256=semantic.text_sha256(text), start=0, end=len(text))]
         # ⚠ 逐判官仍是三态（那是要留的证据）；**合并决议恒 UNVER**。
+        # ⚠⚠ 两名判官的 reason **必须不同**，而合并 reason 必须由 `double_blind_decision`
+        #     真算：这个夹具原来给 A/B 灌同一句话、又手拼一份 `SemanticDecision`，
+        #     于是「合并理由」恰好等于「判官原话」——而生产上它们是两回事
+        #     （合并那句是四选一的**类别**，与候选无关）。夹具重拼生产实参 ⇒
+        #     下面那条「三条候选不能共用一句理由」的守卫在盘上早已失效却一直绿着
+        #     （`docs/LESSONS.md` 第 21 条的第三形状：守卫漂了也可能假绿）。
         judges = [JudgeDecision(
             judge=judge, verdict=verdict, evidence=refs,
-            reason=review.uncertainty_reason or review.concise_reason)
+            reason=f'{review.uncertainty_reason or review.concise_reason}（判官 {judge} 语）')
             for judge in ('A', 'B')]
-        decisions.append(SemanticDecision(
+        decisions.append(double_blind_decision(
             ability='reference_boundary',
             subject_key=semantic.text_sha256(text),
-            verdict='UNVER',
-            evidence=refs,
-            reason=review.uncertainty_reason or review.concise_reason,
-            judges=judges,
+            first=judges[0],
+            second=judges[1],
         ))
     return SimpleNamespace(
         reviews=reviews,
@@ -506,9 +514,66 @@ def test_every_reviewed_candidate_lands_in_uncertain_with_its_own_reason(monkeyp
     assert {row.state for row in states.values()} == {'uncertain'}
     assert not hasattr(semantic.CandidateAssessment, 'selectable')
     assert not hasattr(semantic, 'require_selectable')
-    assert states[TEXT_A].reason == '指代无法确认'
-    assert len({row.reason for row in states.values()}) > 1, (
-        '三条候选共用一句理由 ⇒ 人分不出它们，等于什么都没说')
+    # 合并 reason 是**四选一的类别**（`double_blind_decision`），不是候选自己的话——
+    # 三条候选全干净时它逐字相同，那正是盘上实测的形状，不能拿它当区分依据。
+    assert states[TEXT_A].reason == '至少一名盲评 judge 明确判为 UNVER'
+
+    # ⭐ 真正要守的是这一条：**人在报告上读到的那一行必须逐条不同**。
+    # `R-9.19` 写着「报告必须原样呈现两名判官实际说了什么」，而两名判官的原话
+    # 一直在 `decisions[].judges[].reason` 里、在此之前没有任何读者。
+    _hard, info, _metric = semantic.outcomes(_Store(), _art())
+    details = [row.detail for row in info.findings]
+    # ⚠ 比的是**剥掉 `[候选名]` 前缀之后**的正文：带着前缀比，三条永远不同，
+    #   那条断言就只是在查标签存在，一次内容退化都拦不住。
+    bodies = [detail.split('] ', 1)[-1] for detail in details]
+    assert len(set(bodies)) == 3, (
+        '三条候选在报告上除了名字以外读起来一模一样 ⇒ 人分不出它们，等于什么都没说')
+    for judge in ('A', 'B'):
+        assert all(f'判官 {judge}（' in detail for detail in details), (
+            f'判官 {judge} 的原话没进报告——合并那句类别理由替代不了它')
+    assert any('指代无法确认（判官 A 语）' in detail for detail in details)
+
+    # ⭐⭐ **盘上那本书的真实形状是「三条全干净」**，而那正是合并 reason 塌成
+    # 同一句的情形（四选一里最常见的第四条）。上面那组候选带着 uncertain 与
+    # contradiction，三条的类别本来就不同 ⇒ 分辨得开不算本事。这一组才是要守的：
+    # 全干净时，若判官原话不进报告，人读到的就是三句逐字相同的治理模板。
+    _install(monkeypatch, _semantic_artifact(_all_clean_reviews()))
+    _hard, clean_info, _metric = semantic.outcomes(_Store(), _art())
+    clean_bodies = [row.detail.split('] ', 1)[-1] for row in clean_info.findings]
+    assert len({body.split('；判官 ')[0] for body in clean_bodies}) == 1, (
+        '这一组的合并理由本该逐字相同——不同了说明夹具又在替生产编区分度')
+    assert len(set(clean_bodies)) == 3, (
+        '三条全干净时报告读起来一模一样 —— 这正是盘上实测的那处退化')
+
+
+def test_neutral_labels_do_not_track_the_candidate_position_or_approach():
+    """⭐⭐ 匿名标签必须由**文本内容**决定，不由候选在产物里的位置决定。
+
+    改之前 `T1/T2/T3` 直接按产物顺序发，而产物顺序恒等于 `HOOK_APPROACHES` 的顺序
+    ⇒ 第一种策略恒坐 `T1`、第三种恒坐 `T3`。**位置与策略身份是同一个变量**，
+    于是质量排序里那两者的贡献分不开——本仓已记录过判官的位置偏置，
+    在那个前提下拿旧排序去回答"哪条策略更好"是在污染的仪器上读数。
+
+    这条守卫查的正是那一位：**同一批文本换个排列，每条文本拿到的标签必须不变。**
+    """
+    from novel.stages.stage6 import hook as hook_mod
+
+    forward = _art()
+    reversed_order = SimpleNamespace(
+        candidates=list(reversed(forward.candidates)), approved=None)
+
+    def labelled(art):
+        return {text: neutral for neutral, (_real, text) in zip(
+            (f'T{i}' for i in range(1, 99)),
+            semantic._anonymisation_order(art))}
+
+    assert labelled(forward) == labelled(reversed_order),         '候选换个顺序，匿名标签就跟着挪 ⇒ 标签编码的是位置而不是内容'
+
+    # 而位置**确实**曾经决定标签——用产地那一份未排序的顺序做反证，
+    # 免得这条守卫在实现退化回去之后还绿着。
+    raw = [text for _label, text in hook_mod._texts_of(reversed_order)]
+    ordered = [text for _label, text in semantic._anonymisation_order(reversed_order)]
+    assert raw != ordered,         '这批夹具文本的产物顺序恰好等于指纹顺序 ⇒ 本条断言此刻查不到东西，换文本'
 
 
 def test_human_resolution_needs_actor_reason_and_the_exact_current_bytes(monkeypatch):

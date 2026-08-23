@@ -205,7 +205,7 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 
 ## 六、现役判据
 
-当前注册表共 **22 条**：**5 hard、8 info、5 metric、4 unver**。
+当前注册表共 **23 条**：**5 hard、8 info、6 metric、4 unver**。
 
 | 判据 | 级别 | 作用 |
 |---|---|---|
@@ -226,6 +226,7 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 | `hook_quote_shape` | metric | 引语条数、最长引语、对白比 |
 | `hook_secret_literal` | metric | 与 secret 原文的字面重合读数，不是剧透门 |
 | `hook_fact_attribution` | metric | 人物赠与类事实的弱字面归因读数 |
+| `hook_source_distance` | metric | 与原作文案段的呈现结构距离：多档窗口重合率 · 最长逐字重合 · 末行重合。**度量不是门**——它补的是 `hook_reuses_source` 看不见的那一带（逐句改写措辞、却复用信息出场顺序并落在同一句收尾上，那道 20 字闸报 0 违规）。结构贴近本身不违约（`R-9.11` 尾注明许学结构），读数是给人裁决策略去留与定稿取舍的依据 |
 | `hook_quality_rank` | metric/semantic | 六维分、代码总分与匿名排序 |
 | `hook_semantic_contradiction` | unver/semantic | ⚠ **它永远产不出 Finding**：合并决议在类型上恒 `UNVER`，实现只有一条 `unverifiable(...)` 出口。曾是 HARD（靠 automated FAIL 阻断），随自动放行门下线降级。⇒ 它报的是「这条够不着，去读判官证据」，不是「查过没问题」 |
 | `hook_not_approved` | unver | 是否已有人工定稿 |
