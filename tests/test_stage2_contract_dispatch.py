@@ -277,6 +277,45 @@ def test_the_summary_batch_arm_declares_its_bounds():
         {'chapter_ordinal', 'summary'}
 
 
+def test_the_hinge_review_arm_is_a_bounded_keep_only_selector():
+    assert '只能从现有临时 id 中选择' in prompts.HINGE_REVIEW_SYS
+    assert '不能新增、改写、合并或移动' in prompts.HINGE_REVIEW_SYS
+    assert set(prompts.HINGE_REVIEW_HINT['chapters'][0]) == \
+        {'chapter_ordinal', 'keep_hinge_ids'}
+
+
+def test_dense_hinge_review_uses_low_nothink_and_can_only_delete():
+    book = Path(tempfile.mkdtemp()) / 'hinge复核_128'
+    book.mkdir(parents=True)
+    ctx = _ctx(book, 'stage2.blueprint')
+    blueprints = [{
+        'chapter_ordinal': 1,
+        'beats': [{
+            'event': '普通介绍后给出一项真正会回收的承诺。',
+            'hinges': [{
+                'kind': '要害台词',
+                'source': {'text': f'原句{i}'},
+            } for i in range(extract.HINGE_REVIEW_TRIGGER)],
+        }],
+    }]
+
+    client, transport = _client(
+        ctx, lambda _req, _index: _ok({
+            'chapters': [{'chapter_ordinal': 1,
+                          'keep_hinge_ids': ['r001', 'r016']}],
+        }))
+    result = extract._run_hinge_review_batch(ctx, client, blueprints)
+
+    assert len(transport.calls) == 1
+    assert (transport.calls[0].reasoning_effort, transport.calls[0].thinking) == \
+        ('low', False)
+    assert result['reviewed_chapters'] == [1]
+    assert result['chapters'][0]['before'] == extract.HINGE_REVIEW_TRIGGER
+    assert result['chapters'][0]['after'] == 2
+    assert [h['source']['text'] for h in blueprints[0]['beats'][0]['hinges']] == \
+        ['原句0', '原句15']
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 四、extraction-ir-v1 零成本全链
 # ─────────────────────────────────────────────────────────────────────────────

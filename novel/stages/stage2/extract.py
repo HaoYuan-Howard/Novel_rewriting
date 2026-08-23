@@ -1505,6 +1505,146 @@ def _run_blueprint_repair(
 SUMMARY_BATCH_MIN_CHARS = 50
 SUMMARY_BATCH_MAX_CHARS = 400
 
+#: 高密章复核的**调用触发线**，不是自动删减上限、也不是质量合格线。开发书反例中
+#: 8 条是完整关系链，20 条已有明显普通对白；先只把极端尾部送进语义复核，避免给正常章
+#: 平白增加一次模型判断。是否真删仍由受限 keep/drop 响应决定。
+HINGE_REVIEW_TRIGGER = 16
+HINGE_REVIEW_RUNGS = (('low', False),)
+HINGE_REVIEW_MAX_TOKENS = 8_192
+
+
+def _run_hinge_review_batch(
+    ctx: RunContext,
+    client: LlmClient,
+    blueprints: list[dict[str, Any]],
+    *,
+    force_chapters: tuple[int, ...] = (),
+) -> dict[str, Any]:
+    """对极端高密章做一次低推理、只减不增的 hinge 复核。
+
+    当前只由付费冒烟显式调用；先用开发书证明 precision/recall，再决定是否接入
+    `finish_blueprints`。`force_chapters` 只给冒烟放入阴性对照，不是生产触发面。
+    """
+    from contracts.schema.stage2 import HingeReviewBatchResponse
+    from novel.stages.stage2 import prompts
+
+    forced = set(force_chapters)
+    by_ordinal = {
+        int(bp.get('chapter_ordinal') or 0): bp for bp in blueprints
+    }
+    unknown = sorted(forced - set(by_ordinal))
+    if unknown:
+        raise ValueError(f'强制复核章不在本次编译稿里：{unknown}')
+
+    targets: list[int] = []
+    rows_by: dict[int, list[tuple[str, dict[str, Any], dict[str, Any]]]] = {}
+    payload_chapters: list[dict[str, Any]] = []
+    for ordinal, blueprint in sorted(by_ordinal.items()):
+        hinges = [h for beat in (blueprint.get('beats') or [])
+                  for h in (beat.get('hinges') or [])]
+        if len(hinges) < HINGE_REVIEW_TRIGGER and ordinal not in forced:
+            continue
+        targets.append(ordinal)
+        numbered: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+        payload_beats: list[dict[str, Any]] = []
+        cursor = 0
+        for beat in (blueprint.get('beats') or []):
+            payload_hinges: list[dict[str, str]] = []
+            for hinge in (beat.get('hinges') or []):
+                cursor += 1
+                review_id = f'r{cursor:03d}'
+                source = hinge.get('source') if isinstance(hinge, dict) else None
+                text = str(source.get('text') or '') if isinstance(source, dict) else ''
+                numbered.append((review_id, beat, hinge))
+                payload_hinges.append({
+                    'hinge_id': review_id,
+                    'kind': str(hinge.get('kind') or ''),
+                    'text': text,
+                })
+            payload_beats.append({
+                'event': str(beat.get('event') or ''),
+                'hinges': payload_hinges,
+            })
+        rows_by[ordinal] = numbered
+        payload_chapters.append({
+            'chapter_ordinal': ordinal,
+            'beats': payload_beats,
+        })
+
+    if not targets:
+        return {
+            'called': False,
+            'trigger': HINGE_REVIEW_TRIGGER,
+            'reviewed_chapters': [],
+            'chapters': [],
+        }
+
+    known = {ordinal: {row[0] for row in rows}
+             for ordinal, rows in rows_by.items()}
+
+    def validate(obj: Any, _resp: Any) -> str | None:
+        got = [c.chapter_ordinal for c in obj.chapters]
+        if sorted(got) != targets or len(set(got)) != len(got):
+            return f'章集不齐或重复：要 {targets}，得 {sorted(got)}'
+        for chapter in obj.chapters:
+            keep = list(chapter.keep_hinge_ids)
+            if len(set(keep)) != len(keep):
+                return f'ch{chapter.chapter_ordinal} keep_hinge_ids 有重复项'
+            extra = sorted(set(keep) - known[chapter.chapter_ordinal])
+            if extra:
+                return f'ch{chapter.chapter_ordinal} 选择了未下发 id：{extra}'
+        return None
+
+    response = client.ask_json(
+        with_json_shape(prompts.HINGE_REVIEW_SYS, prompts.HINGE_REVIEW_HINT),
+        '── 待复核的现有事件与 hinge（id 只在本次调用内有效）──\n'
+        + json.dumps({'chapters': payload_chapters}, ensure_ascii=False,
+                     separators=(',', ':')),
+        model_cls=HingeReviewBatchResponse,
+        purpose=f'{ctx.node}:hinge-review',
+        validator=validate,
+        rungs=HINGE_REVIEW_RUNGS,
+        max_tokens=HINGE_REVIEW_MAX_TOKENS,
+    )
+    kept_by = {c.chapter_ordinal: set(c.keep_hinge_ids) for c in response.chapters}
+    report_chapters: list[dict[str, Any]] = []
+    for ordinal in targets:
+        kept = kept_by[ordinal]
+        rows = rows_by[ordinal]
+        before = len(rows)
+        dropped: list[dict[str, str]] = []
+        keep_object_ids = {id(hinge) for review_id, _beat, hinge in rows
+                           if review_id in kept}
+        for review_id, beat, hinge in rows:
+            if review_id in kept:
+                continue
+            source = hinge.get('source') if isinstance(hinge, dict) else None
+            dropped.append({
+                'hinge_id': review_id,
+                'kind': str(hinge.get('kind') or ''),
+                'text': (str(source.get('text') or '')
+                         if isinstance(source, dict) else ''),
+                'event': str(beat.get('event') or ''),
+            })
+        blueprint = by_ordinal[ordinal]
+        for beat in (blueprint.get('beats') or []):
+            beat['hinges'] = [h for h in (beat.get('hinges') or [])
+                              if id(h) in keep_object_ids]
+        report_chapters.append({
+            'chapter_ordinal': ordinal,
+            'before': before,
+            'after': len(kept),
+            'kept_hinge_ids': sorted(kept),
+            'dropped': dropped,
+            'forced_control': ordinal in forced,
+        })
+    return {
+        'called': True,
+        'trigger': HINGE_REVIEW_TRIGGER,
+        'reviewed_chapters': targets,
+        'chapters': report_chapters,
+    }
+
 
 def _run_summary_batch(ctx: RunContext, client: LlmClient,
                        blueprints: list[dict[str, Any]]) -> dict[int, str]:

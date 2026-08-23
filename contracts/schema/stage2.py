@@ -934,6 +934,22 @@ class ChapterBlueprintsResponseV31(StrictModel):
     blueprints: list[ScaffoldedBlueprintResponseV31] = Field(min_length=1)
 
 
+HingeReviewId = Annotated[str, StringConstraints(pattern=r'^r\d{3}$')]
+
+
+class HingeReviewChapterResponse(StrictModel):
+    """高密章 hinge 复核的一章决策；只准保留调用方下发过的临时 id。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    keep_hinge_ids: list[HingeReviewId]
+
+
+class HingeReviewBatchResponse(StrictModel):
+    """低推理复核批的响应边界；它不是盘上 artifact，也不改变 v2 schema。"""
+
+    chapters: list[HingeReviewChapterResponse] = Field(min_length=1)
+
+
 class HingeSelectResponse(StrictModel):
     """候选选择（`--patch` 修 `hinge_ambiguous`）：代码枚举命中位，模型**只挑 id**。
 

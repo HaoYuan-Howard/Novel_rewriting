@@ -735,6 +735,24 @@ _SUMMARY_BATCH_TPL = """\
 
 只输出 JSON，不要额外解释文字。"""
 
+#: 高密章 hinge 复核是抽取后的**受限选择**，不重读正文，也不准改写或补造材料。
+#: 它刻意不带 `RULES_V2`：那份长规则会让一个 keep/drop 小任务重新变成整章抽取。
+_HINGE_REVIEW_TPL = """\
+你会收到若干章已经抽取好的事件拍，以及每拍现有的保真材料（hinge）。这不是再次抽取：
+你只能从现有临时 id 中选择应保留的项，不能新增、改写、合并或移动任何材料。
+
+保留判据是【删掉后，改写者会丢失一个必须精确保真的事实或表达】：
+- 硬数字：数值本身决定笑点、因果、约束或场景成立性；普通人数、时长、顺序数字不保留；
+- 要害台词：承诺、拒绝、决定、揭示、关系/立场反转、后文回收原话或笑点最后一击；
+  普通介绍、寒暄、追问、接话、训斥、语气展示，以及 event 已完整概括且不依赖原句的对白不保留；
+- 物件：具体物件会被使用、识别、交换或回收；仅作背景陈设不保留；
+- 因果前提：条件本身会改变后续行动、决定或利害；只是叙述顺序或一般背景不保留。
+
+逐项用所属 beat 的 event 判断。数量多不是保留理由，数量少也不是删除理由；同一证据若有整句和
+内部数字/短句，只留能让后续还原事实的最小充分项。每章必须返回一条，`keep_hinge_ids` 只列保留的
+临时 id；未列出的全部视为删除。只输出 JSON，不要额外解释文字。"""
+
+
 #: `--patch` 的两条小臂（`extraction-ir-v1` 字段级修复）。均无 `RULES_V2` 前缀——
 #: 它们不是抽取，是对一条已知失败的**受限**修复；user 里只有该拍原文与失败上下文。
 _HINGE_SELECT_TPL = """\
@@ -814,6 +832,9 @@ BLUEPRINT_SYS_V31 = RULES_V2 + fill(
 
 #: 书级摘要批（extraction IR 族共用，付费，一书一调）。
 SUMMARY_BATCH_SYS = fill(_SUMMARY_BATCH_TPL)
+
+#: 高密章受限复核（实验臂；只有冒烟显式开启才会调用）。
+HINGE_REVIEW_SYS = fill(_HINGE_REVIEW_TPL)
 
 #: `--patch` 字段级修复的两条小臂（付费，逐条失败一调）。
 HINGE_SELECT_SYS = fill(_HINGE_SELECT_TPL)
@@ -976,6 +997,11 @@ BLUEPRINT_HINT_V31: dict[str, Any] = {
 #: 书级摘要批的结构提示。
 SUMMARY_BATCH_HINT: dict[str, Any] = {
     'chapters': [{'chapter_ordinal': 1, 'summary': 'str(100~220字，一段话)'}],
+}
+
+#: 高密章受限复核的结构提示。
+HINGE_REVIEW_HINT: dict[str, Any] = {
+    'chapters': [{'chapter_ordinal': 1, 'keep_hinge_ids': ['r001']}],
 }
 
 #: `--patch` 两条小臂的结构提示。
