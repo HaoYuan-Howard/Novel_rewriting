@@ -11,8 +11,8 @@ import pytest
 from contracts.schema.stage4 import CtxBeat, WriterContext
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    Assembly, _gate_setting, _resolve_beats, build_writer_context, display_names,
-    display_names_at, name_collisions, rename_all,
+    Assembly, _gate_setting, _project_facts, _resolve_beats, build_writer_context,
+    display_names, display_names_at, name_collisions, rename_all,
 )
 from tests import corpus
 
@@ -266,6 +266,104 @@ def test_the_setting_gate_uses_the_same_number_ruler_as_secret_keywords():
         setting, [{'secret_id': 'secret_x', 'fact': fact}], ['secret_x'])
     assert out['暗线'] == '这里另有一条无关规则。'
     assert cut == [('暗线', fact + '。')]
+
+
+# ── 二·五、secret 的下发时点（`R-2.18`）───────────────────────────────────
+
+def _split_secrets_grounding() -> dict:
+    """一个复合真相拆成两条、`group_id` 归组的合成底座。
+
+    这正是盘上那本书 `secret_01` 的形状：穿女装的行为在 ch4 点破，而「为什么」
+    要到 ch7 才点破。v1 只能把两件事写进一条 `fact`，于是 ch4 的写手整份都拿到。
+    """
+    return {
+        'entities': {'characters': {
+            'char_001': {'canonical': '江尽夏', 'role': '练习生',
+                         'address': [{'surface': '江尽夏', 'by': 'narration',
+                                      'context': 'reference', 'from_chapter': 1}]},
+        }, 'relations': []},
+        'canon': {
+            'setting': {'时代背景': '当代', '世界观': '偶像公寓'},
+            'world_rules': [],
+            'secrets': [
+                {'secret_id': 'secret_01', 'group_id': 'sgrp_01',
+                 'fact': '江尽夏私下会穿女装打扮自己',
+                 'character_known_by': ['char_001'],
+                 'setup': {'kind': 'foreshadowed', 'chapters': [2]},
+                 'reader_reveal_events': [{'chapter': 4, 'kind': 'first'},
+                                          {'chapter': 9, 'kind': 'confirm'}]},
+                {'secret_id': 'secret_02', 'group_id': 'sgrp_01',
+                 'fact': '他这么做是因为中学时穿裙子被舅舅剃了头',
+                 'character_known_by': ['char_001'],
+                 'setup': {'kind': 'cold'},
+                 'reader_reveal_events': [{'chapter': 7, 'kind': 'first'}]},
+            ],
+        },
+        # ⚠ 阶段必须逐章覆盖全书（`R-2.14`）：`_project_facts` 对定不出章级阶段的
+        #   情形是显式终态，不猜也不省略 ⇒ 这里给满 1~9 章，否则测的就成了那条闸。
+        'arc': {'conflict_stages': [{'stage': '藏', 'chapters': [1, 2, 3, 4, 5]},
+                                    {'stage': '认', 'chapters': [6, 7, 8, 9]}],
+                'climax': '摊牌', 'ending': '和解', 'arc_tracks': []},
+    }
+
+
+@pytest.mark.parametrize(('ordinal', 'visible', 'hidden'), [
+    # ch2 是 secret_01 的埋点章 ⇒ 事实要摆出来（但 reader_knows_by_now=False）
+    (2, ['secret_01'], ['secret_02']),
+    (4, ['secret_01'], ['secret_02']),
+    (6, ['secret_01'], ['secret_02']),
+    (7, ['secret_01', 'secret_02'], []),
+])
+def test_a_split_secret_group_is_released_per_member_not_per_group(
+    ordinal: int, visible: list[str], hidden: list[str],
+):
+    """⭐ `R-2.18`：拆开的两条各按**自己的** `first` 章下发，不按 `group_id` 拉平。
+
+    这是 v2 那次改动真正修掉的东西。v1 里这两件事只能写进一条 `fact`，
+    而闸门按「任意一次揭示 ≤ 本章」判 ⇒ 写 ch4 的写手连 ch7 才点破的成因一起拿到。
+    ⚠ 如果哪天有人「顺手」按 group 下发（同组一条揭示就全放），本条会红——
+    那正是把刚拆开的两件事又粘回去。
+    """
+    facts, must_not_reveal, _held, _cut = _project_facts(
+        _split_secrets_grounding(), ordinal, False, {'char_001': '江尽夏'})
+    got = [row['secret_id'] for row in facts['secrets']]
+    assert [sid for sid in got if sid in visible] == visible
+    assert sorted(must_not_reveal) == sorted(hidden)
+    # 已下发的那些必须同时说清「读者到本章知不知道」——ch2 是埋点章的那一条例外。
+    for row in facts['secrets']:
+        assert isinstance(row['reader_knows_by_now'], bool)
+
+
+def test_a_setup_chapter_releases_the_fact_but_marks_the_reader_as_unaware():
+    """埋点章要把事实摆出来，但 `reader_knows_by_now` 必须是 `False`。
+
+    没有这一格，写 ch2 那件事时不知道它后面会被回收，ch4 的点破就没有铺垫。
+    """
+    facts, must_not_reveal, _held, _cut = _project_facts(
+        _split_secrets_grounding(), 2, False, {'char_001': '江尽夏'})
+    row = next(r for r in facts['secrets'] if r['secret_id'] == 'secret_01')
+    assert row['reader_knows_by_now'] is False, '埋点章不是「读者已经知道」'
+    assert 'secret_02' in must_not_reveal, '另一条既没埋点也没揭示 ⇒ 只能留 id'
+
+
+def test_a_confirm_event_alone_never_opens_the_gate():
+    """⚠ `confirm` 不参与「读者知道了没」。
+
+    把 `first` 那条去掉、只留 `confirm`，闸门必须**关着**——旧式子
+    `any(chapter <= o)` 在这里会开闸，而那正是被换掉的判定。
+    ⚠ 这个形状载体是拒收的（恰一个 `first`）；这里直接喂 `_project_facts` 的
+    dict，测的是**闸门自己**在拿到坏形状时倒向安全的一边，不是测载体。
+    """
+    grounding = _split_secrets_grounding()
+    grounding['canon']['secrets'] = [{
+        'secret_id': 'secret_01', 'group_id': None, 'fact': '只有后续确认的坏形状',
+        'character_known_by': ['char_001'], 'setup': {'kind': 'cold'},
+        'reader_reveal_events': [{'chapter': 4, 'kind': 'confirm'}],
+    }]
+    facts, must_not_reveal, _held, _cut = _project_facts(
+        grounding, 9, False, {'char_001': '江尽夏'})
+    assert facts['secrets'] == []
+    assert must_not_reveal == ['secret_01']
 
 
 # ── 三、名字表的三个方向 ─────────────────────────────────────────────────

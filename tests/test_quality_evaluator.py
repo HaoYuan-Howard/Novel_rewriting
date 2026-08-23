@@ -81,6 +81,7 @@ def _global():
                                            'desc': '规矩'}]}],
             'secrets': [{'secret_id': 'secret_01', 'fact': '真相',
                          'character_known_by': ['char_001'],
+                         'setup': {'kind': 'cold'},
                          'reader_reveal_events': [{'chapter': 2}]}],
         },
     }
@@ -161,12 +162,13 @@ def _full_global():
             'secrets': [
                 {'secret_id': 'secret_01', 'fact': '掌柜是前朝旧臣',
                  'character_known_by': ['char_001'],
-                 'setup_chapters': [1, 2],
+                 'setup': {'kind': 'foreshadowed', 'chapters': [1, 2]},
                  'reader_reveal_events': [{'chapter': 5}]},
-                # 冷揭示：`setup_chapters` 据实留空，与「归一裁空」同形。
+                # 冷揭示：显式声明没有埋点。⚠ 它与「归一裁空后降级成 cold」
+                # 在字段值上仍然同形，分得开的只有 `setup_chapters_pruned` 那份账。
                 {'secret_id': 'secret_02', 'fact': '账房识得那枚印',
                  'character_known_by': ['char_002', '在场众人'],
-                 'setup_chapters': [],
+                 'setup': {'kind': 'cold'},
                  'reader_reveal_events': [{'chapter': 3}]},
             ],
         },
@@ -186,7 +188,7 @@ def test_every_risk_bearing_stage2_subject_is_enumerated_for_review():
     而「项」有多少是这里决定的——少枚举一类，闸照样开，人却从没看过它。
     历史上正是这样漏掉四处已知风险面：`role` 的结局旁路（词表实测 0/17 而人读
     真违规 6/17）、`setting.世界观` 的泄底（逐章字面闸门实测 0/8）、relations
-    这条第二剧透通道，以及两道下发闸门共同的前件 `setup_chapters`。
+    这条第二剧透通道，以及两道下发闸门共同的前件**埋点**。
     """
     review = build_review(_full_global())
     by_kind: dict[str, list[str]] = {}
@@ -203,8 +205,8 @@ def test_every_risk_bearing_stage2_subject_is_enumerated_for_review():
     assert sorted(by_kind['setting_fact']) == [
         'canon.setting.世界观', 'canon.setting.时代背景']
     assert sorted(by_kind['secret_setup']) == [
-        'canon.secrets.secret_01.setup_chapters',
-        'canon.secrets.secret_02.setup_chapters']
+        'canon.secrets.secret_01.setup',
+        'canon.secrets.secret_02.setup']
 
     # 解读层分组：整份一项，不逐条拆——单拆一条判不出对错。
     assert by_kind['conflict_partition'] == ['arc.conflict_stages']

@@ -97,6 +97,22 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '2026-08-22 阶段 B：恒 `sec_0001` 的 `section_id` 删除，产物收成 `{text}`',
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
+    'stage2/global_grounding.json': (
+        2,
+        '2026-08-23 secret 时间线三刀：① `setup_chapters: list[int]` 换成 `setup` '
+        '判别联合（`{"kind":"cold"}` / `{"kind":"foreshadowed","chapters":[…]}`）'
+        '——v1 的 `[]` 同时表示「声明冷揭示」与「模型压根没想过」，而这一格是两道'
+        '下发闸门的前件；② `reader_reveal_events[]` 加 `kind: first|confirm`，'
+        '载体强制恰有一条 `first`——旧的下发闸门按「任意一次揭示 ≤ 本章」判，'
+        '分两次揭示的秘密在第一次之后就把整份 `fact` 泄给了写前面章节的写手；'
+        '③ 新增可空 `group_id`，复合真相拆成多条后归组用',
+        '`stage2.global` 整跑（**付费**）；`.INVALID` 与 `_rounds/` 一律作废，'
+        '不手补字段冒充当前产地。⚠ 本次存量代价：盘上只有《偶像公寓打工日常》一本 '
+        'v1 grounding，它的 `chapter_blueprints` 已因 v2→v3 停在 '
+        '`unknown/no_provenance`、stage3/stage4 三份本就 `stale` ⇒ 重建它不额外'
+        '作废任何有效下游。⚠⚠ 重建后 `global_review` 的 65 项人工决定全部回到 '
+        '`pending`（subject hash 变了），这是本次唯一真实的人工成本。',
+    ),
     'stage2/chapter_blueprints.json': (
         3,
         '两次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'

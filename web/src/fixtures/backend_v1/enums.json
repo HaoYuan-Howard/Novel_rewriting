@@ -271,6 +271,14 @@
   "address",
   "reference"
  ],
+ "secret_setup_kinds": [
+  "cold",
+  "foreshadowed"
+ ],
+ "reveal_event_kinds": [
+  "first",
+  "confirm"
+ ],
  "name_distinctiveness": [
   "high",
   "medium",

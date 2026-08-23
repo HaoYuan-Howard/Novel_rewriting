@@ -654,11 +654,19 @@ def _canon(c: _Ctx) -> list[Outcome]:
                                 evidence=sorted(bad))] if bad else [],
                        scanned=f'{len(secs)} 条 secret · 断言的是裁剪计数不是字段值'))
 
-    cold = [str(s.get('secret_id')) for s in secs if not (s.get('setup_chapters') or [])]
+    # ⚠ v2 起分两档报：`setup.kind == 'cold'` 是**模型显式声明**的冷揭示（合法），
+    #   而**落盘前被裁空降级**来的那些在字段值上与它同形——只有 `pruned` 这份账
+    #   分得开。合成一个数字会让「产地在把揭示章号抄进埋点」藏进一条正常读数里。
+    cold = [str(s.get('secret_id')) for s in secs
+            if ((s.get('setup') or {}).get('kind')) == 'cold']
+    demoted = sorted({str(row[0]) for row in (pruned or [])
+                      if len(row) >= 3 and not row[2]})
     out.append(ran('secret_cold_reveal', [
         finding('secret_cold_reveal',
-                detail=f'{len(cold)}/{len(secs)} 条 secret 没有埋点：{_cut(cold)}',
-                evidence=[f'{len(cold)}/{len(secs)}'])],
+                detail=f'{len(cold)}/{len(secs)} 条 secret 没有埋点：{_cut(cold)}'
+                       + (f'；其中 {len(demoted)} 条是裁空降级来的、不是声明的冷揭示：'
+                          f'{_cut(demoted)}' if demoted else ''),
+                evidence=[f'cold={len(cold)}/{len(secs)}', f'demoted={len(demoted)}'])],
         scanned=f'{len(secs)} 条 secret'))
 
     # `secret_known_by_dangling`：⚠ 按**形状**分流，不按值分流。

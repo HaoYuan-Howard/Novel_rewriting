@@ -12,6 +12,7 @@ import re
 from contracts.schema.stage5 import JudgedDraft
 from contracts.schema.stage6 import Mech
 from novel.core.bands import BAND_SEP, sep_band_of_text
+from novel.core.facts import first_reveal_chapter
 from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
     quote_pair,
@@ -68,12 +69,14 @@ def hidden_secrets(secrets: list[dict], upto: int) -> tuple[list[dict], list[str
     hid: list[dict] = []
     no_time: list[str] = []
     for s in secrets or []:
-        rev = [e.get('chapter') for e in (s.get('reader_reveal_events') or [])
-               if isinstance((e or {}).get('chapter'), int)]
-        if not rev:
+        # ⚠ **首次**揭示章，与逐章下发闸门同一个函数（`first_reveal_chapter`）。
+        #   说不出首次揭示时点的（一条 `kind='first'` 都没有）走 `no_time` 那条：
+        #   「不知道什么时候揭示」不是「已经揭示了」。
+        first = first_reveal_chapter(s)
+        if first is None:
             no_time.append(s.get('secret_id'))
             hid.append(s)
-        elif min(rev) > upto:
+        elif first > upto:
             hid.append(s)
     return hid, no_time
 

@@ -53,6 +53,7 @@ from contracts.invariants import (
     NONBODY_KINDS,
     REMOVED_ORIGIN,
     RESIDUAL_ADOPTION_CONFIDENCE,
+    SECRET_SETUP_KINDS,
     SEVERITY,
     STAGES,
     STRUCTURAL_ROLES,
@@ -975,8 +976,24 @@ class GlobalSecretLine(FrozenModel):
 
     secret_id: str = Field(min_length=1)
     fact: str = Field(min_length=1)
+
+    #: 同一个复合真相被拆成多条时的归组键；独立的秘密是 `null`。
+    group_id: str | None = None
+
     known_by: list[NameRef] = Field(min_length=1)
+
+    #: ⚠ **必须连 `setup_kind` 一起读。** `cold`（声明没有埋点）与
+    #: `foreshadowed` 但章号被落盘前裁空，在 `setup_chapters` 上都是 `[]`；
+    #: 界面拿空数组当「没有埋点」是对的，拿它当「模型声明了冷揭示」是错的。
+    setup_kind: Literal[SECRET_SETUP_KINDS]
     setup_chapters: list[int]
+
+    #: **逐章剧透闸门按它开**，不是按 `reader_reveal_chapters` 的最小值。
+    #: 两者在合法产物上取值相同（载体不许有事件早于首次揭示），但语义不同：
+    #: 界面要说「读者第几章知道这件事」时，说的是这一格。
+    first_reveal_chapter: int = Field(ge=1)
+
+    #: 全部揭示章（含后续 `confirm`）。
     reader_reveal_chapters: list[int] = Field(min_length=1)
 
 

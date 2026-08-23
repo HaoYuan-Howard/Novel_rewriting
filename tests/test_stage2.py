@@ -156,7 +156,7 @@ def global_grounding() -> dict[str, Any]:
             'secrets': [{'secret_id': 'secret_01',
                          'fact': '父亲早已回城却一直不肯露面',
                          'character_known_by': ['char_001'],
-                         'setup_chapters': [1],
+                         'setup': {'kind': 'foreshadowed', 'chapters': [1]},
                          'reader_reveal_events': [{'chapter': 2}]}],
         },
         'arc': {

@@ -224,7 +224,10 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 2),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
     STAGE1_PARTITION_REPORT: ArtifactSpec(PartitionReport, 2),
-    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding),
+    # ⚠ 2026-08-23 升 v2：secret 时间线（`setup` 判别联合 · 揭示事件带 first/confirm ·
+    #   `group_id`）。破坏了什么、存量由谁重建，登记在
+    #   `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
+    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding, 2),
     STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),
     STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——

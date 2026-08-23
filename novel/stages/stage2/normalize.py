@@ -11,6 +11,7 @@ import copy
 from typing import Any
 
 from contracts.invariants import BARE_PRONOUNS
+from novel.core.facts import first_reveal_chapter, setup_chapters_of
 from novel.core.naming import (
     classify_unattested, resolve_present_names, strip_distinguisher,
     surface_owner_since, surface_owners,
@@ -135,17 +136,27 @@ def _resolve_address_by(characters: dict[str, dict[str, Any]]) -> int:
 
 
 def _prune_setups(data: dict[str, Any]) -> list[tuple[str, list[int], list[int]]]:
+    """把不早于**首次揭示章**的埋点裁掉；全裁光的那条降级成 `{"kind": "cold"}`。
+
+    ⚠ 基准是 `first_reveal_chapter`，不是 `min(所有揭示章)`（v2 起）。下发闸门用
+    的是同一个函数——两处必须同基准，否则「这里没裁掉的埋点」会被那边当成未来章。
+    ⚠ 降级成 `cold` 之后，字段值上与真·冷揭示同形；分得开它们的只有本函数
+    返回的这份账（`_provenance.setup_chapters_pruned`）。判据断言的正是它。
+    """
     changed: list[tuple[str, list[int], list[int]]] = []
     for secret in (((data.get('canon') or {}).get('secrets')) or []):
-        old = list(secret.get('setup_chapters') or [])
-        reveals = [event.get('chapter') for event in (secret.get('reader_reveal_events') or [])
-                   if isinstance(event.get('chapter'), int)]
-        if not old or not reveals:
+        if not isinstance(secret, dict):
             continue
-        keep = [chapter for chapter in old if chapter < min(reveals)]
-        if keep != old:
-            secret['setup_chapters'] = keep
-            changed.append((str(secret.get('secret_id') or ''), old, keep))
+        old = setup_chapters_of(secret)
+        first = first_reveal_chapter(secret)
+        if not old or first is None:
+            continue
+        keep = [chapter for chapter in old if chapter < first]
+        if keep == old:
+            continue
+        secret['setup'] = ({'kind': 'foreshadowed', 'chapters': keep} if keep
+                           else {'kind': 'cold'})
+        changed.append((str(secret.get('secret_id') or ''), old, keep))
     return changed
 
 

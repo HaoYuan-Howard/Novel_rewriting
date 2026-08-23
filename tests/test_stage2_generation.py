@@ -593,7 +593,7 @@ def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
         response = _response_global()
         secret = response['canon']['secrets'][0]
         reveal = secret['reader_reveal_events'][0]['chapter']
-        secret['setup_chapters'] = [reveal]
+        secret['setup'] = {'kind': 'foreshadowed', 'chapters': [reveal]}
         client, transport = _client(ctx, lambda _req, _index: _ok(response))
 
         with pytest.raises(GateBlocked):
@@ -609,7 +609,9 @@ def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
         assert (book / extract.GLOBAL_REL).is_file()
         assert not (book / extract._GLOBAL_INVALID).exists()
         stored = ArtifactStore(ctx).read(GlobalGrounding, extract.GLOBAL_REL)
-        assert stored.canon.secrets[0].setup_chapters == []
+        # 埋点全裁光 ⇒ 降级成 cold。⚠ 它与真·冷揭示在字段值上同形，
+        # 分得开的只有下一行那份裁剪账。
+        assert stored.canon.secrets[0].setup.kind == 'cold'
         assert stored.provenance.setup_chapters_pruned == []
         assert stored.provenance.partial_rewrite == '--renormalize'
         assert stored.provenance.usage is not None

@@ -94,9 +94,11 @@ def stage3_grounding(data: object) -> object:
             (cid, c.get('canonical'), c.get('name_distinctiveness'),
              tuple(sorted((a or {}).get('surface') or '' for a in (c.get('address') or []))))
             for cid, c in chars.items() if isinstance(c, dict)),
+        # ⚠ 揭示事件连 `kind` 一起进投影：把 `first` 改成 `confirm`（或反过来）会
+        #   移动整条下发边界，而章号一个都没变——只收章号的投影看不见这种改动。
         'secrets': sorted(
             (s.get('secret_id'), s.get('fact'),
-             tuple(sorted((e or {}).get('chapter') or 0
+             tuple(sorted(((e or {}).get('chapter') or 0, (e or {}).get('kind') or 'first')
                           for e in (s.get('reader_reveal_events') or []))))
             for s in ((data.get('canon') or {}).get('secrets') or [])
             if isinstance(s, dict)),
@@ -159,6 +161,20 @@ def stage4_main_text(data: object) -> object:
     return sorted((m.get('chapter_ordinal'), m.get('text')) for m in data)
 
 
+def _secret_setup_key(setup: object) -> object:
+    """把 `Secret.setup` 判别联合压成确定性可比较的键。
+
+    ⚠ **不能只取 `chapters`**：`{"kind":"cold"}` 与
+    `{"kind":"foreshadowed","chapters":[]}`（理论上载体拒收，但投影吃的是未校验的
+    JSON）在章号集合上同形，而前者说「没有隐瞒窗口」、后者是一份坏数据。
+    投影分不开它们，改一边就不会让下游 stale。
+    """
+    if not isinstance(setup, dict):
+        return ('?',)
+    kind = str(setup.get('kind') or '?')
+    return (kind, tuple(sorted(map(str, setup.get('chapters') or []))))
+
+
 def stage4_grounding(data: object) -> object:
     """计划/上下文组装消费的人物、关系、秘密、设定、规则与弧线字段。"""
     if not isinstance(data, dict):
@@ -178,11 +194,14 @@ def stage4_grounding(data: object) -> object:
              (r or {}).get('predicate'), (r or {}).get('object_id'),
              (r or {}).get('valid_from_chapter'), (r or {}).get('valid_to_chapter'))
             for r in (ent.get('relations') or [])),
+        # ⚠ `setup` 整格进投影（不只是章号）：`{"kind":"cold"}` 与
+        #   `{"kind":"foreshadowed","chapters":[]}` 在「章号集合」上同形而语义不同。
+        #   揭示事件同理连 `kind` 一起收——改 first/confirm 会移动下发边界。
         'secrets': sorted(
-            ((s or {}).get('secret_id'), (s or {}).get('fact'),
+            ((s or {}).get('secret_id'), (s or {}).get('fact'), (s or {}).get('group_id'),
              tuple(sorted(map(str, (s or {}).get('character_known_by') or []))),
-             tuple(sorted(map(str, (s or {}).get('setup_chapters') or []))),
-             tuple(sorted(str(e.get('chapter'))
+             _secret_setup_key((s or {}).get('setup')),
+             tuple(sorted((str(e.get('chapter')), str(e.get('kind') or 'first'))
                           for e in ((s or {}).get('reader_reveal_events') or []))))
             for s in (canon.get('secrets') or [])),
         'setting': sorted((canon.get('setting') or {}).items()),

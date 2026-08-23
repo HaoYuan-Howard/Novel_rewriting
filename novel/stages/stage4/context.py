@@ -39,7 +39,9 @@ from typing import Any
 from novel.core.naming import (
     person_naming_surfaces, rule_names_a_person, strip_distinguisher, surface_first_chapter,
 )
-from novel.core.facts import secret_contains, secret_keywords
+from novel.core.facts import (
+    first_reveal_chapter, secret_contains, secret_keywords, setup_chapters_of,
+)
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
 
@@ -418,12 +420,11 @@ def _relation_gates(ents: dict[str, Any], secrets: list[dict[str, Any]]
     name = {cid: strip_distinguisher((v or {}).get('canonical') or '') for cid, v in chars.items()}
     for s in secrets:
         fact = s.get('fact') or ''
-        setups = [c for c in (s.get('setup_chapters') or []) if c is not None]
-        revs = [e.get('chapter') for e in (s.get('reader_reveal_events') or [])
-                if e.get('chapter') is not None]
-        if not setups or not revs:
+        setups = setup_chapters_of(s)
+        reveal = first_reveal_chapter(s)
+        if not setups or reveal is None:
             continue
-        lo, reveal = min(setups), min(revs)
+        lo = min(setups)
         matched = []
         for r in rels:
             a, b = name.get(r.get('subject_id')), name.get(r.get('object_id'))
@@ -527,15 +528,29 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
     因为**错删事实的代价（写手改口、编名字）比多给严重**。
 
     `secrets` 的闸门是两条【或】关系，两条都带时间维：
-      ① 读者到本章已被揭示（`reader_reveal_events` 有 `chapter ≤ o`）→ 可以写在纸面上；
-      ② 本章是这条 secret 的【埋点章】（`setup_chapters` 含 `o`）→ 事实要摆在读者眼前，
+      ① 读者到本章已被**首次**揭示（`first_reveal_chapter(s) <= o`）→ 可以写在纸面上；
+      ② 本章是这条 secret 的【埋点章】→ 事实要摆在读者眼前，
          **但当时读来是别的意思**，此时给 `reader_knows_by_now=false`，意思是「要埋，不要点破」。
          没有②，写 ch3 那只茶盏时不知道它是主角安排的，ch9 的回收就没有铺垫。
+
+    ⚠⚠ **这一格 v2 修的是什么，说准了才有用。** 病根不是式子，是**一条 secret 装了
+    两个原子事实、分两次点破**：盘上某本 `secret_01` 揭示在 ch4 与 ch7，而 `fact`
+    第三个分句正是 ch7 才点破的成因——旧式子 `any(event.chapter <= o)` 在 ch4 就把
+    **整份 `fact`** 下发，那半段跟着泄给了写 ch4 的写手。
+    真正堵住它的是**载体**：`Secret._exactly_one_first_reveal` 逼着每条恰有一个
+    `first`，那种复合写法在契约上写不出来，只能拆成两条、`group_id` 归组，
+    各自按自己的 `first` 章下发（`R-2.18`）。
+    ⚠ **式子本身在合法产物上没换判**：载体不许有事件早于 `first` ⇒
+    `first_reveal_chapter(s)` 与旧的 `min(全部揭示章)` 恒等。改写它买到的是
+    「三处同一个基准、下次改判向不会漏掉一处」，不是一次行为变化——
+    别把它当成修复本身写进验收。
+    ⚠⚠ **下发不许按 `group_id` 拉平**：那会让整组回到「最早那条一揭示就全放」，
+    正是拆分要修的东西。
 
     ⚠⚠ 曾试过用「本章叙述者知情也放行」来做②，**那是错的**：`character_known_by`
     **没有时间维度**，它说的是「谁知道」不是「谁到第几章才知道」。第一人称书里主角
     几乎在每条 secret 的知情人里，这条一加就等于**全放行**。
-    **用无时间维的字段做按章闸门，本身就是错的**；补上时间维的正是 `setup_chapters`。
+    **用无时间维的字段做按章闸门，本身就是错的**；补上时间维的正是埋点章。
     """
     ents = global_g.get('entities') or {}
     canon = global_g.get('canon') or {}
@@ -546,9 +561,9 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
     secrets: list[dict[str, Any]] = []
     hidden: list[Any] = []
     for s in (canon.get('secrets') or []):
-        evs = [e for e in (s.get('reader_reveal_events') or []) if e.get('chapter') is not None]
-        past = [e for e in evs if e['chapter'] <= o]
-        is_setup = o in (s.get('setup_chapters') or [])
+        first = first_reveal_chapter(s)
+        past = first is not None and first <= o
+        is_setup = o in setup_chapters_of(s)
         if not past and not is_setup:
             hidden.append(s.get('secret_id'))
             continue
@@ -561,7 +576,7 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
               for c in (s.get('character_known_by') or [])]
         secrets.append({'secret_id': s.get('secret_id'), 'fact': s.get('fact'),
                         'known_by': [c for c in kb if c],
-                        'reader_knows_by_now': bool(past)})
+                        'reader_knows_by_now': past})
 
     # `relations` 是**第二条剧透通道**，而它此前只有一道**世内**闸门。
     # `valid_from_chapter` 记的是世内生效时点，`reader_reveal_events` 记的是读者知情时点——

@@ -307,7 +307,7 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
     b = M.Book(title=book.title, ctx=book.ctx, style=book.style,
                source_text=book.source_text,
                secrets=[{'secret_id': 'secret_x', 'fact': fact,
-                         'character_known_by': [], 'setup_chapters': [],
+                         'character_known_by': [], 'setup': {'kind': 'cold'},
                          'reader_reveal_events': [{'chapter': 9}]}])
     e = dict(entry, must_not_reveal=['secret_x'])
     body = _clean_body(book, entry) + fact + '。'
@@ -326,7 +326,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
         source_text=book.source_text,
         secrets=[{
             'secret_id': 'secret_x', 'fact': fact,
-            'character_known_by': [], 'setup_chapters': [],
+            'character_known_by': [], 'setup': {'kind': 'cold'},
             'reader_reveal_events': [{'chapter': 9}],
         }],
     )
@@ -341,7 +341,7 @@ def test_secret_timeline_uses_the_same_number_ruler(book):
     """揭示章原样写出带数字的 fact 时，不得误报「连揭示章都没命中」。"""
     fact = '她其实一直都知道他是三皇子'
     secret = {'secret_id': 'secret_x', 'fact': fact, 'character_known_by': [],
-              'setup_chapters': [], 'reader_reveal_events': [{'chapter': 9}]}
+              'setup': {'kind': 'cold'}, 'reader_reveal_events': [{'chapter': 9}]}
     synthetic = M.Book(title=book.title, ctx=book.ctx, style=book.style,
                        source_text=book.source_text, secrets=[secret])
     fs = checks.book_findings(synthetic, rows=[], bodies={9: fact},
@@ -355,7 +355,7 @@ def test_style_plot_scan_uses_the_same_number_ruler(book, monkeypatch):
     """风格块是第五个消费方，不得偷偷退回只对 fact 剥数字的旧尺子。"""
     fact = '她其实一直都知道他是三皇子'
     secret = {'secret_id': 'secret_x', 'fact': fact, 'character_known_by': [],
-              'setup_chapters': [], 'reader_reveal_events': [{'chapter': 9}]}
+              'setup': {'kind': 'cold'}, 'reader_reveal_events': [{'chapter': 9}]}
     synthetic = M.Book(title=book.title, ctx=book.ctx, style=book.style,
                        source_text=book.source_text, secrets=[secret])
     monkeypatch.setattr(prompts, 'style_block', lambda *_args, **_kwargs: fact)

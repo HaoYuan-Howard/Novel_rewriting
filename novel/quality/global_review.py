@@ -102,12 +102,12 @@ def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewIte
         rows.append(_item(
             'known_by', f'canon.secrets.{sid}.character_known_by',
             secret.get('character_known_by') or []))
-        # 埋点章是 `_relation_gates` 的隐瞒窗口与 secret 闸门第②臂**两道闸门的前件**，
-        # 而「合法冷揭示」与「归一裁空」在字段值上完全同形（都是 `[]`），
-        # 只能靠 `_provenance.setup_chapters_pruned` 分开 ⇒ 判据看不出来，人必须看。
+        # 埋点是 `_relation_gates` 的隐瞒窗口与 secret 闸门第②臂**两道闸门的前件**。
+        # v2 的判别联合逼模型在 cold / foreshadowed 之间显式选一边，但**归一裁空
+        # 降级成 cold** 的那一条与真·冷揭示仍然同形（只有
+        # `_provenance.setup_chapters_pruned` 分得开）⇒ 判据看不出来，人必须看。
         rows.append(_item(
-            'secret_setup', f'canon.secrets.{sid}.setup_chapters',
-            secret.get('setup_chapters') or []))
+            'secret_setup', f'canon.secrets.{sid}.setup', secret.get('setup')))
         for ei, event in enumerate(secret.get('reader_reveal_events') or []):
             rows.append(_item('reveal', f'canon.secrets.{sid}.reader_reveal_events.{ei}', event))
 

@@ -1991,17 +1991,19 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
         for event in (patch.reader_reveal_events or []):
             if event.chapter not in ordinals:
                 bad.append(f'{patch.secret_id}.reader_reveal_events={event.chapter}')
-        for chapter in (patch.setup_chapters or []):
+        # ⚠ `cold` 那一臂根本没有 `chapters` 这个字段：`getattr` 兜的是**形状**
+        #   （判别联合的另一臂），不是「值可能缺失」。
+        for chapter in (getattr(patch.setup, 'chapters', None) or []):
             if chapter not in ordinals:
-                bad.append(f'{patch.secret_id}.setup_chapters={chapter}')
+                bad.append(f'{patch.secret_id}.setup.chapters={chapter}')
     for secret in edit.secrets_replace or []:
         for event in secret.reader_reveal_events:
             if event.chapter not in ordinals:
                 bad.append(
                     f'{secret.secret_id}.reader_reveal_events={event.chapter}')
-        for chapter in secret.setup_chapters:
+        for chapter in (getattr(secret.setup, 'chapters', None) or []):
             if chapter not in ordinals:
-                bad.append(f'{secret.secret_id}.setup_chapters={chapter}')
+                bad.append(f'{secret.secret_id}.setup.chapters={chapter}')
     for patch in edit.world_rules:
         for version in (patch.versions or []):
             if version.effective_from_chapter not in ordinals:
@@ -2035,14 +2037,20 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     else:
         for patch in edit.secrets:
             target = by_id[patch.secret_id]
-            for field in ('fact', 'character_known_by', 'setup_chapters'):
+            for field in ('fact', 'group_id', 'character_known_by'):
                 value = getattr(patch, field)
                 if value is not None:
                     target[field] = copy.deepcopy(value)
                     changed.append(f'{patch.secret_id}.{field}')
+            # `setup` 与下面的揭示事件都是 model ⇒ 落回 dict 时必须 `model_dump`，
+            # 而不是 `deepcopy` 一个 pydantic 对象进产物字典。
+            if patch.setup is not None:
+                target['setup'] = patch.setup.model_dump()
+                changed.append(f'{patch.secret_id}.setup')
             if patch.reader_reveal_events is not None:
                 target['reader_reveal_events'] = [
-                    {'chapter': event.chapter} for event in patch.reader_reveal_events]
+                    {'chapter': event.chapter, 'kind': event.kind}
+                    for event in patch.reader_reveal_events]
                 changed.append(f'{patch.secret_id}.reader_reveal_events')
     if edit.world_rules_replace is not None:
         canon['world_rules'] = [rule.model_dump() for rule in edit.world_rules_replace]

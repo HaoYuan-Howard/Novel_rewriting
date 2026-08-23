@@ -446,11 +446,11 @@ def test_inventory_refuses_a_raw_non_current_version(tmp_path):
     target = book / 'stage2' / 'global_grounding.json'
     target.parent.mkdir(parents=True)
     target.write_text(json.dumps({
-        '_schema_version': 2,
+        '_schema_version': 3,
         **global_grounding(),
     }, ensure_ascii=False), encoding='utf-8')
 
-    with pytest.raises(ValueError, match=r'raw _schema_version=2.*current v1.*从 producer 重跑'):
+    with pytest.raises(ValueError, match=r'raw _schema_version=3.*current v2.*从 producer 重跑'):
         corpus_manifest._artifact_inventory(book)
 
 

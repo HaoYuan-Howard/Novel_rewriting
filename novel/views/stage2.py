@@ -98,9 +98,11 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
         for r in art.entities.relations]
     secrets = [
         GlobalSecretLine(
-            secret_id=s.secret_id, fact=s.fact,
+            secret_id=s.secret_id, fact=s.fact, group_id=s.group_id,
             known_by=[ref(k) for k in s.character_known_by],
-            setup_chapters=list(s.setup_chapters),
+            setup_kind=s.setup.kind,
+            setup_chapters=list(getattr(s.setup, 'chapters', None) or []),
+            first_reveal_chapter=s.first_reveal,
             reader_reveal_chapters=[e.chapter for e in s.reader_reveal_events])
         for s in art.canon.secrets]
     arc = GlobalArcView(

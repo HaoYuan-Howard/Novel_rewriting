@@ -20,8 +20,11 @@ export function projectGlobalSpoilers(raw: Stage2Global, reveal: boolean): Stage
       {
         secret_id: MASKED_SECRET_ID,
         fact: SPOILER_PLACEHOLDER,
+        group_id: null,
         known_by: [],
+        setup_kind: 'cold',
         setup_chapters: [],
+        first_reveal_chapter: 0,
         reader_reveal_chapters: [],
       },
     ],

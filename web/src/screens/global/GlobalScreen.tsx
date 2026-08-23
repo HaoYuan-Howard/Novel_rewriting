@@ -270,10 +270,21 @@ export function GlobalScreen() {
                         {s.secret_id === MASKED_SECRET_ID ? null : (
                           <span className="text-tag text-ink-4">
                             知情：{s.known_by.map((k) => k.display).join('、') || '—'} · 第{' '}
-                            {s.reader_reveal_chapters.join('、')} 章揭示
-                            {s.setup_chapters.length
-                              ? ' · 埋点 ch' + s.setup_chapters.join('/')
+                            {s.first_reveal_chapter} 章首次揭示
+                            {/* 后续 confirm 单独说：闸门只按首次揭示开，两者不是一回事 */}
+                            {s.reader_reveal_chapters.filter((c) => c !== s.first_reveal_chapter)
+                              .length
+                              ? '（第 ' +
+                                s.reader_reveal_chapters
+                                  .filter((c) => c !== s.first_reveal_chapter)
+                                  .join('、') +
+                                ' 章再确认）'
                               : ''}
+                            {/* cold 是模型显式声明的答案，不是「这一格空着」——照它说的显示 */}
+                            {s.setup_kind === 'foreshadowed'
+                              ? ' · 埋点 ch' + s.setup_chapters.join('/')
+                              : ' · 冷揭示（无埋点）'}
+                            {s.group_id ? ' · 归组 ' + s.group_id : ''}
                           </span>
                         )}
                       </Panel>

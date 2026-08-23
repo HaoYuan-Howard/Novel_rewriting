@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from novel.core.facts import first_reveal_chapter
 from novel.errors import RefusedByStructure
 
 
@@ -57,10 +58,11 @@ def catalog(
             for version in (row.get('versions') or []))
         for row in (canon.get('world_rules') or []) if row.get('rule_id')
     }
+    # ⚠ 取**首次**揭示章，与 `context.py` 的下发闸门同一个函数。用 `min(全部事件)`
+    #   会在分两次揭示的 secret 上给出同一个数（载体不许有事件早于 first），
+    #   但两处一旦各写一份式子，下一次改判向就会漏掉其中一处。
     secrets = {
-        row.get('secret_id'): min(
-            (int(event.get('chapter') or 0)
-             for event in (row.get('reader_reveal_events') or [])), default=None)
+        row.get('secret_id'): first_reveal_chapter(row)
         for row in (canon.get('secrets') or []) if row.get('secret_id')
     }
     return {

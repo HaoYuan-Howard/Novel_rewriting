@@ -33,6 +33,7 @@ from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES, CACHE_POLICY, HINGE_KINDS,
+    REVEAL_EVENT_KINDS, SECRET_SETUP_KINDS,
     NAME_DISTINCTIVENESS, NARRATIVE_PERSON, PLACE_MODES, RESPONSE_TIME_LAYERS,
     SPAN_RECOVERY, TIME_LAYERS, WORLD_RULE_KINDS,
 )
@@ -195,32 +196,120 @@ class ReaderRevealEvent(StrictModel):
 
     chapter: int = Field(ge=1)
 
+    #: `first` = 这条秘密**第一次**对读者点破；`confirm` = 后续复述 / 加深 / 再确认。
+    #:
+    #: ⚠⚠ **它不是装饰，是下发闸门的判据**（2026-08-23 v2 加）。此前
+    #: `stage4.context` 判「读者到本章知道了没」用的是 `any(chapter <= o)`
+    #: ——**任意**一次揭示落在本章之前就整份下发 `fact`。一条秘密分两次揭示时，
+    #: 写第一次那一章的写手会连第二次才点破的那半段一起读到。
+    #: ⇒ 闸门只认 `first`，`confirm` 不参与「读者知道了没」的判定。
+    kind: Literal[REVEAL_EVENT_KINDS] = 'first'
+
+
+class SecretSetupCold(StrictModel):
+    """冷揭示：这条秘密**没有埋点**，读者在揭示那一章才第一次接触到它。"""
+
+    kind: Literal[SECRET_SETUP_KINDS[0]]
+
+
+class SecretSetupForeshadowed(StrictModel):
+    """有埋点：那几章把事实摆在读者眼前了，**但当时读来是别的意思**。"""
+
+    kind: Literal[SECRET_SETUP_KINDS[1]]
+
+    #: **[HARD] 每个都严格 `<` 首次揭示章**（`R-2.9`）。
+    #: ⚠ 判据断言的是 `_provenance.setup_chapters_pruned` 那个计数，不是本字段的值：
+    #: 裁剪跑在落盘前，再断言字段值就永远为真。
+    chapters: list[int] = Field(min_length=1)
+
+
+#: 埋点的两种形态。**判别联合而不是可空列表**（2026-08-23 v2）。
+#:
+#: 【它修的是什么】v1 里这一格是 `setup_chapters: list[int]`，于是 `[]` 同时表示
+#: 「模型声明这是冷揭示」与「模型压根没想过这件事」——读的人无从分辨，
+#: 而这一格恰恰是两道下发闸门（关系闸门的隐瞒窗口、secret 闸门第②臂）的前件。
+#: 判别联合逼模型**显式选一边**。
+#:
+#: ⚠ **它没有、也不可能消除第三种歧义**：归一裁剪（`_prune_setups`）跑在落盘前，
+#: 把不早于首次揭示章的埋点裁掉；全裁光的那条会**降级成 `cold`**，字段值上与
+#: 真·冷揭示同形。那一种仍然只能靠 `_provenance.setup_chapters_pruned` 分开，
+#: 与 v1 一样。别把 v2 的收益说成「冷揭示不再有歧义」——它消除的是**模型意图**
+#: 那一层的歧义，不是**归一改写**那一层的。
+SecretSetup = Annotated[
+    SecretSetupCold | SecretSetupForeshadowed, Field(discriminator='kind')]
+
 
 class Secret(StrictModel):
-    """一条秘密。盘上 21 条。"""
+    """一条秘密。**一条只承载一个原子事实。**
+
+    ⚠ 「原子」这件事 schema 只能保证一半：`_exactly_one_first_reveal` 逼着
+    每条恰有一个 `first`，于是「一个复合事实分两次点破」在载体上就写不出来了
+    （只能拆成两条、用 `group_id` 归组）。另一半——「这一条的 `fact` 里会不会
+    还是塞了两件事」——是判据与人工复核的事，载体查不了。
+    """
 
     secret_id: str = Field(pattern=r'^secret_\d{2}$')
 
     #: 长度 17~48。写**被瞒住的真相**，不是揭示那章的情节。
     fact: str = Field(min_length=1)
 
-    #: 长度 1~11，盘上共 73 项。**[HARD] 按【形状】分流**：`char_\\d+` 必须能解析；
+    #: 同一个复合真相被拆成多条时的归组键；独立的秘密填 `null`。
+    #: ⚠ **它只用来归组，不参与任何闸门**：下发按每条自己的 `first` 章判，
+    #: 否则整组会被最早那一条拉平——那正是拆分要修的东西。
+    group_id: str | None = Field(default=None, pattern=r'^sgrp_\d{2}$')
+
+    #: 长度 1~11。**[HARD] 按【形状】分流**：`char_\\d+` 必须能解析；
     #: 其余是自由文本（「在场士兵」），放行。
-    #: ⚠ **盘上 73/73 全是 `char_id`——自由文本那一臂零样本。**
+    #: ⚠ 自由文本那一臂**盘上已有实例**（某本的 `'那两个流氓'`）——
+    #: 旧注释「73/73 全是 char_id、自由文本零样本」已作废。
     character_known_by: list[str] = Field(min_length=1)
 
-    #: 埋点章。**[HARD] 每个都严格 `<` 最早揭示章**（`R-2.9`）——
-    #: ⚠ **判据断言的是 `_provenance.setup_chapters_pruned` 那个计数，不是本字段的值**：
-    #: 裁剪跑在落盘前，再断言字段值就永远为真。
-    #:
-    #: ⚠ **「冷揭示」与「被裁空」在字段值上完全同形**（盘上 **6/22 条**是空数组，
-    #: 2026-08-21 复核——旧注释的「20/21」是已删语料时代的读数，已作废）：
-    #: 前者合法；后者说明产地在把揭示章号抄进埋点。两者只能靠那个计数分开。
-    #: ⚠ 分布逐模型差很多：Pro 那本 **0/4**，Flash 三本 1/7 · 1/4 · **4/7**。
-    setup_chapters: list[int]
+    #: 埋点。取值面与「为什么是判别联合」见 `SecretSetup`。
+    setup: SecretSetup
 
-    #: 长度 1~2。分几次揭示记几条。
+    #: 分几次揭示记几条；**恰有一条 `kind='first'`**。
     reader_reveal_events: list[ReaderRevealEvent] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _exactly_one_first_reveal(self) -> Secret:
+        """恰一个首次揭示，且没有事件早于它。
+
+        ⚠ 这两条**必须在载体上**：`stage4.context` 的下发闸门直接按 `first` 那一章
+        算，拿到零个或两个 `first` 时它没有可退的默认值——而「没有可退的默认值」
+        正是应该在载体上拒收的形状。两条都不被落盘前的归一改写 ⇒ 断言它们的值
+        不是一条永远为真的判定。
+
+        ⚠⚠ **「埋点章严格早于首次揭示章」故意不放在这里**（`R-2.9`）。那一条被
+        `_prune_setups` 在落盘前改写过，在载体上断言它就永远为真；更要紧的是，
+        改成载体拒收会把现有的恢复路（裁剪 + 记账 + 判据报告）换成硬拒收，
+        而那是一道**没有同批 0 成本恢复路**的新闸门。它仍由
+        `secret_setup_order` 断言 `_provenance.setup_chapters_pruned` 那个计数。
+        """
+        firsts = [event for event in self.reader_reveal_events if event.kind == 'first']
+        if len(firsts) != 1:
+            raise ValueError(
+                f'{self.secret_id}: 恰需一条 kind="first" 的揭示事件，实得 {len(firsts)}'
+                '——复合真相请拆成多条 secret 并用 group_id 归组')
+        first = firsts[0].chapter
+        late = [event.chapter for event in self.reader_reveal_events
+                if event.chapter < first]
+        if late:
+            raise ValueError(
+                f'{self.secret_id}: 揭示事件 {late} 早于首次揭示章 {first}')
+        return self
+
+    @property
+    def first_reveal(self) -> int:
+        """首次对读者揭示的章。**model 侧的唯一落点。**
+
+        ⚠ dict 侧另有一个（`novel.core.facts.first_reveal_chapter`），两份是刻意的：
+        归一跑在载体校验**之前**，那边读到的可能还没有 `kind`、可能一条 `first`
+        都没有，必须容错并能回答「不知道」；这边有 `_exactly_one_first_reveal`
+        兜着，取值恒存在。合成一个函数就得让 model 侧也接受「不知道」，
+        而那正是它不该有的返回值。
+        """
+        return next(event.chapter for event in self.reader_reveal_events
+                    if event.kind == 'first')
 
 
 class ConflictStage(StrictModel):
@@ -326,9 +415,12 @@ class GlobalProvenance(LlmProvenance):
     #: 这个键从落地到今天**一次都不会出现在任何报告里**，与不存在毫无区别。
     canonical_distinguishers_stripped: list[tuple[str, str, str]]
 
-    #: `(secret_id, 原 setup_chapters, 裁完的)`。**校验器断言的是它，不是字段值。**
+    #: `(secret_id, 原埋点章, 裁完的)`。**校验器断言的是它，不是字段值。**
     #: 空列表 = 这一趟没裁过；**键不在 = 「不知道」，不发绿灯**。
+    #: ⚠ 裁完为 `[]` 的那一条在产物里**降级成 `{"kind": "cold"}`**，与真·冷揭示同形
+    #: ——v2 的判别联合消除的是「模型意图」那层歧义，这一层仍然只有这个账说得清。
     setup_chapters_pruned: list[tuple[str, list[int], list[int]]]
+
 
 class GlobalGrounding(StrictModel):
     """`stage2/global_grounding.json` —— 顶层 4 个键。**全书一次调用。**
@@ -355,22 +447,23 @@ class SecretPatch(StrictModel):
 
     ⚠ **字段级替换而不是组内合并**：`character_known_by` 少写一个人与「这一项没给」
     在合并语义下同形，而它们是两个决定。`None` = 这一格人没动过。
-    ⚠ **`setup_chapters` 的 `[]` 是有语义的**（「冷揭示」，盘上 6/22 条如此），
-    所以它必须是 `list[int] | None` 而不是靠空列表表示未给——两者一旦同形，
-    「人把埋点清空了」就再也说不出口。
+    ⚠ **`setup` 用 `None` 表示「人没动过」，而「人把埋点清空了」写成
+    `{"kind": "cold"}`**——v1 时代这两件事都落在 `list[int] | None` 上，
+    靠「`[]` 有语义、`None` 才是未给」这条约定撑着；v2 把它变成了两个不同的形状。
     """
 
     secret_id: str = Field(pattern=r'^secret_\d{2}$')
 
     fact: str | None = Field(default=None, min_length=1)
+    group_id: str | None = Field(default=None, pattern=r'^sgrp_\d{2}$')
     character_known_by: list[str] | None = Field(default=None, min_length=1)
-    setup_chapters: list[int] | None = None
+    setup: SecretSetup | None = None
     reader_reveal_events: list[ReaderRevealEvent] | None = Field(default=None, min_length=1)
 
     @model_validator(mode='after')
     def _at_least_one_field(self) -> SecretPatch:
-        given = (self.fact, self.character_known_by,
-                 self.setup_chapters, self.reader_reveal_events)
+        given = (self.fact, self.group_id, self.character_known_by,
+                 self.setup, self.reader_reveal_events)
         if all(value is None for value in given):
             raise ValueError(
                 f'{self.secret_id}: 一个字段都没给——空补丁什么都不改，'

@@ -28,7 +28,8 @@ from contracts.schema.common import Finding
 from contracts.schema.report import finding
 from novel.core.bands import PARA_BANDS, SENT_BANDS, band
 from novel.core.facts import (
-    NUM_UNIT, locate_secret, num_unit_keys, num_values, secret_contains, secret_keywords,
+    NUM_UNIT, first_reveal_chapter, locate_secret, num_unit_keys, num_values,
+    secret_contains, secret_keywords,
 )
 from novel.core.measure import measure
 from novel.core.naming import invented_names
@@ -219,10 +220,11 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     timeline_hidden = []
     if ordinal:
         for secret in book.secrets:
-            reveals = [event.get('chapter') for event in
-                       (secret.get('reader_reveal_events') or [])
-                       if event.get('chapter') is not None]
-            if reveals and ordinal < min(int(chapter) for chapter in reveals):
+            # ⚠ **首次**揭示章，与 `stage4/context.py` 的下发闸门同一个函数。
+            #   这道复核闸的全部意义就是「能从权威时间线复原同一条边界」——
+            #   两处各写一份 `min(全部事件)` 时，下次改判向必然漏掉一处。
+            first = first_reveal_chapter(secret)
+            if first is not None and ordinal < first:
                 timeline_hidden.append(secret.get('secret_id'))
     hid = list(dict.fromkeys([
         *(entry.get('must_not_reveal') or []),

@@ -136,7 +136,7 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
         assert [e.chapter for e in reloaded.canon.secrets[0].reader_reveal_events] == [3]
 
         # ② 重走归一：埋点章 1 < 新揭示章 3 ⇒ 不该被裁掉
-        assert secret.setup_chapters == [1]
+        assert secret.setup.chapters == [1]
         assert reloaded.provenance.setup_chapters_pruned == []
 
         # ③ 重判真的跑过（不是把旧报告抄一遍）
@@ -183,7 +183,7 @@ def test_correcting_the_reveal_chapter_backwards_reprunes_and_then_hits_the_same
         assert (book / extract.GLOBAL_REL).read_bytes() == before, '正式底座被覆盖了'
 
         invalid = json.loads((book / extract._GLOBAL_INVALID).read_text(encoding='utf-8'))
-        assert invalid['canon']['secrets'][0]['setup_chapters'] == []
+        assert invalid['canon']['secrets'][0]['setup'] == {'kind': 'cold'}
         assert invalid['_provenance']['setup_chapters_pruned'] == [['secret_01', [1], []]]
 
         report = extract.run_renormalize(_ctx(book, 'stage2.global', paid=False))
@@ -191,7 +191,7 @@ def test_correcting_the_reveal_chapter_backwards_reprunes_and_then_hits_the_same
         stored = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
             GlobalGrounding, extract.GLOBAL_REL)
         assert [e.chapter for e in stored.canon.secrets[0].reader_reveal_events] == [1]
-        assert stored.canon.secrets[0].setup_chapters == []
+        assert stored.canon.secrets[0].setup.kind == 'cold'
         assert stored.provenance.setup_chapters_pruned == []
         assert not (book / extract._GLOBAL_INVALID).exists()
     finally:
@@ -256,13 +256,13 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
                 'secret_id': 'secret_01',
                 'fact': '父亲已经回城',
                 'character_known_by': ['char_002'],
-                'setup_chapters': [1],
+                'setup': {'kind': 'foreshadowed', 'chapters': [1]},
                 'reader_reveal_events': [{'chapter': 3}],
             }, {
                 'secret_id': 'secret_02',
                 'fact': '母亲早就知道那封信的事',
                 'character_known_by': ['char_001'],
-                'setup_chapters': [],
+                'setup': {'kind': 'cold'},
                 'reader_reveal_events': [{'chapter': 2}],
             }],
             'world_rules_replace': [{
@@ -429,7 +429,7 @@ def test_two_patches_for_one_secret_are_refused():
 @pytest.mark.parametrize('payload,why', [
     ({'secrets': [{'secret_id': 'secret_01', 'reader_reveal_events': [{'chapter': 9}]}]},
      '揭示章越界'),
-    ({'secrets': [{'secret_id': 'secret_01', 'setup_chapters': [7]}]},
+    ({'secrets': [{'secret_id': 'secret_01', 'setup': {'kind': 'foreshadowed', 'chapters': [7]}}]},
      '埋点章越界'),
 ])
 def test_an_out_of_range_chapter_is_refused_before_anything_is_written(payload, why):
@@ -625,7 +625,10 @@ def test_the_patch_does_not_touch_anything_outside_the_named_secret():
                 GlobalGrounding, extract.GLOBAL_REL)
 
         expected = copy.deepcopy(before)
-        expected['canon']['secrets'][0]['reader_reveal_events'] = [{'chapter': 3}]
+        # ⚠ 决策集里没写 `kind`，落盘那一格仍然要带上它（载体默认 `first`）：
+        #   这里跟着写全，才是「这一格整格被替换」而不是「少写一个键也算没溢出」。
+        expected['canon']['secrets'][0]['reader_reveal_events'] = [
+            {'chapter': 3, 'kind': 'first'}]
         expected.pop('_provenance')
         got = copy.deepcopy(after)
         got.pop('_provenance')

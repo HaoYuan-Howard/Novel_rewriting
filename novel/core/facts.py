@@ -9,6 +9,11 @@ facts.py —— 中文正文里的**数值词法**与 secret 的**关键片段�
   · `secret_keywords` —— stage4 的下发面闸门 · stage5 的提前点破 · stage6 的秘密记账。
 
 各处自己抄一份切法必然漂，而漂的表现是**其中一处悄悄不再拦**（判据 25）。
+
+2026-08-23 起还承载 secret 的**时间线读法**（`first_reveal_chapter` /
+`setup_chapters_of`）。它不是字面匹配，收进来是同一个理由：归一、下发闸门与判据
+三处都要问「首次揭示在第几章」，而 v1 时代三处各写一份 `min(所有揭示章)`
+——那个式子让分两次揭示的秘密在第一次之后就整份下发。
 """
 from __future__ import annotations
 
@@ -128,6 +133,57 @@ def num_unit_keys(text: str | None) -> dict[tuple[object, str], str]:
             continue
         out.setdefault((v if v is not None else m.group(), unit), m.group() + unit)
     return out
+
+
+# ── secret 的**时间线读法** —— 归一 / 下发闸门 / 判据三处共用的唯一落点 ──────────
+#
+# ⚠ 这两个函数收的是**未经载体校验的 dict**（归一跑在校验之前），所以它们对形状
+# 一律容错、说不出答案就返回「不知道」，而不是兜一个默认值——兜底会把一个本该被
+# 载体拒收的形状悄悄补成合法的。
+
+def first_reveal_chapter(secret: dict | None) -> int | None:
+    """这条 secret 对读者的**首次**揭示章；`confirm` 事件不参与。
+
+    ⚠⚠ **别把它当成那条泄底路径的修复本身。** 病根是「一条 secret 装了两个原子
+    事实、分两次点破」（盘上某本 `secret_01` 揭示在 ch4 与 ch7，`fact` 第三个分句是
+    ch7 才点破的成因，而写 ch4 的写手整份都拿到了）。真正堵住它的是**载体**：
+    `Secret._exactly_one_first_reveal` 逼着每条恰有一个 `first`，于是那种复合写法
+    在契约上写不出来，只能拆成两条、各自按自己的 `first` 下发（`R-2.18`）。
+
+    ⚠ **在合法产物上，本函数与 `min(所有揭示章)` 恒等**——载体不许有事件早于
+    `first`。所以立这个落点买到的不是「换了个基准」，是：① 三处（归一 / 下发闸门 /
+    判据）不再各写一份式子，下次改判向不会漏掉其中一处；② 读代码的人一眼看见
+    闸门问的是「读者**第一次**知道」而不是「有没有哪次揭示落在本章前」。
+
+    ⚠ 缺 `kind` 时按 `first` 算（与载体默认值一致：模型没写这一格就是首次）。
+    一条 `first` 都没有时返回 `None` —— **不要退回 min(全部)**：那种形状本该被
+    载体拒，兜一个值只会让它悄悄过去。多于一条时取最小，同样让载体去拒。
+    """
+    if not isinstance(secret, dict):
+        return None
+    chapters = [
+        event.get('chapter')
+        for event in (secret.get('reader_reveal_events') or [])
+        if isinstance(event, dict) and isinstance(event.get('chapter'), int)
+        and (event.get('kind') or 'first') == 'first'
+    ]
+    return min(chapters) if chapters else None
+
+
+def setup_chapters_of(secret: dict | None) -> list[int]:
+    """这条 secret 的埋点章；冷揭示（或形状不认识）一律给 `[]`。
+
+    ⚠ `[]` 在这里是「**没有埋点章可用**」，不是「合法冷揭示」——两者的区别在
+    `setup.kind` 上，读它的人要判「有没有隐瞒窗口」就问这个函数，要判「模型
+    声明了什么」就直接看 `setup.kind`。合成一个返回值会把这两个问题又粘回一起。
+    """
+    if not isinstance(secret, dict):
+        return []
+    setup = secret.get('setup')
+    if not isinstance(setup, dict) or setup.get('kind') != 'foreshadowed':
+        return []
+    return [chapter for chapter in (setup.get('chapters') or [])
+            if isinstance(chapter, int)]
 
 
 def secret_keywords(fact: str | None, min_len: int = SECRET_KEYWORD_MIN) -> list[str]:

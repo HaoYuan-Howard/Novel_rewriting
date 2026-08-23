@@ -47,9 +47,18 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 - `Setting` 只含必填的 `era` 与 `worldview`。
 - `WorldRule` 含 `rule_id`、闭合枚举 `kind` 与非空 `versions[]`；正文唯一落点是
   `WorldRuleVersion.desc`，每个版本带 `effective_from_chapter`。
-- `Secret` 含 `secret_id`、`fact`、`character_known_by[]`、`setup_chapters[]` 与
-  `reader_reveal_events[]`。每个揭示事件只含必填 `chapter`。
-- `setup_chapters` 必须严格早于最早揭示章；落盘前的裁剪记录在来源账中。
+- `Secret` 含 `secret_id`、`fact`、可空 `group_id`、`character_known_by[]`、
+  `setup` 与 `reader_reveal_events[]`（v2，2026-08-23）。
+- `setup` 是**判别联合**：`{"kind":"cold"}`（声明没有埋点）或
+  `{"kind":"foreshadowed","chapters":[…]}`。v1 的可空列表里 `[]` 同时表示
+  「声明冷揭示」与「模型没想过」，而这一格是两道下发闸门的前件。
+  ⚠ **裁空降级成 `cold` 的那条与真·冷揭示同形**，只有来源账
+  `setup_chapters_pruned` 分得开——v2 消除的是「模型意图」那层歧义，不是这一层。
+- 每个揭示事件含 `chapter` 与 `kind`（`first` | `confirm`，默认 `first`）。
+  载体强制**恰有一条 `first`** 且没有事件早于它；复合真相拆成多条、`group_id` 归组
+  （`R-2.18`）。逐章下发闸门与全部下游读数以 `first` 为基准，`confirm` 不参与。
+- `foreshadowed.chapters` 必须严格早于 `first` 揭示章；落盘前的裁剪记录在来源账中
+  ——判据断言那份账，不断言字段值（`R-2.9`）。
 
 ### 1.3 弧线
 
@@ -129,7 +138,7 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 | `address_surface_rewrites` | `(char_id, old, new)[]` | 叫法回取改写明细 |
 | `address_from_chapter_raised` | `(char_id, surface, old, new)[]` | 首现章抬升明细 |
 | `canonical_distinguishers_stripped` | `(char_id, old, new)[]` | 区分词剥离明细 |
-| `setup_chapters_pruned` | `(secret_id, old[], new[])[]` | 秘密埋点裁剪明细 |
+| `setup_chapters_pruned` | `(secret_id, old[], new[])[]` | 秘密埋点裁剪明细。⚠ `new` 为空 ⇒ 那条 `setup` 已降级成 `cold`，与声明的冷揭示同形，只有本账分得开 |
 
 ### 3.2 `BlueprintProvenance`
 
@@ -187,7 +196,7 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 
 | 键 | 类型 | 语义 |
 |---|---|---|
-| `secrets` | `SecretPatch[]` | 按已有 `secret_id` 字段级订正；`null` = 该格未动，`setup_chapters=[]` = 合法冷揭示 |
+| `secrets` | `SecretPatch[]` | 按已有 `secret_id` 字段级订正；`null` = 该格未动，`setup={"kind":"cold"}` = 人把埋点清空了（v2 起两者是两个形状，不再靠「`[]` 有语义」这条约定） |
 | `world_rules` | `WorldRulePatch[]` | 按已有 `rule_id` 改 `kind` 或整份 `versions` |
 | `characters` | `CharacterEnumPatch[]` | 按 `char_id` 改 `name_distinctiveness` |
 | `addresses` | `AddressContextPatch[]` | 按 `char_id + address_index` 改已有项的 `context` |

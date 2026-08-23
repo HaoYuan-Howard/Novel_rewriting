@@ -920,6 +920,7 @@
   {
    "secret_id": "secret_01",
    "fact": "苏子瑜与杜婉儿密谋，让杜玉闲到怡红院点李宝珠过夜，以污她清白，且苏夫人提供了秘药。",
+   "group_id": null,
    "known_by": [
     {
      "raw": "char_001",
@@ -942,14 +943,17 @@
      "resolved": true
     }
    ],
+   "setup_kind": "cold",
    "setup_chapters": [],
    "reader_reveal_chapters": [
     3
-   ]
+   ],
+   "first_reveal_chapter": 3
   },
   {
    "secret_id": "secret_02",
    "fact": "李宝珠看到密信后将计就计，在苏夫人送来的茶中装晕，反手将苏夫人推入雅间，使得苏夫人被杜玉闲玷污。",
+   "group_id": null,
    "known_by": [
     {
      "raw": "char_001",
@@ -957,14 +961,17 @@
      "resolved": true
     }
    ],
+   "setup_kind": "cold",
    "setup_chapters": [],
    "reader_reveal_chapters": [
     4
-   ]
+   ],
+   "first_reveal_chapter": 4
   },
   {
    "secret_id": "secret_03",
    "fact": "苏夫人被玷污后怀孕，孩子是杜玉闲的。",
+   "group_id": null,
    "known_by": [
     {
      "raw": "char_001",
@@ -987,14 +994,17 @@
      "resolved": true
     }
    ],
+   "setup_kind": "cold",
    "setup_chapters": [],
    "reader_reveal_chapters": [
     4
-   ]
+   ],
+   "first_reveal_chapter": 4
   },
   {
    "secret_id": "secret_04",
    "fact": "杜婉儿被富商英雄救美并纳为妾，是李宝珠求父亲安排的，以报复苏子瑜。",
+   "group_id": null,
    "known_by": [
     {
      "raw": "char_001",
@@ -1012,14 +1022,17 @@
      "resolved": true
     }
    ],
+   "setup_kind": "cold",
    "setup_chapters": [],
    "reader_reveal_chapters": [
     6
-   ]
+   ],
+   "first_reveal_chapter": 6
   },
   {
    "secret_id": "secret_05",
    "fact": "苏子瑜和父亲苏照庭与外族男子勾结，计划在元宵灯会炸死皇帝，并随外族出逃。",
+   "group_id": null,
    "known_by": [
     {
      "raw": "char_001",
@@ -1052,14 +1065,17 @@
      "resolved": true
     }
    ],
+   "setup_kind": "cold",
    "setup_chapters": [],
    "reader_reveal_chapters": [
     6
-   ]
+   ],
+   "first_reveal_chapter": 6
   },
   {
    "secret_id": "secret_06",
    "fact": "谢允表面是龟公，实乃江湖百晓生，怡红院主人，皇帝安插在怡红院监视外族活动的眼线。",
+   "group_id": null,
    "known_by": [
     {
      "raw": "char_001",
@@ -1077,15 +1093,18 @@
      "resolved": true
     }
    ],
+   "setup_kind": "cold",
    "setup_chapters": [],
    "reader_reveal_chapters": [
     5,
     6
-   ]
+   ],
+   "first_reveal_chapter": 5
   },
   {
    "secret_id": "secret_07",
    "fact": "皇帝故意将苏家贬入怡红院，因为他们与外族有联系，欲借此查出叛国同党。",
+   "group_id": null,
    "known_by": [
     {
      "raw": "char_010",
@@ -1103,10 +1122,12 @@
      "resolved": true
     }
    ],
+   "setup_kind": "cold",
    "setup_chapters": [],
    "reader_reveal_chapters": [
     5
-   ]
+   ],
+   "first_reveal_chapter": 5
   }
  ],
  "arc": {

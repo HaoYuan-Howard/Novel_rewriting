@@ -175,8 +175,12 @@ world_rules[]：{rule_id, kind($RULE_KINDS),
 secrets[]：{secret_id(secret_01…), fact, character_known_by[](世界内谁知情：有名有姓的写 char_id；
     知情的是【无名群体】就直接写原文的说法「在场士兵」「府里的下人」——不要为了凑 char_id 而漏记他们，
     也不要给群体编一个 char_id），
-  setup_chapters[阅读序章号](这件事在第几章被【埋下】),
-  reader_reveal_events[{chapter(阅读序章号)}](原文在第几章向【读者】揭示，描述性；分几次揭示就记几条)}。
+  group_id(可空，sgrp_01…：一个复合真相被拆成多条时，用同一个 group_id 归组；独立的秘密写 null),
+  setup(二选一：{"kind":"cold"} = 没有埋点，凭空点破；
+        {"kind":"foreshadowed","chapters":[阅读序章号]} = 这件事在那几章被【埋下】),
+  reader_reveal_events[{chapter(阅读序章号), kind("first"|"confirm")}]
+    (原文在第几章向【读者】揭示，描述性。**恰有一条 kind="first"**——第一次点破的那一章；
+     后面又提到、又加深的写 "confirm"。)}。
   · 【收录判据】某件事【读者或书中角色】是中途才知道的，而它一旦揭示就会改变对前面情节的理解——就是一条 secret。
     最常见的四类：
     ① 真实动机与表面言行不一致（伪装 / 隐忍 / 别有所图）；
@@ -198,15 +202,26 @@ secrets[]：{secret_id(secret_01…), fact, character_known_by[](世界内谁知
     从一开始 / 收徒那天就知道”这类点破，逐条回问它是否改变了前面关系、动机或事件的
     读法；若会，就必须单列 secret，不能因为当事人从开篇就知情而漏掉——secret 关心的
     是读者何时知道，不是世界内这个事实何时成立。
-  · 【先把 secret 收全，再标埋点】setup_chapters 是给已经收下的 secret 补一个时间戳，
+  · 【先把 secret 收全，再标埋点】setup 是给已经收下的 secret 补一个时间戳，
     **不是收录条件**。不要因为一条 secret 不好定埋点章就不收它。
-    · `setup_chapters` = 这件事在第几章被【埋下】：那一章里这个事实已经摆在读者眼前，
+    · `foreshadowed.chapters` = 这件事在第几章被【埋下】：那一章里这个事实已经摆在读者眼前，
       只是当时看起来是别的意思（是意外、是巧合、是别人自愿），要到回收那一章才被点破。
       上面④类那个例子：埋点在第 3 章（打翻茶盏，读来是意外），回收在第 9 章（点破是安排的）。
-    · 【没有埋点就交空数组】有些事是凭空点破的（此前原文完全没有相关画面），那是冷揭示，据实留空，不要硬凑。
-    · setup_chapters 里的每个章号都必须【严格早于】最早的那次揭示。
+    · 【没有埋点就写 {"kind":"cold"}】有些事是凭空点破的（此前原文完全没有相关画面），
+      那是冷揭示，**据实写 cold，不要硬凑埋点章**。cold 是一个正当答案，不是缺省值——
+      不确定的时候也要在两者之间真的选一个，不要因为拿不准就都写 cold。
+    · chapters 里的每个章号都必须【严格早于】那次 kind="first" 的揭示。
       埋点和回收【不可能在同一章】：埋点靠的就是「当时读来是别的意思」，
       而点破发生的那一章里它已经不是别的意思了。**揭示章不是埋点章，不要把它抄进来。**
+  · 【一条 secret 只装一个原子事实】判据：它只有**一个**「读者第一次吃惊」的时刻。
+    如果一件事是分两次揭开的——先点破一半、隔几章再点破另一半（动机、成因、代价）——
+    那是**两条** secret，各写各的 fact 与 first 章，用同一个 group_id 归组。
+    ✗ 一条 secret 写「他私下穿女装；他这么做是因为幼年被羞辱过」而 first 只标前半那一章
+      ——后半段会在前半段揭示的那一章就被下游当作已公开的事实用掉。
+    ✓ 拆成 secret_01（穿女装，first=第 4 章）与 secret_02（成因是幼年那次羞辱，first=第 7 章），
+      两条 group_id 都写 sgrp_01。
+    · 同一条 secret 在后面章节又被提起、被加深、被再次确认，那**不是**新的一条，
+      写成同一条 secret 的 kind="confirm" 事件。
   · 【主角伪装之下的真实动机是最容易漏的一条】它几乎总在中段才对读者揭示，
     但因为「全书都在讲这件事」，很容易被当成背景设定而不记成 secret。判据仍是上面那条：
     念给只读到揭示前一章的读者听，他会不会吃惊。
@@ -849,9 +864,10 @@ GLOBAL_HINT: dict[str, Any] = {
         'setting': {'时代背景': 'str', '世界观': 'str'},
         'world_rules': [{'rule_id': 'wr_01', 'kind': WORLD_RULE_KINDS[0],
                          'versions': [{'effective_from_chapter': 1, 'desc': 'str'}]}],
-        'secrets': [{'secret_id': 'secret_01', 'fact': 'str',
-                     'character_known_by': ['char_001'], 'setup_chapters': [1],
-                     'reader_reveal_events': [{'chapter': 2}]}],
+        'secrets': [{'secret_id': 'secret_01', 'fact': 'str', 'group_id': None,
+                     'character_known_by': ['char_001'],
+                     'setup': {'kind': 'foreshadowed', 'chapters': [1]},
+                     'reader_reveal_events': [{'chapter': 2, 'kind': 'first'}]}],
     },
     'arc': {
         'conflict_stages': [{'stage': 'str', 'chapters': [1]}],

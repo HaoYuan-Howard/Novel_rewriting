@@ -419,8 +419,15 @@ export interface GlobalWorldRule {
 export interface GlobalSecret {
   secret_id: string
   fact: string
+  /** 同一个复合真相被拆成多条时的归组键；独立的秘密是 null */
+  group_id: string | null
   known_by: NameRef[]
+  /** ⚠ 必须连它一起读：cold 与「foreshadowed 但章号被裁空」在 setup_chapters 上同形 */
+  setup_kind: 'cold' | 'foreshadowed'
   setup_chapters: number[]
+  /** 逐章剧透闸门按它开，不是按 reader_reveal_chapters 的最小值 */
+  first_reveal_chapter: number
+  /** 全部揭示章，含后续 confirm */
   reader_reveal_chapters: number[]
 }
 
