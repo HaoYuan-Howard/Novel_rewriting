@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""smoke_stage2_ir1.py —— 7A：`extraction-ir-v1` **系**的「高难章包」付费冒烟。
+"""smoke_stage2_ir1.py —— 7A：Stage2 extraction IR **系**的「高难章包」付费冒烟。
 
-⚠ 跑哪一臂由 `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 决定（取值面见 `IR1_FAMILY`），
+⚠ 跑哪一臂由 `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 决定（取值面见 `SMOKE_CONTRACTS`），
   工具与 `extract.build_prompts` **同源**地取 spec。ir1.1 只改了 place 那一段措辞，
   所以本工具也是「place 填充率有没有真的回升」最便宜的前置闸——
   6 章的钱先问一次，再决定要不要花 23 章的钱跑全链。
@@ -64,20 +64,23 @@ from novel.config import load_config                              # noqa: E402
 from novel.llm.ledger import audit_path, ledger_path              # noqa: E402
 from novel.run import RunContext                                  # noqa: E402
 from novel.stages.stage2 import extract                           # noqa: E402
-from novel.stages.stage2.contract import active_contract           # noqa: E402
+from novel.stages.stage2.contract import active_contract, contract_for  # noqa: E402
 from novel.stages.stage2.normalize import (                       # noqa: E402
     resolve_character_refs,
 )
 
-#: 本工具服务 ir1 **系**的臂；v3 没有「首轮子集」这个问题（它是历史基线，
-#: 盘上已付费）。收成白名单是为了让「拿错契约跑了一轮」在第一行就停住。
+#: 本工具最初只服务 ir1 系；v3/v3.1 后来同样需要在整跑前验证**新响应契约**的
+#: 首轮子集。收成白名单是为了让「拿错契约跑了一轮」在第一行就停住。
 #:
 #: ⚠⚠ **实际用哪一臂一律走 `active_contract()`（读 env），与 `build_prompts`
 #: 同源**——曾经这里是 `spec = contract_for('extraction-ir-v1')` 写死，而
 #: `extract.build_prompts` 那边走 `_active_spec()`：env 拧到别的臂时，
 #: 发出去的是新 prompt、校验与编译却还是旧 spec，**而这不会报错**
 #: （`contract.py` 模块头警告的正是这个形态）。ir1.1 加进来之后它就不再是理论风险。
-IR1_FAMILY = ('extraction-ir-v1', 'extraction-ir-v1.1', 'extraction-ir-v2')
+SMOKE_CONTRACTS = (
+    'extraction-ir-v1', 'extraction-ir-v1.1', 'extraction-ir-v2',
+    'extraction-ir-v3', 'extraction-ir-v3.1',
+)
 NODE = 'stage2.blueprint'
 
 #: 以**本书自身**为尺子的判据：分母是这本书所有章的中位数
@@ -159,7 +162,7 @@ def _merged_candidate(baseline: dict[str, Any], compiled: list[dict[str, Any]],
             if _chapter_of(row[0] if row else '') not in targets]
     keep_fail = [list(row) for row in (old_prov.get('verbatim_failures') or [])
                  if _chapter_of(row[0] if row else '') not in targets]
-    if architecture == 'extraction-ir-v2':
+    if contract_for(architecture).uses_character_refs:
         resolved_copy = copy.deepcopy(merged)
         char_refs = resolve_character_refs(resolved_copy, main_text, characters)
         inferred = sum(len(beat.get('present_char_ids') or [])
@@ -469,10 +472,10 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
 
     cfg = load_config()
-    if cfg.stage2_blueprint_contract not in IR1_FAMILY:
-        print(f'本工具只跑 ir1 系的臂（{"、".join(IR1_FAMILY)}），而当前配置是 '
+    if cfg.stage2_blueprint_contract not in SMOKE_CONTRACTS:
+        print(f'本工具只跑 extraction IR 系的臂（{"、".join(SMOKE_CONTRACTS)}），而当前配置是 '
               f'{cfg.stage2_blueprint_contract!r}。先显式拧一次：\n'
-              f'  $env:NOVEL_STAGE2_BLUEPRINT_CONTRACT = "{IR1_FAMILY[-1]}"',
+              f'  $env:NOVEL_STAGE2_BLUEPRINT_CONTRACT = "{SMOKE_CONTRACTS[-1]}"',
               file=sys.stderr)
         return 2
     targets = _chapters_of(a.chapters)

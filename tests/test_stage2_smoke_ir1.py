@@ -7,7 +7,7 @@ test_stage2_smoke_ir1.py —— 7A 高难包冒烟工具（`tools/smoke_stage2_i
 ① **子集请求与整跑逐字节同构**——冒烟付费买到的响应必须能被后续整跑的缓存
    原样接住；哪天 `build_blueprint_user` 依赖了「本次跑几章」，这条当场红；
 ② **只发目标章**——子集就是子集，不许顺手把整本发出去；
-③ **合并稿只活在内存里**：未动章逐字节沿用盘上 v3 正式稿、目标章换成 ir1
+③ **合并稿只活在内存里**：未动章逐字节沿用盘上正式稿、目标章换成新响应
    编译结果，跑完书目录零改动（工具自己也核一道，这里断言它真的核得住）。
 """
 from __future__ import annotations
@@ -28,6 +28,10 @@ from tests.test_stage2_generation import (
 from tools import smoke_stage2_ir1 as S
 
 _ENV_KEY = 'NOVEL_STAGE2_BLUEPRINT_CONTRACT'
+
+
+def test_the_smoke_tool_accepts_current_v31_contract():
+    assert 'extraction-ir-v3.1' in S.SMOKE_CONTRACTS
 
 
 def _target_of(user: str) -> int:
