@@ -27,7 +27,8 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
   产物必须由现役 producer 按 `ARTIFACT_SPECS.current_version` 写出。**本仓没有迁移机制**
   （2026-08-18 归零，理由见 `contracts/schema/__init__.py` 模块头【版本】）——
   这一条因此比过去简单：盘上任何一个与注册表当前版本对不上的标记，都说明那份产物不是这一跑产的。
-  ⚠ 版本号**逐份从注册表现算**，别写死 `1`：`stage2/chapter_blueprints.json` 已于 2026-08-19 升到 v2。
+  ⚠ 版本号**逐份从注册表现算**，别写死 `1`：`stage2/chapter_blueprints.json` 已于
+  2026-08-23 随 architecture 收窄升到 v3。
   不给旧 JSON 手补 `_schema_version`、`root_clean_sha1` 或其他字段冒充当前产地。
 - [ ] 生成并提交无正文 manifest：逐书记录 sid、source hash、章节数、预期产物与版本、代码身份、
   冻结命令、ledger 聚合及精确 skip allowlist。终审成本以 `<base>/_service/ledger.jsonl` 为
@@ -390,7 +391,7 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 
 ⚠⚠ **立条目时的读数不能当基线用。** 它们全部取自 `四人成行` 那一份计划，而那份计划有两重
 污染：① 它是**旧 prompt 逼出来的分布**——旧口径下够大的章不移位就不许落盘；
-② 它是对着**旧版 stage2** 产的（当前 `chapter_blueprints.json` 已是 schema v2，
+② 它是对着**旧版 stage2** 产的（当前 `chapter_blueprints.json` 已是 schema v3，
 `from_beats` 里 16/106 个 `beat_id` 在当前蓝图中已不存在）。当时读数：
 `cold_open` **11/11 章** · `transition` = `earlier 18 / start 11 / return 6 / later 1 / continue 1`
 · 方向可判率 **13/26** 个接缝（判不动：`recall→recall` 6 · 上游漂移 3 · `recall→present` 3 ·
@@ -721,7 +722,7 @@ Fisher 单侧 p≈0.21 ⇒ **方向对，但没到显著**。三条已经站得�
 零成本修复已完成：判据从 `CONTRACTS` 的关闭引用能力派生；数字候选不再从“第二天/下一秒”
 截出“二天/一秒”；v3.1 prompt 恢复 hinge 类别、反批量选择与反嵌套规则；全书秘密 prompt 明确
 区分世界内角色不知与读者尚未知。定向 118 项非 corpus 回归 exit 0。**这不改变盘上
-`ChapterBlueprints` artifact schema v2**；待翻的是响应契约默认值，不是 artifact 版本。
+`ChapterBlueprints` artifact schema v3**；本次升版只来自 architecture 收窄，不代表响应形状改造。
 冻结契约五文件 325 项、完整非 corpus 回归、前端 seams/typecheck/build 亦均 exit 0；前端验证
 只读复用了同锁文件主 worktree 的依赖，未安装或改写依赖。
 
@@ -748,7 +749,7 @@ completion 也比 Pro v1.1 高 4.7%，所以结论是“架构有上限、Flash 
 
 该响应字段与 validator 已撤回，system/hint 恢复到 e268 的 6,577/538 字。当前只保留两项不增加模型
 推理任务的代码优化：候选按引语/数字/因果分层并保留各族首尾；章节 HARD 在摘要调用前用同一生产判据
-预检，使失败恢复由 `N+1+k+1` 收为 `N+k+1`。盘上 `ChapterBlueprints` 仍为 v2：
+预检，使失败恢复由 `N+1+k+1` 收为 `N+k+1`。盘上 `ChapterBlueprints` 当前为 v3：
 
 - [x] 先用无情道 ch4/ch12/ch13/ch22、偶像 ch1/ch7 做 6 章核心烟测；必须补回笑点、关系证据与
   揭示回收，ch22 保持约 5–9 beat，ch1/ch7 不粗切，同时不得出现普通对白 hinge 系统性反弹；

@@ -419,20 +419,25 @@ def hinge_heading(kind: str) -> str:
 #:   91→126 拍（Pro 130）、145→169 hinge（Pro 168），在场者代词 9→0、名册外
 #:   9→0；0 HARD，唯一错误由 ch17 定向重生成一次收敛。完整证据见
 #:   `docs/stage2_contract_experiment.md` §十四。
-#: · `extraction-ir-v3 / v3.1`（2026-08-23）：两条**未翻默认的实验臂**，继续只
+#: · `extraction-ir-v2.1`（2026-08-23）：v2 的相级 effort 单变量实验臂。双书付费
+#:   配对因 hinge 召回与成本门失败，默认未翻；完整否决证据见实验手册 §十八。
+#: · `extraction-ir-v3 / v3.1`（2026-08-23）：两条**未翻默认的实验臂**，曾只
 #:   放宽 provenance 取值面、不升 artifact schema。v3 把 v2 的“召回边界 → 细节”
 #:   合进同一次响应，保留强制 micro_events 脚手架，以减少每章第二次 high 推理；
 #:   v3.1 在 v3 上再把 narration 收成可见 char_id，并让 hinge 优先选择代码枚举的
 #:   原文候选（覆盖不到仍可交 phrase，避免为省 token 静默漏事实）。两臂最终都编译
 #:   成既有 `ChapterBlueprints`；没有付费 A/B 证据前默认继续是 v2。
+#: · 2026-08-23 收口：只保留 `extraction-ir-v1.1`、`extraction-ir-v2`、
+#:   `extraction-ir-v3.1`。`bounded-fidelity-v3`、v1、v2.1、v3 从公开取值面撤下；
+#:   Literal 收窄会拒读带退役 architecture 的存量字节，因此 chapter blueprints
+#:   schema v2 → v3，全部存量由 `stage2.blueprint` 付费整跑重建，不做迁移。
 BLUEPRINT_ARCHITECTURES: Final = (
-    'bounded-fidelity-v3', 'extraction-ir-v1', 'extraction-ir-v1.1',
-    'extraction-ir-v2', 'extraction-ir-v3', 'extraction-ir-v3.1')
+    'extraction-ir-v1.1', 'extraction-ir-v2', 'extraction-ir-v3.1')
 
 #: 当前默认架构。`BLUEPRINT_ARCHITECTURES` 是取值面，这一格是默认值——
 #: 翻默认只动这一格（`novel/config.py::DEFAULT_STAGE2_BLUEPRINT_CONTRACT` 从它派生），
-#: **取值面不动**：盘上存量产物可能来自任一已登记架构，收窄取值面会让其中一批当场读不回来，
-#: 而定向修复是按「基线产物的 architecture」选契约的。
+#: 盘上存量产物可能来自任一已登记架构，而定向修复是按「基线产物的 architecture」
+#: 选契约的；因此取值面收窄必须升 artifact version 并整跑重建，不能只改这一格。
 #:
 #: 【2026-08-21 翻默认：v3 → extraction-ir-v1】依据是同书同上游的单变量对照
 #: （`docs/stage2_contract_experiment.md` §六~§十，无情道 23 章）：
@@ -455,7 +460,7 @@ BLUEPRINT_ARCHITECTURES: Final = (
 #: `docs/stage2_contract_experiment.md` §十四。它是**质量换成本**：本书 Flash 真调用
 #: 25→43、completion 136,431→271,462；地点 66.7% 仍没到预登记 81% 底线，n=1。
 #: 采纳的理由是生产默认模型就是 Flash，而拍/hinge 缺口分别约补回 90%/96%、在场者
-#: 四类解析失败归零。回退同样只改这一格；旧取值不删、定向修复仍按基线架构走。
+#: 四类解析失败归零。默认回退仍只改这一格，但契约取值面的增删另按上方升版纪律走。
 BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v2'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 

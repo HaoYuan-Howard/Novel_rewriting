@@ -1566,7 +1566,8 @@ def _present(c: _Ctx) -> list[Outcome]:
     else:
         per_call = [len(b or []) for b in batches]
         architecture = (c.prov.get('context') or {}).get('architecture')
-        phases = 2 if architecture == 'extraction-ir-v2' else 1
+        spec = CONTRACTS.get(str(architecture))
+        phases = 2 if spec is not None and spec.topology == 'boundary_then_detail' else 1
         call_count = len(batches) * phases
         shape = (
             f'两段式逐章抽取（{len(batches)} 章 = {call_count} 次逐章调用）'

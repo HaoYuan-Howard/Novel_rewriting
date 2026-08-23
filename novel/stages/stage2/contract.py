@@ -28,26 +28,15 @@ from pydantic import BaseModel
 
 from contracts.invariants import BLUEPRINT_ARCHITECTURES
 from contracts.schema.stage2 import (
-    ChapterBoundariesResponse, ChapterBlueprintsResponse,
-    ChapterBlueprintsResponseV2, ChapterBlueprintsResponseV2Refs,
-    ChapterBlueprintsResponseV3, ChapterBlueprintsResponseV31,
+    ChapterBoundariesResponse, ChapterBlueprintsResponseV2,
+    ChapterBlueprintsResponseV2Refs, ChapterBlueprintsResponseV31,
 )
 from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import prompts
 from novel.stages.stage2.compile_v2 import (
     canonical_ir_projection, canonical_ir_projection_refs,
-    canonical_ir_projection_v3, canonical_ir_projection_v31,
-    compile_v2, compile_v2_refs, compile_v3_scaffold, compile_v31_refs,
+    canonical_ir_projection_v31, compile_v2, compile_v2_refs, compile_v31_refs,
 )
-from novel.stages.stage2.normalize import normalize_blueprints, response_shape
-
-
-def _compile_v3(data: dict[str, Any], main_text: list[dict[str, Any]],
-                characters: dict[str, dict[str, Any]], *,
-                summaries: dict[int, str] | None = None) -> tuple[dict, dict]:
-    """v3 归一的同签名包装：v3 的 summary 由模型自带，`summaries` 无意义、必须为空。"""
-    assert not summaries, 'bounded-fidelity-v3 的 summary 在响应里，不许再从摘要批注入'
-    return normalize_blueprints(data, main_text, characters)
 
 
 @dataclass(frozen=True)
@@ -89,7 +78,6 @@ class ContractSpec:
     boundary_system: str | None = None
     boundary_sys_name: str | None = None
     boundary_response_model: type[BaseModel] | None = None
-
     #: 细节响应里的在场者是否从本章可见 `char_id` 集合选择；调用方据此
     #: 给 user 注入关闭式候选集，并在本地 validator 再验一次。
     uses_character_refs: bool = False
@@ -106,38 +94,28 @@ class ContractSpec:
     prefers_content_over_reasoning_salvage: bool = False
 
 
+_V2 = ContractSpec(
+    architecture='extraction-ir-v2',
+    system=with_json_shape(
+        prompts.BLUEPRINT_SYS_V2_REFS, prompts.BLUEPRINT_HINT_V2_REFS),
+    sys_name='BLUEPRINT_SYS_V2_REFS',
+    response_model=ChapterBlueprintsResponseV2Refs,
+    schema_mode='prompt_plus_local_validation',
+    compile_fn=compile_v2_refs,
+    projection_fn=canonical_ir_projection_refs,
+    needs_summary_batch=True,
+    supports_field_patch=True,
+    topology='boundary_then_detail',
+    boundary_system=with_json_shape(
+        prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2),
+    boundary_sys_name='BOUNDARY_SYS_V2',
+    boundary_response_model=ChapterBoundariesResponse,
+    uses_character_refs=True,
+)
+
 CONTRACTS: dict[str, ContractSpec] = {
-    'bounded-fidelity-v3': ContractSpec(
-        architecture='bounded-fidelity-v3',
-        system=with_json_shape(prompts.BLUEPRINT_SYS, prompts.BLUEPRINT_HINT),
-        sys_name='BLUEPRINT_SYS',
-        response_model=ChapterBlueprintsResponse,
-        schema_mode='prompt_plus_local_validation',
-        compile_fn=_compile_v3,
-        projection_fn=response_shape,
-        needs_summary_batch=False,
-        supports_field_patch=False,
-        topology='single',
-    ),
-    'extraction-ir-v1': ContractSpec(
-        architecture='extraction-ir-v1',
-        system=with_json_shape(prompts.BLUEPRINT_SYS_V2, prompts.BLUEPRINT_HINT_V2),
-        sys_name='BLUEPRINT_SYS_V2',
-        response_model=ChapterBlueprintsResponseV2,
-        schema_mode='prompt_plus_local_validation',
-        compile_fn=compile_v2,
-        projection_fn=canonical_ir_projection,
-        needs_summary_batch=True,
-        supports_field_patch=True,
-        topology='single',
-    ),
-    # ⚠ 与上面那条**只差 `system` 一处**：响应模型、编译器、投影函数、摘要批开关
-    #   与字段级修复能力全部原样共用（place 的**形状**没动，
-    #   动的只是 system 里那一段措辞的次序）。
-    #   这不是省事——它是**单变量对照能成立的前提**：两臂的差别若不止一处，
-    #   跑出来的读数就归不了因。同理，结构提示复用 `BLUEPRINT_HINT_V2`，
-    #   另起一份只会让两处漂移。
-    #   改动的理由与风险写在 `prompts.py::_BLUEPRINT_TPL_V1_1` 上方。
+    # v1.1 沿用 ir1 的响应模型、编译器与投影函数，只保留修复过地点措辞的 system。
+    # 退役的是可选 architecture，不是这组仍被 v1.1 消费的共享实现。
     'extraction-ir-v1.1': ContractSpec(
         architecture='extraction-ir-v1.1',
         system=with_json_shape(prompts.BLUEPRINT_SYS_V1_1, prompts.BLUEPRINT_HINT_V2),
@@ -154,42 +132,9 @@ CONTRACTS: dict[str, ContractSpec] = {
     # 系统性少切拍。v2 先只交止段，再让第二相在代码冻结的边界上填事实；同时把
     # 在场人物改成可见 char_id 的关闭式选择、地点恢复成字符串或 null。
     # 正式产物形状不变，变化只存在于模型响应边界和调用拓扑。
-    'extraction-ir-v2': ContractSpec(
-        architecture='extraction-ir-v2',
-        system=with_json_shape(
-            prompts.BLUEPRINT_SYS_V2_REFS, prompts.BLUEPRINT_HINT_V2_REFS),
-        sys_name='BLUEPRINT_SYS_V2_REFS',
-        response_model=ChapterBlueprintsResponseV2Refs,
-        schema_mode='prompt_plus_local_validation',
-        compile_fn=compile_v2_refs,
-        projection_fn=canonical_ir_projection_refs,
-        needs_summary_batch=True,
-        supports_field_patch=True,
-        topology='boundary_then_detail',
-        boundary_system=with_json_shape(
-            prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2),
-        boundary_sys_name='BOUNDARY_SYS_V2',
-        boundary_response_model=ChapterBoundariesResponse,
-        uses_character_refs=True,
-    ),
-    # v3 只改变调用拓扑：v2 的召回脚手架与细节字段在**同一次**响应里返回。
-    # 细节编译、摘要批和正式产物均与 v2 同构，便于单变量 A/B。
-    'extraction-ir-v3': ContractSpec(
-        architecture='extraction-ir-v3',
-        system=with_json_shape(prompts.BLUEPRINT_SYS_V3,
-                               prompts.BLUEPRINT_HINT_V3),
-        sys_name='BLUEPRINT_SYS_V3',
-        response_model=ChapterBlueprintsResponseV3,
-        schema_mode='prompt_plus_local_validation',
-        compile_fn=compile_v3_scaffold,
-        projection_fn=canonical_ir_projection_v3,
-        needs_summary_batch=True,
-        supports_field_patch=True,
-        topology='scaffolded_single',
-        uses_character_refs=True,
-    ),
-    # v3.1 在同一拓扑上再收窄两格：叙述身份只选可见 char_id；hinge 优先
-    # 选确定性原文候选、覆盖不到才回抄 phrase。两轮分别登记，结果才能归因。
+    'extraction-ir-v2': _V2,
+    # v3.1 把叙述身份收成可见 char_id；hinge 优先选确定性原文候选、覆盖不到
+    # 才回抄 phrase。它保留单次调用内的召回脚手架。
     'extraction-ir-v3.1': ContractSpec(
         architecture='extraction-ir-v3.1',
         system=with_json_shape(prompts.BLUEPRINT_SYS_V31,

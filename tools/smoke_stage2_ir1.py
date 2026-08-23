@@ -69,7 +69,7 @@ from novel.stages.stage2.normalize import (                       # noqa: E402
     resolve_character_refs,
 )
 
-#: 本工具最初只服务 ir1 系；v3/v3.1 后来同样需要在整跑前验证**新响应契约**的
+#: 本工具最初只服务 ir1 系；v2/v3.1 同样需要在整跑前验证**新响应契约**的
 #: 首轮子集。收成白名单是为了让「拿错契约跑了一轮」在第一行就停住。
 #:
 #: ⚠⚠ **实际用哪一臂一律走 `active_contract()`（读 env），与 `build_prompts`
@@ -78,8 +78,7 @@ from novel.stages.stage2.normalize import (                       # noqa: E402
 #: 发出去的是新 prompt、校验与编译却还是旧 spec，**而这不会报错**
 #: （`contract.py` 模块头警告的正是这个形态）。ir1.1 加进来之后它就不再是理论风险。
 SMOKE_CONTRACTS = (
-    'extraction-ir-v1', 'extraction-ir-v1.1', 'extraction-ir-v2',
-    'extraction-ir-v3', 'extraction-ir-v3.1',
+    'extraction-ir-v1.1', 'extraction-ir-v2', 'extraction-ir-v3.1',
 )
 NODE = 'stage2.blueprint'
 
@@ -500,7 +499,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f'# 7A 高难包冒烟 · {a.sid}')
     print(f'  契约 {spec.architecture} · schema_mode {spec.schema_mode}')
-    print(f'  模型 {cfg.model} · effort {NODES[NODE].effort} · 缓存 {cfg.cache_dir}')
+    print(f'  模型 {cfg.model} · 节点 effort {NODES[NODE].effort} · 缓存 {cfg.cache_dir}')
     systems = ([spec.boundary_system, spec.system]
                if spec.boundary_system is not None else [spec.system])
     print(f'  system {" + ".join(str(len(s)) for s in systems)} 字'

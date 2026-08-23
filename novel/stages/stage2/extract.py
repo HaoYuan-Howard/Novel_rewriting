@@ -1525,8 +1525,11 @@ SUMMARY_BATCH_MIN_CHARS = 50
 SUMMARY_BATCH_MAX_CHARS = 400
 
 
-def _run_summary_batch(ctx: RunContext, client: LlmClient,
-                       blueprints: list[dict[str, Any]]) -> dict[int, str]:
+def _run_summary_batch(
+    ctx: RunContext,
+    client: LlmClient,
+    blueprints: list[dict[str, Any]],
+) -> dict[int, str]:
     """`extraction-ir-v1` 的书级摘要批：一次调用按 events 产全部目标章的摘要。
 
     输入已是压缩事实（各章 beat events），不重读原章；validator 硬校验
@@ -1718,7 +1721,7 @@ def finish_blueprints(
     ordinals = [int(section.get('chapter_ordinal') or 0)
                 for section in main_text]
 
-    def current_artifact() -> ChapterBlueprints:
+    def current_artifact(*, settle: bool = True) -> ChapterBlueprints:
         provenance = ctx.llm_provenance(
             BlueprintProvenance,
             prompts=prompt_keys,
@@ -1729,6 +1732,7 @@ def finish_blueprints(
                                       architecture=spec.architecture),
             partial_regen_chapters=[],
             repairs=[],
+            settle=settle,
             **accounting,
         )
         return ChapterBlueprints.model_validate({
@@ -1757,12 +1761,13 @@ def finish_blueprints(
         # `_judge_candidate`。任何 HARD 都不可能被摘要改好；先拦再摘要，失败拓扑从
         # N+1+k+1 收成 N+k+1。问题稿 prompts 没有 SUMMARY_BATCH_SYS，修复路据此知道
         # 最终要为全书补一次摘要，而不是沿用 debug 文本。
-        provisional = current_artifact()
+        provisional = current_artifact(settle=False)
         provisional_raw = provisional.model_dump(by_alias=True)
         pre_summary_hits = _hard_hits(
             _judge_candidate(global_raw, provisional_raw, main_text))
         if pre_summary_hits:
-            block(provisional, pre_summary_hits, summary_skipped=True)
+            # 这份候选现在真的会作为 `.INVALID` 落盘，重新铸造并在此刻结算。
+            block(current_artifact(), pre_summary_hits, summary_skipped=True)
 
         summaries = _run_summary_batch(ctx, client, data['blueprints'])
         for blueprint in data['blueprints']:

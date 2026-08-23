@@ -179,7 +179,7 @@ class ArtifactSpec:
     ⚠ 这里曾有第三格 `migrations`（低版本 → 当前版本的迁移链）。删除的理由见模块头
     【版本】那一段：它保护的不是存量产物，是**没人重建过的**存量产物。
     `current_version` 保留为可写，是因为它仍要承担「这个形状破坏过几次」这件事——
-    今天全表只有 `stage2/chapter_blueprints.json` 破坏过一次（2026-08-19，见下表那一行）。
+    `stage2/chapter_blueprints.json` 已破坏过两次（2026-08-19、2026-08-23，见版本账）。
     """
 
     model: type[BaseModel]
@@ -206,8 +206,8 @@ class DecodedArtifact:
 #: 是模块头【版本】那一段的裁决：破坏形状要 `current_version` +1 并同批回答
 #: 「存量产物由谁重建」。反向守卫在 `tests/test_artifact_versions.py`。
 #:
-#: ⚠ **全表 v1，例外逐条在下面自己那一行写着理由与重建人**：
-#: `STAGE2_CHAPTER_BLUEPRINTS`（2026-08-19）与 2026-08-22 阶段 B 那一批。
+#: ⚠ **例外逐条在下面自己那一行写着理由与重建人**：
+#: `STAGE2_CHAPTER_BLUEPRINTS`（2026-08-19、2026-08-23）与 2026-08-22 阶段 B 那一批。
 #: **升版的正确形态就是这样**——在表里显式登记，而不是加一条迁移把旧字节读成新形状。
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # ⚠ 2026-08-22 阶段 C 新增：本层唯一可变的那一格（不可变 revision 链 + current
@@ -231,13 +231,13 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
     STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit),
-    # ⚠⚠ **全表唯一的 v2。** 2026-08-19 `bounded-fidelity-v2` → `v3`：beat 的区间
-    #   改由**段号**算出，`BlueprintContext.architecture` 的 `Literal` 随之收窄、
-    #   `BlueprintProvenance.verbatim_recovered` 删除 ⇒ 存量蓝图**读不进来**。
+    # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
+    #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
+    #   v1.1/v2/v3.1 三值，升 v3。两次都会让旧信封**读不进来**。
     #   **存量产物由谁重建：`stage2.blueprint` 整跑（付费）**；`.INVALID` 与 `_rounds/`
     #   一律作废，不手补字段冒充当前产地。取值与升版记录见
     #   `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 2),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 3),
     STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding),
     # ⚠ 三份 `*_edit.json` 不是节点产的，是**人产的输入**——但它们落在产物目录、
     #   被 `--apply-edit` 当决策集吃掉，所以形状同样是契约（stage7 先例，§三）。

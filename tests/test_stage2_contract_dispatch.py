@@ -5,11 +5,9 @@ test_stage2_contract_dispatch.py —— Stage2 多响应契约注册表与接线
 
 四件事：
 ① 注册表与取值面/配置口互相咬合（分家当场红）；
-② **v3 缓存保真**：接线（dispatch 重构）后，默认路径发出的 system/user 必须与
-   直接由 v3 常量拼出的**逐字节相同**——缓存键含全部 messages，动一个字节
-   老臂缓存全 miss，每次 miss 都是真钱；
+② v1.1 / v2 / v3.1 三份现役契约都能从配置入口到达真实请求路径；
 ③ V2 prompt/hint 的形状守卫（没有 summary/beat_id/start_para/para，枚举插值到位）；
-④ `extraction-ir-v1` 零成本全链：逐章请求 + 书级摘要批 → 编译 → 联合校验 → 落盘，
+④ `extraction-ir-v1.1` 零成本全链：逐章请求 + 书级摘要批 → 编译 → 联合校验 → 落盘，
    架构、摘要来源、provenance 双指纹、调用数逐项断言。
 """
 from __future__ import annotations
@@ -32,7 +30,7 @@ from novel.llm.transport import ChatResponse
 from novel.stages.stage2 import extract, prompts
 from novel.stages.stage2.compile_v2 import (
     canonical_ir_projection, canonical_ir_projection_refs,
-    canonical_ir_projection_v3, canonical_ir_projection_v31,
+    canonical_ir_projection_v31,
 )
 from novel.stages.stage2.contract import CONTRACTS, active_contract, contract_for
 from novel.stages.stage2.paragraphs import paragraph_spans
@@ -66,13 +64,23 @@ def test_only_ir31_prefers_normal_content_to_reasoning_channel_salvage():
     )
 
 
-def test_the_default_contract_is_ir2_and_env_can_still_select_v3():
-    """2026-08-21 翻默认（`BLUEPRINT_ARCHITECTURE`，依据见实验手册 §六~§十）。
-    v3 **没有退役**：盘上存量产物全是它，定向修复按基线架构选契约，
-    整跑也要能显式拧回去——所以两个方向都钉。"""
+def test_the_default_is_ir2_and_only_three_contracts_are_selectable():
     assert active_contract(env={}).architecture == 'extraction-ir-v2'
-    assert active_contract(
-        env={_ENV_KEY: 'bounded-fidelity-v3'}).architecture == 'bounded-fidelity-v3'
+    assert tuple(BLUEPRINT_ARCHITECTURES) == (
+        'extraction-ir-v1.1', 'extraction-ir-v2', 'extraction-ir-v3.1')
+    for architecture in BLUEPRINT_ARCHITECTURES:
+        assert active_contract(env={_ENV_KEY: architecture}).architecture == architecture
+
+
+@pytest.mark.parametrize('retired', [
+    'bounded-fidelity-v3', 'extraction-ir-v1',
+    'extraction-ir-v2.1', 'extraction-ir-v3',
+])
+def test_retired_contracts_are_rejected_at_both_public_entries(retired):
+    with pytest.raises(ValueError, match='契约只有'):
+        load_config(env={_ENV_KEY: retired})
+    with pytest.raises(KeyError, match='未登记'):
+        contract_for(retired)
 
 
 def test_a_misspelled_contract_is_rejected_not_silently_defaulted():
@@ -92,20 +100,11 @@ def test_a_misspelled_contract_is_rejected_not_silently_defaulted():
 # ⚠⚠ 下面三条各防一个**具体踩过或差点踩到的**失败形态，缺一条都会让实验白跑。
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_ir11_differs_from_ir1_in_exactly_one_construct():
-    """两臂除 `architecture` / `sys_name` / `system` 外**逐格相同**。
-
-    响应模型、编译器、投影函数、摘要批开关全部共用——这不是省事，
-    它是**单变量对照能成立的前提**：差别不止一处时，跑出来的读数归不了因。
-    """
-    a, b = CONTRACTS['extraction-ir-v1'], CONTRACTS['extraction-ir-v1.1']
-    expected_diff = {'architecture', 'sys_name', 'system'}
-    differing = {f for f in a.__dataclass_fields__
-                 if getattr(a, f) != getattr(b, f)}
-    assert differing == expected_diff, \
-        f'ir1.1 与 ir1 的差别不是恰好那三格：{differing}——单变量对照已不成立'
-    assert b.response_model is a.response_model
-    assert b.compile_fn is a.compile_fn and b.projection_fn is a.projection_fn
+def test_ir11_keeps_the_shared_ir_compiler_and_single_call_topology():
+    spec = CONTRACTS['extraction-ir-v1.1']
+    assert spec.compile_fn.__name__ == 'compile_v2'
+    assert spec.projection_fn.__name__ == 'canonical_ir_projection'
+    assert spec.topology == 'single' and spec.needs_summary_batch
 
 
 def test_ir11_system_differs_from_ir1_only_in_the_place_paragraph():
@@ -131,38 +130,9 @@ def test_ir11_system_differs_from_ir1_only_in_the_place_paragraph():
         'place 的**形状**必须一个字不动（三个 mode 全在），ir1.1 只动措辞的次序'
 
 
-def test_the_ir1_arm_bytes_are_unchanged_by_the_ir11_addition():
-    """老臂 ir1 的请求字节没被 ir1.1 的加入动过。
-
-    与下面 v3 那两条同理：盘上 C/D 两臂的缓存与产物还在，ir1 模板漂一个字节，
-    配对 A/B 的零成本复现就要重新付钱。
-    """
-    spec = active_contract(env={_ENV_KEY: 'extraction-ir-v1'})
-    assert spec.system == with_json_shape(prompts.BLUEPRINT_SYS_V2,
-                                          prompts.BLUEPRINT_HINT_V2)
-    assert spec.sys_name == 'BLUEPRINT_SYS_V2'
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 二、v3 缓存保真：**v3 臂**的请求字节一个都不许动
-#
-# ⚠ 2026-08-21 翻默认之后这两条不再是「默认路径」的守卫，而是**老臂**的守卫，
-#   价值反而更高：盘上两本书的 v3 缓存与产物还在，v3 模板漂一个字节，
-#   它们的定向修复与复现就要重新付钱。⇒ 显式拧到 v3 再断言。
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_the_v3_arm_bytes_are_the_v3_constants_verbatim():
-    spec = active_contract(env={_ENV_KEY: 'bounded-fidelity-v3'})
-    assert spec.system == with_json_shape(prompts.BLUEPRINT_SYS,
-                                          prompts.BLUEPRINT_HINT)
-    assert spec.sys_name == 'BLUEPRINT_SYS'
-
-
-def test_build_prompts_under_the_v3_arm_emits_the_v3_request_bytes(
+def test_build_prompts_under_the_v31_arm_emits_the_v31_request_bytes(
         monkeypatch):
-    """端到端的那一半：接线后 `build_prompts` 产的 (system, user) 与直接由
-    v3 构造函数拼出的逐字节相同——system 走 spec、user 刻意不随契约变，两半都要钉。"""
-    monkeypatch.setenv(_ENV_KEY, 'bounded-fidelity-v3')
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
     book = Path(tempfile.mkdtemp()) / '保真_123'
     book.mkdir(parents=True)
     global_ctx = _ctx(book, 'stage2.global')
@@ -176,10 +146,15 @@ def test_build_prompts_under_the_v3_arm_emits_the_v3_request_bytes(
     rows = extract.build_prompts(ctx, chapters=(1,))
     assert len(rows) == 1
     _ordinal, system, user = rows[0]
-    assert system == with_json_shape(prompts.BLUEPRINT_SYS, prompts.BLUEPRINT_HINT)
+    assert system == with_json_shape(prompts.BLUEPRINT_SYS_V31,
+                                     prompts.BLUEPRINT_HINT_V31)
     characters = gg.model_dump(by_alias=True)['entities']['characters']
+    from novel.stages.stage2.compile_v2 import visible_character_refs
+    visible = visible_character_refs(characters, main_text())
     assert user == extract.build_blueprint_user(
-        ctx.title, main_text(), (1,), characters=characters)
+        ctx.title, main_text(), (1,), characters=characters,
+        character_refs=visible[1],
+        hinge_candidates=extract.hinge_candidates_by_chapter(main_text())[1])
 
 
 def test_build_prompts_under_the_ir11_arm_emits_the_ir11_request_bytes(
@@ -255,17 +230,15 @@ def test_the_two_phase_v2_contract_has_distinct_closed_shapes():
     assert 'present_names' not in str(prompts.BLUEPRINT_HINT_V2_REFS)
 
 
-def test_the_two_scaffolded_single_contracts_are_independently_selectable():
-    v3 = CONTRACTS['extraction-ir-v3']
+def test_the_v31_scaffolded_contract_has_closed_references():
     v31 = CONTRACTS['extraction-ir-v3.1']
-    assert v3.topology == v31.topology == 'scaffolded_single'
-    assert v3.boundary_system is None and v31.boundary_system is None
-    assert v3.uses_character_refs and not v3.uses_narration_refs
+    assert v31.topology == 'scaffolded_single'
+    assert v31.boundary_system is None
     assert v31.uses_character_refs and v31.uses_narration_refs
     assert v31.uses_hinge_candidates
-    assert set(prompts.BLUEPRINT_HINT_V3['blueprints'][0]) == {
+    assert set(prompts.BLUEPRINT_HINT_V31['blueprints'][0]) == {
         'chapter_ordinal', 'micro_events', 'beats', 'narration'}
-    assert set(prompts.BLUEPRINT_HINT_V3['blueprints'][0]['micro_events'][0]) == {
+    assert set(prompts.BLUEPRINT_HINT_V31['blueprints'][0]['micro_events'][0]) == {
         'end_para', 'cue'}
     narration = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['narration'][0]
     assert 'narrator_char_id' in narration and 'narrator_name' not in narration
@@ -279,7 +252,6 @@ def test_the_two_scaffolded_single_contracts_are_independently_selectable():
     assert '关系或立场\n  反转' in prompts.BLUEPRINT_SYS_V31
     assert '不得从「第二天 / 下一秒」中截出「二天 / 一秒」' \
         in prompts.BLUEPRINT_SYS_V31
-    assert '$' not in prompts.BLUEPRINT_SYS_V3
     assert '$' not in prompts.BLUEPRINT_SYS_V31
 
 
@@ -290,7 +262,7 @@ def test_the_summary_batch_arm_declares_its_bounds():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 四、extraction-ir-v1 零成本全链
+# 四、extraction-ir-v1.1 零成本全链
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ir1_responses() -> dict[int, dict]:
@@ -334,8 +306,8 @@ def _scaffolded_responses(*, closed: bool) -> dict[int, dict]:
     }
 
 
-def test_the_ir1_chain_compiles_batches_summaries_and_lands(monkeypatch):
-    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v1')
+def test_the_ir11_chain_compiles_batches_summaries_and_lands(monkeypatch):
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v1.1')
     book = Path(tempfile.mkdtemp()) / 'ir1链_123'
     book.mkdir(parents=True)
     global_ctx = _ctx(book, 'stage2.global')
@@ -363,13 +335,14 @@ def test_the_ir1_chain_compiles_batches_summaries_and_lands(monkeypatch):
 
     assert report.passed
     assert len(transport.calls) == len(ordinals) + 1, '逐章 N 次 + 摘要批 1 次'
-    v2_system = with_json_shape(prompts.BLUEPRINT_SYS_V2, prompts.BLUEPRINT_HINT_V2)
-    assert transport.calls[0].system == v2_system
+    ir11_system = with_json_shape(prompts.BLUEPRINT_SYS_V1_1,
+                                  prompts.BLUEPRINT_HINT_V2)
+    assert transport.calls[0].system == ir11_system
 
     stored = ArtifactStore(ctx).read(ChapterBlueprints, extract.BLUEPRINT_REL)
     context = stored.provenance.context
-    assert context.architecture == 'extraction-ir-v1'
-    assert set(stored.provenance.prompts) == {'BLUEPRINT_SYS_V2',
+    assert context.architecture == 'extraction-ir-v1.1'
+    assert set(stored.provenance.prompts) == {'BLUEPRINT_SYS_V1_1',
                                               'SUMMARY_BATCH_SYS'}
     texts = {s['chapter_ordinal']: s['text'] for s in main_text()}
     for blueprint in stored.blueprints:
@@ -387,7 +360,8 @@ def test_the_ir1_chain_compiles_batches_summaries_and_lands(monkeypatch):
 
 def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
         monkeypatch):
-    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v2')
+    architecture = 'extraction-ir-v2'
+    monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / 'ir2链_125'
     book.mkdir(parents=True)
     global_ctx = _ctx(book, 'stage2.global')
@@ -426,12 +400,28 @@ def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
     report = extract.run_blueprint(ctx, client)
 
     assert report.passed
+    density = next(line for line in report.rules if line.rule == 'batch_density')
+    assert density.scanned.endswith('× 2 相')
+    assert density.findings and '两段式逐章抽取' in density.findings[0].detail
     assert len(transport.calls) == len(ordinals) * 2 + 1, \
         '边界 N 次 + 冻结边界细节 N 次 + 摘要批 1 次'
-    assert transport.calls[0].system == with_json_shape(
+    boundary_system = with_json_shape(
         prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
+    assert transport.calls[0].system == boundary_system
+    summary_calls = [call for call in transport.calls if '逐章事件清单' in call.user]
+    boundary_calls = [call for call in transport.calls if call.system == boundary_system]
+    detail_calls = [call for call in transport.calls
+                    if call not in summary_calls and call not in boundary_calls]
+    assert len(boundary_calls) == len(detail_calls) == len(ordinals)
+    assert len(summary_calls) == 1
+    assert {(call.reasoning_effort, call.thinking) for call in boundary_calls} == {
+        ('high', True)}
+    assert {(call.reasoning_effort, call.thinking) for call in detail_calls} == {
+        ('high', True)}
+    assert {(call.reasoning_effort, call.thinking) for call in summary_calls} == {
+        ('high', True)}
     stored = ArtifactStore(ctx).read(ChapterBlueprints, extract.BLUEPRINT_REL)
-    assert stored.provenance.context.architecture == 'extraction-ir-v2'
+    assert stored.provenance.context.architecture == architecture
     assert set(stored.provenance.prompts) == {
         'BOUNDARY_SYS_V2', 'BLUEPRINT_SYS_V2_REFS', 'SUMMARY_BATCH_SYS'}
     for blueprint in stored.blueprints:
@@ -443,15 +433,10 @@ def test_the_ir2_chain_freezes_boundaries_and_lands_closed_character_refs(
                    for beat in blueprint.beats)
 
 
-@pytest.mark.parametrize(
-    ('architecture', 'closed', 'system_name'),
-    [
-        ('extraction-ir-v3', False, 'BLUEPRINT_SYS_V3'),
-        ('extraction-ir-v3.1', True, 'BLUEPRINT_SYS_V31'),
-    ],
-)
 def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
-        monkeypatch, architecture, closed, system_name):
+        monkeypatch):
+    architecture, closed, system_name = (
+        'extraction-ir-v3.1', True, 'BLUEPRINT_SYS_V31')
     monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / f'{architecture}_126'
     book.mkdir(parents=True)
@@ -494,20 +479,13 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
                for blueprint in stored.blueprints)
 
 
-@pytest.mark.parametrize(
-    ('architecture', 'closed', 'expected_calls', 'expected_event'),
-    [
-        ('extraction-ir-v3', False, 1, '救回稿事件'),
-        ('extraction-ir-v3.1', True, 2, '正文稿事件'),
-    ],
-)
-def test_ir31_resamples_reasoning_only_blueprints_without_disabling_v3_salvage(
-        monkeypatch, architecture, closed, expected_calls, expected_event):
-    """同一份合法 JSON：v3 立即救回；v3.1 留作后备并优先取同档正常正文。
+def test_ir31_resamples_reasoning_only_blueprints(monkeypatch):
+    """合法 reasoning 救回稿留作后备，并优先取同档正常正文。
 
     这里走 `request_blueprints` 的真实 validator 接线，防止只在注册表加了一格、
     首轮或定向修复却忘记消费；不跑摘要批，调用数只统计目标章本身。
     """
+    architecture, closed = 'extraction-ir-v3.1', True
     monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / f'{architecture}_救回策略_128'
     book.mkdir(parents=True)
@@ -543,8 +521,8 @@ def test_ir31_resamples_reasoning_only_blueprints_without_disabling_v3_salvage(
     batch = extract.request_blueprints(ctx, client, chapters=(ordinal,))
 
     assert batch['errors'] == [] and batch['scope_violations'] == []
-    assert len(transport.calls) == expected_calls
-    assert batch['raw_blueprints'][0]['beats'][0]['event'] == expected_event
+    assert len(transport.calls) == 2
+    assert batch['raw_blueprints'][0]['beats'][0]['event'] == '正文稿事件'
 
 
 def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):
@@ -598,10 +576,11 @@ def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):
         paragraph_spans(texts[ordinal])[-1][1]
 
 
-def test_ir31_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
+def test_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
         monkeypatch):
     """`chapter_coverage` 的 inbox 命令必须真能补缺章，不得反手索要不存在的基线。"""
-    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
+    architecture = 'extraction-ir-v3.1'
+    monkeypatch.setenv(_ENV_KEY, architecture)
     book = Path(tempfile.mkdtemp()) / 'ir31缺章恢复_130'
     book.mkdir(parents=True)
     global_ctx = _ctx(book, 'stage2.global')
@@ -611,8 +590,23 @@ def test_ir31_missing_chapter_repair_uses_the_initial_shape_without_a_fake_basel
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
 
-    by_ordinal = _scaffolded_responses(closed=True)
+    spec = CONTRACTS[architecture]
+    by_ordinal = (_ir2_responses()
+                  if spec.topology == 'boundary_then_detail'
+                  else _scaffolded_responses(closed=True))
     ordinals = sorted(by_ordinal)
+
+    def chapter_response(req, ordinal):
+        if req.system == spec.boundary_system:
+            boundary_beats = [
+                {'end_para': beat['end_para'], 'event': beat['event']}
+                for beat in by_ordinal[ordinal]['beats']]
+            return _ok({'blueprints': [{
+                'chapter_ordinal': ordinal,
+                'micro_events': boundary_beats,
+                'beats': boundary_beats,
+            }]})
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
 
     def initial_respond(req, _index):
         if '逐章事件清单' in req.user:
@@ -620,7 +614,7 @@ def test_ir31_missing_chapter_repair_uses_the_initial_shape_without_a_fake_basel
                 {'chapter_ordinal': o, 'summary': _summary_for(o)}
                 for o in ordinals]})
         ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
-        return _ok({'blueprints': [by_ordinal[ordinal]]})
+        return chapter_response(req, ordinal)
 
     ctx = _ctx(book, 'stage2.blueprint')
     client, _transport = _client(ctx, initial_respond)
@@ -653,16 +647,19 @@ def test_ir31_missing_chapter_repair_uses_the_initial_shape_without_a_fake_basel
             return _ok({'chapters': [
                 {'chapter_ordinal': o, 'summary': _summary_for(o)}
                 for o in ordinals]})
-        assert req.user == expected_user, '缺章必须复用首轮 user 字节，不能伪造修复基线'
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        if req.system == spec.boundary_system or spec.boundary_system is None:
+            assert req.user == expected_user, '缺章边界相必须复用首轮 user 字节'
         assert '上一版结构基线' not in req.user
-        return _ok({'blueprints': [by_ordinal[missing]]})
+        return chapter_response(req, ordinal)
 
     repair_client, repair_transport = _client(repair_ctx, repair_respond)
     report = extract.run_blueprint(
         repair_ctx, repair_client, chapters=(missing,))
 
     assert report.passed
-    assert len(repair_transport.calls) == 2, '缺章一次 + 全书摘要一次'
+    expected_calls = 3 if spec.topology == 'boundary_then_detail' else 2
+    assert len(repair_transport.calls) == expected_calls
     stored = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert [row.chapter_ordinal for row in stored.blueprints] == ordinals
     assert stored.provenance.partial_regen_chapters == [missing]
@@ -735,10 +732,10 @@ def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
                for bp in formal.blueprints)
 
 
-def test_an_ir1_summary_batch_that_misses_a_chapter_is_rejected_by_the_gate(
+def test_an_ir11_summary_batch_that_misses_a_chapter_is_rejected_by_the_gate(
         monkeypatch):
     """validator 硬校验「目标章集恰好覆盖」——少一章必须被闸拒，不许静默放行。"""
-    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v1')
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v1.1')
     book = Path(tempfile.mkdtemp()) / 'ir1缺章_123'
     book.mkdir(parents=True)
     global_ctx = _ctx(book, 'stage2.global')

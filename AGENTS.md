@@ -121,7 +121,8 @@ provenance 的口相同。
 版本**，无标记/低版本/高版本都明确拒读——**本仓没有迁移机制**（仍以注册表为准，
 破坏形状就 `current_version` +1 并同批回答「存量产物由谁重建」，并在
 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里显式登记那一次破坏）。
-现役除 `stage2/chapter_blueprints.json`（v2，2026-08-19 锚点改段落索引）外全表恒 v1；
+现役 `stage2/chapter_blueprints.json` 为 v3（2026-08-19 锚点改段落索引升 v2；
+2026-08-23 architecture 收窄为 v1.1/v2/v3.1 升 v3）；其余产物版本以注册表为准；
 旧产物**不手补字段冒充当前产地**，要从 producer 重建。
 `novel/` 里加一层包，`pyproject.toml` 的 `[tool.setuptools] packages` 要同步加一行——漏了没有任何测试
 会出声（`pythonpath=["."]` 让 pytest 照样 import 得到），只有非 editable 安装才崩。

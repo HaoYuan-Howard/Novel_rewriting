@@ -304,7 +304,6 @@ def test_conflict_stage_coverage_reports_duplicate_and_out_of_range_memberships(
 
 @pytest.mark.parametrize('architecture', [
     'extraction-ir-v2',
-    'extraction-ir-v3',
     'extraction-ir-v3.1',
 ])
 def test_closed_present_character_id_is_not_reclassified_as_an_ambiguous_name(
@@ -346,7 +345,7 @@ def test_open_character_names_still_report_ambiguity():
     gg['entities']['characters']['char_001']['address'].append({
         'surface': '母亲', 'by': 'narration',
         'context': 'reference', 'from_chapter': 1})
-    bp['_provenance']['context']['architecture'] = 'extraction-ir-v1'
+    bp['_provenance']['context']['architecture'] = 'extraction-ir-v1.1'
     outcomes = {o.rule: o for o in checks.check(
         global_g=gg, blueprints=bp, main_text=mt)}
     assert outcomes['present_names_ambiguous'].findings[0].detail.startswith('2/')

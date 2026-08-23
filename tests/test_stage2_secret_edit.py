@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -41,22 +40,18 @@ from novel.quality.global_review import decide
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
 from tests.test_stage2_generation import (
-    _client, _ctx, _ok, _response_blueprints, _response_global,
+    _client, _ctx, _ok, _respond_blueprints, _response_blueprints,
+    _response_global,
 )
 from tests.test_stage2 import main_text
 
 BLUEPRINT_EDGE = 'stage2/global_grounding.json'
 
 
-#: ⚠ **本文件的假响应是 `bounded-fidelity-v3` 形状的**（`_response_blueprints()`
-#: 由 v3 正式产物反投影而来，带 `beat_id`/`span`/产物侧 `time_layer`）。
-#: 默认契约已翻成两阶段 `extraction-ir-v2`；不拧回去这些响应会被
-#: V2 的 schema 闸整轮拒光——那是**测试装置的臂选错了**，不是产线的病。
-#: ⇒ 整个文件跑在 v3 臂上；ir1 的链路另有 `test_stage2_contract_dispatch.py`
-#: 与 `test_stage2_compile_v2.py` 覆盖。
+#: 通用底座固定在仍现役的 v1.1；契约特有拓扑由 dispatch 测试覆盖。
 @pytest.fixture(autouse=True)
-def _pin_v3_arm(monkeypatch):
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'bounded-fidelity-v3')
+def _pin_ir11_arm(monkeypatch):
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v1.1')
 
 
 def _seed(book: Path, *, with_blueprints: bool = False) -> None:
@@ -70,8 +65,7 @@ def _seed(book: Path, *, with_blueprints: bool = False) -> None:
     by_ordinal = _response_blueprints()
 
     def respond(req, _index):
-        ordinals = re.findall(r'阅读序第(\d+)章', req.user)
-        return _ok({'blueprints': [by_ordinal[int(ordinals[-1])]]})
+        return _respond_blueprints(req, by_ordinal)
 
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
     bp_client, _bp_transport = _client(blueprint_ctx, respond)

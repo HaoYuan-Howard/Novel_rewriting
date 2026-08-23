@@ -227,11 +227,8 @@
   "must_hold": "必须成立，但【不必写在纸面上】（别为它硬塞背景交代）"
  },
  "blueprint_architectures": [
-  "bounded-fidelity-v3",
-  "extraction-ir-v1",
   "extraction-ir-v1.1",
   "extraction-ir-v2",
-  "extraction-ir-v3",
   "extraction-ir-v3.1"
  ],
  "repair_route": {

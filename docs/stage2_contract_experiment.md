@@ -1,4 +1,4 @@
-# stage2 契约实验手册（v3 / extraction-ir-v1~v3.1）
+# stage2 契约实验手册（现役 v1.1 / v2 / v3.1；其余为历史实验）
 
 自足入口：本页给「跑 A/B、修失败、审读数」的操作者，一页说清多契约怎么选、
 钱怎么不白花、读数从哪来。设计依据与逐步实施记录见 `Stage2_improvement.md`
@@ -7,34 +7,32 @@
 
 ## 一、响应契约是什么、怎么选
 
-`stage2.blueprint` 有六套已登记的**响应契约**（产物契约一个字节不动，下游
-stage4/API 无感）。`extraction-ir-v1.1` 只改 v1 的地点措辞；当前默认 v2 把逐章抽取
-拆成边界与细节两相；v3/v3.1 是尚未付费验收的降耗实验臂：
+`stage2.blueprint` 只保留三套可选择的**响应契约**。`extraction-ir-v1.1` 是一相开放字面 IR；
+当前默认 v2 把逐章抽取拆成边界与细节两相；v3.1 是一相带召回脚手架和关闭引用的候选：
 
-| | `bounded-fidelity-v3`（老臂） | `extraction-ir-v1 / v1.1` | `extraction-ir-v2`（**默认**） | `extraction-ir-v3 / v3.1`（实验） |
-|---|---|---|---|---|
-| 逐章调用 | 一相 | 一相 | **两相**：先回忆并压缩边界，再在冻结边界上填细节 | **一相带脚手架**：同一响应先 cue 召回、再交完整拍 |
-| beat 定位 | 模型交 `start_para + end_para` | 模型只交 `end_para`（起点代码推导，末拍必须到底） | 第一相交 `micro_events + beats[].end_para`；两列均递增到底，且 beat 边界必须取自 micro-event 边界 | 同一响应交 micro cue + 详细 beats；本地守同一边界不变量 |
-| hinge | `kind + para + phrase`（段内定位） | `kind + phrase`（拍区间内**原样唯一**定位） | 同 IR：`kind + phrase`，第二相不能改第一相边界 | v3 同 v2；v3.1 候选 id 优先、phrase 兜底 |
-| place | 自由文本 | 三态；v1.1 只调整降级次序 | 第二相交原文地点字符串或 `null` | 同 v2 细节形状 |
-| 人物引用 | 原文字面 | 原文字面 | 在场者从可见 `char_id` 闭集选 | v3 同 v2；v3.1 连 narrator/focalizer 也闭集选择 |
-| summary | 模型逐章自带 | **书级摘要批**独立一调（events 是唯一语义源） | 同 IR | 同 IR；micro cue 编译前丢弃 |
-| 编译器 | `novel/stages/stage2/normalize.py` | `novel/stages/stage2/compile_v2.py`（含层0 边界外扩） | 同文件的 `compile_v2_refs` | 同文件的 `compile_v3_scaffold` / `compile_v31_refs`，最终形状不变 |
+| | `extraction-ir-v1.1` | `extraction-ir-v2`（默认） | `extraction-ir-v3.1` |
+|---|---|---|---|
+| 逐章调用 | 一相 | **两相**：先回忆并压缩边界，再在冻结边界上填细节 | **一相带脚手架**：同一响应先 cue 召回、再交完整拍 |
+| beat 定位 | 模型只交 `end_para`（起点代码推导，末拍必须到底） | 第一相交 `micro_events + beats[].end_para`；两列均递增到底 | 同一响应交 micro cue + 详细 beats；本地守同一边界不变量 |
+| hinge | `kind + phrase`（拍区间内原样唯一定位） | 第二相交 `kind + phrase`，不能改第一相边界 | 候选 id 优先、phrase 兜底 |
+| 人物引用 | 原文字面 | 在场者从可见 `char_id` 闭集选 | narrator/focalizer 也闭集选择 |
+| summary | **书级摘要批**独立一调 | 同左 | 同左；micro cue 编译前丢弃 |
+| 编译器 | `compile_v2` | `compile_v2_refs` | `compile_v31_refs` |
 
 选择口（与 `DEEPSEEK_MODEL` 同一条纪律——显式拧一次，不是随手改的变量）：
 
 ```text
-NOVEL_STAGE2_BLUEPRINT_CONTRACT=bounded-fidelity-v3   # 缺省 = extraction-ir-v2
+NOVEL_STAGE2_BLUEPRINT_CONTRACT=extraction-ir-v3.1   # 缺省 = extraction-ir-v2
 ```
 
-**旧契约没有退役**：盘上存量产物仍可能来自其中任一架构；收窄取值面会让它们当场读不回来。
-产物 `_provenance.context.architecture` 如实记下这一份用的是哪一套；定向重生成 /
-`--patch` 按**基线产物**的架构选契约，配置与基线不一致会显式终态（先整跑换架构）。
+`bounded-fidelity-v3`、`extraction-ir-v1`、`extraction-ir-v2.1`、`extraction-ir-v3`
+已退役，不再能从配置或修复入口选择。取值面收窄使 `chapter_blueprints.json` schema v2 → v3；
+旧 v2 信封与退役 architecture 产物均由 `stage2.blueprint` 付费整跑重建，不迁移、不手补版本。
 v1 的历史裁决见 §四、§八与 §十一；v2 翻默认的付费依据与未达成项见 §十四；
-v3/v3.1 的预注册与未授权边界见 §十五。
+v3/v3.1 的预注册与结果见 §十五～§十七；v2.1 的预注册与双书付费结果见 §十八。
 
 ⚠ **schema_mode 声明**：DeepSeek V4 官方 API 只支持 `response_format=json_object`
-（`json_schema` 被拒，2026-08-20 文档探针）。六套契约都是
+（`json_schema` 被拒，2026-08-20 文档探针）。三套现役契约都是
 **prompt 约束 + 本地 pydantic 校验**，不是 constrained decoding——
 实验结论不许把「枚举前缀带来的改善」归因给 decoder 约束。
 
@@ -1151,3 +1149,133 @@ ch19 的结契/表白、ch22 的请求—原因—安抚—常来—答应和 ch
 agent progress 为 `5e1a5984a293d6e933880167cdda6114368781137e7f14d4142808c853abe39c` /
 `324a7036eb61a0d016c6db9133b0fc99c7353b288ad432117c57cd69f2750739` /
 `a498d46ff7ba03bd5fda261a1a8977024f9446c34a4bbf6c8474bb9839fe7ca4`。
+
+## 十八、`extraction-ir-v2.1`：两相混合 effort 历史实验（已否决并退役，2026-08-23）
+
+### 定义与归因边界
+
+用户的新方向不是继续压缩 v3.1，而是保留已把拍数/hinge 缺口大幅追近 Pro v1.1、但成本较高的
+v2 两相契约，
+只把不同难度的相分配到不同 effort。v2.1 的定义固定如下：
+
+- 第一相 `boundaries` 继续 `deepseek-v4-flash + high + thinking`。v2 的质量收益来自
+  `micro_events → beats` 的完整回忆与因果压缩；这一相决定正式拍边界，降档会把最危险的
+  “静默少切剧情”重新放回来；
+- 第二相逐章细节改为 `deepseek-v4-flash + low + thinking`。边界已经由代码冻结，人物引用
+  已收成可见 `char_id` 闭集，响应还要过 schema、边界恒等与人物闭集三道本地闸；它只填
+  time layer、地点、event、hinge 与叙述信息，是本轮唯一降档的自变量；
+- 书级摘要批继续 `deepseek-v4-flash + high + thinking`，不把第三个变量混进第一轮实验。
+  三处均为固定单档；客户端仍可在同档重采一次，但不会静默滑到 `thinking=false`。
+
+`extraction-ir-v2.1` 与 v2 的 system/user 字节、响应模型、编译器、字段级修复能力和最终
+`ChapterBlueprints` 逐格相同；差别只有 architecture 与三处相级 rungs。模型名不写进契约注册表：
+本轮实验冻结 Flash，但“模型名 → 契约”不是永久映射。当时 artifact schema 仍是 v2，新增
+architecture 属于放宽；实验失败后该 architecture 已从现役注册表撤下，当前 schema 为 v3。
+
+### 配对方法
+
+先在同一冻结代码、同一 `stage1/main_text.json`、同一 `stage2/global_grounding.json` 上跑
+Flash v2 高档基线。v2.1 的质量配对**复用这一次已经验过的 high 边界响应缓存**，让两臂的
+`frozen_boundaries` 与 `boundary_events` 逐字相同；只让细节请求因 effort 改成 low 而产生新 cache key。
+这样质量差异才能归给第二相 effort，而不是另一份随机边界样本。摘要 user 随 low 细节 event 改变，
+按 v2.1 的 high 策略真实生成。
+
+配对质量门通过之后，才另开独立空缓存做一次 v2.1 完整整跑，取得真实操作墙钟与异常重采率。
+经济账分两层报告：① 配对臂按“基线 high 边界 wire + v2.1 low 细节/摘要 wire”复算完整书成本；
+② 空缓存臂报告真实总墙钟与全部 wire。缓存命中不冒充没执行，completion 已含 reasoning，二者不得相加。
+两本开发书先跑核心/密集章，再整书；开发门不过则不启封第三本 holdout。
+
+### 预登记裁决门
+
+质量先于成本，任一条失败即保持 v2 默认、不再用便宜解释质量：
+
+1. 两书正式产物均 fresh/match、0 HARD、span 与 hinge 定位 100%，人物歧义/名册外/代词/过早四项全 0；
+2. 因为边界响应逐字复用，v2.1 每章 `end_para` 序列必须与 v2 **完全相同**；任何变化都是接线错误；
+3. hinge 总量不低于同边界 v2 的 95%，named place 比例下降不超过 3 个百分点；不能只看总数，必须盲序
+   对照无情道 ch4/ch12/ch13/ch16/ch18/ch22 与偶像 ch1/ch7/ch10/ch13/ch16，确认笑点落点、关系原话、
+   冷揭示、身份爆发、拒绝/承诺链和硬数字没有真漏项，也没有普通对白系统性反弹；
+4. 摘要逐章人工核对不得漏掉正式 beats 中改变后续因果的事件；Stage4 投影的 beat/hinge 数不得减少。
+
+质量全过才读成本：low 细节相 reasoning 至少下降 25%，按完整拓扑复算的总 reasoning 至少下降 15%；
+空缓存 v2.1 的总 wire 不高于同书 v2，操作墙钟至少下降 15%，且不得靠更多 schema/validator 重采换取。
+两本开发书共同通过后才启封第三本结构不同的小说；第三本仍通过同一门，才允许把
+`contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 从 v2 翻到 v2.1。v2 永久保留为显式回退。
+
+### 零成本工程验证
+
+v2.1 的相级 rungs 已同时接入首跑、`--chapters` 恢复、摘要重建和 smoke 报告；生产请求测试直接
+检查三相 wire，确认边界/细节/摘要依次为 `high + thinking`、`low + thinking`、
+`high + thinking`，并钉住 v2.1 相对 v2 只改变 architecture 与三处 effort 策略。Stage2 定向五文件
+118 项、冻结契约相关回归、完整非 corpus 回归，以及前端 seams/typecheck/build 均 exit 0；
+`git diff --check` 通过。前端验证只读复用了依赖声明相同的主 worktree `node_modules` 临时目录联接，
+验证后已删除；两个 worktree 的 lockfile 哈希不同，因此该结果只证明当前源码可由现有兼容依赖构建，
+不冒充目标 lockfile 的干净安装验证。当前仍无 `NOVEL_CORPUS_MANIFEST`，以上不得称为 corpus 全量绿。
+
+### 双书付费结果与裁决
+
+用户随后明确授权把《无情道第一她来自合欢宗》《偶像公寓打工日常》的正文与 Stage2 派生上下文
+发送至 DeepSeek API，并承担本轮实验费用。实验在分支 `codex/stage2-flash-quality`、基线提交
+`4918118718c338e866e8699ee7f368d5d0a2de6e`、付费前冻结工作区 diff SHA-256
+`1bc19ecffc985ebf9dda2160046b3783006b979efbba210b29621ebc14d3b122` 上串行执行；模型/契约分别固定为
+v1.1 + `deepseek-v4-pro`、v2 + `deepseek-v4-flash`、v2.1 + `deepseek-v4-flash`，三臂都启用 thinking。
+付费前发现 smoke 工具虽然生产路径已按 `ContractSpec` 取相级 rungs，但实验入口没有把 rungs 透传给
+边界与摘要调用；先补齐透传与回归，33 项定向测试通过后才真发，故本表没有“名叫 v2.1、实际仍跑
+默认阶梯”的污染。
+
+冻结输入与盘上正式 Stage2 基线在六臂后哈希不变：无情道 main/global/blueprint 为
+`e32f675b2da96174a29b68f190d81d18bc87ebcb61ee2c554e8c2243e714d6d1` /
+`856b18d454cc386f88270d871eb44dafa702ad09bb46579e28fd6247ef9a3c0a` /
+`011cade95b94c287993e889c8cfa53fee72232e55088750e1bf1065cb6c0e1b4`；偶像为
+`b808c137eb11c268219f62b62af1d7ba52c0e22bf03778de00f5d7fd301528b0` /
+`97a6f7786c9c6e859d9055b0c84dbbc7c4b1c578a47332e403feceff0bd2a428` /
+`5e1323e8e65aae71beb401b1dadfa1eb34be5e49ca3222ee38801977a1d85c8e`。smoke 只生成内存候选；正式产物
+零改动，`answer_lost` 证据、ledger、audit 与报告按设计新增。
+
+实际付费运行读数如下。`completion` **已经包含** `reasoning`；墙钟是进程级实测，wire 毫秒求和因逐章
+并发而不等于墙钟。v2.1 配对行含 high 边界缓存，不能拿其 token 或墙钟冒充独立整跑：
+
+| 书 | 臂 | 实付 / 缓存 | prompt | completion | reasoning | 墙钟 | 内存候选 HARD |
+|---|---|---:|---:|---:|---:|---:|---|
+| 无情道 | v1.1 Pro | 24 / 0 | 154,864 | 196,634 | 172,422 | 462.3s | 2 |
+| 无情道 | v2 Flash | 48 / 0 | 221,878 | 332,754 | 296,198 | 507.1s | 2 |
+| 无情道 | v2.1 Flash 配对 | 27 / 20 | 162,807 | 98,969 | 78,160 | 177.6s | 0 |
+| 偶像 | v1.1 Pro | 19 / 0 | 137,629 | 214,018 | 185,437 | 705.1s | 2 |
+| 偶像 | v2 Flash | 39 / 0 | 210,705 | 226,158 | 189,491 | 502.5s | 5 |
+| 偶像 | v2.1 Flash 配对 | 25 / 13 | 161,012 | 156,901 | 129,147 | 415.2s | 2 |
+
+为避免把缓存当成降本，v2.1 完整拓扑成本按事前口径重建：取同书 v2 的全部 high 边界 wire，加 v2.1
+的 low 细节与 high 摘要 wire；配对臂因缓存未命中而重发的 8 个随机 high 边界不重复计入。只按输出侧
+判成本，两书合计 v1.1 Pro 为 43 调 / 410,652 completion / 357,859 reasoning；v2 Flash 为
+87 / 558,912 / 485,689；v2.1 重建为 87 / 503,177 / 424,559。故 v2.1 相对 v2 只降
+10.0% completion、12.6% reasoning，未到 15% 总 reasoning 门；相对 v1.1 仍多 22.5% completion、
+18.6% reasoning。细节相合计 reasoning 虽降 29.4%，但两书方向不一致：无情道降 48.7%，偶像反而
+升 6.2%，不能写成稳定收益。v1.1 与 v2 的两书墙钟合计为 1,167.4s / 1,009.6s，v2 快 13.5%；
+v2.1 因质量门先失败没有运行独立空缓存臂，真实整跑墙钟明确记为**未测**。配对臂 592.8s 是 33/41
+个 high 边界命中缓存后的诊断读数，不进入速度排名；重建 wire 求和也只降 10.5%，不是墙钟。
+
+质量比较只取 `end_para` 完全一致的严格配对章。无情道 20/23 章配对，v2 → v2.1 为 152 → 105
+hinge（69.1%），named place 86/107 → 74/107（80.4% → 69.2%，−11.2pp）；偶像 13/18 章配对，
+131 → 78 hinge（59.5%），65/79 → 56/79（82.3% → 70.9%，−11.4pp）。合计 283 → 183
+hinge（64.7%，比 95% 门低 30.3pp），地点比例下降 11.3pp；两书独立失败。v2.1 的已报 hinge
+定位率反而从 98.7% / 97.0% 升到 100% / 100%，说明它交出的少量锚点较易定位，却不能说明未交出的
+材料不存在；“候选 HARD 更少”同样只证明现存锚点合法，不能替召回背书。
+
+人工核对也排除了“只是删掉普通对白”的解释。无情道 ch16 在相同边界上 18 → 7，未把“昏迷十日”、
+“你什么时候知道”“丹田受损”“别的人帮你我不放心”等因果/关系原话登记为 hinge；ch22 的“等师姐
+多久都不久”与允许常来的收束链也断。偶像 ch1 为 14 → 7，“身无分文”“经费里扣”“进门不到十分钟”
+等设定/笑点锚点消失；ch13 为 20 → 12，“别物化自己—不接受替换—按医嘱治疗”的关系推进链被稀释。
+这里裁的是**下游可消费 hinge 漏标**，不是断言对应事件一定没写在 event 里；但它已经足以否决“质量
+几乎不变”。
+
+裁决：**v2.1 失败，默认保持 `extraction-ir-v2`；不运行两本独立空缓存 v2.1，不启封第三本
+holdout。** v1.1 Pro 在本次首轮样本上拍更细、机械稳定性更好；v2 Flash 的 hinge 总量不低且
+named-place 覆盖明显更高，并在两书合计快 13.5%，但输出 token 更多、偶像候选 HARD 也更多；二者
+各有强项。v2.1 虽在无情道显著降耗，却没有跨书稳定性，并以系统性 hinge 召回下降换取较少红灯，
+不进入默认候选。完整逐臂 JSON/Markdown/log 与汇总见
+`outputs/_stage2_flash_quality/v21_dual_ab_20260823/_reports/`；本活动项已裁决，第三本继续封存。
+
+交付验证：文档契约五文件 + Stage2 相关三文件合跑 410 项 exit 0；完整非 corpus `pytest -q`
+exit 0；前端 seams（96 文件/20 份 mock 基线）、typecheck、build 均 exit 0；`git diff --check`
+通过。前端仍是临时复用主 worktree 的兼容 `node_modules`，联接已删除；两份 lockfile 哈希不同，
+不冒充目标 lockfile 的干净安装。目标 worktree 的临时 `.env` 与两份 pytest 短路径目录也已删除，
+主工作区 `.env`、实验缓存、账本、诊断和报告保留。没有 `NOVEL_CORPUS_MANIFEST`，故只称非 corpus 回归。
