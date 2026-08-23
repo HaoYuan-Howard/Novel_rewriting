@@ -900,3 +900,72 @@ thinking=true、high、独立空缓存；先 `preview`，再按真实 argv 运�
 `e736e739bb73e8e79487e804eb66601594eed4f4988ad36f521e2809fe0b0ab9`；ledger / operator audit 为
 `dd8dbae0fa1f5b91c7568ae6f155f12ef5ed4e314234c549c7b044ab9a13e671` /
 `770f4dbbab4c689c16c934ebdf4eb5e8d978b3bd996f0094e08d3baa81872bed`。
+
+## 十七、同输入 Pro v3.1 诊断与结构化候选（2026-08-23）
+
+### 单变量教师跑
+
+为回答“v3.1 的问题来自架构还是 Flash 能力”，在提交
+`5ce162dd95eb93ebce9f420abef61817e8e1d57a` 上冻结无情道的同一份正文与已审 global，只把模型从
+`deepseek-v4-flash` 换成 `deepseek-v4-pro`，thinking=true、响应契约仍为
+`extraction-ir-v3.1`。`stage1/main_text.json` 与 `stage2/global_grounding.json` 的 SHA-256 分别为
+`e32f675b2da96174a29b68f190d81d18bc87ebcb61ee2c554e8c2243e714d6d1`、
+`856b18d454cc386f88270d871eb44dafa702ad09bb46579e28fd6247ef9a3c0a`，与冻结 Flash v3.1 完全一致；
+独立 base 为 `outputs/_stage2_flash_quality/v31_pro_teacher_20260823/`，使用独立空缓存。
+
+首轮 23 章均一次构造响应成功，摘要后被 `chapter_no_hinge` 关闭式拦在 ch17；人工对照原文确认该章
+确有需要保留的疗伤说法与书名回收，故没有放宽判据，而是按 inbox 的唯一恢复路只重生成 ch17 并重做
+摘要。最终正式稿 152 beat / 134 hinge、152/152 span，关闭人物引用歧义/名册外/代词/过早四项
+均为 0（分母 314），地点命名 117/152（77.0%），0 HARD。最终 blueprint SHA-256 为
+`b67abf381b21381bada0cdab5f4f355f4ea83ee7fe0639eb49609b84ec96d38d`。
+
+| 冻结臂（均含各自登记恢复） | 真调用 | prompt | completion | reasoning | wire latency 合计 | beat / hinge |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Pro × v1.1 | 26 | 162,768 | 216,442 | 191,389 | 3,444.3s | 130 / 168 |
+| Flash × v3.1 | 31 | 199,991 | 229,226 | 200,953 | 1,802.2s | 130 / 133 |
+| Pro × v3.1 | 26 | 162,933 | 226,522 | 188,128 | 3,478.5s | 152 / 134 |
+
+Pro v3.1 相对 Pro v1.1 的 reasoning 低 1.7%，但 completion 高 4.7%；调用数相同，wire latency 近似。
+因此它不是成本与质量同时严格支配 v1.1。账本里 Pro v3.1 的首轮为 24 调，修复 ch17 与全书摘要再
+各 1 调；合计操作墙钟约 582s。ledger / operator audit SHA-256 为
+`82289bd0901ed7289eddcd0ba896b2ed2f5ff50aa461e42e149fc6e4db0f5a8e` /
+`b383744bb924aab8515311845282523400af37b70b33fbb3861b1e2fe403a420`。
+
+### 原文盲读裁决
+
+不按条数直接判优，而是检查同章是否保存了下游真正需要的事件边界与原句材料：
+
+- ch4：Pro v3.1 恢复笑点落点“抽出隐藏款了”；Flash v3.1 只概括事件，没有 hinge；
+- ch12：Pro v3.1 保留 4 条关键原句，包括“除了修炼就是来看师姐练剑”；Flash 只留下糖人一句；
+- ch13：Pro v3.1 恢复“戏骨仙”揭示与“鬼域门口禁止唱歌”的回收，Flash 都只留在 event 概括；
+- ch18：Pro v3.1 用 7 beat 保存身份爆发和后续告知的因果次序，优于 Flash 的 5 beat 粗并；
+- ch22：Pro v3.1 从 Flash 的 3 beat 恢复为 13 beat，关系步骤齐全，但又比 Pro v1.1 的 7 beat
+  明显更细，必须作为过切反例继续审查；
+- ch3：Pro v3.1 为 6 beat / 5 hinge，而 Pro v1.1 为 8 / 17；后者存在把普通台词抬成 hinge 的明显
+  过抽，说明 168 对 134 不能直接解释为 v1.1 质量更高。
+
+可观察的响应 JSON 还显示：Flash ch22 已列 12 个 micro-event，却只编成 3 个 beat；Pro 列 19 个并
+编成 13 个。ch12 同样不是“完全没召回 micro-event”，而是最终边界和关键原句义务没有落实。由此得到
+的限定结论是：**v3.1 架构有能力补回 v1.1 的真实内容并降低假 hinge，但 Flash 的短板集中在从
+micro-event 到最终 beat/hinge 的履约；Pro v3.1 也会过切，不能把 Pro 输出或数量当成真值。** Pro
+只作离线诊断教师，不把其推理文本或整份答案蒸馏进 prompt。
+
+### 当前结构化候选
+
+下一候选把上述差异转成响应字段与本地可执行约束，而不是继续扩写自然语言 system prompt：
+
+1. 仅 v3.1 的 micro-event 增加 `function` 闭集（行动、反应、上下文、揭示、决定、结果、关系、
+   回收、转场）与 `fidelity` 闭集（事实 / 必须原句）；v3 响应与盘上 artifact 不变；
+2. 模型一旦把 micro-event 自报为揭示、决定、结果、回收或转场，其 `end_para` 必须成为最终 beat
+   边界；自报 `F_VERBATIM` 的区间必须有一条可确定反投影的 hinge。这是响应内部一致性义务，不冒充
+   人工 ground truth；
+3. 章内候选按引语、数字、因果分层抽样并保留各层首尾，避免 32 项上限被章前引语占满；
+4. 章节 HARD 预检前不再调用全书摘要。正常成功仍为 `N+1`，修复成功由旧的 `N+1+k+1` 收为
+   `N+k+1`；正式 artifact、摘要和 fresh/match 口径不变。
+
+相对上一候选，v3.1 system prompt 仅由 6,577 增至 6,591 字（+14）；局部结构 hint 从 538 增至
+678 字（+140），主要变化在响应 schema、compiler 与 validator。定向契约/编译测试和 Stage2 四文件
+回归均 exit 0；完整非 corpus 回归也在补齐响应内部词表的 API withheld 登记后 exit 0。它仍没有真实
+Flash 证据；下一步只能先跑两本开发书的失败章/密集章烟测，
+通过后再整跑，最后才可启封第三本 holdout。默认继续是 `extraction-ir-v2`，盘上
+`ChapterBlueprints` schema 继续是 v2。

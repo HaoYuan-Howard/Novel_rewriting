@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from contracts.invariants import BLUEPRINT_ARCHITECTURE
+from contracts.invariants import BLUEPRINT_ARCHITECTURE, MICRO_EVENT_MUST_SPLIT
 from contracts.rules import REGISTRY
 from contracts.schema.base import StrictModel
 from contracts.schema.report import CheckReport
@@ -995,13 +995,15 @@ def _detail_validator(ordinal: int, frozen: list[int], allowed: set[str]) \
 
 def _scaffolded_validator(
     ordinal: int,
-    paragraph_count: int,
+    chapter_text: str,
     allowed: set[str],
     *,
     candidate_rows: list[dict[str, Any]] | None = None,
     narration_refs: bool = False,
 ) -> Callable[[Any, Any], str | None]:
-    """单调用脚手架的动态闸：边界召回、关闭人物与候选所属拍一次验完。"""
+    """单调用脚手架的动态闸：边界、关闭引用与 v3.1 召回义务一次验完。"""
+    paragraphs = paragraph_spans(chapter_text)
+    paragraph_count = len(paragraphs)
     boundary = _boundary_validator(ordinal, paragraph_count)
     candidates = {
         str(row['candidate_id']): row for row in (candidate_rows or [])
@@ -1032,6 +1034,55 @@ def _scaffolded_validator(
             if invalid_narration:
                 return (f'ch{ordinal} 叙述身份含清单外 char_id：'
                         f'{invalid_narration}')
+
+        # v3.1 的 micro-event 多两格闭集字段；v3 没有这两个属性，保持原语义。
+        # 关键功能只要求它的**结束**成为 beat 边界，仍可与紧邻前因合并；逐字义务则
+        # 必须由同一 micro-event 段区间里的 hinge 履行，不能拿同拍别处的对白充数。
+        has_obligations = bool(blueprint.micro_events) and hasattr(
+            blueprint.micro_events[0], 'function')
+        if has_obligations:
+            beat_end_set = {int(beat.end_para) for beat in blueprint.beats}
+            missing_boundaries = [
+                int(micro.end_para)
+                for micro in blueprint.micro_events
+                if str(micro.function) in MICRO_EVENT_MUST_SPLIT
+                and int(micro.end_para) not in beat_end_set
+            ]
+            if missing_boundaries:
+                return (f'ch{ordinal} 关键 micro-event 没保留为 beat 边界：'
+                        f'{missing_boundaries}')
+
+            hinge_paras: set[int] = set()
+            beat_start_para = 1
+            for beat in blueprint.beats:
+                for hinge in beat.hinges:
+                    candidate_id = getattr(hinge, 'candidate_id', None)
+                    if candidate_id is not None:
+                        row = candidates.get(str(candidate_id))
+                        if row is not None:
+                            hinge_paras.add(int(row['para']))
+                        continue
+                    phrase = str(getattr(hinge, 'phrase', '') or '')
+                    if not phrase:
+                        continue
+                    for para, (start, end) in enumerate(paragraphs, start=1):
+                        if (beat_start_para <= para <= int(beat.end_para)
+                                and phrase in chapter_text[start:end]):
+                            hinge_paras.add(para)
+                beat_start_para = int(beat.end_para) + 1
+
+            missing_fidelity: list[str] = []
+            start_para = 1
+            for micro in blueprint.micro_events:
+                end_para = int(micro.end_para)
+                if (str(micro.fidelity) == 'F_VERBATIM'
+                        and not any(start_para <= para <= end_para
+                                    for para in hinge_paras)):
+                    missing_fidelity.append(f'{start_para}..{end_para}')
+                start_para = end_para + 1
+            if missing_fidelity:
+                return (f'ch{ordinal} F_VERBATIM micro-event 在自身段内没有 hinge：'
+                        f'{missing_fidelity}')
 
         start_para = 1
         for beat in blueprint.beats:
@@ -1163,6 +1214,10 @@ def _run_blueprint_repair(
     # ⚠ 修复按**基线产物的 architecture** 选契约——修复必须与基线同构，配置说了不算。
     baseline_arch = previous.provenance.context.architecture
     spec = contract_for(baseline_arch)
+    summaries_pending = (
+        spec.needs_summary_batch
+        and 'SUMMARY_BATCH_SYS' not in previous.provenance.prompts
+    )
     if _active_spec().architecture != baseline_arch:
         raise TerminalState(
             f'配置选的契约是 {_active_spec().architecture!r}，而基线产物是 '
@@ -1292,9 +1347,9 @@ def _run_blueprint_repair(
         prompt_rows[ordinal] = (user, findings_of[ordinal])
         requests.append((ordinal, system, user))
 
-    paragraph_count = {
+    chapter_text_of = {
         int(section.get('chapter_ordinal') or 0):
-        len(paragraph_spans(str(section.get('text') or '')))
+        str(section.get('text') or '')
         for section in main_text
     }
     validator_of = None
@@ -1304,7 +1359,7 @@ def _run_blueprint_repair(
     elif spec.topology == 'scaffolded_single':
         validator_of = lambda ordinal: _scaffolded_validator(
             ordinal,
-            paragraph_count[ordinal],
+            chapter_text_of[ordinal],
             set(visible.get(ordinal, {})),
             candidate_rows=candidate_rows.get(ordinal, []),
             narration_refs=spec.uses_narration_refs,
@@ -1333,7 +1388,7 @@ def _run_blueprint_repair(
         global_raw['entities']['characters'],
         summaries=None,
     )
-    if spec.needs_summary_batch:
+    if spec.needs_summary_batch and not summaries_pending:
         # ir1：目标章的 events 已经变了，旧摘要不可沿用——只为重生成的章跑一次小批。
         summaries = _run_summary_batch(ctx, client, target_data['blueprints'])
         for blueprint in target_data['blueprints']:
@@ -1348,6 +1403,13 @@ def _run_blueprint_repair(
     merged_by = copy.deepcopy(old_by)
     merged_by.update(normalized_by)
     merged = [merged_by[ordinal] for ordinal in ordinals if ordinal in merged_by]
+    if summaries_pending:
+        # 首轮 HARD 已在摘要批之前拦下；问题稿里只是 compiler 的 debug summary。
+        # 修复成功候选形成后一次性为**全书**补摘要，形成 N+k+1，而不是把未动章的
+        # debug 文本冒充正式摘要或为首轮失败先白付一次 N+1。
+        summaries = _run_summary_batch(ctx, client, merged)
+        for blueprint in merged:
+            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
     if spec.uses_character_refs:
         # 在场 char_id 是模型从关闭式候选集直接选择的权威值；不能在合并修复稿时
         # 又从人读 `present_names` 反解一遍把它覆盖。叙述者仍沿用既有解析器。
@@ -1560,14 +1622,14 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
             visible = visible_character_refs(characters, main_text)
             candidate_rows = (hinge_candidates_by_chapter(main_text)
                               if spec.uses_hinge_candidates else {})
-            paragraph_count = {
+            chapter_text_of = {
                 int(section.get('chapter_ordinal') or 0):
-                len(paragraph_spans(str(section.get('text') or '')))
+                str(section.get('text') or '')
                 for section in main_text
             }
             validator_of = lambda ordinal: _scaffolded_validator(
                 ordinal,
-                paragraph_count[ordinal],
+                chapter_text_of[ordinal],
                 set(visible.get(ordinal, {})),
                 candidate_rows=candidate_rows.get(ordinal, []),
                 narration_refs=spec.uses_narration_refs,
@@ -1683,41 +1745,35 @@ def finish_blueprints(
     boundary_requests = batch.get('boundary_requests') or []
     if spec.boundary_sys_name and boundary_requests:
         prompt_keys[spec.boundary_sys_name] = boundary_requests[0][1]
-    if spec.needs_summary_batch:
-        # ir1：summary 不在抽取响应里——书级摘要批按 events 产，编译时的
-        # debug 拼接在这里被**整体覆盖**（validator 保证目标章恰好全覆盖）。
-        summaries = _run_summary_batch(ctx, client, data['blueprints'])
-        for blueprint in data['blueprints']:
-            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
-        from novel.stages.stage2 import prompts as _p
-        prompt_keys['SUMMARY_BATCH_SYS'] = with_json_shape(
-            _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
     ordinals = [int(section.get('chapter_ordinal') or 0)
                 for section in main_text]
-    provenance = ctx.llm_provenance(
-        BlueprintProvenance,
-        prompts=prompt_keys,
-        model=client.model,
-        scope_violations=scope_violations,
-        batches=[[ordinal] for ordinal in ordinals],
-        context=blueprint_context(ctx.title, main_text,
-                                  architecture=spec.architecture),
-        partial_regen_chapters=[],
-        repairs=[],
-        **accounting,
-    )
-    artifact = ChapterBlueprints.model_validate({
-        **data, '_provenance': provenance,
-    })
-    candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
-    hits = _hard_hits(outcomes)
-    if hits:
+
+    def current_artifact() -> ChapterBlueprints:
+        provenance = ctx.llm_provenance(
+            BlueprintProvenance,
+            prompts=prompt_keys,
+            model=client.model,
+            scope_violations=scope_violations,
+            batches=[[ordinal] for ordinal in ordinals],
+            context=blueprint_context(ctx.title, main_text,
+                                      architecture=spec.architecture),
+            partial_regen_chapters=[],
+            repairs=[],
+            **accounting,
+        )
+        return ChapterBlueprints.model_validate({
+            **data, '_provenance': provenance,
+        })
+
+    def block(artifact: ChapterBlueprints, hits: list[str], *,
+              summary_skipped: bool = False) -> None:
         path = store.write_invalid(
             BLUEPRINT_REL, artifact, gates_skipped=[])
         suffix = (
             f'；另有 {len(errors)} 个章节调用失败，已成功返回的付费结果仍保留'
             if errors else '')
+        if summary_skipped:
+            suffix += '；硬规则已在摘要批之前命中，本次没有为摘要额外调用 LLM'
         raise GateBlocked(
             f'stage2.blueprint 落盘闸门命中 {hits}{suffix}。问题稿已存 '
             f'{_INVALID}，正式产物没有被覆盖。改好后跑 '
@@ -1725,6 +1781,32 @@ def finish_blueprints(
             '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=str(path),
         )
+
+    if spec.needs_summary_batch:
+        # 先拿 compiler 已生成的非空 debug summary 构造一份可读问题稿，调用**同一个**
+        # `_judge_candidate`。任何 HARD 都不可能被摘要改好；先拦再摘要，失败拓扑从
+        # N+1+k+1 收成 N+k+1。问题稿 prompts 没有 SUMMARY_BATCH_SYS，修复路据此知道
+        # 最终要为全书补一次摘要，而不是沿用 debug 文本。
+        provisional = current_artifact()
+        provisional_raw = provisional.model_dump(by_alias=True)
+        pre_summary_hits = _hard_hits(
+            _judge_candidate(global_raw, provisional_raw, main_text))
+        if pre_summary_hits:
+            block(provisional, pre_summary_hits, summary_skipped=True)
+
+        summaries = _run_summary_batch(ctx, client, data['blueprints'])
+        for blueprint in data['blueprints']:
+            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
+        from novel.stages.stage2 import prompts as _p
+        prompt_keys['SUMMARY_BATCH_SYS'] = with_json_shape(
+            _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
+
+    artifact = current_artifact()
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(global_raw, candidate, main_text)
+    hits = _hard_hits(outcomes)
+    if hits:
+        block(artifact, hits)
 
     # 完整重跑也可能是在一份被拦下的 `.INVALID` 之后发生。成功稿必须像定向修复一样
     # 归档旧正式稿与问题稿；否则 `_Both` / `--check-only` 会继续优先读取旧问题稿，

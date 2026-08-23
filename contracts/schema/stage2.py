@@ -33,8 +33,9 @@ from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES, CACHE_POLICY, HINGE_KINDS,
-    NAME_DISTINCTIVENESS, NARRATIVE_PERSON, PLACE_MODES, RESPONSE_TIME_LAYERS,
-    SPAN_RECOVERY, TIME_LAYERS, WORLD_RULE_KINDS,
+    MICRO_EVENT_FIDELITY, MICRO_EVENT_FUNCTIONS, NAME_DISTINCTIVENESS,
+    NARRATIVE_PERSON, PLACE_MODES, RESPONSE_TIME_LAYERS, SPAN_RECOVERY, TIME_LAYERS,
+    WORLD_RULE_KINDS,
 )
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import LlmProvenance
@@ -892,6 +893,15 @@ class ChapterBlueprintsResponseV3(StrictModel):
     blueprints: list[ScaffoldedBlueprintResponseV3] = Field(min_length=1)
 
 
+class MicroEventResponseV31(StrictModel):
+    """v3.1 的召回义务；编译前丢弃，不进入 artifact schema。"""
+
+    end_para: int = Field(ge=1)
+    cue: str = Field(min_length=1)
+    function: Literal[tuple(MICRO_EVENT_FUNCTIONS)]
+    fidelity: Literal[tuple(MICRO_EVENT_FIDELITY)]
+
+
 class HingeCandidateResponse(StrictModel):
     """从 user 下发的确定性原文候选中选择；位置由代码掌握，模型只交 id。"""
 
@@ -925,7 +935,7 @@ class BeatResponseV31Refs(StrictModel):
 
 class ScaffoldedBlueprintResponseV31(StrictModel):
     chapter_ordinal: int = Field(ge=1)
-    micro_events: list[MicroEventResponse] = Field(min_length=1)
+    micro_events: list[MicroEventResponseV31] = Field(min_length=1)
     beats: list[BeatResponseV31Refs] = Field(min_length=1)
     narration: list[NarrationResponseRefs] = Field(min_length=1)
 

@@ -277,6 +277,26 @@ def test_v31_number_candidates_keep_ordinals_whole_and_drop_relative_suffixes():
     assert {'二天', '一秒'}.isdisjoint(surfaces)
 
 
+def test_v31_candidate_budget_is_stratified_by_family_and_chapter_position():
+    quoted = [f'「第{index:02d}句对白」' for index in range(45)]
+    text = '\n\n'.join(quoted + [
+        '因为真相终于揭开，所以她决定离开。',
+        '尾声写着「最后的答复」。',
+    ])
+    candidates = hinge_candidates(text)
+    surfaces = {row['source']['text'] for row in candidates}
+
+    assert len(candidates) == 32
+    assert any('因为真相终于揭开' in surface for surface in surfaces), \
+        '显式因果族必须有保底，不能被章首引号填满候选表'
+    assert '「最后的答复」' in surfaces, \
+        '同族也要沿章节位置取样，不能永远只留下前 32 条对白'
+    assert [row['candidate_id'] for row in candidates] == [
+        f'h{index:03d}' for index in range(1, 33)]
+    assert [row['source']['start'] for row in candidates] == sorted(
+        row['source']['start'] for row in candidates)
+
+
 def test_v31_rejects_a_candidate_from_outside_its_beat_even_without_call_gate():
     raw = {'blueprints': [{
         'chapter_ordinal': 1,
@@ -319,6 +339,8 @@ def test_v31_projection_is_a_valid_repair_baseline_and_round_trips():
     artifact = compiled['blueprints'][0]
     projected = canonical_ir_projection_v31(artifact, CH1)
     assert projected['micro_events'][0]['cue'] == artifact['beats'][0]['event']
+    assert projected['micro_events'][0]['function'] == 'M_ACTION'
+    assert projected['micro_events'][0]['fidelity'] == 'F_FACT'
     assert set(projected['narration'][0]) == {
         'grammatical_person', 'narrator_char_id', 'focalizer_char_id',
         'pronoun_surfaces'}

@@ -23,9 +23,12 @@ from pathlib import Path
 
 import pytest
 
-from contracts.invariants import BLUEPRINT_ARCHITECTURES, PLACE_MODES
+from contracts.invariants import (
+    BLUEPRINT_ARCHITECTURES, MICRO_EVENT_FIDELITY, MICRO_EVENT_FUNCTIONS,
+    MICRO_EVENT_MUST_SPLIT, PLACE_MODES,
+)
 from contracts.schema import MainText
-from contracts.schema.stage2 import ChapterBlueprints
+from contracts.schema.stage2 import ChapterBlueprints, ChapterBlueprintsResponseV31
 from novel.config import load_config
 from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import extract, prompts
@@ -35,6 +38,7 @@ from novel.stages.stage2.compile_v2 import (
 )
 from novel.stages.stage2.contract import CONTRACTS, active_contract, contract_for
 from novel.stages.stage2.paragraphs import paragraph_spans
+from novel.stages.stage2.references import hinge_candidates
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, main_text
 from tests.test_stage2_generation import _client, _ctx, _ok, _response_global
@@ -255,6 +259,10 @@ def test_the_two_scaffolded_single_contracts_are_independently_selectable():
         'chapter_ordinal', 'micro_events', 'beats', 'narration'}
     assert set(prompts.BLUEPRINT_HINT_V3['blueprints'][0]['micro_events'][0]) == {
         'end_para', 'cue'}
+    v31_micro = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['micro_events'][0]
+    assert set(v31_micro) == {'end_para', 'cue', 'function', 'fidelity'}
+    assert v31_micro['function'] == '|'.join(MICRO_EVENT_FUNCTIONS)
+    assert v31_micro['fidelity'] == '|'.join(MICRO_EVENT_FIDELITY)
     narration = prompts.BLUEPRINT_HINT_V31['blueprints'][0]['narration'][0]
     assert 'narrator_char_id' in narration and 'narrator_name' not in narration
     assert 'candidate_id' in str(prompts.BLUEPRINT_HINT_V31)
@@ -263,12 +271,73 @@ def test_the_two_scaffolded_single_contracts_are_independently_selectable():
     assert '要害台词不是“随便一句对白”' in prompts.BLUEPRINT_SYS_V31
     assert '反批量不等于少交' in prompts.BLUEPRINT_SYS_V31
     assert '笑点最后一击' in prompts.BLUEPRINT_SYS_V31
-    assert '不得退回 1~3 条' in prompts.BLUEPRINT_SYS_V31
-    assert '关系或立场\n  反转' in prompts.BLUEPRINT_SYS_V31
+    assert '不得退成章节大纲' in prompts.BLUEPRINT_SYS_V31
+    assert '|'.join(sorted(MICRO_EVENT_MUST_SPLIT)) in prompts.BLUEPRINT_SYS_V31
+    assert '同一 micro-event 段内有 hinge' in prompts.BLUEPRINT_SYS_V31
     assert '不得从「第二天 / 下一秒」中截出「二天 / 一秒」' \
         in prompts.BLUEPRINT_SYS_V31
     assert '$' not in prompts.BLUEPRINT_SYS_V3
     assert '$' not in prompts.BLUEPRINT_SYS_V31
+
+
+def _v31_obligation_response(text: str, *, keep_decision: bool,
+                             keep_verbatim: bool) -> ChapterBlueprintsResponseV31:
+    quoted = next(row for row in hinge_candidates(text)
+                  if row['source']['text'] == '「留下。」')
+    beats = [{
+        'end_para': 3 if keep_decision else 4,
+        'time_layer': 'T_PRESENT', 'place': None,
+        'present_char_ids': [], 'event': '她要求对方留下，对方作出决定。',
+        'hinges': ([{'kind': '要害台词',
+                     'candidate_id': quoted['candidate_id']}]
+                   if keep_verbatim else []),
+    }]
+    if keep_decision:
+        beats.append({
+            'end_para': 4, 'time_layer': 'T_PRESENT', 'place': None,
+            'present_char_ids': [], 'event': '事情收束。', 'hinges': [],
+        })
+    return ChapterBlueprintsResponseV31.model_validate({'blueprints': [{
+        'chapter_ordinal': 1,
+        'micro_events': [
+            {'end_para': 1, 'cue': '她开口',
+             'function': 'M_ACTION', 'fidelity': 'F_FACT'},
+            {'end_para': 2, 'cue': '要求留下',
+             'function': 'M_RELATION', 'fidelity': 'F_VERBATIM'},
+            {'end_para': 3, 'cue': '对方答应',
+             'function': 'M_DECISION', 'fidelity': 'F_FACT'},
+            {'end_para': 4, 'cue': '事情收束',
+             'function': 'M_RESULT', 'fidelity': 'F_FACT'},
+        ],
+        'beats': beats,
+        'narration': [{
+            'grammatical_person': 'third', 'narrator_char_id': None,
+            'focalizer_char_id': None, 'pronoun_surfaces': [],
+        }],
+    }]})
+
+
+def test_v31_validator_executes_micro_event_boundary_and_fidelity_obligations():
+    text = '她开口。\n\n「留下。」\n\n对方答应。\n\n事情结束。'
+    rows = hinge_candidates(text)
+
+    missing_boundary = extract._scaffolded_validator(
+        1, text, set(), candidate_rows=rows, narration_refs=True)(
+            _v31_obligation_response(
+                text, keep_decision=False, keep_verbatim=True), None)
+    assert missing_boundary and '关键 micro-event 没保留' in missing_boundary
+
+    missing_hinge = extract._scaffolded_validator(
+        1, text, set(), candidate_rows=rows, narration_refs=True)(
+            _v31_obligation_response(
+                text, keep_decision=True, keep_verbatim=False), None)
+    assert missing_hinge and 'F_VERBATIM' in missing_hinge
+
+    accepted = extract._scaffolded_validator(
+        1, text, set(), candidate_rows=rows, narration_refs=True)(
+            _v31_obligation_response(
+                text, keep_decision=True, keep_verbatim=True), None)
+    assert accepted is None
 
 
 def test_the_summary_batch_arm_declares_its_bounds():
@@ -480,6 +549,67 @@ def test_scaffolded_single_chains_use_one_high_shape_per_chapter_and_land(
     assert set(stored.provenance.prompts) == {system_name, 'SUMMARY_BATCH_SYS'}
     assert all(blueprint.summary == _summary_for(blueprint.chapter_ordinal)
                for blueprint in stored.blueprints)
+
+
+def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
+    """摘要改不了 HARD；先付摘要再发现零 hinge，会把失败拓扑平白多一调。"""
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
+    book = Path(tempfile.mkdtemp()) / 'ir31摘要前闸_127'
+    book.mkdir(parents=True)
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _t = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    by_ordinal = _scaffolded_responses(closed=True)
+    broken_ordinal = min(by_ordinal)
+    for beat in by_ordinal[broken_ordinal]['beats']:
+        beat['hinges'] = []
+
+    def respond(req, _index):
+        assert '逐章事件清单' not in req.user, 'HARD 命中后不该已经发出摘要调用'
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
+
+    ctx = _ctx(book, 'stage2.blueprint')
+    client, transport = _client(ctx, respond)
+    from novel.errors import GateBlocked
+    with pytest.raises(GateBlocked, match='摘要批之前'):
+        extract.run_blueprint(ctx, client)
+
+    assert len(transport.calls) == len(by_ordinal), '只有逐章 N 调，没有摘要 +1'
+    invalid = ArtifactStore(ctx).read(ChapterBlueprints, extract._INVALID)
+    assert set(invalid.provenance.prompts) == {'BLUEPRINT_SYS_V31'}
+    assert invalid.provenance.usage.calls_made == len(by_ordinal)
+
+    repaired_by = _scaffolded_responses(closed=True)
+
+    def repair_respond(req, _index):
+        if '逐章事件清单' in req.user:
+            assert all(f'"chapter_ordinal":{ordinal}' in req.user
+                       for ordinal in sorted(repaired_by)), \
+                '首轮摘要未跑时，修复成功后必须一次补全书摘要'
+            return _ok({'chapters': [
+                {'chapter_ordinal': ordinal, 'summary': _summary_for(ordinal)}
+                for ordinal in sorted(repaired_by)]})
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        return _ok({'blueprints': [repaired_by[ordinal]]})
+
+    repair_ctx = _ctx(book, 'stage2.blueprint')
+    repair_ctx.cache = extract.CachePolicy.refresh()
+    repair_client, repair_transport = _client(repair_ctx, repair_respond)
+    report = extract.run_blueprint(
+        repair_ctx, repair_client, chapters=(broken_ordinal,))
+    assert report.passed
+    assert len(repair_transport.calls) == 2, '目标章 k=1 + 全书摘要 1'
+    formal = ArtifactStore(repair_ctx).read(
+        ChapterBlueprints, extract.BLUEPRINT_REL)
+    assert set(formal.provenance.prompts) == {
+        'BLUEPRINT_SYS_V31', 'SUMMARY_BATCH_SYS'}
+    assert all(bp.summary == _summary_for(bp.chapter_ordinal)
+               for bp in formal.blueprints)
 
 
 def test_an_ir1_summary_batch_that_misses_a_chapter_is_rejected_by_the_gate(

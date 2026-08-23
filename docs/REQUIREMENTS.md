@@ -735,14 +735,27 @@ fresh/match、0 HARD、span 100% 和关闭人物引用四项全 0；无情道 gl
   19 调拓扑实际用了 23 调，不能称跨书首轮稳定。
 
 失败后已完成下一候选的零成本施工：同相脚手架补回对话转折切拍规则，v3.1 hinge 明确“反批量不等于
-少交”，保留关系证据、后文回收原话和笑点最后一击。它发生在本轮冻结响应之后，尚无付费证据：
+少交”，保留关系证据、后文回收原话和笑点最后一击。随后用户授权继续付费诊断；同一正文、同一
+global、同一 `5ce162d` 代码上的 `v3.1 + Pro` 已完成，详见 §十七。它找回 ch4/ch12/ch13/ch18/ch22
+多项 Flash 真漏项，并把人物引用四项收为 0；但最终 152 beat / 134 hinge，ch22 又出现切分偏细风险，
+completion 也比 Pro v1.1 高 4.7%，所以结论是“架构有上限、Flash 仍需约束”，不是“v3.1 已胜”。
 
-- [ ] 下次获得正文外发与付费授权后，先在上述失败章与 candidate/phrase 高密章做新 prompt 冒烟；
-  冒烟同时补回 ch4/ch12 且不恢复普通数字/嵌套、ch1/ch7 不再粗切，才值得再次整跑两书；
-- [ ] 只有新候选两书首轮都通过 §十六的质量/成本门，才把
-  `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 切到 `extraction-ir-v3.1`；继续保留
-  `extraction-ir-v2` 用于显式回退和存量产物重检。`v3.1 + Pro` 仍是后续高质量档实验，
-  不是 Flash 翻默认的前置条件。
+当前候选不继续堆 system prompt，而把 Pro/Flash 的可观察响应差异收成 v3.1 专属的
+`function` / `fidelity` 闭集和本地 validator：模型自报的揭示/决定/结果/回收必须形成 beat 边界，
+`F_VERBATIM` 必须在对应微事件区间内落一条可定位 hinge。候选表改为引语/数字/因果分层抽样，避免
+章前引语挤掉后段揭示；摘要 LLM 调用移到章节 HARD 预检之后，失败拓扑由 `N+1+k+1` 收为
+`N+k+1`。这些都是**响应契约与运行时**变化，盘上 `ChapterBlueprints` 仍为 v2；当前仅有非 corpus
+回归，没有新 Flash 付费证据：
+
+- [ ] 先在两本开发书的既有失败章和 candidate/phrase 高密章跑当前候选烟测；无情道必须补回
+  ch4/ch12/ch13 的笑点、关系证据和揭示回收，且不能恢复普通数字/嵌套或把 ch22 过切；偶像公寓
+  ch1/ch7 必须首轮不再粗切；
+- [ ] 烟测通过后才用独立空缓存整跑两本开发书；两书都须首轮通过 §十六质量/成本门，失败仍保留
+  `BLUEPRINT_ARCHITECTURE = 'extraction-ir-v2'`；
+- [ ] 开发书冻结后才启封第三本结构不同的小说，固定同 global 做 Pro v1.1 / Flash v2 /
+  Flash v3.1 三臂外部验证；不得看第三书结果继续调参后仍称 holdout；
+- [ ] 只有开发书和外部验证共同支持，才把 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`
+  切到 `extraction-ir-v3.1`；继续保留 `extraction-ir-v2` 用于显式回退和存量产物重检。
 
 ## 条目生命周期
 

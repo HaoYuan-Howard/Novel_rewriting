@@ -20,6 +20,13 @@ from novel.stages.stage2.paragraphs import paragraph_spans
 
 MAX_HINGE_CANDIDATES = 32
 
+#: 候选不是语义真值，但也不能让“前 32 个易定位字面”成为一种隐形上下文裁剪。
+#: 对话密集章曾让前半章引号填满整张表，后半章揭示/关系答复只能退回自由 phrase。
+#: 这里先按定位族保底，再在每族内沿章节位置均匀抽样；某族用不满的额度会回流，
+#: 所以普通章节（总数 ≤32）逐字节不变。
+_FAMILY_QUOTA = {'quoted': 20, 'numbered': 4, 'causal': 8}
+assert sum(_FAMILY_QUOTA.values()) == MAX_HINGE_CANDIDATES
+
 _QUOTED = re.compile(
     r'“[^”\n]{1,80}”|「[^」\n]{1,80}」|『[^』\n]{1,80}』|"[^"\n]{1,80}"')
 _NUMBERED = re.compile(
@@ -48,41 +55,74 @@ def _candidate_source(text: str, start: int, end: int) -> dict[str, Any]:
     }
 
 
+def _spread(rows: list[tuple[str, int, int, int]],
+            limit: int) -> list[tuple[str, int, int, int]]:
+    """从有序行里按位置均匀取样；不把额度永远留给章首。"""
+    if limit <= 0:
+        return []
+    if len(rows) <= limit:
+        return list(rows)
+    if limit == 1:
+        return [rows[len(rows) // 2]]
+    # 首尾都保留，中间等距。limit <= len(rows)，索引严格递增。
+    return [rows[(index * (len(rows) - 1)) // (limit - 1)]
+            for index in range(limit)]
+
+
 def hinge_candidates(text: str) -> list[dict[str, Any]]:
     """单章正文 → 稳定候选表；id 只由正文位置顺序决定。"""
-    ranked: list[tuple[int, int, int, int]] = []
+    ranked: list[tuple[str, int, int, int]] = []
     for para, (start, end) in enumerate(paragraph_spans(text), start=1):
         body = text[start:end]
-        for pattern, priority in ((_QUOTED, 0), (_NUMBERED, 0)):
+        for family, pattern in (('quoted', _QUOTED), ('numbered', _NUMBERED)):
             for match in pattern.finditer(body):
-                ranked.append((priority, start + match.start(),
+                ranked.append((family, start + match.start(),
                                start + match.end(), para))
         for match in _SENTENCE.finditer(body):
             sentence = match.group(0)
             if any(marker in sentence for marker in _CAUSAL_MARKERS):
-                ranked.append((1, start + match.start(),
+                ranked.append(('causal', start + match.start(),
                                start + match.end(), para))
 
-    # 同一字节区间只列一次；优先保住引号/数字，再用剩余额度装显式因果句。
+    # 同一字节区间只列一次；若两族恰好得到相同区间，保留先枚举的族。
     #
     # ⚠ 引号正则允许「?」「......」这类只含标点的原文字面。它们的 ``text`` 非空，
     # 但 ``content_only`` 为空，不能构造正式 ``SourceSpan.normalized``。必须在 32 项
     # 截断之前剔除：若在 compiler 末端才发现，不仅会让一次已付费整跑 exit 70，
     # 还会让无效项白占候选额度、挤掉后面的有效材料。
-    selected: dict[tuple[int, int], tuple[int, int, int, int]] = {}
-    for row in sorted(ranked):
+    selected: dict[tuple[int, int], tuple[str, int, int, int]] = {}
+    for row in sorted(ranked, key=lambda item: (item[1], item[2], item[0])):
         if not content_only(text[row[1]:row[2]]):
             continue
         selected.setdefault((row[1], row[2]), row)
-    kept = sorted(selected.values())[:MAX_HINGE_CANDIDATES]
-    kept.sort(key=lambda row: (row[1], row[2]))
+
+    by_family = {
+        family: sorted(
+            (row for row in selected.values() if row[0] == family),
+            key=lambda item: (item[1], item[2]),
+        )
+        for family in _FAMILY_QUOTA
+    }
+    reserved = [
+        row
+        for family, quota in _FAMILY_QUOTA.items()
+        for row in _spread(by_family[family], quota)
+    ]
+    kept_keys = {(row[1], row[2]) for row in reserved}
+    remaining = sorted(
+        (row for row in selected.values() if (row[1], row[2]) not in kept_keys),
+        key=lambda item: (item[1], item[2], item[0]),
+    )
+    room = MAX_HINGE_CANDIDATES - len(reserved)
+    kept = reserved + _spread(remaining, room)
+    kept.sort(key=lambda row: (row[1], row[2], row[0]))
     return [
         {
             'candidate_id': f'h{index:03d}',
             'para': para,
             'source': _candidate_source(text, start, end),
         }
-        for index, (_priority, start, end, para) in enumerate(kept, start=1)
+        for index, (_family, start, end, para) in enumerate(kept, start=1)
     ]
 
 
