@@ -597,6 +597,82 @@ def test_scaffolded_gate_reuses_the_compilers_tail_nudge_cap(monkeypatch):
         paragraph_spans(texts[ordinal])[-1][1]
 
 
+def test_ir31_missing_chapter_repair_uses_the_initial_shape_without_a_fake_baseline(
+        monkeypatch):
+    """`chapter_coverage` 的 inbox 命令必须真能补缺章，不得反手索要不存在的基线。"""
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
+    book = Path(tempfile.mkdtemp()) / 'ir31缺章恢复_130'
+    book.mkdir(parents=True)
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _t = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    by_ordinal = _scaffolded_responses(closed=True)
+    ordinals = sorted(by_ordinal)
+
+    def initial_respond(req, _index):
+        if '逐章事件清单' in req.user:
+            return _ok({'chapters': [
+                {'chapter_ordinal': o, 'summary': _summary_for(o)}
+                for o in ordinals]})
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
+
+    ctx = _ctx(book, 'stage2.blueprint')
+    client, _transport = _client(ctx, initial_respond)
+    assert extract.run_blueprint(ctx, client).passed
+
+    store = ArtifactStore(ctx)
+    _formal, raw = store.read_own(ChapterBlueprints, extract.BLUEPRINT_REL)
+    missing = ordinals[-1]
+    broken = copy.deepcopy(raw)
+    broken['blueprints'] = [
+        row for row in broken['blueprints']
+        if row['chapter_ordinal'] != missing
+    ]
+    broken['_provenance']['prompts'].pop('SUMMARY_BATCH_SYS')
+    store.write_invalid(
+        extract.BLUEPRINT_REL,
+        ChapterBlueprints.model_validate(broken),
+        gates_skipped=[],
+    )
+
+    repair_ctx = _ctx(book, 'stage2.blueprint')
+    repair_ctx.cache = extract.CachePolicy.refresh()
+    expected_user = extract.build_prompts(
+        repair_ctx, chapters=(missing,))[0][2]
+
+    def repair_respond(req, _index):
+        if '逐章事件清单' in req.user:
+            assert all(f'"chapter_ordinal":{o}' in req.user for o in ordinals), \
+                '首轮没做摘要时，补章成功后必须一次补全书摘要'
+            return _ok({'chapters': [
+                {'chapter_ordinal': o, 'summary': _summary_for(o)}
+                for o in ordinals]})
+        assert req.user == expected_user, '缺章必须复用首轮 user 字节，不能伪造修复基线'
+        assert '上一版结构基线' not in req.user
+        return _ok({'blueprints': [by_ordinal[missing]]})
+
+    repair_client, repair_transport = _client(repair_ctx, repair_respond)
+    report = extract.run_blueprint(
+        repair_ctx, repair_client, chapters=(missing,))
+
+    assert report.passed
+    assert len(repair_transport.calls) == 2, '缺章一次 + 全书摘要一次'
+    stored = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
+    assert [row.chapter_ordinal for row in stored.blueprints] == ordinals
+    assert stored.provenance.partial_regen_chapters == [missing]
+    repair = stored.provenance.repairs[-1]
+    assert repair.failure_items == ['chapter_coverage']
+    assert repair.before_metrics.model_dump() == {
+        'beats': 0, 'hinges': 0, 'present_names': 0}
+    assert repair.after_metrics.beats > 0
+    assert not store.exists(extract._INVALID)
+
+
 def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
     """摘要改不了 HARD；先付摘要再发现零 hinge，会把失败拓扑平白多一调。"""
     monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')

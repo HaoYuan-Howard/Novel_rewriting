@@ -1211,9 +1211,7 @@ def _run_blueprint_repair(
         int(blueprint.get('chapter_ordinal') or 0): blueprint
         for blueprint in (previous_raw.get('blueprints') or [])
     }
-    missing_baselines = sorted(set(chapters) - set(old_by))
-    if missing_baselines:
-        raise TerminalState(f'目标章没有上一版结构基线：{missing_baselines}')
+    missing_baselines = set(chapters) - set(old_by)
 
     before_outcomes = _judge_candidate(global_raw, previous_raw, main_text)
     prompt_rows: dict[int, tuple[str, list[dict[str, str]]]] = {}
@@ -1231,13 +1229,19 @@ def _run_blueprint_repair(
     if spec.uses_hinge_candidates:
         candidate_rows = hinge_candidates_by_chapter(main_text)
     for ordinal in chapters:
-        findings = _repair_findings(before_outcomes, ordinal)
-        baseline = _repair_baseline(
-            old_by[ordinal], main_text, projection=spec.projection_fn)
+        backfill = ordinal in missing_baselines
+        findings = ([{
+            'rule': 'chapter_coverage',
+            'item': f'missing:{ordinal}',
+            'detail': (f'首轮问题稿缺少阅读序第 {ordinal} 章；'
+                       '按首轮同形请求补回，不伪造上一版结构基线。'),
+        }] if backfill else _repair_findings(before_outcomes, ordinal))
         findings_of[ordinal] = findings
-        baselines[ordinal] = baseline
+        if not backfill:
+            baselines[ordinal] = _repair_baseline(
+                old_by[ordinal], main_text, projection=spec.projection_fn)
         if spec.topology == 'boundary_then_detail':
-            needs_resegment = bool(
+            needs_resegment = backfill or bool(
                 {row['rule'] for row in findings}
                 & {'beats_coarse', 'beats_collapsed'})
             if needs_resegment:
@@ -1247,10 +1251,11 @@ def _run_blueprint_repair(
                     build_blueprint_user(
                         ctx.title, main_text, (ordinal,),
                         characters=global_raw['entities']['characters'],
-                        repair_findings=findings,
+                        repair_findings=(None if backfill else findings),
                     ),
                 ))
             else:
+                baseline = baselines[ordinal]
                 frozen[ordinal] = [int(beat['end_para'])
                                    for beat in (baseline.get('beats') or [])]
                 boundary_events[ordinal] = [str(beat.get('event') or '')
@@ -1293,8 +1298,9 @@ def _run_blueprint_repair(
         user = build_blueprint_user(
             ctx.title, main_text, (ordinal,),
             characters=global_raw['entities']['characters'],
-            repair_findings=findings_of[ordinal],
-            repair_baseline=baselines[ordinal],
+            repair_findings=(None if ordinal in missing_baselines
+                             else findings_of[ordinal]),
+            repair_baseline=baselines.get(ordinal),
             character_refs=(visible.get(ordinal, {})
                             if spec.uses_character_refs else None),
             hinge_candidates=(candidate_rows.get(ordinal, [])
@@ -1418,7 +1424,9 @@ def _run_blueprint_repair(
             'model': client.model,
             'cache_policy': ctx.cache.name,
             'fields': ['*'],
-            'before_metrics': _blueprint_metrics(old_by[ordinal]),
+            'before_metrics': (_blueprint_metrics(old_by[ordinal])
+                               if ordinal in old_by
+                               else {'beats': 0, 'hinges': 0, 'present_names': 0}),
             'after_metrics': _blueprint_metrics(normalized_by[ordinal]),
         })
 
