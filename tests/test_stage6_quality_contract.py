@@ -38,7 +38,7 @@ def test_the_recipe_fills_every_slot_and_stays_inside_the_value_domain():
     assert HOOK_CURRENT_APPROACHES == ('payoff_preview', 'scene_punchline')
 
 
-def test_model_response_matches_the_recipe_counts_and_keeps_texts_unique():
+def test_model_response_matches_the_recipe_by_position_and_keeps_texts_unique():
     response = HookResponse.model_validate(_candidate_payload())
     assert tuple(candidate.approach for candidate in response.candidates) == HOOK_RECIPE
 
@@ -48,7 +48,13 @@ def test_model_response_matches_the_recipe_counts_and_keeps_texts_unique():
     with pytest.raises(ValidationError, match='配方'):
         HookResponse.model_validate(off_recipe)
 
-    # 退场的写法过得了 `Literal`（存量要读得回来），但过不了配方计数。
+    # 计数相同也不够：位置就是身份，c1/c2 对调必须拒绝。
+    swapped = _candidate_payload(
+        ('scene_punchline', 'payoff_preview', 'scene_punchline'))
+    with pytest.raises(ValidationError, match='槽位顺序'):
+        HookResponse.model_validate(swapped)
+
+    # 退场的写法过得了 `Literal`（v2 对照臂要读得回来），但过不了逐槽配方。
     retired = _candidate_payload(
         (HOOK_RETIRED_APPROACHES[0], 'scene_punchline', 'scene_punchline'))
     with pytest.raises(ValidationError, match='配方'):

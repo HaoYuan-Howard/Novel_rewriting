@@ -35,7 +35,6 @@ stage6/_rounds/hook.rN.json 归档：上一轮的**整份拷贝**，形状与 ho
 """
 from __future__ import annotations
 
-from collections import Counter
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -154,7 +153,9 @@ class ApprovedHook(StrictModel):
     #: （能 0 成本现算的字段不落盘，同 `Candidate.chars` 被裁掉的理由）。
     #: ⚠ `human_edit` 这个取值随之消失：「它是不是人写的」由 `origin` 回答、
     #: 「有没有前身」由 `slot is None` 回答，两件事本来就不该挤在一个枚举里。
-    slot: Literal[HOOK_SLOTS] | None = None
+    # ⚠ `None` 是一个**有意义的显式值**（人手写、无候选前身），不是缺省值。
+    # 字段缺失表示 producer 没交代来源，必须拒读；否则“未知”会被洗成“没有前身”。
+    slot: Literal[HOOK_SLOTS] | None
 
     text: str = Field(min_length=1)
 
@@ -342,20 +343,18 @@ class HookResponse(StrictModel):
 
     @model_validator(mode='after')
     def _matches_the_current_recipe(self) -> 'HookResponse':
-        """按**配方计数**校验，不按策略去重。
+        """按**逐槽配方**校验，不按策略去重。
 
         ⚠⚠ 这里曾经写的是「每种策略恰好一次」（集合相等 + 无重复）。那条断言把
         「取值面」与「这一次要产哪几条」当成同一件事，于是同一种策略采两条样本
-        **在校验器层面就不可能**。现在配方允许重复，校验的是 `Counter` 相等：
-        既拦住「少产一条 / 多产一条」，也拦住已退场的写法混进来
-        （退场写法在配方里计数为 0 ⇒ 一出现计数就对不上）。
-        ⚠ **不校验顺序**：位置身份由候选在列表里的次序决定，模型换个顺序返回
-        并不违约——真正不能松的是「哪几种、各几条」。
+        **在校验器层面就不可能**。现在配方允许重复，但身份又由列表位置承载，
+        因此必须逐槽比较：同一种策略可以占两槽，模型却不能把 c1/c2 对调后
+        再让位置身份替错误顺序背书。
         """
         approaches = [c.approach for c in self.candidates]
-        if Counter(approaches) != Counter(HOOK_RECIPE):
+        if tuple(approaches) != HOOK_RECIPE:
             raise ValueError(
-                f'candidates 的策略计数必须符合当前配方 {HOOK_RECIPE}，实得 {approaches}')
+                f'candidates 必须按槽位顺序符合当前配方 {HOOK_RECIPE}，实得 {approaches}')
         texts = [c.text.strip() for c in self.candidates]
         if len(set(texts)) != len(texts):
             raise ValueError('三个候选文本不得重复')

@@ -117,12 +117,11 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '`HOOK_APPROVED_APPROACHES` 随之删除',
         '`stage6.hook` 重跑（**付费**）。⚠ 重跑写 `approved=None` ⇒ 人工定稿一并失效，'
         '必须重新走 `stage6.approve --pick` 的 actor / reason / 完整 subject SHA-256。'
-        '⚠⚠ **本次代价实际为零，但不是因为运气好**：破坏时盘上唯一那份是'
-        '「我把龙傲天训成狗」（已到 stage7），而它当时**连重建都跑不动**——'
-        '任何付费节点都被 stage2 全局复核闸挡着（3 FAIL + 2 UNVER，'
-        '`novel/cli/main.py` 对所有 paid 节点调 `global_review.require_approved`）。'
-        '随后 2026-08-23 该书目录被本仓之外的动作从 `outputs/` 移走（账本记录仍在），'
-        '同日「寡妇门前」以本形状全链跑通并交付 ⇒ **盘上现存的 stage6 层已经是 v2**。'
+        '⚠⚠ **没有自动迁移，也不能宣称盘上代价为零**：`outputs/_ab/flash/` 仍保留两份'
+        '已到 stage7 的 v1 实验快照，而且都缺 `stage2/global_review_decisions.json`，'
+        '不能直接从 producer 付费重建。本次把它们明确退役为**只读历史实验证据**：'
+        '不纳入 current-schema corpus，也不承诺当前运行时可读；字节原样保留，'
+        '需要检视时使用形状破坏前的代码身份。现役交付必须由 producer 生成 v2 并重新人工定稿。'
         '`stage6/semantic_*.json` 未破坏形状，但它按 `judged_texts` 绑文本、重跑后会判 stale',
     ),
     'stage6/hook_edit.json': (

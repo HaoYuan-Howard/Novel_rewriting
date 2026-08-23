@@ -42,6 +42,8 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
   ⚠ 破坏的理由是结构性的：同一种策略采两条样本时，`approach` **答不出
   「这份定稿是从哪条候选来的」**，而标签、wontfix 证据键与判官的 `judged_texts`
   键全挂在那个答案上。存量重建代价见 `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
+  `outputs/_ab/flash/` 下两份 v1 实验快照已明确退役为只读历史证据：不属于 current-schema
+  corpus，当前运行时拒读，原字节不删除；现役交付须由 producer 重建 v2 后重新人工定稿。
 - `semantic_<n>.json`、`wontfix.json` ——**都是 schema v1**。
 
 ### 2.1 `hook.json`
@@ -50,7 +52,7 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 |---|---|---|
 | `lead_upto` | `int >= 1` | 连续开篇成稿下发上界；全书结构地图不受此上界限制 |
 | `rationale` | `str` | 三条候选各自押注的吸引点 |
-| `candidates` | `Candidate[3]` | 三种当前策略各一条，文本不得重复 |
+| `candidates` | `Candidate[3]` | 按当前逐槽配方产三条；策略可重复，归一后的文本不得重复 |
 | `approved` | `ApprovedHook \| null` | 人工定稿；进入成书的第一段 |
 | `sources.writer_context` | `ContextSource` | 写作上下文来源状态 |
 | `judged` | `{path: JudgedDraft}` | 生成时使用的开篇成稿及其消费指纹 |
@@ -60,7 +62,7 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `approach` | 枚举 | 三个当前策略之一，见 §三 |
+| `approach` | 枚举 | `HOOK_APPROACHES` 的一个取值；当前配方及退场取值见 §三 |
 | `text` | 非空 `str` | 归一后的文案字节 |
 | `mech` | `Mech` | 标点、引号、分段归一的计数 |
 | `findings` | `Finding[]` | 该候选的机械判定；候选不属于正文章，`output_ordinal` 恒为 `null` |
@@ -88,6 +90,9 @@ user/response 指纹、前后 HARD 数、cache policy、状态、是否采纳与
 HARD 数严格下降且文本不与另两条重复时才替换该候选和整组 rationale；wrong approach、请求失败、
 重复或 HARD 未下降均保留已经付费取得的初始候选，并把原因写入重试账。调用数因此是
 `1 + 初始脏候选数`，不再把“初始一次调用”误写成整条路径的成本上限。
+若 wire 上互异的候选在归一后收敛成同一文本，producer 把完整付费产出落
+`hook.INVALID.json` 并明确报出重复槽位；人改开至少一条后走 `--revalidate` 0 LLM 提升，
+不能用一次无落盘的终态把缓存里的有效响应永久锁死。
 
 ### 2.2 `semantic_N.json`
 
@@ -139,8 +144,9 @@ HARD 数严格下降且文本不与另两条重复时才替换该候选和整组
 | `c2` | `scene_punchline` | 用可视可听的场面或对白砸出核心关系，以人物反应、危险或笑点收尾 |
 | `c3` | `scene_punchline` | 同上，但 prompt 现算出一句硬要求：**必须锚在与 `c2` 不同的事件上** |
 
-`HookResponse` 的模型级 validator 校验的是**配方计数**（`Counter` 相等）与三条文本不重复，
-**不是**「每种策略各一次」——后者在配方允许重复之后本身就是错的口径。
+`HookResponse` 的模型级 validator 按列表位置逐槽校验 `HOOK_RECIPE`，并要求三条 wire 文本不重复；
+producer 在归一后、落盘前再守一次正式文本唯一性。这里**不是**「每种策略各一次」——
+后者在配方允许重复之后本身就是错的口径。
 
 **已退场**：`source_architecture`（保住原作文案已验证的结构与最后一击）。
 它仍留在 `Candidate.approach` 的取值面 `HOOK_APPROACHES` 里，因为盘上有存量产物；
@@ -203,7 +209,7 @@ validator 必须确认：
 
 `--revalidate --actor <id> --reason <why>` 与 `--apply-edit` 不能互换：前者对活动 `.INVALID`
 重建派生字段、重判并强审计提升，保留原 prompts/model/inputs 与生成轮次，记录 raw/canonical
-SHA-256、RFC 6901 改动路径和 `edited_by_human`；后者消费 v1 `hook_edit.json`，归档当前正式
+SHA-256、RFC 6901 改动路径和 `edited_by_human`；后者消费 v2 `hook_edit.json`，归档当前正式
 hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本身份自动过期。两条都是 0 次 LLM
 调用，但 apply-edit 的人工内容工作量不等于零。
 

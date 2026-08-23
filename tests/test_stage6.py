@@ -7,6 +7,7 @@ import pytest
 
 from contracts.invariants import slot_of
 from contracts.rules import REGISTRY
+from contracts.schema.stage6 import ApprovedHook
 from novel.core.measure import measure
 from novel.run import RunContext
 from novel.stages.stage6 import checks, hook, prompts
@@ -160,19 +161,10 @@ def test_rejudging_reproduces_what_is_on_disk(box):
     """
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     up = hook._Upstreams(ctx, __import__('novel.store', fromlist=['x']).ArtifactStore(ctx))
+    # `hook_report` 是书级汇总，不存进候选 findings；其余逐文本判据必须逐条相等。
+    # 当前 schema v2 语料已经由含 `hook_source_distance` 的 producer 生成，不能再把
+    # 这条无条件度量从两侧同时减掉，否则重判守卫会在最需要它时假绿。
     book_level = {'hook_report'}
-    # ⚠⚠ **晚于盘上产物的判据要显式登记在这里，一条一行、写明哪一次。**
-    #   本测试比的是「现在重判」与「当时存盘」，而**新增一条无条件报出的判据
-    #   必然让两边不等**——那不是判据抄错了，是判据集本身变了。
-    #   ⚠ 不要因此把断言放松成 `got >= stored`：那会让「某条判据静默不再拦」
-    #   （本测试唯一要抓的东西）一起漏掉。登记制保住了「除这几条外必须逐条相等」。
-    #   ⚠ 登记一条不等于可以永远留着：产物由 `stage6.hook` 重跑后就该销掉这一行。
-    #   同 `hook_quote_unbalanced` 那条「盘上恒缺格」的处理方式。
-    postdates_disk = {
-        # 2026-08-23 新增（`R-9.23`）：盘上那本书的 hook.json 写于它之前。
-        'hook_source_distance',
-    }
-    book_level = book_level | postdates_disk
     for label, text, stored in _texts_and_stored(box):
         _t, _m, fs = hook._normalize_and_judge(text, up)
         got = {f.rule for f in fs} - book_level
@@ -365,6 +357,11 @@ def _fake_client(ctx, texts: list[str]):
     return LlmClient(ctx, FakeTransport(respond), sleep=lambda _s: None)
 
 
+def test_approved_slot_is_nullable_but_required():
+    """缺失不是人手写；只有显式 `null` 才表示没有候选前身。"""
+    assert ApprovedHook.model_fields['slot'].is_required()
+
+
 def test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty(
         tmp_path, monkeypatch):
     """Three-candidate gating is a default-suite contract, not corpus data."""
@@ -416,6 +413,59 @@ def test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty(
         hook.run_hook(ctx2, _fake_client(
             ctx2, ['坏候选甲', '坏候选乙', '坏候选丙']))
     assert written[-1][0] == 'stage6/hook.INVALID.json'
+
+    def normalize_full_width(text, _up):
+        return (text.replace('?', '？'),
+                Mech(punct_fixed=0, quotes_fixed=0, paras_fixed=0), [])
+
+    monkeypatch.setattr(hook, '_normalize_and_judge', normalize_full_width)
+    ctx3 = _ctx(book, 'stage6.hook')
+    with pytest.raises(GateBlocked, match='归一后出现重复'):
+        hook.run_hook(ctx3, _fake_client(
+            ctx3, ['干净候选甲。', '同一句候选?', '同一句候选？']))
+    assert written[-1][0] == 'stage6/hook.INVALID.json'
+
+    invalid_artifact = written[-1][1]
+
+    class RecoveryStore:
+        invalid = invalid_artifact
+        promoted = None
+
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        def exists(self, rel):
+            return rel == 'stage6/hook.INVALID.json' or (
+                rel == hook.REL and self.promoted is not None)
+
+        def read_own(self, _model, rel):
+            artifact = self.promoted if rel == hook.REL else self.invalid
+            return artifact, {}
+
+        def promote_invalid(self, _rel, _model, *, actor, reason, artifact_override):
+            assert actor and reason
+            self.promoted = artifact_override
+
+    monkeypatch.setattr(hook, 'ArtifactStore', RecoveryStore)
+    monkeypatch.setattr(hook, '_judge_artifact', lambda _art, _up, _store: [])
+    monkeypatch.setattr(
+        hook, '_report',
+        lambda _ctx, _store, _outcomes, _art: SimpleNamespace(passed=True))
+
+    recovery_ctx = _ctx(book, 'stage6.hook')
+    with pytest.raises(GateBlocked, match='重复槽位'):
+        hook.run_revalidate(
+            recovery_ctx, actor='stage6-test', reason='still duplicated')
+
+    RecoveryStore.invalid = invalid_artifact.model_copy(update={
+        'candidates': [
+            candidate.model_copy(update={'text': f'人工改开的候选 {index}。'})
+            for index, candidate in enumerate(invalid_artifact.candidates, 1)
+        ],
+    })
+    promoted, report = hook.run_revalidate(
+        recovery_ctx, actor='stage6-test', reason='three normalized texts are unique')
+    assert promoted is True and report.passed is True
 
 
 #: 三条候选各换一处措辞。⚠ **只换形容词，不碰段间分隔也不碰末字**——
@@ -505,21 +555,33 @@ def test_revalidate_promotes_only_after_the_problem_is_fixed(box):
         ctx2, actor='stage6-test', reason='verify the unchanged draft remains blocked')
     assert promoted is False, '还没改就提升了？那道闸门形同虚设'
 
-    # 人手改一个字（0 成本自救），再提升
+    # 人先把三条都改干净，但两槽写成同文：仍不得提升，且问题稿继续留在原位。
+    data = _json.loads(inv.read_text(encoding='utf-8'))
+    data['candidates'][0]['text'] = _sample(box, truncated=False, variant=0)
+    data['candidates'][1]['text'] = _sample(box, truncated=False, variant=0)
+    data['candidates'][2]['text'] = _sample(box, truncated=False, variant=2)
+    inv.write_text(_json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    ctx3 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
+    with pytest.raises(GateBlocked, match='重复槽位'):
+        hook.run_revalidate(
+            ctx3, actor='stage6-test', reason='duplicate normalized candidates stay blocked')
+    assert inv.exists()
+
+    # 人把重复那条也改开（0 成本自救），再提升。
     data = _json.loads(inv.read_text(encoding='utf-8'))
     for i, c in enumerate(data['candidates']):
         c['text'] = _sample(box, truncated=False, variant=i)
     inv.write_text(_json.dumps(data, ensure_ascii=False), encoding='utf-8')
 
-    ctx3 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
+    ctx4 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     promoted, rep = hook.run_revalidate(
-        ctx3, actor='stage6-test', reason='repair all truncated hook candidates')
+        ctx4, actor='stage6-test', reason='repair all truncated hook candidates')
     assert promoted is True
     after = box.read('stage6/hook.json')['_provenance']
     assert after['prompts'] == before['prompts'], '提升重盖了 prompt 指纹 —— 那是伪造'
     assert after['model'] == before['model']
     assert after.get('revalidated') is True
-    assert not ArtifactStore(ctx3).exists('stage6/hook.INVALID.json'), \
+    assert not ArtifactStore(ctx4).exists('stage6/hook.INVALID.json'), \
         '.INVALID 该被归档进 _rounds/，不是留在原地'
     assert rep.passed is True
 
@@ -667,3 +729,10 @@ def test_missing_source_hook_reads_as_unmeasurable_not_as_zero():
     """没有原作文案段时是**量不了**，不是「距离为 0」——两者不许压成一个值。"""
     row = _distance_reading(_FAR, None)['hook_source_distance']
     assert '量不了' in row.detail and not row.evidence
+
+
+def test_short_hook_still_reports_source_distance():
+    """不足 20 字会命中 `hook_empty`，但无条件度量不能被提前返回吞掉。"""
+    rows = _distance_reading('太短。', _SRC_HOOK)
+    assert 'hook_empty' in rows
+    assert 'hook_source_distance' in rows

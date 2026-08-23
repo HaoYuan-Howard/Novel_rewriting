@@ -426,6 +426,12 @@ def run_revalidate(
         'approved': approved,
         'judged': up.judged,
     })
+    duplicate_slots = _duplicate_candidate_slots(rebuilt.candidates)
+    if duplicate_slots:
+        raise GateBlocked(
+            f'候选归一后仍有重复槽位 {duplicate_slots}；请改好 {_INVALID} 中至少一条文本后'
+            f'重新运行 `stage6.hook --revalidate --actor <id> --reason <why>`',
+            invalid_path=str(ctx.novel_dir / _INVALID))
     outcomes = _judge_artifact(rebuilt, up, store)
     if _blocking(outcomes):
         return False, _report(ctx, store, outcomes, rebuilt)
@@ -448,6 +454,14 @@ CANDIDATE_RETRY_RUNGS = (('low', False),)
 
 def _hard_candidate_findings(findings: list[Finding]) -> list[Finding]:
     return [item for item in findings if _sev_of(item.rule) == 'hard']
+
+
+def _duplicate_candidate_slots(candidates: list[Candidate]) -> list[list[str]]:
+    """归一后同文的槽位组；空数组表示三条正式字节互异。"""
+    by_text: dict[str, list[str]] = {}
+    for position, candidate in enumerate(candidates, 1):
+        by_text.setdefault(candidate.text, []).append(slot_of(position))
+    return [slots for slots in by_text.values() if len(slots) > 1]
 
 
 def _retry_failure_rows(findings: list[Finding]) -> list[dict[str, object]]:
@@ -615,6 +629,21 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
                 candidate_retry_effort=CANDIDATE_RETRY_RUNGS[0][0],
                 candidate_retry_thinking=CANDIDATE_RETRY_RUNGS[0][1]),
             candidate_retries=retry_history)})
+
+    # `HookResponse` 只能守住 wire 上的原始文本互异；本层随后还会统一全半角标点、
+    # 引号与段间分隔。两条 wire 文本可能因此收敛成同一份正式字节，而三候选的
+    # 搜索方差与位置身份都建立在“确实是三条不同文本”上。
+    # ⚠ 这是新增落盘闸，必须把已付费产出留在 `.INVALID`，让人能 0 LLM 改一条后
+    # 走 `--revalidate` 提升；直接 TerminalState 会把有效响应永久锁死在缓存里。
+    duplicate_slots = _duplicate_candidate_slots(cands)
+    if duplicate_slots:
+        p = store.write_invalid(REL, artifact, gates_skipped=[])
+        raise GateBlocked(
+            f'候选经标点、引号与分段归一后出现重复槽位 {duplicate_slots}——'
+            f'没有交出三条不同的正式候选。问题稿在 {p}，改好其中至少一条后跑 '
+            f'`stage6.hook --revalidate --actor <id> --reason <why>`'
+            f'（0 LLM、同轮重判并留不可变审计）',
+            invalid_path=str(p))
 
     # ⚠⚠ **闸门条件与 stage3 不同**：本层一次产**三份**，一条红不该废掉另两条。
     # ⇒ 拦的是「**一条干净候选都没有**」。部分红照常落盘，报告把红的那条摆在人面前，

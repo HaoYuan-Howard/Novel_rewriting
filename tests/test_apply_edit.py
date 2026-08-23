@@ -23,6 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from contracts.invariants import slot_of
 from novel.errors import GateBlocked, TerminalState
 from novel.run import RunContext
 from tests import corpus, sandbox
@@ -305,13 +306,15 @@ def test_stage6_apply_edit_normalizes_and_rejudges_the_candidate(box6):
     from novel.stages.stage6 import hook
 
     art_before = box6.read('stage6/hook.json')
-    target = art_before['candidates'][0]['approach']
+    # ⚠ `--apply-edit` 选的是**位置身份**，不是策略名：同一种策略可以占两槽
+    #   （`HOOK_RECIPE`），按策略名寻址会一次指到两条候选上。
+    target = slot_of(1)
     box6.write('stage6/hook_edit.json', {'candidate': target, 'text': _hook_text(box6)})
 
     ctx = RunContext.open(str(box6.root), box6.sid, 'stage6.hook', paid=False)
     new, report = hook.run_apply_edit(ctx)
 
-    edited = next(c for c in new.candidates if c.approach == target)
+    edited = new.candidates[0]
     assert '她站在门口' in edited.text
     assert all(f.detail.startswith(f'[{target}]') for f in edited.findings), \
         '人工稿的 findings 没有走同一条判定（缺标签前缀）'
@@ -324,7 +327,7 @@ def test_stage6_apply_edit_normalizes_and_rejudges_the_candidate(box6):
     assert semantic_rows and all(r.status == 'unver' for r in semantic_rows)
 
 
-def test_stage6_apply_edit_replaces_the_approved_text_and_keeps_its_approach(box6):
+def test_stage6_apply_edit_replaces_the_approved_text_and_keeps_its_slot(box6):
     from novel.stages.stage6 import hook
 
     art_before = box6.read('stage6/hook.json')
@@ -336,7 +339,7 @@ def test_stage6_apply_edit_replaces_the_approved_text_and_keeps_its_approach(box
 
     assert new.approved is not None
     assert new.approved.origin == 'human'
-    assert new.approved.approach == art_before['approved']['approach'], \
+    assert new.approved.slot == art_before['approved']['slot'], \
         '「这份人工稿是从哪一条改出来的」被抹掉了'
     assert '她站在门口' in new.approved.text
 
@@ -385,13 +388,13 @@ def test_stage6_apply_edit_does_not_gate_but_reports_red(box6):
     """本层闸门是「无一干净候选才拦」——编辑单条文本不整拦，红行照报。"""
     from novel.stages.stage6 import hook
 
-    target = box6.read('stage6/hook.json')['candidates'][0]['approach']
+    target = slot_of(1)
     box6.write('stage6/hook_edit.json',
                {'candidate': target, 'text': _hook_text(box6, truncated=True)})
     ctx = RunContext.open(str(box6.root), box6.sid, 'stage6.hook', paid=False)
     new, report = hook.run_apply_edit(ctx)
 
-    edited = next(c for c in new.candidates if c.approach == target)
+    edited = new.candidates[0]
     assert any(f.rule == 'hook_truncated' for f in edited.findings), '截断该被判出来'
     assert report.badge == 'fail' and report.passed is False
 

@@ -128,6 +128,15 @@ def _source_distance_detail(body: str, src_hook: str) -> tuple[str, list[str]]:
     )
 
 
+def _source_distance_finding(body: str, src_hook: str | None) -> Finding:
+    """`hook_source_distance` 的唯一构造口；短文本也必须留下读数。"""
+    if src_hook:
+        detail, evidence = _source_distance_detail(body, src_hook)
+    else:
+        detail, evidence = '本书没有原作文案段可比，结构距离量不了', []
+    return finding('hook_source_distance', detail=detail, evidence=evidence)
+
+
 def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | None,
                   characters: dict | None, src_hook: str | None,
                   style_hook: dict | None, quote_problems: list[str]) -> list[Finding]:
@@ -147,6 +156,9 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
         fs.append(finding('hook_empty',
                           detail=f'文案只有 {len(nb)} 个内容字符——没写出来',
                           evidence=[body[:40]] if body else []))
+        # `R-9.23` 要求这一读数无条件报出。短文本虽不能继续跑其余语义噪声探针，
+        # 仍然能与原作文案比较；漏掉它会被 metric 聚合洗成“扫描过且 OK”。
+        fs.append(_source_distance_finding(body, src_hook))
         return fs                        # 空的就不必往下判了，后面全是噪声
 
     if body.rstrip()[-1] not in TERMINAL_PUNCT:
@@ -321,12 +333,7 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
     # ⚠ 与 ⑨ 并排放，因为它们回答的是同一类问题（"这条候选像谁"），
     #   而两条都刻意不给阈值。没有原作文案段时**不静默跳过**：
     #   "没得比"与"比过了很远"必须分得开。
-    if src_hook:
-        distance_detail, distance_evidence = _source_distance_detail(body, src_hook)
-    else:
-        distance_detail, distance_evidence = '本书没有原作文案段可比，结构距离量不了', []
-    fs.append(finding('hook_source_distance',
-                      detail=distance_detail, evidence=distance_evidence))
+    fs.append(_source_distance_finding(body, src_hook))
     return fs
 
 
