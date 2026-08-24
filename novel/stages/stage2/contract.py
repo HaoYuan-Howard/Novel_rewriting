@@ -28,14 +28,14 @@ from pydantic import BaseModel
 
 from contracts.invariants import BLUEPRINT_ARCHITECTURES
 from contracts.schema.stage2 import (
-    ChapterBoundariesResponse, ChapterBlueprintsResponseV2,
-    ChapterBlueprintsResponseV2Refs, ChapterBlueprintsResponseV31,
+    ChapterBoundariesResponse, ChapterBlueprintsResponseV2Refs,
+    ChapterBlueprintsResponseV31,
 )
 from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import prompts
 from novel.stages.stage2.compile_v2 import (
-    canonical_ir_projection, canonical_ir_projection_refs,
-    canonical_ir_projection_v31, compile_v2, compile_v2_refs, compile_v31_refs,
+    canonical_ir_projection_refs, canonical_ir_projection_v31,
+    compile_v2_refs, compile_v31_refs,
 )
 
 
@@ -57,13 +57,9 @@ class ContractSpec:
 
     #: 这套契约的失败面能不能走 `stage2.blueprint --patch`（字段级修复，量级是条不是章）。
     #:
-    #: 【为什么是一格能力，不是 `--patch` 里的一个名字】`repair.py` 原来写的是
-    #: `architecture != 'extraction-ir-v1'` 与 `contract_for('extraction-ir-v1')`
-    #: 两处**字面**比较。ir1.1 上线后当场显影：它与 ir1 只差 `system`/`sys_name`
-    #: 两格，`response_model`/`compile_fn`/`projection_fn` 等逐格共用 ⇒ 字段级修复
-    #: 结构上完全适用（`plan_repairs` 读的 `verbatim_failures` 与
-    #: `hinge_ambiguous_pending` 两笔账都由共用的 `compile_v2` 产），却被名字挡在门外。
-    #: ⇒ 判「能不能字段级修」按**这一格**，新架构进表时自己回答一次，
+    #: 【为什么是一格能力，不是 `--patch` 里的一个名字】历史上按
+    #: architecture 字面分流曾把新增的同构契约挡在修复门外。因此判「能不能
+    #: 字段级修」只按**这一格**，新架构进表时自己回答一次，
     #: 不必回头改 `repair.py` 里的名单——漏改那份名单不会有任何东西出声。
     #:
     #: v3 判 `False` 不是「还没做」：它的 hinge 带段号、失败面是整章级根因
@@ -114,20 +110,6 @@ _V2 = ContractSpec(
 )
 
 CONTRACTS: dict[str, ContractSpec] = {
-    # v1.1 沿用 ir1 的响应模型、编译器与投影函数，只保留修复过地点措辞的 system。
-    # 退役的是可选 architecture，不是这组仍被 v1.1 消费的共享实现。
-    'extraction-ir-v1.1': ContractSpec(
-        architecture='extraction-ir-v1.1',
-        system=with_json_shape(prompts.BLUEPRINT_SYS_V1_1, prompts.BLUEPRINT_HINT_V2),
-        sys_name='BLUEPRINT_SYS_V1_1',
-        response_model=ChapterBlueprintsResponseV2,
-        schema_mode='prompt_plus_local_validation',
-        compile_fn=compile_v2,
-        projection_fn=canonical_ir_projection,
-        needs_summary_batch=True,
-        supports_field_patch=True,
-        topology='single',
-    ),
     # Flash 的主要失效不是「字段写错」，而是单次请求同时切拍和填十余个字段时
     # 系统性少切拍。v2 先只交止段，再让第二相在代码冻结的边界上填事实；同时把
     # 在场人物改成可见 char_id 的关闭式选择、地点恢复成字符串或 null。

@@ -411,7 +411,7 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 
 ⚠⚠ **立条目时的读数不能当基线用。** 它们全部取自 `四人成行` 那一份计划，而那份计划有两重
 污染：① 它是**旧 prompt 逼出来的分布**——旧口径下够大的章不移位就不许落盘；
-② 它是对着**旧版 stage2** 产的（当前 `chapter_blueprints.json` 已是 schema v3，
+② 它是对着**旧版 stage2** 产的（当前 `chapter_blueprints.json` 已是 schema v4，
 `from_beats` 里 16/106 个 `beat_id` 在当前蓝图中已不存在）。当时读数：
 `cold_open` **11/11 章** · `transition` = `earlier 18 / start 11 / return 6 / later 1 / continue 1`
 · 方向可判率 **13/26** 个接缝（判不动：`recall→recall` 6 · 上游漂移 3 · `recall→present` 3 ·

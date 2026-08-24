@@ -37,7 +37,7 @@ from novel.quality.global_review import build_review
 from novel.run import RunContext
 from novel.stages import initial_extract
 from novel.stages.stage2 import extract
-from novel.stages.stage2.compile_v2 import canonical_ir_projection
+from novel.stages.stage2.compile_v2 import canonical_ir_projection_v31
 from novel.stages.stage3 import style
 from contracts.invariants import HINGE_FAILURE_ROUTE
 from novel.stages.stage2.normalize import normalize_global, normalize_verbatim, response_shape
@@ -46,11 +46,11 @@ from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
 
 
-#: 本文件把通用生成闭环固定在仍现役的 `extraction-ir-v1.1`；需要 v2/v3.1
-#: 特有拓扑的断言集中在 `test_stage2_contract_dispatch.py`。
+#: 通用生成闭环固定在默认 `extraction-ir-v3.1`；v2 两相拓扑的断言
+#: 集中在 `test_stage2_contract_dispatch.py`。
 @pytest.fixture(autouse=True)
-def _pin_ir11_arm(monkeypatch):
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v1.1')
+def _pin_ir31_arm(monkeypatch):
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
 
 
 def test_parallel_chapter_requests_report_batch_positions_without_schema_changes():
@@ -299,12 +299,12 @@ def test_punctuation_only_evidence_locator_becomes_a_recoverable_failure():
 
 
 def _response_blueprints() -> dict[int, dict]:
-    """底座正式产物 → v1.1 的 extraction IR 假响应。"""
+    """底座正式产物 → v3.1 关闭式假响应。"""
     texts = {section['chapter_ordinal']: section['text'] for section in main_text()}
     out: dict[int, dict] = {}
     for blueprint in copy.deepcopy(blueprints())['blueprints']:
         ordinal = blueprint['chapter_ordinal']
-        out[ordinal] = canonical_ir_projection(blueprint, texts[ordinal])
+        out[ordinal] = canonical_ir_projection_v31(blueprint, texts[ordinal])
     return out
 
 
@@ -428,13 +428,10 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert stored.provenance.usage is not None
         assert stored.provenance.usage.calls_made == 4
         context = stored.provenance.context
-        # ⚠ 读**本次运行选中的那套契约**，不抄字面、也不读全局默认：
-        #   本文件钉在 v1.1 臂上（见 `_pin_ir11_arm`），而默认已是 v3.1
-        #   ——拿默认常量来比，等于断言「产地写的是别人的架构」。
-        #   这条守的是「产地如实记下了自己用的那一套」。
+        # 产地必须如实记下本次运行选中的契约。
         from novel.stages.stage2.contract import active_contract
         assert context.architecture == active_contract().architecture
-        assert context.architecture == 'extraction-ir-v1.1'
+        assert context.architecture == 'extraction-ir-v3.1'
         assert context.current_chapter_full is True
         assert context.future_visible is False
         assert context.stable_prefix

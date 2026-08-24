@@ -1,4 +1,4 @@
-# stage2 契约实验手册（现役 v1.1 / v2 / v3.1；其余为历史实验）
+# stage2 契约实验手册（现役 v2 / v3.1；其余为历史实验）
 
 自足入口：本页给「跑 A/B、修失败、审读数」的操作者，一页说清多契约怎么选、
 钱怎么不白花、读数从哪来。设计依据与逐步实施记录见 `Stage2_improvement.md`
@@ -7,17 +7,17 @@
 
 ## 一、响应契约是什么、怎么选
 
-`stage2.blueprint` 只保留三套可选择的**响应契约**。`extraction-ir-v1.1` 是一相开放字面 IR；
-v2 把逐章抽取拆成边界与细节两相；当前默认 v3.1 是一相带召回脚手架和关闭引用的契约：
+`stage2.blueprint` 只保留两套可选择的**响应契约**。v2 把逐章抽取拆成边界与细节两相；
+当前默认 v3.1 是一相带召回脚手架和关闭引用的契约：
 
-| | `extraction-ir-v1.1` | `extraction-ir-v2` | `extraction-ir-v3.1`（默认） |
-|---|---|---|---|
-| 逐章调用 | 一相 | **两相**：先回忆并压缩边界，再在冻结边界上填细节 | **一相带脚手架**：同一响应先 cue 召回、再交完整拍 |
-| beat 定位 | 模型只交 `end_para`（起点代码推导，末拍必须到底） | 第一相交 `micro_events + beats[].end_para`；两列均递增到底 | 同一响应交 micro cue + 详细 beats；本地守同一边界不变量 |
-| hinge | `kind + phrase`（拍区间内原样唯一定位） | 第二相交 `kind + phrase`，不能改第一相边界 | 候选 id 优先、phrase 兜底 |
-| 人物引用 | 原文字面 | 在场者从可见 `char_id` 闭集选 | narrator/focalizer 也闭集选择 |
-| summary | **书级摘要批**独立一调 | 同左 | 同左；micro cue 编译前丢弃 |
-| 编译器 | `compile_v2` | `compile_v2_refs` | `compile_v31_refs` |
+| | `extraction-ir-v2` | `extraction-ir-v3.1`（默认） |
+|---|---|---|
+| 逐章调用 | **两相**：先回忆并压缩边界，再在冻结边界上填细节 | **一相带脚手架**：同一响应先 cue 召回、再交完整拍 |
+| beat 定位 | 第一相交 `micro_events + beats[].end_para`；两列均递增到底 | 同一响应交 micro cue + 详细 beats；本地守同一边界不变量 |
+| hinge | 第二相交 `kind + phrase`，不能改第一相边界 | 候选 id 优先、phrase 兜底 |
+| 人物引用 | 在场者从可见 `char_id` 闭集选 | narrator/focalizer 也闭集选择 |
+| summary | **书级摘要批**独立一调 | 同左；micro cue 编译前丢弃 |
+| 编译器 | `compile_v2_refs` | `compile_v31_refs` |
 
 选择口（与 `DEEPSEEK_MODEL` 同一条纪律——显式拧一次，不是随手改的变量）：
 
@@ -25,15 +25,17 @@ v2 把逐章抽取拆成边界与细节两相；当前默认 v3.1 是一相带�
 NOVEL_STAGE2_BLUEPRINT_CONTRACT=extraction-ir-v2     # 缺省 = extraction-ir-v3.1
 ```
 
-`bounded-fidelity-v3`、`extraction-ir-v1`、`extraction-ir-v2.1`、`extraction-ir-v3`
-已退役，不再能从配置或修复入口选择。取值面收窄使 `chapter_blueprints.json` schema v2 → v3；
-旧 v2 信封与退役 architecture 产物均由 `stage2.blueprint` 付费整跑重建，不迁移、不手补版本。
+`bounded-fidelity-v3`、`extraction-ir-v1`、`extraction-ir-v1.1`、`extraction-ir-v2.1`、
+`extraction-ir-v3` 已退役，不再能从配置或修复入口选择。最近一次取值面收窄使
+`chapter_blueprints.json` schema v3 → v4；旧 v3 信封与退役 architecture 产物均由
+`stage2.blueprint` 付费整跑重建，不迁移、不手补版本。
 v1 的历史裁决见 §四、§八与 §十一；v2 翻默认的付费依据与未达成项见 §十四；
 v3/v3.1 的预注册与迭代见 §十五～§十七；v2.1 的预注册与双书付费结果见 §十八；
-最终两书三契约对照与 v3.1 翻默认的产品裁决见 §十九。
+最终两书三契约对照与 v3.1 翻默认的产品裁决见 §十九；
+v1.1 退役与 schema v4 裁决见 §二十。
 
 ⚠ **schema_mode 声明**：DeepSeek V4 官方 API 只支持 `response_format=json_object`
-（`json_schema` 被拒，2026-08-20 文档探针）。三套现役契约都是
+（`json_schema` 被拒，2026-08-20 文档探针）。两套现役契约都是
 **prompt 约束 + 本地 pydantic 校验**，不是 constrained decoding——
 实验结论不许把「枚举前缀带来的改善」归因给 decoder 约束。
 
@@ -67,11 +69,8 @@ v3/v3.1 的预注册与迭代见 §十五～§十七；v2.1 的预注册与双�
    outputs，按该工具的确认流程走）；
 2. worktree checklist：从主仓复制 `.env`；`NOVEL_CACHE_DIR` 指主仓 `.llm_cache`
    （worktree 不带缓存，miss 全是真钱）；
-3. 零成本重放先过：`-m corpus` 跑 `tests/test_stage2_replay_v2.py` +
-   `python tools/replay_stage2_contract.py --base <outputs> --md-out <留档>`；
-4. **高难章包冒烟**（`tools/smoke_stage2_ir1.py`）：整跑之前先用 6 章问一次
-   「Flash 按 V2 契约自己写出来的响应长什么样」。它发的是**首轮形状**的请求
-   （`--chapters` 定向重生成会把 v3 派生的基线喂进 prompt，那是另一个实验），
+3. **高难章包冒烟**（`tools/smoke_stage2_ir1.py`）：整跑之前先用少量章检查
+   现役契约的首轮响应形状。它发的是**首轮形状**的请求，
    与整跑逐字节同构 ⇒ 这几次响应会被后续整跑的缓存原样接住，钱不花第二遍。
    判据跑在内存里的合并稿上（未动章沿用盘上正式稿），**书目录零改动**。
 
@@ -1285,7 +1284,7 @@ exit 0；前端 seams（96 文件/20 份 mock 基线）、typecheck、build 均 
 
 ### 比较边界
 
-用户要求把三套现役契约统一放在 `deepseek-v4-flash + high + thinking` 下比较，并在第一本后再跑
+用户当时要求把三套契约统一放在 `deepseek-v4-flash + high + thinking` 下比较，并在第一本后再跑
 一本。《无情道第一她来自合欢宗》（23 章）与《偶像公寓打工日常》（18 章）均固定同书正文、同书
 已审 global、同一模型与初始 effort；三臂使用独立空本地缓存并串行运行。第二书的共享 global 先经
 typed edit 与 296/296 项人工 review PASS，再分叉 blueprint，避免把全书事实漏抽算到响应契约头上。
@@ -1337,3 +1336,23 @@ v3，不迁移、不重建存量产物。
 切换后的零成本工程验证：Stage2 定向 147 项、冻结契约五文件 325 项、完整非 corpus 回归均
 exit 0；前端 seams（104 文件/20 份 mock）、typecheck、build 均 exit 0。当前仍无 corpus manifest，
 所以这些结果不称 corpus 全量绿。本轮设置默认没有新增任何 LLM 调用。
+
+## 二十、退役 v1.1，契约面收为 v2 / v3.1（2026-08-24）
+
+§十九记录的「v1.1 继续登记」是当时的裁决；本节是后续裁决，以本节为准。
+用户明确要求删除 `extraction-ir-v1.1`，`stage2.blueprint` 现役只保留
+`extraction-ir-v2` 与默认 `extraction-ir-v3.1`。历史付费 A/B 读数仍然有效且保留，
+但 v1.1 不再是配置、整跑、定向修复或冒烟工具的可达入口。
+
+收窄面同批闭合：
+
+- `contracts/invariants.py::BLUEPRINT_ARCHITECTURES` 与
+  `novel/stages/stage2/contract.py::CONTRACTS` 只剩 v2 / v3.1，配置校验与 API 枚举从前者派生；
+- v1.1 专属的响应载体、prompt/hint 导出、旧蓝图重放工具与 corpus 守卫删除；
+- 前端枚举夹具、冒烟白名单和通用测试基线同步收到保留契约；
+- `BlueprintContext.architecture` 的 Literal 从三值收成两值，因此
+  `stage2/chapter_blueprints.json` 从 schema v3 升到 v4。本仓没有迁移机制；
+  存量 v3、`.INVALID` 与 `_rounds/` 均由 `stage2.blueprint` 付费整跑重建，
+  不手补 marker 或 architecture 冒充当前产地。
+
+本次退役是 0 LLM 的工程改动；它不改写§十九的质量、token 与墙钟史实。

@@ -552,7 +552,7 @@ def test_projection_is_honest_about_failed_hinges():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 五、`place_explicit_unlocatable`：`extraction-ir-v1.1` 的配套探针
+# 五、`place_explicit_unlocatable`：保留契约共用的地点字面探针
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # 【它在防什么】ir1.1 把 `P_EXPLICIT` 从「三选一」提回「首选档」，为的是救回地点

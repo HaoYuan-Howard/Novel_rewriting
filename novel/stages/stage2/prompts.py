@@ -26,7 +26,7 @@ from typing import Any
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, CHANGE_TYPES_ENUM, HINGE_KINDS, NAME_DISTINCTIVENESS,
-    KNOWLEDGE_SUBJECT_KINDS, NARRATIVE_PERSON, PLACE_MODES,
+    KNOWLEDGE_SUBJECT_KINDS, NARRATIVE_PERSON,
     RELATION_VISIBILITY_KINDS, RESPONSE_TIME_LAYERS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from novel.llm.prompts import fill
@@ -393,7 +393,7 @@ _BLUEPRINT_TPL = """\
 
 只输出 JSON（顶层键：blueprints，为【本次指定范围内】每章一项，按阅读序章号顺序）。不要额外解释文字。"""
 
-#: `BLUEPRINT_SYS_V2` 的模板（`extraction-ir-v1`，`Stage2_improvement.md` 改造）。
+#: v2 / v3.1 细节规则的共用模板底座（源自早期 extraction IR 改造）。
 #:
 #: 【与 v3 模板的差别只有四族，其余段落逐字保留】
 #:   ① beat 只交 `end_para`（起点、编号由代码推导，首拍起 1、末拍必须到底）；
@@ -541,32 +541,8 @@ _BLUEPRINT_TPL_V2 = """\
 
 
 # ---------------------------------------------------------------------------
-# `extraction-ir-v1.1` —— 与 ir1 的差别**只有 place 这一段**
+# v2 / v3.1 共用的细节规则派生底座
 # ---------------------------------------------------------------------------
-#
-# 【为什么要改】ir1 的地点填充率相对 v3 掉了一半以上，而这**不是模型的锅**：
-# `docs/stage2_contract_experiment.md` §十一 实测两个模型上都掉
-# （Pro −60% / Flash −28%）⇒ 是契约的独立责任。机制在措辞里看得见：
-#   · v3 写的是「用原文的说法…确实无从判断**才**填 null」——null 是**最后一档**，
-#     「才」是抑制；
-#   · ir1 把三个 mode **并列陈列**、视觉与语义上等权，`P_UNKNOWN` 只剩
-#     「确实无从判断」五个字，抑制没了；`P_INHERIT` 还加了「程序会替你抄」——更省事。
-# ⇒ 三态把 null 从「最后一档」升成了「三选一」。§十 的实例佐证：第 6 章 5 拍全
-#   `P_UNKNOWN`，而 v3 那 8 拍全填了「床上」。
-#
-# 【形状一个字不动】三个 mode 的 JSON 与 `PLACE_MODES` 取值面照旧，响应模型、
-# 编译器、投影函数全部与 ir1 共用 ⇒ 两臂的差别**只有这一段 system 字节**，
-# 这是单变量对照能成立的前提。
-#
-# ⚠ **7A 二轮的教训要正面处理**：给模型加压时它会选最省力的路。那一轮加的是
-#   **跨字段耦合约束**（「end_para 必须盖住 event 写到的最后一样东西」），模型
-#   可以牺牲 event 来满足它，于是拍 24→18 反而更粗（已撤回，碑立在
-#   `_BLUEPRINT_TPL_V2` 上方）。place 的次序约束是**单字段**的，无处可牺牲——
-#   唯一的规避路径是**编一个地点**，所以新段里明写了「不要为了填满而编」，
-#   同时在编译器侧装了 `place_explicit_unlocatable` 读数（只记账不拦截）。
-#
-# 【为什么用 replace 派生而不是复制一份模板】复制 120 行再手改一段，
-# 「其余逐字保留」就只能靠人肉核对；派生让它在**结构上**成立。
 
 _PLACE_SEG_V2 = """\
   · `place`：这一条发生在【哪里】，三种形态（mode 只能是 $PLACE_MODES 之一）：
@@ -574,29 +550,6 @@ _PLACE_SEG_V2 = """\
       {"mode": "P_INHERIT"} —— 原文没明写、但延续着上一条的地点。**程序会替你抄，不要自己写名字**；
       {"mode": "P_UNKNOWN"} —— 确实无从判断。
 """
-
-_PLACE_SEG_V1_1 = """\
-  · `place`：这一条发生在【哪里】，用原文的说法（「出宫的路上」「侧院的厢房」「密牢」）。
-    mode 只能是 $PLACE_MODES 之一，**按下面的次序往下试，前一档成立就不要用后一档**：
-      ① {"mode": "P_EXPLICIT", "name": "原文的说法"} —— 原文明写了地点，照原文用字。**先试这一档**；
-      ② {"mode": "P_INHERIT"} —— 这一条没明写、但延续着上一条的地点。**程序会替你抄，不要自己写名字**；
-      ③ {"mode": "P_UNKNOWN"} —— 上面两档都不成立、确实无从判断，**才**用这一档。
-    · 【不要为了填满而编地点】`name` 必须是原文里真有的说法；原文没写的走 ② 或 ③，不要自己造一个。
-"""
-
-#: `extraction-ir-v1.1` 的模板：从 `_BLUEPRINT_TPL_V2` 派生，**只换 place 那一段**。
-_BLUEPRINT_TPL_V1_1 = _BLUEPRINT_TPL_V2.replace(_PLACE_SEG_V2, _PLACE_SEG_V1_1)
-
-# ⚠⚠ 这两条 assert 防的是**静默失效**：`_PLACE_SEG_V2` 与模板对不上时 replace
-#     什么也不做，ir1.1 会产出与 ir1 **逐字相同**的 system ⇒ 同一个缓存键、
-#     同一份 prompt，换臂跑出来的实验**静默地没有发生**（E 臂踩过这个形状：
-#     27 次调用全命中缓存、0 元、产物与对照臂逐字节相同）。
-assert _BLUEPRINT_TPL_V2.count(_PLACE_SEG_V2) == 1, \
-    '`_PLACE_SEG_V2` 在 `_BLUEPRINT_TPL_V2` 里不是恰好出现一次——' \
-    '模板的 place 段改过而这里没跟着改，派生出来的 ir1.1 是错的'
-assert _BLUEPRINT_TPL_V1_1 != _BLUEPRINT_TPL_V2, \
-    'ir1.1 的模板与 ir1 逐字相同——replace 没有发生，换臂等于没换'
-
 
 # ---------------------------------------------------------------------------
 # `extraction-ir-v2` —— 先切边界，再按冻结边界填事实
@@ -657,15 +610,17 @@ _PRESENT_SEG_V2_REFS = """\
     · 清单没有对应人物、或原文没交代在场者时交空数组，不要猜。
 """
 
-_BLUEPRINT_TPL_V2_REFS = _BLUEPRINT_TPL_V1_1 \
+_BLUEPRINT_TPL_V2_REFS = _BLUEPRINT_TPL_V2 \
     .replace('place, present_names, event, hinges',
              'place, present_char_ids, event, hinges') \
-    .replace(_PLACE_SEG_V1_1, _PLACE_SEG_V2_REFS) \
+    .replace(_PLACE_SEG_V2, _PLACE_SEG_V2_REFS) \
     .replace(_PRESENT_SEG_V2, _PRESENT_SEG_V2_REFS)
 
-assert _BLUEPRINT_TPL_V1_1.count(_PRESENT_SEG_V2) == 1, \
+assert _BLUEPRINT_TPL_V2.count(_PLACE_SEG_V2) == 1, \
+    '地点旧段没有恰好命中一次——v2 引用式模板没有真实替换'
+assert _BLUEPRINT_TPL_V2.count(_PRESENT_SEG_V2) == 1, \
     '在场者旧段没有恰好命中一次——v2 引用式模板没有真实替换'
-assert _BLUEPRINT_TPL_V2_REFS != _BLUEPRINT_TPL_V1_1
+assert _BLUEPRINT_TPL_V2_REFS != _BLUEPRINT_TPL_V2
 
 
 # ---------------------------------------------------------------------------
@@ -823,18 +778,6 @@ GLOBAL_SYS = RULES_V2 + fill(_GLOBAL_TPL, ROLE_FATE=ROLE_FATE_RULE)
 #: `stage2.blueprint` 的 `bounded-fidelity-v3` 臂（付费，当前默认）。
 BLUEPRINT_SYS = RULES_V2 + fill(_BLUEPRINT_TPL)
 
-#: `stage2.blueprint` 的 `extraction-ir-v1` 臂（付费，经
-#: `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 显式选择）。与 v3 并存，选择在
-#: `novel/stages/stage2/contract.py`。
-BLUEPRINT_SYS_V2 = RULES_V2 + fill(_BLUEPRINT_TPL_V2)
-
-#: `stage2.blueprint` 的 `extraction-ir-v1.1` 臂（付费，经
-#: `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 显式选择）。与 ir1 的差别**只有 place 一段**
-#: （派生处在 `_BLUEPRINT_TPL_V1_1` 上方，连同为什么改一起写在那里）。
-#: ⚠ 结构提示**复用 `BLUEPRINT_HINT_V2`**：place 的形状一个字没动，
-#:   另起一份只会让两处漂移。
-BLUEPRINT_SYS_V1_1 = RULES_V2 + fill(_BLUEPRINT_TPL_V1_1)
-
 #: 两段式 v2：边界臂只做一个判断；细节臂在冻结边界上填字段。
 BOUNDARY_SYS_V2 = fill(_BOUNDARY_TPL)
 BLUEPRINT_SYS_V2_REFS = RULES_V2 + fill(
@@ -944,31 +887,6 @@ BLUEPRINT_HINT: dict[str, Any] = {
                    'hinges': [{'kind': '|'.join(HINGE_KINDS),
                                'para': '段号(整数)',
                                'phrase': '那一段里的原文原样'}]}],
-        'narration': [{'grammatical_person': NARRATIVE_PERSON[0],
-                       'narrator_name': '原文里的叫法|null',
-                       'focalizer_name': '原文里的叫法|null',
-                       'pronoun_surfaces': ['我']}],
-    }],
-}
-
-#: `extraction-ir-v1` 的结构提示。
-#:
-#: ⚠ **没有 `summary`、没有 `beat_id`、没有 `span`、没有 hinge 的 `para`**：
-#: 前一个归书级摘要批，后三个归代码（编号 / 游标分割 / 拍区间内定位）。
-#: 把代码产的字段写进提示，模型会替我们猜一个（判据 26 那一类）。
-#: ⚠ 枚举一律从 `contracts.invariants` 派生，一个取值面都不手抄（同上）。
-BLUEPRINT_HINT_V2: dict[str, Any] = {
-    'blueprints': [{
-        'chapter_ordinal': 1,
-        'beats': [{'end_para': '结束段号(整数)',
-                   'time_layer': '|'.join(RESPONSE_TIME_LAYERS),
-                   'place': {'mode': '|'.join(PLACE_MODES),
-                             'name': '原文的说法(仅 P_EXPLICIT 带此键)'},
-                   'present_names': ['原文里称呼他的'
-                                     '那个字面'],
-                   'event': 'str',
-                   'hinges': [{'kind': '|'.join(HINGE_KINDS),
-                               'phrase': '本条范围内原样且唯一的那几个字'}]}],
         'narration': [{'grammatical_person': NARRATIVE_PERSON[0],
                        'narrator_name': '原文里的叫法|null',
                        'focalizer_name': '原文里的叫法|null',

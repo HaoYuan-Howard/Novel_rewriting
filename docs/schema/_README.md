@@ -60,8 +60,9 @@ schema 路由与 stage 真实读写均引用该目录。路径模板由 `artifac
 模型同样不接受旧字段别名或双形状，需要保留的输入从产地按当前契约重新生成。
 
 **没有迁移机制。** 版本号是“**这个产物的形状被破坏过几次**”的计数器，不是家族标签。
-`stage2/chapter_blueprints.json` 已破坏两次：2026-08-19 锚点从逐字转写改成段落索引，升 v2；
-2026-08-23 architecture 从七值收窄为 v1.1/v2/v3.1，升 v3。Stage5 canonical 章、Review 与
+`stage2/chapter_blueprints.json` 已破坏三次：2026-08-19 锚点从逐字转写改成段落索引，升 v2；
+2026-08-23 architecture 从七值收窄为 v1.1/v2/v3.1，升 v3；2026-08-24 再收为
+v2/v3.1，升 v4。Stage5 canonical 章、Review 与
 trim 两类产物也在 2026-08-24 单臂折平时升到 v2：旧 `stage5/deep|shallow/` 只读保留，
 `stage5.write` 付费重建正文、`stage5.review` 免费重建报告，不迁移也不搬文件冒充 current。
 每一次破坏都登记在

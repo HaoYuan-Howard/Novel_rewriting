@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""smoke_stage2_ir1.py —— 7A：Stage2 extraction IR **系**的「高难章包」付费冒烟。
+"""smoke_stage2_ir1.py —— Stage2 现役响应契约的「高难章包」付费冒烟。
 
-⚠ 跑哪一臂由 `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 决定（取值面见 `SMOKE_CONTRACTS`），
-  工具与 `extract.build_prompts` **同源**地取 spec。ir1.1 只改了 place 那一段措辞，
-  所以本工具也是「place 填充率有没有真的回升」最便宜的前置闸——
-  6 章的钱先问一次，再决定要不要花 23 章的钱跑全链。
-
-【它回答什么】零成本重放（`tools/replay_stage2_contract.py`）只能证明「v3 已经
-产对的东西，ir1 编译器收不收得回来」——喂给编译器的是**投影出来的理想响应**。
-真正没被回答的是：**Flash 按 V2 契约自己写出来的响应长什么样**（拍怎么切、
-末拍到不到底、hinge 短语挑得够不够唯一、place 三态用不用得对）。本工具用
-6 章高难包（每章覆盖一类风险）把这个问题用最小的钱问一次。
+⚠ 跑哪一臂由 `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 决定（取值面见
+`SMOKE_CONTRACTS`），工具与 `extract.build_prompts` **同源**地取 spec。
+它用少量高难章先检查拍边界、hinge 定位、人物引用与摘要批，
+再决定是否花全书的钱跑整链。
 
 【为什么不是 CLI 的一个 flag】`stage2.blueprint` 只有两条路：整跑（全书，太贵）
 与 `--chapters` 定向重生成（要求盘上已有**同架构**基线，且 prompt 里带
-`repair_baseline` + findings）。后者会把 v3 派生的基线喂进 ir1 的首轮响应——
-那就不再是「首轮响应长什么样」的实验了。⇒ 冒烟要的是「**首轮形状**的请求，
+`repair_baseline` + findings）。后者不是首轮请求形状。⇒ 冒烟要的是「**首轮形状**的请求，
 只发 6 章」，而生产没有、也不该有这条路。
 
 【它与整跑逐字节同构】请求由生产入口 `extract.request_blueprints(…, chapters=…)`
@@ -24,8 +17,8 @@
 无关。⇒ 这几次付费响应会**原样命中**后续整跑的缓存，冒烟的钱不花第二遍
 （本工具每次跑都当场核这条性质，`tests/test_stage2_smoke_ir1.py` 另钉一道）。
 
-【它不写任何产物】判据跑在**内存里**的合并稿上（未动章沿用盘上 v3 正式稿，
-目标章换成本次 ir1 编译结果），书目录一个字节不改——收尾按目录指纹核一道。
+【它不写任何产物】判据跑在**内存里**的合并稿上（未动章沿用盘上正式稿，
+目标章换成本次编译结果），书目录一个字节不改——收尾按目录指纹核一道。
 采纳与否是人看完读数之后的另一件事，本工具不代做。
 
 【分批纪律】付费调用一次一批、一律前台（本机后台句柄会静默终止且报假 exit 0）。
@@ -69,16 +62,15 @@ from novel.stages.stage2.normalize import (                       # noqa: E402
     resolve_character_refs,
 )
 
-#: 本工具最初只服务 ir1 系；v2/v3.1 同样需要在整跑前验证**新响应契约**的
-#: 首轮子集。收成白名单是为了让「拿错契约跑了一轮」在第一行就停住。
+#: 白名单从现役契约面显式钉住，拿错契约在第一行就停住。
 #:
 #: ⚠⚠ **实际用哪一臂一律走 `active_contract()`（读 env），与 `build_prompts`
 #: 同源**——曾经这里是 `spec = contract_for('extraction-ir-v1')` 写死，而
 #: `extract.build_prompts` 那边走 `_active_spec()`：env 拧到别的臂时，
 #: 发出去的是新 prompt、校验与编译却还是旧 spec，**而这不会报错**
-#: （`contract.py` 模块头警告的正是这个形态）。ir1.1 加进来之后它就不再是理论风险。
+#: （`contract.py` 模块头警告的正是这个形态）。
 SMOKE_CONTRACTS = (
-    'extraction-ir-v1.1', 'extraction-ir-v2', 'extraction-ir-v3.1',
+    'extraction-ir-v2', 'extraction-ir-v3.1',
 )
 NODE = 'stage2.blueprint'
 

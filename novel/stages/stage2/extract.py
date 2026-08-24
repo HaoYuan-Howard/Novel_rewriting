@@ -984,8 +984,7 @@ def _run_chapter_requests(
 ) -> tuple[list[dict[str, Any]], list[str], list[Exception]]:
     """并发等待独立章节；一个失败不丢掉已经付费成功的其他章。
 
-    `model_cls` 按契约传（v3=`ChapterBlueprintsResponse`，
-    ir1=`ChapterBlueprintsResponseV2`）——响应边界与 system 必须同一套 spec，
+    `model_cls` 按契约 spec 传入——响应边界与 system 必须同一套，
     各选一半的失败形态是「prompt 是新的、校验还是旧的」而不会报错。
     """
     results: dict[int, dict[str, Any]] = {}

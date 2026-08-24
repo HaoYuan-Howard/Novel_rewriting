@@ -31,10 +31,10 @@ from tests.test_stage2_generation import (
 )
 
 
-#: 通用 Stage4 底座固定在仍现役的 v1.1；契约特有拓扑由 dispatch 测试覆盖。
+#: 通用 Stage4 底座固定在默认 v3.1；契约特有拓扑由 dispatch 测试覆盖。
 @pytest.fixture(autouse=True)
-def _pin_ir11_arm(monkeypatch):
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v1.1')
+def _pin_ir31_arm(monkeypatch):
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
 
 
 def _prepare(book):

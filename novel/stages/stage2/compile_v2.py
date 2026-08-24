@@ -159,9 +159,8 @@ def _note_unlocatable_place(beat: dict[str, Any], name: str | None, upto: str,
                             place_unlocatable: list[tuple[str, str]]) -> None:
     """`P_EXPLICIT` 的地点名在**截止本章的正文**里一个字节都找不到时记一笔。
 
-    【这条读数要回答什么】`extraction-ir-v1.1` 把 `P_EXPLICIT` 从「三选一」提回
-    「首选档」（`prompts.py::_BLUEPRINT_TPL_V1_1`）。给模型加压时它会找最省力的
-    出路，而 place 是单字段、没有别的字段可牺牲 ⇒ **唯一的规避路径是编一个地点**。
+    【这条读数要回答什么】给模型加压填地点时，它最省力的规避路径是
+    **编一个地点**。该账最初为 v1.1 实验建立，对保留的 v2 / v3.1 同样适用。
     这一笔就是那条路径上的探针：填充率涨了，但如果它同步涨，涨的是幻觉不是覆盖。
 
     ⚠⚠ **匹配面是「截止本章正文」，不是「本拍区间」。** 这不是随手选的——
@@ -327,7 +326,7 @@ def compile_v2(data: dict[str, Any], main_text: list[dict[str, Any]],
                characters: dict[str, dict[str, Any]], *,
                summaries: dict[int, str] | None = None) \
         -> tuple[dict[str, Any], dict[str, Any]]:
-    """把（可能多章合并的）`ChapterBlueprintsResponseV2` 编译成正式产物形状。
+    """把已收窄的逐章 IR 编译成正式产物形状；v2 / v3.1 编译器共用。
 
     与 `normalize.normalize_blueprints` 出入口逐键同构；多出的三笔账
     （`place_inherit_without_base` / `place_explicit_unlocatable` /

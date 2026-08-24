@@ -254,11 +254,12 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 2),
     # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
     #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
-    #   v1.1/v2/v3.1 三值，升 v3。两次都会让旧信封**读不进来**。
+    #   v1.1/v2/v3.1 三值，升 v3；2026-08-24 再收成 v2/v3.1 两值，升 v4。
+    #   三次都会让旧信封**读不进来**。
     #   **存量产物由谁重建：`stage2.blueprint` 整跑（付费）**；`.INVALID` 与 `_rounds/`
     #   一律作废，不手补字段冒充当前产地。取值与升版记录见
     #   `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 3),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 4),
     # 2026-08-24 Stage3 定性包整批退役：顶层只留 measurable + 免费 provenance。
     # v1 不迁移；普通旧书由免费 producer 重建，已用于实验的两本按归档清单保留历史字节。
     STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding, 2),

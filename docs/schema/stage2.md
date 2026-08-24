@@ -207,7 +207,7 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 `BlueprintContext` 固定边界为：
 
 - `architecture` 取值登记在 `contracts/invariants.py::BLUEPRINT_ARCHITECTURES`：
-  `extraction-ir-v1.1`、`extraction-ir-v2`、`extraction-ir-v3.1`；当前默认由同文件
+  `extraction-ir-v2`、`extraction-ir-v3.1`；当前默认由同文件
   `BLUEPRINT_ARCHITECTURE` 唯一指定为 v3.1；
   定向修复按基线产物的架构选契约，不把存量产物伪装成当前默认；
 - `batch_size = 1`；
@@ -303,7 +303,7 @@ locator，属于破坏性变更；本仓没有迁移器。旧 v1 决策集必须
   两列止段严格递增且落到章尾，beat 止段必须取自 micro-event 止段；第二相只能在代码冻结的
   beat 边界上填 time layer、地点、hinge、叙述信息与可见 `char_id`。`--chapters` 定向付费
   重生成；`--renormalize` 重算当前 schema 的原文定位与人物引用；`--check-only` 联合读取两份
-  产物复检。三种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与定向修复共用
+  产物复检。两种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与定向修复共用
   该分派，不从可空 system 字段猜。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。
 - 本层没有旧 schema 迁移入口、字段别名或双形状读取路径。GlobalGrounding v1/v2 只由

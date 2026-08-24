@@ -126,14 +126,15 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '只能作为历史输入，当前运行时关闭式拒读',
     ),
     'stage2/chapter_blueprints.json': (
-        3,
-        '两次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
+        4,
+        '三次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
         '算出，SourceSpan.recovery 去掉 lcs，BlueprintProvenance.verbatim_recovered '
         '删除。2026-08-23：BlueprintContext.architecture 从七值收窄为 '
-        'extraction-ir-v1.1 / v2 / v3.1 三值，退役 bounded-fidelity-v3、v1、v2.1、v3',
+        'extraction-ir-v1.1 / v2 / v3.1 三值，退役 bounded-fidelity-v3、v1、v2.1、v3。'
+        '2026-08-24：再收窄为 v2 / v3.1 两值，退役 v1.1',
         'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
-        '不手补字段冒充当前产地。仓内没有迁移机制，因此即使 architecture 属于保留三值，'
-        '旧 v2 信封也必须由 producer 重建为 v3',
+        '不手补字段冒充当前产地。仓内没有迁移机制，任何 v3 信封'
+        '都必须由 producer 重建为 v4',
     ),
     'stage3/style_grounding.json': (
         2,

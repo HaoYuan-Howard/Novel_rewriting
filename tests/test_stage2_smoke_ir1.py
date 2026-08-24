@@ -22,7 +22,7 @@ from novel.stages.stage2.contract import contract_for
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_contract_dispatch import (
-    _ir1_responses, _summary_for,
+    _scaffolded_responses, _summary_for,
 )
 from tests.test_stage2_generation import (
     _client, _ctx, _ok, _response_global,
@@ -34,7 +34,7 @@ _ENV_KEY = 'NOVEL_STAGE2_BLUEPRINT_CONTRACT'
 
 def test_the_smoke_tool_accepts_current_v31_contract():
     assert S.SMOKE_CONTRACTS == (
-        'extraction-ir-v1.1', 'extraction-ir-v2', 'extraction-ir-v3.1')
+        'extraction-ir-v2', 'extraction-ir-v3.1')
 
 
 def _target_of(user: str) -> int:
@@ -44,8 +44,8 @@ def _target_of(user: str) -> int:
 
 
 def _seed_v3_book(tmp_path: Path, monkeypatch) -> tuple[Path, Path, str]:
-    """造一本盘上已有 v1.1 正式蓝图的书，供冒烟工具做内存合并基线。"""
-    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v1.1')
+    """造一本盘上已有 v3.1 正式蓝图的书，供冒烟工具做内存合并基线。"""
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
     base = tmp_path / 'outputs'
     book = base / '冒烟_777'
     book.mkdir(parents=True)
@@ -56,16 +56,16 @@ def _seed_v3_book(tmp_path: Path, monkeypatch) -> tuple[Path, Path, str]:
         global_ctx, lambda _req, _index: _ok(_response_global()))
     extract.run_global(global_ctx, global_client)
 
-    by_ordinal = _ir1_responses()
+    by_ordinal = _scaffolded_responses(closed=True)
     ctx = _ctx(book, 'stage2.blueprint')
-    client, _transport = _client(ctx, _ir1_responder(sorted(by_ordinal)))
+    client, _transport = _client(ctx, _ir31_responder(sorted(by_ordinal)))
     report = extract.run_blueprint(ctx, client)
-    assert report.passed, 'v1.1 基线自己就没落成，后面的对照没有意义'
+    assert report.passed, 'v3.1 基线自己就没落成，后面的对照没有意义'
     return base, book, '777'
 
 
-def _ir1_responder(ordinals: list[int]):
-    by_ordinal = _ir1_responses()
+def _ir31_responder(ordinals: list[int]):
+    by_ordinal = _scaffolded_responses(closed=True)
 
     def respond(req, _index):
         if '逐章事件清单' in req.user:
@@ -99,7 +99,7 @@ def test_the_smoke_pays_only_for_the_targets_and_leaves_the_book_untouched(
     calls: list[object] = []
 
     def fake_client(ctx):
-        client, transport = _client(ctx, _ir1_responder([2]))
+        client, transport = _client(ctx, _ir31_responder([2]))
         calls.append(transport)
         return client
 
@@ -113,7 +113,7 @@ def test_the_smoke_pays_only_for_the_targets_and_leaves_the_book_untouched(
     assert S._dir_fingerprint(book) == before, '冒烟工具不许改书目录一个字节'
 
     report = json.loads((tmp_path / 'r.json').read_text(encoding='utf-8'))
-    assert report['contract'] == 'extraction-ir-v1.1'
+    assert report['contract'] == 'extraction-ir-v3.1'
     assert [row['chapter_ordinal'] for row in report['per_chapter']] == [2]
     assert report['summary_mode'].startswith('summary-batch')
     assert report['cost']['calls_paid'] == 2
@@ -122,18 +122,19 @@ def test_the_smoke_pays_only_for_the_targets_and_leaves_the_book_untouched(
 
 def test_the_merged_candidate_keeps_untouched_chapters_byte_identical(
         tmp_path, monkeypatch):
-    """合并稿：未动章一个字节不动，目标章整章换新，架构如实记 v1.1。"""
+    """合并稿：未动章一个字节不动，目标章整章换新，架构如实记 v3.1。"""
     base, book, sid = _seed_v3_book(tmp_path, monkeypatch)
     ctx = _ctx(book, 'stage2.blueprint')
     both = extract._Both(ArtifactStore(ctx))
     baseline = both.blueprints
     characters = (both.global_g or {})['entities']['characters']
 
-    compiled, accounting = contract_for('extraction-ir-v1.1').compile_fn(
-        {'blueprints': [_ir1_responses()[2]]}, both.main_text, characters,
+    compiled, accounting = contract_for('extraction-ir-v3.1').compile_fn(
+        {'blueprints': [_scaffolded_responses(closed=True)[2]]},
+        both.main_text, characters,
         summaries={2: '合并稿测试用摘要'})
     merged = S._merged_candidate(baseline, compiled['blueprints'], accounting,
-                                 both.main_text, characters, 'extraction-ir-v1.1')
+                                 both.main_text, characters, 'extraction-ir-v3.1')
 
     by_ordinal = {bp['chapter_ordinal']: bp for bp in merged['blueprints']}
     assert sorted(by_ordinal) == [1, 2, 3]
@@ -142,7 +143,7 @@ def test_the_merged_candidate_keeps_untouched_chapters_byte_identical(
             bp for bp in baseline['blueprints']
             if bp['chapter_ordinal'] == untouched)
     assert by_ordinal[2]['summary'] == '合并稿测试用摘要'
-    assert merged['_provenance']['context']['architecture'] == 'extraction-ir-v1.1'
+    assert merged['_provenance']['context']['architecture'] == 'extraction-ir-v3.1'
     # 目标章的逐字账**整段换新**：旧账里属于第 2 章的行不许混进来。
     for key in ('verbatim_rewrites', 'verbatim_failures'):
         assert [row for row in merged['_provenance'][key]

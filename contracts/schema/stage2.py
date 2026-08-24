@@ -35,7 +35,7 @@ from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES, CACHE_POLICY, HINGE_KINDS,
     KNOWLEDGE_SUBJECT_KINDS, RELATION_VISIBILITY_KINDS,
     REVEAL_EVENT_KINDS, SECRET_SETUP_KINDS,
-    NAME_DISTINCTIVENESS, NARRATIVE_PERSON, PLACE_MODES, RESPONSE_TIME_LAYERS,
+    NAME_DISTINCTIVENESS, NARRATIVE_PERSON, RESPONSE_TIME_LAYERS,
     SPAN_RECOVERY, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from contracts.schema.base import Fp10, StrictModel
@@ -1196,64 +1196,6 @@ class HingeResponseV2(StrictModel):
     phrase: str = Field(min_length=1)
 
 
-class ExplicitPlace(StrictModel):
-    """原文明写（或延续中可辨认）的地点，必带 `name`。"""
-
-    mode: Literal['P_EXPLICIT']
-    name: str = Field(min_length=1)
-
-
-class InheritPlace(StrictModel):
-    """延续上一相邻拍的地点。**继承由代码做**（仅同 `time_layer` 且相邻才许）。"""
-
-    mode: Literal['P_INHERIT']
-
-
-class UnknownPlace(StrictModel):
-    """确实无从判断 ⇒ 产物侧 `place=null`。不确定性是受约束的状态，不是自由文本。"""
-
-    mode: Literal['P_UNKNOWN']
-
-
-#: 判别联合：非法组合（`P_EXPLICIT` 无名、`P_UNKNOWN` 带名）**从形状上不可表达**，
-#: 不靠跨字段校验兜。discriminator 取值面在 `contracts/invariants.py::PLACE_MODES`。
-PlaceRef = Annotated[ExplicitPlace | InheritPlace | UnknownPlace,
-                     Field(discriminator='mode')]
-
-assert set(PLACE_MODES) == {'P_EXPLICIT', 'P_INHERIT', 'P_UNKNOWN'}, \
-    'PLACE_MODES 改了取值面而 PlaceRef 三个成员没跟着改——两处必须一起看'
-
-
-class BeatResponseV2(StrictModel):
-    """`extraction-ir-v1` 的拍：**没有 `beat_id`（代码编号）、没有起点（代码推导）**。
-
-    `time_layer` 用响应侧前缀枚举（`T_*`），compiler 经
-    `contracts/invariants.py::RESPONSE_TIME_LAYERS` 映回产物值。
-    """
-
-    end_para: int = Field(ge=1)
-    time_layer: Literal[tuple(RESPONSE_TIME_LAYERS)]
-    place: PlaceRef
-    present_names: list[str]
-    event: str = Field(min_length=1)
-    hinges: list[HingeResponseV2]
-
-
-class BlueprintResponseV2(StrictModel):
-    """一章的最小抽取 IR。**没有 `summary`**——它是 events 的派生视图，
-    由书级摘要批独立生成（`SummaryBatchResponse`），不再是第二份语义真相。"""
-
-    chapter_ordinal: int = Field(ge=1)
-    beats: list[BeatResponseV2] = Field(min_length=1)
-    narration: list[NarrationResponse] = Field(min_length=1)
-
-
-class ChapterBlueprintsResponseV2(StrictModel):
-    """一次调用原则上只产一章；越界章仍需先接住并记账（与 v3 同规）。"""
-
-    blueprints: list[BlueprintResponseV2] = Field(min_length=1)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 二·c、`extraction-ir-v2` 的两段式响应契约
 #
@@ -1419,7 +1361,7 @@ class BlueprintContext(StrictModel):
     ⚠ `architecture` 曾**故意是单值**（v2→v3 时旧产物语义已坏，放宽等于把
     该重跑的旧蓝图读进来当成还能用）。2026-08-20 起逐步放宽为登记取值面：
     `extraction-ir-v1` 的产物语义与 v3 **逐字段等价**（区间仍是段号查表出的
-    精确区间、下游消费面一个不动），后续 v1.1/v2 同样只改响应边界而不改
+    精确区间、下游消费面一个不动），后续契约同样只改响应边界而不改
     正式产物。并存不欠迁移——收窄/放宽的裁决依据始终是
     「旧字节语义还成不成立」，全案记录在
     `contracts/invariants.py::BLUEPRINT_ARCHITECTURES` 的注释里。
@@ -1550,11 +1492,10 @@ class BlueprintProvenance(LlmProvenance):
     #: 默认空列表：`bounded-fidelity-v3` 的产地没有这个概念，旧字节缺键照常读入。
     place_inherit_without_base: list[str] = Field(default_factory=list)
 
-    #: `(beat_id, name)`（`extraction-ir-v1` 系专属账）：模型按 `P_EXPLICIT` 写了地点，
+    #: `(beat_id, name)`：模型写了地点，
     #: 而那个说法在**截止本章的正文**里一个字节都找不到。
-    #: ⚠ **它是 `extraction-ir-v1.1` 的配套探针，不是违约判定。** ir1.1 把 `P_EXPLICIT`
-    #: 从「三选一」提回「首选档」以救回地点填充率（ir1 相对 v3 掉 −59%，且
-    #: `docs/stage2_contract_experiment.md` §十一 实测两个模型上都掉 ⇒ 是契约的责任）。
+    #: ⚠ **它是地点幻觉的配套探针，不是违约判定。** 该账最初为 v1.1
+    #: 实验建立；保留的 v2 / v3.1 同样产地点字面，因此读数仍属现役。
     #: 给模型加压时它会找最省力的出路，而 place 是单字段、没有别的字段可牺牲，
     #: **唯一的规避路径就是编一个地点**——这笔账就是那条路径上的探针：
     #: 填充率涨了而这笔账同步涨，涨的是幻觉不是覆盖。

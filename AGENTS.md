@@ -125,8 +125,9 @@ provenance 的口相同。
 版本**，无标记/低版本/高版本都明确拒读——**本仓没有迁移机制**（仍以注册表为准，
 破坏形状就 `current_version` +1 并同批回答「存量产物由谁重建」，并在
 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里显式登记那一次破坏）。
-现役 `stage2/chapter_blueprints.json` 为 v3（2026-08-19 锚点改段落索引升 v2；
-2026-08-23 architecture 收窄为 v1.1/v2/v3.1 升 v3）；Stage5 canonical 章稿、Review、
+现役 `stage2/chapter_blueprints.json` 为 v4（2026-08-19 锚点改段落索引升 v2；
+2026-08-23 architecture 收窄为 v1.1/v2/v3.1 升 v3；2026-08-24 再收为 v2/v3.1 升 v4）；
+Stage5 canonical 章稿、Review、
 trim audit/resolution 均为 v2。旧 `stage5/deep|shallow/` 只作历史证据，读模型必须明确报
 `legacy_incompatible`，不允许原地选臂、迁移或触发付费重建；其余产物版本以注册表为准；
 旧产物**不手补字段冒充当前产地**，要从 producer 重建。

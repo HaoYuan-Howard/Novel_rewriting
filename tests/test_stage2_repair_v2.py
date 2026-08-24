@@ -27,7 +27,7 @@ from novel.stages.stage2.repair import (
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_contract_dispatch import (
-    _ENV_KEY, _ir1_responses, _ir2_responses, _scaffolded_responses,
+    _ENV_KEY, _ir2_responses, _scaffolded_responses,
     _summary_for,
 )
 from tests.test_stage2_generation import _client, _ctx, _ok, _response_global
@@ -125,8 +125,8 @@ def _unique_snippet(seg: str, avoid: str) -> str:
 def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     """跑指定 IR 臂的全链但给第 1 章第 1 拍塞一条歧义 hinge 和一条编的 hinge ⇒ .INVALID。
 
-    v1/v1.1 共用开放字面响应，v2 用关闭式 char_id 响应并多一段边界预传，
-    v3/v3.1 则在单次响应里带召回脚手架；
+    v2 用关闭式 char_id 响应并多一段边界预传，
+    v3.1 则在单次响应里带召回脚手架；
     测试从 spec 的能力与拓扑派生，不把「IR 都是一相、都同响应模型」当永久事实。
     """
     monkeypatch.setenv(_ENV_KEY, architecture)
@@ -145,8 +145,6 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
     elif spec.topology == 'scaffolded_single':
         by_ordinal = _scaffolded_responses(
             closed=spec.uses_narration_refs)
-    else:
-        by_ordinal = _ir1_responses()
     ordinals = sorted(by_ordinal)
     texts = {s['chapter_ordinal']: s['text'] for s in main_text()}
     beat_index, seg, dup = _pick_ambiguous_site(
@@ -192,10 +190,8 @@ def _land_broken_ir_book(monkeypatch, architecture: str) -> tuple[Path, dict]:
 def test_patch_repairs_ambiguous_and_void_then_lands_formally(monkeypatch, architecture):
     """⭐ 端到端：**每一条声明可字段级修的契约**都真的修得动。
 
-    ⚠ 参数化到 `supports_field_patch` 全表，不写死架构名——`extraction-ir-v1.1`
-    上线时正是被 `repair.py` 里一句写死的 `!= 'extraction-ir-v1'` 挡在门外，
-    而它与 ir1 的编译器/投影/响应模型逐格共用、结构上完全修得动
-    （2026-08-21 跑《四人成行》时撞出来）。新臂进注册表就自动进这条测试。
+    ⚠ 参数化到 `supports_field_patch` 全表，不写死架构名；
+    新臂进注册表就自动进这条测试。
     """
     book, info = _land_broken_ir_book(monkeypatch, architecture)
     bid, base = info['beat_id'], info['base']
@@ -254,4 +250,4 @@ def test_patch_repairs_ambiguous_and_void_then_lands_formally(monkeypatch, archi
 def test_all_retained_contracts_support_field_patch():
     assert _UNPATCHABLE == []
     assert _PATCHABLE == [
-        'extraction-ir-v1.1', 'extraction-ir-v2', 'extraction-ir-v3.1']
+        'extraction-ir-v2', 'extraction-ir-v3.1']

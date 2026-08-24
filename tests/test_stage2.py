@@ -390,18 +390,6 @@ def test_v31_closed_narration_id_is_not_reclassified_as_an_ambiguous_name():
     assert outcomes['present_names_ambiguous'].findings[0].detail.startswith('0/')
 
 
-def test_open_character_names_still_report_ambiguity():
-    """开放字面契约没有权威 id；同一份投影必须继续如实报告歧义。"""
-    gg, bp, mt = global_grounding(), blueprints(), main_text()
-    gg['entities']['characters']['char_001']['address'].append({
-        'surface': '母亲', 'by': 'narration',
-        'context': 'reference', 'from_chapter': 1})
-    bp['_provenance']['context']['architecture'] = 'extraction-ir-v1.1'
-    outcomes = {o.rule: o for o in checks.check(
-        global_g=gg, blueprints=bp, main_text=mt)}
-    assert outcomes['present_names_ambiguous'].findings[0].detail.startswith('2/')
-
-
 def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
     """FC-14：真实 checks 产的 detail 只记本次数据，规则 caveat 只在 note。"""
     from novel.prov import FreshnessReport

@@ -48,10 +48,10 @@ from tests.test_stage2 import main_text
 BLUEPRINT_EDGE = 'stage2/global_grounding.json'
 
 
-#: 通用底座固定在仍现役的 v1.1；契约特有拓扑由 dispatch 测试覆盖。
+#: 通用底座固定在默认 v3.1；契约特有拓扑由 dispatch 测试覆盖。
 @pytest.fixture(autouse=True)
-def _pin_ir11_arm(monkeypatch):
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v1.1')
+def _pin_ir31_arm(monkeypatch):
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v3.1')
 
 
 def _seed(book: Path, *, with_blueprints: bool = False) -> None:
