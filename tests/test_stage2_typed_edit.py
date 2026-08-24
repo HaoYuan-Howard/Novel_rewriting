@@ -20,23 +20,6 @@ def _formal_evidence(chapter: int = 1, text: str = '证据原文') -> dict:
     }}
 
 
-def _character_response(
-    canonical: str = '沈青', *, by: str = 'public', chapter: int = 1,
-) -> dict:
-    return {
-        'canonical': canonical,
-        'name_distinctiveness': 'high',
-        'address': [{
-            'surface': canonical, 'by': by, 'context': 'reference',
-            'from_chapter': chapter,
-        }],
-        'role': f'{canonical}在沈家负责账务',
-        'role_evidence': _locator(chapter),
-        'fate': None,
-        'fate_evidence': None,
-    }
-
-
 def _knowledge(
     *, chapter: int = 1, char_id: str | None = 'char_001', group: str | None = None,
     response: bool = True,
@@ -225,162 +208,17 @@ def test_complete_replacements_can_split_secrets_replace_rules_and_rebuild_addre
     assert changed == ['canon.secrets', 'canon.world_rules', 'char_001.address']
 
 
-def test_characters_replace_adds_people_and_atomically_references_the_new_registry():
-    """人物全集与 relation/secret/arc 可在同一候选内原子地互相引用。"""
-    data = _grounding()
-    edit = GlobalEdit.model_validate({
-        'characters_replace': {
-            'char_001': _character_response(),
-            'char_002': _character_response('顾兰', by='char_001', chapter=2),
-        },
-        'relations_replace': [{
-            'relation_id': 'rel_01',
-            'subject_id': 'char_002',
-            'predicate': '受雇于',
-            'object_id': 'char_001',
-            'predicate_evidence': _locator(2),
-            'visibility': {'kind': 'public', 'from_chapter': 2},
-            'valid_from_chapter': 2,
-            'valid_through_chapter': None,
-        }],
-        'secrets': [{
-            'secret_id': 'secret_01',
-            'knowledge_events': _knowledge(chapter=2, char_id='char_002'),
-        }],
-        'arc_tracks_replace': [{
-            'subject': 'char_002', 'dimension': '处境',
-            'change_type': 'development', 'trajectory': '从旁观到主动查账',
-            'trajectory_evidence': _locator(2),
-        }, {
-            'subject': 'rel_01', 'dimension': '关系',
-            'change_type': 'development', 'trajectory': '从试探到彼此信任',
-            'trajectory_evidence': _locator(2),
-        }, {
-            'subject': 'reader', 'dimension': '认知',
-            'change_type': 'revelation', 'trajectory': '从不知情到看清真相',
-            'trajectory_evidence': _locator(2),
-        }],
-    })
-
-    changed = _apply_secret_patches(data, edit, {1, 2})
-
-    assert sorted(data['entities']['characters']) == ['char_001', 'char_002']
-    assert data['entities']['relations'][0]['subject_id'] == 'char_002'
-    assert data['canon']['secrets'][0]['knowledge_events'][0]['subject'] == {
-        'kind': 'character', 'char_id': 'char_002'}
-    assert [row['subject'] for row in data['arc']['arc_tracks']] == [
-        'char_002', 'rel_01', 'reader']
-    assert changed == [
-        'secret_01.knowledge_events', 'entities.characters',
-        'entities.relations', 'arc.arc_tracks',
-    ]
-
-
-@pytest.mark.parametrize('competing_surface', [
-    {'characters': [{'char_id': 'char_001', 'name_distinctiveness': 'medium'}]},
-    {'addresses': [{
-        'char_id': 'char_001', 'address_index': 0, 'context': 'reference'}]},
-    {'addresses_replace': [{
-        'char_id': 'char_001',
-        'address': [{
-            'surface': '掌柜', 'by': 'public', 'context': 'address',
-            'from_chapter': 1,
-        }],
-    }]},
+@pytest.mark.parametrize('key,subject', [
+    ('secrets_replace', 'secrets'),
+    ('world_rules_replace', 'world_rules'),
 ])
-def test_characters_replace_is_exclusive_with_all_character_patch_surfaces(
-    competing_surface,
-):
-    with pytest.raises(
-        ValidationError, match='entities.characters cannot be patched and completely replaced',
-    ):
-        GlobalEdit.model_validate({
-            'characters_replace': {'char_001': _character_response()},
-            **competing_surface,
-        })
-
-
-def test_characters_replace_rejects_every_dangling_consumer_before_mutation():
+def test_an_explicit_empty_complete_set_deletes_the_subject(key, subject):
     data = _grounding()
-    data['entities']['relations'] = [{
-        'relation_id': 'rel_01', 'subject_id': 'char_001',
-        'predicate': '自雇', 'object_id': 'char_001',
-        'predicate_evidence': _formal_evidence(),
-        'visibility': {'kind': 'public', 'from_chapter': 1},
-        'valid_from_chapter': 1, 'valid_through_chapter': None,
-    }]
-    data['arc']['arc_tracks'] = [{
-        'subject': 'char_001', 'dimension': '处境',
-        'change_type': 'development', 'trajectory': '从犹疑到坚定',
-        'trajectory_evidence': _formal_evidence(),
-    }]
-    before = repr(data)
-    edit = GlobalEdit.model_validate({
-        'characters_replace': {
-            'char_002': _character_response('顾兰', by='char_001'),
-        },
-    })
-
-    with pytest.raises(TerminalState, match='无效引用/章号') as exc:
-        _apply_secret_patches(data, edit, {1, 2})
-
-    message = str(exc.value)
-    for fragment in (
-        'rel_01.subject_id', 'rel_01.object_id',
-        'secret_01.knowledge_events.char_id', 'char_002.address.0.by',
-        'arc.arc_tracks.0.subject',
-    ):
-        assert fragment in message
-    assert repr(data) == before
-
-
-def test_characters_replace_validates_new_address_and_evidence_chapters():
-    data = _grounding()
-    before = repr(data)
-    edit = GlobalEdit.model_validate({
-        'characters_replace': {'char_001': _character_response(chapter=9)},
-    })
-
-    with pytest.raises(TerminalState, match='章号') as exc:
-        _apply_secret_patches(data, edit, {1, 2})
-
-    assert 'char_001.address.0.from_chapter' in str(exc.value)
-    assert 'entities.characters.char_001.role.role_evidence.chapter_ordinal' in str(exc.value)
-    assert repr(data) == before
-
-
-@pytest.mark.parametrize('key,subject,empty,expected', [
-    ('secrets_replace', 'secrets', [], []),
-    ('world_rules_replace', 'world_rules', [], []),
-    ('characters_replace', 'characters', {}, {}),
-])
-def test_an_explicit_empty_complete_set_deletes_the_subject(
-    key, subject, empty, expected,
-):
-    data = _grounding()
-    if key == 'characters_replace':
-        data['canon']['secrets'][0]['knowledge_events'][0]['subject'] = {
-            'kind': 'group', 'label': '账房众人'}
-    edit = GlobalEdit.model_validate({key: empty})
+    edit = GlobalEdit.model_validate({key: []})
 
     _apply_secret_patches(data, edit, {1, 2})
 
-    owner = data['entities'] if key == 'characters_replace' else data['canon']
-    assert owner[subject] == expected
-
-
-def test_existing_global_edit_v2_without_characters_replace_remains_readable():
-    current = encode_artifact('stage2/global_edit.json', {
-        'characters': [{
-            'char_id': 'char_001', 'name_distinctiveness': 'medium',
-        }],
-    })
-
-    decoded = decode_artifact('stage2/global_edit.json', current)
-    edit = GlobalEdit.model_validate(decoded.payload)
-
-    assert current['_schema_version'] == 2
-    assert edit.characters_replace is None
+    assert data['canon'][subject] == []
 
 
 def test_old_global_edit_v1_is_closed_off_after_the_v2_shape_break():

@@ -226,8 +226,8 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 ## 三之二、`global_edit.json`（Stage2 typed 事实的 0 成本人工订正）
 
 全局 typed 事实抽错、漏抽或 evidence 回取失败时的**契约内 0 LLM 修正入口**。它覆盖
-人物 registry/role/fate/枚举、relation、setting、secret、world rule、arc track 与 address；
-逐格 patch 用稳定 ID/下标改已有记录，完整 replace 则表达新增人物、删除或复合事实拆分。
+人物 role/fate/枚举、relation、setting、secret、world rule、arc track 与 address；
+逐格 patch 用稳定 ID/下标改已有记录，完整 replace 则表达新增、删除或复合事实拆分。
 所有会改自由 claim 的入口必须同交新 locator，不能让旧 evidence 继续给新 claim 背书。
 
 | 键 | 类型 | 语义 |
@@ -241,18 +241,14 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 | `addresses` | `AddressContextPatch[]` | 按 `char_id + address_index` 改已有项的 `context` |
 | `secrets_replace` | `SecretResponse[] \| null` | 完整替换 secrets；可拆分、新增、删除，事实与知情事件交 locator |
 | `world_rules_replace` | `WorldRuleResponse[] \| null` | 完整替换 world rules；可新增、删除，desc 交 locator |
-| `characters_replace` | `dict[str, CharacterResponse] \| null` | 按 `char_id` 完整替换人物 registry；可新增/删除人物，role/fate 交 locator，`address.by` 可原子引用同轮新人物 |
 | `relations_replace` | `RelationResponse[] \| null` | 完整替换 relations；ID 唯一，predicate 交 locator |
 | `arc_tracks_replace` | `ArcTrackResponse[] \| null` | 完整替换 arc tracks；至少一项，trajectory 交 locator |
 | `addresses_replace` | `CharacterAddressReplacement[]` | 每项按 `char_id` 完整替换其 `address`；列表至少一条，可改 `surface/by/context/from_chapter` |
 
-集合 replacement 的 `null` 表示「没动」，允许为空的列表/映射用显式 `[]` / `{}` 表示
-「经复核删除全集」；两者不能合成默认空集合。`arc_tracks_replace` 与
-`addresses_replace[].address` 不允许空，因为正式
+集合 replacement 的 `null` 表示「没动」，允许为空的集合用显式 `[]` 表示「经复核删除全集」；
+两者不能合成默认空列表。`arc_tracks_replace` 与 `addresses_replace[].address` 不允许空，因为正式
 `Arc.arc_tracks` / `Character.address` 至少一项。相同集合不能同时 patch+replace；相同 address
-不能既按下标 patch 又整组 replace。`characters_replace` 与 `characters` / `addresses` /
-`addresses_replace` 三路人物 patch 面互斥，但可与 relation/secret/arc replacement 同轮提交，
-因此这些结构能原子引用本轮新增的 `char_id`。
+不能既按下标 patch 又整组 replace。
 
 所有载体/目标/外键/章号/窗口拒收都发生在调用者对象修改、正式写盘、`.INVALID` 与
 `_rounds/` 归档**之前**：实现先在深拷贝候选上应用全部 patch/replace，再对**应用后的完整图**
@@ -264,11 +260,10 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 | 未知字段 / 空编辑 / 重复 ID 或 subject | 载体（`GlobalEdit`） | 顺序不能决定哪份人工决定生效 |
 | 同一 secret/world-rule/relation/arc-track 集合既逐项 patch 又完整 replace | 载体（`GlobalEdit`） | 两个写口争同一 subject，结果依赖应用顺序 |
 | 同一人物的 address 既按下标 patch 又完整 replace | 载体（`GlobalEdit`） | replacement 会改变下标含义，必须二选一 |
-| 人物全集 replacement 与任一人物/address patch 面同轮出现 | 载体（`GlobalEdit`） | 人物增删会让旧目标与 address 下标失去同一含义，必须二选一 |
-| 逐项 patch 的目标不存在；`addresses_replace` 的人物目标不存在 | `TerminalState` | 错的是决策集，不该给它建 `.INVALID` |
+| 逐项 patch 的目标不存在；replacement 的人物目标不存在 | `TerminalState` | 错的是决策集，不该给它建 `.INVALID` |
 | claim 改了却没同交 locator，或 evidence 被单独清空 | 载体（各 typed patch） | 旧证据不能继续绑定新事实，失败态也必须是显式 `FactEvidence` |
 | 应用后任一窗口/知情/reveal/setup/规则/address/evidence 章号不在本书章集合，或 relation 截止早于起章 | `TerminalState` | 越界/倒序时间会让下发闸门失真，越界证据无法回取 |
-| relation 端点、via-secret、KnowledgeEvent CharacterRef、`address.by` 或 arc-track subject 的外键悬空 | `TerminalState` | arc subject 只接受 registry 人物、`reader` 或现存 relation；自由群体必须走 GroupRef，不能靠伪造 `char_id` 绕过 |
+| relation 端点、via-secret、KnowledgeEvent CharacterRef 或 `address.by` 的外键悬空 | `TerminalState` | 自由群体必须走 GroupRef，不能靠伪造 `char_id` 绕过 |
 | 应用后仍有 HARD | `.INVALID` + `GateBlocked` | 与生成路同一道闸；正式全书底座不被覆盖 |
 
 应用后重走 `normalize_global`（含 `_prune_setups`）、当前判据与落盘闸门，旧轮进 `_rounds/`。
@@ -277,27 +272,12 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 **混版的**，未编辑字段出自当初那次付费产出，被替换/订正的 typed facts 是人给的。
 
 成功落盘会从新 `GlobalGrounding` 重新枚举 `global_review` 必审 surface。人工决定只在
-`item_id + kind + subject_path + subject_sha256` 四者均未变时继承；拆分 secret、新增规则/人物或
-重建 address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS/旧人物集合上的 FAIL
-不能跟随到新事实集合。
+`item_id + kind + subject_path + subject_sha256` 四者均未变时继承；拆分 secret、新增规则或重建
+address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不能跟随到新时间线。
 
 `global_edit.json` 当前为 schema v2。它内嵌的 secret/world-rule/character 形状已增加时点与
 locator，属于破坏性变更；本仓没有迁移器。旧 v1 决策集必须由人按当前正文核对后重写，代码不能
 从无时间的 `character_known_by` 推出知情起章，也不能从一段自由 claim 猜一处唯一原文证据。
-`characters_replace` 是 v2 的可选新增写口：旧 v2 信封缺键时明确读成 `null`，因此不升版；它
-不改变任何既有字段的解释，也不把旧 v1 重新放行。
-
-`character_set_complete.subject_sha256` 只绑定 `global_review` 决定的继承身份，**不是编辑时的
-compare-and-swap 前置条件**。现役其他完整 replacement 同样没有集合级乐观锁，因此本字段不单独
-发明一套人物专属 hash 语义；若未来要防“人工按旧集合写 replacement、期间底座又变化”的并发覆盖，
-应给所有 complete replacement 统一增加 precondition，而不是只让人物集合行为不同。
-
-⚠ **不要直接制造一份新的 `global_grounding.INVALID.json` 来补人物。** `.INVALID` 是正式载体
-过当前闸门失败后的可读候选，不是宽松编辑输入；手造它必须同时伪造正式 `SourceSpan`、provenance
-与归一账，还绕开本节的 patch/replace 互斥和完整图原子校验。正确入口是给
-`characters_replace` 交 locator，让 `run_apply_edit` 在内存候选上统一回取证据、校验引用后，
-再按结果决定正式落盘或生成真实 `.INVALID`。已有 live `.INVALID` 仍可作为修复底稿被该入口读取，
-这与“凭空造 `.INVALID`”不是一回事。
 
 ⚠ 把揭示章往前改到埋点章之前时，`_prune_setups` 会裁掉埋点章，而 `secret_setup_order`
 （HARD）断言的正是那个裁剪计数 ⇒ **照样进 `.INVALID`**，0 成本出路是 `--renormalize`。
