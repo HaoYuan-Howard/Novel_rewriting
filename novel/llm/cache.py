@@ -104,16 +104,32 @@ class CachePolicy:
 # 盘上那份
 # ─────────────────────────────────────────────────────────────────────────────
 
+def request_fingerprint(req: ChatRequest) -> str:
+    """一次实际请求的**完整 SHA-256**；与缓存键共用同一份规范化载荷。
+
+    这不是缓存文件名：来源账与 ledger 要能保存完整请求身份，不能把历史上为缩短
+    文件名而截断的 32 字符键冒充 SHA-256。规范化只能有这一处；否则缓存说请求 A、
+    provenance 说请求 B，二者都长得合法且不会自行报错。
+    """
+    blob = json.dumps(req.cache_payload(), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(blob.encode('utf-8')).hexdigest()
+
+
 def cache_key(req: ChatRequest) -> str:
-    """一次调用的缓存键。**阶梯的每一档各自成键**（`reasoning_effort` 进键）——
-    不然降级到第二档时会读回第一档那个空壳，「重试」变成把同一个结果读两遍。
+    """一次调用的 32 字符**缓存定位键**。盘上兼容形状不得迁移。
+
+    **阶梯的每一档各自成键**（`reasoning_effort` 进键）——不然降级到第二档时
+    会读回第一档那个空壳，「重试」变成把同一个结果读两遍。
 
     边界裁决（TODO-08）：键只含真正影响响应的请求载荷，不含 git/worktree 身份。
     system/user 都在 ``cache_payload``，所以 prompt 改动必定 miss；无关文档或测试改动
     只改变 provenance 审计身份，不击穿全部响应缓存。
+
+    ⚠ 现存 `.llm_cache/<32-hex>.json` 是可复用的已付费响应，不能为补全来源账而
+    整批失效或迁移。完整身份由 ``request_fingerprint`` 保存；本函数只取同一摘要
+    的前 32 字符，因此修复前后的缓存路径逐字相同。
     """
-    blob = json.dumps(req.cache_payload(), ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(blob.encode('utf-8')).hexdigest()[:32]
+    return request_fingerprint(req)[:32]
 
 
 @dataclass

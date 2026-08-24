@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from novel.core.facts import first_reveal_chapter, relation_visibility_gates
 from novel.errors import RefusedByStructure
 
 
@@ -44,23 +45,26 @@ def catalog(
         for bid in unit
     }
     entities = global_g.get('entities') or {}
+    canon = global_g.get('canon') or {}
     characters = sorted((entities.get('characters') or {}).keys())
+    gates = relation_visibility_gates(entities, canon.get('secrets') or [])
     relations = {
         row.get('relation_id'): {
-            'from': row.get('valid_from_chapter'), 'to': row.get('valid_to_chapter')}
+            'from': gates.get(row.get('relation_id')),
+            'to': row.get('valid_through_chapter')}
         for row in (entities.get('relations') or []) if row.get('relation_id')
     }
-    canon = global_g.get('canon') or {}
     rules = {
         row.get('rule_id'): sorted(
             int(version.get('effective_from_chapter') or 0)
             for version in (row.get('versions') or []))
         for row in (canon.get('world_rules') or []) if row.get('rule_id')
     }
+    # ⚠ 取**首次**揭示章，与 `context.py` 的下发闸门同一个函数。用 `min(全部事件)`
+    #   会在分两次揭示的 secret 上给出同一个数（载体不许有事件早于 first），
+    #   但两处一旦各写一份式子，下一次改判向就会漏掉其中一处。
     secrets = {
-        row.get('secret_id'): min(
-            (int(event.get('chapter') or 0)
-             for event in (row.get('reader_reveal_events') or [])), default=None)
+        row.get('secret_id'): first_reveal_chapter(row)
         for row in (canon.get('secrets') or []) if row.get('secret_id')
     }
     return {
@@ -116,7 +120,7 @@ def validate_plan_refs(plan: dict[str, Any], refs: dict[str, Any]) -> None:
                     window = refs['relations'].get(key)
                     if not window:
                         errors.append(f'{prefix}: unknown relation')
-                    elif ((window.get('from') or 1) > ordinal
+                    elif (window.get('from') is None or window['from'] > ordinal
                           or (window.get('to') is not None and ordinal > window['to'])):
                         errors.append(f'{prefix}: relation is outside its validity window')
                 elif kind == 'setting':

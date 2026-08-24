@@ -53,8 +53,8 @@ def _corpus_case(book: str | None, *, label: str, reason: str) -> list:
 def _drafts_of(book: str) -> tuple[str, ...]:
     return tuple(sorted(
         a.rel for a in corpus.iter_artifacts()
-        if a.book_dir == book and a.rel.startswith('stage5/')
-        and '_rounds' not in a.rel and a.rel.endswith('.json')))
+        if a.book_dir == book and a.pattern == 'stage5/ch{nn}.json'
+        and '_rounds/' not in a.rel))
 
 
 def _stage4_book() -> str | None:
@@ -82,11 +82,6 @@ def box4(request):
     s.close()
 
 
-#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
-#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
-_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
-
-
 def _stage6_book() -> str | None:
     """⚠ 取**成稿链条相对上游是当前**的那一本，不是排序第一的那一本。
 
@@ -96,8 +91,11 @@ def _stage6_book() -> str | None:
     """
     books = sorted({a.book_dir for a in corpus.iter_artifacts()
                     if a.rel == 'stage6/hook.json'})
-    return (corpus.first_current_book(books, *_DRAFT_ARMS)
-            or (books[0] if books else None))
+    for book in books:
+        rels = _drafts_of(book)
+        if rels and corpus.is_current(book, *rels):
+            return book
+    return books[0] if books else None
 
 
 @pytest.fixture(params=_corpus_case(
@@ -107,8 +105,8 @@ def _stage6_book() -> str | None:
 ))
 def box6(request):
     book = request.param
-    corpus.requires_current(book, *_DRAFT_ARMS,
-                            produced_by='stage5.write --mode deep', cost='付费')
+    corpus.requires_current(book, *_drafts_of(book),
+                            produced_by='stage5.write', cost='付费')
     s = sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
     yield s
     s.close()

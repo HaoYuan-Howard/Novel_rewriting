@@ -35,7 +35,7 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import BinaryIO
 
-from contracts.invariants import NODES
+from contracts.invariants import LEGACY_STAGE5_MODES
 from contracts.schema.orchestration import (
     JobEvent, JobRecord, JobStart, ProgressEvent, Step,
 )
@@ -63,7 +63,7 @@ class JobConflict(TerminalState):
 # 一、互斥（`R-11.10`）
 # ─────────────────────────────────────────────────────────────────────────────
 
-def active_key(sid: str | None, node: str, mode: str | None = None) -> str:
+def active_key(sid: str | None, node: str) -> str:
     """一本书在互斥表里的键。**必须只有这一个落点。**
 
     ⚠⚠ **这条纪律是拿一个真 bug 换来的。** 原型 `start` 写进去的是
@@ -77,14 +77,11 @@ def active_key(sid: str | None, node: str, mode: str | None = None) -> str:
     摄入是 0 成本且很快，而两个并发的摄入可能推导出同一个目录名、互相覆盖
     ——**串行比并发安全**。
 
-    ⚠ **例外是「同一个节点的两个 mode 值」，不是「两个 kind」**：
-    写作两条臂只差 (system prompt, 给不给源章原文)，产物形状逐字节相同，
-    判据表只有一张 ⇒ 它们是一个节点的参数。原型给了它们两个 kind，
-    于是不得不在互斥表里为这两个名字开一条特例分支——**特例是命名错误的下游症状**。
+    Stage5 v2 不再有并发写作臂；所有作业均以书为互斥单元。
+    旧 JSONL 的臂字段只在 ``_decode_event`` 中被消化，不进入锁接口。
     """
     key = sid or '_global'
-    has_arms = bool(NODES[node].modes) if node in NODES else False
-    return f'{key}:{node}:{mode}' if has_arms and mode is not None else key
+    return key
 
 
 class JobRegistry:
@@ -112,7 +109,7 @@ class JobRegistry:
                 _active, cur = conflict
                 raise JobConflict(
                     f'这本书已有作业在跑（{cur}）——等它结束，或换一本。'
-                    f'⚠ 唯一的例外是写作的两条臂（deep/shallow）可以并发')
+                    '同一本书的产物变更必须串行')
             self._active[key] = job_id
 
     def release(self, key: str, job_id: str) -> None:
@@ -257,12 +254,73 @@ def read_events(base: str | os.PathLike[str]) -> list[JobEvent]:
         if not line:
             continue
         try:
-            out.append(JobEvent.model_validate(json.loads(line)))
+            out.append(_decode_event(json.loads(line)))
         except Exception:                       # noqa: BLE001
             if i == len(raw) - 1:
                 break                           # 被 kill 截在半路，允许
             raise
     return out
+
+
+def _decode_event(payload: object) -> JobEvent:
+    """把 append-only v1 记录投影成现役公共模型。
+
+    ``mode`` 不是 ``JobStart`` 的字段；只有磁盘上旧
+    ``stage5.write`` 的 deep/shallow 值可在这一个私有入口被剥离。
+    新值、其他节点或其他层级出现该键仍关闭式拒读。
+    投影后 API/OpenAPI 无 mode，作业记录本身也没有重放入口。
+    """
+    if not isinstance(payload, dict):
+        return JobEvent.model_validate(payload)
+    data = dict(payload)
+    start = data.get('start')
+    if isinstance(start, dict) and 'mode' in start:
+        projected = dict(start)
+        legacy_mode = projected.pop('mode')
+        if legacy_mode is not None and not (
+            projected.get('node') == 'stage5.write'
+            and legacy_mode in LEGACY_STAGE5_MODES
+        ):
+            raise ValueError(
+                'jobs.jsonl 的 mode 只允许旧 stage5.write deep/shallow')
+        if _has_retired_stage5_selector(projected, legacy_mode):
+            projected = _redact_retired_stage5_start(projected)
+        data['start'] = projected
+    elif isinstance(start, dict) and _has_retired_stage5_selector(start, None):
+        data['start'] = _redact_retired_stage5_start(start)
+    return JobEvent.model_validate(data)
+
+
+def _has_retired_stage5_selector(start: dict, legacy_mode: object) -> bool:
+    if start.get('node') != 'stage5.write':
+        return False
+    tokens = list(start.get('flags') or [])
+    for step in start.get('steps') or []:
+        if isinstance(step, dict):
+            tokens.extend(step.get('argv') or [])
+    return legacy_mode in LEGACY_STAGE5_MODES or bool(
+        {'--mode', '--deep', '--shallow-rest'} & set(tokens))
+
+
+def _redact_retired_stage5_start(start: dict) -> dict:
+    """精确命令留在 append-only 原记录；公共投影不发布已退役入口。"""
+    projected = dict(start)
+    projected['flags'] = []
+    steps: list[object] = []
+    for raw_step in projected.get('steps') or []:
+        if not isinstance(raw_step, dict):
+            steps.append(raw_step)
+            continue
+        step = dict(raw_step)
+        step['argv'] = ['legacy_incompatible']
+        step['label'] = '旧 Stage5 作业（命令已退役）'
+        step['writes'] = (
+            '旧 Stage5 产物（只读历史证据）'
+            if step.get('writes') else '')
+        step['note'] = '原命令仅保留在 append-only 原记录，公共面不可重放'
+        steps.append(step)
+    projected['steps'] = steps
+    return projected
 
 
 def fold(events: Iterable[JobEvent], *, live: set[str] | None = None) -> list[JobRecord]:
@@ -428,7 +486,7 @@ def new_job_id(now: float | None = None) -> str:
 
 
 def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
-               base: str | os.PathLike[str], mode: str | None = None,
+               base: str | os.PathLike[str],
                follow_check: bool = True,
                placeholders: bool = False,
                steps: Sequence[Step] | None = None) -> JobStart:
@@ -444,10 +502,10 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
     它等于逐步折出来的——两处一致才构造得出来（`R-11.7`：贵贱只有一处算）。
     """
     plan = list(steps) if steps is not None else build_steps(
-        node, sid, flags, base=base, mode=mode, follow_check=follow_check,
+        node, sid, flags, base=base, follow_check=follow_check,
         placeholders=placeholders)
     return JobStart(
-        sid=sid, node=node, mode=mode, flags=list(flags), steps=plan,
+        sid=sid, node=node, flags=list(flags), steps=plan,
         python=sys.version, code=code_version(),
         paid=any(s.paid for s in plan),
         writes=any(bool(s.writes) for s in plan))
@@ -491,7 +549,7 @@ def _append_progress(base: str | os.PathLike[str], sid: str | None, node: str,
 
 
 def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequence[str] = (), *,
-        mode: str | None = None, follow_check: bool = True,
+        follow_check: bool = True,
         spawn: Spawn = default_spawn, registry: JobRegistry = REGISTRY,
         steps: Sequence[Step] | None = None,
         job_id: str | None = None) -> JobRecord:
@@ -506,8 +564,9 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
     """
     _refuse_if_agent_running(sid)
     plan = list(steps) if steps is not None else build_steps(
-        node, sid, flags, base=base, mode=mode, follow_check=follow_check)
-    key = active_key(sid, node, mode)
+        node, sid, flags, base=base, follow_check=follow_check)
+    start_meta = plan_start(node, sid, flags, base=base, steps=plan)
+    key = active_key(sid, node)
     job_id = job_id or new_job_id()
     if any(event.job_id == job_id for event in read_events(base)):
         raise JobConflict(f'job_id={job_id!r} already exists')
@@ -515,7 +574,7 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
     try:
         start_event = JobEvent(
             job_id=job_id, kind='started', ts=int(time.time()),
-            start=plan_start(node, sid, flags, base=base, mode=mode, steps=plan))
+            start=start_meta)
         append_event(base, start_event)
         _append_progress(base, sid, node, 'start')
         try:
@@ -556,7 +615,6 @@ def start(
     sid: str | None,
     flags: Sequence[str] = (),
     *,
-    mode: str | None = None,
     follow_check: bool = True,
     spawn: Spawn = default_spawn,
     registry: JobRegistry = REGISTRY,
@@ -571,8 +629,9 @@ def start(
                 _THREADS.pop(finished_id, None)
     _refuse_if_agent_running(sid)
     plan = list(steps) if steps is not None else build_steps(
-        node, sid, flags, base=base, mode=mode, follow_check=follow_check)
-    key = active_key(sid, node, mode)
+        node, sid, flags, base=base, follow_check=follow_check)
+    start_meta = plan_start(node, sid, flags, base=base, steps=plan)
+    key = active_key(sid, node)
     job_id = job_id or new_job_id()
     if any(event.job_id == job_id for event in read_events(base)):
         raise JobConflict(f'job_id={job_id!r} already exists')
@@ -582,7 +641,7 @@ def start(
             prepare()
         start_event = JobEvent(
             job_id=job_id, kind='started', ts=int(time.time()),
-            start=plan_start(node, sid, flags, base=base, mode=mode, steps=plan))
+            start=start_meta)
         append_event(base, start_event)
         _append_progress(base, sid, node, 'start')
     except Exception:

@@ -26,7 +26,8 @@ from typing import Any
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, CHANGE_TYPES_ENUM, HINGE_KINDS, NAME_DISTINCTIVENESS,
-    NARRATIVE_PERSON, PLACE_MODES, RESPONSE_TIME_LAYERS, TIME_LAYERS, WORLD_RULE_KINDS,
+    KNOWLEDGE_SUBJECT_KINDS, NARRATIVE_PERSON, PLACE_MODES,
+    RELATION_VISIBILITY_KINDS, RESPONSE_TIME_LAYERS, TIME_LAYERS, WORLD_RULE_KINDS,
 )
 from novel.llm.prompts import fill
 
@@ -44,7 +45,7 @@ RULES_V2 = """\
 全局硬约定：
 - 一切对「章」的引用一律用【阅读序章号】（chapter_ordinal，整数，即"正文第几章"）作键；原文章号不可信（既缺章也重复章），仅作参考，禁止用作键或排序。
 - 关系(relations)一律【有向】：{subject_id, predicate, object_id}，禁用无向键。
-- 秘密(secrets)区分「世界内哪些角色知情 character_known_by」与「【读者】何时被揭示 reader_reveal_events」；这两者常常不同步（读者已经知道、书里的人还蒙在鼓里）。只描述原文在第几章向读者揭示，不附加「不得提前泄露」之类约束。
+- 秘密(secrets)区分「世界内哪个人物/群体从哪章起知情 knowledge_events」与「【读者】何时被揭示 reader_reveal_events」；这两者常常不同步（读者已经知道、书里的人还蒙在鼓里）。只描述原文事实与时点，不附加「不得提前泄露」之类约束。
 - world_rules 带类型 kind；规则正文一律写在 versions[] 里（每版 {effective_from_chapter(阅读序章号), desc}，至少一条）。宅斗社会规则（贞洁/宗法/舆论）属 social_norm。
 只输出 JSON，不要额外解释文字。"""
 
@@ -101,11 +102,12 @@ _GLOBAL_TPL = """\
 ────────── ① entities（实体与有向关系） ──────────
 characters：char_id 用 char_001…顺序编号，主角优先 char_001。
 每个角色给：canonical(这个人的唯一显示名)、address[](谁在什么时候怎么称呼他)、
-name_distinctiveness ∈ $NAME_DISTINCT、role(静态身份)、fate(经历与结局)。
+name_distinctiveness ∈ $NAME_DISTINCT、role(静态身份)+role_evidence、
+fate(经历与结局|null)+fate_evidence（fate 为 null 时 evidence 也必须为 null）。
 · 【收录判据·满足任意一条就必须收】不看戏份多少，也不看只出现几章：
   ① 原文给了名字或固定称呼的人。**固定称呼包括称谓型指称**——「圣上」「府医」「嬷嬷」「车夫」
      「赵夫人」「静和公主」和「柳公子」「孙大娘」是同一类，都要收。**没有本名不是不收的理由。**
-  ② 会被本产物其它部分引用的人——relations 的两端、secrets 的 character_known_by、arc 里提到的人；
+  ② 会被本产物其它部分引用的人——relations 的两端、secrets 的 knowledge_events、arc 里提到的人；
   ③ 执行了推动情节的具体动作的人——施刑的府医、下毒的祖母、撞破奸情的宾客，哪怕只出场一次；
   ④ 对主线因果/主角动机重要的【幕后 / 前史 / 已故】人物——已死的生母、幕后打压者、赐婚的先帝。
 · 【不收】原文既没给名字、也没给固定称呼的纯背景人物。**更不要替他们发明称呼**——
@@ -129,7 +131,7 @@ name_distinctiveness ∈ $NAME_DISTINCT、role(静态身份)、fate(经历与结
     · 【这么叫他的是一个无名群体时，一律写 `public`】府里的下人、在场的士兵、街坊、满堂宾客——
       **不要写群体名（✗`"苏府下人"` ✗`"怡红院下人"`），也不要给群体编一个 char_id**。
       `public` 这个口子本来就是为「众人、旁人」留的，它同样覆盖「有个说法的无名群体」。
-      （这与 secrets.character_known_by 不同：那边要的是【谁知情】，群体本身就是答案，
+      （这与 secrets.knowledge_events 不同：那边要的是【谁从何时起知情】，群体本身就是答案，
        所以那边照原文的说法写；这边要的是【谁在称呼】，而下游拿它做的是**派发**——
        一个解析不出人的群体串在那儿只是个注解。）
   · `context`：$CONTEXTS 二选一（`address`=当面称呼，`reference`=背后提及）。同一个人当面和背后常常不是一个说法。
@@ -137,7 +139,7 @@ name_distinctiveness ∈ $NAME_DISTINCT、role(静态身份)、fate(经历与结
     叫法是随关系长出来的——「阿杳」这种亲近的叫法要到两人关系变了才会有。
     填早了，第 3 章就会写出第 20 章才该有的称呼。
     （叫法【什么时候不再用】不在这里记：一个叫法停止使用，起因是关系变了，
-     那件事记在 relations 的 valid_to_chapter 上，同一件事不记两遍。）
+     那件事记在 relations 的 valid_through_chapter 上，同一件事不记两遍。）
   · 头衔与称谓（「长公主」「贵妃娘娘」「府医」）也走这里，不要另立字段——它们本来就是别人怎么称呼他。
   · 【surface 里一个代词都不许出现】$PRONOUNS 这几个字，**连在别的字上也不行**。
     ✗「我妈」「我娘」「我爹」「我舅」「我夫君」「秀兰她爹」 ✓「妈」「娘」「爹」「舅舅」「夫君」「秀兰爹」
@@ -150,16 +152,30 @@ name_distinctiveness ∈ $NAME_DISTINCT、role(静态身份)、fate(经历与结
   搜不到就两种情况：要么改回原文的写法，要么这个"人"本来就是你造出来的、根本不该收。
 · 【role 与 fate 分开写，这两件事不许混在一起】
 $ROLE_FATE
+· 【七类自由事实必须同交原文定位】role/fate、relation predicate、setting 两格、
+  world-rule desc、secret fact、knowledge event、arc trajectory 都各带自己的 evidence：
+  `{"chapter_ordinal":阅读序章号,"locator":"指定章内原样出现的短片段"}`。
+  · locator 必须是指定章正文里的【原样字节】，不是转述；取能支撑该事实的最短片段，并补足到
+    在该章里只出现一次。不要抄长段落，也不要把 `source/start/end` 交回来——正式 SourceSpan
+    由代码在这一章内唯一回取；零命中或多命中会进入可修复的定位失败态。
+  · setting 的两格分别叫 `era_evidence` / `worldview_evidence`；world-rule 每个
+    `versions[]` 的 `desc` 各有 `desc_evidence`；secret 的事实叫 `fact_evidence`；
+    knowledge_events 每条各有 `evidence`；arc_tracks 每条各有 `trajectory_evidence`。
 · 【姓名档位】完整专名(≥2 字姓+名)判 high；单字名/较通用称谓判 medium；纯亲属词或多实体共享词判 common。
-relations：全书稳定的【有向】关系 {relation_id, subject_id, predicate, object_id, valid_from_chapter(阅读序章号), valid_to_chapter(阅读序章号|null)}。
-  · valid_to_chapter 是关系的【失效点】（和离、亡故、决裂）——写到结局的章节要靠它才知道该用「前夫」还是「夫君」，据实填，没失效填 null。
+relations：人物间的【有向】关系 {relation_id, subject_id, predicate, predicate_evidence,
+  object_id, visibility, valid_from_chapter(阅读序章号), valid_through_chapter(阅读序章号|null)}。
+  · visibility 写【读者】何时能知道这条关系，二选一：
+    `{"kind":"public","from_chapter":阅读序章号}` = 从该章起对读者明牌；
+    `{"kind":"via_secret","secret_id":"secret_01"}` = 它随指定 secret 的首次揭示开放。
+    必须引用本次 secrets[] 里真实存在的 secret_id；不要用 valid_from_chapter 猜读者知情时点。
+  · valid_through_chapter 是关系【最后仍成立的章，含该章】（和离、亡故、决裂后不再成立）——写到结局的章节要靠它才知道该用「前夫」还是「夫君」，据实填，至全书末仍成立填 null。
   · subject_id 与 object_id 【都必须是上面 characters 里的 char_id】（角色↔角色）；地点/机构/物品【不入 relations】（它们只写进相关角色的 role 里，如「怡红院主理人」）。禁止 object_id 为 null 或地点名。
 
 ────────── ② canon（世界与秘密） ──────────
-setting：{时代背景, 世界观}（时代背景是故事事实）。
+setting：{时代背景, era_evidence, 世界观, worldview_evidence}（时代背景是故事事实）。
 world_rules[]：{rule_id, kind($RULE_KINDS),
   versions[]}。
-  · `versions` 是这条规则的【唯一正文落点】，每条 {effective_from_chapter(阅读序章号), desc}，**至少给一条**。
+  · `versions` 是这条规则的【唯一正文落点】，每条 {effective_from_chapter(阅读序章号), desc, desc_evidence}，**至少给一条**。
     规则中途改版就按生效先后多给几条；从头到尾没变过也要给一条，effective_from_chapter 填 1。
   · 【判据·只收结构性规则】只收「改动它会改变【故事世界设定 / 能力体系 / 法律后果 / 核心社会约束】」的规则。仅是某个情节处境（谁能使唤谁、某物能被拿来威胁人、某人有钱有势）【不是】世界规则——那是普通事实/事件，由相应章节的内容承载，不进 world_rules。
   · 【desc 里不许出现任何人物的名字】一举例就把「世界的规则」写成了「这本书的情节」，而规则是要发给每一章用的。
@@ -172,11 +188,19 @@ world_rules[]：{rule_id, kind($RULE_KINDS),
        线连错人就是这本书爆料的方式。另有文字弹幕直接显示与姻缘相关的隐秘事实。」
     社会规则/法律规则同理：写清【触发条件与后果】（谁违反了会怎样），不要只写「存在这样的规范」。
   （只描述「世界里存在这条规则、它如何运作」，不判定改写是否可违反。）
-secrets[]：{secret_id(secret_01…), fact, character_known_by[](世界内谁知情：有名有姓的写 char_id；
-    知情的是【无名群体】就直接写原文的说法「在场士兵」「府里的下人」——不要为了凑 char_id 而漏记他们，
-    也不要给群体编一个 char_id），
-  setup_chapters[阅读序章号](这件事在第几章被【埋下】),
-  reader_reveal_events[{chapter(阅读序章号)}](原文在第几章向【读者】揭示，描述性；分几次揭示就记几条)}。
+secrets[]：{secret_id(secret_01…), fact, fact_evidence,
+  knowledge_events[](世界内谁从哪一章起知情)：每条
+    {subject, known_from_chapter(阅读序章号), evidence}；subject 是判别联合，二选一：
+    `{"kind":"character","char_id":"char_001"}` = 上面 characters 里的具名人物；
+    `{"kind":"group","label":"在场士兵"}` = 原文里的无名群体。不要为了凑 char_id
+    漏记「府里的下人」这类群体，也不要给群体编 char_id。known_from_chapter 是该主体在
+    【世界内】开始知情的时点，不是读者揭示章；同一主体只列一次，填最早知情章。
+  group_id(可空，sgrp_01…：一个复合真相被拆成多条时，用同一个 group_id 归组；独立的秘密写 null),
+  setup(二选一：{"kind":"cold"} = 没有埋点，凭空点破；
+        {"kind":"foreshadowed","chapters":[阅读序章号]} = 这件事在那几章被【埋下】),
+  reader_reveal_events[{chapter(阅读序章号), kind("first"|"confirm")}]
+    (原文在第几章向【读者】揭示，描述性。**恰有一条 kind="first"**——第一次点破的那一章；
+     后面又提到、又加深的写 "confirm"。)}。
   · 【收录判据】某件事【读者或书中角色】是中途才知道的，而它一旦揭示就会改变对前面情节的理解——就是一条 secret。
     最常见的四类：
     ① 真实动机与表面言行不一致（伪装 / 隐忍 / 别有所图）；
@@ -192,25 +216,36 @@ secrets[]：{secret_id(secret_01…), fact, character_known_by[](世界内谁知
     判据：把 fact 念给只读到揭示前一章的读者听，他应当**吃惊**。不吃惊的就不是 secret。
   · 【第一章明牌不是秘密】故事开头直接告诉读者的身份、目标、修炼路线或背景设定，
     不能因为书中其他角色暂时不知道就收进 secrets；那一格差异只写在
-    character_known_by。只有第一章内部确实先按一种意思铺陈、随后又点破另一层真相时，
+    knowledge_events。只有第一章内部确实先按一种意思铺陈、随后又点破另一层真相时，
     reader_reveal_events 才能填 1（章级载体无法把同章前后拆成 setup 章）。
   · 【反向扫“早就知道”】通读每个中后段揭示：凡原文出现“其实 / 原来 / 一直 / 早就 /
     从一开始 / 收徒那天就知道”这类点破，逐条回问它是否改变了前面关系、动机或事件的
     读法；若会，就必须单列 secret，不能因为当事人从开篇就知情而漏掉——secret 关心的
     是读者何时知道，不是世界内这个事实何时成立。
-  · 【先把 secret 收全，再标埋点】setup_chapters 是给已经收下的 secret 补一个时间戳，
+  · 【先把 secret 收全，再标埋点】setup 是给已经收下的 secret 补一个时间戳，
     **不是收录条件**。不要因为一条 secret 不好定埋点章就不收它。
-    · `setup_chapters` = 这件事在第几章被【埋下】：那一章里这个事实已经摆在读者眼前，
+    · `foreshadowed.chapters` = 这件事在第几章被【埋下】：那一章里这个事实已经摆在读者眼前，
       只是当时看起来是别的意思（是意外、是巧合、是别人自愿），要到回收那一章才被点破。
       上面④类那个例子：埋点在第 3 章（打翻茶盏，读来是意外），回收在第 9 章（点破是安排的）。
-    · 【没有埋点就交空数组】有些事是凭空点破的（此前原文完全没有相关画面），那是冷揭示，据实留空，不要硬凑。
-    · setup_chapters 里的每个章号都必须【严格早于】最早的那次揭示。
+    · 【没有埋点就写 {"kind":"cold"}】有些事是凭空点破的（此前原文完全没有相关画面），
+      那是冷揭示，**据实写 cold，不要硬凑埋点章**。cold 是一个正当答案，不是缺省值——
+      不确定的时候也要在两者之间真的选一个，不要因为拿不准就都写 cold。
+    · chapters 里的每个章号都必须【严格早于】那次 kind="first" 的揭示。
       埋点和回收【不可能在同一章】：埋点靠的就是「当时读来是别的意思」，
       而点破发生的那一章里它已经不是别的意思了。**揭示章不是埋点章，不要把它抄进来。**
+  · 【一条 secret 只装一个原子事实】判据：它只有**一个**「读者第一次吃惊」的时刻。
+    如果一件事是分两次揭开的——先点破一半、隔几章再点破另一半（动机、成因、代价）——
+    那是**两条** secret，各写各的 fact 与 first 章，用同一个 group_id 归组。
+    ✗ 一条 secret 写「他私下穿女装；他这么做是因为幼年被羞辱过」而 first 只标前半那一章
+      ——后半段会在前半段揭示的那一章就被下游当作已公开的事实用掉。
+    ✓ 拆成 secret_01（穿女装，first=第 4 章）与 secret_02（成因是幼年那次羞辱，first=第 7 章），
+      两条 group_id 都写 sgrp_01。
+    · 同一条 secret 在后面章节又被提起、被加深、被再次确认，那**不是**新的一条，
+      写成同一条 secret 的 kind="confirm" 事件。
   · 【主角伪装之下的真实动机是最容易漏的一条】它几乎总在中段才对读者揭示，
     但因为「全书都在讲这件事」，很容易被当成背景设定而不记成 secret。判据仍是上面那条：
     念给只读到揭示前一章的读者听，他会不会吃惊。
-  · 【别再用一句话复述知情关系】谁知情写进 character_known_by，读者何时知情写进 reader_reveal_events——
+  · 【别再用一句话复述知情关系】谁从何时起知情写进 knowledge_events，读者何时知情写进 reader_reveal_events——
     这两处已经把它说完了，不要再补一句「读者先于角色得知」之类的散文。
 
 ────────── ③ arc（弧线） ──────────
@@ -219,7 +254,7 @@ conflict_stages[]：{stage(阶段名), chapters[阅读序章号]} —— 故事�
   chapters 必须把本阶段的**每一章逐个显式列全**，不能用 `[3,5]` 省略中间的第 4 章；
   全部阶段合起来必须让 1..末章**每章恰好出现一次**，无缺章、无重章、无越界章。
 climax：高潮。 ending：结局。
-arc_tracks[]：【多轨迹】{subject(char_id|"reader"|relation_id), dimension, change_type($CHANGE_TYPES), trajectory}。
+arc_tracks[]：【多轨迹】{subject(char_id|"reader"|relation_id), dimension, change_type($CHANGE_TYPES), trajectory, trajectory_evidence}。
   能同时表达「主角立场不变(stable) + 读者对主角认知反转(revelation) + 某关系恶化(deterioration)」等并存轨迹，不要默认「主角必须成长」。
   · dimension = 这条轨迹在【哪个维度】上变化，一个短词即可：处境／权力／立场／认知／情感／关系亲疏／道德底线…
   · trajectory = 一句话说清它【从什么变到什么】（「从依附夫家到自立门户」「从被威胁就范到主动纠缠」），
@@ -779,7 +814,7 @@ $ROLE_FATE
 # ---------------------------------------------------------------------------
 #
 # 【为什么在模块级就渲染好】它们没有逐本变化的插值点（书名/章号都在 user 消息里），
-# 所以「模板」与「渲染结果」在本层合成一件事——同 stage5 的 `DEEP_SYS`。
+# 所以「模板」与「渲染结果」在本层合成一件事——同 stage5 的 `WRITE_SYS`。
 # ⚠ 指纹算在**渲染结果**上（`_common.md` §一），所以下面这三个就是指纹的输入。
 
 #: `stage2.global` 默认路径（付费）。
@@ -831,6 +866,12 @@ ROLE_SPLIT_SYS = fill(_ROLE_SPLIT_TPL, ROLE_FATE=ROLE_FATE_RULE)
 #   手抄的那一份会与载体分家，而分家的表现是「模型照着提示产出、载体当场拒收」。
 
 #: `stage2.global` 默认路径的结构提示（原型 `n2_global.py:179`）。
+_EVIDENCE_HINT: dict[str, Any] = {
+    'chapter_ordinal': 1,
+    'locator': '指定章内原样出现且唯一的短片段',
+}
+
+
 GLOBAL_HINT: dict[str, Any] = {
     'entities': {
         'characters': {'char_001': {
@@ -840,24 +881,45 @@ GLOBAL_HINT: dict[str, Any] = {
                          'context': '|'.join(ADDRESS_CONTEXT),
                          'from_chapter': 1}],
             'name_distinctiveness': '|'.join(NAME_DISTINCTIVENESS),
-            'role': 'str', 'fate': 'str|null'}},
-        'relations': [{'relation_id': 'rel_01', 'subject_id': 'char_001', 'predicate': 'str',
-                       'object_id': 'char_002', 'valid_from_chapter': 1,
-                       'valid_to_chapter': None}],
+            'role': 'str', 'role_evidence': _EVIDENCE_HINT,
+            'fate': 'str|null', 'fate_evidence': '_EVIDENCE_HINT|null'}},
+        'relations': [
+            {'relation_id': 'rel_01', 'subject_id': 'char_001', 'predicate': 'str',
+             'predicate_evidence': _EVIDENCE_HINT, 'object_id': 'char_002',
+             'visibility': {'kind': RELATION_VISIBILITY_KINDS[0], 'from_chapter': 1},
+             'valid_from_chapter': 1, 'valid_through_chapter': None},
+            {'relation_id': 'rel_02', 'subject_id': 'char_002', 'predicate': 'str',
+             'predicate_evidence': _EVIDENCE_HINT, 'object_id': 'char_001',
+             'visibility': {'kind': RELATION_VISIBILITY_KINDS[1],
+                            'secret_id': 'secret_01'},
+             'valid_from_chapter': 2, 'valid_through_chapter': 3},
+        ],
     },
     'canon': {
-        'setting': {'时代背景': 'str', '世界观': 'str'},
+        'setting': {'时代背景': 'str', 'era_evidence': _EVIDENCE_HINT,
+                    '世界观': 'str', 'worldview_evidence': _EVIDENCE_HINT},
         'world_rules': [{'rule_id': 'wr_01', 'kind': WORLD_RULE_KINDS[0],
-                         'versions': [{'effective_from_chapter': 1, 'desc': 'str'}]}],
-        'secrets': [{'secret_id': 'secret_01', 'fact': 'str',
-                     'character_known_by': ['char_001'], 'setup_chapters': [1],
-                     'reader_reveal_events': [{'chapter': 2}]}],
+                         'versions': [{'effective_from_chapter': 1, 'desc': 'str',
+                                       'desc_evidence': _EVIDENCE_HINT}]}],
+        'secrets': [{'secret_id': 'secret_01', 'fact': 'str', 'group_id': None,
+                     'fact_evidence': _EVIDENCE_HINT,
+                     'knowledge_events': [
+                         {'subject': {'kind': KNOWLEDGE_SUBJECT_KINDS[0],
+                                      'char_id': 'char_001'},
+                          'known_from_chapter': 1, 'evidence': _EVIDENCE_HINT},
+                         {'subject': {'kind': KNOWLEDGE_SUBJECT_KINDS[1],
+                                      'label': '在场士兵'},
+                          'known_from_chapter': 2, 'evidence': _EVIDENCE_HINT},
+                     ],
+                     'setup': {'kind': 'foreshadowed', 'chapters': [1]},
+                     'reader_reveal_events': [{'chapter': 2, 'kind': 'first'}]}],
     },
     'arc': {
         'conflict_stages': [{'stage': 'str', 'chapters': [1]}],
         'climax': 'str', 'ending': 'str',
         'arc_tracks': [{'subject': 'char_001|reader|rel_01', 'dimension': 'str',
-                        'change_type': CHANGE_TYPES_ENUM, 'trajectory': 'str'}],
+                        'change_type': CHANGE_TYPES_ENUM, 'trajectory': 'str',
+                        'trajectory_evidence': _EVIDENCE_HINT}],
     },
 }
 

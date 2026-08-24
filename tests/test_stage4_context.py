@@ -9,10 +9,12 @@ from typing import get_origin, get_type_hints
 import pytest
 
 from contracts.schema.stage4 import CtxBeat, WriterContext
+from novel.core.facts import heuristic_relation_gates
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.context import (
-    Assembly, _gate_setting, _resolve_beats, build_writer_context, display_names,
-    display_names_at, name_collisions, rename_all,
+    Assembly, _gate_setting, _name_narration, _project_facts, _resolve_beats,
+    build_writer_context,
+    display_names, display_names_at, name_collisions, rename_all,
 )
 from tests import corpus
 
@@ -268,6 +270,300 @@ def test_the_setting_gate_uses_the_same_number_ruler_as_secret_keywords():
     assert cut == [('暗线', fact + '。')]
 
 
+# ── 二·四、关系截止章的包含式边界（`R-2.8`）──────────────────────────────
+
+def test_relation_valid_through_chapter_includes_the_named_chapter_only():
+    grounding = {
+        'entities': {
+            'characters': {},
+            'relations': [{
+                'relation_id': 'rel_01',
+                'subject_id': 'char_001',
+                'predicate': '雇佣',
+                'object_id': 'char_002',
+                'valid_from_chapter': 1,
+                'valid_through_chapter': 2,
+                'visibility': {'kind': 'public', 'from_chapter': 1},
+            }],
+        },
+        'canon': {},
+        'arc': {'conflict_stages': [{
+            'stage': '共事阶段',
+            'chapters': [1, 2, 3],
+        }]},
+    }
+    display = {'char_001': '沈青', 'char_002': '周衡'}
+
+    at_boundary = _project_facts(grounding, 2, False, display)[0]
+    after_boundary = _project_facts(grounding, 3, False, display)[0]
+
+    assert at_boundary['relations'] == [{
+        'subject': '沈青', 'predicate': '雇佣', 'object': '周衡'}]
+    assert after_boundary['relations'] == []
+
+
+# ── 二·五、secret 的下发时点（`R-2.18`）───────────────────────────────────
+
+def _split_secrets_grounding() -> dict:
+    """一个复合真相拆成两条、`group_id` 归组的合成底座。
+
+    这正是盘上那本书 `secret_01` 的形状：穿女装的行为在 ch4 点破，而「为什么」
+    要到 ch7 才点破。v1 只能把两件事写进一条 `fact`，于是 ch4 的写手整份都拿到。
+    """
+    return {
+        'entities': {'characters': {
+            'char_001': {'canonical': '江尽夏', 'role': '练习生',
+                         'address': [{'surface': '江尽夏', 'by': 'narration',
+                                      'context': 'reference', 'from_chapter': 1}]},
+        }, 'relations': []},
+        'canon': {
+            'setting': {'时代背景': '当代', '世界观': '偶像公寓'},
+            'world_rules': [],
+            'secrets': [
+                {'secret_id': 'secret_01', 'group_id': 'sgrp_01',
+                 'fact': '江尽夏私下会穿女装打扮自己',
+                 'knowledge_events': [{
+                     'subject': {'kind': 'character', 'char_id': 'char_001'},
+                     'known_from_chapter': 1,
+                     'evidence': {'chapter_ordinal': 1, 'source': None},
+                 }],
+                 'setup': {'kind': 'foreshadowed', 'chapters': [2]},
+                 'reader_reveal_events': [{'chapter': 4, 'kind': 'first'},
+                                          {'chapter': 9, 'kind': 'confirm'}]},
+                {'secret_id': 'secret_02', 'group_id': 'sgrp_01',
+                 'fact': '他这么做是因为中学时穿裙子被舅舅剃了头',
+                 'knowledge_events': [{
+                     'subject': {'kind': 'character', 'char_id': 'char_001'},
+                     'known_from_chapter': 1,
+                     'evidence': {'chapter_ordinal': 1, 'source': None},
+                 }],
+                 'setup': {'kind': 'cold'},
+                 'reader_reveal_events': [{'chapter': 7, 'kind': 'first'}]},
+            ],
+        },
+        # ⚠ 阶段必须逐章覆盖全书（`R-2.14`）：`_project_facts` 对定不出章级阶段的
+        #   情形是显式终态，不猜也不省略 ⇒ 这里给满 1~9 章，否则测的就成了那条闸。
+        'arc': {'conflict_stages': [{'stage': '藏', 'chapters': [1, 2, 3, 4, 5]},
+                                    {'stage': '认', 'chapters': [6, 7, 8, 9]}],
+                'climax': '摊牌', 'ending': '和解', 'arc_tracks': []},
+    }
+
+
+def _explicit_visibility_grounding() -> dict:
+    """显式 relation visibility 与 typed knowledge event 的合成底座。"""
+    grounding = _split_secrets_grounding()
+    grounding['entities']['characters']['char_002'] = {
+        'canonical': '周衡',
+        'role': '室友',
+        'address': [{'surface': '周衡', 'by': 'narration',
+                     'context': 'reference', 'from_chapter': 1}],
+    }
+    # 两端名字都在 fact 且关系在隐瞒窗口里，旧启发式会把 rel_public 推到 ch4；
+    # 显式 public 却声明 ch1 可见。实际 gate 必须取 max(valid_from=2, public=1) = 2。
+    grounding['canon']['secrets'][0]['fact'] = '江尽夏与周衡其实是恋人'
+    grounding['entities']['relations'] = [
+        {
+            'relation_id': 'rel_public',
+            'subject_id': 'char_001',
+            'predicate': '室友',
+            'object_id': 'char_002',
+            'valid_from_chapter': 2,
+            'valid_through_chapter': 5,
+            'visibility': {'kind': 'public', 'from_chapter': 1},
+        },
+        {
+            'relation_id': 'rel_via_secret',
+            'subject_id': 'char_002',
+            'predicate': '恋人',
+            'object_id': 'char_001',
+            'valid_from_chapter': 3,
+            'valid_through_chapter': 5,
+            'visibility': {'kind': 'via_secret', 'secret_id': 'secret_01'},
+        },
+    ]
+    grounding['canon']['secrets'].append({
+        'secret_id': 'secret_03',
+        'fact': '公寓里的人会轮流替江尽夏保管钥匙',
+        'setup': {'kind': 'cold'},
+        'reader_reveal_events': [{'chapter': 1, 'kind': 'first'}],
+        'knowledge_events': [
+            {
+                'subject': {'kind': 'character', 'char_id': 'char_001'},
+                'known_from_chapter': 4,
+                'evidence': {'chapter': 4, 'locator': '江尽夏收下钥匙'},
+            },
+            {
+                'subject': {'kind': 'group', 'label': '公寓众人'},
+                'known_from_chapter': 4,
+                'evidence': {'chapter': 4, 'locator': '众人都点了头'},
+            },
+        ],
+    })
+    return grounding
+
+
+def test_explicit_public_and_via_secret_gates_override_the_old_heuristic():
+    """显式声明是生产权威；旧启发式仍能复算，但只供 INFO 对账。"""
+    grounding = _explicit_visibility_grounding()
+    display = {'char_001': '江尽夏', 'char_002': '周衡'}
+
+    inferred, vanished = heuristic_relation_gates(
+        grounding['entities'], grounding['canon']['secrets'])
+    assert inferred['rel_public'] == 4, '合成样本必须制造显式值与旧启发式的真实分歧'
+    assert inferred['rel_via_secret'] == 4
+    assert vanished == []
+
+    chapter2 = _project_facts(grounding, 2, False, display)[0]['relations']
+    chapter3 = _project_facts(grounding, 3, False, display)[0]['relations']
+    chapter4 = _project_facts(grounding, 4, False, display)[0]['relations']
+
+    assert [row['predicate'] for row in chapter2] == ['室友'], \
+        'public gate=max(valid_from=2, from=1)，不能被旧启发式推到 ch4'
+    assert [row['predicate'] for row in chapter3] == ['室友']
+    assert [row['predicate'] for row in chapter4] == ['室友', '恋人'], \
+        'via_secret gate=max(valid_from=3, secret 首次揭示=4)'
+
+
+def test_explicit_relation_valid_through_boundary_is_inclusive_for_both_arms():
+    grounding = _explicit_visibility_grounding()
+    display = {'char_001': '江尽夏', 'char_002': '周衡'}
+
+    at_boundary = _project_facts(grounding, 5, False, display)[0]['relations']
+    after_boundary = _project_facts(grounding, 6, False, display)[0]['relations']
+
+    assert [row['predicate'] for row in at_boundary] == ['室友', '恋人']
+    assert after_boundary == []
+
+
+def test_typed_knowledge_events_open_on_the_named_chapter_for_character_and_group():
+    grounding = _explicit_visibility_grounding()
+    display = {'char_001': '江尽夏', 'char_002': '周衡'}
+
+    before = _project_facts(grounding, 3, False, display)[0]['secrets']
+    on_chapter = _project_facts(grounding, 4, False, display)[0]['secrets']
+    before_row = next(row for row in before if row['secret_id'] == 'secret_03')
+    on_row = next(row for row in on_chapter if row['secret_id'] == 'secret_03')
+
+    assert before_row['known_by'] == []
+    assert on_row['known_by'] == ['江尽夏', '公寓众人']
+    assert 'evidence' not in on_row, '上游回取证据不能进入写手上下文'
+
+
+def test_writer_context_excludes_every_global_source_span_byte():
+    """writer_context 是 Stage5/6 付费材料，正式证据须在组装入口剥掉。"""
+    import json
+
+    from novel.core.evidence import iter_global_evidence_slots
+    from tests.test_stage2 import blueprints, global_grounding, main_text
+
+    global_g = global_grounding()
+    markers: list[str] = []
+    coordinates: list[int] = []
+    for index, (_claim_path, owner, field) in enumerate(
+        iter_global_evidence_slots(global_g), 1,
+    ):
+        marker = f'CONTEXT_EVIDENCE_ONLY_{index}'
+        start = 923_456_700 + index * 100
+        owner[field] = {
+            'chapter_ordinal': 1,
+            'source': {
+                'text': marker,
+                'start': start,
+                'end': start + len(marker),
+                'normalized': f'CONTEXT_NORMALIZED_ONLY_{index}',
+                'recovery': 'normalized',
+            },
+        }
+        markers.extend((marker, f'CONTEXT_NORMALIZED_ONLY_{index}'))
+        coordinates.extend((start, start + len(marker)))
+
+    goal = {'intent': 'advance', 'fact_refs': [{
+        'kind': 'chapter_boundary', 'ref': 'chapter:3', 'chapter': 3,
+    }]}
+    plan_raw = {'output_chapters': [{
+        'output_ordinal': 3,
+        'from_source_ordinals': [3],
+        'chapter_goal': goal,
+        'open_hook_goal': goal,
+        'end_hook_goal': goal,
+        'segments': [{
+            'slot': 's01',
+            'from_beats': [f'b03_{index:02d}' for index in range(1, 7)],
+            'budget_chars': 900,
+            'narrative_role': 'setup',
+            'delivery': 'scene',
+            'transition': 'start',
+            'spine': 1,
+        }],
+    }]}
+    assembled = build_writer_context(
+        plan_raw, global_g, blueprints(), main_text()).ctx
+    paid_context = json.dumps(assembled, ensure_ascii=False, sort_keys=True)
+
+    assert markers and all(marker not in paid_context for marker in markers)
+    assert all(str(coordinate) not in paid_context for coordinate in coordinates), \
+        'SourceSpan 的 start/end 坐标进了 writer_context'
+
+
+@pytest.mark.parametrize(('ordinal', 'visible', 'hidden'), [
+    # ch2 是 secret_01 的埋点章 ⇒ 事实要摆出来（但 reader_knows_by_now=False）
+    (2, ['secret_01'], ['secret_02']),
+    (4, ['secret_01'], ['secret_02']),
+    (6, ['secret_01'], ['secret_02']),
+    (7, ['secret_01', 'secret_02'], []),
+])
+def test_a_split_secret_group_is_released_per_member_not_per_group(
+    ordinal: int, visible: list[str], hidden: list[str],
+):
+    """⭐ `R-2.18`：拆开的两条各按**自己的** `first` 章下发，不按 `group_id` 拉平。
+
+    这是 v2 那次改动真正修掉的东西。v1 里这两件事只能写进一条 `fact`，
+    而闸门按「任意一次揭示 ≤ 本章」判 ⇒ 写 ch4 的写手连 ch7 才点破的成因一起拿到。
+    ⚠ 如果哪天有人「顺手」按 group 下发（同组一条揭示就全放），本条会红——
+    那正是把刚拆开的两件事又粘回去。
+    """
+    facts, must_not_reveal, _held, _cut = _project_facts(
+        _split_secrets_grounding(), ordinal, False, {'char_001': '江尽夏'})
+    got = [row['secret_id'] for row in facts['secrets']]
+    assert [sid for sid in got if sid in visible] == visible
+    assert sorted(must_not_reveal) == sorted(hidden)
+    # 已下发的那些必须同时说清「读者到本章知不知道」——ch2 是埋点章的那一条例外。
+    for row in facts['secrets']:
+        assert isinstance(row['reader_knows_by_now'], bool)
+
+
+def test_a_setup_chapter_releases_the_fact_but_marks_the_reader_as_unaware():
+    """埋点章要把事实摆出来，但 `reader_knows_by_now` 必须是 `False`。
+
+    没有这一格，写 ch2 那件事时不知道它后面会被回收，ch4 的点破就没有铺垫。
+    """
+    facts, must_not_reveal, _held, _cut = _project_facts(
+        _split_secrets_grounding(), 2, False, {'char_001': '江尽夏'})
+    row = next(r for r in facts['secrets'] if r['secret_id'] == 'secret_01')
+    assert row['reader_knows_by_now'] is False, '埋点章不是「读者已经知道」'
+    assert 'secret_02' in must_not_reveal, '另一条既没埋点也没揭示 ⇒ 只能留 id'
+
+
+def test_a_confirm_event_alone_never_opens_the_gate():
+    """⚠ `confirm` 不参与「读者知道了没」。
+
+    把 `first` 那条去掉、只留 `confirm`，闸门必须**关着**——旧式子
+    `any(chapter <= o)` 在这里会开闸，而那正是被换掉的判定。
+    ⚠ 这个形状载体是拒收的（恰一个 `first`）；这里直接喂 `_project_facts` 的
+    dict，测的是**闸门自己**在拿到坏形状时倒向安全的一边，不是测载体。
+    """
+    grounding = _split_secrets_grounding()
+    grounding['canon']['secrets'] = [{
+        'secret_id': 'secret_01', 'group_id': None, 'fact': '只有后续确认的坏形状',
+        'character_known_by': ['char_001'], 'setup': {'kind': 'cold'},
+        'reader_reveal_events': [{'chapter': 4, 'kind': 'confirm'}],
+    }]
+    facts, must_not_reveal, _held, _cut = _project_facts(
+        grounding, 9, False, {'char_001': '江尽夏'})
+    assert facts['secrets'] == []
+    assert must_not_reveal == ['secret_01']
+
+
 # ── 三、名字表的三个方向 ─────────────────────────────────────────────────
 
 def test_a_fabricated_canonical_is_replaced_by_an_attested_appellation():
@@ -407,3 +703,65 @@ def test_a_chapter_in_a_true_stage_gap_or_overlap_is_a_terminal_state():
                                      {'stage': '段乙', 'chapters': [2, 6]}]}
     with pytest.raises(RefusedByStructure, match='唯一归属'):
         build_writer_context(_elided_plan(), gg, bps, mt)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `_name_narration` —— 那道判等闸。⚠ 2026-08-23 之前**两个分支都没有测试覆盖**
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 这道闸是 `CtxNarration.focalizer` 盘上恒空的**唯一成因**：stage2 那一侧
+# `focalizer_name` 填充率 27/31，但它填的值恒等于 `narrator_name`
+# （两格在 `novel/stages/stage2/prompts.py` 里是**同一个占位符字符串**，
+# 且从头到尾没有定义什么是「视点人物」、没说「只在与叙述者不同时才填」），
+# 于是这里判等一律为真、键一律不写。
+# ⇒ **那不是死值，是一道从未成立过的闸**（`docs/LESSONS.md` 第 8 条：
+#   删字段前审计语义消费，不只搜字段名）。本批只补覆盖，不动 prompt、不删字段。
+
+_DISP = {'c1': '沈青', 'c2': '顾堇'}
+
+
+def _seg(**kw):
+    base = {'grammatical_person': 'first', 'segment': '正文主体（直至"……沉重的呼吸声"）'}
+    base.update(kw)
+    return base
+
+
+def test_focalizer_is_dropped_when_it_is_the_same_person_as_the_narrator():
+    """⭐ 盘上 100% 走的就是这一支。"""
+    out = _name_narration(
+        _seg(narrator_char_id='c1', focalizer_char_id='c1'), _DISP, 0, 1)
+    assert out['narrator'] == '沈青' and 'focalizer' not in out
+
+
+def test_focalizer_is_kept_when_it_really_is_a_different_person():
+    """⭐ 另一支——盘上零样本，只有这条测试见过它。"""
+    out = _name_narration(
+        _seg(narrator_char_id='c1', focalizer_char_id='c2'), _DISP, 0, 1)
+    assert out['narrator'] == '沈青' and out['focalizer'] == '顾堇'
+
+
+def test_an_unresolvable_narrator_does_not_suppress_a_resolvable_focalizer():
+    """⚠ **代码上可达的倒置路径**：叙述者叫不出名字、视点人物叫得出
+    ⇒ 只发 `focalizer` 不发 `narrator`。本语料从没走到过，但它不是死路。"""
+    out = _name_narration(
+        _seg(narrator_char_id='c9', focalizer_char_id='c2'), _DISP, 0, 1)
+    assert 'narrator' not in out and out['focalizer'] == '顾堇'
+
+
+def test_a_nameless_narrator_writes_neither_key_and_never_falls_back_to_char_id():
+    """第一人称书的第 1 章正是这样：主角通篇写「我」，名字要到后面才出现。
+    ⚠ **不许兜底成 `char_002`**——写作侧不该看见内部编号。"""
+    out = _name_narration(
+        _seg(narrator_char_id='c9', focalizer_char_id='c9'), _DISP, 0, 1)
+    assert 'narrator' not in out and 'focalizer' not in out
+    assert out['grammatical_person'] == 'first'
+
+
+def test_the_stage2_segment_label_never_reaches_the_writer():
+    """⚠⚠ **反原文泄漏**：stage2 的 `segment` 常原样引用原文当分界，
+    而泄的往往正是本章末句。写手要的只是「分几段、什么顺序」。"""
+    one = _name_narration(_seg(narrator_char_id='c1'), _DISP, 0, 1)
+    many = _name_narration(_seg(narrator_char_id='c1'), _DISP, 1, 3)
+    assert one['segment'] == '全章'
+    assert many['segment'] == '第2段（共3段，按顺序写）'
+    assert '沉重的呼吸声' not in str(one) and '沉重的呼吸声' not in str(many)

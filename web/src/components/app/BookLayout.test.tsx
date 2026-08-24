@@ -7,11 +7,10 @@ import { Rail } from './Rail'
 import type { ApprovalDoc } from '@/types/approvals'
 
 const pending: ApprovalDoc = {
-  v: 1,
+  v: 2,
   sid: 'book-1',
   gate: { s0: false, s1: false, s2: false, s3: false, s4: false, s5: false, s6: false, s7: false },
   seen: { read: false, global: false },
-  deep: [],
   writing: false,
   spawns: {},
 }
@@ -48,7 +47,6 @@ describe('BookLayout approval source', () => {
       dirname: 'book-1',
       chapters: 11,
       stages: {},
-      stage5_modes: [],
       stage_done: {},
       stage_reviewable: {},
       chapters_done: {},
@@ -81,7 +79,6 @@ describe('BookLayout approval source', () => {
       dirname: 'book-1',
       chapters: 11,
       stages: {},
-      stage5_modes: [],
       stage_done: { stage1: true },
       stage_reviewable: {},
       chapters_done: {},

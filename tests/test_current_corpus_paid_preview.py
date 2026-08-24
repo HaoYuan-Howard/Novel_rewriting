@@ -183,8 +183,9 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
         caches.add(env['NOVEL_CACHE_DIR'])
     assert len(caches) == 2
     write = next(row for row in plan['dispatches'] if row['node'] == 'stage5.write')
-    assert write['production_cli_argv'][write['production_cli_argv'].index('--deep') + 1] == '1,2,3'
-    assert '--shallow-rest' in write['production_cli_argv']
+    assert '--deep' not in write['production_cli_argv']
+    assert '--shallow-rest' not in write['production_cli_argv']
+    assert '--mode' not in write['production_cli_argv']
     semantic = [row for row in plan['dispatches']
                 if row['node'] == 'stage6.semantic']
     assert len(semantic) == 2

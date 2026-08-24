@@ -17,7 +17,8 @@
 from __future__ import annotations
 
 import re
-from typing import Callable, Final
+from collections.abc import Iterable, Mapping
+from typing import Any, Callable, Final
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
@@ -28,6 +29,7 @@ from contracts.artifacts import (
     STAGE7_NAME_MAP_EDIT,
 )
 from contracts.invariants import NODES, STAGE3_MEASUREMENT_CONTRACT
+from novel.core.evidence import without_global_evidence
 
 Projection = Callable[[object], object]
 
@@ -37,6 +39,39 @@ def artifact_payload(data: object) -> object:
     if isinstance(data, dict):
         return {key: value for key, value in data.items() if key != '_provenance'}
     return data
+
+
+# ── stage2.blueprint ─────────────────────────────────────────────────────────
+
+def stage2_blueprint_grounding(data: object) -> object:
+    """逐章抽取只消费**已现称名表**要用的两个字段，不消费 global 的其余部分。
+
+    【为什么不能留着 `artifact_payload`】blueprint 是全链 reasoning 占比最高的节点
+    （账本实测 40.8%，逐章付费），而它对 global 的真实依赖只有一份称名清单：
+    `stages/stage2/normalize.py::past_attested_surfaces` 只读 `canonical` 与
+    `address[].surface`，blueprint 侧那几条判据读的同样只是称名。整份消费 ⇒ 改一条
+    secret、动一次 `role`，全书 blueprint 当场判 stale 要重跑付费，**而那次改动
+    根本不影响它读到的任何一个字节**。
+
+    ⚠ **不取 `address` 的 `by` / `context` / `from_chapter`**：`past_attested_surfaces`
+    的「出现过没有」按原文子串判，与这三个字段无关；取了它们等于把一批无关改动
+    重新变回 stale。
+    ⚠ 与 Stage4/5 的 grounding 投影**形状故意不同**：三个节点消费的不是同一批字段，
+    合并成一个函数会让任一侧的取值面变化静默传染给其余节点。
+    """
+    if not isinstance(data, dict):
+        return None
+    entities = data.get('entities')
+    if not isinstance(entities, dict):
+        return None
+    chars = entities.get('characters')
+    if not isinstance(chars, dict):
+        return None
+    return sorted(
+        (cid, c.get('canonical'),
+         tuple(sorted(str(a.get('surface') or '')
+                      for a in (c.get('address') or []) if isinstance(a, dict))))
+        for cid, c in chars.items() if isinstance(c, dict))
 
 
 # ── stage3.style ─────────────────────────────────────────────────────────────
@@ -110,10 +145,57 @@ def stage4_main_text(data: object) -> object:
     return sorted((m.get('chapter_ordinal'), m.get('text')) for m in data)
 
 
+def _secret_setup_key(setup: object) -> object:
+    """把 `Secret.setup` 判别联合压成确定性可比较的键。
+
+    ⚠ **不能只取 `chapters`**：`{"kind":"cold"}` 与
+    `{"kind":"foreshadowed","chapters":[]}`（理论上载体拒收，但投影吃的是未校验的
+    JSON）在章号集合上同形，而前者说「没有隐瞒窗口」、后者是一份坏数据。
+    投影分不开它们，改一边就不会让下游 stale。
+    """
+    if not isinstance(setup, dict):
+        return ('?',)
+    kind = str(setup.get('kind') or '?')
+    return (kind, tuple(sorted(map(str, setup.get('chapters') or []))))
+
+
+def _relation_visibility_key(visibility: object) -> object:
+    """只收 Stage4 真正读取的显式可见性语义。"""
+    if not isinstance(visibility, dict):
+        return None
+    return (visibility.get('kind'), visibility.get('from_chapter'),
+            visibility.get('secret_id'))
+
+
+def _knowledge_subject_key(subject: object) -> object:
+    """typed CharacterRef / GroupRef 的确定性 freshness 键。"""
+    if not isinstance(subject, dict):
+        return None
+    return (subject.get('kind'), subject.get('char_id'), subject.get('label'))
+
+
+def _knowledge_events_key(events: object) -> tuple:
+    if not isinstance(events, list):
+        return ()
+    rows = [
+        (_knowledge_subject_key(event.get('subject')),
+         event.get('known_from_chapter'))
+        for event in events if isinstance(event, dict)
+    ]
+    return tuple(sorted(rows, key=repr))
+
+
 def stage4_grounding(data: object) -> object:
-    """计划/上下文组装消费的人物、关系、秘密、设定、规则与弧线字段。"""
+    """计划/上下文组装消费的人物、关系、秘密、设定、规则与弧线字段。
+
+    原文 ``SourceSpan`` 只给 Stage2 回取与人工复核；Stage4 实际 prompt 也剥掉它们，
+    所以 evidence-only 订正不应让两个 Stage4 制品 stale。
+    """
     if not isinstance(data, dict):
         return None
+    projected = without_global_evidence(data)
+    assert isinstance(projected, dict)
+    data = projected
     ent = data.get('entities') or {}
     canon = data.get('canon') or {}
     return {
@@ -127,13 +209,18 @@ def stage4_grounding(data: object) -> object:
         'relations': sorted(
             ((r or {}).get('relation_id'), (r or {}).get('subject_id'),
              (r or {}).get('predicate'), (r or {}).get('object_id'),
-             (r or {}).get('valid_from_chapter'), (r or {}).get('valid_to_chapter'))
+             (r or {}).get('valid_from_chapter'),
+             (r or {}).get('valid_through_chapter'),
+             _relation_visibility_key((r or {}).get('visibility')))
             for r in (ent.get('relations') or [])),
+        # ⚠ `setup` 整格进投影（不只是章号）：`{"kind":"cold"}` 与
+        #   `{"kind":"foreshadowed","chapters":[]}` 在「章号集合」上同形而语义不同。
+        #   揭示事件同理连 `kind` 一起收——改 first/confirm 会移动下发边界。
         'secrets': sorted(
-            ((s or {}).get('secret_id'), (s or {}).get('fact'),
-             tuple(sorted(map(str, (s or {}).get('character_known_by') or []))),
-             tuple(sorted(map(str, (s or {}).get('setup_chapters') or []))),
-             tuple(sorted(str(e.get('chapter'))
+            ((s or {}).get('secret_id'), (s or {}).get('fact'), (s or {}).get('group_id'),
+             _knowledge_events_key((s or {}).get('knowledge_events')),
+             _secret_setup_key((s or {}).get('setup')),
+             tuple(sorted((str(e.get('chapter')), str(e.get('kind') or 'first'))
                           for e in ((s or {}).get('reader_reveal_events') or []))))
             for s in (canon.get('secrets') or [])),
         'setting': sorted((canon.get('setting') or {}).items()),
@@ -158,10 +245,13 @@ def stage5_main_text(data: object) -> object:
 
 
 def stage5_grounding(data: object) -> object:
-    """Stage 5 只把全量 secrets 作为泄漏检测的 ground truth。"""
+    """Stage 5 只消费 secret 语义；定位证据不进付费 freshness。"""
     if not isinstance(data, dict):
         return None
-    return {'secrets': (data.get('canon') or {}).get('secrets')}
+    projected = without_global_evidence({
+        'canon': {'secrets': (data.get('canon') or {}).get('secrets')},
+    })
+    return {'secrets': ((projected or {}).get('canon') or {}).get('secrets')}
 
 
 def stage5_style(data: object) -> object:
@@ -224,6 +314,38 @@ def stage5_review_context(data: object) -> object:
     }
 
 
+def render_stage5_draft(
+    planned_ordinals: Iterable[int],
+    by_ordinal: Mapping[int, Mapping[str, Any]],
+) -> str:
+    """Canonical ``stage5/draft.md`` 的唯一字节投影。
+
+    renderer 与消费投影放在同一个低层模块：Stage5 producer 与
+    :class:`novel.store.ArtifactStore` 的 freshness 桥必须共用同一把字节尺。
+    若 store 独立重拼 Markdown，标题格式一改，刚写完的 draft 就会一直被第二份旧实现
+    误报 stale，直到有人碰巧想起同步它。
+    """
+    planned = sorted(set(int(ordinal) for ordinal in planned_ordinals))
+    missing = [ordinal for ordinal in planned if ordinal not in by_ordinal]
+    unexpected = sorted(set(by_ordinal) - set(planned))
+    head = [f'# 重构稿（{len(by_ordinal)}/{len(planned)} 章）']
+    if missing:
+        head.append(f'> ⚠ 计划里的第 {missing} 章**没有 canonical 成稿**')
+    if unexpected:
+        head.append(f'> ⚠ canonical 目录还有计划外的第 {unexpected} 章（待复核 stale 章集）')
+    parts = ['\n'.join(head)]
+    for ordinal in sorted(by_ordinal):
+        record = by_ordinal[ordinal]
+        overlap = record.get('overlap_excl_verbatim')
+        sources = '、'.join(
+            str(source) for source in (record.get('from_source_ordinals') or []))
+        parts.append(
+            f"## 第 {ordinal} 章（源 [{sources}] · {record.get('chars')}字"
+            + (f' · 重合(扣除逐字要求) {overlap:.3f}' if overlap is not None else '')
+            + ')\n\n' + str(record.get('text') or ''))
+    return '\n\n'.join(parts) + '\n'
+
+
 # ── stage6.hook ───────────────────────────────────────────────────────────────
 
 def stage6_hook_copy(data: object) -> object:
@@ -232,14 +354,14 @@ def stage6_hook_copy(data: object) -> object:
 
 
 def stage6_grounding(data: object) -> object:
-    """开篇文案与质量审判消费完整故事真相面。"""
+    """开篇文案消费完整 claim 真相面，但不消费原文定位证据。"""
     if not isinstance(data, dict):
         return None
-    return {
+    return without_global_evidence({
         'entities': data.get('entities'),
         'canon': data.get('canon'),
         'arc': data.get('arc'),
-    }
+    })
 
 
 def stage6_style(data: object) -> object:
@@ -380,7 +502,9 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     },
     'stage2.blueprint': {
         STAGE1_MAIN_TEXT: artifact_payload,
-        STAGE2_GLOBAL_GROUNDING: artifact_payload,
+        # ⚠ 收窄到称名两字段（2026-08-23）。此前是 `artifact_payload` ⇒ global 里
+        # 任何一格改动都让全书 blueprint 判 stale，而这一层是全链最贵的付费节点。
+        STAGE2_GLOBAL_GROUNDING: stage2_blueprint_grounding,
     },
     'stage3.style': {
         STAGE1_MAIN_TEXT: stage3_main_text,
@@ -474,5 +598,5 @@ def producer_node(rel: str, *, fallback: str | None = None) -> str | None:
 
 __all__ = [
     'CONSUMED_PROJECTIONS', 'Projection', 'artifact_payload', 'canonical_rel',
-    'producer_node', 'projection_for',
+    'producer_node', 'projection_for', 'render_stage5_draft',
 ]

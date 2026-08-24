@@ -52,7 +52,7 @@ def _rename(**over) -> list:
         name_map={'characters': [], 'surname_map': {}, 'kept': []},
         subs={}, problems=[], applied={}, residual=[], baseline={}, registry={},
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
-        family_members={}, dup=[], missing=[], invalids=[],
+        family_members={}, missing=[], invalids=[],
         post_units=[], title_line='书名：略')
     kw.update(over)
     return checks.rename_findings(**kw)

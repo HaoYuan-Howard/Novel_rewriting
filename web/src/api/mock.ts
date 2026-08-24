@@ -89,7 +89,9 @@ type LegacyNovel = Omit<
 > & {
   stages: Record<string, LegacyArtifact[]>
   stage_done?: Record<string, boolean | null>
-  chapters_done?: Record<string, Record<string, number[]>>
+  chapters_done?: Record<string, number[] | Record<string, number[]>>
+  /** 只用于解码冻结 mock；绝不出现在当前 NovelOverview。 */
+  stage5_modes?: string[]
 }
 
 const PIPELINE_STAGES = Array.from({ length: 8 }, (_, i) => 'stage' + i)
@@ -117,12 +119,80 @@ function currentMockStyle(legacy: LegacyStyle): Stage3Style {
   }
 }
 
+/** 冻结 Stage5 抓包是 v1 双臂布局；mock 只能把它诚实投影成明确 legacy 终态。 */
+function currentMockStage5(): Stage5Response {
+  const legacy = fx<Stage5Response>('stage5_ch3.json')
+  const legacyPaths = legacy.chapters.flatMap((ordinal) => [
+    `stage5/deep/ch${String(ordinal).padStart(2, '0')}.json`,
+    `stage5/shallow/ch${String(ordinal).padStart(2, '0')}.json`,
+  ])
+  return {
+    sid: legacy.sid,
+    title: legacy.title,
+    ctx_exists: legacy.ctx_exists,
+    planned: legacy.planned,
+    written: 0,
+    invalid: 0,
+    missing: [...legacy.chapters],
+    legacy_incompatible: true,
+    legacy_paths: legacyPaths,
+    chapters: legacy.chapters,
+    ordinal: legacy.ordinal,
+    index: legacy.chapters.map((output_ordinal) => ({
+      output_ordinal,
+      budget_chars: null,
+      has_draft: false,
+      invalid: false,
+      chars: null,
+      overlap_excl_verbatim: null,
+      freshness: null,
+    })),
+    source_text: legacy.source_text,
+    source_chars_raw: legacy.source_chars_raw,
+    materials: legacy.materials,
+    drafts: [],
+    invalid_drafts: [],
+    trim_audit: null,
+    ctx_state: legacy.ctx_state,
+  }
+}
+
+function currentMockReview(): ReviewResponse {
+  const legacy = fx<ReviewResponse>('review_ch3.json')
+  return {
+    ...legacy,
+    review_state: 'legacy_incompatible',
+    review_reasons: ['冻结 fixture 来自 stage5/deep|shallow v1，不能驱动当前返工或批准'],
+    finding_counts: { hard: 0, info: 0, metric: 0, unver: 0 },
+    book: [],
+    index: legacy.index.map((row) => ({
+      output_ordinal: row.output_ordinal,
+      round: null,
+      chars: null,
+      budget_chars: row.budget_chars,
+      finding_counts: { hard: 0, info: 0, metric: 0, unver: 0 },
+      unresolved: 0,
+      stale: null,
+    })),
+    chapter: {
+      ...legacy.chapter,
+      findings: [],
+      chars: null,
+      round: null,
+      origin: null,
+      segments: null,
+      text: null,
+      stale: null,
+    },
+  }
+}
+
 /** 冻结 mock 的旧业务推导只准留在这个假后端；屏幕与真实数据缝不兼容旧形状。 */
 function currentMockNovel(legacy: LegacyNovel): NovelOverview {
   const stages: Record<string, Artifact[]> = {}
   const stageDone: Record<string, boolean | null> = {}
   const stageReviewable: Record<string, boolean> = {}
-  const modes = legacy.stage5_modes.filter((mode) => !mode.startsWith('_'))
+  const legacyModes = (legacy.stage5_modes ?? []).filter((mode) => !mode.startsWith('_'))
 
   for (const stage of PIPELINE_STAGES) {
     const artifacts = (legacy.stages[stage] ?? []).map<Artifact>((artifact) => ({
@@ -142,7 +212,7 @@ function currentMockNovel(legacy: LegacyNovel): NovelOverview {
       declared !== undefined
         ? declared
         : stage === 'stage5'
-          ? modes.length > 0
+          ? false
           : artifacts.length
             ? artifacts.every(
                 (artifact) =>
@@ -153,7 +223,7 @@ function currentMockNovel(legacy: LegacyNovel): NovelOverview {
     stageReviewable[stage] =
       done === true ||
       (stage === 'stage5'
-        ? modes.length > 0
+        ? legacyModes.length > 0
         : artifacts.some((artifact) => artifact.exists && artifact.readable !== false))
   }
 
@@ -179,6 +249,12 @@ function currentMockNovel(legacy: LegacyNovel): NovelOverview {
       broken.length + ' 份产物不可用',
       '盘上存在，但当前版本读不回来或已被隔离',
     ]
+  } else if (legacyModes.length) {
+    ;[verdict, text, detail] = [
+      'legacy_incompatible',
+      '发现旧 Stage5 契约产物',
+      'deep/shallow 只读保留，不会迁移或自动付费重跑',
+    ]
   } else if (stale.length) {
     ;[verdict, text, detail] = ['stale', stale.length + ' 份过期', '上游变了，下游要重跑']
   } else if (pending) {
@@ -203,13 +279,26 @@ function currentMockNovel(legacy: LegacyNovel): NovelOverview {
     ]
   }
 
+  const chaptersDone = Object.fromEntries(
+    PIPELINE_STAGES.map((stage) => {
+      const value = legacy.chapters_done?.[stage]
+      return [stage, Array.isArray(value) ? value : []]
+    }),
+  ) as Record<string, number[]>
+  const {
+    stage5_modes: _retiredStage5Modes,
+    chapters_done: _legacyChaptersDone,
+    ...current
+  } = legacy
+  void _retiredStage5Modes
+  void _legacyChaptersDone
+
   return {
-    ...legacy,
+    ...current,
     stages,
-    stage5_modes: modes,
     stage_done: stageDone,
     stage_reviewable: stageReviewable,
-    chapters_done: legacy.chapters_done ?? {},
+    chapters_done: chaptersDone,
     summary: {
       verdict,
       text,
@@ -301,11 +390,10 @@ function lsWrite(key: string, v: unknown): void {
 
 function freshDoc(sid: string): ApprovalDoc {
   return {
-    v: 1,
+    v: 2,
     sid,
     gate: { s0: false, s1: false, s2: false, s3: false, s4: false, s5: false, s6: false, s7: false },
     seen: { read: false, global: false },
-    deep: [1, 2, 3],
     writing: false,
     spawns: SPAWN_ON_APPROVE,
   }
@@ -314,14 +402,14 @@ function freshDoc(sid: string): ApprovalDoc {
 /**
  * 样本那本书的初始状态：已经跑到 stage5，文案与成书还没确认。
  * 这样一打开就能看到一本走到一半的书 —— 全 false 的空壳看不出这个工具在干什么。
+ *
  */
 function seededDoc(sid: string): ApprovalDoc {
   return {
-    v: 1,
+    v: 2,
     sid,
     gate: { s0: true, s1: true, s2: true, s3: true, s4: true, s5: true, s6: false, s7: false },
     seen: { read: true, global: true },
-    deep: [1, 2, 3],
     writing: true,
     spawns: SPAWN_ON_APPROVE,
   }
@@ -330,7 +418,7 @@ function seededDoc(sid: string): ApprovalDoc {
 function loadDoc(sid: string): ApprovalDoc {
   const got = lsRead<ApprovalDoc>('approvals.' + sid)
   // spawns 是服务端的事，存盘的旧记录一律用当前这份覆盖
-  if (got && got.v === 1) return { ...got, spawns: SPAWN_ON_APPROVE }
+  if (got && got.v === 2) return { ...got, spawns: SPAWN_ON_APPROVE }
   const seed = sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
   lsWrite('approvals.' + sid, seed)
   return seed
@@ -345,6 +433,8 @@ function saveDoc(doc: ApprovalDoc): ApprovalDoc {
 
 const MOCK_SHA = {
   source: 'a'.repeat(64),
+  characters: 'd'.repeat(64),
+  relations: 'e'.repeat(64),
   rules: 'b'.repeat(64),
   secrets: 'c'.repeat(64),
 }
@@ -363,6 +453,20 @@ function freshGlobalReview(): GlobalReviewResponse {
     current: true,
     approved: true,
     items: [
+      {
+        item_id: 'character_set_complete:entities.characters:' + MOCK_SHA.characters.slice(0, 12),
+        kind: 'character_set_complete',
+        subject_path: 'entities.characters',
+        subject_sha256: MOCK_SHA.characters,
+        ...decided,
+      },
+      {
+        item_id: 'relation_set_complete:entities.relations:' + MOCK_SHA.relations.slice(0, 12),
+        kind: 'relation_set_complete',
+        subject_path: 'entities.relations',
+        subject_sha256: MOCK_SHA.relations,
+        ...decided,
+      },
       {
         item_id: 'world_rule_set_complete:canon.world_rules:' + MOCK_SHA.rules.slice(0, 12),
         kind: 'world_rule_set_complete',
@@ -424,7 +528,6 @@ function paidOf(req: JobRequest): boolean {
 
 function argvOf(req: JobRequest): string {
   const parts = ['python', '-m', 'novel_refactor.cli', req.kind, '--sid', req.sid]
-  if (req.mode) parts.push('--mode', req.mode)
   if (req.extra) parts.push(...req.extra)
   if (req.args) parts.push(...req.args)
   if (req.kind === 'stage5.write' && req.ordinal) {
@@ -1074,11 +1177,11 @@ export const mockApi: Api = {
     chapterOnly(sid, o, `/novels/${sid}/stage4/${o}`, () => fx<Stage4Response>('stage4_ch3.json')),
 
   getStage5: (sid, o) =>
-    chapterOnly(sid, o, `/novels/${sid}/stage5/${o}`, () => fx<Stage5Response>('stage5_ch3.json')),
+    chapterOnly(sid, o, `/novels/${sid}/stage5/${o}`, currentMockStage5),
 
   getReview: (sid, o) =>
     chapterOnly(sid, o, `/novels/${sid}/review/${o}`, () => {
-      const base = fx<ReviewResponse>('review_ch3.json')
+      const base = currentMockReview()
       const edit = lsRead<{ segments: ReviewResponse['chapter']['segments']; at: number }>(
         `edits.${sid}.${o}`,
       )
@@ -1296,11 +1399,6 @@ export const mockApi: Api = {
     return later(saveDoc({ ...doc, seen: { ...doc.seen, [key]: true } }))
   },
 
-  setDeep: (sid, deep) => {
-    const doc = loadDoc(sid)
-    return later(saveDoc({ ...doc, deep: [...deep].sort((a, b) => a - b) }))
-  },
-
   startWriting: (sid) => {
     const doc = loadDoc(sid)
     return later(saveDoc({ ...doc, writing: true }))
@@ -1314,7 +1412,6 @@ export const mockApi: Api = {
       kind: 'stage5.write',
       label: '章节改稿（人工稿落成新一轮）',
       extra: ['--apply-edit'],
-      mode: req.mode,
       sid,
       ordinal,
     }))

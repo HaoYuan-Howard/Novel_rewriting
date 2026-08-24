@@ -27,7 +27,9 @@ from pydantic import BaseModel, Field
 from contracts.schema import Usage
 from novel.config import Config, DEFAULT_MODEL, load_config, parse_dotenv
 from novel.errors import ProvenanceRefused, TerminalState
-from novel.llm.cache import CachePolicy, ResponseCache, cache_key
+from novel.llm.cache import (
+    CachePolicy, ResponseCache, cache_key, request_fingerprint,
+)
 from novel.llm.client import (
     DEFAULT_MAX_TOKENS, JSON_OBJECT_MODE, LADDER, MAX_SAMPLES_PER_RUNG,
     NOTHINK_RUNGS, REJECT_GATES, REJECT_REASON_MAX, RESOURCE_INTERRUPTED,
@@ -397,6 +399,8 @@ def test_a_resource_interruption_retries_on_the_wire_and_never_touches_the_sampl
     gates = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
     assert [(g['decision'], g['sample'], g['rung_index']) for g in gates] == [
         ('accepted', 1, 0)], '采样预算被资源中断吃掉了'
+    assert client.accepted_attempt('p') == gates[0]['attempt_id']
+    assert client.accepted_request_fingerprint('p') == request_fingerprint(t.calls[1])
     assert slept, '资源中断要退避一下再来，不是原地立刻重发'
 
 
@@ -443,10 +447,12 @@ def test_an_answer_written_into_the_reasoning_channel_is_salvaged_instead_of_res
     assert SALVAGE_ANSWER_FROM_REASONING, '这条路关掉的话，本测试钉的是另一件事'
     ctx = _ctx()
     t = FakeTransport.always(_lost(_SALVAGEABLE))
-    got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+    client = _client(t, ctx=ctx)
+    got = client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
     assert got.voice == {'a': 1} and got.surface_habits == ['h']
     assert len(t.calls) == 1, '捞回来了就不该再付一次重采的钱'
+    assert client.accepted_request_fingerprint('p') == request_fingerprint(t.calls[0])
 
 
 def test_a_contract_can_prefer_one_normal_resample_without_discarding_valid_salvage():
@@ -459,7 +465,8 @@ def test_a_contract_can_prefer_one_normal_resample_without_discarding_valid_salv
     t = FakeTransport(lambda _req, i: _lost(_SALVAGEABLE) if i == 0 else normal)
     ctx = _ctx()
 
-    got = _client(t, ctx=ctx).ask_json(
+    client = _client(t, ctx=ctx)
+    got = client.ask_json(
         'sys', 'usr', model_cls=Resp, purpose='p',
         prefer_content_over_reasoning_salvage=True)
 
@@ -471,6 +478,8 @@ def test_a_contract_can_prefer_one_normal_resample_without_discarding_valid_salv
                 ('rejected', 'answer_lost', True, False),
                 ('accepted', None, False, False),
             ]
+    assert client.accepted_attempt('p') == gates[-1]['attempt_id']
+    assert client.accepted_request_fingerprint('p') == request_fingerprint(t.calls[1])
 
 
 def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails():
@@ -484,7 +493,8 @@ def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails()
     events: list[dict] = []
     ctx.observer = events.append
 
-    got = _client(t, ctx=ctx).ask_json(
+    client = _client(t, ctx=ctx)
+    got = client.ask_json(
         'sys', 'usr', model_cls=Resp, purpose='p',
         prefer_content_over_reasoning_salvage=True)
 
@@ -500,6 +510,8 @@ def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails()
     rejected, = _observed(events)
     assert rejected['fallback_salvage'] is True
     assert rejected['next_effort'] is None and rejected['exhausted'] is False
+    assert client.accepted_attempt('p') == gates[-1]['attempt_id']
+    assert client.accepted_request_fingerprint('p') == request_fingerprint(t.calls[0])
 
 
 def test_a_transport_failure_on_the_preferred_resample_does_not_discard_the_salvage():
@@ -520,7 +532,8 @@ def test_a_transport_failure_on_the_preferred_resample_does_not_discard_the_salv
     ctx = _ctx()
     t = FakeTransport(responder)
 
-    got = _client(t, ctx=ctx).ask_json(
+    client = _client(t, ctx=ctx)
+    got = client.ask_json(
         'sys', 'usr', model_cls=Resp, purpose='p',
         prefer_content_over_reasoning_salvage=True)
 
@@ -530,6 +543,9 @@ def test_a_transport_failure_on_the_preferred_resample_does_not_discard_the_salv
         (g['decision'], g['gate'], g['salvaged']) for g in gates]
     lost, = [e for e in ctx.ledger.audit_events if e['kind'] == 'answer_lost']
     assert lost['salvaged'] is True
+    accepted, = [event for event in gates if event['decision'] == 'accepted']
+    assert client.accepted_attempt('p') == accepted['attempt_id']
+    assert client.accepted_request_fingerprint('p') == request_fingerprint(t.calls[0])
 
 
 def test_a_transport_failure_without_any_salvage_still_propagates():
@@ -645,11 +661,16 @@ def test_a_nonempty_content_gate_rejection_resamples_once_before_stepping_down()
                        finish_reason='stop')
     t = FakeTransport(responder=lambda _r, i: bad if i < 1 else OK_JSON)
 
-    got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+    client = _client(t, ctx=ctx)
+    got = client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
     assert got.voice == {'a': 1}
     assert t.rungs == [LADDER[0], LADDER[0]], '内容闸拒绝必须先同档重采一次'
     assert [e['resample'] for e in _observed(events)] == [True]
+    accepted, = [event for event in ctx.ledger.audit_events
+                 if event['kind'] == 'gate_decision' and event['decision'] == 'accepted']
+    assert client.accepted_attempt('p') == accepted['attempt_id']
+    assert client.accepted_request_fingerprint('p') == request_fingerprint(t.calls[1])
 
 
 def test_a_long_rejection_reason_is_truncated_and_marked():
@@ -818,6 +839,34 @@ def test_cache_identity_tracks_the_request_not_the_worktree():
     changed_prompt = ChatRequest(system='prompt-v2', **base)
     assert cache_key(original) == cache_key(same_request_under_another_worktree)
     assert cache_key(original) != cache_key(changed_prompt)
+
+
+def test_cache_key_remains_the_legacy_prefix_of_the_full_request_identity():
+    """缓存文件名保持 32 字符兼容；来源账保存同一摘要的完整 64 字符。"""
+    req = _req()
+    full = request_fingerprint(req)
+    assert len(full) == 64
+    assert len(cache_key(req)) == 32
+    assert cache_key(req) == full[:32]
+
+
+def test_request_identity_golden_vector_pins_the_legacy_cache_preimage():
+    """固定历史前像；规范化任一字节变化都必须显式改裁决。"""
+    req = ChatRequest(
+        model='deepseek-v4-flash',
+        system='你是闭卷改写作家。',
+        user='请重写第七章：雨夜重逢。',
+        reasoning_effort='high',
+        thinking=True,
+        json_mode=True,
+        max_tokens=96000,
+        temperature=0.25,
+    )
+    assert request_fingerprint(req) == (
+        'f6939aa1dc49de9d4e88de75dd62ddc8'
+        '5f35f589613b8b3e8618fb5141d6d44b'
+    )
+    assert cache_key(req) == 'f6939aa1dc49de9d4e88de75dd62ddc8'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

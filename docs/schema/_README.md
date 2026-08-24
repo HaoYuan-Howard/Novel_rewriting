@@ -39,7 +39,7 @@
 | `stage2.md` | `global_grounding.json` · `chapter_blueprints.json`　**全链第一个调 LLM 的层** |
 | `stage3.md` | `style_grounding.json`　v2 免费机械基线、测量契约与下游最小投影 |
 | `stage4.md` | `plan_chapters.json` · `writer_context.json`　**两份产物：一份 LLM 产、一份确定性组装**；<br>也是**全链的收口点**——前三层所有逐章闸门最后都汇到 `writer_context` 这一份上 |
-| `stage5.md` | `<mode>/chNN.json`（含 `.INVALID`）· `review_<n>.json` · `semantic_<n>.json` · `wontfix.json` · `_rounds/` 三种归档 · **`draft.md`（字节形态，§五）**<br>**全链唯一产出「书」的层**，也是**唯一带 LLM 返工回路**的层；两条写作臂共用正文 schema，机械验收与付费语义审判各自落盘 |
+| `stage5.md` | `chNN.json`（含 `.INVALID`）· `review_<n>.json` · `wontfix.json` · trim / `_rounds/` · **`draft.md`（字节形态）**<br>**全链唯一产出正文的层**，也是**唯一带 LLM 返工回路**的层；现役为 canonical 闭卷单臂，机械验收 0 成本，书级 `stage5.semantic` 已下线 |
 | `stage6.md` | `hook.json` · `_rounds/hook.rN.json`　**全书级单次产出**（不是逐章），也是**唯一以「人定稿」当现役闸门**的层；<br>判据表分两半的边界是**产物类**（文案＝全文改写 ⇒ 连续文本探针结构性失效），不是判据质量 |
 | `stage7.md` | `name_map.json` · `_rounds/name_map.rN.json` · **`name_map_edit.json`（人产的输入，也是契约）** · **成书 `<书名>_rewriting.txt`（字节形态，§四）**<br>**全链最后一层**，也是唯一产出交付物的一层；LLM 只写两个键，其余 19 个顶层键一个字都不经模型 |
 | `_common.md` | `_provenance` 的五个共有键（含必填 `root_clean_sha1`）· **两把尺子**（40 位内容身份 / 10 位来源指纹）· `inputs` 的边 `{file, consumed}` · 新鲜度三态与**幽灵边** · `.INVALID` 与提升路（**签名里没有 `prompts`/`model`/`inputs`**）· 轮次账 · `Finding` 14 字段 · `usage` · 记账键的出口规则 |
@@ -61,8 +61,10 @@ schema 路由与 stage 真实读写均引用该目录。路径模板由 `artifac
 
 **没有迁移机制。** 版本号是“**这个产物的形状被破坏过几次**”的计数器，不是家族标签。
 `stage2/chapter_blueprints.json` 已破坏两次：2026-08-19 锚点从逐字转写改成段落索引，升 v2；
-2026-08-23 architecture 从七值收窄为 v1.1/v2/v3.1，升 v3。存量均由 `stage2.blueprint`
-付费整跑重建。每一次破坏都登记在
+2026-08-23 architecture 从七值收窄为 v1.1/v2/v3.1，升 v3。Stage5 canonical 章、Review 与
+trim 两类产物也在 2026-08-24 单臂折平时升到 v2：旧 `stage5/deep|shallow/` 只读保留，
+`stage5.write` 付费重建正文、`stage5.review` 免费重建报告，不迁移也不搬文件冒充 current。
+每一次破坏都登记在
 `tests/test_artifact_versions.py::_SHAPE_BREAKS`，那张表与注册表互为对方的守卫。曾经有过一梯 v2→v3 migration，删除那天的实测是：
 登记了 migration 的 8 个家族在盘上一份低版本文件都没有，而盘上唯二的 v2 文件恰好属于**刻意不登记
 migration** 的那一族 ⇒ 整条梯子零消费者，却让上一段那句话假了一整段时间。判准是**谁来重建**：

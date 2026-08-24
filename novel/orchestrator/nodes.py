@@ -51,6 +51,23 @@ CLI_MODULE = 'novel.cli'
 #: ⇒ 凡是写盘的付费节点，跑完自动追一次复检，两个结论并排显示。
 FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 
+#: Stage5 两个节点各自的“主操作”。其余 ``--chapters`` / ``--actor`` /
+#: ``--reason`` 都只是这些操作的参数，不参与互斥。
+#:
+#: ⚠ 顺序不是装饰：``novel.cli.main::_run_stage5`` 正是按这些 flag 的分支优先级
+#: 派发。若一次允许两个主操作，CLI 只执行排在前面的那个，而 ``write_effect``
+#: 可能被排在后面的 ``--dry-run`` / ``--check-only`` 盖成“不写盘”，preview 就会
+#: 对实际写盘说假话。这里关闭式拒收，展示与执行共用同一道门。
+_STAGE5_PRIMARY_OPERATIONS = {
+    'stage5.write': frozenset({
+        '--rebuild-draft', '--dry-run', '--recheck', '--revalidate',
+        '--apply-edit', '--revise',
+    }),
+    'stage5.review': frozenset({
+        '--retain-pretrim', '--wontfix', '--check-only',
+    }),
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、flag 的解析与校验
@@ -115,8 +132,7 @@ def placeholder_for(flag: str) -> str:
     return REQUIRED_PLACEHOLDER_PREFIX + flag.lstrip('-')
 
 
-def validate_run(node: str, flags: Sequence[str] = (),
-                 mode: str | None = None, *,
+def validate_run(node: str, flags: Sequence[str] = (), *,
                  allow_placeholders: bool = False) -> tuple[str, ...]:
     """节点认不认识这条跑法。**认不出就当场拒**，不猜。
 
@@ -135,32 +151,10 @@ def validate_run(node: str, flags: Sequence[str] = (),
             f'现有 {len(NODES)} 个：{", ".join(sorted(NODES))}')
     spec = NODES[node]
     tokens = flag_tokens(flags)
-    composite_write = (
-        node == 'stage5.write'
-        and bool({'--deep', '--shallow-rest'} & set(tokens))
-    )
     if node == 'stage2.global' and '--resample' in tokens:
         if set(tokens) != {'--resample'}:
             raise UnsupportedRunMode(
                 'stage2.global --resample 必须单独执行；它会重新采样整份全局响应')
-
-    if composite_write:
-        required = {'--deep', '--shallow-rest'}
-        if not required <= set(tokens) or set(tokens) - required:
-            raise UnsupportedRunMode(
-                'stage5 composite write requires exactly --deep and --shallow-rest')
-        if mode is not None:
-            raise UnsupportedRunMode(
-                'stage5 composite write selects both arms and must not carry --mode')
-    elif spec.modes:
-        if mode not in spec.modes:
-            raise UnsupportedRunMode(
-                f'{node} 必须指定 --mode，取值是 {list(spec.modes)}，实得 {mode!r}')
-    elif mode is not None:
-        raise UnsupportedRunMode(
-            f'{node} 没有臂，不接受 --mode={mode!r}。'
-            f'⚠ 全链只有 `stage5.write` 有臂（两臂只差 system prompt 与给不给源章原文，'
-            f'产物形状逐字节相同，判据表只有一张）')
 
     bad = [f for f in tokens if f not in spec.flags]
     if bad:
@@ -169,6 +163,10 @@ def validate_run(node: str, flags: Sequence[str] = (),
             f'⚠ 如果这条跑法**现役后端真的在跑**，那就是节点表漏登记了——'
             f'补进 `NODES[{node!r}].flags`，别在这里绕过去')
 
+    primary = sorted(set(tokens) & _STAGE5_PRIMARY_OPERATIONS.get(node, frozenset()))
+    if len(primary) > 1:
+        raise UnsupportedRunMode(
+            f'{node} 主操作互斥，一次只能选择一个，不能同时使用 {primary}')
     # 带值 / 不带值都要当场对上：拼错的那条 argv **会真的被执行**。
     seq = list(flags)
     for i, tok in enumerate(seq):
@@ -188,7 +186,6 @@ def validate_run(node: str, flags: Sequence[str] = (),
             raise UnsupportedRunMode(
                 f'{tok} 还是 preview 的占位符 {seq[i + 1]!r}，请换成真值'
                 f'（{VALUED_FLAGS.get(tok, "见节点文档")}）')
-
     # 必填缺项：拒在**展示与执行共用**的这一处（`R-11.8`）。开在节点函数体里
     # 只拦得住真跑那一半，而 preview 会照样摊开一条注定 exit 2 的命令。
     missing = missing_required(node, flags)
@@ -338,7 +335,7 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 
 
 def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
-               base: str | os.PathLike[str], mode: str | None = None,
+               base: str | os.PathLike[str],
                placeholders: bool = False) -> list[str]:
     """那条命令。**preview 与真跑共用这一个函数**（`R-11.8`）。
 
@@ -360,7 +357,7 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
         for flag in missing_required(node, flags):
             filled += [flag, placeholder_for(flag)]
         flags = filled
-    tokens = validate_run(node, flags, mode, allow_placeholders=placeholders)
+    tokens = validate_run(node, flags, allow_placeholders=placeholders)
     if sid is None:
         if node != 'stage0.remove' or '--source' not in tokens:
             raise UnsupportedRunMode(
@@ -371,8 +368,6 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
     argv = [sys.executable, '-X', 'utf8', '-u', '-m', CLI_MODULE, 'run', node]
     if sid is not None:
         argv.append(sid)
-    if mode is not None:
-        argv += ['--mode', mode]
     argv += list(flags)
     argv += ['--base', os.path.abspath(os.fspath(base))]
     if is_paid(node, flags):
@@ -381,7 +376,7 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
         # 界面/队列那一层发生过了（`R-11.8` 的二次确认 · `R-13.3` 的一次性预先确认）。
         # ⇒ 摊开显示的那条命令**就是会跑的那条**，粘进终端也不会再问一遍。
         # ⚠ 它不进 `NodeSpec.flags`：那张表管的是**跑法**（改变贵贱/写不写），
-        # 而 `--yes` 一样都不改，它只是一枚确认凭据。同 `--base` / `--mode`。
+        # 而 `--yes` 一样都不改，它只是一枚确认凭据。同 `--base`。
         argv.append('--yes')
     return argv
 
@@ -419,7 +414,7 @@ def shell_line(argv: Sequence[str]) -> str:
     )
 
 
-def step_label(node: str, flags: Sequence[str] = (), *, mode: str | None = None) -> str:
+def step_label(node: str, flags: Sequence[str] = ()) -> str:
     """这一步的人话。**`_step()` 与 `/api/enums` 的 `actions[]` 共用这一个函数。**
 
     ⚠ 与 `build_argv` 同一条纪律（`R-11.8`）：**界面上那个按钮的名字，与作业记录里
@@ -438,13 +433,13 @@ def step_label(node: str, flags: Sequence[str] = (), *, mode: str | None = None)
     if spec is None:
         raise UnsupportedRunMode(
             f'未知节点 {node!r}。取值面的唯一落点是 `contracts.invariants.NODES`')
-    label = spec.label if mode is None else f'{spec.label}（{mode}）'
+    label = spec.label
     tokens = flag_tokens(flags)
     return f'{label} {" ".join(tokens)}' if tokens else label
 
 
 def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.PathLike[str],
-          mode: str | None, note: str | None = None,
+          note: str | None = None,
           placeholders: bool = False) -> Step:
     # ⚠ **一个 Step 的四格必须出自同一份 flags。** argv 补了占位符而 `paid`/`writes`/
     #   `label` 还按原 flags 算，就是同一条命令的第二个落点（`R-11.8` 要防的那件事）
@@ -459,10 +454,9 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
         said = f'必填项已渲染成占位符，执行前逐个替换：{said}'
         note = f'{note}\n    ⚠ {said}' if note else said
     return Step(
-        argv=build_argv(node, sid, filled, base=base, mode=mode,
-                        placeholders=placeholders),
+        argv=build_argv(node, sid, filled, base=base, placeholders=placeholders),
         cwd=str(REPO_ROOT),
-        label=step_label(node, filled, mode=mode),
+        label=step_label(node, filled),
         paid=is_paid(node, filled),
         writes=write_effect(node, filled),
         note=note,
@@ -470,7 +464,7 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
 
 
 def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
-                base: str | os.PathLike[str], mode: str | None = None,
+                base: str | os.PathLike[str],
                 follow_check: bool = True,
                 placeholders: bool = False) -> list[Step]:
     """一个作业要依次跑哪几条命令。**纯函数、无副作用。**
@@ -484,8 +478,7 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
     ⚠ 只在那个节点**真的接受** `--check-only` 时才追（stage2.global 就不接受）——
     追一条它拒收的命令，作业会在第二步无缘无故失败，而第一步可能已经花过钱了。
     """
-    first = _step(node, sid, flags, base=base, mode=mode,
-                  placeholders=placeholders)
+    first = _step(node, sid, flags, base=base, placeholders=placeholders)
     steps = [first]
     if (follow_check and first.writes
             and '--check-only' in NODES[node].flags
@@ -494,6 +487,6 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
         if check_sid is None:
             source = flags[list(flags).index('--source') + 1]
             check_sid = novel_paths.derive_source_meta(source)[0]
-        steps.append(_step(node, check_sid, ['--check-only'], base=base, mode=mode,
+        steps.append(_step(node, check_sid, ['--check-only'], base=base,
                            note=FOLLOW_CHECK_NOTE))
     return steps

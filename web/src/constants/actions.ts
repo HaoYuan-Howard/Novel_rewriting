@@ -22,7 +22,6 @@ export const ACTION_CLASS_LABEL: Record<ActionClass, string> = {
 export interface ClassifiableAction {
   kind: string
   extra: string[] | null
-  mode?: string | null
   paid: boolean
   writes_disk?: boolean
   required_inputs?: RequiredActionInput[]
@@ -42,17 +41,16 @@ function sameExtra(a: string[] | null, b: string[] | null): boolean {
  */
 export function lookupAction(
   enums: { actions: ClassifiableAction[]; job_kinds: Record<string, { paid: boolean }> } | undefined,
-  ref: { kind: string; extra: string[] | null; mode?: string | null } | null | undefined,
+  ref: { kind: string; extra: string[] | null } | null | undefined,
 ): ClassifiableAction | null {
   if (!enums || !ref) return null
   const exact = enums.actions.find(
     (a) => a.kind === ref.kind
-      && (a.mode ?? null) === (ref.mode ?? null)
       && sameExtra(a.extra, ref.extra),
   )
   if (exact) return exact
   const byKind = enums.job_kinds[ref.kind]
-  if (byKind) return { kind: ref.kind, extra: ref.extra, mode: ref.mode, paid: byKind.paid }
+  if (byKind) return { kind: ref.kind, extra: ref.extra, paid: byKind.paid }
   return null
 }
 

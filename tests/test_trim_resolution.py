@@ -15,6 +15,7 @@ from contracts.schema import artifact_spec, encode_artifact
 from contracts.schema.evaluation import TrimAudit, TrimResolution
 from contracts.schema.common import RoundFreeProvenance
 from contracts.schema.stage5 import Chapter, ChapterSegment
+from contracts.schema.stage1 import MainText
 from novel import paths, prov
 from novel.errors import ApprovalRequired
 from novel.cli import exit_codes as X
@@ -28,6 +29,7 @@ from novel.stages.stage5.trim_resolution import (
 from novel.store import ArtifactStore
 from tests import factories
 from novel.views.inbox import inbox_view
+from novel.views.stage5 import stage5_view
 
 
 PRETRIM_TEXT = '原稿正文。'
@@ -40,10 +42,20 @@ def _book(tmp_path):
     (book / 'stage0').mkdir(parents=True)
     (book / 'stage0' / 'clean_text.txt').write_text(
         '第一章\n原稿正文。\n', encoding='utf-8', newline='\n')
+    main_rel = 'stage1/main_text.json'
+    main = MainText.model_validate([
+        {'chapter_ordinal': 1, 'source_chapter_no': 1, 'text': '前章。'},
+        {'chapter_ordinal': 2, 'source_chapter_no': 2, 'text': '次章。'},
+        {'chapter_ordinal': 3, 'source_chapter_no': 3, 'text': PRETRIM_TEXT},
+    ])
+    (book / 'stage1').mkdir()
+    (book / main_rel).write_text(json.dumps(encode_artifact(
+        main_rel, main.model_dump(mode='json')),
+        ensure_ascii=False), encoding='utf-8', newline='\n')
     ctx = readonly_ctx(book, 'stage5.review', prov.code_version())
-    rel = artifact_rel('stage5.chapter', mode='deep', nn=3)
+    rel = artifact_rel('stage5.chapter', nn=3)
     chapter = Chapter(
-        output_ordinal=3, from_source_ordinals=[1], mode='deep',
+        output_ordinal=3, from_source_ordinals=[1],
         source_chars=len(PRETRIM_TEXT), budget_chars=len(PRETRIM_TEXT),
         chars=len(PRETRIM_TEXT), overlap_excl_verbatim=None,
         segments=[ChapterSegment(slot='s01', text=PRETRIM_TEXT)],
@@ -66,7 +78,6 @@ def _store(book, node='stage5.review'):
 def _audit(*, reason='超上限，本仓没有自动收缩路径', before=PRETRIM_SHA256):
     return TrimAudit(
         output_ordinal=3,
-        mode='deep',
         before_sha256=before,
         reason=reason,
     )
@@ -136,8 +147,8 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
     #   `artifact_key` 那套路由，注册表键的约定一变，它给的不是假红就是**静默指到另一份 spec**。
     assert raw['_schema_version'] == artifact_spec(resolution_rel).current_version
     assert raw['action'] == 'retain_pretrim'
-    assert raw['mode'] == 'deep'
-    assert raw['chapter_rel'] == 'stage5/deep/ch03.json'
+    assert 'mode' not in raw
+    assert raw['chapter_rel'] == 'stage5/ch03.json'
     assert raw['chapter_sha256'] == PRETRIM_SHA256
     assert len(raw['audit_sha256']) == 64
     assert 'model' not in raw['_provenance']
@@ -162,6 +173,36 @@ def test_matching_resolution_closes_inbox_but_any_audit_change_makes_it_stale(tm
         '根身份已变 ⇒ 旧 audit 连「exact-current 根因」都不再是，不只是离开 verification')
 
 
+def test_stage5_view_exposes_and_closes_the_current_trim_decision_surface(tmp_path):
+    base, book = _book(tmp_path)
+    _write_audit(book, _audit(reason='超出目标上限，当前保留完整原稿'))
+
+    before = stage5_view(str(base), '42', 3)
+    assert before.trim_audit is not None
+    assert before.trim_audit.output_ordinal == 3
+    assert before.trim_audit.reason == '超出目标上限，当前保留完整原稿'
+    assert 'before=' in before.trim_audit.context
+
+    retain_pretrim(
+        readonly_ctx(book, 'stage5.review', prov.code_version()),
+        3, actor='reviewer', reason='逐段核对后接受完整原稿')
+    assert stage5_view(str(base), '42', 3).trim_audit is None
+
+
+def test_stage5_view_reports_an_old_trim_schema_as_legacy_incompatible(tmp_path):
+    base, book = _book(tmp_path)
+    _write_audit(book, _audit())
+    audit_path = book / artifact_rel('stage5.trim_audit', nn=3)
+    raw = json.loads(audit_path.read_text(encoding='utf-8'))
+    raw['_schema_version'] = 1
+    audit_path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
+
+    view = stage5_view(str(base), '42', 3)
+    assert view.legacy_incompatible is True
+    assert any('trim_audit_ch03.json:v1->v2' in path for path in view.legacy_paths)
+    assert view.trim_audit is None
+
+
 def test_formal_chapter_rewrite_retires_and_blocks_the_old_trim_resolution(tmp_path):
     base, book = _book(tmp_path)
     _write_audit(book, _audit())
@@ -170,7 +211,7 @@ def test_formal_chapter_rewrite_retires_and_blocks_the_old_trim_resolution(tmp_p
     assert _trim_rows(str(base)) == []
 
     store = ArtifactStore(ctx)
-    rel = artifact_rel('stage5.chapter', mode='deep', nn=3)
+    rel = artifact_rel('stage5.chapter', nn=3)
     chapter, _raw = store.read_own(Chapter, rel)
     changed = chapter.model_copy(update={
         'segments': [ChapterSegment(slot='s01', text='人工改过的另一版正文。')],
@@ -198,9 +239,9 @@ def test_revalidate_failure_restores_chapter_trim_and_all_history(tmp_path, monk
         readonly_ctx(book, 'stage5.review', prov.code_version()),
         3, actor='reviewer', reason='确认保留当前 pretrim',
     )
-    ctx = RunContext.open(base, '42', 'stage5.write', paid=False, mode='deep')
+    ctx = RunContext.open(base, '42', 'stage5.write', paid=False)
     store = ArtifactStore(ctx)
-    rel = artifact_rel('stage5.chapter', mode='deep', nn=3)
+    rel = artifact_rel('stage5.chapter', nn=3)
     chapter, _raw = store.read_own(Chapter, rel)
     store.write_invalid(
         rel, chapter.model_copy(update={'errs': ['模拟旧阻断结论']}),

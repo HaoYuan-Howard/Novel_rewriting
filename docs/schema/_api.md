@@ -77,8 +77,8 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | 键 | E 期的变化 | 依据 |
 |---|---|---|
 | `invent` | 无（`allow`/`forbid`/`principle` 逐值相同） | `抓包` |
-| `job_kinds` | 键从原型 12 个 `n1..n9` 换成**节点 id**，值加 5 格（`stage`/`section`/`modes`/`flags`/`produces`） | `docs/BACKEND_CONTRACT.md`「命名体系」第 5 条：形状不变、只有 `kind` 的取值变 |
-| `actions` | `kind` 取值同上；**新增** `mode` / `writes` / `writes_disk` / `needs_value` 四格 | 同上；`writes_disk` 是前端在 `web/DELIVERY.md` 里点名要的那一格 |
+| `job_kinds` | 键从原型 12 个 `n1..n9` 换成**节点 id**，值含 `stage`/`section`/`flags`/`produces`；不再发布任何 mode 取值面 | `docs/BACKEND_CONTRACT.md`「命名体系」第 5 条；Stage5 v2 只有 canonical 写作 |
+| `actions` | `kind` 取值同上；字段为 `kind`/`extra`/`label`/`paid`/`free_flag`/`writes`/`writes_disk`/`needs_value`/`required_inputs`，无 mode | 同上；`writes_disk` 是前端在 `web/DELIVERY.md` 里点名要的那一格 |
 
 ⚠ `job_kinds` 里的 `paid` 说的是**默认路径**贵不贵，**不许拿它做贵贱对账**。
 真正的贵贱由 `(node, flags)` 决定，唯一落点 `novel/orchestrator/nodes.py::is_paid`（`R-11.7`），
@@ -90,7 +90,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 
 ## 三、端点 → 响应
 
-**当前落地的五十五个**（其余端点见 §七）：
+**当前落地端点**（其余端点见 §七；数量随路由增删，不在本文手写第二份常量）：
 
 | 端点 | 响应 | 新旧 |
 |---|---|---|
@@ -128,7 +128,6 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/seen/:key` | `ApprovalDoc` | 新 |
-| `POST /api/novels/:sid/approvals/deep` | `ApprovalDoc`（请求体 `DeepSelectionRequest`） | 新 |
 | `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/backfill` | `ApprovalBackfillResult`（按盘面显式补录，不在 GET 时静默发生） | 新 |
@@ -198,8 +197,8 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 `AgentRunPreview` 回显两个布尔值，preview 与真跑都由同一函数把两段授权原文写入 prompt。
 
 通用启动返回 202 和 `running` 作业，由后台线程逐步启动 CLI 子进程。同一 `sid` 的书级
-作业互斥并返回 409，不同小说可并行；Stage5 复合写作在拿到书级键后才原子核对并锁定
-人工深度选章，避免“预览一种分配、实际写另一种分配”。
+作业互斥并返回 409，不同小说可并行；Stage5 canonical 写作同样占书级键，并在启动前原子核对
+current writing 授权、Review 状态与旧布局，不存在另一个按臂的并发口。
 
 ⚠ **一个响应模型都不许自己算判定**（`R-11.4`）。`badge` / `passed` / `counts`
 只出现在 `CheckReport` 里，且由 `contracts/schema/report.py::badge_of` 折叠、
@@ -277,12 +276,14 @@ v2 正式产物存在且可读时才同时出现；半块在没有合法 produce
 | `NovelList` | `base` · `novels[]`（`NovelOverview`） | 抓包 `novels.json` 的顶层就是 `{base, novels}`。⚠ **复用 `NovelOverview`，不另造一张轻量清单**——原型 `Web/novels.py` 那张第二清单的代价是 stage5 被迫整个排除在外，于是「有没有陈旧产物」那个徽章不覆盖成稿 |
 | `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
 | `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录 |
+| `ApprovalDoc` | `v=2` · `sid` · `gate` · `seen` · `writing` · `spawns` | HTTP v2 不等于 `_service/approvals/<sid>.json` 的盘上 v3；公共视图不再含 `deep`，writing 只授权 current canonical 全书写作。旧 v2 内部记录仅由显式 backfill 收敛，普通 GET 不迁移 |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
 | `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|landed_red|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |
 
 `PreviewRequest`：`sid`（已有书为非空字符串；首次 `stage0.remove --source` 为 `null`）·
-`node` · `mode` · `flags[]`。
+`node` · `flags[]`。请求外壳是 strict，任何旧 `mode` 键都返回 422；老
+`jobs.jsonl` 的兼容解码只在服务内部磁盘边界发生，不进入本请求或公开响应模型。
 ⚠ `flags` 里的**带值 flag 要带上值**（`--apply-edit <路径>`）——
 `/api/enums` 的 `actions[].needs_value` 就是用来告诉前端「这个按钮要先要一个文件」的。
 
@@ -360,16 +361,18 @@ S-08（ctx 不在仍 200，`materials=null`）。
 
 ⚠ `ctx_exists=false` ⇒ `materials=null`：**不发假材料**（`04_delivery.md:134`，
 后置条件焊死），给「先跑 stage4」——左半边缺席、右半边照常列已有成稿。
-某章两臂皆无稿 ⇒ 200 且 `drafts=[]`（「还没写」不是错误）。
+某章无 canonical 稿 ⇒ 200 且 `drafts=[]`（「还没写」不是错误）。
 `planned=null` = 计划读不回来，「该有几章」判不了——与 0 是两件事。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `ctx_exists` / `planned` / `written` / `invalid` / `missing[]` / `duplicates[]` | | 是 | 全书进度的读数，不折叠成判定 |
-| `chapters` / `ordinal` / `index[]` | | 是 | 章索引取**主稿**（deep 优先）；没有成稿的章 `chars` / `overlap_excl_verbatim` / `freshness` 三格全 `null` |
+| `ctx_exists` / `planned` / `written` / `invalid` / `missing[]` | | 是 | canonical 全书进度读数，不折叠成判定；不再有 `duplicates`（单一正式路径结构上消除了两臂重复） |
+| `legacy_incompatible` / `legacy_paths[]` | bool / str[] | 是 | 旧 `stage5/deep|shallow/` 只读证据，以及仍占 live 位置的旧版 Review/trim schema；两格必须同时有意义，发现旧契约时不挑一臂或低版本冒充 current |
+| `chapters` / `ordinal` / `index[]` | | 是 | 章索引只取 `stage5/chNN.json`；没有成稿的章 `chars` / `overlap_excl_verbatim` / `freshness` 三格全 `null` |
 | `source_text` / `source_chars_raw` | 串/整数 或 null | 是 | 源章原文单独的落点（材料里不重复） |
-| `materials` | 对象 或 null | 是 | 写手拿到的下发面，**与写手同一份**（`prompts.build_material(...).blocks`——`R-11.8` 在读屏上的对应物：显示的材料 = 真发出去的材料）。按**闭卷**臂组装 |
+| `materials` | 对象 或 null | 是 | 写手拿到的下发面，**与 canonical 闭卷写手同一份**（`prompts.build_material(...).blocks`——`R-11.8` 在读屏上的对应物：显示的材料 = 真发出去的材料） |
 | `drafts[]` / `invalid_drafts[]` | 数组 | 是 | 正式稿与 `.INVALID` 分两个数组。`segments[]` 是盘上的唯一内容权威，保留 producer slot；`text` 必须等于代码按段顺序拼出的确定性投影，只供展示。`origin`（`human` / `llm`）由 `_provenance` 的载体类派生 |
+| `trim_audit` | 对象或 null | 是 | 当前章仍绑定 current 正文、且尚未人工销账的超上限事实；对象只发 `output_ordinal/reason/context`，hash 锁由专用 retain 路由执行时从盘上重读，浏览器不代抄。`null` = 本章无待销账 trim |
 | `drafts[].align` | 对象 或 null | 是 | **可空**：`null` = 对齐辅助尚未由服务端提供（本章无锚可对时 `align_rows` 为空、账仍在）。对齐账是对应关系不是判定，`note` 常驻这句话；锚点覆盖率必须常驻显示 |
 | `drafts[].align.coverage_threshold` / `.coverage_state` | 浮点 / 串 | 是 | 阈值取自 `contracts/invariants.py::ANCHOR_COVERAGE_WARN`（0.6），`coverage_state ∈ low｜adequate` 由 `DraftAlignView` 的校验器按 `coverage` 与 threshold 反推 ⇒ **两格不可能各说各话**。前端只消费 `coverage_state`，一行阈值都不写（守卫 `tests/test_api_discipline.py::test_frontend_does_not_rejudge_anchor_coverage`） |
 | `ctx_state` | 对象 | 是 | `ArtifactState` |
@@ -383,6 +386,7 @@ S-08（ctx 不在仍 200，`materials=null`）。
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `review_seq` / `sources` / `baselines` / `baselines_identity` / `book[]` | | 是 | 最新一份全书验收的账，原样 |
+| `review_state` / `review_reasons[]` | `Stage5ReviewState` / str[] | 是 | `fresh｜stale｜unknown｜legacy_incompatible`（`missing` 由路由 404 表达，不能伪装成视图）；只有 fresh 的 reasons 为空。结论统一取 `review.review_status`，API 不重拼第二套 freshness |
 | `finding_counts` | 对象 | 是 | 全书结论按 sev 现数，**四键恒在（0 也写）**。⚠ 不读产物的 `counts` 字段——那份是稀疏 Counter（`Review.counts` 登记过的病）；`index[]` 每行同理（后置条件逐行查） |
 | `wontfix` | 整数 | 是 | 被人豁免的条数——豁免不删结论，单独计数 |
 | `index[]` | 数组 | 是 | `unresolved` = 有收敛账（`unresolved_rounds > 0`）且未豁免的结论条数 |
@@ -460,7 +464,7 @@ HTTP 进程只写 `_service/`（一次性人工稿）。
 |---|---|---|
 | `POST /api/novels/:sid/stage0/approve` | `Stage0ApprovalRequest`（`actor` + `reason`） | actor 是自报身份；空值拒绝。⚠ 零命中自动批已于 2026-08-21 停产、记录它的 `approval.origin` 一格已于 2026-08-22 删除 ⇒ **本端点是批准的唯一来源** |
 | `POST /api/novels/:sid/stage0/candidate/adopt` / `dismiss` | `Stage0CandidateDecisionRequest`（`candidate_revision_id` + `expected_revision_id` 乐观锁 + actor/reason） | 页面上要决定的是**整版留哪一版**，不是逐个冲突选边——聚合根是 `{原文身份, 正文, 剔除账本, 告警}` 整团（`stage0.md` §2.5），只对正文做 diff3 保证不了整个聚合一致。`adopt` 落一条 `human_adopt` revision 并把审批退回 pending；`dismiss` 当前稿一字不动、候选进 `dismissed[]`（否则同一候选每跑一次机器就复活一次）。⚠ 「采纳后再编辑」不是第三个端点，是 adopt 之后照常 `POST /stage0/edit`。决定按内容寻址保留，崩溃后同一请求幂等重放；只有 `ok/landed_red` 才清理一次性 plan |
-| `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（`mode` + `segments[{slot,text}]`） | typed segments 落 `_service/edits/` 一次性 JSON 稿（文件名带 `ch{o}`，`--apply-edit` 从文件名认章）；slot 必须唯一，最终与计划 slot 集合完全一致且顺序由 producer 决定的校验归 `stage5.write --apply-edit`。随后走**与生成稿同一个判定落点**（归一 → 判据 → 归档 → 写回，`origin=human` 记账）；仍有阻断级**只报不拦**（人改的往往正是机器修不动的地方）。⚠ **没有乐观锁**：并发改稿以整份归档兜底，覆盖的代价是多花一轮归档——登记为已知限制，不在 API 层造第二套锁 |
+| `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（仅 `segments[{slot,text}]`，无 mode） | typed segments 落 `_service/edits/` 一次性 JSON 稿（文件名带 `ch{o}`，`--apply-edit` 从文件名认章）；slot 必须唯一，最终与计划 slot 集合完全一致且顺序由 producer 决定的校验归 `stage5.write --apply-edit`。随后走**与生成稿同一个判定落点**（归一 → 判据 → 归档 → 写回，`origin=human` 记账）；仍有阻断级**只报不拦**（人改的往往正是机器修不动的地方）。⚠ **没有乐观锁**：并发改稿以整份归档兜底，覆盖的代价是多花一轮归档——登记为已知限制，不在 API 层造第二套锁 |
 | `POST /api/novels/:sid/stage6/approve` | `HookApproveRequest`（`pick`、`actor`、`reason`、`subject_sha256`） | **不收文本**；完整 hash 与当前候选乐观绑定，actor 是自报而非认证身份。改字是另一个节点（`stage6.hook --apply-edit`），契约把编辑文件钉死在书目录内，`R-11.3` 禁止服务进程写产物盘。**`stage6/edit` / `stage7/edit` 刻意不在 HTTP**，走 CLI |
 | `POST /api/novels/:sid/stage7/approve` | `NameMapApproveRequest`（`actor`、`reason`、`subject_sha256`） | 一本书只有一份人物表，因此不带候选序号；完整 hash 乐观绑定 `surname_map + characters + extra_subs` 决策面。成功后服务 s7 proof 同时绑定完整 typed 审批凭据，但不绑定 `book_txt` 等派生账，正常 assemble 不会自废批准 |
 

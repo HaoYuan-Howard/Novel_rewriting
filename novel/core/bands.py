@@ -39,6 +39,25 @@ def _field(value: MeasurableBody | Mapping[str, Any] | object, key: str) -> Any:
     return value.get(key) if isinstance(value, Mapping) else getattr(value, key)
 
 
+def cut_distance(value: float, cuts: list[tuple[int | None, str]]) -> float | None:
+    """这个值离**最近的档边**有多远；一条档边都没有时给 `None`。
+
+    ⚠⚠ **它存在的理由是「翻档」与「真漂移」在报告上分不开。** 档位是粗粒度的
+    （句子切在 16/22/30、段落切在 20/40/80），基线贴着档边时成稿只降百分之几就翻档，
+    而「短句 → 极短句」看起来和一次真正的形态崩塌**一模一样**。
+    实测旁证：同一份验收里 `para_len_drift`（比值制，<0.6 或 >1.6 才响）只命中 2/19，
+    而 `band_drift` 的段落维命中 10/19 ⇒ 多数是「比值没怎么变但跨过了档边」。
+    ⇒ 判据的 `detail` 必须把这个距离说出来，**否则拿现有产物分辨不了这两种解释**。
+
+    ⚠ **只给读数，不做判定**：本函数不回答「多近算贴边」——那个数没有标定过
+    （同 `docs/LESSONS.md` 第 16 条与 `TODO-30` 的处置：测量确定、区间没标定 ⇒ 只报不挡）。
+    """
+    edges = [hi for hi, _ in cuts if hi is not None]
+    if not edges:
+        return None
+    return round(min(abs(value - hi) for hi in edges), 2)
+
+
 def body_bands(body: MeasurableBody | Mapping[str, Any]) -> dict[str, str]:
     """正文九叶机械投影 → Stage5 使用的五项档位。
 

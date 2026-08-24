@@ -39,7 +39,6 @@ export const qk = {
     [
       'jobPreview',
       req?.kind ?? null,
-      req?.mode ?? null,
       req?.extra ?? null,
       req?.args ?? null,
       req?.sid ?? null,

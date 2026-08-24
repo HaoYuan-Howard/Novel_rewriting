@@ -227,34 +227,32 @@ class ApprovalRequired(TerminalState):
 
 
 class DeliveryIncomplete(TerminalState):
-    """这本书还没到可交付状态：同章双份 / 计划有而成稿无 / 开篇文案未定稿。
+    """这本书还没到可交付状态：计划有而成稿无 / 开篇文案未定稿。
 
     ⚠⚠ **一次报全，不是逐条失败。** `R-10.14` 的原话是「txt 是交付物，里面没有地方写
     风险抬头横幅」——正因为成书里写不下警告，这道闸必须在拒绝的那一刻把差的东西
     一次说清；拆成 first-match 之后，人补完缺章才发现文案还没定稿，
-    **一道 0 成本的闸要走三个来回**。
-    ⇒ 三项各自 typed，消费方按字段路由（人删掉多的那一份 / 去跑 stage5 /
+    **一道 0 成本的闸要走两个来回**。
+    ⇒ 两项各自 typed，消费方按字段路由（去跑 stage5 /
     `stage6.approve --pick N`），而**不是**去 parse 那段人话（`Q-6`）。
 
-    ⚠ **为什么是一个类而不是三个**：这三条不是三种失败，是同一件失败的三种量法
+    ⚠ **为什么是一个类而不是两个**：这两条不是两种失败，是同一件失败的两种量法
     （同 `UpstreamStale` 覆盖 freshness / 消费指纹漂移 / 规模账不符）。差别在于
     **哪一项要补**，那是数据不是类型。⇒ 拆开能给的机器可读性，字段一样给得出。
     ⚠ 它与本函数前面那串 first-match 的闸不同**是有理由的**：那串是有序依赖
-    （没有批准就无从比对批准对象），这三条同时成立且互不依赖。
+    （没有批准就无从比对批准对象），这两条同时成立且互不依赖。
 
     ⚠ 与 `UpstreamMissing` 分开：那一条说「上游那份产物不在盘上」（去跑那一层），
     这一条的上游都在，是**内容还没齐**。
     ⚠ `invalids`（被闸门拦下的废稿）**不在这里**：`R-10.14b` 明说它是「排除但要报计数」，
-    那是报告的一行，不是拒绝交付的理由。⇒ 四类残缺态里这道闸只拦三类。
+    那是报告的一行，不是拒绝交付的理由。
     """
 
     requirement = 'R-10.14'
 
-    def __init__(self, message: str, *, duplicated: Sequence[int],
-                 missing: Sequence[int], hook_unapproved: bool,
+    def __init__(self, message: str, *, missing: Sequence[int], hook_unapproved: bool,
                  hint: str | None = None) -> None:
         super().__init__(message, hint=hint)
-        self.duplicated = tuple(duplicated)
         self.missing = tuple(missing)
         self.hook_unapproved = hook_unapproved
 
@@ -417,7 +415,7 @@ class PathRefused(RefusedByStructure):
          而只有人能决定留哪个」，静默挑一个正是本项目要消灭的那种沉默。
 
     ⚠ 层数那一条不是洁癖：来源账的键是**两级**的（`_common.md` §3.1），
-    `stage5/deep/ch01.json` 记进 `inputs` 会塌成一个**反查不到文件**的键，
+    多于两级的产物路径若记进 `inputs`，会塌成一个**反查不到文件**的键，
     于是那条边**永远显示对得上**——`一个假的匹配比没有记录更坏`。
     成稿走 `store.read_judged`（存完整相对路径），见 `_common.md` §3.2。
     """

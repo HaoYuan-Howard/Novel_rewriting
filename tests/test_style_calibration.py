@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""TODO-13：标定工具可复跑，自动反哺边界由规则表锁定。"""
+"""单臂 Stage5 风格标定工具可复跑，自动反哺边界由规则表锁定。"""
 from __future__ import annotations
 
 import tempfile
@@ -24,7 +24,7 @@ def test_style_calibration_is_deterministic_and_keeps_a_held_out_split():
 
 
 def test_only_unique_style_repairs_may_enter_paid_revision():
-    assert REGISTRY.get('dialogue_halved').repair == 'UNIQUE'
+    assert 'dialogue_halved' not in {row.rule for row in REGISTRY.of_stage('stage5')}
     assert REGISTRY.get('layout_drift').repair == 'UNIQUE'
     for rule in ('dialogue_fewer', 'dialogue_broken', 'dialogue_ratio_drift',
                  'band_drift', 'para_len_drift'):

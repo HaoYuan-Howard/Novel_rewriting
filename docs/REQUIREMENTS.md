@@ -36,9 +36,13 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
   ⚠ 冻结 dispatch 是 **14 条**（2 书 × 7 付费节点，`CURRENT_CORPUS_BOOKS ×
   CURRENT_CORPUS_PAID_NODES` 现算）；Stage3 v2 是免费机械节点，不进入付费 dispatch。
   `stage6.semantic` 随 `--advisory` 删除后只带
-  `--base --yes`，只剩 `stage5.write` 还带 `--deep 1,2,3 --shallow-rest`。
+  `--base --yes`；canonical `stage5.write` 也只带 `--base --yes`，默认补齐当前计划的全部缺章。
 - [ ] 对同一盘面运行 `--require-corpus` 的完整 `corpus or not corpus` 套件；任何书目/产物减少、
   版本漂移、ledger 不闭合或新增 skip 都必须失败。
+
+本条只建立全链 current-schema 语料基线，不包含、也不替代 Stage5 新旧写作契约的付费 A/B。
+即使本条完成，因为 Stage5 消费 Stage1～4 的现役产物，也不能把全链读数单独归因为 Stage5
+beat-material 契约的质量、成本或速度变化。
 
 ⚠⚠ **本条不登记任何滚动读数。** 本文件开头那条 ⚠ 已经禁止拿非验收盘面的数字当证据，
 那么在同一份文件里维护一个「还剩几条红」的分数本身就是违规——它会被读成进度。
@@ -66,6 +70,9 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
 不能为最终 manifest 提供通过数字。
 
 与最终基线相连、但尚未取得实证的付费项：
+
+以下 FC-08 / FC-13 只跟踪既有的密度与 effort 问题；已取消的 Stage5 新旧写作契约 A/B
+不再是本文件的活动项。
 
 - **FC-08**：四项密度基线已完整下发给写手（`novel/stages/stage5/prompts.py::density_guidance`，
   反漂移守卫 `tests/test_stage5_prompts.py`），仍需按冻结的两书 42 章范围复跑，证明漂移命中
@@ -97,10 +104,10 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   1639 份带 `usage` 的真实响应，0 成本可复算）：completion 13,031,022 token 里 reasoning 占
   **11,457,627（87.9%）**，净成品输出只有 1,573,395；写作类调用（n=720）reasoning 中位 9109 而
   成品中位 1213。**输出侧是成本主体、reasoning 一项约占八成，输入侧优化的天花板只有约 7%**
-  ⇒ 缓存/裁材料那一侧无论怎么做都换不来量级收益，只有 effort 降档能。候选优先序按收益：
-  `stage5.write` 的 **shallow 臂**（它做的是照原文改写而不是闭卷创作，却与 deep 臂同付 high）
-  → `stage7.rename`。旧 Stage3 定性抽取的历史候选已由 v2 产品裁决退役。⚠ 判官
-  （`stage6.semantic`）与 `stage2.global` **不进候选**：
+  ⇒ 缓存/裁材料那一侧无论怎么做都换不来量级收益，只有 effort 降档能。历史候选中的
+  Stage5 非 canonical 写作路径已随能力退役，`stage7.rename` 已裁定保持 high，旧 Stage3
+  定性抽取也已由 v2 产品裁决退役；当前没有仍待执行的 effort 降档候选。
+  ⚠ 判官（`stage6.semantic`）与 `stage2.global` **不进候选**：
   2026-08-15 的 A/B 已裁决判官永不换廉价配置、关思考在 `stage2.global` 三轮全灭
   （见 `docs/BACKEND_CONTRACT.md` §十）。⚠ 那次 A/B 测的是**模型**与 **thinking 开关**两个维度，
   `reasoning_effort` 是**第三个维度、从未测过**——不要拿那次结论替本条销账。
@@ -130,11 +137,9 @@ n=11 ⇒ 任何结论只能写成「**这本书上没观察到质量塌陷**」�
 这条历史 effort 对照不再对应现役生产面。
 排除 `stage6.semantic` 与 `stage2.global`（2026-08-15 已裁决，见 `docs/BACKEND_CONTRACT.md` §十）。
 
-⚠ **收益最大的候选 `stage5.write` shallow 臂今天够不着，它是本条真正的施工前置。**
-`NodeSpec.effort` 是**逐节点**的，而 deep/shallow 是同一个节点 `stage5.write` 的两个 mode
-（`novel/cli/main.py` 里 `deep_ctx` 与 `shallow_ctx` 都传同一个 `ctx.node`）
-⇒ `NODES[ctx.node].effort` 对两臂返回同一个值，**现有旋钮挂不上「只给 shallow 降档」**。
-要做这一项必须先加挂载点，那是独立改动，不要在实验里临时改成全臂降档冒充。
+**历史方案关闭说明**：当时想只降旧写作路径中照原文改写的那一支，但
+`NodeSpec.effort` 只能按整个 `stage5.write` 节点生效。现役 Stage5 已收口为单一 canonical 闭卷路径，
+旧分支与单独挂载点都不再是活动开发项。
 
 **成本口径：只看输出侧（`completion` / `reasoning`），不得用 prompt token 判胜负。**
 理由是实测发现 **`reasoning_effort` 会切分供应商前缀缓存**：同一本书、同一段 system 字节、
@@ -164,10 +169,10 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
 `novel/paths.py` 当成书目录），上游产物逐字节相同，只把该节点重跑成 low。
 **high 参照臂从 `.llm_cache/` 复现**（账本 `cached=true`、0 成本、与基线账本逐字段相同）——
 除 `stage4.plan` 外全部命中，因此这次的 high 侧几乎没有花钱。
-⚠ 复现的前提是 argv 与基线**逐字相同**：`--chapters` 会把 `cache_policy` 变成
-`refresh-write`（只写不读），`stage5.write --mode X`（不带 `--chapters`）会把**全部**缺章
-写进那一条臂——两条都实测踩过，各误发了一批真调用。整书入口是
-`stage5.write --deep 1,2,3 --shallow-rest`。
+⚠ **以下是 2026-08-19 已退役 CLI 的历史复现教训，不是现役命令**：当时 argv 必须与基线
+逐字相同，带定向章会改变缓存策略，按旧写作路径单独跑又会补齐那一路的全部缺章；
+两种误操作都曾真实发出付费调用。现役整书入口是 canonical `stage5.write --base --yes`，
+只有明确定向重写时才加 `--chapters`。
 
 **成本（输出侧，按本条既定口径；prompt 侧因 effort 切分前缀缓存不可比）**
 
@@ -193,7 +198,7 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
   low 首轮命中 `hinge_anchor_void` / `span_unlocatable`（86/87 定位成功）/ `verbatim_failed`
   （4 条失败记录）三条 HARD（ok 64·命中 5·unver 2）。**三条全属「锚不回原文」一族。**
   另实测 ch7 一次 `reasoning_tokens` 只有 33（28s，净正文 1,949）⇒ low 档会偶发几乎不思考。
-- `stage5.write`：low 的 ch1（deep 臂）`draft_truncated`（结尾无终止标点）落 `.INVALID`，
+- `stage5.write`：历史整节点 low 实验的 ch1 命中 `draft_truncated`（结尾无终止标点）落 `.INVALID`，
   章集合掉到 10/11；`stage5.review` 的 info 命中 4→6（新增 `invented_number` 与
   `quotes_in_unquoted_corpus`）、unver 1→2；`para_len_drift` 最坏章从 5.57× 恶化到 11.10×。
 - `stage4.plan`：**这一节点测不了**。两条臂都只发生 1 次调用、且都是同一份
@@ -353,8 +358,7 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
       只做 `cache.evict` + 降一档，既不产 observe 事件也不写日志，`errors` 只在**所有档全灭**时
       才随 `LlmFailed` 出现 ⇒ 事后无法回答「为什么降的档」。补一条带 `why` 的 observe 事件是
       本条继续做下去的前置（否则每次 A/B 都可能混进一次说不清的降档）。
-- [ ] `stage5.write` 的 shallow 单臂降档仍够不着（挂载点问题，见上）。本次实测的是**整节点**
-      降档，按上表已否决；**不要拿它替 shallow 臂那一项销账**。
+历史 Stage5 整节点 low 实验已按上表否决；旧非 canonical 分支随能力退役，不再作为本条的独立待验候选。
 
 验收：所有被测产物由现役写盘路径生成；完整套件的通过/跳过/失败数、每条 skip 理由和上述付费
 实验结论一并记录，未完成项不因代码位或预览工具存在而销账。
@@ -445,16 +449,11 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 
 - **stage5 user 块重排**（把跨章不变的块提到 user 最前）：预期约 3–4%。没做的理由是它会把
   「本章任务」从第 2 块挪到靠后，**有位置效应**，超出「零语义风险」这一档，必须一次真跑证明
-  没写坏成稿。⚠ **2026-08-24 现役边界已取代这条旧前提**：Stage5 不再有定性
-  `style_block` / `chapter_styles` 消费面，只剩精确机械投影与 `shape_block`；若以后重启本项，
-  必须按当前 blocks 重新量恒定/逐章字节，不能沿用这里的旧命中估计。
-- **shallow 臂裁材料**：预期约 1%。没做的理由是 `novel/stages/stage5/prompts.py::Material` 的
-  `given` **同时是 `invented_number` / `invented_name` 两条判据的参照集**
-  （`novel/stages/stage5/checks.py`）。直接裁下发块会让原本有依据的数字和人名被判成「自造」——
-  省下占比约 9% 的 input，换来判据误报。要做必须**先把「判据参照集」与「真正发出去的 blocks」
-  拆成两件事**，那是独立改动。
+  没写坏成稿。⚠ **2026-08-24 现役边界已取代旧前提**：Stage5 已收成单一 canonical
+  路径，也不再有定性 `style_block` / `chapter_styles` 消费面，只剩精确机械投影与
+  `shape_block`；若以后重启本项，必须按当前 blocks 重新量恒定/逐章字节，不能沿用旧命中估计。
 
-⚠ 两项加起来也只有个位数百分比：输入侧优化的天花板约 7%（FC-13）。要量级收益只有 effort 降档。
+⚠ 上述现役 user 块重排候选也只有个位数百分比：输入侧优化的天花板约 7%（FC-13）。要量级收益只有 effort 降档。
 
 ### TODO-32 · flash 迁移三本书的未收口项（诚实清单）
 
@@ -477,7 +476,7 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
       `ab_compare` 里 ⑤ 那行 3 vs 70 不可直接比较。
 - [ ] **「最终稿产自哪一档」变成一等公民读数**：同一 `(node, chapter)` 按 `at`
       排序取最后一条 `outcome=='ok'` 的 `reasoning_effort`/`thinking`。实测读数
-      （无情道 flash 臂 10/23 章产自降档档位、含 deep 臂 ch1/ch3；把夫君 8/19；
+      （无情道历史 flash 实验盘面 10/23 章产自降档档位，其中 ch1/ch3 属当时的旧闭卷路径；把夫君 8/19；
       pro 对照 0/23）目前只能从 ledger 手算，任何报告里都没有。
 - [ ] **两处原文短语被逐字带进旧成书**（无情道 ch12；旧 `stage3.micro_quote` 曾报 3 处：
       1 处设计内保真点、2 处写手照抄了 v1 定性举例）。pro 臂同样 2/3 ⇒ 不是 flash

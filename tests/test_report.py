@@ -71,6 +71,70 @@ def _build(reg: Registry, outcomes=(), *, accounting=None, spec=(), monkeypatch=
                  outcomes=outcomes, accounting=accounting, registry=reg, **kw)
 
 
+# ───────────────── 恒等基线两格的出口（2026-08-23 补） ─────────────────
+#
+# ⚠⚠ 补这三条之前，`identity_hit` / `identity_dead` 是**只写不读**的：
+# `novel/stages/stage5/review.py` 的两道闸给它们赋值、`contracts/schema/common.py`
+# 定义、`web/src/types/common.ts` 也有类型，而**全仓没有任何渲染面、view 或前端组件
+# 读过它们**。于是「这一条被本章源文的同一现象混淆了」与「写手真的漂了」
+# 在终端上完全同形——而两者的处置相反（前者要修上游或不修，后者才该付钱重写）。
+# 形状同 `wontfix` 那个记号，理由也同（`docs/LESSONS.md` 第 4 条）。
+
+def _finding(**kw):
+    # ⚠ 用一条**真注册**的判据 id：`contracts/schema/report.py::finding` 会去
+    #   `contracts.rules.REGISTRY` 取那一行（`sev` / `owner` / `actionable` 全从它派生）。
+    #   本文件脚手架里的 `r_demo` 只活在临时 `Registry()` 里，进不了全局表。
+    from contracts.schema.report import finding
+    base = dict(rule='band_drift', detail='示例结论', evidence=['e1'])
+    base.update(kw)
+    return finding(**base)
+
+
+def test_a_clean_finding_carries_no_identity_mark():
+    """缺省不出声——没命中恒等基线的那些不该被这句话污染。"""
+    from novel.report.render import _identity_mark
+    assert _identity_mark(_finding()) == ''
+
+
+def test_the_two_identity_questions_get_two_different_sentences():
+    """⚠ 两格问的**不是同一个问题**，措辞必须分得开。
+
+    `identity_hit` 逐章问「这一条被本章源文的同一现象混淆了吗」；
+    `identity_dead` 书级问「这条判据在这本书上比它自己的基础发生率强吗」。
+    合成一句「恒等基线也命中」会把两种完全不同的处置读成同一种。
+    """
+    from novel.report.render import _identity_mark
+    hit = _identity_mark(_finding(identity_hit=True))
+    dead = _identity_mark(_finding(identity_hit=True, identity_dead=True))
+    assert hit and dead and hit != dead
+    assert '本章源文' in hit and '判别力' in dead
+
+
+def test_identity_dead_none_means_not_computed_not_false():
+    """⚠ `identity_dead: bool | None`，`None` = **没算过**，不是「否」。
+
+    只有 stage5 的书级闸会给它赋值，别的层的 finding 这一格恒 `None`
+    ——写成真值判断就会把「没算过」渲染成「算过、是否」（`docs/LESSONS.md` 第 4 条）。
+    """
+    from novel.report.render import _identity_mark
+    assert _identity_mark(_finding(identity_dead=None)) == ''
+    assert _identity_mark(_finding(identity_dead=False)) == ''
+
+
+def test_a_wontfix_and_an_identity_mark_both_survive_on_the_same_line():
+    """两个记号是**正交**的，不许互相吃掉：豁免说的是「有人决定不修」，
+    恒等说的是「这条结论不携带信息」，一条 finding 可以同时是这两件事。"""
+    from contracts.schema.common import WontFixNote
+    from novel.report.render import _rules
+    from contracts.schema.report import RuleLine
+    f = _finding(identity_hit=True,
+                 wontfix=WontFixNote(why='这条我不修', at='review_1'))
+    line = RuleLine(rule='band_drift', item='示例判据', sev='info', check_kind='mechanical',
+                    requirement='R-7.21', remediation='human', status='hit', findings=[f])
+    text = ' | '.join(_rules([line]))   # 分隔符无关，本条只查两个记号都在
+    assert '已豁免' in text and '本章源文' in text
+
+
 def test_a_valued_fix_route_gets_its_chapters_from_machine_evidence():
     rule = Rule(
         rule='demo_chapters', stage='stage2', item='示例', sev='hard',

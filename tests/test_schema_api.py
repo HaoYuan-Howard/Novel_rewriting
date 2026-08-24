@@ -14,7 +14,9 @@ test_schema_api.py —— HTTP 响应模型的载体层守卫（`docs/schema/_ap
 from __future__ import annotations
 
 import ast
+import json
 import os
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -38,6 +40,31 @@ from contracts.schema.stage3 import (
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 API_PY = os.path.join(ROOT, 'contracts', 'schema', 'api.py')
+
+
+def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapter_text():
+    fixtures = Path(ROOT) / 'web' / 'src' / 'fixtures' / 'backend_v1'
+    raw = json.loads((fixtures / 'global.json').read_text(encoding='utf-8'))
+    view = GlobalView.model_validate(raw)
+    assert {r.visibility.kind for r in view.relations} == {'public', 'via_secret'}
+    assert {e.subject_kind for s in view.secrets for e in s.knowledge_events} == {
+        'character', 'group'}
+
+    reading = json.loads((fixtures / 'reading_ch3.json').read_text(encoding='utf-8'))
+    chapter = ''.join(segment['text'] for segment in reading['segments'])
+    pending: list[object] = [raw]
+    located = 0
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            source = item.get('source')
+            if isinstance(source, dict):
+                assert chapter[source['start']:source['end']] == source['text']
+                located += 1
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    assert located >= 7, '七类 evidence 没有都在 active fixture 里留下可回取正例'
 
 
 def test_preview_sid_is_nullable_but_never_empty():
@@ -120,7 +147,7 @@ def test_stage5_views_only_expose_text_as_the_segment_projection():
         'review': None, 'fixes': None,
     }
     draft = dict(
-        mode='deep', relpath='stage5/deep/ch01.json', invalid=False,
+        relpath='stage5/ch01.json', invalid=False,
         round=1, origin='human', chars=8, budget_chars=8, source_chars=8,
         overlap_excl_verbatim=0.0, segments=segments, text='前段。\n\n后段。',
         align=None, align_rows=[], freshness='fresh', reason='match',
@@ -131,7 +158,7 @@ def test_stage5_views_only_expose_text_as_the_segment_projection():
         DraftView.model_validate({**draft, 'text': '另一份整章正文。'})
 
     review = dict(
-        output_ordinal=1, findings=[], mode='deep', chars=8, budget_chars=8,
+        output_ordinal=1, findings=[], chars=8, budget_chars=8,
         round=1, origin='human', segments=segments, text='前段。\n\n后段。',
         rounds=[], stale=False,
     )

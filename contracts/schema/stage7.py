@@ -374,7 +374,8 @@ class NameMap(StrictModel):
         自己重算了一遍（源码注「书名只认目录名，不认命令行怎么敲」）⇒ 同一件事两个落点。
       · `title_new`（待决①）· `applied.title` + `applied.chapters{*}.chars_*`（待决①②）·
         `_groups`（待决③）· `counts` —— 2026-08-11 用户裁决，理由见各自的落点。
-      · `judged{*}.mode` —— 与 stage6 统一（键的中间那一段就是它）。
+      · `judged{*}.mode` —— Stage5 单臂折平后删除；章路径直接绑定
+        canonical `stage5/chNN.json`，不保留目录臂字段。
     """
 
     #: **模型写的。** `{原姓: 新姓}`——本书**全部改名角色**的姓。

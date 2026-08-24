@@ -10,6 +10,7 @@ test_orchestrator_queue.py —— 批量队列（`R-13`）。
 """
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -99,54 +100,137 @@ def test_human_nodes_are_exactly_the_ones_a_person_does():
                              'stage6.approve', 'stage7.approve'}
 
 
-@pytest.mark.parametrize('deep,want', [([2, 4], '2,4'), ([], 'none')])
-def test_stage5_plan_uses_the_saved_composite_depth_selection(
-        queue_base, monkeypatch, deep, want):
-    """FC-06: one composite item mirrors the human selection value for value."""
+def test_stage5_plan_uses_one_authorized_whole_book_command(
+        queue_base, monkeypatch):
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
     monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
     monkeypatch.setattr(
         Q.st, 'resume_verdict',
         lambda _overview, _node: (Q.st.RESUME_RUN, 'stage5 drafts are missing'))
-    monkeypatch.setattr(
-        Q.approvals, 'current_depth_selection', lambda _base, _sid: deep)
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda _base, _sid: True)
 
-    todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
+    todo, blocked = Q.plan_book(
+        queue_base, 'book-a', until_stage='stage5', follow_check=False)
     assert blocked == [] and len(todo) == 1
     item = todo[0]
-    assert item.node == 'stage5.write' and item.mode is None
-    assert item.flags == ['--deep', want, '--shallow-rest']
+    assert item.node == 'stage5.write'
+    assert item.flags == []
     assert len(item.steps) == 1
     argv = item.steps[0].argv
-    assert argv[argv.index('--deep') + 1] == want and '--shallow-rest' in argv
+    assert '--mode' not in argv and '--deep' not in argv and '--shallow-rest' not in argv
 
 
-def test_stage5_plan_blocks_without_a_persisted_depth_selection(
+def test_stage5_plan_blocks_without_current_writing_approval(
         queue_base, monkeypatch):
-    """The read-only [1,2,3] default is not spending authorization."""
+    """默认全书只是命令语义，不是花钱授权。"""
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
     monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
     monkeypatch.setattr(
         Q.st, 'resume_verdict',
         lambda _overview, _node: (Q.st.RESUME_RUN, 'stage5 drafts are missing'))
-    monkeypatch.setattr(
-        Q.approvals, 'current_depth_selection', lambda _base, _sid: None)
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda _base, _sid: False)
 
     todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
     assert todo == [] and len(blocked) == 1
     item = blocked[0]
-    assert item.waiting_on == Q.WAITING_ON_DEPTH_SELECTION
-    assert item.mode is None and item.flags == [] and item.steps == []
-    assert '不会猜成全 deep' in item.why
+    assert item.waiting_on == Q.WAITING_ON_WRITING_APPROVAL
+    assert item.flags == [] and item.steps == []
+    assert '不会从默认路径反推同意花钱' in item.why
+
+
+def test_stage5_plan_blocks_paid_writing_when_existing_review_is_not_fresh(
+        queue_base, monkeypatch):
+    stage5 = SimpleNamespace(stage='stage5', review_state='stale')
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
+    monkeypatch.setattr(
+        Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[stage5]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (Q.st.RESUME_RUN, 'RULES 指纹已变'))
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda _base, _sid: True)
+
+    todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
+    assert todo == [] and len(blocked) == 1
+    assert blocked[0].waiting_on == Q.WAITING_ON_REVIEW
+    assert blocked[0].steps == [] and '零成本' in blocked[0].why
+
+
+def test_stage5_legacy_status_blocks_without_constructing_a_paid_command(
+        queue_base, monkeypatch):
+    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['stage5.write'])
+    monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
+    monkeypatch.setattr(
+        Q.st, 'resume_verdict',
+        lambda _overview, _node: (
+            Q.st.RESUME_LEGACY,
+            '旧 Stage5 契约不兼容：stage5/deep，不当成 missing'))
+    monkeypatch.setattr(Q.approvals, 'writing_is_current', lambda _base, _sid: True)
+
+    todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
+    assert todo == [] and len(blocked) == 1
+    assert blocked[0].waiting_on == Q.WAITING_ON_LEGACY
+    assert blocked[0].steps == []
+    assert 'stage5/deep' in blocked[0].why and '只读保留' in blocked[0].why
 
 
 def test_a_runnable_queue_item_cannot_lose_its_command_snapshot():
     with pytest.raises(ValidationError, match='exact command snapshot'):
         QueueItem(sid='book-a', node='stage5.write', why='missing command')
     blocked = QueueItem(
-        sid='book-a', node='stage5.write', why='choose depth first',
-        waiting_on=Q.WAITING_ON_DEPTH_SELECTION)
+        sid='book-a', node='stage5.write', why='authorize writing first',
+        waiting_on=Q.WAITING_ON_WRITING_APPROVAL)
     assert blocked.steps == []
+    with pytest.raises(ValidationError, match='Extra inputs'):
+        QueueItem(
+            sid='book-a', node='stage5.write', mode='deep',
+            why='new requests cannot select a retired arm', steps=[_step('legacy')])
+
+
+def test_old_arm_queue_is_projected_without_mode_and_cannot_run(queue_base):
+    item = _item('book-a', 'stage5.write', 'legacy-paid', paid=True)
+    plan = QueuePlan(items=[item], blocked=[], paid_items=1)
+    start = QueueStart(
+        sids=['book-a'], until_stage='stage5', plan=plan, paid_confirmed=True)
+    raw = QueueEvent(
+        queue_id='q-legacy-arm', kind='created', ts=1, start=start,
+    ).model_dump(mode='json')
+    raw['start']['plan']['items'][0]['mode'] = 'deep'
+    Q.queue_path(queue_base).parent.mkdir(parents=True)
+    Q.queue_path(queue_base).write_text(
+        json.dumps(raw, ensure_ascii=False) + '\n', encoding='utf-8')
+
+    event = Q.read_events(queue_base)[0]
+    dumped = event.model_dump(mode='json')
+    assert 'mode' not in dumped['start']['plan']['blocked'][0]
+    record = Q.records(queue_base, registry=Q.QueueRegistry())[0]
+    assert record.state == 'blocked'
+    assert record.entries[0].waiting_on == Q.WAITING_ON_REPLAN
+    assert record.entries[0].item.steps == []
+    calls: list[list[str]] = []
+    still = Q.run(
+        queue_base, 'q-legacy-arm',
+        spawn=lambda argv, *_args: calls.append(list(argv)) or 0,
+        registry=Q.QueueRegistry(), job_registry=J.JobRegistry())
+    assert still.state == 'blocked' and calls == []
+
+
+def test_old_composite_queue_with_null_mode_is_also_non_replayable():
+    item = _item('book-a', 'stage5.write', 'legacy-composite', paid=True)
+    start = QueueStart(
+        sids=['book-a'], until_stage='stage5',
+        plan=QueuePlan(items=[item], blocked=[], paid_items=1),
+        paid_confirmed=True)
+    raw = QueueEvent(
+        queue_id='q-legacy-composite', kind='created', ts=1, start=start,
+    ).model_dump(mode='json')
+    old_item = raw['start']['plan']['items'][0]
+    old_item['mode'] = None
+    old_item['flags'] = ['--deep', '1,2,3', '--shallow-rest']
+    decoded = Q._decode_event(raw)
+    assert decoded.start is not None
+    assert decoded.start.plan.items == []
+    assert decoded.start.plan.blocked[0].waiting_on == Q.WAITING_ON_REPLAN
+    assert decoded.start.plan.blocked[0].steps == []
 
 
 # ───────────────────── 「停在那里」的三个数（R-13.4） ─────────────────────
@@ -520,12 +604,12 @@ def test_service_restart_auto_resumes_an_unchanged_free_snapshot(
 
 def test_changed_command_surface_blocks_instead_of_substituting_a_new_command(
         queue_base, monkeypatch):
+    # 不可变旧队列仍可解码，但已退役的双臂命令不得被解释成新契约。
     old = _item('book-a', 'stage5.write', 'old-paid', paid=True).model_copy(update={
-        'mode': None,
         'flags': ['--deep', '1,2,3', '--shallow-rest'],
     })
     new = old.model_copy(update={
-        'flags': ['--deep', '2,4', '--shallow-rest'],
+        'flags': [],
         'steps': [_step('new-paid', paid=True)],
     })
     _seed(queue_base, 'q-plan-changed', [old])
@@ -566,25 +650,25 @@ def test_restart_detects_a_new_required_node_not_present_in_the_snapshot(
     assert still_blocked.state == 'blocked' and calls == []
 
 
-def test_composite_queue_execution_rechecks_and_locks_the_saved_selection(
-        queue_base, monkeypatch):
-    item = _item('book-a', 'stage5.write', 'composite', paid=True).model_copy(update={
-        'mode': None,
-        'flags': ['--deep', '2,4', '--shallow-rest'],
+@pytest.mark.parametrize(('flags', 'want'), [([], None), (['--chapters', '2,4'], [2, 4])])
+def test_stage5_queue_execution_rechecks_the_saved_writing_scope(
+        queue_base, monkeypatch, flags, want):
+    item = _item('book-a', 'stage5.write', 'canonical', paid=True).model_copy(update={
+        'flags': flags,
     })
-    _seed(queue_base, 'q-composite', [item])
+    _seed(queue_base, 'q-canonical', [item])
     monkeypatch.setattr(Q, '_live_disposition', _always_pending)
-    prepared: list[list[int]] = []
+    prepared: list[list[int] | None] = []
     monkeypatch.setattr(
-        Q.approvals, 'begin_writing',
-        lambda _base, _sid, expected: prepared.append(list(expected)))
+        Q.approvals, 'authorize_writing',
+        lambda _base, _sid, chapters: prepared.append(chapters))
 
     run = Q.run(
-        queue_base, 'q-composite',
+        queue_base, 'q-canonical',
         spawn=lambda _argv, _cwd, _env, _log: 0,
         registry=Q.QueueRegistry(), job_registry=J.JobRegistry())
     assert run.state == 'ok'
-    assert prepared == [[2, 4]]
+    assert prepared == [want]
 
 
 def test_blocked_item_persists_what_it_is_waiting_for(queue_base):

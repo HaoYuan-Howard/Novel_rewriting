@@ -67,7 +67,9 @@ from pydantic import BaseModel, ValidationError
 from novel import config
 from novel.errors import TerminalState
 from novel.llm.budget import BudgetChecker, enforce_request_budget
-from novel.llm.cache import CachePolicy, ResponseCache, cache_key
+from novel.llm.cache import (
+    CachePolicy, ResponseCache, cache_key, request_fingerprint,
+)
 from novel.llm.keepsake import write_answer_lost
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
@@ -1070,6 +1072,13 @@ class LlmClient:
         with self._adopt_lock:
             return self._accepted.get(purpose)
 
+    def accepted_request_fingerprint(self, purpose: str) -> str | None:
+        """最终采纳响应的实际请求指纹；由 attempt 联结成本账，不按默认档位重算。"""
+        attempt_id = self.accepted_attempt(purpose)
+        if attempt_id is None:
+            return None
+        return self.ctx.ledger.request_fingerprint_for_attempt(attempt_id)
+
     # ── 一次调用：缓存 → 传输层重试 → 记账 ────────────────────────────────
 
     def _preflight(self, system: str, user: str, *,
@@ -1308,7 +1317,7 @@ class LlmClient:
         policy = cache_policy or self.ctx.cache
         self.ctx.ledger.record(
             attempt_id=attempt_id,
-            request_fingerprint=cache_key(req),
+            request_fingerprint=request_fingerprint(req),
             response_sha256=_response_sha256(resp),
             node=self.ctx.node, sid=self.ctx.sid,
             model=(resp.model if resp else '') or self.model,
@@ -1351,7 +1360,7 @@ class LlmClient:
         policy = cache_policy or self.ctx.cache
         self.ctx.ledger.record(
             attempt_id=attempt_id,
-            request_fingerprint=cache_key(req),
+            request_fingerprint=request_fingerprint(req),
             response_sha256=_response_sha256(resp),
             node=self.ctx.node, sid=self.ctx.sid, model=resp.model or self.model,
             code=self.ctx.code, cached=True, cache_policy=policy.name,

@@ -12,13 +12,17 @@ test_stage2_review_decisions.py —— `stage2.global --review-decisions` 的决
 """
 from __future__ import annotations
 
+import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from novel.errors import PathRefused
 from contracts.artifacts import STAGE2_GLOBAL_REVIEW_DECISIONS
 from contracts.schema import encode_artifact
+from contracts.schema.evaluation import EvidenceRef
+from novel.quality.global_review import build_review
 from novel.stages.stage2 import global_review
 from tests.test_stage2_generation import _ctx
 from tests.test_stage2_secret_edit import _sandbox, _seed
@@ -104,3 +108,103 @@ def test_the_emitted_template_round_trips_through_a_custom_relative_path():
     # 模板自己就是一份合法（全 pending）的决策集，读得回来即证明信封解得开。
     updated = global_review.apply_file(ctx, 'stage2/emitted_template.json')
     assert updated.items
+
+
+def test_workpack_prefers_formal_evidence_and_never_fabricates_for_source_none(
+        monkeypatch):
+    """正式 SourceSpan 转 EvidenceRef；失败态不能退回 claim 字面搜索。
+
+    反例刻意让 ``世界观`` claim 原样出现在正文里：若 source=None 后仍递归搜 claim，
+    就会制造一条看似可用的证据，掩掉抽取阶段明确留下的失败态。
+    """
+    # 把 SourceSpan.recovery 的字面 ``exact`` 也放进正文；旧递归会把它误当
+    # 第二条 claim 搜出来，正式 evidence 路只能产下面那一条原文坐标。
+    chapter_text = 'exact开头。两人以掌柜与账房相称。世界观事实就在这里。结尾。'
+    literal = '两人以掌柜与账房相称'
+    start = chapter_text.index(literal)
+    source = {
+        'text': literal,
+        'start': start,
+        'end': start + len(literal),
+        'normalized': literal,
+        'recovery': 'exact',
+    }
+    valid = {'chapter_ordinal': 1, 'source': source}
+    unresolved = {'chapter_ordinal': 1, 'source': None}
+    payload = {
+        'entities': {
+            'characters': {
+                'char_001': {
+                    'canonical': '掌柜', 'name_distinctiveness': 'high',
+                    'role': '客栈掌柜', 'role_evidence': valid,
+                    'fate': None, 'fate_evidence': None, 'address': [],
+                },
+                'char_002': {
+                    'canonical': '账房', 'name_distinctiveness': 'high',
+                    'role': '客栈账房', 'role_evidence': valid,
+                    'fate': None, 'fate_evidence': None, 'address': [],
+                },
+            },
+            'relations': [{
+                'relation_id': 'rel_01', 'subject_id': 'char_001',
+                'object_id': 'char_002', 'predicate': '雇佣',
+                'predicate_evidence': valid,
+                'visibility': {'kind': 'public', 'from_chapter': 1},
+                'valid_from_chapter': 1, 'valid_through_chapter': None,
+            }],
+        },
+        'canon': {
+            'setting': {
+                '时代背景': '架空年代', 'era_evidence': valid,
+                '世界观': '世界观事实就在这里', 'worldview_evidence': unresolved,
+            },
+            'world_rules': [],
+            'secrets': [],
+        },
+        'arc': {
+            'conflict_stages': [], 'climax': '对质', 'ending': '和解',
+            'arc_tracks': [],
+        },
+    }
+    review = build_review(payload)
+    grounding = SimpleNamespace(model_dump=lambda **_kwargs: payload)
+    main = SimpleNamespace(root=[SimpleNamespace(
+        chapter_ordinal=1, text=chapter_text)])
+
+    class FakeStore:
+        def read_own(self, _model, rel):
+            return (review if rel == global_review.REL else grounding, None)
+
+        def read(self, _model, _rel):
+            return main
+
+    monkeypatch.setattr(global_review, 'ArtifactStore', lambda _ctx: FakeStore())
+    workpack = global_review.review_workpack(SimpleNamespace(sid='synthetic-book'))
+    by_path = {row['subject_path']: row for row in workpack['items']}
+
+    role = by_path['entities.characters.char_001.role']
+    assert len(role['formal_evidence']) == 1
+    assert role['exact_literal_hits'] == [{
+        'chapter_ordinal': 1,
+        'literal': literal,
+        'start': start,
+        'end': start + len(literal),
+        'context': chapter_text,
+        'origin': 'formal_evidence',
+        'claim_path': 'entities.characters.char_001.role',
+    }]
+    ref = EvidenceRef.model_validate(role['formal_evidence'][0]['evidence_ref'])
+    assert ref.artifact == 'stage1/main_text.json#chapter/1'
+    assert ref.subject_sha256 == hashlib.sha256(
+        chapter_text.encode('utf-8')).hexdigest()
+
+    relation = by_path['entities.relations.rel_01']
+    assert 'predicate_evidence' not in relation['subject']
+    assert all(hit['literal'] == literal for hit in relation['exact_literal_hits'])
+
+    worldview = by_path['canon.setting.世界观']
+    assert worldview['formal_evidence'] == []
+    assert worldview['exact_literal_hits'] == [], \
+        'source=None 不得拿恰好出现的 claim 字面制造 evidence'
+    assert worldview['unresolved_formal_evidence'][0]['reason'].endswith('source=None')
+    assert '维持 UNVER' in worldview['review_note']

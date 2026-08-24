@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,13 +10,15 @@ from contracts.artifacts import (
     STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
 from contracts.schema.evaluation import (
-    GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet,
+    EvidenceRef, GlobalReview, GlobalReviewDecision, GlobalReviewDecisionSet,
 )
 from contracts.schema import encode_artifact
 from contracts.schema.stage2 import GlobalGrounding
 from contracts.schema.stage1 import MainText
 
 from novel import paths
+from novel.core.evidence import iter_global_evidence_slots, without_global_evidence
+from novel.core.spans import exact_span
 from novel.errors import ApprovalRequired, PathRefused, TerminalState, UpstreamMissing
 from novel.orchestrator.jobs import service_dir
 from novel.quality.global_review import apply_decision_set, require_current, review_status
@@ -94,6 +97,99 @@ def _strings(value: object) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def _formal_materials(
+    slots: list[tuple[str, object]],
+    chapters: dict[int, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """把正式 FactEvidence 转成人工可提交的 hash-bound 证据候选。
+
+    缺失或无效的 source 显式留在第二个返回值里；调用方尤其不能用 claim 字面
+    搜索命中替换它。
+    """
+    materials: list[dict[str, object]] = []
+    unresolved: list[dict[str, object]] = []
+    seen: set[tuple[str, int, int, int]] = set()
+    for claim_path, evidence in slots:
+        if not isinstance(evidence, dict):
+            unresolved.append({
+                'claim_path': claim_path,
+                'chapter_ordinal': None,
+                'reason': 'formal evidence 缺失',
+            })
+            continue
+        ordinal = evidence.get('chapter_ordinal')
+        source = evidence.get('source')
+        if not isinstance(ordinal, int) or source is None:
+            unresolved.append({
+                'claim_path': claim_path,
+                'chapter_ordinal': ordinal if isinstance(ordinal, int) else None,
+                'reason': 'formal evidence source=None',
+            })
+            continue
+        chapter = chapters.get(ordinal)
+        text = getattr(chapter, 'text', None)
+        if not isinstance(text, str):
+            unresolved.append({
+                'claim_path': claim_path,
+                'chapter_ordinal': ordinal,
+                'reason': 'formal evidence 指向不存在的正文章',
+            })
+            continue
+        start, end, problem = exact_span(source, text)
+        if problem:
+            unresolved.append({
+                'claim_path': claim_path,
+                'chapter_ordinal': ordinal,
+                'reason': problem,
+            })
+            continue
+        identity = claim_path, ordinal, start, end
+        if identity in seen:
+            continue
+        seen.add(identity)
+        ref = EvidenceRef(
+            artifact=f'{STAGE1_MAIN_TEXT}#chapter/{ordinal}',
+            subject_sha256=_text_sha256(text),
+            start=start,
+            end=end,
+        )
+        lo = max(0, start - 60)
+        hi = min(len(text), end + 60)
+        materials.append({
+            'claim_path': claim_path,
+            'evidence_ref': ref.model_dump(mode='json'),
+            'chapter_ordinal': ordinal,
+            'literal': text[start:end],
+            'start': start,
+            'end': end,
+            'context': text[lo:hi],
+        })
+    return materials, unresolved
+
+
+#: 必须通读全书才能裁的那几类：集合完整性问「有没有漏收」，解读层问「这个划分/
+#: 这条弧线成不成立」——两者的答案都不在某一段原文里，**精确命中 0 条是常态**。
+#: ⚠ 判成另一类会给出一句「命中只是缩小阅读范围」的提示，读的人容易误以为
+#: 「找不到命中 ⇒ 没问题」，而这几类恰恰是 0 命中最需要人真的去读的。
+_WHOLE_BOOK_KINDS = frozenset({
+    'character_set_complete', 'relation_set_complete',
+    'world_rule_set_complete', 'secret_set_complete',
+    'conflict_partition', 'arc_analysis',
+})
+
+# 这些主体的问题不是“这一条事实有没有出处”，不能把其下所有正式 evidence
+# 拼起来冒充集合完整性或阶段划分的证据。arc_analysis 例外：它自己的 trajectory
+# 有逐条证据，虽仍需整体阅读判断，workpack 应优先展示那些正式坐标。
+_NO_FORMAL_EVIDENCE_KINDS = frozenset({
+    'character_set_complete', 'relation_set_complete',
+    'world_rule_set_complete', 'secret_set_complete', 'conflict_partition',
+})
+
+
 def review_workpack(ctx: RunContext) -> dict[str, object]:
     """只读人工核验材料；精确命中是证据候选，不是自动裁决。"""
     store = ArtifactStore(ctx)
@@ -101,6 +197,13 @@ def review_workpack(ctx: RunContext) -> dict[str, object]:
     review = store.read_own(GlobalReview, REL)[0]
     main = store.read(MainText, STAGE1_MAIN_TEXT)
     payload = grounding.model_dump(mode='json', by_alias=True)
+    claim_payload = without_global_evidence(payload)
+    assert isinstance(claim_payload, dict)
+    evidence_slots = [
+        (path, owner.get(field))
+        for path, owner, field in iter_global_evidence_slots(payload)
+    ]
+    chapters = {chapter.chapter_ordinal: chapter for chapter in main.root}
     rows: list[dict[str, object]] = []
     for item in review.items:
         subject_path = item.subject_path
@@ -109,31 +212,74 @@ def review_workpack(ctx: RunContext) -> dict[str, object]:
             lookup_path = lookup_path.rsplit('.', 1)[0]
         elif item.kind == 'name_distinctiveness':
             lookup_path = lookup_path.rsplit('.', 1)[0]
+        elif item.kind == 'secret_setup':
+            # `setup_chapters` 恒是 `list[int]` ⇒ `_strings` 恒空、命中恒 0。
+            # 回退到整条 secret，人读到的是那条秘密的 `fact` 在原文里的位置——
+            # 「这些章到底埋没埋」正要拿它去对。⚠ 与 `address_context` /
+            # `name_distinctiveness` 同一形状：`subject` 是给人看的上下文，
+            # 而 `subject_path` / `subject_sha256` 仍严格绑在被裁决的那个字段上。
+            lookup_path = lookup_path.rsplit('.', 1)[0]
         try:
-            subject = _subject_at(payload, lookup_path)
+            # 人读的 subject 与 claim 搜索面都剥掉正式 evidence；否则
+            # SourceSpan.text/normalized/recovery 会被递归当成三条“claim”再搜一遍。
+            subject = _subject_at(claim_payload, lookup_path)
             literals = _strings(subject)
         except (KeyError, IndexError, StopIteration):
             subject = None
             literals = []
+        relevant_slots: list[tuple[str, object]] = []
+        if item.kind not in _NO_FORMAL_EVIDENCE_KINDS:
+            prefix = f'{item.subject_path}.'
+            relevant_slots = [
+                (path, evidence) for path, evidence in evidence_slots
+                if path == item.subject_path or path.startswith(prefix)
+            ]
+        formal, unresolved = _formal_materials(relevant_slots, chapters)
         hits: list[dict[str, object]] = []
-        for literal in literals:
-            if len(hits) >= 24:
-                break
-            for chapter in main.root:
-                start = 0
-                while len(hits) < 24:
-                    found = chapter.text.find(literal, start)
-                    if found < 0:
-                        break
-                    lo = max(0, found - 60)
-                    hi = min(len(chapter.text), found + len(literal) + 60)
-                    hits.append({
-                        'chapter_ordinal': chapter.chapter_ordinal,
-                        'literal': literal,
-                        'start': found,
-                        'context': chapter.text[lo:hi],
-                    })
-                    start = found + max(1, len(literal))
+        if relevant_slots:
+            # 正式 evidence 是权威坐标；source=None / 坐标无效时保持空，不得再拿
+            # claim 字面搜索制造一条看起来合法的“证据”。
+            hits = [{
+                'chapter_ordinal': row['chapter_ordinal'],
+                'literal': row['literal'],
+                'start': row['start'],
+                'end': row['end'],
+                'context': row['context'],
+                'origin': 'formal_evidence',
+                'claim_path': row['claim_path'],
+            } for row in formal]
+        else:
+            for literal in literals:
+                if len(hits) >= 24:
+                    break
+                for chapter in main.root:
+                    start = 0
+                    while len(hits) < 24:
+                        found = chapter.text.find(literal, start)
+                        if found < 0:
+                            break
+                        lo = max(0, found - 60)
+                        hi = min(len(chapter.text), found + len(literal) + 60)
+                        hits.append({
+                            'chapter_ordinal': chapter.chapter_ordinal,
+                            'literal': literal,
+                            'start': found,
+                            'end': found + len(literal),
+                            'context': chapter.text[lo:hi],
+                            'origin': 'claim_literal',
+                        })
+                        start = found + max(1, len(literal))
+        base_note = ('集合完整性项必须通读全书核对；0 个精确命中不等于 PASS。'
+                     if item.kind in _WHOLE_BOOK_KINDS else
+                     '这些命中只缩小人工阅读范围，不产生 PASS/FAIL/UNVER。')
+        if unresolved:
+            note = ('正式 evidence 含 source=None 或无效坐标；必须维持 UNVER，'
+                    '不能用 claim 字面命中代替证据。' + base_note)
+        elif formal:
+            note = ('已优先把正式 evidence 转为 hash-bound EvidenceRef 与正文上下文；'
+                    '它仍不自动产生裁决。' + base_note)
+        else:
+            note = base_note
         rows.append({
             'item_id': item.item_id, 'kind': item.kind,
             'subject_path': item.subject_path,
@@ -141,10 +287,10 @@ def review_workpack(ctx: RunContext) -> dict[str, object]:
             'current_state': item.state,
             'subject': subject, 'registered_evidence': [
                 evidence.model_dump(mode='json') for evidence in item.evidence],
+            'formal_evidence': formal,
+            'unresolved_formal_evidence': unresolved,
             'exact_literal_hits': hits,
-            'review_note': ('集合完整性项必须通读全书核对；0 个精确命中不等于 PASS。'
-                            if item.kind.endswith('_set_complete') else
-                            '这些命中只缩小人工阅读范围，不产生 PASS/FAIL/UNVER。'),
+            'review_note': note,
         })
     return {
         'kind': 'stage2-global-review-workpack-v1',

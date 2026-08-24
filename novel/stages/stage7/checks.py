@@ -108,7 +108,7 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                     registry: dict[str, dict], pre_target: str, source_text: str,
                     residual_keys: set[str], stem_noise: dict[str, int],
                     family_members: dict[str, tuple[str, ...]],
-                    dup: list[int], missing: list[int],
+                    missing: list[int],
                     invalids: list[str], post_units: list[Unit],
                     title_line: str,
                     derived_aliases: list[dict] | None = None,
@@ -277,12 +277,11 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                           evidence=half))
 
     # ── ⑦ 组装的前置条件（红了一律拒写 txt）──────────────────────
-    if dup or missing:
+    if missing:
         fs.append(finding('rn_book_incomplete',
-                          detail=(f'第 {dup} 章在两条臂下各有一份成稿；' if dup else '')
-                                 + (f'计划有而成稿无的章：{missing}' if missing else '')
-                                 + '——成书要求每一章有且只有一份',
-                          evidence=[str(o) for o in (list(dup) + list(missing))]))
+                          detail=f'计划有而 canonical 成稿无的章：{missing}'
+                                 '——成书要求每一章都有成稿',
+                          evidence=[str(o) for o in missing]))
     if invalids:
         # 「排除了 N 份废稿」与「一份废稿都没有」必须分得开。
         # ⚠ 某章只有废稿时，它同时表现为缺章，两条一起响——**那是对的**。

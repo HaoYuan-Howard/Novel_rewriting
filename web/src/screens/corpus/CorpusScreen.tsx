@@ -636,19 +636,11 @@ function BookCard({
             </div>
 
             {c.isStage5 ? (
-              c.modes.length ? (
-                <div className="flex flex-wrap gap-5">
-                  {c.modes.map((m) => (
-                    <Mono
-                      key={m}
-                      className="rounded-tag border border-line-2 bg-card px-7 py-3 text-mini text-ink-3"
-                    >
-                      {m}
-                    </Mono>
-                  ))}
-                </div>
-              ) : null
-            ) : c.items.length ? (
+              <Mono className="rounded-tag border border-line-2 bg-card px-7 py-3 text-mini text-ink-3">
+                canonical {c.chaptersDone} 章
+              </Mono>
+            ) : null}
+            {c.items.length ? (
               c.items.map((a) => (
                 <div
                   key={a.name}

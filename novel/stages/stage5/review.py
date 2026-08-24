@@ -20,14 +20,16 @@ from __future__ import annotations
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING, STAGE3_STYLE_GROUNDING,
-    STAGE4_WRITER_CONTEXT, STAGE5_REVIEW,
+    STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, artifact_rel,
 )
+from contracts.schema import artifact_spec
 
 import collections
 import glob
 import json
 import os
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from contracts.rules import REGISTRY
@@ -42,7 +44,8 @@ from contracts.schema.stage5 import (
 )
 from novel import prov, wontfix
 from novel.consumption import stage5_style
-from novel.errors import TerminalState, UpstreamMissing
+from novel.core.evidence import without_global_evidence
+from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
 from novel.report.builder import build
 from novel.run import RunContext
 from novel.stages.stage5 import checks
@@ -80,15 +83,17 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
     style = store.read(StyleGrounding, STYLE_GROUNDING)
     wc = store.read(WriterContext, WRITER_CONTEXT)
-    projected = stage5_style(style.model_dump(by_alias=True))
-    if not isinstance(projected, dict) or not isinstance(projected.get('body'), dict):
+    style_projected = stage5_style(style.model_dump(by_alias=True))
+    if not isinstance(style_projected, dict) or not isinstance(style_projected.get('body'), dict):
         raise RuntimeError('stage5_style 没有产出正文机械基线——投影实现与 typed 上游脱节')
+    global_projected = without_global_evidence(gg.model_dump(by_alias=True))
+    assert isinstance(global_projected, dict)
     return M.Book(
         title=ctx.title,
         ctx=wc.model_dump(by_alias=True),
-        measurable=projected['body'],
+        measurable=style_projected['body'],
         source_text={s.chapter_ordinal: (s.text or '') for s in main.root},
-        secrets=[s.model_dump(by_alias=True) for s in gg.canon.secrets],
+        secrets=((global_projected.get('canon') or {}).get('secrets') or []),
     )
 
 
@@ -111,13 +116,199 @@ def review_seqs(store: ArtifactStore) -> list[int]:
 
 
 def latest_review(store: ArtifactStore) -> tuple[int, Review] | None:
-    """最近一份验收报告。没有 ⇒ `None`。"""
+    """最近一份**当前 schema**验收报告。没有 ⇒ `None`。
+
+    v1 Review 是双臂折平前的历史主体，不能参与 v2 收敛计数；但 producer
+    `stage5.review` 又必须能在它后面零成本写出新一轮。因此只在这个“上轮收敛基线”
+    入口忽略最新的低版本；`review_status` 仍会把它明确报成 `legacy_incompatible`。
+    """
     seqs = review_seqs(store)
     if not seqs:
         return None
     n = seqs[-1]
-    art, _raw = store.read_own(Review, REVIEW_TPL.format(n=n))
+    rel = REVIEW_TPL.format(n=n)
+    if store.schema_version(rel) != _current_version(rel):
+        return None
+    art, _raw = store.read_own(Review, rel)
     return n, art
+
+
+@dataclass(frozen=True)
+class ReviewStatus:
+    """当前 Review 能否代表当前 canonical Stage5 主体。
+
+    ``fresh`` 的含义比通用 provenance 更完整：同一结果还核 RULES、计划章集合、当前正文
+    投影、``judged`` 键和值以及 canonical ``draft.md``。调用方只消费这一份结论，禁止
+    state/queue/wontfix/revise/approval 各自拼一套“差不多”的 freshness。
+    """
+
+    state: str  # fresh | stale | unknown | missing | legacy_incompatible
+    reasons: tuple[str, ...]
+    review_rel: str | None = None
+    seq: int | None = None
+    review: Review | None = None
+
+    @property
+    def fresh(self) -> bool:
+        return self.state == 'fresh'
+
+
+def _current_version(rel: str) -> int | None:
+    spec = artifact_spec(rel)
+    return spec.current_version if spec is not None else None
+
+
+def _legacy_versioned_paths(store: ArtifactStore, latest_rel: str | None) -> list[str]:
+    """识别仍在 live 位置的旧 Review/trim；旧序号 Review 只要最新已重建就留作历史。"""
+    candidates: list[str] = []
+    if latest_rel is not None:
+        candidates.append(latest_rel)
+    for pattern in ('trim_audit_ch*.json', 'trim_resolution_ch*.json'):
+        for path in glob.glob(os.path.join(store.path('stage5'), pattern)):
+            candidates.append(f'stage5/{os.path.basename(path)}')
+    old: list[str] = []
+    for rel in sorted(set(candidates)):
+        found = store.schema_version(rel)
+        current = _current_version(rel)
+        if current is not None and (found is None or found < current):
+            old.append(f'{rel}:v{found if found is not None else "unversioned"}->v{current}')
+    return old
+
+
+def legacy_versioned_paths(store: ArtifactStore) -> list[str]:
+    """列出仍占据 live 位置的旧 Review/trim schema，供所有只读视图共用。
+
+    Review 只看最新序号：较早轮次本来就是历史；trim 没有轮次，任何旧版 live
+    文件都会让当前人工销账语义变得不可信。
+    """
+    seqs = review_seqs(store)
+    latest_rel = REVIEW_TPL.format(n=seqs[-1]) if seqs else None
+    return _legacy_versioned_paths(store, latest_rel)
+
+
+def review_status(ctx: RunContext, store: ArtifactStore | None = None) -> ReviewStatus:
+    """一次关闭式判定：旧布局、旧 schema、RULES、上游、正文和 draft 任一漂移都不 fresh。"""
+    store = store or ArtifactStore(ctx)
+    legacy_layout = M.legacy_stage5_paths(store)
+    seqs = review_seqs(store)
+    seq = seqs[-1] if seqs else None
+    rel = REVIEW_TPL.format(n=seq) if seq is not None else None
+    legacy_versions = legacy_versioned_paths(store)
+    if legacy_layout or legacy_versions:
+        details = [*(f'旧双臂路径:{path}' for path in legacy_layout[:8]),
+                   *(f'旧 schema:{path}' for path in legacy_versions[:8])]
+        return ReviewStatus(
+            'legacy_incompatible', tuple(details), review_rel=rel, seq=seq)
+    if rel is None:
+        return ReviewStatus(
+            'missing', ('盘上没有 Stage5 Review',), review_rel=None, seq=None)
+
+    found_version = store.schema_version(rel)
+    current_version = _current_version(rel)
+    if current_version is not None and found_version != current_version:
+        state = ('legacy_incompatible'
+                 if found_version is None or found_version < current_version else 'unknown')
+        return ReviewStatus(
+            state,
+            (f'{rel} schema v{found_version} != current v{current_version}',),
+            review_rel=rel, seq=seq)
+    try:
+        rev, _raw = store.read_own(Review, rel)
+    except ArtifactUnreadable as exc:
+        return ReviewStatus('unknown', (f'{rel} 读不了：{exc}',), review_rel=rel, seq=seq)
+
+    stale: list[str] = []
+    unknown: list[str] = []
+    try:
+        freshness = store.freshness(rel)
+    except (ArtifactUnreadable, UpstreamMissing) as exc:
+        unknown.append(f'Review provenance 判不了：{exc}')
+        freshness = None
+    if freshness is not None and freshness.state == 'stale':
+        changed = ','.join(edge.key for edge in freshness.stale_edges) or freshness.reason
+        stale.append(f'Review 上游已变：{changed}')
+    elif freshness is not None and freshness.state == 'unknown':
+        unknown.append(f'Review 上游来源未知：{freshness.reason}')
+
+    recorded_rules = ((rev.provenance.prompts or {}).get('RULES')
+                      if rev.provenance is not None else None)
+    expected_rules = prov.fingerprint(prov.rules_fingerprint('stage5'))
+    if recorded_rules is None:
+        unknown.append('Review 没有 RULES 指纹')
+    elif recorded_rules != expected_rules:
+        stale.append(f'RULES 已变：{recorded_rules}->{expected_rules}')
+
+    try:
+        by_ord, _invalids, judged_now = M.load_drafts(store, require_current=False)
+    except (ArtifactUnreadable, UpstreamMissing, TerminalState) as exc:
+        return ReviewStatus(
+            'unknown', tuple([*stale, *unknown, f'canonical 成稿读不了：{exc}']),
+            review_rel=rel, seq=seq, review=rev)
+
+    review_rows = {row.output_ordinal: row for row in rev.chapters}
+    row_paths = {row.relpath for row in rev.chapters if row.relpath is not None}
+    current_paths = set(judged_now)
+    judged_paths = set(rev.judged)
+    if row_paths != judged_paths:
+        stale.append(f'Review chapters.relpath 与 judged 键不一致：{sorted(row_paths ^ judged_paths)}')
+    if judged_paths != current_paths:
+        stale.append(f'judged 主体集合已变：{sorted(judged_paths ^ current_paths)}')
+    if set(by_ord) != {jd.output_ordinal for jd in judged_now.values()}:
+        unknown.append('canonical 章节键与 judged.output_ordinal 自相矛盾')
+    for path in sorted(judged_paths & current_paths):
+        was = rev.judged[path]
+        now = judged_now[path]
+        if was.output_ordinal != now.output_ordinal or was.consumed != now.consumed:
+            stale.append(f'{path} 正文投影已变')
+        row = review_rows.get(was.output_ordinal)
+        if row is None or row.relpath != path or row.draft_text_sha1 != now.consumed.text_sha1:
+            stale.append(f'{path} Review 章行没有绑定当前正文摘要')
+        try:
+            chapter_fresh = store.freshness(path)
+        except (ArtifactUnreadable, UpstreamMissing) as exc:
+            unknown.append(f'{path} 来源判不了：{exc}')
+        else:
+            if chapter_fresh.state == 'stale':
+                stale.append(f'{path} 上游已变：{chapter_fresh.reason}')
+            elif chapter_fresh.state == 'unknown':
+                unknown.append(f'{path} 上游来源未知：{chapter_fresh.reason}')
+
+    # 只有通用上游仍 fresh 时才模型化当前 writer_context；已知 stale 时继续读只会被
+    # store 的生产闸拒绝，而且不会增加一条比“上游已变”更有用的理由。
+    if freshness is not None and freshness.state == 'fresh':
+        try:
+            book = load_book(ctx, store)
+        except (ArtifactUnreadable, UpstreamMissing, TerminalState) as exc:
+            unknown.append(f'当前计划读不了：{exc}')
+        else:
+            plan = set(book.chapters)
+            if set(review_rows) != plan:
+                stale.append(f'Review 章集合与当前计划不一致：{sorted(set(review_rows) ^ plan)}')
+            try:
+                from novel.stages.stage5.write import draft_is_current
+                draft_current = draft_is_current(store, book)
+            except (ArtifactUnreadable, UpstreamMissing, TerminalState, OSError) as exc:
+                unknown.append(f'canonical draft 投影判不了：{exc}')
+            else:
+                if not draft_current:
+                    stale.append('stage5/draft.md 不是当前 canonical 章节的字节投影')
+
+    if stale:
+        return ReviewStatus('stale', tuple(dict.fromkeys([*stale, *unknown])), rel, seq, rev)
+    if unknown:
+        return ReviewStatus('unknown', tuple(dict.fromkeys(unknown)), rel, seq, rev)
+    return ReviewStatus('fresh', (), rel, seq, rev)
+
+
+def require_fresh_review(ctx: RunContext, store: ArtifactStore | None = None) -> ReviewStatus:
+    """付费返工、豁免、审批等消费入口的共同关闭式闸。"""
+    status = review_status(ctx, store)
+    if status.fresh:
+        return status
+    reason = '；'.join(status.reasons[:6]) or status.state
+    raise TerminalState(
+        f'Stage5 Review 当前状态是 {status.state}：{reason}。'
+        '旧结论不得驱动豁免、付费返工或审批；请先零成本运行 `stage5.review` 重算当前报告')
 
 
 def load_wontfix(store: ArtifactStore) -> dict[str, WontFixEntry]:
@@ -154,11 +345,9 @@ def mark_wontfix(ctx: RunContext, spec: str) -> CheckReport:
       · **豁免不删结论**——照常出现在报告与界面上，只是不进反哺、不占「待人工」，并单独计数。
     """
     store = ArtifactStore(ctx)
-    got = latest_review(store)
-    if got is None:
-        raise TerminalState(
-            '盘上一份验收报告都没有——**不给不存在的结论发豁免**。先跑 `stage5.review`')
-    seq, rev = got
+    current = require_fresh_review(ctx, store)
+    assert current.seq is not None and current.review is not None
+    seq, rev = current.seq, current.review
     semantic_findings, semantic_at = _semantic_pool(ctx, store)
 
     def pool_of(ordinal: int | None) -> list[Finding]:
@@ -230,12 +419,12 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
 
     for o in sorted(book.chapters):
         entry = book.chapters[o]
-        recs = by_ord.get(o) or []
+        rec = by_ord.get(o)
         base = {'output_ordinal': o,
                 'from_source_ordinals': entry['from_source_ordinals'],
                 'budget_chars': entry['budget_chars'],
                 'source_chars': entry['source_chars']}
-        if not recs:
+        if rec is None:
             rows.append(ReviewChapter(**base, findings=checks.with_output_ordinal([finding(
                 'draft_missing',
                 detail=f'计划里有第 {o} 章，stage5 没有它的成稿——'
@@ -243,27 +432,18 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
                 evidence=[str(o)])], o)))
             continue
         fs: list[Finding] = []
-        if len(recs) > 1:
-            # ⚠ 三处行为**故意不同**：`assemble_book` 对双份**显式终态**（哪一份是成品
-            #   无从判断，不猜），而验收与界面**只报不判死**——把「呈现」变成「判死」
-            #   会让人连报告都看不到。
-            fs.append(finding(
-                'draft_duplicated',
-                detail=f'第 {o} 章在 {[r["_mode"] for r in recs]} 里各有一份成稿'
-                       f'——哪一份是成品无从判断（`assemble_book` 会在这里显式终态）；'
-                       f'下面判的是 {recs[0]["_mode"]} 那一份',
-                evidence=[r['_mode'] for r in recs]))
-        rec = recs[0]
         body = rec.get('text') or ''
         bodies[o] = body
-        mode = rec['_mode']
-        mat = _material(entry, book, mode=mode)
-        fs += checks.chapter_findings(body, entry, book, mode=mode, given=mat)
+        mat = _material(entry, book)
+        # `rec['segments']` 是 Chapter 模型 dump 出来的原件；写作相与 Full Review
+        # 都把它交给同一个 segment-event/章尾读数入口。
+        fs += checks.chapter_findings(body, entry, book, given=mat,
+                                      segments=rec.get('segments'))
         extra, one_land = checks.review_chapter_findings(body, entry, book)
         fs += extra
         land.update(one_land)
 
-        ident = checks.identity_rules(entry, book, mode=mode)
+        ident = checks.identity_rules(entry, book)
         for r_ in ident:
             ident_hits[r_] += 1
         for f in fs:
@@ -280,7 +460,7 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
               if (f.rule in ident and f.rule not in checks.IDENTITY_NA) else f
               for f in fs]
         rows.append(ReviewChapter(
-            **base, mode=mode, mode_dir=mode, relpath=rec['_relpath'],
+            **base, relpath=rec['_relpath'],
             # ⚠ **两把指纹各管一件事，这是被一次误判逼出来的**：来源账、`warns`、归一
             #   这类 0 成本元数据修复会改整份文件的指纹，但写手**一个字都没再写**——
             #   拿整份指纹去推进收敛计数，等于把一次重判记成「写手又试了一次」。
@@ -370,15 +550,10 @@ def _merge_length_over_into_trim(
     return merged
 
 
-def _material(entry: dict[str, Any], book: M.Book, *, mode: str) -> str:
-    """这一臂**实际看得见**的全部文字 —— 发明越界那两个探针的参照集。
-
-    ⚠ **它必须与真跑发出去的那一份同源**（`prompts.build_material`），否则探测器的参照集
-    与被测者当时看得见的东西就不是一回事——实测开卷臂曾因此 4/4 全是假阳。
-    """
+def _material(entry: dict[str, Any], book: M.Book) -> str:
+    """该章写手实际看见的文字；Stage5 只有这一份正式下发面。"""
     from novel.stages.stage5 import prompts
-    return prompts.build_material(
-        entry, book, with_source_text=(mode == 'shallow')).given
+    return prompts.build_material(entry, book).given
 
 
 def _apply_wontfix(rows: list[ReviewChapter], book_fs: list[Finding],
@@ -481,9 +656,10 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
     scanned['_beat_event_landing'] = rev.baselines['_beat_event_landing']
     for r_ in ('secret_timeline', 'no_secrets_in_book'):
         scanned[r_] = f'{len(book.secrets) if book else "?"} 条 secret'
-    for r_ in ('draft_missing', 'draft_duplicated', 'book_length', 'book_length_report',
+    for r_ in ('draft_missing', 'book_length', 'book_length_report',
                'convergence_report', 'name_surface_survey', 'must_hold_unver',
-               'event_landing', 'event_landing_unver', 'arm_split_report',
+               'event_landing', 'event_landing_unver', 'end_hook_surface_report',
+               'end_hook_unver',
                'cross_chapter_number'):
         scanned.setdefault(r_, f'{nch}/{len(rev.chapters)} 章有成稿')
 
@@ -523,39 +699,28 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
                 f'空的意味着它这一章什么原文都没拿到。先看 `stage4` 的 '
                 f'`ctx_hinge_delivered` 那一行——那里说得出是 stage2 没抽到，'
                 f'还是组装这一步把材料吃掉了')
-    # ⚠⚠ **`dialogue_halved` 的分母是「有几章落在它的前件里」，不是「判了几章」。**
-    #   前件第一项就是 `mode == shallow`，而 2026-08-22 起默认深度选择是全书闭卷
-    #   ⇒ 默认路径上这条 HARD 的分母恒为零，而「跑了、零 findings」在报告上渲染成 pass。
-    #   与 `verbatim_missing` 那次假绿逐格同形，处置也照抄那一条：分母无条件打出来，
-    #   为零时落 `unver`。
-    # ⚠ `book is None`（这本书没有 stage2 global grounding）⇒ **前件里的「源章 ≥4 句」
-    #   根本量不出来**。那时说「没有一章落在前件里」是一句假话——分母是**不知道**，
-    #   不是零。两种够不着说两句话。
-    if book is None:
-        blind['dialogue_halved'] = (
-            '这本书没有 stage2 global grounding ⇒ 取不到源章原文，'
-            '本条前件里的「源章 ≥4 句直接引语」**量不出来** ⇒ 分母未知（不是零）。'
-            '先把上游补齐再读这一行')
-        scanned['dialogue_halved'] = '分母未知（取不到源章原文）'
-    else:
-        n_halved = checks.dialogue_halved_scope(
-            ((book.chapters[r.output_ordinal], r.mode) for r in rev.chapters
-             if r.relpath and r.mode and r.output_ordinal in book.chapters),
-            book)
-        scanned['dialogue_halved'] = (
-            f'{n_halved}/{nch} 章落在前件里（开卷 × 计划无净压缩 × 源章 ≥4 句）')
-        if not n_halved:
-            blind['dialogue_halved'] = checks.DIALOGUE_HALVED_BLIND
+    # 人称探针只有“单 narration + 全章边界 + first/third + 非空锚”这一窄域可判。
+    # 混合输入时每章的 metric 明写 UNVER；整本分母为零时，聚合规则也必须落 unver，
+    # 不能把 0 finding 渲染成 OK。
+    person_reports = by_rule.get('narration_person_report', [])
+    n_person = sum(1 for hit in person_reports
+                   if 'probe:judgeable' in set(hit.evidence))
+    scanned['narration_person_drift'] = (
+        f'{n_person}/{len(person_reports)} 个有成稿章节落在弱信号可判域；其余逐章明确 UNVER')
+    if person_reports and not n_person:
+        blind['narration_person_drift'] = (
+            'second / 多 narration / 无段界 / 无锚覆盖了全部有成稿章节，'
+            '本条这次没有一个可判样本；逐章原因见 narration_person_report')
 
     return checks.check(
         chapter_findings_by_rule=by_rule, scanned=scanned,
         unver_empty={
             'draft_missing': f'计划 {len(rev.chapters)} 章全部有成稿——没有一章的判定被跳过',
-            'draft_duplicated': '同一输出章没有出现在两条臂里',
             'no_secrets_in_book': (f'这本书有 {len(book.secrets)} 条 secret'
                                    if book and book.secrets else '这本书没有可查的秘密'),
             'must_hold_unver': '这本书没有【必须成立】那一组材料',
             'event_landing_unver': '每一拍都提得出可回查的原子',
+            'end_hook_unver': '没有成稿章节可供人工复核章尾语义交付',
         },
         blind=blind)
 
@@ -632,16 +797,30 @@ def _report_of_review(ctx: RunContext, store: ArtifactStore, rev: Review,
     ⚠ 恢复书级语义审判时要把那一步一起恢复——豁免不套上去，
     「有人看过并决定不修」与「没人看过」在报告上会重新同形。
     """
+    # `wontfix.json` 是独立于 `review_<n>.json` 的人的决定账。`--wontfix`
+    # 刻意不重算/不落一份新 Review，所以每个读出口都必须在**读时**叠加当前账；
+    # 只在 `build_review` 时烘焙一次会让刚落下的决定在 check/inbox 里继续显示
+    # pending，直到有人额外重跑一次 0 成本验收。重套是幂等的：匹配身份仍是
+    # `(章|book, rule, evidence_key)`，已有标记只会被当前账的同一条目刷新。
+    wf = load_wontfix(store)
+    rows, book_fs = _apply_wontfix(list(rev.chapters), list(rev.book), wf)
+    current = rev.model_copy(update={'chapters': rows, 'book': book_fs})
+
     seqs = review_seqs(store)
     rel = freshness_rel or (REVIEW_TPL.format(n=seqs[-1]) if seqs else WRITER_CONTEXT)
     return build(sid=ctx.sid, node=ctx.node, freshness=store.freshness(rel),
-                 outcomes=list(_outcomes(rev, book)),
+                 outcomes=list(_outcomes(current, book)),
                  accounting=None, invalid=False)
 
 
 def run_review(ctx: RunContext) -> tuple[Review, CheckReport]:
     """默认路：算一份新的验收报告并落盘。**0 成本，不调 LLM。**"""
     store = ArtifactStore(ctx)
+    legacy = M.legacy_stage5_paths(store)
+    if legacy:
+        raise TerminalState(
+            f'legacy_incompatible：发现旧 Stage5 双臂路径 {legacy[:8]}。'
+            '旧 base 是只读历史证据，不在原地迁移；请在新的 canonical base 从 Stage5 producer 重建')
     book = load_book(ctx, store)
     rev = build_review(ctx, store, book)
     n = (review_seqs(store)[-1] + 1) if review_seqs(store) else 1
@@ -656,10 +835,8 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     都是**旧结论**。缺 `judged` 记作「不知道」，不是「匹配」。
     """
     store = ArtifactStore(ctx)
-    got = latest_review(store)
-    if got is None:
-        raise UpstreamMissing(
-            f'盘上一份 {REVIEW_TPL.format(n="<n>")} 都没有——先跑 `stage5.review`（0 成本）')
-    _seq, rev = got
+    current = require_fresh_review(ctx, store)
+    assert current.review is not None
     book = load_book(ctx, store) if store.exists(GLOBAL_GROUNDING) else None
-    return _report_of_review(ctx, store, rev, book)
+    return _report_of_review(
+        ctx, store, current.review, book, freshness_rel=current.review_rel)

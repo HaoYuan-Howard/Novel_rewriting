@@ -10,6 +10,17 @@
 ⚠ `src/mocks/` 那 20 份是**冻结的证据基线**（与 design_handoff 逐字节一致，
 check-seams 钉着），本目录才是 mock 现役消费的数据源；两边不许互相覆盖。
 
+## ⚠⚠ `global.json` 是结构有效的 v3 示例，不是新抓包（2026-08-24）
+
+原抓包书已不在盘上，无法付费重建 `GlobalGrounding` v3。本文件因此收成一份小而完整的
+现役 API 示例，专门覆盖 relation `public/via_secret` 两支、knowledge event 的
+`character/group` 两支，以及证据的「已唯一回取 / `source=null` 定位失败」两态。
+
+成功的 `SourceSpan` 均取自同目录 `reading_ch3.json` 的真实第 3 章 `segments[].text`，
+offset 按拼接后的章正文核过；第 8 章 fate 与第 3 章无法唯一定位的时代背景故意保留
+`source=null`，用来守 UI 不把失败态显示成“没有证据”。这份示例不代表字段分布、模型遵守率
+或语料真值；下次有 v3 真产物时应由真实端点响应整份覆盖。
+
 ## ⚠ `enums.json` 不是抓包，是**生成**的（2026-08-22 改）
 
 它是 `novel/api/enums.py::payload()` 的纯函数输出，不需要书、不需要起服务。

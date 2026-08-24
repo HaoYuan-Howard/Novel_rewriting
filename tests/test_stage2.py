@@ -4,8 +4,8 @@
 test_stage2.py —— Stage 2 当前判据。
 
 ⚠⚠ **本文件的主体是「盘上 0 命中的 HARD 各配一份会让它红的样本」**（2026-08-12 用户裁决）。
-40 条 HARD 里盘上只有 **4 条**有真反例（`address_bare_pronoun` 1 本 · `role_leaks_fate` 2 本 ·
-`hedge_words` 2 本 · `hinge_in_hole` 1 本）——**其余 36 条盘上 0 命中，那不是「干净」，
+43 条 HARD 里盘上只有 **4 条**有真反例（`address_bare_pronoun` 1 本 · `role_leaks_fate` 2 本 ·
+`hedge_words` 2 本 · `hinge_in_hole` 1 本）——**其余 39 条盘上 0 命中，那不是「干净」，
 是那种失效模式在这三本上一次都没发生过**。一条从没见过反例的判据与一条不存在的判据，
 在报告上长得一模一样。
 
@@ -15,7 +15,7 @@ test_stage2.py —— Stage 2 当前判据。
 本文件因此全程操作 dict，一次都不 `model_validate`。
 
 【干净底座是本文件的另一半】`test_the_clean_base_has_no_hard_hits` 钉住：
-**底座上 40 条 HARD 一条都不命中**。没有它，下面 36 条「改一处就红」什么也证明不了
+**底座上 43 条 HARD 一条都不命中**。没有它，下面 39 条「改一处就红」什么也证明不了
 ——一个本来就红的底座上，改什么都红。
 """
 from __future__ import annotations
@@ -96,6 +96,12 @@ def _source(text: str, a: str, b: str | None = None) -> dict[str, Any]:
             'normalized': content_only(raw), 'recovery': 'exact'}
 
 
+def _evidence(chapter: int, a: str, b: str | None = None) -> dict[str, Any]:
+    """正式 GlobalGrounding 的证据形：章号 + 可逐字复验的 SourceSpan。"""
+    text = (CH1, CH2, CH3)[chapter - 1]
+    return {'chapter_ordinal': chapter, 'source': _source(text, a, b)}
+
+
 def _beat(bid: str, a: str, b: str, *, event: str, place: str,
           names: list[str], ids: list[str], hinges: list[dict] | None = None,
           layer: str = 'present') -> dict[str, Any]:
@@ -132,7 +138,9 @@ def global_grounding() -> dict[str, Any]:
                                  'context': 'reference', 'from_chapter': 1}],
                     'name_distinctiveness': 'high',
                     'role': '沈家的独女，替父亲掌管家中账目',
+                    'role_evidence': _evidence(3, '李宝珠把账册摊在桌上一页页翻。'),
                     'fate': None,
+                    'fate_evidence': None,
                 },
                 'char_002': {
                     'canonical': '沈母',
@@ -140,23 +148,40 @@ def global_grounding() -> dict[str, Any]:
                                  'context': 'reference', 'from_chapter': 2}],
                     'name_distinctiveness': 'medium',
                     'role': '李宝珠的娘，管着老宅内院的日常',
+                    'role_evidence': _evidence(2, '回来时看见母亲在门口等她。'),
                     'fate': None,
+                    'fate_evidence': None,
                 },
             },
             'relations': [{'relation_id': 'rel_01', 'subject_id': 'char_001',
                            'object_id': 'char_002', 'predicate': '母女',
-                           'valid_from_chapter': 1, 'valid_to_chapter': None}],
+                           'predicate_evidence': _evidence(
+                               2, '回来时看见母亲在门口等她。'),
+                           'visibility': {'kind': 'public', 'from_chapter': 1},
+                           'valid_from_chapter': 1, 'valid_through_chapter': None}],
         },
         'canon': {
             'setting': {'时代背景': '架空古代江南的一座小城',
-                        '世界观': '寻常人家的宅院生活，没有神怪，规矩由宗族与官府共同维持'},
+                        'era_evidence': _evidence(1, '春风吹过老宅的院墙。'),
+                        '世界观': '寻常人家的宅院生活，没有神怪，规矩由宗族与官府共同维持',
+                        'worldview_evidence': _evidence(2, '街上已经有小贩在吆喝。')},
             'world_rules': [{'rule_id': 'wr_01', 'kind': 'social_norm',
                              'versions': [{'effective_from_chapter': 1,
-                                           'desc': '城中入夜有宵禁，更夫敲过梆子之后不许出门走动'}]}],
+                                            'desc': '城中入夜有宵禁，更夫敲过梆子之后不许出门走动',
+                                            'desc_evidence': _evidence(
+                                                1, '远处传来更夫的梆子声。')}]}],
             'secrets': [{'secret_id': 'secret_01',
                          'fact': '父亲早已回城却一直不肯露面',
-                         'character_known_by': ['char_001'],
-                         'setup_chapters': [1],
+                         'fact_evidence': _evidence(1, '信上说父亲已经回城。'),
+                         'knowledge_events': [
+                             {'subject': {'kind': 'character', 'char_id': 'char_001'},
+                              'known_from_chapter': 1,
+                              'evidence': _evidence(1, '她想起了昨夜那封信。')},
+                             {'subject': {'kind': 'group', 'label': '知情的沈家人'},
+                              'known_from_chapter': 2,
+                              'evidence': _evidence(2, '其实母亲早就知道那封信的事。')},
+                         ],
+                         'setup': {'kind': 'foreshadowed', 'chapters': [1]},
                          'reader_reveal_events': [{'chapter': 2}]}],
         },
         'arc': {
@@ -165,7 +190,9 @@ def global_grounding() -> dict[str, Any]:
             'ending': '她替父亲把这笔烂账认了下来',
             'arc_tracks': [{'subject': 'char_001', 'dimension': '处境',
                             'change_type': 'development',
-                            'trajectory': '从被瞒着到自己扛下这件事'}],
+                            'trajectory': '从被瞒着到自己扛下这件事',
+                            'trajectory_evidence': _evidence(
+                                3, '她忽然想起父亲从前也这样翻账。')}],
         },
         '_provenance': {
             'address_by_fallback': 0,
@@ -173,6 +200,8 @@ def global_grounding() -> dict[str, Any]:
             'address_from_chapter_raised': [],
             'canonical_distinguishers_stripped': [],
             'setup_chapters_pruned': [],
+            'evidence_locator_rewrites': [],
+            'evidence_locator_failures': [],
         },
     }
 
@@ -279,7 +308,7 @@ def _hard_hits(gg: dict | None, bp: dict | None, mt: list | None) -> set[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_the_clean_base_has_no_hard_hits():
-    """⭐ **下面 37 条全部建立在这一条上。**
+    """⭐ **下面 39 条全部建立在这一条上。**
 
     一个本来就红的底座上，「改一处就红」什么也证明不了。
     """
@@ -300,6 +329,28 @@ def test_conflict_stage_coverage_reports_duplicate_and_out_of_range_memberships(
         if o.rule == 'conflict_stage_coverage')
     assert outcome.findings
     assert evidence in outcome.findings[0].evidence
+
+
+@pytest.mark.parametrize(('branch', 'expected'), [
+    ('world_rule', 'wr_01.versions.effective_from_chapter=99'),
+    ('setup', 'secret_01.setup.chapters=98'),
+    ('reveal', 'secret_01.reader_reveal_events.chapter=99'),
+])
+def test_canon_chapter_refs_reject_all_three_out_of_book_timelines(branch, expected):
+    gg = global_grounding()
+    if branch == 'world_rule':
+        gg['canon']['world_rules'][0]['versions'][0]['effective_from_chapter'] = 99
+    elif branch == 'setup':
+        gg['canon']['secrets'][0]['setup'] = {
+            'kind': 'foreshadowed', 'chapters': [98],
+        }
+    else:
+        gg['canon']['secrets'][0]['reader_reveal_events'][0]['chapter'] = 99
+    outcome = next(o for o in checks.check(
+        global_g=gg, blueprints=blueprints(), main_text=main_text())
+        if o.rule == 'canon_chapter_refs_dangling')
+    assert outcome.findings
+    assert expected in outcome.findings[0].evidence
 
 
 @pytest.mark.parametrize('architecture', [
@@ -410,7 +461,7 @@ def test_hedge_words_does_not_treat_factual_or_as_uncertainty():
 def test_the_clean_base_leaves_no_rule_unimplemented():
     """**注册了而没有实现调用它 ⇒ `skipped`，徽章至少 amber。**
 
-    这一条盯的是 `checks.check()` 恰好产 74 个 `Outcome`——
+    这一条盯的是 `checks.check()` 恰好产 77 个 `Outcome`——
     报告是由**判据注册表**生成的，不是由实现的输出生成的，
     所以漏实现一条不会让它从报告里消失，只会让它挂一行「实现未被调用」。
     """
@@ -418,7 +469,7 @@ def test_the_clean_base_leaves_no_rule_unimplemented():
                         main_text=main_text())
     want = {r.rule for r in REGISTRY.all() if r.stage == 'stage2'}
     assert {o.rule for o in outs} == want
-    assert len(outs) == len(want) == 74
+    assert len(outs) == len(want) == 77
 
 
 def test_global_field_failures_route_to_the_dedicated_resample_action():
@@ -430,7 +481,9 @@ def test_global_field_failures_route_to_the_dedicated_resample_action():
         'address_from_out_of_range', 'address_from_too_early',
         'address_bare_pronoun', 'address_all_pronoun', 'role_missing',
         'role_repeats_name', 'hedge_words', 'distinguisher_lonely',
-        'world_rule_no_desc', 'secret_known_by_dangling', 'conflict_stage_coverage',
+        'world_rule_no_desc', 'secret_known_by_dangling', 'relation_dangling',
+        'canon_chapter_refs_dangling', 'global_evidence_unlocated',
+        'conflict_stage_coverage',
     }
 
 
@@ -450,7 +503,7 @@ def test_the_two_unver_rules_always_speak():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、36 条盘上 0 命中的 HARD —— 各配一份会让它红的样本
+# 三、39 条盘上 0 命中的 HARD —— 各配一份会让它红的样本
 # ─────────────────────────────────────────────────────────────────────────────
 
 Mutator = Callable[[dict, dict, list], Any]
@@ -479,7 +532,7 @@ def _ch(bp: dict, o: int) -> dict:
     return next(x for x in bp['blueprints'] if x['chapter_ordinal'] == o)
 
 
-#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，37 条。
+#: `(判据 id, 改哪一处, 为什么这一处会让它红)`。**一行一条**，39 条。
 CASES: list[tuple[str, Mutator, str]] = [
     # ── 一、产物完整性与章对齐 ──────────────────────────────────────────
     ('upstream_missing', lambda g, b, m: (None, b, m),
@@ -533,15 +586,27 @@ CASES: list[tuple[str, Mutator, str]] = [
     ('world_rule_no_desc',
      _m(lambda g, b, m: g['canon']['world_rules'][0]['versions'][0].__setitem__('desc', '')),
      '规则正文的唯一落点是空的，而下游取它时无兜底、缺失即显式终态'),
+    ('canon_chapter_refs_dangling',
+     _m(lambda g, b, m: g['canon']['world_rules'][0]['versions'][0]
+        .__setitem__('effective_from_chapter', 99)),
+     '规则版本指到正文集合外会永不生效；secret 埋点/揭示章同理由专条参数化覆盖'),
     ('secret_setup_order',
      _m(lambda g, b, m: g['_provenance'].__setitem__(
          'setup_chapters_pruned', [['secret_01', [2], []]])),
      '⚠⚠ **断言的是裁剪计数不是字段值**：裁剪跑在落盘前，'
      '再断言 setup_chapters 的值就是一条永远为真的判定'),
     ('secret_known_by_dangling',
-     _m(lambda g, b, m: g['canon']['secrets'][0].__setitem__(
-         'character_known_by', ['char_999'])),
-     '`char_\\d+` 形状的知情人解析不出来。⚠ 自由文本（「在场士兵」）**放行**——按形状分流'),
+     _m(lambda g, b, m: g['canon']['secrets'][0]['knowledge_events'][0]['subject']
+        .__setitem__('char_id', 'char_999')),
+     'CharacterRef 指向 registry 外的 char_id；GroupRef 的自由文本 label 必须继续放行'),
+    ('relation_dangling',
+     _m(lambda g, b, m: g['entities']['relations'][0].__setitem__(
+         'visibility', {'kind': 'via_secret', 'secret_id': 'secret_99'})),
+     'via_secret 指向不存在的 secret 时不能退回启发式猜一个开闸章'),
+    ('global_evidence_unlocated',
+     _m(lambda g, b, m: g['entities']['characters']['char_001']['role_evidence']
+        .__setitem__('source', None)),
+     'source=null 是可读失败态，不是可放行的正式证据'),
     ('conflict_stage_coverage',
      _m(lambda g, b, m: g['arc']['conflict_stages'][0].__setitem__('chapters', [1, 3])),
      '`chapters` 是逐章显式枚举；省掉第 2 章会让 Stage4 拿不到唯一 current_stage'),
@@ -660,7 +725,7 @@ def test_a_sample_that_makes_this_hard_rule_red(rule, mutate, why):
 def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     """⭐⭐ **守卫的守卫：这张清单不许悄悄变短。**
 
-    40 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
+    43 条 HARD 里盘上只有 4 条有真反例；本文件要为**其余每一条**配一份。
     加一条 HARD 而不配样本，这条测试当场点名——
     否则那条新判据就又回到「从没见过反例」那一档，而它与一条不存在的判据长得一样。
     """
@@ -669,7 +734,7 @@ def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     on_disk = {'address_bare_pronoun', 'role_leaks_fate', 'hedge_words', 'hinge_in_hole'}
     hard = {r.rule for r in REGISTRY.all() if r.stage == 'stage2' and r.sev == 'hard'}
     covered = {c[0] for c in CASES}
-    assert len(hard) == 40, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
+    assert len(hard) == 43, f'HARD 条数变了（{len(hard)}）——本条与 §5.1 的账要一起改'
     assert covered <= hard, f'CASES 里有不是 HARD 的：{sorted(covered - hard)}'
     assert not (missing := sorted(hard - on_disk - covered)), (
         f'这几条 HARD 既没有盘上反例、也没有合成样本：{missing}\n'

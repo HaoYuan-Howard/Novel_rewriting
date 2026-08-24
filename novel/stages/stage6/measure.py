@@ -12,6 +12,7 @@ import re
 from contracts.schema.stage5 import JudgedDraft
 from contracts.schema.stage6 import Mech
 from novel.core.bands import BAND_SEP, sep_band_of_text
+from novel.core.facts import first_reveal_chapter
 from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
     quote_pair,
@@ -68,12 +69,14 @@ def hidden_secrets(secrets: list[dict], upto: int) -> tuple[list[dict], list[str
     hid: list[dict] = []
     no_time: list[str] = []
     for s in secrets or []:
-        rev = [e.get('chapter') for e in (s.get('reader_reveal_events') or [])
-               if isinstance((e or {}).get('chapter'), int)]
-        if not rev:
+        # ⚠ **首次**揭示章，与逐章下发闸门同一个函数（`first_reveal_chapter`）。
+        #   说不出首次揭示时点的（一条 `kind='first'` 都没有）走 `no_time` 那条：
+        #   「不知道什么时候揭示」不是「已经揭示了」。
+        first = first_reveal_chapter(s)
+        if first is None:
             no_time.append(s.get('secret_id'))
             hid.append(s)
-        elif min(rev) > upto:
+        elif first > upto:
             hid.append(s)
     return hid, no_time
 
@@ -86,19 +89,27 @@ def lead_drafts(store: ArtifactStore, upto: int) -> tuple[list[dict], list[int],
 
     ⚠ **装载走产地那一份**（`novel/stages/stage5/measure.py::load_drafts`）：
     成稿是 stage5 的产物，本层只是下游读者。这里只加本层的**口径**——
-    「开篇到第几章」，以及同章双份时取排在前面的那一份（**由判据去说**，
-    产地的多义性不该在装载器里被一个隐式的选择抹掉）。
+    「开篇到第几章」。canonical Stage5 每章只有一个结构化落点，
+    本层不再保留旧双臂布局下的选择语义。
     ⚠⚠ 那份装载器里那条「绝不走 `store.read`」的告诫仍然承重，去那边读。
 
     ⚠ `.INVALID` 由装载器排除并单列，本层不消费那个计数：文案只看正式稿。
     """
+    from novel.errors import TerminalState
+    from novel.stages.stage5.measure import legacy_stage5_paths
+
+    legacy = legacy_stage5_paths(store)
+    if legacy:
+        raise TerminalState(
+            f'legacy_incompatible：Stage6 不消费旧 Stage5 双臂路径 {legacy[:8]}。'
+            '保留旧 base 为历史证据，在 canonical Stage5 base 重建后再运行 Stage6')
     by_ord, _invalids, judged = load_drafts(store)
     lead: list[dict] = []
     missing: list[int] = []
     for o in range(1, upto + 1):
-        recs = by_ord.get(o) or []
-        if recs:
-            lead.append(recs[0])
+        rec = by_ord.get(o)
+        if rec is not None:
+            lead.append(rec)
         else:
             missing.append(o)
     return lead, missing, judged

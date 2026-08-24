@@ -205,9 +205,10 @@ def test_relative_paths_that_would_escape_are_refused(bad):
 def test_input_key_refuses_three_levels():
     """⚠⚠ **来源账的键是两级的**（`_common.md` §3.1）。
 
-    `stage5/deep/ch01.json` 记进 `inputs` 会塌成一个**反查不到文件**的键
+    旧 `stage5/deep/ch01.json` 记进 `inputs` 会塌成一个**反查不到文件**的键
     ⇒ 指纹取不到 ⇒ 那条边**永远显示对得上**。**一个假的匹配比没有记录更坏。**
-    ⇒ 成稿走 `store.read_judged`（存完整相对路径）。
+    ⇒ 三级路径本身关闭式拒绝；现役 canonical 成稿仍走 `store.read_judged`
+    （它是被审判主体，并需存完整相对路径与消费投影）。
     """
     assert paths.input_key('stage3/style_grounding.json') == 'stage3/style_grounding.json'
     with pytest.raises(PathRefused, match='两级|2 级'):

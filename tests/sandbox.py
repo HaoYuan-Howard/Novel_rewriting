@@ -109,7 +109,7 @@ def source_resolves_in_a_sandbox(book: str) -> bool:
     """这本书的 `stage0` 新鲜度在**沙箱里**答得出吗（记录的源路径自己还在盘上）。
 
     ⚠⚠ `stage0/removal_report.json` 的新鲜度**不走通用来源账**：它拿记录里的
-    `original_path` 去比 `normalized_source_sha1`（`novel/store.py::_stage0_freshness`）。
+    `source_ref` 去比 `normalized_source_sha1`（`novel/store.py::_stage0_freshness`）。
     那条路径失效时才由 `novel/core/source.py::resolve_recorded_source` 按
     `<base>/_service/uploads/<sha256>/<name>` 回落重锚——**而沙箱的 base 里没有那一层**
     ⇒ 该产物判 `unknown/ghost`，`novel/orchestrator/approvals.py::_proof_for_seen`
@@ -120,12 +120,30 @@ def source_resolves_in_a_sandbox(book: str) -> bool:
     `tests/test_api_http.py::test_the_service_writes_nothing_at_all` 与
     `tests/test_approvals.py` 的「GET 不许落服务状态」都断言沙箱里**根本没有 `_service/`**。
     那两条守的是 `R-11.3`，比这里的方便重要得多 ⇒ 改成**选一本答得出的书**。
+
+    ⚠⚠ **这个 helper 自己漂过一次，代价是整片语料面静默变暗**（2026-08-23 查实）。
+    2026-08-22 阶段 B 把 `original_path: str` 换成了 typed `source_ref: SourceRef`
+    （`contracts/schema/stage0.py`），而这里仍在 `.get('original_path')`
+    ⇒ 恒得 `None` ⇒ 恒 `False` ⇒ **`tests/test_approvals.py` 的 6 条语料用例
+    从那天起全部 skip**，一条红都不发。被它盖住的东西是实打实的：
+    同一天改的「默认全书闭卷」既没被验证，`test_default_depth_is_...one_two_three`
+    里 `[1, 2, 3]` 那个陈旧断言也没被推翻。
+    ⇒ 教训是 `docs/LESSONS.md` 第 21 条的第三形状：**守卫漂了不一定假红，
+    也可能假绿**——而静默 skip 与「查过、没事」在报告上长得一模一样。
+    ⇒ 定位符**从注册模型的属性取**，不手抄 JSON key、也不在这里展开
+    `SourceRef` 那个联合（`contracts/schema/stage0.py` 明说读取端只有一个入口）。
+    字段再改一次名，这里会当场 `AttributeError`，而不是又一次静默变暗。
     """
+    from contracts.schema import ARTIFACTS
     from novel.core.source import resolve_recorded_source
 
-    recorded = (current(book, 'stage0/removal_report.json') or {}).get('original_path')
+    rel = 'stage0/removal_report.json'
+    payload = current(book, rel)
+    if payload is None:
+        return False
     #: `base=None` = 只问记录的那条路径本身，不猜——沙箱里能读到的正是这一支。
-    return bool(recorded) and resolve_recorded_source(recorded, None) is not None
+    typed = ARTIFACTS[rel].model_validate(payload)
+    return resolve_recorded_source(typed.source_ref, None) is not None
 
 
 class Sandbox:

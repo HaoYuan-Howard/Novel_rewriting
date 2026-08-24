@@ -83,7 +83,7 @@ STATUS: dict[type[NovelError], int] = {
     #: 给的是 `rules`——逐条修判据命中，不是提升一份废稿。
     BlockingFindingsUnresolved: 409,
     ApprovalRequired: 409,
-    #: 上游都在，但内容还没齐（缺章 / 同章双份 / 文案未定稿）⇒ 是**冲突**不是 404：
+    #: 上游都在，但内容还没齐（缺章 / 文案未定稿）⇒ 是**冲突**不是 404：
     #: 那本书在，只是这一刻不可交付。`R-10.14` 明写 txt 里没有地方写风险抬头横幅。
     DeliveryIncomplete: 409,
     #: 原始内容与当前状态冲突：覆盖会抹掉另一份书或人工编辑，或批准后输入已变化。
@@ -100,7 +100,7 @@ STATUS: dict[type[NovelError], int] = {
     TooFewChapters: 422,
     #: `R-11.10`：一本书同时只跑一个作业。`jobs.py` 的 docstring 明写「E 期翻成 409」。
     #: 行为半边由通用 `POST /api/jobs` 与专用 Stage0 端点共同测试：同书第二次启动为 409，
-    #: 不同书可并行，stage5 的 deep/shallow 单臂是唯一可共存的书内例外。
+    #: 不同书可并行；同一本书的作业始终互斥。Stage5 v2 已无书内双臂例外。
     JobConflict: 409,
     #: 删除是维护动作；目标忙、确认面变化或移动失败都不得半删后伪装成功。
     BookTrashFailed: 409,

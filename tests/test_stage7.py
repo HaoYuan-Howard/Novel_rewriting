@@ -38,8 +38,8 @@ def books() -> list[str]:
 
 def _drafts_of(book: str) -> tuple[str, ...]:
     return tuple(sorted({a.rel for a in corpus.iter_artifacts()
-                         if a.book_dir == book and a.pattern == 'stage5/{mode}/ch{nn}.json'
-                         and '_rounds' not in a.rel}))
+                         if a.book_dir == book and a.pattern == 'stage5/ch{nn}.json'
+                         and '_rounds/' not in a.rel}))
 
 
 def _box(book: str) -> sandbox.Sandbox:
@@ -65,11 +65,6 @@ def _corpus_params():
     )]
 
 
-#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
-#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
-_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
-
-
 @pytest.fixture(params=_corpus_params(), ids=lambda b: b[:10] if b else 'no-corpus')
 def raw_box(request):
     """**不带任何语料版本前提**的沙箱。
@@ -92,8 +87,8 @@ def box(raw_box):
     （实测：两本过期的书上 28 个 nodeid 里 26 个红在这上面，而它们各自要验的
     判据行数、逐字节对账、闸门行为一次都没跑到）。
     """
-    corpus.requires_current(raw_box.book, *_DRAFT_ARMS,
-                            produced_by='stage5.write --mode deep', cost='付费')
+    corpus.requires_current(raw_box.book, *_drafts_of(raw_box.book),
+                            produced_by='stage5.write', cost='付费')
     return raw_box
 
 

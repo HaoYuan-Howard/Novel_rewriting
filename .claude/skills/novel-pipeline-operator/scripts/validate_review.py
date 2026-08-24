@@ -93,14 +93,20 @@ def validate(text: str, facts: dict[str, Any], *, template_text: str = '') -> li
     return errors
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='只读校验 <书名>_review.md 与当前盘面')
     parser.add_argument('--base', required=True)
     parser.add_argument('--sid', required=True)
+    parser.add_argument('--started-at', required=True, type=int,
+                        help='session_preflight.py 捕获的 epoch 秒')
+    parser.add_argument('--start-code-version', required=True,
+                        help='session_preflight.py 捕获的起始代码指纹')
     parser.add_argument('--review', help='默认使用 novel.paths.review_package_path')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    facts = collect(args.base, args.sid)
+    facts = collect(
+        args.base, args.sid, started_at=args.started_at,
+        start_code_version=args.start_code_version)
     novel_dir = paths.resolve_novel_dir(args.base, args.sid)
     review = Path(args.review).resolve() if args.review else paths.review_package_path(novel_dir)
     template = Path(__file__).resolve().parent.parent / 'assets' / 'final-review-template.md'

@@ -97,6 +97,34 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '2026-08-22 阶段 B：恒 `sec_0001` 的 `section_id` 删除，产物收成 `{text}`',
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
+    'stage2/global_grounding.json': (
+        3,
+        '两次破坏。v2（2026-08-23）secret 时间线三刀：① `setup_chapters: list[int]` 换成 `setup` '
+        '判别联合（`{"kind":"cold"}` / `{"kind":"foreshadowed","chapters":[…]}`）'
+        '——v1 的 `[]` 同时表示「声明冷揭示」与「模型压根没想过」，而这一格是两道'
+        '下发闸门的前件；② `reader_reveal_events[]` 加 `kind: first|confirm`，'
+        '载体强制恰有一条 `first`——旧的下发闸门按「任意一次揭示 ≤ 本章」判，'
+        '分两次揭示的秘密在第一次之后就把整份 `fact` 泄给了写前面章节的写手；'
+        '③ 新增可空 `group_id`，复合真相拆成多条后归组用。'
+        'v3（2026-08-24）：① relation 新增 public/via_secret 显式 visibility；'
+        '② secret 的无时间 `character_known_by` 换成 CharacterRef/GroupRef + known_from_chapter '
+        '的 `knowledge_events`；③ role/fate、relation predicate、setting、rule desc、secret fact、'
+        'knowledge event、arc trajectory 新增代码按“指定章 + 短 locator”唯一回取的正式证据，'
+        '失败态 source=null；'
+        '④ `valid_to_chapter` 改名 `valid_through_chapter`，把原本即包含式的端点语义写进字段名',
+        '`stage2.global` 整跑（**付费**）；`.INVALID` 与 `_rounds/` 一律作废，'
+        'v1/v2 都不手补字段冒充当前产地。重建后 review 按 claim+evidence 新 hash 重新 pending；'
+        '这是形状破坏的真实人工成本，不能靠迁移伪装成旧决定仍有效。',
+    ),
+    'stage2/global_edit.json': (
+        2,
+        '2026-08-24：secret patch/replacement 从 `character_known_by` 换成带 locator 的 '
+        '`knowledge_events`，并新增 relation visibility、setting、fate、arc 与全部自由事实证据的 '
+        'typed patch/replacement；旧 v1 决策文件不能表达知情时点或证据',
+        '它是人产决策集，不由模型重建：人工按当前 `GlobalEdit` v2 重写书内 JSON。'
+        '不根据旧 known_by 猜 known_from_chapter，不为旧 claim 伪造 locator；盘上 v1 字节原样保留'
+        '只能作为历史输入，当前运行时关闭式拒读',
+    ),
     'stage2/chapter_blueprints.json': (
         3,
         '两次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
@@ -115,6 +143,31 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '普通旧书运行 stage3.style 免费重建（纯确定性、零 LLM），v1 不迁移也不手补。'
         '本次消融的两本目标书已按 archive manifest 事务化移出 live discovery，明确不重建；'
         '其 v1 字节只作为可恢复历史实验档案，不进入 _rounds，也不计入 current corpus',
+    ),
+    'stage5/ch{nn}.json': (
+        2,
+        '2026-08-24 Stage5 单臂折平：删除 `mode`，正式稿从 '
+        '`stage5/{mode}/chNN.json` 收成唯一 `stage5/chNN.json`',
+        '`stage5.write` 在冻结的 stage0～4 上游上全书重跑（付费）；旧 deep/shallow '
+        '目录原样保留为只读历史证据，运行时明确报 `legacy_incompatible`，不迁移、不选臂',
+    ),
+    'stage5/review_{n}.json': (
+        2,
+        '2026-08-24 Stage5 单臂折平：ReviewChapter 删除 `mode/mode_dir`，judged '
+        '主体改绑 canonical 章集合',
+        '`stage5.review` 在 canonical 成稿上免费重跑；旧 Review 不得驱动付费 `--revise`',
+    ),
+    'stage5/trim_audit_ch{nn}.json': (
+        2,
+        '2026-08-24 Stage5 单臂折平：TrimAudit 删除 `mode`，章身份只由 ordinal '
+        '与 canonical 路径承载',
+        '新的超长 canonical 章由 `stage5.write` 生成审计；旧双臂审计仅作历史证据',
+    ),
+    'stage5/trim_resolution_ch{nn}.json': (
+        2,
+        '2026-08-24 Stage5 单臂折平：TrimResolution 删除 `mode`，`chapter_rel` '
+        '固定绑定 `stage5/chNN.json`',
+        '在当前 v2 TrimAudit 上重新走免费、hash-bound 的 `--retain-pretrim` 人工裁决',
     ),
     'stage6/hook.json': (
         2,
@@ -212,7 +265,7 @@ def _concrete(rel: str) -> str:
     生产写出的是 `ch001.json` 而这里仍造 `ch01.json`——而路由把 `{nn}` 编译成 `\\d+`，
     两条参数化照样全绿，扫的却是一批生产永远不会写出来的路径。
     """
-    return artifact_rel(_ID_OF_REL[rel], n=1, nn=1, mode='deep')
+    return artifact_rel(_ID_OF_REL[rel], n=1, nn=1)
 
 
 def test_the_placeholder_helper_actually_produces_registered_paths():
@@ -326,16 +379,14 @@ def test_paths_feed_schema_nodes_consumption_and_runtime_from_one_catalog():
     assert {
         rel for projections in CONSUMED_PROJECTIONS.values() for rel in projections
     } <= catalog
-    assert artifact_rel('stage5.chapter', mode='deep', nn=3) == 'stage5/deep/ch03.json'
-    assert artifact_rel('stage5.rejected_revision', mode='shallow', nn=12) \
-        == 'stage5/shallow/ch12.rejected.json'
+    assert artifact_rel('stage5.chapter', nn=3) == 'stage5/ch03.json'
+    assert artifact_rel('stage5.rejected_revision', nn=12) == 'stage5/ch12.rejected.json'
 
 
 @pytest.mark.parametrize('rel,key', [
-    ('stage5/deep/ch01.json', 'stage5/{mode}/ch{nn}.json'),
-    ('stage5/deep/_rounds/ch01.r3.json', 'stage5/{mode}/ch{nn}.json'),
-    ('stage5/deep/_rounds/ch01.INVALID.r3.json',
-     'stage5/{mode}/ch{nn}.json'),
+    ('stage5/ch01.json', 'stage5/ch{nn}.json'),
+    ('stage5/_rounds/ch01.r3.json', 'stage5/ch{nn}.json'),
+    ('stage5/_rounds/ch01.INVALID.r3.json', 'stage5/ch{nn}.json'),
     ('stage5/_rounds/review_4.r2.json', 'stage5/review_{n}.json'),
     ('stage6/hook.INVALID.json', 'stage6/hook.json'),
     ('stage6/_rounds/hook.r2.json', 'stage6/hook.json'),
@@ -345,7 +396,7 @@ def test_runtime_and_corpus_share_the_same_path_router(rel: str, key: str):
 
 
 @pytest.mark.parametrize('rel', [
-    'stage5/deep/_rounds/ch01.INVALID.superseded.json',
+    'stage5/_rounds/ch01.INVALID.superseded.json',
     'stage5/_rounds/review_4.invalid_metadata_convergence.json',
 ])
 def test_retired_archive_aliases_are_not_current_artifact_paths(rel: str):

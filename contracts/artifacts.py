@@ -32,13 +32,12 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage4.plan_edit': 'stage4/plan_edit.json',
     'stage4.writer_context': 'stage4/writer_context.json',
     'stage4.writer_context_identity': 'stage4/writer_context.identity.json',
-    'stage5.chapter': 'stage5/{mode}/ch{nn}.json',
-    'stage5.rejected_revision': 'stage5/{mode}/ch{nn}.rejected.json',
+    'stage5.chapter': 'stage5/ch{nn}.json',
+    'stage5.rejected_revision': 'stage5/ch{nn}.rejected.json',
     'stage5.review': 'stage5/review_{n}.json',
     'stage5.trim_audit': 'stage5/trim_audit_ch{nn}.json',
     'stage5.trim_resolution': 'stage5/trim_resolution_ch{nn}.json',
     'stage5.wontfix': 'stage5/wontfix.json',
-    'stage5.mode_draft': 'stage5/{mode}/draft.md',
     'stage5.book_draft': 'stage5/draft.md',
     'stage6.hook': 'stage6/hook.json',
     'stage6.hook_edit': 'stage6/hook_edit.json',
@@ -58,7 +57,7 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
 #:   | 类 | 例 | 占位符由谁决定 | 完成度落点 |
 #:   |---|---|---|---|
 #:   | 轮次编号 | `stage5/review_{n}.json` | 盘上有几份 | `rounds_done[节点]` |
-#:   | 逐章 | `stage5/{mode}/ch{nn}.json` | 计划里有哪些章 | `chapters_done[臂]` |
+#:   | 逐章 | `stage5/ch{nn}.json` | 计划里有哪些章 | `chapters_done` |
 #:   | **书级** | `stage7/{title}_rewriting.txt` | **这本书是谁** | `artifacts[]`（解析后是具名的） |
 #:
 #: ⚠⚠ **这张表存在的理由**：前两类问「盘上有几份」，第三类问「它叫什么名字」——
@@ -109,7 +108,6 @@ STAGE5_REVIEW = artifact_rel('stage5.review')
 STAGE5_TRIM_AUDIT = artifact_rel('stage5.trim_audit')
 STAGE5_TRIM_RESOLUTION = artifact_rel('stage5.trim_resolution')
 STAGE5_WONTFIX = artifact_rel('stage5.wontfix')
-STAGE5_MODE_DRAFT = artifact_rel('stage5.mode_draft')
 STAGE5_BOOK_DRAFT = artifact_rel('stage5.book_draft')
 STAGE6_HOOK = artifact_rel('stage6.hook')
 STAGE6_HOOK_EDIT = artifact_rel('stage6.hook_edit')

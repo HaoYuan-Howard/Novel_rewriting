@@ -47,7 +47,7 @@ def test_the_view_resolves_ids_and_counts_what_it_could_not(box):
     v = global_view(box.root, box.sid)
     refs = ([a.by for c in v.characters for a in c.address]
             + [r.subject for r in v.relations] + [r.object for r in v.relations]
-            + [k for s in v.secrets for k in s.known_by]
+            + [e.subject for s in v.secrets for e in s.knowledge_events]
             + [t.subject for t in v.arc.arc_tracks])
     assert refs, '一个引用都没收到——组装多半漏了整块'
     for ref in refs:

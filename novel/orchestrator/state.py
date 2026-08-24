@@ -28,7 +28,7 @@ from contracts.artifacts import (
 import os
 from pathlib import Path
 
-from contracts.invariants import NODES, STAGES
+from contracts.invariants import LEGACY_STAGE5_MODES, NODES, STAGES
 from contracts.schema import ARTIFACTS
 from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, StageState,
@@ -150,8 +150,8 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
 # 二、一层
 # ─────────────────────────────────────────────────────────────────────────────
 
-def chapters_done(novel_dir: Path, mode: str) -> list[int]:
-    """规范 `stage5/<mode>/chNN.json` 已落盘的章号（`R-14.2`：续跑粒度是**章**）。
+def chapters_done(novel_dir: Path) -> list[int]:
+    """规范 `stage5/chNN.json` 已落盘的章号（`R-14.2`：续跑粒度是**章**）。
 
     ⚠⚠ **必须排除 `.INVALID.json` 与 `.rejected.json`。** `chNN.json` 的存在本身就是
     「过了写作时的落盘闸门」这个语义（`_common.md` §5.1：先校验后落盘）——
@@ -161,7 +161,7 @@ def chapters_done(novel_dir: Path, mode: str) -> list[int]:
     不再靠“排除已知后缀”的黑名单：新增一种失败留证时，黑名单会再次漏掉。
     候选必须逐字等于产物目录生成的规范路径，只有正式稿这一种形状能通过。
     """
-    d = novel_dir / 'stage5' / mode
+    d = novel_dir / 'stage5'
     if not d.is_dir():
         return []
     out = []
@@ -170,11 +170,30 @@ def chapters_done(novel_dir: Path, mode: str) -> list[int]:
         if not digits:
             continue
         ordinal = int(digits)
-        expected = novel_dir / artifact_rel(
-            'stage5.chapter', mode=mode, nn=ordinal)
+        expected = novel_dir / artifact_rel('stage5.chapter', nn=ordinal)
         if p == expected:
             out.append(ordinal)
     return sorted(out)
+
+
+def stage5_legacy_paths(novel_dir: Path) -> list[str]:
+    """旧 deep/shallow 布局的只读证据。
+
+    它与「没有 canonical 成稿」不是一件事：前者说明这本书跑过已退役
+    契约，队列必须停下来，不得把它当 missing 后静默重新付费。
+    """
+    stage5 = novel_dir / 'stage5'
+    return [
+        f'stage5/{mode}'
+        for mode in LEGACY_STAGE5_MODES
+        if (stage5 / mode).is_dir()
+    ]
+
+
+def _legacy_ghosts(artifacts: list[ArtifactState]) -> list[str]:
+    prefixes = tuple(f'stage5/{mode}/' for mode in LEGACY_STAGE5_MODES)
+    return sorted({ghost for artifact in artifacts for ghost in artifact.ghosts
+                   if ghost.startswith(prefixes)})
 
 
 def planned_chapters(store: ArtifactStore) -> list[int] | None:
@@ -217,11 +236,11 @@ def numbered_produces(stage: str) -> dict[str, str]:
             if _is_pattern(rel) and paths.is_numbered_pattern(rel)}
 
 
-def stage_state(store: ArtifactStore, stage: str, *, modes: list[str]) -> StageState:
+def stage_state(store: ArtifactStore, stage: str) -> StageState:
     """一层的处境。`done` 由逐份折叠出来，**不另存一格**。
 
-    ⚠ **逐章类的层（stage5）走另一条路**：它的产物路径带 `{}`，做不了一次
-    `is_file()`。判据是「计划里的每个输出章，两条臂加起来都有成稿」——
+    ⚠ **逐章类的层（stage5）走另一条路**：它的章稿路径带 `{}`，做不了一次
+    `is_file()`。判据是「计划里的每个输出章都有 canonical 成稿，且 draft 投影可用」——
     而**计划读不回来时结论是 `None`（判不了），不是 `False`**。
     压成 `False` 会让队列一次次去重跑一个可能已经写完的付费层。
 
@@ -233,27 +252,42 @@ def stage_state(store: ArtifactStore, stage: str, *, modes: list[str]) -> StageS
             for rel in required_artifacts(stage, novel_dir=store.ctx.novel_dir)]
     rounds = {node: paths.numbered_rounds(store.ctx.novel_dir, rel)
               for node, rel in numbered_produces(stage).items()}
-    if stage != 'stage5':
-        done = all(a.exists and a.readable and a.freshness != 'stale' and not a.invalid
-                   for a in arts) if arts else None
-        reviewable = done is True or any(a.exists and a.readable for a in arts)
-        return StageState(stage=stage, artifacts=arts, done=done,
-                          rounds_done=rounds, reviewable=reviewable)
+    if stage == 'stage5':
+        written = chapters_done(store.ctx.novel_dir)
+        want = planned_chapters(store)
+        projection_ready = all(
+            a.exists and a.readable and a.freshness != 'stale' and not a.invalid
+            for a in arts
+        )
+        done = (None if want is None else
+                bool(want) and set(want) == set(written) and projection_ready)
+        legacy = stage5_legacy_paths(store.ctx.novel_dir)
+        from novel.stages.stage5.review import review_status
+        review = review_status(store.ctx, store)
+        if review.state == 'legacy_incompatible':
+            legacy = sorted(set([*legacy, *review.reasons]))
+        return StageState(
+            stage=stage, artifacts=arts, done=done, chapters_done=written,
+            rounds_done=rounds, reviewable=bool(written),
+            legacy_incompatible=bool(legacy), legacy_paths=legacy,
+            review_state=review.state, review_reasons=list(review.reasons),
+            review_rel=review.review_rel,
+        )
 
-    per_mode = {m: chapters_done(store.ctx.novel_dir, m) for m in modes}
-    written = {n for chs in per_mode.values() for n in chs}
-    want = planned_chapters(store)
-    done = None if want is None else bool(want) and set(want) <= written
-    return StageState(
-        stage=stage, artifacts=arts, done=done, chapters_done=per_mode,
-        rounds_done=rounds, reviewable=bool(per_mode),
-    )
+    done = all(a.exists and a.readable and a.freshness != 'stale' and not a.invalid
+               for a in arts) if arts else None
+    reviewable = done is True or any(a.exists and a.readable for a in arts)
+    legacy = _legacy_ghosts(arts)
+    return StageState(stage=stage, artifacts=arts, done=done,
+                      rounds_done=rounds, reviewable=reviewable,
+                      legacy_incompatible=bool(legacy), legacy_paths=legacy)
 
 
 def overview_summary(stages: list[StageState]) -> OverviewSummary:
     """一本书顶部的一句话；优先级与计数只在服务端这一处。"""
     artifacts = [artifact for stage in stages for artifact in stage.artifacts]
     broken = [a for a in artifacts if a.condition in ('invalid', 'unreadable')]
+    legacy = [p for stage in stages for p in stage.legacy_paths]
     stale = [a for a in artifacts if a.display_freshness == 'stale']
     pending = next((stage for stage in stages if stage.done is False), None)
     unknown = [a for a in artifacts
@@ -266,6 +300,10 @@ def overview_summary(stages: list[StageState]) -> OverviewSummary:
     if broken:
         verdict, text, detail = (
             'broken', f'{len(broken)} 份产物不可用', '盘上存在，但当前版本读不回来或已被隔离')
+    elif legacy:
+        verdict, text, detail = (
+            'legacy_incompatible', '发现旧 Stage5 契约产物',
+            f'只读保留：{", ".join(legacy)}；不会当成缺失后自动付费重跑')
     elif stale:
         verdict, text, detail = (
             'stale', f'{len(stale)} 份过期', '上游变了，下游要重跑')
@@ -313,17 +351,11 @@ def readonly_ctx(novel_dir: Path, node: str, code: str) -> RunContext:
                       readonly=True)
 
 
-def stage5_modes(novel_dir: Path) -> list[str]:
-    d = novel_dir / 'stage5'
-    return sorted(p.name for p in d.iterdir() if p.is_dir() and not p.name.startswith('_')) \
-        if d.is_dir() else []
-
-
 def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
     """一本书跑到哪了。**纯读**：不写一个字节，不发一个请求。"""
     novel_dir = paths.resolve_novel_dir(base, sid)
     code = prov.code_version()
-    modes = stage5_modes(novel_dir)
+    legacy = stage5_legacy_paths(novel_dir)
 
     #: 每层挑**本层第一个产它的节点**当提问者，理由见 `readonly_ctx`。
     asker = {s: next((n for n, sp in NODES.items() if sp.stage == s and sp.produces), None)
@@ -335,7 +367,7 @@ def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
         if node is None:                     # 一层一个产物都不产？那它不该在 STAGES 里
             continue
         store = ArtifactStore(readonly_ctx(novel_dir, node, code))
-        stages.append(stage_state(store, s, modes=modes))
+        stages.append(stage_state(store, s))
 
     chapter_store = ArtifactStore(readonly_ctx(
         novel_dir, 'stage1.partition', code))
@@ -345,7 +377,7 @@ def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
         dirname=novel_dir.name,
         chapters=stage1_chapter_count(chapter_store),
         stages=stages,
-        stage5_modes=modes,
+        stage5_legacy_paths=legacy,
         summary=overview_summary(stages),
     )
 
@@ -360,11 +392,12 @@ RESUME_RUN = 'run'          # 产物不在盘上 / 是 `.INVALID` ⇒ 该跑
 RESUME_SKIP = 'skip'        # 产物在、读得回来、不陈旧 ⇒ 已存在即跳过
 RESUME_REDO = 'redo'        # 上游在中断期间变过 ⇒ **那不是「续」是「重来」**
 RESUME_UNKNOWN = 'unknown'  # 判不了。⚠ **它不许被折进 `run`**——见下
+RESUME_LEGACY = 'legacy_incompatible'  # 旧 Stage5 契约；绝不自动付费重跑
 
 #: ⚠⚠ `unknown` 折进 `run` 的代价是**真金白银**：那意味着队列会去重跑一个
 #: 可能已经写完的付费层。折进 `skip` 更坏（跳过一个根本没跑的层，
 #: 而下游会拿着半份成品继续走）。⇒ 它只能是第四个值，由人来看那句话。
-RESUME_VERDICTS = (RESUME_RUN, RESUME_SKIP, RESUME_REDO, RESUME_UNKNOWN)
+RESUME_VERDICTS = (RESUME_RUN, RESUME_SKIP, RESUME_REDO, RESUME_UNKNOWN, RESUME_LEGACY)
 
 
 def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
@@ -385,6 +418,20 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
     st = next((s for s in ov.stages if s.stage == spec.stage), None)
     if st is None:
         return RESUME_RUN, f'{spec.stage} 盘上没有可判定的产物'
+    if st.legacy_incompatible:
+        return RESUME_LEGACY, (
+            '旧 Stage5 契约不兼容：' + ', '.join(st.legacy_paths)
+            + '。它们是只读历史证据，不会当成 missing 或触发静默付费重跑')
+
+    if node == 'stage5.review':
+        if st.review_state == 'fresh':
+            return RESUME_SKIP, f'{st.review_rel} 已绑定当前 RULES、章集、正文与 draft'
+        why = '；'.join(st.review_reasons) or (st.review_state or 'unknown')
+        if st.review_state == 'missing':
+            return RESUME_RUN, why
+        if st.review_state == 'stale':
+            return RESUME_REDO, f'Stage5 Review 已陈旧：{why}；先零成本重算'
+        return RESUME_UNKNOWN, f'Stage5 Review 当前无法确认：{why}'
 
     # ⭐ 轮次编号产物（`review_{n}` / `semantic_{n}`）：**它有自己的账，不看 stage 级 `done`**。
     #
@@ -417,11 +464,11 @@ def resume_verdict(ov: NovelOverview, node: str) -> tuple[str, str]:
             f'{node} 盘上一轮都没有（{", ".join(numbered)}）')
 
     # 逐章类的层：结论挂在「计划里的每个输出章都有成稿吗」上，而那可能是**判不了**。
-    if not [a for a in st.artifacts if a.rel in spec.produces]:
-        got = {m: len(v) for m, v in st.chapters_done.items()}
+    if node == 'stage5.write':
+        got = len(st.chapters_done)
         if st.done is None and got:
             return RESUME_UNKNOWN, (
-                f'{spec.stage} 判不了：盘上有成稿 {got}，而「该有几章」要读 '
+                f'{spec.stage} 判不了：盘上有 canonical 成稿 {got} 章，而「该有几章」要读 '
                 f'stage4 的输出章，那份计划现在读不回来。'
                 f'⚠ **这不是「没跑完」**——按没跑完处理会去重跑一个可能已经写完的付费层')
         if st.done is True:

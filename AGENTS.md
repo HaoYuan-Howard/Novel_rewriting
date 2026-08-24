@@ -52,8 +52,9 @@ with code in this repository. **`CLAUDE.md` 是指向本文件的链接——要
 stage2 两个节点、stage5 写作与验收两相、stage0 三个人参与的动作。
 
 三条容易踩的推论：**没有 `check` 节点**（复检一律是 `--check-only` flag，作业 kind 是
-`(node, flags)` 二元组）；**写作两条臂是参数不是节点**（`stage5.write --deep 1,2,3 --shallow-rest`）；
-**正向覆盖率不许写成 `'R-' + stage.removeprefix('stage')`**，`STAGE_SECTIONS` 从 `NODES` 派生。
+`(node, flags)` 二元组）；**Stage5 只有一条 canonical 闭卷写作路**（默认补齐计划中的全部缺章，
+`--chapters` 只用于定向重写）；**正向覆盖率不许写成 `'R-' + stage.removeprefix('stage')`**，
+`STAGE_SECTIONS` 从 `NODES` 派生。
 
 章的唯一键恒是阅读序整数 `chapter_ordinal`，**输出章号恒等于源章号**（不合并、不重排、不删、不拆）。
 
@@ -97,6 +98,9 @@ builder、完成度不偷看作业记录、loopback、无 CORS、同书 409。�
 付费跑法必须 `--yes`。成本的唯一权威源是 `<base>/_service/ledger.jsonl`，不与产物 `usage` 或日志混加；
 缓存命中（`.llm_cache/`）单独记账，不能写成"没有执行过"。
 **付费授权与正文外发授权是两件独立的事**，任一缺失时仍可跑 0 成本的 `state`/`inbox`/`preview`。
+审批服务的盘上 `_service/approvals/<sid>.json` 是 **v3**（Stage5 只有
+`writing/writing_proof`），公开 API `ApprovalDoc` 仍是 **v2**；两个版本面独立。旧盘上 v2 只能经显式
+`backfill_from_disk` 且 proofs 仍绑当前主体时迁移，普通 GET 不得静默迁移。
 
 ### 修复路由与恢复路
 
@@ -104,7 +108,7 @@ builder、完成度不偷看作业记录、loopback、无 CORS、同书 409。�
 `repair == UNIQUE` 且 `unresolved_rounds < 2`）、`human`（typed apply-edit / pick / hash-bound
 resolution / wontfix 收口）、`none`（metric 只报读数）。处理顺序：首轮生成 → 机械检查 →
 deterministic 先修 → UNIQUE 才可付费修 → 连续两轮未消转人 → 全规则回归 → 机械干净且 fresh
-后再跑语义审判。
+后再跑需要的语义审判（现役只有 `stage6.semantic`，Stage5 只有 0 成本机械 Review）。
 
 **加落盘闸门必须同批提供 0 成本恢复路**（`--revalidate` 或人工编辑入口），否则一次有效付费产出会被
 `.INVALID` 永久锁死。人工写回与生成路径共享同一把尺子：输入来源不同，schema、归一、判据、归档、
@@ -122,7 +126,9 @@ provenance 的口相同。
 破坏形状就 `current_version` +1 并同批回答「存量产物由谁重建」，并在
 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里显式登记那一次破坏）。
 现役 `stage2/chapter_blueprints.json` 为 v3（2026-08-19 锚点改段落索引升 v2；
-2026-08-23 architecture 收窄为 v1.1/v2/v3.1 升 v3）；其余产物版本以注册表为准；
+2026-08-23 architecture 收窄为 v1.1/v2/v3.1 升 v3）；Stage5 canonical 章稿、Review、
+trim audit/resolution 均为 v2。旧 `stage5/deep|shallow/` 只作历史证据，读模型必须明确报
+`legacy_incompatible`，不允许原地选臂、迁移或触发付费重建；其余产物版本以注册表为准；
 旧产物**不手补字段冒充当前产地**，要从 producer 重建。
 `novel/` 里加一层包，`pyproject.toml` 的 `[tool.setuptools] packages` 要同步加一行——漏了没有任何测试
 会出声（`pythonpath=["."]` 让 pytest 照样 import 得到），只有非 editable 安装才崩。
@@ -162,9 +168,13 @@ tests/contracts/tools/novel/docs 开头的仓内路径必须存在。文档引�
 
 - **`docs/REQUIREMENTS.md` 是唯一活动待办**，只从仍存在的条目开工，验收通过即删条目；
   已完成的历史归 Git 与 `docs/BACKEND_CONTRACT.md` §十。文档职责分工见 README 的表。
-- 动手前读 `docs/LESSONS.md`（编号化的可迁移经验），尤其第 21 条：**守卫也会假红**。红了先分清是产物
+- **工程任务**（修改仓库代码、契约、测试、工程文档或维护 skill）动手前完整读取
+  `docs/LESSONS.md`（编号化的可迁移经验），尤其第 21 条：**守卫也会假红**。红了先分清是产物
   问题还是守卫自己漂了——典型形状是「守卫重拼了生产的实参」和「守卫断言了一道产品明说不存在的闸」
   （`info` 判据的正确守法是"越线必出声"而不是"不许越线"）。守卫要**调用生产那一个落点**，不要重拼一份。
+- **纯运行型任务**（跑书、断点续跑、查看 `state` / `inbox`、流水线内恢复与代批）不读取
+  `docs/LESSONS.md`，只遵循 `.claude/skills/novel-pipeline-operator/` 内的操作契约和按需经验库。
+  若运行故障进一步转为仓库代码诊断或修复，再进入前述工程任务流程。
 - 不能用 mock、空数组、普通 404 或本地存储伪装尚未提供的后端能力；类型同型只证明适配器对齐，
   联调要走通「页面动作 → API 方法 → HTTP 路由 → 服务实现 → 最终产物」并检查重启后的状态。
 - 语义判据在没有标定过真值前，倾向 `unver` / 人工裁决；**没有 ground truth 时多一条语义判据可能更危险**。

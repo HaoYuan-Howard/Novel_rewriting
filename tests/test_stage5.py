@@ -3,8 +3,8 @@
 """
 test_stage5.py —— 逐章写作 + 全书验收。
 
-⭐ **这一份里最值钱的是那 7 条 HARD 的反例样本。**
-盘上 31 章对这 7 条是 **0 命中**，而「见过它通过」不是证据，「见过它红一次」才是
+⭐ **这一份里最值钱的是那 6 条 HARD 的反例样本。**
+盘上历史成稿对这些 HARD 是 **0 命中**，而「见过它通过」不是证据，「见过它红一次」才是
 （LESSONS 第 3 条）。stage4 / stage6 / stage7 合计 36 条 HARD 至今 0 反例样本——
 本层不再往那个数上加。
 
@@ -36,7 +36,7 @@ def _eligible_books() -> list[str]:
     drafts: set[str] = set()
     for artifact in corpus.iter_artifacts():
         rels.setdefault(artifact.book_dir, set()).add(artifact.rel)
-        if artifact.pattern == 'stage5/{mode}/ch{nn}.json' and '_rounds/' not in artifact.rel:
+        if artifact.pattern == 'stage5/ch{nn}.json' and '_rounds/' not in artifact.rel:
             drafts.add(artifact.book_dir)
     return sorted(book for book, seen in rels.items() if _REQUIRED <= seen and book in drafts)
 
@@ -49,11 +49,18 @@ _BOOKS = _eligible_books()
 #: `stage5.write --recheck` 会 `ProvenanceRefused` ⇒ **退出码 3**，五条全红。
 #: 实测三本里两本过期、一本干净，换到干净那本上五条全绿。
 #: 一本都不当前时留 `_BOOKS[0]`，由 `box` 里的 `requires_current` 给出**带下一步的跳过**。
-#: ⚠ 前缀点名两条臂，**不写成 `stage5/`**：那一层下面还有 `trim_audit_ch*.json`，
-#: 它不在任何节点的 `produces` 里（它是本层的产出，不是本层的前提输入），
-#: 拿它去问「当前不当前」会当场 `AssertionError`——那是 `freshness_of` 在正确地说
-#: 「这个问题问不出口」，不该在这里被吞掉。
-_BOOK = (corpus.first_current_book(_BOOKS, 'stage5/deep/', 'stage5/shallow/')
+def _draft_rels(book_dir: str) -> tuple[str, ...]:
+    return tuple(sorted(
+        artifact.rel for artifact in corpus.iter_artifacts()
+        if artifact.book_dir == book_dir
+        and artifact.pattern == 'stage5/ch{nn}.json'
+        and '_rounds/' not in artifact.rel
+    ))
+
+
+_BOOK = (next((candidate for candidate in _BOOKS
+               if (rels := _draft_rels(candidate))
+               and corpus.is_current(candidate, *rels)), None)
          or (_BOOKS[0] if _BOOKS else ''))
 
 
@@ -73,9 +80,9 @@ def entry(book: M.Book) -> dict:
     return book.chapters[min(book.chapters)]
 
 
-def _fire(text: str, entry: dict, book: M.Book, *, mode: str = 'deep') -> set[str]:
+def _fire(text: str, entry: dict, book: M.Book) -> set[str]:
     """这一份成稿触发了哪些判据。"""
-    return {f.rule for f in checks.chapter_findings(text, entry, book, mode=mode, given='')}
+    return {f.rule for f in checks.chapter_findings(text, entry, book, given='')}
 
 
 #: 一段**通得过大多数判据**的底稿：完整句、够长、带本书的人名。
@@ -85,20 +92,27 @@ def _clean_body(book: M.Book, entry: dict) -> str:
     return (line * 8)
 
 
+def _with_source_material(book: M.Book, entry: dict, *materials: str) -> M.Book:
+    """把合成材料放回对应源章；下游保真 HARD 只检查有源文证据的锚。"""
+    source = dict(book.source_text)
+    ordinal = int((entry.get('from_source_ordinals') or [1])[0])
+    source[ordinal] = source.get(ordinal, '') + '\n' + '\n'.join(materials)
+    return M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
+                  source_text=source, secrets=book.secrets)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、⭐⭐ 7 条 HARD，**每条一份会让它红的样本**
+# 一、⭐⭐ 6 条 HARD，**每条一份会让它红的样本**
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_seven_hard_judges_are_exactly_the_ones_we_have_samples_for():
+def test_the_six_hard_judges_are_exactly_the_ones_we_have_samples_for():
     """守卫的守卫：**本层的 HARD 判据集合改了，下面样本就要跟着改。**
 
     多一条 HARD 而这里没有对应的反例，就又回到了「36 条 HARD 盘上 0 反例样本」那个欠账。
     """
     hard = {r.rule for r in REGISTRY.of_stage('stage5') if r.sev == 'hard'}
-    # ⚠ `semantic_secret_leak` 随 `stage5.semantic` 节点于 2026-08-17 下线 ⇒ 8 条变 7 条。
     assert hard == {'draft_too_short', 'draft_truncated', 'meta_leak', 'verbatim_missing',
-                    'keep_value_missing', 'secret_leak',
-                    'dialogue_halved'}, (
+                    'keep_value_missing', 'secret_leak'}, (
         f'stage5 的 HARD 集合变成了 {sorted(hard)}——'
         f'每新加一条 HARD 就要有一份会让它红的样本（LESSONS 第 3 条）')
 
@@ -109,17 +123,241 @@ def test_draft_too_short_goes_red_and_swallows_everything_else(book, entry):
     早退是**有意的**：后面每一条判据都建立在「这是一篇文章」之上，对 12 个字跑它们
     只会产出一堆没有意义的数。而「这不是『其余都干净』」由这条 HARD 自己承担。
     """
-    fs = checks.chapter_findings('太短了。', entry, book, mode='deep', given='')
+    fs = checks.chapter_findings('太短了。', entry, book, given='')
     assert [f.rule for f in fs] == ['draft_too_short'], (
         '早退没生效——短稿上跑出了别的判据，那些数全是噪声')
+
+
+# ────────── 事件原子：「提不出」与「提错了」是两个层的账 ──────────
+
+def test_a_bad_upstream_atom_is_reported_as_stage2s_bill_not_as_ours():
+    """⭐ **反例样本**：原子在**源章原文**里都找不到 ⇒ 抽取那一步错了。
+
+    ⚠ 它此前与「提不出原子」合并成一条 `event_landing_unver`、`owner` 记 stage5
+    ⇒ 一个 stage2 的 bug 被报成「stage5 这一维够不着」，
+    `novel/report/builder.py::remediation_of` 的修复路由因此指向错的层。
+    ⚠ 两桶的**措辞也必须分开**：一个说「事件是概括句，提不出可回查的原子」，
+    另一个说「原子提错了」——合成一句就没人知道该去修谁。
+    """
+    entry = {'output_ordinal': 1,
+             'characters': {'c1': {'display_name': '顾堇'}},
+             'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
+             'segments': [{'slot': 's01', 'events': ['顾堇打翻了茶盏']}]}
+    book = M.Book(title='t', ctx={'chapters': [entry]}, measurable={},
+                  source_text={1: '这一章原文里根本没有那个人。'}, secrets=[])
+    entry['from_source_ordinals'] = [1]
+    fs, land = checks.review_chapter_findings('成稿正文。', entry, book)
+    assert [f.rule for f in fs] == ['event_atom_unattested']
+    assert land['ident'] == 1 and land['ok'] == 0 and land['missed'] == 0
+    assert REGISTRY.get('event_atom_unattested').owner == 'stage2',         '这条账记的是上游；owner 一改回 stage5，修复路由就又指错层了'
+
+
+# ───────────── band_drift：翻档与真漂移必须在报告上分得开 ─────────────
+
+def test_cut_distance_separates_a_baseline_hugging_the_edge_from_one_in_the_middle():
+    """⭐ 这是 `band_drift` 那条 detail 存在的全部理由。
+
+    档位粗（句子切 16/22/30），基线 16.4 时成稿只降几个百分点就翻档，
+    而报告上「短句 → 极短句」与一次真正的形态崩塌**长得一模一样**。
+    ⚠ 本条只断言**读数分得开**，不断言「多近算贴边」——那个数没有标定过。
+    """
+    from novel.core.bands import PARA_BANDS, SENT_BANDS, band, cut_distance
+    assert band(16.4, SENT_BANDS) == band(19.0, SENT_BANDS)      # 同一档
+    assert cut_distance(16.4, SENT_BANDS) < cut_distance(19.0, SENT_BANDS)
+    assert cut_distance(55.0, PARA_BANDS) == 15.0
+    assert cut_distance(5.0, [(None, '兜底')]) is None, '一条档边都没有时不许编一个数'
+
+
+def test_band_drift_says_the_numbers_not_just_the_band_words(book, entry):
+    """`detail` 要带上本书基线、本章实测、比值与离档边的距离。"""
+    body = chr(10).join(['短。', '', '很短。', '', '还是短。'])
+    got = list(checks._band_drift(body, book))
+    for f in got:
+        assert '字' in f.detail and '×' in f.detail and '离最近档边' in f.detail, f.detail
+    # ⚠ 凭据仍按「哪一维」区分两个实例——`_converge` 的收敛差集靠它，别破坏。
+    assert all(f.evidence[0] in ('句子形态', '段落形态') for f in got)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 章尾交付 —— `R-7.9` 的第二个守卫。⭐ 反例在这里，盘上零样本
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hook_book(facts, *, slots=('s01', 's02')):
+    """造一本只含「结尾目标 + 分段」的书。判据吃 dict ⇒ 反例配得出来。"""
+    entry = {
+        'output_ordinal': 1,
+        'narration': [{'segment': '全章', 'grammatical_person': 'third'}],
+        'characters': {'c1': {'display_name': '顾堇'}},
+        'segments': [{'slot': sl, 'events': ['e']} for sl in slots],
+        'end_hook_goal': {'intent': 'open', 'facts': list(facts)},
+    }
+    book = M.Book(title='t', ctx={'chapters': [entry]}, measurable={},
+                  source_text={}, secrets=[])
+    return book, entry
+
+
+def _segs(*pairs):
+    return [{'slot': sl, 'text': tx} for sl, tx in pairs]
+
+
+def test_an_end_hook_surface_hit_in_the_last_slot_still_needs_semantic_review():
+    book, entry = _hook_book(['顾堇被系统提示'])
+    fs = checks._end_hook_landing(
+        entry, book, _segs(('s01', '她醒了。'), ('s02', '顾堇开口。')))
+    assert [f.rule for f in fs] == ['end_hook_surface_report', 'end_hook_unver']
+    assert 'tail:顾堇' in fs[0].evidence
+    assert '不能证明' in fs[1].detail
+
+
+def test_end_hook_surface_report_distinguishes_other_slot_and_whole_chapter_absence():
+    """字面探针只报告分布：别处命中、整章缺失都不能自动定罪。"""
+    book, entry = _hook_book(['顾堇被系统提示'])
+    fs = checks._end_hook_landing(
+        entry, book, _segs(('s01', '顾堇开口。'), ('s02', '她愣住。')))
+    assert [f.rule for f in fs] == ['end_hook_surface_report', 'end_hook_unver']
+    assert 'other:顾堇' in fs[0].evidence
+    gone = checks._end_hook_landing(
+        entry, book, _segs(('s01', '她醒了。'), ('s02', '她愣住。')))
+    assert [f.rule for f in gone] == ['end_hook_surface_report', 'end_hook_unver']
+    assert 'absent:顾堇' in gone[0].evidence
+
+
+def test_end_hook_pronoun_delivery_and_same_name_collision_are_both_unver():
+    """代词可能完成交付，同名也可能假命中；两边都只能给字面读数。"""
+    book, entry = _hook_book(['顾堇收到密令'])
+    pronoun = checks._end_hook_landing(
+        entry, book, _segs(('s01', '门外有脚步。'), ('s02', '她收到了密令。')))
+    collision = checks._end_hook_landing(
+        entry, book, _segs(('s01', '门外有脚步。'), ('s02', '顾堇只是写在旧名册上。')))
+    assert all(fs[-1].rule == 'end_hook_unver' for fs in (pronoun, collision))
+    assert 'absent:顾堇' in pronoun[0].evidence
+    assert 'tail:顾堇' in collision[0].evidence
+
+
+def test_the_three_ways_of_not_being_able_to_judge_say_which_one_it_was():
+    """⚠⚠ 三种「够不着」必须分得开，而且**都不是通过**（`docs/LESSONS.md` 第 4 条）。
+
+    `noatom` 那一桶预计不小：`CtxGoal.facts` 是人读事实，很可能既无数字也无专名。
+    把它当成通过，就是 `R-7.22` 那两桶「统计出来了但没判过」的翻版。
+    """
+    book, entry = _hook_book(['顾堇被系统提示'])
+    no_seg = checks._end_hook_landing(entry, book, None)
+    lost = checks._end_hook_landing(entry, book, _segs(('s01', '顾堇开口。')))
+    book2, entry2 = _hook_book(['她心里松了一口气'])
+    noatom = checks._end_hook_landing(
+        entry2, book2, _segs(('s01', 'x'), ('s02', 'y')))
+    whys = [f[1].detail for f in (no_seg, lost, noatom)]
+    assert all([f.rule for f in fs] == ['end_hook_surface_report', 'end_hook_unver']
+               for fs in (no_seg, lost, noatom))
+    assert len(set(whys)) == 3, f'三种够不着说了同一句话：{whys}'
+
+
+def test_no_end_hook_goal_or_no_plan_segments_is_explicitly_unver():
+    """上游没给目标时明确留下零分母原因，不能渲染成通过。"""
+    book, entry = _hook_book([])
+    fs = checks._end_hook_landing(entry, book, _segs(('s01', 'x')))
+    assert [f.rule for f in fs] == ['end_hook_surface_report', 'end_hook_unver']
+    assert 'no_goal_or_plan' in fs[0].evidence
+
+
+def test_end_hook_surface_and_semantic_boundary_are_identity_na():
+    """⚠ 恒等基线上**源章没有计划切出来的 slot**，「最后一段」这个概念不存在
+    ⇒ 不登记进 `IDENTITY_NA` 的话它在那一路恒 `unver`，
+    也就是 `measure.py::Book` docstring 警告的「一盏保证会亮的绿灯」。"""
+    assert {'end_hook_surface_report', 'end_hook_unver'} <= checks.IDENTITY_NA
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 叙述人称 —— `R-7.9` 的第一个守卫，反例在这里
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _person_book(*persons_and_surfaces) -> tuple[M.Book, list[dict]]:
+    """按 `(人称, 自称字面)` 造一本只含 narration 的书。**判据吃 dict，所以反例配得出来。**"""
+    chapters = [
+        {'output_ordinal': i,
+         'narration': [{'segment': '全章', 'grammatical_person': person,
+                        'pronoun_surfaces': surfaces}]}
+        for i, (person, surfaces) in enumerate(persons_and_surfaces, 1)]
+    book = M.Book(title='t', ctx={'chapters': chapters}, measurable={},
+                  source_text={}, secrets=[])
+    return book, chapters
+
+
+def test_the_book_supplies_its_own_first_person_surfaces_and_never_a_hardcoded_list():
+    """⭐ 右锚是**上游给的**，不是代码里写死的一张「我/咱/本宫/朕」。
+
+    ⚠ 并集取**书级**：声明 `third` 的那一段自己的 `pronoun_surfaces` 恒为 `null`
+    （第三人称交空数组合法），拿同段那一份当锚 ⇒ **被测的那一类永远没有锚、判据恒不执行**。
+    """
+    book, _ = _person_book(('first', ['咱']), ('third', None), ('first', ['奴家']))
+    assert book.first_person_surfaces == frozenset({'咱', '奴家'})
+    assert M.Book(title='t', ctx={'chapters': []}, measurable={}, source_text={},
+                  secrets=[]).first_person_surfaces == frozenset()
+
+
+def test_narration_person_drift_catches_a_third_person_chapter_that_slips_into_first():
+    """⭐ **反例样本**：这正是盘上真出过的那一次（上游误判 `third`，写手忠实执行）。"""
+    book, chapters = _person_book(('first', ['我']), ('third', None))
+    fs = checks._narration_person('她确实知道。我不信他。她也得确保。', chapters[1], book)
+    assert [f.rule for f in fs] == ['narration_person_drift']
+    assert '「我」×1' in fs[0].detail
+
+
+def test_narration_person_drift_catches_a_first_person_chapter_without_any_self_reference():
+    """⭐ **反例样本**：声明第一人称，叙述层里一个自称都没有。"""
+    book, chapters = _person_book(('first', ['我']))
+    assert [f.rule for f in checks._narration_person('她走进屋。他没抬头。', chapters[0], book)]         == ['narration_person_drift']
+    assert checks._narration_person('我走进屋。他没抬头。', chapters[0], book) == []
+
+
+def test_narration_person_only_ever_looks_at_the_narration_layer():
+    """⚠⚠ **台词里的人称是说话人的，不是叙述者的**——两个方向的假阳都要挡住。
+
+    不剔除直接引语的话：声明 `first` 那一支会被角色台词里的「我」**假阴**（判据静默失效），
+    声明 `third` 那一支会被同一个「我」**假阳**（每一章都红）。
+    """
+    book, chapters = _person_book(('first', ['我']), ('third', None))
+    # 「我」只在台词里 ⇒ 第一人称那一支照样要出声（叙述层确实没有自称）
+    assert [f.rule for f in checks._narration_person(
+        '她说：「我不去。」他没抬头。', chapters[0], book)] == ['narration_person_drift']
+    # 同一句话，第三人称那一支必须**沉默**
+    assert checks._narration_person('她说：「我不去。」他没抬头。', chapters[1], book) == []
+
+
+def test_narration_person_report_says_out_loud_when_it_could_not_judge():
+    """⚠ 「0 命中」的三种来源必须分得开：对得上 / 没给 narration / 没有锚。"""
+    book, chapters = _person_book(('third', None))          # 全书没有第一人称 ⇒ 池空
+    only = checks._narration_person_report('她走了。', chapters[0], book)[0]
+    assert only.rule == 'narration_person_report' and '未判' in only.detail
+    none = checks._narration_person_report('她走了。', {'output_ordinal': 9}, book)[0]
+    assert '上游没有 narration' in none.detail
+
+
+def test_second_person_and_multiple_narration_are_explicitly_unver():
+    second, second_rows = _person_book(('second', ['你']))
+    multi_entry = {
+        'output_ordinal': 1,
+        'narration': [
+            {'segment': '前半', 'grammatical_person': 'first', 'pronoun_surfaces': ['我']},
+            {'segment': '后半', 'grammatical_person': 'third', 'pronoun_surfaces': None},
+        ],
+    }
+    multi = M.Book(title='t', ctx={'chapters': [multi_entry]}, measurable={},
+                   source_text={}, secrets=[])
+    second_report = checks._narration_person_report('你走进屋。', second_rows[0], second)[0]
+    multi_report = checks._narration_person_report('我走进屋。她没回头。', multi_entry, multi)[0]
+    assert '第二人称尚未标定' in second_report.detail
+    assert '多 narration 但正文没有对应段界' in multi_report.detail
+    assert checks._narration_person('你走进屋。', second_rows[0], second) == []
+    assert checks._narration_person('我走进屋。', multi_entry, multi) == []
 
 
 def test_every_chapter_finding_carries_its_output_ordinal(book, entry):
     """逐章 finding 自己携带章号，不再靠 ReviewChapter 外层猜它属于谁。"""
     ordinal = int(entry['output_ordinal'])
-    short = checks.chapter_findings('太短了。', entry, book, mode='deep', given='')
+    short = checks.chapter_findings('太短了。', entry, book, given='')
     full = checks.chapter_findings(
-        _clean_body(book, entry), entry, book, mode='deep', given='')
+        _clean_body(book, entry), entry, book, given='')
     assert short and full
     assert {hit.output_ordinal for hit in [*short, *full]} == {ordinal}
 
@@ -158,9 +396,10 @@ def test_verbatim_missing_goes_red_when_the_mandated_line_is_gone(book, entry):
     """⭐ 【原样写入】那一组**要求逐字**，改一个字就废。"""
     line = '这句话一个字都不能改，写手必须原样放回去。'
     e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
+    anchored = _with_source_material(book, e, line)
     body = _clean_body(book, entry)
-    assert 'verbatim_missing' in _fire(body, e, book)
-    assert 'verbatim_missing' not in _fire(body + line, e, book)
+    assert 'verbatim_missing' in _fire(body, e, anchored)
+    assert 'verbatim_missing' not in _fire(body + line, e, anchored)
 
 
 @pytest.mark.parametrize('rewritten', [
@@ -176,7 +415,8 @@ def test_verbatim_typo_is_a_separate_conclusion_not_a_miss(
     """
     line = '这为公子的伤口已经溃烂了整整三日无人问津。'
     e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
-    fired = _fire(_clean_body(book, entry) + rewritten, e, book)
+    anchored = _with_source_material(book, e, line)
+    fired = _fire(_clean_body(book, entry) + rewritten, e, anchored)
     assert 'verbatim_typo' in fired and 'verbatim_missing' not in fired
 
 
@@ -185,7 +425,8 @@ def test_verbatim_three_character_rewrite_is_still_missing(book, entry):
     line = '这为工子的伤口已经溃烂了整整三日无人问津。'
     e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
     rewritten = '这位年轻人的伤口已经溃烂了整整三日无人问津。'
-    fired = _fire(_clean_body(book, entry) + rewritten, e, book)
+    anchored = _with_source_material(book, e, line)
+    fired = _fire(_clean_body(book, entry) + rewritten, e, anchored)
     assert 'verbatim_missing' in fired and 'verbatim_typo' not in fired
 
 
@@ -197,7 +438,8 @@ def test_verbatim_split_by_a_speech_tag_is_allowed_but_still_recorded(book, entr
     line = '「你要是真的想走，那就走吧，我不拦着你，一次都不会。」'
     e = dict(entry, segments=[{**(entry['segments'][0]), 'verbatim': [line]}])
     split = '「你要是真的想走，」他说，「那就走吧，我不拦着你，一次都不会。」'
-    fired = _fire(_clean_body(book, entry) + split, e, book)
+    anchored = _with_source_material(book, e, line)
+    fired = _fire(_clean_body(book, entry) + split, e, anchored)
     assert 'verbatim_split' in fired and 'verbatim_missing' not in fired
 
 
@@ -211,8 +453,9 @@ def test_real_stage5_report_keeps_verbatim_caveat_in_note_only(book, entry):
     line = '「你要是真的想走，那就走吧，我不拦着你，一次都不会。」'
     e = dict(entry, segments=[{**entry['segments'][0], 'verbatim': [line]}])
     split = '「你要是真的想走，」他说，「那就走吧，我不拦着你，一次都不会。」'
+    anchored = _with_source_material(book, e, line)
     findings = checks.chapter_findings(
-        _clean_body(book, entry) + split, e, book, mode='deep', given='')
+        _clean_body(book, entry) + split, e, anchored, given='')
     by_rule = defaultdict(list)
     for hit in findings:
         by_rule[hit.rule].append(hit)
@@ -255,8 +498,8 @@ def test_stage5_check_report_aggregates_band_drift_without_losing_chapter_state(
     )], 7)[0]
     review_artifact = SimpleNamespace(
         chapters=[
-            SimpleNamespace(output_ordinal=2, relpath='stage5/deep/ch02.json', findings=[first]),
-            SimpleNamespace(output_ordinal=7, relpath='stage5/deep/ch07.json', findings=[second]),
+            SimpleNamespace(output_ordinal=2, relpath='stage5/ch02.json', findings=[first]),
+            SimpleNamespace(output_ordinal=7, relpath='stage5/ch07.json', findings=[second]),
         ],
         book=[],
         baselines={'band_drift': '2/2', '_beat_event_landing': '0/0 拍有落点'},
@@ -281,18 +524,75 @@ def test_stage5_check_report_aggregates_band_drift_without_losing_chapter_state(
     assert details[1]['converge'] == 'unresolved_2'
 
 
+def test_check_only_overlays_a_wontfix_written_after_the_latest_review(monkeypatch):
+    """旁路决定账落下后立刻生效，不要求额外生成一份 Review 才能从 inbox 销账。"""
+    from types import SimpleNamespace
+
+    from contracts.schema.common import WontFixEntry
+    from contracts.schema.report import finding
+    from contracts.schema.stage5 import Review, ReviewChapter
+    from novel.prov import FreshnessReport
+    from novel.stages.stage5 import review
+
+    hit = checks.with_output_ordinal([finding(
+        'event_landing', detail='第 2 拍没有落点', evidence=['b02'],
+        converge='same_draft', unresolved_rounds=0,
+    )], 6)[0]
+    row = ReviewChapter(
+        output_ordinal=6, from_source_ordinals=[6], budget_chars=100,
+        source_chars=100, relpath='stage5/ch06.json', draft_round=1,
+        draft_sha1='a' * 10, draft_text_sha1='b' * 10, chars=100,
+        findings=[hit],
+    )
+    artifact = Review.model_construct(
+        sources=None, judged={}, chapters=[row], book=[],
+        baselines={'_beat_event_landing': '0/1 拍有落点'},
+        baselines_identity={}, counts={}, provenance=None,
+    )
+    entry = WontFixEntry(
+        output_ordinal=6, rule=hit.rule, evidence_key=hit.evidence_key,
+        why='故意保留留白', detail=hit.detail, at='review_1',
+    )
+    monkeypatch.setattr(review, 'load_wontfix', lambda _store: {
+        review.wontfix_key(6, hit.rule, hit.evidence_key): entry,
+    })
+    monkeypatch.setattr(review, 'review_seqs', lambda _store: [])
+    store = SimpleNamespace(
+        freshness=lambda _rel: FreshnessReport('unknown', 'no_inputs'))
+    ctx = SimpleNamespace(sid='book-1', node='stage5.review')
+
+    report = review._report_of_review(ctx, store, artifact)
+
+    finding_row = next(item for item in report.rules if item.rule == 'event_landing')
+    assert finding_row.findings[0].wontfix is not None
+    assert finding_row.findings[0].wontfix.why == '故意保留留白'
+    assert finding_row.findings[0].actionable is False
+
+
 def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
     """⭐⭐ **比值不比字面**：下发面「30岁」、成稿「三十岁」＝**满足**。
 
     ⚠ 这条是被一次**全量误报**逼出来的：原型只搜阿拉伯字面，某章因此被**整章拦下**
     ——而契约发给写手的原话是「数字必须保住，**措辞随你**」，写手做的正是它让做的事。
     """
-    e = dict(entry, segments=[{**(entry['segments'][0]), 'keep_value': ['她今年30岁了。']}])
+    material = '她今年30岁了。'
+    e = dict(entry, segments=[{**(entry['segments'][0]), 'keep_value': [material]}])
+    anchored = _with_source_material(book, e, material)
     body = _clean_body(book, entry)
-    assert 'keep_value_missing' in _fire(body, e, book)
-    assert 'keep_value_missing' not in _fire(body + '她今年三十岁了。', e, book), (
+    assert 'keep_value_missing' in _fire(body, e, anchored)
+    assert 'keep_value_missing' not in _fire(body + '她今年三十岁了。', e, anchored), (
         '「三十岁」没被认成 30——判据退回了字面比对，那会把一次正确的改写判成丢数字')
-    assert 'keep_value_missing' not in _fire(body + '她今年30岁了。', e, book)
+    assert 'keep_value_missing' not in _fire(body + '她今年30岁了。', e, anchored)
+
+
+def test_unattested_material_is_stage2s_bill_and_never_a_stage5_missing_target(book, entry):
+    """源文不存在的锚不能沿 UNIQUE 路由付费塞进正文。"""
+    fake = '源章从未出现过的伪造原话。'
+    e = dict(entry, segments=[{**entry['segments'][0], 'verbatim': [fake]}])
+    fired = _fire(_clean_body(book, entry), e, book)
+    assert 'material_anchor_unattested' in fired
+    assert 'verbatim_missing' not in fired
+    assert REGISTRY.get('material_anchor_unattested').owner == 'stage2'
 
 
 def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, entry):
@@ -307,11 +607,11 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
     b = M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
                source_text=book.source_text,
                secrets=[{'secret_id': 'secret_x', 'fact': fact,
-                         'character_known_by': [], 'setup_chapters': [],
+                         'knowledge_events': [], 'setup': {'kind': 'cold'},
                          'reader_reveal_events': [{'chapter': 9}]}])
     e = dict(entry, must_not_reveal=['secret_x'])
     body = _clean_body(book, entry) + fact + '。'
-    fs = checks.chapter_findings(body, e, b, mode='deep', given='')
+    fs = checks.chapter_findings(body, e, b, given='')
     leak = [f for f in fs if f.rule == 'secret_leak']
     assert leak, 'secret_leak 没红——转抄式泄底是它唯一挡得住的那一类'
     assert all(ev in body for ev in leak[0].evidence), (
@@ -326,7 +626,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
         source_text=book.source_text,
         secrets=[{
             'secret_id': 'secret_x', 'fact': fact,
-            'character_known_by': [], 'setup_chapters': [],
+            'knowledge_events': [], 'setup': {'kind': 'cold'},
             'reader_reveal_events': [{'chapter': 9}],
         }],
     )
@@ -340,8 +640,8 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
 def test_secret_timeline_uses_the_same_number_ruler(book):
     """揭示章原样写出带数字的 fact 时，不得误报「连揭示章都没命中」。"""
     fact = '她其实一直都知道他是三皇子'
-    secret = {'secret_id': 'secret_x', 'fact': fact, 'character_known_by': [],
-              'setup_chapters': [], 'reader_reveal_events': [{'chapter': 9}]}
+    secret = {'secret_id': 'secret_x', 'fact': fact, 'knowledge_events': [],
+              'setup': {'kind': 'cold'}, 'reader_reveal_events': [{'chapter': 9}]}
     synthetic = M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
                        source_text=book.source_text, secrets=[secret])
     fs = checks.book_findings(synthetic, rows=[], bodies={9: fact},
@@ -358,24 +658,18 @@ def test_secret_unknown_says_it_could_not_check_instead_of_passing(book, entry):
     assert 'secret_unknown' in _fire(_clean_body(book, entry), e, book)
 
 
-def test_dialogue_halved_only_fires_on_the_open_book_arm(book, entry):
-    """⭐⭐ **窄 HARD 门**：只在 `shallow + 计划没净压缩 + 源章 ≥4 句` 时拦腰斩。
-
-    ⚠ 闭卷写手手里**没有源章**，「把台词写回来」对它只能是**编一句出来**
-    ——而那正是实测发生过的那次自造台词。所以闭卷那一侧只报提示级 `dialogue_fewer`。
-    """
+def test_dialogue_loss_is_single_arm_information_not_a_hard_gate(book, entry):
+    """闭卷写手不能据源文对白数补写内容；这里只留逐章读数与人工线索。"""
     src_ord = (entry.get('from_source_ordinals') or [1])[0]
     src = '「一。」「二。」「三。」「四。」「五。」「六。」「七。」「八。」' * 3
     b = M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
                source_text={**book.source_text, src_ord: src}, secrets=book.secrets)
     e = dict(entry, source_chars=100, budget_chars=100)
     body = _clean_body(book, entry)          # 一句直接引语都没有
-    assert 'dialogue_halved' in _fire(body, e, b, mode='shallow')
-    assert 'dialogue_halved' not in _fire(body, e, b, mode='deep'), (
-        '闭卷臂被拦了——「把台词写回来」对它只能是编一句出来')
-    # 计划有净压缩时也不拦：N 高估了合法目标，强拦只会逼写手拿对白凑数
-    assert 'dialogue_halved' not in _fire(
-        body, dict(e, budget_chars=40), b, mode='shallow')
+    fired = _fire(body, e, b)
+    assert {'dialogue_report', 'dialogue_fewer'} <= fired
+    assert 'dialogue_halved' not in fired
+    assert 'dialogue_halved' not in {r.rule for r in REGISTRY.of_stage('stage5')}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,7 +689,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 46 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 49 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -405,15 +699,13 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    # 46 = 原 48 减去随 `stage5.semantic` 节点一并下线的 `semantic_secret_leak` /
-    # `semantic_secret_coverage`（2026-08-17 用户裁决），再加 2026-08-22 随「默认全书闭卷」
-    # 一起立的 `arm_split_report`，再减去 Stage5 停止消费定性画像后失去对象的
-    # `style_block_carries_plot`。
-    assert len(reg) == 46
+    # main 的 canonical 单臂注册表原有 50 条；Stage5 停止消费定性画像后，
+    # 删除前提已不可达的 `style_block_carries_plot`，其余现役规则完整保留。
+    assert len(reg) == 49
 
 
-def test_the_unver_five_must_say_why_they_cannot_check():
-    """`sev='unver'` 的五条**必须**走 `unverifiable(rule, why)`。
+def test_every_unver_rule_must_say_why_it_cannot_check():
+    """`sev='unver'` 的那几条**必须**走 `unverifiable(rule, why)`。
 
     `builder._status_of` 会拒收一条 `sev=unver` 却没说出「这次为什么够不着」的判据——
     **`unver` 是判据的边界，而边界要说得出在哪。**
@@ -437,43 +729,26 @@ def test_the_badge_can_never_be_pass_on_this_layer():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、两条臂 —— 差异面只有两个
+# 三、唯一闭卷写作面
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_two_arms_differ_in_exactly_two_things(book, entry):
-    """⭐ `R-7.1`：两条臂产同一个形状，差别只有 `(system prompt, 给不给源章原文)`。
-
-    ⚠ **「差别只有两件事」说的是【自变量】只有两个，不是「下发面只差一个块」**：
-    `dialogue_block` 里那句「本章原文有 N 句直接引语」也**只发给开卷**——
-    而它是 `with_source_text` 这**同一个开关**的后果，不是第三条轴：
-    闭卷写手拿不到原文，给它一个**无法回查内容的 N**，只会把「对白保真」变成「凭空凑 N 句」。
-    ⇒ 这条测试钉的是**自变量的个数**：`_Arm` 恰好一个字段。
-    """
-    import dataclasses
-
+def test_stage5_has_one_closed_book_material_surface(book, entry):
+    """没有 selector / source-text 开关，闭卷由接口形状保证。"""
+    import inspect
     from novel.stages.stage5 import write
-    assert [f.name for f in dataclasses.fields(write._Arm)] == ['with_source_text'], (
-        '`_Arm` 多了一个字段——两条臂的差异面就不止 `R-7.1` 说的那两件事了')
-    deep = prompts.build_material(entry, book, with_source_text=False)
-    shallow = prompts.build_material(entry, book, with_source_text=True)
-    assert write._ARMS['deep'].with_source_text is False
-    assert write._ARMS['shallow'].with_source_text is True
-    assert deep.source_text == '' and shallow.source_text
-    # 开卷多出来的块**只有源章原文**；其余块要么逐字相同，要么只差那一句引语数。
-    extra = shallow.blocks[len(deep.blocks):]
-    assert extra and all(b.startswith('── 源章原文') for b in extra)
-    diff = [(a, b) for a, b in zip(deep.blocks, shallow.blocks) if a != b]
-    assert len(diff) <= 1, f'两条臂的下发面在源章原文之外还差了 {len(diff)} 个块'
-    if diff:
-        assert diff[1 - 1][1].startswith('── 对白形态') and '句直接引语' in diff[0][1]
+    assert list(inspect.signature(prompts.build_material).parameters) == ['entry', 'book']
+    assert not hasattr(write, '_Arm') and not hasattr(write, '_ARMS')
+    material = prompts.build_material(entry, book)
+    assert not hasattr(material, 'source_text')
+    assert all(not block.startswith('── 源章原文') for block in material.blocks)
 
 
 def test_the_closed_book_arm_never_touches_the_source_text(book, entry):
     """⚠⚠ **「闭卷」这件事由 `build_material` 保证，不是由 system prompt 里那句话保证。**"""
-    deep = prompts.build_material(entry, book, with_source_text=False)
+    material = prompts.build_material(entry, book)
     src = M.chapter_source(entry, book.source_text)
     assert len(src) > 200, '这一章源文太短，这条断言失去判别力'
-    assert src[:120] not in deep.given
+    assert src[:120] not in material.given
 
 
 def test_stage5_book_has_no_qualitative_style_surface(book):
@@ -490,15 +765,10 @@ def test_stage5_book_has_no_qualitative_style_surface(book):
     assert set(book.measurable['per_chapter_avg_sentence']) == {'min', 'max'}
 
 
-def test_deep_overlap_high_guards_the_arms_identity_not_the_prose(book, entry):
-    """⚠⚠ **它守的是【臂的身份】不是文风**：越线说明「分工写反 / 开卷稿落进 deep/」。
-
-    ⚠ **开卷不判**（`R-7.6b` → `B-03`）：开卷逐章跨度 0.9%~96.8%，
-    那不是一个可以一刀切的量。
-    """
+def test_source_overlap_high_reports_excess_surface_overlap(book, entry):
+    """canonical 闭卷稿逐章越过源文重合上限时必须出声。"""
     src = M.chapter_source(entry, book.source_text)
-    assert 'deep_overlap_high' in _fire(src, entry, book, mode='deep')
-    assert 'deep_overlap_high' not in _fire(src, entry, book, mode='shallow')
+    assert 'source_overlap_high' in _fire(src, entry, book)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -514,7 +784,7 @@ def test_the_downsend_band_is_the_very_one_the_judges_use(book, entry):
     """
     lo, hi = prompts.target_band(entry)
     assert M.target_range(entry) == (lo, hi)
-    mat = prompts.build_material(entry, book, with_source_text=False)
+    mat = prompts.build_material(entry, book)
     assert f'**{lo}~{hi} 字**' in mat.given
 
 
@@ -522,8 +792,79 @@ def test_the_secret_ids_never_reach_the_writer(book, entry):
     """⚠ `must_not_reveal` 只有裸 id、对写手**无从执行**——真正的保护是那些 secret
     **根本不下发**。把 id 发过去只会让它去猜。"""
     e = dict(entry, must_not_reveal=['secret_01', 'secret_02'])
-    given = prompts.build_material(e, book, with_source_text=False).given
+    given = prompts.build_material(e, book).given
     assert 'must_not_reveal' not in given and 'secret_01' not in given
+
+
+def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch, tmp_path):
+    """Stage5 付费入口必须经共用 ``load_book`` 剥掉正式取证字节。"""
+    import copy
+    from types import SimpleNamespace
+
+    from novel.core.evidence import iter_global_evidence_slots
+    from novel.stages.stage5 import review, write
+    from tests.test_stage2 import global_grounding
+
+    seed = factories.stage5_book()
+    grounding = global_grounding()
+    markers: list[str] = []
+    coordinates: list[int] = []
+    for index, (_claim_path, owner, field) in enumerate(
+        iter_global_evidence_slots(grounding), 1,
+    ):
+        marker = f'STAGE5_EVIDENCE_ONLY_{index}'
+        start = 934_567_800 + index * 100
+        owner[field] = {
+            'chapter_ordinal': 1,
+            'source': {
+                'text': marker,
+                'start': start,
+                'end': start + len(marker),
+                'normalized': f'STAGE5_NORMALIZED_ONLY_{index}',
+                'recovery': 'normalized',
+            },
+        }
+        markers.extend((marker, f'STAGE5_NORMALIZED_ONLY_{index}'))
+        coordinates.extend((start, start + len(marker)))
+
+    class Dumped:
+        def __init__(self, value):
+            self.value = value
+
+        def model_dump(self, **_kwargs):
+            return copy.deepcopy(self.value)
+
+    stored = {
+        review.MAIN_TEXT: SimpleNamespace(root=[
+            SimpleNamespace(chapter_ordinal=ordinal, text=text)
+            for ordinal, text in seed.source_text.items()
+        ]),
+        review.GLOBAL_GROUNDING: Dumped(grounding),
+        review.STYLE_GROUNDING: Dumped({'measurable': {'body': seed.measurable}}),
+        review.WRITER_CONTEXT: Dumped(seed.ctx),
+    }
+
+    class Store:
+        @staticmethod
+        def path(rel):
+            return tmp_path / rel
+
+        @staticmethod
+        def exists(rel):
+            return rel in stored
+
+        @staticmethod
+        def read(_model, rel):
+            return stored[rel]
+
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: Store())
+    _system, user, material = write.build_prompt(
+        SimpleNamespace(title=seed.title), '1')
+
+    paid_material = user + '\n' + material.given
+    assert markers and all(marker not in paid_material for marker in markers)
+    assert all(str(coordinate) not in paid_material for coordinate in coordinates), \
+        'SourceSpan 的 start/end 坐标进了 Stage5 付费 prompt'
 
 
 def test_current_trim_audit_absorbs_the_duplicate_length_over_action():
@@ -568,8 +909,8 @@ def box():
     # ⚠ 前提是**语料的版本**不是被测的性质：本文件测的是验收/wontfix/归一幂等，
     #   而它们都得先写得下去。成稿过期时 `--recheck` 恒 `ProvenanceRefused`
     #   ⇒ 用例根本跑不到自己的断言（实测：过期两本退出码 3，干净那本退出码 0）。
-    corpus.requires_current(_BOOK, 'stage5/deep/', 'stage5/shallow/',
-                            produced_by='stage5.write --mode deep', cost='付费')
+    corpus.requires_current(_BOOK, *_draft_rels(_BOOK),
+                            produced_by='stage5.write', cost='付费')
     rels = tuple(
         a.rel for a in corpus.iter_artifacts()
         if a.book_dir == _BOOK and '_rounds' not in a.rel
@@ -715,9 +1056,10 @@ def test_recheck_is_idempotent_on_stored_drafts(box):
     """
     from novel.cli import exit_codes as X
     root, sid = box
-    before = {p: p.read_bytes() for p in (root / _BOOK / 'stage5' / 'deep').glob('ch*.json')}
+    before = {p: p.read_bytes() for p in (root / _BOOK / 'stage5').glob('ch[0-9]*.json')
+              if '.INVALID.' not in p.name and '.rejected.' not in p.name}
     assert before, '这本书没有成稿——本条**没在查**'
-    rc = _run('run', 'stage5.write', sid, '--mode', 'deep', '--recheck', '--base', str(root))
+    rc = _run('run', 'stage5.write', sid, '--recheck', '--base', str(root))
     assert rc in (X.OK, X.CHECK_FAILED)
     for p, raw in before.items():
         rel = p.relative_to(root / _BOOK).as_posix()
@@ -736,184 +1078,24 @@ def test_dry_run_builds_the_same_prompt_the_paid_path_would_send(box):
     from novel.run import RunContext
     from novel.stages.stage5 import write
     root, sid = box
-    ctx = RunContext.open(root, sid, 'stage5.write', paid=False, mode='deep',
-                          write_ledger=False)
+    ctx = RunContext.open(root, sid, 'stage5.write', paid=False, write_ledger=False)
     system, user, mat = write.build_prompt(ctx, '1')
-    assert system == prompts.write_system('deep')
+    assert system == prompts.write_system()
     assert user == prompts.build_user(mat)
     assert '── 本章任务 ──' in user and '篇幅方式' not in user, (
         '「篇幅方式」那一行回来了——`op` 已整族裁撤，它只会渲染出一个带窟窿的指令')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 六、`dialogue_halved` 的分母 —— **全书闭卷把它的暴露面清空了**（2026-08-22，批 1）
-#
-# ⚠⚠ 这条 HARD 的前件是三合取，第一项就是 `mode == 'shallow'`。默认深度选择从
-#   `(1, 2, 3)` 改成**全部计划章**之后，默认路径上它的分母恒为零，而报告会把
-#   「跑了、零 findings」渲染成 pass——与 `ctx_hinge_delivered` 那次事故逐格同形。
-#   而它背着的正是本项目效应量最大的一条跨书结论（闭卷把对白压到 ~0.7×，6/6 本方向一致），
-#   全书闭卷恰恰把那个效应从 3 章扩到了整本。
+# 六、退役接口不再复活
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_closed_book_arm_gives_dialogue_halved_no_denominator(book, entry):
-    """闭卷臂上这条判据**结构上判不了**——分母是 0，不是「查过、干净」。"""
-    assert checks.dialogue_halved_scope([(entry, 'deep')], book) == 0
-
-
-def test_the_shallow_maintenance_arm_still_gives_it_a_denominator(book, entry):
-    """⚠ **不许因为默认变了就把这条 HARD 拆掉**：单臂维护入口上它判别力完好。
-
-    这也是为什么处置走 `blind`（这一次没有判别力样本）而**不是**把它加进
-    `checks._UNVER`（这条判据永远够不着）——后者会把 `stage5.write --mode shallow`
-    上唯一一道对白 HARD 静默拆掉。
-    """
-    assert checks.dialogue_halved_scope([(entry, 'shallow')], book) == 1
-    assert 'dialogue_halved' not in checks._UNVER
-
-
-def test_a_net_compressed_chapter_is_outside_the_precondition_too(book, entry):
-    """前件的另外两项也真的在算：净压缩的章不进分母。
-
-    ⚠ 净压缩的章计划本身已删内容 ⇒ 源章引语数 N 高估了合法目标，强拦只会逼写手
-    拿对白凑数。这不是宽容，是「按它修会更差」。
-    """
-    squeezed = dict(entry, budget_chars=int(entry['source_chars'] * 0.5))
-    assert checks.dialogue_halved_scope([(squeezed, 'shallow')], book) == 0
-
-
-def test_a_zero_denominator_reports_unver_instead_of_a_green_light(book, entry):
-    """⭐ 分母为零 ⇒ 报告上是 `unver`（带「为什么够不着」），不是一盏绿灯。"""
-    from novel.report.builder import build
-    from novel.prov import FreshnessReport
-
-    outcomes = checks.check(
-        chapter_findings_by_rule={}, scanned={'dialogue_halved': '0/23 章落在前件里'},
-        unver_empty={}, blind={'dialogue_halved': checks.DIALOGUE_HALVED_BLIND},
-        phase='write')
-    one = next(o for o in outcomes if o.rule == 'dialogue_halved')
-    assert one.unver_why == checks.DIALOGUE_HALVED_BLIND
-    report = build(sid='7615069877019300633', node='stage5.write',
-                   freshness=FreshnessReport('unknown', 'no_inputs'), outcomes=outcomes)
-    row = next(item for item in report.rules if item.rule == 'dialogue_halved')
-    assert row.status == 'unver' and row.sev == 'hard', (
-        '⚠ **不降 sev**：它仍是一条 HARD，只是这一次没有判别力样本')
-    assert '没有分母' in (row.why or '')
-
-
-def test_both_phases_share_one_denominator_and_one_reason():
-    """写作相与验收相**读同一个分母函数、同一句理由**——两处手抄必然分家。"""
-    import inspect
-
-    from novel.stages.stage5 import review, write
-
-    for module in (review, write):
-        src = inspect.getsource(module)
-        assert 'dialogue_halved_scope' in src, f'{module.__name__} 自己数了一遍分母'
-        assert 'DIALOGUE_HALVED_BLIND' in src, f'{module.__name__} 手抄了一份理由'
-
-
-def test_the_precondition_has_exactly_one_producer():
-    """`_dialogue` 与 `dialogue_halved_scope` 判的必须是同一个前件。
-
-    ⚠ 分家的形态是「分母说有 5 章，实际一章都判不了」——**比没有分母更糟**。
-    """
-    import inspect
-
-    src = inspect.getsource(checks._dialogue)
-    assert '_dialogue_halved_applies' in src
-    assert "mode == 'shallow'" not in src, '前件被手抄回 `_dialogue` 里了'
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 七、`arm_split_report` —— 走开卷从此是例外，例外要常驻留痕（`R-7.6c`）
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _rows(*modes: str) -> list[dict]:
-    return [{'output_ordinal': i, 'mode': mode, 'relpath': f'stage5/{mode}/ch{i:02d}.json',
-             'chars': 100, 'budget_chars': 100, 'source_chars': 100}
-            for i, mode in enumerate(modes, 1)]
-
-
-def _two_chapter_book() -> M.Book:
-    """一本两章的合成书：第 2 章挂在源第 2 章上，好让开卷那一章算得出重合度。"""
-    fresh = factories.stage5_book()
-    first = fresh.ctx['chapters'][0]
-    second = dict(first, output_ordinal=2, from_source_ordinals=[2],
-                  source_chars=len(fresh.source_text[2]),
-                  budget_chars=len(fresh.source_text[2]))
-    fresh.ctx['chapters'] = [first, second]
-    return fresh
-
-
-def test_the_arm_split_is_reported_unconditionally(book):
-    """**无条件产出**：一本全闭卷的书也要说出「开卷 0 章」这个读数。
-
-    ⚠ 「查过、干净」与「根本没在查」在报告上必须长得不一样——`name_surface_survey`
-    正是因为写成 `if 命中:` 而在盘上 12 份 review 里 0 次产出。
-    """
-    fs = checks.book_findings(book, rows=_rows('deep'), bodies={1: '正文'},
-                              inv_numbers=[], inv_names=[])
-    one = next(f for f in fs if f.rule == 'arm_split_report')
-    assert '闭卷 1 章' in one.detail and '开卷 0 章' in one.detail
-    assert '例外' not in one.detail, '一章开卷都没有时不该报「这几章是例外」'
-
-
-def test_a_shallow_chapter_is_called_out_as_the_exception_it_now_is(book):
-    """有开卷章 ⇒ 报告上明说它是例外，并附**逐章** min~max 重合度。
-
-    ⚠ 附**逐章**跨度不附均值：均值正是当年把「开卷有 96.8% 的章」藏起来的那把尺子。
-    ⚠ **只报不判**：本条是 `metric`，不为开卷发明阈值（`B-03`，2026-08-10 已否决一次）。
-    """
-    from contracts.rules import REGISTRY
-
-    two = _two_chapter_book()
-    fs = checks.book_findings(
-        two, rows=_rows('deep', 'shallow'),
-        bodies={1: two.source_text[1], 2: two.source_text[2]},
-        inv_numbers=[], inv_names=[])
-    one = next(f for f in fs if f.rule == 'arm_split_report')
-    assert '开卷 1 章' in one.detail and '例外' in one.detail
-    assert '开卷逐章重合度' in one.detail
-    assert REGISTRY.get('arm_split_report').sev == 'metric'
-    assert one.actionable is False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 八、默认深度选择 = 全部计划章（2026-08-22 裁决）
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_the_default_depth_is_now_the_whole_book():
-    """⭐ `DEFAULT_DEEP = (1, 2, 3)` 已废：默认闭卷 = **全部计划章**。
-
-    推翻旧默认的是成书级实测（无情道 23 章，`tools/book_overlap.py`）：
-    回映射人名后逐章 20 字窗重合，deep 中位 0.017 / shallow 中位 0.226——**13 倍**。
-    """
+def test_retired_arm_rules_and_selectors_stay_absent():
     from novel.orchestrator import approvals
+    from novel.stages.stage5 import write
 
-    assert not hasattr(approvals, 'DEFAULT_DEEP'), (
-        '旧常量回来了；它与 `default_deep()` 是同一件事的两个落点')
-    assert approvals.default_deep([1, 2, 3, 4, 5]) == [1, 2, 3, 4, 5]
-    assert approvals.default_deep([3, 1, 2, 2]) == [1, 2, 3], '仍要排序去重'
-
-
-def test_no_plan_means_no_default_not_the_first_three_chapters():
-    """`planned is None` ⇒ `[]`：「还不知道有哪些章」与「选了三章」必须分得开。
-
-    ⚠ 这不会把默认卡在空集上——`_read_raw` 在没有盘上记录时每次都现算一份，
-    计划一落盘它自动就是全书。
-    """
-    from novel.orchestrator import approvals
-
-    assert approvals.default_deep(None) == []
-    assert approvals.default_deep([]) == []
-
-
-def test_the_default_is_a_suggestion_not_a_spending_authorization():
-    """默认值仍然只是**建议**：没有 `deep_proof` 之前队列里不会出现付费的 stage5.write。"""
-    import inspect
-
-    from novel.orchestrator import approvals
-
-    src = inspect.getsource(approvals.current_depth_selection)
-    assert 'deep_proof is None' in src
-    assert inspect.signature(approvals._fresh_record).parameters['planned'].default is None
+    retired = {'dialogue_halved', 'arm_split_report', 'draft_duplicated'}
+    assert retired.isdisjoint({r.rule for r in REGISTRY.of_stage('stage5')})
+    assert not hasattr(write, '_ARMS') and not hasattr(write, '_Arm')
+    assert not hasattr(approvals, 'default_deep')
+    assert not hasattr(approvals, 'current_depth_selection')

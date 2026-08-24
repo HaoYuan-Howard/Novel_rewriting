@@ -7,6 +7,8 @@
 > 成书：`<绝对路径或未生成>`
 >
 > 本包对应成书 SHA1：`<sha1 或不适用>`
+>
+> 本次运行坐标：`started_at=<epoch 秒>`；`start_code_version=<完整指纹>`
 
 ## 1. 用户终审入口
 
@@ -83,9 +85,11 @@
 
 ## 4. 各层质量读数
 
+[[operator-quality:start]]
 | 节点/报告 | freshness | HARD | info | metric | unver | skipped | 结论/处置 |
 |---|---|---:|---:|---:|---:|---:|---|
 | <stage0...stage7 最新报告逐行> | <...> | <命中/分母> | <...> | <...> | <...> | <...> | <...> |
+[[operator-quality:end]]
 
 ### 修复记录
 
@@ -103,14 +107,14 @@
 
 ## 6. 调用与耗时账本
 
-口径：`<base>/_service/ledger.jsonl` 是最终成本的**唯一权威源**。只取本 sid 且
-`outcome == "ok"`；`cached == true` 单列缓存次数，不重复累计其携带 token；不把
-`_provenance.usage`、日志或历史报告混加，不写金额。
+口径：`<base>/_service/ledger.jsonl` 是最终成本的**唯一权威源**。本次会话先按 sid、
+`outcome == "ok"` 与 `started_at` 切片；同 SID 的历史累计另表披露，二者不相加。
+`cached == true` 单列缓存次数，不重复累计其携带 token；不把 `_provenance.usage`、
+日志或历史报告混加，不写金额。
 
-| 节点 | 实付调用 | 缓存命中 | prompt tokens | completion tokens | reasoning tokens | 可证实耗时 |
-|---|---:|---:|---:|---:|---:|---:|
-| <逐节点> | <...> | <...> | <...> | <...> | <...> | <...> |
-| **合计** | <...> | <...> | <...> | <...> | <...> | <...> |
+[[operator-ledger:start]]
+<由 sync_review_evidence.py 写入本次会话与同 SID 累计两张表>
+[[operator-ledger:end]]
 
 - 付费授权：<granted/not_granted + 证据来源；交互式默认授予时写“调用本 skill 即授予”，被收回则写收回原文>
 - 正文外发授权：<granted/not_granted + 证据来源；同上，两项分别写，不合并>
@@ -136,11 +140,15 @@
 
 ### 退出码序列
 
+[[operator-exits:start]]
 `<复制 collect_final_evidence.py 的 exit_sequence_compact_text；它按执行顺序列 node:rc，修复轮包含在内，相邻同项用 ×N 无损压缩>`
+[[operator-exits:end]]
 
 ### 机器事实锚点
 
-运行 `scripts/collect_final_evidence.py --base <绝对 base> --sid <sid>`，把输出中的
-`review_anchor_line` 原样粘贴到这里；`scripts/validate_review.py` 会与当前盘面逐项对账。
+从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py` 同步下面四组机器事实；`.claude/skills/novel-pipeline-operator/scripts/validate_review.py`
+会用同一组 `started_at` 与 `start_code_version` 跟当前盘面逐项对账。
 
+[[operator-anchor:start]]
 `<review_anchor_line>`
+[[operator-anchor:end]]

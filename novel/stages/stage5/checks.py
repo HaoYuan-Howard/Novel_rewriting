@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 46 条机械判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
+checks.py —— 49 条机械判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
 
 【本层与前四层最大的形状差异：机械表由写作闸门与全书验收共用】
 落盘闸门（写作相，逐章）与全书验收相**调同一个 `chapter_findings`**。
@@ -10,7 +10,7 @@ checks.py —— 46 条机械判据的实现。**行在 `contracts/judges/stage5
 
 ⚠⚠ **判据吃 `dict` 不吃模型。** 这不是随意：一旦判据跑在已经过了 Pydantic 的对象上，
 「必填齐全」这类判据在**结构上构造不出反例**——它必然全绿，于是又变成一盏保证会亮的绿灯。
-机械层 7 条 HARD 的反例样本（`tests/test_stage5.py`）正是靠这一条才写得出来。
+机械层 6 条 HARD 的反例样本（`tests/test_stage5.py`）正是靠这一条才写得出来。
 
 ⚠ **结论一律走 `contracts.schema.report.finding()`，不许手写 dict**：
 `sev` / `item` / `owner` / `actionable` 全从判据表取 ⇒ 一条 finding 不可能与表说的不一致。
@@ -18,17 +18,17 @@ checks.py —— 46 条机械判据的实现。**行在 `contracts/judges/stage5
 from __future__ import annotations
 
 import collections
-import math
 import re
 from typing import Any, Iterable
 
-from contracts.invariants import DEEP_OVERLAP_MAX
+from contracts.invariants import SOURCE_OVERLAP_MAX
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding
-from novel.core.bands import PARA_BANDS, SENT_BANDS, band
+from novel.core.bands import PARA_BANDS, SENT_BANDS, band, cut_distance
 from novel.core.facts import (
-    NUM_UNIT, locate_secret, num_unit_keys, num_values, secret_contains, secret_keywords,
+    NUM_UNIT, first_reveal_chapter, locate_secret, num_unit_keys, num_values,
+    secret_contains, secret_keywords,
 )
 from novel.core.measure import measure
 from novel.core.naming import invented_names
@@ -37,7 +37,9 @@ from novel.core.style import (
     DASH_CORPUS_P95, SHORT_PARA_MAX, SHORT_RUN_CORPUS_P95, SHORT_RUN_MIN,
     dash_per_1k, short_run_per_1k,
 )
-from novel.core.text import TERMINAL_PUNCT, min_hamming, norm, norm_index, quote_count
+from novel.core.text import (
+    TERMINAL_PUNCT, min_hamming, narration_layer, norm, norm_index, quote_count,
+)
 from novel.core.text import split_by_speech_tag
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage5 import measure as M
@@ -68,7 +70,7 @@ def with_output_ordinal(findings: Iterable[Finding], ordinal: int | None) -> lis
 #:
 #: ⚠ **它刻意不进 `contracts/invariants.py`**：那张表收的是「**同时**进 prompt 与判据」的
 #: 枚举，而这一份**只有判据一个消费方**。放进去就是给它造第二个家。
-#: ⚠⚠ 而两条臂的 system 里那句「不出现任何任务术语（节拍、展开、目标之类的词）」
+#: ⚠⚠ 而唯一写作 system 里那句「不出现任何任务术语（节拍、展开、目标之类的词）」
 #: **是手写的一个子集**，不是从这张表插值来的——那是 LESSONS 第 9 条的形状，
 #: 但 prompt 那两段要与原型**逐字节相同**，改它是一次 prompt 变更。
 #: ⇒ 登记在这里：**下发面说了三个词，判据查的是这一整张表**，两侧不等价是已知的。
@@ -86,8 +88,9 @@ META_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 #: `length_*` 比的是「源章字数 vs 计划预算」，而计划预算本来就要偏离源章；
 #: `overlap_report` 拿源文与自己比恒等于 100%。
 #: 在源文上命中说明的是**计划**，不是判据。
+#: 章尾语义交付按定义是 UNVER，字面原子只作为 metric，不参与恒等基线。
 IDENTITY_NA = frozenset({'length_over', 'length_under', 'length_report', 'overlap_report',
-                         'deep_overlap_high'})
+                         'source_overlap_high', 'end_hook_surface_report', 'end_hook_unver'})
 
 #: 这几条判的是「成稿有没有守住**从源文切出来的**材料」。源文当然守得住 ⇒
 #: 恒等基线上命中 **0 是应该的，非 0 是上游 bug**（锚点切出来的东西回不到原文里去），
@@ -101,13 +104,11 @@ IDENTITY_UPSTREAM = frozenset({'verbatim_missing', 'verbatim_typo', 'keep_value_
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
-                      mode: str, given: str) -> list[Finding]:
+                      given: str) -> list[Finding]:
     """四组保真材料 + 剧透 + 发明越界。**闭卷写手看不到原文、无法自证，所以只能在代码侧验。**
 
-    `given` = 这一臂**实际看得见**的全部文字（下发面；开卷再加源章原文）。
-    ⚠⚠ **参照集必须跟着「这一臂的写手看得见什么」走**：它一度只有下发面，于是
-    **开卷臂 4/4 全是假阳**——那几个「五次/千倍/百倍」全都原样在源章原文里，
-    而开卷写手手里就有那份原文，**照抄一个数字不是发明，是保真**。
+    `given` = 单一闭卷写作路径实际看得见的全部下发文字。参照集必须与真请求同源；
+    判据不能擅自把写手从未见过的源文并进允许集。
 
     ⚠ `evidence` 是**给验收相用的机器可比凭据**，不是给人看的摘要：它必须是能在这一章
     成稿或下发材料里**定位回去**的原串，而不是 `detail` 里那个截断到 14/18 字的展示版。
@@ -115,6 +116,7 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     """
     fs: list[Finding] = []
     beats = entry.get('segments') or []
+    source_norm = norm(M.chapter_source(entry, book.source_text))
 
     # ── ① 【原样写入】必须逐字出现（四组材料里唯一要求逐字的一组）───────────────
     #
@@ -131,6 +133,11 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
         for t in (be.get('verbatim') or []):
             for seg in re.split(r'\n+', t):
                 k = norm(seg)
+                # 伪锚属于 Stage2；Stage5 不得把源文中不存在的“原话”当 HARD 目标，
+                # 更不得沿 UNIQUE 路由付费塞回正文。独立 finding 由
+                # `material_anchor_findings` 留下上游账。
+                if source_norm and k and k not in source_norm:
+                    continue
                 if not k or k in nb:
                     continue
                 # 【被提示语切开算满足】`「…，」他说，「…」` 是中文小说的**标准写法**，
@@ -173,6 +180,8 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     miss_n_full: list[str] = []
     for be in beats:
         for t in (be.get('keep_value') or []):
+            if source_norm and norm(t) not in source_norm:
+                continue
             nums = [m.group() for m in NUM_UNIT.finditer(t or '')]
             vals = num_values(t)
             ok = bool(vals & body_vals) if vals else any(n in body for n in nums)
@@ -197,6 +206,8 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     for be in beats:
         for t in (be.get('must_appear') or []):
             k = norm(t)
+            if source_norm and k and k not in source_norm:
+                continue
             if k and lcs(k, nb)[1] < max(2, min(3, len(k))):
                 miss_o.append(t[:14])
                 miss_o_full.append(t)
@@ -218,10 +229,11 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     timeline_hidden = []
     if ordinal:
         for secret in book.secrets:
-            reveals = [event.get('chapter') for event in
-                       (secret.get('reader_reveal_events') or [])
-                       if event.get('chapter') is not None]
-            if reveals and ordinal < min(int(chapter) for chapter in reveals):
+            # ⚠ **首次**揭示章，与 `stage4/context.py` 的下发闸门同一个函数。
+            #   这道复核闸的全部意义就是「能从权威时间线复原同一条边界」——
+            #   两处各写一份 `min(全部事件)` 时，下次改判向必然漏掉一处。
+            first = first_reveal_chapter(secret)
+            if first is not None and ordinal < first:
                 timeline_hidden.append(secret.get('secret_id'))
     hid = list(dict.fromkeys([
         *(entry.get('must_not_reveal') or []),
@@ -271,10 +283,9 @@ def fidelity_findings(body: str, entry: dict[str, Any], book: M.Book, *,
     keys_given = num_unit_keys(given)
     inv = sorted({disp for k, disp in keys_body.items() if k not in keys_given})
     if inv:
-        seen = '源章原文与下发面' if mode == 'shallow' else '下发面'
         fs.append(finding(
             'invented_number',
-            detail=f'成稿出现{seen}里都没有的【数字+单位】：{inv[:8]}',
+            detail=f'成稿出现下发面里没有的【数字+单位】：{inv[:8]}',
             evidence=inv))
     nm = invented_names(body, given, book.name_stems)
     if nm:
@@ -299,7 +310,6 @@ def segment_fidelity_findings(
     entry: dict[str, Any],
     book: M.Book,
     *,
-    mode: str,
     given: str,
 ) -> list[Finding]:
     """Enforce fidelity inside the producer-owned slot, not just somewhere in the chapter.
@@ -317,7 +327,7 @@ def segment_fidelity_findings(
             continue  # the response-shape validator owns unknown/missing slots
         isolated = {**entry, 'segments': [contract], 'must_not_reveal': []}
         for hit in fidelity_findings(
-            str(returned.get('text') or ''), isolated, book, mode=mode, given=given,
+            str(returned.get('text') or ''), isolated, book, given=given,
         ):
             if hit.rule not in _SEGMENT_BOUNDARY_RULES:
                 continue
@@ -376,12 +386,29 @@ def _band_drift(body: str, book: M.Book) -> list[Finding]:
     if not got:
         return []
     base = book.band_of
-    mine = {'句子形态': band(got.avg_sentence_chars, SENT_BANDS),
-            '段落形态': band(got.avg_paragraph_chars, PARA_BANDS)}
-    return [finding('band_drift',
-                    detail=f'形态漂移 {k}：底座「{base[k]}」→ 成稿「{mine[k]}」',
-                    evidence=[k, base[k], mine[k]])
-            for k in ('句子形态', '段落形态') if base.get(k) and base[k] != mine[k]]
+    meas = book.measurable
+    axes = {'句子形态': (got.avg_sentence_chars, meas.get('avg_sentence_chars'), SENT_BANDS),
+            '段落形态': (got.avg_paragraph_chars, meas.get('avg_paragraph_chars'), PARA_BANDS)}
+    mine = {k: band(v[0], v[2]) for k, v in axes.items()}
+    out: list[Finding] = []
+    for k in ('句子形态', '段落形态'):
+        if not base.get(k) or base[k] == mine[k]:
+            continue
+        got_v, base_v, cuts = axes[k]
+        # ⚠⚠ **把数字打出来，否则「翻档」与「真漂移」分不开**（见
+        #   `novel/core/bands.py::cut_distance` 的第一条 ⚠⚠）。
+        #   底座取不到数值时只说档位，**不编一个数**。
+        if base_v:
+            near = cut_distance(float(base_v), cuts)
+            nums = (f'（本书 {float(base_v):.1f} 字 → 本章 {got_v:.1f} 字，'
+                    f'{got_v / float(base_v):.2f}×；底座离最近档边 {near} 字）')
+        else:
+            nums = '（底座数值取不到，只判得出档位）'
+        out.append(finding(
+            'band_drift',
+            detail=f'形态漂移 {k}：底座「{base[k]}」→ 成稿「{mine[k]}」{nums}',
+            evidence=[k, base[k], mine[k]]))
+    return out
 
 
 def _para_len_drift(body: str, book: M.Book) -> list[Finding]:
@@ -503,68 +530,196 @@ def _short_run(body: str, entry: dict[str, Any], book: M.Book) -> list[Finding]:
                     evidence=[f'{base:.2f}->{short_run_per_1k(body):.2f}'])]
 
 
-def _plan_keeps_content(entry: dict[str, Any]) -> bool:
-    """这一章的计划有没有**净压缩**（预算基本等于源字数）。
+def _end_hook_landing(
+    entry: dict[str, Any], book: M.Book,
+    segments: list[dict[str, Any]] | None,
+) -> list[Finding]:
+    """只盘点章尾目标的**字面原子分布**，绝不据此裁决语义交付。
 
-    ⚠ **为什么不读 `op`**：它曾经就是 `entry['op'] == 'keep'`，而 `op` 已锁定为 `keep`
-    ⇒ 那个合取项**恒真**，靠它收窄的窄 HARD 门会当场变成宽门，所有开卷章都进硬拦
-    ——闸门不是失效，是**扩张到了它没标定过的范围**。
-    改读 `budget_chars/source_chars` 之后判的是同一件事而且更准：`op` 只是个标签，
-    这两个数才是计划实际给出的量。
-    ⚠ 源字数缺失 ⇒ `False`（判不了就不拦，别拿一把缺刻度的尺子升 HARD）。
+    真实章上已经标定出反例：目标人物在成稿里被「他/我」代称，事件完整交付，姓名原子却
+    0 命中；反方向，同名或数字撞上也不能证明目标事件真的发生。故姓名/数字只配做
+    `end_hook_surface_report` metric。每章的语义结论始终是 `end_hook_unver`，由人结合
+    目标、末段与上下文判断，不能进入付费 revise。
     """
-    src = entry['source_chars']
-    return bool(src) and entry['budget_chars'] >= src * 0.90
+    goal = entry.get('end_hook_goal') or {}
+    facts = [f for f in (goal.get('facts') or []) if f]
+    planned = entry.get('segments') or []
+    if not facts or not planned:
+        return [
+            finding(
+                'end_hook_surface_report',
+                detail='上游没有完整的 end_hook_goal/计划分段，字面落点无从盘点',
+                evidence=['no_goal_or_plan']),
+            finding(
+                'end_hook_unver',
+                detail='上游没有完整的章尾目标或计划分段，章尾语义交付**未判**',
+                evidence=['no_goal_or_plan']),
+        ]
+    if segments is None:
+        return [
+            finding(
+                'end_hook_surface_report',
+                detail='拿不到成稿分段，无法区分末段与其他段的字面命中',
+                evidence=['no_segments']),
+            finding(
+                'end_hook_unver',
+                detail='拿不到成稿分段，章尾语义交付**未判**',
+                evidence=['no_segments']),
+        ]
+    roster = {c.get('display_name') for c in (entry.get('characters') or {}).values()}
+    roster = {n for n in roster if n} - _pronoun_named(entry)
+    atoms = _atoms_of_event(' '.join(facts), roster)
+    if not atoms:
+        return [
+            finding(
+                'end_hook_surface_report',
+                detail=f'结尾目标提不出姓名/数字原子：{goal.get("intent")}：'
+                       f'{"；".join(facts)[:60]}',
+                evidence=['noatom']),
+            finding(
+                'end_hook_unver',
+                detail='字面探针没有可回查原子，章尾语义交付**未判**',
+                evidence=['noatom']),
+        ]
+    last_slot = (planned[-1] or {}).get('slot')
+    by_slot = {s.get('slot'): (s.get('text') or '') for s in segments}
+    tail = by_slot.get(last_slot)
+    if tail is None:
+        return [
+            finding(
+                'end_hook_surface_report',
+                detail=f'计划末段 slot `{last_slot}` 在成稿分段里不存在',
+                evidence=[f'slot_missing:{last_slot}']),
+            finding(
+                'end_hook_unver',
+                detail=f'计划末段 slot `{last_slot}` 不存在，章尾语义交付**未判**',
+                evidence=[f'slot_missing:{last_slot}']),
+        ]
+
+    other = ''.join(text for slot, text in by_slot.items() if slot != last_slot)
+    in_tail = sorted(atom for atom in atoms if atom in tail)
+    in_other = sorted(atom for atom in atoms if atom not in tail and atom in other)
+    absent = sorted(atom for atom in atoms if atom not in tail and atom not in other)
+    metric = finding(
+        'end_hook_surface_report',
+        detail=f'章尾字面分布（**只读数、不判交付**）：末段 `{last_slot}` '
+               f'{in_tail or "无"}｜其他段 {in_other or "无"}｜整章未见 {absent or "无"}',
+        evidence=[f'last_slot:{last_slot}',
+                  *(f'tail:{atom}' for atom in in_tail),
+                  *(f'other:{atom}' for atom in in_other),
+                  *(f'absent:{atom}' for atom in absent)],
+    )
+    unver = finding(
+        'end_hook_unver',
+        detail='姓名/数字的字面位置不能证明章尾事件的语义交付；代词、换说法、同名与撞值'
+               '均超出确定性判据，需人工结合末段复核',
+        evidence=[f'semantic:{last_slot}'],
+    )
+    return [metric, unver]
 
 
-#: `dialogue_halved` 报绿之前，这一次到底有没有一章落在它的前件里。
-#:
-#: ⚠⚠ **这条 HARD 的前件是三合取，第一项就是 `mode == 'shallow'`** ⇒ 闭卷臂上它
-#:   **结构上不可能命中**。2026-08-22 把 `DEFAULT_DEEP` 改成全书闭卷之后，
-#:   默认路径上这条判据的分母**恒为零**，而报告会把「跑了、零 findings」渲染成 pass
-#:   ——与 `ctx_hinge_delivered` 那次事故逐格同形（下发面全空、三条保真 HARD 一路报绿）。
-#: ⚠ 而它背着的正是本项目**效应量最大**的一条跨书结论（闭卷把对白压到 ~0.7×，
-#:   6/6 本方向一致），全书闭卷把这个效应从 3 章扩到了整本 ⇒ 恰恰是最不该假绿的时候。
-#: ⇒ 分母为零时走 `blind`（`check(blind=...)` → `unverifiable`），**不降 sev**：
-#:   与 `secret_leak`（探针零判别力）、`verbatim_missing`（一条材料都没下发）同一条路。
-#: ⚠ 走 `blind` 而**不是**把它加进 `_UNVER`：`_UNVER` 是「这条判据永远够不着」，
-#:   而这条在开卷维护臂上判别力完好——加进去等于把单臂入口上唯一一道对白 HARD 拆掉。
-def dialogue_halved_scope(
-    pairs: Iterable[tuple[dict[str, Any], str]], book: M.Book,
-) -> int:
-    """有多少章同时满足 `dialogue_halved` 的三条前件（`mode` / 无净压缩 / 源章 ≥4 句）。
+#: 第三人称叙述里指代**叙述者本人**的字面。⚠ 只用于「声明 `first` 却写成了第三人称」
+#: 那一支的**佐证读数**，不单独构成结论：第一人称叙事里写别的角色当然会出现「他/她」。
+_THIRD_PERSON_MARK = re.compile(r'[他她](?!们)')
 
-    ⚠ 前件必须**从 `_dialogue` 那一份现算**，不许在这里手抄一份判定式：两份必然分家，
-    而分家的形态是「分母说有 5 章，实际一章都判不了」——比没有分母更糟。
+
+def narration_person_probe(
+    entry: dict[str, Any], book: M.Book,
+) -> tuple[str, dict[str, Any] | None, list[str]]:
+    """返回 ``(state, 单段声明, 锚点)``；state 不是 ``judgeable`` 就明确 UNVER。
+
+    Stage2 明说多 narration 没有段界；在这种输入上拿整章正文逐段重复检查只会制造
+    假阳/假阴。第二人称没有经过标定，单段但标签不是「全章」也缺正文边界。只有单段
+    ``first|third`` 且锚点非空时，才运行一个**弱信号**探针。
     """
-    return sum(1 for entry, mode in pairs if _dialogue_halved_applies(entry, book, mode=mode))
+    segs = [seg for seg in (entry.get('narration') or []) if isinstance(seg, dict)]
+    if not segs:
+        return 'no_narration', None, []
+    if len(segs) != 1:
+        return 'multiple_without_boundaries', None, []
+    seg = segs[0]
+    if str(seg.get('segment') or '') != '全章':
+        return 'segment_boundary_unavailable', seg, []
+    person = seg.get('grammatical_person')
+    if person not in {'first', 'third'}:
+        return f'unsupported_{person or "unknown"}', seg, []
+    anchors = ([s for s in (seg.get('pronoun_surfaces') or []) if s]
+               if person == 'first' else sorted(book.first_person_surfaces))
+    if not anchors:
+        return 'no_anchor', seg, []
+    return 'judgeable', seg, list(dict.fromkeys(anchors))
 
 
-def _dialogue_halved_applies(entry: dict[str, Any], book: M.Book, *, mode: str) -> bool:
-    """`dialogue_halved` 这一条在这一章上**判得了吗**（与 `_dialogue` 共用同一个判定式）。"""
-    if mode != 'shallow' or not _plan_keeps_content(entry):
-        return False
-    n = M.src_quote_count(entry, book.source_text)
-    return n is not None and n >= 4
+def _narration_person(body: str, entry: dict[str, Any], book: M.Book) -> list[Finding]:
+    """只在有段界的单段 first/third 上跑弱信号，不把词面命中冒充语义真值。
+
+    第一人称可以合法省略主语，第三人称正文也可能含书信或自由间接引语；因此命中只是
+    INFO + FREE/人工线索，绝不自动进入付费 revise。台词先由 ``narration_layer`` 剔除。
+    """
+    layer = narration_layer(body)
+    if not layer.strip():
+        return []
+    state, seg, anchors = narration_person_probe(entry, book)
+    if state != 'judgeable' or seg is None:
+        return []
+    person = seg.get('grammatical_person')
+    if person == 'first':
+        if any(surface in layer for surface in anchors):
+            return []
+        return [finding(
+            'narration_person_drift',
+            detail=f'弱信号：全章声明第一人称（自称 {"/".join(anchors)}），叙述层未见自称；'
+                   f'可能是人称漂移，也可能是合法省略主语，需人工复核'
+                   f'（第三人称指代 {len(_THIRD_PERSON_MARK.findall(layer))} 处）',
+            evidence=[f'first:{"/".join(anchors)}:0'])]
+    hits = {surface: layer.count(surface) for surface in anchors if surface in layer}
+    if not hits:
+        return []
+    return [finding(
+        'narration_person_drift',
+        detail='弱信号：全章声明第三人称，叙述层出现书级第一人称自称；'
+               '书信/自由间接引语仍可能合法，需人工复核：'
+               + '、'.join(f'「{s}」×{n}' for s, n in sorted(hits.items())),
+        evidence=[f'third:{s}:{n}' for s, n in sorted(hits.items())])]
 
 
-#: 分母为零时那句「这一次为什么够不着」。两相共用，**一个字节都不许分家**。
-DIALOGUE_HALVED_BLIND = (
-    '这一次没有一章落在本条的前件里（前件三合取：`mode == shallow` × 计划无净压缩 × '
-    '源章 ≥4 句直接引语）⇒ **本条没有分母**。'
-    '2026-08-22 起默认深度选择是**全书闭卷**，闭卷臂上这条判据结构上不可能命中；'
-    '「0 命中」在这里不是一个结论。**闭卷同方向的漂移看 `dialogue_report` 的 m/n 分布**'
-    '（闭卷压对白到 ~0.7× 是 6/6 本方向一致的已知代价，不是失败），'
-    '以及 `dialogue_fewer`（`FREE`，闭卷臂上仍然照跑）')
+def _narration_person_report(
+    body: str, entry: dict[str, Any], book: M.Book,
+) -> list[Finding]:
+    """叙述人称的**读数**——无条件出，包括「这一条为什么没判」。
+
+    ⚠⚠ 缺这条度量的话，`narration_person_drift` 的 0 命中有三种完全不同的来源
+    （真的对得上 / `narration` 没声明 / 自称池是空的），而它们在报告上会长得一模一样。
+    `scanned` 里把分母写出来，是本仓「绿灯必须带扫描分母」的那条纪律。
+    """
+    layer = narration_layer(body)
+    state, seg, anchors = narration_person_probe(entry, book)
+    pool = '/'.join(sorted(book.first_person_surfaces)) or '（空）'
+    if state != 'judgeable' or seg is None:
+        labels = {
+            'no_narration': '上游没有 narration',
+            'multiple_without_boundaries': '多 narration 但正文没有对应段界',
+            'segment_boundary_unavailable': 'narration 位置标签不是可定位的全章边界',
+            'unsupported_second': '第二人称尚未标定',
+            'unsupported_unknown': '人称声明缺失或未知',
+            'no_anchor': '没有可用自称锚点',
+        }
+        return [finding(
+            'narration_person_report',
+            detail=f'叙述人称：**UNVER / 未判**｜{labels.get(state, state)}'
+                   f'｜书级自称池 {pool}',
+            evidence=[f'probe:{state}'])]
+    person = seg.get('grammatical_person')
+    got = sum(layer.count(surface) for surface in anchors)
+    return [finding(
+        'narration_person_report',
+        detail=f'叙述人称：全章声明 {person}｜弱信号锚 {"/".join(anchors)}｜'
+               f'叙述层命中 {got} 处｜书级自称池 {pool}',
+        evidence=['probe:judgeable', str(person), str(got)])]
 
 
-def _dialogue(body: str, entry: dict[str, Any], book: M.Book, *, mode: str) -> list[Finding]:
+def _dialogue(body: str, entry: dict[str, Any], book: M.Book) -> list[Finding]:
     """章级引语数：成稿 M vs 源章 N。**度量无条件出**，告警两级。
-
-    ⚠ **窄 HARD 门的理由**：只在 `shallow + 计划没净压缩 + N≥4` 时拦腰斩（`M < ceil(0.5N)`）
-    ——开卷且计划没删内容时**原文就在写手眼前**，腰斩对白没有任何合法理由。
-    净压缩的章计划本身已删内容，N 高估了合法目标，强拦只会**逼写手拿对白凑数**
-    ——按它修会更差。所以闭卷与净压缩章一律走提示级。
 
     ⚠⚠ **`dialogue_report` 是无条件的**：原型只有三条**告警**，于是「这本书的对白比是多少」
     只有在漂了的时候才说得出来——而它承载的是本项目**效应量最大**的一条跨书结论
@@ -579,15 +734,7 @@ def _dialogue(body: str, entry: dict[str, Any], book: M.Book, *, mode: str) -> l
         evidence=[str(m), str(n if n is not None else '')])]
     if n is None:
         return out
-    # ⚠ 前件走 `_dialogue_halved_applies`（**唯一落点**）：`dialogue_halved_scope` 要拿
-    #   同一个判定式去数分母，两处手抄必然分家。
-    if _dialogue_halved_applies(entry, book, mode=mode) and m < math.ceil(n / 2):
-        out.append(finding(
-            'dialogue_halved',
-            detail=f'直接引语腰斩：源章 {n} 句 → 成稿 {m} 句（开卷、且计划没有净压缩'
-                   f'；预算 {entry["budget_chars"]} / 源 {entry["source_chars"]} 字）',
-            evidence=[f'{n}->{m}']))
-    elif n >= 4 and m < n * 0.7:
+    if n >= 4 and m < n * 0.7:
         out.append(finding(
             'dialogue_fewer',
             detail=f'直接引语少于源章：{n} 句 → {m} 句（{m / n:.2f}×）',
@@ -600,8 +747,9 @@ def _dialogue(body: str, entry: dict[str, Any], book: M.Book, *, mode: str) -> l
 # ─────────────────────────────────────────────────────────────────────────────
 
 def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
-                     mode: str, given: str = '',
-                     quote_problems: Iterable[str] = ()) -> list[Finding]:
+                     given: str = '',
+                     quote_problems: Iterable[str] = (),
+                     segments: list[dict[str, Any]] | None = None) -> list[Finding]:
     """一章成稿的全部确定性判定 → `[Finding]`。**两相共用同一个函数。**
 
     `given` 缺省为空串时会按**最严**的口径判发明越界（不知道是哪一臂就不替它放宽探测器）；
@@ -672,20 +820,39 @@ def chapter_findings(text: str, entry: dict[str, Any], book: M.Book, *,
         fs.append(finding('overlap_report',
                           detail=f'与源章原文重合度：{ov:.1%}',
                           evidence=[f'{ov}']))
-        if mode == 'deep' and ov > DEEP_OVERLAP_MAX:
-            # ⚠⚠ **它守的是【臂的身份】不是文风**：越线说明「章的分工写反 /
-            #   `with_source_text` 被翻转 / 开卷稿落进 deep 目录」，不是「写得像原文」。
+        if ov > SOURCE_OVERLAP_MAX:
             fs.append(finding(
-                'deep_overlap_high',
-                detail=f'闭卷臂与源章重合 {ov:.1%} > {DEEP_OVERLAP_MAX:.0%}',
+                'source_overlap_high',
+                detail=f'成稿与源章重合 {ov:.1%} > {SOURCE_OVERLAP_MAX:.0%}',
                 evidence=[f'{ov:.4f}']))
 
-    fs += fidelity_findings(body, entry, book, mode=mode, given=given or '')
-    fs += _dialogue(body, entry, book, mode=mode)
+    fs += material_anchor_findings(entry, book)
+    fidelity = fidelity_findings(body, entry, book, given=given or '')
+    if segments is not None:
+        # 结构化响应存在时，三组材料必须在 producer 声明的 slot 内成立。继续保留
+        # 整章探针会让“全章都没写”同时得到两条同 rule 的结论；更糟的是只跑整章
+        # 探针会把“写进了另一个 slot”误判为满足。其余保真结论（泄密、发明越界等）
+        # 仍按整章正文判断。
+        fidelity = [hit for hit in fidelity
+                    if hit.rule not in _SEGMENT_BOUNDARY_RULES]
+        fidelity += segment_fidelity_findings(
+            segments, entry, book, given=given or '')
+    fs += fidelity
+    fs += _dialogue(body, entry, book)
     fs += (_layout_drift(body, book) + _para_len_drift(body, book)
            + _density_drift(body, book) + _band_drift(body, book) + _dialogue_drift(body, book))
     # ⚠ 新探针一律**追加在末尾**（见 docstring 那条「追加顺序即渲染顺序」）。
     fs += _dash(body, entry, book) + _short_run(body, entry, book)
+    fs += (_narration_person_report(body, entry, book)
+           + _narration_person(body, entry, book))
+    # `event_landing*` 不是 review-only：写作相刚拿到 producer-owned segments 时就有
+    # 最完整的边界。Full Review 读同一份落盘 segments 再调用同一个函数，任何 phase
+    # 都不得把缺事件/倒序覆盖成“本相判不了”。
+    if segments is not None:
+        fs += segment_event_findings(segments, entry, book)
+    # ⚠ `segments` 两相都给得出（落盘闸门直接有，验收相走 `rec['segments']`）；
+    #   给不出时本条自己落 `unver`，不静默通过。
+    fs += _end_hook_landing(entry, book, segments)
     if (qp := sorted(set(quote_problems))):
         # ⚠⚠ 它原来是 `mech.quote_problems`，**一个记账块里的字段**——而它根本不是记账，
         #   **是一条结论**：「引号配对异常、未归一、留着交人工」。
@@ -832,6 +999,37 @@ def segment_event_findings(
     return with_output_ordinal(out, entry.get('output_ordinal'))
 
 
+def material_anchor_findings(entry: dict[str, Any], book: M.Book) -> list[Finding]:
+    """把三组要求写进正文的材料逐条回查到源章，伪锚记到 Stage2。
+
+    这些材料来自源 beat 的 hinge；若规范化后的原始片段连同章源文都没有，Stage5 无论
+    怎么重写都无法“忠实”满足它。尤其不能让 ``verbatim_missing`` 的 UNIQUE 路由把伪造
+    原话付费塞回正文。此处只产 owner=stage2 的 finding，不提供 Stage5 修订指令。
+    """
+    source = M.chapter_source(entry, book.source_text)
+    if not source:
+        return []
+    source_norm = norm(source)
+    missed: list[tuple[str, str]] = []
+    for segment in (entry.get('segments') or []):
+        for field in ('verbatim', 'keep_value', 'must_appear'):
+            for raw in (segment.get(field) or []):
+                pieces = re.split(r'\n+', str(raw)) if field == 'verbatim' else [str(raw)]
+                for piece in pieces:
+                    key = norm(piece)
+                    if key and key not in source_norm:
+                        missed.append((field, piece))
+    if not missed:
+        return []
+    counts = collections.Counter(field for field, _piece in missed)
+    examples = [f'{field}:{piece[:24]}' for field, piece in missed[:5]]
+    return with_output_ordinal([finding(
+        'material_anchor_unattested',
+        detail=f'{len(missed)} 条保真材料在同章源文中找不到：{dict(counts)}；{examples}',
+        evidence=[f'{field}:{piece}' for field, piece in missed],
+    )], entry.get('output_ordinal'))
+
+
 def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
                             ) -> tuple[list[Finding], collections.Counter]:
     """验收相相对落盘闸门的逐章增量：事件落点。"""
@@ -844,17 +1042,28 @@ def review_chapter_findings(body: str, entry: dict[str, Any], book: M.Book,
                                  f'（这些拍提得出可回查的原子，但一个都没出现）：'
                                  f'{[m[0] for m in missed[:3]]}',
                           evidence=[m[0] for m in missed]))
-    if noatom or ident:
+    if ident:
+        # ⚠⚠ **「原子提错」按语义是上游的账，不是成稿的账。**
+        #   原子取自 `CtxBeat.events`，而它在**源章原文里都找不到** ⇒ 抽取那一步坏了，
+        #   与 `IDENTITY_UPSTREAM` 那一桶（「锚点切出来的东西回不到原文里去」）同理。
+        #   它此前和 `noatom` 合并成一条 `event_landing_unver`、`owner` 记在 stage5 ⇒
+        #   一个 stage2 的 bug 被报成「stage5 这一维够不着」，**修复路由指向了错的层**。
+        fs.append(finding('event_atom_unattested',
+                          detail=f'{len(ident)} 拍的事件原子在**源章原文**里找不到'
+                                 f'——抽取那一步就错了，不是成稿的问题：'
+                                 f'{[t for t in ident[:3]]}',
+                          evidence=[t for t in ident]))
+    if noatom:
         fs.append(finding('event_landing_unver',
-                          detail=f'{len(noatom)} 拍提不出可回查的原子、{len(ident)} 拍的原子'
-                                 f'在源章原文里找不到',
-                          evidence=[str(len(noatom)), str(len(ident))]))
+                          detail=f'{len(noatom)} 拍提不出可回查的原子'
+                                 f'（事件是概括句，既没有数字+单位也没有章级名册专名）',
+                          evidence=[str(len(noatom))]))
     land = collections.Counter({'ok': len(landed), 'missed': len(missed),
                                 'noatom': len(noatom), 'ident': len(ident)})
     return with_output_ordinal(fs, entry.get('output_ordinal')), land
 
 
-def identity_rules(entry: dict[str, Any], book: M.Book, *, mode: str) -> set[str]:
+def identity_rules(entry: dict[str, Any], book: M.Book) -> set[str]:
     """**恒等基线**：把源章原文当成一份「成稿」，跑同一套判据，返回它触发了哪些 rule。
 
     这是判断「判据对不对」的决定性测法：**原作要是通不过它自己的判据，那就是判据把合法
@@ -863,7 +1072,7 @@ def identity_rules(entry: dict[str, Any], book: M.Book, *, mode: str) -> set[str
     src = M.chapter_source(entry, book.source_text)
     if not src:
         return set()
-    return {f.rule for f in chapter_findings(src, entry, book, mode=mode, given='')}
+    return {f.rule for f in chapter_findings(src, entry, book, given='')}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -968,36 +1177,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
                + f'；下发名撞名 {len(collide)} 组' + (f'（{collide}）' if collide else ''),
         evidence=sorted(by_surface) + sorted(collide)))
 
-    # ── ⑤ 两条臂各写了几章 —— **只报不判**（`R-7.6c` / `arm_split_report`）──────
-    #
-    # ⚠⚠ 2026-08-22 之前默认深度选择是 `(1, 2, 3)`，开卷是 20/23 章的默认路径；
-    #   改成**全书闭卷**之后，走开卷的章都是**例外**，而例外必须常驻在报告上说出来。
-    #   `stage5/draft.md` 的标题行确实也印着臂的分布，但那是**产物**不是判据表
-    #   ——只在产物里说得出来，等于「谁都能看见、没有一条判据在管」。
-    # ⚠ **不为开卷发明阈值**：2026-08-10 已否决过一次（`B-03`），理由「逐章
-    #   0.9%~96.8% 的跨度不是一个可以一刀切的量」今天仍然成立。
-    # ⚠ 重合度按**逐章 min~max**报，不报均值——均值正是当年把「开卷有 96.8% 的章」
-    #   藏起来的那把尺子（`overlap_report` 的 note 记着这条）。
-    # ⚠ 重合度**现算**，不去解析 `overlap_report` 的 evidence 串：那是同一个数的
-    #   第二个落点，而调用同一个生产函数不是。
-    by_mode: collections.Counter = collections.Counter(
-        str(r.get('mode') or '（无成稿）') for r in written)
-    shallow_ov = sorted(
-        ov for r in written if r.get('mode') == 'shallow'
-        and (entry_ := book.chapters.get(r.get('output_ordinal'))) is not None
-        and (ov := M.overlap_ratio(
-            bodies.get(r.get('output_ordinal')) or '', entry_, book.source_text)) is not None)
-    n_shallow = by_mode.get('shallow', 0)
-    fs.append(finding(
-        'arm_split_report',
-        detail=f'写作臂：闭卷 {by_mode.get("deep", 0)} 章 · 开卷 {n_shallow} 章'
-               f'（共 {len(written)} 章有成稿）'
-               + ('　← **开卷已不在默认路径上**，这几章是例外' if n_shallow else '')
-               + (f'；开卷逐章重合度 {shallow_ov[0]:.1%}~{shallow_ov[-1]:.1%}'
-                  if shallow_ov else ''),
-        evidence=[f'deep={by_mode.get("deep", 0)}', f'shallow={n_shallow}']))
-
-    # ── ⑦ `must_hold`：确定性层判不了，**必须显式说「没查」而不是让它消失** ────
+    # ── ⑤ `must_hold`：确定性层判不了，**必须显式说「没查」而不是让它消失** ────
     n_hold = sum(len(be.get('must_hold') or []) for c in book.chapters.values()
                  for be in (c.get('segments') or []))
     fs.append(finding(
@@ -1011,8 +1191,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
 # 六、返工与收缩的回归护栏 —— `R-7.12` / `R-8.5` 的落点之一
 # ─────────────────────────────────────────────────────────────────────────────
 
-def trim_regressions(prev: str, new: str, entry: dict[str, Any], book: M.Book, *,
-                     mode: str) -> list[str]:
+def trim_regressions(prev: str, new: str, entry: dict[str, Any], book: M.Book) -> list[str]:
     """这一轮把上一轮**弄坏了**吗 → 坏在哪的人话列表（空 = 没变坏）。
 
     ⚠⚠ **四条护栏没有一条在查「其余一字不动」**——它们查的是**没变得更坏**。
@@ -1023,14 +1202,13 @@ def trim_regressions(prev: str, new: str, entry: dict[str, Any], book: M.Book, *
     """
     def hits(text: str) -> collections.Counter:
         return collections.Counter(f.rule for f in chapter_findings(
-            text, entry, book, mode=mode, given=''))
+            text, entry, book, given=''))
 
     a, b = hits(prev), hits(new)
     out: list[str] = []
     for rule, label in (('verbatim_missing', '丢了【原样写入】的原话'),
                         ('keep_value_missing', '丢了【数值不得改动】的数字'),
                         ('draft_truncated', '结尾被削断'),
-                        ('dialogue_halved', '把直接引语腰斩了'),
                         ('dialogue_fewer', '把台词压成了转述'),
                         ('must_appear_missing', '丢了【必须在场】的物件')):
         if b[rule] > a[rule]:
@@ -1050,28 +1228,30 @@ _FROM_CHAPTER: tuple[str, ...] = (
     'must_appear_missing', 'secret_leak', 'secret_unknown',
     'invented_number', 'invented_name',
     'length_report', 'length_over', 'length_under',
-    'overlap_report', 'deep_overlap_high',
-    'dialogue_report', 'dialogue_halved', 'dialogue_fewer', 'dialogue_broken',
+    'overlap_report', 'source_overlap_high',
+    'dialogue_report', 'dialogue_fewer', 'dialogue_broken',
     'dialogue_ratio_drift', 'quotes_in_unquoted_corpus',
     'layout_drift', 'para_len_drift', 'simile_drift', 'xinli_drift',
     'band_drift', 'dash_report', 'dash_drift', 'short_run_report', 'quote_unbalanced',
+    'material_anchor_unattested',
+    'narration_person_report', 'narration_person_drift',
+    'end_hook_surface_report', 'end_hook_unver',
+    'event_landing', 'event_landing_unver',
 )
 
 #: **只有全书验收相**产得出来的：单章视角看不到，或者要跨章比。
 _FROM_REVIEW: tuple[str, ...] = (
-    'event_landing', 'event_landing_unver',
-    'draft_missing', 'draft_duplicated',
+    'event_atom_unattested', 'draft_missing',
     'no_secrets_in_book', 'secret_timeline', 'cross_chapter_number',
     'book_length_report', 'book_length', 'name_surface_survey',
     'must_hold_unver', 'convergence_report',
-    'arm_split_report',
 )
 
 #: `unver` 的五条：**必须走 `unverifiable(rule, why)`**（`builder._status_of` 会拒收
 #: 一条 `sev='unver'` 却没说出「这次为什么够不着」的判据）。
 _UNVER: frozenset[str] = frozenset({
-    'must_hold_unver', 'event_landing_unver', 'draft_missing', 'draft_duplicated',
-    'no_secrets_in_book'})
+    'must_hold_unver', 'event_landing_unver', 'draft_missing',
+    'no_secrets_in_book', 'end_hook_unver'})
 
 
 def _why_of(rule: str, fs: list[Finding], *, empty: str) -> str:
@@ -1095,7 +1275,7 @@ def check(*, chapter_findings_by_rule: dict[str, list[Finding]],
 
     `phase='write'` ⇒ 这是**落盘闸门**那一相：书级/跨章那几条它够不着，落 `unver` 并说清
     「由验收相报」。⚠ **不许让它们落 `skipped`**：`skipped` 的措辞是「实现未被调用」，
-    那是一句**假话**——它们的实现在，只是这一相判不了。而一份 46 行全 `skipped` 的报告
+    那是一句**假话**——它们的实现在，只是这一相判不了。而一份 49 行全 `skipped` 的报告
     徽章是 `fail`，读起来像「全查过全没过」，实际上什么都没说。
 
     `blind[rule]` ⇒ **这一条这一次没有判别力样本**，落 `unver` 而不是打一盏绿灯。

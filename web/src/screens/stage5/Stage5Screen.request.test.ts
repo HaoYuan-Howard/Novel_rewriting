@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { mockApi, SAMPLE_SID } from '@/api/mock'
 import { chapterSelectionArgs } from './Stage5Screen'
-import { stage5WriteActions } from './useStage5Screen'
+import {
+  retainPretrimArgs,
+  stage5WontfixBlockedReason,
+  stage5WontfixSpec,
+  stage5WriteActions,
+  stage5WritingBefore,
+} from './useStage5Screen'
 
 describe('Stage5 dynamic chapter request', () => {
   it('adds the value without duplicating an action-owned --chapters token', () => {
@@ -20,8 +26,7 @@ describe('Stage5 dynamic chapter request', () => {
     const extra = ['--chapters']
     const preview = await mockApi.previewJob({
       kind: 'stage5.write',
-      label: 'stage5 逐章写作（deep） --chapters',
-      mode: 'deep',
+      label: 'stage5 全书闭卷写作 --chapters',
       extra,
       args: chapterSelectionArgs(extra, '11'),
       sid: SAMPLE_SID,
@@ -29,16 +34,17 @@ describe('Stage5 dynamic chapter request', () => {
     })
     const command = preview.steps[0]?.argv ?? ''
 
-    expect(command).toContain('--mode deep --chapters 11')
+    expect(command).toContain('--chapters 11')
+    expect(command).not.toContain('--mode')
     expect(command.match(/--chapters/g)).toHaveLength(1)
   })
 
-  it('offers both revalidate arms with audit inputs and no credential-only buttons', async () => {
+  it('offers one canonical revalidate action with audit inputs and no credential-only buttons', async () => {
     const enums = await mockApi.getEnums()
     const actions = stage5WriteActions(enums.actions)
     const revalidate = actions.filter((action) => action.extra?.includes('--revalidate'))
 
-    expect(revalidate.map((action) => action.mode).sort()).toEqual(['deep', 'shallow'])
+    expect(revalidate).toHaveLength(1)
     expect(revalidate.every((action) =>
       action.required_inputs?.map((input) => input.flag).join(',') === '--actor,--reason',
     )).toBe(true)
@@ -46,5 +52,54 @@ describe('Stage5 dynamic chapter request', () => {
       action.extra?.some((flag) => ['--actor', '--reason'].includes(flag)),
     )).toBe(false)
     expect(actions.some((action) => action.extra?.includes('--apply-edit'))).toBe(false)
+    expect(actions.some((action) => action.extra?.includes('--rebuild-draft'))).toBe(false)
+  })
+
+  it('only prepares writing authorization for an unapproved paid action', async () => {
+    let calls = 0
+    const startWriting = async () => {
+      calls += 1
+    }
+
+    expect(stage5WritingBefore({ paid: false }, false, startWriting)).toBeUndefined()
+    expect(stage5WritingBefore({ paid: true }, true, startWriting)).toBeUndefined()
+    const before = stage5WritingBefore({ paid: true }, false, startWriting)
+
+    expect(before).toBeTypeOf('function')
+    await before?.()
+    expect(calls).toBe(1)
+  })
+
+  it('builds retain-pretrim preview flags from the exact chapter and trimmed audit inputs', () => {
+    expect(retainPretrimArgs(7, ' reviewer-a ', ' 保留原稿，已核对超限原因 ')).toEqual([
+      '--chapters', '7',
+      '--actor', 'reviewer-a',
+      '--reason', '保留原稿，已核对超限原因',
+    ])
+  })
+
+  it('binds wontfix to chapter/book + rule + the complete evidence key', () => {
+    expect(stage5WontfixSpec(3, 'length_report', '887|880|875', ' 人工接受 ')).toBe(
+      '3|length_report|887|880|875=人工接受',
+    )
+    expect(stage5WontfixSpec('book', 'source_overlap_high', 'book:abc', '接受')).toBe(
+      'book|source_overlap_high|book:abc=接受',
+    )
+    expect(stage5WontfixSpec(3, 'length_report', null, '接受')).toBeNull()
+    expect(stage5WontfixSpec(3, 'length_report', '887', '   ')).toBeNull()
+  })
+
+  it('refuses stale, already-wontfix, and identity-less findings before opening confirm', () => {
+    const open = { evidence_key: 'ev-1', wontfix: null }
+    expect(stage5WontfixBlockedReason('fresh', open, false)).toBeNull()
+    expect(stage5WontfixBlockedReason('stale', open, false)).toContain('fresh Review')
+    expect(stage5WontfixBlockedReason('fresh', {
+      evidence_key: 'ev-1',
+      wontfix: { why: '接受', at: 'review_2' },
+    }, false)).toContain('已经有 wontfix')
+    expect(stage5WontfixBlockedReason('fresh', {
+      evidence_key: null,
+      wontfix: null,
+    }, false)).toContain('evidence_key')
   })
 })

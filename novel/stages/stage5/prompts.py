@@ -1,24 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage 5 当前两条写作臂的 system prompt 与材料渲染。
+"""Stage 5 唯一闭卷写作契约的 system prompt 与材料渲染。
 
 【本层与前四层的三处不同】
 
-① **两条臂共用一份骨架，差别只有 (system prompt, 给不给源章原文)。**
-   `DEEP_SYS`（闭卷）与 `SHALLOW_SYS`（开卷）**共享四段规则**
-   （`HINGE_LABEL_RULE` / `FIDELITY_RULE` / `ORDER_RULE` / `STYLE_WORD_RULE`），
-   各自只有开头与硬要求那两段是自己的；同一条边界只保留一个文本落点。
+① **正常写作与修订只有一份骨架。** `REVISE_TAIL` 只由
+   `write_system(revise=True)` 拼接；记账与真正发送的字节因而不会分家。
 
-② ⚠⚠ **`SHALLOW_SYS` 刻意不拼 `LAYER_RULE`，那是一个已登记的洞不是笔误。**
-   开卷写手在 user 消息里照样收到「现场 / 回忆 / 转述」三个标签
-   （下发面逐拍渲染 `LAYER_CN`），而 system prompt 里**一个字的解释都没有**
-   ——这就是 `R-7.14` / `B-13`。补它属于独立的 prompt 语义变更，
-   要有一次真跑去证明它没把别的东西写坏。
-   `test_the_shallow_arm_still_has_no_layer_gloss` 钉着这个洞还在。
-
-③ **本层有第三个 SYS 指纹**：`deep + REVISE_TAIL`（修订轮）。
-   盘上 3 个不同的 `prompts.SYS` 指纹 = deep · shallow · deep+REVISE_TAIL。
-   ⇒ `write_system(mode, revise=True)` 是它**唯一的产地**，反哺那一侧不许再拼一次。
+② **闭卷是代码边界。** 源章原文只供确定性校验算重合度，
+   `build_material` 没有可以把它加回 prompt 的参数。
 
 【为什么一切都走 `fill()`，即便某一段今天没有插值点】
 渲染出去的那一份是要记进 `_provenance.prompts` 的，也是 `--dry-run` 打印的那一份；
@@ -32,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from contracts.invariants import (
-    DEPTH_MODES, HINGE_LABEL, LAYER_CN, LAYER_GLOSS,
+    HINGE_LABEL, LAYER_CN, LAYER_GLOSS,
     TIME_LAYERS, hinge_heading,
 )
 from novel.core.text import norm
@@ -41,20 +31,14 @@ from novel.llm.prompts import fill, with_json_shape
 from novel.stages.stage5 import measure as M
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、两条臂共用的四段规则 —— **唯一落点，两条臂各引一次**
+# 一、唯一闭卷写作路径的共用规则 —— **每条只有一个落点**
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: 三个叙述层的展开释义。**由 `LAYER_CN` / `LAYER_GLOSS` 派生，不手抄。**
-#: ⚠ 只有 `DEEP_SYS` 用它（见模块 docstring ②）。
+#: ⚠ 唯一 `WRITE_SYS` 用它（见模块 docstring ②）。
 LAYER_RULE = '；'.join(f'〔{LAYER_CN[k]}〕= {LAYER_GLOSS[k]}' for k in TIME_LAYERS)
 
-#: 四组保真材料在 system prompt 里的展开说明。**两条臂共用这一份**（判据 25）。
-#:
-#: 【改这里之前的状态】`DEEP_SYS` 把四条的措辞逐字手抄了一份，而 `SHALLOW_SYS`
-#: **整块不存在**——开卷写手在 user 消息里照样收到这四种标签，system prompt 里却没有
-#: 任何解释。那不是措辞漂，是**覆盖面漂**：一条臂有、一条臂没有。
-#: 而把四种都当成「必须逐字出现」恰恰是最常见的错法——「因果前提」要的只是命题成立，
-#: 当台词写就会逼出一段背景交代。
+#: 四组保真材料在 system prompt 里的展开说明。同一条边界只保留一个文本落点。
 HINGE_LABEL_RULE = '\n'.join([
     '【原文材料：四种，各守各的维度】',
     '内容清单里有些条目是【原作里的东西】，直接给了你。**它们要守住的不是同一样东西**，',
@@ -67,7 +51,7 @@ HINGE_LABEL_RULE = '\n'.join([
     '  **但不要为了它硬塞一段背景交代**——把前提当台词写，是把叙事写成说明书。',
 ])
 
-#: 发明边界。**两条臂共用**。
+#: 发明边界。
 #:
 #: 【为什么判据句与七项清单必须在同一段里】它们从前分居两处，说的是同一条边界的两个版本、
 #: 切法还不同：这里是一条**复合判据**（新事件 × 时间/地点/人物动作），那边是**七项平铺**。
@@ -91,7 +75,7 @@ FIDELITY_RULE = fill("""\
 - 记住：自造的细节没有事实底座去约束，写多了会自相矛盾（同一件东西前后对不上），
   读者一眼就能看出破绽。宁可只写那一句，写到疼。""")
 
-#: Stage4 已经完成结构重排；两条写作臂只执行正式计划，不能在链路末端再私自改一次。
+#: Stage4 已经完成结构重排；写作层只执行正式计划，不能在链路末端再私自改一次。
 ORDER_RULE = """\
 【这是重构后的结构，不是原文顺序】
 内容清单已经重建过叙事入口、信息次序和场景边界；它可能先写后果，再回到原因。
@@ -114,16 +98,16 @@ ORDER_RULE = """\
   `summary` 拍的【约 N 字】是让你把几件事压过去。按每一拍自己的那个数写，
   不要把整章的字数平摊到每一条事实上。"""
 
-#: 写法词的拆弹指令。**两条臂共用**。
+#: 写法词的拆弹指令。
 #:
 #: 【为什么必须插值而不是手抄】词表的产地是 `contracts.invariants.STYLE_WORDS`：那是计划侧的
 #: HARD（计划正文里出现写法词就阻断），而这一条是它的**下游拆弹**——万一漏进了计划，
 #: 写手该怎么处置。同一份词表的两个落点，正是判据 25 的形状。
 #:
-#: ⚠ **实测漂到什么程度**：改这里之前两条臂各手抄了一份、且互相不一致——闭卷写
+#: ⚠ **历史漂移证据**：折平前两条臂各手抄了一份、且互相不一致——闭卷写
 #: 「深沉 / 细腻 / 渲染氛围 / 强化感官」（15 词里的 4 个），开卷写同样那 4 个外加
 #: 「铺开心理历程 / 加强冲击」，而**那两个不在词表里**。
-#: ⚠ 缩进对齐两条臂里的挂点 `   ·`：续行 5 空格，与同层的【对白保持对白】那条一致。
+#: ⚠ 缩进对齐 `WRITE_SYS` 里的挂点 `   ·`：续行 5 空格，与同层的【对白保持对白】那条一致。
 STYLE_WORD_RULE = fill("""\
 【任务写法词与现有文面证据冲突时，按证据转译，不照字面执行】：任务说的是
      【这一章要完成什么】；下方正文机械形态基线与给定文本样本说的是【表面怎么落笔】。
@@ -133,11 +117,11 @@ STYLE_WORD_RULE = fill("""\
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 二、`deep` 臂 —— 闭卷
+# 二、闭卷写作
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: 闭卷臂的现行 system prompt。拼接顺序与段间空行**都是契约字节的一部分**。
-DEEP_SYS = """\
+#: 现行闭卷 system prompt。拼接顺序与段间空行**都是契约字节的一部分**。
+WRITE_SYS = """\
 你是网文写手。你在把一部小说改写成【更紧、更强】的重构版，现在只写其中【一章】的正文。
 
 【你拿到什么】这一章要写哪几拍、每一拍展开到什么程度、正文机械形态基线、全书人物与设定。
@@ -187,61 +171,12 @@ DEEP_SYS = """\
 - 每项只含 `slot` 与该段正文 `text`，不要章节标题、作者注或说明；
 - slot 的先后不归你决定，代码会按任务给定顺序组装整章。"""
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 三、修订尾指令
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 三、`shallow` 臂 —— 开卷
-# ─────────────────────────────────────────────────────────────────────────────
-
-#: 开卷臂的现行 system prompt。
-#: ⚠⚠ **它比 `DEEP_SYS` 少一段 `LAYER_RULE`，那是 `B-13` 那个洞。别补。**
-SHALLOW_SYS = """\
-你是网文写手。你在把一部小说改写成【更紧、更强】的重构版，现在只改写其中【一章】的正文。
-
-【你拿到什么】这一章要写哪几拍、每一拍展开到什么程度、正文机械形态基线、全书人物与设定，
-以及【本章的原文】。
-
-【怎么用原文】原文是素材不是答案：可用的骨肉留下，按给定的每一拍与展开程度做增删调整。
-【禁止整段照抄】——禁的是照搬句序与段落结构，【不是】把作者的用词换掉。
-凡保留的地方，语气词、口头禅、自造词、惯用句式这些【表层修饰】尽量原样留住：
-这本书的味道就住在那一层，意思一样、词全换了，等于把这本书写成了另一本。
-要动手的是【增删与归并】：按拍加戏减戏、把啰嗦的两三句并成一句（不新增信息、不改原意）。
-凡要求压缩/带过/展开的地方，必须真的动手，不能原样搬运。改写不是誊写，但也不是另写。
-
-【你的活是落笔，不是策划】写哪些内容、哪一拍是重头、哪一拍快速推进，都已经定好了。
-【篇幅怎么分】**每一拍都标了它大约写多少字**，照着写——给得多的那几拍是本章的重头，
-给得少的快速推进，不要演成场景。各拍加起来就是本章的字数区间，两件事同时满足，不是二选一。
-**写不够也是失败**——离下限差一大截说明重头戏没写透，
-该补的是重头，不是给带过的拍加戏。
-
-""" + HINGE_LABEL_RULE + """
-
-""" + FIDELITY_RULE + """
-
-""" + ORDER_RULE + """
-
-硬要求：
-1. 【不新增原作没有的情节、人物或设定】。可以调整详略与表达，但不能改变发生了什么。
-2. 【文面要像同一本书】。严格按下方正文机械形态基线控制句段、对白占比、引号与排版。
-   【原文的表层是最高实例】——机械基线与原文冲突时，以原文的表层写法为准。
-   ·""" + STYLE_WORD_RULE + """
-   ·【对白保持对白】原文里是直接引语的对白，保留时必须仍是直接引语：用这本书的引号体
-     （符号、占比、排版惯例在下方「对白形态」里给出），引语按这本书的惯例排版。
-     不许把台词压成转述来省字——压缩先砍叙述与铺垫，台词是承重内容，不是可压缩的填充。
-     下方给了本章原文的直接引语数；写完逐句回看原章，成稿不应明显少于它。
-3. 【视角按给定的叙述视角写】。若本章的叙述视角分了多段（如末尾是另一个人的视角），就按分段切换叙述者，
-   换人时声音也要换（不是同一个人的腔调套另一个名字）。
-4. 【人名一律用原名】，不要改名、不要替换称呼体系。
-5. 【不提前揭示后文才揭示的信息】。结尾要留住往下读的动力，不要把底牌提前掀了。
-6. 【篇幅】以上面「篇幅」一节给的**本章目标区间与逐拍字数**为准；原章长度不是目标。
-
-只输出结构化 JSON：
-- `segments` 必须与任务中列出的 slot 一一对应，每个 slot 恰好出现一次；
-- 每项只含 `slot` 与该段正文 `text`，不要章节标题、作者注或说明；
-- slot 的先后不归你决定，代码会按任务给定顺序组装整章。"""
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 四、返工与收缩 —— 两段挂在写作臂上的尾巴
+# 四、返工尾指令
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: `--revise` 时**拼在臂的 SYS 后面**。
@@ -269,11 +204,6 @@ REVISE_TAIL = """
 # 五、取 system 的**唯一入口**
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: 臂 → 它的 system 模板。**两条臂仅有的差异面之一**（另一个是 `with_source_text`，
-#: 它在 `write.py::_ARMS` 里）。
-_SYS_OF: dict[str, str] = {'deep': DEEP_SYS, 'shallow': SHALLOW_SYS}
-assert tuple(_SYS_OF) == DEPTH_MODES, '臂的取值面与 `contracts.invariants.DEPTH_MODES` 分家了'
-
 CHAPTER_RESPONSE_HINT = {
     'segments': [
         {'slot': 's01', 'text': '这一生产者指定片段的正文'},
@@ -282,22 +212,17 @@ CHAPTER_RESPONSE_HINT = {
 }
 
 
-def write_system(mode: str, *, revise: bool = False) -> str:
-    """这一次要发出去的 system。**盘上那三个指纹的唯一产地。**
+def write_system(*, revise: bool = False) -> str:
+    """这一次要发出去的 system。**指纹的唯一产地。**
 
-    `deep` · `shallow` · `deep|shallow + REVISE_TAIL` —— 修订轮的 SYS 是**拼过的**，
-    而 `_provenance.prompts.SYS` 记的就是这里返回的那一份。
+    修订轮的 SYS 是**拼过的**，而 `_provenance.prompts.SYS`
+    记的就是这里返回的那一份。
     ⚠ 反哺那一侧**不许再拼一次**：拼第二次就是同一件事的第二个落点，
     而两份一旦分家，`_provenance` 记的指纹与真正发出去的字节就对不上了。
 
-    ⚠ 认不出的臂**当场炸**，不 `dict.get(mode, DEEP_SYS)` 兜底——
-    兜底会让一次拼错的臂名安静地跑闭卷，而产物里的 `mode` 字段照样写着另一个值。
     """
-    if mode not in _SYS_OF:
-        raise KeyError(f'没有 {mode!r} 这条臂。取值面是 {DEPTH_MODES}'
-                       f'（`contracts.invariants.DEPTH_MODES`）')
     return with_json_shape(
-        fill(_SYS_OF[mode] + (REVISE_TAIL if revise else '')),
+        fill(WRITE_SYS + (REVISE_TAIL if revise else '')),
         CHAPTER_RESPONSE_HINT,
     )
 
@@ -507,7 +432,13 @@ def chapter_facts(entry: dict[str, Any]) -> str:
             for t in (be.get(key) or []):
                 lines.append(f'     · {label}：{(t or "").strip()}')
     body = '\n'.join(lines)
-    nar = entry.get('narration') or []
+    # `focalizer` 在现役上游里恒为 null；只从叙事段下发面删这一格。
+    # 其他 null 仍保留——它们可能承载「不知道」的三态语义，不做全局 drop-null。
+    nar = [
+        {key: value for key, value in segment.items()
+         if not (key == 'focalizer' and value is None)}
+        for segment in (entry.get('narration') or [])
+    ]
     return body + f'\n\n叙述视角（按段）：{_compact(nar)}' if nar else body
 
 
@@ -619,16 +550,14 @@ def writer_chars(entry: dict[str, Any], book: M.Book) -> list[dict[str, str]]:
     ]
 
 
-def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> str:
+def dialogue_block(entry: dict[str, Any], book: M.Book) -> str:
     """对白形态块——**这本书的承重墙**。占比 / 符号 / 本章引语数 / 排版惯例，全部从产物插值。
 
     ⚠ `dialogue_ratio_applicable=False`（语料无引号）⇒ **不下发**：没有可信目标时教排版
     就是教坏。
 
-    ⚠⚠ **引语数 N 只给开卷写手**：它手里有原章，能逐句判断哪些对白该保留；
-    闭卷写手只拿到事件与离散保真点，给一个**无法回查内容的 N**，只会把「对白保真」
-    变成「凭空凑 N 句」——而那正是实测发生过的那次自造台词。
-    这是按消费方投影，**不是删度量**：N 仍照常由判据 `dialogue_report` 无条件报出。
+    ⚠⚠ 闭卷写手不拿源章，因而也不下发无法回查内容的「原章引语数 N」；
+    否则会把对白保真变成凭空凑台词。N 仍由 `dialogue_report` 度量，不进 prompt。
     """
     base = book.measurable
     if not base.get('dialogue_ratio_applicable'):
@@ -638,10 +567,6 @@ def dialogue_block(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
     sym = base.get('quote_styles') or []
     lines = ['── 对白形态（这本书的承重墙）──',
              f"这本书对白密集，正文约 {pct} 的字符在引号里，引号体是 {sym[0] if sym else ''}。"]
-    n = M.src_quote_count(entry, book.source_text)
-    if n and with_source_text:
-        lines.append(f'本章原文有 {n} 句直接引语——成稿里的直接引语不应明显少于它；'
-                     f'要省字，砍叙述，别砍台词。')
     cue = book.cue_rate
     if cue is not None and cue >= 0.8:
         lines.append(f'对白排版照这本书的惯例：提示语以冒号收尾后换行，引语单独成段'
@@ -656,8 +581,6 @@ class Material:
     blocks: list[str]
     #: 这一章的**全部下发文字**——`invented_number` / `invented_name` 的参照集从它来。
     given: str
-    #: 开卷才有：源章原文。⚠ 闭卷这一格恒为 `''`，而那**就是两条臂的第二个差异面**。
-    source_text: str
 
 
 def density_guidance(book: M.Book) -> str:
@@ -677,8 +600,8 @@ def density_guidance(book: M.Book) -> str:
     return '、'.join(rendered)
 
 
-def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: bool) -> Material:
-    """组装一章的下发面。`with_source_text=True` 即开卷（给原章正文）。
+def build_material(entry: dict[str, Any], book: M.Book) -> Material:
+    """组装一章的闭卷下发面。
 
     ⚠⚠ **闭卷模式下这里一个字节的源章原文都不碰**——那份原文只供校验器算重合度。
     「闭卷」这件事是由**这个函数**保证的，不是由 system prompt 里那句话保证的。
@@ -718,7 +641,7 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
           f"{meas.get('avg_paragraph_chars')} 字"
         + (f'；写法密度基线：{density}' if density else '')
         + '。写完回看：你的句段或任一写法密度若明显高于基线，就是写成了另一本书。',
-        dialogue_block(entry, book, with_source_text=with_source_text),
+        dialogue_block(entry, book),
         # ⚠⚠ **块头此前把 events 直接命名为「要写的内容」**，而它们的信息密度实测是
         #   源章正文的 87% ⇒ 那句话在物理上就是「把这 N 条各写一句」。改成「材料」是
         #   2026-08-22 那次「句子单位从 event 上移到拍」的**块级一半**，
@@ -743,14 +666,8 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
     ]
     if (prev := prev_context(entry, book)):
         blocks.append(prev)
-    src = ''
-    if with_source_text:
-        for s in (entry.get('from_source_ordinals') or []):
-            one = book.source_text.get(s, '')
-            src += one
-            blocks.append(f'── 源章原文（阅读序第{s}章）──\n' + one)
-    return Material(blocks=[b for b in blocks if b], given='\n\n'.join(b for b in blocks if b),
-                    source_text=src)
+    rendered = [b for b in blocks if b]
+    return Material(blocks=rendered, given='\n\n'.join(rendered))
 
 
 def build_user(mat: Material) -> str:

@@ -89,6 +89,16 @@ function FindingRow({
         {f.owner ? (
           <span className="font-mono text-mini text-ink-4">根因第一嫌疑：{f.owner}</span>
         ) : null}
+        {f.identity_hit ? (
+          <span className="rounded-tag border border-warn-line bg-warn-bg px-6 py-1 text-mini text-warn-ink">
+            identity_hit · 恒等基线也命中
+          </span>
+        ) : null}
+        {f.identity_dead ? (
+          <span className="rounded-tag border border-warn-line bg-warn-bg px-6 py-1 text-mini text-warn-ink">
+            identity_dead · 判据失去判别力
+          </span>
+        ) : null}
       </div>
       <div className="prose-cn text-sm2 whitespace-pre-wrap text-ink-2">{f.detail}</div>
     </div>
@@ -254,6 +264,17 @@ export function CheckPanel({
               {headerAction}
             </span>
           </div>
+
+          {d?.provenance.reason ? (
+            <div className="prose-cn border-t border-warn-line bg-warn-bg px-20 py-11 text-sm2 text-warn-ink">
+              {d.provenance.freshness === 'stale'
+                ? '报告已过期：'
+                : d.provenance.freshness === 'unknown'
+                  ? '旧产物 / 新鲜度未知：'
+                  : '报告来源说明：'}
+              {d.provenance.reason}
+            </div>
+          ) : null}
 
           {d?.badge === 'amber' ? (
             <div className="prose-cn border-t border-line-row px-20 py-11 text-sm2 text-ink-2">

@@ -31,19 +31,14 @@ def _drafts_of(book: str) -> tuple[str, ...]:
     """本书当前正式成稿。"""
     return tuple(sorted(
         a.rel for a in corpus.iter_artifacts()
-        if a.book_dir == book and a.pattern == 'stage5/{mode}/ch{nn}.json'
-        and '_rounds' not in a.rel))
+        if a.book_dir == book and a.pattern == 'stage5/ch{nn}.json'
+        and '_rounds/' not in a.rel))
 
 
 def _box(book: str) -> sandbox.Sandbox:
     # 机械复检不依赖付费语义历史。旧 semantic v0 的形状不可无损迁移；把它复制进
     # 沙箱只会让免费路径被一份它不需要的旧制品卡住。
     return sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
-
-
-#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
-#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
-_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
 
 
 @pytest.fixture(params=corpus_params(
@@ -65,12 +60,12 @@ def current_drafts(box):
     而跳过与「查过没事」在报告上长得一模一样。
     ⇒ 谁读成稿谁挂前提，用 `@pytest.mark.usefixtures('current_drafts')`。
 
-    过期时的形状（实测 10/10）：`stage6.hook` 在读侧闸拿到
-    `UpstreamStale: 上游 stage5/deep/ch01.json 已过期` ⇒ 用例死在门口，
+    过期时的形状：`stage6.hook` 在读侧闸拿到
+    `UpstreamStale: 上游 stage5/ch01.json 已过期` ⇒ 用例死在门口，
     它要验的判据行数/徽章/重判对账一次都没跑到。
     """
-    corpus.requires_current(box.book, *_DRAFT_ARMS,
-                            produced_by='stage5.write --mode deep', cost='付费')
+    corpus.requires_current(box.book, *_drafts_of(box.book),
+                            produced_by='stage5.write', cost='付费')
     return box
 
 
@@ -624,6 +619,77 @@ def test_prompt_carries_source_full_story_and_minimal_hook_mechanical(box):
     assert packet['source_hook_mechanical'] == mat.hook_mechanical == expected
     assert 'style' not in packet and 'measurable' not in packet
     assert packet['whole_story_map'] == list(mat.story_map) and len(mat.story_map) >= 1
+
+
+def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
+    """Stage6 可看全书 claim，但不可看 Stage2 SourceSpan 原文与坐标。"""
+    import copy
+    import json
+    from types import SimpleNamespace
+
+    from novel.core.evidence import iter_global_evidence_slots
+    from tests import factories
+    from tests.test_stage2 import global_grounding
+
+    seed = factories.stage5_book()
+    grounding = global_grounding()
+    markers: list[str] = []
+    coordinates: list[int] = []
+    for index, (_claim_path, owner, field) in enumerate(
+        iter_global_evidence_slots(grounding), 1,
+    ):
+        marker = f'STAGE6_EVIDENCE_ONLY_{index}'
+        start = 945_678_900 + index * 100
+        owner[field] = {
+            'chapter_ordinal': 1,
+            'source': {
+                'text': marker,
+                'start': start,
+                'end': start + len(marker),
+                'normalized': f'STAGE6_NORMALIZED_ONLY_{index}',
+                'recovery': 'normalized',
+            },
+        }
+        markers.extend((marker, f'STAGE6_NORMALIZED_ONLY_{index}'))
+        coordinates.extend((start, start + len(marker)))
+
+    class Dumped:
+        def __init__(self, value):
+            self.value = value
+
+        def model_dump(self, **_kwargs):
+            return copy.deepcopy(self.value)
+
+    stored = {
+        hook.GLOBAL_GROUNDING: Dumped(grounding),
+        hook.STYLE_GROUNDING: Dumped(factories.stage3_artifact()),
+        hook.WRITER_CONTEXT: Dumped(seed.ctx),
+        hook.HOOK_COPY: SimpleNamespace(text='原作开篇文案。'),
+    }
+
+    class Store:
+        @staticmethod
+        def exists(rel):
+            return rel in stored
+
+        @staticmethod
+        def read(_model, rel):
+            return stored[rel]
+
+    monkeypatch.setattr(hook, 'ArtifactStore', lambda _ctx: Store())
+    monkeypatch.setattr(
+        hook, 'lead_drafts',
+        lambda _store, _upto: (
+            [{'output_ordinal': 1, 'text': '重写后的开篇正文。'}], [], {}),
+    )
+    _system, user, material = hook.build_prompt(SimpleNamespace(title=seed.title))
+
+    paid_material = user + '\n' + material.given
+    truth = json.dumps(material.story_truth, ensure_ascii=False, sort_keys=True)
+    assert markers and all(marker not in paid_material for marker in markers)
+    assert all(str(coordinate) not in paid_material for coordinate in coordinates), \
+        'SourceSpan 的 start/end 坐标进了 Stage6 付费 prompt'
+    assert all(key not in truth for key in ('"source":', '"start":', '"end":'))
 
 
 #: 合成原作文案段：一句一段、空行分隔、末行是一句宣言。

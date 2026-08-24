@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage 5 当前两条写作臂的提示契约。"""
+"""Stage 5 唯一闭卷写作契约。"""
 from __future__ import annotations
 
 import ast
@@ -13,43 +13,59 @@ from novel.stages.stage5 import prompts
 from tests import factories
 
 
+_BEAT_MATERIAL_V2_SYS_SHA256 = 'a2133234679dca134348ea07daa942bb684a0987b60e298441714ad3531619ee'
+_BEAT_MATERIAL_V2_USER_SHA256 = '399e56e1b04afdead83932a52ff692bc6c15ca426d628aa6ac0641d064420c30'
+
+
 @pytest.fixture(scope='module')
 def book():
     """合成的当前形态 Book（不依赖盘上语料）。"""
     return factories.stage5_book()
 
 
-@pytest.mark.parametrize('mode,const', [
-    ('deep', 'DEEP_SYS'),
-    ('shallow', 'SHALLOW_SYS'),
-])
-def test_each_arm_uses_its_single_current_system(mode, const):
-    system = prompts.write_system(mode)
+def test_writer_uses_the_single_current_system():
+    system = prompts.write_system()
     from novel.llm.prompts import with_json_shape
     assert system == with_json_shape(
-        getattr(prompts, const), prompts.CHAPTER_RESPONSE_HINT)
+        prompts.WRITE_SYS, prompts.CHAPTER_RESPONSE_HINT)
     assert system and '$' not in system
 
 
-def test_stage5_has_one_prompt_implementation_without_experiment_selector():
+def test_stage5_production_entry_has_one_contract_and_no_selector():
     from novel.stages.stage5 import write
 
-    assert list(inspect.signature(prompts.write_system).parameters) == ['mode', 'revise']
+    assert list(inspect.signature(prompts.write_system).parameters) == ['revise']
     assert list(inspect.signature(prompts.build_material).parameters) == [
-        'entry', 'book', 'with_source_text']
+        'entry', 'book']
     assert list(inspect.signature(write.run_write).parameters) == [
         'ctx', 'client', 'chapters']
     assert list(inspect.signature(write.run_revise).parameters) == [
         'ctx', 'client', 'chapters']
+    assert not hasattr(prompts, 'SHALLOW_SYS')
+    assert not hasattr(prompts, 'DEEP_SYS')
+    assert not hasattr(prompts, 'EVENT_LIST_V1_SYS')
+    assert not hasattr(prompts, 'experimental_write_system')
+    assert not hasattr(prompts, 'experimental_build_material')
+    assert not hasattr(write, 'run_selected')
+
+
+def test_production_bytes_are_the_retained_beat_material_v2_candidate(book):
+    """实验退役后，正式唯一入口仍逐字保留已选定的新 prompt/material 候选。"""
+    entry = book.chapters[1]
+    system = prompts.write_system()
+    user = prompts.build_user(prompts.build_material(entry, book))
+    assert len(system.encode('utf-8')) == 8890
+    assert len(user.encode('utf-8')) == 3027
+    assert hashlib.sha256(system.encode()).hexdigest() == _BEAT_MATERIAL_V2_SYS_SHA256
+    assert hashlib.sha256(user.encode()).hexdigest() == _BEAT_MATERIAL_V2_USER_SHA256
 
 
 @pytest.mark.parametrize('fragment', [
     'HINGE_LABEL_RULE', 'FIDELITY_RULE', 'ORDER_RULE', 'STYLE_WORD_RULE',
 ])
-def test_shared_rules_reach_both_arms(fragment):
+def test_shared_rules_reach_the_writer(fragment):
     value = getattr(prompts, fragment)
-    assert value in prompts.DEEP_SYS
-    assert value in prompts.SHALLOW_SYS
+    assert value in prompts.WRITE_SYS
 
 
 def test_the_trim_surface_is_gone_and_stays_gone():
@@ -65,49 +81,39 @@ def test_the_trim_surface_is_gone_and_stays_gone():
         assert not hasattr(prompts, gone), f'{gone} 回来了，但没有任何调用者'
 
 
-def test_shallow_arm_keeps_the_current_layer_boundary():
-    assert prompts.LAYER_RULE in prompts.DEEP_SYS
-    assert prompts.LAYER_RULE not in prompts.SHALLOW_SYS
-    for label in ('〔现场〕', '〔回忆〕', '〔转述〕'):
-        assert label not in prompts.SHALLOW_SYS
+def test_the_closed_book_writer_receives_the_layer_boundary():
+    assert prompts.LAYER_RULE in prompts.WRITE_SYS
 
 
 def test_revise_tail_has_one_producer_and_a_distinct_fingerprint():
-    systems = (
-        prompts.write_system('deep'),
-        prompts.write_system('shallow'),
-        prompts.write_system('deep', revise=True),
+    systems = (prompts.write_system(), prompts.write_system(revise=True))
+    assert len({hashlib.sha1(s.encode()).hexdigest() for s in systems}) == 2
+    revised = prompts.write_system(revise=True)
+    from novel.llm.prompts import with_json_shape
+    assert revised == with_json_shape(
+        prompts.WRITE_SYS + prompts.REVISE_TAIL,
+        prompts.CHAPTER_RESPONSE_HINT,
     )
-    assert len({hashlib.sha1(s.encode()).hexdigest() for s in systems}) == 3
-    for mode in ('deep', 'shallow'):
-        revised = prompts.write_system(mode, revise=True)
-        from novel.llm.prompts import with_json_shape
-        assert revised == with_json_shape(
-            getattr(prompts, mode.upper() + '_SYS') + prompts.REVISE_TAIL,
-            prompts.CHAPTER_RESPONSE_HINT,
-        )
-        assert revised.count(prompts.REVISE_TAIL.strip()) == 1
+    assert revised.count(prompts.REVISE_TAIL.strip()) == 1
 
 
-def test_style_vocabulary_reaches_both_arms_whole():
+def test_style_vocabulary_reaches_the_writer_whole():
     from contracts.invariants import STYLE_WORDS
 
     for word in STYLE_WORDS:
         assert word in prompts.STYLE_WORD_RULE
-    assert prompts.STYLE_WORD_RULE in prompts.DEEP_SYS
-    assert prompts.STYLE_WORD_RULE in prompts.SHALLOW_SYS
+    assert prompts.STYLE_WORD_RULE in prompts.WRITE_SYS
 
 
 def test_system_prompts_no_longer_promise_a_stage3_qualitative_packet():
     """Stage5 不再拿到画像；system 不能继续命令模型服从不存在的输入。"""
-    rendered = prompts.DEEP_SYS + '\n' + prompts.SHALLOW_SYS
+    rendered = prompts.write_system() + '\n' + prompts.write_system(revise=True)
     for stale in (
         '声音与写作习惯', '声音画像', '文风画像', '给定的声音', '画像只是',
         'voice', 'surface_habits', 'chapter_styles', 'hook_style',
     ):
         assert stale not in rendered
-    assert '正文机械形态基线' in prompts.DEEP_SYS
-    assert '正文机械形态基线' in prompts.SHALLOW_SYS
+    assert '正文机械形态基线' in prompts.WRITE_SYS
 
 
 def test_shape_block_contains_only_the_five_body_bands(book):
@@ -118,8 +124,7 @@ def test_shape_block_contains_only_the_five_body_bands(book):
     assert '文案段形态' not in block
     for qualitative in ('voice', 'surface_habits', 'chapter_styles', 'hook_style'):
         assert qualitative not in block
-    material = prompts.build_material(
-        book.chapters[min(book.chapters)], book, with_source_text=False).given
+    material = prompts.build_material(book.chapters[min(book.chapters)], book).given
     assert block in material and '文案段形态' not in material
     for qualitative in ('voice', 'surface_habits', 'chapter_styles', 'hook_style'):
         assert qualitative not in material
@@ -133,16 +138,16 @@ def test_invention_boundary_contains_the_complete_contract():
     assert '判据：' in prompts.FIDELITY_RULE
 
 
-def test_all_fidelity_labels_are_explained_to_both_arms():
+def test_all_fidelity_labels_are_explained_to_the_writer():
     from contracts.invariants import HINGE_LABEL_PARTS, hinge_heading
 
     for kind in HINGE_LABEL_PARTS:
         assert f'【{hinge_heading(kind)}】' in prompts.HINGE_LABEL_RULE
 
 
-def test_unknown_arm_is_rejected():
-    with pytest.raises(KeyError, match='deep'):
-        prompts.write_system('deep_v2')
+def test_writer_system_has_no_arm_selector():
+    with pytest.raises(TypeError):
+        prompts.write_system('deep')
 
 
 def _baseline_keys(module) -> set[str]:
@@ -277,20 +282,30 @@ def test_the_material_block_stops_calling_events_the_content_to_write(book):
     ⚠ 「只写这些」守的是**事实的属性**（不得新增剧情），不是句子单位的属性
     ⇒ 措辞下移成「事实只有这些」，边界保留。
     """
-    given = prompts.build_material(
-        book.chapters[1], book, with_source_text=False).given
+    given = prompts.build_material(book.chapters[1], book).given
     assert '── 本章的材料' in given
     assert '本章要写的内容' not in given, '旧块头回来了'
     assert '事实只有这些' in given and '不得新增剧情' in given
     assert '【事实材料】，不是【要写的句子】' in given
 
 
-def test_the_beat_is_one_unit_rule_reaches_both_arms():
-    """一拍 = 一个叙述单位——这条执行规则住在 `ORDER_RULE`（两条臂共用的唯一落点）。"""
+def test_narration_drops_only_null_focalizer_from_the_prompt():
+    rendered = prompts.chapter_facts({
+        'segments': [_beat('s01', 'scene', ['她进门。'])],
+        'narration': [{
+            'segment': '全章', 'grammatical_person': 'third',
+            'focalizer': None, 'pronoun_surfaces': None,
+        }],
+    })
+    assert 'focalizer' not in rendered
+    assert 'pronoun_surfaces' in rendered and 'null' in rendered
+
+
+def test_the_beat_is_one_unit_rule_reaches_the_writer():
+    """一拍 = 一个叙述单位——这条执行规则住在 `ORDER_RULE`。"""
     assert '一拍是一个叙述单位，不是一张待办清单' in prompts.ORDER_RULE
     assert '不要把整章的字数平摊到每一条事实上' in prompts.ORDER_RULE
-    assert prompts.ORDER_RULE in prompts.DEEP_SYS
-    assert prompts.ORDER_RULE in prompts.SHALLOW_SYS
+    assert prompts.ORDER_RULE in prompts.WRITE_SYS
 
 
 def test_merging_a_beat_into_one_scene_is_not_a_licence_to_reorder_inside_it():

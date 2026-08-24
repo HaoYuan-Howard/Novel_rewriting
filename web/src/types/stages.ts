@@ -2,7 +2,7 @@
  * stage0 – stage7 的响应形状。字段名照抄后端契约（`contracts/schema/api.py`），
  * 抓包证据在 `src/fixtures/backend_v1/`。
  */
-import type { Badge, Freshness, Mode, Severity, InboxKind } from '@/constants/vocabulary'
+import type { Badge, Freshness, Severity, InboxKind } from '@/constants/vocabulary'
 import type {
   Facts,
   Finding,
@@ -170,7 +170,6 @@ export interface TrimResolutionRequest {
 
 export interface TrimResolution {
   output_ordinal: number
-  mode: 'deep' | 'shallow'
   action: 'retain_pretrim'
   actor: string
   reason: string
@@ -384,6 +383,20 @@ export interface ReadingResponse {
 
 /* ------------------------------------------------- stage2 · 全局设定 */
 
+export interface GlobalSourceSpan {
+  text: string
+  start: number
+  end: number
+  normalized: string
+  recovery: 'exact' | 'normalized'
+}
+
+export interface GlobalFactEvidence {
+  chapter_ordinal: number
+  /** null 是正式的定位失败态，不等于没有 evidence 字段 */
+  source: GlobalSourceSpan | null
+}
+
 export interface GlobalAddress {
   surface: string
   by: NameRef
@@ -396,39 +409,70 @@ export interface GlobalCharacter {
   canonical: string
   name_distinctiveness: string
   role: string
+  role_evidence: GlobalFactEvidence
   /** 全量下发；剧透遮蔽是前端的纯展示行为（R-11.13） */
   fate: string | null
+  fate_evidence: GlobalFactEvidence | null
   address: GlobalAddress[]
 }
+
+export type GlobalRelationVisibility =
+  | { kind: 'public'; from_chapter: number }
+  | { kind: 'via_secret'; secret_id: string }
 
 export interface GlobalRelation {
   relation_id: string
   subject: NameRef
   predicate: string
+  predicate_evidence: GlobalFactEvidence
   object: NameRef
+  visibility: GlobalRelationVisibility
   valid_from_chapter: number
-  valid_to_chapter: number | null
+  valid_through_chapter: number | null
 }
 
 export interface GlobalWorldRule {
   rule_id: string
   kind: string
-  versions: { effective_from_chapter: number; desc: string }[]
+  versions: {
+    effective_from_chapter: number
+    desc: string
+    desc_evidence: GlobalFactEvidence
+  }[]
+}
+
+export interface GlobalKnowledgeEvent {
+  subject_kind: 'character' | 'group'
+  subject: NameRef
+  known_from_chapter: number
+  evidence: GlobalFactEvidence
 }
 
 export interface GlobalSecret {
   secret_id: string
   fact: string
-  known_by: NameRef[]
+  fact_evidence: GlobalFactEvidence
+  /** 同一个复合真相被拆成多条时的归组键；独立的秘密是 null */
+  group_id: string | null
+  knowledge_events: GlobalKnowledgeEvent[]
+  /** ⚠ 必须连它一起读：cold 与「foreshadowed 但章号被裁空」在 setup_chapters 上同形 */
+  setup_kind: 'cold' | 'foreshadowed'
   setup_chapters: number[]
+  /** 逐章剧透闸门按它开，不是按 reader_reveal_chapters 的最小值 */
+  first_reveal_chapter: number
+  /** 全部揭示章，含后续 confirm */
   reader_reveal_chapters: number[]
 }
 
 export interface Stage2Global {
   sid: string
   title: string
-  /** 键是那两个固定中文 key（时代背景 / 世界观） */
-  setting: Record<string, string>
+  setting: {
+    时代背景: string
+    era_evidence: GlobalFactEvidence
+    世界观: string
+    worldview_evidence: GlobalFactEvidence
+  }
   characters: GlobalCharacter[]
   relations: GlobalRelation[]
   world_rules: GlobalWorldRule[]
@@ -443,6 +487,7 @@ export interface Stage2Global {
       dimension: string
       change_type: string
       trajectory: string
+      trajectory_evidence: GlobalFactEvidence
     }[]
   }
   /** 全屏解引用失败的总数（读数，不是判定） */
@@ -471,8 +516,18 @@ export type GlobalReviewKind =
   | 'name_distinctiveness'
   | 'address_context'
   | 'world_rule_kind'
+  | 'character_set_complete'
+  | 'relation_set_complete'
   | 'world_rule_set_complete'
   | 'secret_set_complete'
+  | 'role'
+  | 'fate'
+  | 'relation'
+  | 'knowledge_event'
+  | 'setting_fact'
+  | 'secret_setup'
+  | 'conflict_partition'
+  | 'arc_analysis'
 
 export interface GlobalReviewItem {
   item_id: string
@@ -712,7 +767,6 @@ export interface ChapterSegment {
 }
 
 export interface Draft {
-  mode: Mode
   relpath: string
   invalid: boolean
   round: number
@@ -736,12 +790,17 @@ export interface Draft {
 export interface DraftIndexRow {
   output_ordinal: number
   budget_chars: number | null
-  modes: Mode[]
-  invalid_modes: Mode[]
-  dup: boolean
+  has_draft: boolean
+  invalid: boolean
   chars: number | null
   overlap_excl_verbatim: number | null
   freshness: Freshness | null
+}
+
+export interface Stage5TrimAudit {
+  output_ordinal: number
+  reason: string
+  context: string
 }
 
 export interface Stage5Response {
@@ -754,16 +813,20 @@ export interface Stage5Response {
   written: number
   invalid: number
   missing: number[]
-  duplicates: number[]
+  /** 旧 deep/shallow 路径只报兼容性，不混入 canonical 单臂稿。 */
+  legacy_incompatible: boolean
+  legacy_paths: string[]
   chapters: number[]
   ordinal: number
   index: DraftIndexRow[]
   source_text: string | null
   source_chars_raw: number | null
   materials: Materials | null
-  /** 一章常常只有 1 份成稿（另一条臂没写这一章） */
+  /** 一章至多一份现役正式稿；旧轮次在服务端归档。 */
   drafts: Draft[]
   invalid_drafts: Draft[]
+  /** 本章仍待人工确认“保留未裁剪正文”的超上限事实；null = 无待销账项。 */
+  trim_audit: Stage5TrimAudit | null
   ctx_state: ArtifactState
 }
 
@@ -771,7 +834,6 @@ export interface Stage5Response {
 
 export interface ReviewIndexRow {
   output_ordinal: number
-  mode: Mode | null
   round: number | null
   chars: number | null
   budget_chars: number | null
@@ -785,7 +847,6 @@ export interface ReviewIndexRow {
 export interface ReviewChapter {
   output_ordinal: number
   findings: Finding[]
-  mode: Mode | null
   chars: number | null
   budget_chars: number | null
   round: number | null
@@ -803,6 +864,8 @@ export interface ReviewResponse {
   sid: string
   title: string
   review_seq: number
+  review_state: 'fresh' | 'stale' | 'unknown' | 'legacy_incompatible'
+  review_reasons: string[]
   sources: Sources
   /** 全书按 sev 现数，四键恒在 —— 不读产物的稀疏 counts */
   finding_counts: Record<Severity, number>

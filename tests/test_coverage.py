@@ -36,8 +36,10 @@ DOC = reqs.load()
 #: ⇒ 改成逐节精确：加/删需求时**必须显式改这里的数字**（那正是它的用途），
 #: 而一次预期外的漂移会精确报出「哪一节从 N 条变成 M 条」，不用去猜是哪里坏了。
 _R_SECTION_SIZES = {
-    'R-0': 16, 'R-1': 16, 'R-2': 23, 'R-3': 29, 'R-4': 18,
-    'R-5': 26, 'R-6': 11, 'R-7': 34, 'R-8': 22, 'R-9': 26,
+    # R-2 于 2026-08-24 增至 28：`R-2.19` 显式 relation 可见性、`R-2.20`
+    # 自由事实 locator → 代码唯一回取、`R-2.21` canon 章引用全书范围。
+    'R-0': 16, 'R-1': 16, 'R-2': 28, 'R-3': 29, 'R-4': 18,
+    'R-5': 26, 'R-6': 11, 'R-7': 37, 'R-8': 22, 'R-9': 26,
     'R-10': 33, 'R-11': 14, 'R-12': 11, 'R-13': 8, 'R-14': 7,
 }
 
@@ -45,7 +47,8 @@ _R_SECTION_SIZES = {
 def test_doc_parses_and_has_all_three_families():
     q, b = DOC.of_kind('Q'), DOC.of_kind('B')
     assert len(q) == 12, f'Q 应有 12 条，实得 {len(q)}'
-    assert len(b) == 22, f'B 应有 22 条，实得 {len(b)}'
+    # 2026-08-23 新增 B-23（：守卫自陈排除掉的样本此后没被判过）。
+    assert len(b) == 23, f'B 应有 23 条，实得 {len(b)}'
 
 
 def test_every_r_section_parses_to_exactly_the_expected_size():

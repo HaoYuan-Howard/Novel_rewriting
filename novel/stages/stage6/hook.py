@@ -38,6 +38,7 @@ from contracts.schema.stage6 import (
     HookCandidateRetryResponse, HookProvenance, HookResponse, Mech,
 )
 from novel import paths, prov, wontfix
+from novel.core.evidence import without_global_evidence
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
@@ -88,12 +89,14 @@ class _Upstreams:
 
         self.gg, self.style, self.wc = gg, style, wc
         self.src_hook: str = (hook_copy.text or '').strip()
-        self.grounding_raw: dict = gg.model_dump(by_alias=True)
+        projected = without_global_evidence(gg.model_dump(by_alias=True))
+        assert isinstance(projected, dict)
+        self.grounding_raw: dict = projected
         self.style_raw: dict = style.model_dump(by_alias=True)
-        self.arc: dict = gg.arc.model_dump(by_alias=True)
-        self.secrets: list[dict] = [s.model_dump(by_alias=True) for s in gg.canon.secrets]
-        self.characters: dict = {
-            cid: c.model_dump(by_alias=True) for cid, c in gg.entities.characters.items()}
+        self.arc: dict = projected.get('arc') or {}
+        self.secrets: list[dict] = ((projected.get('canon') or {}).get('secrets') or [])
+        self.characters: dict = (
+            (projected.get('entities') or {}).get('characters') or {})
         self.upto: int = lead_upto(self.arc)
         lead, missing, self.judged = lead_drafts(store, self.upto)
         self.mat = prompts.build_material(
@@ -180,6 +183,12 @@ def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Out
 
 def _judged_drift(art: Hook, up: _Upstreams) -> tuple[list[str], list[str]]:
     """成稿有没有在这份文案之后改过。返回 `(改过的, 已缺失的)`。"""
+    legacy = sorted(rel for rel in art.judged
+                    if rel.startswith(('stage5/deep/', 'stage5/shallow/')))
+    if legacy:
+        raise TerminalState(
+            f'legacy_incompatible：stage6/hook.json 的 judged 仍绑定旧 Stage5 路径 {legacy}。'
+            '不能把它退化成 missing 或静默触发付费重建；旧 base 保持只读')
     stale: list[str] = []
     missing: list[str] = []
     for rel, stored in art.judged.items():

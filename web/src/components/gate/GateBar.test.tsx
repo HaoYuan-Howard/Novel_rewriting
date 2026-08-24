@@ -18,14 +18,13 @@ import { GateBar } from './GateBar'
  */
 
 const doc: ApprovalDoc = {
-  v: 1,
+  v: 2,
   sid: 'book-1',
   gate: { s0: true, s1: true, s2: true, s3: false, s4: false, s5: false, s6: false, s7: false },
   seen: { read: true, global: true },
-  deep: [],
   writing: false,
   spawns: {
-    s4: [{ kind: 'stage5.write', label: '写作', extra: null, mode: null }],
+    s4: [{ kind: 'stage5.write', label: '写作', extra: null }],
   },
 }
 
@@ -41,7 +40,6 @@ const enums = {
     kind: 'stage5.write',
     label: '写作',
     extra: null,
-    mode: null,
     paid: true,
     free_flag: null,
     writes_disk: true,

@@ -1,34 +1,37 @@
 # 现役 schema 语料硬验收 manifest
 
-最终硬验收会在下方 build/verify 命令给出的路径生成一份已提交、不含正文的语料身份清单，
-覆盖冻结的两本书：`2019402867061048656`（17 章）与 `1668963766200045568`（25 章），
-要求完整 Stage0～7 正式产物（含最终成书）。它不含书名、原文、prompt、
-生成正文，只逐文件记录 SHA-256 与验收身份：
+本契约为两本冻结验收书建立一份可提交、无正文的 current-schema 身份清单：
+`2019402867061048656`（17 章）与 `1668963766200045568`（25 章）。书目与付费节点唯一落点是
+`contracts/schema/corpus.py::CURRENT_CORPUS_BOOKS` / `::CURRENT_CORPUS_PAID_NODES`，本文不再
+手抄第二张节点表。
 
-- 每本书的 `sid`、归一化源 SHA-1 与章数；
-- Stage0～7 每份预期产物路径，及每份 JSON 产物的精确 schema version；
-  ⚠ **成书那一条登记的是模板 rel `stage7/{title}_rewriting.txt`，不是盘上那个文件名。**
-  盘上它按书名命名，而本清单**不含书名**（它要能提交进 git）⇒ 写具体文件名就会泄漏
-  这份清单承诺不含的东西，且 `CorpusBookEntry` 里也没有书名字段可供校验方复原。
-  记模板既保住那条承诺，又让「哪一份产物」说得清；sha256 照旧取盘上那份实体的字节。
-  两侧的字面同取 `contracts/artifacts.py::ARTIFACT_PATHS['stage7.book']`，不各写一份；
-- 冻结的产地代码身份与精确重建命令；
-- 每本书的账本调用数、token 汇总、provider 缓存命中/未命中覆盖、模型/思考档位分布与结果；
-  provider 为 `null` 与显式上报为零分别计数；
-- 精确的 pytest skip allowlist（`nodeid` 与理由）。
+manifest 不含书名、原文、prompt 或生成正文，只记录：
 
-> 实现在 `tests/corpus_manifest.py`。
-> 它不是一次性脚本：`tests/conftest.py` 在模块级 import 它的 `verify`，
-> `--require-corpus` 那条闸就是它把着的 ⇒ 它是**测试基础设施**，
-> 与 `tests/corpus.py` / `tests/sandbox.py` 同族。
+- sid、归一化源 SHA-1 与章数；
+- Stage0～7 预期产物路径、每份 JSON 的精确 current schema version 与文件 SHA-256；
+- 冻结产地代码身份、逐节点 production dispatch；
+- 每本书的 ledger 行数、wire / local-cache 分区、outcome、模型、思考档位与 token 覆盖；
+- 精确 pytest skip allowlist（nodeid + reason）。
 
-只针对隔离的输出目录 build 与 verify：
+成书在 manifest 中登记模板 rel `stage7/{title}_rewriting.txt`，但 SHA-256 取盘上按书名命名的
+实体字节；这样既不泄漏书名，又与 `contracts/artifacts.py::ARTIFACT_PATHS['stage7.book']`
+保持同一落点。
+
+Stage5 current 盘面必须恰有 `stage5/ch01.json`～`stage5/chNN.json` 与
+`stage5/draft.md`、`stage5/review_1.json`；不得出现旧 `stage5/deep|shallow/` 目录来替代
+canonical 章。正式章为 schema v2，Review 为 schema v2；版本逐份从 registry 现算，不能手补
+marker 冒充 current producer。
+
+## 生成与验证
+
+只对隔离输出、独立空本地缓存执行：
 
 ```powershell
 conda run -n novel_refactor python -m tests.corpus_manifest build `
   --base <isolated-current-corpus> `
   --output docs/corpus/current_schema_manifest.json `
-  --command "<exact rebuild command>" `
+  --command "<production dispatch 1>" `
+  --command "<production dispatch ...>" `
   --skip-file <recorded-skips.json>
 
 conda run -n novel_refactor python -m tests.corpus_manifest verify `
@@ -36,34 +39,59 @@ conda run -n novel_refactor python -m tests.corpus_manifest verify `
   --manifest docs/corpus/current_schema_manifest.json
 ```
 
-硬验收的调用方式：
+每条 command 必须恰含一次：
+
+```text
+-m novel.cli run <paid-node> <sid> --base <isolated-current-corpus> --yes
+```
+
+所有节点（包括 `stage5.write` 与 `stage6.semantic`）的冻结 flags 都恰为 `--base --yes`；
+`stage5.write` 不再带 `--deep` / `--shallow-rest` / `--mode`，`stage5.semantic` 已退役。
+两书 × 七个付费节点 = 当前 14 条 dispatch，但校验器按两个 current 元组现算条数与顺序，
+不信本文数字。`preview`、`mark` 或缺少 `run` 的展示命令不能冒充 production dispatch。
+
+最终硬验收显式指定**盘面与 manifest 两个身份**：
 
 ```powershell
 $env:NOVEL_OUTPUT='<isolated-current-corpus>'
+$env:NOVEL_CORPUS_MANIFEST='docs/corpus/current_schema_manifest.json'
 conda run -n novel_refactor python -m pytest --require-corpus
 ```
 
-`--require-corpus` 会覆盖默认的省钱 marker 表达式，同时收集 `corpus` 与非 `corpus` 两类测试；
-它拒收缺环境变量或缺 manifest、书目/产物减少、源文本或章数漂移、schema version 漂移、ledger
-漂移，以及任何未精确列在 manifest 里的 skip。ledger 的行分区（`wire + local-cache`、结果、
-模型与思考档位）必须逐一闭合；每个 token 列分别记录「上报/为空」的行数，上报行数为零的列
-不能声称有非零总数。pytest 的 `xfail` 不会被静默改记成 allowlist 里的一项 skip。
+`--require-corpus` 覆盖默认的省钱 marker，实际收集 `corpus or not corpus`；它关闭式拒绝缺环境
+变量 / manifest、书目或产物减少、源 hash / 章数 / schema / 文件字节 / ledger 漂移，以及任何未
+精确列入 manifest 的 skip。ledger 必须满足 `wire_attempts + local_cache_hits == rows`，current
+corpus 还要求 local cache hit 为 0、每个 dispatch 节点均有非零 wire 行；每个 token 列分别记录
+reported/null 行数，分母不闭合就失败。
 
 manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 14 条真实
 付费 production dispatch：每书各一条 Stage2 global/blueprint、Stage4、Stage5 write、
 Stage6 hook/semantic、Stage7 rename；Stage3 v2 是免费机械节点，不进入付费 dispatch，
 但仍须在 required artifacts 中存在 current v2。`stage6.semantic` 只带 `--base --yes`
-（`--advisory` 已随自动放行门一并删除），write 固定 `--deep 1,2,3 --shallow-rest`。
+（`--advisory` 已随自动放行门一并删除）；canonical `stage5.write` 也只带 `--base --yes`，
+默认补齐当前计划的全部缺章。
 ledger 必须对两书、七个付费节点逐一有非零记录并与这 14 条命令对账。
 ⚠ 这里的 14 = 2 书 × 7 付费节点，**现算不写死**——它曾因 Stage5 semantic 退役从 18
 降为 16，又因 Stage3 v2 免费化降为 14。条数以 `contracts/schema/corpus.py` 的
 `CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES` 为准。`preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
 
-语料 JSON 的盘上原始 `_schema_version` 必须直接等于 artifact registry 当前版本。这道闸**独立于
-`decode_artifact`**：盘面清点要的是盘上那个数字，不是解码器愿意接受的那个数字。（本仓现已没有
-迁移机制；这条闸原本防的是「迁移之后冒充 current」，梯子拆掉后它继续守住直比。）skip
-allowlist 不能收录“缺语料 / missing corpus / 0 collected”一类候选，且硬验收若实际收集到
-0 条 corpus 测试会失败。
+finalise manifest 时可用 `--record-corpus-skips <path>` 收集候选 allowlist；普通测试不自动记录。
+allowlist 禁止掩盖 missing corpus、未设 `NOVEL_OUTPUT` 或 0 collected，xfail 也不能静默改记为
+skip。
 
-finalise manifest 时用 `--record-corpus-skips <path>` 采集候选 allowlist；这个记录动作是
-显式的，普通测试跑不会自动开启。
+## TODO-21 边界
+
+截至当前活动待办，默认目标 docs/corpus/current_schema_manifest.json 尚未由隔离双书现役重跑生成，
+TODO-21 **未闭合**。因此：
+
+- 默认 pytest 或任何“非 corpus 回归”通过数字都不能称为“全量绿”；
+- 历史双臂 Stage5 的 31 章盘面、旧 schema 文件与旧 ledger 不能用来 build current manifest；
+- 只有隔离双书从 producer 重建、manifest 提交、上述 `--require-corpus` 命令通过后，才能报告
+  current-schema 语料硬验收完成。
+
+这份 manifest 只证明现役全链盘面闭合，不比较 Stage5 的旧 event-list 与现役 beat-material
+写作契约，也不能证明后者在质量、成本或速度上胜出。Stage5 消费 Stage1～4 上游；全链重跑的
+读数不能单独归因给 Stage5。
+
+实现落点为 `tests/corpus_manifest.py`；`tests/conftest.py` 在 `--require-corpus` 时调用同一
+`verify`，所以它是长期测试基础设施，不是一次性脚本。

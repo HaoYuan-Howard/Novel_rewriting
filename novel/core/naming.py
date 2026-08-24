@@ -74,9 +74,10 @@ def spoiler_names_of(gg: GlobalGrounding, names: frozenset[str]) -> frozenset[st
         return frozenset()
     out: set[str] = set()
     for s in gg.canon.secrets:
-        rev = [e.chapter for e in s.reader_reveal_events if isinstance(e.chapter, int)]
         # 揭示章 > 1 才算「读者还没知道」——第 1 章就揭示的秘密写进 voice 不是剧透。
-        if rev and min(rev) <= 1:
+        # ⚠ 判的是**首次**揭示章（`Secret.first_reveal`）：后续 `confirm` 事件说的是
+        #   「又提了一次」，与「读者第一次知道」无关。
+        if s.first_reveal <= 1:
             continue
         out |= {n for n in names if n in s.fact}
     return frozenset(out)

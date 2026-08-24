@@ -61,33 +61,45 @@ def test_the_mutex_key_is_computed_in_exactly_one_place():
     assert J.active_key(SID, 'stage3.style') == SID
 
 
-def test_the_two_writing_arms_get_separate_keys_but_one_arm_is_still_mutex():
-    """唯一的例外是**同一个节点的两个 mode 值**，不是「两个 kind」。"""
-    deep = J.active_key(SID, 'stage5.write', 'deep')
-    shallow = J.active_key(SID, 'stage5.write', 'shallow')
-    assert deep != shallow
-    assert J.active_key(SID, 'stage5.write', 'deep') == deep, '同一条臂仍然互斥'
-    assert deep != J.active_key(SID, 'stage3.style'), '别的节点不许与臂共用一个键'
+def test_every_job_for_one_book_uses_the_same_key():
+    """Stage5 单臂后没有按写作臂并发的例外。"""
+    want = J.active_key(SID, 'stage3.style')
+    assert J.active_key(SID, 'stage5.write') == want
 
 
-def test_composite_stage5_lock_conflicts_with_either_arm_but_arms_can_coexist():
-    reg = J.JobRegistry()
-    whole = J.active_key(SID, 'stage5.write', None)
-    deep = J.active_key(SID, 'stage5.write', 'deep')
-    shallow = J.active_key(SID, 'stage5.write', 'shallow')
-    reg.acquire(whole, 'whole')
-    with pytest.raises(J.JobConflict):
-        reg.acquire(deep, 'deep')
-    reg.release(whole, 'whole')
-    reg.acquire(deep, 'deep')
-    reg.acquire(shallow, 'shallow')
-    assert reg.holder(deep) == 'deep' and reg.holder(shallow) == 'shallow'
+def test_old_stage5_job_record_is_privately_decoded_without_public_mode(base):
+    raw = {
+        'job_id': 'legacy-deep', 'kind': 'started', 'ts': 1,
+        'start': {
+            'sid': SID, 'node': 'stage5.write', 'mode': 'deep', 'flags': [],
+            'steps': [s.model_dump(mode='json') for s in _steps()],
+            'python': '3.11', 'code': 'old', 'paid': False, 'writes': False,
+        },
+        'step_index': None, 'exit_code': None, 'note': None,
+    }
+    J.jobs_path(base).parent.mkdir(parents=True)
+    J.jobs_path(base).write_text(json.dumps(raw, ensure_ascii=False) + '\n', encoding='utf-8')
+
+    event = J.read_events(base)[0]
+    assert 'mode' not in JobStart.model_fields
+    assert 'mode' not in event.model_dump(mode='json')['start']
+    assert event.start is not None and event.start.node == 'stage5.write'
+    assert event.start.flags == []
+    assert event.start.steps[0].argv == ['legacy_incompatible']
 
 
-def test_only_the_writing_node_has_arms_in_the_key():
-    """⚠ 别顺手给别的节点加 mode——那会让它的键多一截而与释放那一侧分家。"""
-    armed = {n for n in NODES if ':' in J.active_key(SID, n, 'deep')}
-    assert armed == {'stage5.write'}
+def test_old_job_decoder_rejects_any_non_registered_mode():
+    raw = {
+        'job_id': 'bad-mode', 'kind': 'started', 'ts': 1,
+        'start': {
+            'sid': SID, 'node': 'stage5.write', 'mode': 'fast', 'flags': [],
+            'steps': [s.model_dump(mode='json') for s in _steps()],
+            'python': '3.11', 'code': 'old', 'paid': False, 'writes': False,
+        },
+        'step_index': None, 'exit_code': None, 'note': None,
+    }
+    with pytest.raises(ValueError, match='deep/shallow'):
+        J._decode_event(raw)
 
 
 def test_a_second_job_on_the_same_book_is_refused():

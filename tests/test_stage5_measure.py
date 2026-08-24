@@ -7,7 +7,7 @@ from functools import wraps
 
 import pytest
 
-from contracts.invariants import DEEP_OVERLAP_MAX
+from contracts.invariants import SOURCE_OVERLAP_MAX
 from novel.core.text import quote_count
 from contracts.schema.stage5 import Chapter
 from novel.stages.stage5 import measure as M
@@ -36,7 +36,7 @@ def _load_corpus() -> None:
     _READY = set(MAIN) & set(STYLE) & set(CTX)
     # 正式成稿；归档轮次不属于当前消费面。
     DRAFTS = [a for a in corpus.iter_artifacts()
-              if a.pattern == 'stage5/{mode}/ch{nn}.json' and '_rounds/' not in a.rel
+              if a.pattern == 'stage5/ch{nn}.json' and '_rounds/' not in a.rel
               and a.source_id in _READY]
     _CORPUS_LOADED = True
 
@@ -185,14 +185,20 @@ def test_overlap_reproduces_every_stored_value():
     ⇒ 过滤，并**留分母**：查了几本、几份，一份都不剩就按声明跳过，
     否则「一本当前的都没有」与「查过、都对得上」在报告上同形（LESSONS 第 2 条）。
     """
-    arms = ('stage5/deep/', 'stage5/shallow/')
-    fresh_books = {a.book_dir for a in DRAFTS if corpus.is_current(a.book_dir, *arms)}
+    rels_by_book = {
+        book: tuple(a.rel for a in DRAFTS if a.book_dir == book)
+        for book in {a.book_dir for a in DRAFTS}
+    }
+    fresh_books = {
+        book for book, rels in rels_by_book.items()
+        if rels and corpus.is_current(book, *rels)
+    }
     todo = [a for a in DRAFTS if a.book_dir in fresh_books]
     corpus.declared_dependency(
         bool(todo),
         needs=(f'至少一本成稿相对 stage4/writer_context.json 是当前的书'
                f'（{len({a.book_dir for a in DRAFTS})} 本候选里 0 本满足）'),
-        produced_by='stage5.write --mode deep', cost='付费')
+        produced_by='stage5.write', cost='付费')
 
     checked = 0
     for a in todo:
@@ -257,40 +263,40 @@ def test_budget_is_required_instead_of_guessed():
 # ── ⭐ 三、对白比：本项目效应量最大的一条跨书结论 ──────────────────────────
 
 @needs_corpus
-def test_dialogue_ratios_are_defined_per_current_mode():
-    """对白比逐章计算，模式只允许当前 deep/shallow。"""
-    ratios: dict[str, list[float]] = {'deep': [], 'shallow': []}
+def test_dialogue_ratios_are_defined_per_canonical_chapter():
+    """对白比逐章计算；单臂契约不再按 mode 分桶。"""
+    ratios: list[float] = []
     for a in DRAFTS:
         rec = corpus.load_current(a)
         entry = _ctx_of(a.source_id, rec['output_ordinal'])
         src_n = M.src_quote_count(entry or {}, _source_of(a.source_id))
         if src_n:
-            ratios[rec['mode']].append(quote_count(_chapter_text(rec)) / src_n)
-    assert all(value >= 0 for values in ratios.values() for value in values)
+            ratios.append(quote_count(_chapter_text(rec)) / src_n)
+    assert all(value >= 0 for value in ratios)
 
 
 @needs_corpus
-def test_overlap_is_a_ratio_and_every_deep_excess_carries_its_finding():
-    """重合率是逐章的 0..1 数；闭卷臂越上限的每一章都必须带上 `deep_overlap_high`。
+def test_overlap_is_a_ratio_and_every_excess_carries_its_finding():
+    """重合率是逐章的 0..1 数；越上限的每一章都必须带上 `source_overlap_high`。
 
-    ⚠ **上限不是闸。** `deep_overlap_high` 在判据表里是 `info`（`judges/stage5.py:229`），
-    它的措辞说的是「这个数说明**这一章多半不是闭卷写的**（分工写反 / 开卷稿落进了
-    `deep/` 目录）」——那是一条要人去看的线索，不是一条拦落盘的规则。
-    本条原来直接断言 `value <= DEEP_OVERLAP_MAX`，于是它在**产品正常工作时**变红。
+    ⚠ **上限不是闸。** `source_overlap_high` 在判据表里是 `info`，
+    它只把逐章源文表面重合越线说出来，供人复核；不是一条拦落盘的规则。
+    本条原来直接断言 `value <= SOURCE_OVERLAP_MAX`，于是它在**产品正常工作时**变红。
     ⇒ 改守「越线必出声」：0..1 的取值域仍然是硬的（那是度量自己的契约）。
     """
-    per: dict[str, list[float]] = {'deep': [], 'shallow': []}
+    values: list[float] = []
     silent: list[str] = []
     for a in DRAFTS:
         rec = corpus.load_current(a)
         value = rec.get('overlap_excl_verbatim')
         if value is None:
             continue
-        per[rec['mode']].append(value)
-        if rec['mode'] == 'deep' and value > DEEP_OVERLAP_MAX:
-            if not any(w.startswith('[deep_overlap_high]') for w in (rec.get('warns') or [])):
-                silent.append(f'{a.source_id[-4:]}/{a.rel} 重合 {value} > {DEEP_OVERLAP_MAX}，'
-                              f'却没有 [deep_overlap_high]')
-    assert all(0 <= value <= 1 for values in per.values() for value in values), \
+        values.append(value)
+        if value > SOURCE_OVERLAP_MAX:
+            if not any(w.startswith('[source_overlap_high]')
+                       for w in (rec.get('warns') or [])):
+                silent.append(f'{a.source_id[-4:]}/{a.rel} 重合 {value} > '
+                              f'{SOURCE_OVERLAP_MAX}，却没有 [source_overlap_high]')
+    assert all(0 <= value <= 1 for value in values), \
         '重合率不是 0..1 的比例——度量自己的取值域破了'
     assert not silent, ('闭卷越线却没出声的章：\n  ' + '\n  '.join(silent[:8]))

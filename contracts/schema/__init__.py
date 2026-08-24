@@ -16,7 +16,7 @@ contracts.schema —— 产物 schema 的机器形态。
 盘上语料体检、`/api/novels/:sid/...` 的响应类型、将来 `tools/emit_json_schema.py`
 产前端 TS 类型，三个消费方读的是**同一张表**。手抄第二份的下场见 `Q-6`。
 
-【版本：没有迁移机制；除一次显式登记的破坏外全表恒 v1】
+【版本：没有迁移机制；除显式登记的破坏外全表恒 v1】
 ⚠⚠ 这里曾有一梯 v2→v3 migration（5 张 `MIGRATE_*` 表 + 6 个迁移函数），删除那天的实测：
 **登记了 migration 的 8 个家族在盘上一份低版本文件都没有**，而盘上唯二的 v2 文件
 （两本书的 `stage6/semantic_1.json`）恰好属于**刻意不登记 migration** 的那一族
@@ -51,7 +51,6 @@ from contracts.schema.api import (
     ApprovalAction,
     ApprovalBackfillResult,
     ApprovalDoc,
-    DeepSelectionRequest,
     DriftItem,
     ErrorBody,
     HookCopyView,
@@ -137,11 +136,13 @@ from contracts.schema.stage1 import (
     Stage1Warning,
 )
 from contracts.schema.stage2 import (
-    Address, AddressContextPatch, Arc, ArcTrack, Beat, Blueprint, Canon,
+    Address, AddressContextPatch, Arc, ArcTrack, ArcTrackPatch, Beat, Blueprint, Canon,
     ChapterBlueprints, ChapterBlueprintsResponse, Character, CharacterEnumPatch,
-    CharacterAddressReplacement, ConflictStage, Entities, GlobalEdit, GlobalGrounding,
-    GlobalGroundingResponse, Hinge, Narration, ReaderRevealEvent, Relation,
-    RoleSplitResponse, Secret, SecretPatch, Setting, SourceSpan, WorldRule,
+    CharacterAddressReplacement, CharacterRef, ConflictStage, Entities, EvidenceLocator,
+    FactEvidence, GlobalEdit, GlobalGrounding, GlobalCharacterPatch,
+    GlobalGroundingResponse, GroupRef, Hinge, KnowledgeEvent, KnowledgeEventResponse,
+    Narration, ReaderRevealEvent, Relation, RelationPatch, RelationVisibility,
+    RoleSplitResponse, Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
     WorldRulePatch, WorldRuleVersion,
 )
 from contracts.schema.stage3 import Measurable, StyleGrounding, StyleProvenance
@@ -211,10 +212,10 @@ class DecodedArtifact:
     version: int
 
 
-#: **产物相对路径 → 当前契约。** 路径里的 `{n}` / `{mode}` 是占位符。
+#: **产物相对路径 → 当前契约。** 路径里的 `{n}` / `{nn}` 是占位符。
 #: 这是路径、模型与 schema version 的唯一权威表；`ARTIFACTS` 是模型投影。
 #:
-#: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/**/draft.md` / 成书 `stage7/{title}_rewriting.txt`
+#: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/draft.md` / 成书 `stage7/{title}_rewriting.txt`
 #: ——它们不是 JSON，schema 是**字节形态**，守卫在写盘口那一层。
 #:
 #: ⚠ **一条 `migrations=` 都没有**，将来也不许有。这不是「还没来得及写」，
@@ -239,13 +240,18 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 2),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
     STAGE1_PARTITION_REPORT: ArtifactSpec(PartitionReport, 2),
-    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding),
+    # ⚠ 两次形状破坏：v2 是 secret 原子时间线；v3 是显式 relation visibility、
+    #   knowledge_events、代码回取事实证据与 valid_through 改名。破坏与重建责任登记在
+    #   `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
+    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding, 3),
     STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),
     STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
-    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit),
+    # ⚠ v2：人工决策随 GlobalGrounding v3 改成 locator/knowledge/visibility typed 面；
+    #   旧 v1 决策不能推断知情时点或证据，必须由人按新契约重写，不做迁移。
+    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 2),
     # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
     #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
     #   v1.1/v2/v3.1 三值，升 v3。两次都会让旧信封**读不进来**。
@@ -266,11 +272,18 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   ——**换一个模型就等于说它是另一种东西**，而它恰恰要回答
     #   「计划什么都不改时，写手手里到底有什么」。
     STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext),
-    STAGE5_CHAPTER: ArtifactSpec(Chapter),
+    # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
+    #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；
+    #   current 产物由 `stage5.write` 重建。
+    STAGE5_CHAPTER: ArtifactSpec(Chapter, 2),
     STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision),
-    STAGE5_REVIEW: ArtifactSpec(Review),
-    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit),
-    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution),
+    # ⚠ Review 的章行同步删除 `mode/mode_dir`；由 `stage5.review`
+    #   零成本重建，旧报告不伪装成当前判据产地。
+    STAGE5_REVIEW: ArtifactSpec(Review, 2),
+    # ⚠ trim 两份 hash-bound 产物删除目录臂字段，改绑
+    #   canonical 章路径；新的超长章由写作/重判路径重建。
+    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit, 2),
+    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution, 2),
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
     #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
@@ -289,7 +302,6 @@ ARTIFACTS: dict[str, type[BaseModel]] = {
 def artifact_regex(template: str) -> re.Pattern[str]:
     """把注册表模板编译成语料、运行时共用的相对路径路由。"""
     escaped = re.escape(template)
-    escaped = escaped.replace(r'\{mode\}', r'(?:deep|shallow)')
     escaped = escaped.replace(r'\{nn\}', r'\d+')
     escaped = escaped.replace(r'\{n\}', r'\d+')
     return re.compile(f'^{escaped}$')
@@ -412,7 +424,7 @@ __all__ = [
     'Stage1Segment', 'Stage1Segments', 'Stage1ChapterRow', 'Stage1Chapters',
     'HookCopyView', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'LogStreamEvent', 'PreviewRequest', 'ErrorBody',
-    'ApprovalAction', 'ApprovalBackfillResult', 'ApprovalDoc', 'DeepSelectionRequest',
+    'ApprovalAction', 'ApprovalBackfillResult', 'ApprovalDoc',
     'InboxItem', 'InboxView', 'TrimResolutionRequest', 'NameMapApproveRequest',
     'ResidualAdoptionRequest',
     # 八层
@@ -427,7 +439,10 @@ __all__ = [
     'NoisyDuplicateWarning',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'ReaderRevealEvent',
-    'GlobalEdit', 'SecretPatch', 'WorldRulePatch', 'CharacterEnumPatch',
+    'EvidenceLocator', 'FactEvidence', 'CharacterRef', 'GroupRef', 'KnowledgeEvent',
+    'KnowledgeEventResponse', 'RelationVisibility',
+    'GlobalEdit', 'SecretPatch', 'WorldRulePatch', 'RelationPatch', 'SettingPatch',
+    'ArcTrackPatch', 'GlobalCharacterPatch', 'CharacterEnumPatch',
     'AddressContextPatch', 'CharacterAddressReplacement', 'Arc', 'ConflictStage',
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',

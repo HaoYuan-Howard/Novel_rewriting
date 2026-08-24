@@ -377,3 +377,32 @@ Flash 的质量保险，v1.1 则是未来模型能力足够时仍有价值的快
 落点：`novel/cli/main.py::_cmd_run`、`novel/stages/stage2/global_review.py::require_approved`、
 `::review_workpack`、`novel/store.py::ArtifactStore.read_external`、
 `novel/stages/stage7/assemble.py`。
+
+## 29. 会话边界也是证据契约，必须在首个动作前物化
+
+同一个 sid 可以被续跑、重跑和复验多次；只按 sid 汇总 append-only 账本或信标，会把历史调用与
+退出序列混进本轮。代码指纹若等到收尾才读取，起点与终点天然相等，即使中途换过代码也能伪装成
+“同版完成”。这两种错误都不崩溃，只会生成一份数字齐全、却描述错对象的终审证据。
+
+因此在首个动作前一次性固化 `started_at` 与 `start_code_version`，每个写盘/付费步骤前后核对后者；
+账本和信标先按 sid，再按起始时间切出本次会话，同 sid 累计值另列且不相加。验收器必须要求调用方
+交出起始指纹，不能用结束时当前值作默认。临时编辑只有恢复到原指纹才允许续跑；稳定落到新指纹
+就是另一条 run。
+
+落点：`.claude/skills/novel-pipeline-operator/scripts/session_preflight.py::capture`、
+`.claude/skills/novel-pipeline-operator/scripts/run_step.py::_code_is_current`、
+`.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py::collect`、
+`novel/orchestrator/delivery.py::assess`。
+
+## 30. 旁路决定账必须在每个读出口叠加，不能只在重新生成时烘焙
+
+`wontfix`、人工 resolution 这类独立决定账通常刻意不重写原报告。若 producer 生成报告时读过一次账，
+但 `check-only`、inbox 或 API 只读旧报告本体，那么“决定已落盘”与“系统仍显示 pending”会同时成立；
+用户必须额外重跑一次无关的 producer 才能让决定生效。append-only 账是真的，读出口却活在旧快照里。
+
+修复原则是在所有当前视图必经的最低读边界，以稳定身份键把最新旁路账叠加到报告投影；不删除原结论，
+只更新 `actionable` 与审计标记。回归必须覆盖“生成报告 → 落决定账 → 立即 check/inbox”，不能只测
+“再生成一份报告后能看见”，后者正好绕过了缺陷。
+
+落点：`novel/stages/stage5/review.py::_report_of_review`、
+`novel/wontfix.py::applied`、`tests/test_stage5.py::test_check_only_overlays_a_wontfix_written_after_the_latest_review`。

@@ -49,10 +49,7 @@ from contracts.invariants import (
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 
-#: ⚠ 从 stage2 借的**不是拷贝，是同一个类**：`facts.setting` 是 stage2 那两个中文键的
-#: **字节级原样透传**（实测 31/31 章 mismatch 0）。各定一份就是第二个落点。
-#: ⚠ 但**只借这一个**：`facts.address[].by` 看起来也该借，实际不能——见 `CtxAddress.by`。
-from contracts.schema.stage2 import BEAT_ID_PATTERN, Setting
+from contracts.schema.stage2 import BEAT_ID_PATTERN
 
 #: 源内容单元编号 `pNN_NN` 的形状。**`p` 前缀与 stage2 的 `b` 分开**——
 #: 一个是源 beat、一个是由若干源 beat 组成的拍，同名不同义是最好的漂移温床
@@ -685,6 +682,18 @@ class CtxAddress(StrictModel):
     context: Literal[ADDRESS_CONTEXT]
 
 
+class CtxSetting(StrictModel):
+    """Stage4 写手面只保留两条 claim，不携带 Stage2 的原文证据。
+
+    两个中文 alias 仍与 Stage2 盘上字节完全同形；这里必须是独立的**消费投影**类型，
+    因为 GlobalGrounding v3 的 ``Setting`` 另有 ``*_evidence`` 必填格，而证据既不属于
+    写手故事材料，也已在组装入口被刻意剥掉。复用 producer 模型会让合法投影反而拒收。
+    """
+
+    era: str = Field(alias='时代背景', min_length=1)
+    worldview: str = Field(alias='世界观', min_length=1)
+
+
 class CtxFacts(StrictModel):
     """六块，全部逐章投影。
 
@@ -694,8 +703,8 @@ class CtxFacts(StrictModel):
     **拿 grep 审这一块，默认结论是错的。**
     """
 
-    #: 两个**中文键**，原样透传自 stage2（31/31 章）。逐章闸门只挡**转抄式**泄底。
-    setting: Setting
+    #: 两个**中文键**的 claim 投影。Stage2 evidence 明确不进入 writer context。
+    setting: CtxSetting
 
     relations: list[CtxRelation]
     secrets: list[CtxSecret]

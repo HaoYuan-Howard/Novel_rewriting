@@ -22,20 +22,18 @@ from __future__ import annotations
 from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE4_WRITER_CONTEXT
 
 import os
-from typing import Any
-
-from contracts.invariants import ANCHOR_COVERAGE_WARN, DEPTH_MODES, SEVERITY
+from contracts.invariants import ANCHOR_COVERAGE_WARN, SEVERITY
 from contracts.schema.api import (
     DraftAlignRow, DraftAlignView, DraftView, MaterialView,
     ReviewChapterView, ReviewIndexRow, ReviewView,
-    Stage5IndexRow, Stage5View,
+    Stage5IndexRow, Stage5TrimAuditView, Stage5View,
 )
 from contracts.schema.stage1 import MainText
 from novel import paths, prov
-from novel.errors import ArtifactUnreadable, UpstreamMissing
+from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
 from novel.orchestrator.state import artifact_state, planned_chapters, readonly_ctx
-from novel.stages.stage5 import review
-from novel.stages.stage5.measure import load_drafts
+from novel.stages.stage5 import review, trim_resolution
+from novel.stages.stage5.measure import legacy_stage5_paths, load_drafts
 from novel.stages.stage5.prompts import build_material, target_band
 from novel.store import ArtifactStore
 
@@ -61,6 +59,7 @@ def stage5_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage5V
     ctx_state = artifact_state(store, CTX_REL)
     text_of = _source_text_of(store)
     by_ord, invalid_rels, _judged = load_drafts(store)
+    legacy_paths = [*legacy_stage5_paths(store), *review.legacy_versioned_paths(store)]
 
     planned_list = planned_chapters(store)
     chapters = sorted(set(planned_list or sorted(text_of)) | set(by_ord))
@@ -72,22 +71,34 @@ def stage5_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage5V
 
     materials = None
     if entry is not None and book is not None:
-        mat = build_material(entry, book, with_source_text=False)
+        mat = build_material(entry, book)
         materials = MaterialView(blocks=list(mat.blocks), chars=len(mat.given),
                                  writer_target=target_band(entry))
 
     invalid_by_ord = _invalids_by_ord(invalid_rels)
-    index = [_index_row(store, o, by_ord.get(o, []), invalid_by_ord.get(o, []),
+    index = [_index_row(store, o, by_ord.get(o), invalid_by_ord.get(o, []),
                         entries.get(o))
              for o in chapters]
 
     source_text = text_of.get(ordinal)
-    drafts = [_draft_view(store, rec, invalid=False,
-                          source_text=source_text, entry=entry)
-              for rec in _mode_sorted(by_ord.get(ordinal, []))]
+    rec = by_ord.get(ordinal)
+    drafts = ([_draft_view(store, rec, invalid=False,
+                           source_text=source_text, entry=entry)] if rec is not None else [])
     invalid_drafts = [v for rel in invalid_by_ord.get(ordinal, [])
                       if (v := _invalid_draft_view(store, rel, source_text, entry))
                       is not None]
+
+    trim_audit = None
+    # 旧版 trim 由 legacy 出口负责；current 集合只交出仍绑定当前正文、尚未销账的事实。
+    if not any('trim_' in path and ':v' in path for path in legacy_paths):
+        unresolved = trim_resolution.current_unresolved_audits(store)
+        if ordinal in unresolved:
+            audit, _audit_sha256 = unresolved[ordinal]
+            trim_audit = Stage5TrimAuditView(
+                output_ordinal=ordinal,
+                reason=audit.reason,
+                context=trim_resolution.verification_context(store, audit),
+            )
 
     written = sorted(by_ord)
     return Stage5View(
@@ -98,7 +109,8 @@ def stage5_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage5V
         written=len(written),
         invalid=len(invalid_rels),
         missing=[o for o in (planned_list or []) if o not in by_ord],
-        duplicates=[o for o, recs in sorted(by_ord.items()) if len(recs) > 1],
+        legacy_incompatible=bool(legacy_paths),
+        legacy_paths=legacy_paths,
         chapters=chapters,
         ordinal=ordinal,
         index=index,
@@ -107,6 +119,7 @@ def stage5_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> Stage5V
         materials=materials,
         drafts=drafts,
         invalid_drafts=invalid_drafts,
+        trim_audit=trim_audit,
         ctx_state=ctx_state,
     )
 
@@ -129,11 +142,6 @@ def _book_and_entries(rctx, store, ctx_state):
     return book, dict(book.chapters)
 
 
-def _mode_sorted(recs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    order = {m: i for i, m in enumerate(DEPTH_MODES)}
-    return sorted(recs, key=lambda r: order.get(r.get('_mode'), 99))
-
-
 def _invalids_by_ord(invalid_rels: list[str]) -> dict[int, list[str]]:
     out: dict[int, list[str]] = {}
     for rel in invalid_rels:
@@ -143,9 +151,7 @@ def _invalids_by_ord(invalid_rels: list[str]) -> dict[int, list[str]]:
     return out
 
 
-def _index_row(store, o: int, recs, invalid_rels: list[str], entry) -> Stage5IndexRow:
-    recs = _mode_sorted(recs)
-    primary = recs[0] if recs else None
+def _index_row(store, o: int, primary, invalid_rels: list[str], entry) -> Stage5IndexRow:
     fresh = None
     if primary is not None:
         fresh = artifact_state(store, primary['_relpath']).freshness
@@ -157,9 +163,8 @@ def _index_row(store, o: int, recs, invalid_rels: list[str], entry) -> Stage5Ind
     return Stage5IndexRow(
         output_ordinal=o,
         budget_chars=budget,
-        modes=[r['_mode'] for r in recs],
-        invalid_modes=sorted({rel.split('/')[1] for rel in invalid_rels}),
-        dup=len(recs) > 1,
+        has_draft=primary is not None,
+        invalid=bool(invalid_rels),
         chars=primary.get('chars') if primary is not None else None,
         overlap_excl_verbatim=(primary.get('overlap_excl_verbatim')
                                if primary is not None else None),
@@ -179,7 +184,6 @@ def _draft_view(store, rec: dict[str, Any], *, invalid: bool,
     p = rec.get('_provenance') or {}
     align, rows = _align(source_text, rec.get('text') or '', entry)
     return DraftView(
-        mode=rec['_mode'],
         relpath=rel,
         invalid=invalid,
         round=int(p.get('round') or 1),
@@ -209,7 +213,7 @@ def _invalid_draft_view(store, rel: str, source_text: str | None, entry) -> Draf
         return None
     rec = chapter.model_dump(by_alias=True)
     rec['text'] = chapter.text
-    rec['_relpath'], rec['_mode'] = rel, rel.split('/')[1]
+    rec['_relpath'] = rel
     return _draft_view(store, rec, invalid=True, source_text=source_text, entry=entry)
 
 
@@ -283,10 +287,14 @@ def review_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> ReviewV
     novel_dir = paths.resolve_novel_dir(base, sid)
     store = ArtifactStore(readonly_ctx(novel_dir, REVIEW_NODE, prov.code_version()))
 
-    got = review.latest_review(store)
-    if got is None:
+    current = review.review_status(store.ctx, store)
+    if current.state == 'missing':
         raise UpstreamMissing('盘上一份 stage5/review_*.json 都没有——先跑 stage5.review')
-    seq, rev = got
+    if current.review is None or current.seq is None:
+        raise TerminalState(
+            f'Stage5 Review 是 {current.state}：{"；".join(current.reasons[:6])}。'
+            '旧契约产物不可作为当前 Review 展示')
+    seq, rev = current.seq, current.review
 
     chapters = [rc.output_ordinal for rc in rev.chapters]
     if ordinal not in chapters:
@@ -301,6 +309,8 @@ def review_view(base: str | os.PathLike[str], sid: str, ordinal: int) -> ReviewV
         sid=paths.derive_source_meta(novel_dir.name)[0],
         title=paths.title_of(novel_dir),
         review_seq=seq,
+        review_state=current.state,
+        review_reasons=list(current.reasons),
         sources=rev.sources,
         finding_counts=_dense_counts(
             [f for c in rev.chapters for f in c.findings] + list(rev.book)),
@@ -329,7 +339,6 @@ def _dense_counts(findings) -> dict[str, int]:
 def _review_index_row(rc, judged_now) -> ReviewIndexRow:
     return ReviewIndexRow(
         output_ordinal=rc.output_ordinal,
-        mode=rc.mode,
         round=rc.draft_round,
         chars=rc.chars,
         budget_chars=rc.budget_chars,
@@ -340,25 +349,24 @@ def _review_index_row(rc, judged_now) -> ReviewIndexRow:
 
 
 def _stale_of(rc, judged_now) -> bool | None:
-    """验收判的那份 vs 盘上当前那份（**整文件指纹**，与 `judged` 的审计尺子同一把）。
+    """验收判的正文投影 vs 盘上当前正文；元数据重判不制造假 stale。
 
     `null` = 判不了：本章验收时就无稿、或验收后成稿被移走。
     """
-    if rc.relpath is None or rc.draft_sha1 is None:
+    if rc.relpath is None or rc.draft_text_sha1 is None:
         return None
     now = judged_now.get(rc.relpath)
     if now is None:
         return None
-    return now.sha1 != rc.draft_sha1
+    return now.consumed.text_sha1 != rc.draft_text_sha1
 
 
 def _review_chapter(store, rc, by_ord, judged_now) -> ReviewChapterView:
     """一章明细。`text` / `chars` / `origin` 取**当前盘上**那份稿
     （优先验收判过的那条路径，缺了退主稿）——改稿入口要贴着现役正文。"""
-    recs = {r['_relpath']: r for r in by_ord.get(rc.output_ordinal, [])}
-    rec = recs.get(rc.relpath) if rc.relpath is not None else None
-    if rec is None and by_ord.get(rc.output_ordinal):
-        rec = _mode_sorted(by_ord[rc.output_ordinal])[0]
+    rec = by_ord.get(rc.output_ordinal)
+    if rec is not None and rc.relpath is not None and rec.get('_relpath') != rc.relpath:
+        rec = None
     p = (rec or {}).get('_provenance') or {}
     rounds: list[int] = []
     if rc.relpath is not None:
@@ -366,7 +374,6 @@ def _review_chapter(store, rc, by_ord, judged_now) -> ReviewChapterView:
     return ReviewChapterView(
         output_ordinal=rc.output_ordinal,
         findings=rc.findings,
-        mode=rc.mode,
         chars=(rec or {}).get('chars'),
         budget_chars=rc.budget_chars,
         round=rc.draft_round,

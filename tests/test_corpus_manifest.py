@@ -56,12 +56,9 @@ def _commands() -> list[str]:
     commands = []
     for sid, _chapters in CURRENT_CORPUS_BOOKS:
         for node in CURRENT_CORPUS_PAID_NODES:
-            flags = ''
-            if node == 'stage5.write':
-                flags = ' --deep 1,2,3 --shallow-rest'
             commands.append(
                 f'python -X utf8 -u -m novel.cli run {node} {sid}'
-                f'{flags} --base E:/acceptance --yes')
+                f' --base E:/acceptance --yes')
     return commands
 
 
@@ -210,8 +207,8 @@ def test_manifest_pins_the_real_run_dispatch_topology_and_required_flags():
     raw = _manifest_raw()
     index = next(i for i, command in enumerate(raw['commands'])
                  if 'stage5.write' in command)
-    raw['commands'][index] = raw['commands'][index].replace('1,2,3', '1,2')
-    with pytest.raises(ValidationError, match='deep 1,2,3'):
+    raw['commands'][index] += ' --deep 1,2,3'
+    with pytest.raises(ValidationError, match='flags 必须恰为'):
         CorpusManifest.model_validate(raw)
 
 
@@ -222,8 +219,6 @@ def test_manifest_accepts_commands_from_the_production_argv_builder(tmp_path):
     for sid, _chapters in CURRENT_CORPUS_BOOKS:
         for node in CURRENT_CORPUS_PAID_NODES:
             flags: tuple[str, ...] = ()
-            if node == 'stage5.write':
-                flags = ('--deep', '1,2,3', '--shallow-rest')
             commands.append(subprocess.list2cmdline(build_argv(
                 node, sid, flags, base=tmp_path)))
     raw = _manifest_raw()
@@ -450,7 +445,7 @@ def test_inventory_refuses_a_raw_non_current_version(tmp_path):
         **global_grounding(),
     }, ensure_ascii=False), encoding='utf-8')
 
-    with pytest.raises(ValueError, match=r'raw _schema_version=2.*current v1.*从 producer 重跑'):
+    with pytest.raises(ValueError, match=r'raw _schema_version=2.*current v3.*从 producer 重跑'):
         corpus_manifest._artifact_inventory(book)
 
 

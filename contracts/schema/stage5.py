@@ -5,12 +5,12 @@ stage5.py —— 对应 `docs/schema/stage5.md`。写作 + 全书验收。
 **全链唯一产出「书」的层**，也是**唯一带 LLM 返工回路**的层。
 
 ```
-stage5/<mode>/chNN.json          LLM 产，逐章一次调用 —— 唯一承载正文的产物
-stage5/<mode>/chNN.INVALID.json  被落盘闸门拦下的问题稿（同一份章契约 + errs）
-stage5/<mode>/_rounds/…          三种归档：上一轮 · 被提升掉的问题稿 · 被护栏驳回的自救
+stage5/chNN.json                LLM 产，逐章一次调用 —— 唯一承载正文的产物
+stage5/chNN.INVALID.json        被落盘闸门拦下的问题稿（同一份章契约 + errs）
+stage5/_rounds/…                三种归档：上一轮 · 被提升掉的问题稿 · 被护栏驳回的自救
 stage5/review_<n>.json           确定性验收报告（**0 成本，不调 LLM**）
 stage5/wontfix.json              人的「这条我不修」
-stage5/draft.md                  两条臂合成的全书拼稿（字节形态，不在本模块）
+stage5/draft.md                  canonical 章产物的纯投影（字节形态，不在本模块）
 ```
 ⚠ 这张图上曾列着 `stage5/semantic_<n>.json`（书级语义审判）。`stage5.semantic`
 已于 2026-08-17 **整节点下线**（裁决与实跑证据见 `docs/BACKEND_CONTRACT.md` §十），
@@ -18,20 +18,19 @@ stage5/draft.md                  两条臂合成的全书拼稿（字节形态�
 
 【五条贯穿本层的事实】
 
-  ① **两条臂 + 两相，而 schema 只有一份。** 臂只差 `(system prompt, 给不给源章原文)`，
-     产物形状逐字节相同；`mode` 同时是目录名。
+  ① **单臂 + 两相。** 写作一律闭卷；付费写作与零成本验收共用同一份章契约。
 
   ② **判据 vs 载体在本层几乎全部倒向判据**：拒收 = 整章响应作废 = **再花一次高推理调用**
      （本层最贵的一次重试），而判据拦下 = 落 `.INVALID` + 人手改 / 重判 = **0 成本**。
-     ⇒ 现役 46 条判据**一条都不该上移**；少数够得着的（`mode` / `from_source_ordinals` 长度恒 1）
+     ⇒ 现役 49 条判据**一条都不该上移**；少数够得着的（`from_source_ordinals` 长度恒 1）
      **本来就没有判据**，归载体是原样承认现状，不是收权。
-     ⚠ **还有一处不对称**：stage4 那条「响应侧 `extra='forbid'` 当场挡回」的出路，
-     **在本层的默认路径上不存在**——默认逐章调用走 `ask_text`，**响应是纯文本，没有 JSON 可校验**。
+     Stage5 的 `ask_json` 只在响应侧校验 segment 形状与 slot 闭合；保真等内容判据仍在
+     落盘前完整执行，失败落 `.INVALID`，不把一次可恢复的付费正文当场丢掉。
 
-  ③ **7 条 HARD，盘上 31 章 0 命中；历史那轮 47 条判据里 29 条从未命中。**
-     这不是「干净」，要连基线一起读：`secret_leak` 报 0，而 **21 条 secret 里 19 条
-     「连它自己的揭示章都命中不了」**——那盏灯基本不会亮。
-     **「见过它通过」不是证据，「见过它红一次」才是。**
+  ③ **现役 49 条：6 hard、27 info、11 metric、5 unver。**
+     每条 HARD 都必须有最小反例走生产判据入口；新 canonical corpus 尚未跑完前，
+     不拿旧双臂的命中数冒充当前质量基线。**「见过它通过」不是证据，
+     「见过它红一次」才是。**
 
   ④ **逐章带与书级带是两个数，各自都没有第二层宽限**：`DRAFT_BAND` 0.80~1.20（逐章
      成稿 / 本章预算）、`BOOK_BAND` 0.90~1.10（全书成稿 / 全书源字数）。
@@ -54,18 +53,14 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from contracts.invariants import DEPTH_MODES
 from contracts.schema.base import Fp10, FrozenModel, StrictModel
 from contracts.schema.common import (
     Finding, FreeProvenance, LlmProvenance, RoundFreeProvenance, RoundLlmProvenance,
 )
 from contracts.schema.evaluation import SemanticDecision
 
-Mode = Literal[DEPTH_MODES]
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、`stage5/<mode>/chNN.json`
+# 一、`stage5/chNN.json`
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GeneratedSegment(StrictModel):
@@ -123,9 +118,6 @@ class Chapter(StrictModel):
     #: **长度恒为 1**（一章对一章）。透传自 ctx。
     from_source_ordinals: list[int] = Field(min_length=1, max_length=1)
 
-    #: **同时是目录名。** ⚠ 归载体是原样承认现状——本层没有任何判据在查它。
-    mode: Mode
-
     #: 源章对应部分字数（计划算好的）。盘上 408~1963。
     source_chars: int = Field(ge=0)
 
@@ -139,10 +131,8 @@ class Chapter(StrictModel):
     #: 20 字窗口重合率，**已扣掉按契约必须逐字保留的部分**。
     #: `null` = 正文短于一个窗口，**那是「量不了」不是「重合 0」**。
     #:
-    #: ⚠ **闭卷有上界 `DEEP_OVERLAP_MAX`(10%)，开卷无上界、只报分布**（`B-03`）。
-    #: 必须按**逐章**口径读，不是书级均值：deep 逐章 0.0%~**2.4%**（中位 0.1%）·
-    #: shallow 逐章 **0.9%**~96.8%（中位 49.8%）——书级均值会把闭卷的上界平掉，
-    #: 也会藏起「开卷有低到 0.9% 的章」这件事（**它是上界问题不是分布问题**）。
+    #: 闭卷的现役上界是 10%（`source_overlap_high`），必须按**逐章**口径读；
+    #: 书级均值会把少数高重合章平掉。
     overlap_excl_verbatim: float | None
 
     #: **唯一内容权威**。整章正文与 `draft.md` 都由代码按 producer slot 顺序拼出；
@@ -201,7 +191,7 @@ class Chapter(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一b、`stage5/<mode>/chNN.rejected.json`
+# 一b、`stage5/chNN.rejected.json`
 # ─────────────────────────────────────────────────────────────────────────────
 
 class RejectedAttempt(StrictModel):
@@ -287,15 +277,9 @@ class DraftConsumed(FrozenModel):
     text_sha1: Fp10
 
 class JudgedDraft(FrozenModel):
-    """「我判了哪一份稿」。键是**完整相对路径**（`stage5/deep/ch01.json`）。
+    """「我判了哪一份稿」。键是**完整相对路径**（`stage5/ch01.json`）。
 
-    ⚠⚠ **存完整相对路径是有来历的**：成稿一律不走那条会记账的读路——
-    它的 `input_key` 只取两级，`stage5/deep/ch01.json` 会被记成 `deep/ch01.json`，
-    反查到一个**不存在的路径** ⇒ 指纹 `None` ⇒ 那条边**永远显示对得上**。
-    **一个假的匹配比没有记录更坏。**
-
-    ⚠ **本类 stage5 / stage6 / stage7 共用一份**（2026-08-11 用户裁决）：
-    `mode` 已裁——它是**路径中间那一段**，从键现算，落盘就是第二个落点。
+    canonical 路径只有两级，可以被 `read_judged` 和下游消费方无损地反查。
     """
 
     output_ordinal: int = Field(ge=1)
@@ -322,9 +306,7 @@ class ReviewChapter(StrictModel):
     budget_chars: int = Field(gt=0)
     source_chars: int = Field(ge=0)
 
-    #: 以下五项**无成稿的章没有**。
-    mode: Mode | None = None
-    mode_dir: str | None = None
+    #: 以下六项**无成稿的章没有**。
     relpath: str | None = None
     draft_round: int | None = None
 

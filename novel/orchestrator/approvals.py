@@ -87,7 +87,7 @@ class _ApprovalProof(StrictModel):
     The service record is deliberately not an artifact and therefore does not
     participate in pipeline provenance.  It still needs the same two anchors:
     the current clean-text root and the exact bytes a person accepted.  The
-    decision digest additionally binds choices such as the deep chapter list.
+    decision digest additionally binds the exact human decision scope.
     """
 
     root_clean_sha1: str = Field(pattern=r'^[0-9a-f]{40}$')
@@ -105,15 +105,10 @@ class _ApprovalProof(StrictModel):
         return self
 
 
-class _ApprovalRecordV2(StrictModel):
-    """On-disk approval record; old v1 booleans are intentionally not migrated.
+class _ApprovalRecordV2Legacy(StrictModel):
+    """只为显式 backfill 读取的 v2 记录；普通 GET/启动绝不迁移它。"""
 
-    A bare boolean cannot prove which artifact was approved.  Reading a v1
-    record as if it referred to today's files would invent that fact, so v2 is
-    a hard boundary: reset/backfill is explicit and both paths create proofs.
-    """
-
-    v: Literal[2] = 2
+    v: Literal[2]
     sid: str = Field(min_length=1)
     gate: dict[str, bool]
     seen: dict[str, bool]
@@ -125,7 +120,35 @@ class _ApprovalRecordV2(StrictModel):
     writing_proof: _ApprovalProof | None = None
 
     @model_validator(mode='after')
-    def _record_is_complete_and_proved(self) -> _ApprovalRecordV2:
+    def _legacy_record_is_complete(self) -> _ApprovalRecordV2Legacy:
+        if set(self.gate) != set(APPROVAL_GATES) or set(self.gate_proofs) != set(APPROVAL_GATES):
+            raise ValueError('legacy gate/proofs must contain exactly s0..s7')
+        if set(self.seen) != set(APPROVAL_SEEN) or set(self.seen_proofs) != set(APPROVAL_SEEN):
+            raise ValueError('legacy seen/proofs must contain exactly read/global')
+        if self.deep != sorted(set(self.deep)) or any(n < 1 for n in self.deep):
+            raise ValueError('legacy deep must be sorted unique positive ordinals')
+        return self
+
+
+class _ApprovalRecordV3(StrictModel):
+    """On-disk approval record; writing is independent from the retired arm choice.
+
+    A bare boolean cannot prove which artifact was approved.  Reading a v1
+    record as if it referred to today's files would invent that fact, so v3 is
+    a hard boundary: reset/backfill is explicit and both paths create proofs.
+    """
+
+    v: Literal[3] = 3
+    sid: str = Field(min_length=1)
+    gate: dict[str, bool]
+    seen: dict[str, bool]
+    writing: bool = False
+    gate_proofs: dict[str, _ApprovalProof | None]
+    seen_proofs: dict[str, _ApprovalProof | None]
+    writing_proof: _ApprovalProof | None = None
+
+    @model_validator(mode='after')
+    def _record_is_complete_and_proved(self) -> _ApprovalRecordV3:
         if set(self.gate) != set(APPROVAL_GATES):
             raise ValueError('gate must contain exactly s0..s7')
         if set(self.seen) != set(APPROVAL_SEEN):
@@ -134,8 +157,6 @@ class _ApprovalRecordV2(StrictModel):
             raise ValueError('gate_proofs must contain exactly s0..s7')
         if set(self.seen_proofs) != set(APPROVAL_SEEN):
             raise ValueError('seen_proofs must contain exactly read/global')
-        if self.deep != sorted(set(self.deep)) or any(n < 1 for n in self.deep):
-            raise ValueError('deep must be sorted, unique positive chapter ordinals')
         for key, approved in self.gate.items():
             if approved != (self.gate_proofs[key] is not None):
                 raise ValueError(f'gate {key} and its current-subject proof must agree')
@@ -179,56 +200,24 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     }
 
 
-def default_deep(planned: list[int] | None) -> list[int]:
-    """默认深度选择 = **这本书的全部计划章**（2026-08-22 起；此前是常量 `(1, 2, 3)`）。
-
-    旧默认的理由是「开篇三章决定读者留存，值得更高的单章成本」。推翻它的是一次
-    **成书级**实测（无情道 23 章，`tools/book_overlap.py`）：按 `stage7/name_map.json`
-    把人名回映射之后逐章量 20 字窗重合——
-
-    | 臂 | n | 中位 | 整句照搬率 |
-    |---|--:|--:|--:|
-    | deep（闭卷） | 3 | **0.017** | **18.2%** |
-    | shallow（开卷） | 20 | **0.226** | **55.4%** |
-
-    **13 倍差距**；而全书 290 条照搬句里只有 60 条是 `verbatim` 制度要求的，其余
-    230 条（79%）是写手自发照抄。⇒ 用户那句「差别只是改变了措辞」几乎全部产自开卷臂，
-    而开卷当时是 20/23 章的默认路径。
-
-    ⚠ **这不是把开卷判死**：单臂维护入口 `stage5.write --mode shallow` 一个字没动，
-    `B-03` 那个洞仍在代码里。变的只是**默认路径** ⇒ 走开卷从此是例外，
-    由 `arm_split_report` 常驻报出（只报不判，不为它发明阈值——2026-08-10 已否决过一次，
-    理由「0.9%~96.8% 的跨度不是一个可以一刀切的量」今天仍然成立）。
-
-    ⚠ 返回值仍然只是**建议，不是花钱授权**：`_fresh_record` 不带 `deep_proof`，而
-    `current_depth_selection` / `begin_writing` 都要求 proof 在场
-    ⇒ 没有人签过字之前，队列里不会出现一条付费的 `stage5.write`。
-
-    ⚠ `planned is None`（stage4 还没产计划）⇒ **`[]` 而不是 `[1, 2, 3]`**：
-    「还不知道有哪些章」与「选了三章」必须分得开。这不会把默认卡在空集上——
-    `_read_raw` 在没有盘上记录时每次都现算一份，计划一落盘它自动就是全书。
-    """
-    return sorted(set(planned)) if planned else []
-
-
-def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV2:
-    deep = default_deep(planned)
-    return _ApprovalRecordV2(
+def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV3:
+    del planned  # 兼容旧调用缝；v3 授权不再携带选章决定
+    return _ApprovalRecordV3(
         sid=sid,
         gate={key: False for key in APPROVAL_GATES},
         seen={key: False for key in APPROVAL_SEEN},
-        deep=deep,
         gate_proofs={key: None for key in APPROVAL_GATES},
         seen_proofs={key: None for key in APPROVAL_SEEN},
     )
 
 
 def _view(
-    base: str | os.PathLike[str], record: _ApprovalRecordV2,
+    base: str | os.PathLike[str], record: _ApprovalRecordV3,
 ) -> ApprovalDoc:
+    """服务记录的唯一公开投影；public v2 不再暴露 deep。"""
     return ApprovalDoc(
         sid=record.sid, gate=record.gate, seen=record.seen,
-        deep=record.deep, writing=record.writing,
+        writing=record.writing,
         spawns=_spawns(base, record.sid),
     )
 
@@ -239,23 +228,23 @@ def _planned(base: str | os.PathLike[str], sid: str) -> list[int] | None:
     return state.planned_chapters(ArtifactStore(ctx))
 
 
-def _read_raw(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV2:
+def _read_raw(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV3:
     paths.resolve_novel_dir(base, sid)
     p = _path(base, sid)
     if not p.is_file():
         return _fresh_record(sid, _planned(base, sid))
     try:
-        record = _ApprovalRecordV2.model_validate_json(p.read_text(encoding='utf-8'))
+        record = _ApprovalRecordV3.model_validate_json(p.read_text(encoding='utf-8'))
     except (OSError, UnicodeDecodeError, ValidationError) as exc:
         raise HumanEditProtected(
-            f'approval record is corrupt or is unsupported v1; reset/backfill explicitly: {exc}') from exc
+            f'approval record is corrupt or is unsupported v1/v2; reset/backfill explicitly: {exc}') from exc
     if record.sid != sid:
         raise HumanEditProtected(
             f'approval state belongs to {record.sid!r}, not requested novel {sid!r}')
     return record
 
 
-def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV2:
+def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV3:
     record = _read_raw(base, sid)
     if not _path(base, sid).is_file():
         return record
@@ -264,10 +253,10 @@ def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV2:
 
 
 def _write(
-    base: str | os.PathLike[str], record: _ApprovalRecordV2,
+    base: str | os.PathLike[str], record: _ApprovalRecordV3,
 ) -> ApprovalDoc:
     """审批落盘的**唯一落点**；冻结检查因此也只装在这里。"""
-    record = _ApprovalRecordV2.model_validate(record.model_dump())
+    record = _ApprovalRecordV3.model_validate(record.model_dump())
     _refuse_if_frozen(record.sid)
     p = _path(base, record.sid)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -282,41 +271,21 @@ def get(base: str | os.PathLike[str], sid: str) -> ApprovalDoc:
         return _view(base, _read_current(base, sid))
 
 
-def has_record(base: str | os.PathLike[str], sid: str) -> bool:
-    """Whether Stage5 has a current, approved, persisted spending choice.
-
-    ``get()`` deliberately returns a read-only default for a new book, so its
-    value cannot answer this question.  A file alone is also insufficient: an
-    old/corrupt record or a choice bound to stale mechanical-baseline/plan artifacts must not
-    make the queue emit a paid Stage5 command.
-    """
-    return current_depth_selection(base, sid) is not None
-
-
-def current_depth_selection(
-    base: str | os.PathLike[str], sid: str,
-) -> list[int] | None:
-    """Atomically return the exact current Stage5 spending decision.
-
-    ``[]`` is a valid all-shallow choice, hence ``None`` is the only blocked
-    result.  Queue planning consumes this once instead of a racy ``exists`` +
-    ``get`` pair.
-    """
+def writing_is_current(base: str | os.PathLike[str], sid: str) -> bool:
+    """是否有一份绑定当前 Stage3 机械基线与 Stage4 计划的 Stage5 写作授权。"""
     with _LOCK:
         try:
             if not _path(base, sid).is_file():
                 paths.resolve_novel_dir(base, sid)
-                return None
+                return False
             record = _read_current(base, sid)
         except (NovelError, OSError, UnicodeDecodeError, ValidationError):
-            return None
-        if (
-            record.deep_proof is None
-            or not record.gate['s3']
-            or not record.gate['s4']
-        ):
-            return None
-        return list(record.deep)
+            return False
+        return bool(record.writing and record.gate['s3'] and record.gate['s4'])
+
+
+def has_record(base: str | os.PathLike[str], sid: str) -> bool:
+    return writing_is_current(base, sid)
 
 
 _GATE_ARTIFACTS = {
@@ -365,6 +334,24 @@ def _root_clean_sha1(novel_dir: Path) -> str:
 def _store_for(novel_dir: Path) -> ArtifactStore:
     ctx = state.readonly_ctx(novel_dir, 'stage0.approve', prov.code_version())
     return ArtifactStore(ctx)
+
+
+def _stage5_contract_status(novel_dir: Path):
+    """审批面复用 Stage5 唯一状态判官；不另拼旧目录/旧 schema 判据。"""
+    from novel.stages.stage5.review import review_status
+
+    store = _store_for(novel_dir)
+    return store, review_status(store.ctx, store)
+
+
+def _require_stage5_contract_compatible(novel_dir: Path, *, action: str):
+    """旧 Stage5 主体在任何审批/授权 bool 之前终止，其他状态原样交调用方。"""
+    store, current = _stage5_contract_status(novel_dir)
+    if current.state == 'legacy_incompatible':
+        details = '；'.join(current.reasons[:8])
+        raise HumanEditProtected(
+            f'legacy_incompatible: 旧 Stage5 契约只读保留，不能{action}：{details}')
+    return store, current
 
 
 def _require_fresh_json(store: ArtifactStore, rel: str) -> str:
@@ -499,38 +486,45 @@ def _proof_for_seen(novel_dir: Path, key: str) -> _ApprovalProof:
         novel_dir, _SEEN_ARTIFACTS[key], {'kind': 'seen', 'key': key})
 
 
-def _proof_for_depth(novel_dir: Path, deep: list[int]) -> _ApprovalProof:
+def _proof_for_legacy_depth(novel_dir: Path, deep: list[int]) -> _ApprovalProof:
     return _make_proof(
         novel_dir, (STAGE4_PLAN_CHAPTERS,),
         {'kind': 'depth_selection', 'deep': deep},
     )
 
 
-def _proof_for_writing(novel_dir: Path, deep: list[int]) -> _ApprovalProof:
+def _proof_for_legacy_writing(novel_dir: Path, deep: list[int]) -> _ApprovalProof:
     return _make_proof(
         novel_dir, (STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS),
         {'kind': 'writing', 'deep': deep},
     )
 
 
+def _proof_for_writing(novel_dir: Path) -> _ApprovalProof:
+    return _make_proof(
+        novel_dir, (STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS),
+        {'kind': 'writing', 'scope': 'all_planned_chapters', 'contract': 'stage5-v2'},
+    )
+
+
 def _stage5_subject_rels(
-    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV2,
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV3,
 ) -> list[str]:
     _require_stage5_complete(base, sid, record)
     planned = _planned(base, sid)
     assert planned is not None
-    deep = set(record.deep)
+    store = _store_for(paths.resolve_novel_dir(base, sid))
+    from novel.stages.stage5.review import require_fresh_review
+    review = require_fresh_review(store.ctx, store)
+    assert review.review_rel is not None
     return [
-        artifact_rel(
-            'stage5.chapter', mode='deep' if ordinal in deep else 'shallow',
-            nn=ordinal,
-        )
+        artifact_rel('stage5.chapter', nn=ordinal)
         for ordinal in planned
-    ] + [STAGE5_BOOK_DRAFT]
+    ] + [STAGE5_BOOK_DRAFT, review.review_rel]
 
 
 def _proof_for_gate(
-    novel_dir: Path, gate: str, record: _ApprovalRecordV2,
+    novel_dir: Path, gate: str, record: _ApprovalRecordV3,
 ) -> _ApprovalProof:
     store = _store_for(novel_dir)
     typed_subject = _require_typed_gate_decision(store, gate)
@@ -546,7 +540,7 @@ def _proof_for_gate(
             root_clean_sha1=_root_clean_sha1(novel_dir),
             artifacts={STAGE7_NAME_MAP: typed_subject},
             decision_sha256=_decision_sha256({
-                'kind': 'gate', 'gate': gate, 'deep': None,
+                'kind': 'gate', 'gate': gate,
             }),
         )
     if gate == 's5':
@@ -554,14 +548,14 @@ def _proof_for_gate(
     else:
         rels = list(_GATE_ARTIFACTS[gate])
     return _make_proof(
-        novel_dir, rels, {'kind': 'gate', 'gate': gate, 'deep': record.deep if gate == 's5' else None})
+        novel_dir, rels, {'kind': 'gate', 'gate': gate})
 
 
 def _same_proof(expected: _ApprovalProof | None, current: _ApprovalProof) -> bool:
     return expected is not None and expected == current
 
 
-def _effective_record(novel_dir: Path, record: _ApprovalRecordV2) -> _ApprovalRecordV2:
+def _effective_record(novel_dir: Path, record: _ApprovalRecordV3) -> _ApprovalRecordV3:
     """Return the effective current projection without rewriting audit history."""
     seen = dict(record.seen)
     seen_proofs = dict(record.seen_proofs)
@@ -575,15 +569,6 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV2) -> _ApprovalRe
         if current is None or not _same_proof(seen_proofs[key], current):
             seen[key] = False
             seen_proofs[key] = None
-
-    deep_proof = record.deep_proof
-    if deep_proof is not None:
-        try:
-            current_depth = _proof_for_depth(novel_dir, record.deep)
-        except NovelError:
-            current_depth = None
-        if current_depth is None or not _same_proof(deep_proof, current_depth):
-            deep_proof = None
 
     gates = dict(record.gate)
     gate_proofs = dict(record.gate_proofs)
@@ -614,26 +599,24 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV2) -> _ApprovalRe
     writing_proof = record.writing_proof
     if writing:
         try:
-            current_writing = _proof_for_writing(novel_dir, record.deep)
+            current_writing = _proof_for_writing(novel_dir)
         except NovelError:
             current_writing = None
         if (
             current_writing is None
             or not _same_proof(writing_proof, current_writing)
-            or deep_proof is None
             or not gates['s3']
             or not gates['s4']
         ):
             writing = False
             writing_proof = None
 
-    # s5's proof builder needs the effective depth/writing state, not the stale
-    # booleans from disk.  Later gates then cascade from the resulting s5 state.
+    # s5's proof builder needs the effective writing state, not a stale boolean
+    # from disk. Later gates then cascade from the resulting s5 state.
     effective = record.model_copy(update={
         'gate': gates, 'seen': seen,
         'gate_proofs': gate_proofs, 'seen_proofs': seen_proofs,
-        'deep_proof': deep_proof, 'writing': writing,
-        'writing_proof': writing_proof,
+        'writing': writing, 'writing_proof': writing_proof,
     })
     for gate in _GATE_ORDER[5:]:
         if not gates[gate]:
@@ -661,30 +644,25 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV2) -> _ApprovalRe
 
 def _require_artifacts(
     base: str | os.PathLike[str], sid: str, gate: str,
-    record: _ApprovalRecordV2,
+    record: _ApprovalRecordV3,
 ) -> _ApprovalProof:
     novel_dir = paths.resolve_novel_dir(base, sid)
     return _proof_for_gate(novel_dir, gate, record)
 
 
 def _require_stage5_complete(
-    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV2,
+    base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV3,
 ) -> None:
     planned = _planned(base, sid)
     if planned is None:
         raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before stage5 approval')
     novel_dir = paths.resolve_novel_dir(base, sid)
-    deep_done = set(state.chapters_done(novel_dir, 'deep'))
-    shallow_done = set(state.chapters_done(novel_dir, 'shallow'))
-    deep = set(record.deep)
-    shallow = set(planned) - deep
-    missing = sorted((deep - deep_done) | (shallow - shallow_done))
+    _require_stage5_contract_compatible(novel_dir, action='盖 s5 审批章')
+    done = set(state.chapters_done(novel_dir))
+    missing = sorted(set(planned) - done)
     if missing:
-        raise ApprovalRequired(f'stage5 still lacks assigned chapters: {missing}')
-    wrong = sorted((deep & shallow_done) | (shallow & deep_done))
-    if wrong:
-        raise HumanEditProtected(f'stage5 has drafts in the wrong arm: {wrong}')
-    unexpected = sorted((deep_done | shallow_done) - set(planned))
+        raise ApprovalRequired(f'stage5 still lacks canonical chapters: {missing}')
+    unexpected = sorted(done - set(planned))
     if unexpected:
         raise HumanEditProtected(f'stage5 has drafts outside the current plan: {unexpected}')
     # Same classification as `_require_fresh_json`: a blocked draft is a gate
@@ -692,13 +670,13 @@ def _require_stage5_complete(
     # is the directory that holds them — `GateBlocked.invalid_path` is documented
     # as "where the blocked draft(s) are", not "one file".
     blocked = sorted(p.relative_to(novel_dir).as_posix()
-                     for p in (novel_dir / 'stage5').glob('*/ch*.INVALID.json'))
+                     for p in (novel_dir / 'stage5').glob('ch*.INVALID.json'))
     if blocked:
         raise GateBlocked(
             f'stage5 still has blocked INVALID chapter drafts: {blocked}; an '
             f'approval cannot bind to them',
             invalid_path=str(novel_dir / 'stage5'),
-            hint='stage5.write --mode <arm> --revalidate --actor <id> --reason <why>, '
+            hint='stage5.write --revalidate --actor <id> --reason <why>, '
                  'or --apply-edit to fix those chapters first (both cost nothing)')
 
 
@@ -715,7 +693,7 @@ def approve_gate(base: str | os.PathLike[str], sid: str, gate: str) -> ApprovalD
             raise ApprovalRequired('stage2 global and chapter views must both be seen')
         if gate == 's5':
             if not record.writing:
-                raise ApprovalRequired('select deep chapters and start writing first')
+                raise ApprovalRequired('authorize Stage5 whole-book writing first')
             _require_stage5_complete(base, sid, record)
         proof = _require_artifacts(base, sid, gate, record)
         gates = dict(record.gate)
@@ -727,14 +705,98 @@ def approve_gate(base: str | os.PathLike[str], sid: str, gate: str) -> ApprovalD
         }))
 
 
-def _artifacts_ready(
-    novel_dir: Path, gate: str, record: _ApprovalRecordV2,
-) -> bool:
-    try:
-        _proof_for_gate(novel_dir, gate, record)
-    except NovelError:
-        return False
-    return True
+def _legacy_gate_proof(novel_dir: Path, gate: str) -> _ApprovalProof:
+    """用 v2 当年的 decision digest 重算 s0..s4，只给显式 backfill 对证。"""
+    store = _store_for(novel_dir)
+    _require_typed_gate_decision(store, gate)
+    return _make_proof(
+        novel_dir, list(_GATE_ARTIFACTS[gate]),
+        {'kind': 'gate', 'gate': gate, 'deep': None},
+    )
+
+
+def _migrate_legacy_v2(
+    base: str | os.PathLike[str], sid: str, legacy: _ApprovalRecordV2Legacy,
+) -> tuple[_ApprovalRecordV3, list[str]]:
+    """保守重签 v2。
+
+    只有能对上当前原文/产物的 proof 才保留。writing 另外要求旧决定确为
+    全书 deep；含 shallow 分配时清空 writing 与 s5 以后，绝不自动放行。
+    """
+    if legacy.sid != sid:
+        raise HumanEditProtected(
+            f'approval state belongs to {legacy.sid!r}, not requested novel {sid!r}')
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    record = _fresh_record(sid)
+    seen = dict(record.seen)
+    seen_proofs = dict(record.seen_proofs)
+    for key in APPROVAL_SEEN:
+        if not legacy.seen.get(key):
+            continue
+        try:
+            current = _proof_for_seen(novel_dir, key)
+        except NovelError:
+            continue
+        if _same_proof(legacy.seen_proofs.get(key), current):
+            seen[key] = True
+            seen_proofs[key] = current
+
+    gates = dict(record.gate)
+    gate_proofs = dict(record.gate_proofs)
+    backfilled: list[str] = []
+    for gate in _GATE_ORDER[:5]:
+        if not legacy.gate.get(gate):
+            continue
+        if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
+            continue
+        if gate == 's2' and not all(seen.values()):
+            continue
+        try:
+            current = _legacy_gate_proof(novel_dir, gate)
+        except NovelError:
+            continue
+        if not _same_proof(legacy.gate_proofs.get(gate), current):
+            continue
+        # 落盘的是 v3 proof：旧 digest 只用来证明那次决定确实绑定当前主体。
+        working = record.model_copy(update={
+            'gate': gates, 'gate_proofs': gate_proofs,
+            'seen': seen, 'seen_proofs': seen_proofs,
+        })
+        try:
+            current_v3 = _proof_for_gate(novel_dir, gate, working)
+        except NovelError:
+            continue
+        gates[gate] = True
+        gate_proofs[gate] = current_v3
+        backfilled.append(gate)
+
+    writing = False
+    writing_proof = None
+    planned = _planned(base, sid)
+    if (
+        legacy.writing
+        and planned is not None
+        and legacy.deep == planned
+        and gates['s3'] and gates['s4']
+        and legacy.deep_proof is not None
+        and legacy.writing_proof is not None
+    ):
+        try:
+            depth_now = _proof_for_legacy_depth(novel_dir, legacy.deep)
+            writing_now = _proof_for_legacy_writing(novel_dir, legacy.deep)
+        except NovelError:
+            pass
+        else:
+            if (_same_proof(legacy.deep_proof, depth_now)
+                    and _same_proof(legacy.writing_proof, writing_now)):
+                writing = True
+                writing_proof = _proof_for_writing(novel_dir)
+
+    return record.model_copy(update={
+        'gate': gates, 'gate_proofs': gate_proofs,
+        'seen': seen, 'seen_proofs': seen_proofs,
+        'writing': writing, 'writing_proof': writing_proof,
+    }), backfilled
 
 
 def backfill_from_disk(
@@ -743,36 +805,32 @@ def backfill_from_disk(
     """补录 CLI/队列已经落成的链，并把补了哪些章结构化返回给界面。
 
     这是显式的人操作，不在 GET 时静默发生。普通逐屏验收仍走 `approve_gate`；
-    本入口只在对应正式产物齐备且没有 `.INVALID` 时补章。stage5 还要求计划章
-    在两条臂中恰好各有一份成稿，不能拿半本稿冒充已经验收。
+    本入口只在对应正式产物齐备且没有 `.INVALID` 时补章。Stage5 只认
+    canonical `stage5/chNN.json` + `draft.md` + fresh Review。
     """
     with _LOCK:
+        migrated = False
+        migrated_gates: list[str] = []
         try:
             record = _read_current(base, sid)
         except HumanEditProtected:
-            # Backfill is itself the explicit recovery turn.  It does not copy
-            # a single legacy boolean; it starts blank and recomputes every v2
-            # proof from today's typed/current disk.  A record naming another
-            # sid is different: never overwrite someone else's service state.
             path = _path(base, sid)
             try:
-                legacy = ApprovalDoc.model_validate_json(
+                legacy = _ApprovalRecordV2Legacy.model_validate_json(
                     path.read_text(encoding='utf-8'))
-            except (OSError, UnicodeDecodeError, ValidationError):
-                legacy = None
-            if legacy is not None and legacy.sid != sid:
-                raise
-            record = _fresh_record(sid, _planned(base, sid))
+            except (OSError, UnicodeDecodeError, ValidationError) as exc:
+                raise HumanEditProtected(
+                    f'approval record cannot be explicitly backfilled as v2: {exc}') from exc
+            record, migrated_gates = _migrate_legacy_v2(base, sid, legacy)
+            migrated = True
         novel_dir = paths.resolve_novel_dir(base, sid)
         gates = dict(record.gate)
         gate_proofs = dict(record.gate_proofs)
         seen = dict(record.seen)
         seen_proofs = dict(record.seen_proofs)
-        deep = list(record.deep)
-        deep_proof = record.deep_proof
         writing = record.writing
         writing_proof = record.writing_proof
-        backfilled: list[str] = []
+        backfilled: list[str] = list(migrated_gates)
 
         for gate in _GATE_ORDER:
             if gates[gate]:
@@ -791,24 +849,11 @@ def backfill_from_disk(
                 seen = {key: True for key in APPROVAL_SEEN}
 
             if gate == 's5':
-                planned = _planned(base, sid)
-                if planned is None:
+                if state.stage5_legacy_paths(novel_dir):
                     continue
-                planned_set = set(planned)
-                deep_done = set(state.chapters_done(novel_dir, 'deep'))
-                shallow_done = set(state.chapters_done(novel_dir, 'shallow'))
-                if ((deep_done | shallow_done) & planned_set) != planned_set:
-                    continue
-                if deep_done & shallow_done & planned_set:
-                    continue
-                if (deep_done | shallow_done) - planned_set:
-                    continue
-                if any((novel_dir / 'stage5').glob('*/ch*.INVALID.json')):
-                    continue
-                deep = sorted(deep_done & planned_set)
                 try:
-                    deep_proof = _proof_for_depth(novel_dir, deep)
-                    writing_proof = _proof_for_writing(novel_dir, deep)
+                    _require_stage5_complete(base, sid, record)
+                    writing_proof = _proof_for_writing(novel_dir)
                 except NovelError:
                     continue
                 writing = True
@@ -816,7 +861,6 @@ def backfill_from_disk(
             working = record.model_copy(update={
                 'gate': gates, 'gate_proofs': gate_proofs,
                 'seen': seen, 'seen_proofs': seen_proofs,
-                'deep': deep, 'deep_proof': deep_proof,
                 'writing': writing, 'writing_proof': writing_proof,
             })
             try:
@@ -830,10 +874,9 @@ def backfill_from_disk(
         updated = record.model_copy(update={
             'gate': gates, 'gate_proofs': gate_proofs,
             'seen': seen, 'seen_proofs': seen_proofs,
-            'deep': deep, 'deep_proof': deep_proof,
             'writing': writing, 'writing_proof': writing_proof,
         })
-        approvals_view = _write(base, updated) if backfilled else _view(base, updated)
+        approvals_view = _write(base, updated) if (backfilled or migrated) else _view(base, updated)
         return ApprovalBackfillResult(
             approvals=approvals_view, backfilled=backfilled)
 
@@ -855,83 +898,69 @@ def mark_seen(base: str | os.PathLike[str], sid: str, key: str) -> ApprovalDoc:
 
 
 def _has_stage5_work(novel_dir: Path) -> bool:
-    for mode in ('deep', 'shallow'):
-        folder = novel_dir / 'stage5' / mode
-        if folder.is_dir() and any(folder.glob('ch*.json')):
-            return True
-    return False
-
-
-def set_deep(base: str | os.PathLike[str], sid: str, deep: list[int]) -> ApprovalDoc:
-    canonical = sorted(set(int(value) for value in deep))
-    if canonical != deep or any(value < 1 for value in canonical):
-        raise ApprovalRequired('deep selection must be sorted unique positive ordinals')
-    with _LOCK:
-        record = _read_current(base, sid)
-        novel_dir = paths.resolve_novel_dir(base, sid)
-        if record.writing or _has_stage5_work(novel_dir):
-            raise HumanEditProtected('deep selection is locked after stage5 writing starts')
-        planned = _planned(base, sid)
-        if planned is None:
-            raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before depth selection')
-        if outside := sorted(set(canonical) - set(planned)):
-            raise ApprovalRequired(f'deep selection contains unplanned chapters: {outside}')
-        proof = _proof_for_depth(novel_dir, canonical)
-        return _write(base, record.model_copy(update={
-            'deep': canonical, 'deep_proof': proof,
-        }))
+    stage5 = novel_dir / 'stage5'
+    return bool(
+        state.stage5_legacy_paths(novel_dir)
+        or state.chapters_done(novel_dir)
+        or (stage5 / 'draft.md').is_file()
+        or any(stage5.glob('ch*.INVALID.json'))
+        or any(stage5.glob('ch*.rejected.json'))
+    )
 
 
 def begin_writing(
-    base: str | os.PathLike[str], sid: str, expected: list[int] | None = None,
+    base: str | os.PathLike[str], sid: str,
 ) -> ApprovalDoc:
     with _LOCK:
         record = _read_current(base, sid)
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        _require_stage5_contract_compatible(novel_dir, action='授权新作业')
         if not record.gate['s3'] or not record.gate['s4']:
             raise ApprovalRequired(
                 'stage3 mechanical baseline and stage4 plan must be approved first')
-        if record.deep_proof is None:
-            raise ApprovalRequired('save a current depth selection before writing')
         planned = _planned(base, sid)
         if planned is None:
             raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before writing')
-        if outside := sorted(set(record.deep) - set(planned)):
-            raise ApprovalRequired(f'saved deep selection is outside the plan: {outside}')
-        if expected is not None and list(expected) != record.deep:
-            raise HumanEditProtected(
-                f'writing request depth {list(expected)} differs from approved {record.deep}')
+        if not planned:
+            raise ApprovalRequired('stage4 plan contains no output chapters')
         if record.writing:
             return _view(base, record)
-        proof = _proof_for_writing(
-            paths.resolve_novel_dir(base, sid), record.deep)
+        proof = _proof_for_writing(novel_dir)
         return _write(base, record.model_copy(update={
             'writing': True, 'writing_proof': proof,
         }))
 
 
-def authorize_arm(
+def authorize_writing(
     base: str | os.PathLike[str],
     sid: str,
-    mode: str,
     chapters: list[int] | None,
+    *,
+    requires_fresh_review: bool = False,
 ) -> None:
-    if mode not in ('deep', 'shallow'):
-        raise ApprovalRequired(f'unknown stage5 writing arm: {mode!r}')
+    """启动付费 Stage5 作业前的只读授权校验；不替人自动签字。"""
     with _LOCK:
         record = _read_current(base, sid)
+        novel_dir = paths.resolve_novel_dir(base, sid)
+        store, current_review = _require_stage5_contract_compatible(
+            novel_dir, action='触发新付费作业')
         if not record.writing:
-            raise ApprovalRequired('select deep chapters and start composite writing first')
+            raise ApprovalRequired('authorize current Stage5 whole-book writing first')
         planned = _planned(base, sid)
         if planned is None:
             raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before writing')
-        requested = set(planned if chapters is None else chapters)
-        allowed = (
-            set(record.deep) if mode == 'deep'
-            else set(planned) - set(record.deep)
-        )
-        if outside := sorted(requested - allowed):
+        requested_list = planned if chapters is None else list(chapters)
+        if (requested_list != sorted(set(requested_list))
+                or any(value < 1 for value in requested_list)):
+            raise HumanEditProtected('--chapters must be sorted, unique positive ordinals')
+        if outside := sorted(set(requested_list) - set(planned)):
             raise HumanEditProtected(
-                f'{mode} arm request contains chapters assigned to the other arm: {outside}')
+                f'Stage5 writing request contains chapters outside the current plan: {outside}')
+        from novel.stages.stage5.review import require_fresh_review
+        # 首轮写作时 Review 本来尚未产生，missing 可通行；一旦盘上有报告，
+        # 它必须 fresh。revise 则连 missing 也关闭式拒绝。
+        if requires_fresh_review or current_review.state != 'missing':
+            require_fresh_review(store.ctx, store)
 
 
 def reset(base: str | os.PathLike[str], sid: str) -> ApprovalDoc:

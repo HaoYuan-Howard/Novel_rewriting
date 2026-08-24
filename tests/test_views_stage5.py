@@ -64,7 +64,7 @@ def _tree(root) -> set:
 
 
 def _first_written(v) -> int:
-    return next(r.output_ordinal for r in v.index if r.modes)
+    return next(r.output_ordinal for r in v.index if r.has_draft)
 
 
 def test_materials_come_from_the_writer_ruler(box):
@@ -99,9 +99,7 @@ def test_an_invalid_draft_shows_as_invalid_not_as_formal(box):
     """`.INVALID` 稿走 `invalid_drafts`，不混进正式卡。"""
     v0 = stage5_view(box.root, box.sid, 1)
     o = _first_written(v0)
-    src = box.dir / 'stage5' / 'deep' / f'ch{o:02d}.json'
-    if not src.exists():
-        src = box.dir / 'stage5' / 'shallow' / f'ch{o:02d}.json'
+    src = box.dir / 'stage5' / f'ch{o:02d}.json'
     data = json.loads(src.read_text(encoding='utf-8'))
     (src.parent / f'ch{o:02d}.INVALID.json').write_text(
         json.dumps(data, ensure_ascii=False), encoding='utf-8')
@@ -132,10 +130,9 @@ def test_review_stale_is_none_when_the_draft_is_gone(box):
     if rel is None:
         pytest.skip('这本书验收时一章现稿都配不上——无从制造「稿被移走」')
     o = rel.output_ordinal
-    for mode in ('deep', 'shallow'):
-        p = box.dir / 'stage5' / mode / f'ch{o:02d}.json'
-        if p.exists():
-            p.unlink()
+    p = box.dir / 'stage5' / f'ch{o:02d}.json'
+    if p.exists():
+        p.unlink()
     rv2 = review_view(box.root, box.sid, 1)
     row2 = next(r for r in rv2.index if r.output_ordinal == o)
     assert row2.stale is None

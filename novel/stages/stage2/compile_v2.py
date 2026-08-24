@@ -34,7 +34,7 @@ from typing import Any
 
 from contracts.invariants import RESPONSE_TIME_LAYERS
 from novel.core.naming import strip_distinguisher
-from novel.core.spans import content_index, content_only, extend_terminal_punct
+from novel.core.spans import content_only, locate_unique_span
 from novel.core.text import norm
 from novel.stages.stage2.normalize import (
     _source, normalize_beat_ids, resolve_character_refs,
@@ -52,40 +52,6 @@ def _derive_summary_debug(events: list[str]) -> str:
     而 summary 的唯一消费方（stage4.plan 的 prompt）正是 Flash 已不稳的节点。
     """
     return '本章依次：' + '；'.join(e.strip() for e in events if e.strip())
-
-
-def _locate_in_span(seg: str, phrase: str) -> tuple[int, int, str] | int | None:
-    """在**所属拍的区间**内定位 hinge 短语。
-
-    返回：`(起, 止, recovery)` = 唯一命中（坐标是区间内相对偏移）；
-    `int`（命中次数 ≥2）= 多处命中；`None` = 区间内找不到。
-
-    【纪律与 `normalize._locate_phrase` 相同】原样字节优先（标点可能正是重复字面的
-    唯一消歧信息），抄不对才退内容空间；**没有 LCS 兜底**（救回来的是语义已变的片段，
-    hinge 要的正是「位置对、字节错」被报出来）。
-    差别只有作用面：那边是模型指定的一段（均段约 21 字），这边是整个拍区间
-    ——面变大，「唯一性」从**隐含**（段内几乎必唯一）变成**显式判定**。
-    """
-    raw = phrase.strip()
-    if raw:
-        count = seg.count(raw)
-        if count == 1:
-            hit = seg.find(raw)
-            return hit, extend_terminal_punct(seg, hit + len(raw)), 'exact'
-        if count > 1:
-            return count
-    content, cmap = content_index(seg)
-    needle = content_only(phrase)
-    if not needle or not cmap:
-        return None
-    count = content.count(needle)
-    if count == 0:
-        return None
-    if count > 1:
-        return count
-    at = content.find(needle)
-    return cmap[at], extend_terminal_punct(seg, cmap[at + len(needle) - 1] + 1), \
-        'normalized'
 
 
 #: 护栏式边界外扩的两个帽子（层0 确定性恢复，7A 实测立的）。
@@ -128,12 +94,12 @@ def _nudge_target(text: str, start_para: int, end_para: int, cap: int,
     """本拍装不下这条短语时，**最小**外扩到哪一段能让它在拍内唯一命中。
 
     `None` = 不该外扩（拍内已定位 / 多处命中 / 帽子内怎么扩都不唯一）。
-    复用 `_locate_in_span` 做判定 ⇒「外扩后唯一」是构造出来的，不是另写一套。
+    复用 `locate_unique_span` 做判定 ⇒「外扩后唯一」是构造出来的，不是另写一套。
     """
-    if _locate_in_span(_seg_of(text, start_para, end_para), phrase) is not None:
+    if locate_unique_span(_seg_of(text, start_para, end_para), phrase) is not None:
         return None                       # 已定位，或多处命中（那条归候选选择）
     for candidate in range(end_para + 1, cap + 1):
-        got = _locate_in_span(_seg_of(text, start_para, candidate), phrase)
+        got = locate_unique_span(_seg_of(text, start_para, candidate), phrase)
         if isinstance(got, tuple):
             return candidate
         if isinstance(got, int):
@@ -150,7 +116,7 @@ def _fresh_hinges(beat: dict[str, Any]) -> list[str]:
 def _locatable(text: str, start_para: int, end_para: int,
                phrases: list[str]) -> tuple[bool, ...]:
     return tuple(
-        isinstance(_locate_in_span(_seg_of(text, start_para, end_para), p), tuple)
+        isinstance(locate_unique_span(_seg_of(text, start_para, end_para), p), tuple)
         for p in phrases)
 
 
@@ -213,12 +179,12 @@ def _note_unlocatable_place(beat: dict[str, Any], name: str | None, upto: str,
     ⇒ 这条**判 INFO 且永远不该升 HARD**，它的读法是**相对基线的变化**，
     不是「命中即违规」。基线记在 `docs/stage2_contract_experiment.md`。
 
-    ⚠ **多处命中算找得到**：`_locate_in_span` 返回 `int` 是「≥2 处」，
+    ⚠ **多处命中算找得到**：`locate_unique_span` 返回 `int` 是「≥2 处」，
     地点名重复出现完全正常——它不像 hinge 那样需要唯一定位。只有 `None` 才记。
     """
     if not name or not upto:
         return
-    if _locate_in_span(upto, name) is None:
+    if locate_unique_span(upto, name) is None:
         place_unlocatable.append((str(beat.get('beat_id') or ''), name))
 
 
@@ -327,7 +293,7 @@ def _compile_beats(blueprint: dict[str, Any], text: str, upto: str,
                 fresh.append({'kind': kind, 'source': hinge.get('source')})
                 continue
             phrase = str(hinge.get('phrase') or '')
-            got = _locate_in_span(seg, phrase)
+            got = locate_unique_span(seg, phrase)
             if isinstance(got, tuple):
                 offset, tail, method = got
                 h_start, h_end = start + offset, start + tail

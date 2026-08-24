@@ -19,12 +19,16 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
+import pytest
 
 import novel.llm.keepsake as keepsake_mod
-from novel.llm.cache import CachePolicy, ResponseCache, cache_key
+from novel.llm.cache import (
+    CachePolicy, ResponseCache, cache_key, request_fingerprint,
+)
 from novel.llm.client import JSON_OBJECT_MODE, LlmClient
 from novel.llm.ledger import AUDIT_REL, CostLedger, audit_path
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
+from novel.errors import ProvenanceRefused
 from novel.paths import ANSWER_LOST_DIRNAME
 from novel.run import RunContext
 
@@ -81,7 +85,8 @@ def test_wire_rows_carry_the_attempt_identity_triplet():
         model=client.model, system='sys', user='usr',
         reasoning_effort='high', thinking=True, json_mode=JSON_OBJECT_MODE,
         max_tokens=row['max_tokens'])
-    assert row['request_fingerprint'] == cache_key(expected_req)
+    assert row['request_fingerprint'] == request_fingerprint(expected_req)
+    assert client.accepted_request_fingerprint('p') == row['request_fingerprint']
     assert row['response_sha256'] == hashlib.sha256(
         OK_JSON.content.encode('utf-8')).hexdigest()
 
@@ -129,6 +134,10 @@ def test_gate_decisions_and_adoption_answer_which_rung_was_finally_used():
     assert all(row['outcome'] == 'ok' for row in wire.values())
     assert wire[adoption['attempt_id']]['reasoning_effort'] == 'low'
     assert wire[rejected['attempt_id']]['reasoning_effort'] == 'high'
+    assert client.accepted_request_fingerprint('p') == wire[
+        adoption['attempt_id']]['request_fingerprint']
+    assert client.accepted_request_fingerprint('p') != wire[
+        rejected['attempt_id']]['request_fingerprint']
 
 
 def test_cache_hits_settle_gates_and_are_adoptable_too():
@@ -152,18 +161,49 @@ def test_cache_hits_settle_gates_and_are_adoptable_too():
     assert len(ledger_rows) == 1 and ledger_rows[0]['cached'] is True
     assert ledger_rows[0]['attempt_id'] == audit[0]['attempt_id']
     assert client.accepted_attempt('p') == audit[0]['attempt_id']
+    assert client.accepted_request_fingerprint('p') == ledger_rows[0][
+        'request_fingerprint']
 
 
 def test_audit_events_survive_in_memory_when_there_is_no_ledger_file():
     """`--dry-run` / 测试（`write_ledger=False`）没有盘上账本，判定仍要能被断言。"""
     ctx = RunContext.open(_book(), '123', 'stage3.style', paid=True,
                           write_ledger=False)
-    client = LlmClient(ctx, FakeTransport.always(OK_JSON), sleep=lambda _s: None)
+    transport = FakeTransport.always(OK_JSON)
+    client = LlmClient(ctx, transport, sleep=lambda _s: None)
     client.ask_json('sys', 'usr', model_cls=Resp, purpose='p',
                     cache_policy=CachePolicy.default())
     kinds = [row['kind'] for row in ctx.ledger.audit_events]
     assert kinds == ['gate_decision']
     assert ctx.ledger.audit_events[0]['decision'] == 'accepted'
+    assert client.accepted_request_fingerprint('p') == request_fingerprint(
+        transport.calls[0])
+
+
+def test_request_fingerprint_lookup_refuses_a_missing_attempt_instead_of_estimating():
+    with pytest.raises(ProvenanceRefused, match='拒绝按默认 effort/thinking 估算'):
+        CostLedger().request_fingerprint_for_attempt('not-recorded')
+
+
+def test_ledger_refuses_a_truncated_cache_key_as_request_identity():
+    ledger = CostLedger()
+    with pytest.raises(ProvenanceRefused, match='完整的小写 SHA-256'):
+        ledger.record(
+            node='stage5.write', sid='123', model='m', code='c', cached=False,
+            cache_policy='default', attempt_id='attempt',
+            request_fingerprint='a' * 32)
+    assert ledger.calls_made == 0, '拒收截断身份前不能先记成一次调用'
+
+
+def test_one_attempt_id_cannot_be_rebound_to_another_request():
+    ledger = CostLedger()
+    common = dict(
+        node='stage5.write', sid='123', model='m', code='c', cached=False,
+        cache_policy='default', attempt_id='same-attempt')
+    ledger.record(**common, request_fingerprint='a' * 64)
+    with pytest.raises(ProvenanceRefused, match='同时指向两个请求指纹'):
+        ledger.record(**common, request_fingerprint='b' * 64)
+    assert ledger.calls_made == 1, '拒收碰撞前不能先把同一次请求重复计费'
 
 
 def test_audit_path_is_next_to_the_ledger():

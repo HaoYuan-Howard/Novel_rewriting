@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { JobRequest } from '@/types/jobs'
+import type { Job, JobRequest } from '@/types/jobs'
 
 /**
  * 全应用唯一的 Context。
@@ -21,8 +21,8 @@ export interface PendingConfirm {
   req: JobRequest
   /** 用户确认后、启动作业前必须成功的服务端状态转换（例如批准当前闸门） */
   before?: () => Promise<void>
-  /** 发起成功后要做的事（例如挑完深度章节 → 标记已开写 → 跳成稿屏） */
-  after?: () => void
+  /** 发起成功后要做的事；通用作业会带回真实 job，专用同步写回传 null。 */
+  after?: (job: Job | null) => void
   /**
    * 执行覆盖：三条人工写回走**专用路由**（review/:o/edit、stage6/approve、
    * stage7/approve），不走通用 POST /jobs。确认框仍然先 preview 同一个
@@ -89,7 +89,7 @@ export function useChrome(): ChromeCtx {
 export function useAskJob() {
   const { askConfirm } = useChrome()
   return useCallback(
-    (req: JobRequest, after?: () => void, before?: () => Promise<void>) =>
+    (req: JobRequest, after?: (job: Job | null) => void, before?: () => Promise<void>) =>
       askConfirm({ req, before, after }),
     [askConfirm],
   )

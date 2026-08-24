@@ -249,16 +249,11 @@ def test_every_free_flag_runs_without_an_api_key(flag, node, box):
     ⚠ **不可接受的是第四种**：一段栈、或者一次真请求。
     原型这条纪律靠人工逐个核对分支保证，而漏一个的后果是一笔没打算花的账单。
 
-    ⚠⚠ **有臂的节点要把 `--mode` 带上**（今天只有 `stage5.write`）。不带的话它在
-    「这一次是哪条臂」那一步就落显式终态了——退出码仍然是 `2`（本条照样绿），
-    而**这条跑法一行都没跑到**：守卫会这样**静默失去扫描面**（LESSONS 第 4 条），
-    而失去的正是新移植那一层。
+    Stage5 现役默认路径就是 canonical 全书写作，不存在需额外填入的臂选择。
     """
     argv = ['run', node, box.sid, flag]
     if flag in VALUED_FLAGS:
         argv.append(str(box.dir / 'payload.json'))
-    if (modes := NODES[node].modes):
-        argv += ['--mode', modes[0]]
     argv += ['--base', str(box.root)]
 
     assert N.is_paid(node, argv[3:5] if flag in VALUED_FLAGS else [flag]) is False, \
@@ -289,8 +284,6 @@ def test_every_node_is_a_terminal_state_not_a_stack(box):
     got: dict[str, int] = {}
     for node, spec in sorted(NODES.items()):
         argv = ['run', node, box.sid, '--base', str(box.root)]
-        if spec.modes:
-            argv += ['--mode', spec.modes[0]]
         if spec.paid:
             argv.append('--yes')        # 否则先撞上确认那道闸，测不到这一条
         got[node] = _run(*argv)
@@ -311,14 +304,20 @@ def test_direct_cli_rejects_a_flag_the_node_does_not_accept_before_costing_it(bo
     assert '不接受' in err and '会花钱' not in err and 'Traceback' not in err
 
 
-@pytest.mark.corpus
-def test_direct_cli_rejects_mode_on_a_node_without_arms_without_a_stack(box, capsys):
-    """无臂节点的 `--mode` 在 RunContext 之前成为显式终态，不泄漏裸 ValueError。"""
-    rc = _run('run', 'stage5.review', box.sid, '--mode', 'deep', '--check-only',
-              '--base', str(box.root))
-    assert rc == X.TERMINAL_STATE
+@pytest.mark.parametrize(('node', 'retired_args'), [
+    ('stage5.review', ['--mode', 'deep', '--check-only']),
+    ('stage5.write', ['--write-contract', 'event-list-v1']),
+])
+def test_direct_cli_parser_has_no_retired_stage5_entry(
+        tmp_path, capsys, node, retired_args):
+    """已删除的 Stage5 选择器在 argparse 入口就拒绝，不能进入 RunContext。"""
+    with pytest.raises(SystemExit) as stopped:
+        _run('run', node, 'retired-stage5-entry', *retired_args,
+             '--base', str(tmp_path))
+    assert stopped.value.code == 2
     err = capsys.readouterr().err
-    assert '没有臂' in err and 'Traceback' not in err
+    assert retired_args[0] in err
+    assert 'unrecognized arguments' in err and 'Traceback' not in err
 
 
 # ───────────────────── 钱（Q-10） ─────────────────────

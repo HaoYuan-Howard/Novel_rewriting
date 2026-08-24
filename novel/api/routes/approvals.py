@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from contracts.schema.api import (
-    ApprovalBackfillResult, ApprovalDoc, DeepSelectionRequest, GateKey, SeenKey,
+    ApprovalBackfillResult, ApprovalDoc, GateKey, SeenKey,
 )
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator import approvals
@@ -38,14 +38,6 @@ def mark_seen(
     key: SeenKey, sid: str = Depends(checked_sid), base: str = Depends(get_base),
 ) -> ApprovalDoc:
     return approvals.mark_seen(base, sid, key)
-
-
-@router.post('/deep', response_model=ApprovalDoc)
-def set_deep(
-    request: DeepSelectionRequest,
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> ApprovalDoc:
-    return approvals.set_deep(base, sid, request.deep)
 
 
 @router.post('/writing', response_model=ApprovalDoc)

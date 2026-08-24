@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient          # noqa: E402
 
 from contracts.invariants import STAGES            # noqa: E402
 from novel.api.app import HOST, PORT, UI_HEADER, create_app   # noqa: E402
+from novel.api.routes import jobs as JOB_API       # noqa: E402
 from novel.orchestrator import jobs as J           # noqa: E402
 from novel.orchestrator import queue as Q          # noqa: E402
 from novel.orchestrator.nodes import build_steps   # noqa: E402
@@ -343,7 +344,6 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/approvals/gate/{key}': ['POST'],
         '/api/novels/{sid}/approvals/backfill': ['POST'],
         '/api/novels/{sid}/approvals/seen/{key}': ['POST'],
-        '/api/novels/{sid}/approvals/deep': ['POST'],
         '/api/novels/{sid}/approvals/writing': ['POST'],
             '/api/novels/{sid}/approvals/reset': ['POST'],
             # 项目级可恢复删除：必须确认 sid，真实移动发生在零成本 CLI 子进程。
@@ -448,27 +448,128 @@ def test_preview_argv_is_identical_to_what_would_run(client, base):
     assert len(body['steps']) == 2 and body['paid'] is False and body['writes'] is True
 
 
-def test_preview_refuses_a_run_mode_that_node_does_not_have(client):
+def test_preview_refuses_a_flag_that_node_does_not_have(client):
     """拒收开在 `build_argv` 里（`R-11.8`），于是**界面上摆出来的不可能是一条拼错的命令**。"""
     r = client.post('/api/jobs/preview',
                     json={'sid': '42', 'node': 'stage3.style', 'flags': ['--names-only']})
     assert r.status_code == 400 and r.json()['kind'] == 'UnsupportedRunMode'
 
 
-@pytest.mark.parametrize(('node', 'mode'), [
-    ('stage2.global', None),
-    ('stage2.blueprint', None),
-    ('stage4.plan', None),
-    ('stage5.write', 'deep'),
-    ('stage6.hook', None),
-    ('stage7.rename', None),
+def test_preview_request_shape_rejects_retired_mode_field(client):
+    r = client.post('/api/jobs/preview', json={
+        'sid': '42', 'node': 'stage5.write', 'mode': 'deep', 'flags': [],
+    })
+    assert r.status_code == 422
+
+
+def test_old_job_mode_is_not_serialized_by_public_http(client, base):
+    raw = {
+        'job_id': 'legacy-http', 'kind': 'started', 'ts': 1,
+        'start': {
+            'sid': '42', 'node': 'stage5.write', 'mode': 'shallow', 'flags': [],
+            'steps': [{
+                'argv': ['python', '-m', 'novel.cli', 'run', 'stage5.write'],
+                'cwd': '.', 'label': '旧 Stage5 作业', 'paid': True,
+                'writes': 'stage5/shallow/ch01.json', 'note': None,
+            }],
+            'python': '3.11', 'code': 'legacy', 'paid': True, 'writes': True,
+        },
+        'step_index': None, 'exit_code': None, 'note': None,
+    }
+    J.jobs_path(base).parent.mkdir(parents=True)
+    J.jobs_path(base).write_text(
+        json.dumps(raw, ensure_ascii=False) + '\n', encoding='utf-8')
+    response = client.get('/api/jobs')
+    assert response.status_code == 200
+    start = response.json()['jobs'][0]['start']
+    assert 'mode' not in start
+    assert start['flags'] == []
+    assert start['steps'][0]['argv'] == ['legacy_incompatible']
+    assert 'shallow' not in json.dumps(start, ensure_ascii=False)
+
+
+def _started_record(base, node, sid, flags, steps):
+    start = J.plan_start(node, sid, flags, base=base, steps=steps)
+    return J.JobRecord(
+        job_id='job-stage5-authorization',
+        start=start,
+        started=1,
+        ended=None,
+        exit_code=None,
+        state='running',
+        steps_started=0,
+    )
+
+
+@pytest.mark.parametrize('flags', [
+    ['--rebuild-draft'],
+    ['--recheck', '--chapters', '1'],
+    ['--revalidate', '--chapters', '1',
+     '--actor', 'reviewer-a', '--reason', '同轮重判'],
+    ['--dry-run'],
+])
+def test_free_stage5_recovery_jobs_do_not_request_writing_authorization(
+        client, base, monkeypatch, flags):
+    """preview 判为免费的 Stage5 恢复路不能被 writing 审批反向堵死。"""
+    authorized = []
+
+    def refuse_authorization(*args, **kwargs):
+        authorized.append((args, kwargs))
+        raise AssertionError('零成本 Stage5 作业不应申请 writing 授权')
+
+    def start_without_thread(run_base, node, sid, run_flags, *, steps, prepare=None):
+        assert prepare is None
+        return _started_record(run_base, node, sid, run_flags, steps)
+
+    monkeypatch.setattr(JOB_API.approvals, 'authorize_writing', refuse_authorization)
+    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
+
+    response = client.post('/api/jobs', json={
+        'sid': '42', 'node': 'stage5.write', 'flags': flags,
+    })
+
+    assert response.status_code == 202, response.text
+    assert response.json()['start']['paid'] is False
+    assert authorized == []
+
+
+def test_paid_stage5_job_authorizes_selected_chapters_before_start(
+        client, base, monkeypatch):
+    """付费定向写作仍在占锁后、启动前校验 writing proof。"""
+    authorized = []
+
+    def authorize(run_base, sid, chapters, *, requires_fresh_review):
+        authorized.append((run_base, sid, chapters, requires_fresh_review))
+
+    def start_without_thread(run_base, node, sid, run_flags, *, steps, prepare=None):
+        assert prepare is not None
+        prepare()
+        return _started_record(run_base, node, sid, run_flags, steps)
+
+    monkeypatch.setattr(JOB_API.approvals, 'authorize_writing', authorize)
+    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
+
+    response = client.post('/api/jobs', json={
+        'sid': '42', 'node': 'stage5.write',
+        'flags': ['--chapters', '1,3'],
+    })
+
+    assert response.status_code == 202, response.text
+    assert response.json()['start']['paid'] is True
+    assert [(sid, chapters, fresh) for _, sid, chapters, fresh in authorized] == [
+        ('42', [1, 3], False),
+    ]
+
+
+@pytest.mark.parametrize('node', [
+    'stage2.global', 'stage2.blueprint', 'stage4.plan',
+    'stage5.write', 'stage6.hook', 'stage7.rename',
 ])
 def test_revalidate_preview_is_a_template_but_execution_requires_real_audit_values(
-        client, node, mode):
+        client, node):
     request = {
         'sid': '42',
         'node': node,
-        'mode': mode,
         'flags': ['--revalidate'],
     }
     preview = client.post('/api/jobs/preview', json=request)

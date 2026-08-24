@@ -14,6 +14,7 @@ from contracts.invariants import (
     ENDING_SHAPES, HOOK_APPROACHES, HOOK_APPROACH_NOTES, HOOK_CURRENT_APPROACHES,
     SEP_BANDS,)
 from novel.core.bands import BAND_SEP, ending_shape, sep_band_of_text
+from novel.core.evidence import iter_global_evidence_slots, without_global_evidence
 from novel.core.facts import (
     NUM_UNIT, locate_secret, num_unit_keys, num_value, secret_contains, secret_keywords,
 )
@@ -28,7 +29,7 @@ from novel.core.normalize import (
     quote_pair,
 )
 from novel.core.spans import (
-    content_only, exact_span, extend_terminal_punct, locate_spans,
+    content_only, exact_span, extend_terminal_punct, locate_spans, locate_unique_span,
 )
 from novel.core.text import (
     SPLIT_MIN_SIDE, TERMINAL_PUNCT, locate_norm, min_hamming, norm, quote_count,
@@ -544,6 +545,72 @@ def test_terminal_material_suffix_keeps_ascii_period_but_stops_before_quote_boun
     raw = 'material.:「next」'
     end = extend_terminal_punct(raw, len('material'))
     assert raw[:end] == 'material.'
+
+
+def test_unique_span_locator_rejects_ambiguous_text_and_can_recover_punctuation():
+    raw = '甲说：真相。乙又说：真相！末尾只有一次。'
+    assert locate_unique_span(raw, '真相') == 2
+    assert locate_unique_span('哈哈哈', '哈哈') == 2, '重叠的两个起点也必须判多命中'
+    assert locate_unique_span('哈，哈，哈，哈', '哈哈哈') == 2, \
+        'normalized 内容空间里的重叠起点同样不能取首处'
+
+    got = locate_unique_span(raw, '末尾，只有一次')
+    assert isinstance(got, tuple)
+    start, end, recovery = got
+    assert raw[start:end] == '末尾只有一次。'
+    assert recovery == 'normalized'
+
+
+def test_source_span_rejects_a_punctuation_only_slice():
+    raw = '甲※乙'
+    assert exact_span({
+        'text': '※', 'start': 1, 'end': 2, 'normalized': '', 'recovery': 'exact',
+    }, raw)[2] == 'source span has no content characters'
+
+
+def test_global_evidence_projection_removes_only_evidence_slots():
+    data = {
+        'entities': {
+            'characters': {'char_001': {
+                'role': '主角', 'role_evidence': {'source': {'text': '原文'}},
+                'fate': None, 'fate_evidence': None,
+            }},
+            'relations': [{
+                'relation_id': 'rel_01', 'predicate': '朋友',
+                'predicate_evidence': {'source': {'text': '朋友'}},
+            }],
+        },
+        'canon': {
+            'setting': {
+                '时代背景': '现代', 'era_evidence': {'source': {'text': '现代'}},
+                '世界观': '现实', 'worldview_evidence': {'source': {'text': '现实'}},
+            },
+            'world_rules': [],
+            'secrets': [{
+                'secret_id': 'secret_01', 'fact': '秘密',
+                'fact_evidence': {'source': {'text': '秘密'}},
+                'knowledge_events': [{
+                    'subject': {'kind': 'group', 'label': '众人'},
+                    'known_from_chapter': 1,
+                    'evidence': {'source': {'text': '众人皆知'}},
+                }],
+            }],
+        },
+        'arc': {'arc_tracks': [{
+            'trajectory': '由弱变强',
+            'trajectory_evidence': {'source': {'text': '变强'}},
+        }]},
+    }
+
+    paths = [path for path, _owner, _field in iter_global_evidence_slots(data)]
+    assert 'entities.characters.char_001.role' in paths
+    assert 'canon.secrets.secret_01.knowledge_events.0' in paths
+    projected = without_global_evidence(data)
+    assert projected['entities']['characters']['char_001']['role'] == '主角'
+    assert 'role_evidence' not in projected['entities']['characters']['char_001']
+    assert 'fate_evidence' not in projected['entities']['characters']['char_001']
+    assert 'evidence' not in projected['canon']['secrets'][0]['knowledge_events'][0]
+    assert data['entities']['characters']['char_001']['role_evidence']
 
 
 def test_locate_spans_accepts_verified_exact_sources_without_searching():
