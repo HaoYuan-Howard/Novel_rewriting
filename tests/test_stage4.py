@@ -951,6 +951,38 @@ def _provenance(ctx: RunContext, up) -> object:
                           params=plan._params(up))
 
 
+def test_pre_context_gate_does_not_pair_a_new_candidate_with_the_old_context(monkeypatch):
+    """新候选的前置闸门不能读取旧 writer context。
+
+    真实恢复路上，Stage2 重建后旧 context 的 103 条 event 与 135 个保真点都已过期；
+    新 ``.INVALID`` 计划已覆盖 158/158 个源 beat，本可重建出完整 context，却在
+    ``--revalidate`` 提升前被旧 context 的两条 HARD 永久挡住。
+    """
+    class OldContextStore:
+        @staticmethod
+        def exists(rel: str) -> bool:
+            assert rel == plan.CTX_REL
+            return True
+
+        @staticmethod
+        def read_own(*_args, **_kwargs):
+            raise AssertionError('前置计划闸门不应读取旧 writer context')
+
+    captured = {}
+    monkeypatch.setattr(plan, '_ctx_source_line', lambda _store: '旧 context 仅作来源读数')
+    monkeypatch.setattr(
+        plan.checks, 'check',
+        lambda *_args, **kwargs: captured.update(kwargs) or [],
+    )
+    up = type('Upstreams', (), {
+        'blueprints': {}, 'main_text': [], 'global_g': {}, 'bidx': {},
+    })()
+
+    assert plan._judge(OldContextStore(), {}, up, with_ctx_link=False) == []
+    assert captured['ctx'] is None
+    assert captured['ctx_link'] is None
+
+
 @needs_corpus
 def test_a_single_hard_hit_sends_the_whole_plan_to_invalid():
     """⭐ **落盘闸门照 stage3 不照 stage6**：本层一次产**一份** ⇒ 任何一条 hard 就 `.INVALID`。
