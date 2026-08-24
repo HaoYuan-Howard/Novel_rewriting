@@ -79,7 +79,18 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   再看结果。⇒ runner 已于 2026-08-19 重建为 `tools/effort_ab.py`（**进程内**覆盖
   `NodeSpec.effort`，仓里那一格恒 `None` ⇒ 实验臂与交付跑物理上不可能混）。
   在付费实测满足质量、UNVER/INFO、fallback/wire/error 和 completion 门之前，
-  `stage3.style` / `stage7.rename` 继续保持默认 high（实测结果见下，改默认值仍待用户裁决）。
+  `stage3.style` / `stage7.rename` 继续保持默认 high（实测结果见下）。
+  ⇒ **`stage7.rename` 这一半 2026-08-24 已裁：维持 high，不降 low。**
+  依据是本节点 17 次历史调用的账本读数——两档**正文产出量几乎相同**
+  （high 成功 1,225 / low 1,203 token），差别全在 reasoning（11,064 vs 5,729），
+  降档单本期望 completion 从 15,837 降到 6,932（**−56%**）。
+  **否决降档的理由不是成本，是那 56% 买不到的东西**：唯一可能被降档伤到的维度是
+  「名字起得好不好」，而 `rn_taste_unver` 明说全链没有判据 ⇒ FC-13 那五道门
+  （全是机械判据、n=1）**证不了这一维**，「未见劣化」不等于「没有劣化」。
+  改动落在 `MAX_TOKENS` 而不是 `effort`：16000 → 64000，让 high 档大概率不再落梯，
+  交付的映射恒出自 high 臂。⚠ 代价是真跑飞时浪费从 16k 变 64k，见
+  `novel/stages/stage7/rename.py::MAX_TOKENS` 那段注释里的回读约定。
+  ⇒ **`stage3.style` 那一半仍待裁决**，本次没有一并处理。
   ⚠⚠ **这一条是全链最大的降本杠杆，而它此前没有量。** 2026-08-18 实测（`.llm_cache/` 里
   1639 份带 `usage` 的真实响应，0 成本可复算）：completion 13,031,022 token 里 reasoning 占
   **11,457,627（87.9%）**，净成品输出只有 1,573,395；写作类调用（n=720）reasoning 中位 9109 而
