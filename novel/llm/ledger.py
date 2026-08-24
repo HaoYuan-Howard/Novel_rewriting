@@ -24,9 +24,10 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 from contracts.schema import Usage
-from novel.appendlog import append_line
+from novel.appendlog import append_line, process_append_lock
 from novel.errors import ProvenanceRefused
 from novel.observability import RequestProgress
 
@@ -176,6 +177,12 @@ class CostLedger:
     #: 不能从 client 的主模型配置猜。
     _request_models: dict[str, str] = field(default_factory=dict, repr=False)
 
+    #: 与上面两张索引同源：跨 CLI 的响应修复恢复链需要把**原来已经花掉、但尚未被
+    #: 产物认领**的 attempts 重新纳入本次 provenance 窗口。按 purpose 过滤，不能把
+    #: 同一节点的另一章/另一相调用一起认领。
+    _request_purposes: dict[str, str] = field(default_factory=dict, repr=False)
+    _request_chapters: dict[str, int | None] = field(default_factory=dict, repr=False)
+
     #: Stage 2 会并发等待独立章节响应。计数更新与 JSONL 追加必须是同一个临界区，
     #: 否则两个成功回包可能互相覆盖内存计数，甚至把两行字节交错写坏。
     _lock: threading.RLock = field(default_factory=threading.RLock,
@@ -243,6 +250,14 @@ class CostLedger:
                         f'attempt_id={attempt_id} 同时指向两个模型：'
                         f'{previous_model!r} / {model!r}')
                 self._request_models[attempt_id] = model
+                previous_purpose = self._request_purposes.get(attempt_id)
+                if previous_purpose is not None and previous_purpose != purpose:
+                    raise ProvenanceRefused(
+                        f'attempt_id={attempt_id} 同时指向两个 purpose：'
+                        f'{previous_purpose!r} / {purpose!r}')
+                self._request_purposes[attempt_id] = purpose
+                self._request_chapters[attempt_id] = (
+                    progress.chapter if progress is not None else None)
 
             if cached:
                 self.calls_cached += 1
@@ -325,6 +340,102 @@ class CostLedger:
                     f'accepted attempt_id={attempt_id!r} 在本 run 的成本账里没有 model；'
                     '拒绝按 client 主模型估算')
             return value
+
+    def attempt_ids_for(self, *, purpose: str,
+                        request_fingerprints: Iterable[str]) -> tuple[str, ...]:
+        """本逻辑请求已经发生过的全部成本行；供修复状态封存，顺序不承载语义。"""
+        allowed = set(request_fingerprints)
+        with self._lock:
+            return tuple(sorted(
+                attempt_id for attempt_id, fingerprint
+                in self._request_fingerprints.items()
+                if fingerprint in allowed
+                and self._request_purposes.get(attempt_id) == purpose))
+
+    def claim_prior_attempts(self, attempt_ids: Iterable[str], *, sid: str,
+                             node: str, purpose: str,
+                             request_fingerprints: Iterable[str]) -> None:
+        """把前一次 CLI 已记账、尚未产出制品的调用纳入本次 provenance 窗口。
+
+        **不追加第二行成本账。** 原 wire 行已经是费用事实；这里仅恢复内存计数与
+        attempt 联结，使修复后落下的产物能够如实认领首发/重采的全部 token。
+        若 path=None，同进程没有跨 CLI 可恢复材料，非空输入关闭式拒绝。
+        """
+        wanted = set(attempt_ids)
+        if not wanted:
+            return
+        allowed_fp = set(request_fingerprints)
+        with self._lock:
+            missing = wanted - set(self._request_fingerprints)
+            if not missing:
+                return
+            if self.path is None:
+                raise ProvenanceRefused(
+                    f'响应修复要恢复 {len(missing)} 条 prior attempts，但成本账没有盘上路径')
+
+            rows: dict[str, dict[str, object]] = {}
+            try:
+                with process_append_lock(self.path):
+                    raw_lines = self.path.read_text(encoding='utf-8').splitlines()
+            except OSError as exc:
+                raise ProvenanceRefused(f'读不了响应修复所指成本账 {self.path}: {exc}') from exc
+            for index, line in enumerate(raw_lines):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    if index == len(raw_lines) - 1:
+                        continue
+                    raise ProvenanceRefused(
+                        f'成本账中间第 {index + 1} 行损坏，不能恢复响应修复来源') from exc
+                attempt_id = row.get('attempt_id') if isinstance(row, dict) else None
+                if attempt_id in missing:
+                    rows[str(attempt_id)] = row
+
+            absent = missing - set(rows)
+            if absent:
+                raise ProvenanceRefused(
+                    f'响应修复引用的 prior attempts 不在成本账：{sorted(absent)}')
+
+            for attempt_id in sorted(missing):
+                row = rows[attempt_id]
+                if (row.get('sid') != sid or row.get('node') != node
+                        or row.get('purpose') != purpose
+                        or row.get('request_fingerprint') not in allowed_fp):
+                    raise ProvenanceRefused(
+                        f'prior attempt {attempt_id} 不属于当前请求：'
+                        f'{row.get("sid")}/{row.get("node")}/{row.get("purpose")}/'
+                        f'{row.get("request_fingerprint")}')
+                fingerprint = str(row['request_fingerprint'])
+                model = str(row.get('model') or '')
+                self._request_fingerprints[attempt_id] = fingerprint
+                self._request_models[attempt_id] = model
+                self._request_purposes[attempt_id] = purpose
+                chapter_raw = row.get('chapter')
+                chapter = chapter_raw if isinstance(chapter_raw, int) else None
+                self._request_chapters[attempt_id] = chapter
+
+                cached = row.get('cached') is True
+                if cached:
+                    self.calls_cached += 1
+                else:
+                    self.calls_made += 1
+                counter = (self._by_chapter.setdefault(chapter, _UsageCounter())
+                           if chapter is not None else None)
+                if counter is not None:
+                    if cached:
+                        counter.calls_cached += 1
+                    else:
+                        counter.calls_made += 1
+                for key in TOKEN_KINDS:
+                    value = row.get(key)
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        setattr(self, key, getattr(self, key) + value)
+                        self._seen[key] += 1
+                        if counter is not None:
+                            counter.tokens[key] += value
+                            counter.seen[key] += 1
 
     def _append(self, row: dict) -> None:
         """一行 JSON，**按字节追加**（换行与两把锁都在 `appendlog.append_line` 里）。
@@ -437,6 +548,36 @@ class CostLedger:
             'reasoning_chars': reasoning_chars,
             'dump': dump,                      # 相对书目录；None = 没写成
             'dump_error': dump_error,
+            'chapter': chapter,
+        })
+
+    def note_response_repair(
+            self, *, sid: str, node: str, purpose: str, attempt_id: str,
+            action: str, decision: str, actor: str | None = None,
+            gate: str | None = None, candidate_sha256: str | None = None,
+            dump: str | None = None, dump_error: str | None = None,
+            model: str | None = None, rung_index: int | None = None,
+            sample: int | None = None, chapter: int | None = None) -> None:
+        """一次拒绝是否进入修复、由谁提交、同闸复验结果如何。
+
+        正文只在书内隔离目录；这行只留联结、决定与哈希。`decision=accepted` 也不把
+        原 `gate_decision(rejected)` 改写成通过——通过的是 agent 候选，不是供应商原响应。
+        """
+        self._append_audit({
+            'kind': 'response_repair',
+            'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'sid': sid, 'node': node, 'purpose': purpose,
+            'attempt_id': attempt_id,
+            'action': action,              # offered | agent | declined | deterministic | ineligible
+            'decision': decision,          # pending | accepted | rejected | declined | skipped
+            'actor': actor,
+            'gate': gate,
+            'candidate_sha256': candidate_sha256,
+            'dump': dump,
+            'dump_error': dump_error,
+            'model': model,
+            'rung_index': rung_index,
+            'sample': sample,
             'chapter': chapter,
         })
 

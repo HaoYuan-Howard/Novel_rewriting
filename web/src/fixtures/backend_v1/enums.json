@@ -546,6 +546,7 @@
  ],
  "valued_flags": {
   "--apply-edit": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
+  "--response-repair": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
   "--validate-edit": "要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）",
   "--apply-edit-plan": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
   "--review-decisions": "stage2/global_review 的人工决策集（相对当前书目录）",
@@ -772,7 +773,8 @@
     "--emit-review-template",
     "--emit-review-workpack",
     "--actor",
-    "--reason"
+    "--reason",
+    "--response-repair"
    ],
    "produces": [
     "stage2/global_grounding.json",
@@ -792,7 +794,8 @@
     "--patch",
     "--revalidate",
     "--actor",
-    "--reason"
+    "--reason",
+    "--response-repair"
    ],
    "produces": [
     "stage2/chapter_blueprints.json"
@@ -825,7 +828,8 @@
     "--apply-edit",
     "--chapters",
     "--actor",
-    "--reason"
+    "--reason",
+    "--response-repair"
    ],
    "produces": [
     "stage4/plan_chapters.json"
@@ -855,7 +859,8 @@
     "--revise",
     "--chapters",
     "--actor",
-    "--reason"
+    "--reason",
+    "--response-repair"
    ],
    "produces": [
     "stage5/ch{nn}.json",
@@ -893,7 +898,8 @@
     "--apply-edit",
     "--wontfix",
     "--actor",
-    "--reason"
+    "--reason",
+    "--response-repair"
    ],
    "produces": [
     "stage6/hook.json"
@@ -905,7 +911,8 @@
    "stage": "stage6",
    "section": "R-9",
    "flags": [
-    "--dry-run"
+    "--dry-run",
+    "--response-repair"
    ],
    "produces": [
     "stage6/semantic_{n}.json"
@@ -942,7 +949,8 @@
     "--adopt-residual",
     "--validate-edit",
     "--actor",
-    "--reason"
+    "--reason",
+    "--response-repair"
    ],
    "produces": [
     "stage7/name_map.json"
@@ -1265,6 +1273,19 @@
    "required_inputs": []
   },
   {
+   "kind": "stage2.global",
+   "label": "stage2 全书级抽取 --response-repair",
+   "extra": [
+    "--response-repair"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/global_grounding.json · stage2/global_review.json",
+   "writes_disk": true,
+   "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
+   "required_inputs": []
+  },
+  {
    "kind": "stage2.blueprint",
    "label": "stage2 逐章抽取",
    "extra": null,
@@ -1361,6 +1382,19 @@
      "description": "人工决定的非空理由"
     }
    ]
+  },
+  {
+   "kind": "stage2.blueprint",
+   "label": "stage2 逐章抽取 --response-repair",
+   "extra": [
+    "--response-repair"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/chapter_blueprints.json",
+   "writes_disk": true,
+   "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
+   "required_inputs": []
   },
   {
    "kind": "stage3.style",
@@ -1511,6 +1545,19 @@
    "required_inputs": []
   },
   {
+   "kind": "stage4.plan",
+   "label": "stage4 重构计划 --response-repair",
+   "extra": [
+    "--response-repair"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage4/plan_chapters.json",
+   "writes_disk": true,
+   "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
+   "required_inputs": []
+  },
+  {
    "kind": "stage4.context",
    "label": "stage4 写作上下文组装",
    "extra": null,
@@ -1630,6 +1677,19 @@
    "writes": "stage5/ch{nn}.json · stage5/draft.md",
    "writes_disk": true,
    "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage5.write",
+   "label": "stage5 全书闭卷写作 --response-repair",
+   "extra": [
+    "--response-repair"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage5/ch{nn}.json · stage5/draft.md",
+   "writes_disk": true,
+   "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
    "required_inputs": []
   },
   {
@@ -1820,6 +1880,19 @@
    "required_inputs": []
   },
   {
+   "kind": "stage6.hook",
+   "label": "stage6 开篇文案 --response-repair",
+   "extra": [
+    "--response-repair"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage6/hook.json",
+   "writes_disk": true,
+   "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
+   "required_inputs": []
+  },
+  {
    "kind": "stage6.semantic",
    "label": "stage6 文案语义审判",
    "extra": null,
@@ -1841,6 +1914,19 @@
    "writes": "",
    "writes_disk": false,
    "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage6.semantic",
+   "label": "stage6 文案语义审判 --response-repair",
+   "extra": [
+    "--response-repair"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage6/semantic_{n}.json",
+   "writes_disk": true,
+   "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
    "required_inputs": []
   },
   {
@@ -2032,6 +2118,19 @@
    "writes": "",
    "writes_disk": false,
    "needs_value": "要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）",
+   "required_inputs": []
+  },
+  {
+   "kind": "stage7.rename",
+   "label": "stage7 人名表 --response-repair",
+   "extra": [
+    "--response-repair"
+   ],
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage7/name_map.json",
+   "writes_disk": true,
+   "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
    "required_inputs": []
   },
   {

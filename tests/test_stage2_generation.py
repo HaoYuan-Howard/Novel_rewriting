@@ -24,8 +24,8 @@ from contracts.schema.stage2 import (
 )
 from novel import prov
 from novel.errors import (
-    ArtifactUnreadable, ContextBudgetRefused, GateBlocked, ProvenanceRefused, UpstreamMissing,
-    UpstreamStale,
+    ArtifactUnreadable, ContextBudgetRefused, GateBlocked, ProvenanceRefused,
+    ResponseRepairRequired, UpstreamMissing, UpstreamStale,
 )
 from novel.llm.budget import enforce_request_budget
 from novel.llm.cache import CachePolicy, ResponseCache
@@ -123,6 +123,42 @@ def test_one_llmfailed_chapter_does_not_abort_other_blueprint_chapters():
     assert sorted((event['chapter'], event['outcome']) for event in events) == [
         (4, 'failed'), (9, 'ok'),
     ]
+
+
+def test_response_repair_waits_for_other_blueprint_chapters_then_stops_before_compile():
+    """修复暂停按章隔离；成功章先收完，但不得把暂缺章写成 `.INVALID`。"""
+    calls = []
+
+    class Response:
+        @staticmethod
+        def model_dump(**_kwargs):
+            return {'blueprints': [{'chapter_ordinal': 9}]}
+
+    pause = ResponseRepairRequired(
+        'ch4 等待修复', attempt_id='a' * 16,
+        candidate_path='candidate.json', original_path='original.txt',
+        hint='response-repair')
+
+    class Client:
+        concurrency = 2
+
+        def ask_json(self, *_args, **kwargs):
+            ordinal = kwargs['progress'].chapter
+            calls.append(ordinal)
+            if ordinal == 4:
+                raise pause
+            return Response()
+
+    ctx = SimpleNamespace(
+        node='stage2.blueprint', observe=lambda *_args, **_kwargs: None)
+    results, violations, errors = extract._run_chapter_requests(
+        ctx, Client(), [(4, 's4', 'u4'), (9, 's9', 'u9')])
+
+    assert sorted(calls) == [4, 9]
+    assert results == [{'chapter_ordinal': 9}] and violations == []
+    with pytest.raises(ResponseRepairRequired) as stopped:
+        extract._raise_response_repair(errors)
+    assert stopped.value is pause
 
 
 @pytest.mark.parametrize(('chapters', 'expected_peak'), [(20, 20), (40, 32)])

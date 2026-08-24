@@ -657,6 +657,11 @@ def uploaded_source_tail(recorded: str | os.PathLike[str]) -> tuple[str, str] | 
 #: 它只回答「那条通道里到底装了什么」——在此之前这个问题只能拿 token 体积去猜。
 ANSWER_LOST_DIRNAME = '_answer_lost'
 
+#: 被结构化内容闸拒绝的供应商响应与受托修复决定。它与 `_answer_lost` 同样跟书走，
+#: 但不是只写诊断：`--response-repair agent` 会把这里当成一个显式、可恢复的状态机。
+#: 因此目录名仍用 `_` 隔离于正式产物，路径构造也必须拒绝外部传入的穿越片段。
+REJECTED_RESPONSE_DIRNAME = '_llm_rejected'
+
 
 def answer_lost_rel(attempt_id: str) -> str:
     """留证文件相对**书目录**的路径。审计账里存的就是它——绝对路径换台机器就断。"""
@@ -666,3 +671,18 @@ def answer_lost_rel(attempt_id: str) -> str:
 def answer_lost_path(novel_dir: str | os.PathLike[str], attempt_id: str) -> Path:
     """`<书目录>/_answer_lost/<attempt_id>.json`。形状只有 `answer_lost_rel` 一处。"""
     return Path(os.fspath(novel_dir)) / answer_lost_rel(attempt_id)
+
+
+def rejected_response_rel(chain_id: str, attempt_id: str) -> str:
+    """一次拒绝的隔离目录，相对**书目录**；两段均为完整小写十六进制身份。"""
+    if not re.fullmatch(r'[0-9a-f]{64}', chain_id):
+        raise PathRefused(f'LLM 修复链 id 必须是 64 位小写 SHA-256，实得 {chain_id!r}')
+    if not re.fullmatch(r'[0-9a-f]{16}', attempt_id):
+        raise PathRefused(f'LLM attempt_id 必须是 16 位小写十六进制，实得 {attempt_id!r}')
+    return f'{REJECTED_RESPONSE_DIRNAME}/{chain_id}/{attempt_id}'
+
+
+def rejected_response_path(novel_dir: str | os.PathLike[str], chain_id: str,
+                           attempt_id: str) -> Path:
+    """`<书目录>/_llm_rejected/<chain>/<attempt>/`；不是缓存或正式产物。"""
+    return Path(os.fspath(novel_dir)) / rejected_response_rel(chain_id, attempt_id)

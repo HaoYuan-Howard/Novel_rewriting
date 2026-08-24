@@ -57,6 +57,10 @@ class RunContext:
     cache: CachePolicy
     ledger: CostLedger
 
+    #: 结构化响应被 parse/require/schema 等可修复闸拒绝时，是否先物化给外层受托
+    #: agent，而不是立即烧掉下一采。显式 CLI flag 才能开启；普通 CLI/队列保持原行为。
+    repair_rejected_responses: bool = False
+
     #: 完成度/API 视图使用的只读上下文。只读消费者需要把 stale 产物展示出来并解释
     #: 为什么过期；真正的生产节点则必须在任何 LLM 请求之前拒绝消费 stale 上游。
     #: 这个位只由 ``state.readonly_ctx`` 设置，普通运行上下文默认一律 fail closed。
@@ -344,7 +348,8 @@ class RunContext:
     @classmethod
     def open(cls, base: str | os.PathLike[str], sid: str, node: str, *,
              paid: bool, cache: CachePolicy | None = None,
-             ledger: CostLedger | None = None, write_ledger: bool = True) -> RunContext:
+             ledger: CostLedger | None = None, write_ledger: bool = True,
+             repair_rejected_responses: bool = False) -> RunContext:
         """按 `<Output>` + 书 id 开一次跑。**找不到书目录 ⇒ 显式终态**（`UpstreamMissing`）。
 
         `write_ledger=False` 时账本只在内存里攒（`--dry-run` / 测试）——
@@ -356,4 +361,5 @@ class RunContext:
             code=prov.code_version(),
             cache=cache or CachePolicy.default(),
             ledger=ledger or CostLedger(path=ledger_path(base) if write_ledger else None),
+            repair_rejected_responses=repair_rejected_responses,
         )

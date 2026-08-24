@@ -127,6 +127,9 @@ def test_prompt_surfaces_the_headless_safety_sequence(base, book):
     assert 'expected-code-version' in text
     assert '没有可定位证据时必须保留 `UNVER`' in text
     assert '不得猜测 PASS' in text and '把 exit 0 当成交付 ready' in text
+    assert '--response-repair agent' in text
+    assert 'ResponseRepairRequired' in text and 'novel.cli response-repair' in text
+    assert '_llm_rejected/**/candidate.json' in text
 
 
 def test_prompt_forbids_direct_edits_of_formal_artifacts(base, book):

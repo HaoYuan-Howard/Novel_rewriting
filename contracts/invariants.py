@@ -1404,6 +1404,8 @@ VALUED_FLAGS: Final = {
     #   两个口径分家（skill 现场记录 FN-016）。这一行是人唯一会读到的说明。
     '--apply-edit': '人工改好的候选稿路径（必填；相对路径相对**书目录**，'
                     '如 stage7/name_map_edit.json，也接受书目录内的绝对路径）',
+    '--response-repair': '结构化拒绝响应恢复模式；当前只接受 `agent`。'
+                         '可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样',
     '--validate-edit': '要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）',
     '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--review-decisions': 'stage2/global_review 的人工决策集（相对当前书目录）',
@@ -1646,7 +1648,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--revalidate',
                                          '--apply-edit', '--review-decisions',
                                          '--emit-review-template', '--emit-review-workpack',
-                                         '--actor', '--reason'),
+                                         '--actor', '--reason', '--response-repair'),
                                  produces=(artifact_paths.STAGE2_GLOBAL_GROUNDING,
                                            artifact_paths.STAGE2_GLOBAL_REVIEW)),
     # ⚠⚠ **`--chapters` 是这一列里最容易漏的那一个**：§5.1 有 **19 条**判据的修法是
@@ -1655,7 +1657,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
                                  flags=('--dry-run', '--check-only', '--renormalize',
                                         '--chapters', '--patch',
-                                        '--revalidate', '--actor', '--reason'),
+                                        '--revalidate', '--actor', '--reason',
+                                        '--response-repair'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
     'stage3.style':     NodeSpec('stage3', 'R-4',  False, 'stage3 机械基线',
                                   flags=('--check-only', '--measure-only'),
@@ -1677,7 +1680,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 重构计划',
                                  flags=('--dry-run', '--check-only',
                                         '--revalidate', '--names-only', '--identity',
-                                        '--apply-edit', '--chapters', '--actor', '--reason'),
+                                        '--apply-edit', '--chapters', '--actor', '--reason',
+                                        '--response-repair'),
                                  produces=(artifact_paths.STAGE4_PLAN_CHAPTERS,),
                                  model='deepseek-v4-pro'),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
@@ -1695,7 +1699,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 全书闭卷写作',
                                   flags=('--dry-run', '--recheck', '--revalidate',
                                          '--rebuild-draft', '--apply-edit', '--revise',
-                                         '--chapters', '--actor', '--reason'),
+                                         '--chapters', '--actor', '--reason',
+                                         '--response-repair'),
                                  produces=(artifact_paths.STAGE5_CHAPTER,
                                            artifact_paths.STAGE5_BOOK_DRAFT)),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。
@@ -1730,7 +1735,8 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage6.hook':      NodeSpec('stage6', 'R-9',  True,  'stage6 开篇文案',
                                  flags=('--dry-run', '--check-only', '--identity',
                                         '--recheck', '--revalidate', '--apply-edit',
-                                        '--wontfix', '--actor', '--reason'),
+                                        '--wontfix', '--actor', '--reason',
+                                        '--response-repair'),
                                  produces=(artifact_paths.STAGE6_HOOK,)),
     # 付费语义审判是字面探针的 companion（R-9.19/R-9.20）：
     # 不接 `--check-only`，否则一层两个复检节点、HTTP kind 路由产生歧义。
@@ -1743,7 +1749,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   判 PASS 并排成第一名，证据区间圈成候选全文（等于没有指向）——对「结论必须
     #   绑证据」的判官是死刑。钉在本表 ⇒ `DEEPSEEK_MODEL` 换不掉它。
     'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',
-                                 flags=('--dry-run',),
+                                 flags=('--dry-run', '--response-repair'),
                                  produces=(artifact_paths.STAGE6_SEMANTIC,),
                                  model='deepseek-v4-pro'),
     # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
@@ -1762,7 +1768,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--recheck', '--apply-edit', '--revalidate',
                                           '--emit-edit-template', '--adopt-residual',
                                           '--validate-edit',
-                                         '--actor', '--reason'),
+                                         '--actor', '--reason', '--response-repair'),
                                   produces=(artifact_paths.STAGE7_NAME_MAP,)),
     # ⚠⚠ 本层没有候选序号：一本书只有一份人物表，定稿是「给整份盖章」。
     #   但审批动作必须携带统一人工凭据，并用 decision-surface SHA-256 防旧页面误批。

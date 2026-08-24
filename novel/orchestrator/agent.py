@@ -172,7 +172,9 @@ base 目录（--base 恒用下面这个绝对路径）：
 3. 在任何写盘或付费动作前，按 skill 模板创建终审包草稿；以后每次授权判断、闸门裁决、
    修复与异常都立即更新，不要等结束时凭记忆补写。
 4. 下一步将调用外部模型时，先运行 `doctor --llm-transport`；随后 preview 下一动作，
-   陈述付费/外发边界，再执行 preview 给出的完整步骤并复验。
+   陈述付费/外发边界；结构化付费节点按 skill 主跑参数带 `--response-repair agent`，再执行 preview
+   给出的完整步骤并复验。命中 `ResponseRepairRequired` 时只编辑终态点名的 `_llm_rejected/**/candidate.json`，
+   经 `novel.cli response-repair` 提交或拒绝后，以原节点原参数续跑。
 
 无人值守纪律：
 - 没有用户可以提问。任何 redo/unknown 或闸门争议，按 skill 的修复状态机与代批契约

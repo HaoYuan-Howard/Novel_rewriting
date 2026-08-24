@@ -17,7 +17,8 @@ import pytest
 from novel import prov
 from novel.cli import exit_codes as X
 from novel.errors import (
-    ArtifactUnreadable, GateBlocked, ProvenanceRefused, TerminalState,
+    ArtifactUnreadable, GateBlocked, ProvenanceRefused, ResponseRepairRequired,
+    TerminalState,
 )
 from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
@@ -408,6 +409,7 @@ def test_draft_current_guard_returns_false_when_canonical_projection_is_unreadab
 
 @pytest.mark.parametrize('write_path', [
     'initial', 'revise', 'recheck', 'revalidate', 'apply_edit', 'partial_success',
+    'response_repair_pause',
 ])
 def test_every_chapter_write_path_commits_the_exact_draft_bytes(
         tmp_path, monkeypatch, write_path):
@@ -539,6 +541,11 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
         ordinal = entry['output_ordinal']
         if write_path == 'partial_success' and ordinal == 1:
             return {'error': '没有拿到正文'}
+        if write_path == 'response_repair_pause' and ordinal == 1:
+            return {'response_repair_required': ResponseRepairRequired(
+                '等待修复', attempt_id='a' * 16,
+                candidate_path='candidate.json', original_path='original.txt',
+                hint='response-repair')}
         segments = [{'slot': 's01', 'text': f'第{ordinal}章新正文。'}]
         return {
             'entry': entry, 'ordinal': ordinal,
@@ -571,6 +578,13 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
         write._run_group_parallel(
             ctx, store, book, [entries[1], entries[2]], client,
             revise=None)
+    elif write_path == 'response_repair_pause':
+        store.by_ord[1] = record(entries[1], [{'slot': 's01', 'text': '第一章旧正文。'}])
+        with pytest.raises(ResponseRepairRequired):
+            write._run_group_parallel(
+                ctx, store, book, [entries[1], entries[2]], client,
+                revise=None)
+        assert 2 in store.by_ord, '一章等待修复不能取消另一章的成功落盘'
     elif write_path == 'recheck':
         store.by_ord[1] = record(entries[1], [{'slot': 's01', 'text': '重判正文。'}])
         write.run_recheck(ctx)

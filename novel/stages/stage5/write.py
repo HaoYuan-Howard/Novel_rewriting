@@ -60,7 +60,8 @@ from contracts.schema.stage5 import (
 from novel import paths, prov
 from novel.consumption import render_stage5_draft
 from novel.errors import (
-    ArtifactUnreadable, GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing,
+    ArtifactUnreadable, GateBlocked, ProvenanceRefused, ResponseRepairRequired,
+    TerminalState, UpstreamMissing,
 )
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient, LlmFailed
@@ -363,6 +364,10 @@ def _generate_chapter(
             purpose=accepted_purpose, max_tokens=MAX_TOKENS,
             validator=lambda obj, wire: _response_problem(obj, wire, entry),
             progress=progress)
+    except ResponseRepairRequired as exc:
+        # 这是本章在**下一采之前**的恢复暂停，不是全批网络故障。把终态带回
+        # 汇总线程，让其他已起跑/待起跑章节照常完成并落下自己的成功结果。
+        return {'response_repair_required': exc}
     except LlmFailed as exc:
         return {'error': str(exc).splitlines()[0]}
     segments = _ordered_segments(got, entry)
@@ -381,6 +386,8 @@ def _generate_chapter(
                     max_tokens=MAX_TOKENS,
                     validator=lambda obj, wire: _response_problem(obj, wire, entry),
                     progress=progress, cache_policy=CachePolicy.refresh())
+            except ResponseRepairRequired as exc:
+                return {'response_repair_required': exc}
             except LlmFailed as exc:
                 return {
                     'rejected': {
@@ -483,6 +490,17 @@ def _run_group_parallel(
                     f'第 {ordinal} 章没拿到正文' if error == '没有拿到正文'
                     else f'第 {ordinal} 章没拿到完整正文：{error}')
                 tracker.finish(ordinal, outcome='failed', detail=error)
+                continue
+
+            if repair_pause := generated.get('response_repair_required'):
+                if fatal is None:
+                    fatal = repair_pause
+                blocked_by[ordinal] = (
+                    f'第 {ordinal} 章已停在下一采之前，等待受托响应修复：'
+                    f'{str(repair_pause).splitlines()[0]}')
+                tracker.finish(
+                    ordinal, outcome='failed',
+                    detail='等待受托响应修复；同批其他章节继续')
                 continue
 
             if rejected := generated.get('rejected'):

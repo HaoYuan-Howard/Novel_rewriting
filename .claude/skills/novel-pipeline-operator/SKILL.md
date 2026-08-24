@@ -58,7 +58,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 2. 首个动作前从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为 `<START_CODE>`，后续命令全程逐字复用，不能在收尾时现取一个新值冒充起点。
 3. 对既有 `sid` 先运行 `state` 与 `inbox`；对新书先预览 `stage0.remove`。从盘上事实决定起点。
 4. 在首个动作前创建终审包草稿，随每次授权判断、闸门裁决、修复与异常更新；不要等到最后凭记忆补写。
-5. 从仓根优先用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note，供会话证据关闭式核对。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
+5. 从仓根优先用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note，供会话证据关闭式核对。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv。所有接受该参数的结构化付费节点主跑都带 `--response-repair agent`；遇到 `ResponseRepairRequired` 按修复状态机编辑隔离候选、提交或拒绝，再以原参数续跑。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
 6. 不使用 runner 的特殊诊断命令，仍须执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点，并在动作前确认当前代码仍等于 `<START_CODE>`。
 7. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
 8. 命中闸门时按代批契约裁决；命中失败时按修复状态机收敛。每次决定同时记录证据、被否决方案和复验结果。
@@ -68,7 +68,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 ## 不可突破的边界
 
 - 不修改仓库代码、历史证据目录、LLM 缓存、账本或 `_rounds/` 来“修好”某本书。
-- 不直接编辑正式生成产物或成书。改动一律经终审包与 [修复状态机](references/recovery.md) 明列的**受托编辑面**——那张表上的入口（含整章正文与开篇文案）就是留给本 skill 用的，不是留给用户的；让 CLI 完成校验、归档和正式落盘。
+- 不直接编辑正式生成产物或成书。改动一律经终审包与 [修复状态机](references/recovery.md) 明列的**受托编辑面**——那张表上的入口（含整章正文、开篇文案与 `_llm_rejected` 中终态点名的 `candidate.json`）就是留给本 skill 用的，不是留给用户的；让 CLI 完成校验、归档和正式落盘。
 - **本次会话内**不并行运行两本书，也不在同一本书上并行两个写盘节点。会串的是证据、闸门裁决与终审包，它们都长在单个会话里。⚠ 这**不是**「系统不支持多书并行」：跨书并行是产品明确要求的能力，做法是每本书一个 agent 会话（批量入口与队列 lane 各自代跑一本），互斥只落在各自 `sid`。
 - 会话开始后不换代码版本；任何写盘/付费步骤前后都必须仍等于 `<START_CODE>`。临时编辑只有恢复到原指纹才能续跑；稳定落到新指纹时以 `stopped` 结束本会话，重新预检后才是另一条 run。
 - 不覆盖项目默认模型、思考模式、并发或重试配置，除非用户明确要求一次独立实验。

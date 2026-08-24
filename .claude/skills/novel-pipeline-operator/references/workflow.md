@@ -71,6 +71,11 @@ runner 控制参数在显式 `--` 之前可位于 node 前后，但以上是规�
 生产节点。新书摄入时省略 runner 的 `--sid`，在 node flags 里传 `--source <TXT>`。
 runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；漂移时不再启动下一步。
 
+结构化付费节点只要在 `NODES` 中接受该参数，主跑就统一追加 `--response-repair agent`。这不是
+放宽内容闸，而是让可修的 JSON/形状拒绝在消耗下一采之前先停到受托 agent：终态会给出
+`attempt_id` 与唯一可编辑的 `candidate.json`。按[修复状态机](recovery.md#结构化响应的受托修复)
+提交或拒绝后，必须以**完全相同的节点参数**重新执行；client 会恢复原 sample/model 序列和来源账。
+
 真跑本身已经打印同一份 fresh 报告时，追检的价值是**复核产物完整性**，不是重读判据（那句「⚠ 自动追跑：退出码 0 也可能是残缺产物」说的就是这件事）：仍必须执行并打点，但只取它的退出码与合计行即可，不必重读全文。
 
 对每条实际命令，包括自动追跑的 check 与修复命令：
@@ -94,17 +99,17 @@ runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；�
 | 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅剔除报告后批准，批准状态落盘。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
-| 5 | `stage2.global` | 无 | global 正式落盘；随即生成 review workpack，逐项核验并提交 typed 决策；只有 current 且全部 PASS 才继续 |
-| 6 | `stage2.blueprint` | 无；闸开后独立 preview/run | 逐章蓝图正式落盘，check 无 HARD |
+| 5 | `stage2.global` | `--response-repair agent` | global 正式落盘；随即生成 review workpack，逐项核验并提交 typed 决策；只有 current 且全部 PASS 才继续 |
+| 6 | `stage2.blueprint` | `--response-repair agent`；闸开后独立 preview/run | 逐章蓝图正式落盘，check 无 HARD |
 | 7 | `stage3.style` | 无；免费机械测量，独立 preview/run | 当前机械基线正式落盘，check 无漂移；s3 机械基线确认绑定当前产物 |
-| 8 | `stage4.plan` | 无 | 计划 check 无 HARD，写作上下文由当前计划组装 |
+| 8 | `stage4.plan` | `--response-repair agent` | 计划 check 无 HARD，写作上下文由当前计划组装 |
 | 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
-| 10 | `stage5.write` | 无（不带 `--chapters` 即写全部缺少的 canonical 章） | `stage5/chNN.json` 恰好覆盖计划章集合，`draft.md` 是它们的当前纯投影；内部重试不等于整节点失败 |
+| 10 | `stage5.write` | `--response-repair agent`（不带 `--chapters` 即写全部缺少的 canonical 章） | `stage5/chNN.json` 恰好覆盖计划章集合，`draft.md` 是它们的当前纯投影；内部重试不等于整节点失败 |
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
-| 12 | `stage6.hook` | 无 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
-| 13 | `stage6.semantic` | 无 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
+| 12 | `stage6.hook` | `--response-repair agent` | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
+| 13 | `stage6.semantic` | `--response-repair agent` | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
 | 14 | `stage6.approve` | `--pick <N> --actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 所选候选满足代批判据，hash 与当前文本一致，`hook.json.approved` 与最新语义结论一致 |
-| 15 | `stage7.rename` | 无 | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
+| 15 | `stage7.rename` | `--response-repair agent` | 人名表正式落盘；追跑 check 的 HARD 清零，info/unver 已人工审阅 |
 | 16 | `stage7.approve` | `--actor <ACTOR> --reason <text> --subject-sha256 <64hex>` | 映射、漏网称呼与语义标记通过代批判据，hash 与当前决策面一致，批准状态落盘 |
 | 17 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->

@@ -67,6 +67,21 @@ class TerminalState(NovelError):
     """
 
 
+class ResponseRepairRequired(TerminalState):
+    """一份已付费结构化响应可受托修复；原节点停在下一采之前。
+
+    它不是 `LlmFailed`：采样链尚未耗尽，也不是 `GateBlocked`：没有正式产物或
+    `.INVALID`。固定候选面提交/放弃后，重跑**同一原节点**才能继续状态机。
+    """
+
+    def __init__(self, message: str, *, attempt_id: str, candidate_path: str,
+                 original_path: str, hint: str) -> None:
+        super().__init__(message, hint=hint)
+        self.attempt_id = attempt_id
+        self.candidate_path = candidate_path
+        self.original_path = original_path
+
+
 class BookTrashFailed(TerminalState):
     """项目无法安全移入回收站；正式书目录保持原位或仍可从回收站恢复。"""
 

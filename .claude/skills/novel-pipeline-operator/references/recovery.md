@@ -144,6 +144,33 @@ schema version 写），不按记忆手抄。
 - `--apply-edit` 消费明确的 typed 人工输入，开新人工修订轮，并让已绑定旧主体的下游结论/
   approval 按契约过期。它是 0 LLM 费用，不等于没有人工输入或可以跳过重判。
 
+## 结构化响应的受托修复
+
+主跑带 `--response-repair agent` 时，一份结构化响应命中可修闸后不会立刻消耗下一采，而是保留在
+书目录 `_llm_rejected/<chain>/<attempt>/` 并以 `ResponseRepairRequired`（exit 2）停下。终态给出的
+`candidate.json` 是**唯一允许直接编辑**的文件；`original.txt`、`rejection.json`、`resolution.json`
+和 `outcome.json` 都是审计面，不得修改。
+
+只修 `answer_lost`、JSON parse、必需顶层键和 schema 形状问题；其中截断、空无可用材料、调用点
+validator 判出的内容/契约错误都不猜。代码会先尝试极窄的 BOM / 容器尾逗号确定性修正；过不了完整
+闸才交 agent。修复原则是保留原响应表达，只补 JSON/形状，不发明剧情、事实或判据缺失的内容。
+
+处置顺序：
+
+1. 读取终态点名的 `original.txt`、`rejection.json` 与 `candidate.json`，只编辑后者。
+2. 能忠实修复时，完成编辑后提交：
+   `<PY> -X utf8 -u -m novel.cli response-repair <SID> --base <BASE> --attempt <ID> --actor <ACTOR> --reason <text>`。
+   不能忠实修复时同命令加 `--decline`，不要为了省下一采硬造内容。
+3. 每份响应只允许一次 submit/decline；提交后候选被封存，不再改第二遍。
+4. 以原节点、原 flags（含 `--response-repair agent`）重跑。候选必须重新经过
+   `json.loads → require → model_validate → 调用点 validator`；过闸才采纳，失败或 decline 就恢复
+   原顺序继续下一采。完整链固定为
+   `Flash 首发 → 修复 → Flash 同档重采 → 修复 → Pro 首发 → 修复 → Pro 同档重采 → 修复 → LlmFailed`。
+
+`response-repair` 是零 LLM 的 CLI sidecar，不是 node，不需要为它另造 preview；原付费 node 仍按
+run_step/mark 协议重跑。账本会恢复中断前已经发生的调用与 accepted-attempt 联结，不能删隔离目录、
+换参数或清缓存来“重新开始”。
+
 ## 付费修复与缓存
 
 付费命令中断、网络失败或 exit 70 后：

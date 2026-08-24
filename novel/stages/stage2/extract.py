@@ -35,7 +35,8 @@ from contracts.schema.stage2 import (
 from novel import paths, prov
 from novel.config import MAX_CONCURRENCY
 from novel.errors import (
-    ArtifactUnreadable, GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing,
+    ArtifactUnreadable, GateBlocked, ProvenanceRefused, ResponseRepairRequired,
+    TerminalState, UpstreamMissing,
 )
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
@@ -1047,6 +1048,13 @@ def _run_chapter_requests(
     return [results[o] for o, _s, _u in concrete if o in results], violations, errors
 
 
+def _raise_response_repair(errors: list[Exception]) -> None:
+    """并发章先全部收尾；任一章等待受托修复时，不把缺章编译成 `.INVALID`。"""
+    for error in errors:
+        if isinstance(error, ResponseRepairRequired):
+            raise error
+
+
 def _boundary_validator(ordinal: int, paragraph_count: int) \
         -> Callable[[Any, Any], str | None]:
     """边界动态闸：召回完整，末尾只放行生产编译器能确定性恢复的范围。"""
@@ -1406,6 +1414,7 @@ def _run_blueprint_repair(
                     ordinal, paragraph_count[ordinal]),
                 max_tokens=BOUNDARY_MAX_TOKENS,
             )
+        _raise_response_repair(boundary_errors)
         for blueprint in returned_boundaries:
             ordinal = int(blueprint.get('chapter_ordinal') or 0)
             frozen[ordinal] = [int(beat['end_para'])
@@ -1461,6 +1470,7 @@ def _run_blueprint_repair(
         prefer_content_over_reasoning_salvage=(
             spec.prefers_content_over_reasoning_salvage),
     )
+    _raise_response_repair(detail_errors)
     new_scope = boundary_scope + detail_scope
     errors = boundary_errors + detail_errors
     if not returned:
@@ -1789,6 +1799,7 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
             validator_of=validator_of,
             prefer_content_over_reasoning_salvage=(
                 spec.prefers_content_over_reasoning_salvage))
+        _raise_response_repair(errors)
         return {
             'main_text': main_text,
             'requests': requests,
@@ -1815,6 +1826,7 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
             ordinal, paragraph_count[ordinal]),
         max_tokens=BOUNDARY_MAX_TOKENS,
     )
+    _raise_response_repair(boundary_errors)
     frozen = {
         int(blueprint.get('chapter_ordinal') or 0):
         [int(beat['end_para']) for beat in (blueprint.get('beats') or [])]
@@ -1851,6 +1863,7 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
         validator_of=lambda ordinal: _detail_validator(
             ordinal, frozen[ordinal], set(visible.get(ordinal, {}))),
     )
+    _raise_response_repair(detail_errors)
     return {
         'main_text': main_text,
         'requests': detail_requests,

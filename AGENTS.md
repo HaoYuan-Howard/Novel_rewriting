@@ -39,7 +39,8 @@ with code in this repository. **`CLAUDE.md` 是指向本文件的链接——要
 
 **跑书不要手拼命令**：完整操作规程是 `.claude/skills/novel-pipeline-operator/SKILL.md`
 （`novel-pipeline-operator` skill）。CLI 子命令：`run` / `preview` / `state` / `inbox` /
-`queue` / `queue-list` / `queue-cancel` / `queue-resume` / `jobs` / `reconcile` / `mark`。
+`queue` / `queue-list` / `queue-cancel` / `queue-resume` / `jobs` / `reconcile` / `doctor` /
+`response-repair` / `mark`。
 `preview` 是 0 成本的、且它给出的 argv 才是真跑那一条。
 
 ## 架构要点

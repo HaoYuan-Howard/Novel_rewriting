@@ -68,12 +68,13 @@ from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
 from novel import config
-from novel.errors import TerminalState
+from novel.errors import ResponseRepairRequired, TerminalState
 from novel.llm.budget import BudgetChecker, enforce_request_budget
 from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
 )
 from novel.llm.keepsake import write_answer_lost
+from novel.llm import response_repair
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatRequest, ChatResponse, Transport, TransportError
 from novel.observability import (
@@ -296,6 +297,74 @@ REJECT_GATES: Final[tuple[str, ...]] = (
     'validator',    # ④ 调用点自带的那一道（只有部分调用点传）
     'empty_text',   # ⑤ ask_text 专有：正文空**且是截断**（非截断那半归 ⓪）
 )
+
+#: 通用受托修复只覆盖「响应里的语义材料仍在，坏的是 JSON/外壳/形状」这一族。
+#: `validator` 属于调用点内容契约，可能意味着错章、漏事实或幻觉；通用 agent 不许
+#: 在没有 stage 专用编辑面的地方猜。截断与空响应则根本没有完整材料可修。
+AGENT_REPAIR_GATES: Final[tuple[str, ...]] = (
+    'answer_lost', 'parse', 'require', 'schema',
+)
+
+
+def _agent_repair_eligibility(gate: str, resp: ChatResponse) -> tuple[bool, str]:
+    if gate not in AGENT_REPAIR_GATES:
+        return False, f'{gate} 不属于通用 JSON/形状修复面'
+    if resp.finish_reason == 'length':
+        return False, '响应已截断，缺失尾部不能靠修 JSON 猜回'
+    if gate == 'answer_lost' and not (resp.reasoning or '').strip():
+        return False, '正文与推理通道都没有可修材料'
+    if gate != 'answer_lost' and not (resp.content or '').strip():
+        return False, '响应正文为空，没有可修材料'
+    return True, '完整材料仍在；允许一次受托 JSON/形状修复并按原闸复验'
+
+
+def _deterministic_json_candidate(text: str) -> str | None:
+    """只修两种不改变语义叶子的 JSON 字节问题：UTF-8 BOM 与容器尾逗号。
+
+    不抽取“看起来像 JSON”的子串、不改单引号、不补缺失值：那些都会需要猜模型
+    到底想表达什么，必须留给受托 agent 并重新过内容闸。
+    """
+    source = text.removeprefix('\ufeff')
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    index = 0
+    changed = source != text
+    while index < len(source):
+        char = source[index]
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == ',':
+            look = index + 1
+            while look < len(source) and source[look].isspace():
+                look += 1
+            if look < len(source) and source[look] in '}]':
+                changed = True
+                index += 1
+                continue
+        out.append(char)
+        index += 1
+    candidate = ''.join(out)
+    if not changed:
+        return None
+    try:
+        json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return candidate
 
 #: 结构化拒因摘要最多列几格。摘要要能塞进**一行 JSON**（审计账是 append-only
 #: 且要能 `grep`），而一份 23 章的坏计划可以同时踩上百个错。
@@ -704,6 +773,24 @@ class LlmClient:
                         json_mode=JSON_OBJECT_MODE,
                         max_tokens=max_tokens, purpose=purpose)
 
+        repair_chain_id: str | None = None
+        repair_request_fingerprints: tuple[str, ...] = ()
+        if getattr(self.ctx, 'repair_rejected_responses', False):
+            repair_requests = tuple(
+                ChatRequest(
+                    model=model, system=system, user=user,
+                    reasoning_effort=effort, thinking=thinking,
+                    json_mode=JSON_OBJECT_MODE, max_tokens=max_tokens)
+                for model in active_models
+                for effort, thinking in active_rungs)
+            repair_request_fingerprints = tuple(
+                request_fingerprint(req) for req in repair_requests)
+            repair_chain_id = response_repair.chain_fingerprint(
+                sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                code=self.ctx.code, system=system, user=user,
+                models=active_models, rungs=active_rungs,
+                json_mode=JSON_OBJECT_MODE, max_tokens=max_tokens)
+
         def gate_payload(text: str, resp: ChatResponse) -> tuple[
                 M | None, str | None, str, list[dict[str, Any]] | None]:
             """三道闸（+ 调用点那道可选的第四道）判**一段已经归一过的正文**。
@@ -791,6 +878,219 @@ class LlmClient:
 
         errors: list[str] = []
 
+        def repair_records() -> list[response_repair.RepairRecord]:
+            """读取并核验本逻辑请求的跨 CLI 状态，同时恢复未认领的成本窗口。"""
+            if repair_chain_id is None:
+                return []
+            records = response_repair.records_for_chain(
+                self.ctx.novel_dir, repair_chain_id)
+            attempt_ids: set[str] = set()
+            allowed_fingerprints = set(repair_request_fingerprints)
+            for record in records:
+                rejection = record.rejection
+                if (rejection.get('sid') != self.ctx.sid
+                        or rejection.get('node') != self.ctx.node
+                        or rejection.get('purpose') != purpose
+                        or rejection.get('code') != self.ctx.code
+                        or rejection.get('chain_id') != repair_chain_id
+                        or rejection.get('request_fingerprint') not in allowed_fingerprints
+                        or rejection.get('response_model') != model_cls.__name__):
+                    raise TerminalState(
+                        f'响应修复状态 {record.root} 不属于当前请求/代码/响应契约；'
+                        '拒绝把旧候选接到新 prompt 上')
+                ids = rejection.get('attempt_ids')
+                if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
+                    raise TerminalState(f'响应修复状态 {record.root} 缺合法 attempt_ids')
+                attempt_ids.update(ids)
+            self.ctx.ledger.claim_prior_attempts(
+                attempt_ids, sid=self.ctx.sid, node=self.ctx.node,
+                purpose=purpose,
+                request_fingerprints=repair_request_fingerprints)
+            return records
+
+        def raise_pending(record: response_repair.RepairRecord) -> None:
+            candidate = response_repair.candidate_path(record)
+            original = record.root / response_repair.ORIGINAL_FILE
+            base = self.ctx.novel_dir.parent
+            hint = (
+                'python -X utf8 -u -m novel.cli response-repair '
+                f'{self.ctx.sid} --base "{base}" --attempt {record.attempt_id} '
+                '--actor agent:novel-pipeline-operator --reason "说明修复依据"')
+            raise ResponseRepairRequired(
+                f'{self.ctx.node}/{purpose}: 一份已付费响应被 '
+                f'{record.rejection.get("gate")} 闸拒绝，下一采尚未发出。\n'
+                f'  原响应：{original}\n'
+                f'  固定候选面：{candidate}\n'
+                '先只修 JSON/封装/形状，不猜缺失事实；提交后重跑原节点同闸复验。'
+                '若判断不可安全修复，用同一提交命令追加 `--decline`，再重跑进入下一采。',
+                attempt_id=record.attempt_id,
+                candidate_path=str(candidate), original_path=str(original), hint=hint)
+
+        def resolve_record(record: response_repair.RepairRecord) -> tuple[bool, M | None]:
+            """消费一次不可变 agent 决定；`True` 表示候选通过并已采纳。"""
+            if not record.eligible:
+                return False, None
+            resolution = record.resolution
+            if resolution is None:
+                raise_pending(record)
+            assert resolution is not None
+            action = resolution.get('action')
+            if action == 'decline':
+                if record.outcome is None:
+                    response_repair.write_outcome(
+                        record, decision='declined', gate=record.rejection.get('gate'),
+                        detail=record.rejection.get('reject_detail'),
+                        why='受托 agent 判定不可在不发明内容的前提下安全修复')
+                    self.ctx.ledger.note_response_repair(
+                        sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                        attempt_id=record.attempt_id, action='declined',
+                        decision='declined', actor=str(resolution.get('actor') or ''),
+                        gate=str(record.rejection.get('gate') or ''),
+                        model=str(record.rejection.get('model') or ''),
+                        rung_index=record.rejection.get('rung_index'),
+                        sample=record.rejection.get('sample'),
+                        chapter=record.rejection.get('chapter'))
+                return False, None
+            if action not in ('submit', 'deterministic') or 'candidate' not in resolution:
+                raise TerminalState(
+                    f'{record.root / response_repair.RESOLUTION_FILE} 的 action/candidate 不合法')
+            if record.outcome is not None and record.outcome.get('decision') == 'rejected':
+                errors.append(
+                    f'agent 修复 attempt={record.attempt_id} 已被 '
+                    f'{record.outcome.get("gate")} 闸拒绝：{record.outcome.get("why")}')
+                return False, None
+
+            candidate_text = json.dumps(
+                resolution['candidate'], ensure_ascii=False, separators=(',', ':'))
+            raw_response = record.rejection.get('response')
+            if not isinstance(raw_response, dict):
+                raise TerminalState(f'{record.root} 缺供应商原响应信封')
+            repaired_response = ChatResponse(
+                content=candidate_text,
+                reasoning=raw_response.get('reasoning'),
+                finish_reason=raw_response.get('finish_reason'),
+                usage=raw_response.get('usage'),
+                model=str(raw_response.get('model') or record.rejection.get('model') or ''))
+            obj, why, gate, detail = gate_payload(candidate_text, repaired_response)
+            decision = 'accepted' if why is None else 'rejected'
+            first_check = record.outcome is None
+            response_repair.write_outcome(
+                record, decision=decision, gate=None if why is None else gate,
+                detail=None if why is None else detail, why=why)
+            if first_check:
+                self.ctx.ledger.note_response_repair(
+                    sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                    attempt_id=record.attempt_id,
+                    action='deterministic' if action == 'deterministic' else 'agent',
+                    decision=decision,
+                    actor=str(resolution.get('actor') or ''),
+                    gate=None if why is None else gate,
+                    candidate_sha256=str(resolution.get('candidate_sha256') or ''),
+                    model=str(record.rejection.get('model') or ''),
+                    rung_index=record.rejection.get('rung_index'),
+                    sample=record.rejection.get('sample'),
+                    chapter=record.rejection.get('chapter'))
+            if why is not None:
+                errors.append(
+                    f'agent 修复 attempt={record.attempt_id} 仍被 {gate} 闸拒绝：{why}')
+                return False, None
+            assert obj is not None
+            with self._adopt_lock:
+                self._accepted[purpose] = record.attempt_id
+            return True, obj
+
+        def offer_repair(*, resp: ChatResponse, attempt_id: str,
+                         request_fp: str, model: str, model_index: int,
+                         rung_index: int, sample: int | None, source: str,
+                         gate: str, why: str,
+                         detail: list[dict[str, Any]] | None,
+                         content: str,
+                         would_resample: bool) -> response_repair.RepairRecord | None:
+            """保存所有拒绝；只有严格可修的一族会让原节点停在下一采之前。"""
+            if repair_chain_id is None:
+                return None
+            eligible, eligibility_reason = _agent_repair_eligibility(gate, resp)
+            original = (_strip_fences(resp.reasoning) if gate == 'answer_lost'
+                        else content)
+            candidate: Any | None = None
+            try:
+                candidate = json.loads(original)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            dump, dump_error = response_repair.keep_rejection(
+                self.ctx.novel_dir, chain_id=repair_chain_id,
+                attempt_id=attempt_id, original=original, candidate=candidate,
+                payload={
+                    'sid': self.ctx.sid, 'node': self.ctx.node,
+                    'purpose': purpose, 'code': self.ctx.code,
+                    'request_fingerprint': request_fp,
+                    'attempt_ids': list(self.ctx.ledger.attempt_ids_for(
+                        purpose=purpose,
+                        request_fingerprints=repair_request_fingerprints)),
+                    'model': model, 'model_index': model_index,
+                    'rung_index': rung_index, 'sample': sample, 'source': source,
+                    'would_resample': would_resample,
+                    'gate': gate, 'why': why[:4000], 'reject_detail': detail,
+                    'repair_eligible': eligible,
+                    'eligibility_reason': eligibility_reason,
+                    'response_model': model_cls.__name__,
+                    'required_top_level': list(require),
+                    'response_schema': model_cls.model_json_schema(by_alias=True),
+                    'chapter': progress.chapter if progress else None,
+                    'response': {
+                        'content': resp.content, 'reasoning': resp.reasoning,
+                        'finish_reason': resp.finish_reason,
+                        'usage': resp.usage, 'model': resp.model,
+                        'sha256': _response_sha256(resp),
+                    },
+                })
+            self.ctx.ledger.note_response_repair(
+                sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                attempt_id=attempt_id,
+                action='offered' if eligible else 'ineligible',
+                decision=('pending' if eligible and dump is not None else 'skipped'),
+                gate=gate, dump=dump, dump_error=dump_error,
+                model=model, rung_index=rung_index, sample=sample,
+                chapter=progress.chapter if progress else None)
+            if dump is None:
+                return None
+            return next(
+                record for record in repair_records()
+                if record.attempt_id == attempt_id)
+
+        def accept_deterministic_repair(
+                record: response_repair.RepairRecord | None, *,
+                resp: ChatResponse, gate: str, content: str) -> M | None:
+            """机械候选必须直接通过**完整四道闸**；否则不消耗 agent 的一次额度。"""
+            if record is None or gate not in ('parse', 'answer_lost'):
+                return None
+            source = (_strip_fences(resp.reasoning) if gate == 'answer_lost'
+                      else content)
+            candidate_text = _deterministic_json_candidate(source)
+            if candidate_text is None:
+                return None
+            obj, why, _candidate_gate, _detail = gate_payload(candidate_text, resp)
+            if why is not None or obj is None:
+                return None
+            candidate = json.loads(candidate_text)
+            sealed = response_repair.submit_deterministic(
+                record, candidate, rule='json-bytes-v1')
+            response_repair.write_outcome(
+                sealed, decision='accepted', gate=None, detail=None, why=None)
+            resolution = sealed.resolution or {}
+            self.ctx.ledger.note_response_repair(
+                sid=self.ctx.sid, node=self.ctx.node, purpose=purpose,
+                attempt_id=record.attempt_id, action='deterministic',
+                decision='accepted', actor=str(resolution.get('actor') or ''),
+                candidate_sha256=str(resolution.get('candidate_sha256') or ''),
+                model=str(record.rejection.get('model') or ''),
+                rung_index=record.rejection.get('rung_index'),
+                sample=record.rejection.get('sample'),
+                chapter=record.rejection.get('chapter'))
+            with self._adopt_lock:
+                self._accepted[purpose] = record.attempt_id
+            return obj
+
         # 同 ask_text：主模型或兜底模型任一档已有合格缓存时，本次必须是 0 次真请求。
         for model_index, model in enumerate(active_models):
             for i, (effort, thinking) in enumerate(active_rungs):
@@ -825,6 +1125,12 @@ class LlmClient:
                             salvaged=True)
                     return obj
                 self.cache.evict(key)
+                repair_record = offer_repair(
+                    resp=resp, attempt_id=attempt_id,
+                    request_fp=self.ctx.ledger.request_fingerprint_for_attempt(attempt_id),
+                    model=model, model_index=model_index, rung_index=i,
+                    sample=None, source='cache', gate=gate, why=why,
+                    detail=detail, content=content, would_resample=False)
                 self._settle_gate(
                     purpose=purpose, attempt_id=attempt_id, source='cache',
                     accepted=False, gate=gate, rungs=active_rungs, index=i,
@@ -836,12 +1142,55 @@ class LlmClient:
                     why=why, resp=resp, json_mode=JSON_OBJECT_MODE,
                     progress=progress)
                 errors.append(f'{head} {why}')
+                repaired = accept_deterministic_repair(
+                    repair_record, resp=resp, gate=gate, content=content)
+                if repaired is not None:
+                    return repaired
+
+        # 缓存拒绝不消耗 wire 样本；先横扫完所有模型缓存，避免明明已有合格 Pro 缓存
+        # 却停下来修一份 Flash 毒缓存。没有合格缓存时才消费隔离决定。
+        if repair_chain_id is not None:
+            for record in repair_records():
+                if record.rejection.get('source') != 'cache':
+                    continue
+                accepted, repaired = resolve_record(record)
+                if accepted:
+                    assert repaired is not None
+                    return repaired
 
         for model_index, model in enumerate(active_models):
             transport_failure: TransportError | LlmFailed | None = None
             for i, (effort, thinking) in enumerate(active_rungs):
                 # 被拒后先同档重采一次；截断除外。默认只有一个模型行为档位，
                 # 因而该档耗尽后进入 Pro 兜底，不会自动降低 effort。
+                first_sample = 1
+                if repair_chain_id is not None:
+                    prior = [
+                        record for record in repair_records()
+                        if record.rejection.get('source') == 'wire'
+                        and record.rejection.get('model') == model
+                        and record.rejection.get('rung_index') == i
+                    ]
+                    samples = [record.rejection.get('sample') for record in prior]
+                    if (any(not isinstance(sample_, int) for sample_ in samples)
+                            or sorted(samples) != list(range(1, len(samples) + 1))):
+                        raise TerminalState(
+                            f'{self.ctx.node}/{purpose}: 响应修复采样序列不闭合：'
+                            f'model={model} samples={samples}')
+                    for record in prior:
+                        accepted, repaired = resolve_record(record)
+                        if accepted:
+                            assert repaired is not None
+                            return repaired
+                        if not record.eligible:
+                            errors.append(
+                                f'model={model} sample={record.rejection.get("sample")} '
+                                f'{record.rejection.get("gate")} 不可通用修复：'
+                                f'{record.rejection.get("why")}')
+                    first_sample = (len(prior) + 1
+                                    if (not prior
+                                        or prior[-1].rejection.get('would_resample') is True)
+                                    else MAX_SAMPLES_PER_RUNG + 1)
                 deferred_salvage: tuple[M, ChatResponse, str, str, int] | None = None
 
                 def adopt_deferred(index: int = i, effort: str = effort,
@@ -862,7 +1211,7 @@ class LlmClient:
                         salvaged=True)
                     return obj_
 
-                for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
+                for sample in range(first_sample, MAX_SAMPLES_PER_RUNG + 1):
                     try:
                         resp, key, _cached, attempt_id = self._call_keyed(
                             system, user, model=model, effort=effort,
@@ -927,7 +1276,20 @@ class LlmClient:
                                 salvaged=True)
                         return obj
                     self.cache.evict(key)
-                    resample = sample < MAX_SAMPLES_PER_RUNG and _worth_resampling(resp)
+                    repair_record = (None if deferred_salvage is not None else offer_repair(
+                        resp=resp, attempt_id=attempt_id,
+                        request_fp=self.ctx.ledger.request_fingerprint_for_attempt(attempt_id),
+                        model=model, model_index=model_index, rung_index=i,
+                        sample=sample, source='wire', gate=gate, why=why,
+                        detail=detail, content=content,
+                        would_resample=(sample < MAX_SAMPLES_PER_RUNG
+                                        and _worth_resampling(resp))))
+                    repair_pending = (
+                        repair_record is not None and repair_record.eligible
+                        and repair_record.resolution is None)
+                    resample = (not repair_pending
+                                and sample < MAX_SAMPLES_PER_RUNG
+                                and _worth_resampling(resp))
                     self._settle_gate(
                         purpose=purpose, attempt_id=attempt_id, source='wire',
                         accepted=False, gate=gate, rungs=active_rungs, index=i,
@@ -941,8 +1303,15 @@ class LlmClient:
                         resample=resample, sample=sample, progress=progress,
                         fallback_salvage=deferred_salvage is not None)
                     errors.append(f'{head} {why}')
+                    repaired = accept_deterministic_repair(
+                        repair_record, resp=resp, gate=gate, content=content)
+                    if repaired is not None:
+                        return repaired
                     if deferred_salvage is not None:
                         return adopt_deferred()
+                    if repair_pending:
+                        assert repair_record is not None
+                        raise_pending(repair_record)
                     if not resample:
                         break
                 if transport_failure is not None:

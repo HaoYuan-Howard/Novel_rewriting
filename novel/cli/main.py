@@ -16,6 +16,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     jobs                            作业记录（新的在前）
     reconcile                       启动时把「运行中」一律改判「不知道」
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
+    response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
 而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
@@ -138,6 +139,15 @@ def _parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser('doctor', help='运行环境诊断（0 成本）')
     doctor.add_argument('--llm-transport', action='store_true', required=True,
                         help='按正式代理/超时探测 DeepSeek HTTP 通路；不发正文/密钥')
+
+    rr = sub.add_parser('response-repair', help='提交或放弃一份隔离响应修复稿（0 成本）')
+    rr.add_argument('sid')
+    rr.add_argument('--base', required=True)
+    rr.add_argument('--attempt', required=True, help='拒绝记录的 16 位 attempt_id')
+    rr.add_argument('--actor', required=True)
+    rr.add_argument('--reason', required=True)
+    rr.add_argument('--decline', action='store_true',
+                    help='明确放弃本次修复额度；重跑原节点后进入下一采')
 
     mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
     mk.add_argument('sid')
@@ -916,7 +926,13 @@ def _cmd_run(a: argparse.Namespace) -> int:
     if a.sid is None:
         raise TerminalState(
             f'{a.node} 要已有书 sid；只有 stage0.remove --source 摄入新书时可以省略')
-    ctx = RunContext.open(a.base, a.sid, a.node, paid=paid)
+    repair_mode = _valued(flags, '--response-repair')
+    if repair_mode not in (None, 'agent'):
+        raise TerminalState(
+            f'--response-repair 当前只接受 agent，实得 {repair_mode!r}')
+    ctx = RunContext.open(
+        a.base, a.sid, a.node, paid=paid,
+        repair_rejected_responses=repair_mode == 'agent')
     # Stage2 人工评测是**运行边界**，不是某个编排器的礼貌约定。任何调用方
     # （手敲 CLI、前端 jobs、headless agent）最终都要经过这里；0 成本复检/人工修复
     # 仍可在闸关闭时运行，否则人连开闸的恢复路都进不去。
@@ -1110,6 +1126,23 @@ def _cmd_doctor(a: argparse.Namespace) -> int:
     return X.OK if result.reached_http else X.TERMINAL_STATE
 
 
+def _cmd_response_repair(a: argparse.Namespace) -> int:
+    """封存受托 agent 的修复/放弃决定；真正复验发生在原节点重跑时。"""
+    from novel.llm import response_repair
+
+    novel_dir = paths.resolve_novel_dir(a.base, a.sid)
+    record = response_repair.submit(
+        novel_dir, a.attempt, actor=a.actor, reason=a.reason,
+        decline=a.decline)
+    if a.decline:
+        print(f'  ✓ 已放弃 attempt={a.attempt} 的唯一修复额度；请重跑原节点进入下一采')
+    else:
+        print(f'  ✓ 已封存 attempt={a.attempt} 的候选 '
+              f'{record.root / response_repair.CANDIDATE_FILE}')
+        print('  ⚠ 这不是通过；请重跑原节点，让候选经过原 schema/validator 闸')
+    return X.OK
+
+
 def _cmd_mark(a: argparse.Namespace) -> int:
     """进度信标打点：往 `_service/agent_progress.jsonl` 追加一行。**0 成本，恒 exit 0**。
 
@@ -1135,6 +1168,7 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'queue-list': _cmd_queue_list, 'queue-cancel': _cmd_queue_cancel,
          'queue-resume': _cmd_queue_resume,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
+         'response-repair': _cmd_response_repair,
          'mark': _cmd_mark}
 
 

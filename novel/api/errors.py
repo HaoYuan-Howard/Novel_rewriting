@@ -152,6 +152,9 @@ STATUS: dict[type[NovelError], int] = {
 UNREACHABLE_OVER_HTTP: dict[str, str] = {
     'ContextBudgetRefused': '供应商上下文预算预检在缓存/网络之前拒绝请求。它只由付费节点的'
                             'LLM 子进程抛出，父进程只看到终态退出码',
+    'ResponseRepairRequired': '结构化响应在下一采之前暂停，等待受托 agent 修复或放弃。'
+                              '它只由付费节点的 LLM 子进程抛出；父进程只看到终态退出码，'
+                              '零成本 response-repair sidecar 只封存决定、不抛这类暂停',
     'LlmFailed': '主模型与允许的兜底模型均没拿到可用结果。它在**子进程**里抛，父进程只看到退出码',
     'TransportError': '一次请求没发成功（429/5xx/超时）。同上——服务进程结构上发不出请求',
     'MissingApiKey': '要发真请求了而没有 key。⚠ 它恰恰**证明**了那条边界：'
