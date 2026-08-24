@@ -19,14 +19,14 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 |---|---|---|---|---|
 | FN-001 | stage0 批准前的预期红灯 | contract-confirmed | `s0_approval`, exit 1 | `stage0.approve` |
 | FN-002 | 重号与缺号章节 | contract-confirmed | `s1_chapter_labels` | 核对源文标记与 ordinal，不改正文 |
-| FN-003 | `--full-extract` 部分完成 | contract-confirmed | `--full-extract` | 分别 preview 缺失的 `stage2.blueprint` / `stage3.style` |
+| FN-003 | 旧并发首跑留下部分完成盘面 | contract-confirmed | Stage2 下游缺失 | 先完成全局逐项复核，再分别 preview 缺失节点 |
 | FN-004 | blueprint 锚点失败要先判原字节 | observed | `hinge_anchor_void`, `verbatim_failed` | `--chapters`（付费）或 finding 明列的免费 fix |
 | FN-005 | 钱已调用但目标产物缺失 | contract-confirmed | exit 70, 账本有调用而产物不在盘 | 完全相同参数重跑，命中 `.llm_cache` |
 | FN-006 | 语义结论按文本 sha1 绑定，不跟机械验收的轮次走 | contract-confirmed | `stage6.semantic`, `semantic_review_seq` | 文本未变就**不要**重跑；变了才重跑 |
 | FN-007 | 语义泄底可能源于上游揭示章误标 | contract-confirmed | `semantic_secret_leak` | `stage2.global --apply-edit` 或 `--wontfix` 留账 |
 | FN-008 | stage6 首轮只有 INVALID | contract-confirmed | `hook.INVALID.json`, `hook_para_sep` | `stage6.hook --apply-edit` 或 `--revalidate` |
 | FN-009 | stage6 总报告与所选候选不是同一粒度 | observed | 落选候选 HARD, 同 sha1 两轮矛盾 | 按 label+sha1 对齐，采更严格那一轮 |
-| FN-010 | stage7 人物表不是全部 surface | observed | `rn_kept_contains_mapped`, `rn_semantic_marker_changed` | `name_map_edit.json` 展开内嵌映射 |
+| FN-010 | stage7 人物表不是全部 surface | contract-confirmed | `rn_kept_contains_mapped`, `rn_semantic_marker_changed`, `rn_derived_alias_candidate` | `name_map_edit.json` 展开内嵌映射 |
 | FN-011 | stage7 映射编辑后必须重批重拼 | contract-confirmed | `approved`, `book_txt` | 重跑 `stage7.approve` + `stage7.assemble` |
 | FN-012 | `consumed_changed` 可能是诊断噪声 | observed | `consumed_changed`, stale | 逐项指纹全同才披露诊断边，否则按真 stale 处理 |
 | FN-013 | 语义审判的结论恒是带证据的 `UNVER` | contract-confirmed | `stage6.semantic`, `UNVER`, `judges` | 读 `judges` 两侧再人工收口 |
@@ -37,6 +37,8 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-018 | 宿主杀掉后台句柄后，逐章节点仍是可续的 | observed | 后台终止, `--chapters`, 账本无记录 | 前台 + `--chapters` 分批重跑 |
 | FN-019 | 并行会话改仓库代码会让 CLI 崩在 import 期 | observed | `NameError`, import, 与本书无关的栈 | 等对方写完后重试同一条命令，不改仓库代码 |
 | FN-020 | 审阅 info finding 要按判据实际读的字段读 | contract-confirmed | `present_continuity`, `present_char_ids`, 字段名相近 | 先定位判据实现，再照它读的那几个字段取证 |
+| FN-021 | METRIC/UNVER 重复出现不是 stalled | contract-confirmed | `stalled`, `unresolved_rounds`, `metric`, `unver` | 只让 HARD/INFO 进入 stalled；不要给读数编修复任务 |
+| FN-022 | 长退出序列用无损 RLE 与完整摘要双重锁定 | contract-confirmed | `exit_sequence_compact_text`, `exit_sequence_sha256`, 终审包 | 复制收集器输出，不手抄连续同项 |
 
 ### FN-001 · stage0 批准前的预期红灯
 
@@ -67,19 +69,19 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 依据：`novel/stages/stage1/checks.py::check` 产出的 `s1_chapter_labels`（读的是**原始标签**，
   不是下游 ordinal）；成书侧由代批契约的逐字对账第 1 项复核。
 
-### FN-003 · `--full-extract` 部分完成
+### FN-003 · 旧并发首跑留下部分完成盘面
 
 - 状态：`contract-confirmed`
-- 触发：`stage2.global --full-extract` 在 global 或后续落盘闸门处停止，blueprint/style 缺失。
+- 触发：存量盘面来自已下线的并发首跑，global/style/blueprint 只有部分正式落盘。
 - 判断：组合命令不是原子事务；已经正式落盘的上游不应为补齐下游而重复付费。
   已观测到的一种形态：`stage2.global` 与 `stage3.style` **都正式落盘**，只有逐章蓝图被拦成
   `.INVALID`，而它的逐章生成事件全部 `succeeded`、`failed` 为零。
   ⇒ **逐章生成成功不等于落盘**：闸门是在合并落盘那一步判的，
   所以"每章都绿"与"整条命令 exit 2"完全可以同时成立，别据前者推断产物已就位。
-- 处置：先 `state` 看清哪几份已 fresh，只补缺的那份，不整组重跑。
-  按 finding 修复活动失败，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`。
+- 处置：先 `state` 看清哪几份已 fresh；先把 current Stage2 全局复核逐项收成 PASS，
+  再按 finding 修复活动失败并分别 preview 缺失的 `stage2.blueprint`、`stage3.style`。
 - 验证：两份 follow-check 都 fresh 且无 HARD，`state` 显示 stage2/stage3 完成。
-- 依据：`novel/orchestrator/nodes.py::build_steps` 的 full-extract 追跑规则与产物存在性。
+- 依据：当前 CLI 的 Stage2 全局硬闸与产物存在性；并发入口已经从注册表删除。
 
 ### FN-004 · blueprint 锚点失败要先判原字节
 
@@ -154,12 +156,13 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 
 ### FN-010 · stage7 人物表不是全部 surface
 
-- 状态：`observed`
-- 触发：`rn_kept_contains_mapped`、`rn_semantic_marker_changed`、短别名或全文补扫发现旧名残留。
-- 判断：人物 registry 可能漏掉拆名、家族简称、门派、府邸、外文家名或单字昵称；kept 还可能保护内嵌旧名。
+- 状态：`contract-confirmed`
+- 触发：`rn_kept_contains_mapped`、`rn_semantic_marker_changed`、`rn_derived_alias_candidate`、短别名或全文补扫发现旧名残留。
+- 判断：人物 registry 可能漏掉拆名、家族简称、门派、府邸、外文家名或单字昵称；kept 还可能保护内嵌旧名。`rn_derived_alias_candidate` 会从已改 canonical/alias 推导“旧尾字 + 关系后缀”并给无歧义建议，但中文无词界，所以它只报 INFO、不自动替换。
 - 处置：在 `name_map_edit.json` 中展开内嵌映射、保留数字/排行/关系标记；单字别名用 `old == new` 明确保留，并用带上下文的长 `extra_subs` 处理真实位置。
 - 验证：所有 subs 旧键 count 为零，补集 surface 扫描无未解释旧名，新名不碰通用关系词。
-- 依据：`novel/stages/stage7/subs.py::residual_scan` 的补集扫描；
+- 依据：`novel/stages/stage7/subs.py::residual_scan` 的旧姓补集扫描与
+  `novel/stages/stage7/subs.py::derived_alias_scan` 的尾字昵称候选；
   `novel/stages/stage7/rename.py::_judge` 的映射判据；成书侧另做逐字扫描。
 
 ### FN-011 · stage7 映射编辑后必须重批重拼
@@ -232,8 +235,10 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   stage6 只读正式产物，候选级 finding 在 `hook.INVALID.json` 的 `candidates[].findings` 里（见 FN-008）；
   stage7 也只读正式产物。**stage4 的 `.INVALID` 不带 findings**（schema 无此字段），
   所以那一层的逐条证据只能从报告拿，拿不到就是读法用错了。
-- 处置：被拦下后**第一步就是 `--check-only`** 取逐条命中，再按 finding 的 `fix`/`how` 在
-  允许写入面上修，最后 `--revalidate --actor <ACTOR> --reason <text>` 同轮重判提升。
+- 处置：被拦下后**第一步就是该 stage 注册的复检节点加 `--check-only`** 取逐条命中；
+  `stage2.global` 自身不接受该 flag，要跑 `stage2.blueprint --check-only`（它会同时读取
+  global 问题稿与逐章稿）。再按 finding 的 `fix`/`how` 在允许写入面上修，最后
+  `--revalidate --actor <ACTOR> --reason <text>` 同轮重判提升。
   只有正式稿与 `.INVALID` 两份都不在盘上才是真的“先跑那一层”。
   不要因为终态只给了 rule id 就盲改、自行复算判据或停机。
 - 验证：`--revalidate` 打印的完整报告里该 rule 归零，`state` 判该层完成，活动 `.INVALID` 已归档。
@@ -280,6 +285,9 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   的一致性都不在任何判据的扫描面内，改坏了不会红。所以代笔前先取三样依据——该章 blueprint
   的拍子、`stage3` 文风画像的 measurable、该章在场角色集——写完逐项自查并把方法与结论写进
   终审包。取不到这三样依据时选 `--wontfix` 留一条明确裁决，而不是凭手感改正文。
+- 验证旧豁免：`wontfix` 绑的是 `(章, rule, evidence_key)`，不是“这章从此免检”。
+  `--apply-edit` 改正文后必须先重跑 `stage5.review`；证据键变化的新 finding 会自动重新进入
+  `human_only`，只对当前仍命中的新证据重新裁决，不删除或篡改旧豁免账。
 - 验证：账本按 sid 过滤后该节点的调用数仍等于章数（无多出的一条）；选 `--wontfix` 时
   `inbox` 该项离开 `human_only` 并计入 wontfix 豁免；选 `--apply-edit` 时新一轮落盘且下游重跑通过。
 - 依据：`contracts/rules.py::_validate` 断言 `repair != 'NONE'` 仅允许 `owner == 'stage5'`；
@@ -332,3 +340,31 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 验证：能用判据读的那几个字段复现出与报告完全相同的命中集合；每条命中都写出语义类别与判定。
 - 依据：`novel/stages/stage2/checks.py::_present` 的在场族判定（读 `event` 与 `present_char_ids`，
   按角色去重而非按名字）；严重度分级的理由在 `contracts/judges/stage2.py` 该条的 `_info` 登记。
+
+### FN-021 · METRIC/UNVER 重复出现不是 stalled
+
+- 状态：`contract-confirmed`
+- 触发：重复运行 `stage5.review` 后，`inbox` 把 `arm_split_report`、`secret_timeline`、
+  `name_surface_survey` 或 `must_hold_unver` 列成 `stalled`，并建议改正文或记 `wontfix`。
+- 判断：Review 的收敛账会为所有 finding 带上 `unresolved_rounds`，包括每轮无条件出现的
+  `metric` 与结构性 `unver`。它们连续两轮仍存在，只证明读数/边界仍存在，不证明修复失败；
+  尤其 UNVER 按清单总纪律本就永不入列。只有 HARD/INFO 质量结论才可能升级为 stalled。
+- 处置：不对 METRIC/UNVER 运行 `--apply-edit` 或 `--wontfix`。先确认当前代码的
+  `novel.views.inbox::_is_stage5_stalled` 只接受 HARD/INFO，再刷新 `inbox`；若旧版本仍误列，
+  这是分类器 bug，不是书稿余额。
+- 验证：同一份 Review 即便上述 finding 的 `unresolved_rounds >= 2`，`stalled` 仍为 0；
+  真正的 HARD/INFO 到阈值仍进入 stalled，且定向守卫两侧都覆盖。
+- 依据：`novel/views/inbox.py::_is_stage5_stalled`；`tests/test_views_inbox.py` 的纯函数阈值用例。
+
+### FN-022 · 长退出序列用无损 RLE 与完整摘要双重锁定
+
+- 状态：`contract-confirmed`
+- 触发：一本书的 `agent_progress.jsonl` 含几十个连续同名复检事件，终审包需要列完整退出顺序；
+  人工复制时很难看出多一个或少一个 `stage5.review:0`。
+- 判断：长重复序列不是适合手抄的证据。相邻同项 RLE（如 `stage5.review:0×52`）可无损展开，
+  同时以规范 JSON 的事件数与 SHA-256 锁定完整序列；人读表示、机器摘要与原始 JSONL 三者互证。
+- 处置：运行 `scripts/collect_final_evidence.py`，复制 `exit_sequence_compact_text` 与
+  `review_anchor_line`。不要自己计数、拼箭头或从日志截一段冒充全历史序列。
+- 验证：`scripts/validate_review.py` 要求终审包含当前压缩序列，并逐项比较机器锚点中的
+  `exit_sequence_count` / `exit_sequence_sha256`；任一事件变化都会失败。
+- 依据：`scripts/collect_final_evidence.py::_compact_exits` 与 `scripts/validate_review.py::validate`。

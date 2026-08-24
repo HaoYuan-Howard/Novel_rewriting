@@ -65,7 +65,7 @@ stage7  人名替换：一次调用产新人物表（只产决策）  1 次调�
 | 本文件 | 项目入口、**产品边界与人的任务**、处理链与成本、运行方式、备份与恢复、接手顺序 | 需求明细、完成日志、踩坑长文 |
 | `AGENTS.md`（= `CLAUDE.md` 符号链接） | agent 入口摘要：pytest 三坑、架构要点压缩版、编码风格、工作纪律；命令细节只留指针 | 详细契约与证据；与 `docs/BACKEND_CONTRACT.md` 冲突时以后者为准 |
 | `docs/REQUIREMENTS.md` | 仅列未完成事项、阻塞、验收条件与待裁决问题 | 已完成能力、施工过程、界面设计细节 |
-| `docs/LESSONS.md` | 可迁移的工程经验与真实踩坑，最多 21 条 | 任务状态、需求清单 |
+| `docs/LESSONS.md` | 编号化的可迁移工程经验与真实踩坑 | 任务状态、需求清单 |
 | `web/DELIVERY.md` | **界面规格**：技术与数据缝、路由与屏幕职责、组件清单、UI 硬规则、前端开发命令 | 项目总任务清单、联调历史 |
 | `docs/schema/` | 已实现后端的产物与 API 契约（现在时，不含施工注记） | 后续工作排序、schema 推导史 |
 | `tests/README.md` | 测试分层、跑法与 `--require-corpus` 硬验收操作步骤 | manifest 字段契约（见 `docs/schema/corpus.md`） |
@@ -122,6 +122,13 @@ conda run -n novel_refactor python -X utf8 -u -m novel.cli inbox <sid> --base <O
 API 只监听 `127.0.0.1:8765`。前端默认配置位于 `web/.env`；真实联调时应为
 `VITE_USE_MOCK=false`。前端开发命令（`npm ci` / `typecheck` / `seams` / `build` / `dev`）
 的唯一落点是 `web/DELIVERY.md`。
+
+若本机代理使用 TUN/fake-IP，而后台服务调用 DeepSeek 出现 `SSL UNEXPECTED_EOF`，在根
+`.env` 显式配置 `DEEPSEEK_PROXY=http://127.0.0.1:<本地 HTTP 代理端口>`。该配置由
+DeepSeek 传输层直接读取，CLI 与前端 Agent 共用，不依赖启动服务的终端是否继承代理环境变量。
+配置后先运行 `conda run -n novel_refactor python -m novel.cli doctor --llm-transport`：
+它使用同一代理与超时，只探测 DNS/TCP/TLS/HTTP，不发送正文或 API key；收到 401/403 也说明
+传输已打通。只有这一步成功后才值得启动一次真实付费节点。
 
 只跑编译检查不代表联调完成。交付前还要在真实服务上覆盖正常、未运行、错误和空态，
 并确认关闭 mock 后没有样本正文进入网络响应或构建产物。

@@ -47,10 +47,10 @@ from pathlib import Path
 from typing import BinaryIO, NamedTuple
 
 from contracts.schema.orchestration import (
-    AgentPending, AgentQueueView, AgentRejected, AgentRunEvent, AgentRunRecord,
-    AgentRunStart,
+    AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected, AgentRunEvent,
+    AgentRunRecord, AgentRunStart,
 )
-from novel import paths
+from novel import paths, prov
 from novel.appendlog import append_line
 from novel.cli.exit_codes import CRASH
 from novel.errors import UpstreamMissing
@@ -110,7 +110,8 @@ def _posix_anchor(path: str | os.PathLike[str]) -> str:
 
 
 def build_prompt(sid: str, base: str | os.PathLike[str], *,
-                 authorized: bool, egress_authorized: bool) -> str:
+                 authorized: bool, egress_authorized: bool,
+                 code_version: str | None = None) -> str:
     """发给 agent 的提示词。两项授权原文都在这里，布尔字段只是机读摘要。
 
     核心构造函数故意不设默认值：API/UI 可以提供产品默认，但到达 prompt 边界时
@@ -121,6 +122,7 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
     猜一个名字——`state` 会打印书目录，届时按同一条规则得到同一个名字。
     """
     base_abs = os.path.abspath(os.fspath(base))
+    code_version = code_version or prov.code_version()
     py = Path(sys.executable).as_posix()
     novel_dir = paths.find_novel_dir(base_abs, sid)
     #: ⚠ 成书名**按书名派生**，不是固定的 `book.txt`——唯一落点是 `paths.book_txt_rel`。
@@ -139,34 +141,51 @@ def build_prompt(sid: str, base: str | os.PathLike[str], *,
         '不再询问；每条付费命令的判据读数仍逐条留痕并进终审包。'
         if authorized else
         '**付费授权未授予**：不得执行会产生外部模型调用费用的命令；在第一条付费命令之前停下，'
-        '把「跑到哪、为什么停、恢复命令」写进终审包（落点见下），然后结束。')
+        '但仍须完成只读的 state、inbox、下一节点 preview 并创建终审包草稿，把「跑到哪、为什么停、'
+        '恢复命令」写进去（落点见下），然后结束。')
     egress_authorization = (
         '**正文外发授权已授予**：允许把小说正文及其派生上下文发送给外部模型。'
         '这项授权不代表已经授予付费授权。'
         if egress_authorized else
         '**正文外发授权未授予**：不得把小说正文或其派生上下文发送给外部模型；'
-        '即使付费授权已经授予，也必须在首个需要正文外发的步骤前停下并写明恢复命令。')
-    return f"""你在仓库 {REPO_ROOT.as_posix()} 的根目录下工作（cwd 已就位，不要 cd）。
-使用项目 skill `novel-pipeline-operator`：先读
-`.claude/skills/novel-pipeline-operator/SKILL.md` 全文再动手，并按其中“按需加载资源”
-读取工作流契约、代批与终审契约及 headless 运行环境；遇到失败时再读取修复状态机，
-按节点名/rule id 检索经验库。不要依赖旧版章节号或聊天记忆。
+        '即使付费授权已经授予，也只能先完成只读的 state、inbox、下一节点 preview 与终审包草稿，'
+        '并在首个需要正文外发的步骤前停下、写明恢复命令。')
+    return f"""你在仓库 {REPO_ROOT.as_posix()} 的根目录下工作。launcher 已把 cwd 固定在仓根；
+每次 Bash 调用都必须保持在仓根，不得 cd，读取 base 与产物一律使用绝对路径。
 
 任务：把 sid={sid} 这本书端到端跑到 `{book_target}`。
+本次启动代码指纹：`{code_version}`。每个写盘节点或付费节点都须在执行前用
+`{py} -X utf8 -c "from novel import prov; print(prov.code_version())"`
+复算并逐字比较；不一致立即停下并在终审包披露。服务端结束终验也会再次比较，
+跨版本运行不会被判为 ready。
 base 目录（--base 恒用下面这个绝对路径）：
 {base_abs}
 
 付费授权：{payment_authorization}
 正文外发授权：{egress_authorization}
 
+启动顺序（不可跳步）：
+1. 先读 `.claude/skills/novel-pipeline-operator/SKILL.md` 全文，并照它的“按需加载资源”读取
+   工作流契约、代批与终审契约及 headless 运行环境；失败时再读修复状态机，按节点名/rule id
+   检索经验库。不要依赖旧版章节号或聊天记忆。
+2. 先运行 `state {sid}` 与 `inbox {sid}`，只按盘上事实确定续跑位置。
+3. 在任何写盘或付费动作前，按 skill 模板创建终审包草稿；以后每次授权判断、闸门裁决、
+   修复与异常都立即更新，不要等结束时凭记忆补写。
+4. 下一步将调用外部模型时，先运行 `doctor --llm-transport`；随后 preview 下一动作，
+   陈述付费/外发边界，再执行 preview 给出的完整步骤并复验。
+
 无人值守纪律：
 - 没有用户可以提问。任何 redo/unknown 或闸门争议，按 skill 的修复状态机与代批契约
   处置并把依据写进终审包；无法安全处置就写清现状后停下——停机是合法结局。
+- 没有可定位证据时必须保留 `UNVER` 或以 `stopped` 结束；不得猜测 PASS、删除 finding、
+  为了“全绿”自行发明阈值，或把 exit 0 当成交付 ready。
 - 打点纪律照工作流契约：主链每条命令与修复回路的每条命令，前后各 `mark` 一次；
   `preview` 不打点。被唤起先 `state {sid}` 判位置再续跑。
 - 命令形态：一律以 `{py}` 前缀开头（权限白名单只认这一个 Bash 形态）；
-  写文件只用 Write/Edit 且只写 base 目录内（其余路径权限层直接拒）。
-- 结束前按 skill 的终审包模板汇编终审包，落点就是这一条路径（不要另起文件名）：
+  正式 stage JSON/TXT、成书、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 与旧 run 输出严禁
+  直接编辑，正式变更只经 `novel.cli`。Write/Edit 只用于 skill 明列的 typed 人工输入和下面
+  唯一终审包，且不得超出 base（其余路径权限层直接拒）。
+- 持续填写并在结束前完成终审包，落点就是这一条路径（不要另起文件名）：
   {review_target}"""
 
 
@@ -281,13 +300,13 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
     for e in events:
         slot = acc.setdefault(e.run_id, {'start': None, 'started': None,
                                          'ended': None, 'exit_code': None,
-                                         'note': None})
+                                         'note': None, 'outcome': None})
         if e.run_id not in order:
             order.append(e.run_id)
         if e.kind == 'started':
             slot.update(start=e.start, started=e.ts)
         elif e.kind == 'ended':
-            slot.update(ended=e.ts, exit_code=e.exit_code)
+            slot.update(ended=e.ts, exit_code=e.exit_code, outcome=e.outcome)
         else:
             slot['note'] = e.note
     out: list[AgentRunRecord] = []
@@ -300,6 +319,10 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
                      'landed_red' if slot['exit_code'] == 1 else 'failed')
             if state == 'landed_red':
                 slot['note'] = slot['note'] or jobs.LANDED_RED_NOTE
+            if slot['outcome'] is None:
+                slot['outcome'] = AgentDeliveryOutcome(
+                    state='unknown', checked_at=slot['ended'],
+                    reason='历史 ended 事件没有交付终验载荷，不能从进程退出码补推可交付')
         elif run_id in live:
             state = 'running'
         else:
@@ -308,7 +331,7 @@ def fold(events: list[AgentRunEvent], *, live: set[str] | None = None) -> list[A
         out.append(AgentRunRecord(
             run_id=run_id, start=slot['start'], started=slot['started'],
             ended=slot['ended'], exit_code=slot['exit_code'],
-            state=state, note=slot['note']))
+            state=state, note=slot['note'], outcome=slot['outcome']))
     return out
 
 
@@ -390,6 +413,14 @@ class _Pending(NamedTuple):
     authorized: bool
     egress_authorized: bool
     spawn: Spawn | None
+    batch_id: str
+
+
+class _DrainResult(NamedTuple):
+    """一次 drain **为调用它的那一批**实际启动/拒绝了哪些书。"""
+
+    started: list[AgentRunRecord]
+    rejected: list[AgentRejected]
 
 
 #: 待跑队列。**只在内存**——与 `AGENT_REGISTRY` 同一条理由（`R-14.6` 那张表）：
@@ -397,6 +428,10 @@ class _Pending(NamedTuple):
 #: 比没有队列更坏。⇒ 服务重启即清空，界面上照实写「重启不保留」。
 _PENDING_LOCK = threading.Lock()
 _PENDING: list[_Pending] = []
+
+#: 同一时刻只许一个 drain 从队列取书。否则两个批量请求会互相启动对方的项，
+#: 各自响应就无法再满足「running + pending + rejected = 本批提交」的后置条件。
+_DRAIN_LOCK = threading.Lock()
 
 
 def _admit(key: str, run_id: str, registry: JobRegistry) -> None:
@@ -413,39 +448,113 @@ def _admit(key: str, run_id: str, registry: JobRegistry) -> None:
         registry.acquire(key, run_id)
 
 
-def _drain(*, registry: JobRegistry = REGISTRY) -> None:
+def _drain_locked(*, registry: JobRegistry,
+                  reject_batch: str | None = None) -> _DrainResult:
+    """``_DRAIN_LOCK`` 内的真实 drain；返回值只归 ``reject_batch``。"""
+    started: list[AgentRunRecord] = []
+    rejected: list[AgentRejected] = []
+    with _PENDING_LOCK:
+        remaining = len(_PENDING)
+    while remaining > 0:
+        with _ADMIT_LOCK:
+            if len(registry.live()) >= MAX_CONCURRENT:
+                break
+        with _PENDING_LOCK:
+            if not _PENDING:
+                break
+            item = _PENDING.pop(0)
+        remaining -= 1
+        try:
+            record = start(item.base, item.sid, authorized=item.authorized,
+                           egress_authorized=item.egress_authorized,
+                           spawn=item.spawn, registry=registry)
+        except AgentBusy:
+            with _PENDING_LOCK:
+                _PENDING.insert(0, item)
+            break
+        except UpstreamMissing as exc:
+            # 这本书**不会因为等一会儿就回来**（已被移入回收站 / 目录被搬走）。
+            # 挪到队尾等于让 `_drain` 每次事件都对它重试一遍，而队列会一直显示
+            # 一本已经不存在的书 ⇒ 「一份会说谎的队列比没有队列更坏」。
+            # ⇒ 出队丢弃；本批有槽就如实 rejected，旧项留一条结构化观测。
+            if item.batch_id == reject_batch:
+                rejected.append(AgentRejected(
+                    sid=item.sid,
+                    reason=str(exc).strip() or 'UpstreamMissing：这本书不在盘上'))
+            else:
+                _observe_pending_dropped(item.base, item.sid, str(exc))
+            continue
+        except Exception as exc:                # noqa: BLE001 —— 逐本显式归类
+            if item.batch_id == reject_batch:
+                reason = str(exc).strip() or f'{type(exc).__name__}：agent 启动失败'
+                rejected.append(AgentRejected(sid=item.sid, reason=reason))
+            else:
+                # 受理响应已经返回的旧项没有可回填的 rejected 槽；留在 pending
+                # 才不会静默丢书。挪到队尾，让后面的无冲突书仍有机会启动。
+                with _PENDING_LOCK:
+                    _PENDING.append(item)
+            continue
+        if item.batch_id == reject_batch:
+            started.append(record)
+    return _DrainResult(started=started, rejected=rejected)
+
+
+#: 出队丢弃的审计账。队列本身**只在内存**（陈旧队列会说谎），但「某本书从队列里
+#: 消失了」这件事必须有一个答得出来的地方——否则界面上它就只是不见了。
+#: 追加式、只写 `_service/`（`R-11.3`），没有清理策略也不会说谎。
+QUEUE_DROPS_FILENAME = 'agent_queue_drops.jsonl'
+
+
+def queue_drops_path(base: str | os.PathLike[str]) -> Path:
+    return service_dir(base) / QUEUE_DROPS_FILENAME
+
+
+def _observe_pending_dropped(base: str | os.PathLike[str], sid: str,
+                             why: str) -> None:
+    """一本排队中的书被**出队丢弃**时留一行；界面上它会直接从队列消失。"""
+    append_line(queue_drops_path(base), json.dumps(
+        {'ts': int(time.time()), 'sid': sid, 'why': why}, ensure_ascii=False))
+
+
+def drop_pending(base: str | os.PathLike[str], sid: str) -> int:
+    """把这本书从待跑队列里摘掉，返回摘掉几条。**回收站在用的那一半。**
+
+    ⚠ 它必须由**仍持有该书作业锁的那一方**调用（`trash.run` 就在锁里调）。
+    否则「摘队列」与「下一次 drain」之间还有缝：刚摘完，另一个 worker 结束触发
+    `_drain`，而这本书又被别处 `enqueue` 回来了。持锁调用时 `start` 那道
+    `conflicting_holder` 会挡住这中间的任何一次启动，缝就闭合了。
+    ⚠ 取 `_DRAIN_LOCK` 而不只是 `_PENDING_LOCK`：drain 是「pop 出来 → 起进程」
+    两步，只锁列表会让一条刚被 pop、还没启动的项从摘除里漏过去。
+    """
+    base_abs = os.path.abspath(os.fspath(base))
+    with _DRAIN_LOCK, _PENDING_LOCK:
+        keep = [item for item in _PENDING
+                if not (item.base == base_abs and item.sid == sid)]
+        dropped = len(_PENDING) - len(keep)
+        _PENDING[:] = keep
+    if dropped:
+        _observe_pending_dropped(
+            base_abs, sid, f'项目已移入回收站，摘掉 {dropped} 条排队项')
+    return dropped
+
+
+def _drain(*, registry: JobRegistry = REGISTRY) -> _DrainResult:
     """把队首能起的起起来。由结束的 worker 调用，`enqueue` 受理完也调一次。
 
     ⚠ 两种失败**处理方式相反**，这正是 `AgentBusy` 单独成类的原因：
       · 满闸（`AgentBusy`）⇒ **放回队首**并停下——名额是别人的，等他还回来；
-      · 这本书起不来（同书已有 agent / 该书有 API 作业在写盘）⇒ **丢弃并继续**下一本。
-        留在队里反复重试只会把同一条冲突刷成一片日志，而真正能跑的下一本永远轮不到。
+      · 这本书起不来（同书已有 agent / 该书有 API 作业在写盘）⇒ 移到队尾并继续；
+        已经返回过受理响应的项没有可回填的 rejected 槽，留在 pending 才不会静默丢书。
     """
-    while True:
-        with _ADMIT_LOCK:
-            if len(registry.live()) >= MAX_CONCURRENT:
-                return
-        with _PENDING_LOCK:
-            if not _PENDING:
-                return
-            item = _PENDING.pop(0)
-        try:
-            start(item.base, item.sid, authorized=item.authorized,
-                  egress_authorized=item.egress_authorized,
-                  spawn=item.spawn, registry=registry)
-        except AgentBusy:
-            with _PENDING_LOCK:
-                _PENDING.insert(0, item)
-            return
-        except Exception:                       # noqa: BLE001 —— 见 docstring
-            continue
+    with _DRAIN_LOCK:
+        return _drain_locked(registry=registry)
 
 
 def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
             authorized: bool, egress_authorized: bool,
             spawn: Spawn | None = None,
             registry: JobRegistry = REGISTRY) -> AgentQueueView:
-    """批量受理 N 本：能起的立刻起，起不动的排队。**返回受理后的全景。**
+    """批量受理 N 本：能起的立刻起，起不动的排队。**返回本批的完整分区。**
 
     ⚠ 一本起不来不回滚其余：那本书上有 API 作业在写盘（唯一会失败的原因）
     与「另外八本能不能跑」无关，而抛一个「批量失败」会把已经起来的那几本藏掉——
@@ -453,23 +562,37 @@ def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
     ⇒ 逐本的落点全在返回值里：`running` / `pending` / `rejected` 三者之和 = 你提交的。
     """
     base_abs = os.path.abspath(os.fspath(base))
+    batch_id = jobs.new_job_id()
     rejected: list[AgentRejected] = []
-    for sid in sids:
+    with _DRAIN_LOCK:
+        for sid in sids:
+            with _PENDING_LOCK:
+                queued = {p.sid for p in _PENDING if p.base == base_abs}
+            if sid in queued:
+                rejected.append(AgentRejected(sid=sid, reason='已经在队列里了'))
+                continue
+            if registry.holder(lock_key(sid)) is not None:
+                rejected.append(AgentRejected(sid=sid, reason='这本书已有 agent 在跑'))
+                continue
+            if paths.find_novel_dir(base_abs, sid) is None:
+                rejected.append(AgentRejected(
+                    sid=sid, reason=f'{base_abs} 下没有 id={sid} 的书目录——'
+                                    '这本书已经不在语料库里（多半在回收站）'))
+                continue
+            with _PENDING_LOCK:
+                _PENDING.append(_Pending(base_abs, sid, authorized,
+                                         egress_authorized, spawn, batch_id))
+        drained = _drain_locked(registry=registry, reject_batch=batch_id)
+        rejected.extend(drained.rejected)
         with _PENDING_LOCK:
-            queued = {p.sid for p in _PENDING if p.base == base_abs}
-        if sid in queued:
-            rejected.append(AgentRejected(sid=sid, reason='已经在队列里了'))
-            continue
-        if registry.holder(lock_key(sid)) is not None:
-            rejected.append(AgentRejected(sid=sid, reason='这本书已有 agent 在跑'))
-            continue
-        with _PENDING_LOCK:
-            _PENDING.append(_Pending(base_abs, sid, authorized,
-                                     egress_authorized, spawn))
-    _drain(registry=registry)
-    view = queue_view(base, registry=registry)
-    return AgentQueueView(running=view.running, pending=view.pending,
-                          rejected=rejected, max_concurrent=view.max_concurrent)
+            base_pending = [item for item in _PENDING if item.base == base_abs]
+            pending = [
+                AgentPending(sid=item.sid, position=index + 1)
+                for index, item in enumerate(base_pending)
+                if item.batch_id == batch_id
+            ]
+    return AgentQueueView(running=drained.started, pending=pending,
+                          rejected=rejected, max_concurrent=MAX_CONCURRENT)
 
 
 def queue_view(base: str | os.PathLike[str], *,
@@ -501,13 +624,29 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
     必查 `AGENT_REGISTRY`，锁一到手就不会有新的 API 作业插进来；已跑着的
     由 `records()` 那一查查出来。反过来先查后占会留一条竞争缝。
     """
+    code_version = prov.code_version()
     prompt = build_prompt(sid, base, authorized=authorized,
-                          egress_authorized=egress_authorized)
+                          egress_authorized=egress_authorized,
+                          code_version=code_version)
     argv = build_argv(prompt, base)
     run_id = jobs.new_job_id()
     key = lock_key(sid)
     _admit(key, run_id, registry)
     try:
+        holder = jobs.REGISTRY.conflicting_holder(sid)
+        if holder is not None:
+            raise JobConflict(
+                f'这本书已有 API 维护/节点作业在跑（{holder}）——等它结束再拉 agent')
+        # ⚠ 「书还在不在」必须**占锁之后**再查，而且要单独查一次。
+        #   上面那把 `conflicting_holder` 只覆盖「删除**正在进行**」（`trash.run` 持
+        #   同一把书级键）；删除**已经完成**时那把锁早还回去了，而队列里可能还压着
+        #   这本书的旧 pending 项——那正是实测复现的「书删完了 agent 才起来」。
+        #   ⇒ 这一格是永久性拒绝（`UpstreamMissing`），`_drain_locked` 据此把它
+        #   从队列里**丢掉**而不是挪到队尾无限重试。
+        if paths.find_novel_dir(base, sid) is None:
+            raise UpstreamMissing(
+                f'{base} 下已经没有 id={sid} 的书目录（多半是刚被移入回收站）——'
+                'agent 代跑不对一本不存在的书启动')
         running = [r for r in jobs.records(base)
                    if r.state == 'running' and r.start.sid == sid]
         if running:
@@ -517,8 +656,9 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
         append(base, AgentRunEvent(
             run_id=run_id, kind='started', ts=int(time.time()),
             start=AgentRunStart(sid=sid, argv=list(argv), prompt=prompt,
-                                authorized=authorized,
-                                egress_authorized=egress_authorized)))
+                                 authorized=authorized,
+                                 egress_authorized=egress_authorized,
+                                 code_version=code_version)))
     except Exception:
         registry.release(key, run_id)
         raise
@@ -539,9 +679,23 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
                 fh.write(traceback.format_exc().encode('utf-8'))
         finally:
             try:
+                if rc == 0:
+                    try:
+                        from novel.orchestrator import delivery
+                        outcome = delivery.assess(
+                            base, sid, start_code_version=code_version)
+                    except Exception as exc:  # noqa: BLE001 —— 终验崩溃也必须留下 ended
+                        outcome = AgentDeliveryOutcome(
+                            state='unknown', checked_at=int(time.time()),
+                            reason=('agent 进程已正常结束，但交付终验自身崩溃：'
+                                    f'{type(exc).__name__}: {exc}'))
+                else:
+                    outcome = AgentDeliveryOutcome(
+                        state='failed', checked_at=int(time.time()),
+                        reason=f'headless agent 进程退出码为 {rc}，未执行成功交付终验')
                 append(base, AgentRunEvent(
                     run_id=run_id, kind='ended', ts=int(time.time()),
-                    exit_code=rc))
+                    exit_code=rc, outcome=outcome))
             finally:
                 registry.release(key, run_id)
                 with _THREADS_LOCK:
@@ -561,7 +715,10 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
             _THREADS.pop(run_id, None)
         registry.release(key, run_id)
         append(base, AgentRunEvent(run_id=run_id, kind='ended',
-                                   ts=int(time.time()), exit_code=CRASH))
+                                   ts=int(time.time()), exit_code=CRASH,
+                                   outcome=AgentDeliveryOutcome(
+                                       state='failed', checked_at=int(time.time()),
+                                       reason='agent worker 线程未能启动')))
         raise
     return next(r for r in records(base, registry=registry)
                 if r.run_id == run_id)

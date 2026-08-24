@@ -31,6 +31,7 @@ from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.run import RunContext
 from novel.stages import initial_extract
 from novel.stages.stage2 import extract
+from novel.stages.stage2.compile_v2 import canonical_ir_projection
 from novel.stages.stage3 import style
 from contracts.invariants import HINGE_FAILURE_ROUTE
 from novel.stages.stage2.normalize import normalize_verbatim, response_shape
@@ -39,15 +40,11 @@ from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
 
 
-#: ⚠ **本文件的假响应是 `bounded-fidelity-v3` 形状的**（`_response_blueprints()`
-#: 由 v3 正式产物反投影而来，带 `beat_id`/`span`/产物侧 `time_layer`）。
-#: 2026-08-21 默认契约翻成 `extraction-ir-v1` 之后，不拧回去这些响应会被
-#: V2 的 schema 闸整轮拒光——那是**测试装置的臂选错了**，不是产线的病。
-#: ⇒ 整个文件跑在 v3 臂上；ir1 的链路另有 `test_stage2_contract_dispatch.py`
-#: 与 `test_stage2_compile_v2.py` 覆盖。
+#: 本文件把通用生成闭环固定在仍现役的 `extraction-ir-v1.1`；需要 v2/v3.1
+#: 特有拓扑的断言集中在 `test_stage2_contract_dispatch.py`。
 @pytest.fixture(autouse=True)
-def _pin_v3_arm(monkeypatch):
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'bounded-fidelity-v3')
+def _pin_ir11_arm(monkeypatch):
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v1.1')
 
 
 def test_parallel_chapter_requests_report_batch_positions_without_schema_changes():
@@ -163,17 +160,30 @@ def _response_global() -> dict:
 
 
 def _response_blueprints() -> dict[int, dict]:
-    """底座正式产物 → 假响应形状。
-
-    ⚠ `response_shape` 要**该章自己的正文**才反投影得出段号（`bounded-fidelity-v3`）：
-    拿错章反算出来的段号一样是整数、一样不报错，只是指向别的地方。
-    """
+    """底座正式产物 → v1.1 的 extraction IR 假响应。"""
     texts = {section['chapter_ordinal']: section['text'] for section in main_text()}
     out: dict[int, dict] = {}
     for blueprint in copy.deepcopy(blueprints())['blueprints']:
         ordinal = blueprint['chapter_ordinal']
-        out[ordinal] = response_shape(blueprint, texts[ordinal])
+        out[ordinal] = canonical_ir_projection(blueprint, texts[ordinal])
     return out
+
+
+def _summary_text(ordinal: int) -> str:
+    return f'第{ordinal}章摘要：' + '事件按原叙述顺序推进，人物行动、因果转折与关键材料均保持一致。' * 2
+
+
+def _respond_blueprints(req: ChatRequest, by_ordinal: dict[int, dict]) -> ChatResponse:
+    if '逐章事件清单' in req.user:
+        ordinals = sorted({int(value) for value in re.findall(
+            r'"chapter_ordinal":(\d+)', req.user)})
+        return _ok({'chapters': [
+            {'chapter_ordinal': ordinal, 'summary': _summary_text(ordinal)}
+            for ordinal in ordinals
+        ]})
+    ordinals = re.findall(r'阅读序第(\d+)章', req.user)
+    assert ordinals, '单章 user prompt 没有任务范围'
+    return _ok({'blueprints': [by_ordinal[int(ordinals[-1])]]})
 
 
 def _ctx(book: Path, node: str, *, paid: bool = True) -> RunContext:
@@ -264,10 +274,7 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         by_ordinal = _response_blueprints()
 
         def respond(req: ChatRequest, _index: int) -> ChatResponse:
-            ordinals = re.findall(r'阅读序第(\d+)章', req.user)
-            assert ordinals, '单章 user prompt 没有任务范围'
-            ordinal = int(ordinals[-1])
-            return _ok({'blueprints': [by_ordinal[ordinal]]})
+            return _respond_blueprints(req, by_ordinal)
 
         blueprint_ctx = _ctx(book, 'stage2.blueprint')
         blueprint_client, blueprint_transport = _client(
@@ -275,20 +282,20 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         report = extract.run_blueprint(blueprint_ctx, blueprint_client)
 
         assert report.passed
-        assert len(blueprint_transport.calls) == len(main_text())
+        assert len(blueprint_transport.calls) == len(main_text()) + 1
         stored = ArtifactStore(blueprint_ctx).read(
             ChapterBlueprints, extract.BLUEPRINT_REL)
         assert [bp.chapter_ordinal for bp in stored.blueprints] == [1, 2, 3]
         assert stored.provenance.usage is not None
-        assert stored.provenance.usage.calls_made == 3
+        assert stored.provenance.usage.calls_made == 4
         context = stored.provenance.context
         # ⚠ 读**本次运行选中的那套契约**，不抄字面、也不读全局默认：
-        #   本文件钉在 v3 臂上（见 `_pin_v3_arm`），而默认已是 ir1
+        #   本文件钉在 v1.1 臂上（见 `_pin_ir11_arm`），而默认已是 v2
         #   ——拿默认常量来比，等于断言「产地写的是别人的架构」。
         #   这条守的是「产地如实记下了自己用的那一套」。
         from novel.stages.stage2.contract import active_contract
         assert context.architecture == active_contract().architecture
-        assert context.architecture == 'bounded-fidelity-v3'
+        assert context.architecture == 'extraction-ir-v1.1'
         assert context.current_chapter_full is True
         assert context.future_visible is False
         assert context.stable_prefix
@@ -331,6 +338,66 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert not rerun_store.exists(extract._INVALID)
         assert list((book / 'stage2' / '_rounds').glob(
             'chapter_blueprints.INVALID.r*.json'))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_global_rebuild_is_not_locked_by_an_obsolete_blueprint_schema():
+    """旧版下游不是可消费蓝图；它不能反向锁死 global producer 的重建路。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '旧蓝图升级恢复_124'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        obsolete = book / extract.BLUEPRINT_REL
+        obsolete.parent.mkdir(parents=True, exist_ok=True)
+        obsolete.write_text(
+            json.dumps({'_schema_version': 2}, ensure_ascii=False) + '\n',
+            encoding='utf-8', newline='\n')
+        client, transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        artifact = extract.run_global(ctx, client)
+
+        assert isinstance(artifact, GlobalGrounding)
+        assert len(transport.calls) == 1
+        assert obsolete.read_text(encoding='utf-8').startswith('{"_schema_version": 2}')
+        assert store.read(GlobalGrounding, extract.GLOBAL_REL) == artifact
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize('marker,label', [
+    (999, '比当前还高的版本'),
+    ('v2', '非法 marker'),
+])
+def test_global_rebuild_still_refuses_a_blueprint_that_is_not_merely_old(marker, label):
+    """⭐ **「跳过旧蓝图」不许写成「跳过整族 `ArtifactVersionError`」。**
+
+    那一族有六个抛出点：缺 marker、非法 marker、root envelope 形状坏、
+    **版本比当前还高**、以及真正的「旧版本」。按异常类型放宽会把前四种一起放掉，
+    于是一份 `_schema_version: 999` 的蓝图让这道守卫整个消失 ——
+    这次 global 重跑可以新造悬空 char_id 而不被任何东西挡住（已复现）。
+    """
+    root = Path(tempfile.mkdtemp())
+    book = root / f'坏蓝图不放行_{abs(hash(label)) % 1000}'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        broken = book / extract.BLUEPRINT_REL
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.write_text(
+            json.dumps({'_schema_version': marker}, ensure_ascii=False) + '\n',
+            encoding='utf-8', newline='\n')
+        client, _transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        with pytest.raises(ArtifactUnreadable):
+            extract.run_global(ctx, client)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -472,8 +539,7 @@ def test_stage4_plan_over_limit_stops_before_transport_or_any_stage4_artifact():
         by_ordinal = _response_blueprints()
 
         def respond(req: ChatRequest, _index: int) -> ChatResponse:
-            ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
-            return _ok({'blueprints': [by_ordinal[ordinal]]})
+            return _respond_blueprints(req, by_ordinal)
 
         blueprint_ctx = _ctx(book, 'stage2.blueprint')
         blueprint_client, _ = _client(blueprint_ctx, respond)
@@ -627,8 +693,7 @@ def test_stage2_blueprint_renormalize_rebuilds_code_derived_character_refs():
         by_ordinal = _response_blueprints()
 
         def respond(req: ChatRequest, _index: int) -> ChatResponse:
-            ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
-            return _ok({'blueprints': [by_ordinal[ordinal]]})
+            return _respond_blueprints(req, by_ordinal)
 
         blueprint_ctx = _ctx(book, 'stage2.blueprint')
         blueprint_client, blueprint_transport = _client(
@@ -869,8 +934,7 @@ def test_stage2_renormalize_rejects_locator_shaped_formal_artifact():
         by_ordinal = _response_blueprints()
 
         def respond(req: ChatRequest, _index: int) -> ChatResponse:
-            ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
-            return _ok({'blueprints': [by_ordinal[ordinal]]})
+            return _respond_blueprints(req, by_ordinal)
 
         blueprint_ctx = _ctx(book, 'stage2.blueprint')
         blueprint_client, transport = _client(blueprint_ctx, respond)
@@ -907,8 +971,7 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         by_ordinal = _response_blueprints()
 
         def respond(req: ChatRequest, _index: int) -> ChatResponse:
-            ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
-            return _ok({'blueprints': [by_ordinal[ordinal]]})
+            return _respond_blueprints(req, by_ordinal)
 
         blueprint_ctx = _ctx(book, 'stage2.blueprint')
         blueprint_client, _blueprint_transport = _client(
@@ -938,11 +1001,11 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
             repair_ctx, repair_client, chapters=(1,))
 
         assert report.passed
-        assert len(repair_transport.calls) == 1
+        assert len(repair_transport.calls) == 2
         assert '上一版结构基线' in repair_transport.calls[0].user
         assert '上一版必须修正的问题' in repair_transport.calls[0].user
         assert 'b01_01' in repair_transport.calls[0].user
-        assert len(_blueprint_transport.calls) == len(main_text())
+        assert len(_blueprint_transport.calls) == len(main_text()) + 1
         stored = store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
         assert [bp.chapter_ordinal for bp in stored.blueprints] == [1, 2, 3]
         assert stored.provenance.partial_regen_chapters == [1]
@@ -951,7 +1014,7 @@ def test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book():
         assert stored.provenance.repairs[-1].failure_items == [
             'hinge_anchor_void', 'verbatim_failed']
         assert stored.provenance.usage is not None
-        assert stored.provenance.usage.calls_made == 4
+        assert stored.provenance.usage.calls_made == 6
         assert not (book / extract._INVALID).exists()
         assert previous.provenance.usage is not None
     finally:

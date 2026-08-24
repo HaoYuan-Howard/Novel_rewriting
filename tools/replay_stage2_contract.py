@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-replay_stage2_contract.py —— 拿盘上**已付费**的 v3 蓝图零成本重放 `extraction-ir-v1`。
+replay_stage2_contract.py —— 拿盘上**已付费**的旧蓝图零成本重放 `extraction-ir-v1.1`。
 
 【它回答的问题】把当前正式产物反投影成 ir1 的最小响应（`canonical_ir_projection`），
 喂给确定性编译器（`compile_v2`），新旧产物逐字段对账——**付费前最后一道免费闸**：
@@ -165,7 +165,7 @@ def replay_book(book: Path) -> dict[str, Any]:
         **acc,
         'context': {
             **((old.get('_provenance') or {}).get('context') or {}),
-            'architecture': 'extraction-ir-v1',
+            'architecture': 'extraction-ir-v1.1',
         },
     }
     new_bp_artifact = {'blueprints': compiled['blueprints'],
@@ -220,7 +220,7 @@ def replay_book(book: Path) -> dict[str, Any]:
 
 
 def render_md(reports: list[dict[str, Any]]) -> str:
-    lines = ['# stage2 契约重放报告（v3 产物 → extraction-ir-v1 编译）', '']
+    lines = ['# stage2 契约重放报告（旧产物 → extraction-ir-v1.1 编译）', '']
     lines.append('| 书 | 章 | 拍 | hinge 逐字节回收 | 改写 | 歧义（率） | '
                  'span 膨胀合计/中位/最大 | 段长 P99 | 摘要体积比 | 新增 HARD | 违约 |')
     lines.append('|---|--:|--:|--:|--:|---|---|--:|--:|---|--:|')

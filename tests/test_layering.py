@@ -165,6 +165,13 @@ _JSON_READ_ALLOWED = {
         'agent 代跑记录**不是产物**：与 jobs.jsonl 同一份理由，append-only 事件流'
         '（`_service/agent_runs.jsonl` + `logs/agent-*.log`），'
         '读的一侧要容忍被 kill 截断的最后一行'),
+    'novel/orchestrator/trash.py': (
+        '回收站条目的 `metadata.json` **不是产物**：`ARTIFACTS` 里没有它、'
+        '不进来源账、不进 `_provenance`，它只回答「这条删除完成了没有」'
+        '（`sweep_incomplete` 的硬中断恢复判据）。'
+        '⚠ 更要紧的是它**读的时候一定坏得起**——半成品条目正是进程被硬中断留下的，'
+        '写到一半的 JSON 必须当成「没有 metadata」继续往下判，'
+        '而产物读路的纪律恰恰相反：坏 JSON 一律关闭式失败'),
 }
 
 
@@ -212,6 +219,14 @@ _WRITE_ALLOWED = {
         '它还是全仓唯一一处**会主动删文件**的地方（`evict`），而那与判据 7'
         '「修不了的原样留着」不冲突——产物留着是给人看的，一份坏缓存留着'
         '只会被下一次重跑静默地当成新结果'),
+    'novel/llm/keepsake.py': (
+        '「答案流丢失」（正文空 + 非截断，答案写进了 reasoning）那一份的留证：'
+        '整个模块只有一个函数、只做一件事——落字节。它**不是产物**（不进 ARTIFACTS / '
+        '来源账 / `_provenance`，`_` 前缀目录，完成度与阶段视图都不看它），'
+        '也**不是缓存**（缓存会被读回来当答案用，所以 `ResponseCache.put` 拒写空正文'
+        '是对的；留证只给人看，救场仍禁止从 reasoning 里抠答案）。'
+        '⚠ 它单独成一个模块正是**为了**这张表按文件豁免：把 `llm/client.py` 整个放进来'
+        '等于给全仓最长、改动最频繁的模块开永久豁免，它下次真绕开 store 时这条守卫就哑了'),
     'novel/orchestrator/jobs.py': (
         '作业记录与子进程日志。⚠ **`R-11.3` 已于 2026-08-11（骨架 D）'
         '收窄成「绝不落**产物**盘」**，理由是一句话：'
@@ -231,6 +246,10 @@ _WRITE_ALLOWED = {
     'novel/orchestrator/approvals.py': (
         '人工闸门与深度选章只写 Output/_service/approvals/。它们控制作业是否可启动，'
         '不是小说产物，不进 ARTIFACTS / provenance；原子替换防止并发读到半份状态'),
+    'novel/orchestrator/trash.py': (
+        '项目删除的 CLI 子进程把整本书目录与审批状态原子移入 Output/_service/trash/。'
+        '它不改写任何产物字节；回收站保留原目录、元数据与恢复路径，父服务进程只负责互斥'
+        '和拉起该子进程'),
     'novel/orchestrator/agent.py': (
         'agent 代跑的**子进程日志** `Output/_service/logs/agent-*.log` 按字节追加；'
         '它与 jobs.py 写 _service 同一份理由（「子进程被杀」这条记录只有父进程写得出来），'
@@ -406,6 +425,7 @@ _SERVICE_MUTATORS = {
     ('approvals', 'begin_writing'),
     ('approvals', 'reset'),
     ('approvals', 'backfill_from_disk'),
+    ('trash', 'run'),
 }
 
 
@@ -416,12 +436,13 @@ def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == 'novel.orchestrator':
             for alias in node.names:
-                if alias.name in ('jobs', 'uploads', 'approvals'):
+                if alias.name in ('jobs', 'uploads', 'approvals', 'trash'):
                     module_aliases[alias.asname or alias.name] = alias.name
         elif isinstance(node, ast.ImportFrom) and node.module in (
             'novel.orchestrator.jobs',
             'novel.orchestrator.uploads',
             'novel.orchestrator.approvals',
+            'novel.orchestrator.trash',
         ):
             module = node.module.rsplit('.', 1)[-1]
             for alias in node.names:
@@ -443,7 +464,7 @@ def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
 
 
 def test_service_mutations_are_narrowly_owned_by_mutation_routes():
-    """API 只准备 `_service` 输入并起子进程；视图层保持纯读。新增写入口必须显式改表。"""
+    """API 只准备 `_service` 输入并起作业/回收子进程；视图层保持纯读。新增写入口必须显式改表。"""
     hits = {
         _rel(path): _service_mutator_hits(path)
         for path in _api_files() + _view_files()
@@ -467,6 +488,7 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
             ('jobs', 'run'), ('uploads', 'save_draft_edit'),
             ('uploads', 'discard_edit_plan'), ('approvals', 'approve_gate'),
         },
+        'novel/api/routes/maintenance.py': {('trash', 'run')},
     }
     assert set(hits) == set(expected)
     assert {path: set(values) for path, values in hits.items()} == expected

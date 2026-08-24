@@ -25,6 +25,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
+    AGENT_DELIVERY_OUTCOME,
     AGENT_RUN_EVENT_KINDS, ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
     FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
     OVERVIEW_VERDICT, PROGRESS_PHASES, STAGES,
@@ -41,6 +42,7 @@ ArtifactCondition = Literal[ARTIFACT_CONDITION]
 OverviewVerdict = Literal[OVERVIEW_VERDICT]
 ProgressPhase = Literal[PROGRESS_PHASES]
 BeaconState = Literal[BEACON_STATES]
+AgentDeliveryState = Literal[AGENT_DELIVERY_OUTCOME]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -325,6 +327,18 @@ class AgentRunStart(FrozenModel):
     #: 正文外发授权，与付费授权正交；每一条 started 事件都必须显式记录。
     egress_authorized: bool
 
+    #: 启动时的仓库代码指纹。旧事件没有这一格时为 `None`，只能把最终交付判为
+    #: unknown；新 run 在结束时必须与当前指纹一致，避免一次跑跨两版代码却冒充可复现。
+    code_version: str | None = None
+
+
+class AgentDeliveryOutcome(FrozenModel):
+    """外层进程结束后，服务端从当前盘面重新得出的交付结论。"""
+
+    state: AgentDeliveryState
+    reason: str = Field(min_length=1)
+    checked_at: int = Field(ge=0)
+
 
 AgentRunEventKind = Literal[AGENT_RUN_EVENT_KINDS]
 
@@ -351,6 +365,9 @@ class AgentRunEvent(FrozenModel):
     #: `kind == 'reconciled'`：为什么改判（服务重启那一族）。
     note: str | None = None
 
+    #: 新版 `ended` 事件随退出码一起带；旧事件缺失时折叠为 outcome=unknown。
+    outcome: AgentDeliveryOutcome | None = None
+
     @model_validator(mode='after')
     def _payload_matches_the_kind(self) -> AgentRunEvent:
         """一种事件恰好带一种载荷（与 `JobEvent` 那条逐字同理）。"""
@@ -361,6 +378,8 @@ class AgentRunEvent(FrozenModel):
         if carried != {want}:
             raise ValueError(
                 f'{self.kind} 事件该带且只该带 {want!r}，实得 {sorted(carried)}')
+        if self.outcome is not None and self.kind != 'ended':
+            raise ValueError('只有 ended 事件可以带 outcome')
         return self
 
 
@@ -383,6 +402,9 @@ class AgentRunRecord(StrictModel):
     #: `reconciled` 那一条的原因。`None` = 键不在。
     note: str | None = None
 
+    #: 与 `state` 正交：前者只讲进程，后者讲盘面是否真正可交付。
+    outcome: AgentDeliveryOutcome | None = None
+
     @model_validator(mode='after')
     def _state_matches_the_events(self) -> AgentRunRecord:
         """折叠规则只有一处算（同 `JobRecord` 那条）。"""
@@ -399,6 +421,8 @@ class AgentRunRecord(StrictModel):
                                  f'实得 {self.state!r}')
         if self.state == 'unknown' and not self.note:
             raise ValueError('state=unknown 必须说出原因（R-11.11）')
+        if self.outcome is not None and self.exit_code is None:
+            raise ValueError('没有 ended/exit_code 时不得声称已有交付终验')
         return self
 
 

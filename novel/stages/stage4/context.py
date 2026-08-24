@@ -270,12 +270,18 @@ def _resolve_beats(out_ch: dict[str, Any], bidx: dict[str, dict[str, Any]], disp
         #   一过滤下标就会错位——那正好会把某一段的舞台安到另一段的内容上，
         #   而这一类「张冠李戴」正是本层要根除的东西。
         #   缺 event 是 stage2 的契约违约，该由落盘那一步响亮失败，不在这里悄悄补位。
+        # ⚠ `spine` **原样投影、不给默认值**：`None` 是「计划没做过主次决策」的合法态
+        #   （恒等基线就是它），而 `narrative_role` 那三个的 `or` 默认是给存量载体读的。
+        #   给 `spine` 补一个 1 等于替计划做了它没做的决策，下发面会照着演。
+        #   上界（`spine ≤ len(events)`）由 `CtxBeat` 的载体侧 validator 守——
+        #   这一层**同时**持有 events 与 spine，是全链唯一能把那条不等式写成类型的地方。
         w: dict[str, Any] = {'slot': be.get('slot'),
                              'events': [bidx[b].get('event') or '' for b in cited],
                              'budget_chars': be.get('budget_chars'),
                              'narrative_role': be.get('narrative_role') or 'bridge',
                              'delivery': be.get('delivery') or 'scene',
-                             'transition': be.get('transition') or 'continue'}
+                             'transition': be.get('transition') or 'continue',
+                             'spine': be.get('spine')}
 
         # 舞台信息取自【所引的全部】源 beat（**不做 `seen` 去重**）：一拍写在哪儿、谁在场、
         # 是不是回忆，跟这拍是不是第一个引用该 beat 无关，漏了写手就得靠猜。

@@ -16,12 +16,13 @@ import copy
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import ValidationError
 
 from contracts.invariants import BLUEPRINT_ARCHITECTURE
 from contracts.rules import REGISTRY
+from contracts.schema import ArtifactVersionError
 from contracts.schema.base import StrictModel
 from contracts.schema.report import CheckReport
 from contracts.schema.evaluation import GlobalReview
@@ -33,7 +34,7 @@ from contracts.schema.stage2 import (
 )
 from novel import paths, prov
 from novel.config import MAX_CONCURRENCY
-from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.errors import ArtifactUnreadable, GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
 from novel.llm.ledger import combine_usage
@@ -48,7 +49,10 @@ from novel.stages.stage2.normalize import (
     normalize_blueprints, normalize_global, past_attested_surfaces,
     resolve_character_refs, response_shape,
 )
-from novel.stages.stage2.paragraphs import render_numbered
+from novel.stages.stage2.paragraphs import paragraph_spans, render_numbered
+from novel.stages.stage2.references import (
+    hinge_candidates_by_chapter, prompt_candidates,
+)
 from novel.store import ArtifactStore
 
 GLOBAL_REL = STAGE2_GLOBAL_GROUNDING
@@ -65,6 +69,7 @@ _GLOBAL_INVALID = paths.invalid_of(GLOBAL_REL)
 
 GLOBAL_MAX_TOKENS = 96_000
 BLUEPRINT_MAX_TOKENS = 256_000
+BOUNDARY_MAX_TOKENS = 64_000
 ROLE_MAX_TOKENS = 32_000
 #: 三个 v2 上下文预算（2026-08-14 用 167 本语料 2612 章实测标定，脚本不入仓）：
 #: 4000 字邻章尾窗对 99.5% 的章是整章（章长 P50=795 / P90=1422 / P99=2695；
@@ -104,7 +109,7 @@ class _Both:
         self.main_text = _read_main_text(store)
 
     def judge(self) -> list[Outcome]:
-        """跑全部 75 条。**唯一判定落点**——落盘闸门与复检共用它。"""
+        """跑全部 74 条。**唯一判定落点**——落盘闸门与复检共用它。"""
         return checks.check(global_g=self.global_g, blueprints=self.blueprints,
                             main_text=self.main_text)
 
@@ -317,12 +322,39 @@ def build_prompts(
             f'{GLOBAL_REL} 不在盘上——已现称名表由全局名册派生，先跑 stage2.global')
     characters = store.read(GlobalGrounding, GLOBAL_REL) \
         .model_dump(by_alias=True)['entities']['characters']
-    # 契约 dispatch（v3 / extraction-ir-v1）：system 是 spec 里**已拼好结构提示**的
-    # 完整字节；user 构造两契约共用（上下文策略刻意不随契约变，A/B 变量只有响应契约一维）。
-    system = _active_spec().system
-    return [(o, system,
-             build_blueprint_user(ctx.title, mt, (o,), characters=characters))
-            for o in targets]
+    # 契约 dispatch：system 是 spec 里**已拼好结构提示**的完整字节。v2 的首相
+    # 不需要关闭式细节表；scaffolded single 必须在唯一请求里同时拿到人物与候选。
+    spec = _active_spec()
+    # 两段式契约真实发出的第一条是边界预传；dry-run 与付费路共用这里，
+    # 所以预览不能拿尚未冻结边界的细节 system 冒充第一条调用。
+    system = (spec.boundary_system
+              if spec.topology == 'boundary_then_detail'
+              else spec.system)
+    if system is None:
+        raise RuntimeError(f'{spec.architecture} 的调用拓扑没有登记 system')
+    visible: dict[int, dict[str, list[str]]] = {}
+    candidates: dict[int, list[dict[str, Any]]] = {}
+    if spec.topology == 'scaffolded_single' and spec.uses_character_refs:
+        from novel.stages.stage2.compile_v2 import visible_character_refs_with_drops
+        visible, dropped_refs = visible_character_refs_with_drops(characters, mt)
+        _observe_indistinguishable_refs(ctx, dropped_refs)
+    if spec.topology == 'scaffolded_single' and spec.uses_hinge_candidates:
+        candidates = hinge_candidates_by_chapter(mt)
+    return [
+        (o, system, build_blueprint_user(
+            ctx.title,
+            mt,
+            (o,),
+            characters=characters,
+            character_refs=(visible.get(o, {})
+                            if spec.topology == 'scaffolded_single'
+                            and spec.uses_character_refs else None),
+            hinge_candidates=(candidates.get(o, [])
+                              if spec.topology == 'scaffolded_single'
+                              and spec.uses_hinge_candidates else None),
+        ))
+        for o in targets
+    ]
 
 
 def _active_spec():
@@ -426,6 +458,65 @@ def _past_names_block(names: list[str]) -> str:
             + '、'.join(rows))
 
 
+def _observe_indistinguishable_refs(
+    ctx: RunContext, dropped: dict[int, list[list[str]]],
+) -> None:
+    """把「本章有几组人物在称呼上分不开、因此没有下发」如实报出来。
+
+    ⚠ 剔除本身在 `visible_character_refs_with_drops` 里（候选集只能有一个落点）；
+    这里只负责让它**不是静默的**——少标几个在场者不会有任何判据变红，
+    而「为什么这一章少标了」必须答得出来。
+    """
+    if not dropped:
+        return
+    ctx.observe(
+        'character_refs_indistinguishable',
+        chapters=sorted(dropped),
+        groups={str(ordinal): groups for ordinal, groups in sorted(dropped.items())},
+        dropped_ids=sum(len(cids) for groups in dropped.values()
+                        for cids in groups),
+    )
+
+
+def _character_refs_block(refs: dict[str, list[str]]) -> str:
+    """关闭式人物候选集；每个字面都已由代码证明在截止本章正文出现过。"""
+    if not refs:
+        return ('── 本章可选人物引用（代码派生、关闭式）──\n'
+                '无。`present_char_ids` 只能交空数组。')
+    return (
+        '── 本章可选人物引用（代码派生、关闭式）──\n'
+        '每个键是允许返回的 char_id，值是截止本章正文已经出现过的原文字面。'
+        '只能从这些键中选择，不许写姓名、代词或清单外编号。\n'
+        + json.dumps(refs, ensure_ascii=False, separators=(',', ':'))
+    )
+
+
+def _hinge_candidates_block(rows: list[dict[str, Any]]) -> str:
+    """v3.1 的关闭式定位候选；空表不等于 hinge 必须为空，仍可交 phrase。"""
+    return (
+        '── 本章 hinge 原文候选（代码派生、按需选择）──\n'
+        '候选恰好覆盖材料时只交 candidate_id；没有合适候选时交原样 phrase。'
+        '不要为了使用候选而把无关字面标成 hinge。\n'
+        + json.dumps(prompt_candidates(rows), ensure_ascii=False,
+                     separators=(',', ':'))
+    )
+
+
+def _frozen_boundaries_block(ends: list[int],
+                             events: list[str] | None = None) -> str:
+    rows = [{'end_para': end,
+             **({'event_draft': events[index]}
+                if events is not None and index < len(events) else {})}
+            for index, end in enumerate(ends)]
+    return (
+        '── 已冻结的事件边界（代码校验）──\n'
+        '下面的 end_para 必须按顺序逐项原样返回；beats 数量也必须完全相同。\n'
+        '若带 event_draft，它只是边界相留下的语义草图；请按原文忠实补全或修正 event，'
+        '但不得借此增删边界。\n'
+        + json.dumps(rows, ensure_ascii=False, separators=(',', ':'))
+    )
+
+
 def blueprint_context(title: str, main_text: list[dict[str, Any]],
                       architecture: str = BLUEPRINT_ARCHITECTURE) -> dict[str, Any]:
     """可落盘、可比较的上下文策略身份。
@@ -433,7 +524,7 @@ def blueprint_context(title: str, main_text: list[dict[str, Any]],
     ⚠ `architecture` 的默认值从 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 取，
     判据 `context_scope` 读的是同一张取值面——**两边各写一份字面**是升版时最容易漏的
     那一处，漏了就得到「产物明明是新架构、判据说不符合约定」的假红。
-    双契约期由调用方传入本次选用的架构（整跑=配置选的，修复=基线产物的）；
+    多契约并存期由调用方传入本次选用的架构（整跑=配置选的，修复=基线产物的）；
     其余预算字段**刻意不随契约变**（A/B 变量只有响应契约一维）。
     """
     return {
@@ -461,16 +552,22 @@ def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
                          targets: tuple[int, ...], *,
                          characters: dict[str, dict[str, Any]],
                          repair_findings: list[dict[str, str]] | None = None,
-                         repair_baseline: dict[str, Any] | None = None) -> str:
+                         repair_baseline: dict[str, Any] | None = None,
+                         character_refs: dict[str, list[str]] | None = None,
+                         hinge_candidates: list[dict[str, Any]] | None = None,
+                         frozen_boundaries: list[int] | None = None,
+                         boundary_events: list[str] | None = None) -> str:
     """逐章那一相的 user。
 
-    ⚠⚠ **这里仍然没有人物表**：`char_id` 反转之后抽取器不引用任何全局编号，
-    所以 global 整份不下发。这不只是省输入——**人物表本身带着未来**
+    ⚠⚠ **这里从不下发完整人物表**：旧契约在 `char_id` 反转之后不引用全局编号；
+    v2 若显式传 `character_refs`，也只有「截止本章正文已逐字出现过的字面 → 不透明
+    char_id」关闭式子集。这不只是省输入——**完整人物表本身带着未来**
     （`char_001.address` 里那个名字可能要到 ch4 才在原文首现，而这份表被喂给了抽 ch1 的那次调用）
     ⇒ 只收窄正文修不掉 `event_early_name`，「收窄上下文」与「去掉 global 依赖」
     是同一个根因的两条腿。
 
-    `characters` 只用来派生**已现称名表**（`past_attested_surfaces`）：清单里每个
+    `characters` 默认只用来派生**已现称名表**（`past_attested_surfaces`）；v2 另由
+    `visible_character_refs` 派生关闭式候选集。两份清单里的每个
     字面都经过「第 1..N-1 章原文子串命中」过滤，未来性被代码剥掉了，上面那条否决
     理由对它不成立。v2 窗口化之后模型看不全前文，「到目前为止出现过没有」这条判据
     由这份清单代为作证——不下发它，窗外首现的名字只能保守漏报。
@@ -496,6 +593,13 @@ def build_blueprint_user(title: str, main_text: list[dict[str, Any]],
         '── 本次任务范围 ──\n只产出以下章的 blueprint'
         '（按此顺序，范围外的章一律不要产出）：\n' + scope,
     ]
+    if character_refs is not None:
+        parts.append(_character_refs_block(character_refs))
+    if hinge_candidates is not None:
+        parts.append(_hinge_candidates_block(hinge_candidates))
+    if frozen_boundaries is not None:
+        parts.append(_frozen_boundaries_block(
+            frozen_boundaries, boundary_events))
     if repair_baseline:
         parts.append(
             '── 上一版结构基线 ──\n'
@@ -632,13 +736,34 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
     # 已有 blueprint 时，额外防止一次 global 重跑新造悬空 char_id；
     # 旧问题照报，但不把与本次无关的存量违约当作新错误。
     if store.exists(BLUEPRINT_REL):
-        _old_bp, old_bp_raw = store.read_own(ChapterBlueprints, BLUEPRINT_REL)
-        old_global = _read_raw(store, GlobalGrounding, GLOBAL_REL)
-        before = set(_hard_hits(
-            _judge_candidate(old_global, old_bp_raw, main_text)))
-        after = set(_hard_hits(
-            _judge_candidate(candidate, old_bp_raw, main_text)))
-        hits = sorted(set(hits) | (after - before))
+        try:
+            _old_bp, old_bp_raw = store.read_own(ChapterBlueprints, BLUEPRINT_REL)
+        except ArtifactUnreadable as exc:
+            # schema 升级后的旧蓝图已经不是一份可消费的下游，不能反过来锁死
+            # producer 的重建路；但当前版本坏 JSON / 坏形状仍须关闭式失败。
+            #
+            # ⚠⚠ **只放「盘上确实是更早的注册版本」这一种。** 按异常类型放宽
+            #   会把另外五种一起放掉：缺 marker、`_schema_version` 不是整数、
+            #   root envelope 形状坏、以及**比当前还高的版本**。最后一种最坏——
+            #   一份 `_schema_version: 999` 的蓝图会让这道守卫整个消失，
+            #   于是这次 global 重跑可以新造悬空 char_id 而不被任何东西挡住
+            #   （实测已复现）。判据取版本号大小，不取异常的类型。
+            cause = exc.__cause__
+            if not (isinstance(cause, ArtifactVersionError)
+                    and cause.is_older_than_current):
+                raise
+            ctx.observe(
+                'optional_downstream_guard_skipped', artifact=BLUEPRINT_REL,
+                reason='artifact_version_mismatch',
+                found_version=cause.found, current_version=cause.expected,
+            )
+        else:
+            old_global = _read_raw(store, GlobalGrounding, GLOBAL_REL)
+            before = set(_hard_hits(
+                _judge_candidate(old_global, old_bp_raw, main_text)))
+            after = set(_hard_hits(
+                _judge_candidate(candidate, old_bp_raw, main_text)))
+            hits = sorted(set(hits) | (after - before))
 
     if hits:
         path = _write_invalid(store, GLOBAL_REL, artifact)
@@ -799,6 +924,11 @@ def _run_chapter_requests(
     requests: list[tuple[int | None, str, str]],
     *,
     model_cls: type = ChapterBlueprintsResponse,
+    purpose_of: Callable[[int], str] | None = None,
+    validator_of: Callable[[int], Callable[[Any, Any], str | None] | None]
+    | None = None,
+    max_tokens: int = BLUEPRINT_MAX_TOKENS,
+    prefer_content_over_reasoning_salvage: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str], list[Exception]]:
     """并发等待独立章节；一个失败不丢掉已经付费成功的其他章。
 
@@ -819,9 +949,13 @@ def _run_chapter_requests(
         response = client.ask_json(
             system, user,
             model_cls=model_cls,
-            purpose=f'{ctx.node}:ch{ordinal}',
-            max_tokens=BLUEPRINT_MAX_TOKENS,
+            purpose=(purpose_of(ordinal) if purpose_of
+                     else f'{ctx.node}:ch{ordinal}'),
+            max_tokens=max_tokens,
+            validator=validator_of(ordinal) if validator_of else None,
             progress=tracker.request(ordinal),
+            prefer_content_over_reasoning_salvage=(
+                prefer_content_over_reasoning_salvage),
         )
         return response.model_dump(by_alias=True)['blueprints']
 
@@ -856,6 +990,121 @@ def _run_chapter_requests(
     return [results[o] for o, _s, _u in concrete if o in results], violations, errors
 
 
+def _boundary_validator(ordinal: int, paragraph_count: int) \
+        -> Callable[[Any, Any], str | None]:
+    """边界动态闸：召回完整，末尾只放行生产编译器能确定性恢复的范围。"""
+    from novel.stages.stage2.compile_v2 import (
+        TAIL_NUDGE_MAX_PARAS, tail_end_is_recoverable,
+    )
+
+    def validate(obj: Any, _resp: Any) -> str | None:
+        matches = [bp for bp in obj.blueprints
+                   if int(bp.chapter_ordinal) == ordinal]
+        if len(matches) != 1:
+            return f'ch{ordinal} 必须恰好返回一份，实际 {len(matches)} 份'
+        blueprint = matches[0]
+        micro_ends = [int(beat.end_para) for beat in blueprint.micro_events]
+        beat_ends = [int(beat.end_para) for beat in blueprint.beats]
+        for label, ends in (('micro_events', micro_ends), ('beats', beat_ends)):
+            if any(left >= right for left, right in zip(ends, ends[1:])):
+                return f'ch{ordinal} {label}.end_para 不是严格递增：{ends}'
+            if any(end < 1 or end > paragraph_count for end in ends):
+                return (f'ch{ordinal} {label}.end_para 越界 '
+                        f'1..{paragraph_count}：{ends}')
+            if not ends or not tail_end_is_recoverable(
+                    ends[-1], paragraph_count):
+                return (f'ch{ordinal} {label} 末项须止于最后一段 '
+                        f'{paragraph_count}，或落在编译器尾部外扩帽 '
+                        f'{TAIL_NUDGE_MAX_PARAS} 段内；实际 {ends}')
+        outside = [end for end in beat_ends if end not in set(micro_ends)]
+        if outside:
+            return (f'ch{ordinal} beats 边界必须来自 micro_events，'
+                    f'清单外止段：{outside}')
+        return None
+    return validate
+
+
+def _detail_validator(ordinal: int, frozen: list[int], allowed: set[str]) \
+        -> Callable[[Any, Any], str | None]:
+    """细节传不能暗改边界，也不能从关闭式可见人物集合外造编号。"""
+    def validate(obj: Any, _resp: Any) -> str | None:
+        matches = [bp for bp in obj.blueprints
+                   if int(bp.chapter_ordinal) == ordinal]
+        if len(matches) != 1:
+            return f'ch{ordinal} 必须恰好返回一份，实际 {len(matches)} 份'
+        got = [int(beat.end_para) for beat in matches[0].beats]
+        if got != frozen:
+            return f'ch{ordinal} 冻结边界被改动：要 {frozen}，得 {got}'
+        invalid = sorted({str(cid)
+                          for beat in matches[0].beats
+                          for cid in beat.present_char_ids
+                          if str(cid) not in allowed})
+        if invalid:
+            return f'ch{ordinal} 在场者含清单外 char_id：{invalid}'
+        return None
+    return validate
+
+
+def _scaffolded_validator(
+    ordinal: int,
+    paragraph_count: int,
+    allowed: set[str],
+    *,
+    candidate_rows: list[dict[str, Any]] | None = None,
+    narration_refs: bool = False,
+) -> Callable[[Any, Any], str | None]:
+    """单调用脚手架的动态闸：边界召回、关闭人物与候选所属拍一次验完。"""
+    boundary = _boundary_validator(ordinal, paragraph_count)
+    candidates = {
+        str(row['candidate_id']): row for row in (candidate_rows or [])
+    }
+
+    def validate(obj: Any, resp: Any) -> str | None:
+        boundary_error = boundary(obj, resp)
+        if boundary_error is not None:
+            return boundary_error
+        blueprint = next(bp for bp in obj.blueprints
+                         if int(bp.chapter_ordinal) == ordinal)
+        invalid = sorted({
+            str(cid)
+            for beat in blueprint.beats
+            for cid in beat.present_char_ids
+            if str(cid) not in allowed
+        })
+        if invalid:
+            return f'ch{ordinal} 在场者含清单外 char_id：{invalid}'
+        if narration_refs:
+            invalid_narration = sorted({
+                str(cid)
+                for narration in blueprint.narration
+                for cid in (narration.narrator_char_id,
+                            narration.focalizer_char_id)
+                if cid is not None and str(cid) not in allowed
+            })
+            if invalid_narration:
+                return (f'ch{ordinal} 叙述身份含清单外 char_id：'
+                        f'{invalid_narration}')
+
+        start_para = 1
+        for beat in blueprint.beats:
+            for hinge in beat.hinges:
+                candidate_id = getattr(hinge, 'candidate_id', None)
+                if candidate_id is None:
+                    continue
+                row = candidates.get(str(candidate_id))
+                if row is None:
+                    return (f'ch{ordinal} hinge 含清单外 candidate_id：'
+                            f'{candidate_id}')
+                para = int(row['para'])
+                if not start_para <= para <= int(beat.end_para):
+                    return (f'ch{ordinal} hinge 候选 {candidate_id} 位于第 {para} 段，'
+                            f'不在所属拍 {start_para}..{beat.end_para}')
+            start_para = int(beat.end_para) + 1
+        return None
+
+    return validate
+
+
 def _blueprint_metrics(blueprint: dict[str, Any]) -> dict[str, int]:
     beats = list(blueprint.get('beats') or [])
     return {
@@ -863,6 +1112,16 @@ def _blueprint_metrics(blueprint: dict[str, Any]) -> dict[str, int]:
         'hinges': sum(len(beat.get('hinges') or []) for beat in beats),
         'present_names': sum(len(beat.get('present_names') or []) for beat in beats),
     }
+
+
+def _narration_ref_count(blueprints: list[dict[str, Any]]) -> int:
+    """已定下叙述身份的引用条数（narrator + focalizer）。account 两侧共用一份。"""
+    return sum(
+        int(narration.get(key) is not None)
+        for blueprint in blueprints
+        for narration in (blueprint.get('narration') or [])
+        for key in ('narrator_char_id', 'focalizer_char_id')
+    )
 
 
 def _repair_baseline(blueprint: dict[str, Any],
@@ -966,6 +1225,10 @@ def _run_blueprint_repair(
     # ⚠ 修复按**基线产物的 architecture** 选契约——修复必须与基线同构，配置说了不算。
     baseline_arch = previous.provenance.context.architecture
     spec = contract_for(baseline_arch)
+    summaries_pending = (
+        spec.needs_summary_batch
+        and 'SUMMARY_BATCH_SYS' not in previous.provenance.prompts
+    )
     if _active_spec().architecture != baseline_arch:
         raise TerminalState(
             f'配置选的契约是 {_active_spec().architecture!r}，而基线产物是 '
@@ -977,6 +1240,16 @@ def _run_blueprint_repair(
         raise TerminalState(
             f'定向重生成的 {spec.sys_name} 与基线产物不同，而现有 provenance '
             '没有表达“部分章节使用另一版 system”的槽位；尚未调用 LLM')
+    if spec.topology == 'boundary_then_detail':
+        if spec.boundary_system is None:
+            raise RuntimeError(f'{spec.architecture} 两段拓扑没有登记 boundary_system')
+        old_boundary = previous.provenance.prompts.get(
+            str(spec.boundary_sys_name or ''))
+        if old_boundary != prov.fingerprint(spec.boundary_system):
+            raise TerminalState(
+                f'定向重生成的 {spec.boundary_sys_name} 与基线产物不同，而现有 '
+                'provenance 没有表达“部分章节使用另一版边界 system”的槽位；'
+                '尚未调用 LLM')
 
     expected_context = blueprint_context(ctx.title, main_text,
                                          architecture=baseline_arch)
@@ -989,27 +1262,150 @@ def _run_blueprint_repair(
         int(blueprint.get('chapter_ordinal') or 0): blueprint
         for blueprint in (previous_raw.get('blueprints') or [])
     }
-    missing_baselines = sorted(set(chapters) - set(old_by))
-    if missing_baselines:
-        raise TerminalState(f'目标章没有上一版结构基线：{missing_baselines}')
+    missing_baselines = set(chapters) - set(old_by)
 
     before_outcomes = _judge_candidate(global_raw, previous_raw, main_text)
     prompt_rows: dict[int, tuple[str, list[dict[str, str]]]] = {}
+    findings_of: dict[int, list[dict[str, str]]] = {}
+    baselines: dict[int, dict[str, Any]] = {}
+    frozen: dict[int, list[int]] = {}
+    boundary_events: dict[int, list[str]] = {}
+    boundary_requests: list[tuple[int | None, str, str]] = []
+    visible: dict[int, dict[str, list[str]]] = {}
+    candidate_rows: dict[int, list[dict[str, Any]]] = {}
+    if spec.uses_character_refs:
+        from novel.stages.stage2.compile_v2 import visible_character_refs_with_drops
+        visible, dropped_refs = visible_character_refs_with_drops(
+            global_raw['entities']['characters'], main_text)
+        _observe_indistinguishable_refs(ctx, dropped_refs)
+    if spec.uses_hinge_candidates:
+        candidate_rows = hinge_candidates_by_chapter(main_text)
+    for ordinal in chapters:
+        backfill = ordinal in missing_baselines
+        findings = ([{
+            'rule': 'chapter_coverage',
+            'item': f'missing:{ordinal}',
+            'detail': (f'首轮问题稿缺少阅读序第 {ordinal} 章；'
+                       '按首轮同形请求补回，不伪造上一版结构基线。'),
+        }] if backfill else _repair_findings(before_outcomes, ordinal))
+        findings_of[ordinal] = findings
+        if not backfill:
+            baselines[ordinal] = _repair_baseline(
+                old_by[ordinal], main_text, projection=spec.projection_fn)
+        if spec.topology == 'boundary_then_detail':
+            baseline_beats = (
+                [] if backfill else (baselines[ordinal].get('beats') or []))
+            # ⚠⚠ **`end_para` 可以是 `None`。** `canonical_ir_projection` 对定位不到的
+            #   span（`span_unlocatable` 报的正是这一条）如实交 `None`，不兜底——
+            #   而这里原来直接 `int(beat['end_para'])`：`TypeError` ⇒ exit 70，
+            #   且发生在**任何 LLM 调用之前**，人拿到的是一个崩溃而不是判定。
+            #   语义上它本来就该重切边界：连区间都对不上原文，冻结它没有意义。
+            unlocatable = [index for index, beat in enumerate(baseline_beats)
+                           if beat.get('end_para') is None]
+            needs_resegment = backfill or bool(unlocatable) or bool(
+                {row['rule'] for row in findings}
+                & {'beats_coarse', 'beats_collapsed'})
+            if unlocatable:
+                ctx.observe(
+                    'repair_baseline_boundary_unlocatable',
+                    chapter_ordinal=ordinal, beats=unlocatable,
+                    total_beats=len(baseline_beats))
+            if needs_resegment:
+                boundary_requests.append((
+                    ordinal,
+                    spec.boundary_system,
+                    build_blueprint_user(
+                        ctx.title, main_text, (ordinal,),
+                        characters=global_raw['entities']['characters'],
+                        repair_findings=(None if backfill else findings),
+                    ),
+                ))
+            else:
+                frozen[ordinal] = [int(beat['end_para'])
+                                   for beat in baseline_beats]
+                boundary_events[ordinal] = [str(beat.get('event') or '')
+                                            for beat in baseline_beats]
+
+    boundary_scope: list[str] = []
+    boundary_errors: list[Exception] = []
+    if boundary_requests:
+        if spec.boundary_response_model is None:
+            raise RuntimeError(
+                f'{spec.architecture} 登记了 boundary_system 却没有响应模型')
+        paragraph_count = {
+            int(section.get('chapter_ordinal') or 0):
+            len(paragraph_spans(str(section.get('text') or '')))
+            for section in main_text
+        }
+        returned_boundaries, boundary_scope, boundary_errors = \
+            _run_chapter_requests(
+                ctx,
+                client,
+                boundary_requests,
+                model_cls=spec.boundary_response_model,
+                purpose_of=lambda ordinal:
+                f'{ctx.node}:repair-boundaries:ch{ordinal}',
+                validator_of=lambda ordinal: _boundary_validator(
+                    ordinal, paragraph_count[ordinal]),
+                max_tokens=BOUNDARY_MAX_TOKENS,
+            )
+        for blueprint in returned_boundaries:
+            ordinal = int(blueprint.get('chapter_ordinal') or 0)
+            frozen[ordinal] = [int(beat['end_para'])
+                               for beat in (blueprint.get('beats') or [])]
+            boundary_events[ordinal] = [str(beat.get('event') or '')
+                                        for beat in (blueprint.get('beats') or [])]
+
     requests: list[tuple[int | None, str, str]] = []
     for ordinal in chapters:
-        findings = _repair_findings(before_outcomes, ordinal)
+        if spec.topology == 'boundary_then_detail' and ordinal not in frozen:
+            continue
         user = build_blueprint_user(
             ctx.title, main_text, (ordinal,),
             characters=global_raw['entities']['characters'],
-            repair_findings=findings,
-            repair_baseline=_repair_baseline(
-                old_by[ordinal], main_text, projection=spec.projection_fn),
+            repair_findings=(None if ordinal in missing_baselines
+                             else findings_of[ordinal]),
+            repair_baseline=baselines.get(ordinal),
+            character_refs=(visible.get(ordinal, {})
+                            if spec.uses_character_refs else None),
+            hinge_candidates=(candidate_rows.get(ordinal, [])
+                              if spec.uses_hinge_candidates else None),
+            frozen_boundaries=(frozen[ordinal]
+                               if spec.topology == 'boundary_then_detail' else None),
+            boundary_events=(boundary_events.get(ordinal)
+                             if spec.topology == 'boundary_then_detail' else None),
         )
-        prompt_rows[ordinal] = (user, findings)
+        prompt_rows[ordinal] = (user, findings_of[ordinal])
         requests.append((ordinal, system, user))
 
-    returned, new_scope, errors = _run_chapter_requests(
-        ctx, client, requests, model_cls=spec.response_model)
+    paragraph_count = {
+        int(section.get('chapter_ordinal') or 0):
+        len(paragraph_spans(str(section.get('text') or '')))
+        for section in main_text
+    }
+    validator_of = None
+    if spec.topology == 'boundary_then_detail' and spec.uses_character_refs:
+        validator_of = lambda ordinal: _detail_validator(
+            ordinal, frozen[ordinal], set(visible.get(ordinal, {})))
+    elif spec.topology == 'scaffolded_single':
+        validator_of = lambda ordinal: _scaffolded_validator(
+            ordinal,
+            paragraph_count[ordinal],
+            set(visible.get(ordinal, {})),
+            candidate_rows=candidate_rows.get(ordinal, []),
+            narration_refs=spec.uses_narration_refs,
+        )
+    returned, detail_scope, detail_errors = _run_chapter_requests(
+        ctx,
+        client,
+        requests,
+        model_cls=spec.response_model,
+        validator_of=validator_of,
+        prefer_content_over_reasoning_salvage=(
+            spec.prefers_content_over_reasoning_salvage),
+    )
+    new_scope = boundary_scope + detail_scope
+    errors = boundary_errors + detail_errors
     if not returned:
         if errors:
             raise errors[0]
@@ -1025,7 +1421,7 @@ def _run_blueprint_repair(
         global_raw['entities']['characters'],
         summaries=None,
     )
-    if spec.needs_summary_batch:
+    if spec.needs_summary_batch and not summaries_pending:
         # ir1：目标章的 events 已经变了，旧摘要不可沿用——只为重生成的章跑一次小批。
         summaries = _run_summary_batch(ctx, client, target_data['blueprints'])
         for blueprint in target_data['blueprints']:
@@ -1040,8 +1436,38 @@ def _run_blueprint_repair(
     merged_by = copy.deepcopy(old_by)
     merged_by.update(normalized_by)
     merged = [merged_by[ordinal] for ordinal in ordinals if ordinal in merged_by]
-    char_refs = resolve_character_refs(
-        merged, main_text, global_raw['entities']['characters'])
+    if spec.uses_character_refs:
+        # 在场 char_id 是模型从关闭式候选集直接选择的权威值；不能在合并修复稿时
+        # 又从人读 `present_names` 反解一遍把它覆盖。
+        resolved_copy = copy.deepcopy(merged)
+        char_refs = resolve_character_refs(
+            resolved_copy, main_text, global_raw['entities']['characters'])
+        inferred = sum(len(beat.get('present_char_ids') or [])
+                       for bp in resolved_copy for beat in (bp.get('beats') or []))
+        direct = sum(len(beat.get('present_char_ids') or [])
+                     for bp in merged for beat in (bp.get('beats') or []))
+        char_refs['resolved'] += direct - inferred
+        if spec.uses_narration_refs:
+            # ⚠⚠ **v3.1 的叙述身份也是模型从关闭式候选集直接选的权威值**
+            #   （`compile_v31_refs` 明写「叙述者 id 是权威，名字只是人读投影」）。
+            #   照 v2 那样按 `narrator_name` 再反解一遍，会在**名字有歧义**时
+            #   `resolve_present_names` 交空 ⇒ 一个**正确的 id 被覆盖成 `None``，
+            #   而这一格只进 metric、不阻断落盘：错误的叙述身份就这样静默进蓝图。
+            #   ⇒ 保留权威值，只把反解算出来的那几笔从 `resolved` 里换回去
+            #   （与 `compile_v31_refs` 的 `direct - before` 同一条算法）。
+            narration_direct = _narration_ref_count(merged)
+            narration_inferred = _narration_ref_count(resolved_copy)
+            char_refs['resolved'] += narration_direct - narration_inferred
+        else:
+            for target_bp, resolved_bp in zip(merged, resolved_copy):
+                for target_n, resolved_n in zip(
+                        target_bp.get('narration') or [],
+                        resolved_bp.get('narration') or []):
+                    target_n['narrator_char_id'] = resolved_n.get('narrator_char_id')
+                    target_n['focalizer_char_id'] = resolved_n.get('focalizer_char_id')
+    else:
+        char_refs = resolve_character_refs(
+            merged, main_text, global_raw['entities']['characters'])
 
     targets = set(chapters)
     old_prov = previous.provenance
@@ -1069,7 +1495,9 @@ def _run_blueprint_repair(
             'model': client.model,
             'cache_policy': ctx.cache.name,
             'fields': ['*'],
-            'before_metrics': _blueprint_metrics(old_by[ordinal]),
+            'before_metrics': (_blueprint_metrics(old_by[ordinal])
+                               if ordinal in old_by
+                               else {'beats': 0, 'hinges': 0, 'present_names': 0}),
             'after_metrics': _blueprint_metrics(normalized_by[ordinal]),
         })
 
@@ -1093,47 +1521,62 @@ def _run_blueprint_repair(
         list(row) for row in old_prov.boundary_nudges
         if not _record_is_targeted(row, targets)
     ] + [list(row) for row in (target_accounting.get('boundary_nudges') or [])]
-    prompt_keys = {spec.sys_name: system}
-    if spec.needs_summary_batch:
-        from novel.stages.stage2 import prompts as _p
-        prompt_keys['SUMMARY_BATCH_SYS'] = with_json_shape(
-            _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
-    delta = ctx.llm_provenance(
-        BlueprintProvenance,
-        prompts=prompt_keys,
-        model=client.model,
-        scope_violations=old_scope + new_scope,
-        batches=[list(batch) for batch in old_prov.batches],
-        context=old_prov.context.model_dump(),
-        char_refs=char_refs,
-        verbatim_rewrites=rewrites,
-        verbatim_failures=failures,
-        partial_regen_chapters=partial,
-        repairs=repair_history,
-        place_inherit_without_base=place_rows,
-        hinge_ambiguous_pending=pending_rows,
-        boundary_nudges=nudge_rows,
-    )
-    provenance = BlueprintProvenance.model_validate({
-        **delta.model_dump(),
-        'usage': combine_usage(old_prov.usage, delta.usage),
-        'partial_rewrite': old_prov.partial_rewrite,
-    })
-    artifact = ChapterBlueprints.model_validate({
-        'blueprints': merged,
-        '_provenance': provenance,
-    })
-    candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
-    hits = _hard_hits(outcomes)
+    def current_artifact(*, summary_recorded: bool,
+                         settle: bool = True) -> ChapterBlueprints:
+        """把这一刻的 `merged` 铸成产物。
+
+        ⚠ `summary_recorded=False` 时 `prompts` 里**没有** `SUMMARY_BATCH_SYS`
+        ——与首轮同一条：问题稿据此说得出「摘要还没买过」，下一轮修复才知道
+        最终要为全书补一次，而不是把 compiler 的 debug 文本当正式摘要沿用。
+        """
+        keys = {spec.sys_name: system}
+        if spec.boundary_sys_name and spec.boundary_system:
+            keys[spec.boundary_sys_name] = spec.boundary_system
+        if spec.needs_summary_batch and summary_recorded:
+            from novel.stages.stage2 import prompts as _p
+            keys['SUMMARY_BATCH_SYS'] = with_json_shape(
+                _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
+        delta = ctx.llm_provenance(
+            BlueprintProvenance,
+            prompts=keys,
+            model=client.model,
+            scope_violations=old_scope + new_scope,
+            batches=[list(batch) for batch in old_prov.batches],
+            context=old_prov.context.model_dump(),
+            char_refs=char_refs,
+            verbatim_rewrites=rewrites,
+            verbatim_failures=failures,
+            partial_regen_chapters=partial,
+            repairs=repair_history,
+            place_inherit_without_base=place_rows,
+            hinge_ambiguous_pending=pending_rows,
+            boundary_nudges=nudge_rows,
+            settle=settle,
+        )
+        provenance = BlueprintProvenance.model_validate({
+            **delta.model_dump(),
+            'usage': combine_usage(old_prov.usage, delta.usage),
+            'partial_rewrite': old_prov.partial_rewrite,
+        })
+        return ChapterBlueprints.model_validate({
+            'blueprints': merged,
+            '_provenance': provenance,
+        })
+
     not_returned = sorted(targets - set(repaired_ordinals))
-    if hits or errors or not_returned:
+
+    def block(artifact: ChapterBlueprints, hits: list[str], *,
+              summary_skipped: bool = False) -> None:
         path = _write_invalid(store, BLUEPRINT_REL, artifact)
         extra = []
         if errors:
             extra.append(f'{len(errors)} 个章节调用失败')
         if not_returned:
             extra.append(f'未返回目标章 {not_returned}')
+        if summary_skipped:
+            # ⚠ 措辞要跟着真实原因走：这一趟也可能是「有章没返回」而不是「命中 HARD」，
+            #   而「硬规则已命中」在那种情况下是假话。恒真的只有后半句。
+            extra.append('本次没有为摘要额外调用 LLM（阻断发生在摘要批之前）')
         suffix = f'；{"；".join(extra)}' if extra else ''
         raise GateBlocked(
             f'stage2.blueprint 定向重生成后仍命中 {hits}{suffix}。'
@@ -1143,9 +1586,40 @@ def _run_blueprint_repair(
             invalid_path=path,
         )
 
+    if summaries_pending:
+        # ⚠ **先拦再摘要**，与首轮 `run_blueprints` 同一条纪律：任何 HARD 都不可能
+        #   被摘要改好。少了这一步，一次注定 `GateBlocked` 的修复仍会先白付一整本
+        #   书的摘要批。此刻各章 summary 都非空（未动章是上一版正式摘要、目标章是
+        #   compiler 的 debug 文本），所以 `summary_empty` 不会在这里假红。
+        provisional = current_artifact(summary_recorded=False, settle=False)
+        pre_summary_hits = _hard_hits(_judge_candidate(
+            global_raw, provisional.model_dump(by_alias=True), main_text))
+        if pre_summary_hits or errors or not_returned:
+            # 这一份现在真的要作为 `.INVALID` 落盘 ⇒ 重铸并在此刻结算。
+            block(current_artifact(summary_recorded=False),
+                  pre_summary_hits, summary_skipped=True)
+        # 修复成功候选形成后一次性为**全书**补摘要，形成 N+k+1，而不是把未动章的
+        # debug 文本冒充正式摘要或为首轮失败先白付一次 N+1。
+        summaries = _run_summary_batch(ctx, client, merged)
+        for blueprint in merged:
+            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
+
+    artifact = current_artifact(summary_recorded=True)
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(global_raw, candidate, main_text)
+    hits = _hard_hits(outcomes)
+    if hits or errors or not_returned:
+        block(artifact, hits)
+
     _write_formal(store, BLUEPRINT_REL, artifact)
     repair_purposes: dict[str, int | None] = {
         f'{ctx.node}:ch{o}': o for o in repaired_ordinals}
+    resegmented = {int(ordinal) for ordinal, _system, _user
+                   in boundary_requests if ordinal is not None}
+    repair_purposes.update({
+        f'{ctx.node}:repair-boundaries:ch{o}': o
+        for o in repaired_ordinals if o in resegmented
+    })
     if spec.needs_summary_batch:
         repair_purposes[f'{ctx.node}:summary-batch'] = None
     _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,
@@ -1161,8 +1635,11 @@ SUMMARY_BATCH_MIN_CHARS = 50
 SUMMARY_BATCH_MAX_CHARS = 400
 
 
-def _run_summary_batch(ctx: RunContext, client: LlmClient,
-                       blueprints: list[dict[str, Any]]) -> dict[int, str]:
+def _run_summary_batch(
+    ctx: RunContext,
+    client: LlmClient,
+    blueprints: list[dict[str, Any]],
+) -> dict[int, str]:
     """`extraction-ir-v1` 的书级摘要批：一次调用按 events 产全部目标章的摘要。
 
     输入已是压缩事实（各章 beat events），不重读原章；validator 硬校验
@@ -1217,14 +1694,103 @@ def request_blueprints(ctx: RunContext, client: LlmClient, *,
     assert main_text is not None
     spec = _active_spec()
     requests = build_prompts(ctx, chapters=chapters)
-    raw, violations, errors = _run_chapter_requests(
-        ctx, client, requests, model_cls=spec.response_model)
+    if spec.topology != 'boundary_then_detail':
+        validator_of = None
+        if spec.topology == 'scaffolded_single':
+            characters = store.read(GlobalGrounding, GLOBAL_REL) \
+                .model_dump(by_alias=True)['entities']['characters']
+            from novel.stages.stage2.compile_v2 import visible_character_refs
+            visible = visible_character_refs(characters, main_text)
+            candidate_rows = (hinge_candidates_by_chapter(main_text)
+                              if spec.uses_hinge_candidates else {})
+            paragraph_count = {
+                int(section.get('chapter_ordinal') or 0):
+                len(paragraph_spans(str(section.get('text') or '')))
+                for section in main_text
+            }
+            validator_of = lambda ordinal: _scaffolded_validator(
+                ordinal,
+                paragraph_count[ordinal],
+                set(visible.get(ordinal, {})),
+                candidate_rows=candidate_rows.get(ordinal, []),
+                narration_refs=spec.uses_narration_refs,
+            )
+        raw, violations, errors = _run_chapter_requests(
+            ctx, client, requests, model_cls=spec.response_model,
+            validator_of=validator_of,
+            prefer_content_over_reasoning_salvage=(
+                spec.prefers_content_over_reasoning_salvage))
+        return {
+            'main_text': main_text,
+            'requests': requests,
+            'raw_blueprints': raw,
+            'scope_violations': violations,
+            'errors': errors,
+            'contract': spec.architecture,
+        }
+
+    if spec.boundary_system is None or spec.boundary_response_model is None:
+        raise RuntimeError(f'{spec.architecture} 登记了 boundary_system 却没有响应模型')
+    paragraph_count = {
+        int(section.get('chapter_ordinal') or 0):
+        len(paragraph_spans(str(section.get('text') or '')))
+        for section in main_text
+    }
+    boundary_raw, boundary_violations, boundary_errors = _run_chapter_requests(
+        ctx,
+        client,
+        requests,
+        model_cls=spec.boundary_response_model,
+        purpose_of=lambda ordinal: f'{ctx.node}:boundaries:ch{ordinal}',
+        validator_of=lambda ordinal: _boundary_validator(
+            ordinal, paragraph_count[ordinal]),
+        max_tokens=BOUNDARY_MAX_TOKENS,
+    )
+    frozen = {
+        int(blueprint.get('chapter_ordinal') or 0):
+        [int(beat['end_para']) for beat in (blueprint.get('beats') or [])]
+        for blueprint in boundary_raw
+    }
+    boundary_events = {
+        int(blueprint.get('chapter_ordinal') or 0):
+        [str(beat.get('event') or '') for beat in (blueprint.get('beats') or [])]
+        for blueprint in boundary_raw
+    }
+    store = ArtifactStore(ctx)
+    characters = store.read(GlobalGrounding, GLOBAL_REL) \
+        .model_dump(by_alias=True)['entities']['characters']
+    from novel.stages.stage2.compile_v2 import visible_character_refs
+    visible = visible_character_refs(characters, main_text)
+    detail_requests = [
+        (ordinal, spec.system, build_blueprint_user(
+            ctx.title,
+            main_text,
+            (ordinal,),
+            characters=characters,
+            character_refs=visible.get(ordinal, {}),
+            frozen_boundaries=frozen[ordinal],
+            boundary_events=boundary_events.get(ordinal),
+        ))
+        for ordinal, _system, _user in requests
+        if ordinal is not None and ordinal in frozen
+    ]
+    detail_raw, detail_violations, detail_errors = _run_chapter_requests(
+        ctx,
+        client,
+        detail_requests,
+        model_cls=spec.response_model,
+        validator_of=lambda ordinal: _detail_validator(
+            ordinal, frozen[ordinal], set(visible.get(ordinal, {}))),
+    )
     return {
         'main_text': main_text,
-        'requests': requests,
-        'raw_blueprints': raw,
-        'scope_violations': violations,
-        'errors': errors,
+        'requests': detail_requests,
+        'boundary_requests': requests,
+        'frozen_boundaries': frozen,
+        'boundary_events': boundary_events,
+        'raw_blueprints': detail_raw,
+        'scope_violations': boundary_violations + detail_violations,
+        'errors': boundary_errors + detail_errors,
         'contract': spec.architecture,
     }
 
@@ -1259,41 +1825,39 @@ def finish_blueprints(
     )
     system = requests[0][1]
     prompt_keys = {spec.sys_name: system}
-    if spec.needs_summary_batch:
-        # ir1：summary 不在抽取响应里——书级摘要批按 events 产，编译时的
-        # debug 拼接在这里被**整体覆盖**（validator 保证目标章恰好全覆盖）。
-        summaries = _run_summary_batch(ctx, client, data['blueprints'])
-        for blueprint in data['blueprints']:
-            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
-        from novel.stages.stage2 import prompts as _p
-        prompt_keys['SUMMARY_BATCH_SYS'] = with_json_shape(
-            _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
+    boundary_requests = batch.get('boundary_requests') or []
+    if spec.boundary_sys_name and boundary_requests:
+        prompt_keys[spec.boundary_sys_name] = boundary_requests[0][1]
     ordinals = [int(section.get('chapter_ordinal') or 0)
                 for section in main_text]
-    provenance = ctx.llm_provenance(
-        BlueprintProvenance,
-        prompts=prompt_keys,
-        model=client.model,
-        scope_violations=scope_violations,
-        batches=[[ordinal] for ordinal in ordinals],
-        context=blueprint_context(ctx.title, main_text,
-                                  architecture=spec.architecture),
-        partial_regen_chapters=[],
-        repairs=[],
-        **accounting,
-    )
-    artifact = ChapterBlueprints.model_validate({
-        **data, '_provenance': provenance,
-    })
-    candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
-    hits = _hard_hits(outcomes)
-    if hits:
+
+    def current_artifact(*, settle: bool = True) -> ChapterBlueprints:
+        provenance = ctx.llm_provenance(
+            BlueprintProvenance,
+            prompts=prompt_keys,
+            model=client.model,
+            scope_violations=scope_violations,
+            batches=[[ordinal] for ordinal in ordinals],
+            context=blueprint_context(ctx.title, main_text,
+                                      architecture=spec.architecture),
+            partial_regen_chapters=[],
+            repairs=[],
+            settle=settle,
+            **accounting,
+        )
+        return ChapterBlueprints.model_validate({
+            **data, '_provenance': provenance,
+        })
+
+    def block(artifact: ChapterBlueprints, hits: list[str], *,
+              summary_skipped: bool = False) -> None:
         path = store.write_invalid(
             BLUEPRINT_REL, artifact, gates_skipped=[])
         suffix = (
             f'；另有 {len(errors)} 个章节调用失败，已成功返回的付费结果仍保留'
             if errors else '')
+        if summary_skipped:
+            suffix += '；硬规则已在摘要批之前命中，本次没有为摘要额外调用 LLM'
         raise GateBlocked(
             f'stage2.blueprint 落盘闸门命中 {hits}{suffix}。问题稿已存 '
             f'{_INVALID}，正式产物没有被覆盖。改好后跑 '
@@ -1301,6 +1865,33 @@ def finish_blueprints(
             '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=str(path),
         )
+
+    if spec.needs_summary_batch:
+        # 先拿 compiler 已生成的非空 debug summary 构造一份可读问题稿，调用**同一个**
+        # `_judge_candidate`。任何 HARD 都不可能被摘要改好；先拦再摘要，失败拓扑从
+        # N+1+k+1 收成 N+k+1。问题稿 prompts 没有 SUMMARY_BATCH_SYS，修复路据此知道
+        # 最终要为全书补一次摘要，而不是沿用 debug 文本。
+        provisional = current_artifact(settle=False)
+        provisional_raw = provisional.model_dump(by_alias=True)
+        pre_summary_hits = _hard_hits(
+            _judge_candidate(global_raw, provisional_raw, main_text))
+        if pre_summary_hits:
+            # 这份候选现在真的会作为 `.INVALID` 落盘，重新铸造并在此刻结算。
+            block(current_artifact(), pre_summary_hits, summary_skipped=True)
+
+        summaries = _run_summary_batch(ctx, client, data['blueprints'])
+        for blueprint in data['blueprints']:
+            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
+        from novel.stages.stage2 import prompts as _p
+        prompt_keys['SUMMARY_BATCH_SYS'] = with_json_shape(
+            _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
+
+    artifact = current_artifact()
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(global_raw, candidate, main_text)
+    hits = _hard_hits(outcomes)
+    if hits:
+        block(artifact, hits)
 
     # 完整重跑也可能是在一份被拦下的 `.INVALID` 之后发生。成功稿必须像定向修复一样
     # 归档旧正式稿与问题稿；否则 `_Both` / `--check-only` 会继续优先读取旧问题稿，
@@ -1311,6 +1902,8 @@ def finish_blueprints(
         for blueprint in raw_blueprints
     })
     purposes: dict[str, int | None] = {f'{ctx.node}:ch{o}': o for o in produced}
+    if spec.topology == 'boundary_then_detail':
+        purposes.update({f'{ctx.node}:boundaries:ch{o}': o for o in produced})
     if spec.needs_summary_batch:
         purposes[f'{ctx.node}:summary-batch'] = None
     _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,

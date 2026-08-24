@@ -203,7 +203,7 @@ export function useStage5Screen() {
         : '本章没有被拦下的稿'
       : '',
     invalidBad: !!d && d.invalid_drafts.length > 0,
-    depthNote: '深度=闭卷按拍重构（每章多次调用）；浅层=开卷一次过。',
+    depthNote: '深度=闭卷重构（下发面无源章原文）；浅层=开卷改写。两条臂都是一章一次调用。',
     gateNote: '写作闸门在 depth 屏：文风与计划确认后才允许下笔。',
     /** ctx_exists 为 false 时不显示假材料 */
     ctxExists: d?.ctx_exists ?? true,

@@ -53,7 +53,8 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 
 ### 1.3 弧线
 
-- `ConflictStage`：`stage` + `chapters[]`。
+- `ConflictStage`：`stage` + `chapters[]`；`chapters` 是逐章显式枚举，不是区间端点，
+  全部阶段合起来必须让 Stage1 的每个阅读序章号恰好出现一次（`R-2.14`）。
 - `ArcTrack`：`subject`、`dimension`、`change_type`、`trajectory`。
 - `Arc` 的 `climax` 与 `ending` 均为必填非空文本。
 
@@ -142,6 +143,10 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 | `verbatim_failures` | `(beat_id, position, cause)[]` | 回取失败；非空阻断晋升。`position ∈ span｜hinge`，根因取值面见下 |
 | `partial_regen_chapters` | `int[]` | 定向重生成章节，空也必须写 |
 | `repairs` | `Repair[]` | 定向重生成账，空也必须写 |
+| `place_inherit_without_base` | `beat_id[]` | IR 三态地点声称继承、但链上无基；空也必须写 |
+| `place_explicit_unlocatable` | `(beat_id, name)[]` | 显式地点在截止本章正文中找不到的 INFO 探针；v2 nullable 字面同样记账 |
+| `hinge_ambiguous_pending` | `(beat_id, kind, phrase)[]` | 拍区间内多处命中的原短语，供 `--patch` 确定性枚举候选 |
+| `boundary_nudges` | `(beat_id, old_end, new_end, cause)[]` | IR 编译器护栏式外扩止段的明细；空也必须写 |
 
 `verbatim_failures` 的根因是**闭合取值面**，不是自由文本：
 `position == 'span'` 那一族见 `contracts/invariants.py::SPAN_FAILURE_CAUSES`，
@@ -152,11 +157,12 @@ Stage 2 产出三份严格 JSON，另收两份人产的决策集：
 `bounded-fidelity-v3` 与判据 `anchor_not_verbatim` 一并删除：beat 的区间改由段号算出，
 hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**。
 
-`BlueprintContext` 固定为：
+`BlueprintContext` 固定边界为：
 
-- `architecture = bounded-fidelity-v3`（**唯一取值**，落点
-  `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`；收窄自 v2，
-  存量蓝图因此读不进来，由 `stage2.blueprint` 整跑重建）；
+- `architecture` 取值登记在 `contracts/invariants.py::BLUEPRINT_ARCHITECTURES`：
+  `extraction-ir-v1.1`、`extraction-ir-v2`、`extraction-ir-v3.1`；当前默认由同文件
+  `BLUEPRINT_ARCHITECTURE` 唯一指定为 v2；
+  定向修复按基线产物的架构选契约，不把存量产物伪装成当前默认；
 - `batch_size = 1`；
 - `current_chapter_full = true`；
 - `future_visible = false`；
@@ -229,9 +235,18 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 - `stage2.global`：主路径生成全书抽取；`--purge-role` 付费重划 `role/fate`；
   `--resample` 仅在已有 `global_grounding.INVALID.json` 时绕过同参数缓存，付费重采整份响应；
   `--renormalize` 仅对**已符合当前 schema**的产物重算代码派生字段；
-  `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）。
-- `stage2.blueprint`：逐章生成；`--chapters` 定向付费重生成；`--renormalize` 重算当前
-  schema 的原文定位与人物引用；`--check-only` 联合读取两份产物复检。
+  `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）；
+  `--emit-review-template` stdout-only 从当前 `global_review.json` 投影逐项 hash/evidence，
+  默认全部 `UNVER`，原样应用也不会打开事实闸。
+- `stage2.blueprint`：逐章生成；默认 `extraction-ir-v2` 每章发两相请求——第一相同时列
+  `micro_events`（完整回忆层）与 `beats`（因果拍压缩层），两列止段严格递增且落到章尾，
+  beat 的止段必须取自 micro-event 止段；第二相只能在代码冻结的 beat 边界上填
+  time layer、地点、hinge、叙述信息与可见 `char_id`。`--chapters` 定向付费重生成；
+  `--renormalize` 重算当前 schema 的原文定位与人物引用；`--check-only` 联合读取两份产物复检。
+  `extraction-ir-v3.1` 把召回脚手架和细节合在每章一次响应中，`micro_events` 只交短
+  `cue`、编译前丢弃；narration 选择本章可见 `char_id`，hinge 优先选择确定性原文候选 id、
+  候选覆盖不到仍交唯一 phrase。三种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与
+  定向修复共用该分派，不从可空 system 字段猜。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。
 - 本层没有旧 schema 迁移入口、字段别名或双形状读取路径。
 
@@ -242,35 +257,36 @@ address 后的新 subject 一律回到 `pending`，旧复合事实的 PASS 不�
 
 ## 五、现行判据
 
-当前注册表共 **73 条**：**39 hard、16 info、16 metric、2 unver**。两个 Stage 2 节点共用
+当前注册表共 **74 条**：**40 hard、16 info、16 metric、2 unver**。两个 Stage 2 节点共用
 同一张注册表。（2026-08-20 随 `extraction-ir-v1` 契约新增 `hinge_ambiguous`（HARD）与
 `place_inherit_without_base`（INFO）；2026-08-21 随 `extraction-ir-v1.1` 再增
 `place_explicit_unlocatable`（INFO）。三条在 `bounded-fidelity-v3` 产物上结构性不产出，
-空行是「不适用」不是绿灯。）
+空行是「不适用」不是绿灯。2026-08-23 的 v2 没有增删判据：它收窄的是响应契约与调用拓扑，
+最终产物仍走同一张表。）
 
 | 分组 | 当前规则 id |
 |---|---|
 | 产物与章对齐 | `upstream_missing` · `section_id_leak` · `chapter_coverage` · `chapter_order` |
 | 人物与称谓 | `canonical_unique` · `character_unattested` · `address_by_unresolved` · `address_from_out_of_range` · `address_from_too_early` · `address_bare_pronoun` · `address_all_pronoun` · `address_has_pronoun` · `address_selfref` · `address_missing` · `address_unlocatable` |
 | 身份与结局 | `role_missing` · `role_leaks_fate` · `role_repeats_name` · `hedge_words` · `distinguisher_lonely` · `role_fate_unverifiable` · `fate_report` |
-| 规则、秘密与关系 | `world_rule_no_desc` · `world_rule_names_person` · `secret_setup_order` · `secret_cold_reveal` · `secret_known_by_dangling` · `reveal_unmarked` · `secrets_absent` · `relation_dangling` |
+| 规则、秘密、关系与弧线 | `world_rule_no_desc` · `world_rule_names_person` · `secret_setup_order` · `secret_cold_reveal` · `secret_known_by_dangling` · `reveal_unmarked` · `secrets_absent` · `relation_dangling` · `conflict_stage_coverage` |
 | 拍与区间 | `beat_id_unique` · `beat_id_format` · `span_unlocatable` · `verbatim_failed` · `edge_hole` · `beats_collapsed` · `beats_coarse` · `place_inherit_without_base` · `place_explicit_unlocatable` |
 | 保真材料 | `hinge_cross_chapter` · `hinge_in_hole` · `hinge_anchor_void` · `hinge_ambiguous` · `hinge_cascade` · `hinge_drift` · `chapter_no_hinge` |
 | 在场与叙述 | `time_layer_no_present` · `present_ids_dangling` · `present_names_invented` · `present_continuity` · `present_ungrounded` · `present_early_named` · `event_early_name` · `pronoun_surface_unattested` · `narration_multi` |
 | 范围、必填与返工 | `scope_violation` · `event_empty` · `summary_empty` · `repair_cache_policy` |
 | 无条件读数 | `narration_voices` · `time_layer_mix` · `place_moves` · `present_names_ambiguous` · `present_names_unlisted` · `present_names_pronoun` · `present_names_late` · `present_broad` · `batch_density` · `context_scope` · `span_coverage` · `span_coverage_per_chapter` · `uncovered_holes` · `hinge_density` |
 
-机器可读修复路由共 **35 条**：
+机器可读修复路由共 **36 条**：
 
 - `stage2.blueprint --chapters`: 17 条；
 - `stage2.blueprint --patch`: 1 条（`hinge_ambiguous`——字段级候选选择，量级是条不是章）；
 - `stage2.blueprint --renormalize`: 2 条；
-- `stage2.global --resample`: 13 条；
+- `stage2.global --resample`: 14 条；
 - `stage2.global --purge-role`: 1 条；
 - `stage2.global --renormalize`: 1 条。
 
 判据的权威定义在 `contracts/judges/stage2.py`，注册期会验证规则 id 唯一、严重度、需求落点、
 节点与 flag 的存在性。报告形状见 [`_report.md`](./_report.md)。
 
-双契约（`bounded-fidelity-v3` ⇄ `extraction-ir-v1`）的选择口、A/B 配对纪律、
-`--patch` 修复阶梯与已有重放读数，见 `docs/stage2_contract_experiment.md`（操作手册）。
+三份现役契约的选择口、`--patch` 修复阶梯，以及退役实验臂的历史 A/B 读数，见
+`docs/stage2_contract_experiment.md`（操作手册与实验档案）。

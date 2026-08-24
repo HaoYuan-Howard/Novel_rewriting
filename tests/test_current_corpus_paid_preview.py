@@ -13,7 +13,14 @@ from tools import current_corpus_paid_preview as P
 
 #: 阶梯档数。**从生产落点取，不写死。**
 #: wire 上限恒是「逻辑请求数 × 档数 × 每档采样数」，于是这些期望值里被钉住的是
-#: **逻辑请求数**（136 / 2 / 4 …），而两个乘数只是已知乘数。
+#: **逻辑请求数**（180 / 2 / 4 …），而两个乘数只是已知乘数。
+#: ⚠⚠ 2026-08-24：基础逻辑请求数由 136 改成 **180**，那是修好了一个真的少报。
+#: `stage2.blueprint` 的现役契约（`BLUEPRINT_ARCHITECTURE = extraction-ir-v2`）是
+#: **每章两相 + 一次书级摘要批**（`2N+1`），而预览里写死的是 `N`。
+#: 17+25 章两本因此少报 44 个逻辑请求、264 个 wire 上限——**而这份预览的全部用途
+#: 就是开跑前拿它决定花不花这笔钱**。现在 `_logical_topology` 从
+#: `active_contract()` 的 `topology` / `needs_summary_batch` 派生，翻默认时这一格
+#: 会跟着动；改这个数之前先确认是契约变了，不是预览又漂了。
 #: ⚠ 2026-08-18 阶梯由 4 档降到 3 档（删掉被服务端静默映射回 `high` 的 `medium`，
 #: 见 `novel/llm/client.py::LADDER`）⇒ 全部 wire 上限跟着降 1/4，**那是正确结果不是回归**。
 #: ⚠ 2026-08-20 起答案流丢失同档先重采一次（`novel/llm/client.py::
@@ -22,11 +29,11 @@ from novel.llm.client import MAX_SAMPLES_PER_RUNG
 
 _RUNGS = len(LADDER)
 
-#: 当前语料范围的 wire 硬上限：(基础 136 + stage3 条件 2 + 语义 4) × 档数 ×
+#: 当前语料范围的 wire 硬上限：(基础 180 + stage3 条件 2 + 语义 4) × 档数 ×
 #: 每档采样数，再加 6 条 stage6 定向重试 × 采样数（它们走**单档**
 #: `HOOK_RETRY_RUNGS`，只乘采样数不乘档数）。⚠ 并列的 `external_hard_limit=588`
 #: 是**已有实验**的历史边界，不随当前阶梯变。
-_FULL_WIRE = (136 + 2 + 4) * _RUNGS * MAX_SAMPLES_PER_RUNG \
+_FULL_WIRE = (180 + 2 + 4) * _RUNGS * MAX_SAMPLES_PER_RUNG \
     + 6 * MAX_SAMPLES_PER_RUNG
 
 
@@ -112,9 +119,9 @@ def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path
     aggregate = plan['aggregate']
     assert aggregate == {
         'production_cli_dispatches': 16,
-        'base_nonsemantic_logical_requests': 136,
+        'base_nonsemantic_logical_requests': 180,
         'base_nonsemantic_ladder_wire_hard_limit':
-            136 * _RUNGS * MAX_SAMPLES_PER_RUNG,
+            180 * _RUNGS * MAX_SAMPLES_PER_RUNG,
         'stage3_conditional_habit_quote_logical': 2,
         'stage3_conditional_habit_quote_wire_hard_limit':
             2 * _RUNGS * MAX_SAMPLES_PER_RUNG,
@@ -123,7 +130,7 @@ def test_final_topology_lists_16_dispatches_and_real_conditional_limits(tmp_path
         'stage6_conditional_candidate_retry_logical': 6,
         'stage6_conditional_candidate_retry_wire_hard_limit':
             6 * MAX_SAMPLES_PER_RUNG,   # 单档 HOOK_RETRY_RUNGS，只乘采样数
-        'full_conditional_logical_hard_limit': 148,
+        'full_conditional_logical_hard_limit': 192,
         'full_conditional_wire_hard_limit': _FULL_WIRE,
         'full_conditional_context_token_hard_ceiling': _FULL_WIRE * 1_000_000,
     }
@@ -367,7 +374,7 @@ def test_render_says_upper_bound_unknown_price_and_no_execution(tmp_path):
     # 6 条定向重试 × 单档 × 每档采样数（重采对单档臂一样适用）。
     hook_retry_wire = 6 * len(P.HOOK_RETRY_RUNGS) * MAX_SAMPLES_PER_RUNG
     assert f'Stage6 条件候选定向重试：logical=6 / wire 上限={hook_retry_wire}' in text
-    assert f'全条件硬上限：logical=148 / wire={_FULL_WIRE}' in text
+    assert f'全条件硬上限：logical=192 / wire={_FULL_WIRE}' in text
     assert '可达硬上限，不是预计实付' in text
     assert '已有 FC08/12/13：10 CLI run' in text
     assert '那场战役不会发生' in text

@@ -169,7 +169,28 @@ from contracts.schema.stage7 import (
 )
 
 class ArtifactVersionError(ValueError):
-    """一份产物不是当前注册版本。错误恒带文件与版本。"""
+    """一份产物不是当前注册版本。错误恒带文件与版本。
+
+    ⚠ **六个抛出点不是同一件事**，而消费方分得出它们才敢做不同处置：
+    「盘上是 v2、当前是 v3」（旧产物，producer 重建即可）与「非法 marker」
+    「envelope 形状坏了」「版本比当前还高」是**完全不同的失败**。
+    ⇒ 版本不匹配那一处填 `found` / `expected`，其余保持 `None`。
+    消费方只许按 `is_older_than_current` 放宽，**不许按类型放宽**——
+    宽捕获整族会让一份 `_schema_version: 999` 的坏产物被当成旧 v2 静默跳过。
+    """
+
+    def __init__(self, message: str, *, rel: str | None = None,
+                 found: int | None = None, expected: int | None = None) -> None:
+        super().__init__(message)
+        self.rel = rel
+        self.found = found
+        self.expected = expected
+
+    @property
+    def is_older_than_current(self) -> bool:
+        """盘上那份**确实是一个更早的注册版本**（不是坏信封、不是未来版本）。"""
+        return (self.found is not None and self.expected is not None
+                and self.found < self.expected)
 
 
 @dataclass(frozen=True)
@@ -179,7 +200,7 @@ class ArtifactSpec:
     ⚠ 这里曾有第三格 `migrations`（低版本 → 当前版本的迁移链）。删除的理由见模块头
     【版本】那一段：它保护的不是存量产物，是**没人重建过的**存量产物。
     `current_version` 保留为可写，是因为它仍要承担「这个形状破坏过几次」这件事——
-    今天全表只有 `stage2/chapter_blueprints.json` 破坏过一次（2026-08-19，见下表那一行）。
+    `stage2/chapter_blueprints.json` 已破坏过两次（2026-08-19、2026-08-23，见版本账）。
     """
 
     model: type[BaseModel]
@@ -206,8 +227,8 @@ class DecodedArtifact:
 #: 是模块头【版本】那一段的裁决：破坏形状要 `current_version` +1 并同批回答
 #: 「存量产物由谁重建」。反向守卫在 `tests/test_artifact_versions.py`。
 #:
-#: ⚠ **全表 v1，例外逐条在下面自己那一行写着理由与重建人**：
-#: `STAGE2_CHAPTER_BLUEPRINTS`（2026-08-19）与 2026-08-22 阶段 B 那一批。
+#: ⚠ **例外逐条在下面自己那一行写着理由与重建人**：
+#: `STAGE2_CHAPTER_BLUEPRINTS`（2026-08-19、2026-08-23）与 2026-08-22 阶段 B 那一批。
 #: **升版的正确形态就是这样**——在表里显式登记，而不是加一条迁移把旧字节读成新形状。
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # ⚠ 2026-08-22 阶段 C 新增：本层唯一可变的那一格（不可变 revision 链 + current
@@ -231,13 +252,13 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
     STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit),
-    # ⚠⚠ **全表唯一的 v2。** 2026-08-19 `bounded-fidelity-v2` → `v3`：beat 的区间
-    #   改由**段号**算出，`BlueprintContext.architecture` 的 `Literal` 随之收窄、
-    #   `BlueprintProvenance.verbatim_recovered` 删除 ⇒ 存量蓝图**读不进来**。
+    # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
+    #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
+    #   v1.1/v2/v3.1 三值，升 v3。两次都会让旧信封**读不进来**。
     #   **存量产物由谁重建：`stage2.blueprint` 整跑（付费）**；`.INVALID` 与 `_rounds/`
     #   一律作废，不手补字段冒充当前产地。取值与升版记录见
     #   `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 2),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 3),
     STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding),
     # ⚠ 三份 `*_edit.json` 不是节点产的，是**人产的输入**——但它们落在产物目录、
     #   被 `--apply-edit` 当决策集吃掉，所以形状同样是契约（stage7 先例，§三）。
@@ -260,8 +281,8 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
     #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
-    STAGE6_HOOK: ArtifactSpec(Hook),
-    STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit),
+    STAGE6_HOOK: ArtifactSpec(Hook, 2),
+    STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit, 2),
     STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview),
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
     STAGE7_NAME_MAP: ArtifactSpec(NameMap, 2),
@@ -357,7 +378,8 @@ def decode_artifact(rel: str, data: Any) -> DecodedArtifact:
         raise ArtifactVersionError(
             f'{rel}: schema v{version} 不是当前 v{spec.current_version}；'
             '本仓不迁移旧产物，请从 producer 重新生成'
-            '（**不要手补字段冒充当前产地**）')
+            '（**不要手补字段冒充当前产地**）',
+            rel=rel, found=version, expected=spec.current_version)
     return DecodedArtifact(payload, version)
 
 

@@ -83,6 +83,7 @@ def test_stage1_continuous_view_and_chapter_index_reject_gaps():
                 source_chapter_no=2,
                 chars=1,
                 preview='乙',
+                label_delta=1,
             ),
         ])
 

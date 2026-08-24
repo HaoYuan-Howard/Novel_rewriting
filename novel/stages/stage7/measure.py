@@ -19,7 +19,7 @@ from contracts.schema.stage7 import HookConsumed
 from novel.core.naming import strip_distinguisher
 from novel.core.text import norm
 from novel.stages.stage5.measure import draft_consumed_of, draft_projection, load_drafts
-from novel.stages.stage7.subs import apply_subs, sub_table
+from novel.stages.stage7.subs import apply_subs, sub_table, unclaimed_residual_keys
 
 __all__ = ['draft_consumed_of', 'draft_projection', 'load_drafts']  # 下游按本模块的名字取
 
@@ -315,12 +315,7 @@ def apply_everything(recs: list[dict], hook_old: str, title: str,
         after, cnt, claimed = apply_subs(before, subs, pat, kept)
         pre_units.append((where, before))
         post_units.append((where, after))
-        for k in subs:
-            for m in re.finditer(re.escape(k), after):
-                # 落在任何一个被认领的区间里都不算残留（替换写出来的、恒等留下的都算）
-                if not any(s <= m.start() and m.end() <= e for s, e in claimed):
-                    residual_keys.add(k)
-                    break
+        residual_keys.update(unclaimed_residual_keys(after, subs, claimed))
         return after, cnt
 
     for r in recs:

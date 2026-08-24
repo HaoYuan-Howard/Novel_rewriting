@@ -21,23 +21,20 @@ from novel.llm.cache import CachePolicy
 from novel.report.findings import ran
 from novel.stages.stage2 import extract
 from novel.stages.stage4 import plan
+from novel.stages.stage4.beats import plan_beat_id
 from novel.stages.stage4.measure import identity_plan
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
 from tests.test_stage2_generation import (
-    _client, _ctx, _ok, _response_blueprints, _response_global,
+    _client, _ctx, _ok, _respond_blueprints, _response_blueprints,
+    _response_global,
 )
 
 
-#: ⚠ **本文件的假响应是 `bounded-fidelity-v3` 形状的**（`_response_blueprints()`
-#: 由 v3 正式产物反投影而来，带 `beat_id`/`span`/产物侧 `time_layer`）。
-#: 2026-08-21 默认契约翻成 `extraction-ir-v1` 之后，不拧回去这些响应会被
-#: V2 的 schema 闸整轮拒光——那是**测试装置的臂选错了**，不是产线的病。
-#: ⇒ 整个文件跑在 v3 臂上；ir1 的链路另有 `test_stage2_contract_dispatch.py`
-#: 与 `test_stage2_compile_v2.py` 覆盖。
+#: 通用 Stage4 底座固定在仍现役的 v1.1；契约特有拓扑由 dispatch 测试覆盖。
 @pytest.fixture(autouse=True)
-def _pin_v3_arm(monkeypatch):
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'bounded-fidelity-v3')
+def _pin_ir11_arm(monkeypatch):
+    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'extraction-ir-v1.1')
 
 
 def _prepare(book):
@@ -52,10 +49,7 @@ def _prepare(book):
     by_ordinal = _response_blueprints()
 
     def blueprint_response(request, _index):
-        for ordinal in by_ordinal:
-            if f'阅读序第{ordinal}章' in request.user:
-                return _ok({'blueprints': [by_ordinal[ordinal]]})
-        raise AssertionError('逐章 prompt 没有阅读序目标')
+        return _respond_blueprints(request, by_ordinal)
 
     blueprint_ctx = _ctx(book, 'stage2.blueprint')
     blueprint_client, _ = _client(blueprint_ctx, blueprint_response)
@@ -77,14 +71,38 @@ def _prepare(book):
     return ctx, store, upstreams, artifact.model_dump(by_alias=True)
 
 
+def _target_response(before, groups, ordinal):
+    """把盘上那一章翻成一份**模型会返回的**响应。
+
+    ⚠ 基线块与响应**不是同一样东西**，而这个装置正踩在两者的差上：
+    `_response_baseline` 产的是发给模型的**基线**，三个「产物侧可以没有、响应侧必填」的
+    字段（`spine` 与两级 `weight`）为 `None` 时它把那一格整个删掉
+    （产物侧允许「没做过这个决策」，恒等基线就是——而本文件的盘面正是恒等基线）；
+    模型**返回**的响应里它们却是必填的。补上这三格，模拟的才是一份合法响应；
+    不补就等于让装置去验证「模型漏填必填字段会被拒」，而那是另一条测试的事。
+    """
+    chapter = plan._response_baseline(plan._chapter_by(before)[ordinal], groups, ordinal)
+    # ⚠ 章级档位在定向修复那一路**不起作用**（本章总量由代码钉死在基线合计上），
+    #   但它仍是必填字段 —— 契约与「这一次它管不管用」是两件事。
+    chapter['weight'] = 'CH_EVEN'
+    members = {plan_beat_id(ordinal, index): group
+               for index, group in enumerate(groups.get(ordinal) or [], 1)}
+    for segment in (chapter.get('segments') or []):
+        segment['weight'] = 'W_MID'
+        # ⚠ 补的是**本单元里一个 event 的编号**，不是数字：响应侧 `spine` 从 2026-08-22
+        #   起收 `beat_id`（模型引用可靠、数数不可靠），填个 1 会被载体当场拒。
+        #   ⚠ 恒等基线一个源内容单元一个写作单元 ⇒ `end_beat` 指的就是它自己那一格。
+        segment['spine'] = members[segment['end_beat']][0]
+    return chapter
+
+
 def test_targeted_plan_repair_merges_only_the_requested_chapter_and_records_history(monkeypatch):
     root = Path(tempfile.mkdtemp())
     book = root / '规划定向合并测试_611'
     book.mkdir()
     try:
         ctx, _store, upstreams, before = _prepare(book)
-        target = plan._response_baseline(
-            plan._chapter_by(before)[2], upstreams.groups, 2)
+        target = _target_response(before, upstreams.groups, 2)
         preview_system, preview_user = plan.build_prompt(ctx, chapters=(2,))
         client, transport = _client(ctx, lambda _request, _index: _ok(target))
         captured = {}
@@ -126,15 +144,19 @@ def test_targeted_plan_repair_rejects_wrong_chapter_without_overwriting_formal()
     book.mkdir()
     try:
         ctx, store, upstreams, before = _prepare(book)
-        wrong = plan._response_baseline(
-            plan._chapter_by(before)[1], upstreams.groups, 1)
+        wrong = _target_response(before, upstreams.groups, 1)
         client, transport = _client(ctx, lambda _request, _index: _ok(wrong))
         original = store.path(plan.REL).read_bytes()
 
         with pytest.raises(TerminalState, match='响应却是'):
             plan.run_plan(ctx, client, chapters=(2,))
 
-        assert len(transport.calls) == 1
+        # ⚠⚠ **越界响应从 2026-08-22 起走阶梯，不再是「一次就终态」**：这一拒与 schema 拒
+        #   同型（模型没按契约产出），而「除截断外每一种拒绝都先同档重采」是本仓已经
+        #   付过学费的默认处置（`0e2492a`：那 47.7% 白花的根因）。判词一个字没改，
+        #   只是从 `_run_plan_repair` 搬到了 `_expansion_validator` 上。
+        #   ⚠ 承重的两条在下面：**正式产物一个字节没动**、**不落 `.INVALID`**。
+        assert len(transport.calls) == 6, '越界响应没有走完阶梯（3 档 × 同档重采）'
         assert store.path(plan.REL).read_bytes() == original
         assert not store.exists(plan._INVALID)
     finally:
@@ -224,8 +246,7 @@ def test_targeted_plan_repair_failure_writes_invalid_without_overwriting_formal(
     book.mkdir()
     try:
         ctx, store, upstreams, before = _prepare(book)
-        target = plan._response_baseline(
-            plan._chapter_by(before)[2], upstreams.groups, 2)
+        target = _target_response(before, upstreams.groups, 2)
         target['chapter_goal']['rationale'] = '仍然写着需要张力'
         client, _transport = _client(ctx, lambda _request, _index: _ok(target))
         formal_before = store.path(plan.REL).read_bytes()
@@ -257,8 +278,7 @@ def test_targeted_plan_repair_accumulates_usage_and_rebuilds_context(monkeypatch
             'provenance': previous.provenance.model_copy(update={'usage': old_usage}),
         })
         store.write(plan.REL, previous)
-        target = plan._response_baseline(
-            plan._chapter_by(before)[2], upstreams.groups, 2)
+        target = _target_response(before, upstreams.groups, 2)
         client, transport = _client(ctx, lambda _request, _index: _ok(target))
         rebuilt = []
         monkeypatch.setattr(plan, '_judge', lambda *_args, **_kwargs: [])

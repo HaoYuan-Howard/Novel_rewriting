@@ -291,6 +291,25 @@ class ArtifactStore:
             self._refuse_stale_upstream(rel)
         return obj, payload
 
+    def read_external(self, model: type[M], contract_rel: str,
+                      path: str | os.PathLike[str]) -> M:
+        """按注册产物契约读取一个已由调用方完成路径授权的外部 JSON 文件。
+
+        一次性 API 编辑文件住在 `_service/edits`，不能用 ``self.path(rel)`` 定位；
+        但它的 UTF-8、JSON、schema version 与 Pydantic 校验不能另写第二套。本方法
+        不记来源边，也不决定路径是否合法——那两个职责分别属于产物消费与调用方。
+        """
+        candidate = Path(path)
+        try:
+            raw = _read_file_bytes(candidate)
+        except FileNotFoundError:
+            raise UpstreamMissing(f'{candidate} 不在盘上') from None
+        except OSError as exc:
+            raise ArtifactUnreadable(f'读不了外部输入 {candidate}：{exc!r}') from exc
+        data = self._loads(str(candidate), raw)
+        obj, _payload = self._validate_payload(model, contract_rel, data)
+        return obj
+
     def read_text(self, rel: str) -> str:
         """读一份**字节形态**产物（`clean_text.txt` / `draft.md` / 成书）。记边。
 

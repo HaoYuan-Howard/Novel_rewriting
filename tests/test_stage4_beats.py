@@ -7,7 +7,9 @@ from functools import wraps
 
 import pytest
 
-from contracts.invariants import BEAT_MIN_CHARS, GROUPING_VERSION, PLAN_BUDGET_BAND
+from contracts.invariants import (
+    BEAT_MIN_CHARS, GROUPING_VERSION, PLAN_BUDGET_BAND, VERBATIM_BUDGET_FACTOR,
+)
 from novel.core.spans import content_only, locate_spans
 from novel.core.text import norm
 from novel.errors import RefusedByStructure
@@ -15,10 +17,22 @@ from novel.stages.stage4.beats import (
     beat_index, group_beats, group_chars, group_map, plan_beat_id, verbatim_pieces,
 )
 from novel.stages.stage4.measure import (
-    IDENTITY_GOAL, chapter_source_chars, expand_plan_beats, identity_plan,
-    source_chars_table, verbatim_chars, verbatim_share_stats,
+    IDENTITY_GOAL, allocate_budgets, budget_basis, chapter_source_chars,
+    expand_plan_beats, identity_plan, source_chars_table, verbatim_chars,
+    verbatim_share_stats,
 )
 from tests import corpus
+
+
+def _fake_bidx(*beat_ids: str) -> dict[str, dict[str, object]]:
+    """`expand_plan_beats` 从 bidx 只读一格：`event`。
+
+    它读那一格是为了守住 `spine` 的下标口径——下发给规划者的骨架**过滤**空 event，
+    写手那一侧**不过滤**，两边计数一分家 `spine` 就指错人。所以这里给的每条都非空：
+    合成一份「stage2 契约成立」的 bidx，让下面那批测试判的是编号违约本身，
+    而不是顺带撞上那道断言。
+    """
+    return {b: {'event': f'{b} 发生了一件事'} for b in beat_ids}
 
 
 def _by_rel(rel: str) -> dict[str, object]:
@@ -337,39 +351,369 @@ def test_an_empty_plan_says_so_in_one_sentence():
     而症状的文案指向的是另一个根因。
     """
     with pytest.raises(RefusedByStructure, match='一个输出章都没有'):
-        expand_plan_beats({'output_chapters': []}, {1: [['b01_01']]})
+        expand_plan_beats({'output_chapters': []}, {1: [['b01_01']]}, _fake_bidx('b01_01'))
 
 
 @pytest.mark.parametrize('bad, why', [
-    ([{'plan_beats': ['p09_09']}], '编号不存在'),
-    ([{'plan_beats': ['p01_01']}, {'plan_beats': ['p01_01']}], '重复引用'),
-    ([], '这一拍没有给预算'),
+    ([{'end_beat': 'p09_09'}], '编号不存在'),
+    ([{'end_beat': 'p01_01'}, {'end_beat': 'p01_01'}], '被两个写作单元指到'),
+    ([{'end_beat': 'p01_01'}], '末单元没有到底'),
+    ([], '一个 end_beat 都没有'),
 ])
-def test_every_plan_beat_violation_is_a_terminal_state(bad, why):
-    """三种违约各自说出**是哪一种**——兜底会给违约数据发一张静默通行证。"""
+def test_every_end_beat_violation_is_a_terminal_state(bad, why):
+    """⭐⭐ 模型只剩这四种违约，**各自说出是哪一种**——兜底会给违约数据发一张静默通行证。
+
+    ⚠ 批 4 之前这里守的是三种「逐条点名」的违约（编号不存在 / 重复引用 / 少给一拍）。
+    换成 `end_beat` 之后「少给一拍」这一类**不再表达得出来**：切分由排序推出，
+    覆盖是恒等式。取而代之的是**「末单元没有到底」**——它是新契约下唯一还能漏掉事实的口子。
+    """
     plan = {'output_chapters': [{'output_ordinal': 1, 'segments': bad}]}
     with pytest.raises(RefusedByStructure, match=why):
-        expand_plan_beats(plan, {1: [['b01_01']]})
+        expand_plan_beats(plan, {1: [['b01_01'], ['b01_02']]},
+                          _fake_bidx('b01_01', 'b01_02'))
+
+
+def test_a_source_chapter_nobody_cut_is_a_terminal_state():
+    """⭐ 覆盖是章内的恒等式，**章本身漏掉不是**——那一格仍要有人守。"""
+    plan = {'output_chapters': [{'output_ordinal': 1,
+                                 'segments': [{'end_beat': 'p01_01'}]}]}
+    with pytest.raises(RefusedByStructure, match='没有任何输出章切分它'):
+        expand_plan_beats(plan, {1: [['b01_01']], 2: [['b02_01']]},
+                          _fake_bidx('b01_01', 'b02_01'))
 
 
 def test_expand_plan_beats_writes_from_beats_and_drops_nothing():
     plan = {'output_chapters': [{'output_ordinal': 1,
-                                 'segments': [{'plan_beats': ['p01_01'], 'budget_chars': 120}]}]}
-    assert expand_plan_beats(plan, {1: [['b01_01', 'b01_02']]}) == 1
+                                 'segments': [{'end_beat': 'p01_01'}]}]}
+    assert expand_plan_beats(
+        plan, {1: [['b01_01', 'b01_02']]}, _fake_bidx('b01_01', 'b01_02')) == 1
     assert plan['output_chapters'][0]['segments'][0]['from_beats'] == ['b01_01', 'b01_02']
     assert plan['output_chapters'][0]['segments'][0]['slot'] == 's01'
+    assert 'end_beat' not in plan['output_chapters'][0]['segments'][0], \
+        '`end_beat` 是响应字段，展开之后不该留在产物上'
 
 
 def test_expand_plan_beats_preserves_planner_grouping_and_reordered_sequence():
+    """⭐⭐ **切分由排序推出，顺序由数组序决定——这两件事互不干扰。**
+
+    这一条就是批 4 那次编码换代的验收断言：模型把第三个源单元提到最前面写，
+    同时把前两个并成一个写作单元。它给的只有两个 `end_beat`
+    （`p01_03` 与 `p01_02`，数组序是成稿序），而代码要还原出
+    「(3) 先写、(1,2) 后写」这两个范围。⇒ **重排一格没丢。**
+    """
     plan = {'output_chapters': [{'output_ordinal': 1, 'segments': [
-        {'plan_beats': ['p01_03'], 'budget_chars': 80},
-        {'plan_beats': ['p01_01', 'p01_02'], 'budget_chars': 160},
+        {'end_beat': 'p01_03'},
+        {'end_beat': 'p01_02'},
     ]}]}
     assert expand_plan_beats(
-        plan, {1: [['b01_01'], ['b01_02'], ['b01_03']]}) == 3
+        plan, {1: [['b01_01'], ['b01_02'], ['b01_03']]},
+        _fake_bidx('b01_01', 'b01_02', 'b01_03')) == 3
     assert [row['from_beats'] for row in plan['output_chapters'][0]['segments']] == [
         ['b01_03'], ['b01_01', 'b01_02']]
     assert [row['slot'] for row in plan['output_chapters'][0]['segments']] == ['s01', 's02']
+
+
+# ── 六·2、`spine`：拍内主次（2026-08-22，批 3）────────────────────────────
+
+def _spine_plan(spine, *, end_beat='p01_01') -> dict:
+    return {'output_chapters': [{'output_ordinal': 1, 'segments': [
+        {'end_beat': end_beat, 'spine': spine}]}]}
+
+
+@pytest.mark.parametrize('spine, expected', [('b01_01', 1), ('b01_02', 2)])
+def test_a_spine_naming_an_event_of_this_unit_becomes_its_index(spine, expected):
+    """⭐⭐ 模型给的是**哪一件事**（`beat_id`），落盘的是**第几件**（下标）。
+
+    ⚠ 换算就是「它在 `from_beats` 里排第几」——与 `plan_beats → from_beats` 同一次动作。
+    模型一次都不必数：那个数代码本来就精确知道（2026-08-22 的教训，见
+    `PlanBeatResponse.spine`）。
+    """
+    plan = _spine_plan(spine)
+    assert expand_plan_beats(
+        plan, {1: [['b01_01', 'b01_02']]}, _fake_bidx('b01_01', 'b01_02')) == 1
+    assert plan['output_chapters'][0]['segments'][0]['spine'] == expected
+
+
+@pytest.mark.parametrize('spine', ['b01_03', 'b07_07'])
+def test_a_spine_naming_an_event_outside_this_unit_is_a_terminal_state(spine):
+    """⭐⭐ **归属只有这里知道，所以它也在这里判。**
+
+    载体侧（`PlanBeatResponse.spine`）只判得了形状（`bNN_NN`）——「这个编号在不在本单元
+    切到的那几个源内容单元里」要先把切分展开出来才知道。
+    ⚠ 它与三种编号违约走**同一条出口**：分成两处 raise，就会有一份计划先报完编号错、
+    重跑一次再报一遍 spine 错，而两次都要花钱。
+    ⚠ `b01_03` 是「本章有、但不在本单元」，`b07_07` 是「压根不存在」——
+    两种都只是**指错人**，判词一样。
+    """
+    plan = {'output_chapters': [{'output_ordinal': 1, 'segments': [
+        {'end_beat': 'p01_01', 'spine': spine},
+        {'end_beat': 'p01_02'},
+    ]}]}
+    with pytest.raises(RefusedByStructure, match='不是本单元里的事'):
+        expand_plan_beats(plan, {1: [['b01_01', 'b01_02'], ['b01_03']]},
+                          _fake_bidx('b01_01', 'b01_02', 'b01_03'))
+
+
+def test_a_unit_that_already_broke_the_numbering_does_not_also_get_a_spine_complaint():
+    """⭐ 已经有编号违约的单元**不再判它的 `spine`**——那时 `cited` 本来就是残的。
+
+    ⚠ 报出来的归属错是**派生症状**，会盖住真根因。这是「74 条症状盖住一句话」
+    （`test_an_empty_plan_says_so_in_one_sentence`）的同一个教训，
+    只不过这一次症状与根因在同一个写作单元里。
+    """
+    plan = _spine_plan('b01_01', end_beat='p09_09')        # 编号不存在 ⇒ 本章整个不展开
+    with pytest.raises(RefusedByStructure) as excinfo:
+        expand_plan_beats(plan, {1: [['b01_01']]}, _fake_bidx('b01_01'))
+    assert '编号不存在' in str(excinfo.value)
+    assert '不是本单元里的事' not in str(excinfo.value), 'spine 的派生症状盖过了真根因'
+
+
+def test_a_spine_is_never_a_number_on_the_response_side():
+    """⭐⭐ **响应侧收编号、不收数字**，这条守卫钉的是那次实付买回来的形状。
+
+    2026-08-22：一份 schema 合法的计划里 60 个写作单元错 10 个，**9 个是「本单元只有
+    1 件事、却填了 2 或 3」**——模型要填对下标就得把几个源单元的 events 摊平累加，
+    而那个数代码本来就精确知道。⇒ 数字这条路**不许再回来**：真回来了，
+    `expand_plan_beats` 会安静地把它当成「没做过主次决策」放过去。
+    """
+    plan = _spine_plan(2)                                   # 旧形状：下标
+    with pytest.raises(RefusedByStructure, match='不是本单元里的事'):
+        expand_plan_beats(plan, {1: [['b01_01', 'b01_02']]},
+                          _fake_bidx('b01_01', 'b01_02'))
+
+
+def test_an_empty_source_event_is_a_terminal_state_because_it_shifts_the_spine():
+    """⭐⭐ **那道计数断言**：下发面过滤空 event，写手那一侧不过滤，差一格 `spine` 就指错人。
+
+    ⚠ stage2 契约（`event: str = Field(min_length=1)`）保证两者恒等 ⇒ 这条在正常盘上
+    **永远不响**。它响的那一天，恒等式已经破了——而破了之后往下走的代价是
+    「主干静默指向另一件事」，一条判据都看不见。
+    ⚠ 文案必须说清这不是模型的错：根因在上游那份产物，重跑规划一次都修不好。
+    """
+    bad = _fake_bidx('b01_01', 'b01_02')
+    bad['b01_02']['event'] = '   '
+    with pytest.raises(RefusedByStructure, match='stage2 契约') as excinfo:
+        expand_plan_beats(_spine_plan('b01_01'), {1: [['b01_01', 'b01_02']]}, bad)
+    assert 'b01_02' in str(excinfo.value), '没点名是哪一个 beat'
+
+
+def test_a_plan_without_a_spine_expands_unchanged():
+    """`spine` 缺席是合法态（`--revalidate` 的存量计划、恒等基线）——展开路不为它出声。"""
+    plan = {'output_chapters': [{'output_ordinal': 1, 'segments': [
+        {'end_beat': 'p01_01'}]}]}
+    assert expand_plan_beats(plan, {1: [['b01_01']]}, _fake_bidx('b01_01')) == 1
+    assert 'spine' not in plan['output_chapters'][0]['segments'][0]
+
+
+
+# ── 六·3、篇幅：两级档位 → 整数（2026-08-22，批 4）────────────────────────
+#
+# ⚠⚠ **这一节守的是「三条算术 HARD 已经换了责任方」这件事本身。**
+# `budget_int` / `budget_band` / `plan_book_band` 现在是 `allocate_budgets` 的后置条件；
+# 判据那三条一条没撤（人工稿与存量产物仍然走它们），但**生成路上它们恒绿**——
+# 而「恒绿」只有在这里被证明成恒等式时才是好事，否则它就只是没人再看的绿灯。
+
+def _weighted_plan(chapter_weights, unit_weight='mid'):
+    """每章一个源内容单元、每个单元一个写作单元的最小盘面 + 指定的档位。"""
+    groups = {o: [[f'b{o:02d}_01']] for o in chapter_weights}
+    bidx = {f'b{o:02d}_01': {'event': '一件事', 'source_chars': 100 * o, 'hinges': [],
+                             'ord': o}
+            for o in chapter_weights}
+    plan = {'output_chapters': [
+        {'output_ordinal': o, 'from_source_ordinals': [o], 'weight': w,
+         'segments': [{'slot': 's01', 'from_beats': [f'b{o:02d}_01'], 'weight': unit_weight}]}
+        for o, w in chapter_weights.items()]}
+    return plan, groups, bidx
+
+
+@pytest.mark.parametrize('weights', [
+    {1: 'major', 2: 'minor', 3: 'minor', 4: 'minor'},      # 一章独重
+    {1: 'major', 2: 'major', 3: 'major', 4: 'minor'},      # 章章都想重
+    {1: 'major', 2: 'above', 3: 'below', 4: 'minor'},      # 摊开
+    {1: 'even', 2: 'even', 3: 'even', 4: 'even'},          # 一格都没动
+])
+def test_no_weighting_the_model_can_pick_pushes_a_chapter_out_of_band(weights):
+    """⭐⭐ **ch18 那次 0.442× 在新契约下结构上不可能。**
+
+    批 2 run1 花了一次全书实付才知道：模型把「压缩」理解成把那个数字调小，
+    ch18 冲出 `PLAN_BUDGET_BAND` 的下界，整份计划退回。那时唯一的防线是 prompt 里
+    一句「两端都是硬的」。现在数字不归它管了 ⇒ **无论它怎么填档位**，
+    逐章倍率都被 `_water_fill` 钳在带内。
+    ⚠ 参数化里那四行是**四种填法**，包括「章章都标 major」这种最容易顶破总量的填法。
+    """
+    plan, groups, bidx = _weighted_plan(weights)
+    allocate_budgets(plan, groups, bidx)
+    lo, hi = PLAN_BUDGET_BAND
+    for chapter in plan['output_chapters']:
+        src = 100 * chapter['output_ordinal']
+        got = sum(b['budget_chars'] for b in chapter['segments'])
+        assert lo <= got / src <= hi, \
+            f'第 {chapter["output_ordinal"]} 章 {got / src:.3f} 出带（档位 {chapter["weight"]}）'
+        assert all(isinstance(b['budget_chars'], int) and b['budget_chars'] > 0
+                   for b in chapter['segments']), 'budget_int 的后置条件破了'
+
+
+def test_the_book_total_is_exactly_the_source_total_not_merely_inside_the_band():
+    """⭐⭐ 全书合计**逐字等于**源字数，不是「落在 `BOOK_BAND` 里就算」。
+
+    ⚠ 「恰好相等」是取整那一步买的（最大余数法）：逐格 `round()` 之后那个和会漂几十个字，
+    而它正好压在带的边界上时，一份合格的计划会因为**取整**被判红——那种红最难查，
+    因为每一格看上去都对。
+    """
+    plan, groups, bidx = _weighted_plan({1: 'major', 2: 'minor', 3: 'above', 4: 'below'})
+    allocate_budgets(plan, groups, bidx)
+    total = sum(b['budget_chars'] for c in plan['output_chapters'] for b in c['segments'])
+    assert total == 100 + 200 + 300 + 400, f'全书合计 {total} ≠ 源字数 1000'
+
+
+def test_marking_a_chapter_major_actually_makes_it_thicker_than_marking_it_minor():
+    """⭐⭐ **档位不是一个装饰字段**——它必须真的动那个数。
+
+    ⚠ 这条与上一条是**一对**：只钳带不看效果的话，一个「把所有章都算成 1.0×」的实现
+    会让上面每一条断言都绿，而线 A 那三轮实付买来的章间轻重会被**静默清零**。
+    """
+    heavy, groups, bidx = _weighted_plan({1: 'major', 2: 'minor'})
+    light, _g, _b = _weighted_plan({1: 'minor', 2: 'major'})
+    allocate_budgets(heavy, groups, bidx)
+    allocate_budgets(light, groups, bidx)
+    first_heavy = sum(b['budget_chars'] for b in heavy['output_chapters'][0]['segments'])
+    first_light = sum(b['budget_chars'] for b in light['output_chapters'][0]['segments'])
+    assert first_heavy > first_light, \
+        f'第 1 章标 major 与标 minor 拿到同样多的字（{first_heavy} vs {first_light}）'
+
+
+def test_marking_a_unit_peak_actually_makes_it_thicker_than_the_rest_of_the_chapter():
+    """⭐ 章内那一层同理：`W_PEAK` 必须真的比 `W_BRUSH` 厚，否则「本章哪里重要」没有落点。"""
+    groups = {1: [['b01_01'], ['b01_02']]}
+    bidx = {'b01_01': {'event': 'a', 'source_chars': 200, 'hinges': [], 'ord': 1},
+            'b01_02': {'event': 'b', 'source_chars': 200, 'hinges': [], 'ord': 1}}
+    plan = {'output_chapters': [{
+        'output_ordinal': 1, 'from_source_ordinals': [1], 'weight': 'even', 'segments': [
+            {'slot': 's01', 'from_beats': ['b01_01'], 'weight': 'peak'},
+            {'slot': 's02', 'from_beats': ['b01_02'], 'weight': 'brush'}]}]}
+    allocate_budgets(plan, groups, bidx)
+    peak, brush = (b['budget_chars'] for b in plan['output_chapters'][0]['segments'])
+    assert peak > brush * 3, f'重头拍 {peak} 与一带而过 {brush} 差得不够——档位没进到分配式里'
+
+
+def test_the_allocator_keeps_the_verbatim_floor_it_promised_the_writer():
+    """⭐⭐ 逐字下限（`R-5.13`）现在也由分配器守：原话密集的那一拍不会被压到只剩引用。
+
+    ⚠ 它从前是 prompt 里一句「办法是匀」——而「匀」这件事要模型在两拍之间做加减法。
+    """
+    groups = {1: [['b01_01'], ['b01_02']]}
+    hinge = [{'kind': '要害台词', 'source': {'text': '你' * 60}}]   # ⇒ verbatim 组
+    bidx = {'b01_01': {'event': 'a', 'source_chars': 200, 'hinges': hinge, 'ord': 1},
+            'b01_02': {'event': 'b', 'source_chars': 200, 'hinges': [], 'ord': 1}}
+    plan = {'output_chapters': [{
+        'output_ordinal': 1, 'from_source_ordinals': [1], 'weight': 'even', 'segments': [
+            # ⚠ 故意把**原话最多**的那一拍标成一带而过——这正是模型会犯的那个错。
+            {'slot': 's01', 'from_beats': ['b01_01'], 'weight': 'brush'},
+            {'slot': 's02', 'from_beats': ['b01_02'], 'weight': 'peak'}]}]}
+    allocate_budgets(plan, groups, bidx)
+    got = plan['output_chapters'][0]['segments'][0]['budget_chars']
+    assert got >= VERBATIM_BUDGET_FACTOR * 60, \
+        f'带 60 字原话的那一拍只拿到 {got} 字 ⇒ 写手除了原话再没有别的字可写'
+
+
+def test_targeted_repair_cannot_move_the_chapter_total():
+    """⭐⭐ 定向修复那一路**顶不出 `plan_book_band`**——总量钉死，档位只决定怎么分。
+
+    ⚠ 从前这是 `PLAN_REPAIR_OVERRIDE` 里对模型的一句叮嘱。一句叮嘱的守卫强度是
+    「它照做了我们才没事」，而别章的预算它根本看不见 ⇒ 它没有任何办法验证自己。
+    """
+    groups = {2: [['b02_01'], ['b02_02']]}
+    bidx = {'b02_01': {'event': 'a', 'source_chars': 300, 'hinges': [], 'ord': 2},
+            'b02_02': {'event': 'b', 'source_chars': 300, 'hinges': [], 'ord': 2}}
+    plan = {'output_chapters': [{
+        'output_ordinal': 2, 'from_source_ordinals': [2], 'weight': 'major', 'segments': [
+            {'slot': 's01', 'from_beats': ['b02_01'], 'weight': 'peak'},
+            {'slot': 's02', 'from_beats': ['b02_02'], 'weight': 'brush'}]}]}
+    allocate_budgets(plan, groups, bidx, chapter_totals={2: 555})
+    got = [b['budget_chars'] for b in plan['output_chapters'][0]['segments']]
+    assert sum(got) == 555, f'本章总量被改动了：{sum(got)} ≠ 555'
+    assert got[0] > got[1], '总量钉死之后档位就该只管分配——它没有生效'
+
+
+def test_a_chapter_whose_spans_all_failed_is_named_before_any_call_is_made():
+    """⭐⭐ 没有基准就**不许开跑**：那是 stage2 的锚点坏了，重采多少次都修不好。
+
+    ⚠ 不拦在调用之前的话，它会在 `ask_json(validator=)` 里变成一次「响应不合格」，
+    于是整条降级阶梯走到底、每一次都必然失败——**一次纯粹的付费空转**。
+    """
+    groups = {1: [['b01_01']], 2: [['b02_01']]}
+    bidx = {'b01_01': {'event': 'a', 'source_chars': 100, 'hinges': [], 'ord': 1},
+            'b02_01': {'event': 'b', 'source_chars': None, 'hinges': [], 'ord': 2}}
+    per_chapter, _per_unit, gaps = budget_basis(groups, bidx)
+    assert gaps == [2] and 1 in per_chapter, f'没点名是哪一章：{gaps}'
+
+
+def test_a_partly_unknown_chapter_falls_back_to_its_own_median_not_to_zero():
+    """⭐ 部分未知的拍用**本章已知单元的中位数**顶替，不当成 0。
+
+    ⚠ 当成 0 的后果是方向反的：那一拍拿到 1 个字的预算，而它在原文里可能有两百字。
+    ⚠ 这一章的 `budget_band` 本来就走 `unver`（覆盖率残缺），所以顶替不会让任何一条
+    判据拿着一把缩水的尺子打出结论。盘上实测 5 本书 379 个单元里算不出的是 **0 个**。
+    """
+    groups = {1: [['b01_01'], ['b01_02'], ['b01_03']]}
+    bidx = {'b01_01': {'event': 'a', 'source_chars': 100, 'hinges': [], 'ord': 1},
+            'b01_02': {'event': 'b', 'source_chars': None, 'hinges': [], 'ord': 1},
+            'b01_03': {'event': 'c', 'source_chars': 300, 'hinges': [], 'ord': 1}}
+    per_chapter, per_unit, gaps = budget_basis(groups, bidx)
+    assert not gaps
+    assert per_unit['p01_02'] == 300, f'顶替值不是本章已知单元的中位数：{per_unit}'
+    assert per_chapter[1] == 700
+
+
+def test_the_response_side_pattern_matches_exactly_what_the_producer_writes():
+    """⭐⭐ `PLAN_BEAT_ID_PATTERN` 与 `plan_beat_id` 的恒等——**两个落点，一条断言**。
+
+    载体在 `contracts/` 里（那一层不许 import `novel/`），生产函数在 `novel/` 里
+    ⇒ 这条恒等式只有测试能钉。⚠ 三位数的章号必须仍然合法：`plan_beat_id` 用 `:02d`
+    格式化，宽度是**下限不是上限**，写死 `d{2}` 会让一本 100 章以上的书在
+    **一次已经付过钱的响应**上被载体拒收。
+    """
+    import re
+
+    from contracts.schema.stage4 import PLAN_BEAT_ID_PATTERN
+
+    for ordinal, seq in ((1, 1), (9, 12), (23, 7), (100, 3), (137, 99)):
+        assert re.match(PLAN_BEAT_ID_PATTERN, plan_beat_id(ordinal, seq)), \
+            f'生产函数写得出、而载体收不下：{plan_beat_id(ordinal, seq)}'
+    assert not re.match(PLAN_BEAT_ID_PATTERN, 'b01_01'), '把 stage2 的源 beat 编号也收了'
+
+
+def test_the_identity_baseline_never_claims_to_have_picked_a_spine():
+    """⭐⭐ 恒等基线的 `spine` 恒为 `None`，**不是 1**。
+
+    基线的定义就是「一个决策都没做过」，而 `spine` 是拍这一层的决策之一
+    （另一个是分量档 `weight`）。给它 1 会让基线看起来做过一次主次判断——
+    而这份基线正是 `structure_changed` 的反例来源，**反例上多一个决策，那条 HARD 的靶子
+    就软了一格**。
+    """
+    from tests.hard_cases import _BPS4_PRESENT, _MAIN4
+
+    plan = identity_plan(_BPS4_PRESENT, [_MAIN4[0]])
+    spines = [be['spine'] for o in plan['output_chapters'] for be in o['segments']]
+    assert spines and set(spines) == {None}, f'恒等基线自称做过主次决策：{spines}'
+
+
+def test_the_baseline_block_omits_a_null_spine_instead_of_printing_it():
+    """⭐⭐ 反编码：`spine=None` 那一格**整个删掉**，不印 `null`。
+
+    ⚠ 与那三张前缀表是同一件事：基线块必须是一份「照抄就合法」的响应。
+    `PlanBeatResponse.spine` 是必填的，把 `null` 印进基线块，就是在同一份 user 里让
+    system 与基线互相打脸——模型照基线抄，schema 当场拒，**而那一拒要花一次钱才看得见**。
+    """
+    from novel.stages.stage4.measure import encode_plan_baseline
+
+    kept = encode_plan_baseline({'segments': [
+        {'delivery': 'scene', 'spine': 2, 'from_beats': ['b01_01', 'b01_02']},
+        {'delivery': 'summary', 'spine': None, 'from_beats': ['b01_03']}]})
+    # ⚠⚠ 顺带钉住**类型也要翻回去**：产物侧存下标、响应侧收 `beat_id`，
+    #   基线块里印一个数字，模型照抄就是一次 schema 拒（同一格的错，只是错在类型）。
+    assert kept['segments'][0]['spine'] == 'b01_02'
+    assert 'spine' not in kept['segments'][1]
 
 
 # ── 七、恒等基线 ──────────────────────────────────────────────────────────

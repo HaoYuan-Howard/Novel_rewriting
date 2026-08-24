@@ -101,7 +101,18 @@ ORDER_RULE = """\
 - 第一拍若是 `cold_open`，正文第一句就进入它的冲突或结果，不要先补背景；背景只在后续指定单元出现。
 - `cold_open` 只改变从哪件事起笔，**不要求短句、碎段或一句一段**。句长、段长、对白密度仍须服从
   文风画像；一个 `scene` 也不是一段，按本书原有节奏自然组织句段。
-- 相邻两拍可以写成连贯的一段，但它们在正文里出现的先后必须照计划。"""
+- 相邻两拍可以写成连贯的一段，但它们在正文里出现的先后必须照计划。
+
+【一拍是一个叙述单位，不是一张待办清单】
+- 一拍下面列的每一条都要在正文里成立、都要留下痕迹，但**不要一条一句地各写一遍**：
+  一个 `scene` 拍是一段连贯的场面，一个 `summary` 拍是一两句合并交代。
+  **逐条对译写出来的是事件流水，不是小说**——同样几件事，读者要的是其中一件被演到底，
+  其余的靠它带出来。
+- 但**一拍之内，编号的先后仍是它们在正文里出现的先后**：可以揉进同一段、可以详略悬殊，
+  不要倒着写。
+- 篇幅在拍与拍之间**本来就不平均**：`scene` 拍的【约 N 字】是让你把它演开，
+  `summary` 拍的【约 N 字】是让你把几件事压过去。按每一拍自己的那个数写，
+  不要把整章的字数平摊到每一条事实上。"""
 
 #: 写法词的拆弹指令。**两条臂共用**。
 #:
@@ -337,14 +348,35 @@ def prev_context(entry: dict[str, Any], book: M.Book) -> str | None:
       · 每一章都只该依赖**计划**。拿上一章的成稿当输入，写手会顺着自己刚写的东西续，
         而不是照计划写；上一章编出来的东西会被下一章继承并强化（误差沿章累积）。
       · 章与章之间因此变成串行依赖，既不能并行、也不能单章重写而不影响后面。
-    连贯性由计划承担：上一章的目标 + 结尾要达到什么 + 它写了哪几拍，足够知道从哪儿接。
+    连贯性由计划承担：上一章的目标 + 结尾要达到什么 + 它停在哪个场面上，足够知道从哪儿接。
+
+    ⚠⚠ **2026-08-22 收窄：不再逐条列上一章每一拍的每一条 event。**
+    `CtxBeat.events[]` 的信息密度实测是源章正文的 **87%** ⇒ 那份清单等于**把上一章
+    整章重讲一遍再附在本章下发面后面**。全书闭卷（默认深度 = 全部计划章）之后，
+    这是继本章 `chapter_facts` 之外**第二个淹没下发面**的地方，而它承担的职责只有
+    「从哪儿接」这一件事——那件事由三个 goal 加**末拍**回答得更准。
+    ⇒ 只给：上一章的 `chapter_goal` + `end_hook_goal` + **最后一拍**的材料。
+
+    ⚠ **不给「上一章覆盖过什么」的完整清单，是一次有意的取舍，不是遗漏。**
+    防重复本来就不靠这份清单：`one_to_one` 让第 N 章对应源第 N 章
+    （实测 18/18 章 `from_source_ordinals == [自身]`），本章与上一章的材料集**不相交**；
+    而本章该写什么由本章的 `chapter_facts` 唯一决定，`FIDELITY_RULE` 禁止补事件。
+    ⚠ **证伪它的读数**：若成稿开始把上一章已经交代过的事再立一遍
+    （`stage5.review` 的 `event_landing` 与人读稿都看得见），把更多拍加回来。
+
+    ⚠ 批 3 的 `PlanBeat.spine` 落地之后，这里可以从「只有末拍」升级成「每拍的主干那一条」
+    ——那才是计划真正做过的决定。**在 `spine` 存在之前不许拿第一条冒充主干**：
+    「这份计划没记主干」与「主干是第一条」必须分得开。
     """
     pe = book.chapters.get(int(entry['output_ordinal']) - 1)
     if not pe:
         return None
     bits = [f"上一章的目标：{_goal_directive(pe.get('chapter_goal'))}"]
-    bits += [f'· {e}' for be in (pe.get('segments') or [])
-             for e in (be.get('events') or []) if (e or '').strip()]
+    tail = [be for be in (pe.get('segments') or []) if be]
+    if tail:
+        last = [e for e in (tail[-1].get('events') or []) if (e or '').strip()]
+        if last:
+            bits.append('它停在这里：' + '；'.join(last))
     if pe.get('end_hook_goal'):
         bits.append(f"上一章结尾停在：{_goal_directive(pe['end_hook_goal'])}")
     return '── 上一章写了什么（仅供衔接，不要复述、不要接着展开它）──\n' + '\n'.join(bits)
@@ -379,33 +411,101 @@ _TRANSITION_CN = {
 }
 
 
+def _unit_rule(delivery: str, budget: int, n_events: int, spine: int | None = None) -> str:
+    """这一拍的**执行规则**：`scene` 演开、`summary` 合并交代，外加**哪一件是主干**。
+
+    ⚠⚠ **这是「句子单位从 event 上移到拍」的落点**（2026-08-22）。此前每一拍只写
+    「要写这 N 件事：」，而 `CtxBeat.events[]` 的信息密度实测是源章正文的 **87%**
+    （去标点 7716/8821，8 章超 100%）——一份 N 条事实的编号清单，配上等于源章的
+    字数预算，**最省力的写法就是一条一句地对译**，成稿必然是原文的等密度重述。
+    实测印证：成书对源章的整句照搬率 50.4%（开卷臂 55.4%、闭卷臂 18.2%），
+    而 290 条照搬句里只有 60 条是 `verbatim` 制度要求的。
+    ⚠ 而 events 自己的 10 字窗只有 **7%** 取自原文 ⇒ **它不是抄，是等信息量的逐句转述**；
+    「只改了措辞」在交给写手之前就已经发生过一次。
+    ⇒ 这里改的不是给什么材料，是**给材料的名分**：一拍是一个叙述单位，
+    拍下面那几条是材料不是句子。
+
+    ⚠ **`events` 一条都不删、也不合并**：合并这件事早先是在计划层让 LLM 做的，
+    实测既造事实（「某人身边人」→「某家丫头」）又丢内容——相似度中位 0.84、最低 0.44
+    （`novel/stages/stage4/context.py` 记着那次事故，`ctx_events_verbatim` HARD 为它而设）。
+    ⚠ 也**不许把 events 降级成「只做事实校验的参照」**：闭卷写手能写的只有三样——
+    三个 goal（章级）、离散保真点（点不是内容）、`events`；降级之后它没内容可写，
+    而 `FIDELITY_RULE` 禁止发明。**换的是单位，不是地位。**
+
+    ⚠⚠ **换单位不等于授权拍内重排。** `checks.segment_event_findings` 有一条拍内顺序臂
+    （「slot 内可确定性定位的事件顺序与 producer 顺序相反」→ `event_landing`）。
+    「揉成一个场面」天然会诱发拍内重排，所以 `ORDER_RULE` 里配了一句
+    「一拍之内，编号的先后仍是它们在正文里出现的先后」把它钉住——**两句话是一对，
+    删一句就等于悄悄授权了重排**。真要授权拍内重排，得连那条顺序臂一起改
+    （带非默认主次标记时落 `event_landing_unver`），那是一次单独的、要带读数的裁决。
+
+    ⚠⚠ **`spine` 是那一对的第三句**（2026-08-22，批 3）。批 1 把句子单位从 event 上移到拍，
+    但拍**内部**仍是一张平权清单——而平权清单最省力的写法还是逐条对译，
+    「一件事一句话」只是从章级退到了拍级。`spine` 说的是拍内主次：主干那件演开，
+    其余几件是它的前提、后果或背景。
+    ⚠ 而**主次最容易被读成顺序**：「以第 3 件为主干」离「把第 3 件写到最前面」只有一步，
+    那一步跨过去就是 `event_landing`。所以主干那句话后面**必须**紧跟一句
+    「落笔先后仍按编号」——它与 `ORDER_RULE` 那句不是重复，是在最容易破防的那一格上重申。
+    ⚠ `spine is None`（恒等基线、存量 ctx）或只有一件事时**一个字都不说**：
+    一件事的拍标「主干是第 1 件」是纯噪音，而噪音会稀释旁边那几条真规则。
+    """
+    if delivery == 'summary':
+        if n_events <= 1:
+            return f'用约 {budget} 字把下面这件事**交代过去**，不要演成场面。'
+        head = (f'用约 {budget} 字把下面这 {n_events} 件事**合并交代过去**：'
+                f'不要演成场面、不要给它们各写一句。')
+        return head + (
+            f'其中**第 {spine} 件是这一拍真正要留下的那一件**，别把它压没了；'
+            f'其余几件带过即可。落笔先后仍按下面的编号。'
+            if spine is not None else '')
+    if n_events <= 1:
+        return (f'把这一拍写成**一个场面**（约 {budget} 字）。'
+                f'下面这件事要在场面里成立、要留下痕迹——它是材料，不是一句话。')
+    head = (f'把这一拍写成**一个连贯的场面**（约 {budget} 字）。'
+            f'下面 {n_events} 件事都要在这个场面里成立、都要留下痕迹，'
+            f'但**不要一条一句地各写一遍**——它们是材料，不是句子。')
+    return head + (
+        f'**以第 {spine} 件为主干把这个场面演开**——它是本拍的重心；'
+        f'其余几件是它的前提、后果或背景，融进去，不要各占一段。'
+        f'⚠ 主干说的是**分量**不是**位置**：落笔先后仍按下面的编号。'
+        if spine is not None else '')
+
+
 def chapter_facts(entry: dict[str, Any]) -> str:
-    """本章要写的每一拍：内容 + 篇幅 + 舞台 + 必须守住的原文材料。
+    """本章每一拍的**材料**：篇幅 + 执行规则 + 舞台 + 必须守住的原文材料。
 
     每一拍带**自己的** `budget_chars`（不是相对分量）——写手按「拍」落笔，拍上的字数是它
     唯一对得齐的东西；只给整章区间时它稳定按每拍 56~94 字写，**与目标无关**。
 
     四组原文材料按 kind 分开列、各带各的指令（`HINGE_LABEL`）：它们要守的维度不同。
     ⚠ 这是**闭卷写手拿到原文的唯一通道**——转述必然丢掉「改一个字就废」的那一维。
+
+    ⚠⚠ **保真点原地不动，只有 events 换了单位**（2026-08-22，见 `_unit_rule`）。
+    四组保真材料仍挂在**它所属的那一拍**下渲染。把它们从拍上剥离、或挪到块尾统一列，
+    写手会丢引号句 ⇒ `verbatim_missing`（HARD）直接把这一章打进 `.INVALID`。
     """
     lines: list[str] = []
     for i, be in enumerate(entry['segments'], 1):
         b = be['budget_chars']
         slot = str(be['slot'])
+        raw_delivery = str(be.get('delivery') or 'scene')
         role = _ROLE_CN.get(be.get('narrative_role'), be.get('narrative_role') or '过渡')
-        delivery = _DELIVERY_CN.get(be.get('delivery'), be.get('delivery') or '场景展开')
+        delivery = _DELIVERY_CN.get(raw_delivery, raw_delivery)
         transition = _TRANSITION_CN.get(be.get('transition'), be.get('transition') or '连续')
         head = (f'{i}. 【slot={slot}；约 {b} 字；叙事作用={role}；'
                 f'承载={delivery}；衔接={transition}】')
-        # 一拍可能由好几条内容并成。**逐条列，不合并成一段散文**：合并这件事早先是在计划层
-        # 让 LLM 做的，实测既造事实（「某人身边人」→「某家丫头」）又丢材料。
-        # 编号与 `_stage_line` 的 ①②③ 同序（都按源拍展开），跨层时第 n 件事配第 n 段舞台。
+        # 一拍可能由好几条材料并成。**逐条列，不合并成一段散文**（理由见 `_unit_rule`）。
+        # ⚠ 编号与 `_stage_line` 的 ①②③ **同序**（都按源拍展开），跨层时第 n 件事配
+        #   第 n 段舞台 ⇒ 编号在这里是**舞台锚点**，不是「N 条 ⇒ N 句」的清单序号。
+        #   正因如此它在 `summary` 拍上也保留：合并交代的是内容，不是舞台对应关系。
         evs = [e for e in (be.get('events') or []) if (e or '').strip()]
-        if len(evs) > 1:
-            lines.append(head + f'要写这 {len(evs)} 件事：' + _stage_line(be))
+        # ⚠ `spine` 数的是 `events[]` 的下标，而这里渲染的是过滤后的 `evs`——两者恒等由
+        #   `CtxBeat` 那条「events 不许有空条目」的载体闸保证（`contracts/schema/stage4.py`）。
+        #   **不在这里补一个 min() 或 try**：那会把「口径已经分家」压成「主干指了另一件事」。
+        lines.append(head + _stage_line(be))
+        if evs:
+            lines.append('   ' + _unit_rule(raw_delivery, b, len(evs), be.get('spine')))
             lines += [f'   {n} {e}' for n, e in zip('①②③④⑤⑥', evs)]
-        else:
-            lines.append(head + (evs[0] if evs else '') + _stage_line(be))
         for key, label in HINGE_LABEL.items():
             for t in (be.get(key) or []):
                 lines.append(f'     · {label}：{(t or "").strip()}')
@@ -668,7 +768,17 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
         + (f'；写法密度基线：{density}' if density else '')
         + '。写完回看：你的句段或任一写法密度若明显高于基线，就是写成了另一本书。',
         dialogue_block(entry, book, with_source_text=with_source_text),
-        '── 本章要写的内容（按顺序；**只写这些**，不得新增剧情、也不要写别的章的事）──\n'
+        # ⚠⚠ **块头此前把 events 直接命名为「要写的内容」**，而它们的信息密度实测是
+        #   源章正文的 87% ⇒ 那句话在物理上就是「把这 N 条各写一句」。改成「材料」是
+        #   2026-08-22 那次「句子单位从 event 上移到拍」的**块级一半**，
+        #   逐拍那一半在 `_unit_rule`。
+        # ⚠ **「只写这些」这条保真边界不删，只是挂回它真正守的东西上**：它守的是
+        #   「不得新增事实」，那是**事实的属性**，不是句子单位的属性 ⇒ 措辞从
+        #   「只写这些」改成「事实只有这些」，边界一个字没松。
+        '── 本章的材料（按拍分组；**拍的先后就是落笔的先后**）──\n'
+        '⚠ 每一拍下面列的是【事实材料】，不是【要写的句子】。**事实只有这些**：'
+        '不得新增剧情，也不要写别的章的事；但一条事实写成半句、一句还是三句，'
+        '由这一拍的「承载」与篇幅决定。\n'
         + chapter_facts(entry),
         '── 人物（用这些名字，不要改名、不要另造称呼）──\n'
         + _compact(writer_chars(entry, book)),

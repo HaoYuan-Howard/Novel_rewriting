@@ -28,11 +28,32 @@ def test_metric_is_separate_from_info():
     assert 'info' in inv.SEVERITY
 
 
+#: 这些 tuple **不是取值面**，是**序列**——同一个值出现两次是它们的语义，不是笔误。
+#: ⚠ 白名单一条一行、写明它是什么，别写成一句「有些表允许重复」：那样下一个真写重的
+#: 取值面就会顺着这条口子进来。
+_ORDERED_SEQUENCES_NOT_DOMAINS = {
+    # 候选配方：按槽位逐条指定写法，当前是 payoff_preview ×1 + scene_punchline ×2。
+    # 它的取值面是 `HOOK_APPROACHES`（那一张仍然不许重复，下面照查）。
+    'HOOK_RECIPE',
+}
+
+
 def test_no_duplicates_in_any_tuple_domain():
     for name in dir(inv):
         value = getattr(inv, name)
+        if name in _ORDERED_SEQUENCES_NOT_DOMAINS:
+            continue
         if name.isupper() and isinstance(value, tuple) and value and isinstance(value[0], str):
             assert len(set(value)) == len(value), f'{name} 里有重复值：{value}'
+
+
+def test_every_whitelisted_sequence_still_lives_inside_a_real_domain():
+    """⚠ 白名单不是豁免：序列里的每个值仍必须属于某个**真取值面**。
+
+    少了这一条，`_ORDERED_SEQUENCES_NOT_DOMAINS` 就成了「这张表不受查」的后门。
+    """
+    assert set(inv.HOOK_RECIPE) <= set(inv.HOOK_APPROACHES)
+    assert len(set(inv.HOOK_APPROACHES)) == len(inv.HOOK_APPROACHES)
 
 
 def test_nonbody_kinds_never_collide_with_end_markers():
@@ -107,15 +128,21 @@ def test_unmeasured_nodes_keep_the_default_high_effort():
     assert inv.NODES['stage7.rename'].effort is None
 
 
-def test_the_judge_node_pins_its_model_and_is_the_only_pinned_one():
-    """⚠ `NodeSpec.model` 是「除判官外全链 flash」这个裁决的**形状**落点（2026-08-19/20）。
+def test_the_two_pinned_models_are_exactly_the_two_decided_exceptions():
+    """⚠ `NodeSpec.model` 是「除例外外全链 flash」这个裁决的**形状**落点。
 
-    `stage6.semantic` 钉死 `deepseek-v4-pro` ⇒ `DEEPSEEK_MODEL` / 全局默认都换不掉它
-    （忘带环境变量烧不成 flash 判官）；其余节点必须保持 `''` = 跟随全局默认——
-    多一个钉死值就少一个 A/B 换臂的口，那一格只许给产品裁决过的例外用。
+    钉死两个，**理由不是同一个**（不许互相援引，见 `NodeSpec.model` 的注释）：
+      · `stage6.semantic`（2026-08-19/20）——flash 判官给不出有区分度的证据。
+      · `stage4.plan`（2026-08-22）——**重采粒度**：全链唯一一个全书一次调用的
+        生成节点，一次 `answer_lost` 重采就是整本书（flash@high 实测 43.3%）。
+    其余节点必须保持 `''` = 跟随全局默认——多一个钉死值就少一个 A/B 换臂的口，
+    那一格只许给产品裁决过的例外用。
     """
     pinned = {node: spec.model for node, spec in inv.NODES.items() if spec.model}
-    assert pinned == {'stage6.semantic': 'deepseek-v4-pro'}
+    assert pinned == {
+        'stage6.semantic': 'deepseek-v4-pro',
+        'stage4.plan': 'deepseek-v4-pro',
+    }
 
 
 def test_free_nodes_are_the_ones_without_llm():

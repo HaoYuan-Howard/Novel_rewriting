@@ -145,6 +145,9 @@ def _require_mapping_current(
 
 def read_current_book(ctx: RunContext) -> str:
     """Return the delivery only when every approval/freshness binding is current."""
+    # 下载是交付的一部分；已有 txt 不能绕过后来变红/变旧的 Stage2 人工闸。
+    from novel.stages.stage2 import global_review
+    global_review.require_approved(ctx)
     store = ArtifactStore(ctx)
     if not store.exists(REL):
         raise UpstreamMissing(f'{REL} 不在盘上', hint='先跑 stage7.rename')
@@ -198,6 +201,8 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     ⚠ 「文案未定稿」也是四类之一，而**正因为这道闸挡在前面**，
     「成书里没有开篇文案」这一态**结构上不可达** ⇒ `book_txt.has_hook` 已按待决④ 裁掉。
     """
+    from novel.stages.stage2 import global_review
+    global_review.require_approved(ctx)
     store = ArtifactStore(ctx)
     if not store.exists(REL):
         raise UpstreamMissing(f'{REL} 不在盘上', hint='先跑 stage7.rename')

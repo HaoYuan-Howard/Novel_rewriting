@@ -33,8 +33,18 @@ stage6/hook_edit.json        人工编辑一条候选或定稿的决策集
 stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 记账，纯 0 成本）
 ```
 
-本层全部产物——`hook.json` 与轮次归档、`hook_edit.json`、`semantic_<n>.json`、`wontfix.json`
-——**都是 schema v1**（全仓恒 v1，见 `_README.md`「版本与路径注册表」）。
+本层产物分两档（见 `_README.md`「版本与路径注册表」；本仓**没有迁移机制**，
+破坏形状就 +1 并同批回答「存量由谁重建」）：
+
+- `hook.json` 与轮次归档、`hook_edit.json` ——**都是 schema v2**。
+  2026-08-23 一次破坏：候选身份与策略名解耦（`ApprovedHook.approach` /
+  `HookCandidateRetry.approach` → `slot`，`HookEdit.candidate` 的取值面换成位置身份）。
+  ⚠ 破坏的理由是结构性的：同一种策略采两条样本时，`approach` **答不出
+  「这份定稿是从哪条候选来的」**，而标签、wontfix 证据键与判官的 `judged_texts`
+  键全挂在那个答案上。存量重建代价见 `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
+  `outputs/_ab/flash/` 下两份 v1 实验快照已明确退役为只读历史证据：不属于 current-schema
+  corpus，当前运行时拒读，原字节不删除；现役交付须由 producer 重建 v2 后重新人工定稿。
+- `semantic_<n>.json`、`wontfix.json` ——**都是 schema v1**。
 
 ### 2.1 `hook.json`
 
@@ -42,7 +52,7 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 |---|---|---|
 | `lead_upto` | `int >= 1` | 连续开篇成稿下发上界；全书结构地图不受此上界限制 |
 | `rationale` | `str` | 三条候选各自押注的吸引点 |
-| `candidates` | `Candidate[3]` | 三种当前策略各一条，文本不得重复 |
+| `candidates` | `Candidate[3]` | 按当前逐槽配方产三条；策略可重复，归一后的文本不得重复 |
 | `approved` | `ApprovedHook \| null` | 人工定稿；进入成书的第一段 |
 | `sources.writer_context` | `ContextSource` | 写作上下文来源状态 |
 | `judged` | `{path: JudgedDraft}` | 生成时使用的开篇成稿及其消费指纹 |
@@ -52,30 +62,37 @@ stage6/wontfix.json          人的「这条我不修」（可选；`--wontfix` 
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `approach` | 枚举 | 三个当前策略之一，见 §三 |
+| `approach` | 枚举 | `HOOK_APPROACHES` 的一个取值；当前配方及退场取值见 §三 |
 | `text` | 非空 `str` | 归一后的文案字节 |
 | `mech` | `Mech` | 标点、引号、分段归一的计数 |
 | `findings` | `Finding[]` | 该候选的机械判定；候选不属于正文章，`output_ordinal` 恒为 `null` |
 
-`ApprovedHook = Candidate + origin='human' + resolution`。`resolution` 必须记录自报
+`ApprovedHook = slot + text + origin='human' + mech + findings + resolution`。`resolution` 必须记录自报
 `actor`（不是认证身份）、非空 `reason`、定稿文本的完整 `subject_sha256`、
 恒为 `human_verification` 的判定基础，以及可用的语义审判序号
-（`semantic_review_seq` 可空——「人在零证据下拍的板」与「人读了第 3 轮判官证据」必须分得开）。`approach` 还可为
-`human_edit`；从既有候选编辑时保留其 approach，没有候选前身才写 `human_edit`。
+（`semantic_review_seq` 可空——「人在零证据下拍的板」与「人读了第 3 轮判官证据」必须分得开）。`slot` 记的是**从哪一条候选来**（位置身份 `c1`/`c2`/`c3`）；
+`None` = 没有候选前身（人手写）。⚠ 它曾是 `approach`（策略名 + 一个 `human_edit`），
+而同一种策略采两条样本时策略名**答不出「是哪一条」**——那正是定稿要回答的问题。
+策略名没有丢：由 `candidates[slot].approach` 现算（能 0 成本现算的字段不落盘）。
+「它是不是人写的」由 `origin` 回答，与「有没有前身」是两件事。
 `hook_edit.json` 的 `subject_sha256` 必须绑定经过本书标点、引号与分段归一链后的定稿文本；
 校验发生在 `run_apply_edit` 写盘前，并复用与普通候选批准相同的字节绑定闸，
 不能用 raw 上传字节的哈希绕过。
 
 `HookProvenance.params` 除初始 `max_tokens` 外，还冻结单候选重试的 max tokens、固定一次上限、
-`low` effort 与 `thinking=false`；`candidate_retries[]` 逐条保存 approach、失败规则/证据指纹、
+`low` effort 与 `thinking=false`；`candidate_retries[]` 逐条保存 `slot`（哪一条候选被重试，不是哪种策略）、失败规则/证据指纹、
 user/response 指纹、前后 HARD 数、cache policy、状态、是否采纳与失败理由。发生重试时
 `prompts.HOOK_RETRY_SYS` 必须存在；没有脏候选时该键与历史均为空。
 
 初始三候选归一并机械判定后，每条命中 HARD 的候选恰好获得一次 refresh-write 定向重试；
-请求只允许返回原 approach，并看见完整事实包、整组三候选和该候选的具体 HARD 证据。只有重试后
+定位靠 `target_slot`（位置身份，唯一能选中一条候选的键）；请求只允许返回该条原有的 approach，
+并看见完整事实包、整组候选和该候选的具体 HARD 证据。只有重试后
 HARD 数严格下降且文本不与另两条重复时才替换该候选和整组 rationale；wrong approach、请求失败、
 重复或 HARD 未下降均保留已经付费取得的初始候选，并把原因写入重试账。调用数因此是
 `1 + 初始脏候选数`，不再把“初始一次调用”误写成整条路径的成本上限。
+若 wire 上互异的候选在归一后收敛成同一文本，producer 把完整付费产出落
+`hook.INVALID.json` 并明确报出重复槽位；人改开至少一条后走 `--revalidate` 0 LLM 提升，
+不能用一次无落盘的终态把缓存里的有效响应永久锁死。
 
 ### 2.2 `semantic_N.json`
 
@@ -114,17 +131,27 @@ HARD 数严格下降且文本不与另两条重复时才替换该候选和整组
 
 结果裁到 0~10，保留两位小数。
 
-## 三、候选策略
+## 三、候选身份与候选配方
 
-生成响应必须恰好覆盖：
+**候选的身份是位置**（`HOOK_SLOTS = c1 / c2 / c3`），策略只是它的一个属性，**可以重复**。
+两者曾是同一个东西（「三种策略各一条」），2026-08-23 拆开。
 
-| approach | 功能 |
-|---|---|
-| `source_architecture` | 最大程度保住原作文案已经验证有效的结构与最后一击，换成正文声线和新措辞 |
-| `payoff_preview` | 从全书挑最有吸引力的后期兑现/反转，制造“怎么走到这一步”的阅读欲 |
-| `scene_punchline` | 用可视可听的场面或对白砸出核心关系，以人物反应、危险或笑点收尾 |
+当前配方 `HOOK_RECIPE`（`contracts/invariants.py` 是唯一落点）：
 
-`HookResponse` 的模型级 validator 保证三种策略各一次、三条文本不重复。
+| 位置 | approach | 功能 |
+|---|---|---|
+| `c1` | `payoff_preview` | 从全书挑最有吸引力的后期兑现/反转，制造“怎么走到这一步”的阅读欲 |
+| `c2` | `scene_punchline` | 用可视可听的场面或对白砸出核心关系，以人物反应、危险或笑点收尾 |
+| `c3` | `scene_punchline` | 同上，但 prompt 现算出一句硬要求：**必须锚在与 `c2` 不同的事件上** |
+
+`HookResponse` 的模型级 validator 按列表位置逐槽校验 `HOOK_RECIPE`，并要求三条 wire 文本不重复；
+producer 在归一后、落盘前再守一次正式文本唯一性。这里**不是**「每种策略各一次」——
+后者在配方允许重复之后本身就是错的口径。
+
+**已退场**：`source_architecture`（保住原作文案已验证的结构与最后一击）。
+它仍留在 `Candidate.approach` 的取值面 `HOOK_APPROACHES` 里，因为盘上有存量产物；
+但它在 `HOOK_RETIRED_APPROACHES` 上，排进配方会在 import 期当场断言失败，
+出现在模型响应里会被配方校验器打回。
 
 ## 四、生成材料
 
@@ -182,7 +209,7 @@ validator 必须确认：
 
 `--revalidate --actor <id> --reason <why>` 与 `--apply-edit` 不能互换：前者对活动 `.INVALID`
 重建派生字段、重判并强审计提升，保留原 prompts/model/inputs 与生成轮次，记录 raw/canonical
-SHA-256、RFC 6901 改动路径和 `edited_by_human`；后者消费 v1 `hook_edit.json`，归档当前正式
+SHA-256、RFC 6901 改动路径和 `edited_by_human`；后者消费 v2 `hook_edit.json`，归档当前正式
 hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本身份自动过期。两条都是 0 次 LLM
 调用，但 apply-edit 的人工内容工作量不等于零。
 
@@ -205,7 +232,7 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 
 ## 六、现役判据
 
-当前注册表共 **22 条**：**5 hard、8 info、5 metric、4 unver**。
+当前注册表共 **23 条**：**5 hard、8 info、6 metric、4 unver**。
 
 | 判据 | 级别 | 作用 |
 |---|---|---|
@@ -226,6 +253,7 @@ hook 并形成一轮新的局部人工修订，改字后原 semantic 按文本�
 | `hook_quote_shape` | metric | 引语条数、最长引语、对白比 |
 | `hook_secret_literal` | metric | 与 secret 原文的字面重合读数，不是剧透门 |
 | `hook_fact_attribution` | metric | 人物赠与类事实的弱字面归因读数 |
+| `hook_source_distance` | metric | 与原作文案段的呈现结构距离：多档窗口重合率 · 最长逐字重合 · 末行重合。**度量不是门**——它补的是 `hook_reuses_source` 看不见的那一带（逐句改写措辞、却复用信息出场顺序并落在同一句收尾上，那道 20 字闸报 0 违规）。结构贴近本身不违约（`R-9.11` 尾注明许学结构），读数是给人裁决策略去留与定稿取舍的依据 |
 | `hook_quality_rank` | metric/semantic | 六维分、代码总分与匿名排序 |
 | `hook_semantic_contradiction` | unver/semantic | ⚠ **它永远产不出 Finding**：合并决议在类型上恒 `UNVER`，实现只有一条 `unverifiable(...)` 出口。曾是 HARD（靠 automated FAIL 阻断），随自动放行门下线降级。⇒ 它报的是「这条够不着，去读判官证据」，不是「查过没问题」 |
 | `hook_not_approved` | unver | 是否已有人工定稿 |

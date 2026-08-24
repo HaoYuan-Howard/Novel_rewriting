@@ -295,10 +295,13 @@ export interface Stage1Chapter {
   source_chapter_no: number
   chars: number
   preview: string
+  label_delta: number | null
+  anomaly: ChapterLabelAnomaly | null
 }
 
 export interface Stage1Chapters {
   chapters: Stage1Chapter[]
+  anomaly_count: number
 }
 
 export interface Stage1HookCopy {
@@ -879,7 +882,14 @@ export interface HookCandidate {
 }
 
 export interface HookApproved {
-  approach: string
+  /**
+    * 从**哪一条候选**来的（位置身份 `c1`/`c2`/`c3`）；`null` = 没有前身（人手写）。
+    * ⚠ 这里曾是策略名 + 一个 `human_edit`。同一种策略可以有不止一条候选 ⇒
+    * 策略名答不出「是哪一条」，而定稿要回答的正是这个。
+    */
+  slot: string | null
+  /** 那条候选用的什么策略（服务端现算）；`slot` 为 null 时同为 null。 */
+  approach: string | null
   chars: number
   text: string
   origin: string
@@ -1025,12 +1035,23 @@ export interface InboxItem {
   rule: string
   what: string
   how: string
+  attention: 'pending' | 'reviewed_retained'
+  delivery_effect: 'blocking' | 'disclosure'
+  decision: {
+    actor: string
+    reason: string
+    subject_sha256: string
+    state: string
+    decided_at: string
+  } | null
 }
 
 export interface InboxResponse {
   items: InboxItem[]
   /** 八键全出（0 也要出） */
   counts: Record<InboxKind, number>
+  attention_counts: Record<'pending' | 'reviewed_retained', number>
+  delivery_counts: Record<'blocking' | 'disclosure', number>
   total: number
   wontfix: number
 }

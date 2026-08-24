@@ -584,6 +584,9 @@ def numbered_rounds(novel_dir: str | os.PathLike[str], pattern_rel: str) -> list
 #: **它不是一本书**——`iter_novel_dirs` 靠 `_` 前缀把它跳过。
 SERVICE_DIRNAME = '_service'
 
+#: 可恢复项目删除的唯一落点。回收站不参加 `iter_novel_dirs()`，也不冒充小说产物。
+TRASH_DIRNAME = 'trash'
+
 #: 界面上传的原文长期保留在 `<base>/_service/uploads/<sha256(原始字节)>/<原文件名>`。
 #: 目录名**就是内容地址**，产地只有一个：`novel/orchestrator/uploads.py::save_upload`。
 UPLOADS_DIRNAME = 'uploads'
@@ -599,6 +602,11 @@ _ANY_SEP = re.compile(r'[\\/]+')
 def service_dir(base: str | os.PathLike[str]) -> Path:
     """`<base>/_service/`。服务自己的东西的**唯一落点**，产物一律不进这里。"""
     return Path(os.fspath(base)) / SERVICE_DIRNAME
+
+
+def trash_dir(base: str | os.PathLike[str]) -> Path:
+    """项目回收站：`<base>/_service/trash/`。"""
+    return service_dir(base) / TRASH_DIRNAME
 
 
 def uploads_dir(base: str | os.PathLike[str]) -> Path:
@@ -631,3 +639,32 @@ def uploaded_source_tail(recorded: str | os.PathLike[str]) -> tuple[str, str] | 
     if not _CONTENT_ADDRESS.fullmatch(digest):
         return None
     return digest, name
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 四、诊断留证：`<书目录>/_answer_lost/`
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: 「答案流丢失」那一份的留证目录（`novel/llm/client.py` 模块 docstring ①：正文空、
+#: 非截断、整段答案写进了 `reasoning_content`）。**一次一份文件**，文件名就是
+#: `attempt_id` ⇒ 与成本账那一行、采纳审计账那一行靠同一个 id 联结。
+#:
+#: ⚠⚠ **它刻意【不】进 `<base>/_service/`。** 那份推理里装的是**这本书的正文**
+#: （答案本来就该写进 `content`，只是走错了通道）⇒ 跟书走：删书即删证据，
+#: 而跨书的服务目录里至今一个字正文都没有——这条不该由一份诊断来打破。
+#: `_` 前缀与 `_rounds` / `_revalidation` 同类：它不是产物，完成度与阶段视图不看它。
+#:
+#: ⚠ 留证是**只写不读**的：救场仍然禁止从 `reasoning` 里把答案抠出来
+#: （抠回来的是半成品，见 `novel/llm/transport.py::ChatResponse.reasoning`）。
+#: 它只回答「那条通道里到底装了什么」——在此之前这个问题只能拿 token 体积去猜。
+ANSWER_LOST_DIRNAME = '_answer_lost'
+
+
+def answer_lost_rel(attempt_id: str) -> str:
+    """留证文件相对**书目录**的路径。审计账里存的就是它——绝对路径换台机器就断。"""
+    return f'{ANSWER_LOST_DIRNAME}/{attempt_id}.json'
+
+
+def answer_lost_path(novel_dir: str | os.PathLike[str], attempt_id: str) -> Path:
+    """`<书目录>/_answer_lost/<attempt_id>.json`。形状只有 `answer_lost_rel` 一处。"""
+    return Path(os.fspath(novel_dir)) / answer_lost_rel(attempt_id)

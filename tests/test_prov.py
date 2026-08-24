@@ -349,3 +349,52 @@ def test_code_version_is_asked_again_for_every_run(monkeypatch):
     assert prov.code_version() == 'a' * 40
     assert len(calls) == 2, '第二次没有重新问 git —— 答案被固化到了进程上，而不是这一次跑上'
     assert not hasattr(prov.code_version, 'cache_info'), '`lru_cache` 又回来了'
+
+
+def test_an_untracked_nested_directory_does_not_erase_the_code_identity(monkeypatch):
+    """⭐ **仓根有一个 `.worktrees/` 就让 `code_version()` 恒 `unknown`。**
+
+    `git ls-files --others` 把「整块未跟踪的目录」折叠成一条**目录项**，链接
+    worktree / 嵌套仓库尤其如此（git 明确拒绝 descend 进去）。原来那一行直接
+    `open()` 它，目录 `open` 抛 `PermissionError` ⇒ 摘要 `None` ⇒ 身份 `unknown`。
+    实测形态最坏的地方在于它**不报错**：本机产出的每一份产物都把 `code` 记成
+    `unknown`，而这一格的全部价值就是回答「这次跑用的是哪版代码」。
+    """
+    commit = b'b' * 40 + b'\n'
+
+    def _fake_git(*args: str):
+        if args[0] == 'rev-parse':
+            return commit
+        if args[0] == 'diff':
+            return b''
+        return b'.worktrees/some-linked-worktree/\0'
+
+    monkeypatch.setattr(prov, '_git', _fake_git)
+    got = prov.code_version()
+    assert got != prov.CODE_UNKNOWN, (
+        '未跟踪的嵌套目录把代码身份抹成了 unknown —— '
+        '「不知道」被安静地写进了每一份产物的 `code`')
+    assert got.startswith('b' * 40 + '-dirty.'), got
+
+
+def test_a_nested_directory_still_changes_the_identity(monkeypatch):
+    """目录项按名字入摘要：它出现/消失仍然改变身份，只是不假装读得到内容。"""
+    commit = b'c' * 40 + b'\n'
+
+    def _git_with(untracked: bytes):
+        def _fake(*args: str):
+            if args[0] == 'rev-parse':
+                return commit
+            if args[0] == 'diff':
+                return b''
+            return untracked
+        return _fake
+
+    monkeypatch.setattr(prov, '_git', _git_with(b''))
+    clean = prov.code_version()
+    monkeypatch.setattr(prov, '_git', _git_with(b'.worktrees/a/\0'))
+    with_dir = prov.code_version()
+    monkeypatch.setattr(prov, '_git', _git_with(b'.worktrees/b/\0'))
+    other_dir = prov.code_version()
+    assert clean != with_dir != other_dir and clean != other_dir, (
+        '嵌套目录换了一个名字，代码身份却没变')

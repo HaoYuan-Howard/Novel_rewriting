@@ -11,6 +11,8 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,8 +29,8 @@ from contracts.schema.stage7 import NameMap
 from contracts.schema.base import StrictModel
 from novel import paths, prov
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected, NovelError,
-    UpstreamMissing,
+    ApprovalFrozen, ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected,
+    NovelError, UpstreamMissing,
 )
 from novel.orchestrator import state
 from novel.quality.global_review import (
@@ -38,8 +40,45 @@ from novel.quality.global_review import (
 from novel.store import ArtifactStore
 
 APPROVALS_DIRNAME = 'approvals'
-DEFAULT_DEEP = (1, 2, 3)
 _LOCK = threading.RLock()
+
+#: 正在被移入回收站的书。**`_LOCK` 保护它**，与审批写入同一把锁——
+#: 这样「冻结」与「写一份审批」之间没有缝，两者要么先后、要么其中一个明确 409。
+#: ⚠ 只在内存，与 `jobs.JobRegistry` 同一条理由（`R-14.6`）：写下来就要有陈旧清理
+#: 策略，而**一份会说谎的冻结名单比没有名单更坏**。删除是短操作（拉一个 CLI 子进程
+#: 移目录），进程死了这一格跟着消失，恢复由 `trash.sweep_incomplete` 从盘上重建。
+_FROZEN_FOR_TRASH: set[str] = set()
+
+
+@contextmanager
+def frozen_for_trash(sid: str) -> Iterator[None]:
+    """删除这本书的整段时间里冻结它的审批写入。**回收站的进程内那一半。**
+
+    ⚠⚠ 这一格补的是一条真实的两半竞态：书目录与审批文件由 CLI 子进程移动，
+    而**审批写入发生在服务父进程**。父进程只占了书级作业锁（`jobs.active_key`），
+    审批那条路一把都不占 ⇒ 子进程刚把 `<sid>.json` 移进回收站，父进程的
+    `approve_gate` 就能把它**重新写出来**，留下一本「书已删除、审批还活着」的孤儿；
+    反过来若子进程随后失败回滚，回滚条件 `not approval.exists()` 已被那次重写破坏，
+    归档的那一份就永远留在半成品回收站里。
+    ⇒ 冻结**只按 sid**，不持有 `_LOCK` 本身：删一本书不该把别的书的审批全挡住。
+    """
+    with _LOCK:
+        if sid in _FROZEN_FOR_TRASH:
+            raise ApprovalFrozen(f'{sid} 已经有一个删除在进行中')
+        _FROZEN_FOR_TRASH.add(sid)
+    try:
+        yield
+    finally:
+        with _LOCK:
+            _FROZEN_FOR_TRASH.discard(sid)
+
+
+def _refuse_if_frozen(sid: str) -> None:
+    with _LOCK:
+        if sid in _FROZEN_FOR_TRASH:
+            raise ApprovalFrozen(
+                f'{sid} 正在被移入回收站，这次审批写入不落盘——'
+                '删除完成后这本书不再存在；若删除失败，重新打开这本书再批')
 
 
 class _ApprovalProof(StrictModel):
@@ -122,8 +161,7 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     """
     candidates = {
         's1': [ApprovalAction(
-            kind='stage2.global', label='\u5e76\u53d1\u62bd\u53d6 stage2 + stage3',
-            extra=['--full-extract'])],
+            kind='stage2.global', label='生成 stage2 全局底座；完成后逐项人工复核')],
         's2': [ApprovalAction(
             kind='stage4.plan', label='\u751f\u6210\u91cd\u6784\u8ba1\u5212')],
         's5': [ApprovalAction(
@@ -141,9 +179,40 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     }
 
 
+def default_deep(planned: list[int] | None) -> list[int]:
+    """默认深度选择 = **这本书的全部计划章**（2026-08-22 起；此前是常量 `(1, 2, 3)`）。
+
+    旧默认的理由是「开篇三章决定读者留存，值得更高的单章成本」。推翻它的是一次
+    **成书级**实测（无情道 23 章，`tools/book_overlap.py`）：按 `stage7/name_map.json`
+    把人名回映射之后逐章量 20 字窗重合——
+
+    | 臂 | n | 中位 | 整句照搬率 |
+    |---|--:|--:|--:|
+    | deep（闭卷） | 3 | **0.017** | **18.2%** |
+    | shallow（开卷） | 20 | **0.226** | **55.4%** |
+
+    **13 倍差距**；而全书 290 条照搬句里只有 60 条是 `verbatim` 制度要求的，其余
+    230 条（79%）是写手自发照抄。⇒ 用户那句「差别只是改变了措辞」几乎全部产自开卷臂，
+    而开卷当时是 20/23 章的默认路径。
+
+    ⚠ **这不是把开卷判死**：单臂维护入口 `stage5.write --mode shallow` 一个字没动，
+    `B-03` 那个洞仍在代码里。变的只是**默认路径** ⇒ 走开卷从此是例外，
+    由 `arm_split_report` 常驻报出（只报不判，不为它发明阈值——2026-08-10 已否决过一次，
+    理由「0.9%~96.8% 的跨度不是一个可以一刀切的量」今天仍然成立）。
+
+    ⚠ 返回值仍然只是**建议，不是花钱授权**：`_fresh_record` 不带 `deep_proof`，而
+    `current_depth_selection` / `begin_writing` 都要求 proof 在场
+    ⇒ 没有人签过字之前，队列里不会出现一条付费的 `stage5.write`。
+
+    ⚠ `planned is None`（stage4 还没产计划）⇒ **`[]` 而不是 `[1, 2, 3]`**：
+    「还不知道有哪些章」与「选了三章」必须分得开。这不会把默认卡在空集上——
+    `_read_raw` 在没有盘上记录时每次都现算一份，计划一落盘它自动就是全书。
+    """
+    return sorted(set(planned)) if planned else []
+
+
 def _fresh_record(sid: str, planned: list[int] | None = None) -> _ApprovalRecordV2:
-    allowed = set(planned) if planned is not None else None
-    deep = [n for n in DEFAULT_DEEP if allowed is None or n in allowed]
+    deep = default_deep(planned)
     return _ApprovalRecordV2(
         sid=sid,
         gate={key: False for key in APPROVAL_GATES},
@@ -197,7 +266,9 @@ def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV2:
 def _write(
     base: str | os.PathLike[str], record: _ApprovalRecordV2,
 ) -> ApprovalDoc:
+    """审批落盘的**唯一落点**；冻结检查因此也只装在这里。"""
     record = _ApprovalRecordV2.model_validate(record.model_dump())
+    _refuse_if_frozen(record.sid)
     p = _path(base, record.sid)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(f'.{threading.get_ident()}.tmp')

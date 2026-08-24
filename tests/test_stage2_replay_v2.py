@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_stage2_replay_v2.py —— 拿盘上已付费 v3 蓝图重放 `extraction-ir-v1` 的不变量。
+test_stage2_replay_v2.py —— 拿盘上已付费旧蓝图重放 `extraction-ir-v1.1` 的不变量。
 
 【分工】读数与留档归 `tools/replay_stage2_contract.py`（JSON/MD 报告）；
 本文件只断言**付费前必须成立的不变量**：
@@ -52,7 +52,7 @@ def test_at_least_one_book_is_replayable():
 
 
 @pytest.mark.parametrize('book', BOOKS)
-def test_replaying_the_paid_v3_artifact_through_ir1_holds_the_invariants(book):
+def test_replaying_the_paid_artifact_through_ir11_holds_the_invariants(book):
     from tools.replay_stage2_contract import replay_book
 
     corpus.requires_current(

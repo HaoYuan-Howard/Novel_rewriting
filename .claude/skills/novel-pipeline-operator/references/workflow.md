@@ -54,7 +54,7 @@
 
 `stage0.remove --source <txt>` 摄入新书时省略 `<SID>`。`preview` 不接受 `--yes`；它会通过与真跑共用的 `build_argv`，在付费步骤中生成已经带 `--yes` 的真实命令。它打印的命令**已按单引号规则转义**：含空格的取值（`--reason`、带空格的路径）自带引号，可逐字复制粘贴，不需要也不应该再自行改写 argv。
 
-执行 `preview` 输出的**全部步骤**，不只执行第一条。写盘节点可能自动追加 `--check-only`；`stage2.global --full-extract` 会追加 blueprint 与 style 两条复检。不要另抄追跑规则。
+执行 `preview` 输出的**全部步骤**，不只执行第一条。写盘节点可能自动追加 `--check-only`。推荐直接用 `scripts/run_step.py` 调用生产 `build_steps` 并串联信标；不要另抄追跑规则。
 
 真跑本身已经打印同一份 fresh 报告时，追检的价值是**复核产物完整性**，不是重读判据（那句「⚠ 自动追跑：退出码 0 也可能是残缺产物」说的就是这件事）：仍必须执行并打点，但只取它的退出码与合计行即可，不必重读全文。
 
@@ -79,12 +79,12 @@
 | 2 | `stage0.approve` | `--actor <ACTOR> --reason <text>` | 按代批契约审阅剔除报告后批准，批准状态落盘。**每本书都要过这一步**——首跑恒 pending，零剔除的书也一样（见下） |
 | 3 | `stage0.edit` | 仅当代批发现剔除错误时用 typed edit/edit-plan；无修改则 `state` 跳过 | 人工修订经同一 Stage0 闸门重判，不直改正式文本 |
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
-| 5 | `stage2.global` | `--full-extract` | global 正式落盘；执行 preview 列出的后续 blueprint/style 步骤 |
-| 6 | `stage2.blueprint` | 由 `--full-extract` preview 列出；中断恢复时只跑缺失项 | 逐章蓝图正式落盘，check 无 HARD |
-| 7 | `stage3.style` | 由 `--full-extract` preview 列出；中断恢复时只跑缺失项 | 文风画像正式落盘，check 无 HARD |
+| 5 | `stage2.global` | 无 | global 正式落盘；随即生成 review workpack，逐项核验并提交 typed 决策；只有 current 且全部 PASS 才继续 |
+| 6 | `stage2.blueprint` | 无；闸开后独立 preview/run | 逐章蓝图正式落盘，check 无 HARD |
+| 7 | `stage3.style` | 无；闸开后独立 preview/run | 文风画像正式落盘，check 无 HARD |
 | 8 | `stage4.plan` | 无 | 计划 check 无 HARD，写作上下文由当前计划组装 |
 | 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
-| 10 | `stage5.write` | `--deep 1,2,3 --shallow-rest`；不足三章时截到 `N` | deep+shallow 的正式章集合恰好覆盖计划章集合，内部收缩/重试不等于失败 |
+| 10 | `stage5.write` | `--deep <全部计划章> --shallow-rest`（章号逗号分隔，如 23 章 ⇒ `--deep 1,2,...,23`） | deep+shallow 的正式章集合恰好覆盖计划章集合，内部收缩/重试不等于失败；`arm_split_report` 应报「开卷 0 章」 |
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
 | 12 | `stage6.hook` | 无 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
 | 13 | `stage6.semantic` | 无 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
@@ -94,7 +94,7 @@
 | 17 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
-`stage2.global --full-extract` 在中途被闸门拦下时，不机械重跑整组。按最新 `state` 与 finding 修好已落下的部分，再分别 preview 缺失的 `stage2.blueprint`、`stage3.style`；只执行缺失项。
+Stage2 的顺序硬约束是：global 落盘 → `--emit-review-workpack` 辅助逐项对原文 → `--emit-review-template` 取得版本化决策骨架 → 提交 `--review-decisions` → 确认全部 PASS → 才运行 blueprint/style。旧的并发首跑已下线，因为它会在人工闸形成前启动下游，调用方不同就能绕闸。
 
 ### 零剔除的书同样要过 stage0 闸门
 
@@ -123,11 +123,26 @@
 `stage6.approve` 只能在零证据下拍板。本节点不接 `--check-only`，也不再有 flag。
 它是全链最小的付费面：两名盲判官各一次调用，不随章数增长。
 
-### `--deep 1,2,3` 是默认，不是判据
+### `--deep <全部计划章>` 是默认，不是判据
 
-依据是开篇三章决定读者留存，值得更高的单章成本；其余章走 shallow。deep 与 shallow 的单章成本不同，
-所以这是一个**有成本含义的默认值**。用户在[接口契约](../SKILL.md#接口契约)的可选约束里指定了章节深浅分配时以用户为准，
-并在终审包记录实际分配与依据。不要为「提高质量」自行扩大 deep 集合——那是未经授权的成本变更。
+默认是**全书闭卷**。此前的默认是开篇三章闭卷、其余开卷，依据「开篇三章决定读者留存」；
+换默认的依据是成书级实测——把成书按 `stage7/name_map.json` 回映射人名后逐章与源章比重合，
+**开卷臂的重合度比闭卷臂高一个数量级**，开卷可以把一章几乎原样抄回来，而它此前是绝大多数章的
+默认路径。读数与口径在 `docs/BACKEND_CONTRACT.md` 的 `B-03` 与 `R-7.6b`/`R-7.6c` 行上，
+工具是 `tools/book_overlap.py`（0 成本，退出码恒 0）。
+
+deep 与 shallow 的单章成本不同，所以这仍然是一个**有成本含义的默认值**：全书闭卷比旧默认贵。
+用户在[接口契约](../SKILL.md#接口契约)的可选约束里指定了章节深浅分配时以用户为准，
+并在终审包记录实际分配与依据。**不要为「省钱」自行缩小 deep 集合**——它与「不要为『提高质量』
+自行扩大」是同一条纪律的两面：改默认分配都是未经授权的成本/质量变更。
+
+⚠ 走开卷的章从此是**例外**：`stage5.review` 的 `arm_split_report` 常驻报出
+「本书 N/M 章走开卷」+ 这几章的逐章重合度跨度。终审包里照抄这条读数。
+⚠ 全书闭卷有两条**已知代价**，不是问题、不要去修：
+`dialogue_halved` 的前件第一项是「开卷」⇒ 默认路径上它没有分母，报告上落 `unver` 而不是绿灯；
+`dialogue_fewer` 会大面积命中——它那条线正压在「闭卷会系统性把台词压成转述」这个自然效应上
+⇒ **读 `dialogue_report` 的 m/n 分布，不数 `dialogue_fewer` 的命中数**。
+⚠ 深度选择在 stage5 开写后锁死 ⇒ 已经写过章的书**改不了**它，只能另起 `--base`。
 
 ### 书级剧透防线是 0 成本的那一组
 

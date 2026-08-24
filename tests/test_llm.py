@@ -29,8 +29,9 @@ from novel.config import Config, DEFAULT_MODEL, load_config, parse_dotenv
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
 from novel.llm.client import (
-    DEFAULT_MAX_TOKENS, LADDER, MAX_SAMPLES_PER_RUNG, NOTHINK_RUNGS,
-    REJECT_GATES, REJECT_REASON_MAX, LlmClient, LlmFailed,
+    DEFAULT_MAX_TOKENS, JSON_OBJECT_MODE, LADDER, MAX_SAMPLES_PER_RUNG,
+    NOTHINK_RUNGS, REJECT_GATES, REJECT_REASON_MAX, RESOURCE_INTERRUPTED,
+    SALVAGE_ANSWER_FROM_REASONING, LlmClient, LlmFailed,
 )
 from novel.llm.ledger import CostLedger, combine_usage
 from novel.llm.transport import (
@@ -250,6 +251,8 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
     ⇒ 一次「high 被拒、退到 low 才成功」的调用，事后从账本上读起来像两次成功的调用，
     理由一个字都不在（被拒的那份响应随即被 `evict` 从盘上删掉）。
     ⇒ `gate` 是机器可数的那一半，`reason` 是人读的那一半，两个都要有。
+    ⚠ 这条守的是**出声**，不是「退了哪一档」：2026-08-22 起内容闸拒的下一步改成
+    同档重采（`_worth_resampling`），`next_*` 因此指回本档——事件仍须说真话。
     """
     events: list[dict] = []
     ctx = _ctx()
@@ -260,14 +263,18 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
     got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
     assert got.voice == {'a': 1}
-    assert t.rungs == [LADDER[0], LADDER[1]], '被拒之后必须真的退了一档'
+    assert t.rungs == [LADDER[0], LADDER[0]], '被拒之后必须真的再采一次'
     rejected = _observed(events)
     assert len(rejected) == 1, '降一档只出一次声：成功那一档不出声'
     e = rejected[0]
     assert e['gate'] == gate and e['gate'] in REJECT_GATES
-    assert (e['source'], e['json_mode']) == ('wire', True)
+    # ⚠ 跟着 `JSON_OBJECT_MODE` 走，别写死：2026-08-22 起 `ask_json` 不再发
+    #   `response_format`（用户裁决，见那一格的注释）。这条断言守的是「事件说的是
+    #   **真的发出去的那一位**」，不是「ask_json 恒 True」。
+    assert (e['source'], e['json_mode']) == ('wire', JSON_OBJECT_MODE)
     assert (e['reasoning_effort'], e['thinking']) == LADDER[0]
-    assert (e['next_effort'], e['next_thinking']) == LADDER[1]
+    # 2026-08-22 起内容闸拒的下一步是**同档重采**（`_worth_resampling`）⇒ next 指回本档。
+    assert (e['next_effort'], e['next_thinking']) == LADDER[0]
     assert e['exhausted'] is False
     assert (e['purpose'], e['node'], e['sid']) == ('p', 'stage3.style', '123')
     assert e['finish_reason'] == 'stop'
@@ -286,6 +293,8 @@ def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
     ⚠ 2026-08-20 起每档多出一声 `resample=True` 的**同档重采**：那一声的
     `next_effort`/`next_thinking` 必须指回**同一档**——否则「重采」会被
     统计口径读成「降档」，而降档统计正是这条事件存在的目的。
+    ⚠ 2026-08-22 起空正文那一格叫 `answer_lost`（`_empty()` 正是**非截断**的那种
+    形态）；`empty_text` 只剩「空**且**截断」那一半——见下面那条参数化。
     """
     events: list[dict] = []
     ctx = _ctx()
@@ -298,7 +307,7 @@ def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
     rejected = _observed(events)
     walked = [r for r in LADDER for _ in range(MAX_SAMPLES_PER_RUNG)]
     assert [(e['reasoning_effort'], e['thinking']) for e in rejected] == walked
-    assert {e['gate'] for e in rejected} == {'empty_text'}
+    assert {e['gate'] for e in rejected} == {'answer_lost'}
     assert {e['json_mode'] for e in rejected} == {False}
     assert [e['resample'] for e in rejected] == [True, False] * len(LADDER)
     assert [e['exhausted'] for e in rejected] == [False] * (len(walked) - 1) + [True]
@@ -308,9 +317,326 @@ def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
     assert (rejected[1]['next_effort'], rejected[1]['next_thinking']) == LADDER[1]
 
 
-def test_a_nonempty_content_gate_rejection_does_not_resample():
-    """⚠ 非空正文被内容闸拒（schema 形状不对）也不重采——同一参数大概率拿回
-    同一份形状。真要换样本走 `--resample` / 定向修复，不在阶梯里白付。"""
+@pytest.mark.parametrize('finish, text_gate, json_gate', [
+    ('stop', 'answer_lost', 'answer_lost'),
+    ('length', 'empty_text', 'parse'),
+])
+def test_an_empty_body_is_answer_lost_only_when_it_is_not_a_truncation(
+        finish, text_gate, json_gate):
+    """⭐ **空正文按 `finish_reason` 劈成两格**，两个入口用同一把尺子。
+
+    ⚠⚠ 它守的是一个账面上的洞：`ask_json` 里空正文照旧走 `json.loads('')` 必然抛
+    ⇒「答案写进了推理通道」（`client.py` 模块 docstring ①）与「JSON 被截断」（②）
+    在账上塌成同一个 `parse`。而这两类的处置**正好相反**——①换新样本、②腾预算。
+    2026-08-22 复盘四份账本 752 次 wire 时正是这一格挡住了诊断：
+    flash@high 418 次里 60 次是 ①、pro 255 次里 0 次，而账面上它与截断长得一样。
+
+    ⚠ 劈的是**账**不是**判定**：走法仍由 `_worth_resampling` 一家管
+    ⇒ 最后那条断言钉的就是「加了这一格之后，走过的档位与从前逐字相同」。
+    """
+    empty = ChatResponse(content='', reasoning='想了很多', finish_reason=finish)
+
+    for gate, call in (
+        (text_gate, lambda c: c.ask_text('sys', 'usr', purpose='p')),
+        (json_gate, lambda c: c.ask_json('sys', 'usr', model_cls=Resp, purpose='p')),
+    ):
+        events: list[dict] = []
+        ctx = _ctx()
+        ctx.observer = events.append
+        t = FakeTransport.always(empty)
+
+        with pytest.raises(LlmFailed):
+            call(_client(t, ctx=ctx))
+
+        assert {e['gate'] for e in _observed(events)} == {gate}
+        assert gate in REJECT_GATES
+        # 截断不重采（每档一次），非截断每档两次——`MAX_SAMPLES_PER_RUNG` 那条路没变。
+        per_rung = 1 if finish == 'length' else MAX_SAMPLES_PER_RUNG
+        assert t.rungs == [r for r in LADDER for _ in range(per_rung)]
+
+
+# ── 服务端资源中断：走传输层重试，不碰采样预算 ──────────────────────────────
+
+def _interrupted(usage: dict | None = None) -> ChatResponse:
+    """`finish_reason='insufficient_system_resource'`：服务端自称这次被资源中断了。
+
+    ⚠ HTTP 是 200、`usage` 是真的、**钱花了**——它与连接故障那种「没到达模型」
+    不是一回事，所以这里给它一份 usage。
+    """
+    return ChatResponse(content='', reasoning='', finish_reason=RESOURCE_INTERRUPTED,
+                        usage=usage or {'prompt_tokens': 10, 'completion_tokens': 0},
+                        model='deepseek-v4-pro')
+
+
+def test_a_resource_interruption_retries_on_the_wire_and_never_touches_the_sampling_budget():
+    """⭐ 资源中断走**传输层重试**那条循环，内容闸根本看不到它。
+
+    ⚠⚠ 这一条守的是「三条循环各管各的」：判成 `answer_lost` 的话，两次资源中断
+    就能把一个付费节点推进 `low` 档（`stage4.plan` 在 low 上有已知劣化），
+    而它一次**模型行为**问题都不是。⇒ 断言三样：档位没动 · 采样预算没消耗
+    （`gate_decision` 的 `sample` 仍是 1）· 内容闸一声拒都没出。
+    ⚠ 账上仍记一行 wire（`usage` 是真的、钱花了），靠 `finish_reason` 列分辨——
+    **不新增账本字段**。
+    """
+    events: list[dict] = []
+    ctx = _ctx()
+    ctx.observer = events.append
+    slept: list[float] = []
+
+    def responder(_req: ChatRequest, i: int) -> ChatResponse:
+        return _interrupted() if i == 0 else OK_JSON
+
+    t = FakeTransport(responder=responder)
+    client = LlmClient(ctx, t, cache=None, sleep=slept.append)
+    got = client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+    assert got.voice == {'a': 1}
+    # 档位一格没动：两次上线都在首档，**不是**降档也**不是**同档重采。
+    assert t.rungs == [LADDER[0], LADDER[0]]
+    assert not _observed(events), '内容闸不该看见资源中断'
+    gates = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
+    assert [(g['decision'], g['sample'], g['rung_index']) for g in gates] == [
+        ('accepted', 1, 0)], '采样预算被资源中断吃掉了'
+    assert slept, '资源中断要退避一下再来，不是原地立刻重发'
+
+
+def test_a_resource_interruption_that_never_recovers_is_terminal_and_says_it_was_billed():
+    """⭐ 重试额度用尽仍然中断 ⇒ `LlmFailed`（`TerminalState` ⇒ exit 2，不打栈）。
+
+    ⚠ 报错里必须说**已经计费**：它与连接故障那种「不花钱、同参数重跑即可」长得像，
+    而两者的下一步判断不同——这一条上人会想知道自己付没付钱。
+    """
+    ctx = _ctx()
+    t = FakeTransport.always(_interrupted())
+    client = LlmClient(ctx, t, cache=None, sleep=lambda _s: None, max_retries=2)
+
+    with pytest.raises(LlmFailed, match='资源中断') as excinfo:
+        client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+    assert '已经计费' in str(excinfo.value)
+    assert isinstance(excinfo.value, TerminalState)
+    # 3 次上线（首发 + 2 次重试）全在首档：阶梯一格没走。
+    assert t.rungs == [LADDER[0]] * 3
+
+
+# ── TODO-40：答案写进推理通道时，过得了同一套闸就采纳 ────────────────────────
+
+_SALVAGEABLE = json.dumps({'voice': {'a': 1}, 'surface_habits': ['h']}, ensure_ascii=False)
+
+
+def _lost(reasoning: str, finish: str = 'stop') -> ChatResponse:
+    """正文空、答案（或别的什么）在 `reasoning` 里。"""
+    return ChatResponse(content='', reasoning=reasoning, finish_reason=finish,
+                        usage={'prompt_tokens': 10, 'completion_tokens': 9,
+                               'reasoning_tokens': 9},
+                        model='deepseek-v4-pro')
+
+
+def test_an_answer_written_into_the_reasoning_channel_is_salvaged_instead_of_resampled():
+    """⭐ TODO-40：`content` 空而 `reasoning` 整体过得了同一套闸 ⇒ **采纳，不重采**。
+
+    ⚠⚠ 推翻的是「救回来是半成品」那句老理由：留证 5/5 份横跨两个 `json_mode` 臂，
+    推理通道里那段**整体就是一份合法 JSON**、一个字推敲过程都没混进去，
+    其中 1 份完全合契约——那一次丢掉的是一份**可用的产物**，然后又付了一次钱重采。
+    ⇒ 断言只发 **1 次** wire：这条路省的就是那一次重采。
+    """
+    assert SALVAGE_ANSWER_FROM_REASONING, '这条路关掉的话，本测试钉的是另一件事'
+    ctx = _ctx()
+    t = FakeTransport.always(_lost(_SALVAGEABLE))
+    got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+    assert got.voice == {'a': 1} and got.surface_habits == ['h']
+    assert len(t.calls) == 1, '捞回来了就不该再付一次重采的钱'
+
+
+def test_a_contract_can_prefer_one_normal_resample_without_discarding_valid_salvage():
+    """首份合法救回稿作后备；第二采拿到正常正文时采用正常正文。"""
+    normal = ChatResponse(
+        content=json.dumps({'voice': {'normal': 1}, 'surface_habits': ['正文']}),
+        reasoning='', finish_reason='stop',
+        usage={'prompt_tokens': 10, 'completion_tokens': 5},
+        model='deepseek-v4-flash')
+    t = FakeTransport(lambda _req, i: _lost(_SALVAGEABLE) if i == 0 else normal)
+    ctx = _ctx()
+
+    got = _client(t, ctx=ctx).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='p',
+        prefer_content_over_reasoning_salvage=True)
+
+    assert got.voice == {'normal': 1}
+    assert len(t.calls) == 2 and t.rungs == [LADDER[0], LADDER[0]]
+    gates = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
+    assert [(g['decision'], g['gate'], g['resample'], g['salvaged'])
+            for g in gates] == [
+                ('rejected', 'answer_lost', True, False),
+                ('accepted', None, False, False),
+            ]
+
+
+def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails():
+    """第二采仍不可用时采纳已过契约的后备，不得继续降到 low。"""
+    invalid = ChatResponse(
+        content='不是 JSON', reasoning='', finish_reason='stop',
+        usage={'prompt_tokens': 10, 'completion_tokens': 5},
+        model='deepseek-v4-flash')
+    t = FakeTransport(lambda _req, i: _lost(_SALVAGEABLE) if i == 0 else invalid)
+    ctx = _ctx()
+    events: list[dict] = []
+    ctx.observer = events.append
+
+    got = _client(t, ctx=ctx).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='p',
+        prefer_content_over_reasoning_salvage=True)
+
+    assert got.voice == {'a': 1}
+    assert len(t.calls) == 2 and t.rungs == [LADDER[0], LADDER[0]]
+    gates = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
+    assert [(g['decision'], g['gate'], g['salvaged']) for g in gates] == [
+        ('rejected', 'parse', False),
+        ('accepted', None, True),
+    ]
+    lost, = [e for e in ctx.ledger.audit_events if e['kind'] == 'answer_lost']
+    assert lost['salvaged'] is True
+    rejected, = _observed(events)
+    assert rejected['fallback_salvage'] is True
+    assert rejected['next_effort'] is None and rejected['exhausted'] is False
+
+
+def test_a_transport_failure_on_the_preferred_resample_does_not_discard_the_salvage():
+    """⭐ **手里已有一份过完整契约的响应，不能因为下一次没打通就把它扔掉。**
+
+    这一档的后备只在「再争取一次正常 content」时存在；而争取的那一次**死在传输层**
+    （连接故障 / 资源中断退避耗尽）与「拿到了一份更好的」是两件完全不同的事。
+    原来异常直接冒出 `ask_json`，后备随栈消失 ⇒ 重跑要**重新付一次**同样的钱，
+    而那份合格响应连缓存都进不去（`ResponseCache.put` 拒写空正文）。
+    """
+    from novel.llm.transport import TransportError
+
+    def responder(_req, index):
+        if index == 0:
+            return _lost(_SALVAGEABLE)
+        raise TransportError('connection reset', retryable=False, kind='connection')
+
+    ctx = _ctx()
+    t = FakeTransport(responder)
+
+    got = _client(t, ctx=ctx).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='p',
+        prefer_content_over_reasoning_salvage=True)
+
+    assert got.voice == {'a': 1}, '合格后备被一次连接故障扔掉了'
+    gates = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
+    assert ('accepted', None, True) in [
+        (g['decision'], g['gate'], g['salvaged']) for g in gates]
+    lost, = [e for e in ctx.ledger.audit_events if e['kind'] == 'answer_lost']
+    assert lost['salvaged'] is True
+
+
+def test_a_transport_failure_without_any_salvage_still_propagates():
+    """没有后备时传输故障必须原样抛出——不许被这条新路悄悄吞掉。"""
+    from novel.llm.transport import TransportError
+
+    def responder(_req, _index):
+        raise TransportError('connection reset', retryable=False, kind='connection')
+
+    t = FakeTransport(responder)
+    with pytest.raises(TransportError):
+        _client(t, ctx=_ctx()).ask_json(
+            'sys', 'usr', model_cls=Resp, purpose='p',
+            prefer_content_over_reasoning_salvage=True)
+
+
+def test_salvage_runs_the_full_contract_so_a_merely_parseable_reasoning_is_still_rejected():
+    """⭐ 捞的是**同一套四道闸**，不是「解析得动就用」。
+
+    ⚠⚠ 这一条守的是 `SALVAGE_ANSWER_FROM_REASONING` 边界②：采纳进来的东西必须与
+    正常路径的产物**同质**，否则这条路就是在契约上开了个后门。
+    ⇒ 合法 JSON 但不合 `Resp` 契约的那份**不采纳**，走法与 2026-08-22 之前逐字相同。
+    """
+    for reasoning in (
+        '想了很多，但答案没流出来',                      # 压根不是 JSON
+        '{"voice": {"a": 1}, "surface_hab',              # 半截
+        json.dumps({'voice': 'not-a-dict', 'surface_habits': ['h']}),   # 合法 JSON，不合契约
+        json.dumps({'voice': {}, 'surface_habits': ['h']}),             # 合法 JSON，空壳闸
+    ):
+        events: list[dict] = []
+        ctx = _ctx()
+        ctx.observer = events.append
+        t = FakeTransport.always(_lost(reasoning))
+
+        with pytest.raises(LlmFailed):
+            _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+
+        # 走法逐字相同：每档两采（首发 + 同档重采），闸名仍是 `answer_lost`。
+        assert t.rungs == [r for r in LADDER for _ in range(MAX_SAMPLES_PER_RUNG)]
+        assert {e['gate'] for e in _observed(events)} == {'answer_lost'}
+
+
+def test_salvage_applies_to_neither_a_truncation_nor_ask_text():
+    """⭐ 两条边界，各有各的理由，都不许顺手放开。
+
+    · **截断那一半不捞**（`finish='length'`）：那时 `reasoning` 自己也是半截的，
+      而②的处置是腾预算，捞它只会把两类搅在一起。
+    · **`ask_text` 不捞**：它一次都没量过，而且**没有等价的客观闸**——JSON 那边
+      「解析得动 + 合契约」是可判的证据，自然语言那边「这段是答案还是推敲」判不出来。
+      ⇒ 结构上就不给它这条路（捞的代码只在 `ask_json` 里）。
+    """
+    ctx = _ctx()
+    t = FakeTransport.always(_lost(_SALVAGEABLE, finish='length'))
+    with pytest.raises(LlmFailed):
+        _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+    assert t.rungs == list(LADDER), '截断仍然每档一采、直接降档'
+
+    t2 = FakeTransport.always(_lost(_SALVAGEABLE))
+    with pytest.raises(LlmFailed, match='拿不到正文'):
+        _client(t2, ctx=_ctx()).ask_text('sys', 'usr', purpose='p')
+    assert t2.rungs == [r for r in LADDER for _ in range(MAX_SAMPLES_PER_RUNG)]
+
+
+def test_a_salvaged_answer_is_marked_in_both_audit_rows_and_stays_out_of_the_cache():
+    """⭐ 捞回来的那一份**在账上分得出来**，而且**进不了缓存**。
+
+    ⚠⚠ 不落 `salvaged` 这一位，「这本书有几章的产物不是走正常通道产出的」事后就答不了
+    ——那正是这条路全部的产品语义争议所在。两种审计行都要带：
+    `gate_decision` 答「判定与来路」，`answer_lost` 答「证据在哪」。
+    ⚠ 留证**照写不误**：捞成功之后它已经不是「丢失的证据」而是**被采纳产物的来源**。
+    ⚠ 缓存那条是**认下来的代价**：`ResponseCache.put` 拒写空正文（那是对的），
+    而把捞出来的文本塞回 `content` 再存等于改写供应商的响应 ⇒ 与 `response_sha256` 分家。
+    ⇒ 这条路省的是**本次的重采**，不是下次重跑的钱。
+    """
+    cache = ResponseCache(Path(tempfile.mkdtemp()))
+    ctx = _ctx()
+    t = FakeTransport.always(_lost(_SALVAGEABLE))
+    got = _client(t, ctx=ctx, cache=cache).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='p')
+    assert got.voice == {'a': 1}
+
+    gate, = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
+    assert (gate['decision'], gate['gate'], gate['salvaged']) == ('accepted', None, True)
+    lost, = [e for e in ctx.ledger.audit_events if e['kind'] == 'answer_lost']
+    assert lost['salvaged'] is True and lost['content_chars'] == 0
+    assert lost['reasoning_chars'] == len(_SALVAGEABLE)
+
+    # 空正文进不了缓存 ⇒ 同参数再来一次仍然要真发。
+    t2 = FakeTransport.always(_lost(_SALVAGEABLE))
+    _client(t2, ctx=_ctx(), cache=cache).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='p')
+    assert len(t2.calls) == 1, '捞回来的那份不该被当成正常响应存进缓存'
+
+
+def test_a_nonempty_content_gate_rejection_resamples_once_before_stepping_down():
+    """⭐ 非空正文被内容闸拒（schema 形状不对）**先同档重采一次**再降档。
+
+    ⚠⚠ **这条测试 2026-08-22 反转过，反例证据记在这里，别按旧字面改回去。**
+    它原来叫 `..._does_not_resample`，断言「内容闸拒绝必须每档一采、直接降档」，
+    理由是「同一参数大概率拿回同一份形状」。推翻它的是盘上读数：
+    `stage4.plan` 5 次带失败的跑里 **3 次走成 `high→low→low/nothink→high`**
+    ——整条阶梯白走一遍再回到 `high` 才成功；另 2 次以 `high→low` 收尾，
+    即**最终计划产自降档档位**。22 次实付里 47.7% 的 completion 花在没被采纳的档位上。
+    而真发循环 `use_cache=False` ⇒ 同档重采拿的本来就是新样本。
+    ⚠ 唯一仍然直接降档的是**截断**，那一条由
+    `test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget` 守着。
+    """
     events: list[dict] = []
     ctx = _ctx()
     ctx.observer = events.append
@@ -322,8 +648,8 @@ def test_a_nonempty_content_gate_rejection_does_not_resample():
     got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
     assert got.voice == {'a': 1}
-    assert t.rungs == list(LADDER[:2]), '内容闸拒绝必须每档一采、直接降档'
-    assert [e['resample'] for e in _observed(events)] == [False]
+    assert t.rungs == [LADDER[0], LADDER[0]], '内容闸拒绝必须先同档重采一次'
+    assert [e['resample'] for e in _observed(events)] == [True]
 
 
 def test_a_long_rejection_reason_is_truncated_and_marked():
@@ -456,7 +782,7 @@ def test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget():
     assert [e['resample'] for e in _observed(events)] == [False, False]
 
 
-def test_a_legal_but_structurally_empty_json_goes_down_the_same_ladder():
+def test_a_legal_but_structurally_empty_json_is_rejected_like_a_parse_failure():
     """⚠⚠ **「解析失败」与「合法 JSON 但结构上是空的」是同一类故障**（原型 F-125）。
 
     实测：某次规划调用拿回 `{"reconstruction_strategy": "…"}`——**0 个输出章**、
@@ -468,7 +794,8 @@ def test_a_legal_but_structurally_empty_json_goes_down_the_same_ladder():
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
     out = _client(t).ask_json('sys', 'usr', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == list(LADDER[:2])
+    # 与①同源（想得多、交得少）⇒ 先同档重采；它**不是**截断，不该靠降档腾预算。
+    assert t.rungs == [LADDER[0], LADDER[0]]
 
 
 def test_each_rung_is_its_own_cache_entry():
@@ -654,21 +981,35 @@ def test_a_structurally_empty_shell_is_evicted_from_the_cache():
     ——**那不是重试，是把同一个结果读了两遍**。
     ⚠ 这里**不适用**产物那条「修不了的原样留着」（判据 7）：产物留着是给人看的，
     一份坏缓存留着不会被人看见，只会被下一次重跑静默地当成新结果。
+
+    ⚠⚠ **判据方式 2026-08-22 换过一次，不是放宽。** 同档重采上线后，被拒的那份与
+    救回来的那份**共用同一个缓存键**（键含 `effort`/`thinking`，同档必然相同）
+    ⇒ 「那个键还在不在」不再区分得开「空壳被踢了」与「什么都没写」。
+    改成**直接读那个键**：留下的必须是好的那一份。这比数文件名更强——
+    它直接断言缓存里不是空壳，而不是绕着推。
     """
     d = Path(tempfile.mkdtemp())
+    cache = ResponseCache(d)
     shell = ChatResponse(content='{"voice": {"a": 1}}', finish_reason='stop')
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
-    _client(t, cache=ResponseCache(d)).ask_json('s', 'u', model_cls=Resp, purpose='t')
+    _client(t, cache=cache).ask_json('s', 'u', model_cls=Resp, purpose='t')
 
-    keys = {p.name for p in d.iterdir()}
-    assert f'{cache_key(_json_req(*LADDER[0]))}.json' not in keys, '空壳还留在缓存里'
-    assert f'{cache_key(_json_req(*LADDER[1]))}.json' in keys, '好的那一份该留着'
+    kept = cache.get(cache_key(_json_req(*LADDER[0])))
+    assert kept is not None, '救回来的那一份该留着'
+    assert 'surface_habits' in kept.content, '空壳还留在缓存里'
+    assert cache.get(cache_key(_json_req(*LADDER[1]))) is None, '不该走到第二档'
 
 
 def _json_req(effort: str, thinking: bool) -> ChatRequest:
+    """`ask_json` 在某一档上**真的会发出去**的那个请求（缓存键就按它算）。
+
+    ⚠ `json_mode` 跟着 `JSON_OBJECT_MODE` 走，**别写死 `True`**：写死之后这几条
+    缓存断言测的就不是「客户端存/取的是同一个键」，而是「客户端恒发 json_object」
+    ——那一位是可裁决的（2026-08-22 已关），而缓存键的一致性不是。
+    """
     return ChatRequest(model=DEFAULT_MODEL, system='s', user='u',
                        reasoning_effort=effort, thinking=thinking,
-                       json_mode=True, max_tokens=DEFAULT_MAX_TOKENS)
+                       json_mode=JSON_OBJECT_MODE, max_tokens=DEFAULT_MAX_TOKENS)
 
 
 def test_a_truncated_response_is_never_written_to_the_cache():
@@ -876,7 +1217,7 @@ def test_a_wrongly_shaped_value_walks_the_ladder_instead_of_being_accepted(bad):
                       if i < 1 else OK_JSON)
     out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == list(LADDER[:2]), '形状错的那一份被放行了'
+    assert t.rungs == [LADDER[0], LADDER[0]], '形状错的那一份被放行了'
 
 
 def test_a_legitimate_false_or_zero_is_not_mistaken_for_a_missing_key():
@@ -909,7 +1250,7 @@ def test_an_empty_collection_is_still_treated_as_the_f125_shell():
     t = FakeTransport(responder=lambda _r, i: shell if i < 1 else OK_JSON)
     out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == list(LADDER[:2]), '空集合被当成可用的响应放行了'
+    assert t.rungs == [LADDER[0], LADDER[0]], '空集合被当成可用的响应放行了'
 
 
 def test_an_explicit_require_may_only_narrow():
@@ -1205,6 +1546,84 @@ def test_the_api_key_can_never_be_printed_by_accident():
     assert 'sk-super-secret-value' not in str(cfg)
     assert 'sk-super-secret-value' not in f'{cfg}'
     assert '<set>' in repr(cfg) and '<unset>' in repr(Config())
+
+
+def test_proxy_credentials_can_never_be_printed_by_accident():
+    cfg = Config(proxy_url='http://proxy-user:proxy-secret@127.0.0.1:7890')
+    shown = repr(cfg)
+    assert 'proxy-user' not in shown and 'proxy-secret' not in shown
+    assert 'proxy_url=<set>' in shown and 'proxy_url=<unset>' in repr(Config())
+
+
+def test_load_config_reads_the_explicit_deepseek_proxy(tmp_path):
+    dotenv = tmp_path / '.env'
+    dotenv.write_text('DEEPSEEK_PROXY=http://127.0.0.1:7890\n', encoding='utf-8')
+    assert load_config(env={}, dotenv_path=dotenv).proxy_url == 'http://127.0.0.1:7890'
+
+
+def test_malformed_proxy_is_a_secret_safe_hard_error():
+    with pytest.raises(ValueError, match='DEEPSEEK_PROXY') as caught:
+        Config(proxy_url='not-a-url-with-secret')
+    assert 'not-a-url-with-secret' not in str(caught.value)
+
+
+def test_transport_passes_the_explicit_proxy_to_the_sdk(monkeypatch):
+    import openai
+    from novel.llm.transport import DeepSeekTransport
+
+    seen = {}
+
+    def fake_http_client(**kwargs):
+        seen['http'] = kwargs
+        return object()
+
+    def fake_openai(**kwargs):
+        seen['sdk'] = kwargs
+        return object()
+
+    monkeypatch.setattr(openai, 'DefaultHttpxClient', fake_http_client)
+    monkeypatch.setattr(openai, 'OpenAI', fake_openai)
+    cfg = Config(api_key='synthetic', proxy_url='http://127.0.0.1:7890', timeout=123)
+    DeepSeekTransport(cfg)._sdk()
+
+    assert seen['http'] == {'proxy': cfg.proxy_url, 'timeout': 123}
+    assert seen['sdk']['http_client'] is not None
+    assert seen['sdk']['max_retries'] == 0
+
+
+def test_transport_doctor_uses_the_same_proxy_and_redacts_its_credentials(monkeypatch):
+    """网络诊断可以复现 Agent 的传输面，但错误输出不能泄露代理口令。"""
+    import openai
+    from novel.llm.transport import probe_transport
+
+    secret_proxy = 'http://proxy-user:proxy-secret@127.0.0.1:7890'
+    seen: dict[str, object] = {}
+
+    class ConnectError(OSError):
+        pass
+
+    class BrokenClient:
+        def get(self, url):
+            seen['url'] = url
+            raise ConnectError(f'TLS EOF while using {secret_proxy}')
+
+        def close(self):
+            seen['closed'] = True
+
+    def build(**kwargs):
+        seen['kwargs'] = kwargs
+        return BrokenClient()
+
+    monkeypatch.setattr(openai, 'DefaultHttpxClient', build)
+    result = probe_transport(Config(proxy_url=secret_proxy, timeout=17))
+
+    assert result.reached_http is False
+    assert result.kind == 'connection'
+    assert seen['kwargs'] == {'timeout': 17, 'proxy': secret_proxy}
+    assert seen['url'] == 'https://api.deepseek.com/models'
+    assert seen['closed'] is True
+    assert secret_proxy not in result.detail
+    assert 'proxy-user' not in result.detail and 'proxy-secret' not in result.detail
 
 
 def test_load_config_does_not_touch_the_process_environment():

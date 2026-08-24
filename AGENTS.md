@@ -121,7 +121,8 @@ provenance 的口相同。
 版本**，无标记/低版本/高版本都明确拒读——**本仓没有迁移机制**（仍以注册表为准，
 破坏形状就 `current_version` +1 并同批回答「存量产物由谁重建」，并在
 `tests/test_artifact_versions.py::_SHAPE_BREAKS` 里显式登记那一次破坏）。
-现役除 `stage2/chapter_blueprints.json`（v2，2026-08-19 锚点改段落索引）外全表恒 v1；
+现役 `stage2/chapter_blueprints.json` 为 v3（2026-08-19 锚点改段落索引升 v2；
+2026-08-23 architecture 收窄为 v1.1/v2/v3.1 升 v3）；其余产物版本以注册表为准；
 旧产物**不手补字段冒充当前产地**，要从 producer 重建。
 `novel/` 里加一层包，`pyproject.toml` 的 `[tool.setuptools] packages` 要同步加一行——漏了没有任何测试
 会出声（`pythonpath=["."]` 让 pytest 照样 import 得到），只有非 editable 安装才崩。
@@ -161,7 +162,7 @@ tests/contracts/tools/novel/docs 开头的仓内路径必须存在。文档引�
 
 - **`docs/REQUIREMENTS.md` 是唯一活动待办**，只从仍存在的条目开工，验收通过即删条目；
   已完成的历史归 Git 与 `docs/BACKEND_CONTRACT.md` §十。文档职责分工见 README 的表。
-- 动手前读 `docs/LESSONS.md`（24 条可迁移经验），尤其第 21 条：**守卫也会假红**。红了先分清是产物
+- 动手前读 `docs/LESSONS.md`（编号化的可迁移经验），尤其第 21 条：**守卫也会假红**。红了先分清是产物
   问题还是守卫自己漂了——典型形状是「守卫重拼了生产的实参」和「守卫断言了一道产品明说不存在的闸」
   （`info` 判据的正确守法是"越线必出声"而不是"不许越线"）。守卫要**调用生产那一个落点**，不要重拼一份。
 - 不能用 mock、空数组、普通 404 或本地存储伪装尚未提供的后端能力；类型同型只证明适配器对齐，

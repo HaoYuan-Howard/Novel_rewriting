@@ -23,6 +23,7 @@ import pytest
 
 from contracts.invariants import FREE_ENTRIES, NODES, PAID_FLAGS, VALUED_FLAGS
 from contracts.schema import decode_artifact
+from contracts.schema.evaluation import GlobalReview, GlobalReviewDecisionSet
 from contracts.schema.stage7 import NameMapEdit
 from novel.cli import exit_codes as X
 from novel.cli.main import main
@@ -36,6 +37,25 @@ def box():
     if not sandbox.books_with_stage3():
         pytest.skip('盘上没有语料——这几条**没在查**，不是「查过没事」')
     s = sandbox.Sandbox(sandbox.books_with_stage3()[0])
+    yield s
+    s.close()
+
+
+@pytest.fixture
+def reviewed_box():
+    """带 `stage2/global_review.json` 的沙箱。
+
+    ⚠⚠ **两条复核模板用例曾经挂在 `box` 上，而 `box` 不带这一份** ⇒ 它们从落地起
+    就恒 exit 2（「global_review 不在盘上」）。没被发现是因为**没设 `NOVEL_OUTPUT` 时
+    `box` 整个 skip**：绿的是 skip，不是断言。⇒ 缺哪份就把哪份搬进来，
+    别把断言放松成「exit 2 也算过」。
+    """
+    books = [book for book in sandbox.books_with_stage3()
+             if sandbox.current(book, 'stage2/global_review.json') is not None]
+    if not books:
+        pytest.skip('盘上没有带 stage2 全局复核的语料——这两条**没在查**')
+    s = sandbox.Sandbox(
+        books[0], sandbox.STAGE3_INPUTS + ('stage2/global_review.json',))
     yield s
     s.close()
 
@@ -70,6 +90,96 @@ def test_stage7_edit_template_is_stdout_only_and_round_trips(
     NameMapEdit.model_validate(
         decode_artifact('stage7/name_map_edit.json', raw).payload)
     assert list(novel_dir.iterdir()) == []
+
+
+def test_stage2_emit_review_template_binds_current_rows_and_stays_closed(
+        reviewed_box, capsys):
+    """模板省掉 hash/evidence 手抄，但默认 UNVER 绝不能顺手打开事实闸。"""
+    rc = _run('run', 'stage2.global', reviewed_box.sid, '--emit-review-template',
+              '--base', str(reviewed_box.root))
+
+    assert rc == X.OK
+    template_raw = json.loads(capsys.readouterr().out)
+    assert template_raw['_schema_version'] == 1
+    template = GlobalReviewDecisionSet.model_validate(decode_artifact(
+        'stage2/global_review_decisions.json', template_raw).payload)
+    # ⚠ `Sandbox.read` 出来的已经是**解码后的载荷**；再套一层 `decode_artifact`
+    #   会去找版本标记而当场炸——这条用例从落地起就没真跑过，别照抄那一层。
+    review = GlobalReview.model_validate(
+        reviewed_box.read('stage2/global_review.json'))
+    current = {item.item_id: item for item in review.items}
+    assert set(current) == {row.item_id for row in template.decisions}
+    assert all(row.state == 'UNVER' for row in template.decisions)
+    assert all(row.expected_subject_sha256 == current[row.item_id].subject_sha256
+               and row.evidence == current[row.item_id].evidence
+               for row in template.decisions)
+
+
+def test_stage2_review_workpack_is_read_only_and_never_auto_decides(reviewed_box, capsys):
+    """workpack 只缩小人工阅读面；生成它不能顺手改变任何正式字节。"""
+    before = {p.relative_to(reviewed_box.dir).as_posix(): p.read_bytes()
+              for p in reviewed_box.dir.rglob('*') if p.is_file()}
+
+    rc = _run('run', 'stage2.global', reviewed_box.sid, '--emit-review-workpack',
+              '--base', str(reviewed_box.root))
+
+    assert rc == X.OK
+    workpack = json.loads(capsys.readouterr().out)
+    assert workpack['kind'] == 'stage2-global-review-workpack-v1'
+    assert workpack['read_only'] is True and workpack['auto_decisions'] is False
+    assert workpack['items']
+    assert all('current_state' in row and 'review_note' in row
+               and isinstance(row['exact_literal_hits'], list)
+               for row in workpack['items'])
+    after = {p.relative_to(reviewed_box.dir).as_posix(): p.read_bytes()
+             for p in reviewed_box.dir.rglob('*') if p.is_file()}
+    assert after == before
+
+
+def test_r_2_15_blocks_downstream_paid_work_before_dispatch(box, monkeypatch, capsys):
+    """`R-2.16` 是 CLI 运行边界；换调用方也绕不过 Stage2 typed 闸。"""
+    import importlib
+
+    cli_main = importlib.import_module('novel.cli.main')
+    calls: list[str] = []
+    monkeypatch.setattr(
+        cli_main, '_dispatch',
+        lambda node, _ctx, _flags: calls.append(node) or X.OK)
+
+    rc = _run('run', 'stage2.blueprint', box.sid, '--yes',
+              '--base', str(box.root))
+    assert rc == X.TERMINAL_STATE
+    assert calls == []
+    assert 'stage2' in capsys.readouterr().err.lower()
+
+    sandbox.decide_global_review(box)
+    rc = _run('run', 'stage2.blueprint', box.sid, '--yes',
+              '--base', str(box.root))
+    assert rc == X.OK and calls == ['stage2.blueprint']
+
+
+@pytest.mark.parametrize('reached,status,want_rc', [
+    (True, 401, X.OK),
+    (False, None, X.TERMINAL_STATE),
+])
+def test_llm_transport_doctor_is_zero_cost_and_reports_transport_only(
+        monkeypatch, capsys, reached, status, want_rc):
+    from novel.llm import transport
+
+    monkeypatch.setattr(
+        transport, 'probe_transport',
+        lambda _cfg: transport.TransportProbe(
+            reached_http=reached, status=status,
+            kind='http' if reached else 'connection',
+            detail='synthetic transport result'))
+
+    rc = _run('doctor', '--llm-transport')
+
+    assert rc == want_rc
+    output = capsys.readouterr().out
+    assert '未发送正文或 API key' in output
+    assert ('HTTP reached' if reached else 'FAILED') in output
+    assert 'synthetic transport result' in output
 
 
 #: **每一个** (0 成本 flag, 接受它的节点) 配对——不是每个 flag 取一个代表。
@@ -413,12 +523,13 @@ def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
         % len(fake.calls))
 
 
-def test_the_judge_node_pins_its_model_over_the_global_default(monkeypatch):
+def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
     """⭐ `_llm_client` 是全链唯一的 client 构造口：`NodeSpec.model` 在这里生效。
 
-    「除判官外全链 flash」（2026-08-19/20 用户裁决）必须长成形状而不是纪律：
-    判官节点钉死 pro ⇒ `DEEPSEEK_MODEL` / 全局默认 flash 都换不掉它；
-    其余节点 `''` = 跟随全局默认（flash）。
+    「除例外外全链 flash」必须长成形状而不是纪律：两个钉死节点 ⇒ `DEEPSEEK_MODEL` /
+    全局默认 flash 都换不掉它们；其余节点 `''` = 跟随全局默认（flash）。
+    ⚠ 两个钉死值的理由不同（判官是证据力、`stage4.plan` 是重采粒度），
+    但**接线只有这一条**——所以这里一次断三个节点，不给第二条通路留缝。
     """
     import tempfile
     from pathlib import Path
@@ -435,10 +546,13 @@ def test_the_judge_node_pins_its_model_over_the_global_default(monkeypatch):
 
     judge = M._llm_client(RunContext.open(
         base, '123', 'stage6.semantic', paid=True, write_ledger=False))
+    plan = M._llm_client(RunContext.open(
+        base, '123', 'stage4.plan', paid=True, write_ledger=False))
     other = M._llm_client(RunContext.open(
         base, '123', 'stage3.style', paid=True, write_ledger=False))
 
     assert judge.model == 'deepseek-v4-pro', '判官的 pro 是钉死的，环境变量换不掉'
+    assert plan.model == 'deepseek-v4-pro', 'stage4.plan 的 pro 是钉死的，环境变量换不掉'
     assert other.model == 'deepseek-v4-flash' == config.DEFAULT_MODEL
 
 

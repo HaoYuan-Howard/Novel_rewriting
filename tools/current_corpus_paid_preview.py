@@ -40,7 +40,7 @@ from contracts.artifacts import (  # noqa: E402
     STAGE1_PARTITION_REPORT,
     STAGE2_GLOBAL_GROUNDING,
 )
-from contracts.invariants import HOOK_APPROACHES, NODES  # noqa: E402
+from contracts.invariants import HOOK_SLOTS, NODES  # noqa: E402
 from contracts.schema import artifact_spec, decode_artifact  # noqa: E402
 from contracts.schema.stage0 import RemovalReport  # noqa: E402
 from contracts.schema.stage1 import HookCopy, MainText, PartitionReport  # noqa: E402
@@ -50,13 +50,18 @@ from novel.llm.budget import (  # noqa: E402
     count_input_tokens,
     model_budget,
 )
-from novel.llm.client import MAX_SAMPLES_PER_RUNG, rungs_from_effort  # noqa: E402
+from novel.llm.client import (  # noqa: E402
+    DEFAULT_MAX_TOKENS as LLM_DEFAULT_MAX_TOKENS,
+    MAX_SAMPLES_PER_RUNG,
+    rungs_from_effort,
+)
 from novel.llm.prompts import with_json_shape  # noqa: E402
 from novel.llm.transport import ChatRequest  # noqa: E402
 from novel.orchestrator.nodes import build_argv  # noqa: E402
 from novel.stages.stage0.removal import remove_bytes  # noqa: E402
 from novel.stages.stage1.partition import partition_text  # noqa: E402
 from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
+from novel.stages.stage2.contract import active_contract  # noqa: E402
 from novel.stages.stage2 import prompts as stage2_prompts  # noqa: E402
 from novel.stages.stage4.prompts import PLAN_MAX_TOKENS  # noqa: E402
 from novel.stages.stage5 import write as stage5_write  # noqa: E402
@@ -316,7 +321,16 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
     conditional_wire = 0
     condition: str | None = None
     if node == 'stage2.blueprint':
-        base = chapters
+        # ⚠⚠ **不许写死 `chapters`。** 逐章调用几次由**现役契约的拓扑**决定，
+        #   而那一格会翻默认（`BLUEPRINT_ARCHITECTURE`）：
+        #     · `boundary_then_detail`（现役 v2）—— 每章两相（先切边界再填细节）；
+        #     · `single` / `scaffolded_single`   —— 每章一次；
+        #   再加 `needs_summary_batch` 的那一次书级摘要 ⇒ 现役是 **2N+1**。
+        #   写死成 N 的后果不是「估得糙」：17+25 章两本少报 44 个逻辑请求、
+        #   264 个 wire 上限，而这份预览的全部用途就是**开跑前拿它决定花不花这笔钱**。
+        spec = active_contract()
+        per_chapter = 2 if spec.topology == 'boundary_then_detail' else 1
+        base = chapters * per_chapter + (1 if spec.needs_summary_batch else 0)
     elif node == 'stage3.style':
         base = chapters + 1
         conditional = 1
@@ -326,10 +340,12 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
         # 收缩臂整臂下线后本层只剩逐章一次调用；超上限只落 audit，0 次调用。
         base = chapters
     elif node == 'stage6.hook':
-        # The initial response always contains one candidate per registered
-        # approach.  Every initially HARD candidate can receive one fixed
-        # low/no-thinking refresh, so all three may trigger independently.
-        conditional = len(HOOK_APPROACHES) * HOOK_RETRY_LIMIT
+        # The initial response always fills every slot.  Every initially HARD
+        # candidate can receive one fixed low/no-thinking refresh, so all three
+        # may trigger independently.  ⚠ The bound is the number of *slots*, not
+        # the number of registered approaches: the current recipe repeats one
+        # approach, so counting approaches would under-count the retry ceiling.
+        conditional = len(HOOK_SLOTS) * HOOK_RETRY_LIMIT
         conditional_wire = conditional * len(HOOK_RETRY_RUNGS) * MAX_SAMPLES_PER_RUNG
         condition = (
             '初始三候选中每条含 HARD 的候选最多一次 low/no-thinking 定向重试；'
@@ -370,6 +386,22 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
             'max_tokens': 16_000,
             'rungs': [list(row) for row in rungs],
         })
+    if node == 'stage2.blueprint':
+        # 逐章那一相之外，契约还会发另外两种请求；它们各有自己的 `max_tokens`，
+        # 只列 `BLUEPRINT_MAX_TOKENS` 会让上限估算漏掉这两种。
+        spec = active_contract()
+        if spec.topology == 'boundary_then_detail':
+            rows.append({
+                'kind': 'boundary_phase',
+                'max_tokens': stage2_extract.BOUNDARY_MAX_TOKENS,
+                'rungs': [list(row) for row in rungs],
+            })
+        if spec.needs_summary_batch:
+            rows.append({
+                'kind': 'book_summary_batch',
+                'max_tokens': LLM_DEFAULT_MAX_TOKENS,
+                'rungs': [list(row) for row in rungs],
+            })
     if node == 'stage6.hook':
         rows.append({
             'kind': 'conditional_candidate_retry',

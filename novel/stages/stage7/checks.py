@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 33 条判据的**实现**。行在 `contracts/judges/stage7.py`（`Q-12`）。
+checks.py —— 34 条判据的**实现**。行在 `contracts/judges/stage7.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 真跑、`--recheck`、`--apply-edit` 走的都是
 `rename_findings()` 这一个函数——三条路各判一遍就会长出三把尺子。
@@ -111,6 +111,7 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                     dup: list[int], missing: list[int],
                     invalids: list[str], post_units: list[Unit],
                     title_line: str,
+                    derived_aliases: list[dict] | None = None,
                     dropped_reason: list[str] = ()) -> list[Finding]:
     """对一份映射表 + 一次替换跑全部确定性判据 → `[Finding]`。**唯一判定落点。**"""
     fs: list[Finding] = []
@@ -322,6 +323,21 @@ def rename_findings(*, name_map: dict, subs: dict[str, str], problems: list[Prob
                      '两个信号打架时以 confidence 为准。'
                      '人从上往下读，勾中的走 `--apply-edit` 补进 `extra_subs`',
             evidence=[r['hit'] for r in residual]))
+    if derived_aliases:
+        suggestions = sorted({(row['unit'], row['suggest']) for row in derived_aliases
+                              if row.get('suggest')})
+        fs.append(finding(
+            'rn_derived_alias_candidate',
+            detail=f'{len(derived_aliases)} 处疑似“名字尾字 + 关系称呼”的未登记昵称：'
+                   + '；'.join(
+                       f"{row['where']}「{row['unit']}」…{row['context']}…"
+                       for row in derived_aliases[:4])
+                   + (('　※ 人物表可推出的建议替换对：'
+                       + '、'.join(f'{old}→{new}' for old, new in suggestions))
+                      if suggestions else
+                      '　※ 同一旧尾字映到多个新尾字，无法安全给建议')
+                   + '　※ 只报 INFO 候选，需人工核对后走 `extra_subs`，绝不自动替换',
+            evidence=[row['unit'] for row in derived_aliases]))
 
     # ── ⑨ 三条度量：**无条件产出**，不许挂在「没问题」那一支上 ────
     fs.append(finding(
@@ -406,7 +422,7 @@ def _style_report(post_units: list[Unit], source_text: str) -> Finding:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一份产物 → 34 个 `Outcome`
+# 一份产物 → 35 个 `Outcome`
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: 由 `rename_findings` 产的那些（hard/info/metric），**逐条列出不 glob**：
@@ -424,7 +440,7 @@ _FROM_FINDINGS = (
     # 组装的前置条件
     'rn_book_incomplete', 'rn_invalid_drafts',
     # 漏网
-    'rn_residual_stem', 'rn_no_reason',
+    'rn_residual_stem', 'rn_derived_alias_candidate', 'rn_no_reason',
     # 三条度量
     'rn_stem_noise', 'rn_report', 'rn_style_report',
 )
@@ -435,7 +451,7 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
           stale: list[str], missing: list[str], hook_stale: bool,
           identity: dict | None, title_line: str, body_count: int,
           upstream: tuple[str, str, int]) -> list[Outcome]:
-    """一份 `name_map.json` → **34 个 `Outcome`，一条判据一个**。
+    """一份 `name_map.json` → **35 个 `Outcome`，一条判据一个**。
 
     ⚠ `scanned` 一律填：**一个不知道自己扫了多少的绿灯没有判别力**。
     两条判据的分母与其余的不同，各自单给：

@@ -216,8 +216,8 @@ def test_default_depth_is_chapters_one_two_three_and_get_is_read_only():
         #   已经跑完的节点**不再被提议**——`_spawns` 的 docstring 记着为什么：
         #   原来那张无条件的表会让「批准一份 fresh 的 stage2」顺手提议并执行
         #   **再一次付费的 `stage4.plan`**。现役语料是跑完的书 ⇒ `s1` 这一格应当为空。
-        #   这里曾经断言 `doc.spawns['s1'][0].extra == ['--full-extract']`，
-        #   即断言一条产品**明说不该出现**的提议（`docs/LESSONS.md` 第 21 条第二形状）。
+        #   这里曾经断言 s1 一定提议旧并发首跑，
+        #   即断言一条产品**明说不该出现**的建议（`docs/LESSONS.md` 第 21 条第二形状）。
         #   ⇒ 改成守「提议出来的每一条，生产的 resume 判定都同意它真的要跑」，
         #   并守取值面齐全——**调用生产那一个落点，不重拼一份**。
         assert set(doc.spawns) == {'s1', 's2', 's5', 's6', 's7'}

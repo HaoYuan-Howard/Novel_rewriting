@@ -41,9 +41,12 @@ from contracts.invariants import (
     DEPTH_MODES,
     HINGE_KINDS,
     HOOK_APPROACHES,
-    HOOK_APPROVED_APPROACHES,
+    HOOK_SLOTS,
+    slot_of,
     HOOK_SEMANTIC_STATES,
     HOOK_KEYS,
+    INBOX_ATTENTION,
+    INBOX_DELIVERY_EFFECT,
     INBOX_KIND,
     NAME_DISTINCTIVENESS,
     NARRATIVE_PERSON,
@@ -100,6 +103,8 @@ RemovedOrigin = Literal[REMOVED_ORIGIN]
 GateKey = Literal[APPROVAL_GATES]
 SeenKey = Literal[APPROVAL_SEEN]
 InboxKind = Literal[INBOX_KIND]
+InboxAttention = Literal[INBOX_ATTENTION]
+InboxDeliveryEffect = Literal[INBOX_DELIVERY_EFFECT]
 AnchorCoverageState = Literal[ANCHOR_COVERAGE_STATE]
 
 
@@ -323,16 +328,30 @@ class Stage1ChapterRow(FrozenModel):
     source_chapter_no: int = Field(ge=0)
     chars: int = Field(ge=0)
     preview: str
+    #: 正式 Stage1 章表也携带章号诊断；否则重号/缺号/倒退只藏在校验行的
+    #: ``scanned`` 字符串里，界面会把那条规则折进「查过、没问题」。
+    label_delta: int | None = None
+    anomaly: ChapterLabelAnomaly | None = None
+
+    @model_validator(mode='after')
+    def _delta_exists_exactly_when_it_is_computable(self) -> Stage1ChapterRow:
+        if (self.chapter_ordinal == 1) != (self.label_delta is None):
+            raise ValueError('有且只有第一章没有 label_delta')
+        return self
 
 
 class Stage1Chapters(StrictModel):
     chapters: list[Stage1ChapterRow] = Field(default_factory=list)
+    anomaly_count: int = Field(default=0, ge=0)
 
     @model_validator(mode='after')
     def _ordinals_are_contiguous(self) -> Stage1Chapters:
         got = [chapter.chapter_ordinal for chapter in self.chapters]
         if got != list(range(1, len(got) + 1)):
             raise ValueError('stage1 章节索引必须从 1 起连续有序')
+        hit = sum(1 for chapter in self.chapters if chapter.anomaly is not None)
+        if hit != self.anomaly_count:
+            raise ValueError(f'anomaly_count={self.anomaly_count} 与逐章实际命中 {hit} 不符')
         return self
 
 
@@ -340,8 +359,8 @@ class Stage0PreviewChapter(FrozenModel):
     """S-00 批准前分章预览里的一章。**诊断用，不承重。**
 
     与 `Stage1ChapterRow` 刻意不共用一个模型：那一份是**已批准之后**的正式章表，
-    这一份是**批准之前**的一次性推演，多带两个只在审阅时有意义的字段。
-    合成一个模型就等于让「已验证事实」与「尚未批准的推演」在类型上分不开
+    这一份是**批准之前**的一次性推演。两份都显示同源的章号诊断，但不能因此
+    合成一个模型——那会让「已验证事实」与「尚未批准的推演」在类型上分不开
     （同 `TODO-36` 要拆 command DTO 的那条理由）。
     """
 
@@ -411,6 +430,21 @@ class HookCopyView(StrictModel):
 class UploadResult(StrictModel):
     sid: str = Field(min_length=1)
     job: JobRecord
+
+
+class TrashNovelRequest(StrictModel):
+    """删除确认绑定当前书名；sid 由路径参数单独绑定。"""
+
+    expected_title: str = Field(min_length=1)
+
+
+class TrashNovelResult(StrictModel):
+    """项目已移出语料库，但仍可从 `_service/trash/` 恢复。"""
+
+    sid: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    trash_id: str = Field(min_length=1)
+    trash_rel: str = Field(min_length=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -800,6 +834,16 @@ class DeepSelectionRequest(StrictModel):
 # 二b、待人工清单（修复路由的 `human` 落面；BE-04 第一条的生产者形状）
 # ─────────────────────────────────────────────────────────────────────────────
 
+class InboxDecision(FrozenModel):
+    """能从 typed 产物直接举证的一次人工裁决；没有就必须为 None。"""
+
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    state: str = Field(min_length=1)
+    decided_at: str = Field(min_length=1)
+
+
 class InboxItem(FrozenModel):
     """「待人工」清单的一条。通用 check 的 `unver` 不入列；
     TODO-24 中能通过人工证据消解的 `pending` / `UNVER` 以 `verification` 入列。
@@ -819,6 +863,15 @@ class InboxItem(FrozenModel):
     rule: str = Field(min_length=1)
     what: str = Field(min_length=1)
     how: str = Field(min_length=1)
+    attention: InboxAttention = 'pending'
+    delivery_effect: InboxDeliveryEffect = 'blocking'
+    decision: InboxDecision | None = None
+
+    @model_validator(mode='after')
+    def _retained_requires_a_typed_decision(self) -> InboxItem:
+        if (self.attention == 'reviewed_retained') != (self.decision is not None):
+            raise ValueError('reviewed_retained 与 typed decision 必须同进同出')
+        return self
 
 
 class InboxView(StrictModel):
@@ -831,6 +884,8 @@ class InboxView(StrictModel):
 
     items: list[InboxItem]
     counts: dict[str, int]
+    attention_counts: dict[str, int] = Field(default_factory=dict)
+    delivery_counts: dict[str, int] = Field(default_factory=dict)
     total: int = Field(ge=0)
     wontfix: int = Field(ge=0)
 
@@ -845,6 +900,19 @@ class InboxView(StrictModel):
             got[item.kind] = got.get(item.kind, 0) + 1
         if any(self.counts[k] != got.get(k, 0) for k in self.counts):
             raise ValueError('counts 与 items 的分组计数不一致')
+        attention = {key: 0 for key in INBOX_ATTENTION}
+        delivery = {key: 0 for key in INBOX_DELIVERY_EFFECT}
+        for item in self.items:
+            attention[item.attention] += 1
+            delivery[item.delivery_effect] += 1
+        if not self.attention_counts:
+            self.attention_counts = attention
+        if not self.delivery_counts:
+            self.delivery_counts = delivery
+        if self.attention_counts != attention:
+            raise ValueError('attention_counts 与 items 不一致')
+        if self.delivery_counts != delivery:
+            raise ValueError('delivery_counts 与 items 不一致')
         return self
 
 
@@ -1011,7 +1079,8 @@ class HookCandidateLine(FrozenModel):
     #: 永远开着的闸，误导的方向相反、形状相同。⇒ 两个都删掉；
     #: **每一条候选都要人显式核验**，要判还用不用人看就读 `semantic_state`。
 
-    #: 这一条是不是当前定稿（`hook.approved.approach == candidate.approach`）。
+    #: 这一条是不是当前定稿（按**位置身份**比：`hook.approved.slot == slot_of(index)`）。
+    #: ⚠ 曾按 `approach` 比。同一种策略采两条样本时，那样写会把**两条**都标成已定稿。
     approved: bool
 
 
@@ -1019,7 +1088,11 @@ class HookApprovedLine(FrozenModel):
     """定稿的视图行。`origin` 的取值由 `stage6.ApprovedHook` 收口（恒 `human`），
     这里不抄第二份 Literal（api.py 纪律 ①）。"""
 
-    approach: Literal[HOOK_APPROVED_APPROACHES]
+    #: 从**哪一条候选**来的；`None` = 没有前身（人手写）。
+    slot: Literal[HOOK_SLOTS] | None
+    #: 那条候选用的什么策略。**现算**（`candidates[slot].approach`），
+    #: `slot is None` 时同为 `None`——没有前身就没有策略可报。
+    approach: str | None
     chars: int = Field(ge=0)
     text: str = Field(min_length=1)
     origin: str = Field(min_length=1)
@@ -1055,15 +1128,15 @@ class Stage6View(StrictModel):
     @model_validator(mode='after')
     def _the_approved_flag_matches_the_approved_hook(self) -> Stage6View:
         """`candidates[].approved` 与 `approved` 说的必须是同一件事。"""
-        flagged = [c.approach for c in self.candidates if c.approved]
+        flagged = [slot_of(c.index) for c in self.candidates if c.approved]
         if self.approved is None and flagged:
             raise ValueError(f'没有定稿而 {flagged} 标着已定——两格在说两件事')
         if self.approved is not None:
-            want = [self.approved.approach] if self.approved.approach != 'human_edit' else []
+            want = [self.approved.slot] if self.approved.slot is not None else []
             if flagged != want:
                 raise ValueError(
-                    f'定稿是 {self.approved.approach!r} 而候选标记是 {flagged}——'
-                    f'`human_edit`（无前身）时不许有候选自称定稿')
+                    f'定稿来自 {self.approved.slot!r} 而候选标记是 {flagged}——'
+                    f'无前身（人手写）时不许有候选自称定稿')
         if [c.index for c in self.candidates] != [1, 2, 3]:
             raise ValueError('候选 index 必须是 1..3（顺序即产物顺序）')
         return self
@@ -1298,6 +1371,12 @@ class PlanBeatLine(FrozenModel):
     narrative_role: Literal[STRUCTURAL_ROLES]
     delivery: Literal[DELIVERY_MODES]
     transition: Literal[TEMPORAL_LINKS]
+
+    #: 本拍的主干是 `events[]` 里的第几条。`null` = 这份计划没做过主次决策
+    #: （恒等基线就是它，与 `budget_chars=null` 同一种「基线什么都没决定」）。
+    #: ⚠ 它与上面三个枚举是**同一批东西**——模型在拍这一层做的决策。
+    #: 那三个在这里而它不在，等于让审阅面与决策面分家。
+    spine: int | None = Field(default=None, ge=1)
 
 
 class PlanChapterLine(StrictModel):

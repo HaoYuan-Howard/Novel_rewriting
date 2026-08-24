@@ -15,6 +15,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     queue-resume <qid>              续跑冻结的队列；含付费项时要重新 `--yes`
     jobs                            作业记录（新的在前）
     reconcile                       启动时把「运行中」一律改判「不知道」
+    doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
 而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
@@ -136,6 +137,10 @@ def _parser() -> argparse.ArgumentParser:
     rc = sub.add_parser('reconcile', help='启动时把「运行中」一律改判「不知道」')
     rc.add_argument('--base', required=True)
 
+    doctor = sub.add_parser('doctor', help='运行环境诊断（0 成本）')
+    doctor.add_argument('--llm-transport', action='store_true', required=True,
+                        help='按正式代理/超时探测 DeepSeek HTTP 通路；不发正文/密钥')
+
     mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
     mk.add_argument('sid')
     mk.add_argument('--node', required=True, choices=sorted(NODES))
@@ -193,8 +198,9 @@ def _llm_client(ctx: RunContext):
     from novel.llm.transport import DeepSeekTransport
 
     cfg = load_config()
-    # ⚠ 节点钉死的模型优先于全局配置：`NodeSpec.model` 是「判官例外」的形状落点
-    #   （`DEEPSEEK_MODEL` / `DEFAULT_MODEL` 换不掉它），其余节点 '' = 跟随全局默认。
+    # ⚠ 节点钉死的模型优先于全局配置：`NodeSpec.model` 是那两条例外的形状落点
+    #   （`stage6.semantic` 的证据力、`stage4.plan` 的重采粒度；`DEEPSEEK_MODEL` /
+    #   `DEFAULT_MODEL` 换不掉它们），其余节点 '' = 跟随全局默认。
     return LlmClient(
         ctx,
         DeepSeekTransport(cfg),
@@ -519,23 +525,14 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage2.global':
-        if '--full-extract' in tokens:
-            from novel.stages.initial_extract import run_initial_extract
-            blueprint_ctx = RunContext.open(
-                ctx.novel_dir.parent, ctx.sid, 'stage2.blueprint', paid=True)
-            style_ctx = RunContext.open(
-                ctx.novel_dir.parent, ctx.sid, 'stage3.style', paid=True)
-            report, _artifact = run_initial_extract(
-                ctx,
-                _llm_client(ctx),
-                blueprint_ctx,
-                _llm_client(blueprint_ctx),
-                style_ctx,
-                _llm_client(style_ctx),
-            )
-            print('  ✓ stage2 全局底座完成后，逐章抽取与 stage3 防泄露文风画像已并发完成')
-            print(render(report))
-            return X.OK if report.passed else X.CHECK_FAILED
+        if '--emit-review-template' in tokens:
+            from novel.stages.stage2 import global_review
+            print(global_review.review_template_json(ctx))
+            return X.OK
+        if '--emit-review-workpack' in tokens:
+            from novel.stages.stage2 import global_review
+            print(global_review.review_workpack_json(ctx))
+            return X.OK
         if '--revalidate' in tokens:
             promoted, report = extract.run_revalidate(
                 ctx, actor=_valued(flags, '--actor') or '',
@@ -837,7 +834,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
 
 
 def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
-    """stage7 的十一条路。**十条 0 成本，一条付费。**
+    """stage7 的十二条路。**十一条 0 成本，一条付费。**
 
     ⚠⚠ **本层是第一个「一个 stage 三个节点」的层**（`stage7.rename` / `.assemble` /
     `.approve`）。派发按 **stage** 分（`_runners` 那张表的键就是 stage），
@@ -911,6 +908,13 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
+    if '--validate-edit' in tokens:
+        _art, report = rename.run_validate_edit(
+            ctx, _valued(flags, '--validate-edit') or '')
+        print(render(report))
+        print('  只读预检完成：没有归档、覆盖、退休成书或写入任何产物')
+        return X.OK if report.passed else X.CHECK_FAILED
+
     if '--adopt-residual' in tokens:
         _art, report = rename.run_adopt_residual(
             ctx, _valued(flags, '--adopt-residual') or '')
@@ -975,6 +979,13 @@ def _cmd_run(a: argparse.Namespace) -> int:
         raise TerminalState(
             f'{a.node} 要已有书 sid；只有 stage0.remove --source 摄入新书时可以省略')
     ctx = RunContext.open(a.base, a.sid, a.node, paid=paid, mode=a.mode)
+    # Stage2 人工评测是**运行边界**，不是某个编排器的礼貌约定。任何调用方
+    # （手敲 CLI、前端 jobs、headless agent）最终都要经过这里；0 成本复检/人工修复
+    # 仍可在闸关闭时运行，否则人连开闸的恢复路都进不去。
+    if ((paid and a.node not in ('stage2.global',))
+            or a.node == 'stage7.assemble'):
+        from novel.stages.stage2 import global_review
+        global_review.require_approved(ctx)
     return _dispatch(a.node, ctx, flags)
 
 
@@ -1039,10 +1050,15 @@ def _cmd_inbox(a: argparse.Namespace) -> int:
     view = inbox_view(a.base, a.sid)
     counts = ' · '.join(f'{kind} {n}' for kind, n in view.counts.items())
     print(f'── 待人工 ── 共 {view.total} 项（{counts}）；'
+          f'尚待处理 {view.attention_counts["pending"]} · '
+          f'已裁决保留 {view.attention_counts["reviewed_retained"]}；'
+          f'阻塞交付 {view.delivery_counts["blocking"]} · '
+          f'仅披露 {view.delivery_counts["disclosure"]}；'
           f'wontfix 豁免 {view.wontfix} 条（有人看过并决定不修，不占清单）')
     for it in view.items:
         ch = f' ch{it.chapter}' if it.chapter is not None else ''
-        print(f'  [{it.kind}] {it.stage}{ch}  {it.rule}')
+        print(f'  [{it.kind}] {it.stage}{ch}  {it.rule}  '
+              f'[{it.attention}/{it.delivery_effect}]')
         print(f'      {it.what}')
         print(f'      → {it.how}')
     return X.OK
@@ -1140,6 +1156,22 @@ def _cmd_reconcile(a: argparse.Namespace) -> int:
     return X.OK
 
 
+def _cmd_doctor(a: argparse.Namespace) -> int:
+    from novel.config import load_config
+    from novel.llm.transport import probe_transport
+
+    cfg = load_config()
+    result = probe_transport(cfg)
+    print('── LLM transport doctor（0 成本；未发送正文或 API key）──')
+    print(f'  base_url : {cfg.base_url}')
+    print(f'  proxy    : {"set" if cfg.proxy_url else "unset"}')
+    print(f'  result   : {"HTTP reached" if result.reached_http else "FAILED"}')
+    print(f'  kind     : {result.kind}')
+    print(f'  status   : {result.status if result.status is not None else "—"}')
+    print(f'  detail   : {result.detail}')
+    return X.OK if result.reached_http else X.TERMINAL_STATE
+
+
 def _cmd_mark(a: argparse.Namespace) -> int:
     """进度信标打点：往 `_service/agent_progress.jsonl` 追加一行。**0 成本，恒 exit 0**。
 
@@ -1164,7 +1196,8 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'state': _cmd_state, 'inbox': _cmd_inbox, 'queue': _cmd_queue,
          'queue-list': _cmd_queue_list, 'queue-cancel': _cmd_queue_cancel,
          'queue-resume': _cmd_queue_resume,
-         'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'mark': _cmd_mark}
+         'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
+         'mark': _cmd_mark}
 
 
 def _print_hint(exc: BaseException) -> None:

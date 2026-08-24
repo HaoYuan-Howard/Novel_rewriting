@@ -24,9 +24,17 @@ from novel.orchestrator import agent                    # noqa: E402
 UI = {UI_HEADER: '1'}
 
 
+#: 这一族用例真去拉 agent，而 `agent.start` / `enqueue` 现在**拒绝一本不在盘上的书**
+#: （`UpstreamMissing` → 404）。那道闸补的是删除竞态的下游：书删完之后队列里可能还
+#: 压着它的旧 pending 项。用例关心的是 HTTP 契约与互斥，不是摄入 ⇒ 这里一次落地。
+_SIDS = ('41', '42', '43', '44')
+
+
 @pytest.fixture
 def client(tmp_path):
     base = str(tmp_path)
+    for sid in _SIDS:
+        (tmp_path / f'FQ_接口测试书_{sid}').mkdir(exist_ok=True)
     with TestClient(create_app(base)) as c:
         yield c, base
 

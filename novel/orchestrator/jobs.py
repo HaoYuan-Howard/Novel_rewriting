@@ -126,6 +126,15 @@ class JobRegistry:
         with self._lock:
             return self._active.get(key)
 
+    def conflicting_holder(self, key: str) -> str | None:
+        """返回与 key 同书冲突的占用者；规则与 ``acquire`` 完全相同。"""
+        with self._lock:
+            return next((
+                holder for active, holder in self._active.items()
+                if (active == key or active.startswith(key + ':')
+                    or key.startswith(active + ':'))
+            ), None)
+
     def live(self) -> set[str]:
         with self._lock:
             return set(self._active.values())

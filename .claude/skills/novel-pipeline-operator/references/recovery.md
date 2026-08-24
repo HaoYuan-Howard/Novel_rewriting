@@ -90,8 +90,9 @@
 ## 允许写入面
 
 正式产物必须由 CLI 生成。受托 agent 只可直接创建或编辑下表的输入，并只经下表的入口落盘；
-路径、形状和前稿要求以**当前终态文案**为准（`stage7.rename --emit-edit-template` 是唯一能现取
-骨架的只读入口，其余层照终态报出的字段名与 schema version 写），不按记忆手抄。
+路径、形状和前稿要求以**当前终态文案**为准（`stage2.global --emit-review-template` 与
+`stage7.rename --emit-edit-template` 能现取绑定当前主体的骨架，其余层照终态报出的字段名与
+schema version 写），不按记忆手抄。
 
 ### ⚠ 「人工」不是「不许 agent 用」
 
@@ -111,19 +112,21 @@
 下表按**节点**索引，覆盖每一条 0 成本、但**会改动盘上产物**的入口——包括不需要另写输入文件的那几条
 （`--revalidate` / `--renormalize` / `--recheck` / `--remeasure` / `--identity` / `--adopt-residual`）。
 **“0 成本”不等于“只看不动”**：真正只读的是 `--dry-run`、`--check-only`、`--measure-only`、
-`--names-only`、`--emit-edit-template`，以及 `stage6.hook --identity`。表外的 0 成本 flag 一律按会写盘对待。
+`--names-only`、`--emit-review-template`、`--emit-review-workpack`、`--emit-edit-template`、
+`--validate-edit`，以及
+`stage6.hook --identity`。表外的 0 成本 flag 一律按会写盘对待。
 
 | 节点 | 0 成本写盘入口 | 需要 agent 自己写的输入 | 约束 |
 |---|---|---|---|
 | `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-candidate-plan` | 正式 edit / edit-plan / candidate-plan 形状 | 不直接覆盖 `clean_text.txt` 或 removal report——三者都只往 revision 链上追加一版，再由链物化成那两份产物。`--apply-candidate-plan` 是机器重跑候选的三选一裁决（`adopt` 采纳整版 / `dismiss` 保留当前版），与 edit-plan 同样带乐观锁（`expected_revision_id`）。⚠ 「采纳后再编辑」不是第三个动作，是 adopt 之后照常走 `--apply-edit-plan` |
-| `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` | typed 修订（如 `reader_reveal_events` 时线）；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`（见 [经验库](field-notes.md) FN-007）。`--review-decisions` 是全书评测项唯一的 0 成本销账入口：按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策被拒收 |
+| `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` | typed 修订（如 `reader_reveal_events` 时线）；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`（见 [经验库](field-notes.md) FN-007）。先用只读 `--emit-review-template` 取得当前 item hash/evidence；模板默认全 `UNVER`，原样应用不会开闸。`--review-decisions` 按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策被拒收 |
 | `stage2.blueprint` | `--renormalize` · `--revalidate` | finding 明确允许时编辑活动 `.INVALID` | 本层确实没有 `--apply-edit`；逐章内容的修正走 `--chapters <N>` 定向重生成（**付费**）或回上游 `stage2.global`。只改证据指向字段，不改生成轮次与来源账 |
 | `stage3.style` | `--apply-edit` · `--remeasure` · `--revalidate` | `<novel-dir>/stage3/style_edit.json`；终态明确允许时可修活动 `.INVALID` | 决策集只改 schema 开放字段 |
 | `stage4.plan` | `--apply-edit` · `--identity` · `--revalidate` | `<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID` | `--revalidate` 强审计并重建 writer context；`--identity` 另写 `stage4/writer_context.identity.json` 基线，不覆盖正式计划。仍以追跑 check/state 验证 |
 | `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` | 文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}` | **0 LLM 调用，但必须提交该章全部 producer-owned slot 的全文**；不直接改正式 chapter JSON、draft.md 或其他章 |
 | `stage5.review` | `--retain-pretrim` · `--wontfix` | 无人产文件；决定本身就是输入 | `--retain-pretrim --chapters <N> --actor <ACTOR> --reason <text>` 恰好一章，写 hash-bound `trim_resolution_chNN.json`，不改正文、不采用收缩候选（见 FN-014）；`--wontfix` 只把豁免记进 `stage5/wontfix.json`，**一份验收报告都不产** |
 | `stage6.hook` | `--apply-edit` · `--recheck` · `--revalidate` · `--wontfix` | `<novel-dir>/stage6/hook_edit.json` | 一次只改目标候选；随后重跑机械与语义审判 |
-| `stage7.rename` | `--apply-edit` · `--adopt-residual` · `--identity` · `--recheck` · `--revalidate` | `<novel-dir>/stage7/name_map_edit.json` | 先用 `--emit-edit-template`（只读）取当前注册的 `NameMapEdit` 骨架再改，不手抄 schema 版本。⚠ `--adopt-residual high` **重写 `stage7/name_map.json`、清旧审批、退休现有成书**，`--identity` 也重写同一份 name map——两者都不是“看一眼”，用后强制重新 hash-bound approve、assemble 和逐字对账 |
+| `stage7.rename` | `--apply-edit` · `--adopt-residual` · `--identity` · `--recheck` · `--revalidate` | `<novel-dir>/stage7/name_map_edit.json` | 先用 `--emit-edit-template` 取当前注册骨架，改后用只读 `--validate-edit <路径>` 走同一构建/判定链，确认后才 `--apply-edit`。⚠ `--adopt-residual high` **重写 `stage7/name_map.json`、清旧审批、退休现有成书**，`--identity` 也重写同一份 name map——两者都不是“看一眼”，用后强制重新 hash-bound approve、assemble 和逐字对账 |
 
 非节点的第十个写入面是终审包 `<novel-dir>/<书名>_review.md`（落书目录根，不在任何 `stageN/` 下；确定路径由启动 prompt 给出）：只供用户读取，可随跑更新，不得承担产物修复功能。
 
@@ -157,11 +160,18 @@ stage5 调用次数高于章数可以来自写作重试和长度收缩。最终�
 权威源是 `<BASE>/_service/ledger.jsonl`；产物 usage 和日志不另行混加。账本中的
 `cached == true` 为缓存回放，实付为零；reasoning token 为零或空不等于失败。
 
-修改正文后：
+修改 Stage5 正文后的依赖闭包（全部先 preview）：
 
-- 重新运行 `stage5.review`（0 成本）。本层没有第二个要跟着重跑的节点。
-- 若修改开篇消费范围内章节，检查 `stage6.semantic` 是否因正文 sha1 过期，并按需重跑。
-- 不在正文未变时无谓重跑 `stage5.review`。
+1. 必须重跑 `stage5.review`；旧 `wontfix` 只按 `(章, rule, evidence_key)` 绑定，正文变化后
+   新证据键不会继承旧豁免。只重新裁决**当前仍命中且未豁免**的条目，不删旧账。
+2. 若修改章落在 `stage6/hook.json.lead_upto` 消费范围内，运行 `stage6.hook --recheck`。
+   它刷新正文绑定；批准文本字节未变时可保留当前批准。`stage6.semantic` 绑定的是候选文本，
+   候选字节与 evaluator 指纹均未变时不白跑付费语义审判；任一变化才重跑。
+3. 任一正式章正文变化都会让 Stage7 的 `judged` 绑定过期，因为人物替换消费全书。
+   运行 `stage7.rename --recheck`；它会退休旧成书。若当前决策面未变且实现保留批准，核对
+   `approved.subject_sha256 == approval_subject_sha256` 后可直接组装；批准被清除则取当前完整
+   SHA-256 重跑 `stage7.approve`。最后总要 `stage7.assemble` + 成书逐字对账。
+4. 正文没变时不为“保险”重复跑上述写盘入口；先用只读 check/freshness 证明是否需要。
 
 ## 活动终态文件
 

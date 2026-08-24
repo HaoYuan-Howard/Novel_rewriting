@@ -98,28 +98,66 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
     'stage2/chapter_blueprints.json': (
-        2,
-        'bounded-fidelity-v2 → v3：beat 的区间改由段号算出，'
-        'BlueprintContext.architecture 的 Literal 收窄、'
-        'SourceSpan.recovery 去掉 lcs 一档、BlueprintProvenance.verbatim_recovered 删除',
+        3,
+        '两次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
+        '算出，SourceSpan.recovery 去掉 lcs，BlueprintProvenance.verbatim_recovered '
+        '删除。2026-08-23：BlueprintContext.architecture 从七值收窄为 '
+        'extraction-ir-v1.1 / v2 / v3.1 三值，退役 bounded-fidelity-v3、v1、v2.1、v3',
         'stage2.blueprint 整跑（付费）；.INVALID 与 _rounds/ 一律作废，'
-        '不手补字段冒充当前产地',
+        '不手补字段冒充当前产地。仓内没有迁移机制，因此即使 architecture 属于保留三值，'
+        '旧 v2 信封也必须由 producer 重建为 v3',
+    ),
+    'stage6/hook.json': (
+        2,
+        '2026-08-23 候选身份与策略名解耦：`ApprovedHook.approach`'
+        '（策略名 + 一个 `human_edit`）换成 `slot`（位置身份 `c1`/`c2`/`c3`，'
+        '`None` = 无前身），`HookCandidateRetry.approach` 同样换成 `slot`。'
+        '⚠ 破坏的理由不是「换个名字更好看」：同一种策略采两条样本时，`approach` '
+        '**在结构上答不出「这份定稿是从哪条候选来的」**，而 `_texts_of` 的标签、'
+        'wontfix 的证据键、判官的 `judged_texts` 键全挂在那个答案上。'
+        '策略名没有丢——由 `candidates[slot].approach` 现算。'
+        '`HOOK_APPROVED_APPROACHES` 随之删除',
+        '`stage6.hook` 重跑（**付费**）。⚠ 重跑写 `approved=None` ⇒ 人工定稿一并失效，'
+        '必须重新走 `stage6.approve --pick` 的 actor / reason / 完整 subject SHA-256。'
+        '⚠⚠ **没有自动迁移，也不能宣称盘上代价为零**：`outputs/_ab/flash/` 仍保留两份'
+        '已到 stage7 的 v1 实验快照，而且都缺 `stage2/global_review_decisions.json`，'
+        '不能直接从 producer 付费重建。本次把它们明确退役为**只读历史实验证据**：'
+        '不纳入 current-schema corpus，也不承诺当前运行时可读；字节原样保留，'
+        '需要检视时使用形状破坏前的代码身份。现役交付必须由 producer 生成 v2 并重新人工定稿。'
+        '`stage6/semantic_*.json` 未破坏形状，但它按 `judged_texts` 绑文本、重跑后会判 stale',
+    ),
+    'stage6/hook_edit.json': (
+        2,
+        '2026-08-23 同批：`HookEdit.candidate` 的取值面从策略名换成位置身份 '
+        '`c1`/`c2`/`c3`（`None` 仍表示「写/替换定稿」）。策略名不再唯一 ⇒ 选不中那一条',
+        '**盘上零存量**（全 `outputs/` 找不到一份 `hook_edit.json`）⇒ 本次代价为零。'
+        '它是人工决策集不是产出物，下次写的时候按新取值面写即可',
     ),
     'stage7/name_map.json': (
         2,
-        '2026-08-22 stage7 前置整改批：`NameDecision` 加跨字段 validator——'
+        '2026-08-24 stage7 前置整改批：`NameDecision` 加跨字段 validator——'
         '`renamed=true` 时 `not_renamed_reason` **只准是 `null`**。'
         '契约注释早就这么写着，但 `_build` 一直原样透传 ⇒ 盘上空串合法通行，'
         '收窄之后带 `\'\'` 的存量一律读不进来。'
         '（同批的 `ExtraSub.origin` 加 `adopted` 一格是 Literal **加**格，'
         '旧值 `human` 仍合法 ⇒ 那一项不构成破坏。）',
-        '**存量代价为零，形状破坏趁这个窗口**：`outputs/` 下 8 本书全部停在 stage1，'
-        '无一本有 `stage7/`。唯二两份 v1 产物在 `outputs/_ab/flash/`'
-        '（下划线开头，不是书目录，是 flash A/B 的实验副本），'
-        '而它们**在本批之前就已经读不进来了**——同目录的 '
-        '`stage0/removal_report.json` 是 v1（当前 v3）、`stage1/*` 三份是 v1（当前 v2），'
-        '还带着阶段 C 已下线的 `stage0/_audit/edit_1.json` ⇒ 一律作废不迁移。'
-        '重建路径：`stage7.rename` 重跑（付费）或 `--apply-edit`（0 成本）',
+        '`stage7.rename` 重跑（**付费**）。⚠ 重跑产新决策 ⇒ `approved` 一并失效，'
+        '必须重新走 `stage7.approve` 的 actor / reason / 完整 subject SHA-256，'
+        '旧 `book_txt` 也要重新 `stage7.assemble`。'
+        '⚠⚠ **`--apply-edit` 不是这一格的 0 成本出路**（别照抄别处那句）：'
+        '`run_apply_edit` 会先 `store.read_own(NameMap, ...)` 读盘上那份旧决策集，'
+        '而版本闸恰恰在那一步拒掉 v1 ⇒ 那条路进不去。'
+        '⚠⚠ **不能宣称盘上代价为零**：`outputs/` 现有 1 本走完全链的书'
+        '（`偶像公寓打工日常_2066575217393144601`），它的 `stage7/name_map.json` 是 v1、'
+        '已人工定稿且已交付 `_rewriting.txt`（22044 字 / 18 章）'
+        '⇒ 升版后该书 stage7 读不进来，须付费重跑并重新定稿。'
+        '两条减轻情节：它的 `RULES` 指纹在本批之前**就已经 stale**'
+        '（`rn_derived_alias_candidate` 落地晚于那次跑），而本批改了 `RENAME_SYS` 字节 ⇒ '
+        '它要变 current 本来就得付费重跑一次。'
+        '⚠ `outputs/_ab/flash/` 那两份 v1 快照不在此列——它们已由同表 '
+        '`stage6/hook.json` 那一条明确退役为**只读历史实验证据**，且本批之前就读不进来'
+        '（`stage0/removal_report.json` v1 而当前 v3、`stage1/*` v1 而当前 v2，'
+        '还带着阶段 C 已下线的 `stage0/_audit/edit_1.json`）',
     ),
 }
 

@@ -35,7 +35,7 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import CtxProvenance, PlanChapters, PlanEdit, WriterContext
 from novel import paths, prov
-from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.errors import GateBlocked, RefusedByStructure, TerminalState, UpstreamMissing
 from novel.llm.ledger import combine_usage
 from novel.report import build
 from novel.report.findings import Outcome
@@ -44,7 +44,10 @@ from novel.stages.stage4 import checks, prompts
 from novel.stages.stage4.beats import beat_index, group_beats
 from novel.stages.stage4.context import build_writer_context, display_names_at
 from novel.stages.stage4.fact_refs import catalog as fact_catalog, validate_plan_refs
-from novel.stages.stage4.measure import expand_plan_beats, identity_plan, source_chars_table
+from novel.stages.stage4.measure import (
+    adopt_plan_response, budget_basis, encode_plan_baseline, identity_plan,
+    source_chars_table,
+)
 from novel.store import ArtifactStore
 
 REL = STAGE4_PLAN_CHAPTERS
@@ -271,10 +274,30 @@ def _build_user(ctx: RunContext, up: _Upstreams) -> str:
         + json.dumps(refs, ensure_ascii=False, separators=(',', ':')),
         prompts.BLOCK_SKELETON + '\n' + bs,
     ]
-    if (tbl := source_chars_table(up.groups, up.bidx)):
+    # ⚠ `book_total=True` **只在整跑这一路**：它在表底多印一行全书合计与全书目标区间，
+    #   而定向修复那一路只发目标章那一格，同一行在那里会是假的（见 `source_chars_table`）。
+    if (tbl := source_chars_table(up.groups, up.bidx, book_total=True)):
         parts.append(prompts.BLOCK_SIZES + '\n' + tbl)
     parts.append(prompts.BLOCK_BODY + '\n' + book_text)
     return '\n\n'.join(parts)
+
+
+def _assert_budget_basis(up: _Upstreams) -> None:
+    """**花钱之前**先确认每一章都算得出预算基准。
+
+    ⚠⚠ 批 4 起 `budget_chars` 由 `measure.allocate_budgets` 算，而算它要有基准
+    （`beat.span` 合计）。一章一个已知单元都没有 ⇒ 这一章无从分配，
+    而那是 **stage2 的锚点坏了**，不是模型的错。
+    ⇒ 不拦在这里的话，它会在 `ask_json(validator=)` 里变成一次「响应不合格」，
+    于是整条阶梯重采到底、每一次都必然失败——**一次纯粹的付费空转**。
+    判词指向真根因，并明确说「尚未调用 LLM」（同本文件其余几处前置检查）。
+    """
+    _chars, _units, gaps = budget_basis(up.groups, up.bidx)
+    if gaps:
+        raise TerminalState(
+            f'第 {sorted(gaps)} 章一个源内容单元的字数都算不出来（`beat.span` 全部锚不到）'
+            f'⇒ 预算没有基准可分。先修 stage2 的锚点（`stage2.blueprint`），'
+            f'再回来跑 stage4.plan。尚未调用 LLM')
 
 
 def _chapter_by(plan_raw: dict[str, Any]) -> dict[int, dict[str, Any]]:
@@ -319,22 +342,46 @@ def _repair_baseline_artifact(
 
 def _response_baseline(chapter: dict[str, Any], groups: dict[Any, list[list[str]]],
                        ordinal: int) -> dict[str, Any]:
-    """落盘章 → 单章响应形状，避免把代码派生的 ``from_beats`` 反喂成输出字段。"""
-    member_to_unit = {
-        beat_id: f'p{ordinal:02d}_{index:02d}'
+    """落盘章 → 单章响应形状，避免把代码派生的字段反喂成输出字段。
+
+    ⚠⚠ **基线块与响应契约必须逐格同形**，否则同一份 user 里 system 要一个东西、
+    基线印着另一个，模型照基线抄就被 schema 当场拒——而那一拒要花一次钱才看得见。
+    批 4 之后要对齐的有四格：`from_beats` → `end_beat`（不是 `plan_beats` 了）、
+    `budget_chars` **整个删掉**（模型不再产它）、两个 `weight` 回编码成带前缀的档位、
+    `spine` 从下标翻回 `beat_id`。前三格在这里，后两格在 `encode_plan_baseline`。
+    """
+    unit_of = {
+        beat_id: (index, f'p{ordinal:02d}_{index:02d}')
         for index, members in enumerate(groups.get(ordinal) or [], 1)
         for beat_id in members
     }
     baseline = copy.deepcopy(chapter)
+    # ⚠⚠ **它必须跑在下面那个 pop 之前**：`spine` 从下标翻回 `beat_id` 用的就是同一行的
+    #   `from_beats`，pop 掉之后那份换算就没有来源了（而缺了它，基线块里会印一个
+    #   数字给一个只收编号的字段——同一格的错，只不过错的是类型）。
+    encode_plan_baseline(baseline)
     for segment in baseline.get('segments') or []:
         segment.pop('slot', None)
+        # ⚠ **预算不进基线块**：它已经不是响应字段了（`extra='forbid'` 会拒收），
+        #   而本章总量由 `allocate_budgets` 从基线钉死（`chapter_totals`）⇒
+        #   印出来既没人收、又会让模型以为它还能动那个数。
+        segment.pop('budget_chars', None)
         source = list(segment.pop('from_beats', []) or [])
-        unknown = [beat_id for beat_id in source if beat_id not in member_to_unit]
+        unknown = [beat_id for beat_id in source if beat_id not in unit_of]
         if unknown:
             raise TerminalState(
                 f'第 {ordinal} 章现有计划引用了当前分组里不存在的 beat：{unknown[:6]}')
-        segment['plan_beats'] = list(dict.fromkeys(member_to_unit[beat_id] for beat_id in source))
+        # ⚠ 取**源序上最靠后**的那个单元，不是 `from_beats` 的最后一项：存量计划
+        #   （批 4 之前的契约）允许单元内换序，那时最后一项未必是源序的末尾。
+        segment['end_beat'] = max(
+            (unit_of[beat_id] for beat_id in source), default=(0, ''))[1]
     return baseline
+
+
+def _chapter_total(chapter: dict[str, Any]) -> int:
+    """一个落盘章的预算合计。**定向修复要钉死的就是这个数。**"""
+    return sum(int(segment.get('budget_chars') or 0)
+               for segment in (chapter.get('segments') or []))
 
 
 def _repair_refs(up: _Upstreams, ordinal: int) -> dict[str, Any]:
@@ -400,8 +447,8 @@ def context_ctx(ctx: RunContext) -> RunContext:
     一份刚刚组好的上下文当场显示 `stale`，而 `stage5.write` 读它会被
     `_refuse_stale_upstream` 直接拒绝 —— 主链在这里断，且断得像数据问题。
 
-    ⇒ 与 stage2 `--full-extract` 同一条纪律（`novel/cli/main.py` 给 `stage2.blueprint`
-    与 `stage3.style` 各开一个 ctx）：**谁产的产物就记在谁名下**，不共用调用方的 ctx。
+    ⇒ 与所有跨节点编排同一条纪律（`novel/cli/main.py` 给每个节点各开一个 ctx）：
+    **谁产的产物就记在谁名下**，不共用调用方的 ctx。
     """
     if ctx.node == CTX_NODE:
         return ctx
@@ -548,13 +595,78 @@ def _repair_findings(outcomes: list[Outcome], ordinal: int) -> list[dict[str, An
     return rows
 
 
+def _expansion_validator(up: _Upstreams, *, ordinal: int | None = None,
+                         chapter_total: int | None = None) -> Any:
+    """把**确定性展开**那两道闸接到 `ask_json(validator=)` 上——拒了同档重采，不再是终态。
+
+    ⚠⚠ **这一条是 2026-08-22 花 59 720 completion 买回来的。** 那一次的响应过了内容闸
+    （schema 合法、`decision=accepted`），却倒在 `expand_plan_beats`：10 处 `spine`
+    对不上号。而那时阶梯已经走完 ⇒ `RefusedByStructure` 是**终态**，重采与降档都够不着它，
+    一份其余全都合格的计划连同整轮 token 一起报废，坏响应还留在缓存里等着被读回。
+    接到这里之后，这一拒与 schema 拒同型（`gate='validator'`）：evict、同档重采、必要时降档。
+
+    ⚠ 两道闸都是**纯确定性**的（编号展开 + 事实引用复算），跑在副本上没有副作用。
+    ⚠⚠ **写盘那一侧的同两道闸一格都没撤**：`--apply-edit` / `--revalidate` 不经过本函数，
+    那两条路的输入是人工稿与盘上产物。**两处调的是同一份代码，不是两份逻辑**——
+    改判据只有 `measure.py` / `fact_refs.py` 一个落点。
+
+    ⚠ 归族随之变了，这是有意的：走完阶梯仍不合格 ⇒ `LlmFailed`（`TerminalState`，
+    exit 2、不打栈），而不是从前的「结构性拒绝（是 bug，exit 70 + 栈）」。
+    **模型填错编号从来不是本仓的 bug**；写盘那一侧仍归 `RefusedByStructure`，
+    因为那一侧的输入是代码派生的或人手写的——那里出现编号错，才真的是 bug。
+
+    `ordinal` 给定 ⇒ 校验 `--chapters` 那条路的单章响应（分组也只给那一章，
+    与 `_run_plan_repair` 随后那次展开逐字同参）。
+    ⚠ `chapter_total` 同理：批 4 起 `adopt_plan_response` 连预算一起算，而定向修复那一路
+    把本章总量钉死在基线上。这里不一并传，校验跑的就**不是**随后真跑的那条路——
+    「校验过了、真跑却炸」正是这个函数存在的理由要消灭的那件事。
+    """
+    refs: dict[str, Any] = {}
+
+    def _check(response: Any, _resp: Any) -> str | None:
+        # `model_dump` 每次都新建嵌套容器 ⇒ 下面的就地展开碰不到调用方那一份。
+        raw = response.model_dump(by_alias=True)
+        if ordinal is None:
+            plan, groups = raw, up.groups
+        else:
+            # ⚠⚠ **「响应是别的章」也在这里判，而不是等 `ask_json` 返回之后。**
+            #   它从前是 `_run_plan_repair` 里一句 `TerminalState`：一次越界响应
+            #   直接报废整轮，而这一类恰恰是重采就可能救回来的。放在这里，
+            #   判词一个字不改（`LlmFailed` 会把它逐条带出来），但走的是阶梯。
+            if (raw.get('output_ordinal') != ordinal
+                    or list(raw.get('from_source_ordinals') or []) != [ordinal]):
+                return (f'定向重规划请求第 {ordinal} 章，响应却是 '
+                        f'output_ordinal={raw.get("output_ordinal")} / '
+                        f'from_source_ordinals={raw.get("from_source_ordinals")}。'
+                        f'拒绝把越界响应静默合并')
+            # ⚠ 只包 `output_chapters` 一层：这两道闸都不读 `reconstruction_strategy`，
+            #   给它编一个占位值等于在校验路上放一份假数据。
+            plan = {'output_chapters': [raw]}
+            groups = {ordinal: up.groups.get(ordinal) or []}
+        try:
+            adopt_plan_response(
+                plan, groups, up.bidx,
+                chapter_totals=(None if chapter_total is None
+                                else {ordinal: chapter_total}))
+            assert up.global_g is not None
+            if not refs:
+                refs.update(fact_catalog(up.global_g, up.blueprints, up.main_text,
+                                         plan_units=up.groups))
+            validate_plan_refs(plan, refs)
+        except RefusedByStructure as e:
+            return str(e)
+        return None
+
+    return _check
+
+
 def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: _Upstreams, *,
                provenance: Any) -> CheckReport:
     """落盘闸门 + 写盘。**付费路与人工稿共用这一段**（三条路一把尺子）。
 
     照 stage3 不照 stage6：本层一次产**一份** ⇒ **任何一条 hard 就 `.INVALID`**。
     """
-    expand_plan_beats(data, up.groups)          # 显式终态：编号对不上就在这里停
+    adopt_plan_response(data, up.groups, up.bidx)   # 解前缀 + 展开编号；对不上就在这里停
     return _gate_and_write(ctx, store, data, up, provenance=provenance)
 
 
@@ -649,6 +761,7 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
             '继续会把两版单章契约混在同一份 provenance 里。请整跑 stage4.plan；'
             '尚未调用 LLM')
 
+    _assert_budget_basis(up)
     old_by = _repair_chapter_map(previous_raw, up)
     before_outcomes = _judge(store, previous_raw, up, with_ctx_link=False)
     if strategy_failures := _strategy_hard_findings(before_outcomes):
@@ -668,20 +781,22 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
             repair_system, user, model_cls=PlanChapterResponse,
             purpose=f'{ctx.node}:repair:ch{ordinal}',
             max_tokens=prompts.PLAN_MAX_TOKENS,
+            validator=_expansion_validator(
+                up, ordinal=ordinal, chapter_total=_chapter_total(old_by[ordinal])),
             cache_policy=CachePolicy.refresh())
-        if (response.output_ordinal != ordinal
-                or list(response.from_source_ordinals) != [ordinal]):
-            raise TerminalState(
-                f'定向重规划请求第 {ordinal} 章，响应却是 '
-                f'output_ordinal={response.output_ordinal} / '
-                f'from_source_ordinals={response.from_source_ordinals}。'
-                '正式计划未覆盖；拒绝把越界响应静默合并')
+        # ⚠ 「响应是不是这一章」已经在 `_expansion_validator` 里判过了（拒了会重采、
+        #   走完阶梯才 `LlmFailed`）。这里再判一次就是一条永不触发的分支，
+        #   而永不触发的分支会让下一个人以为它还在守着什么。
         raw_response = response.model_dump(by_alias=True)
         expanded = {
             'reconstruction_strategy': previous_raw['reconstruction_strategy'],
             'output_chapters': [copy.deepcopy(raw_response)],
         }
-        expand_plan_beats(expanded, {ordinal: up.groups.get(ordinal) or []})
+        # ⚠⚠ **本章总量钉死在基线的既有合计上**：这一次只看得见一章，全书归一化无从谈起。
+        #   从前这条是 `PLAN_REPAIR_OVERRIDE` 里对模型的一句叮嘱（「不要动本章总量」），
+        #   现在是代码保证的 ⇒ 定向修复不可能再把 `plan_book_band` 顶出带外。
+        adopt_plan_response(expanded, {ordinal: up.groups.get(ordinal) or []}, up.bidx,
+                            chapter_totals={ordinal: _chapter_total(old_by[ordinal])})
         after = expanded['output_chapters'][0]
         merged_by[ordinal] = after
         interim = {
@@ -742,13 +857,15 @@ def run_plan(ctx: RunContext, client: Any, *,
 
     store = ArtifactStore(ctx)
     up = _Upstreams(ctx, store)
+    _assert_budget_basis(up)
     # ⚠ **不显式传 `require`**：它从 `PlanResponse` 派生，恰好是
     #   `reconstruction_strategy` · `output_chapters` 两个——手写一份等于给
     #   「漏一个不报错」留一道门。
     system = prompts.plan_system()
     resp = client.ask_json(system, _build_user(ctx, up),
                            model_cls=PlanResponse, purpose=ctx.node,
-                           max_tokens=prompts.PLAN_MAX_TOKENS)
+                           max_tokens=prompts.PLAN_MAX_TOKENS,
+                           validator=_expansion_validator(up))
     params = _params(up)
     ctx.account('params', params)
     return write_plan(ctx, store, resp.model_dump(by_alias=True), up,

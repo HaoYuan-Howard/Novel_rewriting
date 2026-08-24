@@ -8,14 +8,23 @@ import { useEnums } from '@/hooks/useEnums'
 import { ActionButton } from '@/components/ui/ActionButton'
 import { ErrorHint } from '@/components/state/States'
 import { GateChip, GateMark } from '@/components/vocab/Badges'
+import { cx } from '@/lib/cx'
 
 /**
- * 每屏底部那条闸门。上一层没确认，下一层不许开跑。
+ * 页面闸门。上一层没确认，下一层不许开跑；默认在屏底，也可嵌入屏内操作区。
  *
  * 按钮是不是橙的，取决于这次确认会不会发起花钱的下游 ——
  * 而「会发起什么」由服务端随验收记录一起下发，前端只是查 /api/enums 拿它的 paid。
  */
-export function GateBar({ screen }: { screen: ScreenName }) {
+export function GateBar({
+  screen,
+  embedded = false,
+  actionOnly = false,
+}: {
+  screen: ScreenName
+  embedded?: boolean
+  actionOnly?: boolean
+}) {
   const { doc, approve } = useApprovals()
   const enums = useEnums()
   const ask = useAskJob()
@@ -51,8 +60,77 @@ export function GateBar({ screen }: { screen: ScreenName }) {
 
   const off = view.done || view.blocked || approve.isPending || spawns.length > 1
 
+  const actionButton = (
+    <ActionButton
+      action={
+        unknownSpawn
+          ? null
+          : {
+              kind: 'gate.' + view.key,
+              extra: null,
+              paid: willSpend,
+              writes_disk: spawnWrites,
+            }
+      }
+      disabled={off}
+      disabledReason={
+        view.blocked ? view.blockedReason
+          : view.done ? '已经确认过了'
+            : spawns.length > 1 ? '服务端返回了多个作业，需合并成一个可预览动作' : ''
+      }
+      onClick={() => {
+        const spawn = spawns[0]
+        if (!spawn) {
+          approve.mutate(view.key, {
+            onSuccess: () => notify('闸门已确认：' + view.title),
+          })
+          return
+        }
+        ask(
+          {
+            kind: spawn.kind,
+            label: spawn.label,
+            extra: spawn.extra,
+            mode: spawn.mode ?? null,
+            required_inputs: resolved[0]?.required_inputs,
+            sid: doc.sid,
+            ordinal: null,
+          },
+          undefined,
+          async () => {
+            await approve.mutateAsync(view.key)
+            notify('闸门已确认：' + view.title)
+          },
+        )
+      }}
+    >
+      {view.btn}
+    </ActionButton>
+  )
+
+  if (actionOnly) {
+    return (
+      <span className="flex flex-col items-end gap-4">
+        {actionButton}
+        {approve.isError ? (
+          <span className="text-sm2 text-warn-ink">
+            确认失败：{errorBody(approve.error)}
+            <ErrorHint error={approve.error} />
+          </span>
+        ) : null}
+      </span>
+    )
+  }
+
   return (
-    <div className="mx-30 mt-20 mb-4 overflow-hidden rounded-card border border-line-btn bg-card">
+    <div
+      className={cx(
+        'overflow-hidden bg-card',
+        embedded
+          ? 'border-t border-line-row'
+          : 'mx-30 mt-20 mb-4 rounded-card border border-line-btn',
+      )}
+    >
       <div className="flex items-center gap-16 px-20 py-15">
         <GateMark ok={view.done} />
         <div className="flex min-w-0 flex-col gap-3">
@@ -63,51 +141,7 @@ export function GateBar({ screen }: { screen: ScreenName }) {
           {view.chips.map((c) => (
             <GateChip key={c.label} ok={c.ok} label={c.label} />
           ))}
-          <ActionButton
-            action={
-              unknownSpawn
-                ? null
-                : {
-                    kind: 'gate.' + view.key,
-                    extra: null,
-                    paid: willSpend,
-                    writes_disk: spawnWrites,
-                  }
-            }
-            disabled={off}
-            disabledReason={
-              view.blocked ? view.blockedReason
-                : view.done ? '已经确认过了'
-                  : spawns.length > 1 ? '服务端返回了多个作业，需合并成一个可预览动作' : ''
-            }
-            onClick={() => {
-              const spawn = spawns[0]
-              if (!spawn) {
-                approve.mutate(view.key, {
-                  onSuccess: () => notify('闸门已确认：' + view.title),
-                })
-                return
-              }
-              ask(
-                {
-                  kind: spawn.kind,
-                  label: spawn.label,
-                  extra: spawn.extra,
-                  mode: spawn.mode ?? null,
-                  required_inputs: resolved[0]?.required_inputs,
-                  sid: doc.sid,
-                  ordinal: null,
-                },
-                undefined,
-                async () => {
-                  await approve.mutateAsync(view.key)
-                  notify('闸门已确认：' + view.title)
-                },
-              )
-            }}
-          >
-            {view.btn}
-          </ActionButton>
+          {actionButton}
         </div>
       </div>
 

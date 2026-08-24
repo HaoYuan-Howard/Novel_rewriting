@@ -3,16 +3,20 @@
 """
 contract.py —— `stage2.blueprint` 的响应契约注册表。
 
-【为什么是一张表而不是 if】v3 与 ir1 要在 A/B 期间**并存**：整跑按配置选，
+【为什么是一张表而不是 if】多套响应契约要在 A/B 与存量修复期间**并存**：整跑按配置选，
 定向重生成按**基线产物的 architecture** 选（修复必须与基线同构，配置说了不算）。
 把「system / 响应模型 / 编译函数 / 投影函数」捆成一条 spec，是为了让
 「换契约」在结构上是**换整套**，而不是四处各换一半——各换一半的失败形态是
 「prompt 是新的、编译器还是旧的」，而那不会报错，只会安静产出错位的产物。
 
 【`schema_mode` 是诚实标签，不是开关】DeepSeek V4 官方 API 只支持
-`response_format=json_object`（`json_schema` 被拒，2026-08-20 文档探针）⇒ 两套契约
+`response_format=json_object`（`json_schema` 被拒，2026-08-20 文档探针）⇒ 全部契约
 都只能是 `prompt_plus_local_validation`：**这不是 constrained decoding**，
-是 prompt 约束 + 本地 pydantic 校验。把它写成字段是为了让实验结论没法把
+是 prompt 约束 + 本地 pydantic 校验。
+⚠ 2026-08-22 曾把 `json_object` 关掉又当天改回（`novel/llm/client.py::JSON_OBJECT_MODE`）——
+两种口径都**不改变本标签**：它说的本来就是「靠 prompt + 本地校验」，
+而 `json_object` 从来只保证「是合法 JSON」、一格 schema 都不保证
+（TODO-40 实测两臂都出越界枚举）。把它写成字段是为了让实验结论没法把
 「枚举前缀带来的改善」误归因给 decoder 约束。
 """
 from __future__ import annotations
@@ -24,20 +28,15 @@ from pydantic import BaseModel
 
 from contracts.invariants import BLUEPRINT_ARCHITECTURES
 from contracts.schema.stage2 import (
-    ChapterBlueprintsResponse, ChapterBlueprintsResponseV2,
+    ChapterBoundariesResponse, ChapterBlueprintsResponseV2,
+    ChapterBlueprintsResponseV2Refs, ChapterBlueprintsResponseV31,
 )
 from novel.llm.prompts import with_json_shape
 from novel.stages.stage2 import prompts
-from novel.stages.stage2.compile_v2 import canonical_ir_projection, compile_v2
-from novel.stages.stage2.normalize import normalize_blueprints, response_shape
-
-
-def _compile_v3(data: dict[str, Any], main_text: list[dict[str, Any]],
-                characters: dict[str, dict[str, Any]], *,
-                summaries: dict[int, str] | None = None) -> tuple[dict, dict]:
-    """v3 归一的同签名包装：v3 的 summary 由模型自带，`summaries` 无意义、必须为空。"""
-    assert not summaries, 'bounded-fidelity-v3 的 summary 在响应里，不许再从摘要批注入'
-    return normalize_blueprints(data, main_text, characters)
+from novel.stages.stage2.compile_v2 import (
+    canonical_ir_projection, canonical_ir_projection_refs,
+    canonical_ir_projection_v31, compile_v2, compile_v2_refs, compile_v31_refs,
+)
 
 
 @dataclass(frozen=True)
@@ -53,7 +52,7 @@ class ContractSpec:
                          'prompt_plus_local_validation']
     compile_fn: Callable[..., tuple[dict[str, Any], dict[str, Any]]]
     projection_fn: Callable[[dict[str, Any], str], dict[str, Any]]
-    #: ir1 专属：summary 不在响应里，编译后要一次书级摘要批。
+    #: extraction IR 族：summary 不在逐章响应里，编译后要一次书级摘要批。
     needs_summary_batch: bool
 
     #: 这套契约的失败面能不能走 `stage2.blueprint --patch`（字段级修复，量级是条不是章）。
@@ -71,37 +70,52 @@ class ContractSpec:
     #: （`--patch` 的候选枚举依赖 IR 的拍区间），走 `--chapters` 整章重生成。
     supports_field_patch: bool
 
+    #: 显式调用拓扑。不能从 `boundary_system is None` 反推：那分不清普通一相与
+    #: “同一次响应内带召回脚手架”的一相，会让预览、生成和修复各自猜一遍。
+    topology: Literal['single', 'boundary_then_detail', 'scaffolded_single']
+
+    #: 两段式契约的第一相；仅 `boundary_then_detail` 拓扑使用。
+    boundary_system: str | None = None
+    boundary_sys_name: str | None = None
+    boundary_response_model: type[BaseModel] | None = None
+    #: 细节响应里的在场者是否从本章可见 `char_id` 集合选择；调用方据此
+    #: 给 user 注入关闭式候选集，并在本地 validator 再验一次。
+    uses_character_refs: bool = False
+
+    #: v3.1 的两个进一步收窄面；调用方按能力分派，不按架构名字猜。
+    uses_hinge_candidates: bool = False
+    uses_narration_refs: bool = False
+
+    #: v3.1 的同请求 A/B 观察到救回稿会把一章过切为 15 拍且地点全 unknown，
+    #: 正常正文重采则为 10 拍且地点全明确；但两本空缓存整跑又观察到全拒救回稿
+    #: 会把 41 章放大为 69 次真实调用。折中不是加 prompt，也不是无条件采纳：
+    #: 首份合法救回稿先留作同档后备，再争取一次正常 `content`；第二份仍不可用时
+    #: 才采纳后备，绝不继续降档白烧。多数结构化契约保持“合法即采纳”。
+    prefers_content_over_reasoning_salvage: bool = False
+
+
+_V2 = ContractSpec(
+    architecture='extraction-ir-v2',
+    system=with_json_shape(
+        prompts.BLUEPRINT_SYS_V2_REFS, prompts.BLUEPRINT_HINT_V2_REFS),
+    sys_name='BLUEPRINT_SYS_V2_REFS',
+    response_model=ChapterBlueprintsResponseV2Refs,
+    schema_mode='prompt_plus_local_validation',
+    compile_fn=compile_v2_refs,
+    projection_fn=canonical_ir_projection_refs,
+    needs_summary_batch=True,
+    supports_field_patch=True,
+    topology='boundary_then_detail',
+    boundary_system=with_json_shape(
+        prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2),
+    boundary_sys_name='BOUNDARY_SYS_V2',
+    boundary_response_model=ChapterBoundariesResponse,
+    uses_character_refs=True,
+)
 
 CONTRACTS: dict[str, ContractSpec] = {
-    'bounded-fidelity-v3': ContractSpec(
-        architecture='bounded-fidelity-v3',
-        system=with_json_shape(prompts.BLUEPRINT_SYS, prompts.BLUEPRINT_HINT),
-        sys_name='BLUEPRINT_SYS',
-        response_model=ChapterBlueprintsResponse,
-        schema_mode='prompt_plus_local_validation',
-        compile_fn=_compile_v3,
-        projection_fn=response_shape,
-        needs_summary_batch=False,
-        supports_field_patch=False,
-    ),
-    'extraction-ir-v1': ContractSpec(
-        architecture='extraction-ir-v1',
-        system=with_json_shape(prompts.BLUEPRINT_SYS_V2, prompts.BLUEPRINT_HINT_V2),
-        sys_name='BLUEPRINT_SYS_V2',
-        response_model=ChapterBlueprintsResponseV2,
-        schema_mode='prompt_plus_local_validation',
-        compile_fn=compile_v2,
-        projection_fn=canonical_ir_projection,
-        needs_summary_batch=True,
-        supports_field_patch=True,
-    ),
-    # ⚠ 与上面那条**只差 `system` 一处**：响应模型、编译器、投影函数、摘要批开关
-    #   与字段级修复能力全部原样共用（place 的**形状**没动，
-    #   动的只是 system 里那一段措辞的次序）。
-    #   这不是省事——它是**单变量对照能成立的前提**：两臂的差别若不止一处，
-    #   跑出来的读数就归不了因。同理，结构提示复用 `BLUEPRINT_HINT_V2`，
-    #   另起一份只会让两处漂移。
-    #   改动的理由与风险写在 `prompts.py::_BLUEPRINT_TPL_V1_1` 上方。
+    # v1.1 沿用 ir1 的响应模型、编译器与投影函数，只保留修复过地点措辞的 system。
+    # 退役的是可选 architecture，不是这组仍被 v1.1 消费的共享实现。
     'extraction-ir-v1.1': ContractSpec(
         architecture='extraction-ir-v1.1',
         system=with_json_shape(prompts.BLUEPRINT_SYS_V1_1, prompts.BLUEPRINT_HINT_V2),
@@ -112,6 +126,31 @@ CONTRACTS: dict[str, ContractSpec] = {
         projection_fn=canonical_ir_projection,
         needs_summary_batch=True,
         supports_field_patch=True,
+        topology='single',
+    ),
+    # Flash 的主要失效不是「字段写错」，而是单次请求同时切拍和填十余个字段时
+    # 系统性少切拍。v2 先只交止段，再让第二相在代码冻结的边界上填事实；同时把
+    # 在场人物改成可见 char_id 的关闭式选择、地点恢复成字符串或 null。
+    # 正式产物形状不变，变化只存在于模型响应边界和调用拓扑。
+    'extraction-ir-v2': _V2,
+    # v3.1 把叙述身份收成可见 char_id；hinge 优先选确定性原文候选、覆盖不到
+    # 才回抄 phrase。它保留单次调用内的召回脚手架。
+    'extraction-ir-v3.1': ContractSpec(
+        architecture='extraction-ir-v3.1',
+        system=with_json_shape(prompts.BLUEPRINT_SYS_V31,
+                               prompts.BLUEPRINT_HINT_V31),
+        sys_name='BLUEPRINT_SYS_V31',
+        response_model=ChapterBlueprintsResponseV31,
+        schema_mode='prompt_plus_local_validation',
+        compile_fn=compile_v31_refs,
+        projection_fn=canonical_ir_projection_v31,
+        needs_summary_batch=True,
+        supports_field_patch=True,
+        topology='scaffolded_single',
+        uses_character_refs=True,
+        uses_hinge_candidates=True,
+        uses_narration_refs=True,
+        prefers_content_over_reasoning_salvage=True,
     ),
 }
 
