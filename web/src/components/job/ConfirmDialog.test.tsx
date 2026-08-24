@@ -11,7 +11,6 @@ import type { JobPreview, JobRequest } from '@/types/jobs'
 const request: JobRequest = {
   kind: 'stage5.write',
   label: '动态修复第 11 章',
-  mode: 'deep',
   extra: ['--chapters'],
   args: ['11'],
   sid: 'book-1',
@@ -19,24 +18,23 @@ const request: JobRequest = {
 }
 
 const preview: JobPreview = {
-  argv: 'python -m novel.cli stage5.write --mode deep --chapters 11',
+  argv: 'python -m novel.cli stage5.write --chapters 11',
   paid: true,
   label: request.label,
   kind: request.kind,
   steps: [
     {
-      label: '第 11 章深度写作',
+      label: '第 11 章闭卷写作',
       paid: true,
-      writes: 'stage5/deep/ch11.json',
-      argv: 'python -m novel.cli stage5.write --mode deep --chapters 11',
+      writes: 'stage5/ch11.json',
+      argv: 'python -m novel.cli stage5.write --chapters 11',
     },
   ],
 }
 
 const revalidateRequest: JobRequest = {
   kind: 'stage5.write',
-  label: 'stage5 逐章写作（deep） --revalidate',
-  mode: 'deep',
+  label: 'stage5 全书闭卷写作 --revalidate',
   extra: ['--revalidate'],
   args: ['--chapters', '11'],
   required_inputs: [
@@ -49,7 +47,7 @@ const revalidateRequest: JobRequest = {
 
 const revalidatePreview: JobPreview = {
   argv:
-    'python -m novel.cli stage5.write --mode deep --revalidate --chapters 11 '
+    'python -m novel.cli stage5.write --revalidate --chapters 11 '
     + '--actor 待填·actor --reason 待填·reason',
   paid: false,
   label: revalidateRequest.label,
@@ -58,9 +56,9 @@ const revalidatePreview: JobPreview = {
     {
       label: revalidateRequest.label,
       paid: false,
-      writes: 'stage5/deep/ch11.json',
+      writes: 'stage5/ch11.json',
       argv:
-        'python -m novel.cli stage5.write --mode deep --revalidate --chapters 11 '
+        'python -m novel.cli stage5.write --revalidate --chapters 11 '
         + '--actor 待填·actor --reason 待填·reason',
     },
   ],

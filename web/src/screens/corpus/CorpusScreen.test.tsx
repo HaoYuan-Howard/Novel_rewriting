@@ -80,7 +80,6 @@ function compactBook(): NovelRow {
       stage0: [artifact('stage0', 'removal_report')],
       stage7: [artifact('stage7', 'name_map')],
     },
-    stage5_modes: [],
     stage_done: {
       stage0: true,
       stage1: false,
@@ -141,14 +140,14 @@ describe('CorpusScreen 批量开书', () => {
     expect(within(stage0Artifact).queryByText('新鲜')).not.toBeInTheDocument()
   })
 
-  it('Stage5 只展示真实跑过的臂，不附加说明', async () => {
+  it('Stage5 展示 canonical 已写章数，不再出现写作臂', async () => {
     const book = compactBook()
-    book.stage5_modes = ['deep', 'shallow']
+    book.chapters_done.stage5 = [1, 2]
     renderCorpus([book])
 
-    expect(await screen.findByText('deep')).toBeVisible()
-    expect(screen.getByText('shallow')).toBeVisible()
-    expect(screen.queryByText('成稿不进产物表，只记跑过哪几条臂')).not.toBeInTheDocument()
+    expect(await screen.findByText('canonical 2 章')).toBeVisible()
+    expect(screen.queryByText('deep')).not.toBeInTheDocument()
+    expect(screen.queryByText('shallow')).not.toBeInTheDocument()
   })
 
   it('单本扫描成功后立即弹出 agent 确认，返回时直接进入这本书的 Stage0', async () => {

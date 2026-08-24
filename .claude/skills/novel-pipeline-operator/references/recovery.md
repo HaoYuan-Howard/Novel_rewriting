@@ -123,7 +123,7 @@ schema version 写），不按记忆手抄。
 | `stage2.blueprint` | `--renormalize` · `--revalidate` | finding 明确允许时编辑活动 `.INVALID` | 本层确实没有 `--apply-edit`；逐章内容的修正走 `--chapters <N>` 定向重生成（**付费**）或回上游 `stage2.global`。只改证据指向字段，不改生成轮次与来源账 |
 | `stage3.style` | `--apply-edit` · `--remeasure` · `--revalidate` | `<novel-dir>/stage3/style_edit.json`；终态明确允许时可修活动 `.INVALID` | 决策集只改 schema 开放字段 |
 | `stage4.plan` | `--apply-edit` · `--identity` · `--revalidate` | `<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID` | `--revalidate` 强审计并重建 writer context；`--identity` 另写 `stage4/writer_context.identity.json` 基线，不覆盖正式计划。仍以追跑 check/state 验证 |
-| `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` | 文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}` | **0 LLM 调用，但必须提交该章全部 producer-owned slot 的全文**；不直接改正式 chapter JSON、draft.md 或其他章 |
+| `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` · `--rebuild-draft` | **`<base>/_service/edits/` 下**、文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}`；或不带编辑文件，用 `--rebuild-draft` 从 canonical 逐章稿重建纯投影 | **0 LLM 调用。** `--apply-edit` 必须提交该章全部 producer-owned slot 的全文；`--rebuild-draft` 只重建 `stage5/draft.md`，不改逐章稿。不直接改正式 chapter JSON、draft.md 或其他章。⚠⚠ **编辑文件落点不要按上面四层类比写进 `<novel-dir>/stage5/`**：那四层的编辑文件登记在 `ARTIFACTS` 里（所以必须在书目录内），本层**刻意没有登记**（`novel/paths.py::edit_rel` 的例外一段），写进书目录会让 `tests/corpus.py::_classify` 关闭式失败 ⇒ **这本书从此当不成语料底座**，而报错文案还会把人引向「加进 ARTIFACTS」那条错路（真发生过）|
 | `stage5.review` | `--retain-pretrim` · `--wontfix` | 无人产文件；决定本身就是输入 | `--retain-pretrim --chapters <N> --actor <ACTOR> --reason <text>` 恰好一章，写 hash-bound `trim_resolution_chNN.json`，不改正文、不采用收缩候选（见 FN-014）；`--wontfix` 只把豁免记进 `stage5/wontfix.json`，**一份验收报告都不产** |
 | `stage6.hook` | `--apply-edit` · `--recheck` · `--revalidate` · `--wontfix` | `<novel-dir>/stage6/hook_edit.json` | 一次只改目标候选；随后重跑机械与语义审判 |
 | `stage7.rename` | `--apply-edit` · `--adopt-residual` · `--identity` · `--recheck` · `--revalidate` | `<novel-dir>/stage7/name_map_edit.json` | 先用 `--emit-edit-template` 取当前注册骨架，改后用只读 `--validate-edit <路径>` 走同一构建/判定链，确认后才 `--apply-edit`。⚠ `--adopt-residual high` **重写 `stage7/name_map.json`、清旧审批、退休现有成书**，`--identity` 也重写同一份 name map——两者都不是“看一眼”，用后强制重新 hash-bound approve、assemble 和逐字对账 |
@@ -151,14 +151,15 @@ schema version 写），不按记忆手抄。
 
 1. 先查 `state` 与目标产物；账本写入不证明产物完整。
 2. 目标缺失或残缺时，用**完全相同参数**重跑，优先命中 `.llm_cache`。
-3. 不为“确保重跑”修改章节集、mode、模型、思考参数或 prompt；那会改变缓存键并形成新付费调用。
+3. 不为“确保重跑”修改章节范围、模型、思考参数或 prompt；那会改变缓存键并形成新付费调用。
 4. 只有 finding 明确要求重新采样时才使用定向刷新入口（`stage2.global --resample` 绕过同参数问题缓存重采整份响应，`stage2.blueprint --chapters <N>` / `stage4.plan --chapters <N>` 只重算目标章）；仍需两项授权并记录原因。
 5. 连接错误使用实现内重试阶梯；实现耗尽后不要再叠加无限外层重试。
 6. **上游正式产物一旦变更，下游缓存全废。** `--revalidate` 提升、`--apply-edit` 新轮、定向重采样都算变更：以它为输入的下游节点缓存键随之失效，下一次运行是**实付**而不是回放，而且是整层重付、与该层首跑同量级。选择修复层之前先估算下游重算面：同一问题在下游有等价的正式修复入口时优先在下游修；只能在上游修时（如 `present_names_invented` 只有 stage2 有入口），在终审包把这笔重算记成**修复的直接代价**，不要读成重复付费。
 
-stage5 调用次数高于章数可以来自写作重试和长度收缩。最终调用/token 成本的唯一
-权威源是 `<BASE>/_service/ledger.jsonl`；产物 usage 和日志不另行混加。账本中的
-`cached == true` 为缓存回放，实付为零；reasoning token 为零或空不等于失败。
+stage5 调用次数高于接受章数可以来自传输重试、内建重采 / 降档，或后来显式授权的付费
+`--revise` / 定向重写；现役没有自动长度收缩臂。最终调用/token 成本的唯一权威源是
+`<BASE>/_service/ledger.jsonl`；产物 usage 和日志不另行混加。账本中的 `cached == true`
+为缓存回放，实付为零；reasoning token 为零或空不等于失败。
 
 修改 Stage5 正文后的依赖闭包（全部先 preview）：
 

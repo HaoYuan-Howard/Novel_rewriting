@@ -127,9 +127,12 @@ Stage5/6/7 都调用 `novel.prov.rules_fingerprint(stage)`；指纹覆盖 `Rule`
 ### 3.2 成稿**不进** `inputs`，进 `judged`
 
 stage5/6/7 都有一份「我判了哪几份稿」的清单，它**不是** `inputs`。
-理由是上面那个两级键：`stage5/deep/ch01.json` 与 `stage5/shallow/ch01.json`
-在两级键下会塌成同一个键。⇒ 逐份成稿记进 `judged`（存完整相对路径 + 指纹），
-`inputs` 只记那几份全书级上游。
+现役 canonical `stage5/ch01.json` 虽然恰好只有两级，仍是**被审判的主体**，不是
+producer 的上游边；`judged` 还要同时保存完整文件指纹与正文消费投影，才能区分
+「元数据变了」和「真正进书的字节变了」。⇒ 逐份成稿记进 `judged`（完整相对路径 +
+整份/消费指纹），`inputs` 只记全书级上游。历史双臂路径曾进一步证明不能把这份主体账
+塞进两级 `inputs`：`stage5/deep/ch01.json` 与 `stage5/shallow/ch01.json` 会塌成同一个键；
+这些路径如今只作 `legacy_incompatible` 反例，不是现役布局。
 
 ---
 
@@ -283,6 +286,7 @@ promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _prov
 | `revision_of` | `str` | 否 | 上一轮**正文**的指纹 |
 | `review` | `str` | 否 | 触发这一轮的报告指纹 |
 | `fixes` | `[[判据, 凭据键]…]` | 否 | 这一轮针对性下发了哪几条。**只存引用不存渲染后的指令文本** |
+| `request_fingerprint` | 64 位 sha256 | LLM 新产出**是**；字段引入前 v2 可缺 | 内容闸最终采纳的实际请求身份；从 accepted attempt 反查，不按默认档位估算 |
 | `origin` | `str` | 否 | 同 §5.1 |
 | `input_basis` | `str` | 否 | 同 §5.1 |
 
@@ -291,6 +295,11 @@ promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _prov
 
 ⚠ **`round` = 盘上见过的最大轮次 + 1**，含 `.INVALID` 与 `_rounds/`；
 **不是 `len(glob) + 1`**。后者在归档缺号时会重号覆盖。
+
+`request_fingerprint` 绑定的是最终被接受的请求：若首档响应不完整、随后降档成功，
+这里必须写降档请求的 64 位身份；命中旧 32 位 cache 文件名时也仍写完整 64 位身份。
+现役 Stage5 producer 拿不到 accepted attempt 就拒绝落章。字段在 v2 中以 additive 形状引入，
+因此 schema 允许早期 v2 缺席；缺席只表示请求身份未知，不能补算或截断后冒充。
 
 ---
 

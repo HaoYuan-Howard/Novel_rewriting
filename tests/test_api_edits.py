@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -44,7 +45,8 @@ def books() -> list[str]:
     for book in sorted({a.book_dir for a in corpus.iter_artifacts()
                         if a.rel == 'stage7/name_map.json'}):
         plan = sandbox.cut(book, 'stage4/plan_chapters.json')
-        if plan is not None and '_provenance' in plan:
+        if (plan is not None and '_provenance' in plan
+                and (corpus.corpus_root() / book / 'stage5' / 'ch01.json').is_file()):
             out.append(book)
     return out
 
@@ -53,7 +55,8 @@ def _stage5_rels(book: str) -> tuple[str, ...]:
     return tuple(sorted(
         a.rel for a in corpus.iter_artifacts()
         if a.book_dir == book and a.rel.startswith('stage5/')
-        and '_rounds' not in a.rel and a.rel.endswith('.json')))
+        and '_rounds' not in a.rel and a.rel.endswith('.json')
+        and (Path(a.rel).parent == Path('stage5'))))
 
 
 def _stage6_semantic_rels(book: str) -> tuple[str, ...]:
@@ -78,9 +81,8 @@ def no_api_key(monkeypatch):
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
 
 
-#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
-#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
-_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
+#: 本组真正要修改第 1 章；不用层级前缀把 trim/review 混进 freshness 前提。
+_DRAFT_RELS = ('stage5/ch01.json',)
 
 
 def _corpus_params():
@@ -89,7 +91,7 @@ def _corpus_params():
         # ⚠ 取**成稿链条相对上游是当前**的那一本，不是排序第一的那一本：本组多数用例
         #   要经 CLI 子进程改产物，成稿过期时那个子进程 exit 2（`UpstreamStale`），
         #   HTTP 层看到的是「作业失败」，断言红在退出码上而不是它要验的那件事。
-        return [pytest.param(corpus.first_current_book(current, *_DRAFT_ARMS) or current[0],
+        return [pytest.param(corpus.first_current_book(current, *_DRAFT_RELS) or current[0],
                              marks=pytest.mark.corpus)]
     return [pytest.param(
         None,
@@ -138,13 +140,6 @@ def validation_client(tmp_path):
         yield c
 
 
-def _draft_mode(box, ordinal: int) -> str:
-    for mode in ('deep', 'shallow'):
-        if (box.dir / 'stage5' / mode / f'ch{ordinal:02d}.json').exists():
-            return mode
-    raise AssertionError('沙箱书第 1 章一条臂都没有稿——语料多半变了')
-
-
 def _edits_dir(box):
     return box.root / '_service' / 'edits'
 
@@ -179,15 +174,14 @@ def _stamp_chain(box, upto: str) -> None:
 def test_a_draft_edit_lands_as_a_new_human_round(client, box):
     """⭐ 成功路：人工稿落成新一轮——`origin=human`、round+1、旧轮进 `_rounds/`、
     一次性稿已清理。**与生成稿同一个判定落点**（仍有阻断级只报不拦）。"""
-    mode = _draft_mode(box, 1)
-    rel = box.dir / 'stage5' / mode / 'ch01.json'
+    rel = box.dir / 'stage5' / 'ch01.json'
     before = json.loads(rel.read_text(encoding='utf-8'))
     marker = '她把那句话咽了回去，转身出门。'
     segments = [dict(segment) for segment in before['segments']]
     segments[-1]['text'] += '\n\n' + marker
 
     r = client.post(f'/api/novels/{box.sid}/review/1/edit',
-                    json={'mode': mode, 'segments': segments})
+                    json={'segments': segments})
     assert r.status_code == 200, r.text[:300]
     assert r.json()['state'] == 'ok', r.text[:300]
 
@@ -198,7 +192,7 @@ def test_a_draft_edit_lands_as_a_new_human_round(client, box):
         '人工稿记了 prompt/model——那是假账（RoundFreeProvenance 在结构上没有那两格）'
     assert int(after['_provenance']['round']) == int(
         before.get('_provenance', {}).get('round', 1)) + 1
-    rounds = list((box.dir / 'stage5' / mode / '_rounds').glob('ch01.r*.json'))
+    rounds = list((box.dir / 'stage5' / '_rounds').glob('ch01.r*.json'))
     assert rounds, '旧轮没有归档——覆盖前的那一份再也回不去了'
     assert not any(_edits_dir(box).rglob('*.json')), '一次性人工稿没清理'
 
@@ -207,8 +201,7 @@ def test_a_draft_edit_without_upstream_is_a_failed_job_not_a_5xx(client, box):
     """上游未运行：删 ctx ⇒ CLI 显式终态 ⇒ **200 + state=failed**（作业失败不是 HTTP 错误）。"""
     (box.dir / 'stage4' / 'writer_context.json').unlink()
     r = client.post(f'/api/novels/{box.sid}/review/1/edit',
-                    json={'mode': _draft_mode(box, 1),
-                          'segments': [{'slot': 's01', 'text': '改过的正文。'}]})
+                    json={'segments': [{'slot': 's01', 'text': '改过的正文。'}]})
     assert r.status_code == 200, r.text[:300]
     assert r.json()['state'] == 'failed'
     assert not any(_edits_dir(box).rglob('*.json')), '失败的作业也要清理一次性稿'
@@ -217,19 +210,19 @@ def test_a_draft_edit_without_upstream_is_a_failed_job_not_a_5xx(client, box):
 def test_a_draft_edit_for_a_chapter_outside_the_plan_fails_loudly(client, box):
     """章号不在计划里：CLI `TerminalState` ⇒ failed，日志说得出为什么。"""
     r = client.post(f'/api/novels/{box.sid}/review/999/edit',
-                    json={'mode': 'deep',
-                          'segments': [{'slot': 's01', 'text': '不存在的章。'}]})
+                    json={'segments': [{'slot': 's01', 'text': '不存在的章。'}]})
     assert r.status_code == 200 and r.json()['state'] == 'failed'
     log = client.get(f'/api/jobs/{r.json()["job_id"]}/log').json()['text']
     assert '999' in log, '日志里连章号都没有——人无从知道错在哪'
 
 
 @pytest.mark.parametrize('body,why', [
-    ({'mode': 'deep', 'segments': []}, '空稿不是一次修改'),
-    ({'mode': 'deep', 'segments': [
+    ({'segments': []}, '空稿不是一次修改'),
+    ({'segments': [
         {'slot': 's01', 'text': '甲。'}, {'slot': 's01', 'text': '乙。'}]}, 'slot 重复'),
-    ({'mode': 'weird', 'segments': [{'slot': 's01', 'text': '正文'}]}, 'mode 取值面外'),
-    ({'segments': [{'slot': 's01', 'text': '正文'}]}, '缺 mode'),
+    ({'mode': 'deep', 'segments': [{'slot': 's01', 'text': '正文'}]},
+     '已退役 mode 字段必须被载体拒绝'),
+    ({}, '缺 segments'),
 ])
 def test_an_illegal_edit_body_is_422_from_the_carrier(validation_client, body, why):
     r = validation_client.post('/api/novels/422/review/1/edit', json=body)

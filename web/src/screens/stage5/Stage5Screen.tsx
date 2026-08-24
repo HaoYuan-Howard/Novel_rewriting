@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorBody } from '@/api/errors'
-import { ARM, FRESH, MUTED, SEV } from '@/constants/vocabulary'
+import { FRESH, MUTED, SEV } from '@/constants/vocabulary'
 import { useAskJob, useChrome } from '@/hooks/useChrome'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
@@ -12,13 +12,19 @@ import { ErrorHint, LoadFailed, NotRunYet } from '@/components/state/States'
 import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
 import { ChapterGrid } from '@/components/ui/ChapterGrid'
 import { ChapterStrip } from '@/components/ui/ChapterStrip'
+import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { HighlightedText } from '@/components/ui/HighlightedText'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { FreshnessBadge } from '@/components/vocab/Freshness'
 import { SevChip, SevCounts, SevMark } from '@/components/vocab/Sev'
 import { cx } from '@/lib/cx'
-import { useStage5Screen, type FindingView } from './useStage5Screen'
+import {
+  retainPretrimArgs,
+  stage5WontfixSpec,
+  useStage5Screen,
+  type FindingView,
+} from './useStage5Screen'
 
 /**
  * `/api/enums` 用 `extra=['--chapters']` 标识这条带值动作，但值要到点击时才有。
@@ -47,6 +53,50 @@ export function Stage5Screen() {
       ?.querySelector('mark')
       ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
   }, [vm.selFinding])
+
+  const askRetainPretrim = () => {
+    if (!vm.trimAudit || !vm.trimActor.trim() || !vm.trimReason.trim()) return
+    const args = retainPretrimArgs(vm.trimAudit.output_ordinal, vm.trimActor, vm.trimReason)
+    askConfirm({
+      req: {
+        kind: 'stage5.review',
+        label: '保留未裁剪正文 · 第 ' + vm.trimAudit.output_ordinal + ' 章',
+        extra: ['--retain-pretrim'],
+        args,
+        sid: vm.sid,
+        ordinal: vm.trimAudit.output_ordinal,
+      },
+      run: () => vm.retainPretrim.mutateAsync({
+        actor: vm.trimActor.trim(),
+        reason: vm.trimReason.trim(),
+      }),
+    })
+  }
+
+  const askWontfix = () => {
+    const target = vm.wontfixTarget
+    if (!target || target.blockedReason) return
+    const spec = stage5WontfixSpec(
+      target.scope,
+      target.rule,
+      target.evidenceKey,
+      vm.wontfixReason,
+    )
+    if (!spec) return
+    ask(
+      {
+        kind: 'stage5.review',
+        label: 'wontfix · ' + target.item,
+        extra: ['--wontfix'],
+        args: [spec],
+        sid: vm.sid,
+        ordinal: null,
+      },
+      (job) => {
+        if (job) vm.afterWontfix(target.key, job.id)
+      },
+    )
+  }
 
   return (
     <ScreenFrame screen="stage5" onJumpChapter={(n) => nav('/n/' + vm.sid + '/stage5/' + n)}>
@@ -107,16 +157,80 @@ export function Stage5Screen() {
                 >
                   {vm.invalidLabel}
                 </span>
-                <LinkButton
-                  className="ml-auto"
-                  onClick={() => nav('/n/' + vm.sid + '/depth')}
-                  title="回去改深度 / 浅层的分配"
-                >
-                  重挑深度章节
-                </LinkButton>
               </div>
-              <div className="prose-cn text-tag text-ink-4">{vm.depthNote}</div>
+              {vm.legacyNotice ? (
+                <div className="prose-cn rounded-block border border-warn-line bg-warn-bg px-12 py-8 text-sm2 text-warn-ink">
+                  {vm.legacyNotice}
+                </div>
+              ) : null}
+              {vm.reviewNotice ? (
+                <div className="prose-cn rounded-block border border-warn-line bg-warn-bg px-12 py-8 text-sm2 text-warn-ink">
+                  {vm.reviewNotice}
+                </div>
+              ) : null}
             </header>
+
+            {vm.trimAudit ? (
+              <div className="px-30 pt-14">
+                <Panel>
+                  <PaneHeader
+                    title="篇幅裁剪核验待销账"
+                    meta={'第 ' + vm.trimAudit.output_ordinal + ' 章 · 只允许保留未裁剪正文'}
+                  />
+                  <div className="flex flex-col gap-10 px-18 py-14">
+                    <div className="grid gap-10 md:grid-cols-2">
+                      <div className="rounded-block border border-line bg-card px-12 py-10">
+                        <div className="mb-4 text-tag font-semibold text-ink-4">审计原因</div>
+                        <div className="prose-cn text-body text-ink-2">{vm.trimAudit.reason}</div>
+                      </div>
+                      <div className="rounded-block border border-line bg-card px-12 py-10">
+                        <div className="mb-4 text-tag font-semibold text-ink-4">核验上下文</div>
+                        <div className="prose-cn whitespace-pre-wrap text-body text-ink-2">
+                          {vm.trimAudit.context}
+                        </div>
+                      </div>
+                    </div>
+                    {vm.retainPretrim.isError ? (
+                      <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
+                        销账失败：{errorBody(vm.retainPretrim.error)}
+                        <ErrorHint error={vm.retainPretrim.error} />
+                      </div>
+                    ) : null}
+                    {vm.retainPretrim.data?.state === 'failed' ? (
+                      <div className="rounded-block border border-warn-line bg-warn-bg px-13 py-9 text-body text-warn-ink">
+                        retain-pretrim 作业没跑成；审计仍未销账，完整输出在作业抽屉。
+                      </div>
+                    ) : null}
+                    <ActorReasonFields
+                      actor={vm.trimActor}
+                      reason={vm.trimReason}
+                      onActor={vm.setTrimActor}
+                      onReason={vm.setTrimReason}
+                      note="该决定由服务端绑定当前 TrimAudit 与当前正文摘要；这里只能确认保留 pretrim，不能采纳任何裁剪候选。"
+                      actions={
+                        <ActionButton
+                          action={vm.retainPretrimAction}
+                          disabled={
+                            !vm.retainPretrimAction ||
+                            vm.retainPretrim.isPending ||
+                            !vm.trimActor.trim() ||
+                            !vm.trimReason.trim()
+                          }
+                          disabledReason={
+                            !vm.retainPretrimAction
+                              ? '服务端未提供 retain-pretrim 动作'
+                              : '请先填写自报身份与保留理由'
+                          }
+                          onClick={askRetainPretrim}
+                        >
+                          确认保留未裁剪正文
+                        </ActionButton>
+                      }
+                    />
+                  </div>
+                </Panel>
+              </div>
+            ) : null}
 
             {!vm.ctxExists ? (
               <div className="px-30 pt-16">
@@ -185,7 +299,6 @@ export function Stage5Screen() {
                             kind: 'stage5.review',
                             label: 'stage5 全书验收',
                             extra: null,
-                            mode: null,
                             required_inputs: vm.reviewAction?.required_inputs,
                             sid: vm.sid,
                             ordinal: null,
@@ -193,6 +306,22 @@ export function Stage5Screen() {
                         }
                       >
                         跑全书验收
+                      </ActionButton>
+                      <ActionButton
+                        size="sm"
+                        action={vm.rebuildDraftAction}
+                        onClick={() =>
+                          ask({
+                            kind: 'stage5.write',
+                            label: 'stage5 重建 canonical draft',
+                            extra: ['--rebuild-draft'],
+                            required_inputs: vm.rebuildDraftAction?.required_inputs,
+                            sid: vm.sid,
+                            ordinal: null,
+                          })
+                        }
+                      >
+                        重建 draft
                       </ActionButton>
                     </div>
                     <div className="border-b border-line-soft px-16 py-9">
@@ -220,7 +349,14 @@ export function Stage5Screen() {
                           </div>
                         )
                       ) : vm.tab === 'book' ? (
-                        vm.bookFindings.map((f) => <FindingRow key={f.key} f={f} />)
+                        vm.bookFindings.map((f, i) => (
+                          <FindingRow
+                            key={f.key}
+                            f={f}
+                            selected={i === vm.selBookFinding}
+                            onClick={() => vm.setSelBookFinding(i)}
+                          />
+                        ))
                       ) : (
                         <div className="flex flex-col">
                           {vm.reviewIndex.map((r) => (
@@ -238,8 +374,8 @@ export function Stage5Screen() {
                               }}
                             >
                               <Mono className="truncate text-mini" title={r.no}>{r.no}</Mono>
-                              <span className="truncate text-micro text-ink-4" title={r.mode}>
-                                {r.mode}
+                              <span className="truncate text-micro text-ink-4" title={r.roundLabel}>
+                                {r.roundLabel}
                               </span>
                               <Mono className="truncate text-micro text-ink-4" title={r.chars}>
                                 {r.chars}
@@ -252,6 +388,54 @@ export function Stage5Screen() {
                           ))}
                         </div>
                       )}
+                      {vm.wontfixTarget && vm.tab !== 'index' ? (
+                        <div className="flex flex-col gap-8 border-t border-line-soft bg-sunken-2 px-16 py-12">
+                          <div className="flex flex-wrap items-center gap-7">
+                            <span className="text-body font-semibold">人工 wontfix</span>
+                            <Mono className="text-micro text-ink-5">
+                              {vm.wontfixTarget.scope}|{vm.wontfixTarget.rule}|
+                              {vm.wontfixTarget.evidenceKey ?? '缺 evidence_key'}
+                            </Mono>
+                          </div>
+                          {vm.wontfixTarget.wontfix ? (
+                            <div className="prose-cn rounded-block border border-line bg-card px-11 py-8 text-sm2 text-ink-3">
+                              已有审计：{vm.wontfixTarget.wontfix.why}（{vm.wontfixTarget.wontfix.at}）
+                            </div>
+                          ) : null}
+                          {vm.wontfixTarget.blockedReason ? (
+                            <div className="prose-cn text-sm2 text-warn-ink">
+                              {vm.wontfixTarget.blockedReason}
+                            </div>
+                          ) : null}
+                          <label className="flex flex-col gap-4 text-tag text-ink-3">
+                            wontfix 理由
+                            <input
+                              value={vm.wontfixReason}
+                              disabled={!!vm.wontfixTarget.blockedReason}
+                              onChange={(event) => vm.setWontfixReason(event.target.value)}
+                              placeholder="说明核对了什么，以及为什么决定不修这一条"
+                              className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body font-normal text-ink disabled:opacity-45"
+                            />
+                          </label>
+                          <ActionButton
+                            action={vm.wontfixAction}
+                            size="sm"
+                            disabled={
+                              !vm.wontfixAction ||
+                              !!vm.wontfixTarget.blockedReason ||
+                              !vm.wontfixReason.trim()
+                            }
+                            disabledReason={
+                              !vm.wontfixAction
+                                ? '服务端未提供 stage5.review --wontfix 动作'
+                                : vm.wontfixTarget.blockedReason ?? '请先填写 wontfix 理由'
+                            }
+                            onClick={askWontfix}
+                          >
+                            记为 wontfix
+                          </ActionButton>
+                        </div>
+                      ) : null}
                       <div className="prose-cn border-t border-line-soft px-16 py-11 text-tag text-ink-4">
                         {vm.findNote}
                       </div>
@@ -292,9 +476,7 @@ export function Stage5Screen() {
                         <div className="flex flex-wrap items-center gap-10 border-b border-line-soft bg-sunken-2 px-18 py-11">
                           <Mono
                             className="rounded-chip px-9 py-2 text-tag font-medium text-card"
-                            style={{
-                              background: vm.draft.mode === 'deep' ? ARM.deep : ARM.shallow,
-                            }}
+                            style={{ background: SEV.metric.color }}
                           >
                             {vm.draft.title}
                           </Mono>
@@ -377,13 +559,11 @@ export function Stage5Screen() {
                                       label: '章节改稿 · 第 ' + vm.ordinal + ' 章（人工稿落成新一轮）',
                                       // 确认框 preview 同一个 (node, flags)；一次性稿的真实路径由服务端执行时生成
                                       extra: ['--apply-edit', '(服务端一次性人工稿)'],
-                                      mode: vm.saveMode,
                                       sid: vm.sid,
                                       ordinal: vm.ordinal,
                                     },
                                     run: () =>
                                       vm.save.mutateAsync({
-                                        mode: vm.saveMode,
                                         segments: vm.editSegments,
                                       }),
                                   })
@@ -429,7 +609,36 @@ export function Stage5Screen() {
                     ) : (
                       <NotRunYet
                         title="这一章还没有成稿"
-                        body="计划里有这一章，但盘上没有它的稿。下面的动作里挑一条把它写出来——注意深度 / 浅层是两条不同的臂。"
+                        body={
+                          d.written === 0
+                            ? 'Stage5 还没有 canonical 成稿。授权后将按唯一闭卷契约写完整本书，并在确认框明确显示这是付费作业。'
+                            : '计划里有这一章，但盘上没有它的 canonical 成稿。可在下方用 --chapters 定向补写。'
+                        }
+                        action={
+                          d.written === 0 ? (
+                            <ActionButton
+                              action={vm.fullWriteAction}
+                              disabled={!vm.fullWriteAction || vm.approvals.startWriting.isPending}
+                              disabledReason={!vm.fullWriteAction ? '服务端未提供全书写作动作' : ''}
+                              onClick={() =>
+                                ask(
+                                  {
+                                    kind: 'stage5.write',
+                                    label: 'Stage5 全书闭卷开写',
+                                    extra: null,
+                                    required_inputs: vm.fullWriteAction?.required_inputs,
+                                    sid: vm.sid,
+                                    ordinal: null,
+                                  },
+                                  undefined,
+                                  vm.writingBefore(vm.fullWriteAction),
+                                )
+                              }
+                            >
+                              全书闭卷开写
+                            </ActionButton>
+                          ) : undefined
+                        }
                       />
                     )}
 
@@ -452,22 +661,25 @@ export function Stage5Screen() {
                       <div className="flex flex-wrap gap-8">
                         {vm.writeActions.map((a) => (
                           <ActionButton
-                            key={a.kind + ':' + (a.mode ?? '') + ':' + (a.extra ?? []).join(',')}
+                            key={a.kind + ':' + (a.extra ?? []).join(',')}
                             action={a}
                             size="sm"
                             disabled={!vm.chaptersArg.trim()}
                             disabledReason="先填章号"
                             onClick={() =>
-                              ask({
-                                kind: a.kind,
-                                label: a.label,
-                                extra: a.extra,
-                                mode: a.mode ?? null,
-                                args: chapterSelectionArgs(a.extra, vm.chaptersArg),
-                                required_inputs: a.required_inputs,
-                                sid: vm.sid,
-                                ordinal: null,
-                              })
+                              ask(
+                                {
+                                  kind: a.kind,
+                                  label: a.label,
+                                  extra: a.extra,
+                                  args: chapterSelectionArgs(a.extra, vm.chaptersArg),
+                                  required_inputs: a.required_inputs,
+                                  sid: vm.sid,
+                                  ordinal: null,
+                                },
+                                undefined,
+                                vm.writingBefore(a),
+                              )
                             }
                           >
                             {a.label.replace('stage5 ', '')}
@@ -490,7 +702,7 @@ export function Stage5Screen() {
                               {/* freshness=null = 本章还没有稿——按「不在盘上」画 */}
                               <FreshnessBadge f={i.freshness ?? 'missing'} size={8} />
                               <Mono className="text-mini">{i.no}</Mono>
-                              <span className="text-tag text-ink-3">{i.modes}</span>
+                              <span className="text-tag text-ink-3">{i.status}</span>
                               <Mono className="text-micro text-ink-5">{i.chars}</Mono>
                               <Mono className="text-micro text-ink-5">重合 {i.overlap}</Mono>
                             </>
@@ -539,6 +751,11 @@ function FindingRow({
       </div>
       <Mono className="text-micro text-ink-5">{f.rule}</Mono>
       <div className="prose-cn text-sm2 text-ink-2">{f.detail}</div>
+      {f.wontfixLabel ? (
+        <div className="prose-cn rounded-tag bg-inset px-8 py-5 text-tag text-ink-3">
+          {f.wontfixLabel}
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -41,10 +41,10 @@ def test_default_approval_value_is_not_mistaken_for_a_saved_human_choice(
         lambda _overview, node: (approvals.state.RESUME_RUN, node))
 
     doc = approvals.get(tmp_path, '123')
-    assert doc.deep == [1, 2, 3]
+    assert doc.v == 2 and not doc.writing
+    assert 'deep' not in type(doc).model_fields, 'public v2 不得重新暴露已退役的双臂决定'
     assert not approvals.has_record(tmp_path, '123')
 
-    # Even a physically persisted v2 record is not spending authority until it
-    # carries current s3/s4 and depth-subject proofs.
+    # 盘上即使已有一份 v3 记录，writing 没有当前 subject proof 仍不是花钱授权。
     approvals._write(tmp_path, approvals._fresh_record('123', [1, 2, 3]))
     assert not approvals.has_record(tmp_path, '123')

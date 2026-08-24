@@ -146,7 +146,7 @@
 
 ### 机器事实锚点
 
-运行 `scripts/sync_review_evidence.py` 同步下面四组机器事实；`scripts/validate_review.py`
+从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py` 同步下面四组机器事实；`.claude/skills/novel-pipeline-operator/scripts/validate_review.py`
 会用同一组 `started_at` 与 `start_code_version` 跟当前盘面逐项对账。
 
 [[operator-anchor:start]]

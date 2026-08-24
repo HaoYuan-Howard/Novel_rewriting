@@ -43,6 +43,16 @@ def _classify(rel: str) -> str:
     raise AssertionError(
         f'当前产物目录出现未登记 JSON：{rel!r}。'
         '请把它加入 contracts.schema.ARTIFACTS 与当前语料路由，或清理过时产物。'
+        # ⚠⚠ 上面那句会把人引向「加进 ARTIFACTS」，而**有两类文件加进去就是错的**，
+        #   2026-08-24 各撞过一次（`stage5/chNN_edit.json` 与
+        #   `stage2/global_review_workpack.json`）⇒ 把这两条岔路写进文案本身。
+        '\n⚠ 先分清它是哪一类：'
+        '（a）`stage5.write` / `stage0.edit` 的**人工改稿**——这两层的 `--apply-edit` '
+        '路径语义是「任意路径」，编辑文件**刻意没有登记**（`novel/paths.py::edit_rel` '
+        '的例外一段：`R-11.3` 要服务进程不写产物盘），落点是 `<base>/_service/edits/` '
+        '⇒ **移走，不要登记**；'
+        '（b）`--emit-review-workpack` / `--emit-*-template` 这类**只读辅助输出**——'
+        '它们是 stdout，重定向进产物目录就成了这里的未登记 JSON ⇒ **移走，不要登记**。'
     )
 
 

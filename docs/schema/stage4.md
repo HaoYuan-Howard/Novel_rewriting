@@ -59,8 +59,8 @@ Stage 4 把 Stage 2 的事实底座与章节蓝图收口成真正的叙事结构
 `spine` 是**本单元的主干是哪一件事**——从下发骨架里那张 `events{}`（`beat_id → 这件事`）
 逐字抄一个编号。它治的是「一拍 N 条材料被写成 N 句平权的话」——批 1 把句子单位从 event
 上移到拍之后，拍**内部**仍是一张平权清单。
-⚠⚠ **它只标主次、不标顺序**：拍内 event 的落笔先后仍恒等于源序，`stage5` 那条拍内顺序臂
-一行未动。
+⚠⚠ **它只标主次、不标顺序**：拍内 event 的落笔先后仍恒等于源序，Stage5 写作契约里的
+拍内顺序约束一行未动。
 ⚠⚠ **它曾经是下标**（`int`，把各源单元的 events 接起来连续编号），2026-08-22 两次整跑
 把那个形状否掉：一份 schema 合法的响应里 60 个写作单元错 10 个，**9 个是「只有 1 件事
 却填 2/3」**，而同一份响应的源单元编号引用一个都没错 ⇒ **让模型引用可靠、
@@ -236,7 +236,7 @@ raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 | `source_chars` | `int ≥ 0` | 本章各拍精确原文区间总字数 |
 | `segments` | `CtxBeat[]` | 展开后的写作单位，顺序与 plan 相同 |
 | `characters` | `dict[str,ChapterCharacter]` | 截止本章可安全叫出的角色 |
-| `narration` | `CtxNarration[]` | 当前叙述人称、叙述者与视角人物 |
+| `narration` | `CtxNarration[]` | 当前叙述人称、叙述者与视角人物。⚠⚠ **`focalizer` 盘上恒空，但它不是死值**（2026-08-23 查实）：stage2 那一侧 `focalizer_name` 填充率 27/31，只是**填的值恒等于 `narrator_name`**，而 `novel/stages/stage4/context.py::_name_narration` 有一道 `focalizer_char_id != narrator_char_id` 的判等闸，相等就不写这个键 ⇒ **是一道从未成立过的闸，不是没人填**。根因在 `novel/stages/stage2/prompts.py`：两格用的是**同一个占位符字符串**，既没有定义什么是「视点人物」，也没说「只在与叙述者不同时才填」，而盘上 `grammatical_person` 恒 `first` ⇒ 第一人称下两者相等本来就是如实作答。⇒ 与 `Narration.last_beat_id` 那种「零消费 + 零样本」**不是同一种病**，删字段之前要先改 prompt 并用真书重跑一次（`docs/LESSONS.md` 第 8 条）。闸的两个分支现由 `tests/test_stage4_context.py` 覆盖 |
 | `facts` | `CtxFacts` | 当前章可见设定、关系、秘密、规则、弧线和称谓 |
 | `must_not_reveal` | `str[]` | 当前章不得点破的事实 |
 

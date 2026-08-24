@@ -651,7 +651,9 @@ def test_blueprint_grounding_projection_marks_missing_character_maps_unknown(
 
 
 def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():
-    assert producer_node('stage5/deep/ch01.json') == 'stage5.write'
+    assert producer_node('stage5/ch01.json') == 'stage5.write'
+    assert producer_node('stage5/deep/ch01.json') is None, \
+        '退役双臂路径只作 legacy 证据，不能冒充当前 producer 产物'
     assert producer_node('stage6/hook.INVALID.json') == 'stage6.hook'
     assert set(CONSUMED_PROJECTIONS['stage4.context']) == {
         'stage1/main_text.json',
@@ -681,8 +683,8 @@ def test_stage5_review_tracks_context_code_without_overinvalidating_writing():
 def test_a_draft_cannot_be_read_through_the_edge_path():
     """⚠⚠ 成稿走 `read_judged`，**不走 `read`**（`_common.md` §3.2）。
 
-    `stage5/deep/ch01.json` 在两级键下会塌成一个**反查不到文件**的键 ⇒ 指纹取不到
-    ⇒ 那条边**永远显示对得上**。**一个假的匹配比没有记录更坏。**
+    这里保留旧三级路径作反例：它在两级 inputs 键下会塌成一个反查不到的键。
+    现役 canonical 虽只有两级也仍走 judged，因为成稿是被审判主体，且要另记正文消费投影。
     """
     base = _book()
     (base / '书名_123' / 'stage5' / 'deep').mkdir(parents=True)
@@ -1254,8 +1256,8 @@ def test_every_produced_artifact_without_provenance_reaches_the_deterministic_br
     ⚠ 作用域是「节点 `produces` 的、且真会落进完成度 `artifacts[]` 的那些」：
       · `*_edit.json` / `wontfix.json` 这类**人写的输入**不是任何节点的产出，
         它们没有来源账是本分，不该被这条逼着去造一个；
-      · `stage5/{mode}/draft.md` 带占位符 ⇒ `state.py::_is_pattern` 把它挡在
-        `artifacts[]` 之外，完成度从来不问它的新鲜度（stage5 视图另有落点）。
+      · `stage5/draft.md` 是无来源块的 canonical 字节投影，必须由确定性桥拿
+        当前 `writer_context` 分母与 `stage5/chNN.json` 同尺重算，不能恒 unknown。
     """
     from contracts.invariants import NODES
     from contracts.schema import ARTIFACT_SPECS
@@ -1285,6 +1287,48 @@ def test_every_produced_artifact_without_provenance_reaches_the_deterministic_br
     assert unreachable == [], (
         f'这些产物没有 `_provenance`，又没接进 `_deterministic_freshness`：'
         f'{unreachable}。它们在完成度里会恒 unknown/no_provenance')
+
+
+def test_stage5_draft_freshness_reuses_the_canonical_byte_renderer(
+        monkeypatch):
+    """draft 新鲜度按生产同一 renderer 的 UTF-8 字节回答，章或投影任一变更都 stale。"""
+    from novel.consumption import render_stage5_draft
+    from novel.stages.stage5 import measure as stage5_measure
+
+    base = _book()
+    book = base / '书名_123'
+    (book / 'stage5').mkdir()
+    by_ordinal = {
+        1: {
+            'output_ordinal': 1,
+            'from_source_ordinals': [1],
+            'chars': 4,
+            'overlap_excl_verbatim': 0.0,
+            'text': '第一章。',
+        },
+    }
+    expected = render_stage5_draft([1], by_ordinal).encode('utf-8')
+    (book / 'stage5' / 'draft.md').write_bytes(expected)
+    store = ArtifactStore(_ctx(base, paid=False))
+    context = type('Context', (), {
+        'chapters': [type('Chapter', (), {'output_ordinal': 1})()],
+    })()
+    monkeypatch.setattr(store, 'read_own', lambda *_args, **_kwargs: (context, {}))
+    monkeypatch.setattr(
+        stage5_measure, 'load_drafts',
+        lambda *_args, **_kwargs: (by_ordinal, [], {}),
+    )
+
+    assert store.freshness('stage5/draft.md').state == 'fresh'
+
+    by_ordinal[1]['text'] = '正文已经变化。'
+    changed = store.freshness('stage5/draft.md')
+    assert (changed.state, changed.reason) == ('stale', 'file_changed')
+
+    by_ordinal[1]['text'] = '第一章。'
+    (book / 'stage5' / 'draft.md').write_bytes(expected.replace(b'\n', b'\r\n'))
+    assert store.freshness('stage5/draft.md').state == 'stale', \
+        'CRLF 也是字节漂移，不能被文本模式归一后伪装成 fresh'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

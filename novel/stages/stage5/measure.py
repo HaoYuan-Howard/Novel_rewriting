@@ -9,7 +9,7 @@ measure.py —— stage5 的**确定性核心**：归一链 · 重合度 · 篇�
 各自抄一遍，其中一处就会悄悄不再归一（原型正是这样：`--recheck` 把定稿原样搬过去，
 于是候选归一了、而真正拼进成书的那一份没有，**报告全绿而交付的书里版式是坏的**）。
 
-⚠⚠ **成稿的装载器住在这里，而不是在读它的那两层**：`stage5/<mode>/chNN.json` 是
+⚠⚠ **成稿的装载器住在这里，而不是在读它的那两层**：`stage5/chNN.json` 是
 本层的产物，`stage6`（开篇文案要看前几章）与 `stage7`（成书要看全部）都是**下游读者**。
 F4 之前这份枚举在 stage6 / stage7 里各有一份**逐字相同**的拷贝（连
 `draft_projection` 的函数体都一样）——第三份写下去就是判据 25 的教科书。
@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from contracts.invariants import BOOK_BAND, DEPTH_MODES, DRAFT_BAND
+from contracts.invariants import BOOK_BAND, DRAFT_BAND
 from contracts.schema.stage5 import Chapter, DraftConsumed, JudgedDraft
 from novel.core.bands import bands
 from novel.core.naming import KINSHIP
@@ -33,6 +33,7 @@ from novel.core.normalize import (
     quote_pair,
 )
 from novel.core.text import norm, quote_count, window_overlap
+from novel.errors import ArtifactUnreadable
 from novel.store import ArtifactStore
 
 
@@ -70,46 +71,81 @@ def draft_consumed_of(rec: dict[str, Any]) -> DraftConsumed:
     )
 
 
-def load_drafts(store: ArtifactStore) -> tuple[dict[int, list[dict[str, Any]]], list[str],
-                                               dict[str, JudgedDraft]]:
-    """全部成稿 → `({output_ordinal: [rec]}, invalids, judged)`。**唯一落点。**
+def is_legacy_stage5_rel(rel: str) -> bool:
+    """Whether a provenance/path key belongs to the retired two-arm Stage5 layout."""
+    normalized = str(rel).replace('\\', '/').lstrip('./')
+    return normalized.startswith(('stage5/deep/', 'stage5/shallow/'))
 
-    ⚠⚠ **一律走 `store.read_judged`，绝不走 `store.read`**：`inputs` 的键只取两级，
-    `stage5/deep/ch01.json` 会塌成 `deep/ch01.json` ⇒ 反查拼出来的路径根本不存在
-    ⇒ 那条边被**静默跳过、永远显示「对得上」**。**一个假的匹配比没有记录更坏。**
-    （B1 期已由 `store.read` 的 `PathRefused` 从结构上拦住这条路，这里别绕开它。）
+
+def legacy_stage5_paths(store: ArtifactStore) -> list[str]:
+    """列出旧 `stage5/deep|shallow` 布局的只读证据，不尝试迁移。
+
+    这是 review/state/API 共用的纯发现面：旧产物必须显式说
+    `legacy_incompatible`，不能因 canonical 装载器看不见它们而被说成 missing。
+    """
+    found: list[str] = []
+    for old_arm in ('deep', 'shallow'):
+        root = store.path(f'stage5/{old_arm}')
+        if not root.is_dir():
+            continue
+        arm_files = sorted(p for p in root.rglob('*') if p.is_file())
+        if not arm_files:
+            # 目录本身就是旧布局证据。只认文件会把一次中断后留下的空目录
+            # 洗成 missing，随后 state/API 可能把它排成一次新的付费首写。
+            found.append(f'stage5/{old_arm}')
+            continue
+        for path in arm_files:
+            rel = f'stage5/{old_arm}/' + path.relative_to(root).as_posix()
+            if is_legacy_stage5_rel(rel):
+                found.append(rel)
+    return found
+
+
+def load_drafts(store: ArtifactStore, *, require_current: bool = True
+                ) -> tuple[dict[int, dict[str, Any]], list[str],
+                           dict[str, JudgedDraft]]:
+    """全部 canonical 成稿 → `({output_ordinal: rec}, invalids, judged)`。**唯一落点。**
+
+    ⚠⚠ **一律走 `store.read_judged`，绝不走 `store.read`**：canonical 路径只有
+    两级，可以被消费指纹无损反查。
 
     ⚠ `.INVALID.json` **排除，但要报计数**：「排除了 3 份废稿」与「一份废稿都没有」
     必须分得开。
 
-    ⚠ 同章双份（deep + shallow 都写过）**这里不判死**：两份都留着，由判据
-    `draft_duplicated` 去说。**产地的多义性不该在装载器里被一个隐式的选择抹掉。**
-
-    ⚠ 枚举臂时**只走 `DEPTH_MODES`**，于是 `_` 开头的子目录天然不在里面
-    ——盘上真有一个人手工放进去的 `stage5/_rounds/`，而界面那一侧曾把它当成第三条臂。
+    ⚠ 旧双臂目录由 `legacy_stage5_paths` 单独发现；本函数不读它们、
+    不替人选一份，更不把旧 v1 字节伪装成 current v2。
     """
-    by_ord: dict[int, list[dict[str, Any]]] = {}
+    by_ord: dict[int, dict[str, Any]] = {}
     judged: dict[str, JudgedDraft] = {}
     invalids: list[str] = []
-    for mode in DEPTH_MODES:
-        directory_rel = artifact_rel('stage5.chapter', mode=mode, nn=1).rsplit('/', 1)[0]
-        pattern = os.path.join(store.path(directory_rel), 'ch*.json')
-        for p in sorted(glob.glob(pattern)):
-            base = os.path.basename(p)
-            rel = f'{directory_rel}/{base}'
-            if base.endswith('.INVALID.json'):
-                invalids.append(rel)
-                continue
-            chapter, fp, _cfp = store.read_judged(
-                Chapter, rel, project=draft_projection, require_current=True)
-            rec = chapter.model_dump(by_alias=True)
-            rec['text'] = chapter.text  # deterministic in-memory projection, never a disk authority
-            rec['_relpath'], rec['_mode'] = rel, mode
-            by_ord.setdefault(chapter.output_ordinal, []).append(rec)
-            judged[rel] = JudgedDraft(
-                output_ordinal=chapter.output_ordinal,
-                round=getattr(chapter.provenance, 'round', 1) or 1,
-                sha1=fp, consumed=draft_consumed_of(rec))
+    directory_rel = 'stage5'
+    pattern = os.path.join(store.path(directory_rel), 'ch*.json')
+    for p in sorted(glob.glob(pattern)):
+        base = os.path.basename(p)
+        rel = f'{directory_rel}/{base}'
+        if re.fullmatch(r'ch\d+\.INVALID\.json', base):
+            invalids.append(rel)
+            continue
+        if not re.fullmatch(r'ch\d+\.json', base):
+            # `.rejected.json` 与其他证据不是正式成稿。
+            continue
+        chapter, fp, _cfp = store.read_judged(
+            Chapter, rel, project=draft_projection, require_current=require_current)
+        canonical = artifact_rel('stage5.chapter', nn=chapter.output_ordinal)
+        if rel != canonical:
+            raise ArtifactUnreadable(
+                f'{rel} 声明 output_ordinal={chapter.output_ordinal}，应落在 {canonical}')
+        if chapter.output_ordinal in by_ord:
+            raise ArtifactUnreadable(
+                f'第 {chapter.output_ordinal} 章出现多份 canonical 成稿，不猜哪份是成品')
+        rec = chapter.model_dump(by_alias=True)
+        rec['text'] = chapter.text  # deterministic in-memory projection, never a disk authority
+        rec['_relpath'] = rel
+        by_ord[chapter.output_ordinal] = rec
+        judged[rel] = JudgedDraft(
+            output_ordinal=chapter.output_ordinal,
+            round=getattr(chapter.provenance, 'round', 1) or 1,
+            sha1=fp, consumed=draft_consumed_of(rec))
     return by_ord, sorted(invalids), judged
 
 
@@ -368,6 +404,35 @@ class Book:
             meas = self.style.get('measurable')
             self._cache['bands'] = bands(Measurable.model_validate(meas)) if meas else {}
         return self._cache['bands']
+
+    @property
+    def first_person_surfaces(self) -> frozenset[str]:
+        """**这本书自己**的第一人称自称字面池（`narration_person_*` 的右锚）。
+
+        取自 `writer_context.chapters[].narration[].pronoun_surfaces`，只收
+        `grammatical_person == 'first'` 那些段声明的字面 ⇒ 它是**上游给的**，
+        不是本模块发明的词表。
+
+        ⚠⚠ **绝不能写死一张「我/咱/本宫/朕」**：那就是关键词表，换一本书就漂。
+        stage2 的 prompt 明写这一格要「照原文用字」（`novel/stages/stage2/prompts.py`
+        那一行举的正是「我」「咱」「本宫」「朕」「哀家」「老子」）⇒ 取值面由书决定。
+
+        ⚠⚠ **书级并集，不取同章那一份**：判「声明 `third` 的章里混进第一人称」时，
+        那一章自己的 `pronoun_surfaces` 恰好是 `null`——第三人称交空数组是合法的
+        （`stage2/checks.py::pronoun_surface_unattested` 的 `scanned` 就是这么写的）。
+        拿同章那一份当右锚，**被测的那一类永远没有锚可用、判据恒不执行**。
+        与 `band_of` 那条「基线一律取书级、同章配对会退化成恒真」是同一个理由的两个实例。
+
+        ⚠ 空集是合法结果（全书没有一段第一人称）⇒ 调用方必须把「池是空的」与
+        「池非空但没命中」分开报，别把前者说成「查过、干净」。
+        """
+        if 'fp_surfaces' not in self._cache:
+            self._cache['fp_surfaces'] = frozenset(
+                s for entry in self.chapters.values()
+                for seg in (entry.get('narration') or [])
+                if (seg or {}).get('grammatical_person') == 'first'
+                for s in ((seg or {}).get('pronoun_surfaces') or []) if s)
+        return self._cache['fp_surfaces']
 
     @property
     def sep_chars(self) -> float:

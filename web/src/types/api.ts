@@ -28,7 +28,6 @@ import type {
 import type { NovelOverview, NovelsResponse } from './novels'
 import type { TrashNovelResult } from './novels'
 import type { RunProgress } from './run'
-import type { Mode } from '@/constants/vocabulary'
 import type {
   CheckKind,
   CheckReport,
@@ -133,7 +132,6 @@ export interface Api {
   approveGate(sid: string, key: GateKey): Promise<ApprovalDoc>
   backfillApprovals(sid: string): Promise<ApprovalBackfillResult>
   markSeen(sid: string, key: SeenKey): Promise<ApprovalDoc>
-  setDeep(sid: string, deep: number[]): Promise<ApprovalDoc>
   startWriting(sid: string): Promise<ApprovalDoc>
   resetBook(sid: string): Promise<ApprovalDoc>
 
@@ -142,7 +140,7 @@ export interface Api {
   saveDraftEdit(
     sid: string,
     ordinal: number,
-    req: { mode: Mode; segments: ChapterSegment[] },
+    req: { segments: ChapterSegment[] },
   ): Promise<Job>
   /** Resolve one current trim verification by retaining pretrim; candidate adoption is impossible here. */
   retainPretrim(sid: string, ordinal: number, req: TrimResolutionRequest): Promise<Job>

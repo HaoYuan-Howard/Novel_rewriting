@@ -42,7 +42,8 @@ from pydantic import BaseModel, ValidationError
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, STAGE1_PARTITION_REPORT,
-    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
+    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE4_WRITER_CONTEXT,
+    STAGE5_BOOK_DRAFT,
     STAGE7_NAME_MAP,
 )
 from contracts.schema import (
@@ -50,7 +51,7 @@ from contracts.schema import (
     decode_artifact, encode_artifact,
 )
 from novel import paths, prov
-from novel.consumption import producer_node, projection_for
+from novel.consumption import producer_node, projection_for, render_stage5_draft
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
     ProvenanceRefused, UpstreamMissing, UpstreamStale,
@@ -230,9 +231,9 @@ class ArtifactStore:
         返回 `(模型, 整份指纹, 投影指纹|None)`——调用方要拿它们去填 `judged[]` 那三格。
 
         ⚠⚠ **为什么成稿必须走另一条路**：`inputs` 的键是两级的，
-        `stage5/deep/ch01.json` 会被记成一个**反查不到文件**的键 ⇒ 指纹取不到
-        ⇒ 那条边**永远显示对得上**。**一个假的匹配比没有记录更坏。**
-        ⇒ 逐份成稿记**完整相对路径** + 指纹。
+        成稿是被审判的主体，不是 producer 上游；若记进 `inputs`，多级历史路径还会
+        塌成一个**反查不到文件**的键。因此无论当前 canonical 路径有几级，都逐份记
+        **完整相对路径** + 指纹，并与普通上游边分开。
         """
         paths.check_rel_deep(rel)
         raw = self._read_bytes(rel)
@@ -307,6 +308,20 @@ class ArtifactStore:
         if require_current:
             self._refuse_stale_upstream(rel, replaced_input_keys=replaced_input_keys)
         return obj, payload
+
+    def schema_version(self, rel: str) -> int | None:
+        """只读盘上 envelope 的版本标记，不把旧产物解码成当前 payload。
+
+        legacy/stale 状态必须在**当前模型拒读之前**仍能区分“明确是旧版本”与“文件损坏”。
+        这里仍走 store 唯一的字节/UTF-8/JSON 入口，但刻意不调用 ``decode_artifact``：
+        调用它会把本方法最需要识别的旧版本先抛成一个无结构的终态。缺标记返回 ``None``，
+        非整数标记也返回 ``None``；它们不是某个可声称的历史契约版本。
+        """
+        data = self._loads(rel, self._read_bytes(paths.check_rel_deep(rel)))
+        if not isinstance(data, dict):
+            return None
+        marker = data.get('_schema_version')
+        return marker if isinstance(marker, int) and not isinstance(marker, bool) else None
 
     def read_external(self, model: type[M], contract_rel: str,
                       path: str | os.PathLike[str]) -> M:
@@ -1111,6 +1126,8 @@ class ArtifactStore:
             return self._stage1_freshness()
         if rel == STAGE2_GLOBAL_REVIEW:
             return self._global_review_freshness()
+        if rel == STAGE5_BOOK_DRAFT:
+            return self._stage5_draft_freshness()
         # ⚠ 成书的 rel 带书名 ⇒ **不能与 `STAGE7_BOOK` 直接比**（那是模板）。
         #   拿模板比出来的恒是 False，而后果是 `_deterministic_freshness` 返回 None
         #   ⇒ 成书的 freshness 变成「没有来源账」，那道对账**静默失效**。
@@ -1266,6 +1283,39 @@ class ArtifactStore:
             now_consumed=current_surface,
         )
         return FreshnessReport(state, reason, (edge,))
+
+    def _stage5_draft_freshness(self) -> FreshnessReport:
+        """``draft.md`` 是否逐字等于当前 canonical 章集合的纯投影。
+
+        这份字节产物没有 ``_provenance`` 槽位；它的权威身份就是当前
+        ``writer_context.chapters`` 分母与 ``stage5/chNN.json`` 集合经生产同一把
+        renderer 算出的 UTF-8 字节。缺分母时只能回答 unknown，绝不把「算不了」
+        伪装成 fresh。
+        """
+        if not _is_file(self.path(STAGE5_BOOK_DRAFT)):
+            return FreshnessReport('unknown', 'no_provenance')
+
+        from contracts.schema.stage4 import WriterContext
+        try:
+            context, _raw = self.read_own(WriterContext, STAGE4_WRITER_CONTEXT)
+        except UpstreamMissing:
+            return FreshnessReport('unknown', 'no_provenance')
+
+        # 动态 import 避免 store 模块初始化时反向 import stage；运行时复用 canonical
+        # loader，不能在这里再写一份 chNN 选择/校验规则。
+        from novel.stages.stage5.measure import load_drafts
+        by_ordinal, _invalids, _judged = load_drafts(self, require_current=False)
+        expected = render_stage5_draft(
+            (chapter.output_ordinal for chapter in context.chapters), by_ordinal,
+        ).encode('utf-8')
+        current = _read_file_bytes(self.path(STAGE5_BOOK_DRAFT))
+        self._decode(STAGE5_BOOK_DRAFT, current)
+        edge = self._content_edge(
+            STAGE5_BOOK_DRAFT,
+            prov.content_sha1(expected),
+            prov.content_sha1(current),
+        )
+        return FreshnessReport(edge.state, edge.reason, (edge,))
 
     def _book_freshness(self) -> FreshnessReport:
         name_map = self._freshness_payload(STAGE7_NAME_MAP)

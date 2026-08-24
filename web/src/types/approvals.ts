@@ -1,7 +1,7 @@
 /**
  * 人工验收记录。
  *
- * 在真产品里这是服务端的东西（人点了哪些确认、挑了哪几章深度重构）。
+ * 在真产品里这是服务端的东西（人点了哪些确认、是否已经批准开写）。
  * mock 版本里它由 mock.ts 存在 localStorage —— 但**取数路径和真实响应完全一样**：
  * 走 api.getApprovals() / api.approveGate()，屏与组件从不直接碰它。
  *
@@ -22,17 +22,14 @@ export interface ActionRef {
   kind: string
   label: string
   extra: string[] | null
-  mode?: string | null
 }
 
 export interface ApprovalDoc {
-  v: 1
+  v: 2
   sid: string
   gate: Record<GateKey, boolean>
   seen: Record<SeenKey, boolean>
-  /** 深度重构的章号。默认值由数据层给，组件里永远不写 ?? [1,2,3] */
-  deep: number[]
-  /** 是否已经开写（false 时 /stage5 要落到挑深度章节那一屏） */
+  /** 是否已经批准全书闭卷开写。 */
   writing: boolean
   /**
    * 确认某一道闸门之后服务端会发起什么。

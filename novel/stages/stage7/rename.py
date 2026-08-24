@@ -209,9 +209,14 @@ class _Upstreams:
         self.ctx_code = writer_context.provenance.code
 
         # ⚠⚠ 成稿与 `hook.json` **一律不走 `store.read`**，理由见 `measure.load_drafts`。
+        from novel.stages.stage5.measure import legacy_stage5_paths
+        legacy = legacy_stage5_paths(store)
+        if legacy:
+            raise TerminalState(
+                f'legacy_incompatible：Stage7 不消费旧 Stage5 双臂路径 {legacy[:8]}。'
+                '旧 base 保持只读；请从 canonical Stage5 base 继续消费链')
         by_ord, invalids, self.judged = load_drafts(store)
-        (self.recs, self.dup, self.missing,
-         self.invalids) = collect_chapters(by_ord, plan, invalids)
+        self.recs, self.missing, self.invalids = collect_chapters(by_ord, plan, invalids)
 
         self.hook_raw: dict | None = None
         self.hook_art = None
@@ -351,7 +356,7 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
         pre_target=up.pre_target, source_text=up.source_text,
         residual_keys=res_keys, stem_noise=stem_noise,
         family_members=up.family_members,
-        dup=up.dup, missing=up.missing, invalids=up.invalids,
+        missing=up.missing, invalids=up.invalids,
         post_units=post_units, title_line=_title_line(up.title, subs, kept),
         dropped_reason=dropped_reason, derived_aliases=derived_aliases)
 
@@ -451,6 +456,12 @@ def _txt_state(store: ArtifactStore, art: NameMap) -> tuple[bool, str]:
 
 def _judged_drift(art: NameMap, up: _Upstreams) -> tuple[list[str], list[str]]:
     """成稿有没有在这次替换之后改过。返回 `(改过的, 已缺失的)`。"""
+    legacy = sorted(rel for rel in art.judged
+                    if rel.startswith(('stage5/deep/', 'stage5/shallow/')))
+    if legacy:
+        raise TerminalState(
+            f'legacy_incompatible：stage7/name_map.json 的 judged 仍绑定旧 Stage5 路径 '
+            f'{legacy}。旧结论不能退化成 missing，也不能驱动静默重跑')
     stale: list[str] = []
     missing: list[str] = []
     for rel, stored in art.judged.items():

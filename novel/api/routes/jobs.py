@@ -3,7 +3,7 @@
 """
 jobs.py —— 作业面板 P-01：列表 / 详情 / 日志 / 预览 / 异步启动。
 
-通用启动只接收结构化 `{sid,node,mode,flags}`，先用与预览相同的 `plan_start()`
+通用启动只接收结构化 `{sid,node,flags}`，先用与预览相同的 `plan_start()`
 构造命令，再交给后台执行器。同一本书的第二个请求由书级锁返回 409；不同小说互不阻塞。
 """
 from __future__ import annotations
@@ -21,22 +21,6 @@ from novel.errors import UnsupportedRunMode, UpstreamMissing
 from novel.orchestrator import approvals, jobs, nodes
 
 router = APIRouter(prefix='/jobs')
-
-
-def _deep_selection(flags: list[str]) -> list[int] | None:
-    tokens = set(nodes.flag_tokens(flags))
-    if not {'--deep', '--shallow-rest'} <= tokens:
-        return None
-    raw = nodes.flag_value(flags, '--deep')
-    if raw == 'none':
-        return []
-    try:
-        deep = [int(value) for value in (raw or '').split(',')]
-    except ValueError as exc:
-        raise UnsupportedRunMode('--deep must be none or comma-separated ordinals') from exc
-    if deep != sorted(set(deep)) or any(value < 1 for value in deep):
-        raise UnsupportedRunMode('--deep ordinals must be sorted, unique and positive')
-    return deep
 
 
 def _chapter_selection(flags: list[str]) -> list[int] | None:
@@ -80,22 +64,21 @@ def list_jobs(sid: str | None = Query(default=None),
 def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     sid = checked_sid(req.sid) if req.sid is not None else None
     planned = jobs.plan_start(
-        req.node, sid, req.flags, base=base, mode=req.mode)
-    deep = _deep_selection(req.flags)
-    if deep is not None and sid is None:
-        raise UnsupportedRunMode('stage5 composite writing requires a novel sid')
-    prepare = (
-        (lambda: approvals.begin_writing(base, sid, deep))
-        if deep is not None and sid is not None else None
-    )
-    if req.node == 'stage5.write' and req.mode in ('deep', 'shallow'):
+        req.node, sid, req.flags, base=base)
+    prepare = None
+    # writing 授权保护的是正文外发 / 付费 LLM 调用。Stage5 同一节点下还有
+    # rebuild/recheck/revalidate/dry-run 等零成本恢复路；若也绑 writing，恢复路
+    # 会在入口处被自己堵死。`planned.paid` 与 preview 展示的是同一份折叠结论，
+    # 本路由不再按 flag 重算一份贵贱。
+    if req.node == 'stage5.write' and planned.paid:
         if sid is None:
             raise UnsupportedRunMode('stage5 writing requires a novel sid')
         chapters = _chapter_selection(req.flags)
-        prepare = lambda: approvals.authorize_arm(
-            base, sid, req.mode or '', chapters)
+        revise = '--revise' in nodes.flag_tokens(req.flags)
+        prepare = lambda: approvals.authorize_writing(
+            base, sid, chapters, requires_fresh_review=revise)
     return jobs.start(
-        base, req.node, sid, req.flags, mode=req.mode,
+        base, req.node, sid, req.flags,
         steps=planned.steps, prepare=prepare)
 
 
@@ -203,6 +186,6 @@ def preview_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobStart:
     # intentionally does *not* enable this mode, so NodeSpec still rejects
     # missing values and rejects the placeholder tokens themselves.
     return jobs.plan_start(
-        req.node, sid, req.flags, base=base, mode=req.mode,
+        req.node, sid, req.flags, base=base,
         placeholders=True,
     )

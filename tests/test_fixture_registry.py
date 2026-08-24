@@ -50,23 +50,22 @@ def _secret_numbers(_monkeypatch) -> None:
 
 
 def _half_draft(monkeypatch) -> None:
-    from novel.orchestrator import state
-
     sample = _load('half_draft')
-    monkeypatch.setattr(state, 'chapters_done', lambda *_a: sample['completed'])
     book = SimpleNamespace(chapters={n: {'output_ordinal': n} for n in sample['planned']})
-    ctx = SimpleNamespace(novel_dir='synthetic-book')
-    got = [row['output_ordinal'] for row in write._chapters_of(ctx, book, None)]
+    completed = set(sample['completed'])
+    store = SimpleNamespace(
+        exists=lambda rel: int(Path(rel).stem.removeprefix('ch')) in completed)
+    got = [row['output_ordinal'] for row in write._chapters_of(store, book, None)]
     assert got == sample['expected_resume']
 
 
 def _rejected_archive(_monkeypatch) -> None:
-    rel = 'stage5/deep/ch01.rejected.json'
+    rel = 'stage5/ch01.rejected.json'
     decoded = decode_artifact(rel, _load('rejected_archive'))
     artifact = RejectedRevision.model_validate(decoded.payload)
     assert len(artifact.attempts) == 2
     archived = paths.round_rel(rel, 1)
-    assert archived == 'stage5/deep/_rounds/ch01.rejected.r1.json'
+    assert archived == 'stage5/_rounds/ch01.rejected.r1.json'
     assert decode_artifact(archived, _load('rejected_archive')).version == 1
 
 

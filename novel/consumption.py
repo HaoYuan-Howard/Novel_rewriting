@@ -17,7 +17,8 @@
 from __future__ import annotations
 
 import re
-from typing import Callable, Final
+from collections.abc import Iterable, Mapping
+from typing import Any, Callable, Final
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
@@ -306,6 +307,38 @@ def stage5_review_context(data: object) -> object:
     }
 
 
+def render_stage5_draft(
+    planned_ordinals: Iterable[int],
+    by_ordinal: Mapping[int, Mapping[str, Any]],
+) -> str:
+    """Canonical ``stage5/draft.md`` 的唯一字节投影。
+
+    renderer 与消费投影放在同一个低层模块：Stage5 producer 与
+    :class:`novel.store.ArtifactStore` 的 freshness 桥必须共用同一把字节尺。
+    若 store 独立重拼 Markdown，标题格式一改，刚写完的 draft 就会一直被第二份旧实现
+    误报 stale，直到有人碰巧想起同步它。
+    """
+    planned = sorted(set(int(ordinal) for ordinal in planned_ordinals))
+    missing = [ordinal for ordinal in planned if ordinal not in by_ordinal]
+    unexpected = sorted(set(by_ordinal) - set(planned))
+    head = [f'# 重构稿（{len(by_ordinal)}/{len(planned)} 章）']
+    if missing:
+        head.append(f'> ⚠ 计划里的第 {missing} 章**没有 canonical 成稿**')
+    if unexpected:
+        head.append(f'> ⚠ canonical 目录还有计划外的第 {unexpected} 章（待复核 stale 章集）')
+    parts = ['\n'.join(head)]
+    for ordinal in sorted(by_ordinal):
+        record = by_ordinal[ordinal]
+        overlap = record.get('overlap_excl_verbatim')
+        sources = '、'.join(
+            str(source) for source in (record.get('from_source_ordinals') or []))
+        parts.append(
+            f"## 第 {ordinal} 章（源 [{sources}] · {record.get('chars')}字"
+            + (f' · 重合(扣除逐字要求) {overlap:.3f}' if overlap is not None else '')
+            + ')\n\n' + str(record.get('text') or ''))
+    return '\n\n'.join(parts) + '\n'
+
+
 # ── stage6.hook ───────────────────────────────────────────────────────────────
 
 def stage6_hook_copy(data: object) -> object:
@@ -547,5 +580,5 @@ def producer_node(rel: str, *, fallback: str | None = None) -> str | None:
 
 __all__ = [
     'CONSUMED_PROJECTIONS', 'Projection', 'artifact_payload', 'canonical_rel',
-    'producer_node', 'projection_for',
+    'producer_node', 'projection_for', 'render_stage5_draft',
 ]

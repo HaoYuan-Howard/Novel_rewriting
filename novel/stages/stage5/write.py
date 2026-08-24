@@ -3,18 +3,18 @@
 """
 write.py —— `stage5.write`：**逐章写作**。全链唯一产出「书」的层，也是唯一带 LLM 返工回路的层。
 
-七条路：
-    默认            逐章一次调用，落 `stage5/<mode>/chNN.json`   **付费**
+八条路：
+    默认            逐章一次调用，落 `stage5/chNN.json`          **付费**
     `--revise`      把可反哺的结论连同上一轮成稿发回写手           **付费**
-    `--chapters`    只写这几章（臂的分工只活在这个实参里）         付费路的**参数**
+    `--chapters`    只写这几章                                      付费路的**参数**
     `--dry-run`     只打印将要发出去的东西                        0 成本
     `--recheck`     按当前判据重判存量成稿并写回指标                0 成本
     `--revalidate`  把合格的 `.INVALID` 提升为正式产物              0 成本
     `--apply-edit`  把人工改好的那一份落成新的一轮                  0 成本
+    `--rebuild-draft` 按 canonical 逐章产物重建 `draft.md`                0 成本
 
-⚠⚠ **两条臂只差两件事**，而那两件事就是 `_ARMS` 那张表里的两个值：
-`(system prompt, 给不给源章原文)`。产物形状**逐字节相同**，`mode` 同时是目录名。
-其余全部走同一个 `_write_chapter`。
+⚠⚠ **本层只有闭卷这一条写作路**。源章原文只供确定性校验，
+不进 prompt，也没有可以把它加回去的 mode 参数。
 
 逐章写作走 `ask_json` + `ChapterResponse`：producer-owned slot 必须恰好各出现一次，
 模型数组顺序不参与组装。机械把关仍在落盘前运行，但响应载体越界会更早在
@@ -36,17 +36,16 @@ Pydantic 边界被拒绝，不能形成正常或 `.INVALID` 章产物。
 """
 from __future__ import annotations
 
-from contracts.artifacts import STAGE5_BOOK_DRAFT, STAGE5_CHAPTER, artifact_rel
+from contracts.artifacts import STAGE5_BOOK_DRAFT, artifact_rel
 
 import glob
 import hashlib
 import os
 import re
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from typing import Any
 
-from contracts.invariants import DEPTH_MODES, STOP_REWRITE_AFTER
+from contracts.invariants import STOP_REWRITE_AFTER
 from novel.config import MAX_CONCURRENCY
 from contracts.rules import REGISTRY
 from contracts.schema.common import (
@@ -59,7 +58,10 @@ from contracts.schema.stage5 import (
     Chapter, ChapterResponse, ChapterSegment, RejectedRevision,
 )
 from novel import paths, prov
-from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.consumption import render_stage5_draft
+from novel.errors import (
+    ArtifactUnreadable, GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing,
+)
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.privacy import assert_prompt_private_absent
@@ -73,33 +75,12 @@ from novel.stages.stage5 import measure as M
 from novel.stages.stage5 import prompts, review
 from novel.store import ArtifactStore
 
-#: 一章的产物路径。⚠ `NN` **就是** `output_ordinal`（补零两位）。
-REL_TPL = STAGE5_CHAPTER
-
 #: 一次逐章调用的上限。⚠ 它进 `_provenance.params`——换了这个数，产物里说得出来。
 MAX_TOKENS = 16000
 
 
-@dataclass(frozen=True)
-class _Arm:
-    """一条臂**仅有**的两个差异面（`R-7.1`）。
-
-    ⚠ 加第三个字段之前先问一句：那件事真的按臂不同吗？两条臂的产物形状**逐字节相同**
-    这句话是契约，而它由「差异面只有这张表」在结构上保证——
-    别处再按 `mode` 分一次岔，这句话就不成立了。
-    """
-
-    with_source_text: bool
-
-
-#: 臂 → 它的差异面。**唯一落点。**
-_ARMS: dict[str, _Arm] = {'deep': _Arm(with_source_text=False),
-                          'shallow': _Arm(with_source_text=True)}
-assert tuple(_ARMS) == DEPTH_MODES, '臂的取值面与 `contracts.invariants.DEPTH_MODES` 分家了'
-
-
-def _rel(mode: str, ordinal: int) -> str:
-    return artifact_rel('stage5.chapter', mode=mode, nn=ordinal)
+def _rel(ordinal: int) -> str:
+    return artifact_rel('stage5.chapter', nn=ordinal)
 
 
 def _retire_trim_state(store: ArtifactStore, ordinal: int) -> None:
@@ -110,39 +91,38 @@ def _retire_trim_state(store: ArtifactStore, ordinal: int) -> None:
             store.archive_round(rel)
 
 
-def _rejected_rel(mode: str, ordinal: int) -> str:
-    return artifact_rel('stage5.rejected_revision', mode=mode, nn=ordinal)
+def _rejected_rel(ordinal: int) -> str:
+    return artifact_rel('stage5.rejected_revision', nn=ordinal)
 
 
-def _mode_dir(mode: str) -> str:
-    return os.path.dirname(artifact_rel('stage5.mode_draft', mode=mode)).replace('\\', '/')
+def require_canonical_layout(store: ArtifactStore) -> None:
+    """旧双臂盘面是显式终态；任何付费/写回入口都必须先经过这里。"""
+    legacy = M.legacy_stage5_paths(store)
+    if legacy:
+        raise TerminalState(
+            f'legacy_incompatible：发现旧 Stage5 双臂产物 {legacy[:8]}。'
+            '旧 base 只作历史证据，不在原地迁移、选臂或静默触发付费重跑；'
+            '请在独立 canonical base 从 Stage5 重建')
 
 
-def _mode_of(ctx: RunContext) -> str:
-    if ctx.mode not in _ARMS:
-        raise TerminalState(f'`stage5.write` 要 `--mode {"|".join(_ARMS)}`（这一次是 {ctx.mode!r}）')
-    return ctx.mode
-
-
-def _chapters_of(ctx: RunContext, book: M.Book, spec: str | None) -> list[dict[str, Any]]:
+def _chapters_of(store: ArtifactStore, book: M.Book,
+                 spec: str | None) -> list[dict[str, Any]]:
     """这一次要写哪几章。
 
-    ⚠⚠ **不给 `--chapters` 时只补「两条臂都还没有成稿」的章**，不是全部重写。
+    ⚠⚠ **不给 `--chapters` 时只补还没有 canonical 成稿的章**，不是全部重写。
     完成度的口径是逐章的（`R-14.2`），默认路必须与它一致——否则一次「续跑」会把已经
     付过钱的章再写一遍。
-    ⚠ **`--chapters` 是逐章深度这个人的决策的唯一载体**（`R-7.2`）：它不落任何产物，
-    只活在这个实参里。给了就照给的写（哪怕那一章已经有稿——那是人明确要重写）。
+    ⚠ **`--chapters` 是定向重写的唯一载体**：给了就照给的写（哪怕那一章
+    已经有稿——那是人明确要重写）。
     """
     plan = book.chapters
     if spec:
-        want = [int(x) for x in spec.split(',') if x.strip()]
+        want = list(dict.fromkeys(int(x) for x in spec.split(',') if x.strip()))
         if (missing := [w for w in want if w not in plan]):
             raise TerminalState(
                 f'--chapters 指定的输出章不存在：{missing}（计划共 {len(plan)} 章）')
         return [plan[w] for w in want]
-    from novel.orchestrator.state import chapters_done
-    done = {n for m in DEPTH_MODES for n in chapters_done(ctx.novel_dir, m)}
-    return [plan[o] for o in sorted(plan) if o not in done]
+    return [plan[o] for o in sorted(plan) if not store.exists(_rel(o))]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,18 +137,17 @@ def build_prompt(ctx: RunContext, chapters: str | None = None
     是两件事，而那种分家没有任何东西会报错。
     ⚠ `--dry-run` 只摊**这一次要写的第一章**——摊全部没人读得完，而形状是一样的。
     """
-    mode = _mode_of(ctx)
     store = ArtifactStore(ctx)
+    require_canonical_layout(store)
     book = review.load_book(ctx, store)
-    todo = _chapters_of(ctx, book, chapters)
+    todo = _chapters_of(store, book, chapters)
     if not todo:
         raise TerminalState(
-            '这一次没有要写的章：计划里的每一章两条臂都已经有成稿了。'
+            '这一次没有要写的章：计划里的每一章都已经有 canonical 成稿了。'
             '⚠ 这**不是**「没问题」——要重写某一章就用 `--chapters N` 明说')
     entry = todo[0]
-    mat = prompts.build_material(entry, book,
-                                 with_source_text=_ARMS[mode].with_source_text)
-    system, user = prompts.write_system(mode), prompts.build_user(mat)
+    mat = prompts.build_material(entry, book)
+    system, user = prompts.write_system(), prompts.build_user(mat)
     assert_prompt_private_absent(
         CtxChapter.model_validate(entry), system=system, user=user)
     return system, user, mat
@@ -178,20 +157,17 @@ def build_prompt(ctx: RunContext, chapters: str | None = None
 # 二、⭐ 落盘 —— 归一 → 判据 → 闸门。**唯一写成稿的地方。**
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _judge(text: str, entry: dict[str, Any], book: M.Book, *, mode: str, mat: str,
+def _judge(text: str, entry: dict[str, Any], book: M.Book, *, mat: str,
            account: M.NormalizeAccount,
            segments: list[dict[str, str]] | None = None) -> tuple[list, list[str], list[str]]:
     """归一之后的字节 → `(findings, errs, warns)`。**落盘闸门与验收相共用同一份判据。**"""
-    fs = checks.chapter_findings(text, entry, book, mode=mode, given=mat,
-                                 quote_problems=account.quote_problems)
-    if segments is not None:
-        fs.extend(checks.segment_fidelity_findings(
-            segments, entry, book, mode=mode, given=mat))
-        fs.extend(checks.segment_event_findings(segments, entry, book))
+    fs = checks.chapter_findings(text, entry, book, given=mat,
+                                 quote_problems=account.quote_problems,
+                                 segments=segments)
     return fs, checks.blocking(fs), checks.warnings_of(fs)
 
 
-def _chapter_record(entry: dict[str, Any], segments: list[dict[str, str]], book: M.Book, *, mode: str,
+def _chapter_record(entry: dict[str, Any], segments: list[dict[str, str]], book: M.Book, *,
                     warns: list[str], errs: list[str] | None,
                     provenance: Any) -> Chapter:
     """一份成稿。**正式稿与 `.INVALID` 共用这一份章契约**——状态由文件名区分。"""
@@ -199,7 +175,6 @@ def _chapter_record(entry: dict[str, Any], segments: list[dict[str, str]], book:
     return Chapter(
         output_ordinal=int(entry['output_ordinal']),
         from_source_ordinals=list(entry['from_source_ordinals']),
-        mode=mode,
         source_chars=int(entry['source_chars']),
         budget_chars=int(entry['budget_chars']),
         chars=M.chars_of(text),
@@ -212,7 +187,7 @@ def _chapter_record(entry: dict[str, Any], segments: list[dict[str, str]], book:
 
 
 def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
-                   book: M.Book, *, mode: str, segments: list[dict[str, str]], mat: str,
+                   book: M.Book, *, segments: list[dict[str, str]], mat: str,
                    account: M.NormalizeAccount, provenance: Any
                    ) -> tuple[str, list[str], list]:
     """归一 → 判据 → 闸门 → 落盘。返回 `(落到哪, errs)`。
@@ -229,11 +204,11 @@ def _write_chapter(ctx: RunContext, store: ArtifactStore, entry: dict[str, Any],
     for k, v in account.counters().items():
         ctx.account(k, int(ctx.accounting.get(k) or 0) + v)
     fs, errs, warns = _judge(
-        text2, entry, book, mode=mode, mat=mat, account=account,
+        text2, entry, book, mat=mat, account=account,
         segments=segments2)
-    rel = _rel(mode, entry['output_ordinal'])
-    rejected_rel = rel.replace('.json', '.rejected.json')
-    art = _chapter_record(entry, segments2, book, mode=mode, warns=warns,
+    rel = _rel(entry['output_ordinal'])
+    rejected_rel = _rejected_rel(int(entry['output_ordinal']))
+    art = _chapter_record(entry, segments2, book, warns=warns,
                           errs=errs or None, provenance=provenance)
     with store.history_transaction(rel, rejected_rel):
         if store.exists(rejected_rel):
@@ -310,8 +285,7 @@ def _sha256_text(text: str) -> str:
 
 
 def _over_length_audit(segments: list[dict[str, str]],
-                       entry: dict[str, Any], *, mode: str,
-                       ) -> tuple[list[str], TrimAudit | None]:
+                       entry: dict[str, Any]) -> tuple[list[str], TrimAudit | None]:
     """超上限 ⇒ **零调用**落一份 identity `TrimAudit`，正文原样保留。
 
     ⚠ 签名里刻意没有 `client`：本层不再有第二条付费回路，这个函数在结构上就花不了钱。
@@ -336,7 +310,6 @@ def _over_length_audit(segments: list[dict[str, str]],
         f'保留 pretrim，转 verification')
     return [reason], TrimAudit(
         output_ordinal=int(entry['output_ordinal']),
-        mode=mode,
         before_sha256=_sha256_text(text),
         reason=reason,
     )
@@ -353,80 +326,15 @@ def run_write(ctx: RunContext, client: LlmClient,
     ⚠ 连贯性靠**上一章的计划**传递，**不给上一章的成稿**——否则写手会顺着自己刚写的续，
     偏差沿章累积，章与章也变成串行依赖（`prompts.prev_context`）。
     """
-    mode = _mode_of(ctx)
     store = ArtifactStore(ctx)
+    require_canonical_layout(store)
     book = review.load_book(ctx, store)
-    todo = _chapters_of(ctx, book, chapters)
+    todo = _chapters_of(store, book, chapters)
     if not todo:
         raise TerminalState(
-            '这一次没有要写的章：计划里的每一章两条臂都已经有成稿了。'
+            '这一次没有要写的章：计划里的每一章都已经有 canonical 成稿了。'
             '⚠ 这**不是**「没问题」——要重写某一章就用 `--chapters N` 明说')
-    return _run_group(ctx, store, book, todo, client, mode=mode, revise=None)
-
-
-def run_selected(
-    deep_ctx: RunContext,
-    deep_client: LlmClient,
-    shallow_ctx: RunContext,
-    shallow_client: LlmClient,
-    deep_chapters: tuple[int, ...],
-) -> dict[str, CheckReport]:
-    if deep_ctx.mode != 'deep' or shallow_ctx.mode != 'shallow':
-        raise TerminalState('composite writing requires deep and shallow contexts')
-    store = ArtifactStore(deep_ctx)
-    book = review.load_book(deep_ctx, store)
-    planned = set(book.chapters)
-    selected = {int(value) for value in deep_chapters}
-    if missing := sorted(selected - planned):
-        raise TerminalState(f'deep chapters are absent from the writing plan: {missing}')
-    assigned = {'deep': selected, 'shallow': planned - selected}
-
-    from novel.orchestrator.state import chapters_done
-    done = {
-        mode: set(chapters_done(deep_ctx.novel_dir, mode))
-        for mode in DEPTH_MODES
-    }
-    conflicts: list[str] = []
-    for mode, ordinals in assigned.items():
-        other = 'shallow' if mode == 'deep' else 'deep'
-        for ordinal in sorted(ordinals):
-            wrong = _rel(other, ordinal)
-            if store.exists(wrong) or store.exists(paths.invalid_of(wrong)):
-                conflicts.append(f'ch{ordinal} already has a {other} draft')
-    if conflicts:
-        raise TerminalState(
-            'human depth selection conflicts with existing drafts: '
-            + '; '.join(conflicts))
-    contexts = {'deep': deep_ctx, 'shallow': shallow_ctx}
-    clients = {'deep': deep_client, 'shallow': shallow_client}
-    work = {
-        mode: sorted(ordinals - done[mode])
-        for mode, ordinals in assigned.items()
-        if ordinals - done[mode]
-    }
-    if not work:
-        assemble_book(deep_ctx, store, book)
-        raise TerminalState('all chapters already have drafts in their selected arms')
-
-    reports: dict[str, CheckReport] = {}
-    failures: list[Exception] = []
-    with ThreadPoolExecutor(max_workers=len(work)) as pool:
-        futures = {}
-        for mode, ordinals in work.items():
-            args = (contexts[mode], clients[mode],
-                    ','.join(str(value) for value in ordinals))
-            future = pool.submit(run_write, *args)
-            futures[future] = mode
-        for future in as_completed(futures):
-            mode = futures[future]
-            try:
-                reports[mode] = future.result()
-            except Exception as exc:
-                failures.append(exc)
-    assemble_book(deep_ctx, store, book)
-    if failures:
-        raise failures[0]
-    return reports
+    return _run_group(ctx, store, book, todo, client, revise=None)
 
 
 def _generate_chapter(
@@ -434,14 +342,12 @@ def _generate_chapter(
     book: M.Book,
     client: LlmClient,
     *,
-    mode: str,
     revise: dict[int, tuple[str, list[list[str]], str]] | None,
     system: str,
     progress: RequestProgress,
 ) -> dict[str, Any]:
     ordinal = int(entry['output_ordinal'])
-    mat = prompts.build_material(
-        entry, book, with_source_text=_ARMS[mode].with_source_text)
+    mat = prompts.build_material(entry, book)
     if revise is not None:
         prev_text, fixes, review_fp = revise[ordinal]
         user = prompts.revise_user(mat, prev_text, _fix_lines(fixes))
@@ -450,27 +356,28 @@ def _generate_chapter(
         user = prompts.build_user(mat)
     typed_entry = CtxChapter.model_validate(entry)
     assert_prompt_private_absent(typed_entry, system=system, user=user)
+    accepted_purpose = ctx_purpose(entry)
     try:
         got = client.ask_json(
             system, user, model_cls=ChapterResponse,
-            purpose=ctx_purpose(entry), max_tokens=MAX_TOKENS,
+            purpose=accepted_purpose, max_tokens=MAX_TOKENS,
             validator=lambda obj, wire: _response_problem(obj, wire, entry),
             progress=progress)
     except LlmFailed as exc:
         return {'error': str(exc).splitlines()[0]}
     segments = _ordered_segments(got, entry)
     segments, account = _normalize_segments(segments, book)
-    trim_notes, trim_audit = _over_length_audit(segments, entry, mode=mode)
+    trim_notes, trim_audit = _over_length_audit(segments, entry)
     text = _segments_text(segments)
     if revise is not None:
         attempts = [{'chars': M.chars_of(text), 'text': text}]
-        regressions = checks.trim_regressions(
-            prev_text, text, entry, book, mode=mode)
+        regressions = checks.trim_regressions(prev_text, text, entry, book)
         if regressions:
+            accepted_purpose = f'{ctx_purpose(entry)}·退化重采样'
             try:
                 got = client.ask_json(
                     system, user, model_cls=ChapterResponse,
-                    purpose=f'{ctx_purpose(entry)}·退化重采样',
+                    purpose=accepted_purpose,
                     max_tokens=MAX_TOKENS,
                     validator=lambda obj, wire: _response_problem(obj, wire, entry),
                     progress=progress, cache_policy=CachePolicy.refresh())
@@ -488,11 +395,11 @@ def _generate_chapter(
             retry_segments = _ordered_segments(got, entry)
             retry_segments, retry_account = _normalize_segments(retry_segments, book)
             retry_trim_notes, retry_trim_audit = _over_length_audit(
-                retry_segments, entry, mode=mode)
+                retry_segments, entry)
             retry_text = _segments_text(retry_segments)
             attempts.append({'chars': M.chars_of(retry_text), 'text': retry_text})
             retry_regressions = checks.trim_regressions(
-                prev_text, retry_text, entry, book, mode=mode)
+                prev_text, retry_text, entry, book)
             if retry_regressions:
                 return {
                     'rejected': {
@@ -510,6 +417,7 @@ def _generate_chapter(
         'segments': segments, 'text': text, 'account': account,
         'trim_notes': trim_notes, 'trim_audit': trim_audit,
         'prev_text': prev_text, 'fixes': fixes, 'review_fp': review_fp,
+        'accepted_purpose': accepted_purpose,
     }
 
 
@@ -520,10 +428,9 @@ def _run_group_parallel(
     todo: list[dict[str, Any]],
     client: LlmClient,
     *,
-    mode: str,
     revise: dict[int, tuple[str, list[list[str]], str]] | None,
 ) -> CheckReport:
-    system = prompts.write_system(mode, revise=revise is not None)
+    system = prompts.write_system(revise=revise is not None)
     judged: dict[int, list] = {}
     written_by: dict[int, str] = {}
     blocked_by: dict[int, str] = {}
@@ -542,7 +449,6 @@ def _run_group_parallel(
                 entry,
                 book,
                 client,
-                mode=mode,
                 revise=revise,
                 system=system,
                 progress=tracker.request(int(entry['output_ordinal'])),
@@ -580,7 +486,7 @@ def _run_group_parallel(
                 continue
 
             if rejected := generated.get('rejected'):
-                rel = _rejected_rel(mode, ordinal)
+                rel = _rejected_rel(ordinal)
                 artifact = RejectedRevision.model_validate(rejected)
                 where = store.write_round(rel, artifact)
                 line = (
@@ -591,7 +497,7 @@ def _run_group_parallel(
                 continue
 
             entry = generated['entry']
-            round_number = store.next_round(_rel(mode, ordinal))
+            round_number = store.next_round(_rel(ordinal))
             extra: dict[str, Any] = {'round': round_number}
             if revise is not None:
                 extra.update(
@@ -599,19 +505,27 @@ def _run_group_parallel(
                     review=generated['review_fp'],
                     fixes=[list(item) for item in generated['fixes']],
                 )
+            request_fingerprint = client.accepted_request_fingerprint(
+                generated['accepted_purpose'])
+            if request_fingerprint is None:
+                raise ProvenanceRefused(
+                    f'第 {ordinal} 章已经返回正文，但 purpose='
+                    f'{generated["accepted_purpose"]!r} 没有 accepted attempt；'
+                    '拒绝估算或截断 request fingerprint')
+            extra['request_fingerprint'] = request_fingerprint
+            prompt_record = {'SYS': system}
             provenance = ctx.llm_provenance_for_chapter(
                 ordinal,
                 RoundLlmProvenance,
                 prompts=(
-                    {'SYS': system, 'REVISE': prompts.REVISE_TAIL}
-                    if revise is not None else
-                    {'SYS': system}),
+                    {**prompt_record, 'REVISE': prompts.REVISE_TAIL}
+                    if revise is not None else prompt_record),
                 model=client.model,
                 **extra,
             )
             trim_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
             trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=ordinal)
-            chapter_rel = _rel(mode, ordinal)
+            chapter_rel = _rel(ordinal)
             # A later in-band rewrite resolves the live verification row; a
             # later trim attempt supersedes it.  In both cases retain the old
             # audit under `_rounds` instead of silently overwriting history.
@@ -621,7 +535,7 @@ def _run_group_parallel(
                 if generated['trim_audit'] is not None:
                     store.write(trim_rel, generated['trim_audit'])
                 where, errors, findings = _write_chapter(
-                    ctx, store, entry, book, mode=mode,
+                    ctx, store, entry, book,
                     segments=generated['segments'], mat=generated['mat'].given,
                     account=generated['account'], provenance=provenance)
             judged[ordinal] = findings
@@ -639,27 +553,30 @@ def _run_group_parallel(
                         else (trim_notes[0] if trim_notes else None)),
             )
 
-    if fatal is not None:
-        raise fatal
     written = [written_by[key] for key in sorted(written_by)]
     blocked = [blocked_by[key] for key in sorted(blocked_by)]
+    # 即使同批部分失败，只要有 canonical 章发生变化，draft 也必须
+    # 是当前集合的纯投影；不能留一份「看起来像上次成功」的旧拼稿。
+    assemble_book(ctx, store, book)
+    if fatal is not None:
+        raise fatal
     report = _report(
-        ctx, store, mode, written=written, blocked=blocked, book=book, judged=judged)
+        ctx, store, written=written, blocked=blocked, book=book, judged=judged)
     if blocked and not written:
         raise GateBlocked(
             f'这一批 {len(todo)} 章全部没落成正式稿：' + '；'.join(blocked)
-            + f'。人修好对应 `.INVALID` 后跑 `stage5.write --mode {mode} '
+            + '。人修好对应 `.INVALID` 后跑 `stage5.write '
               '--revalidate --actor <id> --reason <why>`'
               '（0 LLM、同轮重判并留不可变审计）',
-            invalid_path=str(store.path(_mode_dir(mode))))
+            invalid_path=str(store.path('stage5')))
     return report
 
 
 def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
-               todo: list[dict[str, Any]], client: LlmClient, *, mode: str,
-               revise: dict[int, tuple[str, list[list[str]], str]] | None) -> CheckReport:
-    return _run_group_parallel(
-        ctx, store, book, todo, client, mode=mode, revise=revise)
+               todo: list[dict[str, Any]], client: LlmClient, *,
+               revise: dict[int, tuple[str, list[list[str]], str]] | None
+               ) -> CheckReport:
+    return _run_group_parallel(ctx, store, book, todo, client, revise=revise)
 
 
 def _fix_lines(fixes: list[list[str]]) -> list[str]:
@@ -679,17 +596,16 @@ def _fix_lines(fixes: list[list[str]]) -> list[str]:
 # 四、`--revise` —— 全链唯一的 LLM 返工回路
 # ─────────────────────────────────────────────────────────────────────────────
 
-def revise_targets(store: ArtifactStore, mode: str
+def revise_targets(store: ArtifactStore
                    ) -> tuple[dict[int, list[list[str]]], list[str], str]:
     """最近一份验收 → 这一轮要发回写手的条目。返回 `(按章的 fixes, 跳过的理由, 报告指纹)`。
 
     **四道筛子**，一条都不能省：
-      ① 只要**本臂**这一边的章（另一条臂的稿不是这次要改的东西）；
-      ② `actionable`（根因在写作层——根因不在写手身上的条目重写一百遍也修不好）；
-      ③ **`repair == 'UNIQUE'`**：满足这条判据的路径唯一。密度 / 比率 / 档位类一律不进
+      ① `actionable`（根因在写作层——根因不在写手身上的条目重写一百遍也修不好）；
+      ② **`repair == 'UNIQUE'`**：满足这条判据的路径唯一。密度 / 比率 / 档位类一律不进
          ——满足它们的路径有无穷多条，而**最省力的那条是删内容或编内容**。
          实测代价：可反哺条目 **36 → 9（转人工 27 条，75%）**，其中一本是 10 → 0；
-      ④ `unresolved_rounds < STOP_REWRITE_AFTER`（`R-8.5`）：**连续 2 轮未消 ⇒ 判「根因
+      ③ `unresolved_rounds < STOP_REWRITE_AFTER`（`R-8.5`）：**连续 2 轮未消 ⇒ 判「根因
          不在写手」，主动跳过**。无收敛证据的循环重写是在烧钱抽奖。
 
     ⚠ **跳过的两类都要报出来**（`stalled` / 非 `UNIQUE`）：「不进反哺」不等于「不管」，
@@ -704,7 +620,7 @@ def revise_targets(store: ArtifactStore, mode: str
     picked: dict[int, list[list[str]]] = {}
     skipped: list[str] = []
     for row in rev.chapters:
-        if row.mode != mode or not row.relpath:
+        if not row.relpath:
             continue
         for f in row.findings:
             if not f.actionable:
@@ -729,17 +645,20 @@ def revise_targets(store: ArtifactStore, mode: str
 def run_revise(ctx: RunContext, client: LlmClient,
                chapters: str | None = None) -> CheckReport:
     """`--revise`：把可反哺的结论连同上一轮成稿发回写手。**付费。**"""
-    mode = _mode_of(ctx)
     store = ArtifactStore(ctx)
+    require_canonical_layout(store)
     book = review.load_book(ctx, store)
-    picked, skipped, fp = revise_targets(store, mode)
+    # 付费反哺前必须先证明 Review 的上游、RULES、章集与
+    # judged 主体都是当前的。旧规则/旧正文报告绝不能驱动一次付费重写。
+    review.require_fresh_review(ctx, store)
+    picked, skipped, fp = revise_targets(store)
     if (spec := chapters):
         want = {int(x) for x in spec.split(',') if x.strip()}
         picked = {o: v for o, v in picked.items() if o in want}
     if not picked:
         # **显式终态并明说「这不是『没问题』」。**
         raise TerminalState(
-            f'{mode} 臂这一轮没有可自救的条目。⚠ **这不是「没问题」**：'
+            '这一轮没有可自救的条目。⚠ **这不是「没问题」**：'
             + (f'有 {len(skipped)} 条被跳过——' + '；'.join(skipped[:6]) if skipped
                else '要么全部转人工，要么连续未消已到上限') +
             '\n它们照常列在验收报告与界面上等人看。')
@@ -750,19 +669,19 @@ def run_revise(ctx: RunContext, client: LlmClient,
         if entry is None:
             continue
         prev_art, _raw = store.read_own(
-            Chapter, _rel(mode, o), require_current=True)
+            Chapter, _rel(o), require_current=True)
         todo.append(entry)
         revise[o] = (prev_art.text, fixes, fp)
     for s in skipped:
         print(f'    · 跳过：{s}', flush=True)
-    return _run_group(ctx, store, book, todo, client, mode=mode, revise=revise)
+    return _run_group(ctx, store, book, todo, client, revise=revise)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 五、三条 0 成本路
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_recheck(ctx: RunContext) -> CheckReport:
+def run_recheck(ctx: RunContext, chapters: str | None = None) -> CheckReport:
     """`--recheck`：按当前判据重判存量成稿并写回指标，并重拼 `draft.md`。
 
     ⚠⚠ **它会改写正文字节而不动来源账**，这是一处已知的潜伏故障（盘上 0 样本）：
@@ -773,13 +692,16 @@ def run_recheck(ctx: RunContext) -> CheckReport:
     ⇒ 这里的处置：**改写字节时出声**（报告里逐章点名），并**用 `rewrite_provenance` 标
     `partial_rewrite`**，让「这份产物是混版的」在盘上说得出来。
     """
-    mode = _mode_of(ctx)
     store = ArtifactStore(ctx)
+    require_canonical_layout(store)
     book = review.load_book(ctx, store)
     touched: list[str] = []
     judged: dict[int, list] = {}
-    for o in sorted(book.chapters):
-        rel = _rel(mode, o)
+    ordinals = ([int(entry['output_ordinal'])
+                 for entry in _chapters_of(store, book, chapters)]
+                if chapters else sorted(book.chapters))
+    for o in ordinals:
+        rel = _rel(o)
         if not store.exists(rel):
             continue
         art, _raw = store.read_own(Chapter, rel)
@@ -787,10 +709,9 @@ def run_recheck(ctx: RunContext) -> CheckReport:
         segments, acc = _normalize_segments(
             [segment.model_dump() for segment in art.segments], book)
         text = _segments_text(segments)
-        mat = prompts.build_material(
-            entry, book, with_source_text=_ARMS[mode].with_source_text).given
+        mat = prompts.build_material(entry, book).given
         fs, errs, warns = _judge(
-            text, entry, book, mode=mode, mat=mat, account=acc,
+            text, entry, book, mat=mat, account=acc,
             segments=segments)
         judged[o] = fs
         for k, v in acc.counters().items():
@@ -802,7 +723,7 @@ def run_recheck(ctx: RunContext) -> CheckReport:
         new_prov = ctx.rewrite_provenance(
             art.provenance, by='--recheck') if changed else art.provenance
         updated = _chapter_record(
-            entry, segments, book, mode=mode, warns=warns,
+            entry, segments, book, warns=warns,
             errs=errs or None, provenance=new_prov)
         if changed:
             trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
@@ -813,11 +734,11 @@ def run_recheck(ctx: RunContext) -> CheckReport:
         else:
             store.write(rel, updated)
     assemble_book(ctx, store, book)
-    return _report(ctx, store, mode, written=[], blocked=touched, book=book, judged=judged)
+    return _report(ctx, store, written=[], blocked=touched, book=book, judged=judged)
 
 
 def run_revalidate(
-    ctx: RunContext, *, actor: str, reason: str,
+    ctx: RunContext, *, actor: str, reason: str, chapters: str | None = None,
 ) -> CheckReport:
     """`--revalidate`：按**当前**判据重判被闸门拦下的 `.INVALID`，合格即提升为正式产物。
 
@@ -828,33 +749,35 @@ def run_revalidate(
     记了一个没写它的模型、把「重判提升」记成了「第 N 轮写作」。
     ⚠ **刻意不宣称 `origin=human`**：「判据改了」与「人手改过」在节点这一侧分不开。
     """
-    mode = _mode_of(ctx)
     store = ArtifactStore(ctx)
+    require_canonical_layout(store)
     book = review.load_book(ctx, store)
     promoted: list[str] = []
     still: list[str] = []
     judged: dict[int, list] = {}
-    for o in sorted(book.chapters):
-        rel = _rel(mode, o)
+    ordinals = ([int(entry['output_ordinal'])
+                 for entry in _chapters_of(store, book, chapters)]
+                if chapters else sorted(book.chapters))
+    for o in ordinals:
+        rel = _rel(o)
         inv = paths.invalid_of(rel)
         if not store.exists(inv):
             continue
         art, _raw = store.read_own(Chapter, inv)
         entry = book.chapters[o]
-        mat = prompts.build_material(
-            entry, book, with_source_text=_ARMS[mode].with_source_text).given
+        mat = prompts.build_material(entry, book).given
         segments, account = _normalize_segments(
             [segment.model_dump() for segment in art.segments], book)
         text = _segments_text(segments)
         fs, errs, warns = _judge(
-            text, entry, book, mode=mode, mat=mat,
+            text, entry, book, mat=mat,
             account=account, segments=segments)
         judged[o] = fs
         if errs:
             still.append(f'第 {o} 章仍有 {len(errs)} 条阻断级：{errs[0]}')
             continue
         rebuilt = _chapter_record(
-            entry, segments, book, mode=mode, warns=warns,
+            entry, segments, book, warns=warns,
             errs=None, provenance=art.provenance)
         trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
         trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=o)
@@ -865,8 +788,9 @@ def run_revalidate(
             _retire_trim_state(store, o)
         promoted.append(f'第 {o} 章 → {store.path(rel)}')
     if not promoted and not still:
-        raise TerminalState(f'{mode} 臂盘上一份 `.INVALID` 都没有——没有可提升的稿')
-    return _report(ctx, store, mode, written=promoted, blocked=still, book=book,
+        raise TerminalState('盘上一份 `.INVALID` 都没有——没有可提升的稿')
+    assemble_book(ctx, store, book)
+    return _report(ctx, store, written=promoted, blocked=still, book=book,
                    judged=judged)
 
 
@@ -887,8 +811,8 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
     ⇒ 一份带阻断级判定的人工稿会一路进成书，没有一行报告会说。
     这是裁决的后果不是 bug——**但要写进契约**（`stage5.md` §七）。
     """
-    mode = _mode_of(ctx)
     store = ArtifactStore(ctx)
+    require_canonical_layout(store)
     book = review.load_book(ctx, store)
     p = os.fspath(edit_path)
     if not p or not os.path.isfile(p):
@@ -898,7 +822,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
     entry = book.chapters.get(o)
     if entry is None:
         raise TerminalState(f'人工稿说自己是第 {o} 章，而计划里没有这一章')
-    rel = _rel(mode, o)
+    rel = _rel(o)
     prev_inputs: dict[str, Any] = {}
     if store.exists(rel):
         _prev, raw = store.read_own(Chapter, rel)
@@ -932,12 +856,11 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
         #   下一次就没人看见了——真正的风险是它有一天开始**静默丢字段**。
         provenance = provenance.model_copy(update={
             'inputs': {k: InputEdge.model_validate(v) for k, v in prev_inputs.items()}})
-    mat = prompts.build_material(
-        entry, book, with_source_text=_ARMS[mode].with_source_text).given
+    mat = prompts.build_material(entry, book).given
     fs, errs, warns = _judge(
-        text, entry, book, mode=mode, mat=mat, account=acc,
+        text, entry, book, mat=mat, account=acc,
         segments=segments)
-    art = _chapter_record(entry, segments, book, mode=mode, warns=warns, errs=errs, # 空也写
+    art = _chapter_record(entry, segments, book, warns=warns, errs=errs, # 空也写
                           provenance=provenance)
     trim_audit_rel = artifact_rel('stage5.trim_audit', nn=o)
     trim_resolution_rel = artifact_rel('stage5.trim_resolution', nn=o)
@@ -948,7 +871,8 @@ def run_apply_edit(ctx: RunContext, edit_path: str) -> CheckReport:
     note = ([f'⚠ 人工稿仍有 {len(errs)} 条阻断级判定，**只报不拦**：{errs[0]}'
              f'　⚠⚠ 下游没有第二道——stage7 只排除 `.INVALID`，这一份会一路进成书']
             if errs else [])
-    return _report(ctx, store, mode, written=[f'第 {o} 章 → {where}'], blocked=note,
+    assemble_book(ctx, store, book)
+    return _report(ctx, store, written=[f'第 {o} 章 → {where}'], blocked=note,
                    book=book, judged={o: fs})
 
 
@@ -971,117 +895,94 @@ def _ordinal_of_edit(path: str, text: str) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 六、`draft.md` —— 两条臂合成一本
+# 六、`draft.md` —— canonical 章集合的纯投影
 # ─────────────────────────────────────────────────────────────────────────────
 
+def render_book_draft(book: M.Book, by_ord: dict[int, dict[str, Any]]) -> str:
+    """Pure canonical chapter projection.  This is the sole byte ruler for `draft.md`."""
+    return render_stage5_draft(book.chapters, by_ord)
+
+
+def expected_book_draft(store: ArtifactStore, book: M.Book) -> str:
+    """从当前 canonical 章集合纯重算 `draft.md` 应有的字节。"""
+    # draft 是 formal 章字节的恢复投影，不是 freshness 判官。上游刚变、只定向
+    # 重写了部分章时，旧章仍须如实进入投影；fresh/stale 由统一 review_status 判断。
+    by_ord, _invalids, _judged = M.load_drafts(store, require_current=False)
+    return render_book_draft(book, by_ord)
+
+
+def draft_is_current(store: ArtifactStore, book: M.Book) -> bool:
+    """True only when on-disk draft bytes equal the canonical pure projection."""
+    if not store.exists(STAGE5_BOOK_DRAFT):
+        return False
+    try:
+        current = store.read_text(STAGE5_BOOK_DRAFT)
+        expected = expected_book_draft(store, book)
+    except (ArtifactUnreadable, UpstreamMissing):
+        return False
+    # `read_text` 按原始 UTF-8 字节解码且拒绝 CRLF，因而字符相等就是
+    # 本契约下的字节相等；不在这里另写一条文件读取口。
+    return current == expected
+
+
 def assemble_book(ctx: RunContext, store: ArtifactStore, book: M.Book) -> str:
-    """把 `deep/` 与 `shallow/` 合成**一本** `stage5/draft.md`（顺带各臂一份单 mode 预览）。
-
-    三条硬机制：
-      · **同一输出章两条臂都有成稿 ⇒ 显式终态**——哪一份是成品无从判断，**不猜**。
-        ⚠ 而验收与界面对同一情况**只报不判死**（`draft_duplicated`）：把「呈现」变成
-        「判死」会让人连报告都看不到。**三处行为故意不同。**
-      · **计划有、两边都没有 ⇒ 缺章横幅写进 md**，不静默跳过；
-      · 章头行**不打篇幅方式**——它恒为一个值，已随 `stage4.md` §一裁撤。
-
-    ⚠ `stage5/draft.md` **刻意不进 `NodeSpec.produces`**：那份拼稿在**只写了一章时也存在**
-    （缺章写成 md 里的一条横幅，不是不落盘）⇒ 拿它当完成度信号是**假阳**，
-    `resume_verdict` 会对一个写了一半的付费层判「跳过」。
-    """
-    by_ord, _invalids, _judged = M.load_drafts(store)
-    dup = sorted(o for o, recs in by_ord.items() if len(recs) > 1)
-    if dup:
-        raise TerminalState(
-            f'第 {dup} 章在两条臂里各有一份成稿——**哪一份是成品无从判断，不猜**。'
-            f'删掉不要的那一份，或用 `--chapters` 明确重跑一条臂')
-    planned = sorted(book.chapters)
-    missing = [o for o in planned if o not in by_ord]
-    n_deep = sum(1 for recs in by_ord.values() if recs[0]['_mode'] == 'deep')
-    n_shallow = len(by_ord) - n_deep
-
-    head = [f'# 重构稿（{len(by_ord)}/{len(planned)} 章：deep {n_deep} · shallow {n_shallow}）']
-    if missing:
-        head.append(f'> ⚠ 计划里的第 {missing} 章**两条臂都没有成稿**')
-    parts = ['\n'.join(head)]
-    for o in planned:
-        recs = by_ord.get(o)
-        if not recs:
-            continue
-        r = recs[0]
-        ov = r.get('overlap_excl_verbatim')
-        src = '、'.join(str(s) for s in (r.get('from_source_ordinals') or []))
-        parts.append(f"## 第 {o} 章（{r['_mode']} · 源 [{src}] · {r.get('chars')}字"
-                     + (f' · 重合(扣除逐字要求) {ov:.3f}' if ov is not None else '')
-                     + ')\n\n' + (r.get('text') or ''))
-    store.write_text(STAGE5_BOOK_DRAFT, '\n\n'.join(parts) + '\n')
-    for mode in DEPTH_MODES:
-        one = [f'# {mode} 单臂预览（{sum(1 for recs in by_ord.values() if recs[0]["_mode"] == mode)} 章）'
-               '\n\n> ⚠ **这不是成书**：单臂预览不对照计划算缺章。成书是 `stage5/draft.md`。']
-        for o in planned:
-            recs = by_ord.get(o)
-            if recs and recs[0]['_mode'] == mode:
-                one.append(f'## 第 {o} 章\n\n' + (recs[0].get('text') or ''))
-        store.write_text(artifact_rel('stage5.mode_draft', mode=mode), '\n\n'.join(one) + '\n')
+    """原子写回 canonical 章集合的纯投影；缺章横幅仍显式保留。"""
+    store.write_text(STAGE5_BOOK_DRAFT, expected_book_draft(store, book))
     del ctx
     return STAGE5_BOOK_DRAFT
+
+
+def run_rebuild_draft(ctx: RunContext) -> str:
+    """`--rebuild-draft`：零成本恢复 canonical 投影，不改任何章产物。"""
+    store = ArtifactStore(ctx)
+    require_canonical_layout(store)
+    book = review.load_book(ctx, store)
+    return assemble_book(ctx, store, book)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 七、报告
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _report(ctx: RunContext, store: ArtifactStore, mode: str, *,
+def _report(ctx: RunContext, store: ArtifactStore, *,
             written: list[str], blocked: list[str], book: M.Book,
             judged: dict[int, list] | None = None) -> CheckReport:
     """写作相的报告：**这一次碰过的那几章**逐条报出判据。
 
     ⚠⚠ **书级/跨章那 14 条落 `unver` 而不是 `skipped`**（`checks.check(phase='write')`）。
     两者是两种颜色：`skipped` 的措辞是「实现未被调用」，用在这里是**一句假话**——
-    它们的实现在，只是这一相判不了。而一份 47 行全 `skipped` 的报告徽章是 `fail`，
-    读起来像「全查过全没过」，实际上什么都没说。**要看全书 47 行，跑 `stage5.review`。**
+    它们的实现在，只是这一相判不了。而一份 50 行全 `skipped` 的报告徽章是 `fail`，
+    读起来像「全查过全没过」，实际上什么都没说。**要看全书 50 行，跑 `stage5.review`。**
 
     ⚠ 这一次一章都没碰（比如 `--revalidate` 一份 `.INVALID` 都没有）⇒ 逐章那几条
     也落 `unver`：「这一次没有任何一章被判过」与「判过、干净」必须分得开。
     """
     for line in (*written, *blocked):
         print(f'    · {line}', flush=True)
-    rel = _mode_dir(mode)
+    rel = 'stage5'
     by_rule: dict[str, list] = {}
     n = len(judged or {})
     for fs in (judged or {}).values():
         for f in fs:
             by_rule.setdefault(f.rule, []).append(f)
     empty = '这一次一章都没碰过——**没有任何一章被判过**，不是判过没问题'
-    scanned = {r: f'{n} 章（{mode} 臂，这一次碰过的）' for r in checks._FROM_CHAPTER}
-    # ⚠⚠ **`dialogue_halved` 的分母是「有几章落在它的前件里」**，而前件第一项就是
-    #   `mode == shallow` ⇒ 闭卷臂上它结构上不可能命中，而「跑了、零 findings」在报告上
-    #   渲染成 pass。2026-08-22 起默认深度选择是全书闭卷，那正是这条假绿的常驻形态。
-    #   ⇒ 分母无条件打出来，为零时落 `unver`（同 `verbatim_missing` 那次事故的处置）。
-    # ⚠ `book` 是**必填**，不给可选默认：四个调用方手里全都有它，配一个 `None` 兜底
-    #   等于给这条分母留一条会静默走空的路——而这条判据的失效形态就是「看起来查过了」。
-    blind: dict[str, str] = {}
-    if n:
-        n_halved = checks.dialogue_halved_scope(
-            ((book.chapters[o], mode) for o in sorted(judged or {})
-             if o in book.chapters), book)
-        scanned['dialogue_halved'] = (
-            f'{n_halved}/{n} 章落在前件里（开卷 × 计划无净压缩 × 源章 ≥4 句）')
-        if not n_halved:
-            blind['dialogue_halved'] = checks.DIALOGUE_HALVED_BLIND
+    scanned = {r: f'{n} 章（这一次碰过的）' for r in checks._FROM_CHAPTER}
     outcomes = checks.check(
         chapter_findings_by_rule=by_rule,
-        scanned=scanned, blind=blind,
+        scanned=scanned, blind={},
         unver_empty={}, phase='write') if n else [
         unverifiable(r, empty, scanned='0 章')
         for r in (*checks._FROM_CHAPTER, *checks._FROM_REVIEW)]
     # ⚠ 这里曾追加 `stage5.semantic` 的两条 UNVER 占位（写作相判不了书级语义）。
     #   该节点于 2026-08-17 下线，两条判据一并注销 ⇒ 不再追加占位行。
-    any_rel = next(iter(sorted(glob.glob(os.path.join(store.path(rel), 'ch*.json')))), None)
+    any_rel = next(iter(sorted(
+        p for p in glob.glob(os.path.join(store.path(rel), 'ch*.json'))
+        if re.fullmatch(r'ch\d+\.json', os.path.basename(p)))), None)
     fresh_rel = (f'{rel}/{os.path.basename(any_rel)}' if any_rel
                  else review.WRITER_CONTEXT)
     return build(sid=ctx.sid, node=ctx.node, freshness=store.freshness(fresh_rel),
                  outcomes=outcomes, accounting=ctx.accounting,
-                 invalid=bool(glob.glob(os.path.join(store.path(rel), 'ch*.INVALID.json'))))
+                  invalid=bool(glob.glob(os.path.join(store.path(rel), 'ch*.INVALID.json'))))
 
 
 def run_check_only(ctx: RunContext) -> CheckReport:

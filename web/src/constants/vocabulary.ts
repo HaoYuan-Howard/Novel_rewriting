@@ -13,7 +13,6 @@ export type Freshness = 'fresh' | 'stale' | 'unknown'
 export type Badge = 'pass' | 'amber' | 'fail'
 export type Severity = 'hard' | 'info' | 'metric' | 'unver'
 export type JobState = 'running' | 'ok' | 'landed_red' | 'failed' | 'unknown'
-export type Mode = 'deep' | 'shallow'
 export type Op = 'keep' | 'compress' | 'amplify' | 'rewrite'
 export type InboxKind =
   | 'invalid'
@@ -193,12 +192,6 @@ export const SPEND_INK = 'oklch(0.45 0.16 38)'
 /** 弹窗遮罩 */
 export const SCRIM = 'rgba(27,26,24,0.34)'
 
-/** 「深度 / 浅层」两条臂的底色。它不是状态，是分类。 */
-export const ARM = {
-  deep: 'oklch(0.42 0.09 250)',
-  shallow: 'oklch(0.45 0.06 200)',
-} as const
-
 export interface JobStateToken {
   color: string
   bg: string
@@ -244,7 +237,7 @@ export interface StageDef {
   label: string
 }
 
-/** 产物矩阵的八列。注意：stage5 成稿不进产物表，只记跑过哪几条臂。 */
+/** 产物矩阵的八列。 */
 export const STAGES: StageDef[] = [
   { n: '0', key: 'stage0', label: '剔除番外' },
   { n: '1', key: 'stage1', label: '摄入分章' },
@@ -266,7 +259,6 @@ export type ScreenName =
   | 'global'
   | 'style'
   | 'stage4'
-  | 'depth'
   | 'stage5'
   | 'stage6'
   | 'stage7'
@@ -318,7 +310,6 @@ export const SCREEN_TITLE: Record<ScreenName, string> = {
   global: '全局设定 · stage2',
   style: '文风画像 · stage3',
   stage4: '计划 ↔ 写作上下文',
-  depth: '挑深度重构章节',
   stage5: '成稿 ↔ 材料',
   stage6: '开篇文案 · stage6',
   stage7: '人名替换 + 成书 · stage7',

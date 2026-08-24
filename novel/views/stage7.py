@@ -29,9 +29,11 @@ from contracts.schema.api import (
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from novel import paths, prov
-from novel.errors import ArtifactUnreadable, UpstreamMissing
+from novel.errors import ArtifactUnreadable, HumanEditProtected, UpstreamMissing
 from novel.orchestrator.state import artifact_state, readonly_ctx
-from novel.stages.stage5.measure import load_drafts
+from novel.stages.stage5.measure import (
+    is_legacy_stage5_rel, legacy_stage5_paths, load_drafts,
+)
 from novel.stages.stage7.subs import apply_subs, sub_table
 from novel.stages.stage7.rename import approval_subject_sha256
 from novel.store import ArtifactStore
@@ -53,8 +55,22 @@ def stage7_view(base: str | os.PathLike[str], sid: str,
     novel_dir = paths.resolve_novel_dir(base, sid)
     store = ArtifactStore(readonly_ctx(novel_dir, NODE, prov.code_version()))
 
+    live_legacy = legacy_stage5_paths(store)
+    if live_legacy:
+        raise HumanEditProtected(
+            f'legacy_incompatible：发现旧 Stage5 双臂路径 {live_legacy[:8]}。'
+            '旧产物只读保留，不能退化成 Stage7 missing，也不能据此触发重跑',
+            hint='在独立 canonical Stage5 base 重建 Stage6/7 消费链后再打开本屏',
+        )
     st = artifact_state(store, REL)
     art, _raw = store.read_own(NameMap, REL)
+    legacy = sorted(rel for rel in art.judged if is_legacy_stage5_rel(rel))
+    if legacy:
+        raise HumanEditProtected(
+            f'legacy_incompatible：{REL} 的 judged 仍绑定旧 Stage5 双臂路径 {legacy}。'
+            '旧产物只读保留，不能在当前 Stage7 视图展示，也不能据此触发重跑',
+            hint='在独立 canonical Stage5 base 重建 Stage6/7 消费链后再打开本屏',
+        )
 
     chapters = sorted({jd.output_ordinal for jd in art.judged.values()})
     rows = None
@@ -118,12 +134,13 @@ def _rows(store: ArtifactStore, art: NameMap, ordinal: int) -> list[RenameRow]:
 
     ⚠ 成稿一律走 `load_drafts`（`read_judged` 那条路）——`store.read` 对三级路径
     是 `PathRefused`，这不是绕路，是那条唯一读路本来的形状。
-    ⚠ 同章双份（deep+shallow 并存）时取 `judged` 里的第一条——多义性由判据
-    `draft_duplicated` 去说，对照屏不替它裁决。
+    canonical Stage5 每章只有一份；旧 deep/shallow provenance 由下游消费闸明确报
+    `legacy_incompatible`，本屏不替人挑一份。
     """
     by_ord, _invalids, _judged = load_drafts(store)
-    recs = by_ord.get(ordinal) or []
-    rec = next((r for r in recs if r['_relpath'] in art.judged), recs[0] if recs else None)
+    rec = by_ord.get(ordinal)
+    if rec is not None and rec['_relpath'] not in art.judged:
+        rec = None
     if rec is None:
         raise UpstreamMissing(
             f'stage5 里第 {ordinal} 章的成稿不在盘上——'

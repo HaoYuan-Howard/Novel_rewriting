@@ -2,7 +2,7 @@
  * stage0 – stage7 的响应形状。字段名照抄后端契约（`contracts/schema/api.py`），
  * 抓包证据在 `src/fixtures/backend_v1/`。
  */
-import type { Badge, Freshness, Mode, Severity, InboxKind } from '@/constants/vocabulary'
+import type { Badge, Freshness, Severity, InboxKind } from '@/constants/vocabulary'
 import type {
   Facts,
   Finding,
@@ -170,7 +170,6 @@ export interface TrimResolutionRequest {
 
 export interface TrimResolution {
   output_ordinal: number
-  mode: 'deep' | 'shallow'
   action: 'retain_pretrim'
   actor: string
   reason: string
@@ -782,7 +781,6 @@ export interface ChapterSegment {
 }
 
 export interface Draft {
-  mode: Mode
   relpath: string
   invalid: boolean
   round: number
@@ -806,12 +804,17 @@ export interface Draft {
 export interface DraftIndexRow {
   output_ordinal: number
   budget_chars: number | null
-  modes: Mode[]
-  invalid_modes: Mode[]
-  dup: boolean
+  has_draft: boolean
+  invalid: boolean
   chars: number | null
   overlap_excl_verbatim: number | null
   freshness: Freshness | null
+}
+
+export interface Stage5TrimAudit {
+  output_ordinal: number
+  reason: string
+  context: string
 }
 
 export interface Stage5Response {
@@ -824,16 +827,20 @@ export interface Stage5Response {
   written: number
   invalid: number
   missing: number[]
-  duplicates: number[]
+  /** 旧 deep/shallow 路径只报兼容性，不混入 canonical 单臂稿。 */
+  legacy_incompatible: boolean
+  legacy_paths: string[]
   chapters: number[]
   ordinal: number
   index: DraftIndexRow[]
   source_text: string | null
   source_chars_raw: number | null
   materials: Materials | null
-  /** 一章常常只有 1 份成稿（另一条臂没写这一章） */
+  /** 一章至多一份现役正式稿；旧轮次在服务端归档。 */
   drafts: Draft[]
   invalid_drafts: Draft[]
+  /** 本章仍待人工确认“保留未裁剪正文”的超上限事实；null = 无待销账项。 */
+  trim_audit: Stage5TrimAudit | null
   ctx_state: ArtifactState
 }
 
@@ -841,7 +848,6 @@ export interface Stage5Response {
 
 export interface ReviewIndexRow {
   output_ordinal: number
-  mode: Mode | null
   round: number | null
   chars: number | null
   budget_chars: number | null
@@ -855,7 +861,6 @@ export interface ReviewIndexRow {
 export interface ReviewChapter {
   output_ordinal: number
   findings: Finding[]
-  mode: Mode | null
   chars: number | null
   budget_chars: number | null
   round: number | null
@@ -873,6 +878,8 @@ export interface ReviewResponse {
   sid: string
   title: string
   review_seq: number
+  review_state: 'fresh' | 'stale' | 'unknown' | 'legacy_incompatible'
+  review_reasons: string[]
   sources: Sources
   /** 全书按 sev 现数，四键恒在 —— 不读产物的稀疏 counts */
   finding_counts: Record<Severity, number>

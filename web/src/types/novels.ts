@@ -28,18 +28,16 @@ export interface NovelRow {
   dirname: string
   /** stage1 主正文一落盘即可确定；还没分章时为 null。 */
   chapters: number | null
-  /** stage0~7；stage5 成稿不进 artifacts，只在 stage5_modes / chapters_done 中体现。 */
+  /** stage0~7；Stage5 的 draft 投影进 artifacts，逐章成稿集合进 chapters_done。 */
   stages: Record<string, Artifact[]>
-  /** stage5 只记跑过哪几条臂。以 _ 开头的是目录名泄漏，显示时要过滤掉 */
-  stage5_modes: string[]
   /** 服务端折叠出的三态完成度。 */
   stage_done: Record<string, boolean | null>
   /** 人工流程导航是否可进入；不是运行闸门。 */
   stage_reviewable: Record<string, boolean>
-  /** 逐章层已经落盘的章号，按 mode 分组。 */
-  chapters_done: Record<string, Record<string, number[]>>
+  /** 各层已落盘的 canonical 逐章产物；现役仅 stage5 非空。 */
+  chapters_done: Record<string, number[]>
   summary: {
-    verdict: 'broken' | 'stale' | 'pending' | 'unknown' | 'complete'
+    verdict: 'broken' | 'legacy_incompatible' | 'stale' | 'pending' | 'unknown' | 'complete'
     text: string
     detail: string
     artifact_count: number

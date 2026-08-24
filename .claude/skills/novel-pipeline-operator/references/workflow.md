@@ -34,8 +34,8 @@
 1. cwd 是仓根；`<PY> -X utf8 -u -m novel.cli --help` 可用。
 2. `.env` 中存在外部模型密钥，但不输出值；`.llm_cache/` 可用。
 3. 新跑与续跑使用**同一个** `<BASE>`：隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根。另建一个根会把同一本书的 `_service/ledger.jsonl` 分裂成两份，而[收尾](#收尾)把它当成本的唯一权威源。不要写入任何历史验收或证据目录。
-4. 源文件或既有书目录存在，`<SID>` 唯一。立即运行
-   `<PY> -X utf8 -u scripts/session_preflight.py --base <BASE> --sid <SID>`；新书把
+4. 源文件或既有书目录存在，`<SID>` 唯一。立即从仓根运行
+   `<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书把
    `--sid` 换成 `--source <TXT>`。从这一个 JSON 固化 `<STARTED_AT>` 与 `<START_CODE>`，
    也以它解析出的 sid/novel_dir 为准。终验不得在结束时现取新代码指纹冒充起点。
 5. 付费授权与正文外发授权各自取到值：交互式会话两项**默认 `granted`**，本步是记录不是索要；
@@ -60,11 +60,11 @@
 `stage0.remove --source <txt>` 摄入新书时省略 `<SID>`。`preview` 不接受 `--yes`；它会通过与真跑共用的 `build_argv`，在付费步骤中生成已经带 `--yes` 的真实命令。它打印的命令**已按单引号规则转义**：含空格的取值（`--reason`、带空格的路径）自带引号，可逐字复制粘贴，不需要也不应该再自行改写 argv。
 
 执行 `preview` 输出的**全部步骤**，不只执行第一条。写盘节点可能自动追加 `--check-only`。
-推荐直接用下面两条调用生产 `build_steps` 并串联信标；不要另抄追跑规则：
+推荐从仓根直接用下面两条调用生产 `build_steps` 并串联信标；不要另抄追跑规则：
 
 ```text
-<PY> -X utf8 -u scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]
-<PY> -X utf8 -u scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --execute <node> -- [flags]
+<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]
+<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --execute <node> -- [flags]
 ```
 
 runner 控制参数在显式 `--` 之前可位于 node 前后，但以上是规范写法；`--` 之后全部属于
@@ -85,7 +85,7 @@ runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；�
 
 ## 主链顺序
 
-下表中的节点列由 `scripts/validate_skill.py` 与 `PIPELINE_STEPS` 对账。参数列是本 skill 的主跑策略；实际 argv 始终取自 `preview`。
+下表中的节点列由 `.claude/skills/novel-pipeline-operator/scripts/validate_skill.py` 与 `PIPELINE_STEPS` 对账。参数列是本 skill 的主跑策略；实际 argv 始终取自 `preview`。
 
 <!-- pipeline-steps:start -->
 | # | 节点 | 主跑参数 | 放行证据 |
@@ -99,7 +99,7 @@ runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；�
 | 7 | `stage3.style` | 无；闸开后独立 preview/run | 文风画像正式落盘，check 无 HARD |
 | 8 | `stage4.plan` | 无 | 计划 check 无 HARD，写作上下文由当前计划组装 |
 | 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
-| 10 | `stage5.write` | `--deep <全部计划章> --shallow-rest`（章号逗号分隔，如 23 章 ⇒ `--deep 1,2,...,23`） | deep+shallow 的正式章集合恰好覆盖计划章集合，内部收缩/重试不等于失败；`arm_split_report` 应报「开卷 0 章」 |
+| 10 | `stage5.write` | 无（不带 `--chapters` 即写全部缺少的 canonical 章） | `stage5/chNN.json` 恰好覆盖计划章集合，`draft.md` 是它们的当前纯投影；内部重试不等于整节点失败 |
 | 11 | `stage5.review` | 无 | 最新机械验收完成；HARD 按 remediation 收敛，info/metric/unver 保持原态 |
 | 12 | `stage6.hook` | 无 | 至少一条候选通过落盘闸；追跑 check 可读正式候选 |
 | 13 | `stage6.semantic` | 无 | 每个去重文本都有两名盲评判官的带证据结论与匿名质量排序；结论按完整 SHA-256 与当前候选对齐 |
@@ -138,26 +138,19 @@ Stage2 的顺序硬约束是：global 落盘 → `--emit-review-workpack` 辅助
 `stage6.approve` 只能在零证据下拍板。本节点不接 `--check-only`，也不再有 flag。
 它是全链最小的付费面：两名盲判官各一次调用，不随章数增长。
 
-### `--deep <全部计划章>` 是默认，不是判据
+### Stage5 是 canonical 闭卷单臂
 
-默认是**全书闭卷**。此前的默认是开篇三章闭卷、其余开卷，依据「开篇三章决定读者留存」；
-换默认的依据是成书级实测——把成书按 `stage7/name_map.json` 回映射人名后逐章与源章比重合，
-**开卷臂的重合度比闭卷臂高一个数量级**，开卷可以把一章几乎原样抄回来，而它此前是绝大多数章的
-默认路径。读数与口径在 `docs/BACKEND_CONTRACT.md` 的 `B-03` 与 `R-7.6b`/`R-7.6c` 行上，
-工具是 `tools/book_overlap.py`（0 成本，退出码恒 0）。
+主跑命令不带任何深浅参数：不带 `--chapters` 时写全部缺章；只有定向维护 / 重写才带
+`--chapters 3,7`。当前 CLI/API 没有选臂或人工深度选择；旧双臂目录只作
+`legacy_incompatible` 历史证据，不能挑一臂、搬文件或补版本号冒充 `stage5/chNN.json`。
 
-deep 与 shallow 的单章成本不同，所以这仍然是一个**有成本含义的默认值**：全书闭卷比旧默认贵。
-用户在[接口契约](../SKILL.md#接口契约)的可选约束里指定了章节深浅分配时以用户为准，
-并在终审包记录实际分配与依据。**不要为「省钱」自行缩小 deep 集合**——它与「不要为『提高质量』
-自行扩大」是同一条纪律的两面：改默认分配都是未经授权的成本/质量变更。
+首次写作前仍须显式授权 current Stage5 全书写作，但授权不再携带章臂分配。若 `state` / `inbox`
+报告旧布局，停在可恢复位置：在新隔离 base 由 `stage5.write` 从冻结 Stage0～4 上游全书重建，
+不要让 runner 把旧快照解释成新命令。
 
-⚠ 走开卷的章从此是**例外**：`stage5.review` 的 `arm_split_report` 常驻报出
-「本书 N/M 章走开卷」+ 这几章的逐章重合度跨度。终审包里照抄这条读数。
-⚠ 全书闭卷有两条**已知代价**，不是问题、不要去修：
-`dialogue_halved` 的前件第一项是「开卷」⇒ 默认路径上它没有分母，报告上落 `unver` 而不是绿灯；
-`dialogue_fewer` 会大面积命中——它那条线正压在「闭卷会系统性把台词压成转述」这个自然效应上
-⇒ **读 `dialogue_report` 的 m/n 分布，不数 `dialogue_fewer` 的命中数**。
-⚠ 深度选择在 stage5 开写后锁死 ⇒ 已经写过章的书**改不了**它，只能另起 `--base`。
+`source_overlap_high` 现役含义是 canonical 闭卷逐章 20 字窗重合越过注册阈值的 INFO 异常信号，
+不是臂身份判断；`overlap_report` 与 `dialogue_report` 都按逐章读。后者没有书级汇总，不能用
+`dialogue_fewer` 命中数代替逐章 m/n 分布。
 
 ### 书级剧透防线是 0 成本的那一组
 
@@ -232,7 +225,7 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 
 1. 执行代批文档中的逐字成书对账。
 2. 再运行一次 `state` 与 `inbox`，只统计活动目录，排除 `_rounds/` 历史。
-3. 运行 `scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：先按 sid、`outcome == "ok"` 和 `<STARTED_AT>` 切出本次会话；同 SID 全历史另列累计审计，**两张表不相加**。缓存命中与实付分开计数，token 合计只累加 `cached == false`。产物 `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
-4. 对按模板建立的终审包运行同参数的 `scripts/sync_review_evidence.py`，由脚本更新质量表、两张账本、退出序列与机器锚点；agent 只写内容判断、代批证据和恢复说明。
-5. 清除剩余占位符，用同一组会话参数运行 `scripts/validate_review.py`，再运行 `scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`。确保每个异常、残红和不可验证项都有“影响、证据、恢复路径”。
+3. 从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：先按 sid、`outcome == "ok"` 和 `<STARTED_AT>` 切出本次会话；同 SID 全历史另列累计审计，**两张表不相加**。缓存命中与实付分开计数，token 合计只累加 `cached == false`。产物 `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
+4. 对按模板建立的终审包运行同参数的 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py`，由脚本更新质量表、两张账本、退出序列与机器锚点；agent 只写内容判断、代批证据和恢复说明。
+5. 清除剩余占位符，用同一组会话参数运行 `.claude/skills/novel-pipeline-operator/scripts/validate_review.py`，再运行 `.claude/skills/novel-pipeline-operator/scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`。确保每个异常、残红和不可验证项都有“影响、证据、恢复路径”。
 6. 只向用户交付成书与终审包；中间产物仅作为终审包中的可追溯指针。

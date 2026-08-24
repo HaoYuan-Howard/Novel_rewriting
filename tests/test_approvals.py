@@ -62,10 +62,9 @@ def _approvable_book(rel: str) -> str:
         if a.rel == rel and corpus.load_current(a).get('_provenance') is not None
     })
     ok = [b for b in books if sandbox.source_resolves_in_a_sandbox(b)]
-    # ⚠ **成稿链条当前的排前面**：`s5` 的凭据要求逐份成稿「明确当前」
-    #   （实测 `ApprovalRequired: stage5/deep/ch01.json … stale/consumed_changed`）。
+    # ⚠ **canonical 成稿链条当前的排前面**：`s5` 的凭据要求逐份成稿明确当前。
     #   这是排序不是过滤——一本都不当前时仍然选得出书，由用例各自的前提去声明。
-    ok.sort(key=lambda b: not corpus.is_current(b, 'stage5/deep/', 'stage5/shallow/'))
+    ok.sort(key=lambda b: not corpus.is_current(b, 'stage5/ch01.json'))
     corpus.declared_dependency(
         bool(ok),
         needs=(f'一本 `stage0/removal_report.json` 记的源路径仍在盘上的书'
@@ -100,15 +99,11 @@ def _full_box() -> sandbox.Sandbox:
     return box
 
 
-def _copy_chapter(box: sandbox.Sandbox, ordinal: int, mode: str) -> None:
-    data = next((
-        sandbox.current(box.book, f'stage5/{source_mode}/ch{ordinal:02d}.json')
-        for source_mode in ('deep', 'shallow')
-        if sandbox.current(box.book, f'stage5/{source_mode}/ch{ordinal:02d}.json')
-        is not None
-    ), None)
-    assert data is not None, f'{box.book} 少了第 {ordinal} 章 current Stage5 正式稿'
-    box.write(f'stage5/{mode}/ch{ordinal:02d}.json', data)
+def _copy_chapter(box: sandbox.Sandbox, ordinal: int) -> None:
+    rel = f'stage5/ch{ordinal:02d}.json'
+    data = sandbox.current(box.book, rel)
+    assert data is not None, f'{box.book} 少了第 {ordinal} 章 current Stage5 v2 正式稿'
+    box.write(rel, data)
 
 
 def _touch(box: sandbox.Sandbox, rel: str) -> None:
@@ -204,11 +199,14 @@ def test_s7_service_proof_revokes_changed_typed_approval_or_decision(
 
 
 @_corpus_test
-def test_default_depth_is_chapters_one_two_three_and_get_is_read_only():
+def test_get_exposes_public_v2_without_retired_depth_and_is_read_only():
+    """GET 只公开 v2 审批面，且不落服务状态。"""
     box = _box()
     try:
         doc = approvals.get(box.root, box.sid)
-        assert doc.deep == [1, 2, 3]
+        assert doc.v == 2
+        assert 'deep' not in doc.model_dump() and 'deep_proof' not in doc.model_dump()
+        assert doc.writing is False
         assert not (box.root / '_service').exists(), 'GET must not persist service state'
         assert set(doc.gate) == {f's{i}' for i in range(8)}
 
@@ -232,114 +230,133 @@ def test_default_depth_is_chapters_one_two_three_and_get_is_read_only():
 
 
 @_corpus_test
-def test_depth_selection_is_locked_as_soon_as_writing_begins():
+def test_writing_approval_is_independent_and_persists_as_internal_v3():
     box = _box()
     try:
-        approvals.set_deep(box.root, box.sid, [2, 4])
-        with pytest.raises(ApprovalRequired, match='style and stage4'):
-            approvals.begin_writing(box.root, box.sid, [2, 4])
-        doc = approvals.get(box.root, box.sid)
-        assert doc.deep == [2, 4] and not doc.writing
         _approve_for_writing(box)
-        with pytest.raises(HumanEditProtected, match='differs'):
-            approvals.begin_writing(box.root, box.sid, [1, 2, 3])
-        assert approvals.begin_writing(box.root, box.sid, [2, 4]).writing
-        with pytest.raises(HumanEditProtected, match='locked'):
-            approvals.set_deep(box.root, box.sid, [1])
+        assert not approvals.get(box.root, box.sid).writing
+        doc = approvals.begin_writing(box.root, box.sid)
+        assert doc.writing and approvals.writing_is_current(box.root, box.sid)
+        raw = approvals._path(box.root, box.sid).read_text(encoding='utf-8')
+        assert '"v": 3' in raw and '"deep"' not in raw and 'deep_proof' not in raw
     finally:
         box.close()
 
 
 @_corpus_test
-def test_existing_formal_or_invalid_chapter_locks_depth_selection():
-    for name in ('ch01.json', 'ch01.INVALID.json'):
+def test_current_writing_approval_authorizes_whole_book_or_plan_subset_only():
+    box = _box()
+    try:
+        _approve_for_writing(box)
+        planned = approvals._planned(box.root, box.sid)
+        assert planned
+        approvals.begin_writing(box.root, box.sid)
+        approvals.authorize_writing(box.root, box.sid, None)
+        approvals.authorize_writing(box.root, box.sid, [planned[0]])
+        with pytest.raises(HumanEditProtected, match='outside the current plan'):
+            approvals.authorize_writing(box.root, box.sid, [max(planned) + 100])
+    finally:
+        box.close()
+
+
+@_corpus_test
+def test_writing_approval_requires_current_s3_s4_and_is_idempotent():
+    box = _box()
+    try:
+        with pytest.raises(ApprovalRequired, match='style and stage4'):
+            approvals.begin_writing(box.root, box.sid)
+        assert not approvals.get(box.root, box.sid).writing
+        _approve_for_writing(box)
+        first = approvals.begin_writing(box.root, box.sid)
+        before = approvals._path(box.root, box.sid).read_bytes()
+        second = approvals.begin_writing(box.root, box.sid)
+        assert first.writing and second.writing
+        assert approvals._path(box.root, box.sid).read_bytes() == before
+    finally:
+        box.close()
+
+
+@_corpus_test
+def test_existing_canonical_or_legacy_stage5_work_blocks_approval_reset():
+    for rel in ('stage5/ch01.json', 'stage5/ch01.INVALID.json',
+                'stage5/deep/ch01.json', 'stage5/shallow/ch01.json'):
         box = _box()
         try:
-            _touch(box, f'stage5/deep/{name}')
-            with pytest.raises(HumanEditProtected, match='locked'):
-                approvals.set_deep(box.root, box.sid, [1, 2, 3])
+            _touch(box, rel)
+            with pytest.raises(HumanEditProtected, match='cannot reset approvals'):
+                approvals.reset(box.root, box.sid)
         finally:
             box.close()
 
 
 @_corpus_test
-def test_stage5_gate_requires_exact_arm_assignment_no_invalids_and_combined_draft():
+def test_legacy_stage5_is_explicit_and_cannot_authorize_or_approve():
     box = _box()
     try:
         _approve_for_writing(box)
-        # ⚠ `begin_writing` 要求盘上已经存过一次**显式的**深度决策（`deep_proof` 非空，
-        #   `novel/orchestrator/approvals.py:789`）——默认值 `[1,2,3]` 只是**建议**，
-        #   它自己不带 typed 凭据。`_approve_for_writing` 只批 s0..s4，不替人做这个决策
-        #   （也不该替：另一条用例先 `set_deep([2,4])` 再调它，helper 里加就会覆盖掉）。
-        #   ⇒ 这里照真人的动作显式存一次当前建议值。
-        approvals.set_deep(box.root, box.sid, approvals.get(box.root, box.sid).deep)
-        doc = approvals.begin_writing(box.root, box.sid)
-        planned = approvals._planned(box.root, box.sid)
-        assert planned
-        for ordinal in planned:
-            mode = 'deep' if ordinal in doc.deep else 'shallow'
-            _copy_chapter(box, ordinal, mode)
-
-        wrong = box.dir / f'stage5/shallow/ch{doc.deep[0]:02d}.json'
-        _copy_chapter(box, doc.deep[0], 'shallow')
-        with pytest.raises(HumanEditProtected, match='wrong arm'):
+        approvals.begin_writing(box.root, box.sid)
+        _touch(box, 'stage5/deep/ch01.json')
+        assert state.stage5_legacy_paths(box.dir) == ['stage5/deep']
+        with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
+            approvals.authorize_writing(box.root, box.sid, None)
+        with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
             approvals.approve_gate(box.root, box.sid, 's5')
-        wrong.unlink()
-
-        invalid = box.dir / 'stage5/deep/ch01.INVALID.json'
-        invalid.write_bytes((box.dir / 'stage5/deep/ch01.json').read_bytes())
-        # ⚠ **`GateBlocked` 而不是 `ApprovalRequired`**：没裁决的 `.INVALID` 不是
-        #   「还没人批」，是「此刻批不了」——出路是闸门自己的 0 成本提升/编辑路，
-        #   而那份被拦下的稿在哪必须说得出来（`invalid_path`）。
-        #   ⚠ stage5 逐章拦 ⇒ 指的是**装着它们的那个目录**（`GateBlocked` 的原话是
-        #     「那份被拦下的稿在哪」，不是「一个文件路径」）；具体是哪几章在措辞里。
-        with pytest.raises(GateBlocked, match='INVALID') as blocked:
-            approvals.approve_gate(box.root, box.sid, 's5')
-        assert blocked.value.invalid_path == str(box.dir / 'stage5')
-        assert 'stage5/deep/ch01.INVALID.json' in str(blocked.value)
-        invalid.unlink()
-
-        with pytest.raises(UpstreamMissing, match='stage5/draft.md'):
-            approvals.approve_gate(box.root, box.sid, 's5')
-        _touch(box, 'stage5/draft.md')
-        assert approvals.approve_gate(box.root, box.sid, 's5').gate['s5']
     finally:
         box.close()
 
 
+@pytest.mark.parametrize('legacy_rel', [
+    'stage5/deep/',
+    'stage5/review_1.json',
+    'stage5/trim_audit_ch01.json',
+    'stage5/trim_resolution_ch01.json',
+])
+def test_begin_and_authorize_reject_every_legacy_stage5_subject_before_bool_gates(
+        tmp_path, monkeypatch, legacy_rel):
+    """旧目录、Review v1、trim v1 共用 review_status，且拒绝前不改审批账。"""
+    book = tmp_path / '书名_123'
+    book.mkdir()
+    target = book / legacy_rel.rstrip('/')
+    if legacy_rel.endswith('/'):
+        target.mkdir(parents=True)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('{"_schema_version":1}', encoding='utf-8')
+
+    record = approvals._fresh_record('123')
+    approval_path = approvals._path(tmp_path, '123')
+    approval_path.parent.mkdir(parents=True)
+    approval_path.write_text(record.model_dump_json(indent=2), encoding='utf-8')
+    before = approval_path.read_bytes()
+    monkeypatch.setattr(
+        approvals, '_planned',
+        lambda *_args: pytest.fail('legacy 必须在计划与 bool gate 之前终止'))
+
+    with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
+        approvals.begin_writing(tmp_path, '123')
+    with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
+        approvals.authorize_writing(tmp_path, '123', None)
+
+    assert approval_path.read_bytes() == before
+    assert not (tmp_path / '_service' / 'ledger.jsonl').exists()
+
+
 @_corpus_test
-def test_cli_products_can_be_explicitly_backfilled_and_are_reported_as_such():
+def test_legacy_cli_products_are_not_backfilled_as_canonical_stage5():
     box = _full_box()
     try:
-        # ⚠ 本条断言回填一路走到 `s7`，而 `s5`/`s7` 的凭据各自要求逐份成稿与人物映射
-        #   **明确当前**——那是本条的**输入**（「CLI 产出的这一版能被补录」），不是它的结论。
-        #   三本语料的 `name_map` 相对重生成过的 `stage4/writer_context.json` 都已过期。
-        corpus.requires_current(box.book, 'stage5/deep/', 'stage5/shallow/',
-                                produced_by='stage5.write --mode deep', cost='付费')
-        corpus.requires_current(box.book, 'stage7/name_map.json',
-                                produced_by='stage7.rename --recheck', cost='0 成本')
-        planned = approvals._planned(box.root, box.sid)
-        assert planned
-
+        legacy = state.stage5_legacy_paths(box.dir)
+        assert legacy, '这条用旧语料做只读证据，不能偷换成 canonical 语料'
         result = approvals.backfill_from_disk(box.root, box.sid)
-        assert result.backfilled == [f's{i}' for i in range(8)]
-        assert all(result.approvals.gate.values())
-        assert result.approvals.seen == {'read': True, 'global': True}
-        expected_deep = [
-            ordinal for ordinal in planned
-            if (box.dir / f'stage5/deep/ch{ordinal:02d}.json').is_file()
-        ]
-        assert result.approvals.writing
-        assert result.approvals.deep == expected_deep
-
-        again = approvals.backfill_from_disk(box.root, box.sid)
-        assert again.backfilled == []
+        assert not result.approvals.writing
+        assert not any(result.approvals.gate[f's{i}'] for i in range(5, 8))
+        assert 'deep' not in result.approvals.model_dump()
     finally:
         box.close()
 
 
 @_corpus_test
-def test_stage5_job_api_rejects_a_depth_assignment_different_from_approval(monkeypatch):
+def test_stage5_job_api_rejects_retired_mode_and_accepts_canonical_scopes(monkeypatch):
     pytest.importorskip('fastapi')
     from fastapi.testclient import TestClient
     from novel.api.app import UI_HEADER, create_app
@@ -356,39 +373,40 @@ def test_stage5_job_api_rejects_a_depth_assignment_different_from_approval(monke
     monkeypatch.setattr(route.jobs, 'start', zero_cost_start)
     try:
         _approve_for_writing(box)
-        approvals.set_deep(box.root, box.sid, [2, 4])
+        planned = approvals._planned(box.root, box.sid)
+        assert planned
         app = create_app(box.root)
         headers = {UI_HEADER: '1'}
         with TestClient(app) as client:
-            mismatch = client.post('/api/jobs', headers=headers, json={
-                'sid': box.sid, 'node': 'stage5.write', 'mode': None,
+            retired_shape = client.post('/api/jobs', headers=headers, json={
+                'sid': box.sid, 'node': 'stage5.write', 'mode': 'deep', 'flags': [],
+            })
+            assert retired_shape.status_code == 422
+
+            retired_flags = client.post('/api/jobs', headers=headers, json={
+                'sid': box.sid, 'node': 'stage5.write',
                 'flags': ['--deep', '1,2,3', '--shallow-rest'],
             })
-            assert mismatch.status_code == 409
-            assert mismatch.json()['kind'] == 'HumanEditProtected'
+            assert retired_flags.status_code == 400
             assert not approvals.get(box.root, box.sid).writing
 
-            accepted = client.post('/api/jobs', headers=headers, json={
-                'sid': box.sid, 'node': 'stage5.write', 'mode': None,
-                'flags': ['--deep', '2,4', '--shallow-rest'],
+            unauthorized = client.post('/api/jobs', headers=headers, json={
+                'sid': box.sid, 'node': 'stage5.write', 'flags': [],
             })
-            assert accepted.status_code == 202, accepted.text
-            job_id = accepted.json()['job_id']
-            assert jobs.wait(job_id, 2)
-            assert approvals.get(box.root, box.sid).writing
+            assert unauthorized.status_code == 409
+            approvals.begin_writing(box.root, box.sid)
 
-            wrong_arm = client.post('/api/jobs', headers=headers, json={
-                'sid': box.sid, 'node': 'stage5.write', 'mode': 'shallow',
-                'flags': ['--chapters', '2'],
+            whole = client.post('/api/jobs', headers=headers, json={
+                'sid': box.sid, 'node': 'stage5.write', 'flags': [],
             })
-            assert wrong_arm.status_code == 409
-            assert wrong_arm.json()['kind'] == 'HumanEditProtected'
+            assert whole.status_code == 202, whole.text
+            assert jobs.wait(whole.json()['job_id'], 2)
 
-            correct_arm = client.post('/api/jobs', headers=headers, json={
-                'sid': box.sid, 'node': 'stage5.write', 'mode': 'deep',
-                'flags': ['--chapters', '2'],
+            subset = client.post('/api/jobs', headers=headers, json={
+                'sid': box.sid, 'node': 'stage5.write',
+                'flags': ['--chapters', str(planned[0])],
             })
-            assert correct_arm.status_code == 202, correct_arm.text
-            assert jobs.wait(correct_arm.json()['job_id'], 2)
+            assert subset.status_code == 202, subset.text
+            assert jobs.wait(subset.json()['job_id'], 2)
     finally:
         box.close()

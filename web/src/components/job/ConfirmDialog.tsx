@@ -109,7 +109,7 @@ export function ConfirmDialog() {
     : confirm.req
 
   // A background refetch is deliberately treated as unknown. Never leave a stale command or
-  // price visible while a request-shaping input (including mode) is being revalidated.
+  // price visible while request-shaping inputs are being revalidated.
   const planReady = preview.isSuccess && !preview.isFetching
   const paid = planReady ? preview.data.paid : null
   const steps = planReady ? (preview.data?.steps ?? []) : []
@@ -303,13 +303,13 @@ export function ConfirmDialog() {
                   // 成败都进作业抽屉——失败的作业要被看见，不是被吞掉。
                   await confirm.run()
                   openDrawer()
-                  confirm.after?.()
+                  confirm.after?.(null)
                   closeConfirm()
                 } else {
                   start.mutate(executionReq, {
-                    onSuccess: () => {
+                    onSuccess: (job) => {
                       openDrawer()
-                      confirm.after?.()
+                      confirm.after?.(job)
                       closeConfirm()
                     },
                     // 没起来就把原因摆在框里，并且**不关框**：

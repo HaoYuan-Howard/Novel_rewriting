@@ -38,14 +38,13 @@ from __future__ import annotations
 
 from contracts.artifacts import (
     STAGE2_GLOBAL_REVIEW, STAGE6_HOOK, STAGE7_NAME_MAP,
-    artifact_rel,
 )
 
 import os
 import re
 
 from contracts.invariants import (
-    DEPTH_MODES, INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, slot_of,)
+    INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, slot_of,)
 from contracts.rules import REGISTRY
 from contracts.schema.api import InboxDecision, InboxItem, InboxView
 from contracts.schema.evaluation import GlobalReview
@@ -276,28 +275,27 @@ def _stage5_rejected_revisions(store: ArtifactStore) -> list[InboxItem]:
     from contracts.schema.stage5 import RejectedRevision
 
     out: list[InboxItem] = []
-    for mode in DEPTH_MODES:
-        directory_rel = artifact_rel('stage5.chapter', mode=mode, nn=1).rsplit('/', 1)[0]
-        directory = store.path(directory_rel)
-        if not directory.is_dir():
+    directory_rel = 'stage5'
+    directory = store.path(directory_rel)
+    if not directory.is_dir():
+        return out
+    for path in sorted(directory.glob('ch*.rejected.json')):
+        rel = f'{directory_rel}/{path.name}'
+        match = _CH_RX.search(path.name)
+        chapter = int(match.group(1)) if match else None
+        try:
+            artifact, _raw = store.read_own(RejectedRevision, rel)
+        except ArtifactUnreadable:
             continue
-        for path in sorted(directory.glob('ch*.rejected.json')):
-            rel = f'{directory_rel}/{path.name}'
-            match = _CH_RX.search(path.name)
-            chapter = int(match.group(1)) if match else None
-            try:
-                artifact, _raw = store.read_own(RejectedRevision, rel)
-            except ArtifactUnreadable:
-                continue
-            out.append(InboxItem(
-                kind='rejected', stage='stage5', chapter=chapter,
-                rule='stage5.write',
-                what=(f'{rel}：两次修订候选都相对旧正式稿退化；'
-                      f'旧稿未覆盖。{artifact.why[0]}'),
-                how=(f'检查该文件的 {len(artifact.attempts)} 份候选；人工改好后跑 '
-                     f'`stage5.write --mode {mode} --apply-edit <chNN.json>`；输入必须提供'
-                     f'该章全部 producer-owned slot 的完整 `segments[{{slot,text}}]` 全文（0 LLM 费用），'
-                     f'或在确认修复方向后用 `--revise --chapters {chapter}` 再采样')))
+        out.append(InboxItem(
+            kind='rejected', stage='stage5', chapter=chapter,
+            rule='stage5.write',
+            what=(f'{rel}：两次修订候选都相对旧正式稿退化；'
+                  f'旧稿未覆盖。{artifact.why[0]}'),
+            how=(f'检查该文件的 {len(artifact.attempts)} 份候选；人工改好后跑 '
+                 f'`stage5.write --apply-edit <chNN.json>`；输入必须提供'
+                 f'该章全部 producer-owned slot 的完整 `segments[{{slot,text}}]` 全文（0 LLM 费用），'
+                 f'或在确认修复方向后用 `--revise --chapters {chapter}` 再采样')))
     return out
 
 
@@ -312,10 +310,18 @@ def _stage5_stalled(store: ArtifactStore) -> list[InboxItem]:
     （从前这里顺手数了 stage5 那一份，收成跨层之后会数两次）。
     """
     from novel.stages.stage5 import review
-    got = review.latest_review(store)
-    if got is None:
+    current = review.review_status(store.ctx, store)
+    if current.state == 'missing':
         return []
-    _seq, rev = got
+    if not current.fresh or current.review is None:
+        reason = '；'.join(current.reasons[:5]) or current.state
+        return [InboxItem(
+            kind='upstream', stage='stage5', chapter=None, rule='review_status',
+            what=f'Stage5 Review 为 {current.state}：{reason}',
+            how=('旧/过期 Review 不得驱动付费返工或豁免。stale/unknown 先零成本运行 '
+                 '`stage5.review`；legacy_incompatible 请保留旧 base 为历史证据，在新的 '
+                 'canonical base 从 Stage5 producer 重建'))]
+    rev = current.review
     out: list[InboxItem] = []
     stalled_band: list[tuple[int, object]] = []
 
@@ -454,7 +460,12 @@ def _current_trim_audits(novel_dir, code: str):
     from novel.stages.stage5 import trim_resolution
 
     store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.write', code))
-    return trim_resolution.current_unresolved_audits(store)
+    try:
+        return trim_resolution.current_unresolved_audits(store)
+    except (ArtifactUnreadable, TerminalState):
+        # 旧 v1 trim 由统一 review_status 作为 legacy_incompatible 出口；这里不能在
+        # 清单组装开头先崩掉，也不能把它迁移成一份“当前 audit”。
+        return {}
 
 
 def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[InboxItem]:
@@ -475,7 +486,7 @@ def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[Inbox
                  '人工确认保留原稿可跑 `stage5.review --retain-pretrim '
                  f'--chapters {ordinal} --actor <自报身份> --reason <理由>`；'
                  '确需改写则 `stage5.write --apply-edit <路径>`（同样 0 次调用）。'
-                 'resolution 同时绑定 mode、当前正式章路径/正文 SHA-256、audit 完整 SHA-256 '
+                 'resolution 同时绑定当前正式章路径/正文 SHA-256、audit 完整 SHA-256 '
                  '与 before hash，任一变化即失效')))
     return out
 

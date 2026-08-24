@@ -11,8 +11,8 @@ describe('CheckPanel', () => {
       node: 'stage5.review',
       stage: 'stage5',
       provenance: {
-        freshness: 'fresh',
-        reason: '',
+        freshness: 'stale',
+        reason: '规则版本已变化，需要重新验收',
         ghosts: [],
         edges: [],
         invalid: [],
@@ -47,8 +47,8 @@ describe('CheckPanel', () => {
               evidence_key: 'e1',
               owner: 'stage5',
               actionable: true,
-              identity_hit: false,
-              identity_dead: false,
+              identity_hit: true,
+              identity_dead: true,
               converge: null,
               unresolved_rounds: 1,
               wontfix: { why: '人工确认保留', at: 'review_4' },
@@ -71,6 +71,9 @@ describe('CheckPanel', () => {
     expect(await screen.findByText('稳定规则解释只在 note 出现。')).toBeVisible()
     expect(screen.getByText('本书实例 **不解析 Markdown**')).toBeVisible()
     expect(screen.getByText('已豁免：人工确认保留')).toBeVisible()
+    expect(screen.getByText('identity_hit · 恒等基线也命中')).toBeVisible()
+    expect(screen.getByText('identity_dead · 判据失去判别力')).toBeVisible()
+    expect(screen.getByText('报告已过期：规则版本已变化，需要重新验收')).toBeVisible()
     const chapter = screen.getByRole('button', { name: '第 11 章' })
     expect(chapter).toBeVisible()
     chapter.click()

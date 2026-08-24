@@ -19,7 +19,6 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from contracts.invariants import DEPTH_MODES
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance
 
@@ -182,15 +181,14 @@ class TrimAudit(StrictModel):
     → 采用」那条收缩臂。收缩臂随 evaluator profile 整臂下线后，那六格恒为
     「等于 before / 空 / True / None / None / False」——**六个恒定值不是六个状态**。
 
-    留下的四格各有不可替代的作用：`before_sha256` 是过期机制本体（`trim_resolution`
-    靠「当前正文 sha == 它」判这条 audit 还代不代表当前稿），`mode` + `output_ordinal`
+    留下的三格各有不可替代的作用：`before_sha256` 是过期机制本体（`trim_resolution`
+    靠「当前正文 sha == 它」判这条 audit 还代不代表当前稿），`output_ordinal`
     是唯一键，`reason` 是唯一携带「这一章为什么在这里」的人读格。
     ⚠ **不要**加 `over_by_chars` / `target_hi`：`trim_resolution.verification_context`
     已经 0 成本现算这两个数，落盘等于给自己造第二个会漂的落点。
     """
 
     output_ordinal: int = Field(ge=1)
-    mode: Literal[DEPTH_MODES]
     before_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     reason: str = Field(min_length=1)
 
@@ -208,7 +206,6 @@ class TrimResolution(StrictModel):
     """
 
     output_ordinal: int = Field(ge=1)
-    mode: Literal[DEPTH_MODES]
     action: Literal['retain_pretrim']
     actor: str = Field(min_length=1)
     reason: str = Field(min_length=1)
@@ -222,10 +219,10 @@ class TrimResolution(StrictModel):
     def _audit_text_is_not_blank(self) -> 'TrimResolution':
         if not self.actor.strip() or not self.reason.strip():
             raise ValueError('actor/reason must not be blank')
-        expected = f'stage5/{self.mode}/ch{self.output_ordinal:02d}.json'
+        expected = f'stage5/ch{self.output_ordinal:02d}.json'
         if self.chapter_rel != expected:
             raise ValueError(
-                f'chapter_rel 必须精确绑定 mode/ordinal：期望 {expected}，实得 {self.chapter_rel}')
+                f'chapter_rel 必须精确绑定 ordinal：期望 {expected}，实得 {self.chapter_rel}')
         if self.chapter_sha256 != self.before_sha256:
             raise ValueError('retain_pretrim 的 chapter_sha256 必须等于 audit.before_sha256')
         return self

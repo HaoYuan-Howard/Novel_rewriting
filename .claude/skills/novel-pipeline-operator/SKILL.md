@@ -17,7 +17,7 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 | `base` | **含各书目录的那一层**，默认仓根 `outputs`；新跑与续跑都用同一个根，隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根；始终传绝对路径 |
 | 付费授权（`authorized`） | 只控制是否可产生外部调用费用。**交互式会话里默认 `granted`**——用户让你用本 skill 跑书，这一项就已经在了，不要在开跑前索要它 |
 | 正文外发授权（`egress_authorized`） | 独立控制小说正文及派生上下文能否发送给外部模型。**交互式会话里同样默认 `granted`**，同样不索要 |
-| 可选约束 | 用户指定的模型实验、章节深浅分配、停止条件或审阅偏好 |
+| 可选约束 | 用户指定的模型实验、定向章节范围、停止条件或审阅偏好 |
 
 把“使用本 skill 端到端跑书”视为一次**完整**委托：`stage0.approve`、Stage2 逐项复核、`stage6.approve`、`stage7.approve` 的代批，加上两项授权。**这些事都不要回头问用户**——本 skill 的产品承诺是“用户只审最终成稿”。Stage2 代批仍必须逐项写入 typed PASS/FAIL/UNVER；“agent 看过”不能替代文件里的决定，更不能让 FAIL/UNVER 越过硬闸。用户在本次对话里明确收回某一项时遵从用户范围，并在终审包写明被收回的是哪一项。
 
@@ -49,20 +49,21 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 - [修复状态机](references/recovery.md)：退出码、`remediation`、允许写入面与停止条件。
 - [经验库](references/field-notes.md)：先用节点名、rule id、退出码或报错片段检索，只读取命中的条目；经验不能覆盖当前 finding 与代码契约。
 
-仅在维护本 skill 时读取 [维护协议](references/maintenance.md)，并运行 `scripts/validate_skill.py`。不要在普通跑书任务中加载维护说明。
+仅在维护本 skill 时读取 [维护协议](references/maintenance.md)，并从仓根运行
+`.claude/skills/novel-pipeline-operator/scripts/validate_skill.py`。不要在普通跑书任务中加载维护说明。
 
 ## 执行主循环
 
 1. 确认仓根、Python 解释器、书、绝对 `base`；**记录**两项授权取值与代批范围——默认都是 `granted`，这一步是记录事实，不是向用户索要。不要打印密钥。
-2. 首个动作前运行 `scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为 `<START_CODE>`，后续命令全程逐字复用，不能在收尾时现取一个新值冒充起点。
+2. 首个动作前从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为 `<START_CODE>`，后续命令全程逐字复用，不能在收尾时现取一个新值冒充起点。
 3. 对既有 `sid` 先运行 `state` 与 `inbox`；对新书先预览 `stage0.remove`。从盘上事实决定起点。
 4. 在首个动作前创建终审包草稿，随每次授权判断、闸门裁决、修复与异常更新；不要等到最后凭记忆补写。
-5. 优先用 `scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv。
+5. 从仓根优先用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。需要机器复核 preview 时加 `--evidence-json <PATH>`：它原子记录同一份 Step 的 argv/付费/写盘信息，preview 与 execute 复用同一路径时内容不同会拒绝覆盖。execute 无论是否传该路径，都会把本次真实 Step canonical evidence 的完整 SHA-256 同时写进 start/end 信标 note，供会话证据关闭式核对。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv。Stage5 全书写作节点不带选臂参数；定向维护只用 `--chapters`。
 6. 不使用 runner 的特殊诊断命令，仍须执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点，并在动作前确认当前代码仍等于 `<START_CODE>`。
 7. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
 8. 命中闸门时按代批契约裁决；命中失败时按修复状态机收敛。每次决定同时记录证据、被否决方案和复验结果。
-9. `stage7.assemble` 后执行独立成书对账，再刷新 `state`、`inbox` 与活动终态文件；用 `scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>` 收拢本次会话事实。随后运行同参数的 `scripts/sync_review_evidence.py`，自动同步质量表、会话/累计账本、退出序列与机器锚点，不手抄这些重复事实。
-10. 清除终审包中的其余占位符，运行同一组会话参数的 `scripts/validate_review.py`，再运行 `scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`；只有后者返回 `ready*` 才可交付，然后只把成书与终审包交给用户。
+9. `stage7.assemble` 后执行独立成书对账，再刷新 `state`、`inbox` 与活动终态文件；从仓根用 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>` 收拢本次会话事实。随后运行同参数的 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py`，自动同步质量表、会话/累计账本、退出序列与机器锚点，不手抄这些重复事实。
+10. 清除终审包中的其余占位符，从仓根运行同一组会话参数的 `.claude/skills/novel-pipeline-operator/scripts/validate_review.py`，再运行 `.claude/skills/novel-pipeline-operator/scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`；只有后者返回 `ready*` 才可交付，然后只把成书与终审包交给用户。
 
 ## 不可突破的边界
 

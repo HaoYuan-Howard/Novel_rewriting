@@ -37,8 +37,6 @@ def _byte_artifacts(book: Path) -> tuple[tuple[str, str], ...]:
     return (
         ('stage0/clean_text.txt', 'stage0/clean_text.txt'),
         ('stage5/draft.md', 'stage5/draft.md'),
-        ('stage5/deep/draft.md', 'stage5/deep/draft.md'),
-        ('stage5/shallow/draft.md', 'stage5/shallow/draft.md'),
         (book_txt_rel(book), ARTIFACT_PATHS['stage7.book']),
     )
 _TOKEN_COLUMNS = (

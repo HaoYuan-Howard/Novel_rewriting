@@ -130,7 +130,7 @@ PREREQUISITES = {
         'stage2/global_review.json 必须经 typed 人工 decisions 达到全项 PASS，打开 s2 gate。',
     ),
     'stage5.write': (
-        'Stage4 plan/context 必须 fresh，且已冻结人工深度选择：deep=1,2,3，其余 shallow。',
+        'Stage4 plan/context 必须 fresh，且 writing 已明确授权全部计划章的单一闭卷写作。',
         '超上限章零调用保留 pretrim 并转人工：本仓没有自动收缩路径，'
         '这一层不存在第二条付费回路。',
     ),
@@ -306,7 +306,7 @@ def inspect_books(spec: PreviewSpec) -> list[dict[str, Any]]:
 def _schema_targets(node: str) -> list[str]:
     out: list[str] = []
     for template in NODES[node].produces:
-        rel = template.format(mode='deep', nn=1, n=1)
+        rel = template.format(nn=1, n=1)
         spec = artifact_spec(rel)
         out.append(f'{template}:v{spec.current_version}' if spec else f'{template}:bytes')
     return out
@@ -415,11 +415,7 @@ def _dispatch(book: dict[str, Any], node: str) -> dict[str, Any]:
     effort = NODES[node].effort
     rungs = rungs_from_effort(effort)
     topology = _logical_topology(node, book['chapters'], len(rungs))
-    flags = (
-        ['--deep', '1,2,3', '--shallow-rest']
-        if node == 'stage5.write' else
-        []
-    )
+    flags: list[str] = []
     argv = build_argv(node, book['sid'], flags, base=book['base'])
     ability = SEMANTIC_NODES.get(node)
     return {

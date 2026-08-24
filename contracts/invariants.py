@@ -32,6 +32,11 @@ import contracts.artifacts as artifact_paths
 #: 实测代价：某次 23 章成稿与任何一版上游都配不上（匹配 1/23），配对关系永久丢失，而界面全绿。
 FRESHNESS: Final = ('fresh', 'stale', 'unknown')
 
+#: Stage5 Review 相对当前 RULES、canonical 章集/正文/draft 的完整状态。
+STAGE5_REVIEW_STATE: Final = (
+    'fresh', 'stale', 'unknown', 'missing', 'legacy_incompatible',
+)
+
 #: ArtifactState 给界面直接消费的四态。`missing` 不能再由前端拿 `!exists` 推导。
 ARTIFACT_DISPLAY: Final = ('missing', 'fresh', 'stale', 'unknown')
 
@@ -39,7 +44,9 @@ ARTIFACT_DISPLAY: Final = ('missing', 'fresh', 'stale', 'unknown')
 ARTIFACT_CONDITION: Final = ('missing', 'ready', 'invalid', 'unreadable')
 
 #: 一本书顶部那句服务端结论。顺序优先级由 `novel.orchestrator.state` 唯一计算。
-OVERVIEW_VERDICT: Final = ('broken', 'stale', 'pending', 'unknown', 'complete')
+OVERVIEW_VERDICT: Final = (
+    'broken', 'legacy_incompatible', 'stale', 'pending', 'unknown', 'complete',
+)
 
 #: 一条来源边**为什么**得到那个结论。**用 id 不用措辞**（同 `STAGE0_WARNINGS` 的理由）：
 #: 它要进校验报告的第一节（`Q-4`：来源在前判定在后），而报告不在逐字节验收范围内——
@@ -981,11 +988,9 @@ STYLE_WORDS: Final = (
 # 六、写作（stage5）
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: 两条写作臂。差别只有 (system prompt, 给不给源章原文)。
-#: **闭卷会系统性把对白比压到 ~0.7×**（三本书 15 闭卷章 / 16 开卷章，同章配对，方向一致：
-#: 0.74/0.67/0.68 vs 1.00/1.01/0.94）。效应量远大于本项目量过的任何跑间方差——
-#: 这不是叮嘱不够，是这条臂本身的性质。
-DEPTH_MODES: Final = ('deep', 'shallow')
+#: Stage5 v1 的历史目录名。只用来识别不兼容盘面和读取不可变旧记录；
+#: 它们不是现役写作臂，不得重新暴露到 CLI/API。
+LEGACY_STAGE5_MODES: Final = ('deep', 'shallow')
 
 #: 发明边界。**保持元组不拍平成一句话**：将来给 forbid 逐项补探针时，探针读的就是这份。
 #: ⚠ 这份清单**是给写作节点看的，不是可查依据**。回写侧的覆盖情况见下面的 `INVENT_GUARDED`。
@@ -1044,19 +1049,9 @@ DRAFT_BAND: Final = (0.80, 1.20)
 #: 只是一个在钱花之前问、一个在钱花之后问。
 BOOK_BAND: Final = (0.90, 1.10)
 
-#: 闭卷臂成稿与源章的 20 字窗口重合度上界（已扣掉契约要求逐字保留的部分）。
-#: **它守的是【臂的身份】，不是文风质量** —— 这一点决定了阈值怎么选：
-#:   · 闭卷实测逐章 0.0%~**2.4%**（11 章，中位 0.1%）；
-#:   · 开卷实测逐章 0.9%~**96.8%**（20 章，中位 49.8%），书级均值 36~78%。
-#: 10% 落在两者中间且离两边都远：正常闭卷章不可能碰到（4× 余量），
-#: 而「臂跑错了 / `with_source_text` 被翻转 / 开卷稿落进 deep 目录」会立刻越线。
-#: ⚠ **它是提示级不是阻断级**：越线的唯一真修法是重写一整章（付费），
-#: 而本层已经为同一个理由把篇幅硬门降过一次级（判据 15）。
-#: ⚠ **开卷臂不定线**（B-03 的另一半）：0.9%~96.8% 的跨度说明那不是一个可以一刀切的量，
-#: 它只报分布。别把这条常量套到 shallow 上。
-#: ⚠ **这个数只有 11 章的标定，是「拍的」不是量的**（判据 18/32）：
-#: deep 章数上到 30+ 之后要重看一次分布再决定动不动它。
-DEEP_OVERLAP_MAX: Final = 0.10
+#: canonical 闭卷成稿与源章的 20 字窗口重合度上界
+#: （已扣除契约要求逐字保留的部分）。它是提示级信号，不是自动放行门。
+SOURCE_OVERLAP_MAX: Final = 0.10
 
 #: 连续多少轮未消 → 判「根因不在写手」，反哺主动跳过。
 STOP_REWRITE_AFTER: Final = 2
@@ -1321,6 +1316,7 @@ FREE_ENTRIES: Final = {
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
     '--apply-edit': '把人工改过的内容落成新的一轮',
+    '--rebuild-draft': '从 canonical stage5/chNN.json 重建 stage5/draft.md，0 次 LLM 调用',
     '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策',
     # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
     #   `--wontfix` 原来只挂在 `stage5.review` 上，而那是个 `paid=False` 节点
@@ -1343,7 +1339,6 @@ FREE_ENTRIES: Final = {
 
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
 PAID_FLAGS: Final = {
-    '--shallow-rest': 'stage5 把未选为深度重构的其余章节交给浅层写手',
     '--repair-surface-habits': 'stage3 表层习惯的定向返工——它要再调一次模型',
     '--revise': 'stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手',
     # ⚠ 原型 `FREE_FLAGS['n2_global']` 那一行的注释明写着
@@ -1410,7 +1405,6 @@ PARTIAL_REWRITE_FLAGS: Final = (
 REQUIRED_PLACEHOLDER_PREFIX: Final = '待填·'
 
 VALUED_FLAGS: Final = {
-    '--deep': '深度重构章节（逗号分隔；与 --shallow-rest 成对使用）',
     # ⚠ 「相对**书目录**」这五个字是承重的：stage3/4/6/7 走
     #   `novel/paths.py::edit_rel`，相对路径按当前书目录解释、绝对路径照收，
     #   两者都必须落在书目录内。此前四份实现按进程 cwd 解释而报错文案说书目录，
@@ -1445,9 +1439,8 @@ VALUED_FLAGS: Final = {
     # 同一 (章, 判据) 有多条结论时**要人写出第三段**
     # ——原型那条路把它们**一并豁免**了，而「换了个位置的同类问题」不是人做的决定。
     '--wontfix': '这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填',
-    # ⚠⚠ **它是「逐章重构深度」这个人的决策的唯一载体**（`R-7.2` / `stage5.md` §九-3）：
-    # 那件事**不落任何产物**，只活在这个实参里。没有它，`stage5.write --mode deep`
-    # 只能把缺的章全部写成闭卷，两条臂没法按章分工，而 `R-7.2` 那一行就成了假话。
+    # ⚠⚠ **它只是 canonical 写作的定向章范围**：不给就补写全书所有缺章。
+    # 它不携带深浅语义，也不是授权；花钱授权独立落在 `writing/writing_proof`。
     # ⚠ 它**不进 `FREE_ENTRIES`**（那张表登记的是「0 成本**入口**」，而它是付费入口的
     # **参数**——`is_paid` 因此照旧判付费，正确）；也**不进 `WRITE_EFFECTS`**
     # （它写的就是本节点 `produces` 里那一份，只是少写几章 ⇒ 不登记就落到 `produces`，正确）。
@@ -1476,7 +1469,6 @@ VALUED_FLAGS: Final = {
 #: 已经核实的节点特例放在下方 `NODE_WRITE_EFFECTS`；没登记的其余
 #: 节点仍由 `write_effect` 保守判为会写。
 WRITE_EFFECTS: Final = {
-    '--shallow-rest': '按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿',
     # ── 只看不动的四条（`FREE_ENTRIES` 自述「不写盘」）──
     '--dry-run': '',
     '--check-only': '',
@@ -1494,6 +1486,7 @@ WRITE_EFFECTS: Final = {
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
     '--recheck': '刷新已有成稿的指标，并重拼 draft.md',
+    '--rebuild-draft': '从 canonical stage5/chNN.json 重建 stage5/draft.md',
     '--revalidate': '必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/',
     # ⚠ 本表按 flag 索引 ⇒ 这句话必须对**每一个**挂它的节点都成立。2026-08-22 阶段 C
     #   之后 stage0 的历史不再进 `_rounds/`（它在 revision 链上，且不可覆盖），
@@ -1557,7 +1550,6 @@ class NodeSpec(NamedTuple):
     section: str                        # 需求节。本节点的判据都该指向这一节里的 R 行
     paid: bool                          # 默认路径调不调 LLM
     label: str                          # 人读的一句话。**前端从这里取，不许手写第二份**
-    modes: tuple[str, ...] = ()         # 有参数臂的节点，取值面在别处（DEPTH_MODES）
     paid_flags: tuple[str, ...] = ()    # 能把一个 0 成本节点变成付费的 flag
     flags: tuple[str, ...] = ()         # ★ 本节点接受哪些**跑法** flag，见下
     required_flags: tuple[str, ...] = ()  # ★ 少一个就拼不出可执行 argv 的 flag，见下
@@ -1587,11 +1579,8 @@ class NodeSpec(NamedTuple):
 
 #: 全部作业单元。⚠ 顺序即处理链顺序，队列与断点续跑都按它排。
 #:
-#: ⚠ **写作两条臂是【参数】不是两个节点**：`stage5.write --mode deep|shallow`。
-#: 依据是 stage5 自述「两臂只差 (system prompt, 给不给源章原文)，产物形状逐字节相同，
-#: 判据表只有一张」，且 `R-7` 一节同时管两臂。两个 node id 指同一段代码就是第二个落点。
-#: ⇒ `R-11.10`「一本书同时只跑一个作业，唯一例外是写作两条臂」的互斥键因此是
-#: `(sid, node, mode)`——例外从「两个 kind」变成「同一个节点的两个 mode 值」，语义更准。
+#: Stage5 v2 只有一条 canonical 闭卷写作路径。旧 deep/shallow 值只能出现在
+#: 不可变作业历史的私有解码边界；现役节点形状无选臂字段，同书作业共用一把锁。
 #:
 #: ⚠ **没有 `check` 节点。** 复检一律是 `--check-only` flag。原型两头都有
 #: （`check_partition` 是独立脚本、`n3_style --check-only` 是 flag），正是 `Q-3` 点名的
@@ -1706,24 +1695,19 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
                                  produces=(artifact_paths.STAGE4_WRITER_CONTEXT,)),
     # ⚠ `--revise` 是 F4 从 `stage5.review` **挪过来**的（用户裁决，见本表下方那段）。
-    # ⚠⚠ **两条臂合成的那份 `stage5/draft.md` 刻意不在这一列里**，而它确实是本节点写的
-    #   （`assemble_book`，每跑都拼）。F4 试过补上，当场被两条测试抓住：
-    #   这一列的消费方是 `state.required_artifacts`（「这一层**跑完了**盘上该有哪几份」），
-    #   而那份拼稿**在只写了一章时也存在**（缺章会写成 md 里的一条横幅，不是不落盘）
-    #   ⇒ 拿它当完成度信号是**假阳**：`resume_verdict` 会对一个写了一半的付费层判「跳过」。
-    #   本层的完成度只有一条路——`planned_chapters` 对 `chapters_done` 逐章数（`R-14.2`），
-    #   读不回计划时是 `unknown` 而不是 `False`。
-    #   ⇒ 它的写盘效应由 `stage5/{mode}/ch{nn}.json` 那一条带着（同一次跑、同一个动作）。
+    # ⚠⚠ `stage5/draft.md` 是 canonical 章稿的字节投影，因此与逐章 JSON
+    #   一起登记在 `produces`。它单独存在不代表全书完成：`state.stage_state`
+    #   同时要求计划章集 == canonical `chapters_done` 且 draft 可用；读不回计划时
+    #   仍是 `unknown`，不得因为有一份部分投影就跳过付费写作。
     # ⚠ `--revise` 挪过来之后**不再需要 `paid_flags`**：那一列的定义是
     #   「能把一个 **0 成本节点**变成付费的 flag」，而本节点的默认路径本来就付费。
     #   留着它是一格永远不起作用的声明——`is_paid` 早在 `spec.paid` 那一步就判完了。
-    'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 逐章写作',
-                                  modes=('deep', 'shallow'),
+    'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 全书闭卷写作',
                                   flags=('--dry-run', '--recheck', '--revalidate',
-                                         '--apply-edit', '--revise', '--chapters',
-                                         '--deep', '--shallow-rest', '--actor', '--reason'),
+                                         '--rebuild-draft', '--apply-edit', '--revise',
+                                         '--chapters', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE5_CHAPTER,
-                                           artifact_paths.STAGE5_MODE_DRAFT)),
+                                           artifact_paths.STAGE5_BOOK_DRAFT)),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。
     # ⚠⚠ `stage5/wontfix.json` **刻意不进 `produces`**，而它确实是本节点写的：
     #   这一列的消费方是 `state.required_artifacts`（「这一层跑完了盘上该有哪几份」），
@@ -1830,11 +1814,11 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
 # 但它们指向**两段不同的代码**，当时没有任何实现可以裁定谁对，所以原样登记着。
 #
 # ⇒ 裁给 **`stage5.write`**，判准是本表自己那一列：`--revise` 产的是
-# **新一轮成稿**（`stage5/{mode}/chNN.json`，带 `round` +1 与 `revision_of`），
+# **新一轮 canonical 成稿**（`stage5/chNN.json`，带 `round` +1 与 `revision_of`），
 # 不是新一份验收报告。挂在 `stage5.review` 上会让一个 `paid=False` 的节点
 # 产出另一份产物，而那与它自己的 `produces` 说的不是一回事——
 # **完成度、断点续跑、`would_write` 三处都从 `produces` 派生**，它们会一起说假话。
-# 顺带：`--revise` 要按臂分岔（闭卷/开卷的 SYS 不同），而 `stage5.review` 没有 `modes`。
+# 返工前置另由统一 `review_status` 保证：非 fresh Review 不得驱动付费 `--revise`。
 #
 # 顺带：原型 `n5_write --revalidate` 自述 0 成本，而它的 `FREE_FLAGS` 白名单里**没有它**
 # ⇒ 现役界面把一个不花钱的动作画成橙色并弹二次确认。本表已把它补进 `stage5.write.flags`。

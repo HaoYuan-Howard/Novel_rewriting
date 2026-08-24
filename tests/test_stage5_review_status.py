@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Stage5 Review 的唯一 currentness 判据及所有消费方的关闭式行为。"""
+from __future__ import annotations
+
+import importlib
+from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from contracts.schema import artifact_spec
+from contracts.schema.stage5 import (
+    Chapter, ChapterSegment, JudgedDraft, Review, ReviewChapter,
+)
+from novel import prov
+from novel.errors import TerminalState
+from novel.prov import FreshnessReport
+from novel.stages.stage5 import measure as M, review, write
+from tests import factories
+
+
+class _StatusStore:
+    """只替换 I/O；正文消费投影、Review 模型和状态算法都走生产实现。"""
+
+    def __init__(self, root: Path, book: M.Book, chapter: Chapter) -> None:
+        self.root = root
+        self.book = book
+        self.chapters = {'stage5/ch01.json': chapter}
+        self.review: Review | None = None
+        self.ctx = SimpleNamespace(title=book.title, novel_dir=root)
+        (root / 'stage5').mkdir(parents=True)
+        (root / 'stage5' / 'ch01.json').write_text('{}', encoding='utf-8')
+        (root / 'stage5' / 'review_1.json').write_text('{}', encoding='utf-8')
+
+    def path(self, rel: str) -> Path:
+        return self.root / rel
+
+    @staticmethod
+    def schema_version(rel: str) -> int | None:
+        spec = artifact_spec(rel)
+        return spec.current_version if spec is not None else None
+
+    def read_own(self, _model, rel: str, **_kwargs):
+        assert rel == 'stage5/review_1.json' and self.review is not None
+        return self.review, self.review.model_dump(by_alias=True)
+
+    def read_judged(self, _model, rel: str, *, project, require_current=True):
+        del require_current
+        chapter = self.chapters[rel]
+        raw = chapter.model_dump(by_alias=True, exclude_none=True)
+        whole = prov.fingerprint(chapter.model_dump_json(by_alias=True, exclude_none=True))
+        consumed = prov.fingerprint(str(project(raw)))
+        return chapter, whole, consumed
+
+    @staticmethod
+    def freshness(_rel: str) -> FreshnessReport:
+        return FreshnessReport('fresh', 'match')
+
+    def exists(self, rel: str) -> bool:
+        return self.path(rel).is_file()
+
+    def read_text(self, rel: str) -> str:
+        return self.path(rel).read_text(encoding='utf-8')
+
+    @staticmethod
+    def seen_rounds(_rel: str) -> list[int]:
+        return [1]
+
+
+@dataclass
+class _Rig:
+    store: _StatusStore
+    ctx: object
+
+    def stale_rules(self) -> None:
+        assert self.store.review is not None
+        provenance = self.store.review.provenance.model_copy(
+            update={'prompts': {'RULES': '0' * 10}})
+        self.store.review = self.store.review.model_copy(
+            update={'provenance': provenance})
+
+    def change_body(self) -> None:
+        chapter = self.store.chapters['stage5/ch01.json']
+        changed = chapter.text + '\n\n她又补写了一段。'
+        self.store.chapters['stage5/ch01.json'] = chapter.model_copy(update={
+            'segments': [ChapterSegment(slot='s01', text=changed)],
+            'chars': len(changed),
+        })
+
+    def add_unreviewed_chapter(self) -> None:
+        first = self.store.chapters['stage5/ch01.json']
+        second = first.model_copy(update={
+            'output_ordinal': 2,
+            'from_source_ordinals': [2],
+        })
+        self.store.chapters['stage5/ch02.json'] = second
+        self.store.path('stage5/ch02.json').write_text('{}', encoding='utf-8')
+
+    def corrupt_draft_projection(self) -> None:
+        self.store.path('stage5/draft.md').write_text(
+            '# 人工留下的陈旧投影\n', encoding='utf-8')
+
+
+@pytest.fixture
+def status_rig(tmp_path, monkeypatch) -> _Rig:
+    book = factories.stage5_book()
+    entry = book.chapters[1]
+    text = ('沈青关上门，重新翻到账册最后一页。她逐笔核对墨迹，'
+            '确认那串数字已被人换过。' * 4)
+    chapter = Chapter.model_validate({
+        'output_ordinal': 1,
+        'from_source_ordinals': [1],
+        'source_chars': entry['source_chars'],
+        'budget_chars': entry['budget_chars'],
+        'chars': len(text),
+        'overlap_excl_verbatim': 0.01,
+        'segments': [{'slot': 's01', 'text': text}],
+        'warns': [],
+        '_provenance': {
+            'code': 'test-code', 'root_clean_sha1': 'a' * 40,
+            'inputs': {}, 'round': 1, 'origin': 'human',
+        },
+    })
+    store = _StatusStore(tmp_path / 'book', book, chapter)
+    by_ord, _invalid, judged = M.load_drafts(store, require_current=False)
+    one: JudgedDraft = judged['stage5/ch01.json']
+    store.review = Review.model_validate({
+        'sources': {
+            'writer_context': {'state': 'fresh', 'detail': [], 'code': 'test-code'},
+            'drafts': {'stale': [], 'no_prov': []},
+        },
+        'judged': judged,
+        'chapters': [ReviewChapter(
+            output_ordinal=1,
+            from_source_ordinals=[1],
+            budget_chars=entry['budget_chars'],
+            source_chars=entry['source_chars'],
+            relpath='stage5/ch01.json',
+            draft_round=1,
+            draft_sha1=one.sha1,
+            draft_text_sha1=one.consumed.text_sha1,
+            chars=len(text),
+            findings=[],
+        )],
+        'book': [], 'baselines': {}, 'baselines_identity': {}, 'counts': {},
+        '_provenance': {
+            'code': 'test-code', 'root_clean_sha1': 'a' * 40, 'inputs': {},
+            'prompts': {'RULES': prov.fingerprint(prov.rules_fingerprint('stage5'))},
+        },
+    })
+    store.path('stage5/draft.md').write_text(
+        write.render_book_draft(book, by_ord), encoding='utf-8')
+    monkeypatch.setattr(review, 'load_book', lambda _ctx, current: current.book)
+    return _Rig(store=store, ctx=store.ctx)
+
+
+def test_review_status_fresh_baseline_binds_the_complete_canonical_subject(status_rig):
+    status = review.review_status(status_rig.ctx, status_rig.store)
+    assert status.state == 'fresh' and status.reasons == ()
+    assert status.review_rel == 'stage5/review_1.json' and status.seq == 1
+
+
+@pytest.mark.parametrize(('mutation', 'reason'), [
+    ('stale_rules', 'RULES 已变'),
+    ('change_body', '正文投影已变'),
+    ('add_unreviewed_chapter', 'judged 主体集合已变'),
+    ('corrupt_draft_projection', 'draft.md 不是当前 canonical'),
+])
+def test_review_status_closes_on_every_current_subject_drift(status_rig, mutation, reason):
+    getattr(status_rig, mutation)()
+    status = review.review_status(status_rig.ctx, status_rig.store)
+    assert status.state == 'stale'
+    assert any(reason in detail for detail in status.reasons), status.reasons
+
+
+def test_review_status_classifies_old_two_arm_layout_as_legacy(status_rig):
+    legacy = status_rig.store.path('stage5/deep/ch01.json')
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{}', encoding='utf-8')
+    status = review.review_status(status_rig.ctx, status_rig.store)
+    assert status.state == 'legacy_incompatible'
+    assert any('stage5/deep/ch01.json' in reason for reason in status.reasons)
+
+
+def test_old_review_is_not_a_convergence_baseline_but_keeps_the_next_sequence(tmp_path):
+    """v1 报告不得混入 v2 收敛，也不得堵死免费 producer 的下一轮。"""
+    root = tmp_path / 'book'
+    (root / 'stage5').mkdir(parents=True)
+    (root / 'stage5/review_7.json').write_text(
+        '{"_schema_version":1}', encoding='utf-8')
+
+    class OldReviewStore:
+        @staticmethod
+        def path(rel: str) -> Path:
+            return root / rel
+
+        @staticmethod
+        def schema_version(_rel: str) -> int:
+            return 1
+
+        @staticmethod
+        def read_own(*_args, **_kwargs):
+            raise AssertionError('低版本 Review 不得进入 v2 模型读取')
+
+    store = OldReviewStore()
+    assert review.review_seqs(store) == [7]
+    assert review.latest_review(store) is None
+    assert review.review_seqs(store)[-1] + 1 == 8
+
+
+def test_check_only_is_terminal_exit_2_and_never_renders_old_ok(
+        status_rig, monkeypatch, capsys):
+    status_rig.stale_rules()
+    monkeypatch.setattr(review, 'ArtifactStore', lambda _ctx: status_rig.store)
+    monkeypatch.setattr(
+        review, '_report_of_review',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('stale Review 不得进入报告渲染')))
+
+    cli = importlib.import_module('novel.cli.main')
+    monkeypatch.setattr(
+        cli, '_parser',
+        lambda: SimpleNamespace(parse_args=lambda _argv: SimpleNamespace(cmd='run')))
+    monkeypatch.setitem(
+        cli._CMDS, 'run', lambda _args: review.run_check_only(status_rig.ctx))
+    assert cli.main([]) == 2
+    captured = capsys.readouterr()
+    assert '显式终态' in captured.err and 'RULES' in captured.err
+    assert '[OK]' not in captured.out + captured.err
+
+
+def test_wontfix_revise_and_s5_approval_proof_all_refuse_stale_review(
+        status_rig, monkeypatch):
+    status_rig.stale_rules()
+    monkeypatch.setattr(review, 'ArtifactStore', lambda _ctx: status_rig.store)
+    with pytest.raises(TerminalState, match='Review 当前状态是 stale'):
+        review.mark_wontfix(status_rig.ctx, '1|draft_too_short=旧结论不得豁免')
+
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: status_rig.store)
+    with pytest.raises(TerminalState, match='Review 当前状态是 stale'):
+        write.run_revise(status_rig.ctx, object())
+
+    from novel.orchestrator import approvals
+    monkeypatch.setattr(approvals, '_require_stage5_complete', lambda *_args: None)
+    monkeypatch.setattr(approvals, '_planned', lambda *_args: [1])
+    monkeypatch.setattr(approvals, '_store_for', lambda _novel_dir: status_rig.store)
+    monkeypatch.setattr(approvals.paths, 'resolve_novel_dir',
+                        lambda *_args: status_rig.store.root)
+    with pytest.raises(TerminalState, match='Review 当前状态是 stale'):
+        approvals._stage5_subject_rels(
+            status_rig.store.root.parent, 'test-sid',
+            approvals._fresh_record('test-sid'))
+
+
+def test_state_view_and_inbox_forward_the_same_status_and_reasons(
+        status_rig, monkeypatch):
+    status_rig.stale_rules()
+    status = review.review_status(status_rig.ctx, status_rig.store)
+    monkeypatch.setattr(review, 'review_status', lambda *_args: status)
+
+    from novel.orchestrator import state
+    monkeypatch.setattr(state, 'required_artifacts', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(state, 'numbered_produces', lambda _stage: {})
+    monkeypatch.setattr(state, 'chapters_done', lambda _novel_dir: [1])
+    monkeypatch.setattr(state, 'planned_chapters', lambda _store: [1])
+    monkeypatch.setattr(state, 'stage5_legacy_paths', lambda _novel_dir: [])
+    stage = state.stage_state(status_rig.store, 'stage5')
+    assert stage.review_state == status.state
+    assert stage.review_reasons == list(status.reasons)
+
+    from novel.views import inbox as inbox_module
+    items = inbox_module._stage5_stalled(status_rig.store)
+    assert len(items) == 1 and items[0].rule == 'review_status'
+    assert status.state in items[0].what
+    assert all(reason in items[0].what for reason in status.reasons[:5])
+
+    from novel.views import stage5 as stage5_module
+    monkeypatch.setattr(stage5_module, 'ArtifactStore', lambda _ctx: status_rig.store)
+    monkeypatch.setattr(stage5_module, 'readonly_ctx', lambda *_args: status_rig.ctx)
+    monkeypatch.setattr(stage5_module.paths, 'resolve_novel_dir',
+                        lambda *_args: status_rig.store.root)
+    monkeypatch.setattr(stage5_module.paths, 'derive_source_meta',
+                        lambda _name: ('test-sid', 'book'))
+    monkeypatch.setattr(stage5_module.paths, 'title_of', lambda _path: '测试书')
+    monkeypatch.setattr(review, 'load_wontfix', lambda _store: {})
+    view = stage5_module.review_view(status_rig.store.root.parent, 'test-sid', 1)
+    assert view.review_state == status.state
+    assert view.review_reasons == list(status.reasons)

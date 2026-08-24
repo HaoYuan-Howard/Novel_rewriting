@@ -100,9 +100,6 @@ class JobStart(StrictModel):
 
     node: str = Field(min_length=1)
 
-    #: 只有 `stage5.write` 有（`DEPTH_MODES`）。`None` = 键不在。
-    mode: str | None = None
-
     #: 这一次带的 flag。**空列表也要写**——「没带 flag」与「没记」不是一回事。
     flags: list[str] = Field(default_factory=list)
 
@@ -123,20 +120,6 @@ class JobStart(StrictModel):
         if self.node not in NODES:
             raise ValueError(
                 f'未知节点 {self.node!r}。取值面的唯一落点是 `contracts.invariants.NODES`')
-        want = NODES[self.node].modes
-        tokens = {value for value in self.flags if value.startswith('--')}
-        composite_write = (
-            self.node == 'stage5.write'
-            and {'--deep', '--shallow-rest'} <= tokens
-        )
-        if composite_write and self.mode is not None:
-            raise ValueError('stage5 composite write must not carry a single-arm mode')
-        if want and not composite_write and self.mode not in want:
-            raise ValueError(f'{self.node} 的 mode 必须是 {want} 之一，实得 {self.mode!r}')
-        if not want and self.mode is not None:
-            raise ValueError(
-                f'{self.node} 没有臂，不该带 mode={self.mode!r}。'
-                f'⚠ 全链只有 `stage5.write` 有臂——给别的节点加 mode 就是把两件事藏进一个 id 里')
         # 整份的贵贱 / 写不写，是逐步折叠出来的：第二处算就必然分家（`R-11.7`）。
         if self.paid != any(s.paid for s in self.steps):
             raise ValueError(f'paid={self.paid} 与逐步折叠出来的对不上')
@@ -543,7 +526,7 @@ class StageState(StrictModel):
     #: ⚠⚠ **`None` = 判不了**，与 `False`「没跑完」是两件事——
     #: 这是 `Q-2` 那个三态在完成度这一侧的样子，也是本项目一路在防的那个病
     #: （`FRESHNESS` / `JOB_STATE` 的 `unknown` 防的都是它）。
-    #: 实测就撞上了：stage5 的产物是**逐章**的（`stage5/<mode>/chNN.json`），
+    #: 实测就撞上了：stage5 的产物是**逐章**的（`stage5/chNN.json`），
     #: 「该有几章」要去读 stage4 计划里的输出章；计划读不回来时，
     #: 盘上有 4 章这件事**既不能证明跑完了、也不能证明没跑完**。
     #: 压成 `False` 会让队列一次次去重跑一个可能已经写完的付费层——
@@ -555,10 +538,21 @@ class StageState(StrictModel):
     #: 「不知道它新不新」与「它是旧的」是两件事——**后者才该挡路**。
     done: bool | None
 
-    #: 逐章类的层（stage5）：已落盘的章。**必须排除 `.INVALID.json`**——
+    #: 逐章类的层（stage5）：canonical `stage5/chNN.json` 已落盘的章。
+    #: **必须排除 `.INVALID.json`**——
     #: `chNN.json` 的存在本身就是「过了写作时的落盘闸门」这个语义，
     #: 把被拦下的那份数进去就把语义反过来了。
-    chapters_done: dict[str, list[int]] = Field(default_factory=dict)
+    chapters_done: list[int] = Field(default_factory=list)
+
+    #: 旧 `stage5/deep|shallow` 盘面是一个明确终态，不是 missing。
+    #: 只读历史路径可展示，但续跑/队列必须停下来要求显式重建。
+    legacy_incompatible: bool = False
+    legacy_paths: list[str] = Field(default_factory=list)
+
+    #: stage5.review 的唯一 currentness 结论；其他 stage 三格恒为空。
+    review_state: str | None = None
+    review_reasons: list[str] = Field(default_factory=list)
+    review_rel: str | None = None
 
     #: 轮次编号产物（`stage5/review_{n}.json` / `stage5/semantic_{n}.json` /
     #: `stage6/semantic_{n}.json`）盘上已有的编号，键是**产它的节点**。
@@ -589,6 +583,28 @@ class StageState(StrictModel):
         「计划读不回 ⇒ None、不许压成 False」那半句仍然成立，但它守在**产地**
         （`planned_chapters` 返回 None 的那条路），不在载体。
         """
+        if self.legacy_incompatible != bool(self.legacy_paths):
+            raise ValueError('legacy_incompatible 与 legacy_paths 必须同时出现或同时缺席')
+        if self.stage != 'stage5' and (
+            self.review_state is not None or self.review_reasons or self.review_rel is not None
+        ):
+            raise ValueError('review_state 只属于 stage5')
+        if self.review_state == 'fresh' and self.review_reasons:
+            raise ValueError('fresh Stage5 Review 不得携带失效原因')
+        if self.review_state is None and (self.review_reasons or self.review_rel is not None):
+            raise ValueError('review_state 缺席时不得携带 review 明细')
+        if self.chapters_done != sorted(set(self.chapters_done)):
+            raise ValueError('chapters_done 必须是升序去重章号')
+        if self.stage == 'stage5':
+            if self.done is True and (
+                self.legacy_incompatible
+                or not self.chapters_done
+                or not all(a.exists and a.readable and a.freshness != 'stale' and not a.invalid
+                           for a in self.artifacts)
+            ):
+                raise ValueError(
+                    'stage5 done=True 必须有 canonical 章稿、可用 draft 投影，且无 legacy')
+            return self
         if not self.artifacts:
             return self
         if self.done is None:
@@ -625,8 +641,8 @@ class NovelOverview(StrictModel):
 
     stages: list[StageState] = Field(default_factory=list)
 
-    #: glob `stage5/*` 得到的目录名。stage5 的粒度是**章**（`R-14.2`）。
-    stage5_modes: list[str] = Field(default_factory=list)
+    #: 旧 v1 `stage5/deep|shallow` 盘面的只读证据路径；空列表 = 没有 legacy。
+    stage5_legacy_paths: list[str] = Field(default_factory=list)
 
     summary: OverviewSummary
 
@@ -640,7 +656,6 @@ class QueueItem(StrictModel):
 
     sid: str = Field(min_length=1)
     node: str = Field(min_length=1)
-    mode: str | None = None
     flags: list[str] = Field(default_factory=list)
 
     #: 与真跑**同一个 `build_steps`**（`R-11.8`）。需要人工选择才能拼出命令的

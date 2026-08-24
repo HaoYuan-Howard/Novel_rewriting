@@ -209,9 +209,7 @@ def iter_novel_dirs(base: str | os.PathLike[str]) -> list[Path]:
     """`<base>` 底下有哪几本书。**按目录名排序**，`base` 不存在时返回空列表。
 
     ⚠ **跳过 `_` 开头的目录**：`Output/_service/`（作业记录与子进程日志）不是一本书。
-    这与 `state.stage5_modes` 跳过 `_rounds/` 是同一条规则的两处应用——
-    实测抓包里第三本的 `stage5_modes` 是 `["_rounds","deep","shallow"]`，
-    原型把归档目录当成了第三条臂，而界面上那多出来的一格**不报错，只是永远是空的**。
+    同理，各层的 `_rounds/` 也是归档目录，不是一本书或一个现役产物分支。
 
     ⚠ **一个 sid 匹配到两个目录时不在这里报**：那是 `find_novel_dir` 的职责，
     而本函数是**列目录**，它连 sid 都还没解析。两件事分开的具体好处是
@@ -314,7 +312,7 @@ def check_rel(rel: str) -> str:
 
 
 def check_rel_deep(rel: str) -> str:
-    """同 `check_rel`，但允许更深的层（`stage5/deep/ch01.json`）。
+    """同 `check_rel`，但允许更深的归档/历史路径（如 `stage5/_rounds/ch01.r1.json`）。
 
     ⚠ **只给 `read_judged` / `read_text` / `write_text` 用**——它们不产生 `inputs` 的边，
     所以那个两级键的陷阱够不着它们。产生边的路径一律走 `check_rel`。
@@ -430,7 +428,7 @@ def is_invalid(rel: str) -> bool:
 
 
 def stem_of(rel: str) -> str:
-    """`stage5/deep/ch01.json` → `ch01`；`stage3/x.INVALID.json` → `x.INVALID`。
+    """`stage5/ch01.json` → `ch01`；`stage3/x.INVALID.json` → `x.INVALID`。
 
     ⚠ **`.INVALID` 留在 stem 里是有意的**：它与正式产物是**两条历史**，
     归档时各自编各自的号。合成一条会重号，而重号会静默覆盖一份花过钱的稿。
@@ -439,9 +437,9 @@ def stem_of(rel: str) -> str:
 
 
 def rounds_dir_of(rel: str) -> str:
-    """`stage5/deep/ch01.json` → `stage5/deep/_rounds`（**与产物同目录下的 `_rounds/`**）。
+    """`stage5/ch01.json` → `stage5/_rounds`（**与产物同目录下的 `_rounds/`**）。
 
-    盘上实测就是这个形态：`stage5/deep/_rounds/ch01.r1.json` · `stage6/_rounds/hook.r1.json` ·
+    现役形态是：`stage5/_rounds/ch01.r1.json` · `stage6/_rounds/hook.r1.json` ·
     `stage5/_rounds/review_4.*.json`。
     """
     return os.path.dirname(check_rel_deep(rel)).replace('\\', '/') + '/' + ROUNDS_DIRNAME

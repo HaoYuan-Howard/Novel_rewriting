@@ -54,9 +54,11 @@ _QUALITY = {'read_on_desire': 7.0, 'body_voice_match': 7.0,
             'hook_craft': 7.0, 'synopsis_penalty': 2.0}
 
 
-#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
-#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
-_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
+def _drafts_of(book: str) -> tuple[str, ...]:
+    return tuple(sorted(
+        a.rel for a in corpus.iter_artifacts()
+        if a.book_dir == book and a.pattern == 'stage5/ch{nn}.json'
+        and '_rounds/' not in a.rel))
 
 
 def _one_book() -> list[str]:
@@ -70,7 +72,9 @@ def _one_book() -> list[str]:
     books = _books()
     if not books:
         return []
-    return [corpus.first_current_book(books, *_DRAFT_ARMS) or books[0]]
+    return [next((book for book in books
+                  if (rels := _drafts_of(book)) and corpus.is_current(book, *rels)),
+                 books[0])]
 
 
 @pytest.fixture(params=corpus_params(
@@ -81,12 +85,9 @@ def box(request):
     # ⚠ 前提是**语料的版本**不是被测的性质：本文件测 wontfix 的理由/证据键/闸门边界，
     #   而它们都得先让 `stage6.semantic` 读得进成稿。过期时用例死在门口（实测
     #   11/11 都是 `UpstreamStale`），拿不到自己要断言的输入。
-    corpus.requires_current(book, *_DRAFT_ARMS,
-                            produced_by='stage5.write --mode deep', cost='付费')
-    drafts = tuple(sorted(
-        a.rel for a in corpus.iter_artifacts()
-        if a.book_dir == book and a.rel.startswith('stage5/')
-        and '_rounds' not in a.rel and a.rel.endswith('.json')))
+    drafts = _drafts_of(book)
+    corpus.requires_current(book, *drafts,
+                            produced_by='stage5.write', cost='付费')
     s = sandbox.Sandbox(book, STAGE6_INPUTS + drafts)
     yield s
     s.close()

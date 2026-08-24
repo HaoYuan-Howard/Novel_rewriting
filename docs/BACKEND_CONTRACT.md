@@ -92,7 +92,7 @@
   **1:1 重建**：形态可以变，能力与守卫不许缩水
 - **`R-13` ~ `R-14`** — **相对原型新增的两项能力**（批量队列 · 断点续跑），用户裁决
 - **`Q-1` ~ `Q-12`** — 工程约束，跨阶段成立
-- **`B-01` ~ `B-22`** — 无守卫清单 = **关卡层的施工清单**
+- **`B-01` ~ `B-23`** — 无守卫清单 = **关卡层的施工清单**
 
 > #### 两条改编号时必须照办的惯例（跨层，每一层移植都会撞上）
 >
@@ -137,10 +137,11 @@
 > 2. **作业 id = `<stage>.<动词>`**，唯一落点 `contracts/invariants.py` 的 `NODES`。
 >    用动词不用新编号：**编号会过期，动词不会**——`n` 那套坏掉正是因为把序数编进了标识符。
 >    label 从 `NODES` 派生，**不再手写**。
-> 3. **写作两条臂是参数不是两个节点**：单臂维护入口是
->    `stage5.write --mode deep|shallow`；整书入口是
->    `stage5.write --deep <章号列表|none> --shallow-rest`。后者在一个书级互斥键内同时调度
->    两臂；两臂只差 (system prompt, 给不给源章原文)，产物形状与判据表仍只有一份。
+> 3. **Stage5 只有一条 canonical 闭卷写作路径**：`stage5.write` 默认按全书计划补齐所有缺章，
+>    已有章不重复付费；`--chapters <章号列表>` 是定向重写的唯一范围参数。所有调用共享一个
+>    书级互斥键、单池最多 32 并发，正式章唯一落 `stage5/chNN.json`。旧
+>    `stage5/deep|shallow/` 目录与旧作业记录只作历史证据，现役读模型报
+>    `legacy_incompatible`，不在原地迁移、选臂或触发付费重建。
 > 4. **没有 `check` 节点**，复检一律是 `--check-only` flag；作业 kind = `(node, flags)` 二元组。
 >    原型两头都有（`check_partition` 是独立脚本、`n3_style --check-only` 是 flag），
 >    正是 `Q-3` 点名的「三个节点行为不一致」。
@@ -452,7 +453,7 @@
 | R-4.1 | **形态数字由代码算，不是 LLM 产**：字数 / 段数 / 句数 / 平均段长 / 段间分隔字数 / 平均句长 / 对白比 / 引号体 | `HARD`（`measurable_drift`） |
 | R-4.2 | 正文与开篇文案段**分开测、互不污染** | `结构`（`novel/stages/stage3/measure.py::measure_all` 对正文与文案段各调一次 `novel/core/measure.py::measure`、不共享任何中间量；`measurable` 分 `body` / `hook` 两块同形分开落盘） |
 | R-4.3 | **【抽取侧】实测数字一个都不下发**，只发档位词——既给「权威数字」又禁止复述数字是**一对自相冲突的指令**，模型只能靠复述数字来证明自己遵守了自洽要求 | `结构`（`novel/stages/stage3/prompts.py::build_chapter_user` 与 `build_aggregate_user` 只接收 `Measurable` 并调用 `bands()`；序列化进 user prompt 的只有档位词） |
-| R-4.3b | **【写作侧】发档位词 ＋ 三个原始数值**：平均句长 · 平均段长 · 明喻每千字。档位词是**可执行的指令**（「写出来要落在这些档上」），数值是**校准锚点**（「写完回看，明显比它长就是写成了另一本书」）——光有档位词，写作节点不知道自己写密 / 写长了多少 | `结构`（写作侧两条臂的 SYS —— `novel/stages/stage5/prompts.py::DEEP_SYS` 与 `novel/stages/stage5/prompts.py::SHALLOW_SYS` —— 的插值表 = `novel/core/bands.py::bands` 的档位词 **＋ 且只加三个**数值键；多发一项就是改这张表，即一次契约变更） |
+| R-4.3b | **【写作侧】发档位词 ＋ 三个原始数值**：平均句长 · 平均段长 · 明喻每千字。档位词是**可执行的指令**（「写出来要落在这些档上」），数值是**校准锚点**（「写完回看，明显比它长就是写成了另一本书」）——光有档位词，写作节点不知道自己写密 / 写长了多少 | `结构`（唯一 canonical 写作 SYS `novel/stages/stage5/prompts.py::WRITE_SYS` 的插值表 = `novel/core/bands.py::bands` 的档位词 **＋ 且只加三个**数值键；多发一项就是改这张表，即一次契约变更） |
 | R-4.4 | 描述里**不许出现数字**——数字的落点是实测块，写进描述就是两处不同步 | `HARD`（`number_dup`） |
 | R-4.5 | 描述**必须可迁移**：写生成机制不写本书内容，因此禁止出现专名 | `HARD`（`name_leak`，**三态**：没名表 / 过滤后空表 都是 `unver`，不是 `[OK]`） |
 | R-4.5b | 专名扫描面**排除书名与 id**——它们是确定性搬来的元数据，不是模型写的描述。实测一本书名含一个人物专名，于是该判据在书名上恒红，而书名改不了也不该改 | `载体`（`title` / `source_id` 已从产物裁掉，扫描面里**不存在**这两个字段，无需再排除） |
@@ -597,67 +598,74 @@
 
 ---
 
-### R-7 · 逐章写作（stage5 · 两条臂）
+### R-7 · 逐章写作（stage5 · canonical 闭卷）
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-7.1 | 两条臂产同一个形状，差别只有 (system prompt, 给不给源章原文)：**闭卷**看不到原文、**开卷**看得到 | `结构`（`novel/stages/stage5/write.py::_ARMS` 是两条臂**仅有**的差异面——一张表两行，另一半由 `novel/stages/stage5/prompts.py::write_system` 按臂取 SYS；落盘走同一个 `novel/stages/stage5/write.py::_write_chapter`。闭卷看不到原文由 `novel/stages/stage5/prompts.py::build_material` 保证，不是由 prompt 里那句话保证） |
-| R-7.2 | 逐章重构深度**是人的决策**；默认第 1、2、3 章。选择存于 `_service/approvals/<sid>.json`（不是小说产物、不进 provenance），写作启动后锁定；实际启动参数必须与已选列表逐值相同 | `结构`（`novel/orchestrator/approvals.py::set_deep` / `begin_writing` + `novel/api/routes/jobs.py::_deep_selection`）+ **`人`**（选哪章仍无自动判据，见 `B-19`） |
-| R-7.2b | 深度臂与浅层臂同时起跑；两臂内部各按章并发、每臂硬上限 32。例：深度 3 章 + 浅层 16 章时允许 19 个章节调用同时在途 | `结构`（`novel/stages/stage5/write.py::run_selected` / `_run_group_parallel`）+ 回归测试（19 同时在途、40 章峰值 32） |
+| R-7.1 | 全书只有一条 canonical **闭卷**写作路：写手收到写作上下文与保真材料，源章原文只供确定性校验、绝不进入 prompt；每章正式产物唯一落 `stage5/chNN.json`，正文由 producer-owned `segments` 按计划 slot 顺序确定性拼出 | `结构`（`novel/stages/stage5/prompts.py::build_material` / `write_system` + `novel/stages/stage5/write.py::_rel` / `_ordered_segments`） |
+| R-7.2 | 人只批准「按当前 Stage3/Stage4 主体启动全书闭卷写作」，不再逐章选择写作臂。授权落 `_service/approvals/<sid>.json` 的 `writing/writing_proof`，不是小说产物、不进 provenance；默认按全书计划补齐所有缺章，已有章不重写，`--chapters` 才明确指定要重写的章 | `结构`（`novel/orchestrator/approvals.py::begin_writing` / `authorize_writing` + `novel/stages/stage5/write.py::_chapters_of`）+ **`人`**（是否授权本轮付费写作，见 `B-19`） |
+| R-7.2b | 目标章在一个并发池内逐章起跑，硬上限 32；一章失败不取消其他已经起跑的章，结果仍按阅读序落盘和报告。40 章时同时在途峰值只能是 32 | `结构`（`novel/stages/stage5/write.py::_run_group`）+ 并发、失败隔离与顺序回归测试 |
 | R-7.3 | 必须逐字写入的原话，逐条回写校验 | `闸门` |
 | R-7.3b | 原话允许**被一处提示语切开**（`「…，」我说，「…」`）——中文小说的标准写法。插入必须在原文字节上长成「收引号 + ≤12 内容字 + 开引号」；改词、插动作描写、只写半句照旧判缺失。放行单独留痕 | `闸门` + `INFO` |
 | R-7.4 | 必须保住的硬数字，**按数值比不按字面比**：下发面「30岁」、成稿「三十岁」= 满足 | `闸门` |
 | R-7.5 | 发明越界的**两个探针**：新数字（下发面以外的「数字+单位」逐个列出）· 新人物（只抓「本书已有的名字用字 + 称谓后缀」造出来的人，召回有缺口） | `INFO` |
 | R-7.5b | 发明越界的**另五项**——新事件 / 新地点 / 新道具 / 新因果 / 新时间跳跃，一个探针都没有 | **无守卫 → `B-01`** ★ |
-| R-7.6 | 成稿与源章的重合度：20 字窗口，**已扣掉契约要求逐字保留的部分**。**闭卷臂上界 `DEEP_OVERLAP_MAX`（10%）**——它守的是**臂的身份**（这一章到底是哪条臂写的），不是文风质量 | `INFO` |
-| R-7.6b | **开卷臂的重合度不定线，只报分布**——逐章跨度 0.9%~96.8%，那不是一个可以一刀切的量。⇒ 开卷仍然可以把一章几乎原样抄回来。⚠ **2026-08-22 起开卷已不在默认路径上**（默认深度选择 = 全部计划章），暴露面为空；单臂维护入口 `stage5.write --mode shallow` 仍可走，**洞仍在代码里** | **无守卫 → `B-03`** ★ |
-| R-7.6c | 全书闭卷成为默认之后，**走开卷的章是例外，必须常驻留痕**：书级无条件报出「本书 N/M 章走开卷」并附这几章的逐章重合度跨度。**只报不判**——不为开卷发明阈值（2026-08-10 已否决过一次，理由「0.9%~96.8% 的跨度不是一个可以一刀切的量」今天仍然成立） | `度量`（`arm_split_report`） |
+| R-7.6 | 成稿与源章的重合度用 20 字窗口逐章计算，**扣掉契约要求逐字保留的部分**；canonical 闭卷上界为 `SOURCE_OVERLAP_MAX`（10%）。它用于暴露原文意外进入下发面、缓存或落盘链的异常，不是文风质量线 | `INFO`（`source_overlap_high`） |
+| R-7.6b | **历史关闭说明**：旧开卷路径逐章重合跨度 0.9%~96.8%，没有可标定的一刀切阈值；该无守卫面没有靠发明阈值“修好”，而是随双路径执行能力整体退役。旧盘面仍按原字节保留但为 `legacy_incompatible`，不能作为现役章稿读取 | `结构`（`novel/stages/stage5/measure.py::legacy_stage5_paths` / `canonical_chapter_paths`；历史缺口见 `B-03`） |
+| R-7.6c | 现役章稿不携带写作路径标记，故不再产历史路径分报；重合度由 `overlap_report` 逐章无条件报出，且只有 `source_overlap_high` 这一条提示级结论 | `结构`（`novel/stages/stage5/checks.py::fidelity_findings`） |
 | R-7.7 | 机械层归一（标点 / 引号体 / 分段）由代码做，**归一改了多少进校验报告一行**（不落产物）；**引号配对异常留着报、不静默修** | `INFO`（`quote_unbalanced`） |
 | R-7.8 | 篇幅：成稿字数落在**章预算 `DRAFT_BAND`（±20%）**、全书落在 **`BOOK_BAND`（±10%）**，**两个数不同且都没有第二层宽限**（逐章放宽给单章节奏留余量，全书总量是产品承诺，逐章正负偏差在书级抵消）；超限**由阻断降为提示** | `INFO` |
-| R-7.8b | 源章 / 成稿的**直接引语数与比值无条件报出**（逐章 + 书级），不许只在漂了的时候才说得出来 | `度量`（`dialogue_report`） |
-| R-7.9 | 不把潜台词说破 · 按给定的叙述视角写 · （开卷）表层修饰尽量留住 · （开卷）禁止整段照抄 | **无守卫 → `B-10`** |
+| R-7.8b | 源章 / 成稿的**直接引语数与比值逐章无条件报出**；现役没有书级 `dialogue_report`，不得把逐章 producer 的读数宣传成另一条不存在的聚合 | `度量`（`dialogue_report`） |
+| R-7.9 | 按给定的叙述视角写，但只在确定性可判域内给结论。**人称轴**：`narration_person_report` 逐章常驻报告声明人称、锚点、自称命中与未判原因；只有「单 narration + 全章边界 + first/third + 非空锚」进入弱信号 `narration_person_drift`，且只作人工线索。**章尾轴**：`end_hook_surface_report` 只盘点姓名/数字原子落在末 slot、其他 slot 或整章未见；代词化、换说法、同名与撞值都让字面位置无法推出语义交付，所以每个有稿章节保留 `end_hook_unver`，绝不据字面探针指挥付费改稿 | `度量`（`narration_person_report` / `end_hook_surface_report`）+ `INFO`（`narration_person_drift`）+ `unver`（`end_hook_unver`）。<br>⚠ 人称只看 `novel/core/text.py::narration_layer`；章尾末 slot 由计划 `segments[-1]` 给出。两轴都没有 ground truth，合法省略主语、自由间接引语与代词化反例已出现，故不设 HARD |
+| R-7.9b | 不把潜台词说破、换叙述人时声音也要换，仍没有确定性真值；历史开卷路径的表层修饰与整段照抄约束已随该能力退役 | **无守卫 → `B-10`** |
 | R-7.10 | 拍的顺序就是落笔的顺序 | **无守卫 → `B-02`** |
 | R-7.11 | 「必须成立、不必写在纸面上」那一组，按定义查不了文面 | **`人`**，见 `B-04` |
 | R-7.12 | 篇幅超上限时不许由模型自动裁剪：**没有任何自动收缩路径**，超上限一律零调用保留 pretrim 并转人工 | `结构`（`novel/stages/stage5/write.py::_over_length_audit` 落 identity `TrimAudit` 转 `verification`；该函数签名里没有 client，结构上花不了钱）<br>⚠ 这里曾有「同槽候选生成 + 确定性 claims 对账 + A/B 双盲 + 采用」一整条路，由 `trim_equivalence` 的 evaluator profile 开闸。那个闸从未在任何宿主上打开过，现已随 profile 整批下线；`novel/stages/stage5/checks.py::trim_regressions` 保留，它现在只服务 `--revise` 的退化守卫 |
 | R-7.13 | 超上限章的唯一出路是人：保留 pretrim，或改写整章 | `人`：`novel/stages/stage5/trim_resolution.py::retain_pretrim` 写 hash-bound resolution（0 次调用，绑 audit 完整 SHA-256、当前正式章路径与正文 SHA-256），或 `stage5.write --apply-edit` 落成新的一轮。⚠ **没有任何机制能替人采用一个更短的候选**——`TrimResolution.action` 在类型上只有 `retain_pretrim`（`B-11` 已关闭） |
-| R-7.14 | 开卷臂的 system prompt 应解释「现场 / 回忆 / 转述」三个标签。实验补强在三本真实小说中没有给出稳定净收益（INFO 逐书 37/60/75，且仍有新数字/风格漂移），已随实验分支退役；现役 prompt 保持原写作方案，该缺口作为显式技术债存在 | **无守卫 → `B-13`** |
+| R-7.14 | **历史关闭说明**：旧开卷 system prompt 对「现场 / 回忆 / 转述」解释不足；实验补强在三本真实小说中没有稳定净收益，随后整条开卷能力退役。现役单一路径使用一份闭卷 system prompt，因此该差异面已结构性消失 | `结构`（`novel/stages/stage5/prompts.py::write_system`；历史缺口见 `B-13`） |
 | R-7.15 | 成稿必须是**完整的一章正文**：不是空的或残的（内容字 < 50 早退，其余判定一条都不跑）· 结尾是完整句 · 正文里不含章节标题 / 编号 / 任务术语这类叙述外壳 | `HARD` |
 | R-7.16 | 必须**用下发的那张称谓表**称呼人物：本章相关人物一个名字都没出现是漏写，不是简洁。⚠ 它与 `R-7.5` 是一对反向条款——那一条只管「不许编新的」，没管「要用给的」 | `INFO` |
 | R-7.17 | 【必须在场】的物件要在成稿里**留下痕迹**（怎么描写随写手）——四组保真材料里的第三组，另两组是 `R-7.3` / `R-7.4`，第四组是 `R-7.11` | `INFO` |
 | R-7.18 | **不许提前点破本章还不该揭示的事**（字面探针那一半）。⚠ 报绿灯时**同一行必须打盲区计数**：实测 21 条秘密里 19 条的字面探针连它自己的揭示章都命中不了，一本书盲区 100% 时要落「查不了」而不是沉默 | `HARD` |
 | R-7.18b | **书级改写式泄底的守卫已于 2026-08-17 转授**（用户裁决）。原形态是 `stage5.semantic` 的两相付费语义审判（`semantic_secret_leak`），节点与判据一并下线。裁决依据是实跑证据：本项目的重构**不跨章重组**（实测 18/18 章 `from_source_ordinals == [自身]`），书级泄底的主风险面在计划形态上几乎不存在；而该节点占单本实付调用 54%、输出 token 55%，同一本书上 18 章里 5 章命题抽取返回 uncertain、8 条 secret 全部判不动 | 见 `R-3.7d` |
 | R-7.18c | **语义审判的覆盖闭合条款随 R-7.18b 一并转授**。原形态是 `semantic_secret_coverage`：覆盖不确定时只能 `UNVER`、不得洗成通过。⚠ 该条款的**精神**仍然有效并落在别处：stage2 的后见之明判据是确定性的（不存在"模型没把握"这一态），交付前由成书逐字对账第 8 项把上游 info 逐条投影到成书章序复核 | 见 `R-3.7d` |
-| R-7.19 | 开卷改写、且计划没有净压缩时，**直接引语不许被腰斩** | `HARD` |
-| R-7.20 | 直接引语的**条数 / 引号对白体 / 对白占比**要贴着源章与本书——**闭卷这条臂会系统性把台词压成转述**（6 本书方向一致，是这一层效应量最大的一条跨书结论） | `INFO` |
+| R-7.19 | **历史关闭说明**：旧开卷路径曾以 `dialogue_halved` 阻断「计划无净压缩却把直接引语腰斩」；该判据只在已退役路径上有前件，现役注册表与执行路径一并删除，不留一条永远零分母的假绿灯 | `结构`（现役注册表 `contracts/judges/stage5.py`；历史风险见 `B-03`） |
+| R-7.20 | 直接引语的**条数 / 引号对白体 / 对白占比**要贴着源章与本书——canonical 闭卷写作在历史六本书上都显示把台词压成转述的方向性效应，因此当前只以逐章 `dialogue_report` 给分母、三条 INFO 留线索，不自动补台词 | `INFO` |
 | R-7.21 | 成稿要贴着 `R-4` 那份画像：句段形态档位 · 段均字数 · 提示语排版惯例 · 明喻密度 ·「心里」密度 · 破折号密度。⚠ `R-4` 管的是画像**怎么产**，没有一条管成稿贴不贴 | `INFO` |
 | R-7.21b | 破折号密度与连续短段成串**无条件报出读数**——它们是上一条的基线，只在漂了的时候才说得出来就没有基线可言 | `度量` |
-| R-7.22 | 每一拍的事件在成稿里都要留下落点；**提不出可回查原子的拍要说出来**，不许算作通过 | `INFO` |
+| R-7.22 | 每一拍的事件在成稿里都要留下落点；**提不出可回查原子的拍要说出来**，不许算作通过 | `INFO`（`event_landing`）+ `unver`（`event_landing_unver`） |
+| R-7.22b | 事件原子以及 `verbatim` / `keep_value` / `must_appear` 保真材料的锚点，都要在**源章原文**里找得到；找不到是上游抽取错了，**这条账记上游不记写手** | `INFO`（`event_atom_unattested` / `material_anchor_unattested`，`owner=stage2`）。<br>⚠ 上游不可回查与「本层没写进成稿」是两件事：前者单列 finding，后者仍保留原判定，不靠静默降 `actionable` 隐去根因 |
+| R-7.22c | **守卫自陈排除掉的样本，要说清它们此后没有被判过** —— `noatom` 那一桶的拍被计数、被报出，但它们的「落点」这件事**再也没有第二把尺子** | **无守卫 → `B-23`** |
 | R-7.23 | 自造的数字在**跨章之间**不许打架——同一件事在两章里写成两个数，两处都不是原作给的，选哪个都行**但必须一致** | `INFO` |
 | R-7.24 | `stage5.write --apply-edit` 是 **0 LLM 调用的新人工修订轮**，不是一个局部文本补丁。输入必须是文件名指向的单章完整 `ChapterResponse`，`segments` 覆盖该章全部 producer-owned slot 且每个恰好一次；缺 slot、多 slot 或只交一段差异均关闭式拒绝 | `结构`（`ChapterResponse` + `novel/stages/stage5/write.py::run_apply_edit`）+ 回归测试 |
 
-> **R-7.6 已裁决（2026-08-10，`B-03` 的一半）**：**只给闭卷定上界，开卷不定线。**
+> **审批版本边界**：`_service/approvals/<sid>.json` 的现役盘上形状是
+> `_ApprovalRecordV3`（`v=3`），不再有逐章写作臂选择，且 `writing` 必须与当前主体的
+> `writing_proof` 成对。对外 `ApprovalDoc` **仍是 v2**；这是 API 响应版本，不是盘上版本的别名。
+> 旧盘上 v2 普通 GET/启动一律拒读，只有显式 `backfill_from_disk` 可在 proofs 仍绑当前主体时迁到 v3；
+> 历史写作授权还要满足旧选择覆盖当前全计划章，不猬测、不静默迁移。
+
+> **历史证据（旧双路径，现已不可执行）——R-7.6 在 2026-08-10 当时的裁决**：
+> 旧闭卷路径只定上界，旧开卷路径不定线。
 > ⚠ 定线之前先统一口径——上面那组「闭卷 0.0/0.1/0.3%；开卷 41.2/42.6/92.9/95.9%」是**书级均值**
 > （而且量的是另一批四本书），而判定量是**逐章**。当前三本 31 章重算：
 >
 > | | 书级均值 | **逐章** |
 > |---|---|---|
-> | 闭卷 | 0.8 / 0.1 / 0.5% | 0.0% ~ **2.4%**，中位 0.1% |
-> | 开卷 | 41.3 / 78.0 / 36.4% | **0.9%** ~ **96.8%**，中位 49.8% |
+> | 旧闭卷 | 0.8 / 0.1 / 0.5% | 0.0% ~ **2.4%**，中位 0.1% |
+> | 旧开卷 | 41.3 / 78.0 / 36.4% | **0.9%** ~ **96.8%**，中位 49.8% |
 >
 > 两件事只有换成逐章才看得见：**闭卷的上界是 2.4% 不是 0.3%**；**开卷有低到 0.9% 的章**
 > ——「开卷 = 高重合」不成立，它是**上界**问题不是分布问题。
-> ⇒ 闭卷那条线（10%）**不是质量线，是「这一章到底是哪条臂写的」的探针**；
-> 开卷 0.9%~96.8% 的跨度说明它不是一个可以一刀切的量，**只报分布**。
-> **开卷臂可以把一章几乎原样抄回来，全链仍无一层拦它**——这部分留在 `B-03`。
+> ⇒ 这些数字只解释为什么旧开卷能力不适合靠发明阈值续命；现役不再有写作臂身份，
+> 10% 是 canonical 闭卷链路的异常探针，不是臂分类器。`B-03` 保留的是历史裁决记录，不是可调用的现役漏口。
 
-> **一条与「该不该全用开卷」相关的硬结论**：**6 本书方向一致**——
-> 闭卷的对白比是原作的 0.74 / 0.67 / 0.68（旧三本，15+16 章）与 **0.86 / 0.79 / 0.87**（当前三本，11+20 章），
-> 开卷是 1.00 / 1.01 / 0.94 与 **0.93 / 1.02 / 1.01**。
-> **闭卷这条臂本身会系统性把台词写短**，不是叮嘱不够；开卷**不是靠抄保住的**
-> （最低重合度 0.2% 的那一本仍保住 0.94）。
+> **旧六本书对照的历史结论**：旧闭卷组的对白比是原作的
+> 0.74 / 0.67 / 0.68 与 **0.86 / 0.79 / 0.87**，旧开卷组是 1.00 / 1.01 / 0.94 与
+> **0.93 / 1.02 / 1.01**。它说明现役 canonical 闭卷写作需要常驻暴露对白读数，不能说明应恢复已退役路径。
 > ⚠ **但这一批的效应弱了约一半**——它是一个**有跨书方差的效应，不是一个系数**，
 > 别把 0.7× 当常数引用（判据 30）。这正是 `R-7.8b` 要求那条比值**无条件报出**的理由。
-> ⚠ 这也不等于「该全用开卷」——开卷的重合度**上界**是另一个问题，就是 `B-03`。
+> ⚠ 效应量有跨书方差，不得把 0.7× 当常数；现役处置是 `R-7.8b` / `R-7.20` 的逐章常驻报数。
 
 ---
 
@@ -677,19 +685,30 @@
 | R-8.6 | **付费自救的第二道准入**：可修复之外还要「满足路径唯一」——目标字串被上游钉死，或动作就是「删掉指出来的那个东西」，写手编不出第三种答案。密度 / 比率 / 档位类**一律不进**，因为最省力的满足路径是删内容或编内容 | `结构`（`contracts/rules.py::_validate` ③④：准入是**一个字段的三个取值**，「进且只进一张桶」于是不可能分不干净；写歪一个值当场拒绝注册） |
 | R-8.7 | 「这条我不修」要**理由必填**，且豁免只挂在它真正豁免的那一条结论上 | `载体`（`contracts/schema/common.py::WontFix` 的 `why` 最小长度 + 键↔条目的收敛键一致性断言。⚠ 模型已从 `stage5.py` 搬到 `common.py`：语义豁免闭环把它变成跨层机制，形状必须只有一份） |
 | R-8.7b | 不给**不存在的**结论发豁免（该层**当前结论池**里没有那条 ⇒ 显式终态）；豁免**不删结论**，只是不再进修复、不再占待办，并**单独计数** | `结构`（`novel/wontfix.py::mark` 先在结论池里反查，查不到 / 同一 (章,判据) 有多条而没写出证据键 ⇒ 显式终态；落进 `Finding.wontfix` 由 `novel/wontfix.py::applied` **只降 `actionable` 不删结论**） |
-| R-8.7c | **语义结论也要进得了这个闭环**。持久身份 = `(层, 章\|book, 判据, 证据键)`，**层由文件路径承载**（`<stage>/wontfix.json`，逐层一份账）；审判产物版本只进审计账 `at`，**不参与匹配**——语义审判是付费节点、重跑是常态，把版本塞进匹配键会让一次不改变任何结论的重审把整本账清空。失效由**证据自身**保证：语义证据是候选文案 / 正文的连续原字节，文本一改键就失配 | `结构`（`novel/wontfix.py` 是全链唯一机制落点；结论池由 `novel/stages/stage5/review.py::mark_wontfix` 与 `novel/stages/stage6/hook.py::run_wontfix` 各自交出，两者都含现算的语义结论） |
+| R-8.7c | **持久豁免要跨层共用同一个闭环**。身份 = `(层, 章\|book, 判据, 证据键)`，层由 `<stage>/wontfix.json` 路径承载；产物版本只进审计账 `at`、不参与匹配，失效由当前证据键保证。现役 Stage5 结论池只有 0 成本机械验收；语义结论只在 Stage6 文案层进同一闭环 | `结构`（`novel/wontfix.py` 是全链唯一机制落点；结论池分别由 `novel/stages/stage5/review.py::mark_wontfix` 与 `novel/stages/stage6/hook.py::run_wontfix` 交出） |
 | R-8.8 | 待办清单聚合八类，**只读盘、不重判**：`invalid` / `rejected` / `stalled` / `human_only` / `repairable` / `verification` / `upstream` / `approval`。`repairable` 仅表示本层有结构化修复路，不再冒充「只能人修」；`verification` 只收有明确人工消解路的 UNVER。固有盲区仍不制造永远清不空的待办 | `结构`（`novel/views/inbox.py::inbox_view` 只读正式产物、审批、语义决定与 durable trim audit/resolution；`INBOX_KIND` 八键始终全出，不调用模型） |
 | R-8.9 | 词表类判据**必须报出它的基线命中率** | `结构`（`contracts/rules.py::_validate` 第 ⑤ 条：`wordlist` 不填 `baseline` 当场拒绝注册） |
 | R-8.9b | **探针自己的基线读数**要无条件报出：未揭示秘密在全书成稿里的出现分布 · 全书自造称谓与撞名的名字面。⚠ 后者原来只在**命中时**才产出 ⇒「全书 0 个自造称谓」这个读数永远说不出来，而「查过、干净」与「根本没在查」在报告上长得一模一样 | `度量` |
-| R-8.10 | 改写式泄底已接入两相书级语义审判；机械验收与语义审判保持两份独立产物，不把付费结论冒充 0 成本检查 | 见 `R-7.18b`（原缺口 `B-15`；覆盖边界见 `R-7.18c`） |
-| R-8.11 | 计划里的每一章都要有成稿，且**同一输出章不许两条臂各有一份**。⚠ 两者是**两件相反的事**，不许共用一个判据 key——基线里 `k/N` 会把两种现象加在一起，而读报告的人按名字去解释那个数只会解释错 | `INFO` |
+| R-8.10 | **历史关闭说明**：Stage5 曾有独立付费的两相书级语义审判；它已连节点、产物与判据一并下线，现役 Stage5 只产 0 成本机械 Review，不得宣称仍有一层书级语义守卫 | `结构`（`contracts/invariants.py::NODES`；转授与历史依据见 `R-7.18b` / `R-7.18c` 与 `B-15`） |
+| R-8.11 | 当前 Stage4 计划里的每一章都要有且只有一份 canonical `stage5/chNN.json`；缺章单独报 `draft_missing`，旧目录则进 `legacy_incompatible`，不把两种状态合成一个比例 | `INFO`（`draft_missing`） |
 | R-8.12 | 逐章 finding 必须携带 `output_ordinal`；书级 finding 显式为 `null`。Review、CheckReport、CLI/API 与 inbox 不得丢掉这个定位键 | `载体`（`Finding.output_ordinal`）+ 端到端回归 |
-| R-8.13 | 当章有一份可读、且与当前正式稿正文 SHA-256 精确匹配的 `TrimAudit` 时，`length_over` 不再单独产 finding，而把 before/目标及超限事实吸收到同一条 trim verification detail。⚠ **折叠不看销账状态**：已 `retain_pretrim` 销账的 audit 照样折叠——销账关掉的是待办，不是「这一稿确实超限」这个事实；销账后再产一条 `length_over` 等于把人刚关掉的那个决定重新打开（判据侧取 `current_trim_audits`，inbox 待核验侧取 `current_unresolved_audits`，**两个集合故意不是一个**）。audit 缺失/拒读、正式稿缺失/不可读/过期、`mode`·`output_ordinal` 对不上或正文 hash 已变时，独立篇幅 finding 仍照常保留。⚠ 没有「已采用」这一档：收缩候选与采用路径已于 2026-08-18 整臂下线 | `结构`（`novel/stages/stage5/review.py::_merge_length_over_into_trim`；当前审计集合由 `novel/stages/stage5/trim_resolution.py::current_trim_audits` 给出）+ trim resolution 回归 |
+| R-8.13 | 当章有一份当前 schema 可读、相对路径与 `output_ordinal` 指向当前 canonical 稿、且正文 SHA-256 精确匹配的 `TrimAudit` 时，`length_over` 不再单独产 finding，而把 before/目标及超限事实吸收到同一条 trim verification detail。⚠ **折叠不看销账状态**：已 `retain_pretrim` 销账的 audit 照样折叠——销账关掉的是待办，不是「这一稿确实超限」这个事实；销账后再产一条 `length_over` 等于把人刚关掉的那个决定重新打开（判据侧取 `current_trim_audits`，inbox 待核验侧取 `current_unresolved_audits`，**两个集合故意不是一个**）。audit 缺失/拒读、正式稿缺失/不可读/过期、路径·`output_ordinal` 对不上或正文 hash 已变时，独立篇幅 finding 仍照常保留。⚠ 没有「已采用」这一档：自动收缩候选与采用路径已于 2026-08-18 下线 | `结构`（`novel/stages/stage5/review.py::_merge_length_over_into_trim`；当前审计集合由 `novel/stages/stage5/trim_resolution.py::current_trim_audits` 给出）+ trim resolution 回归 |
 | R-8.14 | `band_drift` 的逐章事实保留在 `Review.chapters`；对外 `CheckReport`/CLI/API/inbox 聚合为一条书级 finding，detail 给命中章数/章号，evidence 可展开逐章明细，且 wontfix/收敛信息不得静默丢失 | `结构`（`novel/stages/stage5/review.py::_aggregate_band_drift`）+ CheckReport/inbox 回归 |
 | R-8.15 | `stage5.review --retain-pretrim` 必须显式提交非空 `--actor` / `--reason`，并用当前章主体 hash 锁定 resolution；不允许默认空凭据 | `结构`（`novel/stages/stage5/trim_resolution.py::retain_pretrim`）+ CLI/ArtifactStore 后置条件回归 |
 | R-8.16 | 字面 secret timeline 以 Stage2 `reader_reveal_events` 为权威揭示序列，覆盖多次/分步揭示；不得只从单个 `reveal_at` 字段推断读者时点 | `结构`（`novel/stages/stage5/checks.py::fidelity_findings`）+ 时线回归 |
 
-> **R-8.6 的依据与代价**：某章为满足「对白变少了」这条（引语 7→11 句）**凭空编了一句台词**，
+> **Stage5 Review 的 freshness 只有一份**：续跑、豁免、付费返工与审批只消费
+> `novel/stages/stage5/review.py::review_status` 的 `fresh / stale / unknown / missing / legacy_incompatible`
+> 五态结论。`fresh` 同时核当前 Review schema、通用 provenance、`RULES` 指纹、计划章集、
+> `chapters.relpath` / `judged` / canonical 章集、逐章来源、`draft_text_sha1` 正文投影与
+> `stage5/draft.md` canonical 字节投影；任一不成立都由 `require_fresh_review` 关闭式拒绝。
+>
+> **恒等基线两道闸故意不同**：逐章 `identity_hit` 仍可让同现象结论退出付费反哺，
+> 书级 `identity_dead` 不用上游锚点错误判死本层判据；根因由 `R-7.22b` 的
+> `material_anchor_unattested(owner=stage2)` 单列。`web/src/components/check/CheckPanel.tsx` 同时显示
+> `identity_hit · 恒等基线也命中` 与 `identity_dead · 判据失去判别力`，不再只写 JSON 不给人看。
+
+> **R-8.6 的历史依据与代价**：某章为满足「对白变少了」这条（引语 7→11 句）**凭空编了一句台词**，
 > 源章 0 次且语义讲不通；而第二轮全部 4 条判定**没有一条指向它**，报告还记它「消掉 2 条」。
 > 收窄后的实测代价：盘上 5 本可修复条目 **36 → 9（转人工 27 条，75%）**，
 > 其中一本是 **10 → 0**。⚠ 这是裁决的后果不是 bug；转人工那些**照常列在报告与界面上等人改**。
@@ -792,7 +811,7 @@
 | R-10.13b | **人手补的映射不受 ③ 的否决，但必须报出它撞上了谁**——同 `R-10.3b` 的形状：这条否决防的是**静默**撞名。⚠ 实测有一次撞名**是对的**（原作对同一个人有两种写法），而硬拦它的唯一出路是撤销一个对的决定 | `INFO` |
 | R-10.13c | 人手补的映射之间不许**首尾重叠**（`a` 的后缀 == `b` 的前缀 ⇒ 单次扫描会切出半截残串） | `HARD` |
 | R-10.13d | 被**保留**的称呼里不许夹着已经改掉的名字（否则成品里半改不改：「阿禾」成了「阿舒」而「阿禾姊姊」原样留着） | `INFO` |
-| R-10.14 | **成书的前置条件**：Stage2 全局复核必须 current 且逐项 PASS；人物表必须已人工定稿且当前 fresh；缺章 / 同章双份 / 各章不出自同一套契约 / 正文或文案消费指纹漂移 / 文案未定稿或其 resolution 不再绑定当前字节 —— 一律拒写 txt。人物表编辑会清空旧批准与 `book_txt` 账并把旧 txt 移出 live 下载路径；下载端点复用同一道 Stage2 + approved/current/fresh 闸，不以“文件存在”冒充可交付。文案语义闸只接受一种可审计基础：actor / reason / 完整 SHA-256 绑定的 `human_verification`，且该 resolution 必须仍绑着当前进成书的那份字节（改一个字即失效）。⚠ 「当前 profile 下的 calibrated PASS」那条路已随自动放行门删除；这里说的 UNVER 不阻断只指 Stage6 双盲结论，Stage2 typed UNVER 按 `R-2.16` 阻断。txt 是交付物，里面没有地方写风险抬头横幅 | `HARD` ×2 + `闸门` ×5（含 Stage2 typed review、`stage6.semantic.require_approved_clear` 与 Stage7 delivery gate） |
+| R-10.14 | **成书的前置条件**：Stage2 全局复核必须 current 且逐项 PASS；人物表必须已人工定稿且当前 fresh；Stage5 缺章或 `legacy_incompatible` / 各章不出自同一套当前契约 / 正文或文案消费指纹漂移 / 文案未定稿或其 resolution 不再绑定当前字节 —— 一律拒写 txt。人物表编辑会清空旧批准与 `book_txt` 账并把旧 txt 移出 live 下载路径；下载端点复用同一道 Stage2 + approved/current/fresh 闸，不以“文件存在”冒充可交付。文案语义闸只接受一种可审计基础：actor / reason / 完整 SHA-256 绑定的 `human_verification`，且该 resolution 必须仍绑着当前进成书的那份字节（改一个字即失效）。⚠ 「当前 profile 下的 calibrated PASS」那条路已随自动放行门删除；这里说的 UNVER 不阻断只指 Stage6 双盲结论，Stage2 typed UNVER 按 `R-2.16` 阻断。txt 是交付物，里面没有地方写风险抬头横幅 | `HARD` ×2 + `闸门` ×5（含 Stage2 typed review、`stage6.semantic.require_approved_clear` 与 Stage7 delivery gate） |
 | R-10.14b | 被拦下的废稿**排除但要报计数**——「排除了 N 份」与「一份都没有」必须分得开 | `INFO` |
 | R-10.15 | **人工编辑面按 `char_id` 浅合并**，不要求人重抄整份决策集；不在补丁里的角色**结构上改不到**，且**不许改由人物表派生的旧名** | `结构`（`novel/stages/stage7/measure.py::merge_mapping_edit` 只认白名单 `_CHARACTER_PATCH_KEYS`，`old_canonical` 不在其中，写了就显式终态） |
 | R-10.16 | **书名里的人名跟着换，其余不动**（不重起书名）——它走的是同一份替换表，是**确定性应用**不是第二次决策 | **`人`**（`rn_title_unver`：现语料上是**恒等变换**，三本书名都不含人名 ⇒ 这一条**从来没有过失败样本**，只能常驻报出换了几处、不能当绿灯读；换得对不对由人定稿时看），见 `B-22` |
@@ -835,7 +854,7 @@
 | R-11.7 | 付费与 0 成本动作在界面上分色，且**贵贱只有一处算**（服务端），前端一行判贵贱的代码都没有 | `HARD` |
 | R-11.8 | 付费入口一律经二次确认，并把**将要执行的那条命令**摊开显示（展示与执行共用同一个构造函数） | `HARD` |
 | R-11.9 | 原文↔重构稿的分界线由**必须逐字写入的原话**定：同一串字节在两侧各定位一次，**两边都锚到才切**。没有锚的拍并进相邻块，**不给它编一条分界线**，并常驻显示锚点覆盖率 | `HARD` |
-| R-11.10 | 同一本书同时只跑一个书级作业（第二个请求 409）；单臂维护入口的 deep/shallow 键可并存，整书深浅写作则持有书级键并在内部并发。不同 `sid` 的后台作业互不阻塞 | `HARD` |
+| R-11.10 | 同一本书同时只跑一个作业（第二个请求 409）；Stage5 的全书默认与 `--chapters` 定向写作共用这一把书级键，只在作业内部按章并发。不同 `sid` 的后台作业互不阻塞 | `HARD` |
 | R-11.11 | 作业记录 = 这次跑用的是哪条命令、哪版代码。**服务重启后 `运行中` 一律改判 `不知道`**，不是「成功」 | `HARD` |
 | R-11.12 | **不做作业取消**——调用在途时钱已经花了，kill 掉省不回来 | `不适用`（一条**负空间**声明：它要求的是「不建某个功能」，没有可判定的对象） |
 | R-11.13 | 剧透开关只关四个字段，**已知旁路仍在**，界面上常驻这句标注 | `结构`（`contracts/invariants.py::SPOILER_DISCLOSURE`，随 `/api/enums` 整份下发；由 `tests/test_api_discipline.py::test_the_spoiler_disclosure_boundary_is_published` 查） |
@@ -918,10 +937,10 @@
 | # | 要求 | 谁在查 |
 |---|---|---|
 | R-13.1 | 队列以「书 × 目标阶段」为单位，可排入、可取消**尚未开始**的项 | **`结构`**（`novel/orchestrator/queue.py::create` 冻结 `QueueStart` 并追加 `queues.jsonl`；`novel/orchestrator/queue.py::cancel` 只接收 `pending/blocked`，运行中明确拒绝）+ API/CLI 行为回归 |
-| R-13.2 | **一本书同时只跑一个作业**这条不变（唯一例外仍是写作的两条臂）；队列只决定顺序，不放宽互斥 | **`结构`**（互斥键唯一落点 `novel/orchestrator/jobs.py::active_key`；队列不碰它） |
+| R-13.2 | **一本书同时只跑一个作业**这条不变，Stage5 也没有书内互斥例外；队列只决定顺序，不放宽互斥 | **`结构`**（互斥键唯一落点 `novel/orchestrator/jobs.py::active_key`；队列不碰它） |
 | R-13.3 | **花钱的项必须一次性预先确认**，不能因为「排进队列了」就变成静默扣费。确认时摊开的仍是**将要执行的那些命令**；服务重启是新的执行轮次，不复用几小时前的 `--yes` 静默启动剩余付费项。恢复会重新逐字展示创建时冻结的剩余付费命令，并且只有 CLI `queue-resume --yes` / API `{"confirmed":true}` 才能移除持久的 restart-confirmation block；调用底层 runner 本身不构成授权 | **`结构`**（`novel/orchestrator/queue.py::confirm` / `_confirm_resume` 落 `ApprovalRequired`；`QueueStart` 拒收未确认的付费计划；`resume_incomplete` 对剩余付费快照落 `queue:restart-confirmation`）+ **`人`**（创建与每次付费恢复各完成当轮确认，见 `B-19`） |
 | R-13.4 | 任一项未绿 → **同书停在那里**，不跳过、不继续往下扣费；另一书继续。exit 1 单列为 `landed_red`（产物已经落盘、报告有阻断红行），不能误报成命令没跑成的 `failed`，但它与 `failed` 一样会停住该书 lane，并把后续项记 `not_run` 等人处理；四类计数不得合并 | **`结构`**（`novel/orchestrator/queue.py::_run_lane`；`QueueLaneCounts` 分列 done / landed_red / failed / not_run）+ 两书一红一成与一败一成回归 |
-| R-13.5 | 需要人裁决的闸门（stage0 批准 / stage5 深度选章 / 文案定稿 / 人名表定稿 / 待人工非空）**会挡住队列**，并明确说出在等谁；没有持久审批记录时不拿只读默认值猜成全 deep | **`结构`**（每项前 `novel/orchestrator/queue.py::plan_book` 重读盘面；`novel/orchestrator/approvals.py::has_record` 区分人工选择与只读默认；`novel/orchestrator/queue.py::_human_gate_satisfied` 识别已有批准；`stage0.edit` 明确是可选能力而非必经闸） |
+| R-13.5 | 需要人裁决的闸门（stage0 批准 / Stage5 全书写作授权 / 文案定稿 / 人名表定稿 / 待人工非空）**会挡住队列**，并明确说出在等谁；没有当前 `writing/writing_proof` 时不拿只读默认值猜成已授权 | **`结构`**（每项前 `novel/orchestrator/queue.py::plan_book` 重读盘面；`novel/orchestrator/approvals.py::has_record` 区分已有记录与只读默认；`novel/orchestrator/queue.py::_human_gate_satisfied` 识别已有批准；`stage0.edit` 明确是可选能力而非必经闸） |
 | R-13.6 | 队列本身**不产生新的判定**，也不放宽任何落盘闸门 | **`结构`**（`tests/test_layering.py::test_the_queue_cannot_reach_the_judgement_layer`：`queue.py` 够不到 `novel.report`，连「顺手判一下」都做不到） |
 | R-13.7 | 不同小说的作业可以并行执行；互斥范围只落在各自 `sid`。每个后台作业独立启动 CLI 子进程，一本书失败或阻塞不占用另一本书的键 | `结构`（`novel/orchestrator/queue.py::_execute` 每书一个线程，调用 `novel/orchestrator/jobs.py::start`；互斥仍唯一落在 `novel/orchestrator/jobs.py::active_key`）+ barrier 证明两本书同时进入子进程的回归 |
 
@@ -932,8 +951,9 @@
 旧 `running` 先改判 `unknown`，再对照 `jobs.jsonl` 与正式产物恢复。作业已经成功，或正式产物
 存在且 fresh 时直接记 `done`。仍需执行时重新生成当前计划并与冻结命令逐项比较：相同且全免费才
 自动续；相同但含付费项等显式 `queue-resume`；不同则要求重新预览/建队列，不能在恢复时扩张或偷换
-授权面。`stage5.write` 的冻结项是 `--deep <人工选择|none> --shallow-rest` 单条复合命令，执行前
-还会在作业互斥锁内用 `approvals.begin_writing` 逐值复核并锁定选择。
+授权面。`stage5.write` 的冻结项是 canonical 全书默认命令，或带明确
+`--chapters` 的定向命令；执行前还会在作业互斥锁内用 `approvals.authorize_writing`
+复核当前全书写作授权、目标章集与 Review 状态。
 
 ### R-14 · 断点续跑 【**新增能力**，原型没有】
 
@@ -1122,7 +1142,7 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 
 ---
 
-## 四、无守卫清单 B-01 ~ B-22
+## 四、无守卫清单 B-01 ~ B-23
 
 > **这是新骨架关卡层的施工清单。**
 > 下表每一条都问过「哪一段代码在查它」，答案都是「没有」。
@@ -1138,8 +1158,8 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 |---|---|---|---|
 | **B-01** ★ | **发明越界七项里的五项**：新事件 · 新地点 · 新道具 · 新因果 · 新时间跳跃 | **零校验。** 只有「新数字」有探针、「新人物」有部分探针（召回有缺口：用本书没出现过的姓造人、不带称谓后缀的光名字都抓不到）。地名后缀是普通名词、无硬左锚，实测 82 条候选几乎全假 | **已裁决（2026-08-10）：不补，直到有 ground truth。** 三条理由都有实测：① gate1 在抽象层做语义判定时**护栏自己成了发明源**，已整节退役；② **唯一 `full` 的那一项自己就零判别力**——`invented_number` 在 3 本里有 2 本被书级恒等闸门判死（头牌 2/8 vs 源章 2/8；三岁 1/9 vs 源章 **2/9**）；③ 修复回环**实测会诱发**自造内容而当轮判定一条都指不出它。<br>⇒ 七项的身份是**给人核对的料**（同 `name_surface_survey`），不是关卡。**「探针报 0 条 ≠ 约束生效」必须写在报告里** |
 | **B-02** | **拍的顺序就是落笔的顺序** | 没有。「事件有没有落点」只查有无，不查顺序 | 补判据（拍的落点位置单调）**或**接受不查并写明 |
-| **B-03** | **开卷臂的重合度没有阈值** | 只有度量。逐章重算：闭卷 0.0~**2.4%**、开卷 **0.9%~96.8%**（中位 49.8%）——**开卷可以把一章几乎原样抄回来** | **已裁决（2026-08-10）：闭卷定线、开卷不定。** 闭卷上界 `DEEP_OVERLAP_MAX = 10%`（`INFO`），它守的是**臂的身份**不是文风质量；开卷 0.9~96.8% 的跨度说明那不是一个可以一刀切的量，**只报分布**。<br>⇒ **本条只剩开卷这一半仍无守卫**，`R-7.6` 照此改写。<br>⚠ **2026-08-22 更新（暴露面，不是补洞）**：默认深度选择从 `(1, 2, 3)` 改成**全部计划章** ⇒ **开卷已不在默认路径上，暴露面为空**。推翻旧默认的是成书级实测（无情道 23 章，`tools/book_overlap.py`，回映射人名后逐章 20 字窗）：deep 中位 **0.017** / shallow 中位 **0.226**，**13 倍**；整句照搬率 deep 18.2% / shallow 55.4%，而 290 条照搬句里只有 60 条是 `verbatim` 制度要求的。<br>⚠⚠ **洞仍在代码里**：单臂维护入口 `stage5.write --mode shallow` 一个字没动，`_dialogue` 的开卷分支、`deep_overlap_high` 的开卷豁免全部原样。这是**事实陈述，不是关闭本条**。<br>⚠ **仍然不为开卷发明阈值**：2026-08-10 的裁决理由（0.9%~96.8% 的跨度不是一个可以一刀切的量）今天依然成立，发明一个数正是 `判据 15` 反对的事，也是已经否决过一次的事。改为**让走开卷留痕**：`arm_split_report`（`R-7.6c`，`度量`）无条件报出「本书 N/M 章走开卷」+ 这几章的逐章重合度跨度，**只报不判** |
-| **B-04** | **「必须成立、不必写在纸面上」那一组** | 机械层没有，且对应判据明确标为「查不了」；第 3 批已另接书级语义审判，但尚未把所有 must-hold 事实扩成独立审判类型 | 机械层继续诚实标注；不能用 secret 审判的存在冒充 must-hold 已全覆盖 |
+| **B-03** | **旧开卷路径的重合度没有阈值** | **历史闭环记录，现役暴露面为空。** 旧盘面逐章重算：旧闭卷 0.0~2.4%，旧开卷 0.9%~96.8%，不存在可标定的开卷一刀切线 | **2026-08-24 以收走能力关闭，不是以发明阈值关闭。** 现役只有 canonical 闭卷 `stage5/chNN.json`，上界为 `SOURCE_OVERLAP_MAX = 10%`（`INFO`）；旧目录只读保留并报 `legacy_incompatible`，CLI 没有可恢复旧能力的入口 |
+| **B-04** | **「必须成立、不必写在纸面上」那一组** | 机械层没有，且对应判据明确标为「查不了」；历史 Stage5 书级语义节点已退役，不再是现役覆盖 | 机械层继续诚实标注 `unver`；没有 ground truth 时不为了消掉盲区恢复一个自动语义门 |
 | **B-05** | **prompt 不许泄漏内部结构名** | 没有。现有的泄漏扫描扫的是**模型的产物**，不是我们发出去的 prompt。而拍号 / 人物 id / 规则 id / 内部枚举名正从多处**发出去** | **补一条 prompt 侧的守卫**。守卫开在错的门上，覆盖率 95% 而漏掉的正是主通道 |
 
 ### 4.2 其余（按节点分组，逐条已核实「谁在查 = 没有」）
@@ -1150,17 +1170,17 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 | **B-07** | 逐章抽取 | 不为首尾相接拉伸区间 · 主谓宾必须明确不许省略施受关系 · 别把「靠什么成立」摘要掉 · 硬数字必须原样进事件文本 · 原文自相矛盾时如实记录矛盾 · 不许照抄例子里的名字 · 摘要不照抄原文措辞 |
 | **B-08** | 全书抽取 | 只收结构性规则 · 规则描述必须连「怎么运作」一起写 · 秘密的四类收录判据 · 冲突阶段名要能定位 · 弧线两个字段的形状。**另加五个枚举**（人名区分度 / 规则类型 / 称谓场合 / 弧线变化类型〔开放枚举〕/ 叙述人称）——已有常量、两处 prompt 已插值，**但仍无任何校验**。<br>⚠ `叙述人称` 的取值面 2026-08-10 收正成 `first｜second｜third`：原型写的是 `first｜third_limited｜omniscient`，**把人称与限知/全知两个轴塞进了一个字段**，而且表达不了第二人称（语料里有一本真的第二人称小说）。限知/全知**不在这一层另立字段**——stage3 的 `narrative_distance`/`interiority` 已经在记它 |
 | **B-09** | 文风 | 必须可迁移（专名探针抓不到「主角是六岁女童」这种）· 逐章只描述本章可见的声音变化 · 每一维要写成可执行规则 · 不得推测前后文 · 正文与文案素材分区不得混用。`cliche` 九词表判据已退役，**没有任何现役消费方** |
-| **B-10** | 写作两条臂 | 不把潜台词说破 · 按给定的叙述视角写（换人时声音也要换）· （开卷）表层修饰尽量原样留住 · （开卷）禁止整段照抄〔= `B-03`〕 |
+| **B-10** | canonical 写作 | 不把潜台词说破·换叙述人时声音也要换，两者没有确定性真值。历史开卷路径的表层修饰/整段照抄要求已随能力退役，不是现役条款。见 `R-7.9b` | 人称的狭可判域已由 `R-7.9` 常驻报数；剩余语义盲区继续明示，不冒充已守住 |
 | **B-11** | 修剪 | **已关闭（2026-08-18 收缩臂整臂下线）**：曾经的关闭方式是「同槽结构化候选 + 确定性 claims 对账 + 校准 A/B 双盲同 PASS 才采用」，而那道校准闸从未在任何宿主上打开过。现在**没有任何自动收缩路径**：超上限章零调用落 identity `TrimAudit` 转 `verification`，由人 `--retain-pretrim` 销账或 `--apply-edit` 改写整章。 |
 | **B-12** | 文案 / 改名 | 不说破任何答案（字面探针**自陈判别力为零，别当门用**）· 只引用正文真实出现过的句子〔标「查不了」〕· 不歪曲人物关系〔标「查不了」〕· 新名贴合时代与性别气质 · 同辈共用字、兄弟姐妹只差一字等**跨名字**结构关系。<br>⚠ 单个旧称呼内部的数字、排行、亲属、头衔标记已由 `R-10.12b` 确定性守住；本 B 只保留无法靠字面不变量判定的语感与跨名关系。 |
-| **B-13** | 开卷写作 | **覆盖面缺口**：user 消息里发「现场/回忆/转述」标签，而 system prompt 里**没有任何解释**（闭卷那条臂有）。补它是内容变更、效果离线验证不了 |
+| **B-13** | 旧开卷写作 | **历史缺口已随能力关闭。** 旧 user 消息曾发「现场/回忆/转述」标签，system prompt 没有解释；实验补强没有稳定净收益 | 现役只有一份 canonical 闭卷 system prompt，旧路径为 `legacy_incompatible`，差异面结构性消失 |
 
 ### 4.3 已量出来、但没有下文的
 
 | # | 条目 | 状态 |
 |---|---|---|
 | **B-14** | 身份描述里的结局 / 未揭示秘密 | **没有确定性防线。** 词表命中 0/17 而人读真违规 6/17（另一本 2/40）。处置不能是加词、也不能按章收窄（会掏空写作节点对角色的认知）。结局字段本身是对的，病在身份描述把它又讲了一遍，而两者的最长公共子串只对 1/3 强，**做不成可靠探测器** |
-| **B-15** | 改写式泄底 | **已于第 3 批接线，保留编号作历史闭环记录。** `stage5.semantic` 用 secret-blind claims → secret alignment 两相审判，并将缺章、缺 secret、证据不闭合或揭示前覆盖不确定显式降为 `UNVER`，不发绿灯。三本真实小说的外部模型实验结果另见 E2E 报告；未完成时不宣称效果已证实 |
+| **B-15** | 改写式泄底 | **历史闭环记录。** 曾以 secret-blind claims → secret alignment 两相付费审判接线；2026-08-17 根据实跑证据转授到 Stage2 后见之明与交付对账，旧 Stage5 节点、产物和判据全部下线 | 现役处置见 `R-3.7d` / `R-7.18b` / `R-7.18c`；不得把历史实验描述成当前 Stage5 能力 |
 | **B-16** | 设定块的剧透闸门 | 字面子串包含，**命中 0/8，包括一条已知真泄漏**。真根因在产地：设定块里装着情节，修法是收紧抽取判据——那要重跑（付费） |
 | **B-17** | 计划的「轻重」两条 warn | **量出来了，然后没有下文**：「各拍字数几乎一样平」三本各 5/20 · 4/11 · 3/15；「有 >300 字的拍」4/20 · 2/11 · 3/15。**没有任何判据、也不进任何回环** |
 | **B-18** | 定向修复被驳回之后 | **没有下一条路。** 回归护栏会正确地驳回一次「顺手少了一条 hinge」的重生成并保留旧稿，但这一层**没有**写作层那套「换一次采样再试一次」⇒ 一次付费调用白花、那一章仍是红的。**同一个问题形状在写作层有解、在抽取层没有** |
@@ -1169,10 +1189,11 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 
 | # | 条目 | 说明 |
 |---|---|---|
-| **B-19** | 逐章重构深度的选择 | 人的决策，无判据可言。选择只落 `_service/approvals/`，不进入小说产物；组装器能验「启动参数与选择一致、两条臂没打架、合起来覆盖了计划」，**验不了「这一章该不该深度重构」** |
+| **B-19** | Stage5 全书写作授权 | 是否按当前 Stage3/Stage4 主体启动一轮付费写作是人的决策，无自动判据可言。决定只落 `_service/approvals/` 的 `writing/writing_proof`，不进入小说产物；系统能验主体当前、目标章在计划内，不能替人授权支出 |
 | **B-20** | 非正文剔除的正确性 | **确定性验不了**——「这一段到底是不是番外」没有结构不变量可查，而正文体已按契约丢弃、盘上不留副本。判据已按 161 本语料标定（27 本命中 / 0 假阳），但那是「在这批语料上没抓错」，不是「对任何输入都不会抓错」。每本必须打印一条「剔除的正确性：本层验不了」 |
 | **B-21** | 改名的替换覆盖率 | **验不了。** 只能替换人物表里有的称呼，人物表漏掉的角色这一层**结构上够不着**——实测漏过一个（靠残留探针捡回来）。别把「残留 0 条」读成「人名都换干净了」 |
 | **B-22** | 新名的质量 | 时代感与雅俗没有确定性判据。**现役闸门就是「人定稿」那一步**，这一点不会变。同理开篇文案的定稿 |
+| **B-23** | 提不出原子的拍 | `R-7.22` 的读数会诚实地说「另 N 拍提不出原子」，**但说出来之后就不再判它们的落点**——那 N 拍既不计入 `ok` 也不计入 `missed`。这不是「无守卫」也不是「查过没事」，是**守卫自陈把样本排除了**，而本文档此前没有为这种状态留登记位（`R-7.22` 的「谁在查」写着 `INFO`，读起来像已经覆盖）。<br>候选的第二把尺子是同一个 `CtxBeat` 上的 `verbatim` / `keep_value` / `must_appear` 三组保真材料（现语料五本合计 921 个点），但那是**改口径不是加检查**，而且 `event_landing` 的 note 记着一条已实测的假阳机制（canonical 写作代词化 ⇒ 内容写全了却没有专名可回查）——把 `noatom` 拍拉进分母很可能直接放大它。⇒ **要真书分布才判得了，别凭手感开闸** |
 
 ---
 
@@ -1192,7 +1213,7 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 | 文风的落盘闸门（`stage3`，**9 条现役**） | `R-4.1` ~ `R-4.6` |
 | 计划的判据表（`stage4`，**32 条现役**，两份产物共用一张） | `R-5.1` / `R-5.2`、**`R-5.3b` / `R-5.3c`**、`R-5.4` ~ `R-5.7`、**`R-5.9b`**、**`R-5.10b` / `R-5.10c`**、**`R-5.11` / `R-5.11b`**、**`R-5.12` ~ `R-5.15`**、**`R-5.16` ~ `R-5.19`**（`R-5.3` 归 `载体`、`R-5.5` / `R-5.10` 归 `结构`、`R-5.8` 无守卫 → `B-06`、`R-5.9` 无守卫 → `B-17`） |
 | 上下文组装的后置条件（**同属上面 `stage4` 那 30 条，不另计**） | `R-6.1` ~ `R-6.4`，另加一条**跨层**的 **`R-3.3b`**（`ctx_hinge_delivered`：抽到的保真点必须条条出现在下发面上——它守的是 stage2 与 stage4 之间那一步，因此挂在 `R-3` 而实现在本层）（`R-6.5` / `R-6.6` 归 `结构`、`R-6.9` / `R-6.10` 归 `载体`、`R-6.7` 无守卫 → `B-16`、`R-6.8` 无守卫 → `B-01`，六行都没有判据） |
-| 写作与验收的判据表（`stage5`，**47 条现役**，机械验收与语义审判共用一张注册表） | `R-7.3` / `R-7.3b`、`R-7.4` ~ `R-7.8b`、`R-7.11`、**`R-7.15` ~ `R-7.23`**（`R-7.18b` / `R-7.18c` 已于 2026-08-17 随 `stage5.semantic` 一并转授，见 `R-3.7d`）、**`R-8.1b`**、**`R-8.3b`**、**`R-8.9b`**、**`R-8.11`**，另加两条上游的账 `R-4.5` / `R-6.3`（`R-7.1`/`R-7.12`/`R-7.24`/`R-8.1`/`R-8.4`/`R-8.5`/`R-8.6`/`R-8.7b`/`R-8.9`/`R-8.13` ~ `R-8.16` 归 `结构`，`R-7.13` 归 `结构 + 校准语义`，`R-8.2`/`R-8.3`/`R-8.7`/`R-8.12` 归 `载体`、`R-8.10` 见 `R-7.18b`、`R-7.2`/`R-7.11` 是人、`R-7.5b`/`R-7.6b`/`R-7.9`/`R-7.10`/`R-7.14` 无守卫）<br>⚠ 这些结构/载体行说的是本层实现机制，不是另加一条产物判据 |
+| 写作与验收的判据表（`stage5`，**50 条现役**，全为机械判据） | 严重度实算为 **hard 6 / info 28 / metric 11 / unver 5**；`repair` 实算为 **UNIQUE 12 / FREE 11 / NONE 27**。对应 `R-7.3` / `R-7.3b`、`R-7.4` ~ `R-7.9`、`R-7.11`、`R-7.15` ~ `R-7.18`、`R-7.20` ~ `R-7.23`、`R-8.1b`、`R-8.3b`、`R-8.9b`、`R-8.11`，另加上游账 `R-4.5` / `R-6.3`。`R-7.18b` / `R-7.18c` 的旧 Stage5 语义节点已转授；`R-7.19` 的旧判据已随非 canonical 路径退役。`R-7.1` / `R-7.12` / `R-7.24` / `R-8.1` / `R-8.4` ~ `R-8.6` / `R-8.7b` / `R-8.9` / `R-8.13` ~ `R-8.16` 归 `结构`，`R-8.2` / `R-8.3` / `R-8.7` / `R-8.12` 归 `载体`，`R-7.2` / `R-7.11` 是人，`R-7.5b` / `R-7.9b` / `R-7.10` 仍是明示盲区。<br>⚠ 本层不再有现役语义判据池；结构/载体行说的是机制，不是另加一条产物判据 |
 | 文案的判据表（`stage6`，**23 条现役**，机械判据与语义审判共用一张注册表） | `R-9.3`、**`R-9.3b`**、`R-9.4` ~ `R-9.6`、**`R-9.9` ~ `R-9.21`**、**`R-9.23`**（`R-9.1`/`R-9.2`/`R-9.22`/**`R-9.24`** 归 `结构`、`R-9.7` 见 `R-9.19`、`R-9.8` 见 `R-9.20`） |
 | 人名替换与成书的判据表（`stage7`，**35 条现役**） | `R-10.2b`、**`R-10.3b` ~ `R-10.3d`**、`R-10.4` / `R-10.5`、**`R-10.6c`**、**`R-10.7` / `R-10.7b`**、`R-10.9`、`R-10.11`、**`R-10.12b`**、**`R-10.13` ~ `R-10.14b`**、**`R-10.16` ~ `R-10.18`**、**`R-10.20`**（`R-10.1`/`R-10.2`/`R-10.3`/`R-10.6`/`R-10.6b`/`R-10.8`/`R-10.15`/`R-10.19` 归 `结构`，`R-10.10` 无守卫 → `B-21`、`R-10.12` 仅余语感与跨名关系无守卫 → `B-12`） |
 | 界面的结构纪律测试（`tests/test_api_discipline.py`） | `R-11.1` ~ `R-11.4`、`R-11.6` ~ `R-11.11`、**`R-11.13`** |
@@ -1203,7 +1224,8 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 > ### `R-11.10` 已覆盖真实 HTTP 行为
 >
 > 通用 `POST /api/jobs` 已开放，并与预览共用 `plan_start()`。同一本书第二个启动请求
-> 返回 409；不同小说的后台作业可并行；stage5 deep/shallow 单臂是唯一书内并发例外。
+> 返回 409；不同小说的后台作业可并行。Stage5 的 `--chapters` 也只是同一书级作业的目标参数，
+> 不创造书内互斥例外。
 > 覆盖见 `tests/test_api_discipline.py` 与 `tests/test_orchestrator_jobs.py`。
 >
 > 持久批量入口同步开放：`/api/queues`（列表/创建）、`/preview`、`/:id`、`/:id/resume`
@@ -1214,7 +1236,7 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 它们的「谁在查」一律是 `待建`——这一列不许在实现之后还留着 `待建`，
 否则新增的两项能力会长成本文档第四节警告的那个形状：**只写在需求里，没人在查**。
 
-**没有守卫的，一律指向 `B-01` ~ `B-22`。** 一条需求既没有守卫、也不在 B 清单里，
+**没有守卫的，一律指向 `B-01` ~ `B-23`。** 一条需求既没有守卫、也不在 B 清单里，
 就是这份文档的漏洞。
 
 ---
@@ -1238,15 +1260,16 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 | none | 无 | metric 只报告读数 | 无 |
 
 处理顺序：首轮生成 → 机械检查 → deterministic 先修 → UNIQUE 才可付费修 → 连续两轮未消转人 →
-全规则回归 → 机械干净且 fresh 后再运行 stage5/stage6 语义审判。unver 与 skipped 不属于四种修复，
+全规则回归 → Stage5 Review 只在 `review_status == fresh` 时驱动后续；Stage6 才有独立语义审判。unver 与 skipped 不属于四种修复，
 也不得洗成通过。
 
 唯一落点：路由算法 `novel/report/builder.py::remediation_of`；付费筛选
 `novel/stages/stage5/write.py::revise_targets`；轮次上限
 `contracts/invariants.py::STOP_REWRITE_AFTER`；八类清单 `novel/views/inbox.py::inbox_view`。
 
-实测收缩账：stage5 可修复条目从 36 条收缩到 9 条，其余 27 条转人工；这避免把密度、比率和档位
-这类多解问题交给模型用删内容或编内容“修绿”。
+现役 Stage5 注册表共 50 条：严重度 **6 / 28 / 11 / 5**（hard / info / metric / unver），
+`repair` **12 / 11 / 27**（UNIQUE / FREE / NONE）。历史收窄实测曾将盘上可修复条目从 36 条收到 9 条、
+其余 27 条转人工；那是当时语料读数，不是现役规则数。现役路由仍禁止把密度、比率和档位这类多解问题交给模型“修绿”。
 
 ## 八、冻结证据基线
 
@@ -1284,7 +1307,7 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 `| R-N.m | 要求 | 谁在查 |`，Q 定义必须以 `### Q-N` 开头，B 定义必须是
 `| **B-NN** | ... |`。编号重复、表格缺列或完全解析不到条目会失败。
 
-现役自检：R 家族大于 50、Q 恰好 12、B 恰好 22 且连续。每个 B 必须被某条 R 引用；每个声明
+现役自检：R 家族大于 50、Q 恰好 12、B 恰好 23 且连续。每个 B 必须被某条 R 引用；每个声明
 HARD / INFO / 闸门 / 度量的 R 必须被注册 Rule 覆盖；每条 Rule 必须反向指向现存 R。结构行的
 可解析落点使用 `` `仓内路径.py::symbol` ``，当前扫描下限为 32 个，只应增加。
 
@@ -1390,6 +1413,7 @@ npm --prefix web run build
 | 2026-08-23 | **Stage2 契约面收口为 v1.1 / v2 / v3.1；chapter blueprints schema v2 → v3** | 用户裁定只保留 `extraction-ir-v1.1`、`extraction-ir-v2`、`extraction-ir-v3.1`，默认仍为 v2。`bounded-fidelity-v3`、`extraction-ir-v1`、`extraction-ir-v2.1`、`extraction-ir-v3` 从 `BLUEPRINT_ARCHITECTURES`、`CONTRACTS`、CLI/env 配置校验、冒烟白名单和前端枚举夹具同时撤下；历史实验读数留档但不再是可运行入口。由于 `BlueprintContext.architecture` 的 Literal 从七值收窄为三值，`stage2/chapter_blueprints.json` 属于破坏性 schema 变更，注册版本升为 v3；本仓无迁移机制，所有 v2 信封（即便 architecture 恰属保留三值）、`.INVALID` 与 `_rounds/` 均不能手补冒充当前产地，重建人是 `stage2.blueprint` 付费整跑。清理 v2.1 相级 rungs 时，回归显影并修正摘要前临时候选提前结算 usage 的问题：临时候选只预览来源账，只有真的写成 `.INVALID` 或形成正式稿才结算，ledger 权威总账不受影响。 |
 | 2026-08-24 | **评审整改 17 条（0 成本改动，无付费实证）；同批修好一个让`code_version` 恒 `unknown` 的真 bug** | 只记会改变现役判断的那几格。① **付费预览少报了 stage2 的一半以上**：`tools/current_corpus_paid_preview.py` 把 `stage2.blueprint` 写死成每章 1 调，而现役契约（`BLUEPRINT_ARCHITECTURE = extraction-ir-v2`）是**每章两相 + 一次书级摘要批**（`2N+1`）。17+25 章两本因此少报 44 个逻辑请求、264 个 wire 上限——而这份预览的全部用途就是开跑前拿它决定花不花这笔钱。现改为从 `active_contract()` 的 `topology` / `needs_summary_batch` 派生，翻默认会跟着动；期望值 136→180 / 148→192。② **`novel/prov.py::_worktree_digest` 对未跟踪目录直接 `open()`**：`git ls-files --others` 把整块未跟踪的目录（嵌套仓库、链接 worktree）折叠成一条**目录项**，目录 `open` 抛 `PermissionError` ⇒ 摘要 `None` ⇒ `code_version()` 恒 `'unknown'`。**本机实测已发生**（仓根有 `.worktrees/`）：那段时间产出的每一份产物都把 `code` 记成 unknown，而它不报错。目录项改为按名字入摘要。③ 交付终验补两道：`unknown == unknown` 不再读成「同一版代码」（倒向 `unknown`）；终审包不再只查 `is_file()`（空文件、早于成书都倒向 `stopped`）。④ **删除与 agent 准入的原子边界**：审批写入住在服务父进程而目录移动在 CLI 子进程，两条竞态各补一半——`approvals.frozen_for_trash`（防「书已删除、审批复活」）与锁内 `agent.drop_pending`（防「书删完了队列才把它带起来」，已复现）；`agent.start`/`enqueue` 拒绝不在盘上的书（HTTP 404），队列对这种永久失败**出队丢弃**并留 `_service/agent_queue_drops.jsonl`；回收站条目加 `complete` 哨兵 + `sweep_incomplete` 硬中断恢复（带在途名单与 300s 宽限期，不许把正在进行的那次收走）。⑤ **Stage2 四条**：本章可见称呼完全相同的多个 `char_id` 整组不再下发（模型在那一格只能抛硬币，而选错就是一个静默的错误人物身份）；v3.1 的权威叙述身份不再被按歧义名字反解覆盖成 `null`；定向修复的边界基线 `end_para=None` 改为重切边界（原来 `int(None)` ⇒ exit 70，且发生在任何 LLM 调用之前）；定向修复补上首轮那道**摘要批前闸**（原来注定被拦的一轮仍会先白付一次全书摘要）。⑥ 「跳过旧蓝图」由**按异常类型**收窄成**按版本号大小**——`ArtifactVersionError` 有六个抛出点，宽捕获会把缺 marker、非法 marker、坏 envelope 与**比当前还高的版本**一起放过（`_schema_version: 999` 已复现让守卫整个消失）。⑦ Stage6 候选互异闸补到 `--recheck` 与 `--apply-edit --candidate` 两条写盘路（候选身份是**位置**，两个 slot 同字之后判官结论就分不开了）。⑧ 已过完整契约的推理通道救回稿，不再因为「再争取一次正常正文」那一采死在传输层而被丢弃（丢了就要重新付一次，而它连缓存都进不去）。⑨ 前端：未勾付费授权**不等于这一趟不花钱**（agent 本身是一次 headless Claude 会话），单本与批量两个框的文案同批改口；交付失败原因从只挂 `title` 改成可聚焦可展开；作业日志只在已停在底部时才自动跟随；删除请求在途时关不掉框。**验证：全量非 corpus `pytest -q` 0 failed；stage6 那三条新守卫只在 `-m corpus` + `NOVEL_OUTPUT` 下真跑（已单独跑过）；前端 26 文件 / 79 项通过 + typecheck + seams + build。本次没有任何付费实证。** |
 
+| 2026-08-24 | **Stage5 契约收口为单一 canonical 闭卷路径**（0 成本工程改动，无付费/语料实证） | 现役章稿唯一落 `stage5/chNN.json`，默认补齐当前计划全部缺章，`--chapters` 只定向重写；旧双路径目录只读保留并报 `legacy_incompatible`，不原地迁移、不触发付费重建。Stage5 chapter / Review / trim audit / trim resolution 盘上均为 v2；审批盘上为 `_ApprovalRecordV3`、公开 `ApprovalDoc` 保持 v2，旧审批 v2 只可显式 backfill。统一 `review_status` 以 `fresh/stale/unknown/missing/legacy_incompatible` 关闭式核 RULES、provenance、计划章集、judged/正文投影、逐章 freshness 与 canonical `draft.md`；旧结论不再驱动付费返工、wontfix 或审批。现役 Stage5 只有 50 条机械判据：严重度 hard/info/metric/unver = **6/28/11/5**，repair UNIQUE/FREE/NONE = **12/11/27**；`R-7.9` 收窄为人称弱信号 + 章尾字面原子报数，章尾语义恒 `unver`；`dialogue_report` 只逐章。同批以 `material_anchor_unattested(owner=stage2)` 显式报上游锚点错误，并在 UI 同时呈现 `identity_hit` / `identity_dead`，因而关闭 TODO-42；移除 prompt 中恒 null `focalizer` 关闭 TODO-43；旧非 canonical 写作路径与专属 `dialogue_halved` 判据整体退役，关闭 TODO-44。工程结论只到 canonical v2、单臂工作流与守卫可靠性；beat-material 相对旧 event-list 是设计改进，原计划的受控双书付费 A/B 已在开跑前取消，没有实验正文、盲评或 manifest，故不宣称质量、成本或速度胜出。Stage5 又显著受 Stage1～4 上游材料影响，后续全链读数也不能直接归因给这一层。`TODO-21` 仍保留：本行没有生成 current-schema corpus/manifest，也没有跑 `--require-corpus`，不得宣称 corpus 闭合。 |
 | 2026-08-24 | **Stage2 全局事实升级为 v3：显式可见性、带时点知情与代码回取证据（TODO-42）** | `Relation.visibility` 收成 `public(from_chapter)` / `via_secret(secret_id)` 判别联合；secret 的无时间 `character_known_by` 换成 CharacterRef/GroupRef + `known_from_chapter` 的 `knowledge_events`，Stage4 只投影截至本章已知主体，旧启发式只由 `relation_visibility_mismatch` INFO 对账。七类自由事实由模型/typed edit 只交“指定章 + 短 locator”，代码按 raw→normalized 在指定章内要求唯一命中并铸成正式 `SourceSpan`；0/多命中与纯标点定位都落 `source=null` + 正面 provenance 失败账，由 `global_evidence_unlocated` HARD 送入可读 `.INVALID`，可经 typed edit / `--revalidate` 零 LLM 恢复。GlobalEdit 同批补齐 role/fate/relation/setting/rule/secret/arc 的 typed 面，并关闭了 INVALID 因“正在替换的 edit 输入变了”而无法恢复的缝；付费 `--purge-role` 仍只改 claim，不索取未授权的原文 locator，旧 evidence 明确失效后走同一恢复闸。`valid_to_chapter` 全栈改名 `valid_through_chapter` 并钉住含端点语义。新增 `canon_chapter_refs_dangling`，Stage2 现役共 **77 条（43 HARD / 16 INFO / 16 metric / 2 unver）**；规则版本、setup、reader reveal 越界与 typed patch 的倒序窗口/重复时点/重复 subject 都在落盘前关闭式拒收。Global review 的身份改为 claim+evidence hash，workpack 直接消费 formal span；Stage4/5/6 的真实 prompt 与 freshness 共用 `without_global_evidence`，不把 SourceSpan 原文或纯 evidence 修订扩散给下游付费节点。形状破坏如实登记：`global_grounding.json` v2→v3，v1/v2 由 `stage2.global` 付费整跑重建；`global_edit.json` v1→v2，旧人工决定必须核正文后重写，不迁移、不猜时点/locator。**合成验证**：Stage2/冻结契约/Stage4～6 联合回归 100% exit 0；完整非 corpus 套件在仅排除一条被 worktree 内 ACL 损坏 `.t` 测试目录阻塞的快照扫描后 100% exit 0，前端 typecheck / seams / 26 文件 80 项通过。**真实付费验收**（同日补齐，用户逐字授权正文外发与一次费用）：在隔离 base `E:\_novel_stage2_v3_validation_20260824` 对《偶像公寓打工日常》运行 `deepseek-v4-flash@high`、thinking=true；ledger 唯一 wire 行 `ok/stop`，prompt **20 439** / completion **39 029** / reasoning **31 528** token。第一次响应成功后暴露“当前 v3 蓝图反向比较时严格读取旧 v1 global、锁死 producer 重建”的通用 bug，修复后以**完全相同请求键**重放本地缓存（账为 1 wire + 1 cached，未发生第二次外发）。模型稿唯一 HARD 为 `role_leaks_fate`，经书内 `GlobalEdit v2` typed role+locator **0 LLM** 修复后正式落 `global_grounding v3`，HARD **0**、INFO 4、UNVER 2；60/60 条自由事实 evidence 均为正式精确 span，workpack unresolved **0**。秘密原子化在生产 Stage4 投影上实测：ch4 仅放 `secret_01`（女装事实），`secret_02`（当偶像的动机）到 ch7 才放，知情主体也随 `known_from_chapter` 递增。全局复核面 115 项中继承 PASS 25、仍 pending 90，**未冒充完成人审**。正式 `outputs` 没有写入：隔离归档的旧 v1 `global_grounding.r3.json` 与正式文件 SHA-256 同为 `74c899019c34f5e721131440739c911a3afe7b5b013cebd3a0843794e656c90c`；全部新稿、ledger 与历史只在隔离副本。⚠ 这是一本文本的一次真实模型实证，不外推为 current-schema corpus 验收；corpus manifest 仍未生成。 |
 | 2026-08-24 | **Stage2 v3 收尾：新旧真实产物逐项对读、补齐召回与集合完整性闸（0 LLM）** | 对同一本《偶像公寓打工日常》完整读取旧 v1、初始 v3、正式证据与关键原文章节，不能只看 schema 更丰富就宣称质量上升：初始 v3 虽有 60/60 精确 SourceSpan、显式 relation visibility、带时点 knowledge event 与 6 条世界规则，却漏了旧稿已有的江尽夏→谢秋愿好感、母子关系及 5 条关系/立场 arc，`rel_11` 还把原文 ch10 已成立的家人关系迟标到 ch18，`secret_03` 同条混入“叛逆动机+A大录取”两个事实，而逐条复核只会审已经抽出的行，发现不了整行漏抽。产线因此新增 `character_set_complete` / `relation_set_complete` 两项全书级人工裁决，与既有 world_rules / secrets 合成四道集合反查；空集合也 pending，集合改动重开，纯 evidence 坐标改动不重开，GlobalReview v1 只放宽 kind、不伪造迁移。隔离副本 `E:\_novel_stage2_v3_finalization_20260824` 再经两轮 `GlobalEdit v2` typed edit（均由 operator preview 确认为不花钱）修正关系时点与方向、补齐旧稿有效关系和 arc、把 `secret_03` 收成单一动机事实；最终 old→new 的 characters / relations / world_rules / secrets / arc_tracks 为 **9→10 / 10→17 / 3→6 / 5→5 / 9→10**，旧稿有效关系与弧线不再因换契约丢失，新稿另保留显式时点和证据优势。正式证据 **70/70** 唯一回取，`evidence_locator_failures=0`，77 条 Stage2 报告 HARD 0；workpack **122/122** 项均 `unresolved_formal_evidence=[]` 且 `auto_decisions=false`。复核仍是 PASS 25 / pending 97，**未冒充完成人审或开 s2 gate**；正式 `outputs` 未改。成本/速度不粉饰：唯一新 wire 仍是上一行的 336.722s、20,439 prompt / 39,029 completion / 31,528 reasoning；旧 v1 provenance 仅有一组不同运行条件下的缓存 usage（18,983 / 21,728 / 17,150），不能作配对墙钟，且 token 表面更低，所以本轮只成立“质量提高”，不成立“更快/更省”。收尾 typed edit 没有新增 wire，故修复本身新增 LLM 成本为 0。⚠ 单书实证不外推为 current-schema corpus；现役 manifest 仍未生成。 |
 | 2026-08-24 | **`stage7.rename` 的 `max_tokens` 16000 → 64000；同批裁定该节点不降 `effort`**（用户裁决；**0 成本改动，本行本身无付费实证**，但依据是 17 次真实调用的账本读数） | **起因是一次真实截断**：当日那本《偶像公寓打工日常》重跑时，第 1 次 `effort=high` 的 `finish_reason=length`、`completion_tokens=reasoning_tokens=16000` —— **满额预算全被推理吃掉，`content` 一个 token 都没有**，随后由 `LADDER` 落到 `low` 才拿到答案 ⇒ 那一次**交付的人名表其实是 low 档产的**。**账本复算**（`_service/ledger.jsonl` 按 `node == stage7.rename` 过滤，17 次）：high 成功 8 次（completion 均 12,289 · reasoning 均 11,064 · **正文均 1,225**）· high **截断 4 次**（三次 16,000、一次 15,999，正文恒 0）· low 5 次（completion 均 6,932 · reasoning 均 5,729 · **正文均 1,203**）。⇒ **high 档截断率 4/12 = 33%**，且**两档的正文需求量几乎相同**——差别全在推理量。**两条路各自的性质因此完全不同**：① 降 `effort` 到 low 是**降本**，单本期望 completion 从 15,837 → 6,932（**−56%**）；② 抬 `max_tokens` 是**买质量的确定性**，让 high 档大概率不再落梯，代价是真跑飞时浪费从 16k 变 64k。**用户裁定取 ②、明确否决 ①**，理由是唯一可能被降档伤到的维度是「名字起得好不好」，而 `rn_taste_unver` 明说全链没有判据 ⇒ FC-13 那五道门全是机械判据、n=1，**证不了这一维**，「未见劣化」不等于「没有劣化」。⚠ 16000 本来就是全链最低档之一：同量级的 `stage6.hook` 用的就是 **64000**（同模型、已实证），`stage2.blueprint` 256000、`stage4.plan` 96000 ⇒ 这个数更像没调过而不是刻意收紧。**核过四处不会被带坏的落点**：① 预算两道闸都过得去（`novel/llm/budget.py::MODEL_BUDGETS` 的 `max_output_tokens=384_000` / `context_limit=1_000_000`，本节点输入仅约 2.4k）；② `tools/current_corpus_paid_preview.py` 早就 import 生产常量 `RENAME_MAX_TOKENS`，**不是第二落点**；③ `tests/test_prov.py` 里那个 16000 只是 provenance 形状测试的夹具值，不钉生产常量；④ **不升 schema 版本**——`NameMapParams.max_tokens: int` 形状没变，存量产物照样读得进来，且 `params` 不进新鲜度计算 ⇒ 当日刚交付那本书实测仍 `fresh/match`。⚠⚠ **一条必须记的副作用**：`max_tokens` 在缓存键里（`novel/llm/transport.py::ChatRequest.cache_payload`）⇒ 本节点**既有缓存整批不再命中**（旧字节不删，只是够不着），「同模型同参数重跑 0 元」对旧的 stage7 跑法不再成立。⚠ **这是一次有尾部风险的下注，不是无损改进**：4 次截断只证明「想要 ≥16000」，没证明尾巴到底有多长。⇒ **回读约定**（写进了 `MAX_TOKENS` 的注释）：下一次跑书要回看这个数，截断若仍发生，说明是推理跑飞而不是预算不够，那时该动的是 `effort` 而不是继续抬上限。⚠ `docs/REQUIREMENTS.md` 的 FC-13 那一条**只销掉 `stage7.rename` 这一半**，`stage3.style` 仍待裁决。**验证**：`tests/test_stage7*.py` + `test_prov` + `test_llm` + `test_invariants` 0 failed；全量非 corpus `pytest` 见下一次回归。本行**没有新的付费调用**——依据全部来自既有账本。 |

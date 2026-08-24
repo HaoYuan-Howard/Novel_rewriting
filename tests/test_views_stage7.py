@@ -15,7 +15,7 @@ import os
 
 import pytest
 
-from novel.errors import UpstreamMissing
+from novel.errors import HumanEditProtected, UpstreamMissing
 from novel.stages.stage7.subs import apply_subs
 from novel.views.stage7 import stage7_view
 from tests import corpus, sandbox
@@ -120,6 +120,38 @@ def test_a_missing_artifact_is_a_terminal_state(box):
 def test_stage7_view_rejects_an_unknown_synthetic_book(tmp_path):
     with pytest.raises(UpstreamMissing):
         stage7_view(tmp_path, '9999999999999999999')
+
+
+def test_stage7_view_closes_on_legacy_judged_paths(tmp_path, monkeypatch):
+    """旧 NameMap 的 judged 键是显式 legacy，不退化成缺章，也不渲染旧结论。"""
+    from types import SimpleNamespace
+    from novel.views import stage7 as view
+
+    (tmp_path / '书名_123').mkdir()
+    art = SimpleNamespace(judged={'stage5/shallow/ch01.json': object()})
+    store = SimpleNamespace(
+        path=lambda rel: tmp_path / '书名_123' / rel,
+        read_own=lambda *_args, **_kwargs: (art, {}),
+    )
+    monkeypatch.setattr(view, 'ArtifactStore', lambda _ctx: store)
+    monkeypatch.setattr(view, 'artifact_state', lambda *_args: object())
+
+    with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
+        stage7_view(tmp_path, '123')
+
+
+def test_stage7_view_reports_live_legacy_before_missing_downstream(tmp_path):
+    """只有旧 Stage5 目录、没有 NameMap 时仍是 legacy，不得退化成 404。"""
+    book = tmp_path / '书名_123'
+    (book / 'stage5' / 'shallow').mkdir(parents=True)
+    before = _tree(tmp_path)
+
+    with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
+        stage7_view(tmp_path, '123')
+
+    assert _tree(tmp_path) == before
+    assert not (book / 'stage7' / 'name_map.json').exists()
+    assert not (tmp_path / '_service' / 'ledger.jsonl').exists()
 
 
 def test_the_view_writes_nothing(box):

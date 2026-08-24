@@ -32,7 +32,7 @@ export interface StageColumn {
   key: string
   items: ArtifactView[]
   isStage5: boolean
-  modes: string[]
+  chaptersDone: number
   done: boolean | null
 }
 
@@ -51,8 +51,6 @@ export interface BookView {
 }
 
 function viewOf(n: NovelRow): BookView {
-  const modes = (n.stage5_modes ?? []).filter((x) => x.charAt(0) !== '_')
-
   const columns: StageColumn[] = STAGES.map((s) => {
     const artifacts = n.stages[s.key] ?? []
     const done = n.stage_done[s.key] ?? null
@@ -73,7 +71,7 @@ function viewOf(n: NovelRow): BookView {
               : null,
       })),
       isStage5: s.key === 'stage5',
-      modes,
+      chaptersDone: (n.chapters_done[s.key] ?? []).length,
       done,
     }
   })

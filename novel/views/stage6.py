@@ -28,7 +28,9 @@ from contracts.schema.api import HookApprovedLine, HookCandidateLine, Stage6View
 from contracts.schema.stage6 import Hook
 from novel import paths, prov
 from novel.core.measure import measure
+from novel.errors import HumanEditProtected
 from novel.orchestrator.state import artifact_state, readonly_ctx
+from novel.stages.stage5.measure import is_legacy_stage5_rel, legacy_stage5_paths
 from novel.stages.stage6 import semantic
 from novel.store import ArtifactStore
 
@@ -47,8 +49,22 @@ def stage6_view(base: str | os.PathLike[str], sid: str) -> Stage6View:
     novel_dir = paths.resolve_novel_dir(base, sid)
     store = ArtifactStore(readonly_ctx(novel_dir, NODE, prov.code_version()))
 
+    live_legacy = legacy_stage5_paths(store)
+    if live_legacy:
+        raise HumanEditProtected(
+            f'legacy_incompatible：发现旧 Stage5 双臂路径 {live_legacy[:8]}。'
+            '旧产物只读保留，不能退化成 Stage6 missing，也不能据此触发重跑',
+            hint='在独立 canonical Stage5 base 重建成稿后，再从 Stage6 继续消费链',
+        )
     st = artifact_state(store, REL)
     art, _raw = store.read_own(Hook, REL)
+    legacy = sorted(rel for rel in art.judged if is_legacy_stage5_rel(rel))
+    if legacy:
+        raise HumanEditProtected(
+            f'legacy_incompatible：{REL} 的 judged 仍绑定旧 Stage5 双臂路径 {legacy}。'
+            '旧产物只读保留，不能在当前 Stage6 视图展示，也不能据此触发重跑',
+            hint='在独立 canonical Stage5 base 重建成稿后，再从 Stage6 继续消费链',
+        )
 
     approved_slot = art.approved.slot if art.approved is not None else None
     assessments = semantic.current_assessments(store, art)

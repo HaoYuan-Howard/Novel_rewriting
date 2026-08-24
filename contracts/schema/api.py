@@ -38,7 +38,6 @@ from contracts.invariants import (
     APPROVAL_SEEN,
     CHAPTER_LABEL_ANOMALY,
     DELIVERY_MODES,
-    DEPTH_MODES,
     HINGE_KINDS,
     HOOK_APPROACHES,
     HOOK_SLOTS,
@@ -57,6 +56,7 @@ from contracts.invariants import (
     SECRET_SETUP_KINDS,
     SEVERITY,
     STAGES,
+    STAGE5_REVIEW_STATE,
     STRUCTURAL_ROLES,
     STAGE0_SEGMENT_KINDS,
     STAGE1_SEGMENT_KINDS,
@@ -109,6 +109,7 @@ InboxKind = Literal[INBOX_KIND]
 InboxAttention = Literal[INBOX_ATTENTION]
 InboxDeliveryEffect = Literal[INBOX_DELIVERY_EFFECT]
 AnchorCoverageState = Literal[ANCHOR_COVERAGE_STATE]
+Stage5ReviewState = Literal[STAGE5_REVIEW_STATE]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -711,7 +712,6 @@ class PreviewRequest(StrictModel):
 
     sid: Annotated[str, Field(min_length=1)] | None
     node: str = Field(min_length=1)
-    mode: str | None = None
     flags: list[str] = Field(default_factory=list)
 
 
@@ -793,15 +793,13 @@ class ApprovalAction(FrozenModel):
     kind: str = Field(min_length=1)
     label: str = Field(min_length=1)
     extra: list[str] | None = None
-    mode: str | None = None
 
 
 class ApprovalDoc(StrictModel):
-    v: Literal[1] = 1
+    v: Literal[2] = 2
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
     seen: dict[SeenKey, bool]
-    deep: list[int] = Field(default_factory=list)
     writing: bool = False
     spawns: dict[GateKey, list[ApprovalAction]] = Field(default_factory=dict)
 
@@ -811,8 +809,6 @@ class ApprovalDoc(StrictModel):
             raise ValueError('gate must contain exactly s0..s7')
         if set(self.seen) != set(APPROVAL_SEEN):
             raise ValueError('seen must contain exactly read/global')
-        if self.deep != sorted(set(self.deep)) or any(n < 1 for n in self.deep):
-            raise ValueError('deep must be sorted, unique positive chapter ordinals')
         return self
 
 
@@ -821,16 +817,6 @@ class ApprovalBackfillResult(StrictModel):
 
     approvals: ApprovalDoc
     backfilled: list[GateKey] = Field(default_factory=list)
-
-
-class DeepSelectionRequest(StrictModel):
-    deep: list[int] = Field(default_factory=list)
-
-    @model_validator(mode='after')
-    def _selection_is_canonical(self) -> DeepSelectionRequest:
-        if self.deep != sorted(set(self.deep)) or any(n < 1 for n in self.deep):
-            raise ValueError('deep must be sorted, unique positive chapter ordinals')
-        return self
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1429,7 +1415,7 @@ class Stage4IndexRow(FrozenModel):
     唯一来源是 `/check/stage4`（`R-11.4`），前端要并排显示就去 join 那份报告。"""
 
     output_ordinal: int = Field(ge=1)
-    #: 深度臂选择的首要决策依据。来自同一份 `plan_chapters.json`，随索引一次下发，
+    #: 章级阅读/写作导航的主要目标。来自同一份 `plan_chapters.json`，随索引一次下发，
     #: 不让前端为了 N 章再发 N 次章级请求。
     chapter_goal: str = Field(min_length=1)
     budget_chars: int | None
@@ -1495,8 +1481,8 @@ class MaterialView(StrictModel):
     """写手拿到的下发面。**与写手同一份**（`prompts.build_material(...).blocks`，
     `R-11.8` 在读屏上的对应物：显示的材料 = 真发出去的材料，不是重新组装的第二份）。
 
-    ⚠ 按**闭卷**臂组装（`with_source_text=False`）：开卷臂多出的那块就是源章原文，
-    而原文在本屏单独有落点（`source_text`），不重复下发。
+    按唯一闭卷写作契约组装；源章原文只在本屏的 `source_text` 有落点，
+    不是发给写手的 material block。
     """
 
     blocks: list[str] = Field(min_length=1)
@@ -1543,7 +1529,6 @@ class DraftAlignView(StrictModel):
 class DraftView(StrictModel):
     """一份成稿卡（正式或 `.INVALID`，由 `invalid` 区分）。"""
 
-    mode: Literal[DEPTH_MODES]
     relpath: str = Field(min_length=1)
     invalid: bool
     round: int = Field(ge=1)
@@ -1576,17 +1561,28 @@ class DraftView(StrictModel):
 
 
 class Stage5IndexRow(FrozenModel):
-    """章索引一行。`chars` / `overlap` / `freshness` 取**主稿**（deep 优先）；
+    """章索引一行。`chars` / `overlap` / `freshness` 取 canonical 稿；
     没有成稿的章三格全 `null`。"""
 
     output_ordinal: int = Field(ge=1)
     budget_chars: int | None
-    modes: list[Literal[DEPTH_MODES]]
-    invalid_modes: list[Literal[DEPTH_MODES]]
-    dup: bool
+    has_draft: bool
+    invalid: bool
     chars: int | None
     overlap_excl_verbatim: float | None
     freshness: Freshness | None
+
+
+class Stage5TrimAuditView(FrozenModel):
+    """当前章仍待人工销账的超上限事实。
+
+    这里只投影人做决定所需的事实与现算上下文；hash 绑定由专用
+    ``retain-pretrim`` 路由在执行时重新从盘上读取，浏览器不代抄锁。
+    """
+
+    output_ordinal: int = Field(ge=1)
+    reason: str = Field(min_length=1)
+    context: str = Field(min_length=1)
 
 
 class Stage5View(StrictModel):
@@ -1594,7 +1590,7 @@ class Stage5View(StrictModel):
 
     ⚠ `ctx_exists=false` ⇒ `materials=null`（**不显示假材料**，`04_delivery.md:134`）
     ——给「先跑 stage4」，左半边缺席、右半边照常列已有成稿。
-    ⚠ 某章两臂皆无稿 ⇒ 200 且 `drafts=[]`（「还没写」不是错误）。
+    ⚠ 某章无 canonical 稿 ⇒ 200 且 `drafts=[]`（「还没写」不是错误）。
     """
 
     sid: str = Field(min_length=1)
@@ -1606,7 +1602,8 @@ class Stage5View(StrictModel):
     written: int = Field(ge=0)
     invalid: int = Field(ge=0)
     missing: list[int]
-    duplicates: list[int]
+    legacy_incompatible: bool = False
+    legacy_paths: list[str] = Field(default_factory=list)
 
     chapters: list[int] = Field(min_length=1)
     ordinal: int = Field(ge=1)
@@ -1617,6 +1614,8 @@ class Stage5View(StrictModel):
     materials: MaterialView | None
     drafts: list[DraftView]
     invalid_drafts: list[DraftView]
+    #: ``null`` = 本章没有一份 current、未销账的 TrimAudit。
+    trim_audit: Stage5TrimAuditView | None = None
 
     ctx_state: ArtifactState
 
@@ -1626,6 +1625,8 @@ class Stage5View(StrictModel):
             raise ValueError(f'ordinal={self.ordinal} 不在 chapters={self.chapters} 里')
         if not self.ctx_exists and self.materials is not None:
             raise ValueError('ctx 不在盘上而 materials 有内容——假材料（`04_delivery.md:134`）')
+        if self.legacy_incompatible != bool(self.legacy_paths):
+            raise ValueError('legacy_incompatible 与 legacy_paths 必须同时出现或缺席')
         return self
 
 
@@ -1638,7 +1639,6 @@ class ReviewIndexRow(FrozenModel):
     产物侧 `Review.counts` 是稀疏的（登记过的病），出线侧修掉。"""
 
     output_ordinal: int = Field(ge=1)
-    mode: Literal[DEPTH_MODES] | None
     round: int | None
     chars: int | None
     budget_chars: int | None
@@ -1655,7 +1655,6 @@ class ReviewChapterView(StrictModel):
 
     output_ordinal: int = Field(ge=1)
     findings: list[Finding]
-    mode: Literal[DEPTH_MODES] | None
     chars: int | None
     budget_chars: int | None
     round: int | None
@@ -1690,6 +1689,8 @@ class ReviewView(StrictModel):
     title: str = Field(min_length=1)
 
     review_seq: int = Field(ge=1)
+    review_state: Stage5ReviewState
+    review_reasons: list[str] = Field(default_factory=list)
     sources: ReviewSources
     #: 全书（chapters+book 全部结论）按 sev 现数，四键恒在。
     #: ⚠ 不读产物的 `counts` 字段——那份是稀疏 Counter（`Review.counts` 的登记病）。
@@ -1717,6 +1718,10 @@ class ReviewView(StrictModel):
         for row in self.index:
             if set(row.finding_counts) != want:
                 raise ValueError(f'ch{row.output_ordinal} 的 finding_counts 键不全')
+        if self.review_state == 'missing':
+            raise ValueError('missing Review 应由路由返回 404，不得伪装成 ReviewView')
+        if (self.review_state == 'fresh') != (not self.review_reasons):
+            raise ValueError('Review fresh 当且仅当 review_reasons 为空')
         return self
 
 
@@ -1736,7 +1741,6 @@ class DraftEditRequest(StrictModel):
     登记为已知限制，不在 API 层造第二套锁。
     """
 
-    mode: Literal[DEPTH_MODES]
     segments: list[ChapterSegment] = Field(min_length=1)
 
     @model_validator(mode='after')

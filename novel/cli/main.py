@@ -85,8 +85,6 @@ def _parser() -> argparse.ArgumentParser:
             help='已有书 id；stage0.remove --source 摄入新书时省略',
         )
         p.add_argument('--base', required=True, help='<Output> 根目录')
-        p.add_argument('--mode', choices=sorted({m for s in NODES.values()
-                                                 for m in s.modes}) or None)
         for f in _ALL_FLAGS:
             if f in VALUED_FLAGS:
                 p.add_argument(f, metavar='VALUE', help=VALUED_FLAGS[f])
@@ -715,12 +713,10 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
 
 
 def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
-    """stage5 的九条路。**先按节点分两支，再按 flag 分**——形态照 `_run_stage7`。
+    """Stage5 的 canonical 闭卷写作与全书验收入口。
 
-    ⚠⚠ **本层是全链唯一有「臂」的层**。单臂维护入口仍用
-    `stage5.write --mode deep|shallow`；正常整书入口用
-    `stage5.write --deep 1,2,3 --shallow-rest`，一次选择两臂并发写作。
-    人工深度选择持久化在 `_service/approvals/`，不混进小说产物或 provenance。
+    不带 `--chapters` 写全书；带它只写指定阅读序章。旧 deep/shallow 布局只作
+    `legacy_incompatible` 证据，不再存在可执行选择器。
 
     ⚠ 写作节点**没有 `--check-only`**：机械复检由 `stage5.review` 承担 ⇒ 对外 check 节点是 review。
     ⚠ `stage5.semantic`（书级语义审判）于 2026-08-17 整节点下线，本函数不再有那一支。
@@ -772,24 +768,12 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     # ── 以下是 `stage5.write` ────────────────────────────────────────────────
-    if {'--deep', '--shallow-rest'} <= tokens:
-        raw_deep = _valued(flags, '--deep') or ''
-        selected = () if raw_deep == 'none' else _chapters_of(raw_deep)
-        deep_ctx = RunContext.open(
-            ctx.novel_dir.parent, ctx.sid, ctx.node, paid=True, mode='deep')
-        shallow_ctx = RunContext.open(
-            ctx.novel_dir.parent, ctx.sid, ctx.node, paid=True, mode='shallow')
-        reports = write.run_selected(
-            deep_ctx, _llm_client(deep_ctx),
-            shallow_ctx, _llm_client(shallow_ctx),
-            selected,
-        )
-        for mode in ('deep', 'shallow'):
-            if mode in reports:
-                print(render(reports[mode]))
-        print('  ✓ 深度与浅层两条写作臂已并发完成，整本 draft.md 已重拼')
-        return (X.OK if all(report.passed for report in reports.values())
-                else X.CHECK_FAILED)
+    if '--rebuild-draft' in tokens:
+        if chapters:
+            raise TerminalState('--rebuild-draft 是全书纯投影恢复，不接受 --chapters')
+        rel = write.run_rebuild_draft(ctx)
+        print(f'  ✓ 已从 canonical 章节零成本重建 {rel}')
+        return X.OK
 
     if '--dry-run' in tokens:
         system, user, _mat = write.build_prompt(ctx, chapters)
@@ -798,18 +782,20 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     if '--recheck' in tokens:
-        report = write.run_recheck(ctx)
+        report = write.run_recheck(ctx, chapters)
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--revalidate' in tokens:
         report = write.run_revalidate(
             ctx, actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '')
+            reason=_valued(flags, '--reason') or '', chapters=chapters)
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--apply-edit' in tokens:
+        if chapters:
+            raise TerminalState('--apply-edit 由编辑文件内的 output_ordinal 绑定章号，不接受 --chapters')
         report = write.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
@@ -943,7 +929,7 @@ def _cmd_preview(a: argparse.Namespace) -> int:
     # 缺必填项时渲染占位符并标注，而不是摊开一条真跑必然 exit 2 的半截命令
     # （2026-08-16 复盘 §六.1）。占位符本身在真跑那一趟仍会被 `validate_run` 拒。
     for i, step in enumerate(N.build_steps(a.node, a.sid, flags,
-                                           base=a.base, mode=a.mode,
+                                           base=a.base,
                                            placeholders=True)):
         print(f'[{i + 1}] {step.label}')
         print(f'    $ {N.shell_line(step.argv)}')
@@ -959,9 +945,8 @@ def _cmd_run(a: argparse.Namespace) -> int:
     flags = _flags_of(a)
     # 手敲 CLI 不能绕过编排器的节点契约。此前 `stage2.global --check-only`
     # （该节点不接受这条跑法）先被 `is_paid` 倒向“会花钱”，显示成“加 --yes”；
-    # 真加了又会落到默认付费分支。更隐蔽的一例是给无臂节点传 `--mode`，它直到
-    # `RunContext` 才抛裸 `ValueError`。两条入口都必须先走同一份校验。
-    N.validate_run(a.node, flags, a.mode)
+    # 真加了又会落到默认付费分支。入口先走与 preview 共用的节点校验。
+    N.validate_run(a.node, flags)
     paid = N.is_paid(a.node, flags)
     if paid and not a.yes:
         raise ApprovalRequired(
@@ -970,15 +955,12 @@ def _cmd_run(a: argparse.Namespace) -> int:
             f'要先看会发出去什么，用 `--dry-run`（0 成本）')
     # ⚠ `paid` 由 `is_paid` 算，**不由 `NODES[node].paid` 推**：
     # 真正的贵贱是 `(node, flags)` 二元组的函数，而它只有一处算（`R-11.7`）。
-    # ⚠⚠ `--mode` **必须传下去**：它此前被解析出来就丢掉了，而全链唯一有臂的
-    # `stage5.write` 从此只能靠一个默认值猜自己是哪条臂——那正是「臂与 tag 被拼成
-    # 同一个串」那次事故的同一个形状（判据在错的臂上恒假，而闸门不报错）。
     if a.node == 'stage0.remove' and '--source' in N.flag_tokens(flags):
         return _run_stage0_source(a.base, a.sid, flags)
     if a.sid is None:
         raise TerminalState(
             f'{a.node} 要已有书 sid；只有 stage0.remove --source 摄入新书时可以省略')
-    ctx = RunContext.open(a.base, a.sid, a.node, paid=paid, mode=a.mode)
+    ctx = RunContext.open(a.base, a.sid, a.node, paid=paid)
     # Stage2 人工评测是**运行边界**，不是某个编排器的礼貌约定。任何调用方
     # （手敲 CLI、前端 jobs、headless agent）最终都要经过这里；0 成本复检/人工修复
     # 仍可在闸关闭时运行，否则人连开闸的恢复路都进不去。
@@ -1031,8 +1013,8 @@ def _cmd_state(a: argparse.Namespace) -> int:
                              f' [幽灵边 {len(art.ghosts)}]' if art.ghosts else ''])
             print(f'      {"有" if art.exists else "无"}  {art.rel}'
                   f'  {art.freshness}/{art.reason}{flags}')
-        for mode, chs in st.chapters_done.items():
-            print(f'      {mode}: {len(chs)} 章已落盘')
+        if st.chapters_done:
+            print(f'      canonical: {len(st.chapters_done)} 章已落盘')
     return X.OK
 
 
@@ -1139,7 +1121,7 @@ def _cmd_jobs(a: argparse.Namespace) -> int:
     for r in recs:
         code = '—' if r.exit_code is None else r.exit_code
         print(f'  {r.state:8} exit={code:<4} {r.job_id}  '
-              f'{r.start.node}{"/" + r.start.mode if r.start.mode else ""}  {r.start.sid}')
+              f'{r.start.node}  {r.start.sid}')
         if r.note:
             print(f'      ⚠ {r.note}')
     return X.OK
