@@ -161,6 +161,32 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '**盘上零存量**（全 `outputs/` 找不到一份 `hook_edit.json`）⇒ 本次代价为零。'
         '它是人工决策集不是产出物，下次写的时候按新取值面写即可',
     ),
+    'stage7/name_map.json': (
+        2,
+        '2026-08-24 stage7 前置整改批：`NameDecision` 加跨字段 validator——'
+        '`renamed=true` 时 `not_renamed_reason` **只准是 `null`**。'
+        '契约注释早就这么写着，但 `_build` 一直原样透传 ⇒ 盘上空串合法通行，'
+        '收窄之后带 `\'\'` 的存量一律读不进来。'
+        '（同批的 `ExtraSub.origin` 加 `adopted` 一格是 Literal **加**格，'
+        '旧值 `human` 仍合法 ⇒ 那一项不构成破坏。）',
+        '`stage7.rename` 重跑（**付费**）。⚠ 重跑产新决策 ⇒ `approved` 一并失效，'
+        '必须重新走 `stage7.approve` 的 actor / reason / 完整 subject SHA-256，'
+        '旧 `book_txt` 也要重新 `stage7.assemble`。'
+        '⚠⚠ **`--apply-edit` 不是这一格的 0 成本出路**（别照抄别处那句）：'
+        '`run_apply_edit` 会先 `store.read_own(NameMap, ...)` 读盘上那份旧决策集，'
+        '而版本闸恰恰在那一步拒掉 v1 ⇒ 那条路进不去。'
+        '⚠⚠ **不能宣称盘上代价为零**：`outputs/` 现有 1 本走完全链的书'
+        '（`偶像公寓打工日常_2066575217393144601`），它的 `stage7/name_map.json` 是 v1、'
+        '已人工定稿且已交付 `_rewriting.txt`（22044 字 / 18 章）'
+        '⇒ 升版后该书 stage7 读不进来，须付费重跑并重新定稿。'
+        '两条减轻情节：它的 `RULES` 指纹在本批之前**就已经 stale**'
+        '（`rn_derived_alias_candidate` 落地晚于那次跑），而本批改了 `RENAME_SYS` 字节 ⇒ '
+        '它要变 current 本来就得付费重跑一次。'
+        '⚠ `outputs/_ab/flash/` 那两份 v1 快照不在此列——它们已由同表 '
+        '`stage6/hook.json` 那一条明确退役为**只读历史实验证据**，且本批之前就读不进来'
+        '（`stage0/removal_report.json` v1 而当前 v3、`stage1/*` v1 而当前 v2，'
+        '还带着阶段 C 已下线的 `stage0/_audit/edit_1.json`）',
+    ),
 }
 
 

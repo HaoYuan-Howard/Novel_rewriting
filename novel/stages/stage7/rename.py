@@ -75,7 +75,35 @@ def book_txt_rel(store: ArtifactStore) -> str:
 
 #: 一次调用要给几十个角色各出一套新名。⚠ 它进 `_provenance.params`——
 #: 换了这个数，产物里说得出来（原型完全没有这个键）。
-MAX_TOKENS = 16000
+#:
+#: ⚠⚠ **2026-08-24 从 16000 提到 64000（用户裁决）。理由是账本，不是手感。**
+#: 本节点 17 次历史调用（`<base>/_service/ledger.jsonl` 按 node 过滤）：
+#:
+#: | 档 | n | completion 均 | reasoning 均 | **正文均** |
+#: |---|---|---|---|---|
+#: | high·成功 | 8 | 12,289 | 11,064 | **1,225** |
+#: | high·**截断** | 4 | 16,000 | 16,000 | **0** |
+#: | low | 5 | 6,932 | 5,729 | **1,203** |
+#:
+#: ⇒ **high 档截断率 4/12 = 33%**，每次白烧满额 16000 且 `content` 一个 token 都没有
+#: （`finish_reason='length'`，推理吃光了预算），随后由 `LADDER` 落到 `low` 救场
+#: ——**交付的人名表因此常常是 low 档产的**。16000 在全链本来就是最低档之一：
+#: 同量级的 `stage6.hook` 用的就是 **64000**，`stage2.blueprint` 是 256000。
+#:
+#: ⚠ **这不是省钱改动，是买质量的确定性**：正文需求量两档几乎相同（1225 vs 1203），
+#: 真正省钱的是把 `effort` 降到 `low`（单本期望 15,837 → 6,932，−56%），
+#: 而那条**被明确否决**了（2026-08-24 用户裁决）——因为唯一可能被降档伤到的维度是
+#: 「名字起得好不好」，而 `rn_taste_unver` 明说全链没有判据。抬上限让 high 档大概率
+#: 不再落梯 ⇒ 交付的映射恒出自 high 臂。`NodeSpec.effort` 保持不覆盖（仍是 high）。
+#: ⚠ **代价照实说**：真跑飞时浪费从 16k 变 64k。4/12 的截断率说明跑飞不罕见，
+#: 而 4 次截断只证明「想要 ≥16000」，没证明尾巴到底有多长 ⇒ 这是一次**有尾部风险的下注**，
+#: 不是无损改进。下一次跑书要回读这个数：截断若仍发生，说明是推理跑飞不是预算不够，
+#: 那时该动的是 `effort` 而不是继续抬上限。
+#: ⚠ 两道预算闸都过得去：`novel/llm/budget.py::MODEL_BUDGETS` 的
+#: `max_output_tokens=384_000`、`context_limit=1_000_000`，而本节点输入仅约 2.4k。
+#: ⚠ **它在缓存键里**（`novel/llm/transport.py::ChatRequest.cache_payload`）
+#: ⇒ 改这个数会让本节点**既有缓存整批不再命中**（旧字节不删，只是够不着）。
+MAX_TOKENS = 64000
 
 
 # 本节点的 consumed 投影统一登记在 `novel.consumption`；读写与 freshness 共用同一函数。
@@ -239,19 +267,37 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
 
     **真跑、`--recheck`、`--apply-edit` 走的都是这一个函数。**
     """
-    chars_out = [{
-        'char_id': c.get('char_id'),
-        # ⚠ **`old_canonical` 由代码从 registry 回填**，不是模型写的，
-        #   人的 patch 也改不到它（`R-10.15`）。
-        'old_canonical': (up.registry.get(c.get('char_id')) or {}).get('canonical') or '',
-        'new_canonical': (c.get('new_canonical') or '').strip(),
-        'renamed': bool(c.get('renamed')),
-        'not_renamed_reason': c.get('not_renamed_reason'),
-        'aliases': [{'old': (a.get('old') or '').strip(),
-                     'new': (a.get('new') or '').strip()}
-                    for a in (c.get('aliases') or [])],
-        'reason': c.get('reason') or '',
-    } for c in (model_out.get('characters') or [])]
+    # ⚠⚠ **`renamed=true` 那一侧的 `not_renamed_reason` 由代码归零，不是模型的自由度。**
+    #    契约（`contracts/schema/stage7.py::NameDecision`）早就写着「必须是 null」，
+    #    但这一行此前是原样透传 ⇒ 盘上两本 flash 书 **7/7 全是空串**，
+    #    而 `rn_no_reason` 只查另一侧 ⇒ 「null」「空串」「缺席」三种拼法谁也没在看。
+    #    归一放在这里（**唯一那处组装口**），载体只兜底。
+    # ⚠ 归一本身不出声（丢掉一个空串没有信息），但**丢掉实质内容要出声**：
+    #    那说明模型把「为什么不改」写到了一个改了名的角色上，是它误读了契约。
+    dropped_reason: list[str] = []
+    chars_out: list[dict] = []
+    for c in (model_out.get('characters') or []):
+        renamed = bool(c.get('renamed'))
+        raw_reason = c.get('not_renamed_reason')
+        if renamed:
+            if (raw_reason or '').strip():
+                dropped_reason.append(f"{c.get('char_id')}：{(raw_reason or '').strip()[:20]}")
+            reason_out = None
+        else:
+            reason_out = raw_reason
+        chars_out.append({
+            'char_id': c.get('char_id'),
+            # ⚠ **`old_canonical` 由代码从 registry 回填**，不是模型写的，
+            #   人的 patch 也改不到它（`R-10.15`）。
+            'old_canonical': (up.registry.get(c.get('char_id')) or {}).get('canonical') or '',
+            'new_canonical': (c.get('new_canonical') or '').strip(),
+            'renamed': renamed,
+            'not_renamed_reason': reason_out,
+            'aliases': [{'old': (a.get('old') or '').strip(),
+                         'new': (a.get('new') or '').strip()}
+                        for a in (c.get('aliases') or [])],
+            'reason': c.get('reason') or '',
+        })
 
     subs, kept, problems = build_subs(chars_out, extra_subs, up.owners,
                                       universe=set(up.mat.universe))
@@ -307,7 +353,7 @@ def _build(ctx: RunContext, up: _Upstreams, model_out: dict,
         family_members=up.family_members,
         dup=up.dup, missing=up.missing, invalids=up.invalids,
         post_units=post_units, title_line=_title_line(up.title, subs, kept),
-        derived_aliases=derived_aliases)
+        dropped_reason=dropped_reason, derived_aliases=derived_aliases)
 
     art = NameMap(
         **name_map,
@@ -347,8 +393,17 @@ def _judge(ctx: RunContext, store: ArtifactStore, art: NameMap,
            up: _Upstreams) -> list[Outcome]:
     """**`--check-only` 与落盘闸门共用。** 判的是产物里存的那份 `book[]`。"""
     stale, missing = _judged_drift(art, up)
+    # ⚠⚠ **来源账那六条边的结论一直算得出来，此前只有 `stage7.assemble` 在算。**
+    #    而人是在 `stage7.approve` 那一步拍板的，approve 在 assemble **之前** ⇒
+    #    今天一个人可以给「照旧人物表算出来的映射」签字，直到组装才被拒。
+    #    ⇒ 复检这一步也要报（`rn_upstream_stale`，info，assemble 那道真闸原样不动）。
+    # ⚠ 走 `freshness_of_inputs` 而不是 `freshness`：本函数也判**还没落盘**的重建产物
+    #   （`--recheck` / `--apply-edit` / `--adopt-residual`），读盘会判成上一份。
+    recorded = art.provenance.model_dump(by_alias=True).get('inputs')
+    fresh = store.freshness_of_inputs(REL, recorded)
     return checks.check(
         findings=list(art.book),
+        upstream=(fresh.state, fresh.reason, len(recorded or {})),
         scanned=f'{len(art.characters)} 个角色 · {len(art.subs)} 条映射 · '
                 f'{len(art.kept)} 条保留 · {len(up.recs)} 章成稿',
         baseline_line=_baseline_line(art),
@@ -679,8 +734,13 @@ def run_adopt_residual(
         raise TerminalState('没有可安全采纳的 high residual：空建议、冲突和已覆盖项均已跳过')
 
     extra = [item.model_dump(mode='json', by_alias=True) for item in art.extra_subs]
+    # ⚠ `origin='adopted'`，**不是 `'human'`**：这几条是残留探针算出来的
+    #   `unit → suggest`，人做的决定是「采纳这一批」而不是逐条敲的字。
+    #   记成 `human` 会让产物说假话——盘上某本 4 条 `孙家/孙府/宋家/宋府` 就是那么记的，
+    #   而 `ExtraSub.origin` 的注释本人预言过「一旦有第二条来源，这一格就是唯一能分开的地方」。
+    #   ⚠ 判定上两者同权（见那一格的注释），这里分开的是**审计**。
     extra.extend(
-        ExtraSub(old=old, new=new, origin='human').model_dump(mode='json', by_alias=True)
+        ExtraSub(old=old, new=new, origin='adopted').model_dump(mode='json', by_alias=True)
         for old, new in sorted(adopted.items())
     )
     model_out = {

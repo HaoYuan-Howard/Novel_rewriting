@@ -27,7 +27,7 @@ from collections import Counter
 
 from contracts.invariants import (
     DERIVED_ALIAS_SUFFIXES, RESIDUAL_CONTEXT_CHARS, RESIDUAL_HIGH_STEMS,
-    RESIDUAL_HIT_CHARS,
+    RESIDUAL_HIT_CHARS, RESIDUAL_INTERRUPT_MARKS, RESIDUAL_INTERRUPT_RUN,
 )
 from novel.core.naming import strip_distinguisher
 
@@ -164,6 +164,48 @@ def mask_known(text: str | None, surfaces: set[str] | frozenset[str]) -> str:
     return pat.sub(lambda m: '　' * len(m.group()), text or '')
 
 
+def _interrupt_run(text: str, at: int) -> str:
+    """`at` 处起**同一个**中断号连成的那一串；不成串时空串。
+
+    「被叫到一半的称呼」在中文里的字节形状是**成对的全角中断号**（`……` / `——`）。
+    ⚠ **单个字符一律不算**：`RESIDUAL_INTERRUPT_RUN` 那一格写着为什么——
+    这条信号喂的是 `high`，而 `high` 是 `--adopt-residual` 的可采纳面。
+    """
+    ch = text[at:at + 1]
+    if ch not in RESIDUAL_INTERRUPT_MARKS:
+        return ''
+    end = at
+    while end < len(text) and text[end] == ch:
+        end += 1
+    run = text[at:end]
+    return run if len(run) >= RESIDUAL_INTERRUPT_RUN else ''
+
+
+def _merge_low_windows(rows: list[tuple[int, dict]], text: str) -> list[dict]:
+    """把**同一个姓字**在同一处窗口里重叠的 `low` 行并成一行。`rows` 按位置升序。
+
+    实测形状：「我**迟迟**未登灵网」里 `迟` 命中两次（i 与 i+1），今天报成两行
+    （`迟迟未` + `迟未登`）——**同一处**却要人读两遍，而同书这样的成对还有一处。
+
+    ⚠⚠ **只并 `low`。** `high` 行带着 `unit → suggest` 这一对，
+    `--adopt-residual` 直接拿它写 `extra_subs`；把两行 high 并起来就等于伪造一对
+    没人验算过的替换。合并在这里**纯粹是呈现**，不许碰可采纳面。
+
+    ⚠ 调用方的 `residual[st]` 计数已经在合并**之前**加过了 ⇒ 覆盖率分子不受影响。
+    """
+    merged: list[tuple[int, dict]] = []
+    for at, row in rows:
+        prev = merged[-1] if merged else None
+        if (prev is not None
+                and prev[1]['confidence'] == 'low' and row['confidence'] == 'low'
+                and at - prev[0] < RESIDUAL_HIT_CHARS):
+            # 命中窗口相交 ⇒ 是同一处。把 `hit` 撑到覆盖合并后的整段。
+            prev[1]['hit'] = text[prev[0]:at + RESIDUAL_HIT_CHARS]
+            continue
+        merged.append((at, row))
+    return [row for _at, row in merged]
+
+
 def derived_alias_scan(
     post_units: list[tuple[str, str]],
     characters: list[dict],
@@ -238,11 +280,17 @@ def residual_scan(pre_units: list[tuple[str, str]], post_units: list[tuple[str, 
     覆盖率低是【由构造决定的】，而不是「这些残留是普通词」的证据。**
     实测 `沈` 5 次里 3 次是漏网的「沈家」⇒ 40%；`孙` 10 次里 4 次是「孙家」⇒ 60%。
     两个都落在「基本是普通词」那一侧，而**两个都是真漏网**。
-    ⇒ **两个信号不一致时以 `confidence` 为准**：它是结构信号（`<姓>家/府/氏/宅/门`），
-    不受这个反馈回路影响，实测 6/6 全真。排序已经把 `high` 排在最前。
+    ⇒ **两个信号不一致时以 `confidence` 为准**：它是结构信号（三个来源见
+    `contracts/invariants.py::RESIDUAL_CONFIDENCE`），不受这个反馈回路影响。
+    排序已经把 `high` 排在最前。
 
     **基线是判据 31 强制的**：没有分母，「residual 只有 4 条」读不出是探针管用
     还是探针瞎了。所以**残留为 0 时也要输出这四个数**。
+
+    ⚠⚠ **`baseline[st].residual` 与 `len(out)` 是两个数，不许当成一个。**
+    前者是**处数**（覆盖率的分子，量在合并之前）；后者是**呈现行数**
+    （`_merge_low_windows` 把同一处的重叠窗口并过）。两个数会**并排出现在
+    `rn_residual_stem` 同一条 finding 里**，所以那条 detail 必须把两个都读出来。
 
     ⚠ **它只报候选，不改任何东西。** 剩余里必然混着固有假阳（「许久」「谈话」），
     靠调阈值消不掉（中文没有词边界）——处置是人勾选 → `extra_subs` → `--apply-edit`
@@ -286,10 +334,14 @@ def residual_scan(pre_units: list[tuple[str, str]], post_units: list[tuple[str, 
                         for index, ch in enumerate(new))
                 split_at.setdefault(split_match.start(), (split_match.group(), suggestion))
         for st in stems:
+            rows: list[tuple[int, dict]] = []
             for m in re.finditer(re.escape(st), masked):
+                # ⚠⚠ **计数在合并【之前】。** `residual[st]` 是覆盖率的分子，
+                #    它量的是「这个姓字还剩几处」；下面的窗口合并只动**呈现行**。
+                #    把计数挪到合并之后，`ratio` 会静默变大——而那是一张人按覆盖率
+                #    从上往下读的表，分母/分子失真是这层最坏的一种错。
                 residual[st] += 1
                 i = m.start()
-                hit = (text or '')[i:i + RESIDUAL_HIT_CHARS]
                 new_sur = (surname_map or {}).get(st)
                 split = split_at.get(i)
                 suffix = next(
@@ -298,6 +350,7 @@ def residual_scan(pre_units: list[tuple[str, str]], post_units: list[tuple[str, 
                      if (text or '').startswith(candidate, i + len(st))),
                     '',
                 )
+                interrupt = _interrupt_run(text or '', i + len(st))
                 if split is not None:
                     unit, suggestion = split
                     confidence = 'high'
@@ -305,29 +358,45 @@ def residual_scan(pre_units: list[tuple[str, str]], post_units: list[tuple[str, 
                     unit = st + suffix
                     suggestion = new_sur + suffix if new_sur else None
                     confidence = 'high'
+                elif interrupt:
+                    # 旧姓 + 成串中断号 ＝ 一句被叫到一半的称呼（`迟……`）。
+                    # ⚠ 只认成串（`RESIDUAL_INTERRUPT_RUN`），**终止标点不算**：
+                    #   同书「高岭之花。」的 `花` 也是旧姓、后面也是标点，
+                    #   但那是一句话说完了。放宽这一条，`high` 这个可采纳面立刻变噪声。
+                    unit = st + interrupt
+                    suggestion = new_sur + interrupt if new_sur else None
+                    confidence = 'high'
                 else:
                     nxt = (text or '')[i + len(st):i + len(st) + 1]
                     unit = st + nxt if nxt else None
-                    suggestion = new_sur + nxt if (new_sur and nxt) else None
+                    # ⚠⚠ **`low` 一侧不给 `suggest`，这不是启发式，是取值域推出来的。**
+                    #    `RESIDUAL_ADOPTION_CONFIDENCE` 只有 `high`，`--adopt-residual`
+                    #    也只读 high ⇒ **low 的 `suggest` 结构上没有消费者**。
+                    #    而它有代价：实测某本 16 条 low 全是普通词，`suggest` 于是产出
+                    #    「苏钝」「柳糕」「柳眼」——人要在这堆噪声里找那一条真漏网。
+                    #    `unit` 保留（人仍要看旧姓后面跟的是什么字）。
+                    suggestion = None
                     confidence = 'low'
-                out.append({
+                rows.append((i, {
                     'stem': st,
                     'where': where,
-                    'hit': hit,
+                    'hit': (text or '')[i:i + RESIDUAL_HIT_CHARS],
                     'context': (text or '')[max(0, i - RESIDUAL_CONTEXT_CHARS):
                                             i + RESIDUAL_CONTEXT_CHARS].replace('\n', ' '),
-                    # `<姓>家/府/氏/宅/门` 实测在两本上 6/6 全真。排前面标 high，
-                    # **但仍不自动换**——「不允许家人」里就含「许家」，
-                    # 自动替换会写出「不允苏家人」。
+                    # 三个结构信号（称呼后缀 / 被拆开的旧名 / 成串中断号）见
+                    # `contracts/invariants.py::RESIDUAL_CONFIDENCE`。
+                    # **标 high 也仍不自动换**——「不允许家人」里就含「许家」，
+                    # 自动替换会写出「不允苏家人」。处置永远是人勾选。
                     'confidence': confidence,
-                    # 建议替换对：`unit` = 旧姓 + 紧邻的一个字（`沈家`），
-                    # `suggest` = 本书新姓 + 同一个字（`林家`）。**只是给人省一次敲字**，
+                    # 建议替换对：`unit` = 旧姓 + 紧邻那一段（`沈家`／`迟……`），
+                    # `suggest` = 本书新姓 + 同一段（`林家`／`苏……`）。**只是给人省一次敲字**，
                     # 不参与任何判定，也绝不自动生效——人勾中之后它走 `extra_subs`，
                     # 于是 `build_subs` 那一整套检查一条都不会被绕过。
-                    # 没有新姓可查时留 `None`，**不猜**。
+                    # 没有新姓可查、或本行是 `low` 时留 `None`，**不猜**。
                     'unit': unit,
                     'suggest': suggestion,
-                })
+                }))
+            out.extend(_merge_low_windows(rows, text or ''))
     baseline: dict[str, dict] = {}
     for st in stems:
         cov = max(0, total[st] - residual[st])

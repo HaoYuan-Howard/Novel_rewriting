@@ -150,7 +150,7 @@ def test_every_registered_rule_produced_a_row(box):
     """
     rep = _check(box)
     want = {r.rule for r in REGISTRY.of_stage('stage7')}
-    assert len(want) == 33
+    assert len(want) == 35
     assert {r.rule for r in rep.rules} == want
     skipped = sorted(r.rule for r in rep.rules if r.status == 'skipped')
     assert skipped == [], f'这些判据注册了却没被调用：{skipped}'
