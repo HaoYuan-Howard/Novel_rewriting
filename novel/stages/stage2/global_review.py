@@ -388,3 +388,25 @@ def require_approved(ctx: RunContext) -> None:
             hint=('先运行 `stage2.global --emit-review-template`，逐项核验后用 '
                   '`stage2.global --review-decisions <书内json>` 提交；'
                   'FAIL/UNVER 不会被 Agent 退出码覆盖'))
+
+
+def require_current_for_stage5_contract_ab(ctx: RunContext) -> None:
+    """TEMP: Stage5 写作契约 A/B 只豁免「逐项全 PASS」，不豁免产物有效性。
+
+    这条窄入口只供 ``stage5.write --write-contract`` 的临时配对实验使用，
+    A/B 裁决完成后必须随选择器一起删除。两臂需要共享逐字节相同的冻结上游，
+    因而允许当前评测面里仍有 pending/FAIL/UNVER；但盘上产物仍必须通过注册表的
+    current-schema 解码、ArtifactStore freshness，以及 grounding→review 完整主体
+    重算。这里刻意不接收 flag/node：谁有资格调用由 CLI 的精确分流负责，避免本层
+    生出第二张节点表。
+    """
+    store = ArtifactStore(ctx)
+    grounding = store.read_own(
+        GlobalGrounding, STAGE2_GLOBAL_GROUNDING, require_current=True)[0]
+    review = store.read_own(GlobalReview, REL, require_current=True)[0]
+    _subject, current, _approved = review_status(
+        grounding.model_dump(by_alias=True), review)
+    if not current:
+        raise ApprovalRequired(
+            'stage5 契约 A/B 只豁免 stage2 逐项决策未全 PASS；'
+            '当前 global review 已过期或缺少必需主体，不能用于冻结上游实验')

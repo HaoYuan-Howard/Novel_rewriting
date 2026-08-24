@@ -129,6 +129,38 @@ def require_canonical_layout(store: ArtifactStore) -> None:
             '请在独立 canonical base 从 Stage5 重建')
 
 
+def require_pristine_contract_ab(ctx: RunContext) -> None:
+    """TEMP: 契约 A/B 首稿只允许写进完全空白的 ``stage5`` 盘面。
+
+    实验要比较的是同一份冻结 Stage0～4 上游上的两次**首写**；若这里只枚举
+    ``chNN.json`` / ``draft.md`` 等现役名字，旧 ``deep|shallow``、``_rounds``、
+    ``.INVALID``，乃至以后新增却忘了同步本闸的证据都可能被洗成“未写过”。因此
+    本闸刻意不猜文件语义：``stage5`` 不存在或是空目录才算 pristine，根下任何
+    目录项都关闭式拒绝。普通无 ``--write-contract`` 的生产续跑不调用本函数。
+    """
+    stage5_dir = ctx.novel_dir / 'stage5'
+    if not os.path.lexists(stage5_dir):
+        return
+    if stage5_dir.is_symlink() or not stage5_dir.is_dir():
+        residual = ['stage5（不是普通目录）']
+    else:
+        try:
+            children = sorted(stage5_dir.iterdir(), key=lambda item: item.name)
+        except OSError as exc:
+            raise TerminalState(
+                f'Stage5 契约 A/B 无法读取 {stage5_dir}，不能证明盘面 pristine：{exc!r}') from exc
+        if not children:
+            return
+        residual = [f'stage5/{item.name}' for item in children[:16]]
+        if len(children) > 16:
+            residual.append(f'……另有 {len(children) - 16} 项')
+    raise TerminalState(
+        'Stage5 契约 A/B 只接受完全空白的首稿 base；'
+        f'发现既有 Stage5 残留 {residual}。'
+        'canonical/draft/review/rejected/trim/wontfix/_rounds/legacy/INVALID '
+        '任一存在都必须换独立空 base，不能续写、覆盖或静默复用')
+
+
 def _chapters_of(store: ArtifactStore, book: M.Book,
                  spec: str | None) -> list[dict[str, Any]]:
     """这一次要写哪几章。

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import shutil
 import tempfile
 import threading
@@ -13,12 +14,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from novel import prov
 from novel.cli import exit_codes as X
 from novel.errors import ArtifactUnreadable, GateBlocked, TerminalState
-from novel.llm.cache import CachePolicy
-from novel.llm.client import LlmFailed
-from novel.llm.transport import ChatResponse
+from novel.llm.cache import (
+    CachePolicy, ResponseCache, cache_key, request_fingerprint,
+)
+from novel.llm.client import JSON_OBJECT_MODE, LADDER, LlmClient, LlmFailed
+from novel.llm.ledger import CostLedger
+from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.stages.stage5 import write
+from tests import factories
 
 
 def test_length_capped_nonempty_draft_is_not_usable():
@@ -791,6 +797,198 @@ def test_experiment_chapter_provenance_uses_rendered_bytes_and_accepted_request(
         'CONTRACT': 'event-list-v1',
     }
     assert kwargs['request_fingerprint'] == accepted_request
+
+
+class _LandingStore:
+    """只替换文件系统；producer 的响应、provenance 与 Chapter 载体全走真实现。"""
+
+    def __init__(self):
+        self.landed = []
+
+    @staticmethod
+    def next_round(_rel):
+        return 1
+
+    @staticmethod
+    def exists(_rel):
+        return False
+
+    @staticmethod
+    @contextmanager
+    def history_transaction(*_rels):
+        yield
+
+    def write_round(self, rel, artifact):
+        self.landed.append((rel, artifact))
+        return rel
+
+    @staticmethod
+    def write_invalid(*_args, **_kwargs):
+        raise AssertionError('合格响应不应落到 INVALID')
+
+
+class _LandingContext:
+    """保留真实 LlmClient → ledger → RoundLlmProvenance 联结的最小 run。"""
+
+    node = 'stage5.write'
+    sid = '123'
+    code = 'test-code'
+
+    def __init__(self):
+        self.cache = CachePolicy.default()
+        self.ledger = CostLedger()
+        self._accounting = {}
+        self.events = []
+
+    @property
+    def accounting(self):
+        return dict(self._accounting)
+
+    def account(self, key, value):
+        self._accounting[key] = value
+
+    @staticmethod
+    def require_observed_roots_current():
+        return None
+
+    def observe(self, event, **fields):
+        self.events.append({'event': event, **fields})
+
+    def llm_provenance_for_chapter(
+            self, chapter, cls, /, *, prompts, model, **extra):
+        out = cls(
+            code=self.code,
+            root_clean_sha1='0' * 40,
+            inputs={},
+            prompts={key: prov.fingerprint(value) for key, value in prompts.items()},
+            model=model,
+            usage=self.ledger.chapter_usage(chapter),
+            **extra,
+        )
+        self.ledger.commit_chapter(chapter)
+        return out
+
+
+def _experiment_response(text='完整章节。'):
+    return ChatResponse(
+        content=json.dumps(
+            {'segments': [{'slot': 's01', 'text': text}]},
+            ensure_ascii=False),
+        finish_reason='stop',
+        usage={'prompt_tokens': 10, 'completion_tokens': 5},
+        model='test-model',
+    )
+
+
+def _experiment_request(book, entry, *, effort='high', thinking=True):
+    contract = 'event-list-v1'
+    material = write._material_for(entry, book, contract)
+    return ChatRequest(
+        model='test-model',
+        system=write._system_for(contract),
+        user=write.prompts.build_user(material),
+        reasoning_effort=effort,
+        thinking=thinking,
+        json_mode=JSON_OBJECT_MODE,
+        max_tokens=write.MAX_TOKENS,
+    )
+
+
+def _run_real_experiment_landing(monkeypatch, transport, *, cache=None):
+    """只豁免与本回归无关的正文判据；其余写作落盘链走生产实现。"""
+    book = factories.stage5_book()
+    entry = book.chapters[1]
+    ctx = _LandingContext()
+    store = _LandingStore()
+    client = LlmClient(
+        ctx,
+        transport,
+        cache=cache or ResponseCache(),
+        model='test-model',
+        max_retries=0,
+        concurrency=1,
+        warmup=False,
+        sleep=lambda _seconds: None,
+        budget_checker=lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(write, '_judge', lambda *_args, **_kwargs: ([], [], []))
+    monkeypatch.setattr(write, 'assemble_book', lambda *_args, **_kwargs: None)
+    report = object()
+    monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: report)
+
+    got = write._run_group(
+        ctx,
+        store,
+        book,
+        [entry],
+        client,
+        revise=None,
+        write_contract='event-list-v1',
+    )
+    assert got is report
+    [(rel, chapter)] = store.landed
+    assert rel == 'stage5/ch01.json'
+    # 真正走一次当前 Chapter schema 往返，避免 fake provenance 再掩盖长度不合约。
+    reloaded = write.Chapter.model_validate(chapter.model_dump(by_alias=True))
+    return ctx, client, reloaded, book, entry
+
+
+def test_real_experiment_write_lands_a_full_request_sha256(monkeypatch):
+    transport = FakeTransport.always(_experiment_response())
+
+    ctx, client, chapter, _book, _entry = _run_real_experiment_landing(
+        monkeypatch, transport)
+
+    assert len(transport.calls) == 1
+    expected = request_fingerprint(transport.calls[0])
+    assert len(expected) == 64
+    assert chapter.provenance.request_fingerprint == expected
+    assert client.accepted_request_fingerprint('stage5.write·ch1') == expected
+    assert ctx.ledger.calls_made == 1
+
+
+def test_real_experiment_write_reuses_the_existing_32_char_cache_path(monkeypatch):
+    cache_dir = Path(tempfile.mkdtemp())
+    cache = ResponseCache(cache_dir)
+    book = factories.stage5_book()
+    entry = book.chapters[1]
+    request = _experiment_request(book, entry)
+    old_key = cache_key(request)
+    assert len(old_key) == 32
+    cache.put(old_key, _experiment_response('缓存里的完整章节。'))
+    assert (cache_dir / f'{old_key}.json').is_file()
+    transport = FakeTransport.always(_experiment_response('不应上线。'))
+
+    ctx, _client, chapter, _book, _entry = _run_real_experiment_landing(
+        monkeypatch, transport, cache=ResponseCache(cache_dir))
+
+    assert transport.calls == []
+    assert ctx.ledger.calls_made == 0 and ctx.ledger.calls_cached == 1
+    assert chapter.provenance.request_fingerprint == request_fingerprint(request)
+    assert len(chapter.provenance.request_fingerprint) == 64
+    assert (cache_dir / f'{old_key}.json').is_file(), '兼容缓存不应被迁移或改名'
+
+
+def test_real_experiment_write_binds_provenance_to_the_accepted_lower_rung(
+        monkeypatch):
+    truncated = ChatResponse(
+        content='{"segments":[', finish_reason='length', model='test-model')
+    accepted = _experiment_response('降档后完整章节。')
+    transport = FakeTransport(
+        responder=lambda _request, index: truncated if index == 0 else accepted)
+
+    ctx, client, chapter, _book, _entry = _run_real_experiment_landing(
+        monkeypatch, transport)
+
+    assert [(req.reasoning_effort, req.thinking) for req in transport.calls] == [
+        LADDER[0], LADDER[1],
+    ]
+    rejected_fp = request_fingerprint(transport.calls[0])
+    accepted_fp = request_fingerprint(transport.calls[1])
+    assert accepted_fp != rejected_fp
+    assert chapter.provenance.request_fingerprint == accepted_fp
+    assert client.accepted_request_fingerprint('stage5.write·ch1') == accepted_fp
+    assert ctx.ledger.calls_made == 2
 
 
 @pytest.mark.parametrize(('chapters', 'expected_peak'), [(19, 19), (40, 32)])

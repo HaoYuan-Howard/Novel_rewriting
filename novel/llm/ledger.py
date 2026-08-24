@@ -217,6 +217,13 @@ class CostLedger:
         全都缺一个必填键，而这里要答的问题 JSONL 已经答得了。
         """
         with self._lock:
+            if (request_fingerprint is not None
+                    and (len(request_fingerprint) != 64
+                         or any(ch not in '0123456789abcdef'
+                                for ch in request_fingerprint))):
+                raise ProvenanceRefused(
+                    'request_fingerprint 必须是完整的小写 SHA-256（64 hex）；'
+                    '32 字符 cache key 只用于定位既有缓存，不能冒充请求来源身份')
             if attempt_id is not None and request_fingerprint is not None:
                 previous = self._request_fingerprints.get(attempt_id)
                 if previous is not None and previous != request_fingerprint:

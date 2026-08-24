@@ -22,7 +22,9 @@ from pydantic import BaseModel, Field
 import pytest
 
 import novel.llm.keepsake as keepsake_mod
-from novel.llm.cache import CachePolicy, ResponseCache, cache_key
+from novel.llm.cache import (
+    CachePolicy, ResponseCache, cache_key, request_fingerprint,
+)
 from novel.llm.client import JSON_OBJECT_MODE, LlmClient
 from novel.llm.ledger import AUDIT_REL, CostLedger, audit_path
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
@@ -83,7 +85,7 @@ def test_wire_rows_carry_the_attempt_identity_triplet():
         model=client.model, system='sys', user='usr',
         reasoning_effort='high', thinking=True, json_mode=JSON_OBJECT_MODE,
         max_tokens=row['max_tokens'])
-    assert row['request_fingerprint'] == cache_key(expected_req)
+    assert row['request_fingerprint'] == request_fingerprint(expected_req)
     assert client.accepted_request_fingerprint('p') == row['request_fingerprint']
     assert row['response_sha256'] == hashlib.sha256(
         OK_JSON.content.encode('utf-8')).hexdigest()
@@ -174,12 +176,23 @@ def test_audit_events_survive_in_memory_when_there_is_no_ledger_file():
     kinds = [row['kind'] for row in ctx.ledger.audit_events]
     assert kinds == ['gate_decision']
     assert ctx.ledger.audit_events[0]['decision'] == 'accepted'
-    assert client.accepted_request_fingerprint('p') == cache_key(transport.calls[0])
+    assert client.accepted_request_fingerprint('p') == request_fingerprint(
+        transport.calls[0])
 
 
 def test_request_fingerprint_lookup_refuses_a_missing_attempt_instead_of_estimating():
     with pytest.raises(ProvenanceRefused, match='拒绝按默认 effort/thinking 估算'):
         CostLedger().request_fingerprint_for_attempt('not-recorded')
+
+
+def test_ledger_refuses_a_truncated_cache_key_as_request_identity():
+    ledger = CostLedger()
+    with pytest.raises(ProvenanceRefused, match='完整的小写 SHA-256'):
+        ledger.record(
+            node='stage5.write', sid='123', model='m', code='c', cached=False,
+            cache_policy='default', attempt_id='attempt',
+            request_fingerprint='a' * 32)
+    assert ledger.calls_made == 0, '拒收截断身份前不能先记成一次调用'
 
 
 def test_one_attempt_id_cannot_be_rebound_to_another_request():

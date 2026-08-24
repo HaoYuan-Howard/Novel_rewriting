@@ -22,6 +22,7 @@ test_skill_operator.py —— 把 `novel-pipeline-operator` skill 的漂移守�
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import sys
 from pathlib import Path
@@ -126,6 +127,11 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
     assert 'mark' in calls[2][0]
     assert calls[2][0][calls[2][0].index('--phase') + 1] == 'end'
     assert calls[2][0][calls[2][0].index('--exit') + 1] == '0'
+    expected_note = (
+        'operator_evidence_sha256='
+        + runner.hashlib.sha256(runner._evidence_bytes([step])).hexdigest())
+    assert calls[0][0][calls[0][0].index('--note') + 1] == expected_note
+    assert calls[2][0][calls[2][0].index('--note') + 1] == expected_note
     assert all('shell' not in kwargs for _argv, kwargs in calls)
 
 
@@ -143,6 +149,139 @@ def test_run_step_stops_before_building_when_the_session_code_changed(monkeypatc
 
     assert rc == 2
     assert built == []
+
+
+def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
+        tmp_path, monkeypatch):
+    runner = _operator_script('run_step')
+    evidence = tmp_path / 'nested' / 'preview.json'
+    step_argv = [
+        'python', '-B', '-m', 'novel.cli', 'run', 'stage5.write', '42',
+        '--base', 'E:/outputs', '--yes',
+    ]
+    step = SimpleNamespace(
+        label='stage5 全书闭卷写作', argv=step_argv, cwd=str(REPO_ROOT),
+        paid=True, writes='stage5/ch{nn}.json + stage5/draft.md',
+        note='随后免费复检')
+    built: list[tuple] = []
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        runner, 'build_steps',
+        lambda *args, **kwargs: built.append((args, kwargs)) or [step])
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner.subprocess, 'run',
+        lambda argv, **_kwargs: calls.append(list(argv)) or SimpleNamespace(returncode=0))
+
+    common = [
+        '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
+        'stage5.write', '--evidence-json', str(evidence),
+    ]
+    assert runner.main(common) == 0
+    preview_bytes = evidence.read_bytes()
+    assert json.loads(preview_bytes) == {
+        'schema': 'novel-operator-step-evidence-v1',
+        'steps': [{
+            'argv': step_argv,
+            'paid': True,
+            'writes': 'stage5/ch{nn}.json + stage5/draft.md',
+            'label': 'stage5 全书闭卷写作',
+            'note': '随后免费复检',
+        }],
+    }
+    assert built[0][0] == ('stage5.write', '42', [])
+    assert built[0][1]['placeholders'] is True
+    assert calls == []
+
+    assert runner.main([*common, '--execute']) == 0
+    assert evidence.read_bytes() == preview_bytes
+    assert built[1][0] == ('stage5.write', '42', [])
+    assert built[1][1]['placeholders'] is False
+    assert step_argv in calls
+    expected_note = 'operator_evidence_sha256=' + runner.hashlib.sha256(
+        preview_bytes).hexdigest()
+    mark_calls = [argv for argv in calls if 'mark' in argv]
+    assert len(mark_calls) == 2
+    assert all(argv[argv.index('--note') + 1] == expected_note for argv in mark_calls)
+
+
+def test_run_step_execute_partial_cannot_reuse_full_book_preview_evidence(
+        tmp_path, monkeypatch):
+    runner = _operator_script('run_step')
+    evidence = tmp_path / 'preview.json'
+
+    def step(flags):
+        argv = ['python', '-m', 'novel.cli', 'run', 'stage5.write', '42', *flags,
+                '--base', 'E:/outputs', '--yes']
+        return SimpleNamespace(
+            label='stage5 写作', argv=argv, cwd=str(REPO_ROOT), paid=True,
+            writes='stage5/ch{nn}.json', note=None)
+
+    def fake_build(_node, _sid, flags, **_kwargs):
+        return [step(list(flags))]
+
+    calls = []
+    monkeypatch.setattr(runner, 'build_steps', fake_build)
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner.subprocess, 'run',
+        lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(returncode=0))
+    common = [
+        '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
+        '--evidence-json', str(evidence),
+    ]
+    assert runner.main([*common, 'stage5.write']) == 0
+    assert runner.main([
+        *common, '--execute', 'stage5.write', '--', '--chapters', '1']) == 2
+    assert calls == [], 'evidence hash 不同必须在打信标/执行前停止'
+
+
+def test_run_step_evidence_refuses_different_existing_content_before_execution(
+        tmp_path, monkeypatch):
+    runner = _operator_script('run_step')
+    evidence = tmp_path / 'preview.json'
+    original = b'{"different":true}\n'
+    evidence.write_bytes(original)
+    step = SimpleNamespace(
+        label='stage5 写作',
+        argv=['python', '-m', 'novel.cli', 'run', 'stage5.write', '42', '--yes'],
+        cwd=str(REPO_ROOT), paid=True, writes='stage5/ch{nn}.json', note=None)
+    monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner.subprocess, 'run',
+        lambda *_args, **_kwargs: pytest.fail('不同证据不得打信标或执行节点'))
+
+    rc = runner.main([
+        '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
+        '--evidence-json', str(evidence), '--execute', 'stage5.write',
+    ])
+
+    assert rc == 2
+    assert evidence.read_bytes() == original
+
+
+def test_run_step_evidence_refuses_a_suspected_key_without_writing_or_execution(
+        tmp_path, monkeypatch):
+    runner = _operator_script('run_step')
+    evidence = tmp_path / 'preview.json'
+    step = SimpleNamespace(
+        label='synthetic',
+        argv=['python', '-m', 'novel.cli', '--api-key=must-not-land'],
+        cwd=str(REPO_ROOT), paid=False, writes='', note=None)
+    monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(
+        runner.subprocess, 'run',
+        lambda *_args, **_kwargs: pytest.fail('疑似密钥不得进入执行路径'))
+
+    rc = runner.main([
+        '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
+        '--evidence-json', str(evidence), '--execute', 'stage5.write',
+    ])
+
+    assert rc == 2
+    assert not evidence.exists()
 
 
 def test_session_preflight_materializes_one_reusable_run_coordinate(
