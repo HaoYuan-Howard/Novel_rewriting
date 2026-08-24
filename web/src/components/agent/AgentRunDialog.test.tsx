@@ -42,8 +42,16 @@ describe('AgentRunDialog', () => {
       expect(screen.getByTestId('agent-command-preview')).toHaveClass('max-h-[260px]'),
     )
     expect(screen.getByRole('button', { name: '收起完整命令' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '生成诊断与恢复方案' })).toBeVisible()
-    expect(screen.getByText('仅诊断与恢复方案')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: '启动诊断（仍产生 Claude 费用）' }),
+    ).toBeVisible()
+    expect(screen.getByText('未授权流水线付费节点')).toBeVisible()
+    // ⚠ 未勾付费授权**不等于这一趟不花钱**：agent 本身就是一次 headless
+    //   Claude 会话。旧文案「生成诊断与恢复方案 / 不执行付费节点」把
+    //   「不走 DeepSeek」说成了「不花钱」。
+    expect(screen.getByTestId('agent-run-cost-note')).toHaveTextContent(
+      /headless Claude 会话/,
+    )
 
     fireEvent.click(screen.getByRole('checkbox', { name: /允许本会话产生外部模型调用费用/ }))
 
@@ -67,7 +75,8 @@ describe('AgentRunDialog', () => {
       <AgentRunDialog sid="book-1" onClose={vi.fn()} onStarted={vi.fn()} />,
       '/n/book-1/stage0',
     )
-    const start = await screen.findByRole('button', { name: '生成诊断与恢复方案' })
+    const start = await screen.findByRole(
+      'button', { name: '启动诊断（仍产生 Claude 费用）' })
     await waitFor(() => expect(start).toBeEnabled())
     fireEvent.click(start)
 

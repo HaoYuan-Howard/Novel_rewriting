@@ -26,12 +26,19 @@ export function DeleteBookDialog({
     },
   })
   const confirmed = confirmation === book.sid
+  // ⚠ **请求在途时不许关框。** `api.trashNovel` 发出去就取消不掉：这时点「取消」
+  // 或点遮罩，界面上像是撤销了，盘上那本书仍会被移入回收站，而恢复位置
+  // （`trash_rel`，唯一一处告诉人「去哪儿找回来」的地方）再也不会显示。
+  const closeIfIdle = () => {
+    if (remove.isPending) return
+    onClose()
+  }
 
   return (
     <div
       className="fixed inset-0 z-60 flex items-center justify-center px-16 py-16"
       style={{ background: SCRIM }}
-      onClick={onClose}
+      onClick={closeIfIdle}
     >
       <div
         role="dialog"
@@ -90,12 +97,20 @@ export function DeleteBookDialog({
 
         <div className="flex shrink-0 items-center gap-10 border-t border-line-soft bg-sunken-2 px-22 py-13">
           <span className="text-tag text-ink-4">
-            {result ? '语料库数据已自动刷新。' : '这是项目级操作，不是清空某一层。'}
+            {remove.isPending
+              ? '请求已经发出，取消不掉了——等它回来再关。'
+              : result
+                ? '语料库数据已自动刷新。'
+                : '这是项目级操作，不是清空某一层。'}
           </span>
           <button
             type="button"
-            onClick={onClose}
-            className="ml-auto cursor-pointer rounded-btn border border-line-btn bg-card px-16 py-8 text-body-lg"
+            onClick={closeIfIdle}
+            disabled={remove.isPending}
+            className={
+              'ml-auto rounded-btn border border-line-btn bg-card px-16 py-8 text-body-lg ' +
+              (remove.isPending ? 'cursor-not-allowed opacity-40' : 'cursor-pointer')
+            }
           >
             {result ? '关闭' : '取消'}
           </button>

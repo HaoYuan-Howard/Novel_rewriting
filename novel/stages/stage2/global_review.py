@@ -188,7 +188,19 @@ def apply_file(ctx: RunContext, decision_path: str = '') -> GlobalReview:
         if not store.exists(rel):
             raise TerminalState(
                 f'{rel} 不在盘上；放入 GlobalReviewDecisionSet（actor + decisions）')
-        decisions = store.read(GlobalReviewDecisionSet, rel)
+        if rel == DEFAULT_DECISIONS:
+            decisions = store.read(GlobalReviewDecisionSet, rel)
+        else:
+            # ⚠ **自定义书内相对路径没在 `ARTIFACT_SPECS` 里登记**，而
+            #   `--emit-review-template` 交出来的模板是**带版本信封**的
+            #   （`review_template_json` 调 `encode_artifact`）。按未注册路径解码
+            #   会把 `_schema_version` 原样留在 payload 里，StrictModel 当场报
+            #   「多了一个字段」——一份刚由本仓生成的模板，换个文件名就读不回来。
+            #   ⇒ 与上面那条绝对路径分支同一把尺子：路径由调用方授权，
+            #   **schema 口径恒取注册的 `DEFAULT_DECISIONS`**。
+            decisions = store.read_external(
+                GlobalReviewDecisionSet, DEFAULT_DECISIONS,
+                Path(ctx.novel_dir) / rel)
     grounding = store.read_own(GlobalGrounding, STAGE2_GLOBAL_GROUNDING)[0]
     grounding_payload = grounding.model_dump(by_alias=True)
     current = store.read_own(GlobalReview, REL)[0]

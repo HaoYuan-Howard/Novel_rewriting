@@ -789,11 +789,47 @@ class LlmClient:
             # 被拒后先同档重采一次再决定降档（_worth_resampling；截断除外）,
             # 见 MAX_SAMPLES_PER_RUNG。
             deferred_salvage: tuple[M, ChatResponse, str, str, int] | None = None
+
+            def adopt_deferred(index: int = i, effort: str = effort,
+                               thinking: bool = thinking) -> M:
+                """采用同档后备并把账结清。**两个采用点共用这一处。**"""
+                assert deferred_salvage is not None
+                obj_, resp_, key_, attempt_, sample_ = deferred_salvage
+                self._keep(key_, resp_, cache_policy=policy)
+                self._settle_gate(
+                    purpose=purpose, attempt_id=attempt_, source='wire',
+                    accepted=True, gate=None, rungs=active_rungs, index=index,
+                    sample=sample_, salvaged=True, progress=progress)
+                self._keep_answer_lost(
+                    purpose=purpose, attempt_id=attempt_, source='wire',
+                    effort=effort, thinking=thinking,
+                    json_mode=JSON_OBJECT_MODE, index=index, sample=sample_,
+                    resample=False, resp=resp_, progress=progress,
+                    salvaged=True)
+                return obj_
+
             for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
-                resp, key, _cached, attempt_id = self._call_keyed(
-                    system, user, effort=effort, thinking=thinking, json_mode=JSON_OBJECT_MODE,
-                    max_tokens=max_tokens, purpose=purpose, use_cache=False,
-                    progress=progress, cache_policy=policy)
+                try:
+                    resp, key, _cached, attempt_id = self._call_keyed(
+                        system, user, effort=effort, thinking=thinking,
+                        json_mode=JSON_OBJECT_MODE,
+                        max_tokens=max_tokens, purpose=purpose, use_cache=False,
+                        progress=progress, cache_policy=policy)
+                except (TransportError, LlmFailed):
+                    # ⚠⚠ **手里已经有一份过完整契约的响应，就不能因为下一次没打通而
+                    #   把它扔掉。** 这一档的后备只在「再争取一次正常 content」时存在；
+                    #   而争取的那一次**死在传输层**（连接故障 / 资源中断退避耗尽）与
+                    #   「拿到了一份更好的」是两件完全不同的事。原来异常直接冒出
+                    #   `ask_json`，`deferred_salvage` 随栈消失 ⇒ 重跑要**重新付一次**
+                    #   同样的钱，而那份合格响应连缓存都进不去
+                    #   （`ResponseCache.put` 拒写空正文）。
+                    if deferred_salvage is None:
+                        raise
+                    self.ctx.observe(
+                        'reasoning_salvage_adopted_after_transport_failure',
+                        purpose=purpose, reasoning_effort=effort,
+                        thinking=thinking, sample=sample)
+                    return adopt_deferred()
                 obj, why, content, gate, detail, salvaged = inspect_response(resp)
                 head = (f'effort={effort} think={thinking}'
                         f'{"（重采）" if sample > 1 else ""}'
@@ -859,21 +895,7 @@ class LlmClient:
                     fallback_salvage=deferred_salvage is not None)
                 errors.append(f'{head} {why}')
                 if deferred_salvage is not None:
-                    (fallback_obj, fallback_resp, fallback_key,
-                     fallback_attempt_id, fallback_sample) = deferred_salvage
-                    self._keep(fallback_key, fallback_resp, cache_policy=policy)
-                    self._settle_gate(
-                        purpose=purpose, attempt_id=fallback_attempt_id,
-                        source='wire', accepted=True, gate=None,
-                        rungs=active_rungs, index=i, sample=fallback_sample,
-                        salvaged=True, progress=progress)
-                    self._keep_answer_lost(
-                        purpose=purpose, attempt_id=fallback_attempt_id,
-                        source='wire', effort=effort, thinking=thinking,
-                        json_mode=JSON_OBJECT_MODE, index=i,
-                        sample=fallback_sample, resample=False,
-                        resp=fallback_resp, progress=progress, salvaged=True)
-                    return fallback_obj
+                    return adopt_deferred()
                 if not resample:
                     break
         raise LlmFailed(

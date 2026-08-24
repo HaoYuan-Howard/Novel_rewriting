@@ -64,7 +64,7 @@ export function AgentRunDialog({
               authorized ? 'bg-spend text-card' : 'bg-line-soft text-ink-2',
             )}
           >
-            {authorized ? '已授权付费节点' : '仅诊断与恢复方案'}
+            {authorized ? '已授权流水线付费节点' : '未授权流水线付费节点'}
           </span>
           <span
             className={cx(
@@ -131,7 +131,11 @@ export function AgentRunDialog({
             />
             <span className="text-body text-ink-2">
               允许本会话产生外部模型调用费用（skill 接口契约的付费授权）；默认不勾，
-              不勾则 agent 在第一条付费命令前停下
+              不勾则 agent 在第一条付费命令前停下。
+              <strong className="font-semibold">
+                这一格只管流水线节点（DeepSeek）；agent 本身是一次 headless Claude
+                会话，无论勾不勾都会产生 Claude 侧调用费用。
+              </strong>
             </span>
           </label>
 
@@ -166,10 +170,10 @@ export function AgentRunDialog({
           data-testid="agent-run-dialog-footer"
           className="flex shrink-0 items-center gap-10 border-t border-line-soft bg-sunken-2 px-22 py-13"
         >
-          <span className="text-tag text-ink-4">
+          <span data-testid="agent-run-cost-note" className="text-tag text-ink-4">
             {authorized
-              ? '发起后跳到进度屏：跑到哪一步、退出码都在那。'
-              : '只收集状态、下一步命令与恢复方案，不执行付费节点。'}
+              ? '发起后跳到进度屏：跑到哪一步、退出码都在那。两侧都会计费：流水线节点走 DeepSeek，agent 会话走 Claude。'
+              : '不执行流水线付费节点；但仍会启动一次 headless Claude 会话收集状态与恢复方案，Claude 侧照常计费。'}
           </span>
           <button
             type="button"
@@ -193,7 +197,7 @@ export function AgentRunDialog({
               disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
             )}
           >
-            {authorized ? '授权并开始跑书' : '生成诊断与恢复方案'}
+            {authorized ? '授权并开始跑书' : '启动诊断（仍产生 Claude 费用）'}
           </button>
         </div>
       </div>

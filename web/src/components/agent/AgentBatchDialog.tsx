@@ -53,7 +53,7 @@ export function AgentBatchDialog({
               authorized ? 'bg-spend text-card' : 'bg-line-soft text-ink-2',
             )}
           >
-            {authorized ? '已授权付费节点' : '仅诊断与恢复方案'}
+            {authorized ? '已授权流水线付费节点' : '未授权流水线付费节点'}
           </span>
           <span
             className={cx(
@@ -164,7 +164,7 @@ export function AgentBatchDialog({
             >
               {authorized
                 ? '授权并开始跑这 ' + books.length + ' 本'
-                : '批量生成诊断与恢复方案'}
+                : '批量启动诊断（仍产生 Claude 费用）'}
             </button>
           )}
         </div>

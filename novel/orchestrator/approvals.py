@@ -11,6 +11,8 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,8 +29,8 @@ from contracts.schema.stage7 import NameMap
 from contracts.schema.base import StrictModel
 from novel import paths, prov
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected, NovelError,
-    UpstreamMissing,
+    ApprovalFrozen, ApprovalRequired, ArtifactUnreadable, GateBlocked, HumanEditProtected,
+    NovelError, UpstreamMissing,
 )
 from novel.orchestrator import state
 from novel.quality.global_review import (
@@ -39,6 +41,44 @@ from novel.store import ArtifactStore
 
 APPROVALS_DIRNAME = 'approvals'
 _LOCK = threading.RLock()
+
+#: 正在被移入回收站的书。**`_LOCK` 保护它**，与审批写入同一把锁——
+#: 这样「冻结」与「写一份审批」之间没有缝，两者要么先后、要么其中一个明确 409。
+#: ⚠ 只在内存，与 `jobs.JobRegistry` 同一条理由（`R-14.6`）：写下来就要有陈旧清理
+#: 策略，而**一份会说谎的冻结名单比没有名单更坏**。删除是短操作（拉一个 CLI 子进程
+#: 移目录），进程死了这一格跟着消失，恢复由 `trash.sweep_incomplete` 从盘上重建。
+_FROZEN_FOR_TRASH: set[str] = set()
+
+
+@contextmanager
+def frozen_for_trash(sid: str) -> Iterator[None]:
+    """删除这本书的整段时间里冻结它的审批写入。**回收站的进程内那一半。**
+
+    ⚠⚠ 这一格补的是一条真实的两半竞态：书目录与审批文件由 CLI 子进程移动，
+    而**审批写入发生在服务父进程**。父进程只占了书级作业锁（`jobs.active_key`），
+    审批那条路一把都不占 ⇒ 子进程刚把 `<sid>.json` 移进回收站，父进程的
+    `approve_gate` 就能把它**重新写出来**，留下一本「书已删除、审批还活着」的孤儿；
+    反过来若子进程随后失败回滚，回滚条件 `not approval.exists()` 已被那次重写破坏，
+    归档的那一份就永远留在半成品回收站里。
+    ⇒ 冻结**只按 sid**，不持有 `_LOCK` 本身：删一本书不该把别的书的审批全挡住。
+    """
+    with _LOCK:
+        if sid in _FROZEN_FOR_TRASH:
+            raise ApprovalFrozen(f'{sid} 已经有一个删除在进行中')
+        _FROZEN_FOR_TRASH.add(sid)
+    try:
+        yield
+    finally:
+        with _LOCK:
+            _FROZEN_FOR_TRASH.discard(sid)
+
+
+def _refuse_if_frozen(sid: str) -> None:
+    with _LOCK:
+        if sid in _FROZEN_FOR_TRASH:
+            raise ApprovalFrozen(
+                f'{sid} 正在被移入回收站，这次审批写入不落盘——'
+                '删除完成后这本书不再存在；若删除失败，重新打开这本书再批')
 
 
 class _ApprovalProof(StrictModel):
@@ -252,7 +292,9 @@ def _read_current(base: str | os.PathLike[str], sid: str) -> _ApprovalRecordV2:
 def _write(
     base: str | os.PathLike[str], record: _ApprovalRecordV2,
 ) -> ApprovalDoc:
+    """审批落盘的**唯一落点**；冻结检查因此也只装在这里。"""
     record = _ApprovalRecordV2.model_validate(record.model_dump())
+    _refuse_if_frozen(record.sid)
     p = _path(base, record.sid)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(f'.{threading.get_ident()}.tmp')

@@ -137,8 +137,23 @@ def _worktree_digest() -> str | None:
     digest.update(diff)
     digest.update(b'\0untracked\0')
     for raw_name in names:
+        path = os.path.join(_REPO_ROOT, os.fsdecode(raw_name))
+        if raw_name.endswith(b'/') or os.path.isdir(path):
+            # ⚠⚠ **`ls-files --others` 会把整块未跟踪的目录折叠成一条目录项**，
+            #   嵌套仓库与链接 worktree（`.worktrees/<name>/`，自带 `.git`）尤其如此
+            #   ——git 明确拒绝 descend 进去，所以这里也拿不到「它的内容」。
+            #   原来这一条会掉进下面那个 `open()`：目录 `open` 抛 `PermissionError`
+            #   ⇒ 整个摘要 `None` ⇒ `code_version()` 恒 `'unknown'`。
+            #   **实测踩到过**：仓根有一个 `.worktrees/` 时，本机产出的每一份产物
+            #   都把 `code` 记成 `unknown`，而「这次跑用的是哪版代码」正是这一格的
+            #   全部价值——它不报错，只是安静地不回答。
+            #   ⇒ 目录项按**名字**入摘要：一个不属于本 checkout 的嵌套目录出现/消失
+            #   仍然改变身份，而它内部的字节本来就不是本 checkout 的代码。
+            digest.update(len(raw_name).to_bytes(8, 'big'))
+            digest.update(raw_name)
+            digest.update(b'\0nested-dir\0')
+            continue
         try:
-            path = os.path.join(_REPO_ROOT, os.fsdecode(raw_name))
             data = open(path, 'rb').read()
         except OSError:
             # 例如文件在 ls-files 与读取之间被删掉。此时工作树没有一份可复算的
