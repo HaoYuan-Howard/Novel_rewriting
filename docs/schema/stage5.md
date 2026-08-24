@@ -244,13 +244,19 @@ repair 分桶为 **12 UNIQUE、11 FREE、27 NONE**；repair 不是 severity，�
 `dialogue_report` **只逐章产出**：成稿直接引语数、源章直接引语数及比值。现役代码没有书级
 汇总；文档或 UI 不得宣称“逐章 + 书级”。对白告警与这个 metric 分开，0 命中不能代替分布。
 
-## 七、历史基线的边界
+## 七、历史基线与验证边界
 
 旧双臂盘面曾有 31 章（deep 11 / shallow 20），并留下逐章带极值 0.814 / 1.206、全书比值
 0.949 / 1.022 / 0.980、旧规则命中与对白差异等读数。这些数字只用于解释阈值来历和识别
 判据退化，是 **v1 旧布局历史基线**；它们不是 canonical v2 current-schema corpus，不能用于
 宣称现役 Stage5 通过率、当前 HARD“0 命中”或当前 50 条判据的质量结论。
 
-当前质量基线只能来自 TODO-21 完成后的隔离双书重跑、current-schema manifest 与
-`--require-corpus` 硬验收。在那之前，单元 / 非 corpus 回归只能证明实现守卫通过，不能证明
-现役语料全量绿。
+canonical v2 产物、单臂入口、freshness、恢复路与 50 条判据的工程可靠性已经由定向及
+非 corpus 回归验证。现役 beat-material 写作契约在设计上改为按 beat / material 组织闭卷材料，
+但原计划与旧 event-list 契约进行的受控双书付费 A/B 已在开跑前取消：没有实验正文、盲评结果
+或无正文 manifest。因此不得宣称 beat-material 在质量、成本或速度上胜出。
+
+TODO-21 的隔离双书重跑、current-schema manifest 与 `--require-corpus` 是另一件事：它只建立
+现役全链语料基线。Stage5 消费 Stage1～4 的事实、文风、计划与 writer context，上游质量会
+显著改变成稿；即使 TODO-21 通过，也不能把全链读数因果归到 Stage5 写作契约。在它完成前，
+单元 / 非 corpus 回归只能证明工程守卫通过，不能证明现役语料全量绿。

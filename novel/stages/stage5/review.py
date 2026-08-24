@@ -430,7 +430,7 @@ def build_review(ctx: RunContext, store: ArtifactStore, book: M.Book) -> Review:
         fs: list[Finding] = []
         body = rec.get('text') or ''
         bodies[o] = body
-        mat = _material(entry, book, rec.get('_provenance') or {})
+        mat = _material(entry, book)
         # `rec['segments']` 是 Chapter 模型 dump 出来的原件；写作相与 Full Review
         # 都把它交给同一个 segment-event/章尾读数入口。
         fs += checks.chapter_findings(body, entry, book, given=mat,
@@ -546,12 +546,10 @@ def _merge_length_over_into_trim(
     return merged
 
 
-def _material(entry: dict[str, Any], book: M.Book,
-              provenance: Any | None = None) -> str:
-    """该章写手实际看见的文字；实验章按 provenance 逐章恢复，未知关闭式拒绝。"""
+def _material(entry: dict[str, Any], book: M.Book) -> str:
+    """该章写手实际看见的文字；Stage5 只有这一份正式下发面。"""
     from novel.stages.stage5 import prompts
-    return prompts.material_for_provenance(
-        entry, book, provenance or {}).given
+    return prompts.build_material(entry, book).given
 
 
 def _apply_wontfix(rows: list[ReviewChapter], book_fs: list[Finding],

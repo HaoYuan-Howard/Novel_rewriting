@@ -6,8 +6,6 @@ from __future__ import annotations
 import ast
 import hashlib
 import inspect
-from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -15,9 +13,8 @@ from novel.stages.stage5 import prompts
 from tests import factories
 
 
-_EVENT_LIST_V1_COMMIT = '98368925da9057b437b8a43a74b02433546b2192'
-_EVENT_LIST_V1_SYS_SHA256 = 'd3303359f45dc4323e71f353b13c4ed45e40120ad1b3088d64b0b593ff25cf7e'
-_EVENT_LIST_V1_USER_SHA256 = 'a186b34aca24cb0fca40ca22bc79e3fa59b2812db2e908c3cea82bd30c91d491'
+_BEAT_MATERIAL_V2_SYS_SHA256 = '468834993ad1c3021e8ac1e50aeb220f2c1372a0238b8ab43d5817cac7c230c5'
+_BEAT_MATERIAL_V2_USER_SHA256 = '96908c9a5941f0fd14c55c18636afc13667d64f41e598346dfe860593a7805ae'
 
 
 @pytest.fixture(scope='module')
@@ -34,100 +31,33 @@ def test_writer_uses_the_single_current_system():
     assert system and '$' not in system
 
 
-def test_stage5_production_entry_stays_selector_free_by_default():
+def test_stage5_production_entry_has_one_contract_and_no_selector():
     from novel.stages.stage5 import write
 
     assert list(inspect.signature(prompts.write_system).parameters) == ['revise']
     assert list(inspect.signature(prompts.build_material).parameters) == [
         'entry', 'book']
     assert list(inspect.signature(write.run_write).parameters) == [
-        'ctx', 'client', 'chapters', 'write_contract']
+        'ctx', 'client', 'chapters']
     assert list(inspect.signature(write.run_revise).parameters) == [
-        'ctx', 'client', 'chapters', 'write_contract']
-    assert inspect.signature(write.run_write).parameters['write_contract'].default is None
-    assert inspect.signature(write.run_revise).parameters['write_contract'].default is None
+        'ctx', 'client', 'chapters']
     assert not hasattr(prompts, 'SHALLOW_SYS')
     assert not hasattr(prompts, 'DEEP_SYS')
+    assert not hasattr(prompts, 'EVENT_LIST_V1_SYS')
+    assert not hasattr(prompts, 'experimental_write_system')
+    assert not hasattr(prompts, 'experimental_build_material')
     assert not hasattr(write, 'run_selected')
 
 
-def _historical_event_list_v1_namespace() -> dict[str, object]:
-    """从冻结提交实际载入旧 producer；不在测试里手抄一份“看起来相同”的旧实现。"""
-    root = Path(__file__).resolve().parents[1]
-    shown = subprocess.run(
-        [
-            'git', '-c', f'safe.directory={root.as_posix()}', 'show',
-            f'{_EVENT_LIST_V1_COMMIT}:novel/stages/stage5/prompts.py',
-        ],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding='utf-8',
-    ).stdout
-    tree = ast.parse(shown)
-    assignments = {
-        'LAYER_RULE', 'HINGE_LABEL_RULE', 'FIDELITY_RULE', 'ORDER_RULE',
-        'STYLE_WORD_RULE', 'DEEP_SYS', 'SHALLOW_SYS', 'REVISE_TAIL',
-        'CHAPTER_RESPONSE_HINT', '_SYS_OF',
-    }
-    functions = {
-        'write_system', 'prev_context', 'chapter_facts', 'dialogue_block',
-        'build_material',
-    }
-    selected: list[ast.stmt] = []
-    for node in tree.body:
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names = {target.id for target in targets if isinstance(target, ast.Name)}
-            if names & assignments:
-                selected.append(node)
-        elif isinstance(node, ast.ClassDef) and node.name == 'Material':
-            selected.append(node)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in functions:
-            selected.append(node)
-
-    namespace = dict(vars(prompts))
-    namespace['DEPTH_MODES'] = ('deep', 'shallow')
-    exec(compile(ast.Module(body=selected, type_ignores=[]),
-                 f'{_EVENT_LIST_V1_COMMIT}:prompts.py', 'exec'), namespace)
-    return namespace
-
-
-def test_event_list_v1_executes_the_frozen_historical_sys_and_user_bytes(book):
-    """旧臂等于历史 producer 的实际输出，不靠“只改了三块”的推测。"""
-    old = _historical_event_list_v1_namespace()
+def test_production_bytes_are_the_retained_beat_material_v2_candidate(book):
+    """实验退役后，正式唯一入口仍逐字保留已选定的新 prompt/material 候选。"""
     entry = book.chapters[1]
-
-    old_system = old['write_system']('deep')
-    old_material = old['build_material'](entry, book, with_source_text=False)
-    old_user = '\n\n'.join(old_material.blocks)
-    selected_system = prompts.experimental_write_system('event-list-v1')
-    selected_user = prompts.build_user(
-        prompts.experimental_build_material('event-list-v1', entry, book))
-
-    assert selected_system == old_system
-    assert selected_user == old_user
-    assert len(selected_system.encode('utf-8')) == 8256
-    assert len(selected_user.encode('utf-8')) == 3682
-    assert hashlib.sha256(selected_system.encode()).hexdigest() == _EVENT_LIST_V1_SYS_SHA256
-    assert hashlib.sha256(selected_user.encode()).hexdigest() == _EVENT_LIST_V1_USER_SHA256
-
-
-def test_beat_material_v2_selector_is_byte_identical_to_no_flag_production(book):
-    """实验选择器不能改动未传 flag 的正式生产字节。"""
-    entry = book.chapters[1]
-    assert prompts.experimental_write_system('beat-material-v2') == prompts.write_system()
-    assert prompts.build_user(
-        prompts.experimental_build_material('beat-material-v2', entry, book)
-    ) == prompts.build_user(prompts.build_material(entry, book))
-
-
-def test_unknown_experiment_contract_never_falls_back_to_production(book):
-    with pytest.raises(ValueError, match='未知 Stage5 write contract'):
-        prompts.experimental_write_system('typo-v9')
-    with pytest.raises(ValueError, match='未知 Stage5 write contract'):
-        prompts.experimental_build_material('typo-v9', book.chapters[1], book)
+    system = prompts.write_system()
+    user = prompts.build_user(prompts.build_material(entry, book))
+    assert len(system.encode('utf-8')) == 9104
+    assert len(user.encode('utf-8')) == 4060
+    assert hashlib.sha256(system.encode()).hexdigest() == _BEAT_MATERIAL_V2_SYS_SHA256
+    assert hashlib.sha256(user.encode()).hexdigest() == _BEAT_MATERIAL_V2_USER_SHA256
 
 
 @pytest.mark.parametrize('fragment', [

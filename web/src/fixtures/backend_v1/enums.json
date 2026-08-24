@@ -279,14 +279,6 @@
   "address",
   "reference"
  ],
- "relation_visibility_kinds": [
-  "public",
-  "via_secret"
- ],
- "knowledge_subject_kinds": [
-  "character",
-  "group"
- ],
  "secret_setup_kinds": [
   "cold",
   "foreshadowed"
@@ -294,6 +286,14 @@
  "reveal_event_kinds": [
   "first",
   "confirm"
+ ],
+ "relation_visibility_kinds": [
+  "public",
+  "via_secret"
+ ],
+ "knowledge_subject_kinds": [
+  "character",
+  "group"
  ],
  "name_distinctiveness": [
   "high",
@@ -427,10 +427,6 @@
   "细腻",
   "张力",
   "质感"
- ],
- "stage5_write_contracts": [
-  "event-list-v1",
-  "beat-material-v2"
  ],
  "invent_guarded": {
   "新数字": "full",
@@ -589,7 +585,6 @@
   "--pick": "定稿选第几个候选（1 起）",
   "--wontfix": "这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填",
   "--chapters": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
-  "--write-contract": "Stage5 契约 A/B（仅 `event-list-v1|beat-material-v2`；临时实验入口）",
   "--adopt-residual": "只接受 `high`；采纳无冲突、未覆盖且 unit/suggest 完整的残留建议"
  },
  "write_effects": {
@@ -895,7 +890,6 @@
     "--apply-edit",
     "--revise",
     "--chapters",
-    "--write-contract",
     "--actor",
     "--reason"
    ],
@@ -1746,19 +1740,6 @@
    "writes": "stage5/ch{nn}.json · stage5/draft.md",
    "writes_disk": true,
    "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.write",
-   "label": "stage5 全书闭卷写作 --write-contract",
-   "extra": [
-    "--write-contract"
-   ],
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage5/ch{nn}.json · stage5/draft.md",
-   "writes_disk": true,
-   "needs_value": "Stage5 契约 A/B（仅 `event-list-v1|beat-material-v2`；临时实验入口）",
    "required_inputs": []
   },
   {

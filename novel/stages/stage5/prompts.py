@@ -23,7 +23,7 @@ from typing import Any
 
 from contracts.invariants import (
     HINGE_LABEL, LAYER_CN, LAYER_GLOSS,
-    STAGE5_WRITE_CONTRACTS, TIME_LAYERS, hinge_heading,
+    TIME_LAYERS, hinge_heading,
 )
 from novel.core.text import norm
 from novel.core.style import dash_per_1k, short_run_per_1k
@@ -97,20 +97,6 @@ ORDER_RULE = """\
 - 篇幅在拍与拍之间**本来就不平均**：`scene` 拍的【约 N 字】是让你把它演开，
   `summary` 拍的【约 N 字】是让你把几件事压过去。按每一拍自己的那个数写，
   不要把整章的字数平摊到每一条事实上。"""
-
-#: `98368925da9057b437b8a43a74b02433546b2192` 的闭卷写作顺序规则。
-#: 这不是第二份生产规则，只供一次性契约 A/B 的 `event-list-v1` 臂复现旧请求字节。
-#: ⚠ 空行、Markdown 标记与结尾都属于冻结字节；不得按现役措辞“顺手同步”。
-EVENT_LIST_V1_ORDER_RULE = """\
-【这是重构后的结构，不是原文顺序】
-内容清单已经重建过叙事入口、信息次序和场景边界；它可能先写后果，再回到原因。
-- **严格按给定 slot 顺序写**，不要改回你以为的时间顺序，也不要把一拍拆到两处。
-- 每拍的「叙事作用 / 承载 / 衔接」都是硬要求：`scene` 写成可见可听的场面，`summary` 压缩交代；
-  `earlier/later/return/parallel` 要用自然且明确的过渡让读者看懂，但不要写出这些标签。
-- 第一拍若是 `cold_open`，正文第一句就进入它的冲突或结果，不要先补背景；背景只在后续指定单元出现。
-- `cold_open` 只改变从哪件事起笔，**不要求短句、碎段或一句一段**。句长、段长、对白密度仍须服从
-  文风画像；一个 `scene` 也不是一段，按本书原有节奏自然组织句段。
-- 相邻两拍可以写成连贯的一段，但它们在正文里出现的先后必须照计划。"""
 
 #: 写法词的拆弹指令。
 #:
@@ -186,13 +172,6 @@ WRITE_SYS = """\
 - 每项只含 `slot` 与该段正文 `text`，不要章节标题、作者注或说明；
 - slot 的先后不归你决定，代码会按任务给定顺序组装整章。"""
 
-#: 旧臂的 system 只比当前模板少「beat 是叙述单位」那一段。用**完整旧块替换**，
-#: 不从当前块裁行，避免空行或结尾随现役规则继续变化。
-EVENT_LIST_V1_SYS = WRITE_SYS.replace(ORDER_RULE, EVENT_LIST_V1_ORDER_RULE)
-assert EVENT_LIST_V1_SYS != WRITE_SYS and EVENT_LIST_V1_SYS.count(
-    EVENT_LIST_V1_ORDER_RULE) == 1
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、修订尾指令
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,22 +226,6 @@ def write_system(*, revise: bool = False) -> str:
     """
     return with_json_shape(
         fill(WRITE_SYS + (REVISE_TAIL if revise else '')),
-        CHAPTER_RESPONSE_HINT,
-    )
-
-
-def experimental_write_system(contract: str, *, revise: bool = False) -> str:
-    """A/B 指定臂的实际 system；不传实验 flag 的生产入口仍是 ``write_system``。
-
-    ``event-list-v1`` 精确复现冻结提交的闭卷 ``DEEP_SYS``；
-    ``beat-material-v2`` 逐字复用当前生产模板。未知值关闭式拒绝，不回退当前臂。
-    """
-    if contract not in STAGE5_WRITE_CONTRACTS:
-        raise ValueError(
-            f'未知 Stage5 write contract {contract!r}；只接受 {STAGE5_WRITE_CONTRACTS}')
-    template = EVENT_LIST_V1_SYS if contract == 'event-list-v1' else WRITE_SYS
-    return with_json_shape(
-        fill(template + (REVISE_TAIL if revise else '')),
         CHAPTER_RESPONSE_HINT,
     )
 
@@ -754,188 +717,6 @@ def build_material(entry: dict[str, Any], book: M.Book) -> Material:
         blocks.append(prev)
     rendered = [b for b in blocks if b]
     return Material(blocks=rendered, given='\n\n'.join(rendered))
-
-
-def _event_list_v1_chapter_facts(entry: dict[str, Any]) -> str:
-    """冻结提交的逐 event 清单渲染；只供 ``event-list-v1`` 实验臂。"""
-    lines: list[str] = []
-    for i, be in enumerate(entry['segments'], 1):
-        b = be['budget_chars']
-        slot = str(be['slot'])
-        role = _ROLE_CN.get(be.get('narrative_role'), be.get('narrative_role') or '过渡')
-        delivery = _DELIVERY_CN.get(be.get('delivery'), be.get('delivery') or '场景展开')
-        transition = _TRANSITION_CN.get(be.get('transition'), be.get('transition') or '连续')
-        head = (f'{i}. 【slot={slot}；约 {b} 字；叙事作用={role}；'
-                f'承载={delivery}；衔接={transition}】')
-        evs = [e for e in (be.get('events') or []) if (e or '').strip()]
-        if len(evs) > 1:
-            lines.append(head + f'要写这 {len(evs)} 件事：' + _stage_line(be))
-            lines += [f'   {n} {e}' for n, e in zip('①②③④⑤⑥', evs)]
-        else:
-            lines.append(head + (evs[0] if evs else '') + _stage_line(be))
-        for key, label in HINGE_LABEL.items():
-            for text in (be.get(key) or []):
-                lines.append(f'     · {label}：{(text or "").strip()}')
-    body = '\n'.join(lines)
-    # v1 原样下发 narration；特别包括当时恒 null 的 focalizer。
-    narration = entry.get('narration') or []
-    return (body + f'\n\n叙述视角（按段）：{_compact(narration)}'
-            if narration else body)
-
-
-def _event_list_v1_prev_context(entry: dict[str, Any], book: M.Book) -> str | None:
-    """冻结提交的上一章上下文：逐拍、逐 event 全量列出。"""
-    previous = book.chapters.get(int(entry['output_ordinal']) - 1)
-    if not previous:
-        return None
-    bits = [f"上一章的目标：{_goal_directive(previous.get('chapter_goal'))}"]
-    bits += [f'· {event}' for beat in (previous.get('segments') or [])
-             for event in (beat.get('events') or []) if (event or '').strip()]
-    if previous.get('end_hook_goal'):
-        bits.append(
-            f"上一章结尾停在：{_goal_directive(previous['end_hook_goal'])}")
-    return ('── 上一章写了什么（仅供衔接，不要复述、不要接着展开它）──\n'
-            + '\n'.join(bits))
-
-
-def _event_list_v1_dialogue_block(entry: dict[str, Any], book: M.Book) -> str:
-    """冻结提交的闭卷对白块（历史 ``with_source_text=False``）。"""
-    base = book.measurable
-    if not base.get('dialogue_ratio_applicable'):
-        return ''
-    ratio = base.get('dialogue_ratio')
-    pct = f'{ratio * 100:.0f}%' if isinstance(ratio, (int, float)) else '相当比例'
-    sym = base.get('quote_styles') or []
-    lines = [
-        '── 对白形态（这本书的承重墙）──',
-        f"这本书对白密集，正文约 {pct} 的字符在引号里，引号体是 {sym[0] if sym else ''}。",
-    ]
-    # 历史 ``with_source_text=False`` 下引语数只被计算、从不进入 prompt；
-    # 冻结的是请求字节，不保留这次无输出的重复扫描。
-    cue = book.cue_rate
-    if cue is not None and cue >= 0.8:
-        lines.append(f'对白排版照这本书的惯例：提示语以冒号收尾后换行，引语单独成段'
-                     f'（原文 {cue:.0%} 如此）。')
-    return '\n'.join(lines)
-
-
-def _event_list_v1_material(entry: dict[str, Any], book: M.Book) -> Material:
-    """冻结提交的完整闭卷 ``build_material(..., with_source_text=False)``。
-
-    这里刻意完整保留旧函数的块顺序与块头，不从现役 ``build_material`` 做字符串替换。
-    否则现役下发面再改一行，两条实验臂会一起变化，所谓旧臂就不再是冻结对照。
-    无行为变化的叶子渲染器仍共用；历史函数逐字执行与固定哈希由专门测试守住。
-    """
-    lo, hi = target_band(entry)
-    plo, phi = target_paragraphs(entry, book)
-    nb = len(entry.get('segments') or [])
-    meas = book.measurable
-    density = density_guidance(book)
-    blocks = [
-        f'《{book.title}》',
-        '── 本章任务 ──\n' + chapter_directive(entry, book),
-        '── 篇幅（硬指标，写之前先据此规划）──\n'
-        f"这本书的章节体例是【{book.band_of.get('章篇幅', '')}】、"
-        f"排版是【{book.band_of.get('段落形态', '')}】，"
-        f'章与章的密度和这种排版本身就是它的风格。\n'
-        f"本章目标 **{lo}~{hi} 字**（约 {plo}~{phi} 个自然段；"
-        f"原章对应部分 {entry['source_chars']} 字），这是硬性要求。"
-        + (f'\n· **本章共 {nb} 拍，算下来平均每拍 {lo // nb}~{hi // nb} 字**。'
-           f'逐拍的`【约 N 字】`才是准数——高于均值的那几拍是重头、低于的快速推进，'
-           f'但**加起来必须落在上面的区间里**。' if nb else '')
-        + f"\n· 段落保持这本书的排版：{book.band_of.get('段落形态', '')}"
-          f'——不要把三四句话并成一大段，那不是这本书的样子。'
-        + f"\n· 句段手感（逐本实测，软指标）：这本书平均一句约 "
-          f"{meas.get('avg_sentence_chars')} 字、平均一段约 "
-          f"{meas.get('avg_paragraph_chars')} 字"
-        + (f'；写法密度基线：{density}' if density else '')
-        + '。写完回看：你的句段或任一写法密度若明显高于基线，就是写成了另一本书。',
-        _event_list_v1_dialogue_block(entry, book),
-        '── 本章要写的内容（按顺序；**只写这些**，不得新增剧情、也不要写别的章的事）──\n'
-        + _event_list_v1_chapter_facts(entry),
-        '── 人物（用这些名字，不要改名、不要另造称呼）──\n'
-        + _compact(writer_chars(entry, book)),
-        '── 世界设定 ──\n' + _compact((entry.get('facts') or {}).get('setting') or {}),
-        facts_block(entry),
-        style_block(book.style, source_ordinals=tuple(entry.get('from_source_ordinals') or [])),
-    ]
-    if (previous := _event_list_v1_prev_context(entry, book)):
-        blocks.append(previous)
-    rendered = [block for block in blocks if block]
-    return Material(blocks=rendered, given='\n\n'.join(rendered))
-
-
-def experimental_build_material(
-    contract: str,
-    entry: dict[str, Any],
-    book: M.Book,
-) -> Material:
-    """A/B 指定臂的 user 下发面；未知值绝不回退。"""
-    if contract not in STAGE5_WRITE_CONTRACTS:
-        raise ValueError(
-            f'未知 Stage5 write contract {contract!r}；只接受 {STAGE5_WRITE_CONTRACTS}')
-    return (_event_list_v1_material(entry, book)
-            if contract == 'event-list-v1' else build_material(entry, book))
-
-
-def _provenance_prompts(provenance: Any) -> dict[str, str]:
-    if isinstance(provenance, dict):
-        value = provenance.get('prompts') or {}
-    else:
-        value = getattr(provenance, 'prompts', {}) or {}
-    return {str(key): str(fp) for key, fp in value.items()}
-
-
-def explicit_contract_of(provenance: Any) -> str | None:
-    """从实验章来源账恢复臂；没有 ``CONTRACT`` 即正常生产 v2。"""
-    prompt_fps = _provenance_prompts(provenance)
-    recorded = prompt_fps.get('CONTRACT')
-    if recorded is None:
-        return None
-    from novel import prov
-    matched = [name for name in STAGE5_WRITE_CONTRACTS
-               if prov.fingerprint(name) == recorded]
-    if len(matched) != 1:
-        from novel.errors import ProvenanceRefused
-        raise ProvenanceRefused(
-            f'Stage5 章 provenance.CONTRACT={recorded!r} 不属于冻结实验取值面 '
-            f'{STAGE5_WRITE_CONTRACTS}；拒绝猜臂后重判')
-    return matched[0]
-
-
-def material_for_provenance(
-    entry: dict[str, Any],
-    book: M.Book,
-    provenance: Any,
-) -> Material:
-    """按章来源账恢复实际 user；生产章无实验标记时仍走当前唯一契约。
-
-    显式实验章同时核 ``SYS`` / ``USER`` / ``CONTRACT`` 与 accepted request：
-    任一缺失或不匹配都关闭式拒绝，不能拿另一臂的材料重判一份付费正文。
-    """
-    contract = explicit_contract_of(provenance)
-    if contract is None:
-        return build_material(entry, book)
-    from novel import prov
-    from novel.errors import ProvenanceRefused
-    mat = experimental_build_material(contract, entry, book)
-    prompt_fps = _provenance_prompts(provenance)
-    expected = {
-        'CONTRACT': prov.fingerprint(contract),
-        'SYS': prov.fingerprint(experimental_write_system(contract)),
-        'USER': prov.fingerprint(build_user(mat)),
-    }
-    mismatch = {key: (prompt_fps.get(key), value)
-                for key, value in expected.items() if prompt_fps.get(key) != value}
-    request_fp = (provenance.get('request_fingerprint')
-                  if isinstance(provenance, dict)
-                  else getattr(provenance, 'request_fingerprint', None))
-    if mismatch or not request_fp:
-        raise ProvenanceRefused(
-            f'Stage5 实验章 {contract} 的 provenance 不完整或自相矛盾：'
-            f'prompt_mismatch={mismatch}, request_fingerprint={bool(request_fp)}；'
-            '拒绝用猜测的契约重判')
-    return mat
 
 
 def build_user(mat: Material) -> str:

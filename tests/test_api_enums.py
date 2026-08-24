@@ -79,9 +79,10 @@ def test_the_web_enums_fixture_is_the_same_payload(paid_payload):
 
 def test_prompt_experiment_controls_are_not_published(paid_payload):
     assert 'prompt_experiments' not in paid_payload
-
-
     assert 'prompt_variants' not in paid_payload
+    assert '--write-contract' not in paid_payload['valued_flags']
+    assert all('--write-contract' not in (action['extra'] or ())
+               for action in paid_payload['actions'])
 
 
 def test_every_action_is_unique_and_buildable(paid_payload):
@@ -100,8 +101,7 @@ def test_every_action_is_unique_and_buildable(paid_payload):
         if action['needs_value']:
             index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
             value = ('1' if flags[index] == '--chapters'
-                     else ('event-list-v1' if flags[index] == '--write-contract'
-                           else 'C:/placeholder.json'))
+                     else 'C:/placeholder.json')
             flags.insert(index + 1, value)
         # ⚠ 必填项由**点下去的那个人**给（同 `needs_value` 那一格的理由）：
         #   `stage0/6.approve` 的 actor/reason 是人工凭据，`actions[]` 里不可能预先填好。

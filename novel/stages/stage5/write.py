@@ -45,7 +45,7 @@ import re
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from typing import Any
 
-from contracts.invariants import STAGE5_WRITE_CONTRACTS, STOP_REWRITE_AFTER
+from contracts.invariants import STOP_REWRITE_AFTER
 from novel.config import MAX_CONCURRENCY
 from contracts.rules import REGISTRY
 from contracts.schema.common import (
@@ -79,30 +79,6 @@ from novel.store import ArtifactStore
 MAX_TOKENS = 16000
 
 
-def _write_contract(value: str | None) -> str | None:
-    """实验值关闭式校验；``None`` 明确表示不改变生产入口。"""
-    if value is not None and value not in STAGE5_WRITE_CONTRACTS:
-        raise TerminalState(
-            f'--write-contract={value!r} 不存在；只接受 {STAGE5_WRITE_CONTRACTS}')
-    return value
-
-
-def _system_for(write_contract: str | None, *, revise: bool = False) -> str:
-    return (prompts.write_system(revise=revise)
-            if write_contract is None else
-            prompts.experimental_write_system(write_contract, revise=revise))
-
-
-def _material_for(
-    entry: dict[str, Any],
-    book: M.Book,
-    write_contract: str | None,
-) -> prompts.Material:
-    return (prompts.build_material(entry, book)
-            if write_contract is None else
-            prompts.experimental_build_material(write_contract, entry, book))
-
-
 def _rel(ordinal: int) -> str:
     return artifact_rel('stage5.chapter', nn=ordinal)
 
@@ -129,38 +105,6 @@ def require_canonical_layout(store: ArtifactStore) -> None:
             '请在独立 canonical base 从 Stage5 重建')
 
 
-def require_pristine_contract_ab(ctx: RunContext) -> None:
-    """TEMP: 契约 A/B 首稿只允许写进完全空白的 ``stage5`` 盘面。
-
-    实验要比较的是同一份冻结 Stage0～4 上游上的两次**首写**；若这里只枚举
-    ``chNN.json`` / ``draft.md`` 等现役名字，旧 ``deep|shallow``、``_rounds``、
-    ``.INVALID``，乃至以后新增却忘了同步本闸的证据都可能被洗成“未写过”。因此
-    本闸刻意不猜文件语义：``stage5`` 不存在或是空目录才算 pristine，根下任何
-    目录项都关闭式拒绝。普通无 ``--write-contract`` 的生产续跑不调用本函数。
-    """
-    stage5_dir = ctx.novel_dir / 'stage5'
-    if not os.path.lexists(stage5_dir):
-        return
-    if stage5_dir.is_symlink() or not stage5_dir.is_dir():
-        residual = ['stage5（不是普通目录）']
-    else:
-        try:
-            children = sorted(stage5_dir.iterdir(), key=lambda item: item.name)
-        except OSError as exc:
-            raise TerminalState(
-                f'Stage5 契约 A/B 无法读取 {stage5_dir}，不能证明盘面 pristine：{exc!r}') from exc
-        if not children:
-            return
-        residual = [f'stage5/{item.name}' for item in children[:16]]
-        if len(children) > 16:
-            residual.append(f'……另有 {len(children) - 16} 项')
-    raise TerminalState(
-        'Stage5 契约 A/B 只接受完全空白的首稿 base；'
-        f'发现既有 Stage5 残留 {residual}。'
-        'canonical/draft/review/rejected/trim/wontfix/_rounds/legacy/INVALID '
-        '任一存在都必须换独立空 base，不能续写、覆盖或静默复用')
-
-
 def _chapters_of(store: ArtifactStore, book: M.Book,
                  spec: str | None) -> list[dict[str, Any]]:
     """这一次要写哪几章。
@@ -185,8 +129,7 @@ def _chapters_of(store: ArtifactStore, book: M.Book,
 # 一、下发面 —— `--dry-run` 与真跑**共用这一个入口**
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_prompt(ctx: RunContext, chapters: str | None = None,
-                 write_contract: str | None = None
+def build_prompt(ctx: RunContext, chapters: str | None = None
                  ) -> tuple[str, str, prompts.Material]:
     """这一次**要发出去的** `(system, user, 下发面)`。
 
@@ -194,7 +137,6 @@ def build_prompt(ctx: RunContext, chapters: str | None = None,
     是两件事，而那种分家没有任何东西会报错。
     ⚠ `--dry-run` 只摊**这一次要写的第一章**——摊全部没人读得完，而形状是一样的。
     """
-    write_contract = _write_contract(write_contract)
     store = ArtifactStore(ctx)
     require_canonical_layout(store)
     book = review.load_book(ctx, store)
@@ -204,8 +146,8 @@ def build_prompt(ctx: RunContext, chapters: str | None = None,
             '这一次没有要写的章：计划里的每一章都已经有 canonical 成稿了。'
             '⚠ 这**不是**「没问题」——要重写某一章就用 `--chapters N` 明说')
     entry = todo[0]
-    mat = _material_for(entry, book, write_contract)
-    system, user = _system_for(write_contract), prompts.build_user(mat)
+    mat = prompts.build_material(entry, book)
+    system, user = prompts.write_system(), prompts.build_user(mat)
     assert_prompt_private_absent(
         CtxChapter.model_validate(entry), system=system, user=user)
     return system, user, mat
@@ -378,14 +320,12 @@ def ctx_purpose(entry: dict[str, Any]) -> str:
 
 
 def run_write(ctx: RunContext, client: LlmClient,
-              chapters: str | None = None,
-              write_contract: str | None = None) -> CheckReport:
+              chapters: str | None = None) -> CheckReport:
     """默认付费路：逐章一次调用。**一章失败不中断整批。**
 
     ⚠ 连贯性靠**上一章的计划**传递，**不给上一章的成稿**——否则写手会顺着自己刚写的续，
     偏差沿章累积，章与章也变成串行依赖（`prompts.prev_context`）。
     """
-    write_contract = _write_contract(write_contract)
     store = ArtifactStore(ctx)
     require_canonical_layout(store)
     book = review.load_book(ctx, store)
@@ -394,9 +334,7 @@ def run_write(ctx: RunContext, client: LlmClient,
         raise TerminalState(
             '这一次没有要写的章：计划里的每一章都已经有 canonical 成稿了。'
             '⚠ 这**不是**「没问题」——要重写某一章就用 `--chapters N` 明说')
-    return _run_group(
-        ctx, store, book, todo, client, revise=None,
-        write_contract=write_contract)
+    return _run_group(ctx, store, book, todo, client, revise=None)
 
 
 def _generate_chapter(
@@ -407,10 +345,9 @@ def _generate_chapter(
     revise: dict[int, tuple[str, list[list[str]], str]] | None,
     system: str,
     progress: RequestProgress,
-    write_contract: str | None = None,
 ) -> dict[str, Any]:
     ordinal = int(entry['output_ordinal'])
-    mat = _material_for(entry, book, write_contract)
+    mat = prompts.build_material(entry, book)
     if revise is not None:
         prev_text, fixes, review_fp = revise[ordinal]
         user = prompts.revise_user(mat, prev_text, _fix_lines(fixes))
@@ -492,9 +429,8 @@ def _run_group_parallel(
     client: LlmClient,
     *,
     revise: dict[int, tuple[str, list[list[str]], str]] | None,
-    write_contract: str | None,
 ) -> CheckReport:
-    system = _system_for(write_contract, revise=revise is not None)
+    system = prompts.write_system(revise=revise is not None)
     judged: dict[int, list] = {}
     written_by: dict[int, str] = {}
     blocked_by: dict[int, str] = {}
@@ -514,7 +450,6 @@ def _run_group_parallel(
                 book,
                 client,
                 revise=revise,
-                write_contract=write_contract,
                 system=system,
                 progress=tracker.request(int(entry['output_ordinal'])),
             ): int(entry['output_ordinal'])
@@ -570,20 +505,15 @@ def _run_group_parallel(
                     review=generated['review_fp'],
                     fixes=[list(item) for item in generated['fixes']],
                 )
+            request_fingerprint = client.accepted_request_fingerprint(
+                generated['accepted_purpose'])
+            if request_fingerprint is None:
+                raise ProvenanceRefused(
+                    f'第 {ordinal} 章已经返回正文，但 purpose='
+                    f'{generated["accepted_purpose"]!r} 没有 accepted attempt；'
+                    '拒绝估算或截断 request fingerprint')
+            extra['request_fingerprint'] = request_fingerprint
             prompt_record = {'SYS': system}
-            if write_contract is not None:
-                prompt_record.update({
-                    'USER': generated['user'],
-                    'CONTRACT': write_contract,
-                })
-                request_fingerprint = client.accepted_request_fingerprint(
-                    generated['accepted_purpose'])
-                if request_fingerprint is None:
-                    raise ProvenanceRefused(
-                        f'第 {ordinal} 章实验臂已经返回正文，但 purpose='
-                        f'{generated["accepted_purpose"]!r} 没有 accepted attempt；'
-                        '拒绝估算 request fingerprint')
-                extra['request_fingerprint'] = request_fingerprint
             provenance = ctx.llm_provenance_for_chapter(
                 ordinal,
                 RoundLlmProvenance,
@@ -644,11 +574,9 @@ def _run_group_parallel(
 
 def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
                todo: list[dict[str, Any]], client: LlmClient, *,
-               revise: dict[int, tuple[str, list[list[str]], str]] | None,
-               write_contract: str | None = None) -> CheckReport:
-    return _run_group_parallel(
-        ctx, store, book, todo, client, revise=revise,
-        write_contract=_write_contract(write_contract))
+               revise: dict[int, tuple[str, list[list[str]], str]] | None
+               ) -> CheckReport:
+    return _run_group_parallel(ctx, store, book, todo, client, revise=revise)
 
 
 def _fix_lines(fixes: list[list[str]]) -> list[str]:
@@ -715,14 +643,8 @@ def revise_targets(store: ArtifactStore
 
 
 def run_revise(ctx: RunContext, client: LlmClient,
-               chapters: str | None = None,
-               write_contract: str | None = None) -> CheckReport:
+               chapters: str | None = None) -> CheckReport:
     """`--revise`：把可反哺的结论连同上一轮成稿发回写手。**付费。**"""
-    if write_contract is not None:
-        _write_contract(write_contract)
-        raise TerminalState(
-            '--write-contract 是首稿 A/B 入口，不支持 --revise；'
-            '拒绝把实验稿静默交给另一套修订契约')
     store = ArtifactStore(ctx)
     require_canonical_layout(store)
     book = review.load_book(ctx, store)
@@ -748,17 +670,11 @@ def run_revise(ctx: RunContext, client: LlmClient,
             continue
         prev_art, _raw = store.read_own(
             Chapter, _rel(o), require_current=True)
-        if prompts.explicit_contract_of(prev_art.provenance) is not None:
-            raise TerminalState(
-                f'第 {o} 章是 --write-contract 产出的实验稿；--revise 不支持实验契约，'
-                '拒绝静默用当前 production prompt 修订')
         todo.append(entry)
         revise[o] = (prev_art.text, fixes, fp)
     for s in skipped:
         print(f'    · 跳过：{s}', flush=True)
-    return _run_group(
-        ctx, store, book, todo, client, revise=revise,
-        write_contract=None)
+    return _run_group(ctx, store, book, todo, client, revise=revise)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -793,8 +709,7 @@ def run_recheck(ctx: RunContext, chapters: str | None = None) -> CheckReport:
         segments, acc = _normalize_segments(
             [segment.model_dump() for segment in art.segments], book)
         text = _segments_text(segments)
-        mat = prompts.material_for_provenance(
-            entry, book, art.provenance).given
+        mat = prompts.build_material(entry, book).given
         fs, errs, warns = _judge(
             text, entry, book, mat=mat, account=acc,
             segments=segments)
@@ -850,8 +765,7 @@ def run_revalidate(
             continue
         art, _raw = store.read_own(Chapter, inv)
         entry = book.chapters[o]
-        mat = prompts.material_for_provenance(
-            entry, book, art.provenance).given
+        mat = prompts.build_material(entry, book).given
         segments, account = _normalize_segments(
             [segment.model_dump() for segment in art.segments], book)
         text = _segments_text(segments)

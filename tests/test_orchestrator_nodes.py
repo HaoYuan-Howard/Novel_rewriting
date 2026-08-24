@@ -50,8 +50,7 @@ def _args(flag: str, node: str | None = None) -> list[str]:
     而这张表想测的是「这条 flag 该节点认不认」，不是「必填项齐不齐」——
     后者有它自己的专测。
     """
-    value = ('event-list-v1' if flag == '--write-contract' else 'payload.json')
-    out = [flag, value] if flag in VALUED_FLAGS else [flag]
+    out = [flag, 'payload.json'] if flag in VALUED_FLAGS else [flag]
     if node is not None:
         for extra in N.missing_required(node, out):
             out += [extra, 'payload.json'] if extra in VALUED_FLAGS else [extra]
@@ -226,7 +225,8 @@ def test_no_current_node_takes_a_mode_and_stage5_rejects_retired_flags():
     assert 'mode' not in inspect.signature(N.build_steps).parameters
     assert 'mode' not in inspect.signature(N.step_label).parameters
     for flags in (['--deep', '1'], ['--shallow-rest'],
-                  ['--deep', '1,2,3', '--shallow-rest']):
+                  ['--deep', '1,2,3', '--shallow-rest'],
+                  ['--write-contract', 'event-list-v1']):
         with pytest.raises(UnsupportedRunMode, match='不接受'):
             N.build_argv('stage5.write', SID, flags, base=BASE)
 
@@ -236,34 +236,6 @@ def test_stage5_default_is_full_book_and_chapters_is_the_only_subset_selector():
     assert '--mode' not in whole and '--chapters' not in whole
     subset = N.build_argv('stage5.write', SID, ['--chapters', '1,3'], base=BASE)
     assert subset[subset.index('--chapters') + 1] == '1,3'
-
-
-def test_stage5_write_contract_is_a_paid_previewable_experiment_value():
-    flags = ['--write-contract', 'event-list-v1']
-    argv = N.build_argv('stage5.write', SID, flags, base=BASE)
-    assert argv[argv.index('--write-contract') + 1] == 'event-list-v1'
-    assert N.is_paid('stage5.write', flags) is True
-    dry = [*flags, '--dry-run']
-    assert N.is_paid('stage5.write', dry) is False
-    preview = N.build_argv('stage5.write', SID, dry, base=BASE)
-    assert preview[preview.index('--write-contract') + 1] == 'event-list-v1'
-    steps = N.build_steps('stage5.write', SID, flags, base=BASE)
-    assert '--write-contract' in steps[0].argv and steps[0].paid is True
-    assert all('--write-contract' not in step.argv for step in steps[1:])
-    with pytest.raises(UnsupportedRunMode, match='只接受'):
-        N.build_argv(
-            'stage5.write', SID, ['--write-contract', 'typo-v9'], base=BASE)
-
-
-@pytest.mark.parametrize('operation', [
-    '--revise', '--recheck', '--revalidate', '--apply-edit', '--rebuild-draft',
-])
-def test_stage5_write_contract_cannot_be_previewed_on_a_non_first_draft_path(operation):
-    flags = ['--write-contract', 'event-list-v1', operation]
-    if operation == '--apply-edit':
-        flags.append('edit.json')
-    with pytest.raises(UnsupportedRunMode, match='只切换 Stage5 首稿请求'):
-        N.build_argv('stage5.write', SID, flags, base=BASE)
 
 
 def test_stage5_rebuild_draft_is_a_free_writing_recovery_entry():

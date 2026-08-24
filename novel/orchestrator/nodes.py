@@ -30,7 +30,7 @@ from pathlib import Path
 
 from contracts.invariants import (
     CONDITIONAL_REQUIRED_FLAGS, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS,
-    REQUIRED_PLACEHOLDER_PREFIX, STAGE5_WRITE_CONTRACTS, VALUED_FLAGS, WRITE_EFFECTS,
+    REQUIRED_PLACEHOLDER_PREFIX, VALUED_FLAGS, WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import Step
 from novel import paths as novel_paths
@@ -173,16 +173,6 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
     if len(primary) > 1:
         raise UnsupportedRunMode(
             f'{node} 主操作互斥，一次只能选择一个，不能同时使用 {primary}')
-    if node == 'stage5.write' and '--write-contract' in tokens:
-        incompatible = sorted(set(tokens) & {
-            '--revise', '--recheck', '--revalidate', '--apply-edit',
-            '--rebuild-draft',
-        })
-        if incompatible:
-            raise UnsupportedRunMode(
-                '--write-contract 只切换 Stage5 首稿请求（或配 --dry-run 预览），'
-                f'不能与 {incompatible} 组合；免费重判按每章 provenance 恢复实际契约')
-
     # 带值 / 不带值都要当场对上：拼错的那条 argv **会真的被执行**。
     seq = list(flags)
     for i, tok in enumerate(seq):
@@ -202,12 +192,6 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
             raise UnsupportedRunMode(
                 f'{tok} 还是 preview 的占位符 {seq[i + 1]!r}，请换成真值'
                 f'（{VALUED_FLAGS.get(tok, "见节点文档")}）')
-        if (tok == '--write-contract' and has_value
-                and seq[i + 1] not in STAGE5_WRITE_CONTRACTS):
-            raise UnsupportedRunMode(
-                f'--write-contract={seq[i + 1]!r} 不存在；'
-                f'只接受 {STAGE5_WRITE_CONTRACTS}')
-
     # 必填缺项：拒在**展示与执行共用**的这一处（`R-11.8`）。开在节点函数体里
     # 只拦得住真跑那一半，而 preview 会照样摊开一条注定 exit 2 的命令。
     missing = missing_required(node, flags)

@@ -286,6 +286,7 @@ promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _prov
 | `revision_of` | `str` | 否 | 上一轮**正文**的指纹 |
 | `review` | `str` | 否 | 触发这一轮的报告指纹 |
 | `fixes` | `[[判据, 凭据键]…]` | 否 | 这一轮针对性下发了哪几条。**只存引用不存渲染后的指令文本** |
+| `request_fingerprint` | 64 位 sha256 | LLM 新产出**是**；字段引入前 v2 可缺 | 内容闸最终采纳的实际请求身份；从 accepted attempt 反查，不按默认档位估算 |
 | `origin` | `str` | 否 | 同 §5.1 |
 | `input_basis` | `str` | 否 | 同 §5.1 |
 
@@ -294,6 +295,11 @@ promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _prov
 
 ⚠ **`round` = 盘上见过的最大轮次 + 1**，含 `.INVALID` 与 `_rounds/`；
 **不是 `len(glob) + 1`**。后者在归档缺号时会重号覆盖。
+
+`request_fingerprint` 绑定的是最终被接受的请求：若首档响应不完整、随后降档成功，
+这里必须写降档请求的 64 位身份；命中旧 32 位 cache 文件名时也仍写完整 64 位身份。
+现役 Stage5 producer 拿不到 accepted attempt 就拒绝落章。字段在 v2 中以 additive 形状引入，
+因此 schema 允许早期 v2 缺席；缺席只表示请求身份未知，不能补算或截断后冒充。
 
 ---
 

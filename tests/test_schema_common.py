@@ -270,10 +270,13 @@ def test_round_provenance_reproduces_the_two_shapes_seen_on_disk():
     assert sorted(paid.to_disk()) == [
         'code', 'fixes', 'inputs', 'model', 'prompts', 'review', 'revision_of',
         'root_clean_sha1', 'round']
-    experiment = paid.model_copy(update={'request_fingerprint': 'f' * 64})
-    assert experiment.to_disk()['request_fingerprint'] == 'f' * 64
+    current = paid.model_copy(update={'request_fingerprint': 'f' * 64})
+    assert current.to_disk()['request_fingerprint'] == 'f' * 64
+    with pytest.raises(ValidationError):
+        RoundLlmProvenance.model_validate({
+            **paid.model_dump(), 'request_fingerprint': 'f' * 32})
     assert 'request_fingerprint' not in paid.to_disk(), \
-        '正式生产无实验 flag 时 additive request 身份必须保持键缺席'
+        '字段引入前的 v2 章没有请求身份，兼容读取时不得伪造；现役 producer 另有落盘守卫'
 
     human = RoundFreeProvenance(
         code='c', root_clean_sha1=ROOT, inputs=EDGE, round=3, revision_of='abc',

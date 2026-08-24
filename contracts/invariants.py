@@ -992,12 +992,6 @@ STYLE_WORDS: Final = (
 #: 它们不是现役写作臂，不得重新暴露到 CLI/API。
 LEGACY_STAGE5_MODES: Final = ('deep', 'shallow')
 
-#: Stage5 契约 A/B 的临时、闭合取值面。两者都仍是 canonical 闭卷写作，
-#: 只切换写手实际收到的 system/user 字节；schema、归一、落盘闸与规则表不切换。
-#: ⚠ 默认生产路径不读取这张表：不传实验 flag 时仍只走现役
-#: `beat-material-v2` 的原函数，避免实验选择器改变生产字节。
-STAGE5_WRITE_CONTRACTS: Final = ('event-list-v1', 'beat-material-v2')
-
 #: 发明边界。**保持元组不拍平成一句话**：将来给 forbid 逐项补探针时，探针读的就是这份。
 #: ⚠ 这份清单**是给写作节点看的，不是可查依据**。回写侧的覆盖情况见下面的 `INVENT_GUARDED`。
 INVENT_ALLOW: Final = ('感官细节', '环境', '动作分解', '内心独白', '对话的语气与节奏')
@@ -1452,7 +1446,6 @@ VALUED_FLAGS: Final = {
     # （它写的就是本节点 `produces` 里那一份，只是少写几章 ⇒ 不登记就落到 `produces`，正确）。
     # 两条都与 `--pick` 逐条同形。
     '--chapters': '只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章',
-    '--write-contract': 'Stage5 契约 A/B（仅 `event-list-v1|beat-material-v2`；临时实验入口）',
     '--adopt-residual': '只接受 `high`；采纳无冲突、未覆盖且 unit/suggest 完整的残留建议',
 }
 
@@ -1712,8 +1705,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 全书闭卷写作',
                                   flags=('--dry-run', '--recheck', '--revalidate',
                                          '--rebuild-draft', '--apply-edit', '--revise',
-                                         '--chapters', '--write-contract',
-                                         '--actor', '--reason'),
+                                         '--chapters', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE5_CHAPTER,
                                            artifact_paths.STAGE5_BOOK_DRAFT)),
     # ⚠ `--wontfix` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`），形态同 `--pick`。

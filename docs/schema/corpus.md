@@ -78,5 +78,9 @@ TODO-21 **未闭合**。因此：
 - 只有隔离双书从 producer 重建、manifest 提交、上述 `--require-corpus` 命令通过后，才能报告
   current-schema 语料硬验收完成。
 
+这份 manifest 只证明现役全链盘面闭合，不比较 Stage5 的旧 event-list 与现役 beat-material
+写作契约，也不能证明后者在质量、成本或速度上胜出。Stage5 消费 Stage1～4 上游；全链重跑的
+读数不能单独归因给 Stage5。
+
 实现落点为 `tests/corpus_manifest.py`；`tests/conftest.py` 在 `--require-corpus` 时调用同一
 `verify`，所以它是长期测试基础设施，不是一次性脚本。

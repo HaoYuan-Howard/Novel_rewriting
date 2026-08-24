@@ -16,7 +16,9 @@ import pytest
 
 from novel import prov
 from novel.cli import exit_codes as X
-from novel.errors import ArtifactUnreadable, GateBlocked, TerminalState
+from novel.errors import (
+    ArtifactUnreadable, GateBlocked, ProvenanceRefused, TerminalState,
+)
 from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
 )
@@ -510,7 +512,7 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
         write.M, 'load_drafts',
         lambda got, *, require_current: (dict(got.by_ord), [], {}))
     monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: object())
-    monkeypatch.setattr(write, '_system_for', lambda *_args, **_kwargs: 'SYS')
+    monkeypatch.setattr(write.prompts, 'write_system', lambda *_args, **_kwargs: 'SYS')
     monkeypatch.setattr(
         write, '_normalize_segments',
         lambda segments, _book: (segments, write.M.NormalizeAccount()))
@@ -518,9 +520,6 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
     monkeypatch.setattr(
         write, '_chapter_record',
         lambda entry, segments, _book, **_kwargs: record(entry, segments))
-    monkeypatch.setattr(
-        write.prompts, 'material_for_provenance',
-        lambda *_args, **_kwargs: SimpleNamespace(given='given'))
     monkeypatch.setattr(
         write.prompts, 'build_material',
         lambda *_args, **_kwargs: SimpleNamespace(given='given'))
@@ -548,22 +547,26 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
         }
 
     monkeypatch.setattr(write, '_generate_chapter', generated)
-    client = SimpleNamespace(concurrency=1, model='test-model')
+    client = SimpleNamespace(
+        concurrency=1,
+        model='test-model',
+        accepted_request_fingerprint=lambda purpose: ('a' * 63 + purpose[-1]),
+    )
 
     if write_path == 'initial':
         write._run_group_parallel(
             ctx, store, book, [entries[1]], client,
-            revise=None, write_contract=None)
+            revise=None)
     elif write_path == 'revise':
         store.by_ord[1] = record(entries[1], [{'slot': 's01', 'text': '旧正文。'}])
         write._run_group_parallel(
             ctx, store, book, [entries[1]], client,
-            revise={1: ('旧正文。', [], 'review-fp')}, write_contract=None)
+            revise={1: ('旧正文。', [], 'review-fp')})
     elif write_path == 'partial_success':
         store.by_ord[1] = record(entries[1], [{'slot': 's01', 'text': '第一章旧正文。'}])
         write._run_group_parallel(
             ctx, store, book, [entries[1], entries[2]], client,
-            revise=None, write_contract=None)
+            revise=None)
     elif write_path == 'recheck':
         store.by_ord[1] = record(entries[1], [{'slot': 's01', 'text': '重判正文。'}])
         write.run_recheck(ctx)
@@ -644,6 +647,10 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
                 'segments': [{'slot': 's01', 'text': '第二章完整结束。'}],
             })
 
+        @staticmethod
+        def accepted_request_fingerprint(_purpose):
+            return 'b' * 64
+
     class Store:
         @staticmethod
         def next_round(_rel):
@@ -712,9 +719,9 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
     assert captured['written'] and '第 1 章没拿到完整正文' in captured['blocked'][0]
 
 
-def test_experiment_chapter_provenance_uses_rendered_bytes_and_accepted_request(
+def test_production_chapter_provenance_uses_the_accepted_request(
         monkeypatch):
-    """实验章的 request 身份来自 accepted attempt 反查，不按首档参数估算。"""
+    """正式章的 request 身份来自 accepted attempt 反查，不按首档参数估算。"""
     accepted_request = 'b' * 64
     captured: dict[str, object] = {}
 
@@ -750,12 +757,10 @@ def test_experiment_chapter_provenance_uses_rendered_bytes_and_accepted_request(
         def write_round(rel, _artifact):
             return rel
 
+    monkeypatch.setattr(write.prompts, 'write_system', lambda **_kw: 'SYS')
     monkeypatch.setattr(
-        write.prompts, 'experimental_write_system',
-        lambda contract, **_kw: f'SYS:{contract}')
-    monkeypatch.setattr(
-        write.prompts, 'experimental_build_material',
-        lambda contract, *_a: SimpleNamespace(given=f'GIVEN:{contract}'))
+        write.prompts, 'build_material',
+        lambda *_a: SimpleNamespace(given='GIVEN'))
     monkeypatch.setattr(
         write.prompts, 'build_user', lambda mat: f'USER:{mat.given}')
     monkeypatch.setattr(
@@ -784,18 +789,13 @@ def test_experiment_chapter_provenance_uses_rendered_bytes_and_accepted_request(
     book = SimpleNamespace(quote_style='curly', sep_chars=[])
 
     assert write._run_group(
-        ctx, Store(), book, [entry], Client(), revise=None,
-        write_contract='event-list-v1') is report
+        ctx, Store(), book, [entry], Client(), revise=None) is report
     assert captured['wire'] == (
-        'SYS:event-list-v1', 'USER:GIVEN:event-list-v1', 'stage5.write·ch1')
+        'SYS', 'USER:GIVEN', 'stage5.write·ch1')
     assert captured['accepted_purpose'] == 'stage5.write·ch1'
     chapter, cls, kwargs = captured['provenance']
     assert chapter == 1 and cls is write.RoundLlmProvenance
-    assert kwargs['prompts'] == {
-        'SYS': 'SYS:event-list-v1',
-        'USER': 'USER:GIVEN:event-list-v1',
-        'CONTRACT': 'event-list-v1',
-    }
+    assert kwargs['prompts'] == {'SYS': 'SYS'}
     assert kwargs['request_fingerprint'] == accepted_request
 
 
@@ -869,7 +869,7 @@ class _LandingContext:
         return out
 
 
-def _experiment_response(text='完整章节。'):
+def _production_response(text='完整章节。'):
     return ChatResponse(
         content=json.dumps(
             {'segments': [{'slot': 's01', 'text': text}]},
@@ -880,12 +880,11 @@ def _experiment_response(text='完整章节。'):
     )
 
 
-def _experiment_request(book, entry, *, effort='high', thinking=True):
-    contract = 'event-list-v1'
-    material = write._material_for(entry, book, contract)
+def _production_request(book, entry, *, effort='high', thinking=True):
+    material = write.prompts.build_material(entry, book)
     return ChatRequest(
         model='test-model',
-        system=write._system_for(contract),
+        system=write.prompts.write_system(),
         user=write.prompts.build_user(material),
         reasoning_effort=effort,
         thinking=thinking,
@@ -894,7 +893,7 @@ def _experiment_request(book, entry, *, effort='high', thinking=True):
     )
 
 
-def _run_real_experiment_landing(monkeypatch, transport, *, cache=None):
+def _run_real_production_landing(monkeypatch, transport, *, cache=None):
     """只豁免与本回归无关的正文判据；其余写作落盘链走生产实现。"""
     book = factories.stage5_book()
     entry = book.chapters[1]
@@ -917,14 +916,7 @@ def _run_real_experiment_landing(monkeypatch, transport, *, cache=None):
     monkeypatch.setattr(write, '_report', lambda *_args, **_kwargs: report)
 
     got = write._run_group(
-        ctx,
-        store,
-        book,
-        [entry],
-        client,
-        revise=None,
-        write_contract='event-list-v1',
-    )
+        ctx, store, book, [entry], client, revise=None)
     assert got is report
     [(rel, chapter)] = store.landed
     assert rel == 'stage5/ch01.json'
@@ -933,10 +925,10 @@ def _run_real_experiment_landing(monkeypatch, transport, *, cache=None):
     return ctx, client, reloaded, book, entry
 
 
-def test_real_experiment_write_lands_a_full_request_sha256(monkeypatch):
-    transport = FakeTransport.always(_experiment_response())
+def test_real_production_write_lands_a_full_request_sha256(monkeypatch):
+    transport = FakeTransport.always(_production_response())
 
-    ctx, client, chapter, _book, _entry = _run_real_experiment_landing(
+    ctx, client, chapter, _book, _entry = _run_real_production_landing(
         monkeypatch, transport)
 
     assert len(transport.calls) == 1
@@ -947,19 +939,29 @@ def test_real_experiment_write_lands_a_full_request_sha256(monkeypatch):
     assert ctx.ledger.calls_made == 1
 
 
-def test_real_experiment_write_reuses_the_existing_32_char_cache_path(monkeypatch):
+def test_production_write_refuses_to_land_without_an_accepted_request_identity(
+        monkeypatch):
+    monkeypatch.setattr(
+        LlmClient, 'accepted_request_fingerprint', lambda *_args: None)
+    transport = FakeTransport.always(_production_response())
+
+    with pytest.raises(ProvenanceRefused, match='没有 accepted attempt'):
+        _run_real_production_landing(monkeypatch, transport)
+
+
+def test_real_production_write_reuses_the_existing_32_char_cache_path(monkeypatch):
     cache_dir = Path(tempfile.mkdtemp())
     cache = ResponseCache(cache_dir)
     book = factories.stage5_book()
     entry = book.chapters[1]
-    request = _experiment_request(book, entry)
+    request = _production_request(book, entry)
     old_key = cache_key(request)
     assert len(old_key) == 32
-    cache.put(old_key, _experiment_response('缓存里的完整章节。'))
+    cache.put(old_key, _production_response('缓存里的完整章节。'))
     assert (cache_dir / f'{old_key}.json').is_file()
-    transport = FakeTransport.always(_experiment_response('不应上线。'))
+    transport = FakeTransport.always(_production_response('不应上线。'))
 
-    ctx, _client, chapter, _book, _entry = _run_real_experiment_landing(
+    ctx, _client, chapter, _book, _entry = _run_real_production_landing(
         monkeypatch, transport, cache=ResponseCache(cache_dir))
 
     assert transport.calls == []
@@ -969,15 +971,15 @@ def test_real_experiment_write_reuses_the_existing_32_char_cache_path(monkeypatc
     assert (cache_dir / f'{old_key}.json').is_file(), '兼容缓存不应被迁移或改名'
 
 
-def test_real_experiment_write_binds_provenance_to_the_accepted_lower_rung(
+def test_real_production_write_binds_provenance_to_the_accepted_lower_rung(
         monkeypatch):
     truncated = ChatResponse(
         content='{"segments":[', finish_reason='length', model='test-model')
-    accepted = _experiment_response('降档后完整章节。')
+    accepted = _production_response('降档后完整章节。')
     transport = FakeTransport(
         responder=lambda _request, index: truncated if index == 0 else accepted)
 
-    ctx, client, chapter, _book, _entry = _run_real_experiment_landing(
+    ctx, client, chapter, _book, _entry = _run_real_production_landing(
         monkeypatch, transport)
 
     assert [(req.reasoning_effort, req.thinking) for req in transport.calls] == [
@@ -1016,6 +1018,10 @@ def test_stage5_chapters_run_together_up_to_32(
             return write.ChapterResponse.model_validate({
                 'segments': [{'slot': 's01', 'text': '完整章节。'}],
             })
+
+        @staticmethod
+        def accepted_request_fingerprint(_purpose):
+            return 'c' * 64
 
     class Store:
         @staticmethod
@@ -1090,66 +1096,19 @@ def test_targeted_stage5_refreshes_cache_and_does_not_print_false_success(
     monkeypatch.setattr(cli, '_llm_client', lambda _ctx: object())
     monkeypatch.setattr(cli, 'render', lambda _report: 'REPORT')
 
-    def fake_run(run_ctx, _client, chapters, *, write_contract=None):
+    def fake_run(run_ctx, _client, chapters):
         seen['cache'] = run_ctx.cache.name
         seen['chapters'] = chapters
-        seen['write_contract'] = write_contract
         return failed_report
 
     monkeypatch.setattr(write, 'run_write', fake_run)
     rc = cli._run_stage5(ctx, ['--chapters', '5,5'])
 
     assert rc == X.CHECK_FAILED
-    assert seen == {'cache': 'refresh-write', 'chapters': '5', 'write_contract': None}
+    assert seen == {'cache': 'refresh-write', 'chapters': '5'}
     output = capsys.readouterr().out
     assert '✓ 逐章成稿已落盘' not in output
     assert '仍有阻断稿' in output
-
-
-def test_stage5_cli_forwards_write_contract_to_preview_and_paid_run(
-        monkeypatch, capsys):
-    cli = importlib.import_module('novel.cli.main')
-    ctx = SimpleNamespace(node='stage5.write', cache=CachePolicy.default())
-    seen = {}
-
-    def preview(_ctx, chapters, *, write_contract=None):
-        seen['preview'] = (chapters, write_contract)
-        return 'SYS', 'USER', object()
-
-    monkeypatch.setattr(write, 'build_prompt', preview)
-    assert cli._run_stage5(
-        ctx, ['--dry-run', '--write-contract', 'event-list-v1']) == X.OK
-    assert seen['preview'] == (None, 'event-list-v1')
-    output = capsys.readouterr().out
-    assert 'SYS' in output and 'USER' in output
-
-    report = SimpleNamespace(passed=True)
-    client = object()
-    monkeypatch.setattr(cli, '_llm_client', lambda _ctx: client)
-    monkeypatch.setattr(cli, 'render', lambda _report: 'REPORT')
-
-    def paid(_ctx, got_client, chapters, *, write_contract=None):
-        seen['paid'] = (got_client, chapters, write_contract)
-        return report
-
-    monkeypatch.setattr(write, 'run_write', paid)
-    assert cli._run_stage5(
-        ctx, ['--write-contract', 'beat-material-v2']) == X.OK
-    assert seen['paid'] == (client, None, 'beat-material-v2')
-
-
-@pytest.mark.parametrize('flags', [
-    ['--recheck'],
-    ['--revalidate'],
-    ['--rebuild-draft'],
-    ['--apply-edit', 'edit.json'],
-])
-def test_stage5_cli_refuses_a_contract_selector_on_non_generation_paths(flags):
-    cli = importlib.import_module('novel.cli.main')
-    ctx = SimpleNamespace(node='stage5.write', cache=CachePolicy.default())
-    with pytest.raises(TerminalState, match='只切换首稿请求'):
-        cli._run_stage5(
-            ctx, ['--write-contract', 'event-list-v1', *flags])
 
 
 def test_targeted_free_recovery_forwards_chapters_and_book_projection_refuses_them(

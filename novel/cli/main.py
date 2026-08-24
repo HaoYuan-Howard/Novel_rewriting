@@ -41,8 +41,7 @@ import traceback
 from collections.abc import Callable, Sequence
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, PAID_FLAGS, PROGRESS_PHASES, STAGE5_WRITE_CONTRACTS,
-    STAGES, VALUED_FLAGS,
+    FREE_ENTRIES, NODES, PAID_FLAGS, PROGRESS_PHASES, STAGES, VALUED_FLAGS,
 )
 from contracts.schema.orchestration import ProgressEvent
 from novel import paths, prov
@@ -726,7 +725,6 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
 
     tokens = set(N.flag_tokens(flags))
     chapters = _valued(flags, '--chapters')
-    write_contract = _valued(flags, '--write-contract')
 
     if ctx.node == 'stage5.review':
         if '--retain-pretrim' in tokens:
@@ -770,12 +768,6 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     # ── 以下是 `stage5.write` ────────────────────────────────────────────────
-    if write_contract and tokens & {
-            '--rebuild-draft', '--recheck', '--revalidate', '--apply-edit'}:
-        raise TerminalState(
-            '--write-contract 只切换首稿请求（或 --dry-run 查看请求），'
-            '重判/提升/人工编辑按章 provenance 恢复契约，不接受选择器')
-
     if '--rebuild-draft' in tokens:
         if chapters:
             raise TerminalState('--rebuild-draft 是全书纯投影恢复，不接受 --chapters')
@@ -784,8 +776,7 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     if '--dry-run' in tokens:
-        system, user, _mat = write.build_prompt(
-            ctx, chapters, write_contract=write_contract)
+        system, user, _mat = write.build_prompt(ctx, chapters)
         print(f'── system（{len(system)} 字）──\n{system}')
         print(f'\n── user（{len(user)} 字）──\n{user}')
         return X.OK
@@ -818,11 +809,9 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
         ctx.cache = CachePolicy.refresh()
     client = _llm_client(ctx)
     if '--revise' in tokens:
-        report = write.run_revise(
-            ctx, client, chapters, write_contract=write_contract)
+        report = write.run_revise(ctx, client, chapters)
     else:
-        report = write.run_write(
-            ctx, client, chapters, write_contract=write_contract)
+        report = write.run_write(ctx, client, chapters)
     print(render(report))
     print('  ✓ 逐章成稿已落盘——跑 `stage5.review`（0 成本）看全书验收'
           if report.passed
@@ -972,28 +961,13 @@ def _cmd_run(a: argparse.Namespace) -> int:
         raise TerminalState(
             f'{a.node} 要已有书 sid；只有 stage0.remove --source 摄入新书时可以省略')
     ctx = RunContext.open(a.base, a.sid, a.node, paid=paid)
-    contract_ab = (a.node == 'stage5.write'
-                   and _valued(flags, '--write-contract') in STAGE5_WRITE_CONTRACTS)
-    if contract_ab:
-        # TEMP(Stage5 contract A/B): 在事实闸、dispatch、client/ledger 之前先证明
-        # 这是一个真正的空白首写 base。普通无 selector 的生产续跑不经过这里。
-        from novel.stages.stage5 import write
-        write.require_pristine_contract_ab(ctx)
     # Stage2 人工评测是**运行边界**，不是某个编排器的礼貌约定。任何调用方
     # （手敲 CLI、前端 jobs、headless agent）最终都要经过这里；0 成本复检/人工修复
     # 仍可在闸关闭时运行，否则人连开闸的恢复路都进不去。
     if ((paid and a.node not in ('stage2.global',))
             or a.node == 'stage7.assemble'):
         from novel.stages.stage2 import global_review
-        # TEMP(Stage5 contract A/B): 只在精确的付费首稿实验入口放宽「逐项全
-        # PASS」。`validate_run` 已在上方拒绝未知值/其他节点/恢复路径；`--yes`
-        # 也已先于这里校验。实验专用校验仍关闭式守 current-schema、ArtifactStore
-        # freshness 与完整评测面。生产无 selector 的行为继续走原硬闸，A/B 裁决后
-        # 本分支与 `--write-contract` 必须整体删除。
-        if contract_ab:
-            global_review.require_current_for_stage5_contract_ab(ctx)
-        else:
-            global_review.require_approved(ctx)
+        global_review.require_approved(ctx)
     return _dispatch(a.node, ctx, flags)
 
 

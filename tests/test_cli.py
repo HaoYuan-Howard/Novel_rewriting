@@ -315,15 +315,20 @@ def test_direct_cli_rejects_a_flag_the_node_does_not_accept_before_costing_it(bo
     assert '不接受' in err and '会花钱' not in err and 'Traceback' not in err
 
 
-@pytest.mark.corpus
-def test_direct_cli_parser_has_no_retired_mode_entry(box, capsys):
-    """已删除的 `--mode` 在 argparse 入口就拒绝，不能进入 RunContext。"""
+@pytest.mark.parametrize(('node', 'retired_args'), [
+    ('stage5.review', ['--mode', 'deep', '--check-only']),
+    ('stage5.write', ['--write-contract', 'event-list-v1']),
+])
+def test_direct_cli_parser_has_no_retired_stage5_entry(
+        tmp_path, capsys, node, retired_args):
+    """已删除的 Stage5 选择器在 argparse 入口就拒绝，不能进入 RunContext。"""
     with pytest.raises(SystemExit) as stopped:
-        _run('run', 'stage5.review', box.sid, '--mode', 'deep', '--check-only',
-             '--base', str(box.root))
+        _run('run', node, 'retired-stage5-entry', *retired_args,
+             '--base', str(tmp_path))
     assert stopped.value.code == 2
     err = capsys.readouterr().err
-    assert '--mode' in err and 'unrecognized arguments' in err and 'Traceback' not in err
+    assert retired_args[0] in err
+    assert 'unrecognized arguments' in err and 'Traceback' not in err
 
 
 # ───────────────────── 钱（Q-10） ─────────────────────
