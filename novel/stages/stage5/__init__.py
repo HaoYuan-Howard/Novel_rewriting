@@ -5,7 +5,7 @@
 六个模块：
     measure.py   确定性核心（归一链 / 重合度 / 篇幅带 / 成稿装载）。**纯函数**
     prompts.py   两条臂的 system + 下发面组装
-    checks.py    47 条确定性机械判据的实现（写作闸门与整书验收共用）
+    checks.py    46 条确定性机械判据的实现（写作闸门与整书验收共用）
     write.py     逐章写作节点的六条路
     review.py    全书验收节点的两条路
     semantic.py  2 条书级语义判据：secret-blind claims → secret 对齐

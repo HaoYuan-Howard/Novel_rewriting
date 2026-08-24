@@ -39,8 +39,6 @@ export interface EnumsResponse {
   hinge_groups: Record<string, string>
   style_words: string[]
   invent: { allow: string[]; forbid: string[]; principle: string }
-  voice_keys: string[]
-  hook_keys: string[]
   job_kinds: Record<string, EnumJobKind>
   actions: EnumAction[]
   uncovered_min_chars: number

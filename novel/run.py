@@ -240,8 +240,8 @@ class RunContext:
         而它们是同一件事——`Q-6`：同一个语义必须叫同一个名字）。
 
         ⚠⚠ **「0 成本不许记 `model`」这道闸开在这里，不开在写盘口**（`_common.md` §1.2）。
-        这是本轮实测挪的一处：写盘口拦不住它，因为**三条 0 成本入口本来就要写回一份
-        带 `model` 的来源账**——`--revalidate` / `--remeasure` / `--recheck` 改写的是
+        这是本轮实测挪的一处：写盘口拦不住它，因为若干 0 成本入口本来就要写回一份
+        带 `model` 的来源账——`--revalidate` / `--recheck` 改写的是
         **付费节点产的**那份产物，它记的 `model` 属于当初那次付费产出，
         不是本次跑的新宣称；`stage6.approve` / `stage7.approve` 同理（0 成本节点，
         改的是付费产物）。⇒ 真正该拦的是「**0 成本的跑现造一份声称模型产了它的账**」，
@@ -252,7 +252,7 @@ class RunContext:
                 f'{self.node} 这一次跑不花钱（paid=False），却在现造一份带 `model` 的来源账。'
                 f'记一个 `model` 上去就是宣称「某个模型产了它」，而这一次跑一个模型都没调。'
                 f'⇒ 0 成本产出走 `free_provenance()`；'
-                f'要写回一份**继承来的**来源账（`--revalidate`/`--remeasure`/定稿节点…），'
+                f'要写回一份**继承来的**来源账（`--revalidate`/`--recheck`/定稿节点…），'
                 f'走 `store.promote_invalid()` 或直接把读上来的那一份原样带下去，别现造')
         out = cls(code=self.code, root_clean_sha1=self._require_single_root(), inputs=self.edges,
                   prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
@@ -301,7 +301,7 @@ class RunContext:
     def rewrite_provenance(self, prev: P, *, by: str) -> P:
         """**第三个口，也是最窄的一个**：一条 0 成本路径只改了这份产物的一部分。
 
-        `--remeasure` / `--recheck` / `--renormalize`，以及只改一部分决策集的
+        `--recheck` / `--renormalize`，以及只改一部分决策集的
         `--apply-edit`，改完之后那一份是**混版的**：
         LLM 写的那些字段出自当初那次付费产出，被改的那部分是**现在**从盘上重算的。
         ⇒ 继承 `prompts` / `model` 一个字不动，换掉 `inputs`（本次真读到的），

@@ -3,36 +3,27 @@
  "node": "stage3.style",
  "stage": "stage3",
  "provenance": {
-  "freshness": "stale",
-  "reason": "file_changed",
+  "freshness": "fresh",
+  "reason": "match",
   "ghosts": [],
   "edges": [
    {
     "key": "stage1/hook_copy.json",
-    "state": "stale",
-    "reason": "file_changed",
+    "state": "fresh",
+    "reason": "match",
     "recorded_file": "10d7955546",
-    "now_file": "2a0733c23b",
-    "recorded_consumed": null,
-    "now_consumed": null
+    "now_file": "10d7955546",
+    "recorded_consumed": "f3a117bd88",
+    "now_consumed": "f3a117bd88"
    },
    {
     "key": "stage1/main_text.json",
-    "state": "stale",
-    "reason": "file_changed",
+    "state": "fresh",
+    "reason": "match",
     "recorded_file": "b8eb890096",
-    "now_file": "779dd4827b",
-    "recorded_consumed": null,
-    "now_consumed": null
-   },
-   {
-    "key": "stage2/global_grounding.json",
-    "state": "stale",
-    "reason": "file_changed",
-    "recorded_file": "ad1e9a0db7",
-    "now_file": "64eae24202",
-    "recorded_consumed": null,
-    "now_consumed": null
+    "now_file": "b8eb890096",
+    "recorded_consumed": "ac13972e14",
+    "now_consumed": "ac13972e14"
    }
   ],
   "invalid": false,
@@ -41,177 +32,32 @@
  },
  "rules": [
   {
-   "rule": "habit_quote",
-   "sev": "hard",
-   "status": "ok",
-   "item": "surface_habits 举具体词例",
-   "requirement": "R-4.13",
-   "check_kind": "mechanical",
-   "remediation": "llm",
-   "fix": {
-    "node": "stage3.style",
-    "flags": [
-     "--repair-surface-habits"
-    ],
-    "paid": true
-   },
-   "findings": [],
-   "why": null,
-   "scanned": "5 条 surface_habits（含 0 个逐章风格块）",
-   "baseline": null
-  },
-  {
    "rule": "measurable_drift",
    "sev": "hard",
    "status": "ok",
-   "item": "measurable 与盘上的 stage1 一致",
+   "item": "机械基线与当前 Stage1 一致",
    "requirement": "R-4.1",
    "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
+   "remediation": "deterministic",
+   "fix": {
+    "node": "stage3.style",
+    "flags": [],
+    "paid": false,
+    "available": true,
+    "unavailable_reason": null
+   },
    "findings": [],
    "why": null,
    "scanned": "body 14 项 · hook 9 项",
-   "baseline": null
-  },
-  {
-   "rule": "micro_quote",
-   "sev": "info",
-   "status": "ok",
-   "item": "原文微引用",
-   "requirement": "R-4.12",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "20 个文本字段（surface_habits 除外，它归 habit_quote）",
-   "baseline": null
-  },
-  {
-   "rule": "name_leak",
-   "sev": "hard",
-   "status": "ok",
-   "item": "人物专名泄漏",
-   "requirement": "R-4.5",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "拿 22 个专名扫过 20 个文本字段",
-   "baseline": null
-  },
-  {
-   "rule": "node_leak",
-   "sev": "info",
-   "status": "ok",
-   "item": "内部工作流名泄漏",
-   "requirement": "R-4.14",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "20 个文本字段",
-   "baseline": "盘上三本 0/3 命中（`N1`/`gate`/`blueprint`/`stage N`/`QC`）"
-  },
-  {
-   "rule": "number_dup",
-   "sev": "hard",
-   "status": "ok",
-   "item": "实测数字被复述进描述",
-   "requirement": "R-4.4",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "20 个文本字段",
-   "baseline": null
-  },
-  {
-   "rule": "required",
-   "sev": "hard",
-   "status": "ok",
-   "item": "必填齐全",
-   "requirement": "R-4.11",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "voice 8/8 维 · surface_habits 5 条 · chapter_styles 0 条 · hook_style 有",
-   "baseline": null
-  },
-  {
-   "rule": "struct_ref",
-   "sev": "info",
-   "status": "ok",
-   "item": "结构/章节引用",
-   "requirement": "R-4.14",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "20 个文本字段",
-   "baseline": null
-  },
-  {
-   "rule": "verbatim",
-   "sev": "hard",
-   "status": "ok",
-   "item": "原句摘抄（≥20 字连续命中原文）",
-   "requirement": "R-4.12",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "20 个文本字段 × 8189 字归一语料",
-   "baseline": null
+   "baseline": null,
+   "note": "两块摊平后取叶子并集逐项比较；测量算法版本也进入 Stage3 consumed 投影。"
   }
  ],
- "accounting": [
-  {
-   "key": "attempts",
-   "item": "这份稿第几次才产对的？返工改了什么？",
-   "recorded": true,
-   "count": 1,
-   "detail": [
-    "{'kind': 'initial', 'user_prompt': '37b4277e08', 'cache_policy': 'default', 'output': '345dd96743'}"
-   ]
-  },
-  {
-   "key": "revalidated",
-   "item": "这份稿是跑出来的，还是被重判提升上来的？",
-   "recorded": false,
-   "count": 0,
-   "detail": []
-  },
-  {
-   "key": "gates_skipped",
-   "item": "哪几条阻断级判据当时【没跑成】？",
-   "recorded": false,
-   "count": 0,
-   "detail": []
-  }
- ],
- "retired": [
-  {
-   "rule": "cliche",
-   "why": "套话词表（九词）× 描述短于 25 字。九个词是拍脑袋列的、没有基线命中率；且「短于 25 字」与「是不是套话」无关——一句 20 字的精准描述会被判，一段 200 字的车轱辘话不会。判据 31"
-  },
-  {
-   "rule": "num_vs_desc",
-   "why": "实测句长 vs 描述里的「长句/短句」字面。拿关键词去匹配自由散文：描述写「长短句交错」时既含「长句」又含「短句」，判据只能靠 `and \"短句\" not in rhythm` 兜一层，换个说法就失效。判据 31"
-  }
- ],
+ "accounting": [],
  "badge": "pass",
  "passed": true,
  "counts": {
-  "ok": 9,
+  "ok": 1,
   "hit": 0,
   "unver": 0,
   "skipped": 0

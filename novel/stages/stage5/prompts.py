@@ -100,7 +100,7 @@ ORDER_RULE = """\
   `earlier/later/return/parallel` 要用自然且明确的过渡让读者看懂，但不要写出这些标签。
 - 第一拍若是 `cold_open`，正文第一句就进入它的冲突或结果，不要先补背景；背景只在后续指定单元出现。
 - `cold_open` 只改变从哪件事起笔，**不要求短句、碎段或一句一段**。句长、段长、对白密度仍须服从
-  文风画像；一个 `scene` 也不是一段，按本书原有节奏自然组织句段。
+  下方正文机械形态基线；一个 `scene` 也不是一段，按本书实测节奏自然组织句段。
 - 相邻两拍可以写成连贯的一段，但它们在正文里出现的先后必须照计划。
 
 【一拍是一个叙述单位，不是一张待办清单】
@@ -125,10 +125,10 @@ ORDER_RULE = """\
 #: 「铺开心理历程 / 加强冲击」，而**那两个不在词表里**。
 #: ⚠ 缩进对齐两条臂里的挂点 `   ·`：续行 5 空格，与同层的【对白保持对白】那条一致。
 STYLE_WORD_RULE = fill("""\
-【任务与声音冲突时，按声音转译，不照字面执行】：任务说的是【这一章要完成什么】，
-     声音说的是【这本书只能怎么说】。任务里若出现「$WORDS」
-     这类【写法】上的说法，而这本书并不这么写（比如它靠笑料打岔、靠冷硬短句白描），
-     就用这本书自己的方式去达成同一个叙事目的。
+【任务写法词与现有文面证据冲突时，按证据转译，不照字面执行】：任务说的是
+     【这一章要完成什么】；下方正文机械形态基线与给定文本样本说的是【表面怎么落笔】。
+     任务里若出现「$WORDS」这类【写法】上的说法，而文本样本与机械基线并不这么写，
+     就按已有证据达成同一个叙事目的。
      照字面执行会把这本书写成另一个类型的书——那是最严重的失败。""")
 
 
@@ -140,7 +140,7 @@ STYLE_WORD_RULE = fill("""\
 DEEP_SYS = """\
 你是网文写手。你在把一部小说改写成【更紧、更强】的重构版，现在只写其中【一章】的正文。
 
-【你拿到什么】这一章要写哪几拍、每一拍展开到什么程度、这本书的声音与写作习惯、全书人物与设定。
+【你拿到什么】这一章要写哪几拍、每一拍展开到什么程度、正文机械形态基线、全书人物与设定。
 【你拿不到原章的文字】——这是刻意的：不要试图复原原句，照给你的内容【重新写】这一章。
 
 【你的活是落笔，不是策划】
@@ -167,15 +167,14 @@ DEEP_SYS = """\
 
 硬要求：
 1. 【只写给定内容里有的】。人物、关系、事件、因果都以给定内容为准；给定内容没有的，一个字都不要加。
-2. 【声音要像同一本书】。严格按给定的声音与写作习惯写：叙述距离、语域口吻、内心戏的插入方式、句段形态、
-   对白呈现形式、章首章尾的惯例、以及在不同情境下声音该怎么变。这是最高优先级——情节对但声音不像，等于失败。
-   你手里【原样写入】的那些句子是这本书声音的标本：落笔的语气、用词习惯、句子长短向它们看齐；
-   画像只是对标本的规律总结——标本与画像冲突时，信标本。
+2. 【文面要像同一本书】。严格按下方正文机械形态基线控制句段、对白占比、引号与排版。
+   你手里【原样写入】的那些句子是有限的文本标本：落笔的语气、用词习惯向它们看齐；
+   机械基线与文本标本冲突时，文本标本优先。
    ·""" + STYLE_WORD_RULE + """
    ·【对白保持对白】给定内容明确承载的对白（尤其【原样写入】里的台词）必须写成【直接引语】，用这本书的引号体
      （符号、占比、排版惯例在下方「对白形态」里给出）；不许拿转述代替台词充数。
      你看不到原章台词清单，因此**不要为了追一个数量凭空编台词**；没有下发具体措辞的地方，
-     只按事件真实需要写对白。对白占比是声音参照，不是要求凑数的目标。
+     只按事件真实需要写对白。对白占比是机械参照，不是要求凑数的目标。
 3. 【视角按给定的叙述视角写】。若分了多段（如末尾是另一个人的视角），就按分段切换叙述者，
    换人时声音也要换（不是同一个人的腔调套另一个名字）。
 4. 【人名一律用给定的原名】，不要改名、不要替换称呼体系。
@@ -198,7 +197,7 @@ DEEP_SYS = """\
 SHALLOW_SYS = """\
 你是网文写手。你在把一部小说改写成【更紧、更强】的重构版，现在只改写其中【一章】的正文。
 
-【你拿到什么】这一章要写哪几拍、每一拍展开到什么程度、这本书的声音与写作习惯、全书人物与设定，
+【你拿到什么】这一章要写哪几拍、每一拍展开到什么程度、正文机械形态基线、全书人物与设定，
 以及【本章的原文】。
 
 【怎么用原文】原文是素材不是答案：可用的骨肉留下，按给定的每一拍与展开程度做增删调整。
@@ -222,10 +221,8 @@ SHALLOW_SYS = """\
 
 硬要求：
 1. 【不新增原作没有的情节、人物或设定】。可以调整详略与表达，但不能改变发生了什么。
-2. 【声音要像同一本书】。严格按给定的声音与写作习惯写：叙述距离、语域口吻、内心戏的插入方式、句段形态、
-   对白呈现形式、章首章尾的惯例、以及在不同情境下声音该怎么变。
-   【原文的表层就是声音的最高实例】——给你的声音画像只是从原文总结出来的规律；
-   两者冲突时以原文的表层写法为准，并用它修正你对画像的理解，不是反过来。
+2. 【文面要像同一本书】。严格按下方正文机械形态基线控制句段、对白占比、引号与排版。
+   【原文的表层是最高实例】——机械基线与原文冲突时，以原文的表层写法为准。
    ·""" + STYLE_WORD_RULE + """
    ·【对白保持对白】原文里是直接引语的对白，保留时必须仍是直接引语：用这本书的引号体
      （符号、占比、排版惯例在下方「对白形态」里给出），引语按这本书的惯例排版。
@@ -552,61 +549,15 @@ def chapter_directive(entry: dict[str, Any], book: M.Book) -> str:
     return '\n'.join(lines)
 
 
-def style_for_sources(style: dict[str, Any], source_ordinals: list[int] | tuple[int, ...]
-                      ) -> dict[str, Any]:
-    """有逐章风格时只投影当前源章；数值仍永远取全书 measurable。"""
-    indexed = {int(item.get('source_ordinal')): item
-               for item in (style.get('chapter_styles') or [])
-               if item.get('source_ordinal') is not None}
-    if not indexed:
-        return style
-    missing = [ordinal for ordinal in source_ordinals if ordinal not in indexed]
-    if missing:
-        raise ValueError(f'逐章风格缺少源章 {missing}，拒绝回退到可能携带后文信息的全局风格')
-    picked = [indexed[ordinal] for ordinal in source_ordinals]
-    if not picked:
-        raise ValueError('已有逐章风格时，写作计划必须声明 from_source_ordinals')
-    voices: dict[str, str] = {}
-    for key in (style.get('voice') or {}):
-        values = list(dict.fromkeys(
-            str((item.get('voice') or {}).get(key) or '').strip()
-            for item in picked
-            if str((item.get('voice') or {}).get(key) or '').strip()))
-        if values:
-            voices[key] = '；'.join(values)
-    habits = list(dict.fromkeys(
-        str(habit).strip() for item in picked
-        for habit in (item.get('surface_habits') or []) if str(habit).strip()))
-    return {'voice': voices, 'surface_habits': habits,
-            'measurable': style.get('measurable') or {}}
+def shape_block(book: M.Book) -> str:
+    """Stage3 正文九叶机械投影派生的五项档位；不接定性画像与文案实测。
 
-
-def style_block(style: dict[str, Any], *, source_ordinals: list[int] | tuple[int, ...] = ()) -> str:
-    """声音底座：voice 八维 + 写作习惯 + 形态档位。**判据 `style_block_carries_plot` 扫的就是它。**
-
-    ⚠ 形态一律给**档位词**不给数值——写手要的是「极短段/一句一段」这种可执行的形态，
-    给原始数字既没用又会诱导它去凑数。
+    ⚠ 档位词来自 ``Book.band_of``，即下发面与判据共用的生产落点；这里不重算阈值。
+    原始句段均值、对白比和引号体分别由篇幅块与对白块下发，避免同一个数字多份措辞。
     """
-    projected = style_for_sources(style, source_ordinals)
-    v = projected.get('voice') or {}
-    meas = projected.get('measurable') or {}
-    from contracts.schema.stage3 import Measurable
-    from novel.core.bands import bands as _bands
-    band_txt = _compact(_bands(Measurable.model_validate(meas))) if (meas.get('body')) else ''
-    return '\n'.join(filter(None, [
-        '【这本书的声音（必须写得像同一本书）】',
-        *[f'· {k}：{v[k]}' for k in v],
-        # ⚠ **手法清单是必须照做的，不是参考**：曾加过「同一个短语全章至多出现一次」去治
-        # 口头禅复用——结果把「同一短句结构快速重复三次或以上」这类**招牌手法**也整批压死
-        # （某本的「很快。我夫君，…」×3 成稿 0 保留）。收窄成：手法照做（要求重复的就重复），
-        # 只禁把**例句**当口头禅同章原样复用。两头的实测都记在这里，防只读一头又改回去。
-        '【写作习惯（这本书的招牌手法清单——照做，不是参考）】'
-        '\n  每条说的是一种【生成方式】，按它执行；它若要求重复（如三连短句、固定自称），'
-        '重复就是手法本身，照它说的节奏来。只禁一件事：不要把任何例句当口头禅在同一章里原样复用——'
-        '手法要反复出现，具体的句子每次新写。',
-        *[f'· {h}' for h in (projected.get('surface_habits') or [])],
-        ('【形态档位（写出来要落在这些档上）】\n' + band_txt) if band_txt else '',
-    ]))
+    band_of = book.band_of
+    return ('【正文机械形态基线（写出来要落在这些档上）】\n'
+            + _compact(band_of)) if band_of else ''
 
 
 def facts_block(entry: dict[str, Any]) -> str:
@@ -788,7 +739,7 @@ def build_material(entry: dict[str, Any], book: M.Book, *, with_source_text: boo
         # 逐章投影：只给到本章为止该知道的。⚠ **`must_not_reveal` 不在这里**——
         # 它只有裸 id、对写手无从执行，真正的保护是那些 secret **根本不下发**。
         facts_block(entry),
-        style_block(book.style, source_ordinals=tuple(entry.get('from_source_ordinals') or [])),
+        shape_block(book),
     ]
     if (prev := prev_context(entry, book)):
         blocks.append(prev)

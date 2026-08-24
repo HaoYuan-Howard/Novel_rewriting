@@ -233,7 +233,8 @@ def test_the_free_flag_scan_covers_every_pair_not_one_per_flag():
         f'是删了节点/flag，还是有人又把它改回「每个 flag 取一个代表」？')
     # `--dry-run` 是漂移最容易藏身的那一族：它是**唯一**逐层各写一段
     # 「怎么把 prompt 打出来」的分支，而那段代码直接调 stage 模块的函数签名。
-    assert sum(1 for f, _ in _FREE_CASES if f == '--dry-run') >= 9, \
+    # Stage3 v2 没有 prompt，预览改走专属 `--measure-only`，所以现役覆盖面是 8 对。
+    assert sum(1 for f, _ in _FREE_CASES if f == '--dry-run') >= 8, \
         '`--dry-run` 的覆盖面缩水了——CLI 与 stage 模块的 API 漂移正是从这里漏的'
 
 
@@ -301,18 +302,6 @@ def test_every_node_is_a_terminal_state_not_a_stack(box):
 
 
 @pytest.mark.corpus
-def test_a_registered_but_unwired_run_mode_says_so(box):
-    """「这个节点没有这条跑法」与「有，但还没接线」**是两件事**。
-
-    前者该改命令，后者该改代码。合成一条，报错就只剩「跑不了」三个字。
-    """
-    assert '--apply-edit' in NODES['stage3.style'].flags
-    rc = _run('run', 'stage3.style', box.sid, '--apply-edit',
-              str(box.dir / 'x.json'), '--base', str(box.root))
-    assert rc == X.TERMINAL_STATE
-
-
-@pytest.mark.corpus
 def test_direct_cli_rejects_a_flag_the_node_does_not_accept_before_costing_it(box, capsys):
     """手敲命令也必须走节点表；未知跑法不能被误导成“加 --yes 就能跑”。"""
     rc = _run('run', 'stage2.global', box.sid, '--check-only',
@@ -338,17 +327,17 @@ def test_direct_cli_rejects_mode_on_a_node_without_arms_without_a_stack(box, cap
 def test_a_paid_run_refuses_without_an_explicit_yes(box):
     """**花钱前必须人确认**（`Q-10`）。⚠ 且**不显示预估花费**——
     猜一个数写在界面上比不显示更坏。"""
-    assert N.is_paid('stage3.style') is True
-    rc = _run('run', 'stage3.style', box.sid, '--base', str(box.root))
+    assert N.is_paid('stage6.hook') is True
+    rc = _run('run', 'stage6.hook', box.sid, '--base', str(box.root))
     assert rc == X.TERMINAL_STATE
 
 
 def test_build_argv_already_carries_the_yes_for_a_paid_run():
     """摊开显示的那条命令**就是会跑的那条**（`R-11.8`）：
     确认在界面/队列那一层发生过了，所以 argv 里带着 `--yes`，粘进终端不会再问一遍。"""
-    argv = N.build_argv('stage3.style', 'sid1', base='.')
+    argv = N.build_argv('stage6.hook', 'sid1', base='.')
     assert argv[-1] == '--yes'
-    assert '--yes' not in N.build_argv('stage3.style', 'sid1', ['--check-only'], base='.')
+    assert '--yes' not in N.build_argv('stage6.hook', 'sid1', ['--check-only'], base='.')
 
 
 def test_stage4_chapters_cli_forces_refresh_and_forwards_sorted_targets(monkeypatch):
@@ -383,11 +372,8 @@ def test_stage4_chapters_cli_forces_refresh_and_forwards_sorted_targets(monkeypa
 @pytest.mark.corpus
 def test_check_only_returns_nonzero_when_the_report_fails(box):
     """`FREE_ENTRIES['--check-only']` 自己写着「**报 FAIL 退出码非零**」。"""
-    from novel.core.naming import names_of
-    from contracts.schema.stage2 import GlobalGrounding
-    gg = GlobalGrounding.model_validate(box.read('stage2/global_grounding.json'))
     data = box.read('stage3/style_grounding.json')
-    data['voice']['register_tone'] += f'（例如{sorted(names_of(gg))[0]}那几段）'
+    data['measurable']['body']['avg_sentence_chars'] += 1
     box.write('stage3/style_grounding.json', data)
 
     assert _run('run', 'stage3.style', box.sid, '--check-only',
@@ -549,7 +535,7 @@ def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
     plan = M._llm_client(RunContext.open(
         base, '123', 'stage4.plan', paid=True, write_ledger=False))
     other = M._llm_client(RunContext.open(
-        base, '123', 'stage3.style', paid=True, write_ledger=False))
+        base, '123', 'stage2.global', paid=True, write_ledger=False))
 
     assert judge.model == 'deepseek-v4-pro', '判官的 pro 是钉死的，环境变量换不掉'
     assert plan.model == 'deepseek-v4-pro', 'stage4.plan 的 pro 是钉死的，环境变量换不掉'
@@ -634,10 +620,10 @@ def test_shell_line_leaves_plain_tokens_bare():
 @pytest.mark.corpus
 def test_preview_says_both_whether_it_costs_and_whether_it_writes(box, capsys):
     """**「0 成本」不等于「不写盘」** —— 两个维度都要摆出来。"""
-    _run('preview', 'stage3.style', box.sid, '--remeasure', '--base', str(box.root))
+    _run('preview', 'stage3.style', box.sid, '--base', str(box.root))
     out = capsys.readouterr().out
     assert '花钱   : 否' in out
-    assert '写盘   : 重算的 measurable 写回正式产物' in out, out
+    assert '写盘   : stage3/style_grounding.json' in out, out
 
 
 # ───────────────────── 其余两个子命令 ─────────────────────

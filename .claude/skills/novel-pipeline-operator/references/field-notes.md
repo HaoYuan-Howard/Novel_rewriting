@@ -283,7 +283,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   不修裁决把它从余额里销掉。
   ⚠ 代笔整章正文是**授权范围内**的，但这条路**没有任何守卫替你兜**：文风、保真材料与在场集
   的一致性都不在任何判据的扫描面内，改坏了不会红。所以代笔前先取三样依据——该章 blueprint
-  的拍子、`stage3` 文风画像的 measurable、该章在场角色集——写完逐项自查并把方法与结论写进
+  的拍子、`stage3` 正文机械基线、该章在场角色集——写完逐项自查并把方法与结论写进
   终审包。取不到这三样依据时选 `--wontfix` 留一条明确裁决，而不是凭手感改正文。
 - 验证旧豁免：`wontfix` 绑的是 `(章, rule, evidence_key)`，不是“这章从此免检”。
   `--apply-edit` 改正文后必须先重跑 `stage5.review`；证据键变化的新 finding 会自动重新进入

@@ -171,7 +171,8 @@ def test_the_style_view_keeps_the_underscore_provenance_key(corpus_client, box):
     """
     body = corpus_client.get(f'/api/novels/{box.sid}/stage3/style').json()
     assert '_provenance' in body and 'provenance' not in body
-    assert body['_provenance']['model'] == 'deepseek-v4-pro'
+    assert body['_provenance']['measurement_contract']
+    assert not ({'voice', 'surface_habits', 'hook_style', 'chapter_styles'} & set(body))
 
 
 def test_a_missing_artifact_is_200_with_the_left_half_intact(corpus_client, box):
@@ -418,7 +419,7 @@ def test_the_service_writes_nothing_at_all(corpus_client, box):
                 f'/api/novels/{box.sid}/inbox'):
         client.get(url)
     client.post('/api/jobs/preview',
-                json={'sid': box.sid, 'node': 'stage3.style', 'flags': ['--remeasure']})
+                json={'sid': box.sid, 'node': 'stage3.style', 'flags': ['--measure-only']})
     assert _tree(box.root) == before, '服务往产物盘上写了东西（`R-11.3`）'
     assert not (box.root / '_service').exists(), \
         '⚠ 只读端点建出了 `_service/`——那一处只归真跑作业的时候写'
@@ -437,13 +438,13 @@ def test_preview_argv_is_identical_to_what_would_run(client, base):
     sid = '42'
     body = client.post('/api/jobs/preview',
                        json={'sid': sid, 'node': 'stage3.style',
-                             'flags': ['--remeasure']}).json()
-    want = J.plan_start('stage3.style', sid, ['--remeasure'], base=base)
+                             'flags': []}).json()
+    want = J.plan_start('stage3.style', sid, [], base=base)
     assert body == json.loads(want.model_dump_json())
     assert body['steps'] == [json.loads(s.model_dump_json())
-                             for s in build_steps('stage3.style', sid, ['--remeasure'],
+                             for s in build_steps('stage3.style', sid, [],
                                                   base=base)]
-    # `--remeasure` 免费但**会写盘** ⇒ 自动追一条 `--check-only`（`build_steps` 的判准）。
+    # Stage3 v2 默认入口免费写机械基线 ⇒ 自动追一条 `--check-only`。
     assert len(body['steps']) == 2 and body['paid'] is False and body['writes'] is True
 
 
@@ -457,7 +458,6 @@ def test_preview_refuses_a_run_mode_that_node_does_not_have(client):
 @pytest.mark.parametrize(('node', 'mode'), [
     ('stage2.global', None),
     ('stage2.blueprint', None),
-    ('stage3.style', None),
     ('stage4.plan', None),
     ('stage5.write', 'deep'),
     ('stage6.hook', None),

@@ -288,6 +288,97 @@ def test_every_revalidate_inbox_instruction_requires_audit_credentials():
         assert '0 LLM、同轮重判、写入不可变审计' in text
 
 
+class _InvalidStore:
+    """只给 `_invalid_items` 的最小只读盘面；不借真实语料替 shape-break 作证。"""
+
+    def __init__(self, *, present: set[str], versions: dict[str, int],
+                 refuse_version_read: bool = False) -> None:
+        self.present = present
+        self.versions = versions
+        self.refuse_version_read = refuse_version_read
+        self.seen_round_calls: list[str] = []
+
+    def exists(self, rel: str) -> bool:
+        return rel in self.present
+
+    def schema_version_of(self, rel: str) -> int | None:
+        if self.refuse_version_read:
+            raise AssertionError('有 --revalidate 的通用节点不应读取 schema version')
+        return self.versions.get(rel)
+
+    def seen_rounds(self, rel: str) -> set[int]:
+        self.seen_round_calls.append(rel)
+        return {2}
+
+
+@pytest.mark.parametrize('with_formal', [False, True])
+def test_legacy_stage3_invalid_routes_to_free_default_rebuild_without_rounds(with_formal):
+    """v1 不是一次失败业务轮次：默认 producer 原位重建 v2，不能塞进 `_rounds/`。"""
+    from contracts.artifacts import STAGE3_STYLE_GROUNDING
+    from novel import paths
+    from novel.views import inbox as I
+
+    invalid = paths.invalid_of(STAGE3_STYLE_GROUNDING)
+    present = {invalid}
+    versions = {invalid: 1}
+    if with_formal:
+        present.add(STAGE3_STYLE_GROUNDING)
+        versions[STAGE3_STYLE_GROUNDING] = 1
+    store = _InvalidStore(present=present, versions=versions)
+
+    rows = I._invalid_items(store, 'stage3')
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.kind == ('rejected' if with_formal else 'invalid')
+    assert row.rule == 'stage3.style' and 'Stage3 v1 shape break' in row.what
+    assert '`stage3.style` 默认路径免费重建当前 v2' in row.how
+    assert '0 LLM 调用' in row.how and '不进入 `_rounds/`' in row.how
+    assert '--revalidate' not in row.how
+    assert store.seen_round_calls == [], 'shape-break 旧字节不得伪装成历史业务轮次'
+
+
+@pytest.mark.parametrize('with_formal', [False, True])
+def test_current_stage3_invalid_has_no_fabricated_revalidate_or_rounds(with_formal):
+    """current v2 `.INVALID` 是 producer 不可达状态，只留证据，不能编恢复按钮。"""
+    from contracts.artifacts import STAGE3_STYLE_GROUNDING
+    from novel import paths
+    from novel.views import inbox as I
+
+    invalid = paths.invalid_of(STAGE3_STYLE_GROUNDING)
+    present = {invalid}
+    versions = {invalid: 2}
+    if with_formal:
+        present.add(STAGE3_STYLE_GROUNDING)
+        versions[STAGE3_STYLE_GROUNDING] = 2
+    store = _InvalidStore(present=present, versions=versions)
+
+    rows = I._invalid_items(store, 'stage3')
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.kind == ('rejected' if with_formal else 'invalid')
+    assert row.rule == 'stage3.style'
+    assert 'Stage3 v2 producer 不会产生这一状态' in row.what
+    assert '不生产或提升 `.INVALID`' in row.how and '不可达的状态' in row.how
+    assert '--revalidate' not in row.how and '_rounds/' not in row.how
+    assert store.seen_round_calls == []
+
+
+def test_generic_invalid_checks_the_producer_revalidate_flag_before_schema_version():
+    """通用路由从 NODES 派生；有真实提升口时不做 Stage3 专属版本猜测。"""
+    from contracts.artifacts import STAGE6_HOOK
+    from novel import paths
+    from novel.views import inbox as I
+
+    invalid = paths.invalid_of(STAGE6_HOOK)
+    store = _InvalidStore(
+        present={STAGE6_HOOK, invalid}, versions={}, refuse_version_read=True)
+    rows = I._invalid_items(store, 'stage6')
+    assert len(rows) == 1 and rows[0].kind == 'rejected'
+    assert rows[0].rule == 'stage6.hook'
+    assert '_rounds/' in rows[0].how
+    assert '`stage6.hook --revalidate --actor <id> --reason <why>`' in rows[0].how
+
+
 def test_every_human_only_row_offers_something_the_operator_can_actually_run():
     """⭐ 端到端：清单上每一条 `human_only` 的 `how` 都必须是**跑得动的**。
 

@@ -2,7 +2,7 @@
  * 闸门 —— 流程的核心，不是装饰。
  *
  *   stage0 剔番外 ─► stage1 切分 ─┬─► stage2（全局设定 + 原文↔骨架，两屏都要看过）─► stage4 计划 ─┐
- *                                 └─► stage3 文风 ─────────────────────────────────────────────┤
+ *                                 └─► stage3 机械基线 ─────────────────────────────────────────┤
  *                                                                                              ├─► 挑深度章节 ─► stage5 ─► stage6 ─► stage7
  *
  * 文案与禁用条件源自历史原型 gateVals()，现役语义见 web/DELIVERY.md（§3 路由 / §7 UI 硬规则）。
@@ -61,12 +61,12 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         done,
         blocked: !g.s0,
         title: done ? '切分已确认' : g.s0 ? '这一刀切对了吗？' : '番外还没剔，切了也要重切',
-        note: '确认后自动并行发起 stage2（全局设定 + 逐章骨架）和 stage3（文风画像）——两条腿互不等待。',
+        note: '确认后自动并行发起 stage2（全局设定 + 逐章骨架）和免费的 stage3（机械基线）——两条腿互不等待。',
         chips: [{ ok: g.s0, label: 'stage0 剔番外' }],
         btn: done ? '已确认' : g.s0 ? '确认切分' : '先过 stage0 剔除番外',
         blockedReason: 'stage0 还没确认删除范围。番外没剔就切分，切完还要重切。',
         doneNote: done
-          ? 'stage2 / stage3 已并行发起。左边两屏是 stage2 的产物，「文风画像」是 stage3 的。'
+          ? 'stage2 / stage3 已并行发起。左边两屏是 stage2 的产物，「机械基线」是 stage3 的。'
           : null,
       }
 
@@ -84,7 +84,7 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         ],
         btn: done ? '已确认' : both ? '确认 stage2，启动 stage4' : '两屏都看过才能确认',
         blockedReason: 'stage2 有两屏产物。只看过一屏就确认，等于替另一屏签了字。',
-        doneNote: done ? 'stage4 已发起。stage3 文风还没确认也不影响——它是另一条腿。' : null,
+        doneNote: done ? 'stage4 已发起。stage3 机械基线还没确认也不影响——它是另一条腿。' : null,
       }
     }
 
@@ -93,14 +93,14 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         key,
         done,
         blocked: false,
-        title: done ? '文风已确认' : '这就是要模仿的那支笔吗？',
-        note: 'stage3 独立于 stage2。它和 stage4 都确认后，才允许下笔写 stage5。',
+        title: done ? '机械基线已确认' : '这份机械基线可以作为下游参照吗？',
+        note: 'stage3 独立于 stage2，且不调用模型。它和 stage4 都确认后，才允许下笔写 stage5。',
         chips: [{ ok: g.s4, label: 'stage4 计划' }],
-        btn: done ? '已确认' : '确认文风',
+        btn: done ? '已确认' : '确认机械基线',
         blockedReason: '',
         doneNote: done
           ? g.s4
-            ? '文风 + 计划都齐了 → 可以进 stage5 挑深度章节。'
+            ? '机械基线 + 计划都齐了 → 可以进 stage5 挑深度章节。'
             : '还等 stage4 计划确认。'
           : null,
       }
@@ -112,13 +112,13 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         blocked: false,
         title: done ? '计划已确认' : '这份重构计划能写吗？',
         note: '确认后与 stage3 会合。两边都齐 → 进入 stage5 前先挑要深度重构的章节。',
-        chips: [{ ok: g.s3, label: 'stage3 文风' }],
+        chips: [{ ok: g.s3, label: 'stage3 机械基线' }],
         btn: done ? '已确认' : '确认计划',
         blockedReason: '',
         doneNote: done
           ? g.s3
-            ? '文风 + 计划都齐了 → 可以进 stage5 挑深度章节。'
-            : '还等 stage3 文风确认。'
+            ? '机械基线 + 计划都齐了 → 可以进 stage5 挑深度章节。'
+            : '还等 stage3 机械基线确认。'
           : null,
       }
 
@@ -131,14 +131,14 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         title: done ? '成稿已确认' : ready ? '这些章可以定稿了吗？' : '上游还没齐，先别定稿',
         note: ready
           ? '判据在左、成稿在右，改完再确认。确认后发起 stage6 开篇文案。'
-          : '成稿建立在 stage3 文风和 stage4 计划之上。这两处没确认，定稿等于把没认过的前提写进书里。',
+          : '成稿建立在 stage3 机械基线和 stage4 计划之上。这两处没确认，定稿等于把没认过的前提写进书里。',
         chips: [
-          { ok: g.s3, label: 'stage3 文风' },
+          { ok: g.s3, label: 'stage3 机械基线' },
           { ok: g.s4, label: 'stage4 计划' },
           { ok: true, label: '深度 ' + doc.deep.length + ' 章' },
         ],
         btn: done ? '已确认' : ready ? '确认成稿，启动 stage6' : '等 stage3 / stage4 确认',
-        blockedReason: '文风与计划这两处没确认，定稿等于把没认过的前提写进书里。',
+        blockedReason: '机械基线与计划这两处没确认，定稿等于把没认过的前提写进书里。',
         doneNote: done ? 'stage6 已发起。' : null,
       }
     }
@@ -196,7 +196,7 @@ export const GATE_LABEL: Record<GateKey, string> = {
   s0: 'stage0 剔除番外',
   s1: 'stage1 切分确认',
   s2: 'stage2 两屏审阅',
-  s3: 'stage3 文风确认',
+  s3: 'stage3 机械基线确认',
   s4: 'stage4 计划确认',
   s5: 'stage5 成稿确认',
   s6: 'stage6 文案确认',

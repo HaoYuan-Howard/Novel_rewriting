@@ -133,7 +133,7 @@
      "rule": "hook_ending_shape",
      "sev": "info",
      "item": "收尾形态与原作文案段同类",
-     "detail": "[result_flashback] 收尾是【陈述】，本书原作文案段是【引号台词】——收尾句是文案的最后一击，对一遍 hook_style.end_question",
+     "detail": "[result_flashback] 收尾是【陈述】，本书原作文案段是【引号台词】——收尾句是文案的最后一击，应与原作文案保持同一形态",
      "evidence": [
       "我笑了，怡红院真是个报仇的好地方。"
      ],
@@ -150,7 +150,7 @@
      "rule": "hook_ending_shape",
      "sev": "info",
      "item": "收尾形态与原作文案段同类",
-     "detail": "[identity_contrast] 收尾是【陈述】，本书原作文案段是【引号台词】——收尾句是文案的最后一击，对一遍 hook_style.end_question",
+     "detail": "[identity_contrast] 收尾是【陈述】，本书原作文案段是【引号台词】——收尾句是文案的最后一击，应与原作文案保持同一形态",
      "evidence": [
       "他们到死都没想通，我到底是丫鬟还是讨债的。"
      ],
@@ -614,20 +614,6 @@
    "recorded": true,
    "count": 0,
    "detail": []
-  }
- ],
- "retired": [
-  {
-   "rule": "hook_no_source",
-   "why": "「这本书有原作文案段可比」。缺 `hook_copy.json` 已改**显式终态**（`R-1.12` 把无文案段的书挡在 stage1，本层不可能遇到），而它留着会造出 **6 盏假绿灯**：0 成本实测把原作文案段与 `style_hook` 一起置空重跑，13 条 hard+info 打了 13 个 `[OK]`，其中 6 条**根本没跑**——它们全都挂在「有原作文案段」这个前提上。判据 31"
-  },
-  {
-   "rule": "hook_relations_unver",
-   "why": "「没歪曲人物关系/不发明事实」并入 `hook_semantic_grounding`（`R-9.20`，付费语义审判，2026-08-14），口径「不许发明事实，必须发明文字」。⚠ 历史教训保留在此：这条要求曾与同一份 prompt 的「不复用原句」硬禁互相打架，实测代价是最长引语 22.6 → 6.8 字、12/12 同向——**一条要求在被判定为「无守卫」之前，先确认它本身是对的**"
-  },
-  {
-   "rule": "hook_spoiler_unver",
-   "why": "「不说破任何答案」已有真实守卫：`hook_semantic_spoiler`（`R-9.19`，付费语义审判，2026-08-14）。留着这一行就是一个问题两个落点——旧行永远说「查不了」，新判据却在给命中/干净/unver 三态答案，读报告的人只会信其中一行。语义产物缺席时新判据自己落 unver，「没查」这个信息不丢；字面探针零判别力的账另见 `hook_secret_literal`/`hook_arc_literal` 的 note"
   }
  ],
  "badge": "amber",

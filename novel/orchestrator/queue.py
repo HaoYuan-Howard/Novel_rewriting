@@ -85,13 +85,20 @@ def nodes_up_to(until_stage: str) -> list[str]:
 
 
 def _upstream_invalid(ov, stage: str) -> list[str]:
-    """**严格上游**那些层里，盘上有几份被闸门拦下的稿。
+    """目标节点真实依赖的严格上游里，有几份被闸门拦下的稿。
 
     ⚠ 只看上游不看本层：本层自己的 `.INVALID` 是**本节点该处理的事**
     （0 成本提升路 `--revalidate`），不是挡住它自己的理由。
+
+    Stage3 v2 是从 Stage1 分出的免费机械支路，不消费 Stage2。按纯 stage 序号把
+    Stage2 INVALID 算成它的上游，会把本应并行的支路重新串行化。
     """
-    cap = _stage_index(stage)
-    return [a.rel for s in ov.stages if _stage_index(s.stage) < cap
+    upstream_stages = (
+        {'stage0', 'stage1'}
+        if stage == 'stage3'
+        else {name for name in STAGES if _stage_index(name) < _stage_index(stage)}
+    )
+    return [a.rel for s in ov.stages if s.stage in upstream_stages
             for a in s.artifacts if a.invalid]
 
 

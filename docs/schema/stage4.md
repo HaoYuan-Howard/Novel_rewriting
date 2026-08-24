@@ -207,7 +207,7 @@ system 要 `D_SCENE`、基线印着 `scene`，模型照基线抄就被拒，而�
 `.INVALID` 按现行判据重判后提升，不创建新生成轮，并在 provenance 中保存 actor/reason、
 raw/canonical SHA-256 与 RFC 6901 改动路径的 `revalidation_audit`。
 
-**路径口径**（stage3/4/6/7 共用 `novel/paths.py::edit_rel`）：相对路径按**当前书目录**
+**路径口径**（stage2/4/6/7 共用 `novel/paths.py::edit_rel`）：相对路径按**当前书目录**
 解释，不按进程 cwd；书目录内的绝对路径同样接受；落在书目录之外（含 `..` 穿越）是显式终态。
 
 ## 四、`writer_context.json`

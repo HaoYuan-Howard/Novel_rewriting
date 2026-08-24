@@ -217,11 +217,11 @@ def test_input_key_refuses_three_levels():
 
 
 def test_invalid_twin_is_same_dir_same_stem():
-    assert paths.invalid_of('stage3/style_grounding.json') == 'stage3/style_grounding.INVALID.json'
-    assert paths.is_invalid('stage3/style_grounding.INVALID.json')
-    assert not paths.is_invalid('stage3/style_grounding.json')
+    assert paths.invalid_of('stage4/plan_chapters.json') == 'stage4/plan_chapters.INVALID.json'
+    assert paths.is_invalid('stage4/plan_chapters.INVALID.json')
+    assert not paths.is_invalid('stage4/plan_chapters.json')
     with pytest.raises(PathRefused):
-        paths.invalid_of('stage3/style_grounding.INVALID.json')     # 不许套两层
+        paths.invalid_of('stage4/plan_chapters.INVALID.json')     # 不许套两层
 
 
 def test_rounds_live_next_to_the_artifact_and_carry_a_number():
@@ -234,8 +234,8 @@ def test_rounds_live_next_to_the_artifact_and_carry_a_number():
     assert paths.round_rel('stage5/deep/ch01.json', 2) == 'stage5/deep/_rounds/ch01.r2.json'
     assert paths.round_rel('stage6/hook.json', 1) == 'stage6/_rounds/hook.r1.json'
     # `.INVALID` 留在 stem 里：它与正式产物是**两条历史**，各编各的号
-    assert (paths.round_rel('stage3/style_grounding.INVALID.json', 1)
-            == 'stage3/_rounds/style_grounding.INVALID.r1.json')
+    assert (paths.round_rel('stage4/plan_chapters.INVALID.json', 1)
+            == 'stage4/_rounds/plan_chapters.INVALID.r1.json')
     with pytest.raises(PathRefused):
         paths.round_rel('stage6/hook.json', 0)
 
@@ -301,19 +301,18 @@ def test_numbered_rounds_counts_only_live_formal_rounds():
 # 五、`--apply-edit <路径>` → 书内相对路径（`edit_rel`）
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# ⚠⚠ 这一节此前**不存在**，而 stage3/4/6/7 各有一份逐字相同的 `_edit_rel`。
+# ⚠⚠ 这一节此前**不存在**，而 stage4/6/7 各有一份逐字相同的 `_edit_rel`。
 # 全仓唯一直接测过它的是 `tests/test_stage7_subs.py` 的两条断言（书内绝对路径 /
-# 目录外绝对路径），stage3/4/6 零覆盖、**相对路径与 `..` 穿越零覆盖**。
-# 而漏掉的恰好是坏的那一条：四份实现都先 `Path(edit_path).resolve()`（按**进程 cwd**）
+# 目录外绝对路径），stage4/6 零覆盖、**相对路径与 `..` 穿越零覆盖**。
+# 而漏掉的恰好是坏的那一条：三份实现都先 `Path(edit_path).resolve()`（按**进程 cwd**）
 # 再拿书目录去卡，报错文案却以书目录为基准 —— 站在仓根敲一个书内相对路径会被
 # 报成「落在产物目录之外」。skill 现场记录为此一度只能建议「传绝对路径绕开它」；
 # 收敛后的当前说法是 FN-016（逐层语义不同，走这四层就写进书目录内）。
 #
 # ⇒ 收敛成 `paths.edit_rel` 一份，并按**书目录**解释相对路径；本节按
-#   「四层 × 五类路径」钉住，缺一类就等于那一类没在查。
+#   「三层 × 五类路径」钉住，缺一类就等于那一类没在查。
 
 _EDIT_DEFAULTS = {
-    'stage3': 'stage3/style_edit.json',
     'stage4': 'stage4/plan_edit.json',
     'stage6': 'stage6/hook_edit.json',
     'stage7': 'stage7/name_map_edit.json',
@@ -325,19 +324,19 @@ def test_the_edit_defaults_here_are_the_ones_the_stages_actually_use():
 
     各写一份，下面那五类用例就会在一个**没人用的路径**上全绿。
     """
-    from novel.stages.stage3 import style
     from novel.stages.stage4 import plan
     from novel.stages.stage6 import hook
     from novel.stages.stage7 import rename
 
-    assert {'stage3': style.EDIT, 'stage4': plan.EDIT,
-            'stage6': hook.EDIT, 'stage7': rename.EDIT} == _EDIT_DEFAULTS
+    assert {'stage4': plan.EDIT, 'stage6': hook.EDIT,
+            'stage7': rename.EDIT} == _EDIT_DEFAULTS
 
 
 @pytest.fixture
 def book_dir(tmp_path: Path) -> Path:
     d = tmp_path / '书名_123'
-    (d / 'stage3').mkdir(parents=True)
+    for stage in ('stage4', 'stage6', 'stage7'):
+        (d / stage).mkdir(parents=True)
     return d
 
 
@@ -390,7 +389,7 @@ def test_a_dotdot_traversal_cannot_climb_out(layer, default, book_dir):
     """
     from novel.errors import TerminalState
 
-    for bad in ('../别的书/stage3/style_edit.json', '..', '../../etc/passwd'):
+    for bad in ('../别的书/stage4/plan_edit.json', '..', '../../etc/passwd'):
         with pytest.raises(TerminalState, match='产物目录之外'):
             paths.edit_rel(book_dir, bad, default)
 
@@ -402,10 +401,10 @@ def test_a_dotdot_that_stays_inside_is_fine():
     root = Path(tempfile.mkdtemp())
     try:
         book = root / '书名_123'
-        (book / 'stage3').mkdir(parents=True)
-        got = paths.edit_rel(book, 'stage3/../stage3/style_edit.json',
-                             'stage3/style_edit.json')
-        assert got == 'stage3/style_edit.json'
+        (book / 'stage4').mkdir(parents=True)
+        got = paths.edit_rel(book, 'stage4/../stage4/plan_edit.json',
+                             'stage4/plan_edit.json')
+        assert got == 'stage4/plan_edit.json'
     finally:
         import shutil
         shutil.rmtree(root, ignore_errors=True)

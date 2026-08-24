@@ -28,8 +28,8 @@ from pathlib import Path
 from contracts.invariants import CACHE_POLICY
 from novel.llm.transport import ChatRequest, ChatResponse
 
-#: 三个具名口径 → `(read, write)`。**唯一落点**，`_provenance.attempts[].cache_policy`
-#: 记的就是这里的名字（`contracts/schema/stage3.py::StyleAttempt`）。
+#: 三个具名口径 → `(read, write)`。**唯一落点**，各付费节点的 attempt/retry
+#: 来源账只记录这里的名字；Stage3 v2 已是零 LLM 机械节点，不再拥有 StyleAttempt。
 _NAMES: dict[tuple[bool, bool], str] = {
     (True, True): 'default',        # 命中就用，没命中就跑并记下来
     (False, True): 'refresh-write',  # **重新采样，但仍然记账**——定向重生成走这条

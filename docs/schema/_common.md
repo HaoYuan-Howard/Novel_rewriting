@@ -164,6 +164,10 @@ stage5/6/7 都有一份「我判了哪几份稿」的清单，它**不是** `inp
 
 ## 五、`.INVALID`、`gates_skipped`、以及三条 0 成本提升路
 
+本节只约束仍生产 `.INVALID` 的产物族。Stage3 v2 是免费全量重建的机械 artifact，
+不生产 `.INVALID`，也没有 `--revalidate`、人工 style edit 或局部 `--remeasure` 面；
+其 shape break 恢复规则见 `docs/schema/stage3.md` §六。
+
 ### 5.1 先校验后落盘（`Q-5`）
 
 阻断级错误**不覆盖已有产物**，问题稿单独存一份带 `.INVALID` 标记的文件。
@@ -193,8 +197,8 @@ RFC 6901 `changed_json_pointers`。因此「判据变了、原稿原样提升」
 
 ### 5.1b `partial_rewrite` —— 混版产物要如实记来源
 
-有一类 0 成本路径**只改产物的一部分**：`--remeasure` 重算 `measurable` 写回 ·
-`--recheck` 刷指标并重拼 · `--renormalize` 按当前契约重算派生字段与原文定位 ·
+有一类 0 成本路径**只改产物的一部分**：`--recheck` 刷指标并重拼 ·
+`--renormalize` 按当前契约重算派生字段与原文定位 · `--identity` 刷新身份投影 ·
 stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模型人物表。
 ⚠ 同名 flag 在 stage5 落的是一整章人工新稿，那里走 `origin=human`，不是混版。
 改完之后那一份是**混版的**：LLM 写的那些字段出自当初那次付费产出，
@@ -204,7 +208,7 @@ stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模
 
 | 记法 | 为什么错 |
 |---|---|
-| 沿用旧 `_provenance` 一个字不改 | 「这份 `measurable` 照哪份原文算的」**永远说不出口**——而那正是 `--remeasure` 存在的理由 |
+| 沿用旧 `_provenance` 一个字不改 | 「这份派生字段照哪份上游重算的」**永远说不出口**——而那正是局部重算必须换 inputs 的理由 |
 | 整份覆盖成新账 | 会把 `prompts` / `model` 说成**本次**产的，而本次一个请求都没发（`Q-5` 点名的伪造） |
 | 借 `revalidated` 来标 | 那一条说的是**状态变更**（`.INVALID` → 正式稿），**内容一个字没动**。两件事 |
 
@@ -213,10 +217,12 @@ stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模
 
 > #### ⚠ 为什么是**一个带值的键**，不是三个布尔
 >
-> `--remeasure` / `--recheck` / `--renormalize` 干的是**同一类事**
+> `--recheck` / `--renormalize` / `--identity` 干的是**同一类事**
 > ——局部改写一份付费产物——区别只在「哪条路」，**那是一个值，不是三个键**。
 > 分成多个布尔会制造同一语义的多个落点
 > （`Q-3`：同一个语义在不同节点上必须叫同一个名字）。
+> Stage3 v2 的默认生产会免费重建**整份**机械 artifact，使用新的 `FreeProvenance`，
+> 不属于这种“保留旧 LLM 字段的混版改写”。
 >
 > 取值面的唯一落点是 `contracts/invariants.py::PARTIAL_REWRITE_FLAGS`，
 > 且它**必须 ⊆ `FREE_ENTRIES`**（由测试钉着）——一条会花钱的路不叫「局部改写」，
@@ -391,7 +397,7 @@ stage5 / stage6 / stage7 **逐字段相同**。
 
 | 情况 | 处置 | 它防的那次损失 |
 |---|---|---|
-| 产地记了某个键，声明表里没有 | **显式终态** | stage2 的 8 个记账键有 **5 个 0 出口**、stage3 的 3 个**一个都没有** |
+| 产地记了某个键，声明表里没有 | **显式终态** | stage2 的 8 个记账键曾有 **5 个 0 出口**；Stage3 v1 的 3 个旧键也一个出口都没有，v2 已删除这些键且声明表为空 |
 | 声明表里有、产地没记 | 打 `[????] 未记录` | 「记了 0 次」与「压根没记」必须分开 |
 | 值为空 | 打 `… 0 处` | 形式要求① |
 

@@ -216,13 +216,13 @@ class Provenance(StrictModel):
     #:
     #: 改完之后这一份是**混版的**：LLM 写的那些字段出自当初那次付费产出，
     #: 被改的那部分是**现在**从盘上重算的。三个记法各错一半：
-    #: 沿用旧账 ⇒「这份 `measurable` 照哪份原文算的」永远说不出口（而那正是
-    #: `--remeasure` 存在的理由）· 整份覆盖 ⇒ 把 `prompts`/`model` 说成本次产的（伪造）·
+    #: 沿用旧账 ⇒「这次重算的派生字段照哪份上游算的」永远说不出口 ·
+    #: 整份覆盖 ⇒ 把 `prompts`/`model` 说成本次产的（伪造）·
     #: 借 `revalidated` ⇒ 那一条只说发生过提升；其 audit 比较的是 INVALID 创建基线与
     #: 人工提交面，不能替本次确定性派生字段重算声明新的输入依据。
     #:
-    #: ⚠ **一个带值的键，不是三个布尔。** 原型标的是 `remeasured: true`，
-    #: 于是 `--recheck` / `--renormalize` 各自还要再加一个键——同一件事的第三个落点。
+    #: ⚠ **一个带值的键，不是多个布尔。** 否则 `--recheck` / `--renormalize`
+    #: 各自还要再加一个键——同一件事会不断长出新落点。
     partial_rewrite: PartialRewrite | None = None
 
     #: ``write_invalid`` 保存的不可变原始快照定位键。只属于活的 `.INVALID`；
@@ -307,8 +307,7 @@ class Provenance(StrictModel):
         ⚠ 签名里**有** `inputs` 而 `promoted()` 没有，这不是不一致：
         提升路**没有读任何新东西**（它只是把一份已有的稿换个位置），
         而局部改写**真的重新读了上游**——记下这次读到的正是它的全部意义。
-        原型的注释把这件事说得最清楚：「沿用旧 `_provenance` 会让『这份 measurable
-        照哪份原文算的』永远说不出口——而那正是 `--remeasure` 存在的理由」。
+        沿用旧 `_provenance` 会让「这次重算的派生字段照哪份上游算的」永远说不出口。
         危险的那两个在两条路上都够不到。
 
         ⚠ 运行时那一侧再收一道：`inputs` 只能来自 `RunContext` 的来源账

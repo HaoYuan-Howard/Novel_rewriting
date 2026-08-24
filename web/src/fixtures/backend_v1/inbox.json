@@ -181,7 +181,7 @@
    "stage": "stage6",
    "chapter": null,
    "rule": "hook_ending_shape",
-   "what": "[result_flashback] 收尾是【陈述】，本书原作文案段是【引号台词】——收尾句是文案的最后一击，对一遍 hook_style.end_question",
+   "what": "[result_flashback] 收尾是【陈述】，本书原作文案段是【引号台词】——收尾句是文案的最后一击，应与原作文案保持同一形态",
    "how": "0 成本人工路：`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决"
   },
   {
@@ -189,7 +189,7 @@
    "stage": "stage6",
    "chapter": null,
    "rule": "hook_ending_shape",
-   "what": "[identity_contrast] 收尾是【陈述】，本书原作文案段是【引号台词】——收尾句是文案的最后一击，对一遍 hook_style.end_question",
+   "what": "[identity_contrast] 收尾是【陈述】，本书原作文案段是【引号台词】——收尾句是文案的最后一击，应与原作文案保持同一形态",
    "how": "0 成本人工路：`--apply-edit` 改内容 / `--wontfix` 记「不修」的裁决"
   },
   {

@@ -287,7 +287,7 @@ def has_record(base: str | os.PathLike[str], sid: str) -> bool:
 
     ``get()`` deliberately returns a read-only default for a new book, so its
     value cannot answer this question.  A file alone is also insufficient: an
-    old/corrupt record or a choice bound to stale style/plan artifacts must not
+    old/corrupt record or a choice bound to stale mechanical-baseline/plan artifacts must not
     make the queue emit a paid Stage5 command.
     """
     return current_depth_selection(base, sid) is not None
@@ -888,7 +888,8 @@ def begin_writing(
     with _LOCK:
         record = _read_current(base, sid)
         if not record.gate['s3'] or not record.gate['s4']:
-            raise ApprovalRequired('stage3 style and stage4 plan must be approved first')
+            raise ApprovalRequired(
+                'stage3 mechanical baseline and stage4 plan must be approved first')
         if record.deep_proof is None:
             raise ApprovalRequired('save a current depth selection before writing')
         planned = _planned(base, sid)

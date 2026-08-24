@@ -162,7 +162,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | `/n/:sid/stage1` | 顶部合并展示校验结论与切分确认，且不依赖正文查询成功；下方是章节索引和原文切分结果，只读，开篇文案只展示一次，重号/缺号/倒退按服务端章号诊断逐章显式提示 |
 | `/n/:sid/read/:o` | 原文与 stage2 骨架对照 |
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
-| `/n/:sid/style` | stage3 文风实测与下发档位 |
+| `/n/:sid/style` | stage3 存量机械基线与当前免费重算对照 |
 | `/n/:sid/stage4/:o` | 计划与写作上下文逐拍对照 |
 | `/n/:sid/depth` | 逐章深/浅重构选择与写作启动前确认 |
 | `/n/:sid/stage5/:o` | 成稿、材料、验收 finding 与修订的合并工作面；`writing=false` 时守卫跳 `depth` |

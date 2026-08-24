@@ -16,7 +16,7 @@ Stage6 生成放在正文前的开篇文案。一次模型调用产三个候选�
 
 - 原作文案作为创作金标准下发，保留其信息顺序、升级节拍、反差、对白密度和最后一击；
 - 下发完整 `entities` / `canon` / `arc` 与全书逐章事件地图，使候选可选择后期兑现；
-- 下发正文 `voice`、`surface_habits` 和开篇源章的 `chapter_styles`，使文案与正文像同一本书；
+- 下发 Stage3 原作文案机械五叶（字符数、平均句/段长、引号体、对白比例），不再下发任何定性文风包；
 - 剧透不再是错误，也不因剧透本身加减分；
 - 合法体裁自由包括重写台词、时间压缩、倒叙、合并数章和合成场面；
 - 唯一语义硬边界是不能改变人物身份、关系、关键因果、故事结果，或新增会改变读者理解的设定。
@@ -161,8 +161,14 @@ producer 在归一后、落盘前再守一次正式文本唯一性。这里**不
 - `story_truth`：完整 `entities`、`canon`、`arc`；
 - `whole_story_map`：每章章号、源章号、章目标、开头目标、全部 beat events、结尾目标；
 - `rewritten_opening`：第 1 章至 `lead_upto` 的连续成稿；
-- `style`：`hook_style`、完整书级 `voice`、`surface_habits`、开篇源章 `chapter_styles`、
-  原作文案形态与 measurable。
+- `source_hook_mechanical`：只含 Stage3 `measurable.hook` 的 `chars`、
+  `avg_sentence_chars`、`avg_paragraph_chars`、`quote_styles`、`dialogue_ratio`；
+- 原作文案目标字数、段间分隔、收尾形态仍由直接读取的 `source_hook` 现算，
+  不把完整 `measurable` 或退役定性字段混入材料。
+
+2026-08-24 的真实 A/B 冻结统计决议仍为 `inconclusive`；产品负责人随后以“无定性包时
+至少有一篇事实安全且足够吸引人继续读”为删除门槛，确认 B 臂已满足。两层结论、候选映射与
+事实复核见 `docs/stage3-stage6-style-ab-result.md`，不得把产品裁决改写成预注册统计阳性。
 
 原作文案可学结构但不可抄长句：任意连续 20 个内容字符相同即命中 `hook_reuses_source`。
 

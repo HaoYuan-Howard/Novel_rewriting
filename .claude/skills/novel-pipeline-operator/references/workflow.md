@@ -81,7 +81,7 @@
 | 4 | `stage1.partition` | 无 | 追跑 check 无 HARD；章节 ordinal 唯一且覆盖 `1..N` |
 | 5 | `stage2.global` | 无 | global 正式落盘；随即生成 review workpack，逐项核验并提交 typed 决策；只有 current 且全部 PASS 才继续 |
 | 6 | `stage2.blueprint` | 无；闸开后独立 preview/run | 逐章蓝图正式落盘，check 无 HARD |
-| 7 | `stage3.style` | 无；闸开后独立 preview/run | 文风画像正式落盘，check 无 HARD |
+| 7 | `stage3.style` | 无；免费机械测量，独立 preview/run | 当前机械基线正式落盘，check 无漂移；s3 机械基线确认绑定当前产物 |
 | 8 | `stage4.plan` | 无 | 计划 check 无 HARD，写作上下文由当前计划组装 |
 | 9 | `stage4.context` | 计划落盘已自动组装时 `state` 跳过；只在需重建时执行 | `stage4/writer_context.json` 与当前计划投影一致且 fresh |
 | 10 | `stage5.write` | `--deep <全部计划章> --shallow-rest`（章号逗号分隔，如 23 章 ⇒ `--deep 1,2,...,23`） | deep+shallow 的正式章集合恰好覆盖计划章集合，内部收缩/重试不等于失败；`arm_split_report` 应报「开卷 0 章」 |
@@ -94,7 +94,7 @@
 | 17 | `stage7.assemble` | 无 | `stage7/<书名>_rewriting.txt` 生成并通过独立成书对账 |
 <!-- pipeline-steps:end -->
 
-Stage2 的顺序硬约束是：global 落盘 → `--emit-review-workpack` 辅助逐项对原文 → `--emit-review-template` 取得版本化决策骨架 → 提交 `--review-decisions` → 确认全部 PASS → 才运行 blueprint/style。旧的并发首跑已下线，因为它会在人工闸形成前启动下游，调用方不同就能绕闸。
+Stage2 的顺序硬约束是：global 落盘 → `--emit-review-workpack` 辅助逐项对原文 → `--emit-review-template` 取得版本化决策骨架 → 提交 `--review-decisions` → 确认全部 PASS → 才运行 blueprint。当前 Stage3 只读 Stage1、零 LLM，不受这道 Stage2 人工闸约束；初始抽取实现可让它与 global 并行，operator 按主链表顺序补跑也得到同一份机械结果。
 
 ### 零剔除的书同样要过 stage0 闸门
 

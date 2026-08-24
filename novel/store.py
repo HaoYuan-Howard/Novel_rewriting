@@ -47,7 +47,7 @@ from contracts.artifacts import (
 )
 from contracts.schema import (
     ArtifactVersionError, HumanApproval, InputEdge, Provenance, RevalidationAudit,
-    decode_artifact, encode_artifact,
+    artifact_spec, decode_artifact, encode_artifact,
 )
 from novel import paths, prov
 from novel.consumption import producer_node, projection_for
@@ -611,6 +611,59 @@ class ArtifactStore:
                     '请勿继续运行下游，先按错误中列出的正式/INVALID 路径人工恢复') from exc
             raise
         return p
+
+    def schema_version_of(self, rel: str) -> int | None:
+        """只读返回盘上 JSON 信封版本；文件不存在返回 ``None``。"""
+        rel = paths.check_rel_deep(rel)
+        p = self.path(rel)
+        if not _is_file(p):
+            return None
+        raw = self._loads(rel, self._read_bytes(rel))
+        marker = raw.get('_schema_version') if isinstance(raw, dict) else None
+        if isinstance(marker, bool) or not isinstance(marker, int) or marker < 1:
+            raise ArtifactUnreadable(
+                f'{rel} 的 _schema_version={marker!r} 非法，不能判定 shape-break 重建策略')
+        return marker
+
+    def replace_shape_break(self, rel: str, artifact: BaseModel) -> Path:
+        """以当前 schema 原位替换旧正式稿，并丢弃退役 INVALID，二者不进轮次史。
+
+        这条口只供已在 ``ARTIFACT_SPECS`` 显式升版的 producer 重建。低版本字节不是
+        当前业务轮次；把它们塞进 ``_rounds`` 会让 current corpus 扫到一份明知读不回的
+        产物。正式稿替换、自证 fresh 与退役 INVALID 在同一 history transaction 内：
+        任一步失败，调用前两份字节都会逐字恢复。
+        """
+        rel = paths.check_rel_deep(rel)
+        if paths.is_invalid(rel):
+            raise PathRefused(f'{rel} 是 `.INVALID`，不能作为 shape-break 正式落点')
+        spec = artifact_spec(rel)
+        if spec is None or spec.current_version <= 1:
+            raise PathRefused(
+                f'{rel} 没有登记过 schema shape break，不能走旧字节替换口')
+        versions = {
+            candidate: self.schema_version_of(candidate)
+            for candidate in (rel, paths.invalid_of(rel))
+        }
+        present = {candidate: version for candidate, version in versions.items()
+                   if version is not None}
+        if not present or not all(version < spec.current_version
+                                  for version in present.values()):
+            raise PathRefused(
+                f'{rel} shape-break 替换口只接受全为旧版本的 live 字节；'
+                f'当前版本 v{spec.current_version}，盘上={present or "（无）"}')
+        data = self._render(rel, artifact)
+        self._verify_round_trip(rel, type(artifact), data)
+        formal = self.path(rel)
+        invalid = self.path(paths.invalid_of(rel))
+        with self.history_transaction(rel):
+            os.makedirs(_filesystem_path(formal.parent), exist_ok=True)
+            self._replace_atomically(formal, data)
+            self._assert_self_fresh(rel, artifact)
+            try:
+                os.unlink(_filesystem_path(invalid))
+            except FileNotFoundError:
+                pass
+        return formal
 
     def retire_invalid(self, rel: str) -> Path | None:
         """同名 `.INVALID` 若在盘上，按它自己记的那一轮归档；不在就什么都不做。
@@ -1514,7 +1567,7 @@ class ArtifactStore:
 
         ⚠⚠ **另一道闸（「0 成本节点不许记 `model`」）不在这里，在铸造口**
         （`RunContext.llm_provenance`）。这是本轮实测改掉的一处：
-        放在写盘口会**误伤三条 0 成本入口**——`--revalidate` / `--remeasure` / `--recheck`
+        放在写盘口会误伤若干 0 成本入口——`--revalidate` / `--recheck`
         写回的是一份**继承来的**来源账，它记的 `model` 属于当初那次付费产出，
         不是本次跑的新宣称；`stage6.approve` / `stage7.approve` 同理
         （它们是 0 成本节点，改写的却是付费节点产的那份产物）。

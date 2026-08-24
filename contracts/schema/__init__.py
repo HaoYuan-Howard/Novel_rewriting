@@ -38,7 +38,6 @@ from contracts.artifacts import (
     STAGE0_REMOVAL_REPORT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE1_PARTITION_REPORT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
-    STAGE3_STYLE_EDIT,
     STAGE3_STYLE_GROUNDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
     STAGE4_WRITER_CONTEXT_IDENTITY, STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
@@ -56,7 +55,6 @@ from contracts.schema.api import (
     DriftItem,
     ErrorBody,
     HookCopyView,
-    HookStyleLine,
     InboxItem,
     InboxView,
     JobList,
@@ -81,7 +79,6 @@ from contracts.schema.api import (
     ResidualAdoptionRequest,
     TrimResolutionRequest,
     UploadResult,
-    VoiceLine,
 )
 from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
 from contracts.schema.common import (
@@ -147,10 +144,7 @@ from contracts.schema.stage2 import (
     RoleSplitResponse, Secret, SecretPatch, Setting, SourceSpan, WorldRule,
     WorldRulePatch, WorldRuleVersion,
 )
-from contracts.schema.stage3 import (
-    ChapterStyle, ChapterStyleResponse, HabitRepairResponse, HookStyle, Measurable,
-    StyleEdit, StyleGrounding, StyleResponse, Voice,
-)
+from contracts.schema.stage3 import Measurable, StyleGrounding, StyleProvenance
 from contracts.schema.stage4 import (
     BookCharacter, CtxBeat, CtxChapter, CtxFacts, CtxGoal, FactRef, PlanBeat, PlanChapter,
     PlanChapters, PlanEdit, PlanGoal, WriterContext,
@@ -259,10 +253,9 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   一律作废，不手补字段冒充当前产地。取值与升版记录见
     #   `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
     STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 3),
-    STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding),
-    # ⚠ 三份 `*_edit.json` 不是节点产的，是**人产的输入**——但它们落在产物目录、
-    #   被 `--apply-edit` 当决策集吃掉，所以形状同样是契约（stage7 先例，§三）。
-    STAGE3_STYLE_EDIT: ArtifactSpec(StyleEdit),
+    # 2026-08-24 Stage3 定性包整批退役：顶层只留 measurable + 免费 provenance。
+    # v1 不迁移；普通旧书由免费 producer 重建，已用于实验的两本按归档清单保留历史字节。
+    STAGE3_STYLE_GROUNDING: ArtifactSpec(StyleGrounding, 2),
     STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters),
     STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit),
     STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext),
@@ -413,7 +406,7 @@ __all__ = [
     'CheckKind', 'Remediation', 'FixRoute',
     'AccountingLine', 'StatusCounts', 'Status', 'Badge', 'finding', 'badge_of',
     # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实
-    'StyleView', 'VoiceLine', 'HookStyleLine', 'DriftItem',
+    'StyleView', 'DriftItem',
     'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest',
     'Stage0ApprovalRequest', 'Stage0CandidateDecisionRequest', 'Stage0CandidateView',
     'Stage1Segment', 'Stage1Segments', 'Stage1ChapterRow', 'Stage1Chapters',
@@ -438,8 +431,7 @@ __all__ = [
     'AddressContextPatch', 'CharacterAddressReplacement', 'Arc', 'ConflictStage',
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',
-    'StyleGrounding', 'StyleResponse', 'ChapterStyle', 'ChapterStyleResponse',
-    'HabitRepairResponse', 'Voice', 'HookStyle', 'Measurable', 'StyleEdit',
+    'StyleGrounding', 'StyleProvenance', 'Measurable',
     'PlanChapters', 'PlanChapter', 'PlanBeat', 'FactRef', 'PlanGoal', 'PlanEdit',
     'WriterContext', 'BookCharacter',
     'CtxChapter', 'CtxBeat', 'CtxFacts', 'CtxGoal',

@@ -5,7 +5,7 @@
 （output base 必须不存在或为空），也可以是已经落稳且已批准的当前 schema Stage0/1
 （Stage2～7 必须完全为空）。它会：
 
-* 用生产 ``build_argv`` 展开每本八条付费 CLI dispatch；
+* 用生产 ``build_argv`` 展开每本七条付费 CLI dispatch；Stage3 v2 免费机械测量不计入；
 * 固定当前模型/思考模式、独立空 cache 与 ``DEEPSEEK_MAX_RETRIES=0``；
 * 从真实节点 ladder 复算基础、语义审判和条件调用的 wire 可达上限；
 * 只对在上游生成前已经可知的 Stage2 global prompt 做精确 tokenizer 计数；
@@ -77,7 +77,6 @@ from novel.stages.stage7.rename import MAX_TOKENS as RENAME_MAX_TOKENS  # noqa: 
 PAID_NODES = (
     'stage2.global',
     'stage2.blueprint',
-    'stage3.style',
     'stage4.plan',
     'stage5.write',
     'stage6.hook',
@@ -121,16 +120,13 @@ PREREQUISITES = {
         f'v{artifact_spec(STAGE2_GLOBAL_GROUNDING).current_version} 产物。',
         '逐章输入范围由当前 Stage1 的 17/25 章复算，不使用旧 corpus 章表。',
     ),
-    'stage3.style': (
-        'Stage1 正文/文案与正式 Stage2 global 必须 fresh。',
-        '若首轮唯一 HARD=habit_quote，dispatch 内条件触发一次窄付费修复。',
-    ),
     'stage4.plan': (
-        'Stage2 global + blueprint + Stage3 style 必须 fresh。',
+        'Stage2 global + blueprint 必须 fresh；Stage3 v2 是独立的免费机械支路。',
         'stage2/global_review.json 必须经 typed 人工 decisions 达到全项 PASS，打开 s2 gate。',
     ),
     'stage5.write': (
-        'Stage4 plan/context 必须 fresh，且已冻结人工深度选择：deep=1,2,3，其余 shallow。',
+        'Stage3 v2 机械基线与 Stage4 plan/context 必须 fresh，且 s3/s4 已人工确认；'
+        '人工深度选择冻结为 deep=1,2,3，其余 shallow。',
         '超上限章零调用保留 pretrim 并转人工：本仓没有自动收缩路径，'
         '这一层不存在第二条付费回路。',
     ),
@@ -331,11 +327,6 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
         spec = active_contract()
         per_chapter = 2 if spec.topology == 'boundary_then_detail' else 1
         base = chapters * per_chapter + (1 if spec.needs_summary_batch else 0)
-    elif node == 'stage3.style':
-        base = chapters + 1
-        conditional = 1
-        conditional_wire = rung_count * MAX_SAMPLES_PER_RUNG
-        condition = '首轮唯一 HARD=habit_quote 时自动窄修复一次'
     elif node == 'stage5.write':
         # 收缩臂整臂下线后本层只剩逐章一次调用；超上限只落 audit，0 次调用。
         base = chapters
@@ -368,7 +359,6 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
     normal_max = {
         'stage2.global': stage2_extract.GLOBAL_MAX_TOKENS,
         'stage2.blueprint': stage2_extract.BLUEPRINT_MAX_TOKENS,
-        'stage3.style': 64_000,
         'stage4.plan': PLAN_MAX_TOKENS,
         'stage5.write': stage5_write.MAX_TOKENS,
         'stage6.hook': HOOK_MAX_TOKENS,
@@ -380,12 +370,6 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
         'max_tokens': normal_max,
         'rungs': [list(row) for row in rungs],
     }]
-    if node == 'stage3.style':
-        rows.append({
-            'kind': 'conditional_habit_quote_repair',
-            'max_tokens': 16_000,
-            'rungs': [list(row) for row in rungs],
-        })
     if node == 'stage2.blueprint':
         # 逐章那一相之外，契约还会发另外两种请求；它们各有自己的 `max_tokens`，
         # 只列 `BLUEPRINT_MAX_TOKENS` 会让上限估算漏掉这两种。
@@ -591,26 +575,21 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
     semantic_nodes = set(SEMANTIC_NODES)
     mandatory = [row for row in dispatches if row['node'] not in semantic_nodes]
     semantic_rows = [row for row in dispatches if row['node'] in semantic_nodes]
-    stage3 = [row for row in dispatches if row['node'] == 'stage3.style']
     hooks = [row for row in dispatches if row['node'] == 'stage6.hook']
     base_logical = sum(row['base_logical_requests'] for row in mandatory)
     base_wire = sum(row['base_ladder_wire_hard_limit'] for row in mandatory)
     semantic_logical = sum(row['base_logical_requests'] for row in semantic_rows)
     semantic_wire = sum(row['base_ladder_wire_hard_limit'] for row in semantic_rows)
-    stage3_logical = sum(row['conditional_logical_requests'] for row in stage3)
-    stage3_wire = sum(row['conditional_wire_hard_limit'] for row in stage3)
     hook_retry_logical = sum(row['conditional_logical_requests'] for row in hooks)
     hook_retry_wire = sum(row['conditional_wire_hard_limit'] for row in hooks)
     full_logical = (
-        base_logical + semantic_logical + stage3_logical + hook_retry_logical)
+        base_logical + semantic_logical + hook_retry_logical)
     full_wire = (
-        base_wire + semantic_wire + stage3_wire + hook_retry_wire)
+        base_wire + semantic_wire + hook_retry_wire)
     return {
         'production_cli_dispatches': len(dispatches),
         'base_nonsemantic_logical_requests': base_logical,
         'base_nonsemantic_ladder_wire_hard_limit': base_wire,
-        'stage3_conditional_habit_quote_logical': stage3_logical,
-        'stage3_conditional_habit_quote_wire_hard_limit': stage3_wire,
         'semantic_logical': semantic_logical,
         'semantic_wire_hard_limit': semantic_wire,
         'stage6_conditional_candidate_retry_logical': hook_retry_logical,
@@ -676,7 +655,7 @@ def build_plan(
         'existing_authorized_boundary': {
             **EXISTING_AUTHORIZED,
             'explanation': (
-                '这 10 条 FC08/12/13 实验 run 与本次 18 条 canonical corpus dispatch '
+                f'这 10 条 FC08/12/13 实验 run 与本次 {len(dispatches)} 条 canonical corpus dispatch '
                 '各列一次；新 totals 不含已有实验，空 base/cache 也不跨范围复用产物。'),
             'combined_wire_hard_ceiling_once_each': (
                 EXISTING_AUTHORIZED['external_hard_limit']
@@ -749,9 +728,6 @@ def render(plan: dict[str, Any]) -> str:
         '## 新 corpus 小计（不含已有 FC08/12/13）',
         f'基础非语义：logical={aggregate["base_nonsemantic_logical_requests"]} / '
         f'wire 上限={aggregate["base_nonsemantic_ladder_wire_hard_limit"]}',
-        f'Stage3 条件 habit_quote 修复：logical='
-        f'{aggregate["stage3_conditional_habit_quote_logical"]} / wire 上限='
-        f'{aggregate["stage3_conditional_habit_quote_wire_hard_limit"]}',
         f'Stage6 条件候选定向重试：logical='
         f'{aggregate["stage6_conditional_candidate_retry_logical"]} / wire 上限='
         f'{aggregate["stage6_conditional_candidate_retry_wire_hard_limit"]}',

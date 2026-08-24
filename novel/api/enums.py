@@ -144,6 +144,8 @@ _WITHHELD: dict[str, str] = {
     'DEEP_OVERLAP_MAX': '判据阈值（闭卷臂与原文的重合度上限）',
     'STOP_REWRITE_AFTER': '返工护栏的轮次上限。它是**编排**参数，不是给人看的取值面',
     'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',
+    'STAGE3_MEASUREMENT_CONTRACT': 'Stage3 机械测量算法的当前版本；产物已在来源账记录实际版本，'
+                                   'freshness 由后端消费投影判断。发给前端会诱导第二个过期判官',
     # ── stage7（人名替换与成书）──
     'MIN_SURFACE': '判据阈值（能进替换面的称呼最短几个字）。前端拿到就能自己判'
                    '「这条映射合不合法」，而那条判据在 stage7',

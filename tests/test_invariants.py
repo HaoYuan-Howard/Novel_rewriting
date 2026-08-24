@@ -149,7 +149,7 @@ def test_free_nodes_are_the_ones_without_llm():
     free = {node for node, spec in inv.NODES.items() if not spec.paid}
     assert free == {
         'stage0.remove', 'stage0.approve', 'stage0.edit',
-        'stage1.partition', 'stage4.context', 'stage5.review',
+        'stage1.partition', 'stage3.style', 'stage4.context', 'stage5.review',
         'stage6.approve', 'stage7.assemble', 'stage7.approve',
     }
 

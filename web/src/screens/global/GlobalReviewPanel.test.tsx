@@ -58,8 +58,6 @@ const enums: EnumsResponse = {
   hinge_groups: {},
   style_words: [],
   invent: { allow: [], forbid: [], principle: '' },
-  voice_keys: [],
-  hook_keys: [],
   job_kinds: { 'stage2.global': { label: 'stage2', paid: true } },
   actions: [{
     kind: 'stage2.global',

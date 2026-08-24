@@ -37,7 +37,7 @@
 | `stage0.md` | `clean_text.txt` · `removal_report.json` |
 | `stage1.md` | `main_text.json` · `hook_copy.json` · `partition_report.json` |
 | `stage2.md` | `global_grounding.json` · `chapter_blueprints.json`　**全链第一个调 LLM 的层** |
-| `stage3.md` | `style_grounding.json`　**唯一一份带完整判据表 + 先校验后落盘闸门的产物** |
+| `stage3.md` | `style_grounding.json`　v2 免费机械基线、测量契约与下游最小投影 |
 | `stage4.md` | `plan_chapters.json` · `writer_context.json`　**两份产物：一份 LLM 产、一份确定性组装**；<br>也是**全链的收口点**——前三层所有逐章闸门最后都汇到 `writer_context` 这一份上 |
 | `stage5.md` | `<mode>/chNN.json`（含 `.INVALID`）· `review_<n>.json` · `semantic_<n>.json` · `wontfix.json` · `_rounds/` 三种归档 · **`draft.md`（字节形态，§五）**<br>**全链唯一产出「书」的层**，也是**唯一带 LLM 返工回路**的层；两条写作臂共用正文 schema，机械验收与付费语义审判各自落盘 |
 | `stage6.md` | `hook.json` · `_rounds/hook.rN.json`　**全书级单次产出**（不是逐章），也是**唯一以「人定稿」当现役闸门**的层；<br>判据表分两半的边界是**产物类**（文案＝全文改写 ⇒ 连续文本探针结构性失效），不是判据质量 |

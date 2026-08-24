@@ -139,7 +139,7 @@ def _source_distance_finding(body: str, src_hook: str | None) -> Finding:
 
 def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | None,
                   characters: dict | None, src_hook: str | None,
-                  style_hook: dict | None, quote_problems: list[str]) -> list[Finding]:
+                  hook_mechanical: dict | None, quote_problems: list[str]) -> list[Finding]:
     """对**一条文案**跑全部确定性判据 → `[Finding]`。
 
     返回的是 `Finding` 而不是 `Outcome`：本层一份产物里有**四条文本**
@@ -244,8 +244,8 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
     # 拿其中一个去比另一个算出来的基准，错的不是某个数，是那个**跨口径的运算**
     # ——而它不会报错，只会让整条判据系统性偏 15%。
     got = measure(body)
-    if style_hook and got:
-        base = style_hook.get('chars') or 0
+    if hook_mechanical and got:
+        base = hook_mechanical.get('chars') or 0
         if base:
             lo, hi = base * HOOK_BAND[0], base * HOOK_BAND[1]
             if not lo <= got.chars <= hi:
@@ -253,14 +253,14 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
                                   detail=f'{got.chars} 字，本书文案段 {base} 字'
                                          f'（提示带 {lo:.0f}~{hi:.0f}）',
                                   evidence=[f'{got.chars}/{base}']))
-        pb = style_hook.get('avg_paragraph_chars') or 0
+        pb = hook_mechanical.get('avg_paragraph_chars') or 0
         gp = got.avg_paragraph_chars or 0
         if pb and gp and not pb * SHAPE_BAND[0] <= gp <= pb * SHAPE_BAND[1]:
             fs.append(finding('hook_shape',
                               detail=f'平均每段 {gp:.1f} 字，本书文案段是 {pb:.1f} 字/段'
                                      f'（文案的体裁特征是短句短段）',
                               evidence=[f'{gp:.1f}/{pb:.1f}']))
-        qs = style_hook.get('quote_styles') or []
+        qs = hook_mechanical.get('quote_styles') or []
         odd = [q for q in (got.quote_styles or []) if q not in qs]
         if qs and odd:
             fs.append(finding('hook_quote_style',
@@ -297,28 +297,24 @@ def hook_findings(text: str, *, mat: Material, secrets: list[dict], arc: dict | 
                         f'——归一化应该已经修掉它了，这条亮了说明归一没跑或坏了'),
                 evidence=[f'{gb}/{sb}' + ('（成稿单段）' if one_para else '')]))
 
-    # ── ⑧ 收尾形态：`hook_style.end_question` 唯一可确定性检测的投影 ────────
+    # ── ⑧ 收尾形态：直接以原作文案段字节为基准 ────────────────────────────
     #
-    # 【为什么需要这一条】`end_question` 逐书下发给模型，但**没有任何一层在查它**——
-    # 实测五本：一本的 `end_question` 写着「用带余波的短句戛然而止，**不展开后续**」，
-    # 成品却展开了后续还加了个反问；另一本写着「以**宣言式断言**收尾」，成品是一句反问。
-    # 两本都违反，全链一处没出声。
-    # ⚠ 更值得记的是那个形状：**合规的那个候选就在同一份产物里**，
-    # 人定稿时选了违规的那个——**没有判据，人也没有依据去挑**。
+    # 这条不需要 Stage3 的定性 ``hook_style.end_question``：生成提示与判据都直接
+    # 消费同一份原作文案段，避免一份 LLM 描述成为第二个、且可能漂移的事实源。
     if src_hook:
         gshape, sshape = ending_shape(body), ending_shape(src_hook)
         if gshape and sshape and gshape != sshape:
             last = [ln for ln in body.split('\n') if ln.strip()][-1].strip()
             fs.append(finding('hook_ending_shape',
                               detail=f'收尾是【{gshape}】，本书原作文案段是【{sshape}】'
-                                     f'——收尾句是文案的最后一击，对一遍 hook_style.end_question',
+                                     f'——收尾句是文案的最后一击，应与原作文案保持同一形态',
                               evidence=[last]))
 
     # ── ⑨ 引语形态：**度量，不是门** ───────────────────────────────────────
     gq_n, gq_max = quote_stats(body)
     sq = (f'原作文案 {quote_stats(src_hook)[0]} 条 / 最长 {quote_stats(src_hook)[1]} 字'
           if src_hook else '本书没有原作文案段可比')
-    dr = (style_hook or {}).get('dialogue_ratio')
+    dr = (hook_mechanical or {}).get('dialogue_ratio')
     fs.append(finding(
         'hook_quote_shape',
         detail=(f'引语 {gq_n} 条 / 最长 {gq_max} 字（≥6 字才计）；{sq}'

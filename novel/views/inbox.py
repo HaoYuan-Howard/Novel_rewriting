@@ -9,9 +9,10 @@ inbox.py —— 「待人工」八类清单的**生产者**（BE-04 第一条；
 
 【八类的数据源】（全部现存机制，本模块**一个判定都不新造**——照 `views/stage3.py` 纪律）
   · `invalid`    盘上 `.INVALID` 在、同名正式稿**不在**：首跑被落盘闸门拦下，在等人改
-  · `rejected`   `.INVALID` 与正式稿**并存**：付费自救/人工补丁被闸门驳回，
-                 正式稿仍是旧轮——「钱花了，稿丢了」。`how` 带 `_rounds/` 归档指针
-                 （**UG-12 的闭环**：被驳回后下一条恢复路径写在这行字里）
+  · `rejected`   `.INVALID` 与正式稿**并存**：通常是付费自救/人工补丁被闸门驳回，
+                 正式稿仍是旧轮——「钱花了，稿丢了」。恢复路先查 producer 真有的 flag；
+                 Stage3 v1 shape break 则走免费默认重建、明确不进 `_rounds/`
+                 （**UG-12 的闭环**：被驳回后下一条真实恢复路径写在这行字里）
   · `stalled`    stage5 最新验收里 HARD/INFO 结论的
                  `unresolved_rounds >= STOP_REWRITE_AFTER` 且未豁免：修复已判
                  「根因不在写手」主动跳过，等人工改稿或豁免；METRIC/UNVER
@@ -47,6 +48,7 @@ import re
 from contracts.invariants import (
     DEPTH_MODES, INBOX_KIND, NODES, STAGES, STOP_REWRITE_AFTER, slot_of,)
 from contracts.rules import REGISTRY
+from contracts.schema import artifact_spec
 from contracts.schema.api import InboxDecision, InboxItem, InboxView
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.report import CheckReport
@@ -122,6 +124,64 @@ def _revalidate_how(node: str) -> str:
     """Copyable strong-audit promotion, never the old credential-free form."""
     return (f'`{node} --revalidate --actor <id> --reason <why>`：0 LLM、同轮重判、'
             '写入不可变审计；不是新一轮人工改写')
+
+
+def _schema_version_or_none(store: ArtifactStore, rel: str) -> int | None:
+    """只为 INVALID 路由探测信封；坏信封仍须进入「保留证据」而不是炸掉 inbox。"""
+    try:
+        return store.schema_version_of(rel)
+    except ArtifactUnreadable:
+        return None
+
+
+def _invalid_recovery_how(
+        store: ArtifactStore, *, node: str, rel: str,
+        formal_exists: bool) -> tuple[str, bool]:
+    """返回真实恢复路与「是否为 Stage3 旧 shape」标记。
+
+    顺序是契约：通用 INVALID 必须先问 producer 有没有 ``--revalidate``，不能因为
+    某个历史节点有过这条 flag，就给所有节点拼一条不存在的命令。Stage3 v2 已退役
+    INVALID 生产/提升面；仅旧 v1 字节有一条受注册版本约束的免费默认重建路。
+    """
+    spec = NODES.get(node)
+    if spec is not None and '--revalidate' in spec.flags:
+        return _revalidate_how(node), False
+
+    registered = artifact_spec(rel)
+    invalid_rel = paths.invalid_of(rel)
+    invalid_version = _schema_version_or_none(store, invalid_rel)
+    formal_version = (_schema_version_or_none(store, rel)
+                      if formal_exists else None)
+    legacy_stage3 = (
+        node == 'stage3.style'
+        and registered is not None
+        and invalid_version is not None
+        and invalid_version < registered.current_version
+        and (not formal_exists
+             or (formal_version is not None
+                 and formal_version < registered.current_version))
+    )
+    if legacy_stage3:
+        return (
+            '运行 `stage3.style` 默认路径免费重建当前 v2（0 LLM 调用）；'
+            '事务会原位替换旧 v1 正式稿（若有）并退役旧 v1 `.INVALID`，'
+            '二者均**不进入 `_rounds/`**',
+            True,
+        )
+    if node == 'stage3.style':
+        version = (f'v{invalid_version}' if invalid_version is not None
+                   else '版本无法判定')
+        return (
+            f'现存 `.INVALID` 为{version}；Stage3 v2 producer 不生产或提升 '
+            '`.INVALID`，也没有可执行的提升入口。这是现役 producer 不可达的状态：'
+            '先保留证据并调查来源，不得自动提升、归档或覆盖',
+            False,
+        )
+    return (
+        f'`{node}` 没有可执行的 INVALID 提升入口；先保留 `.INVALID` 证据并按该节点当前恢复契约'
+        '处置，不得伪造提升命令',
+        False,
+    )
 
 
 def inbox_view(base: str | os.PathLike[str], sid: str) -> InboxView:
@@ -227,18 +287,36 @@ def _invalid_items(store: ArtifactStore, stage: str) -> list[InboxItem]:
         if not store.exists(inv):
             continue
         node = _producer_of(rel, stage)
-        if store.exists(rel):
-            rounds = sorted(store.seen_rounds(rel))
+        formal_exists = store.exists(rel)
+        recovery, legacy_stage3 = _invalid_recovery_how(
+            store, node=node, rel=rel, formal_exists=formal_exists)
+        if formal_exists:
+            if node == 'stage3.style':
+                what = (
+                    f'{inv}：Stage3 v1 shape break 的旧 `.INVALID` 与旧正式稿并存'
+                    if legacy_stage3 else
+                    f'{inv} 与正式稿并存：Stage3 v2 producer 不会产生这一状态'
+                )
+                how = recovery
+            else:
+                rounds = sorted(store.seen_rounds(rel))
+                what = f'{inv}：付费自救/人工补丁被落盘闸门驳回，正式稿仍是旧轮'
+                how = (f'历史轮次在 `{paths.rounds_dir_of(rel)}/`'
+                       f'（已见 r{rounds[-1] if rounds else "?"}）；{recovery}')
             out.append(InboxItem(
                 kind='rejected', stage=stage, chapter=None, rule=node,
-                what=f'{inv}：付费自救/人工补丁被落盘闸门驳回，正式稿仍是旧轮',
-                how=f'历史轮次在 `{paths.rounds_dir_of(rel)}/`（已见 r{rounds[-1] if rounds else "?"}）；'
-                    f'改好 `.INVALID` 后跑 {_revalidate_how(node)}，或改判据后重判'))
+                what=what, how=how))
         else:
+            what = (
+                f'{inv}：Stage3 v1 shape break 的旧字节，当前 v2 正式稿尚未重建'
+                if legacy_stage3 else
+                (f'{inv}：Stage3 v2 producer 不会产生这一状态，且当前没有正式稿'
+                 if node == 'stage3.style' else
+                 f'{inv}：首跑被落盘闸门拦下，还没有现役产物')
+            )
             out.append(InboxItem(
                 kind='invalid', stage=stage, chapter=None, rule=node,
-                what=f'{inv}：首跑被落盘闸门拦下，还没有现役产物',
-                how=f'改好 `.INVALID` 后跑 {_revalidate_how(node)}'))
+                what=what, how=recovery))
     return out
 
 

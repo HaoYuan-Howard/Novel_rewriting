@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema import encode_artifact
-from contracts.schema.stage1 import MainText
+from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
+from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage3 import StyleGrounding, StyleProvenance
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
 from novel.orchestrator import approvals
@@ -19,6 +20,7 @@ from novel.store import ArtifactStore
 
 SID = '123'
 MAIN_REL = 'stage1/main_text.json'
+HOOK_REL = 'stage1/hook_copy.json'
 STYLE_REL = 'stage3/style_grounding.json'
 PLAN_REL = 'stage4/plan_chapters.json'
 
@@ -33,15 +35,6 @@ def _disk_json(book: Path, rel: str, value: object) -> None:
 
 
 def _style(ctx: RunContext) -> StyleGrounding:
-    voice = {key: '描述' for key in (
-        'narrative_distance', 'register_tone', 'interiority', 'sentence_rhythm',
-        'dialogue_presentation', 'description_density', 'chapter_open_close',
-        'mode_variation',
-    )}
-    hook = {key: '写法' for key in (
-        'person', 'open_mode', 'info_hiding', 'twist', 'end_question', 'tone',
-        'relation_to_body',
-    )}
     block = dict(
         chars=20, paragraphs=1, sentences=2, avg_paragraph_chars=20.0,
         paragraph_sep_chars=20.0, avg_sentence_chars=10.0,
@@ -52,22 +45,12 @@ def _style(ctx: RunContext) -> StyleGrounding:
         block, chapter_chars={'min': 20, 'max': 20, 'avg': 20.0},
         per_chapter_avg_sentence={'min': 10.0, 'max': 10.0},
     )
-    provenance = ctx.llm_provenance(
+    provenance = ctx.free_provenance(
         StyleProvenance,
-        prompts={'STYLE_SYS': 'fixture current style prompt'},
-        model='fixture-model',
-        attempts=[{
-            'kind': 'chapter_aggregate', 'user_prompt': '0' * 10,
-            'output': '1' * 10, 'cache_policy': 'default',
-        }],
+        measurement_contract=STAGE3_MEASUREMENT_CONTRACT,
     )
     return StyleGrounding(
-        voice=voice, surface_habits=['以动作推进判断。'], hook_style=hook,
         measurable={'body': body, 'hook': block},
-        chapter_styles=[{
-            'source_ordinal': 1, 'voice': voice,
-            'surface_habits': ['以动作推进判断。'],
-        }],
         _provenance=provenance,
     )
 
@@ -120,11 +103,14 @@ def current_book(tmp_path: Path) -> tuple[Path, Path]:
         },
     ])
     _disk_json(book, MAIN_REL, main.model_dump(mode='json'))
+    hook = HookCopy(text='她必须在天亮前查明账册为什么被换过。')
+    _disk_json(book, HOOK_REL, hook.model_dump(mode='json'))
 
     style_ctx = RunContext.open(
-        tmp_path, SID, 'stage3.style', paid=True, write_ledger=False)
+        tmp_path, SID, 'stage3.style', paid=False, write_ledger=False)
     style_store = ArtifactStore(style_ctx)
     style_store.read(MainText, MAIN_REL)
+    style_store.read(HookCopy, HOOK_REL)
     style_store.write(STYLE_REL, _style(style_ctx))
 
     plan_ctx = RunContext.open(
@@ -238,7 +224,10 @@ def test_saved_selection_without_current_s3_s4_approval_is_not_spending_authorit
     base, _book = current_book
     approvals.set_deep(base, SID, [1])
     assert not approvals.has_record(base, SID)
-    with pytest.raises(approvals.ApprovalRequired, match='style and stage4'):
+    with pytest.raises(
+        approvals.ApprovalRequired,
+        match='stage3 mechanical baseline and stage4 plan',
+    ):
         approvals.begin_writing(base, SID, [1])
 
     _queue_stage5(monkeypatch)

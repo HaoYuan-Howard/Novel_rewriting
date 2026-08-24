@@ -107,6 +107,15 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '不手补字段冒充当前产地。仓内没有迁移机制，因此即使 architecture 属于保留三值，'
         '旧 v2 信封也必须由 producer 重建为 v3',
     ),
+    'stage3/style_grounding.json': (
+        2,
+        '2026-08-24 Stage3 机械基线简化：删除 voice、surface_habits、hook_style、'
+        'chapter_styles 以及 LLM attempts/repair/revalidation 专属账；顶层只保留完整 '
+        'measurable 与带 measurement_contract 的免费 provenance',
+        '普通旧书运行 stage3.style 免费重建（纯确定性、零 LLM），v1 不迁移也不手补。'
+        '本次消融的两本目标书已按 archive manifest 事务化移出 live discovery，明确不重建；'
+        '其 v1 字节只作为可恢复历史实验档案，不进入 _rounds，也不计入 current corpus',
+    ),
     'stage6/hook.json': (
         2,
         '2026-08-23 候选身份与策略名解耦：`ApprovedHook.approach`'
@@ -372,5 +381,5 @@ def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp
     assert style_artifact.condition == 'unreadable'
     assert ov.summary.verdict == 'broken'
     assert style.condition == 'unreadable'
-    assert style.measured_now is not None and style.voice == []
+    assert style.measured_now is not None
     assert inbox.total == len(inbox.items)

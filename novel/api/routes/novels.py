@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-novels.py —— 语料库、总览、S-06 文风。**三个都是纯读端点。**
+novels.py —— 语料库、总览、S-06 机械基线。**三个都是纯读端点。**
 
 ⚠ 三个响应模型里**一个 `badge` / `passed` / `counts` 都没有**（`R-11.4`）：
 这一屏的结论只能来自 `/api/novels/:sid/check/:kind`。
@@ -53,7 +53,7 @@ def get_novel(sid: str = Depends(checked_sid),
 @router.get('/{sid}/stage3/style', response_model=StyleView)
 def get_stage3_style(sid: str = Depends(checked_sid),
                      base: str = Depends(get_base)) -> StyleView:
-    """S-06 文风那一屏。
+    """S-06 Stage3 机械基线那一屏。
 
     ⚠ **产物不在盘上是 200 不是 404**：`04_delivery.md:123` 明写
     「`exists: false` 时左半边（实测）仍有内容」——左半边量的是 stage1，

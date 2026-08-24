@@ -207,41 +207,37 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 
 ---
 
-## 四、`StyleView` —— S-06 文风那一屏
+## 四、`StyleView` —— S-06 Stage3 机械基线
 
-来源：冻结抓包 `web/src/mocks/stage3_style.json`（真实响应，8 章那本；哈希见 `web/scripts/mock-baseline.json`）。
+`web/src/mocks/stage3_style.json` 是 v1 定性画像的冻结历史抓包，保留原字节与哈希但**不是现役
+API 形状**；假后端在 `web/src/api/mock.ts::currentMockStyle` 只投影 v2 仍存在的字段。
 
-⚠ **它是一个【视图】，不是产物。** 盘上那份 `stage3/style_grounding.json` 只贡献右半边；
-左半边（实测数字与档位词）是**代码现算的**，产物在不在都算得出来
-——`04_delivery.md:123` 明写「S-06 文风：`exists: false` 时左半边（实测）仍有内容」。
+⚠ **它是视图，不是产物。** 盘上的 `stage3/style_grounding.json` v2 提供存量机械基线；
+当前代码同时读取 Stage1 免费重算。因此 `exists=false` 时仍可展示 `measured_now`，旧 v1 或坏
+v2 则表现为 `exists=true, readable=false`，不能洗成“没运行”。
 
 | 字段 | 类型 | 必填 | 取值面 / 说明 | 证据 |
 |---|---|---|---|---|
 | `sid` / `title` | 串 | 是 | **由 `novel/paths.py` 从目录名派生** | `派生` |
 | `exists` | 布尔 | 是 | 盘上有没有那份产物 | `抓包` |
 | `invalid_exists` | 布尔 | 是 | 有没有一份 `.INVALID` 在等人处理 | `抓包` |
-| `readable` | 布尔 | 是 | 能不能按**当前** schema 读回来 | `设计` |
-| `voice` | 数组 | 是 | 八项 `{key, text, chars}`，**顺序 = `VOICE_KEYS`** | `抓包` |
-| `surface_habits` | 串数组 | 是 | 产物在时非空；不在时空数组 | `抓包` |
-| `hook_style` | 数组 | 是 | 七项 `{key, text}`，**顺序 = `HOOK_KEYS`** | `抓包` |
+| `readable` | 布尔 或 null | 是 | 当前 schema 可读；产物不存在时为 null | `设计` |
 | `hook_copy_text` | 串 或 null | 是 | 开篇文案段原文（来自 stage1，与本层产物无关） | `抓包` |
 | `measurable_stored` / `measured_now` | 对象 或 null | 是 | `Measurable`。前者来自产物，后者**现算** | `抓包` |
-| `bands_stored` / `bands_now` | 对象 或 null | 是 | 档位词。**现算，不落盘**（`stage3.md`：两个消费方各算一次） | `抓包` |
+| `bands_stored` / `bands_now` | 对象 或 null | 是 | 由对应机械数字即时派生的展示档位，**不落盘** | `设计` |
 | `measure_error` | 串 或 null | 是 | 量不出来时的**人话**。与 `measured_now` **恰好一个非空** | `抓包` |
 | `measure_error_kind` | 串 或 null | 是 | **异常类名**（`UpstreamMissing` / `ArtifactUnreadable`） | `设计` |
 | `drift` | 数组 **或 null** | 是 | 存/现两份实测的逐项差异 | `抓包`（形状）+ `设计`（三态） |
 | `freshness` / `reason` / `ghosts` | 串 / 串 / 串数组 | 是 | `FRESHNESS` / `FRESHNESS_REASON` / 幽灵边**点名** | `设计` |
 | `_provenance` | 对象 或 null | 是 | 产物里那一份，原样 | `抓包` |
 
-### 七条形状裁决（相对抓包）
+### v2 形状裁决
 
-**① `voice_extra` 删掉。** 抓包里有这个数组（值是 `[]`），新契约里**没有对应的东西**：
-`contracts/schema/stage3.py::Voice` 是八键闭合 + `extra='forbid'`，`StyleGrounding` 里
-根本没有这个字段 ⇒ 它**结构上恒为空**。留着就是一盏保证不亮的灯
-（同 stage4 那个恒为 `keep` 的 `op`）。**登记在这里，不是漏了。**
+**① 定性字段整体删除。** 当前响应没有 `voice`、`voice_extra`、`surface_habits` 或
+`hook_style`。它们既不在 v2 产物，也不以空数组占位；空占位会让消费者误以为字段仍是契约的一部分。
 
-**② 算不出来时不 404、不抛，填槽。** 抓包里已经预留了 `measure_error` / `bands_error`，
-那就是答案。三态由后置条件焊死：`measured_now` 与 `measure_error` **恰好一个非空**，
+**② 算不出来时不 404、不抛，填槽。** 三态由后置条件焊死：
+`measured_now` 与 `measure_error` **恰好一个非空**，
 同空或同非空一律炸。
 ⚠ 另出一格 `measure_error_kind`（**id 不是措辞**）：
 「stage1 还没跑」与「stage1 的产物坏了」对人的下一步是**相反**的指示。
@@ -251,11 +247,7 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 抓包里是 `[]`，把两者压成一个 `[]` 就回到本项目一路在防的那个病
 （`Q-2`：「不知道」与「没问题」必须能区分）。
 
-**④ `voice` / `hook_style` 保持【数组】形态，且顺序由 `VOICE_KEYS` / `HOOK_KEYS` 给**，
-配后置条件逐个断言。发成对象的话，顺序就落在**字段声明顺序**上——那是第二个落点，
-而界面上八维的顺序是有意义的（`narrative_distance` 打头）。
-
-**⑤ `bands_error` 也删掉，与 ① 是同一类。**
+**④ `bands_error` 删除。**
 `novel/core/bands.py::bands()` 在一个**合法的** `Measurable` 上是**全函数**
 （每一项都是纯算术与查表，没有失败支）。⇒ `bands_now` 为 null 当且仅当
 `measured_now` 为 null，而那件事已经由 `measure_error` 说过了。
@@ -263,11 +255,14 @@ Stage 3/5 各只有一条生产 prompt 路径，前端和调用方无需也不�
 ⇒ 载体上改成两条后置条件：`bands_now` 与 `measured_now` 同进同出、
 `bands_stored` 与 `measurable_stored` 同进同出。
 
-**⑥ `readable` 是三态（`是 / 否 / null`），不是布尔。**
+**⑤ `readable` 是三态（`是 / 否 / null`），不是布尔。**
 `null` ⟺ 产物不在盘上——「不在盘上的东西读不读得回来」是个没有意义的问题。
 ⚠ `readable=false` 与 `exists=false` **必须分开**：盘上真有一份读不回来的产物
 （`成年人不做选择` 那本的 `stage4/plan_chapters.json` 根本没有 `_provenance`），
 折成「不存在」会让界面说「还没跑」——**而它跑过，只是那次把来源账丢了**。
+
+**⑥ 存量区三格同进同出。** `measurable_stored`、`bands_stored`、`_provenance` 只有在
+v2 正式产物存在且可读时才同时出现；半块在没有合法 producer 来源。
 
 **⑦ 本视图不带 `badge` / `passed` / `counts`。** 那一屏的结论只能来自
 `/api/novels/:sid/check/stage3`。视图给的是「两份数字并排放着让人自己看」

@@ -33,7 +33,7 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > |---|---|---|
 > | **臂** | `stage5.write --mode deep`（闭卷）· `--mode shallow`（开卷） | **只差 (system prompt, 给不给源章原文)**，产物形状逐字节相同；`mode` 同时是目录名 |
 > | **写作** | 首轮逐章写作 + 落盘闸门；仅把 `REPAIR_UNIQUE` 或独立语义审判点名的可引用问题送入定向自救 | 正式稿始终只有 `chNN.json`；失败尝试进 `.INVALID` / `_rounds` |
-> | **验收** | `stage5.review` 做 0 成本机械验收（书级语义审判已下线，见 §三） | 47 条注册表，一份产物 |
+> | **验收** | `stage5.review` 做 0 成本机械验收（书级语义审判已下线，见 §三） | 46 条注册表，一份产物 |
 >
 > 正常整书写作不分别启动两个 mode，而用
 > `stage5.write --deep <章号列表|none> --shallow-rest`：人工选择一次，两臂同时起跑，
@@ -60,6 +60,21 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 > 自然效应上），**读它要看 `dialogue_report` 的分布，不看命中数**。
 > ⚠ **`set_deep` 在 stage5 开写后锁死**（`approvals.py::_has_stage5_work`）
 > ⇒ 已写完的书改不了它的深度选择，A/B 必须另起 `--base`。
+>
+> ### ①.1 Stage3 → Stage5 只有**精确机械投影**，没有定性文风块
+>
+> `novel/consumption.py::stage5_style` 是唯一入口；它从 `measurable.body` 精确保留 9 个叶子：
+> `avg_sentence_chars`、`avg_paragraph_chars`、`paragraph_sep_chars`、
+> `dialogue_ratio_applicable`、`dialogue_ratio`、`quote_styles`、`chapter_chars.avg`、
+> `per_chapter_avg_sentence.min`、`per_chapter_avg_sentence.max`。
+> `review.load_book` 也只用这份投影构造供检查消费的书，不保留 `voice`、`surface_habits`、
+> `chapter_styles` 或 `hook_style`。
+>
+> prompt 的 `shape_block` 再把投影收成 5 个正文档位：句子形态、段落形态、对白形态、
+> 章篇幅、章间形态差异。它不含「文案段形态」，也不直接列 raw 数字；平均句长/段长、
+> 对白适用性/比值/引号体及段落预算分别由其他机械材料块使用。完整投影表见
+> 精确字段见 `docs/schema/stage3.md` §五。Stage3 v2 已删除定性块；Stage6 也只消费
+> 原作文案的五叶机械投影。
 >
 > ### ①.5 下发面上 **events 是材料，不是句子**（2026-08-22）
 >
@@ -162,7 +177,8 @@ stage5/draft.md                  两条臂合成的全书拼稿（**字节形态
 >
 > ### ③ 机械基线：**7 条 HARD，盘上 31 章 0 命中；那一轮的 47 条里 29 条从未命中**
 >
-> ⚠ 这里的 47 是**当时那一轮的分母**，与今天注册表的 47 条只是巧合相等（中间下线 2 条语义判据、2026-08-22 新增 `arm_split_report`）。
+> ⚠ 这里的 47 是**当时那一轮的分母**，历史读数不改。今天注册表为 46 条；差额来自
+> 2026-08-24 随 Stage5 定性消费面下线的 `style_block_carries_plot`，不能拿今天的分母回算旧报告。
 > 下面那张表里的读数一律按它自己那一轮的盘面读，不要拿今天的分母去除。
 >
 > ```
@@ -554,7 +570,7 @@ before SHA-256 与保留 pretrim 的销账入口。audit 缺失/拒读、正文/
 | `prompts.REVISE` | `str` | **否** | 修订轮才有。盘上 4/30 | **盘·码** |
 | `model` | `str` | 是（LLM 稿） | 盘上 30/31 `deepseek-v4-pro`；**人工稿不记**（记了就是假账） | **三源** |
 | `code` | `str` | 是 | git 短 sha。盘上 31/31 | **三源** |
-| `inputs` | `obj` | 是 | 恒四条：stage1 正文 · stage2 global · stage3 style · **stage4 `writer_context`**；身份由来源边证明 | **三源** |
+| `inputs` | `obj` | 是 | 恒四条：stage1 正文 · stage2 global · stage3 style · **stage4 `writer_context`**；stage3 这一条绑定上游产物身份，正文消费值则严格经 `novel/consumption.py::stage5_style` 收成 9 叶机械投影，不等于把整份定性画像下发 | **三源** |
 | `round` | `int` | 是 | 盘上 1~2。取**盘上见过的最大轮次 +1**，不按「刚归档的那一份」算；`.INVALID` 的轮次也算进去 | **三源** |
 | `revision_of` | `str` | **否** | 上一轮**正文**的指纹。盘上 5/31 | **三源** |
 | `review` | `str` | **否** | 触发这一轮的报告指纹。盘上 4/31 | **三源** |
@@ -601,13 +617,12 @@ before SHA-256 与保留 pretrim 的销账入口。audit 缺失/拒读、正文/
 
 ## 七、判据清单（**唯一落点**，机械与语义共用一张注册表）
 
-当前注册表共 **47 条**：**7 hard、25 info、10 metric、5 unver**。可反哺 23 条
+当前注册表共 **46 条**：**7 hard、24 info、10 metric、5 unver**。可反哺 23 条
 （**13 条 `UNIQUE` + 10 条 `FREE`**，见本节末尾那条准入）。
-owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 · `stage3`/`corpus` 各 1。
-⚠ 上面这两行 2026-08-22 按 `REGISTRY.of_stage('stage5')` 现算改正过：此前写着
-「可反哺 24 条（14 `UNIQUE`）· owner `stage5` 29」，与注册表各差 1。
-⚠ 与原型那 43 条相比各多 2：新加的 `quote_unbalanced` / `deep_overlap_high` 归 `stage5`，
-`dialogue_report` / `draft_duplicated` 是非结论。
+owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 · `corpus` 1。
+⚠ 2026-08-22 的修正历史是「可反哺 23 条（13 `UNIQUE`）· owner `stage5` 28」；
+2026-08-24 只删除不再可达的 `style_block_carries_plot`（INFO、owner `stage3`），
+所以可反哺数与其余 owner 数都不变。
 
 落盘闸门 / `--recheck` / `--revalidate` / `--apply-edit` / 机械全书验收 / 语义审判**读同一张注册表**，
 谁也不许再抄一份。但每条报告行用 `check_kind=mechanical|semantic` 明示检查性质，不拿严重度代替它。
@@ -638,7 +653,6 @@ owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 �
 | `event_landing` | INFO | 每一拍在成稿里有落点 | **0** | — |
 | `cross_chapter_number` | INFO | 自造数字跨章不打架 | 0 | — |
 | `book_length` | INFO(stage4) | 全书篇幅落在 **`BOOK_BAND` 0.90~1.10×源字数**（⚠ 与逐章 `DRAFT_BAND` 0.80~1.20 **不是同一个数**，见 §④） | **0**（实测 0.949 / 1.022 / 0.980） | — |
-| `style_block_carries_plot` | INFO(stage3) | 风格块里没夹带情节 | 0 | — |
 | `quote_unbalanced` | INFO | 引号配对异常、未归一——**留着报，不静默修**（原 `mech.quote_problems`） | **0/31** | — |
 | `deep_overlap_high` | INFO | **闭卷臂**重合度 > `DEEP_OVERLAP_MAX`（10%）。**守的是臂的身份不是文风**；开卷不判 | **0/11 闭卷章**（今天 max 2.4%） | — |
 | **〔度量〕** `length_report` · `overlap_report` · `dash_report` · `short_run_report` | metric | **逐章无条件报出** | 31 / 31 / 31 / 31 | — |
@@ -652,6 +666,9 @@ owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 �
 | `draft_missing` | unver | 计划里每一章都有成稿 | 0 | — |
 | `draft_duplicated` | unver | **同一输出章在两条臂里各有一份成稿** | 0/31 | — |
 | `no_secrets_in_book` | unver | 这本书有可查的秘密 | 0（三本都有 secrets） | — |
+
+`style_block_carries_plot` 已从现役注册表删除：Stage5 不再接收可扫描的定性风格块，
+该规则的前提在结构上不可达；`R-4.5` 的“不得夹带旧字段”由 Stage3 v2 strict schema 守住。
 
 > #### ⚠ `secret_leak` 报 0，而它的基线说这盏灯基本不会亮
 >
@@ -758,7 +775,6 @@ owner 分布：`stage5` **28** · `None` **15**（＝非结论）· `stage4` 2 �
 | `convergence_report` | `R-8.3b` ⭐ |
 | `secret_timeline` · `name_surface_survey` | `R-8.9b` ⭐（**探针自己的基线读数**） |
 | `draft_missing` · `draft_duplicated` | `R-8.11` ⭐ |
-| `style_block_carries_plot` | `R-4.5`（描述不许出现专名） |
 | `secret_unknown` | `R-6.3`（逐章剧透闸门产的 `must_not_reveal`） |
 
 > ⚠ **那 20 条不是「判据多余」，是需求文档漏写了。** 判准很直接：它们**每一条都在盘上跑着**，

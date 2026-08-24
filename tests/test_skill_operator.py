@@ -177,14 +177,16 @@ def _report_with_every_shape():
     重拼一份"报告长什么样"就是第二个落点，而守卫要调生产那一个
     （`docs/LESSONS.md` 第 21 条）。判据名也从注册表现取，不写死。
     """
-    stage_rules = [r.rule for r in REGISTRY.of_stage('stage3')]
-    assert len(stage_rules) >= 3, 'stage3 的判据少于三条，这份样例造不出四态'
+    # Stage3 v2 有意只剩一条机械漂移规则，不能为了测试样例把已退役判据加回来。
+    # 取仍有 INVALID/提升面与多条判据的 Stage4，报告形状仍走同一个生产 builder。
+    stage_rules = [r.rule for r in REGISTRY.of_stage('stage4')]
+    assert len(stage_rules) >= 3, 'stage4 的判据少于三条，这份样例造不出四态'
     hit, unver, ok = stage_rules[0], stage_rules[1], stage_rules[2]
     ghost = EdgeVerdict(key='stage2/global_grounding.json', state='unknown',
                         reason='ghost', recorded_file='0123456789', now_file=None,
                         recorded_consumed=None, now_consumed=None)
     return build(
-        sid='7615069877019300633', node='stage3.style',
+        sid='7615069877019300633', node='stage4.plan',
         freshness=FreshnessReport('unknown', 'ghost', (ghost,)),
         outcomes=[
             ran(hit, [finding(hit, detail='示例命中', evidence=['b01_01:「证据」'])]),

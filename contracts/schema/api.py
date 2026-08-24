@@ -44,7 +44,6 @@ from contracts.invariants import (
     HOOK_SLOTS,
     slot_of,
     HOOK_SEMANTIC_STATES,
-    HOOK_KEYS,
     INBOX_ATTENTION,
     INBOX_DELIVERY_EFFECT,
     INBOX_KIND,
@@ -60,7 +59,6 @@ from contracts.invariants import (
     STAGE1_SEGMENT_KINDS,
     TIME_LAYERS,
     TEMPORAL_LINKS,
-    VOICE_KEYS,
 )
 from contracts.schema.base import FrozenModel, Sha1, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval
@@ -93,8 +91,6 @@ from contracts.schema.stage7 import (
     NameMapProvenance, NameMapSources, Residual, StemBaseline,
 )
 
-VoiceKey = Literal[VOICE_KEYS]
-HookKey = Literal[HOOK_KEYS]
 Stage0SegmentKind = Literal[STAGE0_SEGMENT_KINDS]
 Stage1SegmentKind = Literal[STAGE1_SEGMENT_KINDS]
 ChapterLabelAnomaly = Literal[CHAPTER_LABEL_ANOMALY]
@@ -448,36 +444,8 @@ class TrashNovelResult(StrictModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、S-06 文风那一屏（`_api.md` §四）
+# 一、S-06 Stage3 机械基线（`_api.md` §四）
 # ─────────────────────────────────────────────────────────────────────────────
-
-class VoiceLine(FrozenModel):
-    """声音内核的一维。**数组的一项，不是对象的一个字段。**
-
-    ⚠ 发成对象（`{narrative_distance: "...", ...}`）的话，八维的**顺序**就落在
-    字段声明顺序上——那是第二个落点，而顺序在界面上是有意义的
-    （`narrative_distance` 打头，`mode_variation` 收尾且明显长于其余七维）。
-    数组 + 一条「顺序恒等于 `VOICE_KEYS`」的后置条件，顺序就只有一处算。
-    """
-
-    key: VoiceKey
-    text: str = Field(min_length=1)
-
-    #: 这一维写了多少字。**产地是代码，不是模型**——它是给人快速看「哪一维写得敷衍」的。
-    chars: int = Field(ge=0)
-
-
-class HookStyleLine(FrozenModel):
-    """开篇文案段写法的一项。理由同 `VoiceLine`。
-
-    ⚠ 它**没有** `chars`：抓包里就没有。别顺手补齐——补一个没人要的字段，
-    下一个人会以为它有消费方（判据 6：加字段不是免费的）。
-    """
-
-    key: HookKey
-    text: str = Field(min_length=1)
-
-
 class DriftItem(FrozenModel):
     """一项实测漂移：`(键, 产物里存的, 照现在的 stage1 重算的)`。
 
@@ -497,12 +465,11 @@ class DriftItem(FrozenModel):
 
 
 class StyleView(StrictModel):
-    """`GET /api/novels/:sid/stage3/style`。**S-06 那一屏的全部数据。**
+    """`GET /api/novels/:sid/stage3/style`。**S-06 机械基线的全部数据。**
 
-    ⚠⚠ **它是视图不是产物。** 右半边来自盘上那份 `stage3/style_grounding.json`；
-    **左半边（实测数字与档位词）是代码现算的，产物在不在都算得出来**
-    ——`04_delivery.md:123` 明写「`exists: false` 时左半边（实测）仍有内容」。
-    这不是花哨：左半边量的是 **stage1**，它与 stage3 有没有跑过无关。
+    ⚠⚠ **它是视图不是产物。** ``measurable_stored`` 来自盘上的
+    ``stage3/style_grounding.json``；``measured_now`` 由当前代码读取 Stage1 免费重算。
+    因此产物不存在时当前测量仍可呈现，存量 v2 则能与当前口径逐项比漂移。
     """
 
     #: **由 `novel/paths.py` 从目录名派生**——新契约已把 `title`/`source_id` 从产物里
@@ -527,11 +494,8 @@ class StyleView(StrictModel):
     #: 折成「不存在」会让界面说「还没跑」，而它跑过）。
     readable: bool | None
 
-    # ── 右半边：产物（`exists and readable` 时才有） ──────────────────────────
+    # ── 存量基线（`exists and readable` 时才有） ──────────────────────────────
 
-    voice: list[VoiceLine] = Field(default_factory=list)
-    surface_habits: list[str] = Field(default_factory=list)
-    hook_style: list[HookStyleLine] = Field(default_factory=list)
     measurable_stored: Measurable | None
     bands_stored: dict[str, str] | None
     provenance: StyleProvenance | None = Field(alias='_provenance')
@@ -585,27 +549,17 @@ class StyleView(StrictModel):
                 f'exists={self.exists} 而 readable={self.readable!r}：'
                 f'`readable=None` 必须恰好对应「产物不在盘上」')
 
-        # ② 右半边要么整块在、要么整块不在。半块在的形态没有任何消费方，
-        #    而它会让界面画出一屏「有 voice 没有 measurable」的假产物。
+        # ② 存量基线要么整块在、要么整块不在。半块在没有合法的 v2 产物来源。
         loaded = bool(self.exists and self.readable)
-        right = (self.voice, self.surface_habits, self.hook_style,
-                 self.measurable_stored, self.bands_stored, self.provenance)
-        if loaded and not all(x is not None and x != [] for x in right):
-            raise ValueError('产物读回来了，而右半边有空的格子——那不是一份合法的产物')
-        if not loaded and any(x is not None and x != [] for x in right):
+        stored = (self.measurable_stored, self.bands_stored, self.provenance)
+        if loaded and not all(x is not None for x in stored):
+            raise ValueError('产物读回来了，而机械基线有空的格子——那不是合法的 v2 产物')
+        if not loaded and any(x is not None for x in stored):
             raise ValueError(
-                f'exists={self.exists} readable={self.readable} 而右半边有内容——'
+                f'exists={self.exists} readable={self.readable} 而存量基线有内容——'
                 f'那份内容是从哪儿来的？')
 
-        # ③ 顺序只有一处算：`VOICE_KEYS` / `HOOK_KEYS`。
-        if loaded:
-            if [v.key for v in self.voice] != list(VOICE_KEYS):
-                raise ValueError(f'voice 的顺序与 VOICE_KEYS 分家了：{[v.key for v in self.voice]}')
-            if [h.key for h in self.hook_style] != list(HOOK_KEYS):
-                raise ValueError(
-                    f'hook_style 的顺序与 HOOK_KEYS 分家了：{[h.key for h in self.hook_style]}')
-
-        # ④ 「量到了」与「量不了，原因是 X」恰好一个成立。
+        # ③ 「量到了」与「量不了，原因是 X」恰好一个成立。
         #    同空 = 什么都没说；同非空 = 说了两件互相矛盾的事。
         if (self.measured_now is None) == (self.measure_error is None):
             raise ValueError(
@@ -622,7 +576,7 @@ class StyleView(StrictModel):
         if (self.bands_stored is None) != (self.measurable_stored is None):
             raise ValueError('bands_stored 与 measurable_stored 必须同进同出')
 
-        # ⑤ 两边都在才比得了。`drift=[]` 是「比过了没漂移」，`None` 是「无从比」。
+        # ④ 两边都在才比得了。`drift=[]` 是「比过了没漂移」，`None` 是「无从比」。
         comparable = self.measurable_stored is not None and self.measured_now is not None
         if (self.drift is not None) != comparable:
             raise ValueError(

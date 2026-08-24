@@ -152,7 +152,7 @@ v1 骨架为：
 | `--identity` | 0 | 运行恒等替换基线并写回结论 |
 | `--recheck` | 0 | 按当前代码重建派生字段并重判 |
 | `--emit-edit-template` | 0 | stdout-only 输出 registry 绑定的 `NameMapEdit` v1 骨架，不写盘 |
-| `--apply-edit <路径>` | 0 | 应用严格人工编辑输入并开新人工修订轮。路径相对**书目录**，也接受书目录内的绝对路径；目录外（含 `..` 穿越）是显式终态（`novel/paths.py::edit_rel`，stage3/4/6/7 共用） |
+| `--apply-edit <路径>` | 0 | 应用严格人工编辑输入并开新人工修订轮。路径相对**书目录**，也接受书目录内的绝对路径；目录外（含 `..` 穿越）是显式终态（`novel/paths.py::edit_rel`，stage2/4/6/7 共用） |
 | `--adopt-residual high` | 0 | 把当前高置信残留作为新决策输入重判；其他参数关闭式拒绝 |
 | `--revalidate --actor <id> --reason <text>` | 0 | 对 `.INVALID` 做强审计，记录 hash 差异并在合格后提升；不开新生成轮 |
 | `stage7.approve --actor <id> --reason <text> --subject-sha256 <64hex>` | 0 | 人工定稿；hash 必须与当前决策面完全一致 |

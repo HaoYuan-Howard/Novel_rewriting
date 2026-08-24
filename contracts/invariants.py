@@ -654,10 +654,9 @@ NAME_DISTINCTIVENESS: Final = ('high', 'medium', 'common')
 #: 「第三人称限知」（文字写「她」，但只进她一个人的内心）是现代小说的主流写法。
 #:
 #: ⚠⚠ **另一个轴（限知/全知）刻意【不在 stage2 立字段】** —— 那不是遗漏，是裁决：
-#:   stage3 的 `narrative_distance` / `interiority` **已经在记它**，且写得比二值枚举好得多
-#:   （实测产物逐字：「紧贴主角内心，以第一人称即时吐露所有真实想法，读者全程共享其腹黑计算」）。
-#:   再立一个 `focalization` 就是同一语义的第二落点，而两个落点必然漂移（判据 7）；
-#:   叠上判据 6「加字段不是免费的，新字段会从已有字段身上取」，收益不抵成本。
+#:   Stage3 v2 已删除没有稳定下游收益的定性文风字段；不能为了替已退役字段找新住处，
+#:   就在 stage2 再立一个没有验证过消费价值的 `focalization`。新字段会增加抽取成本和
+#:   事实漂移面，在下游用途被证明前不恢复。
 #:   **已知代价**：第三人称全知的源章可能被改写成第三人称限知（丢掉全知声音）。
 #:   这是文风保真的缺口，归 `B-09`，**不假装它被覆盖了**。
 #:
@@ -745,7 +744,7 @@ SPOILER_DISCLOSURE: Final = {
 #: 归类检查而活着的别名。⇒ 与 `enums.py` 那行 `_CONSUMED` 登记同批删除。
 #: 要那句话，读 `SPOILER_DISCLOSURE['notice']`。
 
-#: 一次调用当时的缓存口径，记进 `_provenance`（stage2 的 `repairs[]` · stage3 的 `attempts[]`）。
+#: 一次调用当时的缓存口径，记进付费产物 `_provenance`（如 stage2 的 `repairs[]`）。
 #: ⚠ **定向重生成必须配 `refresh-write`**（`R-3.11`）：它的 prompt 与整跑时那一批**逐字相同**，
 #: 缓存必然命中，于是一个字都没重新生成而它照样打印「已重生成」。
 #: ⚠⚠ **`disabled` 没有 CLI 入口，这是有意的，别当死取值删掉。** 它与那批「装置删了只剩
@@ -1045,28 +1044,16 @@ STOP_REWRITE_AFTER: Final = 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 七、文风（stage3）
+# 七、机械基线（stage3）
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: 声音内核八维，全部自然语言描述。
-VOICE_KEYS: Final = (
-    'narrative_distance', 'register_tone', 'interiority', 'sentence_rhythm',
-    'dialogue_presentation', 'description_density', 'chapter_open_close', 'mode_variation',
-)
-
-#: 开篇文案段的写法七项。
-HOOK_KEYS: Final = (
-    'person', 'open_mode', 'info_hiding', 'twist', 'end_question', 'tone', 'relation_to_body',
-)
-
-#: 文风画像的尝试类别（`_provenance.attempts[].kind`）。
-#: `surface_habits_targeted_repair` = 只把 `surface_habits` 那一个列表发回去改写，
-#: 其余字段一个字不动——**全链唯一有定向返工通道的字段**。
-STAGE3_ATTEMPT_KINDS: Final = (
-    'surface_habits_targeted_repair',
-    # 逐源章抽取，再只用抽象结果做一次书级汇总。
-    'chapter_local', 'chapter_aggregate',
-)
+#: Stage3 确定性测量算法的显式契约版本。
+#:
+#: 这不是 JSON 信封的 schema version：信封 v2 回答「字段形状破坏过几次」，本值回答
+#: 「同一形状里的数字按哪一版算法计算」。测量算法或口径变化时先升本值；
+#: `novel.consumption.stage3_main_text` 把它并入 consumed 投影，因此存量机械基线会被
+#: freshness 判 stale，而不是继续拿旧数字冒充当前测量。
+STAGE3_MEASUREMENT_CONTRACT: Final = 'stage3-measurable-v1'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1163,8 +1150,7 @@ HOOK_APPROACH_NOTES: Final[dict[str, str]] = {
 
 #: 收尾形态的四类。**唯一落点**——分类器（`novel/core/bands.py::ending_shape`）、
 #: 判据措辞、报告共用这一份。
-#: ⚠ 它是 `hook_style.end_question`（一条**自由文本**描述）唯一可确定性检测的投影：
-#: 不去解析那段自由文本，而是从原作文案段量出同一个量，两边比**形态**。
+#: 两边都直接从原作文案段/候选字节量形态，不经过已经退役的定性描述。
 ENDING_SHAPES: Final = ('引号台词', '问句', '省略号', '陈述')
 
 #: 段间分隔的两档。**离散性质，按字节判**（见 `novel/core/bands.py::sep_band_of_text`
@@ -1297,8 +1283,7 @@ FREE_ENTRIES: Final = {
     '--check-only': '按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零',
     '--recheck': '按当前判据重判存量产物并写回指标',
     '--revalidate': '按当前判据对 .INVALID 稿做 0 LLM 同轮重判，必填 actor/reason 并留不可变审计，合格才提升',
-    '--measure-only': '只跑确定性实测并报出来，**不写盘**（与 `--remeasure` 是两件事）',
-    '--remeasure': '重算确定性实测值写回，其余字段不动',
+    '--measure-only': '只跑确定性实测并报出来，不写盘；写回直接免费重跑节点默认路径',
     '--renormalize': '按当前契约重算代码派生字段与原文定位',
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
@@ -1326,7 +1311,6 @@ FREE_ENTRIES: Final = {
 #: 挂在**付费**动作上的 flag。它们不是 0 成本入口，登记在这里免得被当成漏项。
 PAID_FLAGS: Final = {
     '--shallow-rest': 'stage5 把未选为深度重构的其余章节交给浅层写手',
-    '--repair-surface-habits': 'stage3 表层习惯的定向返工——它要再调一次模型',
     '--revise': 'stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手',
     # ⚠ 原型 `FREE_FLAGS['n2_global']` 那一行的注释明写着
     #   「`--purge-role` 是一次真实调用，**不在这里**」——它是语义判官那条臂
@@ -1359,10 +1343,8 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #: ⚠ **`--revalidate` 不在这里**：提升路改的是**状态**（`.INVALID` → 正式稿），
 #: 内容一个字没动，它有自己的键 `revalidated`。两件事。
 #:
-#: ⚠ **`--identity` 是 F2 加进来的第四条，而它与 `--remeasure` 逐条同形**：
-#: 0 成本 · 写盘 · 改的是产物里**由代码算出来的那一部分**（stage7 的 `identity` 键 /
-#: stage3 的 `measurable`）· LLM 写的字段一个字不动。
-#: ⚠⚠ 但它**只对 stage7 成立**：stage6 的 `--identity` 只打印当前恒等读数、**不写盘**。
+#: ⚠ **`--identity` 只对 stage7 成立**：stage6 的 `--identity` 只打印当前恒等读数、
+#: **不写盘**。Stage3 v2 已是整份免费机械产物，不再需要局部重写标记。
 #: 同一个 flag 在两层行为不同，
 #: 这条已经登记在 `WRITE_EFFECTS` 上方那段注释里——本表按 flag 索引，
 #: 而它收的是「**这条路要是写了盘，那份产物就是混版的**」，对两层都不说假话。
@@ -1372,7 +1354,7 @@ REVALIDATE_ONLY_NEW_ERRORS: Final = True
 #: `origin=human` 的新来源账；stage7 只改 `extra_subs` / 决策 patch，模型生成的
 #: `characters` 仍来自旧调用，所以必须允许它如实标成局部改写。
 PARTIAL_REWRITE_FLAGS: Final = (
-    '--remeasure', '--recheck', '--renormalize', '--identity', '--apply-edit',
+    '--recheck', '--renormalize', '--identity', '--apply-edit',
     '--adopt-residual',
 )
 
@@ -1393,7 +1375,7 @@ REQUIRED_PLACEHOLDER_PREFIX: Final = '待填·'
 
 VALUED_FLAGS: Final = {
     '--deep': '深度重构章节（逗号分隔；与 --shallow-rest 成对使用）',
-    # ⚠ 「相对**书目录**」这五个字是承重的：stage3/4/6/7 走
+    # ⚠ 「相对**书目录**」这五个字是承重的：stage4/6/7 走
     #   `novel/paths.py::edit_rel`，相对路径按当前书目录解释、绝对路径照收，
     #   两者都必须落在书目录内。此前四份实现按进程 cwd 解释而报错文案说书目录，
     #   两个口径分家（skill 现场记录 FN-016）。这一行是人唯一会读到的说明。
@@ -1474,7 +1456,6 @@ WRITE_EFFECTS: Final = {
     '--emit-review-workpack': '',
     '--adopt-residual': '重写 stage7/name_map.json，清旧审批并退休现有成书',
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
-    '--remeasure': '重算的 measurable 写回正式产物（其余字段不动）',
     '--recheck': '刷新已有成稿的指标，并重拼 draft.md',
     '--revalidate': '必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/',
     # ⚠ 本表按 flag 索引 ⇒ 这句话必须对**每一个**挂它的节点都成立。2026-08-22 阶段 C
@@ -1492,7 +1473,7 @@ WRITE_EFFECTS: Final = {
     '--retain-pretrim': ('写 stage5/trim_resolution_chNN.json；旧 resolution 归档，'
                          '不改正文、不采用收缩候选'),
     # ── stage2 那两条 0 成本但**会写盘**的路（F5-1 补）──
-    # ⚠ 它们与上面 `--remeasure` / `--recheck` 那几条是同一类：**免费，但写盘**。
+    # ⚠ 它们与上面 `--recheck` 那几条是同一类：**免费，但写盘**。
     #   本表存在的全部理由就是这一类（原型那句「`FREE_FLAGS` 只管钱不管写」
     #   一字不差地出现了 8 次，而它没有落点）。
     # ⚠ **`--purge-role` 刻意不在本表里**，那不是漏登记：它写的就是本节点 `produces`
@@ -1658,10 +1639,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                                         '--chapters', '--patch',
                                         '--revalidate', '--actor', '--reason'),
                                  produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,)),
-    'stage3.style':     NodeSpec('stage3', 'R-4',  True,  'stage3 文风画像',
-                                  flags=('--dry-run', '--check-only', '--measure-only',
-                                         '--remeasure', '--revalidate', '--apply-edit',
-                                         '--repair-surface-habits', '--actor', '--reason'),
+    'stage3.style':     NodeSpec('stage3', 'R-4',  False, 'stage3 机械基线',
+                                  flags=('--check-only', '--measure-only'),
                                  produces=(artifact_paths.STAGE3_STYLE_GROUNDING,)),
     # ⚠⚠ `model` 钉死 `deepseek-v4-pro`（2026-08-22 用户裁决，第二个钉死值）。
     #   理由**不是**「flash 在这里更容易空」，是**重采粒度**：本节点是全链唯一一个
@@ -1763,7 +1742,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                                  '--subject-sha256'),
                                  produces=(artifact_paths.STAGE6_HOOK,)),
     # ⚠ `--revalidate` 是 F2 补的：本层加了落盘闸门（**任何一条 hard ⇒ `.INVALID`**，
-    #   照 stage3 不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
+    #   不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
     #   而**闸门是我们自己加的，不给一条 0 成本提升路，一次付费产出就被永久锁死**。
     'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表',
                                   flags=('--dry-run', '--check-only', '--identity',
@@ -1798,7 +1777,6 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
     ('stage0.edit', '--apply-edit'): ('--actor', '--reason'),
     ('stage2.global', '--revalidate'): ('--actor', '--reason'),
     ('stage2.blueprint', '--revalidate'): ('--actor', '--reason'),
-    ('stage3.style', '--revalidate'): ('--actor', '--reason'),
     ('stage4.plan', '--revalidate'): ('--actor', '--reason'),
     ('stage5.write', '--revalidate'): ('--actor', '--reason'),
     ('stage5.review', '--retain-pretrim'): ('--chapters', '--actor', '--reason'),

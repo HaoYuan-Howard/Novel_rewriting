@@ -115,7 +115,7 @@ def test_the_value_of_a_valued_flag_is_not_mistaken_for_a_flag():
     被判成付费——`Q-3` 记着的那个「漏登记的后果是反的」，换了个成因。
     """
     assert N.flag_tokens(['--apply-edit', 'C:/x.json']) == ('--apply-edit',)
-    assert N.is_paid('stage3.style', ['--apply-edit', 'C:/x.json']) is False
+    assert N.is_paid('stage4.plan', ['--apply-edit', 'C:/x.json']) is False
 
 
 def test_a_bare_paid_node_is_paid():
@@ -133,7 +133,7 @@ def test_the_look_only_flags_never_write(flag):
     assert N.write_effect(node, _args(flag)) == ''
 
 
-@pytest.mark.parametrize('flag', ['--remeasure', '--revalidate', '--recheck',
+@pytest.mark.parametrize('flag', ['--revalidate', '--recheck',
                                   '--apply-edit', '--renormalize'])
 def test_the_free_but_writing_flags_say_what_they_write(flag):
     """⭐ **「0 成本」不等于「不写盘」** —— 原型 8 条注释都在说这句，而它没有落点。
@@ -248,7 +248,7 @@ def test_stage5_composite_selection_builds_both_arms_without_a_mode():
 def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():
     """拼错的那条 argv **会真的被执行**，所以两个方向都要当场对上。"""
     with pytest.raises(UnsupportedRunMode, match='要一个值'):
-        N.build_argv('stage3.style', SID, ['--apply-edit'], base=BASE)
+        N.build_argv('stage4.plan', SID, ['--apply-edit'], base=BASE)
     with pytest.raises(UnsupportedRunMode, match='不带值'):
         N.build_argv('stage3.style', SID, ['--check-only', 'oops'], base=BASE)
 
@@ -287,7 +287,7 @@ def test_the_conditional_required_flags_only_fire_with_their_trigger():
     ) == ()
     assert N.missing_required('stage5.review', ['--check-only']) == ()
     revalidate_nodes = (
-        'stage2.global', 'stage2.blueprint', 'stage3.style', 'stage4.plan',
+        'stage2.global', 'stage2.blueprint', 'stage4.plan',
         'stage5.write', 'stage6.hook', 'stage7.rename',
     )
     for node in revalidate_nodes:
@@ -373,17 +373,15 @@ def test_a_writing_run_gets_a_follow_up_check():
     assert steps[1].paid is False and steps[1].writes == ''
 
 
-@pytest.mark.parametrize('flag', ['--remeasure', '--revalidate'])
-def test_a_free_but_writing_run_also_gets_a_follow_up_check(flag):
+def test_a_free_but_writing_run_also_gets_a_follow_up_check():
     """⭐ **判准是「写不写盘」，不是「花不花钱」** —— 这一格是实测改过的。
 
-    `--remeasure` 那一趟**按设计不排** `measurable_drift`（它刚把 `measurable` 覆盖掉，
-    那条检查在这一趟里恒等成立），⇒ 报告里它是 `skipped`，而 HARD 的 `skipped` 进 `fail`。
-    没有这条追跑，`--remeasure` 就是一条**永远拿不到绿灯**的路。
+    Stage4 的 `--revalidate` 虽然不花钱，仍会提升并重建正式产物；没有追跑就看不到
+    提升后的完整机械结论。Stage3 的免费默认写盘已由上一条单独覆盖。
     """
-    flags = _args(flag, 'stage3.style')
-    steps = N.build_steps('stage3.style', SID, flags, base=BASE)
-    assert N.is_paid('stage3.style', flags) is False, f'{flag} 是 0 成本的'
+    flags = _args('--revalidate', 'stage4.plan')
+    steps = N.build_steps('stage4.plan', SID, flags, base=BASE)
+    assert N.is_paid('stage4.plan', flags) is False
     assert len(steps) == 2 and '--check-only' in steps[1].argv
 
 
@@ -396,7 +394,6 @@ def test_the_follow_up_check_is_skipped_when_the_node_cannot_take_it():
 def test_a_non_writing_run_gets_no_follow_up():
     """只看不动的那几条没什么可复检的——它们一个字节都没改。"""
     assert len(N.build_steps('stage3.style', SID, ['--check-only'], base=BASE)) == 1
-    assert len(N.build_steps('stage3.style', SID, ['--dry-run'], base=BASE)) == 1
     assert len(N.build_steps('stage3.style', SID, ['--measure-only'], base=BASE)) == 1
 
 
@@ -436,7 +433,7 @@ def test_step_label_ignores_the_value_of_a_valued_flag():
     ⚠ 贵贱（`is_paid`）与写不写（`write_effect`）都走 `flag_tokens` 这一个解析器，
     label 没有理由用第二个。
     """
-    got = N.step_label('stage3.style', ['--apply-edit', '-weird-path.json'])
+    got = N.step_label('stage4.plan', ['--apply-edit', '-weird-path.json'])
     assert got.endswith('--apply-edit'), got
 
 

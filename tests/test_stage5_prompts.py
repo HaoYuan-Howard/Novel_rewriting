@@ -98,6 +98,33 @@ def test_style_vocabulary_reaches_both_arms_whole():
     assert prompts.STYLE_WORD_RULE in prompts.SHALLOW_SYS
 
 
+def test_system_prompts_no_longer_promise_a_stage3_qualitative_packet():
+    """Stage5 不再拿到画像；system 不能继续命令模型服从不存在的输入。"""
+    rendered = prompts.DEEP_SYS + '\n' + prompts.SHALLOW_SYS
+    for stale in (
+        '声音与写作习惯', '声音画像', '文风画像', '给定的声音', '画像只是',
+        'voice', 'surface_habits', 'chapter_styles', 'hook_style',
+    ):
+        assert stale not in rendered
+    assert '正文机械形态基线' in prompts.DEEP_SYS
+    assert '正文机械形态基线' in prompts.SHALLOW_SYS
+
+
+def test_shape_block_contains_only_the_five_body_bands(book):
+    block = prompts.shape_block(book)
+    assert list(book.band_of) == [
+        '句子形态', '段落形态', '对白形态', '章篇幅', '章间形态差异']
+    assert all(key in block for key in book.band_of)
+    assert '文案段形态' not in block
+    for qualitative in ('voice', 'surface_habits', 'chapter_styles', 'hook_style'):
+        assert qualitative not in block
+    material = prompts.build_material(
+        book.chapters[min(book.chapters)], book, with_source_text=False).given
+    assert block in material and '文案段形态' not in material
+    for qualitative in ('voice', 'surface_habits', 'chapter_styles', 'hook_style'):
+        assert qualitative not in material
+
+
 def test_invention_boundary_contains_the_complete_contract():
     from contracts.invariants import INVENT_ALLOW, INVENT_FORBID
 
@@ -379,7 +406,8 @@ def test_prev_context_gives_goals_and_the_last_beat_not_the_whole_previous_chapt
             _beat('s03', 'scene', ['上一章停在这个场面上。']),
         ],
     }
-    book = M.Book(title='t', ctx={'chapters': [prev]}, style={}, source_text={}, secrets=[])
+    book = M.Book(
+        title='t', ctx={'chapters': [prev]}, measurable={}, source_text={}, secrets=[])
     rendered = prompts.prev_context({'output_ordinal': 2}, book)
 
     assert '上一章的目标事实' in rendered and '上一章的结尾事实' in rendered

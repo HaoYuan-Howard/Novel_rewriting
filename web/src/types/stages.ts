@@ -512,17 +512,6 @@ export interface GlobalReviewDecisionSet {
 
 /* ---------------------------------------------------------------- stage3 */
 
-export interface StyleVoice {
-  key: string
-  text: string
-  chars: number
-}
-
-export interface StyleHookKey {
-  key: string
-  text: string
-}
-
 export interface StyleBodyMetrics {
   chars: number
   paragraphs: number
@@ -560,9 +549,6 @@ export interface Stage3Style {
   invalid_exists: boolean
   /** 三态：null = 产物不在盘上，「读不读得回来」无从谈起 */
   readable: boolean | null
-  voice: StyleVoice[]
-  surface_habits: string[]
-  hook_style: StyleHookKey[]
   measurable_stored: StyleMeasured | null
   bands_stored: Record<string, string> | null
   _provenance: Provenance | null

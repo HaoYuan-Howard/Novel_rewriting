@@ -22,13 +22,12 @@ from typing import Callable, Final
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REMOVAL_REPORT, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
-    STAGE3_STYLE_EDIT,
     STAGE3_STYLE_GROUNDING, STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
     STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE5_TRIM_AUDIT,
     STAGE6_HOOK, STAGE6_HOOK_EDIT,
     STAGE7_NAME_MAP_EDIT,
 )
-from contracts.invariants import NODES
+from contracts.invariants import NODES, STAGE3_MEASUREMENT_CONTRACT
 
 Projection = Callable[[object], object]
 
@@ -43,32 +42,16 @@ def artifact_payload(data: object) -> object:
 # ── stage3.style ─────────────────────────────────────────────────────────────
 
 def stage3_main_text(data: object) -> object:
-    """正文只消费 ``text``；原文标签变化不影响文风测量。"""
-    return [s.get('text') for s in data] if isinstance(data, list) else None
+    """正文文本与测量契约共同决定机械基线的新鲜度。"""
+    return {
+        'measurement_contract': STAGE3_MEASUREMENT_CONTRACT,
+        'texts': [s.get('text') for s in data] if isinstance(data, list) else None,
+    }
 
 
 def stage3_hook_copy(data: object) -> object:
     """原作文案段只消费正文。"""
     return (data or {}).get('text') if isinstance(data, dict) else None
-
-
-def stage3_grounding(data: object) -> object:
-    """文风判据只消费名表所需字段与秘密揭示时间线。"""
-    if not isinstance(data, dict):
-        return None
-    chars = ((data.get('entities') or {}).get('characters') or {})
-    return {
-        'characters': sorted(
-            (cid, c.get('canonical'), c.get('name_distinctiveness'),
-             tuple(sorted((a or {}).get('surface') or '' for a in (c.get('address') or []))))
-            for cid, c in chars.items() if isinstance(c, dict)),
-        'secrets': sorted(
-            (s.get('secret_id'), s.get('fact'),
-             tuple(sorted((e or {}).get('chapter') or 0
-                          for e in (s.get('reader_reveal_events') or []))))
-            for s in ((data.get('canon') or {}).get('secrets') or [])
-            if isinstance(s, dict)),
-    }
 
 
 # ── stage4.plan / stage4.context ─────────────────────────────────────────────
@@ -182,14 +165,41 @@ def stage5_grounding(data: object) -> object:
 
 
 def stage5_style(data: object) -> object:
-    """写作与验收真正读取的文风字段。"""
+    """写作与验收真正读取的正文机械基线。
+
+    ⚠ 这条投影同时供来源账写入与 freshness 重算，输入可能是一份已经不合当前
+    schema 的旧 raw dict；因此逐层判 ``dict``、缺格投影成 ``None``，不能在这里
+    ``model_validate``。Stage5 只消费下面九个叶子：定性画像、文案段实测以及正文计数
+    即使变化，也不应让既有成稿误报过期。
+    """
     if not isinstance(data, dict):
         return None
+    measurable = data.get('measurable')
+    if not isinstance(measurable, dict):
+        measurable = {}
+    body = measurable.get('body')
+    if not isinstance(body, dict):
+        body = {}
+    chapter_chars = body.get('chapter_chars')
+    if not isinstance(chapter_chars, dict):
+        chapter_chars = {}
+    per_chapter = body.get('per_chapter_avg_sentence')
+    if not isinstance(per_chapter, dict):
+        per_chapter = {}
     return {
-        'voice': data.get('voice'),
-        'surface_habits': data.get('surface_habits'),
-        'chapter_styles': data.get('chapter_styles'),
-        'measurable': data.get('measurable'),
+        'body': {
+            'avg_sentence_chars': body.get('avg_sentence_chars'),
+            'avg_paragraph_chars': body.get('avg_paragraph_chars'),
+            'paragraph_sep_chars': body.get('paragraph_sep_chars'),
+            'dialogue_ratio_applicable': body.get('dialogue_ratio_applicable'),
+            'dialogue_ratio': body.get('dialogue_ratio'),
+            'quote_styles': body.get('quote_styles'),
+            'chapter_chars': {'avg': chapter_chars.get('avg')},
+            'per_chapter_avg_sentence': {
+                'min': per_chapter.get('min'),
+                'max': per_chapter.get('max'),
+            },
+        },
     }
 
 
@@ -233,20 +243,33 @@ def stage6_grounding(data: object) -> object:
 
 
 def stage6_style(data: object) -> object:
-    """文案消费正文声音、surface habits、逐章风格与全部可量风格面。"""
+    """Stage6 对 Stage3 的唯一消费面：文案段五叶机械基线。
+
+    生成、机械复检与 freshness 共用这一投影。正文机械面以及已经退役的定性画像
+    即使变化，也不应让既有文案或语义复核误报过期。输入可能是已经不合当前
+    schema 的旧 raw dict，因此这里逐层收窄，缺格投影成 ``None``。
+    """
     if not isinstance(data, dict):
         return None
+    measurable = data.get('measurable')
+    if not isinstance(measurable, dict):
+        measurable = {}
+    hook = measurable.get('hook')
+    if not isinstance(hook, dict):
+        hook = {}
     return {
-        'voice': data.get('voice'),
-        'surface_habits': data.get('surface_habits'),
-        'chapter_styles': data.get('chapter_styles'),
-        'hook_style': data.get('hook_style'),
-        'measurable': data.get('measurable'),
+        'hook': {
+            'chars': hook.get('chars'),
+            'avg_sentence_chars': hook.get('avg_sentence_chars'),
+            'avg_paragraph_chars': hook.get('avg_paragraph_chars'),
+            'quote_styles': hook.get('quote_styles'),
+            'dialogue_ratio': hook.get('dialogue_ratio'),
+        },
     }
 
 
 def stage6_context(data: object) -> object:
-    """文案消费全书故事地图，并用开篇源章号选择对应 chapter_styles。"""
+    """文案消费全书故事地图。"""
     if not isinstance(data, dict):
         return None
 
@@ -362,8 +385,6 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'stage3.style': {
         STAGE1_MAIN_TEXT: stage3_main_text,
         STAGE1_HOOK_COPY: stage3_hook_copy,
-        STAGE2_GLOBAL_GROUNDING: stage3_grounding,
-        STAGE3_STYLE_EDIT: artifact_payload,
     },
     'stage4.plan': {
         STAGE1_MAIN_TEXT: stage4_main_text,

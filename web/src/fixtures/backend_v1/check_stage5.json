@@ -1688,20 +1688,6 @@
    "baseline": "盘上命中 7/31，**恒等基线 5/31**——判别力薄。词表是六个明喻标记（像/好似/如同/仿佛/似的/一样）"
   },
   {
-   "rule": "style_block_carries_plot",
-   "sev": "info",
-   "status": "ok",
-   "item": "风格块里没有夹带情节",
-   "requirement": "R-4.5",
-   "check_kind": "mechanical",
-   "remediation": "human",
-   "fix": null,
-   "findings": [],
-   "why": null,
-   "scanned": "0/8 章（恒等基线 0/8）",
-   "baseline": null
-  },
-  {
    "rule": "verbatim_missing",
    "sev": "hard",
    "status": "ok",
@@ -1808,7 +1794,7 @@
  "badge": "amber",
  "passed": true,
  "counts": {
-  "ok": 34,
+  "ok": 33,
   "hit": 7,
   "unver": 8,
   "skipped": 0

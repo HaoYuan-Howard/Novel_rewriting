@@ -26,7 +26,7 @@ from typing import Any, Callable
 
 from contracts.invariants import BOOK_BAND, DEPTH_MODES, DRAFT_BAND
 from contracts.schema.stage5 import Chapter, DraftConsumed, JudgedDraft
-from novel.core.bands import bands
+from novel.core.bands import body_bands
 from novel.core.naming import KINSHIP
 from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
@@ -167,8 +167,7 @@ def target_quote_style(measurable: dict[str, Any] | None,
     **入库前被人工删掉的**（语料缺陷，不是作者选择）⇒ 没有「本书的引号体」可言，
     硬归一等于按一个不存在的基准去改写正文。
     """
-    base = ((measurable or {}).get('body') or {})
-    if not base.get('dialogue_ratio_applicable'):
+    if not (measurable or {}).get('dialogue_ratio_applicable'):
         return None
     return quote_pair(dominant_quote_style(source_text))
 
@@ -328,7 +327,8 @@ class Book:
 
     title: str
     ctx: dict[str, Any]
-    style: dict[str, Any]
+    #: Stage3 的九叶正文机械投影；Book 结构上没有定性画像或文案实测入口。
+    measurable: dict[str, Any]
     source_text: dict[int, str]
     #: stage2 的**全量** secrets（含一次都没下发过的）。⚠ **收窄下发面是修复，收窄检测器是削弱**：
     #: 从各章 `facts.secrets` 取并集会让一条全书从未下发的 secret 的泄漏检查**永远不执行**，
@@ -351,10 +351,6 @@ class Book:
         return (self.ctx.get('world_facts') or {}).get('characters') or {}
 
     @property
-    def measurable(self) -> dict[str, Any]:
-        return (self.style.get('measurable') or {}).get('body') or {}
-
-    @property
     def band_of(self) -> dict[str, str]:
         """这本书自己的形态档位（章篇幅 / 句子形态 / 段落形态 …）。
 
@@ -364,9 +360,7 @@ class Book:
         从 425 到 1348 不等，写死「短章体」会把长章书直接压垮。
         """
         if 'bands' not in self._cache:
-            from contracts.schema.stage3 import Measurable
-            meas = self.style.get('measurable')
-            self._cache['bands'] = bands(Measurable.model_validate(meas)) if meas else {}
+            self._cache['bands'] = body_bands(self.measurable) if self.measurable else {}
         return self._cache['bands']
 
     @property
@@ -387,7 +381,7 @@ class Book:
         """本书成稿应归一到哪种引号体；判不了返回 `None`（**不猜**）。"""
         if 'quote_style' not in self._cache:
             self._cache['quote_style'] = target_quote_style(
-                self.style.get('measurable'), ''.join(self.source_text.values()))
+                self.measurable, ''.join(self.source_text.values()))
         return self._cache['quote_style']
 
     @property

@@ -425,30 +425,6 @@
   0.9,
   1.1
  ],
- "voice_keys": [
-  "narrative_distance",
-  "register_tone",
-  "interiority",
-  "sentence_rhythm",
-  "dialogue_presentation",
-  "description_density",
-  "chapter_open_close",
-  "mode_variation"
- ],
- "hook_keys": [
-  "person",
-  "open_mode",
-  "info_hiding",
-  "twist",
-  "end_question",
-  "tone",
-  "relation_to_body"
- ],
- "stage3_attempt_kinds": [
-  "surface_habits_targeted_repair",
-  "chapter_local",
-  "chapter_aggregate"
- ],
  "hook_approaches": [
   "source_architecture",
   "payoff_preview",
@@ -521,8 +497,7 @@
   "--check-only": "按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零",
   "--recheck": "按当前判据重判存量产物并写回指标",
   "--revalidate": "按当前判据对 .INVALID 稿做 0 LLM 同轮重判，必填 actor/reason 并留不可变审计，合格才提升",
-  "--measure-only": "只跑确定性实测并报出来，**不写盘**（与 `--remeasure` 是两件事）",
-  "--remeasure": "重算确定性实测值写回，其余字段不动",
+  "--measure-only": "只跑确定性实测并报出来，不写盘；写回直接免费重跑节点默认路径",
   "--renormalize": "按当前契约重算代码派生字段与原文定位",
   "--names-only": "只产逐章可用名册（stage4），不产计划",
   "--identity": "恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外",
@@ -538,14 +513,12 @@
  },
  "paid_flags": {
   "--shallow-rest": "stage5 把未选为深度重构的其余章节交给浅层写手",
-  "--repair-surface-habits": "stage3 表层习惯的定向返工——它要再调一次模型",
   "--revise": "stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手",
   "--purge-role": "stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型",
   "--resample": "stage2 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应",
   "--patch": "stage2 逐章蓝图 extraction IR 族的字段级修复——逐条失败各调一次模型，量级是条不是章"
  },
  "partial_rewrite_flags": [
-  "--remeasure",
   "--recheck",
   "--renormalize",
   "--identity",
@@ -579,7 +552,6 @@
   "--emit-review-template": "",
   "--emit-review-workpack": "",
   "--adopt-residual": "重写 stage7/name_map.json，清旧审批并退休现有成书",
-  "--remeasure": "重算的 measurable 写回正式产物（其余字段不动）",
   "--recheck": "刷新已有成稿的指标，并重拼 draft.md",
   "--revalidate": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
   "--apply-edit": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
@@ -815,21 +787,14 @@
    ]
   },
   "stage3.style": {
-   "label": "stage3 文风画像",
-   "paid": true,
+   "label": "stage3 机械基线",
+   "paid": false,
    "stage": "stage3",
    "section": "R-4",
    "modes": [],
    "flags": [
-    "--dry-run",
     "--check-only",
-    "--measure-only",
-    "--remeasure",
-    "--revalidate",
-    "--apply-edit",
-    "--repair-surface-habits",
-    "--actor",
-    "--reason"
+    "--measure-only"
    ],
    "produces": [
     "stage3/style_grounding.json"
@@ -1431,9 +1396,9 @@
   {
    "kind": "stage3.style",
    "mode": null,
-   "label": "stage3 文风画像",
+   "label": "stage3 机械基线",
    "extra": null,
-   "paid": true,
+   "paid": false,
    "free_flag": null,
    "writes": "stage3/style_grounding.json",
    "writes_disk": true,
@@ -1443,21 +1408,7 @@
   {
    "kind": "stage3.style",
    "mode": null,
-   "label": "stage3 文风画像 --dry-run",
-   "extra": [
-    "--dry-run"
-   ],
-   "paid": false,
-   "free_flag": "--dry-run",
-   "writes": "",
-   "writes_disk": false,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage3.style",
-   "mode": null,
-   "label": "stage3 文风画像 --check-only",
+   "label": "stage3 机械基线 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1471,7 +1422,7 @@
   {
    "kind": "stage3.style",
    "mode": null,
-   "label": "stage3 文风画像 --measure-only",
+   "label": "stage3 机械基线 --measure-only",
    "extra": [
     "--measure-only"
    ],
@@ -1479,71 +1430,6 @@
    "free_flag": "--measure-only",
    "writes": "",
    "writes_disk": false,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage3.style",
-   "mode": null,
-   "label": "stage3 文风画像 --remeasure",
-   "extra": [
-    "--remeasure"
-   ],
-   "paid": false,
-   "free_flag": "--remeasure",
-   "writes": "重算的 measurable 写回正式产物（其余字段不动）",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage3.style",
-   "mode": null,
-   "label": "stage3 文风画像 --revalidate",
-   "extra": [
-    "--revalidate"
-   ],
-   "paid": false,
-   "free_flag": "--revalidate",
-   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": [
-    {
-     "flag": "--actor",
-     "description": "人工决定的自报身份（不是认证身份）"
-    },
-    {
-     "flag": "--reason",
-     "description": "人工决定的非空理由"
-    }
-   ]
-  },
-  {
-   "kind": "stage3.style",
-   "mode": null,
-   "label": "stage3 文风画像 --apply-edit",
-   "extra": [
-    "--apply-edit"
-   ],
-   "paid": false,
-   "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
-   "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
-   "required_inputs": []
-  },
-  {
-   "kind": "stage3.style",
-   "mode": null,
-   "label": "stage3 文风画像 --repair-surface-habits",
-   "extra": [
-    "--repair-surface-habits"
-   ],
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage3/style_grounding.json",
-   "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },

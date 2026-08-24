@@ -102,8 +102,8 @@ class _Upstreams:
             lead=lead, missing=missing, upto=self.upto)
 
     @property
-    def style_hook(self) -> dict | None:
-        return ((self.style_raw.get('measurable') or {}).get('hook')) or None
+    def hook_mechanical(self) -> dict:
+        return self.mat.hook_mechanical
 
 
 def paths_hook_copy_model():
@@ -120,7 +120,8 @@ def _normalize_and_judge(text: str, up: _Upstreams) -> tuple[str, Mech, list[Fin
     text, mech = normalize_hook(text, src_hook=up.src_hook)
     fs = checks.hook_findings(
         text, mat=up.mat, secrets=up.secrets, arc=up.arc, characters=up.characters,
-        src_hook=up.src_hook, style_hook=up.style_hook, quote_problems=problems)
+        src_hook=up.src_hook, hook_mechanical=up.hook_mechanical,
+        quote_problems=problems)
     return text, mech, fs
 
 
@@ -172,7 +173,7 @@ def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Out
     return checks.check(
         texts=texts, mat=up.mat, secrets=up.secrets, arc=up.arc,
         lead_upto_ch=art.lead_upto,
-        hook_chars=(up.style_hook or {}).get('chars'),
+        hook_chars=up.hook_mechanical.get('chars'),
         approved=art.approved is not None,
         stale=stale, missing=missing) + semantic.outcomes(store, art)
 
@@ -324,7 +325,7 @@ def run_identity(ctx: RunContext) -> tuple[dict[str, str], CheckReport]:
     outcomes = checks.check(
         texts=[('原作文案段', up.src_hook, _labelled('原作文案段', fs))],
         mat=up.mat, secrets=up.secrets, arc=up.arc,
-        lead_upto_ch=up.upto, hook_chars=(up.style_hook or {}).get('chars'),
+        lead_upto_ch=up.upto, hook_chars=up.hook_mechanical.get('chars'),
         approved=False, stale=[], missing=[]
     ) + semantic.unavailable_outcomes('恒等基线是 0 成本路，不跑付费语义审判')
     return grid, _report(ctx, store, outcomes, None)

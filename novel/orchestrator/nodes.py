@@ -144,12 +144,6 @@ def validate_run(node: str, flags: Sequence[str] = (),
             raise UnsupportedRunMode(
                 'stage2.global --resample 必须单独执行；它会重新采样整份全局响应')
 
-    if '--repair-surface-habits' in tokens:
-        allowed = {'--repair-surface-habits', '--dry-run'}
-        if node != 'stage3.style' or set(tokens) - allowed:
-            raise UnsupportedRunMode(
-                'stage3 --repair-surface-habits 只可单独执行，或与 --dry-run 组合预览')
-
     if composite_write:
         required = {'--deep', '--shallow-rest'}
         if not required <= set(tokens) or set(tokens) - required:
@@ -484,13 +478,8 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
     追跑规则：**任何会写盘的跑法后面自动追一条 `--check-only`**，理由见 `FOLLOW_CHECK_NOTE`。
 
     ⚠⚠ **判准是「写不写盘」，不是「花不花钱」，而这一格是实测改过的。**
-    第一版写的是「付费且写盘」，于是 `--remeasure` / `--revalidate` / `--apply-edit`
+    第一版写的是「付费且写盘」，于是 `--revalidate` / `--apply-edit`
     这几条**免费但会写盘**的路一条都不追——而它们改的是同一份正式产物。
-    更具体的一处：`--remeasure` 那一趟**按设计不排** `measurable_drift`
-    （`measurable` 刚被它自己覆盖，那条检查在这一趟里恒等成立），
-    ⇒ 报告里它是 `skipped`，而 HARD 的 `skipped` 进 `fail`——
-    **「你确实没跑那道闸，就不该拿到一个绿灯」**。那道闸只能由紧接着的 `--check-only` 去跑。
-    没有这条追跑，`--remeasure` 就变成一条**永远拿不到绿灯**的路。
 
     ⚠ 只在那个节点**真的接受** `--check-only` 时才追（stage2.global 就不接受）——
     追一条它拒收的命令，作业会在第二步无缘无故失败，而第一步可能已经花过钱了。

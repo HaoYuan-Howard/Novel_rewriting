@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-stage3.py —— S-06「文风」那一屏（`GET /api/novels/:sid/stage3/style`）。
+stage3.py —— S-06「机械基线」那一屏（`GET /api/novels/:sid/stage3/style`）。
 
 【这一屏的形状是被一句需求定死的】`04_delivery.md:123`：
-「**S-06 文风：`exists: false` 时左半边（实测）仍有内容**」。
+「**S-06 机械基线：`exists: false` 时左半边（实测）仍有内容**」。
 那不是花哨——**左半边量的是 stage1，与 stage3 有没有跑过无关**。
 ⇒ 本模块分两半各自失败：产物读不回来不影响实测，实测量不出来不影响产物。
 把它们捆在一个 try 里，一边坏掉就会把另一边一起变成空屏。
@@ -15,13 +15,13 @@ stage3.py —— S-06「文风」那一屏（`GET /api/novels/:sid/stage3/style`
   · 「读哪几份上游、投影是什么」→ `novel.stages.stage3.style` 的常量与投影函数
   · 「量出什么」→ `novel.stages.stage3.measure.measure_all`
   · 「档位词」→ `novel.core.bands.bands`（**现算不落盘**：盘上只有原始数字）
-  · 「逐项漂移」→ `novel.core.measure.drift`（与 `style.remeasured()` 同一个函数）
+  · 「逐项漂移」→ `novel.core.measure.drift`（与 Stage3 复检走同一个函数）
 """
 from __future__ import annotations
 
 import os
 
-from contracts.schema.api import DriftItem, HookStyleLine, StyleView, VoiceLine
+from contracts.schema.api import DriftItem, StyleView
 from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage3 import StyleGrounding
 from novel import paths, prov
@@ -65,11 +65,6 @@ def style_view(base: str | os.PathLike[str], sid: str) -> StyleView:
         # ⚠ 三态：不在盘上时是 `None`，不是 `True`。`ArtifactState` 那边用 `True` 兜底
         # （它的 `readable` 是二值的），本屏把「无从谈起」显式建模成第三个值。
         readable=st.readable if st.exists else None,
-        voice=[VoiceLine(key=k, text=v, chars=len(v))
-               for k, v in (loaded.voice.model_dump().items() if loaded else ())],
-        surface_habits=list(loaded.surface_habits) if loaded else [],
-        hook_style=[HookStyleLine(key=k, text=v)
-                    for k, v in (loaded.hook_style.model_dump().items() if loaded else ())],
         measurable_stored=stored,
         bands_stored=bands(stored) if stored is not None else None,
         _provenance=loaded.provenance if loaded is not None else None,
@@ -118,7 +113,7 @@ def _measure(store: ArtifactStore) -> tuple[object, str | None, str | None, str 
 
 
 def _drift(stored, now) -> list[DriftItem]:
-    """存/现两份实测的逐项差异。**与 `style.remeasured()` 走同一个 `drift()`。**
+    """存/现两份实测的逐项差异。**与 Stage3 复检走同一个 `drift()`。**
 
     ⚠ 出线时从三元组换成具名对象：元组一旦出线就是一个**位置数组**，
     前端拿到 `["body.chars", 9516, 9520]` 只能靠下标认格子。

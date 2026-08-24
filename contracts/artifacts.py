@@ -28,7 +28,6 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.global_edit': 'stage2/global_edit.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
     'stage3.style_grounding': 'stage3/style_grounding.json',
-    'stage3.style_edit': 'stage3/style_edit.json',
     'stage4.plan_chapters': 'stage4/plan_chapters.json',
     'stage4.plan_edit': 'stage4/plan_edit.json',
     'stage4.writer_context': 'stage4/writer_context.json',
@@ -100,7 +99,6 @@ STAGE2_GLOBAL_REVIEW_DECISIONS = artifact_rel('stage2.global_review_decisions')
 STAGE2_GLOBAL_EDIT = artifact_rel('stage2.global_edit')
 STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')
 STAGE3_STYLE_GROUNDING = artifact_rel('stage3.style_grounding')
-STAGE3_STYLE_EDIT = artifact_rel('stage3.style_edit')
 STAGE4_PLAN_CHAPTERS = artifact_rel('stage4.plan_chapters')
 STAGE4_PLAN_EDIT = artifact_rel('stage4.plan_edit')
 STAGE4_WRITER_CONTEXT = artifact_rel('stage4.writer_context')

@@ -19,7 +19,7 @@ import os
 import pytest
 from pydantic import ValidationError
 
-from contracts.invariants import HOOK_KEYS, VOICE_KEYS
+from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
 from contracts.schema.api import (
     DraftAlignView, DraftView, DriftItem, ErrorBody, GlobalView, HookCopyView, JobList,
     LogChunk, LogStreamEvent, NovelList,
@@ -182,17 +182,13 @@ def _loaded_view(**over):
     base = dict(
         sid='7615069877019300633', title='某本书',
         exists=True, condition='ready', invalid_exists=False, readable=True,
-        voice=[{'key': k, 'text': f'{k} 的描述', 'chars': 12} for k in VOICE_KEYS],
-        surface_habits=['一条写作小动作'],
-        hook_style=[{'key': k, 'text': f'{k} 的描述'} for k in HOOK_KEYS],
         measurable_stored=meas, bands_stored={'句子形态': '短句'},
         _provenance=StyleProvenance(
-            code='b371244', model='deepseek-v4-pro',
+            code='b371244',
             root_clean_sha1='0' * 40,
-            prompts={'STYLE_SYS': '0ca5dc44e0'},
             inputs={'stage1/main_text.json': {'file': 'b8eb890096', 'consumed': None}},
-            attempts=[{'kind': 'chapter_aggregate', 'user_prompt': '37b4277e08',
-                       'output': '345dd96743', 'cache_policy': 'default'}]),
+            measurement_contract=STAGE3_MEASUREMENT_CONTRACT,
+        ),
         hook_copy_text='全家被贬为奴籍发配青楼。',
         measured_now=meas, bands_now={'句子形态': '短句'},
         measure_error=None, measure_error_kind=None,
@@ -230,10 +226,10 @@ def test_readable_is_none_exactly_when_the_artifact_is_absent():
 
 
 def test_the_right_half_is_all_or_nothing():
-    """产物没读回来，右半边就不许有内容——**那份内容是从哪儿来的？**"""
-    with pytest.raises(ValidationError, match='右半边'):
-        _empty_view(surface_habits=['凭空冒出来的一条'], voice=[])
-    with pytest.raises(ValidationError, match='右半边'):
+    """产物没读回来，存量机械基线就不许有内容——**那份内容是从哪儿来的？**"""
+    with pytest.raises(ValidationError, match='存量基线'):
+        _empty_view(measurable_stored=_measurable())
+    with pytest.raises(ValidationError, match='存量基线'):
         _empty_view(bands_stored={'句子形态': '短句'})
 
 
@@ -269,28 +265,22 @@ def test_drift_null_and_empty_are_two_different_things():
         _empty_view(drift=[])                # 两份实测一份都没有，却宣称「比过了」
 
 
-def test_voice_order_is_not_a_second_landing_point():
-    """`voice` / `hook_style` 的顺序恒等于 `VOICE_KEYS` / `HOOK_KEYS`。
+@pytest.mark.parametrize('retired', ['voice', 'surface_habits', 'hook_style', 'chapter_styles'])
+def test_style_view_rejects_retired_qualitative_fields(retired: str):
+    """Stage3 v2 的 HTTP 载体不保留定性字段的兼容口。
 
-    ⚠ 顺序如果落在**字段声明顺序**上，那就是第二个落点——而界面上八维的顺序有意义
-    （`narrative_distance` 打头，`mode_variation` 收尾且明显长于其余七维）。
+    冻结 mock 的投影只允许存在于 ``web/src/api/mock.ts`` 的适配边界；真实响应多发一格
+    必须由 ``extra='forbid'`` 当场拒绝，否则旧字段会重新变成现役 API。
     """
-    view = _loaded_view()
-    assert [v.key for v in view.voice] == list(VOICE_KEYS)
-    assert [h.key for h in view.hook_style] == list(HOOK_KEYS)
-    with pytest.raises(ValidationError, match='VOICE_KEYS'):
-        _loaded_view(voice=[{'key': k, 'text': f'{k} 的描述', 'chars': 12}
-                            for k in reversed(VOICE_KEYS)])
-    with pytest.raises(ValidationError, match='HOOK_KEYS'):
-        _loaded_view(hook_style=[{'key': k, 'text': f'{k} 的描述'}
-                                 for k in reversed(HOOK_KEYS)])
+    with pytest.raises(ValidationError, match='Extra inputs are not permitted'):
+        _loaded_view(**{retired: []})
 
 
 def test_a_loaded_view_cannot_hide_an_empty_right_half():
-    """反方向：产物读回来了，右半边就不许有空格子——**那不是一份合法的产物**。"""
-    with pytest.raises(ValidationError, match='右半边'):
-        _loaded_view(surface_habits=[])
-    with pytest.raises(ValidationError, match='右半边'):
+    """反方向：产物读回来了，存量机械基线就不许有空格子。"""
+    with pytest.raises(ValidationError, match='机械基线'):
+        _loaded_view(measurable_stored=None)
+    with pytest.raises(ValidationError, match='机械基线'):
         _loaded_view(_provenance=None)
 
 

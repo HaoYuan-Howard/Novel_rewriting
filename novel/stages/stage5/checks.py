@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 47 条机械判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
+checks.py —— 46 条机械判据的实现。**行在 `contracts/judges/stage5.py`，这里只负责执行。**
 
 【本层与前四层最大的形状差异：机械表由写作闸门与全书验收共用】
 落盘闸门（写作相，逐章）与全书验收相**调同一个 `chapter_findings`**。
@@ -41,7 +41,6 @@ from novel.core.text import TERMINAL_PUNCT, min_hamming, norm, norm_index, quote
 from novel.core.text import split_by_speech_tag
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage5 import measure as M
-from novel.stages.stage5 import prompts
 
 
 def with_output_ordinal(findings: Iterable[Finding], ordinal: int | None) -> list[Finding]:
@@ -337,11 +336,11 @@ def segment_fidelity_findings(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 二、声音守恒的六条漂移 + 对白
+# 二、正文机械基线的六条漂移 + 对白
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _dialogue_drift(body: str, book: M.Book) -> list[Finding]:
-    """对白维度的声音守恒。**这是画像里最硬的形态特征，比句长段长更刺眼。**"""
+    """对白机械形态守恒。**它比句长段长更刺眼。**"""
     base = book.measurable
     got = measure(body)
     if not got:
@@ -969,30 +968,7 @@ def book_findings(book: M.Book, *, rows: list[dict[str, Any]], bodies: dict[int,
                + f'；下发名撞名 {len(collide)} 组' + (f'（{collide}）' if collide else ''),
         evidence=sorted(by_surface) + sorted(collide)))
 
-    # ── ⑤ 风格块夹带情节 ────────────────────────────────────────────────────
-    #
-    # ⚠ **盘点通道不盘点字段**：它是在某一维上被发现的，但风格块把 voice 八维 + 写作习惯
-    #   **整份**发给每一章 ⇒ 要扫的是**它实际发出去的那整段**。
-    # ⚠ 检测器用**全书**名表与**全量** secrets——收窄下发面是修复，收窄检测器是削弱。
-    # 扫写手真正会看到的每一份逐章投影，不扫一份它不再收到的
-    # 书级聚合块。收窄下发面是修复，检测面仍要覆盖全书所有实际投影。
-    blob = '\n'.join(
-        prompts.style_block(
-            book.style,
-            source_ordinals=tuple(entry.get('from_source_ordinals') or []))
-        for entry in book.chapters.values())
-    all_names = {c.get('display_name') for c in book.characters.values()}
-    kw_hits = sorted({k for s in book.secrets for k in secret_keywords(s.get('fact'))
-                      if secret_contains(k, blob)})
-    nm_hits = sorted({n for n in all_names if n and len(n) >= 2 and n in blob})
-    if kw_hits or nm_hits:
-        fs.append(finding(
-            'style_block_carries_plot',
-            detail=f'stage3 风格块出现 secret 片段 {kw_hits[:3]} '
-                   f'/ 人物名 {nm_hits[:5]}',
-            evidence=kw_hits + nm_hits))
-
-    # ── ⑥ 两条臂各写了几章 —— **只报不判**（`R-7.6c` / `arm_split_report`）──────
+    # ── ⑤ 两条臂各写了几章 —— **只报不判**（`R-7.6c` / `arm_split_report`）──────
     #
     # ⚠⚠ 2026-08-22 之前默认深度选择是 `(1, 2, 3)`，开卷是 20/23 章的默认路径；
     #   改成**全书闭卷**之后，走开卷的章都是**例外**，而例外必须常驻在报告上说出来。
@@ -1087,7 +1063,7 @@ _FROM_REVIEW: tuple[str, ...] = (
     'draft_missing', 'draft_duplicated',
     'no_secrets_in_book', 'secret_timeline', 'cross_chapter_number',
     'book_length_report', 'book_length', 'name_surface_survey',
-    'style_block_carries_plot', 'must_hold_unver', 'convergence_report',
+    'must_hold_unver', 'convergence_report',
     'arm_split_report',
 )
 
@@ -1119,7 +1095,7 @@ def check(*, chapter_findings_by_rule: dict[str, list[Finding]],
 
     `phase='write'` ⇒ 这是**落盘闸门**那一相：书级/跨章那几条它够不着，落 `unver` 并说清
     「由验收相报」。⚠ **不许让它们落 `skipped`**：`skipped` 的措辞是「实现未被调用」，
-    那是一句**假话**——它们的实现在，只是这一相判不了。而一份 47 行全 `skipped` 的报告
+    那是一句**假话**——它们的实现在，只是这一相判不了。而一份 46 行全 `skipped` 的报告
     徽章是 `fail`，读起来像「全查过全没过」，实际上什么都没说。
 
     `blind[rule]` ⇒ **这一条这一次没有判别力样本**，落 `unver` 而不是打一盏绿灯。

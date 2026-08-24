@@ -41,6 +41,7 @@ from contracts.schema.stage5 import (
     ReviewSources,
 )
 from novel import prov, wontfix
+from novel.consumption import stage5_style
 from novel.errors import TerminalState, UpstreamMissing
 from novel.report.builder import build
 from novel.run import RunContext
@@ -79,10 +80,13 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
     style = store.read(StyleGrounding, STYLE_GROUNDING)
     wc = store.read(WriterContext, WRITER_CONTEXT)
+    projected = stage5_style(style.model_dump(by_alias=True))
+    if not isinstance(projected, dict) or not isinstance(projected.get('body'), dict):
+        raise RuntimeError('stage5_style 没有产出正文机械基线——投影实现与 typed 上游脱节')
     return M.Book(
         title=ctx.title,
         ctx=wc.model_dump(by_alias=True),
-        style=style.model_dump(by_alias=True),
+        measurable=projected['body'],
         source_text={s.chapter_ordinal: (s.text or '') for s in main.root},
         secrets=[s.model_dump(by_alias=True) for s in gg.canon.secrets],
     )
@@ -480,7 +484,7 @@ def _outcomes(rev: Review, book: M.Book | None) -> list:
     for r_ in ('draft_missing', 'draft_duplicated', 'book_length', 'book_length_report',
                'convergence_report', 'name_surface_survey', 'must_hold_unver',
                'event_landing', 'event_landing_unver', 'arm_split_report',
-               'cross_chapter_number', 'style_block_carries_plot'):
+               'cross_chapter_number'):
         scanned.setdefault(r_, f'{nch}/{len(rev.chapters)} 章有成稿')
 
     # ⚠⚠ **`secret_leak` 报绿灯时同一行必须打盲区计数**：实测 21 条 secret 里 19 条的字面

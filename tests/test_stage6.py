@@ -603,8 +603,8 @@ def _packet_of(user: str) -> dict:
 
 
 @pytest.mark.usefixtures('current_drafts')
-def test_prompt_carries_source_full_story_and_body_execution_style(box):
-    """质量升级的三项信息必须真的进入实际发送的 user，而不只写在设计文档里。"""
+def test_prompt_carries_source_full_story_and_minimal_hook_mechanical(box):
+    """质量材料与五叶机械基线必须真的进入 user，定性画像不得混入。"""
     ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
     _sys, user, mat = hook.build_prompt(ctx)
     packet = _packet_of(user)
@@ -617,8 +617,12 @@ def test_prompt_carries_source_full_story_and_body_execution_style(box):
     for value in (gg['arc'].get('climax'), gg['arc'].get('ending')):
         if value:
             assert value in user, '全书兑现没有真正下发，payoff_preview 仍会闭卷写作'
-    assert mat.style_packet['book_surface_habits'] == style.get('surface_habits')
-    assert packet['style'] == mat.style_packet, '下发的风格包与 Material 记的那份分家了'
+    hook_meas = style['measurable']['hook']
+    expected = {key: hook_meas.get(key) for key in (
+        'chars', 'avg_sentence_chars', 'avg_paragraph_chars',
+        'quote_styles', 'dialogue_ratio')}
+    assert packet['source_hook_mechanical'] == mat.hook_mechanical == expected
+    assert 'style' not in packet and 'measurable' not in packet
     assert packet['whole_story_map'] == list(mat.story_map) and len(mat.story_map) >= 1
 
 
@@ -684,7 +688,7 @@ def _distance_reading(text: str, src_hook: str | None) -> dict:
     fs = checks.hook_findings(
         text, mat=prompts.Material(blocks=('合成创作包。',), upto=1),
         secrets=[], arc=None, characters=None, src_hook=src_hook,
-        style_hook=None, quote_problems=[])
+        hook_mechanical=None, quote_problems=[])
     return {f.rule: f for f in fs}
 
 

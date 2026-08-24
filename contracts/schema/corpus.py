@@ -26,7 +26,6 @@ CURRENT_CORPUS_BOOKS: tuple[tuple[str, int], ...] = (
 CURRENT_CORPUS_PAID_NODES: tuple[str, ...] = (
     'stage2.global',
     'stage2.blueprint',
-    'stage3.style',
     'stage4.plan',
     'stage5.write',
     'stage6.hook',

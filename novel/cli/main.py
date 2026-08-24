@@ -347,7 +347,7 @@ def _run_stage1(ctx: RunContext, flags: list[str]) -> int:
 
 
 def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
-    """stage3 的六条路。**五条 0 成本，一条付费。**"""
+    """Stage3 v2：默认免费落盘、测量预览或复检。"""
     from novel.stages.stage3 import style
 
     tokens = set(N.flag_tokens(flags))
@@ -363,52 +363,8 @@ def _run_stage3(ctx: RunContext, flags: list[str]) -> int:
         print(meas.model_dump_json(indent=2))
         return X.OK
 
-    if '--dry-run' in tokens:
-        if '--repair-surface-habits' in tokens:
-            system, user, _literals = style.build_habit_repair_prompt(ctx)
-        else:
-            system, user, _meas = style.build_prompt(ctx)
-        print(f'── system（{len(system)} 字）──\n{system}')
-        print(f'\n── user（{len(user)} 字）──\n{user}')
-        return X.OK
-
-    if '--remeasure' in tokens:
-        _art, diff, report = style.run_remeasure(ctx)
-        print(f'── 重算 ── measurable 变化 {len(diff)} 项')
-        for k, a, b in diff[:20]:
-            print(f'  {k}: {a} → {b}')
-        print(render(report))
-        # ⚠ **这里恒不拿 badge 当退出码。** 这一趟按设计不排 `measurable_drift`
-        # （它刚把 measurable 覆盖掉），⇒ HARD 的 `skipped` 让 badge 恒为 `fail`。
-        # 拿它当退出码，`--remeasure` 就成了一条永远「失败」的路。
-        # 那道闸由 `build_steps` 自动追跑的 `--check-only` 去跑，退出码也归它。
-        return X.OK
-
-    if '--revalidate' in tokens:
-        promoted, report = style.run_revalidate(
-            ctx, actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '')
-        print(render(report))
-        print('  ✓ 已提升为正式产物（0 成本）' if promoted
-              else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
-        return X.OK if promoted else X.CHECK_FAILED
-
-    if '--repair-surface-habits' in tokens:
-        artifact, report = style.run_repair_surface_habits(ctx, _llm_client(ctx))
-        print(render(report))
-        print(f'  ✓ stage3 第二轮已原位修复 {len(artifact.surface_habits)} 条全局习惯清单')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--apply-edit' in tokens:
-        _art, report = style.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
-        print(render(report))
-        print('  ✓ 人工画像修订已落为新一轮；measurable 已照盘上 stage1 重算')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    # 付费路。⚠ 本仓第一次真花钱要先说一声（README）。
-    client = _llm_client(ctx)
-    style.run_style(ctx, client)
-    print('  ✓ stage3 逐章文风画像已落盘')
+    style.run_style(ctx)
+    print('  ✓ stage3 v2 机械基线已免费落盘')
     return X.OK
 
 

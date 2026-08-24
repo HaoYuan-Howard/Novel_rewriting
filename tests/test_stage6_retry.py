@@ -35,7 +35,7 @@ def _run_case(monkeypatch, root: Path, initial_texts: list[str], retry_responder
     material = prompts.Material(blocks=('完整创作包。',), upto=1)
     upstreams = SimpleNamespace(
         mat=material, src_hook='', secrets=[], arc=None, characters={},
-        style_hook=None, upto=1, judged={})
+        hook_mechanical={}, upto=1, judged={})
     written = []
 
     class Store:
@@ -91,7 +91,7 @@ def test_each_initially_dirty_candidate_retries_once_and_usage_includes_retries(
         material = prompts.Material(blocks=('完整创作包。',), upto=1)
         upstreams = SimpleNamespace(
             mat=material, src_hook='', secrets=[], arc=None, characters={},
-            style_hook=None, upto=1, judged={})
+            hook_mechanical={}, upto=1, judged={})
         written = []
 
         class Store:

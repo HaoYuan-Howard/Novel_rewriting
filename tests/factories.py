@@ -3,10 +3,9 @@
 """Small, deterministic builders for tests that do not need the local corpus."""
 from __future__ import annotations
 
-from copy import deepcopy
-
-from contracts.invariants import HOOK_KEYS, VOICE_KEYS
+from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
 from contracts.schema.stage1 import HookCopy, MainText
+from novel.consumption import stage5_style
 from novel.stages.stage3.measure import measure_all
 from novel.stages.stage5.measure import Book
 
@@ -73,35 +72,37 @@ def stage5_book() -> Book:
         },
         'must_not_reveal': [],
     }
-    voice = {key: f'{key} 的合成风格描述' for key in VOICE_KEYS}
+    projected = stage5_style({'measurable': measurable})
+    assert isinstance(projected, dict) and isinstance(projected.get('body'), dict)
     return Book(
         title='雨夜账册',
         ctx={
             'world_facts': {'characters': {'char_001': character}},
             'chapters': [entry],
         },
-        style={
-            'voice': voice,
-            'surface_habits': ['以动作推进判断，避免解释性总结。'],
-            'measurable': measurable,
-        },
+        measurable=projected['body'],
         source_text={1: source_one, 2: source_two},
         secrets=[],
     )
 
 
 def stage3_artifact() -> dict:
-    """Return a model-authored Stage3 payload suitable for rule counterexamples."""
+    """Return a current Stage3 v2 mechanical payload."""
     book = stage5_book()
-    data = deepcopy(book.style)
-    data['hook_style'] = {key: f'{key} 的合成文案风格' for key in HOOK_KEYS}
-    data['chapter_styles'] = [
-        {
-            'source_ordinal': ordinal,
-            'voice': deepcopy(data['voice']),
-            'surface_habits': list(data['surface_habits']),
-        }
-        for ordinal in sorted(book.source_text)
-    ]
-    data['_provenance'] = {}
-    return data
+    main = MainText.model_validate([
+        {'chapter_ordinal': ordinal, 'source_chapter_no': ordinal, 'text': text}
+        for ordinal, text in sorted(book.source_text.items())
+    ])
+    measurable = measure_all(
+        main,
+        HookCopy(text='一把银匙，一本被调换的账册，足以让旧日秘密重新开口。'),
+    ).model_dump()
+    return {
+        'measurable': measurable,
+        '_provenance': {
+            'code': 'fixture',
+            'root_clean_sha1': '0' * 40,
+            'inputs': {},
+            'measurement_contract': STAGE3_MEASUREMENT_CONTRACT,
+        },
+    }

@@ -70,9 +70,9 @@
 修锚点逐字、悬空 id、secret 时序这类定位问题）、`stage2.blueprint --chapters <N>`（定向重生成那几章，**这一条付费**）、
 以及 `stage2.blueprint --patch`（**付费但量级是条不是章**：`extraction-ir-v1` 契约下 `hinge_ambiguous` 的修复路——
 代码枚举候选命中位、模型只挑 candidate_id；有整章级根因时它会显式拒绝并指路 `--chapters`，先整章、后字段）。
-另有两条同样 0 成本、会写盘但不由 `fix` 指名的重算入口，只在读数需要刷新时用：
+另有同样 0 成本、会写盘但不一定由 finding flag 指名的重算入口，只在读数需要刷新时用：
 `--recheck`（`stage5.write` / `stage6.hook` / `stage7.rename`，刷新已有成稿的指标并重拼 `draft.md`）与
-`stage3.style --remeasure`（重算的 measurable 写回正式产物，其余字段不动）。
+默认 `stage3.style`（从当前 Stage1 完整重建当前机械基线）。
 **它们都写盘**，所以照样先 preview、前后打点、以最新 check 复验；只是不发起外部调用。
 
 `llm` 那一行的「finding 明列的付费入口」在 `stage5.write --revise` 之外还有三条注册在案的定向返工路，
@@ -81,7 +81,6 @@
 | flag | 节点 | 它修什么 |
 |---|---|---|
 | `--purge-role` | `stage2.global` | `role_leaks_fate` 的唯一修复路：把 role/fate 双向重划分一遍 |
-| `--repair-surface-habits` | `stage3.style` | 表层习惯的定向返工 |
 | `--resample` | `stage2.global` | 全书响应被闸门拦下后，绕过同参数问题缓存重新采样整份响应 |
 | `--patch` | `stage2.blueprint` | `extraction-ir-v1` 专属的字段级修复（`hinge_ambiguous` 候选选择 / 编的短语重给），逐条失败各调一次模型，量级是条不是章；详见 `docs/stage2_contract_experiment.md` |
 
@@ -110,7 +109,7 @@ schema version 写），不按记忆手抄。
 [经验库](field-notes.md) FN-017）。
 
 下表按**节点**索引，覆盖每一条 0 成本、但**会改动盘上产物**的入口——包括不需要另写输入文件的那几条
-（`--revalidate` / `--renormalize` / `--recheck` / `--remeasure` / `--identity` / `--adopt-residual`）。
+（`--revalidate` / `--renormalize` / `--recheck` / `--identity` / `--adopt-residual`，以及 Stage3 默认免费重建）。
 **“0 成本”不等于“只看不动”**：真正只读的是 `--dry-run`、`--check-only`、`--measure-only`、
 `--names-only`、`--emit-review-template`、`--emit-review-workpack`、`--emit-edit-template`、
 `--validate-edit`，以及
@@ -121,7 +120,7 @@ schema version 写），不按记忆手抄。
 | `stage0.edit` | `--apply-edit` · `--apply-edit-plan` · `--apply-candidate-plan` | 正式 edit / edit-plan / candidate-plan 形状 | 不直接覆盖 `clean_text.txt` 或 removal report——三者都只往 revision 链上追加一版，再由链物化成那两份产物。`--apply-candidate-plan` 是机器重跑候选的三选一裁决（`adopt` 采纳整版 / `dismiss` 保留当前版），与 edit-plan 同样带乐观锁（`expected_revision_id`）。⚠ 「采纳后再编辑」不是第三个动作，是 adopt 之后照常走 `--apply-edit-plan` |
 | `stage2.global` | `--apply-edit` · `--review-decisions` · `--renormalize` · `--revalidate` | typed 修订（如 `reader_reveal_events` 时线）；`stage2/global_review_decisions.json` | 本层**有**通用 `--apply-edit`（见 [经验库](field-notes.md) FN-007）。先用只读 `--emit-review-template` 取得当前 item hash/evidence；模板默认全 `UNVER`，原样应用不会开闸。`--review-decisions` 按 `actor + 理由 + subject_sha256` 提交 PASS/FAIL/UNVER，subject hash 变更后旧决策被拒收 |
 | `stage2.blueprint` | `--renormalize` · `--revalidate` | finding 明确允许时编辑活动 `.INVALID` | 本层确实没有 `--apply-edit`；逐章内容的修正走 `--chapters <N>` 定向重生成（**付费**）或回上游 `stage2.global`。只改证据指向字段，不改生成轮次与来源账 |
-| `stage3.style` | `--apply-edit` · `--remeasure` · `--revalidate` | `<novel-dir>/stage3/style_edit.json`；终态明确允许时可修活动 `.INVALID` | 决策集只改 schema 开放字段 |
+| `stage3.style` | 默认生产（无 flag） | 无 | 从当前 Stage1 完整重建机械基线；旧形状 formal/INVALID 走 shape-break 替换且不进入 `_rounds/`。`--measure-only` 与 `--check-only` 都只读 |
 | `stage4.plan` | `--apply-edit` · `--identity` · `--revalidate` | `<novel-dir>/stage4/plan_edit.json`；终态明确允许时可修活动 `.INVALID` | `--revalidate` 强审计并重建 writer context；`--identity` 另写 `stage4/writer_context.identity.json` 基线，不覆盖正式计划。仍以追跑 check/state 验证 |
 | `stage5.write` | `--apply-edit` · `--recheck` · `--revalidate` | 文件名含 `chNN` 的完整 `ChapterResponse`：`{"segments":[{"slot":"s01","text":"…"},…]}` | **0 LLM 调用，但必须提交该章全部 producer-owned slot 的全文**；不直接改正式 chapter JSON、draft.md 或其他章 |
 | `stage5.review` | `--retain-pretrim` · `--wontfix` | 无人产文件；决定本身就是输入 | `--retain-pretrim --chapters <N> --actor <ACTOR> --reason <text>` 恰好一章，写 hash-bound `trim_resolution_chNN.json`，不改正文、不采用收缩候选（见 FN-014）；`--wontfix` 只把豁免记进 `stage5/wontfix.json`，**一份验收报告都不产** |
@@ -133,7 +132,7 @@ schema version 写），不按记忆手抄。
 不得直接修改：正式 JSON/TXT、成书、`_service/*.jsonl`、`.llm_cache/`、`_rounds/` 历史、旧 run 的输出目录。`mark` 是写进度信标的唯一入口。
 
 `--apply-edit` 的路径解析**逐层不同，不要当成通则**（见 [经验库](field-notes.md) FN-016）：
-`stage3.style` / `stage4.plan` / `stage6.hook` / `stage7.rename` 按**书目录**解析相对路径，
+`stage4.plan` / `stage6.hook` / `stage7.rename` 按**书目录**解析相对路径，
 也接受书目录内的绝对路径，目录外路径和 `..` 穿越关闭式拒绝；`stage5.write` 与 `stage0.edit`
 收任意路径——服务进程把人工改稿放在 `_service/edits/` 下，依赖这一点。
 `--review-decisions` 与前一组同规矩。操作包一律优先记录解析后的绝对路径，便于复核。

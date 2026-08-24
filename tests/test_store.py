@@ -27,10 +27,12 @@ from contracts.artifacts import (
     STAGE1_PARTITION_REPORT, STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW,
 )
 from contracts.schema import (
-    ArtifactVersionError, InputEdge, StyleGrounding, Usage, artifact_spec,
+    ArtifactVersionError, InputEdge, LlmProvenance, StyleGrounding, Usage, artifact_spec,
     decode_artifact, encode_artifact,
 )
+from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
 from contracts.schema.stage3 import StyleProvenance
+from contracts.schema.stage4 import PlanChapters, PlanProvenance
 from novel.consumption import CONSUMED_PROJECTIONS, producer_node, projection_for
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
@@ -48,6 +50,7 @@ from novel.store import (
 from tests import corpus, sandbox
 
 STYLE_REL = 'stage3/style_grounding.json'
+PLAN_REL = 'stage4/plan_chapters.json'
 UPSTREAM = 'stage1/main_text.json'
 REVALIDATION = {'actor': 'test-reviewer', 'reason': '逐项复核当前判据'}
 
@@ -85,38 +88,68 @@ def _book(sid: str = '123', title: str = '书名', payload: bytes = b'{"sections
     return base
 
 
-def _ctx(base: Path, sid: str = '123', node: str = 'stage3.style', *, paid: bool = True,
+def _ctx(base: Path, sid: str = '123', node: str = 'stage3.style', *, paid: bool = False,
          write_ledger: bool = False) -> RunContext:
     return RunContext.open(base, sid, node, paid=paid, write_ledger=write_ledger)
 
 
 def _style(ctx: RunContext, *, habit: str = '习惯一') -> StyleGrounding:
-    """一份最小的合法 stage3 产物。字段值不重要——本文件测的是读写口，不是文风。"""
-    voice = {k: '描述' for k in (
-        'narrative_distance', 'register_tone', 'interiority', 'sentence_rhythm',
-        'dialogue_presentation', 'description_density', 'chapter_open_close', 'mode_variation')}
-    hook = {k: '写法' for k in (
-        'person', 'open_mode', 'info_hiding', 'twist', 'end_question', 'tone', 'relation_to_body')}
+    """一份最小的合法 Stage3 v2；变化哨兵借 ``quote_styles`` 承载。"""
     blk = dict(chars=1, paragraphs=1, sentences=1, avg_paragraph_chars=1.0,
                paragraph_sep_chars=1.0, avg_sentence_chars=1.0, dialogue_ratio=None,
-               dialogue_ratio_applicable=True, quote_styles=['「」'])
+               dialogue_ratio_applicable=True, quote_styles=[habit])
     body = dict(blk, chapter_chars=dict(min=1, max=2, avg=1.5),
                 per_chapter_avg_sentence=dict(min=1.0, max=2.0))
-    prov = ctx.llm_provenance(
-        StyleProvenance, prompts={'STYLE_SYS': '插值之后的系统提示词'}, model='deepseek-v4-pro',
-        attempts=[dict(kind='chapter_aggregate', user_prompt='0' * 10, output='1' * 10,
-                       cache_policy='default')])
+    prov = ctx.free_provenance(
+        StyleProvenance,
+        prompts={'RULES': '测试用确定性尺子'},
+        measurement_contract=STAGE3_MEASUREMENT_CONTRACT,
+    )
     return StyleGrounding(
-        voice=voice,
-        surface_habits=[habit],
-        hook_style=hook,
         measurable=dict(body=body, hook=blk),
-        chapter_styles=[dict(
-            source_ordinal=1,
-            voice=voice,
-            surface_habits=[habit],
-        )],
         _provenance=prov,
+    )
+
+
+def _plan_ctx(base: Path, sid: str = '123', *, paid: bool = True) -> RunContext:
+    """通用写盘/提升测试使用的现役 Stage4 产地上下文。"""
+    return _ctx(base, sid, node='stage4.plan', paid=paid)
+
+
+def _plan(ctx: RunContext, *, marker: str = '计划一') -> PlanChapters:
+    """一份最小合法 Stage4 计划；``marker`` 是各事务测试的内容哨兵。"""
+    goal = {
+        'intent': 'advance',
+        'fact_refs': [{
+            'kind': 'chapter_boundary', 'ref': 'chapter:1', 'chapter': 1,
+        }],
+        'rationale': '测试事务与来源账，不测试规划质量。',
+    }
+    provenance = ctx.llm_provenance(
+        PlanProvenance,
+        prompts={'PLAN_SYS': '测试用计划提示词'},
+        model='fixture-model',
+        params={
+            'grouping': 'absorb-small-v1',
+            'beat_min_chars': 80,
+            'plan_beats': 1,
+        },
+    )
+    return PlanChapters(
+        reconstruction_strategy=marker,
+        output_chapters=[{
+            'output_ordinal': 1,
+            'from_source_ordinals': [1],
+            'chapter_goal': goal,
+            'open_hook_goal': {**goal, 'intent': 'open'},
+            'end_hook_goal': {**goal, 'intent': 'close'},
+            'segments': [{
+                'slot': 's01',
+                'budget_chars': 20,
+                'from_beats': ['b01_01'],
+            }],
+        }],
+        _provenance=provenance,
     )
 
 
@@ -148,7 +181,7 @@ def test_two_runs_in_one_process_never_share_a_source_ledger():
     这条测试就是那个结构：两本书、同一个进程、同一个键，两份账互不相干。
     """
     base_a, base_b = _book('111', 'A', b'{"sections": [1]}'), _book('222', 'B', b'{"sections": [2]}')
-    ctx_a, ctx_b = _ctx(base_a, '111'), _ctx(base_b, '222')
+    ctx_a, ctx_b = _plan_ctx(base_a, '111'), _plan_ctx(base_b, '222')
     ArtifactStore(ctx_a).read(Loose, UPSTREAM)
     ArtifactStore(ctx_b).read(Loose, UPSTREAM)
 
@@ -156,14 +189,14 @@ def test_two_runs_in_one_process_never_share_a_source_ledger():
     assert ctx_a.edges[UPSTREAM].file != ctx_b.edges[UPSTREAM].file, \
         'A 书的指纹与 B 书的一样 —— 两个实例串了，那正是原型那条假匹配边'
 
-    p = ArtifactStore(ctx_a).write(STYLE_REL, _style(ctx_a))
+    p = ArtifactStore(ctx_a).write(PLAN_REL, _plan(ctx_a))
     assert list(_prov_on_disk(p)['inputs']) == [UPSTREAM]
     assert _prov_on_disk(p)['inputs'][UPSTREAM]['file'] == ctx_a.edges[UPSTREAM].file
 
 
 def test_edges_are_a_snapshot_not_the_live_dict():
     """外面改 `ctx.edges` 不该影响这一次跑——来源账是账，不是可编辑的草稿。"""
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     ArtifactStore(ctx).read(Loose, UPSTREAM)
     ctx.edges.clear()
     assert set(ctx.edges) == {UPSTREAM}
@@ -203,7 +236,10 @@ def test_reading_with_a_projection_fingerprints_the_projection_not_the_whole_fil
     ArtifactStore(ctx).read(MainTextLoose, UPSTREAM)
 
     from novel.prov import projection_fingerprint
-    assert ctx.edges[UPSTREAM].consumed == projection_fingerprint(['真正读的正文'])
+    assert ctx.edges[UPSTREAM].consumed == projection_fingerprint({
+        'measurement_contract': STAGE3_MEASUREMENT_CONTRACT,
+        'texts': ['真正读的正文'],
+    })
     assert ctx.edges[UPSTREAM].consumed != projection_fingerprint(
         json.loads((base / '书名_123' / 'stage1' / 'main_text.json').read_text('utf-8'))), \
         '投影指纹等于整份文件的指纹 —— `project()` 多半没被调用'
@@ -425,6 +461,86 @@ def test_stage5_review_tracks_context_code_without_overinvalidating_writing():
     assert review_projection(before) != review_projection(after)
 
 
+def test_stage5_style_projection_is_exactly_the_nine_body_mechanical_leaves():
+    write_projection = projection_for('stage5.write', STYLE_REL)
+    review_projection = projection_for('stage5.review', STYLE_REL)
+    assert write_projection is review_projection and write_projection is not None
+    source = {
+        'voice': {'narrative_distance': '定性哨兵'},
+        'surface_habits': ['习惯哨兵'],
+        'chapter_styles': [{'source_ordinal': 1, 'voice': {'x': '逐章哨兵'}}],
+        'hook_style': {'tone': '文案定性哨兵'},
+        'measurable': {
+            'body': {
+                'chars': 101, 'paragraphs': 11, 'sentences': 21,
+                'avg_sentence_chars': 17.1, 'avg_paragraph_chars': 27.2,
+                'paragraph_sep_chars': 2.0,
+                'dialogue_ratio_applicable': True, 'dialogue_ratio': 0.33,
+                'quote_styles': ['「」'],
+                'chapter_chars': {'min': 700, 'max': 1300, 'avg': 1000.0},
+                'per_chapter_avg_sentence': {'min': 15.0, 'max': 20.0},
+            },
+            'hook': {
+                'chars': 51, 'paragraphs': 5, 'sentences': 7,
+                'avg_sentence_chars': 9.9, 'avg_paragraph_chars': 10.2,
+            },
+        },
+    }
+    expected = {'body': {
+        'avg_sentence_chars': 17.1,
+        'avg_paragraph_chars': 27.2,
+        'paragraph_sep_chars': 2.0,
+        'dialogue_ratio_applicable': True,
+        'dialogue_ratio': 0.33,
+        'quote_styles': ['「」'],
+        'chapter_chars': {'avg': 1000.0},
+        'per_chapter_avg_sentence': {'min': 15.0, 'max': 20.0},
+    }}
+    assert write_projection(source) == expected
+
+    dropped = copy.deepcopy(source)
+    dropped['voice'] = {'changed': 'changed'}
+    dropped['surface_habits'] = ['changed']
+    dropped['chapter_styles'] = [{'changed': True}]
+    dropped['hook_style'] = {'changed': 'changed'}
+    dropped['measurable']['hook']['avg_sentence_chars'] = 999
+    dropped['measurable']['body']['chars'] = 999
+    dropped['measurable']['body']['paragraphs'] = 999
+    dropped['measurable']['body']['sentences'] = 999
+    dropped['measurable']['body']['chapter_chars']['min'] = 999
+    dropped['measurable']['body']['chapter_chars']['max'] = 999
+    assert write_projection(dropped) == expected
+
+    retained_paths = (
+        ('avg_sentence_chars',), ('avg_paragraph_chars',), ('paragraph_sep_chars',),
+        ('dialogue_ratio_applicable',), ('dialogue_ratio',), ('quote_styles',),
+        ('chapter_chars', 'avg'),
+        ('per_chapter_avg_sentence', 'min'), ('per_chapter_avg_sentence', 'max'),
+    )
+    for path in retained_paths:
+        edited = copy.deepcopy(source)
+        target = edited['measurable']['body']
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = 'changed'
+        assert write_projection(edited) != expected, path
+
+
+def test_stage5_style_projection_tolerates_malformed_raw_nested_shapes():
+    project = projection_for('stage5.write', STYLE_REL)
+    assert project is not None
+    assert project({'measurable': '旧坏形状'}) == {'body': {
+        'avg_sentence_chars': None,
+        'avg_paragraph_chars': None,
+        'paragraph_sep_chars': None,
+        'dialogue_ratio_applicable': None,
+        'dialogue_ratio': None,
+        'quote_styles': None,
+        'chapter_chars': {'avg': None},
+        'per_chapter_avg_sentence': {'min': None, 'max': None},
+    }}
+
+
 def test_a_draft_cannot_be_read_through_the_edge_path():
     """⚠⚠ 成稿走 `read_judged`，**不走 `read`**（`_common.md` §3.2）。
 
@@ -476,27 +592,27 @@ def test_what_we_write_is_what_we_can_read_back():
     而 `exclude_none` 是**全局**的 ⇒ 它连着剥掉两处**必填但可为 `null`** 的键
     （`inputs[].consumed` 与 `usage.*_tokens`），于是**落下去的产物读不回来**。
     """
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
     ctx.record_edge(UPSTREAM, InputEdge(
         file=ctx.edges[UPSTREAM].file, consumed=None))
     ctx.ledger.record(node=ctx.node, sid=ctx.sid, model='m', code=ctx.code,
                       cached=False, cache_policy='default')     # 响应没给 usage ⇒ token 三项 null
-    artifact = _style(ctx)
+    artifact = _plan(ctx)
     # consumed=null 会让正式稿的自新鲜度只能是 unknown；正式盘口现在必须拒绝。
     with pytest.raises(ProvenanceRefused, match='freshness 后置条件'):
-        st.write(STYLE_REL, artifact)
-    assert not st.exists(STYLE_REL), '后置条件失败后新正式稿没有回滚'
-    p = st.write_invalid(STYLE_REL, artifact, gates_skipped=[])
+        st.write(PLAN_REL, artifact)
+    assert not st.exists(PLAN_REL), '后置条件失败后新正式稿没有回滚'
+    p = st.write_invalid(PLAN_REL, artifact, gates_skipped=[])
 
     raw = json.loads(p.read_text(encoding='utf-8'))
     assert raw['_provenance']['inputs'][UPSTREAM]['consumed'] is None, \
         '`consumed` 的键被抹掉了——「必填但可为 null」与「三态字段」语义相反，不许一个开关同管'
     assert raw['_provenance']['usage']['prompt_tokens'] is None, \
         '`null` = 这次响应没给 usage，**不是 0**；抹掉这个键，产物就再也加载不回来'
-    assert raw['_schema_version'] == artifact_spec(STYLE_REL).current_version
-    StyleGrounding.model_validate(decode_artifact(STYLE_REL, raw).payload)
+    assert raw['_schema_version'] == artifact_spec(PLAN_REL).current_version
+    PlanChapters.model_validate(decode_artifact(PLAN_REL, raw).payload)
 
 
 def test_a_tampered_schema_version_is_refused_on_the_real_read_path():
@@ -526,7 +642,7 @@ def test_a_tampered_schema_version_is_refused_on_the_real_read_path():
 
     # 先证明原样能读回来——否则下面那条拒读证明不了是版本号造成的。
     assert ArtifactStore(_ctx(base)).read_own(
-        StyleGrounding, STYLE_REL)[0].surface_habits == ['习惯一']
+        StyleGrounding, STYLE_REL)[0].measurable.hook.quote_styles == ['习惯一']
 
     encoded['_schema_version'] = current + 1
     official.write_text(
@@ -544,12 +660,9 @@ def _spend(ctx: RunContext, **tokens) -> None:
                       cached=False, cache_policy='default', **tokens)
 
 
-def _mint(ctx: RunContext) -> StyleProvenance:
+def _mint(ctx: RunContext) -> LlmProvenance:
     """铸一份付费来源账。**只为了拿它的 `usage`**，别的字段取最小合法值。"""
-    return ctx.llm_provenance(
-        StyleProvenance, prompts={'STYLE_SYS': 'x'}, model='m',
-        attempts=[dict(kind='chapter_aggregate', user_prompt='0' * 10, output='1' * 10,
-                       cache_policy='default')])
+    return ctx.llm_provenance(LlmProvenance, prompts={'TEST_SYS': 'x'}, model='m')
 
 
 def test_each_artifact_gets_its_own_usage_not_the_whole_runs_total():
@@ -561,7 +674,7 @@ def test_each_artifact_gets_its_own_usage_not_the_whole_runs_total():
     账面还看着都对。两份账答的是两个问题（`_common.md` §八）：
     账本答「这周/这本书花了多少」，产物里那一份答「这一份花了多少」。
     """
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     _spend(ctx, prompt_tokens=10, completion_tokens=5, reasoning_tokens=1)
     a = _mint(ctx)
     _spend(ctx, prompt_tokens=20, completion_tokens=7, reasoning_tokens=2)
@@ -580,7 +693,7 @@ def test_every_artifacts_usage_sums_back_to_the_run_total():
 
     差一分钱就说明有一段窗口的账**谁都没认领**（或者被认领了两次）。
     """
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     parts = []
     for i in (1, 2, 3):
         _spend(ctx, prompt_tokens=i, completion_tokens=i * 2, reasoning_tokens=i * 3)
@@ -598,7 +711,7 @@ def test_a_token_kind_the_response_never_reported_stays_null():
     的响应（DeepSeek 实测有）会把另外两项写成 `0`——而「没给」与「真的没花」
     是必须分得开的两件事。一个全局开关同时管三件事，必然把其中两件搞错。
     """
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     _spend(ctx, prompt_tokens=10)              # ← 只报了这一项
     u = _mint(ctx).usage
     assert u.prompt_tokens == 10
@@ -610,7 +723,7 @@ def test_the_same_usage_mark_can_never_be_committed_twice():
     """同一把刻度提交两次 = 两份产物各自认领同一批 token。**显式终态，不是一笔悄悄重复的账。**"""
     led = CostLedger()
     mark = led.snapshot()
-    led.record(node='stage3.style', sid='1', model='m', code='c',
+    led.record(node='stage4.plan', sid='1', model='m', code='c',
                cached=False, cache_policy='default', prompt_tokens=3)
     assert led.usage_since(mark).prompt_tokens == 3
     led.commit(mark)
@@ -621,14 +734,14 @@ def test_the_same_usage_mark_can_never_be_committed_twice():
 def test_a_failed_mint_does_not_push_the_usage_mark():
     """⭐ **推刻度必须在构造成功之后。**
 
-    来源账自己带后置条件（`StyleProvenance.attempts` 非空），构造是会抛的。
+    来源账是 strict schema；传入退役的 ``attempts`` 字段时构造会抛。
     抛了还把刻度推走，那段窗口的账就再也没有产物认领它——
     Σ（每份）== run 总量 当场破，而破得**一声不响**。
     """
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     _spend(ctx, prompt_tokens=10)
     with pytest.raises(Exception):
-        ctx.llm_provenance(StyleProvenance, prompts={'S': 'x'}, model='m', attempts=[])
+        ctx.llm_provenance(LlmProvenance, prompts={'S': 'x'}, model='m', attempts=[])
     # 刻度没动 ⇒ 下一份产物照样认领得到这 10 个 token
     assert _mint(ctx).usage.prompt_tokens == 10
 
@@ -641,10 +754,10 @@ def test_a_run_with_no_calls_still_has_no_usage_key():
 
 def test_three_state_keys_are_absent_on_disk_not_null():
     """三态那四个键：`None` ⇒ **键不在**。`revalidated: null` 与「没有这个键」是两份字节。"""
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    d = _prov_on_disk(st.write(STYLE_REL, _style(ctx)))
+    d = _prov_on_disk(st.write(PLAN_REL, _plan(ctx)))
     for k in ('revalidated', 'gates_skipped', 'origin', 'input_basis', 'usage'):
         assert k not in d, f'{k} 是 None，不该出现在盘上'
 
@@ -656,22 +769,22 @@ def test_the_write_gate_refuses_prompts_without_inputs():
     的 `inputs` 干脆是空的。一份自称能证明来源的记录悄悄漏掉一个来源，
     **比没有这个记录更坏**——下游会拿它当证据。
     """
-    ctx = _ctx(_book())                         # ← 一次 read 都没有 ⇒ inputs 为空
+    ctx = _plan_ctx(_book())                    # ← 一次 read 都没有 ⇒ inputs 为空
     with pytest.raises(ProvenanceRefused, match='inputs'):
-        ArtifactStore(ctx).write(STYLE_REL, _style(ctx))
+        ArtifactStore(ctx).write(PLAN_REL, _plan(ctx))
 
 
 def test_a_free_run_cannot_mint_a_provenance_that_names_a_model():
     """⚠ 「0 成本不许记 `model`」这道闸开在**铸造口**，不开在写盘口。
 
-    理由是实测的：写盘口拦不住它，因为**五条 0 成本路径本来就要写回一份带 `model` 的
-    来源账**（`--revalidate` / `--remeasure` / `--recheck` / `stage6.approve` /
+    理由是实测的：写盘口拦不住它，因为若干 0 成本路径本来就要写回一份带 `model` 的
+    来源账（`--revalidate` / `--recheck` / `stage6.approve` /
     `stage7.approve` 改写的都是**付费节点产的**那份产物，它记的 model 属于当初那次付费产出）。
     ⇒ 真正该拦的是「0 成本的跑**现造**一份声称模型产了它的账」，而现造只有一个入口。
     """
     ctx = _ctx(_book(), paid=False)
     with pytest.raises(ProvenanceRefused, match='不花钱'):
-        _style(ctx)
+        ctx.llm_provenance(LlmProvenance, prompts={'TEST_SYS': 'x'}, model='m')
     # 0 成本的那一份**结构上**没有 model 这个字段
     free = ctx.free_provenance(prompts={'RULES': '判据表全文'})
     assert 'model' not in free.to_disk() and 'model' not in type(free).model_fields
@@ -683,10 +796,10 @@ def test_a_failed_write_never_touches_the_existing_artifact(monkeypatch):
     ⚠ `open(p,'w')` 是「先截断再写」：在它写完之前，盘上那份是**半截 JSON**。
     原型并发落盘时踩过——半截 JSON 的坏处不是读失败，是**读失败会被当成「上游还没产出」**。
     """
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    p = st.write(STYLE_REL, _style(ctx, habit='第一版'))
+    p = st.write(PLAN_REL, _plan(ctx, marker='第一版'))
     before = p.read_bytes()
 
     def boom(*_a, **_k):
@@ -694,7 +807,7 @@ def test_a_failed_write_never_touches_the_existing_artifact(monkeypatch):
 
     monkeypatch.setattr(ArtifactStore, '_verify_round_trip', staticmethod(boom))
     with pytest.raises(ProvenanceRefused):
-        st.write(STYLE_REL, _style(ctx, habit='第二版'))
+        st.write(PLAN_REL, _plan(ctx, marker='第二版'))
 
     assert p.read_bytes() == before, '旧产物被截断/覆盖了——那正是原子写要防的那一瞬间'
     assert not list(p.parent.glob('*.tmp')), '临时文件没清掉'
@@ -702,19 +815,19 @@ def test_a_failed_write_never_touches_the_existing_artifact(monkeypatch):
 
 def test_self_freshness_failure_restores_official_and_keeps_invalid():
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    official = st.write(STYLE_REL, _style(ctx, habit='原正式稿'))
+    official = st.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
     before = official.read_bytes()
     invalid = st.write_invalid(
-        STYLE_REL, _style(ctx, habit='待修问题稿'), gates_skipped=[])
+        PLAN_REL, _plan(ctx, marker='待修问题稿'), gates_skipped=[])
     invalid_before = invalid.read_bytes()
 
     edge = ctx.edges[UPSTREAM]
     ctx.record_edge(UPSTREAM, InputEdge(file=edge.file, consumed=None))
     with pytest.raises(ProvenanceRefused, match='freshness 后置条件'):
-        st.write(STYLE_REL, _style(ctx, habit='来源账写错的新稿'))
+        st.write(PLAN_REL, _plan(ctx, marker='来源账写错的新稿'))
 
     assert official.read_bytes() == before, '后置条件失败没有逐字节恢复旧正式稿'
     assert invalid.read_bytes() == invalid_before, '正式稿还没自证 fresh 就退休了 INVALID'
@@ -722,13 +835,13 @@ def test_self_freshness_failure_restores_official_and_keeps_invalid():
 
 def test_retiring_invalid_failure_rolls_the_formal_write_back(monkeypatch):
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    official = st.write(STYLE_REL, _style(ctx, habit='原正式稿'))
+    official = st.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
     before = official.read_bytes()
     invalid = st.write_invalid(
-        STYLE_REL, _style(ctx, habit='问题稿'), gates_skipped=[])
+        PLAN_REL, _plan(ctx, marker='问题稿'), gates_skipped=[])
     invalid_before = invalid.read_bytes()
 
     def fail_retirement(_rel):
@@ -736,7 +849,7 @@ def test_retiring_invalid_failure_rolls_the_formal_write_back(monkeypatch):
 
     monkeypatch.setattr(st, 'retire_invalid', fail_retirement)
     with pytest.raises(RuntimeError, match='retirement failure'):
-        st.write(STYLE_REL, _style(ctx, habit='本来合格的新稿'))
+        st.write(PLAN_REL, _plan(ctx, marker='本来合格的新稿'))
     assert official.read_bytes() == before
     assert invalid.read_bytes() == invalid_before
 
@@ -834,10 +947,10 @@ def test_json_pointer_diff_uses_rfc6901_escaping_and_stable_order():
 
 
 def test_json_artifacts_are_written_without_cr():
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    assert b'\r' not in st.write(STYLE_REL, _style(ctx)).read_bytes()
+    assert b'\r' not in st.write(PLAN_REL, _plan(ctx)).read_bytes()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1254,11 +1367,11 @@ def test_a_non_utf8_json_artifact_still_says_it_is_not_utf8_not_bad_json():
 # 五、`.INVALID`、`gates_skipped`、提升路
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _write_invalid(base: Path, gates: list[str], *, habit: str = '习惯一') -> tuple[RunContext, Path]:
-    ctx = _ctx(base)
+def _write_invalid(base: Path, gates: list[str], *, marker: str = '计划一') -> tuple[RunContext, Path]:
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    return ctx, st.write_invalid(STYLE_REL, _style(ctx, habit=habit), gates_skipped=gates)
+    return ctx, st.write_invalid(PLAN_REL, _plan(ctx, marker=marker), gates_skipped=gates)
 
 
 def test_gates_skipped_is_written_even_when_empty():
@@ -1269,19 +1382,19 @@ def test_gates_skipped_is_written_even_when_empty():
     正是 `Q-2` 要求必须能区分的两件事。
     """
     _ctx_, inv = _write_invalid(_book(), [])
-    assert inv.name == 'style_grounding.INVALID.json'
+    assert inv.name == 'plan_chapters.INVALID.json'
     assert _prov_on_disk(inv)['gates_skipped'] == []
 
 
 def test_invalid_does_not_overwrite_the_official_artifact():
     """`Q-5` 先校验后落盘：阻断级错误**不覆盖已有产物**。"""
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    good = st.write(STYLE_REL, _style(ctx, habit='合格的那一版'))
+    good = st.write(PLAN_REL, _plan(ctx, marker='合格的那一版'))
     before = good.read_bytes()
-    st.write_invalid(STYLE_REL, _style(ctx, habit='被拦下的那一版'), gates_skipped=['name_leak'])
+    st.write_invalid(PLAN_REL, _plan(ctx, marker='被拦下的那一版'), gates_skipped=['name_leak'])
     assert good.read_bytes() == before
 
 
@@ -1295,12 +1408,12 @@ def _byte_tree(root: Path) -> dict[str, bytes]:
 def test_write_invalid_rolls_back_live_rounds_and_baselines_together(monkeypatch):
     """A replacement INVALID must not pre-archive its predecessor on IO failure."""
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
     store.read(Loose, UPSTREAM)
     store.write_invalid(
-        STYLE_REL, _style(ctx, habit='第一份问题稿'), gates_skipped=['name_leak'])
-    stage = store.path(STYLE_REL).parent
+        PLAN_REL, _plan(ctx, marker='第一份问题稿'), gates_skipped=['name_leak'])
+    stage = store.path(PLAN_REL).parent
     before = _byte_tree(stage)
 
     def fail_baseline(_self, _destination, _data):
@@ -1309,7 +1422,7 @@ def test_write_invalid_rolls_back_live_rounds_and_baselines_together(monkeypatch
     monkeypatch.setattr(ArtifactStore, '_write_immutable', fail_baseline)
     with pytest.raises(OSError, match='基线写入失败'):
         store.write_invalid(
-            STYLE_REL, _style(ctx, habit='第二份问题稿'), gates_skipped=['name_leak'])
+            PLAN_REL, _plan(ctx, marker='第二份问题稿'), gates_skipped=['name_leak'])
 
     assert _byte_tree(stage) == before
 
@@ -1317,24 +1430,24 @@ def test_write_invalid_rolls_back_live_rounds_and_baselines_together(monkeypatch
 def test_write_round_rolls_back_formal_invalid_and_round_history(monkeypatch):
     """Post-write freshness failure restores the whole pre-archive byte set."""
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
     store.read(Loose, UPSTREAM)
-    store.write(STYLE_REL, _style(ctx, habit='原正式稿'))
+    store.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
     store.write_invalid(
-        STYLE_REL, _style(ctx, habit='原问题稿'), gates_skipped=['name_leak'])
-    stage = store.path(STYLE_REL).parent
+        PLAN_REL, _plan(ctx, marker='原问题稿'), gates_skipped=['name_leak'])
+    stage = store.path(PLAN_REL).parent
     before = _byte_tree(stage)
     original = ArtifactStore._assert_self_fresh
 
     def fail_new_round(self, rel, artifact):
-        if rel == STYLE_REL:
+        if rel == PLAN_REL:
             raise ProvenanceRefused('模拟后置 freshness 失败')
         return original(self, rel, artifact)
 
     monkeypatch.setattr(ArtifactStore, '_assert_self_fresh', fail_new_round)
     with pytest.raises(ProvenanceRefused, match='freshness 失败'):
-        store.write_round(STYLE_REL, _style(ctx, habit='新正式稿'))
+        store.write_round(PLAN_REL, _plan(ctx, marker='新正式稿'))
 
     assert _byte_tree(stage) == before
 
@@ -1342,7 +1455,7 @@ def test_write_round_rolls_back_formal_invalid_and_round_history(monkeypatch):
 def test_history_transaction_restores_a_late_bound_delivery_retirement():
     """Content-addressed byte archives must join the caller's transaction journal."""
     base = _book()
-    store = ArtifactStore(_ctx(base))
+    store = ArtifactStore(_plan_ctx(base))
     live = store.path('stage7/book.txt')
     live.parent.mkdir(parents=True, exist_ok=True)
     live.write_bytes('旧交付物\n'.encode('utf-8'))
@@ -1359,9 +1472,9 @@ def test_history_transaction_restores_a_late_bound_delivery_retirement():
 
 
 def test_the_official_write_path_refuses_an_invalid_name():
-    ctx = _ctx(_book())
+    ctx = _plan_ctx(_book())
     with pytest.raises(PathRefused, match='write_invalid'):
-        ArtifactStore(ctx).write('stage3/style_grounding.INVALID.json', _style(ctx))
+        ArtifactStore(ctx).write('stage4/plan_chapters.INVALID.json', _plan(ctx))
 
 
 def test_a_new_official_draft_retires_the_old_invalid_sibling():
@@ -1374,14 +1487,14 @@ def test_a_new_official_draft_retires_the_old_invalid_sibling():
     ⚠ **归档不是删除**（`Q-8`）：那份稿花过钱，而且可能还被别人的 `inputs` 指着。
     """
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    inv = st.write_invalid(STYLE_REL, _style(ctx, habit='被拦下的那一版'),
+    inv = st.write_invalid(PLAN_REL, _plan(ctx, marker='被拦下的那一版'),
                            gates_skipped=['name_leak'])
     assert inv.is_file()
 
-    good = st.write(STYLE_REL, _style(ctx, habit='修好之后的那一版'))
+    good = st.write(PLAN_REL, _plan(ctx, marker='修好之后的那一版'))
 
     assert good.is_file(), '正式稿要落盘'
     assert not inv.exists(), '.INVALID 兄弟必须让位——留着它，四个消费方一起说假话'
@@ -1394,11 +1507,11 @@ def test_a_new_official_draft_retires_the_old_invalid_sibling():
 def test_a_rejected_official_write_does_not_retire_the_invalid_sibling(monkeypatch):
     """新内容连完整预校验都过不了时，旧问题稿必须仍留在原位。"""
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
     inv = st.write_invalid(
-        STYLE_REL, _style(ctx, habit='仍待修的问题稿'), gates_skipped=['name_leak'])
+        PLAN_REL, _plan(ctx, marker='仍待修的问题稿'), gates_skipped=['name_leak'])
     before = inv.read_bytes()
 
     def boom(*_args, **_kwargs):
@@ -1406,7 +1519,7 @@ def test_a_rejected_official_write_does_not_retire_the_invalid_sibling(monkeypat
 
     monkeypatch.setattr(ArtifactStore, '_verify_round_trip', staticmethod(boom))
     with pytest.raises(ProvenanceRefused, match='预校验失败'):
-        st.write(STYLE_REL, _style(ctx, habit='结构坏掉的新稿'))
+        st.write(PLAN_REL, _plan(ctx, marker='结构坏掉的新稿'))
 
     assert inv.read_bytes() == before
     assert not (inv.parent / paths.ROUNDS_DIRNAME).exists()
@@ -1414,22 +1527,22 @@ def test_a_rejected_official_write_does_not_retire_the_invalid_sibling(monkeypat
 
 def test_an_atomic_replace_failure_restores_the_just_retired_invalid(monkeypatch):
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
     inv = st.write_invalid(
-        STYLE_REL, _style(ctx, habit='仍待修的问题稿'), gates_skipped=['name_leak'])
+        PLAN_REL, _plan(ctx, marker='仍待修的问题稿'), gates_skipped=['name_leak'])
     before = inv.read_bytes()
     original = ArtifactStore._replace_atomically
 
     def fail_official(path, data):
-        if path == st.path(STYLE_REL):
+        if path == st.path(PLAN_REL):
             raise OSError('模拟正式稿原子替换失败')
         return original(path, data)
 
     monkeypatch.setattr(ArtifactStore, '_replace_atomically', staticmethod(fail_official))
     with pytest.raises(OSError, match='原子替换失败'):
-        st.write(STYLE_REL, _style(ctx, habit='已预校验的新稿'))
+        st.write(PLAN_REL, _plan(ctx, marker='已预校验的新稿'))
 
     assert inv.read_bytes() == before
     rounds = inv.parent / paths.ROUNDS_DIRNAME
@@ -1439,12 +1552,12 @@ def test_an_atomic_replace_failure_restores_the_just_retired_invalid(monkeypatch
 def test_retiring_the_invalid_sibling_is_a_no_op_when_there_is_none():
     """没有问题稿时 `None` 表示「本来就没有」，不是「归档失败」。"""
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    assert st.retire_invalid(STYLE_REL) is None
-    st.write(STYLE_REL, _style(ctx))
-    assert not (st.path(STYLE_REL).parent / paths.ROUNDS_DIRNAME).exists(), \
+    assert st.retire_invalid(PLAN_REL) is None
+    st.write(PLAN_REL, _plan(ctx))
+    assert not (st.path(PLAN_REL).parent / paths.ROUNDS_DIRNAME).exists(), \
         '没有问题稿就不该凭空造一个归档目录'
 
 
@@ -1461,13 +1574,14 @@ def test_promotion_keeps_the_original_prompts_and_archives_the_invalid():
     was = _prov_on_disk(inv)
 
     # 提升走的是一次 **0 成本**的跑（`--revalidate` 在 `FREE_ENTRIES` 里）
-    ctx2 = _ctx(base, paid=False)
+    ctx2 = _plan_ctx(base, paid=False)
     out = ArtifactStore(ctx2).promote_invalid(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
+        PLAN_REL, PlanChapters, **REVALIDATION)
     now = _prov_on_disk(out)
 
     assert now['prompts'] == was['prompts'], '盖上了当前的 SYS 指纹 —— 这就是伪造'
-    assert now['model'] == was['model'] and now['inputs'] == was['inputs']
+    assert now['model'] == was['model']
+    assert now['inputs'] == was['inputs']
     assert now['revalidated'] is True
     assert now['revalidation_audit']['actor'] == REVALIDATION['actor']
     assert now['revalidation_audit']['raw_changed'] is False
@@ -1479,14 +1593,14 @@ def test_promotion_keeps_the_original_prompts_and_archives_the_invalid():
     assert now['code'] == ctx2.code, 'code 必须记本次重判真正使用的代码版本'
 
     assert not inv.exists()
-    archived = sorted(p.name for p in (base / '书名_123' / 'stage3' / '_rounds').iterdir())
-    assert archived == ['style_grounding.INVALID.r1.json'], \
+    archived = sorted(p.name for p in (base / '书名_123' / 'stage4' / '_rounds').iterdir())
+    assert archived == ['plan_chapters.INVALID.r1.json'], \
         '⚠ 原型归档叫 `*.INVALID.superseded.json`（**没有编号**），第二次会静默覆盖第一次'
 
 
 def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():
     base = _book()
-    _ctx_, inv = _write_invalid(base, [], habit='机器原稿')
+    _ctx_, inv = _write_invalid(base, [], marker='机器原稿')
     provenance = _prov_on_disk(inv)
     locator = provenance['invalid_baseline_sha256']
     baselines = list((inv.parent / '_revalidation').glob(f'*.{locator}.snapshot'))
@@ -1496,19 +1610,19 @@ def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():
     assert baseline_before == inv.read_bytes(), '基线不是 INVALID 创建时的完整原始字节'
 
     edited = json.loads(inv.read_text(encoding='utf-8'))
-    edited['surface_habits'][0] = '人工修正'
+    edited['reconstruction_strategy'] = '人工修正'
     inv.write_text(json.dumps(edited, ensure_ascii=False, indent=4) + '\n', encoding='utf-8')
 
-    store = ArtifactStore(_ctx(base, paid=False))
+    store = ArtifactStore(_plan_ctx(base, paid=False))
     audit = store.revalidation_audit(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
+        PLAN_REL, PlanChapters, **REVALIDATION)
     assert audit.raw_changed is True and audit.content_changed is True
     assert audit.edited_by_human is True
-    assert audit.changed_json_pointers == ('/surface_habits/0',)
+    assert audit.changed_json_pointers == ('/reconstruction_strategy',)
     assert audit.baseline_raw_sha256 != audit.candidate_raw_sha256
     assert audit.baseline_canonical_sha256 != audit.candidate_canonical_sha256
 
-    out = store.promote_invalid(STYLE_REL, StyleGrounding, **REVALIDATION)
+    out = store.promote_invalid(PLAN_REL, PlanChapters, **REVALIDATION)
     disk_audit = _prov_on_disk(out)['revalidation_audit']
     assert disk_audit == audit.model_dump(mode='json')
     assert baseline.read_bytes() == baseline_before, '提升过程改写了不可变基线'
@@ -1522,8 +1636,8 @@ def test_revalidation_distinguishes_raw_only_edits_from_logical_edits():
     inv.write_text(json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
                    encoding='utf-8')
 
-    audit = ArtifactStore(_ctx(base, paid=False)).revalidation_audit(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
+    audit = ArtifactStore(_plan_ctx(base, paid=False)).revalidation_audit(
+        PLAN_REL, PlanChapters, **REVALIDATION)
     assert audit.raw_changed is True
     assert audit.content_changed is False
     assert audit.edited_by_human is False
@@ -1532,30 +1646,31 @@ def test_revalidation_distinguishes_raw_only_edits_from_logical_edits():
 
 def test_promotion_override_rebuilds_derived_fields_but_cannot_replace_live_audit_or_source():
     base = _book()
-    _ctx_, inv = _write_invalid(base, [], habit='机器原稿')
+    _ctx_, inv = _write_invalid(base, [], marker='机器原稿')
     baseline_source = _prov_on_disk(inv)
     current = json.loads(inv.read_text(encoding='utf-8'))
-    current['surface_habits'][0] = '人工提交'
+    current['reconstruction_strategy'] = '人工提交'
     inv.write_text(json.dumps(current, ensure_ascii=False, indent=2) + '\n',
                    encoding='utf-8')
-    live = StyleGrounding.model_validate(decode_artifact(STYLE_REL, current).payload)
+    live = PlanChapters.model_validate(decode_artifact(PLAN_REL, current).payload)
     fake_source = live.provenance.model_copy(update={'code': 'fake-override-code', 'inputs': {}})
     rebuilt = live.model_copy(update={
-        'surface_habits': ['确定性派生字段已重建'],
+        'reconstruction_strategy': '确定性派生字段已重建',
         'provenance': fake_source,
     })
 
-    store = ArtifactStore(_ctx(base, paid=False))
+    store = ArtifactStore(_plan_ctx(base, paid=False))
     live_audit = store.revalidation_audit(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
+        PLAN_REL, PlanChapters, **REVALIDATION)
     out = store.promote_invalid(
-        STYLE_REL, StyleGrounding, artifact_override=rebuilt, **REVALIDATION)
+        PLAN_REL, PlanChapters, artifact_override=rebuilt, **REVALIDATION)
     disk = json.loads(out.read_text(encoding='utf-8'))
     source = disk['_provenance']
 
-    assert disk['surface_habits'] == ['确定性派生字段已重建']
+    assert disk['reconstruction_strategy'] == '确定性派生字段已重建'
     assert source['revalidation_audit'] == live_audit.model_dump(mode='json')
-    assert source['revalidation_audit']['changed_json_pointers'] == ['/surface_habits/0']
+    assert source['revalidation_audit']['changed_json_pointers'] == [
+        '/reconstruction_strategy']
     assert source['inputs'] == baseline_source['inputs'], 'override 自带的假来源账被信任了'
     assert source['code'] != 'fake-override-code'
 
@@ -1565,12 +1680,12 @@ def test_revalidation_rejects_blank_human_credentials_without_touching_files(act
     base = _book()
     _ctx_, inv = _write_invalid(base, [])
     before = inv.read_bytes()
-    store = ArtifactStore(_ctx(base, paid=False))
+    store = ArtifactStore(_plan_ctx(base, paid=False))
     with pytest.raises(ApprovalRequired, match='actor.*reason'):
         store.promote_invalid(
-            STYLE_REL, StyleGrounding, actor=actor, reason=reason)
+            PLAN_REL, PlanChapters, actor=actor, reason=reason)
     assert inv.read_bytes() == before
-    assert not store.exists(STYLE_REL)
+    assert not store.exists(PLAN_REL)
 
 
 def test_revalidation_refuses_a_tampered_immutable_baseline_before_writing():
@@ -1579,14 +1694,14 @@ def test_revalidation_refuses_a_tampered_immutable_baseline_before_writing():
     locator = _prov_on_disk(inv)['invalid_baseline_sha256']
     baseline = next((inv.parent / '_revalidation').glob(f'*.{locator}.snapshot'))
     damaged = json.loads(baseline.read_text(encoding='utf-8'))
-    damaged['surface_habits'][0] = '基线被改'
+    damaged['reconstruction_strategy'] = '基线被改'
     baseline.write_text(json.dumps(damaged, ensure_ascii=False, indent=2) + '\n',
                         encoding='utf-8')
 
-    store = ArtifactStore(_ctx(base, paid=False))
+    store = ArtifactStore(_plan_ctx(base, paid=False))
     with pytest.raises(ProvenanceRefused, match='内容校验失败'):
-        store.promote_invalid(STYLE_REL, StyleGrounding, **REVALIDATION)
-    assert inv.is_file() and not store.exists(STYLE_REL)
+        store.promote_invalid(PLAN_REL, PlanChapters, **REVALIDATION)
+    assert inv.is_file() and not store.exists(PLAN_REL)
 
 
 def test_an_invalid_without_a_creation_snapshot_fails_closed():
@@ -1606,38 +1721,38 @@ def test_an_invalid_without_a_creation_snapshot_fails_closed():
     )
     before = inv.read_bytes()
 
-    store = ArtifactStore(_ctx(base, paid=False))
+    store = ArtifactStore(_plan_ctx(base, paid=False))
     with pytest.raises(ProvenanceRefused, match='没有 write_invalid 记录的不可变基线定位键'):
-        store.promote_invalid(STYLE_REL, StyleGrounding, **REVALIDATION)
+        store.promote_invalid(PLAN_REL, PlanChapters, **REVALIDATION)
 
     assert inv.read_bytes() == before
-    assert not store.exists(STYLE_REL)
+    assert not store.exists(PLAN_REL)
 
 
 def test_first_write_invalid_creates_a_nested_snapshot_near_windows_max_path():
     root = Path(tempfile.mkdtemp())
     locator = '0' * 64
-    empty_old = (root / '_123' / 'stage3' / '_revalidation' /
-                 f'style_grounding.INVALID.{locator}.snapshot')
+    empty_old = (root / '_123' / 'stage4' / '_revalidation' /
+                 f'plan_chapters.INVALID.{locator}.snapshot')
     # Reproduce the acceptance budget: the old target-derived temporary name
     # and even the long legacy target reach MAX_PATH, while every ordinary
     # input/output directory remains comfortably shorter.
     title = '长' * max(8, 264 - len(str(empty_old)))
     base = _book(title=title, root=root)
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
     store.read(Loose, UPSTREAM)
-    revalidation = store.path(STYLE_REL).parent / '_revalidation'
+    revalidation = store.path(PLAN_REL).parent / '_revalidation'
     assert not revalidation.exists()
 
-    inv = store.write_invalid(STYLE_REL, _style(ctx), gates_skipped=[])
+    inv = store.write_invalid(PLAN_REL, _plan(ctx), gates_skipped=[])
     locator = _prov_on_disk(inv)['invalid_baseline_sha256']
     snapshots = list(revalidation.glob(f'*.{locator}.snapshot'))
     assert len(snapshots) == 1
     assert snapshots[0].name == f'b.{locator}.snapshot'
     assert snapshots[0].read_bytes() == inv.read_bytes()
 
-    legacy = revalidation / f'style_grounding.INVALID.{locator}.snapshot'
+    legacy = revalidation / f'plan_chapters.INVALID.{locator}.snapshot'
     legacy_tmp = legacy.with_name(f'{legacy.name}.{os.getpid()}.tmp')
     assert len(str(legacy)) >= 260, '夹具没有复现真实验收的 Windows 路径预算'
     assert len(str(snapshots[0])) + 20 < len(str(legacy_tmp))
@@ -1645,10 +1760,10 @@ def test_first_write_invalid_creates_a_nested_snapshot_near_windows_max_path():
 
 def test_failed_first_snapshot_write_leaves_no_partial_or_live_invalid(monkeypatch):
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
     store.read(Loose, UPSTREAM)
-    invalid = store.path(paths.invalid_of(STYLE_REL))
+    invalid = store.path(paths.invalid_of(PLAN_REL))
     revalidation = invalid.parent / '_revalidation'
     original = os.replace
 
@@ -1659,7 +1774,7 @@ def test_failed_first_snapshot_write_leaves_no_partial_or_live_invalid(monkeypat
 
     monkeypatch.setattr(os, 'replace', fail_snapshot)
     with pytest.raises(OSError, match='快照原子替换失败'):
-        store.write_invalid(STYLE_REL, _style(ctx), gates_skipped=[])
+        store.write_invalid(PLAN_REL, _plan(ctx), gates_skipped=[])
 
     assert not invalid.exists(), '快照没落成却留下了可提升的活动 INVALID'
     assert not revalidation.exists() or not any(revalidation.iterdir()), \
@@ -1678,14 +1793,14 @@ def test_write_invalid_never_overwrites_an_existing_baseline_snapshot():
     base = _book()
     ctx, inv = _write_invalid(base, [])
     store = ArtifactStore(ctx)
-    artifact = store.read_own(StyleGrounding, paths.invalid_of(STYLE_REL))[0]
+    artifact = store.read_own(PlanChapters, paths.invalid_of(PLAN_REL))[0]
     locator = _prov_on_disk(inv)['invalid_baseline_sha256']
     baseline = next((inv.parent / '_revalidation').glob(f'*.{locator}.snapshot'))
     baseline.write_bytes(b'tampered immutable history')
     live_before = inv.read_bytes()
 
     with pytest.raises(ProvenanceRefused, match='拒绝覆盖审计历史'):
-        store.write_invalid(STYLE_REL, artifact, gates_skipped=[])
+        store.write_invalid(PLAN_REL, artifact, gates_skipped=[])
 
     assert baseline.read_bytes() == b'tampered immutable history'
     assert inv.read_bytes() == live_before
@@ -1697,23 +1812,23 @@ def test_a_second_promotion_lands_in_the_next_round_not_on_top_of_the_first():
     ⚠ 这一条挡的是原型那个 `*.INVALID.superseded.json`（无编号）：
     第二次会静默覆盖第一次。轮次由 `seen_rounds` 扫出来，缺号也不会退回去。
 
-    ⚠ 两份 `.INVALID` **必须内容不同**（`habit`），否则第二次提升渲染出的字节
+    ⚠ 两份 `.INVALID` **必须内容不同**（`marker`），否则第二次提升渲染出的字节
     与盘上正式稿逐字节相同、归档那一步按设计跳过，这条断言就变成靠巧合绿的。
     """
     base = _book()
-    _write_invalid(base, [], habit='第一版')
-    p = ArtifactStore(_ctx(base, paid=False)).promote_invalid(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
+    _write_invalid(base, [], marker='第一版')
+    p = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
+        PLAN_REL, PlanChapters, **REVALIDATION)
     first = p.read_bytes()
-    _write_invalid(base, ['name_leak'], habit='第二版')
-    ArtifactStore(_ctx(base, paid=False)).promote_invalid(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
+    _write_invalid(base, ['name_leak'], marker='第二版')
+    ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
+        PLAN_REL, PlanChapters, **REVALIDATION)
 
-    rounds = base / '书名_123' / 'stage3' / '_rounds'
+    rounds = base / '书名_123' / 'stage4' / '_rounds'
     archived = sorted(q.name for q in rounds.iterdir())
-    assert archived == ['style_grounding.INVALID.r1.json', 'style_grounding.INVALID.r2.json',
-                        'style_grounding.r1.json']
-    assert (rounds / 'style_grounding.r1.json').read_bytes() == first, \
+    assert archived == ['plan_chapters.INVALID.r1.json', 'plan_chapters.INVALID.r2.json',
+                        'plan_chapters.r1.json']
+    assert (rounds / 'plan_chapters.r1.json').read_bytes() == first, \
         '归档里那份不是被换掉的那一版正式稿'
     assert p.read_bytes() != first, '第二次提升根本没改动正式稿？夹具白搭了'
 
@@ -1728,21 +1843,22 @@ def test_promotion_archives_the_paid_official_instead_of_destroying_it():
     """
     base = _book()
     # 先有一份**正式**产物（付费产出的那一版）
-    ctx0 = _ctx(base)
+    ctx0 = _plan_ctx(base)
     st0 = ArtifactStore(ctx0)
     st0.read(Loose, UPSTREAM)
-    official = st0.write(STYLE_REL, _style(ctx0, habit='付过钱的那一版'))
+    official = st0.write(PLAN_REL, _plan(ctx0, marker='付过钱的那一版'))
     was = official.read_bytes()
 
-    _write_invalid(base, ['name_leak'], habit='被拦下的那一版')
-    out = ArtifactStore(_ctx(base, paid=False)).promote_invalid(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
+    _write_invalid(base, ['name_leak'], marker='被拦下的那一版')
+    out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
+        PLAN_REL, PlanChapters, **REVALIDATION)
 
-    rounds = base / '书名_123' / 'stage3' / '_rounds'
-    assert (rounds / 'style_grounding.r1.json').read_bytes() == was, \
+    rounds = base / '书名_123' / 'stage4' / '_rounds'
+    assert (rounds / 'plan_chapters.r1.json').read_bytes() == was, \
         '旧正式稿被原子替换销毁了，而 `_rounds/` 里没有任何副本'
-    assert (rounds / 'style_grounding.INVALID.r1.json').exists(), '`.INVALID` 那条历史也要归档'
-    assert json.loads(out.read_text(encoding='utf-8'))['surface_habits'] == ['被拦下的那一版']
+    assert (rounds / 'plan_chapters.INVALID.r1.json').exists(), '`.INVALID` 那条历史也要归档'
+    assert json.loads(out.read_text(encoding='utf-8'))[
+        'reconstruction_strategy'] == '被拦下的那一版'
     assert _prov_on_disk(out)['revalidated'] is True
 
 
@@ -1757,19 +1873,19 @@ def test_a_resumed_promotion_does_not_invent_a_phantom_round():
     这里直接模拟那个崩溃窗口：提升一次之后把 `.INVALID` 放回原位，再提升一次。
     """
     base = _book()
-    _write_invalid(base, [], habit='唯一那一版')
-    ArtifactStore(_ctx(base, paid=False)).promote_invalid(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
+    _write_invalid(base, [], marker='唯一那一版')
+    ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
+        PLAN_REL, PlanChapters, **REVALIDATION)
 
-    rounds = base / '书名_123' / 'stage3' / '_rounds'
+    rounds = base / '书名_123' / 'stage4' / '_rounds'
     # 模拟「正式稿已落、`.INVALID` 还没挪走」那半个刻意选的窗口
-    inv = base / '书名_123' / 'stage3' / 'style_grounding.INVALID.json'
-    (rounds / 'style_grounding.INVALID.r1.json').rename(inv)
-    ArtifactStore(_ctx(base, paid=False)).promote_invalid(
-        STYLE_REL, StyleGrounding, **REVALIDATION)
+    inv = base / '书名_123' / 'stage4' / 'plan_chapters.INVALID.json'
+    (rounds / 'plan_chapters.INVALID.r1.json').rename(inv)
+    ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
+        PLAN_REL, PlanChapters, **REVALIDATION)
 
     archived = sorted(q.name for q in rounds.iterdir())
-    assert archived == ['style_grounding.INVALID.r1.json'], \
+    assert archived == ['plan_chapters.INVALID.r1.json'], \
         f'重跑凭空造出了轮次：{archived}——`--revalidate` 本该自愈，而不是往账上塞幻影'
 
 
@@ -1791,14 +1907,14 @@ def test_a_free_produced_invalid_can_be_promoted_too():
         provenance: FreeProvenance = Field(alias='_provenance')
 
     base = _book()
-    ctx = _ctx(base, paid=False)
+    ctx = _plan_ctx(base, paid=False)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
     art = FreeArtifact(note='0 成本算出来的', _provenance=ctx.free_provenance(prompts={'RULES': '判据表'}))
-    st.write_invalid(STYLE_REL, art, gates_skipped=['name_leak'])
+    st.write_invalid(PLAN_REL, art, gates_skipped=['name_leak'])
 
-    out = ArtifactStore(_ctx(base, paid=False)).promote_invalid(
-        STYLE_REL, FreeArtifact, **REVALIDATION)
+    out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
+        PLAN_REL, FreeArtifact, **REVALIDATION)
     now = _prov_on_disk(out)
     assert now['revalidated'] is True
     assert 'model' not in now, '0 成本产物提升上来不许长出一个 `model`'
@@ -1819,24 +1935,24 @@ def test_promotion_refuses_before_touching_anything_when_the_slot_is_taken(monke
     """
     base = _book()
     _ctx_, inv = _write_invalid(base, [])
-    rounds = base / '书名_123' / 'stage3' / '_rounds'
+    rounds = base / '书名_123' / 'stage4' / '_rounds'
     rounds.mkdir(parents=True)
-    (rounds / 'style_grounding.INVALID.r1.json').write_bytes(b'{"taken": true}')
+    (rounds / 'plan_chapters.INVALID.r1.json').write_bytes(b'{"taken": true}')
 
-    st = ArtifactStore(_ctx(base, paid=False))
+    st = ArtifactStore(_plan_ctx(base, paid=False))
     monkeypatch.setattr(ArtifactStore, '_round_on_disk', lambda self, rel: 1)
     with pytest.raises(PathRefused, match='一个字节都没动'):
-        st.promote_invalid(STYLE_REL, StyleGrounding, **REVALIDATION)
+        st.promote_invalid(PLAN_REL, PlanChapters, **REVALIDATION)
     assert inv.exists(), '`.INVALID` 被挪走了'
-    assert not st.exists(STYLE_REL), '正式稿落下去了，而调用方拿到的是一个异常'
-    assert sorted(q.name for q in rounds.iterdir()) == ['style_grounding.INVALID.r1.json'], \
+    assert not st.exists(PLAN_REL), '正式稿落下去了，而调用方拿到的是一个异常'
+    assert sorted(q.name for q in rounds.iterdir()) == ['plan_chapters.INVALID.r1.json'], \
         '归档目录变了——有人把「归档旧正式稿」挪到了占位检查之前'
 
 
 def test_promotion_without_an_invalid_is_a_terminal_state():
     with pytest.raises(UpstreamMissing):
-        ArtifactStore(_ctx(_book(), paid=False)).promote_invalid(
-            STYLE_REL, StyleGrounding, **REVALIDATION)
+        ArtifactStore(_plan_ctx(_book(), paid=False)).promote_invalid(
+            PLAN_REL, PlanChapters, **REVALIDATION)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1849,27 +1965,27 @@ def test_archiving_never_overwrites_an_existing_round():
     轮次号算错（`len(glob)+1` 那个式子的典型症状）时，这条是唯一会出声的地方。
     """
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    st.write(STYLE_REL, _style(ctx, habit='第一轮'))
-    st.archive_round(STYLE_REL)                       # → _rounds/style_grounding.r1.json
-    st.write(STYLE_REL, _style(ctx, habit='第二轮'))
+    st.write(PLAN_REL, _plan(ctx, marker='第一轮'))
+    st.archive_round(PLAN_REL)                       # → _rounds/plan_chapters.r1.json
+    st.write(PLAN_REL, _plan(ctx, marker='第二轮'))
     with pytest.raises(PathRefused, match='归档目标已存在'):
-        st.archive_round(STYLE_REL, round_no=1)
+        st.archive_round(PLAN_REL, round_no=1)
 
 
 def test_seen_rounds_counts_the_invalid_and_the_gaps():
     """`round` = **盘上见过的最大轮次 + 1**，含 `.INVALID` 与 `_rounds/`，缺号也算。"""
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    rounds = base / '书名_123' / 'stage3' / '_rounds'
+    rounds = base / '书名_123' / 'stage4' / '_rounds'
     rounds.mkdir(parents=True)
-    (rounds / 'style_grounding.r1.json').write_bytes(b'{}')
-    (rounds / 'style_grounding.r3.json').write_bytes(b'{}')       # ← r2 被人挪走了
-    assert st.seen_rounds(STYLE_REL) == {1, 3}
-    assert st.next_round(STYLE_REL) == 4, 'len(glob)+1 会返回 3，与现存的 r3 撞号'
+    (rounds / 'plan_chapters.r1.json').write_bytes(b'{}')
+    (rounds / 'plan_chapters.r3.json').write_bytes(b'{}')       # ← r2 被人挪走了
+    assert st.seen_rounds(PLAN_REL) == {1, 3}
+    assert st.next_round(PLAN_REL) == 4, 'len(glob)+1 会返回 3，与现存的 r3 撞号'
 
 
 def test_archive_can_keep_the_original_when_the_layer_needs_it():
@@ -1878,13 +1994,13 @@ def test_archive_can_keep_the_original_when_the_layer_needs_it():
     而「先抄一份再原地改写」的那几层需要它留着。
     """
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    p = st.write(STYLE_REL, _style(ctx))
-    st.archive_round(STYLE_REL, keep=True)
+    p = st.write(PLAN_REL, _plan(ctx))
+    st.archive_round(PLAN_REL, keep=True)
     assert p.exists()
-    st.archive_round(STYLE_REL, round_no=2)
+    st.archive_round(PLAN_REL, round_no=2)
     assert not p.exists()
 
 
@@ -1899,14 +2015,14 @@ def test_a_deleted_upstream_becomes_a_named_ghost_edge():
     原型的比对函数对这种条目**静默跳过** ⇒ 既不报错、也不报「不知道」。
     """
     base = _book()
-    ctx = _ctx(base)
+    ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
     st.read(Loose, UPSTREAM)
-    st.write(STYLE_REL, _style(ctx))
-    assert st.freshness(STYLE_REL).state == 'fresh'
+    st.write(PLAN_REL, _plan(ctx))
+    assert st.freshness(PLAN_REL).state == 'fresh'
 
     (base / '书名_123' / 'stage1' / 'main_text.json').unlink()
-    r = st.freshness(STYLE_REL)
+    r = st.freshness(PLAN_REL)
     assert (r.state, r.reason) == ('unknown', 'ghost')
     assert r.ghosts == (UPSTREAM,), '不点名 = 人无从判断这条边要不要重新挂钩'
 
@@ -1919,8 +2035,8 @@ def test_freshness_reads_raw_and_survives_an_artifact_that_no_longer_validates()
     让新鲜度依赖校验通过，等于在最需要它的那一刻把它关掉。
     """
     base = _book()
-    st = ArtifactStore(_ctx(base))
-    (base / '书名_123' / 'stage3').mkdir()
+    st = ArtifactStore(_plan_ctx(base))
+    (base / '书名_123' / 'stage4').mkdir()
     root_clean_sha1 = prov.content_sha1(
         (base / '书名_123' / 'stage0' / 'clean_text.txt').read_bytes())
     malformed = {
@@ -1930,22 +2046,22 @@ def test_freshness_reads_raw_and_survives_an_artifact_that_no_longer_validates()
             'inputs': {UPSTREAM: {'file': 'ffffffffff', 'consumed': None}},
         },
     }
-    (base / '书名_123' / 'stage3' / 'style_grounding.json').write_text(
-        json.dumps(encode_artifact(STYLE_REL, malformed), ensure_ascii=False),
+    (base / '书名_123' / 'stage4' / 'plan_chapters.json').write_text(
+        json.dumps(encode_artifact(PLAN_REL, malformed), ensure_ascii=False),
         encoding='utf-8',
     )
-    r = st.freshness(STYLE_REL)
+    r = st.freshness(PLAN_REL)
     assert (r.state, r.reason) == ('stale', 'file_changed')
     with pytest.raises(ArtifactUnreadable):
-        st.read(StyleGrounding, STYLE_REL)          # ← 同一份，过模型就是读不出来
+        st.read(PlanChapters, PLAN_REL)          # ← 同一份，过模型就是读不出来
 
 
 def test_a_bad_key_in_current_provenance_does_not_blow_up_the_report():
     """当前产物里的来源键仍可能损坏。**别让一条坏键把整份报告干掉**——
     「有一条边指向已删文件」不该升级成「报告出不来」。"""
     base = _book()
-    st = ArtifactStore(_ctx(base))
-    (base / '书名_123' / 'stage3').mkdir()
+    st = ArtifactStore(_plan_ctx(base))
+    (base / '书名_123' / 'stage4').mkdir()
     root_clean_sha1 = prov.content_sha1(
         (base / '书名_123' / 'stage0' / 'clean_text.txt').read_bytes())
     malformed = {
@@ -1956,9 +2072,9 @@ def test_a_bad_key_in_current_provenance_does_not_blow_up_the_report():
             }},
         },
     }
-    (base / '书名_123' / 'stage3' / 'style_grounding.json').write_text(
-        json.dumps(encode_artifact(STYLE_REL, malformed)), encoding='utf-8')
-    r = st.freshness(STYLE_REL)
+    (base / '书名_123' / 'stage4' / 'plan_chapters.json').write_text(
+        json.dumps(encode_artifact(PLAN_REL, malformed)), encoding='utf-8')
+    r = st.freshness(PLAN_REL)
     assert (r.state, r.reason) == ('unknown', 'ghost')
 
 
@@ -2000,7 +2116,7 @@ def test_the_ledger_keeps_two_counters_and_appends_lf_only():
     assert led.usage() is None, '一次调用都没有 ⇒ 键不在，不是一份全 0 的 usage'
 
     for cached in (False, True, True):
-        led.record(node='stage3.style', sid='1', model='m', code='c',
+        led.record(node='stage4.plan', sid='1', model='m', code='c',
                    cached=cached, cache_policy='default',
                    prompt_tokens=10, completion_tokens=5, reasoning_tokens=1)
     u = led.usage()
@@ -2015,7 +2131,7 @@ def test_the_ledger_keeps_two_counters_and_appends_lf_only():
 def test_the_ledger_reports_null_tokens_when_the_response_gave_none():
     """`null` = 这次响应没给 usage，**不是 0**（DeepSeek 实测会有不带 usage 的响应）。"""
     led = CostLedger()
-    led.record(node='stage3.style', sid='1', model='m', code='c',
+    led.record(node='stage4.plan', sid='1', model='m', code='c',
                cached=False, cache_policy='default')
     u = led.usage()
     assert u is not None and u.calls_made == 1
@@ -2043,7 +2159,7 @@ def test_the_context_takes_its_identity_from_the_directory():
 def test_opening_a_book_that_is_not_there_is_a_terminal_state():
     with pytest.raises(UpstreamMissing, match='先跑 stage1'):
         RunContext.open(Path(tempfile.mkdtemp()), '没有这本书', 'stage3.style',
-                        paid=True, write_ledger=False)
+                        paid=False, write_ledger=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2176,7 +2292,8 @@ def test_every_corpus_artifact_survives_a_write_read_round_trip(
     #   于是「这本书缺根」会伪装成一条形状回归。`Sandbox` 那里是会点名的 assert。
     box = sandbox.Sandbox(a.book_dir, ())
     try:
-        ctx = RunContext.open(box.root, box.sid, 'stage3.style',
+        node = producer_node(a.formal_rel) or 'stage4.plan'
+        ctx = RunContext.open(box.root, box.sid, node,
                               paid=True, write_ledger=False)
         st = ArtifactStore(ctx)
 
@@ -2233,15 +2350,15 @@ def test_the_waiver_switches_off_nothing_but_the_unknown_half(
     ⚠ 这不是重复已有的守卫：`.INVALID` 路径闸与全链根比对各自都有非语料测试，
     本条测的是**「豁免的作用域」**这条性质——全仓没有第二处守它。
     """
-    a = next((x for x in _CORPUS if x.formal_rel == STYLE_REL), None)
+    a = next((x for x in _CORPUS if x.formal_rel == PLAN_REL), None)
     corpus.declared_dependency(
-        a is not None, needs=f'任意一本书的 {STYLE_REL}',
-        produced_by='stage3.style', cost='付费')
+        a is not None, needs=f'任意一本书的 {PLAN_REL}',
+        produced_by='stage4.plan', cost='付费')
     obj = a.model.model_validate(corpus.load_current(a))
 
     box = sandbox.Sandbox(a.book_dir, ())
     try:
-        ctx = RunContext.open(box.root, box.sid, 'stage3.style',
+        ctx = RunContext.open(box.root, box.sid, 'stage4.plan',
                               paid=True, write_ledger=False)
         # ① `.INVALID` 路径闸（`novel/store.py:548-551`）：豁免不该让它放行。
         with pytest.raises(PathRefused):
@@ -2252,7 +2369,7 @@ def test_the_waiver_switches_off_nothing_but_the_unknown_half(
         #    测到的是「它记住了改之前那份」，不是这道闸。
         root = box.dir / sandbox.CHAIN_ROOT
         root.write_bytes(root.read_bytes() + '　'.encode('utf-8'))
-        moved = RunContext.open(box.root, box.sid, 'stage3.style',
+        moved = RunContext.open(box.root, box.sid, 'stage4.plan',
                                 paid=True, write_ledger=False)
         with pytest.raises(ProvenanceRefused, match='拒绝混根'):
             ArtifactStore(moved).write(a.formal_rel, obj)

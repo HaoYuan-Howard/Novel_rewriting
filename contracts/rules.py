@@ -296,17 +296,19 @@ def _validate(r: Rule, prompt_surfaces: dict[str, PromptSurface]) -> None:
     #    ⚠ 这一条正是 `fix` 存在的**全部理由**：写进 `note` 的散文没有任何东西在查它。
     if r.fix is not None:
         from contracts.invariants import NODES, VALUED_FLAGS  # 局部导入：避免反向依赖
-        if len(r.fix) < 2:
-            raise ValueError(
-                f'{r.rule}: fix={r.fix!r} 至少要 (节点, flag) 两格。'
-                f'只写节点名等于说「去跑一次默认路径」，而那对一条 0 成本修复路是假话'
-            )
+        if not r.fix:
+            raise ValueError(f'{r.rule}: fix 不能为空 tuple')
         node, *flags = r.fix
         spec = NODES.get(node)
         if spec is None:
             raise ValueError(
                 f'{r.rule}: fix 指的节点 {node!r} 不在 `NODES` 里。'
                 f'界面上那个「去修」按钮会指到一个跑不起来的地址'
+            )
+        if not flags and spec.paid:
+            raise ValueError(
+                f'{r.rule}: fix={r.fix!r} 指向付费节点默认路径，至少要有一个显式 flag。'
+                f'默认重跑只有在节点本身 paid=False 时才是一条可声明的确定性修复路'
             )
         flag_tokens: list[str] = []
         missing_values: list[str] = []

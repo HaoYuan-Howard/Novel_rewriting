@@ -86,10 +86,10 @@ def _clean_body(book: M.Book, entry: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、⭐⭐ 8 条 HARD，**每条一份会让它红的样本**
+# 一、⭐⭐ 7 条 HARD，**每条一份会让它红的样本**
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_eight_hard_judges_are_exactly_the_ones_we_have_samples_for():
+def test_the_seven_hard_judges_are_exactly_the_ones_we_have_samples_for():
     """守卫的守卫：**本层的 HARD 判据集合改了，下面样本就要跟着改。**
 
     多一条 HARD 而这里没有对应的反例，就又回到了「36 条 HARD 盘上 0 反例样本」那个欠账。
@@ -304,7 +304,7 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
     # 旧实现在 fact 侧剥「一 / 三」、成稿侧不剥，这份原样转抄
     # 会系统性假阴。反例要直接保留这两类数字词，不许退回不含数字的 happy path。
     fact = '她其实一直都知道那三笔钱是从公司账上挪出来的'
-    b = M.Book(title=book.title, ctx=book.ctx, style=book.style,
+    b = M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
                source_text=book.source_text,
                secrets=[{'secret_id': 'secret_x', 'fact': fact,
                          'character_known_by': [], 'setup_chapters': [],
@@ -322,7 +322,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
     """ctx 漏投 must_not_reveal 时，显式 reveal timeline 仍能拦截揭示章之前的字面泄密。"""
     fact = '她其实一直都知道那三笔钱是从公司账上挪出来的'
     synthetic = M.Book(
-        title=book.title, ctx=book.ctx, style=book.style,
+        title=book.title, ctx=book.ctx, measurable=book.measurable,
         source_text=book.source_text,
         secrets=[{
             'secret_id': 'secret_x', 'fact': fact,
@@ -342,26 +342,13 @@ def test_secret_timeline_uses_the_same_number_ruler(book):
     fact = '她其实一直都知道他是三皇子'
     secret = {'secret_id': 'secret_x', 'fact': fact, 'character_known_by': [],
               'setup_chapters': [], 'reader_reveal_events': [{'chapter': 9}]}
-    synthetic = M.Book(title=book.title, ctx=book.ctx, style=book.style,
+    synthetic = M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
                        source_text=book.source_text, secrets=[secret])
     fs = checks.book_findings(synthetic, rows=[], bodies={9: fact},
                               inv_numbers=[], inv_names=[])
     timeline = next(f for f in fs if f.rule == 'secret_timeline')
     assert '出现于 [9]' in timeline.detail
     assert '没有判别力' not in timeline.detail
-
-
-def test_style_plot_scan_uses_the_same_number_ruler(book, monkeypatch):
-    """风格块是第五个消费方，不得偷偷退回只对 fact 剥数字的旧尺子。"""
-    fact = '她其实一直都知道他是三皇子'
-    secret = {'secret_id': 'secret_x', 'fact': fact, 'character_known_by': [],
-              'setup_chapters': [], 'reader_reveal_events': [{'chapter': 9}]}
-    synthetic = M.Book(title=book.title, ctx=book.ctx, style=book.style,
-                       source_text=book.source_text, secrets=[secret])
-    monkeypatch.setattr(prompts, 'style_block', lambda *_args, **_kwargs: fact)
-    fs = checks.book_findings(synthetic, rows=[], bodies={},
-                              inv_numbers=[], inv_names=[])
-    assert 'style_block_carries_plot' in {f.rule for f in fs}
 
 
 def test_secret_unknown_says_it_could_not_check_instead_of_passing(book, entry):
@@ -379,7 +366,7 @@ def test_dialogue_halved_only_fires_on_the_open_book_arm(book, entry):
     """
     src_ord = (entry.get('from_source_ordinals') or [1])[0]
     src = '「一。」「二。」「三。」「四。」「五。」「六。」「七。」「八。」' * 3
-    b = M.Book(title=book.title, ctx=book.ctx, style=book.style,
+    b = M.Book(title=book.title, ctx=book.ctx, measurable=book.measurable,
                source_text={**book.source_text, src_ord: src}, secrets=book.secrets)
     e = dict(entry, source_chars=100, budget_chars=100)
     body = _clean_body(book, entry)          # 一句直接引语都没有
@@ -408,7 +395,7 @@ def test_the_two_phases_read_one_and_the_same_rule_table():
 
 
 def test_every_registered_rule_has_exactly_one_producer():
-    """⭐ 47 条判据**一条不多一条不少**地被实现覆盖。
+    """⭐ 46 条判据**一条不多一条不少**地被实现覆盖。
 
     ⚠ 少列一条，那一条在报告上就变 `skipped`——而 `skipped`（实现未被调用）与
     「跑了没命中」是**两种颜色**；多列一条，`builder` 会抛（那是「注册了没实现」的镜像病）。
@@ -418,10 +405,11 @@ def test_every_registered_rule_has_exactly_one_producer():
     assert len(mine) == len(set(mine)), '同一条判据被列了两次'
     assert set(mine) == reg, (f'注册了没实现：{sorted(reg - set(mine))}；'
                               f'实现了没注册：{sorted(set(mine) - reg)}')
-    # 47 = 原 48 减去随 `stage5.semantic` 节点一并下线的 `semantic_secret_leak` /
+    # 46 = 原 48 减去随 `stage5.semantic` 节点一并下线的 `semantic_secret_leak` /
     # `semantic_secret_coverage`（2026-08-17 用户裁决），再加 2026-08-22 随「默认全书闭卷」
-    # 一起立的 `arm_split_report`（`R-7.6c`：走开卷从此是例外，例外必须常驻留痕）。
-    assert len(reg) == 47
+    # 一起立的 `arm_split_report`，再减去 Stage5 停止消费定性画像后失去对象的
+    # `style_block_carries_plot`。
+    assert len(reg) == 46
 
 
 def test_the_unver_five_must_say_why_they_cannot_check():
@@ -488,28 +476,18 @@ def test_the_closed_book_arm_never_touches_the_source_text(book, entry):
     assert src[:120] not in deep.given
 
 
-def test_chapter_local_style_projection_keeps_global_measures(book, entry):
-    local = {
-        'source_ordinal': entry['from_source_ordinals'][0],
-        'voice': {key: f'本章-{key}' for key in book.style['voice']},
-        'surface_habits': ['本章局部手法'],
-    }
-    style = {**book.style, 'chapter_styles': [local]}
-    got = prompts.style_for_sources(style, entry['from_source_ordinals'])
-    assert got['surface_habits'] == ['本章局部手法']
-    assert got['measurable'] == book.style['measurable']
-    assert all(value.startswith('本章-') for value in got['voice'].values())
+def test_stage5_book_has_no_qualitative_style_surface(book):
+    """Book 结构上只拿正文机械投影，不能再把 Stage3 整包偷偷递给 prompt。"""
+    import dataclasses
 
-
-def test_chapter_local_style_never_falls_back_to_global_when_mapping_is_missing(book, entry):
-    local = {
-        'source_ordinal': 999,
-        'voice': book.style['voice'],
-        'surface_habits': ['别章手法'],
+    assert 'style' not in {field.name for field in dataclasses.fields(book)}
+    assert set(book.measurable) == {
+        'avg_sentence_chars', 'avg_paragraph_chars', 'paragraph_sep_chars',
+        'dialogue_ratio_applicable', 'dialogue_ratio', 'quote_styles',
+        'chapter_chars', 'per_chapter_avg_sentence',
     }
-    with pytest.raises(ValueError, match='拒绝回退'):
-        prompts.style_for_sources(
-            {**book.style, 'chapter_styles': [local]}, entry['from_source_ordinals'])
+    assert set(book.measurable['chapter_chars']) == {'avg'}
+    assert set(book.measurable['per_chapter_avg_sentence']) == {'min', 'max'}
 
 
 def test_deep_overlap_high_guards_the_arms_identity_not_the_prose(book, entry):

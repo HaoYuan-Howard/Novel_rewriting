@@ -1037,8 +1037,8 @@ def _report(ctx: RunContext, store: ArtifactStore, mode: str, *,
 
     ⚠⚠ **书级/跨章那 14 条落 `unver` 而不是 `skipped`**（`checks.check(phase='write')`）。
     两者是两种颜色：`skipped` 的措辞是「实现未被调用」，用在这里是**一句假话**——
-    它们的实现在，只是这一相判不了。而一份 47 行全 `skipped` 的报告徽章是 `fail`，
-    读起来像「全查过全没过」，实际上什么都没说。**要看全书 47 行，跑 `stage5.review`。**
+    它们的实现在，只是这一相判不了。而一份 46 行全 `skipped` 的报告徽章是 `fail`，
+    读起来像「全查过全没过」，实际上什么都没说。**要看全书 46 行，跑 `stage5.review`。**
 
     ⚠ 这一次一章都没碰（比如 `--revalidate` 一份 `.INVALID` 都没有）⇒ 逐章那几条
     也落 `unver`：「这一次没有任何一章被判过」与「判过、干净」必须分得开。

@@ -124,8 +124,8 @@ stage1/partition_report.json  {…9 个字段…}                ← 见 §三
 
 | 层 | 怎么用 | 空了会怎样 |
 |---|---|---|
-| stage3 | `_provenance.inputs` 记着 `stage1/hook_copy.json`；产出 `hook_style` 七项（`HOOK_KEYS`）+ `hook_copy_text` | 文案写法七项无源可量 |
-| stage6 | 三候选文案参照原作文案段的写法与收尾形态（`R-9.4`） | 参照物没有 |
+| stage3 | `_provenance.inputs` 记着 `stage1/hook_copy.json`；确定性产出 `measurable.hook` 机械块 | 原作文案为空时无法形成机械基线；该情形已由 `R-1.12` 上游拒绝 |
+| stage6 | 三候选直接读取原作文案，参照其信息顺序与收尾形态，并另取 Stage3 hook 五叶机械投影（`R-9.4` / `R-9.10`）；不消费定性画像 | 参照物没有 |
 | stage7 | 成书 = `文案 \n\n 1 \n\n 第1章正文 …`（`R-10.8`） | 成书第一段是空的 |
 
 ⇒ **让它带着一个 `null` 往下跑，等于把一次本该在 0 成本层红掉的失败，推迟到花钱之后。**

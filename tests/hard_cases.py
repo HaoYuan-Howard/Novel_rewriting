@@ -29,7 +29,7 @@ def _hook(text: str, *, src_hook: str | None = None, characters: dict | None = N
     from novel.stages.stage6 import checks, prompts
     return checks.hook_findings(
         text, mat=prompts.Material(blocks=(given,)), secrets=[], arc=None,
-        characters=characters or {}, src_hook=src_hook, style_hook=None,
+        characters=characters or {}, src_hook=src_hook, hook_mechanical=None,
         quote_problems=[])
 
 

@@ -16,21 +16,19 @@ def run_initial_extract(
     blueprint_ctx: RunContext,
     blueprint_client: LlmClient,
     style_ctx: RunContext,
-    style_client: LlmClient,
 ) -> tuple[CheckReport, StyleGrounding]:
-    # 逐章风格抽取必须先消费 global 的专名表做正文脱敏；让它与 global 并发会把
-    # “没拿到名表”伪装成安全输入。global 落稳后，两个逐章扇出仍可彼此并发。
-    extract.run_global(global_ctx, global_client)
+    # Stage3 v2 只读 Stage1，和 Stage2 global 是两条真正独立的支路；逐章蓝图仍须
+    # 等 global 正式落稳。先同时启动 global + 免费机械测量，再在 global 返回后跑蓝图。
     with ThreadPoolExecutor(max_workers=2) as pool:
-        blueprint_future = pool.submit(
-            extract.request_blueprints, blueprint_ctx, blueprint_client)
-        style_future = pool.submit(style.run_style, style_ctx, style_client)
+        global_future = pool.submit(extract.run_global, global_ctx, global_client)
+        style_future = pool.submit(style.run_style, style_ctx)
 
     report: CheckReport | None = None
     artifact: StyleGrounding | None = None
     errors: list[Exception] = []
     try:
-        blueprint_batch = blueprint_future.result()
+        global_future.result()
+        blueprint_batch = extract.request_blueprints(blueprint_ctx, blueprint_client)
         report = extract.finish_blueprints(
             blueprint_ctx, blueprint_client, blueprint_batch)
     except Exception as exc:

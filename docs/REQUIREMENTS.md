@@ -33,8 +33,9 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
 - [ ] 生成并提交无正文 manifest：逐书记录 sid、source hash、章节数、预期产物与版本、代码身份、
   冻结命令、ledger 聚合及精确 skip allowlist。终审成本以 `<base>/_service/ledger.jsonl` 为
   唯一权威源，不与产物 usage 或日志混加。
-  ⚠ 冻结 dispatch 是 **16 条**（2 书 × 8 付费节点，`CURRENT_CORPUS_BOOKS ×
-  CURRENT_CORPUS_PAID_NODES` 现算）。`stage6.semantic` 随 `--advisory` 删除后只带
+  ⚠ 冻结 dispatch 是 **14 条**（2 书 × 7 付费节点，`CURRENT_CORPUS_BOOKS ×
+  CURRENT_CORPUS_PAID_NODES` 现算）；Stage3 v2 是免费机械节点，不进入付费 dispatch。
+  `stage6.semantic` 随 `--advisory` 删除后只带
   `--base --yes`，只剩 `stage5.write` 还带 `--deep 1,2,3 --shallow-rest`。
 - [ ] 对同一盘面运行 `--require-corpus` 的完整 `corpus or not corpus` 套件；任何书目/产物减少、
   版本漂移、ledger 不闭合或新增 skip 都必须失败。
@@ -79,7 +80,8 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   再看结果。⇒ runner 已于 2026-08-19 重建为 `tools/effort_ab.py`（**进程内**覆盖
   `NodeSpec.effort`，仓里那一格恒 `None` ⇒ 实验臂与交付跑物理上不可能混）。
   在付费实测满足质量、UNVER/INFO、fallback/wire/error 和 completion 门之前，
-  `stage3.style` / `stage7.rename` 继续保持默认 high（实测结果见下）。
+  `stage7.rename` 继续保持默认 high（实测结果见下）。Stage3 v2 已删除 LLM 定性抽取，
+  不再存在 effort 档位裁决。
   ⇒ **`stage7.rename` 这一半 2026-08-24 已裁：维持 high，不降 low。**
   依据是本节点 17 次历史调用的账本读数——两档**正文产出量几乎相同**
   （high 成功 1,225 / low 1,203 token），差别全在 reasoning（11,064 vs 5,729），
@@ -90,14 +92,15 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   改动落在 `MAX_TOKENS` 而不是 `effort`：16000 → 64000，让 high 档大概率不再落梯，
   交付的映射恒出自 high 臂。⚠ 代价是真跑飞时浪费从 16k 变 64k，见
   `novel/stages/stage7/rename.py::MAX_TOKENS` 那段注释里的回读约定。
-  ⇒ **`stage3.style` 那一半仍待裁决**，本次没有一并处理。
+  ⇒ 旧 `stage3.style` effort 臂的历史数据保留在下文；现役 v2 为零 LLM，已不再是活动待决项。
   ⚠⚠ **这一条是全链最大的降本杠杆，而它此前没有量。** 2026-08-18 实测（`.llm_cache/` 里
   1639 份带 `usage` 的真实响应，0 成本可复算）：completion 13,031,022 token 里 reasoning 占
   **11,457,627（87.9%）**，净成品输出只有 1,573,395；写作类调用（n=720）reasoning 中位 9109 而
   成品中位 1213。**输出侧是成本主体、reasoning 一项约占八成，输入侧优化的天花板只有约 7%**
   ⇒ 缓存/裁材料那一侧无论怎么做都换不来量级收益，只有 effort 降档能。候选优先序按收益：
   `stage5.write` 的 **shallow 臂**（它做的是照原文改写而不是闭卷创作，却与 deep 臂同付 high）
-  → `stage7.rename` → `stage3.style`。⚠ 判官（`stage6.semantic`）与 `stage2.global` **不进候选**：
+  → `stage7.rename`。旧 Stage3 定性抽取的历史候选已由 v2 产品裁决退役。⚠ 判官
+  （`stage6.semantic`）与 `stage2.global` **不进候选**：
   2026-08-15 的 A/B 已裁决判官永不换廉价配置、关思考在 `stage2.global` 三轮全灭
   （见 `docs/BACKEND_CONTRACT.md` §十）。⚠ 那次 A/B 测的是**模型**与 **thinking 开关**两个维度，
   `reasoning_effort` 是**第三个维度、从未测过**——不要拿那次结论替本条销账。
@@ -123,7 +126,8 @@ n=11 ⇒ 任何结论只能写成「**这本书上没观察到质量塌陷**」�
 正确形状：先全 high 跑通一遍当基线（它同时是交付品），再对每个候选**复制一份 base、
 只把该节点重跑成 low、上游产物逐字节相同**，用 `tools/ab_compare.py --arm` 双 base 对账。
 
-**候选与顺序**：`stage7.rename` → `stage3.style`。
+**候选与顺序（历史预注册）**：`stage7.rename` → 旧 `stage3.style`。Stage3 v2 已是免费机械节点，
+这条历史 effort 对照不再对应现役生产面。
 排除 `stage6.semantic` 与 `stage2.global`（2026-08-15 已裁决，见 `docs/BACKEND_CONTRACT.md` §十）。
 
 ⚠ **收益最大的候选 `stage5.write` shallow 臂今天够不着，它是本条真正的施工前置。**
@@ -343,7 +347,8 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
 - [ ] 把 `edge_hole` 从「≥30 字未覆盖区间」升级成段号精确判据。
 
 - [ ] 改 `NodeSpec.effort` 默认值需用户裁决（`tests/test_invariants.py` 现钉着
-      `stage3.style` / `stage7.rename` 恒 `None`，改默认要同批改那两行断言）。
+      `stage7.rename` 恒 `None`，改默认要同批改对应断言）。Stage3 v2 是免费节点，
+      它的 inert `effort=None` 不再构成档位待办。
 - [ ] **降档路径没有任何可观测**：`novel/llm/client.py::LlmClient.ask_json` 三道内容闸失败时
       只做 `cache.evict` + 降一档，既不产 observe 事件也不写日志，`errors` 只在**所有档全灭**时
       才随 `LlmFailed` 出现 ⇒ 事后无法回答「为什么降的档」。补一条带 `why` 的 observe 事件是
@@ -440,8 +445,9 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
 
 - **stage5 user 块重排**（把跨章不变的块提到 user 最前）：预期约 3–4%。没做的理由是它会把
   「本章任务」从第 2 块挪到靠后，**有位置效应**，超出「零语义风险」这一档，必须一次真跑证明
-  没写坏成稿。⚠ 另需先判断 `novel/stages/stage5/prompts.py::style_block` 到底变不变——
-  有 `chapter_styles` 时它本就是逐章投影，那部分挪上去不会带来任何命中。
+  没写坏成稿。⚠ **2026-08-24 现役边界已取代这条旧前提**：Stage5 不再有定性
+  `style_block` / `chapter_styles` 消费面，只剩精确机械投影与 `shape_block`；若以后重启本项，
+  必须按当前 blocks 重新量恒定/逐章字节，不能沿用这里的旧命中估计。
 - **shallow 臂裁材料**：预期约 1%。没做的理由是 `novel/stages/stage5/prompts.py::Material` 的
   `given` **同时是 `invented_number` / `invented_name` 两条判据的参照集**
   （`novel/stages/stage5/checks.py`）。直接裁下发块会让原本有依据的数字和人名被判成「自造」——
@@ -473,11 +479,11 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
       排序取最后一条 `outcome=='ok'` 的 `reasoning_effort`/`thinking`。实测读数
       （无情道 flash 臂 10/23 章产自降档档位、含 deep 臂 ch1/ch3；把夫君 8/19；
       pro 对照 0/23）目前只能从 ledger 手算，任何报告里都没有。
-- [ ] **两处原文短语被逐字带进成书**（无情道 ch12，`stage3.micro_quote` 报 3 处：
-      1 处设计内保真点、2 处写手照抄了 `style_grounding.json` 的文风举例）。
-      pro 臂同样 2/3 ⇒ 流水线固有特征不是 flash 退步。修它要
-      `stage3.style --apply-edit`，代价是下游缓存全废、stage4+stage5 整层重付——
-      已披露未修，修不修由用户裁决。
+- [ ] **两处原文短语被逐字带进旧成书**（无情道 ch12；旧 `stage3.micro_quote` 曾报 3 处：
+      1 处设计内保真点、2 处写手照抄了 v1 定性举例）。pro 臂同样 2/3 ⇒ 不是 flash
+      单独退步。Stage3 v2 已删除定性举例与 style edit，不能再推荐退役的上游修复命令；
+      若这份旧书仍要交付，只能在 current-schema 全链重建后核对是否自然消失，或经现役
+      Stage5 正文人工编辑面修目标章并重走下游闭包。
 - [ ] 未测项：flash 修掉「空正文降档」（`MAX_SAMPLES_PER_RUNG`）之后的真实
       `high` 档能力——此前 3 本里 2 本的 `stage4.plan` 从未在 `high` 档被评估过。
 
@@ -693,7 +699,7 @@ Fisher 单侧 p≈0.21 ⇒ **方向对，但没到显著**。三条已经站得�
 | `stage5.write`（**已逐章**） | 66 | 30 | **45.5%** | 1 335 |
 | `stage4.plan`（全书一次） | 30 | 13 | 43.3% | 12 024 |
 | `stage2.blueprint`（**已逐章**） | 109 | 25 | 22.9% | 5 610 |
-| `stage3.style` | 215 | 20 | 9.3% | 1 310 |
+| 旧 `stage3.style`（已退役） | 215 | 20 | 9.3% | 1 310 |
 
 **最短的那个节点率最高**，按 `max_tokens` 分桶也不单调（16k 桶 23.2% / 64k 桶 5.1% /
 96k 桶 37.1%），`low` 档在每个节点上都是 0 次。⇒ 这是 `flash @ high/think` 的**档位行为**，
@@ -727,8 +733,9 @@ Fisher 单侧 p≈0.21 ⇒ **方向对，但没到显著**。三条已经站得�
       合契约」是可判的证据，自然语言那边「这段是答案还是推敲」判不出来。
       ⇒ 结构上就不给 `ask_text` 开这条路。别拿本条的结论去覆盖它。
 - [ ] ⚠ **紧迫性已经降了一档**：2026-08-22 同日 `stage4.plan` 钉死 pro（pro 全表
-      `answer_lost` 0/249）⇒ 这条路现在的受益者是仍跑 flash 的 stage2/3/5，
-      而它们逐章重采一次只要约 5.7k output。**这条路的真实收益要等下一次 flash 整跑才有读数。**
+      `answer_lost` 0/249）⇒ 这条路现在的受益者是仍跑 flash 的 Stage2/Stage5；
+      Stage3 v2 已无模型响应可救。逐章重采一次约 5.7k output，**真实收益要等下一次
+      flash 整跑才有读数。**
 
 验收：`novel/llm/client.py` 模块 docstring ① 与 `novel/llm/transport.py::ChatResponse`
 的成因两句已同批改口（2026-08-22）；采纳路径同日落地并由

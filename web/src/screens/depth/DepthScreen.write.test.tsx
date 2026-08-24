@@ -33,8 +33,6 @@ const enums = {
   hinge_groups: {},
   style_words: [],
   invent: { allow: [], forbid: [], principle: '' },
-  voice_keys: [],
-  hook_keys: [],
   job_kinds: {},
   actions: [{
     kind: 'stage5.write',

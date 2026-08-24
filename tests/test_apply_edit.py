@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""三条 `--apply-edit` 人工修订路（stage3 / stage4 / stage6）——BE-02 的完成判据。
+"""两条 `--apply-edit` 人工修订路（stage4 / stage6）——BE-02 的完成判据。
 
 ⚠ **stage2 那条在 `tests/test_stage2_secret_edit.py`**（Stage2 typed facts 订正入口）：
 它同样守下面这四件事，但**全程合成语料**——本文件的四条都要盘上有对应产物，
 而 secret 的越界章号、未知 `secret_id` 那几个反例在真语料上造不出来。
 两个文件不是重复：同一把尺子，一个量真产物、一个量构造得出来的反例。
 
-一把尺子四件事，三层逐一钉住：
+一把尺子四件事，两层逐一钉住：
   · **同一判定落点**：人工稿走与生成稿完全相同的判据（没有免检写口）；
-  · **闸门语义与生成稿一致**：stage3/4 任何 HARD ⇒ `.INVALID` 不覆盖正式稿，
+  · **闸门语义与生成稿一致**：stage4 任何 HARD ⇒ `.INVALID` 不覆盖正式稿，
     stage6 不整拦（本层闸门是「无一干净候选才拦」）、红行照报；
   · **轮次归档**：旧轮进 `_rounds/`；
   · **来源账不伪造**：`rewrite_provenance` 继承 `prompts`/`model`、标 `partial_rewrite`。
@@ -55,17 +55,6 @@ def _drafts_of(book: str) -> tuple[str, ...]:
         a.rel for a in corpus.iter_artifacts()
         if a.book_dir == book and a.rel.startswith('stage5/')
         and '_rounds' not in a.rel and a.rel.endswith('.json')))
-
-
-@pytest.fixture(params=_corpus_case(
-    _first_book('stage3/style_grounding.json'),
-    label='stage3-corpus',
-    reason='盘上没有 stage3 语料——本组没在查，不是「查过没事」',
-))
-def box3(request):
-    s = sandbox.Sandbox(request.param)
-    yield s
-    s.close()
 
 
 def _stage4_book() -> str | None:
@@ -123,74 +112,6 @@ def box6(request):
     s = sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
     yield s
     s.close()
-
-
-# ── stage3 ──────────────────────────────────────────────────────────────────
-
-def test_stage3_apply_edit_patches_walk_the_same_judge_and_remeasure(box3):
-    """补丁落盘 = 同一判据 + `measurable` 照盘上 stage1 重算 + 归档 + partial_rewrite。"""
-    from contracts.rules import REGISTRY
-    from novel.stages.stage3 import style
-
-    # 先把盘上的 measurable 改坏一格——apply-edit 必须把它按 stage1 重算回来，
-    # 否则人工路会带着一份伪造的实测继续往下走。
-    data = box3.read('stage3/style_grounding.json')
-    tampered = data['measurable']['body']['chars']
-    data['measurable']['body']['chars'] = tampered + 999
-    box3.write('stage3/style_grounding.json', data)
-
-    habits = list(data['surface_habits'])
-    box3.write('stage3/style_edit.json', {'surface_habits': list(reversed(habits))})
-
-    ctx = RunContext.open(str(box3.root), box3.sid, 'stage3.style', paid=False)
-    art, report = style.run_apply_edit(ctx)
-
-    assert list(art.surface_habits) == list(reversed(habits))
-    assert art.measurable.body.chars == tampered, 'measurable 没有被照 stage1 重算'
-    after = box3.read('stage3/style_grounding.json')
-    assert after['_provenance'].get('partial_rewrite') == '--apply-edit'
-    before_prov = data['_provenance']
-    assert after['_provenance']['prompts'] == before_prov['prompts'], '继承的 prompts 被重盖'
-    assert after['_provenance']['model'] == before_prov['model']
-    assert list((box3.dir / 'stage3' / '_rounds').glob('style_grounding.r*.json')), \
-        '旧轮没有归档'
-    assert {r.rule for r in report.rules} == {r.rule for r in REGISTRY.of_stage('stage3')}
-
-
-def test_stage3_apply_edit_with_hard_goes_to_invalid_not_formal(box3):
-    """人工补丁同样过闸：引号字面在语料里找不到 ⇒ `habit_quote` HARD ⇒ `.INVALID`。
-
-    ⚠ 与付费首轮不同，这里**不许自动触发付费自救**——0 成本编辑不代扣钱。
-    """
-    from novel.stages.stage3 import style
-
-    before = (box3.dir / 'stage3' / 'style_grounding.json').read_bytes()
-    box3.write('stage3/style_edit.json',
-               {'surface_habits': ['爱用「这句原话绝无可能出现在任何语料正文里」收尾']})
-    ctx = RunContext.open(str(box3.root), box3.sid, 'stage3.style', paid=False)
-    with pytest.raises(GateBlocked, match='人工画像补丁'):
-        style.run_apply_edit(ctx)
-    assert (box3.dir / 'stage3' / 'style_grounding.json').read_bytes() == before, \
-        '正式产物被一份带 HARD 的人工稿覆盖了'
-    assert (box3.dir / 'stage3' / 'style_grounding.INVALID.json').exists()
-
-
-def test_stage3_apply_edit_requires_a_previous_artifact(box3):
-    from novel.stages.stage3 import style
-
-    box3.write('stage3/style_edit.json', {'surface_habits': ['短句收尾。']})
-    (box3.dir / 'stage3' / 'style_grounding.json').unlink()
-    ctx = RunContext.open(str(box3.root), box3.sid, 'stage3.style', paid=False)
-    with pytest.raises(TerminalState, match='修订路'):
-        style.run_apply_edit(ctx)
-
-
-def test_stage3_apply_edit_refuses_a_missing_edit_file(box3):
-    from novel.stages.stage3 import style
-
-    ctx = RunContext.open(str(box3.root), box3.sid, 'stage3.style', paid=False)
-    with pytest.raises(TerminalState, match='决策集'):
-        style.run_apply_edit(ctx)
 
 
 # ── stage4 ──────────────────────────────────────────────────────────────────

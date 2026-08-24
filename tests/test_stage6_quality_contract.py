@@ -12,6 +12,7 @@ from contracts.invariants import (
     HOOK_APPROACHES, HOOK_CURRENT_APPROACHES, HOOK_RECIPE, HOOK_RETIRED_APPROACHES,
     HOOK_SLOTS,)
 from contracts.schema.stage6 import HookResponse
+from novel.consumption import projection_for, stage6_style
 from novel.stages.stage6 import checks, prompts
 
 
@@ -74,7 +75,9 @@ def test_generation_system_prioritizes_retention_and_removes_spoiler_gate():
     assert '第一目标只有一个：让目标读者看完文案后立刻继续读第一章' in system
     assert '原始文案是创作金标准' in system
     assert '剧透不是违规' in system
-    assert 'surface_habits' in system
+    for retired in ('surface_habits', 'hook_style', 'book_voice',
+                    'opening_chapter_styles', '逐章声音'):
+        assert retired not in system
     assert '不得取后期高潮或结局' not in system
     assert '故事最终如何收场' not in system
     for approach in HOOK_CURRENT_APPROACHES:
@@ -117,7 +120,7 @@ def test_invented_number_compares_values_and_ignores_success_false_positive():
             '所有事实都来自下发材料，这一句只是把文案补到正常长度。')
     findings = checks.hook_findings(
         text, mat=mat, secrets=[], arc=None, characters={}, src_hook=None,
-        style_hook=None, quote_problems=[])
+        hook_mechanical=None, quote_problems=[])
     assert not [finding for finding in findings
                 if finding.rule == 'hook_invented_number']
 
@@ -136,7 +139,7 @@ def test_hook_secret_literal_uses_the_shared_number_ruler_and_own_bytes():
         arc=None,
         characters={},
         src_hook=None,
-        style_hook=None,
+        hook_mechanical=None,
         quote_problems=[],
     )
     literal = next(item for item in findings if item.rule == 'hook_secret_literal')
@@ -177,7 +180,7 @@ def test_story_map_consumes_segments_keeps_slots_and_strips_private_rationale():
         assert 'rationale' not in rows[0][key]
 
 
-def test_material_carries_source_full_truth_story_map_and_body_habits():
+def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanical():
     ctx = {
         'chapters': [
             {
@@ -204,7 +207,7 @@ def test_material_carries_source_full_truth_story_map_and_body_habits():
     style = {
         'hook_style': {'relation_to_body': '更高浓度'},
         'voice': {'pace': '快', 'mode_variation': {'danger': '句子更短'}},
-        'surface_habits': ['一句一段', '用人物反应收尾'],
+        'surface_habits': ['绝不能进入提示词的定性哨兵'],
         'chapter_styles': [
             {'source_ordinal': 2, 'voice': {'stance': '冷'}},
             {'source_ordinal': 3, 'voice': {'stance': '急'}},
@@ -222,6 +225,7 @@ def test_material_carries_source_full_truth_story_map_and_body_habits():
                 'dialogue_ratio_applicable': True,
                 'quote_styles': ['“”'],
             },
+            'body': {'avg_sentence_chars': 99, 'quote_styles': ['定性哨兵']},
         },
     }
     grounding = {
@@ -251,10 +255,77 @@ def test_material_carries_source_full_truth_story_map_and_body_habits():
     }
     assert 'fact_refs' not in packet['whole_story_map'][0]['chapter_goal']
     assert packet['story_truth']['arc']['ending'] in user
-    assert packet['style']['book_surface_habits'] == style['surface_habits']
-    assert packet['style']['book_voice']['mode_variation'] == {'danger': '句子更短'}
-    assert [item['source_ordinal'] for item in packet['style']['opening_chapter_styles']] == [2]
+    expected = {
+        'chars': 100,
+        'avg_sentence_chars': 10,
+        'avg_paragraph_chars': 12,
+        'quote_styles': ['“”'],
+        'dialogue_ratio': 0.2,
+    }
+    assert packet['source_hook_mechanical'] == expected == material.hook_mechanical
+    assert packet['source_hook_target_chars'] == 100
+    assert packet['source_hook_shape'] == {
+        '句子形态': '极短句', '段落形态': '极短段（多为一句一段）'}
+    assert 'style' not in packet and 'measurable' not in packet
+    for sentinel in ('更高浓度', 'danger', '定性哨兵', 'stance', '远期'):
+        assert sentinel not in user
     assert packet['rewritten_opening'][0]['text'] == '重写后的第一章正文。'
+
+
+def test_stage6_style_projection_is_exactly_the_five_hook_mechanical_leaves():
+    source = {
+        'voice': {'register_tone': '定性哨兵'},
+        'surface_habits': ['定性哨兵'],
+        'chapter_styles': [{'source_ordinal': 1, 'voice': {'x': '定性哨兵'}}],
+        'hook_style': {'end_question': '定性哨兵'},
+        'measurable': {
+            'body': {'avg_sentence_chars': 99},
+            'hook': {
+                'chars': 100,
+                'paragraphs': 8,
+                'sentences': 10,
+                'avg_sentence_chars': 10,
+                'avg_paragraph_chars': 12,
+                'paragraph_sep_chars': 2,
+                'dialogue_ratio': 0.2,
+                'dialogue_ratio_applicable': True,
+                'quote_styles': ['“”'],
+            },
+        },
+        '_provenance': {'code': '不消费'},
+    }
+    expected = {'hook': {
+        'chars': 100,
+        'avg_sentence_chars': 10,
+        'avg_paragraph_chars': 12,
+        'quote_styles': ['“”'],
+        'dialogue_ratio': 0.2,
+    }}
+    assert stage6_style(source) == expected
+
+    for key in ('voice', 'surface_habits', 'chapter_styles', 'hook_style',
+                '_provenance'):
+        edited = json.loads(json.dumps(source, ensure_ascii=False))
+        edited[key] = {'任意': '变化'}
+        assert stage6_style(edited) == expected, key
+    for key in expected['hook']:
+        edited = json.loads(json.dumps(source, ensure_ascii=False))
+        edited['measurable']['hook'][key] = 'changed'
+        assert stage6_style(edited) != expected, key
+
+    assert stage6_style({'measurable': '旧坏形状'}) == {'hook': {
+        'chars': None,
+        'avg_sentence_chars': None,
+        'avg_paragraph_chars': None,
+        'quote_styles': None,
+        'dialogue_ratio': None,
+    }}
+
+
+def test_stage6_hook_and_semantic_freshness_share_the_same_minimal_projection():
+    hook_project = projection_for('stage6.hook', 'stage3/style_grounding.json')
+    semantic_project = projection_for('stage6.semantic', 'stage3/style_grounding.json')
+    assert hook_project is semantic_project is stage6_style
 
 
 def test_weak_fact_attribution_metric_compares_gift_phrase_to_story_map():
@@ -286,7 +357,7 @@ def test_source_copy_guard_now_rejects_any_twenty_content_character_window():
         arc=None,
         characters={},
         src_hook=source,
-        style_hook=None,
+        hook_mechanical=None,
         quote_problems=[],
     )
     reuse = [item for item in findings if item.rule == 'hook_reuses_source']
@@ -306,7 +377,7 @@ def test_body_transcription_guard_reports_normalized_lcs_and_both_raw_ranges():
         arc=None,
         characters={},
         src_hook=None,
-        style_hook=None,
+        hook_mechanical=None,
         quote_problems=[],
     )
 

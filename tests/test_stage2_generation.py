@@ -121,36 +121,38 @@ def test_stage2_uses_one_concurrent_call_per_chapter_up_to_32(chapters, expected
     assert peak == expected_peak
 
 
-def test_global_precedes_parallel_blueprint_and_anti_leak_style(monkeypatch):
+def test_global_and_free_stage3_run_in_parallel_then_blueprint_waits(monkeypatch):
     barrier = threading.Barrier(2)
     entered = []
     global_done = threading.Event()
 
     def run_global(*_args):
         entered.append('global')
+        barrier.wait(timeout=2)
         global_done.set()
 
-    def paid_after_global(name, result):
-        def run(*args):
-            assert global_done.is_set(), f'{name} 在全局专名表落盘前启动了'
-            entered.append(name)
-            barrier.wait(timeout=2)
-            if name == 'style':
-                assert len(args) == 2, 'Stage 3 已收敛为唯一逐章实现，不再携带实验臂参数'
-            return result
-        return run
+    artifact = object()
+
+    def run_style(*args):
+        assert len(args) == 1, 'Stage3 v2 只收 RunContext，不再携带 LLM client'
+        entered.append('style')
+        barrier.wait(timeout=2)
+        return artifact
+
+    def request_blueprints(*_args):
+        assert global_done.is_set(), 'blueprints 在全局事实底座落盘前启动了'
+        entered.append('blueprints')
+        return {'batch': 1}
 
     monkeypatch.setattr(extract, 'run_global', run_global)
-    monkeypatch.setattr(
-        extract, 'request_blueprints', paid_after_global('blueprints', {'batch': 1}))
-    artifact = object()
-    monkeypatch.setattr(style, 'run_style', paid_after_global('style', artifact))
+    monkeypatch.setattr(extract, 'request_blueprints', request_blueprints)
+    monkeypatch.setattr(style, 'run_style', run_style)
     report = object()
     monkeypatch.setattr(extract, 'finish_blueprints', lambda *_a: report)
-    got = initial_extract.run_initial_extract(*([object()] * 6))
+    got = initial_extract.run_initial_extract(*([object()] * 5))
     assert got == (report, artifact)
-    assert entered[0] == 'global'
-    assert set(entered[1:]) == {'blueprints', 'style'}
+    assert set(entered[:2]) == {'global', 'style'}
+    assert entered[-1] == 'blueprints'
 
 
 def _response_global() -> dict:

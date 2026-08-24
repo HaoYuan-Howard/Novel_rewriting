@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """Stage 6 开篇文案生成 prompt 与唯一的材料投影。
 
-2026-08-15 三书 A/B 证明，当前文案质量的主要瓶颈不是模型能力，而是模型看不见
-原作文案的有效结构、全书兑现和正文实际执行的 ``surface_habits``。本模块因此把
-原作文案作为创作金标准，把全书事实/故事地图作为真实性边界，把开篇成稿与正文手法
-作为声线边界。剧透不再是违规；真正的边界是不能改变人物身份、关系、关键因果或结果。
+本模块把原作文案作为创作金标准，把全书事实/故事地图作为真实性边界，把重写开篇
+作为正文声线参照。Stage3 只提供文案段的五叶机械基线；定性 voice、surface habits、
+逐章风格和 hook style 均不再消费。剧透不再是违规；真正的边界是不能改变人物身份、
+关系、关键因果或结果。
 
 ``Material.given`` 仍是机械词面探针的唯一「给过什么」全集。prompt 与探针必须消费
 同一份 blocks；分开拼装会让发明人名/数字的探针误报或漏报。
@@ -20,20 +20,21 @@ from collections import Counter
 from contracts.invariants import (
     HOOK_APPROACH_NOTES, HOOK_CURRENT_APPROACHES, HOOK_RECIPE, slot_of,)
 from novel.core.bands import ending_shape, hook_shape_band, sep_band_of_text
+from novel.consumption import stage6_style
 from novel.llm.prompts import fill, with_json_shape
 
 
 HOOK_SYS = """\
 你是中文商业网文的资深开篇文案作者。你的第一目标只有一个：让目标读者看完文案后立刻继续读第一章。
 
-你会看到原始文案、完整故事事实、全书逐章故事地图、重写后的开篇正文，以及正文实际使用的声音和写作手法。
+你会看到原始文案、完整故事事实、全书逐章故事地图、重写后的开篇正文，以及原作文案的机械基线。
 你知道全书，不等于必须把全书都说出来；由你选择披露多少。剧透不是违规，也不是目的，只是一种吸引读者的
 工具：能增强期待就用，会把悬念彻底说死就不用。
 
 【原始文案是创作金标准】
 - 保留它真正有效的钩子机制：信息出场顺序、误导与揭示、喜剧或危险节拍、对白密度、反差、最后一击的功能；
 - 不得照抄其措辞；不要出现与原始文案连续 20 个内容字符相同的片段。短小的通用称谓和必要设定可以自然重合；
-- 新文案必须与重写正文像同一本书，优先执行逐章声音与 surface_habits，不要写成编辑部剧情简介。
+- 新文案不要写成编辑部剧情简介。
 
 【文案体裁自由】
 - 允许压缩时间线、把数章合成一个高张力预告、从后期结果倒叙、为真实关系和真实事件重写新台词、
@@ -49,7 +50,7 @@ HOOK_SYS = """\
   【单换行】就用**单个换行**。⚠ **绝不允许把一条候选写成没有任何换行的一整段**——
   归一化只换得了分隔符、造不出段落边界，这一条落盘前会被硬闸拦下，整轮三条候选一起作废；
 - `source_hook_ending_shape` 说的是原作文案段最后一行的收尾形态（引号台词 / 问句 / 陈述 / 省略号）：
-  新文案的最后一行照这个形态收，它就是 `hook_style.end_question` 那句描述可被验证的那一面。
+  新文案的最后一行照这个形态收。
 
 产出三条真正不同的候选。**候选的身份是位置**（c1 / c2 / c3），按下面这份配方逐条写，
 输出顺序就是位置顺序：
@@ -131,22 +132,12 @@ class Material:
     source_hook: str = ''
     story_truth: dict = field(default_factory=dict)
     story_map: tuple[dict, ...] = field(default_factory=tuple)
-    style_packet: dict = field(default_factory=dict)
+    hook_mechanical: dict = field(default_factory=dict)
 
     @property
     def given(self) -> str:
         """机械词面探针的「模型实际看见过什么」全集。"""
         return '\n'.join(self.blocks)
-
-
-def voice_for_hook(style: dict) -> dict:
-    """正文的整份书级 voice。
-
-    旧设计删除 ``mode_variation`` 是因为文案只有一段；A/B 表明问题恰恰在文案与正文
-    执行感不一致。它现在与 ``surface_habits``、开篇逐章风格一起作为可选择的声线证据，
-    由模型判断哪些情境变化与所选场面有关。
-    """
-    return dict(style.get('voice') or {})
 
 
 def story_map(ctx: dict) -> list[dict]:
@@ -181,53 +172,38 @@ def story_map(ctx: dict) -> list[dict]:
     return out
 
 
-def _opening_source_ordinals(ctx: dict, upto: int) -> set[int]:
-    out: set[int] = set()
-    for chapter in ctx.get('chapters') or []:
-        if int(chapter.get('output_ordinal') or 0) <= upto:
-            out.update(int(x) for x in (chapter.get('from_source_ordinals') or []) if int(x) > 0)
-    return out
-
-
-def style_packet(style: dict, ctx: dict, upto: int) -> dict:
-    """与开篇正文同源的风格执行包，而非只有抽象的书级 voice。"""
-    source_ordinals = _opening_source_ordinals(ctx, upto)
-    chapter_styles = [
-        item for item in (style.get('chapter_styles') or [])
-        if int(item.get('source_ordinal') or 0) in source_ordinals
-    ]
-    return {
-        'hook_style': style.get('hook_style'),
-        'book_voice': voice_for_hook(style),
-        'book_surface_habits': style.get('surface_habits'),
-        'opening_chapter_styles': chapter_styles,
-        'source_hook_shape': hook_shape_band(_hook_meas(style)),
-        'measurable': style.get('measurable'),
-    }
+def hook_mechanical(style: dict) -> dict:
+    """取出与 provenance/freshness 完全同型的五叶文案机械基线。"""
+    projected = stage6_style(style)
+    if not isinstance(projected, dict):
+        return {}
+    hook = projected.get('hook')
+    return dict(hook) if isinstance(hook, dict) else {}
 
 
 def build_material(*, title: str, ctx: dict, style: dict, grounding: dict,
                    source_hook: str, lead: list[dict], missing: list[int],
                    upto: int) -> Material:
-    """组装 A/B 已验证的完整创作包。"""
+    """组装不含 Stage3 定性画像的完整创作包。"""
     truth = {
         'entities': grounding.get('entities'),
         'canon': grounding.get('canon'),
         'arc': grounding.get('arc'),
     }
     full_map = story_map(ctx)
-    styles = style_packet(style, ctx, upto)
+    mechanical = hook_mechanical(style)
     packet = {
         'title': title,
         'source_hook': source_hook,
-        'source_hook_target_chars': ((_hook_meas_raw(style) or {}).get('chars')),
+        'source_hook_target_chars': mechanical.get('chars'),
+        'source_hook_mechanical': mechanical,
+        'source_hook_shape': hook_shape_band(mechanical) if mechanical else None,
         # ⚠ 这两项与 `hook_para_sep`（HARD）/ `hook_ending_shape` 消费的是**同一个函数**。
         # 少了它们，判据就在查一件 prompt 没说过的事——实测一本书三条候选**全部**被
         # `hook_para_sep` 拦下（模型把文案写成没有换行的一整段），整轮付费产出作废。
         # 同 `hook_shape_band` 的那条注释，只是那次修的是均值档、这次是离散档。
         'source_hook_para_sep': sep_band_of_text(source_hook),
         'source_hook_ending_shape': ending_shape(source_hook),
-        'style': styles,
         'story_truth': truth,
         'whole_story_map': full_map,
         'rewritten_opening': [
@@ -247,19 +223,8 @@ def build_material(*, title: str, ctx: dict, style: dict, grounding: dict,
         source_hook=source_hook,
         story_truth=truth,
         story_map=tuple(full_map),
-        style_packet=styles,
+        hook_mechanical=mechanical,
     )
-
-
-def _hook_meas_raw(style: dict) -> dict | None:
-    return ((style.get('measurable') or {}).get('hook')) or None
-
-
-def _hook_meas(style: dict):
-    """``measurable.hook`` → 强类型模型，避免字段漂移静默选错形态档。"""
-    from contracts.schema.stage3 import MeasurableBlock
-    raw = _hook_meas_raw(style)
-    return MeasurableBlock.model_validate(raw) if raw else None
 
 
 def build_user(mat: Material) -> str:

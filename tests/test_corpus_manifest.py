@@ -582,44 +582,46 @@ def test_long_path_probe_measures_the_host_and_leaves_nothing_behind():
     assert set(Path(tempfile.gettempdir()).glob('lp-*')) == before
 
 
-def test_default_collection_keeps_schema_gates_and_carrier_regressions(tmp_path):
+def test_default_collection_keeps_schema_gates_and_carrier_regressions(
+        tmp_path_factory):
     """防止以后再用整文件 ``corpus`` 把可合成验证的契约静默排除。"""
     root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     env.pop('NOVEL_OUTPUT', None)
     env.pop('NOVEL_CORPUS_MANIFEST', None)
-    # A nested tmp_path would deliberately trip the Windows path preflight;
-    # give the collection subprocess its own short repository-local base.
-    with tempfile.TemporaryDirectory(dir=root, prefix='.c') as short_base:
-        result = subprocess.run(
-            [
-                sys.executable, '-m', 'pytest', '--collect-only', '-vv',
-                '-m', 'not corpus', '--basetemp', short_base,
-                'tests/test_stage3_free_paths.py',
-                'tests/test_stage4.py',
-                'tests/test_stage4_repair.py',
-                'tests/test_stage6.py',
-                'tests/test_wontfix_semantic.py',
-                'tests/test_stage7.py',
-                'tests/test_api_edits.py',
-                'tests/test_api_screens.py',
-                'tests/test_views_stage2.py',
-                'tests/test_views_stage3.py',
-                'tests/test_views_stage4.py',
-                'tests/test_views_stage5.py',
-                'tests/test_views_stage6.py',
-                'tests/test_views_stage7.py',
-            ],
-            cwd=root,
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            check=False,
-        )
+    # 外层 pytest 的 basetemp 已经过同一套 Windows MAX_PATH 预检；嵌套收集应复用
+    # 那个短根，而不是回到可能很长的 worktree。必须再分一个唯一子目录：pytest
+    # 启动时会清空它收到的 --basetemp，直接传外层根会把仍在运行的外层临时区删掉。
+    short_base = tmp_path_factory.mktemp('c')
+    result = subprocess.run(
+        [
+            sys.executable, '-m', 'pytest', '--collect-only', '-vv',
+            '-m', 'not corpus', '--basetemp', str(short_base),
+            'tests/test_stage3_free_paths.py',
+            'tests/test_stage4.py',
+            'tests/test_stage4_repair.py',
+            'tests/test_stage6.py',
+            'tests/test_wontfix_semantic.py',
+            'tests/test_stage7.py',
+            'tests/test_api_edits.py',
+            'tests/test_api_screens.py',
+            'tests/test_views_stage2.py',
+            'tests/test_views_stage3.py',
+            'tests/test_views_stage4.py',
+            'tests/test_views_stage5.py',
+            'tests/test_views_stage6.py',
+            'tests/test_views_stage7.py',
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        check=False,
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     default_nodes = (
-        'test_synthetic_check_only_runs_in_the_default_suite',
+        'test_preview_run_and_check_all_use_the_same_numbers',
         'test_system_prompt_contains_every_current_style_word',
         'test_synthetic_stage4_response_satisfies_every_reference_hard_rule',
         'test_targeted_plan_repair_failure_writes_invalid_without_overwriting_formal',

@@ -36,8 +36,6 @@ const enums = {
   hinge_groups: {},
   style_words: [],
   invent: { allow: [], forbid: [], principle: '' },
-  voice_keys: [],
-  hook_keys: [],
   job_kinds: {},
   actions: [{
     kind: 'stage5.write',
@@ -70,7 +68,7 @@ function mount(screenName: 'style' | 'stage4') {
 describe('GateBar 的动作分类', () => {
   it('没有 spawn 的闸门不画成「未标注」——它只写 _service 的审批记录', async () => {
     mount('style')
-    const button = await screen.findByRole('button', { name: /确认文风/ })
+    const button = await screen.findByRole('button', { name: /确认机械基线/ })
     expect(button.textContent).not.toContain('未标注')
     expect(button.textContent).not.toContain('写盘')
   })
@@ -98,7 +96,7 @@ describe('GateBar 的动作分类', () => {
     ))
 
     renderRoute(<GateBar screen="style" actionOnly />)
-    fireEvent.click(await screen.findByRole('button', { name: /确认文风/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /确认机械基线/ }))
 
     expect(await screen.findByText('python -m novel.cli state book-1')).toBeVisible()
     expect(screen.getByText(/确认失败：盘面需要先恢复/)).toBeVisible()

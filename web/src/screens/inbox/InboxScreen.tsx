@@ -18,7 +18,7 @@ const LAYERS: { kind: CheckKind; where: string; screen: string; chaptered?: bool
   { kind: 'stage0', where: '剔除审阅', screen: 'stage0' },
   { kind: 'stage1', where: '分章报告', screen: 'stage1' },
   { kind: 'stage2', where: '全局设定', screen: 'global' },
-  { kind: 'stage3', where: '文风画像', screen: 'style' },
+  { kind: 'stage3', where: '机械基线', screen: 'style' },
   { kind: 'stage4', where: '计划屏', screen: 'stage4', chaptered: true },
   { kind: 'stage5', where: '成稿屏', screen: 'stage5', chaptered: true },
   { kind: 'stage6', where: '文案屏', screen: 'stage6' },

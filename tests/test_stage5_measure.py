@@ -61,8 +61,8 @@ def _source_of(sid: str) -> dict[int, str]:
 
 
 def _quote_style_of(sid: str):
-    meas = STYLE[sid].get('measurable') or {}
-    return M.target_quote_style(meas, ''.join(_source_of(sid).values()))
+    body = ((STYLE[sid].get('measurable') or {}).get('body') or {})
+    return M.target_quote_style(body, ''.join(_source_of(sid).values()))
 
 
 def _sep_of(sid: str):
@@ -132,17 +132,28 @@ def test_the_three_counters_add_up_instead_of_overwriting():
     assert total.quote_problems == ['闭无开'], '结论也要留着，它是判据的输入'
 
 
-@needs_corpus
 def test_a_book_whose_quotes_were_stripped_gets_no_quote_normalization():
     """⚠ `dialogue_ratio_applicable=False` 的书**不归引号**（返回 `None`，不猜）。
 
     那几本的引号是**入库前被人工删掉的**（语料缺陷，不是作者选择）⇒ 没有「本书的
     引号体」可言，硬归一等于按一个不存在的基准去改写正文。
     """
-    assert M.target_quote_style({'body': {'dialogue_ratio_applicable': False}}, '「甲」') is None
-    assert M.target_quote_style({'body': {'dialogue_ratio_applicable': True}},
+    assert M.target_quote_style({'dialogue_ratio_applicable': False}, '「甲」') is None
+    assert M.target_quote_style({'dialogue_ratio_applicable': True},
                                 '「甲」「乙」') == ('「」', '『』')
     assert M.target_quote_style(None, '「甲」') is None, '没有实测就没有基准'
+
+
+def test_minimal_body_baseline_keeps_quote_and_paragraph_normalization_idempotent():
+    text = '“先关门。”\n她把灯拨亮。'
+    first, account = M.normalize_chapter(
+        text, quote_style=('「」', '『』'), sep_chars=2.0)
+    assert '「先关门。」' in first and '\n\n' in first
+    assert account.quotes_fixed > 0 and account.paras_fixed == 1
+    second, again = M.normalize_chapter(
+        first, quote_style=('「」', '『』'), sep_chars=2.0)
+    assert second == first
+    assert again.counters() == {'punct_fixed': 0, 'quotes_fixed': 0, 'paras_fixed': 0}
 
 
 # ── 二、读数逐值相同 ──────────────────────────────────────────────────────

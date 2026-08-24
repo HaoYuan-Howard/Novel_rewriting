@@ -75,7 +75,14 @@ function raw<T>(file: string): T {
 }
 
 type LegacyArtifact = Omit<Artifact, 'display_freshness' | 'condition'>
-type LegacyStyle = Omit<Stage3Style, 'condition'>
+type LegacyStyle = Omit<Stage3Style, 'condition'> & {
+  voice?: unknown
+  voice_extra?: unknown
+  surface_habits?: unknown
+  hook_style?: unknown
+  source_id?: unknown
+  bands_error?: unknown
+}
 type LegacyNovel = Omit<
   NovelOverview,
   'stages' | 'stage_done' | 'stage_reviewable' | 'chapters_done' | 'summary'
@@ -88,8 +95,18 @@ type LegacyNovel = Omit<
 const PIPELINE_STAGES = Array.from({ length: 8 }, (_, i) => 'stage' + i)
 
 function currentMockStyle(legacy: LegacyStyle): Stage3Style {
+  // `src/mocks` 是冻结的历史证据，不篡改原文件；假后端只投影当前 v2 对外形状。
+  const {
+    voice: _voice,
+    voice_extra: _voiceExtra,
+    surface_habits: _surfaceHabits,
+    hook_style: _hookStyle,
+    source_id: _sourceId,
+    bands_error: _bandsError,
+    ...current
+  } = legacy
   return {
-    ...legacy,
+    ...current,
     condition: legacy.invalid_exists
       ? 'invalid'
       : !legacy.exists
@@ -758,7 +775,7 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage1.partition', label: 'stage1 分章', paid: false },
   { node: 'stage2.global', label: 'stage2 全书级抽取', paid: true },
   { node: 'stage2.blueprint', label: 'stage2 逐章抽取', paid: true },
-  { node: 'stage3.style', label: 'stage3 文风画像', paid: true },
+  { node: 'stage3.style', label: 'stage3 机械基线', paid: false },
   { node: 'stage4.plan', label: 'stage4 重构计划', paid: true },
   { node: 'stage4.context', label: 'stage4 写作上下文组装', paid: false },
   { node: 'stage5.write', label: 'stage5 逐章写作', paid: true },

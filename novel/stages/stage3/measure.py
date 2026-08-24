@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-measure.py —— 把两块实测拼成本层的 `measurable{}`。
+"""把 Stage1 两块文本测成 Stage3 v2 的 ``measurable``。
 
 【为什么是两块而不是一块】`R-4.2`：**正文与开篇文案段分开测、互不污染**。
 文案段的情绪浓度通常远高于正文，拿它的调子去描述正文就错了。
@@ -10,17 +9,21 @@ measure.py —— 把两块实测拼成本层的 `measurable{}`。
 """
 from __future__ import annotations
 
+from contracts.invariants import STAGE3_MEASUREMENT_CONTRACT
 from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage3 import Measurable
 from novel.core.measure import measure, measure_body
 from novel.errors import ArtifactUnreadable
+
+# 对外保留一个短名，生产与测试都不得手写版本字面。
+MEASUREMENT_CONTRACT = STAGE3_MEASUREMENT_CONTRACT
 
 
 def measure_all(main_text: MainText, hook: HookCopy) -> Measurable:
     """两份上游 → 本层的 `measurable{}`。**确定性，0 成本，可重复。**
 
     ⚠ `hook` 是**必填**的：`R-1.12` 已把「没有开篇文案段」的书挡在 stage1，
-    走不到这一层（`stage3.md` §三「`hook_style|null` 这个类型已作废」）。
+    走不到这一层；v2 的 ``measurable.hook`` 因而保持必填。
     ⇒ **别在本层留兜底分支**——留了就是一条永不执行、也永不被验证的路（`R-4.6`）。
     """
     hook_block = measure(hook_text_of(hook))
@@ -34,14 +37,3 @@ def measure_all(main_text: MainText, hook: HookCopy) -> Measurable:
 def hook_text_of(hook: HookCopy) -> str:
     """开篇文案段的正文。**唯一取法**——两处各写一遍 `.text.strip()` 就会有两个答案。"""
     return (hook.text or '').strip()
-
-
-def corpus_of(main_text: MainText, hook: HookCopy) -> str:
-    """判「摘抄原文」用的**归一后**语料：全书正文 + 文案段。
-
-    ⚠ 归一（去标点/空白）不是优化，是必要的：**LLM 常改写标点**
-    （半角逗号→全角），不归一会让长段摘抄从检测下漏过去。
-    ⚠ 文案段也要进语料：`hook_style` 那一半描述的正是它，摘抄它同样违约。
-    """
-    from novel.core.text import norm
-    return norm(''.join(s.text for s in main_text.root) + hook_text_of(hook))

@@ -4,10 +4,8 @@
 accounting.py —— 记账键的出口。**一张会炸的表。**
 
 【它存在的那一句话】`Q-1`：**记账不是终点，报出来才是。**
-原型 13 个记账键里 6 个 0 出口——stage2 的 8 个有 5 个没有出口、
-stage3 的 3 个（`attempts` / `revalidated` / `gates_skipped`）**一个都没有**，
-而它们记的恰好是最该被人看见的三件事（这份稿第几次才产对的 / 是不是被重判提升上来的 /
-哪几条阻断级判据当时没跑成）。
+历史原型 13 个记账键里曾有 6 个 0 出口；本表由那次事故建立。Stage3 v2 已删除
+LLM attempt / repair / INVALID 提升面，只留下免费机械 provenance，因此不再声明那三笔历史账。
 
 【三条判定，各消灭一种已发生的故障】见 `docs/schema/_report.md` §六：
   · 产地记了而表里没有 ⇒ **`AccountingKeyUnregistered`**（记了一笔谁也读不到的账）
@@ -78,16 +76,8 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
                        '盘上的 span 不是模型给的那个数，'
                        '「模型切得准」与「差 1 段、代码补上了」只有这笔账分得开）'),
     ),
-    # ⚠⚠ **这三个键就是 `stage3.md` §五 记的那笔账**：实跑三本 `--check-only`，
-    #    报告里 `attempts` / `revalidated` / `gates_skipped` **一行都没有**，
-    #    而它们记的恰好是最该被人看见的三件事。这一格把账还上。
-    'stage3': (
-        AccountingSpec('attempts', '这份稿第几次才产对的？返工改了什么？'),
-        AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
-        # 第三个尤其要紧：它是判据 36 那整套设计的**唯一痕迹**，而「闸门没跑成」
-        # 与「闸门跑过没事」正是 `Q-2` 要求必须能区分的两件事。
-        AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
-    ),
+    # Stage3 v2 无 LLM attempt、repair、INVALID 提升或人工编辑账；空元组是显式声明。
+    'stage3': (),
     # ⚠⚠ `params` 是**原型记了、而全仓没有一个读者**的那个键（`stage4.md` §3.3）：
     #    `structure_changed` / `structure_units` 两条 HARD 拿**当前**的分组函数去量，
     #    从不读它——**每一次都在拿新尺子量旧布**。本层给了它两个出口：
@@ -110,7 +100,7 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     #    （「引号配对异常、未归一、留着交人工」），已升成判据 `quote_unbalanced`。
     #    把一条结论塞进记账块，就是它既没有出口、也没有守卫的原因。
     # ⚠ **刻意不声明 `revalidated` / `gates_skipped`**：前者由 `promoted()` 写进
-    #    `_provenance` 而本层的报告按**这一次跑了什么**报（判据那 47 行由验收相报）；
+    #    `_provenance` 而本层的报告按**这一次跑了什么**报（判据那 46 行由验收相报）；
     #    后者本层一条都不会跳（判据全是确定性的，没有「缺料所以没跑」那一支）。
     #    声明一个结构上永远记不上的键，只会让报告上恒挂一行「未记录」。
     'stage5': (

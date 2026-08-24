@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-bands.py —— 实测数字 → **定性档位词**。喂给抽取器的是档位词，不是数值。
+"""机械测量 → 人读档位词。
 
-【根因 F-013·也是 `R-4.3`】既给「权威数字」又禁止复述数字，是**一对自相冲突的指令**
-——模型只能靠复述数字来证明自己遵守了自洽要求。
-⇒ 档位词本身就是我们要它写进描述的形态词，数字则只留 `measurable` 一个落点。
-⚠ 那一条在需求表里标的是 `结构` 而不是 `HARD`：抽取侧的插值表里**只有档位词键**，
-实测数值**不在参数里**——发不出去不是因为有人在查，是因为没有那个变量。
-
-档位阈值是网文短篇的通用启发式，**不针对任何一本书**。
+原始数字只落在 Stage3 v2 ``measurable``；本模块提供纯派生展示与下游 prompt 所需的
+最小档位，不生成、保存或恢复任何定性文风画像。档位阈值是网文短篇的通用启发式，
+**不针对任何一本书**。
 """
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from typing import Any
 
 from contracts.invariants import SEP_BANDS
-from contracts.schema.stage3 import Measurable, MeasurableBlock
+from contracts.schema.stage3 import Measurable, MeasurableBlock, MeasurableBody
 from novel.core.normalize import normalize_paragraphs as _normalize_paragraphs
 
 #: 句子/段落的档位阈值：**唯一落点**。
@@ -37,28 +34,44 @@ def band(value: float, cuts: list[tuple[int | None, str]]) -> str:
     return next(word for hi, word in cuts if hi is None or value < hi)
 
 
-def bands(meas: Measurable) -> dict[str, str]:
-    """实测数字 → 发给抽取器的那张档位表。
+def _field(value: MeasurableBody | Mapping[str, Any] | object, key: str) -> Any:
+    """同一把档位尺同时接 typed Stage3 body 与 Stage5 的最小 dict 投影。"""
+    return value.get(key) if isinstance(value, Mapping) else getattr(value, key)
 
-    ⚠⚠ **这份输出的每一个字都进 prompt**，所以它的措辞是契约的一部分：
-    改一个字，全部存量 `style_grounding.json` 的 `_provenance.prompts` 指纹当场对不上、
-    被报成 stale——那是一次**假回归**（判据 28）。
+
+def body_bands(body: MeasurableBody | Mapping[str, Any]) -> dict[str, str]:
+    """正文九叶机械投影 → Stage5 使用的五项档位。
+
+    ⚠ 这里只读 ``stage5_style`` 保留的九个叶子；尤其不接 ``measurable.hook``。
+    键的顺序与原 ``bands()`` 前五项逐字相同，后者复用本函数，避免抽取侧与写作侧
+    各自维护一份阈值或措辞。
     """
-    b, h = meas.body, meas.hook
-    out = {
-        '句子形态': band(b.avg_sentence_chars, SENT_BANDS),
-        '段落形态': band(b.avg_paragraph_chars, PARA_BANDS),
+    chapter_chars = _field(body, 'chapter_chars')
+    per_chapter = _field(body, 'per_chapter_avg_sentence')
+    dialogue_ratio_applicable = _field(body, 'dialogue_ratio_applicable')
+    quote_styles = _field(body, 'quote_styles')
+    return {
+        '句子形态': band(_field(body, 'avg_sentence_chars'), SENT_BANDS),
+        '段落形态': band(_field(body, 'avg_paragraph_chars'), PARA_BANDS),
         '对白形态': (
             '无引号对白体（全书不用引号，对白比无法按引号统计）'
-            if not b.dialogue_ratio_applicable
-            else band(b.dialogue_ratio, [(0.15, '对白稀少'), (0.3, '对白中等'), (None, '对白密集')])
-            + f"（引号体：{'/'.join(b.quote_styles)}）"),
-        '章篇幅': band(b.chapter_chars.avg, [(600, '短章'), (1500, '中等篇幅章'), (None, '长章')]),
+            if not dialogue_ratio_applicable
+            else band(_field(body, 'dialogue_ratio'), [
+                (0.15, '对白稀少'), (0.3, '对白中等'), (None, '对白密集')])
+            + f"（引号体：{'/'.join(quote_styles)}）"),
+        '章篇幅': band(_field(chapter_chars, 'avg'), [
+            (600, '短章'), (1500, '中等篇幅章'), (None, '长章')]),
         '章间形态差异': (
             '章间句长形态差异明显'
-            if b.per_chapter_avg_sentence.max >= 1.5 * max(b.per_chapter_avg_sentence.min, 1)
+            if _field(per_chapter, 'max') >= 1.5 * max(_field(per_chapter, 'min'), 1)
             else '各章句长形态接近'),
     }
+
+
+def bands(meas: Measurable) -> dict[str, str]:
+    """完整 Stage3 机械基线 → API 展示用的六项人读档位。"""
+    b, h = meas.body, meas.hook
+    out = body_bands(b)
     if h:
         ratio = h.avg_sentence_chars / max(b.avg_sentence_chars, 1)
         out['文案段形态'] = (band(h.avg_sentence_chars, SENT_BANDS) + '；相对正文'
@@ -66,14 +79,14 @@ def bands(meas: Measurable) -> dict[str, str]:
     return out
 
 
-def hook_shape_band(hook_meas: MeasurableBlock | None) -> dict[str, str] | None:
+def hook_shape_band(
+    hook_meas: MeasurableBlock | Mapping[str, Any] | None,
+) -> dict[str, str] | None:
     """文案段自己的【句子 + 段落】档位。给 stage6 下发用。
 
-    【为什么不并进 `bands()['文案段形态']`】那一项的消费方是 **stage3 自己的 prompt**
-    （抽取器收的是 `bands()` 整份）。往里加一项会改动 stage3 的 prompt 文本，
-    于是已跑过的 `style_grounding.json` 的 `_provenance.prompts` 指纹当场对不上、
-    被报成 stale——**那是一次假回归**（判据 28）。这里另起一个函数，
-    `bands()` 的输出逐字节不变，而阈值仍然共用 `SENT_BANDS`/`PARA_BANDS`（判据 25）。
+    它与 ``bands()['文案段形态']`` 分开，是因为 Stage6 需要文案自身的句/段两维，
+    而完整展示项还包含相对正文的比较。两者共用 ``SENT_BANDS`` / ``PARA_BANDS``，
+    阈值仍只有一个落点。
 
     实测动机：三个候选文案全被模型写成**一整段**（162/178/185 字/段），
     而本书文案段是 16.4 字/段（一句一段）。`hook_shape` 判据抓到了，
@@ -81,8 +94,8 @@ def hook_shape_band(hook_meas: MeasurableBlock | None) -> dict[str, str] | None:
     """
     if not hook_meas:
         return None
-    return {'句子形态': band(hook_meas.avg_sentence_chars or 0, SENT_BANDS),
-            '段落形态': band(hook_meas.avg_paragraph_chars or 0, PARA_BANDS)}
+    return {'句子形态': band(_field(hook_meas, 'avg_sentence_chars') or 0, SENT_BANDS),
+            '段落形态': band(_field(hook_meas, 'avg_paragraph_chars') or 0, PARA_BANDS)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,7 +117,7 @@ def sep_band_of_text(text: str | None) -> str:
     「段间有没有空行」是一个**离散、精确**的性质；把它平均成一个浮点数再卡阈值，
     那一步才是引入 bug 的地方。
 
-    ⚠ 上游那个 off-by-one **本轮不修**：`paragraph_sep_chars` 被 stage3/4/5 一路消费，
+    ⚠ 上游那个 off-by-one **本轮不修**：`paragraph_sep_chars` 被 Stage3/5 一路消费，
     改分母会动到**所有书所有产物的指纹**，远超本轮范围。
     它的触发条件很具体：**段数 ≤ 3 的文本会被判成单换行**。
     正文章节段数都在几十以上所以现在不咬人，而**文案本来就短**——所以本层必须绕开它。
@@ -125,9 +138,8 @@ _CLOSE_QUOTES = '」”』’"'
 def ending_shape(text: str | None) -> str | None:
     """文本最后一行的收尾形态 → `ENDING_SHAPES` 之一（没有内容行时 `None`）。
 
-    这是 `hook_style.end_question`（一条**自由文本**描述，逐书下发给模型）
-    **唯一可确定性检测的投影**：不去解析那段自由文本，而是从原作文案段里量出
-    同一个量，两边比**形态**（判据 11：验收判据用结构不变量，不要用关键词表）。
+    生成提示和验收都从原作文案段字节量出同一个量，两边比**形态**；不经过已经
+    退役的 Stage3 定性描述（判据 11：验收判据用结构不变量，不要用关键词表）。
 
     ⚠ **判定顺序是有意的**，`引号台词` 优先于 `问句`：原作里就有既是台词又以问号收尾的
     （`“不然我怎么遇到你就变坏了呢？”`），而「用一句角色台词收尾」与「用叙述者的反问收尾」

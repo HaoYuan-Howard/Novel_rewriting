@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE3_STYLE_EDIT, STAGE4_PLAN_EDIT, STAGE6_HOOK_EDIT,
+    STAGE2_GLOBAL_EDIT, STAGE4_PLAN_EDIT, STAGE6_HOOK_EDIT,
     STAGE7_NAME_MAP_EDIT,
 )
 from contracts.schema import decode_artifact, encode_artifact
@@ -61,7 +61,7 @@ CHAIN_ROOT = 'stage0/clean_text.txt'
 #: ⚠ **名单从 `contracts/artifacts.py` 派生，不在这里手抄第二份**——
 #:   「沙箱漏一条上游边」这个形状到 2026-08-18 已经出现三次：
 #:   `stage0/clean_text.txt`（17 条红）、`stage7/name_map_edit.json`、`stage2/global_edit.json`。
-HUMAN_EDITS = (STAGE2_GLOBAL_EDIT, STAGE3_STYLE_EDIT, STAGE4_PLAN_EDIT,
+HUMAN_EDITS = (STAGE2_GLOBAL_EDIT, STAGE4_PLAN_EDIT,
                STAGE6_HOOK_EDIT, STAGE7_NAME_MAP_EDIT)
 
 

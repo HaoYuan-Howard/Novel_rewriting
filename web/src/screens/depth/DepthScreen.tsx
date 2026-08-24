@@ -77,7 +77,7 @@ export function DepthScreen() {
           </div>
         </div>
         <div className="flex items-center gap-8">
-          <GateChip ok={!!doc?.gate.s3} label="stage3 文风" />
+          <GateChip ok={!!doc?.gate.s3} label="stage3 机械基线" />
           <GateChip ok={!!doc?.gate.s4} label="stage4 计划" />
         </div>
       </header>
@@ -158,7 +158,7 @@ export function DepthScreen() {
                 className="ml-auto"
                 action={writeAction}
                 disabled={!ready}
-                disabledReason="stage3 文风与 stage4 计划都确认之后才允许下笔"
+                disabledReason="stage3 机械基线与 stage4 计划都确认之后才允许下笔"
                 onClick={() =>
                   ask(
                     {

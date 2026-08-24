@@ -289,8 +289,8 @@ def review_package_path(novel_dir: str | os.PathLike[str]) -> Path:
 #: 而且人从此才有得比较「改了 prompt 之后是变好还是变坏」。
 ROUNDS_DIRNAME = '_rounds'
 
-#: 被落盘闸门拦下的那一份的中缀。`stage3/style_grounding.json` 的孪生是
-#: `stage3/style_grounding.INVALID.json`——**同目录同 stem**，人一眼看得见它俩是一对。
+#: 被落盘闸门拦下的那一份的中缀。`stage4/plan_chapters.json` 的孪生是
+#: `stage4/plan_chapters.INVALID.json`——**同目录同 stem**，人一眼看得见它俩是一对。
 INVALID_INFIX = '.INVALID'
 
 #: `_rounds/<stem>.r<N>.json`。⚠ 匹配时**锚死 stem**：
@@ -375,12 +375,12 @@ def artifact_path(novel_dir: str | os.PathLike[str], rel: str) -> Path:
 
 def edit_rel(novel_dir: str | os.PathLike[str], edit_path: str | None,
              default_rel: str) -> str:
-    """`--apply-edit <路径>` → **书内相对路径**。stage3/4/6/7 共用这一份。
+    """`--apply-edit <路径>` → **书内相对路径**。stage2/4/6/7 共用这一份。
 
     【相对谁】**相对当前书目录**，不是相对进程 cwd。
     ⚠⚠ 这一位是本函数存在的理由。四层此前各有一份 `_edit_rel`，都写成
     `Path(edit_path).resolve()` 再 `.relative_to(书目录)` —— 先按 **cwd** 解释，
-    再拿书目录去卡。于是站在仓根敲 `--apply-edit stage3/style_edit.json`
+    再拿书目录去卡。于是站在仓根敲 `--apply-edit stage4/plan_edit.json`
     会被报成「落在这本书的产物目录之外」，而报错文案说的正是书目录
     ——**代码按一个口径解释，报错按另一个口径解释**，两边都言之凿凿。
     这条曾把 skill 现场记录逼出一条「一律传绝对路径绕开它」的处置建议。
@@ -415,7 +415,7 @@ def edit_rel(novel_dir: str | os.PathLike[str], edit_path: str | None,
 
 
 def invalid_of(rel: str) -> str:
-    """`stage3/style_grounding.json` → `stage3/style_grounding.INVALID.json`。"""
+    """`stage4/plan_chapters.json` → `stage4/plan_chapters.INVALID.json`。"""
     norm = check_rel_deep(rel)
     stem, dot, ext = norm.rpartition('.')
     if not dot:
@@ -430,7 +430,7 @@ def is_invalid(rel: str) -> bool:
 
 
 def stem_of(rel: str) -> str:
-    """`stage5/deep/ch01.json` → `ch01`；`stage3/x.INVALID.json` → `x.INVALID`。
+    """`stage5/deep/ch01.json` → `ch01`；`stage4/x.INVALID.json` → `x.INVALID`。
 
     ⚠ **`.INVALID` 留在 stem 里是有意的**：它与正式产物是**两条历史**，
     归档时各自编各自的号。合成一条会重号，而重号会静默覆盖一份花过钱的稿。
