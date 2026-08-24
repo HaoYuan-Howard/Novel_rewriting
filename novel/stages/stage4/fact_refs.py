@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from novel.core.facts import first_reveal_chapter
+from novel.core.facts import first_reveal_chapter, relation_visibility_gates
 from novel.errors import RefusedByStructure
 
 
@@ -45,13 +45,15 @@ def catalog(
         for bid in unit
     }
     entities = global_g.get('entities') or {}
+    canon = global_g.get('canon') or {}
     characters = sorted((entities.get('characters') or {}).keys())
+    gates = relation_visibility_gates(entities, canon.get('secrets') or [])
     relations = {
         row.get('relation_id'): {
-            'from': row.get('valid_from_chapter'), 'to': row.get('valid_to_chapter')}
+            'from': gates.get(row.get('relation_id')),
+            'to': row.get('valid_through_chapter')}
         for row in (entities.get('relations') or []) if row.get('relation_id')
     }
-    canon = global_g.get('canon') or {}
     rules = {
         row.get('rule_id'): sorted(
             int(version.get('effective_from_chapter') or 0)
@@ -118,7 +120,7 @@ def validate_plan_refs(plan: dict[str, Any], refs: dict[str, Any]) -> None:
                     window = refs['relations'].get(key)
                     if not window:
                         errors.append(f'{prefix}: unknown relation')
-                    elif ((window.get('from') or 1) > ordinal
+                    elif (window.get('from') is None or window['from'] > ordinal
                           or (window.get('to') is not None and ordinal > window['to'])):
                         errors.append(f'{prefix}: relation is outside its validity window')
                 elif kind == 'setting':

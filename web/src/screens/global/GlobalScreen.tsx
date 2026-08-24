@@ -16,9 +16,29 @@ import { LinkButton } from '@/components/ui/ActionButton'
 import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
+import type { GlobalFactEvidence } from '@/types/stages'
 import { GlobalReviewPanel } from './GlobalReviewPanel'
 
 type Tab = 'chars' | 'rels' | 'rules' | 'secrets' | 'arc'
+
+function EvidenceLine({ evidence }: { evidence: GlobalFactEvidence | null }) {
+  if (evidence === null) return null
+  if (evidence.source === null) {
+    return (
+      <span className="text-mini text-warn-ink" role="status">
+        证据定位失败 · 第 {evidence.chapter_ordinal} 章
+      </span>
+    )
+  }
+  return (
+    <span
+      className="prose-cn text-mini text-ink-5"
+      title={`原文 ${evidence.source.start}–${evidence.source.end} · ${evidence.source.recovery}`}
+    >
+      证据 ch{evidence.chapter_ordinal} · “{evidence.source.text}”
+    </span>
+  )
+}
 
 /**
  * 全局设定。人物、关系、世界规则、秘密、弧线 —— 抽对了吗、抽全了吗。
@@ -104,16 +124,21 @@ export function GlobalScreen() {
           ]
           const chapters = Math.max(
             8,
-            ...d.relations.map((r) => r.valid_to_chapter ?? r.valid_from_chapter),
+            ...d.relations.map((r) => r.valid_through_chapter ?? r.valid_from_chapter),
           )
+          const settingRows = [
+            { label: '时代背景', value: d.setting.时代背景, evidence: d.setting.era_evidence },
+            { label: '世界观', value: d.setting.世界观, evidence: d.setting.worldview_evidence },
+          ]
 
           return (
             <div className="flex flex-col gap-16">
               <div className="grid gap-12" style={{ gridTemplateColumns: 'repeat(2,1fr)' }}>
-                {Object.entries(d.setting).map(([k, v]) => (
-                  <Panel key={k} className="flex flex-col gap-4 px-16 py-13">
-                    <span className="text-tag text-ink-4">{k}</span>
-                    <span className="prose-cn text-section text-ink-2">{v}</span>
+                {settingRows.map((row) => (
+                  <Panel key={row.label} className="flex flex-col gap-4 px-16 py-13">
+                    <span className="text-tag text-ink-4">{row.label}</span>
+                    <span className="prose-cn text-section text-ink-2">{row.value}</span>
+                    <EvidenceLine evidence={row.evidence} />
                   </Panel>
                 ))}
               </div>
@@ -162,7 +187,10 @@ export function GlobalScreen() {
                           辨识度 {c.name_distinctiveness}
                         </span>
                       </div>
-                      <div className="prose-cn text-body-lg text-ink-2">{c.role}</div>
+                      <div className="flex flex-col gap-3">
+                        <div className="prose-cn text-body-lg text-ink-2">{c.role}</div>
+                        <EvidenceLine evidence={c.role_evidence} />
+                      </div>
                       <div className="flex flex-wrap gap-5">
                         {c.address.map((a, i) => (
                           <span
@@ -181,7 +209,10 @@ export function GlobalScreen() {
                           spoilers ? 'border border-line-2 bg-sunken-2 text-ink-2' : 'hatch-tight border border-dashed border-line-dash text-ink-5',
                         )}
                       >
-                        {c.fate ?? '（这个人没有 fate 字段）'}
+                        <div className="flex flex-col gap-3">
+                          <span>{c.fate ?? '（这个人没有 fate 字段）'}</span>
+                          <EvidenceLine evidence={c.fate_evidence} />
+                        </div>
                       </div>
                     </Panel>
                   ))}
@@ -192,29 +223,38 @@ export function GlobalScreen() {
                 <Panel>
                   <div
                     className="grid gap-12 border-b border-line-soft px-18 py-10 text-tag text-ink-4"
-                    style={{ gridTemplateColumns: '64px minmax(0,1fr) minmax(90px,150px) minmax(0,1fr) 210px' }}
+                    style={{ gridTemplateColumns: '64px minmax(0,1fr) minmax(120px,170px) minmax(0,1fr) 170px 210px' }}
                   >
                     <span>id</span>
                     <span>主</span>
                     <span>谓</span>
                     <span>宾</span>
+                    <span>读者可见</span>
                     <span>成立区间（章）</span>
                   </div>
                   {d.relations.map((r) => {
                     const from = r.valid_from_chapter
-                    const to = r.valid_to_chapter ?? chapters
+                    const to = r.valid_through_chapter ?? chapters
+                    const visibility =
+                      r.visibility.kind === 'public'
+                        ? `公开 · 第 ${r.visibility.from_chapter} 章起`
+                        : `随 ${r.visibility.secret_id} 揭示`
                     return (
                       <div
                         key={r.relation_id}
                         className="grid items-center gap-12 border-b border-line-row px-18 py-10"
-                        style={{ gridTemplateColumns: '64px minmax(0,1fr) minmax(90px,150px) minmax(0,1fr) 210px' }}
+                        style={{ gridTemplateColumns: '64px minmax(0,1fr) minmax(120px,170px) minmax(0,1fr) 170px 210px' }}
                       >
                         <Mono className="text-micro text-ink-5">{r.relation_id}</Mono>
                         <span className="text-body">{r.subject.display}</span>
-                        <span className="truncate text-body text-ink-3" title={r.predicate}>
-                          {r.predicate}
+                        <span className="flex min-w-0 flex-col gap-2">
+                          <span className="truncate text-body text-ink-3" title={r.predicate}>
+                            {r.predicate}
+                          </span>
+                          <EvidenceLine evidence={r.predicate_evidence} />
                         </span>
                         <span className="text-body">{r.object.display}</span>
+                        <span className="text-mini text-ink-4">{visibility}</span>
                         <span className="flex items-center gap-8">
                           <span className="relative h-7 min-w-0 flex-1 overflow-hidden rounded-tag bg-inset">
                             <span
@@ -249,7 +289,10 @@ export function GlobalScreen() {
                             <Mono className="flex-none text-mini text-ink-5">
                               第 {v.effective_from_chapter} 章起
                             </Mono>
-                            <span className="prose-cn text-section text-ink-2">{v.desc}</span>
+                            <span className="flex min-w-0 flex-col gap-2">
+                              <span className="prose-cn text-section text-ink-2">{v.desc}</span>
+                              <EvidenceLine evidence={v.desc_evidence} />
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -266,26 +309,49 @@ export function GlobalScreen() {
                         {s.secret_id === MASKED_SECRET_ID ? null : (
                           <Mono className="text-mini text-ink-4">{s.secret_id}</Mono>
                         )}
-                        <span className="prose-cn text-section text-ink-2">{s.fact}</span>
+                        <span className="flex flex-col gap-2">
+                          <span className="prose-cn text-section text-ink-2">{s.fact}</span>
+                          {s.secret_id === MASKED_SECRET_ID ? null : (
+                            <EvidenceLine evidence={s.fact_evidence} />
+                          )}
+                        </span>
                         {s.secret_id === MASKED_SECRET_ID ? null : (
-                          <span className="text-tag text-ink-4">
-                            知情：{s.known_by.map((k) => k.display).join('、') || '—'} · 第{' '}
-                            {s.first_reveal_chapter} 章首次揭示
-                            {/* 后续 confirm 单独说：闸门只按首次揭示开，两者不是一回事 */}
-                            {s.reader_reveal_chapters.filter((c) => c !== s.first_reveal_chapter)
-                              .length
-                              ? '（第 ' +
-                                s.reader_reveal_chapters
-                                  .filter((c) => c !== s.first_reveal_chapter)
-                                  .join('、') +
-                                ' 章再确认）'
-                              : ''}
-                            {/* cold 是模型显式声明的答案，不是「这一格空着」——照它说的显示 */}
-                            {s.setup_kind === 'foreshadowed'
-                              ? ' · 埋点 ch' + s.setup_chapters.join('/')
-                              : ' · 冷揭示（无埋点）'}
-                            {s.group_id ? ' · 归组 ' + s.group_id : ''}
-                          </span>
+                          <div className="flex flex-col gap-4">
+                            <span className="text-tag text-ink-4">世界内知情：</span>
+                            <div className="flex flex-wrap gap-6">
+                              {s.knowledge_events.map((event, i) => (
+                                <span
+                                  key={`${event.subject.raw}-${event.known_from_chapter}-${i}`}
+                                  className="flex flex-col rounded-btn bg-inset px-8 py-4 text-mini text-ink-3"
+                                >
+                                  <span>
+                                    {event.subject.display}（
+                                    {event.subject_kind === 'group' ? '群体' : '人物'} · 第{' '}
+                                    {event.known_from_chapter} 章起）
+                                  </span>
+                                  <EvidenceLine evidence={event.evidence} />
+                                </span>
+                              ))}
+                            </div>
+                            <span className="text-tag text-ink-4">
+                              读者第 {s.first_reveal_chapter} 章首次揭示
+                              {/* 后续 confirm 单独说：闸门只按首次揭示开，两者不是一回事 */}
+                              {s.reader_reveal_chapters.filter(
+                                (c) => c !== s.first_reveal_chapter,
+                              ).length
+                                ? '（第 ' +
+                                  s.reader_reveal_chapters
+                                    .filter((c) => c !== s.first_reveal_chapter)
+                                    .join('、') +
+                                  ' 章再确认）'
+                                : ''}
+                              {/* cold 是模型显式声明的答案，不是「这一格空着」——照它说的显示 */}
+                              {s.setup_kind === 'foreshadowed'
+                                ? ' · 埋点 ch' + s.setup_chapters.join('/')
+                                : ' · 冷揭示（无埋点）'}
+                              {s.group_id ? ' · 归组 ' + s.group_id : ''}
+                            </span>
+                          </div>
                         )}
                       </Panel>
                     ))}
@@ -339,8 +405,11 @@ export function GlobalScreen() {
                       >
                         <span className="text-body font-semibold">{t.subject.display}</span>
                         <span className="text-tag text-ink-4">{t.dimension}</span>
-                        <span className="prose-cn text-section text-ink-2">
-                          {t.change_type} · {t.trajectory}
+                        <span className="flex min-w-0 flex-col gap-2">
+                          <span className="prose-cn text-section text-ink-2">
+                            {t.change_type} · {t.trajectory}
+                          </span>
+                          <EvidenceLine evidence={t.trajectory_evidence} />
                         </span>
                       </div>
                     ))}

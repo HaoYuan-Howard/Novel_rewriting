@@ -5,9 +5,10 @@ from __future__ import annotations
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, CHANGE_TYPES_ENUM, HINGE_KINDS, NAME_DISTINCTIVENESS,
-    NARRATIVE_PERSON, TIME_LAYERS, WORLD_RULE_KINDS,
+    KNOWLEDGE_SUBJECT_KINDS, NARRATIVE_PERSON, RELATION_VISIBILITY_KINDS,
+    TIME_LAYERS, WORLD_RULE_KINDS,
 )
-from contracts.schema.stage2 import AnchorLocatorResponse, HingeResponse
+from contracts.schema.stage2 import AnchorLocatorResponse, EvidenceLocator, HingeResponse
 from novel.stages.stage2 import prompts
 
 
@@ -31,6 +32,38 @@ def test_global_prompt_separates_opening_premises_from_later_hidden_truths():
     assert '收徒那天就知道' in prompts.GLOBAL_SYS
     assert 'secret 关心的' in prompts.GLOBAL_SYS
     assert '是读者何时知道' in prompts.GLOBAL_SYS
+
+
+def test_global_prompt_requests_typed_visibility_knowledge_and_seven_locator_families():
+    assert 'visibility 写【读者】何时能知道这条关系' in prompts.GLOBAL_SYS
+    assert 'knowledge_events' in prompts.GLOBAL_SYS
+    assert 'character_known_by' not in prompts.GLOBAL_SYS
+    assert '七类自由事实必须同交原文定位' in prompts.GLOBAL_SYS
+    assert '零命中或多命中会进入可修复的定位失败态' in prompts.GLOBAL_SYS
+
+    hint = prompts.GLOBAL_HINT
+    relations = hint['entities']['relations']
+    assert [row['visibility']['kind'] for row in relations] == list(
+        RELATION_VISIBILITY_KINDS)
+    knowledge = hint['canon']['secrets'][0]['knowledge_events']
+    assert [row['subject']['kind'] for row in knowledge] == list(KNOWLEDGE_SUBJECT_KINDS)
+
+    locator_keys = set(EvidenceLocator.model_fields)
+    seven_families = [
+        hint['entities']['characters']['char_001']['role_evidence'],
+        relations[0]['predicate_evidence'],
+        hint['canon']['setting']['era_evidence'],
+        hint['canon']['world_rules'][0]['versions'][0]['desc_evidence'],
+        hint['canon']['secrets'][0]['fact_evidence'],
+        knowledge[0]['evidence'],
+        hint['arc']['arc_tracks'][0]['trajectory_evidence'],
+    ]
+    assert all(set(row) == locator_keys for row in seven_families)
+
+
+def test_role_split_stays_a_claim_only_judge_without_source_access():
+    assert set(prompts.ROLE_SPLIT_HINT['characters']['char_001']) == {'role', 'fate'}
+    assert 'locator' not in prompts.ROLE_SPLIT_SYS
 
 
 def test_removed_narration_fields_are_absent_from_model_surfaces():

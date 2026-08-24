@@ -23,7 +23,7 @@ import os
 
 from contracts.schema.api import (
     ArcTrackLine, GlobalAddressLine, GlobalArcView, GlobalCharacterLine,
-    GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
+    GlobalKnowledgeEventLine, GlobalRelationLine, GlobalSecretLine, GlobalView, NameRef,
     ReadingBeatLine, ReadingHinge, ReadingNarrationLine, ReadingSegment, ReadingView,
 )
 from contracts.schema.stage1 import MainText
@@ -85,6 +85,7 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
         GlobalCharacterLine(
             char_id=cid, canonical=c.canonical,
             name_distinctiveness=c.name_distinctiveness, role=c.role, fate=c.fate,
+            role_evidence=c.role_evidence, fate_evidence=c.fate_evidence,
             address=[GlobalAddressLine(surface=a.surface, by=ref(a.by),
                                        context=a.context, from_chapter=a.from_chapter)
                      for a in c.address])
@@ -92,14 +93,27 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
     relations = [
         GlobalRelationLine(
             relation_id=r.relation_id, subject=ref(r.subject_id),
-            predicate=r.predicate, object=ref(r.object_id),
+            predicate=r.predicate, predicate_evidence=r.predicate_evidence,
+            object=ref(r.object_id), visibility=r.visibility,
             valid_from_chapter=r.valid_from_chapter,
-            valid_to_chapter=r.valid_to_chapter)
+            valid_through_chapter=r.valid_through_chapter)
         for r in art.entities.relations]
+
+    def knowledge_subject(event) -> NameRef:
+        if event.subject.kind == 'character':
+            return ref(event.subject.char_id)
+        return NameRef(raw=event.subject.label, display=event.subject.label, resolved=True)
+
     secrets = [
         GlobalSecretLine(
-            secret_id=s.secret_id, fact=s.fact, group_id=s.group_id,
-            known_by=[ref(k) for k in s.character_known_by],
+            secret_id=s.secret_id, fact=s.fact, fact_evidence=s.fact_evidence,
+            group_id=s.group_id,
+            knowledge_events=[GlobalKnowledgeEventLine(
+                subject_kind=e.subject.kind,
+                subject=knowledge_subject(e),
+                known_from_chapter=e.known_from_chapter,
+                evidence=e.evidence,
+            ) for e in s.knowledge_events],
             setup_kind=s.setup.kind,
             setup_chapters=list(getattr(s.setup, 'chapters', None) or []),
             first_reveal_chapter=s.first_reveal,
@@ -109,7 +123,8 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
         conflict_stages=art.arc.conflict_stages,
         climax=art.arc.climax, ending=art.arc.ending,
         arc_tracks=[ArcTrackLine(subject=ref(t.subject), dimension=t.dimension,
-                                 change_type=t.change_type, trajectory=t.trajectory)
+                                 change_type=t.change_type, trajectory=t.trajectory,
+                                 trajectory_evidence=t.trajectory_evidence)
                     for t in art.arc.arc_tracks])
 
     return GlobalView(

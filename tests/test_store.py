@@ -290,12 +290,27 @@ def test_stage4_blueprint_projection_tracks_exact_material_and_ignores_provenanc
 
 
 def _stage4_grounding_payload() -> dict:
+    def evidence(chapter: int, text: str, start: int) -> dict:
+        return {
+            'chapter_ordinal': chapter,
+            'source': {
+                'text': text,
+                'start': start,
+                'end': start + len(text),
+                'normalized': text.rstrip('。'),
+                'recovery': 'exact',
+            },
+        }
+
     return {
         'entities': {
             'characters': {
                 'char_001': {
                     'canonical': '甲',
                     'role': '角色',
+                    'role_evidence': evidence(1, '甲在柜台后核对账册。', 0),
+                    'fate': '后来继续经营这间铺子',
+                    'fate_evidence': evidence(2, '此后甲仍每日照常开门。', 12),
                     'name_distinctiveness': 'high',
                     'address': [{
                         'surface': '掌柜', 'from_chapter': 1,
@@ -303,24 +318,56 @@ def _stage4_grounding_payload() -> dict:
                     }],
                 },
             },
-            'relations': [],
+            'relations': [{
+                'relation_id': 'rel_01',
+                'subject_id': 'char_001',
+                'object_id': 'char_001',
+                'predicate': '独自经营',
+                'predicate_evidence': evidence(1, '柜台内外只有甲一人忙碌。', 24),
+                'visibility': {'kind': 'public', 'from_chapter': 1},
+                'valid_from_chapter': 1,
+                'valid_through_chapter': None,
+            }],
         },
         'canon': {
-            'setting': {'时代背景': '架空', '世界观': '普通城镇'},
+            'setting': {
+                '时代背景': '架空',
+                'era_evidence': evidence(1, '城门仍按旧历时辰开闭。', 37),
+                '世界观': '普通城镇',
+                'worldview_evidence': evidence(1, '街坊都按城中规矩做买卖。', 49),
+            },
             'secrets': [{
                 'secret_id': 'secret_01', 'fact': '真相',
-                'character_known_by': ['char_001'],
-                'setup_chapters': [1],
-                'reader_reveal_events': [{'chapter': 2}],
+                'fact_evidence': evidence(1, '甲早已知道那件旧事的真相。', 62),
+                'group_id': None,
+                'knowledge_events': [{
+                    'subject': {'kind': 'character', 'char_id': 'char_001'},
+                    'known_from_chapter': 1,
+                    'evidence': evidence(1, '甲把旧信重新收进柜底。', 75),
+                }],
+                'setup': {'kind': 'foreshadowed', 'chapters': [1]},
+                'reader_reveal_events': [{'chapter': 2, 'kind': 'first'}],
             }],
             'world_rules': [{
                 'rule_id': 'wr_01', 'kind': 'legal_rule',
                 'versions': [{
                     'effective_from_chapter': 1, 'desc': '夜间实行宵禁',
+                    'desc_evidence': evidence(1, '更夫敲梆后街门一律落锁。', 87),
                 }],
             }],
         },
-        'arc': {'conflict_stages': []},
+        'arc': {
+            'conflict_stages': [{'stage': '守店', 'chapters': [1, 2]}],
+            'climax': '旧信被当众取出的那一刻',
+            'ending': '甲守住了铺子也说清了旧事',
+            'arc_tracks': [{
+                'subject': 'char_001',
+                'dimension': '处境',
+                'change_type': 'development',
+                'trajectory': '从独自隐瞒到公开承担',
+                'trajectory_evidence': evidence(2, '甲当众展开旧信并认下责任。', 100),
+            }],
+        },
         '_provenance': {'code': 'source-v1'},
     }
 
@@ -359,7 +406,10 @@ def _write_grounding_projection_subject(
     ('stage4.plan', 'stage4/plan_chapters.json'),
     ('stage4.context', 'stage4/writer_context.json'),
 ))
-@pytest.mark.parametrize('edited_field', ('known_by', 'world_rule_kind'))
+@pytest.mark.parametrize('edited_field', (
+    'relation_visibility', 'knowledge_subject', 'knowledge_known_from',
+    'world_rule_kind',
+))
 def test_stage4_grounding_edits_invalidate_real_store_freshness(
     node: str, rel: str, edited_field: str,
 ):
@@ -369,8 +419,15 @@ def test_stage4_grounding_edits_invalidate_real_store_freshness(
         base, grounding, node=node, rel=rel)
     assert store.freshness(rel).state == 'fresh'
 
-    if edited_field == 'known_by':
-        grounding['canon']['secrets'][0]['character_known_by'] = ['在场众人']
+    if edited_field == 'relation_visibility':
+        grounding['entities']['relations'][0]['visibility'] = {
+            'kind': 'via_secret', 'secret_id': 'secret_01'}
+    elif edited_field == 'knowledge_subject':
+        grounding['canon']['secrets'][0]['knowledge_events'][0]['subject'] = {
+            'kind': 'group', 'label': '在场众人'}
+    elif edited_field == 'knowledge_known_from':
+        grounding['canon']['secrets'][0]['knowledge_events'][0][
+            'known_from_chapter'] = 2
     else:
         grounding['canon']['world_rules'][0]['kind'] = 'institution'
     _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
@@ -405,8 +462,53 @@ def test_stage4_grounding_projection_ignores_unconsumed_source_provenance(
     assert edge.recorded_consumed == edge.now_consumed
 
 
+@pytest.mark.parametrize(('node', 'rel'), (
+    ('stage4.plan', 'stage4/plan_chapters.json'),
+    ('stage4.context', 'stage4/writer_context.json'),
+    ('stage5.write', 'stage5/deep/ch01.json'),
+    ('stage5.review', 'stage5/review_1.json'),
+    ('stage6.hook', 'stage6/hook.json'),
+    ('stage6.semantic', 'stage6/semantic_1.json'),
+))
+def test_downstream_grounding_freshness_ignores_every_evidence_only_edit(
+    node: str, rel: str,
+):
+    """九类 SourceSpan 全改也只改整文件指纹，不得重跑 Stage4/5/6。"""
+    from novel.core.evidence import iter_global_evidence_slots
+
+    base = _book()
+    grounding = _stage4_grounding_payload()
+    store = _write_grounding_projection_subject(
+        base, grounding, node=node, rel=rel)
+    assert store.freshness(rel).state == 'fresh'
+
+    slots = list(iter_global_evidence_slots(grounding))
+    assert len(slots) == 9, 'v3 夹具必须覆盖全部九类正式 evidence 槽'
+    for index, (_claim_path, owner, field) in enumerate(slots, 1):
+        marker = f'EVIDENCE_ONLY_{index}'
+        start = 987_654_300 + index * 100
+        owner[field] = {
+            'chapter_ordinal': 2,
+            'source': {
+                'text': marker,
+                'start': start,
+                'end': start + len(marker),
+                'normalized': f'NORMALIZED_{index}',
+                'recovery': 'normalized',
+            },
+        }
+    _write_payload(base / '书名_123', STAGE2_GLOBAL_GROUNDING, grounding)
+
+    report = store.freshness(rel)
+    assert (report.state, report.reason) == ('fresh', 'match')
+    edge = next(edge for edge in report.edges
+                if edge.key == STAGE2_GLOBAL_GROUNDING)
+    assert edge.recorded_file != edge.now_file, '证据改动必须真实落到上游字节'
+    assert edge.recorded_consumed == edge.now_consumed
+
+
 @pytest.mark.parametrize('edited', (
-    'secret_fact', 'setup_chapters', 'reveal_events', 'known_by', 'role', 'fate',
+    'secret_fact', 'setup', 'reveal_events', 'knowledge_events', 'role', 'fate',
     'relations', 'setting', 'arc', 'world_rules',
     'name_distinctiveness', 'address_context', 'address_by', 'address_from_chapter',
 ))
@@ -433,22 +535,19 @@ def test_blueprint_grounding_projection_only_tracks_attested_names(edited: str):
     secret = grounding['canon']['secrets'][0]
     if edited == 'secret_fact':
         secret['fact'] = '另一个真相'
-    elif edited == 'setup_chapters':
-        secret['setup_chapters'] = []
+    elif edited == 'setup':
+        secret['setup'] = {'kind': 'cold'}
     elif edited == 'reveal_events':
         secret['reader_reveal_events'] = [{'chapter': 9}]
-    elif edited == 'known_by':
-        secret['character_known_by'] = ['在场众人']
+    elif edited == 'knowledge_events':
+        secret['knowledge_events'][0]['subject'] = {
+            'kind': 'group', 'label': '在场众人'}
     elif edited == 'role':
         char['role'] = '换一个身份描述'
     elif edited == 'fate':
         char['fate'] = '后来死了'
     elif edited == 'relations':
-        grounding['entities']['relations'] = [{
-            'relation_id': 'rel_01', 'subject_id': 'char_001',
-            'object_id': 'char_001', 'predicate': '自指',
-            'valid_from_chapter': 1, 'valid_to_chapter': None,
-        }]
+        grounding['entities']['relations'][0]['predicate'] = '自指'
     elif edited == 'setting':
         grounding['canon']['setting']['世界观'] = '换一个世界'
     elif edited == 'arc':
@@ -536,6 +635,19 @@ def test_blueprint_grounding_projection_survives_malformed_upstream(malformed: o
     """
     from novel.consumption import stage2_blueprint_grounding
     stage2_blueprint_grounding(malformed)
+
+
+@pytest.mark.parametrize('malformed', (
+    {},
+    {'entities': None},
+    {'entities': {'characters': None}},
+))
+def test_blueprint_grounding_projection_marks_missing_character_maps_unknown(
+    malformed: object,
+):
+    from novel.consumption import stage2_blueprint_grounding
+
+    assert stage2_blueprint_grounding(malformed) is None
 
 
 def test_projection_registry_resolves_dynamic_and_invalid_artifact_paths():

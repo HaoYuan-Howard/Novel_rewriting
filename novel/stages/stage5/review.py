@@ -41,6 +41,7 @@ from contracts.schema.stage5 import (
     ReviewSources,
 )
 from novel import prov, wontfix
+from novel.core.evidence import without_global_evidence
 from novel.errors import TerminalState, UpstreamMissing
 from novel.report.builder import build
 from novel.run import RunContext
@@ -79,12 +80,14 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
     style = store.read(StyleGrounding, STYLE_GROUNDING)
     wc = store.read(WriterContext, WRITER_CONTEXT)
+    projected = without_global_evidence(gg.model_dump(by_alias=True))
+    assert isinstance(projected, dict)
     return M.Book(
         title=ctx.title,
         ctx=wc.model_dump(by_alias=True),
         style=style.model_dump(by_alias=True),
         source_text={s.chapter_ordinal: (s.text or '') for s in main.root},
-        secrets=[s.model_dump(by_alias=True) for s in gg.canon.secrets],
+        secrets=((projected.get('canon') or {}).get('secrets') or []),
     )
 
 

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 
 import pytest
 
 from contracts.schema.evaluation import EvidenceRef, JudgeDecision
 from novel.quality.evaluator import double_blind_decision
-from novel.quality.global_review import build_review, decide, review_status
+from novel.quality.global_review import (
+    build_review, decide, review_status, subject_sha256,
+)
 from novel.errors import HumanEditProtected
 
 
@@ -17,6 +20,16 @@ def _judge(name='a', verdict='PASS', evidence=True):
     refs = [EvidenceRef(artifact='stage5/deep/ch01.json', subject_sha256=_H,
                         start=0, end=2)] if evidence else []
     return JudgeDecision(judge=name, verdict=verdict, evidence=refs, reason='fixed rubric')
+
+
+def _evidence(text: str = '原文证据', chapter: int = 1) -> dict:
+    return {
+        'chapter_ordinal': chapter,
+        'source': {
+            'text': text, 'start': 0, 'end': len(text),
+            'normalized': text, 'recovery': 'exact',
+        },
+    }
 
 
 @pytest.mark.parametrize(('first', 'second', 'why'), [
@@ -72,15 +85,27 @@ def _global():
         'entities': {'characters': {
             'char_001': {
                 'name_distinctiveness': 'HIGH', 'role': '静态身份',
+                'role_evidence': _evidence('静态身份'),
+                'fate': None, 'fate_evidence': None,
                 'address': [{'context': 'address', 'surface': '阿甲'}],
             },
         }},
         'canon': {
+            'setting': {
+                '时代背景': '架空王朝', 'era_evidence': _evidence('架空王朝'),
+                '世界观': '城镇市井', 'worldview_evidence': _evidence('城镇市井'),
+            },
             'world_rules': [{'rule_id': 'wr_01', 'kind': 'social',
                              'versions': [{'effective_from_chapter': 1,
-                                           'desc': '规矩'}]}],
+                                           'desc': '规矩',
+                                           'desc_evidence': _evidence('规矩')}]}],
             'secrets': [{'secret_id': 'secret_01', 'fact': '真相',
-                         'character_known_by': ['char_001'],
+                         'fact_evidence': _evidence('真相'),
+                         'knowledge_events': [{
+                             'subject': {'kind': 'character', 'char_id': 'char_001'},
+                             'known_from_chapter': 1,
+                             'evidence': _evidence('知情'),
+                         }],
                          'setup': {'kind': 'cold'},
                          'reader_reveal_events': [{'chapter': 2}]}],
         },
@@ -138,12 +163,16 @@ def _full_global():
                 'char_001': {
                     'canonical': '甲', 'name_distinctiveness': 'HIGH',
                     'role': '客栈掌柜', 'fate': '后来远走他乡',
+                    'role_evidence': _evidence('客栈掌柜'),
+                    'fate_evidence': _evidence('后来远走他乡', 5),
                     'address': [{'context': 'address', 'surface': '阿甲',
                                  'by': 'public', 'from_chapter': 1}],
                 },
                 'char_002': {
                     'canonical': '乙', 'name_distinctiveness': 'LOW',
                     'role': '账房先生', 'fate': None,
+                    'role_evidence': _evidence('账房先生'),
+                    'fate_evidence': None,
                     'address': [{'context': 'reference', 'surface': '乙娘',
                                  'by': 'narration', 'from_chapter': 2}],
                 },
@@ -151,23 +180,43 @@ def _full_global():
             'relations': [{
                 'relation_id': 'rel_01', 'subject_id': 'char_001',
                 'object_id': 'char_002', 'predicate': '雇佣',
-                'valid_from_chapter': 1, 'valid_to_chapter': None,
+                'predicate_evidence': _evidence('雇佣'),
+                'visibility': {'kind': 'public', 'from_chapter': 1},
+                'valid_from_chapter': 1, 'valid_through_chapter': None,
             }],
         },
         'canon': {
-            'setting': {'时代背景': '架空王朝', '世界观': '城镇市井'},
+            'setting': {
+                '时代背景': '架空王朝', 'era_evidence': _evidence('架空王朝'),
+                '世界观': '城镇市井', 'worldview_evidence': _evidence('城镇市井'),
+            },
             'world_rules': [{'rule_id': 'wr_01', 'kind': 'social',
                              'versions': [{'effective_from_chapter': 1,
-                                           'desc': '宵禁按更鼓算'}]}],
+                                           'desc': '宵禁按更鼓算',
+                                           'desc_evidence': _evidence('宵禁按更鼓算')}]}],
             'secrets': [
                 {'secret_id': 'secret_01', 'fact': '掌柜是前朝旧臣',
-                 'character_known_by': ['char_001'],
+                 'fact_evidence': _evidence('掌柜是前朝旧臣'),
+                 'knowledge_events': [{
+                     'subject': {'kind': 'character', 'char_id': 'char_001'},
+                     'known_from_chapter': 1,
+                     'evidence': _evidence('掌柜自己知道'),
+                 }],
                  'setup': {'kind': 'foreshadowed', 'chapters': [1, 2]},
                  'reader_reveal_events': [{'chapter': 5}]},
                 # 冷揭示：显式声明没有埋点。⚠ 它与「归一裁空后降级成 cold」
                 # 在字段值上仍然同形，分得开的只有 `setup_chapters_pruned` 那份账。
                 {'secret_id': 'secret_02', 'fact': '账房识得那枚印',
-                 'character_known_by': ['char_002', '在场众人'],
+                 'fact_evidence': _evidence('账房识得那枚印', 3),
+                 'knowledge_events': [{
+                     'subject': {'kind': 'character', 'char_id': 'char_002'},
+                     'known_from_chapter': 2,
+                     'evidence': _evidence('账房早已识得', 2),
+                 }, {
+                     'subject': {'kind': 'group', 'label': '在场众人'},
+                     'known_from_chapter': 3,
+                     'evidence': _evidence('众人当场看见', 3),
+                 }],
                  'setup': {'kind': 'cold'},
                  'reader_reveal_events': [{'chapter': 3}]},
             ],
@@ -176,7 +225,11 @@ def _full_global():
             'conflict_stages': [{'stage': '身份败露', 'chapters': [1, 2, 3, 4, 5]}],
             'climax': '第五章对质',
             'ending': '掌柜远走',
-            'arc_tracks': [{'char_id': 'char_001', 'trajectory': '由藏到认'}],
+            'arc_tracks': [{
+                'subject': 'char_001', 'dimension': '身份',
+                'change_type': 'development', 'trajectory': '由藏到认',
+                'trajectory_evidence': _evidence('由藏到认', 5),
+            }],
         },
     }
 
@@ -207,6 +260,11 @@ def test_every_risk_bearing_stage2_subject_is_enumerated_for_review():
     assert sorted(by_kind['secret_setup']) == [
         'canon.secrets.secret_01.setup',
         'canon.secrets.secret_02.setup']
+    assert sorted(by_kind['knowledge_event']) == [
+        'canon.secrets.secret_01.knowledge_events.0',
+        'canon.secrets.secret_02.knowledge_events.0',
+        'canon.secrets.secret_02.knowledge_events.1',
+    ]
 
     # 解读层分组：整份一项，不逐条拆——单拆一条判不出对错。
     assert by_kind['conflict_partition'] == ['arc.conflict_stages']
@@ -226,9 +284,87 @@ def test_review_kind_vocabulary_matches_what_enumeration_produces():
 
     declared = set(get_args(GlobalReviewItem.model_fields['kind'].annotation))
     produced = {row.kind for row in build_review(_full_global()).items}
-    assert produced == declared, (
-        f'只声明未产出：{sorted(declared - produced)}；'
+    assert produced == declared - {'known_by'}, (
+        f'除兼容旧 review v1 的 known_by 外只声明未产出：'
+        f'{sorted(declared - produced - {"known_by"})}；'
         f'只产出未声明：{sorted(produced - declared)}')
+
+    # GlobalReview 本身仍是 v1；旧盘上的 known_by 行必须继续能严格解码，
+    # 但当前 producer 不再从无时间维的 character_known_by 造这种行。
+    legacy = GlobalReviewItem.model_validate({
+        'item_id': 'known_by:canon.secrets.secret_01.character_known_by:abc',
+        'kind': 'known_by',
+        'subject_path': 'canon.secrets.secret_01.character_known_by',
+        'subject_sha256': 'a' * 64,
+        'state': 'pending',
+        'evidence': [],
+    })
+    assert legacy.kind == 'known_by'
+
+
+@pytest.mark.parametrize(('trail', 'subject_path'), [
+    (('entities', 'characters', 'char_001', 'role_evidence'),
+     'entities.characters.char_001.role'),
+    (('entities', 'characters', 'char_001', 'fate_evidence'),
+     'entities.characters.char_001.fate'),
+    (('entities', 'relations', 0, 'predicate_evidence'),
+     'entities.relations.rel_01'),
+    (('canon', 'setting', 'era_evidence'), 'canon.setting.时代背景'),
+    (('canon', 'setting', 'worldview_evidence'), 'canon.setting.世界观'),
+    (('canon', 'world_rules', 0, 'versions', 0, 'desc_evidence'),
+     'canon.world_rules.wr_01.versions.0'),
+    (('canon', 'secrets', 0, 'fact_evidence'), 'canon.secrets.secret_01.fact'),
+    (('canon', 'secrets', 0, 'knowledge_events', 0, 'evidence'),
+     'canon.secrets.secret_01.knowledge_events.0'),
+    (('arc', 'arc_tracks', 0, 'trajectory_evidence'), 'arc'),
+])
+def test_each_free_fact_hash_binds_its_formal_evidence(trail, subject_path):
+    grounding = _full_global()
+    before = next(
+        row.subject_sha256 for row in build_review(grounding).items
+        if row.subject_path == subject_path)
+    changed = copy.deepcopy(grounding)
+    cursor = changed
+    for segment in trail[:-1]:
+        cursor = cursor[segment]
+    cursor[trail[-1]] = _evidence('换了一段正式证据', 2)
+    after = next(
+        row.subject_sha256 for row in build_review(changed).items
+        if row.subject_path == subject_path)
+    assert after != before
+
+
+def test_free_fact_hash_uses_claim_evidence_pair_and_completeness_strips_evidence():
+    grounding = _full_global()
+    review = build_review(grounding)
+    role = next(row for row in review.items
+                if row.subject_path == 'entities.characters.char_001.role')
+    character = grounding['entities']['characters']['char_001']
+    assert role.subject_sha256 == subject_sha256({
+        'claim': character['role'], 'evidence': character['role_evidence'],
+    })
+
+    changed = copy.deepcopy(grounding)
+    changed['canon']['world_rules'][0]['versions'][0]['desc_evidence'] = \
+        _evidence('规则换证据', 2)
+    changed['canon']['secrets'][0]['fact_evidence'] = _evidence('秘密换证据', 2)
+    before = {row.kind: row.subject_sha256 for row in review.items
+              if row.kind.endswith('_set_complete')}
+    after = {row.kind: row.subject_sha256 for row in build_review(changed).items
+             if row.kind.endswith('_set_complete')}
+    assert after == before
+
+    approved = review
+    for item in [row for row in review.items if row.kind.endswith('_set_complete')]:
+        approved = decide(
+            approved,
+            item_id=item.item_id,
+            expected_subject_sha256=item.subject_sha256,
+            state='PASS', actor='reviewer-1', reason='通读全书核过集合完整性',
+            now='2026-08-24T00:00:00Z')
+    refreshed = build_review(changed, approved)
+    assert all(row.state == 'PASS' for row in refreshed.items
+               if row.kind.endswith('_set_complete'))
 
 
 def test_a_null_fate_still_requires_an_explicit_human_decision():
@@ -245,6 +381,8 @@ def test_a_null_fate_still_requires_an_explicit_human_decision():
     # 空值同样有确定的主体摘要 ⇒ 决定能被 hash 绑住，改成非空即失效。
     changed = _full_global()
     changed['entities']['characters']['char_002']['fate'] = '后来接手了客栈'
+    changed['entities']['characters']['char_002']['fate_evidence'] = \
+        _evidence('后来接手了客栈', 5)
     refreshed = next(r for r in build_review(changed).items
                      if r.subject_path == 'entities.characters.char_002.fate')
     assert refreshed.subject_sha256 != row.subject_sha256

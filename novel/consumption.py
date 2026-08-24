@@ -29,6 +29,7 @@ from contracts.artifacts import (
     STAGE7_NAME_MAP_EDIT,
 )
 from contracts.invariants import NODES
+from novel.core.evidence import without_global_evidence
 
 Projection = Callable[[object], object]
 
@@ -62,7 +63,9 @@ def stage2_blueprint_grounding(data: object) -> object:
     if not isinstance(data, dict):
         return None
     entities = data.get('entities')
-    chars = (entities.get('characters') if isinstance(entities, dict) else None) or {}
+    if not isinstance(entities, dict):
+        return None
+    chars = entities.get('characters')
     if not isinstance(chars, dict):
         return None
     return sorted(
@@ -175,10 +178,43 @@ def _secret_setup_key(setup: object) -> object:
     return (kind, tuple(sorted(map(str, setup.get('chapters') or []))))
 
 
+def _relation_visibility_key(visibility: object) -> object:
+    """只收 Stage4 真正读取的显式可见性语义。"""
+    if not isinstance(visibility, dict):
+        return None
+    return (visibility.get('kind'), visibility.get('from_chapter'),
+            visibility.get('secret_id'))
+
+
+def _knowledge_subject_key(subject: object) -> object:
+    """typed CharacterRef / GroupRef 的确定性 freshness 键。"""
+    if not isinstance(subject, dict):
+        return None
+    return (subject.get('kind'), subject.get('char_id'), subject.get('label'))
+
+
+def _knowledge_events_key(events: object) -> tuple:
+    if not isinstance(events, list):
+        return ()
+    rows = [
+        (_knowledge_subject_key(event.get('subject')),
+         event.get('known_from_chapter'))
+        for event in events if isinstance(event, dict)
+    ]
+    return tuple(sorted(rows, key=repr))
+
+
 def stage4_grounding(data: object) -> object:
-    """计划/上下文组装消费的人物、关系、秘密、设定、规则与弧线字段。"""
+    """计划/上下文组装消费的人物、关系、秘密、设定、规则与弧线字段。
+
+    原文 ``SourceSpan`` 只给 Stage2 回取与人工复核；Stage4 实际 prompt 也剥掉它们，
+    所以 evidence-only 订正不应让两个 Stage4 制品 stale。
+    """
     if not isinstance(data, dict):
         return None
+    projected = without_global_evidence(data)
+    assert isinstance(projected, dict)
+    data = projected
     ent = data.get('entities') or {}
     canon = data.get('canon') or {}
     return {
@@ -192,14 +228,16 @@ def stage4_grounding(data: object) -> object:
         'relations': sorted(
             ((r or {}).get('relation_id'), (r or {}).get('subject_id'),
              (r or {}).get('predicate'), (r or {}).get('object_id'),
-             (r or {}).get('valid_from_chapter'), (r or {}).get('valid_to_chapter'))
+             (r or {}).get('valid_from_chapter'),
+             (r or {}).get('valid_through_chapter'),
+             _relation_visibility_key((r or {}).get('visibility')))
             for r in (ent.get('relations') or [])),
         # ⚠ `setup` 整格进投影（不只是章号）：`{"kind":"cold"}` 与
         #   `{"kind":"foreshadowed","chapters":[]}` 在「章号集合」上同形而语义不同。
         #   揭示事件同理连 `kind` 一起收——改 first/confirm 会移动下发边界。
         'secrets': sorted(
             ((s or {}).get('secret_id'), (s or {}).get('fact'), (s or {}).get('group_id'),
-             tuple(sorted(map(str, (s or {}).get('character_known_by') or []))),
+             _knowledge_events_key((s or {}).get('knowledge_events')),
              _secret_setup_key((s or {}).get('setup')),
              tuple(sorted((str(e.get('chapter')), str(e.get('kind') or 'first'))
                           for e in ((s or {}).get('reader_reveal_events') or []))))
@@ -226,10 +264,13 @@ def stage5_main_text(data: object) -> object:
 
 
 def stage5_grounding(data: object) -> object:
-    """Stage 5 只把全量 secrets 作为泄漏检测的 ground truth。"""
+    """Stage 5 只消费 secret 语义；定位证据不进付费 freshness。"""
     if not isinstance(data, dict):
         return None
-    return {'secrets': (data.get('canon') or {}).get('secrets')}
+    projected = without_global_evidence({
+        'canon': {'secrets': (data.get('canon') or {}).get('secrets')},
+    })
+    return {'secrets': ((projected or {}).get('canon') or {}).get('secrets')}
 
 
 def stage5_style(data: object) -> object:
@@ -273,14 +314,14 @@ def stage6_hook_copy(data: object) -> object:
 
 
 def stage6_grounding(data: object) -> object:
-    """开篇文案与质量审判消费完整故事真相面。"""
+    """开篇文案消费完整 claim 真相面，但不消费原文定位证据。"""
     if not isinstance(data, dict):
         return None
-    return {
+    return without_global_evidence({
         'entities': data.get('entities'),
         'canon': data.get('canon'),
         'arc': data.get('arc'),
-    }
+    })
 
 
 def stage6_style(data: object) -> object:

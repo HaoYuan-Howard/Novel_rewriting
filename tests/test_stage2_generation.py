@@ -14,10 +14,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.schema import encode_artifact
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
+from contracts.schema.stage2 import (
+    ChapterBlueprints, GlobalGrounding, GlobalGroundingResponse,
+)
 from novel import prov
 from novel.errors import (
     ArtifactUnreadable, ContextBudgetRefused, GateBlocked, ProvenanceRefused, UpstreamMissing,
@@ -28,13 +31,14 @@ from novel.llm.cache import CachePolicy, ResponseCache
 from novel.llm.client import LlmClient
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
+from novel.core.evidence import iter_global_evidence_slots
 from novel.run import RunContext
 from novel.stages import initial_extract
 from novel.stages.stage2 import extract
 from novel.stages.stage2.compile_v2 import canonical_ir_projection
 from novel.stages.stage3 import style
 from contracts.invariants import HINGE_FAILURE_ROUTE
-from novel.stages.stage2.normalize import normalize_verbatim, response_shape
+from novel.stages.stage2.normalize import normalize_global, normalize_verbatim, response_shape
 from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
@@ -154,9 +158,140 @@ def test_global_precedes_parallel_blueprint_and_anti_leak_style(monkeypatch):
 
 
 def _response_global() -> dict:
+    """正式 v3 fixture → 模型响应形；自由事实证据只交章号 + 短 locator。"""
     data = copy.deepcopy(global_grounding())
     data.pop('_provenance')
+    for _path, owner, field in iter_global_evidence_slots(data):
+        evidence = owner.get(field)
+        assert isinstance(evidence, dict) and isinstance(evidence.get('source'), dict)
+        owner[field] = {
+            'chapter_ordinal': evidence['chapter_ordinal'],
+            'locator': evidence['source']['text'],
+        }
     return data
+
+
+@pytest.mark.parametrize(('branch', 'message'), [
+    ('secret', 'duplicate secret ids'),
+    ('world_rule', 'duplicate world rule ids'),
+    ('relation', 'duplicate relation ids'),
+])
+def test_global_response_and_formal_artifact_reject_duplicate_stable_ids(
+    branch: str, message: str,
+):
+    """patch/apply-edit 按稳定 ID 定位；重复 ID 不能退化成“最后一条生效”。"""
+    response = _response_global()
+    formal = copy.deepcopy(global_grounding())
+    if branch == 'secret':
+        response['canon']['secrets'].append(copy.deepcopy(response['canon']['secrets'][0]))
+        formal['canon']['secrets'].append(copy.deepcopy(formal['canon']['secrets'][0]))
+    elif branch == 'world_rule':
+        response['canon']['world_rules'].append(
+            copy.deepcopy(response['canon']['world_rules'][0]))
+        formal['canon']['world_rules'].append(
+            copy.deepcopy(formal['canon']['world_rules'][0]))
+    else:
+        response['entities']['relations'].append(
+            copy.deepcopy(response['entities']['relations'][0]))
+        formal['entities']['relations'].append(
+            copy.deepcopy(formal['entities']['relations'][0]))
+
+    with pytest.raises(ValidationError, match=message):
+        GlobalGroundingResponse.model_validate(response)
+    with pytest.raises(ValidationError, match=message):
+        GlobalGrounding.model_validate(formal)
+
+
+def test_global_response_rejects_order_dependent_timelines_and_lossy_values():
+    cases: list[dict] = []
+
+    duplicate_knower = _response_global()
+    events = duplicate_knower['canon']['secrets'][0]['knowledge_events']
+    events.append({**copy.deepcopy(events[0]), 'known_from_chapter': 2})
+    cases.append(duplicate_knower)
+
+    duplicate_rule_start = _response_global()
+    versions = duplicate_rule_start['canon']['world_rules'][0]['versions']
+    versions.append(copy.deepcopy(versions[0]))
+    cases.append(duplicate_rule_start)
+
+    blank_group = _response_global()
+    blank_group['canon']['secrets'][0]['knowledge_events'][0]['subject'] = {
+        'kind': 'group', 'label': '   ',
+    }
+    cases.append(blank_group)
+
+    string_chapter = _response_global()
+    string_chapter['canon']['secrets'][0]['fact_evidence']['chapter_ordinal'] = '1'
+    cases.append(string_chapter)
+
+    bool_chapter = _response_global()
+    bool_chapter['entities']['relations'][0]['visibility'] = {
+        'kind': 'public', 'from_chapter': True,
+    }
+    cases.append(bool_chapter)
+
+    float_chapter = _response_global()
+    float_chapter['canon']['secrets'][0]['knowledge_events'][0][
+        'known_from_chapter'] = 1.0
+    cases.append(float_chapter)
+
+    for payload in cases:
+        with pytest.raises(ValidationError):
+            GlobalGroundingResponse.model_validate(payload)
+
+
+@pytest.mark.parametrize(('chapter', 'locator', 'recovery', 'failure_fragment'), [
+    (1, '信上说父亲已经回城。', 'exact', None),
+    (1, '信上说 父亲，已经回城', 'normalized', None),
+    (1, '这句话在原文里不存在', None, '找不到'),
+    (1, '她', None, '多处命中'),
+    (2, '信上说父亲已经回城。', None, '找不到'),
+])
+def test_global_evidence_locator_is_unique_within_its_named_chapter(
+    chapter: int, locator: str, recovery: str | None, failure_fragment: str | None,
+):
+    """exact / normalized / 零命中 / 多命中 / 指错章共用生产归一入口。"""
+    response = _response_global()
+    secret = response['canon']['secrets'][0]
+    secret['fact_evidence'] = {'chapter_ordinal': chapter, 'locator': locator}
+
+    normalized, meta = normalize_global(response, main_text())
+    evidence = normalized['canon']['secrets'][0]['fact_evidence']
+
+    assert evidence['chapter_ordinal'] == chapter
+    if recovery is not None:
+        assert evidence['source']['text'] == '信上说父亲已经回城。'
+        assert evidence['source']['recovery'] == recovery
+        assert meta['evidence_locator_failures'] == []
+        if recovery == 'normalized':
+            assert meta['evidence_locator_rewrites'] == [
+                ('canon.secrets.secret_01.fact', locator, '信上说父亲已经回城。')]
+    else:
+        assert evidence['source'] is None
+        assert len(meta['evidence_locator_failures']) == 1
+        path, failed_chapter, failed_locator, reason = meta['evidence_locator_failures'][0]
+        assert path == 'canon.secrets.secret_01.fact'
+        assert (failed_chapter, failed_locator) == (chapter, locator)
+        assert failure_fragment in reason
+
+
+def test_punctuation_only_evidence_locator_becomes_a_recoverable_failure():
+    """唯一命中的纯标点也不能先造出 schema 拒收的空 normalized span。"""
+    response = _response_global()
+    path = 'canon.secrets.secret_01.fact'
+    response['canon']['secrets'][0]['fact_evidence'] = {
+        'chapter_ordinal': 1, 'locator': '※',
+    }
+    sections = copy.deepcopy(main_text())
+    sections[0]['text'] += '※'
+
+    normalized, meta = normalize_global(response, sections)
+
+    assert normalized['canon']['secrets'][0]['fact_evidence']['source'] is None
+    failure = next(row for row in meta['evidence_locator_failures'] if row[0] == path)
+    assert failure[1:3] == (1, '※')
+    assert 'no content characters' in failure[3]
 
 
 def _response_blueprints() -> dict[int, dict]:

@@ -2,20 +2,34 @@ import { describe, expect, it } from 'vitest'
 import { qk } from './queryKeys'
 import { adaptNovel, splitLog } from './endpoints'
 import { projectGlobalSpoilers, SPOILER_PLACEHOLDER } from './spoilers'
-import type { Stage2Global } from '@/types/stages'
+import type { GlobalFactEvidence, Stage2Global } from '@/types/stages'
+
+function evidence(text: string): GlobalFactEvidence {
+  return {
+    chapter_ordinal: 2,
+    source: { text, start: 3, end: 3 + text.length, normalized: text, recovery: 'exact' },
+  }
+}
 
 function globalFixture(): Stage2Global {
   return {
     sid: 's',
     title: 't',
-    setting: {},
+    setting: {
+      时代背景: '古代',
+      era_evidence: evidence('古代证据'),
+      世界观: '现实世界',
+      worldview_evidence: evidence('世界观证据'),
+    },
     characters: [
       {
         char_id: 'c1',
         canonical: '甲',
         name_distinctiveness: 'high',
         role: '主角',
+        role_evidence: evidence('主角证据'),
         fate: '真实 fate',
+        fate_evidence: evidence('真实 fate 证据'),
         address: [],
       },
     ],
@@ -25,7 +39,8 @@ function globalFixture(): Stage2Global {
       {
         secret_id: 'secret-1',
         fact: '真实秘密',
-        known_by: [],
+        fact_evidence: evidence('真实秘密证据'),
+        knowledge_events: [],
         group_id: null,
         setup_kind: 'foreshadowed',
         setup_chapters: [1],
@@ -37,7 +52,15 @@ function globalFixture(): Stage2Global {
       conflict_stages: [],
       climax: '真实高潮',
       ending: '真实结局',
-      arc_tracks: [],
+      arc_tracks: [
+        {
+          subject: { raw: 'c1', display: '甲', resolved: true },
+          dimension: '处境',
+          change_type: 'development',
+          trajectory: '真实弧线',
+          trajectory_evidence: evidence('真实弧线证据'),
+        },
+      ],
     },
     unresolved_refs: 0,
     invalid_exists: false,
@@ -99,11 +122,18 @@ describe('display-only spoiler projection', () => {
     const raw = globalFixture()
     const hidden = projectGlobalSpoilers(raw, false)
     expect(hidden.characters[0]?.fate).toBe(SPOILER_PLACEHOLDER)
+    expect(hidden.characters[0]?.fate_evidence?.source?.text).toBe(SPOILER_PLACEHOLDER)
+    expect(hidden.characters[0]?.fate_evidence?.source?.normalized).toBe(SPOILER_PLACEHOLDER)
     expect(hidden.secrets).toHaveLength(1)
     expect(hidden.secrets[0]?.fact).toBe(SPOILER_PLACEHOLDER)
     expect(hidden.arc.climax).toBe(SPOILER_PLACEHOLDER)
     expect(hidden.arc.ending).toBe(SPOILER_PLACEHOLDER)
+    expect(hidden.arc.arc_tracks[0]?.trajectory_evidence.source?.text).toBe(
+      SPOILER_PLACEHOLDER,
+    )
     expect(JSON.stringify(hidden)).not.toContain('真实秘密')
+    expect(JSON.stringify(hidden)).not.toContain('真实 fate 证据')
+    expect(JSON.stringify(hidden)).not.toContain('真实弧线证据')
     expect(projectGlobalSpoilers(raw, true)).toBe(raw)
   })
 })

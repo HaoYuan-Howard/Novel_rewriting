@@ -33,6 +33,7 @@ from pydantic import Field, StringConstraints, model_validator
 
 from contracts.invariants import (
     ADDRESS_BY, ADDRESS_CONTEXT, BLUEPRINT_ARCHITECTURES, CACHE_POLICY, HINGE_KINDS,
+    KNOWLEDGE_SUBJECT_KINDS, RELATION_VISIBILITY_KINDS,
     REVEAL_EVENT_KINDS, SECRET_SETUP_KINDS,
     NAME_DISTINCTIVENESS, NARRATIVE_PERSON, PLACE_MODES, RESPONSE_TIME_LAYERS,
     SPAN_RECOVERY, TIME_LAYERS, WORLD_RULE_KINDS,
@@ -44,9 +45,94 @@ from contracts.schema.common import LlmProvenance
 #: ⚠ `ADDRESS_BY` 记的是**三类**（`char_id` 是类名不是值），所以这里必须写成模式，
 #: 不能写成 `Literal[ADDRESS_BY]`——那会把全部真实的 `char_001` 拒掉。
 AddressBy = Annotated[str, StringConstraints(pattern=r'^(char_\d+|narration|public)$')]
+ChapterOrdinal = Annotated[int, Field(strict=True, ge=1)]
 
 assert set(ADDRESS_BY) == {'char_id', 'narration', 'public'}, \
     'ADDRESS_BY 改了取值面而 AddressBy 那个模式没跟着改——两处必须一起看'
+
+
+class SourceSpan(StrictModel):
+    """正式制品里的原文引用；模型 locator 只存在于响应归一边界。"""
+
+    text: str = Field(min_length=1)
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+    normalized: str = Field(min_length=1)
+    recovery: Literal[SPAN_RECOVERY]
+
+    @model_validator(mode='after')
+    def _end_is_after_start(self) -> SourceSpan:
+        if self.end <= self.start:
+            raise ValueError('source span end must be greater than start')
+        return self
+
+
+class EvidenceLocator(StrictModel):
+    """模型/人工入口交的短定位；正式产物里不保留 ``locator`` 字节。"""
+
+    chapter_ordinal: ChapterOrdinal
+    locator: str = Field(min_length=1, max_length=160)
+
+
+class FactEvidence(StrictModel):
+    """一条自由事实的正式原文证据。
+
+    ``source=None`` 是可读、可归档的失败态：归一找不到或发现多处命中时必须先
+    落 `.INVALID`，再让 typed edit / `--revalidate` 有东西可修，不能在 Pydantic
+    构造前崩掉而永久锁死一次有效付费响应。
+    """
+
+    chapter_ordinal: ChapterOrdinal
+    source: SourceSpan | None
+
+
+class RelationVisibilityPublic(StrictModel):
+    kind: Literal['public']
+    from_chapter: ChapterOrdinal
+
+
+class RelationVisibilityViaSecret(StrictModel):
+    kind: Literal['via_secret']
+    secret_id: str = Field(pattern=r'^secret_\d{2}$')
+
+
+RelationVisibility = Annotated[
+    RelationVisibilityPublic | RelationVisibilityViaSecret,
+    Field(discriminator='kind'),
+]
+
+
+class CharacterRef(StrictModel):
+    kind: Literal['character']
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+
+
+class GroupRef(StrictModel):
+    kind: Literal['group']
+    label: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _label_has_visible_text(self) -> GroupRef:
+        if not self.label.strip():
+            raise ValueError('group label must contain visible text')
+        return self
+
+
+KnowledgeSubject = Annotated[CharacterRef | GroupRef, Field(discriminator='kind')]
+
+
+class KnowledgeEvent(StrictModel):
+    """世界内某个主体从哪一章起知道这条 secret。"""
+
+    subject: KnowledgeSubject
+    known_from_chapter: ChapterOrdinal
+    evidence: FactEvidence
+
+
+assert set(RELATION_VISIBILITY_KINDS) == {'public', 'via_secret'}, \
+    'RelationVisibility 判别联合与契约取值面分家'
+assert set(KNOWLEDGE_SUBJECT_KINDS) == {'character', 'group'}, \
+    'KnowledgeSubject 判别联合与契约取值面分家'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,8 +153,8 @@ class Address(StrictModel):
     #: **派发键**——一个解析不出人的串对派发毫无用处。已知代价：丢掉「哪个群体」。
     #: 盘上兜底 0 次，⚠ 这**不是**「没发生过」的证据，它同时也可以是
     #: 「这三本恰好没有群体称呼」。
-    #: ⚠ 这与 `Secret.character_known_by` 的处置**故意相反**：那边要的是「谁知情」，
-    #: 群体本身就是答案，逼它写 id 只会逼出假 id。
+    #: ⚠ 这与 `Secret.knowledge_events[].subject` 的 GroupRef 处置**故意相反**：
+    #: 那边要的是「谁知情」，群体本身就是答案，逼它写 id 只会逼出假 id。
     #: **同一个「无名群体」在两个字段上的正确处置方向相反**——
     #: 改之前先问它在这里是**派发键**还是**答案**。
     by: AddressBy
@@ -78,7 +164,7 @@ class Address(StrictModel):
 
     #: ≥1 且在全书章范围内。**[HARD] 不早于该 `surface` 在原文里首次出现的章**——
     #: **单边**（`R-2.5`）。⚠ 落盘前会被**只往后抬**，记进 `_provenance.address_from_chapter_raised`。
-    from_chapter: int = Field(ge=1)
+    from_chapter: ChapterOrdinal
 
 
 class Character(StrictModel):
@@ -102,10 +188,18 @@ class Character(StrictModel):
     #: 而词表只抓「转抄式结局词」（实测一本上命中 0/17 而人读真违规 6/17）。
     #: **它不是恒为 0，只是判别力低**；校验器为此常驻打印一条 `[????] role 不含结局`。
     role: str = Field(min_length=1)
+    role_evidence: FactEvidence
 
     #: 长度 2~58；**盘上 6/75 为 `null`**（键恒在）。只统计（`R-2.7`）。
     #: ⚠ **`fate` 一概不下发给写手**——写手提前知道谁最后会死，第 1 章的伏笔就写过明。
     fate: str | None
+    fate_evidence: FactEvidence | None
+
+    @model_validator(mode='after')
+    def _fate_and_evidence_agree(self) -> Character:
+        if (self.fate is None) != (self.fate_evidence is None):
+            raise ValueError('fate 与 fate_evidence 必须同时为空或同时非空')
+        return self
 
 
 class Relation(StrictModel):
@@ -119,6 +213,10 @@ class Relation(StrictModel):
     object_id: str = Field(min_length=1)
 
     predicate: str = Field(min_length=1)
+    predicate_evidence: FactEvidence
+
+    #: **读者**何时能知道这条关系；与下方世内成立窗口正交。
+    visibility: RelationVisibility
 
     #: 关系**世内**成立的章。**[HARD] 在章范围内**（`R-2.8`）。
     #:
@@ -132,10 +230,20 @@ class Relation(StrictModel):
     #: Pro 那本 **0/4**（埋点全填了，闸门全程有效），Flash 三本 1/7 · 1/4 · **4/7**。
     #: ⇒ 闸门在 Pro 产的 global 上是开着的；Flash 会掉一部分，那是**生成侧换模型**
     #: 要盯的读数，不是这条闸门本身失效。
-    valid_from_chapter: int = Field(ge=1)
+    valid_from_chapter: ChapterOrdinal
 
-    #: 失效点（和离/亡故/决裂），没失效填 `null`（键恒在）。盘上 22/70 非 `null`。
-    valid_to_chapter: int | None
+    #: 截止仍成立的最后一章（**含该章**）；没有截止章填 `null`（键恒在）。
+    #: 旧名 `valid_to_chapter` 没说清边界是否包含，消费者实际一直按 ``>= 当前章``
+    #: 判定，故随 GlobalGrounding v3 同批改名为 `valid_through_chapter`。盘上 22/70 非 `null`。
+    valid_through_chapter: ChapterOrdinal | None
+
+    @model_validator(mode='after')
+    def _valid_window_is_ordered(self) -> Relation:
+        if (self.valid_through_chapter is not None
+                and self.valid_through_chapter < self.valid_from_chapter):
+            raise ValueError(
+                'valid_through_chapter 不能早于 valid_from_chapter')
+        return self
 
 
 class Setting(StrictModel):
@@ -152,23 +260,26 @@ class Setting(StrictModel):
 
     #: 长度 12~42。故事事实，**不是文体判断**。
     era: str = Field(alias='时代背景', min_length=1)
+    era_evidence: FactEvidence
 
     #: 长度 33~69。
     #: ⚠ **逐章闸门只挡转抄式泄底**（字面子串包含），实测在唯一有 secrets 的那本上
     #: 命中 **0/8**，包括一条已知真泄漏。命中 0 时打常驻 `[????]`，**不打 `[OK]`**。
     worldview: str = Field(alias='世界观', min_length=1)
+    worldview_evidence: FactEvidence
 
 
 class WorldRuleVersion(StrictModel):
     """一条规则的一个版本。**规则正文的唯一落点。**"""
 
     #: 从头没变过的规则也要给一条，填 `1`。
-    effective_from_chapter: int = Field(ge=1)
+    effective_from_chapter: ChapterOrdinal
 
     #: 长度 23~94。**必须连「怎么运作 / 怎么判读」一起写**——只写「存在」等于没记。
     #: **无守卫 → `B-08`**。
     #: ⚠ 下游取正文时**无兜底，缺失即显式终态**（`or description` 那个兜底就是漏洞本身）。
     desc: str = Field(min_length=1)
+    desc_evidence: FactEvidence
 
 
 class WorldRule(StrictModel):
@@ -190,11 +301,18 @@ class WorldRule(StrictModel):
     #: **至少一条**。盘上 10 条长度 1 · 1 条长度 2。
     versions: list[WorldRuleVersion] = Field(min_length=1)
 
+    @model_validator(mode='after')
+    def _version_starts_are_unique(self) -> WorldRule:
+        starts = [row.effective_from_chapter for row in self.versions]
+        if len(starts) != len(set(starts)):
+            raise ValueError(f'{self.rule_id}: duplicate effective_from_chapter')
+        return self
+
 
 class ReaderRevealEvent(StrictModel):
     """读者第几章被揭示——**逐章剧透闸门的依据**（`secrets` 与 `relations` 两条通道都按它闸）。"""
 
-    chapter: int = Field(ge=1)
+    chapter: ChapterOrdinal
 
     #: `first` = 这条秘密**第一次**对读者点破；`confirm` = 后续复述 / 加深 / 再确认。
     #:
@@ -220,7 +338,7 @@ class SecretSetupForeshadowed(StrictModel):
     #: **[HARD] 每个都严格 `<` 首次揭示章**（`R-2.9`）。
     #: ⚠ 判据断言的是 `_provenance.setup_chapters_pruned` 那个计数，不是本字段的值：
     #: 裁剪跑在落盘前，再断言字段值就永远为真。
-    chapters: list[int] = Field(min_length=1)
+    chapters: list[ChapterOrdinal] = Field(min_length=1)
 
 
 #: 埋点的两种形态。**判别联合而不是可空列表**（2026-08-23 v2）。
@@ -252,17 +370,16 @@ class Secret(StrictModel):
 
     #: 长度 17~48。写**被瞒住的真相**，不是揭示那章的情节。
     fact: str = Field(min_length=1)
+    fact_evidence: FactEvidence
 
     #: 同一个复合真相被拆成多条时的归组键；独立的秘密填 `null`。
     #: ⚠ **它只用来归组，不参与任何闸门**：下发按每条自己的 `first` 章判，
     #: 否则整组会被最早那一条拉平——那正是拆分要修的东西。
     group_id: str | None = Field(default=None, pattern=r'^sgrp_\d{2}$')
 
-    #: 长度 1~11。**[HARD] 按【形状】分流**：`char_\\d+` 必须能解析；
-    #: 其余是自由文本（「在场士兵」），放行。
-    #: ⚠ 自由文本那一臂**盘上已有实例**（某本的 `'那两个流氓'`）——
-    #: 旧注释「73/73 全是 char_id、自由文本零样本」已作废。
-    character_known_by: list[str] = Field(min_length=1)
+    #: 世界内知情人时间线。具名人物是 registry 外键；无名群体保留自由文本 label。
+    #: 旧 `character_known_by` 没有时间维，不能回答“第几章起知道”，已随 v3 退役。
+    knowledge_events: list[KnowledgeEvent] = Field(min_length=1)
 
     #: 埋点。取值面与「为什么是判别联合」见 `SecretSetup`。
     setup: SecretSetup
@@ -296,6 +413,14 @@ class Secret(StrictModel):
         if late:
             raise ValueError(
                 f'{self.secret_id}: 揭示事件 {late} 早于首次揭示章 {first}')
+        subjects = [
+            (event.subject.kind,
+             getattr(event.subject, 'char_id', None),
+             getattr(event.subject, 'label', None))
+            for event in self.knowledge_events
+        ]
+        if len(subjects) != len(set(subjects)):
+            raise ValueError(f'{self.secret_id}: duplicate knowledge subject')
         return self
 
     @property
@@ -350,6 +475,7 @@ class ArcTrack(StrictModel):
     #: 剥掉 `trajectory` 之后剩下的 `{char_001, 道德底线, deterioration}` 对写手是零信息。
     #: **别把它们当成三个独立的信号。**
     trajectory: str = Field(min_length=1)
+    trajectory_evidence: FactEvidence
 
 
 class Arc(StrictModel):
@@ -377,19 +503,36 @@ class Canon(StrictModel):
     world_rules: list[WorldRule]
     secrets: list[Secret]
 
+    @model_validator(mode='after')
+    def _stable_ids_are_unique(self) -> Canon:
+        for label, values in (
+            ('world rule', [row.rule_id for row in self.world_rules]),
+            ('secret', [row.secret_id for row in self.secrets]),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f'duplicate {label} ids')
+        return self
+
 
 class Entities(StrictModel):
     #: 键即 `char_id`。盘上 75 个，全部形如 `char_\\d{3}`，主角恒 `char_001`。
     #: ⚠ **键的格式没有任何判据在查**，下游只做成员检查（`x in registry`）——
     #: 所以这里**故意不加 pattern**：加一个就是替一个不存在的守卫声称了存在。
-    #: 形状真正承重的地方在别处（`Secret.character_known_by` 的 `char_\\d+` 分流）。
+    #: 形状真正承重的地方在别处（`KnowledgeSubject` 的判别联合）。
     characters: dict[str, Character]
 
     relations: list[Relation]
 
+    @model_validator(mode='after')
+    def _relation_ids_are_unique(self) -> Entities:
+        values = [row.relation_id for row in self.relations]
+        if len(values) != len(set(values)):
+            raise ValueError('duplicate relation ids')
+        return self
+
 
 class GlobalProvenance(LlmProvenance):
-    """`global_grounding._provenance` —— 五个确定性归一记账键。
+    """`global_grounding._provenance` —— 全局确定性归一记账键。
 
     ⚠ **记账不是终点，报出来才是**（`Q-1`）：这五个键各有**指定出口**
     （断言计数 / 逐条列出），细则见 `stage2.md` §3.3。三条形式要求：
@@ -421,6 +564,13 @@ class GlobalProvenance(LlmProvenance):
     #: ——v2 的判别联合消除的是「模型意图」那层歧义，这一层仍然只有这个账说得清。
     setup_chapters_pruned: list[tuple[str, list[int], list[int]]]
 
+    #: `(claim_path, locator, 回取的原文字节)`；只有 normalized 恢复才入账。
+    evidence_locator_rewrites: list[tuple[str, str, str]]
+
+    #: `(claim_path, chapter, locator, reason)`；非空时正式证据为 `source=None`，
+    #: 由 `global_evidence_unlocated` HARD 拦到可恢复的 `.INVALID`。
+    evidence_locator_failures: list[tuple[str, int, str, str]]
+
 
 class GlobalGrounding(StrictModel):
     """`stage2/global_grounding.json` —— 顶层 4 个键。**全书一次调用。**
@@ -442,157 +592,6 @@ class GlobalGrounding(StrictModel):
     provenance: GlobalProvenance = Field(alias='_provenance')
 
 
-class SecretPatch(StrictModel):
-    """一条 secret 的人工订正。**按 `secret_id` 定位；给了哪个字段就整字段替换那个。**
-
-    ⚠ **字段级替换而不是组内合并**：`character_known_by` 少写一个人与「这一项没给」
-    在合并语义下同形，而它们是两个决定。`None` = 这一格人没动过。
-    ⚠ **`setup` 用 `None` 表示「人没动过」，而「人把埋点清空了」写成
-    `{"kind": "cold"}`**——v1 时代这两件事都落在 `list[int] | None` 上，
-    靠「`[]` 有语义、`None` 才是未给」这条约定撑着；v2 把它变成了两个不同的形状。
-    """
-
-    secret_id: str = Field(pattern=r'^secret_\d{2}$')
-
-    fact: str | None = Field(default=None, min_length=1)
-    group_id: str | None = Field(default=None, pattern=r'^sgrp_\d{2}$')
-    character_known_by: list[str] | None = Field(default=None, min_length=1)
-    setup: SecretSetup | None = None
-    reader_reveal_events: list[ReaderRevealEvent] | None = Field(default=None, min_length=1)
-
-    @model_validator(mode='after')
-    def _at_least_one_field(self) -> SecretPatch:
-        given = (self.fact, self.group_id, self.character_known_by,
-                 self.setup, self.reader_reveal_events)
-        if all(value is None for value in given):
-            raise ValueError(
-                f'{self.secret_id}: 一个字段都没给——空补丁什么都不改，'
-                f'而它在盘上与「人看过并改了」长得一样')
-        return self
-
-
-class WorldRulePatch(StrictModel):
-    """Typed correction for an existing world rule; never creates/deletes one."""
-
-    rule_id: str = Field(pattern=r'^wr_\d{2}$')
-    kind: Literal[WORLD_RULE_KINDS] | None = None
-    versions: list[WorldRuleVersion] | None = Field(default=None, min_length=1)
-
-    @model_validator(mode='after')
-    def _has_change(self) -> 'WorldRulePatch':
-        if self.kind is None and self.versions is None:
-            raise ValueError(f'{self.rule_id}: empty world-rule patch')
-        return self
-
-
-class CharacterEnumPatch(StrictModel):
-    """Typed correction for the derived name distinctiveness enum."""
-
-    char_id: str = Field(pattern=r'^char_\d{3}$')
-    name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
-
-
-class AddressContextPatch(StrictModel):
-    """Correct one existing address enum by its audited list position."""
-
-    char_id: str = Field(pattern=r'^char_\d{3}$')
-    address_index: int = Field(ge=0)
-    context: Literal[ADDRESS_CONTEXT]
-
-
-class CharacterAddressReplacement(StrictModel):
-    """Replace one character's complete address surface.
-
-    A positional patch cannot add an omitted address, remove an invented one,
-    or correct ``surface``/``by``/``from_chapter``.  The replacement is keyed
-    by the stable character id and deliberately carries the whole typed list.
-    """
-
-    char_id: str = Field(pattern=r'^char_\d{3}$')
-    address: list[Address] = Field(min_length=1)
-
-
-class GlobalEdit(StrictModel):
-    """`stage2/global_edit.json` —— typed Stage2 human corrections.
-
-    【它解决的是什么】细粒度 patch 适合订正已有事实的一格，却无法补漏、删除幻觉项，
-    也无法把拥有不同读者揭示时点的复合 secret 拆成独立记录。本载体因此同时提供
-    existing-row patches 与 typed complete replacements；后者允许有证据的新增/删除/拆分，
-    并由运行时在任何写盘前校验全部外键与章号。
-
-    ⚠ 同一 subject 的 patch 与 replacement 严格互斥。否则 replacement 会重定义集合或
-    address 下标，而最后生效的是哪份人工决定将取决于实现遍历顺序。
-    ⚠ 编辑文件落在书目录里、进 `ARTIFACTS`、被 `store.read` 当上游边记账，
-    **形状即契约**（照 stage3/4/6/7 四份 `*_edit.json` 的先例）。
-    """
-
-    secrets: list[SecretPatch] = Field(default_factory=list)
-    world_rules: list[WorldRulePatch] = Field(default_factory=list)
-    characters: list[CharacterEnumPatch] = Field(default_factory=list)
-    addresses: list[AddressContextPatch] = Field(default_factory=list)
-
-    #: Complete-set replacements are nullable rather than defaulting to ``[]``:
-    #: an explicit empty list means "delete every row", while ``null`` means
-    #: that this subject was not edited.  That distinction is required for
-    #: omission repair and cannot be recovered after parsing.
-    secrets_replace: list[Secret] | None = None
-    world_rules_replace: list[WorldRule] | None = None
-    addresses_replace: list[CharacterAddressReplacement] = Field(
-        default_factory=list)
-
-    @model_validator(mode='after')
-    def _one_patch_per_subject(self) -> GlobalEdit:
-        if not (
-            self.secrets or self.world_rules or self.characters or self.addresses
-            or self.secrets_replace is not None
-            or self.world_rules_replace is not None
-            or self.addresses_replace
-        ):
-            raise ValueError('global edit must contain at least one typed patch')
-        if self.secrets_replace is not None and self.secrets:
-            raise ValueError(
-                'canon.secrets cannot be patched and completely replaced in one edit')
-        if self.world_rules_replace is not None and self.world_rules:
-            raise ValueError(
-                'canon.world_rules cannot be patched and completely replaced in one edit')
-        got = [patch.secret_id for patch in self.secrets]
-        if len(set(got)) != len(got):
-            dup = sorted({sid for sid in got if got.count(sid) > 1})
-            raise ValueError(
-                f'同一条 secret 给了多份补丁：{dup}。'
-                f'哪一份生效取决于遍历顺序 ⇒ 人的决定会被实现细节改写')
-        for label, keys in (
-            ('world rule', [patch.rule_id for patch in self.world_rules]),
-            ('character', [patch.char_id for patch in self.characters]),
-            ('address', [(patch.char_id, patch.address_index) for patch in self.addresses]),
-        ):
-            if len(keys) != len(set(keys)):
-                raise ValueError(f'duplicate {label} patches are order-dependent')
-
-        replacement_characters = [row.char_id for row in self.addresses_replace]
-        if len(replacement_characters) != len(set(replacement_characters)):
-            raise ValueError('duplicate complete address replacements are order-dependent')
-        patched_address_characters = {row.char_id for row in self.addresses}
-        conflicts = sorted(set(replacement_characters) & patched_address_characters)
-        if conflicts:
-            raise ValueError(
-                f'character address cannot be patched and completely replaced together: '
-                f'{conflicts}')
-
-        for label, rows, key in (
-            ('secret', self.secrets_replace, 'secret_id'),
-            ('world rule', self.world_rules_replace, 'rule_id'),
-        ):
-            if rows is None:
-                continue
-            ids = [str(getattr(row, key)) for row in rows]
-            if len(ids) != len(set(ids)):
-                duplicate = sorted({item for item in ids if ids.count(item) > 1})
-                raise ValueError(
-                    f'duplicate {label} ids in complete replacement: {duplicate}')
-        return self
-
-
 # ── LLM response models：只收【模型该写的字段】──────────────────────────────
 #
 # 最终产物模型不能直接拿来校验响应：Address.by 允许模型先写人名、再由代码回解；
@@ -603,7 +602,7 @@ class AddressResponse(StrictModel):
     surface: str = Field(min_length=1)
     by: str = Field(min_length=1)
     context: Literal[ADDRESS_CONTEXT]
-    from_chapter: int = Field(ge=1)
+    from_chapter: ChapterOrdinal
 
 
 class CharacterResponse(StrictModel):
@@ -611,20 +610,144 @@ class CharacterResponse(StrictModel):
     address: list[AddressResponse] = Field(min_length=1)
     name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
     role: str = Field(min_length=1)
+    role_evidence: EvidenceLocator
     fate: str | None
+    fate_evidence: EvidenceLocator | None
+
+    @model_validator(mode='after')
+    def _fate_and_evidence_agree(self) -> CharacterResponse:
+        if (self.fate is None) != (self.fate_evidence is None):
+            raise ValueError('fate 与 fate_evidence 必须同时为空或同时非空')
+        return self
+
+
+class RelationResponse(StrictModel):
+    relation_id: str = Field(pattern=r'^rel_\d{2}$')
+    subject_id: str = Field(min_length=1)
+    object_id: str = Field(min_length=1)
+    predicate: str = Field(min_length=1)
+    predicate_evidence: EvidenceLocator
+    visibility: RelationVisibility
+    valid_from_chapter: ChapterOrdinal
+    valid_through_chapter: ChapterOrdinal | None
+
+    @model_validator(mode='after')
+    def _valid_window_is_ordered(self) -> RelationResponse:
+        if (self.valid_through_chapter is not None
+                and self.valid_through_chapter < self.valid_from_chapter):
+            raise ValueError('relation 有效截止章早于起章')
+        return self
+
+
+class SettingResponse(StrictModel):
+    era: str = Field(alias='时代背景', min_length=1)
+    era_evidence: EvidenceLocator
+    worldview: str = Field(alias='世界观', min_length=1)
+    worldview_evidence: EvidenceLocator
+
+
+class WorldRuleVersionResponse(StrictModel):
+    effective_from_chapter: ChapterOrdinal
+    desc: str = Field(min_length=1)
+    desc_evidence: EvidenceLocator
+
+
+class WorldRuleResponse(StrictModel):
+    rule_id: str = Field(pattern=r'^wr_\d{2}$')
+    kind: Literal[WORLD_RULE_KINDS]
+    versions: list[WorldRuleVersionResponse] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _version_starts_are_unique(self) -> WorldRuleResponse:
+        starts = [row.effective_from_chapter for row in self.versions]
+        if len(starts) != len(set(starts)):
+            raise ValueError(f'{self.rule_id}: duplicate effective_from_chapter')
+        return self
+
+
+class KnowledgeEventResponse(StrictModel):
+    subject: KnowledgeSubject
+    known_from_chapter: ChapterOrdinal
+    evidence: EvidenceLocator
+
+
+class SecretResponse(StrictModel):
+    secret_id: str = Field(pattern=r'^secret_\d{2}$')
+    fact: str = Field(min_length=1)
+    fact_evidence: EvidenceLocator
+    group_id: str | None = Field(default=None, pattern=r'^sgrp_\d{2}$')
+    knowledge_events: list[KnowledgeEventResponse] = Field(min_length=1)
+    setup: SecretSetup
+    reader_reveal_events: list[ReaderRevealEvent] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _exactly_one_first_reveal(self) -> SecretResponse:
+        firsts = [event for event in self.reader_reveal_events if event.kind == 'first']
+        if len(firsts) != 1:
+            raise ValueError(f'{self.secret_id}: 恰需一条 kind="first" 的揭示事件')
+        first = firsts[0].chapter
+        if any(event.chapter < first for event in self.reader_reveal_events):
+            raise ValueError(f'{self.secret_id}: 有揭示事件早于首次揭示章')
+        subjects = [
+            (event.subject.kind,
+             getattr(event.subject, 'char_id', None),
+             getattr(event.subject, 'label', None))
+            for event in self.knowledge_events
+        ]
+        if len(subjects) != len(set(subjects)):
+            raise ValueError(f'{self.secret_id}: duplicate knowledge subject')
+        return self
+
+
+class CanonResponse(StrictModel):
+    setting: SettingResponse
+    world_rules: list[WorldRuleResponse]
+    secrets: list[SecretResponse]
+
+    @model_validator(mode='after')
+    def _stable_ids_are_unique(self) -> CanonResponse:
+        for label, values in (
+            ('world rule', [row.rule_id for row in self.world_rules]),
+            ('secret', [row.secret_id for row in self.secrets]),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f'duplicate {label} ids')
+        return self
+
+
+class ArcTrackResponse(StrictModel):
+    subject: str = Field(min_length=1)
+    dimension: str = Field(min_length=1)
+    change_type: str = Field(min_length=1)
+    trajectory: str = Field(min_length=1)
+    trajectory_evidence: EvidenceLocator
+
+
+class ArcResponse(StrictModel):
+    conflict_stages: list[ConflictStage] = Field(min_length=1)
+    climax: str = Field(min_length=1)
+    ending: str = Field(min_length=1)
+    arc_tracks: list[ArcTrackResponse] = Field(min_length=1)
 
 
 class EntitiesResponse(StrictModel):
     characters: dict[str, CharacterResponse]
-    relations: list[Relation]
+    relations: list[RelationResponse]
+
+    @model_validator(mode='after')
+    def _relation_ids_are_unique(self) -> EntitiesResponse:
+        values = [row.relation_id for row in self.relations]
+        if len(values) != len(set(values)):
+            raise ValueError('duplicate relation ids')
+        return self
 
 
 class GlobalGroundingResponse(StrictModel):
     """stage2.global 的不可信响应；不含任何代码产字段。"""
 
     entities: EntitiesResponse
-    canon: Canon
-    arc: Arc
+    canon: CanonResponse
+    arc: ArcResponse
 
 
 class RoleFateResponse(StrictModel):
@@ -638,29 +761,257 @@ class RoleSplitResponse(StrictModel):
     characters: dict[str, RoleFateResponse]
 
 
+class SecretPatch(StrictModel):
+    """一条 secret 的 typed 人工订正；claim 改动必须同交新 locator。"""
+
+    secret_id: str = Field(pattern=r'^secret_\d{2}$')
+    fact: str | None = Field(default=None, min_length=1)
+    fact_evidence: EvidenceLocator | None = None
+    group_id: str | None = Field(default=None, pattern=r'^sgrp_\d{2}$')
+    knowledge_events: list[KnowledgeEventResponse] | None = Field(
+        default=None, min_length=1)
+    setup: SecretSetup | None = None
+    reader_reveal_events: list[ReaderRevealEvent] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _valid_patch(self) -> SecretPatch:
+        changed = self.model_fields_set - {'secret_id'}
+        if not changed:
+            raise ValueError(f'{self.secret_id}: empty secret patch')
+        for field in ('fact', 'knowledge_events', 'setup', 'reader_reveal_events'):
+            if field in changed and getattr(self, field) is None:
+                raise ValueError(f'{self.secret_id}: {field} 不能显式置空')
+        if 'fact' in changed and 'fact_evidence' not in changed:
+            raise ValueError(f'{self.secret_id}: 修改 fact 必须同交 fact_evidence locator')
+        if 'fact_evidence' in changed and self.fact_evidence is None:
+            raise ValueError(f'{self.secret_id}: fact_evidence 不能显式置空')
+        if self.reader_reveal_events is not None:
+            firsts = [event for event in self.reader_reveal_events
+                      if event.kind == 'first']
+            if len(firsts) != 1:
+                raise ValueError(
+                    f'{self.secret_id}: 恰需一条 kind="first" 的揭示事件，'
+                    f'实得 {len(firsts)}')
+            first = firsts[0].chapter
+            if any(event.chapter < first for event in self.reader_reveal_events):
+                raise ValueError(f'{self.secret_id}: 有揭示事件早于首次揭示章')
+        if self.knowledge_events is not None:
+            subjects = [
+                (event.subject.kind,
+                 getattr(event.subject, 'char_id', None),
+                 getattr(event.subject, 'label', None))
+                for event in self.knowledge_events
+            ]
+            if len(subjects) != len(set(subjects)):
+                raise ValueError(f'{self.secret_id}: duplicate knowledge subject')
+        return self
+
+
+class WorldRulePatch(StrictModel):
+    rule_id: str = Field(pattern=r'^wr_\d{2}$')
+    kind: Literal[WORLD_RULE_KINDS] | None = None
+    versions: list[WorldRuleVersionResponse] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _has_change(self) -> WorldRulePatch:
+        changed = self.model_fields_set - {'rule_id'}
+        if not changed:
+            raise ValueError(f'{self.rule_id}: empty world-rule patch')
+        for field in changed:
+            if getattr(self, field) is None:
+                raise ValueError(f'{self.rule_id}: {field} 不能显式置空')
+        if self.versions is not None:
+            starts = [row.effective_from_chapter for row in self.versions]
+            if len(starts) != len(set(starts)):
+                raise ValueError(f'{self.rule_id}: duplicate effective_from_chapter')
+        return self
+
+
+class GlobalCharacterPatch(StrictModel):
+    """按人物稳定 ID 订正 enum、role/fate 与其 locator。"""
+
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+    name_distinctiveness: Literal[NAME_DISTINCTIVENESS] | None = None
+    role: str | None = Field(default=None, min_length=1)
+    role_evidence: EvidenceLocator | None = None
+    fate: str | None = None
+    fate_evidence: EvidenceLocator | None = None
+
+    @model_validator(mode='after')
+    def _has_change(self) -> GlobalCharacterPatch:
+        changed = self.model_fields_set - {'char_id'}
+        if not changed:
+            raise ValueError(f'{self.char_id}: empty character patch')
+        if 'name_distinctiveness' in changed and self.name_distinctiveness is None:
+            raise ValueError(f'{self.char_id}: name_distinctiveness 不能显式置空')
+        if 'role' in changed and self.role is None:
+            raise ValueError(f'{self.char_id}: role 不能显式置空')
+        if 'role' in changed and 'role_evidence' not in changed:
+            raise ValueError(f'{self.char_id}: 修改 role 必须同交 role_evidence locator')
+        if 'role_evidence' in changed and self.role_evidence is None:
+            raise ValueError(f'{self.char_id}: role_evidence 不能显式置空')
+        if 'fate' in changed and self.fate is not None and 'fate_evidence' not in changed:
+            raise ValueError(f'{self.char_id}: 写入 fate 必须同交 fate_evidence locator')
+        if 'fate' in changed and self.fate is None and self.fate_evidence is not None:
+            raise ValueError(f'{self.char_id}: fate=null 时不能携带非空 fate_evidence')
+        if 'fate_evidence' in changed and self.fate_evidence is None \
+                and not ('fate' in changed and self.fate is None):
+            raise ValueError(f'{self.char_id}: fate_evidence 只能随 fate=null 清空')
+        return self
+
+
+CharacterEnumPatch = GlobalCharacterPatch
+
+
+class RelationPatch(StrictModel):
+    relation_id: str = Field(pattern=r'^rel_\d{2}$')
+    subject_id: str | None = Field(default=None, min_length=1)
+    object_id: str | None = Field(default=None, min_length=1)
+    predicate: str | None = Field(default=None, min_length=1)
+    predicate_evidence: EvidenceLocator | None = None
+    visibility: RelationVisibility | None = None
+    valid_from_chapter: ChapterOrdinal | None = None
+    valid_through_chapter: ChapterOrdinal | None = None
+
+    @model_validator(mode='after')
+    def _valid_patch(self) -> RelationPatch:
+        changed = self.model_fields_set - {'relation_id'}
+        if not changed:
+            raise ValueError(f'{self.relation_id}: empty relation patch')
+        for field in ('subject_id', 'object_id', 'predicate', 'visibility',
+                      'valid_from_chapter'):
+            if field in changed and getattr(self, field) is None:
+                raise ValueError(f'{self.relation_id}: {field} 不能显式置空')
+        if 'predicate' in changed and 'predicate_evidence' not in changed:
+            raise ValueError(
+                f'{self.relation_id}: 修改 predicate 必须同交 predicate_evidence locator')
+        if 'predicate_evidence' in changed and self.predicate_evidence is None:
+            raise ValueError(f'{self.relation_id}: predicate_evidence 不能显式置空')
+        return self
+
+
+class SettingPatch(StrictModel):
+    era: str | None = Field(default=None, alias='时代背景', min_length=1)
+    era_evidence: EvidenceLocator | None = None
+    worldview: str | None = Field(default=None, alias='世界观', min_length=1)
+    worldview_evidence: EvidenceLocator | None = None
+
+    @model_validator(mode='after')
+    def _valid_patch(self) -> SettingPatch:
+        changed = self.model_fields_set
+        if not changed:
+            raise ValueError('empty setting patch')
+        for claim, evidence in (
+            ('era', 'era_evidence'), ('worldview', 'worldview_evidence'),
+        ):
+            if claim in changed and getattr(self, claim) is None:
+                raise ValueError(f'setting.{claim} 不能显式置空')
+            if claim in changed and evidence not in changed:
+                raise ValueError(f'修改 setting.{claim} 必须同交 {evidence} locator')
+            if evidence in changed and getattr(self, evidence) is None:
+                raise ValueError(f'{evidence} 不能显式置空')
+        return self
+
+
+class ArcTrackPatch(StrictModel):
+    track_index: int = Field(ge=0)
+    subject: str | None = Field(default=None, min_length=1)
+    dimension: str | None = Field(default=None, min_length=1)
+    change_type: str | None = Field(default=None, min_length=1)
+    trajectory: str | None = Field(default=None, min_length=1)
+    trajectory_evidence: EvidenceLocator | None = None
+
+    @model_validator(mode='after')
+    def _valid_patch(self) -> ArcTrackPatch:
+        changed = self.model_fields_set - {'track_index'}
+        if not changed:
+            raise ValueError(f'arc track {self.track_index}: empty patch')
+        for field in ('subject', 'dimension', 'change_type', 'trajectory'):
+            if field in changed and getattr(self, field) is None:
+                raise ValueError(f'arc track {self.track_index}: {field} 不能显式置空')
+        if 'trajectory' in changed and 'trajectory_evidence' not in changed:
+            raise ValueError('修改 trajectory 必须同交 trajectory_evidence locator')
+        if 'trajectory_evidence' in changed and self.trajectory_evidence is None:
+            raise ValueError('trajectory_evidence 不能显式置空')
+        return self
+
+
+class AddressContextPatch(StrictModel):
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+    address_index: int = Field(ge=0)
+    context: Literal[ADDRESS_CONTEXT]
+
+
+class CharacterAddressReplacement(StrictModel):
+    char_id: str = Field(pattern=r'^char_\d{3}$')
+    address: list[Address] = Field(min_length=1)
+
+
+class GlobalEdit(StrictModel):
+    """`stage2/global_edit.json` —— 全局事实的 0 LLM typed 恢复面。"""
+
+    secrets: list[SecretPatch] = Field(default_factory=list)
+    world_rules: list[WorldRulePatch] = Field(default_factory=list)
+    characters: list[GlobalCharacterPatch] = Field(default_factory=list)
+    relations: list[RelationPatch] = Field(default_factory=list)
+    setting: SettingPatch | None = None
+    arc_tracks: list[ArcTrackPatch] = Field(default_factory=list)
+    addresses: list[AddressContextPatch] = Field(default_factory=list)
+    secrets_replace: list[SecretResponse] | None = None
+    world_rules_replace: list[WorldRuleResponse] | None = None
+    relations_replace: list[RelationResponse] | None = None
+    arc_tracks_replace: list[ArcTrackResponse] | None = Field(default=None, min_length=1)
+    addresses_replace: list[CharacterAddressReplacement] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _one_patch_per_subject(self) -> GlobalEdit:
+        if not (
+            self.secrets or self.world_rules or self.characters or self.relations
+            or self.setting is not None or self.arc_tracks or self.addresses
+            or self.secrets_replace is not None or self.world_rules_replace is not None
+            or self.relations_replace is not None or self.arc_tracks_replace is not None
+            or self.addresses_replace
+        ):
+            raise ValueError('global edit must contain at least one typed patch')
+        for label, patch, replacement in (
+            ('canon.secrets', self.secrets, self.secrets_replace),
+            ('canon.world_rules', self.world_rules, self.world_rules_replace),
+            ('entities.relations', self.relations, self.relations_replace),
+            ('arc.arc_tracks', self.arc_tracks, self.arc_tracks_replace),
+        ):
+            if replacement is not None and patch:
+                raise ValueError(f'{label} cannot be patched and completely replaced together')
+        for label, keys in (
+            ('secret', [p.secret_id for p in self.secrets]),
+            ('world rule', [p.rule_id for p in self.world_rules]),
+            ('character', [p.char_id for p in self.characters]),
+            ('relation', [p.relation_id for p in self.relations]),
+            ('arc track', [p.track_index for p in self.arc_tracks]),
+            ('address', [(p.char_id, p.address_index) for p in self.addresses]),
+        ):
+            if len(keys) != len(set(keys)):
+                raise ValueError(f'duplicate {label} patches are order-dependent')
+        replacement_characters = [row.char_id for row in self.addresses_replace]
+        if len(replacement_characters) != len(set(replacement_characters)):
+            raise ValueError('duplicate complete address replacements are order-dependent')
+        if set(replacement_characters) & {row.char_id for row in self.addresses}:
+            raise ValueError('character address cannot be patched and replaced together')
+        for label, rows, key in (
+            ('secret', self.secrets_replace, 'secret_id'),
+            ('world rule', self.world_rules_replace, 'rule_id'),
+            ('relation', self.relations_replace, 'relation_id'),
+        ):
+            if rows is None:
+                continue
+            ids = [str(getattr(row, key)) for row in rows]
+            if len(ids) != len(set(ids)):
+                raise ValueError(f'duplicate {label} ids in complete replacement')
+        return self
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、`chapter_blueprints.json`
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-
-class SourceSpan(StrictModel):
-    """正式制品里的原文引用；模型 locator 只存在于响应归一边界。"""
-
-    text: str = Field(min_length=1)
-    start: int = Field(ge=0)
-    end: int = Field(gt=0)
-    normalized: str = Field(min_length=1)
-
-    #: 取值面与「为什么只剩两档」的落点：`contracts/invariants.py::SPAN_RECOVERY`。
-    recovery: Literal[SPAN_RECOVERY]
-
-    @model_validator(mode='after')
-    def _end_is_after_start(self) -> SourceSpan:
-        if self.end <= self.start:
-            raise ValueError('source span end must be greater than start')
-        return self
-
 
 
 

@@ -20,7 +20,7 @@ context.py —— `writer_context.json` 的**确定性组装**。
 | 叫法时点 | 本章原文里还叫不出名字的人 → 整个人不下发 | `display_names_at` |
 | 秘密揭示章 | 未揭示且非埋点章的 secret → 只留 id 进 `must_not_reveal` | `_project_facts` |
 | 规则放行章 | 规则点到的人本章还没被指名 → 暂不下发 | `_plot_free_rules` |
-| 关系剧透闸门 | 承载秘密的关系改按**读者揭示章**开闸 | `_relation_gates` |
+| 关系剧透闸门 | relation 的显式 `visibility` 决定读者可见章 | `relation_visibility_gates` |
 | 弧线终点 | `arc_tracks` / `climax` / `ending` **只在末章下发** | `_project_facts` |
 | setting 逐章闸门 | 转抄式说出未揭示 secret 的句子 → 剔除 | `_gate_setting` |
 
@@ -40,8 +40,10 @@ from novel.core.naming import (
     person_naming_surfaces, rule_names_a_person, strip_distinguisher, surface_first_chapter,
 )
 from novel.core.facts import (
-    first_reveal_chapter, secret_contains, secret_keywords, setup_chapters_of,
+    first_reveal_chapter, relation_visibility_gates, secret_contains, secret_keywords,
+    setup_chapters_of,
 )
+from novel.core.evidence import without_global_evidence
 from novel.errors import RefusedByStructure
 from novel.stages.stage4.beats import beat_index, verbatim_pieces
 
@@ -380,75 +382,6 @@ def _relation_labels(ents: dict[str, Any], disp: dict[str, str]) -> dict[str, st
     return out
 
 
-def _relation_gates(ents: dict[str, Any], secrets: list[dict[str, Any]]
-                    ) -> tuple[dict[str, int], list[tuple[Any, Any, int, int]]]:
-    """`{relation_id: 最早可下发的章号}`。默认 = `valid_from_chapter`（**世内**生效时点）；
-    **承载了某条 secret 的关系**改用那条 secret 的最早**读者**揭示章。
-
-    【命中判据 = 两端人名都在 `fact` 里 ＋ 这条关系恰好在该 secret 的【隐瞒窗口】内生效】
-    即 `min(setup_chapters) ≤ valid_from_chapter < min(reveal)`。
-
-    ⚠ 只比人名远远不够——主角与主要配角几乎在每条 `fact` 里都出现。
-    用**谓词**做第二个条件试过两种写法，**单独用哪一种都不成立**：
-      · 谓词**字面**出现在 fact 里 —— 漏掉要拦的那条：`赵怜儿·情人·江随野` 对应的秘密
-        写的是「早已有**私情**」，「情人」二字不在 fact 里；
-      · 谓词与 fact **共享字符** —— 实测闸掉 4 条正当关系：「保媒对象」（第 1 章就摆在
-        明面上的前提）推到 ch9，「父女」「父子」推到 ch5/6。**把亲缘关系瞒到第六章，
-        写手只能改口或编称呼。**
-    ⇒ 「隐瞒窗口」这个**时间**条件不依赖措辞，命中的是「这条关系是在秘密还没揭穿的
-    那几章里成立的」，那正好是它作为剧透的定义。
-
-    【同对消歧：谓词字面命中的优先】只剩一类误报——同一对人之间有好几条关系，
-    而秘密只关于其中一条：某本 `(A→B)` 同时有 `上司` 与 `暗恋`，而秘密是暗恋。
-    两条都落在窗口里，**把「他是她上司」也瞒到第 18 章，写手只好绕开这层关系或自己编一个**。
-    ⇒ 同一 `(subject, object)` 对里若**有**谓词字面出现在 fact 里的，就只闸那些；
-    一条都没有时才全闸。
-
-    **保守方向是明确的**：宁可漏一条（退回原来的行为），也不要把正当关系闸掉。
-    没有 `setup_chapters` 的冷揭示 secret 不参与：它没有隐瞒窗口可言。
-
-    返回 `(gates, vanished)`。⚠ `vanished` = **推迟到失效点之后**的那些
-    （`[(relation_id, predicate, 闸到第几章, 第几章失效)]`）：那是一次**静默的信息删除**，
-    不是一次推迟。实测四本无一命中（某条的窗口正好收缩成一章），
-    但「现在没有」不等于以后没有——这类损失一旦发生，下游只会看到一条关系凭空不存在。
-    """
-    rels = ents.get('relations') or []
-    gates = {r.get('relation_id'): (r.get('valid_from_chapter') or 1) for r in rels}
-    if not secrets or not rels:
-        return gates, []
-    chars = ents.get('characters') if isinstance(ents.get('characters'), dict) else {}
-    name = {cid: strip_distinguisher((v or {}).get('canonical') or '') for cid, v in chars.items()}
-    for s in secrets:
-        fact = s.get('fact') or ''
-        setups = setup_chapters_of(s)
-        reveal = first_reveal_chapter(s)
-        if not setups or reveal is None:
-            continue
-        lo = min(setups)
-        matched = []
-        for r in rels:
-            a, b = name.get(r.get('subject_id')), name.get(r.get('object_id'))
-            if not (a and b) or a not in fact or b not in fact:
-                continue
-            if lo <= (r.get('valid_from_chapter') or 1) < reveal:
-                matched.append(r)
-        by_pair: dict[tuple[Any, Any], list[dict]] = {}
-        for r in matched:
-            by_pair.setdefault((r.get('subject_id'), r.get('object_id')), []).append(r)
-        for group in by_pair.values():
-            literal = [r for r in group if (r.get('predicate') or '').strip()
-                       and (r.get('predicate') or '').strip() in fact]
-            for r in (literal or group):
-                rid = r.get('relation_id')
-                gates[rid] = max(gates.get(rid, 1), reveal)
-    vanished = [(r.get('relation_id'), r.get('predicate'), gates.get(r.get('relation_id'), 1),
-                 r.get('valid_to_chapter'))
-                for r in rels
-                if r.get('valid_to_chapter') is not None
-                and gates.get(r.get('relation_id'), 1) > r.get('valid_to_chapter')]
-    return gates, vanished
-
-
 def _arc_subject(subj: Any, disp: dict[str, str], rel_labels: dict[str, str]) -> str | None:
     """把一条轨迹的 `subject` 说成人话；说不成返回 `None`（由调用方入显式终态）。"""
     if subj == 'reader':
@@ -511,6 +444,41 @@ def _gate_setting(setting: dict[str, Any], secrets: list[dict[str, Any]], hidden
     return out, cut
 
 
+def _known_by_at(secret: dict[str, Any], ordinal: int, disp: dict[str, str]) -> list[str]:
+    """把本章已经知情的 typed subject 投影成 `known_by` 的人话列表。
+
+    `knowledge_events` 的时间判断是包含式：`known_from_chapter <= ordinal`。
+    CharacterRef 走本章名字表，叫不出名字就略去；GroupRef 的自由文本 label 原样保留。
+    evidence 只用于上游回取与审计，不进入写手上下文。
+
+    本仓没有旧 artifact 迁移/双形状读取；缺整格 `knowledge_events` 与显式空数组都不
+    猜知情主体。GlobalGrounding v2 会先被注册版本拒掉，不能在下发层悄悄复活旧语义。
+    """
+    values = []
+    for event in (secret.get('knowledge_events') or []):
+        if not isinstance(event, dict):
+            continue
+        known_from = event.get('known_from_chapter')
+        if type(known_from) is not int or known_from > ordinal:
+            continue
+        subject = event.get('subject')
+        if not isinstance(subject, dict):
+            continue
+        if subject.get('kind') == 'character':
+            values.append(disp.get(subject.get('char_id')))
+        elif subject.get('kind') == 'group':
+            label = subject.get('label')
+            values.append(label.strip() if isinstance(label, str) else None)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if isinstance(value, str) and value and value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
 def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[str, str]
                    ) -> tuple[dict[str, Any], list[Any], list[tuple[Any, tuple[str, ...]]],
                               list[tuple[str, str]]]:
@@ -547,10 +515,9 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
     ⚠⚠ **下发不许按 `group_id` 拉平**：那会让整组回到「最早那条一揭示就全放」，
     正是拆分要修的东西。
 
-    ⚠⚠ 曾试过用「本章叙述者知情也放行」来做②，**那是错的**：`character_known_by`
-    **没有时间维度**，它说的是「谁知道」不是「谁到第几章才知道」。第一人称书里主角
-    几乎在每条 secret 的知情人里，这条一加就等于**全放行**。
-    **用无时间维的字段做按章闸门，本身就是错的**；补上时间维的正是埋点章。
+    ⚠⚠ `knowledge_events` 有时间维，但它只回答**世内谁到本章已经知道**，用于裁剪
+    `known_by`；它仍然不能替代读者的揭示时点来放行 secret。第一人称主角先知道真相，
+    不等于读者已经知道；秘密本身的两臂闸门仍只认首次揭示章与埋点章。
     """
     ents = global_g.get('entities') or {}
     canon = global_g.get('canon') or {}
@@ -570,23 +537,14 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
         # 【只留 `reader_knows_by_now` 这一个标志】它已经把两种写法说完了。
         # 曾经并排的 `is_setup_chapter` 落盘之后**全仓无人读**，而且它和这个标志
         # 在揭示章上会同时为真——**一对自相矛盾的标志**。
-        # ⚠ `known_by` 里叫不出名字的略去，不兜底：`char_\d+` 是保留形，解析不到就不写；
-        #   其余是自由文本的无名群体（「在场士兵」），原样留。
-        kb = [disp.get(c) if _CHAR_ID.fullmatch(str(c)) else c
-              for c in (s.get('character_known_by') or [])]
         secrets.append({'secret_id': s.get('secret_id'), 'fact': s.get('fact'),
-                        'known_by': [c for c in kb if c],
+                        'known_by': _known_by_at(s, o, disp),
                         'reader_knows_by_now': past})
 
-    # `relations` 是**第二条剧透通道**，而它此前只有一道**世内**闸门。
-    # `valid_from_chapter` 记的是世内生效时点，`reader_reveal_events` 记的是读者知情时点——
-    # 秘密类关系上这两者**系统性错位**：某条关系 `valid_from=11`，
-    # 而承载它的那条秘密对读者的揭示在 **ch13**、埋点章是 [11,12]。
-    # 于是写 ch11 的人一边被告知「这是埋点章，要埋不能点破」，一边从 relations 拿到了
-    # 「他俩是情人·自第 11 章起」。
-    # ⚠ **不加字段**：给 relations 补一个 `reader_known_from` 会让同一个语义有两个落点。
-    #   在**投影层**解决。
-    gates, _vanished = _relation_gates(ents, canon.get('secrets') or [])
+    # `relations` 是**第二条剧透通道**。`valid_from_chapter` 只记世内生效时点；
+    # 显式 `visibility` 才是读者可见时点。两种 visibility 的 max / secret join
+    # 与 typed fact refs 共用 core 那一个 gate，旧人名启发式只留给 INFO 对账。
+    gates = relation_visibility_gates(ents, canon.get('secrets') or [])
     # ⚠ **两端都得叫得出名字，否则整条不发**：一条边只有一端有名字，写手拿到的是
     #   「许言 · 情人 · char_003」——裸编号进 prompt；而把它解析成全书通用名，
     #   正是这一整轮要堵的剧透（那个人本章还没登场）。
@@ -596,8 +554,10 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
              'object': disp[r.get('object_id')]}
             for r in (ents.get('relations') or [])
             if r.get('subject_id') in disp and r.get('object_id') in disp
-            and gates.get(r.get('relation_id'), r.get('valid_from_chapter') or 1) <= o
-            and (r.get('valid_to_chapter') is None or r.get('valid_to_chapter') >= o)]
+            and gates.get(r.get('relation_id')) is not None
+            and gates[r.get('relation_id')] <= o
+            and (r.get('valid_through_chapter') is None
+                 or r.get('valid_through_chapter') >= o)]
 
     # `arc_tracks` 的 `trajectory` 写的是「从什么变到什么」——**终点就是结局**。
     # 保留维度与变化类型、去掉终点？**剥掉 trajectory 之后剩下的
@@ -642,7 +602,7 @@ def _project_facts(global_g: dict[str, Any], o: int, is_last: bool, disp: dict[s
     # （实测某个亲密称呼要到 ch21 两人关系变了才出现）。
     # 【没有终点这一维】曾有过 `to_chapter`，但模型 48/48 全填 null，而确定性派生
     # 噪声压倒信号——17 个候选里最亲密的那个反被判成 ch21 退役，**方向正好相反**。
-    # 叫法停用的【成因】是关系变了，那件事记在 `relations.valid_to_chapter` 上。
+    # 叫法停用的【成因】是关系变了，那件事记在 `relations.valid_through_chapter` 上。
     # ⚠⚠ **`who` 也要走章级表**：这一处是本函数**自己内部**漏掉的那条——
     #   闸门筛的是「列哪些叫法」，而挂在它上面的 `who` 标签用的仍是全书表，
     #   于是称谓表本身合规、标签却把那个人的全书通用名说了出来。
@@ -780,6 +740,12 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
 
     返回 `Assembly` 而不是裸 dict，使撞名、剔除、闸住等信息能够进入报告。
     """
+    # SourceSpan 只服务 Stage2 回取/复核，不是写手故事材料。这里在唯一组装入口剥一次，
+    # setting 与末章 arc_tracks 即使整格投影也不会把证据原文送进付费 prompt。
+    semantic_global = without_global_evidence(global_g)
+    assert isinstance(semantic_global, dict)
+    global_g = semantic_global
+
     bp = {b.get('chapter_ordinal'): b for b in (blueprints.get('blueprints') or [])}
     text = {m.get('chapter_ordinal'): (m.get('text') or '') for m in main_text}
     chars = ((global_g.get('entities') or {}).get('characters') or {})

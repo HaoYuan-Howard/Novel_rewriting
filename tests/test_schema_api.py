@@ -14,7 +14,9 @@ test_schema_api.py —— HTTP 响应模型的载体层守卫（`docs/schema/_ap
 from __future__ import annotations
 
 import ast
+import json
 import os
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -38,6 +40,31 @@ from contracts.schema.stage3 import (
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 API_PY = os.path.join(ROOT, 'contracts', 'schema', 'api.py')
+
+
+def test_active_global_fixture_is_a_v3_view_and_every_located_span_matches_chapter_text():
+    fixtures = Path(ROOT) / 'web' / 'src' / 'fixtures' / 'backend_v1'
+    raw = json.loads((fixtures / 'global.json').read_text(encoding='utf-8'))
+    view = GlobalView.model_validate(raw)
+    assert {r.visibility.kind for r in view.relations} == {'public', 'via_secret'}
+    assert {e.subject_kind for s in view.secrets for e in s.knowledge_events} == {
+        'character', 'group'}
+
+    reading = json.loads((fixtures / 'reading_ch3.json').read_text(encoding='utf-8'))
+    chapter = ''.join(segment['text'] for segment in reading['segments'])
+    pending: list[object] = [raw]
+    located = 0
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            source = item.get('source')
+            if isinstance(source, dict):
+                assert chapter[source['start']:source['end']] == source['text']
+                located += 1
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    assert located >= 7, '七类 evidence 没有都在 active fixture 里留下可回取正例'
 
 
 def test_preview_sid_is_nullable_but_never_empty():

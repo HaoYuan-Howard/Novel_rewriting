@@ -307,7 +307,7 @@ def test_secret_leak_goes_red_and_the_evidence_is_the_drafts_own_bytes(book, ent
     b = M.Book(title=book.title, ctx=book.ctx, style=book.style,
                source_text=book.source_text,
                secrets=[{'secret_id': 'secret_x', 'fact': fact,
-                         'character_known_by': [], 'setup': {'kind': 'cold'},
+                         'knowledge_events': [], 'setup': {'kind': 'cold'},
                          'reader_reveal_events': [{'chapter': 9}]}])
     e = dict(entry, must_not_reveal=['secret_x'])
     body = _clean_body(book, entry) + fact + '。'
@@ -326,7 +326,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
         source_text=book.source_text,
         secrets=[{
             'secret_id': 'secret_x', 'fact': fact,
-            'character_known_by': [], 'setup': {'kind': 'cold'},
+            'knowledge_events': [], 'setup': {'kind': 'cold'},
             'reader_reveal_events': [{'chapter': 9}],
         }],
     )
@@ -340,7 +340,7 @@ def test_secret_literal_leak_uses_the_authoritative_reveal_timeline(book, entry)
 def test_secret_timeline_uses_the_same_number_ruler(book):
     """揭示章原样写出带数字的 fact 时，不得误报「连揭示章都没命中」。"""
     fact = '她其实一直都知道他是三皇子'
-    secret = {'secret_id': 'secret_x', 'fact': fact, 'character_known_by': [],
+    secret = {'secret_id': 'secret_x', 'fact': fact, 'knowledge_events': [],
               'setup': {'kind': 'cold'}, 'reader_reveal_events': [{'chapter': 9}]}
     synthetic = M.Book(title=book.title, ctx=book.ctx, style=book.style,
                        source_text=book.source_text, secrets=[secret])
@@ -354,7 +354,7 @@ def test_secret_timeline_uses_the_same_number_ruler(book):
 def test_style_plot_scan_uses_the_same_number_ruler(book, monkeypatch):
     """风格块是第五个消费方，不得偷偷退回只对 fact 剥数字的旧尺子。"""
     fact = '她其实一直都知道他是三皇子'
-    secret = {'secret_id': 'secret_x', 'fact': fact, 'character_known_by': [],
+    secret = {'secret_id': 'secret_x', 'fact': fact, 'knowledge_events': [],
               'setup': {'kind': 'cold'}, 'reader_reveal_events': [{'chapter': 9}]}
     synthetic = M.Book(title=book.title, ctx=book.ctx, style=book.style,
                        source_text=book.source_text, secrets=[secret])
@@ -546,6 +546,73 @@ def test_the_secret_ids_never_reach_the_writer(book, entry):
     e = dict(entry, must_not_reveal=['secret_01', 'secret_02'])
     given = prompts.build_material(e, book, with_source_text=False).given
     assert 'must_not_reveal' not in given and 'secret_01' not in given
+
+
+def test_paid_writer_prompt_excludes_global_source_spans(monkeypatch):
+    """Stage5 付费入口必须经共用 ``load_book`` 剥掉正式取证字节。"""
+    import copy
+    from types import SimpleNamespace
+
+    from novel.core.evidence import iter_global_evidence_slots
+    from novel.stages.stage5 import review, write
+    from tests.test_stage2 import global_grounding
+
+    seed = factories.stage5_book()
+    grounding = global_grounding()
+    markers: list[str] = []
+    coordinates: list[int] = []
+    for index, (_claim_path, owner, field) in enumerate(
+        iter_global_evidence_slots(grounding), 1,
+    ):
+        marker = f'STAGE5_EVIDENCE_ONLY_{index}'
+        start = 934_567_800 + index * 100
+        owner[field] = {
+            'chapter_ordinal': 1,
+            'source': {
+                'text': marker,
+                'start': start,
+                'end': start + len(marker),
+                'normalized': f'STAGE5_NORMALIZED_ONLY_{index}',
+                'recovery': 'normalized',
+            },
+        }
+        markers.extend((marker, f'STAGE5_NORMALIZED_ONLY_{index}'))
+        coordinates.extend((start, start + len(marker)))
+
+    class Dumped:
+        def __init__(self, value):
+            self.value = value
+
+        def model_dump(self, **_kwargs):
+            return copy.deepcopy(self.value)
+
+    stored = {
+        review.MAIN_TEXT: SimpleNamespace(root=[
+            SimpleNamespace(chapter_ordinal=ordinal, text=text)
+            for ordinal, text in seed.source_text.items()
+        ]),
+        review.GLOBAL_GROUNDING: Dumped(grounding),
+        review.STYLE_GROUNDING: Dumped(seed.style),
+        review.WRITER_CONTEXT: Dumped(seed.ctx),
+    }
+
+    class Store:
+        @staticmethod
+        def exists(rel):
+            return rel in stored
+
+        @staticmethod
+        def read(_model, rel):
+            return stored[rel]
+
+    monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: Store())
+    _system, user, material = write.build_prompt(
+        SimpleNamespace(title=seed.title, mode='deep'), '1')
+
+    paid_material = user + '\n' + material.given
+    assert markers and all(marker not in paid_material for marker in markers)
+    assert all(str(coordinate) not in paid_material for coordinate in coordinates), \
+        'SourceSpan 的 start/end 坐标进了 Stage5 付费 prompt'
 
 
 def test_current_trim_audit_absorbs_the_duplicate_length_over_action():

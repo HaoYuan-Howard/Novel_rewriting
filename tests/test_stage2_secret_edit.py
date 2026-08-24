@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema import encode_artifact
+from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalEdit, GlobalGrounding
@@ -79,6 +79,37 @@ def _write_edit(book: Path, payload: dict) -> None:
         json.dumps(encode_artifact(extract.GLOBAL_EDIT, payload),
                    ensure_ascii=False, indent=2),
         encoding='utf-8', newline='\n')
+
+
+def _locator(chapter: int, locator: str) -> dict:
+    """GlobalEdit/响应证据形；正式 SourceSpan 一律由生产归一回取。"""
+    return {'chapter_ordinal': chapter, 'locator': locator}
+
+
+def _fact_locator() -> dict:
+    return _locator(1, '信上说父亲已经回城。')
+
+
+def _role_locator() -> dict:
+    return _locator(3, '李宝珠把账册摊在桌上一页页翻。')
+
+
+def _knowledge_character(char_id: str, chapter: int) -> dict:
+    locator = ('她想起了昨夜那封信。' if chapter == 1
+               else '其实母亲早就知道那封信的事。')
+    return {
+        'subject': {'kind': 'character', 'char_id': char_id},
+        'known_from_chapter': chapter,
+        'evidence': _locator(chapter, locator),
+    }
+
+
+def _knowledge_group(label: str, chapter: int = 2) -> dict:
+    return {
+        'subject': {'kind': 'group', 'label': label},
+        'known_from_chapter': chapter,
+        'evidence': _locator(chapter, '其实母亲早就知道那封信的事。'),
+    }
 
 
 def _apply(book: Path):
@@ -198,22 +229,175 @@ def test_correcting_the_reveal_chapter_backwards_reprunes_and_then_hits_the_same
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_the_other_two_editable_fields_land_too():
-    """知情人与 secret 事实——TODO-05 点名的另外两处抽错，同样改得动。"""
+def test_fact_and_typed_knowledge_timeline_land_together():
+    """secret 事实与 CharacterRef/GroupRef 知情时间线同样能走 typed 写回。"""
     root, book = _sandbox('知情人订正_003')
     try:
         _seed(book)
         _write_edit(book, {'secrets': [{
             'secret_id': 'secret_01',
             'fact': '父亲早已回城，只是被债主扣在城南客栈里',
-            'character_known_by': ['char_001', 'char_002'],
+            'fact_evidence': _fact_locator(),
+            'knowledge_events': [
+                _knowledge_character('char_001', 1),
+                _knowledge_group('知情的沈家人', 2),
+            ],
         }]})
         artifact, _report = _apply(book)
         secret = artifact.canon.secrets[0]
         assert secret.fact.endswith('客栈里')
-        assert secret.character_known_by == ['char_001', 'char_002']
+        assert [event.subject.kind for event in secret.knowledge_events] == [
+            'character', 'group']
+        assert [event.known_from_chapter for event in secret.knowledge_events] == [1, 2]
         # 没给的字段一个都不许动
         assert [e.chapter for e in secret.reader_reveal_events] == [2]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_reviewed_role_can_be_corrected_without_an_llm_and_reopens_only_its_review():
+    """批 1 的 role 复核必须接得上批 2 的 typed 写回面。
+
+    人先对旧 role 作出 PASS 决策，再用 ``GlobalEdit.characters[].role`` 修正它；
+    写回要走正式落盘口，而旧 subject hash 上的决定不得跟到新事实上。
+    """
+    root, book = _sandbox('人物身份订正_003a')
+    try:
+        _seed(book)
+        ctx = _ctx(book, 'stage2.global', paid=False)
+        store = ArtifactStore(ctx)
+        review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+        old_item = next(
+            item for item in review.items
+            if item.kind == 'role'
+            and item.subject_path == 'entities.characters.char_001.role')
+        stable_item = next(
+            item for item in review.items
+            if item.kind == 'role'
+            and item.subject_path != old_item.subject_path)
+        review = decide(
+            review,
+            item_id=old_item.item_id,
+            expected_subject_sha256=old_item.subject_sha256,
+            state='PASS',
+            actor='test-reviewer',
+            reason='旧身份已按原文复核',
+            now='2026-08-24T00:00:00+00:00',
+        )
+        review = decide(
+            review,
+            item_id=stable_item.item_id,
+            expected_subject_sha256=stable_item.subject_sha256,
+            state='PASS',
+            actor='test-reviewer',
+            reason='另一个未改身份已按原文复核',
+            now='2026-08-24T00:00:01+00:00',
+        )
+        store.write(extract.GLOBAL_REVIEW_REL, review)
+
+        corrected = '沈家账房，负责核对往来账目'
+        _write_edit(book, {'characters': [{
+            'char_id': 'char_001',
+            'role': corrected,
+            'role_evidence': _role_locator(),
+        }]})
+        artifact, report = _apply(book)
+
+        assert report.node == 'stage2.global' and report.passed
+        assert artifact.entities.characters['char_001'].role == corrected
+        reloaded = ArtifactStore(ctx).read(GlobalGrounding, extract.GLOBAL_REL)
+        assert reloaded.entities.characters['char_001'].role == corrected
+        assert reloaded.provenance.partial_rewrite == '--apply-edit'
+
+        rebuilt = ArtifactStore(ctx).read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+        new_item = next(
+            item for item in rebuilt.items
+            if item.kind == 'role'
+            and item.subject_path == 'entities.characters.char_001.role')
+        assert new_item.subject_sha256 != old_item.subject_sha256
+        assert new_item.item_id != old_item.item_id
+        assert new_item.state == 'pending'
+        kept_item = next(
+            item for item in rebuilt.items
+            if item.subject_path == stable_item.subject_path)
+        assert kept_item.item_id == stable_item.item_id
+        assert kept_item.subject_sha256 == stable_item.subject_sha256
+        assert kept_item.state == 'PASS'
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_leaky_role_invalid_is_repaired_by_the_typed_zero_llm_path():
+    """role/evidence HARD 先留可读问题稿，再从 `.INVALID` 走 typed 恢复。
+
+    第一次人工稿既含结局词，locator 也零命中；归一必须把证据收成 `source=null`，
+    仍能通过 GlobalGrounding 载体落 `.INVALID`。第二次同交 role + 正确 locator，
+    从 live INVALID 继续修，0 LLM 回取正式 SourceSpan；旧正式稿与问题稿都归档。
+    """
+    root, book = _sandbox('身份泄漏恢复_003aa')
+    try:
+        _seed(book)
+        formal_path = book / extract.GLOBAL_REL
+        invalid_path = book / extract._GLOBAL_INVALID
+        formal_before = formal_path.read_bytes()
+
+        _write_edit(book, {'characters': [{
+            'char_id': 'char_001',
+            'role': '沈家账房，最终下狱',
+            'role_evidence': _locator(3, '不存在的身份原文'),
+        }]})
+        blocked_ctx = _ctx(book, 'stage2.global', paid=False)
+        with pytest.raises(GateBlocked, match='role_leaks_fate') as blocked:
+            extract.run_apply_edit(blocked_ctx)
+        assert 'global_evidence_unlocated' in str(blocked.value)
+
+        assert blocked_ctx.ledger.usage() is None, '0 LLM 人工路不该产生调用账'
+        assert formal_path.read_bytes() == formal_before, '问题稿覆盖了正式底座'
+        invalid_before = invalid_path.read_bytes()
+        invalid = json.loads(invalid_before)
+        assert invalid['entities']['characters']['char_001']['role'].endswith('最终下狱')
+        evidence = invalid['entities']['characters']['char_001']['role_evidence']
+        assert evidence['source'] is None
+        failures = invalid['_provenance']['evidence_locator_failures']
+        assert failures and failures[0][0] == 'entities.characters.char_001.role'
+        decoded = decode_artifact(extract._GLOBAL_INVALID, invalid)
+        assert GlobalGrounding.model_validate(decoded.payload), \
+            'source=null 必须仍是可读的失败态'
+
+        corrected = '沈家账房，负责核对往来账目'
+        _write_edit(book, {'characters': [{
+            'char_id': 'char_001',
+            'role': corrected,
+            'role_evidence': _role_locator(),
+        }]})
+
+        # 只豁免「正被替换的决策集」那条 stale 边；正文变化仍须关闭式拒绝。
+        main_path = book / extract.MAIN_TEXT
+        main_before = main_path.read_bytes()
+        changed_main = json.loads(main_before)
+        changed_main['payload'][0]['text'] += '正文发生变化。'
+        main_path.write_text(
+            json.dumps(changed_main, ensure_ascii=False, indent=2), encoding='utf-8')
+        with pytest.raises(UpstreamStale, match='stage1/main_text.json'):
+            extract.run_apply_edit(_ctx(book, 'stage2.global', paid=False))
+        assert invalid_path.read_bytes() == invalid_before
+        assert formal_path.read_bytes() == formal_before
+        main_path.write_bytes(main_before)
+
+        repair_ctx = _ctx(book, 'stage2.global', paid=False)
+        artifact, report = extract.run_apply_edit(repair_ctx)
+
+        assert repair_ctx.ledger.usage() is None, '恢复路不该调用模型或命中模型缓存'
+        assert report.passed
+        assert artifact.entities.characters['char_001'].role == corrected
+        assert artifact.entities.characters['char_001'].role_evidence.source is not None
+        assert artifact.provenance.evidence_locator_failures == []
+        assert not invalid_path.exists(), '通过后的 live INVALID 没有退役'
+        rounds = book / 'stage2' / '_rounds'
+        assert any(path.read_bytes() == invalid_before for path in rounds.glob(
+            'global_grounding.INVALID.r*.json')), '原问题稿没有进入轮次归档'
+        assert any(path.read_bytes() == formal_before for path in rounds.glob(
+            'global_grounding.r*.json')), '原正式底座没有进入轮次归档'
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -255,13 +439,15 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
             'secrets_replace': [{
                 'secret_id': 'secret_01',
                 'fact': '父亲已经回城',
-                'character_known_by': ['char_002'],
+                'fact_evidence': _fact_locator(),
+                'knowledge_events': [_knowledge_character('char_002', 2)],
                 'setup': {'kind': 'foreshadowed', 'chapters': [1]},
                 'reader_reveal_events': [{'chapter': 3}],
             }, {
                 'secret_id': 'secret_02',
                 'fact': '母亲早就知道那封信的事',
-                'character_known_by': ['char_001'],
+                'fact_evidence': _locator(2, '其实母亲早就知道那封信的事。'),
+                'knowledge_events': [_knowledge_character('char_001', 1)],
                 'setup': {'kind': 'cold'},
                 'reader_reveal_events': [{'chapter': 2}],
             }],
@@ -271,6 +457,7 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
                 'versions': [{
                     'effective_from_chapter': 1,
                     'desc': '城中夜间梆子响过以后实行宵禁，行人须留在住所直到天明',
+                    'desc_evidence': _locator(1, '远处传来更夫的梆子声。'),
                 }],
             }],
             'addresses_replace': [{
@@ -300,8 +487,8 @@ def test_complete_typed_surfaces_reach_disk_and_rebuild_the_human_review():
             GlobalReview, extract.GLOBAL_REVIEW_REL)
         secret_rows = [
             item for item in rebuilt.items
-            if item.kind in {'secret_set_complete', 'secret', 'known_by', 'reveal'}]
-        assert len(secret_rows) == 7  # set completeness + 2 × fact/known-by/reveal
+            if item.kind in {'secret_set_complete', 'secret', 'knowledge_event', 'reveal'}]
+        assert len(secret_rows) == 7  # set completeness + 2 × fact/knowledge-event/reveal
         assert all(item.state == 'pending' for item in secret_rows)
         assert old_item_ids.isdisjoint({item.item_id for item in secret_rows})
         assert {item.subject_path for item in secret_rows if item.kind == 'secret'} == {
@@ -328,7 +515,8 @@ def test_the_human_round_inherits_the_paid_ledger_and_marks_the_partial_rewrite(
         before = store.read(GlobalGrounding, extract.GLOBAL_REL).provenance
 
         _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'fact': '父亲早已回城，只是不肯认这笔账'}]})
+            {'secret_id': 'secret_01', 'fact': '父亲早已回城，只是不肯认这笔账',
+             'fact_evidence': _fact_locator()}]})
         artifact, _report = _apply(book)
 
         after = artifact.provenance
@@ -349,7 +537,8 @@ def test_the_previous_round_is_archived_before_the_human_round_lands():
         _seed(book)
         before = (book / extract.GLOBAL_REL).read_bytes()
         _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'character_known_by': ['char_002']}]})
+            {'secret_id': 'secret_01',
+             'knowledge_events': [_knowledge_character('char_002', 2)]}]})
         _apply(book)
         archived = sorted(p.name for p in (book / 'stage2' / '_rounds').iterdir())
         assert archived == ['global_grounding.r1.json', 'global_review.r1.json']
@@ -365,7 +554,10 @@ def test_global_and_review_roll_back_as_one_history_byte_set(monkeypatch):
         _seed(book)
         _write_edit(book, {'secrets': [{
             'secret_id': 'secret_01',
-            'character_known_by': ['char_001', 'char_002'],
+            'knowledge_events': [
+                _knowledge_character('char_001', 1),
+                _knowledge_group('知情的沈家人', 2),
+            ],
         }]})
         stage = book / 'stage2'
         before = {
@@ -422,8 +614,8 @@ def test_two_patches_for_one_secret_are_refused():
     而那意味着**人的决定被实现细节改写**。"""
     with pytest.raises(ValidationError):
         GlobalEdit.model_validate({'secrets': [
-            {'secret_id': 'secret_01', 'fact': 'A'},
-            {'secret_id': 'secret_01', 'fact': 'B'}]})
+            {'secret_id': 'secret_01', 'fact': 'A', 'fact_evidence': _fact_locator()},
+            {'secret_id': 'secret_01', 'fact': 'B', 'fact_evidence': _fact_locator()}]})
 
 
 @pytest.mark.parametrize('payload,why', [
@@ -446,7 +638,7 @@ def test_an_out_of_range_chapter_is_refused_before_anything_is_written(payload, 
         _seed(book)
         before = (book / extract.GLOBAL_REL).read_bytes()
         _write_edit(book, payload)
-        with pytest.raises(TerminalState, match='章号不在这本书的章集合内'):
+        with pytest.raises(TerminalState, match='无效引用/章号'):
             _apply(book)
         assert (book / extract.GLOBAL_REL).read_bytes() == before, f'{why}：正式底座被动过了'
         assert not (book / extract._GLOBAL_INVALID).exists(), \
@@ -461,7 +653,9 @@ def test_an_unknown_secret_id_is_refused_with_the_current_set_spelled_out():
     root, book = _sandbox('未知secret_007')
     try:
         _seed(book)
-        _write_edit(book, {'secrets': [{'secret_id': 'secret_09', 'fact': '凭空一条'}]})
+        _write_edit(book, {'secrets': [{
+            'secret_id': 'secret_09', 'fact': '凭空一条',
+            'fact_evidence': _fact_locator()}]})
         with pytest.raises(TerminalState, match='secret_01'):
             _apply(book)
         assert not (book / extract._GLOBAL_INVALID).exists()
@@ -481,7 +675,8 @@ def test_a_dangling_known_by_reference_is_rejected_before_any_artifact_write():
         _seed(book)
         before = (book / extract.GLOBAL_REL).read_bytes()
         _write_edit(book, {'secrets': [
-            {'secret_id': 'secret_01', 'character_known_by': ['char_777']}]})
+            {'secret_id': 'secret_01',
+             'knowledge_events': [_knowledge_character('char_777', 1)]}]})
         with pytest.raises(TerminalState, match='char_777'):
             _apply(book)
         assert (book / extract.GLOBAL_REL).read_bytes() == before
@@ -506,7 +701,9 @@ def test_a_missing_edit_file_and_a_missing_base_are_two_different_terminal_state
         (book2 / 'stage2').mkdir(parents=True)
         ArtifactStore(_ctx(book2, 'stage2.global')).write(
             extract.MAIN_TEXT, MainText.model_validate(main_text()))
-        _write_edit(book2, {'secrets': [{'secret_id': 'secret_01', 'fact': 'x'}]})
+        _write_edit(book2, {'secrets': [{
+            'secret_id': 'secret_01', 'fact': 'x',
+            'fact_evidence': _fact_locator()}]})
         with pytest.raises(Exception) as caught:
             _apply(book2)
         assert 'stage2.global' in str(caught.value), \
@@ -542,7 +739,9 @@ def test_the_blueprint_node_has_no_secret_edit_entry():
     root, book = _sandbox('走错节点_011')
     try:
         _seed(book)
-        _write_edit(book, {'secrets': [{'secret_id': 'secret_01', 'fact': 'x'}]})
+        _write_edit(book, {'secrets': [{
+            'secret_id': 'secret_01', 'fact': 'x',
+            'fact_evidence': _fact_locator()}]})
         with pytest.raises(TerminalState, match='stage2.global'):
             extract.run_apply_edit(_ctx(book, 'stage2.blueprint', paid=False))
     finally:
@@ -557,7 +756,9 @@ def test_the_edit_file_is_recorded_as_an_input_edge():
     root, book = _sandbox('来源边_012')
     try:
         _seed(book)
-        _write_edit(book, {'secrets': [{'secret_id': 'secret_01', 'fact': '改一个字'}]})
+        _write_edit(book, {'secrets': [{
+            'secret_id': 'secret_01', 'fact': '改一个字',
+            'fact_evidence': _fact_locator()}]})
         artifact, _report = _apply(book)
         assert extract.GLOBAL_EDIT in artifact.provenance.inputs, \
             f'来源账里没有 {extract.GLOBAL_EDIT} 这条边：{sorted(artifact.provenance.inputs)}'

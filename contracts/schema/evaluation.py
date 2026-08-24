@@ -100,7 +100,9 @@ class GlobalReviewItem(StrictModel):
     #: 付费执行都压在它上面。与 `novel/quality/global_review.py::enumerate_required`
     #: 必须同时改：那边枚举得出、这边收不下，是落盘时才炸的一对。
     kind: Literal[
-        'world_rule_version', 'secret', 'reveal', 'known_by',
+        # `known_by` 只为读取存量 global_review v1 保留；当前 grounding 的
+        # knowledge_events 有时间与逐事件证据，生产面改用 `knowledge_event`。
+        'world_rule_version', 'secret', 'reveal', 'known_by', 'knowledge_event',
         'name_distinctiveness', 'address_context', 'world_rule_kind',
         'world_rule_set_complete', 'secret_set_complete',
         # 2026-08-23 补齐：此前评测面只有上面九类，于是 `role` 泄结局、`setting`

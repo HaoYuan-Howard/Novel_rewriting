@@ -10,15 +10,19 @@ facts.py —— 中文正文里的**数值词法**与 secret 的**关键片段�
 
 各处自己抄一份切法必然漂，而漂的表现是**其中一处悄悄不再拦**（判据 25）。
 
-2026-08-23 起还承载 secret 的**时间线读法**（`first_reveal_chapter` /
-`setup_chapters_of`）。它不是字面匹配，收进来是同一个理由：归一、下发闸门与判据
-三处都要问「首次揭示在第几章」，而 v1 时代三处各写一份 `min(所有揭示章)`
-——那个式子让分两次揭示的秘密在第一次之后就整份下发。
+2026-08-23 起还承载 secret 与 relation 的**时间线读法**（`first_reveal_chapter` /
+`setup_chapters_of` / `relation_visibility_gates`）。它不是字面匹配，收进来是同一个
+理由：归一、下发闸门与判据都要问同一条事实何时可见，不能各写一份判向。
+
+relation 的显式 `visibility` 是生产权威；旧的人名 + 隐瞒窗口启发式保留在
+`heuristic_relation_gates`，只给 INFO 对账，不能再决定实际下发。
 """
 from __future__ import annotations
 
 import re
+from typing import Any
 
+from novel.core.naming import strip_distinguisher
 from novel.core.text import norm_index
 
 CN_NUM_CHARS = '〇零一二两三四五六七八九十百千万'
@@ -184,6 +188,139 @@ def setup_chapters_of(secret: dict | None) -> list[int]:
         return []
     return [chapter for chapter in (setup.get('chapters') or [])
             if isinstance(chapter, int)]
+
+
+# ── relation 的读者可见时点 ────────────────────────────────────────────────
+
+def _chapter(value: Any, default: int | None = None) -> int | None:
+    """只接真正的章号；`bool` 虽是 `int` 子类，也不能悄悄变成第 0/1 章。"""
+    return value if type(value) is int else default
+
+
+def relation_visibility_gate(
+    relation: dict[str, Any] | None,
+    secrets_by_id: dict[str, dict[str, Any]],
+) -> int | None:
+    """一条 relation 最早可给读者/写手看的章；说不出答案时关闭为 `None`。
+
+    `valid_from_chapter` 是世内成立时点，`visibility` 是读者可见时点，两者正交：
+
+    - `public`：`max(valid_from_chapter, visibility.from_chapter)`；
+    - `via_secret`：`max(valid_from_chapter, 所指 secret 的首次揭示章)`。
+
+    显式 visibility 一旦存在就是唯一权威；引用不存在、秘密没有合法 `first`、或
+    kind 不认识、或缺整格 visibility 时都不能退回启发式开闸。本仓没有旧 artifact
+    迁移/双形状读取；v2 产物由注册版本先关闭式拒掉，这一落点同样只定义 v3 语义。
+    """
+    if not isinstance(relation, dict):
+        return None
+    valid_from = _chapter(relation.get('valid_from_chapter'), 1)
+    if valid_from is None:
+        return None
+
+    visibility = relation.get('visibility')
+    if visibility is None:
+        return None
+    if not isinstance(visibility, dict):
+        return None
+
+    kind = visibility.get('kind')
+    if kind == 'public':
+        visible_from = _chapter(visibility.get('from_chapter'))
+        return max(valid_from, visible_from) if visible_from is not None else None
+    if kind == 'via_secret':
+        secret_id = visibility.get('secret_id')
+        secret = secrets_by_id.get(secret_id) if isinstance(secret_id, str) else None
+        reveal = first_reveal_chapter(secret)
+        return max(valid_from, reveal) if reveal is not None else None
+    return None
+
+
+def relation_visibility_gates(
+    entities: dict[str, Any] | None,
+    secrets: list[dict[str, Any]] | None,
+) -> dict[str, int | None]:
+    """全部 relation 的显式可见 gate；Stage4 投影与 typed fact refs 共用此处。"""
+    secret_rows = [row for row in (secrets or []) if isinstance(row, dict)]
+    secrets_by_id = {
+        row['secret_id']: row for row in secret_rows
+        if isinstance(row.get('secret_id'), str)
+    }
+    rels = ((entities or {}).get('relations') or []) if isinstance(entities, dict) else []
+    return {
+        row['relation_id']: relation_visibility_gate(row, secrets_by_id)
+        for row in rels
+        if isinstance(row, dict) and isinstance(row.get('relation_id'), str)
+    }
+
+
+def heuristic_relation_gates(
+    entities: dict[str, Any],
+    secrets: list[dict[str, Any]],
+) -> tuple[dict[str, int], list[tuple[Any, Any, int, int]]]:
+    """旧关系可见性启发式的完整推导结果，只供 INFO 与显式声明交叉对账。
+
+    返回 `(gates, vanished)`：`gates` 是旧算法对每条 relation 推导出的最早章；
+    `vanished` 是被推迟到 `valid_through_chapter` 之后、因而整段消失的关系。
+    这份结果不能参与生产投影；实际 gate 只由 `relation_visibility_gates` 给出。
+
+    旧命中口径原样保留：两端 canonical 都出现在 secret.fact，关系在
+    `[最早埋点章, 首次揭示章)` 内成立；同一有向人物对若有谓词字面命中，只取字面
+    命中的 relation，否则取该对全部候选。冷揭示没有隐瞒窗口，不参与推导。
+
+    ⚠ 只比人名远远不够——主角与主要配角几乎在每条 fact 里都出现。旧算法曾试过
+    两种谓词条件，单独用哪种都不成立：要求谓词字面会漏掉「情人」vs「私情」；
+    只要共享字符又会把公开的「父女 / 父子 / 保媒对象」推到后章。最后留下的时间
+    窗口不依赖措辞，并用同对谓词字面优先缩小多关系误报。它的保守方向一直是宁可
+    漏掉一条、退回世内生效章，也不把公开关系错闸。正因为这个判向仍可能错，显式
+    visibility 落地后它只能报告分歧，不能再直接改 gate。
+    """
+    rels = entities.get('relations') or []
+    gates = {r.get('relation_id'): (r.get('valid_from_chapter') or 1) for r in rels}
+    if not secrets or not rels:
+        return gates, []
+    chars = (entities.get('characters')
+             if isinstance(entities.get('characters'), dict) else {})
+    names = {
+        cid: strip_distinguisher((value or {}).get('canonical') or '')
+        for cid, value in chars.items()
+    }
+    for secret in secrets:
+        fact = secret.get('fact') or ''
+        setups = setup_chapters_of(secret)
+        reveal = first_reveal_chapter(secret)
+        if not setups or reveal is None:
+            continue
+        lower = min(setups)
+        matched = []
+        for relation in rels:
+            subject = names.get(relation.get('subject_id'))
+            obj = names.get(relation.get('object_id'))
+            if not (subject and obj) or subject not in fact or obj not in fact:
+                continue
+            if lower <= (relation.get('valid_from_chapter') or 1) < reveal:
+                matched.append(relation)
+        by_pair: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
+        for relation in matched:
+            by_pair.setdefault(
+                (relation.get('subject_id'), relation.get('object_id')), []).append(relation)
+        for group in by_pair.values():
+            literal = [
+                relation for relation in group
+                if (relation.get('predicate') or '').strip()
+                and (relation.get('predicate') or '').strip() in fact
+            ]
+            for relation in (literal or group):
+                relation_id = relation.get('relation_id')
+                gates[relation_id] = max(gates.get(relation_id, 1), reveal)
+    vanished = [
+        (relation.get('relation_id'), relation.get('predicate'),
+         gates.get(relation.get('relation_id'), 1), relation.get('valid_through_chapter'))
+        for relation in rels
+        if relation.get('valid_through_chapter') is not None
+        and gates.get(relation.get('relation_id'), 1) > relation.get('valid_through_chapter')
+    ]
+    return gates, vanished
 
 
 def secret_keywords(fact: str | None, min_len: int = SECRET_KEYWORD_MIN) -> list[str]:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-checks.py —— 74 条判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
+checks.py —— 77 条判据的**实现**。行在 `contracts/judges/stage2.py`（`Q-12`）。
 
 ⚠⚠ **唯一的判定落点。** 两个节点的落盘闸门 / `--check-only` / `--renormalize` 之后的复检
 走的都是 `check()` 这一个函数，保证生成、重算与复检使用同一把尺子。
@@ -14,7 +14,7 @@ checks.py —— 74 条判据的**实现**。行在 `contracts/judges/stage2.py`
 
 【一张表，两个节点共用】`stage2.global` 判 R-2 那一族、`stage2.blueprint` 判 R-3 那一族，
 而**复检相两份产物一起读**（判 `canonical_unique` 要 global，判 `present_ids_dangling`
-要 registry）⇒ `check()` 一次产全部 74 条。缺哪一份，那一族落 `unver` **不是「通过」**。
+要 registry）⇒ `check()` 一次产全部 77 条。缺哪一份，那一族落 `unver` **不是「通过」**。
 
 【判据与产地必须用同一把尺子】本模块一处都不自己写解析：
 `surface_owners` / `surface_owner_since` / `resolve_present_names` / `classify_unattested`
@@ -41,6 +41,8 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.report import finding as _finding
+from novel.core.evidence import iter_global_evidence_slots
+from novel.core.facts import heuristic_relation_gates, relation_visibility_gates
 from novel.core.naming import (
     classify_unattested, person_naming_surfaces, resolve_present_names, rule_names_a_person,
     strip_distinguisher, surface_first_chapter, surface_owner_since, surface_owners,
@@ -560,7 +562,8 @@ def _roles(c: _Ctx) -> list[Outcome]:
         f'**改写式泄漏没有任何确定性防线**——实测某本词表命中 0/17 而人读真违规 6/17'
         f'（`role` 写「…后成为某某的下属」，差一个字避开了 `后被`）。'
         f'⚠ 本条**与上面那条报绿灯还是红灯无关，每本每次都产**：'
-        f'唯一的修复路是 `--purge-role`（语义判官，**付费**）',
+        f'自动语义重划分可走 `--purge-role`（**付费**）；人工核对后的新 `role` '
+        f'可走 `stage2.global --apply-edit <书内json>`（**0 LLM**）',
         scanned=f'{len(items)} 个角色的 role'))
 
     n_fate = sum(1 for _cid, v in items if ((v or {}).get('fate') or '').strip())
@@ -573,12 +576,14 @@ def _roles(c: _Ctx) -> list[Outcome]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 四、世界规则 · 秘密 · 关系（3 HARD · 3 INFO · 1 度量 · 1 查不了）
+# 四、世界规则 · 秘密 · 关系（6 HARD · 3 INFO · 1 度量 · 1 查不了）
 # ─────────────────────────────────────────────────────────────────────────────
 
-_CANON_RULES = ('world_rule_no_desc', 'world_rule_names_person', 'secret_setup_order',
+_CANON_RULES = ('world_rule_no_desc', 'canon_chapter_refs_dangling',
+                'world_rule_names_person', 'secret_setup_order',
                 'secret_cold_reveal', 'secret_known_by_dangling', 'reveal_unmarked',
-                'secrets_absent', 'relation_dangling')
+                'secrets_absent', 'relation_dangling', 'global_evidence_unlocated',
+                'relation_visibility_mismatch')
 
 
 def _canon(c: _Ctx) -> list[Outcome]:
@@ -622,6 +627,40 @@ def _canon(c: _Ctx) -> list[Outcome]:
 
     # ── secrets ───────────────────────────────────────────────────────────
     secs = c.secrets
+
+    if not c.has_mt:
+        out.append(unverifiable(
+            'canon_chapter_refs_dangling', _NO_MAIN_TEXT,
+            scanned='world-rule 生效章 + secret 埋点/揭示章'))
+    else:
+        bad_canon_chapters = [
+            f'{rule.get("rule_id")}.versions.effective_from_chapter='
+            f'{version.get("effective_from_chapter")!r}'
+            for rule in c.world_rules
+            for version in (rule.get('versions') or [])
+            if (version or {}).get('effective_from_chapter') not in c.ords
+        ]
+        for secret in secs:
+            sid = secret.get('secret_id')
+            setup = secret.get('setup') or {}
+            bad_canon_chapters.extend(
+                f'{sid}.setup.chapters={chapter!r}'
+                for chapter in (setup.get('chapters') or []) if chapter not in c.ords)
+            bad_canon_chapters.extend(
+                f'{sid}.reader_reveal_events.chapter={(event or {}).get("chapter")!r}'
+                for event in (secret.get('reader_reveal_events') or [])
+                if (event or {}).get('chapter') not in c.ords)
+        out.append(ran(
+            'canon_chapter_refs_dangling',
+            [finding(
+                'canon_chapter_refs_dangling',
+                detail=f'{len(bad_canon_chapters)} 个 canon 时间章不在正文集合：'
+                       f'{_cut(bad_canon_chapters)}',
+                evidence=sorted(bad_canon_chapters),
+            )] if bad_canon_chapters else [],
+            scanned=(f'{sum(len(r.get("versions") or []) for r in c.world_rules)} 个规则版本 + '
+                     f'{sum(len(((s.get("setup") or {}).get("chapters") or [])) + len(s.get("reader_reveal_events") or []) for s in secs)} 个 secret 时间点'),
+        ))
 
     # `secrets_absent`：**永远输出**（`sev='unver'`）。
     out.append(unverifiable(
@@ -669,22 +708,31 @@ def _canon(c: _Ctx) -> list[Outcome]:
                 evidence=[f'cold={len(cold)}/{len(secs)}', f'demoted={len(demoted)}'])],
         scanned=f'{len(secs)} 条 secret'))
 
-    # `secret_known_by_dangling`：⚠ 按**形状**分流，不按值分流。
+    # `secret_known_by_dangling`：typed CharacterRef / GroupRef + 知情起章。
     dangling, n_kb, n_free = [], 0, 0
     for s in secs:
-        for k in (s.get('character_known_by') or []):
+        for event in (s.get('knowledge_events') or []):
             n_kb += 1
-            if not re.match(r'^char_\d+$', str(k)):
-                n_free += 1                      # 自由文本（「在场士兵」）—— **放行**
-                continue
-            if k not in c.chars:
-                dangling.append(f'{s.get("secret_id")}:{k}')
+            subject = (event or {}).get('subject') or {}
+            if subject.get('kind') == 'group':
+                n_free += 1                      # 自由文本群体本身就是答案
+            elif subject.get('kind') == 'character':
+                char_id = subject.get('char_id')
+                if char_id not in c.chars:
+                    dangling.append(f'{s.get("secret_id")}:char_id={char_id!r}')
+            else:
+                dangling.append(
+                    f'{s.get("secret_id")}:subject.kind={subject.get("kind")!r}')
+            if (event or {}).get('known_from_chapter') not in c.ords:
+                dangling.append(
+                    f'{s.get("secret_id")}:known_from_chapter='
+                    f'{(event or {}).get("known_from_chapter")!r}')
     out.append(ran('secret_known_by_dangling',
                    [finding('secret_known_by_dangling',
-                            detail=f'{len(dangling)} 个 char_id 形状的 character_known_by '
-                                   f'不在 registry 里：{_cut(dangling)}',
+                            detail=f'{len(dangling)} 个 knowledge event 的 typed 引用或章号'
+                                   f'无效：{_cut(dangling)}',
                             evidence=sorted(dangling))] if dangling else [],
-                   scanned=f'{n_kb} 项（其中 {n_free} 项是自由文本，按形状放行）'))
+                   scanned=f'{n_kb} 项（其中 {n_free} 项是 GroupRef 自由文本，合法放行）'))
 
     # `reveal_unmarked`：**只筛不判**。
     if not c.has_mt:
@@ -707,19 +755,94 @@ def _canon(c: _Ctx) -> list[Outcome]:
                                 evidence=sorted(unmarked))] if unmarked else [],
                        scanned=f'{n_pairs} 组「秘密→揭示章」· 词表 {len(REVEAL_MARKS)} 个标记'))
 
-    # ── `relation_dangling` ───────────────────────────────────────────────
-    # ⚠ **本条只收「两端可解析」这一半**：`valid_from/to_chapter` 的**范围**那一半
-    #   要拿全书章数比，而 `R-2.8` 那一格今天没有第二条判据指着它（已登记在
-    #   `docs/schema/stage2.md` §5.6）。
+    # ── relation 结构 + 显式 visibility ──────────────────────────────────
     bad_rel = [f'{r.get("relation_id")}:{end}={r.get(end)!r}'
                for r in c.relations for end in ('subject_id', 'object_id')
                if r.get(end) not in c.chars]
+    secret_ids = {s.get('secret_id') for s in secs}
+    for relation in c.relations:
+        rid = relation.get('relation_id')
+        start, through = relation.get('valid_from_chapter'), relation.get('valid_through_chapter')
+        if start not in c.ords:
+            bad_rel.append(f'{rid}:valid_from_chapter={start!r}')
+        if through is not None and through not in c.ords:
+            bad_rel.append(f'{rid}:valid_through_chapter={through!r}')
+        if type(start) is int and type(through) is int and through < start:
+            bad_rel.append(f'{rid}:window={start}>{through}')
+        visibility = relation.get('visibility') or {}
+        if visibility.get('kind') == 'public':
+            if visibility.get('from_chapter') not in c.ords:
+                bad_rel.append(
+                    f'{rid}:visibility.from_chapter={visibility.get("from_chapter")!r}')
+        elif visibility.get('kind') == 'via_secret':
+            if visibility.get('secret_id') not in secret_ids:
+                bad_rel.append(
+                    f'{rid}:visibility.secret_id={visibility.get("secret_id")!r}')
+        else:
+            bad_rel.append(f'{rid}:visibility.kind={visibility.get("kind")!r}')
     out.append(ran('relation_dangling',
                    [finding('relation_dangling',
-                            detail=f'{len(bad_rel)}/{len(c.relations) * 2} 端悬空'
-                                   f'（非 registry 里的 char_id）：{_cut(bad_rel)}',
+                            detail=f'{len(bad_rel)} 个 relation 外键、有效窗口或 visibility '
+                                   f'无效：{_cut(bad_rel)}',
                             evidence=sorted(bad_rel))] if bad_rel else [],
-                   scanned=f'{len(c.relations)} 条关系 / {len(c.relations) * 2} 端'))
+                   scanned=f'{len(c.relations)} 条关系 / 两端 + 世内窗口 + 读者 visibility'))
+
+    explicit = relation_visibility_gates(c.gg.get('entities') or {}, secs)
+    heuristic, vanished = heuristic_relation_gates(c.gg.get('entities') or {}, secs)
+    mismatch = [
+        f'{rid}:explicit={gate},heuristic={heuristic.get(rid)}'
+        for rid, gate in explicit.items() if gate != heuristic.get(rid)
+    ]
+    out.append(ran(
+        'relation_visibility_mismatch',
+        [finding(
+            'relation_visibility_mismatch',
+            detail=f'{len(mismatch)} 条显式 visibility 与旧启发式不一致：{_cut(mismatch)}；'
+                   f'旧启发式会让 {len(vanished)} 条关系越过失效点',
+            evidence=sorted(mismatch + [f'vanished={row}' for row in vanished]),
+        )] if mismatch else [],
+        scanned=f'{len(c.relations)} 条 relation · 显式声明为生产权威，旧启发式仅 INFO 对账',
+    ))
+
+    # ── 自由事实证据：归一失败账 + 正式 SourceSpan 双向守 ────────────────
+    recorded = c.gprov.get('evidence_locator_failures')
+    if recorded is None:
+        out.append(unverifiable(
+            'global_evidence_unlocated',
+            'GlobalProvenance 缺 evidence_locator_failures：不知道 locator 回取是否执行过',
+            scanned='全局自由事实证据'))
+    elif not c.has_mt:
+        findings = [finding(
+            'global_evidence_unlocated',
+            detail=f'{row[0]} ch{row[1]}：{row[3]}',
+            evidence=[str(value) for value in row],
+        ) for row in recorded]
+        out.append(ran('global_evidence_unlocated', findings,
+                       scanned=f'{len(recorded)} 条已记录失败；正文缺失，正式 span 无法复核'))
+    else:
+        problems: dict[str, str] = {
+            str(row[0]): f'ch{row[1]} locator={row[2]!r}: {row[3]}'
+            for row in recorded if len(row) >= 4
+        }
+        total = 0
+        for path, owner, field in iter_global_evidence_slots(c.gg):
+            total += 1
+            evidence = owner.get(field) or {}
+            chapter = evidence.get('chapter_ordinal')
+            text = c.text_of.get(chapter)
+            if text is None:
+                problems[path] = f'证据章 {chapter!r} 不在正文集合'
+                continue
+            _start, _end, problem = exact_span(evidence.get('source'), text)
+            if problem:
+                problems[path] = problem
+        findings = [finding(
+            'global_evidence_unlocated', detail=f'{path}: {problem}', evidence=[path, problem],
+        ) for path, problem in sorted(problems.items())]
+        out.append(ran(
+            'global_evidence_unlocated', findings,
+            scanned=f'{total} 条自由事实证据 · 指定章 + 精确 SourceSpan + 归一失败账',
+        ))
     return out
 
 
@@ -1647,7 +1770,7 @@ def _present(c: _Ctx) -> list[Outcome]:
 
 def check(*, global_g: dict[str, Any] | None, blueprints: dict[str, Any] | None,
           main_text: list[dict[str, Any]] | None) -> list[Outcome]:
-    """对两份 stage2 产物跑全部 74 条确定性判据 → `[Outcome]`。
+    """对两份 stage2 产物跑全部 77 条确定性判据 → `[Outcome]`。
 
     **一条判据恰好一个 `Outcome`，一条都不许少**：`build()` 遍历判据注册表，
     注册了而这里没产出 ⇒ 强制 `skipped`，徽章至少 amber。

@@ -10,20 +10,16 @@
 ⚠ `src/mocks/` 那 20 份是**冻结的证据基线**（与 design_handoff 逐字节一致，
 check-seams 钉着），本目录才是 mock 现役消费的数据源；两边不许互相覆盖。
 
-## ⚠⚠ `global.json` 的 secret 有三格**不是抓包证据**（2026-08-23）
+## ⚠⚠ `global.json` 是结构有效的 v3 示例，不是新抓包（2026-08-24）
 
-`GlobalGrounding` 升 v2 时给 secret 加了 `setup_kind` / `first_reveal_chapter` /
-`group_id`。抓包那本书早已不在盘上（`outputs/` 现在只有《偶像公寓打工日常》），
-重抓不了，于是这三格是**从 v1 字段机械推导**填进去的：
+原抓包书已不在盘上，无法付费重建 `GlobalGrounding` v3。本文件因此收成一份小而完整的
+现役 API 示例，专门覆盖 relation `public/via_secret` 两支、knowledge event 的
+`character/group` 两支，以及证据的「已唯一回取 / `source=null` 定位失败」两态。
 
-- `first_reveal_chapter` = `min(reader_reveal_chapters)` —— 在合法产物上与真值相同；
-- `group_id` = `null` —— v1 没有拆分，这一格必然为空；
-- `setup_kind` —— ⚠ **这一格推不出真值**。填的是「`setup_chapters` 空 ⇒ `cold`」，
-  而 v1 的空数组恰恰**分不清「声明冷揭示」与「归一裁空」**——那正是 v2 要修的歧义。
-  七条全填了 `cold`，其中有几条本该是 `foreshadowed` 无从得知。
-
-⇒ **不要拿这份夹具当 `setup_kind` 的取值面证据**（比如「盘上 cold 占比 7/7」）。
-下次真抓包会整份覆盖它。
+成功的 `SourceSpan` 均取自同目录 `reading_ch3.json` 的真实第 3 章 `segments[].text`，
+offset 按拼接后的章正文核过；第 8 章 fate 与第 3 章无法唯一定位的时代背景故意保留
+`source=null`，用来守 UI 不把失败态显示成“没有证据”。这份示例不代表字段分布、模型遵守率
+或语料真值；下次有 v3 真产物时应由真实端点响应整份覆盖。
 
 ## ⚠ `enums.json` 不是抓包，是**生成**的（2026-08-22 改）
 

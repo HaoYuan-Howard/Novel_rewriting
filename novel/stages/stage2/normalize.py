@@ -11,13 +11,14 @@ import copy
 from typing import Any
 
 from contracts.invariants import BARE_PRONOUNS
+from novel.core.evidence import iter_global_evidence_slots
 from novel.core.facts import first_reveal_chapter, setup_chapters_of
 from novel.core.naming import (
     classify_unattested, resolve_present_names, strip_distinguisher,
     surface_owner_since, surface_owners,
 )
 from novel.core.spans import (
-    content_index, content_only, exact_span, extend_terminal_punct,
+    content_index, content_only, exact_span, extend_terminal_punct, locate_unique_span,
 )
 from novel.core.text import norm
 from novel.stages.stage2.paragraphs import (
@@ -160,6 +161,74 @@ def _prune_setups(data: dict[str, Any]) -> list[tuple[str, list[int], list[int]]
     return changed
 
 
+def _normalize_global_evidence(
+    data: dict[str, Any], main_text: list[dict[str, Any]],
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, int, str, str]]]:
+    """把所有响应/人工 locator 回取成正式 ``FactEvidence``。
+
+    指定章内必须唯一命中；零命中、多命中、错章与既有正式 span 漂移都写正向失败账，
+    并把该槽收成 ``source=None``。失败态仍符合最终 schema，随后由同一 HARD 判据
+    拦进 `.INVALID`，因此 typed edit 与 `--revalidate` 有一份可读问题稿可恢复。
+    """
+    text_of = {
+        int(section.get('chapter_ordinal') or 0): str(section.get('text') or '')
+        for section in main_text
+    }
+    fallback_chapter = min(text_of) if text_of else 1
+    rewrites: list[tuple[str, str, str]] = []
+    failures: list[tuple[str, int, str, str]] = []
+
+    for path, owner, field in iter_global_evidence_slots(data):
+        evidence = owner.get(field)
+        if not isinstance(evidence, dict):
+            owner[field] = {'chapter_ordinal': fallback_chapter, 'source': None}
+            failures.append((path, fallback_chapter, '', '缺少 evidence 对象'))
+            continue
+        chapter_raw = evidence.get('chapter_ordinal')
+        chapter = chapter_raw if type(chapter_raw) is int else fallback_chapter
+        locator = str(evidence.get('locator') or '')
+        chapter_text = text_of.get(chapter)
+        if chapter_text is None:
+            owner[field] = {'chapter_ordinal': chapter, 'source': None}
+            failures.append((path, chapter, locator, '证据章不在 Stage1 正文章集合内'))
+            continue
+
+        if 'locator' in evidence:
+            got = locate_unique_span(chapter_text, locator)
+            if isinstance(got, tuple):
+                start, end, recovery = got
+                source = _source(chapter_text, start, end, recovery)
+                _start, _end, problem = exact_span(source, chapter_text)
+                if problem:
+                    owner[field] = {'chapter_ordinal': chapter, 'source': None}
+                    failures.append((path, chapter, locator, problem))
+                    continue
+                owner[field] = {'chapter_ordinal': chapter, 'source': source}
+                if recovery != 'exact':
+                    rewrites.append((path, locator, source['text']))
+                continue
+            owner[field] = {'chapter_ordinal': chapter, 'source': None}
+            reason = (f'locator 在指定章内多处命中（{got} 处）'
+                      if isinstance(got, int) else 'locator 在指定章内找不到')
+            failures.append((path, chapter, locator, reason))
+            continue
+
+        source = evidence.get('source')
+        _start, _end, problem = exact_span(source, chapter_text)
+        if problem:
+            owner[field] = {'chapter_ordinal': chapter, 'source': None}
+            failures.append((
+                path, chapter,
+                str((source or {}).get('text') or '') if isinstance(source, dict) else '',
+                problem,
+            ))
+            continue
+        # 已是正式产物形：只验证，不按字面重搜，不把重复原文误判成漂移。
+        owner[field] = {'chapter_ordinal': chapter, 'source': copy.deepcopy(source)}
+
+    return rewrites, failures
+
+
 def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
         -> tuple[dict[str, Any], dict[str, Any]]:
     """把 ``GlobalGroundingResponse`` 的 dict 归一为最终产物字段。"""
@@ -174,12 +243,15 @@ def normalize_global(data: dict[str, Any], main_text: list[dict[str, Any]]) \
     raised = _normalize_from_chapter(characters, chapters)
     fallback = _resolve_address_by(characters)
     pruned = _prune_setups(data)
+    evidence_rewrites, evidence_failures = _normalize_global_evidence(data, main_text)
     return data, {
         'address_by_fallback': fallback,
         'address_surface_rewrites': surfaces,
         'address_from_chapter_raised': raised,
         'canonical_distinguishers_stripped': distinguishers,
         'setup_chapters_pruned': pruned,
+        'evidence_locator_rewrites': evidence_rewrites,
+        'evidence_locator_failures': evidence_failures,
     }
 
 
