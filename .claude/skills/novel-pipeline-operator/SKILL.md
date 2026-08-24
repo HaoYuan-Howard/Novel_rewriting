@@ -54,23 +54,22 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 ## 执行主循环
 
 1. 确认仓根、Python 解释器、书、绝对 `base`；**记录**两项授权取值与代批范围——默认都是 `granted`，这一步是记录事实，不是向用户索要。不要打印密钥。
-2. 对既有 `sid` 先运行 `state` 与 `inbox`；对新书先预览 `stage0.remove`。从盘上事实决定起点。
-3. 在首个动作前创建终审包草稿，随每次授权判断、闸门裁决、修复与异常更新；不要等到最后凭记忆补写。
-4. 优先用 `scripts/run_step.py --base <BASE> --sid <SID> <node> -- [flags]` 预览生产 `build_steps`；确认后加 `--execute`，由脚本逐字执行同一 Step.argv 并可靠串起 start/end 信标。不要凭文档手拼真实 argv。
-5. 不使用 runner 的特殊诊断命令，仍须执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点。
-6. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
-7. 命中闸门时按代批契约裁决；命中失败时按修复状态机收敛。每次决定同时记录证据、被否决方案和复验结果。
-8. `stage7.assemble` 后执行独立成书对账，再刷新 `state`、`inbox`、活动终态文件与账本摘要；
-   用 `scripts/collect_final_evidence.py --base <绝对 base> --sid <sid>` 收拢当前事实并复制机器锚点、质量表行与
-   `exit_sequence_compact_text`；不要手抄重复的退出事件。
-9. 清除终审包中的占位符，运行 `scripts/validate_review.py --base <绝对 base> --sid <sid>`，再运行
-   `scripts/verify_delivery.py --base <绝对 base> --sid <sid>`；只有后者返回 `ready*` 才可交付，然后只把成书与终审包交给用户。
+2. 首个动作前运行 `scripts/session_preflight.py --base <BASE> --sid <SID>`；新书改用 `--source <TXT>`。把输出的 `started_at` 固化为 `<STARTED_AT>`、`code_version` 固化为 `<START_CODE>`，后续命令全程逐字复用，不能在收尾时现取一个新值冒充起点。
+3. 对既有 `sid` 先运行 `state` 与 `inbox`；对新书先预览 `stage0.remove`。从盘上事实决定起点。
+4. 在首个动作前创建终审包草稿，随每次授权判断、闸门裁决、修复与异常更新；不要等到最后凭记忆补写。
+5. 优先用 `scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]` 预览生产 `build_steps`；真跑采用同一条命令并把 `--execute` 放在 node 前。脚本会逐字执行同一 Step.argv、串起 start/end 信标，并在每一步前后拒绝代码漂移。新书的 `stage0.remove` 省略 runner 的 `--sid`。不要凭文档手拼真实 argv。
+6. 不使用 runner 的特殊诊断命令，仍须执行 `mark start`，取得真实子进程退出码后执行 `mark end --exit <rc>`；`preview` 不打点，并在动作前确认当前代码仍等于 `<START_CODE>`。
+7. 一次只运行一个写盘节点。用退出码判断进程结果，用最新 check badge 与 finding 判断质量结果。
+8. 命中闸门时按代批契约裁决；命中失败时按修复状态机收敛。每次决定同时记录证据、被否决方案和复验结果。
+9. `stage7.assemble` 后执行独立成书对账，再刷新 `state`、`inbox` 与活动终态文件；用 `scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>` 收拢本次会话事实。随后运行同参数的 `scripts/sync_review_evidence.py`，自动同步质量表、会话/累计账本、退出序列与机器锚点，不手抄这些重复事实。
+10. 清除终审包中的其余占位符，运行同一组会话参数的 `scripts/validate_review.py`，再运行 `scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`；只有后者返回 `ready*` 才可交付，然后只把成书与终审包交给用户。
 
 ## 不可突破的边界
 
 - 不修改仓库代码、历史证据目录、LLM 缓存、账本或 `_rounds/` 来“修好”某本书。
 - 不直接编辑正式生成产物或成书。改动一律经终审包与 [修复状态机](references/recovery.md) 明列的**受托编辑面**——那张表上的入口（含整章正文与开篇文案）就是留给本 skill 用的，不是留给用户的；让 CLI 完成校验、归档和正式落盘。
 - **本次会话内**不并行运行两本书，也不在同一本书上并行两个写盘节点。会串的是证据、闸门裁决与终审包，它们都长在单个会话里。⚠ 这**不是**「系统不支持多书并行」：跨书并行是产品明确要求的能力，做法是每本书一个 agent 会话（批量入口与队列 lane 各自代跑一本），互斥只落在各自 `sid`。
+- 会话开始后不换代码版本；任何写盘/付费步骤前后都必须仍等于 `<START_CODE>`。临时编辑只有恢复到原指纹才能续跑；稳定落到新指纹时以 `stopped` 结束本会话，重新预检后才是另一条 run。
 - 不覆盖项目默认模型、思考模式、并发或重试配置，除非用户明确要求一次独立实验。
 - 不把 `unver`、`skipped`、分母为零或落选候选的状态改写成 `ok`。绿灯必须带分母和 freshness。
 - 不估算或换算金额。只报告账本中的调用次数、缓存命中、token 与耗时事实。
@@ -88,5 +87,6 @@ description: 作为受托终审代理，使用本仓 novel.cli 将单本中文�
 - 活动目录不存在未解释的 `.INVALID`、`.rejected` 或 `.stalled`；历史 `_rounds/` 不计入活动余额。
 - 三次代批均有可追溯依据；所选 stage6 候选和 stage7 人名表均通过各自定稿条件。
 - 成书通过 [代批与终审契约](references/delegated-review.md) 的逐字对账，终审包中的统计与盘上事实一致。
+- 终审包的退出序列与成本账按 `<STARTED_AT>` 切出本次会话；同 SID 历史只作累计审计，不能混进本轮数字；起止代码指纹逐字一致。
 
 任何一项未满足时只能使用 `ready_with_disclosures` 或 `stopped`，并说明用户审阅时真正需要关注什么。
