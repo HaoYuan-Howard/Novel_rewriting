@@ -658,3 +658,66 @@ def test_the_probe_key_is_always_present_even_when_empty():
     而 ir1 系产物空表是「查过、没有」——两者在报告上必须分得开。"""
     _, prov = _compile(_clean_data())
     assert 'place_explicit_unlocatable' in prov
+
+
+# ── 关闭式候选集：分不开的人不下发 ────────────────────────────────────────
+
+def _two_maids_one_name():
+    """两个角色在 ch1 只剩同一个可见字面；第三个人可区分。
+
+    `canonical_unique` 只保证**完整** canonical 唯一，而消歧靠的正是尾部区分词，
+    `strip_distinguisher` 会把它剥掉 —— 这就是碰撞的真实来路。
+    """
+    characters = {
+        'C001': {'canonical': '小宫女(打翻茶盏)',
+                 'address': [{'surface': '小宫女', 'from_chapter': 1}]},
+        'C002': {'canonical': '小宫女(捧灯)',
+                 'address': [{'surface': '小宫女', 'from_chapter': 1}]},
+        'C003': {'canonical': '黎玄',
+                 'address': [{'surface': '黎玄', 'from_chapter': 1}]},
+    }
+    main = [{'chapter_ordinal': 1, 'text': '小宫女端着茶盏，黎玄看了一眼。'}]
+    return characters, main
+
+
+def test_indistinguishable_char_ids_are_never_offered_to_the_model():
+    """⭐ **两个不可区分的键 = 让模型抛硬币定人物身份。**
+
+    下发 `{"C001":["小宫女"],"C002":["小宫女"]}` 时，任选一个都能过 validator
+    （它只查「在不在集合里」）、也都能过 `compile_v31_refs`（同一条集合）——
+    于是一个**错误的人物身份**静默进蓝图，下游改名、视点、在场关系全跟着错。
+    """
+    from novel.stages.stage2.compile_v2 import visible_character_refs_with_drops
+
+    characters, main = _two_maids_one_name()
+    refs, dropped = visible_character_refs_with_drops(characters, main)
+
+    assert sorted(refs[1]) == ['C003'], (
+        f'分不开的两个人还在候选集里：{sorted(refs[1])}')
+    assert dropped[1] == [['C001', 'C002']], dropped
+
+
+def test_a_distinguishable_pair_is_still_offered():
+    """只要还有一个字面能分开，就不该剔——剔多了是另一个方向的错。"""
+    from novel.stages.stage2.compile_v2 import visible_character_refs_with_drops
+
+    characters, main = _two_maids_one_name()
+    characters['C002']['address'].append(
+        {'surface': '捧灯宫女', 'from_chapter': 1})
+    main = [{'chapter_ordinal': 1,
+             'text': '小宫女端着茶盏，捧灯宫女跟在后面，黎玄看了一眼。'}]
+    refs, dropped = visible_character_refs_with_drops(characters, main)
+
+    assert sorted(refs[1]) == ['C001', 'C002', 'C003']
+    assert dropped == {}
+
+
+def test_the_plain_helper_and_the_accounted_one_agree():
+    """三个调用点必须看到逐字相同的一份，否则模型的合法答案会在编译期炸。"""
+    from novel.stages.stage2.compile_v2 import (
+        visible_character_refs, visible_character_refs_with_drops,
+    )
+
+    characters, main = _two_maids_one_name()
+    assert visible_character_refs(characters, main) == \
+        visible_character_refs_with_drops(characters, main)[0]

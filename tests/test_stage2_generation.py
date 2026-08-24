@@ -342,6 +342,66 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_global_rebuild_is_not_locked_by_an_obsolete_blueprint_schema():
+    """旧版下游不是可消费蓝图；它不能反向锁死 global producer 的重建路。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '旧蓝图升级恢复_124'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        obsolete = book / extract.BLUEPRINT_REL
+        obsolete.parent.mkdir(parents=True, exist_ok=True)
+        obsolete.write_text(
+            json.dumps({'_schema_version': 2}, ensure_ascii=False) + '\n',
+            encoding='utf-8', newline='\n')
+        client, transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        artifact = extract.run_global(ctx, client)
+
+        assert isinstance(artifact, GlobalGrounding)
+        assert len(transport.calls) == 1
+        assert obsolete.read_text(encoding='utf-8').startswith('{"_schema_version": 2}')
+        assert store.read(GlobalGrounding, extract.GLOBAL_REL) == artifact
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize('marker,label', [
+    (999, '比当前还高的版本'),
+    ('v2', '非法 marker'),
+])
+def test_global_rebuild_still_refuses_a_blueprint_that_is_not_merely_old(marker, label):
+    """⭐ **「跳过旧蓝图」不许写成「跳过整族 `ArtifactVersionError`」。**
+
+    那一族有六个抛出点：缺 marker、非法 marker、root envelope 形状坏、
+    **版本比当前还高**、以及真正的「旧版本」。按异常类型放宽会把前四种一起放掉，
+    于是一份 `_schema_version: 999` 的蓝图让这道守卫整个消失 ——
+    这次 global 重跑可以新造悬空 char_id 而不被任何东西挡住（已复现）。
+    """
+    root = Path(tempfile.mkdtemp())
+    book = root / f'坏蓝图不放行_{abs(hash(label)) % 1000}'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        broken = book / extract.BLUEPRINT_REL
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.write_text(
+            json.dumps({'_schema_version': marker}, ensure_ascii=False) + '\n',
+            encoding='utf-8', newline='\n')
+        client, _transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        with pytest.raises(ArtifactUnreadable):
+            extract.run_global(ctx, client)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_stage2_global_invalid_can_be_revalidated_without_another_llm_call():
     root = Path(tempfile.mkdtemp())
     book = root / '提升测试_456'

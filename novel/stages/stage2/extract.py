@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from contracts.invariants import BLUEPRINT_ARCHITECTURE
 from contracts.rules import REGISTRY
+from contracts.schema import ArtifactVersionError
 from contracts.schema.base import StrictModel
 from contracts.schema.report import CheckReport
 from contracts.schema.evaluation import GlobalReview
@@ -33,7 +34,7 @@ from contracts.schema.stage2 import (
 )
 from novel import paths, prov
 from novel.config import MAX_CONCURRENCY
-from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.errors import ArtifactUnreadable, GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
 from novel.llm.ledger import combine_usage
@@ -334,8 +335,9 @@ def build_prompts(
     visible: dict[int, dict[str, list[str]]] = {}
     candidates: dict[int, list[dict[str, Any]]] = {}
     if spec.topology == 'scaffolded_single' and spec.uses_character_refs:
-        from novel.stages.stage2.compile_v2 import visible_character_refs
-        visible = visible_character_refs(characters, mt)
+        from novel.stages.stage2.compile_v2 import visible_character_refs_with_drops
+        visible, dropped_refs = visible_character_refs_with_drops(characters, mt)
+        _observe_indistinguishable_refs(ctx, dropped_refs)
     if spec.topology == 'scaffolded_single' and spec.uses_hinge_candidates:
         candidates = hinge_candidates_by_chapter(mt)
     return [
@@ -454,6 +456,26 @@ def _past_names_block(names: list[str]) -> str:
             '以下称名在此前章节的正文里出现过。判断「到目前为止的正文里出现过没有」时'
             '可据此认定；既不在此清单、也不在已给出正文里出现过的名字，仍然一个都不许用。\n'
             + '、'.join(rows))
+
+
+def _observe_indistinguishable_refs(
+    ctx: RunContext, dropped: dict[int, list[list[str]]],
+) -> None:
+    """把「本章有几组人物在称呼上分不开、因此没有下发」如实报出来。
+
+    ⚠ 剔除本身在 `visible_character_refs_with_drops` 里（候选集只能有一个落点）；
+    这里只负责让它**不是静默的**——少标几个在场者不会有任何判据变红，
+    而「为什么这一章少标了」必须答得出来。
+    """
+    if not dropped:
+        return
+    ctx.observe(
+        'character_refs_indistinguishable',
+        chapters=sorted(dropped),
+        groups={str(ordinal): groups for ordinal, groups in sorted(dropped.items())},
+        dropped_ids=sum(len(cids) for groups in dropped.values()
+                        for cids in groups),
+    )
 
 
 def _character_refs_block(refs: dict[str, list[str]]) -> str:
@@ -714,13 +736,34 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
     # 已有 blueprint 时，额外防止一次 global 重跑新造悬空 char_id；
     # 旧问题照报，但不把与本次无关的存量违约当作新错误。
     if store.exists(BLUEPRINT_REL):
-        _old_bp, old_bp_raw = store.read_own(ChapterBlueprints, BLUEPRINT_REL)
-        old_global = _read_raw(store, GlobalGrounding, GLOBAL_REL)
-        before = set(_hard_hits(
-            _judge_candidate(old_global, old_bp_raw, main_text)))
-        after = set(_hard_hits(
-            _judge_candidate(candidate, old_bp_raw, main_text)))
-        hits = sorted(set(hits) | (after - before))
+        try:
+            _old_bp, old_bp_raw = store.read_own(ChapterBlueprints, BLUEPRINT_REL)
+        except ArtifactUnreadable as exc:
+            # schema 升级后的旧蓝图已经不是一份可消费的下游，不能反过来锁死
+            # producer 的重建路；但当前版本坏 JSON / 坏形状仍须关闭式失败。
+            #
+            # ⚠⚠ **只放「盘上确实是更早的注册版本」这一种。** 按异常类型放宽
+            #   会把另外五种一起放掉：缺 marker、`_schema_version` 不是整数、
+            #   root envelope 形状坏、以及**比当前还高的版本**。最后一种最坏——
+            #   一份 `_schema_version: 999` 的蓝图会让这道守卫整个消失，
+            #   于是这次 global 重跑可以新造悬空 char_id 而不被任何东西挡住
+            #   （实测已复现）。判据取版本号大小，不取异常的类型。
+            cause = exc.__cause__
+            if not (isinstance(cause, ArtifactVersionError)
+                    and cause.is_older_than_current):
+                raise
+            ctx.observe(
+                'optional_downstream_guard_skipped', artifact=BLUEPRINT_REL,
+                reason='artifact_version_mismatch',
+                found_version=cause.found, current_version=cause.expected,
+            )
+        else:
+            old_global = _read_raw(store, GlobalGrounding, GLOBAL_REL)
+            before = set(_hard_hits(
+                _judge_candidate(old_global, old_bp_raw, main_text)))
+            after = set(_hard_hits(
+                _judge_candidate(candidate, old_bp_raw, main_text)))
+            hits = sorted(set(hits) | (after - before))
 
     if hits:
         path = _write_invalid(store, GLOBAL_REL, artifact)
@@ -1071,6 +1114,16 @@ def _blueprint_metrics(blueprint: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _narration_ref_count(blueprints: list[dict[str, Any]]) -> int:
+    """已定下叙述身份的引用条数（narrator + focalizer）。account 两侧共用一份。"""
+    return sum(
+        int(narration.get(key) is not None)
+        for blueprint in blueprints
+        for narration in (blueprint.get('narration') or [])
+        for key in ('narrator_char_id', 'focalizer_char_id')
+    )
+
+
 def _repair_baseline(blueprint: dict[str, Any],
                      main_text: list[dict[str, Any]],
                      *, projection: Any = response_shape) -> dict[str, Any]:
@@ -1221,9 +1274,10 @@ def _run_blueprint_repair(
     visible: dict[int, dict[str, list[str]]] = {}
     candidate_rows: dict[int, list[dict[str, Any]]] = {}
     if spec.uses_character_refs:
-        from novel.stages.stage2.compile_v2 import visible_character_refs
-        visible = visible_character_refs(
+        from novel.stages.stage2.compile_v2 import visible_character_refs_with_drops
+        visible, dropped_refs = visible_character_refs_with_drops(
             global_raw['entities']['characters'], main_text)
+        _observe_indistinguishable_refs(ctx, dropped_refs)
     if spec.uses_hinge_candidates:
         candidate_rows = hinge_candidates_by_chapter(main_text)
     for ordinal in chapters:
@@ -1239,9 +1293,23 @@ def _run_blueprint_repair(
             baselines[ordinal] = _repair_baseline(
                 old_by[ordinal], main_text, projection=spec.projection_fn)
         if spec.topology == 'boundary_then_detail':
-            needs_resegment = backfill or bool(
+            baseline_beats = (
+                [] if backfill else (baselines[ordinal].get('beats') or []))
+            # ⚠⚠ **`end_para` 可以是 `None`。** `canonical_ir_projection` 对定位不到的
+            #   span（`span_unlocatable` 报的正是这一条）如实交 `None`，不兜底——
+            #   而这里原来直接 `int(beat['end_para'])`：`TypeError` ⇒ exit 70，
+            #   且发生在**任何 LLM 调用之前**，人拿到的是一个崩溃而不是判定。
+            #   语义上它本来就该重切边界：连区间都对不上原文，冻结它没有意义。
+            unlocatable = [index for index, beat in enumerate(baseline_beats)
+                           if beat.get('end_para') is None]
+            needs_resegment = backfill or bool(unlocatable) or bool(
                 {row['rule'] for row in findings}
                 & {'beats_coarse', 'beats_collapsed'})
+            if unlocatable:
+                ctx.observe(
+                    'repair_baseline_boundary_unlocatable',
+                    chapter_ordinal=ordinal, beats=unlocatable,
+                    total_beats=len(baseline_beats))
             if needs_resegment:
                 boundary_requests.append((
                     ordinal,
@@ -1253,11 +1321,10 @@ def _run_blueprint_repair(
                     ),
                 ))
             else:
-                baseline = baselines[ordinal]
                 frozen[ordinal] = [int(beat['end_para'])
-                                   for beat in (baseline.get('beats') or [])]
+                                   for beat in baseline_beats]
                 boundary_events[ordinal] = [str(beat.get('event') or '')
-                                             for beat in (baseline.get('beats') or [])]
+                                            for beat in baseline_beats]
 
     boundary_scope: list[str] = []
     boundary_errors: list[Exception] = []
@@ -1369,16 +1436,9 @@ def _run_blueprint_repair(
     merged_by = copy.deepcopy(old_by)
     merged_by.update(normalized_by)
     merged = [merged_by[ordinal] for ordinal in ordinals if ordinal in merged_by]
-    if summaries_pending:
-        # 首轮 HARD 已在摘要批之前拦下；问题稿里只是 compiler 的 debug summary。
-        # 修复成功候选形成后一次性为**全书**补摘要，形成 N+k+1，而不是把未动章的
-        # debug 文本冒充正式摘要或为首轮失败先白付一次 N+1。
-        summaries = _run_summary_batch(ctx, client, merged)
-        for blueprint in merged:
-            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
     if spec.uses_character_refs:
         # 在场 char_id 是模型从关闭式候选集直接选择的权威值；不能在合并修复稿时
-        # 又从人读 `present_names` 反解一遍把它覆盖。叙述者仍沿用既有解析器。
+        # 又从人读 `present_names` 反解一遍把它覆盖。
         resolved_copy = copy.deepcopy(merged)
         char_refs = resolve_character_refs(
             resolved_copy, main_text, global_raw['entities']['characters'])
@@ -1387,12 +1447,24 @@ def _run_blueprint_repair(
         direct = sum(len(beat.get('present_char_ids') or [])
                      for bp in merged for beat in (bp.get('beats') or []))
         char_refs['resolved'] += direct - inferred
-        for target_bp, resolved_bp in zip(merged, resolved_copy):
-            for target_n, resolved_n in zip(
-                    target_bp.get('narration') or [],
-                    resolved_bp.get('narration') or []):
-                target_n['narrator_char_id'] = resolved_n.get('narrator_char_id')
-                target_n['focalizer_char_id'] = resolved_n.get('focalizer_char_id')
+        if spec.uses_narration_refs:
+            # ⚠⚠ **v3.1 的叙述身份也是模型从关闭式候选集直接选的权威值**
+            #   （`compile_v31_refs` 明写「叙述者 id 是权威，名字只是人读投影」）。
+            #   照 v2 那样按 `narrator_name` 再反解一遍，会在**名字有歧义**时
+            #   `resolve_present_names` 交空 ⇒ 一个**正确的 id 被覆盖成 `None``，
+            #   而这一格只进 metric、不阻断落盘：错误的叙述身份就这样静默进蓝图。
+            #   ⇒ 保留权威值，只把反解算出来的那几笔从 `resolved` 里换回去
+            #   （与 `compile_v31_refs` 的 `direct - before` 同一条算法）。
+            narration_direct = _narration_ref_count(merged)
+            narration_inferred = _narration_ref_count(resolved_copy)
+            char_refs['resolved'] += narration_direct - narration_inferred
+        else:
+            for target_bp, resolved_bp in zip(merged, resolved_copy):
+                for target_n, resolved_n in zip(
+                        target_bp.get('narration') or [],
+                        resolved_bp.get('narration') or []):
+                    target_n['narrator_char_id'] = resolved_n.get('narrator_char_id')
+                    target_n['focalizer_char_id'] = resolved_n.get('focalizer_char_id')
     else:
         char_refs = resolve_character_refs(
             merged, main_text, global_raw['entities']['characters'])
@@ -1449,49 +1521,62 @@ def _run_blueprint_repair(
         list(row) for row in old_prov.boundary_nudges
         if not _record_is_targeted(row, targets)
     ] + [list(row) for row in (target_accounting.get('boundary_nudges') or [])]
-    prompt_keys = {spec.sys_name: system}
-    if spec.boundary_sys_name and spec.boundary_system:
-        prompt_keys[spec.boundary_sys_name] = spec.boundary_system
-    if spec.needs_summary_batch:
-        from novel.stages.stage2 import prompts as _p
-        prompt_keys['SUMMARY_BATCH_SYS'] = with_json_shape(
-            _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
-    delta = ctx.llm_provenance(
-        BlueprintProvenance,
-        prompts=prompt_keys,
-        model=client.model,
-        scope_violations=old_scope + new_scope,
-        batches=[list(batch) for batch in old_prov.batches],
-        context=old_prov.context.model_dump(),
-        char_refs=char_refs,
-        verbatim_rewrites=rewrites,
-        verbatim_failures=failures,
-        partial_regen_chapters=partial,
-        repairs=repair_history,
-        place_inherit_without_base=place_rows,
-        hinge_ambiguous_pending=pending_rows,
-        boundary_nudges=nudge_rows,
-    )
-    provenance = BlueprintProvenance.model_validate({
-        **delta.model_dump(),
-        'usage': combine_usage(old_prov.usage, delta.usage),
-        'partial_rewrite': old_prov.partial_rewrite,
-    })
-    artifact = ChapterBlueprints.model_validate({
-        'blueprints': merged,
-        '_provenance': provenance,
-    })
-    candidate = artifact.model_dump(by_alias=True)
-    outcomes = _judge_candidate(global_raw, candidate, main_text)
-    hits = _hard_hits(outcomes)
+    def current_artifact(*, summary_recorded: bool,
+                         settle: bool = True) -> ChapterBlueprints:
+        """把这一刻的 `merged` 铸成产物。
+
+        ⚠ `summary_recorded=False` 时 `prompts` 里**没有** `SUMMARY_BATCH_SYS`
+        ——与首轮同一条：问题稿据此说得出「摘要还没买过」，下一轮修复才知道
+        最终要为全书补一次，而不是把 compiler 的 debug 文本当正式摘要沿用。
+        """
+        keys = {spec.sys_name: system}
+        if spec.boundary_sys_name and spec.boundary_system:
+            keys[spec.boundary_sys_name] = spec.boundary_system
+        if spec.needs_summary_batch and summary_recorded:
+            from novel.stages.stage2 import prompts as _p
+            keys['SUMMARY_BATCH_SYS'] = with_json_shape(
+                _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
+        delta = ctx.llm_provenance(
+            BlueprintProvenance,
+            prompts=keys,
+            model=client.model,
+            scope_violations=old_scope + new_scope,
+            batches=[list(batch) for batch in old_prov.batches],
+            context=old_prov.context.model_dump(),
+            char_refs=char_refs,
+            verbatim_rewrites=rewrites,
+            verbatim_failures=failures,
+            partial_regen_chapters=partial,
+            repairs=repair_history,
+            place_inherit_without_base=place_rows,
+            hinge_ambiguous_pending=pending_rows,
+            boundary_nudges=nudge_rows,
+            settle=settle,
+        )
+        provenance = BlueprintProvenance.model_validate({
+            **delta.model_dump(),
+            'usage': combine_usage(old_prov.usage, delta.usage),
+            'partial_rewrite': old_prov.partial_rewrite,
+        })
+        return ChapterBlueprints.model_validate({
+            'blueprints': merged,
+            '_provenance': provenance,
+        })
+
     not_returned = sorted(targets - set(repaired_ordinals))
-    if hits or errors or not_returned:
+
+    def block(artifact: ChapterBlueprints, hits: list[str], *,
+              summary_skipped: bool = False) -> None:
         path = _write_invalid(store, BLUEPRINT_REL, artifact)
         extra = []
         if errors:
             extra.append(f'{len(errors)} 个章节调用失败')
         if not_returned:
             extra.append(f'未返回目标章 {not_returned}')
+        if summary_skipped:
+            # ⚠ 措辞要跟着真实原因走：这一趟也可能是「有章没返回」而不是「命中 HARD」，
+            #   而「硬规则已命中」在那种情况下是假话。恒真的只有后半句。
+            extra.append('本次没有为摘要额外调用 LLM（阻断发生在摘要批之前）')
         suffix = f'；{"；".join(extra)}' if extra else ''
         raise GateBlocked(
             f'stage2.blueprint 定向重生成后仍命中 {hits}{suffix}。'
@@ -1500,6 +1585,31 @@ def _run_blueprint_repair(
             '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=path,
         )
+
+    if summaries_pending:
+        # ⚠ **先拦再摘要**，与首轮 `run_blueprints` 同一条纪律：任何 HARD 都不可能
+        #   被摘要改好。少了这一步，一次注定 `GateBlocked` 的修复仍会先白付一整本
+        #   书的摘要批。此刻各章 summary 都非空（未动章是上一版正式摘要、目标章是
+        #   compiler 的 debug 文本），所以 `summary_empty` 不会在这里假红。
+        provisional = current_artifact(summary_recorded=False, settle=False)
+        pre_summary_hits = _hard_hits(_judge_candidate(
+            global_raw, provisional.model_dump(by_alias=True), main_text))
+        if pre_summary_hits or errors or not_returned:
+            # 这一份现在真的要作为 `.INVALID` 落盘 ⇒ 重铸并在此刻结算。
+            block(current_artifact(summary_recorded=False),
+                  pre_summary_hits, summary_skipped=True)
+        # 修复成功候选形成后一次性为**全书**补摘要，形成 N+k+1，而不是把未动章的
+        # debug 文本冒充正式摘要或为首轮失败先白付一次 N+1。
+        summaries = _run_summary_batch(ctx, client, merged)
+        for blueprint in merged:
+            blueprint['summary'] = summaries[int(blueprint['chapter_ordinal'])]
+
+    artifact = current_artifact(summary_recorded=True)
+    candidate = artifact.model_dump(by_alias=True)
+    outcomes = _judge_candidate(global_raw, candidate, main_text)
+    hits = _hard_hits(outcomes)
+    if hits or errors or not_returned:
+        block(artifact, hits)
 
     _write_formal(store, BLUEPRINT_REL, artifact)
     repair_purposes: dict[str, int | None] = {
