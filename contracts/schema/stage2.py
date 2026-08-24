@@ -959,6 +959,7 @@ class GlobalEdit(StrictModel):
     addresses: list[AddressContextPatch] = Field(default_factory=list)
     secrets_replace: list[SecretResponse] | None = None
     world_rules_replace: list[WorldRuleResponse] | None = None
+    characters_replace: dict[str, CharacterResponse] | None = None
     relations_replace: list[RelationResponse] | None = None
     arc_tracks_replace: list[ArcTrackResponse] | None = Field(default=None, min_length=1)
     addresses_replace: list[CharacterAddressReplacement] = Field(default_factory=list)
@@ -969,8 +970,8 @@ class GlobalEdit(StrictModel):
             self.secrets or self.world_rules or self.characters or self.relations
             or self.setting is not None or self.arc_tracks or self.addresses
             or self.secrets_replace is not None or self.world_rules_replace is not None
-            or self.relations_replace is not None or self.arc_tracks_replace is not None
-            or self.addresses_replace
+            or self.characters_replace is not None or self.relations_replace is not None
+            or self.arc_tracks_replace is not None or self.addresses_replace
         ):
             raise ValueError('global edit must contain at least one typed patch')
         for label, patch, replacement in (
@@ -981,6 +982,11 @@ class GlobalEdit(StrictModel):
         ):
             if replacement is not None and patch:
                 raise ValueError(f'{label} cannot be patched and completely replaced together')
+        if self.characters_replace is not None and (
+            self.characters or self.addresses or self.addresses_replace
+        ):
+            raise ValueError(
+                'entities.characters cannot be patched and completely replaced together')
         for label, keys in (
             ('secret', [p.secret_id for p in self.secrets]),
             ('world rule', [p.rule_id for p in self.world_rules]),

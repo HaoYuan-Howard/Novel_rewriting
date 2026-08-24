@@ -2160,6 +2160,22 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             apply_fields(rule_by_id[patch.rule_id], patch, patch.rule_id,
                          skip={'rule_id'})
 
+    if edit.characters_replace is not None:
+        entities['characters'] = {
+            char_id: row.model_dump(by_alias=True)
+            for char_id, row in edit.characters_replace.items()
+        }
+        # 后续 relation/knowledge/address/arc 的完整图校验必须看到新 registry；
+        # 留着旧局部引用会把同轮新增人物误报成悬空，或漏查已删除人物。
+        characters = entities['characters']
+        changed.append('entities.characters')
+    else:
+        for patch in edit.characters:
+            target = characters[patch.char_id]
+            apply_fields(target, patch, patch.char_id, skip={'char_id'})
+            if 'fate' in patch.model_fields_set and patch.fate is None:
+                target['fate_evidence'] = None
+
     if edit.relations_replace is not None:
         entities['relations'] = [row.model_dump(by_alias=True)
                                  for row in edit.relations_replace]
@@ -2169,11 +2185,6 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             apply_fields(relation_by_id[patch.relation_id], patch, patch.relation_id,
                          skip={'relation_id'})
 
-    for patch in edit.characters:
-        target = characters[patch.char_id]
-        apply_fields(target, patch, patch.char_id, skip={'char_id'})
-        if 'fate' in patch.model_fields_set and patch.fate is None:
-            target['fate_evidence'] = None
     if edit.setting is not None:
         dumped = edit.setting.model_dump(by_alias=True, exclude_unset=True)
         canon.setdefault('setting', {}).update(dumped)
@@ -2205,7 +2216,10 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
     resulting_secrets = canon.get('secrets') or []
     secret_ids = {row.get('secret_id') for row in resulting_secrets
                   if isinstance(row, dict)}
-    for relation in (entities.get('relations') or []):
+    resulting_relations = entities.get('relations') or []
+    relation_ids = {row.get('relation_id') for row in resulting_relations
+                    if isinstance(row, dict)}
+    for relation in resulting_relations:
         rid = relation.get('relation_id')
         for key in ('subject_id', 'object_id'):
             if relation.get(key) not in characters:
@@ -2224,6 +2238,12 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
             if visibility.get('secret_id') not in secret_ids:
                 bad_refs.append(
                     f'{rid}.visibility.secret_id={visibility.get("secret_id")!r}')
+
+    for index, track in enumerate(arc.get('arc_tracks') or []):
+        subject = track.get('subject')
+        if (subject != 'reader' and subject not in characters
+                and subject not in relation_ids):
+            bad_refs.append(f'arc.arc_tracks.{index}.subject={subject!r}')
 
     for secret in resulting_secrets:
         sid = secret.get('secret_id')
@@ -2270,9 +2290,9 @@ def _apply_secret_patches(data: dict[str, Any], edit: GlobalEdit,
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGrounding, CheckReport]:
     """`--apply-edit`：吃 typed 人工订正，走与生成稿**同一道**归一、判定与闸门。0 成本。
 
-    【它补的是什么】既能逐格订正已有 secret/world-rule/枚举，也能完整替换 secret、
-    world-rule 和单个人物的 address 集合，从而表达新增、删除与复合时间线拆分；所有字段
-    仍由同一严格 schema 收口，来源账明确记录这是人工 partial rewrite。
+    【它补的是什么】既能逐格订正已有 secret/world-rule/枚举，也能完整替换人物 registry、
+    secret、world-rule 和单个人物的 address 集合，从而表达漏抽人物的新增、删除与复合时间线
+    拆分；所有字段仍由同一严格 schema 收口，来源账明确记录这是人工 partial rewrite。
 
     四条纪律（与 stage3/4/6/7 的人工路同款）：
       · **同一归一落点**（`normalize_global`）——人改完的埋点章照样过 `_prune_setups`，

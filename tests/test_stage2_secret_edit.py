@@ -26,6 +26,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -92,6 +93,22 @@ def _fact_locator() -> dict:
 
 def _role_locator() -> dict:
     return _locator(3, '李宝珠把账册摊在桌上一页页翻。')
+
+
+def _character_response_from_formal(character: Any) -> dict:
+    """把正式人物转回 GlobalEdit response 形；人工入口不能伪造 SourceSpan。"""
+    response = character.model_dump(by_alias=True)
+    for field in ('role_evidence', 'fate_evidence'):
+        evidence = response[field]
+        if evidence is None:
+            continue
+        source = evidence.get('source')
+        assert isinstance(source, dict) and source.get('text')
+        response[field] = {
+            'chapter_ordinal': evidence['chapter_ordinal'],
+            'locator': source['text'],
+        }
+    return response
 
 
 def _knowledge_character(char_id: str, chapter: int) -> dict:
@@ -323,6 +340,98 @@ def test_a_reviewed_role_can_be_corrected_without_an_llm_and_reopens_only_its_re
         assert kept_item.item_id == stable_item.item_id
         assert kept_item.subject_sha256 == stable_item.subject_sha256
         assert kept_item.state == 'PASS'
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_character_set_fail_adds_an_omitted_person_through_the_zero_llm_typed_path():
+    """集合完整性 FAIL 必须有能新增人物、重开 hash 并使下游 stale 的真实写回路。"""
+    root, book = _sandbox('漏抽人物恢复_003ab')
+    try:
+        _seed(book, with_blueprints=True)
+        ctx = _ctx(book, 'stage2.global', paid=False)
+        store = ArtifactStore(ctx)
+        before = store.read(GlobalGrounding, extract.GLOBAL_REL)
+        review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+        old_set = next(
+            item for item in review.items if item.kind == 'character_set_complete')
+        stable_role = next(
+            item for item in review.items
+            if item.kind == 'role'
+            and item.subject_path == 'entities.characters.char_001.role')
+        review = decide(
+            review,
+            item_id=old_set.item_id,
+            expected_subject_sha256=old_set.subject_sha256,
+            state='FAIL',
+            actor='test-reviewer',
+            reason='原文第三章出现了人物表遗漏的管家',
+            now='2026-08-24T01:00:00+00:00',
+        )
+        review = decide(
+            review,
+            item_id=stable_role.item_id,
+            expected_subject_sha256=stable_role.subject_sha256,
+            state='PASS',
+            actor='test-reviewer',
+            reason='李宝珠身份未变且已按原文复核',
+            now='2026-08-24T01:00:01+00:00',
+        )
+        store.write(extract.GLOBAL_REVIEW_REL, review)
+
+        replacement = {
+            char_id: _character_response_from_formal(character)
+            for char_id, character in before.entities.characters.items()
+        }
+        replacement['char_003'] = {
+            'canonical': '管家',
+            'address': [{
+                'surface': '管家', 'by': 'char_001', 'context': 'reference',
+                'from_chapter': 3,
+            }],
+            'name_distinctiveness': 'medium',
+            'role': '沈宅管家，负责对外回话与采买事务',
+            'role_evidence': _locator(3, '管家在门外回话说米价又涨了。'),
+            'fate': None,
+            'fate_evidence': None,
+        }
+        _write_edit(book, {'characters_replace': replacement})
+
+        apply_ctx = _ctx(book, 'stage2.global', paid=False)
+        artifact, report = extract.run_apply_edit(apply_ctx)
+
+        assert report.passed
+        assert apply_ctx.ledger.usage() is None, 'typed 人物恢复不得调用模型或命中模型缓存'
+        assert sorted(artifact.entities.characters) == ['char_001', 'char_002', 'char_003']
+        added = artifact.entities.characters['char_003']
+        assert added.role_evidence.source is not None
+        assert added.role_evidence.source.text == '管家在门外回话说米价又涨了。'
+        assert artifact.provenance.evidence_locator_failures == []
+        assert artifact.provenance.partial_rewrite == '--apply-edit'
+        assert extract.GLOBAL_EDIT in artifact.provenance.inputs
+        assert not (book / extract._GLOBAL_INVALID).exists()
+
+        rebuilt = ArtifactStore(_ctx(book, 'stage2.global', paid=False)).read(
+            GlobalReview, extract.GLOBAL_REVIEW_REL)
+        new_set = next(
+            item for item in rebuilt.items if item.kind == 'character_set_complete')
+        assert new_set.subject_sha256 != old_set.subject_sha256
+        assert new_set.item_id != old_set.item_id
+        assert new_set.state == 'pending', '旧集合上的 FAIL 不能跟到修复后的新集合'
+        assert old_set.item_id not in {item.item_id for item in rebuilt.items}
+        kept_role = next(
+            item for item in rebuilt.items
+            if item.subject_path == stable_role.subject_path)
+        assert kept_role.item_id == stable_role.item_id
+        assert kept_role.state == 'PASS', '全集替换不能冲掉未变化人物的精确 hash 决定'
+        added_role = next(
+            item for item in rebuilt.items
+            if item.subject_path == 'entities.characters.char_003.role')
+        assert added_role.state == 'pending'
+
+        production_store = ArtifactStore(_ctx(book, 'stage2.blueprint', paid=False))
+        with pytest.raises(UpstreamStale, match='已过期'):
+            production_store.read(ChapterBlueprints, extract.BLUEPRINT_REL)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
