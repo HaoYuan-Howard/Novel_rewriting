@@ -131,6 +131,14 @@ def _read_raw(store: ArtifactStore, model: type, rel: str) -> dict[str, Any] | N
     return raw
 
 
+def _older_version_error(exc: ArtifactUnreadable) -> ArtifactVersionError | None:
+    """只识别“盘上确实是低版本”这一种不可读；其余坏载体继续关闭式失败。"""
+    cause = exc.__cause__
+    if isinstance(cause, ArtifactVersionError) and cause.is_older_than_current:
+        return cause
+    return None
+
+
 def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
     if not store.exists(MAIN_TEXT):
         return None
@@ -749,9 +757,8 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
             #   一份 `_schema_version: 999` 的蓝图会让这道守卫整个消失，
             #   于是这次 global 重跑可以新造悬空 char_id 而不被任何东西挡住
             #   （实测已复现）。判据取版本号大小，不取异常的类型。
-            cause = exc.__cause__
-            if not (isinstance(cause, ArtifactVersionError)
-                    and cause.is_older_than_current):
+            cause = _older_version_error(exc)
+            if cause is None:
                 raise
             ctx.observe(
                 'optional_downstream_guard_skipped', artifact=BLUEPRINT_REL,
@@ -759,12 +766,26 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
                 found_version=cause.found, current_version=cause.expected,
             )
         else:
-            old_global = _read_raw(store, GlobalGrounding, GLOBAL_REL)
-            before = set(_hard_hits(
-                _judge_candidate(old_global, old_bp_raw, main_text)))
             after = set(_hard_hits(
                 _judge_candidate(candidate, old_bp_raw, main_text)))
-            hits = sorted(set(hits) | (after - before))
+            try:
+                old_global = _read_raw(store, GlobalGrounding, GLOBAL_REL)
+            except ArtifactUnreadable as exc:
+                # 当前蓝图可能已经按新架构重建，但正式 global 仍是上一个 schema
+                # （逐产物升级的真实中间态）。这时没有一份可比较的旧业务底座，不能
+                # 为了做“只拦新增悬空引用”的差分而锁死 producer。仍对新候选 + 当前
+                # 蓝图跑完整 HARD，并把全部命中都拦下；只是不再伪造 before 差分。
+                if (version := _older_version_error(exc)) is None:
+                    raise
+                ctx.observe(
+                    'optional_downstream_baseline_unavailable', artifact=GLOBAL_REL,
+                    found_version=version.found, current_version=version.expected,
+                )
+                hits = sorted(set(hits) | after)
+            else:
+                before = set(_hard_hits(
+                    _judge_candidate(old_global, old_bp_raw, main_text)))
+                hits = sorted(set(hits) | (after - before))
 
     if hits:
         path = _write_invalid(store, GLOBAL_REL, artifact)

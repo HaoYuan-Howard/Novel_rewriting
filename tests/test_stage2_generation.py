@@ -17,6 +17,7 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schema import encode_artifact
+from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import (
     ChapterBlueprints, GlobalGrounding, GlobalGroundingResponse,
@@ -32,6 +33,7 @@ from novel.llm.client import LlmClient
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.core.evidence import iter_global_evidence_slots
+from novel.quality.global_review import build_review
 from novel.run import RunContext
 from novel.stages import initial_extract
 from novel.stages.stage2 import extract
@@ -500,6 +502,126 @@ def test_global_rebuild_is_not_locked_by_an_obsolete_blueprint_schema():
         assert len(transport.calls) == 1
         assert obsolete.read_text(encoding='utf-8').startswith('{"_schema_version": 2}')
         assert store.read(GlobalGrounding, extract.GLOBAL_REL) == artifact
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _write_current_blueprint_fixture(book: Path, ctx: RunContext) -> None:
+    """落一份可严格读取的当前蓝图，用于覆盖逐产物升级的中间态。"""
+    payload = copy.deepcopy(blueprints())
+    payload['_provenance'].update({
+        'code': ctx.code,
+        'root_clean_sha1': ctx.root_clean_sha1,
+        'inputs': {},
+        'prompts': {'BP_SYS': '0123456789'},
+        'model': 'fixture-model',
+    })
+    artifact = ChapterBlueprints.model_validate(payload)
+    envelope = encode_artifact(
+        extract.BLUEPRINT_REL, artifact.model_dump(by_alias=True, mode='json'))
+    target = book / extract.BLUEPRINT_REL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(envelope, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8', newline='\n',
+    )
+
+
+def test_global_producer_rebuilds_obsolete_global_and_review_as_one_transaction():
+    """v3 producer 可越过 v1 正式稿；旧 global/review 原字节分别进入历史。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '逐产物升级恢复_125'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        _write_current_blueprint_fixture(book, ctx)
+        old_global = b'{"_schema_version":1,"legacy":"global"}\n'
+        old_review_payload = build_review(global_grounding()).model_dump(
+            by_alias=True, mode='json')
+        old_review = (
+            json.dumps(
+                encode_artifact(extract.GLOBAL_REVIEW_REL, old_review_payload),
+                ensure_ascii=False, indent=2,
+            ) + '\n'
+        ).encode('utf-8')
+        global_path = book / extract.GLOBAL_REL
+        review_path = book / extract.GLOBAL_REVIEW_REL
+        global_path.write_bytes(old_global)
+        review_path.write_bytes(old_review)
+        client, transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        artifact = extract.run_global(ctx, client)
+
+        assert len(transport.calls) == 1
+        assert store.read(GlobalGrounding, extract.GLOBAL_REL) == artifact
+        review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+        assert review.items and all(item.state == 'pending' for item in review.items)
+        global_rounds = list((book / 'stage2/_rounds').glob(
+            'global_grounding.r*.json'))
+        review_rounds = list((book / 'stage2/_rounds').glob(
+            'global_review.r*.json'))
+        assert len(global_rounds) == len(review_rounds) == 1
+        assert global_rounds[0].read_bytes() == old_global
+        assert review_rounds[0].read_bytes() == old_review
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize('marker', [999, 'v1'])
+def test_global_rebuild_refuses_non_obsolete_global_baseline(marker):
+    """未来版本与非法 marker 不能借 producer 重建口被当成低版本跳过。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / f'坏global基线_{abs(hash(str(marker))) % 1000}'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        _write_current_blueprint_fixture(book, ctx)
+        broken = book / extract.GLOBAL_REL
+        before = (json.dumps({'_schema_version': marker}, ensure_ascii=False) + '\n').encode()
+        broken.write_bytes(before)
+        client, _transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        with pytest.raises(ArtifactUnreadable):
+            extract.run_global(ctx, client)
+
+        assert broken.read_bytes() == before
+        assert not list((book / 'stage2/_rounds').glob('global_grounding.r*.json'))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_bad_global_review_rolls_back_an_obsolete_global_rebuild():
+    """companion 不是低版本时，global 正式稿与刚建的归档必须一起回滚。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '坏review事务回滚_126'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        _write_current_blueprint_fixture(book, ctx)
+        old_global = b'{"_schema_version":1,"legacy":"global"}\n'
+        bad_review = b'{"_schema_version":999}\n'
+        global_path = book / extract.GLOBAL_REL
+        review_path = book / extract.GLOBAL_REVIEW_REL
+        global_path.write_bytes(old_global)
+        review_path.write_bytes(bad_review)
+        client, _transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        with pytest.raises(ArtifactUnreadable):
+            extract.run_global(ctx, client)
+
+        assert global_path.read_bytes() == old_global
+        assert review_path.read_bytes() == bad_review
+        assert not list((book / 'stage2/_rounds').glob('global_grounding.r*.json'))
+        assert not list((book / 'stage2/_rounds').glob('global_review.r*.json'))
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
