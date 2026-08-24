@@ -8,6 +8,54 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { RunScreen } from './RunScreen'
 
+describe('RunScreen 交付终验', () => {
+  it('交付失败的判定依据可聚焦、可展开——不只挂在 title 上', async () => {
+    // ⭐ `reason` 曾经只有 `title`。`title` 只在鼠标悬停时出现：触摸与键盘用户
+    //    一个字都读不到，而它是「为什么没交付、下一步做什么」的**唯一**出口。
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
+      runs: [{
+        run_id: 'run-1',
+        start: {
+          sid: SAMPLE_SID,
+          argv: ['claude', '-p', 'x'],
+          prompt: 'x',
+          authorized: true,
+          egress_authorized: true,
+          code_version: 'abc',
+        },
+        started: 1,
+        ended: 2,
+        exit_code: 0,
+        state: 'ok',
+        note: null,
+        outcome: {
+          state: 'stopped',
+          reason: 'Stage2 复核闸未打开：current=True，counts={"pending": 3}',
+          checked_at: 3,
+        },
+      }],
+    })
+
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+
+    const toggle = await screen.findByRole('button', {
+      name: /查看交付终验依据/,
+    })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('delivery-reason')).not.toBeInTheDocument()
+
+    fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(await screen.findByTestId('delivery-reason')).toHaveTextContent(
+      'Stage2 复核闸未打开',
+    )
+  })
+})
+
 describe('RunScreen check composition', () => {
   it('renders exit 1 as landed_red instead of a failed command', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
