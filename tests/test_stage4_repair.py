@@ -18,6 +18,7 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage4 import PlanChapters, PlanProvenance
 from novel.errors import GateBlocked, TerminalState
 from novel.llm.cache import CachePolicy
+from novel.llm.client import MAX_SAMPLES_PER_RUNG
 from novel.report.findings import ran
 from novel.stages.stage2 import extract
 from novel.stages.stage4 import plan
@@ -152,13 +153,14 @@ def test_targeted_plan_repair_rejects_wrong_chapter_without_overwriting_formal()
         with pytest.raises(TerminalState, match='响应却是'):
             plan.run_plan(ctx, client, chapters=(2,))
 
-        # ⚠⚠ 越界响应与 schema 拒同型，仍先同档重采一次；本测试显式使用 test-model，
-        # 不在 Flash→Pro 产品兜底链内，第二采仍失败即终态。
-        #   同型（模型没按契约产出），而「除截断外每一种拒绝都先同档重采」是本仓已经
+        # ⚠⚠ 越界响应与 schema 拒同型，仍最多同档重采两次；本测试显式使用 test-model，
+        # 不在 Flash→Pro 产品兜底链内，第三采仍失败即终态。
+        #   同型（模型没按契约产出），而「除截断外每一种拒绝都先走有界同档重采」是本仓已经
         #   付过学费的默认处置（`0e2492a`：那 47.7% 白花的根因）。判词一个字没改，
         #   只是从 `_run_plan_repair` 搬到了 `_expansion_validator` 上。
         #   ⚠ 承重的两条在下面：**正式产物一个字节没动**、**不落 `.INVALID`**。
-        assert len(transport.calls) == 2, '越界响应没有完成首发 + 一次同档重采'
+        assert len(transport.calls) == MAX_SAMPLES_PER_RUNG, \
+            '越界响应没有完成首发 + 两次同档重采'
         assert store.path(plan.REL).read_bytes() == original
         assert not store.exists(plan._INVALID)
     finally:

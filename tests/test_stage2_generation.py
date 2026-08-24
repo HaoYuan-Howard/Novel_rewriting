@@ -29,7 +29,7 @@ from novel.errors import (
 )
 from novel.llm.budget import enforce_request_budget
 from novel.llm.cache import CachePolicy, ResponseCache
-from novel.llm.client import LlmClient
+from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.core.evidence import iter_global_evidence_slots
@@ -88,6 +88,41 @@ def test_parallel_chapter_requests_report_batch_positions_without_schema_changes
         (event['chapter'], event['outcome'], event['chapter_total'])
         for event in events
     ) == [(4, 'ok', 2), (9, 'ok', 2)]
+
+
+def test_one_llmfailed_chapter_does_not_abort_other_blueprint_chapters():
+    """内容/契约恢复链按章耗尽；不能让一章失败取消其他已付费章节。"""
+    calls = []
+    events = []
+
+    class Response:
+        @staticmethod
+        def model_dump(**_kwargs):
+            return {'blueprints': [{'chapter_ordinal': 9}]}
+
+    class Client:
+        concurrency = 2
+
+        def ask_json(self, *_args, **kwargs):
+            ordinal = kwargs['progress'].chapter
+            calls.append(ordinal)
+            if ordinal == 4:
+                raise LlmFailed('同配置三采与模型兜底均被内容闸拒绝')
+            return Response()
+
+    ctx = SimpleNamespace(
+        node='stage2.blueprint',
+        observe=lambda event, **fields: events.append({'event': event, **fields}),
+    )
+    requests = [(4, 'sys4', 'user4'), (9, 'sys9', 'user9')]
+    results, violations, errors = extract._run_chapter_requests(ctx, Client(), requests)
+
+    assert sorted(calls) == [4, 9]
+    assert results == [{'chapter_ordinal': 9}] and violations == []
+    assert len(errors) == 1 and isinstance(errors[0], LlmFailed)
+    assert sorted((event['chapter'], event['outcome']) for event in events) == [
+        (4, 'failed'), (9, 'ok'),
+    ]
 
 
 @pytest.mark.parametrize(('chapters', 'expected_peak'), [(20, 20), (40, 32)])

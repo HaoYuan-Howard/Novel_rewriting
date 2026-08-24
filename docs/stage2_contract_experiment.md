@@ -1166,7 +1166,7 @@ v2 两相契约，
   已收成可见 `char_id` 闭集，响应还要过 schema、边界恒等与人物闭集三道本地闸；它只填
   time layer、地点、event、hinge 与叙述信息，是本轮唯一降档的自变量；
 - 书级摘要批继续 `deepseek-v4-flash + high + thinking`，不把第三个变量混进第一轮实验。
-  三处均为固定单档；客户端仍可在同档重采一次，但不会静默滑到 `thinking=false`。
+  三处均为固定单档；客户端现最多同档重采两次，但不会静默滑到 `thinking=false`。
 
 `extraction-ir-v2.1` 与 v2 的 system/user 字节、响应模型、编译器、字段级修复能力和最终
 `ChapterBlueprints` 逐格相同；差别只有 architecture 与三处相级 rungs。模型名不写进契约注册表：

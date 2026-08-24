@@ -1666,7 +1666,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   重采一章 ≈ 5.7k output。跨 4 份账本的严格口径（正文空 **且** `finish=stop`）：
     #   `stage4.plan` flash@high **13/30 = 43.3%**（blueprint 22.9% / write 12.1% /
     #   style 7.9%），pro@high **0/6**、全表 pro **0/249**。
-    #   ⚠ 43.3% 下 `MAX_SAMPLES_PER_RUNG=2` 双空掉档的概率 ≈ 18.7%，而本节点在 low
+    #   ⚠ 该裁决当时 `MAX_SAMPLES_PER_RUNG=2`，43.3% 下双空掉档概率 ≈ 18.7%，而本节点在 low
     #   上有已知劣化（猜 event 编号）⇒ 掉档不是安全网，是另一种坏。
     #   ⚠ **它不是一次加钱**：flash 产出一份可用计划累计 completion ≈ 67k
     #   （`json_mode` 同场次对照两臂 67 028 / 68 214），pro 一次过 out 中位 22 848
