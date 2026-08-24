@@ -1050,6 +1050,21 @@ class ArtifactStore:
             recorded = (block or {}).get('inputs') if isinstance(block, dict) else None
             if block is not None and recorded is None:
                 recorded = {}                # 有来源账但没有 `inputs` ⇒ `no_inputs`，不是 `no_provenance`
+        return self.freshness_of_inputs(rel, recorded)
+
+    def freshness_of_inputs(self, rel: str, recorded: dict | None) -> FreshnessReport:
+        """同 `freshness`，但**来源账由调用方给**——用于还没落盘的那一份。
+
+        ⚠⚠ **它存在的理由是「不许有第二把尺子」。** `freshness()` 读盘上那份，
+        而判定路径上有一批产物是**在内存里刚重建、还没写**的
+        （stage7 的 `--recheck` / `--apply-edit` / `--adopt-residual` 都是这个形状）。
+        让调用方自己 `prov.freshness(...)` 拼一遍，两处必然在某次改动后分家；
+        让它去读盘，判的就成了**上一份**产物的来源。
+        ⇒ 同一个算法开两个入口，`recorded` 从哪来是唯一的区别。
+
+        ⚠ `rel` 只用来定位 `producer_node`（决定 `consumed` 那一半怎么投影），
+        **不读它的字节**。
+        """
         node = producer_node(rel, fallback=self.ctx.node)
         return prov.freshness(
             recorded,
