@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from contracts.invariants import RESIDUAL_CONFIDENCE
 from contracts.schema.base import Fp10, Sha1, StrictModel
@@ -83,7 +83,12 @@ class NameDecision(StrictModel):
     #: （`renamed=true` 时盘上有 `null` 9 个与 `''` 23 个两种「没有」），
     #: 而 `rn_no_reason` 只查 `renamed=false` 的那一侧 ⇒ **另一侧的两种拼法谁也没在看**。
     #: ⇒ 契约收窄成：**键恒在**，`renamed=true` 时**必须是 `null`**（不是空串、不是缺席）。
-    #: 它是**代码回填**的位置，不是模型的自由度 ⇒ 归载体。
+    #: 它是**代码回填**的位置，不是模型的自由度 ⇒ 归载体（下面那个 validator）。
+    #:
+    #: ⚠ **旧注释把这条契约写下了，但一直没有人实现**：`_build` 只是
+    #: `c.get('not_renamed_reason')` 原样透传，于是盘上两本 flash 书
+    #: **7/7 个 `renamed=true` 角色全是空串**。归一现在落在
+    #: `novel/stages/stage7/rename.py::_build`（写之前先归零），载体在这里兜底。
     not_renamed_reason: str | None
 
     aliases: list[Alias]
@@ -93,9 +98,29 @@ class NameDecision(StrictModel):
     #: ⚠ **0 代码读者但不是孤儿**：界面渲染它，**它是人定稿时唯一的判断材料**。
     reason: str
 
+    @model_validator(mode='after')
+    def _reason_side_matches_renamed(self) -> NameDecision:
+        """`renamed=true` 那一侧**只准是 `null`**。
+
+        ⚠⚠ **只收这半边，另半边故意留给 info 判据。** 「`renamed=false` 却没写理由」
+        由 `rn_no_reason`（info）报——把它也搬进载体，模型漏写一条理由就会让
+        **本层唯一那次付费调用整个作废**，而本层的产品事实是「拒收＝再花一次钱」
+        （见模块头「判据 vs 载体」那一段）。
+        这半边不同：它**不是模型的自由度**，`_build` 落盘前一律归零 ⇒
+        归一之后这个 validator 结构上不可能因模型的写法而红，
+        它挡的是**人手写的编辑文件**和**代码自己写错**，两者的代价都是改一行。
+        """
+        if self.renamed and self.not_renamed_reason is not None:
+            raise ValueError(
+                f'{self.char_id}: renamed=true 时 not_renamed_reason 必须是 null，'
+                f'收到 {self.not_renamed_reason!r}——'
+                f'「不该改的理由」挂在一个改了名的角色上是自相矛盾，'
+                f'而空串与 null 在盘上曾同时存在、谁也没在看')
+        return self
+
 
 class ExtraSub(StrictModel):
-    """人写的补充映射。盘上 4~12 条、共 21 条。
+    """补充映射。盘上 4~12 条、共 21 条。
 
     ⚠⚠ **它是人产的输入直接落进产物，而全链没有一处校验它的形状**：
     合并函数把它原样传出、`build_name_map` 原样 `list(...)` 落盘，展开器只读三个键。
@@ -107,9 +132,23 @@ class ExtraSub(StrictModel):
     old: str = Field(min_length=1)
     new: str = Field(min_length=1)
 
-    #: 盘上恒 `'human'`。它答的是「这条是谁加的」——
-    #: `residual.suggest` 一旦有第二条来源，这个字段就是唯一能分开的地方。
-    origin: Literal['human']
+    #: 这条是**谁加的**。⚠ 旧注释写着「盘上恒 `'human'`」并预言
+    #: 「`residual.suggest` 一旦有第二条来源，这个字段就是唯一能分开的地方」——
+    #: **那第二条来源一直都在，只是记了假话**：`--adopt-residual high`
+    #: （`novel/stages/stage7/rename.py::run_adopt_residual`）把探针算出来的
+    #: `unit → suggest` 直接写进 `extra_subs`，却硬编码成 `'human'`。
+    #: 实测某本 4 条 `孙家/孙府/宋家/宋府` 全是这么来的，产物里却说是人一条条敲的。
+    #:
+    #: · `human` —— 人在 `name_map_edit.json` 里手写的。
+    #: · `adopted` —— 人跑 `--adopt-residual high` 批量采纳的探针高置信建议。
+    #:
+    #: ⚠ **两者在判定上同权，这是有意的**：`rn_new_collide_human` /
+    #: `rn_shared_surface_human` 豁免的语义是「**有人看过并决定这么做**」与
+    #: 「没人看过」必须分得开，而 `--adopt-residual` 是人显式敲的一条 CLI，
+    #: 不是静默自动路。把 `adopted` 降回 HARD，唯一出路会变成撤销一个对的决定
+    #: （正是 `rn_new_collide_human` 那条 note 记着的失败形状）。
+    #: 这一格分开记的是**审计**，不是权限。
+    origin: Literal['human', 'adopted']
 
 class AppliedFace(StrictModel):
     """一个替换面的记账（逐章 / 文案）。
@@ -338,8 +377,22 @@ class NameMap(StrictModel):
       · `judged{*}.mode` —— 与 stage6 统一（键的中间那一段就是它）。
     """
 
-    #: **模型写的。** `{原姓: 新姓}`，只覆盖【字面同姓且 ≥2 人】的族群。
+    #: **模型写的。** `{原姓: 新姓}`——本书**全部改名角色**的姓。
     #: 盘上 8/3/9 条，**新姓 ∩ 旧姓 = ∅、新姓无重复**（3/3）。
+    #:
+    #: ⚠⚠ **旧注释写的是「只覆盖【字面同姓且 ≥2 人】的族群」，那与代码从来不是一回事。**
+    #: 族群（`novel/core/naming.py::family_groups`，判据确实是「字面同姓且 ≥2 人」）
+    #: 只是这张表里**必须协调一致**的那一部分；`rn_surname_split` 实际 enforce 的是
+    #: 「每条映射都要被某个**改名角色**真实使用」，**从不要求它属于某个族群**
+    #: （那条 orphan 检查还显式允许「姓只由别名承载」）。
+    #: 实测某本 `family_groups` 交出空族群表、模型仍给了 4 条**单人**映射，
+    #: 全部合法通过——**盘上的事实一直是宽口径。**
+    #:
+    #: ⚠ **宽口径是对的，不要回头收窄。** `R-10.6` 的探针把本字段的**键**并进 `stems`
+    #: （`novel/stages/stage7/rename.py::_build`），而 `attested_surname` 的四道过滤
+    #: 必然漏掉真姓（实测两例：只由自造标签承载的姓、撞上亲属字表的姓）——
+    #: 模型这张表是唯一能把它们捞回来的地方，注释里记着漏掉那两个姓的代价是
+    #: **6 处旧姓活着进了交付的成书**。收窄这一格＝把那条兜底关掉。
     #:
     #: ⚠⚠ **调用点曾漏声明它是必需键，而它缺席会静默关掉一条 HARD**：
     #: `rn_surname_split` 恒不触发（查表全 `None` ⇒ 候选集恒空）·
@@ -432,8 +485,9 @@ class NameMapResponse(StrictModel):
     **一条违约数据的静默通行证。** 派生之后这件事**结构上不可能再发生**。
     """
 
-    #: `{原姓: 新姓}`，只覆盖【字面同姓且 ≥2 人】的族群。
-    #: ⚠ **必需键**——见上面那张表。空表是合法的（这本书没有族群），
+    #: `{原姓: 新姓}`——本书**全部改名角色**的姓；口径与去向见 `NameMap.surname_map`。
+    #: 【姓氏族群】那张表列出的原姓是其中**一个都不能漏**的子集（同族必须共姓）。
+    #: ⚠ **必需键**——见上面那张表。空表是合法的（这本书没有一个改名角色带姓），
     #: 而**键不在**不是（那说明模型没照契约答）。
     surname_map: dict[str, str]
 

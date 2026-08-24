@@ -285,7 +285,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit, 2),
     STAGE6_SEMANTIC: ArtifactSpec(HookSemanticReview),
     STAGE6_WONTFIX: ArtifactSpec(WontFix),
-    STAGE7_NAME_MAP: ArtifactSpec(NameMap),
+    STAGE7_NAME_MAP: ArtifactSpec(NameMap, 2),
     STAGE7_NAME_MAP_EDIT: ArtifactSpec(NameMapEdit),
 }
 ARTIFACTS: dict[str, type[BaseModel]] = {

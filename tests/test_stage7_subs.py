@@ -19,8 +19,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from pydantic import ValidationError
+
 from contracts.schema import decode_artifact
-from contracts.schema.stage7 import ExtraSub, NameMapEdit, Residual
+from contracts.schema.stage7 import ExtraSub, NameDecision, NameMapEdit, Residual
 from novel.errors import BlockingFindingsUnresolved, TerminalState
 from novel.stages.stage7 import checks
 from novel.stages.stage7 import rename
@@ -357,6 +359,123 @@ def test_residual_common_words_stay_low():
     assert all(row['confidence'] == 'low' for row in residual)
 
 
+# ── 被打断的姓：第三个结构信号，**正例与反例同书** ──────────────────────────
+#
+# 两条字面都取自 `无情道第一她来自合欢宗` 的成稿：ch18「【每日一问，迟……等等」
+# 是原作真姓被叫到一半（人最后靠**读正文**才补上 `迟……→苏……`），
+# ch8「高岭之花。」的「花」同样是本书旧姓、同样后接标点，**但那是一句话说完了**。
+# ⇒ 这两条必须落在不同的 confidence 上，否则这个信号不携带信息。
+
+def test_an_interrupted_surname_is_high_but_a_finished_sentence_is_not():
+    residual, _base = residual_scan(
+        [('ch18', '【每日一问，迟……等等】'), ('ch8', '真正的高岭之花。他醉心于剑')],
+        [('ch18', '【每日一问，迟……等等】'), ('ch8', '真正的高岭之花。他醉心于剑')],
+        {'迟', '花'}, set(), {'迟': '苏', '花': '柳'},
+    )
+    by_stem = {row['stem']: row for row in residual}
+    assert by_stem['迟']['confidence'] == 'high', '姓 + 成串省略号 ＝ 被打断的称呼'
+    assert by_stem['迟']['unit'] == '迟……' and by_stem['迟']['suggest'] == '苏……'
+    assert by_stem['花']['confidence'] == 'low', \
+        '终止句号不是中断号——放宽这一条，high 这个可采纳面立刻变噪声'
+    assert by_stem['花']['suggest'] is None
+
+
+def test_a_single_mark_is_not_a_run_and_stays_low():
+    """`……` 与 `——` 在中文里是成对的全角形；孤立一个更可能是排版噪声。"""
+    residual, _base = residual_scan(
+        [('ch1', '迟…了')], [('ch1', '迟…了')], {'迟'}, set(), {'迟': '苏'})
+    assert [row['confidence'] for row in residual] == ['low']
+
+
+def test_low_rows_carry_no_suggestion_because_only_high_can_be_adopted():
+    """⭐ `RESIDUAL_ADOPTION_CONFIDENCE` 只有 `high`，`--adopt-residual` 也只读 high
+    ⇒ **low 的 `suggest` 结构上没有消费者**，留着只会造噪声。
+
+    这三条字面全是盘上真出现过的假阳，旧实现会给出「柳糕」「柳眼」「苏钝」。
+    """
+    residual, _base = residual_scan(
+        [('ch1', '桂花糕'), ('ch2', '桃花眼'), ('ch3', '有些迟钝地')],
+        [('ch1', '桂花糕'), ('ch2', '桃花眼'), ('ch3', '有些迟钝地')],
+        {'花', '迟'}, set(), {'花': '柳', '迟': '苏'},
+    )
+    assert residual and all(row['confidence'] == 'low' for row in residual)
+    assert all(row['suggest'] is None for row in residual)
+    assert all(row['unit'] for row in residual), \
+        '`unit` 要留着——人仍要看旧姓后面跟的是什么字，被砍掉的只是那条建议'
+
+
+def test_overlapping_low_windows_merge_without_moving_the_denominator():
+    """⭐⭐ **合并的是呈现行，不是计数。**
+
+    「我迟迟未登灵网」里 `迟` 命中两次（i 与 i+1），旧实现报成两行
+    （`迟迟未` + `迟未登`）——同一处要人读两遍。
+    ⚠ 而 `baseline['迟'].residual` 是覆盖率的**分子**：它必须仍然是 2。
+      把计数挪到合并之后，`ratio` 会静默变大，而那是一张人按覆盖率从上往下读的表。
+    """
+    pre = [('ch18', '只是因为我迟迟未登灵网')]
+    residual, base = residual_scan(pre, pre, {'迟'}, set(), {'迟': '苏'})
+
+    assert len(residual) == 1, '两个重叠窗口是同一处，只报一行'
+    assert residual[0]['hit'] == '迟迟未登', '`hit` 撑到覆盖合并后的整段'
+    assert base['迟']['residual'] == 2, '**分子不动**——合并只影响呈现'
+    assert base['迟']['total'] == 2 and base['迟']['covered'] == 0
+
+
+def test_high_rows_are_never_merged_because_adoption_reads_their_pairs():
+    """`high` 行带着 `unit → suggest` 这一对，`--adopt-residual` 直接拿它写 `extra_subs`
+    ⇒ 合并两行 high 等于伪造一对没人验算过的替换。"""
+    pre = [('ch1', '孙家孙府')]
+    residual, base = residual_scan(pre, pre, {'孙'}, set(), {'孙': '韩'})
+    assert [(r['unit'], r['suggest']) for r in residual] == [('孙家', '韩家'),
+                                                             ('孙府', '韩府')]
+    assert base['孙']['residual'] == 2
+
+
+# ── 「为什么不改」这一格的两侧 ──────────────────────────────────────────────
+
+def _decision(**over) -> dict:
+    return {'char_id': 'char_001', 'old_canonical': '迟折月', 'new_canonical': '苏暮雪',
+            'renamed': True, 'not_renamed_reason': None, 'aliases': [], 'reason': '清冷',
+            **over}
+
+
+@pytest.mark.parametrize('bad', ['', '  ', '纯头衔，没有本名'])
+def test_a_renamed_character_may_not_carry_a_reason_for_not_renaming(bad):
+    """⭐ 载体收这半边。**空串与实质内容一视同仁**——盘上两本 flash 书
+    `renamed=true` 的角色 7/7 是空串，而契约注释一直写着「必须是 null」。
+    「没有这个字段」「是 null」「是空串」曾在盘上同时存在，谁也没在看。
+    """
+    with pytest.raises(ValidationError, match='not_renamed_reason'):
+        NameDecision(**_decision(not_renamed_reason=bad))
+
+
+def test_the_other_side_stays_with_the_info_judge_not_the_carrier():
+    """⚠ `renamed=false` 却没写理由**不进载体**：拒收 ⇒ 本层唯一那次付费调用整个作废。
+    那一侧由 `rn_no_reason`（info）报，这里只钉住「载体放它过」。"""
+    art = NameDecision(**_decision(renamed=False, new_canonical='迟折月',
+                                   not_renamed_reason=None))
+    assert art.not_renamed_reason is None
+
+
+def test_dropping_a_substantive_reason_is_reported_but_dropping_a_blank_is_not():
+    """归一掉一个空串没有信息（不报）；归一掉实质内容说明模型误读了契约（要报）。"""
+    def _rules(dropped):
+        fs = checks.rename_findings(
+            name_map={'characters': [_decision()], 'surname_map': {}},
+            subs={}, problems=[], applied={'chapters': {}, 'hook': {'counts': {}}},
+            residual=[], baseline={}, registry={'char_001': {'canonical': '迟折月'}},
+            pre_target='', source_text='', residual_keys=set(), stem_noise={},
+            family_members={}, dup=[], missing=[], invalids=[], post_units=[],
+            # ⚠ `title_line` 非空是**必需**的：`rn_title_unver` 直接拿它当 detail
+            #   （`checks.py::rename_findings`），而 `Finding.detail` 有 min_length。
+            title_line='书名「测试书」→「测试书」：恒等', dropped_reason=dropped)
+        return {f.rule for f in fs}
+
+    assert 'rn_no_reason' not in _rules([]), '空串被归一掉时不该出声'
+    hit = _rules(['char_001：纯头衔，没有本名'])
+    assert 'rn_no_reason' in hit
+
+
 #: 假 store 也必须有 `ctx.novel_dir`：成书的 rel 带书名，`rename.book_txt_rel(store)`
 #: 从这里现算。⚠ **别在测试里手写那个文件名**——那就是第二个落点
 #: （`docs/LESSONS.md` 第 21 条：守卫要调用生产那一个落点）。
@@ -460,9 +579,12 @@ def test_adopt_residual_only_commits_unambiguous_uncovered_high_suggestions(monk
 
     assert report == 'report'
     assert captured['provenance'] == ('old-provenance', '--adopt-residual')
+    # ⚠ 两条的 `origin` **必须不同**：`沈家` 是本来就在 `extra_subs` 里的那条（人手写的），
+    #   `温兄` 是本次由探针建议、被这条命令批量采纳的 ⇒ `adopted`。
+    #   旧断言两条都写 `human`，那是把「产物说假话」钉成了期望值。
     assert captured['extra'] == [
         {'old': '沈家', 'new': '林家', 'origin': 'human'},
-        {'old': '温兄', 'new': '顾兄', 'origin': 'human'},
+        {'old': '温兄', 'new': '顾兄', 'origin': 'adopted'},
     ]
     assert rebuilt.approved is None and rebuilt.book_txt is None
     assert rebuilt.identity == 'identity-baseline'
