@@ -64,8 +64,8 @@ def test_only_ir31_prefers_normal_content_to_reasoning_channel_salvage():
     )
 
 
-def test_the_default_is_ir2_and_only_three_contracts_are_selectable():
-    assert active_contract(env={}).architecture == 'extraction-ir-v2'
+def test_the_default_is_ir31_and_only_three_contracts_are_selectable():
+    assert active_contract(env={}).architecture == 'extraction-ir-v3.1'
     assert tuple(BLUEPRINT_ARCHITECTURES) == (
         'extraction-ir-v1.1', 'extraction-ir-v2', 'extraction-ir-v3.1')
     for architecture in BLUEPRINT_ARCHITECTURES:

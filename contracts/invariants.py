@@ -435,7 +435,7 @@ def hinge_heading(kind: str) -> str:
 #:   `docs/stage2_contract_experiment.md` §十四。
 #: · `extraction-ir-v2.1`（2026-08-23）：v2 的相级 effort 单变量实验臂。双书付费
 #:   配对因 hinge 召回与成本门失败，默认未翻；完整否决证据见实验手册 §十八。
-#: · `extraction-ir-v3 / v3.1`（2026-08-23）：两条**未翻默认的实验臂**，曾只
+#: · `extraction-ir-v3 / v3.1`（2026-08-23 登记时）：两条**尚未翻默认的实验臂**，只
 #:   放宽 provenance 取值面、不升 artifact schema。v3 把 v2 的“召回边界 → 细节”
 #:   合进同一次响应，保留强制 micro_events 脚手架，以减少每章第二次 high 推理；
 #:   v3.1 在 v3 上再把 narration 收成可见 char_id，并让 hinge 优先选择代码枚举的
@@ -475,7 +475,16 @@ BLUEPRINT_ARCHITECTURES: Final = (
 #: 25→43、completion 136,431→271,462；地点 66.7% 仍没到预登记 81% 底线，n=1。
 #: 采纳的理由是生产默认模型就是 Flash，而拍/hinge 缺口分别约补回 90%/96%、在场者
 #: 四类解析失败归零。默认回退仍只改这一格，但契约取值面的增删另按上方升版纪律走。
-BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v2'
+#:
+#: 【2026-08-24 翻默认：extraction-ir-v2 → extraction-ir-v3.1】用户依据同模型、同上游、
+#: 独立空缓存的两书三臂对照作出产品裁决，完整证据见实验手册 §十九。v3.1 两书匿名盲审
+#: 均第一（26.0/30、25.0/30），最终正式产物 2/2；v2 为 20.0/30、24.4/30，正式产物
+#: 1/2。v3.1 以每章一相替代 v2 两相，两书累计 wire 61 vs 97、付费命令墙钟 958s vs
+#: 1,073s，但 prompt+completion 高 11.0%。
+#: ⚠ 这次没有完成预登记的第三本外部 holdout；第二书 v3.1 与 v2 还共同出现 ch6 实体
+#: 串线，机械 HARD 没抓到。因此这是带明确风险账的产品默认选择，不冒充全语料质量门通过。
+#: v1.1 / v2 继续留在取值面供显式低成本运行、回退和存量产物重检；只翻默认，不升 schema。
+BLUEPRINT_ARCHITECTURE: Final = 'extraction-ir-v3.1'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 #: `SourceSpan.recovery` 的取值面：这个区间是怎么对上原文的。

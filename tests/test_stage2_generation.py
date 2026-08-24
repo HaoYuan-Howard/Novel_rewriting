@@ -429,7 +429,7 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert stored.provenance.usage.calls_made == 4
         context = stored.provenance.context
         # ⚠ 读**本次运行选中的那套契约**，不抄字面、也不读全局默认：
-        #   本文件钉在 v1.1 臂上（见 `_pin_ir11_arm`），而默认已是 v2
+        #   本文件钉在 v1.1 臂上（见 `_pin_ir11_arm`），而默认已是 v3.1
         #   ——拿默认常量来比，等于断言「产地写的是别人的架构」。
         #   这条守的是「产地如实记下了自己用的那一套」。
         from novel.stages.stage2.contract import active_contract

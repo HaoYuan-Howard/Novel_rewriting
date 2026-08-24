@@ -208,7 +208,7 @@ hinge 那一侧的 LCS 兜底本来就是禁的 ⇒ 那笔账**结构性恒空**
 
 - `architecture` 取值登记在 `contracts/invariants.py::BLUEPRINT_ARCHITECTURES`：
   `extraction-ir-v1.1`、`extraction-ir-v2`、`extraction-ir-v3.1`；当前默认由同文件
-  `BLUEPRINT_ARCHITECTURE` 唯一指定为 v2；
+  `BLUEPRINT_ARCHITECTURE` 唯一指定为 v3.1；
   定向修复按基线产物的架构选契约，不把存量产物伪装成当前默认；
 - `batch_size = 1`；
 - `current_chapter_full = true`；
@@ -296,15 +296,15 @@ locator，属于破坏性变更；本仓没有迁移器。旧 v1 决策集必须
   `--apply-edit <路径>` 吃 `global_edit.json` 落 Stage2 typed facts 的 0 成本人工订正（见 §三之二）；
   `--emit-review-template` stdout-only 从当前 `global_review.json` 投影逐项 hash/evidence，
   默认全部 `UNVER`，原样应用也不会打开事实闸。
-- `stage2.blueprint`：逐章生成；默认 `extraction-ir-v2` 每章发两相请求——第一相同时列
-  `micro_events`（完整回忆层）与 `beats`（因果拍压缩层），两列止段严格递增且落到章尾，
-  beat 的止段必须取自 micro-event 止段；第二相只能在代码冻结的 beat 边界上填
-  time layer、地点、hinge、叙述信息与可见 `char_id`。`--chapters` 定向付费重生成；
-  `--renormalize` 重算当前 schema 的原文定位与人物引用；`--check-only` 联合读取两份产物复检。
-  `extraction-ir-v3.1` 把召回脚手架和细节合在每章一次响应中，`micro_events` 只交短
-  `cue`、编译前丢弃；narration 选择本章可见 `char_id`，hinge 优先选择确定性原文候选 id、
-  候选覆盖不到仍交唯一 phrase。三种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与
-  定向修复共用该分派，不从可空 system 字段猜。
+- `stage2.blueprint`：逐章生成；默认 `extraction-ir-v3.1` 每章发一次请求，把召回脚手架和
+  最终细节合在同一响应中；`micro_events` 只交短 `cue`、编译前丢弃，narration 选择本章可见
+  `char_id`，hinge 优先选择确定性原文候选 id，候选覆盖不到仍交唯一 phrase。显式 v2 回退臂
+  每章发两相请求：第一相同时列 `micro_events`（完整回忆层）与 `beats`（因果拍压缩层），
+  两列止段严格递增且落到章尾，beat 止段必须取自 micro-event 止段；第二相只能在代码冻结的
+  beat 边界上填 time layer、地点、hinge、叙述信息与可见 `char_id`。`--chapters` 定向付费
+  重生成；`--renormalize` 重算当前 schema 的原文定位与人物引用；`--check-only` 联合读取两份
+  产物复检。三种现役契约的拓扑显式登记在 `ContractSpec.topology`，预览、整跑与定向修复共用
+  该分派，不从可空 system 字段猜。
 - 正式写入前先跑严格载体校验与联合 HARD 闸门；失败响应进入 `.INVALID`，不会覆盖正式产物。
 - 本层没有旧 schema 迁移入口、字段别名或双形状读取路径。GlobalGrounding v1/v2 只由
   `stage2.global` 付费重建；GlobalEdit v1 只由人重写为 v2。

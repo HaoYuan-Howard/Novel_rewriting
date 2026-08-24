@@ -319,11 +319,11 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
     if node == 'stage2.blueprint':
         # ⚠⚠ **不许写死 `chapters`。** 逐章调用几次由**现役契约的拓扑**决定，
         #   而那一格会翻默认（`BLUEPRINT_ARCHITECTURE`）：
-        #     · `boundary_then_detail`（现役 v2）—— 每章两相（先切边界再填细节）；
+        #     · `boundary_then_detail`（显式 v2）—— 每章两相（先切边界再填细节）；
         #     · `single` / `scaffolded_single`   —— 每章一次；
-        #   再加 `needs_summary_batch` 的那一次书级摘要 ⇒ 现役是 **2N+1**。
-        #   写死成 N 的后果不是「估得糙」：17+25 章两本少报 44 个逻辑请求、
-        #   264 个 wire 上限，而这份预览的全部用途就是**开跑前拿它决定花不花这笔钱**。
+        #   再加 `needs_summary_batch` 的那一次书级摘要 ⇒ 当前默认 v3.1 是 **N+1**。
+        #   这段曾在默认 v2 时写死成 N，导致 17+25 章两本少报 44 个逻辑请求、
+        #   264 个 wire 上限；而这份预览的用途正是**开跑前拿它决定花不花这笔钱**。
         spec = active_contract()
         per_chapter = 2 if spec.topology == 'boundary_then_detail' else 1
         base = chapters * per_chapter + (1 if spec.needs_summary_batch else 0)
@@ -371,8 +371,8 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
         'rungs': [list(row) for row in rungs],
     }]
     if node == 'stage2.blueprint':
-        # 逐章那一相之外，契约还会发另外两种请求；它们各有自己的 `max_tokens`，
-        # 只列 `BLUEPRINT_MAX_TOKENS` 会让上限估算漏掉这两种。
+        # 逐章细节请求之外，契约还可能发边界相与书级摘要批；它们各有自己的
+        # `max_tokens`，只列 `BLUEPRINT_MAX_TOKENS` 会漏掉当前契约实际存在的额外请求。
         spec = active_contract()
         if spec.topology == 'boundary_then_detail':
             rows.append({

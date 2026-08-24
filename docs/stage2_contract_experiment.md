@@ -8,9 +8,9 @@
 ## 一、响应契约是什么、怎么选
 
 `stage2.blueprint` 只保留三套可选择的**响应契约**。`extraction-ir-v1.1` 是一相开放字面 IR；
-当前默认 v2 把逐章抽取拆成边界与细节两相；v3.1 是一相带召回脚手架和关闭引用的候选：
+v2 把逐章抽取拆成边界与细节两相；当前默认 v3.1 是一相带召回脚手架和关闭引用的契约：
 
-| | `extraction-ir-v1.1` | `extraction-ir-v2`（默认） | `extraction-ir-v3.1` |
+| | `extraction-ir-v1.1` | `extraction-ir-v2` | `extraction-ir-v3.1`（默认） |
 |---|---|---|---|
 | 逐章调用 | 一相 | **两相**：先回忆并压缩边界，再在冻结边界上填细节 | **一相带脚手架**：同一响应先 cue 召回、再交完整拍 |
 | beat 定位 | 模型只交 `end_para`（起点代码推导，末拍必须到底） | 第一相交 `micro_events + beats[].end_para`；两列均递增到底 | 同一响应交 micro cue + 详细 beats；本地守同一边界不变量 |
@@ -22,14 +22,15 @@
 选择口（与 `DEEPSEEK_MODEL` 同一条纪律——显式拧一次，不是随手改的变量）：
 
 ```text
-NOVEL_STAGE2_BLUEPRINT_CONTRACT=extraction-ir-v3.1   # 缺省 = extraction-ir-v2
+NOVEL_STAGE2_BLUEPRINT_CONTRACT=extraction-ir-v2     # 缺省 = extraction-ir-v3.1
 ```
 
 `bounded-fidelity-v3`、`extraction-ir-v1`、`extraction-ir-v2.1`、`extraction-ir-v3`
 已退役，不再能从配置或修复入口选择。取值面收窄使 `chapter_blueprints.json` schema v2 → v3；
 旧 v2 信封与退役 architecture 产物均由 `stage2.blueprint` 付费整跑重建，不迁移、不手补版本。
 v1 的历史裁决见 §四、§八与 §十一；v2 翻默认的付费依据与未达成项见 §十四；
-v3/v3.1 的预注册与结果见 §十五～§十七；v2.1 的预注册与双书付费结果见 §十八。
+v3/v3.1 的预注册与迭代见 §十五～§十七；v2.1 的预注册与双书付费结果见 §十八；
+最终两书三契约对照与 v3.1 翻默认的产品裁决见 §十九。
 
 ⚠ **schema_mode 声明**：DeepSeek V4 官方 API 只支持 `response_format=json_object`
 （`json_schema` 被拒，2026-08-20 文档探针）。三套现役契约都是
@@ -619,8 +620,7 @@ reasoning 至少下降 25%、正常无重采拓扑从约 `2N+1` 降为 `N+1`；v
 v3 的 reasoning 相对同场 v2 下降 69.6%，但 hinge 只保留到 v2 的 85.7%，且关闭人物引用
 新增 6 个歧义与 2 个名册外值，一级质量门失败；v3.1 的全部模型调用完成后在编译正式产物时
 因空 `SourceSpan.normalized` 触发 schema 异常，产物未落盘，独立 `--check-only` 亦以 exit 2
-确认缺失。默认继续 `extraction-ir-v2`，后续施工与重验留在
-`docs/REQUIREMENTS.md::TODO-41`。
+确认缺失。当时默认继续 `extraction-ir-v2`；后续施工、重验与最终产品裁决见 §十六～§十九。
 
 ### 付费 A/B 实测结果（2026-08-23）
 
@@ -827,10 +827,11 @@ thinking=true、high、独立空缓存；先 `preview`，再按真实 argv 运�
    Flash v2，并不劣于 Pro v1.1 的既有 completion/reasoning 优势。第二书只要求没有异常重采或
    token/章反弹，不从不同正文硬算百分比优胜。
 
-只有两本同时通过 3–6，才将 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 改为
-`extraction-ir-v3.1` 并验证默认真实 consumer；任一本失败都保持 v2 默认，把失败章、证据与修复路
-写回 `docs/REQUIREMENTS.md::TODO-41`。即便通过，结论也限定为“n=2 支持 Flash 默认切换”，不宣称
-所有题材或 Pro 档都整体超过。
+本节当时预注册：只有两本同时通过 3–6，才将
+`contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 改为 `extraction-ir-v3.1` 并验证默认真实
+consumer；任一本失败都保持 v2 默认并登记失败章、证据与修复路。即便通过，结论也只限于“n=2
+支持 Flash 默认切换”，不宣称所有题材或 Pro 档都整体超过。该实验门后来没有通过；§十九记录的是
+用户在新一轮双书对照后覆盖这一前置门的产品裁决，不重写本节的历史结果。
 
 ### 双书真实结果与裁决
 
@@ -1279,3 +1280,60 @@ exit 0；前端 seams（96 文件/20 份 mock 基线）、typecheck、build 均 
 通过。前端仍是临时复用主 worktree 的兼容 `node_modules`，联接已删除；两份 lockfile 哈希不同，
 不冒充目标 lockfile 的干净安装。目标 worktree 的临时 `.env` 与两份 pytest 短路径目录也已删除，
 主工作区 `.env`、实验缓存、账本、诊断和报告保留。没有 `NOVEL_CORPUS_MANIFEST`，故只称非 corpus 回归。
+
+## 十九、v1.1 / v2 / v3.1 同模型双书复验与 v3.1 默认裁决（2026-08-24）
+
+### 比较边界
+
+用户要求把三套现役契约统一放在 `deepseek-v4-flash + high + thinking` 下比较，并在第一本后再跑
+一本。《无情道第一她来自合欢宗》（23 章）与《偶像公寓打工日常》（18 章）均固定同书正文、同书
+已审 global、同一模型与初始 effort；三臂使用独立空本地缓存并串行运行。第二书的共享 global 先经
+typed edit 与 296/296 项人工 review PASS，再分叉 blueprint，避免把全书事实漏抽算到响应契约头上。
+成本只取各臂 ledger；共同 global 建底不摊入任一臂。`completion` 已含 `reasoning`，不能重复相加；
+仓内没有供应商费率，因此下表是 token 与墙钟，不冒充货币账单。
+
+这不是旧活动项预登记的第三本外部 holdout：使用的仍是两本开发书，且旧预登记门此前已经失败。
+本节记录的是用户在看完新的同模型双书结果后作出的**产品默认裁决**，不是把未跑的 holdout 伪装成
+通过，也不把 n=2 外推成全题材结论。
+
+### 冻结结果
+
+| 指标（两本累计） | v1.1 | v2 | v3.1 |
+|---|---:|---:|---:|
+| 匿名盲审（第一本 → 第二本） | 22.0 → 20.2 | 20.0 → 24.4 | **26.0 → 25.0** |
+| 最终正式产物 | **2/2** | 1/2 | **2/2** |
+| 首轮正式产物 | 0/2 | 0/2 | **1/2** |
+| 真实 wire / 本地缓存 | **46 / 0** | 97 / 0 | 61 / 0 |
+| prompt | **311,003** | 494,153 | 446,396 |
+| completion（含 reasoning） | **437,685** | 445,392 | 596,894 |
+| reasoning（completion 子集） | 399,383 | **390,462** | 523,803 |
+| prompt + completion（非金额） | **748,688** | 939,545 | 1,043,290 |
+| 付费命令墙钟 | **855s** | 1,073s | 958s |
+
+第一书 v2 在 54 wire / 744s 后仍为 `.INVALID`；v3.1 是该书唯一首轮形成正式产物的臂。第二书
+v3.1 与 v2 同档，只领先 0.6 分，而 v2 的周转和 token 明显更好。合并两书后，v3.1 相对 v1.1
+多 39.4% prompt+completion、慢 12.0%，换来两书盲审都高约 3～5 分及更稳定的人物 ID/场景边界；
+相对 v2 多 11.0% prompt+completion，但快 10.7%，并多形成一本正式产物。故 v1.1 是明确的低
+token 臂，v2 是方差较大的高密度回退臂，v3.1 在这两本上提供最好的质量/可交付可靠性组合。
+
+### 裁决、回退与已知风险
+
+用户据此明确裁定把 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE` 从
+`extraction-ir-v2` 翻为 `extraction-ir-v3.1`。`extraction-ir-v1.1` 与
+`extraction-ir-v2` 继续登记，可经 `NOVEL_STAGE2_BLUEPRINT_CONTRACT` 显式选择；定向修复仍按
+基线产物自己的 architecture 选契约。这里只改变默认值：`ChapterBlueprints` artifact schema 仍为
+v3，不迁移、不重建存量产物。
+
+风险账不随翻默认消失。第二书 v3.1 与 v2 都在 ch6 把女装江尽夏绑定成 ch15 的孤儿院小妹妹
+`char_029`，机械 HARD 没抓到；两臂另各有动作施受、跨场景或 summary 完成态错误。因而“v3.1
+默认”不等于“可未经语义复核直接进入 Stage4/5”。在同一实体揭示链的 ID 一致性防线补齐前，人工
+语义复核仍是必需边界。
+
+逐书成本、终态、hash 与匿名逐章证据分别见
+`outputs/_stage2_contract_ab_20260824/stage2_contract_ab_report.md`、
+`outputs/_stage2_contract_ab_book2_20260824/stage2_contract_ab_book2_report.md` 与同目录
+`blind_review.md`。这些 `outputs/` 证据不提交；本节保留可继续引用的聚合裁决。
+
+切换后的零成本工程验证：Stage2 定向 147 项、冻结契约五文件 325 项、完整非 corpus 回归均
+exit 0；前端 seams（104 文件/20 份 mock）、typecheck、build 均 exit 0。当前仍无 corpus manifest，
+所以这些结果不称 corpus 全量绿。本轮设置默认没有新增任何 LLM 调用。

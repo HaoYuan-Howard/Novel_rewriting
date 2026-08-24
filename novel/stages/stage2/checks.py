@@ -1461,7 +1461,7 @@ def _present(c: _Ctx) -> list[Outcome]:
                     # 权威引用；人读 name 只是编译器的确定性投影。同一个「师尊」即使
                     # 挂两个人，只要投影字面确实属于所选 id，就不能再报「歧义」——
                     # 那会把确定引用翻回开放字面，再制造一条守卫假红。能力从注册表
-                    # 派生，不能把当前默认 v2 的架构名钉成永久边界；v3/v3.1 也关闭
+                    # 派生，不能把某一时点的默认架构名钉成永久边界；v2/v3.1 都关闭
                     # present 引用，v3.1 还关闭 narration 引用。
                     if cid is not None and key in norm(upto) \
                             and cid in c.owners.get(key, frozenset()) \
