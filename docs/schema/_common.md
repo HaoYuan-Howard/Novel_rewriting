@@ -9,7 +9,7 @@
 
 | # | 管什么 | 为什么必须在这里定一次，而不是在八层各定一次 |
 |---|---|---|
-| 一~三 | `_provenance` 的五个共有键 | 它们**逐层同形**。分层定 = 保证漂：`code` 的口径对全链生效 |
+| 一~三 | `_provenance` 的六个共有来源键 | 它们**逐层同形**。分层定 = 保证漂：`code` 的口径对全链生效 |
 | 四 | 新鲜度 `fresh/stale/unknown` | `Q-2` 四个落点里最贵的一个。它由 `inputs` 算出来，算法只能有一份 |
 | 五 | `.INVALID` 与三条 0 成本提升路 | 全链**三处**实测伪造 + **一处**实测丢失，都是同一个形状 |
 | 六~七 | 轮次账 与 `Finding` | `Finding` 统一为 15 字段，并显式携带章序 |
@@ -17,12 +17,13 @@
 
 ---
 
-## 一、`_provenance` 的五个共有键
+## 一、`_provenance` 的六个共有来源键
 
 | 键 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
 | `prompts` | `{名字: 指纹}` | 付费节点**是**；0 成本节点**只在有尺子时**有 | 插值**之后**的 system prompt 指纹。见 §1.1 | **三源** |
-| `model` | `str` | 付费节点**是**；0 成本节点**键不在** | 盘上恒 `deepseek-v4-pro`。见 §1.2 | **三源** |
+| `model` | `str` | 付费节点**是**；0 成本节点**键不在** | 本次运行配置的**主模型**；保留既有 A/B 比较轴。见 §1.2 | **契·码** |
+| `adopted_models` | `[str, …]`（去重、字典序） | 现役付费 producer **是**；模型兜底落地前旧产物可缺 | 真正被内容闸采纳并进入本产物的响应模型集合；聚合产物可同时含 Flash / Pro。见 §1.2 | **契·码** |
 | `code` | `str` | **是** | 完整提交 SHA + 可复现的工作树摘要。见 §1.3 | **三源** |
 | `root_clean_sha1` | 40 位 sha1 | **是** | 本产物最终建立在哪一版 `stage0/clean_text.txt` 上；与运行上下文根哈希不一致时拒绝写盘 | **契·码** |
 | `inputs` | `{键: 边}` | **是** | 这份产物照哪几份上游产的。见 §三 | **三源** |
@@ -39,7 +40,16 @@ stage6 已经证明这条：`APPROACHES` 一改，`HOOK_SYS` 的指纹必须跟�
 Stage5/6/7 都调用 `novel.prov.rules_fingerprint(stage)`；指纹覆盖 `Rule` 当前声明的全部字段，
 字段集合从 dataclass 本身派生。新增判据元数据不会只在某一层漏算，注册顺序变化也不会制造假 stale。
 
-### 1.2 `model` —— 0 成本节点必须是**键不在**，不是 `null`
+### 1.2 `model` / `adopted_models` —— 主配置与实际采纳不能混成一格
+
+`model` 回答「这次以哪个模型为主配置」，让既有 A/B、局部修复的配置一致性检查与
+存量产物保持同一轴；`adopted_models` 回答「真正进入这份产物的响应由谁生成」。
+Flash 内容采样或可重试传输耗尽后可能由 Pro 兜底；若只记 `model=flash`，Pro 结果就会
+被静默标成 Flash。逐章/多候选聚合产物还可能同时采纳两种模型，所以后一格必须是集合，
+不能用单值覆盖。现役 producer 从 accepted attempt → ledger 行精确反查，拿不到即拒绝落盘；
+模型兜底落地前的旧产物缺该字段时，才按当时不存在混合模型链的版本边界沿用 `model`。
+
+0 成本节点的两格都必须是**键不在**，不是 `null`。
 
 这条看着像洁癖，它防的是**假账**：`--apply-edit` 落的是人手写的稿，
 `review_<n>.json` 是 0 成本算出来的，两者都**没有任何模型参与**。
@@ -196,7 +206,7 @@ producer 的上游边；`judged` 还要同时保存完整文件指纹与正文�
 提升前分别比较原始字节与去掉 `_provenance` 后的 canonical 业务 JSON：纯排版变化只令
 `raw_changed=true`；业务内容变化令 `content_changed=true`、`edited_by_human=true`，并列出排序去重的
 RFC 6901 `changed_json_pointers`。因此「判据变了、原稿原样提升」与「人改过问题稿后提升」不再同形。
-该审计仍不把提升伪造成新生成：原 prompts/model/inputs/usage/round 原样继承。
+该审计仍不把提升伪造成新生成：原 prompts/model/adopted_models/inputs/usage/round 原样继承。
 
 ### 5.1b `partial_rewrite` —— 混版产物要如实记来源
 
@@ -212,10 +222,10 @@ stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模
 | 记法 | 为什么错 |
 |---|---|
 | 沿用旧 `_provenance` 一个字不改 | 「这份派生字段照哪份上游重算的」**永远说不出口**——而那正是局部重算必须换 inputs 的理由 |
-| 整份覆盖成新账 | 会把 `prompts` / `model` 说成**本次**产的，而本次一个请求都没发（`Q-5` 点名的伪造） |
+| 整份覆盖成新账 | 会把 `prompts` / `model` / `adopted_models` 说成**本次**产的，而本次一个请求都没发（`Q-5` 点名的伪造） |
 | 借 `revalidated` 来标 | 那一条说的是**状态变更**（`.INVALID` → 正式稿），**内容一个字没动**。两件事 |
 
-**正确的记法**：只换 `inputs`、保留 `prompts` / `model`、标一个 `partial_rewrite`，
+**正确的记法**：只换 `inputs`、保留 `prompts` / `model` / `adopted_models`、标一个 `partial_rewrite`，
 让局部改写这件事看得见。
 
 > #### ⚠ 为什么是**一个带值的键**，不是三个布尔
@@ -235,14 +245,14 @@ stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模
 
 ```
 partial_rewrite(旧的 _provenance, *, 哪条路, 代码版本, 本次读到的 inputs) -> 新的 _provenance
-    继承旧的 prompts / model 一个字不动
+    继承旧的 prompts / model / adopted_models 一个字不动
     round 不 +1（它不是新的一轮写作）
 ```
 
 ⚠ 签名里**有** `inputs` 而 5.2 的提升路**没有**，这不是不一致：
 提升路**没有读任何新东西**（它只是把一份已有的稿换个位置），而局部改写
 **真的重新读了上游**——记下这次读到的正是它的全部意义。
-危险的那两个（`prompts` / `model`）在两条路上都够不到。
+危险的那三个（`prompts` / `model` / `adopted_models`）在两条路上都够不到。
 ⚠ 运行时那一侧再收一道：`inputs` 只能来自 `RunContext` 的来源账，
 **调用方传不进去**（同 `llm_provenance` / `free_provenance` 的写法）。
 
@@ -255,11 +265,11 @@ partial_rewrite(旧的 _provenance, *, 哪条路, 代码版本, 本次读到的 
 | stage6 | **伪造** | 归档与正式产物的候选文本、`findings` **逐字相同**，而 `prompts.HOOK_SYS` 是两个值 |
 | stage7 | **伪造** | 四条 0 成本写盘路全部重盖来源账 |
 
-**⇒ 让它在结构上不可能。** 提升函数的签名里**没有** `prompts` / `model` / `inputs` 三个参数：
+**⇒ 让它在结构上不可能。** 提升函数的签名里**没有** `prompts` / `model` / `adopted_models` / `inputs` 四个参数：
 
 ```
 promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _provenance
-    继承旧的 prompts / model / inputs 一个字不动
+    继承旧的 prompts / model / adopted_models / inputs 一个字不动
     记录 revalidated = true 与完整强审计账
     round 不 +1（它不是新的一轮写作）
 ```
@@ -272,7 +282,7 @@ promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _prov
 
 ### 5.3 `--apply-edit` 是新修订，`--revalidate` 是强审计提升
 
-继承上一轮的 `inputs`（改的是同一份上游下的稿）· **`pop` 掉 `prompts` 与 `model`**
+继承上一轮的 `inputs`（改的是同一份上游下的稿）· **`pop` 掉 `prompts`、`model` 与 `adopted_models`**
 （这一稿不是任何 prompt / 模型产的，记了就是假账）· 记 `origin=human` ·
 上一轮 `inputs` 为空时**记下这次真实读过的那份并打上 `input_basis`**，
 明说它不是对历史的追认。
@@ -302,8 +312,8 @@ promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _prov
 ⚠ **`round` = 盘上见过的最大轮次 + 1**，含 `.INVALID` 与 `_rounds/`；
 **不是 `len(glob) + 1`**。后者在归档缺号时会重号覆盖。
 
-`request_fingerprint` 绑定的是最终被接受的请求：若首档响应不完整、随后降档成功，
-这里必须写降档请求的 64 位身份；命中旧 32 位 cache 文件名时也仍写完整 64 位身份。
+`request_fingerprint` 绑定的是最终被接受的请求：若 Flash 响应不完整、随后 Pro 兜底成功，
+这里必须写 Pro 请求的 64 位身份；命中旧 32 位 cache 文件名时也仍写完整 64 位身份。
 现役 Stage5 producer 拿不到 accepted attempt 就拒绝落章。字段在 v2 中以 additive 形状引入，
 因此 schema 允许早期 v2 缺席；缺席只表示请求身份未知，不能补算或截断后冒充。
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar
 
 from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance
@@ -208,6 +208,7 @@ class RunContext:
 
     def llm_provenance(self, cls: type[P] = LlmProvenance, /, *,
                        prompts: dict[str, str], model: str,
+                       adopted_models: Iterable[str] | None = None,
                        settle: bool = True, **extra: Any) -> P:
         """付费产出的来源账。`inputs` **不接受参数**——它只能来自 `_edges`。
 
@@ -234,9 +235,15 @@ class RunContext:
                 f'⇒ 0 成本产出走 `free_provenance()`；'
                 f'要写回一份**继承来的**来源账（`--revalidate`/`--recheck`/定稿节点…），'
                 f'走 `store.promote_invalid()` 或直接把读上来的那一份原样带下去，别现造')
+        actual_models = sorted(set(adopted_models or ()))
+        if not actual_models:
+            raise ProvenanceRefused(
+                f'{self.node}: 已有付费产出要铸来源账，但没有 accepted model；'
+                '拒绝拿主模型配置冒充实际响应来源')
         out = cls(code=self.code, root_clean_sha1=self._require_single_root(), inputs=self.edges,
                   prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
-                  model=model, usage=self.ledger.usage_since(self._usage_mark), **extra)
+                  model=model, adopted_models=actual_models,
+                  usage=self.ledger.usage_since(self._usage_mark), **extra)
         # `settle=False` 只供**尚未决定是否落盘**的候选做同 schema 校验：若它最终被
         # HARD 拦成 `.INVALID`，调用方必须再以默认 `settle=True` 铸造落盘稿；若它继续
         # 进入下一次付费调用，最终稿才能一次认领完整窗口。预览时推进刻度会让正式稿
@@ -245,16 +252,23 @@ class RunContext:
 
     def llm_provenance_for_chapter(
             self, chapter: int, cls: type[P] = LlmProvenance, /, *,
-            prompts: dict[str, str], model: str, **extra: Any) -> P:
+            prompts: dict[str, str], model: str,
+            adopted_models: Iterable[str] | None = None, **extra: Any) -> P:
         if not self.paid:
             raise ProvenanceRefused(
                 f'{self.node} is paid=False and cannot mint model provenance')
+        actual_models = sorted(set(adopted_models or ()))
+        if not actual_models:
+            raise ProvenanceRefused(
+                f'{self.node}: 第 {chapter} 章已有付费产出，但没有 accepted model；'
+                '拒绝拿主模型配置冒充实际响应来源')
         out = cls(
             code=self.code,
             root_clean_sha1=self._require_single_root(),
             inputs=self.edges,
             prompts={k: prov.fingerprint(v) for k, v in prompts.items()},
             model=model,
+            adopted_models=actual_models,
             usage=self.ledger.chapter_usage(chapter),
             **extra,
         )
@@ -284,10 +298,12 @@ class RunContext:
         `--recheck` / `--renormalize`，以及只改一部分决策集的
         `--apply-edit`，改完之后那一份是**混版的**：
         LLM 写的那些字段出自当初那次付费产出，被改的那部分是**现在**从盘上重算的。
-        ⇒ 继承 `prompts` / `model` 一个字不动，换掉 `inputs`（本次真读到的），
+        ⇒ 继承 `prompts` / `model` / `adopted_models` 一个字不动，
+        换掉 `inputs`（本次真读到的），
         标一个 `partial_rewrite` 让混版这件事看得见（`_common.md` §5.1b）。
 
-        ⚠⚠ **它没有 `prompts` / `model` / `inputs` 三个参数**——与 `promoted()` 同一条判准：
+        ⚠⚠ **它没有 `prompts` / `model` / `adopted_models` / `inputs` 四个参数**
+        ——与 `promoted()` 同一条判准：
         本次一个请求都没发过，记上它们就是假账。`inputs` 只能来自 `_edges`
         （与另外两个铸造口一致：**手工列举的来源清单会烂，而且是静默地烂**）。
 

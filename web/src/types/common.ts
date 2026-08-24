@@ -25,6 +25,7 @@ export interface StaleRef {
 export interface Provenance {
   root_clean_sha1: string
   model?: string
+  adopted_models?: string[]
   code?: string
   round?: number
   origin?: string

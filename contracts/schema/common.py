@@ -3,7 +3,7 @@
 """
 common.py —— 对应 `docs/schema/_common.md`。所有产物共有的部分。
 
-八份 stage 文档都写着「四个共有键留给 `_common.md`」。这里是它的机器形态。
+八份 stage 文档都把共有来源账留给 `_common.md`。这里是它的机器形态。
 
 【枚举一律从 `contracts.invariants` 取，不在本文件重抄】
 写法是 `Literal[SEVERITY]`——用元组给 `Literal` 下标，运行时等价于逐个写字面量，
@@ -264,7 +264,8 @@ class Provenance(StrictModel):
     def promoted(self: P, *, code: str, audit: RevalidationAudit) -> P:
         """把 `.INVALID` 稿的来源账带上来。`_common.md` §5.2。
 
-        ⚠⚠ **签名里没有 `prompts` / `model` / `inputs` —— 这是本方法存在的全部意义。**
+        ⚠⚠ **签名里没有 `prompts` / `model` / `adopted_models` / `inputs`
+        —— 这是本方法存在的全部意义。**
 
         原型的 `--revalidate` 之所以能**伪造**，是因为提升分支够得到那个会构造一份
         全新来源账的函数：它盖上当前的 SYS 指纹 + 当前 `model` + 当前 `inputs`，
@@ -340,7 +341,12 @@ class FreeProvenance(Provenance):
 
 
 class LlmProvenance(Provenance):
-    """付费节点的来源账。`prompts` 与 `model` 都是必填。"""
+    """付费节点的来源账。`prompts` 与 `model` 都是必填。
+
+    ``model`` 是这次运行配置的主模型，维持既有实验/存量产物的比较轴；
+    ``adopted_models`` 才是最终进入这份产物的响应实际来自哪些模型。后者在模型兜底
+    落地前的旧产物可缺，现役 producer 必须填写，不能拿主模型猜。
+    """
 
     #: 插值**之后**的 system prompt 指纹。
     #:
@@ -352,10 +358,35 @@ class LlmProvenance(Provenance):
 
     model: str = Field(min_length=1)
 
+    #: 最终被内容闸采纳、并实际进入本产物的响应模型集合。
+    #:
+    #: ⚠ 不是 ``model`` 的同义重复：主模型是 Flash 时，产物可能完全由 Pro 兜底响应
+    #: 产生；逐章/多候选聚合产物也可能同时采纳两种模型。缺席只表示这份产物早于
+    #: 模型兜底的精确来源账，不能解释成空集合。
+    adopted_models: list[Annotated[str, StringConstraints(min_length=1)]] | None = Field(
+        default=None, min_length=1)
+
+    @field_validator('adopted_models')
+    @classmethod
+    def _adopted_models_are_canonical(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and value != sorted(set(value)):
+            raise ValueError('adopted_models 必须去重并按字典序排列')
+        return value
+
+    def adopted_model_ids(self) -> tuple[str, ...]:
+        """返回可合并的实际模型集合；旧产物只能沿用当时唯一的 ``model``。
+
+        模型级兜底引入前，一个产物不可能混入第二个模型，因此旧字节缺
+        ``adopted_models`` 时，用既有 ``model`` 是有版本边界支撑的历史事实；
+        新 producer 一律显式写字段，不会走到这条兼容解释。
+        """
+        return tuple(self.adopted_models) if self.adopted_models is not None else (self.model,)
+
     def to_human_edit(self, *, code: str, input_basis: str | None = None) -> FreeProvenance:
         """`--apply-edit` 落人工稿。`_common.md` §5.3 —— 原型这一份是对的。
 
-        继承上一轮的 `inputs`（改的是同一份上游下的稿）· **丢掉 `prompts` 与 `model`**
+        继承上一轮的 `inputs`（改的是同一份上游下的稿）·
+        **丢掉 `prompts`、`model` 与 `adopted_models`**
         （这一稿不是任何 prompt / 模型产的，记了就是假账）· 记 `origin='human'`。
         """
         return FreeProvenance(

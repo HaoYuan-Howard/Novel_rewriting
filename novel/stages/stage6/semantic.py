@@ -474,6 +474,8 @@ def run_semantic(ctx: RunContext, client: LlmClient
         _provenance=ctx.llm_provenance(
             prompts=judge_prompts(system),
             model=client.model,
+            adopted_models=client.accepted_models(
+                f'{ctx.node}.A', f'{ctx.node}.B'),
         ),
     )
     seqs = semantic_seqs(store)

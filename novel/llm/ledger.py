@@ -171,6 +171,11 @@ class CostLedger:
     #: 且 ``path=None`` 的测试/缓存路径同样必须保留这条联结。
     _request_fingerprints: dict[str, str] = field(default_factory=dict, repr=False)
 
+    #: 本 run 的 ``attempt_id → 实际响应模型`` 精确索引。与请求指纹同一条联结：
+    #: 内容闸只记 attempt id，产物来源账据此反查最终采纳的是 Flash 还是 Pro，
+    #: 不能从 client 的主模型配置猜。
+    _request_models: dict[str, str] = field(default_factory=dict, repr=False)
+
     #: Stage 2 会并发等待独立章节响应。计数更新与 JSONL 追加必须是同一个临界区，
     #: 否则两个成功回包可能互相覆盖内存计数，甚至把两行字节交错写坏。
     _lock: threading.RLock = field(default_factory=threading.RLock,
@@ -231,6 +236,13 @@ class CostLedger:
                         f'attempt_id={attempt_id} 同时指向两个请求指纹：'
                         f'{previous} / {request_fingerprint}')
                 self._request_fingerprints[attempt_id] = request_fingerprint
+            if attempt_id is not None:
+                previous_model = self._request_models.get(attempt_id)
+                if previous_model is not None and previous_model != model:
+                    raise ProvenanceRefused(
+                        f'attempt_id={attempt_id} 同时指向两个模型：'
+                        f'{previous_model!r} / {model!r}')
+                self._request_models[attempt_id] = model
 
             if cached:
                 self.calls_cached += 1
@@ -302,6 +314,16 @@ class CostLedger:
                 raise ProvenanceRefused(
                     f'accepted attempt_id={attempt_id!r} 在本 run 的成本账里没有 '
                     'request_fingerprint；拒绝按默认 effort/thinking 估算')
+            return value
+
+    def model_for_attempt(self, attempt_id: str) -> str:
+        """精确反查一次已记账请求的实际响应模型；缺联结时关闭式失败。"""
+        with self._lock:
+            value = self._request_models.get(attempt_id)
+            if value is None:
+                raise ProvenanceRefused(
+                    f'accepted attempt_id={attempt_id!r} 在本 run 的成本账里没有 model；'
+                    '拒绝按 client 主模型估算')
             return value
 
     def _append(self, row: dict) -> None:
@@ -382,7 +404,7 @@ class CostLedger:
         """「答案流丢失」各记一行：**指针与读数进账，正文进留证文件。**
 
         它与同一次拒绝的 `gate_decision` 行不重复，各答一个问题：那一行答
-        「哪一道闸判的、下一步是重采还是降档」；这一行答**「证据在哪」**——
+        「哪一道闸判的、下一步是重采还是模型兜底」；这一行答**「证据在哪」**——
         `dump` 是相对**书目录**的路径（`novel/paths.py::answer_lost_rel`），
         因为那份推理里装的是这本书的正文，跟书走而不是跟服务走。
 

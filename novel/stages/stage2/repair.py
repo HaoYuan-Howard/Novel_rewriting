@@ -38,7 +38,7 @@ from contracts.schema.stage2 import (
 )
 from novel import prov
 from novel.core.spans import content_index, content_only
-from novel.errors import GateBlocked, TerminalState, UpstreamMissing
+from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing
 from novel.llm.client import LlmClient
 from novel.llm.ledger import combine_usage
 from novel.llm.prompts import with_json_shape
@@ -218,7 +218,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
             '`--chapters` 整章重生成。尚未调用 LLM')
     if old_prov.model != client.model:
         raise TerminalState(
-            '当前 BlueprintProvenance 没有表达混合模型的槽位；'
+            '字段修复不能把不同主模型配置的结果混成一份来源账；'
             f'原稿 model={old_prov.model!r}，本次={client.model!r}。尚未调用 LLM')
     spec = contract_for(baseline)
 
@@ -269,6 +269,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
         ir_beats = ir_by_ordinal[action.chapter]['beats']
         target = beat_index_of[action.beat_id]
 
+        purpose = f'{ctx.node}:patch:{action.beat_id}.h{action.hinge_index}'
         if action.route == 'candidate_select':
             occs = _occurrences(seg, action.phrase or '')
             if len(occs) < 2:
@@ -289,7 +290,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
             response = client.ask_json(
                 system, user,
                 model_cls=HingeSelectResponse,
-                purpose=f'{ctx.node}:patch:{action.beat_id}.h{action.hinge_index}',
+                purpose=purpose,
                 validator=lambda obj, _r, _ids=valid_ids: (
                     None if obj.candidate_id in _ids
                     else f'candidate_id 不在候选里：{obj.candidate_id!r}'),
@@ -308,7 +309,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
             response = client.ask_json(
                 system, user,
                 model_cls=HingePhraseResponse,
-                purpose=f'{ctx.node}:patch:{action.beat_id}.h{action.hinge_index}',
+                purpose=purpose,
                 validator=lambda obj, _r, _seg=seg: (
                     None if len(_occurrences(_seg, obj.phrase)) == 1
                     else f'短语在这一拍里命中 '
@@ -316,6 +317,11 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
             )
             new_phrase = response.phrase
 
+        accepted_model = client.accepted_model(purpose)
+        if accepted_model is None:
+            raise ProvenanceRefused(
+                f'{action.beat_id} 已返回字段修复，但没有 accepted model；'
+                '拒绝按主模型配置估算')
         ir_beats[target]['hinges'][action.hinge_index]['phrase'] = new_phrase
         repair_rows.append({
             'chapter_ordinal': action.chapter,
@@ -327,7 +333,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
                  'route': action.route}),
             'user_prompt': prov.fingerprint(user),
             'output': prov.projection_fingerprint({'phrase': new_phrase}),
-            'model': client.model,
+            'model': accepted_model,
             'cache_policy': ctx.cache.name,
             'fields': [f'beats[{action.beat_id}]'
                        f'.hinges[{action.hinge_index}].phrase'],
@@ -350,6 +356,7 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
         BlueprintProvenance,
         prompts=prompt_keys,
         model=client.model,
+        adopted_models=client.accepted_models(),
         scope_violations=list(old_prov.scope_violations),
         batches=[list(batch) for batch in old_prov.batches],
         context=old_prov.context.model_dump(),
@@ -360,6 +367,8 @@ def run_field_patches(ctx: RunContext, client: LlmClient) -> Any:
     provenance = BlueprintProvenance.model_validate({
         **delta.model_dump(),
         'prompts': {**old_prov.prompts, **delta.prompts},
+        'adopted_models': sorted(set(old_prov.adopted_model_ids())
+                                 | set(delta.adopted_model_ids())),
         'usage': combine_usage(old_prov.usage, delta.usage),
         'partial_rewrite': old_prov.partial_rewrite,
     })

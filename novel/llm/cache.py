@@ -118,8 +118,8 @@ def request_fingerprint(req: ChatRequest) -> str:
 def cache_key(req: ChatRequest) -> str:
     """一次调用的 32 字符**缓存定位键**。盘上兼容形状不得迁移。
 
-    **阶梯的每一档各自成键**（`reasoning_effort` 进键）——不然降级到第二档时
-    会读回第一档那个空壳，「重试」变成把同一个结果读两遍。
+    **每一组模型/effort/thinking 配置各自成键**——不然 Flash→Pro 兜底或显式
+    effort A/B 会读回另一组配置的响应，「换模型/换臂」变成把同一个结果读两遍。
 
     边界裁决（TODO-08）：键只含真正影响响应的请求载荷，不含 git/worktree 身份。
     system/user 都在 ``cache_payload``，所以 prompt 改动必定 miss；无关文档或测试改动
@@ -142,7 +142,7 @@ class ResponseCache:
 
     ⚠⚠ **`dir=None` 曾经是「一个字都不缓存」，而 docstring 写着「语义完全一样」。**
     `_path` 返回 `None` ⇒ `get` 恒 `None` · `put` 恒 `False` · `evict` 什么也不做。
-    而 `LlmClient` 的默认缓存**恰好就是这一档**：于是「四档阶梯各自成键」
+    而 `LlmClient` 的默认缓存**恰好就是这一档**：于是「请求配置各自成键」
     「空壳踢出缓存」「命中记进 `calls_cached`」这些行为在默认配置下**一条都不成立**，
     却没有任何测试会红——它们全都在断言一个从不发生的事。
     ⇒ 内存那一档改成真的（一个 dict），三个方法逐条对齐盘上那一份。
@@ -185,8 +185,8 @@ class ResponseCache:
 
         ⚠ 实测 DeepSeek 会把整段答案写进 `reasoning_content`、`content` 返回空串
         （`finish_reason='stop'`，**不是截断**）。空回答对任何调用方都无用，
-        缓存下来只会让重试**每次都命中同一个空壳**——那时连降级阶梯都救不了它，
-        因为四档都会各自读回自己那份空的。
+        缓存下来只会让重跑**每次都命中同一个空壳**——同档重采与模型兜底都会被
+        各自的坏缓存短路。
 
         ⚠ **不写缓存 ≠ 证据没了。** 这一条曾经的副作用是：空响应被 `evict` 之后
         盘上一个字都不剩，「那条推理通道里到底装了什么」只能拿 token 体积去猜。

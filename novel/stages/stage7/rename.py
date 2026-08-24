@@ -86,7 +86,7 @@ def book_txt_rel(store: ArtifactStore) -> str:
 #: | low | 5 | 6,932 | 5,729 | **1,203** |
 #:
 #: ⇒ **high 档截断率 4/12 = 33%**，每次白烧满额 16000 且 `content` 一个 token 都没有
-#: （`finish_reason='length'`，推理吃光了预算），随后由 `LADDER` 落到 `low` 救场
+#: （`finish_reason='length'`，推理吃光了预算），旧实现随后由 `LADDER` 落到 `low` 救场
 #: ——**交付的人名表因此常常是 low 档产的**。16000 在全链本来就是最低档之一：
 #: 同量级的 `stage6.hook` 用的就是 **64000**，`stage2.blueprint` 是 256000。
 #:
@@ -94,7 +94,8 @@ def book_txt_rel(store: ArtifactStore) -> str:
 #: 真正省钱的是把 `effort` 降到 `low`（单本期望 15,837 → 6,932，−56%），
 #: 而那条**被明确否决**了（2026-08-24 用户裁决）——因为唯一可能被降档伤到的维度是
 #: 「名字起得好不好」，而 `rn_taste_unver` 明说全链没有判据。抬上限让 high 档大概率
-#: 不再落梯 ⇒ 交付的映射恒出自 high 臂。`NodeSpec.effort` 保持不覆盖（仍是 high）。
+#: 2026-08-24 全局取消异常驱动的 effort 降级后，该节点保持 high；若默认 Flash
+#: 失败则只允许 Pro 以同配置兜底。`NodeSpec.effort` 保持不覆盖（仍是 high）。
 #: ⚠ **代价照实说**：真跑飞时浪费从 16k 变 64k。4/12 的截断率说明跑飞不罕见，
 #: 而 4 次截断只证明「想要 ≥16000」，没证明尾巴到底有多长 ⇒ 这是一次**有尾部风险的下注**，
 #: 不是无损改进。下一次跑书要回读这个数：截断若仍发生，说明是推理跑飞不是预算不够，
@@ -848,7 +849,8 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
     provenance = ctx.llm_provenance(
         NameMapProvenance,
         prompts={'RENAME_SYS': system, 'RULES': prov.rules_fingerprint('stage7')},
-        model=client.model, params=NameMapParams(max_tokens=MAX_TOKENS))
+        model=client.model, adopted_models=client.accepted_models(ctx.node),
+        params=NameMapParams(max_tokens=MAX_TOKENS))
     art, fs, _hook_new = _build(ctx, up, resp.model_dump(by_alias=True), [], provenance)
     art = art.model_copy(update={'identity': baseline})
 

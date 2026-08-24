@@ -512,6 +512,12 @@ def _run_group_parallel(
                     f'第 {ordinal} 章已经返回正文，但 purpose='
                     f'{generated["accepted_purpose"]!r} 没有 accepted attempt；'
                     '拒绝估算或截断 request fingerprint')
+            accepted_model = client.accepted_model(generated['accepted_purpose'])
+            if accepted_model is None:
+                raise ProvenanceRefused(
+                    f'第 {ordinal} 章已经返回正文，但 purpose='
+                    f'{generated["accepted_purpose"]!r} 没有 accepted model；'
+                    '拒绝按主模型配置估算')
             extra['request_fingerprint'] = request_fingerprint
             prompt_record = {'SYS': system}
             provenance = ctx.llm_provenance_for_chapter(
@@ -521,6 +527,7 @@ def _run_group_parallel(
                     {**prompt_record, 'REVISE': prompts.REVISE_TAIL}
                     if revise is not None else prompt_record),
                 model=client.model,
+                adopted_models=[accepted_model],
                 **extra,
             )
             trim_rel = artifact_rel('stage5.trim_audit', nn=ordinal)

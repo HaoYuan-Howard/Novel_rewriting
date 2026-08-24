@@ -106,6 +106,8 @@ def test_the_probe_disables_the_warmup_gate_so_its_peak_reading_stays_real():
 
     assert seen.get('warmup') is False, \
         'probe 没关首发闸 ⇒ 它测出来的并发峰值不是它自己设的那个'
+    assert seen.get('enable_model_fallback') is False, \
+        'probe 没关模型兜底 ⇒ 它可能在测量中途把供应商模型换成 Pro'
 
 
 def test_cli_refuses_before_creating_output_without_explicit_paid_acknowledgement():

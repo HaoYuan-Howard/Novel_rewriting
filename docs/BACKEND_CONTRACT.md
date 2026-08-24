@@ -903,12 +903,12 @@
 | R-12.1b | 节点要诚实报出「这条规则本次没有跑，不是跑过没事」，且**流程里必须钉死一次 0 成本复检**。⚠ 别拿「这次补跑是绿的」当结论——那是运气，不是保证 | `HARD` |
 | R-12.1c | 逐章抽取按章全量并发、硬上限 32；20 章即 20 个同时调用，40 章峰值只能是 32。并发完成顺序不得串错逐章 usage/provenance | `结构`（`novel/stages/stage2/extract.py::_run_chapter_requests` + `novel/llm/ledger.py::chapter_usage`）+ 回归测试 |
 | R-12.1d | 供应商限流与产品并发闸必须分开陈述：项目硬上限是 32，DeepSeek V4 Pro 当前官方账号级上限是 500；正常产品路径不为制造 429 越过自身硬闸。真实观测必须显式确认付费、禁缓存、限制请求/重试/token，并保留逐次 ledger 与不含 prompt/响应正文的报告；429 重试/退避由可重复合成故障守卫 | `结构`（`tools/observe_provider_limits.py`）+ 2026-08-16 真实 32 并发观测 + 合成 429/退避回归；供应商口径见 [官方限速说明](https://api-docs.deepseek.com/zh-cn/quick_start/rate_limit) |
-| R-12.2 | **结构化调用点必须声明自己的必需顶层键**。「解析失败」与「合法但结构上是空的」是同一类故障，走同一条重试阶梯，且空壳**必须踢出缓存** | `HARD` |
+| R-12.2 | **结构化调用点必须声明自己的必需顶层键**。「解析失败」与「合法但结构上是空的」是同一类内容故障，空壳**必须踢出缓存**。除截断外，同一模型配置最多两采（首发 + 一次重采）；禁止异常驱动的 effort / thinking 自动降级。主模型为 `deepseek-v4-flash` 时，内容采样耗尽或可重试传输/资源重试耗尽后，才由 `deepseek-v4-pro` 保持相同 effort / thinking 兜底；Pro 仍失败统一 `LlmFailed`。主模型本来就是 Pro 不重复兜底；不可重试 4xx、配置错误与预算预检拒绝不触发换模型。产物来源账的 `model` 保留主模型配置，`adopted_models` 必须由 accepted attempt → ledger 精确记录真正进入产物的 Flash / Pro 集合；拿不到联结就拒绝落盘，不许把 Pro 兜底结果标成 Flash | `HARD`（`novel/llm/client.py::models_for` + 同档重采/模型链/失败归族/实际模型来源账回归） |
 | R-12.2b | 下游节点在开始逐条报症状之前，先判一次「上游这份东西是不是整个空的」 | `HARD` |
 | R-12.3 | 子进程环境三件套（UTF-8 相关）缺一不可：缺了它，任何打印 `✓` 的节点进管道就非零退出——而一次**成功的付费跑**会被报成失败 | `HARD`（回归测试） |
 | R-12.4 | 缓存三条语义：关缓存是**同时关读写** · 参数不变的「重跑」什么都没跑 · 被打断的跑可几乎免费续 | `HARD` |
 | R-12.5 | **发出去的 prompt 里不许出现内部结构名**（拍号 `bNN_NN` / 人物 id `char_001` / 规则 id `wr_01` / 内部枚举名 / 节点名）。每层只说自己的语言：prompt 只讲任务，不提节点名、不提消费方、不提归属 | **无守卫 → `B-05`** |
-| R-12.6 | **整本请求先过精确上下文预算，再碰缓存、外部请求、ledger 或正常产物。** `stage2.global` 与 `stage4.plan`（以及所有统一 `LlmClient` 调用）按最终 system、user 与官方消息 framing 精确计 input tokens；`deepseek-v4-pro` / `deepseek-v4-flash` 的保守有效上下文上限固定为 1,000,000，单次输出上限 384,000，且要求 `input_tokens + max_tokens <= 1,000,000`。tokenizer 固定为 DeepSeek V4 官方 revision `0e1a0e5e52aea73055f50fef6f2423db370265b6`，资源 SHA-256 `8f9f37ca37fdc4f5fd36d5cf4d3b0e8392edb4e894fd10cc0d70b4957c8633cf`；未知模型、依赖/资源不可用或 hash 不符全部关闭式拒绝，不用字符比例猜测。产品路径是**限制书长**：不截断、不分块聚合、不自动换模型；错误必须给出模型、tokenizer 版本、输入、声明输出、合计、两项上限及缩减正文的行动建议 | `结构`（`novel/llm/budget.py` + `novel/llm/client.py::_preflight`）+ 边界/副作用/Stage2/Stage4/CLI 回归测试 |
+| R-12.6 | **整本请求先过精确上下文预算，再碰缓存、外部请求、ledger 或正常产物。** `stage2.global` 与 `stage4.plan`（以及所有统一 `LlmClient` 调用）按最终 system、user 与官方消息 framing 精确计 input tokens；Flash 主模型必须把 R-12.2 登记的 Pro 兜底请求也同批预检，任一项拒绝即全链 0 副作用。`deepseek-v4-pro` / `deepseek-v4-flash` 的保守有效上下文上限固定为 1,000,000，单次输出上限 384,000，且要求 `input_tokens + max_tokens <= 1,000,000`。tokenizer 固定为 DeepSeek V4 官方 revision `0e1a0e5e52aea73055f50fef6f2423db370265b6`，资源 SHA-256 `8f9f37ca37fdc4f5fd36d5cf4d3b0e8392edb4e894fd10cc0d70b4957c8633cf`；未知模型、依赖/资源不可用或 hash 不符全部关闭式拒绝，不用字符比例猜测。产品路径是**限制书长**：不截断、不分块聚合；预算拒绝本身不触发模型兜底。错误必须给出模型、tokenizer 版本、输入、声明输出、合计、两项上限及缩减正文的行动建议 | `结构`（`novel/llm/budget.py` + `novel/llm/client.py::_preflight`）+ 边界/副作用/Stage2/Stage4/CLI 回归测试 |
 
 > **R-12.5 的守卫开在错的门上。** 现有的泄漏扫描扫的是**模型的产物**，
 > 而这条约束管的是**我们发出去的 prompt**——两者是两扇不同的门，而现在只有前一扇有守卫。
@@ -1050,7 +1050,7 @@
 代码直接叫你重付一次钱）。新骨架**必须一致**。
 
 ### Q-4 · 每份产物必须记住自己是从哪份上游来的
-`{prompts 指纹, model, code 版本, inputs 指纹, params}`。
+`{prompts 指纹, 主模型 model, 实际采纳 adopted_models, code 版本, inputs 指纹, params}`。
 **校验器先报来源，再报判定**——对不上时报出来的一堆违规是「拿新尺子量旧布」，
 不说破就会被当成一次回归。
 
@@ -1071,7 +1071,7 @@ RFC 6901 改动路径、自报 actor/reason 与 `edited_by_human`，合格才提
 而重掷回来的是**另一份稿**，修没修好无从对照。
 
 ⚠ **问题稿与被提升的稿【同样要带来源】，并且要记「它是被提升上来的」**（2026-08-10 补）。
-提升保留原 prompts/model/inputs 与生成轮次，审计不得把人工改过的字节洗成新模型结果。
+提升保留原 prompts/model/adopted_models/inputs 与生成轮次，审计不得把人工改过的字节洗成新模型结果。
 `--apply-edit` 则是另一条 typed 人工修订路：它开新人工轮次并使旧主体绑定结论过期；
 两者不得互换或共用一个 `revalidated: true` 布尔值代表。
 原型这条整个漏了：问题稿用裸写绕过了带来源的落盘、提升路又不传来源，
@@ -1422,6 +1422,8 @@ npm --prefix web run build
 
 | 2026-08-24 | **Stage2 blueprint 默认由 v2 翻到 `extraction-ir-v3.1`；v1.1/v2 继续显式可选** | 用户在两本书的同模型、同上游、独立空缓存三臂对照后作出产品裁决。`deepseek-v4-flash + high + thinking` 下，v1.1 / v2 / v3.1 的两书匿名盲审分别为 **22.0→20.2 / 20.0→24.4 / 26.0→25.0**，最终正式产物率 **2/2 / 1/2 / 2/2**，首轮正式率 **0/2 / 0/2 / 1/2**；累计 wire **46 / 97 / 61**、prompt+completion **748,688 / 939,545 / 1,043,290**、付费命令墙钟 **855s / 1,073s / 958s**。因此 v3.1 取质量与可交付可靠性，v1.1 保留为显式低 token 臂，v2 保留为显式回退/存量复检臂。⚠ 本次没有跑预登记的第三本 holdout，旧开发门也没有被重写成通过；第二书 v3.1 与 v2 共同发生 ch6 实体串线且机械 HARD 未检出，因此该裁决不等于可跳过语义复核。唯一默认落点改为 `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`；配置、整跑、预算预览与 provenance 从生产落点派生，默认预览拓扑由两相 `2N+1` 变为一相 `N+1`。取值面仍为 v1.1/v2/v3.1，`ChapterBlueprints` schema 仍 v3，不迁移、不自动重建存量书；本次切换本身 0 LLM。完整逐书证据与限制见 `docs/stage2_contract_experiment.md` §十九。工程验证：Stage2 定向 147 项、冻结契约五文件 325 项与完整非 corpus 回归均 exit 0；前端 seams（104 文件/20 份 mock）、typecheck、build 均 exit 0；当前仍无 corpus manifest，不称 corpus 全量绿。 |
 | 2026-08-24 | **Stage2 blueprint 退役 `extraction-ir-v1.1`；契约面收为 v2 / v3.1，chapter blueprints schema v3 → v4** | 用户明确裁决删除 v1.1，仅保留 `extraction-ir-v2` 与默认 `extraction-ir-v3.1`。v1.1 从 `BLUEPRINT_ARCHITECTURES`、`CONTRACTS`、CLI/env 配置校验、响应载体与 prompt 导出、冒烟白名单和前端枚举夹具同时撤下；v1.1 专用的旧蓝图重放工具与 corpus 守卫删除，历史 A/B 数据保留。由于 `BlueprintContext.architecture` 从三值收窄为两值，`stage2/chapter_blueprints.json` 形状破坏并升 v4；本仓无迁移机制，所有 v3 信封、`.INVALID` 与 `_rounds/` 都由 `stage2.blueprint` 付费整跑重建，不手补版本或 architecture 冒充当前产地。本批工程改动 0 LLM；实验证据与后续裁决见 `docs/stage2_contract_experiment.md` §二十。 |
+
+| 2026-08-24 | **取消异常驱动的 effort/thinking 降级，生产恢复链改为同配置 Flash→Pro 兜底**（用户裁决；**0 成本实现，无真实 LLM/付费实证**） | **先纠正旧行为口径**：传输层默认不是“失败后重试两次”，而是首发 + **3** 次 retry（只对 429/5xx/timeout 等 retryable 故障）；内容层除截断外是同一配置首发 + **1** 次重采；旧实现随后才走 `high→low→low/off`。本批保留前两层、整批删除异常驱动的 effort/thinking 降级：默认与显式 effort 都只形成一组配置，多组 `rungs=` 在缓存/预算/wire 前关闭式拒绝，防止旧降级借参数复活。主模型为 `deepseek-v4-flash` 时，内容采样耗尽或 retryable 传输/`insufficient_system_resource` 重试耗尽后，才由 `deepseek-v4-pro` 保持**同 effort / thinking / prompt / schema / validator / max_tokens**兜底；Pro 内容或传输仍失败统一 `LlmFailed`。主模型本来就是 Pro 时不重复兜底；不可重试 4xx、配置/API key 错误与上下文预算拒绝不花 Pro 调用。Flash 与 Pro 的完整请求在碰缓存/ledger/wire 前一起做预算预检；缓存先横扫两模型同配置，已有合格 Pro 缓存可以 0 wire 恢复。`tools/json_mode_control.py` / `tools/observe_provider_limits.py` 明确关闭模型兜底，避免诊断变量被替换。**来源账闭环**：既有 `_provenance.model` 保留“主模型配置”这条 A/B 轴；新增 additive、旧产物可缺的 `adopted_models`，由 accepted attempt → ledger 精确反查真正进入产物的 Flash/Pro 集合，现役 producer 拿不到联结即拒绝落盘；局部修复合并旧集合，Stage5 每章绑定自己的 accepted purpose，避免 Pro 产物被静默标成 Flash。前端 Stage5 显示实际采纳模型。**验证**：全量非 corpus **2673 passed / 0 failed / 0 error / 3 skipped**（406.347s；3 条均为既有语料依赖，默认 corpus 仍被排除，故不称全量语料绿）；冻结契约五文件与模型/ledger/各 stage 生产落盘回归通过；前端 typecheck 0、seams 104 文件通过且 mocks 20 份基线未动、Vitest **27 文件 / 86 用例**全过、production build 通过。⚠ 全部 LLM 场景使用 FakeTransport/合成故障，**没有真实 DeepSeek 调用，尚不能把“Pro 真实稳定性”写成这一批的实测结论**。 |
 
 证据解释纪律：阶段性 smoke 会被后续完整验收覆盖；历史报告中的“未完成”不能越过
 `docs/REQUIREMENTS.md` 重新成为活动状态。模型或语料结论只适用于当时样本与预登记规则，不外推成

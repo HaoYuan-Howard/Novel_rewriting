@@ -1550,8 +1550,8 @@ class NodeSpec(NamedTuple):
     # ⚠ 取值面是 `low` / `high` / `max` / `None`：`medium` 与 `xhigh` 虽然 API 收，但被
     #   服务端静默映射回 `high` ⇒ 允许它们就是允许一个「写着降了档、实际一档没降」的配置，
     #   而账本那一列会如实记下 `medium`，事后分辨不出来。`max` 是**升档**（2026-08-21
-    #   为 FC-13 质量实验启用，官方 effort 前缀已从 `4744479^` 原样取回）：它走
-    #   `rungs_from_effort` 的覆盖梯，不进降级梯 `LADDER`。
+    #   为 FC-13 质量实验启用，官方 effort 前缀已从 `4744479^` 原样取回）：它由
+    #   `rungs_from_effort` 显式选中；异常不再自动切换 effort。
     #   判定落点是 `novel/llm/client.py::rungs_from_effort`，不靠本注释。
     effort: str | None = None
     # 本节点钉死的模型 id；'' = 跟随全局默认（`novel/config.py::DEFAULT_MODEL`，

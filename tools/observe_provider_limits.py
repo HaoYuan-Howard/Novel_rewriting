@@ -3,8 +3,9 @@
 """以有界、留账的真实请求观测供应商 429、退避和并发峰值。
 
 本工具不会因普通执行而联网：CLI 必须同时收到 ``--acknowledge-paid-network``、
-有效 API key 和一个新的/空的输出目录。每个逻辑请求只走 ``low + thinking off``
-一档、禁用缓存、限制很小的输出 token；传输层重试仍走产品的唯一实现。
+有效 API key 和一个新的/空的输出目录。每个逻辑请求只走指定模型的
+``low + thinking off`` 一档、禁用模型兜底与缓存、限制很小的输出 token；
+传输层重试仍走产品的唯一实现。
 """
 from __future__ import annotations
 
@@ -159,7 +160,7 @@ def run_probe(
         ctx, measured, cache=ResponseCache(), model=cfg.model,
         thinking_mode='off', max_retries=cfg.max_retries,
         backoff_base=cfg.backoff_base, concurrency=cfg.concurrency,
-        warmup=False,
+        warmup=False, enable_model_fallback=False,
         sleep=sleep,
     )
 

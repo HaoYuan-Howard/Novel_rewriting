@@ -35,7 +35,9 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import CtxProvenance, PlanChapters, PlanEdit, WriterContext
 from novel import paths, prov
-from novel.errors import GateBlocked, RefusedByStructure, TerminalState, UpstreamMissing
+from novel.errors import (
+    GateBlocked, ProvenanceRefused, RefusedByStructure, TerminalState, UpstreamMissing,
+)
 from novel.llm.ledger import combine_usage
 from novel.report import build
 from novel.report.findings import Outcome
@@ -296,7 +298,7 @@ def _assert_budget_basis(up: _Upstreams) -> None:
     （`beat.span` 合计）。一章一个已知单元都没有 ⇒ 这一章无从分配，
     而那是 **stage2 的锚点坏了**，不是模型的错。
     ⇒ 不拦在这里的话，它会在 `ask_json(validator=)` 里变成一次「响应不合格」，
-    于是整条阶梯重采到底、每一次都必然失败——**一次纯粹的付费空转**。
+    于是同配置重采与模型兜底都会走到底、每一次都必然失败——**一次纯粹的付费空转**。
     判词指向真根因，并明确说「尚未调用 LLM」（同本文件其余几处前置检查）。
     """
     _chars, _units, gaps = budget_basis(up.groups, up.bidx)
@@ -608,16 +610,16 @@ def _expansion_validator(up: _Upstreams, *, ordinal: int | None = None,
 
     ⚠⚠ **这一条是 2026-08-22 花 59 720 completion 买回来的。** 那一次的响应过了内容闸
     （schema 合法、`decision=accepted`），却倒在 `expand_plan_beats`：10 处 `spine`
-    对不上号。而那时阶梯已经走完 ⇒ `RefusedByStructure` 是**终态**，重采与降档都够不着它，
+    对不上号。而那时旧恢复链已经走完 ⇒ `RefusedByStructure` 是**终态**，重采与模型兜底都够不着它，
     一份其余全都合格的计划连同整轮 token 一起报废，坏响应还留在缓存里等着被读回。
-    接到这里之后，这一拒与 schema 拒同型（`gate='validator'`）：evict、同档重采、必要时降档。
+    接到这里之后，这一拒与 schema 拒同型（`gate='validator'`）：evict、同档重采、必要时由 Pro 兜底。
 
     ⚠ 两道闸都是**纯确定性**的（编号展开 + 事实引用复算），跑在副本上没有副作用。
     ⚠⚠ **写盘那一侧的同两道闸一格都没撤**：`--apply-edit` / `--revalidate` 不经过本函数，
     那两条路的输入是人工稿与盘上产物。**两处调的是同一份代码，不是两份逻辑**——
     改判据只有 `measure.py` / `fact_refs.py` 一个落点。
 
-    ⚠ 归族随之变了，这是有意的：走完阶梯仍不合格 ⇒ `LlmFailed`（`TerminalState`，
+    ⚠ 归族随之变了，这是有意的：走完恢复链仍不合格 ⇒ `LlmFailed`（`TerminalState`，
     exit 2、不打栈），而不是从前的「结构性拒绝（是 bug，exit 70 + 栈）」。
     **模型填错编号从来不是本仓的 bug**；写盘那一侧仍归 `RefusedByStructure`，
     因为那一侧的输入是代码派生的或人手写的——那里出现编号错，才真的是 bug。
@@ -639,7 +641,7 @@ def _expansion_validator(up: _Upstreams, *, ordinal: int | None = None,
             # ⚠⚠ **「响应是别的章」也在这里判，而不是等 `ask_json` 返回之后。**
             #   它从前是 `_run_plan_repair` 里一句 `TerminalState`：一次越界响应
             #   直接报废整轮，而这一类恰恰是重采就可能救回来的。放在这里，
-            #   判词一个字不改（`LlmFailed` 会把它逐条带出来），但走的是阶梯。
+            #   判词一个字不改（`LlmFailed` 会把它逐条带出来），但走的是响应恢复链。
             if (raw.get('output_ordinal') != ordinal
                     or list(raw.get('from_source_ordinals') or []) != [ordinal]):
                 return (f'定向重规划请求第 {ordinal} 章，响应却是 '
@@ -748,7 +750,7 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
     params = _params(up)
     if old_prov.model != client.model:
         raise TerminalState(
-            '当前 PlanProvenance 没有表达混合模型的槽位；'
+            '定向重规划不能把不同主模型配置的结果混成一份来源账；'
             f'原稿 model={old_prov.model!r}，本次={client.model!r}。尚未调用 LLM')
     if old_prov.params.model_dump() != params:
         raise TerminalState(
@@ -791,8 +793,12 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
             validator=_expansion_validator(
                 up, ordinal=ordinal, chapter_total=_chapter_total(old_by[ordinal])),
             cache_policy=CachePolicy.refresh())
+        accepted_model = client.accepted_model(f'{ctx.node}:repair:ch{ordinal}')
+        if accepted_model is None:
+            raise ProvenanceRefused(
+                f'第 {ordinal} 章已经返回规划，但没有 accepted model；拒绝按主模型估算')
         # ⚠ 「响应是不是这一章」已经在 `_expansion_validator` 里判过了（拒了会重采、
-        #   走完阶梯才 `LlmFailed`）。这里再判一次就是一条永不触发的分支，
+        #   走完同配置采样/模型兜底才 `LlmFailed`）。这里再判一次就是一条永不触发的分支，
         #   而永不触发的分支会让下一个人以为它还在守着什么。
         raw_response = response.model_dump(by_alias=True)
         expanded = {
@@ -823,7 +829,7 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
             'after': prov.projection_fingerprint(after),
             'before_hard': before_hard,
             'after_hard': after_hard,
-            'model': client.model,
+            'model': accepted_model,
             'cache_policy': ctx.cache.name,
         })
 
@@ -836,11 +842,13 @@ def _run_plan_repair(ctx: RunContext, client: Any, *,
     delta = ctx.llm_provenance(
         PlanProvenance,
         prompts={'PLAN_SYS': base_system, 'PLAN_REPAIR_SYS': repair_system},
-        model=client.model, params=params,
+        model=client.model, adopted_models=client.accepted_models(), params=params,
         partial_regen_chapters=partial, repairs=history)
     provenance = PlanProvenance.model_validate({
         **delta.model_dump(),
         'prompts': {**old_prov.prompts, **delta.prompts},
+        'adopted_models': sorted(set(old_prov.adopted_model_ids())
+                                 | set(delta.adopted_model_ids())),
         'usage': combine_usage(old_prov.usage, delta.usage),
         'partial_rewrite': old_prov.partial_rewrite,
     })
@@ -878,7 +886,9 @@ def run_plan(ctx: RunContext, client: Any, *,
     return write_plan(ctx, store, resp.model_dump(by_alias=True), up,
                       provenance=ctx.llm_provenance(
                           PlanProvenance, prompts={'PLAN_SYS': system},
-                          model=client.model, params=params))
+                          model=client.model,
+                          adopted_models=client.accepted_models(ctx.node),
+                          params=params))
 
 
 def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:

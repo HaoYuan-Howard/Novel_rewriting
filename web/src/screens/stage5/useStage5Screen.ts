@@ -497,8 +497,10 @@ export function useStage5Screen() {
               ? '量不了'
               : Math.round(firstDraft.overlap_excl_verbatim * 100) + '%'),
           prov:
-            'model ' +
-            (firstDraft._provenance.model ?? '—') +
+            'actual model ' +
+            (firstDraft._provenance.adopted_models?.join(' + ') ??
+              firstDraft._provenance.model ??
+              '—') +
             ' · code ' +
             (firstDraft._provenance.code ?? '—') +
             ' · prompts ' +

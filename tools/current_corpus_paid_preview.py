@@ -53,6 +53,7 @@ from novel.llm.budget import (  # noqa: E402
 from novel.llm.client import (  # noqa: E402
     DEFAULT_MAX_TOKENS as LLM_DEFAULT_MAX_TOKENS,
     MAX_SAMPLES_PER_RUNG,
+    models_for,
     rungs_from_effort,
 )
 from novel.llm.prompts import with_json_shape  # noqa: E402
@@ -308,9 +309,11 @@ def _schema_targets(node: str) -> list[str]:
     return out
 
 
-def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, Any]:
+def _logical_topology(node: str, chapters: int, rung_count: int,
+                      model_count: int) -> dict[str, Any]:
     # ⚠ wire 上限按 `MAX_SAMPLES_PER_RUNG` 放大：答案流丢失（content 空 + stop）时
-    #   同一档先重采一次再降档（`novel/llm/client.py`），每一档最坏烧两采。
+    #   同一配置先重采一次（`novel/llm/client.py`），随后 Flash 才切 Pro；每个模型
+    #   配置最坏烧两采。
     #   与档数一样，这个乘数从生产落点 import，不写死。
     base = 1
     conditional = 0
@@ -337,17 +340,20 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
         # the number of registered approaches: the current recipe repeats one
         # approach, so counting approaches would under-count the retry ceiling.
         conditional = len(HOOK_SLOTS) * HOOK_RETRY_LIMIT
-        conditional_wire = conditional * len(HOOK_RETRY_RUNGS) * MAX_SAMPLES_PER_RUNG
+        conditional_wire = (conditional * len(HOOK_RETRY_RUNGS) * model_count
+                            * MAX_SAMPLES_PER_RUNG)
         condition = (
             '初始三候选中每条含 HARD 的候选最多一次 low/no-thinking 定向重试；'
             '三条均 dirty 时达到上限')
     elif node == 'stage6.semantic':
         base = 2  # judge A/B
-    base_wire = base * rung_count * MAX_SAMPLES_PER_RUNG
+    base_wire = base * rung_count * model_count * MAX_SAMPLES_PER_RUNG
     return {
         'base_logical_requests': base,
         'conditional_logical_requests': conditional,
         'logical_request_hard_limit': base + conditional,
+        # ⚠ 输出键保留旧名以便既有只读预览 JSON 可继续比较；这里的 ladder 自
+        # 2026-08-24 起实际指「单配置采样 × Flash→Pro 模型恢复链」，不再含 effort 降级。
         'base_ladder_wire_hard_limit': base_wire,
         'conditional_wire_hard_limit': conditional_wire,
         'wire_attempt_hard_limit': base_wire + conditional_wire,
@@ -355,7 +361,8 @@ def _logical_topology(node: str, chapters: int, rung_count: int) -> dict[str, An
     }
 
 
-def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[dict[str, Any]]:
+def _request_envelopes(node: str, models: tuple[str, ...],
+                       rungs: tuple[tuple[str, bool], ...]) -> list[dict[str, Any]]:
     normal_max = {
         'stage2.global': stage2_extract.GLOBAL_MAX_TOKENS,
         'stage2.blueprint': stage2_extract.BLUEPRINT_MAX_TOKENS,
@@ -368,6 +375,7 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
     rows = [{
         'kind': 'default',
         'max_tokens': normal_max,
+        'models': list(models),
         'rungs': [list(row) for row in rungs],
     }]
     if node == 'stage2.blueprint':
@@ -378,18 +386,21 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
             rows.append({
                 'kind': 'boundary_phase',
                 'max_tokens': stage2_extract.BOUNDARY_MAX_TOKENS,
+                'models': list(models),
                 'rungs': [list(row) for row in rungs],
             })
         if spec.needs_summary_batch:
             rows.append({
                 'kind': 'book_summary_batch',
                 'max_tokens': LLM_DEFAULT_MAX_TOKENS,
+                'models': list(models),
                 'rungs': [list(row) for row in rungs],
             })
     if node == 'stage6.hook':
         rows.append({
             'kind': 'conditional_candidate_retry',
             'max_tokens': HOOK_RETRY_MAX_TOKENS,
+            'models': list(models),
             'rungs': [list(row) for row in HOOK_RETRY_RUNGS],
         })
     return rows
@@ -398,7 +409,10 @@ def _request_envelopes(node: str, rungs: tuple[tuple[str, bool], ...]) -> list[d
 def _dispatch(book: dict[str, Any], node: str) -> dict[str, Any]:
     effort = NODES[node].effort
     rungs = rungs_from_effort(effort)
-    topology = _logical_topology(node, book['chapters'], len(rungs))
+    primary_model = NODES[node].model or FIXED_MODEL
+    models = models_for(primary_model)
+    topology = _logical_topology(
+        node, book['chapters'], len(rungs), len(models))
     flags: list[str] = []
     argv = build_argv(node, book['sid'], flags, base=book['base'])
     ability = SEMANTIC_NODES.get(node)
@@ -414,6 +428,8 @@ def _dispatch(book: dict[str, Any], node: str) -> dict[str, Any]:
             'NOVEL_CACHE_DIR': str(book['cache']),
         },
         'effort_start': effort or 'high',
+        'primary_model': primary_model,
+        'models': list(models),
         'rungs': [list(row) for row in rungs],
         'retry': FIXED_MAX_RETRIES,
         'cache_must_start_empty': True,
@@ -424,7 +440,7 @@ def _dispatch(book: dict[str, Any], node: str) -> dict[str, Any]:
             if ability else None),
         'human_gate_dependencies': list(PREREQUISITES[node]),
         'schema_targets': _schema_targets(node),
-        'request_envelopes': _request_envelopes(node, rungs),
+        'request_envelopes': _request_envelopes(node, models, rungs),
         **topology,
     }
 
@@ -439,23 +455,26 @@ def _global_token_estimate(
     system = with_json_shape(stage2_prompts.GLOBAL_SYS, stage2_prompts.GLOBAL_HINT)
     user = stage2_extract.build_global_user(book['title'], main)
     rungs = rungs_from_effort(NODES['stage2.global'].effort)
+    models = models_for(NODES['stage2.global'].model or FIXED_MODEL)
     counts: list[dict[str, Any]] = []
     try:
-        for effort, thinking in rungs:
-            request = ChatRequest(
-                model=FIXED_MODEL,
-                system=system,
-                user=user,
-                reasoning_effort=effort,
-                thinking=thinking,
-                json_mode=True,
-                max_tokens=stage2_extract.GLOBAL_MAX_TOKENS,
-            )
-            counts.append({
-                'effort': effort,
-                'thinking': thinking,
-                'input_tokens': counter(request),
-            })
+        for model in models:
+            for effort, thinking in rungs:
+                request = ChatRequest(
+                    model=model,
+                    system=system,
+                    user=user,
+                    reasoning_effort=effort,
+                    thinking=thinking,
+                    json_mode=True,
+                    max_tokens=stage2_extract.GLOBAL_MAX_TOKENS,
+                )
+                counts.append({
+                    'model': model,
+                    'effort': effort,
+                    'thinking': thinking,
+                    'input_tokens': counter(request),
+                })
     except Exception as exc:
         return {
             'status': 'unknown',
@@ -471,12 +490,13 @@ def _global_token_estimate(
             (system + '\0' + user).encode('utf-8')).hexdigest(),
         'input_tokens_by_rung': counts,
         'first_success_input_tokens': counts[0]['input_tokens'],
-        # 「走完整条阶梯」在新语义下 = 每档两采（含同档重采）都烧完 ⇒ ×采样数。
+        # 旧输出键保留兼容；新语义是 Flash/Pro 每个显式配置的采样都烧完。
         'exhausted_ladder_input_tokens':
             sum(row['input_tokens'] for row in counts) * MAX_SAMPLES_PER_RUNG,
         'completion_tokens_lower_bound': 0,
         'completion_tokens_ladder_upper_bound': (
-            len(rungs) * MAX_SAMPLES_PER_RUNG * stage2_extract.GLOBAL_MAX_TOKENS),
+            len(models) * len(rungs) * MAX_SAMPLES_PER_RUNG
+            * stage2_extract.GLOBAL_MAX_TOKENS),
         'completion_includes_reasoning': True,
     }
 
@@ -641,7 +661,7 @@ def build_plan(
                 'Stage2 global 之后的 prompt 依赖尚未生成的当前-schema artifacts；'
                 '字符比例与旧 schema ledger 都不能替代精确 tokenizer 计数。'),
             'hard_ceiling_basis': (
-                f'每个 wire 在发出前受 {FIXED_MODEL} {CONTEXT_LIMIT} token context 闸约束；'
+                f'每个 wire 在发出前受已登记模型 {CONTEXT_LIMIT} token context 闸约束；'
                 '总上界=full conditional wire × context limit，不是预计实付。'),
             'price': 'unknown（本工具不含费率/单价，也不猜）',
             'completion_includes_reasoning': True,
@@ -700,12 +720,12 @@ def render(plan: dict[str, Any]) -> str:
             '',
             f'[{index:02d}/{total:02d}] {row["sid"]} · {row["node"]}',
             f'  prerequisite={" / ".join(row["human_gate_dependencies"])}',
-            f'  model={plan["model"]} thinking={plan["thinking"]} '
+            f'  model_chain={"→".join(row["models"])} thinking={plan["thinking"]} '
             f'effort={row["effort_start"]} retry=0',
             f'  cache={row["frozen_environment"]["NOVEL_CACHE_DIR"]}（必须为空）',
             f'  logical=基础 {row["base_logical_requests"]} + 条件 '
             f'{row["conditional_logical_requests"]}；hard={row["logical_request_hard_limit"]}',
-            f'  wire_ladder=基础 {row["base_ladder_wire_hard_limit"]} + 条件 '
+            f'  wire_recovery=基础 {row["base_ladder_wire_hard_limit"]} + 条件 '
             f'{row["conditional_wire_hard_limit"]}；hard={row["wire_attempt_hard_limit"]}',
         ])
         if row['conditional_reason']:
@@ -741,7 +761,7 @@ def render(plan: dict[str, Any]) -> str:
         if estimate['status'].startswith('exact'):
             lines.append(
                 f'- {sid}/stage2.global：首档 input={estimate["first_success_input_tokens"]}；'
-                f'走完整 ladder input={estimate["exhausted_ladder_input_tokens"]}；'
+                f'走完整模型恢复链 input={estimate["exhausted_ladder_input_tokens"]}；'
                 f'completion=0..{estimate["completion_tokens_ladder_upper_bound"]} '
                 '（已含 reasoning）')
         else:

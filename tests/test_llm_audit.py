@@ -91,16 +91,16 @@ def test_wire_rows_carry_the_attempt_identity_triplet():
         OK_JSON.content.encode('utf-8')).hexdigest()
 
 
-def test_gate_decisions_and_adoption_answer_which_rung_was_finally_used():
-    """⭐ 反查全链：首档被 parse 闸拒 → 次档采纳 → adoption 行 → attempt_id → 档位。
+def test_gate_decisions_and_adoption_answer_which_model_was_finally_used():
+    """⭐ 反查全链：Flash 被 parse 闸拒 → Pro 采纳 → adoption → 实际模型。
 
     这正是「最终采纳档位」的读法：**不看**「最后一条 ok 行」（首档那行也是 ok），
     看 `artifact_adoption → attempt_id → 成本账行` 这条联结。
 
     ⚠ **首档这一份刻意是【截断】的**（`finish_reason='length'`），不是随便一个坏 JSON：
     2026-08-22 起除截断外的每一种拒绝都先**同档重采**（`_worth_resampling`），
-    而本条测试承重的是最后那两行——「被拒的是 `high`、采纳的是 `low`」这条**跨档**反查。
-    换成非截断的坏响应，两端会落在同一档上，这条断言就不再证明任何事。
+    而本条测试承重的是最后那两行——「被拒的是 Flash、采纳的是 Pro」这条
+    **跨模型**反查；两端的 effort/thinking 必须完全相同，不能暗中恢复降档。
     """
     ctx, d = _ledgered_ctx()
     bad = ChatResponse(content='{"voice": {"a": 1}, "surface_hab', finish_reason='length')
@@ -116,7 +116,7 @@ def test_gate_decisions_and_adoption_answer_which_rung_was_finally_used():
             rejected['resample']) == (0, 1, False)
     assert rejected['source'] == 'wire'
     assert (accepted['decision'], accepted['gate']) == ('accepted', None)
-    assert accepted['rung_index'] == 1
+    assert accepted['rung_index'] == 0
 
     adopted = client.accepted_attempt('p')
     assert adopted == accepted['attempt_id']
@@ -132,8 +132,10 @@ def test_gate_decisions_and_adoption_answer_which_rung_was_finally_used():
     wire = {row['attempt_id']: row for row in _rows(d / 'ledger.jsonl')}
     # 两行都是传输层 ok —— 单看成本账分不出谁被采纳，这正是审计账存在的理由。
     assert all(row['outcome'] == 'ok' for row in wire.values())
-    assert wire[adoption['attempt_id']]['reasoning_effort'] == 'low'
-    assert wire[rejected['attempt_id']]['reasoning_effort'] == 'high'
+    assert wire[adoption['attempt_id']]['model'] == 'deepseek-v4-pro'
+    assert wire[rejected['attempt_id']]['model'] == 'deepseek-v4-flash'
+    assert {row['reasoning_effort'] for row in wire.values()} == {'high'}
+    assert client.accepted_model('p') == 'deepseek-v4-pro'
     assert client.accepted_request_fingerprint('p') == wire[
         adoption['attempt_id']]['request_fingerprint']
     assert client.accepted_request_fingerprint('p') != wire[
@@ -185,6 +187,11 @@ def test_request_fingerprint_lookup_refuses_a_missing_attempt_instead_of_estimat
         CostLedger().request_fingerprint_for_attempt('not-recorded')
 
 
+def test_model_lookup_refuses_a_missing_attempt_instead_of_using_the_primary_model():
+    with pytest.raises(ProvenanceRefused, match='拒绝按 client 主模型估算'):
+        CostLedger().model_for_attempt('not-recorded')
+
+
 def test_ledger_refuses_a_truncated_cache_key_as_request_identity():
     ledger = CostLedger()
     with pytest.raises(ProvenanceRefused, match='完整的小写 SHA-256'):
@@ -206,6 +213,18 @@ def test_one_attempt_id_cannot_be_rebound_to_another_request():
     assert ledger.calls_made == 1, '拒收碰撞前不能先把同一次请求重复计费'
 
 
+def test_one_attempt_id_cannot_be_rebound_to_another_model():
+    ledger = CostLedger()
+    common = dict(
+        node='stage5.write', sid='123', code='c', cached=False,
+        cache_policy='default', attempt_id='same-attempt',
+        request_fingerprint='a' * 64)
+    ledger.record(**common, model='deepseek-v4-flash')
+    with pytest.raises(ProvenanceRefused, match='同时指向两个模型'):
+        ledger.record(**common, model='deepseek-v4-pro')
+    assert ledger.calls_made == 1
+
+
 def test_audit_path_is_next_to_the_ledger():
     assert audit_path('X').as_posix() == 'X/_service/llm_audit.jsonl'
 
@@ -221,7 +240,7 @@ def test_the_lost_answer_is_kept_on_disk_and_the_audit_row_points_at_it():
     """⭐ 「答案流丢失」那一份**整份留证**，审计账上只有指针与长度读数。
 
     ⚠⚠ 它补的是一个诊断洞：`ResponseCache.put` **拒写空正文**（那是对的——缓存下来
-    只会让重试每次命中同一个空壳，四档各读回自己那份空的），于是空响应被 `evict`
+    只会让重试每次命中同一个空壳，各请求配置读回自己那份空的），于是空响应被 `evict`
     之后盘上一个字都不剩，「那条推理通道里到底装了什么」只能拿 token 体积去猜。
     ⇒ 另落一份留证：留证与缓存是两件事，缓存会被**读回来当答案用**，留证只给人看。
 
@@ -341,8 +360,8 @@ def test_a_schema_rejection_says_which_field_and_never_leaks_the_body():
 def test_a_truncated_response_says_it_broke_at_the_end_not_in_the_middle():
     """⭐ `parse` 那一支要分得开**「被截断」**与**「中间就坏了」**。
 
-    两类的处置不同：前者降档腾预算（`client.py` 模块 docstring ②），
-    后者降档大概率没用。⚠ 只取解析器自己那句固定措辞与位置，不取正文。
+    两类的处置不同：前者不做同配置重采、直接进入 Pro 同配置兜底；
+    后者先同配置重采。⚠ 只取解析器自己那句固定措辞与位置，不取正文。
 
     ⚠⚠ **这一条钉的是「`truncated` 不许从 `pos` 推」。** 本例正是最典型的截断
     （`finish_reason='length'`、字符串写到一半就没了），而解析器给的

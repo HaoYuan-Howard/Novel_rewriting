@@ -12,12 +12,11 @@ keepsake.py —— 「答案流丢失」那一份的**留证落点**。整个模
 
 【留证不是缓存，也不是产物】
  · **不是缓存**：缓存会被**读回来当答案用**，所以 `ResponseCache.put` 拒写空正文是对的
-   （缓存一份空壳，四档都会各自读回自己那份空的）。留证只给人看。
+   （缓存一份空壳，每个模型配置都会各自读回自己那份空的）。留证只给人看。
  · **不是产物**：不进 `ARTIFACTS`、不进来源账、没有 `_provenance`，
    完成度与阶段视图都不看它（`_` 前缀，与 `_rounds` / `_revalidation` 同类）。
- · **救场仍然禁止从 `reasoning` 里抠答案**——那里面混着推敲过程，抠回来的是半成品
-   （`novel/llm/transport.py::ChatResponse.reasoning`）。留证只回答一个问题：
-   那条通道里到底装了什么。在此之前这个问题只能拿 token 体积去猜。
+ · **纯文本仍禁止从 `reasoning` 里抠答案**；结构化响应只有整段通过与正常正文完全相同的
+   JSON / schema / validator 闸时才可采纳。留证回答那条通道里到底装了什么。
 """
 from __future__ import annotations
 
@@ -36,7 +35,7 @@ def write_answer_lost(novel_dir: Path, attempt_id: str,
 
     ⚠⚠ **它永远不许把一次跑弄死。** 这是诊断不是产物：盘满、路径超长
     （Windows `MAX_PATH`，本仓踩过）、权限不对——任何一种都只该让**证据缺席**，
-    而不该让一次已经付过钱、且马上就要正常重采/降档的调用抛在这里。
+    而不该让一次已经付过钱、且马上就要正常重采/模型兜底的调用抛在这里。
     ⇒ 吞 `OSError`，把原因原样交回去记进审计行（`Ledger.note_answer_lost`）。
 
     ⚠ 吞的**只有** `OSError`：`TypeError` 之类是我们自己把不可序列化的东西塞进了

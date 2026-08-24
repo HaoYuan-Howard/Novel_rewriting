@@ -67,6 +67,7 @@ def _plan(ctx: RunContext, *, strategy: str = '按原章次序推进。') -> Pla
         PlanProvenance,
         prompts={'PLAN_SYS': 'fixture current plan prompt'},
         model='fixture-model',
+        adopted_models=['fixture-model'],
         params={'grouping': 'absorb-small-v1', 'beat_min_chars': 80,
                 'plan_beats': 1},
     )

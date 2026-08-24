@@ -7,7 +7,7 @@
 `max_tokens=96000`），**只翻 `json_mode` 一位**，重复采样 N 次。
 
 【为什么走 `ask_text` 而不是自己直连传输层】
-`ask_text` 与 `ask_json` 共用同一条阶梯、同一个缓存键、同一份账，唯一的差别就是
+`ask_text` 与 `ask_json` 共用同一套单配置采样/传输重试、同一个缓存键、同一份账，唯一的差别就是
 `json_mode=False` ⇒ **被测变量恰好只有一个**。自己直连传输层要重造重试、记账、
 留证三条路，而重造出来的那份与生产路的差异会变成结论里说不清的部分。
 副作用还都是想要的：每次 wire 都记成本账；空正文会被判成 `answer_lost` 闸并
@@ -18,7 +18,8 @@
  · wire 调用有硬上限（`--max-wire`），驱动循环与传输层各守一道，到顶即停；
  · 缓存目录必须显式给（`--cache-dir`）且强制 `CachePolicy.refresh()`
    ⇒ 既读不到既有缓存（否则实验会静默不发生），也污染不了生产缓存；
- · 阶梯钉死单档 `('high', True)`：降档会把「这一档到底行不行」的答案换掉。
+ · 模型与配置钉死：`('high', True)` 且关闭 Flash→Pro 兜底；任一切换都会把
+   「flash@high 到底行不行」的问题换掉。
 """
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ from novel.run import RunContext                                      # noqa: E4
 from novel.stages.stage4 import plan as planmod, prompts              # noqa: E402
 from novel.store import ArtifactStore                                 # noqa: E402
 
-#: 被测臂钉死单档。降档会换掉「high 这一档到底行不行」这个问题本身。
+#: 被测臂钉死单档；client 构造时另显式关闭模型兜底。
 ARM_RUNGS = (('high', True),)
 
 
@@ -164,9 +165,9 @@ def main(argv: list[str] | None = None) -> int:
     client = LlmClient(ctx, rec, cache=ResponseCache(Path(args.cache_dir)),
                        model=cfg.model, thinking_mode=cfg.thinking_mode,
                        max_retries=cfg.max_retries, backoff_base=cfg.backoff_base,
-                       concurrency=1)
+                       concurrency=1, enable_model_fallback=False)
 
-    print(f'臂：json_mode={args.json_mode} · model={cfg.model} · 阶梯={ARM_RUNGS} '
+    print(f'臂：json_mode={args.json_mode} · model={cfg.model} · 显式配置={ARM_RUNGS} '
           f'· max_tokens={prompts.PLAN_MAX_TOKENS}')
     print(f'system {len(system)} 字 / user {len(user)} 字 · 目标 {args.samples} 样本 '
           f'· wire 硬上限 {args.max_wire}', flush=True)

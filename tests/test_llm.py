@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_llm.py —— 降级阶梯 · 缓存两个开关 · `require` 从模型派生 · 成本账。
+test_llm.py —— 同档重采 / Flash→Pro 兜底 · 缓存 · 响应契约 · 成本账。
 
-⚠⚠ **这一份的存在本身就是 B2 的主要产出。** 原型那条阶梯是全链最值钱的逻辑之一
-（它扛着两类实测发生过的故障），而它**一行测试都没有**——因为跑一次要花钱。
+⚠⚠ **这一份的存在本身就是 B2 的主要产出。** 原型那条恢复链扛着多类实测故障，
+而它**一行测试都没有**——因为跑一次要花钱。现役取消 effort/thinking 自动降级，
+保留同配置重采与 Flash→Pro 同配置兜底。
 把「发请求」抽成一条缝（`novel/llm/transport.py::Transport`）之后，
-**每一档**都能零成本跑一遍，而且能断言它**真的走过**那一档
-（只看最终结果的话，「第一档就成功」与「降到第四档才成功」长得一模一样）。
+每一种配置都能零成本跑一遍，而且能断言它**真的走过**哪一个模型
+（只看最终结果的话，「Flash 成功」与「Pro 兜底成功」长得一模一样）。
 
 ⚠ 本机 `%TEMP%\\pytest-of-yh255` 的 ACL 坏了，`tmp_path` 一用就炸——一律 `tempfile.mkdtemp()`。
 """
@@ -26,14 +27,16 @@ from pydantic import BaseModel, Field
 
 from contracts.schema import Usage
 from novel.config import Config, DEFAULT_MODEL, load_config, parse_dotenv
-from novel.errors import ProvenanceRefused, TerminalState
+from novel.errors import ContextBudgetRefused, ProvenanceRefused, TerminalState
 from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
 )
 from novel.llm.client import (
-    DEFAULT_MAX_TOKENS, JSON_OBJECT_MODE, LADDER, MAX_SAMPLES_PER_RUNG,
+    DEFAULT_MAX_TOKENS, DEFAULT_RUNGS, FLASH_MODEL, JSON_OBJECT_MODE,
+    MAX_SAMPLES_PER_RUNG,
     NOTHINK_RUNGS, REJECT_GATES, REJECT_REASON_MAX, RESOURCE_INTERRUPTED,
-    SALVAGE_ANSWER_FROM_REASONING, LlmClient, LlmFailed,
+    SALVAGE_ANSWER_FROM_REASONING, PRO_FALLBACK_MODEL, LlmClient, LlmFailed,
+    models_for,
 )
 from novel.llm.ledger import CostLedger, combine_usage
 from novel.llm.transport import (
@@ -42,6 +45,10 @@ from novel.llm.transport import (
 )
 from novel.observability import AttemptHeartbeat, RequestProgress
 from novel.run import RunContext
+
+# 既有响应闸用例按“一个显式模型行为档位”取分母；名称留在本测试文件内，
+# 不再表示生产有自动 effort 降级。
+LADDER = DEFAULT_RUNGS
 
 
 class Resp(BaseModel):
@@ -63,6 +70,9 @@ def _ctx(*, cache: CachePolicy | None = None, paid: bool = True) -> RunContext:
 
 
 def _client(transport, *, ctx=None, cache: ResponseCache | None = None, **kw) -> LlmClient:
+    # 响应闸/缓存/重试的既有单元测试默认固定 Pro，避免把模型兜底这一根轴混进来；
+    # Flash→Pro 由下面的专门用例显式传 model=FLASH_MODEL 覆盖。
+    kw.setdefault('model', PRO_FALLBACK_MODEL)
     return LlmClient(ctx or _ctx(), transport, cache=cache,
                      sleep=lambda _s: None,          # 测试不真的睡
                      **kw)
@@ -111,35 +121,25 @@ def test_ask_json_can_refresh_a_valid_cached_response():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 一、⭐ 降级阶梯 —— 每一档都零成本跑一遍
+# 一、⭐ 同档重采 + Flash→Pro 兜底
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_the_ladder_is_exactly_the_three_rungs_and_there_is_only_one_of_it():
-    """⚠ **原型把这条阶梯在两个入口各写了一遍。** 两份逐行相同的东西必然分家。
-
-    `high→low` 是**给正文腾预算**（`max_tokens` 在推理模型上同时约束
-    reasoning + completion），最后那档关掉 thinking 是最后一手。
-
-    ⚠⚠ **原型的第二档 `('medium', True)` 已删，而它不是「简化」。** 本模型真实档位是
-    low/high/max；`medium` 合法但被服务端**静默映射回 `high`** ⇒ 它与首档是两个缓存键、
-    同一种模型行为：首档失败后第二档把同样的行为再跑一遍，**一分预算都没腾出来**，
-    白付一次。⇒ 四档里只有三种行为，删掉那一档不改变任何救场能力。
-    """
-    assert LADDER == (('high', True), ('low', True), ('low', False))
-    assert not any(effort == 'medium' for effort, _thinking in LADDER), \
-        'medium 被服务端映射回 high ⇒ 它当不了降级档，只会白付一次'
+def test_default_behavior_is_one_rung_and_flash_has_exactly_one_pro_fallback():
+    """默认不再自动降 effort / 关 thinking；模型链只允许 Flash → Pro。"""
+    assert DEFAULT_RUNGS == (('high', True),)
+    assert models_for(FLASH_MODEL) == (FLASH_MODEL, PRO_FALLBACK_MODEL)
+    assert models_for(PRO_FALLBACK_MODEL) == (PRO_FALLBACK_MODEL,)
+    assert models_for('experiment-model') == ('experiment-model',)
     import inspect
     from novel.llm import client
     src = inspect.getsource(client)
-    assert src.count('LADDER: Final') == 1
-    # 两个入口默认都必须**走**它，不许各自展开一份。辅助调用可显式收窄，
-    # 但默认值仍必须从这同一份常量取得。
+    assert src.count('DEFAULT_RUNGS: Final') == 1
+    assert src.count('def models_for(') == 1
     text_body = inspect.getsource(client.LlmClient.ask_text)
     json_body = inspect.getsource(client.LlmClient.ask_json)
-    assert 'self._rungs if rungs is None' in text_body
-    assert 'self._rungs if rungs is None' in json_body
-    # 思考开关默认 `on` ⇒ 默认构造的 client 走的仍是这同一份 LADDER（零行为变化）。
-    assert _client(FakeTransport.always(OK_TEXT))._rungs is LADDER
+    assert 'self._active_rungs_for' in text_body
+    assert 'self._active_rungs_for' in json_body
+    assert _client(FakeTransport.always(OK_TEXT))._rungs is DEFAULT_RUNGS
 
 
 def _empty() -> ChatResponse:
@@ -148,15 +148,128 @@ def _empty() -> ChatResponse:
                         finish_reason='stop', usage=None)
 
 
+def test_flash_text_keeps_the_same_rung_then_falls_back_to_pro():
+    events: list[dict] = []
+    ctx = _ctx()
+    ctx.observer = events.append
+    t = FakeTransport(responder=lambda req, _i: (
+        _empty() if req.model == FLASH_MODEL else OK_TEXT))
+
+    client = _client(t, ctx=ctx, model=FLASH_MODEL)
+    got = client.ask_text(
+        'sys', 'usr', purpose='p')
+
+    assert got == '一段正文'
+    assert [req.model for req in t.calls] == [
+        FLASH_MODEL, FLASH_MODEL, PRO_FALLBACK_MODEL]
+    assert t.rungs == [DEFAULT_RUNGS[0]] * 3
+    switched = _observed(events, 'llm_model_fallback')
+    assert [(e['from_model'], e['to_model'], e['reason']) for e in switched] == [
+        (FLASH_MODEL, PRO_FALLBACK_MODEL, 'content_rejected')]
+    assert client.accepted_model('p') == PRO_FALLBACK_MODEL
+    assert client.accepted_models() == (PRO_FALLBACK_MODEL,)
+
+
+def test_flash_json_uses_the_same_contract_on_the_pro_fallback():
+    bad = ChatResponse(content='{}', finish_reason='stop', model=FLASH_MODEL)
+    t = FakeTransport(responder=lambda req, _i: (
+        bad if req.model == FLASH_MODEL else OK_JSON))
+
+    got = _client(t, model=FLASH_MODEL).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='p')
+
+    assert got.voice == {'a': 1}
+    assert [req.model for req in t.calls] == [
+        FLASH_MODEL, FLASH_MODEL, PRO_FALLBACK_MODEL]
+    assert t.rungs == [DEFAULT_RUNGS[0]] * 3
+
+
+def test_pro_primary_neither_falls_back_nor_downgrades():
+    t = FakeTransport.always(_empty())
+    with pytest.raises(LlmFailed, match=PRO_FALLBACK_MODEL):
+        _client(t, model=PRO_FALLBACK_MODEL).ask_text(
+            'sys', 'usr', purpose='p')
+    assert [req.model for req in t.calls] == [PRO_FALLBACK_MODEL] * 2
+    assert t.rungs == [DEFAULT_RUNGS[0]] * 2
+
+
+def test_both_flash_and_pro_content_failure_raise_llmfailed():
+    t = FakeTransport.always(_empty())
+    with pytest.raises(LlmFailed, match='主模型与兜底模型'):
+        _client(t, model=FLASH_MODEL).ask_text('sys', 'usr', purpose='p')
+    assert [req.model for req in t.calls] == [
+        FLASH_MODEL, FLASH_MODEL, PRO_FALLBACK_MODEL, PRO_FALLBACK_MODEL]
+
+
+def test_retryable_flash_transport_exhaustion_falls_back_after_all_retries():
+    t = FakeTransport(responder=lambda req, _i: (
+        TransportError('503', retryable=True, status=503)
+        if req.model == FLASH_MODEL else OK_TEXT))
+
+    got = _client(t, model=FLASH_MODEL, max_retries=2).ask_text(
+        'sys', 'usr', purpose='p')
+
+    assert got == '一段正文'
+    assert [req.model for req in t.calls] == [
+        FLASH_MODEL, FLASH_MODEL, FLASH_MODEL, PRO_FALLBACK_MODEL]
+
+
+def test_nonretryable_flash_transport_failure_does_not_spend_a_pro_call():
+    t = FakeTransport.always(
+        TransportError('400', retryable=False, status=400))
+    with pytest.raises(TransportError):
+        _client(t, model=FLASH_MODEL).ask_text('sys', 'usr', purpose='p')
+    assert [req.model for req in t.calls] == [FLASH_MODEL]
+
+
+@pytest.mark.parametrize('entry', ['text', 'json'])
+def test_nonretryable_error_from_the_pro_fallback_is_llmfailed(entry):
+    def responder(req: ChatRequest, _i: int):
+        if req.model == FLASH_MODEL:
+            return _empty()
+        return TransportError('400', retryable=False, status=400)
+
+    t = FakeTransport(responder=responder)
+    with pytest.raises(LlmFailed, match='主模型与兜底模型'):
+        client = _client(t, model=FLASH_MODEL)
+        if entry == 'text':
+            client.ask_text('sys', 'usr', purpose='p')
+        else:
+            client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+    assert [req.model for req in t.calls] == [
+        FLASH_MODEL, FLASH_MODEL, PRO_FALLBACK_MODEL]
+
+
+def test_single_model_diagnostic_can_explicitly_disable_product_fallback():
+    t = FakeTransport.always(_empty())
+    with pytest.raises(LlmFailed):
+        _client(t, model=FLASH_MODEL, enable_model_fallback=False).ask_text(
+            'sys', 'usr', purpose='p')
+    assert [req.model for req in t.calls] == [FLASH_MODEL, FLASH_MODEL]
+
+
+def test_flash_and_pro_are_both_budget_checked_before_any_wire_attempt():
+    seen: list[str] = []
+
+    def refuse(requests, **_kwargs):
+        seen.extend(req.model for req in requests)
+        raise ContextBudgetRefused('合成 Pro 预算拒绝', model=PRO_FALLBACK_MODEL)
+
+    t = FakeTransport.always(OK_TEXT)
+    with pytest.raises(ContextBudgetRefused):
+        _client(t, model=FLASH_MODEL, budget_checker=refuse).ask_text(
+            'sys', 'usr', purpose='p')
+    assert seen == [FLASH_MODEL, PRO_FALLBACK_MODEL]
+    assert t.calls == []
+
+
 @pytest.mark.parametrize('rung', range(len(LADDER)))
-def test_every_rung_can_recover_an_empty_answer(rung):
-    """⭐ **每一档各测一遍**（分母从 `LADDER` 派生，不手写）：前面档位**两采全空**
-    （重采也没救回，才降档），第 `rung+1` 档首发空、**同档重采**拿到正文。
+def test_the_default_rung_can_recover_an_empty_answer(rung):
+    """默认档首发空时，同档第二采可拿回正文，不触发模型兜底。
 
     ⚠ 空正文那个形态是实测的：`finish_reason='stop'`、`reasoning` 很长、`content` 是空串
     ——**不是截断**，是推理流与答案流的边界丢了。照着「截断」去修（加 max_tokens）救不了它。
-    ⇒ 2026-08-20 起这一档先同档重采一次（`MAX_SAMPLES_PER_RUNG`）再降档：
-    实测 3 本里 2 本的 `stage4.plan` 因为旧阶梯直接降档，`high` 档从未被真正评估过。
+    ⇒ 保留同档重采，取消的是后续自动 effort 降级。
     """
     empties = 2 * rung + 1          # 前面每档烧掉两采；本档第一采也空
 
@@ -175,7 +288,7 @@ def test_all_rungs_empty_raises_and_never_returns_an_empty_draft():
 
     ⚠ 一份空稿落下去，下游是**确定性代码**——它不会像写手那样将就着用，
     它会在几层之外炸，或者更坏：静默产出一份缺内容的东西。
-    ⚠ 每档两采（首发 + 重采）全空才降档——重采不是无限重试，烧完就退。
+    ⚠ 每个配置两采（首发 + 重采）全空才判失败——重采不是无限重试，烧完就退。
     """
     t = FakeTransport.always(_empty())
     with pytest.raises(LlmFailed, match='拿不到正文'):
@@ -201,11 +314,10 @@ def test_thinking_off_walks_only_the_single_nothink_rung():
     assert t2.rungs == [('low', False)]
 
 
-def test_a_node_effort_override_changes_only_the_first_rung():
-    """⚠ 能降的只有一档：带 thinking 的档位就 `low`/`high` 两个。"""
+def test_a_node_effort_override_selects_one_explicit_rung():
+    """节点 effort 是显式配置，不是异常后的自动降档。"""
     low = _client(FakeTransport.always(OK_TEXT), effort='low')
-    assert low._rungs == (('low', True), ('low', False))
-    # `None` 与 `high` 都保留全梯——覆盖只裁掉更高档，不另造第二份阶梯。
+    assert low._rungs == (('low', True),)
     assert _client(FakeTransport.always(OK_TEXT), effort='high')._rungs is LADDER
     assert _client(FakeTransport.always(OK_TEXT), effort=None)._rungs is LADDER
     with pytest.raises(ValueError, match='effort'):
@@ -246,7 +358,7 @@ def _observed(events: list, name: str = 'llm_rung_rejected') -> list[dict]:
     (json.dumps({'voice': 'not-a-dict', 'surface_habits': ['h']}), 'schema'),
 ])
 def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
-    """⭐ **降一档必须出声，而且说得出是哪一道闸。**
+    """⭐ **响应拒绝必须出声，而且说得出是哪一道闸。**
 
     ⚠⚠ 这条守的是一个实测踩过的洞：内容闸拒掉一档时只 `evict` + 降档，而账本那一行
     记的是**传输层**的结论（`outcome=ok` / `finish_reason=stop` / `will_retry=false`）
@@ -267,7 +379,7 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
     assert got.voice == {'a': 1}
     assert t.rungs == [LADDER[0], LADDER[0]], '被拒之后必须真的再采一次'
     rejected = _observed(events)
-    assert len(rejected) == 1, '降一档只出一次声：成功那一档不出声'
+    assert len(rejected) == 1, '拒绝只出一次声：成功的第二采不出声'
     e = rejected[0]
     assert e['gate'] == gate and e['gate'] in REJECT_GATES
     # ⚠ 跟着 `JSON_OBJECT_MODE` 走，别写死：2026-08-22 起 `ask_json` 不再发
@@ -288,7 +400,7 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
 
 
 def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
-    """走完整条阶梯时**每档两采各出一声**，最后那一声标 `exhausted`。
+    """走完当前模型配置时**两采各出一声**，最后那一声标 `exhausted`。
 
     ⚠ `exhausted` 与 `LlmFailed` 不是一回事：缓存那一趟走完也会标它，
     而那一趟走完之后还有真跑那一趟。它说的是「这一趟的阶梯到头了」。
@@ -314,9 +426,10 @@ def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
     assert [e['resample'] for e in rejected] == [True, False] * len(LADDER)
     assert [e['exhausted'] for e in rejected] == [False] * (len(walked) - 1) + [True]
     assert rejected[-1]['next_effort'] is None and rejected[-1]['next_thinking'] is None
-    # 第一声（重采）：next 指回本档；第二声（降档）：next 才指向下一档。
-    assert (rejected[0]['next_effort'], rejected[0]['next_thinking']) == LADDER[0]
-    assert (rejected[1]['next_effort'], rejected[1]['next_thinking']) == LADDER[1]
+    # 第一声（重采）仍指回同模型同档；Pro 主模型第二声即耗尽，不存在低档。
+    assert (rejected[0]['next_model'], rejected[0]['next_effort'],
+            rejected[0]['next_thinking']) == (PRO_FALLBACK_MODEL, *LADDER[0])
+    assert rejected[1]['next_model'] is None
 
 
 @pytest.mark.parametrize('finish, text_gate, json_gate', [
@@ -412,14 +525,15 @@ def test_a_resource_interruption_that_never_recovers_is_terminal_and_says_it_was
     """
     ctx = _ctx()
     t = FakeTransport.always(_interrupted())
-    client = LlmClient(ctx, t, cache=None, sleep=lambda _s: None, max_retries=2)
+    client = LlmClient(ctx, t, cache=None, model=PRO_FALLBACK_MODEL,
+                       sleep=lambda _s: None, max_retries=2)
 
     with pytest.raises(LlmFailed, match='资源中断') as excinfo:
         client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
     assert '已经计费' in str(excinfo.value)
     assert isinstance(excinfo.value, TerminalState)
-    # 3 次上线（首发 + 2 次重试）全在首档：阶梯一格没走。
+    # 3 次上线（首发 + 2 次重试）全在 Pro 同档，不存在自动低档。
     assert t.rungs == [LADDER[0]] * 3
 
 
@@ -601,7 +715,7 @@ def test_salvage_applies_to_neither_a_truncation_nor_ask_text():
     t = FakeTransport.always(_lost(_SALVAGEABLE, finish='length'))
     with pytest.raises(LlmFailed):
         _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
-    assert t.rungs == list(LADDER), '截断仍然每档一采、直接降档'
+    assert t.rungs == list(LADDER), '截断不做同配置重采'
 
     t2 = FakeTransport.always(_lost(_SALVAGEABLE))
     with pytest.raises(LlmFailed, match='拿不到正文'):
@@ -641,7 +755,7 @@ def test_a_salvaged_answer_is_marked_in_both_audit_rows_and_stays_out_of_the_cac
 
 
 def test_a_nonempty_content_gate_rejection_resamples_once_before_stepping_down():
-    """⭐ 非空正文被内容闸拒（schema 形状不对）**先同档重采一次**再降档。
+    """⭐ 非空正文被内容闸拒（schema 形状不对）**先同档重采一次**再走模型兜底。
 
     ⚠⚠ **这条测试 2026-08-22 反转过，反例证据记在这里，别按旧字面改回去。**
     它原来叫 `..._does_not_resample`，断言「内容闸拒绝必须每档一采、直接降档」，
@@ -650,7 +764,7 @@ def test_a_nonempty_content_gate_rejection_resamples_once_before_stepping_down()
     ——整条阶梯白走一遍再回到 `high` 才成功；另 2 次以 `high→low` 收尾，
     即**最终计划产自降档档位**。22 次实付里 47.7% 的 completion 花在没被采纳的档位上。
     而真发循环 `use_cache=False` ⇒ 同档重采拿的本来就是新样本。
-    ⚠ 唯一仍然直接降档的是**截断**，那一条由
+    ⚠ 唯一仍然不做同档重采的是**截断**，那一条由
     `test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget` 守着。
     """
     events: list[dict] = []
@@ -708,18 +822,20 @@ def test_a_malformed_thinking_mode_is_refused_at_client_construction():
         _client(FakeTransport.always(OK_TEXT), thinking_mode='max')
 
 
-def test_nonempty_but_length_capped_text_can_be_rejected_and_downgraded():
-    """非空不等于完整：`finish_reason=length` 的短稿也必须能走降档阶梯。"""
+def test_nonempty_but_length_capped_flash_text_falls_back_to_pro_without_downgrade():
+    """非空不等于完整；截断的 Flash 不重采、不降档，直接交给同档 Pro。"""
     cut = ChatResponse(content='写到一半', reasoning='想了很久',
                        finish_reason='length', usage=None)
-    t = FakeTransport(responder=lambda _req, i: cut if i == 0 else OK_TEXT)
+    t = FakeTransport(responder=lambda req, _i: (
+        cut if req.model == FLASH_MODEL else OK_TEXT))
 
     def complete(_text: str, response: ChatResponse) -> str | None:
         return '答案被 token 上限截断' if response.finish_reason == 'length' else None
 
-    assert _client(t).ask_text(
+    assert _client(t, model=FLASH_MODEL).ask_text(
         'sys', 'usr', purpose='t', validator=complete) == '一段正文'
-    assert t.rungs == list(LADDER[:2])
+    assert [req.model for req in t.calls] == [FLASH_MODEL, PRO_FALLBACK_MODEL]
+    assert t.rungs == [DEFAULT_RUNGS[0]] * 2
 
 
 def test_a_text_helper_can_explicitly_use_one_cheaper_rung():
@@ -748,6 +864,24 @@ def test_empty_custom_json_ladder_fails_before_budget_cache_or_transport():
         client.ask_json('sys', 'usr', model_cls=Resp, purpose='trim-json', rungs=())
     assert budget_calls == []
     assert t.calls == []
+
+
+@pytest.mark.parametrize('entry', ['text', 'json'])
+def test_multiple_rungs_cannot_restore_automatic_effort_degradation(entry):
+    t = FakeTransport.always(OK_JSON if entry == 'json' else OK_TEXT)
+    budget_calls = []
+    client = _client(
+        t, budget_checker=lambda *args, **kwargs: budget_calls.append((args, kwargs)))
+    with pytest.raises(ValueError, match='只允许一个显式配置'):
+        if entry == 'text':
+            client.ask_text(
+                'sys', 'usr', purpose='p',
+                rungs=(('high', True), ('low', True)))
+        else:
+            client.ask_json(
+                'sys', 'usr', model_cls=Resp, purpose='p',
+                rungs=(('high', True), ('low', True)))
+    assert budget_calls == [] and t.calls == []
 
 
 def test_custom_json_rungs_reach_budget_preflight_and_keep_cache_identity():
@@ -780,12 +914,11 @@ def test_an_empty_custom_text_ladder_is_a_call_error():
             'sys', 'usr', purpose='t', rungs=())
 
 
-def test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget():
+def test_a_truncated_flash_json_falls_back_to_pro_at_the_same_effort():
     """⚠ **截断表现为 JSON 解析失败**（`finish_reason='length'`），不是别的。
 
-    `max_tokens` 在推理模型上**同时约束 reasoning + completion**：`effort='high'` 时
-    模型可能把大半预算花在思考上，正文写到一半就到顶了。⇒ 降 effort = 给正文腾预算。
-    ⚠ 截断**不触发同档重采**（`resample` 恒 False）：重采换样本，腾不了预算。
+    截断**不触发同档重采**（`resample` 恒 False）；旧实现会降 effort，现实现保持
+    high 并切 Pro，避免用低档响应静默收口。
     """
     events: list[dict] = []
     ctx = _ctx()
@@ -793,14 +926,16 @@ def test_a_truncated_json_walks_the_ladder_because_lower_effort_frees_budget():
     truncated = ChatResponse(content='{"voice": {"a": 1}, "surface_hab',
                              finish_reason='length', usage=None)
 
-    def responder(_req, i):
-        return truncated if i < 2 else OK_JSON
+    def responder(req, _i):
+        return truncated if req.model == FLASH_MODEL else OK_JSON
 
     t = FakeTransport(responder=responder)
-    out = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='t')
+    out = _client(t, ctx=ctx, model=FLASH_MODEL).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == list(LADDER[:3])
-    assert [e['resample'] for e in _observed(events)] == [False, False]
+    assert [req.model for req in t.calls] == [FLASH_MODEL, PRO_FALLBACK_MODEL]
+    assert t.rungs == [DEFAULT_RUNGS[0]] * 2
+    assert [e['resample'] for e in _observed(events)] == [False]
 
 
 def test_a_legal_but_structurally_empty_json_is_rejected_like_a_parse_failure():
@@ -928,9 +1063,8 @@ def test_one_call_can_refresh_without_mutating_the_shared_run_policy():
 
 
 def _req(effort: str = 'high', thinking: bool = True) -> ChatRequest:
-    # ⚠ model 从 `DEFAULT_MODEL` 派生：client 默认模型换过一次（pro → flash），
-    # 这里写死旧值会让缓存键与 client 算的对不上——缓存测试整批假红。
-    return ChatRequest(model=DEFAULT_MODEL, system='s', user='u',
+    # 缓存单元测试用 `_client` 固定 Pro，避免混入模型兜底这根轴。
+    return ChatRequest(model=PRO_FALLBACK_MODEL, system='s', user='u',
                        reasoning_effort=effort, thinking=thinking,
                        json_mode=False, max_tokens=DEFAULT_MAX_TOKENS)
 
@@ -1015,10 +1149,9 @@ def test_warmup_can_be_turned_off_and_then_nothing_is_serialised():
 
 
 def test_an_empty_answer_is_never_cached():
-    """⚠ 缓存下来只会让重试**每次都命中同一个空壳**——那时连降级阶梯都救不了它，
-    因为四档会各自读回自己那份空的。"""
+    """⚠ 缓存下来只会让重跑**每次都命中同一个空壳**——恢复链会被坏缓存短路。"""
     d = Path(tempfile.mkdtemp())
-    t = FakeTransport.empty_until(2, OK_TEXT)
+    t = FakeTransport.empty_until(1, OK_TEXT)
     _client(t, cache=ResponseCache(d)).ask_text('s', 'u', purpose='t')
     assert len(list(d.iterdir())) == 1, '空回答被写进缓存了'
 
@@ -1046,17 +1179,18 @@ def test_a_structurally_empty_shell_is_evicted_from_the_cache():
     kept = cache.get(cache_key(_json_req(*LADDER[0])))
     assert kept is not None, '救回来的那一份该留着'
     assert 'surface_habits' in kept.content, '空壳还留在缓存里'
-    assert cache.get(cache_key(_json_req(*LADDER[1]))) is None, '不该走到第二档'
+    assert len(list(d.iterdir())) == 1, '不该产生第二个 effort 缓存键'
 
 
-def _json_req(effort: str, thinking: bool) -> ChatRequest:
+def _json_req(effort: str, thinking: bool, *,
+              model: str = PRO_FALLBACK_MODEL) -> ChatRequest:
     """`ask_json` 在某一档上**真的会发出去**的那个请求（缓存键就按它算）。
 
     ⚠ `json_mode` 跟着 `JSON_OBJECT_MODE` 走，**别写死 `True`**：写死之后这几条
     缓存断言测的就不是「客户端存/取的是同一个键」，而是「客户端恒发 json_object」
     ——那一位是可裁决的（2026-08-22 已关），而缓存键的一致性不是。
     """
-    return ChatRequest(model=DEFAULT_MODEL, system='s', user='u',
+    return ChatRequest(model=model, system='s', user='u',
                        reasoning_effort=effort, thinking=thinking,
                        json_mode=JSON_OBJECT_MODE, max_tokens=DEFAULT_MAX_TOKENS)
 
@@ -1070,12 +1204,16 @@ def test_a_truncated_response_is_never_written_to_the_cache():
     """
     d = Path(tempfile.mkdtemp())
     truncated = ChatResponse(content='{"voice": {"a": 1}, "surface_hab', finish_reason='length')
-    t = FakeTransport(responder=lambda _r, i: truncated if i < 1 else OK_JSON)
-    _client(t, cache=ResponseCache(d)).ask_json('s', 'u', model_cls=Resp, purpose='t')
+    t = FakeTransport(responder=lambda req, _i: (
+        truncated if req.model == FLASH_MODEL else OK_JSON))
+    _client(t, cache=ResponseCache(d), model=FLASH_MODEL).ask_json(
+        's', 'u', model_cls=Resp, purpose='t')
 
     keys = {p.name for p in d.iterdir()}
-    assert f'{cache_key(_json_req(*LADDER[0]))}.json' not in keys, '截断的那一份进了缓存'
-    assert f'{cache_key(_json_req(*LADDER[1]))}.json' in keys, '好的那一份该留着'
+    flash_key = cache_key(_json_req(*DEFAULT_RUNGS[0], model=FLASH_MODEL))
+    pro_key = cache_key(_json_req(*DEFAULT_RUNGS[0], model=PRO_FALLBACK_MODEL))
+    assert f'{flash_key}.json' not in keys, '截断的 Flash 响应进了缓存'
+    assert f'{pro_key}.json' in keys, 'Pro 兜底的好响应该留着'
 
 
 def test_a_poisoned_cache_entry_heals_within_the_very_same_run():
@@ -1109,49 +1247,54 @@ def test_a_poisoned_cache_entry_heals_within_the_very_same_run():
     assert cache.get(cache_key(_json_req('high', True))).text == OK_JSON.text
 
 
-def test_a_valid_lower_rung_json_cache_prevents_any_higher_rung_network_call():
-    """真实语义审判回归：low 有合格缓存时，high miss 不能触发重复付费。"""
+def test_a_valid_pro_json_cache_prevents_any_flash_network_call():
+    """已有合格 Pro 兜底缓存时，Flash miss 不能触发重复付费。"""
     d = Path(tempfile.mkdtemp())
     cache = ResponseCache(d)
-    cache.put(cache_key(_json_req('low', False)), OK_JSON)
+    cache.put(cache_key(_json_req(*DEFAULT_RUNGS[0], model=PRO_FALLBACK_MODEL)), OK_JSON)
     ctx = _ctx()
+    events: list[dict] = []
+    ctx.observer = events.append
     transport = FakeTransport.always(OK_JSON)
 
-    out = _client(transport, ctx=ctx, cache=ResponseCache(d)).ask_json(
+    out = _client(transport, ctx=ctx, cache=ResponseCache(d),
+                  model=FLASH_MODEL).ask_json(
         's', 'u', model_cls=Resp, purpose='t')
 
     assert out.surface_habits == ['h']
     assert transport.calls == []
     assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (0, 1)
+    switched, = _observed(events, 'llm_model_fallback')
+    assert switched['reason'] == 'cached_fallback'
 
 
-def test_a_valid_lower_rung_text_cache_prevents_any_higher_rung_network_call():
+def test_a_valid_pro_text_cache_prevents_any_flash_network_call():
     d = Path(tempfile.mkdtemp())
     cache = ResponseCache(d)
-    low = ChatRequest(model=DEFAULT_MODEL, system='s', user='u',
-                      reasoning_effort='low', thinking=False, json_mode=False,
+    pro = ChatRequest(model=PRO_FALLBACK_MODEL, system='s', user='u',
+                      reasoning_effort='high', thinking=True, json_mode=False,
                       max_tokens=DEFAULT_MAX_TOKENS)
-    cache.put(cache_key(low), OK_TEXT)
+    cache.put(cache_key(pro), OK_TEXT)
     ctx = _ctx()
     transport = FakeTransport.always(OK_TEXT)
 
-    assert _client(transport, ctx=ctx, cache=ResponseCache(d)).ask_text(
+    assert _client(transport, ctx=ctx, cache=ResponseCache(d),
+                   model=FLASH_MODEL).ask_text(
         's', 'u', purpose='t') == '一段正文'
     assert transport.calls == []
     assert (ctx.ledger.calls_made, ctx.ledger.calls_cached) == (0, 1)
 
 
-def test_a_genuinely_bad_response_still_walks_the_ladder_without_double_sending():
-    """同一档的「第二次」只给**缓存坏了**那种情况。真发的那份也坏 ⇒ 直接降一档。
-
-    否则每一档都会真发两遍——**降级阶梯的花费当场翻倍**，而阶梯守的正是钱。
-    """
+def test_a_truncated_flash_response_falls_back_without_double_sending():
+    """截断不做同档重采；Flash 一次被拒后只发一次同档 Pro。"""
     truncated = ChatResponse(content='{"voice": {"a": 1}, "surface_hab', finish_reason='length')
-    t = FakeTransport(responder=lambda _r, i: truncated if i < 2 else OK_JSON)
-    out = _client(t).ask_json('s', 'u', model_cls=Resp, purpose='t')
+    t = FakeTransport(responder=lambda req, _i: (
+        truncated if req.model == FLASH_MODEL else OK_JSON))
+    out = _client(t, model=FLASH_MODEL).ask_json(
+        's', 'u', model_cls=Resp, purpose='t')
     assert out.surface_habits == ['h']
-    assert t.rungs == list(LADDER[:3]), \
-        '每一档发了不止一次——阶梯的花费翻倍了'
+    assert [req.model for req in t.calls] == [FLASH_MODEL, PRO_FALLBACK_MODEL]
+    assert t.rungs == [DEFAULT_RUNGS[0]] * 2
 
 
 def test_a_half_written_cache_file_reads_as_a_miss_not_as_a_failure():
@@ -1350,11 +1493,11 @@ def test_ask_json_cannot_be_called_without_a_model():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 四、传输层重试 —— 与降级阶梯是**两条**循环
+# 四、传输层重试 —— 与同档重采 / 模型兜底是**独立**循环
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_a_retryable_transport_error_does_not_consume_a_ladder_rung():
-    """⚠⚠ **混成一条，一次网络抖动就会消耗掉整条阶梯**——而阶梯救不了连接被重置。"""
+    """⚠⚠ 混成一条会让网络抖动消耗内容采样；模型兜底也救不了连接被重置。"""
     def responder(_req, i):
         return TransportError('429 Too Many Requests', retryable=True, status=429) if i < 2 \
             else OK_TEXT
@@ -1471,7 +1614,7 @@ def test_a_run_that_fails_outright_still_says_it_spent_something():
     """整轮失败原来 `calls_made == 0`——与「什么都没干」一模一样，而钱可能已经花了。"""
     ctx = _ctx()
     t = FakeTransport(responder=lambda _r, _i: TransportError('503', retryable=True, status=503))
-    with pytest.raises(TransportError):
+    with pytest.raises(LlmFailed):
         _client(t, ctx=ctx, max_retries=3).ask_text('s', 'u', purpose='t')
     assert len(t.calls) == 4 and ctx.ledger.calls_made == 4
 
@@ -1488,7 +1631,7 @@ def test_a_non_retryable_transport_error_is_not_retried_at_all():
 
 def test_retries_are_bounded():
     t = FakeTransport(responder=lambda _r, _i: TransportError('503', retryable=True, status=503))
-    with pytest.raises(TransportError):
+    with pytest.raises(LlmFailed):
         _client(t, max_retries=2).ask_text('s', 'u', purpose='t')
     assert len(t.calls) == 3, '重试次数 = max_retries + 1 次首发'
 

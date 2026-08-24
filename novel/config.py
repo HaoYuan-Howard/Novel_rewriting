@@ -42,11 +42,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 #: （`NodeSpec.model` 优先于本默认与环境变量），换模型是一次产品裁决
 #: （成稿风格会整体变），不是一个可以随手改的环境变量。
 #: ⚠ 允许用 `DEEPSEEK_MODEL` 覆盖，是为了 A/B 时**显式**换一次（对照臂、诊断跑）；
-#: 换了之后 `_provenance.model` 会如实记下来——那正是它存在的理由。
+#: 换了之后 `_provenance.model` 记主模型配置，`adopted_models` 记最终真正进入
+#: 产物的 Flash / Pro 响应集合；两格分开，模型兜底才不会把 Pro 产物标成 Flash。
 DEFAULT_MODEL = 'deepseek-v4-flash'
 DEFAULT_BASE_URL = 'https://api.deepseek.com'
 
-#: 思考模式。`on` = 现行降级阶梯（`('high', True)` 起步，带降档保护）；
+#: 思考模式。`on` = 单档 `('high', True)`；模型异常不会自动降低 effort，
+#: Flash 恢复链改由 Pro 保持同配置兜底；
 #: `off` = 单档关思考（`novel/llm/client.py::NOTHINK_RUNGS`）。
 #: ⚠ 与 `DEEPSEEK_MODEL` 同一条纪律：这是给 A/B 显式拧一次的口，
 #: 不是随手改的环境变量——账本每行的 `reasoning_effort`/`thinking` 列会如实记下来。
@@ -71,7 +73,7 @@ DEFAULT_TIMEOUT = 600.0
 
 #: 传输层重试次数（429 / 5xx / 超时）。⚠ **这个数是拍的，不是量的**：
 #: 手上没有真实的 429 分布（`Q-10` 的「重试退避调参」已登记为「现在不建」）。
-#: 它与**降级阶梯是两件事**——混成一条会让一次网络抖动消耗掉整条阶梯。
+#: 它与**同档重采 / 模型兜底是三件事**——混成一条会让一次网络抖动消耗内容恢复预算。
 DEFAULT_MAX_RETRIES = 3
 
 #: 退避基数（秒），指数退避 `base * 2**n`。⚠ 同上，拍的。
@@ -155,7 +157,7 @@ class Config:
         if self.concurrency > MAX_CONCURRENCY:
             raise bad('concurrency', f'逐章并发硬上限是 {MAX_CONCURRENCY}')
         if not self.model:
-            raise bad('model', '模型 id 不能是空的（`_provenance.model` 靠它答「谁产了这份稿」）')
+            raise bad('model', '模型 id 不能是空的（`_provenance.model` 靠它记录主模型配置）')
         if self.thinking_mode not in THINKING_MODES:
             raise bad('thinking_mode',
                       f'思考模式只有 {THINKING_MODES}（大小写敏感）——静默兜底会把一次 A/B '

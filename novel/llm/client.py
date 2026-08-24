@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-client.py —— `ask_text` / `ask_json`。**降级阶梯只有一份，两个入口共用。**
+client.py —— `ask_text` / `ask_json`。**重采与 Flash→Pro 兜底只有一份，两个入口共用。**
 
-【降级阶梯扛的是两类实测发生过的故障，它们看起来完全不像同一件事】
+【内容恢复处理过三类实测故障；旧降档结论保留在这里，说明为什么现已取消】
 
   ① **答案流丢了。** DeepSeek 会把整段答案写进 `reasoning_content` 而 `content` 返回**空串**，
      `finish_reason='stop'`——**不是截断**。实测：模型把整章正文写进了推理里。
@@ -21,35 +21,38 @@ client.py —— `ask_text` / `ask_json`。**降级阶梯只有一份，两个�
      ⇒ 2026-08-22 起它在账上**有自己的名字**（闸名 `answer_lost`，见 `REJECT_GATES`），
        且整份响应会落一份留证（`novel/paths.py::answer_lost_path`）。在此之前它与
        ②「JSON 被截断」共用 `parse` 一格，而这两类的处置正好相反。
-     ⇒ 2026-08-20 起这一档先**同档重采一次**（`MAX_SAMPLES_PER_RUNG`）再决定降档；
+     ⇒ 2026-08-20 起这一档先**同档重采一次**（`MAX_SAMPLES_PER_RUNG`）；
+       2026-08-24 起同档仍失败改由 Pro **保持同配置**兜底，不再自动降 effort；
      2026-08-22 起**除截断外的每一种拒绝**都走这条重采（见 `_worth_resampling`）。
      实测（flash 迁移，三本书）：`stage4.plan` 的 `high` 档空正文而 `reasoning_chars`
      上万、`finish_reason=stop`，旧阶梯把它当「这一档不行」直接降档 ⇒ 3 本里 2 本的
      计划**从未在 `high` 档被评估过**，一上来就掉进取证能力受损的 `low`。
-     温度采样下同参数重发拿到的是新样本；降档换的是模型行为——两件事。
+     温度采样下同参数重发拿到的是新样本；换 Pro 换的是模型能力——两件事。
      ⚠ `prefer_content_over_reasoning_salvage=True` 的响应契约只把首份合法救回稿
        **延迟到同档第二采再裁决**：正常正文成功就采用正常正文；第二采仍不可用就采用
-       已过完整契约的后备，不能继续降档。它只改变采纳顺序，不放宽任何一道 JSON 闸。
+       已过完整契约的后备，不再进入 Pro 兜底。它只改变采纳顺序，不放宽任何一道 JSON 闸。
 
   ② **JSON 被截断。** `max_tokens` 在推理模型上**同时约束 reasoning + completion**。
      `reasoning_effort='high'` 时模型可能把大半预算花在思考上，正文写到一半就到顶了，
      于是**截断表现为 JSON 解析失败**（`finish_reason='length'`）。
-     ⇒ 降 effort 就是**给正文腾预算**，这才是阶梯管用的原因。
-     ⚠ 它是**唯一不做同档重采**的一类：同参数重采只会把推理再写满一遍。
+     ⇒ 旧实现靠降 effort **给正文腾预算**，但也把异常静默改成了取证能力更弱的响应；
+       现实现不再交换质量，直接让 Pro 以同 effort / thinking 接手。
+     ⚠ 它仍是**唯一不做同档重采**的一类：同参数重采只会把推理再写满一遍。
 
-  ③ **合法 JSON 但结构上是空的。** 这一类与①②**必须走同一条阶梯**（原型 F-125）。
+  ③ **合法 JSON 但结构上是空的。** 这一类与①②**必须走同一条恢复链**（原型 F-125）。
      实测：某次规划调用拿回 `{"reconstruction_strategy": "…"}`——0 个输出章、正常结束、
      4477 token 里推理占 4317。它是合法 JSON，于是一路放行**并进了缓存**；
      下游把它摊成 **74 条**「这一拍没有给预算」。**74 条派生症状盖住了一句话能说清的事实。**
-     ⚠ 它与①同源（想得多、交得少），因此**也先同档重采**再降档——
-     `stage4.plan` 实测 `high` 档被拒后直接降档，白花掉整条阶梯再回 `high` 才成功。
+     ⚠ 它与①同源（想得多、交得少），因此**也先同档重采**再由 Pro 兜底——
+     `stage4.plan` 实测 `high` 档被拒后旧实现直接降档，白花掉整条阶梯再回 `high` 才成功。
 
-⚠⚠ **原型把这条阶梯在两个入口各写了一遍。** 两份逐行相同的东西必然分家——
-本文件只有一份 `LADDER`，两个入口都从它走。
+⚠⚠ **原型把响应恢复在两个入口各写了一遍。** 两份逐行相同的东西必然分家——
+本文件只有一份 `models_for()` 与默认配置，两个入口共用。
 
-【阶梯与传输层重试是两条独立的循环，不许合并】
-阶梯换的是**模型行为**（effort / thinking），重试扛的是**网络**（429 / 5xx / 超时）。
-混成一条，一次网络抖动就会消耗掉整条阶梯——而阶梯救不了连接被重置。
+【模型兜底、同档重采与传输层重试是三条独立的循环，不许合并】
+模型兜底换的是 **Flash / Pro**，同档重采换的是温度样本，传输层重试扛的是
+**网络**（429 / 5xx / 超时）。混成一条，一次网络抖动就会消耗内容采样预算；
+而自动降低 effort 还会把显式失败洗成一份取证能力更差的“成功”响应。
 """
 from __future__ import annotations
 
@@ -78,29 +81,12 @@ from novel.observability import (
 )
 from novel.run import RunContext
 
-#: **降级阶梯，全仓唯一一份。** `(reasoning_effort, thinking)`，按顺序走。
-#: `high→low` 是**给正文腾预算**（见模块 docstring ②），
-#: 最后那档关掉 thinking 是「推理流本身就是问题源」时的最后一手。
-#: ⚠ **全空则抛**，绝不返回空稿——一份空稿落下去，下游是确定性代码，
-#: 它不会像写手那样将就着用，它会在几层之外炸，或者更坏：静默产出一份缺内容的东西。
-#:
-#: ⚠⚠ **这里曾有第二档 `('medium', True)`，逐字照抄自原型，而它是一次白花的钱。**
-#: 本模型的真实档位是 `low` / `high` / `max` 三档；`medium`（还有 `xhigh`）**是合法参数、
-#: 但服务端静默映射回 `high`** ⇒ 它不报错、不重试、看起来一切正常，
-#: 而 `cache_key` 含 `reasoning_effort`（`novel/llm/transport.py::ChatRequest.cache_payload`）
-#: ⇒ 它与首档是**两个缓存键、同一种模型行为**。后果：首档拿回空响应/截断之后，
-#: 第二档换个键把**同样的行为**再跑一遍，大概率同样失败，**一分预算都没腾出来**——
-#: 而「降 effort 就是给正文腾预算」正是这条阶梯管用的全部理由。
-#: 四档里只有三种行为，却付四次钱。⇒ 删掉那一档。
-#:
-#: ⚠ **`max` 刻意不在梯上，那不是遗漏。** 它是**升档**：带 79 token 的官方 effort 前缀
-#: （`novel/llm/budget.py` 记着它被删的位置与恢复方式），且那段前缀明令模型写出完整推敲过程
-#: ⇒ reasoning 只会更多。而这条阶梯扛的两类故障里有一类**就是**「推理吃光了 `max_tokens`
-#: 预算、正文写到一半截断」——拿 `max` 去救它是火上浇油。
-#: 要用 `max` 是**质量实验**那条路（`docs/REQUIREMENTS.md` FC-13），不是救场路。
-LADDER: Final[tuple[tuple[str, bool], ...]] = (
-    ('high', True), ('low', True), ('low', False),
-)
+#: 默认模型行为，只有一档。2026-08-24 用户裁决：**取消自动 effort / thinking 降级**。
+#: Flash 的实跑问题主要是能力与稳定性不足；把 `high` 降成 `low` 会让失败变成一份
+#: 取证能力更差、却可能通过结构闸的响应。默认因此保持原档位，Flash 同档重采仍失败
+#: 就交给 Pro 的**同档位**兜底。显式 effort A/B 仍可从 `rungs_from_effort()` 选择一档，
+#: 辅助调用也仍可显式传 `rungs=`；两者都不是异常驱动的静默降级。
+DEFAULT_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('high', True),)
 
 #: 关思考阶梯：**单档**。`('low', False)` 是仓内唯一实测验证过的关思考档
 #: （`novel/stages/stage6/hook.py::CANDIDATE_RETRY_RUNGS` 同款；这里曾指向
@@ -110,6 +96,17 @@ LADDER: Final[tuple[tuple[str, bool], ...]] = (
 #: 等于把「重试」混进「阶梯」，而那两条循环不许合并（见上）。
 #: 选用哪条由 `DEEPSEEK_THINKING` 决定（`novel/config.py::THINKING_MODES`）。
 NOTHINK_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('low', False),)
+
+#: 模型级兜底。只允许 Flash → Pro；主模型本来就是 Pro（两个钉死节点或显式 A/B）时
+#: 不再重复调用同一个模型。未知/实验模型也不被静默改成 Pro，避免把拼错的模型 id
+#: 伪装成一次成功兜底；预算预检会在任何缓存/网络副作用之前拒绝它。
+FLASH_MODEL: Final = 'deepseek-v4-flash'
+PRO_FALLBACK_MODEL: Final = 'deepseek-v4-pro'
+
+
+def models_for(model: str) -> tuple[str, ...]:
+    """主模型及其显式兜底链。**模型选择只有这一处。**"""
+    return (model, PRO_FALLBACK_MODEL) if model == FLASH_MODEL else (model,)
 
 #: `ask_json` 还发不发 `response_format={'type':'json_object'}`。**发。**
 #:
@@ -168,13 +165,13 @@ JSON_OBJECT_MODE: Final = True
 #: ⚠ **翻这一位不会让缓存作废**（与 `JSON_OBJECT_MODE` 的关键区别）：它不进
 #: `cache_payload`，因为它一个字都不改请求，只改我们怎么读回来的那一份。
 #: ⚠ **判定式一行没动**：`_answer_lost` 与 `_worth_resampling` 与从前逐字相同——
-#: 捞不动时的走法（同档重采、再降档）与 2026-08-22 之前完全一样。
+#: 捞不动时仍先同档重采；2026-08-24 起随后走 Flash→Pro 同配置兜底。
 SALVAGE_ANSWER_FROM_REASONING: Final = True
 
 #: 答案流丢失（模块 docstring ①）时，同一档最多采几个样本。**2 = 首发 + 一次重采。**
 #:
 #: ⚠ 这是「重采」不是「重试」：重试扛**网络**（`_send_attempts`，429/5xx/超时），
-#: 重采换的是**同参数下的新样本**，降档换的是**模型行为**——三条循环各管各的，不许合并
+#: 重采换的是**同参数下的新样本**，兜底换的是**模型能力**——三条循环各管各的，不许合并
 #: （合并一次网络抖动就会烧掉两份采样预算）。`tools/current_corpus_paid_preview.py`
 #: 按这一格放大 wire 硬上限——改它必须同批改那边的口径。
 MAX_SAMPLES_PER_RUNG: Final = 2
@@ -187,7 +184,7 @@ MAX_SAMPLES_PER_RUNG: Final = 2
 #: 它与 429/5xx/超时同族（等一下再来），**不是** ①答案流丢失（换样本）、
 #: 也不是 ②截断（腾预算）。
 #: ⇒ 落 `_send_attempts` 的成功分支里退避重试：**不消耗采样预算**
-#: （`MAX_SAMPLES_PER_RUNG`）、**不推向降档**、内容闸根本看不到它。
+#: （`MAX_SAMPLES_PER_RUNG`）、**不直接消耗模型兜底**、内容闸根本看不到它。
 #: 走错循环的代价是不对称的：判成 `answer_lost` 的话，两次资源中断就能把一个付费节点
 #: 推进 `low` 档（`stage4.plan` 在 low 上有已知劣化），而它一次模型行为问题都不是。
 #:
@@ -200,11 +197,11 @@ RESOURCE_INTERRUPTED: Final = 'insufficient_system_resource'
 
 
 def _worth_resampling(resp: ChatResponse) -> bool:
-    """这一档被拒之后，值不值得**同档再采一个样本**（而不是直接降档）。
+    """这一配置被拒之后，值不值得**同配置再采一个样本**（而不是交给 Pro）。
 
     规则只有一条例外：**截断（`finish_reason='length'`）不重采。**
-    那是模块 docstring ②——要腾的是 `max_tokens` 预算，同参数重采大概率把推理
-    再写满一遍；降 effort 才是给正文腾预算。其余一律重采一次：①的答案流丢失、
+    那是模块 docstring ②——同参数重采大概率把推理再写满一遍；现由同配置的 Pro
+    兜底，不再自动降低 effort。其余一律重采一次：①的答案流丢失、
     ③的空壳，以及 `parse` / `schema` / `validator` / `empty_text` 这些形状拒绝。
 
     ⚠⚠ **这里把 ① 已经确立的结论推广到了 ③ 与内容闸拒，别按旧字面撤回。**
@@ -233,7 +230,7 @@ def _answer_lost(text: str, resp: ChatResponse) -> bool:
     """这一份是不是模块 docstring ① 的形态：**正文空，而且不是截断。**
 
     ⚠ 它只决定**闸名**（`answer_lost` 而不是 `parse` / `empty_text`），
-    **不决定走哪条路**——重采与降档仍由 `_worth_resampling` 一家判。两个谓词都看
+    **不决定走哪条路**——是否同档重采仍由 `_worth_resampling` 一家判。两个谓词都看
     `finish_reason` 却各自独立：这里问「这一份是什么」，那里问「下一步做什么」。
     ⇒ 2026-08-22 加这一格时判定式一行没动，走法与从前逐字相同。
 
@@ -248,33 +245,22 @@ def _answer_lost(text: str, resp: ChatResponse) -> bool:
 
 
 def rungs_from_effort(effort: str | None) -> tuple[tuple[str, bool], ...]:
-    """节点的首档覆盖 → 仍可向下退让的阶梯。
+    """节点显式选择的一种模型行为；异常不再把它自动改成另一档。
 
-    ``None`` 与 ``high`` 都保留全局默认。覆盖只裁掉更高档，不另造第二份阶梯；
-    因而截断/空响应时仍能走现有降级路径。
-
-    ⚠ **能降的只有一档**（`low`）——本模型带 thinking 的档位就 `low`/`high` 两个。
-    取值面窄不是漏写：`medium`/`xhigh` 虽然 API 收，但服务端把它们映射回 `high`
-    ⇒ 允许它们等于允许一个**看起来降了、实际没降**的配置，而账本上分辨不出来。
-
-    ⚠ `max` 是**升档**：它在这里长成「`max` 起步、再降进 `LADDER`」的覆盖梯，
-    而 **`LADDER` 本身一格不动**——那条梯扛的两类故障里有一类就是「推理吃光
-    `max_tokens`」，把升档放进降级路是火上浇油。它带 79 token 的官方 effort 前缀
-    （`novel/llm/budget.py::_MAX_EFFORT_PREFIX`，2026-08-21 为 FC-13 质量实验取回），
-    因此它与其余档位**不同 framing**——预算那一侧要跟着算，别只改这里。
+    ``None`` 与 ``high`` 都取默认 high；`low` / `max` 只用于显式节点配置或 A/B。
+    `medium`/`xhigh` 虽然 API 收，但服务端映射回 `high`，仍关闭式拒绝，避免账面
+    effort 与真实模型行为分叉。
     """
     if effort in (None, 'high'):
-        return LADDER
+        return DEFAULT_RUNGS
     if effort == 'max':
-        return (('max', True),) + LADDER
+        return (('max', True),)
     if effort != 'low':
         raise ValueError(
             f'节点 effort={effort!r}；可选 low / high / max / None。'
             f'⚠ `medium` 与 `xhigh` 会被服务端静默映射回 `high`——这里关闭式拒绝它们，'
             f'免得一个「降了档」的节点配置其实一档没降')
-    start = next(i for i, (name, thinking) in enumerate(LADDER)
-                 if name == effort and thinking)
-    return LADDER[start:]
+    return (('low', True),)
 
 #: 默认 token 上限。**统一 64k**：`max_tokens` 在推理模型上同时约束 reasoning + completion，
 #: 高预算防止长正文/推理被 API 默认上限**悄悄**截断。确需更小上限时显式传。
@@ -287,7 +273,7 @@ DEFAULT_MAX_TOKENS: Final = 64_000
 #: ⚠⚠ **`answer_lost` 与 `parse` 曾经是同一格，而它们是两件事。**
 #: 空正文照旧进 `json.loads` 必然抛 `JSONDecodeError` ⇒ 模块 docstring ①（答案写进了
 #: 推理通道、非截断）与 ②（JSON 被截断）在账上塌成同一个 `parse`。而这两类的处置
-#: **本来就相反**：①换新样本（同档重采），②腾预算（降档）——账上却分不出谁是谁，
+#: **本来就相反**：①换新样本（同档重采），②不值得同参数重采——账上却分不出谁是谁，
 #: 于是「这个节点到底在坏哪一种」只能靠人去翻 `finish_reason` 手数。
 #: 实测代价（2026-08-22 复盘，四份账本 752 次 wire）：flash@high 418 次里 60 次是 ①、
 #: pro 255 次里 0 次——一个只在**一个模型的一个档位**上出现的失败模式，
@@ -357,7 +343,7 @@ def _parse_detail(exc: json.JSONDecodeError, content: str,
     ⚠ 只取解析器自己那句固定措辞（`exc.msg`，例如 `Expecting ',' delimiter`）与位置，
     **不取正文**。
     ⚠⚠ `truncated` 取自 **`finish_reason`**，不是从 `pos` 推的——这两类的处置不同
-    （截断该降档腾预算，见模块 docstring ②；中间就坏了降档大概率没用），
+    （截断不值得同配置重采；中间就坏了则新样本仍可能有用，见模块 docstring ②），
     所以这一格必须是权威信号。**曾经写成 `pos >= len - 1` 是错的**：
     `Unterminated string starting at` 的 `pos` 指向那个字符串的**起点**而不是文档末尾
     （实测 `{"voice": {"a": 1}, "surface_hab` ⇒ `pos=20`、`len=32`，最典型的截断
@@ -370,7 +356,7 @@ def _parse_detail(exc: json.JSONDecodeError, content: str,
     }]
 
 
-#: 降档理由进事件时的截断长度。`ValidationError` 的文本可以有几千字，而观测事件是
+#: 响应拒因进事件时的截断长度。`ValidationError` 的文本可以有几千字，而观测事件是
 #: **一行 JSON**、要能被作业日志与 `grep` 消化 ⇒ 截断并标记，不整段灌进去。
 REJECT_REASON_MAX: Final = 400
 
@@ -381,7 +367,7 @@ JsonValidator = Callable[[M, ChatResponse], str | None]
 
 
 class LlmFailed(TerminalState):
-    """整条阶梯走完仍然没拿到可用的东西。**显式终态，绝不返回空稿。**
+    """主模型与允许的兜底模型都没拿到可用结果。**显式终态，绝不返回空稿。**
 
     ⚠⚠ 基类是 `TerminalState` 而不是 `NovelError`，而这一位承重：
     `novel/cli/main.py` 只捕 `TerminalState` / `RefusedByStructure` / `Exception`，
@@ -455,6 +441,7 @@ class LlmClient:
                  backoff_base: float = config.DEFAULT_BACKOFF_BASE,
                  concurrency: int = config.DEFAULT_CONCURRENCY,
                  warmup: bool = True,
+                 enable_model_fallback: bool = True,
                  sleep: Callable[[float], None] = time.sleep,
                  heartbeat_interval: float = DEFAULT_HEARTBEAT_SECONDS,
                  clock: Callable[[], float] = time.perf_counter,
@@ -467,13 +454,17 @@ class LlmClient:
         self.transport = transport
         self.cache = cache if cache is not None else ResponseCache()
         self.model = model or config.DEFAULT_MODEL
+        # 产品调用默认启用唯一的 Flash→Pro 模型链。单模型供应商探针与 A/B 工具
+        # 必须显式关闭，否则一次兜底会把它们正在测量的模型变量换掉。
+        self._models = (models_for(self.model) if enable_model_fallback
+                        else (self.model,))
         # 取值闸放构造期（同下面的 concurrency 闸）：手搭一个 client 也拦得住。
         if thinking_mode not in config.THINKING_MODES:
             raise ValueError(
                 f'DEEPSEEK_THINKING（thinking_mode）={thinking_mode!r}：'
                 f'思考模式只有 {config.THINKING_MODES}')
         self.thinking_mode = thinking_mode
-        #: 默认阶梯。思考开关拧的是**默认起点集**；显式 `rungs` 的优先级不受它影响。
+        #: 默认模型行为。思考开关选择唯一档位；显式 `rungs` 的优先级不受它影响。
         self._rungs = (NOTHINK_RUNGS if thinking_mode == 'off'
                        else rungs_from_effort(effort))
         self.max_retries = max_retries
@@ -507,75 +498,54 @@ class LlmClient:
 
     # ── 两个入口 ──────────────────────────────────────────────────────────
 
+    def _active_rungs_for(
+        self, rungs: tuple[tuple[str, bool], ...] | None, *, purpose: str,
+    ) -> tuple[tuple[str, bool], ...]:
+        """选择唯一显式模型配置；多档输入关闭式拒绝，防止降级机制借参数复活。"""
+        active = self._rungs if rungs is None else tuple(rungs)
+        if not active:
+            raise ValueError(f'{self.ctx.node}/{purpose}: rungs 不能为空')
+        if len(active) != 1:
+            raise ValueError(
+                f'{self.ctx.node}/{purpose}: rungs 只允许一个显式配置，实得 {active!r}；'
+                '2026-08-24 已取消异常驱动的 effort / thinking 自动降级')
+        return active
+
     def ask_text(self, system: str, user: str, *, purpose: str,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
                  validator: TextValidator | None = None,
                  rungs: tuple[tuple[str, bool], ...] | None = None,
                  progress: RequestProgress | None = None,
                  cache_policy: CachePolicy | None = None) -> str:
-        """纯文本调用。默认走 `self._rungs`（思考开关在 `LADDER` 与 `NOTHINK_RUNGS`
-        之间选定），**全空或全被调用点拒绝则抛**。
+        """纯文本调用。默认保持一个 effort / thinking 档位；Flash 失败时由 Pro
+        以同档位兜底。**全空或全被调用点拒绝则抛**。
 
         `validator` 是纯文本响应声明「可用」含义的边界：返回 `None` 表示可用，
-        返回人话理由表示这一档不可用、应驱逐缓存并降档。它只该判断响应是否完整，
+        返回人话理由表示这一份不可用、应驱逐缓存并重采/兜底。它只该判断响应是否完整，
         不能拿文风偏好触发付费重采样。
 
-        `rungs` 只给确有不同成本语义的辅助调用收窄阶梯；默认路径仍走同一份
-        `self._rungs`。空阶梯是调用错误，不能伪装成「模型失败」。
+        `rungs` 只给确有不同成本语义的辅助调用显式选择**一个**配置；空或多档
+        都是调用错误，不能伪装成「模型失败」或借参数恢复自动降级。
         """
-        active_rungs = self._rungs if rungs is None else tuple(rungs)
-        if not active_rungs:
-            raise ValueError(f'{self.ctx.node}/{purpose}: rungs 不能为空')
-        self._preflight(system, user, rungs=active_rungs, json_mode=False,
+        active_rungs = self._active_rungs_for(rungs, purpose=purpose)
+        active_models = self._models
+        self._preflight(system, user, models=active_models, rungs=active_rungs,
+                        json_mode=False,
                         max_tokens=max_tokens, purpose=purpose)
         policy = cache_policy or self.ctx.cache
         tried: list[str] = []
 
-        # 先横扫所有档位的已验证缓存，再发任何新请求。真实语义审判暴露过：一章在
-        # medium/low 档已有合格缓存，但旧顺序会因为 high miss 立刻重发 high，既重复
-        # 付费又污染 A/B 成本。缓存档位表示“哪种模型行为产出”，不是质量优先级。
-        for i, (effort, thinking) in enumerate(active_rungs):
-            got = self._read_cached(
-                system, user, effort=effort, thinking=thinking, json_mode=False,
-                max_tokens=max_tokens, purpose=purpose, progress=progress,
-                cache_policy=policy)
-            if got is None:
-                continue
-            resp, key, attempt_id = got
-            text = resp.text
-            why = None if text else '正文为空'
-            gate = 'answer_lost' if _answer_lost(text, resp) else 'empty_text'
-            if why is None and validator is not None:
-                why = validator(text, resp)
-                gate = 'validator'
-            if why is None:
-                self._settle_gate(
-                    purpose=purpose, attempt_id=attempt_id, source='cache',
-                    accepted=True, gate=None, rungs=active_rungs, index=i,
-                    progress=progress)
-                return text
-            self.cache.evict(key)
-            self._settle_gate(
-                purpose=purpose, attempt_id=attempt_id, source='cache',
-                accepted=False, gate=gate, rungs=active_rungs, index=i,
-                progress=progress)
-            self._observe_rung_rejected(
-                purpose=purpose, attempt_id=attempt_id, rungs=active_rungs,
-                index=i, source='cache',
-                gate=gate, why=why, resp=resp, json_mode=False, progress=progress)
-            tried.append(
-                f'effort={effort} think={thinking} [缓存] '
-                f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
-                f'拒绝={why}')
-
-        for i, (effort, thinking) in enumerate(active_rungs):
-            # 被拒后先同档重采一次再决定降档（_worth_resampling；截断除外）,
-            # 见 MAX_SAMPLES_PER_RUNG。
-            for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
-                resp, key, _cached, attempt_id = self._call_keyed(
-                    system, user, effort=effort, thinking=thinking, json_mode=False,
-                    max_tokens=max_tokens, purpose=purpose, use_cache=False,
+        # 先横扫主模型与兜底模型的全部已验证缓存，再发任何新请求。否则盘上已有合格
+        # Pro 兜底缓存时，仍会因为 Flash miss 重新付一次钱。
+        for model_index, model in enumerate(active_models):
+            for i, (effort, thinking) in enumerate(active_rungs):
+                got = self._read_cached(
+                    system, user, model=model, effort=effort, thinking=thinking,
+                    json_mode=False, max_tokens=max_tokens, purpose=purpose,
                     progress=progress, cache_policy=policy)
+                if got is None:
+                    continue
+                resp, key, attempt_id = got
                 text = resp.text
                 why = None if text else '正文为空'
                 gate = 'answer_lost' if _answer_lost(text, resp) else 'empty_text'
@@ -583,32 +553,97 @@ class LlmClient:
                     why = validator(text, resp)
                     gate = 'validator'
                 if why is None:
-                    self._keep(key, resp, cache_policy=policy)  # ← 判定可用之后才写
+                    if model_index > 0:
+                        self._observe_model_fallback(
+                            purpose=purpose,
+                            from_model=active_models[model_index - 1],
+                            to_model=model, reason='cached_fallback',
+                            progress=progress)
                     self._settle_gate(
-                        purpose=purpose, attempt_id=attempt_id, source='wire',
+                        purpose=purpose, attempt_id=attempt_id, source='cache',
                         accepted=True, gate=None, rungs=active_rungs, index=i,
-                        sample=sample, progress=progress)
+                        progress=progress)
                     return text
                 self.cache.evict(key)
-                resample = sample < MAX_SAMPLES_PER_RUNG and _worth_resampling(resp)
                 self._settle_gate(
-                    purpose=purpose, attempt_id=attempt_id, source='wire',
+                    purpose=purpose, attempt_id=attempt_id, source='cache',
                     accepted=False, gate=gate, rungs=active_rungs, index=i,
-                    sample=sample, resample=resample, progress=progress)
+                    progress=progress)
                 self._observe_rung_rejected(
-                    purpose=purpose, attempt_id=attempt_id, rungs=active_rungs,
-                    index=i, source='wire',
-                    gate=gate, why=why, resp=resp, json_mode=False,
-                    resample=resample, sample=sample, progress=progress)
+                    purpose=purpose, attempt_id=attempt_id, model=model,
+                    models=active_models, model_index=model_index,
+                    rungs=active_rungs, index=i, source='cache', gate=gate,
+                    why=why, resp=resp, json_mode=False, progress=progress)
                 tried.append(
-                    f'effort={effort} think={thinking}{"（重采）" if sample > 1 else ""} '
+                    f'model={model} effort={effort} think={thinking} [缓存] '
                     f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
                     f'拒绝={why}')
-                if not resample:
+
+        for model_index, model in enumerate(active_models):
+            transport_failure: TransportError | LlmFailed | None = None
+            for i, (effort, thinking) in enumerate(active_rungs):
+                # 被拒后先同档重采一次；截断除外。默认只有一个模型行为档位，
+                # 因而该档耗尽后进入 Pro 兜底，不会自动降低 effort。
+                for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
+                    try:
+                        resp, key, _cached, attempt_id = self._call_keyed(
+                            system, user, model=model, effort=effort,
+                            thinking=thinking, json_mode=False,
+                            max_tokens=max_tokens, purpose=purpose, use_cache=False,
+                            progress=progress, cache_policy=policy)
+                    except (TransportError, LlmFailed) as exc:
+                        transport_failure = exc
+                        break
+                    text = resp.text
+                    why = None if text else '正文为空'
+                    gate = 'answer_lost' if _answer_lost(text, resp) else 'empty_text'
+                    if why is None and validator is not None:
+                        why = validator(text, resp)
+                        gate = 'validator'
+                    if why is None:
+                        self._keep(key, resp, cache_policy=policy)
+                        self._settle_gate(
+                            purpose=purpose, attempt_id=attempt_id, source='wire',
+                            accepted=True, gate=None, rungs=active_rungs, index=i,
+                            sample=sample, progress=progress)
+                        return text
+                    self.cache.evict(key)
+                    resample = sample < MAX_SAMPLES_PER_RUNG and _worth_resampling(resp)
+                    self._settle_gate(
+                        purpose=purpose, attempt_id=attempt_id, source='wire',
+                        accepted=False, gate=gate, rungs=active_rungs, index=i,
+                        sample=sample, resample=resample, progress=progress)
+                    self._observe_rung_rejected(
+                        purpose=purpose, attempt_id=attempt_id, model=model,
+                        models=active_models, model_index=model_index,
+                        rungs=active_rungs, index=i, source='wire', gate=gate,
+                        why=why, resp=resp, json_mode=False, resample=resample,
+                        sample=sample, progress=progress)
+                    tried.append(
+                        f'model={model} effort={effort} think={thinking}'
+                        f'{"（重采）" if sample > 1 else ""} '
+                        f'finish={resp.finish_reason} reasoning_len={len(resp.reasoning or "")} '
+                        f'拒绝={why}')
+                    if not resample:
+                        break
+                if transport_failure is not None:
                     break
+            if transport_failure is not None:
+                tried.append(f'model={model} 传输/资源重试耗尽：{transport_failure}')
+                # 4xx 等不可重试错误说明请求/授权本身有问题，换模型只会再犯一次。
+                if model_index == 0 \
+                        and isinstance(transport_failure, TransportError) \
+                        and not transport_failure.retryable:
+                    raise transport_failure
+            if model_index + 1 < len(active_models):
+                self._observe_model_fallback(
+                    purpose=purpose, from_model=model,
+                    to_model=active_models[model_index + 1],
+                    reason=('transport_exhausted' if transport_failure is not None
+                            else 'content_rejected'), progress=progress)
         raise LlmFailed(
-            f'{self.ctx.node}/{purpose}: 走完 {len(active_rungs)} 档阶梯仍然拿不到正文'
-            '（没有可用响应）。\n  '
+            f'{self.ctx.node}/{purpose}: 主模型与兜底模型 '
+            f'{" → ".join(active_models)} 均仍然拿不到正文（没有可用响应）。\n  '
             + '\n  '.join(tried)
             + '\n⚠ `reasoning_len` 大而正文为空 = 模型不是没干活，是答案流丢了；'
               '**不从 reasoning 里抠答案**，那里面混着推敲过程，救回来的是半成品')
@@ -621,7 +656,7 @@ class LlmClient:
                  progress: RequestProgress | None = None,
                  cache_policy: CachePolicy | None = None,
                  prefer_content_over_reasoning_salvage: bool = False) -> M:
-        """结构化调用。默认走与 `ask_text` **同一条**阶梯（`self._rungs`）；
+        """结构化调用。默认与 `ask_text` 使用同一档模型行为与 Flash→Pro 兜底；
         只有收缩/裁决这类成本语义明确不同的辅助调用可显式收窄 `rungs`。
         解析失败与「结构上是空的」同等对待。
 
@@ -646,11 +681,10 @@ class LlmClient:
           ③ `model_validate`  —— 形状/类型/`extra='forbid'`。
         ②在③之前：`require` 是按**盘上键名**（alias）定义的，而且这条路要报得出
         「缺的是哪一个顶层键」——那句话归②，不归 pydantic 的错误文本。
-        三道闸失败的处置**完全一样**：驱逐这一档的缓存 + 降一档。
+        三道闸失败的处置**完全一样**：驱逐缓存 + 必要时同档重采 + Pro 兜底。
         """
-        active_rungs = self._rungs if rungs is None else tuple(rungs)
-        if not active_rungs:
-            raise ValueError(f'{self.ctx.node}/{purpose}: rungs 不能为空')
+        active_rungs = self._active_rungs_for(rungs, purpose=purpose)
+        active_models = self._models
         derived = required_top_level(model_cls)
         if require is None:
             require = derived
@@ -661,7 +695,8 @@ class LlmClient:
                 f'显式传只许**收窄**——放宽等于给这个调用点开一个「它特殊」的口子')
 
         policy = cache_policy or self.ctx.cache
-        self._preflight(system, user, rungs=active_rungs, json_mode=JSON_OBJECT_MODE,
+        self._preflight(system, user, models=active_models, rungs=active_rungs,
+                        json_mode=JSON_OBJECT_MODE,
                         max_tokens=max_tokens, purpose=purpose)
 
         def gate_payload(text: str, resp: ChatResponse) -> tuple[
@@ -706,7 +741,7 @@ class LlmClient:
         def inspect_response(resp: ChatResponse) -> tuple[
                 M | None, str | None, str, str, list[dict[str, Any]] | None, bool]:
             """⚠ 第四个返回值是**闸名**（`REJECT_GATES` 之一），不是给人读的。
-            `why` 那句话事后要靠人读才能归类，而降档统计要能机器数。
+            `why` 那句话事后要靠人读才能归类，而恢复链统计要能机器数。
 
             ⚠⚠ 第五个是**结构化拒因摘要**，进审计账（`gate_decision.reject_detail`）。
             它与 `why` 的分工是承重的：`why` 只进 stdout 事件，而 stdout **会随进程
@@ -751,162 +786,193 @@ class LlmClient:
 
         errors: list[str] = []
 
-        # 同 ask_text：任一档已有合格缓存时，本次必须是 0 次真请求。
-        for i, (effort, thinking) in enumerate(active_rungs):
-            got = self._read_cached(
-                system, user, effort=effort, thinking=thinking, json_mode=JSON_OBJECT_MODE,
-                max_tokens=max_tokens, purpose=purpose, progress=progress,
-                cache_policy=policy)
-            if got is None:
-                continue
-            resp, key, attempt_id = got
-            obj, why, content, gate, detail, salvaged = inspect_response(resp)
-            head = (f'effort={effort} think={thinking} [缓存]'
-                    f'{"（捞自推理通道）" if salvaged else ""} '
-                    f'finish={resp.finish_reason} clen={len(content)}')
-            if why is None:
-                self._settle_gate(
-                    purpose=purpose, attempt_id=attempt_id, source='cache',
-                    accepted=True, gate=None, rungs=active_rungs, index=i,
-                    salvaged=salvaged, progress=progress)
-                if salvaged:
-                    self._keep_answer_lost(
-                        purpose=purpose, attempt_id=attempt_id, source='cache',
-                        effort=effort, thinking=thinking, json_mode=JSON_OBJECT_MODE,
-                        index=i, sample=None, resample=False, resp=resp,
-                        progress=progress, salvaged=True)
-                return obj
-            self.cache.evict(key)
-            self._settle_gate(
-                purpose=purpose, attempt_id=attempt_id, source='cache',
-                accepted=False, gate=gate, rungs=active_rungs, index=i,
-                detail=detail, progress=progress)
-            self._observe_rung_rejected(
-                purpose=purpose, attempt_id=attempt_id, rungs=active_rungs,
-                index=i, source='cache', gate=gate, why=why, resp=resp,
-                json_mode=JSON_OBJECT_MODE, progress=progress)
-            errors.append(f'{head} {why}')
-
-        for i, (effort, thinking) in enumerate(active_rungs):
-            # 被拒后先同档重采一次再决定降档（_worth_resampling；截断除外）,
-            # 见 MAX_SAMPLES_PER_RUNG。
-            deferred_salvage: tuple[M, ChatResponse, str, str, int] | None = None
-
-            def adopt_deferred(index: int = i, effort: str = effort,
-                               thinking: bool = thinking) -> M:
-                """采用同档后备并把账结清。**两个采用点共用这一处。**"""
-                assert deferred_salvage is not None
-                obj_, resp_, key_, attempt_, sample_ = deferred_salvage
-                self._keep(key_, resp_, cache_policy=policy)
-                self._settle_gate(
-                    purpose=purpose, attempt_id=attempt_, source='wire',
-                    accepted=True, gate=None, rungs=active_rungs, index=index,
-                    sample=sample_, salvaged=True, progress=progress)
-                self._keep_answer_lost(
-                    purpose=purpose, attempt_id=attempt_, source='wire',
-                    effort=effort, thinking=thinking,
-                    json_mode=JSON_OBJECT_MODE, index=index, sample=sample_,
-                    resample=False, resp=resp_, progress=progress,
-                    salvaged=True)
-                return obj_
-
-            for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
-                try:
-                    resp, key, _cached, attempt_id = self._call_keyed(
-                        system, user, effort=effort, thinking=thinking,
-                        json_mode=JSON_OBJECT_MODE,
-                        max_tokens=max_tokens, purpose=purpose, use_cache=False,
-                        progress=progress, cache_policy=policy)
-                except (TransportError, LlmFailed):
-                    # ⚠⚠ **手里已经有一份过完整契约的响应，就不能因为下一次没打通而
-                    #   把它扔掉。** 这一档的后备只在「再争取一次正常 content」时存在；
-                    #   而争取的那一次**死在传输层**（连接故障 / 资源中断退避耗尽）与
-                    #   「拿到了一份更好的」是两件完全不同的事。原来异常直接冒出
-                    #   `ask_json`，`deferred_salvage` 随栈消失 ⇒ 重跑要**重新付一次**
-                    #   同样的钱，而那份合格响应连缓存都进不去
-                    #   （`ResponseCache.put` 拒写空正文）。
-                    if deferred_salvage is None:
-                        raise
-                    self.ctx.observe(
-                        'reasoning_salvage_adopted_after_transport_failure',
-                        purpose=purpose, reasoning_effort=effort,
-                        thinking=thinking, sample=sample)
-                    return adopt_deferred()
+        # 同 ask_text：主模型或兜底模型任一档已有合格缓存时，本次必须是 0 次真请求。
+        for model_index, model in enumerate(active_models):
+            for i, (effort, thinking) in enumerate(active_rungs):
+                got = self._read_cached(
+                    system, user, model=model, effort=effort, thinking=thinking,
+                    json_mode=JSON_OBJECT_MODE, max_tokens=max_tokens,
+                    purpose=purpose, progress=progress, cache_policy=policy)
+                if got is None:
+                    continue
+                resp, key, attempt_id = got
                 obj, why, content, gate, detail, salvaged = inspect_response(resp)
-                head = (f'effort={effort} think={thinking}'
-                        f'{"（重采）" if sample > 1 else ""}'
+                head = (f'model={model} effort={effort} think={thinking} [缓存]'
                         f'{"（捞自推理通道）" if salvaged else ""} '
                         f'finish={resp.finish_reason} clen={len(content)}')
                 if why is None:
-                    assert obj is not None
-                    if (salvaged and prefer_content_over_reasoning_salvage
-                            and sample < MAX_SAMPLES_PER_RUNG):
-                        # v3.1 的合法救回稿不是废稿：先留作**同档后备**，只多争取
-                        # 一次正常 content。第二份仍不合用时必须采用这份，不能再
-                        # 降档把一个已过完整契约的响应扔掉。判定账延后到去向确定时写，
-                        # 避免同一个 attempt 先写 rejected、随后又写 accepted。
-                        deferred_salvage = (obj, resp, key, attempt_id, sample)
-                        continue
-                    if deferred_salvage is not None:
-                        (_old_obj, old_resp, old_key, old_attempt_id,
-                         old_sample) = deferred_salvage
-                        self.cache.evict(old_key)
-                        self._settle_gate(
-                            purpose=purpose, attempt_id=old_attempt_id,
-                            source='wire', accepted=False, gate='answer_lost',
-                            rungs=active_rungs, index=i, sample=old_sample,
-                            resample=True, progress=progress)
-                        self._observe_rung_rejected(
-                            purpose=purpose, attempt_id=old_attempt_id,
-                            rungs=active_rungs, index=i, source='wire',
-                            gate='answer_lost',
-                            why=('正文为空；合法推理通道救回稿已保留为后备，'
-                                 '同档正常正文优先且已取得'),
-                            resp=old_resp, json_mode=JSON_OBJECT_MODE,
-                            resample=True, sample=old_sample, progress=progress)
-                    # ⚠ 捞回来的那一份**存不进缓存**：`ResponseCache.put` 拒写空正文，
-                    #   而把捞出来的文本塞进 `content` 再存等于改写供应商的响应
-                    #   （见 `SALVAGE_ANSWER_FROM_REASONING` 的两条已知代价）。
-                    #   这里照常调 `_keep`：拒写发生在 `put` 那一侧，不在这里分岔。
-                    self._keep(key, resp, cache_policy=policy)
+                    if model_index > 0:
+                        self._observe_model_fallback(
+                            purpose=purpose,
+                            from_model=active_models[model_index - 1],
+                            to_model=model, reason='cached_fallback',
+                            progress=progress)
                     self._settle_gate(
-                        purpose=purpose, attempt_id=attempt_id, source='wire',
+                        purpose=purpose, attempt_id=attempt_id, source='cache',
                         accepted=True, gate=None, rungs=active_rungs, index=i,
-                        sample=sample, salvaged=salvaged, progress=progress)
+                        salvaged=salvaged, progress=progress)
                     if salvaged:
                         self._keep_answer_lost(
-                            purpose=purpose, attempt_id=attempt_id, source='wire',
+                            purpose=purpose, attempt_id=attempt_id, source='cache',
                             effort=effort, thinking=thinking,
-                            json_mode=JSON_OBJECT_MODE, index=i, sample=sample,
+                            json_mode=JSON_OBJECT_MODE, index=i, sample=None,
                             resample=False, resp=resp, progress=progress,
                             salvaged=True)
                     return obj
-                # ⚠ **每一条不可用的路径都 evict**（包括解析失败这条——它原来没有）。
                 self.cache.evict(key)
-                resample = sample < MAX_SAMPLES_PER_RUNG and _worth_resampling(resp)
                 self._settle_gate(
-                    purpose=purpose, attempt_id=attempt_id, source='wire',
+                    purpose=purpose, attempt_id=attempt_id, source='cache',
                     accepted=False, gate=gate, rungs=active_rungs, index=i,
-                    sample=sample, resample=resample, detail=detail,
-                    progress=progress)
+                    detail=detail, progress=progress)
                 self._observe_rung_rejected(
-                    purpose=purpose, attempt_id=attempt_id, rungs=active_rungs,
-                    index=i, source='wire', gate=gate, why=why, resp=resp,
-                    json_mode=JSON_OBJECT_MODE,
-                    resample=resample, sample=sample, progress=progress,
-                    fallback_salvage=deferred_salvage is not None)
+                    purpose=purpose, attempt_id=attempt_id, model=model,
+                    models=active_models, model_index=model_index,
+                    rungs=active_rungs, index=i, source='cache', gate=gate,
+                    why=why, resp=resp, json_mode=JSON_OBJECT_MODE,
+                    progress=progress)
                 errors.append(f'{head} {why}')
-                if deferred_salvage is not None:
-                    return adopt_deferred()
-                if not resample:
+
+        for model_index, model in enumerate(active_models):
+            transport_failure: TransportError | LlmFailed | None = None
+            for i, (effort, thinking) in enumerate(active_rungs):
+                # 被拒后先同档重采一次；截断除外。默认只有一个模型行为档位，
+                # 因而该档耗尽后进入 Pro 兜底，不会自动降低 effort。
+                deferred_salvage: tuple[M, ChatResponse, str, str, int] | None = None
+
+                def adopt_deferred(index: int = i, effort: str = effort,
+                                   thinking: bool = thinking) -> M:
+                    """采用同档后备并把账结清。**两个采用点共用这一处。**"""
+                    assert deferred_salvage is not None
+                    obj_, resp_, key_, attempt_, sample_ = deferred_salvage
+                    self._keep(key_, resp_, cache_policy=policy)
+                    self._settle_gate(
+                        purpose=purpose, attempt_id=attempt_, source='wire',
+                        accepted=True, gate=None, rungs=active_rungs, index=index,
+                        sample=sample_, salvaged=True, progress=progress)
+                    self._keep_answer_lost(
+                        purpose=purpose, attempt_id=attempt_, source='wire',
+                        effort=effort, thinking=thinking,
+                        json_mode=JSON_OBJECT_MODE, index=index, sample=sample_,
+                        resample=False, resp=resp_, progress=progress,
+                        salvaged=True)
+                    return obj_
+
+                for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
+                    try:
+                        resp, key, _cached, attempt_id = self._call_keyed(
+                            system, user, model=model, effort=effort,
+                            thinking=thinking, json_mode=JSON_OBJECT_MODE,
+                            max_tokens=max_tokens, purpose=purpose, use_cache=False,
+                            progress=progress, cache_policy=policy)
+                    except (TransportError, LlmFailed) as exc:
+                        # 手里已有一份过完整契约的响应，就不能因争取正常 content 的
+                        # 第二采没打通而扔掉它；没有后备时才进入模型兜底。
+                        if deferred_salvage is not None:
+                            self.ctx.observe(
+                                'reasoning_salvage_adopted_after_transport_failure',
+                                purpose=purpose, model=model,
+                                reasoning_effort=effort, thinking=thinking,
+                                sample=sample)
+                            return adopt_deferred()
+                        transport_failure = exc
+                        break
+                    obj, why, content, gate, detail, salvaged = inspect_response(resp)
+                    head = (f'model={model} effort={effort} think={thinking}'
+                            f'{"（重采）" if sample > 1 else ""}'
+                            f'{"（捞自推理通道）" if salvaged else ""} '
+                            f'finish={resp.finish_reason} clen={len(content)}')
+                    if why is None:
+                        assert obj is not None
+                        if (salvaged and prefer_content_over_reasoning_salvage
+                                and sample < MAX_SAMPLES_PER_RUNG):
+                            # 合法救回稿先作同档后备，只多争取一次正常 content；
+                            # 第二份仍不可用时采用后备，不进入 Pro 兜底。
+                            deferred_salvage = (obj, resp, key, attempt_id, sample)
+                            continue
+                        if deferred_salvage is not None:
+                            (_old_obj, old_resp, old_key, old_attempt_id,
+                             old_sample) = deferred_salvage
+                            self.cache.evict(old_key)
+                            self._settle_gate(
+                                purpose=purpose, attempt_id=old_attempt_id,
+                                source='wire', accepted=False, gate='answer_lost',
+                                rungs=active_rungs, index=i, sample=old_sample,
+                                resample=True, progress=progress)
+                            self._observe_rung_rejected(
+                                purpose=purpose, attempt_id=old_attempt_id,
+                                model=model, models=active_models,
+                                model_index=model_index, rungs=active_rungs,
+                                index=i, source='wire', gate='answer_lost',
+                                why=('正文为空；合法推理通道救回稿已保留为后备，'
+                                     '同档正常正文优先且已取得'),
+                                resp=old_resp, json_mode=JSON_OBJECT_MODE,
+                                resample=True, sample=old_sample,
+                                progress=progress)
+                        self._keep(key, resp, cache_policy=policy)
+                        self._settle_gate(
+                            purpose=purpose, attempt_id=attempt_id, source='wire',
+                            accepted=True, gate=None, rungs=active_rungs, index=i,
+                            sample=sample, salvaged=salvaged, progress=progress)
+                        if salvaged:
+                            self._keep_answer_lost(
+                                purpose=purpose, attempt_id=attempt_id,
+                                source='wire', effort=effort, thinking=thinking,
+                                json_mode=JSON_OBJECT_MODE, index=i, sample=sample,
+                                resample=False, resp=resp, progress=progress,
+                                salvaged=True)
+                        return obj
+                    self.cache.evict(key)
+                    resample = sample < MAX_SAMPLES_PER_RUNG and _worth_resampling(resp)
+                    self._settle_gate(
+                        purpose=purpose, attempt_id=attempt_id, source='wire',
+                        accepted=False, gate=gate, rungs=active_rungs, index=i,
+                        sample=sample, resample=resample, detail=detail,
+                        progress=progress)
+                    self._observe_rung_rejected(
+                        purpose=purpose, attempt_id=attempt_id, model=model,
+                        models=active_models, model_index=model_index,
+                        rungs=active_rungs, index=i, source='wire', gate=gate,
+                        why=why, resp=resp, json_mode=JSON_OBJECT_MODE,
+                        resample=resample, sample=sample, progress=progress,
+                        fallback_salvage=deferred_salvage is not None)
+                    errors.append(f'{head} {why}')
+                    if deferred_salvage is not None:
+                        return adopt_deferred()
+                    if not resample:
+                        break
+                if transport_failure is not None:
                     break
+            if transport_failure is not None:
+                errors.append(f'model={model} 传输/资源重试耗尽：{transport_failure}')
+                if model_index == 0 \
+                        and isinstance(transport_failure, TransportError) \
+                        and not transport_failure.retryable:
+                    raise transport_failure
+            if model_index + 1 < len(active_models):
+                self._observe_model_fallback(
+                    purpose=purpose, from_model=model,
+                    to_model=active_models[model_index + 1],
+                    reason=('transport_exhausted' if transport_failure is not None
+                            else 'content_rejected'), progress=progress)
         raise LlmFailed(
-            f'{self.ctx.node}/{purpose}: 走完 {len(active_rungs)} 档阶梯仍然没有可用的 JSON。\n  '
+            f'{self.ctx.node}/{purpose}: 主模型与兜底模型 '
+            f'{" → ".join(active_models)} 均未拿到可用 JSON。\n  '
             + '\n  '.join(errors)
             + f'\n⚠ 必需顶层键来自 {model_cls.__name__}（判据 39：每个结构化调用点'
               f'声明【全部】必需顶层键，而这一条现在由派生保证）')
 
+    def _observe_model_fallback(self, *, purpose: str, from_model: str,
+                                to_model: str, reason: str,
+                                progress: RequestProgress | None) -> None:
+        """模型链切换的唯一事件出口；不携带 prompt 或响应正文。"""
+        self.ctx.observe(
+            'llm_model_fallback', purpose=purpose,
+            from_model=from_model, to_model=to_model, reason=reason,
+            chapter=progress.chapter if progress else None)
+
     def _observe_rung_rejected(self, *, purpose: str, attempt_id: str,
+                               model: str, models: tuple[str, ...],
+                               model_index: int,
                                rungs: tuple[tuple[str, bool], ...], index: int,
                                source: str, gate: str, why: str,
                                resp: ChatResponse, json_mode: bool,
@@ -914,7 +980,7 @@ class LlmClient:
                                sample: int | None = None,
                                progress: RequestProgress | None = None,
                                fallback_salvage: bool = False) -> None:
-        """降一档（或同档重采）时留下【为什么】。**这条事件是降档理由的唯一出口。**
+        """响应被拒时留下【为什么】以及下一步是重采、显式 rung 还是模型兜底。
 
         ⚠⚠ 它补的是一个实测踩过的观测洞：内容闸判定不可用时，这里只做
         `cache.evict` + 降一档，**既不产事件也不写日志**；而账本那一行记的是
@@ -923,11 +989,11 @@ class LlmClient:
         理由在三处同时不在：账本只有传输层、降档路径不出声、被拒的那一档响应
         随即被 `ResponseCache.evict` 从盘上删掉；`errors` / `tried` 只有在
         **所有档全灭**时才随 `LlmFailed` 浮出来，而降档成功那一路根本走不到。
-        ⇒ 降档是**模型行为层**的判定，它得有自己的出口，不能借账本那一行。
+        ⇒ 这是**模型响应层**的判定，它得有自己的出口，不能借账本那一行。
 
         ⚠ `resample=True` 表示这一拒的下一步是**同档重采**（`MAX_SAMPLES_PER_RUNG`），
         此时 `next_effort` / `next_thinking` 指回**同一档**——事件必须说真话，
-        否则「重采」会被统计口径读成「降档」。
+        否则「重采」会被统计口径读成「切换配置或模型」。
         `fallback_salvage=True` 则表示下一步采用已通过完整契约的同档后备；这时
         `next_*` 为空但 `exhausted=False`，不能谎报成“下一档”或“阶梯耗尽”。
 
@@ -948,12 +1014,15 @@ class LlmClient:
         if fallback_salvage:
             nxt = None
         elif resample:
-            nxt = (effort, thinking)
+            nxt = (model, effort, thinking)
+        elif model_index + 1 < len(models):
+            nxt = (models[model_index + 1], *rungs[0])
         else:
-            nxt = rungs[index + 1] if index + 1 < len(rungs) else None
+            nxt = None
         self.ctx.observe(
             'llm_rung_rejected',
             purpose=purpose,
+            model=model,
             reasoning_effort=effort,
             thinking=thinking,
             json_mode=json_mode,
@@ -964,11 +1033,13 @@ class LlmClient:
             finish_reason=resp.finish_reason,
             content_chars=len(resp.content or ''),
             reasoning_chars=len(resp.reasoning or ''),
-            resample=resample,                # True = 下一步同档重采，不是降档
-            fallback_salvage=fallback_salvage,  # True = 不降档，采用已验过的后备
-            next_effort=None if nxt is None else nxt[0],
-            next_thinking=None if nxt is None else nxt[1],
-            # 最后一档也被拒 ⇒ 这一趟走完了，调用方要么进真跑那一趟、要么 LlmFailed。
+            resample=resample,                # True = 下一步同档重采，不切模型
+            fallback_salvage=fallback_salvage,  # True = 不切模型，采用已验过的后备
+            next_model=None if nxt is None else nxt[0],
+            next_effort=None if nxt is None else nxt[1],
+            next_thinking=None if nxt is None else nxt[2],
+            model_fallback=nxt is not None and nxt[0] != model,
+            # 最后一个模型的最后配置也被拒，才算整条恢复链耗尽。
             exhausted=nxt is None and not fallback_salvage,
         )
         if gate == 'answer_lost':
@@ -1079,16 +1150,42 @@ class LlmClient:
             return None
         return self.ctx.ledger.request_fingerprint_for_attempt(attempt_id)
 
+    def accepted_model(self, purpose: str) -> str | None:
+        """最终采纳响应的实际模型；由 attempt 联结成本账，不按主模型估算。"""
+        attempt_id = self.accepted_attempt(purpose)
+        if attempt_id is None:
+            return None
+        return self.ctx.ledger.model_for_attempt(attempt_id)
+
+    def accepted_models(self, *purposes: str) -> tuple[str, ...]:
+        """给聚合产物返回去重、稳定排序的实际采纳模型集合。
+
+        不传 purpose 时覆盖本 client 本 run 已采纳的全部 purpose。传入的 purpose
+        若没有采纳响应则跳过——定向重生成合并进来的未动章正是这个形状。
+        """
+        if purposes:
+            selected = purposes
+        else:
+            with self._adopt_lock:
+                selected = tuple(self._accepted)
+        models = {
+            model
+            for purpose in selected
+            if (model := self.accepted_model(purpose)) is not None
+        }
+        return tuple(sorted(models))
+
     # ── 一次调用：缓存 → 传输层重试 → 记账 ────────────────────────────────
 
     def _preflight(self, system: str, user: str, *,
+                   models: tuple[str, ...],
                    rungs: tuple[tuple[str, bool], ...], json_mode: bool,
                    max_tokens: int, purpose: str) -> None:
-        """把整条降级阶梯一次验完；返回前没有缓存、账本、网络或文件副作用。"""
+        """把主模型与兜底模型一次验完；返回前没有缓存、账本、网络或文件副作用。"""
         self.ctx.require_observed_roots_current()
         requests = tuple(
             ChatRequest(
-                model=self.model,
+                model=model,
                 system=system,
                 user=user,
                 reasoning_effort=effort,
@@ -1096,11 +1193,13 @@ class LlmClient:
                 json_mode=json_mode,
                 max_tokens=max_tokens,
             )
+            for model in models
             for effort, thinking in rungs
         )
         self._budget_checker(requests, node=self.ctx.node, purpose=purpose)
 
-    def _read_cached(self, system: str, user: str, *, effort: str, thinking: bool,
+    def _read_cached(self, system: str, user: str, *, model: str,
+                     effort: str, thinking: bool,
                      json_mode: bool, max_tokens: int, purpose: str,
                      progress: RequestProgress | None,
                      cache_policy: CachePolicy | None = None,
@@ -1109,7 +1208,7 @@ class LlmClient:
         policy = cache_policy or self.ctx.cache
         if not policy.read:
             return None
-        req = ChatRequest(model=self.model, system=system, user=user,
+        req = ChatRequest(model=model, system=system, user=user,
                           reasoning_effort=effort, thinking=thinking,
                           json_mode=json_mode, max_tokens=max_tokens)
         key = cache_key(req)
@@ -1120,7 +1219,8 @@ class LlmClient:
             req, hit, purpose=purpose, progress=progress, cache_policy=policy)
         return hit, key, attempt_id
 
-    def _call_keyed(self, system: str, user: str, *, effort: str, thinking: bool,
+    def _call_keyed(self, system: str, user: str, *, model: str,
+                    effort: str, thinking: bool,
                     json_mode: bool, max_tokens: int, purpose: str,
                     use_cache: bool = True,
                     progress: RequestProgress | None = None,
@@ -1139,7 +1239,7 @@ class LlmClient:
         `use_cache=False` 调这里。保留 `use_cache=True` 仅维持本私有帮助函数的完整语义，
         不能拿它恢复“某档 miss 就立刻上线”的旧顺序。
         """
-        req = ChatRequest(model=self.model, system=system, user=user,
+        req = ChatRequest(model=model, system=system, user=user,
                           reasoning_effort=effort, thinking=thinking,
                           json_mode=json_mode, max_tokens=max_tokens)
         key = cache_key(req)
@@ -1171,7 +1271,7 @@ class LlmClient:
                          progress: RequestProgress | None = None,
                          cache_policy: CachePolicy | None = None,
                          ) -> tuple[ChatResponse, str]:
-        """**传输层**重试。与降级阶梯是两条独立的循环（见模块 docstring 末尾）。
+        """**传输层**重试。与同档重采、模型兜底是独立循环（见模块 docstring 末尾）。
 
         ⚠ 只重试 `retryable` 的（429 / 5xx / 超时）。4xx 里其余的是**我们自己发错了**，
         重试只会把同一个错误再犯三遍，而每一遍都可能计费。
@@ -1185,7 +1285,7 @@ class LlmClient:
         （见 `transport.py::_sdk`），不然两层各退各的避，一次调用能打出 12 次 HTTP。
 
         ⚠ 首发独占闸包在最外层（`_warmup_gate`）：它守的是**顺序**，而重试守的是**网络**。
-        与降级阶梯同理，**三条不许合并**——合并之后一次限流退避会把整批章都堵在闸里。
+        与模型兜底同理，**三条不许合并**——合并之后一次限流退避会把整批章都堵在闸里。
         """
         with self._warmup_gate():
             return self._send_attempts(
@@ -1201,7 +1301,7 @@ class LlmClient:
         实测 `stage2/prompts.py::BLUEPRINT_SYS` 4073 token、`stage5` 的臂 SYS 约 1900 token，
         一本 20 章的书因此白付 19 份。⇒ 拿第一发的串行，换后面 N−1 发的前缀命中。
 
-        ⚠⚠ **`finally` 里无条件放行。** 首发走完整条降级阶梯仍然失败（或抛任何异常）时，
+        ⚠⚠ **`finally` 里无条件放行。** 首发走完整条响应恢复链仍然失败（或抛任何异常）时，
         其余线程必须继续跑：不放行就是整批死等一个已经死掉的请求，而那比多花一次钱坏得多。
         ⚠ **只有真上线才消耗名额**：本地缓存命中走 `_read_cached`，根本进不到这里——
         一次全命中的重跑不会因为这道闸而串行。
@@ -1320,7 +1420,7 @@ class LlmClient:
             request_fingerprint=request_fingerprint(req),
             response_sha256=_response_sha256(resp),
             node=self.ctx.node, sid=self.ctx.sid,
-            model=(resp.model if resp else '') or self.model,
+            model=(resp.model if resp else '') or req.model,
             code=self.ctx.code, cached=False, cache_policy=policy.name,
             prompt_tokens=u.get('prompt_tokens'),
             prompt_cache_hit_tokens=u.get('prompt_cache_hit_tokens'),
@@ -1362,7 +1462,7 @@ class LlmClient:
             attempt_id=attempt_id,
             request_fingerprint=request_fingerprint(req),
             response_sha256=_response_sha256(resp),
-            node=self.ctx.node, sid=self.ctx.sid, model=resp.model or self.model,
+            node=self.ctx.node, sid=self.ctx.sid, model=resp.model or req.model,
             code=self.ctx.code, cached=True, cache_policy=policy.name,
             prompt_tokens=u.get('prompt_tokens'),
             completion_tokens=u.get('completion_tokens'),

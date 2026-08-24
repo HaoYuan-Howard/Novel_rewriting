@@ -79,6 +79,9 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   逐书不增加、合计严格下降且 short-run 偏差不恶化。
 - **FC-13**：逐节点 effort 覆盖位已落地（`contracts/invariants.py::NodeSpec` 的 `effort` 一格；
   未做 A/B 的节点保持 `None` 即 high，现在**每个节点都是 `None`**）。
+  ⇒ **2026-08-24 后现役异常恢复不再自动降 effort / 关 thinking**：显式 A/B 或节点配置
+  仍可选择一档，但 Flash 内容采样或可重试传输耗尽后，只允许 Pro 保持同配置兜底。
+  因此下文的降档数据是历史成本/质量证据，不再描述生产异常路径。
   ⚠ **受限 A/B 工具已随 `860e1b1` 连同三份测试一并删除**（`tools.restricted_ab`、
   `tools.restricted_fc08`、`tools.paid_experiment_preview`——**点号模块名不是笔误**：
   反引号里的仓内路径受 `tests/test_docs_references.py` 保护，指着已删文件会红），
@@ -96,8 +99,8 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   **否决降档的理由不是成本，是那 56% 买不到的东西**：唯一可能被降档伤到的维度是
   「名字起得好不好」，而 `rn_taste_unver` 明说全链没有判据 ⇒ FC-13 那五道门
   （全是机械判据、n=1）**证不了这一维**，「未见劣化」不等于「没有劣化」。
-  改动落在 `MAX_TOKENS` 而不是 `effort`：16000 → 64000，让 high 档大概率不再落梯，
-  交付的映射恒出自 high 臂。⚠ 代价是真跑飞时浪费从 16k 变 64k，见
+  改动落在 `MAX_TOKENS` 而不是 `effort`：16000 → 64000；现役恢复链本身也不再降档，
+  Flash 失败时只由 Pro 保持 high 接手。⚠ 代价是真跑飞时浪费从 16k 变 64k，见
   `novel/stages/stage7/rename.py::MAX_TOKENS` 那段注释里的回读约定。
   ⇒ 旧 `stage3.style` effort 臂的历史数据保留在下文；现役 v2 为零 LLM，已不再是活动待决项。
   ⚠⚠ **这一条是全链最大的降本杠杆，而它此前没有量。** 2026-08-18 实测（`.llm_cache/` 里
@@ -154,7 +157,7 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
 |---|---|---|
 | 1 | 该节点 check 的 HARD 命中数 / 分母 | ≤ 基线，且分母不变 |
 | 2 | `unver` + `info` 条数 | ≤ 基线 |
-| 3 | 降级阶梯触发次数、wire error 数 | ≤ 基线 |
+| 3 | 内容重采 / 模型兜底触发次数、wire error 数 | ≤ 基线 |
 | 4 | `finish_reason != stop`（截断）计数 | ≤ 基线 |
 | 5 | 产物 schema 校验、章集合覆盖 | 全通过且覆盖面逐字不变 |
 
@@ -483,7 +486,7 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
       单独退步。Stage3 v2 已删除定性举例与 style edit，不能再推荐退役的上游修复命令；
       若这份旧书仍要交付，只能在 current-schema 全链重建后核对是否自然消失，或经现役
       Stage5 正文人工编辑面修目标章并重走下游闭包。
-- [ ] 未测项：flash 修掉「空正文降档」（`MAX_SAMPLES_PER_RUNG`）之后的真实
+- [ ] 未测项：flash 增加空正文同档重采（`MAX_SAMPLES_PER_RUNG`）之后的真实
       `high` 档能力——此前 3 本里 2 本的 `stage4.plan` 从未在 `high` 档被评估过。
 
 ⚠⚠ **`TODO-38` / `TODO-39` 这两个号在 2026-08-22 被两条分支各分配过一次，含义不同。**

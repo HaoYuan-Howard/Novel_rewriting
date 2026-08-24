@@ -25,7 +25,7 @@ from novel.llm.budget import (
     _verified_tokenizer_bytes,
 )
 from novel.llm.cache import CachePolicy, ResponseCache, cache_key
-from novel.llm.client import LADDER, LlmClient
+from novel.llm.client import DEFAULT_RUNGS, LlmClient
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.run import RunContext
@@ -106,17 +106,13 @@ def test_max_costs_exactly_the_official_effort_prefix_and_only_when_thinking():
     assert max_off == high_off, '关思考时不该有前缀'
 
 
-def test_max_starts_an_override_ladder_and_never_joins_the_degradation_one():
-    """`max` 起步、再降进 `LADDER`；而 `LADDER` 本身一格不动。
-
-    ⚠ 后半句是要害：这条梯扛的一类故障就是「推理吃光 max_tokens 导致截断」，
-    把升档放进降级路等于火上浇油。
-    """
+def test_every_explicit_effort_selects_exactly_one_rung():
+    """`max` / `high` 都是显式单档；异常不再自动改变 effort。"""
     from novel.llm.client import rungs_from_effort
 
-    assert rungs_from_effort('max') == (('max', True),) + LADDER
-    assert ('max', True) not in LADDER
-    assert rungs_from_effort(None) == LADDER == rungs_from_effort('high')
+    assert rungs_from_effort('max') == (('max', True),)
+    assert rungs_from_effort('low') == (('low', True),)
+    assert rungs_from_effort(None) == DEFAULT_RUNGS == rungs_from_effort('high')
 
 
 def test_every_ladder_rung_shares_the_same_framing():
@@ -124,13 +120,13 @@ def test_every_ladder_rung_shares_the_same_framing():
 
     ⚠ 这是上面那条拒绝的**对照组**：只查「非法值被拒」而不查「合法值都通得过」，
     一次把取值面收窄过头的改动照样全绿。
-    ⚠ 档位从 `novel/llm/client.py::LADDER` **现算**，不在这里手抄第二份：阶梯
-    **加宽**时（比如哪天把 `max` 加回去）这条要当场把新档位一并量，否则一个
+    ⚠ 档位从 `novel/llm/client.py::DEFAULT_RUNGS` **现算**，不在这里手抄第二份：
+    默认配置面**加宽**时（比如哪天把 `max` 加回去）这条要当场把新档位一并量，否则一个
     framing 没人核过的档位会带着错的预算估算上真跑——而预算是花钱前最后一道闸。
     """
     counts = {
         rung: count_input_tokens(_req(reasoning_effort=rung, thinking=True))
-        for rung in sorted({effort for effort, _thinking in LADDER})
+        for rung in sorted({effort for effort, _thinking in DEFAULT_RUNGS})
     }
     assert len(set(counts.values())) == 1, f'某个档位悄悄改了 framing：{counts}'
 
@@ -194,7 +190,8 @@ def test_one_token_over_context_boundary_is_an_explanatory_terminal_state():
     for fact in ('input_tokens=904001', 'declared_max_tokens=96000', 'total=1000001',
                  'context_limit=1000000', 'input_tokens <= 904000'):
         assert fact in message
-    assert '不截断' in message and '不分块聚合' in message and '不自动换模型' in message
+    assert ('不截断' in message and '不分块聚合' in message
+            and '预算预检拒绝不触发模型兜底' in message)
 
 
 def test_declared_output_above_provider_limit_is_rejected():
@@ -207,7 +204,7 @@ def test_unknown_model_fails_closed_before_any_tokenizer_guess():
     with pytest.raises(ContextBudgetRefused, match='没有已验证') as caught:
         enforce_request_budget((_req(model='future-model'),), node='stage2.global', purpose='global')
     assert caught.value.input_tokens is None
-    assert '自动换模型' in str(caught.value)
+    assert '预算预检拒绝' in str(caught.value) and '模型兜底' in str(caught.value)
 
 
 def test_tokenizer_asset_is_packaged_and_matches_the_pinned_hash():

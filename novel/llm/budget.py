@@ -35,9 +35,9 @@ _THINKING_END: Final = '</think>'
 #: 随「零引用死代码」被删过一次，2026-08-21 为质量实验（FC-13：max 能不能切细拍）
 #: **从 `4744479^:novel/llm/budget.py` 原样取回**，逐字节未改：476 字符 / 79 token。
 #: ⚠ 启用它是**升档**：多 79 token 输入，且前缀明令写出完整推敲过程 ⇒ reasoning 会涨。
-#: 它进的是 `rungs_from_effort` 的**覆盖梯**（max 起步、再降进 `LADDER`），
-#: **不进 `LADDER` 本身**——那条梯扛的一类故障就是「推理吃光 max_tokens」，
-#: 拿升档去救它是火上浇油。
+#: 它由 `rungs_from_effort` **显式选择**；异常不会再自动切到别的 effort。
+#: 这条边界承重：拿升档去救「推理吃光 max_tokens」是火上浇油，而静默降档
+#: 又会换掉模型行为。现行 Flash→Pro 兜底保持这一配置不变。
 _MAX_EFFORT_PREFIX: Final = (
     'Reasoning Effort: Absolute maximum with no shortcuts permitted.\n'
     'You MUST be very thorough in your thinking and comprehensively decompose the problem '
@@ -100,7 +100,7 @@ def model_budget(model: str) -> ModelBudgetSpec:
         raise _refusal(
             f'模型 {model!r} 没有已验证的上下文规格/tokenizer，预算预检关闭式拒绝。'
             f'行动：先在 MODEL_BUDGETS 登记供应商上限和固定 tokenizer；当前已登记：{known}。'
-            '本版本不会猜测 token 比例、自动换模型或试着花钱碰运气。',
+            '本版本不会猜测 token 比例；预算预检拒绝也不会触发模型兜底或花钱碰运气。',
             model=model,
         ) from None
 
@@ -193,7 +193,7 @@ def validate_budget(estimate: BudgetEstimate, *, node: str, purpose: str) -> Bud
             f'total={estimate.total_tokens}，context_limit={estimate.context_limit}，'
             f'max_output_tokens={estimate.max_output_tokens}。声明输出已超过供应商单次输出上限。'
             f'行动：把 max_tokens 降到 {estimate.max_output_tokens} 以下；本版本不截断、'
-            '不分块聚合、不自动换模型。',
+            '不分块聚合，且预算预检拒绝不触发模型兜底。',
             model=estimate.model,
             input_tokens=estimate.input_tokens,
             max_tokens=estimate.max_tokens,
@@ -209,7 +209,7 @@ def validate_budget(estimate: BudgetEstimate, *, node: str, purpose: str) -> Bud
             f'max_output_tokens={estimate.max_output_tokens}。'
             f'行动：缩短整本正文/提示，使 input_tokens <= {allowed_input}，即完整输入 + '
             f'{estimate.max_tokens} 声明输出不超过 {estimate.context_limit}；本版本不截断、'
-            '不分块聚合、不自动换模型。',
+            '不分块聚合，且预算预检拒绝不触发模型兜底。',
             model=estimate.model,
             input_tokens=estimate.input_tokens,
             max_tokens=estimate.max_tokens,
@@ -225,7 +225,7 @@ BudgetChecker = Callable[..., BudgetEstimate]
 
 def enforce_request_budget(requests: Sequence[ChatRequest], *, node: str, purpose: str,
                            counter: TokenCounter = count_input_tokens) -> BudgetEstimate:
-    """在一条降级阶梯开始前验证所有不同 framing，返回最坏一档的预算。"""
+    """在缓存/网络之前验证模型链的所有不同 framing，返回最坏一项预算。"""
     if not requests:
         raise ValueError(f'{node}/{purpose}: 预算预检收到空请求组')
     estimates: list[BudgetEstimate] = []

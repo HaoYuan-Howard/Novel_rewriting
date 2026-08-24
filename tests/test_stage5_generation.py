@@ -22,7 +22,10 @@ from novel.errors import (
 from novel.llm.cache import (
     CachePolicy, ResponseCache, cache_key, request_fingerprint,
 )
-from novel.llm.client import JSON_OBJECT_MODE, LADDER, LlmClient, LlmFailed
+from novel.llm.client import (
+    DEFAULT_RUNGS, FLASH_MODEL, JSON_OBJECT_MODE, PRO_FALLBACK_MODEL,
+    LlmClient, LlmFailed,
+)
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.stages.stage5 import write
@@ -551,6 +554,7 @@ def test_every_chapter_write_path_commits_the_exact_draft_bytes(
         concurrency=1,
         model='test-model',
         accepted_request_fingerprint=lambda purpose: ('a' * 63 + purpose[-1]),
+        accepted_model=lambda _purpose: 'test-model',
     )
 
     if write_path == 'initial':
@@ -651,6 +655,10 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
         def accepted_request_fingerprint(_purpose):
             return 'b' * 64
 
+        @staticmethod
+        def accepted_model(_purpose):
+            return 'test-model'
+
     class Store:
         @staticmethod
         def next_round(_rel):
@@ -739,6 +747,10 @@ def test_production_chapter_provenance_uses_the_accepted_request(
             captured['accepted_purpose'] = purpose
             return accepted_request
 
+        @staticmethod
+        def accepted_model(_purpose):
+            return 'actual-model'
+
     class Store:
         @staticmethod
         def next_round(_rel):
@@ -797,6 +809,8 @@ def test_production_chapter_provenance_uses_the_accepted_request(
     assert chapter == 1 and cls is write.RoundLlmProvenance
     assert kwargs['prompts'] == {'SYS': 'SYS'}
     assert kwargs['request_fingerprint'] == accepted_request
+    assert kwargs['model'] == 'test-model'
+    assert kwargs['adopted_models'] == ['actual-model']
 
 
 class _LandingStore:
@@ -869,21 +883,21 @@ class _LandingContext:
         return out
 
 
-def _production_response(text='完整章节。'):
+def _production_response(text='完整章节。', *, model=FLASH_MODEL):
     return ChatResponse(
         content=json.dumps(
             {'segments': [{'slot': 's01', 'text': text}]},
             ensure_ascii=False),
         finish_reason='stop',
         usage={'prompt_tokens': 10, 'completion_tokens': 5},
-        model='test-model',
+        model=model,
     )
 
 
 def _production_request(book, entry, *, effort='high', thinking=True):
     material = write.prompts.build_material(entry, book)
     return ChatRequest(
-        model='test-model',
+        model=FLASH_MODEL,
         system=write.prompts.write_system(),
         user=write.prompts.build_user(material),
         reasoning_effort=effort,
@@ -903,7 +917,7 @@ def _run_real_production_landing(monkeypatch, transport, *, cache=None):
         ctx,
         transport,
         cache=cache or ResponseCache(),
-        model='test-model',
+        model=FLASH_MODEL,
         max_retries=0,
         concurrency=1,
         warmup=False,
@@ -935,6 +949,7 @@ def test_real_production_write_lands_a_full_request_sha256(monkeypatch):
     expected = request_fingerprint(transport.calls[0])
     assert len(expected) == 64
     assert chapter.provenance.request_fingerprint == expected
+    assert chapter.provenance.adopted_models == [FLASH_MODEL]
     assert client.accepted_request_fingerprint('stage5.write·ch1') == expected
     assert ctx.ledger.calls_made == 1
 
@@ -971,24 +986,29 @@ def test_real_production_write_reuses_the_existing_32_char_cache_path(monkeypatc
     assert (cache_dir / f'{old_key}.json').is_file(), '兼容缓存不应被迁移或改名'
 
 
-def test_real_production_write_binds_provenance_to_the_accepted_lower_rung(
+def test_real_production_write_binds_provenance_to_the_accepted_pro_fallback(
         monkeypatch):
     truncated = ChatResponse(
-        content='{"segments":[', finish_reason='length', model='test-model')
-    accepted = _production_response('降档后完整章节。')
+        content='{"segments":[', finish_reason='length', model=FLASH_MODEL)
+    accepted = _production_response(
+        'Pro 兜底后的完整章节。', model=PRO_FALLBACK_MODEL)
     transport = FakeTransport(
-        responder=lambda _request, index: truncated if index == 0 else accepted)
+        responder=lambda request, _index: (
+            truncated if request.model == FLASH_MODEL else accepted))
 
     ctx, client, chapter, _book, _entry = _run_real_production_landing(
         monkeypatch, transport)
 
+    assert [req.model for req in transport.calls] == [
+        FLASH_MODEL, PRO_FALLBACK_MODEL]
     assert [(req.reasoning_effort, req.thinking) for req in transport.calls] == [
-        LADDER[0], LADDER[1],
-    ]
+        DEFAULT_RUNGS[0], DEFAULT_RUNGS[0]]
     rejected_fp = request_fingerprint(transport.calls[0])
     accepted_fp = request_fingerprint(transport.calls[1])
     assert accepted_fp != rejected_fp
     assert chapter.provenance.request_fingerprint == accepted_fp
+    assert chapter.provenance.model == FLASH_MODEL
+    assert chapter.provenance.adopted_models == [PRO_FALLBACK_MODEL]
     assert client.accepted_request_fingerprint('stage5.write·ch1') == accepted_fp
     assert ctx.ledger.calls_made == 2
 
@@ -1022,6 +1042,10 @@ def test_stage5_chapters_run_together_up_to_32(
         @staticmethod
         def accepted_request_fingerprint(_purpose):
             return 'c' * 64
+
+        @staticmethod
+        def accepted_model(_purpose):
+            return 'test-model'
 
     class Store:
         @staticmethod

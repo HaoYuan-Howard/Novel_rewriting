@@ -7,18 +7,15 @@
 做 A/B 有两条路，本文件选了后一条：
 
   ① 直接改 `contracts/invariants.py` 那一格，跑完再改回来。
-     不选的理由是**忘了改回来不会有任何声音**——此后每一次真跑都静默降档，
+     不选的理由是**忘了改回来不会有任何声音**——此后每一次真跑都静默换档，
      而账本要事后逐行看 `reasoning_effort` 才看得出来。
   ② 进程内就地覆盖那一格，只活在这一个进程里。⇒ 仓里那份恒是 `None`（即 high），
      实验臂与交付跑物理上不可能混。
 
 ⚠⚠ **换臂之前先换 `NOVEL_CACHE_DIR`，否则这一臂可能一次都不发。**
-  `client.py` 在发任何新请求之前会**横扫阶梯上所有档位**的已验证缓存
-  （`_read_cached`，line ~317）——那是为了「中断恢复不重复付费」，
-  但对 effort A/B 恰好是陷阱：`max` 臂的阶梯是 `max→high→low`，
-  只要 `high` 那一档已经有缓存（比如刚跑过对照臂），它就会被直接采纳，
-  **一次 max 都不发，而账本如实记着 `high`、产物与对照臂逐字节相同**。
-  2026-08-21 实测踩过一次：27 次调用全是缓存命中，实验静默地没有发生。
+  现役 client 不再自动降低 effort；缓存仍按完整请求配置分键，并会在上线前横扫
+  同配置的 Flash→Pro 模型链。若目录里已有这一臂的响应，实验会直接命中缓存，
+  **一次新样本都不发**。2026-08-21 实测踩过一次：27 次调用全是缓存命中。
   ⇒ 每条实验臂配一个独立缓存目录（`NOVEL_CACHE_DIR=<主仓>/.llm_cache_ab_<臂名>`），
   跑完看账本 `reasoning_effort` 那一列**全是你要的那一档**才算数。
 
@@ -27,10 +24,12 @@
   「不要凭文档手拼真实 argv」）。付费确认仍由 CLI 自己的 `--yes` 把关，本工具不代批。
 
 ⚠ 覆盖值的取值面不在这里判——转交 `novel/llm/client.py::rungs_from_effort`
-  （`medium`/`xhigh` 被服务端静默映射回 `high`、`max` 不在梯上，三处闸说的是同一件事）。
+  （`medium`/`xhigh` 被服务端静默映射回 `high`，故关闭式拒绝；`max` 是合法的
+  单一显式实验配置）。若主模型是 Flash，模型兜底仍可能发生；验收须同时核 ledger 的
+  `model` 与产物 `adopted_models`，不能把 Pro 兜底样本归进 Flash 臂。
 
 用法：
-  # 0 成本预览：只摊开覆盖后的阶梯与将要透传的 argv，不跑
+  # 0 成本预览：只摊开覆盖后的显式配置与将要透传的 argv，不跑
   python -X utf8 tools/effort_ab.py --set stage7.rename=low -- \\
       run stage7.rename --sid <sid> --base <臂 base> --yes
 
@@ -85,14 +84,13 @@ def main(argv: list[str] | None = None) -> int:
     for node, effort in overrides:
         was = NODES[node].effort
         print(f'  {node}: effort {was!r} → {effort!r}')
-        print(f'    阶梯 {list(rungs_from_effort(was))} → {list(rungs_from_effort(effort))}')
+        print(f'    显式配置 {list(rungs_from_effort(was))} → '
+              f'{list(rungs_from_effort(effort))}')
     print(f'  透传 argv: {" ".join(passthrough)}')
     from novel.config import load_config
     print(f'  缓存目录: {load_config().cache_dir}')
-    print('  ⚠ 阶梯会横扫**所有档位**的缓存：上面这个目录里若已有别档的响应，'
-          '本臂可能一次都不发\n'
-          '    （账本会如实记成那一档，产物与对照臂逐字节相同）。'
-          '换臂请一并换 NOVEL_CACHE_DIR。')
+    print('  ⚠ 上面这个目录里若已有本臂同请求的 Flash/Pro 响应，本臂可能一次都不发；'
+          '换臂请一并换 NOVEL_CACHE_DIR，并核 ledger.model 与 adopted_models。')
     print(f'  真跑: {"是（--execute）" if a.execute else "否（0 成本预览）"}')
     if not a.execute:
         print('  ⚠ 未加 --execute，到此为止；仓内 NodeSpec.effort 一个字没动。')

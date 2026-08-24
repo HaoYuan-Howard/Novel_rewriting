@@ -370,7 +370,8 @@ prompt 152 570 / completion 190 331（比 A 便宜 8%）。
 
 `max` 此前被三处闸关闭式拒绝，本轮为这个实验启用（官方 effort 前缀从
 `4744479^:novel/llm/budget.py` 逐字节取回，476 字符 / 79 token，测试当场重量；
-它走 `rungs_from_effort` 的覆盖梯 `max→high→low`，**不进降级梯 `LADDER`**）。
+它在当时实现中走 `rungs_from_effort` 的覆盖梯 `max→high→low`；2026-08-24 起现役
+异常恢复已取消 effort 降级，这里只记录 E 臂发生时的实验形状）。
 
 | 读数 | C：×high | E：×max | |
 |---|--:|--:|--:|

@@ -106,15 +106,17 @@ def cost_table(rows: list[dict]) -> dict:
             and (row['prompt_cache_hit_tokens'] + row['prompt_cache_miss_tokens']
                  != row['prompt_tokens'])
             for row in wire)
-        by_purpose: dict[str, list[tuple[object, object]]] = defaultdict(list)
+        by_purpose: dict[str, list[tuple[object, object, object]]] = defaultdict(list)
         for row in wire:
             key = str(row.get('purpose') or '（purpose 未记录）')
-            rung = (row.get('reasoning_effort'), row.get('thinking'))
-            # Network retry repeats one rung; fallback means moving to a different rung.
-            if not by_purpose[key] or by_purpose[key][-1] != rung:
-                by_purpose[key].append(rung)
-        fallback_purposes = sum(len(rungs) > 1 for rungs in by_purpose.values())
-        fallback_steps = sum(max(0, len(rungs) - 1) for rungs in by_purpose.values())
+            configuration = (
+                row.get('model'), row.get('reasoning_effort'), row.get('thinking'))
+            # 网络重试/同配置重采会重复同一组；历史 effort 降档与现役 Flash→Pro
+            # 都是配置转换。JSON 键保留 fallback_*，避免打碎已有报告读者。
+            if not by_purpose[key] or by_purpose[key][-1] != configuration:
+                by_purpose[key].append(configuration)
+        fallback_purposes = sum(len(configs) > 1 for configs in by_purpose.values())
+        fallback_steps = sum(max(0, len(configs) - 1) for configs in by_purpose.values())
         cache_total = ph + pm
         out[node] = {
             'judge': node in JUDGE_NODES,
@@ -419,9 +421,10 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
             + [('—' if arms[n]['cost'].get(node) is None
                 else _cache_rate_cell(arms[n]['cost'][node])) for n in names]))
         for key, label in (
+                ('models', 'model（调用行）'),
                 ('efforts', 'effort（wire 行）'),
                 ('thinking', 'thinking（wire 行）'),
-                ('fallback_steps', '降档步数（按 purpose 去除网络重试）'),
+                ('fallback_steps', '恢复配置转换步数（按 purpose 去除网络重试/同配置重采）'),
                 ('conditional_surface_repair_calls',
                  'habit_quote 条件窄修复 wire（非基础调用）'),
                 ('outcomes', 'wire outcome'),

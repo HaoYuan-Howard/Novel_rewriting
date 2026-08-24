@@ -130,6 +130,7 @@ def _plan(ctx: RunContext, *, marker: str = '计划一') -> PlanChapters:
         PlanProvenance,
         prompts={'PLAN_SYS': '测试用计划提示词'},
         model='fixture-model',
+        adopted_models=['fixture-model'],
         params={
             'grouping': 'absorb-small-v1',
             'beat_min_chars': 80,
@@ -917,7 +918,15 @@ def _spend(ctx: RunContext, **tokens) -> None:
 
 def _mint(ctx: RunContext) -> LlmProvenance:
     """铸一份付费来源账。**只为了拿它的 `usage`**，别的字段取最小合法值。"""
-    return ctx.llm_provenance(LlmProvenance, prompts={'TEST_SYS': 'x'}, model='m')
+    return ctx.llm_provenance(
+        LlmProvenance, prompts={'TEST_SYS': 'x'}, model='m', adopted_models=['m'])
+
+
+def test_paid_provenance_refuses_to_guess_the_actual_model_from_primary_config():
+    ctx = _plan_ctx(_book())
+    with pytest.raises(ProvenanceRefused, match='没有 accepted model'):
+        ctx.llm_provenance(
+            LlmProvenance, prompts={'TEST_SYS': 'x'}, model='deepseek-v4-flash')
 
 
 def test_each_artifact_gets_its_own_usage_not_the_whole_runs_total():
@@ -996,7 +1005,9 @@ def test_a_failed_mint_does_not_push_the_usage_mark():
     ctx = _plan_ctx(_book())
     _spend(ctx, prompt_tokens=10)
     with pytest.raises(Exception):
-        ctx.llm_provenance(LlmProvenance, prompts={'S': 'x'}, model='m', attempts=[])
+        ctx.llm_provenance(
+            LlmProvenance, prompts={'S': 'x'}, model='m',
+            adopted_models=['m'], attempts=[])
     # 刻度没动 ⇒ 下一份产物照样认领得到这 10 个 token
     assert _mint(ctx).usage.prompt_tokens == 10
 

@@ -34,7 +34,9 @@ from contracts.schema.stage2 import (
 )
 from novel import paths, prov
 from novel.config import MAX_CONCURRENCY
-from novel.errors import ArtifactUnreadable, GateBlocked, TerminalState, UpstreamMissing
+from novel.errors import (
+    ArtifactUnreadable, GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing,
+)
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
 from novel.llm.ledger import combine_usage
@@ -732,6 +734,7 @@ def run_global(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
         GlobalProvenance,
         prompts={'GLOBAL_SYS': system},
         model=client.model,
+        adopted_models=client.accepted_models(ctx.node),
         **accounting,
     )
     artifact = GlobalGrounding.model_validate({
@@ -883,7 +886,7 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
         raise UpstreamMissing(f'{MAIN_TEXT} 不在盘上')
     if old_artifact.provenance.model != client.model:
         raise TerminalState(
-            '当前 GlobalProvenance 没有表达混合模型的槽位；'
+            '局部重划不能把不同主模型配置的结果混成一份来源账；'
             f'原稿 model={old_artifact.provenance.model!r}，本次={client.model!r}。'
             '为避免来源账说假话，尚未调用 LLM')
 
@@ -937,6 +940,7 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
         GlobalProvenance,
         prompts={'ROLE_SPLIT_SYS': system},
         model=client.model,
+        adopted_models=client.accepted_models(f'{ctx.node}:purge-role'),
         **accounting,
     )
     provenance = GlobalProvenance.model_validate({
@@ -945,6 +949,8 @@ def run_purge_role(ctx: RunContext, client: LlmClient) -> GlobalGrounding:
         'code': ctx.code,
         'inputs': delta.inputs,
         'prompts': {**old_prov.prompts, **delta.prompts},
+        'adopted_models': sorted(set(old_prov.adopted_model_ids())
+                                 | set(delta.adopted_model_ids())),
         'usage': combine_usage(old_prov.usage, delta.usage),
         'gates_skipped': None,
     })
@@ -1267,7 +1273,7 @@ def _run_blueprint_repair(
         ChapterBlueprints, source_rel, require_current=True)
     if previous.provenance.model != client.model:
         raise TerminalState(
-            '当前 BlueprintProvenance 没有表达混合模型的槽位；'
+            '定向重生成不能把不同主模型配置的结果混成一份来源账；'
             f'原稿 model={previous.provenance.model!r}，本次={client.model!r}。'
             '为避免来源账说假话，尚未调用 LLM')
 
@@ -1537,13 +1543,18 @@ def _run_blueprint_repair(
     repair_history = [row.model_dump() for row in old_prov.repairs]
     for ordinal in repaired_ordinals:
         user, findings = prompt_rows[ordinal]
+        accepted_model = client.accepted_model(f'{ctx.node}:ch{ordinal}')
+        if accepted_model is None:
+            raise ProvenanceRefused(
+                f'第 {ordinal} 章已经返回蓝图，但没有 accepted model；'
+                '拒绝按主模型配置估算')
         repair_history.append({
             'chapter_ordinal': ordinal,
             'failure_items': sorted({row['rule'] for row in findings}),
             'failure_evidence': prov.projection_fingerprint(findings),
             'user_prompt': prov.fingerprint(user),
             'output': prov.projection_fingerprint(raw_by[ordinal]),
-            'model': client.model,
+            'model': accepted_model,
             'cache_policy': ctx.cache.name,
             'fields': ['*'],
             'before_metrics': (_blueprint_metrics(old_by[ordinal])
@@ -1572,6 +1583,15 @@ def _run_blueprint_repair(
         list(row) for row in old_prov.boundary_nudges
         if not _record_is_targeted(row, targets)
     ] + [list(row) for row in (target_accounting.get('boundary_nudges') or [])]
+    repair_purposes: dict[str, int | None] = {
+        f'{ctx.node}:ch{o}': o for o in repaired_ordinals}
+    resegmented = {int(ordinal) for ordinal, _system, _user
+                   in boundary_requests if ordinal is not None}
+    repair_purposes.update({
+        f'{ctx.node}:repair-boundaries:ch{o}': o
+        for o in repaired_ordinals if o in resegmented
+    })
+
     def current_artifact(*, summary_recorded: bool,
                          settle: bool = True) -> ChapterBlueprints:
         """把这一刻的 `merged` 铸成产物。
@@ -1587,10 +1607,14 @@ def _run_blueprint_repair(
             from novel.stages.stage2 import prompts as _p
             keys['SUMMARY_BATCH_SYS'] = with_json_shape(
                 _p.SUMMARY_BATCH_SYS, _p.SUMMARY_BATCH_HINT)
+        adopted_purposes = list(repair_purposes)
+        if spec.needs_summary_batch and summary_recorded:
+            adopted_purposes.append(f'{ctx.node}:summary-batch')
         delta = ctx.llm_provenance(
             BlueprintProvenance,
             prompts=keys,
             model=client.model,
+            adopted_models=client.accepted_models(*adopted_purposes),
             scope_violations=old_scope + new_scope,
             batches=[list(batch) for batch in old_prov.batches],
             context=old_prov.context.model_dump(),
@@ -1606,6 +1630,8 @@ def _run_blueprint_repair(
         )
         provenance = BlueprintProvenance.model_validate({
             **delta.model_dump(),
+            'adopted_models': sorted(set(old_prov.adopted_model_ids())
+                                     | set(delta.adopted_model_ids())),
             'usage': combine_usage(old_prov.usage, delta.usage),
             'partial_rewrite': old_prov.partial_rewrite,
         })
@@ -1663,14 +1689,6 @@ def _run_blueprint_repair(
         block(artifact, hits)
 
     _write_formal(store, BLUEPRINT_REL, artifact)
-    repair_purposes: dict[str, int | None] = {
-        f'{ctx.node}:ch{o}': o for o in repaired_ordinals}
-    resegmented = {int(ordinal) for ordinal, _system, _user
-                   in boundary_requests if ordinal is not None}
-    repair_purposes.update({
-        f'{ctx.node}:repair-boundaries:ch{o}': o
-        for o in repaired_ordinals if o in resegmented
-    })
     if spec.needs_summary_batch:
         repair_purposes[f'{ctx.node}:summary-batch'] = None
     _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,
@@ -1694,7 +1712,7 @@ def _run_summary_batch(
     """`extraction-ir-v1` 的书级摘要批：一次调用按 events 产全部目标章的摘要。
 
     输入已是压缩事实（各章 beat events），不重读原章；validator 硬校验
-    「目标章集恰好覆盖 + 长度界」。阶梯耗尽由 `ask_json` 抛 `LlmFailed`
+    「目标章集恰好覆盖 + 长度界」。单配置采样与模型恢复链耗尽由 `ask_json` 抛 `LlmFailed`
     （显式终态）——此时章响应已在缓存里，重跑只补这一次调用。
     """
     from contracts.schema.stage2 import SummaryBatchResponse
@@ -1881,12 +1899,23 @@ def finish_blueprints(
         prompt_keys[spec.boundary_sys_name] = boundary_requests[0][1]
     ordinals = [int(section.get('chapter_ordinal') or 0)
                 for section in main_text]
+    produced = sorted({
+        int(blueprint.get('chapter_ordinal') or 0)
+        for blueprint in raw_blueprints
+    })
+    purposes: dict[str, int | None] = {f'{ctx.node}:ch{o}': o for o in produced}
+    if spec.topology == 'boundary_then_detail':
+        purposes.update({f'{ctx.node}:boundaries:ch{o}': o for o in produced})
 
     def current_artifact(*, settle: bool = True) -> ChapterBlueprints:
+        adopted_purposes = list(purposes)
+        if spec.needs_summary_batch and 'SUMMARY_BATCH_SYS' in prompt_keys:
+            adopted_purposes.append(f'{ctx.node}:summary-batch')
         provenance = ctx.llm_provenance(
             BlueprintProvenance,
             prompts=prompt_keys,
             model=client.model,
+            adopted_models=client.accepted_models(*adopted_purposes),
             scope_violations=scope_violations,
             batches=[[ordinal] for ordinal in ordinals],
             context=blueprint_context(ctx.title, main_text,
@@ -1948,13 +1977,6 @@ def finish_blueprints(
     # 归档旧正式稿与问题稿；否则 `_Both` / `--check-only` 会继续优先读取旧问题稿，
     # 出现“正式稿已写成功、自动复检却仍判上一轮失败”的幽灵红灯。
     _write_formal(store, BLUEPRINT_REL, artifact)
-    produced = sorted({
-        int(blueprint.get('chapter_ordinal') or 0)
-        for blueprint in raw_blueprints
-    })
-    purposes: dict[str, int | None] = {f'{ctx.node}:ch{o}': o for o in produced}
-    if spec.topology == 'boundary_then_detail':
-        purposes.update({f'{ctx.node}:boundaries:ch{o}': o for o in produced})
     if spec.needs_summary_batch:
         purposes[f'{ctx.node}:summary-batch'] = None
     _note_adopted(ctx, client, rel=BLUEPRINT_REL, candidate=candidate,
@@ -2280,7 +2302,8 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
         HARD ⇒ `.INVALID` **不覆盖正式全书底座**；
       · **轮次归档**——旧轮进 `_rounds/`，覆盖前有处可回；
       · **来源账不伪造**——`rewrite_provenance(prev, by='--apply-edit')`：
-        继承 `prompts`/`model` 一个字不动，换成本次真读到的 `inputs`，
+        继承 `prompts`/`model`/`adopted_models` 一个字不动，
+        换成本次真读到的 `inputs`，
         标 `partial_rewrite`（这一份此后是混版的：未编辑字段出自当初那次付费产出，
         被改的 typed facts 是**现在**由人给的）。
 

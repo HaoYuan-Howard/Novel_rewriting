@@ -654,6 +654,7 @@ def run_hook(ctx: RunContext, client: LlmClient) -> Hook:
             HookProvenance,
             prompts=prompt_accounting,
             model=client.model,
+            adopted_models=client.accepted_models(),
             params=HookParams(
                 max_tokens=MAX_TOKENS,
                 candidate_retry_max_tokens=CANDIDATE_RETRY_MAX_TOKENS,

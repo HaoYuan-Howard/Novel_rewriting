@@ -171,7 +171,7 @@ def _seed_semantic(box, *, dirty: int = 0, uncertain: tuple[int, ...] = ()) -> s
         #   就是在断言一件不再发生的事。
         _provenance=ctx.llm_provenance(
             prompts=semantic.judge_prompts(semantic.SEMANTIC_SYS),
-            model='test-model'),
+            model='test-model', adopted_models=['test-model']),
     )
     seq = (semantic.semantic_seqs(store)[-1] + 1) if semantic.semantic_seqs(store) else 1
     rel = semantic.SEMANTIC_TPL.format(n=seq)
