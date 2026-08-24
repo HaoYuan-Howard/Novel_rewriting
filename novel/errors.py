@@ -71,6 +71,15 @@ class BookTrashFailed(TerminalState):
     """项目无法安全移入回收站；正式书目录保持原位或仍可从回收站恢复。"""
 
 
+class ApprovalFrozen(TerminalState):
+    """这本书正在被移入回收站，审批写入不许再落盘。
+
+    ⚠ 与 `JobConflict` 同一族「流程说这一步现在不该发生」：删除与审批是两个人
+    （或两个标签页）同时点的按钮，不是 bug。落点在
+    `novel/orchestrator/approvals.py::frozen_for_trash`，那里写着它防的是哪条竞态。
+    """
+
+
 class ContextBudgetRefused(TerminalState):
     """LLM 请求无法在已登记的供应商上下文预算内安全执行。
 

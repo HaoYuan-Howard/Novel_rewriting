@@ -165,6 +165,13 @@ _JSON_READ_ALLOWED = {
         'agent 代跑记录**不是产物**：与 jobs.jsonl 同一份理由，append-only 事件流'
         '（`_service/agent_runs.jsonl` + `logs/agent-*.log`），'
         '读的一侧要容忍被 kill 截断的最后一行'),
+    'novel/orchestrator/trash.py': (
+        '回收站条目的 `metadata.json` **不是产物**：`ARTIFACTS` 里没有它、'
+        '不进来源账、不进 `_provenance`，它只回答「这条删除完成了没有」'
+        '（`sweep_incomplete` 的硬中断恢复判据）。'
+        '⚠ 更要紧的是它**读的时候一定坏得起**——半成品条目正是进程被硬中断留下的，'
+        '写到一半的 JSON 必须当成「没有 metadata」继续往下判，'
+        '而产物读路的纪律恰恰相反：坏 JSON 一律关闭式失败'),
 }
 
 

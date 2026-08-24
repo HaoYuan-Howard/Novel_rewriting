@@ -472,6 +472,18 @@ def _drain_locked(*, registry: JobRegistry,
             with _PENDING_LOCK:
                 _PENDING.insert(0, item)
             break
+        except UpstreamMissing as exc:
+            # 这本书**不会因为等一会儿就回来**（已被移入回收站 / 目录被搬走）。
+            # 挪到队尾等于让 `_drain` 每次事件都对它重试一遍，而队列会一直显示
+            # 一本已经不存在的书 ⇒ 「一份会说谎的队列比没有队列更坏」。
+            # ⇒ 出队丢弃；本批有槽就如实 rejected，旧项留一条结构化观测。
+            if item.batch_id == reject_batch:
+                rejected.append(AgentRejected(
+                    sid=item.sid,
+                    reason=str(exc).strip() or 'UpstreamMissing：这本书不在盘上'))
+            else:
+                _observe_pending_dropped(item.base, item.sid, str(exc))
+            continue
         except Exception as exc:                # noqa: BLE001 —— 逐本显式归类
             if item.batch_id == reject_batch:
                 reason = str(exc).strip() or f'{type(exc).__name__}：agent 启动失败'
@@ -485,6 +497,45 @@ def _drain_locked(*, registry: JobRegistry,
         if item.batch_id == reject_batch:
             started.append(record)
     return _DrainResult(started=started, rejected=rejected)
+
+
+#: 出队丢弃的审计账。队列本身**只在内存**（陈旧队列会说谎），但「某本书从队列里
+#: 消失了」这件事必须有一个答得出来的地方——否则界面上它就只是不见了。
+#: 追加式、只写 `_service/`（`R-11.3`），没有清理策略也不会说谎。
+QUEUE_DROPS_FILENAME = 'agent_queue_drops.jsonl'
+
+
+def queue_drops_path(base: str | os.PathLike[str]) -> Path:
+    return service_dir(base) / QUEUE_DROPS_FILENAME
+
+
+def _observe_pending_dropped(base: str | os.PathLike[str], sid: str,
+                             why: str) -> None:
+    """一本排队中的书被**出队丢弃**时留一行；界面上它会直接从队列消失。"""
+    append_line(queue_drops_path(base), json.dumps(
+        {'ts': int(time.time()), 'sid': sid, 'why': why}, ensure_ascii=False))
+
+
+def drop_pending(base: str | os.PathLike[str], sid: str) -> int:
+    """把这本书从待跑队列里摘掉，返回摘掉几条。**回收站在用的那一半。**
+
+    ⚠ 它必须由**仍持有该书作业锁的那一方**调用（`trash.run` 就在锁里调）。
+    否则「摘队列」与「下一次 drain」之间还有缝：刚摘完，另一个 worker 结束触发
+    `_drain`，而这本书又被别处 `enqueue` 回来了。持锁调用时 `start` 那道
+    `conflicting_holder` 会挡住这中间的任何一次启动，缝就闭合了。
+    ⚠ 取 `_DRAIN_LOCK` 而不只是 `_PENDING_LOCK`：drain 是「pop 出来 → 起进程」
+    两步，只锁列表会让一条刚被 pop、还没启动的项从摘除里漏过去。
+    """
+    base_abs = os.path.abspath(os.fspath(base))
+    with _DRAIN_LOCK, _PENDING_LOCK:
+        keep = [item for item in _PENDING
+                if not (item.base == base_abs and item.sid == sid)]
+        dropped = len(_PENDING) - len(keep)
+        _PENDING[:] = keep
+    if dropped:
+        _observe_pending_dropped(
+            base_abs, sid, f'项目已移入回收站，摘掉 {dropped} 条排队项')
+    return dropped
 
 
 def _drain(*, registry: JobRegistry = REGISTRY) -> _DrainResult:
@@ -522,6 +573,11 @@ def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
                 continue
             if registry.holder(lock_key(sid)) is not None:
                 rejected.append(AgentRejected(sid=sid, reason='这本书已有 agent 在跑'))
+                continue
+            if paths.find_novel_dir(base_abs, sid) is None:
+                rejected.append(AgentRejected(
+                    sid=sid, reason=f'{base_abs} 下没有 id={sid} 的书目录——'
+                                    '这本书已经不在语料库里（多半在回收站）'))
                 continue
             with _PENDING_LOCK:
                 _PENDING.append(_Pending(base_abs, sid, authorized,
@@ -581,6 +637,16 @@ def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
         if holder is not None:
             raise JobConflict(
                 f'这本书已有 API 维护/节点作业在跑（{holder}）——等它结束再拉 agent')
+        # ⚠ 「书还在不在」必须**占锁之后**再查，而且要单独查一次。
+        #   上面那把 `conflicting_holder` 只覆盖「删除**正在进行**」（`trash.run` 持
+        #   同一把书级键）；删除**已经完成**时那把锁早还回去了，而队列里可能还压着
+        #   这本书的旧 pending 项——那正是实测复现的「书删完了 agent 才起来」。
+        #   ⇒ 这一格是永久性拒绝（`UpstreamMissing`），`_drain_locked` 据此把它
+        #   从队列里**丢掉**而不是挪到队尾无限重试。
+        if paths.find_novel_dir(base, sid) is None:
+            raise UpstreamMissing(
+                f'{base} 下已经没有 id={sid} 的书目录（多半是刚被移入回收站）——'
+                'agent 代跑不对一本不存在的书启动')
         running = [r for r in jobs.records(base)
                    if r.state == 'running' and r.start.sid == sid]
         if running:
