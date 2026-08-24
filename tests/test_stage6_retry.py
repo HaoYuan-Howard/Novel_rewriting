@@ -241,7 +241,7 @@ def test_failed_retry_keeps_paid_initial_candidate_and_rationale(
         retry = artifact.provenance.candidate_retries[0]
         # `invalid` 是这里唯一被**载体闸**拒的一种（`require`：缺 rationale）。
         # 除截断外的每一种拒绝都走有界同档重采（`_worth_resampling`）
-        # ⇒ 它最多烧三采；上限没破（`HOOK_RETRY_RUNGS` 单档 × `MAX_SAMPLES_PER_RUNG`，
+        # ⇒ 它最多烧两采；上限没破（`HOOK_RETRY_RUNGS` 单档 × `MAX_SAMPLES_PER_RUNG`，
         # `tools/current_corpus_paid_preview.py` 早按这个口径算）。
         # 其余四种要么过了载体闸、被 stage6 自己的业务判据拒（wrong/duplicate/same_hard），
         # 要么根本没到内容闸（transport）。

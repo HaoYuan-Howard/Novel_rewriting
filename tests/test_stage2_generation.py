@@ -107,7 +107,7 @@ def test_one_llmfailed_chapter_does_not_abort_other_blueprint_chapters():
             ordinal = kwargs['progress'].chapter
             calls.append(ordinal)
             if ordinal == 4:
-                raise LlmFailed('同配置三采与模型兜底均被内容闸拒绝')
+                raise LlmFailed('同配置两采与模型兜底均被内容闸拒绝')
             return Response()
 
     ctx = SimpleNamespace(

@@ -21,8 +21,7 @@ client.py —— `ask_text` / `ask_json`。**重采与 Flash→Pro 兜底只有�
      ⇒ 2026-08-22 起它在账上**有自己的名字**（闸名 `answer_lost`，见 `REJECT_GATES`），
        且整份响应会落一份留证（`novel/paths.py::answer_lost_path`）。在此之前它与
        ②「JSON 被截断」共用 `parse` 一格，而这两类的处置正好相反。
-     ⇒ 2026-08-20 起这一档先做有上限的同档重采；2026-08-25 起上限为
-       **两次重采**（`MAX_SAMPLES_PER_RUNG`）；
+     ⇒ 2026-08-20 起这一档先**同档重采一次**（`MAX_SAMPLES_PER_RUNG`）；
        2026-08-24 起同档仍失败改由 Pro **保持同配置**兜底，不再自动降 effort；
      2026-08-22 起**除截断外的每一种拒绝**都走这条重采（见 `_worth_resampling`）。
      实测（flash 迁移，三本书）：`stage4.plan` 的 `high` 档空正文而 `reasoning_chars`
@@ -170,7 +169,7 @@ JSON_OBJECT_MODE: Final = True
 SALVAGE_ANSWER_FROM_REASONING: Final = True
 
 #: 除截断外的内容/契约拒绝发生时，同一模型配置最多采几个样本。
-#: **3 = 首发 + 两次同档重采。**
+#: **2 = 首发 + 一次同档重采。**
 #:
 #: ⚠ 这是「重采」不是「重试」：重试扛**网络**（`_send_attempts`，429/5xx/超时），
 #: 重采换的是**同参数下的新样本**，兜底换的是**模型能力**——三条循环各管各的，不许合并
@@ -180,7 +179,7 @@ SALVAGE_ANSWER_FROM_REASONING: Final = True
 #: ⚠ 被内容闸拒绝的响应会 `evict`，真发循环也显式 `use_cache=False`，所以本地响应缓存
 #: **不会**替后续重采买单。供应商输入前缀缓存可能命中，但不是本仓可保证的契约；
 #: 每一采都必须按一次真实 wire 与最多一份完整输出计入预览上限。
-MAX_SAMPLES_PER_RUNG: Final = 3
+MAX_SAMPLES_PER_RUNG: Final = 2
 
 #: **服务端资源中断**。DeepSeek 在这一格里说的是「这次没做完，可以安全重试」。
 #:
@@ -207,7 +206,7 @@ def _worth_resampling(resp: ChatResponse) -> bool:
 
     规则只有一条例外：**截断（`finish_reason='length'`）不重采。**
     那是模块 docstring ②——同参数重采大概率把推理再写满一遍；现由同配置的 Pro
-    兜底，不再自动降低 effort。其余一律最多重采两次：①的答案流丢失、
+    兜底，不再自动降低 effort。其余一律重采一次：①的答案流丢失、
     ③的空壳，以及 `parse` / `schema` / `validator` / `empty_text` 这些形状拒绝。
 
     ⚠⚠ **这里把 ① 已经确立的结论推广到了 ③ 与内容闸拒，别按旧字面撤回。**
@@ -226,8 +225,8 @@ def _worth_resampling(resp: ChatResponse) -> bool:
 
     盘上 22 次实付合计 completion 378 368，其中 **180 334（47.7%）** 花在没被采纳的档位上。
 
-    2026-08-25 用户把 `MAX_SAMPLES_PER_RUNG` 从 2 调到 3：当前每个模型配置的
-    wire 硬上限是三采，`tools/current_corpus_paid_preview.py` 从这个生产常量派生上限。
+    ⚠ `MAX_SAMPLES_PER_RUNG=2` ⇒ 每档 wire 硬上限是两采，
+    `tools/current_corpus_paid_preview.py` 从这个生产常量派生上限。
     """
     return resp.finish_reason != 'length'
 
@@ -588,7 +587,7 @@ class LlmClient:
         for model_index, model in enumerate(active_models):
             transport_failure: TransportError | LlmFailed | None = None
             for i, (effort, thinking) in enumerate(active_rungs):
-                # 被拒后最多同档重采两次；截断除外。默认只有一个模型行为档位，
+                # 被拒后先同档重采一次；截断除外。默认只有一个模型行为档位，
                 # 因而该档耗尽后进入 Pro 兜底，不会自动降低 effort。
                 for sample in range(1, MAX_SAMPLES_PER_RUNG + 1):
                     try:
@@ -841,7 +840,7 @@ class LlmClient:
         for model_index, model in enumerate(active_models):
             transport_failure: TransportError | LlmFailed | None = None
             for i, (effort, thinking) in enumerate(active_rungs):
-                # 被拒后最多同档重采两次；截断除外。默认只有一个模型行为档位，
+                # 被拒后先同档重采一次；截断除外。默认只有一个模型行为档位，
                 # 因而该档耗尽后进入 Pro 兜底，不会自动降低 effort。
                 deferred_salvage: tuple[M, ChatResponse, str, str, int] | None = None
 

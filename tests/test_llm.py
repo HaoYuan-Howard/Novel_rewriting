@@ -127,7 +127,7 @@ def test_ask_json_can_refresh_a_valid_cached_response():
 def test_default_behavior_is_one_rung_and_flash_has_exactly_one_pro_fallback():
     """默认不再自动降 effort / 关 thinking；模型链只允许 Flash → Pro。"""
     assert DEFAULT_RUNGS == (('high', True),)
-    assert MAX_SAMPLES_PER_RUNG == 3, '内容恢复上限必须是首发 + 两次同档重采'
+    assert MAX_SAMPLES_PER_RUNG == 2, '内容恢复上限必须是首发 + 一次同档重采'
     assert models_for(FLASH_MODEL) == (FLASH_MODEL, PRO_FALLBACK_MODEL)
     assert models_for(PRO_FALLBACK_MODEL) == (PRO_FALLBACK_MODEL,)
     assert models_for('experiment-model') == ('experiment-model',)
@@ -267,14 +267,14 @@ def test_flash_and_pro_are_both_budget_checked_before_any_wire_attempt():
 
 @pytest.mark.parametrize('rung', range(len(LADDER)))
 def test_the_default_rung_can_recover_an_empty_answer(rung):
-    """默认档前两采为空时，同档第三采仍可拿回正文，不触发模型兜底。
+    """默认档首发为空时，同档第二采仍可拿回正文，不触发模型兜底。
 
     ⚠ 空正文那个形态是实测的：`finish_reason='stop'`、`reasoning` 很长、`content` 是空串
     ——**不是截断**，是推理流与答案流的边界丢了。照着「截断」去修（加 max_tokens）救不了它。
     ⇒ 保留同档重采，取消的是后续自动 effort 降级。
     """
     empties = (MAX_SAMPLES_PER_RUNG * rung
-               + MAX_SAMPLES_PER_RUNG - 1)  # 本档前两采为空，最后一采成功
+               + MAX_SAMPLES_PER_RUNG - 1)  # 本档首发为空，最后一采成功
 
     def responder(_req: ChatRequest, i: int) -> ChatResponse:
         return _empty() if i < empties else OK_TEXT
@@ -291,7 +291,7 @@ def test_all_rungs_empty_raises_and_never_returns_an_empty_draft():
 
     ⚠ 一份空稿落下去，下游是**确定性代码**——它不会像写手那样将就着用，
     它会在几层之外炸，或者更坏：静默产出一份缺内容的东西。
-    ⚠ 每个配置三采（首发 + 两次重采）全空才判失败——重采不是无限重试，烧完就退。
+    ⚠ 每个配置两采（首发 + 一次重采）全空才判失败——重采不是无限重试，烧完就退。
     """
     t = FakeTransport.always(_empty())
     with pytest.raises(LlmFailed, match='拿不到正文'):
@@ -343,7 +343,7 @@ def test_efforts_the_server_remaps_to_high_are_refused_instead_of_silently_accep
 def test_thinking_off_exhaustion_still_raises_and_never_returns_an_empty_draft():
     """off 模式全空同样抛 `LlmFailed`——「绝不返回空稿」与思考开关无关。
 
-    单档也照走同档重采（首发 + 两次重采），重采完仍空才认输。
+    单档也照走同档重采（首发 + 一次重采），重采完仍空才认输。
     """
     t = FakeTransport.always(_empty())
     with pytest.raises(LlmFailed, match='拿不到正文'):
@@ -403,11 +403,11 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
 
 
 def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
-    """走完当前模型配置时**三采各出一声**，最后那一声标 `exhausted`。
+    """走完当前模型配置时**两采各出一声**，最后那一声标 `exhausted`。
 
     ⚠ `exhausted` 与 `LlmFailed` 不是一回事：缓存那一趟走完也会标它，
     而那一趟走完之后还有真跑那一趟。它说的是「这一趟的阶梯到头了」。
-    ⚠ 当前每档前两声 `resample=True`，表示后面还有一次**同档重采**：这些事件的
+    ⚠ 当前每档第一声 `resample=True`，表示后面还有一次**同档重采**：该事件的
     `next_effort`/`next_thinking` 必须指回**同一档**——否则「重采」会被
     统计口径读成「降档」，而降档统计正是这条事件存在的目的。
     ⚠ 2026-08-22 起空正文那一格叫 `answer_lost`（`_empty()` 正是**非截断**的那种
@@ -430,7 +430,7 @@ def test_every_rung_rejection_is_observed_and_only_the_last_one_is_exhausted():
         [True] * (MAX_SAMPLES_PER_RUNG - 1) + [False]) * len(LADDER)
     assert [e['exhausted'] for e in rejected] == [False] * (len(walked) - 1) + [True]
     assert rejected[-1]['next_effort'] is None and rejected[-1]['next_thinking'] is None
-    # 前两声仍指回同模型同档；Pro 主模型第三声才耗尽，不存在低档。
+    # 第一声仍指回同模型同档；Pro 主模型第二声才耗尽，不存在低档。
     assert all(
         (event['next_model'], event['next_effort'], event['next_thinking'])
         == (PRO_FALLBACK_MODEL, *LADDER[0])
@@ -471,7 +471,7 @@ def test_an_empty_body_is_answer_lost_only_when_it_is_not_a_truncation(
 
         assert {e['gate'] for e in _observed(events)} == {gate}
         assert gate in REJECT_GATES
-        # 截断不重采（每档一次），非截断每档最多三采。
+        # 截断不重采（每档一次），非截断每档最多两采。
         per_rung = 1 if finish == 'length' else MAX_SAMPLES_PER_RUNG
         assert t.rungs == [r for r in LADDER for _ in range(per_rung)]
 
@@ -703,7 +703,7 @@ def test_salvage_runs_the_full_contract_so_a_merely_parseable_reasoning_is_still
         with pytest.raises(LlmFailed):
             _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
-        # 走法逐字相同：每档按生产上限三采，闸名仍是 `answer_lost`。
+        # 走法逐字相同：每档按生产上限两采，闸名仍是 `answer_lost`。
         assert t.rungs == [r for r in LADDER for _ in range(MAX_SAMPLES_PER_RUNG)]
         assert {e['gate'] for e in _observed(events)} == {'answer_lost'}
 

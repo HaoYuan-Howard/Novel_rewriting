@@ -312,8 +312,8 @@ def _schema_targets(node: str) -> list[str]:
 def _logical_topology(node: str, chapters: int, rung_count: int,
                       model_count: int) -> dict[str, Any]:
     # ⚠ wire 上限按 `MAX_SAMPLES_PER_RUNG` 放大：答案流丢失（content 空 + stop）时
-    #   同一配置最多重采两次（`novel/llm/client.py`），随后 Flash 才切 Pro；每个模型
-    #   配置最坏烧三采。
+    #   同一配置先重采一次（`novel/llm/client.py`），随后 Flash 才切 Pro；每个模型
+    #   配置最坏烧两采。
     #   与档数一样，这个乘数从生产落点 import，不写死。
     base = 1
     conditional = 0

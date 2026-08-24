@@ -646,7 +646,7 @@ def test_one_semantically_failed_chapter_does_not_abort_the_rest(monkeypatch):
         def ask_json(self, *args, **kwargs):
             self.calls.append(kwargs)
             if len(self.calls) == 1:
-                raise LlmFailed('同配置三采与模型兜底均被拒绝')
+                raise LlmFailed('同配置两采与模型兜底均被拒绝')
             return write.ChapterResponse.model_validate({
                 'segments': [{'slot': 's01', 'text': '第二章完整结束。'}],
             })
