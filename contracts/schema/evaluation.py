@@ -104,6 +104,7 @@ class GlobalReviewItem(StrictModel):
         # knowledge_events 有时间与逐事件证据，生产面改用 `knowledge_event`。
         'world_rule_version', 'secret', 'reveal', 'known_by', 'knowledge_event',
         'name_distinctiveness', 'address_context', 'world_rule_kind',
+        'character_set_complete', 'relation_set_complete',
         'world_rule_set_complete', 'secret_set_complete',
         # 2026-08-23 补齐：此前评测面只有上面九类，于是 `role` 泄结局、`setting`
         # 泄底、relations 这条第二剧透通道、以及两道下发闸门的前件 `setup_chapters`

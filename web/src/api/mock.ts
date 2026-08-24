@@ -328,6 +328,8 @@ function saveDoc(doc: ApprovalDoc): ApprovalDoc {
 
 const MOCK_SHA = {
   source: 'a'.repeat(64),
+  characters: 'd'.repeat(64),
+  relations: 'e'.repeat(64),
   rules: 'b'.repeat(64),
   secrets: 'c'.repeat(64),
 }
@@ -346,6 +348,20 @@ function freshGlobalReview(): GlobalReviewResponse {
     current: true,
     approved: true,
     items: [
+      {
+        item_id: 'character_set_complete:entities.characters:' + MOCK_SHA.characters.slice(0, 12),
+        kind: 'character_set_complete',
+        subject_path: 'entities.characters',
+        subject_sha256: MOCK_SHA.characters,
+        ...decided,
+      },
+      {
+        item_id: 'relation_set_complete:entities.relations:' + MOCK_SHA.relations.slice(0, 12),
+        kind: 'relation_set_complete',
+        subject_path: 'entities.relations',
+        subject_sha256: MOCK_SHA.relations,
+        ...decided,
+      },
       {
         item_id: 'world_rule_set_complete:canon.world_rules:' + MOCK_SHA.rules.slice(0, 12),
         kind: 'world_rule_set_complete',

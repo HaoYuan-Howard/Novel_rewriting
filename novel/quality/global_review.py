@@ -83,6 +83,15 @@ def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewIte
 
     entities = global_grounding.get('entities') or {}
     projected_entities = projected.get('entities') or {}
+    # 逐条复核只能判「已经抽出来的这一条对不对」，不能发现整个人物或关系根本没被
+    # 抽出来。两项集合裁决故意绑定剥掉 evidence 的完整集合：改坐标不重开，增删或
+    # 改写事实则必须重新通读来源确认没有漏项。
+    projected_characters = projected_entities.get('characters') or {}
+    projected_relations = projected_entities.get('relations') or []
+    rows.append(_item(
+        'character_set_complete', 'entities.characters', projected_characters))
+    rows.append(_item(
+        'relation_set_complete', 'entities.relations', projected_relations))
     for cid, character in sorted((entities.get('characters') or {}).items()):
         rows.append(_item(
             'name_distinctiveness', f'entities.characters.{cid}.name_distinctiveness',
@@ -107,7 +116,6 @@ def enumerate_required(global_grounding: dict[str, Any]) -> list[GlobalReviewIte
     # 【世内生效时点】而不是【读者知情时点】，秘密类关系上两者系统性错位。
     # 下发侧那道补救闸门靠「`fact` 是否同时含两端人名」的启发式命中，
     # 判不准的那部分只能在这里由人兜住。
-    projected_relations = projected_entities.get('relations') or []
     for index, relation in enumerate(entities.get('relations') or []):
         rid = relation.get('relation_id') or str(index)
         path = f'entities.relations.{rid}'

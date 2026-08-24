@@ -91,9 +91,10 @@
 - **解读分组**——`arc.conflict_stages` 一项、`arc` 其余部分（climax / ending / arc_tracks）一项。
   这两格是本层自己声明的解读层，逐条拆开每条都判不出对错。
 
-外加两个集合级 subject：`canon.world_rules` 的 `world_rule_set_complete` 与 `canon.secrets` 的
-`secret_set_complete`。即使数组为空，这两项仍存在且初始为 `pending`；只有人工对照来源后才能
-裁为 `PASS｜FAIL｜UNVER`。因此「一行都没抽到」不能借空循环变成全绿。
+外加四个集合级 subject：`entities.characters` 的 `character_set_complete`、`entities.relations`
+的 `relation_set_complete`、`canon.world_rules` 的 `world_rule_set_complete` 与 `canon.secrets` 的
+`secret_set_complete`。即使集合为空，这四项仍存在且初始为 `pending`；只有人工对照来源后才能
+裁为 `PASS｜FAIL｜UNVER`。因此「一个人/一条关系/一条规则/一个秘密都没抽到」不能借空循环变成全绿。
 
 ⚠ **没被枚举出来的字段等于没人审。** 下一段说的「缺任一必审项就不能开 gate」守的是这份清单
 **自身**的完整性，不是「整份 grounding 都过了人眼」。2026-08-23 之前，`role` 的结局旁路

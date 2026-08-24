@@ -135,6 +135,8 @@ def test_global_review_enumerates_and_only_inherits_unchanged_subjects():
 
 def test_empty_stage2_collections_still_require_explicit_completeness_decisions():
     grounding = _global()
+    grounding['entities']['characters'] = {}
+    grounding['entities']['relations'] = []
     grounding['canon']['world_rules'] = []
     grounding['canon']['secrets'] = []
     review = build_review(grounding)
@@ -143,6 +145,8 @@ def test_empty_stage2_collections_still_require_explicit_completeness_decisions(
         if row.kind.endswith('_set_complete')
     ]
     assert collection_items == [
+        ('character_set_complete', 'entities.characters'),
+        ('relation_set_complete', 'entities.relations'),
         ('world_rule_set_complete', 'canon.world_rules'),
         ('secret_set_complete', 'canon.secrets'),
     ]
@@ -345,6 +349,10 @@ def test_free_fact_hash_uses_claim_evidence_pair_and_completeness_strips_evidenc
     })
 
     changed = copy.deepcopy(grounding)
+    changed['entities']['characters']['char_001']['role_evidence'] = \
+        _evidence('人物换证据', 2)
+    changed['entities']['relations'][0]['predicate_evidence'] = \
+        _evidence('关系换证据', 2)
     changed['canon']['world_rules'][0]['versions'][0]['desc_evidence'] = \
         _evidence('规则换证据', 2)
     changed['canon']['secrets'][0]['fact_evidence'] = _evidence('秘密换证据', 2)
@@ -430,20 +438,19 @@ def test_review_approval_recomputes_complete_current_subject_and_required_surfac
     forged = review.model_copy(update={'items': review.items[1:]})
     assert review_status(grounding, forged)[1:] == (False, False)
 
-    # An unaudited field edit changes the complete GlobalGrounding subject even
-    # when every individually enumerated item happens to be byte-identical.
-    # ⚠ 这里改的是 `address[].surface`：它没有独立复核项（有的是同一条 address 的
-    #   `context`）。**不能再用 `role`** —— 它自 `R-2.17` 起已是逐条复核主体，
-    #   拿它当「未被枚举的字段」会让这条用例悄悄测反：改了它，被枚举的项本身就变了。
+    # `address[].surface` 没有独立复核项（有的是同一条 address 的 `context`），
+    # 但人物集合完整性项必须覆盖这种变化，不能只靠整份 source hash 把它变成一条
+    # 无法从 workpack 里找到的隐形 pending。
     edited = _global()
     edited['entities']['characters']['char_001']['address'][0]['surface'] = '甲郎'
     assert review_status(edited, review)[1:] == (False, False)
 
-    # Refreshing from that edit may inherit only exact item identities and then
-    # binds those decisions to the new complete subject hash.
+    # Refreshing from that edit only reopens the changed collection item；其余精确身份继承。
     refreshed = build_review(edited, review)
-    assert all(item.state == 'PASS' for item in refreshed.items)
-    assert review_status(edited, refreshed)[1:] == (True, True)
+    reopened = [item for item in refreshed.items if item.state == 'pending']
+    assert [(item.kind, item.subject_path) for item in reopened] == [
+        ('character_set_complete', 'entities.characters')]
+    assert review_status(edited, refreshed)[1:] == (True, False)
 
 
 def test_global_review_rejects_stale_and_unaudited_decisions():

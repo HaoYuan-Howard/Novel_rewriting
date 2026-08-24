@@ -176,6 +176,7 @@ def _formal_materials(
 #: ⚠ 判成另一类会给出一句「命中只是缩小阅读范围」的提示，读的人容易误以为
 #: 「找不到命中 ⇒ 没问题」，而这几类恰恰是 0 命中最需要人真的去读的。
 _WHOLE_BOOK_KINDS = frozenset({
+    'character_set_complete', 'relation_set_complete',
     'world_rule_set_complete', 'secret_set_complete',
     'conflict_partition', 'arc_analysis',
 })
@@ -184,6 +185,7 @@ _WHOLE_BOOK_KINDS = frozenset({
 # 拼起来冒充集合完整性或阶段划分的证据。arc_analysis 例外：它自己的 trajectory
 # 有逐条证据，虽仍需整体阅读判断，workpack 应优先展示那些正式坐标。
 _NO_FORMAL_EVIDENCE_KINDS = frozenset({
+    'character_set_complete', 'relation_set_complete',
     'world_rule_set_complete', 'secret_set_complete', 'conflict_partition',
 })
 

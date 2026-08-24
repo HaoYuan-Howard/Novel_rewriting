@@ -517,6 +517,8 @@ export type GlobalReviewKind =
   | 'name_distinctiveness'
   | 'address_context'
   | 'world_rule_kind'
+  | 'character_set_complete'
+  | 'relation_set_complete'
   | 'world_rule_set_complete'
   | 'secret_set_complete'
   | 'role'
