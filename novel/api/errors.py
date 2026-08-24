@@ -22,6 +22,7 @@ errors.py —— 异常 → HTTP 状态码的**唯一落点**。纯函数，**�
 from __future__ import annotations
 
 from novel.errors import (
+    ApprovalFrozen,
     AccountingKeyUnregistered,
     ApprovalRequired,
     ArtifactUnreadable,
@@ -103,6 +104,9 @@ STATUS: dict[type[NovelError], int] = {
     JobConflict: 409,
     #: 删除是维护动作；目标忙、确认面变化或移动失败都不得半删后伪装成功。
     BookTrashFailed: 409,
+    #: 删除进行中，这本书的审批写入不落盘。与 `JobConflict` 同码同因：
+    #: 两个人同时点了「删除」与「批准」，是**流程**说这一步现在不该发生。
+    ApprovalFrozen: 409,
     #: agent 并发闸满了（`agent.MAX_CONCURRENT`）。**与 `JobConflict` 同码不同因**：
     #: 那条是「这本书现在不该开始」，这条是「同时烧的钱到上限了，换个时间来」。
     #: ⚠ 单本入口才会看到它；批量入口 `POST /api/agent/runs/batch` 把它接住改成排队。

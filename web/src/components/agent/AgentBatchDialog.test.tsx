@@ -25,12 +25,14 @@ describe('AgentBatchDialog', () => {
     )
 
     await waitFor(() => expect(api.getAgentQueue).toHaveBeenCalled())
-    expect(screen.getByText('仅诊断与恢复方案')).toBeVisible()
-    expect(screen.getByRole('button', { name: '批量生成诊断与恢复方案' })).toBeVisible()
+    expect(screen.getByText('未授权流水线付费节点')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: '批量启动诊断（仍产生 Claude 费用）' }),
+    ).toBeVisible()
 
     fireEvent.click(screen.getByRole('checkbox', { name: /允许这一批产生外部模型调用费用/ }))
 
-    expect(screen.getByText('已授权付费节点')).toBeVisible()
+    expect(screen.getByText('已授权流水线付费节点')).toBeVisible()
     expect(screen.getByRole('button', { name: '授权并开始跑这 2 本' })).toBeVisible()
   })
 })

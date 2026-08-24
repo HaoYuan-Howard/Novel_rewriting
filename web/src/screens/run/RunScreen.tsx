@@ -127,11 +127,41 @@ const DELIVERY_LABEL = {
   unknown: '交付未知',
 } as const
 
+/**
+ * 交付终验徽标 + **可展开的判定依据**。
+ *
+ * ⚠ `reason` 曾经只挂在 `title` 上。`title` 只在鼠标悬停时出现：触摸与键盘用户
+ * 一个字都读不到，而它是「为什么没交付、下一步做什么」的**唯一**出口
+ * （后端那句话里带着 counts、缺的是哪一格、阻塞待办的样本）。
+ * ⇒ 与 `UnverifiedHelp` 同一条呈现纪律：按钮可聚焦、`aria-expanded`、展开成正文。
+ */
 function DeliveryChip({ outcome }: { outcome: NonNullable<import('@/types/agent').AgentRunRecord['outcome']> }) {
   const ok = outcome.state === 'ready' || outcome.state === 'ready_with_disclosures'
+  const explanationId = useId()
+  const [open, setOpen] = useState(false)
   return (
-    <span title={outcome.reason}>
-      <GateChip ok={ok} label={'交付终验：' + DELIVERY_LABEL[outcome.state]} />
+    <span className="inline-flex flex-col items-start gap-4">
+      <button
+        type="button"
+        aria-label={'查看交付终验依据：' + DELIVERY_LABEL[outcome.state]}
+        aria-expanded={open}
+        aria-controls={explanationId}
+        title={outcome.reason}
+        onClick={() => setOpen((value) => !value)}
+        className="cursor-pointer border-none bg-transparent p-0 text-left"
+      >
+        <GateChip ok={ok} label={'交付终验：' + DELIVERY_LABEL[outcome.state]} />
+      </button>
+      {open ? (
+        <span
+          id={explanationId}
+          role="note"
+          data-testid="delivery-reason"
+          className="block max-w-[420px] rounded-block border border-line-btn bg-card px-10 py-8 text-tag leading-relaxed whitespace-pre-line text-ink-2"
+        >
+          {outcome.reason}
+        </span>
+      ) : null}
     </span>
   )
 }

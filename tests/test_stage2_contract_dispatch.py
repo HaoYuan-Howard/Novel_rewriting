@@ -732,6 +732,200 @@ def test_ir31_hard_preflight_blocks_before_the_paid_summary_batch(monkeypatch):
                for bp in formal.blueprints)
 
 
+def _land_ir31_invalid(book, by_ordinal):
+    """把一份 ch1 零 hinge 的 `.INVALID` 落到盘上（摘要批还没买过）。"""
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _t = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    def respond(req, _index):
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
+
+    ctx = _ctx(book, 'stage2.blueprint')
+    client, _transport = _client(ctx, respond)
+    from novel.errors import GateBlocked
+    with pytest.raises(GateBlocked):
+        extract.run_blueprint(ctx, client)
+    return ctx
+
+
+def test_the_repair_path_also_blocks_before_the_paid_summary_batch(monkeypatch):
+    """⭐ **修复路少了首轮那道摘要前闸。**
+
+    首轮已经「先拦再摘要」，而定向修复没有：一次注定 `GateBlocked` 的修复仍会先
+    为**整本书**买一次摘要批。任何 HARD 都不可能被摘要改好，这笔钱是纯白付。
+    """
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
+    book = Path(tempfile.mkdtemp()) / 'ir31修复摘要前闸_128'
+    book.mkdir(parents=True)
+    by_ordinal = _scaffolded_responses(closed=True)
+    broken_ordinal = min(by_ordinal)
+    for beat in by_ordinal[broken_ordinal]['beats']:
+        beat['hinges'] = []
+    _land_ir31_invalid(book, by_ordinal)
+
+    def repair_respond(req, _index):
+        assert '逐章事件清单' not in req.user, (
+            '修复后仍命中 HARD，却已经为全书摘要付过一次钱')
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        return _ok({'blueprints': [by_ordinal[ordinal]]})   # 修完还是零 hinge
+
+    repair_ctx = _ctx(book, 'stage2.blueprint')
+    repair_ctx.cache = extract.CachePolicy.refresh()
+    repair_client, repair_transport = _client(repair_ctx, repair_respond)
+    from novel.errors import GateBlocked
+    with pytest.raises(GateBlocked, match='摘要批之前'):
+        extract.run_blueprint(repair_ctx, repair_client,
+                              chapters=(broken_ordinal,))
+
+    assert len(repair_transport.calls) == 1, '目标章 1 调，摘要批一次都不该发'
+    invalid = ArtifactStore(repair_ctx).read(ChapterBlueprints, extract._INVALID)
+    assert set(invalid.provenance.prompts) == {'BLUEPRINT_SYS_V31'}, (
+        '问题稿的 prompts 里出现了 SUMMARY_BATCH_SYS —— '
+        '下一轮修复会据此以为摘要已经买过')
+
+
+def test_v31_repair_keeps_the_model_chosen_narration_identity(monkeypatch):
+    """⭐ **v3.1 的叙述身份是模型从关闭式候选集直选的权威值，不能反解覆盖。**
+
+    合并修复稿时按 `narrator_name` 再解析一遍，名字一歧义 `resolve_present_names`
+    就交空 ⇒ 一个**正确的 id 被覆盖成 `None`**，而这一格只进 metric、不阻断落盘。
+    这里把反解整个打成 `None` 来放大它：权威值必须原样活到产物里。
+    """
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v3.1')
+    book = Path(tempfile.mkdtemp()) / 'ir31叙述身份_129'
+    book.mkdir(parents=True)
+    by_ordinal = _scaffolded_responses(closed=True)
+    broken_ordinal = min(by_ordinal)
+    for beat in by_ordinal[broken_ordinal]['beats']:
+        beat['hinges'] = []
+    _land_ir31_invalid(book, by_ordinal)
+
+    repaired_by = _scaffolded_responses(closed=True)
+    expected = {
+        ordinal: [(n.get('narrator_char_id'), n.get('focalizer_char_id'))
+                  for n in blueprint.get('narration') or []]
+        for ordinal, blueprint in repaired_by.items()
+    }
+    assert any(any(pair != (None, None) for pair in pairs)
+               for pairs in expected.values()), \
+        '这批响应根本没给叙述身份，用例证明不了任何事'
+
+    real_resolve = extract.resolve_character_refs
+
+    def resolve_that_gives_up_on_names(blueprints, main, characters):
+        """模拟「名字有歧义 ⇒ 反解交空」——正确 id 会被它抹成 None。"""
+        stats = real_resolve(blueprints, main, characters)
+        for blueprint in blueprints:
+            for narration in blueprint.get('narration') or []:
+                narration['narrator_char_id'] = None
+                narration['focalizer_char_id'] = None
+        return stats
+
+    monkeypatch.setattr(
+        extract, 'resolve_character_refs', resolve_that_gives_up_on_names)
+
+    def repair_respond(req, _index):
+        if '逐章事件清单' in req.user:
+            return _ok({'chapters': [
+                {'chapter_ordinal': ordinal, 'summary': _summary_for(ordinal)}
+                for ordinal in sorted(repaired_by)]})
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        return _ok({'blueprints': [repaired_by[ordinal]]})
+
+    repair_ctx = _ctx(book, 'stage2.blueprint')
+    repair_ctx.cache = extract.CachePolicy.refresh()
+    repair_client, _transport = _client(repair_ctx, repair_respond)
+    assert extract.run_blueprint(
+        repair_ctx, repair_client, chapters=(broken_ordinal,)).passed
+
+    formal = ArtifactStore(repair_ctx).read(
+        ChapterBlueprints, extract.BLUEPRINT_REL)
+    got = {
+        bp.chapter_ordinal: [(n.narrator_char_id, n.focalizer_char_id)
+                             for n in bp.narration]
+        for bp in formal.blueprints
+    }
+    assert got[broken_ordinal] == expected[broken_ordinal], (
+        f'目标章的权威叙述身份被反解覆盖了：{got[broken_ordinal]}')
+
+
+def test_a_v2_baseline_beat_that_cannot_be_located_is_resegmented(monkeypatch):
+    """⭐ **`end_para` 可以是 `None`，而修复路原来直接 `int(None)`。**
+
+    `canonical_ir_projection` 对定位不到的 span（`span_unlocatable`）如实交 `None`。
+    那一行崩在**任何 LLM 调用之前**，人拿到的是 exit 70 而不是一条判定。
+    正确处置是重切这一章的边界：连区间都对不上原文，冻结它没有意义。
+    """
+    monkeypatch.setenv(_ENV_KEY, 'extraction-ir-v2')
+    book = Path(tempfile.mkdtemp()) / 'v2基线定位不到_130'
+    book.mkdir(parents=True)
+    global_ctx = _ctx(book, 'stage2.global')
+    ArtifactStore(global_ctx).write(
+        extract.MAIN_TEXT, MainText.model_validate(main_text()))
+    global_client, _t = _client(
+        global_ctx, lambda _req, _index: _ok(_response_global()))
+    extract.run_global(global_ctx, global_client)
+
+    by_ordinal = _ir2_responses()
+
+    def respond(req, _index):
+        if '逐章事件清单' in req.user:
+            # 摘要批的目标章集**由请求决定**：修复路只为重生成的那几章补摘要。
+            wanted = sorted({int(value) for value in re.findall(
+                r'"chapter_ordinal":(\d+)', req.user)})
+            return _ok({'chapters': [
+                {'chapter_ordinal': ordinal, 'summary': _summary_for(ordinal)}
+                for ordinal in wanted]})
+        ordinal = int(re.findall(r'阅读序第(\d+)章', req.user)[-1])
+        if '第一张表 `micro_events`' in req.system:
+            boundary_beats = [
+                {'end_para': beat['end_para'], 'event': beat['event']}
+                for beat in by_ordinal[ordinal]['beats']]
+            return _ok({'blueprints': [{
+                'chapter_ordinal': ordinal,
+                'micro_events': boundary_beats,
+                'beats': boundary_beats,
+            }]})
+        return _ok({'blueprints': [by_ordinal[ordinal]]})
+
+    ctx = _ctx(book, 'stage2.blueprint')
+    client, _transport = _client(ctx, respond)
+    assert extract.run_blueprint(ctx, client).passed
+
+    # 把 ch1 第一拍的 span 抹掉：投影出来的 `end_para` 就是 None。
+    store = ArtifactStore(ctx)
+    _previous, raw = store.read_own(ChapterBlueprints, extract.BLUEPRINT_REL)
+    broken = copy.deepcopy(raw)
+    broken['blueprints'][0]['beats'][0]['span'] = None
+    store.write_invalid(
+        extract.BLUEPRINT_REL,
+        ChapterBlueprints.model_validate(broken), gates_skipped=[])
+
+    from novel.stages.stage2.compile_v2 import canonical_ir_projection_refs
+    texts = {s['chapter_ordinal']: s['text'] for s in main_text()}
+    projected = canonical_ir_projection_refs(
+        broken['blueprints'][0], texts[broken['blueprints'][0]['chapter_ordinal']])
+    assert projected['beats'][0]['end_para'] is None, (
+        '这份基线的 `end_para` 不是 None，用例没有触到那一行')
+
+    repair_ctx = _ctx(book, 'stage2.blueprint')
+    repair_ctx.cache = extract.CachePolicy.refresh()
+    repair_client, repair_transport = _client(repair_ctx, respond)
+    report = extract.run_blueprint(repair_ctx, repair_client, chapters=(1,))
+
+    assert report.passed
+    boundary_system = with_json_shape(
+        prompts.BOUNDARY_SYS_V2, prompts.BOUNDARY_HINT_V2)
+    assert any(call.system == boundary_system
+               for call in repair_transport.calls), \
+        '基线定位不到，却没有为这一章重发边界相'
+
+
 def test_an_ir11_summary_batch_that_misses_a_chapter_is_rejected_by_the_gate(
         monkeypatch):
     """validator 硬校验「目标章集恰好覆盖」——少一章必须被闸拒，不许静默放行。"""

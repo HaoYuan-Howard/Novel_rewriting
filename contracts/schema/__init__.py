@@ -169,7 +169,28 @@ from contracts.schema.stage7 import (
 )
 
 class ArtifactVersionError(ValueError):
-    """一份产物不是当前注册版本。错误恒带文件与版本。"""
+    """一份产物不是当前注册版本。错误恒带文件与版本。
+
+    ⚠ **六个抛出点不是同一件事**，而消费方分得出它们才敢做不同处置：
+    「盘上是 v2、当前是 v3」（旧产物，producer 重建即可）与「非法 marker」
+    「envelope 形状坏了」「版本比当前还高」是**完全不同的失败**。
+    ⇒ 版本不匹配那一处填 `found` / `expected`，其余保持 `None`。
+    消费方只许按 `is_older_than_current` 放宽，**不许按类型放宽**——
+    宽捕获整族会让一份 `_schema_version: 999` 的坏产物被当成旧 v2 静默跳过。
+    """
+
+    def __init__(self, message: str, *, rel: str | None = None,
+                 found: int | None = None, expected: int | None = None) -> None:
+        super().__init__(message)
+        self.rel = rel
+        self.found = found
+        self.expected = expected
+
+    @property
+    def is_older_than_current(self) -> bool:
+        """盘上那份**确实是一个更早的注册版本**（不是坏信封、不是未来版本）。"""
+        return (self.found is not None and self.expected is not None
+                and self.found < self.expected)
 
 
 @dataclass(frozen=True)
@@ -360,7 +381,8 @@ def decode_artifact(rel: str, data: Any) -> DecodedArtifact:
         raise ArtifactVersionError(
             f'{rel}: schema v{version} 不是当前 v{spec.current_version}；'
             '本仓不迁移旧产物，请从 producer 重新生成'
-            '（**不要手补字段冒充当前产地**）')
+            '（**不要手补字段冒充当前产地**）',
+            rel=rel, found=version, expected=spec.current_version)
     return DecodedArtifact(payload, version)
 
 

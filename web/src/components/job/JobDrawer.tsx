@@ -11,6 +11,10 @@ import { cx } from '@/lib/cx'
  * 底部常驻作业面板：左侧是全部作业，右侧是选中作业的 stdout/stderr。
  * 普通作业日志没有第二个消费者；这里若只留状态，failed 就失去唯一恢复依据。
  */
+//: 距底多少像素之内仍算「停在底部」。行高级别的容差——浏览器的小数像素、
+//: 等宽字体的行高取整都会让严格相等永远不成立，于是自动跟随一次都不发生。
+const AUTOSCROLL_SLACK = 24
+
 export function JobDrawer() {
   const sid = useSid()
   const { drawerOpen, toggleDrawer } = useChrome()
@@ -28,9 +32,25 @@ export function JobDrawer() {
   const wasOpenRef = useRef(drawerOpen)
   const lineCount = log.data?.lines.length ?? 0
 
+  // ⚠ **只有已经停在底部时才跟随。** 原来每追加一行都无条件 `scrollTop =
+  // scrollHeight`：运行期间日志每秒都在长，人往上翻一眼就被拽回底部，
+  // 而 failed 作业的恢复依据恰恰在**前面**那些行里（这个抽屉是它唯一的出口）。
+  const stickToBottomRef = useRef(true)
+  const onLogScroll = () => {
+    const element = logRef.current
+    if (!element) return
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+    stickToBottomRef.current = distance <= AUTOSCROLL_SLACK
+  }
+
+  // 换一条作业 / 重新打开抽屉 ⇒ 回到「跟随」，那是新内容的合理起点。
+  useEffect(() => {
+    stickToBottomRef.current = true
+  }, [drawerOpen, selected?.id])
+
   useEffect(() => {
     const element = logRef.current
-    if (element) element.scrollTop = element.scrollHeight
+    if (element && stickToBottomRef.current) element.scrollTop = element.scrollHeight
   }, [drawerOpen, lineCount, selected?.id])
 
   useEffect(() => {
@@ -128,6 +148,7 @@ export function JobDrawer() {
                     </div>
                     <div
                       ref={logRef}
+                      onScroll={onLogScroll}
                       aria-label={selected.label + ' 作业日志'}
                       className="min-h-0 flex-1 overflow-auto bg-sunken-2 px-18 py-10 font-mono text-mini leading-[1.8] text-ink-2"
                     >

@@ -502,6 +502,50 @@ def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails()
     assert rejected['next_effort'] is None and rejected['exhausted'] is False
 
 
+def test_a_transport_failure_on_the_preferred_resample_does_not_discard_the_salvage():
+    """⭐ **手里已有一份过完整契约的响应，不能因为下一次没打通就把它扔掉。**
+
+    这一档的后备只在「再争取一次正常 content」时存在；而争取的那一次**死在传输层**
+    （连接故障 / 资源中断退避耗尽）与「拿到了一份更好的」是两件完全不同的事。
+    原来异常直接冒出 `ask_json`，后备随栈消失 ⇒ 重跑要**重新付一次**同样的钱，
+    而那份合格响应连缓存都进不去（`ResponseCache.put` 拒写空正文）。
+    """
+    from novel.llm.transport import TransportError
+
+    def responder(_req, index):
+        if index == 0:
+            return _lost(_SALVAGEABLE)
+        raise TransportError('connection reset', retryable=False, kind='connection')
+
+    ctx = _ctx()
+    t = FakeTransport(responder)
+
+    got = _client(t, ctx=ctx).ask_json(
+        'sys', 'usr', model_cls=Resp, purpose='p',
+        prefer_content_over_reasoning_salvage=True)
+
+    assert got.voice == {'a': 1}, '合格后备被一次连接故障扔掉了'
+    gates = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
+    assert ('accepted', None, True) in [
+        (g['decision'], g['gate'], g['salvaged']) for g in gates]
+    lost, = [e for e in ctx.ledger.audit_events if e['kind'] == 'answer_lost']
+    assert lost['salvaged'] is True
+
+
+def test_a_transport_failure_without_any_salvage_still_propagates():
+    """没有后备时传输故障必须原样抛出——不许被这条新路悄悄吞掉。"""
+    from novel.llm.transport import TransportError
+
+    def responder(_req, _index):
+        raise TransportError('connection reset', retryable=False, kind='connection')
+
+    t = FakeTransport(responder)
+    with pytest.raises(TransportError):
+        _client(t, ctx=_ctx()).ask_json(
+            'sys', 'usr', model_cls=Resp, purpose='p',
+            prefer_content_over_reasoning_salvage=True)
+
+
 def test_salvage_runs_the_full_contract_so_a_merely_parseable_reasoning_is_still_rejected():
     """⭐ 捞的是**同一套四道闸**，不是「解析得动就用」。
 

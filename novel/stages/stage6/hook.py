@@ -372,6 +372,7 @@ def run_recheck(ctx: RunContext) -> tuple[Hook, CheckReport]:
                                 findings=_labelled(label, fs),
                                 resolution=art.approved.resolution)
 
+    _refuse_duplicate_candidates(cands, by='--recheck')
     new = art.model_copy(update={
         'candidates': cands, 'approved': approved, 'judged': up.judged,
         'provenance': ctx.rewrite_provenance(art.provenance, by='--recheck'),
@@ -454,6 +455,27 @@ CANDIDATE_RETRY_RUNGS = (('low', False),)
 
 def _hard_candidate_findings(findings: list[Finding]) -> list[Finding]:
     return [item for item in findings if _sev_of(item.rule) == 'hard']
+
+
+def _refuse_duplicate_candidates(candidates: list[Candidate], *, by: str) -> None:
+    """写回正式产物之前拦下重复候选。**四条写盘路共用这一个拒因。**
+
+    ⚠⚠ 这道闸原来只装在 `run_hook`（生成）与 `run_revalidate`（提升）上，
+    而 `--recheck` 与 `--apply-edit --candidate` 同样 `store.write_round(REL, ...)`：
+      · `--apply-edit --candidate slot2 --text <与 slot1 同字>` 直接写成正式产物；
+      · `--recheck` 重跑归一，两条候选可能在归一后**坍缩成同文**。
+    两条都能把「位置身份」与「语义结论」折叠掉——`slot` 是候选的身份
+    （`payoff_preview` ×1 + `scene_punchline` ×2 是按**位置**记的配方），
+    两个 slot 同字之后，判官对哪一条给的结论就再也分不开了。
+    ⇒ 0 成本路一律拒绝写盘，恢复路是 `--apply-edit --candidate <slot>` 改一条文本。
+    """
+    duplicate_slots = _duplicate_candidate_slots(candidates)
+    if not duplicate_slots:
+        return
+    raise TerminalState(
+        f'{by} 会让候选在归一后出现重复槽位 {duplicate_slots}；正式产物没有被覆盖。'
+        f'候选的身份是**位置**，两个 slot 同字之后判官结论就分不开了。'
+        f'→ 用 `stage6.hook --apply-edit --candidate <slot>` 改掉其中至少一条文本')
 
 
 def _duplicate_candidate_slots(candidates: list[Candidate]) -> list[list[str]]:
@@ -708,6 +730,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
                            findings=_labelled(label, fs))
                  if slot_of(position) == edit.candidate else c
                  for position, c in enumerate(art.candidates, 1)]
+        _refuse_duplicate_candidates(cands, by='--apply-edit')
         new = art.model_copy(update={
             'candidates': cands,
             'provenance': ctx.rewrite_provenance(art.provenance, by='--apply-edit')})
