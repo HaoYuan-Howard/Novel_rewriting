@@ -96,6 +96,7 @@ def test_synthetic_check_only_runs_in_the_default_suite(tmp_path):
         address_by_fallback=0,
         address_surface_rewrites=[], address_from_chapter_raised=[],
         canonical_distinguishers_stripped=[], setup_chapters_pruned=[],
+        evidence_locator_rewrites=[], evidence_locator_failures=[],
     ).model_dump(mode='json')
     grounding = GlobalGrounding.model_validate(grounding_payload)
 

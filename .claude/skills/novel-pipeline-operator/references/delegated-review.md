@@ -197,9 +197,12 @@ freshness。确为同输入非确定性时采信更严格的一轮，不用后�
 - 第一屏让用户看见交付状态、成书路径、真正需要审阅的风险和建议结论。
 - 每个 badge 都带命中数/分母、freshness 和活动产物标识。
 - 每个代批决定都包含证据、落选项和不可验证余额。
-- 最终成本只以 `<base>/_service/ledger.jsonl` 为权威源，按 sid 与 `outcome == "ok"`
-  过滤；`cached == true` 只计缓存次数，不重复累计其携带的原调用 token。不把产物
-  usage、终端日志或历史 report 叠加成第二份成本账。
+- 先用本次 preflight 的 `started_at` 与 `start_code_version` 运行
+  `scripts/sync_review_evidence.py`，由脚本同步质量表、退出序列、机器锚点和账本；不要手抄这些事实。
+- 最终成本只以 `<base>/_service/ledger.jsonl` 为权威源。本次表按 sid、
+  `outcome == "ok"` 与 `started_at` 过滤；同 SID 全历史另列累计审计，二者不相加。
+  `cached == true` 只计缓存次数，不重复累计其携带的原调用 token。不把产物 usage、
+  终端日志或历史 report 叠加成第二份成本账。
 - 不写金额，只写实付调用数、缓存命中、prompt/completion/reasoning token 与可证实耗时。
 - 所有未收口项都给出影响范围、当前状态和可复制的恢复命令。
 - 删除全部 `<...>` 占位符；不能取得的值写“未知 + 原因”，不留空白冒充完成。

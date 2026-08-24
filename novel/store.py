@@ -247,7 +247,8 @@ class ArtifactStore:
         self.ctx.record_judged(paths.check_rel_deep(rel), fp)
         return obj, fp, consumed
 
-    def _refuse_stale_upstream(self, rel: str) -> None:
+    def _refuse_stale_upstream(self, rel: str, *,
+                               replaced_input_keys: Iterable[str] = ()) -> None:
         """在生产节点拿到载体之前拒绝已知过期的上游。
 
         ``unknown`` 仍按既有兼容契约放行：它表示旧产物没有足够来源事实，不能伪装成
@@ -257,7 +258,17 @@ class ArtifactStore:
         report = self.freshness(rel)
         if report.state != 'stale':
             return
-        changed = ', '.join(edge.key for edge in report.edges) or report.reason
+        replaced = frozenset(replaced_input_keys)
+        if replaced:
+            blocking = tuple(
+                edge for edge in report.edges
+                if edge.state == 'stale' and edge.key not in replaced
+            )
+            if not blocking:
+                return
+            changed = ', '.join(edge.key for edge in blocking) or report.reason
+        else:
+            changed = ', '.join(edge.key for edge in report.edges) or report.reason
         producer = producer_node(rel, fallback=self.ctx.node) or self.ctx.node
         # ⚠ `UpstreamStale` 而不是 `ProvenanceRefused`：这条拒绝自带恢复命令
         # ⇒ 它是显式终态（退出码 2），不是「代码自相矛盾」（退出码 3）。见该类的 docstring。
@@ -266,7 +277,8 @@ class ArtifactStore:
             f'请先从 {producer} 重建当前根上的产物')
 
     def read_own(self, model: type[M], rel: str, *,
-                 require_current: bool = False) -> tuple[M, Any]:
+                 require_current: bool = False,
+                 replaced_input_keys: Iterable[str] = ()) -> tuple[M, Any]:
         """读**本节点自己产的那一份**（复检 / 重算 / 提升前要先看看它）。
         返回 `(模型, 盘上原始 dict)`。
 
@@ -283,13 +295,18 @@ class ArtifactStore:
         （新契约把八维做成了 `Field(min_length=1)`，模型化之后 `required` 必然全绿，
         而按「判据 vs 载体按失败成本划」它该留在判据侧——载体拒收要再花一次钱，
         判据拦下是 0 成本自救）。见 `novel/stages/stage3/checks.py` 开头那段。
+
+        ``replaced_input_keys`` 只服务 typed 人工修订：问题稿会把**上一份**编辑决策集
+        记成输入，而人的下一步恰恰是修改同一个文件。此时只放行被明确替换的那条边；
+        正文、设定等其余上游仍关闭式拒绝。调用方不给键时与普通 ``require_current``
+        完全同义，不能把它当成「问题稿一律跳过 freshness」的口子。
         """
         raw = self._read_bytes(rel)
         data = self._loads(rel, raw)
         obj, payload = self._validate_payload(model, rel, data)
         self._record_artifact_root(rel, obj)
         if require_current:
-            self._refuse_stale_upstream(rel)
+            self._refuse_stale_upstream(rel, replaced_input_keys=replaced_input_keys)
         return obj, payload
 
     def schema_version(self, rel: str) -> int | None:

@@ -97,6 +97,34 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '2026-08-22 阶段 B：恒 `sec_0001` 的 `section_id` 删除，产物收成 `{text}`',
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
+    'stage2/global_grounding.json': (
+        3,
+        '两次破坏。v2（2026-08-23）secret 时间线三刀：① `setup_chapters: list[int]` 换成 `setup` '
+        '判别联合（`{"kind":"cold"}` / `{"kind":"foreshadowed","chapters":[…]}`）'
+        '——v1 的 `[]` 同时表示「声明冷揭示」与「模型压根没想过」，而这一格是两道'
+        '下发闸门的前件；② `reader_reveal_events[]` 加 `kind: first|confirm`，'
+        '载体强制恰有一条 `first`——旧的下发闸门按「任意一次揭示 ≤ 本章」判，'
+        '分两次揭示的秘密在第一次之后就把整份 `fact` 泄给了写前面章节的写手；'
+        '③ 新增可空 `group_id`，复合真相拆成多条后归组用。'
+        'v3（2026-08-24）：① relation 新增 public/via_secret 显式 visibility；'
+        '② secret 的无时间 `character_known_by` 换成 CharacterRef/GroupRef + known_from_chapter '
+        '的 `knowledge_events`；③ role/fate、relation predicate、setting、rule desc、secret fact、'
+        'knowledge event、arc trajectory 新增代码按“指定章 + 短 locator”唯一回取的正式证据，'
+        '失败态 source=null；'
+        '④ `valid_to_chapter` 改名 `valid_through_chapter`，把原本即包含式的端点语义写进字段名',
+        '`stage2.global` 整跑（**付费**）；`.INVALID` 与 `_rounds/` 一律作废，'
+        'v1/v2 都不手补字段冒充当前产地。重建后 review 按 claim+evidence 新 hash 重新 pending；'
+        '这是形状破坏的真实人工成本，不能靠迁移伪装成旧决定仍有效。',
+    ),
+    'stage2/global_edit.json': (
+        2,
+        '2026-08-24：secret patch/replacement 从 `character_known_by` 换成带 locator 的 '
+        '`knowledge_events`，并新增 relation visibility、setting、fate、arc 与全部自由事实证据的 '
+        'typed patch/replacement；旧 v1 决策文件不能表达知情时点或证据',
+        '它是人产决策集，不由模型重建：人工按当前 `GlobalEdit` v2 重写书内 JSON。'
+        '不根据旧 known_by 猜 known_from_chapter，不为旧 claim 伪造 locator；盘上 v1 字节原样保留'
+        '只能作为历史输入，当前运行时关闭式拒读',
+    ),
     'stage2/chapter_blueprints.json': (
         3,
         '两次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'

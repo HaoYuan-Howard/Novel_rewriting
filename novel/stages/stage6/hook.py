@@ -38,6 +38,7 @@ from contracts.schema.stage6 import (
     HookCandidateRetryResponse, HookProvenance, HookResponse, Mech,
 )
 from novel import paths, prov, wontfix
+from novel.core.evidence import without_global_evidence
 from novel.errors import GateBlocked, TerminalState, UpstreamMissing
 from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmClient
@@ -88,12 +89,14 @@ class _Upstreams:
 
         self.gg, self.style, self.wc = gg, style, wc
         self.src_hook: str = (hook_copy.text or '').strip()
-        self.grounding_raw: dict = gg.model_dump(by_alias=True)
+        projected = without_global_evidence(gg.model_dump(by_alias=True))
+        assert isinstance(projected, dict)
+        self.grounding_raw: dict = projected
         self.style_raw: dict = style.model_dump(by_alias=True)
-        self.arc: dict = gg.arc.model_dump(by_alias=True)
-        self.secrets: list[dict] = [s.model_dump(by_alias=True) for s in gg.canon.secrets]
-        self.characters: dict = {
-            cid: c.model_dump(by_alias=True) for cid, c in gg.entities.characters.items()}
+        self.arc: dict = projected.get('arc') or {}
+        self.secrets: list[dict] = ((projected.get('canon') or {}).get('secrets') or [])
+        self.characters: dict = (
+            (projected.get('entities') or {}).get('characters') or {})
         self.upto: int = lead_upto(self.arc)
         lead, missing, self.judged = lead_drafts(store, self.upto)
         self.mat = prompts.build_material(

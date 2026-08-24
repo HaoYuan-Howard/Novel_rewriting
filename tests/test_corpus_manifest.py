@@ -445,7 +445,7 @@ def test_inventory_refuses_a_raw_non_current_version(tmp_path):
         **global_grounding(),
     }, ensure_ascii=False), encoding='utf-8')
 
-    with pytest.raises(ValueError, match=r'raw _schema_version=2.*current v1.*从 producer 重跑'):
+    with pytest.raises(ValueError, match=r'raw _schema_version=2.*current v3.*从 producer 重跑'):
         corpus_manifest._artifact_inventory(book)
 
 

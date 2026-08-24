@@ -25,6 +25,9 @@
 - 真跑前先执行 `<PY> -X utf8 -u -m novel.cli doctor --llm-transport`。它使用正式代理与超时，
   但不发送正文、API key，也不产生模型调用；收到任意 HTTP 状态即证明 DNS/TCP/TLS 通路成立。
   `SSL UNEXPECTED_EOF` 等连接错误应在这里先复现并修代理/TUN 进程环境，不要烧一次正文请求来诊断网络。
+- 任何宿主都先用 `scripts/session_preflight.py` 固化 `<STARTED_AT>` 与 `<START_CODE>`。正常节点走
+  `scripts/run_step.py --expect-code-version <START_CODE>`；特殊诊断/人工入口也在动作前复算并逐字比较。
+  结束时把同一指纹传给终验。`unknown == unknown` 不证明同版；结束时现取当前值也不证明起点。
 
 「打点串联」与「重定向后过滤」合起来在 PowerShell 里的写法（把数十 KB 的报告压到个位数行，
 保留全部命中、非 `ok` 状态、来源与告警行）：
@@ -106,9 +109,11 @@ shell 的而非真跑的。判断真伪只看三样，全部指向盘上而不�
 （例如某模块 `NameError`），而同一条命令几分钟前还正常，且报错栈与本书、本节点无关。
 
 判据：`git status` 显示 `novel/` 下有未提交改动，且报错文件正在其中。
-处置：**不改仓库代码**（那是本 skill 的硬边界），等对方那次编辑完成后重试同一条命令；
-重试前重新取一次乐观锁 hash（决策面可能已随代码变化）。命令崩在 import 期时**没有写盘**，
-状态干净可直接重试。把这次干扰如实记进终审包，不要读成本书的产物问题。
+处置：**不改仓库代码**（那是本 skill 的硬边界），也不把当前新指纹追认为本次起点。
+等对方编辑完成；只有代码逐字恢复到 `<START_CODE>` 才能在同一会话重试，并重新取乐观锁 hash。
+若稳定落在另一指纹，本次以 `stopped` 收口，重新运行 preflight 后才开始另一条 run。命令崩在
+import 期时通常没有写盘，但仍以 `state`、目标产物与信标核实，不从栈形状猜。把干扰如实记进
+终审包，不要读成本书的产物问题。
 
 ## headless agent
 
@@ -125,9 +130,8 @@ shell 的而非真跑的。判断真伪只看三样，全部指向盘上而不�
 - 进程日志与生死记录由 launcher 管理；不要手改 `_service/agent_runs.jsonl` 或日志来改变状态。
 - launcher 记录的进程 `state` 与交付 `outcome` 是两根轴：只有 outcome 为 `ready` 或
   `ready_with_disclosures` 才表示服务端已从盘面复验交付；`exit 0` 本身只表示 Agent 正常退出。
-- 启动 prompt 带代码指纹。每个写盘或付费节点在执行前都用启动 prompt 给出的项目 Python
-  单行命令复算 `novel.prov.code_version()` 并逐字比较；变化时停止。结束终验会再次比较，
-  跨版本 run 不会被判 ready。
+- 启动 prompt 带代码指纹；先确认它与 `session_preflight.py` 的 `<START_CODE>` 一致，再按共同规则
+  由 runner 逐步比较。结束终验继续使用这一份起始指纹，跨版本 run 不会被判 ready。
 
 当前 launcher 使用两个独立字段：`authorized` 只表示付费授权，`egress_authorized`
 只表示正文外发授权。新 API 请求对 `egress_authorized` 的产品默认值为 `true`，UI 也默认勾选；

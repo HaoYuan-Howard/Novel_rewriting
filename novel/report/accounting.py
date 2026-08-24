@@ -40,8 +40,8 @@ class AccountingSpec:
 ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     'stage0': (),
     'stage1': (),
-    # ⚠⚠ **全链唯一一层的记账横跨两份产物**（`stage2.md` §3.3 列了 11 个出口）：
-    #    前 6 个在 `global_grounding._provenance`、后 5 个在 `chapter_blueprints`。
+    # ⚠⚠ **全链唯一一层的记账横跨两份产物**（`stage2.md` §3.3 列全出口）：
+    #    前一组在 `global_grounding._provenance`、后一组在 `chapter_blueprints`。
     #    合成一节而不是两节，理由与「判据表只有一张」同源：两个节点是**同一层**，
     #    拆成两节，「这一层落盘前改写了多少」就要读两屏才拼得出来。
     # ⚠ 这一层的记账**不是可选的装饰**：本层有一整族判据**断言的就是这些计数而不是字段值**
@@ -60,6 +60,11 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
         AccountingSpec('canonical_distinguishers_stripped', '哪几个显示名被剥掉了消歧区分词？'),
         AccountingSpec('setup_chapters_pruned', '哪几条秘密的埋点章被裁掉了？'
                                                 '（「冷揭示」与「被裁空」只能靠它分开）'),
+        AccountingSpec('evidence_locator_rewrites',
+                       '哪些事实 locator 经内容字符归一后才唯一回取到正式原文字节？'),
+        AccountingSpec('evidence_locator_failures',
+                       '哪些事实 locator 因错章、零命中、多命中或正式 span 漂移而失败？'
+                       '（非空即 GlobalGrounding 失败态）'),
         AccountingSpec('verbatim_rewrites', '哪几条 hinge 的短语被**回取**改过字节、'
                                             '或被段号改判给了别的拍？'),
         AccountingSpec('verbatim_failures', '哪几处**锚不到**？（非空即失败态，按根因分）'),

@@ -14,10 +14,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.schema import encode_artifact
+from contracts.schema.evaluation import GlobalReview
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
+from contracts.schema.stage2 import (
+    ChapterBlueprints, GlobalGrounding, GlobalGroundingResponse,
+)
 from novel import prov
 from novel.errors import (
     ArtifactUnreadable, ContextBudgetRefused, GateBlocked, ProvenanceRefused, UpstreamMissing,
@@ -28,13 +32,15 @@ from novel.llm.cache import CachePolicy, ResponseCache
 from novel.llm.client import LlmClient
 from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
+from novel.core.evidence import iter_global_evidence_slots
+from novel.quality.global_review import build_review
 from novel.run import RunContext
 from novel.stages import initial_extract
 from novel.stages.stage2 import extract
 from novel.stages.stage2.compile_v2 import canonical_ir_projection
 from novel.stages.stage3 import style
 from contracts.invariants import HINGE_FAILURE_ROUTE
-from novel.stages.stage2.normalize import normalize_verbatim, response_shape
+from novel.stages.stage2.normalize import normalize_global, normalize_verbatim, response_shape
 from novel.stages.stage2.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
 from tests.test_stage2 import blueprints, global_grounding, main_text
@@ -154,9 +160,140 @@ def test_global_precedes_parallel_blueprint_and_anti_leak_style(monkeypatch):
 
 
 def _response_global() -> dict:
+    """正式 v3 fixture → 模型响应形；自由事实证据只交章号 + 短 locator。"""
     data = copy.deepcopy(global_grounding())
     data.pop('_provenance')
+    for _path, owner, field in iter_global_evidence_slots(data):
+        evidence = owner.get(field)
+        assert isinstance(evidence, dict) and isinstance(evidence.get('source'), dict)
+        owner[field] = {
+            'chapter_ordinal': evidence['chapter_ordinal'],
+            'locator': evidence['source']['text'],
+        }
     return data
+
+
+@pytest.mark.parametrize(('branch', 'message'), [
+    ('secret', 'duplicate secret ids'),
+    ('world_rule', 'duplicate world rule ids'),
+    ('relation', 'duplicate relation ids'),
+])
+def test_global_response_and_formal_artifact_reject_duplicate_stable_ids(
+    branch: str, message: str,
+):
+    """patch/apply-edit 按稳定 ID 定位；重复 ID 不能退化成“最后一条生效”。"""
+    response = _response_global()
+    formal = copy.deepcopy(global_grounding())
+    if branch == 'secret':
+        response['canon']['secrets'].append(copy.deepcopy(response['canon']['secrets'][0]))
+        formal['canon']['secrets'].append(copy.deepcopy(formal['canon']['secrets'][0]))
+    elif branch == 'world_rule':
+        response['canon']['world_rules'].append(
+            copy.deepcopy(response['canon']['world_rules'][0]))
+        formal['canon']['world_rules'].append(
+            copy.deepcopy(formal['canon']['world_rules'][0]))
+    else:
+        response['entities']['relations'].append(
+            copy.deepcopy(response['entities']['relations'][0]))
+        formal['entities']['relations'].append(
+            copy.deepcopy(formal['entities']['relations'][0]))
+
+    with pytest.raises(ValidationError, match=message):
+        GlobalGroundingResponse.model_validate(response)
+    with pytest.raises(ValidationError, match=message):
+        GlobalGrounding.model_validate(formal)
+
+
+def test_global_response_rejects_order_dependent_timelines_and_lossy_values():
+    cases: list[dict] = []
+
+    duplicate_knower = _response_global()
+    events = duplicate_knower['canon']['secrets'][0]['knowledge_events']
+    events.append({**copy.deepcopy(events[0]), 'known_from_chapter': 2})
+    cases.append(duplicate_knower)
+
+    duplicate_rule_start = _response_global()
+    versions = duplicate_rule_start['canon']['world_rules'][0]['versions']
+    versions.append(copy.deepcopy(versions[0]))
+    cases.append(duplicate_rule_start)
+
+    blank_group = _response_global()
+    blank_group['canon']['secrets'][0]['knowledge_events'][0]['subject'] = {
+        'kind': 'group', 'label': '   ',
+    }
+    cases.append(blank_group)
+
+    string_chapter = _response_global()
+    string_chapter['canon']['secrets'][0]['fact_evidence']['chapter_ordinal'] = '1'
+    cases.append(string_chapter)
+
+    bool_chapter = _response_global()
+    bool_chapter['entities']['relations'][0]['visibility'] = {
+        'kind': 'public', 'from_chapter': True,
+    }
+    cases.append(bool_chapter)
+
+    float_chapter = _response_global()
+    float_chapter['canon']['secrets'][0]['knowledge_events'][0][
+        'known_from_chapter'] = 1.0
+    cases.append(float_chapter)
+
+    for payload in cases:
+        with pytest.raises(ValidationError):
+            GlobalGroundingResponse.model_validate(payload)
+
+
+@pytest.mark.parametrize(('chapter', 'locator', 'recovery', 'failure_fragment'), [
+    (1, '信上说父亲已经回城。', 'exact', None),
+    (1, '信上说 父亲，已经回城', 'normalized', None),
+    (1, '这句话在原文里不存在', None, '找不到'),
+    (1, '她', None, '多处命中'),
+    (2, '信上说父亲已经回城。', None, '找不到'),
+])
+def test_global_evidence_locator_is_unique_within_its_named_chapter(
+    chapter: int, locator: str, recovery: str | None, failure_fragment: str | None,
+):
+    """exact / normalized / 零命中 / 多命中 / 指错章共用生产归一入口。"""
+    response = _response_global()
+    secret = response['canon']['secrets'][0]
+    secret['fact_evidence'] = {'chapter_ordinal': chapter, 'locator': locator}
+
+    normalized, meta = normalize_global(response, main_text())
+    evidence = normalized['canon']['secrets'][0]['fact_evidence']
+
+    assert evidence['chapter_ordinal'] == chapter
+    if recovery is not None:
+        assert evidence['source']['text'] == '信上说父亲已经回城。'
+        assert evidence['source']['recovery'] == recovery
+        assert meta['evidence_locator_failures'] == []
+        if recovery == 'normalized':
+            assert meta['evidence_locator_rewrites'] == [
+                ('canon.secrets.secret_01.fact', locator, '信上说父亲已经回城。')]
+    else:
+        assert evidence['source'] is None
+        assert len(meta['evidence_locator_failures']) == 1
+        path, failed_chapter, failed_locator, reason = meta['evidence_locator_failures'][0]
+        assert path == 'canon.secrets.secret_01.fact'
+        assert (failed_chapter, failed_locator) == (chapter, locator)
+        assert failure_fragment in reason
+
+
+def test_punctuation_only_evidence_locator_becomes_a_recoverable_failure():
+    """唯一命中的纯标点也不能先造出 schema 拒收的空 normalized span。"""
+    response = _response_global()
+    path = 'canon.secrets.secret_01.fact'
+    response['canon']['secrets'][0]['fact_evidence'] = {
+        'chapter_ordinal': 1, 'locator': '※',
+    }
+    sections = copy.deepcopy(main_text())
+    sections[0]['text'] += '※'
+
+    normalized, meta = normalize_global(response, sections)
+
+    assert normalized['canon']['secrets'][0]['fact_evidence']['source'] is None
+    failure = next(row for row in meta['evidence_locator_failures'] if row[0] == path)
+    assert failure[1:3] == (1, '※')
+    assert 'no content characters' in failure[3]
 
 
 def _response_blueprints() -> dict[int, dict]:
@@ -365,6 +502,126 @@ def test_global_rebuild_is_not_locked_by_an_obsolete_blueprint_schema():
         assert len(transport.calls) == 1
         assert obsolete.read_text(encoding='utf-8').startswith('{"_schema_version": 2}')
         assert store.read(GlobalGrounding, extract.GLOBAL_REL) == artifact
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _write_current_blueprint_fixture(book: Path, ctx: RunContext) -> None:
+    """落一份可严格读取的当前蓝图，用于覆盖逐产物升级的中间态。"""
+    payload = copy.deepcopy(blueprints())
+    payload['_provenance'].update({
+        'code': ctx.code,
+        'root_clean_sha1': ctx.root_clean_sha1,
+        'inputs': {},
+        'prompts': {'BP_SYS': '0123456789'},
+        'model': 'fixture-model',
+    })
+    artifact = ChapterBlueprints.model_validate(payload)
+    envelope = encode_artifact(
+        extract.BLUEPRINT_REL, artifact.model_dump(by_alias=True, mode='json'))
+    target = book / extract.BLUEPRINT_REL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(envelope, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8', newline='\n',
+    )
+
+
+def test_global_producer_rebuilds_obsolete_global_and_review_as_one_transaction():
+    """v3 producer 可越过 v1 正式稿；旧 global/review 原字节分别进入历史。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '逐产物升级恢复_125'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        _write_current_blueprint_fixture(book, ctx)
+        old_global = b'{"_schema_version":1,"legacy":"global"}\n'
+        old_review_payload = build_review(global_grounding()).model_dump(
+            by_alias=True, mode='json')
+        old_review = (
+            json.dumps(
+                encode_artifact(extract.GLOBAL_REVIEW_REL, old_review_payload),
+                ensure_ascii=False, indent=2,
+            ) + '\n'
+        ).encode('utf-8')
+        global_path = book / extract.GLOBAL_REL
+        review_path = book / extract.GLOBAL_REVIEW_REL
+        global_path.write_bytes(old_global)
+        review_path.write_bytes(old_review)
+        client, transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        artifact = extract.run_global(ctx, client)
+
+        assert len(transport.calls) == 1
+        assert store.read(GlobalGrounding, extract.GLOBAL_REL) == artifact
+        review = store.read(GlobalReview, extract.GLOBAL_REVIEW_REL)
+        assert review.items and all(item.state == 'pending' for item in review.items)
+        global_rounds = list((book / 'stage2/_rounds').glob(
+            'global_grounding.r*.json'))
+        review_rounds = list((book / 'stage2/_rounds').glob(
+            'global_review.r*.json'))
+        assert len(global_rounds) == len(review_rounds) == 1
+        assert global_rounds[0].read_bytes() == old_global
+        assert review_rounds[0].read_bytes() == old_review
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.parametrize('marker', [999, 'v1'])
+def test_global_rebuild_refuses_non_obsolete_global_baseline(marker):
+    """未来版本与非法 marker 不能借 producer 重建口被当成低版本跳过。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / f'坏global基线_{abs(hash(str(marker))) % 1000}'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        _write_current_blueprint_fixture(book, ctx)
+        broken = book / extract.GLOBAL_REL
+        before = (json.dumps({'_schema_version': marker}, ensure_ascii=False) + '\n').encode()
+        broken.write_bytes(before)
+        client, _transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        with pytest.raises(ArtifactUnreadable):
+            extract.run_global(ctx, client)
+
+        assert broken.read_bytes() == before
+        assert not list((book / 'stage2/_rounds').glob('global_grounding.r*.json'))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_bad_global_review_rolls_back_an_obsolete_global_rebuild():
+    """companion 不是低版本时，global 正式稿与刚建的归档必须一起回滚。"""
+    root = Path(tempfile.mkdtemp())
+    book = root / '坏review事务回滚_126'
+    book.mkdir()
+    try:
+        ctx = _ctx(book, 'stage2.global')
+        store = ArtifactStore(ctx)
+        store.write(extract.MAIN_TEXT, MainText.model_validate(main_text()))
+        _write_current_blueprint_fixture(book, ctx)
+        old_global = b'{"_schema_version":1,"legacy":"global"}\n'
+        bad_review = b'{"_schema_version":999}\n'
+        global_path = book / extract.GLOBAL_REL
+        review_path = book / extract.GLOBAL_REVIEW_REL
+        global_path.write_bytes(old_global)
+        review_path.write_bytes(bad_review)
+        client, _transport = _client(
+            ctx, lambda _req, _index: _ok(_response_global()))
+
+        with pytest.raises(ArtifactUnreadable):
+            extract.run_global(ctx, client)
+
+        assert global_path.read_bytes() == old_global
+        assert review_path.read_bytes() == bad_review
+        assert not list((book / 'stage2/_rounds').glob('global_grounding.r*.json'))
+        assert not list((book / 'stage2/_rounds').glob('global_review.r*.json'))
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -653,7 +910,7 @@ def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
         response = _response_global()
         secret = response['canon']['secrets'][0]
         reveal = secret['reader_reveal_events'][0]['chapter']
-        secret['setup_chapters'] = [reveal]
+        secret['setup'] = {'kind': 'foreshadowed', 'chapters': [reveal]}
         client, transport = _client(ctx, lambda _req, _index: _ok(response))
 
         with pytest.raises(GateBlocked):
@@ -669,7 +926,9 @@ def test_stage2_global_renormalize_promotes_deterministically_pruned_invalid():
         assert (book / extract.GLOBAL_REL).is_file()
         assert not (book / extract._GLOBAL_INVALID).exists()
         stored = ArtifactStore(ctx).read(GlobalGrounding, extract.GLOBAL_REL)
-        assert stored.canon.secrets[0].setup_chapters == []
+        # 埋点全裁光 ⇒ 降级成 cold。⚠ 它与真·冷揭示在字段值上同形，
+        # 分得开的只有下一行那份裁剪账。
+        assert stored.canon.secrets[0].setup.kind == 'cold'
         assert stored.provenance.setup_chapters_pruned == []
         assert stored.provenance.partial_rewrite == '--renormalize'
         assert stored.provenance.usage is not None

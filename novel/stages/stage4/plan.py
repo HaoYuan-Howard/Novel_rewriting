@@ -151,9 +151,16 @@ def _ctx_source_line(store: ArtifactStore) -> str:
 
 def _judge(store: ArtifactStore, plan_raw: dict[str, Any], up: _Upstreams, *,
            with_ctx_link: bool) -> list[Outcome]:
-    """跑全部判据。**唯一判定落点**——落盘闸门与复检共用它。"""
+    """跑全部判据。**唯一判定落点**——落盘闸门与复检共用它。
+
+    ``with_ctx_link=False`` 是 writer context **尚未按候选计划重建**的前置闸门；
+    这一趟不能读取盘上的旧 context。否则 Stage2 或计划更新后，旧 context 的
+    ``ctx_events_verbatim`` / ``ctx_hinge_delivered`` 会被错配到新候选上，
+    ``--revalidate`` 也会在提升并重建之前被永久挡住。前置闸门让五条 ctx 判据
+    如实走 ``unver``，候选落稳并重建 context 后再以 ``with_ctx_link=True`` 跑后置条件。
+    """
     ctx_raw: dict[str, Any] | None = None
-    if store.exists(CTX_REL):
+    if with_ctx_link and store.exists(CTX_REL):
         try:
             ctx_art, ctx_raw = store.read_own(WriterContext, CTX_REL)
         except Exception:                                    # noqa: BLE001

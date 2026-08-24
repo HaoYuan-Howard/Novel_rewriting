@@ -16,11 +16,18 @@ def _request() -> GlobalReviewDecisionSet:
     return GlobalReviewDecisionSet.model_validate({
         'actor': 'reviewer-a',
         'decisions': [{
-            'item_id': 'secret_set_complete:canon.secrets:aaaaaaaaaaaa',
+            'item_id': (
+                'knowledge_event:canon.secrets.secret_01.knowledge_events.0:'
+                'aaaaaaaaaaaa'),
             'expected_subject_sha256': 'a' * 64,
             'state': 'PASS',
             'reason': '已经逐项对照原文与抽取集合',
-            'evidence': [],
+            'evidence': [{
+                'artifact': 'stage1/main_text.json#chapter/1',
+                'subject_sha256': 'b' * 64,
+                'start': 0,
+                'end': 4,
+            }],
         }],
     })
 

@@ -11,7 +11,7 @@ import pytest
 
 from contracts.rules import REGISTRY
 from contracts.schema.stage4 import WriterContext
-from novel.errors import UpstreamMissing
+from novel.errors import RefusedByStructure, UpstreamMissing
 from novel.run import RunContext
 from novel.stages.stage4 import plan, prompts
 from tests import corpus, sandbox
@@ -559,6 +559,67 @@ def test_structure_distance_reports_the_new_pair_of_detail_readings():
     assert 'summary 承载源字数 25%' in d, f'summary 承载比不对：{d}'
 
 
+def test_relation_fact_refs_share_explicit_visibility_and_inclusive_endpoints():
+    """typed fact refs 与 writer context 必须消费 core 的同一份显式 gate。"""
+    from novel.stages.stage4.fact_refs import catalog, validate_plan_refs
+
+    global_g = {
+        'entities': {
+            'characters': {'char_001': {}, 'char_002': {}},
+            'relations': [
+                {
+                    'relation_id': 'rel_public',
+                    'subject_id': 'char_001', 'predicate': '同事',
+                    'object_id': 'char_002',
+                    'valid_from_chapter': 3,
+                    'valid_through_chapter': 5,
+                    'visibility': {'kind': 'public', 'from_chapter': 2},
+                },
+                {
+                    'relation_id': 'rel_secret',
+                    'subject_id': 'char_001', 'predicate': '盟友',
+                    'object_id': 'char_002',
+                    'valid_from_chapter': 2,
+                    'valid_through_chapter': 5,
+                    'visibility': {'kind': 'via_secret', 'secret_id': 'secret_01'},
+                },
+            ],
+        },
+        'canon': {'secrets': [{
+            'secret_id': 'secret_01',
+            'reader_reveal_events': [{'chapter': 4, 'kind': 'first'}],
+        }]},
+    }
+    refs = catalog(
+        global_g, {'blueprints': []},
+        [{'chapter_ordinal': ordinal} for ordinal in range(1, 7)],
+        plan_units={},
+    )
+    assert refs['relations'] == {
+        'rel_public': {'from': 3, 'to': 5},
+        'rel_secret': {'from': 4, 'to': 5},
+    }
+
+    def plan_for(ordinal: int, relation_id: str) -> dict:
+        return {'output_chapters': [{
+            'output_ordinal': ordinal,
+            'chapter_goal': {
+                'intent': 'advance',
+                'fact_refs': [{
+                    'kind': 'relation', 'ref': relation_id, 'chapter': ordinal,
+                }],
+            },
+        }]}
+
+    validate_plan_refs(plan_for(3, 'rel_public'), refs)
+    with pytest.raises(RefusedByStructure, match='validity window'):
+        validate_plan_refs(plan_for(3, 'rel_secret'), refs)
+    validate_plan_refs(plan_for(4, 'rel_secret'), refs)
+    validate_plan_refs(plan_for(5, 'rel_secret'), refs)
+    with pytest.raises(RefusedByStructure, match='validity window'):
+        validate_plan_refs(plan_for(6, 'rel_secret'), refs)
+
+
 def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
     """A legal response must be constructible from the current prompt ID spaces.
 
@@ -678,6 +739,52 @@ def test_synthetic_stage4_response_satisfies_every_reference_hard_rule():
     assert set(refs['event_units']) == set(refs['events'])
     hit = {rule for rule in reference_hard if by_rule[rule].findings}
     assert hit == set(), f'合法引用响应仍命中 HARD：{sorted(hit)}'
+
+
+def test_stage4_paid_prompt_excludes_global_source_spans():
+    """Stage2 原文取证字节不是规划器的付费材料。"""
+    from types import SimpleNamespace
+
+    from novel.core.evidence import iter_global_evidence_slots
+    from novel.stages.stage4.beats import beat_index, group_beats
+    from tests.test_stage2 import blueprints, global_grounding, main_text
+
+    body = main_text()
+    bps = blueprints()
+    global_g = global_grounding()
+    markers: list[str] = []
+    coordinates: list[int] = []
+    for index, (_claim_path, owner, field) in enumerate(
+        iter_global_evidence_slots(global_g), 1,
+    ):
+        marker = f'STAGE4_EVIDENCE_ONLY_{index}'
+        start = 912_345_600 + index * 100
+        owner[field] = {
+            'chapter_ordinal': 1,
+            'source': {
+                'text': marker,
+                'start': start,
+                'end': start + len(marker),
+                'normalized': f'STAGE4_NORMALIZED_ONLY_{index}',
+                'recovery': 'normalized',
+            },
+        }
+        markers.extend((marker, f'STAGE4_NORMALIZED_ONLY_{index}'))
+        coordinates.extend((start, start + len(marker)))
+
+    bidx = beat_index(bps, body)
+    up = SimpleNamespace(
+        main_text=body,
+        blueprints=bps,
+        global_g=global_g,
+        bidx=bidx,
+        groups=group_beats(bps, body, bidx),
+    )
+    user = plan._build_user(SimpleNamespace(title='合成书'), up)
+
+    assert markers and all(marker not in user for marker in markers)
+    assert all(str(coordinate) not in user for coordinate in coordinates), \
+        'SourceSpan 的 start/end 坐标进了 Stage4 付费 user prompt'
 
 
 @pytest.mark.corpus
@@ -842,6 +949,38 @@ def _provenance(ctx: RunContext, up) -> object:
     return PlanProvenance(code='0' * 10, root_clean_sha1=ctx.root_clean_sha1, inputs=ctx.edges,
                           prompts={'PLAN_SYS': '0' * 10}, model='deepseek-v4-pro',
                           params=plan._params(up))
+
+
+def test_pre_context_gate_does_not_pair_a_new_candidate_with_the_old_context(monkeypatch):
+    """新候选的前置闸门不能读取旧 writer context。
+
+    真实恢复路上，Stage2 重建后旧 context 的 103 条 event 与 135 个保真点都已过期；
+    新 ``.INVALID`` 计划已覆盖 158/158 个源 beat，本可重建出完整 context，却在
+    ``--revalidate`` 提升前被旧 context 的两条 HARD 永久挡住。
+    """
+    class OldContextStore:
+        @staticmethod
+        def exists(rel: str) -> bool:
+            assert rel == plan.CTX_REL
+            return True
+
+        @staticmethod
+        def read_own(*_args, **_kwargs):
+            raise AssertionError('前置计划闸门不应读取旧 writer context')
+
+    captured = {}
+    monkeypatch.setattr(plan, '_ctx_source_line', lambda _store: '旧 context 仅作来源读数')
+    monkeypatch.setattr(
+        plan.checks, 'check',
+        lambda *_args, **kwargs: captured.update(kwargs) or [],
+    )
+    up = type('Upstreams', (), {
+        'blueprints': {}, 'main_text': [], 'global_g': {}, 'bidx': {},
+    })()
+
+    assert plan._judge(OldContextStore(), {}, up, with_ctx_link=False) == []
+    assert captured['ctx'] is None
+    assert captured['ctx_link'] is None
 
 
 @needs_corpus

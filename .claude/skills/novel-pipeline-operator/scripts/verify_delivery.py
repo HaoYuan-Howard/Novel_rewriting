@@ -12,19 +12,19 @@ ROOT = Path(__file__).resolve().parents[4]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from novel import prov  # noqa: E402
 from novel.orchestrator.delivery import assess  # noqa: E402
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='只读交付终验')
     parser.add_argument('--base', required=True)
     parser.add_argument('--sid', required=True)
-    parser.add_argument('--start-code-version', default=None)
-    args = parser.parse_args()
+    parser.add_argument('--start-code-version', required=True,
+                        help='session_preflight.py 捕获的起始代码指纹')
+    args = parser.parse_args(argv)
     outcome = assess(
         args.base, args.sid,
-        start_code_version=args.start_code_version or prov.code_version())
+        start_code_version=args.start_code_version)
     print(json.dumps(outcome.model_dump(mode='json'), ensure_ascii=False, indent=2))
     return 0 if outcome.state in ('ready', 'ready_with_disclosures') else 1
 

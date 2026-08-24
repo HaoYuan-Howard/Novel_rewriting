@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""把终审包的机器事实块同步为当前盘面；只改模板标记之间的内容。"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from collect_final_evidence import collect  # noqa: E402
+from novel import paths  # noqa: E402
+
+
+QUALITY = ('[[operator-quality:start]]', '[[operator-quality:end]]')
+LEDGER = ('[[operator-ledger:start]]', '[[operator-ledger:end]]')
+EXITS = ('[[operator-exits:start]]', '[[operator-exits:end]]')
+ANCHOR = ('[[operator-anchor:start]]', '[[operator-anchor:end]]')
+_ALL_MARKERS = QUALITY + LEDGER + EXITS + ANCHOR
+_QUALITY_HEADER = '| 节点/报告 | freshness | HARD | info | metric | unver | skipped | 结论/处置 |'
+
+
+def _replace(text: str, markers: tuple[str, str], body: str) -> str:
+    start, end = markers
+    pattern = re.compile(
+        rf'(?ms)^{re.escape(start)}\r?\n.*?^{re.escape(end)}\s*$')
+    matches = list(pattern.finditer(text))
+    if len(matches) != 1:
+        raise ValueError(
+            f'终审包必须恰有一组 {start} / {end}，实际匹配 {len(matches)} 组')
+    replacement = f'{start}\n{body.rstrip()}\n{end}'
+    return text[:matches[0].start()] + replacement + text[matches[0].end():]
+
+
+def _wrap_table(text: str, header_pattern: str,
+    markers: tuple[str, str]) -> str:
+    pattern = re.compile(
+        rf'(?m)^{header_pattern}[ \t]*\r?\n'
+        rf'(?:^\|[^\n]*\|[ \t]*\r?\n?)+')
+    matches = list(pattern.finditer(text))
+    if len(matches) != 1:
+        raise ValueError(
+            f'旧终审包中应恰有一张可迁移表，实际匹配 {len(matches)} 张：{header_pattern}')
+    old = matches[0].group(0).rstrip()
+    block = f'{markers[0]}\n{old}\n{markers[1]}\n'
+    return text[:matches[0].start()] + block + text[matches[0].end():]
+
+
+def _bootstrap_legacy_markers(text: str) -> str:
+    """给旧模板实例补稳定标记；保留 agent 的全部叙述与裁决。"""
+    counts = {marker: text.count(marker) for marker in _ALL_MARKERS}
+    if all(counts[marker] == 1 for marker in _ALL_MARKERS):
+        return text
+    if any(counts.values()):
+        raise ValueError(f'终审包机器标记不完整：{counts}')
+
+    text = _wrap_table(text, re.escape(_QUALITY_HEADER), QUALITY)
+    text = _wrap_table(
+        text,
+        r'\| 节点 \| 实付调用 \| 缓存命中 \| prompt tokens \| '
+        r'completion tokens \| reasoning tokens \| [^\n|]+\|',
+        LEDGER)
+
+    exit_pattern = re.compile(
+        r'(?m)(^### 退出码序列\s*\r?\n(?:\s*\r?\n)?)(^`[^\n]*`\s*$)')
+    exit_matches = list(exit_pattern.finditer(text))
+    if len(exit_matches) != 1:
+        raise ValueError(f'旧终审包退出码块实际匹配 {len(exit_matches)} 处')
+    old_exit = exit_matches[0].group(2)
+    text = (text[:exit_matches[0].start(2)] + f'{EXITS[0]}\n{old_exit}\n{EXITS[1]}'
+            + text[exit_matches[0].end(2):])
+
+    anchor_pattern = re.compile(r'(?m)^<!-- novel-final-evidence:\{[^\n]*\} -->\s*$')
+    anchor_matches = list(anchor_pattern.finditer(text))
+    if len(anchor_matches) != 1:
+        raise ValueError(f'旧终审包机器锚点实际匹配 {len(anchor_matches)} 处')
+    old_anchor = anchor_matches[0].group(0)
+    return (text[:anchor_matches[0].start()]
+            + f'{ANCHOR[0]}\n{old_anchor}\n{ANCHOR[1]}'
+            + text[anchor_matches[0].end():])
+
+
+def _quality(facts: dict[str, Any]) -> str:
+    return '\n'.join([
+        '| 节点/报告 | freshness | HARD | info | metric | unver | skipped | 结论/处置 |',
+        '|---|---|---:|---:|---:|---:|---:|---|',
+        *facts['quality_table_rows'],
+    ])
+
+
+def _ledger_table(data: dict[str, Any]) -> list[str]:
+    lines = [
+        '| 节点 | 实付调用 | 缓存命中 | prompt tokens | completion tokens | reasoning tokens | 可证实耗时 ms |',
+        '|---|---:|---:|---:|---:|---:|---:|',
+    ]
+    for node, row in data['by_node'].items():
+        lines.append(
+            f"| {node} | {row['calls_paid']} | {row['calls_cached']} | "
+            f"{row['prompt_tokens']} | {row['completion_tokens']} | "
+            f"{row['reasoning_tokens']} | {row['latency_ms']} |")
+    total = data['total']
+    lines.append(
+        f"| **合计** | {total['calls_paid']} | {total['calls_cached']} | "
+        f"{total['prompt_tokens']} | {total['completion_tokens']} | "
+        f"{total['reasoning_tokens']} | {total['latency_ms']} |")
+    return lines
+
+
+def _ledger(facts: dict[str, Any]) -> str:
+    book = facts['book']
+    return '\n'.join([
+        f"本次会话：`started_at={facts['review_anchor']['session_started_at']}`；"
+        f"`start_code_version={facts['review_anchor']['start_code_version']}`。",
+        '',
+        f"当前 state/inbox：{facts['inbox_counts_text']}",
+        '',
+        f"当前成书：`{book['path']}`；SHA1：`{book.get('sha1') or '未生成'}`。",
+        '',
+        '### 本次会话',
+        '',
+        *_ledger_table(facts['ledger']),
+        '',
+        '### 同 SID 累计（历史审计，不与本次相加）',
+        '',
+        *_ledger_table(facts['ledger_cumulative']),
+    ])
+
+
+def render(text: str, facts: dict[str, Any]) -> str:
+    """只替换四组稳定标记，agent 写的判断与叙述原样保留。"""
+    text = _bootstrap_legacy_markers(text)
+    text = _replace(text, QUALITY, _quality(facts))
+    text = _replace(text, LEDGER, _ledger(facts))
+    text = _replace(
+        text, EXITS, f"`{facts['exit_sequence_compact_text']}`")
+    return _replace(text, ANCHOR, facts['review_anchor_line'])
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description='同步终审包中的机器事实块')
+    parser.add_argument('--base', required=True)
+    parser.add_argument('--sid', required=True)
+    parser.add_argument('--started-at', required=True, type=int)
+    parser.add_argument('--start-code-version', required=True)
+    parser.add_argument('--review', help='默认使用 novel.paths.review_package_path')
+    args = parser.parse_args(argv)
+
+    facts = collect(
+        args.base, args.sid, started_at=args.started_at,
+        start_code_version=args.start_code_version)
+    novel_dir = paths.resolve_novel_dir(args.base, args.sid)
+    review = (Path(args.review).resolve() if args.review else
+              paths.review_package_path(novel_dir))
+    if not review.is_file():
+        print(f'FAIL 终审包不存在：{review}')
+        return 1
+    try:
+        updated = render(review.read_text(encoding='utf-8'), facts)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        print(f'FAIL {type(exc).__name__}: {exc}')
+        return 1
+    temp = review.with_name(review.name + '.operator-sync.tmp')
+    temp.write_text(updated, encoding='utf-8')
+    os.replace(temp, review)
+    print(f'PASS 已同步机器事实：{review}')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -279,6 +279,22 @@
   "address",
   "reference"
  ],
+ "relation_visibility_kinds": [
+  "public",
+  "via_secret"
+ ],
+ "knowledge_subject_kinds": [
+  "character",
+  "group"
+ ],
+ "secret_setup_kinds": [
+  "cold",
+  "foreshadowed"
+ ],
+ "reveal_event_kinds": [
+  "first",
+  "confirm"
+ ],
  "name_distinctiveness": [
   "high",
   "medium",

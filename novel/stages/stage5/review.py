@@ -43,6 +43,7 @@ from contracts.schema.stage5 import (
     ReviewSources,
 )
 from novel import prov, wontfix
+from novel.core.evidence import without_global_evidence
 from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
 from novel.report.builder import build
 from novel.run import RunContext
@@ -81,12 +82,14 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
     gg = store.read(GlobalGrounding, GLOBAL_GROUNDING)
     style = store.read(StyleGrounding, STYLE_GROUNDING)
     wc = store.read(WriterContext, WRITER_CONTEXT)
+    projected = without_global_evidence(gg.model_dump(by_alias=True))
+    assert isinstance(projected, dict)
     return M.Book(
         title=ctx.title,
         ctx=wc.model_dump(by_alias=True),
         style=style.model_dump(by_alias=True),
         source_text={s.chapter_ordinal: (s.text or '') for s in main.root},
-        secrets=[s.model_dump(by_alias=True) for s in gg.canon.secrets],
+        secrets=((projected.get('canon') or {}).get('secrets') or []),
     )
 
 
@@ -792,10 +795,19 @@ def _report_of_review(ctx: RunContext, store: ArtifactStore, rev: Review,
     ⚠ 恢复书级语义审判时要把那一步一起恢复——豁免不套上去，
     「有人看过并决定不修」与「没人看过」在报告上会重新同形。
     """
+    # `wontfix.json` 是独立于 `review_<n>.json` 的人的决定账。`--wontfix`
+    # 刻意不重算/不落一份新 Review，所以每个读出口都必须在**读时**叠加当前账；
+    # 只在 `build_review` 时烘焙一次会让刚落下的决定在 check/inbox 里继续显示
+    # pending，直到有人额外重跑一次 0 成本验收。重套是幂等的：匹配身份仍是
+    # `(章|book, rule, evidence_key)`，已有标记只会被当前账的同一条目刷新。
+    wf = load_wontfix(store)
+    rows, book_fs = _apply_wontfix(list(rev.chapters), list(rev.book), wf)
+    current = rev.model_copy(update={'chapters': rows, 'book': book_fs})
+
     seqs = review_seqs(store)
     rel = freshness_rel or (REVIEW_TPL.format(n=seqs[-1]) if seqs else WRITER_CONTEXT)
     return build(sid=ctx.sid, node=ctx.node, freshness=store.freshness(rel),
-                 outcomes=list(_outcomes(rev, book)),
+                 outcomes=list(_outcomes(current, book)),
                  accounting=None, invalid=False)
 
 

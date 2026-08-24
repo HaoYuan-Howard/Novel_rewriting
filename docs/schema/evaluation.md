@@ -83,11 +83,24 @@
 
 ## 二、Stage2 全局逐项复核与 s2 gate
 
-`stage2/global_review.json` 不是对「已经抽出来的行」逐行盖章后就算完整。确定性枚举器除人物
-辨识度、称谓语境、每条世界规则 kind/version、每条秘密 fact/known-by/reveal 外，始终增加两个
-集合级 subject：`canon.world_rules` 的 `world_rule_set_complete` 与 `canon.secrets` 的
-`secret_set_complete`。即使数组为空，这两项仍存在且初始为 `pending`；只有人工对照来源后才能
-裁为 `PASS｜FAIL｜UNVER`。因此「一行都没抽到」不能借空循环变成全绿。
+`stage2/global_review.json` 不是对「已经抽出来的行」逐行盖章后就算完整。确定性枚举器覆盖的
+主体按「**能不能被单独修正**」分两档（`R-2.17`）：
+
+- **事实逐条**——人物辨识度与称谓语境、每个角色的 `role` 与 `fate`、`canon.setting` 的每个键、
+  每条 relation、每条世界规则的 kind/version、每条秘密的 fact / known-by / **埋点章** / reveal；
+- **解读分组**——`arc.conflict_stages` 一项、`arc` 其余部分（climax / ending / arc_tracks）一项。
+  这两格是本层自己声明的解读层，逐条拆开每条都判不出对错。
+
+外加四个集合级 subject：`entities.characters` 的 `character_set_complete`、`entities.relations`
+的 `relation_set_complete`、`canon.world_rules` 的 `world_rule_set_complete` 与 `canon.secrets` 的
+`secret_set_complete`。即使集合为空，这四项仍存在且初始为 `pending`；只有人工对照来源后才能
+裁为 `PASS｜FAIL｜UNVER`。因此「一个人/一条关系/一条规则/一个秘密都没抽到」不能借空循环变成全绿。
+
+⚠ **没被枚举出来的字段等于没人审。** 下一段说的「缺任一必审项就不能开 gate」守的是这份清单
+**自身**的完整性，不是「整份 grounding 都过了人眼」。2026-08-23 之前，`role` 的结局旁路
+（`R-2.6` 词表实测命中 0/17 而人读真违规 6/17）、`setting.世界观` 的泄底（逐章字面闸门实测
+0/8）、relations 这条第二剧透通道，以及两道下发闸门共同的前件 `setup_chapters`，就全都落在
+清单之外——闸照开，人却从没看过它们。
 
 每次生成或编辑 `GlobalGrounding` 后，review 的 `source_sha256` 绑定去除 schema/provenance 后的
 完整 typed subject。旧决定只在 `(item_id, kind, subject_path, subject_sha256)` 四项完全不变时

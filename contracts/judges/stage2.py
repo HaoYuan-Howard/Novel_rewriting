@@ -3,7 +3,7 @@
 """
 stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §5.1（**唯一落点**）。
 
-**74 条现役：40 HARD · 16 INFO · 16 度量 · 2 查不了。**
+**77 条现役：43 HARD · 16 INFO · 16 度量 · 2 查不了。**
 权威恒在本模块的注册表与 `BACKEND_CONTRACT.md` §反向覆盖率；2026-08-23 新增的
 `conflict_stage_coverage` HARD 把冲突阶段的逐章覆盖关在 Stage2 产地。
 
@@ -18,14 +18,14 @@ stage2.py —— 抽取那一层的判据行。源是 `docs/schema/stage2.md` §
 
 【本层特有的四条，与前七层都不同】
 
-**① 这是第一个用 `Rule.fix` 的层。** 36 条带机器可读的修复路由：
-`blueprint --chapters` 17 · `blueprint --patch` 1 · `blueprint --renormalize` 2 ·
-`global --resample` 14 ·
+**① 这是第一个用 `Rule.fix` 的层。** 38 条带机器可读的修复路由：
+`blueprint --chapters` 17 · `blueprint --patch` 1 · `blueprint --renormalize` 1 ·
+`global --resample` 17 ·
 `global --purge-role` / `--renormalize` 各 1。注册期第 ⑧ 条会查节点与 flag 都真实存在——**写歪一个当场炸**，
 而写进 `note` 的散文里拼错一个 flag 名不会有任何东西出声（LESSONS 第 11 条）。
 ⚠ **`fix` 与 `directive` 是两格，在本层完全不重叠**：全表 `repair='NONE'`
 （反哺是 stage5 独有的，`contracts/rules.py::_validate` ④ 把它锁在 `owner='stage5'` 上）
-⇒ `directive` 全表为空，而 `fix` 有 36 条。
+⇒ `directive` 全表为空，而 `fix` 有 38 条。
 
 ⚠ **徽章结构上永远不可能是 `pass`**：本表有 **2 条 `unver`**，其中
 `role_fate_unverifiable` **无条件产出**（见下）⇒ 每本每次都产 ⇒ 最好情况是 `amber`
@@ -195,8 +195,9 @@ _hard('role_leaks_fate', '静态身份里没有结局词', 'R-2.6', wordlist=Tru
                '常驻说出来',
       note='拆 role/fate 两个字段的**唯一理由**就是只下发 role——写手提前知道谁最后会死，'
            '第 1 章的伏笔就写过明。⇒ 结局漏回 role 就是把这次拆分白做了。'
-           '⚠ 修法是**付费**的（`--purge-role` 要再调一次语义判官），'
-           '它是本表唯一一条 `is_paid` 为真的 fix')
+           '⚠ 自动修法是**付费**的（`--purge-role` 要再调一次语义判官），'
+           '它是本表唯一一条 `is_paid` 为真的 fix；人工核对后的新 `role` 另可走 '
+           '`stage2.global --apply-edit <书内json>`（0 LLM）')
 
 _hard('role_repeats_name', '静态身份不与显示名完全同字', 'R-2.6', fix=FIX_RESAMPLE,
       note='同字的话写手拿到的下发面是「李宝珠：李宝珠」——一条零信息的介绍。盘上 0/3')
@@ -225,7 +226,8 @@ _unver('role_fate_unverifiable', '改写式结局泄漏有确定性防线', 'R-2
             '**在最需要说的两本上反而不说**。'
             '⇒ 本条与 `role_leaks_fate` 报绿灯还是红灯无关，**每本每次都产**：'
             '词表只挡转抄式（实测头牌命中 0/17 而人读真违规 6/17），'
-            '改写式泄漏归语义层，而语义层只有 `--purge-role` 那条**付费**臂。'
+            '改写式泄漏仍须人读；自动语义重划分只有 `--purge-role` 那条**付费**臂，'
+            '人工核对后的 typed `role` 可用 `stage2.global --apply-edit` 0 LLM 写回。'
             '⚠ 它是本层徽章到不了 `pass` 的主因，**而那是对的**')
 
 _metric('fate_report', '结局字段的缺失率', 'R-2.7',
@@ -234,7 +236,7 @@ _metric('fate_report', '结局字段的缺失率', 'R-2.7',
              '盘上 12/12 · **9/15** · 48/48 —— 中间那本 6 个角色没有结局，'
              '⚠ 那**不是违约**（配角本来就可以没有归宿），所以它只能是读数')
 
-# ═══ 四、世界规则 · 秘密 · 关系（3 HARD · 3 INFO · 1 度量 · 1 查不了）═════
+# ═══ 四、世界规则 · 秘密 · 关系（5 HARD · 3 INFO · 1 度量 · 1 查不了）═════
 
 _hard('world_rule_no_desc', '每条规则至少有一个带正文的版本', 'R-2.11b',
       fix=FIX_RESAMPLE,
@@ -242,6 +244,13 @@ _hard('world_rule_no_desc', '每条规则至少有一个带正文的版本', 'R-
            '**无兜底、缺失即显式终态**（`or description` 那个兜底就是漏洞本身）。'
            '⚠ 载体那边 `versions` 有 `min_length=1`、`desc` 有 `min_length=1`，'
            '本条在结构上恒不命中——理由同 `address_missing`。盘上 0/3')
+
+_hard('canon_chapter_refs_dangling', '规则版本与 secret 时间线章号都在正文集合内', 'R-2.21',
+      fix=FIX_RESAMPLE,
+      note='覆盖 world_rules[].versions[].effective_from_chapter、secret setup.chapters 与 '
+           'reader_reveal_events[].chapter。它们都直接决定逐章下发；越界值会让一条事实'
+           '永不生效/永不揭示。relation、knowledge、address、evidence 与 conflict stage '
+           '各由自己的专门规则守，不在这里重报。人工可用 GlobalEdit v2 0 LLM 修复')
 
 _info('world_rule_names_person', '规则正文里出现人名时按叫法时点扣住', 'R-2.11b',
       note='⚠⚠ **这道闸门在盘上什么也没拦住，而判据必须报出自己的基线**：'
@@ -265,14 +274,12 @@ _metric('secret_cold_reveal', '没有埋点的秘密条数', 'R-2.9b',
              '在**字段值上完全同形** ⇒ 两者只能靠 `setup_chapters_pruned` 那个计数分开，'
              '因此该计数必须常驻来源账。')
 
-_hard('secret_known_by_dangling', '「谁知情」里的保留形都解析得出来', 'R-2.9c',
+_hard('secret_known_by_dangling', '知情事件的 typed 主体与起章都有效', 'R-2.9c',
       fix=FIX_RESAMPLE,
-      note='⚠ 按**形状**分流：`char_\\d+` 必须能在 registry 里解析，'
-           '自由文本（「在场士兵」）**放行**。⚠⚠ 这与 `Address.by` 的处置'
-           '**故意相反**：那边要的是派发键，群体名解析不出人就没用；'
-           '这边要的是「谁知情」，**群体本身就是答案**，逼它写 id 只会逼出假 id。'
-           '**同一个「无名群体」在两个字段上的正确处置方向相反。**'
-           '盘上 0/3（24 / 24 / 25 条，⚠ 73/73 全是 `char_id`——自由文本那一臂零样本）')
+      note='CharacterRef 必须能在 registry 里解析，GroupRef 的自由文本 label '
+           '（「在场士兵」）放行；`known_from_chapter` 必须落在正文章集合。'
+           '这与 `Address.by` 故意相反：那边要派发键，这边群体本身就是答案。'
+           '人工可用 typed `knowledge_events` 经 `--apply-edit` 0 LLM 修复')
 
 _info('reveal_unmarked', '声称点破的那一章里有点破痕迹', 'R-2.9d',
       wordlist=True,
@@ -288,12 +295,22 @@ _unver('secrets_absent', '这本书有可查的秘密', 'R-2.9b',
             '在这本书上**恒不执行**，任何「剧透闸门验过了」的说法对它都不成立。'
             '⚠ 它与「查过、没泄」必须分得开。盘上 0/3（三本都有秘密，这一支零样本）')
 
-_info('relation_dangling', '关系两端都是 registry 里的 char_id', 'R-2.8',
-      note='⚠ 判 INFO 不判 HARD：地点 / 机构 / 物品**按契约就不入 relations**，'
-           '而模型偶尔会给一条「李宝珠 → 苏府」——那条解析不出来只是这一条失效，'
-           '不影响别的。⚠ **本条不查 `valid_from/to_chapter` 的范围**：'
-           '那一半今天没有判据（`R-2.8` 那一格写的是范围，而范围要拿全书章数比，'
-           '本层两份产物里都没有那个数）。盘上 0/3（13 / 15 / 42 条）')
+_hard('relation_dangling', '关系两端、世内窗口与读者 visibility 都关闭式有效', 'R-2.8',
+      fix=FIX_RESAMPLE,
+      note='两端必须是 registry char_id；valid_from/valid_through 与 public.from_chapter '
+           '必须在正文章集合且窗口有序；via_secret 必须引用现有 secret。'
+           '这些值直接决定 Stage4 是否下发，悬空时不能退回启发式猜。人工可用 relation '
+           'typed `--apply-edit` 0 LLM 修复')
+
+_info('relation_visibility_mismatch', '显式 relation visibility 与旧启发式交叉对账', 'R-2.19',
+      note='显式 visibility 是生产权威；旧的人名 + 隐瞒窗口启发式保留为独立 INFO 探针。'
+           '不一致必须出声，但 INFO 不能改生产 gate')
+
+_hard('global_evidence_unlocated', '自由事实证据能在指定章唯一回取为精确 SourceSpan', 'R-2.20',
+      fix=FIX_RESAMPLE,
+      note='模型只交章号 + 短 locator；代码原样优先、内容字符归一次之，且必须唯一命中。'
+           '零命中、多命中、错章、正式 span 漂移都落 source=null + 正向失败账，问题稿仍可读。'
+           '人工可同交新 claim/locator，或修正式 span 后 `--revalidate`；两条均 0 LLM')
 
 # ═══ 五、冲突阶段章覆盖（1 HARD）═══════════════════════════════════════════
 

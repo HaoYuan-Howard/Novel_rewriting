@@ -95,11 +95,57 @@ def lcs(a: str, b: str) -> tuple[int, int]:
 _TERMINAL_SUFFIX = frozenset('\u3002\uff01\uff1f?!\u2026.')
 
 
+def _overlapping_count(text: str, needle: str) -> int:
+    """统计所有可能起点；``str.count`` 会漏掉重叠命中。"""
+    if not needle:
+        return 0
+    count, start = 0, 0
+    while (hit := text.find(needle, start)) >= 0:
+        count += 1
+        start = hit + 1
+    return count
+
+
 def extend_terminal_punct(text: str, end: int) -> int:
     """只接住句末闭合标点，不把冒号、开引号等下一段语义吞进材料。"""
     while end < len(text) and text[end] in _TERMINAL_SUFFIX:
         end += 1
     return end
+
+
+def locate_unique_span(text: str, locator: str) \
+        -> tuple[int, int, str] | int | None:
+    """在一个已限定的原文面内唯一定位短 locator。
+
+    返回 ``(start, end, recovery)`` 表示唯一命中；返回 ``int``（≥2）表示
+    多处命中；返回 ``None`` 表示找不到。原样字节优先，因为标点可能正是重复
+    字面的唯一消歧信息；原样找不到才退到内容字符空间。这里故意没有 LCS 兜底：
+    locator 的职责是把事实绑定到一处精确原文，近似命中会把证据静默绑错。
+
+    这是 Stage2 所有“模型给短 locator、代码回取正式 SourceSpan”的唯一性尺子。
+    调用方决定 ``text`` 是一个 beat、一个段还是指定章节，但不得另写 ``find()``
+    并取第一处。
+    """
+    raw = locator.strip()
+    if raw:
+        count = _overlapping_count(text, raw)
+        if count == 1:
+            hit = text.find(raw)
+            return hit, extend_terminal_punct(text, hit + len(raw)), 'exact'
+        if count > 1:
+            return count
+    content, cmap = content_index(text)
+    needle = content_only(locator)
+    if not needle or not cmap:
+        return None
+    count = _overlapping_count(content, needle)
+    if count == 0:
+        return None
+    if count > 1:
+        return count
+    at = content.find(needle)
+    return cmap[at], extend_terminal_punct(
+        text, cmap[at + len(needle) - 1] + 1), 'normalized'
 
 
 def exact_span(source: Any, text: str, after: int = 0) -> tuple[int, int, str | None]:
@@ -114,7 +160,10 @@ def exact_span(source: Any, text: str, after: int = 0) -> tuple[int, int, str | 
     raw = text[start:end]
     if source.get('text') != raw:
         return 0, 0, 'source span text does not match offsets'
-    if source.get('normalized') != content_only(raw):
+    normalized = content_only(raw)
+    if not normalized:
+        return 0, 0, 'source span has no content characters'
+    if source.get('normalized') != normalized:
         return 0, 0, 'source span normalized text does not match'
     # ⚠ 取值面从**契约**取，不在这里手抄一份：`SourceSpan.recovery` 的 `Literal`
     #   收窄过一次（`lcs` 随最长公共子串救回装置一并下线），手抄的那份不会跟着改。

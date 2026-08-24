@@ -47,11 +47,13 @@ from contracts.invariants import (
     INBOX_ATTENTION,
     INBOX_DELIVERY_EFFECT,
     INBOX_KIND,
+    KNOWLEDGE_SUBJECT_KINDS,
     NAME_DISTINCTIVENESS,
     NARRATIVE_PERSON,
     NONBODY_KINDS,
     REMOVED_ORIGIN,
     RESIDUAL_ADOPTION_CONFIDENCE,
+    SECRET_SETUP_KINDS,
     SEVERITY,
     STAGES,
     STAGE5_REVIEW_STATE,
@@ -72,7 +74,8 @@ from contracts.schema.orchestration import (
 from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage0 import RemovalReport, Stage0Revision, Stage0Warning
 from contracts.schema.stage2 import (
-    BlueprintProvenance, ConflictStage, GlobalProvenance, Setting, WorldRule,
+    BlueprintProvenance, ConflictStage, FactEvidence, GlobalProvenance,
+    RelationVisibility, Setting, WorldRule,
 )
 from contracts.schema.stage3 import Measurable, StyleProvenance
 from contracts.schema.stage4 import CtxChapter, CtxProvenance, PlanGoal, PlanProvenance
@@ -932,14 +935,16 @@ class GlobalCharacterLine(FrozenModel):
     """一个人（`entities.characters` 的 dict 展平成带 `char_id` 的行）。
 
     ⚠ **`fate` 全量下发**：剧透遮蔽是前端的纯展示行为（`R-11.13`，四个字段名
-    写在 `SPOILER_DISCLOSURE['fields']` 里），服务端不做第二把尺子。
+    写在 `SPOILER_DISCLOSURE['hidden_paths']` 里），服务端不做第二把尺子。
     """
 
     char_id: str = Field(min_length=1)
     canonical: str = Field(min_length=1)
     name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
     role: str = Field(min_length=1)
+    role_evidence: FactEvidence
     fate: str | None
+    fate_evidence: FactEvidence | None
     address: list[GlobalAddressLine] = Field(min_length=1)
 
 
@@ -949,9 +954,20 @@ class GlobalRelationLine(FrozenModel):
     relation_id: str = Field(min_length=1)
     subject: NameRef
     predicate: str = Field(min_length=1)
+    predicate_evidence: FactEvidence
     object: NameRef
+    visibility: RelationVisibility
     valid_from_chapter: int = Field(ge=1)
-    valid_to_chapter: int | None
+    valid_through_chapter: int | None
+
+
+class GlobalKnowledgeEventLine(FrozenModel):
+    """一条世界内知情事件；人物已解引用，无名群体原样显示。"""
+
+    subject_kind: Literal[KNOWLEDGE_SUBJECT_KINDS]
+    subject: NameRef
+    known_from_chapter: int = Field(ge=1)
+    evidence: FactEvidence
 
 
 class GlobalSecretLine(FrozenModel):
@@ -961,8 +977,25 @@ class GlobalSecretLine(FrozenModel):
 
     secret_id: str = Field(min_length=1)
     fact: str = Field(min_length=1)
-    known_by: list[NameRef] = Field(min_length=1)
+    fact_evidence: FactEvidence
+
+    #: 同一个复合真相被拆成多条时的归组键；独立的秘密是 `null`。
+    group_id: str | None = None
+
+    knowledge_events: list[GlobalKnowledgeEventLine] = Field(min_length=1)
+
+    #: ⚠ **必须连 `setup_kind` 一起读。** `cold`（声明没有埋点）与
+    #: `foreshadowed` 但章号被落盘前裁空，在 `setup_chapters` 上都是 `[]`；
+    #: 界面拿空数组当「没有埋点」是对的，拿它当「模型声明了冷揭示」是错的。
+    setup_kind: Literal[SECRET_SETUP_KINDS]
     setup_chapters: list[int]
+
+    #: **逐章剧透闸门按它开**，不是按 `reader_reveal_chapters` 的最小值。
+    #: 两者在合法产物上取值相同（载体不许有事件早于首次揭示），但语义不同：
+    #: 界面要说「读者第几章知道这件事」时，说的是这一格。
+    first_reveal_chapter: int = Field(ge=1)
+
+    #: 全部揭示章（含后续 `confirm`）。
     reader_reveal_chapters: list[int] = Field(min_length=1)
 
 
@@ -973,6 +1006,7 @@ class ArcTrackLine(FrozenModel):
     dimension: str = Field(min_length=1)
     change_type: str = Field(min_length=1)
     trajectory: str = Field(min_length=1)
+    trajectory_evidence: FactEvidence
 
 
 class GlobalArcView(StrictModel):
@@ -1003,7 +1037,7 @@ class GlobalView(StrictModel):
     secrets: list[GlobalSecretLine]
     arc: GlobalArcView
 
-    #: 全屏解引用失败的总数（relations 两端 + secrets.known_by + arc.subject）。
+    #: 全屏解引用失败的总数（relations 两端 + secrets.knowledge_events + arc.subject）。
     #: **读数不是判定**——它是给人看「这份产物里有几个说不出名字的 id」。
     unresolved_refs: int = Field(ge=0)
 

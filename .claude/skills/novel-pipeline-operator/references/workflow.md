@@ -21,18 +21,23 @@
 
 ## 运行前检查
 
-先建立三个变量：
+先建立五个变量：
 
 - `<PY>`：能导入当前仓库的 `novel_refactor` 环境解释器。优先使用启动服务或当前项目实际使用的 `sys.executable`，不要硬编码到另一套环境。
 - `<BASE>`：输出根的绝对路径。
 - `<SID>`：从既有目录读取，或由 `stage0.remove --source` 的源文件名尾部数字推导。
+- `<STARTED_AT>`：本次会话开始的 epoch 秒。
+- `<START_CODE>`：本次会话开始时的完整代码指纹。
 
 逐项确认：
 
 1. cwd 是仓根；`<PY> -X utf8 -u -m novel.cli --help` 可用。
 2. `.env` 中存在外部模型密钥，但不输出值；`.llm_cache/` 可用。
 3. 新跑与续跑使用**同一个** `<BASE>`：隔离靠每本书自己的 `<平台_书名_sid>/` 目录，不靠另建输出根。另建一个根会把同一本书的 `_service/ledger.jsonl` 分裂成两份，而[收尾](#收尾)把它当成本的唯一权威源。不要写入任何历史验收或证据目录。
-4. 源文件或既有书目录存在，`<SID>` 唯一。
+4. 源文件或既有书目录存在，`<SID>` 唯一。立即从仓根运行
+   `<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/session_preflight.py --base <BASE> --sid <SID>`；新书把
+   `--sid` 换成 `--source <TXT>`。从这一个 JSON 固化 `<STARTED_AT>` 与 `<START_CODE>`，
+   也以它解析出的 sid/novel_dir 为准。终验不得在结束时现取新代码指纹冒充起点。
 5. 付费授权与正文外发授权各自取到值：交互式会话两项**默认 `granted`**，本步是记录不是索要；
    headless 取 launcher prompt 原文。两项不是同一授权，任何一项都不由另一项推定。
 6. 不覆盖项目默认模型与思考配置；运行时实际模型以配置和账本为准。
@@ -54,7 +59,17 @@
 
 `stage0.remove --source <txt>` 摄入新书时省略 `<SID>`。`preview` 不接受 `--yes`；它会通过与真跑共用的 `build_argv`，在付费步骤中生成已经带 `--yes` 的真实命令。它打印的命令**已按单引号规则转义**：含空格的取值（`--reason`、带空格的路径）自带引号，可逐字复制粘贴，不需要也不应该再自行改写 argv。
 
-执行 `preview` 输出的**全部步骤**，不只执行第一条。写盘节点可能自动追加 `--check-only`。推荐从仓根直接用 `.claude/skills/novel-pipeline-operator/scripts/run_step.py` 调用生产 `build_steps` 并串联信标；不要另抄追跑规则。
+执行 `preview` 输出的**全部步骤**，不只执行第一条。写盘节点可能自动追加 `--check-only`。
+推荐从仓根直接用下面两条调用生产 `build_steps` 并串联信标；不要另抄追跑规则：
+
+```text
+<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> <node> -- [flags]
+<PY> -X utf8 -u .claude/skills/novel-pipeline-operator/scripts/run_step.py --base <BASE> --sid <SID> --expect-code-version <START_CODE> --execute <node> -- [flags]
+```
+
+runner 控制参数在显式 `--` 之前可位于 node 前后，但以上是规范写法；`--` 之后全部属于
+生产节点。新书摄入时省略 runner 的 `--sid`，在 node flags 里传 `--source <TXT>`。
+runner 在构建 Step 前、每一步执行前后逐字核对 `<START_CODE>`；漂移时不再启动下一步。
 
 真跑本身已经打印同一份 fresh 报告时，追检的价值是**复核产物完整性**，不是重读判据（那句「⚠ 自动追跑：退出码 0 也可能是残缺产物」说的就是这件事）：仍必须执行并打点，但只取它的退出码与合计行即可，不必重读全文。
 
@@ -210,8 +225,7 @@ CLI `state` 会显示共享的 deterministic freshness badge；这个 badge 才�
 
 1. 执行代批文档中的逐字成书对账。
 2. 再运行一次 `state` 与 `inbox`，只统计活动目录，排除 `_rounds/` 历史。
-3. 最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：按 sid 过滤 `outcome == "ok"`
-   的记录，缓存命中与实付分开计数，token 合计只累加 `cached == false`。产物
-   `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
-4. 完成终审包，确保每个异常、残红和不可验证项都有“影响、证据、恢复路径”。
-5. 只向用户交付成书与终审包；中间产物仅作为终审包中的可追溯指针。
+3. 从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py --base <BASE> --sid <SID> --started-at <STARTED_AT> --start-code-version <START_CODE>`。最终成本只以 `<BASE>/_service/ledger.jsonl` 为权威源：先按 sid、`outcome == "ok"` 和 `<STARTED_AT>` 切出本次会话；同 SID 全历史另列累计审计，**两张表不相加**。缓存命中与实付分开计数，token 合计只累加 `cached == false`。产物 `_provenance.usage`、控制台日志和历史报告只用于单产物追溯，不得与 ledger 混加或替代它。
+4. 对按模板建立的终审包运行同参数的 `.claude/skills/novel-pipeline-operator/scripts/sync_review_evidence.py`，由脚本更新质量表、两张账本、退出序列与机器锚点；agent 只写内容判断、代批证据和恢复说明。
+5. 清除剩余占位符，用同一组会话参数运行 `.claude/skills/novel-pipeline-operator/scripts/validate_review.py`，再运行 `.claude/skills/novel-pipeline-operator/scripts/verify_delivery.py --base <BASE> --sid <SID> --start-code-version <START_CODE>`。确保每个异常、残红和不可验证项都有“影响、证据、恢复路径”。
+6. 只向用户交付成书与终审包；中间产物仅作为终审包中的可追溯指针。

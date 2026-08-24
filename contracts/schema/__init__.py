@@ -139,11 +139,13 @@ from contracts.schema.stage1 import (
     Stage1Warning,
 )
 from contracts.schema.stage2 import (
-    Address, AddressContextPatch, Arc, ArcTrack, Beat, Blueprint, Canon,
+    Address, AddressContextPatch, Arc, ArcTrack, ArcTrackPatch, Beat, Blueprint, Canon,
     ChapterBlueprints, ChapterBlueprintsResponse, Character, CharacterEnumPatch,
-    CharacterAddressReplacement, ConflictStage, Entities, GlobalEdit, GlobalGrounding,
-    GlobalGroundingResponse, Hinge, Narration, ReaderRevealEvent, Relation,
-    RoleSplitResponse, Secret, SecretPatch, Setting, SourceSpan, WorldRule,
+    CharacterAddressReplacement, CharacterRef, ConflictStage, Entities, EvidenceLocator,
+    FactEvidence, GlobalEdit, GlobalGrounding, GlobalCharacterPatch,
+    GlobalGroundingResponse, GroupRef, Hinge, KnowledgeEvent, KnowledgeEventResponse,
+    Narration, ReaderRevealEvent, Relation, RelationPatch, RelationVisibility,
+    RoleSplitResponse, Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
     WorldRulePatch, WorldRuleVersion,
 )
 from contracts.schema.stage3 import (
@@ -244,13 +246,18 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 2),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
     STAGE1_PARTITION_REPORT: ArtifactSpec(PartitionReport, 2),
-    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding),
+    # ⚠ 两次形状破坏：v2 是 secret 原子时间线；v3 是显式 relation visibility、
+    #   knowledge_events、代码回取事实证据与 valid_through 改名。破坏与重建责任登记在
+    #   `tests/test_artifact_versions.py::_SHAPE_BREAKS`。
+    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(GlobalGrounding, 3),
     STAGE2_GLOBAL_REVIEW: ArtifactSpec(GlobalReview),
     STAGE2_GLOBAL_REVIEW_DECISIONS: ArtifactSpec(GlobalReviewDecisionSet),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
     #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
-    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit),
+    # ⚠ v2：人工决策随 GlobalGrounding v3 改成 locator/knowledge/visibility typed 面；
+    #   旧 v1 决策不能推断知情时点或证据，必须由人按新契约重写，不做迁移。
+    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 2),
     # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
     #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
     #   v1.1/v2/v3.1 三值，升 v3。两次都会让旧信封**读不进来**。
@@ -439,7 +446,10 @@ __all__ = [
     'NoisyDuplicateWarning',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
     'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret', 'ReaderRevealEvent',
-    'GlobalEdit', 'SecretPatch', 'WorldRulePatch', 'CharacterEnumPatch',
+    'EvidenceLocator', 'FactEvidence', 'CharacterRef', 'GroupRef', 'KnowledgeEvent',
+    'KnowledgeEventResponse', 'RelationVisibility',
+    'GlobalEdit', 'SecretPatch', 'WorldRulePatch', 'RelationPatch', 'SettingPatch',
+    'ArcTrackPatch', 'GlobalCharacterPatch', 'CharacterEnumPatch',
     'AddressContextPatch', 'CharacterAddressReplacement', 'Arc', 'ConflictStage',
     'ArcTrack', 'ChapterBlueprints', 'Blueprint', 'Beat', 'SourceSpan', 'Hinge', 'Narration',
     'GlobalGroundingResponse', 'ChapterBlueprintsResponse', 'RoleSplitResponse',

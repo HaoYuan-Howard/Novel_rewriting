@@ -649,6 +649,24 @@ ADDRESS_BY: Final = ('char_id', 'narration', 'public')
 #: 称谓的场合。
 ADDRESS_CONTEXT: Final = ('address', 'reference')
 
+#: `Secret.setup` 判别联合的两臂。**`cold` 是一个正当答案，不是缺省值**——
+#: v1 时代这一格是 `list[int]`，空数组同时表示「声明没有埋点」与「模型没想过」，
+#: 而它是关系闸门隐瞒窗口与 secret 闸门第②臂**两道下发闸门的前件**。
+SECRET_SETUP_KINDS: Final = ('cold', 'foreshadowed')
+
+#: 一次读者揭示是**首次点破**还是**后续确认**。
+#: ⚠ 逐章下发闸门**只认 `first`**：旧闸门按「任意一次揭示 ≤ 本章」判，
+#: 分两次揭示的秘密在第一次之后就把整份 `fact` 泄给了写前面章节的写手。
+REVEAL_EVENT_KINDS: Final = ('first', 'confirm')
+
+#: relation 的**读者可见**时点与世内成立时点正交：公开事实直接给起章，
+#: 秘密关系引用一条 secret 的首次揭示章。两臂是闭合判别联合。
+RELATION_VISIBILITY_KINDS: Final = ('public', 'via_secret')
+
+#: secret 知情主体的两臂。具名人物用 registry 外键；无名群体本身就是答案，
+#: 以自由文本 label 保留，不能为了闭合引用而逼模型编一个 char_id。
+KNOWLEDGE_SUBJECT_KINDS: Final = ('character', 'group')
+
 #: 人名区分度。**不下发给写作节点**——它只给确定性代码用（成稿人名检查 / 文风专名过滤）。
 #: 写作 prompt 里从没定义过这个枚举，整份发过去只是噪声。
 NAME_DISTINCTIVENESS: Final = ('high', 'medium', 'common')

@@ -15,8 +15,12 @@
 | `runtime-profiles.md` | 宿主差异 | 流水线质量判据 |
 | `field-notes.md` | 经验证或明确标态的经验；索引兼入口（超出整读预算后条目分片进 `field-notes/`） | 稳定公共接口、流水账 |
 | `assets/final-review-template.md` | 用户最终审阅界面 | 运行逻辑 |
-| `scripts/collect_final_evidence.py` | 只读调用生产 state/inbox/check/组装/账本出口，收拢终审事实与机器锚点 | 新造质量判据、写盘或替代逐项人工审阅 |
+| `scripts/session_preflight.py` | 只读固化一次 run 的起始时间、代码指纹、sid 与路径 | 推进节点或替代授权检查 |
+| `scripts/run_step.py` | 调用生产 `build_steps`，核对起始代码并给每一步串 start/end 信标 | 重造 argv、判定质量或吞掉节点退出码 |
+| `scripts/collect_final_evidence.py` | 只读调用生产 state/inbox/check/组装/账本出口，按会话收拢终审事实与机器锚点 | 新造质量判据、写盘或替代逐项人工审阅 |
+| `scripts/sync_review_evidence.py` | 只改终审模板稳定标记间的机器事实块 | 改写 agent 的语义判断、代批理由或产物 |
 | `scripts/validate_review.py` | 把终审包实例的锚点、八类余额、质量表、退出序列与当前盘面对账 | 判断小说内容好坏 |
+| `scripts/verify_delivery.py` | 用起始代码指纹调用生产交付终验 | 用结束时当前指纹替代起始事实 |
 | `scripts/validate_skill.py` | 静态对账：结构、链接、节点顺序、经验格式，以及「文档声称的行为 vs 代码」 | 代替真实跑书；需要 pydantic 模型实例才能验的事 |
 | `tests/test_skill_operator.py`（仓内） | 把校验器接进默认 pytest 套件；扫描面下界；用真 `render()` 验推荐读法 | 结构与文案本身 |
 
