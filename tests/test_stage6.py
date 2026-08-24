@@ -7,10 +7,11 @@ import pytest
 
 from contracts.invariants import slot_of
 from contracts.rules import REGISTRY
-from contracts.schema.stage6 import ApprovedHook
+from contracts.schema.stage6 import ApprovedHook, Hook
 from novel.core.measure import measure
 from novel.run import RunContext
 from novel.stages.stage6 import checks, hook, prompts
+from novel.store import ArtifactStore
 from novel.stages.stage6.measure import normalize_hook, quote_problems_of
 from tests import corpus, sandbox
 from tests.markers import corpus_params
@@ -736,3 +737,93 @@ def test_short_hook_still_reports_source_distance():
     rows = _distance_reading('太短。', _SRC_HOOK)
     assert 'hook_empty' in rows
     assert 'hook_source_distance' in rows
+
+
+# ── 候选互异：四条写盘路一条都不许绕过 ────────────────────────────────────
+
+def _write_hook_edit(box, *, candidate: str, text: str) -> None:
+    """`--apply-edit` 的决策集。⚠ **走 `encode_artifact`**：它是注册产物，
+    手写一个裸 dict 会被读盘口按「缺版本标记」拒掉，用例就测不到真正那道闸。"""
+    import json as _json
+
+    from contracts.schema import encode_artifact
+
+    (box.dir / 'stage6' / 'hook_edit.json').write_text(
+        _json.dumps(encode_artifact(
+            'stage6/hook_edit.json',
+            {'candidate': candidate, 'text': text}), ensure_ascii=False),
+        encoding='utf-8')
+
+
+def _land_three_clean_candidates(box):
+    """一份三条互异候选的正式 `hook.json`。"""
+    ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=True)
+    art = hook.run_hook(
+        ctx, _fake_client(ctx, _samples(box, truncated=[False, False, False])))
+    assert len(art.candidates) == 3
+    return art
+
+
+@pytest.mark.usefixtures('current_drafts')
+def test_apply_edit_cannot_collapse_two_candidate_slots(box):
+    """⭐ **`--apply-edit --candidate` 能把两个槽写成同文，直接落正式产物。**
+
+    候选的身份是**位置**（配方按 slot 记：`payoff_preview` ×1 + `scene_punchline` ×2）。
+    两个 slot 同字之后，判官对哪一条给的结论就再也分不开了。
+    生成路与 `--revalidate` 早有这道闸，`--apply-edit` 没有。
+    """
+    import json as _json
+
+    from novel.errors import TerminalState
+
+    art = _land_three_clean_candidates(box)
+    _write_hook_edit(box, candidate='c2', text=art.candidates[0].text)
+
+    ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
+    with pytest.raises(TerminalState, match='重复槽位'):
+        hook.run_apply_edit(ctx)
+
+    after = ArtifactStore(
+        RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False),
+    ).read_own(Hook, 'stage6/hook.json')[0]
+    assert [c.text for c in after.candidates] == [c.text for c in art.candidates],         '正式产物被一次会折叠槽位的编辑覆盖了'
+
+
+@pytest.mark.usefixtures('current_drafts')
+def test_apply_edit_still_accepts_a_genuinely_different_text(box):
+    """闸只拦折叠，不拦正常改字——收多了是另一个方向的错。"""
+    import json as _json
+
+    art = _land_three_clean_candidates(box)
+    _write_hook_edit(
+        box, candidate='c2',
+        text=_sample(box, truncated=False, variant=1) + '换一句。')
+
+    ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
+    updated, _report = hook.run_apply_edit(ctx)
+    assert updated.candidates[1].text != art.candidates[1].text
+    assert len({c.text for c in updated.candidates}) == 3
+
+
+@pytest.mark.usefixtures('current_drafts')
+def test_recheck_refuses_to_write_back_candidates_that_normalise_together(box):
+    """⭐ `--recheck` 0 成本但**写盘**：归一后坍缩成同文时不许静默写回。
+
+    归一规则改过之后，两条本来不同的候选可能在归一后变成同一串字节。
+    `--recheck` 原来照写不误 —— 那一刻位置身份就没了。
+    """
+    import json as _json
+
+    from novel.errors import TerminalState
+
+    _land_three_clean_candidates(box)
+    formal = box.dir / 'stage6' / 'hook.json'
+    data = _json.loads(formal.read_text(encoding='utf-8'))
+    payload = data['payload'] if 'payload' in data else data
+    # 只差一个会被归一吃掉的全角/半角差异 ⇒ 归一后两槽同文。
+    payload['candidates'][1]['text'] = payload['candidates'][0]['text']
+    formal.write_text(_json.dumps(data, ensure_ascii=False), encoding='utf-8')
+
+    ctx = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=False)
+    with pytest.raises(TerminalState, match='重复槽位'):
+        hook.run_recheck(ctx)
