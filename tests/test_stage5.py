@@ -281,6 +281,52 @@ def test_stage5_check_report_aggregates_band_drift_without_losing_chapter_state(
     assert details[1]['converge'] == 'unresolved_2'
 
 
+def test_check_only_overlays_a_wontfix_written_after_the_latest_review(monkeypatch):
+    """旁路决定账落下后立刻生效，不要求额外生成一份 Review 才能从 inbox 销账。"""
+    from types import SimpleNamespace
+
+    from contracts.schema.common import WontFixEntry
+    from contracts.schema.report import finding
+    from contracts.schema.stage5 import Review, ReviewChapter
+    from novel.prov import FreshnessReport
+    from novel.stages.stage5 import review
+
+    hit = checks.with_output_ordinal([finding(
+        'event_landing', detail='第 2 拍没有落点', evidence=['b02'],
+        converge='same_draft', unresolved_rounds=0,
+    )], 6)[0]
+    row = ReviewChapter(
+        output_ordinal=6, from_source_ordinals=[6], budget_chars=100,
+        source_chars=100, mode='deep', mode_dir='deep',
+        relpath='stage5/deep/ch06.json', draft_round=1,
+        draft_sha1='a' * 10, draft_text_sha1='b' * 10, chars=100,
+        findings=[hit],
+    )
+    artifact = Review.model_construct(
+        sources=None, judged={}, chapters=[row], book=[],
+        baselines={'_beat_event_landing': '0/1 拍有落点'},
+        baselines_identity={}, counts={}, provenance=None,
+    )
+    entry = WontFixEntry(
+        output_ordinal=6, rule=hit.rule, evidence_key=hit.evidence_key,
+        why='故意保留留白', detail=hit.detail, at='review_1',
+    )
+    monkeypatch.setattr(review, 'load_wontfix', lambda _store: {
+        review.wontfix_key(6, hit.rule, hit.evidence_key): entry,
+    })
+    monkeypatch.setattr(review, 'review_seqs', lambda _store: [])
+    store = SimpleNamespace(
+        freshness=lambda _rel: FreshnessReport('unknown', 'no_inputs'))
+    ctx = SimpleNamespace(sid='book-1', node='stage5.review')
+
+    report = review._report_of_review(ctx, store, artifact)
+
+    finding_row = next(item for item in report.rules if item.rule == 'event_landing')
+    assert finding_row.findings[0].wontfix is not None
+    assert finding_row.findings[0].wontfix.why == '故意保留留白'
+    assert finding_row.findings[0].actionable is False
+
+
 def test_keep_value_missing_compares_the_value_not_the_literal(book, entry):
     """⭐⭐ **比值不比字面**：下发面「30岁」、成稿「三十岁」＝**满足**。
 

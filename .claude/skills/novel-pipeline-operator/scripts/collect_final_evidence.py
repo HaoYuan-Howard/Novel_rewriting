@@ -14,6 +14,7 @@ import json
 import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -117,7 +118,24 @@ def _reports(novel_dir: Path, sid: str) -> tuple[dict[str, Any], list[str]]:
     return reports, rows
 
 
-def _ledger(base: Path, sid: str) -> dict[str, Any]:
+def _event_epoch(row: dict[str, Any]) -> int | None:
+    """读服务账本的一行时间；不知道就显式返回 ``None``。"""
+    ts = row.get('ts')
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+        return int(ts)
+    at = row.get('at')
+    if not isinstance(at, str) or not at.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(at.strip().replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return int(parsed.timestamp())
+
+
+def _ledger(base: Path, sid: str, *, started_at: int | None = None) -> dict[str, Any]:
     by_node: dict[str, dict[str, int]] = defaultdict(lambda: {
         'calls_paid': 0, 'calls_cached': 0, 'prompt_tokens': 0,
         'completion_tokens': 0, 'reasoning_tokens': 0, 'latency_ms': 0,
@@ -125,6 +143,14 @@ def _ledger(base: Path, sid: str) -> dict[str, Any]:
     for row in _jsonl(ledger_path(base)):
         if row.get('sid') != sid or row.get('outcome') != 'ok':
             continue
+        if started_at is not None:
+            event_at = _event_epoch(row)
+            if event_at is None:
+                raise ValueError(
+                    f'账本中 sid={sid} 有一条 outcome=ok 记录没有可解析时间，'
+                    '无法证明它属于本次会话还是历史：' + repr(row))
+            if event_at < started_at:
+                continue
         bucket = by_node[str(row.get('node') or 'unknown')]
         if row.get('cached') is True:
             bucket['calls_cached'] += 1
@@ -139,8 +165,12 @@ def _ledger(base: Path, sid: str) -> dict[str, Any]:
                  'calls_paid': 0, 'calls_cached': 0, 'prompt_tokens': 0,
                  'completion_tokens': 0, 'reasoning_tokens': 0, 'latency_ms': 0,
              })}
-    return {'path': str(ledger_path(base)), 'by_node': dict(sorted(by_node.items())),
-            'total': total}
+    return {
+        'path': str(ledger_path(base)),
+        'scope': ('session' if started_at is not None else 'sid_all_history'),
+        'started_at': started_at,
+        'by_node': dict(sorted(by_node.items())), 'total': total,
+    }
 
 
 def _active_files(novel_dir: Path) -> tuple[list[str], list[str]]:
@@ -241,16 +271,31 @@ def _book_facts(base: Path, sid: str, novel_dir: Path) -> dict[str, Any]:
     }
 
 
-def collect(base: str | Path, sid: str) -> dict[str, Any]:
+def _session_exits(events: list[Any], sid: str, started_at: int) -> list[dict[str, Any]]:
+    """只取本次会话内的 end 信标；同 SID 的旧 run 不得混入。"""
+    return [
+        {'node': event.node, 'exit_code': event.exit_code}
+        for event in events
+        if (event.sid == sid and event.phase == 'end' and event.ts >= started_at)
+    ]
+
+
+def collect(base: str | Path, sid: str, *, started_at: int,
+            start_code_version: str) -> dict[str, Any]:
     base = Path(base).resolve()
+    current_code = prov.code_version()
+    if prov.CODE_UNKNOWN in (start_code_version, current_code):
+        raise ValueError(
+            f'代码指纹不可用（start={start_code_version}，current={current_code}）')
+    if current_code != start_code_version:
+        raise ValueError(
+            f'运行期间代码指纹变化：start={start_code_version}，current={current_code}')
     novel_dir = paths.resolve_novel_dir(base, sid).resolve()
     ov = overview(base, sid)
     inbox = inbox_view(base, sid)
     terminals, edits = _active_files(novel_dir)
     reports, quality_rows = _reports(novel_dir, sid)
-    events = [event for event in beacon.read_events(base)
-              if event.sid == sid and event.phase == 'end']
-    exits = [{'node': event.node, 'exit_code': event.exit_code} for event in events]
+    exits = _session_exits(beacon.read_events(base), sid, started_at)
     exit_text = ' → '.join(f"{row['node']}:{row['exit_code']}" for row in exits) or '无'
     exit_compact = _compact_exits(exits)
     exit_digest = hashlib.sha256(json.dumps(
@@ -279,7 +324,9 @@ def collect(base: str | Path, sid: str) -> dict[str, Any]:
             'error': f'{type(exc).__name__}: {exc}',
         }
     anchor = {
-        'schema': 'novel-final-evidence-v2', 'sid': sid,
+        'schema': 'novel-final-evidence-v3', 'sid': sid,
+        'session_started_at': started_at,
+        'start_code_version': start_code_version,
         'title': paths.title_of(novel_dir), 'novel_dir': str(novel_dir),
         'book_path': book['path'], 'book_sha1': book.get('sha1'),
         'chapters': book.get('chapter_count'), 'inbox_counts': inbox_counts,
@@ -298,7 +345,9 @@ def collect(base: str | Path, sid: str) -> dict[str, Any]:
         'inbox': inbox.model_dump(mode='json'), 'inbox_counts_text': inbox_text,
         'reports': reports, 'quality_table_rows': quality_rows,
         'active_terminal_files': terminals, 'active_edit_inputs': edits,
-        'book': book, 'ledger': _ledger(base, sid),
+        'book': book,
+        'ledger': _ledger(base, sid, started_at=started_at),
+        'ledger_cumulative': _ledger(base, sid),
         'stage2_review': stage2_review,
         'exit_sequence': exits, 'exit_sequence_text': exit_text,
         'exit_sequence_compact_text': exit_compact,
@@ -312,8 +361,14 @@ def main() -> int:
         description='只读收集小说终审事实；JSON 输出到 stdout')
     parser.add_argument('--base', required=True)
     parser.add_argument('--sid', required=True)
+    parser.add_argument('--started-at', required=True, type=int,
+                        help='session_preflight.py 捕获的 epoch 秒')
+    parser.add_argument('--start-code-version', required=True,
+                        help='session_preflight.py 捕获的起始代码指纹')
     args = parser.parse_args()
-    print(json.dumps(collect(args.base, args.sid), ensure_ascii=False, indent=2))
+    print(json.dumps(collect(
+        args.base, args.sid, started_at=args.started_at,
+        start_code_version=args.start_code_version), ensure_ascii=False, indent=2))
     return 0
 
 

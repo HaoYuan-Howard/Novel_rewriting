@@ -111,9 +111,11 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(runner.subprocess, 'run', fake_run)
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
 
     rc = runner.main([
-        '--base', 'E:/outputs', '--sid', '42', '--execute', 'stage2.global',
+        '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
+        'stage2.global', '--execute',
     ])
 
     assert rc == 0
@@ -125,6 +127,45 @@ def test_run_step_executes_the_production_argv_and_brackets_it_with_beacons(
     assert calls[2][0][calls[2][0].index('--phase') + 1] == 'end'
     assert calls[2][0][calls[2][0].index('--exit') + 1] == '0'
     assert all('shell' not in kwargs for _argv, kwargs in calls)
+
+
+def test_run_step_stops_before_building_when_the_session_code_changed(monkeypatch):
+    runner = _operator_script('run_step')
+    built: list[bool] = []
+    monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v2')
+    monkeypatch.setattr(
+        runner, 'build_steps', lambda *args, **kwargs: built.append(True) or [])
+
+    rc = runner.main([
+        '--base', 'E:/outputs', '--sid', '42',
+        '--expect-code-version', 'code-v1', 'stage2.global',
+    ])
+
+    assert rc == 2
+    assert built == []
+
+
+def test_session_preflight_materializes_one_reusable_run_coordinate(
+        tmp_path, monkeypatch):
+    preflight = _operator_script('session_preflight')
+    book = tmp_path / '测试书_42'
+    book.mkdir()
+    monkeypatch.setattr(preflight.prov, 'code_version', lambda: 'code-v1')
+    monkeypatch.setattr(preflight.time, 'time', lambda: 1234567890)
+
+    facts = preflight.capture(tmp_path, sid='42')
+
+    assert facts['started_at'] == 1234567890
+    assert facts['code_version'] == 'code-v1'
+    assert facts['sid'] == '42'
+    assert Path(str(facts['novel_dir'])) == book.resolve()
+
+
+def test_delivery_verifier_requires_the_start_code_version():
+    verifier = _operator_script('verify_delivery')
+    with pytest.raises(SystemExit) as exc:
+        verifier.main(['--base', 'E:/outputs', '--sid', '42'])
+    assert exc.value.code == 2
 
 
 #: 每个扫描面的下界。**不是等值断言**——注册表本来就会增删；
