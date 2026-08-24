@@ -49,7 +49,7 @@ def test_derived_alias_probe_catches_name_tail_nickname_without_auto_replacing()
                   'extra_subs': [], 'subs': {}, 'kept': []},
         subs={}, problems=[], applied={}, residual=[], baseline={}, registry={},
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
-        family_members={}, dup=[], missing=[], invalids=[],
+        family_members={}, missing=[], invalids=[],
         post_units=[('ch6', '箬姐姐替她掩上房门。')], title_line='书名语义需人工确认',
         derived_aliases=rows)
     hit = [row for row in findings if row.rule == 'rn_derived_alias_candidate']
@@ -160,7 +160,7 @@ def _split_detail(characters: list[dict], surname_map: dict, subs: dict) -> str 
         subs=subs, problems=[], applied={'chapters': {}}, residual=[], baseline={},
         registry={c['char_id']: {} for c in characters},
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
-        family_members={}, dup=[], missing=[], invalids=[], post_units=[],
+        family_members={}, missing=[], invalids=[], post_units=[],
         title_line='书名语义需人工确认')
     return next((f.detail for f in fs if f.rule == 'rn_surname_split'), None)
 
@@ -207,7 +207,7 @@ def test_rename_semantic_marker_finding_catches_rank_change():
         name_map={'characters': [], 'surname_map': {}},
         problems=[], applied={}, residual=[], baseline={}, registry={},
         pre_target='', source_text='', residual_keys=set(), stem_noise={},
-        family_members={}, dup=[], missing=[], invalids=[],
+        family_members={}, missing=[], invalids=[],
         post_units=[], title_line='书名语义需人工确认',
     )
     changed = checks.rename_findings(subs={'七郎': '六郎'}, **kwargs)
@@ -465,7 +465,7 @@ def test_dropping_a_substantive_reason_is_reported_but_dropping_a_blank_is_not()
             subs={}, problems=[], applied={'chapters': {}, 'hook': {'counts': {}}},
             residual=[], baseline={}, registry={'char_001': {'canonical': '迟折月'}},
             pre_target='', source_text='', residual_keys=set(), stem_noise={},
-            family_members={}, dup=[], missing=[], invalids=[], post_units=[],
+            family_members={}, missing=[], invalids=[], post_units=[],
             # ⚠ `title_line` 非空是**必需**的：`rn_title_unver` 直接拿它当 detail
             #   （`checks.py::rename_findings`），而 `Finding.detail` 有 min_length。
             title_line='书名「测试书」→「测试书」：恒等', dropped_reason=dropped)

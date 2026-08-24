@@ -406,6 +406,11 @@ class _RoundFields(StrictModel):
 class RoundLlmProvenance(LlmProvenance, _RoundFields):
     """stage5 逐章成稿（模型产的那一份）。"""
 
+    #: 临时契约 A/B 才写：最终被内容闸采纳的**实际请求** SHA-256。
+    #: 它由 ``accepted purpose → attempt_id → ledger wire/cache row`` 精确反查，
+    #: 不能按默认 effort 或首发档位重算。正常生产不带实验 flag 时键缺席。
+    request_fingerprint: Sha256 | None = None
+
 
 class RoundFreeProvenance(FreeProvenance, _RoundFields):
     """stage5 逐章成稿（`--apply-edit` 落的人工稿）。盘上 1/31。"""

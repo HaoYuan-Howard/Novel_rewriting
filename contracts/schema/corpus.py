@@ -53,12 +53,10 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         'stage3/style_grounding.json',
         'stage4/plan_chapters.json',
         'stage4/writer_context.json',
-        'stage5/deep/draft.md',
         'stage5/draft.md',
         'stage5/review_1.json',
         # ⚠ `stage5/semantic_1.json` 随 `stage5.semantic` 节点于 2026-08-17 下线，
         #   不再是一本合格语料书的必备面。
-        'stage5/shallow/draft.md',
         'stage6/hook.json',
         'stage6/semantic_1.json',
         # ⚠⚠ **成书这一条登记的是模板 rel，不是盘上那个文件名。**
@@ -70,11 +68,7 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         ARTIFACT_PATHS['stage7.book'],
         'stage7/name_map.json',
     }
-    fixed.update(f'stage5/deep/ch{ordinal:02d}.json' for ordinal in range(1, 4))
-    fixed.update(
-        f'stage5/shallow/ch{ordinal:02d}.json'
-        for ordinal in range(4, chapters + 1)
-    )
+    fixed.update(f'stage5/ch{ordinal:02d}.json' for ordinal in range(1, chapters + 1))
     return frozenset(fixed)
 
 
@@ -190,15 +184,15 @@ class CorpusBookEntry(StrictModel):
             raise ValueError(f'最终 corpus 不得残留 INVALID：{invalid}')
         expected_chapter_artifacts = {
             rel for rel in required_current_corpus_artifacts(self.chapters)
-            if re.fullmatch(r'stage5/(?:deep|shallow)/ch\d+\.json', rel)
+            if re.fullmatch(r'stage5/ch\d+\.json', rel)
         }
         actual_chapter_artifacts = {
             rel for rel in rels
-            if re.fullmatch(r'stage5/(?:deep|shallow)/ch\d+\.json', rel)
+            if re.fullmatch(r'stage5/ch\d+\.json', rel)
         }
         if actual_chapter_artifacts != expected_chapter_artifacts:
             raise ValueError(
-                'Stage5 formal chapters 必须恰为 deep 1,2,3 与 shallow rest')
+                'Stage5 formal chapters 必须恰为 canonical ch01..chNN')
         expected_nodes = set(CURRENT_CORPUS_PAID_NODES)
         if set(self.ledger.nodes) != expected_nodes:
             raise ValueError(
@@ -284,19 +278,12 @@ class CorpusManifest(StrictModel):
         for command, (_sid, node) in zip(self.commands, dispatches, strict=True):
             flags = re.findall(r'(?<!\S)--[a-z0-9-]+(?=\s|$)', command)
             expected_flags = {'--base', '--yes'}
-            if node == 'stage5.write':
-                expected_flags.update({'--deep', '--shallow-rest'})
             # ⚠ `stage6.semantic` 曾在这里多加一个 `--advisory`。那个 flag 随自动放行门
             #   一起删除后它只带 `--base --yes`——**不要**为了让旧 manifest 通过而补回来。
             if set(flags) != expected_flags or len(flags) != len(expected_flags):
                 raise ValueError(
                     f'{node} production command flags 必须恰为 '
                     f'{sorted(expected_flags)}，实得 {flags}')
-            if node == 'stage5.write':
-                if re.search(r'(?<!\S)--deep\s+1,2,3(?=\s|$)', command) is None:
-                    raise ValueError('stage5.write command 必须固定 --deep 1,2,3')
-                if not _has_flag(command, '--shallow-rest'):
-                    raise ValueError('stage5.write command 必须含 --shallow-rest')
         command_nodes = {node for _sid, node in dispatches}
         for book in self.books:
             if set(book.ledger.nodes) != command_nodes:

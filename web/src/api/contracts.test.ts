@@ -46,10 +46,10 @@ function globalFixture(): Stage2Global {
 }
 
 describe('request-shaped cache and diagnostics', () => {
-  it('includes mode in preview cache identity', () => {
+  it('includes runtime chapter args in preview cache identity', () => {
     const base = { kind: 'stage5.write', label: '写', extra: null, sid: 's' }
-    expect(qk.jobPreview({ ...base, mode: 'deep' })).not.toEqual(
-      qk.jobPreview({ ...base, mode: 'shallow' }),
+    expect(qk.jobPreview({ ...base, args: ['--chapters', '1'] })).not.toEqual(
+      qk.jobPreview({ ...base, args: ['--chapters', '2'] }),
     )
   })
 
@@ -60,7 +60,6 @@ describe('request-shaped cache and diagnostics', () => {
       dirname: 's',
       chapters: 11,
       stages: [],
-      stage5_modes: [],
       summary: {
         verdict: 'pending',
         text: '',

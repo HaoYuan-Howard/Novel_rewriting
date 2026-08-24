@@ -4,7 +4,7 @@
 assemble.py —— `stage7.assemble`：把替换后的文案与正文拼成成书 `stage7/<书名>_rewriting.txt`。
 
 **它是交付物，不是审阅稿。** 里面没有地方写「缺章」抬头横幅
-——所以四类残缺态**一律拒写**（`R-10.14`），而不是写一份带警告的 txt。
+——所以缺章与未批准文案**一律拒写**（`R-10.14`），而不是写一份带警告的 txt。
 
 〔`R-10.8` 那一行「谁在查」标的代码落点：**`assemble_txt` 是唯一的组装路径**，
 章分隔与换行都是常量，不是参数。〕
@@ -119,14 +119,11 @@ def _require_mapping_current(
     from novel.stages.stage6 import semantic as hook_semantic
     hook_semantic.require_approved_clear(store, up.hook_art)
 
-    # ⚠ 三项各自「差什么」进 `bad`（message），「怎么补」进 `todo`（hint）。
+    # ⚠ 两项各自「差什么」进 `bad`（message），「怎么补」进 `todo`（hint）。
     #   `hint` 是**一条时给一条、多条时逐条列全**：这道闸的全部价值就是一次说清，
     #   而人只能按其中一条去敲下一个命令。
     bad: list[str] = []
     todo: list[str] = []
-    if up.dup:
-        bad.append(f'同章双份：{up.dup}（哪一份是成品无从判断）')
-        todo.append(f'删掉 {up.dup} 里多出来的那一份成稿（只有人能决定留哪个）')
     if up.missing:
         bad.append(f'计划有而成稿无：{up.missing}')
         todo.append(f'把 {up.missing} 写出来（stage5.write，可能付费）')
@@ -134,12 +131,12 @@ def _require_mapping_current(
         bad.append('开篇文案还没定稿（txt 的第一段就是它）')
         todo.append('stage6.approve --pick N（0 成本）')
     if bad:
-        # ⚠ **一次报全**：三条同时成立且互不依赖，逐条失败会让人补完一样才发现还差另一样。
-        #   三项各自 typed（恢复路各不相同），消费方按字段路由而不是 parse 这段人话。
+        # ⚠ **一次报全**：两条同时成立且互不依赖，逐条失败会让人补完一样才发现还差另一样。
+        #   两项各自 typed（恢复路各不相同），消费方按字段路由而不是 parse 这段人话。
         raise DeliveryIncomplete(
             '成书是交付物，不是审阅稿——txt 里没有地方写「缺章」那种抬头横幅：\n    '
             + '\n    '.join(bad),
-            duplicated=up.dup, missing=up.missing, hook_unapproved=not up.hook_text,
+            missing=up.missing, hook_unapproved=not up.hook_text,
             hint='；'.join(todo))
 
 
@@ -184,7 +181,7 @@ def read_current_book(ctx: RunContext) -> str:
 def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     """`stage7.assemble`：定稿之后组装成书。**0 成本，写盘。**
 
-    ⚠⚠ **四类残缺态在这里硬拦，而不在 `measure.collect_chapters` 里。**
+    ⚠⚠ **交付残缺态在这里硬拦，而不在 `measure.collect_chapters` 里。**
     那个函数会被复检经 HTTP 工作线程调用，而 `SystemExit` 是 `BaseException`
     ——一次「这本书还没写完」就会杀掉整个服务。**这条是付过一次代价的。**
     这里是 CLI 的调用点，抛的是 `TerminalState` 那一族（显式终态，不打栈）。
@@ -198,7 +195,7 @@ def run_assemble(ctx: RunContext) -> tuple[str, NameMap, CheckReport]:
     「这条终态有没有出路」在消费方那边只能靠读中文去猜。CLI 由
     `novel/cli/main.py::_print_hint` 单独打一行，HTTP 由 `ErrorBody.hint` 单独一格。
 
-    ⚠ 「文案未定稿」也是四类之一，而**正因为这道闸挡在前面**，
+    ⚠ 「文案未定稿」也属于交付残缺，而**正因为这道闸挡在前面**，
     「成书里没有开篇文案」这一态**结构上不可达** ⇒ `book_txt.has_hook` 已按待决④ 裁掉。
     """
     from novel.stages.stage2 import global_review

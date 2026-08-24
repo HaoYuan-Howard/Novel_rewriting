@@ -374,6 +374,24 @@ def test_a_corrupt_artifact_is_409_not_404(client, box, tail):
     assert r.json()['kind'] == 'ArtifactUnreadable'
 
 
+def test_stage6_and_stage7_live_legacy_without_downstream_are_explicit_409(tmp_path):
+    """真实旧目录优先于缺失下游；两次 GET 都必须纯读且不产生付费账。"""
+    book = tmp_path / '书名_123'
+    (book / 'stage5' / 'deep').mkdir(parents=True)
+    before = _tree(tmp_path)
+    with TestClient(create_app(tmp_path)) as http:
+        http.headers.update({UI_HEADER: '1'})
+        for tail in ('stage6', 'stage7'):
+            response = http.get(f'/api/novels/123/{tail}')
+            body = response.json()
+            assert response.status_code == 409, (tail, body)
+            assert body['kind'] == 'HumanEditProtected'
+            assert 'legacy_incompatible' in body['message']
+            assert body['hint']
+    assert _tree(tmp_path) == before
+    assert not (tmp_path / '_service' / 'ledger.jsonl').exists()
+
+
 # ───────────────────────── 四、参数不合法 ⇒ 400 ─────────────────────────
 
 @pytest.mark.parametrize('sid', ['C:', 'a b ', 'x%5Cy'])

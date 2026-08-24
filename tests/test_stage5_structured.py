@@ -53,20 +53,30 @@ def test_writer_response_slots_are_complete_unique_and_canonicalised():
             {'slot': 's01', 'text': '一。'}, {'slot': 's01', 'text': '二。'}]})
 
 
-def test_fidelity_material_must_land_in_its_declared_segment():
+def test_writing_gate_requires_fidelity_material_in_its_declared_segment():
     entry, book = _entry()
     required = '这句必须留在第一幕，一个字也不能挪。'
     first = {**entry['segments'][0], 'verbatim': [required]}
     second = {**entry['segments'][0], 'slot': 's02', 'verbatim': []}
     entry = {**entry, 'segments': [first, second]}
+    source = dict(book.source_text)
+    source_ordinal = int(entry['from_source_ordinals'][0])
+    source[source_ordinal] += '\n' + required
+    book = type(book)(title=book.title, ctx=book.ctx, style=book.style,
+                      source_text=source, secrets=book.secrets)
     returned = [
-        {'slot': 's01', 'text': '第一幕只有别的内容。'},
-        {'slot': 's02', 'text': '第二幕误放了：' + required},
+        {'slot': 's01', 'text': '第一幕只有别的内容。' * 4},
+        {'slot': 's02', 'text': '第二幕误放了：' + required + '其余故事仍在继续。' * 4},
     ]
-    hits = checks.segment_fidelity_findings(
-        returned, entry, book, mode='deep', given='')
+    # 整章确实含 required；只有真正穿过 ``write._judge -> chapter_findings``
+    # 的 producer-slot 判据才会拦住这份稿，不能拿 helper 直调冒充生产链覆盖。
+    text = '\n\n'.join(segment['text'] for segment in returned)
+    hits, errs, _warns = write._judge(
+        text, entry, book, mat='', account=write.M.NormalizeAccount(),
+        segments=returned)
     assert any(hit.rule == 'verbatim_missing' and hit.evidence[0] == 's01'
                for hit in hits)
+    assert any('[verbatim_missing]' in err for err in errs)
     assert hits and {hit.output_ordinal for hit in hits} == {entry['output_ordinal']}
 
 
@@ -117,8 +127,8 @@ def test_final_writer_messages_do_not_contain_private_secret_ids():
     entry, book = _entry()
     entry = {**entry, 'must_not_reveal': ['secret_never_send_987']}
     typed = CtxChapter.model_validate(entry)
-    material = prompts.build_material(entry, book, with_source_text=False)
-    system, user = prompts.write_system('deep'), prompts.build_user(material)
+    material = prompts.build_material(entry, book)
+    system, user = prompts.write_system(), prompts.build_user(material)
     assert 'secret_never_send_987' not in system + user
     assert_prompt_private_absent(typed, system=system, user=user)
 
@@ -150,8 +160,8 @@ def test_final_writer_messages_project_character_rule_and_secret_ids_to_human_fa
     assert ('facts.world_rules[0].rule_id', rule_id) in private
     assert ('facts.secrets[0].secret_id', secret_id) in private
 
-    material = prompts.build_material(entry, book, with_source_text=False)
-    system, user = prompts.write_system('deep'), prompts.build_user(material)
+    material = prompts.build_material(entry, book)
+    system, user = prompts.write_system(), prompts.build_user(material)
     rendered = system + user
     assert all(token not in rendered for token in (char_id, rule_id, secret_id))
     for human_fact in ('周衡', '账房', '共同封存', '调换账册末页'):
@@ -161,7 +171,7 @@ def test_final_writer_messages_project_character_rule_and_secret_ids_to_human_fa
 
 def test_writer_goal_uses_resolved_facts_and_never_internal_plan_ids():
     entry, book = _entry()
-    material = prompts.build_material(entry, book, with_source_text=False)
+    material = prompts.build_material(entry, book)
     user = prompts.build_user(material)
     assert '事件：沈青发现账册末页的墨迹被人换过。' in user
     assert 'b01_01' not in user
@@ -218,8 +228,8 @@ def test_hidden_secret_withhold_goal_does_not_disclose_identity_or_fact():
 
 def test_writer_system_requires_json_segments_and_user_names_each_slot():
     entry, book = _entry()
-    system = prompts.write_system('deep')
-    user = prompts.build_user(prompts.build_material(entry, book, with_source_text=False))
+    system = prompts.write_system()
+    user = prompts.build_user(prompts.build_material(entry, book))
     assert 'Return ONLY valid JSON' in system
     assert '"segments"' in system
     assert 'slot=s01' in user
@@ -248,9 +258,9 @@ def test_over_length_lands_an_identity_audit_and_cannot_spend_anything():
     import inspect
 
     entry, _book, original = _trim_case()
-    notes, audit = write._over_length_audit(original, entry, mode='deep')
+    notes, audit = write._over_length_audit(original, entry)
     assert audit is not None
-    assert (audit.output_ordinal, audit.mode) == (int(entry['output_ordinal']), 'deep')
+    assert audit.output_ordinal == int(entry['output_ordinal'])
     assert audit.before_sha256 == write._sha256_text(write._segments_text(original))
     assert notes == [audit.reason]
     assert '超上限' in audit.reason and 'verification' in audit.reason
@@ -264,7 +274,7 @@ def test_within_the_target_band_produces_no_audit_at_all():
     """没超上限 ⇒ 既没有提示也**没有 audit**——空 audit 会在 inbox 里凭空长出待办。"""
     entry, _book, _original = _trim_case()
     short = [{'slot': 's01', 'text': '短短一句。'}]
-    assert write._over_length_audit(short, entry, mode='deep') == ([], None)
+    assert write._over_length_audit(short, entry) == ([], None)
 
 
 def test_over_length_audit_stays_in_verification():
@@ -275,7 +285,7 @@ def test_over_length_audit_stays_in_verification():
     from novel.views.inbox import _trim_verification_items
 
     audit = TrimAudit(
-        output_ordinal=4, mode='deep', before_sha256='a' * 64,
+        output_ordinal=4, before_sha256='a' * 64,
         reason='超上限 120 字（620/500）；本仓没有自动收缩路径，保留 pretrim，转 verification')
     root = Path(tempfile.mkdtemp(prefix='trim-inbox-'))
     try:

@@ -4,6 +4,13 @@
   "stale",
   "unknown"
  ],
+ "stage5_review_state": [
+  "fresh",
+  "stale",
+  "unknown",
+  "missing",
+  "legacy_incompatible"
+ ],
  "artifact_display": [
   "missing",
   "fresh",
@@ -18,6 +25,7 @@
  ],
  "overview_verdict": [
   "broken",
+  "legacy_incompatible",
   "stale",
   "pending",
   "unknown",
@@ -404,9 +412,9 @@
   "张力",
   "质感"
  ],
- "depth_modes": [
-  "deep",
-  "shallow"
+ "stage5_write_contracts": [
+  "event-list-v1",
+  "beat-material-v2"
  ],
  "invent_guarded": {
   "新数字": "full",
@@ -527,6 +535,7 @@
   "--names-only": "只产逐章可用名册（stage4），不产计划",
   "--identity": "恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外",
   "--apply-edit": "把人工改过的内容落成新的一轮",
+  "--rebuild-draft": "从 canonical stage5/chNN.json 重建 stage5/draft.md，0 次 LLM 调用",
   "--review-decisions": "应用带 actor、理由和 subject hash 乐观锁的 stage2 人工复核决策",
   "--wontfix": "把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用",
   "--retain-pretrim": "人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，0 次 LLM 调用（不是 0 人工成本）",
@@ -537,7 +546,6 @@
   "--adopt-residual": "显式采纳可安全应用的 high residual 建议并重放 stage7 确定性链"
  },
  "paid_flags": {
-  "--shallow-rest": "stage5 把未选为深度重构的其余章节交给浅层写手",
   "--repair-surface-habits": "stage3 表层习惯的定向返工——它要再调一次模型",
   "--revise": "stage5 的修订式反哺——把可反哺的结论连同上一轮成稿发回写手",
   "--purge-role": "stage2 的语义判官臂——把 role/fate 双向重划分一遍，它要再调一次模型",
@@ -553,7 +561,6 @@
   "--adopt-residual"
  ],
  "valued_flags": {
-  "--deep": "深度重构章节（逗号分隔；与 --shallow-rest 成对使用）",
   "--apply-edit": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
   "--validate-edit": "要预检的 stage7 人工编辑路径（与 --apply-edit 同路径规则，不写盘）",
   "--apply-edit-plan": "审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）",
@@ -566,10 +573,10 @@
   "--pick": "定稿选第几个候选（1 起）",
   "--wontfix": "这一条我不修：`<章|book>|<判据>[|<证据键>]=<理由>`，理由必填",
   "--chapters": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
+  "--write-contract": "Stage5 契约 A/B（仅 `event-list-v1|beat-material-v2`；临时实验入口）",
   "--adopt-residual": "只接受 `high`；采纳无冲突、未覆盖且 unit/suggest 完整的残留建议"
  },
  "write_effects": {
-  "--shallow-rest": "按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿",
   "--dry-run": "",
   "--check-only": "",
   "--measure-only": "",
@@ -581,6 +588,7 @@
   "--adopt-residual": "重写 stage7/name_map.json，清旧审批并退休现有成书",
   "--remeasure": "重算的 measurable 写回正式产物（其余字段不动）",
   "--recheck": "刷新已有成稿的指标，并重拼 draft.md",
+  "--rebuild-draft": "从 canonical stage5/chNN.json 重建 stage5/draft.md",
   "--revalidate": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
   "--apply-edit": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
   "--renormalize": "按当前契约重算代码派生字段与原文定位并写回",
@@ -709,7 +717,6 @@
    "paid": false,
    "stage": "stage0",
    "section": "R-0",
-   "modes": [],
    "flags": [
     "--source",
     "--dry-run",
@@ -726,7 +733,6 @@
    "paid": false,
    "stage": "stage0",
    "section": "R-0",
-   "modes": [],
    "flags": [
     "--actor",
     "--reason"
@@ -741,7 +747,6 @@
    "paid": false,
    "stage": "stage0",
    "section": "R-0",
-   "modes": [],
    "flags": [
     "--apply-edit",
     "--apply-edit-plan",
@@ -760,7 +765,6 @@
    "paid": false,
    "stage": "stage1",
    "section": "R-1",
-   "modes": [],
    "flags": [
     "--dry-run",
     "--check-only"
@@ -776,7 +780,6 @@
    "paid": true,
    "stage": "stage2",
    "section": "R-2",
-   "modes": [],
    "flags": [
     "--renormalize",
     "--purge-role",
@@ -799,7 +802,6 @@
    "paid": true,
    "stage": "stage2",
    "section": "R-3",
-   "modes": [],
    "flags": [
     "--dry-run",
     "--check-only",
@@ -819,7 +821,6 @@
    "paid": true,
    "stage": "stage3",
    "section": "R-4",
-   "modes": [],
    "flags": [
     "--dry-run",
     "--check-only",
@@ -840,7 +841,6 @@
    "paid": true,
    "stage": "stage4",
    "section": "R-5",
-   "modes": [],
    "flags": [
     "--dry-run",
     "--check-only",
@@ -861,36 +861,31 @@
    "paid": false,
    "stage": "stage4",
    "section": "R-6",
-   "modes": [],
    "flags": [],
    "produces": [
     "stage4/writer_context.json"
    ]
   },
   "stage5.write": {
-   "label": "stage5 逐章写作",
+   "label": "stage5 全书闭卷写作",
    "paid": true,
    "stage": "stage5",
    "section": "R-7",
-   "modes": [
-    "deep",
-    "shallow"
-   ],
    "flags": [
     "--dry-run",
     "--recheck",
     "--revalidate",
+    "--rebuild-draft",
     "--apply-edit",
     "--revise",
     "--chapters",
-    "--deep",
-    "--shallow-rest",
+    "--write-contract",
     "--actor",
     "--reason"
    ],
    "produces": [
-    "stage5/{mode}/ch{nn}.json",
-    "stage5/{mode}/draft.md"
+    "stage5/ch{nn}.json",
+    "stage5/draft.md"
    ]
   },
   "stage5.review": {
@@ -898,7 +893,6 @@
    "paid": false,
    "stage": "stage5",
    "section": "R-8",
-   "modes": [],
    "flags": [
     "--check-only",
     "--wontfix",
@@ -916,7 +910,6 @@
    "paid": true,
    "stage": "stage6",
    "section": "R-9",
-   "modes": [],
    "flags": [
     "--dry-run",
     "--check-only",
@@ -937,7 +930,6 @@
    "paid": true,
    "stage": "stage6",
    "section": "R-9",
-   "modes": [],
    "flags": [
     "--dry-run"
    ],
@@ -950,7 +942,6 @@
    "paid": false,
    "stage": "stage6",
    "section": "R-9",
-   "modes": [],
    "flags": [
     "--pick",
     "--actor",
@@ -966,7 +957,6 @@
    "paid": true,
    "stage": "stage7",
    "section": "R-10",
-   "modes": [],
    "flags": [
     "--dry-run",
     "--check-only",
@@ -989,7 +979,6 @@
    "paid": false,
    "stage": "stage7",
    "section": "R-10",
-   "modes": [],
    "flags": [
     "--actor",
     "--reason",
@@ -1004,7 +993,6 @@
    "paid": false,
    "stage": "stage7",
    "section": "R-10",
-   "modes": [],
    "flags": [],
    "produces": [
     "stage7/{title}_rewriting.txt"
@@ -1014,7 +1002,6 @@
  "actions": [
   {
    "kind": "stage0.remove",
-   "mode": null,
    "label": "stage0 非正文剔除",
    "extra": null,
    "paid": false,
@@ -1026,7 +1013,6 @@
   },
   {
    "kind": "stage0.remove",
-   "mode": null,
    "label": "stage0 非正文剔除 --source",
    "extra": [
     "--source"
@@ -1040,7 +1026,6 @@
   },
   {
    "kind": "stage0.remove",
-   "mode": null,
    "label": "stage0 非正文剔除 --dry-run",
    "extra": [
     "--dry-run"
@@ -1054,7 +1039,6 @@
   },
   {
    "kind": "stage0.remove",
-   "mode": null,
    "label": "stage0 非正文剔除 --check-only",
    "extra": [
     "--check-only"
@@ -1068,7 +1052,6 @@
   },
   {
    "kind": "stage0.approve",
-   "mode": null,
    "label": "stage0 人工批准",
    "extra": null,
    "paid": false,
@@ -1089,7 +1072,6 @@
   },
   {
    "kind": "stage0.edit",
-   "mode": null,
    "label": "stage0 人工编辑",
    "extra": null,
    "paid": false,
@@ -1101,7 +1083,6 @@
   },
   {
    "kind": "stage0.edit",
-   "mode": null,
    "label": "stage0 人工编辑 --apply-edit",
    "extra": [
     "--apply-edit"
@@ -1124,7 +1105,6 @@
   },
   {
    "kind": "stage0.edit",
-   "mode": null,
    "label": "stage0 人工编辑 --apply-edit-plan",
    "extra": [
     "--apply-edit-plan"
@@ -1138,7 +1118,6 @@
   },
   {
    "kind": "stage0.edit",
-   "mode": null,
    "label": "stage0 人工编辑 --apply-candidate-plan",
    "extra": [
     "--apply-candidate-plan"
@@ -1152,7 +1131,6 @@
   },
   {
    "kind": "stage1.partition",
-   "mode": null,
    "label": "stage1 分章",
    "extra": null,
    "paid": false,
@@ -1164,7 +1142,6 @@
   },
   {
    "kind": "stage1.partition",
-   "mode": null,
    "label": "stage1 分章 --dry-run",
    "extra": [
     "--dry-run"
@@ -1178,7 +1155,6 @@
   },
   {
    "kind": "stage1.partition",
-   "mode": null,
    "label": "stage1 分章 --check-only",
    "extra": [
     "--check-only"
@@ -1192,7 +1168,6 @@
   },
   {
    "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取",
    "extra": null,
    "paid": true,
@@ -1204,7 +1179,6 @@
   },
   {
    "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取 --renormalize",
    "extra": [
     "--renormalize"
@@ -1218,7 +1192,6 @@
   },
   {
    "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取 --purge-role",
    "extra": [
     "--purge-role"
@@ -1232,7 +1205,6 @@
   },
   {
    "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取 --resample",
    "extra": [
     "--resample"
@@ -1246,7 +1218,6 @@
   },
   {
    "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取 --revalidate",
    "extra": [
     "--revalidate"
@@ -1269,7 +1240,6 @@
   },
   {
    "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取 --apply-edit",
    "extra": [
     "--apply-edit"
@@ -1283,7 +1253,6 @@
   },
   {
    "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取 --review-decisions",
    "extra": [
     "--review-decisions"
@@ -1297,7 +1266,6 @@
   },
   {
    "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取 --emit-review-template",
    "extra": [
     "--emit-review-template"
@@ -1311,7 +1279,6 @@
   },
   {
    "kind": "stage2.global",
-   "mode": null,
    "label": "stage2 全书级抽取 --emit-review-workpack",
    "extra": [
     "--emit-review-workpack"
@@ -1325,7 +1292,6 @@
   },
   {
    "kind": "stage2.blueprint",
-   "mode": null,
    "label": "stage2 逐章抽取",
    "extra": null,
    "paid": true,
@@ -1337,7 +1303,6 @@
   },
   {
    "kind": "stage2.blueprint",
-   "mode": null,
    "label": "stage2 逐章抽取 --dry-run",
    "extra": [
     "--dry-run"
@@ -1351,7 +1316,6 @@
   },
   {
    "kind": "stage2.blueprint",
-   "mode": null,
    "label": "stage2 逐章抽取 --check-only",
    "extra": [
     "--check-only"
@@ -1365,7 +1329,6 @@
   },
   {
    "kind": "stage2.blueprint",
-   "mode": null,
    "label": "stage2 逐章抽取 --renormalize",
    "extra": [
     "--renormalize"
@@ -1379,7 +1342,6 @@
   },
   {
    "kind": "stage2.blueprint",
-   "mode": null,
    "label": "stage2 逐章抽取 --chapters",
    "extra": [
     "--chapters"
@@ -1393,7 +1355,6 @@
   },
   {
    "kind": "stage2.blueprint",
-   "mode": null,
    "label": "stage2 逐章抽取 --patch",
    "extra": [
     "--patch"
@@ -1407,7 +1368,6 @@
   },
   {
    "kind": "stage2.blueprint",
-   "mode": null,
    "label": "stage2 逐章抽取 --revalidate",
    "extra": [
     "--revalidate"
@@ -1430,7 +1390,6 @@
   },
   {
    "kind": "stage3.style",
-   "mode": null,
    "label": "stage3 文风画像",
    "extra": null,
    "paid": true,
@@ -1442,7 +1401,6 @@
   },
   {
    "kind": "stage3.style",
-   "mode": null,
    "label": "stage3 文风画像 --dry-run",
    "extra": [
     "--dry-run"
@@ -1456,7 +1414,6 @@
   },
   {
    "kind": "stage3.style",
-   "mode": null,
    "label": "stage3 文风画像 --check-only",
    "extra": [
     "--check-only"
@@ -1470,7 +1427,6 @@
   },
   {
    "kind": "stage3.style",
-   "mode": null,
    "label": "stage3 文风画像 --measure-only",
    "extra": [
     "--measure-only"
@@ -1484,7 +1440,6 @@
   },
   {
    "kind": "stage3.style",
-   "mode": null,
    "label": "stage3 文风画像 --remeasure",
    "extra": [
     "--remeasure"
@@ -1498,7 +1453,6 @@
   },
   {
    "kind": "stage3.style",
-   "mode": null,
    "label": "stage3 文风画像 --revalidate",
    "extra": [
     "--revalidate"
@@ -1521,7 +1475,6 @@
   },
   {
    "kind": "stage3.style",
-   "mode": null,
    "label": "stage3 文风画像 --apply-edit",
    "extra": [
     "--apply-edit"
@@ -1535,7 +1488,6 @@
   },
   {
    "kind": "stage3.style",
-   "mode": null,
    "label": "stage3 文风画像 --repair-surface-habits",
    "extra": [
     "--repair-surface-habits"
@@ -1549,7 +1501,6 @@
   },
   {
    "kind": "stage4.plan",
-   "mode": null,
    "label": "stage4 重构计划",
    "extra": null,
    "paid": true,
@@ -1561,7 +1512,6 @@
   },
   {
    "kind": "stage4.plan",
-   "mode": null,
    "label": "stage4 重构计划 --dry-run",
    "extra": [
     "--dry-run"
@@ -1575,7 +1525,6 @@
   },
   {
    "kind": "stage4.plan",
-   "mode": null,
    "label": "stage4 重构计划 --check-only",
    "extra": [
     "--check-only"
@@ -1589,7 +1538,6 @@
   },
   {
    "kind": "stage4.plan",
-   "mode": null,
    "label": "stage4 重构计划 --revalidate",
    "extra": [
     "--revalidate"
@@ -1612,7 +1560,6 @@
   },
   {
    "kind": "stage4.plan",
-   "mode": null,
    "label": "stage4 重构计划 --names-only",
    "extra": [
     "--names-only"
@@ -1626,7 +1573,6 @@
   },
   {
    "kind": "stage4.plan",
-   "mode": null,
    "label": "stage4 重构计划 --identity",
    "extra": [
     "--identity"
@@ -1640,7 +1586,6 @@
   },
   {
    "kind": "stage4.plan",
-   "mode": null,
    "label": "stage4 重构计划 --apply-edit",
    "extra": [
     "--apply-edit"
@@ -1654,7 +1599,6 @@
   },
   {
    "kind": "stage4.plan",
-   "mode": null,
    "label": "stage4 重构计划 --chapters",
    "extra": [
     "--chapters"
@@ -1668,7 +1612,6 @@
   },
   {
    "kind": "stage4.context",
-   "mode": null,
    "label": "stage4 写作上下文组装",
    "extra": null,
    "paid": false,
@@ -1680,20 +1623,18 @@
   },
   {
    "kind": "stage5.write",
-   "mode": "deep",
-   "label": "stage5 逐章写作（deep）",
+   "label": "stage5 全书闭卷写作",
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
+   "writes": "stage5/ch{nn}.json · stage5/draft.md",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
    "kind": "stage5.write",
-   "mode": "deep",
-   "label": "stage5 逐章写作（deep） --dry-run",
+   "label": "stage5 全书闭卷写作 --dry-run",
    "extra": [
     "--dry-run"
    ],
@@ -1706,8 +1647,7 @@
   },
   {
    "kind": "stage5.write",
-   "mode": "deep",
-   "label": "stage5 逐章写作（deep） --recheck",
+   "label": "stage5 全书闭卷写作 --recheck",
    "extra": [
     "--recheck"
    ],
@@ -1720,8 +1660,7 @@
   },
   {
    "kind": "stage5.write",
-   "mode": "deep",
-   "label": "stage5 逐章写作（deep） --revalidate",
+   "label": "stage5 全书闭卷写作 --revalidate",
    "extra": [
     "--revalidate"
    ],
@@ -1743,8 +1682,20 @@
   },
   {
    "kind": "stage5.write",
-   "mode": "deep",
-   "label": "stage5 逐章写作（deep） --apply-edit",
+   "label": "stage5 全书闭卷写作 --rebuild-draft",
+   "extra": [
+    "--rebuild-draft"
+   ],
+   "paid": false,
+   "free_flag": "--rebuild-draft",
+   "writes": "从 canonical stage5/chNN.json 重建 stage5/draft.md",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "stage5.write",
+   "label": "stage5 全书闭卷写作 --apply-edit",
    "extra": [
     "--apply-edit"
    ],
@@ -1757,140 +1708,45 @@
   },
   {
    "kind": "stage5.write",
-   "mode": "deep",
-   "label": "stage5 逐章写作（deep） --revise",
+   "label": "stage5 全书闭卷写作 --revise",
    "extra": [
     "--revise"
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
+   "writes": "stage5/ch{nn}.json · stage5/draft.md",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
    "kind": "stage5.write",
-   "mode": "deep",
-   "label": "stage5 逐章写作（deep） --chapters",
+   "label": "stage5 全书闭卷写作 --chapters",
    "extra": [
     "--chapters"
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
+   "writes": "stage5/ch{nn}.json · stage5/draft.md",
    "writes_disk": true,
    "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
    "required_inputs": []
   },
   {
    "kind": "stage5.write",
-   "mode": "shallow",
-   "label": "stage5 逐章写作（shallow）",
-   "extra": null,
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.write",
-   "mode": "shallow",
-   "label": "stage5 逐章写作（shallow） --dry-run",
+   "label": "stage5 全书闭卷写作 --write-contract",
    "extra": [
-    "--dry-run"
-   ],
-   "paid": false,
-   "free_flag": "--dry-run",
-   "writes": "",
-   "writes_disk": false,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.write",
-   "mode": "shallow",
-   "label": "stage5 逐章写作（shallow） --recheck",
-   "extra": [
-    "--recheck"
-   ],
-   "paid": false,
-   "free_flag": "--recheck",
-   "writes": "刷新已有成稿的指标，并重拼 draft.md",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.write",
-   "mode": "shallow",
-   "label": "stage5 逐章写作（shallow） --revalidate",
-   "extra": [
-    "--revalidate"
-   ],
-   "paid": false,
-   "free_flag": "--revalidate",
-   "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": [
-    {
-     "flag": "--actor",
-     "description": "人工决定的自报身份（不是认证身份）"
-    },
-    {
-     "flag": "--reason",
-     "description": "人工决定的非空理由"
-    }
-   ]
-  },
-  {
-   "kind": "stage5.write",
-   "mode": "shallow",
-   "label": "stage5 逐章写作（shallow） --apply-edit",
-   "extra": [
-    "--apply-edit"
-   ],
-   "paid": false,
-   "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）",
-   "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**，如 stage7/name_map_edit.json，也接受书目录内的绝对路径）",
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.write",
-   "mode": "shallow",
-   "label": "stage5 逐章写作（shallow） --revise",
-   "extra": [
-    "--revise"
+    "--write-contract"
    ],
    "paid": true,
    "free_flag": null,
-   "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
+   "writes": "stage5/ch{nn}.json · stage5/draft.md",
    "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.write",
-   "mode": "shallow",
-   "label": "stage5 逐章写作（shallow） --chapters",
-   "extra": [
-    "--chapters"
-   ],
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage5/{mode}/ch{nn}.json · stage5/{mode}/draft.md",
-   "writes_disk": true,
-   "needs_value": "只写这几个输出章（逗号分隔，如 `2,14`）；不给就补写所有缺的章",
+   "needs_value": "Stage5 契约 A/B（仅 `event-list-v1|beat-material-v2`；临时实验入口）",
    "required_inputs": []
   },
   {
    "kind": "stage5.review",
-   "mode": null,
    "label": "stage5 全书验收",
    "extra": null,
    "paid": false,
@@ -1902,7 +1758,6 @@
   },
   {
    "kind": "stage5.review",
-   "mode": null,
    "label": "stage5 全书验收 --check-only",
    "extra": [
     "--check-only"
@@ -1916,7 +1771,6 @@
   },
   {
    "kind": "stage5.review",
-   "mode": null,
    "label": "stage5 全书验收 --wontfix",
    "extra": [
     "--wontfix"
@@ -1930,7 +1784,6 @@
   },
   {
    "kind": "stage5.review",
-   "mode": null,
    "label": "stage5 全书验收 --retain-pretrim",
    "extra": [
     "--retain-pretrim"
@@ -1957,7 +1810,6 @@
   },
   {
    "kind": "stage5.review",
-   "mode": null,
    "label": "stage5 全书验收 --chapters",
    "extra": [
     "--chapters"
@@ -1971,7 +1823,6 @@
   },
   {
    "kind": "stage6.hook",
-   "mode": null,
    "label": "stage6 开篇文案",
    "extra": null,
    "paid": true,
@@ -1983,7 +1834,6 @@
   },
   {
    "kind": "stage6.hook",
-   "mode": null,
    "label": "stage6 开篇文案 --dry-run",
    "extra": [
     "--dry-run"
@@ -1997,7 +1847,6 @@
   },
   {
    "kind": "stage6.hook",
-   "mode": null,
    "label": "stage6 开篇文案 --check-only",
    "extra": [
     "--check-only"
@@ -2011,7 +1860,6 @@
   },
   {
    "kind": "stage6.hook",
-   "mode": null,
    "label": "stage6 开篇文案 --identity",
    "extra": [
     "--identity"
@@ -2025,7 +1873,6 @@
   },
   {
    "kind": "stage6.hook",
-   "mode": null,
    "label": "stage6 开篇文案 --recheck",
    "extra": [
     "--recheck"
@@ -2039,7 +1886,6 @@
   },
   {
    "kind": "stage6.hook",
-   "mode": null,
    "label": "stage6 开篇文案 --revalidate",
    "extra": [
     "--revalidate"
@@ -2062,7 +1908,6 @@
   },
   {
    "kind": "stage6.hook",
-   "mode": null,
    "label": "stage6 开篇文案 --apply-edit",
    "extra": [
     "--apply-edit"
@@ -2076,7 +1921,6 @@
   },
   {
    "kind": "stage6.hook",
-   "mode": null,
    "label": "stage6 开篇文案 --wontfix",
    "extra": [
     "--wontfix"
@@ -2090,7 +1934,6 @@
   },
   {
    "kind": "stage6.semantic",
-   "mode": null,
    "label": "stage6 文案语义审判",
    "extra": null,
    "paid": true,
@@ -2102,7 +1945,6 @@
   },
   {
    "kind": "stage6.semantic",
-   "mode": null,
    "label": "stage6 文案语义审判 --dry-run",
    "extra": [
     "--dry-run"
@@ -2116,7 +1958,6 @@
   },
   {
    "kind": "stage6.approve",
-   "mode": null,
    "label": "stage6 文案定稿",
    "extra": null,
    "paid": false,
@@ -2145,7 +1986,6 @@
   },
   {
    "kind": "stage6.approve",
-   "mode": null,
    "label": "stage6 文案定稿 --pick",
    "extra": [
     "--pick"
@@ -2172,7 +2012,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表",
    "extra": null,
    "paid": true,
@@ -2184,7 +2023,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表 --dry-run",
    "extra": [
     "--dry-run"
@@ -2198,7 +2036,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表 --check-only",
    "extra": [
     "--check-only"
@@ -2212,7 +2049,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表 --identity",
    "extra": [
     "--identity"
@@ -2226,7 +2062,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表 --recheck",
    "extra": [
     "--recheck"
@@ -2240,7 +2075,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表 --apply-edit",
    "extra": [
     "--apply-edit"
@@ -2254,7 +2088,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表 --revalidate",
    "extra": [
     "--revalidate"
@@ -2277,7 +2110,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表 --emit-edit-template",
    "extra": [
     "--emit-edit-template"
@@ -2291,7 +2123,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表 --adopt-residual",
    "extra": [
     "--adopt-residual"
@@ -2305,7 +2136,6 @@
   },
   {
    "kind": "stage7.rename",
-   "mode": null,
    "label": "stage7 人名表 --validate-edit",
    "extra": [
     "--validate-edit"
@@ -2319,7 +2149,6 @@
   },
   {
    "kind": "stage7.approve",
-   "mode": null,
    "label": "stage7 人名表定稿",
    "extra": null,
    "paid": false,
@@ -2344,7 +2173,6 @@
   },
   {
    "kind": "stage7.assemble",
-   "mode": null,
    "label": "stage7 替换与成书",
    "extra": null,
    "paid": false,
@@ -2352,21 +2180,6 @@
    "writes": "stage7/{title}_rewriting.txt",
    "writes_disk": true,
    "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage5.write",
-   "mode": null,
-   "label": "stage5 逐章写作 --deep --shallow-rest",
-   "extra": [
-    "--deep",
-    "--shallow-rest"
-   ],
-   "paid": true,
-   "free_flag": null,
-   "writes": "按人工深度选章并发写 stage5/deep 与 stage5/shallow 的逐章成稿",
-   "writes_disk": true,
-   "needs_value": "深度重构章节（逗号分隔；与 --shallow-rest 成对使用）",
    "required_inputs": []
   }
  ]

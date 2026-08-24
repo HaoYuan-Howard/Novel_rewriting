@@ -16,7 +16,7 @@ contracts.schema —— 产物 schema 的机器形态。
 盘上语料体检、`/api/novels/:sid/...` 的响应类型、将来 `tools/emit_json_schema.py`
 产前端 TS 类型，三个消费方读的是**同一张表**。手抄第二份的下场见 `Q-6`。
 
-【版本：没有迁移机制；除一次显式登记的破坏外全表恒 v1】
+【版本：没有迁移机制；除显式登记的破坏外全表恒 v1】
 ⚠⚠ 这里曾有一梯 v2→v3 migration（5 张 `MIGRATE_*` 表 + 6 个迁移函数），删除那天的实测：
 **登记了 migration 的 8 个家族在盘上一份低版本文件都没有**，而盘上唯二的 v2 文件
 （两本书的 `stage6/semantic_1.json`）恰好属于**刻意不登记 migration** 的那一族
@@ -52,7 +52,6 @@ from contracts.schema.api import (
     ApprovalAction,
     ApprovalBackfillResult,
     ApprovalDoc,
-    DeepSelectionRequest,
     DriftItem,
     ErrorBody,
     HookCopyView,
@@ -217,10 +216,10 @@ class DecodedArtifact:
     version: int
 
 
-#: **产物相对路径 → 当前契约。** 路径里的 `{n}` / `{mode}` 是占位符。
+#: **产物相对路径 → 当前契约。** 路径里的 `{n}` / `{nn}` 是占位符。
 #: 这是路径、模型与 schema version 的唯一权威表；`ARTIFACTS` 是模型投影。
 #:
-#: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/**/draft.md` / 成书 `stage7/{title}_rewriting.txt`
+#: ⚠ 这里**不含** `stage0/clean_text.txt` / `stage5/draft.md` / 成书 `stage7/{title}_rewriting.txt`
 #: ——它们不是 JSON，schema 是**字节形态**，守卫在写盘口那一层。
 #:
 #: ⚠ **一条 `migrations=` 都没有**，将来也不许有。这不是「还没来得及写」，
@@ -273,11 +272,18 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   ——**换一个模型就等于说它是另一种东西**，而它恰恰要回答
     #   「计划什么都不改时，写手手里到底有什么」。
     STAGE4_WRITER_CONTEXT_IDENTITY: ArtifactSpec(WriterContext),
-    STAGE5_CHAPTER: ArtifactSpec(Chapter),
+    # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
+    #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；
+    #   current 产物由 `stage5.write` 重建。
+    STAGE5_CHAPTER: ArtifactSpec(Chapter, 2),
     STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision),
-    STAGE5_REVIEW: ArtifactSpec(Review),
-    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit),
-    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution),
+    # ⚠ Review 的章行同步删除 `mode/mode_dir`；由 `stage5.review`
+    #   零成本重建，旧报告不伪装成当前判据产地。
+    STAGE5_REVIEW: ArtifactSpec(Review, 2),
+    # ⚠ trim 两份 hash-bound 产物删除目录臂字段，改绑
+    #   canonical 章路径；新的超长章由写作/重判路径重建。
+    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit, 2),
+    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution, 2),
     # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
     #   两份共用一个模型——同一件事的第 N 个落点必然分家。
     STAGE5_WONTFIX: ArtifactSpec(WontFix),
@@ -296,7 +302,6 @@ ARTIFACTS: dict[str, type[BaseModel]] = {
 def artifact_regex(template: str) -> re.Pattern[str]:
     """把注册表模板编译成语料、运行时共用的相对路径路由。"""
     escaped = re.escape(template)
-    escaped = escaped.replace(r'\{mode\}', r'(?:deep|shallow)')
     escaped = escaped.replace(r'\{nn\}', r'\d+')
     escaped = escaped.replace(r'\{n\}', r'\d+')
     return re.compile(f'^{escaped}$')
@@ -419,7 +424,7 @@ __all__ = [
     'Stage1Segment', 'Stage1Segments', 'Stage1ChapterRow', 'Stage1Chapters',
     'HookCopyView', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'LogStreamEvent', 'PreviewRequest', 'ErrorBody',
-    'ApprovalAction', 'ApprovalBackfillResult', 'ApprovalDoc', 'DeepSelectionRequest',
+    'ApprovalAction', 'ApprovalBackfillResult', 'ApprovalDoc',
     'InboxItem', 'InboxView', 'TrimResolutionRequest', 'NameMapApproveRequest',
     'ResidualAdoptionRequest',
     # 八层

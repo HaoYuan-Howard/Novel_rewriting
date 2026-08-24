@@ -131,7 +131,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | 状态 | 家 |
 |---|---|
 | 20 份响应 | TanStack Query |
-| **`gate` / `seen` / `deep` / `writing`** | 一份 `ApprovalDoc`，也走 Query（`['approvals', sid]`） |
+| **`gate` / `seen` / `writing`** | 一份 v2 `ApprovalDoc`，也走 Query（`['approvals', sid]`）；`writing` 独立记录全书闭卷写作授权 |
 | `job` / `jobLog` | Query + `refetchInterval`（由服务端下发的 `running` 决定） |
 | 确认框里的 argv | Query（`api.previewJob`） |
 | `sid` / 章号 / 当前屏 | React Router 路径 |
@@ -164,8 +164,7 @@ export const api: Api = USE_MOCK ? mockApi : realApi
 | `/n/:sid/global` | stage2 全局人物、关系、规则、秘密 |
 | `/n/:sid/style` | stage3 文风实测与下发档位 |
 | `/n/:sid/stage4/:o` | 计划与写作上下文逐拍对照 |
-| `/n/:sid/depth` | 逐章深/浅重构选择与写作启动前确认 |
-| `/n/:sid/stage5/:o` | 成稿、材料、验收 finding 与修订的合并工作面；`writing=false` 时守卫跳 `depth` |
+| `/n/:sid/stage5/:o` | canonical 成稿、材料、验收 finding 与修订的合并工作面；空状态在付费确认前先写入全书闭卷授权；current TrimAudit 在本屏经专用 retain-pretrim 路由留 actor/reason 销账，fresh Review 的章级/书级 finding 可按完整 evidence identity 提交 wontfix |
 | `/n/:sid/inbox` | 八类待办的全书路由器，不提供第二个编辑面（校验下沉到各阶段屏的面板） |
 | `/n/:sid/stage6` | 三候选文案与人工定稿 |
 | `/n/:sid/stage7`、`/n/:sid/stage7/:o` | 人名表、漏网候选、成书状态和逐章替换对照 |

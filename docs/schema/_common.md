@@ -127,9 +127,12 @@ Stage5/6/7 都调用 `novel.prov.rules_fingerprint(stage)`；指纹覆盖 `Rule`
 ### 3.2 成稿**不进** `inputs`，进 `judged`
 
 stage5/6/7 都有一份「我判了哪几份稿」的清单，它**不是** `inputs`。
-理由是上面那个两级键：`stage5/deep/ch01.json` 与 `stage5/shallow/ch01.json`
-在两级键下会塌成同一个键。⇒ 逐份成稿记进 `judged`（存完整相对路径 + 指纹），
-`inputs` 只记那几份全书级上游。
+现役 canonical `stage5/ch01.json` 虽然恰好只有两级，仍是**被审判的主体**，不是
+producer 的上游边；`judged` 还要同时保存完整文件指纹与正文消费投影，才能区分
+「元数据变了」和「真正进书的字节变了」。⇒ 逐份成稿记进 `judged`（完整相对路径 +
+整份/消费指纹），`inputs` 只记全书级上游。历史双臂路径曾进一步证明不能把这份主体账
+塞进两级 `inputs`：`stage5/deep/ch01.json` 与 `stage5/shallow/ch01.json` 会塌成同一个键；
+这些路径如今只作 `legacy_incompatible` 反例，不是现役布局。
 
 ---
 

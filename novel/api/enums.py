@@ -23,7 +23,7 @@ enums.py —— `GET /api/enums` 的**唯一**构造函数。纯函数：不碰�
     `payload()` 当场抛 `ValueDomainRefused`，你必须选一个桶并写出理由。
 
 ⚠ **标量为什么默认不发**：一个孤立的数字（`MIN_CHAPTERS` / `BODY_RATIO_MIN` /
-`DEEP_OVERLAP_MAX`…）对前端只有一个用途——**自己算一个结论**，而那就是第二个判官
+`SOURCE_OVERLAP_MAX`…）对前端只有一个用途——**自己算一个结论**，而那就是第二个判官
 （`R-11.4`：界面不重算任何已经在校验器里的判据）。容器不一样：取值面、词表、映射表、
 区间，前端拿它渲染选项与图例，渲染不产生判定。
 
@@ -68,6 +68,7 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
+    'LEGACY_STAGE5_MODES': '只用来识别并拒绝旧 deep/shallow 盘面，不是现役选项',
     # ── 分章（stage0 / stage1）的判据阈值与剥壳正则 ──
     'NONBODY_LEAD_STRIP': '正则。发过去等于请前端自己剥壳，而剥出来的 core 是所有长度阈值的输入',
     'NONBODY_TRAIL_STRIP': '同上',
@@ -141,7 +142,7 @@ _WITHHELD: dict[str, str] = {
                                   '而那条判定是 `structure_changed`（`R-11.4` 的第二个判官）',
     'ANCHOR_COVERAGE_WARN': 'Stage5 对齐覆盖率的判据阈值。响应已经给出 threshold/state，'
                             '前端只展示后端结论，不重判',
-    'DEEP_OVERLAP_MAX': '判据阈值（闭卷臂与原文的重合度上限）',
+    'SOURCE_OVERLAP_MAX': '判据阈值（canonical 成稿与原文的重合度上限）',
     'STOP_REWRITE_AFTER': '返工护栏的轮次上限。它是**编排**参数，不是给人看的取值面',
     'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',
     # ── stage7（人名替换与成书）──
@@ -289,17 +290,17 @@ def job_kinds() -> dict[str, dict[str, Any]]:
     是原型把复检做成了独立 kind 而两层命名下它是一个 flag。
     """
     return {node: {'label': s.label, 'paid': s.paid, 'stage': s.stage,
-                   'section': s.section, 'modes': list(s.modes),
+                   'section': s.section,
                    'flags': list(s.flags), 'produces': list(s.produces)}
             for node, s in NODES.items()}
 
 
 def actions() -> list[dict[str, Any]]:
-    """界面上摆得出来的每一个按钮 = `节点 × (默认路径 + 每个 flag) × 每条臂`。
+    """界面上摆得出来的每一个按钮 = `节点 × (默认路径 + 每个独立 flag)`。
 
     **字段形状照抄抓包，只做加法**（§一「命名体系」第 5 条：形状不变、只有 `kind` 的取值变）：
     `kind` / `extra` / `label` / `paid` / `free_flag` 五格原样，
-    新增 `mode` / `writes` / `writes_disk` / `needs_value` 四格。
+    新增 `writes` / `writes_disk` / `needs_value` 三格。
 
     ⚠ 每一格都是**派生**的，一个字都不手写：
       · `label`       ← `nodes.step_label`  —— 与作业记录里那一步共用（`R-11.8`）
@@ -337,15 +338,11 @@ def actions() -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     for node, spec in NODES.items():
-        for mode in (spec.modes or (None,)):
-            independent = [f for f in spec.flags
-                           if f not in {'--deep', '--shallow-rest'}
-                           and f not in credential_flags]
-            for flags in [()] + [(f,) for f in independent]:
-                out.append({
+        independent = [f for f in spec.flags if f not in credential_flags]
+        for flags in [()] + [(f,) for f in independent]:
+            out.append({
                     'kind': node,
-                    'mode': mode,
-                    'label': step_label(node, flags, mode=mode),
+                    'label': step_label(node, flags),
                     # 抓包里默认路径是 `null`、带 flag 的是一个数组。原样保持。
                     'extra': list(flags) or None,
                     'paid': is_paid(node, flags),
@@ -356,19 +353,6 @@ def actions() -> list[dict[str, Any]]:
                                          if f in VALUED_FLAGS), None),
                     'required_inputs': required_inputs(node, flags),
                 })
-    composite = ('--deep', '1', '--shallow-rest')
-    out.append({
-        'kind': 'stage5.write',
-        'mode': None,
-        'label': step_label('stage5.write', composite),
-        'extra': ['--deep', '--shallow-rest'],
-        'paid': is_paid('stage5.write', composite),
-        'free_flag': None,
-        'writes': write_effect('stage5.write', composite),
-        'writes_disk': would_write('stage5.write', composite),
-        'needs_value': VALUED_FLAGS['--deep'],
-        'required_inputs': required_inputs('stage5.write', composite),
-    })
     return out
 
 
@@ -386,7 +370,7 @@ _COMPOSITE: dict[str, Any] = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 def payload() -> dict[str, Any]:
-    """`GET /api/enums` 的全部内容。**纯函数**，每次现算（57 条 action，成本可忽略）。
+    """`GET /api/enums` 的全部内容。**纯函数**，每次从当前 `NODES` 现算。
 
     ⚠ **它刻意没有 Pydantic 响应模型。** 它的键集就是它的内容；写成一个
     五十来个字段的 `StrictModel`，等于把「自动发布」重新变回一份手写清单，

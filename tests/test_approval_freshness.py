@@ -152,8 +152,7 @@ def isolated_stage34(monkeypatch: pytest.MonkeyPatch) -> None:
 def _approve_spending_surface(base: Path) -> None:
     approvals.approve_gate(base, SID, 's3')
     approvals.approve_gate(base, SID, 's4')
-    approvals.set_deep(base, SID, [1])
-    approvals.begin_writing(base, SID, [1])
+    approvals.begin_writing(base, SID)
 
 
 def _queue_stage5(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,17 +163,16 @@ def _queue_stage5(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda _overview, _node: (Q.st.RESUME_RUN, 'stage5 drafts are missing'))
 
 
-def test_fresh_proofs_authorize_exact_selection_and_queue_plan(
+def test_fresh_proofs_authorize_canonical_whole_book_queue_plan(
     current_book, isolated_stage34, monkeypatch,
 ):
     base, _book = current_book
     _approve_spending_surface(base)
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
-    assert raw['v'] == 2
+    assert raw['v'] == 3
     assert raw['gate_proofs']['s3']['root_clean_sha1']
     assert raw['gate_proofs']['s4']['artifacts'][PLAN_REL]
-    assert raw['deep_proof']['decision_sha256']
     assert raw['writing_proof']['artifacts'] == {
         STYLE_REL: raw['gate_proofs']['s3']['artifacts'][STYLE_REL],
         PLAN_REL: raw['gate_proofs']['s4']['artifacts'][PLAN_REL],
@@ -184,7 +182,8 @@ def test_fresh_proofs_authorize_exact_selection_and_queue_plan(
     _queue_stage5(monkeypatch)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
     assert blocked == [] and len(todo) == 1
-    assert todo[0].flags == ['--deep', '1', '--shallow-rest']
+    assert todo[0].flags == []
+    assert 'mode' not in todo[0].model_dump()
 
 
 @pytest.mark.parametrize('mutation', ['root', 'upstream', 'subject', 'invalid', 'corrupt'])
@@ -228,18 +227,17 @@ def test_stale_or_changed_subject_revokes_spending_and_queue_emits_no_paid_plan(
     _queue_stage5(monkeypatch)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
     assert todo == [] and len(blocked) == 1
-    assert blocked[0].waiting_on == Q.WAITING_ON_DEPTH_SELECTION
+    assert blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
     assert blocked[0].steps == []
 
 
-def test_saved_selection_without_current_s3_s4_approval_is_not_spending_authority(
+def test_writing_cannot_be_authorized_without_current_s3_s4_approval(
     current_book, isolated_stage34, monkeypatch,
 ):
     base, _book = current_book
-    approvals.set_deep(base, SID, [1])
     assert not approvals.has_record(base, SID)
     with pytest.raises(approvals.ApprovalRequired, match='style and stage4'):
-        approvals.begin_writing(base, SID, [1])
+        approvals.begin_writing(base, SID)
 
     _queue_stage5(monkeypatch)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
@@ -253,7 +251,7 @@ def test_backfill_uses_the_same_current_proofs_and_rejects_invalid(
     monkeypatch.setattr(approvals, '_GATE_ORDER', ('s3', 's4'))
     first = approvals.backfill_from_disk(base, SID)
     assert first.backfilled == ['s3', 's4']
-    approvals.set_deep(base, SID, [1])
+    approvals.begin_writing(base, SID)
     assert approvals.has_record(base, SID)
 
     (book / 'stage4' / 'plan_chapters.INVALID.json').write_bytes(
@@ -264,7 +262,7 @@ def test_backfill_uses_the_same_current_proofs_and_rejects_invalid(
     assert not second.approvals.gate['s4']
 
 
-def test_backfill_rejects_wrong_arm_and_does_not_stamp_stage5(
+def test_backfill_rejects_legacy_arm_layout_and_does_not_stamp_stage5(
     current_book, isolated_stage34, monkeypatch,
 ):
     base, book = current_book
@@ -297,10 +295,59 @@ def test_v1_or_corrupt_service_record_never_authorizes_queue(
     with pytest.raises(approvals.HumanEditProtected, match='unsupported v1'):
         approvals.get(base, SID)
 
-    monkeypatch.setattr(approvals, '_GATE_ORDER', ('s3', 's4'))
-    recovered = approvals.backfill_from_disk(base, SID)
-    assert recovered.backfilled == ['s3', 's4']
-    assert json.loads(path.read_text(encoding='utf-8'))['v'] == 2
+    with pytest.raises(approvals.HumanEditProtected, match='explicitly backfilled as v2'):
+        approvals.backfill_from_disk(base, SID)
 
     path.write_text('{broken', encoding='utf-8')
     assert not approvals.has_record(base, SID)
+
+
+def _write_legacy_v2(base: Path, book: Path, *, deep: list[int]) -> None:
+    gate = {f's{i}': False for i in range(8)}
+    gate.update({'s3': True, 's4': True})
+    gate_proofs = {f's{i}': None for i in range(8)}
+    gate_proofs.update({
+        's3': approvals._legacy_gate_proof(book, 's3').model_dump(mode='json'),
+        's4': approvals._legacy_gate_proof(book, 's4').model_dump(mode='json'),
+    })
+    path = approvals._path(base, SID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        'v': 2, 'sid': SID, 'gate': gate,
+        'seen': {'read': False, 'global': False},
+        'deep': deep, 'writing': True,
+        'gate_proofs': gate_proofs,
+        'seen_proofs': {'read': None, 'global': None},
+        'deep_proof': approvals._proof_for_legacy_depth(
+            book, deep).model_dump(mode='json'),
+        'writing_proof': approvals._proof_for_legacy_writing(
+            book, deep).model_dump(mode='json'),
+    }, ensure_ascii=False), encoding='utf-8')
+
+
+def test_explicit_v2_backfill_resigns_writing_only_when_old_selection_was_all_deep(
+    current_book, isolated_stage34, monkeypatch,
+):
+    base, book = current_book
+    monkeypatch.setattr(approvals, '_GATE_ORDER', ('s3', 's4'))
+    _write_legacy_v2(base, book, deep=[1])
+
+    result = approvals.backfill_from_disk(base, SID)
+    assert result.approvals.writing is True
+    assert result.approvals.gate['s3'] and result.approvals.gate['s4']
+    assert not any(result.approvals.gate[f's{i}'] for i in range(5, 8))
+    raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
+    assert raw['v'] == 3 and 'deep' not in raw and 'deep_proof' not in raw
+
+
+def test_explicit_v2_backfill_clears_writing_when_any_chapter_was_shallow(
+    current_book, isolated_stage34, monkeypatch,
+):
+    base, book = current_book
+    monkeypatch.setattr(approvals, '_GATE_ORDER', ('s3', 's4'))
+    _write_legacy_v2(base, book, deep=[])
+
+    result = approvals.backfill_from_disk(base, SID)
+    assert result.approvals.writing is False
+    assert result.approvals.gate['s3'] and result.approvals.gate['s4']
+    assert not any(result.approvals.gate[f's{i}'] for i in range(5, 8))

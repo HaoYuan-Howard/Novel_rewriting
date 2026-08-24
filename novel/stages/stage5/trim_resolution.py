@@ -36,8 +36,7 @@ def _current_pretrim(
     audit: TrimAudit,
 ) -> tuple[str, str] | None:
     """Return ``(formal rel, text sha256)`` only for a readable current chapter."""
-    rel = artifact_rel(
-        'stage5.chapter', mode=audit.mode, nn=audit.output_ordinal)
+    rel = artifact_rel('stage5.chapter', nn=audit.output_ordinal)
     if not store.exists(rel):
         return None
     try:
@@ -47,7 +46,7 @@ def _current_pretrim(
     #   只覆盖来源账自相矛盾的旧行为面，不是这条读法的正常出路。
     except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale):
         return None
-    if chapter.output_ordinal != audit.output_ordinal or chapter.mode != audit.mode:
+    if chapter.output_ordinal != audit.output_ordinal:
         return None
     digest = hashlib.sha256(chapter.text.encode('utf-8')).hexdigest()
     return rel, digest
@@ -72,7 +71,6 @@ def matches_current_audit(
     chapter_rel, chapter_sha256 = chapter
     return (
         resolution.output_ordinal == audit.output_ordinal
-        and resolution.mode == audit.mode
         and resolution.action == 'retain_pretrim'
         and resolution.audit_sha256 == audit_sha256
         and resolution.before_sha256 == audit.before_sha256
@@ -146,8 +144,7 @@ def current_unresolved_audits(
 def verification_context(store: ArtifactStore, audit: TrimAudit) -> str:
     """Render the root-cause facts folded into one trim verification task."""
     identity = f'audit before={audit.before_sha256}'
-    rel = artifact_rel(
-        'stage5.chapter', mode=audit.mode, nn=audit.output_ordinal)
+    rel = artifact_rel('stage5.chapter', nn=audit.output_ordinal)
     try:
         chapter, _raw = store.read_own(Chapter, rel, require_current=True)
     except (ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale):
@@ -189,7 +186,7 @@ def retain_pretrim(
     chapter = _current_pretrim(store, audit)
     if chapter is None:
         raise ApprovalRequired(
-            f'{audit.mode} 臂第 {ordinal} 章正式稿不存在、不可读或已过期；'
+            f'第 {ordinal} 章正式稿不存在、不可读或已过期；'
             '不能用旧 trim audit 销账')
     chapter_rel, chapter_sha256 = chapter
     if chapter_sha256 != audit.before_sha256:
@@ -199,7 +196,6 @@ def retain_pretrim(
 
     resolution = TrimResolution(
         output_ordinal=ordinal,
-        mode=audit.mode,
         action='retain_pretrim',
         actor=actor,
         reason=reason,

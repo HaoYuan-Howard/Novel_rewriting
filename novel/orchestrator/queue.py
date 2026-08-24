@@ -33,7 +33,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from contracts.invariants import NODES, STAGES
+from contracts.invariants import LEGACY_STAGE5_MODES, NODES, STAGES
 from contracts.schema.orchestration import (
     QueueCounts, QueueEntry, QueueEvent, QueueItem, QueueLaneCounts, QueuePlan,
     QueueRun, QueueStart,
@@ -63,9 +63,29 @@ OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
 
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
-WAITING_ON_DEPTH_SELECTION = 'approval:stage5-depth'
+WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
+WAITING_ON_REVIEW = 'stage5:review-currentness'
+WAITING_ON_LEGACY = 'legacy_incompatible'
 WAITING_ON_RESTART_CONFIRMATION = 'queue:restart-confirmation'
 WAITING_ON_REPLAN = 'queue:plan-changed'
+
+
+def _chapters_from_flags(flags: Sequence[str]) -> list[int] | None:
+    """取 Stage5 定向章列表；不带则是全书。
+
+    队列只会读自己冻结过的命令，但恢复时仍要关闭式校验：旧
+    `--deep/--shallow-rest` 快照必须走 replan，不得在这里被解释成新语义。
+    """
+    raw = flag_value(flags, '--chapters')
+    if raw is None:
+        return None
+    try:
+        values = [int(value) for value in raw.split(',')]
+    except ValueError as exc:
+        raise ApprovalRequired('--chapters 必须是逗号分隔的正整数章号') from exc
+    if values != sorted(set(values)) or any(value < 1 for value in values):
+        raise ApprovalRequired('--chapters 必须升序、去重且全为正整数')
+    return values
 
 
 def _stage_index(stage: str) -> int:
@@ -168,27 +188,27 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
         if why_blocked is None and verdict == st.RESUME_SKIP:
             continue                                 # 已存在即跳过
 
-        mode = spec.modes[0] if spec.modes else None
+        if why_blocked is None and verdict == st.RESUME_LEGACY:
+            why_blocked = WAITING_ON_LEGACY
+
         flags: list[str] = []
         steps = None
         if node == 'stage5.write':
-            # The normal writing entry is one composite command.  Choosing the
-            # first arm here used to turn every chapter into the expensive deep
-            # route and silently discard the persisted human selection.
-            mode = None
-            selected = approvals.current_depth_selection(base, sid)
-            if selected is not None:
-                flags = [
-                    '--deep', ','.join(str(value) for value in selected) or 'none',
-                    '--shallow-rest',
-                ]
-            else:
+            # Stage5 v2 只有一条全书 canonical 闭卷写作命令。
+            # 授权是独立人工决定；队列不从「默认全书」反推出同意花钱。
+            if not approvals.writing_is_current(base, sid):
                 if why_blocked is None:
-                    why_blocked = WAITING_ON_DEPTH_SELECTION
-                # No person has selected the depth arm yet, therefore there is
-                # no honest executable command to snapshot.  Once selected, the
-                # command surface changes and the old queue requires replanning.
+                    why_blocked = WAITING_ON_WRITING_APPROVAL
                 steps = []
+            review = next((stage for stage in ov.stages if stage.stage == 'stage5'), None)
+            if (review is not None
+                    and review.review_state not in (None, 'missing', 'fresh')):
+                if why_blocked is None:
+                    why_blocked = WAITING_ON_REVIEW
+                steps = []
+
+        if verdict == st.RESUME_LEGACY:
+            steps = []
 
         if steps is None and why_blocked == node and node in HUMAN_NODES:
             # ⚠⚠ **人还没签字之前，这道闸没有一条「诚实的可执行命令」可以快照。**
@@ -199,16 +219,16 @@ def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
             # ⚠ 曾经这里无条件 `build_steps`：于是一本「stage0 还没人批」的书会让
             #   **整条队列计划当场抛异常**——CLI `queue --plan-only` 退出码 2、
             #   HTTP 400，而真正的事实只是「在等人批准 stage0」。
-            # ⇒ 与上面 `stage5.write` 缺深度选择时**同一处置**：留空命令面。
+            # ⇒ 与上面 `stage5.write` 缺写作授权时**同一处置**：留空命令面。
             #   人给出裁决之后命令面本来就会变，那时旧队列本就需要重排。
             steps = []
         if steps is None:
             steps = build_steps(
-                node, sid, flags, base=base, mode=mode,
+                node, sid, flags, base=base,
                 follow_check=follow_check)
 
         item = QueueItem(
-            sid=sid, node=node, mode=mode, flags=flags, steps=steps,
+            sid=sid, node=node, flags=flags, steps=steps,
             why=(f'{verdict}：{why}' if why_blocked is None
                  else _blocked_why(why_blocked, why)),
             waiting_on=why_blocked,
@@ -225,9 +245,14 @@ def _blocked_why(waiting_on: str, verdict_why: str) -> str:
             '上游有被闸门拦下的稿要人处理（0 LLM 提升路是 '
             '`--revalidate --actor <id> --reason <why>`，同轮重判并留不可变审计）；'
             f'{verdict_why}')
-    if waiting_on == WAITING_ON_DEPTH_SELECTION:
-        return ('还没有持久化的深度章节选择；先在「挑深度章节」屏保存一次，'
-                f'队列不会猜成全 deep 或全 shallow；{verdict_why}')
+    if waiting_on == WAITING_ON_WRITING_APPROVAL:
+        return ('还没有当前 Stage5 全书闭卷写作授权；先在 Stage5 空状态明确授权，'
+                f'队列不会从默认路径反推同意花钱；{verdict_why}')
+    if waiting_on == WAITING_ON_REVIEW:
+        return ('Stage5 Review 不是 fresh，旧结论不得驱动付费作业；'
+                f'先零成本运行 `stage5.review`；{verdict_why}')
+    if waiting_on == WAITING_ON_LEGACY:
+        return f'{verdict_why}；旧产物只读保留，必须显式重建 canonical Stage5'
     return f'在等 `{waiting_on}`——这一步是人做的裁决，机器替不了；{verdict_why}'
 
 
@@ -357,12 +382,84 @@ def read_events(base: str | os.PathLike[str]) -> list[QueueEvent]:
         if not line.strip():
             continue
         try:
-            out.append(QueueEvent.model_validate(json.loads(line)))
+            out.append(_decode_event(json.loads(line)))
         except Exception:  # noqa: BLE001 - only the interrupted tail is recoverable
             if index == len(raw) - 1:
                 break
             raise
     return out
+
+
+def _decode_event(payload: object) -> QueueEvent:
+    """只在磁盘边界消化旧队列的 ``mode``。
+
+    ``mode=null`` 是旧 serializer 在所有条目上留下的噪声，直接剥离。
+    任一非空 deep/shallow 表明这是旧 Stage5 双臂快照：整份计划
+    投影为 ``queue:plan-changed`` 且清空命令，保证 API 不暴露 mode，
+    runner 也永远不会把旧快照解释成 canonical 写作。
+    """
+    if not isinstance(payload, dict):
+        return QueueEvent.model_validate(payload)
+    data = dict(payload)
+    start = data.get('start')
+    if not isinstance(start, dict):
+        return QueueEvent.model_validate(data)
+    projected_start = dict(start)
+    plan = projected_start.get('plan')
+    if not isinstance(plan, dict):
+        return QueueEvent.model_validate(data)
+    projected_plan = dict(plan)
+    has_legacy_arm = False
+    buckets: dict[str, list[object]] = {}
+    for bucket in ('items', 'blocked'):
+        raw_items = projected_plan.get(bucket, [])
+        if not isinstance(raw_items, list):
+            return QueueEvent.model_validate(data)
+        projected_items: list[object] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                projected_items.append(raw_item)
+                continue
+            item = dict(raw_item)
+            if 'mode' in item:
+                legacy_mode = item.pop('mode')
+                if legacy_mode is not None:
+                    if not (
+                        item.get('node') == 'stage5.write'
+                        and legacy_mode in LEGACY_STAGE5_MODES
+                    ):
+                        raise ValueError(
+                            'queues.jsonl 的 mode 只允许旧 stage5.write deep/shallow')
+            else:
+                legacy_mode = None
+            if jobs._has_retired_stage5_selector(item, legacy_mode):
+                has_legacy_arm = True
+            projected_items.append(item)
+        buckets[bucket] = projected_items
+
+    if has_legacy_arm:
+        reason = (
+            '旧 Stage5 deep/shallow 队列快照与 canonical 契约不兼容；'
+            '本记录只读，必须重新预览并创建队列')
+        blocked: list[object] = []
+        for raw_item in buckets['items'] + buckets['blocked']:
+            if not isinstance(raw_item, dict):
+                blocked.append(raw_item)
+                continue
+            item = dict(raw_item)
+            item['steps'] = []
+            item['why'] = reason
+            item['waiting_on'] = WAITING_ON_REPLAN
+            blocked.append(item)
+        projected_plan['items'] = []
+        projected_plan['blocked'] = blocked
+        projected_plan['paid_items'] = 0
+    else:
+        projected_plan['items'] = buckets['items']
+        projected_plan['blocked'] = buckets['blocked']
+    projected_start['plan'] = projected_plan
+    data['start'] = projected_start
+    return QueueEvent.model_validate(data)
 
 
 def new_queue_id(now: float | None = None) -> str:
@@ -530,7 +627,7 @@ def cancel(base: str | os.PathLike[str], queue_id: str, item_index: int, *,
 def _command_surface(item: QueueItem) -> tuple[object, ...]:
     """The immutable part of a queue item that was shown and confirmed."""
     return (
-        item.node, item.mode, tuple(item.flags),
+        item.node, tuple(item.flags),
         tuple((tuple(step.argv), step.cwd, step.paid, step.writes)
               for step in item.steps),
     )
@@ -554,8 +651,7 @@ def _live_disposition(base: str | os.PathLike[str], run: QueueRun,
     same_node = [item for item in todo + blocked if item.node == entry.item.node]
     if not same_node:
         return 'done', None, '盘上产物存在且当前新鲜，恢复时跳过，不重复调用'
-    matches = [item for item in same_node if item.mode == entry.item.mode]
-    current = matches[0] if matches else same_node[0]
+    current = same_node[0]
     if _command_surface(current) != _command_surface(entry.item):
         return (
             'blocked', WAITING_ON_REPLAN,
@@ -768,16 +864,13 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
                     note=reason)
             try:
                 prepare = None
-                if (entry.item.node == 'stage5.write'
-                        and '--shallow-rest' in entry.item.flags):
-                    raw = flag_value(entry.item.flags, '--deep') or ''
-                    selected = [] if raw == 'none' else [
-                        int(value) for value in raw.split(',') if value]
-                    prepare = lambda selected=selected: approvals.begin_writing(
-                        base, entry.item.sid, selected)
+                if entry.item.node == 'stage5.write':
+                    chapters = _chapters_from_flags(entry.item.flags)
+                    prepare = lambda chapters=chapters: approvals.authorize_writing(
+                        base, entry.item.sid, chapters)
                 jobs.start(
                     base, entry.item.node, entry.item.sid, entry.item.flags,
-                    mode=entry.item.mode, steps=entry.item.steps,
+                    steps=entry.item.steps,
                     spawn=spawn, registry=job_registry, job_id=job_id,
                     prepare=prepare)
                 jobs.wait(job_id)
@@ -1011,7 +1104,8 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 
 __all__ = [
     'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
-    'WAITING_ON_DEPTH_SELECTION', 'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
+    'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW', 'WAITING_ON_LEGACY',
+    'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
     'QueueRegistry', 'append_event', 'cancel', 'confirm', 'create', 'fold',
     'fold_counts', 'frozen_resume_commands', 'new_queue_id', 'nodes_up_to', 'plan', 'plan_book',
     'queue_path', 'read_events', 'records', 'resume_incomplete', 'run', 'start',

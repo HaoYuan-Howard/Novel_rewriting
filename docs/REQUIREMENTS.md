@@ -35,7 +35,7 @@ P2 是明确可延期的工程化与体验增强。勾选前必须满足条目�
   唯一权威源，不与产物 usage 或日志混加。
   ⚠ 冻结 dispatch 是 **16 条**（2 书 × 8 付费节点，`CURRENT_CORPUS_BOOKS ×
   CURRENT_CORPUS_PAID_NODES` 现算）。`stage6.semantic` 随 `--advisory` 删除后只带
-  `--base --yes`，只剩 `stage5.write` 还带 `--deep 1,2,3 --shallow-rest`。
+  `--base --yes`；canonical `stage5.write` 也只带 `--base --yes`，默认补齐当前计划的全部缺章。
 - [ ] 对同一盘面运行 `--require-corpus` 的完整 `corpus or not corpus` 套件；任何书目/产物减少、
   版本漂移、ledger 不闭合或新增 skip 都必须失败。
 
@@ -84,9 +84,9 @@ schema 破坏让盘上三本书的 stage5/stage6 层整体拒读 ⇒ 那份盘�
   1639 份带 `usage` 的真实响应，0 成本可复算）：completion 13,031,022 token 里 reasoning 占
   **11,457,627（87.9%）**，净成品输出只有 1,573,395；写作类调用（n=720）reasoning 中位 9109 而
   成品中位 1213。**输出侧是成本主体、reasoning 一项约占八成，输入侧优化的天花板只有约 7%**
-  ⇒ 缓存/裁材料那一侧无论怎么做都换不来量级收益，只有 effort 降档能。候选优先序按收益：
-  `stage5.write` 的 **shallow 臂**（它做的是照原文改写而不是闭卷创作，却与 deep 臂同付 high）
-  → `stage7.rename` → `stage3.style`。⚠ 判官（`stage6.semantic`）与 `stage2.global` **不进候选**：
+  ⇒ 缓存/裁材料那一侧无论怎么做都换不来量级收益，只有 effort 降档能。现役候选优先序只剩
+  `stage7.rename` → `stage3.style`。历史 Stage5 非 canonical 写作路径曾被列为首优候选，但该能力已退役，不再有独立降档挂载点。
+  ⚠ 判官（`stage6.semantic`）与 `stage2.global` **不进候选**：
   2026-08-15 的 A/B 已裁决判官永不换廉价配置、关思考在 `stage2.global` 三轮全灭
   （见 `docs/BACKEND_CONTRACT.md` §十）。⚠ 那次 A/B 测的是**模型**与 **thinking 开关**两个维度，
   `reasoning_effort` 是**第三个维度、从未测过**——不要拿那次结论替本条销账。
@@ -115,11 +115,9 @@ n=11 ⇒ 任何结论只能写成「**这本书上没观察到质量塌陷**」�
 **候选与顺序**：`stage7.rename` → `stage3.style`。
 排除 `stage6.semantic` 与 `stage2.global`（2026-08-15 已裁决，见 `docs/BACKEND_CONTRACT.md` §十）。
 
-⚠ **收益最大的候选 `stage5.write` shallow 臂今天够不着，它是本条真正的施工前置。**
-`NodeSpec.effort` 是**逐节点**的，而 deep/shallow 是同一个节点 `stage5.write` 的两个 mode
-（`novel/cli/main.py` 里 `deep_ctx` 与 `shallow_ctx` 都传同一个 `ctx.node`）
-⇒ `NODES[ctx.node].effort` 对两臂返回同一个值，**现有旋钮挂不上「只给 shallow 降档」**。
-要做这一项必须先加挂载点，那是独立改动，不要在实验里临时改成全臂降档冒充。
+**历史方案关闭说明**：当时想只降旧写作路径中照原文改写的那一支，但
+`NodeSpec.effort` 只能按整个 `stage5.write` 节点生效。现役 Stage5 已收口为单一 canonical 闭卷路径，
+旧分支与单独挂载点都不再是活动开发项。
 
 **成本口径：只看输出侧（`completion` / `reasoning`），不得用 prompt token 判胜负。**
 理由是实测发现 **`reasoning_effort` 会切分供应商前缀缓存**：同一本书、同一段 system 字节、
@@ -149,10 +147,10 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
 `novel/paths.py` 当成书目录），上游产物逐字节相同，只把该节点重跑成 low。
 **high 参照臂从 `.llm_cache/` 复现**（账本 `cached=true`、0 成本、与基线账本逐字段相同）——
 除 `stage4.plan` 外全部命中，因此这次的 high 侧几乎没有花钱。
-⚠ 复现的前提是 argv 与基线**逐字相同**：`--chapters` 会把 `cache_policy` 变成
-`refresh-write`（只写不读），`stage5.write --mode X`（不带 `--chapters`）会把**全部**缺章
-写进那一条臂——两条都实测踩过，各误发了一批真调用。整书入口是
-`stage5.write --deep 1,2,3 --shallow-rest`。
+⚠ **以下是 2026-08-19 已退役 CLI 的历史复现教训，不是现役命令**：当时 argv 必须与基线
+逐字相同，带定向章会改变缓存策略，按旧写作路径单独跑又会补齐那一路的全部缺章；
+两种误操作都曾真实发出付费调用。现役整书入口是 canonical `stage5.write --base --yes`，
+只有明确定向重写时才加 `--chapters`。
 
 **成本（输出侧，按本条既定口径；prompt 侧因 effort 切分前缀缓存不可比）**
 
@@ -178,7 +176,7 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
   low 首轮命中 `hinge_anchor_void` / `span_unlocatable`（86/87 定位成功）/ `verbatim_failed`
   （4 条失败记录）三条 HARD（ok 64·命中 5·unver 2）。**三条全属「锚不回原文」一族。**
   另实测 ch7 一次 `reasoning_tokens` 只有 33（28s，净正文 1,949）⇒ low 档会偶发几乎不思考。
-- `stage5.write`：low 的 ch1（deep 臂）`draft_truncated`（结尾无终止标点）落 `.INVALID`，
+- `stage5.write`：历史整节点 low 实验的 ch1 命中 `draft_truncated`（结尾无终止标点）落 `.INVALID`，
   章集合掉到 10/11；`stage5.review` 的 info 命中 4→6（新增 `invented_number` 与
   `quotes_in_unquoted_corpus`）、unver 1→2；`para_len_drift` 最坏章从 5.57× 恶化到 11.10×。
 - `stage4.plan`：**这一节点测不了**。两条臂都只发生 1 次调用、且都是同一份
@@ -337,8 +335,7 @@ hit=0 / miss=5613 ⇒ **low 臂天然冷启**，prompt 侧对比是伪信号（�
       只做 `cache.evict` + 降一档，既不产 observe 事件也不写日志，`errors` 只在**所有档全灭**时
       才随 `LlmFailed` 出现 ⇒ 事后无法回答「为什么降的档」。补一条带 `why` 的 observe 事件是
       本条继续做下去的前置（否则每次 A/B 都可能混进一次说不清的降档）。
-- [ ] `stage5.write` 的 shallow 单臂降档仍够不着（挂载点问题，见上）。本次实测的是**整节点**
-      降档，按上表已否决；**不要拿它替 shallow 臂那一项销账**。
+历史 Stage5 整节点 low 实验已按上表否决；旧非 canonical 分支随能力退役，不再作为本条的独立待验候选。
 
 验收：所有被测产物由现役写盘路径生成；完整套件的通过/跳过/失败数、每条 skip 理由和上述付费
 实验结论一并记录，未完成项不因代码位或预览工具存在而销账。
@@ -431,13 +428,7 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
   「本章任务」从第 2 块挪到靠后，**有位置效应**，超出「零语义风险」这一档，必须一次真跑证明
   没写坏成稿。⚠ 另需先判断 `novel/stages/stage5/prompts.py::style_block` 到底变不变——
   有 `chapter_styles` 时它本就是逐章投影，那部分挪上去不会带来任何命中。
-- **shallow 臂裁材料**：预期约 1%。没做的理由是 `novel/stages/stage5/prompts.py::Material` 的
-  `given` **同时是 `invented_number` / `invented_name` 两条判据的参照集**
-  （`novel/stages/stage5/checks.py`）。直接裁下发块会让原本有依据的数字和人名被判成「自造」——
-  省下占比约 9% 的 input，换来判据误报。要做必须**先把「判据参照集」与「真正发出去的 blocks」
-  拆成两件事**，那是独立改动。
-
-⚠ 两项加起来也只有个位数百分比：输入侧优化的天花板约 7%（FC-13）。要量级收益只有 effort 降档。
+⚠ 上述现役 user 块重排候选也只有个位数百分比：输入侧优化的天花板约 7%（FC-13）。要量级收益只有 effort 降档。
 
 ### TODO-32 · flash 迁移三本书的未收口项（诚实清单）
 
@@ -460,7 +451,7 @@ mock 模式就与真后端多分家一点，而三条缝检查全绿。
       `ab_compare` 里 ⑤ 那行 3 vs 70 不可直接比较。
 - [ ] **「最终稿产自哪一档」变成一等公民读数**：同一 `(node, chapter)` 按 `at`
       排序取最后一条 `outcome=='ok'` 的 `reasoning_effort`/`thinking`。实测读数
-      （无情道 flash 臂 10/23 章产自降档档位、含 deep 臂 ch1/ch3；把夫君 8/19；
+      （无情道历史 flash 实验盘面 10/23 章产自降档档位，其中 ch1/ch3 属当时的旧闭卷路径；把夫君 8/19；
       pro 对照 0/23）目前只能从 ledger 手算，任何报告里都没有。
 - [ ] **两处原文短语被逐字带进成书**（无情道 ch12，`stage3.micro_quote` 报 3 处：
       1 处设计内保真点、2 处写手照抄了 `style_grounding.json` 的文风举例）。
@@ -823,82 +814,6 @@ JSON 为 15 beat / 12 hinge、15/15 地点 unknown；同一请求正常正文重
 切拍也更连贯。故只对 `extraction-ir-v3.1` 把“是否接纳 reasoning salvage”登记为响应契约能力并关闭，
 由既有客户端同档重采；其他契约及全局 salvage 不变。零成本组合回归 211 项通过。下一步仍是独立
 空缓存双书整跑，不因烟测通过提前翻默认；第三本 holdout 继续封存。
-
-### TODO-42 · 恒等基线两道闸对 `IDENTITY_UPSTREAM` 的处置不一致
-
-`novel/stages/stage5/review.py::build_review` 有两道恒等闸：
-
-- ② 逐章降级：`f.rule in ident and f.rule not in checks.IDENTITY_NA` ⇒
-  `identity_hit=True, actionable=False`；
-- ③.5 书级判死：`set(ident_hits) - checks.IDENTITY_NA - checks.IDENTITY_UPSTREAM`。
-
-**`IDENTITY_UPSTREAM` 只在 ③.5 被排除，② 没有。** 而 `checks.py` 里它自己的注释明写
-「非 0 是上游 bug，**不是「判据无判别力」**，分开报，别混进「不可反哺」那一桶」——
-③.5 照做了，② 没有。后果：源章一命中这四条，成稿的同条结论被打 `actionable=False`，
-而其中三条（`verbatim_missing` / `keep_value_missing` / `must_appear_missing`）是
-`repair='UNIQUE'`，全链唯一会进 `--revise` 的那一类 ⇒ 直接掉出
-`novel/stages/stage5/write.py::revise_targets`。
-
-⚠⚠ **本次没有直接翻转 ②，理由是两种处置各有道理、而分辨它们需要真实样本**：
-锚点在源文里找不到时，让写手「把它放回去」等于要求插入一段上游凭空造出来的文字
-（那正是 `FIDELITY_RULE` 禁止的事）；但反过来，静默降 `actionable` 又让**上游那个 bug
-没有任何 owner**。⇒ 先做的是让它**看得见**（2026-08-23：`novel/report/render.py::_identity_mark`
-——在此之前 `identity_hit` / `identity_dead` 是**只写不读**的，全仓没有任何渲染面、
-view 或前端组件读过它们）。
-
-- [ ] 盘上出现第一例真实的 `IDENTITY_UPSTREAM` 恒等命中之后，看那一章的锚点长什么样，
-      再决定 ② 该排除它、还是该像 `R-7.22b` 那样**另开一条 `owner=stage2` 的账**。
-- [ ] 顺序约束：要**一本走完 stage0~5 的书**，且它的恒等基线在这四条上非 0。
-      补它要跑的是 `stage5.review`（**0 成本**），前提是盘上有成稿。
-
-验收：② 与 ③.5 的处置写成同一句话，或者在 `checks.py` 那段注释里写明「两道闸刻意不同」
-以及为什么。
-
-### TODO-43 · 写手 prompt 里那个恒 null 的 `focalizer`
-
-`novel/stages/stage5/prompts.py` 用 `_compact`（裸 `json.dumps`，**无 `exclude_none`**）
-序列化整个 narration 数组 ⇒ 每一次写手调用的 prompt 里都带着一个恒 `null` 的
-`"focalizer"` 键。它是 `CtxNarration.focalizer` 这格空值**唯一的实际代价**
-（成因见 `docs/schema/stage4.md` 的 `narration` 行：那是一道从未成立过的判等闸，不是死值）。
-
-- [ ] 顺序约束：**改它会动写手 prompt 的字节** ⇒ 改之后跑的书与改之前的书
-      不是同一个 prompt 指纹，拿旧书当回归底座会多一个变量；且会整批作废 stage5 缓存。
-      ⇒ 挑一个「手上没有正在依赖旧 prompt 的对照实验」的时机单独做。
-- [ ] 同批更新 `tests/test_stage5_prompts.py` 的反漂移守卫（它会红，那是它在正确工作）。
-
-### TODO-44 · shallow 臂在盘上零覆盖 ⇒ 7 条 HARD 里有 1 条默认永远够不着
-
-盘上唯一合格底座 `偶像公寓打工日常_2066575217393144601`（18 章）与它之前那本（19 章，
-已不在盘上）**都是 deep-only**：`stage5/shallow/` 底下只有 `draft.md`，**一份章 JSON 都没有**。
-这不是偶然——2026-08-22 把 `DEFAULT_DEEP` 改成全书闭卷之后，默认路径就不产 shallow 章。
-
-⚠⚠ **不要把「两本书 37 章、7 条 HARD 全 0 命中」读成「HARD 层没有判别力」。**
-2026-08-24 在新底座上取的真读数（`review._outcomes` 直接跑在 `stage5/review_1.json` 上，
-**0 成本、不落盘**）把这个 0 分成了两类，而**报告上它们本来就长得不一样**：
-
-| 判据 | 状态 | 这一次的分母 |
-|---|---|---|
-| `draft_too_short` · `draft_truncated` · `meta_leak` | 跑了，0 命中 | 18 章全扫 |
-| `verbatim_missing` | 跑了，0 命中 | **135 句**【原样写入】材料 |
-| `keep_value_missing` | 跑了，0 命中 | **23 处**【数值不得改动】材料 |
-| `secret_leak` | 跑了，0 命中 | 5 条 secret，**0 条探针零判别力** |
-| `dialogue_halved` | **UNVER** | 0/18 章落在前件 ⇒ 明写「本条没有分母」 |
-
-⇒ **6 条有真分母的 HARD 查过 158 条保真材料 + 18 章，0 命中是真结论**；
-第 7 条 `dialogue_halved` 诚实地报 UNVER（`checks.DIALOGUE_HALVED_BLIND`，
-两相接线在 `review.py` 与 `write.py`）。假绿那一层**已经修好了，不要重做**。
-
-仍然成立的是另一件事：**默认配置下实际只有 6 条 HARD 在工作**，第 7 条要 shallow 臂
-才够得着，而它背着的是本项目效应量最大的一条跨书结论（闭卷把对白压到 ~0.7×，6/6 本
-方向一致）。同理，凡是 shallow 特有的性质，全部没有在真书上被查过。
-
-- [ ] 顺序约束：补它要**付费**跑 `stage5.write --mode shallow`（整臂或 `--chapters` 一小批）。
-      2026-08-24 用户裁决**暂不跑**，先登记。
-- [ ] 补上之后要重读的是两件事：`dialogue_halved` 第一次拿到真分母时命不命中；
-      以及 shallow 臂的逐章 JSON 能不能过 `tests/test_stage5.py` 那批只在 deep 臂验过的用例。
-
-验收：盘上出现一本 shallow 章 JSON 非空的书，且 `dialogue_halved` 的 `unver_why` 变成
-真实判定（命中或 0 命中都算），本条删除。
 
 ## 条目生命周期
 

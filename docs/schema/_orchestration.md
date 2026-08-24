@@ -128,7 +128,6 @@ argv 的形态是：
 | `job_id` | `str` | **是** | 单调 + 随机后缀，形如 `1786199530-3f2a1b8c`。**不是自增数**（多进程下自增会撞） | **契·码** |
 | `sid` | `str \| null` | **是** | 书 id。⚠ **可为 `null`**：上传新书那条路不带 sid（那会儿目录还不存在） | **契·码** |
 | `node` | `str` | **是** | `NODES` 之一 | **设计** |
-| `mode` | `str \| 键不在` | 否 | 只有 `stage5.write` 有（`DEPTH_MODES`） | **设计** |
 | `flags` | `str[]` | **是** | 这一次带的 flag。**空列表也要写**——「没带 flag」与「没记」不是一回事 | **设计** |
 | `steps` | `Step[]` | **是** | 这个作业要依次跑哪几条命令 | **设计** |
 | `python` | `str` | **是** | `sys.version`。哪版解释器跑的 | **盘·码** |
@@ -144,6 +143,12 @@ argv 的形态是：
 ⚠ **`argv` 不在这张表上，它在 `steps[].argv` 里。**
 原型的 `meta` 同时有 `argv`（第一步）与 `all_argv`（全部）——**两个字段说同一件事**，
 而界面只渲染前者，于是一个两步作业在界面上看起来只跑了一步。
+
+旧 append-only `jobs.jsonl` 里可能还有 `stage5.write` 的 deep/shallow `mode`。
+它只由 `novel/orchestrator/jobs.py::_decode_event` 在读盘边界校验后剥离；
+`JobStart`/`JobRecord` 公开模型、OpenAPI 与前端类型都没有该字段。
+旧 selector 与它的可执行 `argv` 也只留在 append-only 原记录；公共投影仅显示
+`legacy_incompatible` 占位命令与「命令已退役」说明，避免把历史快照画成仍可重放的入口。
 
 ### 2.3 ⚠ 退出码 0 不等于成功
 
@@ -257,7 +262,7 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 > ### ⚠ `done` 是**三态**：`True` / `False` / **`None`＝判不了**
 >
 > 这一格是实跑盘上三本时被逼出来的，不是设计洁癖。
-> stage5 的产物是**逐章**的（`stage5/<mode>/chNN.json`），做不了一次 `is_file()`；
+> stage5 的产物是**逐章**的（`stage5/chNN.json`），做不了一次 `is_file()`；
 > 它的判据是「stage4 计划里的每个输出章都有成稿吗」——
 > **而那份计划读不回来的时候，盘上有 4 章这件事既不能证明跑完了、也不能证明没跑完。**
 >
@@ -271,7 +276,7 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 > |---|---|---|---|
 > | 具名 | `stage7/name_map.json` | — | `artifacts[]`（一次 `is_file()`） |
 > | 轮次编号 | `stage5/review_{n}.json` · `stage6/semantic_{n}.json` | 盘上有几份 | **`rounds_done[节点]`** |
-> | 逐章（目录段也带占位符） | `stage5/{mode}/ch{nn}.json` | 计划里有哪些章 | `chapters_done[臂]` |
+> | 逐章 | `stage5/ch{nn}.json` | 计划里有哪些章 | `chapters_done` |
 > | **书级参数化** | `stage7/{title}_rewriting.txt` | **这本书是谁** | `artifacts[]`（**先解析再筛**） |
 >
 > `required_artifacts()` 收第一种与第四种，于是**中间两种在 `artifacts[]` 里没有行**。
@@ -301,10 +306,11 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 大量边仍为 `consumed=null`；把 `unknown` 当未完成会让升级后的队列重跑一批可能已完成的付费层。
 「不知道它新不新」与「它是旧的」是两件事——后者才该挡路。
 
-**`NovelOverview`** 另有 `chapters` 与 `stage5_modes` 两格。`chapters` 只从可读的
-`stage1/chapters.json` 的主章表长度派生；stage1 未跑或读不回时为 `null`，语料库不为此
-逐书追加请求，也不等 stage5 才猜章数。`stage5_modes` 取 glob `stage5/*` 的目录名：
-stage5 的粒度是**章**（`R-14.2`），逐章状态由 `stage5/<mode>/ch*.json` 给，
+**`NovelOverview`** 另有 `chapters` 与 `stage5_legacy_paths`。`chapters` 只从可读的
+`stage1/main_text.json` 主章表长度派生；stage1 未跑或读不回时为 `null`，语料库不为此
+逐书追加请求，也不等 stage5 才猜章数。Stage5 的粒度是**章**（`R-14.2`），逐章状态只由
+canonical `stage5/ch*.json` 给；`stage5_legacy_paths` 仅列旧 `deep/shallow` 只读证据，
+并使该层进入 `legacy_incompatible`，绝不挑一臂折成 current。
 ⚠ **必须排除 `.INVALID.json`**——原型这里踩过，`chNN.json` 的存在本身就是
 「过了写作时的落盘闸门」这个语义，把被拦下的那份数进去就把语义反过来了：
 续跑会跳过一章**根本没写成的**稿子，而那一章的钱到时候还得花。
@@ -343,7 +349,7 @@ stage5 的粒度是**章**（`R-14.2`），逐章状态由 `stage5/<mode>/ch*.js
 | `sid` | `str` | **是** | |
 | `node` | `str` | **是** | |
 | `flags` | `str[]` | **是** | 空列表也要写 |
-| `steps` | `Step[]` | **是** | 与真跑**同一个 `build_steps`**（`R-11.8`）。仅「还没做深度选章，因而命令本身尚不可构造」的 blocked 项可为空；可运行项为空时载体拒收 |
+| `steps` | `Step[]` | **是** | 与真跑**同一个 `build_steps`**（`R-11.8`）。仅尚未满足人工闸门、因而命令必填凭据尚不可构造的 blocked 项可为空；可运行项为空时载体拒收 |
 | `why` | `str` | **是** | 为什么排它（`产物不存在` / `上游变过 ⇒ 重来` / `.INVALID 待处理`…） |
 | `waiting_on` | `str \| 键不在` | 否 | ⭐ 在等谁。见下 |
 
@@ -377,7 +383,9 @@ not_run: M  它后面那些，一步都没跑
 | 情形 | `waiting_on` |
 |---|---|
 | stage0 未批准（`APPROVAL_STATE != 'approved'`） | `stage0.approve` |
-| stage5 尚未持久化人工深度选章 | `approval:stage5-depth` |
+| stage5 尚未授权 current canonical 全书写作 | `approval:stage5-writing` |
+| Stage5 Review 不是 `missing/fresh`，旧结论不能驱动写作续跑 | `stage5:review-currentness` |
+| 发现旧 `stage5/deep|shallow/` 布局 | `legacy_incompatible` |
 | 文案未定稿 | `stage6.approve` |
 | 人名表未定稿 | `stage7.approve` |
 | inbox 非空（`.INVALID` / 被驳回 / 连续未消） | `inbox:<kind>` |
@@ -403,6 +411,11 @@ CLI 这一侧：没给 `--yes` 而计划里有付费项 ⇒ 打印全部命令�
 产物存在性、新鲜度与人工闸门，但重判只能使一项 `done/blocked/pending`，不能临时发明一条
 用户没有确认过的新付费命令。
 
+旧 `queues.jsonl` 的 `mode=null` 只在私有读盘投影中剥离；任一非空
+deep/shallow 表明该快照依赖旧契约，整份计划投影为 `queue:plan-changed`
+并清空可执行 `steps`。因此旧记录可被读取审计，但不会在公开序列化中出现 mode，
+也不可能被 runner 重放。
+
 | 模型 | 关键字段 | 作用 |
 |---|---|---|
 | `QueueStart` | `sids` · `until_stage` · `plan` · `paid_confirmed` | 创建时的目标与一次性授权快照；有付费项却没确认时载体直接拒收 |
@@ -427,24 +440,24 @@ approve 闸门读取现役类型里的批准字段，已经批准就跳过，未
 
 ---
 
-## 六、`active_key(sid, node, mode)` 与 409
+## 六、`active_key(sid, node)` 与 409
 
-`R-11.10`：**一本书同时只跑一个作业**（第二个请求 409）。唯一例外：写作的两条臂可并发。
-不同 `sid` 生成不同键，因此后台作业与其 CLI 子进程可以并行，互不占用对方的锁。
+`R-11.10`：**一本书同时只跑一个作业**（第二个请求 409）。Stage5 v2 已无并发写作臂；
+不同 `sid` 生成不同键，因此不同书的后台作业与 CLI 子进程仍可并行。
 
 互斥键的**唯一落点**就是这一个函数：
 
 ```
-active_key(sid, node, mode) -> str
+active_key(sid, node) -> str
     sid 为 null      → '_global'（上传新书那条路；串行比并发安全——
                        两个并发的摄入可能推导出同一个目录名、互相覆盖）
-    mode 非 null     → f'{sid}:{node}:{mode}'（单臂维护入口）
-    否则             → sid（包括同时调度 deep/shallow 的 Stage5 整书入口）
+    sid 非 null      → sid
 ```
 
-注册表按层级判断冲突：书级键 `sid` 与其任一 `sid:node:mode` 冲突；deep 与 shallow
-两个同级臂键彼此不冲突。通用 `start()` 拿锁、执行可选审批准备、追加 `started` 后立即
-返回 `running`，后台线程与同步 `run()` 共用同一个逐步子进程执行内核。
+旧 jobs 记录的兼容只在私有 JSONL 解码器，互斥键与现役作业构造口都没有 mode 参数。
+通用 `start()` 拿锁、执行可选
+审批准备、追加 `started` 后立即返回 `running`，后台线程与同步 `run()` 共用同一个逐步子进程
+执行内核。
 
 ⚠⚠ **这个函数必须只有一个落点，而这一条是拿一个真 bug 换来的。**
 原型 `start` 写进去的是 `sid or '_global'`、而 `_run_chain` 释放时拿 `meta['sid']` 去查——
@@ -456,13 +469,10 @@ active_key(sid, node, mode) -> str
 
 - **拿到锁之后到线程真跑起来之前，任何一步抛出去都要把锁还回去**——
   否则这本书被一个**从未存在过的作业**永久锁死
-- **释放时用同一个函数算键，且带上 `mode`**——臂级键少了它就还错了半个键
+- **释放时调用同一个 `active_key`**——同一把锁不得在启动与释放两处重拼。
 
-> **为什么例外是「同一个节点的两个 mode 值」而不是「两个 kind」**：
-> 写作两条臂只差 (system prompt, 给不给源章原文)，产物形状逐字节相同，判据表只有一张，
-> 且 `R-7` 一节同时管两臂 ⇒ 它们是**一个节点的参数**。
-> 原型给了它们两个 kind（`n5_write` / `n6_write`），于是不得不在互斥表里
-> 为这两个名字开一条特例分支（`STAGE5_ARM_KINDS`）——**特例是命名错误的下游症状**。
+旧 `n5_write` / `n6_write`、deep / shallow 与臂级互斥只属于历史事件解码面。现役节点恒为
+`stage5.write`，现役输出恒为 `stage5/chNN.json`；兼容旧记录不等于恢复旧命令能力。
 
 ---
 
@@ -485,7 +495,7 @@ Output/_service/ledger.jsonl      跨书逐请求成本事实
 Output/_service/*.jsonl.lock      上面五份 JSONL 各自的追加锁载体（见下）
 Output/_service/uploads/…         浏览器上传的原始小说字节
 Output/_service/edits/<sid>/…     交给 stage0 CLI 的一次性编辑计划
-Output/_service/approvals/<sid>.json 人工闸门、已阅状态与深度选章（原子替换）
+Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```
 
 它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们；
@@ -504,20 +514,21 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与深度选章�
 > B 进程紧接着写的完整行**顶到中间**，于是读侧对一次正常的并行跑开火，
 > 且是**所有书**的视图一起失效。锁补齐之后那条容忍才真正成立。
 
-`approvals/<sid>.json` 的盘上服务记录当前为 **v2**。每个已盖 gate、已阅状态、
-深浅章选择和 writing 授权都必须带一份 current-subject proof：当前
-`stage0/clean_text.txt` 的完整 SHA-1、所裁决正式产物的主体 SHA-256，以及决定本身
-（例如 `deep=[1,2,3]`）的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
-人工决定与 freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、
-出现 `.INVALID` 或 Stage5 选错臂，都会让对应决定及依赖它的下游决定在有效视图中失效。
+`approvals/<sid>.json` 的盘上服务记录当前为 **v3**；HTTP 投影 `ApprovalDoc.v=2` 是另一条
+版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态和 writing 授权都必须带一份
+current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式产物的主体
+SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed 人工决定与
+freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、出现 `.INVALID` 或
+发现旧 Stage5 双臂布局，都会让对应决定及依赖它的下游决定在有效视图中失效。
 普通产物主体是正式文件字节；`s7` 是有意的窄主体：当前
 `surname_map + characters + extra_subs` 决策面与完整 typed `ApprovedNameMap` 的规范摘要。
 因此 `stage7.assemble` 写回 `book_txt` 交付账不会自废 s7，而决策面、actor/reason/origin
 或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
-旧 v1 只有 bool，无法证明人当时看的是哪份产物，故不猜迁移；只能显式 reset 或按当前
-盘面 backfill。`ApprovalDoc.v=1` 仍只是 HTTP 界面视图版本，不等于这份内部服务记录版本。
-队列用一次加锁读取取得“当前可用深浅章选择”；不得先查文件存在、再另读选择，从而留下
-两次读取之间产物变更仍生成付费命令的窗口。
+旧 v2 内部记录还含 `deep/deep_proof`，只为**显式** backfill 解码；普通 GET / 作业启动绝不
+静默迁移。只有旧 deep 集合恰等于当前全部计划章、旧 proof 与当前盘面一致时，才能收敛为 v3
+的无选臂 writing 授权；含 shallow 分配时清空 writing 与 s5 以后 gate。旧 v1、损坏记录或
+不满足上述条件的记录只能显式 reset/backfill，不能猜。队列在一把锁内读取 current writing
+授权与盘面；不得先查文件、再另读授权，从而留下两次读取之间主体变化仍生成付费命令的窗口。
 
 ⚠ 契约收窄时必须同步更新需求与 schema 文档；运行时只保留收窄后的当前规则。
 

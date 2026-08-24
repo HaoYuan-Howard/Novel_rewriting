@@ -40,7 +40,6 @@ def main(argv: list[str] | None = None) -> int:
         description='调用生产 build_steps；默认只预览，加 --execute 才逐步执行')
     parser.add_argument('--base', required=True)
     parser.add_argument('--sid')
-    parser.add_argument('--mode')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('node')
     parser.add_argument('flags', nargs=argparse.REMAINDER,
@@ -50,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     if flags[:1] == ['--']:
         flags = flags[1:]
     steps = build_steps(
-        args.node, args.sid, flags, base=args.base, mode=args.mode,
+        args.node, args.sid, flags, base=args.base,
         placeholders=not args.execute)
     for index, step in enumerate(steps, 1):
         print(f'[{index}] {step.label}')

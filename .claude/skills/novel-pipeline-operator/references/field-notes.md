@@ -33,7 +33,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 | FN-014 | 超限章有一条 0 成本销账路 | contract-confirmed | `trim_audit_chNN`, verification | `--retain-pretrim --chapters` 或 `--apply-edit` |
 | FN-015 | 落盘闸拦下后，finding 细节的读法逐层不同 | contract-confirmed | `.INVALID`, exit 2 | 先 `--check-only` 取逐条，再 `--revalidate` 提升 |
 | FN-016 | `--apply-edit` 的路径语义逐层不同 | contract-confirmed | `edit_rel`, 产物目录之外, exit 2 | `--apply-edit`，编辑文件写进书目录内 |
-| FN-017 | `--revise` 不吃密度与篇幅类判据 | contract-confirmed | `--revise`, `length_under`, 没有可自救的条目 | `--apply-edit` 提交整章全文，或 `--wontfix` 记不修裁决 |
+| FN-017 | `--revise` 只吃 UNIQUE，FREE/NONE 转人工 | contract-confirmed | `--revise`, `repair`, 没有可自救的条目 | 按 finding 的免费路修；没有唯一修法时 `--apply-edit` 或 `--wontfix` |
 | FN-018 | 宿主杀掉后台句柄后，逐章节点仍是可续的 | observed | 后台终止, `--chapters`, 账本无记录 | 前台 + `--chapters` 分批重跑 |
 | FN-019 | 并行会话改仓库代码会让 CLI 崩在 import 期 | observed | `NameError`, import, 与本书无关的栈 | 等对方写完后重试同一条命令，不改仓库代码 |
 | FN-020 | 审阅 info finding 要按判据实际读的字段读 | contract-confirmed | `present_continuity`, `present_char_ids`, 字段名相近 | 先定位判据实现，再照它读的那几个字段取证 |
@@ -127,7 +127,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 判断：若成稿只是保留源章已发生的揭示，根因可能是 Stage2 权威
   `reader_reveal_events` 时线标晚，而不是写手跨章泄底。多次/分步揭示不再被压成单点。
 - 处置：逐句对照源章，不误改成稿。上游标注错误时走 typed `stage2.global --apply-edit`
-  修正 secret 时线，重跑受影响的 Stage5 review/semantic；确认不修时用当前 finding
+  修正 secret 时线，重跑受影响的 `stage5.review`，再让 `stage6.semantic` 对新的候选文本重新审判；确认不修时用当前 finding
   证据键的 `stage5.review --wontfix`留账。
 - 验证：记录源文章号、逐字证据、更正后的 `reader_reveal_events` 与 fresh semantic finding
   的对应关系；旧主体绑定结论必须过期。
@@ -272,21 +272,20 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 依据：`novel/paths.py::edit_rel` 的相对/绝对分支与目录外终态，其 docstring 记明
   `stage5.write` / `stage0.edit` 的例外与 `novel/api/routes/edits.py` 对该例外的依赖。
 
-### FN-017 · `--revise` 不吃密度与篇幅类判据
+### FN-017 · `--revise` 只吃 UNIQUE，FREE/NONE 转人工
 
 - 状态：`contract-confirmed`
-- 触发：成稿命中篇幅或密度类 info（篇幅低于下限 `length_under`、形态/对白比/明喻/「心里」密度漂移），
-  想用 `stage5.write --revise` 返工，得到 exit 2「deep 臂这一轮没有可自救的条目」并列出被跳过的条数，
-  每条附「不进付费自救（满足路径不唯一）⇒ 转人工」。
-- 判断：**这不是失败，是产品在说这一层没有自动返工路。** `--revise` 只吃 `repair == 'UNIQUE'` 的条目，
-  而"写足篇幅"「贴回本书密度」的满足路径不唯一（最省力的写法就是注水，而 directive 明写不要注水），
-  所以这一族判据一律 `repair='NONE'`。⚠ 别把它读成 `remediation` 出错：
-  `remediation` 与 `repair` 是两格，前者说"归谁修"，后者才是付费自救的准入（见[修复状态机](recovery.md)）。
-  也别据此推断"篇幅不达标不算问题"——它照样进 `human_only` 余额，只是必须由人裁决。
-- 处置：确认账本没有因这次尝试新增调用（它在发请求之前就退了）。随后二选一，
-  **两条都由受托 agent 自己定，不回头找用户**：`--apply-edit` 提交该章全部 producer-owned slot
-  的完整成稿（0 次调用，会让下游 stale 需重跑），或 `--wontfix` 记一条带 actor/reason 的
-  不修裁决把它从余额里销掉。
+- 触发：成稿仍有 finding，想统一交给 `stage5.write --revise`，却得到 exit 2
+  「这一轮没有可自救的条目」，并列出被跳过的条数。
+- 判断：**这不是付费调用失败，而是修复分流在请求发出前关闭式退出。** `--revise` 只消费
+  `repair == 'UNIQUE'` 且尚未超过轮次上限的条目。现役 50 条中 repair 分布为
+  **12 UNIQUE、11 FREE、27 NONE**：FREE 必须按 finding 指名的 0 成本入口修，NONE 表示满足路径
+  不唯一、必须人工判断。`remediation` 与 `repair` 是两格，前者说“归谁修”，后者才是付费自救
+  的准入（见[修复状态机](recovery.md)）。
+- 处置：先按 Review 中的 `repair` 分桶；UNIQUE 才运行 `--revise`，FREE 跑 finding 指名的
+  deterministic 路径，NONE 则二选一：`--apply-edit` 提交该章完整 `ChapterResponse`
+  （0 次调用，会让下游 stale 需重跑），或 `--wontfix` 记带 actor/reason 的不修裁决。
+  如果误跑 `--revise` 命中“没有可自救的条目”，先确认 ledger 没有新增调用，再回到上述分流。
   ⚠ 代笔整章正文是**授权范围内**的，但这条路**没有任何守卫替你兜**：文风、保真材料与在场集
   的一致性都不在任何判据的扫描面内，改坏了不会红。所以代笔前先取三样依据——该章 blueprint
   的拍子、`stage3` 文风画像的 measurable、该章在场角色集——写完逐项自查并把方法与结论写进
@@ -294,10 +293,11 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 - 验证旧豁免：`wontfix` 绑的是 `(章, rule, evidence_key)`，不是“这章从此免检”。
   `--apply-edit` 改正文后必须先重跑 `stage5.review`；证据键变化的新 finding 会自动重新进入
   `human_only`，只对当前仍命中的新证据重新裁决，不删除或篡改旧豁免账。
-- 验证：账本按 sid 过滤后该节点的调用数仍等于章数（无多出的一条）；选 `--wontfix` 时
+- 验证：无 UNIQUE 时这次尝试没有新增调用；选 `--wontfix` 时
   `inbox` 该项离开 `human_only` 并计入 wontfix 豁免；选 `--apply-edit` 时新一轮落盘且下游重跑通过。
-- 依据：`contracts/rules.py::_validate` 断言 `repair != 'NONE'` 仅允许 `owner == 'stage5'`；
-  `contracts/invariants.py::REVALIDATE_ONLY_NEW_ERRORS` 所在的同一张表登记 `--revise` 的语义。
+- 依据：`contracts/rules.py::_validate` 的 repair 约束；
+  `novel/stages/stage5/write.py` 的 `--revise` 选择与轮次守卫；完整分布由
+  `contracts/judges/stage5.py` 的现役注册表机械统计。
 
 ### FN-018 · 宿主杀掉后台句柄后，逐章节点仍是可续的
 
@@ -350,7 +350,7 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
 ### FN-021 · METRIC/UNVER 重复出现不是 stalled
 
 - 状态：`contract-confirmed`
-- 触发：重复运行 `stage5.review` 后，`inbox` 把 `arm_split_report`、`secret_timeline`、
+- 触发：重复运行 `stage5.review` 后，`inbox` 把 `dialogue_report`、`secret_timeline`、
   `name_surface_survey` 或 `must_hold_unver` 列成 `stalled`，并建议改正文或记 `wontfix`。
 - 判断：Review 的收敛账会为所有 finding 带上 `unresolved_rounds`，包括每轮无条件出现的
   `metric` 与结构性 `unver`。它们连续两轮仍存在，只证明读数/边界仍存在，不证明修复失败；
@@ -369,8 +369,9 @@ rg -n "stage6|hook_para_sep|exit 70" .claude/skills/novel-pipeline-operator/refe
   人工复制时很难看出多一个或少一个 `stage5.review:0`。
 - 判断：长重复序列不是适合手抄的证据。相邻同项 RLE（如 `stage5.review:0×52`）可无损展开，
   同时以规范 JSON 的事件数与 SHA-256 锁定完整序列；人读表示、机器摘要与原始 JSONL 三者互证。
-- 处置：运行 `scripts/collect_final_evidence.py`，复制 `exit_sequence_compact_text` 与
+- 处置：从仓根运行 `.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py`，复制 `exit_sequence_compact_text` 与
   `review_anchor_line`。不要自己计数、拼箭头或从日志截一段冒充全历史序列。
-- 验证：`scripts/validate_review.py` 要求终审包含当前压缩序列，并逐项比较机器锚点中的
+- 验证：`.claude/skills/novel-pipeline-operator/scripts/validate_review.py` 要求终审包含当前压缩序列，并逐项比较机器锚点中的
   `exit_sequence_count` / `exit_sequence_sha256`；任一事件变化都会失败。
-- 依据：`scripts/collect_final_evidence.py::_compact_exits` 与 `scripts/validate_review.py::validate`。
+- 依据：`.claude/skills/novel-pipeline-operator/scripts/collect_final_evidence.py::_compact_exits` 与
+  `.claude/skills/novel-pipeline-operator/scripts/validate_review.py::validate`。

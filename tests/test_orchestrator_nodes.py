@@ -10,6 +10,7 @@ test_orchestrator_nodes.py —— 四个纯函数：贵贱 · 写不写 · 那�
 """
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 
@@ -24,16 +25,9 @@ from novel.orchestrator import nodes as N
 BASE = os.path.join('E:', os.sep, 'somewhere', 'Output')
 SID = '7615069877019300633'
 
-#: 逐 node × 独立 flag 铺平；stage5 的两项是一个不可拆的复合动作，另有专测。
-PAIRED_FLAGS = {'--deep', '--shallow-rest'}
 CASES = [
     (node, flag) for node, spec in NODES.items() for flag in spec.flags
-    if flag not in PAIRED_FLAGS
 ]
-
-
-def _mode_of(node: str) -> str | None:
-    return NODES[node].modes[0] if NODES[node].modes else None
 
 
 def _bare(node: str) -> list[str]:
@@ -56,7 +50,8 @@ def _args(flag: str, node: str | None = None) -> list[str]:
     而这张表想测的是「这条 flag 该节点认不认」，不是「必填项齐不齐」——
     后者有它自己的专测。
     """
-    out = [flag, 'payload.json'] if flag in VALUED_FLAGS else [flag]
+    value = ('event-list-v1' if flag == '--write-contract' else 'payload.json')
+    out = [flag, value] if flag in VALUED_FLAGS else [flag]
     if node is not None:
         for extra in N.missing_required(node, out):
             out += [extra, 'payload.json'] if extra in VALUED_FLAGS else [extra]
@@ -180,7 +175,7 @@ def test_node_specific_write_effects_keep_all_three_identity_behaviors_distinct(
 
 @pytest.mark.parametrize('node,flag', CASES, ids=lambda v: str(v))
 def test_every_registered_run_mode_builds_a_command(node, flag):
-    argv = N.build_argv(node, SID, _args(flag, node), base=BASE, mode=_mode_of(node))
+    argv = N.build_argv(node, SID, _args(flag, node), base=BASE)
     assert argv[0] == sys.executable
     assert node in argv and SID in argv
 
@@ -225,24 +220,81 @@ def test_stage2_global_resample_is_paid_and_cannot_hide_another_action():
             'stage2.global', SID, ['--resample', '--purge-role'], base=BASE)
 
 
-def test_only_the_writing_node_takes_a_mode():
-    with pytest.raises(UnsupportedRunMode, match='没有臂'):
-        N.build_argv('stage3.style', SID, base=BASE, mode='deep')
-    with pytest.raises(UnsupportedRunMode, match='--mode'):
-        N.build_argv('stage5.write', SID, base=BASE)
-    argv = N.build_argv('stage5.write', SID, base=BASE, mode='deep')
-    assert argv[argv.index('--mode') + 1] == 'deep'
+def test_no_current_node_takes_a_mode_and_stage5_rejects_retired_flags():
+    assert 'mode' not in inspect.signature(N.validate_run).parameters
+    assert 'mode' not in inspect.signature(N.build_argv).parameters
+    assert 'mode' not in inspect.signature(N.build_steps).parameters
+    assert 'mode' not in inspect.signature(N.step_label).parameters
+    for flags in (['--deep', '1'], ['--shallow-rest'],
+                  ['--deep', '1,2,3', '--shallow-rest']):
+        with pytest.raises(UnsupportedRunMode, match='不接受'):
+            N.build_argv('stage5.write', SID, flags, base=BASE)
 
 
-def test_stage5_composite_selection_builds_both_arms_without_a_mode():
-    flags = ['--deep', '1,2,3', '--shallow-rest']
+def test_stage5_default_is_full_book_and_chapters_is_the_only_subset_selector():
+    whole = N.build_argv('stage5.write', SID, base=BASE)
+    assert '--mode' not in whole and '--chapters' not in whole
+    subset = N.build_argv('stage5.write', SID, ['--chapters', '1,3'], base=BASE)
+    assert subset[subset.index('--chapters') + 1] == '1,3'
+
+
+def test_stage5_write_contract_is_a_paid_previewable_experiment_value():
+    flags = ['--write-contract', 'event-list-v1']
     argv = N.build_argv('stage5.write', SID, flags, base=BASE)
-    assert '--mode' not in argv
-    assert argv[argv.index('--deep') + 1] == '1,2,3'
-    assert '--shallow-rest' in argv
-    for lone in (['--deep', '1'], ['--shallow-rest']):
-        with pytest.raises(UnsupportedRunMode, match='requires exactly'):
-            N.build_argv('stage5.write', SID, lone, base=BASE)
+    assert argv[argv.index('--write-contract') + 1] == 'event-list-v1'
+    assert N.is_paid('stage5.write', flags) is True
+    dry = [*flags, '--dry-run']
+    assert N.is_paid('stage5.write', dry) is False
+    preview = N.build_argv('stage5.write', SID, dry, base=BASE)
+    assert preview[preview.index('--write-contract') + 1] == 'event-list-v1'
+    steps = N.build_steps('stage5.write', SID, flags, base=BASE)
+    assert '--write-contract' in steps[0].argv and steps[0].paid is True
+    assert all('--write-contract' not in step.argv for step in steps[1:])
+    with pytest.raises(UnsupportedRunMode, match='只接受'):
+        N.build_argv(
+            'stage5.write', SID, ['--write-contract', 'typo-v9'], base=BASE)
+
+
+@pytest.mark.parametrize('operation', [
+    '--revise', '--recheck', '--revalidate', '--apply-edit', '--rebuild-draft',
+])
+def test_stage5_write_contract_cannot_be_previewed_on_a_non_first_draft_path(operation):
+    flags = ['--write-contract', 'event-list-v1', operation]
+    if operation == '--apply-edit':
+        flags.append('edit.json')
+    with pytest.raises(UnsupportedRunMode, match='只切换 Stage5 首稿请求'):
+        N.build_argv('stage5.write', SID, flags, base=BASE)
+
+
+def test_stage5_rebuild_draft_is_a_free_writing_recovery_entry():
+    flags = ['--rebuild-draft']
+    assert N.is_paid('stage5.write', flags) is False
+    assert N.would_write('stage5.write', flags) is True
+    argv = N.build_argv('stage5.write', SID, flags, base=BASE)
+    assert '--rebuild-draft' in argv
+
+
+@pytest.mark.parametrize(('node', 'flags'), [
+    ('stage5.review', ['--check-only', '--wontfix', 'book|draft_missing=人工接受']),
+    ('stage5.review', [
+        '--check-only', '--retain-pretrim', '--chapters', '3',
+        '--actor', '复核员', '--reason', '保留原稿',
+    ]),
+    ('stage5.review', [
+        '--wontfix', 'book|draft_missing=人工接受', '--retain-pretrim',
+        '--chapters', '3', '--actor', '复核员', '--reason', '保留原稿',
+    ]),
+    ('stage5.write', ['--rebuild-draft', '--dry-run']),
+    ('stage5.write', ['--recheck', '--revise']),
+    ('stage5.write', [
+        '--revalidate', '--actor', '复核员', '--reason', '按当前闸门重判',
+        '--apply-edit', 'stage5_edit.json',
+    ]),
+])
+def test_stage5_primary_operations_are_mutually_exclusive(node, flags):
+    """CLI 按分支优先级只会执行一个；preview 不得把另一个 flag 的效果算进去。"""
+    with pytest.raises(UnsupportedRunMode, match='主操作互斥'):
+        N.build_argv(node, SID, flags, base=BASE)
 
 
 def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():
@@ -403,14 +455,14 @@ def test_a_non_writing_run_gets_no_follow_up():
 def test_steps_carry_the_cost_and_write_answers_they_were_asked_for():
     """`Step` 上的 `paid` / `writes` 必须与那两个函数一致——**第二处必然分家**。"""
     for node, spec in NODES.items():
-        mode, bare = _mode_of(node), _bare(node)
-        for step in N.build_steps(node, SID, bare, base=BASE, mode=mode):
+        bare = _bare(node)
+        for step in N.build_steps(node, SID, bare, base=BASE):
             flags = [t for t in step.argv if t.startswith('--')
-                     and t not in ('--base', '--mode')]
+                     and t != '--base']
             assert step.paid == N.is_paid(node, flags)
             assert step.writes == N.write_effect(node, flags)
         assert spec.label in N.build_steps(
-            node, SID, bare, base=BASE, mode=mode)[0].label
+            node, SID, bare, base=BASE)[0].label
 
 
 # ───────────────── 层 ↔ 复检节点那座桥（骨架 E5 加） ─────────────────
@@ -422,9 +474,9 @@ def test_step_label_is_the_one_the_actions_table_publishes():
     「stage1 摄入+分章」而「摄入」早已搬到 stage0——**手写的 label 会说谎**。
     """
     for node, spec in NODES.items():
-        mode, bare = _mode_of(node), _bare(node)
-        step = N.build_steps(node, SID, bare, base=BASE, mode=mode)[0]
-        assert step.label == N.step_label(node, bare, mode=mode)
+        bare = _bare(node)
+        step = N.build_steps(node, SID, bare, base=BASE)[0]
+        assert step.label == N.step_label(node, bare)
         assert spec.label in step.label
     with pytest.raises(UnsupportedRunMode, match='未知节点'):
         N.step_label('stage9.nope')

@@ -1,16 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
-import { FRESH, SEV, chNo, type Mode, type Severity } from '@/constants/vocabulary'
+import { FRESH, SEV, chNo, type Severity } from '@/constants/vocabulary'
 import type { Finding } from '@/types/common'
-import type { ChapterSegment } from '@/types/stages'
+import type { ChapterSegment, ReviewResponse, TrimResolutionRequest } from '@/types/stages'
 import type { TextPart } from '@/components/ui/HighlightedText'
 import { useOrdinal, useSid } from '@/hooks/useRouteParams'
 import { useChrome } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import { lookupAction } from '@/constants/actions'
 import type { EnumAction } from '@/types/enums'
+import { useApprovals } from '@/hooks/useApprovals'
+import { useJobs } from '@/hooks/useJobs'
 
 export type S5Tab = 'chapter' | 'book' | 'index'
 
@@ -21,6 +23,28 @@ export interface FindingView {
   detail: string
   sev: Severity
   evidenceLabel: string
+  wontfixLabel: string | null
+}
+
+export type Stage5WontfixScope = number | 'book'
+
+export interface Stage5WontfixTarget {
+  key: string
+  scope: Stage5WontfixScope
+  rule: string
+  item: string
+  evidenceKey: string | null
+  wontfix: Finding['wontfix']
+  blockedReason: string | null
+}
+
+function stage5FindingKey(
+  scope: Stage5WontfixScope,
+  finding: Pick<Finding, 'rule' | 'evidence_key'>,
+): string | null {
+  return finding.evidence_key?.trim()
+    ? `${scope}|${finding.rule}|${finding.evidence_key}`
+    : null
 }
 
 /**
@@ -31,9 +55,62 @@ export interface FindingView {
 export function stage5WriteActions(actions: readonly EnumAction[]): EnumAction[] {
   return actions.filter(
     (action) => action.kind === 'stage5.write'
-      && (action.mode === 'deep' || action.mode === 'shallow')
+      && !action.extra?.includes('--rebuild-draft')
       && (!action.needs_value || action.extra?.includes('--chapters')),
   )
+}
+
+/**
+ * 付费写作在用户确认之后、真正启动作业之前补齐 writing 授权。
+ * `undefined` 也按「尚未证明已授权」处理；查询未返回时直接放行，会留下一个
+ * 只在慢请求上出现的 409 死路。免费恢复动作永远不走这条状态转换。
+ */
+export function stage5WritingBefore(
+  action: { paid: boolean } | null,
+  writing: boolean | null | undefined,
+  startWriting: () => Promise<unknown>,
+): (() => Promise<void>) | undefined {
+  if (!action?.paid || writing === true) return undefined
+  return async () => {
+    await startWriting()
+  }
+}
+
+/** 专用 retain 路由与同源 preview 共用的完整 flags；输入先去首尾空白。 */
+export function retainPretrimArgs(ordinal: number, actor: string, reason: string): string[] {
+  return [
+    '--chapters', String(ordinal),
+    '--actor', actor.trim(),
+    '--reason', reason.trim(),
+  ]
+}
+
+/**
+ * 一次 wontfix 只绑定一条现役结论。证据键即使含 `|` 也原样放在第三段；
+ * 服务端只切前两刀，前端不解析或重算 evidence identity。
+ */
+export function stage5WontfixSpec(
+  scope: Stage5WontfixScope,
+  rule: string,
+  evidenceKey: string | null,
+  reason: string,
+): string | null {
+  if (!rule.trim() || !evidenceKey?.trim() || !reason.trim()) return null
+  return `${scope}|${rule}|${evidenceKey}=${reason.trim()}`
+}
+
+/** 只让 current fresh、未豁免、且可精确寻址的 finding 进入 wontfix。 */
+export function stage5WontfixBlockedReason(
+  reviewState: ReviewResponse['review_state'] | undefined,
+  finding: Pick<Finding, 'evidence_key' | 'wontfix'> | undefined,
+  submitted: boolean,
+): string | null {
+  if (!finding) return '没有选中一条 finding'
+  if (reviewState !== 'fresh') return '只有 fresh Review 的 finding 可以提交 wontfix'
+  if (finding.wontfix) return '这条 finding 已经有 wontfix 审计记录'
+  if (!finding.evidence_key?.trim()) return '这条 finding 没有 evidence_key，不能精确绑定人工决定'
+  if (submitted) return '这条 wontfix 作业已经发起，等待作业结束后刷新报告'
+  return null
 }
 
 /** 把服务端给的证据串在成稿里找出来高亮。**只做 indexOf，不解析、不抠结构。** */
@@ -73,15 +150,25 @@ export function useStage5Screen() {
   const ordinal = useOrdinal()
   const qc = useQueryClient()
   const enums = useEnums()
+  const approvals = useApprovals(sid)
+  const jobs = useJobs(sid)
   const { notify, openDrawer } = useChrome()
 
   const [tab, setTab] = useState<S5Tab>('chapter')
   const [selFinding, setSelFinding] = useState(0)
+  const [selBookFinding, setSelBookFinding] = useState(0)
   const [sideBySide, setSideBySide] = useState(true)
   const [editing, setEditing] = useState(false)
   const [draftSegments, setDraftSegments] = useState<ChapterSegment[] | null>(null)
   const [matOpen, setMatOpen] = useState(false)
   const [chaptersArg, setChaptersArg] = useState(String(ordinal))
+  const [trimActor, setTrimActor] = useState('')
+  const [trimReason, setTrimReason] = useState('')
+  const [wontfixReason, setWontfixReason] = useState('')
+  const [submittedWontfix, setSubmittedWontfix] = useState<{
+    key: string
+    jobId: string
+  } | null>(null)
 
   const draftQ = useQuery({
     queryKey: qk.stage5(sid, ordinal),
@@ -95,8 +182,7 @@ export function useStage5Screen() {
   })
 
   const save = useMutation({
-    // mode 取当前稿的臂——人工稿落回同一条臂的新一轮
-    mutationFn: (req: { mode: Mode; segments: ChapterSegment[] }) =>
+    mutationFn: (req: { segments: ChapterSegment[] }) =>
       api.saveDraftEdit(sid, ordinal, req),
     onSuccess: (job) => {
       if (job.state === 'failed') {
@@ -113,12 +199,67 @@ export function useStage5Screen() {
     },
   })
 
+  const retainPretrim = useMutation({
+    mutationFn: (req: TrimResolutionRequest) => api.retainPretrim(sid, ordinal, req),
+    onSuccess: (job) => {
+      if (job.state === 'failed') {
+        openDrawer()
+      } else {
+        setTrimReason('')
+        notify('未裁剪正文已由人工确认保留')
+      }
+      void qc.invalidateQueries({ queryKey: qk.stage5(sid, ordinal) })
+      void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
+      void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
+    },
+  })
+
   const d = draftQ.data
   const mat = d?.materials ?? null
   const rv = reviewQ.data
 
   const findings: Finding[] = rv?.chapter.findings ?? []
   const active = findings[selFinding]
+  const bookFindings: Finding[] = rv?.book ?? []
+  const activeBook = bookFindings[selBookFinding]
+  const wontfixFinding = tab === 'chapter' ? active : tab === 'book' ? activeBook : undefined
+  const wontfixScope: Stage5WontfixScope = tab === 'book'
+    ? 'book'
+    : (rv?.chapter.output_ordinal ?? ordinal)
+  const wontfixKey = wontfixFinding ? stage5FindingKey(wontfixScope, wontfixFinding) : null
+  const wontfixBlockedReason = stage5WontfixBlockedReason(
+    rv?.review_state,
+    wontfixFinding,
+    wontfixKey !== null && submittedWontfix?.key === wontfixKey,
+  )
+
+  // 本地 submitted 只表示「这个真实 job 尚未由服务端收口」。启动成功绝不等于落盘：
+  // 成功终态要等同一 evidence identity 的 wontfix 从新 Review 读回来；failed / unknown
+  // 则明确没有可采信的落盘结论，解除占位供人查看日志后重试。
+  const submittedLanded = !!submittedWontfix && !!rv && [
+    ...rv.chapter.findings.map((finding) => ({
+      scope: rv.chapter.output_ordinal,
+      finding,
+    })),
+    ...rv.book.map((finding) => ({ scope: 'book' as const, finding })),
+  ].some(({ scope, finding }) =>
+    !!finding.wontfix && stage5FindingKey(scope, finding) === submittedWontfix.key,
+  )
+  const submittedJobState = submittedWontfix
+    ? jobs.data?.jobs.find((job) => job.id === submittedWontfix.jobId)?.state ?? null
+    : null
+  useEffect(() => {
+    if (!submittedWontfix) return
+    const landedAtTerminal = submittedLanded && (
+      submittedJobState === 'ok' || submittedJobState === 'landed_red'
+    )
+    if (!landedAtTerminal && submittedJobState !== 'failed' && submittedJobState !== 'unknown') {
+      return
+    }
+    setSubmittedWontfix((current) =>
+      current?.jobId === submittedWontfix.jobId ? null : current,
+    )
+  }, [submittedJobState, submittedLanded, submittedWontfix])
   const firstDraft = d?.drafts[0] ?? null
   const baseSegments = rv?.chapter.segments ?? firstDraft?.segments ?? []
   const segments = draftSegments ?? baseSegments
@@ -157,9 +298,20 @@ export function useStage5Screen() {
     enums: enums.data,
 
     tab,
-    setTab,
+    setTab: (next: S5Tab) => {
+      setTab(next)
+      setWontfixReason('')
+    },
     selFinding,
-    setSelFinding,
+    setSelFinding: (index: number) => {
+      setSelFinding(index)
+      setWontfixReason('')
+    },
+    selBookFinding,
+    setSelBookFinding: (index: number) => {
+      setSelBookFinding(index)
+      setWontfixReason('')
+    },
     sideBySide,
     toggleSide: () => setSideBySide((v) => !v),
     editing,
@@ -184,8 +336,13 @@ export function useStage5Screen() {
         ),
       ),
     save,
-    saveMode: (firstDraft?.mode ?? 'deep') as Mode,
     editNote: '保存走子进程重跑校验，落成新的一轮；旧轮归档，不覆盖。',
+    trimAudit: d?.trim_audit ?? null,
+    trimActor,
+    setTrimActor,
+    trimReason,
+    setTrimReason,
+    retainPretrim,
 
     counts: d
       ? '计划 ' +
@@ -203,8 +360,13 @@ export function useStage5Screen() {
         : '本章没有被拦下的稿'
       : '',
     invalidBad: !!d && d.invalid_drafts.length > 0,
-    depthNote: '深度=闭卷重构（下发面无源章原文）；浅层=开卷改写。两条臂都是一章一次调用。',
-    gateNote: '写作闸门在 depth 屏：文风与计划确认后才允许下笔。',
+    gateNote: 'Stage5 只有全书闭卷写作路径；定向章号只缩小本次写入集合，不改变契约。',
+    legacyNotice: d?.legacy_incompatible
+      ? '检测到旧 Stage5 双臂产物，当前契约不会读取或迁移：' + d.legacy_paths.join('、')
+      : null,
+    reviewNotice: rv && rv.review_state !== 'fresh'
+      ? '验收报告不可用于返工或批准（' + rv.review_state + '）：' + rv.review_reasons.join('；')
+      : null,
     /** ctx_exists 为 false 时不显示假材料 */
     ctxExists: d?.ctx_exists ?? true,
     ctxNote: d && !d.ctx_exists ? '写作上下文不在盘上——先跑 stage4，这里不显示假材料。' : null,
@@ -213,7 +375,7 @@ export function useStage5Screen() {
       no: chNo(i.output_ordinal),
       ordinal: i.output_ordinal,
       freshness: i.freshness,
-      modes: i.modes.join('+') || '未写',
+      status: i.has_draft ? (i.invalid ? '正式稿 + INVALID' : '已写') : i.invalid ? '仅 INVALID' : '未写',
       chars: (i.chars ?? '—') + '/' + (i.budget_chars ?? '—'),
       overlap:
         i.overlap_excl_verbatim === null
@@ -229,19 +391,21 @@ export function useStage5Screen() {
       detail: f.detail,
       sev: f.sev,
       evidenceLabel: f.evidence.length ? '证据 ' + f.evidence.length + ' 条' : '没有证据串',
+      wontfixLabel: f.wontfix ? '已 wontfix：' + f.wontfix.why : null,
     })),
-    bookFindings: (rv?.book ?? []).map<FindingView>((f, i) => ({
+    bookFindings: bookFindings.map<FindingView>((f, i) => ({
       key: 'b' + f.rule + i,
       rule: f.rule,
       item: f.item,
       detail: f.detail,
       sev: f.sev,
       evidenceLabel: f.evidence.length ? '证据 ' + f.evidence.length + ' 条' : '没有证据串',
+      wontfixLabel: f.wontfix ? '已 wontfix：' + f.wontfix.why : null,
     })),
     reviewIndex: (rv?.index ?? []).map((i) => ({
       no: chNo(i.output_ordinal),
       ordinal: i.output_ordinal,
-      mode: (i.mode ?? '无稿') + (i.round ? ' r' + i.round : ''),
+      roundLabel: i.round ? 'r' + i.round : '无稿',
       chars: (i.chars ?? '—') + '/' + (i.budget_chars ?? '—'),
       hard: i.finding_counts.hard,
       info: i.finding_counts.info,
@@ -250,7 +414,7 @@ export function useStage5Screen() {
       stale: i.stale,
       active: i.output_ordinal === ordinal,
     })),
-    // 41/61 条是 metric —— 四级分开计数，metric 不能画成警告
+    // 四级分开计数，metric 只报读数、不能画成警告
     sevCounts: (rv?.finding_counts ?? {}) as Partial<Record<Severity, number>>,
     tabLabels: {
       chapter: '本章 ' + findings.length + ' 条',
@@ -284,6 +448,27 @@ export function useStage5Screen() {
       : '',
     evidenceHit: hitTotal > 0,
 
+    wontfixTarget: wontfixFinding
+      ? {
+          key: wontfixKey ?? `${wontfixScope}|${wontfixFinding.rule}|<missing-evidence-key>`,
+          scope: wontfixScope,
+          rule: wontfixFinding.rule,
+          item: wontfixFinding.item,
+          evidenceKey: wontfixFinding.evidence_key,
+          wontfix: wontfixFinding.wontfix,
+          blockedReason: wontfixBlockedReason,
+        } satisfies Stage5WontfixTarget
+      : null,
+    wontfixReason,
+    setWontfixReason,
+    afterWontfix: (key: string, jobId: string) => {
+      setSubmittedWontfix({ key, jobId })
+      setWontfixReason('')
+      void qc.invalidateQueries({ queryKey: qk.review(sid, ordinal) })
+      void qc.invalidateQueries({ queryKey: qk.inbox(sid) })
+      void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
+    },
+
     matOpen,
     toggleMat: () => setMatOpen((v) => !v),
     /** 与写手同一份下发面（build_material 的 blocks）——不是重组的第二份 */
@@ -301,8 +486,7 @@ export function useStage5Screen() {
 
     draft: firstDraft
       ? {
-          mode: firstDraft.mode,
-          title: firstDraft.mode === 'deep' ? '深度 · 闭卷重构' : '浅层 · 开卷改写',
+          title: '闭卷重构',
           freshness: firstDraft.freshness,
           numbers:
             firstDraft.chars +
@@ -357,6 +541,14 @@ export function useStage5Screen() {
     chaptersArg,
     setChaptersArg,
     writeActions: stage5WriteActions(enums.data?.actions ?? []),
+    fullWriteAction: lookupAction(enums.data, { kind: 'stage5.write', extra: null }),
+    approvals,
+    writingBefore: (action: { paid: boolean } | null) =>
+      stage5WritingBefore(
+        action,
+        approvals.doc?.writing,
+        () => approvals.startWriting.mutateAsync(),
+      ),
     /**
      * 全书验收动作。**它不在 `writeActions` 里，那是对的**——那个盒子只喂
      * `--chapters`，而本条是书级的。但它必须在这一屏有自己的入口：
@@ -365,5 +557,17 @@ export function useStage5Screen() {
      * 浏览器里的人到这一步只能改去命令行。
      */
     reviewAction: lookupAction(enums.data, { kind: 'stage5.review', extra: null }),
+    wontfixAction: lookupAction(enums.data, {
+      kind: 'stage5.review',
+      extra: ['--wontfix'],
+    }),
+    retainPretrimAction: lookupAction(enums.data, {
+      kind: 'stage5.review',
+      extra: ['--retain-pretrim'],
+    }),
+    rebuildDraftAction: lookupAction(enums.data, {
+      kind: 'stage5.write',
+      extra: ['--rebuild-draft'],
+    }),
   }
 }

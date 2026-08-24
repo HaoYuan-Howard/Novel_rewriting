@@ -166,6 +166,11 @@ class CostLedger:
         default_factory=dict, repr=False)
     _claimed_chapters: set[int] = field(default_factory=set, repr=False)
 
+    #: 本 run 的 ``attempt_id → request_fingerprint`` 精确索引。
+    #: 成本 JSONL 是跨 run 的账，不应为铸一份正在落盘的 provenance 再扫全文件；
+    #: 且 ``path=None`` 的测试/缓存路径同样必须保留这条联结。
+    _request_fingerprints: dict[str, str] = field(default_factory=dict, repr=False)
+
     #: Stage 2 会并发等待独立章节响应。计数更新与 JSONL 追加必须是同一个临界区，
     #: 否则两个成功回包可能互相覆盖内存计数，甚至把两行字节交错写坏。
     _lock: threading.RLock = field(default_factory=threading.RLock,
@@ -212,6 +217,14 @@ class CostLedger:
         全都缺一个必填键，而这里要答的问题 JSONL 已经答得了。
         """
         with self._lock:
+            if attempt_id is not None and request_fingerprint is not None:
+                previous = self._request_fingerprints.get(attempt_id)
+                if previous is not None and previous != request_fingerprint:
+                    raise ProvenanceRefused(
+                        f'attempt_id={attempt_id} 同时指向两个请求指纹：'
+                        f'{previous} / {request_fingerprint}')
+                self._request_fingerprints[attempt_id] = request_fingerprint
+
             if cached:
                 self.calls_cached += 1
             else:
@@ -273,6 +286,16 @@ class CostLedger:
                 'chapter_total': progress.total if progress else None,
             }
             self._append(row)
+
+    def request_fingerprint_for_attempt(self, attempt_id: str) -> str:
+        """精确反查一次已记账请求；缺联结是来源账结构错误，不做估算。"""
+        with self._lock:
+            value = self._request_fingerprints.get(attempt_id)
+            if value is None:
+                raise ProvenanceRefused(
+                    f'accepted attempt_id={attempt_id!r} 在本 run 的成本账里没有 '
+                    'request_fingerprint；拒绝按默认 effort/thinking 估算')
+            return value
 
     def _append(self, row: dict) -> None:
         """一行 JSON，**按字节追加**（换行与两把锁都在 `appendlog.append_line` 里）。

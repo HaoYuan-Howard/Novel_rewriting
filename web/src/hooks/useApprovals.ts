@@ -39,10 +39,6 @@ export function useApprovals(sidOverride?: string) {
     mutationFn: (key: SeenKey) => api.markSeen(sid, key),
     onSuccess: put,
   })
-  const setDeep = useMutation({
-    mutationFn: (deep: number[]) => api.setDeep(sid, deep),
-    onSuccess: put,
-  })
   const startWriting = useMutation({
     mutationFn: () => api.startWriting(sid),
     onSuccess: put,
@@ -55,7 +51,6 @@ export function useApprovals(sidOverride?: string) {
     approve,
     backfill,
     markSeen,
-    setDeep,
     startWriting,
   }
 }

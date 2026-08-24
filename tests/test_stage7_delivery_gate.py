@@ -37,7 +37,7 @@ class _Store:
 
 def _upstreams():
     return SimpleNamespace(
-        hook_art=object(), hook_text='已批准文案', dup=[], missing=[], recs=[{}],
+        hook_art=object(), hook_text='已批准文案', missing=[], recs=[{}],
     )
 
 
@@ -171,19 +171,19 @@ def test_assembly_refuses_an_approval_bound_to_an_older_decision_surface(monkeyp
 
 
 def test_an_incomplete_book_reports_every_missing_piece_at_once(monkeypatch):
-    """⭐ 三项**一次报全**，而且各自 typed。
+    """⭐ 缺章与未批准文案**一次报全**，而且各自 typed。
 
     `R-10.14`：txt 是交付物，里面没有地方写风险抬头横幅——正因为成书里写不下警告，
     这道闸必须在拒绝的那一刻把差的东西一次说清。拆成 first-match 之后，
-    人补完缺章才发现文案还没定稿，**一道 0 成本的闸要走三个来回**。
-    ⚠ 三项恢复路各不相同（人删掉多的那一份 / 去跑 stage5 / `stage6.approve --pick N`）
+    人补完缺章才发现文案还没定稿，**一道 0 成本的闸要走两个来回**。
+    ⚠ 两项恢复路各不相同（去跑 stage5 / `stage6.approve --pick N`）
     ⇒ 消费方按字段路由，不去 parse 那段人话。
     """
     from novel.stages.stage6 import semantic
 
     art = _approved_art()
     up = SimpleNamespace(
-        hook_art=object(), hook_text='', dup=[3], missing=[7, 8], recs=[{}])
+        hook_art=object(), hook_text='', missing=[7, 8], recs=[{}])
     monkeypatch.setattr(assemble, '_judged_drift', lambda _art, _up: ([], []))
     monkeypatch.setattr(assemble, '_hook_drift', lambda _art, _up: False)
     monkeypatch.setattr(semantic, 'require_approved_clear', lambda *_args: None)
@@ -191,11 +191,10 @@ def test_an_incomplete_book_reports_every_missing_piece_at_once(monkeypatch):
     with pytest.raises(DeliveryIncomplete) as bad:
         assemble._require_mapping_current(SimpleNamespace(), _Store(), art, up)
 
-    assert bad.value.duplicated == (3,)
     assert bad.value.missing == (7, 8)
     assert bad.value.hook_unapproved is True
-    # 一次报全：三条都要在措辞里，而不是碰到第一条就返回。
-    assert all(s in str(bad.value) for s in ('同章双份', '计划有而成稿无', '开篇文案'))
+    # 一次报全：两条都要在措辞里，而不是碰到第一条就返回。
+    assert all(s in str(bad.value) for s in ('计划有而成稿无', '开篇文案'))
 
 
 def test_retired_book_leaves_the_live_download_path_but_remains_recoverable(tmp_path):

@@ -39,13 +39,8 @@ def _STAGE6_CORPUS(test):
 def _drafts_of(book: str) -> tuple[str, ...]:
     return tuple(sorted(
         a.rel for a in corpus.iter_artifacts()
-        if a.book_dir == book and a.rel.startswith('stage5/')
-        and '_rounds' not in a.rel and a.rel.endswith('.json')))
-
-
-#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
-#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
-_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
+        if a.book_dir == book and a.pattern == 'stage5/ch{nn}.json'
+        and '_rounds/' not in a.rel))
 
 
 @pytest.fixture
@@ -58,8 +53,10 @@ def box():
     看起来像视图漏了行。实测：过期的两本 0 行，链条干净的那本 3 行且含种下的那一行。
     """
     books = _books()
-    book = (BOOK_WITH_HITS if BOOK_WITH_HITS in books
-            else corpus.first_current_book(books, *_DRAFT_ARMS) or sorted(books)[0])
+    book = BOOK_WITH_HITS if BOOK_WITH_HITS in books else next(
+        (candidate for candidate in sorted(books)
+         if (rels := _drafts_of(candidate)) and corpus.is_current(candidate, *rels)),
+        sorted(books)[0])
     s = sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
     yield s
     s.close()
@@ -212,14 +209,15 @@ def test_stalled_items_only_take_hard_info_at_the_stop_threshold(monkeypatch):
         ])],
         book=[
             finding('book_length', 2),
-            finding('arm_split_report', 2),
+            finding('end_hook_surface_report', 2),
             finding('must_hold_unver', 2),
         ])
-    monkeypatch.setattr(review, 'latest_review', lambda _s: (4, rev))
+    status = SimpleNamespace(state='fresh', fresh=True, reasons=[], review=rev)
+    monkeypatch.setattr(review, 'review_status', lambda _ctx, _store: status)
 
     # ⚠ 豁免计数**不再由这个函数交**：那张账逐层各一份（`<stage>/wontfix.json`），
     #   由 `inbox_view` 跨层求和。顺手在这里数会把 stage5 那一份数两次。
-    items = I._stage5_stalled(object())
+    items = I._stage5_stalled(SimpleNamespace(ctx=object()))
     assert [(it.rule, it.chapter) for it in items] == [('book_length', None), ('band_drift', None)]
     assert '[3]' in next(it.what for it in items if it.rule == 'band_drift')
     assert all(it.kind == 'stalled' and 'wontfix' in it.how for it in items)
@@ -247,9 +245,8 @@ def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
     真拼一遍，拼不出来就红。这正是 `docs/LESSONS.md` 第 21 条那句
     「守卫要调用生产那一个落点，不要重拼一份」。
 
-    ⚠ 补 `--mode` 与带值 flag 的占位值是**调用协议**，不是被测逻辑：`build_argv`
+    ⚠ 带值 flag 的占位值是**调用协议**，不是被测逻辑：`build_argv`
     要形状完整才肯往下走，而本条断言的是「这个节点到底有没有这个 flag」。
-    两者都从生产自己的取值面取（`placeholder_for` / `NodeSpec.modes`），不另写一份。
     """
     import re as _re
 
@@ -263,9 +260,7 @@ def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
         named = _re.findall(r'`([a-z0-9]+\.[a-z-]+) (--[a-z-]+)`', text)
         for node, flag in named:
             flags = [flag, placeholder_for(flag)] if flag in VALUED_FLAGS else [flag]
-            modes = NODES[node].modes
-            build_argv(node, 'SID', flags, base='.',
-                       mode=modes[0] if modes else None, placeholders=True)
+            build_argv(node, 'SID', flags, base='.', placeholders=True)
             checked += 1
         assert not _re.findall(r'`(--[a-z-]+)`', text), (
             f'{stage} 的兜底文案出现了不带节点前缀的裸 flag：{text!r}；'
@@ -396,11 +391,11 @@ def test_an_over_length_trim_audit_is_a_verification_row(box):
 
     store = ArtifactStore(readonly_ctx(box.dir, 'stage5.write', prov.code_version()))
     drafts, _invalid, _judged = M.load_drafts(store)
-    ordinal = next(number for number, rows in sorted(drafts.items()) if len(rows) == 1)
-    draft = drafts[ordinal][0]
+    ordinal = next(iter(sorted(drafts)))
+    draft = drafts[ordinal]
     before = hashlib.sha256(draft['text'].encode('utf-8')).hexdigest()
     audit = TrimAudit(
-        output_ordinal=ordinal, mode=draft['_mode'], before_sha256=before,
+        output_ordinal=ordinal, before_sha256=before,
         reason='超上限；本仓没有自动收缩路径，保留 pretrim，转 verification')
     store.write(artifact_rel('stage5.trim_audit', nn=ordinal), audit)
 

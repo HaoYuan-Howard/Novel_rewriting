@@ -62,12 +62,6 @@ class RunContext:
     #: 这个位只由 ``state.readonly_ctx`` 设置，普通运行上下文默认一律 fail closed。
     readonly: bool = False
 
-    #: 这一次跑的是**哪条臂**（`stage5.write --mode deep|shallow`）。全链只有这一个节点有臂。
-    #:
-    #: ⚠⚠ **臂不是 flag。** 它与 `--base` / `--yes` 同类：不改变贵贱、不改变
-    #: 写不写盘，只说「这一次是哪一条」——所以它不在 `NodeSpec.flags` 里，而在 `modes` 里。
-    mode: str | None = None
-
     #: 运行期心跳/进度的唯一出口。默认写进 stdout（编排器会把它收进作业日志）；
     #: 测试可换成 ``list.append``，不需要 mock print 或线程内部。
     observer: Callable[[dict[str, object]], None] = field(
@@ -78,7 +72,7 @@ class RunContext:
     _edges: dict[str, InputEdge] = field(default_factory=dict, repr=False)
 
     #: 本次跑**判过**哪几份成稿（**完整**相对路径 → 10 位指纹）。见 `_common.md` §3.2：
-    #: 成稿不进 `inputs`，因为 `stage5/deep/ch01.json` 在两级键下会塌成一个反查不到的键。
+    #: 成稿不进 `inputs`，因为逐章成稿由 `judged` 以完整相对路径和正文摘要单独绑定。
     _judged: dict[str, str] = field(default_factory=dict, repr=False)
 
     #: 落盘前的确定性改写记了哪些账（`repairs` / `attempts` / `scope_violations` …）。
@@ -96,18 +90,6 @@ class RunContext:
             raise ValueError(
                 f'未知节点 {self.node!r}。取值面的唯一落点是 contracts.invariants.NODES：'
                 f'{sorted(NODES)}。⚠ `n1..n9` 那一套已整套退役——作业 id 是 `<stage>.<动词>`')
-        spec = NODES[self.node]
-        if self.mode is not None and self.mode not in spec.modes:
-            # 认不出的臂**当场炸**：兜底会让一次拼错的臂名安静地跑另一条，
-            # 而产物里的 `mode` 字段照样写着别的值。
-            raise ValueError(
-                f'{self.node} 没有 {self.mode!r} 这条臂。取值面是 {spec.modes or "（本节点没有臂）"}'
-                f'（`contracts.invariants.NODES[...].modes`）')
-        # ⚠ **`mode=None` 在这里【不】拦**，即便这个节点有臂：本类同时服务
-        # `state.readonly_ctx`（只读完成度，一个字节都不写、也不关心是哪条臂）。
-        # 「这一次没说是哪条臂」是**跑法**的问题，由那条路自己说
-        # （`novel/stages/stage5/write.py::_mode_of` 落显式终态）——
-        # 在构造这一步拦，会让一次纯读的完成度查询因为「没选臂」而崩掉。
         self.novel_dir = Path(self.novel_dir)
         clean_path = self.novel_dir / STAGE0_CLEAN_TEXT
         if clean_path.is_file():
@@ -204,8 +186,6 @@ class RunContext:
             'node': self.node,
             **fields,
         }
-        if self.mode is not None:
-            payload['mode'] = self.mode
         self.observer(payload)
 
     # ── 记账 ──────────────────────────────────────────────────────────────
@@ -347,7 +327,7 @@ class RunContext:
 
     @classmethod
     def open(cls, base: str | os.PathLike[str], sid: str, node: str, *,
-             paid: bool, mode: str | None = None, cache: CachePolicy | None = None,
+             paid: bool, cache: CachePolicy | None = None,
              ledger: CostLedger | None = None, write_ledger: bool = True) -> RunContext:
         """按 `<Output>` + 书 id 开一次跑。**找不到书目录 ⇒ 显式终态**（`UpstreamMissing`）。
 
@@ -356,7 +336,7 @@ class RunContext:
         """
         novel_dir = paths.resolve_novel_dir(base, sid)
         return cls(
-            novel_dir=novel_dir, node=node, paid=paid, mode=mode,
+            novel_dir=novel_dir, node=node, paid=paid,
             code=prov.code_version(),
             cache=cache or CachePolicy.default(),
             ledger=ledger or CostLedger(path=ledger_path(base) if write_ledger else None),

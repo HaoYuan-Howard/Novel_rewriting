@@ -111,13 +111,13 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         done,
         blocked: false,
         title: done ? '计划已确认' : '这份重构计划能写吗？',
-        note: '确认后与 stage3 会合。两边都齐 → 进入 stage5 前先挑要深度重构的章节。',
+        note: '确认后与 stage3 会合。两边都齐 → 可以授权 Stage5 全书闭卷写作。',
         chips: [{ ok: g.s3, label: 'stage3 文风' }],
         btn: done ? '已确认' : '确认计划',
         blockedReason: '',
         doneNote: done
           ? g.s3
-            ? '文风 + 计划都齐了 → 可以进 stage5 挑深度章节。'
+            ? '文风 + 计划都齐了 → 可以授权 Stage5 全书闭卷写作。'
             : '还等 stage3 文风确认。'
           : null,
       }
@@ -135,7 +135,7 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         chips: [
           { ok: g.s3, label: 'stage3 文风' },
           { ok: g.s4, label: 'stage4 计划' },
-          { ok: true, label: '深度 ' + doc.deep.length + ' 章' },
+          { ok: doc.writing, label: doc.writing ? '全书写作已授权' : '全书写作未授权' },
         ],
         btn: done ? '已确认' : ready ? '确认成稿，启动 stage6' : '等 stage3 / stage4 确认',
         blockedReason: '文风与计划这两处没确认，定稿等于把没认过的前提写进书里。',

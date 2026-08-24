@@ -179,6 +179,12 @@ def _judge_artifact(art: Hook, up: _Upstreams, store: ArtifactStore) -> list[Out
 
 def _judged_drift(art: Hook, up: _Upstreams) -> tuple[list[str], list[str]]:
     """成稿有没有在这份文案之后改过。返回 `(改过的, 已缺失的)`。"""
+    legacy = sorted(rel for rel in art.judged
+                    if rel.startswith(('stage5/deep/', 'stage5/shallow/')))
+    if legacy:
+        raise TerminalState(
+            f'legacy_incompatible：stage6/hook.json 的 judged 仍绑定旧 Stage5 路径 {legacy}。'
+            '不能把它退化成 missing 或静默触发付费重建；旧 base 保持只读')
     stale: list[str] = []
     missing: list[str] = []
     for rel, stored in art.judged.items():

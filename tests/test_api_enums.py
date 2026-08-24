@@ -86,7 +86,7 @@ def test_prompt_experiment_controls_are_not_published(paid_payload):
 
 def test_every_action_is_unique_and_buildable(paid_payload):
     actions = paid_payload['actions']
-    keys = [(a['kind'], a['mode'], tuple(a['extra'] or ())) for a in actions]
+    keys = [(a['kind'], tuple(a['extra'] or ())) for a in actions]
     assert actions
     assert len(keys) == len(set(keys))
 
@@ -99,16 +99,17 @@ def test_every_action_is_unique_and_buildable(paid_payload):
         ]
         if action['needs_value']:
             index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
-            flags.insert(index + 1, '1' if flags[index] == '--deep' else 'C:/placeholder.json')
+            value = ('1' if flags[index] == '--chapters'
+                     else ('event-list-v1' if flags[index] == '--write-contract'
+                           else 'C:/placeholder.json'))
+            flags.insert(index + 1, value)
         # ⚠ 必填项由**点下去的那个人**给（同 `needs_value` 那一格的理由）：
         #   `stage0/6.approve` 的 actor/reason 是人工凭据，`actions[]` 里不可能预先填好。
         #   ⇒ 本条测的是「补齐必填之后这条动作拼得出命令」，不是「空 flags 拼得出」——
         #   后者恰恰该拼不出，那正是 `NodeSpec.required_flags` 要挡的（复盘 §六.1）。
         for extra in N.missing_required(action['kind'], flags):
             flags += [extra, 'C:/placeholder.json'] if extra in VALUED_FLAGS else [extra]
-        argv = N.build_argv(
-            action['kind'], 'sid123', flags, base=BASE, mode=action['mode'],
-        )
+        argv = N.build_argv(action['kind'], 'sid123', flags, base=BASE)
         assert ('--yes' in argv) == action['paid']
 
 
@@ -121,14 +122,9 @@ def test_revalidate_actions_collect_audit_values_without_credential_buttons(paid
         if set(action['extra'] or ()) <= credentials and action['extra']
     ], 'audit credentials are action inputs, never standalone operations'
 
-    expected = {
-        (node, mode)
-        for node, spec in NODES.items()
-        if '--revalidate' in spec.flags
-        for mode in (spec.modes or (None,))
-    }
+    expected = {node for node, spec in NODES.items() if '--revalidate' in spec.flags}
     revalidate = {
-        (action['kind'], action['mode']): action
+        action['kind']: action
         for action in actions
         if action['extra'] == ['--revalidate']
     }
@@ -141,15 +137,16 @@ def test_revalidate_actions_collect_audit_values_without_credential_buttons(paid
 
 
 def test_action_fields_are_derived_from_current_registries(paid_payload):
+    assert all('modes' not in item and 'mode' not in item
+               for item in paid_payload['job_kinds'].values())
     for action in paid_payload['actions']:
         flags = tuple(action['extra'] or ())
-        invoked = ('--deep', '1', '--shallow-rest') \
-            if flags == ('--deep', '--shallow-rest') else flags
         node = action['kind']
-        assert action['label'] == N.step_label(node, invoked, mode=action['mode'])
-        assert action['paid'] == N.is_paid(node, invoked)
-        assert action['writes'] == N.write_effect(node, invoked)
-        assert action['writes_disk'] == N.would_write(node, invoked)
+        assert 'mode' not in action
+        assert action['label'] == N.step_label(node, flags)
+        assert action['paid'] == N.is_paid(node, flags)
+        assert action['writes'] == N.write_effect(node, flags)
+        assert action['writes_disk'] == N.would_write(node, flags)
         assert action['free_flag'] == next((flag for flag in flags if flag in FREE_ENTRIES), None)
         assert action['needs_value'] == next(
             (VALUED_FLAGS[flag] for flag in flags if flag in VALUED_FLAGS), None,

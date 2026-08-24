@@ -31,19 +31,14 @@ def _drafts_of(book: str) -> tuple[str, ...]:
     """本书当前正式成稿。"""
     return tuple(sorted(
         a.rel for a in corpus.iter_artifacts()
-        if a.book_dir == book and a.pattern == 'stage5/{mode}/ch{nn}.json'
-        and '_rounds' not in a.rel))
+        if a.book_dir == book and a.pattern == 'stage5/ch{nn}.json'
+        and '_rounds/' not in a.rel))
 
 
 def _box(book: str) -> sandbox.Sandbox:
     # 机械复检不依赖付费语义历史。旧 semantic v0 的形状不可无损迁移；把它复制进
     # 沙箱只会让免费路径被一份它不需要的旧制品卡住。
     return sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
-
-
-#: 逐章成稿的两条臂。⚠ 不写成 `stage5/`：那一层下面还有 `trim_audit_ch*.json`，
-#: 它不在任何节点的 `produces` 里（是产出不是前提输入）。
-_DRAFT_ARMS = ('stage5/deep/', 'stage5/shallow/')
 
 
 @pytest.fixture(params=corpus_params(
@@ -65,12 +60,12 @@ def current_drafts(box):
     而跳过与「查过没事」在报告上长得一模一样。
     ⇒ 谁读成稿谁挂前提，用 `@pytest.mark.usefixtures('current_drafts')`。
 
-    过期时的形状（实测 10/10）：`stage6.hook` 在读侧闸拿到
-    `UpstreamStale: 上游 stage5/deep/ch01.json 已过期` ⇒ 用例死在门口，
+    过期时的形状：`stage6.hook` 在读侧闸拿到
+    `UpstreamStale: 上游 stage5/ch01.json 已过期` ⇒ 用例死在门口，
     它要验的判据行数/徽章/重判对账一次都没跑到。
     """
-    corpus.requires_current(box.book, *_DRAFT_ARMS,
-                            produced_by='stage5.write --mode deep', cost='付费')
+    corpus.requires_current(box.book, *_drafts_of(box.book),
+                            produced_by='stage5.write', cost='付费')
     return box
 
 

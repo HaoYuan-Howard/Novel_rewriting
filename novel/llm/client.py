@@ -1070,6 +1070,13 @@ class LlmClient:
         with self._adopt_lock:
             return self._accepted.get(purpose)
 
+    def accepted_request_fingerprint(self, purpose: str) -> str | None:
+        """最终采纳响应的实际请求指纹；由 attempt 联结成本账，不按默认档位重算。"""
+        attempt_id = self.accepted_attempt(purpose)
+        if attempt_id is None:
+            return None
+        return self.ctx.ledger.request_fingerprint_for_attempt(attempt_id)
+
     # ── 一次调用：缓存 → 传输层重试 → 记账 ────────────────────────────────
 
     def _preflight(self, system: str, user: str, *,

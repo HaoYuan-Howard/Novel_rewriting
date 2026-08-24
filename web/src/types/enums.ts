@@ -14,7 +14,6 @@ export interface EnumAction {
   paid: boolean
   /** 免费动作的 flag 串（可能是空串）；paid 的一律是 null。 */
   free_flag: string | null
-  mode?: string | null
   writes?: string
   writes_disk?: boolean
   needs_value?: string | null
@@ -27,7 +26,6 @@ export interface EnumJobKind {
   paid: boolean
   stage?: string
   section?: string
-  modes?: string[]
   flags?: string[]
   produces?: string[]
 }

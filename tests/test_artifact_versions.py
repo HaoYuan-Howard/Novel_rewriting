@@ -107,6 +107,31 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '不手补字段冒充当前产地。仓内没有迁移机制，因此即使 architecture 属于保留三值，'
         '旧 v2 信封也必须由 producer 重建为 v3',
     ),
+    'stage5/ch{nn}.json': (
+        2,
+        '2026-08-24 Stage5 单臂折平：删除 `mode`，正式稿从 '
+        '`stage5/{mode}/chNN.json` 收成唯一 `stage5/chNN.json`',
+        '`stage5.write` 在冻结的 stage0～4 上游上全书重跑（付费）；旧 deep/shallow '
+        '目录原样保留为只读历史证据，运行时明确报 `legacy_incompatible`，不迁移、不选臂',
+    ),
+    'stage5/review_{n}.json': (
+        2,
+        '2026-08-24 Stage5 单臂折平：ReviewChapter 删除 `mode/mode_dir`，judged '
+        '主体改绑 canonical 章集合',
+        '`stage5.review` 在 canonical 成稿上免费重跑；旧 Review 不得驱动付费 `--revise`',
+    ),
+    'stage5/trim_audit_ch{nn}.json': (
+        2,
+        '2026-08-24 Stage5 单臂折平：TrimAudit 删除 `mode`，章身份只由 ordinal '
+        '与 canonical 路径承载',
+        '新的超长 canonical 章由 `stage5.write` 生成审计；旧双臂审计仅作历史证据',
+    ),
+    'stage5/trim_resolution_ch{nn}.json': (
+        2,
+        '2026-08-24 Stage5 单臂折平：TrimResolution 删除 `mode`，`chapter_rel` '
+        '固定绑定 `stage5/chNN.json`',
+        '在当前 v2 TrimAudit 上重新走免费、hash-bound 的 `--retain-pretrim` 人工裁决',
+    ),
     'stage6/hook.json': (
         2,
         '2026-08-23 候选身份与策略名解耦：`ApprovedHook.approach`'
@@ -203,7 +228,7 @@ def _concrete(rel: str) -> str:
     生产写出的是 `ch001.json` 而这里仍造 `ch01.json`——而路由把 `{nn}` 编译成 `\\d+`，
     两条参数化照样全绿，扫的却是一批生产永远不会写出来的路径。
     """
-    return artifact_rel(_ID_OF_REL[rel], n=1, nn=1, mode='deep')
+    return artifact_rel(_ID_OF_REL[rel], n=1, nn=1)
 
 
 def test_the_placeholder_helper_actually_produces_registered_paths():
@@ -317,16 +342,14 @@ def test_paths_feed_schema_nodes_consumption_and_runtime_from_one_catalog():
     assert {
         rel for projections in CONSUMED_PROJECTIONS.values() for rel in projections
     } <= catalog
-    assert artifact_rel('stage5.chapter', mode='deep', nn=3) == 'stage5/deep/ch03.json'
-    assert artifact_rel('stage5.rejected_revision', mode='shallow', nn=12) \
-        == 'stage5/shallow/ch12.rejected.json'
+    assert artifact_rel('stage5.chapter', nn=3) == 'stage5/ch03.json'
+    assert artifact_rel('stage5.rejected_revision', nn=12) == 'stage5/ch12.rejected.json'
 
 
 @pytest.mark.parametrize('rel,key', [
-    ('stage5/deep/ch01.json', 'stage5/{mode}/ch{nn}.json'),
-    ('stage5/deep/_rounds/ch01.r3.json', 'stage5/{mode}/ch{nn}.json'),
-    ('stage5/deep/_rounds/ch01.INVALID.r3.json',
-     'stage5/{mode}/ch{nn}.json'),
+    ('stage5/ch01.json', 'stage5/ch{nn}.json'),
+    ('stage5/_rounds/ch01.r3.json', 'stage5/ch{nn}.json'),
+    ('stage5/_rounds/ch01.INVALID.r3.json', 'stage5/ch{nn}.json'),
     ('stage5/_rounds/review_4.r2.json', 'stage5/review_{n}.json'),
     ('stage6/hook.INVALID.json', 'stage6/hook.json'),
     ('stage6/_rounds/hook.r2.json', 'stage6/hook.json'),
@@ -336,7 +359,7 @@ def test_runtime_and_corpus_share_the_same_path_router(rel: str, key: str):
 
 
 @pytest.mark.parametrize('rel', [
-    'stage5/deep/_rounds/ch01.INVALID.superseded.json',
+    'stage5/_rounds/ch01.INVALID.superseded.json',
     'stage5/_rounds/review_4.invalid_metadata_convergence.json',
 ])
 def test_retired_archive_aliases_are_not_current_artifact_paths(rel: str):

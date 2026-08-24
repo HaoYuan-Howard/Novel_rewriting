@@ -50,12 +50,12 @@ def hook_consumed_of(rec: dict | None) -> HookConsumed:
 
 # ── 成稿：走 `read_judged`，绝不走会记 `inputs` 的那条 ──────────────────────
 
-def collect_chapters(by_ord: dict[int, list[dict]], plan: dict,
+def collect_chapters(by_ord: dict[int, dict], plan: dict,
                      invalids: list[str]
-                     ) -> tuple[list[dict], list[int], list[int], list[str]]:
-    """→ `(recs 按章排好, dup, missing, invalids)`。
+                     ) -> tuple[list[dict], list[int], list[str]]:
+    """→ ``(canonical recs 按章排好, missing, invalids)``。
 
-    ⚠⚠ **四类残缺态一律翻成判据，这里【一个 `sys.exit` 都不许有】。**
+    ⚠⚠ **残缺态一律翻成判据，这里【一个 `sys.exit` 都不许有】。**
     本函数会被复检经 HTTP 工作线程调用，而 `SystemExit` 是 `BaseException`——
     anyio 会把它重新抛进事件循环那个 task，**一次「这本书还没写完」就杀掉整个服务**。
     **这条是付过一次代价的。** 判死在 `assemble.run_assemble`，那里是 CLI 的调用点。
@@ -63,11 +63,12 @@ def collect_chapters(by_ord: dict[int, list[dict]], plan: dict,
     ⚠ 映射表的产出与界面预览**不受这些约束**——人正要靠界面看清缺的是哪几章。
     受约束的只有 txt：那是交付物，而 txt 里没有地方写「缺章」抬头横幅。
     """
-    dup = sorted(o for o, rs in by_ord.items() if len(rs) > 1)
-    recs = [rs[0] for _o, rs in sorted(by_ord.items(), key=lambda kv: kv[0] or 0) if rs]
+    # canonical 路径按章结构唯一；加载器也会拒绝文件名与 ordinal 不一致，
+    # 下游只接收这一个明确投影。
+    recs = [rec for _o, rec in sorted(by_ord.items(), key=lambda kv: kv[0] or 0)]
     want = sorted(c['output_ordinal'] for c in plan['output_chapters'])
     missing = [o for o in want if o not in by_ord]
-    return recs, dup, missing, sorted(invalids)
+    return recs, missing, sorted(invalids)
 
 
 # ── 人工编辑面：按 `char_id` 浅合并 ─────────────────────────────────────────

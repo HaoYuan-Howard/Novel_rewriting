@@ -397,6 +397,8 @@ def test_a_resource_interruption_retries_on_the_wire_and_never_touches_the_sampl
     gates = [e for e in ctx.ledger.audit_events if e['kind'] == 'gate_decision']
     assert [(g['decision'], g['sample'], g['rung_index']) for g in gates] == [
         ('accepted', 1, 0)], '采样预算被资源中断吃掉了'
+    assert client.accepted_attempt('p') == gates[0]['attempt_id']
+    assert client.accepted_request_fingerprint('p') == cache_key(t.calls[1])
     assert slept, '资源中断要退避一下再来，不是原地立刻重发'
 
 
@@ -443,10 +445,12 @@ def test_an_answer_written_into_the_reasoning_channel_is_salvaged_instead_of_res
     assert SALVAGE_ANSWER_FROM_REASONING, '这条路关掉的话，本测试钉的是另一件事'
     ctx = _ctx()
     t = FakeTransport.always(_lost(_SALVAGEABLE))
-    got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+    client = _client(t, ctx=ctx)
+    got = client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
     assert got.voice == {'a': 1} and got.surface_habits == ['h']
     assert len(t.calls) == 1, '捞回来了就不该再付一次重采的钱'
+    assert client.accepted_request_fingerprint('p') == cache_key(t.calls[0])
 
 
 def test_a_contract_can_prefer_one_normal_resample_without_discarding_valid_salvage():
@@ -459,7 +463,8 @@ def test_a_contract_can_prefer_one_normal_resample_without_discarding_valid_salv
     t = FakeTransport(lambda _req, i: _lost(_SALVAGEABLE) if i == 0 else normal)
     ctx = _ctx()
 
-    got = _client(t, ctx=ctx).ask_json(
+    client = _client(t, ctx=ctx)
+    got = client.ask_json(
         'sys', 'usr', model_cls=Resp, purpose='p',
         prefer_content_over_reasoning_salvage=True)
 
@@ -471,6 +476,8 @@ def test_a_contract_can_prefer_one_normal_resample_without_discarding_valid_salv
                 ('rejected', 'answer_lost', True, False),
                 ('accepted', None, False, False),
             ]
+    assert client.accepted_attempt('p') == gates[-1]['attempt_id']
+    assert client.accepted_request_fingerprint('p') == cache_key(t.calls[1])
 
 
 def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails():
@@ -484,7 +491,8 @@ def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails()
     events: list[dict] = []
     ctx.observer = events.append
 
-    got = _client(t, ctx=ctx).ask_json(
+    client = _client(t, ctx=ctx)
+    got = client.ask_json(
         'sys', 'usr', model_cls=Resp, purpose='p',
         prefer_content_over_reasoning_salvage=True)
 
@@ -500,6 +508,8 @@ def test_a_contract_uses_valid_salvage_after_the_preferred_normal_sample_fails()
     rejected, = _observed(events)
     assert rejected['fallback_salvage'] is True
     assert rejected['next_effort'] is None and rejected['exhausted'] is False
+    assert client.accepted_attempt('p') == gates[-1]['attempt_id']
+    assert client.accepted_request_fingerprint('p') == cache_key(t.calls[0])
 
 
 def test_a_transport_failure_on_the_preferred_resample_does_not_discard_the_salvage():
@@ -520,7 +530,8 @@ def test_a_transport_failure_on_the_preferred_resample_does_not_discard_the_salv
     ctx = _ctx()
     t = FakeTransport(responder)
 
-    got = _client(t, ctx=ctx).ask_json(
+    client = _client(t, ctx=ctx)
+    got = client.ask_json(
         'sys', 'usr', model_cls=Resp, purpose='p',
         prefer_content_over_reasoning_salvage=True)
 
@@ -530,6 +541,9 @@ def test_a_transport_failure_on_the_preferred_resample_does_not_discard_the_salv
         (g['decision'], g['gate'], g['salvaged']) for g in gates]
     lost, = [e for e in ctx.ledger.audit_events if e['kind'] == 'answer_lost']
     assert lost['salvaged'] is True
+    accepted, = [event for event in gates if event['decision'] == 'accepted']
+    assert client.accepted_attempt('p') == accepted['attempt_id']
+    assert client.accepted_request_fingerprint('p') == cache_key(t.calls[0])
 
 
 def test_a_transport_failure_without_any_salvage_still_propagates():
@@ -645,11 +659,16 @@ def test_a_nonempty_content_gate_rejection_resamples_once_before_stepping_down()
                        finish_reason='stop')
     t = FakeTransport(responder=lambda _r, i: bad if i < 1 else OK_JSON)
 
-    got = _client(t, ctx=ctx).ask_json('sys', 'usr', model_cls=Resp, purpose='p')
+    client = _client(t, ctx=ctx)
+    got = client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
 
     assert got.voice == {'a': 1}
     assert t.rungs == [LADDER[0], LADDER[0]], '内容闸拒绝必须先同档重采一次'
     assert [e['resample'] for e in _observed(events)] == [True]
+    accepted, = [event for event in ctx.ledger.audit_events
+                 if event['kind'] == 'gate_decision' and event['decision'] == 'accepted']
+    assert client.accepted_attempt('p') == accepted['attempt_id']
+    assert client.accepted_request_fingerprint('p') == cache_key(t.calls[1])
 
 
 def test_a_long_rejection_reason_is_truncated_and_marked():

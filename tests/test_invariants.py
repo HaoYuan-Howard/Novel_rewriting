@@ -114,9 +114,13 @@ def test_node_labels_are_unique():
     assert len(set(labels)) == len(labels)
 
 
-def test_only_the_writing_node_has_modes():
-    with_modes = {node: spec.modes for node, spec in inv.NODES.items() if spec.modes}
-    assert with_modes == {'stage5.write': inv.DEPTH_MODES}
+def test_node_schema_has_no_modes_and_legacy_modes_are_detection_only():
+    assert 'modes' not in inv.NodeSpec._fields
+    assert inv.LEGACY_STAGE5_MODES == ('deep', 'shallow')
+    assert '--deep' not in _known_flags()
+    assert '--shallow-rest' not in _known_flags()
+    assert '--rebuild-draft' in inv.FREE_ENTRIES
+    assert '--rebuild-draft' in inv.NODES['stage5.write'].flags
 
 
 def test_unmeasured_nodes_keep_the_default_high_effort():

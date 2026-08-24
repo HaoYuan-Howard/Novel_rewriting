@@ -86,7 +86,7 @@ interface BackendStageState {
   stage: string
   artifacts: BackendArtifactState[]
   done: boolean | null
-  chapters_done: Record<string, number[]>
+  chapters_done: number[]
   reviewable: boolean
 }
 
@@ -96,7 +96,6 @@ interface BackendNovelOverview {
   dirname: string
   chapters: number | null
   stages: BackendStageState[]
-  stage5_modes: string[]
   summary: NovelOverview['summary']
 }
 
@@ -108,7 +107,7 @@ interface BackendNovelList {
 export function adaptNovel(raw: BackendNovelOverview): NovelOverview {
   const stages: Record<string, Artifact[]> = {}
   const stageDone: Record<string, boolean | null> = {}
-  const chaptersDone: Record<string, Record<string, number[]>> = {}
+  const chaptersDone: Record<string, number[]> = {}
   const stageReviewable: Record<string, boolean> = {}
 
   for (const state of raw.stages) {
@@ -140,7 +139,6 @@ export function adaptNovel(raw: BackendNovelOverview): NovelOverview {
     dirname: raw.dirname,
     chapters: raw.chapters,
     stages,
-    stage5_modes: raw.stage5_modes,
     stage_done: stageDone,
     stage_reviewable: stageReviewable,
     chapters_done: chaptersDone,
@@ -196,7 +194,6 @@ function backendJobRequest(req: JobRequest): BackendJobRequest {
   return {
     sid: req.sid,
     node: req.kind,
-    mode: req.mode ?? null,
     flags: [...(req.extra ?? []), ...(req.args ?? [])],
   }
 }
@@ -473,7 +470,6 @@ export const realApi: Api = {
   backfillApprovals: (sid) =>
     post<ApprovalBackfillResult>(n(sid) + '/approvals/backfill'),
   markSeen: (sid, key: SeenKey) => post<ApprovalDoc>(n(sid) + '/approvals/seen/' + key),
-  setDeep: (sid, deep) => post<ApprovalDoc>(n(sid) + '/approvals/deep', { deep }),
   startWriting: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/writing'),
   resetBook: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/reset'),
 

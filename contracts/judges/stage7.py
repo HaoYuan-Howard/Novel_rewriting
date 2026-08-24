@@ -161,7 +161,7 @@ _hard('rn_residual_key', '替换后没有任何一条映射的键残留', 'R-10.
 #
 # ⚠ 原型的 markdown 组装器对缺章只在抬头写一条横幅——**txt 里没有地方写横幅**。
 
-_hard('rn_book_incomplete', '每一章都有且只有一份成稿', 'R-10.14', owner='stage5',
+_hard('rn_book_incomplete', '计划中的每一章都有 canonical 成稿', 'R-10.14', owner='stage5',
       note='⚠ owner 是 `stage5`：缺章的根因在写作那一层，不在映射表 ⇒ '
            '**它不在那 13 条「人能 0 成本改掉」里**，人改映射表救不了它')
 

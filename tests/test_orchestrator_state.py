@@ -89,8 +89,8 @@ def test_every_placeholder_in_the_path_registry_is_claimed_by_exactly_one_classi
         classes = {
             'numbered': paths.is_numbered_pattern(rel),
             'book_scoped': rel in book_scoped,
-            # 逐章：目录段也带占位符（`stage5/{mode}/ch{nn}.json`），或文件名里
-            # 带 `{nn}`（`stage5/trim_audit_ch{nn}.json`）。
+            # 逐章：文件名带 `{nn}`（`stage5/ch{nn}.json` /
+            # `stage5/trim_audit_ch{nn}.json`）。
             'per_chapter': '{' in head or '{nn}' in tail,
         }
         hit = sorted(name for name, ok in classes.items() if ok)
@@ -138,13 +138,10 @@ def test_overview_runs_on_the_real_corpus(sid):
     ov = S.overview(CORPUS, sid)
     assert ov.sid == sid and ov.title and ov.dirname
     assert [s.stage for s in ov.stages] == list(STAGES)
-    # 臂是盘面事实：只写过 deep 的书不应被 fixture 凭空补出 shallow。
+    # 旧臂目录只作 legacy 证据，不冒充 canonical 完成度。
     novel_dir = paths.resolve_novel_dir(CORPUS, sid)
-    stage5_dir = novel_dir / 'stage5'
-    expected_modes = sorted(
-        path.name for path in stage5_dir.iterdir()
-        if path.is_dir() and not path.name.startswith('_')) if stage5_dir.is_dir() else []
-    assert ov.stage5_modes == expected_modes
+    expected_legacy = S.stage5_legacy_paths(novel_dir)
+    assert ov.stage5_legacy_paths == expected_legacy
 
 
 # ───────────────────── 逐章：只有正式稿可被数进去 ─────────────────────
@@ -158,23 +155,24 @@ def test_only_canonical_formal_chapters_are_counted_as_written():
     """
     root = Path(tempfile.mkdtemp())
     try:
-        d = root / 'stage5' / 'deep'
+        d = root / 'stage5'
         d.mkdir(parents=True)
         (d / 'ch01.json').write_text('{}', encoding='utf-8')
         (d / 'ch02.INVALID.json').write_text('{}', encoding='utf-8')
         (d / 'ch02.rejected.json').write_text('{}', encoding='utf-8')
         (d / 'ch03.json').write_text('{}', encoding='utf-8')
         (d / 'ch04.notes.json').write_text('{}', encoding='utf-8')
-        assert S.chapters_done(root, 'deep') == [1, 3]
-        assert S.chapters_done(root, 'shallow') == [], '目录不存在时是空，不是抛'
+        assert S.chapters_done(root) == [1, 3]
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
 
 def test_resume_verdicts_are_a_closed_set():
-    """守卫的守卫：四个结论写死在一处，加第五个就来改这里。"""
-    assert S.RESUME_VERDICTS == ('run', 'skip', 'redo', 'unknown')
-    assert S.RESUME_UNKNOWN not in (S.RESUME_RUN, S.RESUME_SKIP, S.RESUME_REDO)
+    """守卫的守卫：legacy 是独立终态，不能折进 missing/run。"""
+    assert S.RESUME_VERDICTS == (
+        'run', 'skip', 'redo', 'unknown', 'legacy_incompatible')
+    assert S.RESUME_UNKNOWN not in (
+        S.RESUME_RUN, S.RESUME_SKIP, S.RESUME_REDO, S.RESUME_LEGACY)
 
 
 # ─────────────── 轮次编号产物：它有自己的账，不看 stage 级 `done` ───────────────
@@ -182,14 +180,26 @@ def test_resume_verdicts_are_a_closed_set():
 def _overview(*stages: StageState) -> NovelOverview:
     """一份最小的完成度视图；`resume_verdict` 只读 `stages`。"""
     return NovelOverview(
-        sid='1', title='t', dirname='t_1', stages=list(stages), stage5_modes=['deep'],
+        sid='1', title='t', dirname='t_1', stages=list(stages),
+        stage5_legacy_paths=[],
         summary=OverviewSummary(verdict='unknown', text='t', detail='d',
                                 artifact_count=0, latest_mtime=None))
 
 
-def _stage5(*, chapters: list[int], rounds: dict[str, list[int]]) -> StageState:
-    return StageState(stage='stage5', artifacts=[], done=True, reviewable=True,
-                      chapters_done={'deep': chapters}, rounds_done=rounds)
+def _stage5(*, chapters: list[int], rounds: dict[str, list[int]],
+            review_state: str = 'missing',
+            review_reasons: list[str] | None = None) -> StageState:
+    draft = ArtifactState(
+        rel='stage5/draft.md', exists=True, bytes=1, mtime=1,
+        freshness='fresh', reason='match', display_freshness='fresh',
+        invalid=False, readable=True, condition='ready')
+    return StageState(
+        stage='stage5', artifacts=[draft], done=True, reviewable=True,
+        chapters_done=chapters, rounds_done=rounds,
+        review_state=review_state,
+        review_reasons=(review_reasons if review_reasons is not None else
+                        ([] if review_state == 'fresh' else ['尚无当前 Review'])),
+        review_rel=('stage5/review_1.json' if review_state == 'fresh' else None))
 
 
 def test_numbered_round_products_are_not_answered_by_the_chapter_count():
@@ -212,12 +222,34 @@ def test_numbered_round_products_are_not_answered_by_the_chapter_count():
     assert S.resume_verdict(ov, 'stage5.write')[0] == S.RESUME_SKIP
 
 
-def test_a_numbered_round_on_disk_is_skipped_and_says_what_it_cannot_know():
-    """盘上有轮次 ⇒ 跳过；同时**说出**它判不了新鲜度（`Q-2`：不知道要说出来）。"""
-    ov = _overview(_stage5(chapters=[1], rounds={'stage5.review': [1, 2]}))
+def test_a_fresh_review_is_skipped_by_the_unified_status_not_round_presence():
+    ov = _overview(_stage5(
+        chapters=[1], rounds={'stage5.review': [1, 2]}, review_state='fresh'))
     verdict, why = S.resume_verdict(ov, 'stage5.review')
     assert verdict == S.RESUME_SKIP
-    assert '1, 2' in why and '新鲜度' in why
+    assert 'RULES' in why
+
+
+def test_a_stale_review_is_redo_even_when_a_round_exists():
+    ov = _overview(_stage5(
+        chapters=[1], rounds={'stage5.review': [1]}, review_state='stale',
+        review_reasons=['RULES 指纹已变']))
+    verdict, why = S.resume_verdict(ov, 'stage5.review')
+    assert verdict == S.RESUME_REDO
+    assert 'RULES 指纹已变' in why and '零成本' in why
+
+
+def test_legacy_stage5_is_never_treated_as_missing_or_paid_resume():
+    legacy = StageState(
+        stage='stage5', artifacts=[], done=False, reviewable=False,
+        legacy_incompatible=True, legacy_paths=['stage5/deep'],
+        review_state='legacy_incompatible',
+        review_reasons=['stage5/deep 是旧契约'])
+    ov = _overview(legacy)
+    for node in ('stage5.write', 'stage5.review'):
+        verdict, why = S.resume_verdict(ov, node)
+        assert verdict == S.RESUME_LEGACY
+        assert 'stage5/deep' in why and 'missing' in why
 
 
 

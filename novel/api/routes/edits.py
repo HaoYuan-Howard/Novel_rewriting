@@ -88,7 +88,6 @@ def edit_draft(
             'stage5.write',
             sid,
             ['--apply-edit', str(path)],
-            mode=request.mode,
             follow_check=False,
         )
     finally:

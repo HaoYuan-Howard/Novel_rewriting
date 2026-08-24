@@ -15,7 +15,6 @@ const SCREEN_STAGE: Partial<Record<ScreenName, string>> = {
   global: 'stage2',
   style: 'stage3',
   stage4: 'stage4',
-  depth: 'stage4',
   stage5: 'stage5',
   stage6: 'stage6',
   stage7: 'stage7',
